@@ -205,6 +205,11 @@ const VARIANTS: &[Variant] = &[
         top: "sdram_ctrl",
         params: &[("CLK_MHZ", "50"), ("CAS_LATENCY", "2")],
     },
+    Variant {
+        package: "hyperram_ctrl",
+        top: "hyperram_ctrl",
+        params: &[("ADDR_WIDTH", "22"), ("CK_DELAY", "100")],
+    },
 ];
 
 /// The devices the footprint table reports, besides the generic LUT
@@ -4648,6 +4653,655 @@ fn the_sdram_model_catches_a_controller_that_breaks_the_datasheet() {
             ram.model.violations
         );
     }
+}
+
+// ---------------------------------------------------------------------------
+// hyperram_ctrl
+// ---------------------------------------------------------------------------
+
+/// The latency, in clocks, a configuration register 0 value selects.
+fn hyper_latency(cr0: u16) -> u32 {
+    match (cr0 >> 4) & 0xF {
+        0 => 5,
+        1 => 6,
+        2 => 7,
+        14 => 3,
+        15 => 4,
+        other => panic!("reserved latency code {other}"),
+    }
+}
+
+/// The word address of a HyperRAM register, as CA[44:16] and CA[2:0]
+/// spell it: configuration register 0 is CA 0x0000_0100_0000 with the
+/// read and address-space bits aside.
+const HYPER_CR0: u32 = 0x800;
+const HYPER_CR1: u32 = 0x801;
+const HYPER_ID0: u32 = 0x000;
+/// What the model answers for them, and CR0's reset value: six clocks,
+/// fixed latency, legacy wrapped bursts of 32 bytes.
+const HYPER_CR0_RESET: u16 = 0x8F1F;
+const HYPER_CR1_VALUE: u16 = 0xFFC1;
+const HYPER_ID0_VALUE: u16 = 0x0C81;
+
+/// A HyperRAM that **enforces** the initial latency.
+///
+/// It counts CK edges from the fall of CS#, reads the command-address
+/// from the first six, and then expects the data exactly where its
+/// latency — single or doubled, fixed or chosen per transaction — puts
+/// it: a write whose data is on the bus a clock early drives DQ during
+/// the latency count, one a clock late has no data at the first beat,
+/// and both are violations. A read's data is driven with RWDS toggling
+/// from the first beat and nothing before. In variable-latency mode it
+/// doubles every third transaction, as a refresh collision would, and
+/// says so on RWDS during CA the way the part does.
+struct HyperModel {
+    mem: BTreeMap<u32, u16>,
+    cr0: u16,
+    t_rwr: u64,
+    /// CK edges since CS# fell in this transaction.
+    edge: u32,
+    in_tx: bool,
+    ca: u64,
+    doubled: bool,
+    transactions: u64,
+    /// Bytes written in this transaction, with their RWDS masks.
+    beats: Vec<(u8, bool)>,
+    /// The word address the next data beat belongs to.
+    next_addr: u32,
+    /// What the part drives, when it drives.
+    dq: Option<u8>,
+    rwds: Option<bool>,
+    /// The clock cycle CS# last rose in.
+    cs_rose: Option<u64>,
+    violations: Vec<String>,
+    /// How many transactions ran with a doubled latency.
+    doubled_count: u64,
+}
+
+/// The HyperBus as it is at one CK edge: what the controller drives.
+#[derive(Clone, Copy)]
+struct HyperBus {
+    dq: Option<u8>,
+    rwds: Option<bool>,
+}
+
+impl HyperModel {
+    fn new(t_rwr: u64) -> HyperModel {
+        HyperModel {
+            mem: BTreeMap::new(),
+            cr0: HYPER_CR0_RESET,
+            t_rwr,
+            edge: 0,
+            in_tx: false,
+            ca: 0,
+            doubled: false,
+            transactions: 0,
+            beats: Vec::new(),
+            next_addr: 0,
+            dq: None,
+            rwds: None,
+            cs_rose: None,
+            violations: Vec::new(),
+            doubled_count: 0,
+        }
+    }
+
+    fn violation(&mut self, what: String) {
+        if self.violations.len() < 20 {
+            self.violations.push(format!(
+                "transaction {}, CK edge {}: {what}",
+                self.transactions, self.edge
+            ));
+        }
+    }
+
+    fn fixed(&self) -> bool {
+        self.cr0 & 0x8 != 0
+    }
+
+    fn is_read(&self) -> bool {
+        self.ca >> 47 & 1 == 1
+    }
+
+    fn is_reg(&self) -> bool {
+        self.ca >> 46 & 1 == 1
+    }
+
+    fn address(&self) -> u32 {
+        let upper = u32::try_from((self.ca >> 16) & 0x1FFF_FFFF).expect("29 bits");
+        let lower = u32::try_from(self.ca & 7).expect("3 bits");
+        (upper << 3) | lower
+    }
+
+    /// The CK edge at which the first data byte is transferred: the
+    /// rising edge that begins clock 3 + latency, counting the CA's
+    /// first clock as clock 1, so edge 4 + 2 * latency counting from 0.
+    fn first_data_edge(&self) -> u32 {
+        if self.is_reg() && !self.is_read() {
+            return 6;
+        }
+        let count = hyper_latency(self.cr0);
+        let clocks = if self.doubled { 2 * count } else { count };
+        4 + 2 * clocks
+    }
+
+    /// CS# fell in clock cycle `cycle`.
+    fn select(&mut self, cycle: u64) {
+        if let Some(rose) = self.cs_rose {
+            let high = cycle - rose;
+            if high < self.t_rwr {
+                self.violation(format!(
+                    "CS# high for {high} cycle(s), tRWR needs {}",
+                    self.t_rwr
+                ));
+            }
+        }
+        self.transactions += 1;
+        self.in_tx = true;
+        self.edge = 0;
+        self.ca = 0;
+        self.beats.clear();
+        self.doubled = self.fixed() || self.transactions.is_multiple_of(3);
+        if self.doubled {
+            self.doubled_count += 1;
+        }
+        // RWDS during CA says whether the latency is doubled.
+        self.rwds = Some(self.doubled);
+        self.dq = None;
+    }
+
+    /// CS# rose in clock cycle `cycle`.
+    fn deselect(&mut self, cycle: u64) {
+        if self.in_tx && !self.is_read() && self.edge >= 6 {
+            if !self.beats.len().is_multiple_of(2) {
+                self.violation("CS# rose in the middle of a word".into());
+            }
+            if self.beats.is_empty() {
+                self.violation("a write ended with no data".into());
+            }
+        }
+        if self.in_tx && self.edge < 6 {
+            self.violation(format!("CS# rose after {} CA edge(s)", self.edge));
+        }
+        self.in_tx = false;
+        self.dq = None;
+        self.rwds = None;
+        self.cs_rose = Some(cycle);
+    }
+
+    /// One CK edge while CS# is low, with what the controller drives.
+    fn ck_edge(&mut self, bus: HyperBus) {
+        let e = self.edge;
+        self.edge += 1;
+        if bus.rwds.is_some() && (e < 6 || self.is_read()) {
+            self.violation("the controller drives RWDS while the part does".into());
+        }
+        if e < 6 {
+            match bus.dq {
+                Some(byte) => self.ca = (self.ca << 8) | u64::from(byte),
+                None => self.violation("no command-address byte on DQ".into()),
+            }
+            if e == 5 {
+                self.next_addr = self.address();
+                // After CA the part stops signalling latency; a read's
+                // RWDS is its preamble, low, until the data.
+                self.rwds = if self.is_read() { Some(false) } else { None };
+            }
+            return;
+        }
+        let first = self.first_data_edge();
+        if self.is_read() {
+            if bus.dq.is_some() {
+                self.violation("the controller drives DQ during a read".into());
+            }
+            if e >= first {
+                // Beat `e - first` goes out from this edge to the next,
+                // with RWDS high over a word's first byte and low over
+                // its second.
+                let beat = e - first;
+                let [hi, lo] = self.read_word(self.next_addr).to_be_bytes();
+                self.dq = Some(if beat.is_multiple_of(2) { hi } else { lo });
+                self.rwds = Some(beat.is_multiple_of(2));
+                if beat % 2 == 1 {
+                    self.next_addr += 1;
+                }
+            }
+            return;
+        }
+        // A write.
+        if e < first {
+            if bus.dq.is_some() {
+                self.violation(format!(
+                    "DQ driven during the latency count, {} edge(s) early",
+                    first - e
+                ));
+            }
+            return;
+        }
+        let Some(byte) = bus.dq else {
+            self.violation(format!("no write data at beat {}", e - first));
+            return;
+        };
+        let masked = if self.is_reg() {
+            false
+        } else {
+            match bus.rwds {
+                Some(mask) => mask,
+                None => {
+                    self.violation("a memory write with RWDS not driven".into());
+                    true
+                }
+            }
+        };
+        self.beats.push((byte, masked));
+        if self.beats.len().is_multiple_of(2) {
+            let n = self.beats.len();
+            let (hi, hi_masked) = self.beats[n - 2];
+            let (lo, lo_masked) = self.beats[n - 1];
+            let addr = self.next_addr;
+            self.next_addr += 1;
+            if self.is_reg() {
+                let value = (u16::from(hi) << 8) | u16::from(lo);
+                match addr {
+                    HYPER_CR0 => self.cr0 = value,
+                    HYPER_CR1 => {}
+                    other => self.violation(format!("a write to register {other:#x}")),
+                }
+            } else {
+                let mut value = self.mem.get(&addr).copied().unwrap_or(0);
+                if !hi_masked {
+                    value = (value & 0x00FF) | (u16::from(hi) << 8);
+                }
+                if !lo_masked {
+                    value = (value & 0xFF00) | u16::from(lo);
+                }
+                self.mem.insert(addr, value);
+            }
+        }
+    }
+
+    fn read_word(&self, addr: u32) -> u16 {
+        if self.is_reg() {
+            match addr {
+                HYPER_CR0 => self.cr0,
+                HYPER_CR1 => HYPER_CR1_VALUE,
+                HYPER_ID0 => HYPER_ID0_VALUE,
+                _ => 0,
+            }
+        } else {
+            self.mem.get(&addr).copied().unwrap_or(0)
+        }
+    }
+}
+
+/// The controller with the model on its pins, and the IO registers
+/// between them modelled the way the FPGA backend builds them.
+///
+/// A double-data-rate output port is registered on the rising edge of
+/// `clk` and appears on the pin for the whole next cycle, its low half
+/// first and its high half after the falling edge; `hram_ck` then goes
+/// through a quarter-cycle IO delay, which is what `CK_DELAY` is for. A
+/// double-data-rate input samples the pin on the rising edge and on the
+/// falling edge, and the fabric sees the pair at the next rising edge.
+/// Chip select and the output enables are ordinary outputs. The
+/// testbench steps in quarter cycles to put each of those events where
+/// it belongs.
+struct Hyper<'d> {
+    sim: Simulator<'d>,
+    clk: NetHandle,
+    req_valid: NetHandle,
+    req_ready: NetHandle,
+    req_we: NetHandle,
+    req_reg: NetHandle,
+    req_addr: NetHandle,
+    req_wdata: NetHandle,
+    req_be: NetHandle,
+    rd_data: NetHandle,
+    rd_valid: NetHandle,
+    rd_error: NetHandle,
+    cur_latency: NetHandle,
+    cur_fixed: NetHandle,
+    cs_n: NetHandle,
+    ck: NetHandle,
+    dq_o: NetHandle,
+    dq_oe: NetHandle,
+    dq_i: NetHandle,
+    rwds_o: NetHandle,
+    rwds_oe: NetHandle,
+    rwds_i: NetHandle,
+    model: HyperModel,
+    cycle: u64,
+    ck_level: bool,
+    cs_level: bool,
+}
+
+impl<'d> Hyper<'d> {
+    fn new(design: &'d Design, t_rwr: u64) -> Hyper<'d> {
+        let sim = simulate(design, "hyperram_ctrl");
+        let pin = |n: &str| top_net(&sim, n);
+        let mut h = Hyper {
+            clk: pin("clk"),
+            req_valid: pin("req_valid"),
+            req_ready: pin("req_ready"),
+            req_we: pin("req_we"),
+            req_reg: pin("req_reg"),
+            req_addr: pin("req_addr"),
+            req_wdata: pin("req_wdata"),
+            req_be: pin("req_be"),
+            rd_data: pin("rd_data"),
+            rd_valid: pin("rd_valid"),
+            rd_error: pin("rd_error"),
+            cur_latency: pin("cur_latency"),
+            cur_fixed: pin("cur_fixed"),
+            cs_n: pin("hram_cs_n"),
+            ck: pin("hram_ck"),
+            dq_o: pin("hram_dq_o"),
+            dq_oe: pin("hram_dq_oe"),
+            dq_i: pin("hram_dq_i"),
+            rwds_o: pin("hram_rwds_o"),
+            rwds_oe: pin("hram_rwds_oe"),
+            rwds_i: pin("hram_rwds_i"),
+            model: HyperModel::new(t_rwr),
+            cycle: 0,
+            ck_level: false,
+            cs_level: true,
+            sim,
+        };
+        let rst_n = top_net(&h.sim, "rst_n");
+        for net in [h.req_valid, h.req_we, h.req_reg] {
+            h.sim.set(net, bit(false));
+        }
+        h.sim.set(h.req_addr, word(22, 0));
+        h.sim.set(h.req_wdata, word(16, 0));
+        h.sim.set(h.req_be, word(2, 0));
+        h.sim.set(h.dq_i, word(16, 0));
+        h.sim.set(h.rwds_i, word(2, 0));
+        let clk = h.clk;
+        reset(&mut h.sim, clk, rst_n);
+        h
+    }
+
+    /// The byte on DQ and the level on RWDS, as the IO sees them: the
+    /// controller's where it drives, the part's where it does, a
+    /// changing pattern where nobody does.
+    fn bus(&mut self, ctrl: HyperBus) -> (u8, bool) {
+        if ctrl.dq.is_some() && self.model.dq.is_some() {
+            self.model.violation("both ends drive DQ".into());
+        }
+        if ctrl.rwds.is_some() && self.model.rwds.is_some() {
+            self.model.violation("both ends drive RWDS".into());
+        }
+        let floating = self.cycle.wrapping_mul(0x5B).to_le_bytes()[0];
+        (
+            ctrl.dq.or(self.model.dq).unwrap_or(floating),
+            ctrl.rwds.or(self.model.rwds).unwrap_or(self.cycle & 1 == 1),
+        )
+    }
+
+    /// The controller's drive for one half of the cycle.
+    fn drive(dq_oe: bool, rwds_oe: bool, dq: u64, rwds: u64, half: u32) -> HyperBus {
+        HyperBus {
+            dq: dq_oe.then(|| (dq >> (8 * half)).to_le_bytes()[0]),
+            rwds: rwds_oe.then(|| (rwds >> half) & 1 == 1),
+        }
+    }
+
+    fn tick(&mut self) {
+        let quarter = HALF / 2;
+        // What the output registers take at this rising edge, for the
+        // cycle that follows it.
+        let ck = get_u64(&self.sim, self.ck);
+        let dq = get_u64(&self.sim, self.dq_o);
+        let rwds = get_u64(&self.sim, self.rwds_o);
+
+        // The rising edge: the input registers sample the low half.
+        self.sim.set(self.clk, bit(true));
+        self.sim.run_for(0);
+        self.cycle += 1;
+        let cs = high(&self.sim, self.cs_n);
+        if cs != self.cs_level {
+            if cs {
+                self.model.deselect(self.cycle);
+            } else {
+                self.model.select(self.cycle);
+            }
+            self.cs_level = cs;
+        }
+        let dq_oe = high(&self.sim, self.dq_oe);
+        let rwds_oe = high(&self.sim, self.rwds_oe);
+        let first = Self::drive(dq_oe, rwds_oe, dq, rwds, 0);
+        let second = Self::drive(dq_oe, rwds_oe, dq, rwds, 1);
+        let (lo_dq, lo_rwds) = self.bus(first);
+
+        // A quarter later, CK takes the level of the low half.
+        self.sim.run_for(quarter);
+        self.ck_step(ck & 1 == 1, first);
+
+        // The falling edge: the input registers sample the high half,
+        // and the fabric sees both at the next rising edge.
+        self.sim.run_for(quarter);
+        let (hi_dq, hi_rwds) = self.bus(second);
+        self.sim.set(
+            self.dq_i,
+            word(16, (u64::from(hi_dq) << 8) | u64::from(lo_dq)),
+        );
+        self.sim.set(
+            self.rwds_i,
+            word(2, (u64::from(hi_rwds) << 1) | u64::from(lo_rwds)),
+        );
+        self.sim.set(self.clk, bit(false));
+
+        // And a quarter after that, the high half of CK.
+        self.sim.run_for(quarter);
+        self.ck_step(ck & 2 == 2, second);
+        self.sim.run_for(quarter);
+    }
+
+    fn ck_step(&mut self, level: bool, bus: HyperBus) {
+        if level != self.ck_level {
+            self.ck_level = level;
+            if self.cs_level {
+                // CK may run with CS# high; the part ignores it.
+            } else {
+                self.model.ck_edge(bus);
+            }
+        }
+    }
+
+    /// One request; a read returns its word and whether it timed out.
+    fn request(
+        &mut self,
+        we: bool,
+        reg: bool,
+        addr: u32,
+        data: u16,
+        be: u64,
+    ) -> Option<(u16, bool)> {
+        self.sim.set(self.req_we, bit(we));
+        self.sim.set(self.req_reg, bit(reg));
+        self.sim.set(self.req_addr, word(22, u64::from(addr)));
+        self.sim.set(self.req_wdata, word(16, u64::from(data)));
+        self.sim.set(self.req_be, word(2, be));
+        self.sim.set(self.req_valid, bit(true));
+        let mut taken = false;
+        for _ in 0..100 {
+            let ready = high(&self.sim, self.req_ready);
+            self.tick();
+            if ready {
+                taken = true;
+                break;
+            }
+        }
+        assert!(taken, "the request for {addr:#x} was never taken");
+        self.sim.set(self.req_valid, bit(false));
+        for _ in 0..100 {
+            self.tick();
+            if !we && high(&self.sim, self.rd_valid) {
+                let value = u16::try_from(get_u64(&self.sim, self.rd_data)).expect("16 bits");
+                let error = high(&self.sim, self.rd_error);
+                return Some((value, error));
+            }
+            if we && high(&self.sim, self.req_ready) {
+                return None;
+            }
+        }
+        panic!("the request for {addr:#x} never finished");
+    }
+
+    fn read(&mut self, reg: bool, addr: u32) -> u16 {
+        let (value, error) = self.request(false, reg, addr, 0, 0).expect("a read");
+        assert!(!error, "the read of {addr:#x} timed out");
+        value
+    }
+
+    fn assert_clean(&self) {
+        assert!(
+            self.model.violations.is_empty(),
+            "the HyperRAM model caught the controller breaking the protocol:\n  {}",
+            self.model.violations.join("\n  ")
+        );
+    }
+}
+
+fn hyper_design(latency: &str, fixed: &str) -> Design {
+    design_of(
+        "hyperram_ctrl",
+        "hyperram_ctrl",
+        &[
+            ("ADDR_WIDTH", "22"),
+            ("LATENCY", latency),
+            ("FIXED_LATENCY", fixed),
+            ("T_RWR", "4"),
+        ],
+    )
+}
+
+/// Writes, partial writes and reads of memory, checked against a
+/// reference, on whatever latency the part is set to now.
+fn hyper_traffic(h: &mut Hyper<'_>, seed: u32) {
+    let mut reference: BTreeMap<u32, u16> = BTreeMap::new();
+    let mut state = seed;
+    let mut next = || {
+        state = state.wrapping_mul(1_103_515_245).wrapping_add(12345);
+        state >> 8
+    };
+    for i in 0..24u32 {
+        let addr = (next() & 0x3F_FFFF) | (i & 1);
+        let value = u16::try_from(next() & 0xFFFF).expect("16 bits");
+        h.request(true, false, addr, value, 3);
+        reference.insert(addr, value);
+        // Every third one gets a byte masked off on a second write.
+        if i % 3 == 0 {
+            let be = if i % 2 == 0 { 1 } else { 2 };
+            let patch = 0xA55A;
+            h.request(true, false, addr, patch, be);
+            let old = reference[&addr];
+            let new = if be == 1 {
+                (old & 0xFF00) | (patch & 0x00FF)
+            } else {
+                (old & 0x00FF) | (patch & 0xFF00)
+            };
+            reference.insert(addr, new);
+        }
+    }
+    for (addr, value) in &reference {
+        assert_eq!(h.read(false, *addr), *value, "memory word {addr:#x}");
+    }
+    // The model agrees with the reference about what it holds, so the
+    // writes landed where they were meant to and not only somewhere the
+    // reads could find them again.
+    for (addr, value) in &reference {
+        assert_eq!(
+            h.model.mem.get(addr),
+            Some(value),
+            "the part's word {addr:#x}"
+        );
+    }
+}
+
+#[test]
+fn hyperram_ctrl_reads_and_writes_at_the_fixed_reset_latency() {
+    let design = hyper_design("6", "1");
+    let mut h = Hyper::new(&design, 4);
+    assert_eq!(get_u64(&h.sim, h.cur_latency), 6);
+    assert!(high(&h.sim, h.cur_fixed));
+
+    // The registers first: the identification and the configuration.
+    assert_eq!(h.read(true, HYPER_ID0), HYPER_ID0_VALUE, "ID register 0");
+    assert_eq!(h.read(true, HYPER_CR0), HYPER_CR0_RESET, "CR0 at reset");
+    assert_eq!(h.read(true, HYPER_CR1), HYPER_CR1_VALUE, "CR1");
+
+    hyper_traffic(&mut h, 7);
+    // Fixed latency doubles every transaction.
+    assert_eq!(h.model.doubled_count, h.model.transactions);
+    h.assert_clean();
+}
+
+#[test]
+fn hyperram_ctrl_follows_the_latency_it_configures() {
+    let design = hyper_design("6", "1");
+    let mut h = Hyper::new(&design, 4);
+
+    // Every latency the part has, variable and fixed, set through CR0
+    // and then used: the controller must time its writes the way the
+    // part now expects, and its reads must find the data wherever the
+    // part's RWDS puts it.
+    for (code, clocks) in [(14u16, 3u64), (15, 4), (0, 5), (2, 7), (1, 6)] {
+        for fixed in [false, true] {
+            let cr0 = (HYPER_CR0_RESET & !0x00F8) | (code << 4) | if fixed { 0x8 } else { 0 };
+            h.request(true, true, HYPER_CR0, cr0, 3);
+            assert_eq!(h.model.cr0, cr0, "the part took the new CR0");
+            assert_eq!(get_u64(&h.sim, h.cur_latency), clocks);
+            assert_eq!(high(&h.sim, h.cur_fixed), fixed);
+            assert_eq!(h.read(true, HYPER_CR0), cr0, "and reads it back");
+            let before = (h.model.transactions, h.model.doubled_count);
+            hyper_traffic(&mut h, u32::from(code) * 2 + u32::from(fixed));
+            let ran = h.model.transactions - before.0;
+            let doubled = h.model.doubled_count - before.1;
+            if fixed {
+                assert_eq!(doubled, ran, "fixed latency doubles every transaction");
+            } else {
+                // A third of them collided with a refresh, and the
+                // controller had to see RWDS say so.
+                assert!(doubled > 0 && doubled < ran, "{doubled} of {ran} doubled");
+            }
+        }
+    }
+    h.assert_clean();
+}
+
+/// The model is not a pushover: a controller that believes the part is
+/// set to a different latency than it is gets caught, early or late.
+#[test]
+fn the_hyperram_model_catches_a_controller_with_the_wrong_latency() {
+    // Too short a latency drives the data while the part is still
+    // counting; too long leaves the part's first beat with nothing on it.
+    for (latency, symptom) in [("5", "during the latency count"), ("7", "no write data")] {
+        let design = hyper_design(latency, "1");
+        let mut h = Hyper::new(&design, 4);
+        h.request(true, false, 0x1234, 0xBEEF, 3);
+        let _ = h.request(false, false, 0x1234, 0, 0);
+        assert!(
+            h.model.violations.iter().any(|v| v.contains(symptom)),
+            "LATENCY = {latency} against a part at six: {:?}",
+            h.model.violations
+        );
+    }
+    // A controller that waits too little between transactions breaks
+    // the part's read-write recovery time.
+    let design = design_of(
+        "hyperram_ctrl",
+        "hyperram_ctrl",
+        &[("LATENCY", "6"), ("FIXED_LATENCY", "1"), ("T_RWR", "1")],
+    );
+    let mut h = Hyper::new(&design, 4);
+    h.request(true, false, 1, 1, 3);
+    h.request(true, false, 2, 2, 3);
+    assert!(
+        h.model.violations.iter().any(|v| v.contains("tRWR")),
+        "{:?}",
+        h.model.violations
+    );
 }
 
 // ---------------------------------------------------------------------------

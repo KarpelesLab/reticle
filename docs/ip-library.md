@@ -2,7 +2,7 @@
 
 The first-party half of phase 8. [`docs/ip.md`](ip.md) describes the
 machinery — the manifest formats, the resolver, the bus model, the black
-boxes. This document describes the **blocks**: fifteen pieces of HDL
+boxes. This document describes the **blocks**: sixteen pieces of HDL
 that drop into a design the way a crate drops into a Rust program, each
 with a manifest, a Rust co-simulation test, and a resource footprint that
 was measured rather than guessed.
@@ -18,6 +18,7 @@ ip/
   eth_mac_rmii/  reticle.ip  rtl/eth_mac_rmii.v
   fifo_async/    reticle.ip  rtl/fifo_async.v
   fifo_sync/     reticle.ip  rtl/fifo_sync.v
+  hyperram_ctrl/ reticle.ip  rtl/hyperram_ctrl.v
   i2c_master/    reticle.ip  rtl/i2c_master.v
   pwm/           reticle.ip  rtl/pwm.v
   ram_wrapper/   reticle.ip  rtl/ram_sp.v  rtl/ram_sdp.v
@@ -55,6 +56,7 @@ It is distributed as part of the repository instead.
 | `eth_mac_rmii` | `eth_mac_rmii` | Ethernet MAC over RMII: preamble, frame check sequence, inter-frame gap | — |
 | `spiflash_xip` | `spiflash_xip` | execute-in-place SPI flash reader, read only and cache-less | — |
 | `sdram_ctrl` | `sdram_ctrl` | SDR SDRAM controller for x16 parts: power-up sequence, refresh, open rows per bank, datasheet timings in nanoseconds | — |
+| `hyperram_ctrl` | `hyperram_ctrl` | HyperBus controller: command-address, fixed or variable latency, DDR data and RWDS, register access | — |
 
 The last three are the **larger blocks**, and they are larger in a
 particular way: each is a whole protocol or a whole machine rather than a
@@ -68,6 +70,10 @@ primitive**, the ones phase 8 waited on the FPGA backend for: it forwards
 its clock to the part through a double-data-rate output register, which
 it asks for with a `ddr` attribute on the port, so the ECP5 row of its
 footprint carries an `ODDRX1F` and the iCE40 row an `SB_IO` in DDR mode.
+`hyperram_ctrl` puts every HyperBus pin through one — nine `IDDRX1F` and
+ten `ODDRX1F` on the ECP5 — and asks for an IO delay on CK, the
+`DELAYG` that moves each clock edge into the middle of the byte it
+clocks.
 
 Everything is **Verilog-2005**, deliberately: it is the path this
 compiler exercises hardest, and it is the dialect every other tool reads.
@@ -223,6 +229,26 @@ is the part that matters:
   the model a part slower than the controller was built for, one timing
   at a time — tRCD, tRP, tRAS, tRC, tWR and the refresh interval — and
   requires the model to name the rule each one breaks.
+- **`hyperram_ctrl`** — against a HyperRAM model that **enforces the
+  initial latency**: it counts CK edges from the fall of CS#, reads the
+  command-address from the first six, and expects a write's first byte on
+  exactly the edge its latency names, so data a clock early is DQ driven
+  during the latency count and data a clock late is a first beat with
+  nothing on it. It answers reads with RWDS toggling from the first beat,
+  drives RWDS during CA the way the part does, doubles every third
+  transaction in variable-latency mode as a refresh collision would, and
+  checks CS#'s recovery time, whole words, and that the two ends never
+  drive the bus together. Between them sit the IO registers as the FPGA
+  backend builds them — a DDR output that launches its two halves in
+  the next cycle, a DDR input that samples both edges, CK a quarter cycle
+  late through the IO delay — with the testbench stepping in quarter
+  cycles. The identification and configuration registers are read, and
+  then every latency the part has, three to seven clocks, fixed and
+  variable, is written to configuration register 0 and used for writes,
+  masked writes and reads checked against a reference and against the
+  model's own contents. A controller built believing the part is at
+  five clocks, or at seven, is caught by the model, and so is one that
+  does not wait out the recovery time.
 
 ### What the processor actually executes
 
@@ -378,6 +404,10 @@ exactly what this table is for.
 | `sdram_ctrl` | `sdram_ctrl` | CLK_MHZ=50, CAS_LATENCY=2 | LUT6 | 36 x dff, 348 x lut | 9 |
 | `sdram_ctrl` | `sdram_ctrl` | CLK_MHZ=50, CAS_LATENCY=2 | iCE40 HX1K | 24 x SB_CARRY, 180 x SB_DFFER, 3 x SB_DFFR, 36 x SB_DFFS, 1 x SB_GB, 121 x SB_IO, 418 x SB_LUT4 | 10 |
 | `sdram_ctrl` | `sdram_ctrl` | CLK_MHZ=50, CAS_LATENCY=2 | ECP5 45F | 1 x DCCA, 427 x LUT4, 1 x ODDRX1F, 219 x TRELLIS_FF, 121 x TRELLIS_IO | 10 |
+| `hyperram_ctrl` | `hyperram_ctrl` | ADDR_WIDTH=22, CK_DELAY=100 | LUT4 | 26 x dff, 214 x lut | 7 |
+| `hyperram_ctrl` | `hyperram_ctrl` | ADDR_WIDTH=22, CK_DELAY=100 | LUT6 | 26 x dff, 187 x lut | 7 |
+| `hyperram_ctrl` | `hyperram_ctrl` | ADDR_WIDTH=22, CK_DELAY=100 | iCE40 HX1K | 13 x SB_CARRY, 102 x SB_DFFER, 4 x SB_DFFES, 11 x SB_DFFR, 1 x SB_DFFS, 1 x SB_GB, 91 x SB_IO, 213 x SB_LUT4 | 8 |
+| `hyperram_ctrl` | `hyperram_ctrl` | ADDR_WIDTH=22, CK_DELAY=100 | ECP5 45F | 1 x DCCA, 1 x DELAYG, 9 x IDDRX1F, 214 x LUT4, 10 x ODDRX1F, 118 x TRELLIS_FF, 91 x TRELLIS_IO | 7 |
 <!-- end footprints -->
 
 ### Four things writing these blocks found

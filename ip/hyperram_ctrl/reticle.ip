@@ -1,0 +1,47 @@
+# hyperram_ctrl: a HyperBus controller for a x8 HyperRAM, one
+# sixteen-bit word per transaction, memory or register space. The data,
+# RWDS and CK ports are double data rate (`ddr = "clk"` in the source),
+# two bits per pin; CK also takes CK_DELAY steps of IO delay. LATENCY
+# and FIXED_LATENCY are what the part is assumed to be set to after
+# reset, and the block follows every later write to its configuration
+# register 0.
+name hyperram_ctrl
+version 1.0.0
+license MIT
+description "HyperBus controller: command-address, fixed or variable initial latency, DDR data and RWDS, register access"
+
+top hyperram_ctrl
+target ice40
+target ecp5
+
+source rtl/hyperram_ctrl.v
+
+param ADDR_WIDTH int 22 12..29
+param LATENCY int 6 3..7
+param FIXED_LATENCY int 1 0..1
+param T_RWR int 4 1..15
+param CK_DELAY int 100 0..127
+
+port clk in
+port rst_n in
+port req_valid in
+port req_ready out
+port req_we in
+port req_reg in
+port req_addr in ADDR_WIDTH
+port req_wdata in 16
+port req_be in 2
+port rd_data out 16
+port rd_valid out
+port rd_error out
+port cur_latency out 3
+port cur_fixed out
+port hram_rst_n out
+port hram_cs_n out
+port hram_ck out 2
+port hram_dq_o out 16
+port hram_dq_oe out
+port hram_dq_i in 16
+port hram_rwds_o out 2
+port hram_rwds_oe out
+port hram_rwds_i in 2
