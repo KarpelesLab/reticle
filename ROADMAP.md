@@ -471,15 +471,27 @@ and first-party IP should drop into a design as easily as a Rust crate.
       transmitter into its receiver and by rejecting a frame with a flipped
       dibit; and `spiflash_xip`, a read-only execute-in-place path from a
       serial flash, tested against a flash model on the four wires.
-- [ ] The library blocks that need device primitives first: SDRAM and
-      HyperRAM controllers, a USB device, HDMI/DVI output and RGMII. The
-      primitives are now configured — DDR input and output registers
-      from a `ddr` attribute (iCE40 `SB_IO`, ECP5 `IDDRX1F` /
-      `ODDRX1F`), IO delays from `io_delay` (ECP5 `DELAYG`), and PLLs
-      from a clock constraint on an undriven net with the dividers
-      solved and the error reported (iCE40 `SB_PLL40_CORE`, ECP5
-      `EHXPLLL`) — so this item is unblocked; the blocks themselves are
-      not written yet.
+- [x] The library blocks that need device primitives first, built on
+      the DDR registers (`ddr`), IO delays (`io_delay`) and PLLs
+      (`clock_mhz`) the FPGA backend now configures: `sdram_ctrl`, an
+      SDR SDRAM controller with the power-up sequence, refresh,
+      open-row tracking per bank and datasheet timings derived from
+      nanoseconds, tested against an SDRAM model that fails on any
+      timing violation; `hyperram_ctrl`, a HyperBus controller with
+      fixed and variable latency, DDR data and RWDS and register
+      access, tested against a model that enforces the latency;
+      `dvi_tx` (and `dvi_tx_pll`), DVI output at 640x480, 800x600 and
+      1280x720 with a TMDS encoder checked exhaustively against the
+      specification's algorithm and 10:1 serialisation through DDR
+      outputs from a PLL-made five-times clock; `eth_mac_rgmii`, a
+      gigabit MAC on `eth_mac_rmii`'s frame logic behind DDR IO with
+      optional IO delays, tested by loopback; and `usb_device_fs` (and
+      `usb_device_fs_pll`), a full-speed device with NRZI, bit
+      stuffing and CRC5 / CRC16 checked and a control endpoint that
+      enumerates, tested by a USB host model. Each block's header says
+      what it does not do — no bursts on either memory controller,
+      gigabit only for RGMII, endpoint 0 only for USB. See
+      `docs/ip-library.md`.
 - [x] Registry: a static index (git repository of manifests) that
       `reticle add` searches, in the style of a crates.io index: one file
       per package under a name-derived path, one line per release with
