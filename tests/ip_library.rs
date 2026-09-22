@@ -48,16 +48,17 @@
 //! a USB host model sending real packets, NRZI and bit stuffing and
 //! CRCs included, on a clock a little off the device's.
 //!
-//! Five tests here came from gaps in Reticle rather than in the blocks,
+//! Six tests here came from gaps in Reticle rather than in the blocks,
 //! found by writing real HDL, which is the argument for a first-party
 //! library in the first place:
 //! `ice40_flip_flops_take_an_active_low_reset_through_one_inverter`,
 //! `small_memories_become_logic_after_the_fpga_flow`,
 //! `function_locals_are_not_reported_as_unreset_registers`,
-//! `a_two_read_port_register_file_is_duplicated_across_block_rams` and
-//! `a_project_top_that_is_also_instantiated_with_an_override_is_lost`.
-//! The first four once asserted that their gap was *still there* and
-//! now hold the fix; the fifth still pins an open gap. The paragraph in
+//! `a_two_read_port_register_file_is_duplicated_across_block_rams`,
+//! `a_project_top_that_is_also_instantiated_with_an_override_is_lost`
+//! and `a_zero_step_io_delay_still_builds_a_delay_element`. The first
+//! four once asserted that their gap was *still there* and now hold the
+//! fix; the last two still pin open gaps. The paragraph in
 //! `docs/ip-library.md` each points at says which.
 //!
 //! Set `UPDATE_EXPECT=1` to rewrite the footprint table in
@@ -7257,5 +7258,71 @@ fn dvi_tx_pll_takes_its_clock_from_the_pll_and_its_lanes_through_ddr() {
             assert_eq!(clock, "clk_x5", "{device_name}: {lane}");
             assert_eq!(register, ddr, "{device_name}: {lane}");
         }
+    }
+}
+
+/// The code the FPGA flow warns with about an IO register or delay it
+/// cannot build as asked.
+const ZERO_DELAY_GAP: &str = "F0304";
+
+/// An `io_delay` of zero steps still asks for the delay element.
+///
+/// Found writing `eth_mac_rgmii`, whose TX_DELAY and RX_DELAY default to
+/// 0 for a PHY that skews the RGMII clock itself, and `hyperram_ctrl`,
+/// whose CK delay is a parameter too. A parameterised block can only
+/// spell its delay as `(* io_delay = TX_DELAY *)`, since an attribute
+/// cannot be made conditional in Verilog, and zero is how it says
+/// "none". `fpga::primitives` takes the zero literally: the ECP5 gets a
+/// `DELAYG` set to nothing, one primitive per pin for no effect, and the
+/// iCE40, which has no delay element, reports `F0304` — "the 0-step
+/// delay asked for is not applied" — for a delay nobody asked for. The
+/// netlist is correct either way; the cost and the warning are not.
+///
+/// This test pins the gap. When a zero-step delay is treated as no
+/// delay, flip the assertions: no `DELAYG` and no warning.
+#[test]
+fn a_zero_step_io_delay_still_builds_a_delay_element() {
+    let text = "\
+module zerodelay (input wire clk, (* io_delay = 0 *) input wire d, output reg q);
+    always @(posedge clk) q <= d;
+endmodule
+";
+    for (device_name, built, warned) in [
+        ("ecp5-45f-CABGA381", true, false),
+        ("ice40-hx1k-tq144", false, true),
+    ] {
+        let mut design = design_of_text("zerodelay.v", text);
+        let id = design.top.expect("a top");
+        let device = fpga::target(device_name).expect("a built-in device");
+        let mut diags = Diagnostics::new();
+        let mut constraints = Constraints::new();
+        constraints.merge_attrs(&design, id, &mut diags);
+        let report = fpga::synthesize_for(
+            &mut design,
+            id,
+            device,
+            &constraints,
+            &FpgaOptions::default(),
+            &mut diags,
+        )
+        .expect("the flow runs");
+        let io = report
+            .primitives
+            .io_buffers
+            .iter()
+            .find(|b| b.port == "d")
+            .expect("a buffer for d");
+        assert_eq!(
+            io.delay.as_ref().map(|(steps, _)| *steps),
+            built.then_some(0),
+            "{device_name}: the gap is fixed if no delay element was built — flip this test"
+        );
+        let warning = diags
+            .iter()
+            .any(|d| d.code == Some(ZERO_DELAY_GAP) && d.message.contains("0-step"));
+        assert_eq!(
+            warning, warned,
+            "{device_name}: the gap is fixed if the zero-step warning is gone — flip this test"
+        );
     }
 }

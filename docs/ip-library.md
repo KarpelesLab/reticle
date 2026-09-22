@@ -520,14 +520,14 @@ exactly what this table is for.
 | `usb_device_fs_pll` | `usb_device_fs_pll` | VID=16'h1209, PID=16'h0001 | ECP5 45F | 1 x DCCA, 1 x EHXPLLL, 541 x LUT4, 242 x TRELLIS_FF, 17 x TRELLIS_IO | 9 |
 <!-- end footprints -->
 
-### Five things writing these blocks found
+### Six things writing these blocks found
 
-All five were gaps in Reticle itself rather than in the blocks, and each
+All six were gaps in Reticle itself rather than in the blocks, and each
 is pinned down by a test. Two were found by the original eleven blocks,
-two by writing the three larger ones, and one by the blocks that need
+two by writing the three larger ones, and two by the blocks that need
 device primitives. **The first four have since been fixed**, and their
-tests now hold the fix rather than the gap; the fifth is described last
-and is still open.
+tests now hold the fix rather than the gap; the last two are described
+last and are still open.
 
 **iCE40 flip-flops refused an active-low reset. Fixed.** Every block
 resets on `negedge rst_n`, which is the convention the rest of this
@@ -670,6 +670,21 @@ holds a ten-line reproduction, and checks that the same design builds
 once the override is removed; the likely fix is passing `project.top`
 as the elaboration top. Until then the wrapper is a package of its own,
 `dvi_tx_pll`, which depends on `dvi_tx` and so never shares its sources.
+`usb_device_fs_pll` is a package of its own for the same reason.
+
+**A zero-step IO delay still builds a delay element. Open, and minor.**
+`eth_mac_rgmii`'s TX_DELAY and RX_DELAY default to 0, for a PHY that
+adds the RGMII clock skew itself, and a parameterised block can only
+spell its delay as `(* io_delay = TX_DELAY *)`: Verilog has no way to
+make an attribute conditional, so zero is how it says "none".
+`fpga::primitives` takes the zero literally. The ECP5 gets a `DELAYG`
+set to nothing on every such pin, and the iCE40, which has no delay
+element, warns `F0304` that "the 0-step delay asked for is not applied"
+for a delay nobody asked for. The netlist is right either way; the
+primitives and the warning are not.
+`a_zero_step_io_delay_still_builds_a_delay_element` holds a three-line
+reproduction on both families; the likely fix is to treat a zero-step
+delay as no delay at all.
 
 ## What is not here yet
 
