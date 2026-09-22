@@ -1,0 +1,945 @@
+top ram16
+
+module ram16
+  net %clk u1 wire
+  net %rdata u8 wire
+  net %mem$w0 u8 wire
+  net %mem$we u1 wire
+  net %mem$w0_d u8 wire
+  net %mem$w1 u8 wire
+  net %mem$we$1 u1 wire
+  net %mem$w1_d u8 wire
+  net %mem$w2 u8 wire
+  net %mem$we$2 u1 wire
+  net %mem$w2_d u8 wire
+  net %mem$w3 u8 wire
+  net %mem$we$3 u1 wire
+  net %mem$w3_d u8 wire
+  net %mem$w4 u8 wire
+  net %mem$we$4 u1 wire
+  net %mem$w4_d u8 wire
+  net %mem$w5 u8 wire
+  net %mem$we$5 u1 wire
+  net %mem$w5_d u8 wire
+  net %mem$w6 u8 wire
+  net %mem$we$6 u1 wire
+  net %mem$w6_d u8 wire
+  net %mem$w7 u8 wire
+  net %mem$we$7 u1 wire
+  net %mem$w7_d u8 wire
+  net %mem$w8 u8 wire
+  net %mem$we$8 u1 wire
+  net %mem$w8_d u8 wire
+  net %mem$w9 u8 wire
+  net %mem$we$9 u1 wire
+  net %mem$w9_d u8 wire
+  net %mem$w10 u8 wire
+  net %mem$we$10 u1 wire
+  net %mem$w10_d u8 wire
+  net %mem$w11 u8 wire
+  net %mem$we$11 u1 wire
+  net %mem$w11_d u8 wire
+  net %mem$w12 u8 wire
+  net %mem$we$12 u1 wire
+  net %mem$w12_d u8 wire
+  net %mem$w13 u8 wire
+  net %mem$we$13 u1 wire
+  net %mem$w13_d u8 wire
+  net %mem$w14 u8 wire
+  net %mem$we$14 u1 wire
+  net %mem$w14_d u8 wire
+  net %mem$w15 u8 wire
+  net %mem$we$15 u1 wire
+  net %mem$w15_d u8 wire
+  net %clk$pad u1 wire
+  net %clk$in0 u1 wire
+  net %we$pad u1 wire
+  net %we$in0 u1 wire
+  net %waddr$pad u4 wire
+  net %waddr$in0 u1 wire
+  net %waddr$in1 u1 wire
+  net %waddr$in2 u1 wire
+  net %waddr$in3 u1 wire
+  net %raddr$pad u4 wire
+  net %raddr$in0 u1 wire
+  net %raddr$in1 u1 wire
+  net %raddr$in2 u1 wire
+  net %raddr$in3 u1 wire
+  net %wdata$pad u8 wire
+  net %wdata$in0 u1 wire
+  net %wdata$in1 u1 wire
+  net %wdata$in2 u1 wire
+  net %wdata$in3 u1 wire
+  net %wdata$in4 u1 wire
+  net %wdata$in5 u1 wire
+  net %wdata$in6 u1 wire
+  net %wdata$in7 u1 wire
+  net %rdata$pad u8 wire
+  net %rdata$pin0 u1 wire
+  net %rdata$pin1 u1 wire
+  net %rdata$pin2 u1 wire
+  net %rdata$pin3 u1 wire
+  net %rdata$pin4 u1 wire
+  net %rdata$pin5 u1 wire
+  net %rdata$pin6 u1 wire
+  net %rdata$pin7 u1 wire
+  net %clk$gb u1 wire
+  net %$lut0 u1 wire
+  net %$lut1 u1 wire
+  net %$lut2 u1 wire
+  net %$lut3 u1 wire
+  net %$lut4 u1 wire
+  net %$lut5 u1 wire
+  net %$lut6 u1 wire
+  net %$lut7 u1 wire
+  net %$lut8 u1 wire
+  net %$lut9 u1 wire
+  net %$lut10 u1 wire
+  net %$lut11 u1 wire
+  net %$lut12 u1 wire
+  net %$lut13 u1 wire
+  net %$lut14 u1 wire
+  net %$lut15 u1 wire
+  net %$lut16 u1 wire
+  net %$lut17 u1 wire
+  net %$lut18 u1 wire
+  net %$lut19 u1 wire
+  net %$lut20 u1 wire
+  net %$lut21 u1 wire
+  net %$lut22 u1 wire
+  net %$lut23 u1 wire
+  net %$lut24 u1 wire
+  net %$lut25 u1 wire
+  net %$lut26 u1 wire
+  net %$lut27 u1 wire
+  net %$lut28 u1 wire
+  net %$lut29 u1 wire
+  net %$lut30 u1 wire
+  net %$lut31 u1 wire
+  net %$lut32 u1 wire
+  net %$lut33 u1 wire
+  net %$lut34 u1 wire
+  net %$lut35 u1 wire
+  net %$lut36 u1 wire
+  net %$lut37 u1 wire
+  net %$lut38 u1 wire
+  net %$lut39 u1 wire
+  net %$lut40 u1 wire
+  net %$lut41 u1 wire
+  net %$lut42 u1 wire
+  net %$lut43 u1 wire
+  net %$lut44 u1 wire
+  net %$lut45 u1 wire
+  net %$lut46 u1 wire
+  net %$lut47 u1 wire
+  net %$lut48 u1 wire
+  net %$lut49 u1 wire
+  net %$lut50 u1 wire
+  net %$lut51 u1 wire
+  net %$lut52 u1 wire
+  net %$lut53 u1 wire
+  net %$lut54 u1 wire
+  net %$lut55 u1 wire
+  net %$lut56 u1 wire
+  net %$lut57 u1 wire
+  net %$lut58 u1 wire
+  net %$lut59 u1 wire
+  net %$lut60 u1 wire
+  net %$lut61 u1 wire
+  net %$lut62 u1 wire
+  net %$lut63 u1 wire
+  net %$lut64 u1 wire
+  net %$lut65 u1 wire
+  net %$lut66 u1 wire
+  net %$lut67 u1 wire
+  net %$lut68 u1 wire
+  net %$lut69 u1 wire
+  net %$lut70 u1 wire
+  net %$lut71 u1 wire
+  net %$lut72 u1 wire
+  net %$lut73 u1 wire
+  net %$lut74 u1 wire
+  net %$lut75 u1 wire
+  net %$lut76 u1 wire
+  net %$lut77 u1 wire
+  net %$lut78 u1 wire
+  net %$lut79 u1 wire
+  net %$lut80 u1 wire
+  net %$lut81 u1 wire
+  net %$lut82 u1 wire
+  net %$lut83 u1 wire
+  net %$lut84 u1 wire
+  net %$lut85 u1 wire
+  net %$lut86 u1 wire
+  net %$lut87 u1 wire
+  net %$lut88 u1 wire
+  net %$lut89 u1 wire
+  net %$lut90 u1 wire
+  net %$lut91 u1 wire
+  net %$lut92 u1 wire
+  net %$lut93 u1 wire
+  net %$lut94 u1 wire
+  net %$lut95 u1 wire
+  net %$lut96 u1 wire
+  net %$lut97 u1 wire
+  net %$lut98 u1 wire
+  net %$lut99 u1 wire
+  net %$lut100 u1 wire
+  net %$lut101 u1 wire
+  net %$lut102 u1 wire
+  net %$lut103 u1 wire
+  net %$lut104 u1 wire
+  net %$lut105 u1 wire
+  net %$lut106 u1 wire
+  net %$lut107 u1 wire
+  net %$lut108 u1 wire
+  net %$lut109 u1 wire
+  net %$lut110 u1 wire
+  net %$lut111 u1 wire
+  net %$lut112 u1 wire
+  net %$lut113 u1 wire
+  net %$lut114 u1 wire
+  net %$lut115 u1 wire
+  net %$lut116 u1 wire
+  net %$lut117 u1 wire
+  net %$lut118 u1 wire
+  net %$lut119 u1 wire
+  net %$lut120 u1 wire
+  net %$lut121 u1 wire
+  net %$lut122 u1 wire
+  net %$lut123 u1 wire
+  net %$lut124 u1 wire
+  net %$lut125 u1 wire
+  net %$lut126 u1 wire
+  net %$lut127 u1 wire
+  net %$lut128 u1 wire
+  net %$lut129 u1 wire
+  net %$lut130 u1 wire
+  net %$lut131 u1 wire
+  net %$lut132 u1 wire
+  net %$lut133 u1 wire
+  net %$lut134 u1 wire
+  net %$lut135 u1 wire
+  net %$lut136 u1 wire
+  net %$lut137 u1 wire
+  net %$lut138 u1 wire
+  net %$lut139 u1 wire
+  net %$lut140 u1 wire
+  net %$lut141 u1 wire
+  net %$lut142 u1 wire
+  net %$lut143 u1 wire
+  net %$lut144 u1 wire
+  net %$lut145 u1 wire
+  net %$lut146 u1 wire
+  net %$lut147 u1 wire
+  net %$lut148 u1 wire
+  net %$lut149 u1 wire
+  net %$lut150 u1 wire
+  net %$lut151 u1 wire
+  net %$lut152 u1 wire
+  net %$lut153 u1 wire
+  net %$lut154 u1 wire
+  net %$lut155 u1 wire
+  net %$lut156 u1 wire
+  net %$lut157 u1 wire
+  net %$lut158 u1 wire
+  net %$lut159 u1 wire
+  net %$lut160 u1 wire
+  net %$lut161 u1 wire
+  net %$lut162 u1 wire
+  net %$lut163 u1 wire
+  net %$lut164 u1 wire
+  net %$lut165 u1 wire
+  net %$lut166 u1 wire
+  net %$lut167 u1 wire
+  net %$lut168 u1 wire
+  net %$lut169 u1 wire
+  net %$lut170 u1 wire
+  net %$lut171 u1 wire
+  net %$lut172 u1 wire
+  net %$lut173 u1 wire
+  net %$lut174 u1 wire
+  net %$lut175 u1 wire
+  net %$lut176 u1 wire
+  net %$lut177 u1 wire
+  net %$lut178 u1 wire
+  net %$lut179 u1 wire
+  net %$lut180 u1 wire
+  net %$lut181 u1 wire
+  net %$lut182 u1 wire
+  net %$lut183 u1 wire
+  net %$lut184 u1 wire
+  net %$lut185 u1 wire
+  net %$lut186 u1 wire
+  net %$lut187 u1 wire
+  net %$lut188 u1 wire
+  net %$lut189 u1 wire
+  net %$lut190 u1 wire
+  net %$lut191 u1 wire
+  net %$lut192 u1 wire
+  net %$lut193 u1 wire
+  net %$lut194 u1 wire
+  net %$lut195 u1 wire
+  net %$lut196 u1 wire
+  net %$lut197 u1 wire
+  net %$lut198 u1 wire
+  net %$lut199 u1 wire
+  net %$lut200 u1 wire
+  net %$lut201 u1 wire
+  net %$lut202 u1 wire
+  net %$lut203 u1 wire
+  net %$lut204 u1 wire
+  net %$lut205 u1 wire
+  net %$lut206 u1 wire
+  net %$lut207 u1 wire
+  net %$lut208 u1 wire
+  net %$lut209 u1 wire
+  net %$lut210 u1 wire
+  net %$lut211 u1 wire
+  net %$lut212 u1 wire
+  net %$lut213 u1 wire
+  net %$lut214 u1 wire
+  net %$lut215 u1 wire
+  net %$lut216 u1 wire
+  net %$lut217 u1 wire
+  net %$lut218 u1 wire
+  net %$lut219 u1 wire
+  net %$lut220 u1 wire
+  net %$lut221 u1 wire
+  net %$lut222 u1 wire
+  net %$lut223 u1 wire
+  net %$lut224 u1 wire
+  net %$lut225 u1 wire
+  net %$lut226 u1 wire
+  net %$lut227 u1 wire
+  net %$lut228 u1 wire
+  net %$lut229 u1 wire
+  net %$lut230 u1 wire
+  net %$lut231 u1 wire
+  net %$lut232 u1 wire
+  net %$lut233 u1 wire
+  net %$lut234 u1 wire
+  net %$lut235 u1 wire
+  net %$lut236 u1 wire
+  net %$lut237 u1 wire
+  net %$lut238 u1 wire
+  net %$lut239 u1 wire
+  net %$lut240 u1 wire
+  net %$lut241 u1 wire
+  net %$lut242 u1 wire
+  net %$lut243 u1 wire
+  net %mem$ff0$q0 u1 wire
+  net %mem$ff0$q1 u1 wire
+  net %mem$ff0$q2 u1 wire
+  net %mem$ff0$q3 u1 wire
+  net %mem$ff0$q4 u1 wire
+  net %mem$ff0$q5 u1 wire
+  net %mem$ff0$q6 u1 wire
+  net %mem$ff0$q7 u1 wire
+  net %mem$ff1$q0 u1 wire
+  net %mem$ff1$q1 u1 wire
+  net %mem$ff1$q2 u1 wire
+  net %mem$ff1$q3 u1 wire
+  net %mem$ff1$q4 u1 wire
+  net %mem$ff1$q5 u1 wire
+  net %mem$ff1$q6 u1 wire
+  net %mem$ff1$q7 u1 wire
+  net %mem$ff2$q0 u1 wire
+  net %mem$ff2$q1 u1 wire
+  net %mem$ff2$q2 u1 wire
+  net %mem$ff2$q3 u1 wire
+  net %mem$ff2$q4 u1 wire
+  net %mem$ff2$q5 u1 wire
+  net %mem$ff2$q6 u1 wire
+  net %mem$ff2$q7 u1 wire
+  net %mem$ff3$q0 u1 wire
+  net %mem$ff3$q1 u1 wire
+  net %mem$ff3$q2 u1 wire
+  net %mem$ff3$q3 u1 wire
+  net %mem$ff3$q4 u1 wire
+  net %mem$ff3$q5 u1 wire
+  net %mem$ff3$q6 u1 wire
+  net %mem$ff3$q7 u1 wire
+  net %mem$ff4$q0 u1 wire
+  net %mem$ff4$q1 u1 wire
+  net %mem$ff4$q2 u1 wire
+  net %mem$ff4$q3 u1 wire
+  net %mem$ff4$q4 u1 wire
+  net %mem$ff4$q5 u1 wire
+  net %mem$ff4$q6 u1 wire
+  net %mem$ff4$q7 u1 wire
+  net %mem$ff5$q0 u1 wire
+  net %mem$ff5$q1 u1 wire
+  net %mem$ff5$q2 u1 wire
+  net %mem$ff5$q3 u1 wire
+  net %mem$ff5$q4 u1 wire
+  net %mem$ff5$q5 u1 wire
+  net %mem$ff5$q6 u1 wire
+  net %mem$ff5$q7 u1 wire
+  net %mem$ff6$q0 u1 wire
+  net %mem$ff6$q1 u1 wire
+  net %mem$ff6$q2 u1 wire
+  net %mem$ff6$q3 u1 wire
+  net %mem$ff6$q4 u1 wire
+  net %mem$ff6$q5 u1 wire
+  net %mem$ff6$q6 u1 wire
+  net %mem$ff6$q7 u1 wire
+  net %mem$ff7$q0 u1 wire
+  net %mem$ff7$q1 u1 wire
+  net %mem$ff7$q2 u1 wire
+  net %mem$ff7$q3 u1 wire
+  net %mem$ff7$q4 u1 wire
+  net %mem$ff7$q5 u1 wire
+  net %mem$ff7$q6 u1 wire
+  net %mem$ff7$q7 u1 wire
+  net %mem$ff8$q0 u1 wire
+  net %mem$ff8$q1 u1 wire
+  net %mem$ff8$q2 u1 wire
+  net %mem$ff8$q3 u1 wire
+  net %mem$ff8$q4 u1 wire
+  net %mem$ff8$q5 u1 wire
+  net %mem$ff8$q6 u1 wire
+  net %mem$ff8$q7 u1 wire
+  net %mem$ff9$q0 u1 wire
+  net %mem$ff9$q1 u1 wire
+  net %mem$ff9$q2 u1 wire
+  net %mem$ff9$q3 u1 wire
+  net %mem$ff9$q4 u1 wire
+  net %mem$ff9$q5 u1 wire
+  net %mem$ff9$q6 u1 wire
+  net %mem$ff9$q7 u1 wire
+  net %mem$ff10$q0 u1 wire
+  net %mem$ff10$q1 u1 wire
+  net %mem$ff10$q2 u1 wire
+  net %mem$ff10$q3 u1 wire
+  net %mem$ff10$q4 u1 wire
+  net %mem$ff10$q5 u1 wire
+  net %mem$ff10$q6 u1 wire
+  net %mem$ff10$q7 u1 wire
+  net %mem$ff11$q0 u1 wire
+  net %mem$ff11$q1 u1 wire
+  net %mem$ff11$q2 u1 wire
+  net %mem$ff11$q3 u1 wire
+  net %mem$ff11$q4 u1 wire
+  net %mem$ff11$q5 u1 wire
+  net %mem$ff11$q6 u1 wire
+  net %mem$ff11$q7 u1 wire
+  net %mem$ff12$q0 u1 wire
+  net %mem$ff12$q1 u1 wire
+  net %mem$ff12$q2 u1 wire
+  net %mem$ff12$q3 u1 wire
+  net %mem$ff12$q4 u1 wire
+  net %mem$ff12$q5 u1 wire
+  net %mem$ff12$q6 u1 wire
+  net %mem$ff12$q7 u1 wire
+  net %mem$ff13$q0 u1 wire
+  net %mem$ff13$q1 u1 wire
+  net %mem$ff13$q2 u1 wire
+  net %mem$ff13$q3 u1 wire
+  net %mem$ff13$q4 u1 wire
+  net %mem$ff13$q5 u1 wire
+  net %mem$ff13$q6 u1 wire
+  net %mem$ff13$q7 u1 wire
+  net %mem$ff14$q0 u1 wire
+  net %mem$ff14$q1 u1 wire
+  net %mem$ff14$q2 u1 wire
+  net %mem$ff14$q3 u1 wire
+  net %mem$ff14$q4 u1 wire
+  net %mem$ff14$q5 u1 wire
+  net %mem$ff14$q6 u1 wire
+  net %mem$ff14$q7 u1 wire
+  net %mem$ff15$q0 u1 wire
+  net %mem$ff15$q1 u1 wire
+  net %mem$ff15$q2 u1 wire
+  net %mem$ff15$q3 u1 wire
+  net %mem$ff15$q4 u1 wire
+  net %mem$ff15$q5 u1 wire
+  net %mem$ff15$q6 u1 wire
+  net %mem$ff15$q7 u1 wire
+  port clk in %clk$pad
+  port we in %we$pad
+  port waddr in %waddr$pad
+  port raddr in %raddr$pad
+  port wdata in %wdata$pad
+  port rdata out %rdata$pad
+  assign %clk = %clk$in0
+  assign %rdata = {%$lut152, %$lut165, %$lut178, %$lut191, %$lut204, %$lut217, %$lut230, %$lut243}
+  assign %mem$w0_d = {%$lut132, %$lut133, %$lut134, %$lut135, %$lut136, %$lut137, %$lut138, %$lut139}
+  assign %mem$w1_d = {%$lut123, %$lut124, %$lut125, %$lut126, %$lut127, %$lut128, %$lut129, %$lut130}
+  assign %mem$w2_d = {%$lut114, %$lut115, %$lut116, %$lut117, %$lut118, %$lut119, %$lut120, %$lut121}
+  assign %mem$w3_d = {%$lut105, %$lut106, %$lut107, %$lut108, %$lut109, %$lut110, %$lut111, %$lut112}
+  assign %mem$w4_d = {%$lut95, %$lut96, %$lut97, %$lut98, %$lut99, %$lut100, %$lut101, %$lut102}
+  assign %mem$w5_d = {%$lut87, %$lut88, %$lut89, %$lut90, %$lut91, %$lut92, %$lut93, %$lut94}
+  assign %mem$w6_d = {%$lut79, %$lut80, %$lut81, %$lut82, %$lut83, %$lut84, %$lut85, %$lut86}
+  assign %mem$w7_d = {%$lut71, %$lut72, %$lut73, %$lut74, %$lut75, %$lut76, %$lut77, %$lut78}
+  assign %mem$w8_d = {%$lut62, %$lut63, %$lut64, %$lut65, %$lut66, %$lut67, %$lut68, %$lut69}
+  assign %mem$w9_d = {%$lut54, %$lut55, %$lut56, %$lut57, %$lut58, %$lut59, %$lut60, %$lut61}
+  assign %mem$w10_d = {%$lut46, %$lut47, %$lut48, %$lut49, %$lut50, %$lut51, %$lut52, %$lut53}
+  assign %mem$w11_d = {%$lut38, %$lut39, %$lut40, %$lut41, %$lut42, %$lut43, %$lut44, %$lut45}
+  assign %mem$w12_d = {%$lut29, %$lut30, %$lut31, %$lut32, %$lut33, %$lut34, %$lut35, %$lut36}
+  assign %mem$w13_d = {%$lut20, %$lut21, %$lut22, %$lut23, %$lut24, %$lut25, %$lut26, %$lut27}
+  assign %mem$w14_d = {%$lut11, %$lut12, %$lut13, %$lut14, %$lut15, %$lut16, %$lut17, %$lut18}
+  assign %mem$w15_d = {%$lut2, %$lut3, %$lut4, %$lut5, %$lut6, %$lut7, %$lut8, %$lut9}
+  assign %rdata$pad = {%rdata$pin7, %rdata$pin6, %rdata$pin5, %rdata$pin4, %rdata$pin3, %rdata$pin2, %rdata$pin1, %rdata$pin0}
+  assign %mem$w0 = {%mem$ff0$q7, %mem$ff0$q6, %mem$ff0$q5, %mem$ff0$q4, %mem$ff0$q3, %mem$ff0$q2, %mem$ff0$q1, %mem$ff0$q0}
+  assign %mem$w1 = {%mem$ff1$q7, %mem$ff1$q6, %mem$ff1$q5, %mem$ff1$q4, %mem$ff1$q3, %mem$ff1$q2, %mem$ff1$q1, %mem$ff1$q0}
+  assign %mem$w2 = {%mem$ff2$q7, %mem$ff2$q6, %mem$ff2$q5, %mem$ff2$q4, %mem$ff2$q3, %mem$ff2$q2, %mem$ff2$q1, %mem$ff2$q0}
+  assign %mem$w3 = {%mem$ff3$q7, %mem$ff3$q6, %mem$ff3$q5, %mem$ff3$q4, %mem$ff3$q3, %mem$ff3$q2, %mem$ff3$q1, %mem$ff3$q0}
+  assign %mem$w4 = {%mem$ff4$q7, %mem$ff4$q6, %mem$ff4$q5, %mem$ff4$q4, %mem$ff4$q3, %mem$ff4$q2, %mem$ff4$q1, %mem$ff4$q0}
+  assign %mem$w5 = {%mem$ff5$q7, %mem$ff5$q6, %mem$ff5$q5, %mem$ff5$q4, %mem$ff5$q3, %mem$ff5$q2, %mem$ff5$q1, %mem$ff5$q0}
+  assign %mem$w6 = {%mem$ff6$q7, %mem$ff6$q6, %mem$ff6$q5, %mem$ff6$q4, %mem$ff6$q3, %mem$ff6$q2, %mem$ff6$q1, %mem$ff6$q0}
+  assign %mem$w7 = {%mem$ff7$q7, %mem$ff7$q6, %mem$ff7$q5, %mem$ff7$q4, %mem$ff7$q3, %mem$ff7$q2, %mem$ff7$q1, %mem$ff7$q0}
+  assign %mem$w8 = {%mem$ff8$q7, %mem$ff8$q6, %mem$ff8$q5, %mem$ff8$q4, %mem$ff8$q3, %mem$ff8$q2, %mem$ff8$q1, %mem$ff8$q0}
+  assign %mem$w9 = {%mem$ff9$q7, %mem$ff9$q6, %mem$ff9$q5, %mem$ff9$q4, %mem$ff9$q3, %mem$ff9$q2, %mem$ff9$q1, %mem$ff9$q0}
+  assign %mem$w10 = {%mem$ff10$q7, %mem$ff10$q6, %mem$ff10$q5, %mem$ff10$q4, %mem$ff10$q3, %mem$ff10$q2, %mem$ff10$q1, %mem$ff10$q0}
+  assign %mem$w11 = {%mem$ff11$q7, %mem$ff11$q6, %mem$ff11$q5, %mem$ff11$q4, %mem$ff11$q3, %mem$ff11$q2, %mem$ff11$q1, %mem$ff11$q0}
+  assign %mem$w12 = {%mem$ff12$q7, %mem$ff12$q6, %mem$ff12$q5, %mem$ff12$q4, %mem$ff12$q3, %mem$ff12$q2, %mem$ff12$q1, %mem$ff12$q0}
+  assign %mem$w13 = {%mem$ff13$q7, %mem$ff13$q6, %mem$ff13$q5, %mem$ff13$q4, %mem$ff13$q3, %mem$ff13$q2, %mem$ff13$q1, %mem$ff13$q0}
+  assign %mem$w14 = {%mem$ff14$q7, %mem$ff14$q6, %mem$ff14$q5, %mem$ff14$q4, %mem$ff14$q3, %mem$ff14$q2, %mem$ff14$q1, %mem$ff14$q0}
+  assign %mem$w15 = {%mem$ff15$q7, %mem$ff15$q6, %mem$ff15$q5, %mem$ff15$q4, %mem$ff15$q3, %mem$ff15$q2, %mem$ff15$q1, %mem$ff15$q0}
+  attr port = "clk"
+  attr pin = "21"
+  attr io_standard = "LVCMOS33"
+  cell clk$io0 blackbox SB_IO #(PIN_TYPE=6'd1) (PACKAGE_PIN=%clk$pad) -> (D_IN_0=%clk$in0)
+  attr port = "we"
+  attr pin = "8"
+  attr io_standard = "LVCMOS33"
+  cell we$io0 blackbox SB_IO #(PIN_TYPE=6'd1) (PACKAGE_PIN=%we$pad) -> (D_IN_0=%we$in0)
+  attr port = "waddr"
+  cell waddr$io0 blackbox SB_IO #(PIN_TYPE=6'd1) (PACKAGE_PIN=%waddr$pad[0:0]) -> (D_IN_0=%waddr$in0)
+  attr port = "waddr"
+  cell waddr$io1 blackbox SB_IO #(PIN_TYPE=6'd1) (PACKAGE_PIN=%waddr$pad[1:1]) -> (D_IN_0=%waddr$in1)
+  attr port = "waddr"
+  cell waddr$io2 blackbox SB_IO #(PIN_TYPE=6'd1) (PACKAGE_PIN=%waddr$pad[2:2]) -> (D_IN_0=%waddr$in2)
+  attr port = "waddr"
+  cell waddr$io3 blackbox SB_IO #(PIN_TYPE=6'd1) (PACKAGE_PIN=%waddr$pad[3:3]) -> (D_IN_0=%waddr$in3)
+  attr port = "raddr"
+  cell raddr$io0 blackbox SB_IO #(PIN_TYPE=6'd1) (PACKAGE_PIN=%raddr$pad[0:0]) -> (D_IN_0=%raddr$in0)
+  attr port = "raddr"
+  cell raddr$io1 blackbox SB_IO #(PIN_TYPE=6'd1) (PACKAGE_PIN=%raddr$pad[1:1]) -> (D_IN_0=%raddr$in1)
+  attr port = "raddr"
+  cell raddr$io2 blackbox SB_IO #(PIN_TYPE=6'd1) (PACKAGE_PIN=%raddr$pad[2:2]) -> (D_IN_0=%raddr$in2)
+  attr port = "raddr"
+  cell raddr$io3 blackbox SB_IO #(PIN_TYPE=6'd1) (PACKAGE_PIN=%raddr$pad[3:3]) -> (D_IN_0=%raddr$in3)
+  attr port = "wdata"
+  cell wdata$io0 blackbox SB_IO #(PIN_TYPE=6'd1) (PACKAGE_PIN=%wdata$pad[0:0]) -> (D_IN_0=%wdata$in0)
+  attr port = "wdata"
+  cell wdata$io1 blackbox SB_IO #(PIN_TYPE=6'd1) (PACKAGE_PIN=%wdata$pad[1:1]) -> (D_IN_0=%wdata$in1)
+  attr port = "wdata"
+  cell wdata$io2 blackbox SB_IO #(PIN_TYPE=6'd1) (PACKAGE_PIN=%wdata$pad[2:2]) -> (D_IN_0=%wdata$in2)
+  attr port = "wdata"
+  cell wdata$io3 blackbox SB_IO #(PIN_TYPE=6'd1) (PACKAGE_PIN=%wdata$pad[3:3]) -> (D_IN_0=%wdata$in3)
+  attr port = "wdata"
+  cell wdata$io4 blackbox SB_IO #(PIN_TYPE=6'd1) (PACKAGE_PIN=%wdata$pad[4:4]) -> (D_IN_0=%wdata$in4)
+  attr port = "wdata"
+  cell wdata$io5 blackbox SB_IO #(PIN_TYPE=6'd1) (PACKAGE_PIN=%wdata$pad[5:5]) -> (D_IN_0=%wdata$in5)
+  attr port = "wdata"
+  cell wdata$io6 blackbox SB_IO #(PIN_TYPE=6'd1) (PACKAGE_PIN=%wdata$pad[6:6]) -> (D_IN_0=%wdata$in6)
+  attr port = "wdata"
+  cell wdata$io7 blackbox SB_IO #(PIN_TYPE=6'd1) (PACKAGE_PIN=%wdata$pad[7:7]) -> (D_IN_0=%wdata$in7)
+  attr port = "rdata"
+  cell rdata$io0 blackbox SB_IO #(PIN_TYPE=6'd25) (D_OUT_0=%rdata[0:0]) -> (PACKAGE_PIN=%rdata$pin0)
+  attr port = "rdata"
+  cell rdata$io1 blackbox SB_IO #(PIN_TYPE=6'd25) (D_OUT_0=%rdata[1:1]) -> (PACKAGE_PIN=%rdata$pin1)
+  attr port = "rdata"
+  cell rdata$io2 blackbox SB_IO #(PIN_TYPE=6'd25) (D_OUT_0=%rdata[2:2]) -> (PACKAGE_PIN=%rdata$pin2)
+  attr port = "rdata"
+  cell rdata$io3 blackbox SB_IO #(PIN_TYPE=6'd25) (D_OUT_0=%rdata[3:3]) -> (PACKAGE_PIN=%rdata$pin3)
+  attr port = "rdata"
+  cell rdata$io4 blackbox SB_IO #(PIN_TYPE=6'd25) (D_OUT_0=%rdata[4:4]) -> (PACKAGE_PIN=%rdata$pin4)
+  attr port = "rdata"
+  cell rdata$io5 blackbox SB_IO #(PIN_TYPE=6'd25) (D_OUT_0=%rdata[5:5]) -> (PACKAGE_PIN=%rdata$pin5)
+  attr port = "rdata"
+  cell rdata$io6 blackbox SB_IO #(PIN_TYPE=6'd25) (D_OUT_0=%rdata[6:6]) -> (PACKAGE_PIN=%rdata$pin6)
+  attr port = "rdata"
+  cell rdata$io7 blackbox SB_IO #(PIN_TYPE=6'd25) (D_OUT_0=%rdata[7:7]) -> (PACKAGE_PIN=%rdata$pin7)
+  cell clk$gbuf blackbox SB_GB (USER_SIGNAL_TO_GLOBAL_BUFFER=%clk) -> (GLOBAL_BUFFER_OUTPUT=%clk$gb)
+  cell $lut244 blackbox SB_LUT4 #(LUT_INIT=16'd34952) (I0={%waddr$in3, %waddr$in2}[0:0], I1={%waddr$in3, %waddr$in2}[1:1], I2=1'd0, I3=1'd0) -> (O=%$lut0)
+  cell $lut245 blackbox SB_LUT4 #(LUT_INIT=16'd32896) (I0={%waddr$in1, %waddr$in0, %we$in0}[0:0], I1={%waddr$in1, %waddr$in0, %we$in0}[1:1], I2={%waddr$in1, %waddr$in0, %we$in0}[2:2], I3=1'd0) -> (O=%$lut1)
+  cell $lut246 blackbox SB_LUT4 #(LUT_INIT=16'd51882) (I0={%$lut0, %$lut1, %wdata$in7, %mem$w15[7:7]}[0:0], I1={%$lut0, %$lut1, %wdata$in7, %mem$w15[7:7]}[1:1], I2={%$lut0, %$lut1, %wdata$in7, %mem$w15[7:7]}[2:2], I3={%$lut0, %$lut1, %wdata$in7, %mem$w15[7:7]}[3:3]) -> (O=%$lut2)
+  cell $lut247 blackbox SB_LUT4 #(LUT_INIT=16'd51882) (I0={%$lut0, %$lut1, %wdata$in6, %mem$w15[6:6]}[0:0], I1={%$lut0, %$lut1, %wdata$in6, %mem$w15[6:6]}[1:1], I2={%$lut0, %$lut1, %wdata$in6, %mem$w15[6:6]}[2:2], I3={%$lut0, %$lut1, %wdata$in6, %mem$w15[6:6]}[3:3]) -> (O=%$lut3)
+  cell $lut248 blackbox SB_LUT4 #(LUT_INIT=16'd51882) (I0={%$lut0, %$lut1, %wdata$in5, %mem$w15[5:5]}[0:0], I1={%$lut0, %$lut1, %wdata$in5, %mem$w15[5:5]}[1:1], I2={%$lut0, %$lut1, %wdata$in5, %mem$w15[5:5]}[2:2], I3={%$lut0, %$lut1, %wdata$in5, %mem$w15[5:5]}[3:3]) -> (O=%$lut4)
+  cell $lut249 blackbox SB_LUT4 #(LUT_INIT=16'd51882) (I0={%$lut0, %$lut1, %wdata$in4, %mem$w15[4:4]}[0:0], I1={%$lut0, %$lut1, %wdata$in4, %mem$w15[4:4]}[1:1], I2={%$lut0, %$lut1, %wdata$in4, %mem$w15[4:4]}[2:2], I3={%$lut0, %$lut1, %wdata$in4, %mem$w15[4:4]}[3:3]) -> (O=%$lut5)
+  cell $lut250 blackbox SB_LUT4 #(LUT_INIT=16'd51882) (I0={%$lut0, %$lut1, %wdata$in3, %mem$w15[3:3]}[0:0], I1={%$lut0, %$lut1, %wdata$in3, %mem$w15[3:3]}[1:1], I2={%$lut0, %$lut1, %wdata$in3, %mem$w15[3:3]}[2:2], I3={%$lut0, %$lut1, %wdata$in3, %mem$w15[3:3]}[3:3]) -> (O=%$lut6)
+  cell $lut251 blackbox SB_LUT4 #(LUT_INIT=16'd51882) (I0={%$lut0, %$lut1, %wdata$in2, %mem$w15[2:2]}[0:0], I1={%$lut0, %$lut1, %wdata$in2, %mem$w15[2:2]}[1:1], I2={%$lut0, %$lut1, %wdata$in2, %mem$w15[2:2]}[2:2], I3={%$lut0, %$lut1, %wdata$in2, %mem$w15[2:2]}[3:3]) -> (O=%$lut7)
+  cell $lut252 blackbox SB_LUT4 #(LUT_INIT=16'd51882) (I0={%$lut0, %$lut1, %wdata$in1, %mem$w15[1:1]}[0:0], I1={%$lut0, %$lut1, %wdata$in1, %mem$w15[1:1]}[1:1], I2={%$lut0, %$lut1, %wdata$in1, %mem$w15[1:1]}[2:2], I3={%$lut0, %$lut1, %wdata$in1, %mem$w15[1:1]}[3:3]) -> (O=%$lut8)
+  cell $lut253 blackbox SB_LUT4 #(LUT_INIT=16'd51882) (I0={%$lut0, %$lut1, %wdata$in0, %mem$w15[0:0]}[0:0], I1={%$lut0, %$lut1, %wdata$in0, %mem$w15[0:0]}[1:1], I2={%$lut0, %$lut1, %wdata$in0, %mem$w15[0:0]}[2:2], I3={%$lut0, %$lut1, %wdata$in0, %mem$w15[0:0]}[3:3]) -> (O=%$lut9)
+  cell $lut254 blackbox SB_LUT4 #(LUT_INIT=16'd34952) (I0={%$lut0, %$lut1}[0:0], I1={%$lut0, %$lut1}[1:1], I2=1'd0, I3=1'd0) -> (O=%mem$we$15)
+  cell $lut255 blackbox SB_LUT4 #(LUT_INIT=16'd8224) (I0={%waddr$in1, %waddr$in0, %we$in0}[0:0], I1={%waddr$in1, %waddr$in0, %we$in0}[1:1], I2={%waddr$in1, %waddr$in0, %we$in0}[2:2], I3=1'd0) -> (O=%$lut10)
+  cell $lut256 blackbox SB_LUT4 #(LUT_INIT=16'd51882) (I0={%$lut0, %$lut10, %wdata$in7, %mem$w14[7:7]}[0:0], I1={%$lut0, %$lut10, %wdata$in7, %mem$w14[7:7]}[1:1], I2={%$lut0, %$lut10, %wdata$in7, %mem$w14[7:7]}[2:2], I3={%$lut0, %$lut10, %wdata$in7, %mem$w14[7:7]}[3:3]) -> (O=%$lut11)
+  cell $lut257 blackbox SB_LUT4 #(LUT_INIT=16'd51882) (I0={%$lut0, %$lut10, %wdata$in6, %mem$w14[6:6]}[0:0], I1={%$lut0, %$lut10, %wdata$in6, %mem$w14[6:6]}[1:1], I2={%$lut0, %$lut10, %wdata$in6, %mem$w14[6:6]}[2:2], I3={%$lut0, %$lut10, %wdata$in6, %mem$w14[6:6]}[3:3]) -> (O=%$lut12)
+  cell $lut258 blackbox SB_LUT4 #(LUT_INIT=16'd51882) (I0={%$lut0, %$lut10, %wdata$in5, %mem$w14[5:5]}[0:0], I1={%$lut0, %$lut10, %wdata$in5, %mem$w14[5:5]}[1:1], I2={%$lut0, %$lut10, %wdata$in5, %mem$w14[5:5]}[2:2], I3={%$lut0, %$lut10, %wdata$in5, %mem$w14[5:5]}[3:3]) -> (O=%$lut13)
+  cell $lut259 blackbox SB_LUT4 #(LUT_INIT=16'd51882) (I0={%$lut0, %$lut10, %wdata$in4, %mem$w14[4:4]}[0:0], I1={%$lut0, %$lut10, %wdata$in4, %mem$w14[4:4]}[1:1], I2={%$lut0, %$lut10, %wdata$in4, %mem$w14[4:4]}[2:2], I3={%$lut0, %$lut10, %wdata$in4, %mem$w14[4:4]}[3:3]) -> (O=%$lut14)
+  cell $lut260 blackbox SB_LUT4 #(LUT_INIT=16'd51882) (I0={%$lut0, %$lut10, %wdata$in3, %mem$w14[3:3]}[0:0], I1={%$lut0, %$lut10, %wdata$in3, %mem$w14[3:3]}[1:1], I2={%$lut0, %$lut10, %wdata$in3, %mem$w14[3:3]}[2:2], I3={%$lut0, %$lut10, %wdata$in3, %mem$w14[3:3]}[3:3]) -> (O=%$lut15)
+  cell $lut261 blackbox SB_LUT4 #(LUT_INIT=16'd51882) (I0={%$lut0, %$lut10, %wdata$in2, %mem$w14[2:2]}[0:0], I1={%$lut0, %$lut10, %wdata$in2, %mem$w14[2:2]}[1:1], I2={%$lut0, %$lut10, %wdata$in2, %mem$w14[2:2]}[2:2], I3={%$lut0, %$lut10, %wdata$in2, %mem$w14[2:2]}[3:3]) -> (O=%$lut16)
+  cell $lut262 blackbox SB_LUT4 #(LUT_INIT=16'd51882) (I0={%$lut0, %$lut10, %wdata$in1, %mem$w14[1:1]}[0:0], I1={%$lut0, %$lut10, %wdata$in1, %mem$w14[1:1]}[1:1], I2={%$lut0, %$lut10, %wdata$in1, %mem$w14[1:1]}[2:2], I3={%$lut0, %$lut10, %wdata$in1, %mem$w14[1:1]}[3:3]) -> (O=%$lut17)
+  cell $lut263 blackbox SB_LUT4 #(LUT_INIT=16'd51882) (I0={%$lut0, %$lut10, %wdata$in0, %mem$w14[0:0]}[0:0], I1={%$lut0, %$lut10, %wdata$in0, %mem$w14[0:0]}[1:1], I2={%$lut0, %$lut10, %wdata$in0, %mem$w14[0:0]}[2:2], I3={%$lut0, %$lut10, %wdata$in0, %mem$w14[0:0]}[3:3]) -> (O=%$lut18)
+  cell $lut264 blackbox SB_LUT4 #(LUT_INIT=16'd34952) (I0={%$lut0, %$lut10}[0:0], I1={%$lut0, %$lut10}[1:1], I2=1'd0, I3=1'd0) -> (O=%mem$we$14)
+  cell $lut265 blackbox SB_LUT4 #(LUT_INIT=16'd2056) (I0={%waddr$in1, %waddr$in0, %we$in0}[0:0], I1={%waddr$in1, %waddr$in0, %we$in0}[1:1], I2={%waddr$in1, %waddr$in0, %we$in0}[2:2], I3=1'd0) -> (O=%$lut19)
+  cell $lut266 blackbox SB_LUT4 #(LUT_INIT=16'd51882) (I0={%$lut0, %$lut19, %wdata$in7, %mem$w13[7:7]}[0:0], I1={%$lut0, %$lut19, %wdata$in7, %mem$w13[7:7]}[1:1], I2={%$lut0, %$lut19, %wdata$in7, %mem$w13[7:7]}[2:2], I3={%$lut0, %$lut19, %wdata$in7, %mem$w13[7:7]}[3:3]) -> (O=%$lut20)
+  cell $lut267 blackbox SB_LUT4 #(LUT_INIT=16'd51882) (I0={%$lut0, %$lut19, %wdata$in6, %mem$w13[6:6]}[0:0], I1={%$lut0, %$lut19, %wdata$in6, %mem$w13[6:6]}[1:1], I2={%$lut0, %$lut19, %wdata$in6, %mem$w13[6:6]}[2:2], I3={%$lut0, %$lut19, %wdata$in6, %mem$w13[6:6]}[3:3]) -> (O=%$lut21)
+  cell $lut268 blackbox SB_LUT4 #(LUT_INIT=16'd51882) (I0={%$lut0, %$lut19, %wdata$in5, %mem$w13[5:5]}[0:0], I1={%$lut0, %$lut19, %wdata$in5, %mem$w13[5:5]}[1:1], I2={%$lut0, %$lut19, %wdata$in5, %mem$w13[5:5]}[2:2], I3={%$lut0, %$lut19, %wdata$in5, %mem$w13[5:5]}[3:3]) -> (O=%$lut22)
+  cell $lut269 blackbox SB_LUT4 #(LUT_INIT=16'd51882) (I0={%$lut0, %$lut19, %wdata$in4, %mem$w13[4:4]}[0:0], I1={%$lut0, %$lut19, %wdata$in4, %mem$w13[4:4]}[1:1], I2={%$lut0, %$lut19, %wdata$in4, %mem$w13[4:4]}[2:2], I3={%$lut0, %$lut19, %wdata$in4, %mem$w13[4:4]}[3:3]) -> (O=%$lut23)
+  cell $lut270 blackbox SB_LUT4 #(LUT_INIT=16'd51882) (I0={%$lut0, %$lut19, %wdata$in3, %mem$w13[3:3]}[0:0], I1={%$lut0, %$lut19, %wdata$in3, %mem$w13[3:3]}[1:1], I2={%$lut0, %$lut19, %wdata$in3, %mem$w13[3:3]}[2:2], I3={%$lut0, %$lut19, %wdata$in3, %mem$w13[3:3]}[3:3]) -> (O=%$lut24)
+  cell $lut271 blackbox SB_LUT4 #(LUT_INIT=16'd51882) (I0={%$lut0, %$lut19, %wdata$in2, %mem$w13[2:2]}[0:0], I1={%$lut0, %$lut19, %wdata$in2, %mem$w13[2:2]}[1:1], I2={%$lut0, %$lut19, %wdata$in2, %mem$w13[2:2]}[2:2], I3={%$lut0, %$lut19, %wdata$in2, %mem$w13[2:2]}[3:3]) -> (O=%$lut25)
+  cell $lut272 blackbox SB_LUT4 #(LUT_INIT=16'd51882) (I0={%$lut0, %$lut19, %wdata$in1, %mem$w13[1:1]}[0:0], I1={%$lut0, %$lut19, %wdata$in1, %mem$w13[1:1]}[1:1], I2={%$lut0, %$lut19, %wdata$in1, %mem$w13[1:1]}[2:2], I3={%$lut0, %$lut19, %wdata$in1, %mem$w13[1:1]}[3:3]) -> (O=%$lut26)
+  cell $lut273 blackbox SB_LUT4 #(LUT_INIT=16'd51882) (I0={%$lut0, %$lut19, %wdata$in0, %mem$w13[0:0]}[0:0], I1={%$lut0, %$lut19, %wdata$in0, %mem$w13[0:0]}[1:1], I2={%$lut0, %$lut19, %wdata$in0, %mem$w13[0:0]}[2:2], I3={%$lut0, %$lut19, %wdata$in0, %mem$w13[0:0]}[3:3]) -> (O=%$lut27)
+  cell $lut274 blackbox SB_LUT4 #(LUT_INIT=16'd34952) (I0={%$lut0, %$lut19}[0:0], I1={%$lut0, %$lut19}[1:1], I2=1'd0, I3=1'd0) -> (O=%mem$we$13)
+  cell $lut275 blackbox SB_LUT4 #(LUT_INIT=16'd514) (I0={%waddr$in1, %waddr$in0, %we$in0}[0:0], I1={%waddr$in1, %waddr$in0, %we$in0}[1:1], I2={%waddr$in1, %waddr$in0, %we$in0}[2:2], I3=1'd0) -> (O=%$lut28)
+  cell $lut276 blackbox SB_LUT4 #(LUT_INIT=16'd51882) (I0={%$lut0, %$lut28, %wdata$in7, %mem$w12[7:7]}[0:0], I1={%$lut0, %$lut28, %wdata$in7, %mem$w12[7:7]}[1:1], I2={%$lut0, %$lut28, %wdata$in7, %mem$w12[7:7]}[2:2], I3={%$lut0, %$lut28, %wdata$in7, %mem$w12[7:7]}[3:3]) -> (O=%$lut29)
+  cell $lut277 blackbox SB_LUT4 #(LUT_INIT=16'd51882) (I0={%$lut0, %$lut28, %wdata$in6, %mem$w12[6:6]}[0:0], I1={%$lut0, %$lut28, %wdata$in6, %mem$w12[6:6]}[1:1], I2={%$lut0, %$lut28, %wdata$in6, %mem$w12[6:6]}[2:2], I3={%$lut0, %$lut28, %wdata$in6, %mem$w12[6:6]}[3:3]) -> (O=%$lut30)
+  cell $lut278 blackbox SB_LUT4 #(LUT_INIT=16'd51882) (I0={%$lut0, %$lut28, %wdata$in5, %mem$w12[5:5]}[0:0], I1={%$lut0, %$lut28, %wdata$in5, %mem$w12[5:5]}[1:1], I2={%$lut0, %$lut28, %wdata$in5, %mem$w12[5:5]}[2:2], I3={%$lut0, %$lut28, %wdata$in5, %mem$w12[5:5]}[3:3]) -> (O=%$lut31)
+  cell $lut279 blackbox SB_LUT4 #(LUT_INIT=16'd51882) (I0={%$lut0, %$lut28, %wdata$in4, %mem$w12[4:4]}[0:0], I1={%$lut0, %$lut28, %wdata$in4, %mem$w12[4:4]}[1:1], I2={%$lut0, %$lut28, %wdata$in4, %mem$w12[4:4]}[2:2], I3={%$lut0, %$lut28, %wdata$in4, %mem$w12[4:4]}[3:3]) -> (O=%$lut32)
+  cell $lut280 blackbox SB_LUT4 #(LUT_INIT=16'd51882) (I0={%$lut0, %$lut28, %wdata$in3, %mem$w12[3:3]}[0:0], I1={%$lut0, %$lut28, %wdata$in3, %mem$w12[3:3]}[1:1], I2={%$lut0, %$lut28, %wdata$in3, %mem$w12[3:3]}[2:2], I3={%$lut0, %$lut28, %wdata$in3, %mem$w12[3:3]}[3:3]) -> (O=%$lut33)
+  cell $lut281 blackbox SB_LUT4 #(LUT_INIT=16'd51882) (I0={%$lut0, %$lut28, %wdata$in2, %mem$w12[2:2]}[0:0], I1={%$lut0, %$lut28, %wdata$in2, %mem$w12[2:2]}[1:1], I2={%$lut0, %$lut28, %wdata$in2, %mem$w12[2:2]}[2:2], I3={%$lut0, %$lut28, %wdata$in2, %mem$w12[2:2]}[3:3]) -> (O=%$lut34)
+  cell $lut282 blackbox SB_LUT4 #(LUT_INIT=16'd51882) (I0={%$lut0, %$lut28, %wdata$in1, %mem$w12[1:1]}[0:0], I1={%$lut0, %$lut28, %wdata$in1, %mem$w12[1:1]}[1:1], I2={%$lut0, %$lut28, %wdata$in1, %mem$w12[1:1]}[2:2], I3={%$lut0, %$lut28, %wdata$in1, %mem$w12[1:1]}[3:3]) -> (O=%$lut35)
+  cell $lut283 blackbox SB_LUT4 #(LUT_INIT=16'd51882) (I0={%$lut0, %$lut28, %wdata$in0, %mem$w12[0:0]}[0:0], I1={%$lut0, %$lut28, %wdata$in0, %mem$w12[0:0]}[1:1], I2={%$lut0, %$lut28, %wdata$in0, %mem$w12[0:0]}[2:2], I3={%$lut0, %$lut28, %wdata$in0, %mem$w12[0:0]}[3:3]) -> (O=%$lut36)
+  cell $lut284 blackbox SB_LUT4 #(LUT_INIT=16'd34952) (I0={%$lut0, %$lut28}[0:0], I1={%$lut0, %$lut28}[1:1], I2=1'd0, I3=1'd0) -> (O=%mem$we$12)
+  cell $lut285 blackbox SB_LUT4 #(LUT_INIT=16'd17476) (I0={%waddr$in3, %waddr$in2}[0:0], I1={%waddr$in3, %waddr$in2}[1:1], I2=1'd0, I3=1'd0) -> (O=%$lut37)
+  cell $lut286 blackbox SB_LUT4 #(LUT_INIT=16'd51882) (I0={%$lut37, %$lut1, %wdata$in7, %mem$w11[7:7]}[0:0], I1={%$lut37, %$lut1, %wdata$in7, %mem$w11[7:7]}[1:1], I2={%$lut37, %$lut1, %wdata$in7, %mem$w11[7:7]}[2:2], I3={%$lut37, %$lut1, %wdata$in7, %mem$w11[7:7]}[3:3]) -> (O=%$lut38)
+  cell $lut287 blackbox SB_LUT4 #(LUT_INIT=16'd51882) (I0={%$lut37, %$lut1, %wdata$in6, %mem$w11[6:6]}[0:0], I1={%$lut37, %$lut1, %wdata$in6, %mem$w11[6:6]}[1:1], I2={%$lut37, %$lut1, %wdata$in6, %mem$w11[6:6]}[2:2], I3={%$lut37, %$lut1, %wdata$in6, %mem$w11[6:6]}[3:3]) -> (O=%$lut39)
+  cell $lut288 blackbox SB_LUT4 #(LUT_INIT=16'd51882) (I0={%$lut37, %$lut1, %wdata$in5, %mem$w11[5:5]}[0:0], I1={%$lut37, %$lut1, %wdata$in5, %mem$w11[5:5]}[1:1], I2={%$lut37, %$lut1, %wdata$in5, %mem$w11[5:5]}[2:2], I3={%$lut37, %$lut1, %wdata$in5, %mem$w11[5:5]}[3:3]) -> (O=%$lut40)
+  cell $lut289 blackbox SB_LUT4 #(LUT_INIT=16'd51882) (I0={%$lut37, %$lut1, %wdata$in4, %mem$w11[4:4]}[0:0], I1={%$lut37, %$lut1, %wdata$in4, %mem$w11[4:4]}[1:1], I2={%$lut37, %$lut1, %wdata$in4, %mem$w11[4:4]}[2:2], I3={%$lut37, %$lut1, %wdata$in4, %mem$w11[4:4]}[3:3]) -> (O=%$lut41)
+  cell $lut290 blackbox SB_LUT4 #(LUT_INIT=16'd51882) (I0={%$lut37, %$lut1, %wdata$in3, %mem$w11[3:3]}[0:0], I1={%$lut37, %$lut1, %wdata$in3, %mem$w11[3:3]}[1:1], I2={%$lut37, %$lut1, %wdata$in3, %mem$w11[3:3]}[2:2], I3={%$lut37, %$lut1, %wdata$in3, %mem$w11[3:3]}[3:3]) -> (O=%$lut42)
+  cell $lut291 blackbox SB_LUT4 #(LUT_INIT=16'd51882) (I0={%$lut37, %$lut1, %wdata$in2, %mem$w11[2:2]}[0:0], I1={%$lut37, %$lut1, %wdata$in2, %mem$w11[2:2]}[1:1], I2={%$lut37, %$lut1, %wdata$in2, %mem$w11[2:2]}[2:2], I3={%$lut37, %$lut1, %wdata$in2, %mem$w11[2:2]}[3:3]) -> (O=%$lut43)
+  cell $lut292 blackbox SB_LUT4 #(LUT_INIT=16'd51882) (I0={%$lut37, %$lut1, %wdata$in1, %mem$w11[1:1]}[0:0], I1={%$lut37, %$lut1, %wdata$in1, %mem$w11[1:1]}[1:1], I2={%$lut37, %$lut1, %wdata$in1, %mem$w11[1:1]}[2:2], I3={%$lut37, %$lut1, %wdata$in1, %mem$w11[1:1]}[3:3]) -> (O=%$lut44)
+  cell $lut293 blackbox SB_LUT4 #(LUT_INIT=16'd51882) (I0={%$lut37, %$lut1, %wdata$in0, %mem$w11[0:0]}[0:0], I1={%$lut37, %$lut1, %wdata$in0, %mem$w11[0:0]}[1:1], I2={%$lut37, %$lut1, %wdata$in0, %mem$w11[0:0]}[2:2], I3={%$lut37, %$lut1, %wdata$in0, %mem$w11[0:0]}[3:3]) -> (O=%$lut45)
+  cell $lut294 blackbox SB_LUT4 #(LUT_INIT=16'd34952) (I0={%$lut37, %$lut1}[0:0], I1={%$lut37, %$lut1}[1:1], I2=1'd0, I3=1'd0) -> (O=%mem$we$11)
+  cell $lut295 blackbox SB_LUT4 #(LUT_INIT=16'd51882) (I0={%$lut37, %$lut10, %wdata$in7, %mem$w10[7:7]}[0:0], I1={%$lut37, %$lut10, %wdata$in7, %mem$w10[7:7]}[1:1], I2={%$lut37, %$lut10, %wdata$in7, %mem$w10[7:7]}[2:2], I3={%$lut37, %$lut10, %wdata$in7, %mem$w10[7:7]}[3:3]) -> (O=%$lut46)
+  cell $lut296 blackbox SB_LUT4 #(LUT_INIT=16'd51882) (I0={%$lut37, %$lut10, %wdata$in6, %mem$w10[6:6]}[0:0], I1={%$lut37, %$lut10, %wdata$in6, %mem$w10[6:6]}[1:1], I2={%$lut37, %$lut10, %wdata$in6, %mem$w10[6:6]}[2:2], I3={%$lut37, %$lut10, %wdata$in6, %mem$w10[6:6]}[3:3]) -> (O=%$lut47)
+  cell $lut297 blackbox SB_LUT4 #(LUT_INIT=16'd51882) (I0={%$lut37, %$lut10, %wdata$in5, %mem$w10[5:5]}[0:0], I1={%$lut37, %$lut10, %wdata$in5, %mem$w10[5:5]}[1:1], I2={%$lut37, %$lut10, %wdata$in5, %mem$w10[5:5]}[2:2], I3={%$lut37, %$lut10, %wdata$in5, %mem$w10[5:5]}[3:3]) -> (O=%$lut48)
+  cell $lut298 blackbox SB_LUT4 #(LUT_INIT=16'd51882) (I0={%$lut37, %$lut10, %wdata$in4, %mem$w10[4:4]}[0:0], I1={%$lut37, %$lut10, %wdata$in4, %mem$w10[4:4]}[1:1], I2={%$lut37, %$lut10, %wdata$in4, %mem$w10[4:4]}[2:2], I3={%$lut37, %$lut10, %wdata$in4, %mem$w10[4:4]}[3:3]) -> (O=%$lut49)
+  cell $lut299 blackbox SB_LUT4 #(LUT_INIT=16'd51882) (I0={%$lut37, %$lut10, %wdata$in3, %mem$w10[3:3]}[0:0], I1={%$lut37, %$lut10, %wdata$in3, %mem$w10[3:3]}[1:1], I2={%$lut37, %$lut10, %wdata$in3, %mem$w10[3:3]}[2:2], I3={%$lut37, %$lut10, %wdata$in3, %mem$w10[3:3]}[3:3]) -> (O=%$lut50)
+  cell $lut300 blackbox SB_LUT4 #(LUT_INIT=16'd51882) (I0={%$lut37, %$lut10, %wdata$in2, %mem$w10[2:2]}[0:0], I1={%$lut37, %$lut10, %wdata$in2, %mem$w10[2:2]}[1:1], I2={%$lut37, %$lut10, %wdata$in2, %mem$w10[2:2]}[2:2], I3={%$lut37, %$lut10, %wdata$in2, %mem$w10[2:2]}[3:3]) -> (O=%$lut51)
+  cell $lut301 blackbox SB_LUT4 #(LUT_INIT=16'd51882) (I0={%$lut37, %$lut10, %wdata$in1, %mem$w10[1:1]}[0:0], I1={%$lut37, %$lut10, %wdata$in1, %mem$w10[1:1]}[1:1], I2={%$lut37, %$lut10, %wdata$in1, %mem$w10[1:1]}[2:2], I3={%$lut37, %$lut10, %wdata$in1, %mem$w10[1:1]}[3:3]) -> (O=%$lut52)
+  cell $lut302 blackbox SB_LUT4 #(LUT_INIT=16'd51882) (I0={%$lut37, %$lut10, %wdata$in0, %mem$w10[0:0]}[0:0], I1={%$lut37, %$lut10, %wdata$in0, %mem$w10[0:0]}[1:1], I2={%$lut37, %$lut10, %wdata$in0, %mem$w10[0:0]}[2:2], I3={%$lut37, %$lut10, %wdata$in0, %mem$w10[0:0]}[3:3]) -> (O=%$lut53)
+  cell $lut303 blackbox SB_LUT4 #(LUT_INIT=16'd34952) (I0={%$lut37, %$lut10}[0:0], I1={%$lut37, %$lut10}[1:1], I2=1'd0, I3=1'd0) -> (O=%mem$we$10)
+  cell $lut304 blackbox SB_LUT4 #(LUT_INIT=16'd51882) (I0={%$lut37, %$lut19, %wdata$in7, %mem$w9[7:7]}[0:0], I1={%$lut37, %$lut19, %wdata$in7, %mem$w9[7:7]}[1:1], I2={%$lut37, %$lut19, %wdata$in7, %mem$w9[7:7]}[2:2], I3={%$lut37, %$lut19, %wdata$in7, %mem$w9[7:7]}[3:3]) -> (O=%$lut54)
+  cell $lut305 blackbox SB_LUT4 #(LUT_INIT=16'd51882) (I0={%$lut37, %$lut19, %wdata$in6, %mem$w9[6:6]}[0:0], I1={%$lut37, %$lut19, %wdata$in6, %mem$w9[6:6]}[1:1], I2={%$lut37, %$lut19, %wdata$in6, %mem$w9[6:6]}[2:2], I3={%$lut37, %$lut19, %wdata$in6, %mem$w9[6:6]}[3:3]) -> (O=%$lut55)
+  cell $lut306 blackbox SB_LUT4 #(LUT_INIT=16'd51882) (I0={%$lut37, %$lut19, %wdata$in5, %mem$w9[5:5]}[0:0], I1={%$lut37, %$lut19, %wdata$in5, %mem$w9[5:5]}[1:1], I2={%$lut37, %$lut19, %wdata$in5, %mem$w9[5:5]}[2:2], I3={%$lut37, %$lut19, %wdata$in5, %mem$w9[5:5]}[3:3]) -> (O=%$lut56)
+  cell $lut307 blackbox SB_LUT4 #(LUT_INIT=16'd51882) (I0={%$lut37, %$lut19, %wdata$in4, %mem$w9[4:4]}[0:0], I1={%$lut37, %$lut19, %wdata$in4, %mem$w9[4:4]}[1:1], I2={%$lut37, %$lut19, %wdata$in4, %mem$w9[4:4]}[2:2], I3={%$lut37, %$lut19, %wdata$in4, %mem$w9[4:4]}[3:3]) -> (O=%$lut57)
+  cell $lut308 blackbox SB_LUT4 #(LUT_INIT=16'd51882) (I0={%$lut37, %$lut19, %wdata$in3, %mem$w9[3:3]}[0:0], I1={%$lut37, %$lut19, %wdata$in3, %mem$w9[3:3]}[1:1], I2={%$lut37, %$lut19, %wdata$in3, %mem$w9[3:3]}[2:2], I3={%$lut37, %$lut19, %wdata$in3, %mem$w9[3:3]}[3:3]) -> (O=%$lut58)
+  cell $lut309 blackbox SB_LUT4 #(LUT_INIT=16'd51882) (I0={%$lut37, %$lut19, %wdata$in2, %mem$w9[2:2]}[0:0], I1={%$lut37, %$lut19, %wdata$in2, %mem$w9[2:2]}[1:1], I2={%$lut37, %$lut19, %wdata$in2, %mem$w9[2:2]}[2:2], I3={%$lut37, %$lut19, %wdata$in2, %mem$w9[2:2]}[3:3]) -> (O=%$lut59)
+  cell $lut310 blackbox SB_LUT4 #(LUT_INIT=16'd51882) (I0={%$lut37, %$lut19, %wdata$in1, %mem$w9[1:1]}[0:0], I1={%$lut37, %$lut19, %wdata$in1, %mem$w9[1:1]}[1:1], I2={%$lut37, %$lut19, %wdata$in1, %mem$w9[1:1]}[2:2], I3={%$lut37, %$lut19, %wdata$in1, %mem$w9[1:1]}[3:3]) -> (O=%$lut60)
+  cell $lut311 blackbox SB_LUT4 #(LUT_INIT=16'd51882) (I0={%$lut37, %$lut19, %wdata$in0, %mem$w9[0:0]}[0:0], I1={%$lut37, %$lut19, %wdata$in0, %mem$w9[0:0]}[1:1], I2={%$lut37, %$lut19, %wdata$in0, %mem$w9[0:0]}[2:2], I3={%$lut37, %$lut19, %wdata$in0, %mem$w9[0:0]}[3:3]) -> (O=%$lut61)
+  cell $lut312 blackbox SB_LUT4 #(LUT_INIT=16'd34952) (I0={%$lut37, %$lut19}[0:0], I1={%$lut37, %$lut19}[1:1], I2=1'd0, I3=1'd0) -> (O=%mem$we$9)
+  cell $lut313 blackbox SB_LUT4 #(LUT_INIT=16'd51882) (I0={%$lut37, %$lut28, %wdata$in7, %mem$w8[7:7]}[0:0], I1={%$lut37, %$lut28, %wdata$in7, %mem$w8[7:7]}[1:1], I2={%$lut37, %$lut28, %wdata$in7, %mem$w8[7:7]}[2:2], I3={%$lut37, %$lut28, %wdata$in7, %mem$w8[7:7]}[3:3]) -> (O=%$lut62)
+  cell $lut314 blackbox SB_LUT4 #(LUT_INIT=16'd51882) (I0={%$lut37, %$lut28, %wdata$in6, %mem$w8[6:6]}[0:0], I1={%$lut37, %$lut28, %wdata$in6, %mem$w8[6:6]}[1:1], I2={%$lut37, %$lut28, %wdata$in6, %mem$w8[6:6]}[2:2], I3={%$lut37, %$lut28, %wdata$in6, %mem$w8[6:6]}[3:3]) -> (O=%$lut63)
+  cell $lut315 blackbox SB_LUT4 #(LUT_INIT=16'd51882) (I0={%$lut37, %$lut28, %wdata$in5, %mem$w8[5:5]}[0:0], I1={%$lut37, %$lut28, %wdata$in5, %mem$w8[5:5]}[1:1], I2={%$lut37, %$lut28, %wdata$in5, %mem$w8[5:5]}[2:2], I3={%$lut37, %$lut28, %wdata$in5, %mem$w8[5:5]}[3:3]) -> (O=%$lut64)
+  cell $lut316 blackbox SB_LUT4 #(LUT_INIT=16'd51882) (I0={%$lut37, %$lut28, %wdata$in4, %mem$w8[4:4]}[0:0], I1={%$lut37, %$lut28, %wdata$in4, %mem$w8[4:4]}[1:1], I2={%$lut37, %$lut28, %wdata$in4, %mem$w8[4:4]}[2:2], I3={%$lut37, %$lut28, %wdata$in4, %mem$w8[4:4]}[3:3]) -> (O=%$lut65)
+  cell $lut317 blackbox SB_LUT4 #(LUT_INIT=16'd51882) (I0={%$lut37, %$lut28, %wdata$in3, %mem$w8[3:3]}[0:0], I1={%$lut37, %$lut28, %wdata$in3, %mem$w8[3:3]}[1:1], I2={%$lut37, %$lut28, %wdata$in3, %mem$w8[3:3]}[2:2], I3={%$lut37, %$lut28, %wdata$in3, %mem$w8[3:3]}[3:3]) -> (O=%$lut66)
+  cell $lut318 blackbox SB_LUT4 #(LUT_INIT=16'd51882) (I0={%$lut37, %$lut28, %wdata$in2, %mem$w8[2:2]}[0:0], I1={%$lut37, %$lut28, %wdata$in2, %mem$w8[2:2]}[1:1], I2={%$lut37, %$lut28, %wdata$in2, %mem$w8[2:2]}[2:2], I3={%$lut37, %$lut28, %wdata$in2, %mem$w8[2:2]}[3:3]) -> (O=%$lut67)
+  cell $lut319 blackbox SB_LUT4 #(LUT_INIT=16'd51882) (I0={%$lut37, %$lut28, %wdata$in1, %mem$w8[1:1]}[0:0], I1={%$lut37, %$lut28, %wdata$in1, %mem$w8[1:1]}[1:1], I2={%$lut37, %$lut28, %wdata$in1, %mem$w8[1:1]}[2:2], I3={%$lut37, %$lut28, %wdata$in1, %mem$w8[1:1]}[3:3]) -> (O=%$lut68)
+  cell $lut320 blackbox SB_LUT4 #(LUT_INIT=16'd51882) (I0={%$lut37, %$lut28, %wdata$in0, %mem$w8[0:0]}[0:0], I1={%$lut37, %$lut28, %wdata$in0, %mem$w8[0:0]}[1:1], I2={%$lut37, %$lut28, %wdata$in0, %mem$w8[0:0]}[2:2], I3={%$lut37, %$lut28, %wdata$in0, %mem$w8[0:0]}[3:3]) -> (O=%$lut69)
+  cell $lut321 blackbox SB_LUT4 #(LUT_INIT=16'd34952) (I0={%$lut37, %$lut28}[0:0], I1={%$lut37, %$lut28}[1:1], I2=1'd0, I3=1'd0) -> (O=%mem$we$8)
+  cell $lut322 blackbox SB_LUT4 #(LUT_INIT=16'd8738) (I0={%waddr$in3, %waddr$in2}[0:0], I1={%waddr$in3, %waddr$in2}[1:1], I2=1'd0, I3=1'd0) -> (O=%$lut70)
+  cell $lut323 blackbox SB_LUT4 #(LUT_INIT=16'd51882) (I0={%$lut1, %$lut70, %wdata$in7, %mem$w7[7:7]}[0:0], I1={%$lut1, %$lut70, %wdata$in7, %mem$w7[7:7]}[1:1], I2={%$lut1, %$lut70, %wdata$in7, %mem$w7[7:7]}[2:2], I3={%$lut1, %$lut70, %wdata$in7, %mem$w7[7:7]}[3:3]) -> (O=%$lut71)
+  cell $lut324 blackbox SB_LUT4 #(LUT_INIT=16'd51882) (I0={%$lut1, %$lut70, %wdata$in6, %mem$w7[6:6]}[0:0], I1={%$lut1, %$lut70, %wdata$in6, %mem$w7[6:6]}[1:1], I2={%$lut1, %$lut70, %wdata$in6, %mem$w7[6:6]}[2:2], I3={%$lut1, %$lut70, %wdata$in6, %mem$w7[6:6]}[3:3]) -> (O=%$lut72)
+  cell $lut325 blackbox SB_LUT4 #(LUT_INIT=16'd51882) (I0={%$lut1, %$lut70, %wdata$in5, %mem$w7[5:5]}[0:0], I1={%$lut1, %$lut70, %wdata$in5, %mem$w7[5:5]}[1:1], I2={%$lut1, %$lut70, %wdata$in5, %mem$w7[5:5]}[2:2], I3={%$lut1, %$lut70, %wdata$in5, %mem$w7[5:5]}[3:3]) -> (O=%$lut73)
+  cell $lut326 blackbox SB_LUT4 #(LUT_INIT=16'd51882) (I0={%$lut1, %$lut70, %wdata$in4, %mem$w7[4:4]}[0:0], I1={%$lut1, %$lut70, %wdata$in4, %mem$w7[4:4]}[1:1], I2={%$lut1, %$lut70, %wdata$in4, %mem$w7[4:4]}[2:2], I3={%$lut1, %$lut70, %wdata$in4, %mem$w7[4:4]}[3:3]) -> (O=%$lut74)
+  cell $lut327 blackbox SB_LUT4 #(LUT_INIT=16'd51882) (I0={%$lut1, %$lut70, %wdata$in3, %mem$w7[3:3]}[0:0], I1={%$lut1, %$lut70, %wdata$in3, %mem$w7[3:3]}[1:1], I2={%$lut1, %$lut70, %wdata$in3, %mem$w7[3:3]}[2:2], I3={%$lut1, %$lut70, %wdata$in3, %mem$w7[3:3]}[3:3]) -> (O=%$lut75)
+  cell $lut328 blackbox SB_LUT4 #(LUT_INIT=16'd51882) (I0={%$lut1, %$lut70, %wdata$in2, %mem$w7[2:2]}[0:0], I1={%$lut1, %$lut70, %wdata$in2, %mem$w7[2:2]}[1:1], I2={%$lut1, %$lut70, %wdata$in2, %mem$w7[2:2]}[2:2], I3={%$lut1, %$lut70, %wdata$in2, %mem$w7[2:2]}[3:3]) -> (O=%$lut76)
+  cell $lut329 blackbox SB_LUT4 #(LUT_INIT=16'd51882) (I0={%$lut1, %$lut70, %wdata$in1, %mem$w7[1:1]}[0:0], I1={%$lut1, %$lut70, %wdata$in1, %mem$w7[1:1]}[1:1], I2={%$lut1, %$lut70, %wdata$in1, %mem$w7[1:1]}[2:2], I3={%$lut1, %$lut70, %wdata$in1, %mem$w7[1:1]}[3:3]) -> (O=%$lut77)
+  cell $lut330 blackbox SB_LUT4 #(LUT_INIT=16'd51882) (I0={%$lut1, %$lut70, %wdata$in0, %mem$w7[0:0]}[0:0], I1={%$lut1, %$lut70, %wdata$in0, %mem$w7[0:0]}[1:1], I2={%$lut1, %$lut70, %wdata$in0, %mem$w7[0:0]}[2:2], I3={%$lut1, %$lut70, %wdata$in0, %mem$w7[0:0]}[3:3]) -> (O=%$lut78)
+  cell $lut331 blackbox SB_LUT4 #(LUT_INIT=16'd34952) (I0={%$lut1, %$lut70}[0:0], I1={%$lut1, %$lut70}[1:1], I2=1'd0, I3=1'd0) -> (O=%mem$we$7)
+  cell $lut332 blackbox SB_LUT4 #(LUT_INIT=16'd51882) (I0={%$lut10, %$lut70, %wdata$in7, %mem$w6[7:7]}[0:0], I1={%$lut10, %$lut70, %wdata$in7, %mem$w6[7:7]}[1:1], I2={%$lut10, %$lut70, %wdata$in7, %mem$w6[7:7]}[2:2], I3={%$lut10, %$lut70, %wdata$in7, %mem$w6[7:7]}[3:3]) -> (O=%$lut79)
+  cell $lut333 blackbox SB_LUT4 #(LUT_INIT=16'd51882) (I0={%$lut10, %$lut70, %wdata$in6, %mem$w6[6:6]}[0:0], I1={%$lut10, %$lut70, %wdata$in6, %mem$w6[6:6]}[1:1], I2={%$lut10, %$lut70, %wdata$in6, %mem$w6[6:6]}[2:2], I3={%$lut10, %$lut70, %wdata$in6, %mem$w6[6:6]}[3:3]) -> (O=%$lut80)
+  cell $lut334 blackbox SB_LUT4 #(LUT_INIT=16'd51882) (I0={%$lut10, %$lut70, %wdata$in5, %mem$w6[5:5]}[0:0], I1={%$lut10, %$lut70, %wdata$in5, %mem$w6[5:5]}[1:1], I2={%$lut10, %$lut70, %wdata$in5, %mem$w6[5:5]}[2:2], I3={%$lut10, %$lut70, %wdata$in5, %mem$w6[5:5]}[3:3]) -> (O=%$lut81)
+  cell $lut335 blackbox SB_LUT4 #(LUT_INIT=16'd51882) (I0={%$lut10, %$lut70, %wdata$in4, %mem$w6[4:4]}[0:0], I1={%$lut10, %$lut70, %wdata$in4, %mem$w6[4:4]}[1:1], I2={%$lut10, %$lut70, %wdata$in4, %mem$w6[4:4]}[2:2], I3={%$lut10, %$lut70, %wdata$in4, %mem$w6[4:4]}[3:3]) -> (O=%$lut82)
+  cell $lut336 blackbox SB_LUT4 #(LUT_INIT=16'd51882) (I0={%$lut10, %$lut70, %wdata$in3, %mem$w6[3:3]}[0:0], I1={%$lut10, %$lut70, %wdata$in3, %mem$w6[3:3]}[1:1], I2={%$lut10, %$lut70, %wdata$in3, %mem$w6[3:3]}[2:2], I3={%$lut10, %$lut70, %wdata$in3, %mem$w6[3:3]}[3:3]) -> (O=%$lut83)
+  cell $lut337 blackbox SB_LUT4 #(LUT_INIT=16'd51882) (I0={%$lut10, %$lut70, %wdata$in2, %mem$w6[2:2]}[0:0], I1={%$lut10, %$lut70, %wdata$in2, %mem$w6[2:2]}[1:1], I2={%$lut10, %$lut70, %wdata$in2, %mem$w6[2:2]}[2:2], I3={%$lut10, %$lut70, %wdata$in2, %mem$w6[2:2]}[3:3]) -> (O=%$lut84)
+  cell $lut338 blackbox SB_LUT4 #(LUT_INIT=16'd51882) (I0={%$lut10, %$lut70, %wdata$in1, %mem$w6[1:1]}[0:0], I1={%$lut10, %$lut70, %wdata$in1, %mem$w6[1:1]}[1:1], I2={%$lut10, %$lut70, %wdata$in1, %mem$w6[1:1]}[2:2], I3={%$lut10, %$lut70, %wdata$in1, %mem$w6[1:1]}[3:3]) -> (O=%$lut85)
+  cell $lut339 blackbox SB_LUT4 #(LUT_INIT=16'd51882) (I0={%$lut10, %$lut70, %wdata$in0, %mem$w6[0:0]}[0:0], I1={%$lut10, %$lut70, %wdata$in0, %mem$w6[0:0]}[1:1], I2={%$lut10, %$lut70, %wdata$in0, %mem$w6[0:0]}[2:2], I3={%$lut10, %$lut70, %wdata$in0, %mem$w6[0:0]}[3:3]) -> (O=%$lut86)
+  cell $lut340 blackbox SB_LUT4 #(LUT_INIT=16'd34952) (I0={%$lut10, %$lut70}[0:0], I1={%$lut10, %$lut70}[1:1], I2=1'd0, I3=1'd0) -> (O=%mem$we$6)
+  cell $lut341 blackbox SB_LUT4 #(LUT_INIT=16'd51882) (I0={%$lut19, %$lut70, %wdata$in7, %mem$w5[7:7]}[0:0], I1={%$lut19, %$lut70, %wdata$in7, %mem$w5[7:7]}[1:1], I2={%$lut19, %$lut70, %wdata$in7, %mem$w5[7:7]}[2:2], I3={%$lut19, %$lut70, %wdata$in7, %mem$w5[7:7]}[3:3]) -> (O=%$lut87)
+  cell $lut342 blackbox SB_LUT4 #(LUT_INIT=16'd51882) (I0={%$lut19, %$lut70, %wdata$in6, %mem$w5[6:6]}[0:0], I1={%$lut19, %$lut70, %wdata$in6, %mem$w5[6:6]}[1:1], I2={%$lut19, %$lut70, %wdata$in6, %mem$w5[6:6]}[2:2], I3={%$lut19, %$lut70, %wdata$in6, %mem$w5[6:6]}[3:3]) -> (O=%$lut88)
+  cell $lut343 blackbox SB_LUT4 #(LUT_INIT=16'd51882) (I0={%$lut19, %$lut70, %wdata$in5, %mem$w5[5:5]}[0:0], I1={%$lut19, %$lut70, %wdata$in5, %mem$w5[5:5]}[1:1], I2={%$lut19, %$lut70, %wdata$in5, %mem$w5[5:5]}[2:2], I3={%$lut19, %$lut70, %wdata$in5, %mem$w5[5:5]}[3:3]) -> (O=%$lut89)
+  cell $lut344 blackbox SB_LUT4 #(LUT_INIT=16'd51882) (I0={%$lut19, %$lut70, %wdata$in4, %mem$w5[4:4]}[0:0], I1={%$lut19, %$lut70, %wdata$in4, %mem$w5[4:4]}[1:1], I2={%$lut19, %$lut70, %wdata$in4, %mem$w5[4:4]}[2:2], I3={%$lut19, %$lut70, %wdata$in4, %mem$w5[4:4]}[3:3]) -> (O=%$lut90)
+  cell $lut345 blackbox SB_LUT4 #(LUT_INIT=16'd51882) (I0={%$lut19, %$lut70, %wdata$in3, %mem$w5[3:3]}[0:0], I1={%$lut19, %$lut70, %wdata$in3, %mem$w5[3:3]}[1:1], I2={%$lut19, %$lut70, %wdata$in3, %mem$w5[3:3]}[2:2], I3={%$lut19, %$lut70, %wdata$in3, %mem$w5[3:3]}[3:3]) -> (O=%$lut91)
+  cell $lut346 blackbox SB_LUT4 #(LUT_INIT=16'd51882) (I0={%$lut19, %$lut70, %wdata$in2, %mem$w5[2:2]}[0:0], I1={%$lut19, %$lut70, %wdata$in2, %mem$w5[2:2]}[1:1], I2={%$lut19, %$lut70, %wdata$in2, %mem$w5[2:2]}[2:2], I3={%$lut19, %$lut70, %wdata$in2, %mem$w5[2:2]}[3:3]) -> (O=%$lut92)
+  cell $lut347 blackbox SB_LUT4 #(LUT_INIT=16'd51882) (I0={%$lut19, %$lut70, %wdata$in1, %mem$w5[1:1]}[0:0], I1={%$lut19, %$lut70, %wdata$in1, %mem$w5[1:1]}[1:1], I2={%$lut19, %$lut70, %wdata$in1, %mem$w5[1:1]}[2:2], I3={%$lut19, %$lut70, %wdata$in1, %mem$w5[1:1]}[3:3]) -> (O=%$lut93)
+  cell $lut348 blackbox SB_LUT4 #(LUT_INIT=16'd51882) (I0={%$lut19, %$lut70, %wdata$in0, %mem$w5[0:0]}[0:0], I1={%$lut19, %$lut70, %wdata$in0, %mem$w5[0:0]}[1:1], I2={%$lut19, %$lut70, %wdata$in0, %mem$w5[0:0]}[2:2], I3={%$lut19, %$lut70, %wdata$in0, %mem$w5[0:0]}[3:3]) -> (O=%$lut94)
+  cell $lut349 blackbox SB_LUT4 #(LUT_INIT=16'd34952) (I0={%$lut19, %$lut70}[0:0], I1={%$lut19, %$lut70}[1:1], I2=1'd0, I3=1'd0) -> (O=%mem$we$5)
+  cell $lut350 blackbox SB_LUT4 #(LUT_INIT=16'd51882) (I0={%$lut70, %$lut28, %wdata$in7, %mem$w4[7:7]}[0:0], I1={%$lut70, %$lut28, %wdata$in7, %mem$w4[7:7]}[1:1], I2={%$lut70, %$lut28, %wdata$in7, %mem$w4[7:7]}[2:2], I3={%$lut70, %$lut28, %wdata$in7, %mem$w4[7:7]}[3:3]) -> (O=%$lut95)
+  cell $lut351 blackbox SB_LUT4 #(LUT_INIT=16'd51882) (I0={%$lut70, %$lut28, %wdata$in6, %mem$w4[6:6]}[0:0], I1={%$lut70, %$lut28, %wdata$in6, %mem$w4[6:6]}[1:1], I2={%$lut70, %$lut28, %wdata$in6, %mem$w4[6:6]}[2:2], I3={%$lut70, %$lut28, %wdata$in6, %mem$w4[6:6]}[3:3]) -> (O=%$lut96)
+  cell $lut352 blackbox SB_LUT4 #(LUT_INIT=16'd51882) (I0={%$lut70, %$lut28, %wdata$in5, %mem$w4[5:5]}[0:0], I1={%$lut70, %$lut28, %wdata$in5, %mem$w4[5:5]}[1:1], I2={%$lut70, %$lut28, %wdata$in5, %mem$w4[5:5]}[2:2], I3={%$lut70, %$lut28, %wdata$in5, %mem$w4[5:5]}[3:3]) -> (O=%$lut97)
+  cell $lut353 blackbox SB_LUT4 #(LUT_INIT=16'd51882) (I0={%$lut70, %$lut28, %wdata$in4, %mem$w4[4:4]}[0:0], I1={%$lut70, %$lut28, %wdata$in4, %mem$w4[4:4]}[1:1], I2={%$lut70, %$lut28, %wdata$in4, %mem$w4[4:4]}[2:2], I3={%$lut70, %$lut28, %wdata$in4, %mem$w4[4:4]}[3:3]) -> (O=%$lut98)
+  cell $lut354 blackbox SB_LUT4 #(LUT_INIT=16'd51882) (I0={%$lut70, %$lut28, %wdata$in3, %mem$w4[3:3]}[0:0], I1={%$lut70, %$lut28, %wdata$in3, %mem$w4[3:3]}[1:1], I2={%$lut70, %$lut28, %wdata$in3, %mem$w4[3:3]}[2:2], I3={%$lut70, %$lut28, %wdata$in3, %mem$w4[3:3]}[3:3]) -> (O=%$lut99)
+  cell $lut355 blackbox SB_LUT4 #(LUT_INIT=16'd51882) (I0={%$lut70, %$lut28, %wdata$in2, %mem$w4[2:2]}[0:0], I1={%$lut70, %$lut28, %wdata$in2, %mem$w4[2:2]}[1:1], I2={%$lut70, %$lut28, %wdata$in2, %mem$w4[2:2]}[2:2], I3={%$lut70, %$lut28, %wdata$in2, %mem$w4[2:2]}[3:3]) -> (O=%$lut100)
+  cell $lut356 blackbox SB_LUT4 #(LUT_INIT=16'd51882) (I0={%$lut70, %$lut28, %wdata$in1, %mem$w4[1:1]}[0:0], I1={%$lut70, %$lut28, %wdata$in1, %mem$w4[1:1]}[1:1], I2={%$lut70, %$lut28, %wdata$in1, %mem$w4[1:1]}[2:2], I3={%$lut70, %$lut28, %wdata$in1, %mem$w4[1:1]}[3:3]) -> (O=%$lut101)
+  cell $lut357 blackbox SB_LUT4 #(LUT_INIT=16'd51882) (I0={%$lut70, %$lut28, %wdata$in0, %mem$w4[0:0]}[0:0], I1={%$lut70, %$lut28, %wdata$in0, %mem$w4[0:0]}[1:1], I2={%$lut70, %$lut28, %wdata$in0, %mem$w4[0:0]}[2:2], I3={%$lut70, %$lut28, %wdata$in0, %mem$w4[0:0]}[3:3]) -> (O=%$lut102)
+  cell $lut358 blackbox SB_LUT4 #(LUT_INIT=16'd34952) (I0={%$lut70, %$lut28}[0:0], I1={%$lut70, %$lut28}[1:1], I2=1'd0, I3=1'd0) -> (O=%mem$we$4)
+  cell $lut359 blackbox SB_LUT4 #(LUT_INIT=16'd34952) (I0={%waddr$in1, %waddr$in0}[0:0], I1={%waddr$in1, %waddr$in0}[1:1], I2=1'd0, I3=1'd0) -> (O=%$lut103)
+  cell $lut360 blackbox SB_LUT4 #(LUT_INIT=16'd514) (I0={%waddr$in3, %waddr$in2, %we$in0}[0:0], I1={%waddr$in3, %waddr$in2, %we$in0}[1:1], I2={%waddr$in3, %waddr$in2, %we$in0}[2:2], I3=1'd0) -> (O=%$lut104)
+  cell $lut361 blackbox SB_LUT4 #(LUT_INIT=16'd51882) (I0={%$lut103, %$lut104, %wdata$in7, %mem$w3[7:7]}[0:0], I1={%$lut103, %$lut104, %wdata$in7, %mem$w3[7:7]}[1:1], I2={%$lut103, %$lut104, %wdata$in7, %mem$w3[7:7]}[2:2], I3={%$lut103, %$lut104, %wdata$in7, %mem$w3[7:7]}[3:3]) -> (O=%$lut105)
+  cell $lut362 blackbox SB_LUT4 #(LUT_INIT=16'd51882) (I0={%$lut103, %$lut104, %wdata$in6, %mem$w3[6:6]}[0:0], I1={%$lut103, %$lut104, %wdata$in6, %mem$w3[6:6]}[1:1], I2={%$lut103, %$lut104, %wdata$in6, %mem$w3[6:6]}[2:2], I3={%$lut103, %$lut104, %wdata$in6, %mem$w3[6:6]}[3:3]) -> (O=%$lut106)
+  cell $lut363 blackbox SB_LUT4 #(LUT_INIT=16'd51882) (I0={%$lut103, %$lut104, %wdata$in5, %mem$w3[5:5]}[0:0], I1={%$lut103, %$lut104, %wdata$in5, %mem$w3[5:5]}[1:1], I2={%$lut103, %$lut104, %wdata$in5, %mem$w3[5:5]}[2:2], I3={%$lut103, %$lut104, %wdata$in5, %mem$w3[5:5]}[3:3]) -> (O=%$lut107)
+  cell $lut364 blackbox SB_LUT4 #(LUT_INIT=16'd51882) (I0={%$lut103, %$lut104, %wdata$in4, %mem$w3[4:4]}[0:0], I1={%$lut103, %$lut104, %wdata$in4, %mem$w3[4:4]}[1:1], I2={%$lut103, %$lut104, %wdata$in4, %mem$w3[4:4]}[2:2], I3={%$lut103, %$lut104, %wdata$in4, %mem$w3[4:4]}[3:3]) -> (O=%$lut108)
+  cell $lut365 blackbox SB_LUT4 #(LUT_INIT=16'd51882) (I0={%$lut103, %$lut104, %wdata$in3, %mem$w3[3:3]}[0:0], I1={%$lut103, %$lut104, %wdata$in3, %mem$w3[3:3]}[1:1], I2={%$lut103, %$lut104, %wdata$in3, %mem$w3[3:3]}[2:2], I3={%$lut103, %$lut104, %wdata$in3, %mem$w3[3:3]}[3:3]) -> (O=%$lut109)
+  cell $lut366 blackbox SB_LUT4 #(LUT_INIT=16'd51882) (I0={%$lut103, %$lut104, %wdata$in2, %mem$w3[2:2]}[0:0], I1={%$lut103, %$lut104, %wdata$in2, %mem$w3[2:2]}[1:1], I2={%$lut103, %$lut104, %wdata$in2, %mem$w3[2:2]}[2:2], I3={%$lut103, %$lut104, %wdata$in2, %mem$w3[2:2]}[3:3]) -> (O=%$lut110)
+  cell $lut367 blackbox SB_LUT4 #(LUT_INIT=16'd51882) (I0={%$lut103, %$lut104, %wdata$in1, %mem$w3[1:1]}[0:0], I1={%$lut103, %$lut104, %wdata$in1, %mem$w3[1:1]}[1:1], I2={%$lut103, %$lut104, %wdata$in1, %mem$w3[1:1]}[2:2], I3={%$lut103, %$lut104, %wdata$in1, %mem$w3[1:1]}[3:3]) -> (O=%$lut111)
+  cell $lut368 blackbox SB_LUT4 #(LUT_INIT=16'd51882) (I0={%$lut103, %$lut104, %wdata$in0, %mem$w3[0:0]}[0:0], I1={%$lut103, %$lut104, %wdata$in0, %mem$w3[0:0]}[1:1], I2={%$lut103, %$lut104, %wdata$in0, %mem$w3[0:0]}[2:2], I3={%$lut103, %$lut104, %wdata$in0, %mem$w3[0:0]}[3:3]) -> (O=%$lut112)
+  cell $lut369 blackbox SB_LUT4 #(LUT_INIT=16'd34952) (I0={%$lut103, %$lut104}[0:0], I1={%$lut103, %$lut104}[1:1], I2=1'd0, I3=1'd0) -> (O=%mem$we$3)
+  cell $lut370 blackbox SB_LUT4 #(LUT_INIT=16'd17476) (I0={%waddr$in1, %waddr$in0}[0:0], I1={%waddr$in1, %waddr$in0}[1:1], I2=1'd0, I3=1'd0) -> (O=%$lut113)
+  cell $lut371 blackbox SB_LUT4 #(LUT_INIT=16'd51882) (I0={%$lut113, %$lut104, %wdata$in7, %mem$w2[7:7]}[0:0], I1={%$lut113, %$lut104, %wdata$in7, %mem$w2[7:7]}[1:1], I2={%$lut113, %$lut104, %wdata$in7, %mem$w2[7:7]}[2:2], I3={%$lut113, %$lut104, %wdata$in7, %mem$w2[7:7]}[3:3]) -> (O=%$lut114)
+  cell $lut372 blackbox SB_LUT4 #(LUT_INIT=16'd51882) (I0={%$lut113, %$lut104, %wdata$in6, %mem$w2[6:6]}[0:0], I1={%$lut113, %$lut104, %wdata$in6, %mem$w2[6:6]}[1:1], I2={%$lut113, %$lut104, %wdata$in6, %mem$w2[6:6]}[2:2], I3={%$lut113, %$lut104, %wdata$in6, %mem$w2[6:6]}[3:3]) -> (O=%$lut115)
+  cell $lut373 blackbox SB_LUT4 #(LUT_INIT=16'd51882) (I0={%$lut113, %$lut104, %wdata$in5, %mem$w2[5:5]}[0:0], I1={%$lut113, %$lut104, %wdata$in5, %mem$w2[5:5]}[1:1], I2={%$lut113, %$lut104, %wdata$in5, %mem$w2[5:5]}[2:2], I3={%$lut113, %$lut104, %wdata$in5, %mem$w2[5:5]}[3:3]) -> (O=%$lut116)
+  cell $lut374 blackbox SB_LUT4 #(LUT_INIT=16'd51882) (I0={%$lut113, %$lut104, %wdata$in4, %mem$w2[4:4]}[0:0], I1={%$lut113, %$lut104, %wdata$in4, %mem$w2[4:4]}[1:1], I2={%$lut113, %$lut104, %wdata$in4, %mem$w2[4:4]}[2:2], I3={%$lut113, %$lut104, %wdata$in4, %mem$w2[4:4]}[3:3]) -> (O=%$lut117)
+  cell $lut375 blackbox SB_LUT4 #(LUT_INIT=16'd51882) (I0={%$lut113, %$lut104, %wdata$in3, %mem$w2[3:3]}[0:0], I1={%$lut113, %$lut104, %wdata$in3, %mem$w2[3:3]}[1:1], I2={%$lut113, %$lut104, %wdata$in3, %mem$w2[3:3]}[2:2], I3={%$lut113, %$lut104, %wdata$in3, %mem$w2[3:3]}[3:3]) -> (O=%$lut118)
+  cell $lut376 blackbox SB_LUT4 #(LUT_INIT=16'd51882) (I0={%$lut113, %$lut104, %wdata$in2, %mem$w2[2:2]}[0:0], I1={%$lut113, %$lut104, %wdata$in2, %mem$w2[2:2]}[1:1], I2={%$lut113, %$lut104, %wdata$in2, %mem$w2[2:2]}[2:2], I3={%$lut113, %$lut104, %wdata$in2, %mem$w2[2:2]}[3:3]) -> (O=%$lut119)
+  cell $lut377 blackbox SB_LUT4 #(LUT_INIT=16'd51882) (I0={%$lut113, %$lut104, %wdata$in1, %mem$w2[1:1]}[0:0], I1={%$lut113, %$lut104, %wdata$in1, %mem$w2[1:1]}[1:1], I2={%$lut113, %$lut104, %wdata$in1, %mem$w2[1:1]}[2:2], I3={%$lut113, %$lut104, %wdata$in1, %mem$w2[1:1]}[3:3]) -> (O=%$lut120)
+  cell $lut378 blackbox SB_LUT4 #(LUT_INIT=16'd51882) (I0={%$lut113, %$lut104, %wdata$in0, %mem$w2[0:0]}[0:0], I1={%$lut113, %$lut104, %wdata$in0, %mem$w2[0:0]}[1:1], I2={%$lut113, %$lut104, %wdata$in0, %mem$w2[0:0]}[2:2], I3={%$lut113, %$lut104, %wdata$in0, %mem$w2[0:0]}[3:3]) -> (O=%$lut121)
+  cell $lut379 blackbox SB_LUT4 #(LUT_INIT=16'd34952) (I0={%$lut113, %$lut104}[0:0], I1={%$lut113, %$lut104}[1:1], I2=1'd0, I3=1'd0) -> (O=%mem$we$2)
+  cell $lut380 blackbox SB_LUT4 #(LUT_INIT=16'd8738) (I0={%waddr$in1, %waddr$in0}[0:0], I1={%waddr$in1, %waddr$in0}[1:1], I2=1'd0, I3=1'd0) -> (O=%$lut122)
+  cell $lut381 blackbox SB_LUT4 #(LUT_INIT=16'd51882) (I0={%$lut104, %$lut122, %wdata$in7, %mem$w1[7:7]}[0:0], I1={%$lut104, %$lut122, %wdata$in7, %mem$w1[7:7]}[1:1], I2={%$lut104, %$lut122, %wdata$in7, %mem$w1[7:7]}[2:2], I3={%$lut104, %$lut122, %wdata$in7, %mem$w1[7:7]}[3:3]) -> (O=%$lut123)
+  cell $lut382 blackbox SB_LUT4 #(LUT_INIT=16'd51882) (I0={%$lut104, %$lut122, %wdata$in6, %mem$w1[6:6]}[0:0], I1={%$lut104, %$lut122, %wdata$in6, %mem$w1[6:6]}[1:1], I2={%$lut104, %$lut122, %wdata$in6, %mem$w1[6:6]}[2:2], I3={%$lut104, %$lut122, %wdata$in6, %mem$w1[6:6]}[3:3]) -> (O=%$lut124)
+  cell $lut383 blackbox SB_LUT4 #(LUT_INIT=16'd51882) (I0={%$lut104, %$lut122, %wdata$in5, %mem$w1[5:5]}[0:0], I1={%$lut104, %$lut122, %wdata$in5, %mem$w1[5:5]}[1:1], I2={%$lut104, %$lut122, %wdata$in5, %mem$w1[5:5]}[2:2], I3={%$lut104, %$lut122, %wdata$in5, %mem$w1[5:5]}[3:3]) -> (O=%$lut125)
+  cell $lut384 blackbox SB_LUT4 #(LUT_INIT=16'd51882) (I0={%$lut104, %$lut122, %wdata$in4, %mem$w1[4:4]}[0:0], I1={%$lut104, %$lut122, %wdata$in4, %mem$w1[4:4]}[1:1], I2={%$lut104, %$lut122, %wdata$in4, %mem$w1[4:4]}[2:2], I3={%$lut104, %$lut122, %wdata$in4, %mem$w1[4:4]}[3:3]) -> (O=%$lut126)
+  cell $lut385 blackbox SB_LUT4 #(LUT_INIT=16'd51882) (I0={%$lut104, %$lut122, %wdata$in3, %mem$w1[3:3]}[0:0], I1={%$lut104, %$lut122, %wdata$in3, %mem$w1[3:3]}[1:1], I2={%$lut104, %$lut122, %wdata$in3, %mem$w1[3:3]}[2:2], I3={%$lut104, %$lut122, %wdata$in3, %mem$w1[3:3]}[3:3]) -> (O=%$lut127)
+  cell $lut386 blackbox SB_LUT4 #(LUT_INIT=16'd51882) (I0={%$lut104, %$lut122, %wdata$in2, %mem$w1[2:2]}[0:0], I1={%$lut104, %$lut122, %wdata$in2, %mem$w1[2:2]}[1:1], I2={%$lut104, %$lut122, %wdata$in2, %mem$w1[2:2]}[2:2], I3={%$lut104, %$lut122, %wdata$in2, %mem$w1[2:2]}[3:3]) -> (O=%$lut128)
+  cell $lut387 blackbox SB_LUT4 #(LUT_INIT=16'd51882) (I0={%$lut104, %$lut122, %wdata$in1, %mem$w1[1:1]}[0:0], I1={%$lut104, %$lut122, %wdata$in1, %mem$w1[1:1]}[1:1], I2={%$lut104, %$lut122, %wdata$in1, %mem$w1[1:1]}[2:2], I3={%$lut104, %$lut122, %wdata$in1, %mem$w1[1:1]}[3:3]) -> (O=%$lut129)
+  cell $lut388 blackbox SB_LUT4 #(LUT_INIT=16'd51882) (I0={%$lut104, %$lut122, %wdata$in0, %mem$w1[0:0]}[0:0], I1={%$lut104, %$lut122, %wdata$in0, %mem$w1[0:0]}[1:1], I2={%$lut104, %$lut122, %wdata$in0, %mem$w1[0:0]}[2:2], I3={%$lut104, %$lut122, %wdata$in0, %mem$w1[0:0]}[3:3]) -> (O=%$lut130)
+  cell $lut389 blackbox SB_LUT4 #(LUT_INIT=16'd34952) (I0={%$lut104, %$lut122}[0:0], I1={%$lut104, %$lut122}[1:1], I2=1'd0, I3=1'd0) -> (O=%mem$we$1)
+  cell $lut390 blackbox SB_LUT4 #(LUT_INIT=16'd4369) (I0={%waddr$in3, %waddr$in2}[0:0], I1={%waddr$in3, %waddr$in2}[1:1], I2=1'd0, I3=1'd0) -> (O=%$lut131)
+  cell $lut391 blackbox SB_LUT4 #(LUT_INIT=16'd51882) (I0={%$lut28, %$lut131, %wdata$in7, %mem$w0[7:7]}[0:0], I1={%$lut28, %$lut131, %wdata$in7, %mem$w0[7:7]}[1:1], I2={%$lut28, %$lut131, %wdata$in7, %mem$w0[7:7]}[2:2], I3={%$lut28, %$lut131, %wdata$in7, %mem$w0[7:7]}[3:3]) -> (O=%$lut132)
+  cell $lut392 blackbox SB_LUT4 #(LUT_INIT=16'd51882) (I0={%$lut28, %$lut131, %wdata$in6, %mem$w0[6:6]}[0:0], I1={%$lut28, %$lut131, %wdata$in6, %mem$w0[6:6]}[1:1], I2={%$lut28, %$lut131, %wdata$in6, %mem$w0[6:6]}[2:2], I3={%$lut28, %$lut131, %wdata$in6, %mem$w0[6:6]}[3:3]) -> (O=%$lut133)
+  cell $lut393 blackbox SB_LUT4 #(LUT_INIT=16'd51882) (I0={%$lut28, %$lut131, %wdata$in5, %mem$w0[5:5]}[0:0], I1={%$lut28, %$lut131, %wdata$in5, %mem$w0[5:5]}[1:1], I2={%$lut28, %$lut131, %wdata$in5, %mem$w0[5:5]}[2:2], I3={%$lut28, %$lut131, %wdata$in5, %mem$w0[5:5]}[3:3]) -> (O=%$lut134)
+  cell $lut394 blackbox SB_LUT4 #(LUT_INIT=16'd51882) (I0={%$lut28, %$lut131, %wdata$in4, %mem$w0[4:4]}[0:0], I1={%$lut28, %$lut131, %wdata$in4, %mem$w0[4:4]}[1:1], I2={%$lut28, %$lut131, %wdata$in4, %mem$w0[4:4]}[2:2], I3={%$lut28, %$lut131, %wdata$in4, %mem$w0[4:4]}[3:3]) -> (O=%$lut135)
+  cell $lut395 blackbox SB_LUT4 #(LUT_INIT=16'd51882) (I0={%$lut28, %$lut131, %wdata$in3, %mem$w0[3:3]}[0:0], I1={%$lut28, %$lut131, %wdata$in3, %mem$w0[3:3]}[1:1], I2={%$lut28, %$lut131, %wdata$in3, %mem$w0[3:3]}[2:2], I3={%$lut28, %$lut131, %wdata$in3, %mem$w0[3:3]}[3:3]) -> (O=%$lut136)
+  cell $lut396 blackbox SB_LUT4 #(LUT_INIT=16'd51882) (I0={%$lut28, %$lut131, %wdata$in2, %mem$w0[2:2]}[0:0], I1={%$lut28, %$lut131, %wdata$in2, %mem$w0[2:2]}[1:1], I2={%$lut28, %$lut131, %wdata$in2, %mem$w0[2:2]}[2:2], I3={%$lut28, %$lut131, %wdata$in2, %mem$w0[2:2]}[3:3]) -> (O=%$lut137)
+  cell $lut397 blackbox SB_LUT4 #(LUT_INIT=16'd51882) (I0={%$lut28, %$lut131, %wdata$in1, %mem$w0[1:1]}[0:0], I1={%$lut28, %$lut131, %wdata$in1, %mem$w0[1:1]}[1:1], I2={%$lut28, %$lut131, %wdata$in1, %mem$w0[1:1]}[2:2], I3={%$lut28, %$lut131, %wdata$in1, %mem$w0[1:1]}[3:3]) -> (O=%$lut138)
+  cell $lut398 blackbox SB_LUT4 #(LUT_INIT=16'd51882) (I0={%$lut28, %$lut131, %wdata$in0, %mem$w0[0:0]}[0:0], I1={%$lut28, %$lut131, %wdata$in0, %mem$w0[0:0]}[1:1], I2={%$lut28, %$lut131, %wdata$in0, %mem$w0[0:0]}[2:2], I3={%$lut28, %$lut131, %wdata$in0, %mem$w0[0:0]}[3:3]) -> (O=%$lut139)
+  cell $lut399 blackbox SB_LUT4 #(LUT_INIT=16'd34952) (I0={%$lut28, %$lut131}[0:0], I1={%$lut28, %$lut131}[1:1], I2=1'd0, I3=1'd0) -> (O=%mem$we)
+  cell $lut400 blackbox SB_LUT4 #(LUT_INIT=16'd53) (I0={%raddr$in1, %raddr$in0, %mem$w1[7:7], %mem$w0[7:7]}[0:0], I1={%raddr$in1, %raddr$in0, %mem$w1[7:7], %mem$w0[7:7]}[1:1], I2={%raddr$in1, %raddr$in0, %mem$w1[7:7], %mem$w0[7:7]}[2:2], I3={%raddr$in1, %raddr$in0, %mem$w1[7:7], %mem$w0[7:7]}[3:3]) -> (O=%$lut140)
+  cell $lut401 blackbox SB_LUT4 #(LUT_INIT=16'd1164) (I0={%mem$w3[7:7], %mem$w2[7:7], %raddr$in1, %raddr$in0}[0:0], I1={%mem$w3[7:7], %mem$w2[7:7], %raddr$in1, %raddr$in0}[1:1], I2={%mem$w3[7:7], %mem$w2[7:7], %raddr$in1, %raddr$in0}[2:2], I3={%mem$w3[7:7], %mem$w2[7:7], %raddr$in1, %raddr$in0}[3:3]) -> (O=%$lut141)
+  cell $lut402 blackbox SB_LUT4 #(LUT_INIT=16'd257) (I0={%$lut140, %$lut141, %raddr$in2}[0:0], I1={%$lut140, %$lut141, %raddr$in2}[1:1], I2={%$lut140, %$lut141, %raddr$in2}[2:2], I3=1'd0) -> (O=%$lut142)
+  cell $lut403 blackbox SB_LUT4 #(LUT_INIT=16'd291) (I0={%mem$w5[7:7], %mem$w4[7:7], %raddr$in1, %raddr$in0}[0:0], I1={%mem$w5[7:7], %mem$w4[7:7], %raddr$in1, %raddr$in0}[1:1], I2={%mem$w5[7:7], %mem$w4[7:7], %raddr$in1, %raddr$in0}[2:2], I3={%mem$w5[7:7], %mem$w4[7:7], %raddr$in1, %raddr$in0}[3:3]) -> (O=%$lut143)
+  cell $lut404 blackbox SB_LUT4 #(LUT_INIT=16'd1164) (I0={%mem$w7[7:7], %mem$w6[7:7], %raddr$in1, %raddr$in0}[0:0], I1={%mem$w7[7:7], %mem$w6[7:7], %raddr$in1, %raddr$in0}[1:1], I2={%mem$w7[7:7], %mem$w6[7:7], %raddr$in1, %raddr$in0}[2:2], I3={%mem$w7[7:7], %mem$w6[7:7], %raddr$in1, %raddr$in0}[3:3]) -> (O=%$lut144)
+  cell $lut405 blackbox SB_LUT4 #(LUT_INIT=16'd253) (I0={%$lut142, %$lut143, %$lut144, %raddr$in2}[0:0], I1={%$lut142, %$lut143, %$lut144, %raddr$in2}[1:1], I2={%$lut142, %$lut143, %$lut144, %raddr$in2}[2:2], I3={%$lut142, %$lut143, %$lut144, %raddr$in2}[3:3]) -> (O=%$lut145)
+  cell $lut406 blackbox SB_LUT4 #(LUT_INIT=16'd291) (I0={%mem$w9[7:7], %mem$w8[7:7], %raddr$in1, %raddr$in0}[0:0], I1={%mem$w9[7:7], %mem$w8[7:7], %raddr$in1, %raddr$in0}[1:1], I2={%mem$w9[7:7], %mem$w8[7:7], %raddr$in1, %raddr$in0}[2:2], I3={%mem$w9[7:7], %mem$w8[7:7], %raddr$in1, %raddr$in0}[3:3]) -> (O=%$lut146)
+  cell $lut407 blackbox SB_LUT4 #(LUT_INIT=16'd1164) (I0={%mem$w11[7:7], %mem$w10[7:7], %raddr$in1, %raddr$in0}[0:0], I1={%mem$w11[7:7], %mem$w10[7:7], %raddr$in1, %raddr$in0}[1:1], I2={%mem$w11[7:7], %mem$w10[7:7], %raddr$in1, %raddr$in0}[2:2], I3={%mem$w11[7:7], %mem$w10[7:7], %raddr$in1, %raddr$in0}[3:3]) -> (O=%$lut147)
+  cell $lut408 blackbox SB_LUT4 #(LUT_INIT=16'd257) (I0={%$lut146, %$lut147, %raddr$in2}[0:0], I1={%$lut146, %$lut147, %raddr$in2}[1:1], I2={%$lut146, %$lut147, %raddr$in2}[2:2], I3=1'd0) -> (O=%$lut148)
+  cell $lut409 blackbox SB_LUT4 #(LUT_INIT=16'd291) (I0={%mem$w13[7:7], %mem$w12[7:7], %raddr$in1, %raddr$in0}[0:0], I1={%mem$w13[7:7], %mem$w12[7:7], %raddr$in1, %raddr$in0}[1:1], I2={%mem$w13[7:7], %mem$w12[7:7], %raddr$in1, %raddr$in0}[2:2], I3={%mem$w13[7:7], %mem$w12[7:7], %raddr$in1, %raddr$in0}[3:3]) -> (O=%$lut149)
+  cell $lut410 blackbox SB_LUT4 #(LUT_INIT=16'd1164) (I0={%mem$w15[7:7], %mem$w14[7:7], %raddr$in1, %raddr$in0}[0:0], I1={%mem$w15[7:7], %mem$w14[7:7], %raddr$in1, %raddr$in0}[1:1], I2={%mem$w15[7:7], %mem$w14[7:7], %raddr$in1, %raddr$in0}[2:2], I3={%mem$w15[7:7], %mem$w14[7:7], %raddr$in1, %raddr$in0}[3:3]) -> (O=%$lut150)
+  cell $lut411 blackbox SB_LUT4 #(LUT_INIT=16'd253) (I0={%$lut148, %$lut149, %$lut150, %raddr$in2}[0:0], I1={%$lut148, %$lut149, %$lut150, %raddr$in2}[1:1], I2={%$lut148, %$lut149, %$lut150, %raddr$in2}[2:2], I3={%$lut148, %$lut149, %$lut150, %raddr$in2}[3:3]) -> (O=%$lut151)
+  cell $lut412 blackbox SB_LUT4 #(LUT_INIT=16'd10023) (I0={%$lut145, %$lut151, %raddr$in3}[0:0], I1={%$lut145, %$lut151, %raddr$in3}[1:1], I2={%$lut145, %$lut151, %raddr$in3}[2:2], I3=1'd0) -> (O=%$lut152)
+  cell $lut413 blackbox SB_LUT4 #(LUT_INIT=16'd53) (I0={%raddr$in1, %raddr$in0, %mem$w1[6:6], %mem$w0[6:6]}[0:0], I1={%raddr$in1, %raddr$in0, %mem$w1[6:6], %mem$w0[6:6]}[1:1], I2={%raddr$in1, %raddr$in0, %mem$w1[6:6], %mem$w0[6:6]}[2:2], I3={%raddr$in1, %raddr$in0, %mem$w1[6:6], %mem$w0[6:6]}[3:3]) -> (O=%$lut153)
+  cell $lut414 blackbox SB_LUT4 #(LUT_INIT=16'd1164) (I0={%mem$w3[6:6], %mem$w2[6:6], %raddr$in1, %raddr$in0}[0:0], I1={%mem$w3[6:6], %mem$w2[6:6], %raddr$in1, %raddr$in0}[1:1], I2={%mem$w3[6:6], %mem$w2[6:6], %raddr$in1, %raddr$in0}[2:2], I3={%mem$w3[6:6], %mem$w2[6:6], %raddr$in1, %raddr$in0}[3:3]) -> (O=%$lut154)
+  cell $lut415 blackbox SB_LUT4 #(LUT_INIT=16'd257) (I0={%$lut153, %$lut154, %raddr$in2}[0:0], I1={%$lut153, %$lut154, %raddr$in2}[1:1], I2={%$lut153, %$lut154, %raddr$in2}[2:2], I3=1'd0) -> (O=%$lut155)
+  cell $lut416 blackbox SB_LUT4 #(LUT_INIT=16'd291) (I0={%mem$w5[6:6], %mem$w4[6:6], %raddr$in1, %raddr$in0}[0:0], I1={%mem$w5[6:6], %mem$w4[6:6], %raddr$in1, %raddr$in0}[1:1], I2={%mem$w5[6:6], %mem$w4[6:6], %raddr$in1, %raddr$in0}[2:2], I3={%mem$w5[6:6], %mem$w4[6:6], %raddr$in1, %raddr$in0}[3:3]) -> (O=%$lut156)
+  cell $lut417 blackbox SB_LUT4 #(LUT_INIT=16'd1164) (I0={%mem$w7[6:6], %mem$w6[6:6], %raddr$in1, %raddr$in0}[0:0], I1={%mem$w7[6:6], %mem$w6[6:6], %raddr$in1, %raddr$in0}[1:1], I2={%mem$w7[6:6], %mem$w6[6:6], %raddr$in1, %raddr$in0}[2:2], I3={%mem$w7[6:6], %mem$w6[6:6], %raddr$in1, %raddr$in0}[3:3]) -> (O=%$lut157)
+  cell $lut418 blackbox SB_LUT4 #(LUT_INIT=16'd253) (I0={%$lut155, %$lut156, %$lut157, %raddr$in2}[0:0], I1={%$lut155, %$lut156, %$lut157, %raddr$in2}[1:1], I2={%$lut155, %$lut156, %$lut157, %raddr$in2}[2:2], I3={%$lut155, %$lut156, %$lut157, %raddr$in2}[3:3]) -> (O=%$lut158)
+  cell $lut419 blackbox SB_LUT4 #(LUT_INIT=16'd291) (I0={%mem$w9[6:6], %mem$w8[6:6], %raddr$in1, %raddr$in0}[0:0], I1={%mem$w9[6:6], %mem$w8[6:6], %raddr$in1, %raddr$in0}[1:1], I2={%mem$w9[6:6], %mem$w8[6:6], %raddr$in1, %raddr$in0}[2:2], I3={%mem$w9[6:6], %mem$w8[6:6], %raddr$in1, %raddr$in0}[3:3]) -> (O=%$lut159)
+  cell $lut420 blackbox SB_LUT4 #(LUT_INIT=16'd1164) (I0={%mem$w11[6:6], %mem$w10[6:6], %raddr$in1, %raddr$in0}[0:0], I1={%mem$w11[6:6], %mem$w10[6:6], %raddr$in1, %raddr$in0}[1:1], I2={%mem$w11[6:6], %mem$w10[6:6], %raddr$in1, %raddr$in0}[2:2], I3={%mem$w11[6:6], %mem$w10[6:6], %raddr$in1, %raddr$in0}[3:3]) -> (O=%$lut160)
+  cell $lut421 blackbox SB_LUT4 #(LUT_INIT=16'd257) (I0={%$lut159, %$lut160, %raddr$in2}[0:0], I1={%$lut159, %$lut160, %raddr$in2}[1:1], I2={%$lut159, %$lut160, %raddr$in2}[2:2], I3=1'd0) -> (O=%$lut161)
+  cell $lut422 blackbox SB_LUT4 #(LUT_INIT=16'd291) (I0={%mem$w13[6:6], %mem$w12[6:6], %raddr$in1, %raddr$in0}[0:0], I1={%mem$w13[6:6], %mem$w12[6:6], %raddr$in1, %raddr$in0}[1:1], I2={%mem$w13[6:6], %mem$w12[6:6], %raddr$in1, %raddr$in0}[2:2], I3={%mem$w13[6:6], %mem$w12[6:6], %raddr$in1, %raddr$in0}[3:3]) -> (O=%$lut162)
+  cell $lut423 blackbox SB_LUT4 #(LUT_INIT=16'd1164) (I0={%mem$w15[6:6], %mem$w14[6:6], %raddr$in1, %raddr$in0}[0:0], I1={%mem$w15[6:6], %mem$w14[6:6], %raddr$in1, %raddr$in0}[1:1], I2={%mem$w15[6:6], %mem$w14[6:6], %raddr$in1, %raddr$in0}[2:2], I3={%mem$w15[6:6], %mem$w14[6:6], %raddr$in1, %raddr$in0}[3:3]) -> (O=%$lut163)
+  cell $lut424 blackbox SB_LUT4 #(LUT_INIT=16'd253) (I0={%$lut161, %$lut162, %$lut163, %raddr$in2}[0:0], I1={%$lut161, %$lut162, %$lut163, %raddr$in2}[1:1], I2={%$lut161, %$lut162, %$lut163, %raddr$in2}[2:2], I3={%$lut161, %$lut162, %$lut163, %raddr$in2}[3:3]) -> (O=%$lut164)
+  cell $lut425 blackbox SB_LUT4 #(LUT_INIT=16'd10023) (I0={%$lut158, %$lut164, %raddr$in3}[0:0], I1={%$lut158, %$lut164, %raddr$in3}[1:1], I2={%$lut158, %$lut164, %raddr$in3}[2:2], I3=1'd0) -> (O=%$lut165)
+  cell $lut426 blackbox SB_LUT4 #(LUT_INIT=16'd53) (I0={%raddr$in1, %raddr$in0, %mem$w1[5:5], %mem$w0[5:5]}[0:0], I1={%raddr$in1, %raddr$in0, %mem$w1[5:5], %mem$w0[5:5]}[1:1], I2={%raddr$in1, %raddr$in0, %mem$w1[5:5], %mem$w0[5:5]}[2:2], I3={%raddr$in1, %raddr$in0, %mem$w1[5:5], %mem$w0[5:5]}[3:3]) -> (O=%$lut166)
+  cell $lut427 blackbox SB_LUT4 #(LUT_INIT=16'd1164) (I0={%mem$w3[5:5], %mem$w2[5:5], %raddr$in1, %raddr$in0}[0:0], I1={%mem$w3[5:5], %mem$w2[5:5], %raddr$in1, %raddr$in0}[1:1], I2={%mem$w3[5:5], %mem$w2[5:5], %raddr$in1, %raddr$in0}[2:2], I3={%mem$w3[5:5], %mem$w2[5:5], %raddr$in1, %raddr$in0}[3:3]) -> (O=%$lut167)
+  cell $lut428 blackbox SB_LUT4 #(LUT_INIT=16'd257) (I0={%$lut166, %$lut167, %raddr$in2}[0:0], I1={%$lut166, %$lut167, %raddr$in2}[1:1], I2={%$lut166, %$lut167, %raddr$in2}[2:2], I3=1'd0) -> (O=%$lut168)
+  cell $lut429 blackbox SB_LUT4 #(LUT_INIT=16'd291) (I0={%mem$w5[5:5], %mem$w4[5:5], %raddr$in1, %raddr$in0}[0:0], I1={%mem$w5[5:5], %mem$w4[5:5], %raddr$in1, %raddr$in0}[1:1], I2={%mem$w5[5:5], %mem$w4[5:5], %raddr$in1, %raddr$in0}[2:2], I3={%mem$w5[5:5], %mem$w4[5:5], %raddr$in1, %raddr$in0}[3:3]) -> (O=%$lut169)
+  cell $lut430 blackbox SB_LUT4 #(LUT_INIT=16'd1164) (I0={%mem$w7[5:5], %mem$w6[5:5], %raddr$in1, %raddr$in0}[0:0], I1={%mem$w7[5:5], %mem$w6[5:5], %raddr$in1, %raddr$in0}[1:1], I2={%mem$w7[5:5], %mem$w6[5:5], %raddr$in1, %raddr$in0}[2:2], I3={%mem$w7[5:5], %mem$w6[5:5], %raddr$in1, %raddr$in0}[3:3]) -> (O=%$lut170)
+  cell $lut431 blackbox SB_LUT4 #(LUT_INIT=16'd253) (I0={%$lut168, %$lut169, %$lut170, %raddr$in2}[0:0], I1={%$lut168, %$lut169, %$lut170, %raddr$in2}[1:1], I2={%$lut168, %$lut169, %$lut170, %raddr$in2}[2:2], I3={%$lut168, %$lut169, %$lut170, %raddr$in2}[3:3]) -> (O=%$lut171)
+  cell $lut432 blackbox SB_LUT4 #(LUT_INIT=16'd291) (I0={%mem$w9[5:5], %mem$w8[5:5], %raddr$in1, %raddr$in0}[0:0], I1={%mem$w9[5:5], %mem$w8[5:5], %raddr$in1, %raddr$in0}[1:1], I2={%mem$w9[5:5], %mem$w8[5:5], %raddr$in1, %raddr$in0}[2:2], I3={%mem$w9[5:5], %mem$w8[5:5], %raddr$in1, %raddr$in0}[3:3]) -> (O=%$lut172)
+  cell $lut433 blackbox SB_LUT4 #(LUT_INIT=16'd1164) (I0={%mem$w11[5:5], %mem$w10[5:5], %raddr$in1, %raddr$in0}[0:0], I1={%mem$w11[5:5], %mem$w10[5:5], %raddr$in1, %raddr$in0}[1:1], I2={%mem$w11[5:5], %mem$w10[5:5], %raddr$in1, %raddr$in0}[2:2], I3={%mem$w11[5:5], %mem$w10[5:5], %raddr$in1, %raddr$in0}[3:3]) -> (O=%$lut173)
+  cell $lut434 blackbox SB_LUT4 #(LUT_INIT=16'd257) (I0={%$lut172, %$lut173, %raddr$in2}[0:0], I1={%$lut172, %$lut173, %raddr$in2}[1:1], I2={%$lut172, %$lut173, %raddr$in2}[2:2], I3=1'd0) -> (O=%$lut174)
+  cell $lut435 blackbox SB_LUT4 #(LUT_INIT=16'd291) (I0={%mem$w13[5:5], %mem$w12[5:5], %raddr$in1, %raddr$in0}[0:0], I1={%mem$w13[5:5], %mem$w12[5:5], %raddr$in1, %raddr$in0}[1:1], I2={%mem$w13[5:5], %mem$w12[5:5], %raddr$in1, %raddr$in0}[2:2], I3={%mem$w13[5:5], %mem$w12[5:5], %raddr$in1, %raddr$in0}[3:3]) -> (O=%$lut175)
+  cell $lut436 blackbox SB_LUT4 #(LUT_INIT=16'd1164) (I0={%mem$w15[5:5], %mem$w14[5:5], %raddr$in1, %raddr$in0}[0:0], I1={%mem$w15[5:5], %mem$w14[5:5], %raddr$in1, %raddr$in0}[1:1], I2={%mem$w15[5:5], %mem$w14[5:5], %raddr$in1, %raddr$in0}[2:2], I3={%mem$w15[5:5], %mem$w14[5:5], %raddr$in1, %raddr$in0}[3:3]) -> (O=%$lut176)
+  cell $lut437 blackbox SB_LUT4 #(LUT_INIT=16'd253) (I0={%$lut174, %$lut175, %$lut176, %raddr$in2}[0:0], I1={%$lut174, %$lut175, %$lut176, %raddr$in2}[1:1], I2={%$lut174, %$lut175, %$lut176, %raddr$in2}[2:2], I3={%$lut174, %$lut175, %$lut176, %raddr$in2}[3:3]) -> (O=%$lut177)
+  cell $lut438 blackbox SB_LUT4 #(LUT_INIT=16'd10023) (I0={%$lut171, %$lut177, %raddr$in3}[0:0], I1={%$lut171, %$lut177, %raddr$in3}[1:1], I2={%$lut171, %$lut177, %raddr$in3}[2:2], I3=1'd0) -> (O=%$lut178)
+  cell $lut439 blackbox SB_LUT4 #(LUT_INIT=16'd53) (I0={%raddr$in1, %raddr$in0, %mem$w1[4:4], %mem$w0[4:4]}[0:0], I1={%raddr$in1, %raddr$in0, %mem$w1[4:4], %mem$w0[4:4]}[1:1], I2={%raddr$in1, %raddr$in0, %mem$w1[4:4], %mem$w0[4:4]}[2:2], I3={%raddr$in1, %raddr$in0, %mem$w1[4:4], %mem$w0[4:4]}[3:3]) -> (O=%$lut179)
+  cell $lut440 blackbox SB_LUT4 #(LUT_INIT=16'd1164) (I0={%mem$w3[4:4], %mem$w2[4:4], %raddr$in1, %raddr$in0}[0:0], I1={%mem$w3[4:4], %mem$w2[4:4], %raddr$in1, %raddr$in0}[1:1], I2={%mem$w3[4:4], %mem$w2[4:4], %raddr$in1, %raddr$in0}[2:2], I3={%mem$w3[4:4], %mem$w2[4:4], %raddr$in1, %raddr$in0}[3:3]) -> (O=%$lut180)
+  cell $lut441 blackbox SB_LUT4 #(LUT_INIT=16'd257) (I0={%$lut179, %$lut180, %raddr$in2}[0:0], I1={%$lut179, %$lut180, %raddr$in2}[1:1], I2={%$lut179, %$lut180, %raddr$in2}[2:2], I3=1'd0) -> (O=%$lut181)
+  cell $lut442 blackbox SB_LUT4 #(LUT_INIT=16'd291) (I0={%mem$w5[4:4], %mem$w4[4:4], %raddr$in1, %raddr$in0}[0:0], I1={%mem$w5[4:4], %mem$w4[4:4], %raddr$in1, %raddr$in0}[1:1], I2={%mem$w5[4:4], %mem$w4[4:4], %raddr$in1, %raddr$in0}[2:2], I3={%mem$w5[4:4], %mem$w4[4:4], %raddr$in1, %raddr$in0}[3:3]) -> (O=%$lut182)
+  cell $lut443 blackbox SB_LUT4 #(LUT_INIT=16'd1164) (I0={%mem$w7[4:4], %mem$w6[4:4], %raddr$in1, %raddr$in0}[0:0], I1={%mem$w7[4:4], %mem$w6[4:4], %raddr$in1, %raddr$in0}[1:1], I2={%mem$w7[4:4], %mem$w6[4:4], %raddr$in1, %raddr$in0}[2:2], I3={%mem$w7[4:4], %mem$w6[4:4], %raddr$in1, %raddr$in0}[3:3]) -> (O=%$lut183)
+  cell $lut444 blackbox SB_LUT4 #(LUT_INIT=16'd253) (I0={%$lut181, %$lut182, %$lut183, %raddr$in2}[0:0], I1={%$lut181, %$lut182, %$lut183, %raddr$in2}[1:1], I2={%$lut181, %$lut182, %$lut183, %raddr$in2}[2:2], I3={%$lut181, %$lut182, %$lut183, %raddr$in2}[3:3]) -> (O=%$lut184)
+  cell $lut445 blackbox SB_LUT4 #(LUT_INIT=16'd291) (I0={%mem$w9[4:4], %mem$w8[4:4], %raddr$in1, %raddr$in0}[0:0], I1={%mem$w9[4:4], %mem$w8[4:4], %raddr$in1, %raddr$in0}[1:1], I2={%mem$w9[4:4], %mem$w8[4:4], %raddr$in1, %raddr$in0}[2:2], I3={%mem$w9[4:4], %mem$w8[4:4], %raddr$in1, %raddr$in0}[3:3]) -> (O=%$lut185)
+  cell $lut446 blackbox SB_LUT4 #(LUT_INIT=16'd1164) (I0={%mem$w11[4:4], %mem$w10[4:4], %raddr$in1, %raddr$in0}[0:0], I1={%mem$w11[4:4], %mem$w10[4:4], %raddr$in1, %raddr$in0}[1:1], I2={%mem$w11[4:4], %mem$w10[4:4], %raddr$in1, %raddr$in0}[2:2], I3={%mem$w11[4:4], %mem$w10[4:4], %raddr$in1, %raddr$in0}[3:3]) -> (O=%$lut186)
+  cell $lut447 blackbox SB_LUT4 #(LUT_INIT=16'd257) (I0={%$lut185, %$lut186, %raddr$in2}[0:0], I1={%$lut185, %$lut186, %raddr$in2}[1:1], I2={%$lut185, %$lut186, %raddr$in2}[2:2], I3=1'd0) -> (O=%$lut187)
+  cell $lut448 blackbox SB_LUT4 #(LUT_INIT=16'd291) (I0={%mem$w13[4:4], %mem$w12[4:4], %raddr$in1, %raddr$in0}[0:0], I1={%mem$w13[4:4], %mem$w12[4:4], %raddr$in1, %raddr$in0}[1:1], I2={%mem$w13[4:4], %mem$w12[4:4], %raddr$in1, %raddr$in0}[2:2], I3={%mem$w13[4:4], %mem$w12[4:4], %raddr$in1, %raddr$in0}[3:3]) -> (O=%$lut188)
+  cell $lut449 blackbox SB_LUT4 #(LUT_INIT=16'd1164) (I0={%mem$w15[4:4], %mem$w14[4:4], %raddr$in1, %raddr$in0}[0:0], I1={%mem$w15[4:4], %mem$w14[4:4], %raddr$in1, %raddr$in0}[1:1], I2={%mem$w15[4:4], %mem$w14[4:4], %raddr$in1, %raddr$in0}[2:2], I3={%mem$w15[4:4], %mem$w14[4:4], %raddr$in1, %raddr$in0}[3:3]) -> (O=%$lut189)
+  cell $lut450 blackbox SB_LUT4 #(LUT_INIT=16'd253) (I0={%$lut187, %$lut188, %$lut189, %raddr$in2}[0:0], I1={%$lut187, %$lut188, %$lut189, %raddr$in2}[1:1], I2={%$lut187, %$lut188, %$lut189, %raddr$in2}[2:2], I3={%$lut187, %$lut188, %$lut189, %raddr$in2}[3:3]) -> (O=%$lut190)
+  cell $lut451 blackbox SB_LUT4 #(LUT_INIT=16'd10023) (I0={%$lut184, %$lut190, %raddr$in3}[0:0], I1={%$lut184, %$lut190, %raddr$in3}[1:1], I2={%$lut184, %$lut190, %raddr$in3}[2:2], I3=1'd0) -> (O=%$lut191)
+  cell $lut452 blackbox SB_LUT4 #(LUT_INIT=16'd53) (I0={%raddr$in1, %raddr$in0, %mem$w1[3:3], %mem$w0[3:3]}[0:0], I1={%raddr$in1, %raddr$in0, %mem$w1[3:3], %mem$w0[3:3]}[1:1], I2={%raddr$in1, %raddr$in0, %mem$w1[3:3], %mem$w0[3:3]}[2:2], I3={%raddr$in1, %raddr$in0, %mem$w1[3:3], %mem$w0[3:3]}[3:3]) -> (O=%$lut192)
+  cell $lut453 blackbox SB_LUT4 #(LUT_INIT=16'd1164) (I0={%mem$w3[3:3], %mem$w2[3:3], %raddr$in1, %raddr$in0}[0:0], I1={%mem$w3[3:3], %mem$w2[3:3], %raddr$in1, %raddr$in0}[1:1], I2={%mem$w3[3:3], %mem$w2[3:3], %raddr$in1, %raddr$in0}[2:2], I3={%mem$w3[3:3], %mem$w2[3:3], %raddr$in1, %raddr$in0}[3:3]) -> (O=%$lut193)
+  cell $lut454 blackbox SB_LUT4 #(LUT_INIT=16'd257) (I0={%$lut192, %$lut193, %raddr$in2}[0:0], I1={%$lut192, %$lut193, %raddr$in2}[1:1], I2={%$lut192, %$lut193, %raddr$in2}[2:2], I3=1'd0) -> (O=%$lut194)
+  cell $lut455 blackbox SB_LUT4 #(LUT_INIT=16'd291) (I0={%mem$w5[3:3], %mem$w4[3:3], %raddr$in1, %raddr$in0}[0:0], I1={%mem$w5[3:3], %mem$w4[3:3], %raddr$in1, %raddr$in0}[1:1], I2={%mem$w5[3:3], %mem$w4[3:3], %raddr$in1, %raddr$in0}[2:2], I3={%mem$w5[3:3], %mem$w4[3:3], %raddr$in1, %raddr$in0}[3:3]) -> (O=%$lut195)
+  cell $lut456 blackbox SB_LUT4 #(LUT_INIT=16'd1164) (I0={%mem$w7[3:3], %mem$w6[3:3], %raddr$in1, %raddr$in0}[0:0], I1={%mem$w7[3:3], %mem$w6[3:3], %raddr$in1, %raddr$in0}[1:1], I2={%mem$w7[3:3], %mem$w6[3:3], %raddr$in1, %raddr$in0}[2:2], I3={%mem$w7[3:3], %mem$w6[3:3], %raddr$in1, %raddr$in0}[3:3]) -> (O=%$lut196)
+  cell $lut457 blackbox SB_LUT4 #(LUT_INIT=16'd253) (I0={%$lut194, %$lut195, %$lut196, %raddr$in2}[0:0], I1={%$lut194, %$lut195, %$lut196, %raddr$in2}[1:1], I2={%$lut194, %$lut195, %$lut196, %raddr$in2}[2:2], I3={%$lut194, %$lut195, %$lut196, %raddr$in2}[3:3]) -> (O=%$lut197)
+  cell $lut458 blackbox SB_LUT4 #(LUT_INIT=16'd291) (I0={%mem$w9[3:3], %mem$w8[3:3], %raddr$in1, %raddr$in0}[0:0], I1={%mem$w9[3:3], %mem$w8[3:3], %raddr$in1, %raddr$in0}[1:1], I2={%mem$w9[3:3], %mem$w8[3:3], %raddr$in1, %raddr$in0}[2:2], I3={%mem$w9[3:3], %mem$w8[3:3], %raddr$in1, %raddr$in0}[3:3]) -> (O=%$lut198)
+  cell $lut459 blackbox SB_LUT4 #(LUT_INIT=16'd1164) (I0={%mem$w11[3:3], %mem$w10[3:3], %raddr$in1, %raddr$in0}[0:0], I1={%mem$w11[3:3], %mem$w10[3:3], %raddr$in1, %raddr$in0}[1:1], I2={%mem$w11[3:3], %mem$w10[3:3], %raddr$in1, %raddr$in0}[2:2], I3={%mem$w11[3:3], %mem$w10[3:3], %raddr$in1, %raddr$in0}[3:3]) -> (O=%$lut199)
+  cell $lut460 blackbox SB_LUT4 #(LUT_INIT=16'd257) (I0={%$lut198, %$lut199, %raddr$in2}[0:0], I1={%$lut198, %$lut199, %raddr$in2}[1:1], I2={%$lut198, %$lut199, %raddr$in2}[2:2], I3=1'd0) -> (O=%$lut200)
+  cell $lut461 blackbox SB_LUT4 #(LUT_INIT=16'd291) (I0={%mem$w13[3:3], %mem$w12[3:3], %raddr$in1, %raddr$in0}[0:0], I1={%mem$w13[3:3], %mem$w12[3:3], %raddr$in1, %raddr$in0}[1:1], I2={%mem$w13[3:3], %mem$w12[3:3], %raddr$in1, %raddr$in0}[2:2], I3={%mem$w13[3:3], %mem$w12[3:3], %raddr$in1, %raddr$in0}[3:3]) -> (O=%$lut201)
+  cell $lut462 blackbox SB_LUT4 #(LUT_INIT=16'd1164) (I0={%mem$w15[3:3], %mem$w14[3:3], %raddr$in1, %raddr$in0}[0:0], I1={%mem$w15[3:3], %mem$w14[3:3], %raddr$in1, %raddr$in0}[1:1], I2={%mem$w15[3:3], %mem$w14[3:3], %raddr$in1, %raddr$in0}[2:2], I3={%mem$w15[3:3], %mem$w14[3:3], %raddr$in1, %raddr$in0}[3:3]) -> (O=%$lut202)
+  cell $lut463 blackbox SB_LUT4 #(LUT_INIT=16'd253) (I0={%$lut200, %$lut201, %$lut202, %raddr$in2}[0:0], I1={%$lut200, %$lut201, %$lut202, %raddr$in2}[1:1], I2={%$lut200, %$lut201, %$lut202, %raddr$in2}[2:2], I3={%$lut200, %$lut201, %$lut202, %raddr$in2}[3:3]) -> (O=%$lut203)
+  cell $lut464 blackbox SB_LUT4 #(LUT_INIT=16'd10023) (I0={%$lut197, %$lut203, %raddr$in3}[0:0], I1={%$lut197, %$lut203, %raddr$in3}[1:1], I2={%$lut197, %$lut203, %raddr$in3}[2:2], I3=1'd0) -> (O=%$lut204)
+  cell $lut465 blackbox SB_LUT4 #(LUT_INIT=16'd53) (I0={%raddr$in1, %raddr$in0, %mem$w1[2:2], %mem$w0[2:2]}[0:0], I1={%raddr$in1, %raddr$in0, %mem$w1[2:2], %mem$w0[2:2]}[1:1], I2={%raddr$in1, %raddr$in0, %mem$w1[2:2], %mem$w0[2:2]}[2:2], I3={%raddr$in1, %raddr$in0, %mem$w1[2:2], %mem$w0[2:2]}[3:3]) -> (O=%$lut205)
+  cell $lut466 blackbox SB_LUT4 #(LUT_INIT=16'd1164) (I0={%mem$w3[2:2], %mem$w2[2:2], %raddr$in1, %raddr$in0}[0:0], I1={%mem$w3[2:2], %mem$w2[2:2], %raddr$in1, %raddr$in0}[1:1], I2={%mem$w3[2:2], %mem$w2[2:2], %raddr$in1, %raddr$in0}[2:2], I3={%mem$w3[2:2], %mem$w2[2:2], %raddr$in1, %raddr$in0}[3:3]) -> (O=%$lut206)
+  cell $lut467 blackbox SB_LUT4 #(LUT_INIT=16'd257) (I0={%$lut205, %$lut206, %raddr$in2}[0:0], I1={%$lut205, %$lut206, %raddr$in2}[1:1], I2={%$lut205, %$lut206, %raddr$in2}[2:2], I3=1'd0) -> (O=%$lut207)
+  cell $lut468 blackbox SB_LUT4 #(LUT_INIT=16'd291) (I0={%mem$w5[2:2], %mem$w4[2:2], %raddr$in1, %raddr$in0}[0:0], I1={%mem$w5[2:2], %mem$w4[2:2], %raddr$in1, %raddr$in0}[1:1], I2={%mem$w5[2:2], %mem$w4[2:2], %raddr$in1, %raddr$in0}[2:2], I3={%mem$w5[2:2], %mem$w4[2:2], %raddr$in1, %raddr$in0}[3:3]) -> (O=%$lut208)
+  cell $lut469 blackbox SB_LUT4 #(LUT_INIT=16'd1164) (I0={%mem$w7[2:2], %mem$w6[2:2], %raddr$in1, %raddr$in0}[0:0], I1={%mem$w7[2:2], %mem$w6[2:2], %raddr$in1, %raddr$in0}[1:1], I2={%mem$w7[2:2], %mem$w6[2:2], %raddr$in1, %raddr$in0}[2:2], I3={%mem$w7[2:2], %mem$w6[2:2], %raddr$in1, %raddr$in0}[3:3]) -> (O=%$lut209)
+  cell $lut470 blackbox SB_LUT4 #(LUT_INIT=16'd253) (I0={%$lut207, %$lut208, %$lut209, %raddr$in2}[0:0], I1={%$lut207, %$lut208, %$lut209, %raddr$in2}[1:1], I2={%$lut207, %$lut208, %$lut209, %raddr$in2}[2:2], I3={%$lut207, %$lut208, %$lut209, %raddr$in2}[3:3]) -> (O=%$lut210)
+  cell $lut471 blackbox SB_LUT4 #(LUT_INIT=16'd291) (I0={%mem$w9[2:2], %mem$w8[2:2], %raddr$in1, %raddr$in0}[0:0], I1={%mem$w9[2:2], %mem$w8[2:2], %raddr$in1, %raddr$in0}[1:1], I2={%mem$w9[2:2], %mem$w8[2:2], %raddr$in1, %raddr$in0}[2:2], I3={%mem$w9[2:2], %mem$w8[2:2], %raddr$in1, %raddr$in0}[3:3]) -> (O=%$lut211)
+  cell $lut472 blackbox SB_LUT4 #(LUT_INIT=16'd1164) (I0={%mem$w11[2:2], %mem$w10[2:2], %raddr$in1, %raddr$in0}[0:0], I1={%mem$w11[2:2], %mem$w10[2:2], %raddr$in1, %raddr$in0}[1:1], I2={%mem$w11[2:2], %mem$w10[2:2], %raddr$in1, %raddr$in0}[2:2], I3={%mem$w11[2:2], %mem$w10[2:2], %raddr$in1, %raddr$in0}[3:3]) -> (O=%$lut212)
+  cell $lut473 blackbox SB_LUT4 #(LUT_INIT=16'd257) (I0={%$lut211, %$lut212, %raddr$in2}[0:0], I1={%$lut211, %$lut212, %raddr$in2}[1:1], I2={%$lut211, %$lut212, %raddr$in2}[2:2], I3=1'd0) -> (O=%$lut213)
+  cell $lut474 blackbox SB_LUT4 #(LUT_INIT=16'd291) (I0={%mem$w13[2:2], %mem$w12[2:2], %raddr$in1, %raddr$in0}[0:0], I1={%mem$w13[2:2], %mem$w12[2:2], %raddr$in1, %raddr$in0}[1:1], I2={%mem$w13[2:2], %mem$w12[2:2], %raddr$in1, %raddr$in0}[2:2], I3={%mem$w13[2:2], %mem$w12[2:2], %raddr$in1, %raddr$in0}[3:3]) -> (O=%$lut214)
+  cell $lut475 blackbox SB_LUT4 #(LUT_INIT=16'd1164) (I0={%mem$w15[2:2], %mem$w14[2:2], %raddr$in1, %raddr$in0}[0:0], I1={%mem$w15[2:2], %mem$w14[2:2], %raddr$in1, %raddr$in0}[1:1], I2={%mem$w15[2:2], %mem$w14[2:2], %raddr$in1, %raddr$in0}[2:2], I3={%mem$w15[2:2], %mem$w14[2:2], %raddr$in1, %raddr$in0}[3:3]) -> (O=%$lut215)
+  cell $lut476 blackbox SB_LUT4 #(LUT_INIT=16'd253) (I0={%$lut213, %$lut214, %$lut215, %raddr$in2}[0:0], I1={%$lut213, %$lut214, %$lut215, %raddr$in2}[1:1], I2={%$lut213, %$lut214, %$lut215, %raddr$in2}[2:2], I3={%$lut213, %$lut214, %$lut215, %raddr$in2}[3:3]) -> (O=%$lut216)
+  cell $lut477 blackbox SB_LUT4 #(LUT_INIT=16'd10023) (I0={%$lut210, %$lut216, %raddr$in3}[0:0], I1={%$lut210, %$lut216, %raddr$in3}[1:1], I2={%$lut210, %$lut216, %raddr$in3}[2:2], I3=1'd0) -> (O=%$lut217)
+  cell $lut478 blackbox SB_LUT4 #(LUT_INIT=16'd53) (I0={%raddr$in1, %raddr$in0, %mem$w1[1:1], %mem$w0[1:1]}[0:0], I1={%raddr$in1, %raddr$in0, %mem$w1[1:1], %mem$w0[1:1]}[1:1], I2={%raddr$in1, %raddr$in0, %mem$w1[1:1], %mem$w0[1:1]}[2:2], I3={%raddr$in1, %raddr$in0, %mem$w1[1:1], %mem$w0[1:1]}[3:3]) -> (O=%$lut218)
+  cell $lut479 blackbox SB_LUT4 #(LUT_INIT=16'd1164) (I0={%mem$w3[1:1], %mem$w2[1:1], %raddr$in1, %raddr$in0}[0:0], I1={%mem$w3[1:1], %mem$w2[1:1], %raddr$in1, %raddr$in0}[1:1], I2={%mem$w3[1:1], %mem$w2[1:1], %raddr$in1, %raddr$in0}[2:2], I3={%mem$w3[1:1], %mem$w2[1:1], %raddr$in1, %raddr$in0}[3:3]) -> (O=%$lut219)
+  cell $lut480 blackbox SB_LUT4 #(LUT_INIT=16'd257) (I0={%$lut218, %$lut219, %raddr$in2}[0:0], I1={%$lut218, %$lut219, %raddr$in2}[1:1], I2={%$lut218, %$lut219, %raddr$in2}[2:2], I3=1'd0) -> (O=%$lut220)
+  cell $lut481 blackbox SB_LUT4 #(LUT_INIT=16'd291) (I0={%mem$w5[1:1], %mem$w4[1:1], %raddr$in1, %raddr$in0}[0:0], I1={%mem$w5[1:1], %mem$w4[1:1], %raddr$in1, %raddr$in0}[1:1], I2={%mem$w5[1:1], %mem$w4[1:1], %raddr$in1, %raddr$in0}[2:2], I3={%mem$w5[1:1], %mem$w4[1:1], %raddr$in1, %raddr$in0}[3:3]) -> (O=%$lut221)
+  cell $lut482 blackbox SB_LUT4 #(LUT_INIT=16'd1164) (I0={%mem$w7[1:1], %mem$w6[1:1], %raddr$in1, %raddr$in0}[0:0], I1={%mem$w7[1:1], %mem$w6[1:1], %raddr$in1, %raddr$in0}[1:1], I2={%mem$w7[1:1], %mem$w6[1:1], %raddr$in1, %raddr$in0}[2:2], I3={%mem$w7[1:1], %mem$w6[1:1], %raddr$in1, %raddr$in0}[3:3]) -> (O=%$lut222)
+  cell $lut483 blackbox SB_LUT4 #(LUT_INIT=16'd253) (I0={%$lut220, %$lut221, %$lut222, %raddr$in2}[0:0], I1={%$lut220, %$lut221, %$lut222, %raddr$in2}[1:1], I2={%$lut220, %$lut221, %$lut222, %raddr$in2}[2:2], I3={%$lut220, %$lut221, %$lut222, %raddr$in2}[3:3]) -> (O=%$lut223)
+  cell $lut484 blackbox SB_LUT4 #(LUT_INIT=16'd291) (I0={%mem$w9[1:1], %mem$w8[1:1], %raddr$in1, %raddr$in0}[0:0], I1={%mem$w9[1:1], %mem$w8[1:1], %raddr$in1, %raddr$in0}[1:1], I2={%mem$w9[1:1], %mem$w8[1:1], %raddr$in1, %raddr$in0}[2:2], I3={%mem$w9[1:1], %mem$w8[1:1], %raddr$in1, %raddr$in0}[3:3]) -> (O=%$lut224)
+  cell $lut485 blackbox SB_LUT4 #(LUT_INIT=16'd1164) (I0={%mem$w11[1:1], %mem$w10[1:1], %raddr$in1, %raddr$in0}[0:0], I1={%mem$w11[1:1], %mem$w10[1:1], %raddr$in1, %raddr$in0}[1:1], I2={%mem$w11[1:1], %mem$w10[1:1], %raddr$in1, %raddr$in0}[2:2], I3={%mem$w11[1:1], %mem$w10[1:1], %raddr$in1, %raddr$in0}[3:3]) -> (O=%$lut225)
+  cell $lut486 blackbox SB_LUT4 #(LUT_INIT=16'd257) (I0={%$lut224, %$lut225, %raddr$in2}[0:0], I1={%$lut224, %$lut225, %raddr$in2}[1:1], I2={%$lut224, %$lut225, %raddr$in2}[2:2], I3=1'd0) -> (O=%$lut226)
+  cell $lut487 blackbox SB_LUT4 #(LUT_INIT=16'd291) (I0={%mem$w13[1:1], %mem$w12[1:1], %raddr$in1, %raddr$in0}[0:0], I1={%mem$w13[1:1], %mem$w12[1:1], %raddr$in1, %raddr$in0}[1:1], I2={%mem$w13[1:1], %mem$w12[1:1], %raddr$in1, %raddr$in0}[2:2], I3={%mem$w13[1:1], %mem$w12[1:1], %raddr$in1, %raddr$in0}[3:3]) -> (O=%$lut227)
+  cell $lut488 blackbox SB_LUT4 #(LUT_INIT=16'd1164) (I0={%mem$w15[1:1], %mem$w14[1:1], %raddr$in1, %raddr$in0}[0:0], I1={%mem$w15[1:1], %mem$w14[1:1], %raddr$in1, %raddr$in0}[1:1], I2={%mem$w15[1:1], %mem$w14[1:1], %raddr$in1, %raddr$in0}[2:2], I3={%mem$w15[1:1], %mem$w14[1:1], %raddr$in1, %raddr$in0}[3:3]) -> (O=%$lut228)
+  cell $lut489 blackbox SB_LUT4 #(LUT_INIT=16'd253) (I0={%$lut226, %$lut227, %$lut228, %raddr$in2}[0:0], I1={%$lut226, %$lut227, %$lut228, %raddr$in2}[1:1], I2={%$lut226, %$lut227, %$lut228, %raddr$in2}[2:2], I3={%$lut226, %$lut227, %$lut228, %raddr$in2}[3:3]) -> (O=%$lut229)
+  cell $lut490 blackbox SB_LUT4 #(LUT_INIT=16'd10023) (I0={%$lut223, %$lut229, %raddr$in3}[0:0], I1={%$lut223, %$lut229, %raddr$in3}[1:1], I2={%$lut223, %$lut229, %raddr$in3}[2:2], I3=1'd0) -> (O=%$lut230)
+  cell $lut491 blackbox SB_LUT4 #(LUT_INIT=16'd53) (I0={%raddr$in1, %raddr$in0, %mem$w1[0:0], %mem$w0[0:0]}[0:0], I1={%raddr$in1, %raddr$in0, %mem$w1[0:0], %mem$w0[0:0]}[1:1], I2={%raddr$in1, %raddr$in0, %mem$w1[0:0], %mem$w0[0:0]}[2:2], I3={%raddr$in1, %raddr$in0, %mem$w1[0:0], %mem$w0[0:0]}[3:3]) -> (O=%$lut231)
+  cell $lut492 blackbox SB_LUT4 #(LUT_INIT=16'd1164) (I0={%mem$w3[0:0], %mem$w2[0:0], %raddr$in1, %raddr$in0}[0:0], I1={%mem$w3[0:0], %mem$w2[0:0], %raddr$in1, %raddr$in0}[1:1], I2={%mem$w3[0:0], %mem$w2[0:0], %raddr$in1, %raddr$in0}[2:2], I3={%mem$w3[0:0], %mem$w2[0:0], %raddr$in1, %raddr$in0}[3:3]) -> (O=%$lut232)
+  cell $lut493 blackbox SB_LUT4 #(LUT_INIT=16'd257) (I0={%$lut231, %$lut232, %raddr$in2}[0:0], I1={%$lut231, %$lut232, %raddr$in2}[1:1], I2={%$lut231, %$lut232, %raddr$in2}[2:2], I3=1'd0) -> (O=%$lut233)
+  cell $lut494 blackbox SB_LUT4 #(LUT_INIT=16'd291) (I0={%mem$w5[0:0], %mem$w4[0:0], %raddr$in1, %raddr$in0}[0:0], I1={%mem$w5[0:0], %mem$w4[0:0], %raddr$in1, %raddr$in0}[1:1], I2={%mem$w5[0:0], %mem$w4[0:0], %raddr$in1, %raddr$in0}[2:2], I3={%mem$w5[0:0], %mem$w4[0:0], %raddr$in1, %raddr$in0}[3:3]) -> (O=%$lut234)
+  cell $lut495 blackbox SB_LUT4 #(LUT_INIT=16'd1164) (I0={%mem$w7[0:0], %mem$w6[0:0], %raddr$in1, %raddr$in0}[0:0], I1={%mem$w7[0:0], %mem$w6[0:0], %raddr$in1, %raddr$in0}[1:1], I2={%mem$w7[0:0], %mem$w6[0:0], %raddr$in1, %raddr$in0}[2:2], I3={%mem$w7[0:0], %mem$w6[0:0], %raddr$in1, %raddr$in0}[3:3]) -> (O=%$lut235)
+  cell $lut496 blackbox SB_LUT4 #(LUT_INIT=16'd253) (I0={%$lut233, %$lut234, %$lut235, %raddr$in2}[0:0], I1={%$lut233, %$lut234, %$lut235, %raddr$in2}[1:1], I2={%$lut233, %$lut234, %$lut235, %raddr$in2}[2:2], I3={%$lut233, %$lut234, %$lut235, %raddr$in2}[3:3]) -> (O=%$lut236)
+  cell $lut497 blackbox SB_LUT4 #(LUT_INIT=16'd291) (I0={%mem$w9[0:0], %mem$w8[0:0], %raddr$in1, %raddr$in0}[0:0], I1={%mem$w9[0:0], %mem$w8[0:0], %raddr$in1, %raddr$in0}[1:1], I2={%mem$w9[0:0], %mem$w8[0:0], %raddr$in1, %raddr$in0}[2:2], I3={%mem$w9[0:0], %mem$w8[0:0], %raddr$in1, %raddr$in0}[3:3]) -> (O=%$lut237)
+  cell $lut498 blackbox SB_LUT4 #(LUT_INIT=16'd1164) (I0={%mem$w11[0:0], %mem$w10[0:0], %raddr$in1, %raddr$in0}[0:0], I1={%mem$w11[0:0], %mem$w10[0:0], %raddr$in1, %raddr$in0}[1:1], I2={%mem$w11[0:0], %mem$w10[0:0], %raddr$in1, %raddr$in0}[2:2], I3={%mem$w11[0:0], %mem$w10[0:0], %raddr$in1, %raddr$in0}[3:3]) -> (O=%$lut238)
+  cell $lut499 blackbox SB_LUT4 #(LUT_INIT=16'd257) (I0={%$lut237, %$lut238, %raddr$in2}[0:0], I1={%$lut237, %$lut238, %raddr$in2}[1:1], I2={%$lut237, %$lut238, %raddr$in2}[2:2], I3=1'd0) -> (O=%$lut239)
+  cell $lut500 blackbox SB_LUT4 #(LUT_INIT=16'd291) (I0={%mem$w13[0:0], %mem$w12[0:0], %raddr$in1, %raddr$in0}[0:0], I1={%mem$w13[0:0], %mem$w12[0:0], %raddr$in1, %raddr$in0}[1:1], I2={%mem$w13[0:0], %mem$w12[0:0], %raddr$in1, %raddr$in0}[2:2], I3={%mem$w13[0:0], %mem$w12[0:0], %raddr$in1, %raddr$in0}[3:3]) -> (O=%$lut240)
+  cell $lut501 blackbox SB_LUT4 #(LUT_INIT=16'd1164) (I0={%mem$w15[0:0], %mem$w14[0:0], %raddr$in1, %raddr$in0}[0:0], I1={%mem$w15[0:0], %mem$w14[0:0], %raddr$in1, %raddr$in0}[1:1], I2={%mem$w15[0:0], %mem$w14[0:0], %raddr$in1, %raddr$in0}[2:2], I3={%mem$w15[0:0], %mem$w14[0:0], %raddr$in1, %raddr$in0}[3:3]) -> (O=%$lut241)
+  cell $lut502 blackbox SB_LUT4 #(LUT_INIT=16'd253) (I0={%$lut239, %$lut240, %$lut241, %raddr$in2}[0:0], I1={%$lut239, %$lut240, %$lut241, %raddr$in2}[1:1], I2={%$lut239, %$lut240, %$lut241, %raddr$in2}[2:2], I3={%$lut239, %$lut240, %$lut241, %raddr$in2}[3:3]) -> (O=%$lut242)
+  cell $lut503 blackbox SB_LUT4 #(LUT_INIT=16'd10023) (I0={%$lut236, %$lut242, %raddr$in3}[0:0], I1={%$lut236, %$lut242, %raddr$in3}[1:1], I2={%$lut236, %$lut242, %raddr$in3}[2:2], I3=1'd0) -> (O=%$lut243)
+  cell mem$ff0$ff0 blackbox SB_DFFE (C=%clk$gb, D=%mem$w0_d[0:0], E=%mem$we) -> (Q=%mem$ff0$q0)
+  cell mem$ff0$ff1 blackbox SB_DFFE (C=%clk$gb, D=%mem$w0_d[1:1], E=%mem$we) -> (Q=%mem$ff0$q1)
+  cell mem$ff0$ff2 blackbox SB_DFFE (C=%clk$gb, D=%mem$w0_d[2:2], E=%mem$we) -> (Q=%mem$ff0$q2)
+  cell mem$ff0$ff3 blackbox SB_DFFE (C=%clk$gb, D=%mem$w0_d[3:3], E=%mem$we) -> (Q=%mem$ff0$q3)
+  cell mem$ff0$ff4 blackbox SB_DFFE (C=%clk$gb, D=%mem$w0_d[4:4], E=%mem$we) -> (Q=%mem$ff0$q4)
+  cell mem$ff0$ff5 blackbox SB_DFFE (C=%clk$gb, D=%mem$w0_d[5:5], E=%mem$we) -> (Q=%mem$ff0$q5)
+  cell mem$ff0$ff6 blackbox SB_DFFE (C=%clk$gb, D=%mem$w0_d[6:6], E=%mem$we) -> (Q=%mem$ff0$q6)
+  cell mem$ff0$ff7 blackbox SB_DFFE (C=%clk$gb, D=%mem$w0_d[7:7], E=%mem$we) -> (Q=%mem$ff0$q7)
+  cell mem$ff1$ff0 blackbox SB_DFFE (C=%clk$gb, D=%mem$w1_d[0:0], E=%mem$we$1) -> (Q=%mem$ff1$q0)
+  cell mem$ff1$ff1 blackbox SB_DFFE (C=%clk$gb, D=%mem$w1_d[1:1], E=%mem$we$1) -> (Q=%mem$ff1$q1)
+  cell mem$ff1$ff2 blackbox SB_DFFE (C=%clk$gb, D=%mem$w1_d[2:2], E=%mem$we$1) -> (Q=%mem$ff1$q2)
+  cell mem$ff1$ff3 blackbox SB_DFFE (C=%clk$gb, D=%mem$w1_d[3:3], E=%mem$we$1) -> (Q=%mem$ff1$q3)
+  cell mem$ff1$ff4 blackbox SB_DFFE (C=%clk$gb, D=%mem$w1_d[4:4], E=%mem$we$1) -> (Q=%mem$ff1$q4)
+  cell mem$ff1$ff5 blackbox SB_DFFE (C=%clk$gb, D=%mem$w1_d[5:5], E=%mem$we$1) -> (Q=%mem$ff1$q5)
+  cell mem$ff1$ff6 blackbox SB_DFFE (C=%clk$gb, D=%mem$w1_d[6:6], E=%mem$we$1) -> (Q=%mem$ff1$q6)
+  cell mem$ff1$ff7 blackbox SB_DFFE (C=%clk$gb, D=%mem$w1_d[7:7], E=%mem$we$1) -> (Q=%mem$ff1$q7)
+  cell mem$ff2$ff0 blackbox SB_DFFE (C=%clk$gb, D=%mem$w2_d[0:0], E=%mem$we$2) -> (Q=%mem$ff2$q0)
+  cell mem$ff2$ff1 blackbox SB_DFFE (C=%clk$gb, D=%mem$w2_d[1:1], E=%mem$we$2) -> (Q=%mem$ff2$q1)
+  cell mem$ff2$ff2 blackbox SB_DFFE (C=%clk$gb, D=%mem$w2_d[2:2], E=%mem$we$2) -> (Q=%mem$ff2$q2)
+  cell mem$ff2$ff3 blackbox SB_DFFE (C=%clk$gb, D=%mem$w2_d[3:3], E=%mem$we$2) -> (Q=%mem$ff2$q3)
+  cell mem$ff2$ff4 blackbox SB_DFFE (C=%clk$gb, D=%mem$w2_d[4:4], E=%mem$we$2) -> (Q=%mem$ff2$q4)
+  cell mem$ff2$ff5 blackbox SB_DFFE (C=%clk$gb, D=%mem$w2_d[5:5], E=%mem$we$2) -> (Q=%mem$ff2$q5)
+  cell mem$ff2$ff6 blackbox SB_DFFE (C=%clk$gb, D=%mem$w2_d[6:6], E=%mem$we$2) -> (Q=%mem$ff2$q6)
+  cell mem$ff2$ff7 blackbox SB_DFFE (C=%clk$gb, D=%mem$w2_d[7:7], E=%mem$we$2) -> (Q=%mem$ff2$q7)
+  cell mem$ff3$ff0 blackbox SB_DFFE (C=%clk$gb, D=%mem$w3_d[0:0], E=%mem$we$3) -> (Q=%mem$ff3$q0)
+  cell mem$ff3$ff1 blackbox SB_DFFE (C=%clk$gb, D=%mem$w3_d[1:1], E=%mem$we$3) -> (Q=%mem$ff3$q1)
+  cell mem$ff3$ff2 blackbox SB_DFFE (C=%clk$gb, D=%mem$w3_d[2:2], E=%mem$we$3) -> (Q=%mem$ff3$q2)
+  cell mem$ff3$ff3 blackbox SB_DFFE (C=%clk$gb, D=%mem$w3_d[3:3], E=%mem$we$3) -> (Q=%mem$ff3$q3)
+  cell mem$ff3$ff4 blackbox SB_DFFE (C=%clk$gb, D=%mem$w3_d[4:4], E=%mem$we$3) -> (Q=%mem$ff3$q4)
+  cell mem$ff3$ff5 blackbox SB_DFFE (C=%clk$gb, D=%mem$w3_d[5:5], E=%mem$we$3) -> (Q=%mem$ff3$q5)
+  cell mem$ff3$ff6 blackbox SB_DFFE (C=%clk$gb, D=%mem$w3_d[6:6], E=%mem$we$3) -> (Q=%mem$ff3$q6)
+  cell mem$ff3$ff7 blackbox SB_DFFE (C=%clk$gb, D=%mem$w3_d[7:7], E=%mem$we$3) -> (Q=%mem$ff3$q7)
+  cell mem$ff4$ff0 blackbox SB_DFFE (C=%clk$gb, D=%mem$w4_d[0:0], E=%mem$we$4) -> (Q=%mem$ff4$q0)
+  cell mem$ff4$ff1 blackbox SB_DFFE (C=%clk$gb, D=%mem$w4_d[1:1], E=%mem$we$4) -> (Q=%mem$ff4$q1)
+  cell mem$ff4$ff2 blackbox SB_DFFE (C=%clk$gb, D=%mem$w4_d[2:2], E=%mem$we$4) -> (Q=%mem$ff4$q2)
+  cell mem$ff4$ff3 blackbox SB_DFFE (C=%clk$gb, D=%mem$w4_d[3:3], E=%mem$we$4) -> (Q=%mem$ff4$q3)
+  cell mem$ff4$ff4 blackbox SB_DFFE (C=%clk$gb, D=%mem$w4_d[4:4], E=%mem$we$4) -> (Q=%mem$ff4$q4)
+  cell mem$ff4$ff5 blackbox SB_DFFE (C=%clk$gb, D=%mem$w4_d[5:5], E=%mem$we$4) -> (Q=%mem$ff4$q5)
+  cell mem$ff4$ff6 blackbox SB_DFFE (C=%clk$gb, D=%mem$w4_d[6:6], E=%mem$we$4) -> (Q=%mem$ff4$q6)
+  cell mem$ff4$ff7 blackbox SB_DFFE (C=%clk$gb, D=%mem$w4_d[7:7], E=%mem$we$4) -> (Q=%mem$ff4$q7)
+  cell mem$ff5$ff0 blackbox SB_DFFE (C=%clk$gb, D=%mem$w5_d[0:0], E=%mem$we$5) -> (Q=%mem$ff5$q0)
+  cell mem$ff5$ff1 blackbox SB_DFFE (C=%clk$gb, D=%mem$w5_d[1:1], E=%mem$we$5) -> (Q=%mem$ff5$q1)
+  cell mem$ff5$ff2 blackbox SB_DFFE (C=%clk$gb, D=%mem$w5_d[2:2], E=%mem$we$5) -> (Q=%mem$ff5$q2)
+  cell mem$ff5$ff3 blackbox SB_DFFE (C=%clk$gb, D=%mem$w5_d[3:3], E=%mem$we$5) -> (Q=%mem$ff5$q3)
+  cell mem$ff5$ff4 blackbox SB_DFFE (C=%clk$gb, D=%mem$w5_d[4:4], E=%mem$we$5) -> (Q=%mem$ff5$q4)
+  cell mem$ff5$ff5 blackbox SB_DFFE (C=%clk$gb, D=%mem$w5_d[5:5], E=%mem$we$5) -> (Q=%mem$ff5$q5)
+  cell mem$ff5$ff6 blackbox SB_DFFE (C=%clk$gb, D=%mem$w5_d[6:6], E=%mem$we$5) -> (Q=%mem$ff5$q6)
+  cell mem$ff5$ff7 blackbox SB_DFFE (C=%clk$gb, D=%mem$w5_d[7:7], E=%mem$we$5) -> (Q=%mem$ff5$q7)
+  cell mem$ff6$ff0 blackbox SB_DFFE (C=%clk$gb, D=%mem$w6_d[0:0], E=%mem$we$6) -> (Q=%mem$ff6$q0)
+  cell mem$ff6$ff1 blackbox SB_DFFE (C=%clk$gb, D=%mem$w6_d[1:1], E=%mem$we$6) -> (Q=%mem$ff6$q1)
+  cell mem$ff6$ff2 blackbox SB_DFFE (C=%clk$gb, D=%mem$w6_d[2:2], E=%mem$we$6) -> (Q=%mem$ff6$q2)
+  cell mem$ff6$ff3 blackbox SB_DFFE (C=%clk$gb, D=%mem$w6_d[3:3], E=%mem$we$6) -> (Q=%mem$ff6$q3)
+  cell mem$ff6$ff4 blackbox SB_DFFE (C=%clk$gb, D=%mem$w6_d[4:4], E=%mem$we$6) -> (Q=%mem$ff6$q4)
+  cell mem$ff6$ff5 blackbox SB_DFFE (C=%clk$gb, D=%mem$w6_d[5:5], E=%mem$we$6) -> (Q=%mem$ff6$q5)
+  cell mem$ff6$ff6 blackbox SB_DFFE (C=%clk$gb, D=%mem$w6_d[6:6], E=%mem$we$6) -> (Q=%mem$ff6$q6)
+  cell mem$ff6$ff7 blackbox SB_DFFE (C=%clk$gb, D=%mem$w6_d[7:7], E=%mem$we$6) -> (Q=%mem$ff6$q7)
+  cell mem$ff7$ff0 blackbox SB_DFFE (C=%clk$gb, D=%mem$w7_d[0:0], E=%mem$we$7) -> (Q=%mem$ff7$q0)
+  cell mem$ff7$ff1 blackbox SB_DFFE (C=%clk$gb, D=%mem$w7_d[1:1], E=%mem$we$7) -> (Q=%mem$ff7$q1)
+  cell mem$ff7$ff2 blackbox SB_DFFE (C=%clk$gb, D=%mem$w7_d[2:2], E=%mem$we$7) -> (Q=%mem$ff7$q2)
+  cell mem$ff7$ff3 blackbox SB_DFFE (C=%clk$gb, D=%mem$w7_d[3:3], E=%mem$we$7) -> (Q=%mem$ff7$q3)
+  cell mem$ff7$ff4 blackbox SB_DFFE (C=%clk$gb, D=%mem$w7_d[4:4], E=%mem$we$7) -> (Q=%mem$ff7$q4)
+  cell mem$ff7$ff5 blackbox SB_DFFE (C=%clk$gb, D=%mem$w7_d[5:5], E=%mem$we$7) -> (Q=%mem$ff7$q5)
+  cell mem$ff7$ff6 blackbox SB_DFFE (C=%clk$gb, D=%mem$w7_d[6:6], E=%mem$we$7) -> (Q=%mem$ff7$q6)
+  cell mem$ff7$ff7 blackbox SB_DFFE (C=%clk$gb, D=%mem$w7_d[7:7], E=%mem$we$7) -> (Q=%mem$ff7$q7)
+  cell mem$ff8$ff0 blackbox SB_DFFE (C=%clk$gb, D=%mem$w8_d[0:0], E=%mem$we$8) -> (Q=%mem$ff8$q0)
+  cell mem$ff8$ff1 blackbox SB_DFFE (C=%clk$gb, D=%mem$w8_d[1:1], E=%mem$we$8) -> (Q=%mem$ff8$q1)
+  cell mem$ff8$ff2 blackbox SB_DFFE (C=%clk$gb, D=%mem$w8_d[2:2], E=%mem$we$8) -> (Q=%mem$ff8$q2)
+  cell mem$ff8$ff3 blackbox SB_DFFE (C=%clk$gb, D=%mem$w8_d[3:3], E=%mem$we$8) -> (Q=%mem$ff8$q3)
+  cell mem$ff8$ff4 blackbox SB_DFFE (C=%clk$gb, D=%mem$w8_d[4:4], E=%mem$we$8) -> (Q=%mem$ff8$q4)
+  cell mem$ff8$ff5 blackbox SB_DFFE (C=%clk$gb, D=%mem$w8_d[5:5], E=%mem$we$8) -> (Q=%mem$ff8$q5)
+  cell mem$ff8$ff6 blackbox SB_DFFE (C=%clk$gb, D=%mem$w8_d[6:6], E=%mem$we$8) -> (Q=%mem$ff8$q6)
+  cell mem$ff8$ff7 blackbox SB_DFFE (C=%clk$gb, D=%mem$w8_d[7:7], E=%mem$we$8) -> (Q=%mem$ff8$q7)
+  cell mem$ff9$ff0 blackbox SB_DFFE (C=%clk$gb, D=%mem$w9_d[0:0], E=%mem$we$9) -> (Q=%mem$ff9$q0)
+  cell mem$ff9$ff1 blackbox SB_DFFE (C=%clk$gb, D=%mem$w9_d[1:1], E=%mem$we$9) -> (Q=%mem$ff9$q1)
+  cell mem$ff9$ff2 blackbox SB_DFFE (C=%clk$gb, D=%mem$w9_d[2:2], E=%mem$we$9) -> (Q=%mem$ff9$q2)
+  cell mem$ff9$ff3 blackbox SB_DFFE (C=%clk$gb, D=%mem$w9_d[3:3], E=%mem$we$9) -> (Q=%mem$ff9$q3)
+  cell mem$ff9$ff4 blackbox SB_DFFE (C=%clk$gb, D=%mem$w9_d[4:4], E=%mem$we$9) -> (Q=%mem$ff9$q4)
+  cell mem$ff9$ff5 blackbox SB_DFFE (C=%clk$gb, D=%mem$w9_d[5:5], E=%mem$we$9) -> (Q=%mem$ff9$q5)
+  cell mem$ff9$ff6 blackbox SB_DFFE (C=%clk$gb, D=%mem$w9_d[6:6], E=%mem$we$9) -> (Q=%mem$ff9$q6)
+  cell mem$ff9$ff7 blackbox SB_DFFE (C=%clk$gb, D=%mem$w9_d[7:7], E=%mem$we$9) -> (Q=%mem$ff9$q7)
+  cell mem$ff10$ff0 blackbox SB_DFFE (C=%clk$gb, D=%mem$w10_d[0:0], E=%mem$we$10) -> (Q=%mem$ff10$q0)
+  cell mem$ff10$ff1 blackbox SB_DFFE (C=%clk$gb, D=%mem$w10_d[1:1], E=%mem$we$10) -> (Q=%mem$ff10$q1)
+  cell mem$ff10$ff2 blackbox SB_DFFE (C=%clk$gb, D=%mem$w10_d[2:2], E=%mem$we$10) -> (Q=%mem$ff10$q2)
+  cell mem$ff10$ff3 blackbox SB_DFFE (C=%clk$gb, D=%mem$w10_d[3:3], E=%mem$we$10) -> (Q=%mem$ff10$q3)
+  cell mem$ff10$ff4 blackbox SB_DFFE (C=%clk$gb, D=%mem$w10_d[4:4], E=%mem$we$10) -> (Q=%mem$ff10$q4)
+  cell mem$ff10$ff5 blackbox SB_DFFE (C=%clk$gb, D=%mem$w10_d[5:5], E=%mem$we$10) -> (Q=%mem$ff10$q5)
+  cell mem$ff10$ff6 blackbox SB_DFFE (C=%clk$gb, D=%mem$w10_d[6:6], E=%mem$we$10) -> (Q=%mem$ff10$q6)
+  cell mem$ff10$ff7 blackbox SB_DFFE (C=%clk$gb, D=%mem$w10_d[7:7], E=%mem$we$10) -> (Q=%mem$ff10$q7)
+  cell mem$ff11$ff0 blackbox SB_DFFE (C=%clk$gb, D=%mem$w11_d[0:0], E=%mem$we$11) -> (Q=%mem$ff11$q0)
+  cell mem$ff11$ff1 blackbox SB_DFFE (C=%clk$gb, D=%mem$w11_d[1:1], E=%mem$we$11) -> (Q=%mem$ff11$q1)
+  cell mem$ff11$ff2 blackbox SB_DFFE (C=%clk$gb, D=%mem$w11_d[2:2], E=%mem$we$11) -> (Q=%mem$ff11$q2)
+  cell mem$ff11$ff3 blackbox SB_DFFE (C=%clk$gb, D=%mem$w11_d[3:3], E=%mem$we$11) -> (Q=%mem$ff11$q3)
+  cell mem$ff11$ff4 blackbox SB_DFFE (C=%clk$gb, D=%mem$w11_d[4:4], E=%mem$we$11) -> (Q=%mem$ff11$q4)
+  cell mem$ff11$ff5 blackbox SB_DFFE (C=%clk$gb, D=%mem$w11_d[5:5], E=%mem$we$11) -> (Q=%mem$ff11$q5)
+  cell mem$ff11$ff6 blackbox SB_DFFE (C=%clk$gb, D=%mem$w11_d[6:6], E=%mem$we$11) -> (Q=%mem$ff11$q6)
+  cell mem$ff11$ff7 blackbox SB_DFFE (C=%clk$gb, D=%mem$w11_d[7:7], E=%mem$we$11) -> (Q=%mem$ff11$q7)
+  cell mem$ff12$ff0 blackbox SB_DFFE (C=%clk$gb, D=%mem$w12_d[0:0], E=%mem$we$12) -> (Q=%mem$ff12$q0)
+  cell mem$ff12$ff1 blackbox SB_DFFE (C=%clk$gb, D=%mem$w12_d[1:1], E=%mem$we$12) -> (Q=%mem$ff12$q1)
+  cell mem$ff12$ff2 blackbox SB_DFFE (C=%clk$gb, D=%mem$w12_d[2:2], E=%mem$we$12) -> (Q=%mem$ff12$q2)
+  cell mem$ff12$ff3 blackbox SB_DFFE (C=%clk$gb, D=%mem$w12_d[3:3], E=%mem$we$12) -> (Q=%mem$ff12$q3)
+  cell mem$ff12$ff4 blackbox SB_DFFE (C=%clk$gb, D=%mem$w12_d[4:4], E=%mem$we$12) -> (Q=%mem$ff12$q4)
+  cell mem$ff12$ff5 blackbox SB_DFFE (C=%clk$gb, D=%mem$w12_d[5:5], E=%mem$we$12) -> (Q=%mem$ff12$q5)
+  cell mem$ff12$ff6 blackbox SB_DFFE (C=%clk$gb, D=%mem$w12_d[6:6], E=%mem$we$12) -> (Q=%mem$ff12$q6)
+  cell mem$ff12$ff7 blackbox SB_DFFE (C=%clk$gb, D=%mem$w12_d[7:7], E=%mem$we$12) -> (Q=%mem$ff12$q7)
+  cell mem$ff13$ff0 blackbox SB_DFFE (C=%clk$gb, D=%mem$w13_d[0:0], E=%mem$we$13) -> (Q=%mem$ff13$q0)
+  cell mem$ff13$ff1 blackbox SB_DFFE (C=%clk$gb, D=%mem$w13_d[1:1], E=%mem$we$13) -> (Q=%mem$ff13$q1)
+  cell mem$ff13$ff2 blackbox SB_DFFE (C=%clk$gb, D=%mem$w13_d[2:2], E=%mem$we$13) -> (Q=%mem$ff13$q2)
+  cell mem$ff13$ff3 blackbox SB_DFFE (C=%clk$gb, D=%mem$w13_d[3:3], E=%mem$we$13) -> (Q=%mem$ff13$q3)
+  cell mem$ff13$ff4 blackbox SB_DFFE (C=%clk$gb, D=%mem$w13_d[4:4], E=%mem$we$13) -> (Q=%mem$ff13$q4)
+  cell mem$ff13$ff5 blackbox SB_DFFE (C=%clk$gb, D=%mem$w13_d[5:5], E=%mem$we$13) -> (Q=%mem$ff13$q5)
+  cell mem$ff13$ff6 blackbox SB_DFFE (C=%clk$gb, D=%mem$w13_d[6:6], E=%mem$we$13) -> (Q=%mem$ff13$q6)
+  cell mem$ff13$ff7 blackbox SB_DFFE (C=%clk$gb, D=%mem$w13_d[7:7], E=%mem$we$13) -> (Q=%mem$ff13$q7)
+  cell mem$ff14$ff0 blackbox SB_DFFE (C=%clk$gb, D=%mem$w14_d[0:0], E=%mem$we$14) -> (Q=%mem$ff14$q0)
+  cell mem$ff14$ff1 blackbox SB_DFFE (C=%clk$gb, D=%mem$w14_d[1:1], E=%mem$we$14) -> (Q=%mem$ff14$q1)
+  cell mem$ff14$ff2 blackbox SB_DFFE (C=%clk$gb, D=%mem$w14_d[2:2], E=%mem$we$14) -> (Q=%mem$ff14$q2)
+  cell mem$ff14$ff3 blackbox SB_DFFE (C=%clk$gb, D=%mem$w14_d[3:3], E=%mem$we$14) -> (Q=%mem$ff14$q3)
+  cell mem$ff14$ff4 blackbox SB_DFFE (C=%clk$gb, D=%mem$w14_d[4:4], E=%mem$we$14) -> (Q=%mem$ff14$q4)
+  cell mem$ff14$ff5 blackbox SB_DFFE (C=%clk$gb, D=%mem$w14_d[5:5], E=%mem$we$14) -> (Q=%mem$ff14$q5)
+  cell mem$ff14$ff6 blackbox SB_DFFE (C=%clk$gb, D=%mem$w14_d[6:6], E=%mem$we$14) -> (Q=%mem$ff14$q6)
+  cell mem$ff14$ff7 blackbox SB_DFFE (C=%clk$gb, D=%mem$w14_d[7:7], E=%mem$we$14) -> (Q=%mem$ff14$q7)
+  cell mem$ff15$ff0 blackbox SB_DFFE (C=%clk$gb, D=%mem$w15_d[0:0], E=%mem$we$15) -> (Q=%mem$ff15$q0)
+  cell mem$ff15$ff1 blackbox SB_DFFE (C=%clk$gb, D=%mem$w15_d[1:1], E=%mem$we$15) -> (Q=%mem$ff15$q1)
+  cell mem$ff15$ff2 blackbox SB_DFFE (C=%clk$gb, D=%mem$w15_d[2:2], E=%mem$we$15) -> (Q=%mem$ff15$q2)
+  cell mem$ff15$ff3 blackbox SB_DFFE (C=%clk$gb, D=%mem$w15_d[3:3], E=%mem$we$15) -> (Q=%mem$ff15$q3)
+  cell mem$ff15$ff4 blackbox SB_DFFE (C=%clk$gb, D=%mem$w15_d[4:4], E=%mem$we$15) -> (Q=%mem$ff15$q4)
+  cell mem$ff15$ff5 blackbox SB_DFFE (C=%clk$gb, D=%mem$w15_d[5:5], E=%mem$we$15) -> (Q=%mem$ff15$q5)
+  cell mem$ff15$ff6 blackbox SB_DFFE (C=%clk$gb, D=%mem$w15_d[6:6], E=%mem$we$15) -> (Q=%mem$ff15$q6)
+  cell mem$ff15$ff7 blackbox SB_DFFE (C=%clk$gb, D=%mem$w15_d[7:7], E=%mem$we$15) -> (Q=%mem$ff15$q7)
+end

@@ -1,0 +1,6 @@
+# The same sixteen-word memory as `logicram_ice40`, on a family that
+# does declare a distributed RAM: two `TRELLIS_DPR16X4` side by side,
+# four bits each, and no multiplexer at all.
+set_io -io_standard LVCMOS33 clk G2
+set_io -io_standard LVCMOS33 we B2
+create_clock -name sys -period 40.0 clk

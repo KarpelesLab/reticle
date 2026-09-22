@@ -1,0 +1,7 @@
+# A sixteen-word memory is 128 bits, under the block RAM threshold, and
+# the iCE40 database declares no distributed RAM, so this case is the
+# flip-flop fallback: one register per word, a decoded write enable and
+# a read multiplexer.
+set_io -io_standard LVCMOS33 clk 21
+set_io -io_standard LVCMOS33 we 8
+create_clock -name sys -period 83.333 clk

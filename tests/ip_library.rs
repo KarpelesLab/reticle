@@ -736,45 +736,62 @@ fn ice40_flip_flops_take_an_active_low_reset_through_one_inverter() {
     assert!(fpga::check_nextpnr_json(&design, id, device, &Constraints::new()).is_empty());
 }
 
-/// A memory below the block-RAM threshold is reported as falling back to
-/// logic, but nothing performs the fallback.
+/// A memory below the block-RAM threshold is built out of logic.
 ///
-/// `fpga::primitives` records the decision and leaves the `$memrd` and
-/// `$memwr` cells in place, and `fpga::check_nextpnr_json` — this
-/// crate's own netlist checker — then says the netlist is unusable. The
-/// two FIFOs are where the library meets it, since a 16 x 8 FIFO is 128
-/// bits and the threshold is 256.
+/// `fpga::primitives` used to record the decision — "it will be built
+/// from distributed LUT RAM" — and then leave the `$memrd` and `$memwr`
+/// cells in place, so `fpga::check_nextpnr_json` said the netlist was
+/// unusable. The two FIFOs are where the library met it, since a 16 x 8
+/// FIFO is 128 bits and the threshold is 256. The fallback is performed
+/// now: the ECP5 has a distributed RAM primitive and uses it, the iCE40
+/// has none and builds flip-flops with a decoded write enable and a read
+/// multiplexer.
 #[test]
-fn small_memories_are_left_generic_after_the_fpga_flow() {
+fn small_memories_become_logic_after_the_fpga_flow() {
     let variant = &VARIANTS[0]; // fifo_sync, WIDTH=8 DEPTH=16
-    let (mut design, id) = flattened(variant.package, variant.top, variant.params);
-    let device = fpga::target("ecp5-45f-CABGA381").expect("the ECP5 device");
-    let mut diags = Diagnostics::new();
-    let report = fpga::synthesize_for(
-        &mut design,
-        id,
-        device,
-        &Constraints::new(),
-        &FpgaOptions::default(),
-        &mut diags,
-    )
-    .expect("the flow runs");
-    assert!(
-        report
+    for (device_name, style, primitive) in [
+        (
+            "ecp5-45f-CABGA381",
+            "distributed LUT RAM",
+            Some("TRELLIS_DPR16X4"),
+        ),
+        ("ice40-hx1k-tq144", "flip-flops", None),
+    ] {
+        let (mut design, id) = flattened(variant.package, variant.top, variant.params);
+        let device = fpga::target(device_name).expect("a built-in device");
+        let mut diags = Diagnostics::new();
+        let report = fpga::synthesize_for(
+            &mut design,
+            id,
+            device,
+            &Constraints::new(),
+            &FpgaOptions::default(),
+            &mut diags,
+        )
+        .expect("the flow runs");
+        let fallback = report
             .primitives
             .bram_fallbacks
-            .iter()
-            .any(|f| f.reason.contains("threshold")),
-        "the 128-bit memory should be below the block RAM threshold"
-    );
-    let problems = fpga::check_nextpnr_json(&design, id, device, &Constraints::new());
-    assert!(
-        problems
-            .iter()
-            .any(|p| p.message.contains("did not become")),
-        "the fallback is performed now: drop this test and refresh \
-         docs/ip-library.md"
-    );
+            .first()
+            .expect("the 128-bit memory is below the block RAM threshold");
+        assert!(fallback.reason.contains("threshold"), "{fallback:?}");
+        assert!(fallback.built, "{device_name}: {fallback:?}");
+        assert_eq!(fallback.style, style, "{device_name}");
+        assert_eq!(fallback.primitive.as_deref(), primitive, "{device_name}");
+        assert!(fallback.cells > 0, "{device_name}: nothing was built");
+
+        // Nothing generic is left, so the netlist check is clean.
+        let problems = fpga::check_nextpnr_json(&design, id, device, &Constraints::new());
+        assert!(
+            problems.is_empty(),
+            "{device_name}: {}",
+            problems
+                .iter()
+                .map(|p| p.to_string())
+                .collect::<Vec<_>>()
+                .join("\n")
+        );
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -4000,13 +4017,16 @@ fn a_two_read_port_register_file_is_declined_for_a_stated_reason() {
         diags.iter().any(|d| d.code == Some(BRAM_SHAPE_GAP)),
         "the fallback should be reported as {BRAM_SHAPE_GAP}"
     );
-    // And, as for the FIFOs, nothing performs the fallback it names.
-    let problems = fpga::check_nextpnr_json(&design, id, device, &Constraints::new());
-    assert!(
-        problems
-            .iter()
-            .any(|p| p.message.contains("did not become")),
-        "the register file is mapped now: drop this test and refresh \
-         docs/ip-library.md"
-    );
+    // The fallback it names is now performed — the ECP5's distributed
+    // RAM — so the netlist is usable; what is still missing is the block
+    // RAM a real flow would duplicate the file into.
+    let fallback = report
+        .primitives
+        .bram_fallbacks
+        .iter()
+        .find(|f| f.memory.as_str() == "regs")
+        .expect("the register file falls back");
+    assert!(fallback.built);
+    assert_eq!(fallback.style, "distributed LUT RAM");
+    assert!(fpga::check_nextpnr_json(&design, id, device, &Constraints::new()).is_empty());
 }

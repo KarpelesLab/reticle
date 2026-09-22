@@ -33,6 +33,17 @@
 #     the B side), which is what a Yosys JSON netlist carries and what
 #     nextpnr splits into bits. Lattice Diamond wants the per-bit form
 #     (ADA0, ADA1, ...); Reticle does not emit that yet.
+#   * TRELLIS_DPR16X4 is the distributed (LUT) RAM: sixteen words of four
+#     bits, one clocked write port (WCK, WRE, WAD0..3, DI0..3) and one
+#     asynchronous read port (RAD0..3 -> DO0..3), with WCKMUX and WREMUX
+#     selecting the polarity of the two write controls and INITVAL the
+#     contents. These are the pins and parameters Yosys' `synth_ecp5`
+#     emits and nextpnr-ecp5 consumes; MEDIUM-HIGH confidence, since they
+#     come from Project Trellis rather than from Lattice. Reticle reads
+#     the shape off the port list — four `dout` pins wide, four `raddr`
+#     pins deep — so nothing about 16x4 is written in Rust. INITVAL is
+#     not emitted: the fallback that uses this primitive declines a
+#     memory with initial contents rather than loading them.
 #   * MULT18X18D is an 18x18 signed multiplier with a 36-bit product and
 #     up to three pipeline stages. High confidence for the arithmetic,
 #     MEDIUM confidence for the port names recorded here (bus form again).
@@ -110,7 +121,7 @@ device ecp5-25f-CABGA381
   bel TRELLIS_FF ff mode negedge,enable,async_set,active_low port clk=CLK d=DI q=Q en=CE rst=LSR param GSR="DISABLED" REGMODE="FF" CEMUX="CE" CLKMUX="INV" LSRMUX="INV" SRMODE="ASYNC" REGSET="SET"
   bel TRELLIS_IO io port pad=B din=O dout=I oe=T param_in DIR="INPUT" param_out DIR="OUTPUT" param_inout DIR="BIDIR" param_pullup PULLMODE="UP"
   bel DCCA gb count 16 port i=CLKI o=CLKO en=CE
-  bel TRELLIS_DPR16X4 lutram
+  bel TRELLIS_DPR16X4 lutram port wclk=WCK we=WRE waddr=WAD0,WAD1,WAD2,WAD3 din=DI0,DI1,DI2,DI3 raddr=RAD0,RAD1,RAD2,RAD3 dout=DO0,DO1,DO2,DO3 param WCKMUX="WCK" WREMUX="WRE"
   bram DP16KD
     ports 2
     mode 18 1024 param DATA_WIDTH_A=18 DATA_WIDTH_B=18
@@ -189,7 +200,7 @@ device ecp5-45f-CABGA381
   bel TRELLIS_FF ff mode negedge,enable,async_set,active_low port clk=CLK d=DI q=Q en=CE rst=LSR param GSR="DISABLED" REGMODE="FF" CEMUX="CE" CLKMUX="INV" LSRMUX="INV" SRMODE="ASYNC" REGSET="SET"
   bel TRELLIS_IO io port pad=B din=O dout=I oe=T param_in DIR="INPUT" param_out DIR="OUTPUT" param_inout DIR="BIDIR" param_pullup PULLMODE="UP"
   bel DCCA gb count 16 port i=CLKI o=CLKO en=CE
-  bel TRELLIS_DPR16X4 lutram
+  bel TRELLIS_DPR16X4 lutram port wclk=WCK we=WRE waddr=WAD0,WAD1,WAD2,WAD3 din=DI0,DI1,DI2,DI3 raddr=RAD0,RAD1,RAD2,RAD3 dout=DO0,DO1,DO2,DO3 param WCKMUX="WCK" WREMUX="WRE"
   bram DP16KD
     ports 2
     mode 18 1024 param DATA_WIDTH_A=18 DATA_WIDTH_B=18

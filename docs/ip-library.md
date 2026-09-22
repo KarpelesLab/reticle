@@ -260,12 +260,12 @@ exactly what this table is for.
 |-------|-----|------------|--------|-------|-----------|
 | `fifo_sync` | `fifo_sync` | WIDTH=8, DEPTH=16, FWFT=0 | LUT4 | 3 x dff, 27 x lut, 1 x memory 16x8, 1 x memrd, 1 x memwr | 3 |
 | `fifo_sync` | `fifo_sync` | WIDTH=8, DEPTH=16, FWFT=0 | LUT6 | 3 x dff, 22 x lut, 1 x memory 16x8, 1 x memrd, 1 x memwr | 2 |
-| `fifo_sync` | `fifo_sync` | WIDTH=8, DEPTH=16, FWFT=0 | iCE40 HX1K | 8 x SB_CARRY, 18 x SB_DFFER, 1 x SB_GB, 27 x SB_IO, 26 x SB_LUT4, 1 x memory 16x8, 1 x memrd, 1 x memwr | 3 |
-| `fifo_sync` | `fifo_sync` | WIDTH=8, DEPTH=16, FWFT=0 | ECP5 45F | 1 x DCCA, 27 x LUT4, 18 x TRELLIS_FF, 27 x TRELLIS_IO, 1 x memory 16x8, 1 x memrd, 1 x memwr | 3 |
+| `fifo_sync` | `fifo_sync` | WIDTH=8, DEPTH=16, FWFT=0 | iCE40 HX1K | 8 x SB_CARRY, 128 x SB_DFFE, 18 x SB_DFFER, 1 x SB_GB, 27 x SB_IO, 290 x SB_LUT4 | 4 |
+| `fifo_sync` | `fifo_sync` | WIDTH=8, DEPTH=16, FWFT=0 | ECP5 45F | 1 x DCCA, 27 x LUT4, 2 x TRELLIS_DPR16X4, 18 x TRELLIS_FF, 27 x TRELLIS_IO | 3 |
 | `fifo_sync` | `fifo_sync` | WIDTH=8, DEPTH=16, FWFT=1 | LUT4 | 2 x dff, 27 x lut, 1 x memory 16x8, 1 x memrd, 1 x memwr | 3 |
 | `fifo_sync` | `fifo_sync` | WIDTH=8, DEPTH=16, FWFT=1 | LUT6 | 2 x dff, 22 x lut, 1 x memory 16x8, 1 x memrd, 1 x memwr | 2 |
-| `fifo_sync` | `fifo_sync` | WIDTH=8, DEPTH=16, FWFT=1 | iCE40 HX1K | 8 x SB_CARRY, 10 x SB_DFFER, 1 x SB_GB, 27 x SB_IO, 26 x SB_LUT4, 1 x memory 16x8, 1 x memrd, 1 x memwr | 3 |
-| `fifo_sync` | `fifo_sync` | WIDTH=8, DEPTH=16, FWFT=1 | ECP5 45F | 1 x DCCA, 27 x LUT4, 10 x TRELLIS_FF, 27 x TRELLIS_IO, 1 x memory 16x8, 1 x memrd, 1 x memwr | 3 |
+| `fifo_sync` | `fifo_sync` | WIDTH=8, DEPTH=16, FWFT=1 | iCE40 HX1K | 8 x SB_CARRY, 128 x SB_DFFE, 10 x SB_DFFER, 1 x SB_GB, 27 x SB_IO, 290 x SB_LUT4 | 4 |
+| `fifo_sync` | `fifo_sync` | WIDTH=8, DEPTH=16, FWFT=1 | ECP5 45F | 1 x DCCA, 27 x LUT4, 2 x TRELLIS_DPR16X4, 10 x TRELLIS_FF, 27 x TRELLIS_IO | 3 |
 | `cdc_sync` | `cdc_sync` | WIDTH=1, STAGES=2 | LUT4 | 2 x dff | 0 |
 | `cdc_sync` | `cdc_sync` | WIDTH=1, STAGES=2 | LUT6 | 2 x dff | 0 |
 | `cdc_sync` | `cdc_sync` | WIDTH=1, STAGES=2 | iCE40 HX1K | 2 x SB_DFFR, 4 x SB_IO, 1 x SB_LUT4 | 0 |
@@ -280,8 +280,8 @@ exactly what this table is for.
 | `cdc_pulse` | `cdc_pulse` | (defaults) | ECP5 45F | 4 x LUT4, 6 x TRELLIS_FF, 7 x TRELLIS_IO | 1 |
 | `fifo_async` | `fifo_async` | WIDTH=8, DEPTH=16 | LUT4 | 10 x dff, 41 x lut, 1 x memory 16x8, 1 x memrd, 1 x memwr | 4 |
 | `fifo_async` | `fifo_async` | WIDTH=8, DEPTH=16 | LUT6 | 10 x dff, 37 x lut, 1 x memory 16x8, 1 x memrd, 1 x memwr | 3 |
-| `fifo_async` | `fifo_async` | WIDTH=8, DEPTH=16 | iCE40 HX1K | 8 x SB_CARRY, 41 x SB_DFFR, 1 x SB_DFFS, 2 x SB_GB, 24 x SB_IO, 42 x SB_LUT4, 1 x memory 16x8, 1 x memrd, 1 x memwr | 4 |
-| `fifo_async` | `fifo_async` | WIDTH=8, DEPTH=16 | ECP5 45F | 2 x DCCA, 41 x LUT4, 42 x TRELLIS_FF, 24 x TRELLIS_IO, 1 x memory 16x8, 1 x memrd, 1 x memwr | 4 |
+| `fifo_async` | `fifo_async` | WIDTH=8, DEPTH=16 | iCE40 HX1K | 8 x SB_CARRY, 128 x SB_DFFE, 41 x SB_DFFR, 1 x SB_DFFS, 2 x SB_GB, 24 x SB_IO, 298 x SB_LUT4 | 4 |
+| `fifo_async` | `fifo_async` | WIDTH=8, DEPTH=16 | ECP5 45F | 2 x DCCA, 41 x LUT4, 2 x TRELLIS_DPR16X4, 42 x TRELLIS_FF, 24 x TRELLIS_IO | 4 |
 | `uart` | `uart` | CLK_DIV=104 | LUT4 | 13 x dff, 119 x lut | 6 |
 | `uart` | `uart` | CLK_DIV=104 | LUT6 | 13 x dff, 109 x lut | 5 |
 | `uart` | `uart` | CLK_DIV=104 | iCE40 HX1K | 33 x SB_CARRY, 26 x SB_DFFER, 10 x SB_DFFES, 34 x SB_DFFR, 2 x SB_DFFS, 1 x SB_GB, 24 x SB_IO, 124 x SB_LUT4 | 4 |
@@ -316,12 +316,12 @@ exactly what this table is for.
 | `ram_wrapper` | `ram_sdp` | WIDTH=8, DEPTH=256, OUT_REG=0 | ECP5 45F | 1 x DP16KD, 36 x TRELLIS_IO | 0 |
 | `rv32i` | `rv32i` | REGFILE_BRAM=0 | LUT4 | 14 x dff, 2436 x lut, 1 x memory 32x32, 2 x memrd, 1 x memwr | 34 |
 | `rv32i` | `rv32i` | REGFILE_BRAM=0 | LUT6 | 14 x dff, 2044 x lut, 1 x memory 32x32, 2 x memrd, 1 x memwr | 28 |
-| `rv32i` | `rv32i` | REGFILE_BRAM=0 | iCE40 HX1K | 220 x SB_CARRY, 292 x SB_DFFER, 66 x SB_DFFR, 1 x SB_GB, 208 x SB_IO, 2326 x SB_LUT4, 1 x memory 32x32, 2 x memrd, 1 x memwr | 34 |
-| `rv32i` | `rv32i` | REGFILE_BRAM=0 | ECP5 45F | 1 x DCCA, 2438 x LUT4, 358 x TRELLIS_FF, 208 x TRELLIS_IO, 1 x memory 32x32, 2 x memrd, 1 x memwr | 34 |
+| `rv32i` | `rv32i` | REGFILE_BRAM=0 | iCE40 HX1K | 220 x SB_CARRY, 1024 x SB_DFFE, 292 x SB_DFFER, 66 x SB_DFFR, 1 x SB_GB, 208 x SB_IO, 5047 x SB_LUT4 | 36 |
+| `rv32i` | `rv32i` | REGFILE_BRAM=0 | ECP5 45F | 1 x DCCA, 2486 x LUT4, 32 x TRELLIS_DPR16X4, 358 x TRELLIS_FF, 208 x TRELLIS_IO | 34 |
 | `rv32i` | `rv32i` | REGFILE_BRAM=1 | LUT4 | 16 x dff, 2445 x lut, 1 x memory 32x32, 2 x memrd, 1 x memwr | 34 |
 | `rv32i` | `rv32i` | REGFILE_BRAM=1 | LUT6 | 16 x dff, 2075 x lut, 1 x memory 32x32, 2 x memrd, 1 x memwr | 28 |
-| `rv32i` | `rv32i` | REGFILE_BRAM=1 | iCE40 HX1K | 220 x SB_CARRY, 2 x SB_DFFE, 292 x SB_DFFER, 66 x SB_DFFR, 1 x SB_GB, 208 x SB_IO, 2355 x SB_LUT4, 1 x memory 32x32, 2 x memrd, 1 x memwr | 34 |
-| `rv32i` | `rv32i` | REGFILE_BRAM=1 | ECP5 45F | 1 x DCCA, 2442 x LUT4, 360 x TRELLIS_FF, 208 x TRELLIS_IO, 1 x memory 32x32, 2 x memrd, 1 x memwr | 34 |
+| `rv32i` | `rv32i` | REGFILE_BRAM=1 | iCE40 HX1K | 220 x SB_CARRY, 1090 x SB_DFFE, 292 x SB_DFFER, 66 x SB_DFFR, 1 x SB_GB, 208 x SB_IO, 5143 x SB_LUT4 | 34 |
+| `rv32i` | `rv32i` | REGFILE_BRAM=1 | ECP5 45F | 1 x DCCA, 2509 x LUT4, 32 x TRELLIS_DPR16X4, 424 x TRELLIS_FF, 208 x TRELLIS_IO | 34 |
 | `eth_mac_rmii` | `eth_mac_rmii` | IFG_CYCLES=48 | LUT4 | 26 x dff, 305 x lut | 4 |
 | `eth_mac_rmii` | `eth_mac_rmii` | IFG_CYCLES=48 | LUT6 | 26 x dff, 283 x lut | 4 |
 | `eth_mac_rmii` | `eth_mac_rmii` | IFG_CYCLES=48 | iCE40 HX1K | 10 x SB_CARRY, 127 x SB_DFFER, 64 x SB_DFFES, 3 x SB_DFFR, 1 x SB_GB, 34 x SB_IO, 301 x SB_LUT4 | 4 |
@@ -336,8 +336,9 @@ exactly what this table is for.
 
 All four were gaps in Reticle itself rather than in the blocks, and each
 is pinned down by a test. Two were found by the original eleven blocks
-and two by writing the three larger ones. **All four have since been
-fixed**, and their tests now hold the fix rather than the gap.
+and two by writing the three larger ones. **Three have since been
+fixed**, and their tests now hold the fix rather than the gap; the
+fourth is half fixed, and its paragraph says which half.
 
 **iCE40 flip-flops refused an active-low reset. Fixed.** Every block
 resets on `negedge rst_n`, which is the convention the rest of this
@@ -363,16 +364,39 @@ physical-design decision rather than a mapper's, so it is still reported.
 `ice40_flip_flops_take_an_active_low_reset_through_one_inverter` holds
 the fix.
 
-**A memory below the block-RAM threshold is left generic.**
-`fpga::primitives` decides that a memory too small for a block RAM will
-be built from flip-flops or LUT RAM, records the decision in the report —
-and nothing performs it. The `$memrd` and `$memwr` cells stay, and
-`fpga::check_nextpnr_json`, this crate's own netlist checker, then says
-`a memory is left: it did not become block RAM or logic`. It is visible
+**A memory below the block-RAM threshold was left generic. Fixed.**
+`fpga::primitives` decided that a memory too small for a block RAM would
+be built from flip-flops or LUT RAM, recorded the decision in the report
+— and nothing performed it. The `$memrd` and `$memwr` cells stayed, and
+`fpga::check_nextpnr_json`, this crate's own netlist checker, then said
+`a memory is left: it did not become block RAM or logic`. It was visible
 in the table as the `memory 16x8, memrd, memwr` entries on the two FIFOs,
 whose 128 bits fall under the 256-bit threshold; the 256 x 8 RAMs above
-it map to `SB_RAM40_4K` and `DP16KD` cleanly.
-`small_memories_are_left_generic_after_the_fpga_flow` holds that one.
+it mapped to `SB_RAM40_4K` and `DP16KD` cleanly.
+
+The fallback is performed now, and which of the two it is comes from the
+device file rather than from the family name. A device that declares a
+distributed RAM primitive with a usable port map gets one — the ECP5's
+`TRELLIS_DPR16X4`, whose shape Reticle reads off that port map (four
+`dout` pins wide, four `raddr` pins deep) so that nothing about 16 x 4 is
+written in Rust. A device that declares none, as the iCE40 database does,
+gets one flip-flop per bit with a write enable decoded per word and a
+multiplexer per read port, and a clocked read port gets its output
+register. Several read ports mean several copies of a distributed RAM,
+since it has one read port; one array of flip-flops serves them all with
+one multiplexer each.
+
+A memory the fallback still cannot build is *named*, not silently
+mangled: initial contents that flip-flops cannot be preloaded with, a
+write that is not clocked, write ports on different clocks, or more than
+`MapOptions::max_logic_bits` (4096 by default, lifted by an explicit
+`ram_style`) — a few thousand flip-flops are almost never what was
+meant, and "it does not fit" is the useful answer.
+`the_logic_fallback_answers_like_the_memory_it_replaced` in
+`tests/fpga_flow.rs` drives the same stimulus into a design before and
+after the lowering and insists the two answer alike;
+`small_memories_become_logic_after_the_fpga_flow` holds the library
+half.
 
 **A function call inside an asynchronously reset process warned about
 the function's own locals. Fixed.** Writing a CRC step, a decode table or
@@ -415,9 +439,10 @@ but the memory needs 3 (2 read, 1 write)
 What remains is the mapping a real flow would apply here: duplication,
 two block RAMs holding the same contents, each with one read port and one
 write port, both written together. That is not done, so the register file
-still shows up in the table as `memory 32x32, 2 x memrd, memwr` on every
-target. `a_two_read_port_register_file_is_declined_for_a_stated_reason`
-holds the wording and that remaining gap.
+takes the logic fallback instead — thirty-two `TRELLIS_DPR16X4` on the
+ECP5, a thousand flip-flops on the iCE40, both visible in the table.
+`a_two_read_port_register_file_is_declined_for_a_stated_reason` holds the
+wording and that remaining gap.
 
 ## What is not here yet
 

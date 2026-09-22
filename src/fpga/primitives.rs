@@ -25,10 +25,27 @@
 //! Each step asks the database for what it needs — a [`BramShape`] whose
 //! width modes fit, a [`DspShape`] wide enough, a primitive with the
 //! ports the step must connect — and *declines with a note* when the
-//! device does not describe it. A memory that fits no block RAM is left
-//! as a memory, which is what falls back to distributed LUT RAM or to
-//! flip-flops in the technology mapper, and the report says which of the
-//! two the device offers.
+//! device does not describe it.
+//!
+//! # The memory fallback
+//!
+//! A memory that fits no block RAM is not left as a memory: a
+//! place-and-route tool takes primitives only, so it is *built out of
+//! logic* here, and which logic comes from the device file. A family
+//! that declares a distributed RAM primitive with a usable port map (the
+//! ECP5's `TRELLIS_DPR16X4`) gets one per bank, with its shape read off
+//! that port map rather than written in Rust; a family that declares
+//! none (iCE40) gets one flip-flop per bit, a write enable decoded per
+//! word and a multiplexer per read port. Several read ports mean several
+//! copies of a distributed RAM, which has one; one array of flip-flops
+//! serves them all.
+//!
+//! The cases the fallback cannot take are *named* rather than
+//! approximated: initial contents flip-flops cannot be preloaded with, a
+//! write that is not clocked, write ports on different clocks, and a
+//! memory over [`MapOptions::max_logic_bits`], where "it does not fit
+//! this part" is the useful answer. [`BramFallback`] says which of these
+//! happened and what was built.
 //!
 //! # Known gap
 //!
@@ -71,6 +88,12 @@ pub struct MapOptions {
     /// Memories smaller than this many bits stay in logic, unless
     /// `ram_style = "block"` says otherwise.
     pub min_bram_bits: u64,
+    /// A memory of more than this many bits is not built out of logic
+    /// when it misses a block RAM: it is left as a memory and reported,
+    /// since some thousands of flip-flops are almost never what the
+    /// designer meant and the honest answer is that the design does not
+    /// fit the part.
+    pub max_logic_bits: u64,
     /// Map multipliers onto DSP blocks.
     pub infer_dsp: bool,
     /// Insert an IO buffer at every top-level port.
@@ -90,6 +113,7 @@ impl Default for MapOptions {
         MapOptions {
             infer_block_ram: true,
             min_bram_bits: 256,
+            max_logic_bits: 4096,
             infer_dsp: true,
             insert_io_buffers: true,
             insert_clock_buffers: true,
@@ -127,15 +151,31 @@ impl BramMapping {
 }
 
 /// What happened to a memory that did not become a block RAM.
+///
+/// The fallback is *performed*, not only decided: `style` says what the
+/// memory was actually built from and `cells` how many of them it took.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct BramFallback {
     /// The memory's name.
     pub memory: String,
-    /// Why it was not mapped.
+    /// Why it was not mapped onto a block RAM.
     pub reason: String,
-    /// What it falls back to: `distributed LUT RAM` when the device has
-    /// one, `flip-flops` otherwise.
+    /// What it was built from instead: `distributed LUT RAM` when the
+    /// device declares a usable one, `flip-flops` when it does not,
+    /// `logic` for a read-only memory that is nothing but multiplexers,
+    /// and `a memory` when even this could not be done, which `reason`
+    /// then explains.
     pub style: &'static str,
+    /// The primitive the fallback instantiated, when it used one.
+    pub primitive: Option<String>,
+    /// How many storage elements it built — flip-flops, or distributed
+    /// RAM primitives. Zero for a read-only memory and for one that was
+    /// left in place.
+    pub cells: u32,
+    /// True when the memory really was lowered and no `memory` is left
+    /// in the netlist. False is what [`super::check_nextpnr_json`]
+    /// reports as "it did not become block RAM or logic".
+    pub built: bool,
 }
 
 /// One multiplier turned into a DSP block.
@@ -255,7 +295,17 @@ impl MapReport {
                 );
             }
             for item in &self.bram_fallbacks {
-                let _ = writeln!(out, "  {} -> {} ({})", item.memory, item.style, item.reason);
+                let _ = write!(out, "  {} -> {}", item.memory, item.style);
+                match (&item.primitive, item.cells) {
+                    (Some(primitive), n) => {
+                        let _ = write!(out, ", {n} x {primitive}");
+                    }
+                    (None, n) if n > 0 => {
+                        let _ = write!(out, ", {n} flip-flop(s)");
+                    }
+                    (None, _) => {}
+                }
+                let _ = writeln!(out, " ({})", item.reason);
             }
         }
         if !self.dsps.is_empty() {
@@ -558,13 +608,53 @@ impl Mapper<'_> {
     fn block_rams(&mut self, module: &mut Module) {
         let memories: Vec<MemoryId> = module.memories.ids().collect();
         let mut mapped: Vec<CellId> = Vec::new();
+        let mut lowered: Vec<MemoryId> = Vec::new();
         for mem in memories {
             if let Some(used) = self.block_ram(module, mem) {
                 mapped.extend(used);
+            } else if let Some(used) = self.lower_memory(module, mem) {
+                mapped.extend(used);
+                lowered.push(mem);
             }
         }
         if !mapped.is_empty() {
             module.cells.retain(|id, _| !mapped.contains(&id));
+        }
+        if !lowered.is_empty() {
+            // The memories are gone, so the ids of the ones left move.
+            // Every port cell of a lowered memory went with it, so the
+            // only references to fix are those of the survivors.
+            let remap = module.memories.retain(|id, _| !lowered.contains(&id));
+            for (_, cell) in module.cells.iter_mut() {
+                if let CellKind::MemRdPort { mem, .. } | CellKind::MemWrPort { mem, .. } =
+                    &mut cell.kind
+                    && let Some(Some(new)) = remap.get(mem.index())
+                {
+                    *mem = *new;
+                }
+            }
+        }
+    }
+
+    /// Records what happened to a memory the block RAM mapper declined.
+    fn record_fallback(
+        &mut self,
+        memory: &str,
+        style: &'static str,
+        primitive: Option<String>,
+        cells: u32,
+    ) {
+        if let Some(entry) = self
+            .report
+            .bram_fallbacks
+            .iter_mut()
+            .rev()
+            .find(|f| f.memory == memory)
+        {
+            entry.style = style;
+            entry.primitive = primitive;
+            entry.cells = cells;
+            entry.built = true;
         }
     }
 
@@ -586,7 +676,7 @@ impl Mapper<'_> {
             style.as_str(),
             "distributed" | "logic" | "registers" | "ff" | "flops"
         );
-        let fallback_style = if self.device.bel(BelRole::LutRam).is_some() {
+        let fallback_style = if self.lutram_shape().is_some() {
             "distributed LUT RAM"
         } else {
             "flip-flops"
@@ -606,7 +696,12 @@ impl Mapper<'_> {
             this.report.bram_fallbacks.push(BramFallback {
                 memory: name.clone(),
                 reason,
-                style: fallback_style,
+                // Filled in by `lower_memory`, which runs next and says
+                // what was really built.
+                style: "a memory",
+                primitive: None,
+                cells: 0,
+                built: false,
             });
             None::<Vec<CellId>>
         };
@@ -1147,6 +1242,649 @@ impl Mapper<'_> {
             },
             span,
         )
+    }
+
+    // --- memories that stay in logic ----------------------------------------
+
+    /// The device's distributed RAM primitive and its shape, when it
+    /// declares one Reticle can wire up.
+    ///
+    /// The shape is read off the port map rather than declared
+    /// separately: the block is as wide as it has `dout` pins and as
+    /// deep as its `raddr` pins address, which for an ECP5
+    /// `TRELLIS_DPR16X4` is four bits wide and sixteen deep. A `lutram`
+    /// line without those port names is a primitive the database records
+    /// but cannot connect, and the fallback then uses flip-flops.
+    fn lutram_shape(&self) -> Option<LutRamShape> {
+        let bel = self.device.bel(BelRole::LutRam)?;
+        if !bel.has_ports(&["wclk", "we", "waddr", "din", "raddr", "dout"]) {
+            return None;
+        }
+        let width = u32::try_from(bel.port_names("dout").len()).ok()?;
+        let addr_bits = u32::try_from(bel.port_names("raddr").len()).ok()?;
+        if width == 0
+            || addr_bits == 0
+            || addr_bits >= 31
+            || bel.port_names("din").len() != bel.port_names("dout").len()
+            || bel.port_names("waddr").len() != bel.port_names("raddr").len()
+        {
+            return None;
+        }
+        Some(LutRamShape {
+            bel: bel.clone(),
+            width,
+            addr_bits,
+        })
+    }
+
+    /// Builds a memory the block RAM step turned down out of logic, and
+    /// returns the port cells that became part of it.
+    ///
+    /// `None` leaves the memory alone, which only happens for the cases
+    /// the report names: contents that flip-flops cannot be preloaded
+    /// with, a write that is not clocked, two write ports on different
+    /// clocks, or a memory so large that building it from logic would be
+    /// a worse answer than saying it does not fit.
+    fn lower_memory(&mut self, module: &mut Module, mem: MemoryId) -> Option<Vec<CellId>> {
+        let memory = module.memories.get(mem)?;
+        let name = memory.name.as_str().to_owned();
+        let span = memory.span;
+        let width = memory.elem.width().unwrap_or(0);
+        let depth = memory.size;
+        let has_init = memory.init.as_ref().is_some_and(|v| !v.is_empty());
+        let init = memory.init.clone().unwrap_or_default();
+        // A `ram_style` naming logic is an instruction, not a hint, so it
+        // lifts the size limit the same way `ram_style = "block"` lifts
+        // the block RAM threshold.
+        let asked_for_logic = memory
+            .attrs
+            .get("ram_style")
+            .and_then(AttrValue::as_str)
+            .is_some_and(|style| {
+                matches!(
+                    style.to_ascii_lowercase().as_str(),
+                    "distributed" | "logic" | "registers" | "ff" | "flops"
+                )
+            });
+
+        let mut reads: Vec<CellId> = Vec::new();
+        let mut writes: Vec<CellId> = Vec::new();
+        for (id, cell) in module.cells.iter() {
+            match &cell.kind {
+                CellKind::MemRdPort { mem: m, .. } if *m == mem => reads.push(id),
+                CellKind::MemWrPort { mem: m, .. } if *m == mem => writes.push(id),
+                _ => {}
+            }
+        }
+        // Nothing reads it, or it holds nothing: it has no effect, so it
+        // goes away with its ports rather than being built.
+        if reads.is_empty() || width == 0 || depth == 0 {
+            self.record_fallback(&name, "logic", None, 0);
+            let mut replaced = reads;
+            replaced.extend(writes);
+            return Some(replaced);
+        }
+        let Ok(rows_wanted) = usize::try_from(depth) else {
+            self.decline_lowering(&name, "it has more words than this machine can count", span);
+            return None;
+        };
+        if !asked_for_logic && u64::from(width) * depth > self.options.max_logic_bits {
+            self.decline_lowering(
+                &name,
+                &format!(
+                    "{} bits is over the {} bit limit for building a memory out of logic",
+                    u64::from(width) * depth,
+                    self.options.max_logic_bits
+                ),
+                span,
+            );
+            return None;
+        }
+
+        // The write side decides the storage: its clock drives every
+        // flip-flop, and a distributed RAM has exactly one write port.
+        let mut write_clk: Option<ExprId> = None;
+        for id in &writes {
+            let cell = &module.cells[*id];
+            let Some(clk) = cell.input("clk") else {
+                self.decline_lowering(
+                    &name,
+                    "a write port is not clocked, so it is a latch array rather than a register \
+                     file",
+                    span,
+                );
+                return None;
+            };
+            let same = write_clk.is_none_or(|first| {
+                module.exprs.get(first).and_then(Expr::as_net)
+                    == module.exprs.get(clk).and_then(Expr::as_net)
+            });
+            if !same {
+                self.decline_lowering(
+                    &name,
+                    "its write ports are on different clocks, which one array of flip-flops \
+                     cannot serve",
+                    span,
+                );
+                return None;
+            }
+            write_clk = Some(clk);
+        }
+        if has_init && !writes.is_empty() {
+            self.decline_lowering(
+                &name,
+                "it has initial contents, which flip-flops built from logic cannot be loaded \
+                 with",
+                span,
+            );
+            return None;
+        }
+
+        let shape = self.lutram_shape().filter(|_| writes.len() == 1);
+        let plan = LogicPlan {
+            name: name.clone(),
+            span,
+            width,
+            rows_wanted,
+            init,
+        };
+        let cells = match &shape {
+            Some(shape) => self.emit_lutram(module, &plan, shape, &reads, &writes, write_clk),
+            None => self.emit_registers(module, &plan, &reads, &writes, write_clk),
+        };
+        match &shape {
+            Some(shape) => {
+                self.record_fallback(
+                    &name,
+                    "distributed LUT RAM",
+                    Some(shape.bel.name.clone()),
+                    cells,
+                );
+            }
+            None if writes.is_empty() => self.record_fallback(&name, "logic", None, 0),
+            None => self.record_fallback(&name, "flip-flops", None, cells),
+        }
+        let mut replaced = reads;
+        replaced.extend(writes);
+        Some(replaced)
+    }
+
+    /// Records a memory the fallback could not build either, with the
+    /// reason, so that the netlist check's complaint has an explanation
+    /// beside it.
+    fn decline_lowering(&mut self, name: &str, why: &str, span: Span) {
+        self.diags.push(
+            Diagnostic::warning(format!("memory `{name}` is left as a memory: {why}"))
+                .with_code(NO_BLOCK_RAM)
+                .with_span(span)
+                .with_note(
+                    "a place-and-route tool takes primitives only, so the design will not build \
+                     as it stands",
+                ),
+        );
+        if let Some(entry) = self
+            .report
+            .bram_fallbacks
+            .iter_mut()
+            .rev()
+            .find(|f| f.memory == name)
+        {
+            entry.reason = format!("{}; {why}", entry.reason);
+        }
+        self.note(format!("memory `{name}` stays generic: {why}"));
+    }
+
+    /// The signals of one memory port, for the logic fallback.
+    fn logic_port(&mut self, module: &Module, cell: CellId) -> LogicPort {
+        let cell = &module.cells[cell];
+        LogicPort {
+            addr: cell.input("addr"),
+            clk: cell.input("clk"),
+            en: cell.input("en"),
+            data: cell.input("data"),
+            out: cell.output("data"),
+        }
+    }
+
+    /// True when the port's address selects row `row`, and its enable is
+    /// on.
+    fn row_hit(
+        &mut self,
+        module: &mut Module,
+        port: &LogicPort,
+        row: u64,
+        bits: u32,
+        span: Span,
+    ) -> ExprId {
+        let enable = match port.en {
+            Some(en) => en,
+            None => const_expr(module, Const::ones(1), span),
+        };
+        if bits == 0 {
+            return enable;
+        }
+        let Some(addr) = port.addr else { return enable };
+        let want = const_expr(module, Const::from_u64(row, bits), span);
+        let selected = slice_expr(module, addr, bits - 1, 0, span);
+        let hit = add_net(module, "mem$sel", Type::bit(), span);
+        add_cell(
+            module,
+            "mem$eq",
+            CellKind::Eq,
+            vec![(Name::new("a"), selected), (Name::new("b"), want)],
+            vec![(Name::new("y"), hit)],
+            span,
+        );
+        let hit = net_expr(module, hit, span);
+        let gated = add_net(module, "mem$we", Type::bit(), span);
+        add_cell(
+            module,
+            "mem$and",
+            CellKind::And,
+            vec![(Name::new("a"), enable), (Name::new("b"), hit)],
+            vec![(Name::new("y"), gated)],
+            span,
+        );
+        net_expr(module, gated, span)
+    }
+
+    /// Drives one read port's net with `value`, through an output
+    /// register when the port is clocked.
+    fn finish_read(
+        &mut self,
+        module: &mut Module,
+        plan: &LogicPlan,
+        port: &LogicPort,
+        index: usize,
+        value: ExprId,
+    ) {
+        let Some(out) = port.out else { return };
+        let span = plan.span;
+        let want = net_width(module, out);
+        let value = self.resize(module, value, want, span);
+        let Some(clk) = port.clk.filter(|_| port.out.is_some()) else {
+            add_assign(module, out, value, span);
+            return;
+        };
+        let mut inputs = vec![(Name::new("clk"), clk), (Name::new("d"), value)];
+        let has_enable = port.en.is_some();
+        if let Some(en) = port.en {
+            inputs.push((Name::new("en"), en));
+        }
+        add_cell(
+            module,
+            &format!("{}$rd{index}_q", plan.name),
+            CellKind::Dff {
+                clk_pos: true,
+                has_enable,
+                reset: None,
+            },
+            inputs,
+            vec![(Name::new("q"), out)],
+            span,
+        );
+    }
+
+    /// The multiplexer selecting one of `rows` on the low bits of a read
+    /// port's address.
+    fn row_mux(
+        &mut self,
+        module: &mut Module,
+        plan: &LogicPlan,
+        port: &LogicPort,
+        index: usize,
+        rows: &[ExprId],
+        bits: u32,
+    ) -> ExprId {
+        let span = plan.span;
+        if rows.len() == 1 || bits == 0 {
+            return rows[0];
+        }
+        let select: Vec<ExprId> = match port.addr {
+            Some(addr) => (0..bits)
+                .map(|bit| slice_expr(module, addr, bit, bit, span))
+                .collect(),
+            None => Vec::new(),
+        };
+        let out = ReadOutput {
+            base: &plan.name,
+            index,
+            width: plan.width,
+            span,
+        };
+        self.mux_tree(module, rows, &select, &out)
+    }
+
+    /// One flip-flop array: a register per word, a decoded write enable
+    /// and a read multiplexer.
+    ///
+    /// A memory with no write port at all is a ROM, and then every row
+    /// is a constant from the memory's initial contents rather than a
+    /// register, so nothing is stored and only the multiplexer is built.
+    fn emit_registers(
+        &mut self,
+        module: &mut Module,
+        plan: &LogicPlan,
+        reads: &[CellId],
+        writes: &[CellId],
+        write_clk: Option<ExprId>,
+    ) -> u32 {
+        let span = plan.span;
+        let bits = addr_bits(plan.rows_wanted as u64);
+        let write_ports: Vec<LogicPort> = writes
+            .iter()
+            .map(|id| self.logic_port(module, *id))
+            .collect();
+        let read_ports: Vec<LogicPort> = reads
+            .iter()
+            .map(|id| self.logic_port(module, *id))
+            .collect();
+
+        let mut rows: Vec<ExprId> = Vec::with_capacity(plan.rows_wanted);
+        let mut flops = 0u32;
+        for row in 0..plan.rows_wanted {
+            if write_ports.is_empty() {
+                rows.push(plan.constant_row(module, row, span));
+                continue;
+            }
+            let q = add_net(
+                module,
+                &format!("{}$w{row}", plan.name),
+                Type::bits(plan.width),
+                span,
+            );
+            let q_expr = net_expr(module, q, span);
+            // The word a write leaves behind: the last port that hits
+            // this row wins, as the last assignment of a process does.
+            let mut value = q_expr;
+            let mut enable: Option<ExprId> = None;
+            for port in &write_ports {
+                let hit = self.row_hit(module, port, row as u64, bits, span);
+                if let Some(data) = port.data {
+                    let data = self.resize(module, data, plan.width, span);
+                    let next = add_net(
+                        module,
+                        &format!("{}$w{row}_d", plan.name),
+                        Type::bits(plan.width),
+                        span,
+                    );
+                    add_cell(
+                        module,
+                        &format!("{}$w{row}_mux", plan.name),
+                        CellKind::Mux,
+                        vec![
+                            (Name::new("a"), value),
+                            (Name::new("b"), data),
+                            (Name::new("s"), hit),
+                        ],
+                        vec![(Name::new("y"), next)],
+                        span,
+                    );
+                    value = net_expr(module, next, span);
+                }
+                enable = Some(match enable {
+                    None => hit,
+                    Some(previous) => {
+                        let any = add_net(module, "mem$any", Type::bit(), span);
+                        add_cell(
+                            module,
+                            "mem$or",
+                            CellKind::Or,
+                            vec![(Name::new("a"), previous), (Name::new("b"), hit)],
+                            vec![(Name::new("y"), any)],
+                            span,
+                        );
+                        net_expr(module, any, span)
+                    }
+                });
+            }
+            let mut inputs = vec![
+                (
+                    Name::new("clk"),
+                    write_clk.unwrap_or_else(|| const_expr(module, Const::zero(1), span)),
+                ),
+                (Name::new("d"), value),
+            ];
+            let has_enable = enable.is_some();
+            if let Some(enable) = enable {
+                inputs.push((Name::new("en"), enable));
+            }
+            add_cell(
+                module,
+                &format!("{}$ff{row}", plan.name),
+                CellKind::Dff {
+                    clk_pos: true,
+                    has_enable,
+                    reset: None,
+                },
+                inputs,
+                vec![(Name::new("q"), q)],
+                span,
+            );
+            flops += plan.width;
+            rows.push(q_expr);
+        }
+        for (index, port) in read_ports.iter().enumerate() {
+            let value = self.row_mux(module, plan, port, index, &rows, bits);
+            self.finish_read(module, plan, port, index, value);
+        }
+        flops
+    }
+
+    /// One array of the device's distributed RAM primitive per read
+    /// port.
+    ///
+    /// The primitive has one write port and one asynchronous read port,
+    /// so several readers means several copies of the contents, each
+    /// written from the one write port — the same duplication a vendor
+    /// flow applies, and the same one [`Mapper::block_ram`] applies to a
+    /// register file.
+    fn emit_lutram(
+        &mut self,
+        module: &mut Module,
+        plan: &LogicPlan,
+        shape: &LutRamShape,
+        reads: &[CellId],
+        writes: &[CellId],
+        write_clk: Option<ExprId>,
+    ) -> u32 {
+        let span = plan.span;
+        let write = self.logic_port(module, writes[0]);
+        let read_ports: Vec<LogicPort> = reads
+            .iter()
+            .map(|id| self.logic_port(module, *id))
+            .collect();
+        let banks = div_ceil_u32(plan.width, shape.width);
+        let total = addr_bits(plan.rows_wanted as u64);
+        let low = shape.addr_bits.min(total);
+        let high = total - low;
+        let rows = 1usize << high;
+        let waddr = write
+            .addr
+            .map(|addr| self.resize_low(module, addr, low, span));
+        let clk = write_clk.unwrap_or_else(|| const_expr(module, Const::zero(1), span));
+
+        let mut built = 0u32;
+        for (index, port) in read_ports.iter().enumerate() {
+            let raddr = port
+                .addr
+                .map(|addr| self.resize_low(module, addr, low, span));
+            let mut row_values: Vec<ExprId> = Vec::with_capacity(rows);
+            for row in 0..rows {
+                let we = self.row_hit_high(module, &write, row as u64, high, low, span);
+                let mut parts: Vec<ExprId> = Vec::with_capacity(banks as usize);
+                for bank in 0..banks {
+                    let lo = bank * shape.width;
+                    let hi = ((bank + 1) * shape.width - 1).min(plan.width - 1);
+                    let mut inputs: Vec<(Name, ExprId)> = Vec::new();
+                    let mut outputs: Vec<(Name, NetId)> = Vec::new();
+                    inputs.push((Name::new(shape.bel.port("wclk").unwrap_or("WCK")), clk));
+                    inputs.push((Name::new(shape.bel.port("we").unwrap_or("WRE")), we));
+                    for (bit, pin) in shape.bel.port_names("waddr").iter().enumerate() {
+                        let value = self.addr_bit(module, waddr, bit, span);
+                        inputs.push((Name::new(*pin), value));
+                    }
+                    for (bit, pin) in shape.bel.port_names("raddr").iter().enumerate() {
+                        let value = self.addr_bit(module, raddr, bit, span);
+                        inputs.push((Name::new(*pin), value));
+                    }
+                    let data = write.data.map(|data| {
+                        let part = slice_expr(module, data, hi, lo, span);
+                        self.resize(module, part, shape.width, span)
+                    });
+                    for (bit, pin) in shape.bel.port_names("din").iter().enumerate() {
+                        let bit = u32::try_from(bit).unwrap_or(0);
+                        let value = match data {
+                            Some(data) => slice_expr(module, data, bit, bit, span),
+                            None => const_expr(module, Const::zero(1), span),
+                        };
+                        inputs.push((Name::new(*pin), value));
+                    }
+                    let mut bits: Vec<ExprId> = Vec::new();
+                    for (bit, pin) in shape.bel.port_names("dout").iter().enumerate() {
+                        let net = add_net(
+                            module,
+                            &format!("{}$rd{index}_r{row}_b{bank}_{bit}", plan.name),
+                            Type::bit(),
+                            span,
+                        );
+                        outputs.push((Name::new(*pin), net));
+                        bits.push(net_expr(module, net, span));
+                    }
+                    let cell = add_cell(
+                        module,
+                        &format!("{}$dpr{index}_{row}_{bank}", plan.name),
+                        CellKind::Blackbox(Name::new(shape.bel.name.clone())),
+                        inputs,
+                        outputs,
+                        span,
+                    );
+                    for (key, value) in &shape.bel.params {
+                        module.cells[cell].params.set(key.clone(), value.clone());
+                    }
+                    module.cells[cell].attrs.set("memory", plan.name.clone());
+                    built += 1;
+                    bits.truncate(usize::try_from(hi - lo + 1).unwrap_or(0));
+                    bits.reverse();
+                    parts.push(expr(module, ExprKind::Concat(bits), span));
+                }
+                parts.reverse();
+                let value = if parts.len() == 1 {
+                    parts[0]
+                } else {
+                    expr(module, ExprKind::Concat(parts), span)
+                };
+                row_values.push(value);
+            }
+            let value = self.mux_high(module, plan, port, index, &row_values, (low, high));
+            self.finish_read(module, plan, port, index, value);
+        }
+        built
+    }
+
+    /// Bit `bit` of an address that may be narrower than the pin list,
+    /// or a zero when it is.
+    fn addr_bit(
+        &mut self,
+        module: &mut Module,
+        addr: Option<ExprId>,
+        bit: usize,
+        span: Span,
+    ) -> ExprId {
+        let bit = u32::try_from(bit).unwrap_or(0);
+        match addr {
+            Some(addr) if bit < expr_width(module, addr) => {
+                slice_expr(module, addr, bit, bit, span)
+            }
+            _ => const_expr(module, Const::zero(1), span),
+        }
+    }
+
+    /// The low `bits` of an address, or a zero when it has none.
+    fn resize_low(&mut self, module: &mut Module, addr: ExprId, bits: u32, span: Span) -> ExprId {
+        if bits == 0 {
+            return const_expr(module, Const::zero(1), span);
+        }
+        let available = expr_width(module, addr);
+        slice_expr(module, addr, bits.min(available) - 1, 0, span)
+    }
+
+    /// Like [`Mapper::row_hit`], but on the *high* address bits, which is
+    /// what selects one bank of a distributed RAM array.
+    fn row_hit_high(
+        &mut self,
+        module: &mut Module,
+        port: &LogicPort,
+        row: u64,
+        high: u32,
+        low: u32,
+        span: Span,
+    ) -> ExprId {
+        let enable = match port.en {
+            Some(en) => en,
+            None => const_expr(module, Const::ones(1), span),
+        };
+        if high == 0 {
+            return enable;
+        }
+        let Some(addr) = port.addr else { return enable };
+        let available = expr_width(module, addr);
+        if low + high > available {
+            return enable;
+        }
+        let want = const_expr(module, Const::from_u64(row, high), span);
+        let selected = slice_expr(module, addr, low + high - 1, low, span);
+        let hit = add_net(module, "mem$bank", Type::bit(), span);
+        add_cell(
+            module,
+            "mem$eq",
+            CellKind::Eq,
+            vec![(Name::new("a"), selected), (Name::new("b"), want)],
+            vec![(Name::new("y"), hit)],
+            span,
+        );
+        let hit = net_expr(module, hit, span);
+        let gated = add_net(module, "mem$we", Type::bit(), span);
+        add_cell(
+            module,
+            "mem$and",
+            CellKind::And,
+            vec![(Name::new("a"), enable), (Name::new("b"), hit)],
+            vec![(Name::new("y"), gated)],
+            span,
+        );
+        net_expr(module, gated, span)
+    }
+
+    /// The multiplexer over the banks of a distributed RAM array,
+    /// selected by the address bits above the ones one block carries.
+    fn mux_high(
+        &mut self,
+        module: &mut Module,
+        plan: &LogicPlan,
+        port: &LogicPort,
+        index: usize,
+        rows: &[ExprId],
+        split: (u32, u32),
+    ) -> ExprId {
+        let (low, high) = split;
+        let span = plan.span;
+        if rows.len() == 1 || high == 0 {
+            return rows[0];
+        }
+        let select: Vec<ExprId> = match port.addr {
+            Some(addr) if low + high <= expr_width(module, addr) => (0..high)
+                .map(|bit| slice_expr(module, addr, low + bit, low + bit, span))
+                .collect(),
+            _ => Vec::new(),
+        };
+        let out = ReadOutput {
+            base: &plan.name,
+            index,
+            width: plan.width,
+            span,
+        };
+        self.mux_tree(module, rows, &select, &out)
     }
 
     // --- DSP ---------------------------------------------------------------
@@ -1788,6 +2526,63 @@ fn allocate_ports(
     Some((read_slots, write_slots))
 }
 
+/// What the database says the device's distributed RAM primitive is.
+///
+/// Read off its port map rather than declared: `width` is how many
+/// `dout` pins it has, `addr_bits` how many `raddr` pins, and `depth`
+/// what those address.
+struct LutRamShape {
+    /// The primitive.
+    bel: BelKind,
+    /// Bits per word.
+    width: u32,
+    /// Address bits one block takes, so it holds `2^addr_bits` words.
+    addr_bits: u32,
+}
+
+/// The shape of one memory being built out of logic.
+struct LogicPlan {
+    /// The memory's name, which the new nets and cells are named after.
+    name: String,
+    /// The span the new objects carry.
+    span: Span,
+    /// Bits per word.
+    width: u32,
+    /// Words.
+    rows_wanted: usize,
+    /// The initial contents, element 0 first; empty when there are none.
+    init: Vec<Const>,
+}
+
+impl LogicPlan {
+    /// Word `row` of the initial contents as a constant, or an `x` word
+    /// when the memory does not state one, which is what reading an
+    /// uninitialised memory gives.
+    fn constant_row(&self, module: &mut Module, row: usize, span: Span) -> ExprId {
+        match self.init.get(row) {
+            Some(value) => {
+                let value = value.clone().resize(self.width);
+                const_expr(module, value, span)
+            }
+            None => const_expr(module, Const::x(self.width), span),
+        }
+    }
+}
+
+/// The signals of one memory port, for the logic fallback.
+struct LogicPort {
+    /// The address.
+    addr: Option<ExprId>,
+    /// The clock, for a clocked port.
+    clk: Option<ExprId>,
+    /// The enable, if the port has one.
+    en: Option<ExprId>,
+    /// The data written, for a write port.
+    data: Option<ExprId>,
+    /// The net read, for a read port.
+    out: Option<NetId>,
+}
+
 /// The signals of one memory port, resolved for the block wiring.
 struct PortWiring {
     /// The address bits inside one block.
@@ -2042,6 +2837,141 @@ mod tests {
         let report = run(&mut design, top, "ecp5-25f-CABGA381", &options);
         assert!(report.block_rams.is_empty());
         assert_eq!(report.bram_fallbacks[0].style, "distributed LUT RAM");
+    }
+
+    #[test]
+    fn a_small_memory_becomes_flip_flops_on_a_family_without_lut_ram() {
+        // 16 x 4 is 64 bits, under the threshold, and the iCE40 database
+        // declares no distributed RAM: one flip-flop per bit, a decoded
+        // write enable and a read multiplexer.
+        let (mut design, top, _map) = memory_design(4, 16);
+        let options = MapOptions {
+            insert_io_buffers: false,
+            insert_clock_buffers: false,
+            ..MapOptions::default()
+        };
+        let report = run(&mut design, top, "ice40-hx1k-tq144", &options);
+        let fallback = &report.bram_fallbacks[0];
+        assert_eq!(fallback.style, "flip-flops");
+        assert!(fallback.built);
+        assert_eq!(fallback.cells, 64);
+        assert_eq!(fallback.primitive, None);
+        assert!(
+            report
+                .to_text()
+                .contains("ram -> flip-flops, 64 flip-flop(s)")
+        );
+
+        // Nothing is left of the memory for the netlist check to find.
+        let module = design.module(top);
+        assert_eq!(module.memories.len(), 0);
+        assert!(module.cells.iter().all(|(_, c)| !matches!(
+            c.kind,
+            CellKind::MemRdPort { .. } | CellKind::MemWrPort { .. }
+        )));
+        // Sixteen word registers plus the clocked read port's own.
+        assert_eq!(
+            module
+                .cells
+                .iter()
+                .filter(|(_, c)| matches!(c.kind, CellKind::Dff { .. }))
+                .count(),
+            17
+        );
+        // A 16:1 multiplexer is fifteen two-input ones.
+        assert_eq!(
+            module
+                .cells
+                .iter()
+                .filter(|(_, c)| c.kind == CellKind::Mux)
+                .count(),
+            15 + 16,
+            "fifteen to select the word, one per word for the write"
+        );
+        assert!(!validate(&design).has_errors());
+    }
+
+    #[test]
+    fn a_small_memory_becomes_lut_ram_where_the_device_has_one() {
+        // The ECP5 declares TRELLIS_DPR16X4, four bits by sixteen words,
+        // so a 16 x 8 memory is two of them side by side and no
+        // multiplexer at all.
+        let (mut design, top, _map) = memory_design(8, 16);
+        let options = MapOptions {
+            insert_io_buffers: false,
+            insert_clock_buffers: false,
+            ..MapOptions::default()
+        };
+        let report = run(&mut design, top, "ecp5-45f-CABGA381", &options);
+        let fallback = &report.bram_fallbacks[0];
+        assert_eq!(fallback.style, "distributed LUT RAM");
+        assert_eq!(fallback.primitive.as_deref(), Some("TRELLIS_DPR16X4"));
+        assert_eq!(fallback.cells, 2);
+        assert!(fallback.built);
+        assert_eq!(cells_named(&design, top, "TRELLIS_DPR16X4"), 2);
+        assert_eq!(design.module(top).memories.len(), 0);
+        assert!(!validate(&design).has_errors());
+
+        // Every pin the cells connect is one the device declares; the
+        // whole netlist is checked by `tests/fpga_flow.rs`, which runs
+        // the rest of the flow too.
+        let device = target("ecp5-45f-CABGA381").unwrap();
+        let declared = device.primitive_ports("TRELLIS_DPR16X4").unwrap();
+        for (_, cell) in design.module(top).cells.iter() {
+            if !matches!(&cell.kind, CellKind::Blackbox(n) if n.as_str() == "TRELLIS_DPR16X4") {
+                continue;
+            }
+            // Sixteen pins wired: WCK, WRE, four each of WAD, DI, RAD
+            // and DO.
+            assert_eq!(cell.inputs.len() + cell.outputs.len(), 18);
+            let connected = cell
+                .inputs
+                .iter()
+                .map(|(port, _)| port)
+                .chain(cell.outputs.iter().map(|(port, _)| port));
+            for port in connected {
+                assert!(
+                    declared.iter().any(|p| p == port.as_str()),
+                    "`{port}` is not a TRELLIS_DPR16X4 pin"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn a_memory_too_big_for_logic_is_reported_rather_than_built() {
+        // Eight kilobits of flip-flops is not what anyone meant, so the
+        // memory stays and the report says why.
+        let (mut design, top, sources) = memory_design(8, 1024);
+        let options = MapOptions {
+            insert_io_buffers: false,
+            insert_clock_buffers: false,
+            // No block RAM to fall into.
+            infer_block_ram: true,
+            max_logic_bits: 256,
+            ..MapOptions::default()
+        };
+        let mut device = target("ice40-hx1k-tq144").unwrap().clone();
+        device.block_rams.clear();
+        let mut diags = Diagnostics::new();
+        let report = map(
+            &mut design,
+            top,
+            &device,
+            &Constraints::new(),
+            &options,
+            &mut diags,
+        );
+        let fallback = &report.bram_fallbacks[0];
+        assert!(!fallback.built);
+        assert_eq!(fallback.style, "a memory");
+        assert!(
+            fallback.reason.contains("over the 256 bit limit"),
+            "{fallback:?}"
+        );
+        assert_eq!(design.module(top).memories.len(), 1);
+        let text = diags.render(&sources);
+        assert!(text.contains("is left as a memory"), "{text}");
     }
 
     #[test]

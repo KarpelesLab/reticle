@@ -1,0 +1,15 @@
+device: ecp5-45f-CABGA381
+block RAM:
+  mem -> distributed LUT RAM, 2 x TRELLIS_DPR16X4 (128 bits is below the 256 bit threshold)
+io:
+  clk (1 bits) -> TRELLIS_IO at pin G2 as LVCMOS33
+  we (1 bits) -> TRELLIS_IO at pin B2 as LVCMOS33
+  waddr (4 bits) -> TRELLIS_IO
+  raddr (4 bits) -> TRELLIS_IO
+  wdata (8 bits) -> TRELLIS_IO
+  rdata (8 bits) -> TRELLIS_IO
+logic:
+  0 LUTs, depth 0
+netlist:
+  2 x TRELLIS_DPR16X4
+  26 x TRELLIS_IO

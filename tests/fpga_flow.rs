@@ -45,12 +45,14 @@ use reticle::ir::validate::validate;
 use reticle::source::SourceMap;
 
 /// The cases, each with the built-in device it targets.
-const CASES: [(&str, &str); 6] = [
+const CASES: [(&str, &str); 8] = [
     ("blinky_ice40", "ice40-hx1k-tq144"),
     ("ram_ice40", "ice40-hx1k-tq144"),
+    ("logicram_ice40", "ice40-hx1k-tq144"),
     ("carry_ice40", "ice40-hx1k-tq144"),
     ("blinky_ecp5", "ecp5-45f-CABGA381"),
     ("ram_ecp5", "ecp5-45f-CABGA381"),
+    ("logicram_ecp5", "ecp5-45f-CABGA381"),
     ("clkbuf_ecp5", "ecp5-45f-CABGA381"),
 ];
 
@@ -257,15 +259,20 @@ fn exports_are_acceptable_netlists() {
 /// the block RAM, the clock buffer, the LUTs and the flip-flops.
 #[test]
 fn every_layer_of_the_flow_is_exercised() {
-    let expected: [(&str, &[&str]); 6] = [
+    let expected: [(&str, &[&str]); 8] = [
         (
             "blinky_ice40",
             &["SB_LUT4", "SB_CARRY", "SB_IO", "SB_GB", "SB_DFFSR"],
         ),
         ("ram_ice40", &["SB_RAM40_4K", "SB_IO"]),
+        // The fallback: a memory under the threshold on a family with
+        // no distributed RAM is flip-flops and a read multiplexer.
+        ("logicram_ice40", &["SB_DFFE", "SB_LUT4", "SB_IO"]),
         ("carry_ice40", &["SB_CARRY", "SB_LUT4", "SB_DFF"]),
         ("blinky_ecp5", &["LUT4", "TRELLIS_FF", "TRELLIS_IO", "DCCA"]),
         ("ram_ecp5", &["DP16KD", "TRELLIS_IO"]),
+        // The same memory on a family that has one.
+        ("logicram_ecp5", &["TRELLIS_DPR16X4", "TRELLIS_IO"]),
         ("clkbuf_ecp5", &["DCCA", "TRELLIS_FF", "TRELLIS_IO"]),
     ];
     for (name, device_name) in CASES {
@@ -353,4 +360,119 @@ fn nextpnr_reads_the_export() {
     }
     assert!(failed.is_empty(), "{}", failed.join("\n"));
     println!("{ran} of {} cases were placed and routed", CASES.len());
+}
+
+/// The logic fallback really *is* the memory it replaced.
+///
+/// `logicram_ice40` is sixteen words of eight bits with a clocked write
+/// and an asynchronous read. The same stimulus is driven into the design
+/// as written and into the same design after `fpga::map` has lowered the
+/// memory into flip-flops, and the two have to answer alike — which
+/// checks the decoded write enable, the read multiplexer and the
+/// behaviour of a read during a write to the same address, all at once.
+///
+/// Only the memory step runs: IO and clock buffers would put primitives
+/// in the netlist, and a primitive is a black box the simulator has no
+/// model for.
+#[cfg(feature = "sim")]
+#[test]
+fn the_logic_fallback_answers_like_the_memory_it_replaced() {
+    use reticle::fpga::MapOptions;
+    use reticle::logic::Logic;
+    use reticle::sim::{NetHandle, SimOptions, Simulator};
+
+    fn load(name: &str) -> Design {
+        let text = read(&format!("{name}.rtl"));
+        let mut sources = SourceMap::new();
+        let file = sources.add(format!("{name}.rtl"), text.clone()).unwrap();
+        Design::parse_text(&text, file)
+            .unwrap_or_else(|d| panic!("{name}.rtl does not parse:\n{}", d.render(&sources)))
+    }
+
+    /// Drives the same writes and reads into one design and returns what
+    /// it read back each time.
+    fn exercise(design: &Design) -> Vec<u64> {
+        const HALF: u64 = 500;
+        let mut sim = Simulator::new(design, SimOptions::default())
+            .unwrap_or_else(|d| panic!("cannot simulate: {} problem(s)", d.len()));
+        let handle = |sim: &Simulator<'_>, name: &str| -> NetHandle {
+            let path = format!("{}.{name}", sim.top_name());
+            sim.net(&path).unwrap_or_else(|| panic!("no net `{path}`"))
+        };
+        let clk = handle(&sim, "clk");
+        let we = handle(&sim, "we");
+        let waddr = handle(&sim, "waddr");
+        let raddr = handle(&sim, "raddr");
+        let wdata = handle(&sim, "wdata");
+        let rdata = handle(&sim, "rdata");
+
+        let mut seen = Vec::new();
+        let cycle = |sim: &mut Simulator<'_>| {
+            sim.run_for(HALF);
+            sim.set(clk, Logic::from_bool(true));
+            sim.run_for(HALF);
+            sim.set(clk, Logic::from_bool(false));
+        };
+        sim.set(clk, Logic::from_bool(false));
+        // Write every word with a value only that word can have.
+        for word in 0u64..16 {
+            sim.set(we, Logic::from_bool(true));
+            sim.set(waddr, Logic::from_u64(word, 4));
+            sim.set(wdata, Logic::from_u64(0xA0 ^ (word * 7), 8));
+            cycle(&mut sim);
+        }
+        // Read them all back, then read one while the same address is
+        // written, which is where a decoded enable goes wrong.
+        sim.set(we, Logic::from_bool(false));
+        for word in 0u64..16 {
+            sim.set(raddr, Logic::from_u64(word, 4));
+            sim.run_for(HALF);
+            seen.push(sim.get(rdata).to_u64().unwrap_or(u64::MAX));
+        }
+        sim.set(we, Logic::from_bool(true));
+        sim.set(waddr, Logic::from_u64(5, 4));
+        sim.set(raddr, Logic::from_u64(5, 4));
+        sim.set(wdata, Logic::from_u64(0x5A, 8));
+        sim.run_for(HALF);
+        seen.push(sim.get(rdata).to_u64().unwrap_or(u64::MAX));
+        cycle(&mut sim);
+        sim.set(we, Logic::from_bool(false));
+        sim.run_for(HALF);
+        seen.push(sim.get(rdata).to_u64().unwrap_or(u64::MAX));
+        // A write to one address must not disturb its neighbour.
+        sim.set(raddr, Logic::from_u64(6, 4));
+        sim.run_for(HALF);
+        seen.push(sim.get(rdata).to_u64().unwrap_or(u64::MAX));
+        seen
+    }
+
+    let original = load("logicram_ice40");
+    let wanted = exercise(&original);
+    assert_eq!(wanted.len(), 19);
+    assert!(
+        wanted.iter().all(|v| *v != u64::MAX),
+        "the memory itself read x: {wanted:?}"
+    );
+
+    let mut lowered = load("logicram_ice40");
+    let top = lowered.top.unwrap();
+    let device = fpga::target("ice40-hx1k-tq144").unwrap();
+    let options = MapOptions {
+        insert_io_buffers: false,
+        insert_clock_buffers: false,
+        ..MapOptions::default()
+    };
+    let mut diags = Diagnostics::new();
+    let report = fpga::map(
+        &mut lowered,
+        top,
+        device,
+        &Constraints::new(),
+        &options,
+        &mut diags,
+    );
+    assert!(report.bram_fallbacks[0].built);
+    assert_eq!(report.bram_fallbacks[0].style, "flip-flops");
+    assert!(!validate(&lowered).has_errors());
+    assert_eq!(exercise(&lowered), wanted);
 }

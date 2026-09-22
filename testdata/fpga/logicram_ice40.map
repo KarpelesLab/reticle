@@ -1,0 +1,19 @@
+device: ice40-hx1k-tq144
+block RAM:
+  mem -> flip-flops, 128 flip-flop(s) (128 bits is below the 256 bit threshold)
+io:
+  clk (1 bits) -> SB_IO at pin 21 as LVCMOS33
+  we (1 bits) -> SB_IO at pin 8 as LVCMOS33
+  waddr (4 bits) -> SB_IO
+  raddr (4 bits) -> SB_IO
+  wdata (8 bits) -> SB_IO
+  rdata (8 bits) -> SB_IO
+clocks:
+  clk (128 flip-flops) -> SB_GB
+logic:
+  260 LUTs, depth 4
+netlist:
+  128 x SB_DFFE
+  1 x SB_GB
+  26 x SB_IO
+  260 x SB_LUT4
