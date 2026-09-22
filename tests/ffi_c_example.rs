@@ -86,6 +86,21 @@ fn system_libraries() -> Vec<&'static str> {
 
 #[test]
 fn the_c_example_compiles_and_runs() {
+    // On the MSVC target the static library is an MSVC archive, and the
+    // compilers this test drives with gcc-style flags are GNU toolchains.
+    // A MinGW `gcc` found on the path cannot link it: it has no MSVC
+    // runtime, so symbols such as `__chkstk` and the C++ `type_info`
+    // vtable that panic unwinding needs stay undefined. That is an ABI
+    // mismatch between two toolchains, not a fault in the C API, which the
+    // Rust-side FFI tests still exercise on Windows. The C example is
+    // compiled and run on the GNU targets, where the toolchains agree.
+    if cfg!(target_env = "msvc") {
+        println!(
+            "skipping: the MSVC-built static library cannot be linked by a \
+             GNU C compiler; the C example runs on the GNU targets"
+        );
+        return;
+    }
     let Some(cc) = compiler() else {
         println!("skipping: no C compiler found (tried $CC, cc, gcc, clang)");
         return;
