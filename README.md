@@ -44,6 +44,7 @@ Early, but the middle of the pipeline runs end to end. What works today:
 | Formal | CDCL SAT solver, bit-blaster, bounded model checking, k-induction, equivalence checking |
 | ASIC | Liberty, LEF and DEF readers and writers |
 | Timing | static timing analysis with setup and hold, path reports, clock domain crossing checks |
+| IP | manifests with dependency resolution and a lock file, bus interfaces, generated interconnect, encrypted-core black boxes |
 | Tooling | Verilog and VHDL formatters |
 | FPGA | device database (iCE40, ECP5, generic), primitive mapping, placement and IO constraints, nextpnr and vendor export |
 
@@ -51,6 +52,7 @@ Both languages go all the way through, from source to a synthesised
 netlist, a simulation or a proof.
 
 ```sh
+reticle build   --synth reticle.proj
 reticle check   counter.v counter.vhd design.rtl
 reticle fmt     --write counter.v
 reticle synth   --report --lut 4 --output netlist.rtl counter.vhd

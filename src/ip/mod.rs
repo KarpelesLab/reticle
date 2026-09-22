@@ -377,6 +377,7 @@ pub fn elaborate(
     }
 
     // 3. Verilog, elaborated together so instances resolve across files.
+    let mut verilog_diags = Diagnostics::new();
     let mut design = if verilog.is_empty() {
         Design::new()
     } else {
@@ -407,10 +408,18 @@ pub fn elaborate(
         let refs: Vec<&crate::verilog::ast::SourceFile> = files.iter().collect();
         let options = crate::verilog::ElabOptions::new(dialect);
         let design = crate::verilog::elaborate(&refs, &options, &mut front);
-        diags.append(&mut front);
+        // The diagnostics are held back rather than appended here: the
+        // frontend flags an instance of a module it cannot see as a black
+        // box, and in a mixed-language project the module it is looking
+        // for may be a VHDL entity that has not been elaborated yet. They
+        // are filtered and appended once the whole design exists.
+        verilog_diags = front;
         match design {
             Some(design) => design,
-            None => return out,
+            None => {
+                diags.append(&mut verilog_diags);
+                return out;
+            }
         }
     };
 
@@ -486,6 +495,23 @@ pub fn elaborate(
     }
     design.resolve_instances();
 
+    // The Verilog frontend warns that an instance of a module it could not
+    // see is kept as a black box. Within one project that claim can be
+    // false twice over: the module may be a VHDL entity elaborated
+    // afterwards, or a declared stub built from an encrypted package's
+    // manifest. Either way the finished design contains it and the
+    // instance is bound, so the warning would send the reader looking for
+    // a problem that is not there. A genuine black box is still reported,
+    // with its provenance, by `Elaboration::report`.
+    for diag in verilog_diags {
+        let named = quoted_name(&diag.message);
+        let resolved_here = diag.code == Some(crate::verilog::elab::codes::BLACKBOX)
+            && named.is_some_and(|name| design.module_by_name(name).is_some());
+        if !resolved_here {
+            diags.push(diag);
+        }
+    }
+
     // 7. The top.
     if let Some(top) = &project.top {
         match design.module_by_name(top) {
@@ -531,4 +557,31 @@ pub fn elaborate_project(
     diags: &mut Diagnostics,
 ) -> Option<Design> {
     elaborate(project, resolved, diags).design
+}
+
+/// The first `` `name` `` in a diagnostic message.
+///
+/// Diagnostics quote the identifier they are about, which is a more exact
+/// match than searching the whole message for a module name: a module
+/// called `a` would otherwise match almost anything.
+fn quoted_name(message: &str) -> Option<&str> {
+    let start = message.find('`')? + 1;
+    let rest = &message[start..];
+    let end = rest.find('`')?;
+    Some(&rest[..end])
+}
+
+#[cfg(test)]
+mod quoted_name_tests {
+    use super::quoted_name;
+
+    #[test]
+    fn takes_the_first_quoted_identifier() {
+        assert_eq!(
+            quoted_name("no module named `ddr_phy` was found"),
+            Some("ddr_phy")
+        );
+        assert_eq!(quoted_name("nothing quoted here"), None);
+        assert_eq!(quoted_name("unterminated `quote"), None);
+    }
 }

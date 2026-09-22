@@ -220,6 +220,14 @@ fn a_mixed_language_project_builds() {
         "{}",
         built.diagnostics
     );
+    // And no spurious black-box warning: the VHDL entity is elaborated
+    // after the Verilog top that instantiates it, but it does end up in
+    // the design.
+    assert!(
+        !built.diagnostics.contains("V0023"),
+        "{}",
+        built.diagnostics
+    );
 
     let design = built.design.as_ref().expect("no design was elaborated");
     // The Verilog top and the VHDL entity are both there.
@@ -277,6 +285,16 @@ fn encrypted_ip_still_elaborates() {
         "{}",
         built.report
     );
+    // The frontend's "no module named `ddr_phy` was found" warning is
+    // suppressed: the stub built from the package's manifest is in the
+    // design and the instance is bound, so the claim would be false. The
+    // black box itself is still reported, with provenance, above.
+    assert!(
+        !built.diagnostics.contains("V0023"),
+        "a black-box warning survived for a module that is in the design:\n{}",
+        built.diagnostics
+    );
+
     // The stub's `interface` line became a whole AXI4-Lite port set.
     assert!(
         built.report.contains("interface s_axi: 19 ports"),

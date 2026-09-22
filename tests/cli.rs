@@ -76,6 +76,63 @@ fn missing_file_is_an_error() {
     assert!(stderr.contains("cannot read"), "{stderr}");
 }
 
+/// `reticle build` resolves a project's dependencies and elaborates the
+/// whole graph. The corpus projects use relative `path` dependencies, so
+/// the test copies one into a scratch directory and builds it there.
+#[test]
+fn build_resolves_and_elaborates_a_project() {
+    let dir = scratch("build_project");
+    copy_dir(Path::new("testdata/ip"), &dir);
+    let project = dir.join("projects/two_deps");
+
+    let out = project.join("design.rtl");
+    let (code, _, stderr) = run(&[
+        "build",
+        "--report",
+        "--output",
+        out.to_str().unwrap(),
+        project.join("reticle.proj").to_str().unwrap(),
+    ]);
+    assert_eq!(code, 0, "{stderr}");
+    // The diamond resolved: the top plus all three dependencies.
+    assert!(stderr.contains("4 module(s)"), "{stderr}");
+
+    let rtl = std::fs::read_to_string(&out).unwrap();
+    for module in ["top", "uart_lite", "fifo_sync", "cdc_sync"] {
+        assert!(
+            rtl.contains(&format!("module {module}")),
+            "{module} missing"
+        );
+    }
+    // A lock file is written next to the manifest by default.
+    assert!(project.join("reticle.lock").exists(), "no lock file");
+}
+
+#[test]
+fn build_reports_a_version_conflict() {
+    let dir = scratch("build_conflict");
+    copy_dir(Path::new("testdata/ip"), &dir);
+    let manifest = dir.join("projects/conflict/reticle.proj");
+    let (code, _, stderr) = run(&["build", manifest.to_str().unwrap()]);
+    assert_eq!(code, 1, "{stderr}");
+    assert!(stderr.contains("satisfies every requirement"), "{stderr}");
+}
+
+/// Copies a directory tree, which the build tests need because a project
+/// writes its lock file next to its manifest.
+fn copy_dir(from: &Path, to: &Path) {
+    std::fs::create_dir_all(to).unwrap();
+    for entry in std::fs::read_dir(from).unwrap() {
+        let entry = entry.unwrap();
+        let target = to.join(entry.file_name());
+        if entry.file_type().unwrap().is_dir() {
+            copy_dir(&entry.path(), &target);
+        } else {
+            std::fs::copy(entry.path(), &target).unwrap();
+        }
+    }
+}
+
 #[test]
 fn check_accepts_every_frontend() {
     let (code, _, stderr) = run(&[

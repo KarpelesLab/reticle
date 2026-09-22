@@ -30,6 +30,7 @@ reticle: a VHDL / Verilog compiler
 Usage: reticle <command> [options] [files...]
 
 Commands:
+  build    Resolve a project's IP dependencies and elaborate it
   check    Parse and check source files
   fmt      Format Verilog and VHDL source
   synth    Synthesise a design to a technology-independent netlist
@@ -60,6 +61,22 @@ Options:
   --diff     Print a unified diff instead of the formatted text
   --width <n>    Line width to aim for (default 100)
   --indent <n>   Spaces per level, or `tab` (default 2)
+";
+
+const BUILD_USAGE: &str = "\
+Usage: reticle build [options] [reticle.proj]
+
+Reads a project manifest, resolves its IP dependencies, and elaborates
+the project and everything it depends on into one design. Defaults to
+`reticle.proj` in the current directory.
+
+Options:
+  --output <file>  Write the elaborated design as .rtl
+  --lock <file>    Write the resolved versions here (default reticle.lock)
+  --no-lock        Do not write a lock file
+  --synth          Synthesise the elaborated design
+  --report         Print what was resolved and elaborated
+  --quiet          Suppress the summary line
 ";
 
 const CHECK_USAGE: &str = "\
@@ -181,6 +198,7 @@ fn main() -> ExitCode {
             println!("reticle {}", reticle::VERSION);
             ExitCode::SUCCESS
         }
+        "build" => run(build, rest, BUILD_USAGE),
         "check" => run(check, rest, CHECK_USAGE),
         "fmt" => run(fmt, rest, FMT_USAGE),
         "synth" => run(synth, rest, SYNTH_USAGE),
@@ -200,6 +218,7 @@ fn main() -> ExitCode {
 /// The help text for one command, or the overview.
 fn help_text(command: Option<&str>) -> &'static str {
     match command {
+        Some("build") => BUILD_USAGE,
         Some("check") => CHECK_USAGE,
         Some("fmt") => FMT_USAGE,
         Some("synth") => SYNTH_USAGE,
@@ -254,7 +273,12 @@ fn run(command: fn(&Args) -> Result<Outcome, ArgError>, argv: &[String], usage: 
 fn spec_for(usage: &str) -> Spec {
     // Kept as one match rather than parsed out of the text: a static table
     // is checked by the compiler, a parsed one is not.
-    if std::ptr::eq(usage, CHECK_USAGE) {
+    if std::ptr::eq(usage, BUILD_USAGE) {
+        Spec {
+            options: &["output", "lock"],
+            flags: &["no-lock", "synth", "report", "quiet"],
+        }
+    } else if std::ptr::eq(usage, CHECK_USAGE) {
         Spec {
             options: &[],
             flags: &["quiet"],
@@ -494,6 +518,110 @@ fn load_design(args: &Args) -> Result<Result<(Design, SourceMap), Outcome>, ArgE
         Some(design) if !failed => Ok(Ok((design, map))),
         _ => Ok(Err(Outcome::Failed)),
     }
+}
+
+/// `reticle build`: resolve a project's IP and elaborate it.
+fn build(args: &Args) -> Result<Outcome, ArgError> {
+    use reticle::ip::{PathProvider, elaborate, load_project, resolve};
+
+    let manifest = match args.positionals() {
+        [] => "reticle.proj".to_string(),
+        [one] => one.clone(),
+        many => {
+            return Ok(Outcome::Usage(format!(
+                "expected one project manifest, got {}",
+                many.len()
+            )));
+        }
+    };
+    let text = match std::fs::read_to_string(&manifest) {
+        Ok(text) => text,
+        Err(err) => {
+            eprintln!("error: cannot read `{manifest}`: {err}");
+            return Ok(Outcome::Failed);
+        }
+    };
+
+    // Paths in a manifest are relative to the directory holding it, so the
+    // provider is rooted there rather than at the current directory.
+    let root = std::path::Path::new(&manifest)
+        .parent()
+        .filter(|p| !p.as_os_str().is_empty())
+        .unwrap_or(std::path::Path::new("."))
+        .to_path_buf();
+
+    let mut map = SourceMap::new();
+    let mut diags = Diagnostics::new();
+    let Some(project) = load_project(&mut map, manifest.clone(), &text, &mut diags) else {
+        report(&mut diags, &map);
+        return Ok(Outcome::Failed);
+    };
+
+    // The library never touches the filesystem: it asks through this
+    // closure, and the CLI owns every read.
+    let read_root = root.clone();
+    let mut provider = PathProvider::new(".", move |path: &str| {
+        std::fs::read_to_string(read_root.join(path)).ok()
+    });
+
+    let mut resolved = resolve(map, &project, &mut provider, &mut diags);
+    let elaboration = elaborate(&project, &mut resolved, &mut diags);
+    let map = resolved.source_map();
+    let failed = report(&mut diags, map);
+
+    if args.flag("report") {
+        eprint!("{}", elaboration.report());
+    }
+
+    if !args.flag("no-lock") && resolved.is_complete() {
+        let lock = args
+            .option("lock")
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(|| root.join("reticle.lock"));
+        if let Err(err) = std::fs::write(&lock, resolved.lock.to_text()) {
+            eprintln!("error: cannot write `{}`: {err}", lock.display());
+            return Ok(Outcome::Failed);
+        }
+    }
+
+    let Some(mut design) = elaboration.design else {
+        if !failed {
+            eprintln!("error: the project produced no design");
+        }
+        return Ok(Outcome::Failed);
+    };
+    if failed {
+        return Ok(Outcome::Failed);
+    }
+
+    if args.flag("synth") {
+        let mut diags = Diagnostics::new();
+        let options = reticle::synth::SynthOptions::default();
+        let stats = reticle::synth::run(&mut design, &options, &mut diags);
+        if report(&mut diags, map) {
+            return Ok(Outcome::Failed);
+        }
+        if args.flag("report") {
+            eprint!("{}", stats.render(Some(map)));
+        }
+    }
+
+    if let Some(path) = args.option("output")
+        && let Err(message) = write_out(Some(path), &design.to_text())
+    {
+        eprintln!("error: {message}");
+        return Ok(Outcome::Failed);
+    }
+
+    if !args.flag("quiet") {
+        eprintln!(
+            "note: built `{}`: {} module(s) from {} source(s)",
+            project.name,
+            design.modules.len(),
+            elaboration.sources.len()
+        );
+    }
+    Ok(Outcome::Ok)
 }
 
 /// `reticle fmt`: lay source back out in one house style.
