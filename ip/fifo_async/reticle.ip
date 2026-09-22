@@ -1,0 +1,29 @@
+# fifo_async: two clock domains, gray-coded pointers, the pointer
+# synchronisers coming from cdc_sync.
+name fifo_async
+version 1.0.0
+license MIT
+description "Asynchronous FIFO with gray-coded pointers and two-flop pointer synchronisers"
+
+top fifo_async
+target ice40
+target ecp5
+
+source rtl/fifo_async.v
+
+param WIDTH int 8 1..1024
+param DEPTH int 16 4..65536
+param ADDR_WIDTH int 4 2..16
+
+port wr_clk in
+port wr_rst_n in
+port wr_en in
+port wr_data in WIDTH
+port wr_full out
+port rd_clk in
+port rd_rst_n in
+port rd_en in
+port rd_data out WIDTH
+port rd_empty out
+
+depends cdc_sync ^1.0.0

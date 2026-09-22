@@ -1,0 +1,22 @@
+# cdc_pulse: a pulse across two domains, built on cdc_sync. It says what
+# it needs and never where that lives; the project places cdc_sync.
+name cdc_pulse
+version 1.0.0
+license MIT
+description "Single-cycle pulse crossing two clock domains through a toggle handshake"
+
+top cdc_pulse
+target ice40
+target ecp5
+
+source rtl/cdc_pulse.v
+
+port src_clk in
+port src_rst_n in
+port src_pulse in
+port src_busy out
+port dst_clk in
+port dst_rst_n in
+port dst_pulse out
+
+depends cdc_sync ^1.0.0

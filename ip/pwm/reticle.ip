@@ -1,0 +1,21 @@
+# pwm: a counter-comparator PWM channel with a duty latched per period.
+name pwm
+version 1.0.0
+license MIT
+description "Counter-comparator PWM with a parameterised resolution and a duty latched once per period"
+
+top pwm
+target ice40
+target ecp5
+
+source rtl/pwm.v
+
+param WIDTH int 8 1..32
+
+port clk in
+port rst_n in
+port en in
+port duty in WIDTH
+port pwm_out out
+port duty_active out WIDTH
+port period_tick out

@@ -1,0 +1,28 @@
+# fifo_sync: one clock domain, DEPTH words, optional first-word
+# fall-through. ADDR_WIDTH and CNT_WIDTH are derived from DEPTH.
+name fifo_sync
+version 1.0.0
+license MIT
+description "Synchronous FIFO with full, empty, occupancy count and an optional first-word-fall-through read port"
+
+top fifo_sync
+target ice40
+target ecp5
+
+source rtl/fifo_sync.v
+
+param WIDTH int 8 1..1024
+param DEPTH int 16 2..65536
+param FWFT int 0 0..1
+param ADDR_WIDTH int 4 1..16
+param CNT_WIDTH int 5 2..17
+
+port clk in
+port rst_n in
+port wr_en in
+port wr_data in WIDTH
+port full out
+port rd_en in
+port rd_data out WIDTH
+port empty out
+port count out CNT_WIDTH

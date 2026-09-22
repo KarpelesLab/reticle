@@ -1,0 +1,26 @@
+# axil_gpio: the AXI4-Lite subordinate of the library. The `interface`
+# line is one declaration standing for all nineteen AXI4-Lite ports, and
+# `bus::match_ports` checks the RTL against it.
+name axil_gpio
+version 1.0.0
+license MIT
+description "AXI4-Lite GPIO subordinate with data, direction and set registers"
+
+top axil_gpio
+target ice40
+target ecp5
+
+source rtl/axil_gpio.v
+
+param WIDTH int 8 1..32
+param ADDR_WIDTH int 32 4..32
+param DATA_WIDTH int 32 32..32
+
+port s_axi_aclk in
+port s_axi_aresetn in
+port gpio_i in WIDTH
+port gpio_o out WIDTH
+port gpio_oe out WIDTH
+interface s_axi axi4lite subordinate prefix s_axi_
+
+depends cdc_sync ^1.0.0

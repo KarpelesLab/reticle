@@ -9,8 +9,17 @@ license = "MIT"
 keywords = ["vhdl", "verilog", "fpga", "hdl", "synthesis"]
 categories = ["compilers", "hardware-support", "simulation", "development-tools"]
 # Keep the published .crate small: CI config and large test corpora stay out.
+# `/ip` is the Reticle IP library — HDL packages, not Rust. Nothing under
+# `src/` reads it (the library is sans-I/O and the blocks reach a design
+# through `ip::resolve` like any other package), only `tests/ip_library.rs`
+# does, so shipping it would add a tree of `.v` files to every download of
+# the crate without making the crate do anything more. It is published as
+# part of the repository instead; see `docs/ip-library.md`. The leading
+# slash anchors the pattern to the package root: `ip` alone would also
+# match `src/ip/`, which is Rust and has to ship.
 exclude = [
     ".github",
+    "/ip",
     "testdata/corpus",
 ]
 

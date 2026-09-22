@@ -1,0 +1,31 @@
+# i2c_master: one command per start pulse — optional START, one byte,
+# optional STOP — with clock stretching tolerated.
+name i2c_master
+version 1.0.0
+license MIT
+description "Byte-level I2C master with start, stop, acknowledge and clock stretching, for 7-bit addressing"
+
+top i2c_master
+target ice40
+target ecp5
+
+source rtl/i2c_master.v
+
+param CLK_DIV int 4 1..65535
+
+port clk in
+port rst_n in
+port start in
+port cmd_start in
+port cmd_stop in
+port cmd_read in
+port wr_data in 8
+port ack_in in
+port busy out
+port done out
+port rd_data out 8
+port ack_out out
+port scl_o out
+port scl_i in
+port sda_o out
+port sda_i in

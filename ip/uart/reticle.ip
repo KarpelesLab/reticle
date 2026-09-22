@@ -1,0 +1,28 @@
+# uart: an 8N1 transmitter and receiver behind one baud divisor. The
+# package ships three modules; `top` names the pair, and a design that
+# wants only one half instantiates `uart_tx` or `uart_rx` directly.
+name uart
+version 1.0.0
+license MIT
+description "8N1 UART transmitter and receiver with a ready/valid interface and a parameterised baud divisor"
+
+top uart
+target ice40
+target ecp5
+
+source rtl/uart_tx.v
+source rtl/uart_rx.v
+source rtl/uart.v
+
+param CLK_DIV int 16 4..65535
+
+port clk in
+port rst_n in
+port tx_data in 8
+port tx_valid in
+port tx_ready out
+port tx out
+port rx in
+port rx_data out 8
+port rx_valid out
+port rx_error out

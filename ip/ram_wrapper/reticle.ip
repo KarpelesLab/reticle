@@ -1,0 +1,29 @@
+# ram_wrapper: the two portable block RAM shapes. `top` names the dual
+# port one because it is the one other blocks build on; the `port` lines
+# below describe it, and `ram_sp` is the single-port module in the same
+# package, documented in its own source.
+name ram_wrapper
+version 1.0.0
+license MIT
+description "Portable synchronous block RAM wrappers, single port and simple dual port, with an optional output register"
+
+top ram_sdp
+target ice40
+target ecp5
+
+source rtl/ram_sp.v
+source rtl/ram_sdp.v
+
+param WIDTH int 8 1..512
+param DEPTH int 256 2..1048576
+param OUT_REG int 0 0..1
+param ADDR_WIDTH int 8 1..20
+
+port wr_clk in
+port wr_en in
+port wr_addr in ADDR_WIDTH
+port wr_data in WIDTH
+port rd_clk in
+port rd_en in
+port rd_addr in ADDR_WIDTH
+port rd_data out WIDTH

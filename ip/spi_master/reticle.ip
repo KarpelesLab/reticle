@@ -1,0 +1,28 @@
+# spi_master: one word per transfer, MSB first, any of the four modes.
+name spi_master
+version 1.0.0
+license MIT
+description "Byte-level SPI master with configurable CPOL and CPHA and a parameterised clock divisor"
+
+top spi_master
+target ice40
+target ecp5
+
+source rtl/spi_master.v
+
+param CPOL int 0 0..1
+param CPHA int 0 0..1
+param CLK_DIV int 4 1..65535
+param WIDTH int 8 2..64
+
+port clk in
+port rst_n in
+port tx_data in WIDTH
+port start in
+port busy out
+port done out
+port rx_data out WIDTH
+port sclk out
+port mosi out
+port miso in
+port cs_n out

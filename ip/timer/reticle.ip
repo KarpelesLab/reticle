@@ -1,0 +1,25 @@
+# timer: prescaler, auto-reload down-counter, pulse and sticky interrupt.
+name timer
+version 1.0.0
+license MIT
+description "Prescaled auto-reload down-counter with a pulse and a sticky interrupt output"
+
+top timer
+target ice40
+target ecp5
+
+source rtl/timer.v
+
+param WIDTH int 16 1..64
+param PRESCALE_WIDTH int 8 1..32
+
+port clk in
+port rst_n in
+port en in
+port load in
+port prescale in PRESCALE_WIDTH
+port reload in WIDTH
+port value out WIDTH
+port irq out
+port irq_pending out
+port irq_clear in

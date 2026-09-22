@@ -1,0 +1,20 @@
+# cdc_sync: the N-flop synchroniser every other crossing is built from.
+name cdc_sync
+version 1.0.0
+license MIT
+description "Parameterised N-flop clock domain crossing synchroniser"
+
+top cdc_sync
+target ice40
+target ecp5
+
+source rtl/cdc_sync.v
+
+param WIDTH int 1 1..1024
+param STAGES int 2 2..4
+param INIT int 0 0..1
+
+port clk in
+port rst_n in
+port d in WIDTH
+port q out WIDTH
