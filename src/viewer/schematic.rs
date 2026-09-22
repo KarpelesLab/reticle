@@ -165,13 +165,13 @@ fn wires(h: &mut Html, graph: &Graph, layout: &Layout) {
         }
         labelled.push((edge.from, edge.from_pin));
         let at = layout.nodes[edge.from].outputs[edge.from_pin];
-        let text = match edge.width {
-            Some(w) if w > 1 => format!("{} /{w}", edge.label),
-            _ => edge.label.clone(),
+        let width = match edge.width {
+            Some(w) if w > 1 => format!(" /{w}"),
+            _ => String::new(),
         };
         // Cut the label to the room before the next box, so a long net
         // name is shortened rather than painted over a cell.
-        let Some(text) = fit(&text, label_room(layout, at)) else {
+        let Some(text) = fit(&edge.label, &width, label_room(layout, at)) else {
             continue;
         };
         let (x, y) = (format!("{}", at.x + 7), format!("{}", at.y - 5));
@@ -200,19 +200,30 @@ fn label_room(layout: &Layout, at: Point) -> i32 {
         .unwrap_or(i32::MAX)
 }
 
-/// Cuts `text` to what fits in `room` units of 10px monospaced type, or
-/// returns `None` when there is not even room for an ellipsis.
-fn fit(text: &str, room: i32) -> Option<String> {
-    let chars = i32::try_from(text.chars().count()).unwrap_or(i32::MAX);
-    if chars * 6 + 6 <= room {
-        return Some(text.to_owned());
+/// Fits `name` followed by `suffix` into `room` units of 10px monospaced
+/// type.
+///
+/// Only the name is cut: the suffix carries a bus's width, which is the
+/// part of the label a reader cannot infer from anything else. `None`
+/// means not even the suffix and an ellipsis fit, and the label is left
+/// off.
+fn fit(name: &str, suffix: &str, room: i32) -> Option<String> {
+    let width = |text: &str| i32::try_from(text.chars().count()).unwrap_or(i32::MAX / 8) * 6;
+    if width(name) + width(suffix) + 6 <= room {
+        return Some(format!("{name}{suffix}"));
     }
-    let keep = usize::try_from((room - 6) / 6).unwrap_or(0);
-    if keep < 2 {
-        return None;
-    }
-    let kept: String = text.chars().take(keep - 1).collect();
-    Some(format!("{kept}\u{2026}"))
+    let cut = |keep: i32, suffix: &str| {
+        let keep = usize::try_from(keep).unwrap_or(0);
+        if keep < 2 {
+            return None;
+        }
+        let kept: String = name.chars().take(keep - 1).collect();
+        Some(format!("{}\u{2026}{suffix}", kept.trim_end()))
+    };
+    // Prefer to keep the width and cut the name. Where even two letters
+    // and the width do not fit, a piece of the name still says more than
+    // an empty space does.
+    cut((room - 6 - width(suffix)) / 6, suffix).or_else(|| cut((room - 6) / 6, ""))
 }
 
 /// The boxes, their labels and their pins.
@@ -545,6 +556,20 @@ mod tests {
         );
         assert!(!html.contains("<script>"));
         assert!(html.contains("&lt;script&gt;"));
+    }
+
+    #[test]
+    fn a_cut_label_keeps_the_bus_width() {
+        // Plenty of room: nothing is cut.
+        assert_eq!(fit("data", " /8", 200), Some("data /8".to_owned()));
+        // Tight: the name is cut, the width survives.
+        let cut = fit("a_very_long_net_name", " /8", 80).unwrap();
+        assert!(cut.ends_with("\u{2026} /8"), "{cut}");
+        assert!(cut.chars().count() * 6 <= 80, "{cut}");
+        // Tighter still: the width goes, but a piece of the name stays.
+        assert_eq!(fit("rdata", " /8", 32), Some("rda\u{2026}".to_owned()));
+        // No room at all: no label rather than a stray ellipsis.
+        assert_eq!(fit("data", " /8", 10), None);
     }
 
     #[test]
