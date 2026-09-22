@@ -1,0 +1,18 @@
+top case_latch
+
+module case_latch
+  net %sel u2 wire
+  net %a u4 wire
+  net %b u4 wire
+  net %y u4 wire
+  net %z u4 wire
+  net %z$pmux u4 wire
+  port sel in %sel
+  port a in %a
+  port b in %b
+  port y out %y
+  port z out %z
+  cell y$pmux pmux (a=4'bxxxx, b={or(%a, %b), and(%a, %b), %b, %a}, s={eq(%sel, 2'd3), eq(%sel, 2'd2), eq(%sel, 2'd1), eq(%sel, 2'd0)}) -> (y=%y)
+  cell z$pmux pmux (a=4'bxxxx, b={xor(%a, %b), %a}, s={or(eq(%sel, 2'd1), eq(%sel, 2'd2)), eq(%sel, 2'd0)}) -> (y=%z$pmux)
+  cell z$latch dlatch (en=or(eq(%sel, 2'd0), or(eq(%sel, 2'd1), eq(%sel, 2'd2))), d=%z$pmux) -> (q=%z)
+end

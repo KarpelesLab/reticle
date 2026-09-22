@@ -1,0 +1,6 @@
+note[S0020]: state machine `state` with 3 states re-encoded as one-hot
+  --> fsm.rtl:18:7
+   |
+18 |       %state <= 2'd0
+   |       ^^^^^^^^^^^^^^
+

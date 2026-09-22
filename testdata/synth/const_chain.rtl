@@ -1,0 +1,31 @@
+top const_chain
+
+module const_chain
+  net %a u8 wire
+  net %s u1 wire
+  net %y u8 wire
+  net %z u8 wire
+  net %w u4 wire
+  net %k u8 wire
+  net %f u1 wire
+  net %g u8 reg
+  port a in %a
+  port s in %s
+  port y out %y
+  port z out %z
+  port w out %w
+  port f out %f
+  port g out %g
+  assign %k = add(mul(8'd2, 8'd3), 8'd4)
+  assign %y = or(and(%a, 8'd255), xor(%k, %k))
+  assign %z = mux(1'd1, resize(resize(%a[3:0], u16), u8), shl(%a, 8'd0))
+  assign %w = {%a[3:0], %a[7:4]}[3:0]
+  assign %f = eq(and(%s, 1'd1), 1'd1)
+  process comb
+    if lt(8'd3, 8'd5)
+      %g = mux(%s, %a, 8'bxxxxxxxx)
+    else
+      %g = 8'd7
+    end
+  end
+end

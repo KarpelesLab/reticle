@@ -1,0 +1,16 @@
+top async_reg
+
+module async_reg
+  net %clk u1 wire
+  net %rst_n u1 wire
+  net %d u4 wire
+  net %q u4 wire
+  net %q_n u4 wire
+  port clk in %clk
+  port rst_n in %rst_n
+  port d in %d
+  port q out %q
+  port q_n out %q_n
+  cell q$ff dff pos arst neg 4'd0 (clk=%clk, d=%d, rst=%rst_n) -> (q=%q)
+  cell q_n$ff dff pos arst neg 4'd15 (clk=%clk, d=not(%d), rst=%rst_n) -> (q=%q_n)
+end

@@ -207,13 +207,13 @@ transmits and receives a byte.
 From the process form of the IR to a netlist of generic cells, then to
 technology cells.
 
-- [ ] Process lowering: sensitivity analysis, flip-flop and latch inference
+- [x] Process lowering: sensitivity analysis, flip-flop and latch inference
       (with reset and enable extraction), mux tree construction from
       `if` / `case`, `casez` / `casex` and priority handling.
-- [ ] Memory inference: RAM / ROM recognition from arrays, port collection,
+- [x] Memory inference: RAM / ROM recognition from arrays, port collection,
       read-before-write / write-first semantics preserved, initialisation.
-- [ ] FSM extraction and re-encoding (binary, one-hot, gray).
-- [ ] Optimisation: constant folding, dead code elimination, redundant
+- [x] FSM extraction and re-encoding (binary, one-hot, gray).
+- [x] Optimisation: constant folding, dead code elimination, redundant
       register removal, common subexpression merging, width reduction,
       mux and logic simplification, retiming (later).
 - [ ] Arithmetic lowering: adders, multipliers, comparators, shifters, with

@@ -1,0 +1,15 @@
+top adder_tree
+
+module adder_tree
+  net %a u16 wire
+  net %sum u8 reg
+  net %i u8 var
+  port a in %a
+  port sum out %sum
+  process comb
+    %sum = 8'd0
+    for %i = 8'd0; lt(%i, 8'd4); %i = add(%i, 8'd1)
+      %sum = add(%sum, resize(%a[mul(%i, 8'd4) +: 4], u8))
+    end
+  end
+end

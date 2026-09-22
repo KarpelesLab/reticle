@@ -1,0 +1,25 @@
+top counter_en
+
+module counter_en
+  net %clk u1 wire
+  net %rst u1 wire
+  net %en u1 wire
+  net %q u8 reg
+  net %wrap u1 reg
+  port clk in %clk
+  port rst in %rst
+  port en in %en
+  port q out %q
+  port wrap out %wrap
+  process count seq posedge %clk
+    if %rst
+      %q <= 8'd0
+      %wrap <= 1'd0
+    else
+      if %en
+        %q <= add(%q, 8'd1)
+        %wrap <= eq(%q, 8'd255)
+      end
+    end
+  end
+end

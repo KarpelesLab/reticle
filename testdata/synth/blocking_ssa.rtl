@@ -1,0 +1,21 @@
+top blocking_ssa
+
+module blocking_ssa
+  net %a u4 wire
+  net %b u4 wire
+  net %c u4 wire
+  net %y u4 reg
+  net %t u4 reg
+  port a in %a
+  port b in %b
+  port c in %c
+  port y out %y
+  process comb
+    %t = and(%a, %b)
+    %t = or(%t, %c)
+    if eq(%t, 4'd0)
+      %t = 4'd15
+    end
+    %y = xor(%t, %a)
+  end
+end

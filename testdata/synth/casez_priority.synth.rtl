@@ -1,0 +1,12 @@
+top casez_priority
+
+module casez_priority
+  net %req u4 wire
+  net %grant u2 wire
+  net %valid u1 wire
+  port req in %req
+  port grant out %grant
+  port valid out %valid
+  assign %grant = mux(weq(%req, 4'bzzz1), 2'd0, mux(weq(%req, 4'bzz1z), 2'd1, mux(weq(%req, 4'bz1zz), 2'd2, mux(weq(%req, 4'b1zzz), 2'd3, 2'd0))))
+  assign %valid = or(weq(%req, 4'bzzz1), or(weq(%req, 4'bzz1z), or(weq(%req, 4'bz1zz), weq(%req, 4'b1zzz))))
+end

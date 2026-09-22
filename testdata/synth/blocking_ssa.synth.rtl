@@ -1,0 +1,13 @@
+top blocking_ssa
+
+module blocking_ssa
+  net %a u4 wire
+  net %b u4 wire
+  net %c u4 wire
+  net %y u4 wire
+  port a in %a
+  port b in %b
+  port c in %c
+  port y out %y
+  assign %y = xor(mux(eq(or(and(%a, %b), %c), 4'd0), 4'd15, or(and(%a, %b), %c)), %a)
+end

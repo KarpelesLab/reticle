@@ -1,0 +1,28 @@
+top dup_logic
+
+module dup_logic
+  net %clk u1 wire
+  net %a u4 wire
+  net %b u4 wire
+  net %y1 u4 wire
+  net %y2 u4 wire
+  net %q1 u4 reg
+  net %q2 u4 reg
+  net %t1 u4 wire
+  net %t2 u4 wire
+  port clk in %clk
+  port a in %a
+  port b in %b
+  port y1 out %y1
+  port y2 out %y2
+  port q1 out %q1
+  port q2 out %q2
+  assign %t1 = add(%a, %b)
+  assign %t2 = add(%b, %a)
+  assign %y1 = xor(%t1, %a)
+  assign %y2 = xor(%t2, %a)
+  process seq posedge %clk
+    %q1 <= and(%t1, %b)
+    %q2 <= and(%t2, %b)
+  end
+end

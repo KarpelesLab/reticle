@@ -1,0 +1,35 @@
+top mux_tree
+
+module mux_tree
+  net %a u1 wire
+  net %b u1 wire
+  net %c u1 wire
+  net %x u8 wire
+  net %y u8 wire
+  net %out u8 reg
+  net %flag u1 reg
+  port a in %a
+  port b in %b
+  port c in %c
+  port x in %x
+  port y in %y
+  port out out %out
+  port flag out %flag
+  process comb
+    %flag = 1'd0
+    if %a
+      if %b
+        %out = %x
+      else
+        %out = %y
+        %flag = 1'd1
+      end
+    else
+      if %c
+        %out = add(%x, %y)
+      else
+        %out = 8'd0
+      end
+    end
+  end
+end

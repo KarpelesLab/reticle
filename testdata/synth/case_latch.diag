@@ -1,0 +1,8 @@
+warning[S0012]: latch inferred for `z`
+  --> case_latch.rtl:31:9
+   |
+31 |         %z = %a
+   |         ^^^^^^^ not assigned on every path
+   |
+   = note: add an `else` or a default assignment to make it combinational
+

@@ -1,0 +1,38 @@
+top case_latch
+
+module case_latch
+  net %sel u2 wire
+  net %a u4 wire
+  net %b u4 wire
+  net %y u4 reg
+  net %z u4 reg
+  port sel in %sel
+  port a in %a
+  port b in %b
+  port y out %y
+  port z out %z
+  process decode comb
+    case %sel
+      when 2'd0
+        %y = %a
+      end
+      when 2'd1
+        %y = %b
+      end
+      when 2'd2
+        %y = and(%a, %b)
+      end
+      when 2'd3
+        %y = or(%a, %b)
+      end
+    end
+    case %sel
+      when 2'd0
+        %z = %a
+      end
+      when 2'd1, 2'd2
+        %z = xor(%a, %b)
+      end
+    end
+  end
+end

@@ -1,0 +1,20 @@
+top fsm
+
+module fsm
+  net %clk u1 wire
+  net %rst u1 wire
+  net %go u1 wire
+  net %done u1 wire
+  net %busy u1 wire
+  attr fsm_encoded = "one-hot"
+  net %state$fsm u3 wire
+  net %state$pmux$fsm u3 wire
+  port clk in %clk
+  port rst in %rst
+  port go in %go
+  port done in %done
+  port busy out %busy
+  assign %busy = not(%state$fsm[0:0])
+  cell state$ff dff pos en srst pos 3'd1 (clk=%clk, d=%state$pmux$fsm, en=mux(%state$fsm[0:0], %go, or(%state$fsm[1:1], or(not(%state$fsm[2:2]), %done))), rst=%rst) -> (q=%state$fsm)
+  cell state$pmux$fsm pmux (a=3'd1, b=9'd98, s=%state$fsm) -> (y=%state$pmux$fsm)
+end

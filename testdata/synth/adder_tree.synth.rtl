@@ -1,0 +1,9 @@
+top adder_tree
+
+module adder_tree
+  net %a u16 wire
+  net %sum u8 wire
+  port a in %a
+  port sum out %sum
+  assign %sum = resize(add(resize(add(resize(add(resize(%a[3:0], u5), resize(%a[7:4], u5)), u6), resize(%a[11:8], u6)), u7), resize(%a[15:12], u7)), u8)
+end

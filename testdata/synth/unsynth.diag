@@ -1,0 +1,18 @@
+note[S0014]: 1 simulation-only statement dropped (system call)
+  --> unsynth.rtl:12:5
+   |
+12 |     sys $display("hello")
+   |     ^^^^^^^^^^^^^^^^^^^^^
+
+error[S0010]: process without a sensitivity list or clock is not synthesisable
+  --> unsynth.rtl:15:3
+   |
+15 |   process ticker free
+   |   ^^^^^^^^^^^^^^^^^^^
+
+note[S0014]: 1 simulation-only statement dropped (assertion)
+  --> unsynth.rtl:21:5
+   |
+21 |     assert error %a report "a must be set"
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+

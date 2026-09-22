@@ -1,0 +1,23 @@
+top async_reg
+
+module async_reg
+  net %clk u1 wire
+  net %rst_n u1 wire
+  net %d u4 wire
+  net %q u4 reg
+  net %q_n u4 reg
+  port clk in %clk
+  port rst_n in %rst_n
+  port d in %d
+  port q out %q
+  port q_n out %q_n
+  process seq posedge %clk async negedge %rst_n
+    if lnot(%rst_n)
+      %q <= 4'd0
+      %q_n <= 4'd15
+    else
+      %q <= %d
+      %q_n <= not(%d)
+    end
+  end
+end
