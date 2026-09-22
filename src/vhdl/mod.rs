@@ -14,6 +14,8 @@
 //!   boundaries so one mistake yields one diagnostic.
 //! - [`ast_dump`]: a deterministic text rendering of the tree for golden
 //!   tests and debugging.
+//! - [`format`](mod@format): the source formatter, laying the tree back
+//!   out with the comments and blank lines put back in place.
 //! - `sema`: types, overload resolution, attributes, visibility (planned).
 //! - `stdlib`: the `std` and `ieee` libraries, shipped as source (planned).
 //! - `elab`: generics, port maps, generate, configurations (planned).
@@ -37,6 +39,7 @@
 
 pub mod ast;
 pub mod ast_dump;
+pub mod format;
 pub mod lex;
 pub mod parse;
 pub mod token;
