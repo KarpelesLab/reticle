@@ -432,7 +432,25 @@ pub fn elaborate(
             ));
         }
         let refs: Vec<&crate::verilog::ast::SourceFile> = files.iter().collect();
-        let options = crate::verilog::ElabOptions::new(dialect);
+        let mut options = crate::verilog::ElabOptions::new(dialect);
+        // Tell the elaborator which module the project names as its top.
+        // Left to itself it picks the module nothing instantiates, which is
+        // a different module whenever the project's top is also
+        // instantiated somewhere with a parameter override: the top then
+        // exists only under the renamed variant (`leaf$W_1`) and the build
+        // failed with P0401. Only a top this language actually defines is
+        // passed on, so a VHDL top in a mixed project is left to the VHDL
+        // side instead of being reported missing here.
+        if let Some(top) = &project.top
+            && files.iter().any(|file| {
+                file.items.iter().any(|item| {
+                    matches!(&item.kind, crate::verilog::ast::ItemKind::Module(m)
+                        if m.name.name == *top)
+                })
+            })
+        {
+            options.top = Some(top.clone());
+        }
         let design = crate::verilog::elaborate(&refs, &options, &mut front);
         // The diagnostics are held back rather than appended here: the
         // frontend flags an instance of a module it cannot see as a black

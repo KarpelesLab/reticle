@@ -651,40 +651,34 @@ read was given a block whose clock pin nothing drove.
 halves, and `regfile_ecp5` in `testdata/fpga/` takes the same shape
 through the whole flow.
 
-**A project loses a top that its own sources instantiate with a
-parameter override. Open.** `dvi_tx`'s package first shipped the
+**A project lost a top that its own sources instantiate with a
+parameter override. Fixed.** `dvi_tx`'s package first shipped the
 transmitter and a wrapper around it, `dvi_tx_pll`, which instantiates it
-as `dvi_tx #(.MODE(MODE))`. A project whose top is `dvi_tx` then failed
+as `dvi_tx #(.MODE(MODE))`. A project whose top was `dvi_tx` then failed
 to build with `P0401`, "the project's top `dvi_tx` is not in the
-design", although the source is right there. `ip::elaborate` elaborates
-the Verilog with `ElabOptions::new(dialect)` and never passes the
-project's `top` through `with_top`, so the frontend chooses the roots
-itself — the modules nothing instantiates — and elaborates everything
-else only as their instances; an instance with a parameter override is
-elaborated under a name derived from the override (`leaf$W_1`, even
-when the value is the default), so no module keeps the plain name. The
-same module elaborates as a top through `verilog::elaborate` with
-`with_top`, so only a project build meets it.
-`a_project_top_that_is_also_instantiated_with_an_override_is_lost`
-holds a ten-line reproduction, and checks that the same design builds
-once the override is removed; the likely fix is passing `project.top`
-as the elaboration top. Until then the wrapper is a package of its own,
-`dvi_tx_pll`, which depends on `dvi_tx` and so never shares its sources.
-`usb_device_fs_pll` is a package of its own for the same reason.
+design". `ip::elaborate` never passed the project's `top` to the
+Verilog elaborator, which chose its own roots, the modules nothing
+instantiates, and elaborated everything else only as instances; an
+instance with a parameter override gets a name derived from the
+override (`leaf$W_1`), so no module kept the plain name.
+`ip::elaborate` now passes the project's top to whichever frontend
+defines it, so a VHDL top in a mixed project is left to the VHDL side.
+`a_project_top_that_is_also_instantiated_with_an_override_keeps_its_name`
+holds the fix, with and without the override. The wrapper packages
+`dvi_tx_pll` and `usb_device_fs_pll`, split out to work around this,
+stay as they are: a separate package for a PLL-wrapped variant is a
+reasonable shape in its own right.
 
-**A zero-step IO delay still builds a delay element. Open, and minor.**
+**A zero-step IO delay built a delay element. Fixed.**
 `eth_mac_rgmii`'s TX_DELAY and RX_DELAY default to 0, for a PHY that
 adds the RGMII clock skew itself, and a parameterised block can only
 spell its delay as `(* io_delay = TX_DELAY *)`: Verilog has no way to
-make an attribute conditional, so zero is how it says "none".
-`fpga::primitives` takes the zero literally. The ECP5 gets a `DELAYG`
-set to nothing on every such pin, and the iCE40, which has no delay
-element, warns `F0304` that "the 0-step delay asked for is not applied"
-for a delay nobody asked for. The netlist is right either way; the
-primitives and the warning are not.
-`a_zero_step_io_delay_still_builds_a_delay_element` holds a three-line
-reproduction on both families; the likely fix is to treat a zero-step
-delay as no delay at all.
+make an attribute conditional, so zero is how it says "none". The mapper
+used to take the zero literally, giving the ECP5 a `DELAYG` set to
+nothing on every such pin and the iCE40 an `F0304` warning for a delay
+nobody asked for. A zero-step delay now builds nothing and warns about
+nothing. `a_zero_step_io_delay_builds_nothing` holds the fix on both
+families.
 
 ## What is not here yet
 

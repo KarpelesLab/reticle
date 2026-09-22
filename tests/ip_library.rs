@@ -55,11 +55,11 @@
 //! `small_memories_become_logic_after_the_fpga_flow`,
 //! `function_locals_are_not_reported_as_unreset_registers`,
 //! `a_two_read_port_register_file_is_duplicated_across_block_rams`,
-//! `a_project_top_that_is_also_instantiated_with_an_override_is_lost`
-//! and `a_zero_step_io_delay_still_builds_a_delay_element`. The first
-//! four once asserted that their gap was *still there* and now hold the
-//! fix; the last two still pin open gaps. The paragraph in
-//! `docs/ip-library.md` each points at says which.
+//! `a_project_top_that_is_also_instantiated_with_an_override_keeps_its_name`
+//! and `a_zero_step_io_delay_builds_nothing`. Each once asserted that its
+//! gap was *still there*, so fixing it failed the test and named what to
+//! change; all six now hold the fix. The paragraph in
+//! `docs/ip-library.md` each points at records what was wrong.
 //!
 //! Set `UPDATE_EXPECT=1` to rewrite the footprint table in
 //! `docs/ip-library.md` after an intended change, and read the diff: a
@@ -7134,26 +7134,17 @@ fn build_project_from_text(manifest: &str, source: &str, top: &str) -> (Vec<Stri
 /// The code `ip::elaborate` reports for a project top it cannot find.
 const PROJECT_TOP_GAP: &str = "P0401";
 
-/// A project whose top is a module another module in the same sources
-/// instantiates *with a parameter override* does not build.
+/// A project's top that its own sources also instantiate with a
+/// parameter override must keep its plain name.
 ///
-/// Found writing `dvi_tx`, whose package ships the block and a wrapper
-/// that instantiates it as `dvi_tx #(.MODE(MODE))`. `ip::elaborate`
-/// elaborates the Verilog with `ElabOptions::new(dialect)` and never
-/// passes the project's `top` as `with_top`, so the frontend picks the
-/// roots itself — modules nothing instantiates — and elaborates
-/// everything else only as their instances. An instance with a
-/// parameter override is elaborated under a name derived from the
-/// override, so no module keeps the plain name, and the project's top
-/// is then reported missing (`P0401`) although its source is right
-/// there. The same module elaborates as a top through
-/// `verilog::elaborate` with `with_top`, which is what `design_of` in
-/// this file does, so only a project build meets it.
-///
-/// This test pins the gap. When `ip::elaborate` passes the top through,
-/// flip the assertions: the build should succeed and name `leaf`.
+/// `ip::elaborate` used to leave the Verilog elaborator to pick its own
+/// root, which is the module nothing instantiates. When the project's top
+/// was also instantiated elsewhere with an override, it then existed only
+/// as the renamed variant (`leaf$W_1`) and the build failed with P0401.
+/// It now passes the project's top to the frontend that defines it. This
+/// test holds the fix, with and without the override.
 #[test]
-fn a_project_top_that_is_also_instantiated_with_an_override_is_lost() {
+fn a_project_top_that_is_also_instantiated_with_an_override_keeps_its_name() {
     let manifest =
         "name pkg\nversion 1.0.0\nlicense MIT\ndescription \"gap\"\ntop leaf\nsource rtl/pkg.v\n";
     let source = "\
@@ -7164,22 +7155,20 @@ module wrap #(parameter W = 1) (input wire [W-1:0] a, output wire [W-1:0] y);
     leaf #(.W(W)) u (.a(a), .y(y));
 endmodule
 ";
-    let (names, rendered) = build_project_from_text(manifest, source, "leaf");
-    assert!(
-        rendered.contains(PROJECT_TOP_GAP),
-        "the gap is fixed — flip this test. The build said:\n{rendered}\nmodules: {names:?}"
-    );
-    assert!(
-        !names.iter().any(|n| n == "leaf"),
-        "no module keeps the plain name `leaf`: {names:?}"
-    );
-
-    // Without the override the same instance keeps its name, and the
-    // project builds: the override is what loses it.
-    let source = source.replace("leaf #(.W(W)) u", "leaf u");
-    let (names, rendered) = build_project_from_text(manifest, &source, "leaf");
-    assert!(!rendered.contains(PROJECT_TOP_GAP), "{rendered}");
-    assert!(names.iter().any(|n| n == "leaf"), "{names:?}");
+    for source in [
+        source.to_string(),
+        source.replace("leaf #(.W(W)) u", "leaf u"),
+    ] {
+        let (names, rendered) = build_project_from_text(manifest, &source, "leaf");
+        assert!(
+            !rendered.contains(PROJECT_TOP_GAP),
+            "the project's top was lost:\n{rendered}"
+        );
+        assert!(
+            names.iter().any(|n| n == "leaf"),
+            "`leaf` should keep its plain name: {names:?}"
+        );
+    }
 }
 
 /// The pixel rate is an enable, not a clock, so the whole transmitter is
@@ -7265,32 +7254,24 @@ fn dvi_tx_pll_takes_its_clock_from_the_pll_and_its_lanes_through_ddr() {
 /// cannot build as asked.
 const ZERO_DELAY_GAP: &str = "F0304";
 
-/// An `io_delay` of zero steps still asks for the delay element.
+/// A zero-step IO delay must build nothing and warn about nothing.
 ///
-/// Found writing `eth_mac_rgmii`, whose TX_DELAY and RX_DELAY default to
-/// 0 for a PHY that skews the RGMII clock itself, and `hyperram_ctrl`,
-/// whose CK delay is a parameter too. A parameterised block can only
-/// spell its delay as `(* io_delay = TX_DELAY *)`, since an attribute
-/// cannot be made conditional in Verilog, and zero is how it says
-/// "none". `fpga::primitives` takes the zero literally: the ECP5 gets a
-/// `DELAYG` set to nothing, one primitive per pin for no effect, and the
-/// iCE40, which has no delay element, reports `F0304` — "the 0-step
-/// delay asked for is not applied" — for a delay nobody asked for. The
-/// netlist is correct either way; the cost and the warning are not.
-///
-/// This test pins the gap. When a zero-step delay is treated as no
-/// delay, flip the assertions: no `DELAYG` and no warning.
+/// A parameterised block can only spell its delay as
+/// `(* io_delay = TX_DELAY *)`, since an attribute cannot be made
+/// conditional in Verilog, and zero is how it says "none". The mapper
+/// used to take the zero literally: the ECP5 got a `DELAYG` set to
+/// nothing, one primitive per pin for no effect, and the iCE40, which has
+/// no delay element, reported `F0304` for a delay nobody asked for. The
+/// netlist was correct either way; the cost and the warning were not.
+/// This test holds the fix.
 #[test]
-fn a_zero_step_io_delay_still_builds_a_delay_element() {
+fn a_zero_step_io_delay_builds_nothing() {
     let text = "\
 module zerodelay (input wire clk, (* io_delay = 0 *) input wire d, output reg q);
     always @(posedge clk) q <= d;
 endmodule
 ";
-    for (device_name, built, warned) in [
-        ("ecp5-45f-CABGA381", true, false),
-        ("ice40-hx1k-tq144", false, true),
-    ] {
+    for device_name in ["ecp5-45f-CABGA381", "ice40-hx1k-tq144"] {
         let mut design = design_of_text("zerodelay.v", text);
         let id = design.top.expect("a top");
         let device = fpga::target(device_name).expect("a built-in device");
@@ -7312,17 +7293,17 @@ endmodule
             .iter()
             .find(|b| b.port == "d")
             .expect("a buffer for d");
-        assert_eq!(
-            io.delay.as_ref().map(|(steps, _)| *steps),
-            built.then_some(0),
-            "{device_name}: the gap is fixed if no delay element was built — flip this test"
+        assert!(
+            io.delay.is_none(),
+            "{device_name}: a zero-step delay built an element: {:?}",
+            io.delay
         );
         let warning = diags
             .iter()
             .any(|d| d.code == Some(ZERO_DELAY_GAP) && d.message.contains("0-step"));
-        assert_eq!(
-            warning, warned,
-            "{device_name}: the gap is fixed if the zero-step warning is gone — flip this test"
+        assert!(
+            !warning,
+            "{device_name}: warned about a delay nobody asked for"
         );
     }
 }

@@ -2386,6 +2386,14 @@ impl Mapper<'_> {
         let ddr =
             ddr_clock.and_then(|clock| self.ddr_plan(module, bel, &name, dir, width, &clock, span));
         let delay = delay_steps.and_then(|steps| {
+            // Zero steps is how a parameterised block says "no delay": it
+            // has no other way to leave the attribute out. So it builds no
+            // element and warns about nothing, rather than setting a delay
+            // element to zero on every pin, or, on a family with none,
+            // warning that a delay nobody wanted is not applied.
+            if steps == 0 {
+                return None;
+            }
             if matches!(ddr, Some(DdrPlan::InBuffer { .. })) {
                 self.io_warning(
                     &name,
