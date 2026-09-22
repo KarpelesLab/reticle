@@ -1,0 +1,186 @@
+# Which corpus modules run in compiled fast mode, and why the rest do not.
+# Rewritten by `UPDATE_EXPECT=1 cargo test --features sim eligibility`.
+
+testdata/sim/casez.rtl
+  enc: refused - process enc.stim: timing control (a wait or a delay) has no cycle-based meaning
+
+testdata/sim/counter.rtl
+  counter_tb: refused - process counter_tb.clkgen: a free-running process controls its own timing, which a cycle-based run has none of
+      also process counter_tb.stim: timing control (a wait or a delay) has no cycle-based meaning
+
+testdata/sim/coverage.rtl
+  cov_tb: refused - process cov_tb.clkgen: a free-running process controls its own timing, which a cycle-based run has none of
+      also process cov_tb.stim: timing control (a wait or a delay) has no cycle-based meaning
+
+testdata/sim/delta_chain.rtl
+  chain: refused - process chain.p1: timing control (a wait or a delay) has no cycle-based meaning
+
+testdata/sim/dff_cell.rtl
+  cells_tb: refused - process cells_tb.clkgen: a free-running process controls its own timing, which a cycle-based run has none of
+      also process cells_tb.stim: timing control (a wait or a delay) has no cycle-based meaning
+
+testdata/sim/display.rtl
+  fmt_tb: refused - process fmt_tb.p0: timing control (a wait or a delay) has no cycle-based meaning
+
+testdata/sim/fifo_assert.rtl
+  fifo_tb: refused - process fifo_tb.clkgen: a free-running process controls its own timing, which a cycle-based run has none of
+      also process fifo_tb.stim: timing control (a wait or a delay) has no cycle-based meaning
+
+testdata/sim/fifo_assert_fail.rtl
+  fifo_tb: refused - process fifo_tb.clkgen: a free-running process controls its own timing, which a cycle-based run has none of
+      also process fifo_tb.stim: timing control (a wait or a delay) has no cycle-based meaning
+
+testdata/sim/finish_at.rtl
+  fin: refused - process fin.clkgen: a free-running process controls its own timing, which a cycle-based run has none of
+      also process fin.late: timing control (a wait or a delay) has no cycle-based meaning
+      also process fin.p2: timing control (a wait or a delay) has no cycle-based meaning
+
+testdata/sim/hier.rtl
+  adder: eligible (1 comb ops, 0 edge ops, 0 registers, 0 bits)
+  top: refused - process top.p0: timing control (a wait or a delay) has no cycle-based meaning
+
+testdata/sim/inactive.rtl
+  zero_delay: refused - process zero_delay.first: timing control (a wait or a delay) has no cycle-based meaning
+
+testdata/sim/memory.rtl
+  memtest: refused - process memtest.p1: timing control (a wait or a delay) has no cycle-based meaning
+
+testdata/sim/nba_swap.rtl
+  swap: refused - process swap.p0: timing control (a wait or a delay) has no cycle-based meaning
+
+testdata/sim/vcd.rtl
+  wave: refused - process wave.clkgen: a free-running process controls its own timing, which a cycle-based run has none of
+      also process wave.p2: timing control (a wait or a delay) has no cycle-based meaning
+
+testdata/sim/vhdl_sensitive.rtl
+  vhdl: refused - process vhdl.counter: the sensitivity list does not cover everything the body reads
+      also process vhdl.stim: timing control (a wait or a delay) has no cycle-based meaning
+      also process vhdl.watcher: a free-running process controls its own timing, which a cycle-based run has none of
+
+testdata/sim/wire_conflict.rtl
+  wires: refused - cell wires.t0: tri-state drive needs wire resolution, which two-state mode does not have
+      also cell wires.t1: tri-state drive needs wire resolution, which two-state mode does not have
+      also process wires.p0: timing control (a wait or a delay) has no cycle-based meaning
+      also wires.bus: several drivers write the same bits, which needs wire resolution
+      also wires.y2: several drivers write the same bits, which needs wire resolution
+      also wires.y: several drivers write the same bits, which needs wire resolution
+
+testdata/synth/adder_tree.cells.rtl
+  adder_tree: eligible (14 comb ops, 0 edge ops, 0 registers, 0 bits)
+
+testdata/synth/adder_tree.rtl
+  adder_tree: eligible (12 comb ops, 0 edge ops, 0 registers, 0 bits)
+
+testdata/synth/adder_tree.synth.rtl
+  adder_tree: eligible (14 comb ops, 0 edge ops, 0 registers, 0 bits)
+
+testdata/synth/async_reg.cells.rtl
+  async_reg: eligible (4 comb ops, 4 edge ops, 2 registers, 8 bits)
+
+testdata/synth/async_reg.rtl
+  async_reg: eligible (3 comb ops, 7 edge ops, 2 registers, 8 bits)
+
+testdata/synth/async_reg.synth.rtl
+  async_reg: eligible (3 comb ops, 5 edge ops, 2 registers, 8 bits)
+
+testdata/synth/blocking_ssa.cells.rtl
+  blocking_ssa: eligible (5 comb ops, 0 edge ops, 0 registers, 0 bits)
+
+testdata/synth/blocking_ssa.rtl
+  blocking_ssa: eligible (6 comb ops, 0 edge ops, 0 registers, 0 bits)
+
+testdata/synth/blocking_ssa.synth.rtl
+  blocking_ssa: eligible (5 comb ops, 0 edge ops, 0 registers, 0 bits)
+
+testdata/synth/case_latch.cells.rtl
+  case_latch: refused - cell case_latch.z$latch: level-sensitive storage: the value is kept when no branch assigns it
+
+testdata/synth/case_latch.rtl
+  case_latch: refused - case_latch.y: level-sensitive storage: the value is kept when no branch assigns it
+      also case_latch.y: only some of its bits are driven
+      also case_latch.z: level-sensitive storage: the value is kept when no branch assigns it
+      also case_latch.z: only some of its bits are driven
+
+testdata/synth/case_latch.synth.rtl
+  case_latch: refused - cell case_latch.z$latch: level-sensitive storage: the value is kept when no branch assigns it
+
+testdata/synth/casez_priority.cells.rtl
+  casez_priority: eligible (15 comb ops, 0 edge ops, 0 registers, 0 bits)
+
+testdata/synth/casez_priority.rtl
+  casez_priority: eligible (26 comb ops, 0 edge ops, 0 registers, 0 bits)
+
+testdata/synth/casez_priority.synth.rtl
+  casez_priority: eligible (15 comb ops, 0 edge ops, 0 registers, 0 bits)
+
+testdata/synth/const_chain.cells.rtl
+  const_chain: eligible (3 comb ops, 0 edge ops, 0 registers, 0 bits)
+
+testdata/synth/const_chain.rtl
+  const_chain: refused - process const_chain.p0: the literal `8'hxx` has x or z bits
+
+testdata/synth/const_chain.synth.rtl
+  const_chain: eligible (3 comb ops, 0 edge ops, 0 registers, 0 bits)
+
+testdata/synth/counter_en.cells.rtl
+  counter_en: eligible (2 comb ops, 6 edge ops, 2 registers, 9 bits)
+
+testdata/synth/counter_en.rtl
+  counter_en: eligible (0 comb ops, 12 edge ops, 2 registers, 9 bits)
+
+testdata/synth/counter_en.synth.rtl
+  counter_en: eligible (0 comb ops, 8 edge ops, 2 registers, 9 bits)
+
+testdata/synth/dead_logic.cells.rtl
+  dead_logic: eligible (2 comb ops, 0 edge ops, 0 registers, 0 bits)
+
+testdata/synth/dead_logic.rtl
+  dead_logic: eligible (3 comb ops, 2 edge ops, 1 registers, 4 bits)
+
+testdata/synth/dead_logic.synth.rtl
+  dead_logic: eligible (2 comb ops, 0 edge ops, 0 registers, 0 bits)
+
+testdata/synth/dup_logic.cells.rtl
+  dup_logic: eligible (3 comb ops, 1 edge ops, 1 registers, 4 bits)
+
+testdata/synth/dup_logic.rtl
+  dup_logic: eligible (4 comb ops, 4 edge ops, 2 registers, 8 bits)
+
+testdata/synth/dup_logic.synth.rtl
+  dup_logic: eligible (2 comb ops, 2 edge ops, 1 registers, 4 bits)
+
+testdata/synth/fsm.cells.rtl
+  fsm: eligible (9 comb ops, 3 edge ops, 1 registers, 3 bits)
+
+testdata/synth/fsm.rtl
+  fsm: eligible (1 comb ops, 26 edge ops, 1 registers, 2 bits)
+
+testdata/synth/fsm.synth.rtl
+  fsm: eligible (3 comb ops, 9 edge ops, 1 registers, 3 bits)
+
+testdata/synth/mux_tree.cells.rtl
+  mux_tree: eligible (6 comb ops, 0 edge ops, 0 registers, 0 bits)
+
+testdata/synth/mux_tree.rtl
+  mux_tree: eligible (13 comb ops, 0 edge ops, 0 registers, 0 bits)
+
+testdata/synth/mux_tree.synth.rtl
+  mux_tree: eligible (6 comb ops, 0 edge ops, 0 registers, 0 bits)
+
+testdata/synth/ram_regread.cells.rtl
+  ram_regread: eligible (2 comb ops, 4 edge ops, 1 registers, 8 bits)
+
+testdata/synth/ram_regread.rtl
+  ram_regread: eligible (2 comb ops, 4 edge ops, 1 registers, 8 bits)
+
+testdata/synth/ram_regread.synth.rtl
+  ram_regread: eligible (2 comb ops, 4 edge ops, 1 registers, 8 bits)
+
+testdata/synth/unsynth.cells.rtl
+  unsynth: refused - process unsynth.ticker: a free-running process controls its own timing, which a cycle-based run has none of
+
+testdata/synth/unsynth.rtl
+  unsynth: refused - process unsynth.ticker: a free-running process controls its own timing, which a cycle-based run has none of
+
+testdata/synth/unsynth.synth.rtl
+  unsynth: refused - process unsynth.ticker: a free-running process controls its own timing, which a cycle-based run has none of

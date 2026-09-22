@@ -211,9 +211,17 @@ user-facing simulator and as the reference model for every synthesis pass
 - [x] Rust co-simulation API: drive inputs, read outputs, await edges, from
       a Rust test (`#[test]` that instantiates a DUT), in the spirit of
       cocotb but with types. This is how the in-crate IP library is tested.
-- [ ] Compiled 2-state fast mode: lower cycle-based designs to straight-line
-      Rust-native evaluation code for a large speed-up on synchronous logic
-      (Verilator's niche), selectable per run.
+- [x] Compiled 2-state fast mode: `sim::compiled` proves a design is
+      synchronous and two-state safe (`check` names every obstacle with its
+      span), lowers it to a straight-line program over a register file of
+      machine words — constant folded, common subexpressions shared,
+      topologically ordered — and runs a cycle as settle, edge, commit,
+      with no event queue. `CompiledSim` mirrors the co-simulation API, so
+      a testbench picks the engine per run. `tests/sim_compiled.rs` runs
+      both engines on the same design for thousands of random vectors and
+      compares every net and memory element each cycle; the measured
+      speed-up (3–10x on the IP blocks, 42x on pure combinational logic)
+      and what fast mode gives up are in `docs/simulation.md`.
 - [x] Assertions: immediate assertions, a useful subset of SVA / PSL
       (sequences, `|->`, `|=>`, `##n`) checked during simulation.
 - [x] Coverage: line and toggle coverage reports.

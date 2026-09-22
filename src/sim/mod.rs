@@ -24,6 +24,7 @@
 //! | `assertion/`  | Concurrent assertions: an SVA / PSL subset as automata       |
 //! | `coverage.rs` | Line and toggle coverage, rendered as text or LCOV           |
 //! | `interactive.rs` | The sans-I/O command session behind interactive mode      |
+//! | `compiled/`   | Cycle-based two-state fast mode over the same elaboration    |
 //!
 //! # Elaboration
 //!
@@ -125,10 +126,21 @@
 //! simulator itself ([`Simulator::add_breakpoint`]) and stop a run at the
 //! end of the time slot the change happened in.
 //!
+//! # Compiled fast mode
+//!
+//! [`compiled`] is the other trade for the same designs: for a
+//! synchronous, two-state-safe design it proves the design is cycle-based,
+//! lowers it once to a straight-line program over a register file of
+//! machine words, and runs that. It reuses *this* elaboration, so a
+//! hierarchical name and a [`NetHandle`] mean the same thing in both, and
+//! `tests/sim_compiled.rs` runs the two against each other. What it gives
+//! up — time, `x` and `z`, wire resolution, waveforms — is in that
+//! module's docs.
+//!
 //! # Not yet here
 //!
-//! The cycle-based fast mode and inertial delay on continuous assignments
-//! (transport delay is used) are later roadmap items.
+//! Inertial delay on continuous assignments (transport delay is used) is a
+//! later roadmap item.
 
 use std::collections::{BTreeMap, VecDeque};
 
@@ -138,6 +150,7 @@ use crate::logic::Logic;
 
 mod api;
 pub mod assertion;
+pub mod compiled;
 pub mod coverage;
 mod elab;
 mod eval;
