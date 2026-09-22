@@ -123,6 +123,83 @@ through the whole flow on both families. The synthetic placement
 architecture has no wires for the extra DDR pins, so a DDR design goes
 out to nextpnr rather than through Reticle's own placer.
 
+## Hierarchy
+
+`fpga::synthesize_for` flattens the module it is given before anything
+else (`Design::flatten`, default options), so a design with instances
+maps from the library, from `reticle fpga` and from anything else that
+calls it: an instance marked `keep_hierarchy` and an instance of a black
+box stay instances, and everything else is inlined. The module keeps
+its id; the modules it inlined stay in the design, unsynthesised and
+unmapped, and `fpga::export_nextpnr` leaves them out of the JSON. The
+report counts the instances inlined, and `FpgaOptions::flatten` turns
+the step off for a caller that wants to do it differently. A hierarchy
+that cannot be flattened (a recursive one, a connection that cannot be
+inlined) is `FlowError::Hierarchy`, with the reasons as diagnostics.
+
+## Block RAM contents
+
+A memory with initial contents in the IR (`Memory::init`) keeps them when it becomes block RAM: every block
+gets its initialisation parameters, holding the width slice and the
+depth slice of the contents that block stores, and every copy of a
+memory duplicated per read port gets the same. Where each bit goes is
+data in the device file, on each `mode` line of a `bram` block and in
+its `init_params` line, so nothing about a primitive is written in Rust:
+
+```text
+bram SB_RAM40_4K
+  mode 16 256 param READ_MODE=0 WRITE_MODE=0 init high 0-15
+  mode 8 512 param READ_MODE=1 WRITE_MODE=1 data 0,2,4,6,8,10,12,14 init high 0,2,4,6,8,10,12,14 1,3,5,7,9,11,13,15
+  ...
+  init_params INIT_ count 16 digits 1 rows 16 slot 16
+```
+
+`init_params` says the contents are rows held by `count` parameters of
+`rows` rows each, `slot` bits a row, first row in the low bits. `init
+low` or `init high` says which address bits pick among the words that
+share a row in a narrow mode, followed by the row bits of each of those
+words. `data` names the data pins a mode uses when they are not simply
+the low ones, and `addr` and `pad` say where the word address starts on
+the address port and what the pins below it are tied to.
+
+| Family | Layout | Confidence |
+|--------|--------|------------|
+| iCE40 `SB_RAM40_4K` | 256 rows of 16 bits; `INIT_<k>` holds rows 16k..16k+15, row 16k+i in bits 16i+15..16i | high: the iCE Technology Library's definition |
+| iCE40, narrow modes | the row is address bits 7..0; the bits above pick word `s` of the row, whose data bit `j` is row bit (16/width)·j + s; the data are on pins 0,2,..,14 (512x8), 1,5,9,13 (1024x4) and 3,11 (2048x2) | medium-high: what the Yosys simulation model and block RAM mapping of the primitive do |
+| ECP5 `DP16KD` | 1024 rows of 18 bits; `INITVAL_<nn>` holds rows 16nn..16nn+15 in 20-bit slots, the top two bits zero; consecutive addresses share a row (9-bit words in bits 8..0 and 17..9); the word address starts at address pin 4, 3, 2, 1, 0 for the 18-, 9-, 4-, 2- and 1-bit modes, and the 18-bit mode's two pins below it, the write byte enables, are tied high | medium-high |
+| ECP5, 4-, 2- and 1-bit modes | the words fill the sixteen row bits that are not the parity bits 8 and 17 | medium: Reticle's reading, not checked against a part |
+
+The parameters reach nextpnr and the vendor exports. Reticle's own
+place and route does not put them into its `.asc`: the synthetic RAM
+bel declares configuration bits for `READ_MODE` and `WRITE_MODE` only,
+since where a real part keeps its block RAM contents in the bitstream
+is exactly what that fabric does not know.
+
+The iCE40 data pins and the ECP5 address alignment are not only about
+contents: they are how the blocks are wired, and a netlist wired to the
+low pins in those modes would read and write the wrong bits on a device.
+
+When the database cannot say where the contents go — a primitive
+without the `init` flag, a block without `init_params`, a mode without
+an `init` layout, as on the invented `generic` family — the memory is
+still mapped, and the loss is a warning, `F0305`: the blocks start
+blank, and a ROM in them reads zeros. A read-only memory read from more
+ports than a block has is duplicated, one copy per read port, each
+holding the contents, exactly as a written memory with one write port
+is; the copies need no keeping in step.
+
+## Package pins
+
+A pin constraint names a package pin the device file lists. Most lists
+are partial, taken from the boards that use the part; a device whose
+list is known to be incomplete says `pins partial`, and a constraint
+naming a pin it does not list is then a warning (`F0202`) that the pin
+is unchecked rather than an error, and `check_nextpnr_json` leaves it to
+nextpnr, which knows the package. `ice40-hx8k-ct256` is one: it lists
+the iCE40-HX8K breakout board's clock, LEDs, serial port (B12, B10) and
+SPI flash, and the CT256 has over two hundred IO balls more. The tq144
+lists stay strict.
+
 ## Read this first: the architecture is synthetic
 
 Placement and routing need to know what wire is where, which

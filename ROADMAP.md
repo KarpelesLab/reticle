@@ -520,12 +520,15 @@ LUT4s, 10 block RAMs) with the JSON and PCF `nextpnr-ice40` reads
 exported. It does **not** show it running on a board, and cannot yet:
 no board is attached, Reticle's own iCE40 place and route is a synthetic
 fabric, and building the example found eight defects (each pinned in
-`tests/soc.rs`), four of which stand between it and working silicon —
+`tests/soc.rs`), four of which stood between it and working silicon —
 `$readmemh` from Verilog loads nothing in the simulator and is dropped
-by synthesis, block RAM is mapped without its `INIT_*` contents, and
-`reticle fpga` does not flatten — so the test preloads the ROM in the IR
-and runs the iCE40 flow through the library. Open until those are fixed
-and the board run has been done by hand.
+by synthesis, block RAM was mapped without its `INIT_*` contents, and
+`reticle fpga` did not flatten. The last two are fixed (the ROM's block
+RAMs now carry the program, and `reticle fpga` maps the SoC), as are the
+HX8K pin list and ROM duplication; while the `$readmemh` ones are open
+the test preloads the ROM in the IR and runs the iCE40 flow through the
+library. Open until those are fixed and the board run has been done by
+hand.
 
 ## Phase 9: developer experience
 

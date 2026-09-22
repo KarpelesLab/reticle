@@ -23,15 +23,16 @@
 //! What it cannot prove is the board itself: none is attached here, and
 //! the iCE40 place-and-route in this repository uses a synthetic fabric
 //! that cannot program a real part (`docs/fpga.md`). The chain is proved
-//! up to the JSON and PCF that `nextpnr-ice40` reads, and even those would
-//! not yet print anything on a board, for the reasons below;
-//! `examples/soc/README.md` has the commands that take it from there.
+//! up to the JSON and PCF that `nextpnr-ice40` reads, with the program in
+//! the ROM's block RAMs; `examples/soc/README.md` has the commands that
+//! take it from there.
 //!
 //! # Gaps this found
 //!
-//! Building the example exposed eight defects in Reticle, each reproduced
-//! in a few lines by a test at the end of this file that asserts the gap
-//! is *still there*, so fixing one fails its test and points here:
+//! Building the example exposed eight defects in Reticle. Each open one
+//! is reproduced in a few lines by a test at the end of this file that
+//! asserts the gap is *still there*, so fixing one fails its test and
+//! points here:
 //!
 //! - `a_system_task_without_parentheses_is_dropped`: `$finish;` is
 //!   lowered as an expression and silently discarded; only `$finish(0);`
@@ -46,28 +47,29 @@
 //!   call with a note, so the ROM of a netlist is empty.
 //! - `displaying_a_memory_word_prints_the_memory_name`: `$display("%h",
 //!   mem[1])` prints the memory's name rather than the word.
-//! - `the_hx8k_database_lacks_the_breakout_boards_uart_pins`: the HX8K's
-//!   device database lists only the breakout board's LEDs and clock, so
-//!   the constraints for its serial port are refused.
-//! - `a_rom_with_two_read_ports_is_not_duplicated_across_block_rams`: a
-//!   read-only memory read from both buses stays a generic cell on
-//!   iCE40, where a written one is duplicated per read port.
-//! - `block_ram_loses_the_contents_it_is_initialised_with`: a memory
-//!   mapped to SB_RAM40_4K gets no INIT_* parameters, so the ROM in the
-//!   exported netlist is blank even when the IR holds the program.
-//! - `reticle_fpga_does_not_flatten_a_design_with_instances`: the
-//!   binary's FPGA flow maps the top module alone, so a design with any
-//!   instance is refused; the flow here flattens first, as the library
-//!   documents.
+//!
+//! Four more were in the FPGA backend and are fixed; their tests now
+//! assert the fix:
+//!
+//! - `the_hx8k_database_knows_the_breakout_boards_uart_pins`: the HX8K's
+//!   device database listed only the breakout board's LEDs and clock, so
+//!   the constraints for its serial port were refused.
+//! - `a_rom_with_two_read_ports_is_duplicated_across_block_rams`: a
+//!   read-only memory read from both buses stayed a generic cell on
+//!   iCE40, where a written one was duplicated per read port.
+//! - `block_ram_carries_the_contents_it_is_initialised_with`: a memory
+//!   mapped to SB_RAM40_4K got no INIT_* parameters, so the ROM in the
+//!   exported netlist was blank even when the IR held the program.
+//! - `reticle_fpga_flattens_a_design_with_instances`: the FPGA flow
+//!   mapped the top module alone, so a design with any instance was
+//!   refused.
 //!
 //! Until the second and third are fixed, [`preload_rom`] puts the program
-//! into the ROM's initial contents in the IR, which the simulator and
-//! generic synthesis honour. It is the one step here that a user of the
-//! binary cannot take, and it stands exactly where `$readmemh` should have
-//! done the work: the ROM holds `sw/hello.hex`, word for word, before the
-//! first clock edge. The seventh defect then drops those contents again
-//! on the way into block RAM, which is the main reason the exported
-//! netlist would not yet print anything on a board.
+//! into the ROM's initial contents in the IR, which the simulator, generic
+//! synthesis and block RAM mapping honour. It is the one step here that a
+//! user of the binary cannot take, and it stands exactly where `$readmemh`
+//! should have done the work: the ROM holds `sw/hello.hex`, word for word,
+//! before the first clock edge, and in the exported netlist's block RAMs.
 //!
 //! `examples/` is not in the published crate, so every test that needs the
 //! example skips with a message when it is absent.
@@ -88,7 +90,6 @@ use std::rc::Rc;
 use reticle::diag::{Diagnostics, Severity};
 use reticle::fpga::{self, Constraints, FpgaOptions};
 use reticle::ip::{self, Elaboration, PathProvider, Project, SourceEntry};
-use reticle::ir::hier::FlattenOptions;
 use reticle::ir::{CellKind, Delay, Design, TimeUnit};
 use reticle::logic::Logic;
 use reticle::sim::{MemoryFiles, SimOptions, Simulator};
@@ -226,9 +227,8 @@ fn testbench_design(dir: &Path) -> Design {
 /// This stands in for `$readmemh`, which Reticle does not yet honour from
 /// Verilog in either the simulator or synthesis (see the module docs and
 /// the tests at the end). The initial contents are what both of them
-/// read. With any other synthesis tool they would end up in the block
-/// RAMs' `INIT_*` parameters; Reticle's block RAM mapper does not write
-/// those yet (`block_ram_loses_the_contents_it_is_initialised_with`).
+/// read, and block RAM mapping puts them into the block RAMs' `INIT_*`
+/// parameters (`block_ram_carries_the_contents_it_is_initialised_with`).
 fn preload_rom(design: &mut Design, words: &[u32]) {
     let module = design
         .modules
@@ -488,12 +488,8 @@ fn the_soc_maps_onto_the_hx8k_and_exports_for_nextpnr() {
     let Some(dir) = example() else { return };
     let mut design = soc_design(&dir);
     preload_rom(&mut design, &rom_image(&dir));
+    // `synthesize_for` flattens the hierarchy itself.
     let top = design.top.expect("a top");
-    design
-        .flatten(top, &FlattenOptions::default())
-        .unwrap_or_else(|d| panic!("soc_top does not flatten: {} problem(s)", d.len()));
-    design.remove_unused_modules(top);
-    let top = design.top.expect("the top survives flattening");
 
     let device = fpga::target(DEVICE).expect("the HX8K is a built-in device");
     let mut map = SourceMap::new();
@@ -505,20 +501,8 @@ fn the_soc_maps_onto_the_hx8k_and_exports_for_nextpnr() {
     let mut constraints = Constraints::parse(&rcf, file, &mut diags);
     constraints.merge_attrs(&design, top, &mut diags);
     constraints.check(&design, device, &mut diags);
-    // The only complaint is the database gap that
-    // `the_hx8k_database_lacks_the_breakout_boards_uart_pins` pins: the
-    // pins are right for the board, and nextpnr, which has the real
-    // package, takes them.
-    let complaints: Vec<String> = diags.iter().map(|d| d.message.clone()).collect();
-    assert_eq!(
-        complaints,
-        [
-            "`ice40-hx8k-ct256` has no pin named B12",
-            "`ice40-hx8k-ct256` has no pin named B10",
-        ],
-        "{}",
-        diags.render(&map)
-    );
+    // The board's clock and serial pins are all in the device database.
+    assert!(diags.is_empty(), "{}", diags.render(&map));
 
     let mut diags = Diagnostics::new();
     let flow = fpga::synthesize_for(
@@ -544,9 +528,16 @@ fn the_soc_maps_onto_the_hx8k_and_exports_for_nextpnr() {
     }
     println!("  {} LUTs, depth {}", flow.luts, flow.lut_depth);
 
+    // The flow flattened the core and the UART into soc_top.
+    assert!(flow.inlined >= 2, "{} instance(s) inlined", flow.inlined);
+    assert!(
+        !diags.iter().any(|d| d.code == Some("F0305")),
+        "a memory lost its initial contents: {}",
+        diags.render(&map)
+    );
+
     // The ROM, the four RAM lanes and the register file (two copies, one
-    // per read port) all went into block RAM. The ROM's contents did
-    // not: see `block_ram_loses_the_contents_it_is_initialised_with`.
+    // per read port) all went into block RAM.
     let luts = flow.count("SB_LUT4");
     let brams = flow.count("SB_RAM40_4K");
     assert!(luts > 1000, "{luts} LUTs is too few for a processor");
@@ -562,19 +553,27 @@ fn the_soc_maps_onto_the_hx8k_and_exports_for_nextpnr() {
         flow.netlist
     );
 
-    // Every cell is a primitive the device has; the two problems left
-    // are the same two pins again.
+    // The ROM's blocks hold the program, word for word: the low half of
+    // each word in `rom$ram_w0_d0`, the high half in `rom$ram_w1_d0`.
+    let rom = block_rams_of(&design, top, "rom");
+    assert_eq!(rom.len(), 2, "the ROM is two blocks wide");
+    let image = rom_image(&dir);
+    for (address, word) in (0u32..).zip(&image) {
+        let low = sb_ram_word(rom[0], address);
+        let high = sb_ram_word(rom[1], address);
+        assert_eq!(
+            (high << 16) | low,
+            u64::from(*word),
+            "ROM word {address} in the netlist"
+        );
+    }
+
+    // Every cell is a primitive the device has, and nothing is wrong.
     let problems: Vec<String> = fpga::check_nextpnr_json(&design, top, device, &constraints)
         .into_iter()
         .map(|p| format!("{}: {}", p.object, p.message))
         .collect();
-    assert_eq!(
-        problems,
-        [
-            "uart_tx: `ice40-hx8k-ct256` has no package pin `B12`",
-            "uart_rx: `ice40-hx8k-ct256` has no package pin `B10`",
-        ]
-    );
+    assert!(problems.is_empty(), "{problems:?}");
     let inputs = fpga::export_nextpnr(&design, top, device, &constraints).expect("exports");
     assert_eq!(inputs.constraints_name, "soc_top.pcf");
     assert_eq!(
@@ -585,6 +584,7 @@ fn the_soc_maps_onto_the_hx8k_and_exports_for_nextpnr() {
         assert!(inputs.pcf_or_lpf.contains(pin), "the PCF lacks `{pin}`");
     }
     assert!(inputs.json.contains("\"SB_RAM40_4K\""));
+    assert!(inputs.json.contains("\"INIT_0\": \""));
 
     // The files a board needs, where a reader can pick them up.
     let out = Path::new(env!("CARGO_TARGET_TMPDIR")).join("soc");
@@ -818,40 +818,111 @@ fn displaying_a_memory_word_prints_the_memory_name() {
 }
 
 #[test]
-fn the_hx8k_database_lacks_the_breakout_boards_uart_pins() {
-    // src/fpga/devices/ice40.dev lists nine pins for `ice40-hx8k-ct256`:
-    // the eight LEDs of the iCE40-HX8K breakout board and its clock, J3.
-    // The CT256 package has over two hundred, and the board's own serial
-    // port is on B12 and B10, so constraining it is an error (F0202) and
-    // `check_nextpnr_json` refuses the netlist, although nextpnr would
-    // take it. Fixed, no F0202 is reported.
-    let design = verilog("module t (input wire a, output wire y);\nassign y = a;\nendmodule\n");
+fn the_hx8k_database_knows_the_breakout_boards_uart_pins() {
+    // src/fpga/devices/ice40.dev once listed nine pins for
+    // `ice40-hx8k-ct256`, the breakout board's LEDs and clock, so the
+    // board's serial port on B12 and B10 was refused (F0202) although
+    // nextpnr takes it. The list now has the serial and flash pins too,
+    // and it is marked `pins partial`: a pin it does not list is a
+    // warning that Reticle cannot check it, not an error, since nextpnr
+    // has the real package.
+    let design = verilog(
+        "module t (input wire a, input wire b, output wire y);\n\
+         assign y = a & b;\nendmodule\n",
+    );
+    let top = design.top.expect("a top");
     let device = fpga::target(DEVICE).expect("the HX8K");
+    assert!(device.pins_partial);
     let mut map = SourceMap::new();
     let text = "set_io y B12\nset_io a B10\n";
     let file = map.add("pins.rcf", text).expect("fits");
     let mut diags = Diagnostics::new();
     let constraints = Constraints::parse(text, file, &mut diags);
     constraints.check(&design, device, &mut diags);
+    assert!(diags.is_empty(), "{}", diags.render(&map));
+    // The design is not synthesised, so the netlist check has plenty to
+    // say; none of it may be about the pins.
+    let pin_problems = |constraints: &Constraints| -> Vec<String> {
+        fpga::check_nextpnr_json(&design, top, device, constraints)
+            .into_iter()
+            .map(|p| p.message)
+            .filter(|m| m.contains("pin"))
+            .collect()
+    };
+    assert_eq!(pin_problems(&constraints), Vec::<String>::new());
+
+    // A ball the list does not have is a warning with the same code, and
+    // nothing downstream refuses it.
+    let text = "set_io y B12\nset_io a B10\nset_io b T16\n";
+    let file = map.add("more.rcf", text).expect("fits");
+    let mut diags = Diagnostics::new();
+    let constraints = Constraints::parse(text, file, &mut diags);
+    constraints.check(&design, device, &mut diags);
+    let found: Vec<(Severity, &str)> = diags
+        .iter()
+        .map(|d| (d.severity, d.message.as_str()))
+        .collect();
     assert_eq!(
-        diags.iter().filter(|d| d.code == Some("F0202")).count(),
-        2,
-        "the HX8K knows B12 and B10 now; see the comment"
+        found,
+        [(
+            Severity::Warning,
+            "pin T16 is not in Reticle's partial pin list for `ice40-hx8k-ct256`, so it is \
+             not checked here"
+        )],
+        "{}",
+        diags.render(&map)
     );
+    assert!(diags.iter().all(|d| d.code == Some("F0202")));
+    assert_eq!(pin_problems(&constraints), Vec::<String>::new());
+}
+
+/// The value of initialisation parameter `name` of `cell`, as bits.
+fn init_param(cell: &reticle::ir::Cell, name: &str) -> Logic {
+    match cell.params.get(name) {
+        Some(reticle::ir::AttrValue::Const(value)) => value.clone(),
+        other => panic!("`{}` has no constant {name}: {other:?}", cell.name),
+    }
+}
+
+/// Word `address` of the 16 bits an iCE40 `SB_RAM40_4K` in 256x16 mode
+/// holds, read back from its `INIT_0`..`INIT_F`: row `address`, in bits
+/// `16 * (address % 16)` up of `INIT_<address / 16>`.
+fn sb_ram_word(cell: &reticle::ir::Cell, address: u32) -> u64 {
+    let init = init_param(cell, &format!("INIT_{:X}", address / 16));
+    assert_eq!(init.width(), 256);
+    let base = 16 * (address % 16);
+    (0..16)
+        .filter(|bit| init.bit(base + bit) == reticle::ir::Bit::One)
+        .map(|bit| 1u64 << bit)
+        .sum()
+}
+
+/// The `SB_RAM40_4K` cells built for memory `memory`, in cell order.
+fn block_rams_of<'a>(
+    design: &'a Design,
+    top: reticle::ir::ModuleId,
+    memory: &str,
+) -> Vec<&'a reticle::ir::Cell> {
+    design.modules[top]
+        .cells
+        .iter()
+        .map(|(_, c)| c)
+        .filter(|c| matches!(&c.kind, CellKind::Blackbox(p) if p.as_str() == "SB_RAM40_4K"))
+        .filter(|c| c.attrs.get("memory").and_then(|v| v.as_str()) == Some(memory))
+        .collect()
 }
 
 #[test]
-fn a_rom_with_two_read_ports_is_not_duplicated_across_block_rams() {
+fn a_rom_with_two_read_ports_is_duplicated_across_block_rams() {
     // A memory with two read ports and one write port becomes one block
     // RAM copy per read port (`Mapper::block_ram` in
     // src/fpga/primitives.rs). A ROM — two read ports, no write port,
     // initial contents — is the easier case, since there is nothing to
-    // keep the copies in step, but duplication only happens when there
-    // is exactly one writer, so the ROM is left as a generic `$memrd`
-    // that no device has and nextpnr cannot place. The reason given
-    // also reads as though it fits: "2 port(s) ... needs 2". soc_top
-    // shares one ROM port between the buses, which this core allows; a
-    // design that cannot hits this. Fixed, the ROM maps to block RAM.
+    // keep the copies in step, and it once stayed a generic `$memrd`
+    // that no device has, because duplication wanted exactly one writer.
+    // Now it is duplicated too, and every copy holds the whole contents.
+    // soc_top shares one ROM port between the buses, which this core
+    // allows; a design that cannot needs this.
     let mut design = verilog(
         "module t (input wire clk, input wire [7:0] a, input wire [7:0] b,\n\
          output reg [31:0] qa, output reg [31:0] qb);\n\
@@ -879,32 +950,52 @@ fn a_rom_with_two_read_ports_is_not_duplicated_across_block_rams() {
     )
     .expect("the flow runs");
     let report = flow.to_text();
-    assert_eq!(
-        flow.count("$memrd"),
-        2,
-        "the ROM maps now; see the comment:\n{report}"
-    );
-    assert_eq!(flow.count("SB_RAM40_4K"), 0, "{report}");
+    assert_eq!(flow.count("$memrd"), 0, "{report}");
+    // 32 bits in the 256x16 mode is two blocks wide, and there are two
+    // copies, one per read port.
+    assert_eq!(flow.count("SB_RAM40_4K"), 4, "{report}");
     assert!(
         report.contains(
-            "has 2 port(s) and each serves either a read or a write, \
-             but the memory needs 2 (2 read, 0 write)"
+            "rom (256x32) -> 4 x SB_RAM40_4K in 16x256 mode (2 wide, 1 deep, 2 copies, one per \
+             read port, initialised)"
         ),
         "{report}"
     );
+    assert!(
+        !diags.iter().any(|d| d.severity >= Severity::Warning),
+        "{}",
+        report
+    );
+    assert!(fpga::check_nextpnr_json(&design, top, device, &Constraints::new()).is_empty());
+
+    // Each copy's two blocks hold the low and the high half of every
+    // word: word i is i, so the low halves read i and the high ones 0.
+    let blocks = block_rams_of(&design, top, "rom");
+    assert_eq!(blocks.len(), 4);
+    for copy in 0..2 {
+        let name = |w: u32| format!("rom$c{copy}$ram_w{w}_d0");
+        let low = blocks
+            .iter()
+            .find(|c| c.name.as_str() == name(0))
+            .expect("the low block");
+        let high = blocks
+            .iter()
+            .find(|c| c.name.as_str() == name(1))
+            .expect("the high block");
+        for address in 0..256 {
+            assert_eq!(sb_ram_word(low, address), u64::from(address), "copy {copy}");
+            assert_eq!(sb_ram_word(high, address), 0, "copy {copy}");
+        }
+    }
 }
 
 #[test]
-fn block_ram_loses_the_contents_it_is_initialised_with() {
-    // The iCE40 database says SB_RAM40_4K is initialisable through
-    // INIT_0..INIT_F (`flags dual_port init` in ice40.dev), but the block
-    // RAM mapper never writes them: a memory with initial contents maps
-    // to block RAM without a word of them, silently. `preload_rom` gives
-    // soc_top's ROM its contents in the IR, and they reach neither the
-    // netlist nor the JSON nextpnr reads, so a board configured from the
-    // export would fetch zeros. Only a ROM small enough to become logic
-    // keeps its contents (`emit_registers` builds its rows as
-    // constants). Fixed, the JSON carries INIT_0 with 0x1234 in it.
+fn block_ram_carries_the_contents_it_is_initialised_with() {
+    // A memory with initial contents mapped to SB_RAM40_4K once got no
+    // INIT_* parameters, silently, so a ROM in the exported netlist was
+    // blank. The block RAM mapper now writes them in the layout
+    // ice40.dev states (`init_params` and each mode's `init`), and a
+    // device that cannot hold them says so (F0305) instead.
     let mut design = verilog(
         "module t (input wire clk, input wire [7:0] a, output reg [15:0] q);\n\
          reg [15:0] rom [0:255];\n\
@@ -919,6 +1010,7 @@ fn block_ram_loses_the_contents_it_is_initialised_with() {
         .find(|m| m.name.as_str() == "rom")
         .expect("the ROM");
     rom.init = Some((0..256).map(|_| Logic::from_u64(0x1234, 16)).collect());
+    let generic = design.clone();
     let device = fpga::target(DEVICE).expect("the HX8K");
     let mut diags = Diagnostics::new();
     let flow = fpga::synthesize_for(
@@ -931,28 +1023,65 @@ fn block_ram_loses_the_contents_it_is_initialised_with() {
     )
     .expect("the flow runs");
     assert_eq!(flow.count("SB_RAM40_4K"), 1, "{}", flow.to_text());
+    assert!(flow.primitives.block_rams[0].initialised);
+    assert!(
+        !diags.iter().any(|d| d.code == Some("F0305")),
+        "the contents were lost"
+    );
+    // Sixteen rows of 0x1234 in each of INIT_0..INIT_F, most significant
+    // bit first as the JSON writes a wide constant.
     let json = fpga::export_nextpnr(&design, top, device, &Constraints::new())
         .expect("exports")
         .json;
-    assert!(
-        !json.contains("INIT_"),
-        "block RAM carries its contents now; see the comment"
+    let rows = "0001001000110100".repeat(16);
+    for index in 0..16 {
+        let param = format!("\"INIT_{index:X}\": \"{rows}\"");
+        assert!(json.contains(&param), "no {param} in the JSON");
+    }
+
+    // The generic device's RAMB says it can be initialised but not how,
+    // so the contents cannot go in, and that is said, not swallowed.
+    let mut design = generic;
+    let device = fpga::target("generic").expect("the generic device");
+    let mut diags = Diagnostics::new();
+    let flow = fpga::synthesize_for(
+        &mut design,
+        top,
+        device,
+        &Constraints::new(),
+        &FpgaOptions::default(),
+        &mut diags,
+    )
+    .expect("the flow runs");
+    assert_eq!(flow.count("RAMB"), 1, "{}", flow.to_text());
+    assert!(!flow.primitives.block_rams[0].initialised);
+    let lost: Vec<&str> = diags
+        .iter()
+        .filter(|d| d.code == Some("F0305"))
+        .map(|d| d.message.as_str())
+        .collect();
+    assert_eq!(
+        lost,
+        [
+            "memory `rom` has initial contents that its block RAMs will not hold: `generic`'s \
+             database does not say which parameters hold `RAMB`'s contents (no `init_params`)"
+        ]
     );
     assert!(
-        !diags.iter().any(|d| d.message.contains("initial")),
-        "the loss is reported now; see the comment"
+        diags
+            .iter()
+            .all(|d| d.code != Some("F0305") || d.severity == Severity::Warning)
     );
 }
 
 #[cfg(feature = "cli")]
 #[test]
-fn reticle_fpga_does_not_flatten_a_design_with_instances() {
-    // `fpga::synthesize_for` maps one module and says a hierarchical
-    // design should be flattened first; `reticle fpga` (src/bin/reticle/
-    // main.rs) hands it the top as elaborated, so any design with an
-    // instance in it — soc_top has two — is refused with "an instance is
-    // left". The test's own flow flattens, which is what the binary should
-    // do. Fixed, this writes top.json and exits 0.
+fn reticle_fpga_flattens_a_design_with_instances() {
+    // `reticle fpga` hands `fpga::synthesize_for` the top as elaborated,
+    // and a design with any instance in it — soc_top has two — was once
+    // refused with "an instance is left". `synthesize_for` now flattens
+    // the hierarchy itself, so the binary and every other caller get one
+    // flat netlist.
     let scratch = Path::new(env!("CARGO_TARGET_TMPDIR")).join("soc-fpga-hier");
     fs::create_dir_all(&scratch).expect("a scratch directory");
     fs::write(
@@ -973,9 +1102,11 @@ fn reticle_fpga_does_not_flatten_a_design_with_instances() {
             "h.v",
         ],
     );
-    assert_ne!(code, 0, "reticle fpga flattens now; see the comment");
-    assert!(
-        err.contains("an instance is left: nextpnr wants one flat netlist"),
-        "{err}"
-    );
+    assert_eq!(code, 0, "{err}");
+    let json = fs::read_to_string(scratch.join("top.json")).expect("reticle fpga wrote top.json");
+    // One flat module: the inverter is inside `top`, and `inv` itself,
+    // inlined and never mapped, is not in the tool's input.
+    assert!(json.contains("\"top\": {"), "{json}");
+    assert!(!json.contains("\"inv\": {"), "{json}");
+    assert!(json.contains("\"SB_LUT4\""), "{json}");
 }

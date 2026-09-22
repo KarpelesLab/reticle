@@ -76,7 +76,7 @@ cargo test --all-features --test soc
 | `the_project_resolves_and_elaborates` | the manifest builds from exactly two library packages and `rtl/soc_top.v` |
 | `the_soc_synthesises_without_errors_or_latches` | synthesis has no error, no warning and no latch |
 | `the_line_comes_out_of_the_serial_wire` | the testbench runs, and `Hello from Reticle\n` is decoded from the waveform of `uart_tx` |
-| `the_soc_maps_onto_the_hx8k_and_exports_for_nextpnr` | the iCE40 flow fits it on the HX8K and writes `soc_top.json` and `soc_top.pcf` |
+| `the_soc_maps_onto_the_hx8k_and_exports_for_nextpnr` | the iCE40 flow flattens it, fits it on the HX8K with the program in the ROM's block RAMs, and writes `soc_top.json` and `soc_top.pcf` |
 | `reticle_build_builds_the_project` | `reticle build --synth` on the manifest |
 | `reticle_sim_cannot_run_the_testbench_yet` | what `reticle sim` does with the testbench today |
 
@@ -111,8 +111,11 @@ The iCE40 flow in `tests/soc.rs`, for `ice40-hx8k-ct256`:
 | `SB_GB` | 1 | 8 |
 
 The ten block RAMs are the ROM (two), the four RAM byte lanes (one each)
-and the register file (four: two copies, one per read port). Almost all
-the logic is the core; the logic depth is 41 LUTs.
+and the register file (four: two copies, one per read port). The ROM's
+two carry the program in their `INIT_0`..`INIT_F` parameters, the low
+half of each word in one and the high half in the other, and the test
+reads every word of `sw/hello.hex` back out of them. Almost all the
+logic is the core; the logic depth is 41 LUTs.
 
 ## On a board
 
@@ -136,33 +139,56 @@ show `Hello from Reticle` once per configuration.
 no IceStorm tools installed, and Reticle's own iCE40 place and route uses
 a synthetic fabric that cannot program a real part
 ([`docs/fpga.md`](../../docs/fpga.md)). So what is demonstrated stops at
-the files `nextpnr-ice40` reads, and those files would not yet work,
-because of the gaps below: in particular the ROM in `soc_top.json` has no
-contents.
+the files `nextpnr-ice40` reads: every cell in `soc_top.json` a real
+primitive, the pins in `soc_top.pcf` ones the board has, and the ROM's
+block RAMs holding the program.
+
+The same flow runs from the command line, flattening the core and the
+UART into `soc_top` on the way:
+
+```sh
+reticle fpga --device ice40-hx8k-ct256 --top soc_top \
+  --constraints board/hx8k_breakout.rcf \
+  rtl/soc_top.v ../../ip/rv32i/rtl/rv32i.v \
+  ../../ip/uart/rtl/uart_tx.v ../../ip/uart/rtl/uart_rx.v ../../ip/uart/rtl/uart.v
+```
+
+but its ROM is only as full as synthesis leaves it, and while synthesis
+drops `$readmemh` (see [known gaps](#known-gaps)) the binary's ROM is
+blank; the files `tests/soc.rs` writes are the ones with the program in.
 
 ## Known gaps
 
-Building this example found eight defects in Reticle. Each is reproduced
-in a few lines by a test at the end of `tests/soc.rs` that asserts the
-defect is still there, so fixing one fails its test and points back here.
+Building this example found eight defects in Reticle. Each open one is
+reproduced in a few lines by a test at the end of `tests/soc.rs` that
+asserts the defect is still there, so fixing one fails its test and
+points back here.
 
 | Test | The defect | What it costs this example |
 |------|------------|----------------------------|
 | `a_system_task_without_parentheses_is_dropped` | `$finish;` is lowered as an expression and silently discarded; `$finish(0);` works | the testbench says `$finish(0)` |
 | `readmemh_in_verilog_never_reaches_the_simulator` | the Verilog frontend passes `$readmemh`'s memory as a name, the simulator wants a memory read, so every call fails with "needs a memory"; `reticle sim` also gives the simulator no file access | the ROM cannot be loaded as written |
 | `synthesis_drops_the_contents_readmemh_loads` | synthesis drops `$readmemh` with a note | the synthesised ROM is empty |
-| `block_ram_loses_the_contents_it_is_initialised_with` | a memory mapped to `SB_RAM40_4K` gets no `INIT_*` parameters | the ROM in the exported netlist is blank |
-| `the_hx8k_database_lacks_the_breakout_boards_uart_pins` | the HX8K's device database has only the breakout board's LEDs and clock | Reticle refuses the constraints for the serial port (nextpnr would take them) |
-| `reticle_fpga_does_not_flatten_a_design_with_instances` | `reticle fpga` maps the top module without flattening it | the binary cannot run the iCE40 flow on this design; the test flattens first |
-| `a_rom_with_two_read_ports_is_not_duplicated_across_block_rams` | a ROM read from two ports stays a generic cell, where a RAM would be duplicated | `soc_top` shares one ROM port between the buses, which this core allows |
 | `displaying_a_memory_word_prints_the_memory_name` | `$display("%h", mem[1])` prints the memory's name | nothing; found while chasing the `$readmemh` one |
 
 Until the `$readmemh` defects are fixed, `tests/soc.rs` puts the words of
 `sw/hello.hex` into the ROM's initial contents in the IR (`preload_rom`)
 before simulating and synthesising. That is the one step the binary
 cannot take, which is why `reticle sim` on the testbench times out today
-instead of printing the line, and why the iCE40 flow here runs through
-the library rather than `reticle fpga`.
+instead of printing the line, and why the ROM `reticle fpga` exports is
+blank while the one the library flow in `tests/soc.rs` exports is not.
+
+Four more defects it found are fixed, and their tests now assert the
+fix: block RAM carries a memory's initial contents in the INIT layout
+each family's device file states, and says so when it cannot
+(`block_ram_carries_the_contents_it_is_initialised_with`); a ROM read
+from two ports is duplicated across block RAMs like a written memory
+(`a_rom_with_two_read_ports_is_duplicated_across_block_rams`); the
+HX8K's pin list has the board's serial and flash pins and treats a pin
+it does not list as unchecked rather than wrong
+(`the_hx8k_database_knows_the_breakout_boards_uart_pins`); and the FPGA
+flow flattens the design itself, so `reticle fpga` maps a design with
+instances (`reticle_fpga_flattens_a_design_with_instances`).
 
 ## What this proves, and what it does not
 
@@ -176,13 +202,19 @@ Proved here, by `cargo test`:
   serial wire, decoded from the pin's waveform, with the program in the
   ROM;
 - the iCE40 flow maps every cell to an HX8K primitive, fits in a third of
-  the part, and exports the JSON and PCF that `nextpnr-ice40` reads.
+  the part, puts the program into the ROM's block RAMs, and exports the
+  JSON and PCF that `nextpnr-ice40` reads, with no problem left for
+  `check_nextpnr_json` to find;
+- `reticle fpga` maps a design with instances, flattening it first.
 
 Not proved:
 
-- **that it runs on a board.** No board or IceStorm tools here, and the
-  exported netlist's ROM is empty until the block RAM defect is fixed;
-- that `reticle sim` runs the testbench, or `reticle fpga` maps the
-  design, from the command line: both are blocked by the defects above;
+- **that it runs on a board.** No board or IceStorm tools here, and
+  where the iCE40 block RAM layout comes from is stated, with its
+  confidence, in `src/fpga/devices/ice40.dev`, not checked against a
+  part;
+- that `reticle sim` runs the testbench, or that `reticle fpga` exports
+  the ROM with the program in it, from the command line: both wait on
+  the `$readmemh` defects above;
 - timing: nothing here checks that the design closes at 12 MHz on the
   real part.
