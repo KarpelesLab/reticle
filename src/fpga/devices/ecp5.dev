@@ -33,6 +33,25 @@
 #     the B side), which is what a Yosys JSON netlist carries and what
 #     nextpnr splits into bits. Lattice Diamond wants the per-bit form
 #     (ADA0, ADA1, ...); Reticle does not emit that yet.
+#   * DP16KD layout, on each `mode` line. The contents are 1024 rows of
+#     18 bits; INITVAL_<nn> holds rows 16nn..16nn+15, each in a 20-bit
+#     slot whose top two bits are zero (`init_params`). The address pins
+#     count in units of the narrowest mode, so a wider mode leaves the
+#     low pins out: the word address starts at ADA/ADB bit 4 in 18-bit
+#     mode, 3 in 9-bit, 2 in 4-bit and 1 in 2-bit (`addr`). In 18-bit
+#     mode the two lowest address pins are the write byte enables, tied
+#     high so a write writes both halves (`pad 4'b0011`). Consecutive
+#     addresses share a row (`init low`): two 9-bit words per row, in
+#     bits 8..0 and 17..9, and in the 4-, 2- and 1-bit modes the words
+#     fill the sixteen bits that are not the parity bits 8 and 17. The
+#     data are on the low pins of DIA/DOA in every mode. MEDIUM-HIGH
+#     confidence for the 18- and 9-bit layouts, the address alignment
+#     and the byte enables: they are what Yosys' ECP5 block RAM mapping
+#     does, read from memory of it, and what Lattice's memory usage guide
+#     (TN1264) describes. MEDIUM confidence for where the 4-, 2- and
+#     1-bit words sit: that the parity bits are skipped is Reticle's
+#     reading of how the 16 kbit modes use an 18 kbit array, not
+#     something checked against a part or a bitstream.
 #   * TRELLIS_DPR16X4 is the distributed (LUT) RAM: sixteen words of four
 #     bits, one clocked write port (WCK, WRE, WAD0..3, DI0..3) and one
 #     asynchronous read port (RAD0..3 -> DO0..3), with WCKMUX and WREMUX
@@ -151,12 +170,13 @@ device ecp5-25f-CABGA381
   bel TRELLIS_DPR16X4 lutram port wclk=WCK we=WRE waddr=WAD0,WAD1,WAD2,WAD3 din=DI0,DI1,DI2,DI3 raddr=RAD0,RAD1,RAD2,RAD3 dout=DO0,DO1,DO2,DO3 param WCKMUX="WCK" WREMUX="WRE"
   bram DP16KD
     ports 2
-    mode 18 1024 param DATA_WIDTH_A=18 DATA_WIDTH_B=18
-    mode 9 2048 param DATA_WIDTH_A=9 DATA_WIDTH_B=9
-    mode 4 4096 param DATA_WIDTH_A=4 DATA_WIDTH_B=4
-    mode 2 8192 param DATA_WIDTH_A=2 DATA_WIDTH_B=2
-    mode 1 16384 param DATA_WIDTH_A=1 DATA_WIDTH_B=1
+    mode 18 1024 param DATA_WIDTH_A=18 DATA_WIDTH_B=18 addr 4 pad 4'b0011 init low 0-17
+    mode 9 2048 param DATA_WIDTH_A=9 DATA_WIDTH_B=9 addr 3 init low 0-8 9-17
+    mode 4 4096 param DATA_WIDTH_A=4 DATA_WIDTH_B=4 addr 2 init low 0-3 4-7 9-12 13-16
+    mode 2 8192 param DATA_WIDTH_A=2 DATA_WIDTH_B=2 addr 1 init low 0,1 2,3 4,5 6,7 9,10 11,12 13,14 15,16
+    mode 1 16384 param DATA_WIDTH_A=1 DATA_WIDTH_B=1 init low 0 1 2 3 4 5 6 7 9 10 11 12 13 14 15 16
     flags dual_port init
+    init_params INITVAL_ count 64 digits 2 rows 16 slot 20
     port rw clk=CLKA en=CEA addr=ADA din=DIA dout=DOA we=WEA rst=RSTA
     port rw clk=CLKB en=CEB addr=ADB din=DIB dout=DOB we=WEB rst=RSTB
   end
@@ -233,12 +253,13 @@ device ecp5-45f-CABGA381
   bel TRELLIS_DPR16X4 lutram port wclk=WCK we=WRE waddr=WAD0,WAD1,WAD2,WAD3 din=DI0,DI1,DI2,DI3 raddr=RAD0,RAD1,RAD2,RAD3 dout=DO0,DO1,DO2,DO3 param WCKMUX="WCK" WREMUX="WRE"
   bram DP16KD
     ports 2
-    mode 18 1024 param DATA_WIDTH_A=18 DATA_WIDTH_B=18
-    mode 9 2048 param DATA_WIDTH_A=9 DATA_WIDTH_B=9
-    mode 4 4096 param DATA_WIDTH_A=4 DATA_WIDTH_B=4
-    mode 2 8192 param DATA_WIDTH_A=2 DATA_WIDTH_B=2
-    mode 1 16384 param DATA_WIDTH_A=1 DATA_WIDTH_B=1
+    mode 18 1024 param DATA_WIDTH_A=18 DATA_WIDTH_B=18 addr 4 pad 4'b0011 init low 0-17
+    mode 9 2048 param DATA_WIDTH_A=9 DATA_WIDTH_B=9 addr 3 init low 0-8 9-17
+    mode 4 4096 param DATA_WIDTH_A=4 DATA_WIDTH_B=4 addr 2 init low 0-3 4-7 9-12 13-16
+    mode 2 8192 param DATA_WIDTH_A=2 DATA_WIDTH_B=2 addr 1 init low 0,1 2,3 4,5 6,7 9,10 11,12 13,14 15,16
+    mode 1 16384 param DATA_WIDTH_A=1 DATA_WIDTH_B=1 init low 0 1 2 3 4 5 6 7 9 10 11 12 13 14 15 16
     flags dual_port init
+    init_params INITVAL_ count 64 digits 2 rows 16 slot 20
     port rw clk=CLKA en=CEA addr=ADA din=DIA dout=DOA we=WEA rst=RSTA
     port rw clk=CLKB en=CEB addr=ADB din=DIB dout=DOB we=WEB rst=RSTB
   end

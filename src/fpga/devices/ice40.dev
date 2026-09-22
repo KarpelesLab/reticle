@@ -25,6 +25,19 @@
 #     The 16-bit mode has a bit-granular MASK input rather than byte
 #     enables, so `byte_enable` is deliberately not set. READ_MODE and
 #     WRITE_MODE select the width, 0 for 16 bits through 3 for 2 bits.
+#   * SB_RAM40_4K layout, on each `mode` line. The contents are 256 rows
+#     of 16 bits, and INIT_<k> holds rows 16k..16k+15, row 16k+i in bits
+#     16i+15..16i (`init_params`). HIGH confidence: it is the iCE
+#     Technology Library's definition, which the Yosys simulation model
+#     and icebox both follow. The row is always address bits 7..0; in a
+#     narrow mode the address bits above them pick which word of the row,
+#     and word `s` keeps its data bit `j` in row bit (16/width)*j + s
+#     (`init high ...`). The narrow modes also move the data pins: 512x8
+#     uses WDATA/RDATA 0,2,..,14, 1024x4 uses 1,5,9,13 and 2048x2 uses 3
+#     and 11 (`data ...`). MEDIUM-HIGH confidence for both: they are what
+#     the Yosys simulation model of SB_RAM40_4K and its block RAM mapping
+#     do (write masks selected by WADDR[10:8], data pins spread), read
+#     from memory of those sources, not checked against silicon here.
 #   * SB_IO's PIN_TYPE values below (6'b000001 for a plain input,
 #     6'b011001 for a plain output, 6'b101001 for a tristatable one) are
 #     the ones every published iCE40 design uses. Medium-high confidence.
@@ -69,11 +82,23 @@
 #     PACKAGE DRAWINGS. The tq144 entries are the pins the Lattice
 #     iCEstick uses (12 MHz oscillator, the five LEDs, the FTDI UART and
 #     the PMOD header); the ct256 entries are the pins the Lattice iCE40
-#     HX8K Breakout Board uses (12 MHz oscillator and the eight LEDs).
+#     HX8K Breakout Board uses: the 12 MHz oscillator (J3) and the eight
+#     LEDs, which Lattice's board documentation gives; the FPGA side of
+#     the second channel of the board's FTDI chip, its serial port (B12
+#     transmits from the FPGA, B10 receives), and the SPI flash the part
+#     configures from (R12 select, R11 clock, P12 and P11 data), which
+#     are the pins every published HX8K breakout design constrains them
+#     to (Project IceStorm's examples, PicoRV32's hx8kdemo). HIGH
+#     confidence that these are IO pins of the CT256; the flash pins are
+#     also the configuration pins, which become IO after configuration.
 #     They are enough to constrain the designs those boards run and are
-#     marked `io`/`clock` accordingly; every other pin of both packages is
-#     missing, and a constraint naming one is reported as unknown. Add the
-#     rest from the datasheet before trusting this file for a new board.
+#     marked `io`/`clock` accordingly. The tq144 lists stay strict: a pin
+#     missing there is reported as unknown (an error). The ct256 list is
+#     marked `pins partial`: the package has over two hundred IO balls
+#     that Reticle cannot list with confidence, so a constraint naming an
+#     unlisted one is a WARNING that the pin is unchecked, and nextpnr,
+#     which has the real package, is the authority on it. Add the rest
+#     from the package's pinout before relying on this list.
 
 device ice40-lp1k-tq144
   family ice40
@@ -107,11 +132,12 @@ device ice40-lp1k-tq144
   bel SB_GB gb count 8 port i=USER_SIGNAL_TO_GLOBAL_BUFFER o=GLOBAL_BUFFER_OUTPUT
   bram SB_RAM40_4K
     ports 2
-    mode 16 256 param READ_MODE=0 WRITE_MODE=0
-    mode 8 512 param READ_MODE=1 WRITE_MODE=1
-    mode 4 1024 param READ_MODE=2 WRITE_MODE=2
-    mode 2 2048 param READ_MODE=3 WRITE_MODE=3
+    mode 16 256 param READ_MODE=0 WRITE_MODE=0 init high 0-15
+    mode 8 512 param READ_MODE=1 WRITE_MODE=1 data 0,2,4,6,8,10,12,14 init high 0,2,4,6,8,10,12,14 1,3,5,7,9,11,13,15
+    mode 4 1024 param READ_MODE=2 WRITE_MODE=2 data 1,5,9,13 init high 0,4,8,12 1,5,9,13 2,6,10,14 3,7,11,15
+    mode 2 2048 param READ_MODE=3 WRITE_MODE=3 data 3,11 init high 0,8 1,9 2,10 3,11 4,12 5,13 6,14 7,15
     flags dual_port init
+    init_params INIT_ count 16 digits 1 rows 16 slot 16
     port read clk=RCLK en=RE addr=RADDR dout=RDATA ce=RCLKE
     port write clk=WCLK en=WE addr=WADDR din=WDATA ce=WCLKE
   end
@@ -175,11 +201,12 @@ device ice40-hx1k-tq144
   bel SB_GB gb count 8 port i=USER_SIGNAL_TO_GLOBAL_BUFFER o=GLOBAL_BUFFER_OUTPUT
   bram SB_RAM40_4K
     ports 2
-    mode 16 256 param READ_MODE=0 WRITE_MODE=0
-    mode 8 512 param READ_MODE=1 WRITE_MODE=1
-    mode 4 1024 param READ_MODE=2 WRITE_MODE=2
-    mode 2 2048 param READ_MODE=3 WRITE_MODE=3
+    mode 16 256 param READ_MODE=0 WRITE_MODE=0 init high 0-15
+    mode 8 512 param READ_MODE=1 WRITE_MODE=1 data 0,2,4,6,8,10,12,14 init high 0,2,4,6,8,10,12,14 1,3,5,7,9,11,13,15
+    mode 4 1024 param READ_MODE=2 WRITE_MODE=2 data 1,5,9,13 init high 0,4,8,12 1,5,9,13 2,6,10,14 3,7,11,15
+    mode 2 2048 param READ_MODE=3 WRITE_MODE=3 data 3,11 init high 0,8 1,9 2,10 3,11 4,12 5,13 6,14 7,15
     flags dual_port init
+    init_params INIT_ count 16 digits 1 rows 16 slot 16
     port read clk=RCLK en=RE addr=RADDR dout=RDATA ce=RCLKE
     port write clk=WCLK en=WE addr=WADDR din=WDATA ce=WCLKE
   end
@@ -243,11 +270,12 @@ device ice40-hx8k-ct256
   bel SB_GB gb count 8 port i=USER_SIGNAL_TO_GLOBAL_BUFFER o=GLOBAL_BUFFER_OUTPUT
   bram SB_RAM40_4K
     ports 2
-    mode 16 256 param READ_MODE=0 WRITE_MODE=0
-    mode 8 512 param READ_MODE=1 WRITE_MODE=1
-    mode 4 1024 param READ_MODE=2 WRITE_MODE=2
-    mode 2 2048 param READ_MODE=3 WRITE_MODE=3
+    mode 16 256 param READ_MODE=0 WRITE_MODE=0 init high 0-15
+    mode 8 512 param READ_MODE=1 WRITE_MODE=1 data 0,2,4,6,8,10,12,14 init high 0,2,4,6,8,10,12,14 1,3,5,7,9,11,13,15
+    mode 4 1024 param READ_MODE=2 WRITE_MODE=2 data 1,5,9,13 init high 0,4,8,12 1,5,9,13 2,6,10,14 3,7,11,15
+    mode 2 2048 param READ_MODE=3 WRITE_MODE=3 data 3,11 init high 0,8 1,9 2,10 3,11 4,12 5,13 6,14 7,15
     flags dual_port init
+    init_params INIT_ count 16 digits 1 rows 16 slot 16
     port read clk=RCLK en=RE addr=RADDR dout=RDATA ce=RCLKE
     port write clk=WCLK en=WE addr=WADDR din=WDATA ce=WCLKE
   end
@@ -256,15 +284,22 @@ device ice40-hx8k-ct256
   io_standard LVCMOS18 vccio 1.8
   io_standard SB_LVDS_INPUT vccio 2.5 differential
   bank io vccio 3.3,2.5,1.8
+  pins partial
   pin A1 io bank io
   pin A2 io bank io
   pin B3 io bank io
   pin B4 io bank io
   pin B5 io bank io
+  pin B10 io bank io
+  pin B12 io bank io
   pin C3 io bank io
   pin C4 io bank io
   pin C5 io bank io
   pin J3 clock bank io
+  pin P11 io bank io
+  pin P12 io bank io
+  pin R11 io bank io
+  pin R12 io bank io
   global_buffers 8
   clock_region global 0 0 33 33
   pll SB_PLL40_CORE input 10 133 vco 533 1066 outputs 1 count 2 pfd 10 133 feedback vco divide ref DIVR 0 15 offset 1 divide feedback DIVF 0 127 offset 1 divide out DIVQ 1 6 pow2 band FILTER_RANGE 17=1 26=2 44=3 66=4 101=5 134=6 port ref=REFERENCECLK out=PLLOUTCORE lock=LOCK tie RESETB=1 BYPASS=0 param FEEDBACK_PATH="SIMPLE" PLLOUT_SELECT="GENCLK"

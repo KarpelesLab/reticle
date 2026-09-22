@@ -33,15 +33,17 @@
 //!   bel SB_IO io port pad=PACKAGE_PIN din=D_IN_0 dout=D_OUT_0 oe=OUTPUT_ENABLE
 //!   bram SB_RAM40_4K
 //!     ports 2
-//!     mode 16 256
-//!     mode 8 512
+//!     mode 16 256 init high 0-15
+//!     mode 8 512 data 0,2,4,6,8,10,12,14 init high 0,2,4,6,8,10,12,14 1,3,5,7,9,11,13,15
 //!     flags dual_port init
+//!     init_params INIT_ count 16 digits 1 rows 16 slot 16
 //!     port read clk=RCLK en=RE addr=RADDR dout=RDATA
 //!     port write clk=WCLK en=WE addr=WADDR din=WDATA
 //!   end
 //!   dsp MULT18X18D a 18 b 18 p 36 accumulator stages 3 port a=A b=B p=P
 //!   io_standard LVCMOS33 vccio 3.3 drive 4,8,12 slew slow,fast
 //!   bank io vccio 3.3,2.5,1.8
+//!   pins partial
 //!   pin 21 clock bank io
 //!   pin 99 io bank io
 //!   global_buffers 8
@@ -76,6 +78,25 @@
 //! those are different primitives (iCE40) or one primitive with different
 //! parameters (ECP5), and [`super::techcells`] maps an inferred flip-flop
 //! onto the line that matches it exactly.
+//!
+//! # Block RAM layouts
+//!
+//! A block RAM's `mode` line may say more than its width and depth, in
+//! [`BramModeLayout`]: which data pins carry the mode's bits (`data`,
+//! for a family that spreads the bits of a narrow mode), where the word
+//! address starts on the address pins and what the pins below it are
+//! tied to (`addr`, `pad`, for a family that addresses in units of its
+//! narrowest mode), and where each word sits in the contents (`init
+//! low|high` followed by the row bits of each word of a row, see
+//! [`BramInitLayout`]). The `init_params` line says which parameters
+//! carry those rows ([`BramInitParams`]). A mode without an `init`
+//! clause, or a block without `init_params`, is one whose contents
+//! layout the database does not know, and block RAM mapping then says
+//! that a memory's initial contents are lost rather than guessing.
+//!
+//! A device whose pin list is known to be incomplete says `pins
+//! partial`, which turns a constraint naming an unlisted pin from an
+//! error into a warning.
 
 use std::fmt;
 
@@ -590,8 +611,149 @@ pub struct BramShape {
     pub dual_port: bool,
     /// The block's contents can be initialised by the bitstream.
     pub init_supported: bool,
+    /// How each mode places a word on the pins and in the contents,
+    /// parallel to `width_modes` like `mode_params`. Use
+    /// [`BramShape::layout_for_mode`] rather than indexing it.
+    pub mode_layouts: Vec<BramModeLayout>,
+    /// The parameters that carry the initial contents, when the database
+    /// describes them (`init_params` in the text format).
+    pub init_params: Option<BramInitParams>,
     /// The physical ports and their pin names, in file order.
     pub port_map: Vec<BramPort>,
+}
+
+/// How one width mode of a block RAM places a word: on the data and
+/// address pins, and in the initial contents.
+///
+/// The default is the plain case — data bit `j` on data pin `j`, the word
+/// address from address bit 0 up, and no statement about the contents.
+/// A family that differs says so on the `mode` line of its `.dev` file
+/// (`data`, `addr`, `pad` and `init`), so nothing about a particular
+/// primitive is written in Rust.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct BramModeLayout {
+    /// The data-port bit that carries data bit `j` of the mode, for both
+    /// the write data and the read data; empty means bit `j` on pin `j`.
+    /// The iCE40's narrow modes spread their bits (`1,5,9,13` for 1024x4).
+    pub data_bits: Vec<u32>,
+    /// The lowest address-port bit carrying the word address. A block
+    /// that addresses its narrowest unit with every pin and ignores the
+    /// low pins in wide modes (the ECP5's DP16KD: `ADA[13:4]` in 18-bit
+    /// mode) sets it; the bits below are tied to `addr_pad`.
+    pub addr_low: u32,
+    /// What the address bits below `addr_low` are tied to, `addr_low`
+    /// bits wide; `None` ties them to zero.
+    pub addr_pad: Option<Const>,
+    /// Where the bits of each word sit in the initial contents, or `None`
+    /// when the database does not say, in which case a memory with
+    /// initial contents cannot be put in this mode with them.
+    pub init: Option<BramInitLayout>,
+}
+
+impl BramModeLayout {
+    /// The data-port bit that carries data bit `bit` of the mode.
+    pub fn data_bit(&self, bit: u32) -> u32 {
+        usize::try_from(bit)
+            .ok()
+            .and_then(|i| self.data_bits.get(i))
+            .copied()
+            .unwrap_or(bit)
+    }
+}
+
+/// Which address bits choose among the words that share one row of a
+/// block RAM's contents in a narrow mode.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum WordSelect {
+    /// The low address bits: consecutive addresses share a row (ECP5).
+    Low,
+    /// The address bits above the row address: a row holds words a whole
+    /// block's worth of rows apart (iCE40, where address bits 7..0 are
+    /// always the row).
+    High,
+}
+
+impl WordSelect {
+    /// The keyword used in the text format.
+    pub fn keyword(self) -> &'static str {
+        match self {
+            WordSelect::Low => "low",
+            WordSelect::High => "high",
+        }
+    }
+}
+
+/// Where the words of one width mode sit in the rows of a block RAM's
+/// initial contents.
+///
+/// The contents are rows of [`BramInitParams::slot`] bits. In a mode,
+/// `words.len()` words share a row, and word `k` of a row keeps its data
+/// bit `j` in row bit `words[k][j]`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct BramInitLayout {
+    /// Which address bits pick the word within a row.
+    pub select: WordSelect,
+    /// For each word of a row, the row bit of each of its data bits.
+    pub words: Vec<Vec<u32>>,
+}
+
+impl BramInitLayout {
+    /// The row and the row bit holding bit `bit` of the word at `address`
+    /// (counted from the block's first word), for a block of `rows` rows;
+    /// `None` when the layout does not cover it.
+    pub fn locate(&self, address: u64, bit: u32, rows: u64) -> Option<(u64, u32)> {
+        let per_row = u64::try_from(self.words.len()).ok()?;
+        if per_row == 0 || rows == 0 {
+            return None;
+        }
+        let (row, word) = match self.select {
+            WordSelect::Low => (address / per_row, address % per_row),
+            WordSelect::High => (address % rows, address / rows),
+        };
+        let word = self.words.get(usize::try_from(word).ok()?)?;
+        let at = *word.get(usize::try_from(bit).ok()?)?;
+        (row < rows).then_some((row, at))
+    }
+}
+
+/// The parameters that carry a block RAM's initial contents.
+///
+/// There are `count` of them, named `prefix` followed by the index in
+/// upper-case hexadecimal of `digits` digits (`INIT_0`..`INIT_F`,
+/// `INITVAL_00`..`INITVAL_3F`), each holding `rows` rows of `slot` bits
+/// with its first row in its lowest bits.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct BramInitParams {
+    /// The parameter name before the index.
+    pub prefix: String,
+    /// How many parameters there are.
+    pub count: u32,
+    /// How many hexadecimal digits the index is written with.
+    pub digits: u32,
+    /// Rows of the contents per parameter.
+    pub rows: u32,
+    /// Bits per row in a parameter; a row narrower than its slot fills
+    /// the low bits and the rest are zero (the ECP5 keeps 18-bit rows in
+    /// 20-bit slots).
+    pub slot: u32,
+}
+
+impl BramInitParams {
+    /// The name of parameter `index`.
+    pub fn name(&self, index: u32) -> String {
+        let digits = usize::try_from(self.digits).unwrap_or(1);
+        format!("{}{index:0digits$X}", self.prefix)
+    }
+
+    /// The number of rows the parameters hold between them.
+    pub fn total_rows(&self) -> u64 {
+        u64::from(self.count) * u64::from(self.rows)
+    }
+
+    /// The width of one parameter.
+    pub fn param_width(&self) -> u32 {
+        self.rows.saturating_mul(self.slot)
+    }
 }
 
 impl BramShape {
@@ -619,6 +781,17 @@ impl BramShape {
         fitting
             .or_else(|| self.width_modes.iter().max_by_key(|(w, _)| *w))
             .copied()
+    }
+
+    /// How `mode` places a word; the plain default when the database
+    /// says nothing.
+    pub fn layout_for_mode(&self, mode: (u32, u32)) -> BramModeLayout {
+        self.width_modes
+            .iter()
+            .position(|m| *m == mode)
+            .and_then(|index| self.mode_layouts.get(index))
+            .cloned()
+            .unwrap_or_default()
     }
 
     /// The parameters selecting `mode`, empty when the database records
@@ -1093,6 +1266,11 @@ pub struct Device {
     pub io_banks: Vec<IoBank>,
     /// The package pins, in file order.
     pub pins: Vec<Pin>,
+    /// The package has pins that `pins` does not list (`pins partial` in
+    /// the text format). A constraint naming an unlisted pin is then a
+    /// warning that Reticle cannot check it, rather than an error, and
+    /// the place-and-route tool, which knows the package, decides.
+    pub pins_partial: bool,
     /// Clock buffers, clock regions and PLLs.
     pub clock_resources: ClockResources,
     /// Placeable sites, in file order; may be empty.
@@ -1117,6 +1295,7 @@ impl Device {
             io_standards: Vec::new(),
             io_banks: Vec::new(),
             pins: Vec::new(),
+            pins_partial: false,
             clock_resources: ClockResources::default(),
             sites: Vec::new(),
             tile_grid: None,
@@ -1302,6 +1481,9 @@ impl Device {
             }
             out.push_str(&line);
             out.push('\n');
+        }
+        if self.pins_partial {
+            out.push_str("  pins partial\n");
         }
         for pin in &self.pins {
             let mut line = format!("  pin {} {}", quote(&pin.name), pin.kind.keyword());
@@ -1489,6 +1671,9 @@ fn write_bram(out: &mut String, bram: &BramShape) {
         {
             write_params(&mut line, "param", params);
         }
+        if let Some(layout) = bram.mode_layouts.get(index) {
+            write_mode_layout(&mut line, layout);
+        }
         out.push_str(&line);
         out.push('\n');
     }
@@ -1505,6 +1690,16 @@ fn write_bram(out: &mut String, bram: &BramShape) {
     if !flags.is_empty() {
         out.push_str(&format!("    flags{flags}\n"));
     }
+    if let Some(init) = &bram.init_params {
+        out.push_str(&format!(
+            "    init_params {} count {} digits {} rows {} slot {}\n",
+            quote(&init.prefix),
+            init.count,
+            init.digits,
+            init.rows,
+            init.slot
+        ));
+    }
     for port in &bram.port_map {
         let mut line = format!("    port {}", port.role.keyword());
         for (role, name) in &port.signals {
@@ -1514,6 +1709,66 @@ fn write_bram(out: &mut String, bram: &BramShape) {
         out.push('\n');
     }
     out.push_str("  end\n");
+}
+
+/// Appends the `data`, `addr`, `pad` and `init` clauses of a `mode` line.
+fn write_mode_layout(line: &mut String, layout: &BramModeLayout) {
+    if !layout.data_bits.is_empty() {
+        line.push_str(&format!(" data {}", write_bit_list(&layout.data_bits)));
+    }
+    if layout.addr_low > 0 {
+        line.push_str(&format!(" addr {}", layout.addr_low));
+    }
+    if let Some(pad) = &layout.addr_pad {
+        line.push_str(&format!(" pad {}", pad.to_verilog_literal()));
+    }
+    if let Some(init) = &layout.init {
+        line.push_str(&format!(" init {}", init.select.keyword()));
+        for word in &init.words {
+            line.push(' ');
+            line.push_str(&write_bit_list(word));
+        }
+    }
+}
+
+/// Writes bit positions as a comma-separated list, with a run of three
+/// or more consecutive positions as `first-last`.
+fn write_bit_list(bits: &[u32]) -> String {
+    let mut parts: Vec<String> = Vec::new();
+    let mut i = 0;
+    while i < bits.len() {
+        let mut j = i;
+        while j + 1 < bits.len() && bits[j].checked_add(1) == Some(bits[j + 1]) {
+            j += 1;
+        }
+        if j >= i + 2 {
+            parts.push(format!("{}-{}", bits[i], bits[j]));
+            i = j + 1;
+        } else {
+            parts.push(bits[i].to_string());
+            i += 1;
+        }
+    }
+    parts.join(",")
+}
+
+/// Reads a list written by [`write_bit_list`]; `None` when it is not one.
+fn parse_bit_list(text: &str) -> Option<Vec<u32>> {
+    let mut bits = Vec::new();
+    for part in text.split(',') {
+        match part.split_once('-') {
+            Some((first, last)) => {
+                let first: u32 = first.parse().ok()?;
+                let last: u32 = last.parse().ok()?;
+                if last < first {
+                    return None;
+                }
+                bits.extend(first..=last);
+            }
+            None => bits.push(part.parse().ok()?),
+        }
+    }
+    Some(bits)
 }
 
 fn write_dsp(dsp: &DspShape) -> String {
@@ -1813,6 +2068,15 @@ impl<'a> Parser<'a> {
                     device.io_banks.push(bank);
                 }
             }
+            "pins" => match line.get(1) {
+                Some(token) if token.is("partial") => device.pins_partial = true,
+                Some(token) => {
+                    let span = token.span;
+                    let text = token.as_str().to_owned();
+                    self.unknown(span, format!("unknown `pins` option `{text}`"));
+                }
+                None => self.error(line.span, "expected `partial` after `pins`"),
+            },
             "pin" => {
                 if let Some(pin) = self.pin(line) {
                     device.pins.push(pin);
@@ -1975,6 +2239,8 @@ impl<'a> Parser<'a> {
             has_byte_enable: false,
             dual_port: false,
             init_supported: false,
+            mode_layouts: Vec::new(),
+            init_params: None,
             port_map: Vec::new(),
         };
         loop {
@@ -2010,9 +2276,11 @@ impl<'a> Parser<'a> {
                             .map(|(key, value)| (key, parse_value(&value)))
                             .collect();
                     }
+                    let layout = self.mode_layout(line, index, width);
                     if let (Some(width), Some(depth)) = (width, depth) {
                         bram.width_modes.push((width, depth));
                         bram.mode_params.push(params);
+                        bram.mode_layouts.push(layout);
                     }
                 }
                 "flags" => {
@@ -2029,6 +2297,9 @@ impl<'a> Parser<'a> {
                             }
                         }
                     }
+                }
+                "init_params" => {
+                    bram.init_params = self.init_params(line);
                 }
                 "port" => {
                     let Some(kind) = line.get(1) else {
@@ -2052,6 +2323,150 @@ impl<'a> Parser<'a> {
             }
         }
         Some(bram)
+    }
+
+    /// A list of bit positions, `expected` long when that is known.
+    fn bit_list(&mut self, token: &Token, what: &str, expected: Option<u32>) -> Option<Vec<u32>> {
+        let Some(bits) = parse_bit_list(token.as_str()) else {
+            self.error(
+                token.span,
+                format!("expected {what} as a list of bit positions, found `{token}`"),
+            );
+            return None;
+        };
+        if let Some(width) = expected
+            && u32::try_from(bits.len()).ok() != Some(width)
+        {
+            self.error(
+                token.span,
+                format!(
+                    "{what} lists {} bit(s) for a mode {width} bits wide",
+                    bits.len()
+                ),
+            );
+            return None;
+        }
+        Some(bits)
+    }
+
+    /// The `data`, `addr`, `pad` and `init` clauses of a `mode` line,
+    /// from token `index` on.
+    fn mode_layout(
+        &mut self,
+        line: &'a Line,
+        mut index: usize,
+        width: Option<u32>,
+    ) -> BramModeLayout {
+        let mut layout = BramModeLayout::default();
+        while let Some(token) = line.get(index) {
+            index += 1;
+            match token.as_str() {
+                "data" => {
+                    let Some(value) = line.get(index) else {
+                        self.error(line.span, "expected the data pins after `data`");
+                        break;
+                    };
+                    index += 1;
+                    if let Some(bits) = self.bit_list(value, "`data`", width) {
+                        layout.data_bits = bits;
+                    }
+                }
+                "addr" => {
+                    if let Some(value) = self.number_at(line, index, "the lowest address bit") {
+                        layout.addr_low = value;
+                    }
+                    index += 1;
+                }
+                "pad" => {
+                    let Some(value) = line.get(index) else {
+                        self.error(line.span, "expected a constant after `pad`");
+                        break;
+                    };
+                    index += 1;
+                    match parse_value(value.as_str()) {
+                        AttrValue::Const(c) => layout.addr_pad = Some(c),
+                        _ => self.error(
+                            value.span,
+                            format!("expected a sized constant such as `4'b0011`, found `{value}`"),
+                        ),
+                    }
+                }
+                "init" => {
+                    let select = match line.get(index).map(Token::as_str) {
+                        Some("low") => WordSelect::Low,
+                        Some("high") => WordSelect::High,
+                        _ => {
+                            self.error(line.span, "expected `low` or `high` after `init`");
+                            break;
+                        }
+                    };
+                    index += 1;
+                    let mut words = Vec::new();
+                    while let Some(value) = line.get(index) {
+                        if !value.as_str().starts_with(|c: char| c.is_ascii_digit()) {
+                            break;
+                        }
+                        index += 1;
+                        if let Some(bits) = self.bit_list(value, "a word of `init`", width) {
+                            words.push(bits);
+                        }
+                    }
+                    if words.is_empty() {
+                        self.error(line.span, "expected the row bits of each word after `init`");
+                    } else {
+                        layout.init = Some(BramInitLayout { select, words });
+                    }
+                }
+                other => {
+                    let span = token.span;
+                    self.unknown(span, format!("unknown `mode` option `{other}`"));
+                }
+            }
+        }
+        layout
+    }
+
+    /// An `init_params <prefix> count <n> digits <n> rows <n> slot <n>`
+    /// line.
+    fn init_params(&mut self, line: &'a Line) -> Option<BramInitParams> {
+        let prefix = self.word(line, 1, "the parameter name prefix")?.to_owned();
+        let mut params = BramInitParams {
+            prefix,
+            count: 0,
+            digits: 1,
+            rows: 0,
+            slot: 0,
+        };
+        let mut index = 2;
+        while let Some(token) = line.get(index) {
+            index += 1;
+            let value = match token.as_str() {
+                "count" | "digits" | "rows" | "slot" => {
+                    let value = self.number_at(line, index, "a number")?;
+                    index += 1;
+                    value
+                }
+                other => {
+                    let span = token.span;
+                    self.unknown(span, format!("unknown `init_params` option `{other}`"));
+                    continue;
+                }
+            };
+            match token.as_str() {
+                "count" => params.count = value,
+                "digits" => params.digits = value,
+                "rows" => params.rows = value,
+                _ => params.slot = value,
+            }
+        }
+        if params.count == 0 || params.rows == 0 || params.slot == 0 || params.digits == 0 {
+            self.error(
+                line.span,
+                "`init_params` needs a non-zero `count`, `digits`, `rows` and `slot`",
+            );
+            return None;
+        }
+        Some(params)
     }
 
     fn dsp(&mut self, line: &'a Line) -> Option<DspShape> {
@@ -2537,6 +2952,110 @@ end
     }
 
     #[test]
+    fn block_ram_layouts_and_partial_pins_round_trip() {
+        let text = "\
+device demo-l
+  family demo
+  bram R
+    ports 2
+    mode 16 256 init high 0-15
+    mode 8 512 data 0,2,4,6,8,10,12,14 init high 0,2,4,6,8,10,12,14 1,3,5,7,9,11,13,15
+    mode 18 1024 addr 4 pad 4'b0011 init low 0-17
+    flags init
+    init_params INIT_ count 16 digits 1 rows 16 slot 16
+  end
+  pins partial
+  pin A1 io
+end
+";
+        let (device, diags) = parse(text);
+        assert_eq!(diags, "");
+        let device = device.unwrap();
+        assert!(device.pins_partial);
+        let bram = &device.block_rams[0];
+        let narrow = bram.layout_for_mode((8, 512));
+        assert_eq!(narrow.data_bit(3), 6);
+        let init = narrow.init.as_ref().unwrap();
+        assert_eq!(init.select, WordSelect::High);
+        // Word 300 is row 44, the odd bits: data bit 2 in row bit 5.
+        assert_eq!(init.locate(300, 2, 256), Some((44, 5)));
+        let wide = bram.layout_for_mode((18, 1024));
+        assert_eq!(wide.addr_low, 4);
+        assert_eq!(wide.addr_pad, Some(Const::from_u64(3, 4)));
+        assert_eq!(wide.data_bit(17), 17);
+        let params = bram.init_params.as_ref().unwrap();
+        assert_eq!(
+            (params.name(15), params.total_rows()),
+            ("INIT_F".to_owned(), 256)
+        );
+        assert_eq!(params.param_width(), 256);
+        let again = device.to_text();
+        assert!(
+            again.contains("    mode 8 512 data 0,2,4,6,8,10,12,14 init high"),
+            "{again}"
+        );
+        assert!(again.contains("  pins partial\n"), "{again}");
+        let (reparsed, diags) = parse(&again);
+        assert_eq!(diags, "");
+        assert_eq!(reparsed.unwrap(), device);
+
+        // Low selection: consecutive words share a row.
+        let low = BramInitLayout {
+            select: WordSelect::Low,
+            words: vec![vec![0, 1], vec![2, 3]],
+        };
+        assert_eq!(low.locate(5, 1, 8), Some((2, 3)));
+        assert_eq!(low.locate(16, 0, 8), None);
+        let hex = BramInitParams {
+            prefix: "INITVAL_".into(),
+            count: 64,
+            digits: 2,
+            rows: 16,
+            slot: 20,
+        };
+        assert_eq!(hex.name(10), "INITVAL_0A");
+        assert_eq!(write_bit_list(&[0, 1, 2, 4, 5, 7, 8, 9]), "0-2,4,5,7-9");
+        assert_eq!(parse_bit_list("3-1"), None);
+    }
+
+    #[test]
+    fn bad_block_ram_layouts_are_reported() {
+        let text = "\
+device demo-bad
+  family demo
+  bram R
+    mode 8 512 data 0,2 init sideways 0-7
+    mode 4 1024 init low 0-3 x pad 12 addr
+    init_params INIT_ count 0 rows 16 slot 16
+    init_params INIT_ count 16 bogus 3
+  end
+  pins everywhere
+end
+";
+        let (_, diags) = parse(text);
+        assert!(
+            diags.contains("`data` lists 2 bit(s) for a mode 8 bits wide"),
+            "{diags}"
+        );
+        assert!(
+            diags.contains("expected `low` or `high` after `init`"),
+            "{diags}"
+        );
+        assert!(diags.contains("unknown `mode` option `x`"), "{diags}");
+        assert!(diags.contains("expected a sized constant"), "{diags}");
+        assert!(diags.contains("expected the lowest address bit"), "{diags}");
+        assert!(diags.contains("needs a non-zero `count`"), "{diags}");
+        assert!(
+            diags.contains("unknown `init_params` option `bogus`"),
+            "{diags}"
+        );
+        assert!(
+            diags.contains("unknown `pins` option `everywhere`"),
+            "{diags}"
+        );
+    }
+
+    #[test]
     fn text_round_trips() {
         let (device, _) = parse(SAMPLE);
         let device = device.unwrap();
@@ -2651,9 +3170,12 @@ end
             has_byte_enable: false,
             dual_port: false,
             init_supported: false,
+            mode_layouts: Vec::new(),
+            init_params: None,
             port_map: Vec::new(),
         };
         assert_eq!(bram.bits(), 0);
+        assert_eq!(bram.layout_for_mode((8, 8)), BramModeLayout::default());
         assert_eq!(bram.mode_for_width(8), None);
         assert_eq!(bram.addr_width(), 0);
         assert!(bram.params_for_mode((8, 8)).is_empty());

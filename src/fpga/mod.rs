@@ -297,6 +297,36 @@ mod tests {
                 assert!(bram.addr_width() > 0, "{}", device.name);
                 assert!(bram.read_port().is_some(), "{}", device.name);
                 assert!(bram.write_port().is_some(), "{}", device.name);
+                // A layout the database states must add up: the words of
+                // a row times the rows is the depth, no two bits share a
+                // row bit, every bit fits a slot, and the word address
+                // fits the address port (and fills it, when it starts
+                // above bit 0, which is the point of starting there).
+                let Some(params) = &bram.init_params else {
+                    continue;
+                };
+                for &(width, depth) in &bram.width_modes {
+                    let layout = bram.layout_for_mode((width, depth));
+                    let init = layout.init.as_ref().unwrap_or_else(|| {
+                        panic!("{}: the {width}x{depth} mode has no layout", device.name)
+                    });
+                    let per_row = u64::try_from(init.words.len()).unwrap();
+                    assert_eq!(per_row * params.total_rows(), u64::from(depth));
+                    let mut seen: Vec<u32> = init.words.iter().flatten().copied().collect();
+                    let all = seen.len();
+                    seen.sort_unstable();
+                    seen.dedup();
+                    assert_eq!(seen.len(), all, "{}: a row bit is used twice", device.name);
+                    assert!(seen.iter().all(|bit| *bit < params.slot));
+                    let word_bits = u64::BITS - (u64::from(depth) - 1).leading_zeros();
+                    assert!(layout.addr_low + word_bits <= bram.addr_width());
+                    if layout.addr_low > 0 {
+                        assert_eq!(layout.addr_low + word_bits, bram.addr_width());
+                    }
+                    if let Some(pad) = &layout.addr_pad {
+                        assert_eq!(pad.width(), layout.addr_low, "{}", device.name);
+                    }
+                }
             }
             for pin in &device.pins {
                 if let Some(bank) = &pin.bank {

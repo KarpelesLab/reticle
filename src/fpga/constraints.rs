@@ -707,6 +707,42 @@ impl Constraints {
                         }
                         Some(pin)
                     }
+                    None if device.pins_partial => {
+                        // The database knows its list is incomplete, so
+                        // an unlisted pin may well exist: say that it is
+                        // unchecked, and leave the verdict to the tool
+                        // that has the package.
+                        diags.push(
+                            Diagnostic::warning(format!(
+                                "pin {} is not in Reticle's partial pin list for `{}`, so it \
+                                 is not checked here",
+                                assignment.pin, device.name
+                            ))
+                            .with_code(NO_SUCH_PIN)
+                            .with_span(assignment.span)
+                            .with_note(
+                                "the place-and-route tool checks it against the real package \
+                                 and refuses it if the package has no such IO pin",
+                            ),
+                        );
+                        if let Some((_, first)) = pin_used
+                            .iter()
+                            .find(|(name, _)| *name == assignment.pin.as_str())
+                        {
+                            diags.push(
+                                Diagnostic::error(format!(
+                                    "pin {} is assigned to two signals",
+                                    assignment.pin
+                                ))
+                                .with_code(DUPLICATE_ASSIGNMENT)
+                                .with_label(assignment.span, "assigned again here")
+                                .with_secondary(*first, "first assigned here"),
+                            );
+                        } else {
+                            pin_used.push((assignment.pin.as_str(), assignment.span));
+                        }
+                        None
+                    }
                     None => {
                         let mut diag = Diagnostic::error(format!(
                             "`{}` has no pin named {}",
@@ -2038,6 +2074,20 @@ frobnicate
 
         let text = check("set_io clk 4242\n", "ice40-hx1k-tq144");
         assert!(text.contains("has no pin named 4242"), "{text}");
+
+        // A partial pin list cannot say a pin is missing, only unchecked;
+        // a pin it does not know is still caught when used twice.
+        let text = check("set_io clk T16\n", "ice40-hx8k-ct256");
+        assert!(
+            text.contains("warning[F0202]: pin T16 is not in Reticle's partial pin list"),
+            "{text}"
+        );
+        assert!(!text.contains("error"), "{text}");
+        let text = check("set_io clk T16\nset_io d[0] T16\n", "ice40-hx8k-ct256");
+        assert!(
+            text.contains("pin T16 is assigned to two signals"),
+            "{text}"
+        );
 
         let text = check("set_io clk 99\nset_io d[0] 99\n", "ice40-hx1k-tq144");
         assert!(text.contains("pin 99 is assigned to two signals"), "{text}");
