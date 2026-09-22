@@ -89,6 +89,7 @@ Options:
   --until <ticks>  Stop at this time (in the design's precision)
   --seed <n>       Seed for $random (default 1)
   --vcd <file>     Write a VCD waveform here
+  --fst <file>     Write a GTKWave FST waveform here
   --quiet          Suppress the summary line
 ";
 
@@ -206,7 +207,7 @@ fn spec_for(usage: &str) -> Spec {
         }
     } else if std::ptr::eq(usage, SIM_USAGE) {
         Spec {
-            options: &["top", "until", "seed", "vcd"],
+            options: &["top", "until", "seed", "vcd", "fst"],
             flags: &["quiet"],
         }
     } else {
@@ -472,6 +473,9 @@ fn sim(args: &Args) -> Result<Outcome, ArgError> {
     if dump.is_some() {
         sim.enable_vcd();
     }
+    // The FST capture records through the change callbacks, so it has to be
+    // installed before the run and handed back at dump time.
+    let fst = args.option("fst").map(|path| (path, sim.enable_fst()));
 
     match until {
         Some(time) => sim.run_until(time),
@@ -490,6 +494,18 @@ fn sim(args: &Args) -> Result<Outcome, ArgError> {
         }
         if let Err(message) = write_out(Some(path), &text) {
             eprintln!("error: {message}");
+            return Ok(Outcome::Failed);
+        }
+    }
+
+    if let Some((path, capture)) = fst {
+        let mut bytes = Vec::new();
+        if sim.dump_fst(&capture, &mut bytes).is_err() {
+            eprintln!("error: could not render the FST waveform");
+            return Ok(Outcome::Failed);
+        }
+        if let Err(err) = std::fs::write(path, &bytes) {
+            eprintln!("error: cannot write `{path}`: {err}");
             return Ok(Outcome::Failed);
         }
     }

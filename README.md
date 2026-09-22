@@ -38,7 +38,7 @@ Early, but the middle of the pipeline runs end to end. What works today:
 | Verilog / SystemVerilog | preprocessor, lexer, parser; elaboration in progress |
 | VHDL-2008 | lexer, parser; semantic analysis in progress |
 | Unified IR | design model, validator, round-tripping `.rtl` text format |
-| Simulation | event-driven 4-state simulator, VCD, Rust co-simulation API |
+| Simulation | event-driven 4-state simulator, VCD and FST waveforms, Rust co-simulation API |
 | Synthesis | process lowering, flip-flop / latch / memory / FSM inference, optimisation passes |
 | Emission | Verilog, VHDL, Yosys JSON, BLIF, EDIF |
 | Formal | CDCL SAT solver, bit-blaster, bounded model checking, k-induction, equivalence checking |
@@ -50,7 +50,7 @@ so the stages after elaboration take `.rtl` input for the moment:
 reticle check      counter.v counter.vhd design.rtl
 reticle synth      --report --output netlist.rtl design.rtl
 reticle emit       --format verilog netlist.rtl
-reticle sim        --vcd waves.vcd testbench.rtl
+reticle sim        --vcd waves.vcd --fst waves.fst testbench.rtl
 reticle verify     --depth 20 --trace cex.vcd design.rtl
 ```
 

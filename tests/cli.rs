@@ -185,6 +185,25 @@ fn sim_runs_a_testbench_and_dumps_a_waveform() {
 }
 
 #[test]
+fn sim_writes_an_fst_waveform() {
+    let dir = scratch("sim_fst");
+    let fst = dir.join("counter.fst");
+    let (code, _, stderr) = run(&[
+        "sim",
+        "--fst",
+        fst.to_str().unwrap(),
+        "testdata/sim/counter.rtl",
+    ]);
+    assert_eq!(code, 0, "{stderr}");
+
+    // Byte-identical to the golden the FST tests check against a real
+    // GTKWave reader, so the CLI path is covered by that validation too.
+    let written = std::fs::read(&fst).unwrap();
+    let golden = std::fs::read("testdata/sim/fst/counter.fst").unwrap();
+    assert_eq!(written, golden, "CLI FST differs from the golden");
+}
+
+#[test]
 fn sim_honours_the_time_limit() {
     let (code, stdout, stderr) = run(&["sim", "--until", "50", "testdata/sim/counter.rtl"]);
     assert_eq!(code, 0, "{stderr}");
