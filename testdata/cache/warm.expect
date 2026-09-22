@@ -1,0 +1,14 @@
+sources
+  leaf.v: verilog, scan hit
+  mid.v: verilog, scan hit
+  other.v: verilog, scan hit
+  top.v: verilog, scan hit
+modules
+  leaf: elaborate, hit
+  mid: elaborate, hit
+  other: elaborate, hit
+  top: elaborate, hit
+summary
+  top: top
+  hits: 8
+  misses: 0
