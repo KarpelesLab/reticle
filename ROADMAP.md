@@ -342,22 +342,35 @@ example trace, and the fixed FIFO is proven by induction.
 The reason this project exists beyond "another synthesiser". Third-party
 and first-party IP should drop into a design as easily as a Rust crate.
 
-- [ ] IP package manifest (`reticle.toml` in the IP's directory): sources
-      per language, top entity, parameters with types and ranges, bus
-      interfaces exposed, target constraints, licence, version.
-- [ ] Project manifest for the user's design: dependencies on IP packages
-      by path, git URL or registry, target device, constraints files,
-      testbenches. `reticle build`, `reticle sim`, `reticle test` read it.
-- [ ] Bus interface abstraction: AXI4 / AXI4-Lite / AXI-Stream, Wishbone,
-      APB, Avalon, described once so port maps are generated and checked,
-      with interconnect (crossbar / arbiter) generation.
-- [ ] Vendor and encrypted IP: black-box declarations from a stub, so a
+- [x] IP package manifest (`reticle.ip` in the IP's directory, not
+      `reticle.toml`: the crate has no TOML parser and will not grow one,
+      so it is the line-oriented format the `.rcf`, `.dev` and `.rtl` files
+      already use): sources per language, top entity, parameters with types
+      and ranges, bus interfaces exposed, target constraints, licence,
+      version. See `docs/ip.md`.
+- [x] Project manifest for the user's design (`reticle.proj`): dependencies
+      on IP packages by path, git URL or registry, target device,
+      constraints files, testbenches. Resolution is depth first, selects the
+      highest version satisfying every requirement, reports conflicts and
+      cycles with the path through the graph, and writes a `reticle.lock`.
+      `git` and `registry` are grammar only so far, since fetching one is
+      network I/O and the library does none; `reticle build`, `reticle sim`
+      and `reticle test` are not wired to it yet.
+- [x] Bus interface abstraction: AXI4 / AXI4-Lite / AXI4-Stream, Wishbone
+      (classic and pipelined), APB, Avalon-MM, described once as data under
+      `src/ip/buses/` so port maps are generated and checked — missing
+      signals, reversed directions, widths that contradict the parameters —
+      with interconnect generation: an AXI4-Lite crossbar and a Wishbone
+      arbiter, both tested by simulating transactions.
+- [x] Vendor and encrypted IP: black-box declarations from a stub, so a
       design using an encrypted core still elaborates, lints, and simulates
       with a behavioural model, and is emitted for the vendor tool to fill.
 - [ ] IP-XACT import for existing IP catalogues.
-- [ ] Generators: parameterised IP written in Rust against the IR builder
+- [x] Generators: parameterised IP written in Rust against the IR builder
       API (the way Chisel or Amaranth do it), for blocks that are painful
-      to express in HDL (wide crossbars, CORDIC tables, filter banks).
+      to express in HDL (wide crossbars, CORDIC tables, filter banks). The
+      crossbar and the arbiter are the first two; the arithmetic generators
+      are still to come.
 - [ ] The Reticle IP library, each block with a Rust co-simulation test and
       a documented resource footprint per target: FIFOs (sync / async),
       CDC synchronisers, UART, SPI, I²C, PWM, timers, block RAM wrappers,
