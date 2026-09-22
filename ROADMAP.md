@@ -317,9 +317,28 @@ FPGA:
 ASIC:
 - [x] Liberty (`.lib`) parser: cells, pins, functions, timing tables.
 - [x] LEF / DEF read and write.
-- [ ] Standard-cell mapping through phase 5 against a Liberty library, with
-      an open PDK (SKY130 or IHP SG13G2) as the reference target.
-- [ ] Hand-off to OpenROAD for placement and routing, later an own flow.
+- [x] Standard-cell mapping through phase 5 against a Liberty library:
+      `asic::library` turns a `.lib` into the mapper's gate library
+      (functions as truth tables, areas, one representative delay per
+      pin at an FO4 point derived from the library itself) and reports
+      every cell it cannot use and why; `asic::flow::synthesize_asic`
+      runs synthesis, flip-flop legalisation, cell mapping, flip-flop
+      mapping and an optional drive-strength pass, and reports area and
+      the critical path (Liberty delays) from one call. Flip-flops are
+      matched on edge, reset kind and polarity and enable, inserting an
+      inverter when the library lacks a polarity and moving an enable or
+      a synchronous reset into the data path when it lacks the pin. The
+      reference target is a *synthetic* library under `testdata/asic/`,
+      shaped after an open PDK; SKY130 or IHP SG13G2 drops in unchanged
+      (no process data is vendored). See `docs/asic.md`.
+- [x] Hand-off to OpenROAD for placement and routing, later an own flow:
+      `asic::export_openroad` returns the gate-level Verilog, the SDC
+      (`asic::sdc`), a generated Tcl script that reads the LEF, the
+      Liberty, the netlist and the constraints and runs floorplan,
+      placement, CTS, routing and reporting in that order, the DEF when
+      a floorplan is given, and the command line — spawning nothing.
+      `asic::check_physical` verifies the netlist against the Liberty
+      and the LEF cell by cell and pin by pin before the tool sees it.
 
 Shared:
 - [x] Static timing analysis: the `timing` feature builds a pin-level
