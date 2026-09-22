@@ -1,0 +1,28 @@
+module m @3:1
+  var logic ok @17:5
+  assign ok = 1'b1 @18:5
+--- diagnostics
+error: `class` is not supported
+ --> error_unsupported.sv:4:5
+  |
+4 |     class packet;
+  |     ^^^^^
+
+error: DPI imports are not supported
+  --> error_unsupported.sv:10:5
+   |
+10 |     import "DPI-C" function int c_add(input int a, b);
+   |     ^^^^^^
+
+error: DPI exports are not supported
+  --> error_unsupported.sv:11:5
+   |
+11 |     export "DPI-C" function sv_fn;
+   |     ^^^^^^
+
+error: `covergroup` is not supported
+  --> error_unsupported.sv:13:5
+   |
+13 |     covergroup cg @(posedge clk);
+   |     ^^^^^^^^^^
+

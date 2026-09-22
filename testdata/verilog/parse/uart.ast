@@ -1,0 +1,110 @@
+module uart_tx @2:1
+  param parameter CLK_DIV = 868
+  port input wire clk @5:5
+  port input wire rst @6:5
+  port input wire [7:0] data @7:5
+  port input wire valid @8:5
+  port output reg ready @9:5
+  port output reg txd @10:5
+  param localparam IDLE = 2'd0, START = 2'd1, DATA = 2'd2, STOP = 2'd3 @12:5
+  var reg [1:0] state @17:5
+  var reg [15:0] baud_cnt @18:5
+  var reg [2:0] bit_idx @19:5
+  var reg [7:0] shreg @20:5
+  net wire tick = (baud_cnt == (CLK_DIV - 1)) @21:5
+  always @23:5
+    @(posedge clk) @23:12
+      begin @23:27
+        if (rst) @24:9
+          begin @24:18
+            state <= IDLE @25:13
+            baud_cnt <= 16'd0 @26:13
+            bit_idx <= 3'd0 @27:13
+            txd <= 1'b1 @28:13
+            ready <= 1'b1 @29:13
+        else
+          begin @30:18
+            if ((state == IDLE)) @31:13
+              baud_cnt <= 16'd0 @32:17
+            else
+              baud_cnt <= (tick ? 16'd0 : (baud_cnt + 16'd1)) @34:17
+            case (state) @36:13
+              item IDLE @37:17
+                begin @37:23
+                  txd <= 1'b1 @38:21
+                  if ((valid && ready)) @39:21
+                    begin @39:41
+                      shreg <= data @40:25
+                      ready <= 1'b0 @41:25
+                      state <= START @42:25
+              item START @45:17
+                begin @45:24
+                  txd <= 1'b0 @46:21
+                  if (tick) @47:21
+                    state <= DATA @47:31
+              item DATA @49:17
+                begin @49:23
+                  txd <= shreg[bit_idx] @50:21
+                  if (tick) @51:21
+                    begin @51:31
+                      if ((bit_idx == 3'd7)) @52:25
+                        begin @52:46
+                          bit_idx <= 3'd0 @53:29
+                          state <= STOP @54:29
+                      else
+                        bit_idx <= (bit_idx + 3'd1) @56:29
+              item STOP @59:17
+                begin @59:23
+                  txd <= 1'b1 @60:21
+                  if (tick) @61:21
+                    begin @61:31
+                      state <= IDLE @62:25
+                      ready <= 1'b1 @63:25
+              default @66:17
+                state <= IDLE @66:26
+module uart_rx @72:1
+  param parameter CLK_DIV = 868
+  port input wire clk @75:5
+  port input wire rst @76:5
+  port input wire rxd @77:5
+  port output reg [7:0] data @78:5
+  port output reg valid @79:5
+  var reg [1:0] sync @81:5
+  var reg [15:0] cnt @82:5
+  var reg [3:0] bit_cnt @83:5
+  var reg busy @84:5
+  net wire rx = sync[1] @85:5
+  always @87:5
+    @(posedge clk) @87:12
+      sync <= {sync[0], rxd} @87:27
+  always @89:5
+    @(posedge clk) @89:12
+      begin @89:27
+        valid <= 1'b0 @90:9
+        if (rst) @91:9
+          begin @91:18
+            busy <= 1'b0 @92:13
+            cnt <= 0 @93:13
+            bit_cnt <= 0 @94:13
+        else
+          if ((!busy)) @95:18
+            begin @95:29
+              if ((!rx)) @96:13
+                begin @96:22
+                  busy <= 1'b1 @97:17
+                  cnt <= (CLK_DIV / 2) @98:17
+          else
+            if ((cnt == (CLK_DIV - 1))) @100:18
+              begin @100:42
+                cnt <= 0 @101:13
+                if ((bit_cnt < 4'd8)) @102:13
+                  begin @102:33
+                    data <= {rx, data[7:1]} @103:17
+                    bit_cnt <= (bit_cnt + 1) @104:17
+                else
+                  begin @105:22
+                    busy <= 1'b0 @106:17
+                    bit_cnt <= 0 @107:17
+                    valid <= rx @108:17
+            else
+              cnt <= (cnt + 1) @111:13

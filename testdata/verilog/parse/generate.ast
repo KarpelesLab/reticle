@@ -1,0 +1,69 @@
+module gen @3:1
+  param parameter N = 4
+  param parameter MODE = 1
+  param parameter USE_REG = 0
+  port input clk @4:5
+  port input [(N - 1):0] a @5:5
+  port output [(N - 1):0] y @6:5
+  genvar i, j @8:5
+  generate @10:5
+    gen-for (i = 0; (i < N); (i = (i + 1))) @11:9
+      block : g_loop @11:39
+        net wire t = a[i] @12:13
+        assign y[i] = (~t) @13:13
+  gen-for (genvar k = 0; (k < N); k++) @17:5
+    block : g_sv @17:36
+      net wire [1:0] pair = {a[k], a[k]} @18:9
+  generate @21:5
+    gen-if ((MODE == 0)) @22:9
+      then : g_mode0 @22:24
+        assign y = a @23:13
+      else @24:18
+        gen-if ((MODE == 1)) @24:18
+          then : g_mode1 @24:33
+            assign y = (~a) @25:13
+          else @26:18
+            assign y = {N{1'b0}} @27:13
+  gen-if (USE_REG) @31:5
+    then @32:9
+      var reg [(N - 1):0] r @32:9
+    else @34:9
+      net wire [(N - 1):0] r = a @34:9
+  generate @36:5
+    gen-case (MODE) @37:9
+      item 0 @38:13
+        block : g_c0 @38:16
+          assign y = a @39:17
+      item 1, 2 @41:13
+        block : g_c12 @41:19
+          assign y = (a + 1) @42:17
+      default @44:13
+        block @44:22
+          assign y = 'x @44:22
+  generate @48:5
+    gen-for (i = 0; (i < 2); (i = (i + 1))) @49:9
+      block : g_outer @49:39
+        gen-for (j = 0; (j < 2); (j = (j + 1))) @50:13
+          block : g_inner @50:43
+            net wire cell_w = (a[i] & a[j]) @51:17
+            gen-if ((i == j)) @52:17
+              then : g_diag @52:29
+                net wire d = cell_w @53:21
+  generate @59:5
+    block : g_bare @60:9
+      net wire bare = 1'b1 @61:13
+  gen-if ((N > 2)) @65:5
+    then @65:16
+      net wire big = 1'b1 @66:9
+  gen-if ((N > 8)) @68:5
+    then @68:16
+    else : g_small @68:23
+      net wire sm = 1'b1 @69:9
+  gen-for (i = 0; (i < N); (i = (i + 1))) @71:5
+    block @71:35
+      assign y[i] = a[i] @71:35
+  gen-for (genvar m = (N - 1); (m >= 0); m--) @72:5
+    block @72:41
+      always @73:9
+        @(posedge clk) @73:16
+          expr $display("%0d", m) @73:31

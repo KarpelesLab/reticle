@@ -1,0 +1,30 @@
+directive `timescale 1ns / 1ps @2:1
+directive `default_nettype none @3:1
+module counter @5:1
+  param parameter WIDTH = 8
+  param parameter [(WIDTH - 1):0] RESET_VALUE = {WIDTH{1'b0}}
+  port input wire clk @9:5
+  port input wire rst_n @10:5
+  port input wire en @11:5
+  port input wire up @12:5
+  port input wire load @13:5
+  port input wire [(WIDTH - 1):0] d @14:5
+  port output reg [(WIDTH - 1):0] q @15:5
+  port output wire wrap @16:5
+  assign wrap = (up ? (&q) : (~|q)) @20:5
+  always @22:5
+    @(posedge clk, negedge rst_n) @22:12
+      begin @22:44
+        if ((!rst_n)) @23:9
+          q <= RESET_VALUE @24:13
+        else
+          if (load) @25:14
+            q <= d @26:13
+          else
+            if (en) @27:14
+              begin @27:22
+                if (up) @28:13
+                  q <= (q + 1'b1) @29:17
+                else
+                  q <= (q - 1'b1) @31:17
+directive `default_nettype wire @37:1

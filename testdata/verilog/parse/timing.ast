@@ -1,0 +1,108 @@
+module timing @4:1
+  var reg clk, rst, a, b, c @5:5
+  var reg [7:0] d, q @6:5
+  var event done @7:5
+  param parameter T = 10 @8:5
+  always @10:5
+    #5 @10:12
+      clk = (~clk) @10:15
+  always @11:5
+    #(T / 2) @11:12
+      clk = (~clk) @11:19
+  always @12:5
+    #T @12:12
+      clk = (~clk) @12:15
+  always @13:5
+    #1.5 @13:12
+      a = b @13:17
+  always @14:5
+    #(1:2:3) @14:12
+      a = b @14:21
+  always @16:5
+    @(posedge clk) @16:12
+      q <= d @16:27
+  always @17:5
+    @(posedge clk, negedge rst) @17:12
+      q <= d @17:42
+  always @18:5
+    @(posedge clk, negedge rst) @18:12
+      q <= d @18:40
+  always @19:5
+    @(a, b, c) @19:12
+      d = ((a + b) + c) @19:27
+  always @20:5
+    @(a, b, c) @20:12
+      d = ((a + b) + c) @20:23
+  always @21:5
+    @* @21:12
+      d = (a + b) @21:15
+  always @22:5
+    @* @22:12
+      d = (a + b) @22:17
+  always @23:5
+    @* @23:12
+      d = (a + b) @23:19
+  always @24:5
+    @(clk) @24:12
+      q <= d @24:17
+  always @25:5
+    @(clk) @25:12
+      q <= d @25:19
+  always @26:5
+    @(edge clk) @26:12
+      q <= d @26:24
+  always @27:5
+    @(top.sub.clk) @27:12
+      q <= d @27:27
+  always @28:5
+    @(d[0]) @28:12
+      a = d[0] @28:20
+  always @29:5
+    @(posedge clk) @29:12
+      @(negedge clk) @29:27
+        q <= d @29:42
+  always @30:5
+    @(done) @30:12
+      expr $display("done at %0t", $time) @30:18
+  initial @32:5
+    begin @32:13
+      #10 @33:9
+        null @33:12
+      #10 @34:9
+        a = 1 @34:13
+      #10 @35:9
+        b = 1 @35:15
+      @(posedge clk) @36:9
+        null @36:23
+      @(posedge clk) @37:9
+        a = 0 @37:24
+      @(done) @38:9
+        null @38:14
+      q = #1 d @39:9
+      q <= #1 d @40:9
+      q = @(posedge clk) d @41:9
+      q <= @(negedge clk) d @42:9
+      q = repeat (3) @(posedge clk) d @43:9
+      q <= repeat (2) @(posedge clk) d @44:9
+      wait ((rst == 0)) @45:9
+        null @45:24
+      wait (a) @46:9
+        b = 1 @46:18
+      wait ((a && b)) @47:9
+        begin @47:23
+          c = 1 @48:13
+      -> done @50:9
+      #1 @51:9
+        -> done @51:12
+      fork join @52:9
+        #5 @53:13
+          a = 1 @53:16
+        @(posedge clk) @54:13
+          b = 1 @54:28
+      #100 @56:9
+        expr $finish @56:14
+  assign #1 a = b @59:5
+  assign #(1, 2) b = c @60:5
+  assign #(1:2:3, 4:5:6, 7:8:9) c = a @61:5
+  assign (strong1, weak0) #2 d = q @62:5
+  assign (weak0, weak1) a = b, b = c @63:5

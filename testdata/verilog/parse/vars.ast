@@ -1,0 +1,50 @@
+module vars @3:1
+  var reg r @4:5
+  var reg [7:0] r8, r8b = 8'h5a @5:5
+  var reg signed [15:0] rs @6:5
+  var logic l @7:5
+  var logic [3:0] l4 = 4'b1010 @8:5
+  var logic [1:0] [7:0] l2d @9:5
+  var logic unsigned [7:0] lu @10:5
+  var bit b @11:5
+  var bit [63:0] b64 @12:5
+  var byte by = 8'd7 @13:5
+  var shortint si @14:5
+  var int i = 42, j @15:5
+  var longint li @16:5
+  var integer n @17:5
+  var time t @18:5
+  var real re = 1.5e-3 @19:5
+  var realtime rt @20:5
+  var shortreal sr @21:5
+  var string s = "hello" @22:5
+  var chandle ch @23:5
+  var event ev, ev2 @24:5
+  genvar g @25:5
+  var logic [7:0] mem [0:255] @27:5
+  var logic [7:0] mem2 [256] @28:5
+  var int dyn [] @29:5
+  var int q [$] @30:5
+  var int bounded_q [$:15] @31:5
+  var int assoc [string] @32:5
+  var int assoc_any [*] @33:5
+  var logic [7:0] mixed [2] [3:0] @34:5
+  var var logic vl @36:5
+  var var v_implicit @37:5
+  var var [3:0] v_range @38:5
+  var static int st = 0 @39:5
+  var automatic int au @40:5
+  var const int K = 5 @41:5
+  var const logic [1:0] K2 = 2'b11 @42:5
+  var var int vi @43:5
+  var static logic [1:0] sl @44:5
+  net wire logic [7:0] wl @46:5
+  net wire bit wb @47:5
+  var var struct packed {logic a; logic [2:0] b;} sp @48:5
+  var var enum {E0, E1} en @49:5
+  var struct {int x; int y;} point @50:5
+  var union packed {logic [7:0] b; logic [1:0] [3:0] n;} un @51:5
+  typedef arr4_t [4] = int @52:5
+  var arr4_t a4 = '{1, 2, 3, 4} @53:5
+  var type(i) same_as_i @54:5
+  var type(int) also_int @55:5

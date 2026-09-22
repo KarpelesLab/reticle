@@ -1,0 +1,26 @@
+module attrs (* keep_hierarchy = "yes", top *) @3:1
+  param parameter W = 4
+  port input wire clk (* keep *) @7:5
+  port output reg [(W - 1):0] q (* mark_debug = 1, async_reg *) @8:5
+  port input wire [(W - 1):0] d @9:5
+  var reg [7:0] mem [0:255] (* ram_style = "block" *) @11:5
+  net wire w = d[0] (* dont_touch *) @12:5
+  var reg r (* keep = "true", another *) @13:5
+  always (* fsm_encoding = "one-hot" *) @15:5
+    @(posedge clk) @16:12
+      begin @16:27
+        case (d) (* full_case, parallel_case *) @17:9
+          item 0 @19:13
+            q <= 1 @19:16
+          default @20:13
+            q <= 0 @20:22
+        for ((r = 0); (r < 1); (r = (r + 1))) (* unroll *) @22:9
+          null @22:52
+        q <= d @23:9
+        q <= (d + 1) @24:9
+  instance leaf (* keep_hierarchy *) @27:5
+    u0 (.i(d), .o(), .clk(clk)) @27:31
+  function [3:0] f (no port list) (* black_box *) @28:5
+    decl portdecl input [3:0] x @29:9
+    f = x @30:9
+  assign r = 1'b0 (* async *) @32:5

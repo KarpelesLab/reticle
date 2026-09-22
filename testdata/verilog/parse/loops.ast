@@ -1,0 +1,70 @@
+module loops @3:1
+  var int arr [4] [8] @4:5
+  var int q [$] @5:5
+  var int total, i, j @6:5
+  var logic clk @7:5
+  initial @9:5
+    begin @9:13
+      for ((i = 0); (i < 4); (i = (i + 1))) @10:9
+        total += i @10:39
+      for (int k = 0; (k < 4); k++) @11:9
+        total += k @11:37
+      for (int k = 0, m = 8; (k < m); k++, m--) @12:9
+        total += (k * m) @12:49
+      for ((i = 0), (j = 10); (i < j); i++, j--) @13:9
+        null @13:46
+      for (int k = 0, byte b = 0; (k < 4); k++) @14:9
+        begin @14:49
+          b += 8'd1 @15:13
+      for (; ; ) @17:9
+        begin @17:18
+          if ((total > 100)) @18:13
+            break @18:30
+          expr total++ @19:13
+      for ((i = 0); ; i++) @21:9
+        if ((i == 3)) @21:28
+          break @21:40
+      for (var int v = 0; (v < 2); (v += 1)) @22:9
+        begin @22:44
+      while ((total > 0)) @24:9
+        expr total-- @24:27
+      while (1) @25:9
+        begin @25:19
+          if ((total++ == 5)) @26:13
+            break @26:31
+          else
+            continue @27:18
+      do-while ((total < 10)) @30:9
+        expr total++ @30:12
+      do-while ((total > 0)) @31:9
+        begin @31:12
+          expr total-- @32:13
+      repeat (3) @35:9
+        expr total++ @35:20
+      repeat (arr[0][0]) @36:9
+        begin @36:28
+          @(posedge clk) @37:13
+            null @37:27
+      foreach arr[a, b] @40:9
+        arr[a][b] = (a * b) @40:29
+      foreach arr[a] @41:9
+        arr[a][0] = a @41:26
+      foreach arr[, b] @42:9
+        arr[0][b] = b @42:28
+      foreach q[k] @43:9
+        begin @43:24
+          if ((q[k] == 0)) @44:13
+            continue @44:28
+          total += q[k] @45:13
+  initial @49:5
+    forever @49:13
+      #5 @49:21
+        clk = (~clk) @49:24
+  initial @51:5
+    begin @51:13
+      forever @52:9
+        begin @52:17
+          @(posedge clk) @53:13
+            null @53:27
+          if ((total == 0)) @54:13
+            break @54:29

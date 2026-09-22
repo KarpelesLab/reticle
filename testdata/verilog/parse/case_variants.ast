@@ -1,0 +1,62 @@
+module cases @3:1
+  port input logic [3:0] op @3:14
+  port input logic [7:0] v @3:36
+  port output logic [7:0] y @3:57
+  always_comb @4:5
+    begin @4:17
+      case (op) @5:9
+        item 4'd0 @6:13
+          y = v @6:19
+        item 4'd1, 4'd2 @7:13
+          y = (v + 1) @7:25
+        item 4'd3 @8:13
+          begin @8:19
+            y = (v - 1) @9:17
+        default @11:13
+          y = 'x @11:22
+      casez (op) @14:9
+        item 4'b1??? @15:13
+          y = 8'd1 @15:22
+        item 4'b01?? @16:13
+          y = 8'd2 @16:22
+        item 4'b001? @17:13
+          y = 8'd3 @17:22
+        default @18:13
+          y = 8'd0 @18:22
+      casex (op) @21:9
+        item 4'b1xxx @22:13
+          y = 8'd1 @22:22
+        item 4'bx1zz @23:13
+          y = 8'd2 @23:22
+        default @24:13
+          null @24:22
+      unique case (op) inside @27:9
+        item [4'd0:4'd3] @28:13
+          y = 8'd10 @28:26
+        item 4'd4, [4'd6:4'd7] @29:13
+          y = 8'd11 @29:32
+        default @30:13
+          y = 8'd12 @30:22
+      priority casez (op) @33:9
+        item 4'b???1 @34:13
+          y = 1 @34:22
+        item 4'b??1? @35:13
+          y = 2 @35:22
+      unique0 case (1'b1) @38:9
+        item op[0] @39:13
+          y = 1 @39:20
+        item op[1] @40:13
+          y = 2 @40:20
+      case (v) @43:9
+        item 8'h00 @44:13
+          case (op) @44:20
+            item 4'd0 @45:17
+              y = 0 @45:23
+            default @46:17
+              y = 1 @46:26
+        item 8'hff @48:13
+          y = 2 @48:20
+      case (op) @51:9
+      case (((op == 4'd1) ? v : (~v))) @53:9
+        item 8'd5 @54:13
+          y = 5 @54:19

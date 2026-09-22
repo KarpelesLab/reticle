@@ -1,0 +1,32 @@
+module nets @3:1
+  net wire w @4:5
+  net wire [7:0] bus, bus2 @5:5
+  net wire signed [15:0] sw @6:5
+  net wire unsigned [3:0] uw @7:5
+  net tri t @8:5
+  net tri0 t0 @9:5
+  net tri1 t1 @10:5
+  net triand ta @11:5
+  net trior to @12:5
+  net trireg (large) cap @13:5
+  net trireg (small) [3:0] caps @14:5
+  net wand wa @15:5
+  net wor wo @16:5
+  net supply0 gnd @17:5
+  net supply1 vcc @18:5
+  net uwire u @19:5
+  net wire (strong0, weak1) [1:0] drv = 2'b01 @20:5
+  net wire (pull1, supply0) p = 1'b1 @21:5
+  net wire #1 delayed = w @22:5
+  net wire #(1, 2) rf = w @23:5
+  net wire #(1:2:3, 2:3:4) mtm = w @24:5
+  net wire [7:0] #(1, 2, 3) turnoff @25:5
+  net wire vectored [7:0] vbus @26:5
+  net wire scalared [7:0] sbus @27:5
+  net wire [7:0] arr [0:3] @28:5
+  net wire [7:0] arr2 [0:3] [0:1] @29:5
+  net wire a = 1'b0, b = a, c @30:5
+  net wire [3:0] x = 4'd1, y = (x + 1) @31:5
+  net wire escaped-name = w @32:5
+  net wire [7:0] bus[0] @33:5
+  assign bus2 = bus[0] @34:5

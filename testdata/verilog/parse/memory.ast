@@ -1,0 +1,35 @@
+module rom @2:1
+  param parameter AW = 10
+  param parameter DW = 32
+  param parameter INIT_FILE = "boot.hex"
+  port input wire clk @7:5
+  port input wire [(AW - 1):0] addr @8:5
+  port output reg [(DW - 1):0] data @9:5
+  var reg [(DW - 1):0] mem [0:((1 << AW) - 1)] (* ram_style = "block" *) @11:5
+  initial @14:5
+    begin @14:13
+      if ((INIT_FILE != "")) @15:9
+        expr $readmemh(INIT_FILE, mem) @16:13
+      else
+        expr $readmemb("zeros.bin", mem, 0, 15) @18:13
+  always @21:5
+    @(posedge clk) @21:12
+      data <= mem[addr] @22:9
+module ram_dp @25:1
+  port input wire clk @26:5
+  port input wire we @27:5
+  port input wire [7:0] waddr @28:5
+  port raddr @28:31
+  port input wire [15:0] wdata @29:5
+  port output reg [15:0] rdata @30:5
+  var reg [15:0] mem [255:0] @32:5
+  var integer i @33:5
+  initial @35:5
+    for ((i = 0); (i < 256); (i = (i + 1))) @36:9
+      mem[i] = 16'h0000 @37:13
+  always @39:5
+    @(posedge clk) @39:12
+      begin @39:27
+        if (we) @40:9
+          mem[waddr] <= wdata @40:17
+        rdata <= mem[raddr] @41:9

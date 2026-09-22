@@ -1,0 +1,52 @@
+module adder @3:1
+  ports (non-ansi)
+    port a @3:14
+    port b @3:17
+    port cin @3:20
+    port sum @3:25
+    port cout @3:30
+  portdecl input [3:0] a, b @4:5
+  portdecl input cin @5:5
+  portdecl output [3:0] sum @6:5
+  portdecl output cout @7:5
+  assign {cout, sum} = ((a + b) + cin) @8:5
+module regs @11:1
+  ports (non-ansi)
+    port clk @11:13
+    port d @11:18
+    port q @11:21
+  portdecl input clk @12:5
+  portdecl input [7:0] d @13:5
+  portdecl output [7:0] q @14:5
+  var reg [7:0] q @15:5
+  always @16:5
+    @(posedge clk) @16:12
+      q <= d @16:27
+module regs2 @19:1
+  ports (non-ansi)
+    port clk @19:14
+    port d @19:19
+    port q @19:22
+  portdecl input clk @20:5
+  portdecl input [7:0] d @21:5
+  portdecl output reg [7:0] q @22:5
+  always @23:5
+    @(posedge clk) @23:12
+      q <= d @23:27
+module split @26:1
+  ports (non-ansi)
+    port .hi(bus[7:4]) @26:14
+    port .lo(bus[3:0]) @26:29
+    port .unused() @26:44
+    port {x, y} @26:55
+    port z[1:0] @26:63
+    port (empty) @26:71
+    port w @26:73
+  portdecl inout [7:0] bus @27:5
+  portdecl input x, y @28:5
+  portdecl input [1:0] z @29:5
+  portdecl output w @30:5
+  net wire w = 1'b0 @31:5
+module none @34:1
+module empty_parens @37:1
+  ports (empty)

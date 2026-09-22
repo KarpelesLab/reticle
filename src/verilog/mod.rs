@@ -7,19 +7,28 @@
 //!   expanded text plus a [`SpanMap`] back to the original files.
 //! - [`token`]: the token set, keywords gated by [`Dialect`].
 //! - [`lex`]: tokens with spans, from raw or preprocessed text.
-//! - `parse`: AST with error recovery (not yet written).
-//! - `elab`: name resolution, parameters, generate, width inference.
+//! - [`ast`]: the syntax tree, purely syntactic (names are strings, numbers
+//!   are their source text).
+//! - [`parse`]: recursive descent with error recovery.
+//! - [`ast_dump`]: a deterministic text rendering of the tree, for golden
+//!   tests and debugging.
+//! - `elab`: name resolution, parameters, generate, width inference (not
+//!   yet written).
 //! - `lower`: AST to [`crate::ir`].
 //! - `lint`: AST-level checks that need no synthesis.
 //!
-//! [`lex_source`] is the entry point that runs the preprocessor and lexer
-//! together, which is what the parser will consume.
+//! [`lex_source`] runs the preprocessor and lexer; [`parse_source`] runs
+//! all three stages and is the entry point elaboration will consume.
 
+pub mod ast;
+pub mod ast_dump;
 pub mod lex;
+pub mod parse;
 pub mod preprocess;
 pub mod token;
 
 pub use lex::{CommentKind, Lexed, Lexer};
+pub use parse::{ParseError, Parser};
 pub use preprocess::{IncludeResolver, NoIncludes, Preprocessed, Preprocessor, SpanMap};
 pub use token::{Dialect, Keyword, Punct, Token, TokenKind};
 
@@ -79,4 +88,38 @@ pub fn lex_source_full(
         eof.span = crate::source::Span::new(id, len, len);
     }
     lexed
+}
+
+/// Preprocesses, lexes and parses the file `id` of `map`.
+///
+/// Lexer and parser diagnostics are appended to `diags`; the tree is
+/// always returned, with unparseable regions skipped, so callers can keep
+/// going (a linter or language server wants the partial tree).
+///
+/// ```
+/// use reticle::diag::Diagnostics;
+/// use reticle::source::SourceMap;
+/// use reticle::verilog::ast::ItemKind;
+/// use reticle::verilog::{Dialect, NoIncludes, parse_source};
+///
+/// let mut map = SourceMap::new();
+/// let id = map.add("t.sv", "module m(input logic a, output logic y);\n  assign y = ~a;\nendmodule").unwrap();
+/// let mut diags = Diagnostics::new();
+/// let file = parse_source(&mut map, id, Dialect::SystemVerilog, &mut NoIncludes, &mut diags);
+/// assert!(diags.is_empty());
+/// let ItemKind::Module(m) = &file.items[0].kind else { panic!() };
+/// assert_eq!(m.name.name, "m");
+/// ```
+pub fn parse_source(
+    map: &mut SourceMap,
+    id: SourceId,
+    dialect: Dialect,
+    resolver: &mut dyn IncludeResolver,
+    diags: &mut Diagnostics,
+) -> ast::SourceFile {
+    let tokens = lex_source(map, id, dialect, resolver, diags);
+    let mut parser = Parser::new(&tokens, dialect);
+    let file = parser.parse_source_file();
+    diags.append(&mut parser.take_diagnostics());
+    file
 }

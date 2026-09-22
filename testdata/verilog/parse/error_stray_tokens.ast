@@ -1,0 +1,42 @@
+module m @3:1
+  assign b = a @4:5
+  net wire w @6:5
+  initial @7:5
+    begin @7:13
+  assign b = w @13:5
+var garbage here @15:1
+module ok @16:1
+  port input x @16:11
+  port output y @16:20
+  assign y = x @17:5
+--- diagnostics
+error: expected identifier, found number `42`
+ --> error_stray_tokens.v:3:29
+  |
+3 | module m(input a, output b, 42);
+  |                             ^^
+
+error: expected item, found `endcase`
+ --> error_stray_tokens.v:5:5
+  |
+5 |     endcase
+  |     ^^^^^^^
+
+error: assignment outside a procedural block; use `assign`, or put it in an `initial` or `always` block
+ --> error_stray_tokens.v:9:9
+  |
+9 |         a = 1;
+  |         ^
+
+error: expected `;`, found identifier `baz`
+  --> error_stray_tokens.v:11:13
+   |
+11 |     foo bar baz;
+   |             ^^^
+
+error: expected `;`, found `module`
+  --> error_stray_tokens.v:16:1
+   |
+16 | module ok(input x, output y);
+   | ^^^^^^
+

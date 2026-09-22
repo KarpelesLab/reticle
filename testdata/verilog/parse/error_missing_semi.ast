@@ -1,0 +1,29 @@
+module m @3:1
+  port input a @3:10
+  port output reg y @3:19
+  net wire w = a @4:5
+  net wire v = (~a) @5:5
+  var reg r @6:5
+  always @7:5
+    @(a) @7:12
+      begin @7:17
+  assign y = r @11:5
+--- diagnostics
+error: expected `;`, found `wire`
+ --> error_missing_semi.v:5:5
+  |
+5 |     wire v = ~a;
+  |     ^^^^
+
+error: expected `;`, found `always`
+ --> error_missing_semi.v:7:5
+  |
+7 |     always @(a) begin
+  |     ^^^^^^
+
+error: expected `;`, found identifier `r`
+ --> error_missing_semi.v:9:9
+  |
+9 |         r = v;
+  |         ^
+

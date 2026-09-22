@@ -1,0 +1,31 @@
+typedef byte_t = logic [7:0] @2:1
+typedef word_t [2] = byte_t @3:1
+typedef uint_t = int unsigned @4:1
+typedef quad_t = logic [3:0] [7:0] @5:1
+typedef colour_t = enum {RED, GREEN, BLUE} @7:1
+typedef state_t = enum bit [2:0] {IDLE = 0, RUN = 3'd1, DONE = 3'b111} @8:1
+typedef opcode_t = enum logic [7:0] {OP_ADD = 8'h10, OP_SUB, REG[4], IMM[1:3] = 8'h40} @9:1
+typedef sign_t = enum shortint {NEG = (-1), ZERO, POS} @15:1
+typedef packet_t = struct packed {logic valid; logic [3:0] tag; byte_t data;} @17:1
+typedef bundle_t = struct {int count; string name; packet_t pkts [4];} @23:1
+typedef half_t = union packed {logic [15:0] word; struct packed {logic [7:0] hi, lo;} bytes;} @29:1
+typedef fixed_t = struct packed signed {logic s; logic [6:0] mag;} @34:1
+typedef fwd_t (forward) @36:1
+typedef fwd_s (forward) @37:1
+typedef plain_fwd (forward) @38:1
+module m @40:1
+  var packet_t p @41:5
+  var bundle_t b @42:5
+  var half_t h @43:5
+  var colour_t c = GREEN @44:5
+  var opcode_t op @45:5
+  var quad_t q @46:5
+  var word_t w @47:5
+  var fixed_t f @48:5
+  typedef local_t = logic [1:0] @49:5
+  var local_t l @50:5
+  typedef inner_e = enum {A, B} @51:5
+  var inner_e e @52:5
+  assign h.bytes.hi = p.data @53:5
+  assign p = '{valid: 1'b1, tag: 4'd2, data: 8'hff} @54:5
+  assign q = '{default: '0} @55:5

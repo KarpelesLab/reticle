@@ -1,0 +1,51 @@
+module traffic_light @3:1
+  port input logic clk @4:5
+  port input logic rst_n @5:5
+  port input logic car_waiting @6:5
+  port output logic red @7:5
+  port output logic yellow @8:5
+  port output logic green @9:5
+  typedef state_t = enum logic [1:0] {S_RED = 2'b00, S_GREEN = 2'b01, S_YELLOW = 2'b10} @11:5
+  var state_t state, next_state @17:5
+  var logic [3:0] timer @18:5
+  var logic timer_done @19:5
+  always_ff @21:5
+    @(posedge clk, negedge rst_n) @21:15
+      begin @21:47
+        if ((!rst_n)) @22:9
+          state <= S_RED @22:21
+        else
+          state <= next_state @23:21
+  always_ff @26:5
+    @(posedge clk) @26:15
+      begin @26:30
+        if ((state != next_state)) @27:9
+          timer <= '0 @27:34
+        else
+          timer <= (timer + 1'b1) @28:34
+  assign timer_done = (&timer) @31:5
+  always_comb @33:5
+    begin @33:17
+      next_state = state @34:9
+      unique case (state) @35:9
+        item S_RED @36:13
+          if ((timer_done && car_waiting)) @36:23
+            next_state = S_GREEN @36:54
+        item S_GREEN @37:13
+          if (timer_done) @37:23
+            next_state = S_YELLOW @37:54
+        item S_YELLOW @38:13
+          if (timer[1]) @38:23
+            next_state = S_RED @38:54
+  always_comb @42:5
+    begin @42:17
+      {red, yellow, green} = 3'b000 @43:9
+      priority case (state) @44:9
+        item S_RED @45:13
+          red = 1'b1 @45:23
+        item S_GREEN @46:13
+          green = 1'b1 @46:23
+        item S_YELLOW @47:13
+          yellow = 1'b1 @47:23
+        default @48:13
+          red = 1'b1 @48:23

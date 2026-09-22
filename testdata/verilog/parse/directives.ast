@@ -1,0 +1,14 @@
+directive `timescale 1ns / 1ps @3:1
+directive `default_nettype none @4:1
+directive `resetall @7:1
+directive `timescale 10 ps / 1 ps @8:1
+module dir @10:1
+  port input wire clk @10:12
+  port output reg [(8 - 1):0] q @10:28
+  directive `default_nettype wire @11:5
+  var reg [(8 - 1):0] r @12:5
+  net wire synth = 1'b0 @16:5
+  always @18:5
+    @(posedge clk) @18:12
+      q <= r @18:27
+directive `default_nettype wire @23:1

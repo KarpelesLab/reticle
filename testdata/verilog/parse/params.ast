@@ -1,0 +1,32 @@
+module params @3:1
+  param parameter int W = 8
+  param parameter type T = logic [(W - 1):0]
+  param localparam int W2 = (W * 2)
+  param parameter real GAIN = 1.5
+  param parameter string NAME = "params"
+  param parameter logic [3:0] MASK = 4'hf, INIT = 0
+  param parameter signed [7:0] S = (-1)
+  param parameter [7:0] R = 8'd3, R2 = 8'd4
+  param parameter type U = int
+  port input T in @15:5
+  port output T out @16:5
+  param parameter P1 = 1, P2 = (P1 + 1) @18:5
+  param localparam int L = (W2 / 2) @19:5
+  param localparam type VT = logic [(L - 1):0] @20:5
+  param parameter [(W - 1):0] MEM_INIT [0:3] = '{0, 1, 2, 3} @21:5
+  param parameter bit [1:0] TWO = 2'b10 @22:5
+  param specparam TSETUP = 1.2, THOLD = 0.8 @23:5
+  param specparam TP = 1:2:3 @24:5
+  var VT vt @25:5
+  var U u @26:5
+  assign out = T'((in & MASK)) @27:5
+module empty_params @30:1
+  params (empty)
+  port input a @30:26
+module override @33:1
+  instance params #(.W(16), .T(logic [15:0]), .GAIN(2.0), .NAME("x"), .U(byte)) @34:5
+    u0 (.in(), .out()) @34:74
+  instance params #(4, logic [3:0]) @35:5
+    u1 (.in('0), .out()) @35:30
+  defparam u0.P1 = 5, u1.P1 = 6 @36:5
+  defparam override.u0.P2 = 7 @37:5

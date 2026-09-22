@@ -1,0 +1,35 @@
+module broken @3:1
+  port input logic clk @3:15
+  port input logic [1:0] s @3:32
+  port output logic y @3:53
+  always_ff @4:5
+    @(posedge clk) @4:15
+      begin @4:30
+        y <= s[0] @5:9
+        if (s[1]) @6:9
+          begin @6:19
+            y <= 1'b0 @7:13
+  always_comb @10:5
+    begin @10:17
+      case (s) @11:9
+        item 2'd0 @12:13
+          y = 1'b1 @12:19
+        item 2'd1 @13:13
+          y = 1'b0 @13:19
+module fine @18:1
+  port input a @18:13
+  port output b @18:22
+  assign b = a @19:5
+--- diagnostics
+error: expected `end`, found `always_comb`
+  --> error_unclosed_block.sv:10:5
+   |
+10 |     always_comb begin
+   |     ^^^^^^^^^^^
+
+error: expected `:`, found `=`
+  --> error_unclosed_block.sv:14:11
+   |
+14 |         y = 1'b1;
+   |           ^
+

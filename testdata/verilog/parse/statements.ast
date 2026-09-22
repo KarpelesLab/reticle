@@ -1,0 +1,124 @@
+module stmts @4:1
+  var logic [7:0] a, b, c @5:5
+  var int i, j @6:5
+  var event ev @7:5
+  var logic [3:0] arr [4] @8:5
+  initial @10:5
+    begin : main @10:13
+      a = 8'd1 @11:9
+      b <= a @12:9
+      a += 1 @13:9
+      a -= 1 @14:9
+      a *= 2 @15:9
+      a /= 2 @16:9
+      a %= 3 @17:9
+      a &= 8'hf0 @18:9
+      a |= 8'h0f @19:9
+      a ^= 8'hff @20:9
+      a <<= 1 @21:9
+      a >>= 1 @22:9
+      a <<<= 1 @23:9
+      a >>>= 1 @24:9
+      expr i++ @25:9
+      expr i-- @26:9
+      expr ++i @27:9
+      expr --i @28:9
+      {a, b} = {b, a} @29:9
+      a[3:0] = b[7:4] @30:9
+      a[i] = b[j] @31:9
+      a[i+:2] = b[j-:2] @32:9
+      arr[1][2] = 1'b1 @33:9
+      null @34:9
+  initial @37:5
+    begin @37:13
+      decl var int local_i = 3 @38:9
+      decl var logic [1:0] local_l @39:9
+      decl var automatic int auto_i = 4 @40:9
+      decl var static int static_i = 5 @41:9
+      decl param localparam int LP = 6 @42:9
+      decl param parameter P = 7 @43:9
+      decl typedef two_t = logic [1:0] @44:9
+      decl var two_t tt @45:9
+      begin : inner @46:9
+        decl var int deep = (LP + P) @47:13
+        tt = deep[1:0] @48:13
+  always @52:5
+    @(a) @52:12
+      begin @52:17
+        if ((a == 0)) @53:9
+          b = 1 @53:21
+        if ((a == 1)) @54:9
+          b = 2 @54:21
+        else
+          b = 3 @54:33
+        if ((a == 2)) @55:9
+          begin @55:21
+            b = 4 @55:27
+        else
+          if ((a == 3)) @55:43
+            begin @55:55
+              b = 5 @55:61
+          else
+            begin @55:77
+              b = 6 @55:83
+        unique if (a[0]) @56:9
+          b = 7 @56:26
+        else
+          if (a[1]) @56:38
+            b = 8 @56:48
+        unique0 if (a[0]) @57:9
+          b = 9 @57:27
+        priority if (a[0]) @58:9
+          b = 10 @58:28
+        else
+          b = 11 @58:41
+        if (a) @59:9
+          if (b) @59:16
+            c = 1 @59:23
+          else
+            c = 2 @59:35
+  initial @62:5
+    begin @62:13
+      proc-assign a = b @63:9
+      deassign a @64:9
+      force c = 8'hff @65:9
+      release c @66:9
+      -> ev @67:9
+      ->> ev @68:9
+      disable main @69:9
+      disable fork @70:9
+      wait fork @71:9
+      expr $display("done") @72:9
+      expr $finish @73:9
+      expr $finish() @74:9
+      expr void'(some_func(a)) @75:9
+      expr some_task(a, b) @76:9
+      expr top.sub.some_task @77:9
+      lbl: a = 1 @78:9
+      lbl2: begin @79:9
+        b = 2 @80:13
+      fork join @82:9
+        a = 1 @83:13
+        b = 2 @84:13
+      fork join_any : named_fork @86:9
+        #1 @87:13
+          a = 1 @87:16
+        #2 @88:13
+          b = 2 @88:16
+      fork join_none @90:9
+        c = 3 @91:13
+      a = 1 (* full_case *) @93:9
+  function int f @96:5
+    port int x @96:20
+    if ((x < 0)) @97:9
+      return (-x) @97:20
+    return x @98:9
+  task t (no port list) @101:5
+    decl var int k @102:9
+    for ((k = 0); (k < 4); k++) @103:9
+      begin @103:33
+        if ((k == 2)) @104:13
+          continue @104:25
+        if ((k == 3)) @105:13
+          break @105:25
+    return @107:9

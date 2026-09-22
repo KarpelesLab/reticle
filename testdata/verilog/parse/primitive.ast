@@ -1,0 +1,43 @@
+primitive mux2 @3:1
+  ports (non-ansi)
+    port out @3:16
+    port sel @3:21
+    port a @3:26
+    port b @3:29
+  portdecl output out @4:5
+  portdecl input sel, a, b @5:5
+  table @6:5
+    0 0 ? : 0 @8:9
+    0 1 ? : 1 @9:9
+    1 ? 0 : 0 @10:9
+    1 ? 1 : 1 @11:9
+    ? 0 0 : 0 @12:9
+    ? 1 1 : 1 @13:9
+primitive dff_udp @17:1
+  ports (non-ansi)
+    port q @17:19
+    port clk @17:22
+    port d @17:27
+  portdecl output q @18:5
+  var reg q @19:5
+  portdecl input clk, d @20:5
+  initial @21:5
+    q = 1'b0 @21:13
+  table @22:5
+    ( 01 ) 0 : ? : 0 @24:9
+    ( 01 ) 1 : ? : 1 @25:9
+    ( 0 ? ) 1 : 1 : 1 @26:9
+    ( ? 0 ) ? : ? : - @27:9
+    ? ( ? ? ) : ? : - @28:9
+module uses_udp @32:1
+  port input clk @32:17
+  port d @32:28
+  port sel @32:31
+  port a @32:36
+  port b @32:39
+  port output q @32:42
+  port y @32:52
+  instance dff_udp @33:5
+    ff (q, clk, d) @33:13
+  instance mux2 @34:5
+    m (y, sel, a, b) @34:10

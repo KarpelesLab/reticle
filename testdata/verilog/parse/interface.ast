@@ -1,0 +1,62 @@
+interface bus_if @3:1
+  param parameter int AW = 8, DW = 32
+  port input logic clk @3:52
+  var logic [(AW - 1):0] addr @4:5
+  var logic [(DW - 1):0] wdata, rdata @5:5
+  var logic we, req, ack @6:5
+  modport master @8:13
+    output addr @8:21
+    output wdata @8:34
+    output we @8:41
+    output req @8:45
+    input rdata @8:50
+    input ack @8:63
+    import do_write @8:68
+  modport slave @9:13
+    input addr @9:21
+    input wdata @9:33
+    input we @9:40
+    input req @9:44
+    output rdata @9:49
+    output ack @9:63
+  modport monitor @10:13
+    input addr @10:21
+    input .data(wdata) @10:33
+    input clk @10:47
+  task automatic do_write @12:5
+    port input logic [(AW - 1):0] a @12:29
+    port input logic [(DW - 1):0] d @12:53
+    addr <= a @13:9
+    wdata <= d @14:9
+    we <= 1'b1 @15:9
+    req <= 1'b1 @16:9
+    @(posedge clk iff ack) @17:9
+      null @17:31
+    req <= 1'b0 @18:9
+  clocking cb @(posedge clk) @21:5
+    body: default input # 1step output # 2 ; input rdata , ack ; output addr , wdata ;
+module producer @28:1
+  port bus_if.master bus @28:18
+  port input logic start @28:37
+  always_ff @29:5
+    @(posedge bus.clk) @29:15
+      if (start) @30:9
+        expr bus.do_write(8'h10, 32'hdead_beef) @30:20
+module consumer @33:1
+  port bus_if bus @33:18
+  always_comb @34:5
+    bus.ack = bus.req @34:17
+module generic_port @37:1
+  port interface any @37:22
+  port interface.slave s @37:37
+  assign s.rdata = any.wdata @38:5
+module top @41:1
+  var logic clk = 0 @42:5
+  instance bus_if #(.AW(8), .DW(32)) @43:5
+    bus (.clk(clk)) @43:31
+  instance producer @44:5
+    p (.bus(bus), .start(1'b1)) @44:14
+  instance consumer @45:5
+    c (.bus) @45:14
+  instance generic_port @46:5
+    g (.any(bus), .s(bus)) @46:18

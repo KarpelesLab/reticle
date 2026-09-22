@@ -1,0 +1,42 @@
+typedef u8 = logic [7:0] @3:1
+param parameter int G = 3 @4:1
+param localparam string V = "1.0" @5:1
+var int unit_var @6:1
+import pkg::* @7:1
+function automatic int twice @9:1
+  port int x @9:30
+  return (2 * x) @10:5
+task unit_task (no port list) @13:1
+  expr $display("unit") @14:5
+macromodule mm @17:1
+  port input u8 a @17:16
+  port output u8 b @17:28
+  assign b = a @18:5
+program automatic test @21:1
+  port input logic clk @21:24
+  initial @22:5
+    begin @22:13
+      @(posedge clk) @23:9
+        null @23:23
+      expr $display("program") @24:9
+module outer @28:1
+  net wire [7:0] x, y @29:5
+  net wire [3:0] lo, hi @30:5
+  alias x, y @31:5
+  alias lo, x[3:0] @32:5
+  alias hi, x[7:4], y[7:4] @33:5
+  module nested @35:5
+    port input a @35:19
+    port output b @35:28
+    assign b = a @36:9
+  instance nested @39:5
+    n0 (.a(x[0]), .b(y[0])) @39:12
+  net wire bus/sel = x[1] @40:5
+  net wire a+b = bus/sel @41:5
+  instance mm @42:5
+    mm.inst (.a(x), .b(y)) @42:8
+  empty @43:5
+module static_mod @46:1
+module automatic auto_mod @49:1
+interface automatic ifc @52:1
+package automatic pk @55:1

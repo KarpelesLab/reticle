@@ -1,0 +1,26 @@
+typedef byte_t = logic [7:0] @4:1
+module ansi @6:1
+  param parameter N = 4
+  port input a @7:5
+  port b @7:14
+  port input wire c @8:5
+  port input wire [3:0] d @9:5
+  port e @9:25
+  port input logic signed [7:0] s @10:5
+  port output reg [(N - 1):0] r @11:5
+  port output logic [(N - 1):0] l = '0 @12:5
+  port output var logic v @13:5
+  port output tri t (* mark_debug = "true" *) @14:5
+  port inout wire [1:0] io @15:5
+  port input byte_t bytes [0:3] @16:5
+  port input int unsigned u @17:5
+  port ref logic rf @18:5
+  port input bus_if.master m @19:5
+  port input pkg::word_t w @20:5
+  port input logic [1:0] [3:0] packed2d @21:5
+  port input logic arr [2] [3] @22:5
+module lonely @26:1
+  port input clk @26:16
+module typed_first @29:1
+  port byte_t x @29:21
+  port output y @29:31

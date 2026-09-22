@@ -1,0 +1,16 @@
+timeunit 1ns @3:1
+timeprecision 1ps @4:1
+module with_specify @6:1
+  port input logic clk @6:21
+  port a @6:38
+  port output logic y @6:41
+  timeunit 1ns / 1ps @7:5
+  assign y = a @9:5
+  specify (skipped) @11:5
+  clocking cb @(posedge clk) @20:5
+    body: default input # 1step output # 0 ; input a ; output y ;
+  clocking default cb @26:5
+  clocking global gcb @(posedge clk) @28:5
+  directive `default_nettype none @30:5
+  net wire logic w @31:5
+  directive `resetall @32:5

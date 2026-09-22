@@ -1,0 +1,59 @@
+module m @3:1
+  port input [3:0] a @3:10
+  port b @3:25
+  port output reg [3:0] y @3:28
+  port z @3:48
+  always @4:5
+    @(a, b) @4:12
+      begin @4:22
+        z = b @10:9
+  assign z = a @15:5
+--- diagnostics
+error: expected expression, found `;`
+ --> error_bad_expr.v:5:17
+  |
+5 |         y = a + ;
+  |                 ^
+
+error: expected `)`, found `;`
+ --> error_bad_expr.v:6:19
+  |
+6 |         z = (a + b;
+  |                   ^
+
+error: expected `;`, found identifier `b`
+ --> error_bad_expr.v:7:15
+  |
+7 |         y = a b;
+  |               ^
+
+error: expected expression, found `}`
+ --> error_bad_expr.v:8:17
+  |
+8 |         z = {a, };
+  |                 ^
+
+error: expected expression, found `;`
+ --> error_bad_expr.v:9:17
+  |
+9 |         y = a[3:;
+  |                 ^
+
+error: expected expression, found `*`
+  --> error_bad_expr.v:12:16
+   |
+12 |     assign y = * a;
+   |                ^
+
+error: expected `:`, found `;`
+  --> error_bad_expr.v:13:21
+   |
+13 |     assign z = a ? b;
+   |                     ^
+
+error: expected expression, found `;`
+  --> error_bad_expr.v:14:18
+   |
+14 |     assign y = a[;
+   |                  ^
+

@@ -1,0 +1,39 @@
+module mac @3:1
+  param parameter int W = 16
+  port input logic clk @6:5
+  port input logic rst_n @7:5
+  port input logic clear @8:5
+  port input logic signed [(W - 1):0] a @9:5
+  port b @9:36
+  port output logic signed [(2 * W):0] acc @10:5
+  port output logic overflow @11:5
+  typedef stage_t = struct packed {logic signed [((2 * W) - 1):0] prod; logic valid;} @13:5
+  var stage_t s1 @18:5
+  var logic signed [(2 * W):0] sum @19:5
+  var logic latch_q @20:5
+  always_ff @22:5
+    @(posedge clk, negedge rst_n) @22:15
+      begin : stage1 @22:47
+        if ((!rst_n)) @23:9
+          begin @23:21
+            s1 <= '{prod: '0, valid: 1'b0} @24:13
+        else
+          begin @25:18
+            s1.prod <= (a * b) @26:13
+            s1.valid <= 1'b1 @27:13
+  always_comb @31:5
+    sum = (acc + s1.prod) @31:17
+  always_ff @33:5
+    @(posedge clk) @33:15
+      begin @33:30
+        if (clear) @34:9
+          acc <= '0 @34:29
+        else
+          if (s1.valid) @35:14
+            acc <= sum @35:29
+  always_ff @38:5
+    @(posedge clk iff (!clear)) @38:15
+      overflow <= (sum[(2 * W)] ^ sum[((2 * W) - 1)]) @38:41
+  always_latch @40:5
+    if (clear) @41:9
+      latch_q = 1'b0 @41:20

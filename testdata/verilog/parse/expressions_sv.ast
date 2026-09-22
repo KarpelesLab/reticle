@@ -1,0 +1,71 @@
+module exprs_sv @4:1
+  var logic [7:0] a, b @5:5
+  var logic [31:0] w @6:5
+  var int i, j @7:5
+  var int q [$] @8:5
+  var int dyn [] @9:5
+  var string s @10:5
+  typedef half_t = logic [15:0] @11:5
+  var half_t h @12:5
+  var logic [3:0] nib @13:5
+  assign w = int'(a) @16:5
+  assign w = 16'(a) @17:5
+  assign w = (i + 1)'(a) @18:5
+  assign w = signed'(a) @19:5
+  assign w = unsigned'(a) @20:5
+  assign w = const'(a) @21:5
+  assign w = half_t'(a) @22:5
+  assign w = pkg::t'(a) @23:5
+  assign w = logic'(a) @24:5
+  assign w = string'(a) @25:5
+  assign w = half_t'{default: 0} @26:5
+  assign w = (8'(a) + 8'(b)) @27:5
+  assign nib[0] = (a inside {8'd1, 8'd2, [8'd10:8'd20]}) @30:5
+  assign nib[1] = ((a inside {b, [0:3]}) && b[0]) @31:5
+  assign nib[2] = (a ==? 8'b1x0z_????) @32:5
+  assign nib[3] = (a !=? b) @33:5
+  assign w = {<< {a, b}} @36:5
+  assign w = {>> 8 {a, b}} @37:5
+  assign w = {<< byte {w}} @38:5
+  assign w = '{1, 2, 3, 4} @39:5
+  assign w = '{default: '0, 1: 8'd5} @40:5
+  assign w = '{int: 0, logic: 1} @41:5
+  assign w = '{{4{8'd0}}} @42:5
+  assign w = '{} @43:5
+  assign a = '0 @46:5
+  assign a = '1 @47:5
+  assign a = 'x @48:5
+  assign a = 'z @49:5
+  assign i = $bits(int) @50:5
+  assign i = $bits(logic [3:0]) @51:5
+  assign i = $bits(half_t) @52:5
+  assign i = $bits(a) @53:5
+  assign i = $size(dyn, 1) @54:5
+  assign i = $clog2(pkg::DEPTH) @55:5
+  assign i = pkg::f(a) @56:5
+  assign i = (pkg::CONST + $unit::G) @57:5
+  initial @59:5
+    begin @59:13
+      expr q.push_back(1) @60:9
+      i = q.size() @61:9
+      i = q[$] @62:9
+      i = q[($ - 1)] @63:9
+      q = q[1:$] @64:9
+      dyn = new(8) @65:9
+      dyn = new(16, dyn) @66:9
+      s = "abc" @67:9
+      i = s.len() @68:9
+      i = s.substr(0, 1).len() @69:9
+      i = a.b.c.d @70:9
+      j = (i++ + ++i) @71:9
+      j = (i-- - --i) @72:9
+      w = ((a ** 2) - (-b)) @73:9
+      w = (a = b) @74:9
+      w = 10ns @75:9
+      w = 1step @76:9
+      w = 1.5ms @77:9
+      i = (null == null) @78:9
+      i = $root.top.i @79:9
+      w = a.first() @80:9
+      w = arr.sum @81:9
+      w = {>> {a}} @82:9

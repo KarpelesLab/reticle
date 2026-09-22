@@ -1,0 +1,53 @@
+module sync_fifo @3:1
+  param parameter int WIDTH = 8
+  param parameter int DEPTH = 16
+  param parameter bit OUTPUT_REG = 1
+  param localparam int AW = $clog2(DEPTH)
+  port input logic clk @9:5
+  port input logic rst @10:5
+  port input logic wr_en @11:5
+  port input logic [(WIDTH - 1):0] wr_data @12:5
+  port output logic full @13:5
+  port input logic rd_en @14:5
+  port output logic [(WIDTH - 1):0] rd_data @15:5
+  port output logic empty @16:5
+  port output logic [AW:0] count @17:5
+  var logic [(WIDTH - 1):0] mem [DEPTH] @19:5
+  var logic [AW:0] wr_ptr, rd_ptr @20:5
+  var logic [(WIDTH - 1):0] rd_word @21:5
+  assign full = ((wr_ptr[AW] != rd_ptr[AW]) && (wr_ptr[(AW - 1):0] == rd_ptr[(AW - 1):0])) @23:5
+  assign empty = (wr_ptr == rd_ptr) @24:5
+  assign count = (wr_ptr - rd_ptr) @25:5
+  always_ff @27:5
+    @(posedge clk) @27:15
+      begin @27:30
+        if (rst) @28:9
+          begin @28:18
+            wr_ptr <= '0 @29:13
+            rd_ptr <= '0 @30:13
+        else
+          begin @31:18
+            if ((wr_en && (!full))) @32:13
+              begin @32:33
+                mem[wr_ptr[(AW - 1):0]] <= wr_data @33:17
+                wr_ptr <= (wr_ptr + 1'b1) @34:17
+            if ((rd_en && (!empty))) @36:13
+              rd_ptr <= (rd_ptr + 1'b1) @37:17
+  assign rd_word = mem[rd_ptr[(AW - 1):0]] @41:5
+  generate @43:5
+    gen-if (OUTPUT_REG) @44:9
+      then : g_reg @44:25
+        always_ff @45:13
+          @(posedge clk) @45:23
+            rd_data <= rd_word @45:38
+      else : g_comb @46:18
+        assign rd_data = rd_word @47:13
+  param localparam int BYTES = ((WIDTH + 7) / 8) @52:5
+  var logic [(BYTES - 1):0] parity @53:5
+  genvar b @54:5
+  generate @55:5
+    gen-for (b = 0; (b < BYTES); (b = (b + 1))) @56:9
+      block : g_parity @56:43
+        param localparam int LO = (b * 8) @57:13
+        param localparam int HI = (((LO + 7) < WIDTH) ? (LO + 7) : (WIDTH - 1)) @58:13
+        assign parity[b] = (^wr_data[HI:LO]) @59:13

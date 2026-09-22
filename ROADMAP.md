@@ -94,7 +94,7 @@ parts of SystemVerilog (IEEE 1800) that people actually use.
       trace through expansions.
 - [x] Lexer: full token set, numeric literals with bases and `x`/`z` digits,
       escaped identifiers, attributes `(* ... *)`.
-- [ ] Parser: modules, ports (ANSI and non-ANSI), parameters, nets, regs,
+- [x] Parser: modules, ports (ANSI and non-ANSI), parameters, nets, regs,
       `always` / `always_ff` / `always_comb` / `always_latch`, `initial`,
       continuous assigns, instances, `generate`, functions, tasks, `case`
       variants, `for`/`while`/`repeat`, `logic`, packed/unpacked arrays,

@@ -1,0 +1,46 @@
+package math_pkg @3:1
+  param localparam int WIDTH = 16 @4:5
+  param parameter real PI = 3.14159 @5:5
+  typedef word_t = logic [(WIDTH - 1):0] @6:5
+  typedef level_t = enum logic {LOW, HIGH} @7:5
+  function automatic word_t saturate @9:5
+    port input int x @9:40
+    if ((x > ((2 ** WIDTH) - 1))) @10:9
+      return '1 @10:31
+    else
+      if ((x < 0)) @11:14
+        return '0 @11:31
+      else
+        return word_t'(x) @12:31
+  function int max2 @15:5
+    port int a @15:23
+    port int b @15:30
+    return ((a > b) ? a : b) @16:9
+  task automatic wait_cycles @19:5
+    port input int n @19:32
+    repeat (n) @20:9
+      #1 @20:20
+        null @20:22
+package util_pkg @24:1
+  import math_pkg::WIDTH @25:5
+  export math_pkg::WIDTH @26:5
+  param localparam int DOUBLE = (WIDTH * 2) @27:5
+  export *::* @28:5
+module user @31:1
+  import math_pkg::*, util_pkg::DOUBLE
+  param parameter int N = WIDTH
+  port input word_t a @37:5
+  port b @37:22
+  port output word_t y @38:5
+  var level_t lvl = HIGH @40:5
+  assign y = saturate((max2(a, b) + N)) @41:5
+module scoped @44:1
+  import math_pkg::word_t @45:5
+  var math_pkg::word_t w @46:5
+  var logic [(math_pkg::WIDTH - 1):0] v @47:5
+  initial @48:5
+    begin @48:13
+      w = math_pkg::saturate((-5)) @49:9
+      v = w @50:9
+      expr $display("%0d", math_pkg::PI) @51:9
+      expr $display("%0d", $unit::something) @52:9

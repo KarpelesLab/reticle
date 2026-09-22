@@ -1,0 +1,63 @@
+module dut @3:1
+  port input logic clk @3:12
+  port rst @3:29
+  port req @3:34
+  port ack @3:39
+  port input logic [3:0] cnt @3:44
+  always @4:5
+    @(posedge clk) @4:12
+      begin @4:27
+        assert ((cnt < 4'd10)) @5:9
+        assert ((cnt != 4'd15)) @6:9
+          else
+            expr $error("saturated") @6:36
+        assert ((req -> ack)) @7:9
+          expr $display("ok") @7:29
+          else
+            expr $fatal(1, "bad") @7:50
+        assume ((rst == 0)) @8:9
+          else
+            expr $warning("reset") @8:32
+        cover (ack) @9:9
+          expr $info("covered") @9:21
+        assert #0 ((cnt > 0)) @10:9
+        assert final ((cnt > 0)) @11:9
+          else
+            expr $error("final") @11:37
+        assume #0 (req) @12:9
+          expr $display("assumed") @12:25
+        chk: assert (cnt[0]) @13:9
+          else
+            begin @13:35
+              expr $error("odd") @14:13
+              expr $finish @15:13
+  a_req_ack: assert property (@ ( posedge clk ) disable iff ( rst ) req |-> ## [ 1 : 3 ] ack) @19:5
+    else
+      expr $error("no ack") @20:14
+  assert property (@ ( posedge clk ) req |=> ack) @21:5
+  assume property (@ ( posedge clk ) ! ( req && ack )) @22:5
+  c_ack: cover property (@ ( posedge clk ) req ## 1 ack) @23:5
+  cover property (@ ( posedge clk ) req ## 1 ack) @24:5
+  restrict property (@ ( posedge clk ) cnt < 8) @25:5
+  a_lbl: assert property (p_stable ( cnt )) @26:5
+    expr $display("stable") @26:44
+    else
+      expr $error("changed") @26:69
+  property p_stable @28:5
+    body: ( x ) ; @ ( posedge clk ) $stable ( x ) or $rose ( req ) ;
+  sequence s_handshake @32:5
+    body: ; req ## [ 1 : $ ] ack ;
+  clocking default cb @(posedge clk) @36:5
+module checker_mod @40:1
+  port input logic clk @40:20
+  port input logic [3:0] cnt @40:37
+  a: assert property (@ ( posedge clk ) cnt != 4'hf) @41:5
+bind dut @44:1
+  instance checker_mod @44:1
+    chk_i (.clk(clk), .cnt(cnt)) @44:22
+bind dut: u0, u1 @45:1
+  instance checker_mod @45:1
+    chk_j (.*) @45:30
+bind top.dut_inst @46:1
+  instance checker_mod #(.P(1)) @46:1
+    chk_k (.clk, .cnt) @46:40

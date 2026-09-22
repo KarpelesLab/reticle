@@ -1,0 +1,58 @@
+directive `timescale 1ns / 1ps @3:1
+module tb @4:1
+  var reg clk = 0 @5:5
+  var reg rst @6:5
+  var reg [7:0] d @7:5
+  net wire [7:0] q @8:5
+  var integer errors = 0 @9:5
+  var integer fd @10:5
+  always @12:5
+    #5 @12:12
+      clk = (~clk) @12:15
+  instance counter #(.WIDTH(8)) @14:5
+    dut (.clk(clk), .rst_n((~rst)), .en(1'b1), .up(1'b1), .load(1'b0), .d(d), .q(q), .wrap()) @14:26
+  task automatic check @25:5
+    port input [7:0] expected @25:26
+    begin @26:9
+      if ((q !== expected)) @27:13
+        begin @27:33
+          expr $display("%0t: FAIL q=%h expected=%h", $time, q, expected) @28:17
+          errors = (errors + 1) @29:17
+  task reset_dut (no port list) @34:5
+    begin @35:9
+      rst = 1 @36:13
+      repeat (2) @37:13
+        @(posedge clk) @37:24
+          null @37:38
+      #1 @38:13
+        rst = 0 @38:16
+  initial @42:5
+    begin @42:13
+      expr $dumpfile("tb.vcd") @43:9
+      expr $dumpvars(0, tb) @44:9
+      expr $monitor("t=%0t q=%0d", $time, q) @45:9
+      d = 8'h00 @46:9
+      expr reset_dut @47:9
+      @(posedge clk) @48:9
+        null @48:23
+      #1 @49:9
+        expr check(8'h01) @49:12
+      repeat (10) @50:9
+        @(negedge clk) @50:21
+          null @50:35
+      expr check(8'h0b) @51:9
+      fd = $fopen("log.txt", "w") @52:9
+      expr $fdisplay(fd, "errors=%0d", errors) @53:9
+      expr $fclose(fd) @54:9
+      if ((errors == 0)) @55:9
+        expr $display("PASS") @55:26
+      else
+        expr $display("FAIL: %0d errors", errors) @56:14
+      #100 @57:9
+        expr $finish @57:14
+  initial @60:5
+    begin : watchdog @60:13
+      #100000 @61:9
+        null @61:16
+      expr $display("timeout") @62:9
+      expr $finish(1) @63:9

@@ -1,0 +1,74 @@
+module gates @3:1
+  port input a @3:14
+  port b @3:23
+  port c @3:26
+  port en @3:29
+  port output y0 @3:33
+  port y1 @3:44
+  port y2 @3:48
+  port y3 @3:52
+  port y4 @3:56
+  port y5 @3:60
+  port y6 @3:64
+  port y7 @3:68
+  port inout p @3:72
+  port q @3:81
+  net wire [3:0] va, vb, vy @4:5
+  gate and @5:5
+    g0 (y0, a, b) @5:9
+  gate nand @6:5
+    (unnamed) (y1, a, b, c) @6:10
+  gate or #2 @7:5
+    g2 (y2, a, b) @7:11
+  gate nor #(1, 2) @8:5
+    g3 (y3, a, b) @8:17
+  gate xor (strong0, weak1) @9:5
+    g4 (y4, a, b) @9:26
+  gate xnor (weak1, strong0) #(1:2:3) @10:5
+    g5 (y5, a, b) @10:36
+  gate buf @11:5
+    b0 (y6, a) @11:9
+    b1 (y7, b) @11:21
+  gate not #1 @12:5
+    n0 (y7, a) @12:12
+  gate bufif1 @13:5
+    t0 (y0, a, en) @13:12
+  gate bufif0 @14:5
+    t1 (y1, a, en) @14:12
+  gate notif1 @15:5
+    t2 (y2, a, en) @15:12
+  gate notif0 @16:5
+    t3 (y3, a, en) @16:12
+  gate and @17:5
+    ga [3:0] (vy, va, vb) @17:9
+  gate nmos @18:5
+    m0 (y4, a, en) @18:10
+  gate pmos @19:5
+    m1 (y5, a, en) @19:10
+  gate cmos @20:5
+    m2 (y6, a, en, (~en)) @20:10
+  gate rnmos @21:5
+    m3 (y4, a, en) @21:11
+  gate rpmos @22:5
+    m4 (y5, a, en) @22:11
+  gate rcmos @23:5
+    m5 (y6, a, en, (~en)) @23:11
+  gate tran @24:5
+    tr0 (p, q) @24:10
+  gate rtran @25:5
+    tr1 (p, q) @25:11
+  gate tranif1 @26:5
+    tr2 (p, q, en) @26:13
+  gate tranif0 @27:5
+    tr3 (p, q, en) @27:13
+  gate rtranif1 @28:5
+    tr4 (p, q, en) @28:14
+  gate rtranif0 @29:5
+    tr5 (p, q, en) @29:14
+  gate pullup (strong1) @30:5
+    pu (p) @30:22
+  gate pulldown @31:5
+    pd (q) @31:14
+  gate pullup @32:5
+    pu2 (p) @32:12
+    pu3 (q) @32:21

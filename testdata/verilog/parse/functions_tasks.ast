@@ -1,0 +1,85 @@
+module subs @4:1
+  function [7:0] add8 (no port list) @5:5
+    decl portdecl input [7:0] a, b @6:9
+    begin @7:9
+      add8 = (a + b) @8:13
+  function automatic integer fact @12:5
+    port input integer n @12:37
+    if ((n <= 1)) @13:9
+      fact = 1 @13:21
+    else
+      fact = (n * fact((n - 1))) @14:14
+  function signed [15:0] neg @17:5
+    port input signed [15:0] x @17:32
+    neg = (-x) @18:9
+  function void log @21:5
+    port string msg @21:23
+    port int level = 0 @21:35
+    expr $display("[%0d] %s", level, msg) @22:9
+  function int sum @25:5
+    port int arr [] @25:22
+    port ref int count @25:33
+    sum = 0 @26:9
+    count = 0 @27:9
+    foreach arr[k] @28:9
+      begin @28:26
+        sum += arr[k] @29:13
+        expr count++ @30:13
+  function static bit parity @34:5
+    port input bit [7:0] v @34:32
+    parity = (^v) @35:9
+  function logic [3:0] nibble @38:5
+    port logic [7:0] v @38:33
+    port bit hi @38:48
+    return (hi ? v[7:4] : v[3:0]) @39:9
+  function real half @42:5
+    port real x @42:24
+    return (x / 2.0) @43:9
+  function noargs (no port list) @46:5
+    noargs = 1'b1 @47:9
+  function pkg::word_t typed_ret @50:5
+    port input a @50:36
+    typed_ret = a @51:9
+  task automatic pulse @54:5
+    port inout logic sig @54:26
+    port input int width = 1 @54:43
+    port output int done @54:64
+    decl var int i @55:9
+    decl var logic saved = sig @56:9
+    for ((i = 0); (i < width); i++) @57:9
+      begin @57:37
+        sig = (~sig) @58:13
+        #1 @59:13
+          null @59:15
+    sig = saved @61:9
+    done = 1 @62:9
+  task old_style (no port list) @65:5
+    decl portdecl input [3:0] a @66:9
+    decl portdecl output [3:0] b @67:9
+    decl portdecl inout c @68:9
+    decl var reg tmp @69:9
+    begin @70:9
+      tmp = c @71:13
+      b = a @72:13
+  task no_ports (no port list) @76:5
+    expr $display("no ports") @77:9
+  task with_ref @80:5
+    port ref int r @80:19
+    port const ref int cr @80:30
+    r = cr @81:9
+  var int d @84:5
+  var logic s @85:5
+  initial @86:5
+    begin @86:13
+      decl var int arr [] = new(3) @87:9
+      decl var int cnt @88:9
+      d = fact(5) @89:9
+      expr log("start") @90:9
+      expr log(.msg("named"), .level(2)) @91:9
+      expr pulse(s, 3, d) @92:9
+      expr pulse(.sig(s), .done(d)) @93:9
+      expr void'(sum(arr, cnt)) @94:9
+      expr old_style(4'd1, d[3:0], s) @95:9
+      expr no_ports @96:9
+      expr no_ports() @97:9
+      d = nibble(8'hab, 1) @98:9

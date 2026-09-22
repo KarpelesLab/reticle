@@ -1,0 +1,73 @@
+module exprs @4:1
+  net wire [7:0] a, b, c, d @5:5
+  net wire [31:0] w @6:5
+  net wire x, y, z @7:5
+  net wire [7:0] m [0:3] @8:5
+  assign x = (a || (b && c)) @11:5
+  assign x = (a | (b ^ (c & d))) @12:5
+  assign x = ((a == b) != c) @13:5
+  assign x = ((((a < b) <= c) > d) >= a) @14:5
+  assign x = ((((a << 1) >> 2) <<< 3) >>> 4) @15:5
+  assign x = ((a + b) - c) @16:5
+  assign x = (((a * b) / c) % d) @17:5
+  assign x = ((a ** b) ** c) @18:5
+  assign x = ((a + (b * (c ** d))) - (a / b)) @19:5
+  assign x = ((a === b) !== c) @20:5
+  assign x = ((a ~^ b) ~^ c) @21:5
+  assign x = (a -> b) @22:5
+  assign x = (a -> (b -> c)) @23:5
+  assign x = (a <-> b) @24:5
+  assign x = (a ? b : (c ? d : a)) @25:5
+  assign x = (a ? (b ? c : d) : a) @26:5
+  assign x = ((a || b) ? c : d) @27:5
+  assign x = (a -> (b ? c : d)) @28:5
+  assign x = ((a + b) * c) @29:5
+  assign x = (a + (b * c)) @30:5
+  assign x = ((-a) + (+b)) @33:5
+  assign x = ((!a) && (~b)) @34:5
+  assign x = (((&a) | ((~&b) ^ (|c))) | (~|d)) @35:5
+  assign x = ((^a) ~^ (~^b)) @36:5
+  assign x = (~^a) @37:5
+  assign x = (-(-a)) @38:5
+  assign x = ((~&a) & (&b)) @39:5
+  assign x = ((-a) ** 2) @40:5
+  assign w = {a, b, c, d} @43:5
+  assign w = {4{a}} @44:5
+  assign w = {2{a, b}} @45:5
+  assign w = {{2{a}}, {2{b}}} @46:5
+  assign x = a[3] @47:5
+  assign x = a[3:0] @48:5
+  assign x = a[i+:4] @49:5
+  assign x = a[7-:4] @50:5
+  assign x = m[2][3:1] @51:5
+  assign x = m[i][j] @52:5
+  assign x = w[a[1:0]] @53:5
+  assign x = top.sub.inst.sig @54:5
+  assign x = top.arr[2].sig[3:0] @55:5
+  assign x = $root.top.sig @56:5
+  assign w = 32'hdead_beef @59:5
+  assign w = 8'b1010_zx01 @60:5
+  assign w = 'h1f @61:5
+  assign w = 'sd5 @62:5
+  assign w = 16'so17 @63:5
+  assign w = 4'bx @64:5
+  assign w = 123 @65:5
+  assign w = 1_000 @66:5
+  assign w = 3.14 @67:5
+  assign w = 1e10 @68:5
+  assign w = 2.5e-3 @69:5
+  assign w = "str" @70:5
+  assign w = (4'd3 + 3'd4) @71:5
+  assign x = f(a, b) @74:5
+  assign x = $clog2(256) @75:5
+  assign x = ($signed(a) < $signed(b)) @76:5
+  assign x = ($unsigned(a) + $bits(w)) @77:5
+  assign x = ($random % 8) @78:5
+  assign x = ($time > 100) @79:5
+  assign x = f() @80:5
+  assign x = g(.a(1), .b()) @81:5
+  net wire #(1:2:3) delayed = a @84:5
+  assign x = ((a + b) - c) @85:5
+  assign x = a @86:5
+  assign x = ((a ? b : c) + d) @87:5
+  assign x = a[((b + c) - 1)] @88:5
