@@ -264,33 +264,32 @@ impl Checker<'_> {
         }
         let (generics, ports) = match &i.unit {
             ast::InstantiatedUnit::Component(n) => {
+                // `classify` reports an unknown name, but a component
+                // declaration is not a prefix of its own and classifies as
+                // an error; what matters here is the declaration the name
+                // resolved to, which `classify` has already recorded.
                 let p = self.classify(n, RMode::Commit, None);
-                match p {
-                    Prefix::Error => (Vec::new(), Vec::new()),
+                let decl = self.a.decl_of(n.span());
+                match decl.map(|d| self.a.decl(d).kind.clone()) {
+                    Some(DeclKind::Component {
+                        generics, ports, ..
+                    }) => (generics, ports),
+                    Some(DeclKind::Unit { unit, .. }) => self.unit_interfaces(unit),
+                    // An unresolvable name has already been reported.
+                    None if matches!(p, Prefix::Error) => (Vec::new(), Vec::new()),
                     _ => {
-                        // A component, or a direct entity by selected name.
-                        let decl = self.a.decl_of(n.span());
-                        match decl.map(|d| self.a.decl(d).kind.clone()) {
-                            Some(DeclKind::Component {
-                                generics, ports, ..
-                            }) => (generics, ports),
-                            Some(DeclKind::Unit { unit, .. }) => self.unit_interfaces(unit),
-                            _ => {
-                                let text = self.text(n.span()).to_owned();
-                                let mut d = Diagnostic::error(format!(
-                                    "`{text}` is not a component or entity"
-                                ))
+                        let text = self.text(n.span()).to_owned();
+                        let mut d =
+                            Diagnostic::error(format!("`{text}` is not a component or entity"))
                                 .with_code("V0206")
                                 .with_span(n.span());
-                                if decl.is_some() {
-                                    d = d.with_note(
-                                        "declare a `component` for it, or instantiate it directly with `entity work.name`",
-                                    );
-                                }
-                                self.push(d);
-                                (Vec::new(), Vec::new())
-                            }
+                        if decl.is_some() {
+                            d = d.with_note(
+                                "declare a `component` for it, or instantiate it directly with `entity work.name`",
+                            );
                         }
+                        self.push(d);
+                        (Vec::new(), Vec::new())
                     }
                 }
             }
@@ -379,10 +378,10 @@ impl Checker<'_> {
     }
 
     fn has_default(&self, d: DeclId) -> bool {
-        // A generic or port with a default has its value recorded at
-        // declaration time; ports of mode `in` without a default must be
-        // connected.
-        self.a.decl_value(d).is_some()
+        // A generic or port with a default has that default recorded at
+        // the declared name's span; ports of mode `in` without a default
+        // must be connected.
+        self.a.decl_value(d).is_some() || self.a.value_of(self.a.decl(d).span).is_some()
     }
 
     fn first_required_port(&self, ports: &[DeclId]) -> Option<DeclId> {

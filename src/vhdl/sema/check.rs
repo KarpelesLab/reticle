@@ -1165,6 +1165,16 @@ impl<'a> Checker<'a> {
                             name.span,
                         );
                         self.a.set_type(name.span, ty);
+                        // A default on an interface object is recorded at
+                        // the declared name's span, so that an association
+                        // list can tell that the formal may be left out
+                        // (clause 6.5.2) without the value being the
+                        // object's own.
+                        if let Some(def) = &o.default
+                            && let Some(v) = self.a.value_of(def.span()).cloned()
+                        {
+                            self.a.set_value(name.span, v);
+                        }
                         out.push(d);
                     }
                 }
