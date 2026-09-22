@@ -305,7 +305,12 @@ impl AsicReport {
         for (name, count) in &self.cells {
             let _ = writeln!(out, "  {count} x {name}");
         }
-        let _ = writeln!(out, "area: {}", super::fmt_num(self.area));
+        // A report is read, not parsed back, so it rounds for display.
+        // `fmt_num` is the file writers' exact round-trip form, which
+        // falls back to full precision whenever six decimals would not
+        // read back, and an area summed over hundreds of cells never
+        // does: it printed `1782.9599999999991`.
+        let _ = writeln!(out, "area: {:.2}", self.area);
         for (cell, why) in &self.unmapped {
             let _ = writeln!(out, "unmapped: {cell} ({why})");
         }
