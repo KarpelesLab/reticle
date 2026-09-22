@@ -23,7 +23,7 @@
 //! asynchronous FIFO passes data between two clocks with no common
 //! period, and the PWM's duty cycle is counted over a whole period.
 //!
-//! The three larger blocks are tested the same way and harder.
+//! The four larger blocks are tested the same way and harder.
 //! `eth_mac_rmii` has its own transmitter looped into its own receiver,
 //! and the frame on the pins is decoded independently in Rust against a
 //! check sequence this file computes for itself. `spiflash_xip` answers
@@ -34,6 +34,23 @@
 //! after each instruction. The last two of those programs are a loop
 //! summing an array and Fibonacci computed recursively on a stack, so
 //! the whole datapath is proved together and not only piece by piece.
+//!
+//! `mos6502` is the second processor and is deliberately the opposite
+//! of the first: an 8-bit accumulator machine with thirteen addressing
+//! modes, variable-length instructions and a cycle count per
+//! instruction that its programs were written to depend on. `mod m6502`
+//! is a second assembler built on the documented opcode matrix — the
+//! mnemonic, the mode, the opcode byte and the reference's own cycle
+//! count — so `mos6502_counts_the_cycles_of_every_instruction` compares
+//! two independent statements of the same table rather than the core
+//! with itself. Beside the architectural tests there are tests for each
+//! of the quirks a compatible core has to reproduce: the indirect JMP
+//! page bug, the page-crossing and branch penalties, the stack's wrap
+//! inside page one, zero-page wrap, the read-modify-write double write
+//! and the one-instruction delay of CLI and SEI. Its three end-to-end
+//! programs are a 16 x 16 shift-and-add multiply, an array summed into
+//! sixteen bits through a subroutine, and Fibonacci computed
+//! recursively with its frames reached through `TSX` and absolute,X.
 //!
 //! The blocks that need device primitives are held to their protocol by
 //! models that enforce it. `sdram_ctrl` answers to an SDRAM model that
@@ -195,6 +212,16 @@ const VARIANTS: &[Variant] = &[
         package: "rv32i",
         top: "rv32i",
         params: &[("REGFILE_BRAM", "1")],
+    },
+    Variant {
+        package: "mos6502",
+        top: "mos6502",
+        params: &[("DECIMAL_MODE", "1")],
+    },
+    Variant {
+        package: "mos6502",
+        top: "mos6502",
+        params: &[("DECIMAL_MODE", "0")],
     },
     Variant {
         package: "eth_mac_rmii",
@@ -3089,6 +3116,2126 @@ fn rv32i_runs_a_recursive_function_on_the_stack() {
             cpu.retired
         );
     }
+}
+
+// ---------------------------------------------------------------------------
+// mos6502: a 6502 assembler, 64 KiB of memory, and programs the core has
+// to get right
+// ---------------------------------------------------------------------------
+
+/// A minimal 6502 assembler, written out from the documented opcode
+/// matrix rather than from the core's decoder. It lives in
+/// `tests/mos6502_asm/mod.rs`.
+#[path = "mos6502_asm/mod.rs"]
+mod m6502;
+
+/// The three vectors, where the part has always had them.
+const VEC_NMI: u16 = 0xFFFA;
+const VEC_RES: u16 = 0xFFFC;
+const VEC_IRQ: u16 = 0xFFFE;
+
+/// Where `m6502::assemble` places a program that does not say `.org`.
+const M6502_ORIGIN: u16 = 0x0200;
+
+/// Both settings of the decimal parameter. A program that does not use
+/// decimal mode has to behave the same on each, so most tests run both.
+const DECIMALS: [&str; 2] = ["1", "0"];
+
+fn mos6502_design(decimal: &str) -> Design {
+    design_of("mos6502", "mos6502", &[("DECIMAL_MODE", decimal)])
+}
+
+/// Assembles a program into 64 KiB of memory.
+///
+/// The three vectors are filled in where the program did not place them
+/// itself: RES from the label `reset` or the origin, NMI from the label
+/// `nmi`, IRQ from the label `irq`, each falling back to the origin.
+fn mos6502_image(source: &str) -> (m6502::Image, Vec<u8>) {
+    let image =
+        m6502::assemble(source).unwrap_or_else(|e| panic!("the program does not assemble: {e}"));
+    let mut mem = vec![0u8; 0x1_0000];
+    for (addr, byte) in &image.bytes {
+        mem[usize::from(*addr)] = *byte;
+    }
+    let start = image.bytes.keys().next().copied().unwrap_or(M6502_ORIGIN);
+    for (vector, label) in [(VEC_RES, "reset"), (VEC_NMI, "nmi"), (VEC_IRQ, "irq")] {
+        if image.bytes.contains_key(&vector) {
+            continue;
+        }
+        let target = if image.has(label) {
+            image.label(label)
+        } else {
+            start
+        };
+        mem[usize::from(vector)] = u8::try_from(target & 0xFF).expect("a byte");
+        mem[usize::from(vector) + 1] = u8::try_from(target >> 8).expect("a byte");
+    }
+    (image, mem)
+}
+
+/// The core with 64 KiB behind its one bus, driven a cycle at a time.
+///
+/// The 6502 makes exactly one access per cycle, so [`Mos::step`] is both
+/// "answer the bus" and "one clock": the memory presents the byte at
+/// `addr`, takes `dout` where `we` is high, and the rising edge is the
+/// transfer. With `stalls` wait states an access takes `stalls + 1`
+/// clocks and the core must still spend the same number of *cycles*.
+struct Mos<'d> {
+    sim: Simulator<'d>,
+    clk: NetHandle,
+    rst_n: NetHandle,
+    addr: NetHandle,
+    dout: NetHandle,
+    din: NetHandle,
+    we: NetHandle,
+    ready: NetHandle,
+    sync: NetHandle,
+    irq: NetHandle,
+    nmi: NetHandle,
+    dbg_pc: NetHandle,
+    dbg_retire: NetHandle,
+    dbg_trap: NetHandle,
+    a_n: NetHandle,
+    x_n: NetHandle,
+    y_n: NetHandle,
+    s_n: NetHandle,
+    pc_n: NetHandle,
+    flag_n: [NetHandle; 6],
+    /// The whole address space.
+    mem: Vec<u8>,
+    /// What the assembler said, so a test can name a label.
+    image: m6502::Image,
+    stalls: u32,
+    /// Bus cycles taken since reset was released.
+    cycles: u64,
+    /// Instructions finished and interrupt sequences finished.
+    retired: u64,
+    traps: u64,
+    /// Every bus cycle, once `trace` is on: address, write, byte.
+    trace: bool,
+    bus: Vec<(u16, bool, u8)>,
+}
+
+impl<'d> Mos<'d> {
+    /// A core at its first opcode fetch, the reset sequence behind it.
+    fn boot(design: &'d Design, source: &str, stalls: u32) -> Mos<'d> {
+        let mut cpu = Mos::new(design, source, stalls);
+        // RES is seven cycles, like every other interrupt sequence.
+        for _ in 0..7 {
+            cpu.cycle();
+        }
+        let vector = u16::from(cpu.mem[usize::from(VEC_RES)])
+            | (u16::from(cpu.mem[usize::from(VEC_RES) + 1]) << 8);
+        assert!(cpu.at_fetch(), "the reset sequence ends in an opcode fetch");
+        assert_eq!(cpu.bus_addr(), vector, "and it fetches from the RES vector");
+        assert_eq!(cpu.s(), 0xFD, "with S three below where it started");
+        assert!(cpu.flag(2), "and I set");
+        // The reset sequence is an interrupt sequence and counts as one;
+        // the counters start at zero from the program's point of view.
+        cpu.cycles = 0;
+        cpu.retired = 0;
+        cpu.traps = 0;
+        cpu
+    }
+
+    /// A core held in reset and then released, with nothing run yet.
+    fn new(design: &'d Design, source: &str, stalls: u32) -> Mos<'d> {
+        let (image, mem) = mos6502_image(source);
+        let sim = simulate(design, "mos6502");
+        let name = |what: &str| net(&sim, &format!("{}.{what}", sim.top_name()));
+        let mut cpu = Mos {
+            clk: name("clk"),
+            rst_n: name("rst_n"),
+            addr: name("addr"),
+            dout: name("dout"),
+            din: name("din"),
+            we: name("we"),
+            ready: name("ready"),
+            sync: name("sync"),
+            irq: name("irq"),
+            nmi: name("nmi"),
+            dbg_pc: name("dbg_pc"),
+            dbg_retire: name("dbg_retire"),
+            dbg_trap: name("dbg_trap"),
+            a_n: name("a_r"),
+            x_n: name("x_r"),
+            y_n: name("y_r"),
+            s_n: name("s_r"),
+            pc_n: name("pc"),
+            flag_n: [
+                name("p_c"),
+                name("p_z"),
+                name("p_i"),
+                name("p_d"),
+                name("p_v"),
+                name("p_n"),
+            ],
+            sim,
+            mem,
+            image,
+            stalls,
+            cycles: 0,
+            retired: 0,
+            traps: 0,
+            trace: false,
+            bus: Vec::new(),
+        };
+        cpu.start();
+        cpu
+    }
+
+    fn start(&mut self) {
+        for line in [self.irq, self.nmi] {
+            self.sim.set(line, bit(false));
+        }
+        self.sim.set(self.ready, bit(true));
+        self.sim.set(self.din, word(8, 0));
+        let clk = self.clk;
+        let rst_n = self.rst_n;
+        reset(&mut self.sim, clk, rst_n);
+    }
+
+    /// The address the core is presenting.
+    fn bus_addr(&self) -> u16 {
+        u16::try_from(loose_u64(&self.sim, self.addr) & 0xFFFF).expect("sixteen bits")
+    }
+
+    /// Whether this cycle is an opcode fetch.
+    fn at_fetch(&self) -> bool {
+        high(&self.sim, self.sync)
+    }
+
+    /// One bus cycle: answer the access, take the edge. A cycle takes
+    /// `stalls + 1` clocks.
+    fn cycle(&mut self) {
+        let address = self.bus_addr();
+        let writing = high(&self.sim, self.we);
+        let byte = self.mem[usize::from(address)];
+        self.sim.set(self.din, word(8, u64::from(byte)));
+        // The access is held until the memory says it is ready.
+        for _ in 0..self.stalls {
+            self.sim.set(self.ready, bit(false));
+            let clk = self.clk;
+            cycle(&mut self.sim, clk, HALF);
+            assert_eq!(
+                self.bus_addr(),
+                address,
+                "the access is held while the memory is not ready"
+            );
+        }
+        self.sim.set(self.ready, bit(true));
+        let written = octet(loose_u64(&self.sim, self.dout));
+        if writing {
+            self.mem[usize::from(address)] = written;
+        }
+        if self.trace {
+            self.bus
+                .push((address, writing, if writing { written } else { byte }));
+        }
+        let clk = self.clk;
+        cycle(&mut self.sim, clk, HALF);
+        self.cycles += 1;
+        if high(&self.sim, self.dbg_retire) {
+            self.retired += 1;
+        }
+        if high(&self.sim, self.dbg_trap) {
+            self.traps += 1;
+        }
+    }
+
+    /// `n` bus cycles.
+    fn run(&mut self, n: u32) {
+        for _ in 0..n {
+            self.cycle();
+        }
+    }
+
+    /// Runs one whole instruction, from this opcode fetch to the next,
+    /// and answers how many cycles it took.
+    fn next(&mut self) -> u32 {
+        assert!(self.at_fetch(), "`next` starts at an opcode fetch");
+        let mut n = 0;
+        loop {
+            self.cycle();
+            n += 1;
+            if self.at_fetch() {
+                return n;
+            }
+            assert!(n < 64, "an instruction that never ends");
+        }
+    }
+
+    /// Runs `count` instructions.
+    fn run_instructions(&mut self, count: usize) {
+        for _ in 0..count {
+            self.next();
+        }
+    }
+
+    /// Runs until the opcode at `addr` is fetched, and answers the
+    /// number of cycles that took.
+    fn run_until_fetch(&mut self, addr: u16, limit: u32) -> u32 {
+        for n in 0..limit {
+            if self.at_fetch() && self.bus_addr() == addr {
+                return n;
+            }
+            self.cycle();
+        }
+        panic!("{addr:#06x} was never fetched within {limit} cycles");
+    }
+
+    /// Runs until `count` interrupt sequences have been entered since
+    /// reset, counting BRK and every taken IRQ and NMI.
+    fn run_until_traps(&mut self, count: u64, limit: u32) {
+        for _ in 0..limit {
+            if self.traps >= count {
+                return;
+            }
+            self.cycle();
+        }
+        panic!(
+            "only {} interrupt(s) in {limit} cycles, wanted {count}",
+            self.traps
+        );
+    }
+
+    /// Runs until the program's `done` label is reached.
+    fn run_to_done(&mut self, limit: u32) -> u32 {
+        let done = self.image.label("done");
+        self.run_until_fetch(done, limit)
+    }
+
+    fn a(&self) -> u8 {
+        octet(get_u64(&self.sim, self.a_n))
+    }
+    fn x(&self) -> u8 {
+        octet(get_u64(&self.sim, self.x_n))
+    }
+    fn y(&self) -> u8 {
+        octet(get_u64(&self.sim, self.y_n))
+    }
+    fn s(&self) -> u8 {
+        octet(get_u64(&self.sim, self.s_n))
+    }
+    fn pc(&self) -> u16 {
+        u16::try_from(get_u64(&self.sim, self.pc_n) & 0xFFFF).expect("sixteen bits")
+    }
+
+    /// One flag by its bit number in the status byte.
+    fn flag(&self, bit_number: usize) -> bool {
+        let index = match bit_number {
+            0 => 0,
+            1 => 1,
+            2 => 2,
+            3 => 3,
+            6 => 4,
+            _ => 5,
+        };
+        high(&self.sim, self.flag_n[index])
+    }
+
+    /// The status byte as PHP would push it, without bit 4: bit 5 reads
+    /// as one and B is not a flag.
+    fn p(&self) -> u8 {
+        let mut value = 0x20u8;
+        for (bit_number, weight) in [
+            (0, 0x01u8),
+            (1, 0x02),
+            (2, 0x04),
+            (3, 0x08),
+            (6, 0x40),
+            (7, 0x80),
+        ] {
+            if self.flag(bit_number) {
+                value |= weight;
+            }
+        }
+        value
+    }
+
+    fn byte_at(&self, addr: u16) -> u8 {
+        self.mem[usize::from(addr)]
+    }
+
+    fn set_byte(&mut self, addr: u16, value: u8) {
+        self.mem[usize::from(addr)] = value;
+    }
+
+    /// The little-endian word at `addr`.
+    fn word_at(&self, addr: u16) -> u16 {
+        u16::from(self.byte_at(addr)) | (u16::from(self.byte_at(addr.wrapping_add(1))) << 8)
+    }
+
+    fn label(&self, name: &str) -> u16 {
+        self.image.label(name)
+    }
+
+    /// Starts recording every bus cycle.
+    fn record(&mut self) {
+        self.trace = true;
+        self.bus.clear();
+    }
+
+    /// The addresses recorded so far.
+    fn addresses(&self) -> Vec<u16> {
+        self.bus.iter().map(|(a, _, _)| *a).collect()
+    }
+
+    fn set_irq(&mut self, value: bool) {
+        let line = self.irq;
+        self.sim.set(line, bit(value));
+    }
+
+    fn set_nmi(&mut self, value: bool) {
+        let line = self.nmi;
+        self.sim.set(line, bit(value));
+    }
+
+    /// The address the last finished instruction was fetched from.
+    fn last_pc(&self) -> u16 {
+        u16::try_from(get_u64(&self.sim, self.dbg_pc) & 0xFFFF).expect("sixteen bits")
+    }
+}
+
+#[test]
+fn mos6502_loads_stores_and_transfers() {
+    for decimal in DECIMALS {
+        let design = mos6502_design(decimal);
+        let mut cpu = Mos::boot(
+            &design,
+            "
+        lda #$42
+        sta $10
+        ldx #$80
+        stx $0011
+        ldy #$00
+        sty $12
+        lda $10
+        tax
+        tay
+        lda #$ff
+        txa
+        ldx #$fe
+        txs
+        tsx
+        tya
+done:   jmp done
+",
+            0,
+        );
+
+        cpu.next();
+        assert_eq!(cpu.a(), 0x42, "DECIMAL_MODE={decimal}: LDA immediate");
+        assert_eq!(cpu.p() & 0x82, 0, "a positive, non-zero byte sets neither");
+        cpu.next();
+        assert_eq!(cpu.byte_at(0x0010), 0x42, "STA zero page");
+        cpu.next();
+        assert_eq!(cpu.x(), 0x80);
+        assert_eq!(cpu.p() & 0x82, 0x80, "LDX of a byte with bit 7 set is N");
+        cpu.next();
+        assert_eq!(cpu.byte_at(0x0011), 0x80, "STX absolute");
+        cpu.next();
+        assert_eq!(cpu.y(), 0x00);
+        assert_eq!(cpu.p() & 0x82, 0x02, "LDY of zero is Z");
+        cpu.next();
+        assert_eq!(cpu.byte_at(0x0012), 0x00, "STY zero page");
+        cpu.next();
+        assert_eq!(cpu.a(), 0x42, "LDA zero page reads back what STA wrote");
+        cpu.next();
+        assert_eq!(cpu.x(), 0x42, "TAX");
+        cpu.next();
+        assert_eq!(cpu.y(), 0x42, "TAY");
+        cpu.run_instructions(2);
+        assert_eq!(cpu.a(), 0x42, "TXA");
+        cpu.next();
+        assert_eq!(cpu.x(), 0xFE);
+        cpu.next();
+        assert_eq!(cpu.s(), 0xFE, "TXS moves X into S");
+        assert_eq!(
+            cpu.p() & 0x82,
+            0x80,
+            "and is the one transfer that sets no flag"
+        );
+        cpu.next();
+        assert_eq!(cpu.x(), 0xFE, "TSX moves it back");
+        cpu.next();
+        assert_eq!(cpu.a(), 0x42, "TYA");
+        assert_eq!(
+            cpu.bus_addr(),
+            cpu.label("done"),
+            "and the program ran to the end"
+        );
+    }
+}
+
+#[test]
+fn mos6502_reaches_every_addressing_mode() {
+    // One load per mode, each from an address only that mode computes,
+    // so a mode that lands anywhere else reads a zero.
+    let design = mos6502_design("1");
+    let mut cpu = Mos::boot(
+        &design,
+        "
+        ldx #$04
+        ldy #$06
+        lda #$11
+        sta $30         ; a byte the (zp,X) pointer is not
+        lda $0040       ; absolute, a low address written wide
+        lda $41,x       ; zero page,X  -> $45
+        lda $42,y       ; there is no LDA $nn,y, so this is absolute,Y
+        lda $1000,x     ; absolute,X   -> $1004
+        lda $1010,y     ; absolute,Y   -> $1016
+        lda ($30,x)     ; the pointer at $30 + X = $34 -> $2000
+        lda ($38),y     ; the pointer at $38 -> $3000, plus Y
+        lda #$00
+done:   jmp done
+",
+        0,
+    );
+    // The pointers and the byte each mode must find.
+    cpu.set_byte(0x0034, 0x00);
+    cpu.set_byte(0x0035, 0x20);
+    cpu.set_byte(0x0038, 0x00);
+    cpu.set_byte(0x0039, 0x30);
+    for (addr, value) in [
+        (0x0040u16, 0xA1u8),
+        (0x0045, 0xA2),
+        (0x0048, 0xA3),
+        (0x1004, 0xA4),
+        (0x1016, 0xA5),
+        (0x2000, 0xA6),
+        (0x3006, 0xA7),
+    ] {
+        cpu.set_byte(addr, value);
+    }
+
+    cpu.run_instructions(4);
+    for (what, want) in [
+        ("absolute", 0xA1u8),
+        ("zero page,X", 0xA2),
+        ("absolute,Y", 0xA3),
+        ("absolute,X", 0xA4),
+        ("absolute,Y again", 0xA5),
+        ("(zp,X)", 0xA6),
+        ("(zp),Y", 0xA7),
+    ] {
+        cpu.next();
+        assert_eq!(cpu.a(), want, "{what} reached the wrong byte");
+    }
+}
+
+/// Runs one arithmetic instruction with the accumulator, the operand,
+/// the carry and the decimal flag the caller names, and answers the
+/// accumulator and the status byte it left.
+fn mos6502_arith(
+    design: &Design,
+    mnemonic: &str,
+    a: u8,
+    m: u8,
+    carry: bool,
+    decimal: bool,
+) -> (u8, u8) {
+    let source = format!(
+        "        {}\n        {}\n        lda #${a:02x}\n        {mnemonic} #${m:02x}\ndone:   jmp done\n",
+        if decimal { "sed" } else { "cld" },
+        if carry { "sec" } else { "clc" },
+    );
+    let mut cpu = Mos::boot(design, &source, 0);
+    cpu.run_to_done(40);
+    (cpu.a(), cpu.p())
+}
+
+/// The status bits the arithmetic tests name, as a mask.
+const F_C: u8 = 0x01;
+const F_Z: u8 = 0x02;
+const F_I: u8 = 0x04;
+const F_D: u8 = 0x08;
+const F_V: u8 = 0x40;
+const F_N: u8 = 0x80;
+
+/// The four flags an ADC or an SBC sets, as a byte, so a case can be
+/// written as one expectation.
+fn arith_flags(c: bool, z: bool, n: bool, v: bool) -> u8 {
+    (if c { F_C } else { 0 })
+        | (if z { F_Z } else { 0 })
+        | (if n { F_N } else { 0 })
+        | (if v { F_V } else { 0 })
+}
+
+#[test]
+fn mos6502_traces_what_it_retired() {
+    // `dbg_retire` pulses at the end of an instruction with `dbg_pc`
+    // naming the opcode it came from, which is how a testbench follows a
+    // program without decoding the bus for itself.
+    let design = mos6502_design("1");
+    let mut cpu = Mos::boot(
+        &design,
+        "
+        lda #$01
+        ldx #$02
+        jmp there
+        nop             ; jumped over
+there:  nop
+done:   jmp done
+",
+        0,
+    );
+    let mut seen = Vec::new();
+    for _ in 0..4 {
+        let fetched = cpu.bus_addr();
+        cpu.next();
+        seen.push((fetched, cpu.last_pc()));
+    }
+    for (fetched, traced) in &seen {
+        assert_eq!(
+            fetched, traced,
+            "`dbg_pc` names the opcode whose instruction just retired"
+        );
+    }
+    assert_eq!(
+        cpu.retired, 4,
+        "four instructions, the skipped NOP not among them"
+    );
+    assert_eq!(cpu.traps, 0, "and nothing trapped");
+    assert_eq!(
+        cpu.pc(),
+        cpu.label("done"),
+        "the program counter is at the opcode being fetched"
+    );
+}
+
+#[test]
+fn mos6502_counts_its_index_registers() {
+    // INX, INY, DEX and DEY over both wrap-arounds, with the flags each
+    // one leaves.
+    for decimal in DECIMALS {
+        let design = mos6502_design(decimal);
+        let mut cpu = Mos::boot(
+            &design,
+            "
+        ldx #$fe
+        inx             ; $FF
+        inx             ; $00
+        inx             ; $01
+        dex             ; $00
+        dex             ; $FF
+        ldy #$7f
+        iny             ; $80
+        dey             ; $7F
+        ldy #$00
+        dey             ; $FF
+        iny             ; $00
+done:   jmp done
+",
+            0,
+        );
+        cpu.next();
+        for (want, flags) in [
+            (0xFFu8, F_N),
+            (0x00, F_Z),
+            (0x01, 0),
+            (0x00, F_Z),
+            (0xFF, F_N),
+        ] {
+            cpu.next();
+            assert_eq!(cpu.x(), want, "DECIMAL_MODE={decimal}: the X counters");
+            assert_eq!(cpu.p() & (F_N | F_Z), flags, "and their flags");
+        }
+        cpu.next();
+        for (want, flags) in [(0x80u8, F_N), (0x7F, 0)] {
+            cpu.next();
+            assert_eq!(cpu.y(), want, "the Y counters");
+            assert_eq!(cpu.p() & (F_N | F_Z), flags);
+        }
+        cpu.next();
+        for (want, flags) in [(0xFFu8, F_N), (0x00, F_Z)] {
+            cpu.next();
+            assert_eq!(cpu.y(), want, "and Y wrapping the other way");
+            assert_eq!(cpu.p() & (F_N | F_Z), flags);
+        }
+    }
+}
+
+#[test]
+fn mos6502_stores_through_every_mode() {
+    // Every mode each of the three stores has, each landing on an
+    // address only that mode computes.
+    let design = mos6502_design("1");
+    let mut cpu = Mos::boot(
+        &design,
+        "
+        ldx #$02
+        ldy #$03
+        lda #$5a
+        sta $10         ; $0010
+        sta $20,x       ; $0022
+        sta $0030       ; $0030
+        sta $0040,x     ; $0042
+        sta $0050,y     ; $0053
+        sta ($60,x)     ; the pointer at $62 -> $1000
+        sta ($70),y     ; the pointer at $70 -> $2000, plus Y
+        stx $11
+        stx $0012
+        stx $13,y       ; STX has a zero page,Y and no zero page,X
+        sty $14
+        sty $0015
+        sty $16,x       ; and STY the other way round
+done:   jmp done
+",
+        0,
+    );
+    cpu.set_byte(0x0062, 0x00);
+    cpu.set_byte(0x0063, 0x10);
+    cpu.set_byte(0x0070, 0x00);
+    cpu.set_byte(0x0071, 0x20);
+    cpu.run_to_done(120);
+
+    for (addr, want, what) in [
+        (0x0010u16, 0x5Au8, "STA zero page"),
+        (0x0022, 0x5A, "STA zero page,X"),
+        (0x0030, 0x5A, "STA absolute"),
+        (0x0042, 0x5A, "STA absolute,X"),
+        (0x0053, 0x5A, "STA absolute,Y"),
+        (0x1000, 0x5A, "STA (zp,X)"),
+        (0x2003, 0x5A, "STA (zp),Y"),
+        (0x0011, 0x02, "STX zero page"),
+        (0x0012, 0x02, "STX absolute"),
+        (0x0016, 0x02, "STX zero page,Y"),
+        (0x0014, 0x03, "STY zero page"),
+        (0x0015, 0x03, "STY absolute"),
+        (0x0018, 0x03, "STY zero page,X"),
+    ] {
+        assert_eq!(cpu.byte_at(addr), want, "{what} should reach {addr:#06x}");
+    }
+    assert_eq!(cpu.a(), 0x5A, "and none of them changed a register");
+    assert_eq!(cpu.x(), 0x02);
+    assert_eq!(cpu.y(), 0x03);
+}
+
+#[test]
+fn mos6502_computes_every_logical_operation() {
+    for decimal in DECIMALS {
+        let design = mos6502_design(decimal);
+        let mut cpu = Mos::boot(
+            &design,
+            "
+        lda #$f0
+        sta $10
+        lda #$3c
+        ora $10         ; $FC
+        and #$0f        ; $0C
+        eor #$ff        ; $F3
+        eor #$f3        ; $00
+        ora #$00        ; $00 again, to leave Z set
+done:   jmp done
+",
+            0,
+        );
+        cpu.run_instructions(3);
+        cpu.next();
+        assert_eq!(cpu.a(), 0xFC, "DECIMAL_MODE={decimal}: ORA");
+        assert_eq!(cpu.p() & (F_N | F_Z), F_N, "and its flags");
+        cpu.next();
+        assert_eq!(cpu.a(), 0x0C, "AND");
+        assert_eq!(cpu.p() & (F_N | F_Z), 0);
+        cpu.next();
+        assert_eq!(cpu.a(), 0xF3, "EOR");
+        assert_eq!(cpu.p() & (F_N | F_Z), F_N);
+        cpu.next();
+        assert_eq!(cpu.a(), 0x00, "EOR with itself");
+        assert_eq!(cpu.p() & (F_N | F_Z), F_Z);
+        cpu.next();
+        assert_eq!(cpu.p() & (F_N | F_Z), F_Z, "ORA of zero with zero");
+    }
+}
+
+#[test]
+fn mos6502_sets_overflow_for_every_sign_combination() {
+    // The four sign combinations of ADC and of SBC, each with a result
+    // that overflows and one that does not: the table every 6502
+    // tutorial on the V flag prints.
+    let cases: &[(&str, u8, u8, bool, u8, bool, bool)] = &[
+        // mnemonic,  A,    M,   carry-in, result, carry-out, overflow
+        ("adc", 0x50, 0x10, false, 0x60, false, false), // + +  -> +
+        ("adc", 0x50, 0x50, false, 0xA0, false, true),  // + +  -> - !
+        ("adc", 0x50, 0x90, false, 0xE0, false, false), // + -  -> -
+        ("adc", 0x50, 0xD0, false, 0x20, true, false),  // + -  -> +
+        ("adc", 0xD0, 0x10, false, 0xE0, false, false), // - +  -> -
+        ("adc", 0xD0, 0x50, false, 0x20, true, false),  // - +  -> +
+        ("adc", 0xD0, 0x90, false, 0x60, true, true),   // - -  -> + !
+        ("adc", 0xD0, 0xD0, false, 0xA0, true, false),  // - -  -> -
+        // the carry in is part of the sum, and of the overflow
+        ("adc", 0x7F, 0x00, true, 0x80, false, true),
+        ("adc", 0xFF, 0x00, true, 0x00, true, false),
+        ("sbc", 0x50, 0xF0, true, 0x60, false, false),
+        ("sbc", 0x50, 0xB0, true, 0xA0, false, true),
+        ("sbc", 0x50, 0x70, true, 0xE0, false, false),
+        ("sbc", 0x50, 0x30, true, 0x20, true, false),
+        ("sbc", 0xD0, 0xF0, true, 0xE0, false, false),
+        ("sbc", 0xD0, 0xB0, true, 0x20, true, false),
+        ("sbc", 0xD0, 0x70, true, 0x60, true, true),
+        ("sbc", 0xD0, 0x30, true, 0xA0, true, false),
+        // a borrow in is one more taken away
+        ("sbc", 0x00, 0x00, false, 0xFF, false, false),
+        ("sbc", 0x80, 0x00, false, 0x7F, true, true),
+    ];
+    for decimal in DECIMALS {
+        let design = mos6502_design(decimal);
+        for (mnemonic, a, m, carry, result, carry_out, overflow) in cases.iter().copied() {
+            let (got, p) = mos6502_arith(&design, mnemonic, a, m, carry, false);
+            let want = arith_flags(carry_out, result == 0, result & 0x80 != 0, overflow);
+            assert_eq!(
+                got, result,
+                "DECIMAL_MODE={decimal}: {mnemonic} #${m:02x} with A=${a:02x} C={carry}"
+            );
+            assert_eq!(
+                p & (F_C | F_Z | F_N | F_V),
+                want,
+                "DECIMAL_MODE={decimal}: the flags of {mnemonic} #${m:02x} with A=${a:02x} C={carry}"
+            );
+        }
+    }
+}
+
+/// One decimal-mode case: the accumulator, the operand and the carry
+/// in, then the result and the C, Z, N and V it leaves.
+type DecimalCase = (u8, u8, bool, u8, bool, bool, bool, bool);
+
+#[test]
+fn mos6502_adds_and_subtracts_in_decimal_mode() {
+    // Known results of the NMOS part, including the three places its
+    // decimal arithmetic is famously surprising: Z comes from the binary
+    // sum, N and V from the intermediate before the high nibble is
+    // corrected, and SBC's flags are the binary subtraction's entirely.
+    let adc: &[DecimalCase] = &[
+        // A,    M,   Cin, result, C,     Z,     N,     V
+        (0x00, 0x00, false, 0x00, false, true, false, false),
+        (0x00, 0x00, true, 0x01, false, false, false, false),
+        (0x09, 0x01, false, 0x10, false, false, false, false),
+        (0x12, 0x34, false, 0x46, false, false, false, false),
+        (0x50, 0x50, false, 0x00, true, false, true, true),
+        (0x99, 0x01, false, 0x00, true, false, true, false),
+        (0x99, 0x00, true, 0x00, true, false, true, false),
+        (0x58, 0x46, true, 0x05, true, false, true, true),
+        (0x79, 0x00, true, 0x80, false, false, true, true),
+        (0x24, 0x56, false, 0x80, false, false, true, true),
+        (0x93, 0x82, false, 0x75, true, false, false, true),
+        (0x89, 0x76, false, 0x65, true, false, false, false),
+        // the binary sum is $100, so Z is set although the result is $60
+        (0x80, 0x80, false, 0x60, true, true, false, true),
+        (0x45, 0x45, false, 0x90, false, false, true, true),
+    ];
+    let sbc: &[DecimalCase] = &[
+        (0x00, 0x00, true, 0x00, true, true, false, false),
+        (0x00, 0x01, true, 0x99, false, false, true, false),
+        (0x50, 0x25, true, 0x25, true, false, false, false),
+        (0x12, 0x34, true, 0x78, false, false, true, false),
+        (0x46, 0x12, true, 0x34, true, false, false, false),
+        (0x99, 0x99, true, 0x00, true, true, false, false),
+        (0x99, 0x00, true, 0x99, true, false, true, false),
+        (0x20, 0x10, false, 0x09, true, false, false, false),
+        (0x05, 0x21, true, 0x84, false, false, true, false),
+    ];
+
+    let design = mos6502_design("1");
+    for (mnemonic, cases) in [("adc", adc), ("sbc", sbc)] {
+        for (a, m, carry, result, c, z, n, v) in cases.iter().copied() {
+            let (got, p) = mos6502_arith(&design, mnemonic, a, m, carry, true);
+            assert_eq!(
+                got, result,
+                "SED {mnemonic} #${m:02x} with A=${a:02x} C={carry}"
+            );
+            assert_eq!(
+                p & (F_C | F_Z | F_N | F_V),
+                arith_flags(c, z, n, v),
+                "the flags of SED {mnemonic} #${m:02x} with A=${a:02x} C={carry}"
+            );
+            assert_eq!(p & F_D, F_D, "and D is still set afterwards");
+        }
+    }
+
+    // Compiled out, D is still a flag and the arithmetic is binary.
+    let plain = mos6502_design("0");
+    for (mnemonic, cases) in [("adc", adc), ("sbc", sbc)] {
+        for (a, m, carry, _, _, _, _, _) in cases.iter().copied() {
+            let (got, p) = mos6502_arith(&plain, mnemonic, a, m, carry, true);
+            let (binary, _) = mos6502_arith(&plain, mnemonic, a, m, carry, false);
+            assert_eq!(
+                got, binary,
+                "DECIMAL_MODE=0: SED {mnemonic} #${m:02x} with A=${a:02x} is still binary"
+            );
+            assert_eq!(p & F_D, F_D, "but SED still sets the flag");
+        }
+    }
+}
+
+#[test]
+fn mos6502_compares_with_cmp_cpx_and_cpy() {
+    // A comparison is a subtraction whose result is thrown away: C is
+    // set when the register is at least the operand, Z when they are
+    // equal, N from bit 7 of the difference. None of the three touches
+    // V, and none of them is affected by decimal mode.
+    let cases: &[(u8, u8, bool, bool, bool)] = &[
+        // register, operand, C,     Z,     N
+        (0x00, 0x00, true, true, false),
+        (0x01, 0x00, true, false, false),
+        (0x00, 0x01, false, false, true),
+        (0x7F, 0x80, false, false, true),
+        (0x80, 0x7F, true, false, false),
+        (0xFF, 0xFF, true, true, false),
+        (0xFF, 0x00, true, false, true),
+        (0x00, 0xFF, false, false, false),
+        (0x40, 0x20, true, false, false),
+    ];
+    let design = mos6502_design("1");
+    for (mnemonic, load) in [("cmp", "lda"), ("cpx", "ldx"), ("cpy", "ldy")] {
+        for (register, operand, c, z, n) in cases.iter().copied() {
+            // V is set beforehand so that a comparison touching it is
+            // caught, and D is set so that a decimal comparison is too.
+            let source = format!(
+                "        sed
+        clc
+        lda #$50
+        adc #$50        ; V = 1
+        {load} #${register:02x}
+        {mnemonic} #${operand:02x}
+done:   jmp done
+"
+            );
+            let mut cpu = Mos::boot(&design, &source, 0);
+            cpu.run_to_done(60);
+            assert_eq!(
+                cpu.p() & (F_C | F_Z | F_N),
+                arith_flags(c, z, n, false),
+                "{mnemonic} #${operand:02x} against ${register:02x}"
+            );
+            assert_eq!(cpu.p() & F_V, F_V, "{mnemonic} leaves V alone");
+        }
+    }
+}
+
+#[test]
+fn mos6502_tests_bits_with_bit() {
+    // BIT is the odd one: N and V are bits 7 and 6 of the *memory*
+    // byte, whatever the accumulator holds, and only Z comes from the
+    // conjunction.
+    let design = mos6502_design("1");
+    for (memory, accumulator, n, v, z) in [
+        (0xC0u8, 0x00u8, true, true, true),
+        (0xC0, 0xFF, true, true, false),
+        (0x80, 0x80, true, false, false),
+        (0x40, 0x40, false, true, false),
+        (0x3F, 0xFF, false, false, false),
+        (0x00, 0xFF, false, false, true),
+        (0xFF, 0x01, true, true, false),
+    ] {
+        let source = format!(
+            "        lda #${memory:02x}
+        sta $10
+        sta $0300
+        lda #${accumulator:02x}
+        bit $10
+done:   jmp done
+"
+        );
+        let mut cpu = Mos::boot(&design, &source, 0);
+        cpu.run_to_done(40);
+        assert_eq!(
+            cpu.p() & (F_N | F_V | F_Z),
+            arith_flags(false, z, n, v),
+            "BIT ${memory:02x} with A=${accumulator:02x}"
+        );
+        assert_eq!(cpu.a(), accumulator, "and BIT does not change A");
+    }
+}
+
+#[test]
+fn mos6502_shifts_and_rotates_through_carry() {
+    // Each of the four over the accumulator, with the carry both ways.
+    let cases: &[(&str, u8, bool, u8, bool)] = &[
+        // mnemonic, in,   Cin,   out,  Cout
+        ("asl", 0x40, false, 0x80, false),
+        ("asl", 0x80, false, 0x00, true),
+        ("asl", 0xFF, true, 0xFE, true),
+        ("lsr", 0x01, false, 0x00, true),
+        ("lsr", 0x80, true, 0x40, false),
+        ("lsr", 0xFF, false, 0x7F, true),
+        ("rol", 0x80, false, 0x00, true),
+        ("rol", 0x80, true, 0x01, true),
+        ("rol", 0x7F, true, 0xFF, false),
+        ("ror", 0x01, false, 0x00, true),
+        ("ror", 0x01, true, 0x80, true),
+        ("ror", 0xFE, false, 0x7F, false),
+    ];
+    let design = mos6502_design("1");
+    for (mnemonic, input, carry_in, output, carry_out) in cases.iter().copied() {
+        let setup = if carry_in { "sec" } else { "clc" };
+        // The accumulator form and the memory form have to agree.
+        let source = format!(
+            "        lda #${input:02x}
+        sta $10
+        {setup}
+        {mnemonic} a
+        sta $11
+        lda #${input:02x}
+        sta $12
+        {setup}
+        {mnemonic} $12
+done:   jmp done
+"
+        );
+        let mut cpu = Mos::boot(&design, &source, 0);
+        cpu.run_instructions(4);
+        assert_eq!(
+            cpu.a(),
+            output,
+            "{mnemonic} a of ${input:02x} with C={carry_in}"
+        );
+        assert_eq!(
+            cpu.p() & (F_C | F_Z | F_N),
+            arith_flags(carry_out, output == 0, output & 0x80 != 0, false),
+            "the flags of {mnemonic} a of ${input:02x} with C={carry_in}"
+        );
+        cpu.run_to_done(40);
+        assert_eq!(
+            cpu.byte_at(0x0012),
+            output,
+            "{mnemonic} $12 of ${input:02x} with C={carry_in}"
+        );
+        assert_eq!(
+            cpu.p() & (F_C | F_Z | F_N),
+            arith_flags(carry_out, output == 0, output & 0x80 != 0, false),
+            "and its flags are the same as the accumulator form's"
+        );
+    }
+}
+
+#[test]
+fn mos6502_reads_modifies_and_writes_memory() {
+    for decimal in DECIMALS {
+        let design = mos6502_design(decimal);
+        let mut cpu = Mos::boot(
+            &design,
+            "
+        lda #$7f
+        sta $10
+        inc $10         ; $80: N
+        dec $10         ; $7F
+        lda #$81
+        sta $11
+        asl $11         ; $02, C = 1
+        lsr $11         ; $01, C = 0
+        sec
+        rol $11         ; $03, C = 0
+        ror $11         ; $01, C = 1
+        ldx #$01
+        inc $10,x       ; $11 -> $02, C untouched
+        lda #$ff
+        sta $0400
+        inc $0400       ; $00: Z, C still set
+        dec $0400,x     ; $0401 -> $FF
+done:   jmp done
+",
+            0,
+        );
+        cpu.run_instructions(2);
+        cpu.next();
+        assert_eq!(cpu.byte_at(0x0010), 0x80, "DECIMAL_MODE={decimal}: INC");
+        assert_eq!(cpu.p() & (F_N | F_Z), F_N);
+        cpu.next();
+        assert_eq!(cpu.byte_at(0x0010), 0x7F, "DEC");
+        assert_eq!(cpu.p() & (F_N | F_Z), 0);
+        cpu.run_instructions(2);
+        cpu.next();
+        assert_eq!(cpu.byte_at(0x0011), 0x02, "ASL in memory");
+        assert_eq!(cpu.p() & F_C, F_C, "and its carry out");
+        cpu.next();
+        assert_eq!(cpu.byte_at(0x0011), 0x01, "LSR in memory");
+        assert_eq!(cpu.p() & F_C, 0);
+        cpu.next();
+        cpu.next();
+        assert_eq!(
+            cpu.byte_at(0x0011),
+            0x03,
+            "ROL in memory brings the carry in"
+        );
+        assert_eq!(cpu.p() & F_C, 0);
+        cpu.next();
+        assert_eq!(cpu.byte_at(0x0011), 0x01, "ROR in memory");
+        assert_eq!(cpu.p() & F_C, F_C);
+        cpu.run_instructions(2);
+        assert_eq!(cpu.byte_at(0x0011), 0x02, "INC zero page,X");
+        assert_eq!(cpu.p() & F_C, F_C, "and INC leaves the carry alone");
+        cpu.run_instructions(3);
+        assert_eq!(cpu.byte_at(0x0400), 0x00, "INC absolute wrapping to zero");
+        assert_eq!(cpu.p() & (F_Z | F_C), F_Z | F_C);
+        cpu.next();
+        assert_eq!(cpu.byte_at(0x0401), 0xFF, "DEC absolute,X wrapping down");
+        assert_eq!(cpu.p() & F_N, F_N);
+    }
+}
+
+#[test]
+fn mos6502_writes_a_read_modify_write_byte_back_before_the_result() {
+    // A 6502 read-modify-write touches its address three times: a read,
+    // a write of what it read, and a write of the result. Hardware
+    // registers mapped into memory can see that middle write, so it is
+    // part of the contract and not an implementation detail.
+    let design = mos6502_design("1");
+    let mut cpu = Mos::boot(
+        &design,
+        "
+        lda #$41
+        sta $10
+        inc $10
+done:   jmp done
+",
+        0,
+    );
+    cpu.run_instructions(2);
+    cpu.record();
+    assert_eq!(cpu.next(), 5, "INC zero page is five cycles");
+    assert_eq!(
+        cpu.bus,
+        vec![
+            (M6502_ORIGIN + 4, false, 0xE6),
+            (M6502_ORIGIN + 5, false, 0x10),
+            (0x0010, false, 0x41),
+            (0x0010, true, 0x41),
+            (0x0010, true, 0x42),
+        ],
+        "read, write back, write the result"
+    );
+}
+
+#[test]
+fn mos6502_wraps_zero_page_indexing_and_its_pointers() {
+    // Zero-page indexing never leaves page zero, and neither does the
+    // pair of addresses a pointer is read from.
+    let design = mos6502_design("1");
+    let mut cpu = Mos::boot(
+        &design,
+        "
+        ldx #$02
+        ldy #$03
+        lda $ff,x       ; $FF + 2 = $01, never $0101
+        sta $20
+        lda ($fe,x)     ; the pointer is at $00 and $01
+        sta $21
+        lda ($ff),y     ; the pointer is at $FF and $00, wrapped
+        sta $22
+done:   jmp done
+",
+        0,
+    );
+    cpu.set_byte(0x0000, 0x34);
+    cpu.set_byte(0x0001, 0x12);
+    cpu.set_byte(0x00FF, 0x00);
+    // What a core that did not wrap would read instead.
+    cpu.set_byte(0x0100, 0x99);
+    cpu.set_byte(0x0101, 0x99);
+    cpu.set_byte(0x1234, 0xC3);
+    cpu.set_byte(0x3403, 0xD4);
+    cpu.set_byte(0x9900, 0xEE);
+
+    cpu.run_to_done(80);
+    assert_eq!(
+        cpu.byte_at(0x0020),
+        0x12,
+        "LDA $FF,X wraps inside page zero"
+    );
+    assert_eq!(
+        cpu.byte_at(0x0021),
+        0xC3,
+        "the (zp,X) pointer is at $00 / $01"
+    );
+    assert_eq!(
+        cpu.byte_at(0x0022),
+        0xD4,
+        "and the (zp),Y pointer's high byte wraps to $00"
+    );
+}
+
+#[test]
+fn mos6502_wraps_the_stack_inside_page_one() {
+    let design = mos6502_design("1");
+    let mut cpu = Mos::boot(
+        &design,
+        "
+        ldx #$00
+        txs             ; S = $00
+        lda #$aa
+        pha             ; $0100, S -> $FF
+        lda #$bb
+        pha             ; $01FF, S -> $FE
+        pla             ; S -> $FF, reads $01FF
+        sta $10
+        pla             ; S -> $00, reads $0100
+        sta $11
+done:   jmp done
+",
+        0,
+    );
+    cpu.run_instructions(2);
+    cpu.record();
+    cpu.run_to_done(80);
+    assert_eq!(cpu.byte_at(0x0100), 0xAA, "the first push landed at $0100");
+    assert_eq!(
+        cpu.byte_at(0x01FF),
+        0xBB,
+        "and S wrapped to $FF for the next"
+    );
+    assert_eq!(cpu.byte_at(0x0010), 0xBB, "the first pull came back");
+    assert_eq!(
+        cpu.byte_at(0x0011),
+        0xAA,
+        "and the second wrapped round again"
+    );
+    assert_eq!(cpu.s(), 0x00, "S is back where it started");
+    // Every write was either in page one or one of the program's own
+    // two stores: the stack never reached outside its page.
+    for (addr, writing, _) in &cpu.bus {
+        assert!(
+            !writing || (0x0100..=0x01FF).contains(addr) || matches!(addr, 0x0010 | 0x0011),
+            "a stack access reached {addr:#06x}"
+        );
+    }
+}
+
+#[test]
+fn mos6502_reproduces_the_indirect_jmp_page_bug() {
+    // `JMP ($10FF)` takes its high byte from $1000, not from $1100.
+    let design = mos6502_design("1");
+    let mut cpu = Mos::boot(
+        &design,
+        "
+        .org $0200
+reset:  jmp ($10ff)
+        .org $0300
+good:   lda #$01
+        jmp done
+        .org $0400
+bad:    lda #$02
+done:   jmp done
+",
+        0,
+    );
+    cpu.set_byte(0x10FF, 0x00);
+    cpu.set_byte(0x1000, 0x03); // what the part actually reads
+    cpu.set_byte(0x1100, 0x04); // what a core without the bug would read
+    cpu.record();
+    let took = cpu.next();
+    assert_eq!(took, 5, "an indirect JMP is five cycles");
+    assert_eq!(
+        cpu.addresses(),
+        vec![0x0200, 0x0201, 0x0202, 0x10FF, 0x1000],
+        "the second pointer byte comes from the start of the same page"
+    );
+    assert_eq!(cpu.bus_addr(), 0x0300, "so the jump lands at $0300");
+    cpu.run_to_done(40);
+    assert_eq!(cpu.a(), 0x01, "which is the branch a compatible core takes");
+}
+
+#[test]
+fn mos6502_counts_the_cycles_of_every_instruction() {
+    // Every documented encoding but the branches, which have their own
+    // test because their count depends on the flags. Each index is zero
+    // after reset, so no indexed access here crosses a page and each
+    // count is the base one from the table.
+    fn operand_text(mode: m6502::Mode) -> &'static str {
+        match mode {
+            m6502::Mode::Imp => "",
+            m6502::Mode::Acc => "a",
+            m6502::Mode::Imm => "#$12",
+            m6502::Mode::Zp => "$34",
+            m6502::Mode::ZpX => "$34,x",
+            m6502::Mode::ZpY => "$34,y",
+            m6502::Mode::Abs => "$1234",
+            m6502::Mode::AbsX => "$1234,x",
+            m6502::Mode::AbsY => "$1234,y",
+            m6502::Mode::Ind => "($1234)",
+            m6502::Mode::IzX => "($34,x)",
+            m6502::Mode::IzY => "($34),y",
+            m6502::Mode::Rel => "done",
+        }
+    }
+
+    let design = mos6502_design("1");
+    let mut checked = 0;
+    for insn in m6502::TABLE {
+        if insn.mode == m6502::Mode::Rel {
+            continue;
+        }
+        let source = format!(
+            "        {} {}\ndone:   jmp done\n",
+            insn.name,
+            operand_text(insn.mode)
+        );
+        let mut cpu = Mos::boot(&design, &source, 0);
+        // The assembler and the table agree on the encoding, which is
+        // also a check that the source above says what it means.
+        assert_eq!(
+            cpu.byte_at(M6502_ORIGIN),
+            insn.code,
+            "`{} {}` should assemble to {:#04x}",
+            insn.name,
+            operand_text(insn.mode),
+            insn.code
+        );
+        let took = cpu.next();
+        assert_eq!(
+            took,
+            u32::from(insn.cycles),
+            "`{} {}` ({:#04x}) is documented as {} cycles",
+            insn.name,
+            operand_text(insn.mode),
+            insn.code,
+            insn.cycles
+        );
+        checked += 1;
+    }
+    assert_eq!(
+        checked, 143,
+        "every documented encoding but the eight branches"
+    );
+}
+
+#[test]
+fn mos6502_spends_an_extra_cycle_when_an_indexed_read_crosses_a_page() {
+    let design = mos6502_design("1");
+    let mut checked = 0;
+    for insn in m6502::TABLE.iter().filter(|e| e.page_penalty) {
+        for (base, crossing) in [(0x12FFu16, true), (0x1200u16, false)] {
+            let (setup, operand) = match insn.mode {
+                m6502::Mode::AbsX => ("ldx #$01", format!("${base:04x},x")),
+                m6502::Mode::AbsY => ("ldy #$01", format!("${base:04x},y")),
+                _ => ("ldy #$01", "($40),y".to_owned()),
+            };
+            let source = format!(
+                "        {setup}\n        {} {operand}\ndone:   jmp done\n",
+                insn.name
+            );
+            let mut cpu = Mos::boot(&design, &source, 0);
+            if insn.mode == m6502::Mode::IzY {
+                cpu.set_byte(0x0040, u8::try_from(base & 0xFF).expect("a byte"));
+                cpu.set_byte(0x0041, u8::try_from(base >> 8).expect("a byte"));
+            }
+            cpu.next();
+            let took = cpu.next();
+            assert_eq!(
+                took,
+                u32::from(insn.cycles) + u32::from(crossing),
+                "`{} {operand}` with the index at 1 {}crosses a page",
+                insn.name,
+                if crossing { "" } else { "does not " }
+            );
+            checked += 1;
+        }
+    }
+    assert!(checked >= 30, "every indexed read is measured: {checked}");
+
+    // An indexed write, and an indexed read-modify-write, spend that
+    // cycle whether they cross or not.
+    for (mnemonic, operand, want) in [
+        ("sta", "$12ff,x", 5),
+        ("sta", "$1200,x", 5),
+        ("sta", "$12ff,y", 5),
+        ("sta", "$1200,y", 5),
+        ("inc", "$12ff,x", 7),
+        ("inc", "$1200,x", 7),
+        ("asl", "$12ff,x", 7),
+        ("asl", "$1200,x", 7),
+    ] {
+        let source = format!(
+            "        ldx #$01\n        ldy #$01\n        {mnemonic} {operand}\ndone:   jmp done\n"
+        );
+        let mut cpu = Mos::boot(&design, &source, 0);
+        cpu.run_instructions(2);
+        assert_eq!(
+            cpu.next(),
+            want,
+            "`{mnemonic} {operand}` always spends the index cycle"
+        );
+    }
+    // And so does `sta ($40),y`, at six cycles either way.
+    for base in [0x12FFu16, 0x1200] {
+        let mut cpu = Mos::boot(
+            &design,
+            "        ldy #$01\n        sta ($40),y\ndone:   jmp done\n",
+            0,
+        );
+        cpu.set_byte(0x0040, u8::try_from(base & 0xFF).expect("a byte"));
+        cpu.set_byte(0x0041, u8::try_from(base >> 8).expect("a byte"));
+        cpu.next();
+        assert_eq!(cpu.next(), 6, "`sta ($40),y` is six cycles");
+    }
+}
+
+#[test]
+fn mos6502_times_branches_by_whether_they_are_taken_and_cross() {
+    let design = mos6502_design("1");
+    // Not taken: two cycles.
+    let mut cpu = Mos::boot(
+        &design,
+        "
+        sec
+        bcc away
+        nop
+away:   nop
+done:   jmp done
+",
+        0,
+    );
+    cpu.next();
+    assert_eq!(cpu.next(), 2, "a branch not taken is two cycles");
+
+    // Taken inside the page: three.
+    let mut cpu = Mos::boot(
+        &design,
+        "
+        clc
+        bcc away
+        nop
+away:   nop
+done:   jmp done
+",
+        0,
+    );
+    cpu.next();
+    assert_eq!(cpu.next(), 3, "a branch taken is three");
+    assert_eq!(
+        cpu.bus_addr(),
+        cpu.label("away"),
+        "and it lands on its target"
+    );
+
+    // Taken onto the next page: four.
+    let mut cpu = Mos::boot(
+        &design,
+        "
+        .org $02fa
+reset:  clc
+        bcc away
+        .org $0302
+away:   nop
+done:   jmp done
+",
+        0,
+    );
+    cpu.next();
+    assert_eq!(cpu.next(), 4, "a branch across a page is four");
+    assert_eq!(cpu.bus_addr(), 0x0302, "and still lands on its target");
+
+    // And backwards across one.
+    let mut cpu = Mos::boot(
+        &design,
+        "
+        .org $02f0
+away:   nop
+        jmp done
+        .org $0300
+reset:  clc
+        bcc away
+done:   jmp done
+",
+        0,
+    );
+    cpu.next();
+    assert_eq!(cpu.next(), 4, "a backward branch across a page is four too");
+    assert_eq!(cpu.bus_addr(), 0x02F0);
+}
+
+#[test]
+fn mos6502_takes_and_declines_every_branch() {
+    // Each of the eight branches given a flag state that makes it jump
+    // and one that makes it fall through.
+    let sets_v = "clc\n        lda #$50\n        adc #$50";
+    let cases: &[(&str, &str, bool)] = &[
+        ("bpl", "lda #$00", true),
+        ("bpl", "lda #$80", false),
+        ("bmi", "lda #$80", true),
+        ("bmi", "lda #$00", false),
+        ("bvc", "clv", true),
+        ("bvc", sets_v, false),
+        ("bvs", sets_v, true),
+        ("bvs", "clv", false),
+        ("bcc", "clc", true),
+        ("bcc", "sec", false),
+        ("bcs", "sec", true),
+        ("bcs", "clc", false),
+        ("bne", "lda #$01", true),
+        ("bne", "lda #$00", false),
+        ("beq", "lda #$00", true),
+        ("beq", "lda #$01", false),
+    ];
+    let design = mos6502_design("1");
+    for (mnemonic, setup, taken) in cases.iter().copied() {
+        let source = format!(
+            "        {setup}
+        {mnemonic} there
+        ldx #$00
+        jmp done
+there:  ldx #$01
+done:   jmp done
+"
+        );
+        let mut cpu = Mos::boot(&design, &source, 0);
+        cpu.run_to_done(60);
+        assert_eq!(
+            cpu.x() == 1,
+            taken,
+            "`{mnemonic}` after `{setup}` should {}have been taken",
+            if taken { "" } else { "not " }
+        );
+    }
+}
+
+#[test]
+fn mos6502_calls_and_returns_through_the_stack() {
+    for decimal in DECIMALS {
+        let design = mos6502_design(decimal);
+        let mut cpu = Mos::boot(
+            &design,
+            "
+        ldx #$ff
+        txs
+        jsr outer
+        sta $20
+done:   jmp done
+
+outer:  lda #$11
+        jsr inner
+        clc
+        adc #$22
+        rts
+
+inner:  lda #$44
+        rts
+",
+            0,
+        );
+        cpu.run_instructions(2);
+        assert_eq!(
+            cpu.s(),
+            0xFF,
+            "DECIMAL_MODE={decimal}: the stack starts full"
+        );
+        let jsr_at = M6502_ORIGIN + 3;
+        // Six cycles later the return address is on the stack.
+        assert_eq!(cpu.next(), 6, "JSR is six cycles");
+        assert_eq!(cpu.s(), 0xFD, "and pushes two bytes");
+        let pushed = u16::from(cpu.byte_at(0x01FE)) | (u16::from(cpu.byte_at(0x01FF)) << 8);
+        assert_eq!(
+            pushed,
+            jsr_at + 2,
+            "JSR pushes the address of its own last byte"
+        );
+        assert_eq!(
+            cpu.bus_addr(),
+            cpu.label("outer"),
+            "and jumps to its target"
+        );
+
+        cpu.run_to_done(200);
+        assert_eq!(cpu.a(), 0x66, "$44 from the inner call plus $22");
+        assert_eq!(cpu.byte_at(0x0020), 0x66, "stored after the return");
+        assert_eq!(cpu.s(), 0xFF, "and every frame was popped again");
+    }
+}
+
+#[test]
+fn mos6502_pushes_and_pulls_the_status_byte() {
+    // B is not a flag: PHP pushes bit 4 set, PLP ignores bits 4 and 5.
+    let design = mos6502_design("1");
+    let mut cpu = Mos::boot(
+        &design,
+        "
+        ldx #$ff
+        txs
+        sec
+        sed
+        php
+        pla
+        sta $10
+        cld
+        clc
+        lda #$00
+        pha
+        plp             ; every flag from a zero byte, B included
+        php
+        pla
+        sta $11
+done:   jmp done
+",
+        0,
+    );
+    cpu.run_to_done(80);
+    // N from `ldx #$ff`, I from the reset sequence, D and C just set.
+    assert_eq!(
+        cpu.byte_at(0x0010),
+        F_N | 0x20 | 0x10 | F_D | F_I | F_C,
+        "PHP pushes bit 5 and bit 4 set"
+    );
+    assert_eq!(
+        cpu.byte_at(0x0011),
+        0x20 | 0x10,
+        "PLP takes no flag from bits 4 and 5, and PHP sets them anyway"
+    );
+    assert_eq!(
+        cpu.p() & (F_C | F_Z | F_N | F_V | F_D | F_I),
+        0x00,
+        "PLP cleared the rest"
+    );
+    assert_eq!(cpu.s(), 0xFF, "and the stack is level again");
+}
+
+#[test]
+fn mos6502_treats_an_undocumented_opcode_as_a_nop() {
+    // Out of scope, but not undefined: two cycles and nothing touched.
+    let design = mos6502_design("1");
+    for code in [0x02u8, 0x03, 0x1A, 0x80, 0xBB, 0xFF] {
+        let source = format!(
+            "        lda #$42
+        ldx #$07
+        .byte ${code:02x}
+        iny
+done:   jmp done
+"
+        );
+        let mut cpu = Mos::boot(&design, &source, 0);
+        cpu.run_instructions(2);
+        let p = cpu.p();
+        assert_eq!(
+            cpu.next(),
+            2,
+            "the undocumented {code:#04x} is a two-cycle NOP"
+        );
+        assert_eq!(cpu.a(), 0x42, "with the accumulator untouched");
+        assert_eq!(cpu.x(), 0x07, "and X");
+        assert_eq!(cpu.p(), p, "and the flags");
+        cpu.next();
+        assert_eq!(cpu.y(), 0x01, "and the instruction after it runs");
+    }
+}
+
+/// The program the interrupt tests run: a loop that counts in `$30`,
+/// with a handler at `$0300` that counts in `$31`.
+const MOS_IRQ_PROGRAM: &str = "
+        .org $0200
+reset:  ldx #$ff
+        txs
+        cli
+loop:   inc $30
+        jmp loop
+        .org $0300
+irq:    inc $31
+        rti
+";
+
+#[test]
+fn mos6502_takes_an_irq_between_instructions() {
+    let design = mos6502_design("1");
+    let mut cpu = Mos::boot(&design, MOS_IRQ_PROGRAM, 0);
+    let handler = cpu.label("irq");
+    let loop_at = cpu.label("loop");
+    cpu.run_instructions(3);
+    cpu.run(40);
+    assert_eq!(cpu.traps, 0, "an unasserted line does not fire");
+    let spun = cpu.byte_at(0x0030);
+    assert!(spun > 0, "the loop should have gone round");
+
+    // Raised at the top of a known instruction, so the sequence's own
+    // seven cycles can be counted off the end of it.
+    cpu.run_until_fetch(loop_at, 40);
+    cpu.set_irq(true);
+    assert_eq!(
+        cpu.next(),
+        5 + 7,
+        "INC zero page's five cycles, then the sequence's seven"
+    );
+    assert_eq!(cpu.bus_addr(), handler, "the handler is entered");
+    assert_eq!(cpu.traps, 1, "exactly one interrupt was taken");
+    assert_eq!(cpu.s(), 0xFC, "three bytes on the stack");
+    assert!(cpu.flag(2), "I is set on entry");
+    let pushed = u16::from(cpu.byte_at(0x01FE)) | (u16::from(cpu.byte_at(0x01FF)) << 8);
+    assert!(
+        (loop_at..loop_at + 5).contains(&pushed),
+        "the pushed address is an instruction of the loop, not {pushed:#06x}"
+    );
+    let status = cpu.byte_at(0x01FD);
+    assert_eq!(status & 0x10, 0x00, "an interrupt pushes bit 4 clear");
+    assert_eq!(status & 0x20, 0x20, "and bit 5 set");
+    assert_eq!(status & F_I, 0x00, "with I as it was before the interrupt");
+
+    // The line is still high, so it fires again as soon as RTI puts I
+    // back: it is level triggered, not an edge.
+    cpu.run_until_traps(2, 120);
+    assert_eq!(
+        cpu.bus_addr(),
+        handler,
+        "a level that stays high fires again"
+    );
+    cpu.set_irq(false);
+    let before = cpu.traps;
+    cpu.run(200);
+    assert_eq!(cpu.traps, before, "and stops once the line drops");
+    assert!(
+        cpu.byte_at(0x0030) > spun,
+        "the interrupted loop carried on"
+    );
+    assert_eq!(cpu.byte_at(0x0031), 2, "the handler ran twice");
+}
+
+#[test]
+fn mos6502_masks_an_irq_with_the_interrupt_flag() {
+    let design = mos6502_design("1");
+    let mut cpu = Mos::boot(
+        &design,
+        "
+        .org $0200
+reset:  ldx #$ff
+        txs
+        sei
+loop:   inc $30
+        jmp loop
+        .org $0300
+irq:    inc $31
+        rti
+",
+        0,
+    );
+    cpu.run_instructions(3);
+    cpu.set_irq(true);
+    cpu.run(300);
+    assert_eq!(cpu.traps, 0, "I masks the IRQ however long it is held");
+    assert_eq!(cpu.byte_at(0x0031), 0, "the handler never ran");
+    assert!(cpu.byte_at(0x0030) > 4, "and the loop kept going");
+}
+
+#[test]
+fn mos6502_takes_an_nmi_on_its_edge_and_through_the_mask() {
+    let design = mos6502_design("1");
+    let mut cpu = Mos::boot(
+        &design,
+        "
+        .org $0200
+reset:  ldx #$ff
+        txs
+        sei             ; I is set: an NMI does not care
+loop:   inc $30
+        jmp loop
+        .org $0300
+nmi:    inc $31
+        rti
+",
+        0,
+    );
+    let handler = cpu.label("nmi");
+    let loop_at = cpu.label("loop");
+    cpu.run_instructions(3);
+
+    // A held-high line is one edge and therefore one interrupt, even
+    // though I is set throughout.
+    cpu.set_nmi(true);
+    cpu.run_until_traps(1, 40);
+    assert_eq!(
+        cpu.bus_addr(),
+        handler,
+        "the NMI ignores the interrupt mask"
+    );
+    assert_eq!(cpu.byte_at(0x01FD) & 0x10, 0, "and pushes bit 4 clear");
+    cpu.run(300);
+    assert_eq!(cpu.traps, 1, "a line that stays high is still one edge");
+    assert_eq!(cpu.byte_at(0x0031), 1, "so the handler ran once");
+
+    // A second edge is a second interrupt.
+    cpu.set_nmi(false);
+    cpu.run(4);
+    cpu.set_nmi(true);
+    cpu.run_until_traps(2, 60);
+    assert_eq!(cpu.bus_addr(), handler, "a fresh edge fires again");
+
+    // And an edge narrower than an instruction is latched, not lost.
+    cpu.set_nmi(false);
+    cpu.run(4);
+    cpu.run_until_fetch(loop_at, 40);
+    cpu.set_nmi(true);
+    cpu.run(1);
+    cpu.set_nmi(false);
+    cpu.run_until_traps(3, 60);
+    assert_eq!(
+        cpu.bus_addr(),
+        handler,
+        "a one-cycle pulse is held until it is taken"
+    );
+}
+
+#[test]
+fn mos6502_prefers_an_nmi_to_an_irq() {
+    let design = mos6502_design("1");
+    let mut cpu = Mos::boot(
+        &design,
+        "
+        .org $0200
+reset:  ldx #$ff
+        txs
+        cli
+loop:   inc $30
+        jmp loop
+        .org $0300
+nmi:    inc $31
+        jmp done
+        .org $0380
+irq:    inc $32
+done:   jmp done
+",
+        0,
+    );
+    let nmi_at = cpu.label("nmi");
+    cpu.run_instructions(3);
+    cpu.set_irq(true);
+    cpu.set_nmi(true);
+    cpu.run_until_traps(1, 40);
+    assert_eq!(cpu.bus_addr(), nmi_at, "the NMI vector won");
+    cpu.run_instructions(1);
+    assert_eq!(cpu.byte_at(0x0031), 1, "and its handler ran");
+    assert_eq!(cpu.byte_at(0x0032), 0, "while the IRQ handler did not");
+}
+
+#[test]
+fn mos6502_breaks_and_returns_from_the_interrupt() {
+    let design = mos6502_design("1");
+    let mut cpu = Mos::boot(
+        &design,
+        "
+        .org $0200
+reset:  ldx #$ff
+        txs
+        cli
+        sec
+        brk
+        .byte $ee       ; BRK's padding byte, which it skips
+back:   lda #$99
+        sta $20
+done:   jmp done
+        .org $0400
+irq:    inc $30
+        rti
+",
+        0,
+    );
+    let handler = cpu.label("irq");
+    let back = cpu.label("back");
+    cpu.run_instructions(4);
+    assert_eq!(cpu.next(), 7, "BRK is seven cycles");
+    assert_eq!(cpu.bus_addr(), handler, "and vectors through $FFFE");
+    assert_eq!(cpu.traps, 1);
+    let pushed = u16::from(cpu.byte_at(0x01FE)) | (u16::from(cpu.byte_at(0x01FF)) << 8);
+    assert_eq!(pushed, back, "BRK pushes the address past its padding byte");
+    let status = cpu.byte_at(0x01FD);
+    assert_eq!(
+        status & 0x10,
+        0x10,
+        "and pushes bit 4 set, which an IRQ does not"
+    );
+    assert_eq!(status & F_I, 0, "with I as it was");
+    assert_eq!(status & F_C, F_C, "and the carry it was left with");
+    assert!(cpu.flag(2), "the handler runs with I set");
+
+    cpu.run_to_done(60);
+    assert_eq!(cpu.byte_at(0x0030), 1, "the handler ran");
+    assert_eq!(cpu.a(), 0x99, "RTI came back past the padding byte");
+    assert_eq!(cpu.byte_at(0x0020), 0x99);
+    assert!(!cpu.flag(2), "RTI restored I to what it was");
+    assert!(cpu.flag(0), "and the carry with it");
+    assert_eq!(cpu.s(), 0xFF, "and the frame was popped");
+}
+
+#[test]
+fn mos6502_delays_the_effect_of_cli_and_sei_by_one_instruction() {
+    // The interrupt decision is made with the flags as they were before
+    // the instruction, which is the delay the part is documented to
+    // have: CLI does not let one through until the instruction after
+    // it, and SEI does not shut one out until then either.
+    let design = mos6502_design("1");
+
+    let mut cpu = Mos::boot(
+        &design,
+        "
+        .org $0200
+reset:  ldx #$ff
+        txs
+        sei
+        nop
+clear:  cli
+after:  inc $30         ; this runs before the interrupt is taken
+        inc $31
+done:   jmp done
+        .org $0300
+irq:    inc $32
+        rti
+",
+        0,
+    );
+    let cli_at = cpu.label("clear");
+    let after = cpu.label("after");
+    let handler = cpu.label("irq");
+    cpu.set_irq(true);
+    cpu.run_until_fetch(cli_at, 40);
+    assert_eq!(cpu.traps, 0, "I keeps it out while it is set");
+    cpu.next();
+    assert_eq!(cpu.bus_addr(), after, "CLI does not let it in at once");
+    assert_eq!(cpu.traps, 0);
+    cpu.next();
+    assert_eq!(cpu.byte_at(0x0030), 1, "the instruction after CLI ran");
+    assert_eq!(cpu.bus_addr(), handler, "and only then was it taken");
+
+    let mut cpu = Mos::boot(
+        &design,
+        "
+        .org $0200
+reset:  ldx #$ff
+        txs
+        cli
+block:  sei
+        inc $30
+done:   jmp done
+        .org $0300
+irq:    inc $32
+        rti
+",
+        0,
+    );
+    let sei_at = cpu.label("block");
+    let handler = cpu.label("irq");
+    cpu.run_until_fetch(sei_at, 40);
+    // The line goes high during SEI itself, so the decision at the end
+    // of SEI is made with I still clear.
+    cpu.set_irq(true);
+    cpu.next();
+    assert!(cpu.flag(2), "SEI set the flag");
+    assert_eq!(
+        cpu.bus_addr(),
+        handler,
+        "and the interrupt it was meant to keep out is taken anyway"
+    );
+}
+
+#[test]
+fn mos6502_multiplies_sixteen_bits_by_shift_and_add() {
+    // 16 x 16 into 16, the way a 6502 does it: shift the multiplier
+    // right a bit at a time, add the shifted multiplicand when the bit
+    // was set, all of it in a subroutine reached through the stack.
+    const MULTIPLY: &str = "
+        .org $0200
+reset:  ldx #$ff
+        txs
+        jsr mul16
+        lda $14
+        sta $20
+        lda $15
+        sta $21
+done:   jmp done
+
+mul16:  lda #$00
+        sta $14
+        sta $15
+        ldx #$10        ; sixteen bits of multiplier
+ml:     lsr $13         ; multiplier >>= 1, its low bit into C
+        ror $12
+        bcc noadd
+        clc
+        lda $14         ; product += multiplicand
+        adc $10
+        sta $14
+        lda $15
+        adc $11
+        sta $15
+noadd:  asl $10         ; multiplicand <<= 1
+        rol $11
+        dex
+        bne ml
+        rts
+";
+    for decimal in DECIMALS {
+        let design = mos6502_design(decimal);
+        for (a, b) in [
+            (1234u16, 53u16),
+            (300, 200),
+            (0xFFFF, 3),
+            (0, 12345),
+            (7, 1),
+        ] {
+            let mut cpu = Mos::boot(&design, MULTIPLY, 0);
+            for (addr, value) in [(0x0010u16, a), (0x0012, b)] {
+                cpu.set_byte(addr, u8::try_from(value & 0xFF).expect("a byte"));
+                cpu.set_byte(addr + 1, u8::try_from(value >> 8).expect("a byte"));
+            }
+            cpu.run_to_done(4000);
+            assert_eq!(
+                cpu.word_at(0x0020),
+                a.wrapping_mul(b),
+                "DECIMAL_MODE={decimal}: {a} x {b}"
+            );
+            assert_eq!(cpu.s(), 0xFF, "and the stack came back");
+            assert_eq!(cpu.traps, 0, "with nothing trapping on the way");
+        }
+    }
+}
+
+#[test]
+fn mos6502_sums_an_array_into_sixteen_bits() {
+    // A loop over sixteen bytes, each added through a subroutine that
+    // carries into the high byte, so the whole call sequence is on the
+    // stack for every one of them.
+    let values: [u8; 16] = [
+        0x10, 0x20, 0x30, 0x40, 0x50, 0x60, 0x70, 0x80, 0x90, 0xA0, 0xB0, 0xC0, 0xD0, 0xE0, 0xF0,
+        0xFF,
+    ];
+    let total: u16 = values.iter().map(|v| u16::from(*v)).sum();
+
+    for decimal in DECIMALS {
+        let design = mos6502_design(decimal);
+        let mut cpu = Mos::boot(
+            &design,
+            "
+        .org $0200
+reset:  ldx #$ff
+        txs
+        lda #$00
+        sta $30
+        sta $31
+        ldy #$00
+loop:   lda $0400,y
+        jsr add8
+        iny
+        cpy #$10
+        bne loop
+done:   jmp done
+
+add8:   clc
+        adc $30
+        sta $30
+        lda $31
+        adc #$00
+        sta $31
+        rts
+",
+            0,
+        );
+        for (index, value) in values.iter().enumerate() {
+            cpu.set_byte(0x0400 + u16::try_from(index).expect("sixteen"), *value);
+        }
+        cpu.run_to_done(4000);
+        assert_eq!(
+            cpu.word_at(0x0030),
+            total,
+            "DECIMAL_MODE={decimal}: the sixteen-bit total"
+        );
+        assert_eq!(cpu.y(), 0x10, "the index walked the whole array");
+        assert_eq!(cpu.s(), 0xFF, "and every call returned");
+    }
+}
+
+#[test]
+fn mos6502_runs_a_recursive_function_on_the_stack() {
+    // Fibonacci by the definition: two nested calls per frame, with the
+    // argument and the first result kept on the stack and read back
+    // through `tsx` and absolute,X, which is how a 6502 reaches its own
+    // frame. Nothing here fits in a register, so the whole calling
+    // convention is proved at once.
+    const FIB: &str = "
+        .org $0200
+reset:  ldx #$ff
+        txs
+        lda #$0a
+        jsr fib
+        sta $20
+done:   jmp done
+
+fib:    cmp #$02
+        bcc base        ; fib(0) = 0 and fib(1) = 1 are the argument
+        pha             ; [n]
+        sec
+        sbc #$01
+        jsr fib         ; A = fib(n-1)
+        pha             ; [n][fib(n-1)]
+        tsx
+        lda $0102,x     ; n again, out of this frame
+        sec
+        sbc #$02
+        jsr fib         ; A = fib(n-2)
+        tsx
+        clc
+        adc $0101,x     ; + fib(n-1)
+        tay
+        pla             ; drop fib(n-1)
+        pla             ; drop n
+        tya
+base:   rts
+";
+    fn fib(n: u32) -> u32 {
+        if n < 2 { n } else { fib(n - 1) + fib(n - 2) }
+    }
+
+    let design = mos6502_design("1");
+    let mut cpu = Mos::boot(&design, FIB, 0);
+    cpu.run_to_done(120_000);
+    assert_eq!(
+        u32::from(cpu.byte_at(0x0020)),
+        fib(10),
+        "fib(10) computed recursively"
+    );
+    assert_eq!(cpu.s(), 0xFF, "every frame was popped again");
+    assert_eq!(cpu.traps, 0, "and nothing faulted on the way");
+    assert!(
+        cpu.retired > 1000,
+        "the whole recursion ran: {} instructions",
+        cpu.retired
+    );
+}
+
+#[test]
+fn mos6502_survives_a_memory_that_makes_it_wait() {
+    // `ready` low holds the access; the core must take the same number
+    // of bus *cycles* however many clocks each one costs.
+    let design = mos6502_design("1");
+    let mut counts = Vec::new();
+    for stalls in [0u32, 1, 3] {
+        let mut cpu = Mos::boot(
+            &design,
+            "
+        .org $0200
+reset:  ldx #$ff
+        txs
+        ldy #$00
+        lda #$00
+loop:   clc
+        adc $0400,y
+        iny
+        cpy #$08
+        bne loop
+        sta $20
+done:   jmp done
+",
+            stalls,
+        );
+        for index in 0..8u16 {
+            cpu.set_byte(0x0400 + index, u8::try_from(index + 1).expect("a byte"));
+        }
+        let cycles = cpu.run_to_done(2000);
+        assert_eq!(
+            cpu.byte_at(0x0020),
+            36,
+            "1 + 2 + … + 8, with {stalls} wait states"
+        );
+        counts.push(cycles);
+    }
+    assert_eq!(
+        counts[0], counts[1],
+        "a wait state costs clocks, not bus cycles"
+    );
+    assert_eq!(counts[0], counts[2]);
 }
 
 // ---------------------------------------------------------------------------

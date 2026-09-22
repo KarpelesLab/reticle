@@ -2,7 +2,7 @@
 
 The first-party half of phase 8. [`docs/ip.md`](ip.md) describes the
 machinery — the manifest formats, the resolver, the bus model, the black
-boxes. This document describes the **blocks**: twenty-one pieces of HDL
+boxes. This document describes the **blocks**: twenty-two pieces of HDL
 that drop into a design the way a crate drops into a Rust program, each
 with a manifest, a Rust co-simulation test, and a resource footprint that
 was measured rather than guessed.
@@ -23,6 +23,7 @@ ip/
   fifo_sync/     reticle.ip  rtl/fifo_sync.v
   hyperram_ctrl/ reticle.ip  rtl/hyperram_ctrl.v
   i2c_master/    reticle.ip  rtl/i2c_master.v
+  mos6502/       reticle.ip  rtl/mos6502.v
   pwm/           reticle.ip  rtl/pwm.v
   ram_wrapper/   reticle.ip  rtl/ram_sp.v  rtl/ram_sdp.v
   rv32i/         reticle.ip  rtl/rv32i.v
@@ -58,6 +59,7 @@ It is distributed as part of the repository instead.
 | `axil_gpio` | `axil_gpio` | AXI4-Lite GPIO subordinate: data, direction and set registers | `cdc_sync` |
 | `ram_wrapper` | `ram_sdp`, `ram_sp` | portable block RAM wrappers, single and simple dual port, optional output register | — |
 | `rv32i` | `rv32i` | the whole RV32I base integer set, multi-cycle, machine-mode CSRs, traps and interrupts | — |
+| `mos6502` | `mos6502` | the documented MOS 6502: 56 mnemonics, 13 addressing modes, decimal mode, RES / NMI / IRQ / BRK, documented cycle counts | — |
 | `eth_mac_rmii` | `eth_mac_rmii`, `eth_mac_tx`, `eth_mac_rx` | Ethernet MAC over RMII: preamble, frame check sequence, inter-frame gap | — |
 | `spiflash_xip` | `spiflash_xip` | execute-in-place SPI flash reader, read only and cache-less | — |
 | `sdram_ctrl` | `sdram_ctrl` | SDR SDRAM controller for x16 parts: power-up sequence, refresh, open rows per bank, datasheet timings in nanoseconds | — |
@@ -68,13 +70,32 @@ It is distributed as part of the repository instead.
 | `usb_device_fs` | `usb_device_fs`, `usb_fs_rx`, `usb_fs_tx` | USB full-speed device: NRZI, bit stuffing, SYNC and EOP, CRC5 and CRC16 checked, a control endpoint that enumerates | — |
 | `usb_device_fs_pll` | `usb_device_fs_pll` | `usb_device_fs` with its 48 MHz from the device's PLL and a 12 MHz board clock | `usb_device_fs` |
 
-`rv32i`, `eth_mac_rmii` and `spiflash_xip` are the **larger blocks**,
-and they are larger in a particular way: each is a whole protocol or a
-whole machine rather than a part of one, so each is where a shortcut
-would have been invisible. They also fit together. `spiflash_xip`
-presents the memory port `rv32i` puts on its instruction side, so a
-processor executing straight out of a serial flash is the two of them
-and one wire.
+`rv32i`, `mos6502`, `eth_mac_rmii` and `spiflash_xip` are the **larger
+blocks**, and they are larger in a particular way: each is a whole
+protocol or a whole machine rather than a part of one, so each is where
+a shortcut would have been invisible. They also fit together.
+`spiflash_xip` presents the memory port `rv32i` puts on its instruction
+side, so a processor executing straight out of a serial flash is the two
+of them and one wire.
+
+The **two processors are deliberately nothing alike**, which is the
+reason there are two. `rv32i` is a 32-bit load/store machine with
+fixed-width instructions, thirty-two registers and one addressing mode;
+its core is a three-state sequencer and an ALU, and what its tests prove
+is arithmetic and traps. `mos6502` is an 8-bit accumulator machine from
+1975 with three registers, variable-length instructions, **thirteen**
+addressing modes and a cycle count per instruction that programs were
+written to depend on. So its core is a forty-state sequencer where every
+state is one bus access, and what its tests prove is *timing* as much as
+arithmetic: an indexed read that crosses a page costs a cycle, a taken
+branch costs a cycle, a branch onto another page costs two, and a
+read-modify-write writes its address three times. It also has to
+reproduce the part's documented faults rather than fix them — `JMP
+($xxFF)` takes its high byte from `$xx00` — and it has packed
+binary-coded decimal arithmetic, which is where most 6502
+implementations are wrong and which `DECIMAL_MODE` can compile out. The
+two of them between them exercise almost disjoint parts of the
+toolchain.
 
 `sdram_ctrl` is the first of the blocks that **need a device
 primitive**, the ones phase 8 waited on the FPGA backend for: it forwards
@@ -211,6 +232,10 @@ is the part that matters:
   output register, and the read-first behaviour on a write.
 - **`rv32i`** — real machine code, assembled in the test and run. See
   [below](#what-the-processor-actually-executes).
+- **`mos6502`** — real 6502 machine code, assembled in the test from the
+  documented opcode matrix and run against a 64 KiB memory, with the
+  cycle count of every instruction checked against the reference.
+  See [below](#and-what-the-6502-executes).
 - **`eth_mac_rmii`** — the transmitter's own pins looped into the
   receiver, and the frame that comes out compared with the one that went
   in; the same frame with one dibit flipped in the payload, which still
@@ -363,6 +388,64 @@ flavours run every program.
 | `rv32i_sums_an_array_in_a_loop` | eight words summed through a `lw` / `add` / `addi` / `bne` loop and the total stored past the end of the array |
 | `rv32i_runs_a_recursive_function_on_the_stack` | Fibonacci of ten by the definition: two nested calls per frame, the return address and the argument saved on a stack, 177 calls and about two thousand instructions, and the stack pointer back where it started |
 
+### And what the 6502 executes
+
+`mos6502` is tested the same way and harder, because on a 6502 being
+right is not only about the answer. `tests/mos6502_asm/mod.rs` is a
+second assembler, built on the **documented opcode matrix typed out in
+hexadecimal order** — mnemonic, addressing mode, opcode byte and the
+cycle count the reference prints for it — with a two-pass front end over
+it for labels and the thirteen operand syntaxes. Nothing in it comes
+from the core's decoder, and the cycle counts in it are the
+reference's, not the hardware's, so
+`mos6502_counts_the_cycles_of_every_instruction` is a comparison between
+two independent statements of the same table.
+
+| Test | What it runs |
+|------|--------------|
+| `mos6502_loads_stores_and_transfers` | the three loads, the three stores and all six transfers, with N and Z after each, and TXS proved to be the one transfer that sets no flag |
+| `mos6502_reaches_every_addressing_mode` | one load per mode, each from an address only that mode computes, so a mode that lands anywhere else reads a zero |
+| `mos6502_traces_what_it_retired` | `dbg_retire` pulsing once per instruction with `dbg_pc` naming the opcode it came from, over a jump that skips one |
+| `mos6502_counts_its_index_registers` | INX, INY, DEX and DEY over both wrap-arounds, with the flags each leaves |
+| `mos6502_stores_through_every_mode` | every mode each of the three stores has, including STX's zero page,Y and STY's zero page,X |
+| `mos6502_computes_every_logical_operation` | ORA, AND and EOR with their flags |
+| `mos6502_sets_overflow_for_every_sign_combination` | the four sign combinations of ADC and of SBC, each with a result that overflows and one that does not, plus the carry in as part of the sum |
+| `mos6502_adds_and_subtracts_in_decimal_mode` | fourteen known ADC results and nine known SBC ones in packed BCD, including the three places the NMOS part is famously surprising: Z from the *binary* sum, N and V from the intermediate before the high nibble is corrected, and every SBC flag being the binary subtraction's. Then all of them again with `DECIMAL_MODE = 0`, where D is still a flag and the arithmetic is binary |
+| `mos6502_compares_with_cmp_cpx_and_cpy` | nine pairs through each of the three, with V set beforehand and D set too, so a comparison that touched either is caught |
+| `mos6502_tests_bits_with_bit` | N and V from bits 7 and 6 of *memory* whatever the accumulator holds, and Z from the conjunction |
+| `mos6502_shifts_and_rotates_through_carry` | all four, with the carry both ways, over the accumulator and over memory, which must agree |
+| `mos6502_reads_modifies_and_writes_memory` | INC, DEC, ASL, LSR, ROL and ROR in zero page, zero page,X, absolute and absolute,X, with INC and DEC proved to leave the carry alone |
+| `mos6502_writes_a_read_modify_write_byte_back_before_the_result` | the bus trace of `INC $10`: read, write what was read, write the result — the double write a memory-mapped register can see |
+| `mos6502_wraps_zero_page_indexing_and_its_pointers` | `LDA $FF,X` reaching `$0001` and never `$0101`, and both halves of a `(zp,X)` and a `(zp),Y` pointer wrapping inside page zero |
+| `mos6502_wraps_the_stack_inside_page_one` | S walked past both ends, with every write checked to stay inside `$0100`–`$01FF` |
+| `mos6502_reproduces_the_indirect_jmp_page_bug` | `JMP ($10FF)`, whose bus trace must read `$10FF` and then `$1000`, so the jump lands where the part sends it and not where the arithmetic says |
+| `mos6502_counts_the_cycles_of_every_instruction` | all 143 non-branch encodings, each assembled, checked to be the opcode byte the table names, run, and its cycles compared with the documented count |
+| `mos6502_spends_an_extra_cycle_when_an_indexed_read_crosses_a_page` | every indexed read at a base that crosses and one that does not, and the indexed writes and read-modify-writes proved to spend that cycle either way |
+| `mos6502_times_branches_by_whether_they_are_taken_and_cross` | two cycles not taken, three taken, four across a page, forwards and backwards |
+| `mos6502_takes_and_declines_every_branch` | each of the eight given a flag state that makes it jump and one that makes it fall through |
+| `mos6502_calls_and_returns_through_the_stack` | a nested JSR / RTS, with the pushed address checked to be the JSR's own last byte and the stack pointer back where it started |
+| `mos6502_pushes_and_pulls_the_status_byte` | PHP pushing bits 4 and 5 set, PLP taking no flag from either, and PHP setting them again over a status byte pulled as zero |
+| `mos6502_treats_an_undocumented_opcode_as_a_nop` | six of the 105 undocumented opcodes, each two cycles with no register and no flag touched |
+| `mos6502_takes_an_irq_between_instructions` | the line raised at the top of a known instruction so the sequence's own seven cycles can be counted, the frame on the stack with bit 4 clear, the handler entered with I set, and a level that stays high firing again after RTI |
+| `mos6502_masks_an_irq_with_the_interrupt_flag` | the same line held high for three hundred cycles with I set, and nothing taken |
+| `mos6502_takes_an_nmi_on_its_edge_and_through_the_mask` | an NMI taken although I is set, a line held high counting as one edge and not many, a second edge taken, and a one-cycle pulse latched rather than lost |
+| `mos6502_prefers_an_nmi_to_an_irq` | both raised at once; the NMI vector wins |
+| `mos6502_breaks_and_returns_from_the_interrupt` | BRK's seven cycles, the address past its padding byte pushed, bit 4 pushed *set* where an interrupt pushes it clear, and RTI returning with I and C as they were |
+| `mos6502_delays_the_effect_of_cli_and_sei_by_one_instruction` | an IRQ pending across CLI, which does not let it in until the instruction after; and one raised during SEI, which is taken anyway |
+| `mos6502_multiplies_sixteen_bits_by_shift_and_add` | a 16 x 16 multiply in a subroutine: the multiplier shifted right a bit at a time through `LSR` / `ROR`, the multiplicand shifted left through `ASL` / `ROL`, a 16-bit add when the bit was set, five operand pairs, and the stack level again |
+| `mos6502_sums_an_array_into_sixteen_bits` | sixteen bytes summed into a 16-bit total through a subroutine called once per byte, so the carry into the high byte and the whole call sequence are proved together |
+| `mos6502_runs_a_recursive_function_on_the_stack` | Fibonacci of ten by the definition, with the argument and the first result kept on the stack and read back through `TSX` and absolute,X — which is how a 6502 reaches its own frame, since nothing there fits in a register |
+| `mos6502_survives_a_memory_that_makes_it_wait` | the same loop with zero, one and three wait states, which must cost clocks and **not** bus cycles: all three take the same number of cycles and reach the same answer |
+
+The **quirks are the point** of half of that list. A 6502 core that gets
+the answers right and the timing wrong is not a 6502 core, because the
+programs written for it counted cycles — so the extra cycle of a
+page-crossing indexed read, the branch penalties, the stack's wrap
+inside page one, the zero-page wrap of an indexed address and of a
+pointer's two halves, the indirect `JMP` page bug and the
+one-instruction delay of `CLI` and `SEI` each have a test named after
+them, and the core's header names the test next to the quirk.
+
 Where a block crosses clock domains, `timing::analyze_cdc` is run over
 the synthesised and flattened netlist and the result is *asserted*, not
 just printed: `cdc_pulse` must show two two-flop synchronisers and
@@ -408,6 +491,16 @@ buffers disappear; the logic and the flip-flops do not.
 
 `LUT depth` is the depth of the mapped combinational network in cells,
 which is the rough shape of the critical path before place and route.
+
+`mos6502` is measured twice, which is what `DECIMAL_MODE` is for.
+Decimal mode is a ten-bit adder and a five-bit one for ADC, two
+five-bit subtractors for SBC and four comparators, and the two pairs of
+rows below say what that costs: **64 more LUT4 and 34 more LUT6** (about
+four per cent either way), and on the iCE40 92 more `SB_LUT4` and 54
+more `SB_CARRY`. The LUT depth does not move, because the decimal path
+is beside the binary one and not in front of it, so the parameter buys
+area back and nothing else. Off, D is still a flag — SED, CLD, PHP and
+PLP all see it — and ADC and SBC simply ignore it.
 
 The table is generated by `footprints_match_the_documentation` in
 `tests/ip_library.rs` and compared byte for byte, so it cannot drift.
@@ -482,6 +575,14 @@ exactly what this table is for.
 | `rv32i` | `rv32i` | REGFILE_BRAM=1 | LUT6 | 16 x dff, 2075 x lut, 1 x memory 32x32, 2 x memrd, 1 x memwr | 28 |
 | `rv32i` | `rv32i` | REGFILE_BRAM=1 | iCE40 HX1K | 220 x SB_CARRY, 2 x SB_DFFE, 292 x SB_DFFER, 66 x SB_DFFR, 1 x SB_GB, 208 x SB_IO, 2355 x SB_LUT4, 4 x SB_RAM40_4K | 34 |
 | `rv32i` | `rv32i` | REGFILE_BRAM=1 | ECP5 45F | 1 x DCCA, 4 x DP16KD, 2445 x LUT4, 360 x TRELLIS_FF, 208 x TRELLIS_IO | 34 |
+| `mos6502` | `mos6502` | DECIMAL_MODE=1 | LUT4 | 25 x dff, 1710 x lut | 18 |
+| `mos6502` | `mos6502` | DECIMAL_MODE=1 | LUT6 | 25 x dff, 1336 x lut | 18 |
+| `mos6502` | `mos6502` | DECIMAL_MODE=1 | iCE40 HX1K | 179 x SB_CARRY, 132 x SB_DFFER, 4 x SB_DFFES, 3 x SB_DFFR, 1 x SB_GB, 57 x SB_IO, 1733 x SB_LUT4 | 16 |
+| `mos6502` | `mos6502` | DECIMAL_MODE=1 | ECP5 45F | 1 x DCCA, 1720 x LUT4, 139 x TRELLIS_FF, 57 x TRELLIS_IO | 16 |
+| `mos6502` | `mos6502` | DECIMAL_MODE=0 | LUT4 | 25 x dff, 1646 x lut | 18 |
+| `mos6502` | `mos6502` | DECIMAL_MODE=0 | LUT6 | 25 x dff, 1302 x lut | 18 |
+| `mos6502` | `mos6502` | DECIMAL_MODE=0 | iCE40 HX1K | 125 x SB_CARRY, 132 x SB_DFFER, 4 x SB_DFFES, 3 x SB_DFFR, 1 x SB_GB, 57 x SB_IO, 1641 x SB_LUT4 | 16 |
+| `mos6502` | `mos6502` | DECIMAL_MODE=0 | ECP5 45F | 1 x DCCA, 1661 x LUT4, 139 x TRELLIS_FF, 57 x TRELLIS_IO | 16 |
 | `eth_mac_rmii` | `eth_mac_rmii` | IFG_CYCLES=48 | LUT4 | 26 x dff, 305 x lut | 4 |
 | `eth_mac_rmii` | `eth_mac_rmii` | IFG_CYCLES=48 | LUT6 | 26 x dff, 283 x lut | 4 |
 | `eth_mac_rmii` | `eth_mac_rmii` | IFG_CYCLES=48 | iCE40 HX1K | 10 x SB_CARRY, 127 x SB_DFFER, 64 x SB_DFFES, 3 x SB_DFFR, 1 x SB_GB, 34 x SB_IO, 301 x SB_LUT4 | 4 |

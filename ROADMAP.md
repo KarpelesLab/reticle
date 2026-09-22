@@ -471,6 +471,25 @@ and first-party IP should drop into a design as easily as a Rust crate.
       transmitter into its receiver and by rejecting a frame with a flipped
       dibit; and `spiflash_xip`, a read-only execute-in-place path from a
       serial flash, tested against a flash model on the four wires.
+- [x] A second processor, chosen to be as unlike the first as the
+      library can make it: `mos6502`, the documented MOS 6502 — all
+      fifty-six official mnemonics across thirteen addressing modes,
+      variable-length instructions, packed binary-coded decimal
+      arithmetic behind a `DECIMAL_MODE` parameter, RES / NMI / IRQ /
+      BRK with the right vectors, stack frames and priority, and one
+      bus access per clock so the documented cycle counts are the ones
+      it spends. The quirks a compatible core must reproduce are
+      reproduced and named in the header next to the test that holds
+      them: the indirect `JMP` page bug, the extra cycle of a
+      page-crossing indexed read, the branch penalties, the stack's
+      wrap inside page one, zero-page wrap and the one-instruction
+      delay of CLI and SEI. Tested by assembling 6502 machine code from
+      the opcode matrix — never from the core's decoder — and running
+      it: every instruction group and its flags, the cycle count of all
+      143 non-branch encodings, decimal mode against a table of known
+      results, a 16 x 16 shift-and-add multiply, an array summed
+      through a subroutine and Fibonacci computed recursively on the
+      stack. See `docs/ip-library.md`.
 - [x] The library blocks that need device primitives first, built on
       the DDR registers (`ddr`), IO delays (`io_delay`) and PLLs
       (`clock_mhz`) the FPGA backend now configures: `sdram_ctrl`, an

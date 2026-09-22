@@ -1,0 +1,32 @@
+# mos6502: the documented MOS 6502 instruction set in a cycle-counting
+# core — thirteen addressing modes, variable-length instructions and one
+# bus access per clock, so a program's cycle count is the one the tables
+# print. DECIMAL_MODE builds the packed binary-coded decimal arithmetic
+# ADC and SBC use when the D flag is set; turn it off and the flag stays
+# but the two adders it needs are not synthesised.
+name mos6502
+version 1.0.0
+license MIT
+description "MOS 6502 core: all 56 documented opcodes, 13 addressing modes, cycle-accurate counts, decimal mode, RES / NMI / IRQ / BRK"
+
+top mos6502
+target ice40
+target ecp5
+
+source rtl/mos6502.v
+
+param DECIMAL_MODE int 1 0..1
+
+port clk in
+port rst_n in
+port addr out 16
+port dout out 8
+port din in 8
+port we out
+port ready in
+port sync out
+port irq in
+port nmi in
+port dbg_pc out 16
+port dbg_retire out
+port dbg_trap out
