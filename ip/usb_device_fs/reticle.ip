@@ -1,0 +1,33 @@
+# usb_device_fs: a USB 2.0 full-speed device on a 48 MHz clock: the
+# line (NRZI, bit stuffing, SYNC, EOP), packets with their CRC5 and
+# CRC16 checked, and a control endpoint that enumerates. VID and PID go
+# into the device descriptor; 1209:0001 is pid.codes' test pair. The
+# package `usb_device_fs_pll` makes the 48 MHz from a 12 MHz board
+# clock with the device's PLL.
+name usb_device_fs
+version 1.0.0
+license MIT
+description "USB full-speed device: NRZI and bit stuffing, CRC5 and CRC16 checked, a control endpoint answering GET_DESCRIPTOR, SET_ADDRESS and SET_CONFIGURATION"
+
+top usb_device_fs
+target ice40
+target ecp5
+
+source rtl/usb_fs_rx.v
+source rtl/usb_fs_tx.v
+source rtl/usb_device_fs.v
+
+param VID bits 16'h1209
+param PID bits 16'h0001
+
+port clk48 in
+port rst_n in
+port usb_dp_i in
+port usb_dn_i in
+port usb_dp_o out
+port usb_dn_o out
+port usb_oe out
+port usb_dp_pu out
+port address out 7
+port configured out
+port usb_reset out

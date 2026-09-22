@@ -2,7 +2,7 @@
 
 The first-party half of phase 8. [`docs/ip.md`](ip.md) describes the
 machinery — the manifest formats, the resolver, the bus model, the black
-boxes. This document describes the **blocks**: nineteen pieces of HDL
+boxes. This document describes the **blocks**: twenty-one pieces of HDL
 that drop into a design the way a crate drops into a Rust program, each
 with a manifest, a Rust co-simulation test, and a resource footprint that
 was measured rather than guessed.
@@ -31,6 +31,8 @@ ip/
   spiflash_xip/  reticle.ip  rtl/spiflash_xip.v
   timer/         reticle.ip  rtl/timer.v
   uart/          reticle.ip  rtl/uart_tx.v  rtl/uart_rx.v  rtl/uart.v
+  usb_device_fs/ reticle.ip  rtl/usb_fs_rx.v  rtl/usb_fs_tx.v  rtl/usb_device_fs.v
+  usb_device_fs_pll/ reticle.ip  rtl/usb_device_fs_pll.v
 ```
 
 `ip/` is in the `exclude` list of `Cargo.toml`, so the published `.crate`
@@ -63,6 +65,8 @@ It is distributed as part of the repository instead.
 | `dvi_tx` | `dvi_tx`, `tmds_encoder`, `video_timing` | DVI output: 640x480, 800x600 and 1280x720 timings, TMDS 8b/10b with DC balance, 10:1 serialisation through DDR outputs | — |
 | `dvi_tx_pll` | `dvi_tx_pll` | `dvi_tx` with its five-times clock from the device's PLL | `dvi_tx` |
 | `eth_mac_rgmii` | `eth_mac_rgmii` | gigabit Ethernet MAC over RGMII: the RMII MAC's frame logic an octet a cycle behind DDR IO, optional IO delays | `eth_mac_rmii` |
+| `usb_device_fs` | `usb_device_fs`, `usb_fs_rx`, `usb_fs_tx` | USB full-speed device: NRZI, bit stuffing, SYNC and EOP, CRC5 and CRC16 checked, a control endpoint that enumerates | — |
+| `usb_device_fs_pll` | `usb_device_fs_pll` | `usb_device_fs` with its 48 MHz from the device's PLL and a 12 MHz board clock | `usb_device_fs` |
 
 `rv32i`, `eth_mac_rmii` and `spiflash_xip` are the **larger blocks**,
 and they are larger in a particular way: each is a whole protocol or a
@@ -90,6 +94,10 @@ share them, eight bits a cycle instead of two — behind DDR registers on
 every RGMII pin, with the clock skew RGMII needs available from the IO
 delay element: six `DELAYG` in its ECP5 row. The split cost the RMII
 block nothing; its footprint did not move by a cell.
+`usb_device_fs` needs no DDR at all — full speed is 12 Mbit/s, sampled
+four times a bit — but it needs 48 MHz, which is exactly what
+`usb_device_fs_pll` asks the PLL to make from the 12 MHz oscillator
+most small boards carry, with no error on either family.
 
 Everything is **Verilog-2005**, deliberately: it is the path this
 compiler exercises hardest, and it is the dialect every other tool reads.
@@ -305,6 +313,32 @@ is the part that matters:
   withhold the frame's last octet. `timing::analyze_cdc` must find
   exactly two domains, `tx_clk` and `rgmii_rxc`, and nothing crossing
   between them.
+- **`usb_device_fs`** — driven by a **USB host model** that sends real
+  packets: SYNC, the bytes least significant bit first, a zero stuffed
+  after every six ones, NRZI from idle J and an EOP, with CRC5 and CRC16
+  from the host's own arithmetic, which is itself first held to the
+  CRC catalogue's check values and to the bytes every analyser shows for
+  a SETUP to address 0 (`2D 00 10`) and for the first GET_DESCRIPTOR
+  (`… DD 94`). What the device sends back is decoded the way a host
+  does — SYNC, stuffing, EOP, the PID's check nibble and the CRC16 — and
+  the time it took to answer must fall between two and six and a half
+  bit times. A whole enumeration runs: a bus reset, the device
+  descriptor at address 0 with wLength 64, SET_ADDRESS taking effect
+  only after its status stage, the old address then ignored, short
+  reads, a read of exactly two packets, the configuration descriptor
+  in 8 + 8 + 2 with runs of ones in the request to make the device
+  unstuff, SET_CONFIGURATION, and a second bus reset forgetting the
+  address. The same enumeration runs against a host whose clock is
+  0.4 % slow and one 0.4 % fast — more than the 0.25 % the
+  specification allows — which is what found the receiver sampling each
+  bit in its last cycle instead of its middle. Packets with a bad CRC16,
+  a bad CRC5, a bad PID check nibble or broken bit stuffing, and a
+  SETUP to an endpoint that does not exist, all go unanswered; GET_STATUS
+  and a string descriptor are stalled; the next SETUP is served as if
+  none of it had happened. A data packet the host does not acknowledge
+  is sent again with the same toggle, and the next one follows once it
+  is. The device is one clock domain, and `usb_device_fs_pll` must build
+  a PLL giving exactly 48 MHz from 12 on both families.
 
 ### What the processor actually executes
 
@@ -476,6 +510,14 @@ exactly what this table is for.
 | `eth_mac_rgmii` | `eth_mac_rgmii` | IFG_CYCLES=12, TX_DELAY=80, RX_DELAY=80 | LUT6 | 28 x dff, 349 x lut | 4 |
 | `eth_mac_rgmii` | `eth_mac_rgmii` | IFG_CYCLES=12, TX_DELAY=80, RX_DELAY=80 | iCE40 HX1K | 10 x SB_CARRY, 119 x SB_DFFER, 64 x SB_DFFES, 7 x SB_DFFR, 2 x SB_GB, 39 x SB_IO, 393 x SB_LUT4 | 5 |
 | `eth_mac_rgmii` | `eth_mac_rgmii` | IFG_CYCLES=12, TX_DELAY=80, RX_DELAY=80 | ECP5 45F | 2 x DCCA, 6 x DELAYG, 5 x IDDRX1F, 394 x LUT4, 6 x ODDRX1F, 190 x TRELLIS_FF, 39 x TRELLIS_IO | 5 |
+| `usb_device_fs` | `usb_device_fs` | VID=16'h1209, PID=16'h0001 | LUT4 | 63 x dff, 541 x lut | 9 |
+| `usb_device_fs` | `usb_device_fs` | VID=16'h1209, PID=16'h0001 | LUT6 | 63 x dff, 462 x lut | 8 |
+| `usb_device_fs` | `usb_device_fs` | VID=16'h1209, PID=16'h0001 | iCE40 HX1K | 24 x SB_CARRY, 190 x SB_DFFER, 39 x SB_DFFES, 10 x SB_DFFR, 3 x SB_DFFS, 1 x SB_GB, 17 x SB_IO, 527 x SB_LUT4 | 8 |
+| `usb_device_fs` | `usb_device_fs` | VID=16'h1209, PID=16'h0001 | ECP5 45F | 1 x DCCA, 541 x LUT4, 242 x TRELLIS_FF, 17 x TRELLIS_IO | 9 |
+| `usb_device_fs_pll` | `usb_device_fs_pll` | VID=16'h1209, PID=16'h0001 | LUT4 | 63 x dff, 541 x lut | 9 |
+| `usb_device_fs_pll` | `usb_device_fs_pll` | VID=16'h1209, PID=16'h0001 | LUT6 | 63 x dff, 462 x lut | 8 |
+| `usb_device_fs_pll` | `usb_device_fs_pll` | VID=16'h1209, PID=16'h0001 | iCE40 HX1K | 24 x SB_CARRY, 190 x SB_DFFER, 39 x SB_DFFES, 10 x SB_DFFR, 3 x SB_DFFS, 1 x SB_GB, 17 x SB_IO, 527 x SB_LUT4, 1 x SB_PLL40_CORE | 8 |
+| `usb_device_fs_pll` | `usb_device_fs_pll` | VID=16'h1209, PID=16'h0001 | ECP5 45F | 1 x DCCA, 1 x EHXPLLL, 541 x LUT4, 242 x TRELLIS_FF, 17 x TRELLIS_IO | 9 |
 <!-- end footprints -->
 
 ### Five things writing these blocks found
@@ -631,40 +673,27 @@ as the elaboration top. Until then the wrapper is a package of its own,
 
 ## What is not here yet
 
-The roadmap's list for this phase also names SDRAM and HyperRAM
-controllers, a USB device, HDMI/DVI output and RGMII. None of those is
-here yet. They waited on the FPGA backend configuring the device
-primitives they need — DDR registers and IO delays for a memory
-controller's data strobe, a PLL for the pixel clock a display wants and
-for the 480 Mbit/s a USB high-speed engine wants — because writing an
-SDRAM controller against primitives the backend cannot emit would
-produce a block that simulates and can never be built, which is worse
-than not having one.
+The roadmap's blocks that waited on device primitives are all here now:
+`sdram_ctrl`, `hyperram_ctrl`, `dvi_tx`, `eth_mac_rgmii` and
+`usb_device_fs`, with their PLL wrappers. Each one is tested against a
+model of what is on the other side of its pins, and those models are
+where a word of caution belongs: every primitive the blocks rely on is
+checked against the device database and the netlist checker, not
+against silicon, and the simulator does not simulate a DDR register or
+an IO delay — it sees the port the design sees. So each test models the
+IO registers at the pins the way `docs/fpga.md` states the convention,
+and a mismatch between that convention and a real part would pass them.
+The same goes for the latency conventions of the HyperRAM, which are
+taken from the Infineon datasheet's drawings and written down in the
+block's header.
 
-**That prerequisite is now met**, for both families the repository
-ships (see [`docs/fpga.md`](fpga.md)):
-
-- a port with a `ddr` attribute is two bits per pin, registered on both
-  edges — in the iCE40's `SB_IO` itself, or in an `IDDRX1F` /
-  `ODDRX1F` beside the ECP5's buffer;
-- an `io_delay` attribute puts a `DELAYG` between an ECP5 pin and the
-  fabric (the iCE40 has no programmable delay, and says so);
-- a clock constraint on a net nothing drives instantiates the device's
-  PLL, with `fpga::pll::solve` choosing the dividers and the report
-  stating the frequency reached and the error: 125 MHz from the ULX3S's
-  25 is exact, 74.25 MHz comes out at 75.
-
-What is still missing is the blocks themselves, and a word of caution
-for whoever writes them: every one of those primitives is checked
-against the device database and the netlist checker, not against
-silicon, and the simulator treats a primitive as a black box, so a DDR
-block's tests will have to model the two edges at the port the way the
-convention in `docs/fpga.md` states them.
-
-RMII was the Ethernet interface to pick first for exactly that reason:
-it is single data rate, two bits per edge on a clock the PHY provides,
-so the whole MAC is ordinary logic. RGMII, which is DDR on both
-directions, is now buildable too.
+Each block's header lists what it does not do. The largest gaps are the
+ones a user would meet first: `sdram_ctrl` has no bursts and serves one
+word at a time; `hyperram_ctrl` has no bursts either and does not use
+RWDS as a capture clock; `dvi_tx` runs everything at five times the
+pixel rate, which leaves 1280 x 720 beyond both families' fabric;
+`eth_mac_rgmii` is gigabit only; and `usb_device_fs` has endpoint 0 and
+nothing else, so it enumerates and then has no way to move data.
 
 The `rv32i` core is big: about 2400 LUT4s, which does not fit an iCE40
 HX1K's 1280 and does fit an ECP5 45F many times over. That is a

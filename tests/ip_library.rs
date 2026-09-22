@@ -44,7 +44,9 @@
 //! cycles. `dvi_tx`'s TMDS encoder is checked against the DVI
 //! specification's algorithm for every byte from every running disparity
 //! it can reach. `eth_mac_rgmii` loops its double-data-rate pins into
-//! itself the way the RMII test does.
+//! itself the way the RMII test does. `usb_device_fs` is enumerated by
+//! a USB host model sending real packets, NRZI and bit stuffing and
+//! CRCs included, on a clock a little off the device's.
 //!
 //! Five tests here came from gaps in Reticle rather than in the blocks,
 //! found by writing real HDL, which is the argument for a first-party
@@ -232,6 +234,16 @@ const VARIANTS: &[Variant] = &[
         top: "eth_mac_rgmii",
         params: &[("IFG_CYCLES", "12"), ("TX_DELAY", "80"), ("RX_DELAY", "80")],
     },
+    Variant {
+        package: "usb_device_fs",
+        top: "usb_device_fs",
+        params: &[("VID", "16'h1209"), ("PID", "16'h0001")],
+    },
+    Variant {
+        package: "usb_device_fs_pll",
+        top: "usb_device_fs_pll",
+        params: &[("VID", "16'h1209"), ("PID", "16'h0001")],
+    },
 ];
 
 /// Board constraints a variant needs to go through the FPGA flow, as
@@ -241,6 +253,8 @@ fn board_constraints(variant: &Variant) -> &'static str {
     match variant.top {
         // A 25 MHz oscillator, which both families' PLLs take.
         "dvi_tx_pll" => "create_clock -name ref -period 40.0 clk_ref\n",
+        // The 12 MHz oscillator of most small iCE40 boards.
+        "usb_device_fs_pll" => "create_clock -name ref -period 83.333333 clk_ref\n",
         _ => "",
     }
 }
@@ -6043,6 +6057,785 @@ fn eth_mac_rgmii_keeps_its_two_clock_domains_apart() {
         "an unsynchronised crossing in eth_mac_rgmii: {kinds:?}"
     );
     assert!(kinds.is_empty(), "nothing should cross: {kinds:?}");
+}
+
+// ---------------------------------------------------------------------------
+// usb_device_fs
+// ---------------------------------------------------------------------------
+
+/// USB's CRC5 over a bit sequence, least significant bit first, from the
+/// catalogue definition: polynomial 0x05 reflected, seeded and
+/// complemented with all ones.
+fn usb_crc5(bits: &[u8]) -> u8 {
+    let mut c = 0x1Fu8;
+    for b in bits {
+        c = if (c ^ b) & 1 == 1 {
+            (c >> 1) ^ 0x14
+        } else {
+            c >> 1
+        };
+    }
+    c ^ 0x1F
+}
+
+/// USB's CRC16 over bytes, the same way: polynomial 0x8005 reflected.
+fn usb_crc16(bytes: &[u8]) -> u16 {
+    let mut c = 0xFFFFu16;
+    for byte in bytes {
+        for i in 0..8 {
+            let b = u16::from(byte >> i & 1);
+            c = if (c ^ b) & 1 == 1 {
+                (c >> 1) ^ 0xA001
+            } else {
+                c >> 1
+            };
+        }
+    }
+    c ^ 0xFFFF
+}
+
+fn lsb_bits(value: u64, n: usize) -> Vec<u8> {
+    (0..n).map(|i| u8::from(value >> i & 1 == 1)).collect()
+}
+
+const USB_OUT: u8 = 0b0001;
+const USB_IN: u8 = 0b1001;
+const USB_SETUP: u8 = 0b1101;
+const USB_DATA0: u8 = 0b0011;
+const USB_DATA1: u8 = 0b1011;
+const USB_ACK: u8 = 0b0010;
+const USB_NAK: u8 = 0b1010;
+const USB_STALL: u8 = 0b1110;
+
+/// A PID and its check nibble.
+fn usb_pid(pid: u8) -> u8 {
+    pid | (!pid & 0xF) << 4
+}
+
+fn usb_token(pid: u8, addr: u8, endp: u8) -> Vec<u8> {
+    let field = u64::from(addr & 0x7F) | u64::from(endp & 0xF) << 7;
+    let crc = usb_crc5(&lsb_bits(field, 11));
+    let word = field | u64::from(crc) << 11;
+    let [lo, hi, ..] = word.to_le_bytes();
+    vec![usb_pid(pid), lo, hi]
+}
+
+fn usb_data(pid: u8, payload: &[u8]) -> Vec<u8> {
+    let mut packet = vec![usb_pid(pid)];
+    packet.extend_from_slice(payload);
+    packet.extend_from_slice(&usb_crc16(payload).to_le_bytes());
+    packet
+}
+
+/// A line state on the D+ / D- pair.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum UsbLine {
+    J,
+    K,
+    Se0,
+}
+
+impl UsbLine {
+    fn pins(self) -> (bool, bool) {
+        match self {
+            UsbLine::J => (true, false),
+            UsbLine::K => (false, true),
+            UsbLine::Se0 => (false, false),
+        }
+    }
+}
+
+/// A packet as the line carries it, one state per bit time: SYNC, the
+/// bytes least significant bit first, a zero stuffed after every six
+/// ones counted from SYNC on, NRZI from idle J, and the EOP. `stuff`
+/// false leaves the stuffing out, which is how a broken packet is made.
+fn usb_line(packet: &[u8], stuff: bool) -> Vec<UsbLine> {
+    let mut bits = lsb_bits(0x80, 8);
+    for byte in packet {
+        bits.extend(lsb_bits(u64::from(*byte), 8));
+    }
+    let mut stuffed = Vec::new();
+    let mut ones = 0;
+    for b in bits {
+        stuffed.push(b);
+        ones = if b == 1 { ones + 1 } else { 0 };
+        if stuff && ones == 6 {
+            stuffed.push(0);
+            ones = 0;
+        }
+    }
+    let mut level = UsbLine::J;
+    let mut line = Vec::new();
+    for b in stuffed {
+        if b == 0 {
+            level = if level == UsbLine::J {
+                UsbLine::K
+            } else {
+                UsbLine::J
+            };
+        }
+        line.push(level);
+    }
+    line.extend([UsbLine::Se0, UsbLine::Se0, UsbLine::J]);
+    line
+}
+
+/// What the host heard back.
+#[derive(Debug, PartialEq, Eq)]
+enum UsbReply {
+    Handshake(u8),
+    Data(u8, Vec<u8>),
+    Nothing,
+}
+
+/// A USB host on the other end of the pair: it sends real packets —
+/// NRZI, stuffed, with their CRCs — a bit every four cycles of the
+/// device's 48 MHz, stretched or shortened now and then as a host
+/// clock a little off the device's would, and it decodes what the
+/// device sends back the way a host does, checking the SYNC field, the
+/// stuffing, the EOP, the PID check nibble and the CRC16, and measuring
+/// how long the device took to answer.
+struct UsbHost<'d> {
+    sim: Simulator<'d>,
+    clk: NetHandle,
+    dp_i: NetHandle,
+    dn_i: NetHandle,
+    dp_o: NetHandle,
+    dn_o: NetHandle,
+    oe: NetHandle,
+    address: NetHandle,
+    configured: NetHandle,
+    usb_reset: NetHandle,
+    /// Every how many bits the host's bit is a cycle long or short: a
+    /// positive number stretches, a negative one shortens, zero never.
+    drift: i32,
+    bits_sent: u64,
+    /// Turnaround gaps the device took before answering, in cycles.
+    gaps: Vec<u64>,
+    problems: Vec<String>,
+}
+
+impl<'d> UsbHost<'d> {
+    fn new(design: &'d Design, drift: i32) -> UsbHost<'d> {
+        let sim = simulate(design, "usb_device_fs");
+        let pin = |n: &str| top_net(&sim, n);
+        let mut host = UsbHost {
+            clk: pin("clk48"),
+            dp_i: pin("usb_dp_i"),
+            dn_i: pin("usb_dn_i"),
+            dp_o: pin("usb_dp_o"),
+            dn_o: pin("usb_dn_o"),
+            oe: pin("usb_oe"),
+            address: pin("address"),
+            configured: pin("configured"),
+            usb_reset: pin("usb_reset"),
+            drift,
+            bits_sent: 0,
+            gaps: Vec::new(),
+            problems: Vec::new(),
+            sim,
+        };
+        let rst_n = top_net(&host.sim, "rst_n");
+        host.set_line(UsbLine::J);
+        let clk = host.clk;
+        reset(&mut host.sim, clk, rst_n);
+        assert!(
+            high(&host.sim, top_net(&host.sim, "usb_dp_pu")),
+            "the device asks for its D+ pull-up"
+        );
+        host
+    }
+
+    fn set_line(&mut self, line: UsbLine) {
+        let (dp, dn) = line.pins();
+        self.sim.set(self.dp_i, bit(dp));
+        self.sim.set(self.dn_i, bit(dn));
+    }
+
+    /// One cycle with the host driving `line`; the device must not
+    /// drive at the same time.
+    fn host_cycle(&mut self, line: UsbLine) {
+        self.set_line(line);
+        let clk = self.clk;
+        cycle(&mut self.sim, clk, HALF);
+        if high(&self.sim, self.oe) {
+            self.problems
+                .push("the device drives the pair while the host does".into());
+        }
+    }
+
+    /// The cycles the host's next bit lasts.
+    fn bit_cycles(&mut self) -> u32 {
+        self.bits_sent += 1;
+        let every = u64::from(self.drift.unsigned_abs());
+        if every != 0 && self.bits_sent.is_multiple_of(every) {
+            if self.drift > 0 { 5 } else { 3 }
+        } else {
+            4
+        }
+    }
+
+    fn send_line(&mut self, line: &[UsbLine]) {
+        for state in line {
+            for _ in 0..self.bit_cycles() {
+                self.host_cycle(*state);
+            }
+        }
+        self.set_line(UsbLine::J);
+    }
+
+    fn send(&mut self, packet: &[u8]) {
+        let line = usb_line(packet, true);
+        self.send_line(&line);
+    }
+
+    /// Idles the bus for `bits` bit times, the gap a host leaves between
+    /// its own packets.
+    fn idle(&mut self, bits: u32) {
+        for _ in 0..4 * bits {
+            self.host_cycle(UsbLine::J);
+        }
+    }
+
+    /// Waits up to eighteen bit times — the host's turnaround timeout —
+    /// for the device to answer, and decodes what it sends.
+    fn receive(&mut self) -> UsbReply {
+        let clk = self.clk;
+        let mut waited = 0u64;
+        self.set_line(UsbLine::J);
+        while !high(&self.sim, self.oe) {
+            if waited > 18 * 4 {
+                return UsbReply::Nothing;
+            }
+            cycle(&mut self.sim, clk, HALF);
+            waited += 1;
+        }
+        self.gaps.push(waited);
+
+        // Record the pair for as long as the device drives it; the bus
+        // is the device's while it does, so the device's own input sees
+        // it too.
+        let mut states = Vec::new();
+        while high(&self.sim, self.oe) {
+            let dp = high(&self.sim, self.dp_o);
+            let dn = high(&self.sim, self.dn_o);
+            let state = match (dp, dn) {
+                (true, false) => UsbLine::J,
+                (false, true) => UsbLine::K,
+                (false, false) => UsbLine::Se0,
+                _ => {
+                    self.problems.push("the device drove SE1".into());
+                    UsbLine::Se0
+                }
+            };
+            states.push(state);
+            self.sim.set(self.dp_i, bit(dp));
+            self.sim.set(self.dn_i, bit(dn));
+            cycle(&mut self.sim, clk, HALF);
+            if states.len() > 4 * 200 {
+                self.problems
+                    .push("the device never let go of the bus".into());
+                break;
+            }
+        }
+        self.set_line(UsbLine::J);
+        match self.decode(&states) {
+            Ok(reply) => reply,
+            Err(why) => {
+                self.problems.push(why);
+                UsbReply::Nothing
+            }
+        }
+    }
+
+    /// A packet from the line states the device drove, one per cycle,
+    /// sampled in the middle of each four-cycle bit.
+    fn decode(&self, states: &[UsbLine]) -> Result<UsbReply, String> {
+        if !states.len().is_multiple_of(4) {
+            return Err(format!(
+                "the device drove {} cycles, not whole bits",
+                states.len()
+            ));
+        }
+        let symbols: Vec<UsbLine> = states.iter().skip(2).step_by(4).copied().collect();
+        let n = symbols.len();
+        if n < 8 + 8 + 3 {
+            return Err(format!("{n} bit times is too short for a packet"));
+        }
+        if symbols[n - 3..] != [UsbLine::Se0, UsbLine::Se0, UsbLine::J] {
+            return Err(format!(
+                "the packet does not end SE0 SE0 J: {:?}",
+                &symbols[n - 3..]
+            ));
+        }
+        let mut level = UsbLine::J;
+        let mut raw = Vec::new();
+        for s in &symbols[..n - 3] {
+            if *s == UsbLine::Se0 {
+                return Err("SE0 in the middle of a packet".into());
+            }
+            raw.push(u8::from(*s == level));
+            level = *s;
+        }
+        if raw[..8] != [0, 0, 0, 0, 0, 0, 0, 1] {
+            return Err(format!("the SYNC field is {:?}", &raw[..8]));
+        }
+        // Unstuff, counting ones from SYNC on.
+        let mut bits = Vec::new();
+        let mut ones = 0;
+        let mut skip = false;
+        for (i, b) in raw.iter().enumerate() {
+            if skip {
+                if *b != 0 {
+                    return Err(format!("bit {i} should be a stuffed zero"));
+                }
+                skip = false;
+                ones = 0;
+                continue;
+            }
+            if i >= 8 {
+                bits.push(*b);
+            }
+            ones = if *b == 1 { ones + 1 } else { 0 };
+            if ones == 6 {
+                skip = true;
+            }
+        }
+        if skip {
+            return Err("the stuffed zero after the last six ones is missing".into());
+        }
+        if !bits.len().is_multiple_of(8) {
+            return Err(format!("{} bits is not whole bytes", bits.len()));
+        }
+        let bytes: Vec<u8> = bits
+            .chunks(8)
+            .map(|c| c.iter().enumerate().fold(0u8, |a, (i, b)| a | b << i))
+            .collect();
+        let pid = bytes[0] & 0xF;
+        if bytes[0] >> 4 != !pid & 0xF {
+            return Err(format!("PID {:#04x} fails its check nibble", bytes[0]));
+        }
+        match pid {
+            USB_ACK | USB_NAK | USB_STALL if bytes.len() == 1 => Ok(UsbReply::Handshake(pid)),
+            USB_DATA0 | USB_DATA1 if bytes.len() >= 3 => {
+                let payload = &bytes[1..bytes.len() - 2];
+                let crc = u16::from_le_bytes([bytes[bytes.len() - 2], bytes[bytes.len() - 1]]);
+                if crc != usb_crc16(payload) {
+                    return Err(format!("CRC16 {crc:#06x} over {payload:02x?}"));
+                }
+                Ok(UsbReply::Data(pid, payload.to_vec()))
+            }
+            _ => Err(format!("an unexpected packet {bytes:02x?}")),
+        }
+    }
+
+    /// SE0 for ten microseconds: a bus reset.
+    fn bus_reset(&mut self) {
+        let mut seen = false;
+        for _ in 0..480 {
+            self.host_cycle(UsbLine::Se0);
+            seen |= high(&self.sim, self.usb_reset);
+        }
+        assert!(seen, "the device saw the bus reset");
+        self.idle(50);
+    }
+
+    /// SETUP and its eight bytes; the device must acknowledge.
+    fn setup(&mut self, addr: u8, request: [u8; 8]) -> UsbReply {
+        self.send(&usb_token(USB_SETUP, addr, 0));
+        self.idle(3);
+        self.send(&usb_data(USB_DATA0, &request));
+        self.receive()
+    }
+
+    fn in_token(&mut self, addr: u8) -> UsbReply {
+        self.send(&usb_token(USB_IN, addr, 0));
+        self.receive()
+    }
+
+    fn ack(&mut self) {
+        self.idle(2);
+        self.send(&[usb_pid(USB_ACK)]);
+        self.idle(4);
+    }
+
+    /// A whole control read: SETUP, IN until a short packet or wLength,
+    /// each acknowledged, and the zero-length OUT of the status stage.
+    fn control_read(&mut self, addr: u8, request: [u8; 8]) -> Result<Vec<u8>, UsbReply> {
+        let reply = self.setup(addr, request);
+        if reply != UsbReply::Handshake(USB_ACK) {
+            return Err(reply);
+        }
+        self.idle(4);
+        let length = usize::from(u16::from_le_bytes([request[6], request[7]]));
+        let mut got = Vec::new();
+        let mut toggle = USB_DATA1;
+        loop {
+            match self.in_token(addr) {
+                UsbReply::Data(pid, payload) => {
+                    assert_eq!(pid, toggle, "the data stage alternates DATA1, DATA0, ...");
+                    let short = payload.len() < 8;
+                    got.extend(payload);
+                    self.ack();
+                    toggle = if toggle == USB_DATA1 {
+                        USB_DATA0
+                    } else {
+                        USB_DATA1
+                    };
+                    if short || got.len() >= length {
+                        break;
+                    }
+                }
+                other => return Err(other),
+            }
+        }
+        self.send(&usb_token(USB_OUT, addr, 0));
+        self.idle(3);
+        self.send(&usb_data(USB_DATA1, &[]));
+        let status = self.receive();
+        assert_eq!(
+            status,
+            UsbReply::Handshake(USB_ACK),
+            "the status stage of a read"
+        );
+        self.idle(4);
+        Ok(got)
+    }
+
+    /// A control transfer with no data stage: SETUP, then a zero-length
+    /// IN for the status, acknowledged.
+    fn control_write(&mut self, addr: u8, request: [u8; 8]) -> UsbReply {
+        let reply = self.setup(addr, request);
+        if reply != UsbReply::Handshake(USB_ACK) {
+            return reply;
+        }
+        self.idle(4);
+        let status = self.in_token(addr);
+        if status == UsbReply::Data(USB_DATA1, Vec::new()) {
+            self.ack();
+        }
+        status
+    }
+
+    fn assert_clean(&self) {
+        assert!(
+            self.problems.is_empty(),
+            "the host saw the device break the protocol:\n  {}",
+            self.problems.join("\n  ")
+        );
+        // Every answer came between two and six and a half bit times
+        // after the host's EOP.
+        for gap in &self.gaps {
+            assert!(
+                (8..=26).contains(gap),
+                "the device answered after {gap} cycles, outside 2 to 6.5 bit times"
+            );
+        }
+    }
+}
+
+const GET_DEVICE_DESCRIPTOR: [u8; 8] = [0x80, 0x06, 0x00, 0x01, 0x00, 0x00, 0x40, 0x00];
+
+fn get_descriptor(kind: u8, length: u16) -> [u8; 8] {
+    let [lo, hi] = length.to_le_bytes();
+    [0x80, 0x06, 0x00, kind, 0x00, 0x00, lo, hi]
+}
+
+fn set_address(addr: u8) -> [u8; 8] {
+    [0x00, 0x05, addr, 0x00, 0x00, 0x00, 0x00, 0x00]
+}
+
+/// The device descriptor the block should send, written from the
+/// specification's layout rather than from the block's table.
+fn expected_device_descriptor(vid: u16, pid: u16) -> Vec<u8> {
+    let mut d = vec![18, 1, 0x00, 0x02, 0xFF, 0x00, 0x00, 8];
+    d.extend_from_slice(&vid.to_le_bytes());
+    d.extend_from_slice(&pid.to_le_bytes());
+    d.extend_from_slice(&[0x00, 0x01, 0, 0, 0, 1]);
+    d
+}
+
+fn usb_design() -> Design {
+    design_of(
+        "usb_device_fs",
+        "usb_device_fs",
+        &[("VID", "16'h1209"), ("PID", "16'h0001")],
+    )
+}
+
+#[test]
+fn usb_crcs_match_the_catalogue_and_the_wire() {
+    // The host model's own arithmetic, held to published values before
+    // anything is held to it: the CRC catalogue's check values over
+    // "123456789", and the bytes every USB analyser shows for a SETUP to
+    // address 0 and for the first GET_DESCRIPTOR of an enumeration.
+    let check: Vec<u8> = b"123456789"
+        .iter()
+        .flat_map(|b| lsb_bits(u64::from(*b), 8))
+        .collect();
+    assert_eq!(usb_crc5(&check), 0x19, "CRC-5/USB check value");
+    assert_eq!(usb_crc16(b"123456789"), 0xB4C8, "CRC-16/USB check value");
+    assert_eq!(usb_token(USB_SETUP, 0, 0), vec![0x2D, 0x00, 0x10]);
+    assert_eq!(usb_token(USB_IN, 0, 0), vec![0x69, 0x00, 0x10]);
+    assert_eq!(
+        usb_data(USB_DATA0, &GET_DEVICE_DESCRIPTOR)[9..],
+        [0xDD, 0x94]
+    );
+}
+
+fn usb_enumerate(drift: i32) {
+    let design = usb_design();
+    let mut host = UsbHost::new(&design, drift);
+    host.bus_reset();
+    assert_eq!(get_u64(&host.sim, host.address), 0);
+
+    // What a host does first: the device descriptor at address 0, with a
+    // wLength of 64 whatever the descriptor's size.
+    let device = host
+        .control_read(0, GET_DEVICE_DESCRIPTOR)
+        .expect("the device descriptor");
+    assert_eq!(device, expected_device_descriptor(0x1209, 0x0001));
+
+    // SET_ADDRESS takes effect after its status stage, not before.
+    let status = host.control_write(0, set_address(9));
+    assert_eq!(status, UsbReply::Data(USB_DATA1, Vec::new()));
+    assert_eq!(get_u64(&host.sim, host.address), 9, "the new address");
+
+    // Address 0 is not the device's any more.
+    host.idle(10);
+    assert_eq!(host.in_token(0), UsbReply::Nothing, "IN to the old address");
+    host.idle(10);
+
+    // The descriptors again at the new address: short reads, a read of
+    // exactly two packets, and a read longer than the descriptor with
+    // runs of ones in the request to exercise the device's unstuffing.
+    let first8 = host
+        .control_read(9, get_descriptor(1, 8))
+        .expect("eight bytes");
+    assert_eq!(first8, expected_device_descriptor(0x1209, 0x0001)[..8]);
+    let config9 = host
+        .control_read(9, get_descriptor(2, 9))
+        .expect("the configuration header");
+    assert_eq!(config9, [9, 2, 18, 0, 1, 1, 0, 0x80, 50]);
+    let config = host
+        .control_read(9, [0x80, 0x06, 0x00, 0x02, 0xFF, 0xFF, 0xFF, 0xFF])
+        .expect("the whole configuration");
+    assert_eq!(
+        config,
+        [9, 2, 18, 0, 1, 1, 0, 0x80, 50, 9, 4, 0, 0, 0, 0xFF, 0, 0, 0],
+        "configuration and interface, 18 bytes in 8 + 8 + 2"
+    );
+    let sixteen = host
+        .control_read(9, get_descriptor(1, 16))
+        .expect("two whole packets");
+    assert_eq!(sixteen.len(), 16, "wLength ends the data stage");
+
+    // SET_CONFIGURATION 1, then 0.
+    assert!(!high(&host.sim, host.configured));
+    let status = host.control_write(9, [0x00, 0x09, 0x01, 0, 0, 0, 0, 0]);
+    assert_eq!(status, UsbReply::Data(USB_DATA1, Vec::new()));
+    assert!(high(&host.sim, host.configured), "configured");
+    host.control_write(9, [0x00, 0x09, 0x00, 0, 0, 0, 0, 0]);
+    assert!(!high(&host.sim, host.configured), "and back");
+
+    // A bus reset forgets the address.
+    host.bus_reset();
+    assert_eq!(get_u64(&host.sim, host.address), 0);
+    let again = host
+        .control_read(0, GET_DEVICE_DESCRIPTOR)
+        .expect("enumerable again");
+    assert_eq!(again.len(), 18);
+
+    host.assert_clean();
+}
+
+#[test]
+fn usb_device_fs_enumerates_with_a_host_on_its_own_clock() {
+    usb_enumerate(0);
+}
+
+#[test]
+fn usb_device_fs_tracks_a_host_clock_that_is_slow_or_fast() {
+    // One bit in sixty-four a cycle long or a cycle short: a host clock
+    // 0.4 % off the device's, more than the 0.25 % the specification
+    // allows between the two, and the device must stay locked.
+    usb_enumerate(64);
+    usb_enumerate(-64);
+}
+
+#[test]
+fn usb_device_fs_ignores_bad_packets_and_stalls_what_it_cannot_do() {
+    let design = usb_design();
+    let mut host = UsbHost::new(&design, 0);
+    host.bus_reset();
+
+    // A SETUP whose data has a wrong CRC16 is not acknowledged.
+    host.send(&usb_token(USB_SETUP, 0, 0));
+    host.idle(3);
+    let mut bad = usb_data(USB_DATA0, &GET_DEVICE_DESCRIPTOR);
+    bad[9] ^= 0x01;
+    host.send(&bad);
+    assert_eq!(host.receive(), UsbReply::Nothing, "a bad CRC16 gets no ACK");
+    host.idle(20);
+
+    // Nor is one whose token has a wrong CRC5: the data that follows
+    // belongs to nothing.
+    let mut token = usb_token(USB_SETUP, 0, 0);
+    token[2] ^= 0x80;
+    host.send(&token);
+    host.idle(3);
+    host.send(&usb_data(USB_DATA0, &GET_DEVICE_DESCRIPTOR));
+    assert_eq!(host.receive(), UsbReply::Nothing, "a bad CRC5 gets no ACK");
+    host.idle(20);
+
+    // A PID whose check nibble is wrong is ignored.
+    let mut token = usb_token(USB_SETUP, 0, 0);
+    token[0] ^= 0x10;
+    host.send(&token);
+    host.idle(3);
+    host.send(&usb_data(USB_DATA0, &GET_DEVICE_DESCRIPTOR));
+    assert_eq!(host.receive(), UsbReply::Nothing, "a bad PID gets no ACK");
+    host.idle(20);
+
+    // A packet with its stuffed zeros left out breaks the stuffing
+    // rule, and is ignored too. 0xFF payload bytes make sure it has runs
+    // of six ones to break.
+    host.send(&usb_token(USB_SETUP, 0, 0));
+    host.idle(3);
+    let line = usb_line(
+        &usb_data(USB_DATA0, &[0x80, 0x06, 0x00, 0x01, 0xFF, 0xFF, 0x40, 0x00]),
+        false,
+    );
+    host.send_line(&line);
+    assert_eq!(
+        host.receive(),
+        UsbReply::Nothing,
+        "a stuffing error gets no ACK"
+    );
+    host.idle(20);
+
+    // A token for another endpoint is not for the control endpoint.
+    host.send(&usb_token(USB_SETUP, 0, 1));
+    host.idle(3);
+    host.send(&usb_data(USB_DATA0, &GET_DEVICE_DESCRIPTOR));
+    assert_eq!(
+        host.receive(),
+        UsbReply::Nothing,
+        "endpoint 1 does not exist"
+    );
+    host.idle(20);
+
+    // Requests it does not do are acknowledged and then stalled:
+    // GET_STATUS, and a string descriptor.
+    for request in [
+        [0x80, 0x00, 0x00, 0x00, 0x00, 0x00, 0x02, 0x00],
+        [0x80, 0x06, 0x01, 0x03, 0x09, 0x04, 0xFF, 0x00],
+    ] {
+        assert_eq!(host.setup(0, request), UsbReply::Handshake(USB_ACK));
+        host.idle(4);
+        assert_eq!(host.in_token(0), UsbReply::Handshake(USB_STALL));
+        host.idle(10);
+    }
+
+    // And after all of that, the next SETUP is served as if none of it
+    // had happened.
+    let device = host
+        .control_read(0, GET_DEVICE_DESCRIPTOR)
+        .expect("the device recovers");
+    assert_eq!(device, expected_device_descriptor(0x1209, 0x0001));
+    host.assert_clean();
+}
+
+#[test]
+fn usb_device_fs_sends_again_what_the_host_did_not_acknowledge() {
+    let design = usb_design();
+    let mut host = UsbHost::new(&design, 0);
+    host.bus_reset();
+    assert_eq!(
+        host.setup(0, GET_DEVICE_DESCRIPTOR),
+        UsbReply::Handshake(USB_ACK)
+    );
+    host.idle(4);
+    // The first packet, and the host says nothing: as if it were lost.
+    let first = host.in_token(0);
+    host.idle(20);
+    // Asked again, the device sends the same packet with the same toggle.
+    let again = host.in_token(0);
+    assert_eq!(first, again, "the same packet again");
+    let UsbReply::Data(pid, payload) = &again else {
+        panic!("data expected, got {again:?}");
+    };
+    assert_eq!(*pid, USB_DATA1);
+    assert_eq!(payload[..], expected_device_descriptor(0x1209, 0x0001)[..8]);
+    host.ack();
+    // Acknowledged, it moves on to the next eight bytes and DATA0.
+    let next = host.in_token(0);
+    assert_eq!(
+        next,
+        UsbReply::Data(
+            USB_DATA0,
+            expected_device_descriptor(0x1209, 0x0001)[8..16].to_vec()
+        )
+    );
+    host.assert_clean();
+}
+
+/// Everything runs on the one 48 MHz clock; the pins come in through
+/// two flip-flops each, which are not a crossing between clocks.
+#[test]
+fn usb_device_fs_is_one_clock_domain() {
+    let kinds = crossings(
+        "usb_device_fs",
+        "usb_device_fs",
+        &[("VID", "16'h1209"), ("PID", "16'h0001")],
+    );
+    assert!(kinds.is_empty(), "nothing should cross: {kinds:?}");
+}
+
+/// From a 12 MHz board clock both families' PLLs make 48 MHz exactly.
+#[test]
+fn usb_device_fs_pll_takes_48_mhz_from_the_pll() {
+    let variant = VARIANTS
+        .iter()
+        .find(|v| v.top == "usb_device_fs_pll")
+        .expect("usb_device_fs_pll is measured");
+    for (device_name, primitive) in [
+        ("ice40-hx1k-tq144", "SB_PLL40_CORE"),
+        ("ecp5-45f-CABGA381", "EHXPLLL"),
+    ] {
+        let (mut design, id) = flattened(variant.package, variant.top, variant.params);
+        let device = fpga::target(device_name).expect("a built-in device");
+        let mut diags = Diagnostics::new();
+        let mut map = SourceMap::new();
+        let rcf = board_constraints(variant);
+        let file = map.add("board.rcf", rcf).expect("fits");
+        let mut constraints = Constraints::parse(rcf, file, &mut diags);
+        constraints.merge_attrs(&design, id, &mut diags);
+        let report = fpga::synthesize_for(
+            &mut design,
+            id,
+            device,
+            &constraints,
+            &FpgaOptions::default(),
+            &mut diags,
+        )
+        .expect("the flow runs");
+        assert!(
+            !diags.has_errors(),
+            "{device_name}:\n{}",
+            diags.render(&map)
+        );
+        let pll = report
+            .primitives
+            .plls
+            .first()
+            .unwrap_or_else(|| panic!("{device_name}: no PLL"));
+        assert_eq!(pll.primitive, primitive);
+        assert_eq!(pll.net, "clk48");
+        assert_eq!(pll.source, "clk_ref");
+        assert_eq!(pll.input_hz, 12_000_000);
+        assert_eq!(pll.achieved_hz, 48_000_000, "{device_name}: exactly 48 MHz");
+    }
 }
 
 // ---------------------------------------------------------------------------
