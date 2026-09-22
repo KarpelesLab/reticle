@@ -24,6 +24,9 @@
 //!    discrete cells, so the design can be written as a netlist. It runs
 //!    after the loop because the optimiser is most effective on the
 //!    expression form.
+//! 4. With [`SynthOptions::verify_equivalence`] and the `formal` feature,
+//!    [`verify::check_synthesis`] proves every module equivalent to a
+//!    minimally lowered copy of the input.
 //!
 //! Every pass implements [`Pass`] and reports [`PassStats`]; a
 //! [`PassManager`] runs a custom sequence when the default is not wanted.
@@ -70,7 +73,9 @@
 //! | `S0001` | The design is not valid; synthesis did not run               |
 //! | `S0010` .. `S0020` | Process lowering and FSM extraction (see [`proc`], [`fsm`]) |
 //! | `S0030` | A construct [`cellify`] cannot turn into cells               |
-//! | `S0031` .. `S0033` | Reserved for post-synthesis verification          |
+//! | `S0031` | The post-synthesis equivalence check found a difference      |
+//! | `S0032` | The post-synthesis equivalence check is inconclusive         |
+//! | `S0033` | `verify_equivalence` without the `formal` feature            |
 
 use crate::diag::{Diagnostic, Diagnostics};
 use crate::ir::{Design, Module, ModuleId};
@@ -93,6 +98,9 @@ pub mod cells;
 
 // Technology mapping: k-LUT covering and standard-cell mapping.
 pub mod techmap;
+
+#[cfg(feature = "formal")]
+pub mod verify;
 
 pub(crate) mod util;
 
@@ -153,6 +161,12 @@ pub struct SynthOptions {
     /// Validate the design after every pass and panic on a violation.
     /// Defaults to true in debug builds and false in release builds.
     pub validate: bool,
+    /// Check every synthesised module against a minimally lowered copy of
+    /// the input with [`verify::check_synthesis`]. Off by default: it runs
+    /// a SAT-based equivalence proof per module, which is expensive. Needs
+    /// the `formal` feature; without it, asking for the check is a warning
+    /// (`S0033`).
+    pub verify_equivalence: bool,
 }
 
 impl Default for SynthOptions {
@@ -164,6 +178,7 @@ impl Default for SynthOptions {
             max_iterations: 8,
             max_unroll: 1 << 16,
             validate: cfg!(debug_assertions),
+            verify_equivalence: false,
         }
     }
 }
@@ -307,6 +322,12 @@ pub fn run(design: &mut Design, options: &SynthOptions, diags: &mut Diagnostics)
         return stats;
     }
 
+    let before = if options.verify_equivalence && cfg!(feature = "formal") {
+        Some(design.clone())
+    } else {
+        None
+    };
+
     let lowered = run_pass(&proc::ProcLower::new(options), design, options, diags);
     stats.passes.push(("proc_lower".to_owned(), lowered));
 
@@ -344,8 +365,69 @@ pub fn run(design: &mut Design, options: &SynthOptions, diags: &mut Diagnostics)
         }
     }
 
+    verify_synthesis(design, &before, options, &mut stats, diags);
+
     stats.report = Report::of_design(design);
     stats
+}
+
+/// Runs the post-synthesis equivalence check when it was asked for.
+#[cfg(feature = "formal")]
+fn verify_synthesis(
+    design: &Design,
+    before: &Option<Design>,
+    options: &SynthOptions,
+    stats: &mut SynthStats,
+    diags: &mut Diagnostics,
+) {
+    let Some(before) = before else { return };
+    let vopts = verify::VerifyOptions {
+        max_unroll: options.max_unroll,
+        ..verify::VerifyOptions::default()
+    };
+    for id in design.modules.ids() {
+        let module = design.module(id);
+        if module.blackbox {
+            continue;
+        }
+        let report = verify::check_synthesis(before, design, id, &vopts);
+        if !report.passed() {
+            let severity = if report.inconclusive() {
+                Diagnostic::warning(format!(
+                    "the post-synthesis equivalence check of `{}` is inconclusive",
+                    report.module
+                ))
+                .with_code("S0032")
+            } else {
+                Diagnostic::error(format!(
+                    "synthesis changed the behaviour of `{}`",
+                    report.module
+                ))
+                .with_code("S0031")
+            };
+            diags.push(severity.with_span(module.span).with_note(report.render()));
+        }
+        stats.verification.push(report);
+    }
+}
+
+/// Without the `formal` feature there is no engine to check with.
+#[cfg(not(feature = "formal"))]
+fn verify_synthesis(
+    _design: &Design,
+    _before: &Option<Design>,
+    options: &SynthOptions,
+    _stats: &mut SynthStats,
+    diags: &mut Diagnostics,
+) {
+    if options.verify_equivalence {
+        diags.push(
+            Diagnostic::warning(
+                "`verify_equivalence` needs the `formal` feature; no check was run",
+            )
+            .with_code("S0033"),
+        );
+    }
 }
 
 #[cfg(test)]

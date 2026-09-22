@@ -240,9 +240,12 @@ technology cells.
 - [x] Generic technology mapping: k-LUT mapping (for FPGAs) and structural
       cell mapping against a gate library (for ASIC). Area and depth
       oriented modes.
-- [ ] Post-synthesis verification: equivalence check against the pre-
-      synthesis IR through phase 7's engine, and simulation of the mapped
-      netlist through phase 4.
+- [x] Post-synthesis verification: `synth::verify::check_synthesis`
+      proves the optimised result equivalent to the same source lowered
+      with process lowering alone, through phase 7's equivalence engine
+      (the engine cannot read the process form, so process lowering is the
+      one pass taken on trust; the module docs say so). Simulation of the
+      mapped netlist through phase 4 is still open.
 - [ ] Reports: cell counts, estimated depth, inferred memories and FSMs,
       with source spans.
 

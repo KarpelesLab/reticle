@@ -38,6 +38,9 @@ vhdl = []
 sim = []
 # Technology-independent synthesis: process lowering, FSM/memory/FF inference,
 # logic optimisation, cellification, plus generic LUT and cell mapping.
+# With `formal` also on, `synth::verify` adds the post-synthesis
+# equivalence check (`SynthOptions::verify_equivalence`); the dependency is
+# deliberately not declared here so a synthesis-only build stays lean.
 synth = []
 
 # --- backends & targets (land as they are implemented, see ROADMAP.md) ---

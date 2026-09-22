@@ -4,7 +4,9 @@
 //! the number of cells of each kind, the nets and assigns, any processes
 //! left unsynthesised, and the inferred storage (flip-flops, latches,
 //! memory ports) with the source span each was inferred from.
-//! [`SynthStats`] adds the per-pass counters collected by [`super::run`].
+//! [`SynthStats`] adds the per-pass counters collected by [`super::run`]
+//! and, with the `formal` feature, the post-synthesis equivalence
+//! verdicts.
 //! Both render to plain text, with `file:line:col` locations when a
 //! [`SourceMap`] is supplied.
 
@@ -217,6 +219,11 @@ pub struct SynthStats {
     pub iterations: u32,
     /// The summary of the result.
     pub report: Report,
+    /// One entry per module checked by
+    /// [`crate::synth::verify::check_synthesis`], empty unless
+    /// [`crate::synth::SynthOptions::verify_equivalence`] was set.
+    #[cfg(feature = "formal")]
+    pub verification: Vec<crate::synth::verify::SynthVerifyReport>,
 }
 
 impl SynthStats {
@@ -240,6 +247,10 @@ impl SynthStats {
                 .map(|(k, v)| format!("{k} {v}"))
                 .collect();
             let _ = writeln!(out, "  {name}: {}", items.join(", "));
+        }
+        #[cfg(feature = "formal")]
+        for report in &self.verification {
+            out.push_str(&report.render());
         }
         out.push_str(&self.report.render(map));
         out
