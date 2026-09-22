@@ -76,3 +76,21 @@ jobs:
         run: |
           rustup toolchain install 1.89 --profile minimal
           cargo +1.89 check --all-features
+
+  package:
+    name: Publishable crate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+
+      # release-plz publishes from master, so a crate that does not package
+      # or does not build once packaged must fail here rather than at
+      # release time. `cargo package` compiles the packaged copy, which also
+      # catches a source file left out by the `exclude` list.
+      - name: Package and verify
+        run: cargo package
+
+      - name: Report the crate size
+        run: ls -lh target/package/*.crate
