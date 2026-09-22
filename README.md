@@ -36,7 +36,7 @@ Early, but the middle of the pipeline runs end to end. What works today:
 | Stage | State |
 |-------|-------|
 | Verilog / SystemVerilog | preprocessor, lexer, parser, 28-rule linter, elaboration and lowering to the IR |
-| VHDL-2008 | lexer, parser, semantic analysis with bundled std and ieee packages, elaboration and lowering to the IR |
+| VHDL-2008 | lexer, parser, semantic analysis, elaboration and lowering to the IR, with std, std_logic_1164, numeric_std, numeric_bit, math_real and the Synopsys packages bundled |
 | Unified IR | design model, validator, round-tripping `.rtl` text format |
 | Simulation | event-driven 4-state simulator, VCD and FST waveforms, Rust co-simulation API |
 | Synthesis | process lowering, flip-flop / latch / memory / FSM inference, optimisation passes, AIG optimiser, LUT and standard-cell mapping, post-synthesis equivalence checking |
