@@ -1,0 +1,11 @@
+run
+expect-output
+in=0100 out=2
+in=0011 out=1
+in=1x00 out=3
+in=x010 out=0
+sel=2 y=1
+sel=0 y=1
+end-output
+expect-message unique case: 2 arms match 2'h2
+expect-message unique case: no arm matches 2'h0

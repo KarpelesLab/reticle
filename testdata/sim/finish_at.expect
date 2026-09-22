@@ -1,0 +1,7 @@
+run
+expect-finished
+expect-time 50ns
+expect fin.n = 8'd2
+expect-output
+n=2 at 45
+end-output

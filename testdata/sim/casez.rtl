@@ -1,0 +1,56 @@
+// casez as a priority encoder, plus unique-case violations.
+top enc
+
+module enc
+  net %in u4 reg
+  net %out u2 reg
+  net %sel u2 reg
+  net %y u2 reg
+  process encode comb
+    casez %in
+      when 4'b1zzz
+        %out = 2'd3
+      end
+      when 4'b01zz
+        %out = 2'd2
+      end
+      when 4'b001z
+        %out = 2'd1
+      end
+      default
+        %out = 2'd0
+      end
+    end
+  end
+  process pick comb
+    case %sel unique
+      when 2'd1, 2'd2
+        %y = 2'd1
+      end
+      when 2'd2
+        %y = 2'd2
+      end
+    end
+  end
+  process stim initial
+    %sel = 2'd1
+    %in = 4'b0100
+    wait for 8'd1
+    sys $display("in=%b out=%0d", %in, %out)
+    %in = 4'b0011
+    wait for 8'd1
+    sys $display("in=%b out=%0d", %in, %out)
+    %in = 4'b1x00
+    wait for 8'd1
+    sys $display("in=%b out=%0d", %in, %out)
+    %in = 4'bx010
+    wait for 8'd1
+    sys $display("in=%b out=%0d", %in, %out)
+    %sel = 2'd2
+    wait for 8'd1
+    sys $display("sel=%0d y=%0d", %sel, %y)
+    %sel = 2'd0
+    wait for 8'd1
+    sys $display("sel=%0d y=%0d", %sel, %y)
+  end
+end

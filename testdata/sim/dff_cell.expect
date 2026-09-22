@@ -1,0 +1,12 @@
+# Edges at 5 (reset), 15 -> 1, 25 -> 2 (display at 27), 35 -> 3 (display at
+# 38); reset at 38 clears q at once; with en low the edge at 45 holds.
+run
+expect-finished
+expect-output
+q=2 is2=1
+q=3 is2=0
+async reset: q=0
+held: q=0
+end-output
+expect cells_tb.q = 4'd0
+expect cells_tb.inc = 4'd1

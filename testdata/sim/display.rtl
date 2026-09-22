@@ -1,0 +1,42 @@
+// A sweep of $display formats, $write, $strobe, $monitor and $timeformat.
+top fmt_tb
+
+module fmt_tb
+  timescale 1 ns / 1 ps
+  net %v u8 reg
+  net %s s8 reg
+  process initial
+    %v = 8'd10
+    %s = neg(8'sd3)
+    sys $display("%d|%0d|%5d|%-5d|%h|%H|%b|%o|%c|%s|%%", %v, %v, %v, %v, %v, %v, %v, %v, 8'd65, "str")
+    sys $display("%d %h %b", %s, %s, %s)
+    sys $display(%v, %v)
+    sys $displayh(%v)
+    sys $displayb(%v)
+    sys $displayo(%v)
+    sys $display("%s", 16'h4142)
+    sys $display("[%t]", call $time() as u64)
+    sys $display("[%0t]", call $time() as u64)
+    sys $display("x=%d z=%d mixed=%d hx=%h", 8'hxx, 8'hzz, 8'b0x00zz01, 8'b1010xxzz)
+    sys $display("%m")
+    sys $display()
+    sys $write("a")
+    sys $write("b\n")
+    sys $display("%e %f %g", call $realtime() as real, call $realtime() as real, call $realtime() as real)
+    sys $monitor("mon v=%0d", %v)
+    wait for 8'd3
+    sys $display("%e %f %g %5.1f", call $realtime() as real, call $realtime() as real, call $realtime() as real, call $realtime() as real)
+    sys $timeformat(neg(32'sd9), 32'd2, " ns", 32'd10)
+    sys $display("[%t]", call $time() as u64)
+    %v = 8'd11
+    wait for 8'd1
+    %v = 8'd11
+    wait for 8'd1
+    %v = 8'd12
+    sys $strobe("strobe v=%0d", %v)
+    %v = 8'd13
+    wait for 8'd1
+    sys $display("random=%0d clog2=%0d", ne(call $random() as s32, call $random() as s32), call $clog2(8'd9) as u32)
+    finish
+  end
+end

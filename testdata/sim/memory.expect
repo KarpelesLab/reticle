@@ -1,0 +1,15 @@
+file data.hex
+// four bytes
+ab cd
+@2 ef 01
+end-file
+run
+expect-finished
+expect-output
+rdata=x mem3=77
+rdata=77 rom=239 hex1=cd
+end-output
+expect-mem memtest.mem[3] = 8'd77
+expect-mem memtest.mem[4] = 8'hxx
+expect-mem memtest.hexmem[3] = 8'h01
+expect-mem memtest.rom[0] = 8'd222

@@ -1,0 +1,18 @@
+// A #0 delay moves the rest of the process to the inactive region, after
+// every other active process of the time slot.
+top zero_delay
+
+module zero_delay
+  net %x u8 reg
+  net %y u8 reg
+  process first initial
+    %x = 8'd1
+    sys $display("before #0: x=%0d y=%0d", %x, %y)
+    wait for 8'd0
+    sys $display("after #0: x=%0d y=%0d", %x, %y)
+  end
+  process second initial
+    %y = 8'd5
+    %x = 8'd2
+  end
+end

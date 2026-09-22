@@ -1,0 +1,16 @@
+no-validate
+run
+expect-output
+y=x y2=1 w=5a bus=3
+y=1 y2=1 w=5a bus=x
+y=1 y2=1 w=5a bus=c
+end-output
+expect wires.y = 1'b1
+expect wires.bus = 4'hc
+set wires.enb = 1'd0
+run 1ns
+expect wires.bus = 4'hz
+force wires.bus = 4'h7
+expect wires.bus = 4'h7
+release wires.bus
+expect wires.bus = 4'hz

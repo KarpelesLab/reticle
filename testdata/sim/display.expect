@@ -1,0 +1,25 @@
+run
+expect-finished
+expect-output
+ 10|10|   10|10   |0a|0A|00001010|012|A|str|%
+  -3 fd 11111101
+ 10 10
+0a
+00001010
+012
+AB
+[                   0]
+[0]
+x=  x z=  z mixed=  X hx=aX
+fmt_tb
+
+ab
+0.000000e+00 0.000000 0
+mon v=10
+3.000000e+00 3.000000 3   3.0
+[   3.00 ns]
+mon v=11
+strobe v=13
+mon v=13
+random=1 clog2=4
+end-output

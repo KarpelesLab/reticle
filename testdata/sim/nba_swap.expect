@@ -1,0 +1,9 @@
+run
+expect-finished
+expect swap.a = 4'd2
+expect swap.b = 4'd1
+expect swap.c = 4'd2
+expect swap.d = 4'd2
+expect-output
+nba a=2 b=1 blocking c=2 d=2
+end-output

@@ -1,0 +1,30 @@
+// Non-blocking assignments swap; blocking ones do not.
+top swap
+
+module swap
+  net %clk u1 reg
+  net %a u4 reg
+  net %b u4 reg
+  net %c u4 reg
+  net %d u4 reg
+  process initial
+    %a = 4'd1
+    %b = 4'd2
+    %c = 4'd1
+    %d = 4'd2
+    %clk = 1'd0
+    wait for 4'd1
+    %clk = 1'd1
+    wait for 4'd1
+    sys $display("nba a=%0d b=%0d blocking c=%0d d=%0d", %a, %b, %c, %d)
+    finish
+  end
+  process nba seq posedge %clk
+    %a <= %b
+    %b <= %a
+  end
+  process blocking seq posedge %clk
+    %c = %d
+    %d = %c
+  end
+end

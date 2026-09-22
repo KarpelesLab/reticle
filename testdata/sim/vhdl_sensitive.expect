@@ -1,0 +1,10 @@
+# The watcher resumes in the delta cycle where cnt becomes 2, before dbl is
+# updated by the doubler's own delta cycle.
+run
+expect-finished
+expect-output
+cnt reached 2 at 30000 (dbl=2)
+cnt=2 dbl=4
+end-output
+expect vhdl.cnt = 4'd2
+expect vhdl.dbl = 4'd4

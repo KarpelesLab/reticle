@@ -1,0 +1,34 @@
+// Two instances: ports aliased to plain nets, an input fed by an
+// expression and an output driving a slice of the parent's net.
+top top
+
+module adder
+  net %a u4 wire
+  net %b u4 wire
+  net %y u4 wire
+  port a in %a
+  port b in %b
+  port y out %y
+  assign %y = add(%a, %b)
+end
+
+module top
+  net %x u4 reg
+  net %y u4 reg
+  net %z u4 reg
+  net %t u4 wire
+  net %pair u8 wire
+  instance u0 of adder (a=%x, b=%y, y=%t)
+  instance u1 of adder (a=%t, b=not(%z), y=%pair[3:0])
+  assign %pair[7:4] = %t
+  process initial
+    %x = 4'd1
+    %y = 4'd2
+    %z = 4'd0
+    wait for 8'd1
+    sys $display("t=%0d pair=%h", %t, %pair)
+    %z = 4'd15
+    wait for 8'd1
+    sys $display("t=%0d pair=%h", %t, %pair)
+  end
+end

@@ -1,0 +1,35 @@
+// VHDL-style processes: a sensitivity list, signal assignments that take
+// effect after a delta cycle, and a `wait until`.
+top vhdl
+
+module vhdl
+  net %clk u1 reg
+  net %cnt u4 reg
+  net %dbl u4 reg
+  process counter sensitive %clk
+    if %clk
+      %cnt <= add(%cnt, 4'd1)
+    end
+  end
+  process doubler sensitive %cnt
+    %dbl <= shl(%cnt, 4'd1)
+  end
+  process watcher free
+    wait until eq(%cnt, 4'd2)
+    sys $display("cnt reached 2 at %0t (dbl=%0d)", call $time() as u64, %dbl)
+    wait for 8'd100
+  end
+  process stim initial
+    %cnt = 4'd0
+    %clk = 1'd0
+    wait for 8'd10
+    %clk = 1'd1
+    wait for 8'd10
+    %clk = 1'd0
+    wait for 8'd10
+    %clk = 1'd1
+    wait for 8'd10
+    sys $display("cnt=%0d dbl=%0d", %cnt, %dbl)
+    finish
+  end
+end

@@ -1,0 +1,40 @@
+// Memory write with read-old semantics, a ROM with initial contents, and
+// $readmemh through the file provider.
+top memtest
+
+module memtest
+  net %clk u1 reg
+  net %addr u4 reg
+  net %wdata u8 reg
+  net %we u1 reg
+  net %rdata u8 reg
+  net %rom_out u8 wire
+  memory @mem 16 x u8
+  memory @rom 4 x u8
+    init 8'd222 8'd173 8'd190 8'd239
+  memory @hexmem 4 x u8
+  assign %rom_out = @rom[%addr[1:0]]
+  process seq posedge %clk
+    memwrite @mem[%addr] = %wdata enable %we
+    %rdata <= @mem[%addr]
+  end
+  process initial
+    sys $readmemh("data.hex", @hexmem[4'd0])
+    %clk = 1'd0
+    %addr = 4'd3
+    %wdata = 8'd77
+    %we = 1'd1
+    wait for 8'd5
+    %clk = 1'd1
+    wait for 8'd5
+    %clk = 1'd0
+    sys $display("rdata=%0d mem3=%0d", %rdata, @mem[4'd3])
+    %we = 1'd0
+    wait for 8'd5
+    %clk = 1'd1
+    wait for 8'd5
+    %clk = 1'd0
+    sys $display("rdata=%0d rom=%0d hex1=%h", %rdata, %rom_out, @hexmem[4'd1])
+    finish
+  end
+end

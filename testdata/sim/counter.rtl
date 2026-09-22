@@ -1,0 +1,29 @@
+// A counter with synchronous reset, clocked by a free-running process.
+top counter_tb
+
+module counter_tb
+  timescale 1 ns / 1 ps
+  net %clk u1 reg
+  net %rst u1 reg
+  net %q u8 reg
+  process clkgen free
+    wait for 8'd5
+    %clk = not(%clk)
+  end
+  process stim initial
+    %clk = 1'd0
+    %rst = 1'd1
+    wait for 8'd12
+    %rst = 1'd0
+    wait for 8'd100
+    sys $display("q=%0d at %0t", %q, call $time() as u64)
+    finish
+  end
+  process count seq posedge %clk
+    if %rst
+      %q <= 8'd0
+    else
+      %q <= add(%q, 8'd1)
+    end
+  end
+end

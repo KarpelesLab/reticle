@@ -1,0 +1,27 @@
+// $finish at a fixed time stops a free-running clock.
+top fin
+
+module fin
+  timescale 1 ns / 1 ns
+  net %clk u1 reg
+  net %n u8 reg
+  process clkgen free
+    wait for 8'd10
+    %clk = not(%clk)
+  end
+  process seq posedge %clk
+    %n <= add(%n, 8'd1)
+  end
+  process initial
+    %clk = 1'd0
+    %n = 8'd0
+    wait for 8'd45
+    sys $display("n=%0d at %0t", %n, call $time() as u64)
+    wait for 8'd5
+    finish
+  end
+  process late initial
+    wait for 8'd60
+    sys $display("never printed")
+  end
+end

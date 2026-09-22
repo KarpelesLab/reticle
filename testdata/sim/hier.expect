@@ -1,0 +1,16 @@
+run
+expect-output
+t=3 pair=32
+t=3 pair=33
+end-output
+expect top.u0.a = 4'd1
+expect top.u0.y = 4'd3
+expect top.u1.a = 4'd3
+expect top.u1.b = 4'd0
+expect top.u1.y = 4'd3
+expect top.pair = 8'h33
+set top.x = 4'd5
+run 1ns
+expect top.t = 4'd7
+expect top.u1.y = 4'd7
+expect top.pair = 8'h77

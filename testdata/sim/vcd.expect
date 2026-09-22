@@ -1,0 +1,5 @@
+vcd
+run
+expect-finished
+expect-time 22ns
+expect-vcd

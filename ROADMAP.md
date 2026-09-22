@@ -180,15 +180,15 @@ An event-driven simulator over the IR's process form. Needed both as the
 user-facing simulator and as the reference model for every synthesis pass
 (a synthesised design must simulate identically to its source).
 
-- [ ] Scheduler implementing the Verilog stratified event queue (active,
+- [x] Scheduler implementing the Verilog stratified event queue (active,
       inactive, NBA, monitor regions) and the VHDL delta cycle model, unified
       so a mixed design behaves as each language's standard prescribes.
-- [ ] 4-state evaluation, `std_logic` resolution, delays (`#`, `after`,
+- [x] 4-state evaluation, `std_logic` resolution, delays (`#`, `after`,
       `wait for`), `wait until`, `$time`, `$finish`, `$display` / `report`
       family with correct formatting.
 - [ ] Waveform output: VCD, then FST (compressed, GTKWave native).
 - [ ] Interactive mode: run to time, step, force / release, dump.
-- [ ] Rust co-simulation API: drive inputs, read outputs, await edges, from
+- [x] Rust co-simulation API: drive inputs, read outputs, await edges, from
       a Rust test (`#[test]` that instantiates a DUT), in the spirit of
       cocotb but with types. This is how the in-crate IP library is tested.
 - [ ] Compiled 2-state fast mode: lower cycle-based designs to straight-line

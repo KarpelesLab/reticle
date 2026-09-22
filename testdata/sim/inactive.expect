@@ -1,0 +1,6 @@
+run
+expect-output
+before #0: x=1 y=x
+after #0: x=2 y=5
+end-output
+expect zero_delay.x = 8'd2

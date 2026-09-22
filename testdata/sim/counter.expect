@@ -1,0 +1,9 @@
+# Posedges at 5, 15, 25, ...; reset released at 12, so ten edges count before 112.
+run
+expect-finished
+expect-time 112ns
+expect counter_tb.q = 8'd10
+expect counter_tb.clk = 1'd0
+expect-output
+q=10 at 112000
+end-output
