@@ -1,0 +1,8 @@
+sources
+  gray_counter: rtl/gray_counter.vhd (vhdl)
+  mixed: rtl/top.v (verilog)
+design
+  top: top
+  modules: gray_counter, top
+rtl
+  2 modules

@@ -44,7 +44,7 @@ use reticle::ir::{Design, ModuleRef, Name, PortDir, Type};
 use reticle::source::{SourceMap, Span};
 
 /// Every project under `testdata/ip/projects/`.
-const CASES: [&str; 4] = ["two_deps", "conflict", "encrypted", "crossbar"];
+const CASES: [&str; 5] = ["two_deps", "conflict", "encrypted", "crossbar", "mixed"];
 
 fn dir() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("testdata/ip")
@@ -101,6 +101,7 @@ struct Built {
     resolved: Resolved,
     report: String,
     diagnostics: String,
+    design: Option<Design>,
 }
 
 /// Resolves and elaborates one project, exactly as `reticle build`
@@ -162,6 +163,7 @@ fn build(case: &str) -> Built {
         resolved,
         report,
         diagnostics,
+        design: elaboration.design,
     }
 }
 
@@ -197,6 +199,42 @@ fn a_project_with_two_dependencies_builds() {
     // Nothing was black boxed: every package had readable sources.
     assert!(built.report.contains("rtl/uart_lite.v"));
     assert!(!built.report.contains("black boxes"));
+}
+
+/// A project whose top is Verilog and whose dependency is VHDL. Both
+/// frontends reach the IR, so the design must hold modules from each and
+/// the instance must bind across the language boundary.
+#[test]
+fn a_mixed_language_project_builds() {
+    let built = build("mixed");
+    assert!(built.resolved.is_complete(), "{}", built.diagnostics);
+
+    // Nothing was skipped: VHDL used to be analysed and dropped.
+    assert!(
+        !built.report.contains("VHDL"),
+        "VHDL was skipped:\n{}",
+        built.report
+    );
+    assert!(
+        !built.diagnostics.contains("P0403"),
+        "{}",
+        built.diagnostics
+    );
+
+    let design = built.design.as_ref().expect("no design was elaborated");
+    // The Verilog top and the VHDL entity are both there.
+    assert!(design.module_by_name("top").is_some(), "no Verilog top");
+    assert!(
+        design.module_by_name("gray_counter").is_some(),
+        "the VHDL entity did not reach the design"
+    );
+    // And the cross-language instance is bound, not left dangling.
+    let top = design.module_by_name("top").unwrap();
+    let bound = design.modules[top]
+        .instances
+        .iter()
+        .all(|(_, inst)| matches!(inst.module, ModuleRef::Resolved(_)));
+    assert!(bound, "the VHDL instance was left unresolved");
 }
 
 #[test]

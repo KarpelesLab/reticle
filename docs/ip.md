@@ -513,17 +513,12 @@ same way twice.
 | `P0101`–`P0105` | resolution: not found, conflict, cycle, name mismatch, unsupported source |
 | `P0201`–`P0205` | buses: missing signal, direction, width, unknown bus, `.bus` syntax |
 | `P0301` | lock file syntax |
-| `P0401`–`P0404` | project elaboration: no such top, unknown language, VHDL not lowered, invalid design |
 
 An unknown key comes with a "did you mean" over the keys that manifest
 kind does have.
 
 ## What is not here yet
 
-- **VHDL sources are analysed but not lowered.** The VHDL frontend's path
-  to the IR is phase 2 of `ROADMAP.md`; until it lands, a VHDL source in a
-  package is parsed and checked and then reported with a `P0403` note
-  saying it contributed no modules.
 - **`git` and `registry` dependencies are declined.** Fetching one is
   network I/O, which the library does not do; vendor the package or use a
   checkout and a `path` dependency. The grammar is there so the manifests

@@ -1,0 +1,15 @@
+# A VHDL package, so a project can depend on IP written in either
+# language and get one design out.
+name gray_counter
+version 0.2.0
+license MIT
+description "Binary counter with a gray-coded output"
+
+top gray_counter
+
+source rtl/gray_counter.vhd
+
+param WIDTH int 4 1..32
+port clk in
+port rst in
+port gray out

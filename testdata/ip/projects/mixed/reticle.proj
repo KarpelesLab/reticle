@@ -1,0 +1,10 @@
+# A project whose top is Verilog and whose dependency is VHDL. Both
+# frontends reach the IR, so the design that comes out holds modules
+# from each.
+name mixed
+top top
+device ice40-hx1k-tq144
+
+source rtl/top.v
+
+depends gray_counter ^0.2.0 path ../../packages/gray_counter

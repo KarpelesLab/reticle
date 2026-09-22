@@ -155,8 +155,11 @@ use crate::source::{SourceId, SourceMap};
 pub const NO_SUCH_TOP: &str = "P0401";
 /// Diagnostic code for a source whose language nothing recognises.
 pub const UNKNOWN_LANGUAGE: &str = "P0402";
-/// Diagnostic code for a VHDL source, which analyses but does not yet
-/// lower to the IR.
+/// Diagnostic code once used for a VHDL source that could not be lowered.
+///
+/// VHDL now reaches the IR like Verilog does, so nothing emits this. It is
+/// kept so a stored report referring to it still resolves.
+#[deprecated(note = "VHDL is lowered like Verilog; nothing emits this code")]
 pub const VHDL_NOT_LOWERED: &str = "P0403";
 /// Diagnostic code for an elaborated design that fails IR validation.
 pub const INVALID_DESIGN: &str = "P0404";
@@ -275,12 +278,12 @@ impl Elaboration {
 ///
 /// # What is not here yet
 ///
-/// VHDL sources are parsed and analysed against the bundled `std` and
-/// `ieee` libraries, and every problem in them is reported, but the VHDL
-/// frontend has no path to the IR yet (phase 2 of `ROADMAP.md`), so they
-/// contribute no modules and say so with a `P0403` note. `` `include ``
-/// is not followed: a package lists its files in its manifest, which is
-/// what the provider reads.
+/// Sources of each language are elaborated together, so an entity or
+/// module defined in one file and instantiated from another resolves. A
+/// mixed-language project merges both halves into one design, keeping the
+/// first definition of a repeated name. `` `include `` is not followed: a
+/// package lists its files in its manifest, which is what the provider
+/// reads.
 pub fn elaborate(
     project: &Project,
     resolved: &mut Resolved,
@@ -411,26 +414,52 @@ pub fn elaborate(
         }
     };
 
-    // 4. VHDL: analysed, but not yet lowered.
+    // 4. VHDL, analysed against the bundled libraries and elaborated
+    //    together, for the same reason the Verilog sources are: an entity
+    //    in one file is instantiated from another.
     if !vhdl.is_empty() {
+        let mut front = Diagnostics::new();
         let mut library = crate::vhdl::sema::Design::with_stdlib(
             resolved.source_map_mut(),
             crate::vhdl::Standard::Vhdl2008,
-            diags,
+            &mut front,
         );
         for id in &vhdl {
-            library.add_source(resolved.source_map_mut(), *id, "work", diags);
+            library.add_source(resolved.source_map_mut(), *id, "work", &mut front);
         }
-        library.analyze(resolved.source_map_mut(), diags);
-        for id in &vhdl {
-            let name = resolved.source_map().file(*id).name().to_owned();
-            diags.push(
-                Diagnostic::note(format!("`{name}` was analysed but not lowered to the IR"))
-                    .with_code(VHDL_NOT_LOWERED)
-                    .with_note("the VHDL path to the IR is phase 2 of ROADMAP.md"),
-            );
-            out.skipped
-                .push((name, "VHDL is not lowered yet".to_owned()));
+        let analysis = library.analyze(resolved.source_map(), &mut front);
+        let analysed_cleanly = !front.has_errors();
+        diags.append(&mut front);
+
+        if analysed_cleanly {
+            let mut front = Diagnostics::new();
+            let options = crate::vhdl::ElabOptions::new();
+            match crate::vhdl::elaborate(&analysis, &options, &mut front) {
+                Some(vhdl_design) => {
+                    // Merge rather than replace: the Verilog half of a
+                    // mixed-language project is already in `design`, and a
+                    // name defined twice keeps the first, which is what the
+                    // `.rtl` merge below does too.
+                    for (_, module) in vhdl_design.modules.iter() {
+                        if design.module_by_name(module.name.as_str()).is_none() {
+                            design.add_module(module.clone());
+                        }
+                    }
+                }
+                None => {
+                    for id in &vhdl {
+                        let name = resolved.source_map().file(*id).name().to_owned();
+                        out.skipped
+                            .push((name, "VHDL elaboration failed".to_owned()));
+                    }
+                }
+            }
+            diags.append(&mut front);
+        } else {
+            for id in &vhdl {
+                let name = resolved.source_map().file(*id).name().to_owned();
+                out.skipped.push((name, "VHDL analysis failed".to_owned()));
+            }
         }
     }
 
