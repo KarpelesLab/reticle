@@ -1,0 +1,62 @@
+top adder8
+
+module adder8
+  net %a u8 wire
+  net %b u8 wire
+  net %cin u1 wire
+  net %sum u8 wire
+  net %cout u1 wire
+  net %$lut0 u1 wire
+  net %$lut1 u1 wire
+  net %$lut2 u1 wire
+  net %$lut3 u1 wire
+  net %$lut4 u1 wire
+  net %$lut5 u1 wire
+  net %$lut6 u1 wire
+  net %$lut7 u1 wire
+  net %$lut8 u1 wire
+  net %$lut9 u1 wire
+  net %$lut10 u1 wire
+  net %$lut11 u1 wire
+  net %$lut12 u1 wire
+  net %$lut13 u1 wire
+  net %$lut14 u1 wire
+  net %$lut15 u1 wire
+  net %$lut16 u1 wire
+  net %$lut17 u1 wire
+  net %$lut18 u1 wire
+  net %$lut19 u1 wire
+  net %$lut20 u1 wire
+  net %$lut21 u1 wire
+  net %$lut22 u1 wire
+  port a in %a
+  port b in %b
+  port cin in %cin
+  port sum out %sum
+  port cout out %cout
+  assign %sum = {%$lut12, %$lut13, %$lut16, %$lut17, %$lut19, %$lut20, %$lut21, %$lut22}
+  cell $lut23 lut 6 64'd72909780498219007 (a={%b[2:2], %b[1:1], %b[0:0], %a[2:2], %a[1:1], %a[0:0]}) -> (y=%$lut0)
+  cell $lut24 lut 5 32'd327090487 (a={%$lut0, %b[4:4], %b[3:3], %a[4:4], %a[3:3]}) -> (y=%$lut1)
+  cell $lut25 lut 5 32'd327090487 (a={%$lut1, %b[6:6], %b[5:5], %a[6:6], %a[5:5]}) -> (y=%$lut2)
+  cell $lut26 lut 2 4'd6 (a={%b[6:6], %a[6:6]}) -> (y=%$lut3)
+  cell $lut27 lut 2 4'd6 (a={%b[4:4], %a[4:4]}) -> (y=%$lut4)
+  cell $lut28 lut 4 16'd4991 (a={%b[1:1], %b[0:0], %a[1:1], %a[0:0]}) -> (y=%$lut5)
+  cell $lut29 lut 5 32'd306708480 (a={%cin, %b[1:1], %b[0:0], %a[1:1], %a[0:0]}) -> (y=%$lut6)
+  cell $lut30 lut 4 16'd24720 (a={%$lut5, %$lut6, %b[2:2], %a[2:2]}) -> (y=%$lut7)
+  cell $lut31 lut 5 32'd1611661440 (a={%$lut4, %$lut0, %$lut7, %b[3:3], %a[3:3]}) -> (y=%$lut8)
+  cell $lut32 lut 5 32'd1611661440 (a={%$lut3, %$lut1, %$lut8, %b[5:5], %a[5:5]}) -> (y=%$lut9)
+  cell $lut33 lut 4 16'd59518 (a={%$lut2, %$lut9, %b[7:7], %a[7:7]}) -> (y=%cout)
+  cell $lut34 lut 2 4'd6 (a={%b[7:7], %a[7:7]}) -> (y=%$lut10)
+  cell $lut35 lut 6 64'd1404842948465589960 (a={%$lut10, %$lut1, %b[6:6], %b[5:5], %a[6:6], %a[5:5]}) -> (y=%$lut11)
+  cell $lut36 lut 6 64'd11524710894001979520 (a={%$lut11, %$lut3, %$lut1, %$lut8, %b[5:5], %a[5:5]}) -> (y=%$lut12)
+  cell $lut37 lut 5 32'd394389630 (a={%$lut3, %$lut1, %$lut8, %b[5:5], %a[5:5]}) -> (y=%$lut13)
+  cell $lut38 lut 2 4'd6 (a={%b[5:5], %a[5:5]}) -> (y=%$lut14)
+  cell $lut39 lut 6 64'd1404842948465589960 (a={%$lut14, %$lut0, %b[4:4], %b[3:3], %a[4:4], %a[3:3]}) -> (y=%$lut15)
+  cell $lut40 lut 6 64'd11524710894001979520 (a={%$lut15, %$lut4, %$lut0, %$lut7, %b[3:3], %a[3:3]}) -> (y=%$lut16)
+  cell $lut41 lut 5 32'd394389630 (a={%$lut4, %$lut0, %$lut7, %b[3:3], %a[3:3]}) -> (y=%$lut17)
+  cell $lut42 lut 2 4'd6 (a={%b[3:3], %a[3:3]}) -> (y=%$lut18)
+  cell $lut43 lut 5 32'd394389630 (a={%$lut18, %$lut5, %$lut6, %b[2:2], %a[2:2]}) -> (y=%$lut19)
+  cell $lut44 lut 4 16'd38505 (a={%$lut5, %$lut6, %b[2:2], %a[2:2]}) -> (y=%$lut20)
+  cell $lut45 lut 5 32'd3375797100 (a={%cin, %b[1:1], %b[0:0], %a[1:1], %a[0:0]}) -> (y=%$lut21)
+  cell $lut46 lut 3 8'd150 (a={%cin, %b[0:0], %a[0:0]}) -> (y=%$lut22)
+end

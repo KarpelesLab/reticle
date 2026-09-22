@@ -1,0 +1,61 @@
+top priority8
+
+module priority8
+  net %d u8 wire
+  net %idx u3 wire
+  net %valid u1 wire
+  net %$g0 u1 wire
+  net %$g1 u1 wire
+  net %$g2 u1 wire
+  net %$g3 u1 wire
+  net %$g4 u1 wire
+  net %$g5 u1 wire
+  net %$g6 u1 wire
+  net %$g7 u1 wire
+  net %$g8 u1 wire
+  net %$g9 u1 wire
+  net %$g10 u1 wire
+  net %$g11 u1 wire
+  net %$g12 u1 wire
+  net %$g13 u1 wire
+  net %$g14 u1 wire
+  net %$g15 u1 wire
+  port d in %d
+  port idx out %idx
+  port valid out %valid
+  assign %idx = {%$g6, %$g8, %$g15}
+  attr lib_cell = "NOR2"
+  cell $g16 blackbox NOR2 (A=%d[0:0], B=%d[1:1]) -> (y=%$g0)
+  attr lib_cell = "NOR2"
+  cell $g17 blackbox NOR2 (A=%d[2:2], B=%d[3:3]) -> (y=%$g1)
+  attr lib_cell = "AND2"
+  cell $g18 and (a=%$g1, b=%$g0) -> (y=%$g2)
+  attr lib_cell = "NOR2"
+  cell $g19 blackbox NOR2 (A=%d[4:4], B=%d[5:5]) -> (y=%$g3)
+  attr lib_cell = "NOR2"
+  cell $g20 blackbox NOR2 (A=%d[6:6], B=%d[7:7]) -> (y=%$g4)
+  attr lib_cell = "AND2"
+  cell $g21 and (a=%$g4, b=%$g3) -> (y=%$g5)
+  attr lib_cell = "INV"
+  cell $g22 not (a=%$g5) -> (y=%$g6)
+  attr lib_cell = "NAND2"
+  cell $g23 blackbox NAND2 (A=%$g5, B=%$g2) -> (y=%valid)
+  attr lib_cell = "INV"
+  cell $g24 not (a=%$g3) -> (y=%$g7)
+  attr lib_cell = "OAI21"
+  cell $g25 blackbox OAI21 (A=%$g7, B=%$g1, C=%$g4) -> (y=%$g8)
+  attr lib_cell = "INV"
+  cell $g26 not (a=%d[2:2]) -> (y=%$g9)
+  attr lib_cell = "AOI21"
+  cell $g27 blackbox AOI21 (A=%d[1:1], B=%$g9, C=%d[3:3]) -> (y=%$g10)
+  attr lib_cell = "INV"
+  cell $g28 not (a=%d[4:4]) -> (y=%$g11)
+  attr lib_cell = "INV"
+  cell $g29 not (a=%$g10) -> (y=%$g12)
+  attr lib_cell = "AOI21"
+  cell $g30 blackbox AOI21 (A=%$g11, B=%$g12, C=%d[5:5]) -> (y=%$g13)
+  attr lib_cell = "INV"
+  cell $g31 not (a=%d[7:7]) -> (y=%$g14)
+  attr lib_cell = "OAI21"
+  cell $g32 blackbox OAI21 (A=%d[6:6], B=%$g13, C=%$g14) -> (y=%$g15)
+end

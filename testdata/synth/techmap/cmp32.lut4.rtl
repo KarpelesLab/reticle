@@ -1,0 +1,201 @@
+top cmp32
+
+module cmp32
+  net %a u32 wire
+  net %b u32 wire
+  net %lt u1 wire
+  net %eq u1 wire
+  net %gt u1 wire
+  net %$lut0 u1 wire
+  net %$lut1 u1 wire
+  net %$lut2 u1 wire
+  net %$lut3 u1 wire
+  net %$lut4 u1 wire
+  net %$lut5 u1 wire
+  net %$lut6 u1 wire
+  net %$lut7 u1 wire
+  net %$lut8 u1 wire
+  net %$lut9 u1 wire
+  net %$lut10 u1 wire
+  net %$lut11 u1 wire
+  net %$lut12 u1 wire
+  net %$lut13 u1 wire
+  net %$lut14 u1 wire
+  net %$lut15 u1 wire
+  net %$lut16 u1 wire
+  net %$lut17 u1 wire
+  net %$lut18 u1 wire
+  net %$lut19 u1 wire
+  net %$lut20 u1 wire
+  net %$lut21 u1 wire
+  net %$lut22 u1 wire
+  net %$lut23 u1 wire
+  net %$lut24 u1 wire
+  net %$lut25 u1 wire
+  net %$lut26 u1 wire
+  net %$lut27 u1 wire
+  net %$lut28 u1 wire
+  net %$lut29 u1 wire
+  net %$lut30 u1 wire
+  net %$lut31 u1 wire
+  net %$lut32 u1 wire
+  net %$lut33 u1 wire
+  net %$lut34 u1 wire
+  net %$lut35 u1 wire
+  net %$lut36 u1 wire
+  net %$lut37 u1 wire
+  net %$lut38 u1 wire
+  net %$lut39 u1 wire
+  net %$lut40 u1 wire
+  net %$lut41 u1 wire
+  net %$lut42 u1 wire
+  net %$lut43 u1 wire
+  net %$lut44 u1 wire
+  net %$lut45 u1 wire
+  net %$lut46 u1 wire
+  net %$lut47 u1 wire
+  net %$lut48 u1 wire
+  net %$lut49 u1 wire
+  net %$lut50 u1 wire
+  net %$lut51 u1 wire
+  net %$lut52 u1 wire
+  net %$lut53 u1 wire
+  net %$lut54 u1 wire
+  net %$lut55 u1 wire
+  net %$lut56 u1 wire
+  net %$lut57 u1 wire
+  net %$lut58 u1 wire
+  net %$lut59 u1 wire
+  net %$lut60 u1 wire
+  net %$lut61 u1 wire
+  net %$lut62 u1 wire
+  net %$lut63 u1 wire
+  net %$lut64 u1 wire
+  net %$lut65 u1 wire
+  net %$lut66 u1 wire
+  net %$lut67 u1 wire
+  net %$lut68 u1 wire
+  net %$lut69 u1 wire
+  net %$lut70 u1 wire
+  net %$lut71 u1 wire
+  net %$lut72 u1 wire
+  net %$lut73 u1 wire
+  net %$lut74 u1 wire
+  net %$lut75 u1 wire
+  net %$lut76 u1 wire
+  net %$lut77 u1 wire
+  net %$lut78 u1 wire
+  net %$lut79 u1 wire
+  net %$lut80 u1 wire
+  net %$lut81 u1 wire
+  net %$lut82 u1 wire
+  net %$lut83 u1 wire
+  net %$lut84 u1 wire
+  net %$lut85 u1 wire
+  net %$lut86 u1 wire
+  net %$lut87 u1 wire
+  net %$lut88 u1 wire
+  net %$lut89 u1 wire
+  net %$lut90 u1 wire
+  net %$lut91 u1 wire
+  port a in %a
+  port b in %b
+  port lt out %lt
+  port eq out %eq
+  port gt out %gt
+  cell $lut92 lut 4 16'd63281 (a={%b[1:1], %b[0:0], %a[1:1], %a[0:0]}) -> (y=%$lut0)
+  cell $lut93 lut 2 4'd9 (a={%b[3:3], %a[3:3]}) -> (y=%$lut1)
+  cell $lut94 lut 4 16'd8368 (a={%$lut0, %$lut1, %b[2:2], %a[2:2]}) -> (y=%$lut2)
+  cell $lut95 lut 2 4'd2 (a={%b[3:3], %a[3:3]}) -> (y=%$lut3)
+  cell $lut96 lut 4 16'd17485 (a={%$lut2, %$lut3, %b[4:4], %a[4:4]}) -> (y=%$lut4)
+  cell $lut97 lut 2 4'd9 (a={%b[6:6], %a[6:6]}) -> (y=%$lut5)
+  cell $lut98 lut 4 16'd8368 (a={%$lut4, %$lut5, %b[5:5], %a[5:5]}) -> (y=%$lut6)
+  cell $lut99 lut 2 4'd2 (a={%b[6:6], %a[6:6]}) -> (y=%$lut7)
+  cell $lut100 lut 4 16'd17485 (a={%$lut6, %$lut7, %b[7:7], %a[7:7]}) -> (y=%$lut8)
+  cell $lut101 lut 2 4'd9 (a={%b[9:9], %a[9:9]}) -> (y=%$lut9)
+  cell $lut102 lut 4 16'd8368 (a={%$lut8, %$lut9, %b[8:8], %a[8:8]}) -> (y=%$lut10)
+  cell $lut103 lut 2 4'd2 (a={%b[9:9], %a[9:9]}) -> (y=%$lut11)
+  cell $lut104 lut 4 16'd17485 (a={%$lut10, %$lut11, %b[10:10], %a[10:10]}) -> (y=%$lut12)
+  cell $lut105 lut 2 4'd9 (a={%b[12:12], %a[12:12]}) -> (y=%$lut13)
+  cell $lut106 lut 4 16'd8368 (a={%$lut12, %$lut13, %b[11:11], %a[11:11]}) -> (y=%$lut14)
+  cell $lut107 lut 2 4'd2 (a={%b[12:12], %a[12:12]}) -> (y=%$lut15)
+  cell $lut108 lut 4 16'd17485 (a={%$lut14, %$lut15, %b[13:13], %a[13:13]}) -> (y=%$lut16)
+  cell $lut109 lut 2 4'd9 (a={%b[15:15], %a[15:15]}) -> (y=%$lut17)
+  cell $lut110 lut 4 16'd8368 (a={%$lut16, %$lut17, %b[14:14], %a[14:14]}) -> (y=%$lut18)
+  cell $lut111 lut 2 4'd2 (a={%b[15:15], %a[15:15]}) -> (y=%$lut19)
+  cell $lut112 lut 4 16'd17485 (a={%$lut18, %$lut19, %b[16:16], %a[16:16]}) -> (y=%$lut20)
+  cell $lut113 lut 2 4'd9 (a={%b[18:18], %a[18:18]}) -> (y=%$lut21)
+  cell $lut114 lut 4 16'd8368 (a={%$lut20, %$lut21, %b[17:17], %a[17:17]}) -> (y=%$lut22)
+  cell $lut115 lut 2 4'd2 (a={%b[18:18], %a[18:18]}) -> (y=%$lut23)
+  cell $lut116 lut 4 16'd17485 (a={%$lut22, %$lut23, %b[19:19], %a[19:19]}) -> (y=%$lut24)
+  cell $lut117 lut 2 4'd9 (a={%b[21:21], %a[21:21]}) -> (y=%$lut25)
+  cell $lut118 lut 4 16'd8368 (a={%$lut24, %$lut25, %b[20:20], %a[20:20]}) -> (y=%$lut26)
+  cell $lut119 lut 2 4'd2 (a={%b[21:21], %a[21:21]}) -> (y=%$lut27)
+  cell $lut120 lut 4 16'd17485 (a={%$lut26, %$lut27, %b[22:22], %a[22:22]}) -> (y=%$lut28)
+  cell $lut121 lut 2 4'd9 (a={%b[24:24], %a[24:24]}) -> (y=%$lut29)
+  cell $lut122 lut 4 16'd8368 (a={%$lut28, %$lut29, %b[23:23], %a[23:23]}) -> (y=%$lut30)
+  cell $lut123 lut 2 4'd2 (a={%b[24:24], %a[24:24]}) -> (y=%$lut31)
+  cell $lut124 lut 4 16'd17485 (a={%$lut30, %$lut31, %b[25:25], %a[25:25]}) -> (y=%$lut32)
+  cell $lut125 lut 2 4'd9 (a={%b[27:27], %a[27:27]}) -> (y=%$lut33)
+  cell $lut126 lut 4 16'd8368 (a={%$lut32, %$lut33, %b[26:26], %a[26:26]}) -> (y=%$lut34)
+  cell $lut127 lut 2 4'd2 (a={%b[27:27], %a[27:27]}) -> (y=%$lut35)
+  cell $lut128 lut 4 16'd17485 (a={%$lut34, %$lut35, %b[28:28], %a[28:28]}) -> (y=%$lut36)
+  cell $lut129 lut 2 4'd9 (a={%b[30:30], %a[30:30]}) -> (y=%$lut37)
+  cell $lut130 lut 4 16'd8368 (a={%$lut36, %$lut37, %b[29:29], %a[29:29]}) -> (y=%$lut38)
+  cell $lut131 lut 2 4'd2 (a={%b[30:30], %a[30:30]}) -> (y=%$lut39)
+  cell $lut132 lut 4 16'd48050 (a={%$lut38, %$lut39, %b[31:31], %a[31:31]}) -> (y=%gt)
+  cell $lut133 lut 4 16'd33825 (a={%b[1:1], %b[0:0], %a[1:1], %a[0:0]}) -> (y=%$lut40)
+  cell $lut134 lut 4 16'd33825 (a={%b[3:3], %b[2:2], %a[3:3], %a[2:2]}) -> (y=%$lut41)
+  cell $lut135 lut 4 16'd33825 (a={%b[5:5], %b[4:4], %a[5:5], %a[4:4]}) -> (y=%$lut42)
+  cell $lut136 lut 4 16'd33825 (a={%b[7:7], %b[6:6], %a[7:7], %a[6:6]}) -> (y=%$lut43)
+  cell $lut137 lut 4 16'd32768 (a={%$lut40, %$lut41, %$lut42, %$lut43}) -> (y=%$lut44)
+  cell $lut138 lut 4 16'd33825 (a={%b[9:9], %b[8:8], %a[9:9], %a[8:8]}) -> (y=%$lut45)
+  cell $lut139 lut 4 16'd33825 (a={%b[11:11], %b[10:10], %a[11:11], %a[10:10]}) -> (y=%$lut46)
+  cell $lut140 lut 4 16'd33825 (a={%b[13:13], %b[12:12], %a[13:13], %a[12:12]}) -> (y=%$lut47)
+  cell $lut141 lut 4 16'd33825 (a={%b[15:15], %b[14:14], %a[15:15], %a[14:14]}) -> (y=%$lut48)
+  cell $lut142 lut 4 16'd32768 (a={%$lut45, %$lut46, %$lut47, %$lut48}) -> (y=%$lut49)
+  cell $lut143 lut 4 16'd33825 (a={%b[17:17], %b[16:16], %a[17:17], %a[16:16]}) -> (y=%$lut50)
+  cell $lut144 lut 4 16'd33825 (a={%b[19:19], %b[18:18], %a[19:19], %a[18:18]}) -> (y=%$lut51)
+  cell $lut145 lut 4 16'd33825 (a={%b[21:21], %b[20:20], %a[21:21], %a[20:20]}) -> (y=%$lut52)
+  cell $lut146 lut 4 16'd33825 (a={%b[23:23], %b[22:22], %a[23:23], %a[22:22]}) -> (y=%$lut53)
+  cell $lut147 lut 4 16'd32768 (a={%$lut50, %$lut51, %$lut52, %$lut53}) -> (y=%$lut54)
+  cell $lut148 lut 4 16'd33825 (a={%b[25:25], %b[24:24], %a[25:25], %a[24:24]}) -> (y=%$lut55)
+  cell $lut149 lut 4 16'd33825 (a={%b[27:27], %b[26:26], %a[27:27], %a[26:26]}) -> (y=%$lut56)
+  cell $lut150 lut 4 16'd33825 (a={%b[29:29], %b[28:28], %a[29:29], %a[28:28]}) -> (y=%$lut57)
+  cell $lut151 lut 4 16'd33825 (a={%b[31:31], %b[30:30], %a[31:31], %a[30:30]}) -> (y=%$lut58)
+  cell $lut152 lut 4 16'd32768 (a={%$lut55, %$lut56, %$lut57, %$lut58}) -> (y=%$lut59)
+  cell $lut153 lut 4 16'd32768 (a={%$lut44, %$lut49, %$lut54, %$lut59}) -> (y=%eq)
+  cell $lut154 lut 4 16'd50225 (a={%b[2:2], %b[1:1], %a[2:2], %a[1:1]}) -> (y=%$lut60)
+  cell $lut155 lut 4 16'd36015 (a={%b[1:1], %b[0:0], %a[1:1], %a[0:0]}) -> (y=%$lut61)
+  cell $lut156 lut 2 4'd4 (a={%b[2:2], %a[2:2]}) -> (y=%$lut62)
+  cell $lut157 lut 4 16'd35464 (a={%$lut60, %$lut61, %$lut62, %$lut1}) -> (y=%$lut63)
+  cell $lut158 lut 2 4'd4 (a={%b[3:3], %a[3:3]}) -> (y=%$lut64)
+  cell $lut159 lut 4 16'd8747 (a={%$lut63, %$lut64, %b[4:4], %a[4:4]}) -> (y=%$lut65)
+  cell $lut160 lut 4 16'd16592 (a={%$lut65, %$lut5, %b[5:5], %a[5:5]}) -> (y=%$lut66)
+  cell $lut161 lut 2 4'd4 (a={%b[6:6], %a[6:6]}) -> (y=%$lut67)
+  cell $lut162 lut 4 16'd8747 (a={%$lut66, %$lut67, %b[7:7], %a[7:7]}) -> (y=%$lut68)
+  cell $lut163 lut 4 16'd16592 (a={%$lut68, %$lut9, %b[8:8], %a[8:8]}) -> (y=%$lut69)
+  cell $lut164 lut 2 4'd4 (a={%b[9:9], %a[9:9]}) -> (y=%$lut70)
+  cell $lut165 lut 4 16'd8747 (a={%$lut69, %$lut70, %b[10:10], %a[10:10]}) -> (y=%$lut71)
+  cell $lut166 lut 4 16'd16592 (a={%$lut71, %$lut13, %b[11:11], %a[11:11]}) -> (y=%$lut72)
+  cell $lut167 lut 2 4'd4 (a={%b[12:12], %a[12:12]}) -> (y=%$lut73)
+  cell $lut168 lut 4 16'd8747 (a={%$lut72, %$lut73, %b[13:13], %a[13:13]}) -> (y=%$lut74)
+  cell $lut169 lut 4 16'd16592 (a={%$lut74, %$lut17, %b[14:14], %a[14:14]}) -> (y=%$lut75)
+  cell $lut170 lut 2 4'd4 (a={%b[15:15], %a[15:15]}) -> (y=%$lut76)
+  cell $lut171 lut 4 16'd8747 (a={%$lut75, %$lut76, %b[16:16], %a[16:16]}) -> (y=%$lut77)
+  cell $lut172 lut 4 16'd16592 (a={%$lut77, %$lut21, %b[17:17], %a[17:17]}) -> (y=%$lut78)
+  cell $lut173 lut 2 4'd4 (a={%b[18:18], %a[18:18]}) -> (y=%$lut79)
+  cell $lut174 lut 4 16'd8747 (a={%$lut78, %$lut79, %b[19:19], %a[19:19]}) -> (y=%$lut80)
+  cell $lut175 lut 4 16'd16592 (a={%$lut80, %$lut25, %b[20:20], %a[20:20]}) -> (y=%$lut81)
+  cell $lut176 lut 2 4'd4 (a={%b[21:21], %a[21:21]}) -> (y=%$lut82)
+  cell $lut177 lut 4 16'd8747 (a={%$lut81, %$lut82, %b[22:22], %a[22:22]}) -> (y=%$lut83)
+  cell $lut178 lut 4 16'd16592 (a={%$lut83, %$lut29, %b[23:23], %a[23:23]}) -> (y=%$lut84)
+  cell $lut179 lut 2 4'd4 (a={%b[24:24], %a[24:24]}) -> (y=%$lut85)
+  cell $lut180 lut 4 16'd8747 (a={%$lut84, %$lut85, %b[25:25], %a[25:25]}) -> (y=%$lut86)
+  cell $lut181 lut 4 16'd16592 (a={%$lut86, %$lut33, %b[26:26], %a[26:26]}) -> (y=%$lut87)
+  cell $lut182 lut 2 4'd4 (a={%b[27:27], %a[27:27]}) -> (y=%$lut88)
+  cell $lut183 lut 4 16'd8747 (a={%$lut87, %$lut88, %b[28:28], %a[28:28]}) -> (y=%$lut89)
+  cell $lut184 lut 4 16'd16592 (a={%$lut89, %$lut37, %b[29:29], %a[29:29]}) -> (y=%$lut90)
+  cell $lut185 lut 2 4'd4 (a={%b[30:30], %a[30:30]}) -> (y=%$lut91)
+  cell $lut186 lut 4 16'd56788 (a={%$lut90, %$lut91, %b[31:31], %a[31:31]}) -> (y=%lt)
+end

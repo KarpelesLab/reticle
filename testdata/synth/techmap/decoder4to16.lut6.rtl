@@ -1,0 +1,43 @@
+top decoder4to16
+
+module decoder4to16
+  net %sel u4 wire
+  net %en u1 wire
+  net %y u16 wire
+  net %$lut0 u1 wire
+  net %$lut1 u1 wire
+  net %$lut2 u1 wire
+  net %$lut3 u1 wire
+  net %$lut4 u1 wire
+  net %$lut5 u1 wire
+  net %$lut6 u1 wire
+  net %$lut7 u1 wire
+  net %$lut8 u1 wire
+  net %$lut9 u1 wire
+  net %$lut10 u1 wire
+  net %$lut11 u1 wire
+  net %$lut12 u1 wire
+  net %$lut13 u1 wire
+  net %$lut14 u1 wire
+  net %$lut15 u1 wire
+  port sel in %sel
+  port en in %en
+  port y out %y
+  assign %y = {%$lut0, %$lut1, %$lut2, %$lut3, %$lut4, %$lut5, %$lut6, %$lut7, %$lut8, %$lut9, %$lut10, %$lut11, %$lut12, %$lut13, %$lut14, %$lut15}
+  cell $lut16 lut 5 32'd2147483648 (a={%en, %sel[3:3], %sel[2:2], %sel[1:1], %sel[0:0]}) -> (y=%$lut0)
+  cell $lut17 lut 5 32'd1073741824 (a={%en, %sel[3:3], %sel[2:2], %sel[1:1], %sel[0:0]}) -> (y=%$lut1)
+  cell $lut18 lut 5 32'd536870912 (a={%en, %sel[3:3], %sel[2:2], %sel[1:1], %sel[0:0]}) -> (y=%$lut2)
+  cell $lut19 lut 5 32'd268435456 (a={%en, %sel[3:3], %sel[2:2], %sel[1:1], %sel[0:0]}) -> (y=%$lut3)
+  cell $lut20 lut 5 32'd134217728 (a={%en, %sel[3:3], %sel[2:2], %sel[1:1], %sel[0:0]}) -> (y=%$lut4)
+  cell $lut21 lut 5 32'd67108864 (a={%en, %sel[3:3], %sel[2:2], %sel[1:1], %sel[0:0]}) -> (y=%$lut5)
+  cell $lut22 lut 5 32'd33554432 (a={%en, %sel[3:3], %sel[2:2], %sel[1:1], %sel[0:0]}) -> (y=%$lut6)
+  cell $lut23 lut 5 32'd16777216 (a={%en, %sel[3:3], %sel[2:2], %sel[1:1], %sel[0:0]}) -> (y=%$lut7)
+  cell $lut24 lut 5 32'd8388608 (a={%en, %sel[3:3], %sel[2:2], %sel[1:1], %sel[0:0]}) -> (y=%$lut8)
+  cell $lut25 lut 5 32'd4194304 (a={%en, %sel[3:3], %sel[2:2], %sel[1:1], %sel[0:0]}) -> (y=%$lut9)
+  cell $lut26 lut 5 32'd2097152 (a={%en, %sel[3:3], %sel[2:2], %sel[1:1], %sel[0:0]}) -> (y=%$lut10)
+  cell $lut27 lut 5 32'd1048576 (a={%en, %sel[3:3], %sel[2:2], %sel[1:1], %sel[0:0]}) -> (y=%$lut11)
+  cell $lut28 lut 5 32'd524288 (a={%en, %sel[3:3], %sel[2:2], %sel[1:1], %sel[0:0]}) -> (y=%$lut12)
+  cell $lut29 lut 5 32'd262144 (a={%en, %sel[3:3], %sel[2:2], %sel[1:1], %sel[0:0]}) -> (y=%$lut13)
+  cell $lut30 lut 5 32'd131072 (a={%en, %sel[3:3], %sel[2:2], %sel[1:1], %sel[0:0]}) -> (y=%$lut14)
+  cell $lut31 lut 5 32'd65536 (a={%en, %sel[3:3], %sel[2:2], %sel[1:1], %sel[0:0]}) -> (y=%$lut15)
+end

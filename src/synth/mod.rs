@@ -1,5 +1,3 @@
-//! Synthesis: from the IR's process form to a netlist of generic cells.
-//!
 //! This module is the technology-independent front half of phase 5 of
 //! `ROADMAP.md`. It takes a validated [`Design`] whose modules hold
 //! processes and continuous assignments, and rewrites every module into
@@ -64,6 +62,19 @@ pub mod fsm;
 pub mod opt;
 pub mod proc;
 pub mod report;
+
+// And-Inverter Graph: structural hashing, rewriting, balancing, FRAIGing.
+// (A plain comment, not a doc comment: an outer doc on a module whose file
+// carries its own `//!` docs makes rustdoc resolve that file's intra-doc
+// links in this scope instead of the module's, breaking every one.)
+pub mod aig;
+
+// Gate libraries for standard-cell mapping.
+pub mod cells;
+
+// Technology mapping: k-LUT covering and standard-cell mapping.
+pub mod techmap;
+
 pub(crate) mod util;
 
 #[cfg(test)]

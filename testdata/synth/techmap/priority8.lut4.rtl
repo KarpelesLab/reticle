@@ -1,0 +1,26 @@
+top priority8
+
+module priority8
+  net %d u8 wire
+  net %idx u3 wire
+  net %valid u1 wire
+  net %$lut0 u1 wire
+  net %$lut1 u1 wire
+  net %$lut2 u1 wire
+  net %$lut3 u1 wire
+  net %$lut4 u1 wire
+  net %$lut5 u1 wire
+  net %$lut6 u1 wire
+  port d in %d
+  port idx out %idx
+  port valid out %valid
+  assign %idx = {%$lut2, %$lut4, %$lut6}
+  cell $lut7 lut 4 16'd1 (a={%d[3:3], %d[2:2], %d[1:1], %d[0:0]}) -> (y=%$lut0)
+  cell $lut8 lut 4 16'd1 (a={%d[7:7], %d[6:6], %d[5:5], %d[4:4]}) -> (y=%$lut1)
+  cell $lut9 lut 1 2'd1 (a=%$lut1) -> (y=%$lut2)
+  cell $lut10 lut 2 4'd7 (a={%$lut0, %$lut1}) -> (y=%valid)
+  cell $lut11 lut 4 16'd14 (a={%d[5:5], %d[4:4], %d[3:3], %d[2:2]}) -> (y=%$lut3)
+  cell $lut12 lut 3 8'd254 (a={%$lut3, %d[7:7], %d[6:6]}) -> (y=%$lut4)
+  cell $lut13 lut 4 16'd242 (a={%d[4:4], %d[3:3], %d[2:2], %d[1:1]}) -> (y=%$lut5)
+  cell $lut14 lut 4 16'd62450 (a={%$lut5, %d[7:7], %d[6:6], %d[5:5]}) -> (y=%$lut6)
+end

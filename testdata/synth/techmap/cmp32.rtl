@@ -1,0 +1,17 @@
+top cmp32
+
+module cmp32
+  net %a u32 wire
+  net %b u32 wire
+  net %lt u1 wire
+  net %eq u1 wire
+  net %gt u1 wire
+  port a in %a
+  port b in %b
+  port lt out %lt
+  port eq out %eq
+  port gt out %gt
+  assign %lt = lt(%a, %b)
+  assign %eq = eq(%a, %b)
+  assign %gt = gt(%a, %b)
+end

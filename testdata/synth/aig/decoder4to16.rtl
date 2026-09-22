@@ -1,0 +1,77 @@
+top decoder4to16
+
+module decoder4to16
+  net %sel u4 wire
+  net %en u1 wire
+  net %y u16 wire
+  net %$not0 u1 wire
+  net %$not1 u1 wire
+  net %$and0 u1 wire
+  net %$not2 u1 wire
+  net %$and1 u1 wire
+  net %$not3 u1 wire
+  net %$and2 u1 wire
+  net %$and3 u1 wire
+  net %$and4 u1 wire
+  net %$and5 u1 wire
+  net %$and6 u1 wire
+  net %$and7 u1 wire
+  net %$and8 u1 wire
+  net %$and9 u1 wire
+  net %$and10 u1 wire
+  net %$and11 u1 wire
+  net %$and12 u1 wire
+  net %$and13 u1 wire
+  net %$and14 u1 wire
+  net %$and15 u1 wire
+  net %$and16 u1 wire
+  net %$and17 u1 wire
+  net %$and18 u1 wire
+  net %$and19 u1 wire
+  net %$and20 u1 wire
+  net %$and21 u1 wire
+  net %$and22 u1 wire
+  net %$and23 u1 wire
+  net %$and24 u1 wire
+  net %$and25 u1 wire
+  net %$and26 u1 wire
+  net %$and27 u1 wire
+  net %$and28 u1 wire
+  port sel in %sel
+  port en in %en
+  port y out %y
+  assign %y = {%$and28, %$and27, %$and26, %$and25, %$and23, %$and22, %$and21, %$and20, %$and18, %$and16, %$and14, %$and12, %$and10, %$and8, %$and6, %$and3}
+  cell $not4 not (a=%sel[2:2]) -> (y=%$not0)
+  cell $not5 not (a=%sel[3:3]) -> (y=%$not1)
+  cell $and29 and (a=%$not0, b=%$not1) -> (y=%$and0)
+  cell $not6 not (a=%sel[1:1]) -> (y=%$not2)
+  cell $and30 and (a=%$not2, b=%en) -> (y=%$and1)
+  cell $not7 not (a=%sel[0:0]) -> (y=%$not3)
+  cell $and31 and (a=%$not3, b=%$and1) -> (y=%$and2)
+  cell $and32 and (a=%$and0, b=%$and2) -> (y=%$and3)
+  cell $and33 and (a=%en, b=%$and0) -> (y=%$and4)
+  cell $and34 and (a=%sel[0:0], b=%$not2) -> (y=%$and5)
+  cell $and35 and (a=%$and4, b=%$and5) -> (y=%$and6)
+  cell $and36 and (a=%$not3, b=%sel[1:1]) -> (y=%$and7)
+  cell $and37 and (a=%$and4, b=%$and7) -> (y=%$and8)
+  cell $and38 and (a=%sel[0:0], b=%sel[1:1]) -> (y=%$and9)
+  cell $and39 and (a=%$and4, b=%$and9) -> (y=%$and10)
+  cell $and40 and (a=%sel[2:2], b=%$not1) -> (y=%$and11)
+  cell $and41 and (a=%$and2, b=%$and11) -> (y=%$and12)
+  cell $and42 and (a=%sel[0:0], b=%$and1) -> (y=%$and13)
+  cell $and43 and (a=%$and11, b=%$and13) -> (y=%$and14)
+  cell $and44 and (a=%en, b=%$and7) -> (y=%$and15)
+  cell $and45 and (a=%$and11, b=%$and15) -> (y=%$and16)
+  cell $and46 and (a=%en, b=%$and9) -> (y=%$and17)
+  cell $and47 and (a=%$and11, b=%$and17) -> (y=%$and18)
+  cell $and48 and (a=%$not0, b=%sel[3:3]) -> (y=%$and19)
+  cell $and49 and (a=%$and2, b=%$and19) -> (y=%$and20)
+  cell $and50 and (a=%$and13, b=%$and19) -> (y=%$and21)
+  cell $and51 and (a=%$and15, b=%$and19) -> (y=%$and22)
+  cell $and52 and (a=%$and17, b=%$and19) -> (y=%$and23)
+  cell $and53 and (a=%sel[2:2], b=%sel[3:3]) -> (y=%$and24)
+  cell $and54 and (a=%$and2, b=%$and24) -> (y=%$and25)
+  cell $and55 and (a=%$and13, b=%$and24) -> (y=%$and26)
+  cell $and56 and (a=%$and15, b=%$and24) -> (y=%$and27)
+  cell $and57 and (a=%$and17, b=%$and24) -> (y=%$and28)
+end

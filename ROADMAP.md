@@ -233,10 +233,10 @@ technology cells.
       continuous assigns with discrete cells, so the netlist formats (JSON,
       BLIF, EDIF) can express a synthesised design without technology
       mapping first. `reticle emit --format json` needs this today.
-- [ ] Logic optimisation core: an AIG (and-inverter graph) with structural
+- [x] Logic optimisation core: an AIG (and-inverter graph) with structural
       hashing, rewriting, balancing and FRAIGing, sufficient to stand in for
       ABC on typical designs.
-- [ ] Generic technology mapping: k-LUT mapping (for FPGAs) and structural
+- [x] Generic technology mapping: k-LUT mapping (for FPGAs) and structural
       cell mapping against a gate library (for ASIC). Area and depth
       oriented modes.
 - [ ] Post-synthesis verification: equivalence check against the pre-

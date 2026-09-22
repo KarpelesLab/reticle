@@ -1,0 +1,78 @@
+top priority8
+
+module priority8
+  net %d u8 wire
+  net %idx u3 wire
+  net %valid u1 wire
+  net %$not0 u1 wire
+  net %$and0 u1 wire
+  net %$not1 u1 wire
+  net %$not2 u1 wire
+  net %$and1 u1 wire
+  net %$not3 u1 wire
+  net %$not4 u1 wire
+  net %$and2 u1 wire
+  net %$not5 u1 wire
+  net %$not6 u1 wire
+  net %$and3 u1 wire
+  net %$not7 u1 wire
+  net %$not8 u1 wire
+  net %$and4 u1 wire
+  net %$not9 u1 wire
+  net %$not10 u1 wire
+  net %$and5 u1 wire
+  net %$and6 u1 wire
+  net %$and7 u1 wire
+  net %$and8 u1 wire
+  net %$not11 u1 wire
+  net %$and9 u1 wire
+  net %$not12 u1 wire
+  net %$and10 u1 wire
+  net %$and11 u1 wire
+  net %$not13 u1 wire
+  net %$not14 u1 wire
+  net %$and12 u1 wire
+  net %$and13 u1 wire
+  net %$and14 u1 wire
+  net %$not15 u1 wire
+  net %$not16 u1 wire
+  net %$not17 u1 wire
+  port d in %d
+  port idx out %idx
+  port valid out %valid
+  assign %idx = {%$not17, %$not16, %$not15}
+  cell $not18 not (a=%d[2:2]) -> (y=%$not0)
+  cell $and15 and (a=%d[1:1], b=%$not0) -> (y=%$and0)
+  cell $not19 not (a=%d[3:3]) -> (y=%$not1)
+  cell $not20 not (a=%$and0) -> (y=%$not2)
+  cell $and16 and (a=%$not1, b=%$not2) -> (y=%$and1)
+  cell $not21 not (a=%d[4:4]) -> (y=%$not3)
+  cell $not22 not (a=%$and1) -> (y=%$not4)
+  cell $and17 and (a=%$not3, b=%$not4) -> (y=%$and2)
+  cell $not23 not (a=%d[5:5]) -> (y=%$not5)
+  cell $not24 not (a=%$and2) -> (y=%$not6)
+  cell $and18 and (a=%$not5, b=%$not6) -> (y=%$and3)
+  cell $not25 not (a=%d[6:6]) -> (y=%$not7)
+  cell $not26 not (a=%$and3) -> (y=%$not8)
+  cell $and19 and (a=%$not7, b=%$not8) -> (y=%$and4)
+  cell $not27 not (a=%d[7:7]) -> (y=%$not9)
+  cell $not28 not (a=%$and4) -> (y=%$not10)
+  cell $and20 and (a=%$not9, b=%$not10) -> (y=%$and5)
+  cell $and21 and (a=%$not7, b=%$not9) -> (y=%$and6)
+  cell $and22 and (a=%$not3, b=%$not5) -> (y=%$and7)
+  cell $and23 and (a=%$not0, b=%$not1) -> (y=%$and8)
+  cell $not29 not (a=%$and8) -> (y=%$not11)
+  cell $and24 and (a=%$and7, b=%$not11) -> (y=%$and9)
+  cell $not30 not (a=%$and9) -> (y=%$not12)
+  cell $and25 and (a=%$and6, b=%$not12) -> (y=%$and10)
+  cell $and26 and (a=%$and6, b=%$and7) -> (y=%$and11)
+  cell $not31 not (a=%d[0:0]) -> (y=%$not13)
+  cell $not32 not (a=%d[1:1]) -> (y=%$not14)
+  cell $and27 and (a=%$not13, b=%$not14) -> (y=%$and12)
+  cell $and28 and (a=%$and8, b=%$and12) -> (y=%$and13)
+  cell $and29 and (a=%$and11, b=%$and13) -> (y=%$and14)
+  cell $not33 not (a=%$and5) -> (y=%$not15)
+  cell $not34 not (a=%$and10) -> (y=%$not16)
+  cell $not35 not (a=%$and11) -> (y=%$not17)
+  cell $not36 not (a=%$and14) -> (y=%valid)
+end

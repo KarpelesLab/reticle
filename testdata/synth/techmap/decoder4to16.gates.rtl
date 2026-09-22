@@ -1,0 +1,134 @@
+top decoder4to16
+
+module decoder4to16
+  net %sel u4 wire
+  net %en u1 wire
+  net %y u16 wire
+  net %$g0 u1 wire
+  net %$g1 u1 wire
+  net %$g2 u1 wire
+  net %$g3 u1 wire
+  net %$g4 u1 wire
+  net %$g5 u1 wire
+  net %$g6 u1 wire
+  net %$g7 u1 wire
+  net %$g8 u1 wire
+  net %$g9 u1 wire
+  net %$g10 u1 wire
+  net %$g11 u1 wire
+  net %$g12 u1 wire
+  net %$g13 u1 wire
+  net %$g14 u1 wire
+  net %$g15 u1 wire
+  net %$g16 u1 wire
+  net %$g17 u1 wire
+  net %$g18 u1 wire
+  net %$g19 u1 wire
+  net %$g20 u1 wire
+  net %$g21 u1 wire
+  net %$g22 u1 wire
+  net %$g23 u1 wire
+  net %$g24 u1 wire
+  net %$g25 u1 wire
+  net %$g26 u1 wire
+  net %$g27 u1 wire
+  net %$g28 u1 wire
+  net %$g29 u1 wire
+  net %$g30 u1 wire
+  net %$g31 u1 wire
+  net %$g32 u1 wire
+  net %$g33 u1 wire
+  net %$g34 u1 wire
+  net %$g35 u1 wire
+  net %$g36 u1 wire
+  net %$g37 u1 wire
+  net %$g38 u1 wire
+  net %$g39 u1 wire
+  net %$g40 u1 wire
+  port sel in %sel
+  port en in %en
+  port y out %y
+  assign %y = {%$g5, %$g9, %$g13, %$g16, %$g19, %$g20, %$g21, %$g22, %$g25, %$g26, %$g27, %$g28, %$g32, %$g35, %$g38, %$g40}
+  attr lib_cell = "AND2"
+  cell $g41 and (a=%sel[2:2], b=%sel[3:3]) -> (y=%$g0)
+  attr lib_cell = "INV"
+  cell $g42 not (a=%sel[0:0]) -> (y=%$g1)
+  attr lib_cell = "INV"
+  cell $g43 not (a=%sel[1:1]) -> (y=%$g2)
+  attr lib_cell = "INV"
+  cell $g44 not (a=%en) -> (y=%$g3)
+  attr lib_cell = "NOR3"
+  cell $g45 blackbox NOR3 (A=%$g1, B=%$g2, C=%$g3) -> (y=%$g4)
+  attr lib_cell = "AND2"
+  cell $g46 and (a=%$g4, b=%$g0) -> (y=%$g5)
+  attr lib_cell = "INV"
+  cell $g47 not (a=%sel[1:1]) -> (y=%$g6)
+  attr lib_cell = "INV"
+  cell $g48 not (a=%en) -> (y=%$g7)
+  attr lib_cell = "NOR3"
+  cell $g49 blackbox NOR3 (A=%sel[0:0], B=%$g6, C=%$g7) -> (y=%$g8)
+  attr lib_cell = "AND2"
+  cell $g50 and (a=%$g8, b=%$g0) -> (y=%$g9)
+  attr lib_cell = "INV"
+  cell $g51 not (a=%sel[0:0]) -> (y=%$g10)
+  attr lib_cell = "INV"
+  cell $g52 not (a=%en) -> (y=%$g11)
+  attr lib_cell = "NOR3"
+  cell $g53 blackbox NOR3 (A=%$g10, B=%sel[1:1], C=%$g11) -> (y=%$g12)
+  attr lib_cell = "AND2"
+  cell $g54 and (a=%$g12, b=%$g0) -> (y=%$g13)
+  attr lib_cell = "INV"
+  cell $g55 not (a=%en) -> (y=%$g14)
+  attr lib_cell = "NOR3"
+  cell $g56 blackbox NOR3 (A=%sel[0:0], B=%sel[1:1], C=%$g14) -> (y=%$g15)
+  attr lib_cell = "AND2"
+  cell $g57 and (a=%$g15, b=%$g0) -> (y=%$g16)
+  attr lib_cell = "INV"
+  cell $g58 not (a=%sel[3:3]) -> (y=%$g17)
+  attr lib_cell = "NOR2"
+  cell $g59 blackbox NOR2 (A=%sel[2:2], B=%$g17) -> (y=%$g18)
+  attr lib_cell = "AND2"
+  cell $g60 and (a=%$g4, b=%$g18) -> (y=%$g19)
+  attr lib_cell = "AND2"
+  cell $g61 and (a=%$g8, b=%$g18) -> (y=%$g20)
+  attr lib_cell = "AND2"
+  cell $g62 and (a=%$g12, b=%$g18) -> (y=%$g21)
+  attr lib_cell = "AND2"
+  cell $g63 and (a=%$g15, b=%$g18) -> (y=%$g22)
+  attr lib_cell = "INV"
+  cell $g64 not (a=%sel[2:2]) -> (y=%$g23)
+  attr lib_cell = "NOR2"
+  cell $g65 blackbox NOR2 (A=%$g23, B=%sel[3:3]) -> (y=%$g24)
+  attr lib_cell = "AND2"
+  cell $g66 and (a=%$g24, b=%$g4) -> (y=%$g25)
+  attr lib_cell = "AND2"
+  cell $g67 and (a=%$g24, b=%$g8) -> (y=%$g26)
+  attr lib_cell = "AND2"
+  cell $g68 and (a=%$g24, b=%$g12) -> (y=%$g27)
+  attr lib_cell = "AND2"
+  cell $g69 and (a=%$g15, b=%$g24) -> (y=%$g28)
+  attr lib_cell = "AND2"
+  cell $g70 and (a=%sel[0:0], b=%sel[1:1]) -> (y=%$g29)
+  attr lib_cell = "INV"
+  cell $g71 not (a=%en) -> (y=%$g30)
+  attr lib_cell = "NOR3"
+  cell $g72 blackbox NOR3 (A=%sel[2:2], B=%sel[3:3], C=%$g30) -> (y=%$g31)
+  attr lib_cell = "AND2"
+  cell $g73 and (a=%$g31, b=%$g29) -> (y=%$g32)
+  attr lib_cell = "INV"
+  cell $g74 not (a=%sel[1:1]) -> (y=%$g33)
+  attr lib_cell = "NOR2"
+  cell $g75 blackbox NOR2 (A=%sel[0:0], B=%$g33) -> (y=%$g34)
+  attr lib_cell = "AND2"
+  cell $g76 and (a=%$g31, b=%$g34) -> (y=%$g35)
+  attr lib_cell = "INV"
+  cell $g77 not (a=%sel[0:0]) -> (y=%$g36)
+  attr lib_cell = "NOR2"
+  cell $g78 blackbox NOR2 (A=%$g36, B=%sel[1:1]) -> (y=%$g37)
+  attr lib_cell = "AND2"
+  cell $g79 and (a=%$g31, b=%$g37) -> (y=%$g38)
+  attr lib_cell = "NOR2"
+  cell $g80 blackbox NOR2 (A=%sel[2:2], B=%sel[3:3]) -> (y=%$g39)
+  attr lib_cell = "AND2"
+  cell $g81 and (a=%$g39, b=%$g15) -> (y=%$g40)
+end

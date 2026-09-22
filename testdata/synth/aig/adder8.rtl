@@ -1,0 +1,346 @@
+top adder8
+
+module adder8
+  net %a u8 wire
+  net %b u8 wire
+  net %cin u1 wire
+  net %sum u8 wire
+  net %cout u1 wire
+  net %$and0 u1 wire
+  net %$not0 u1 wire
+  net %$not1 u1 wire
+  net %$and1 u1 wire
+  net %$not2 u1 wire
+  net %$not3 u1 wire
+  net %$and2 u1 wire
+  net %$and3 u1 wire
+  net %$not4 u1 wire
+  net %$not5 u1 wire
+  net %$and4 u1 wire
+  net %$not6 u1 wire
+  net %$not7 u1 wire
+  net %$and5 u1 wire
+  net %$and6 u1 wire
+  net %$not8 u1 wire
+  net %$not9 u1 wire
+  net %$and7 u1 wire
+  net %$not10 u1 wire
+  net %$not11 u1 wire
+  net %$and8 u1 wire
+  net %$and9 u1 wire
+  net %$not12 u1 wire
+  net %$and10 u1 wire
+  net %$not13 u1 wire
+  net %$not14 u1 wire
+  net %$and11 u1 wire
+  net %$and12 u1 wire
+  net %$not15 u1 wire
+  net %$and13 u1 wire
+  net %$not16 u1 wire
+  net %$not17 u1 wire
+  net %$and14 u1 wire
+  net %$and15 u1 wire
+  net %$and16 u1 wire
+  net %$not18 u1 wire
+  net %$not19 u1 wire
+  net %$and17 u1 wire
+  net %$not20 u1 wire
+  net %$not21 u1 wire
+  net %$and18 u1 wire
+  net %$not22 u1 wire
+  net %$and19 u1 wire
+  net %$not23 u1 wire
+  net %$and20 u1 wire
+  net %$not24 u1 wire
+  net %$not25 u1 wire
+  net %$and21 u1 wire
+  net %$and22 u1 wire
+  net %$not26 u1 wire
+  net %$and23 u1 wire
+  net %$not27 u1 wire
+  net %$not28 u1 wire
+  net %$and24 u1 wire
+  net %$and25 u1 wire
+  net %$and26 u1 wire
+  net %$not29 u1 wire
+  net %$not30 u1 wire
+  net %$and27 u1 wire
+  net %$not31 u1 wire
+  net %$not32 u1 wire
+  net %$and28 u1 wire
+  net %$not33 u1 wire
+  net %$and29 u1 wire
+  net %$not34 u1 wire
+  net %$and30 u1 wire
+  net %$not35 u1 wire
+  net %$not36 u1 wire
+  net %$and31 u1 wire
+  net %$and32 u1 wire
+  net %$not37 u1 wire
+  net %$and33 u1 wire
+  net %$not38 u1 wire
+  net %$not39 u1 wire
+  net %$and34 u1 wire
+  net %$and35 u1 wire
+  net %$and36 u1 wire
+  net %$not40 u1 wire
+  net %$not41 u1 wire
+  net %$and37 u1 wire
+  net %$not42 u1 wire
+  net %$not43 u1 wire
+  net %$and38 u1 wire
+  net %$not44 u1 wire
+  net %$and39 u1 wire
+  net %$not45 u1 wire
+  net %$and40 u1 wire
+  net %$not46 u1 wire
+  net %$not47 u1 wire
+  net %$and41 u1 wire
+  net %$and42 u1 wire
+  net %$not48 u1 wire
+  net %$and43 u1 wire
+  net %$not49 u1 wire
+  net %$not50 u1 wire
+  net %$and44 u1 wire
+  net %$and45 u1 wire
+  net %$and46 u1 wire
+  net %$not51 u1 wire
+  net %$not52 u1 wire
+  net %$and47 u1 wire
+  net %$not53 u1 wire
+  net %$not54 u1 wire
+  net %$and48 u1 wire
+  net %$not55 u1 wire
+  net %$and49 u1 wire
+  net %$not56 u1 wire
+  net %$and50 u1 wire
+  net %$not57 u1 wire
+  net %$not58 u1 wire
+  net %$and51 u1 wire
+  net %$and52 u1 wire
+  net %$not59 u1 wire
+  net %$and53 u1 wire
+  net %$not60 u1 wire
+  net %$not61 u1 wire
+  net %$and54 u1 wire
+  net %$and55 u1 wire
+  net %$and56 u1 wire
+  net %$not62 u1 wire
+  net %$not63 u1 wire
+  net %$and57 u1 wire
+  net %$not64 u1 wire
+  net %$not65 u1 wire
+  net %$and58 u1 wire
+  net %$not66 u1 wire
+  net %$and59 u1 wire
+  net %$not67 u1 wire
+  net %$and60 u1 wire
+  net %$not68 u1 wire
+  net %$not69 u1 wire
+  net %$and61 u1 wire
+  net %$and62 u1 wire
+  net %$not70 u1 wire
+  net %$and63 u1 wire
+  net %$not71 u1 wire
+  net %$not72 u1 wire
+  net %$and64 u1 wire
+  net %$and65 u1 wire
+  net %$and66 u1 wire
+  net %$not73 u1 wire
+  net %$not74 u1 wire
+  net %$and67 u1 wire
+  net %$not75 u1 wire
+  net %$not76 u1 wire
+  net %$and68 u1 wire
+  net %$not77 u1 wire
+  net %$and69 u1 wire
+  net %$not78 u1 wire
+  net %$and70 u1 wire
+  net %$not79 u1 wire
+  net %$not80 u1 wire
+  net %$and71 u1 wire
+  net %$and72 u1 wire
+  net %$not81 u1 wire
+  net %$and73 u1 wire
+  net %$not82 u1 wire
+  net %$not83 u1 wire
+  net %$and74 u1 wire
+  net %$and75 u1 wire
+  net %$and76 u1 wire
+  net %$not84 u1 wire
+  net %$and77 u1 wire
+  net %$not85 u1 wire
+  net %$not86 u1 wire
+  port a in %a
+  port b in %b
+  port cin in %cin
+  port sum out %sum
+  port cout out %cout
+  assign %sum = {%$and74, %$and64, %$and54, %$and44, %$and34, %$and24, %$and14, %$and5}
+  cell $and78 and (a=%a[0:0], b=%b[0:0]) -> (y=%$and0)
+  cell $not87 not (a=%a[0:0]) -> (y=%$not0)
+  cell $not88 not (a=%b[0:0]) -> (y=%$not1)
+  cell $and79 and (a=%$not0, b=%$not1) -> (y=%$and1)
+  cell $not89 not (a=%$and0) -> (y=%$not2)
+  cell $not90 not (a=%$and1) -> (y=%$not3)
+  cell $and80 and (a=%$not2, b=%$not3) -> (y=%$and2)
+  cell $and81 and (a=%cin, b=%$and2) -> (y=%$and3)
+  cell $not91 not (a=%cin) -> (y=%$not4)
+  cell $not92 not (a=%$and2) -> (y=%$not5)
+  cell $and82 and (a=%$not4, b=%$not5) -> (y=%$and4)
+  cell $not93 not (a=%$and3) -> (y=%$not6)
+  cell $not94 not (a=%$and4) -> (y=%$not7)
+  cell $and83 and (a=%$not6, b=%$not7) -> (y=%$and5)
+  cell $and84 and (a=%a[1:1], b=%b[1:1]) -> (y=%$and6)
+  cell $not95 not (a=%a[1:1]) -> (y=%$not8)
+  cell $not96 not (a=%b[1:1]) -> (y=%$not9)
+  cell $and85 and (a=%$not8, b=%$not9) -> (y=%$and7)
+  cell $not97 not (a=%$and6) -> (y=%$not10)
+  cell $not98 not (a=%$and7) -> (y=%$not11)
+  cell $and86 and (a=%$not10, b=%$not11) -> (y=%$and8)
+  cell $and87 and (a=%$and0, b=%$and8) -> (y=%$and9)
+  cell $not99 not (a=%$and8) -> (y=%$not12)
+  cell $and88 and (a=%$not2, b=%$not12) -> (y=%$and10)
+  cell $not100 not (a=%$and9) -> (y=%$not13)
+  cell $not101 not (a=%$and10) -> (y=%$not14)
+  cell $and89 and (a=%$not13, b=%$not14) -> (y=%$and11)
+  cell $and90 and (a=%$and3, b=%$and11) -> (y=%$and12)
+  cell $not102 not (a=%$and11) -> (y=%$not15)
+  cell $and91 and (a=%$not6, b=%$not15) -> (y=%$and13)
+  cell $not103 not (a=%$and12) -> (y=%$not16)
+  cell $not104 not (a=%$and13) -> (y=%$not17)
+  cell $and92 and (a=%$not16, b=%$not17) -> (y=%$and14)
+  cell $and93 and (a=%$not10, b=%$not13) -> (y=%$and15)
+  cell $and94 and (a=%a[2:2], b=%b[2:2]) -> (y=%$and16)
+  cell $not105 not (a=%a[2:2]) -> (y=%$not18)
+  cell $not106 not (a=%b[2:2]) -> (y=%$not19)
+  cell $and95 and (a=%$not18, b=%$not19) -> (y=%$and17)
+  cell $not107 not (a=%$and16) -> (y=%$not20)
+  cell $not108 not (a=%$and17) -> (y=%$not21)
+  cell $and96 and (a=%$not20, b=%$not21) -> (y=%$and18)
+  cell $not109 not (a=%$and15) -> (y=%$not22)
+  cell $and97 and (a=%$not22, b=%$and18) -> (y=%$and19)
+  cell $not110 not (a=%$and18) -> (y=%$not23)
+  cell $and98 and (a=%$and15, b=%$not23) -> (y=%$and20)
+  cell $not111 not (a=%$and19) -> (y=%$not24)
+  cell $not112 not (a=%$and20) -> (y=%$not25)
+  cell $and99 and (a=%$not24, b=%$not25) -> (y=%$and21)
+  cell $and100 and (a=%$and12, b=%$and21) -> (y=%$and22)
+  cell $not113 not (a=%$and21) -> (y=%$not26)
+  cell $and101 and (a=%$not16, b=%$not26) -> (y=%$and23)
+  cell $not114 not (a=%$and22) -> (y=%$not27)
+  cell $not115 not (a=%$and23) -> (y=%$not28)
+  cell $and102 and (a=%$not27, b=%$not28) -> (y=%$and24)
+  cell $and103 and (a=%$not20, b=%$not24) -> (y=%$and25)
+  cell $and104 and (a=%a[3:3], b=%b[3:3]) -> (y=%$and26)
+  cell $not116 not (a=%a[3:3]) -> (y=%$not29)
+  cell $not117 not (a=%b[3:3]) -> (y=%$not30)
+  cell $and105 and (a=%$not29, b=%$not30) -> (y=%$and27)
+  cell $not118 not (a=%$and26) -> (y=%$not31)
+  cell $not119 not (a=%$and27) -> (y=%$not32)
+  cell $and106 and (a=%$not31, b=%$not32) -> (y=%$and28)
+  cell $not120 not (a=%$and25) -> (y=%$not33)
+  cell $and107 and (a=%$not33, b=%$and28) -> (y=%$and29)
+  cell $not121 not (a=%$and28) -> (y=%$not34)
+  cell $and108 and (a=%$and25, b=%$not34) -> (y=%$and30)
+  cell $not122 not (a=%$and29) -> (y=%$not35)
+  cell $not123 not (a=%$and30) -> (y=%$not36)
+  cell $and109 and (a=%$not35, b=%$not36) -> (y=%$and31)
+  cell $and110 and (a=%$and22, b=%$and31) -> (y=%$and32)
+  cell $not124 not (a=%$and31) -> (y=%$not37)
+  cell $and111 and (a=%$not27, b=%$not37) -> (y=%$and33)
+  cell $not125 not (a=%$and32) -> (y=%$not38)
+  cell $not126 not (a=%$and33) -> (y=%$not39)
+  cell $and112 and (a=%$not38, b=%$not39) -> (y=%$and34)
+  cell $and113 and (a=%$not31, b=%$not35) -> (y=%$and35)
+  cell $and114 and (a=%a[4:4], b=%b[4:4]) -> (y=%$and36)
+  cell $not127 not (a=%a[4:4]) -> (y=%$not40)
+  cell $not128 not (a=%b[4:4]) -> (y=%$not41)
+  cell $and115 and (a=%$not40, b=%$not41) -> (y=%$and37)
+  cell $not129 not (a=%$and36) -> (y=%$not42)
+  cell $not130 not (a=%$and37) -> (y=%$not43)
+  cell $and116 and (a=%$not42, b=%$not43) -> (y=%$and38)
+  cell $not131 not (a=%$and35) -> (y=%$not44)
+  cell $and117 and (a=%$not44, b=%$and38) -> (y=%$and39)
+  cell $not132 not (a=%$and38) -> (y=%$not45)
+  cell $and118 and (a=%$and35, b=%$not45) -> (y=%$and40)
+  cell $not133 not (a=%$and39) -> (y=%$not46)
+  cell $not134 not (a=%$and40) -> (y=%$not47)
+  cell $and119 and (a=%$not46, b=%$not47) -> (y=%$and41)
+  cell $and120 and (a=%$and32, b=%$and41) -> (y=%$and42)
+  cell $not135 not (a=%$and41) -> (y=%$not48)
+  cell $and121 and (a=%$not38, b=%$not48) -> (y=%$and43)
+  cell $not136 not (a=%$and42) -> (y=%$not49)
+  cell $not137 not (a=%$and43) -> (y=%$not50)
+  cell $and122 and (a=%$not49, b=%$not50) -> (y=%$and44)
+  cell $and123 and (a=%$not42, b=%$not46) -> (y=%$and45)
+  cell $and124 and (a=%a[5:5], b=%b[5:5]) -> (y=%$and46)
+  cell $not138 not (a=%a[5:5]) -> (y=%$not51)
+  cell $not139 not (a=%b[5:5]) -> (y=%$not52)
+  cell $and125 and (a=%$not51, b=%$not52) -> (y=%$and47)
+  cell $not140 not (a=%$and46) -> (y=%$not53)
+  cell $not141 not (a=%$and47) -> (y=%$not54)
+  cell $and126 and (a=%$not53, b=%$not54) -> (y=%$and48)
+  cell $not142 not (a=%$and45) -> (y=%$not55)
+  cell $and127 and (a=%$not55, b=%$and48) -> (y=%$and49)
+  cell $not143 not (a=%$and48) -> (y=%$not56)
+  cell $and128 and (a=%$and45, b=%$not56) -> (y=%$and50)
+  cell $not144 not (a=%$and49) -> (y=%$not57)
+  cell $not145 not (a=%$and50) -> (y=%$not58)
+  cell $and129 and (a=%$not57, b=%$not58) -> (y=%$and51)
+  cell $and130 and (a=%$and42, b=%$and51) -> (y=%$and52)
+  cell $not146 not (a=%$and51) -> (y=%$not59)
+  cell $and131 and (a=%$not49, b=%$not59) -> (y=%$and53)
+  cell $not147 not (a=%$and52) -> (y=%$not60)
+  cell $not148 not (a=%$and53) -> (y=%$not61)
+  cell $and132 and (a=%$not60, b=%$not61) -> (y=%$and54)
+  cell $and133 and (a=%$not53, b=%$not57) -> (y=%$and55)
+  cell $and134 and (a=%a[6:6], b=%b[6:6]) -> (y=%$and56)
+  cell $not149 not (a=%a[6:6]) -> (y=%$not62)
+  cell $not150 not (a=%b[6:6]) -> (y=%$not63)
+  cell $and135 and (a=%$not62, b=%$not63) -> (y=%$and57)
+  cell $not151 not (a=%$and56) -> (y=%$not64)
+  cell $not152 not (a=%$and57) -> (y=%$not65)
+  cell $and136 and (a=%$not64, b=%$not65) -> (y=%$and58)
+  cell $not153 not (a=%$and55) -> (y=%$not66)
+  cell $and137 and (a=%$not66, b=%$and58) -> (y=%$and59)
+  cell $not154 not (a=%$and58) -> (y=%$not67)
+  cell $and138 and (a=%$and55, b=%$not67) -> (y=%$and60)
+  cell $not155 not (a=%$and59) -> (y=%$not68)
+  cell $not156 not (a=%$and60) -> (y=%$not69)
+  cell $and139 and (a=%$not68, b=%$not69) -> (y=%$and61)
+  cell $and140 and (a=%$and52, b=%$and61) -> (y=%$and62)
+  cell $not157 not (a=%$and61) -> (y=%$not70)
+  cell $and141 and (a=%$not60, b=%$not70) -> (y=%$and63)
+  cell $not158 not (a=%$and62) -> (y=%$not71)
+  cell $not159 not (a=%$and63) -> (y=%$not72)
+  cell $and142 and (a=%$not71, b=%$not72) -> (y=%$and64)
+  cell $and143 and (a=%$not64, b=%$not68) -> (y=%$and65)
+  cell $and144 and (a=%a[7:7], b=%b[7:7]) -> (y=%$and66)
+  cell $not160 not (a=%a[7:7]) -> (y=%$not73)
+  cell $not161 not (a=%b[7:7]) -> (y=%$not74)
+  cell $and145 and (a=%$not73, b=%$not74) -> (y=%$and67)
+  cell $not162 not (a=%$and66) -> (y=%$not75)
+  cell $not163 not (a=%$and67) -> (y=%$not76)
+  cell $and146 and (a=%$not75, b=%$not76) -> (y=%$and68)
+  cell $not164 not (a=%$and65) -> (y=%$not77)
+  cell $and147 and (a=%$not77, b=%$and68) -> (y=%$and69)
+  cell $not165 not (a=%$and68) -> (y=%$not78)
+  cell $and148 and (a=%$and65, b=%$not78) -> (y=%$and70)
+  cell $not166 not (a=%$and69) -> (y=%$not79)
+  cell $not167 not (a=%$and70) -> (y=%$not80)
+  cell $and149 and (a=%$not79, b=%$not80) -> (y=%$and71)
+  cell $and150 and (a=%$and62, b=%$and71) -> (y=%$and72)
+  cell $not168 not (a=%$and71) -> (y=%$not81)
+  cell $and151 and (a=%$not71, b=%$not81) -> (y=%$and73)
+  cell $not169 not (a=%$and72) -> (y=%$not82)
+  cell $not170 not (a=%$and73) -> (y=%$not83)
+  cell $and152 and (a=%$not82, b=%$not83) -> (y=%$and74)
+  cell $and153 and (a=%$not75, b=%$not79) -> (y=%$and75)
+  cell $and154 and (a=%$not82, b=%$and75) -> (y=%$and76)
+  cell $not171 not (a=%$and75) -> (y=%$not84)
+  cell $and155 and (a=%$and72, b=%$not84) -> (y=%$and77)
+  cell $not172 not (a=%$and76) -> (y=%$not85)
+  cell $not173 not (a=%$and77) -> (y=%$not86)
+  cell $and156 and (a=%$not85, b=%$not86) -> (y=%cout)
+end

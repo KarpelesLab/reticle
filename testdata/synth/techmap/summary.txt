@@ -1,0 +1,13 @@
+Cell counts after `map_module` on the reference designs.
+`aig` is the optimised AIG (AND nodes / levels); the mapped
+columns are cells and levels of cells. Compare with Yosys
+(`synth; abc -lut 4`) or ABC (`if -K 4`) by hand.
+The AIG script here leaves FRAIGing out so the numbers do not
+depend on whether the `formal` feature is compiled in.
+
+design                  aig           lut4           lut6            gates
+adder8              79 / 19        29 /  6        24 /  5      65 / 10  213
+mul8               456 / 53       182 / 19       106 / 14     369 / 27 1145
+decoder4to16        29 /  3        21 /  2        16 /  1      41 /  2   92
+priority8           15 /  6         8 /  2         6 /  2      17 /  3   34
+cmp32              251 / 63        95 / 21        49 / 16     372 / 32  752

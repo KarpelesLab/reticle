@@ -1,0 +1,1127 @@
+top cmp32
+
+module cmp32
+  net %a u32 wire
+  net %b u32 wire
+  net %lt u1 wire
+  net %eq u1 wire
+  net %gt u1 wire
+  net %$g0 u1 wire
+  net %$g1 u1 wire
+  net %$g2 u1 wire
+  net %$g3 u1 wire
+  net %$g4 u1 wire
+  net %$g5 u1 wire
+  net %$g6 u1 wire
+  net %$g7 u1 wire
+  net %$g8 u1 wire
+  net %$g9 u1 wire
+  net %$g10 u1 wire
+  net %$g11 u1 wire
+  net %$g12 u1 wire
+  net %$g13 u1 wire
+  net %$g14 u1 wire
+  net %$g15 u1 wire
+  net %$g16 u1 wire
+  net %$g17 u1 wire
+  net %$g18 u1 wire
+  net %$g19 u1 wire
+  net %$g20 u1 wire
+  net %$g21 u1 wire
+  net %$g22 u1 wire
+  net %$g23 u1 wire
+  net %$g24 u1 wire
+  net %$g25 u1 wire
+  net %$g26 u1 wire
+  net %$g27 u1 wire
+  net %$g28 u1 wire
+  net %$g29 u1 wire
+  net %$g30 u1 wire
+  net %$g31 u1 wire
+  net %$g32 u1 wire
+  net %$g33 u1 wire
+  net %$g34 u1 wire
+  net %$g35 u1 wire
+  net %$g36 u1 wire
+  net %$g37 u1 wire
+  net %$g38 u1 wire
+  net %$g39 u1 wire
+  net %$g40 u1 wire
+  net %$g41 u1 wire
+  net %$g42 u1 wire
+  net %$g43 u1 wire
+  net %$g44 u1 wire
+  net %$g45 u1 wire
+  net %$g46 u1 wire
+  net %$g47 u1 wire
+  net %$g48 u1 wire
+  net %$g49 u1 wire
+  net %$g50 u1 wire
+  net %$g51 u1 wire
+  net %$g52 u1 wire
+  net %$g53 u1 wire
+  net %$g54 u1 wire
+  net %$g55 u1 wire
+  net %$g56 u1 wire
+  net %$g57 u1 wire
+  net %$g58 u1 wire
+  net %$g59 u1 wire
+  net %$g60 u1 wire
+  net %$g61 u1 wire
+  net %$g62 u1 wire
+  net %$g63 u1 wire
+  net %$g64 u1 wire
+  net %$g65 u1 wire
+  net %$g66 u1 wire
+  net %$g67 u1 wire
+  net %$g68 u1 wire
+  net %$g69 u1 wire
+  net %$g70 u1 wire
+  net %$g71 u1 wire
+  net %$g72 u1 wire
+  net %$g73 u1 wire
+  net %$g74 u1 wire
+  net %$g75 u1 wire
+  net %$g76 u1 wire
+  net %$g77 u1 wire
+  net %$g78 u1 wire
+  net %$g79 u1 wire
+  net %$g80 u1 wire
+  net %$g81 u1 wire
+  net %$g82 u1 wire
+  net %$g83 u1 wire
+  net %$g84 u1 wire
+  net %$g85 u1 wire
+  net %$g86 u1 wire
+  net %$g87 u1 wire
+  net %$g88 u1 wire
+  net %$g89 u1 wire
+  net %$g90 u1 wire
+  net %$g91 u1 wire
+  net %$g92 u1 wire
+  net %$g93 u1 wire
+  net %$g94 u1 wire
+  net %$g95 u1 wire
+  net %$g96 u1 wire
+  net %$g97 u1 wire
+  net %$g98 u1 wire
+  net %$g99 u1 wire
+  net %$g100 u1 wire
+  net %$g101 u1 wire
+  net %$g102 u1 wire
+  net %$g103 u1 wire
+  net %$g104 u1 wire
+  net %$g105 u1 wire
+  net %$g106 u1 wire
+  net %$g107 u1 wire
+  net %$g108 u1 wire
+  net %$g109 u1 wire
+  net %$g110 u1 wire
+  net %$g111 u1 wire
+  net %$g112 u1 wire
+  net %$g113 u1 wire
+  net %$g114 u1 wire
+  net %$g115 u1 wire
+  net %$g116 u1 wire
+  net %$g117 u1 wire
+  net %$g118 u1 wire
+  net %$g119 u1 wire
+  net %$g120 u1 wire
+  net %$g121 u1 wire
+  net %$g122 u1 wire
+  net %$g123 u1 wire
+  net %$g124 u1 wire
+  net %$g125 u1 wire
+  net %$g126 u1 wire
+  net %$g127 u1 wire
+  net %$g128 u1 wire
+  net %$g129 u1 wire
+  net %$g130 u1 wire
+  net %$g131 u1 wire
+  net %$g132 u1 wire
+  net %$g133 u1 wire
+  net %$g134 u1 wire
+  net %$g135 u1 wire
+  net %$g136 u1 wire
+  net %$g137 u1 wire
+  net %$g138 u1 wire
+  net %$g139 u1 wire
+  net %$g140 u1 wire
+  net %$g141 u1 wire
+  net %$g142 u1 wire
+  net %$g143 u1 wire
+  net %$g144 u1 wire
+  net %$g145 u1 wire
+  net %$g146 u1 wire
+  net %$g147 u1 wire
+  net %$g148 u1 wire
+  net %$g149 u1 wire
+  net %$g150 u1 wire
+  net %$g151 u1 wire
+  net %$g152 u1 wire
+  net %$g153 u1 wire
+  net %$g154 u1 wire
+  net %$g155 u1 wire
+  net %$g156 u1 wire
+  net %$g157 u1 wire
+  net %$g158 u1 wire
+  net %$g159 u1 wire
+  net %$g160 u1 wire
+  net %$g161 u1 wire
+  net %$g162 u1 wire
+  net %$g163 u1 wire
+  net %$g164 u1 wire
+  net %$g165 u1 wire
+  net %$g166 u1 wire
+  net %$g167 u1 wire
+  net %$g168 u1 wire
+  net %$g169 u1 wire
+  net %$g170 u1 wire
+  net %$g171 u1 wire
+  net %$g172 u1 wire
+  net %$g173 u1 wire
+  net %$g174 u1 wire
+  net %$g175 u1 wire
+  net %$g176 u1 wire
+  net %$g177 u1 wire
+  net %$g178 u1 wire
+  net %$g179 u1 wire
+  net %$g180 u1 wire
+  net %$g181 u1 wire
+  net %$g182 u1 wire
+  net %$g183 u1 wire
+  net %$g184 u1 wire
+  net %$g185 u1 wire
+  net %$g186 u1 wire
+  net %$g187 u1 wire
+  net %$g188 u1 wire
+  net %$g189 u1 wire
+  net %$g190 u1 wire
+  net %$g191 u1 wire
+  net %$g192 u1 wire
+  net %$g193 u1 wire
+  net %$g194 u1 wire
+  net %$g195 u1 wire
+  net %$g196 u1 wire
+  net %$g197 u1 wire
+  net %$g198 u1 wire
+  net %$g199 u1 wire
+  net %$g200 u1 wire
+  net %$g201 u1 wire
+  net %$g202 u1 wire
+  net %$g203 u1 wire
+  net %$g204 u1 wire
+  net %$g205 u1 wire
+  net %$g206 u1 wire
+  net %$g207 u1 wire
+  net %$g208 u1 wire
+  net %$g209 u1 wire
+  net %$g210 u1 wire
+  net %$g211 u1 wire
+  net %$g212 u1 wire
+  net %$g213 u1 wire
+  net %$g214 u1 wire
+  net %$g215 u1 wire
+  net %$g216 u1 wire
+  net %$g217 u1 wire
+  net %$g218 u1 wire
+  net %$g219 u1 wire
+  net %$g220 u1 wire
+  net %$g221 u1 wire
+  net %$g222 u1 wire
+  net %$g223 u1 wire
+  net %$g224 u1 wire
+  net %$g225 u1 wire
+  net %$g226 u1 wire
+  net %$g227 u1 wire
+  net %$g228 u1 wire
+  net %$g229 u1 wire
+  net %$g230 u1 wire
+  net %$g231 u1 wire
+  net %$g232 u1 wire
+  net %$g233 u1 wire
+  net %$g234 u1 wire
+  net %$g235 u1 wire
+  net %$g236 u1 wire
+  net %$g237 u1 wire
+  net %$g238 u1 wire
+  net %$g239 u1 wire
+  net %$g240 u1 wire
+  net %$g241 u1 wire
+  net %$g242 u1 wire
+  net %$g243 u1 wire
+  net %$g244 u1 wire
+  net %$g245 u1 wire
+  net %$g246 u1 wire
+  net %$g247 u1 wire
+  net %$g248 u1 wire
+  net %$g249 u1 wire
+  net %$g250 u1 wire
+  net %$g251 u1 wire
+  net %$g252 u1 wire
+  net %$g253 u1 wire
+  net %$g254 u1 wire
+  net %$g255 u1 wire
+  net %$g256 u1 wire
+  net %$g257 u1 wire
+  net %$g258 u1 wire
+  net %$g259 u1 wire
+  net %$g260 u1 wire
+  net %$g261 u1 wire
+  net %$g262 u1 wire
+  net %$g263 u1 wire
+  net %$g264 u1 wire
+  net %$g265 u1 wire
+  net %$g266 u1 wire
+  net %$g267 u1 wire
+  net %$g268 u1 wire
+  net %$g269 u1 wire
+  net %$g270 u1 wire
+  net %$g271 u1 wire
+  net %$g272 u1 wire
+  net %$g273 u1 wire
+  net %$g274 u1 wire
+  net %$g275 u1 wire
+  net %$g276 u1 wire
+  net %$g277 u1 wire
+  net %$g278 u1 wire
+  net %$g279 u1 wire
+  net %$g280 u1 wire
+  net %$g281 u1 wire
+  net %$g282 u1 wire
+  net %$g283 u1 wire
+  net %$g284 u1 wire
+  net %$g285 u1 wire
+  net %$g286 u1 wire
+  net %$g287 u1 wire
+  net %$g288 u1 wire
+  net %$g289 u1 wire
+  net %$g290 u1 wire
+  net %$g291 u1 wire
+  net %$g292 u1 wire
+  net %$g293 u1 wire
+  net %$g294 u1 wire
+  net %$g295 u1 wire
+  net %$g296 u1 wire
+  net %$g297 u1 wire
+  net %$g298 u1 wire
+  net %$g299 u1 wire
+  net %$g300 u1 wire
+  net %$g301 u1 wire
+  net %$g302 u1 wire
+  net %$g303 u1 wire
+  net %$g304 u1 wire
+  net %$g305 u1 wire
+  net %$g306 u1 wire
+  net %$g307 u1 wire
+  net %$g308 u1 wire
+  net %$g309 u1 wire
+  net %$g310 u1 wire
+  net %$g311 u1 wire
+  net %$g312 u1 wire
+  net %$g313 u1 wire
+  net %$g314 u1 wire
+  net %$g315 u1 wire
+  net %$g316 u1 wire
+  net %$g317 u1 wire
+  net %$g318 u1 wire
+  net %$g319 u1 wire
+  net %$g320 u1 wire
+  net %$g321 u1 wire
+  net %$g322 u1 wire
+  net %$g323 u1 wire
+  net %$g324 u1 wire
+  net %$g325 u1 wire
+  net %$g326 u1 wire
+  net %$g327 u1 wire
+  net %$g328 u1 wire
+  net %$g329 u1 wire
+  net %$g330 u1 wire
+  net %$g331 u1 wire
+  net %$g332 u1 wire
+  net %$g333 u1 wire
+  net %$g334 u1 wire
+  net %$g335 u1 wire
+  net %$g336 u1 wire
+  net %$g337 u1 wire
+  net %$g338 u1 wire
+  net %$g339 u1 wire
+  net %$g340 u1 wire
+  net %$g341 u1 wire
+  net %$g342 u1 wire
+  net %$g343 u1 wire
+  net %$g344 u1 wire
+  net %$g345 u1 wire
+  net %$g346 u1 wire
+  net %$g347 u1 wire
+  net %$g348 u1 wire
+  net %$g349 u1 wire
+  net %$g350 u1 wire
+  net %$g351 u1 wire
+  net %$g352 u1 wire
+  net %$g353 u1 wire
+  net %$g354 u1 wire
+  net %$g355 u1 wire
+  net %$g356 u1 wire
+  net %$g357 u1 wire
+  net %$g358 u1 wire
+  net %$g359 u1 wire
+  net %$g360 u1 wire
+  net %$g361 u1 wire
+  net %$g362 u1 wire
+  net %$g363 u1 wire
+  net %$g364 u1 wire
+  net %$g365 u1 wire
+  net %$g366 u1 wire
+  net %$g367 u1 wire
+  net %$g368 u1 wire
+  port a in %a
+  port b in %b
+  port lt out %lt
+  port eq out %eq
+  port gt out %gt
+  attr lib_cell = "INV"
+  cell $g369 not (a=%a[0:0]) -> (y=%$g0)
+  attr lib_cell = "NOR2"
+  cell $g370 blackbox NOR2 (A=%$g0, B=%b[0:0]) -> (y=%$g1)
+  attr lib_cell = "INV"
+  cell $g371 not (a=%b[1:1]) -> (y=%$g2)
+  attr lib_cell = "NOR2"
+  cell $g372 blackbox NOR2 (A=%a[1:1], B=%$g2) -> (y=%$g3)
+  attr lib_cell = "INV"
+  cell $g373 not (a=%a[1:1]) -> (y=%$g4)
+  attr lib_cell = "NOR2"
+  cell $g374 blackbox NOR2 (A=%$g4, B=%b[1:1]) -> (y=%$g5)
+  attr lib_cell = "INV"
+  cell $g375 not (a=%$g3) -> (y=%$g6)
+  attr lib_cell = "AOI21"
+  cell $g376 blackbox AOI21 (A=%$g6, B=%$g1, C=%$g5) -> (y=%$g7)
+  attr lib_cell = "INV"
+  cell $g377 not (a=%a[2:2]) -> (y=%$g8)
+  attr lib_cell = "NOR2"
+  cell $g378 blackbox NOR2 (A=%$g8, B=%b[2:2]) -> (y=%$g9)
+  attr lib_cell = "INV"
+  cell $g379 not (a=%b[2:2]) -> (y=%$g10)
+  attr lib_cell = "NOR2"
+  cell $g380 blackbox NOR2 (A=%a[2:2], B=%$g10) -> (y=%$g11)
+  attr lib_cell = "INV"
+  cell $g381 not (a=%$g11) -> (y=%$g12)
+  attr lib_cell = "INV"
+  cell $g382 not (a=%$g7) -> (y=%$g13)
+  attr lib_cell = "AOI21"
+  cell $g383 blackbox AOI21 (A=%$g12, B=%$g13, C=%$g9) -> (y=%$g14)
+  attr lib_cell = "INV"
+  cell $g384 not (a=%a[3:3]) -> (y=%$g15)
+  attr lib_cell = "NOR2"
+  cell $g385 blackbox NOR2 (A=%$g15, B=%b[3:3]) -> (y=%$g16)
+  attr lib_cell = "INV"
+  cell $g386 not (a=%b[3:3]) -> (y=%$g17)
+  attr lib_cell = "NOR2"
+  cell $g387 blackbox NOR2 (A=%a[3:3], B=%$g17) -> (y=%$g18)
+  attr lib_cell = "INV"
+  cell $g388 not (a=%$g18) -> (y=%$g19)
+  attr lib_cell = "INV"
+  cell $g389 not (a=%$g14) -> (y=%$g20)
+  attr lib_cell = "AOI21"
+  cell $g390 blackbox AOI21 (A=%$g19, B=%$g20, C=%$g16) -> (y=%$g21)
+  attr lib_cell = "INV"
+  cell $g391 not (a=%a[4:4]) -> (y=%$g22)
+  attr lib_cell = "NOR2"
+  cell $g392 blackbox NOR2 (A=%$g22, B=%b[4:4]) -> (y=%$g23)
+  attr lib_cell = "INV"
+  cell $g393 not (a=%b[4:4]) -> (y=%$g24)
+  attr lib_cell = "NOR2"
+  cell $g394 blackbox NOR2 (A=%a[4:4], B=%$g24) -> (y=%$g25)
+  attr lib_cell = "INV"
+  cell $g395 not (a=%$g25) -> (y=%$g26)
+  attr lib_cell = "INV"
+  cell $g396 not (a=%$g21) -> (y=%$g27)
+  attr lib_cell = "AOI21"
+  cell $g397 blackbox AOI21 (A=%$g26, B=%$g27, C=%$g23) -> (y=%$g28)
+  attr lib_cell = "INV"
+  cell $g398 not (a=%a[5:5]) -> (y=%$g29)
+  attr lib_cell = "NOR2"
+  cell $g399 blackbox NOR2 (A=%$g29, B=%b[5:5]) -> (y=%$g30)
+  attr lib_cell = "INV"
+  cell $g400 not (a=%b[5:5]) -> (y=%$g31)
+  attr lib_cell = "NOR2"
+  cell $g401 blackbox NOR2 (A=%a[5:5], B=%$g31) -> (y=%$g32)
+  attr lib_cell = "INV"
+  cell $g402 not (a=%$g32) -> (y=%$g33)
+  attr lib_cell = "INV"
+  cell $g403 not (a=%$g28) -> (y=%$g34)
+  attr lib_cell = "AOI21"
+  cell $g404 blackbox AOI21 (A=%$g33, B=%$g34, C=%$g30) -> (y=%$g35)
+  attr lib_cell = "INV"
+  cell $g405 not (a=%a[6:6]) -> (y=%$g36)
+  attr lib_cell = "NOR2"
+  cell $g406 blackbox NOR2 (A=%$g36, B=%b[6:6]) -> (y=%$g37)
+  attr lib_cell = "INV"
+  cell $g407 not (a=%b[6:6]) -> (y=%$g38)
+  attr lib_cell = "NOR2"
+  cell $g408 blackbox NOR2 (A=%a[6:6], B=%$g38) -> (y=%$g39)
+  attr lib_cell = "INV"
+  cell $g409 not (a=%$g39) -> (y=%$g40)
+  attr lib_cell = "INV"
+  cell $g410 not (a=%$g35) -> (y=%$g41)
+  attr lib_cell = "AOI21"
+  cell $g411 blackbox AOI21 (A=%$g40, B=%$g41, C=%$g37) -> (y=%$g42)
+  attr lib_cell = "INV"
+  cell $g412 not (a=%a[7:7]) -> (y=%$g43)
+  attr lib_cell = "NOR2"
+  cell $g413 blackbox NOR2 (A=%$g43, B=%b[7:7]) -> (y=%$g44)
+  attr lib_cell = "INV"
+  cell $g414 not (a=%b[7:7]) -> (y=%$g45)
+  attr lib_cell = "NOR2"
+  cell $g415 blackbox NOR2 (A=%a[7:7], B=%$g45) -> (y=%$g46)
+  attr lib_cell = "INV"
+  cell $g416 not (a=%$g46) -> (y=%$g47)
+  attr lib_cell = "INV"
+  cell $g417 not (a=%$g42) -> (y=%$g48)
+  attr lib_cell = "AOI21"
+  cell $g418 blackbox AOI21 (A=%$g47, B=%$g48, C=%$g44) -> (y=%$g49)
+  attr lib_cell = "INV"
+  cell $g419 not (a=%a[8:8]) -> (y=%$g50)
+  attr lib_cell = "NOR2"
+  cell $g420 blackbox NOR2 (A=%$g50, B=%b[8:8]) -> (y=%$g51)
+  attr lib_cell = "INV"
+  cell $g421 not (a=%b[8:8]) -> (y=%$g52)
+  attr lib_cell = "NOR2"
+  cell $g422 blackbox NOR2 (A=%a[8:8], B=%$g52) -> (y=%$g53)
+  attr lib_cell = "INV"
+  cell $g423 not (a=%$g53) -> (y=%$g54)
+  attr lib_cell = "INV"
+  cell $g424 not (a=%$g49) -> (y=%$g55)
+  attr lib_cell = "AOI21"
+  cell $g425 blackbox AOI21 (A=%$g54, B=%$g55, C=%$g51) -> (y=%$g56)
+  attr lib_cell = "INV"
+  cell $g426 not (a=%a[9:9]) -> (y=%$g57)
+  attr lib_cell = "NOR2"
+  cell $g427 blackbox NOR2 (A=%$g57, B=%b[9:9]) -> (y=%$g58)
+  attr lib_cell = "INV"
+  cell $g428 not (a=%b[9:9]) -> (y=%$g59)
+  attr lib_cell = "NOR2"
+  cell $g429 blackbox NOR2 (A=%a[9:9], B=%$g59) -> (y=%$g60)
+  attr lib_cell = "INV"
+  cell $g430 not (a=%$g60) -> (y=%$g61)
+  attr lib_cell = "INV"
+  cell $g431 not (a=%$g56) -> (y=%$g62)
+  attr lib_cell = "AOI21"
+  cell $g432 blackbox AOI21 (A=%$g61, B=%$g62, C=%$g58) -> (y=%$g63)
+  attr lib_cell = "INV"
+  cell $g433 not (a=%a[10:10]) -> (y=%$g64)
+  attr lib_cell = "NOR2"
+  cell $g434 blackbox NOR2 (A=%$g64, B=%b[10:10]) -> (y=%$g65)
+  attr lib_cell = "INV"
+  cell $g435 not (a=%b[10:10]) -> (y=%$g66)
+  attr lib_cell = "NOR2"
+  cell $g436 blackbox NOR2 (A=%a[10:10], B=%$g66) -> (y=%$g67)
+  attr lib_cell = "INV"
+  cell $g437 not (a=%$g67) -> (y=%$g68)
+  attr lib_cell = "INV"
+  cell $g438 not (a=%$g63) -> (y=%$g69)
+  attr lib_cell = "AOI21"
+  cell $g439 blackbox AOI21 (A=%$g68, B=%$g69, C=%$g65) -> (y=%$g70)
+  attr lib_cell = "INV"
+  cell $g440 not (a=%a[11:11]) -> (y=%$g71)
+  attr lib_cell = "NOR2"
+  cell $g441 blackbox NOR2 (A=%$g71, B=%b[11:11]) -> (y=%$g72)
+  attr lib_cell = "INV"
+  cell $g442 not (a=%b[11:11]) -> (y=%$g73)
+  attr lib_cell = "NOR2"
+  cell $g443 blackbox NOR2 (A=%a[11:11], B=%$g73) -> (y=%$g74)
+  attr lib_cell = "INV"
+  cell $g444 not (a=%$g74) -> (y=%$g75)
+  attr lib_cell = "INV"
+  cell $g445 not (a=%$g70) -> (y=%$g76)
+  attr lib_cell = "AOI21"
+  cell $g446 blackbox AOI21 (A=%$g75, B=%$g76, C=%$g72) -> (y=%$g77)
+  attr lib_cell = "INV"
+  cell $g447 not (a=%a[12:12]) -> (y=%$g78)
+  attr lib_cell = "NOR2"
+  cell $g448 blackbox NOR2 (A=%$g78, B=%b[12:12]) -> (y=%$g79)
+  attr lib_cell = "INV"
+  cell $g449 not (a=%b[12:12]) -> (y=%$g80)
+  attr lib_cell = "NOR2"
+  cell $g450 blackbox NOR2 (A=%a[12:12], B=%$g80) -> (y=%$g81)
+  attr lib_cell = "INV"
+  cell $g451 not (a=%$g81) -> (y=%$g82)
+  attr lib_cell = "INV"
+  cell $g452 not (a=%$g77) -> (y=%$g83)
+  attr lib_cell = "AOI21"
+  cell $g453 blackbox AOI21 (A=%$g82, B=%$g83, C=%$g79) -> (y=%$g84)
+  attr lib_cell = "INV"
+  cell $g454 not (a=%a[13:13]) -> (y=%$g85)
+  attr lib_cell = "NOR2"
+  cell $g455 blackbox NOR2 (A=%$g85, B=%b[13:13]) -> (y=%$g86)
+  attr lib_cell = "INV"
+  cell $g456 not (a=%b[13:13]) -> (y=%$g87)
+  attr lib_cell = "NOR2"
+  cell $g457 blackbox NOR2 (A=%a[13:13], B=%$g87) -> (y=%$g88)
+  attr lib_cell = "INV"
+  cell $g458 not (a=%$g88) -> (y=%$g89)
+  attr lib_cell = "INV"
+  cell $g459 not (a=%$g84) -> (y=%$g90)
+  attr lib_cell = "AOI21"
+  cell $g460 blackbox AOI21 (A=%$g89, B=%$g90, C=%$g86) -> (y=%$g91)
+  attr lib_cell = "INV"
+  cell $g461 not (a=%a[14:14]) -> (y=%$g92)
+  attr lib_cell = "NOR2"
+  cell $g462 blackbox NOR2 (A=%$g92, B=%b[14:14]) -> (y=%$g93)
+  attr lib_cell = "INV"
+  cell $g463 not (a=%b[14:14]) -> (y=%$g94)
+  attr lib_cell = "NOR2"
+  cell $g464 blackbox NOR2 (A=%a[14:14], B=%$g94) -> (y=%$g95)
+  attr lib_cell = "INV"
+  cell $g465 not (a=%$g95) -> (y=%$g96)
+  attr lib_cell = "INV"
+  cell $g466 not (a=%$g91) -> (y=%$g97)
+  attr lib_cell = "AOI21"
+  cell $g467 blackbox AOI21 (A=%$g96, B=%$g97, C=%$g93) -> (y=%$g98)
+  attr lib_cell = "INV"
+  cell $g468 not (a=%a[15:15]) -> (y=%$g99)
+  attr lib_cell = "NOR2"
+  cell $g469 blackbox NOR2 (A=%$g99, B=%b[15:15]) -> (y=%$g100)
+  attr lib_cell = "INV"
+  cell $g470 not (a=%b[15:15]) -> (y=%$g101)
+  attr lib_cell = "NOR2"
+  cell $g471 blackbox NOR2 (A=%a[15:15], B=%$g101) -> (y=%$g102)
+  attr lib_cell = "INV"
+  cell $g472 not (a=%$g102) -> (y=%$g103)
+  attr lib_cell = "INV"
+  cell $g473 not (a=%$g98) -> (y=%$g104)
+  attr lib_cell = "AOI21"
+  cell $g474 blackbox AOI21 (A=%$g103, B=%$g104, C=%$g100) -> (y=%$g105)
+  attr lib_cell = "INV"
+  cell $g475 not (a=%a[16:16]) -> (y=%$g106)
+  attr lib_cell = "NOR2"
+  cell $g476 blackbox NOR2 (A=%$g106, B=%b[16:16]) -> (y=%$g107)
+  attr lib_cell = "INV"
+  cell $g477 not (a=%b[16:16]) -> (y=%$g108)
+  attr lib_cell = "NOR2"
+  cell $g478 blackbox NOR2 (A=%a[16:16], B=%$g108) -> (y=%$g109)
+  attr lib_cell = "INV"
+  cell $g479 not (a=%$g109) -> (y=%$g110)
+  attr lib_cell = "INV"
+  cell $g480 not (a=%$g105) -> (y=%$g111)
+  attr lib_cell = "AOI21"
+  cell $g481 blackbox AOI21 (A=%$g110, B=%$g111, C=%$g107) -> (y=%$g112)
+  attr lib_cell = "INV"
+  cell $g482 not (a=%a[17:17]) -> (y=%$g113)
+  attr lib_cell = "NOR2"
+  cell $g483 blackbox NOR2 (A=%$g113, B=%b[17:17]) -> (y=%$g114)
+  attr lib_cell = "INV"
+  cell $g484 not (a=%b[17:17]) -> (y=%$g115)
+  attr lib_cell = "NOR2"
+  cell $g485 blackbox NOR2 (A=%a[17:17], B=%$g115) -> (y=%$g116)
+  attr lib_cell = "INV"
+  cell $g486 not (a=%$g116) -> (y=%$g117)
+  attr lib_cell = "INV"
+  cell $g487 not (a=%$g112) -> (y=%$g118)
+  attr lib_cell = "AOI21"
+  cell $g488 blackbox AOI21 (A=%$g117, B=%$g118, C=%$g114) -> (y=%$g119)
+  attr lib_cell = "INV"
+  cell $g489 not (a=%a[18:18]) -> (y=%$g120)
+  attr lib_cell = "NOR2"
+  cell $g490 blackbox NOR2 (A=%$g120, B=%b[18:18]) -> (y=%$g121)
+  attr lib_cell = "INV"
+  cell $g491 not (a=%b[18:18]) -> (y=%$g122)
+  attr lib_cell = "NOR2"
+  cell $g492 blackbox NOR2 (A=%a[18:18], B=%$g122) -> (y=%$g123)
+  attr lib_cell = "INV"
+  cell $g493 not (a=%$g123) -> (y=%$g124)
+  attr lib_cell = "INV"
+  cell $g494 not (a=%$g119) -> (y=%$g125)
+  attr lib_cell = "AOI21"
+  cell $g495 blackbox AOI21 (A=%$g124, B=%$g125, C=%$g121) -> (y=%$g126)
+  attr lib_cell = "INV"
+  cell $g496 not (a=%a[19:19]) -> (y=%$g127)
+  attr lib_cell = "NOR2"
+  cell $g497 blackbox NOR2 (A=%$g127, B=%b[19:19]) -> (y=%$g128)
+  attr lib_cell = "INV"
+  cell $g498 not (a=%b[19:19]) -> (y=%$g129)
+  attr lib_cell = "NOR2"
+  cell $g499 blackbox NOR2 (A=%a[19:19], B=%$g129) -> (y=%$g130)
+  attr lib_cell = "INV"
+  cell $g500 not (a=%$g130) -> (y=%$g131)
+  attr lib_cell = "INV"
+  cell $g501 not (a=%$g126) -> (y=%$g132)
+  attr lib_cell = "AOI21"
+  cell $g502 blackbox AOI21 (A=%$g131, B=%$g132, C=%$g128) -> (y=%$g133)
+  attr lib_cell = "INV"
+  cell $g503 not (a=%a[20:20]) -> (y=%$g134)
+  attr lib_cell = "NOR2"
+  cell $g504 blackbox NOR2 (A=%$g134, B=%b[20:20]) -> (y=%$g135)
+  attr lib_cell = "INV"
+  cell $g505 not (a=%b[20:20]) -> (y=%$g136)
+  attr lib_cell = "NOR2"
+  cell $g506 blackbox NOR2 (A=%a[20:20], B=%$g136) -> (y=%$g137)
+  attr lib_cell = "INV"
+  cell $g507 not (a=%$g137) -> (y=%$g138)
+  attr lib_cell = "INV"
+  cell $g508 not (a=%$g133) -> (y=%$g139)
+  attr lib_cell = "AOI21"
+  cell $g509 blackbox AOI21 (A=%$g138, B=%$g139, C=%$g135) -> (y=%$g140)
+  attr lib_cell = "INV"
+  cell $g510 not (a=%a[21:21]) -> (y=%$g141)
+  attr lib_cell = "NOR2"
+  cell $g511 blackbox NOR2 (A=%$g141, B=%b[21:21]) -> (y=%$g142)
+  attr lib_cell = "INV"
+  cell $g512 not (a=%b[21:21]) -> (y=%$g143)
+  attr lib_cell = "NOR2"
+  cell $g513 blackbox NOR2 (A=%a[21:21], B=%$g143) -> (y=%$g144)
+  attr lib_cell = "INV"
+  cell $g514 not (a=%$g144) -> (y=%$g145)
+  attr lib_cell = "INV"
+  cell $g515 not (a=%$g140) -> (y=%$g146)
+  attr lib_cell = "AOI21"
+  cell $g516 blackbox AOI21 (A=%$g145, B=%$g146, C=%$g142) -> (y=%$g147)
+  attr lib_cell = "INV"
+  cell $g517 not (a=%a[22:22]) -> (y=%$g148)
+  attr lib_cell = "NOR2"
+  cell $g518 blackbox NOR2 (A=%$g148, B=%b[22:22]) -> (y=%$g149)
+  attr lib_cell = "INV"
+  cell $g519 not (a=%b[22:22]) -> (y=%$g150)
+  attr lib_cell = "NOR2"
+  cell $g520 blackbox NOR2 (A=%a[22:22], B=%$g150) -> (y=%$g151)
+  attr lib_cell = "INV"
+  cell $g521 not (a=%$g151) -> (y=%$g152)
+  attr lib_cell = "INV"
+  cell $g522 not (a=%$g147) -> (y=%$g153)
+  attr lib_cell = "AOI21"
+  cell $g523 blackbox AOI21 (A=%$g152, B=%$g153, C=%$g149) -> (y=%$g154)
+  attr lib_cell = "INV"
+  cell $g524 not (a=%a[23:23]) -> (y=%$g155)
+  attr lib_cell = "NOR2"
+  cell $g525 blackbox NOR2 (A=%$g155, B=%b[23:23]) -> (y=%$g156)
+  attr lib_cell = "INV"
+  cell $g526 not (a=%b[23:23]) -> (y=%$g157)
+  attr lib_cell = "NOR2"
+  cell $g527 blackbox NOR2 (A=%a[23:23], B=%$g157) -> (y=%$g158)
+  attr lib_cell = "INV"
+  cell $g528 not (a=%$g158) -> (y=%$g159)
+  attr lib_cell = "INV"
+  cell $g529 not (a=%$g154) -> (y=%$g160)
+  attr lib_cell = "AOI21"
+  cell $g530 blackbox AOI21 (A=%$g159, B=%$g160, C=%$g156) -> (y=%$g161)
+  attr lib_cell = "INV"
+  cell $g531 not (a=%a[24:24]) -> (y=%$g162)
+  attr lib_cell = "NOR2"
+  cell $g532 blackbox NOR2 (A=%$g162, B=%b[24:24]) -> (y=%$g163)
+  attr lib_cell = "INV"
+  cell $g533 not (a=%b[24:24]) -> (y=%$g164)
+  attr lib_cell = "NOR2"
+  cell $g534 blackbox NOR2 (A=%a[24:24], B=%$g164) -> (y=%$g165)
+  attr lib_cell = "INV"
+  cell $g535 not (a=%$g165) -> (y=%$g166)
+  attr lib_cell = "INV"
+  cell $g536 not (a=%$g161) -> (y=%$g167)
+  attr lib_cell = "AOI21"
+  cell $g537 blackbox AOI21 (A=%$g166, B=%$g167, C=%$g163) -> (y=%$g168)
+  attr lib_cell = "INV"
+  cell $g538 not (a=%a[25:25]) -> (y=%$g169)
+  attr lib_cell = "NOR2"
+  cell $g539 blackbox NOR2 (A=%$g169, B=%b[25:25]) -> (y=%$g170)
+  attr lib_cell = "INV"
+  cell $g540 not (a=%b[25:25]) -> (y=%$g171)
+  attr lib_cell = "NOR2"
+  cell $g541 blackbox NOR2 (A=%a[25:25], B=%$g171) -> (y=%$g172)
+  attr lib_cell = "INV"
+  cell $g542 not (a=%$g172) -> (y=%$g173)
+  attr lib_cell = "INV"
+  cell $g543 not (a=%$g168) -> (y=%$g174)
+  attr lib_cell = "AOI21"
+  cell $g544 blackbox AOI21 (A=%$g173, B=%$g174, C=%$g170) -> (y=%$g175)
+  attr lib_cell = "INV"
+  cell $g545 not (a=%a[26:26]) -> (y=%$g176)
+  attr lib_cell = "NOR2"
+  cell $g546 blackbox NOR2 (A=%$g176, B=%b[26:26]) -> (y=%$g177)
+  attr lib_cell = "INV"
+  cell $g547 not (a=%b[26:26]) -> (y=%$g178)
+  attr lib_cell = "NOR2"
+  cell $g548 blackbox NOR2 (A=%a[26:26], B=%$g178) -> (y=%$g179)
+  attr lib_cell = "INV"
+  cell $g549 not (a=%$g179) -> (y=%$g180)
+  attr lib_cell = "INV"
+  cell $g550 not (a=%$g175) -> (y=%$g181)
+  attr lib_cell = "AOI21"
+  cell $g551 blackbox AOI21 (A=%$g180, B=%$g181, C=%$g177) -> (y=%$g182)
+  attr lib_cell = "INV"
+  cell $g552 not (a=%a[27:27]) -> (y=%$g183)
+  attr lib_cell = "NOR2"
+  cell $g553 blackbox NOR2 (A=%$g183, B=%b[27:27]) -> (y=%$g184)
+  attr lib_cell = "INV"
+  cell $g554 not (a=%b[27:27]) -> (y=%$g185)
+  attr lib_cell = "NOR2"
+  cell $g555 blackbox NOR2 (A=%a[27:27], B=%$g185) -> (y=%$g186)
+  attr lib_cell = "INV"
+  cell $g556 not (a=%$g186) -> (y=%$g187)
+  attr lib_cell = "INV"
+  cell $g557 not (a=%$g182) -> (y=%$g188)
+  attr lib_cell = "AOI21"
+  cell $g558 blackbox AOI21 (A=%$g187, B=%$g188, C=%$g184) -> (y=%$g189)
+  attr lib_cell = "INV"
+  cell $g559 not (a=%a[28:28]) -> (y=%$g190)
+  attr lib_cell = "NOR2"
+  cell $g560 blackbox NOR2 (A=%$g190, B=%b[28:28]) -> (y=%$g191)
+  attr lib_cell = "INV"
+  cell $g561 not (a=%b[28:28]) -> (y=%$g192)
+  attr lib_cell = "NOR2"
+  cell $g562 blackbox NOR2 (A=%a[28:28], B=%$g192) -> (y=%$g193)
+  attr lib_cell = "INV"
+  cell $g563 not (a=%$g193) -> (y=%$g194)
+  attr lib_cell = "INV"
+  cell $g564 not (a=%$g189) -> (y=%$g195)
+  attr lib_cell = "AOI21"
+  cell $g565 blackbox AOI21 (A=%$g194, B=%$g195, C=%$g191) -> (y=%$g196)
+  attr lib_cell = "INV"
+  cell $g566 not (a=%a[29:29]) -> (y=%$g197)
+  attr lib_cell = "NOR2"
+  cell $g567 blackbox NOR2 (A=%$g197, B=%b[29:29]) -> (y=%$g198)
+  attr lib_cell = "INV"
+  cell $g568 not (a=%b[29:29]) -> (y=%$g199)
+  attr lib_cell = "NOR2"
+  cell $g569 blackbox NOR2 (A=%a[29:29], B=%$g199) -> (y=%$g200)
+  attr lib_cell = "INV"
+  cell $g570 not (a=%$g200) -> (y=%$g201)
+  attr lib_cell = "INV"
+  cell $g571 not (a=%$g196) -> (y=%$g202)
+  attr lib_cell = "AOI21"
+  cell $g572 blackbox AOI21 (A=%$g201, B=%$g202, C=%$g198) -> (y=%$g203)
+  attr lib_cell = "INV"
+  cell $g573 not (a=%a[30:30]) -> (y=%$g204)
+  attr lib_cell = "NOR2"
+  cell $g574 blackbox NOR2 (A=%$g204, B=%b[30:30]) -> (y=%$g205)
+  attr lib_cell = "INV"
+  cell $g575 not (a=%b[30:30]) -> (y=%$g206)
+  attr lib_cell = "NOR2"
+  cell $g576 blackbox NOR2 (A=%a[30:30], B=%$g206) -> (y=%$g207)
+  attr lib_cell = "INV"
+  cell $g577 not (a=%$g207) -> (y=%$g208)
+  attr lib_cell = "INV"
+  cell $g578 not (a=%$g203) -> (y=%$g209)
+  attr lib_cell = "AOI21"
+  cell $g579 blackbox AOI21 (A=%$g208, B=%$g209, C=%$g205) -> (y=%$g210)
+  attr lib_cell = "INV"
+  cell $g580 not (a=%a[31:31]) -> (y=%$g211)
+  attr lib_cell = "NOR2"
+  cell $g581 blackbox NOR2 (A=%$g211, B=%b[31:31]) -> (y=%$g212)
+  attr lib_cell = "INV"
+  cell $g582 not (a=%b[31:31]) -> (y=%$g213)
+  attr lib_cell = "NOR2"
+  cell $g583 blackbox NOR2 (A=%a[31:31], B=%$g213) -> (y=%$g214)
+  attr lib_cell = "INV"
+  cell $g584 not (a=%$g212) -> (y=%$g215)
+  attr lib_cell = "OAI21"
+  cell $g585 blackbox OAI21 (A=%$g214, B=%$g210, C=%$g215) -> (y=%gt)
+  attr lib_cell = "XNOR2"
+  cell $g586 blackbox XNOR2 (A=%a[0:0], B=%b[0:0]) -> (y=%$g216)
+  attr lib_cell = "XNOR2"
+  cell $g587 blackbox XNOR2 (A=%a[1:1], B=%b[1:1]) -> (y=%$g217)
+  attr lib_cell = "AND2"
+  cell $g588 and (a=%$g217, b=%$g216) -> (y=%$g218)
+  attr lib_cell = "XNOR2"
+  cell $g589 blackbox XNOR2 (A=%a[2:2], B=%b[2:2]) -> (y=%$g219)
+  attr lib_cell = "XNOR2"
+  cell $g590 blackbox XNOR2 (A=%a[3:3], B=%b[3:3]) -> (y=%$g220)
+  attr lib_cell = "AND2"
+  cell $g591 and (a=%$g220, b=%$g219) -> (y=%$g221)
+  attr lib_cell = "AND2"
+  cell $g592 and (a=%$g221, b=%$g218) -> (y=%$g222)
+  attr lib_cell = "XNOR2"
+  cell $g593 blackbox XNOR2 (A=%a[4:4], B=%b[4:4]) -> (y=%$g223)
+  attr lib_cell = "XNOR2"
+  cell $g594 blackbox XNOR2 (A=%a[5:5], B=%b[5:5]) -> (y=%$g224)
+  attr lib_cell = "AND2"
+  cell $g595 and (a=%$g224, b=%$g223) -> (y=%$g225)
+  attr lib_cell = "XNOR2"
+  cell $g596 blackbox XNOR2 (A=%a[6:6], B=%b[6:6]) -> (y=%$g226)
+  attr lib_cell = "XNOR2"
+  cell $g597 blackbox XNOR2 (A=%a[7:7], B=%b[7:7]) -> (y=%$g227)
+  attr lib_cell = "AND2"
+  cell $g598 and (a=%$g227, b=%$g226) -> (y=%$g228)
+  attr lib_cell = "AND2"
+  cell $g599 and (a=%$g228, b=%$g225) -> (y=%$g229)
+  attr lib_cell = "AND2"
+  cell $g600 and (a=%$g229, b=%$g222) -> (y=%$g230)
+  attr lib_cell = "XNOR2"
+  cell $g601 blackbox XNOR2 (A=%a[8:8], B=%b[8:8]) -> (y=%$g231)
+  attr lib_cell = "XNOR2"
+  cell $g602 blackbox XNOR2 (A=%a[9:9], B=%b[9:9]) -> (y=%$g232)
+  attr lib_cell = "AND2"
+  cell $g603 and (a=%$g232, b=%$g231) -> (y=%$g233)
+  attr lib_cell = "XNOR2"
+  cell $g604 blackbox XNOR2 (A=%a[10:10], B=%b[10:10]) -> (y=%$g234)
+  attr lib_cell = "XNOR2"
+  cell $g605 blackbox XNOR2 (A=%a[11:11], B=%b[11:11]) -> (y=%$g235)
+  attr lib_cell = "AND2"
+  cell $g606 and (a=%$g235, b=%$g234) -> (y=%$g236)
+  attr lib_cell = "AND2"
+  cell $g607 and (a=%$g236, b=%$g233) -> (y=%$g237)
+  attr lib_cell = "XNOR2"
+  cell $g608 blackbox XNOR2 (A=%a[12:12], B=%b[12:12]) -> (y=%$g238)
+  attr lib_cell = "XNOR2"
+  cell $g609 blackbox XNOR2 (A=%a[13:13], B=%b[13:13]) -> (y=%$g239)
+  attr lib_cell = "AND2"
+  cell $g610 and (a=%$g239, b=%$g238) -> (y=%$g240)
+  attr lib_cell = "XNOR2"
+  cell $g611 blackbox XNOR2 (A=%a[14:14], B=%b[14:14]) -> (y=%$g241)
+  attr lib_cell = "XNOR2"
+  cell $g612 blackbox XNOR2 (A=%a[15:15], B=%b[15:15]) -> (y=%$g242)
+  attr lib_cell = "AND2"
+  cell $g613 and (a=%$g242, b=%$g241) -> (y=%$g243)
+  attr lib_cell = "AND2"
+  cell $g614 and (a=%$g243, b=%$g240) -> (y=%$g244)
+  attr lib_cell = "AND2"
+  cell $g615 and (a=%$g244, b=%$g237) -> (y=%$g245)
+  attr lib_cell = "AND2"
+  cell $g616 and (a=%$g245, b=%$g230) -> (y=%$g246)
+  attr lib_cell = "XNOR2"
+  cell $g617 blackbox XNOR2 (A=%a[16:16], B=%b[16:16]) -> (y=%$g247)
+  attr lib_cell = "XNOR2"
+  cell $g618 blackbox XNOR2 (A=%a[17:17], B=%b[17:17]) -> (y=%$g248)
+  attr lib_cell = "AND2"
+  cell $g619 and (a=%$g248, b=%$g247) -> (y=%$g249)
+  attr lib_cell = "XNOR2"
+  cell $g620 blackbox XNOR2 (A=%a[18:18], B=%b[18:18]) -> (y=%$g250)
+  attr lib_cell = "XNOR2"
+  cell $g621 blackbox XNOR2 (A=%a[19:19], B=%b[19:19]) -> (y=%$g251)
+  attr lib_cell = "AND2"
+  cell $g622 and (a=%$g251, b=%$g250) -> (y=%$g252)
+  attr lib_cell = "AND2"
+  cell $g623 and (a=%$g252, b=%$g249) -> (y=%$g253)
+  attr lib_cell = "XNOR2"
+  cell $g624 blackbox XNOR2 (A=%a[20:20], B=%b[20:20]) -> (y=%$g254)
+  attr lib_cell = "XNOR2"
+  cell $g625 blackbox XNOR2 (A=%a[21:21], B=%b[21:21]) -> (y=%$g255)
+  attr lib_cell = "AND2"
+  cell $g626 and (a=%$g255, b=%$g254) -> (y=%$g256)
+  attr lib_cell = "XNOR2"
+  cell $g627 blackbox XNOR2 (A=%a[22:22], B=%b[22:22]) -> (y=%$g257)
+  attr lib_cell = "XNOR2"
+  cell $g628 blackbox XNOR2 (A=%a[23:23], B=%b[23:23]) -> (y=%$g258)
+  attr lib_cell = "AND2"
+  cell $g629 and (a=%$g258, b=%$g257) -> (y=%$g259)
+  attr lib_cell = "AND2"
+  cell $g630 and (a=%$g259, b=%$g256) -> (y=%$g260)
+  attr lib_cell = "AND2"
+  cell $g631 and (a=%$g260, b=%$g253) -> (y=%$g261)
+  attr lib_cell = "XNOR2"
+  cell $g632 blackbox XNOR2 (A=%a[24:24], B=%b[24:24]) -> (y=%$g262)
+  attr lib_cell = "XNOR2"
+  cell $g633 blackbox XNOR2 (A=%a[25:25], B=%b[25:25]) -> (y=%$g263)
+  attr lib_cell = "AND2"
+  cell $g634 and (a=%$g263, b=%$g262) -> (y=%$g264)
+  attr lib_cell = "XNOR2"
+  cell $g635 blackbox XNOR2 (A=%a[26:26], B=%b[26:26]) -> (y=%$g265)
+  attr lib_cell = "XNOR2"
+  cell $g636 blackbox XNOR2 (A=%a[27:27], B=%b[27:27]) -> (y=%$g266)
+  attr lib_cell = "AND2"
+  cell $g637 and (a=%$g266, b=%$g265) -> (y=%$g267)
+  attr lib_cell = "AND2"
+  cell $g638 and (a=%$g267, b=%$g264) -> (y=%$g268)
+  attr lib_cell = "XNOR2"
+  cell $g639 blackbox XNOR2 (A=%a[28:28], B=%b[28:28]) -> (y=%$g269)
+  attr lib_cell = "XNOR2"
+  cell $g640 blackbox XNOR2 (A=%a[29:29], B=%b[29:29]) -> (y=%$g270)
+  attr lib_cell = "AND2"
+  cell $g641 and (a=%$g270, b=%$g269) -> (y=%$g271)
+  attr lib_cell = "XNOR2"
+  cell $g642 blackbox XNOR2 (A=%a[30:30], B=%b[30:30]) -> (y=%$g272)
+  attr lib_cell = "XNOR2"
+  cell $g643 blackbox XNOR2 (A=%a[31:31], B=%b[31:31]) -> (y=%$g273)
+  attr lib_cell = "AND2"
+  cell $g644 and (a=%$g273, b=%$g272) -> (y=%$g274)
+  attr lib_cell = "AND2"
+  cell $g645 and (a=%$g274, b=%$g271) -> (y=%$g275)
+  attr lib_cell = "AND2"
+  cell $g646 and (a=%$g275, b=%$g268) -> (y=%$g276)
+  attr lib_cell = "AND2"
+  cell $g647 and (a=%$g276, b=%$g261) -> (y=%$g277)
+  attr lib_cell = "AND2"
+  cell $g648 and (a=%$g277, b=%$g246) -> (y=%eq)
+  attr lib_cell = "NOR3"
+  cell $g649 blackbox NOR3 (A=%$g11, B=%$g9, C=%$g5) -> (y=%$g278)
+  attr lib_cell = "INV"
+  cell $g650 not (a=%a[0:0]) -> (y=%$g279)
+  attr lib_cell = "INV"
+  cell $g651 not (a=%a[1:1]) -> (y=%$g280)
+  attr lib_cell = "AOI22"
+  cell $g652 blackbox AOI22 (A=%$g279, B=%b[0:0], C=%$g280, D=%b[1:1]) -> (y=%$g281)
+  attr lib_cell = "INV"
+  cell $g653 not (a=%$g281) -> (y=%$g282)
+  attr lib_cell = "AOI21"
+  cell $g654 blackbox AOI21 (A=%$g282, B=%$g278, C=%$g11) -> (y=%$g283)
+  attr lib_cell = "INV"
+  cell $g655 not (a=%$g16) -> (y=%$g284)
+  attr lib_cell = "INV"
+  cell $g656 not (a=%$g283) -> (y=%$g285)
+  attr lib_cell = "AOI21"
+  cell $g657 blackbox AOI21 (A=%$g284, B=%$g285, C=%$g18) -> (y=%$g286)
+  attr lib_cell = "INV"
+  cell $g658 not (a=%$g23) -> (y=%$g287)
+  attr lib_cell = "INV"
+  cell $g659 not (a=%$g286) -> (y=%$g288)
+  attr lib_cell = "AOI21"
+  cell $g660 blackbox AOI21 (A=%$g287, B=%$g288, C=%$g25) -> (y=%$g289)
+  attr lib_cell = "INV"
+  cell $g661 not (a=%$g30) -> (y=%$g290)
+  attr lib_cell = "INV"
+  cell $g662 not (a=%$g289) -> (y=%$g291)
+  attr lib_cell = "AOI21"
+  cell $g663 blackbox AOI21 (A=%$g290, B=%$g291, C=%$g32) -> (y=%$g292)
+  attr lib_cell = "INV"
+  cell $g664 not (a=%$g37) -> (y=%$g293)
+  attr lib_cell = "INV"
+  cell $g665 not (a=%$g292) -> (y=%$g294)
+  attr lib_cell = "AOI21"
+  cell $g666 blackbox AOI21 (A=%$g293, B=%$g294, C=%$g39) -> (y=%$g295)
+  attr lib_cell = "INV"
+  cell $g667 not (a=%$g44) -> (y=%$g296)
+  attr lib_cell = "INV"
+  cell $g668 not (a=%$g295) -> (y=%$g297)
+  attr lib_cell = "AOI21"
+  cell $g669 blackbox AOI21 (A=%$g296, B=%$g297, C=%$g46) -> (y=%$g298)
+  attr lib_cell = "INV"
+  cell $g670 not (a=%$g51) -> (y=%$g299)
+  attr lib_cell = "INV"
+  cell $g671 not (a=%$g298) -> (y=%$g300)
+  attr lib_cell = "AOI21"
+  cell $g672 blackbox AOI21 (A=%$g299, B=%$g300, C=%$g53) -> (y=%$g301)
+  attr lib_cell = "INV"
+  cell $g673 not (a=%$g58) -> (y=%$g302)
+  attr lib_cell = "INV"
+  cell $g674 not (a=%$g301) -> (y=%$g303)
+  attr lib_cell = "AOI21"
+  cell $g675 blackbox AOI21 (A=%$g302, B=%$g303, C=%$g60) -> (y=%$g304)
+  attr lib_cell = "INV"
+  cell $g676 not (a=%$g65) -> (y=%$g305)
+  attr lib_cell = "INV"
+  cell $g677 not (a=%$g304) -> (y=%$g306)
+  attr lib_cell = "AOI21"
+  cell $g678 blackbox AOI21 (A=%$g305, B=%$g306, C=%$g67) -> (y=%$g307)
+  attr lib_cell = "INV"
+  cell $g679 not (a=%$g72) -> (y=%$g308)
+  attr lib_cell = "INV"
+  cell $g680 not (a=%$g307) -> (y=%$g309)
+  attr lib_cell = "AOI21"
+  cell $g681 blackbox AOI21 (A=%$g308, B=%$g309, C=%$g74) -> (y=%$g310)
+  attr lib_cell = "INV"
+  cell $g682 not (a=%$g79) -> (y=%$g311)
+  attr lib_cell = "INV"
+  cell $g683 not (a=%$g310) -> (y=%$g312)
+  attr lib_cell = "AOI21"
+  cell $g684 blackbox AOI21 (A=%$g311, B=%$g312, C=%$g81) -> (y=%$g313)
+  attr lib_cell = "INV"
+  cell $g685 not (a=%$g86) -> (y=%$g314)
+  attr lib_cell = "INV"
+  cell $g686 not (a=%$g313) -> (y=%$g315)
+  attr lib_cell = "AOI21"
+  cell $g687 blackbox AOI21 (A=%$g314, B=%$g315, C=%$g88) -> (y=%$g316)
+  attr lib_cell = "INV"
+  cell $g688 not (a=%$g93) -> (y=%$g317)
+  attr lib_cell = "INV"
+  cell $g689 not (a=%$g316) -> (y=%$g318)
+  attr lib_cell = "AOI21"
+  cell $g690 blackbox AOI21 (A=%$g317, B=%$g318, C=%$g95) -> (y=%$g319)
+  attr lib_cell = "INV"
+  cell $g691 not (a=%$g100) -> (y=%$g320)
+  attr lib_cell = "INV"
+  cell $g692 not (a=%$g319) -> (y=%$g321)
+  attr lib_cell = "AOI21"
+  cell $g693 blackbox AOI21 (A=%$g320, B=%$g321, C=%$g102) -> (y=%$g322)
+  attr lib_cell = "INV"
+  cell $g694 not (a=%$g107) -> (y=%$g323)
+  attr lib_cell = "INV"
+  cell $g695 not (a=%$g322) -> (y=%$g324)
+  attr lib_cell = "AOI21"
+  cell $g696 blackbox AOI21 (A=%$g323, B=%$g324, C=%$g109) -> (y=%$g325)
+  attr lib_cell = "INV"
+  cell $g697 not (a=%$g114) -> (y=%$g326)
+  attr lib_cell = "INV"
+  cell $g698 not (a=%$g325) -> (y=%$g327)
+  attr lib_cell = "AOI21"
+  cell $g699 blackbox AOI21 (A=%$g326, B=%$g327, C=%$g116) -> (y=%$g328)
+  attr lib_cell = "INV"
+  cell $g700 not (a=%$g121) -> (y=%$g329)
+  attr lib_cell = "INV"
+  cell $g701 not (a=%$g328) -> (y=%$g330)
+  attr lib_cell = "AOI21"
+  cell $g702 blackbox AOI21 (A=%$g329, B=%$g330, C=%$g123) -> (y=%$g331)
+  attr lib_cell = "INV"
+  cell $g703 not (a=%$g128) -> (y=%$g332)
+  attr lib_cell = "INV"
+  cell $g704 not (a=%$g331) -> (y=%$g333)
+  attr lib_cell = "AOI21"
+  cell $g705 blackbox AOI21 (A=%$g332, B=%$g333, C=%$g130) -> (y=%$g334)
+  attr lib_cell = "INV"
+  cell $g706 not (a=%$g135) -> (y=%$g335)
+  attr lib_cell = "INV"
+  cell $g707 not (a=%$g334) -> (y=%$g336)
+  attr lib_cell = "AOI21"
+  cell $g708 blackbox AOI21 (A=%$g335, B=%$g336, C=%$g137) -> (y=%$g337)
+  attr lib_cell = "INV"
+  cell $g709 not (a=%$g142) -> (y=%$g338)
+  attr lib_cell = "INV"
+  cell $g710 not (a=%$g337) -> (y=%$g339)
+  attr lib_cell = "AOI21"
+  cell $g711 blackbox AOI21 (A=%$g338, B=%$g339, C=%$g144) -> (y=%$g340)
+  attr lib_cell = "INV"
+  cell $g712 not (a=%$g149) -> (y=%$g341)
+  attr lib_cell = "INV"
+  cell $g713 not (a=%$g340) -> (y=%$g342)
+  attr lib_cell = "AOI21"
+  cell $g714 blackbox AOI21 (A=%$g341, B=%$g342, C=%$g151) -> (y=%$g343)
+  attr lib_cell = "INV"
+  cell $g715 not (a=%$g156) -> (y=%$g344)
+  attr lib_cell = "INV"
+  cell $g716 not (a=%$g343) -> (y=%$g345)
+  attr lib_cell = "AOI21"
+  cell $g717 blackbox AOI21 (A=%$g344, B=%$g345, C=%$g158) -> (y=%$g346)
+  attr lib_cell = "INV"
+  cell $g718 not (a=%$g163) -> (y=%$g347)
+  attr lib_cell = "INV"
+  cell $g719 not (a=%$g346) -> (y=%$g348)
+  attr lib_cell = "AOI21"
+  cell $g720 blackbox AOI21 (A=%$g347, B=%$g348, C=%$g165) -> (y=%$g349)
+  attr lib_cell = "INV"
+  cell $g721 not (a=%$g170) -> (y=%$g350)
+  attr lib_cell = "INV"
+  cell $g722 not (a=%$g349) -> (y=%$g351)
+  attr lib_cell = "AOI21"
+  cell $g723 blackbox AOI21 (A=%$g350, B=%$g351, C=%$g172) -> (y=%$g352)
+  attr lib_cell = "INV"
+  cell $g724 not (a=%$g177) -> (y=%$g353)
+  attr lib_cell = "INV"
+  cell $g725 not (a=%$g352) -> (y=%$g354)
+  attr lib_cell = "AOI21"
+  cell $g726 blackbox AOI21 (A=%$g353, B=%$g354, C=%$g179) -> (y=%$g355)
+  attr lib_cell = "INV"
+  cell $g727 not (a=%$g184) -> (y=%$g356)
+  attr lib_cell = "INV"
+  cell $g728 not (a=%$g355) -> (y=%$g357)
+  attr lib_cell = "AOI21"
+  cell $g729 blackbox AOI21 (A=%$g356, B=%$g357, C=%$g186) -> (y=%$g358)
+  attr lib_cell = "INV"
+  cell $g730 not (a=%$g191) -> (y=%$g359)
+  attr lib_cell = "INV"
+  cell $g731 not (a=%$g358) -> (y=%$g360)
+  attr lib_cell = "AOI21"
+  cell $g732 blackbox AOI21 (A=%$g359, B=%$g360, C=%$g193) -> (y=%$g361)
+  attr lib_cell = "INV"
+  cell $g733 not (a=%$g198) -> (y=%$g362)
+  attr lib_cell = "INV"
+  cell $g734 not (a=%$g361) -> (y=%$g363)
+  attr lib_cell = "AOI21"
+  cell $g735 blackbox AOI21 (A=%$g362, B=%$g363, C=%$g200) -> (y=%$g364)
+  attr lib_cell = "INV"
+  cell $g736 not (a=%$g205) -> (y=%$g365)
+  attr lib_cell = "INV"
+  cell $g737 not (a=%$g364) -> (y=%$g366)
+  attr lib_cell = "AOI21"
+  cell $g738 blackbox AOI21 (A=%$g365, B=%$g366, C=%$g207) -> (y=%$g367)
+  attr lib_cell = "INV"
+  cell $g739 not (a=%$g214) -> (y=%$g368)
+  attr lib_cell = "OAI21"
+  cell $g740 blackbox OAI21 (A=%$g212, B=%$g367, C=%$g368) -> (y=%lt)
+end

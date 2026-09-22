@@ -1,0 +1,16 @@
+top adder8
+
+module adder8
+  net %a u8 wire
+  net %b u8 wire
+  net %cin u1 wire
+  net %sum u8 wire
+  net %cout u1 wire
+  port a in %a
+  port b in %b
+  port cin in %cin
+  port sum out %sum
+  port cout out %cout
+  assign %sum = add(add(resize(%a, u9), resize(%b, u9)), resize(%cin, u9))[7:0]
+  assign %cout = add(add(resize(%a, u9), resize(%b, u9)), resize(%cin, u9))[8:8]
+end
