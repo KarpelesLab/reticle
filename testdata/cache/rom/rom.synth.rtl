@@ -1,0 +1,13 @@
+top rom
+
+module rom
+  net %clk u1 wire
+  net %addr u3 wire
+  net %data u8 wire
+  port clk in %clk
+  port addr in %addr
+  port data out %data
+  memory @mem 8 x u8
+    init 8'd17 8'd34 8'd51 8'd68 8'd85 8'd102 8'd119 8'd136
+  cell mem$rd memrd @mem clocked (addr=%addr, clk=%clk, en=1'd1) -> (data=%data)
+end

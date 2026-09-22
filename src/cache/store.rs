@@ -14,13 +14,15 @@
 //! eye:
 //!
 //! ```text
-//! reticle-cache 1
+//! reticle-cache 2
 //! key 4f1c...c3
-//! producer elab:verilog
+//! producer synth
 //! created 1758499200
 //! used 7
 //! size 412
 //! content 9a02...1b
+//! input 5e0d...77 prog.hex
+//! input missing boot.hex
 //!
 //! module counter
 //!   ...
@@ -31,6 +33,12 @@
 //! the library has no clock of its own), its place in the least-recently-
 //! used order (`used`) and its size. `key` and `content` are what
 //! [`Cache::verify`] re-checks.
+//!
+//! The `input` lines, zero or more and sorted by path, are the files the
+//! work read while it ran ([`super::inputs`]): the digest of what it found,
+//! or `missing`, then the path. A key cannot cover them, because they are
+//! only known once the work has run, so [`Cache::get_valid`] checks them
+//! on every lookup instead.
 //!
 //! # `used` is a logical clock, not a time
 //!
@@ -61,6 +69,7 @@ use std::fmt;
 use std::fmt::Write as _;
 
 use super::hash::{Hash128, hash128};
+use super::inputs::FileInput;
 use super::key::{CacheKey, FORMAT};
 
 /// A place a [`Cache`] keeps bytes.
@@ -155,6 +164,9 @@ pub struct Entry {
     pub created: u64,
     /// Position in the least-recently-used order; see the module docs.
     pub used: u64,
+    /// The files the work read while producing the artefact, sorted by
+    /// path; see [`super::inputs`]. Empty for work that reads no files.
+    pub inputs: Vec<FileInput>,
     /// The artefact itself.
     pub content: Vec<u8>,
 }
@@ -176,8 +188,20 @@ impl Entry {
             producer,
             created: 0,
             used: 0,
+            inputs: Vec::new(),
             content,
         }
+    }
+
+    /// The same entry, recording that the work read `inputs`.
+    ///
+    /// They are sorted by path and repeated paths are dropped, so the
+    /// header is the same however the work happened to order its reads.
+    pub fn with_inputs(mut self, mut inputs: Vec<FileInput>) -> Entry {
+        inputs.sort();
+        inputs.dedup_by(|a, b| a.path == b.path);
+        self.inputs = inputs;
+        self
     }
 
     /// The artefact's size in bytes.
@@ -208,6 +232,9 @@ impl Entry {
         let _ = writeln!(header, "used {}", self.used);
         let _ = writeln!(header, "size {}", self.content.len());
         let _ = writeln!(header, "content {}", self.content_hash());
+        for input in &self.inputs {
+            let _ = writeln!(header, "input {input}");
+        }
         header.push('\n');
         let mut out = header.into_bytes();
         out.extend_from_slice(&self.content);
@@ -257,8 +284,10 @@ impl Entry {
             .map_err(|_| EntryError::BadField("size"))?;
         let digest = field("content")?;
         let digest = Hash128::from_hex(&digest).ok_or(EntryError::BadField("content"))?;
-        if lines.next().is_some() {
-            return Err(EntryError::NoHeader);
+        let mut inputs = Vec::new();
+        for line in lines {
+            let input = line.strip_prefix("input ").ok_or(EntryError::NoHeader)?;
+            inputs.push(FileInput::decode(input).ok_or(EntryError::BadField("input"))?);
         }
 
         if size != content.len() {
@@ -272,6 +301,7 @@ impl Entry {
             producer,
             created,
             used,
+            inputs,
             content,
         };
         if entry.content_hash() != digest {
@@ -511,6 +541,22 @@ impl<'a> Cache<'a> {
     /// dropped: a corrupt entry must never be served, and leaving it in
     /// place would make every build miss on it forever.
     pub fn get(&mut self, key: CacheKey) -> Option<Entry> {
+        self.get_valid(key, |_| true)
+    }
+
+    /// Looks `key` up like [`Cache::get`], but counts it a hit only when
+    /// `valid` accepts the entry.
+    ///
+    /// This is how the recorded inputs of an entry
+    /// ([`Entry::inputs`], [`super::inputs::still_valid`]) are checked: an
+    /// entry that `valid` rejects is counted as a miss and not served. It
+    /// is left in the store, since the work that follows a miss writes a
+    /// fresh entry under the same key.
+    pub fn get_valid(
+        &mut self,
+        key: CacheKey,
+        valid: impl FnOnce(&Entry) -> bool,
+    ) -> Option<Entry> {
         let Some(bytes) = self.storage.get(key) else {
             self.misses += 1;
             self.index.remove(&key);
@@ -524,6 +570,10 @@ impl<'a> Cache<'a> {
                 return None;
             }
         };
+        if !valid(&entry) {
+            self.misses += 1;
+            return None;
+        }
         self.hits += 1;
         entry.used = self.next_stamp();
         if let Some(meta) = self.index.get_mut(&key) {
@@ -699,9 +749,56 @@ mod tests {
         assert_eq!(Entry::decode(&bytes), Ok(entry.clone()));
         // The header is text, and the artefact follows it verbatim.
         let text = String::from_utf8(bytes).unwrap();
-        assert!(text.starts_with("reticle-cache 1\nkey "));
+        assert!(text.starts_with("reticle-cache 2\nkey "));
         assert!(text.ends_with("\n\nmodule m\nend\n"));
         assert_eq!(entry.text(), Some("module m\nend\n"));
+    }
+
+    #[test]
+    fn recorded_inputs_round_trip_sorted_in_the_header() {
+        use crate::cache::inputs::FileInput;
+        let entry = Entry::new(key(1), "synth", b"module m\nend\n".to_vec()).with_inputs(vec![
+            FileInput {
+                path: "b.hex".to_owned(),
+                digest: None,
+            },
+            FileInput {
+                path: "a.hex".to_owned(),
+                digest: Some(hash128(b"00\n")),
+            },
+            FileInput {
+                path: "a.hex".to_owned(),
+                digest: Some(hash128(b"00\n")),
+            },
+        ]);
+        assert_eq!(entry.inputs.len(), 2, "a repeated path is kept once");
+        let bytes = entry.encode();
+        assert_eq!(Entry::decode(&bytes), Ok(entry.clone()));
+        let text = String::from_utf8(bytes).unwrap();
+        let header = text.split("\n\n").next().unwrap();
+        let inputs: Vec<&str> = header.lines().filter(|l| l.starts_with("input ")).collect();
+        assert_eq!(inputs.len(), 2);
+        assert!(inputs[0].ends_with(" a.hex"), "{header}");
+        assert_eq!(inputs[1], "input missing b.hex");
+
+        // A damaged input line is an unreadable entry, not a lost input.
+        let bad = text.replacen("input missing", "input nonsense", 1);
+        assert_eq!(
+            Entry::decode(bad.as_bytes()),
+            Err(EntryError::BadField("input"))
+        );
+    }
+
+    #[test]
+    fn a_rejected_entry_is_a_miss_and_stays_in_the_store() {
+        let mut storage = MemoryStorage::new();
+        let mut cache = Cache::new(&mut storage);
+        cache.insert(key(1), "synth", 0, b"x".to_vec());
+        assert!(cache.get_valid(key(1), |_| false).is_none());
+        assert_eq!((cache.hits(), cache.misses()), (0, 1));
+        assert!(cache.peek(key(1)).is_some());
+        assert!(cache.get_valid(key(1), |e| e.content == b"x").is_some());
+        assert_eq!((cache.hits(), cache.misses()), (1, 1));
     }
 
     #[test]
@@ -740,7 +837,7 @@ mod tests {
 
         // A header from another format version.
         let other = String::from_utf8(good.clone()).unwrap().replacen(
-            "reticle-cache 1",
+            "reticle-cache 2",
             "reticle-cache 99",
             1,
         );

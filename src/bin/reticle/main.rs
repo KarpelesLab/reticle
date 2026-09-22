@@ -761,7 +761,11 @@ fn cache_cmd(args: &Args) -> Result<Outcome, ArgError> {
         .duration_since(std::time::UNIX_EPOCH)
         .map_or(0, |d| d.as_secs());
     if args.flag("synth") {
-        options.synth = Some(reticle::synth::SynthOptions::default());
+        // `$readmemh` reads through this, like `reticle sim` does. The
+        // cache records every file synthesis reads with a digest of its
+        // contents and re-checks them on each hit, so editing only a
+        // `.hex` file still rebuilds the netlist.
+        options.synth = Some(synth_options(paths));
     }
 
     let mut diags = Diagnostics::new();

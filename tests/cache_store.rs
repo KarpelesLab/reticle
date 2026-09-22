@@ -102,7 +102,7 @@ fn entries_survive_the_process_that_wrote_them() {
 
     // And the file on disk is readable text, header first.
     let raw = fs::read_to_string(dir.join(format!("{}.entry", key(1).to_hex()))).unwrap();
-    assert!(raw.starts_with("reticle-cache 1\n"), "{raw}");
+    assert!(raw.starts_with("reticle-cache 2\n"), "{raw}");
     assert!(raw.contains("producer elab:verilog\n"), "{raw}");
     assert!(raw.ends_with("\n\nmodule m\nend\n"), "{raw}");
 }
@@ -305,5 +305,62 @@ mod cli {
         assert!(stdout.contains("removed"), "{stdout}");
         let (_, stdout, _) = reticle(&dir, &["cache", "--verify"]);
         assert!(stdout.starts_with("0 entries"), "{stdout}");
+    }
+
+    /// `reticle cache --synth` gives synthesis the files next to the
+    /// sources, and a `.hex` edit alone rebuilds the netlist.
+    #[test]
+    fn editing_only_the_hex_file_rebuilds_the_rom() {
+        let dir = scratch("cache-cli-rom");
+        let rtl = dir.join("rtl");
+        fs::create_dir_all(&rtl).unwrap();
+        let from = Path::new(env!("CARGO_MANIFEST_DIR")).join("testdata/cache/rom");
+        for file in ["rom.v", "prog.hex"] {
+            fs::copy(from.join(file), rtl.join(file)).unwrap();
+        }
+        let run = |output: &str| {
+            reticle(
+                &dir,
+                &[
+                    "cache",
+                    "--synth",
+                    "--stats",
+                    "--top",
+                    "rom",
+                    "--output",
+                    output,
+                    "rtl/rom.v",
+                ],
+            )
+        };
+
+        let (code, stdout, stderr) = run("first.rtl");
+        assert_eq!(code, 0, "{stderr}");
+        assert!(stdout.contains("rom: synthesise, miss"), "{stdout}");
+        let first = fs::read_to_string(dir.join("first.rtl")).unwrap();
+        assert!(first.contains("init 8'd17 8'd34"), "{first}");
+
+        let (code, stdout, stderr) = run("second.rtl");
+        assert_eq!(code, 0, "{stderr}");
+        assert!(stdout.contains("rom: synthesise, hit"), "{stdout}");
+        assert_eq!(
+            first,
+            fs::read_to_string(dir.join("second.rtl")).unwrap(),
+            "a cached build must give the same bytes as a cold one"
+        );
+
+        fs::write(rtl.join("prog.hex"), "a0 a1 a2 a3 a4 a5 a6 a7\n").unwrap();
+        let (code, stdout, stderr) = run("third.rtl");
+        assert_eq!(code, 0, "{stderr}");
+        assert!(stdout.contains("rom: synthesise, miss"), "{stdout}");
+        assert!(stdout.contains("rom: elaborate, hit"), "{stdout}");
+        let third = fs::read_to_string(dir.join("third.rtl")).unwrap();
+        assert!(third.contains("init 8'd160 8'd161"), "{third}");
+
+        fs::remove_file(rtl.join("prog.hex")).unwrap();
+        let (code, stdout, stderr) = run("fourth.rtl");
+        assert_ne!(code, 0, "a missing file is an error");
+        assert!(stdout.contains("rom: synthesise, miss"), "{stdout}");
+        assert!(stderr.contains("prog.hex"), "{stderr}");
     }
 }

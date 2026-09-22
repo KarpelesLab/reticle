@@ -34,6 +34,7 @@
 //! |-------|------------|
 //! | [`hash`] | A 128-bit hash written in-crate (two xxHash64 lanes) |
 //! | [`key`]  | [`CacheKey`], and the rule for what goes into one |
+//! | [`inputs`] | Files a unit of work read while it ran, recorded and re-checked on every hit |
 //! | [`store`] | [`Cache`] over the [`Storage`] trait, with metadata, eviction and [`Cache::verify`] |
 //! | [`scan`] | The per-file dependency scan that builds the module graph |
 //! | [`mod@build`] | The incremental build itself |
@@ -59,7 +60,10 @@
 //!   That format already round-trips exactly, so there is no new
 //!   serialiser to get wrong and an entry can be read with `cat`.
 //! - **Synthesised modules** (with the `synth` feature), the same way,
-//!   under a key that adds the synthesis options.
+//!   under a key that adds the synthesis options. Synthesis also reads the
+//!   files `$readmemh` names, which no key computed beforehand can cover,
+//!   so the entry records each one it read and a digest of its contents,
+//!   and a lookup re-reads them and misses on any difference ([`inputs`]).
 //! - **Dependency scans**: the handful of names a file defines and
 //!   instantiates. Parsed ASTs are *not* worth caching — parsing is a
 //!   small fraction of elaboration and an AST has no stable serialised
@@ -72,6 +76,7 @@
 
 pub mod build;
 pub mod hash;
+pub mod inputs;
 pub mod key;
 pub mod scan;
 pub mod store;
@@ -80,6 +85,7 @@ pub use build::{
     BuildOptions, BuildResult, ModuleBuild, Outcome, ScanBuild, Stage, VhdlStandard, build,
 };
 pub use hash::{Hash128, Hasher128, hash128};
+pub use inputs::{FileInput, Recorder, still_valid};
 pub use key::{CacheKey, KeyBuilder, feature_set};
 pub use scan::{FileScan, Language, ModuleGraph, ModuleScan, SourceUnit};
 pub use store::{Cache, Corruption, Entry, EntryError, MemoryStorage, Problem, Storage};

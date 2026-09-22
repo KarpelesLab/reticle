@@ -64,8 +64,11 @@ An **elaborated module** key adds:
 11. the key of each module it instantiates, with that module's name, sorted
     by name.
 
-A **synthesised module** key adds the elaborated module's key and the
-synthesis options that can change the netlist.
+A **synthesised module** key adds the elaborated module's key, the
+synthesis options that can change the netlist, and whether synthesis was
+given a file provider (`SynthOptions::files`) at all. It cannot cover the
+*contents* of the files synthesis reads; the next section says how those
+are handled.
 
 Point 11 is what makes the dependency direction work. A dependency's key
 already covers its sources and its own dependencies, so:
@@ -78,6 +81,69 @@ already covers its sources and its own dependencies, so:
 
 `tests/cache_build.rs` asserts each of those three directly, because that
 relationship is the part most likely to be quietly wrong.
+
+### Files synthesis reads: discovered inputs
+
+Synthesis turns `$readmemh("prog.hex", rom)` into the memory's initial
+contents, reading `prog.hex` through `SynthOptions::files`. The source
+text covers the file's *name* but not its contents, and the name can be
+computed rather than written literally. The synthesised-module key is
+looked up *before* elaboration, so that a hit can skip it, so the names
+cannot be taken from the elaborated design either. Keying on the source
+alone would serve the old netlist, with the old program in the ROM, after
+an edit to nothing but the `.hex` file: a silent wrong build.
+
+So the files are treated as **discovered inputs**, as ccache's direct mode
+and Bazel do for inputs only known once a step has run
+(`reticle::cache::inputs`):
+
+1. On a miss, synthesis runs against a recording provider that passes
+   every read through to the real one and logs the path asked for and a
+   128-bit digest of the text that came back, or that nothing did.
+2. The entry stores that list in its header, one `input` line per path,
+   sorted, next to the netlist:
+
+   ```text
+   reticle-cache 2
+   key 8c703821ebe89d4a16e39383a7ca56ec
+   producer synth
+   created 1790097233
+   used 3
+   size 307
+   content 52e8d9a2b59899f0f46bc32cee3b56eb
+   input 53e0d786fc435de80c2c2ddf7a3c0897 prog.hex
+   ```
+
+   A file that was asked for and not found is recorded as
+   `input missing <path>`, distinct from an empty file.
+3. A lookup that finds the entry re-reads every recorded path through the
+   provider the build has *now* and compares digests. A changed file, a
+   recorded file that has gone, or a file recorded as missing that now
+   exists makes the lookup a **miss**; only a full match is a hit. The
+   elaborated entry underneath is still used, since elaboration reads no
+   files.
+
+**A synthesised entry is therefore valid exactly when** its key matches
+(elaborated key, synthesis options, whether there is a provider) **and**
+every file it records reads back through the current provider with the
+same digest, or is still absent where it was absent. Nothing else is
+consulted: a file synthesis did not read cannot change its result, so
+editing an unrelated file keeps the hit.
+
+Two more rules keep that sound:
+
+- **A synthesis that reported an error is not stored.** A missing or
+  malformed `.hex` file is an error (`S0018`); storing the result would
+  turn the next build into a hit that reports nothing and serves a ROM
+  without its program. The error comes back on every build until it is
+  fixed.
+- **A file that reads differently twice in one synthesis** (edited while
+  the build was running) leaves nothing stored, since the netlist then
+  matches no single state of the files.
+
+`reticle cache --synth` gives synthesis the same provider `reticle sim`
+uses: a relative path is looked up next to each source file, in the order
+given, and then in the current directory.
 
 ### What is deliberately *not* in a key
 
@@ -146,7 +212,7 @@ An entry is a text header plus the artefact, so a store can be read with
 `cat`:
 
 ```text
-reticle-cache 1
+reticle-cache 2
 key 93860cafd363751265687aaa808848b8
 producer elab:verilog
 created 1790077299
@@ -164,6 +230,9 @@ module other
   assign %y = %a
 end
 ```
+
+A synthesised entry may also carry `input` lines after `content`, the
+files synthesis read (see "Files synthesis reads" above).
 
 `created` is a Unix timestamp the *caller* supplies (`0` when it has none):
 the library has no clock. `used` is a logical counter, not a time, so the
@@ -209,9 +278,10 @@ entry depends on the build that wrote it, so two builds that want the same
 module always agree.
 
 **Synthesised modules**, the same way, under a key that adds the synthesis
-options. This is the clearest win, because synthesis costs several times
-what elaboration does. A synthesis hit answers on its own: the elaborated
-entry underneath it is not even read.
+options, with the files synthesis read listed in the entry and re-checked
+on every lookup. This is the clearest win, because synthesis costs several
+times what elaboration does. A synthesis hit answers on its own: the
+elaborated entry underneath it is not even read.
 
 **Dependency scans** — the handful of names a file defines and
 instantiates. Parsed ASTs are *not* worth caching: parsing is a small
@@ -369,6 +439,16 @@ it:
   depend on which modules were asked for.
 - `cli::a_second_run_hits_and_writes_the_same_design` — the same thing
   through the binary and a real directory.
+
+For the files synthesis reads, `tests/cache_build.rs::discovered_inputs`
+builds a ROM loaded by `$readmemh` and checks that a second build hits;
+that editing only the `.hex` file misses and puts the new program in
+`Memory::init`; that deleting it misses, as does creating a file recorded
+as missing; that changing an unrelated file keeps the hit; and that a
+cached and a cold build render the same `.rtl`, ROM contents included,
+checked in as `testdata/cache/rom/rom.synth.rtl`.
+`cache_store::cli::editing_only_the_hex_file_rebuilds_the_rom` does the
+same through `reticle cache --synth` and real files.
 
 ## Left out
 

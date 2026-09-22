@@ -63,6 +63,8 @@ use crate::diag::{Diagnostic, Diagnostics};
 use crate::ir::{Design, ModuleRef, Name};
 use crate::source::{SourceId, SourceMap};
 
+#[cfg(feature = "synth")]
+use super::inputs::{Recorder, still_valid};
 use super::key::{CacheKey, KIND_ELAB, KIND_SCAN, KeyBuilder};
 use super::scan::{FileScan, Language, ModuleGraph, SourceUnit, normalise, scan_file};
 use super::store::{Cache, Entry, Storage};
@@ -727,7 +729,7 @@ impl<'a> Builder<'a> {
         let synth_key = self.options.synth.as_ref().map(|s| synth_key(key, s));
         #[cfg(feature = "synth")]
         if let Some(synth_key) = synth_key
-            && let Some(design) = self.take_cached(synth_key, &display, cache)
+            && let Some(design) = self.take_cached_synth(synth_key, &display, cache)
         {
             // A synthesised hit makes elaborating pointless: the netlist is
             // the artefact the build wants.
@@ -741,7 +743,7 @@ impl<'a> Builder<'a> {
             return;
         }
 
-        let design = match self.take_cached(key, &display, cache) {
+        let design = match self.take_cached(key, &display, cache, |_| true) {
             Some(design) => {
                 self.modules.push(ModuleBuild {
                     name: display.clone(),
@@ -783,13 +785,7 @@ impl<'a> Builder<'a> {
         let mut design = design;
         #[cfg(feature = "synth")]
         if let (Some(synth_key), Some(options)) = (synth_key, self.options.synth.as_ref()) {
-            crate::synth::run(&mut design, options, diags);
-            cache.insert(
-                synth_key,
-                "synth",
-                self.options.created,
-                design.to_text().into_bytes(),
-            );
+            self.synthesise(&mut design, synth_key, options, cache, diags);
             self.modules.push(ModuleBuild {
                 name: display,
                 stage: Stage::Synthesise,
@@ -801,15 +797,92 @@ impl<'a> Builder<'a> {
         self.artefacts.insert(module.to_owned(), design);
     }
 
-    /// Reads an artefact back, adding its text to the source map so that
-    /// the spans of the parsed design resolve.
-    fn take_cached(
+    /// Synthesises `design` in place and stores the netlist under
+    /// `synth_key`, with the files synthesis read recorded in the entry.
+    ///
+    /// The caller's file provider is wrapped in a [`Recorder`], so every
+    /// path synthesis asks for, found or not, ends up in the entry's
+    /// `input` lines with a digest of what it got; see
+    /// [`super::inputs`]. Nothing is stored when synthesis reported an
+    /// error (a later hit would serve the broken netlist and report
+    /// nothing) or when a file changed while synthesis was reading it.
+    #[cfg(feature = "synth")]
+    fn synthesise(
+        &self,
+        design: &mut Design,
+        synth_key: CacheKey,
+        options: &crate::synth::SynthOptions,
+        cache: &mut Cache<'_>,
+        diags: &mut Diagnostics,
+    ) {
+        use std::rc::Rc;
+
+        let recorder = options
+            .files
+            .clone()
+            .map(|files| Rc::new(Recorder::new(files)));
+        let mut recorded = options.clone();
+        if let Some(recorder) = &recorder {
+            let files: Rc<dyn crate::ir::memfile::FileProvider> = recorder.clone();
+            recorded.files = Some(files);
+        }
+        let errors = diags.error_count();
+        crate::synth::run(design, &recorded, diags);
+        if diags.error_count() > errors {
+            return;
+        }
+        let inputs = match &recorder {
+            Some(recorder) => match recorder.inputs() {
+                Some(inputs) => inputs,
+                None => return,
+            },
+            None => Vec::new(),
+        };
+        let mut entry =
+            Entry::new(synth_key, "synth", design.to_text().into_bytes()).with_inputs(inputs);
+        entry.created = self.options.created;
+        cache.put(entry);
+    }
+
+    /// Reads a synthesised artefact back, if every file synthesis read
+    /// when it was stored still reads the same.
+    ///
+    /// The files are re-read through the provider this build was given.
+    /// An entry that records files when this build has no provider cannot
+    /// be checked, so it is a miss; the synthesis key folds in whether
+    /// there is a provider, so that only happens to a hand-made entry.
+    #[cfg(feature = "synth")]
+    fn take_cached_synth(
         &mut self,
         key: CacheKey,
         display: &str,
         cache: &mut Cache<'_>,
     ) -> Option<Design> {
-        let entry: Entry = cache.get(key)?;
+        let files = self
+            .options
+            .synth
+            .as_ref()
+            .and_then(|options| options.files.clone());
+        self.take_cached(key, display, cache, |entry| {
+            entry.inputs.is_empty()
+                || files
+                    .as_deref()
+                    .is_some_and(|files| still_valid(&entry.inputs, files))
+        })
+    }
+
+    /// Reads an artefact back, adding its text to the source map so that
+    /// the spans of the parsed design resolve.
+    ///
+    /// `valid` sees the entry first; one it rejects is a miss.
+    fn take_cached(
+        &mut self,
+        key: CacheKey,
+        display: &str,
+        cache: &mut Cache<'_>,
+        valid: impl FnOnce(&Entry) -> bool,
+    ) -> Option<Design> {
+        let entry: Entry = cache.get_valid(key, valid)?;
         let text = entry.text()?.to_owned();
         let id = self
             .map
@@ -1050,6 +1123,12 @@ fn merge_into(dest: &mut Design, src: &Design) {
 /// changes what the build reports even though it leaves the netlist alone,
 /// and a hit that skipped the proof would be a silent loss of checking.
 ///
+/// Whether there is a file provider at all is folded in, because without
+/// one `$readmemh` loads nothing and warns, and with one it loads the
+/// file. *What* the provider holds is not, and cannot be: which files
+/// synthesis reads is only known once it has run. Those are recorded in
+/// the entry and checked on every lookup instead ([`super::inputs`]).
+///
 /// The encoding is folded in through its `Debug` spelling, which is stable
 /// for a fieldless enum; renaming a variant would retire the entries that
 /// used it, which is a spurious rebuild rather than a wrong one.
@@ -1065,7 +1144,8 @@ fn synth_key(elaboration: CacheKey, options: &crate::synth::SynthOptions) -> Cac
         .flag("keep-hierarchy", options.keep_hierarchy)
         .number("max-iterations", u64::from(options.max_iterations))
         .number("max-unroll", u64::from(options.max_unroll))
-        .flag("verify-equivalence", options.verify_equivalence);
+        .flag("verify-equivalence", options.verify_equivalence)
+        .flag("files", options.files.is_some());
     builder.finish()
 }
 
@@ -1218,5 +1298,24 @@ mod tests {
             synth_key(base, &SynthOptions::default()),
             synth_key(base, &c)
         );
+
+        // Whether there is a file provider is, since it decides whether
+        // `$readmemh` loads anything; what the provider holds is not; that
+        // is checked against the entry's recorded inputs instead.
+        use crate::ir::memfile::{FileProvider, MemoryFiles};
+        use std::rc::Rc;
+        let with = |files: MemoryFiles| SynthOptions {
+            files: Some(Rc::new(files) as Rc<dyn FileProvider>),
+            ..SynthOptions::default()
+        };
+        let mut one = MemoryFiles::new();
+        one.insert("prog.hex", "00\n");
+        let mut two = MemoryFiles::new();
+        two.insert("prog.hex", "01\n");
+        assert_ne!(
+            synth_key(base, &SynthOptions::default()),
+            synth_key(base, &with(one.clone()))
+        );
+        assert_eq!(synth_key(base, &with(one)), synth_key(base, &with(two)));
     }
 }

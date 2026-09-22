@@ -55,6 +55,9 @@
 //! A **synthesised module** key ([`KIND_SYNTH`]) folds in the elaborated
 //! module's key and then every synthesis option that can change the
 //! netlist; see [`mod@super::build`] for which ones and why one is left out.
+//! The contents of the files synthesis reads (`$readmemh`) cannot be in
+//! it, since they are only known once synthesis has run: they are recorded
+//! in the entry and re-checked on every lookup ([`super::inputs`]).
 //!
 //! # What is deliberately *not* in a key
 //!
@@ -77,7 +80,7 @@ use super::hash::{Hash128, Hasher128};
 ///
 /// Bumping it makes every existing entry unreachable, which is the correct
 /// response to a change in what a key means.
-pub const FORMAT: u32 = 1;
+pub const FORMAT: u32 = 2;
 
 /// Kind tag of a per-file dependency scan key (see [`super::scan`]).
 pub const KIND_SCAN: &str = "scan";
