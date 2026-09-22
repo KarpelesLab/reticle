@@ -15,6 +15,8 @@
 //! | [`bus`] | bus interfaces as data; port-map generation and checking |
 //! | [`interconnect`] | crossbar and arbiter generators over the IR builder |
 //! | [`blackbox`] | encrypted and vendor IP as stubs |
+//! | [`ipxact`] | importing an existing IP-XACT catalogue |
+//! | [`xml`] | the XML reader [`ipxact`] needs, and nothing more |
 //!
 //! # The format
 //!
@@ -88,6 +90,15 @@
 //! the same definitions, so a generated crossbar passes the checker by
 //! construction.
 //!
+//! # Bringing in IP somebody else described
+//!
+//! A catalogue that already describes its IP in IP-XACT does not have to
+//! be rewritten: [`ipxact::import`] reads a component description — 1685-2009's `spirit` spelling or
+//! 1685-2014's and 1685-2022's `ipxact` one — and produces a manifest
+//! plus a report of everything that was approximated or dropped, since
+//! an import that loses half a component quietly is worse than one that
+//! refuses.
+//!
 //! # A whole build
 //!
 //! ```
@@ -129,15 +140,18 @@
 pub mod blackbox;
 pub mod bus;
 pub mod interconnect;
+pub mod ipxact;
 pub mod manifest;
 pub mod resolve;
 mod text;
+pub mod xml;
 
 pub use blackbox::{BlackBoxReport, BlackBoxSource};
 pub use bus::{
     BusEndpoint, BusInterface, BusProblem, BusRole, BusSignal, Connection, PortMapping, Width,
 };
 pub use interconnect::{AddressRange, Crossbar, WishboneArbiter};
+pub use ipxact::{ImportOptions, ImportReport, ImportedIp, Standard, Vlnv};
 pub use manifest::{
     DepSource, Dependency, InterfaceDecl, IpManifest, Language, ParamDecl, ParamType, PortDecl,
     Project, SourceEntry, Version, VersionReq,

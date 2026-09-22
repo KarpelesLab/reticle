@@ -1,0 +1,91 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  A plain counter, in the IEEE 1685-2014 spelling: one view, one file
+  set, two parameters and four ports, one of which is a vector whose
+  bounds are written as an expression over a parameter.
+
+  Hand written for `tests/ip_ipxact.rs`; no vendor tool produced it.
+-->
+<ipxact:component
+    xmlns:ipxact="http://www.accellera.org/XMLSchema/IPXACT/1685-2014"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
+  <ipxact:vendor>reticle.example</ipxact:vendor>
+  <ipxact:library>basics</ipxact:library>
+  <ipxact:name>counter</ipxact:name>
+  <ipxact:version>1.0.0</ipxact:version>
+  <ipxact:description>A free-running counter with a synchronous clear.</ipxact:description>
+
+  <ipxact:model>
+    <ipxact:views>
+      <ipxact:view>
+        <ipxact:name>rtl</ipxact:name>
+        <ipxact:componentInstantiationRef>rtl_impl</ipxact:componentInstantiationRef>
+      </ipxact:view>
+    </ipxact:views>
+    <ipxact:instantiations>
+      <ipxact:componentInstantiation>
+        <ipxact:name>rtl_impl</ipxact:name>
+        <ipxact:language>verilog</ipxact:language>
+        <ipxact:moduleName>counter</ipxact:moduleName>
+      </ipxact:componentInstantiation>
+    </ipxact:instantiations>
+    <ipxact:ports>
+      <ipxact:port>
+        <ipxact:name>clk</ipxact:name>
+        <ipxact:wire>
+          <ipxact:direction>in</ipxact:direction>
+        </ipxact:wire>
+      </ipxact:port>
+      <ipxact:port>
+        <ipxact:name>rst_n</ipxact:name>
+        <ipxact:wire>
+          <ipxact:direction>in</ipxact:direction>
+        </ipxact:wire>
+      </ipxact:port>
+      <ipxact:port>
+        <ipxact:name>clear</ipxact:name>
+        <ipxact:wire>
+          <ipxact:direction>in</ipxact:direction>
+        </ipxact:wire>
+      </ipxact:port>
+      <ipxact:port>
+        <ipxact:name>count</ipxact:name>
+        <ipxact:wire>
+          <ipxact:direction>out</ipxact:direction>
+          <ipxact:vectors>
+            <ipxact:vector>
+              <ipxact:left>WIDTH-1</ipxact:left>
+              <ipxact:right>0</ipxact:right>
+            </ipxact:vector>
+          </ipxact:vectors>
+        </ipxact:wire>
+      </ipxact:port>
+    </ipxact:ports>
+  </ipxact:model>
+
+  <ipxact:fileSets>
+    <ipxact:fileSet>
+      <ipxact:name>rtl</ipxact:name>
+      <ipxact:file>
+        <ipxact:name>rtl/counter.v</ipxact:name>
+        <ipxact:fileType>verilogSource-2005</ipxact:fileType>
+      </ipxact:file>
+      <ipxact:file>
+        <ipxact:name>doc/counter.pdf</ipxact:name>
+        <ipxact:fileType>unknown</ipxact:fileType>
+      </ipxact:file>
+    </ipxact:fileSet>
+  </ipxact:fileSets>
+
+  <ipxact:parameters>
+    <ipxact:parameter parameterId="p_width" type="int" minimum="1" maximum="32">
+      <ipxact:name>WIDTH</ipxact:name>
+      <ipxact:displayName>Counter width</ipxact:displayName>
+      <ipxact:value>8</ipxact:value>
+    </ipxact:parameter>
+    <ipxact:parameter parameterId="p_wrap" type="bit">
+      <ipxact:name>WRAP</ipxact:name>
+      <ipxact:value>true</ipxact:value>
+    </ipxact:parameter>
+  </ipxact:parameters>
+</ipxact:component>

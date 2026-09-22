@@ -1,0 +1,16 @@
+warning[P0604]: the version `r1p3` is not a semantic version; using 0.0.0-r1p3
+  --> legacy_uart.xml:16:4
+   |
+16 |   <spirit:version>r1p3</spirit:version>
+   |    ^^^^^^^^^^^^^^
+   |
+   = note: it names no number at all, so it sorts below every release
+
+warning[P0605]: the width of the port `fifo_level` does not evaluate: `clog2(FIFO_DEPTH)` and `0` are not both constant
+   --> legacy_uart.xml:108:11
+    |
+108 |           <spirit:vector>
+    |           ^^^^^^^^^^^^^^^
+    |
+    = note: give the parameters it uses a value, or declare the port by hand: a width Reticle had to guess would be worse than none
+

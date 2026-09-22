@@ -1,0 +1,8 @@
+warning[P0607]: `doc/counter.pdf` is not an HDL source
+  --> simple.xml:73:7
+   |
+73 |       <ipxact:file>
+   |       ^^^^^^^^^^^^^
+   |
+   = note: its file type is `unknown`; Reticle imports Verilog, SystemVerilog and VHDL sources
+

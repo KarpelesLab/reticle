@@ -1,0 +1,8 @@
+translated
+  standard IEEE 1685-2014 (ipxact)
+  component reticle.example:basics:counter:1.0.0 -> package counter 1.0.0
+  parameters: 2
+  file set rtl: 1 sources
+  ports: 4
+dropped
+  file doc/counter.pdf: the type `unknown` is not an HDL source

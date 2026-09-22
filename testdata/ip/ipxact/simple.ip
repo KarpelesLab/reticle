@@ -1,0 +1,14 @@
+name counter
+version 1.0.0
+description "A free-running counter with a synchronous clear."
+
+top counter
+
+source rtl/counter.v
+
+param WIDTH int 8 1..32
+param WRAP bool true
+port clk in
+port rst_n in
+port clear in
+port count out 8

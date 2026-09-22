@@ -1,0 +1,16 @@
+name legacy_uart
+version 0.0.0-r1p3
+description "A UART with an APB register interface, as an older catalogue describes it."
+
+top legacy_uart
+
+source rtl/legacy_uart.vhd
+
+param ADDR_WIDTH int 8
+param DATA_WIDTH int 32
+param PARITY string none
+port pclk in
+port presetn in
+port uart_tx out
+port uart_rx in
+interface apb apb subordinate

@@ -1,0 +1,145 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  The same kind of component in the older IEEE 1685-2009 spelling: the
+  `spirit` namespace, a VLNV version that is not a semantic version, a
+  view carrying `entity(architecture)`, `modelParameters` instead of
+  `parameters`, `vector` straight under `wire`, and port maps hanging
+  off the bus interface rather than off an abstraction type.
+
+  Hand written for `tests/ip_ipxact.rs`; no vendor tool produced it.
+-->
+<spirit:component
+    xmlns:spirit="http://www.spiritconsortium.org/XMLSchema/SPIRIT/1685-2009">
+  <spirit:vendor>reticle.example</spirit:vendor>
+  <spirit:library>legacy</spirit:library>
+  <spirit:name>Legacy UART</spirit:name>
+  <spirit:version>r1p3</spirit:version>
+  <spirit:description>
+    A UART with an APB register interface,
+    as an older catalogue describes it.
+  </spirit:description>
+
+  <spirit:busInterfaces>
+    <spirit:busInterface>
+      <spirit:name>apb</spirit:name>
+      <spirit:busType spirit:vendor="amba.com" spirit:library="AMBA2"
+                      spirit:name="APB" spirit:version="r1p0"/>
+      <spirit:slave/>
+      <spirit:portMaps>
+        <spirit:portMap>
+          <spirit:logicalPort><spirit:name>PADDR</spirit:name></spirit:logicalPort>
+          <spirit:physicalPort><spirit:name>apb_paddr</spirit:name></spirit:physicalPort>
+        </spirit:portMap>
+        <spirit:portMap>
+          <spirit:logicalPort><spirit:name>PWDATA</spirit:name></spirit:logicalPort>
+          <spirit:physicalPort><spirit:name>apb_pwdata</spirit:name></spirit:physicalPort>
+        </spirit:portMap>
+        <spirit:portMap>
+          <spirit:logicalPort><spirit:name>PRDATA</spirit:name></spirit:logicalPort>
+          <spirit:physicalPort><spirit:name>apb_prdata</spirit:name></spirit:physicalPort>
+        </spirit:portMap>
+      </spirit:portMaps>
+    </spirit:busInterface>
+  </spirit:busInterfaces>
+
+  <spirit:model>
+    <spirit:views>
+      <spirit:view>
+        <spirit:name>rtl</spirit:name>
+        <spirit:envIdentifier>::</spirit:envIdentifier>
+        <spirit:language>vhdl</spirit:language>
+        <spirit:modelName>legacy_uart(rtl)</spirit:modelName>
+        <spirit:fileSetRef>
+          <spirit:localName>rtl</spirit:localName>
+        </spirit:fileSetRef>
+      </spirit:view>
+    </spirit:views>
+    <spirit:ports>
+      <spirit:port>
+        <spirit:name>pclk</spirit:name>
+        <spirit:wire><spirit:direction>in</spirit:direction></spirit:wire>
+      </spirit:port>
+      <spirit:port>
+        <spirit:name>presetn</spirit:name>
+        <spirit:wire><spirit:direction>in</spirit:direction></spirit:wire>
+      </spirit:port>
+      <spirit:port>
+        <spirit:name>apb_paddr</spirit:name>
+        <spirit:wire>
+          <spirit:direction>in</spirit:direction>
+          <spirit:vector>
+            <spirit:left>ADDR_WIDTH-1</spirit:left>
+            <spirit:right>0</spirit:right>
+          </spirit:vector>
+        </spirit:wire>
+      </spirit:port>
+      <spirit:port>
+        <spirit:name>apb_pwdata</spirit:name>
+        <spirit:wire>
+          <spirit:direction>in</spirit:direction>
+          <spirit:vector>
+            <spirit:left>DATA_WIDTH-1</spirit:left>
+            <spirit:right>0</spirit:right>
+          </spirit:vector>
+        </spirit:wire>
+      </spirit:port>
+      <spirit:port>
+        <spirit:name>apb_prdata</spirit:name>
+        <spirit:wire>
+          <spirit:direction>out</spirit:direction>
+          <spirit:vector>
+            <spirit:left>DATA_WIDTH-1</spirit:left>
+            <spirit:right>0</spirit:right>
+          </spirit:vector>
+        </spirit:wire>
+      </spirit:port>
+      <spirit:port>
+        <spirit:name>uart_tx</spirit:name>
+        <spirit:wire><spirit:direction>out</spirit:direction></spirit:wire>
+      </spirit:port>
+      <spirit:port>
+        <spirit:name>uart_rx</spirit:name>
+        <spirit:wire><spirit:direction>in</spirit:direction></spirit:wire>
+      </spirit:port>
+      <spirit:port>
+        <spirit:name>fifo_level</spirit:name>
+        <spirit:wire>
+          <spirit:direction>out</spirit:direction>
+          <spirit:vector>
+            <spirit:left>clog2(FIFO_DEPTH)</spirit:left>
+            <spirit:right>0</spirit:right>
+          </spirit:vector>
+        </spirit:wire>
+      </spirit:port>
+    </spirit:ports>
+    <spirit:modelParameters>
+      <spirit:modelParameter spirit:dataType="integer">
+        <spirit:name>ADDR_WIDTH</spirit:name>
+        <spirit:value spirit:id="aw">8</spirit:value>
+      </spirit:modelParameter>
+      <spirit:modelParameter spirit:dataType="integer">
+        <spirit:name>DATA_WIDTH</spirit:name>
+        <spirit:value spirit:id="dw">32</spirit:value>
+      </spirit:modelParameter>
+      <spirit:modelParameter spirit:dataType="string">
+        <spirit:name>PARITY</spirit:name>
+        <spirit:value spirit:id="par">none</spirit:value>
+      </spirit:modelParameter>
+    </spirit:modelParameters>
+  </spirit:model>
+
+  <spirit:fileSets>
+    <spirit:fileSet>
+      <spirit:name>rtl</spirit:name>
+      <spirit:file>
+        <spirit:name>rtl/legacy_uart.vhd</spirit:name>
+        <spirit:fileType>vhdlSource-93</spirit:fileType>
+      </spirit:file>
+      <spirit:file>
+        <spirit:name>rtl/legacy_uart_defs.vh</spirit:name>
+        <spirit:fileType>verilogSource</spirit:fileType>
+        <spirit:isIncludeFile>true</spirit:isIncludeFile>
+      </spirit:file>
+    </spirit:fileSet>
+  </spirit:fileSets>
+</spirit:component>

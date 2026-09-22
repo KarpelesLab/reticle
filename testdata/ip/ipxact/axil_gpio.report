@@ -1,0 +1,18 @@
+translated
+  standard IEEE 1685-2014 (ipxact)
+  component reticle.example:peripherals:axil_gpio:2.1 -> package axil_gpio 2.1.0
+  parameters: 4
+  interface S_AXI: amba.com:AMBA4:AXI4-Lite:r0p0_0 -> axi4lite subordinate (prefix `s_axi_`, 5 signals)
+  file set rtl: 2 sources
+  file set constraints: 0 sources
+  memory map REGS: CTRL at 0x40000000 range 0x1000 width 32, IRQ at 0x40001000 range 0x100 width 32 (described, not turned into logic)
+  ports: 5
+approximated
+  version `2.1`: the missing numbers are zero, giving 2.1.0
+  parameter GPIO_WIDTH: the default `ADDR_WIDTH-4` evaluates to 8
+  interface S_AXI: no port for the required axi4lite signals wvalid, wready, bvalid, bready, araddr, arvalid, arready, rdata, rvalid, rready
+dropped
+  port scan_mode: a phantom port is not in the HDL
+  interface M_AHB: no bus matches amba.com:AMBA3:AHBLite:r2p0_0 (its port is kept as a plain port)
+  file syn/axil_gpio.sdc: the type `SDC` is not an HDL source
+  vendorExtensions: vendor extensions are not read

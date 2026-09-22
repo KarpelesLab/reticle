@@ -1,0 +1,14 @@
+translated
+  standard IEEE 1685-2009 (spirit)
+  component reticle.example:legacy:Legacy UART:r1p3 -> package legacy_uart 0.0.0-r1p3
+  parameters: 3
+  interface apb: amba.com:AMBA2:APB:r1p0 -> apb subordinate (prefix `apb_`, 3 signals)
+  file set rtl: 1 sources
+  ports: 4
+approximated
+  name `Legacy UART` spelled `legacy_uart` for a package name
+  version `r1p3`: it names no number at all, so it sorts below every release
+  interface apb: no port for the required apb signals psel, penable, pwrite, pready
+dropped
+  port fifo_level: the width `clog2(FIFO_DEPTH):0` does not evaluate
+  file rtl/legacy_uart_defs.vh: an include file, and Reticle does not follow `include`

@@ -1,0 +1,19 @@
+name axil_gpio
+version 2.1.0
+description "An AXI4-Lite GPIO with interrupt support; memory map REGS: CTRL at 0x40000000 range 0x1000 width 32, IRQ at 0x40001000 range 0x100 width 32"
+
+top axil_gpio
+
+source rtl/axil_gpio.v
+source rtl/axil_gpio_pkg.sv
+
+param ADDR_WIDTH int 12
+param DATA_WIDTH int 32 32..64
+param GPIO_WIDTH int 8
+param IRQ_MODE string level
+port s_axi_aclk in
+port s_axi_aresetn in
+port m_ahb_haddr out 32
+port gpio inout 8
+port irq out
+interface s_axi axi4lite subordinate

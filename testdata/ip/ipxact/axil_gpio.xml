@@ -1,0 +1,232 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  An AXI4-Lite peripheral in the IEEE 1685-2014 spelling: one bus
+  interface with port maps, a memory map with two address blocks, a
+  strobe whose width is a parameter expression, and a second interface
+  on a bus Reticle has no definition for, so the import has something to
+  drop.
+
+  Hand written for `tests/ip_ipxact.rs`; no vendor tool produced it.
+-->
+<ipxact:component
+    xmlns:ipxact="http://www.accellera.org/XMLSchema/IPXACT/1685-2014">
+  <ipxact:vendor>reticle.example</ipxact:vendor>
+  <ipxact:library>peripherals</ipxact:library>
+  <ipxact:name>axil_gpio</ipxact:name>
+  <ipxact:version>2.1</ipxact:version>
+  <ipxact:description>An AXI4-Lite GPIO with interrupt support.</ipxact:description>
+
+  <ipxact:busInterfaces>
+    <ipxact:busInterface>
+      <ipxact:name>S_AXI</ipxact:name>
+      <ipxact:busType vendor="amba.com" library="AMBA4" name="AXI4-Lite" version="r0p0_0"/>
+      <ipxact:abstractionTypes>
+        <ipxact:abstractionType>
+          <ipxact:abstractionRef vendor="amba.com" library="AMBA4"
+                                 name="AXI4-Lite_rtl" version="r0p0_0"/>
+          <ipxact:portMaps>
+            <ipxact:portMap>
+              <ipxact:logicalPort><ipxact:name>AWADDR</ipxact:name></ipxact:logicalPort>
+              <ipxact:physicalPort><ipxact:name>s_axi_awaddr</ipxact:name></ipxact:physicalPort>
+            </ipxact:portMap>
+            <ipxact:portMap>
+              <ipxact:logicalPort><ipxact:name>AWVALID</ipxact:name></ipxact:logicalPort>
+              <ipxact:physicalPort><ipxact:name>s_axi_awvalid</ipxact:name></ipxact:physicalPort>
+            </ipxact:portMap>
+            <ipxact:portMap>
+              <ipxact:logicalPort><ipxact:name>AWREADY</ipxact:name></ipxact:logicalPort>
+              <ipxact:physicalPort><ipxact:name>s_axi_awready</ipxact:name></ipxact:physicalPort>
+            </ipxact:portMap>
+            <ipxact:portMap>
+              <ipxact:logicalPort><ipxact:name>WDATA</ipxact:name></ipxact:logicalPort>
+              <ipxact:physicalPort><ipxact:name>s_axi_wdata</ipxact:name></ipxact:physicalPort>
+            </ipxact:portMap>
+            <ipxact:portMap>
+              <ipxact:logicalPort><ipxact:name>WSTRB</ipxact:name></ipxact:logicalPort>
+              <ipxact:physicalPort><ipxact:name>s_axi_wstrb</ipxact:name></ipxact:physicalPort>
+            </ipxact:portMap>
+          </ipxact:portMaps>
+        </ipxact:abstractionType>
+      </ipxact:abstractionTypes>
+      <ipxact:slave>
+        <ipxact:memoryMapRef memoryMapRef="REGS"/>
+      </ipxact:slave>
+    </ipxact:busInterface>
+
+    <ipxact:busInterface>
+      <ipxact:name>M_AHB</ipxact:name>
+      <ipxact:busType vendor="amba.com" library="AMBA3" name="AHBLite" version="r2p0_0"/>
+      <ipxact:master/>
+      <ipxact:portMaps>
+        <ipxact:portMap>
+          <ipxact:logicalPort><ipxact:name>HADDR</ipxact:name></ipxact:logicalPort>
+          <ipxact:physicalPort><ipxact:name>m_ahb_haddr</ipxact:name></ipxact:physicalPort>
+        </ipxact:portMap>
+      </ipxact:portMaps>
+    </ipxact:busInterface>
+  </ipxact:busInterfaces>
+
+  <ipxact:memoryMaps>
+    <ipxact:memoryMap>
+      <ipxact:name>REGS</ipxact:name>
+      <ipxact:addressBlock>
+        <ipxact:name>CTRL</ipxact:name>
+        <ipxact:baseAddress>0x40000000</ipxact:baseAddress>
+        <ipxact:range>0x1000</ipxact:range>
+        <ipxact:width>32</ipxact:width>
+        <ipxact:register>
+          <ipxact:name>DIRECTION</ipxact:name>
+          <ipxact:addressOffset>0x0</ipxact:addressOffset>
+          <ipxact:size>32</ipxact:size>
+        </ipxact:register>
+      </ipxact:addressBlock>
+      <ipxact:addressBlock>
+        <ipxact:name>IRQ</ipxact:name>
+        <ipxact:baseAddress>0x40001000</ipxact:baseAddress>
+        <ipxact:range>0x100</ipxact:range>
+        <ipxact:width>32</ipxact:width>
+      </ipxact:addressBlock>
+      <ipxact:addressUnitBits>8</ipxact:addressUnitBits>
+    </ipxact:memoryMap>
+  </ipxact:memoryMaps>
+
+  <ipxact:model>
+    <ipxact:instantiations>
+      <ipxact:componentInstantiation>
+        <ipxact:name>rtl_impl</ipxact:name>
+        <ipxact:language>verilog</ipxact:language>
+        <ipxact:moduleName>axil_gpio</ipxact:moduleName>
+      </ipxact:componentInstantiation>
+    </ipxact:instantiations>
+    <ipxact:ports>
+      <ipxact:port>
+        <ipxact:name>s_axi_aclk</ipxact:name>
+        <ipxact:wire><ipxact:direction>in</ipxact:direction></ipxact:wire>
+      </ipxact:port>
+      <ipxact:port>
+        <ipxact:name>s_axi_aresetn</ipxact:name>
+        <ipxact:wire><ipxact:direction>in</ipxact:direction></ipxact:wire>
+      </ipxact:port>
+      <ipxact:port>
+        <ipxact:name>s_axi_awaddr</ipxact:name>
+        <ipxact:wire>
+          <ipxact:direction>in</ipxact:direction>
+          <ipxact:vectors>
+            <ipxact:vector>
+              <ipxact:left>ADDR_WIDTH-1</ipxact:left>
+              <ipxact:right>0</ipxact:right>
+            </ipxact:vector>
+          </ipxact:vectors>
+        </ipxact:wire>
+      </ipxact:port>
+      <ipxact:port>
+        <ipxact:name>s_axi_awvalid</ipxact:name>
+        <ipxact:wire><ipxact:direction>in</ipxact:direction></ipxact:wire>
+      </ipxact:port>
+      <ipxact:port>
+        <ipxact:name>s_axi_awready</ipxact:name>
+        <ipxact:wire><ipxact:direction>out</ipxact:direction></ipxact:wire>
+      </ipxact:port>
+      <ipxact:port>
+        <ipxact:name>s_axi_wdata</ipxact:name>
+        <ipxact:wire>
+          <ipxact:direction>in</ipxact:direction>
+          <ipxact:vectors>
+            <ipxact:vector>
+              <ipxact:left>DATA_WIDTH-1</ipxact:left>
+              <ipxact:right>0</ipxact:right>
+            </ipxact:vector>
+          </ipxact:vectors>
+        </ipxact:wire>
+      </ipxact:port>
+      <ipxact:port>
+        <ipxact:name>s_axi_wstrb</ipxact:name>
+        <ipxact:wire>
+          <ipxact:direction>in</ipxact:direction>
+          <ipxact:vectors>
+            <ipxact:vector>
+              <ipxact:left>DATA_WIDTH/8-1</ipxact:left>
+              <ipxact:right>0</ipxact:right>
+            </ipxact:vector>
+          </ipxact:vectors>
+        </ipxact:wire>
+      </ipxact:port>
+      <ipxact:port>
+        <ipxact:name>m_ahb_haddr</ipxact:name>
+        <ipxact:wire>
+          <ipxact:direction>out</ipxact:direction>
+          <ipxact:vectors>
+            <ipxact:vector>
+              <ipxact:left>31</ipxact:left>
+              <ipxact:right>0</ipxact:right>
+            </ipxact:vector>
+          </ipxact:vectors>
+        </ipxact:wire>
+      </ipxact:port>
+      <ipxact:port>
+        <ipxact:name>gpio</ipxact:name>
+        <ipxact:wire>
+          <ipxact:direction>inout</ipxact:direction>
+          <ipxact:vectors>
+            <ipxact:vector>
+              <ipxact:left>GPIO_WIDTH-1</ipxact:left>
+              <ipxact:right>0</ipxact:right>
+            </ipxact:vector>
+          </ipxact:vectors>
+        </ipxact:wire>
+      </ipxact:port>
+      <ipxact:port>
+        <ipxact:name>irq</ipxact:name>
+        <ipxact:wire><ipxact:direction>out</ipxact:direction></ipxact:wire>
+      </ipxact:port>
+      <ipxact:port>
+        <ipxact:name>scan_mode</ipxact:name>
+        <ipxact:wire><ipxact:direction>phantom</ipxact:direction></ipxact:wire>
+      </ipxact:port>
+    </ipxact:ports>
+  </ipxact:model>
+
+  <ipxact:fileSets>
+    <ipxact:fileSet>
+      <ipxact:name>rtl</ipxact:name>
+      <ipxact:file>
+        <ipxact:name>rtl/axil_gpio.v</ipxact:name>
+        <ipxact:fileType>verilogSource-2005</ipxact:fileType>
+      </ipxact:file>
+      <ipxact:file>
+        <ipxact:name>rtl/axil_gpio_pkg.sv</ipxact:name>
+        <ipxact:fileType>systemVerilogSource-2012</ipxact:fileType>
+      </ipxact:file>
+    </ipxact:fileSet>
+    <ipxact:fileSet>
+      <ipxact:name>constraints</ipxact:name>
+      <ipxact:file>
+        <ipxact:name>syn/axil_gpio.sdc</ipxact:name>
+        <ipxact:fileType>SDC</ipxact:fileType>
+      </ipxact:file>
+    </ipxact:fileSet>
+  </ipxact:fileSets>
+
+  <ipxact:parameters>
+    <ipxact:parameter parameterId="p_addr" type="int">
+      <ipxact:name>ADDR_WIDTH</ipxact:name>
+      <ipxact:value>12</ipxact:value>
+    </ipxact:parameter>
+    <ipxact:parameter parameterId="p_data" type="int" minimum="32" maximum="64">
+      <ipxact:name>DATA_WIDTH</ipxact:name>
+      <ipxact:value>32</ipxact:value>
+    </ipxact:parameter>
+    <ipxact:parameter parameterId="p_gpio" type="int">
+      <ipxact:name>GPIO_WIDTH</ipxact:name>
+      <ipxact:value>ADDR_WIDTH-4</ipxact:value>
+    </ipxact:parameter>
+    <ipxact:parameter parameterId="p_mode" type="string">
+      <ipxact:name>IRQ_MODE</ipxact:name>
+      <ipxact:value>level</ipxact:value>
+    </ipxact:parameter>
+  </ipxact:parameters>
+
+  <ipxact:vendorExtensions>
+    <ipxact:note>Written by hand, not by a vendor tool.</ipxact:note>
+  </ipxact:vendorExtensions>
+</ipxact:component>
