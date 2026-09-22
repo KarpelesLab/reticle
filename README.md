@@ -45,7 +45,8 @@ Early, but the middle of the pipeline runs end to end. What works today:
 | ASIC | Liberty, LEF and DEF readers and writers |
 | Timing | static timing analysis with setup and hold, path reports, clock domain crossing checks |
 | IP | manifests with dependency resolution and a lock file, bus interfaces, generated interconnect, encrypted-core black boxes |
-| Tooling | Verilog and VHDL formatters |
+| Tooling | Verilog and VHDL formatters, a language server for both |
+| Embedding | C ABI for use from another tool, and a WebAssembly build with a browser playground under `web/` |
 | FPGA | device database (iCE40, ECP5, generic), primitive mapping, placement and IO constraints, nextpnr and vendor export |
 
 Both languages go all the way through, from source to a synthesised
