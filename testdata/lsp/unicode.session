@@ -1,0 +1,22 @@
+# Positions on lines holding non-ASCII text. On line 9 the `data`
+# argument starts at UTF-16 column 34 and at byte offset 39 of the line:
+# if the server confused the two it would answer about the `%d` instead,
+# which is the classic language-server bug.
+request 1 initialize {}
+notify initialized {}
+open file:///unicode.v verilog unicode.v
+
+# Hover and go-to-definition on the `data` after the string literal.
+ask 2 textDocument/hover file:///unicode.v 9 34
+ask 3 textDocument/definition file:///unicode.v 9 34
+
+# The same `data`, but at the byte offset instead of the UTF-16 column:
+# that lands inside the string, which is not a name.
+ask 4 textDocument/definition file:///unicode.v 9 39
+
+# Renaming rewrites the occurrence on the non-ASCII line at the right
+# column.
+ask 5 textDocument/rename file:///unicode.v 4 20 {"newName":"payload"}
+
+request 6 shutdown null
+notify exit

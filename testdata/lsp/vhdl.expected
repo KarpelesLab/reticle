@@ -1,0 +1,431 @@
+> request 1 initialize {"clientInfo":{"name":"golden"}}
+< {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "result": {
+      "capabilities": {
+        "positionEncoding": "utf-16",
+        "textDocumentSync": {
+          "openClose": true,
+          "change": 2,
+          "save": {
+            "includeText": false
+          }
+        },
+        "completionProvider": {
+          "triggerCharacters": [
+            ".",
+            "("
+          ]
+        },
+        "hoverProvider": true,
+        "definitionProvider": true,
+        "referencesProvider": true,
+        "documentSymbolProvider": true,
+        "renameProvider": {
+          "prepareProvider": true
+        },
+        "documentFormattingProvider": true,
+        "documentRangeFormattingProvider": true
+      },
+      "serverInfo": {
+        "name": "reticle",
+        "version": "0.0.0"
+      }
+    }
+  }
+
+> notify initialized {}
+
+> open file:///counter.vhd vhdl counter.vhd
+< {
+    "jsonrpc": "2.0",
+    "method": "textDocument/publishDiagnostics",
+    "params": {
+      "uri": "file:///counter.vhd",
+      "version": 1,
+      "diagnostics": []
+    }
+  }
+
+> ask 2 textDocument/hover file:///counter.vhd 21 6
+< {
+    "jsonrpc": "2.0",
+    "id": 2,
+    "result": {
+      "contents": {
+        "kind": "markdown",
+        "value": "```vhdl\nsignal count : std_logic_vector(7 downto 0);\n```\nsignal `count` — `std_logic_vector(7 downto 0)`, 8 bits"
+      },
+      "range": {
+        "start": {
+          "line": 21,
+          "character": 6
+        },
+        "end": {
+          "line": 21,
+          "character": 11
+        }
+      }
+    }
+  }
+
+> ask 3 textDocument/hover file:///counter.vhd 5 8
+< {
+    "jsonrpc": "2.0",
+    "id": 3,
+    "result": {
+      "contents": {
+        "kind": "markdown",
+        "value": "```vhdl\nentity counter is\n```\nentity `counter`\n\nports:\n- `clk`: in std_logic\n- `rst`: in std_logic\n- `q`: out std_logic_vector(7 downto 0)"
+      },
+      "range": {
+        "start": {
+          "line": 5,
+          "character": 7
+        },
+        "end": {
+          "line": 5,
+          "character": 14
+        }
+      }
+    }
+  }
+
+> ask 4 textDocument/definition file:///counter.vhd 25 7
+< {
+    "jsonrpc": "2.0",
+    "id": 4,
+    "result": {
+      "uri": "file:///counter.vhd",
+      "range": {
+        "start": {
+          "line": 14,
+          "character": 9
+        },
+        "end": {
+          "line": 14,
+          "character": 14
+        }
+      }
+    }
+  }
+
+> ask 5 textDocument/definition file:///counter.vhd 7 14
+< {
+    "jsonrpc": "2.0",
+    "id": 5,
+    "result": null
+  }
+
+> ask 6 textDocument/hover file:///counter.vhd 7 14
+< {
+    "jsonrpc": "2.0",
+    "id": 6,
+    "result": {
+      "contents": {
+        "kind": "markdown",
+        "value": "```vhdl\nstd_logic\n```\nsubtype `std_logic` — `std_logic`\n\ndeclared in `<reticle>/ieee/std_logic_1164.vhd` at 19:11"
+      },
+      "range": {
+        "start": {
+          "line": 7,
+          "character": 14
+        },
+        "end": {
+          "line": 7,
+          "character": 23
+        }
+      }
+    }
+  }
+
+> ask 7 textDocument/references file:///counter.vhd 14 9
+< {
+    "jsonrpc": "2.0",
+    "id": 7,
+    "result": [
+      {
+        "uri": "file:///counter.vhd",
+        "range": {
+          "start": {
+            "line": 14,
+            "character": 9
+          },
+          "end": {
+            "line": 14,
+            "character": 14
+          }
+        }
+      },
+      {
+        "uri": "file:///counter.vhd",
+        "range": {
+          "start": {
+            "line": 19,
+            "character": 6
+          },
+          "end": {
+            "line": 19,
+            "character": 11
+          }
+        }
+      },
+      {
+        "uri": "file:///counter.vhd",
+        "range": {
+          "start": {
+            "line": 21,
+            "character": 6
+          },
+          "end": {
+            "line": 21,
+            "character": 11
+          }
+        }
+      },
+      {
+        "uri": "file:///counter.vhd",
+        "range": {
+          "start": {
+            "line": 21,
+            "character": 15
+          },
+          "end": {
+            "line": 21,
+            "character": 20
+          }
+        }
+      },
+      {
+        "uri": "file:///counter.vhd",
+        "range": {
+          "start": {
+            "line": 25,
+            "character": 7
+          },
+          "end": {
+            "line": 25,
+            "character": 12
+          }
+        }
+      }
+    ]
+  }
+
+> doc 8 textDocument/documentSymbol file:///counter.vhd
+< {
+    "jsonrpc": "2.0",
+    "id": 8,
+    "result": [
+      {
+        "name": "counter",
+        "detail": "entity",
+        "kind": 2,
+        "range": {
+          "start": {
+            "line": 5,
+            "character": 0
+          },
+          "end": {
+            "line": 11,
+            "character": 19
+          }
+        },
+        "selectionRange": {
+          "start": {
+            "line": 5,
+            "character": 7
+          },
+          "end": {
+            "line": 5,
+            "character": 14
+          }
+        },
+        "children": [
+          {
+            "name": "clk",
+            "detail": "in std_logic",
+            "kind": 8,
+            "range": {
+              "start": {
+                "line": 7,
+                "character": 4
+              },
+              "end": {
+                "line": 7,
+                "character": 23
+              }
+            },
+            "selectionRange": {
+              "start": {
+                "line": 7,
+                "character": 4
+              },
+              "end": {
+                "line": 7,
+                "character": 7
+              }
+            }
+          },
+          {
+            "name": "rst",
+            "detail": "in std_logic",
+            "kind": 8,
+            "range": {
+              "start": {
+                "line": 8,
+                "character": 4
+              },
+              "end": {
+                "line": 8,
+                "character": 23
+              }
+            },
+            "selectionRange": {
+              "start": {
+                "line": 8,
+                "character": 4
+              },
+              "end": {
+                "line": 8,
+                "character": 7
+              }
+            }
+          },
+          {
+            "name": "q",
+            "detail": "out std_logic_vector(7 downto 0)",
+            "kind": 8,
+            "range": {
+              "start": {
+                "line": 9,
+                "character": 4
+              },
+              "end": {
+                "line": 9,
+                "character": 42
+              }
+            },
+            "selectionRange": {
+              "start": {
+                "line": 9,
+                "character": 4
+              },
+              "end": {
+                "line": 9,
+                "character": 5
+              }
+            }
+          }
+        ]
+      },
+      {
+        "name": "rtl",
+        "detail": "of counter",
+        "kind": 3,
+        "range": {
+          "start": {
+            "line": 13,
+            "character": 0
+          },
+          "end": {
+            "line": 26,
+            "character": 21
+          }
+        },
+        "selectionRange": {
+          "start": {
+            "line": 13,
+            "character": 13
+          },
+          "end": {
+            "line": 13,
+            "character": 16
+          }
+        },
+        "children": [
+          {
+            "name": "count",
+            "detail": "std_logic_vector(7 downto 0)",
+            "kind": 13,
+            "range": {
+              "start": {
+                "line": 14,
+                "character": 2
+              },
+              "end": {
+                "line": 14,
+                "character": 46
+              }
+            },
+            "selectionRange": {
+              "start": {
+                "line": 14,
+                "character": 9
+              },
+              "end": {
+                "line": 14,
+                "character": 14
+              }
+            }
+          },
+          {
+            "name": "tick",
+            "detail": "(clk, rst)",
+            "kind": 24,
+            "range": {
+              "start": {
+                "line": 16,
+                "character": 2
+              },
+              "end": {
+                "line": 23,
+                "character": 19
+              }
+            },
+            "selectionRange": {
+              "start": {
+                "line": 16,
+                "character": 2
+              },
+              "end": {
+                "line": 16,
+                "character": 6
+              }
+            }
+          }
+        ]
+      }
+    ]
+  }
+
+> ask 9 textDocument/completion file:///counter.vhd 21 11
+< {
+    "jsonrpc": "2.0",
+    "id": 9,
+    "result": [
+      {
+        "label": "count",
+        "kind": 6,
+        "detail": "std_logic_vector(7 downto 0)",
+        "sortText": "1count"
+      },
+      {
+        "label": "counter",
+        "kind": 9,
+        "detail": "entity",
+        "sortText": "1counter"
+      }
+    ]
+  }
+
+> request 10 shutdown null
+< {
+    "jsonrpc": "2.0",
+    "id": 10,
+    "result": null
+  }
+
+> notify exit
+

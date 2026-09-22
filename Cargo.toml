@@ -77,13 +77,17 @@ ip = ["verilog", "vhdl"]
 # Formal: bounded model checking and equivalence checking over the IR, built
 # on an in-crate SAT solver.
 formal = []
-# Language server (LSP) over the frontends.
-lsp = []
+# Language server (LSP) over the frontends: JSON-RPC over the LSP base
+# protocol, a document store, and diagnostics, go-to-definition, hover,
+# symbols, completion, rename, references and formatting for both
+# languages. It drives the two frontends (and their formatters and the
+# Verilog linter) directly, so it needs both. See `docs/lsp.md`.
+lsp = ["verilog", "vhdl"]
 
 # The `reticle` command-line tool (gates the binary target below). It drives
 # every stage, so it turns them all on, including `formal` which is otherwise
 # off by default.
-cli = ["verilog", "vhdl", "sim", "synth", "formal", "fpga", "timing", "ip"]
+cli = ["verilog", "vhdl", "sim", "synth", "formal", "fpga", "timing", "ip", "lsp"]
 
 # --- dependencies ---
 # Reticle is written from scratch and ships no foreign code: hand-written

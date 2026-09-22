@@ -1,0 +1,35 @@
+# A Verilog session: open `counter.v` and ask for every feature.
+# Lines and characters are zero-based; see tests/lsp_session.rs for the
+# directive syntax.
+request 1 initialize {"clientInfo":{"name":"golden"}}
+notify initialized {}
+open file:///counter.v verilog counter.v
+
+# Hover on the `next` of `assign next = q + 8'd1;`: a net, its declared
+# type and its width.
+ask 2 textDocument/hover file:///counter.v 9 9
+
+# Hover on `counter` in `counter u_counter (`: the module and its ports.
+ask 3 textDocument/hover file:///counter.v 22 4
+
+# Go to the declaration of `next` from its use in the `always` block.
+ask 4 textDocument/definition file:///counter.v 13 14
+
+# ... and to the module from its instantiation.
+ask 5 textDocument/definition file:///counter.v 22 4
+
+# Every use of `q`, the output port.
+ask 6 textDocument/references file:///counter.v 5 19
+
+# The outline of the whole file.
+doc 7 textDocument/documentSymbol file:///counter.v
+
+# Completion inside the instantiation's connection list, just after the
+# `.` of `.q(value)`: the ports of `counter` that are not connected yet.
+ask 8 textDocument/completion file:///counter.v 25 6
+
+# The file is already formatted, so formatting has nothing to say.
+doc 9 textDocument/formatting file:///counter.v {"options":{"tabSize":2,"insertSpaces":true}}
+
+request 10 shutdown null
+notify exit

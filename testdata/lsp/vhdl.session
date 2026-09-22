@@ -1,0 +1,35 @@
+# A VHDL session: the same features over `counter.vhd`, where the types
+# come from the semantic analysis rather than from the source text.
+request 1 initialize {"clientInfo":{"name":"golden"}}
+notify initialized {}
+open file:///counter.vhd vhdl counter.vhd
+
+# Hover on `count` in `count <= count;`: the resolved subtype and width.
+ask 2 textDocument/hover file:///counter.vhd 21 6
+
+# Hover on the entity, which lists its ports with their modes.
+ask 3 textDocument/hover file:///counter.vhd 5 8
+
+# Go to the declaration of the signal.
+ask 4 textDocument/definition file:///counter.vhd 25 7
+
+# `std_logic` is declared in the bundled `ieee` library, not in this
+# document, so there is no location to offer.
+ask 5 textDocument/definition file:///counter.vhd 7 14
+
+# Hover still says what it is and where it came from, because the
+# analysis is kept next to the document.
+ask 6 textDocument/hover file:///counter.vhd 7 14
+
+# Every use of `count`, declaration included.
+ask 7 textDocument/references file:///counter.vhd 14 9
+
+# The outline: the entity with its ports, the architecture with its
+# signal and its process.
+doc 8 textDocument/documentSymbol file:///counter.vhd
+
+# Completion in the process body.
+ask 9 textDocument/completion file:///counter.vhd 21 11
+
+request 10 shutdown null
+notify exit

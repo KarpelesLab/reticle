@@ -1,0 +1,200 @@
+> request 1 initialize {}
+< {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "result": {
+      "capabilities": {
+        "positionEncoding": "utf-16",
+        "textDocumentSync": {
+          "openClose": true,
+          "change": 2,
+          "save": {
+            "includeText": false
+          }
+        },
+        "completionProvider": {
+          "triggerCharacters": [
+            ".",
+            "("
+          ]
+        },
+        "hoverProvider": true,
+        "definitionProvider": true,
+        "referencesProvider": true,
+        "documentSymbolProvider": true,
+        "renameProvider": {
+          "prepareProvider": true
+        },
+        "documentFormattingProvider": true,
+        "documentRangeFormattingProvider": true
+      },
+      "serverInfo": {
+        "name": "reticle",
+        "version": "0.0.0"
+      }
+    }
+  }
+
+> notify initialized {}
+
+> open file:///counter.v verilog counter.v
+< {
+    "jsonrpc": "2.0",
+    "method": "textDocument/publishDiagnostics",
+    "params": {
+      "uri": "file:///counter.v",
+      "version": 1,
+      "diagnostics": []
+    }
+  }
+
+> edit file:///counter.v 2 9 16 9 17 "("
+< {
+    "jsonrpc": "2.0",
+    "method": "textDocument/publishDiagnostics",
+    "params": {
+      "uri": "file:///counter.v",
+      "version": 2,
+      "diagnostics": [
+        {
+          "range": {
+            "start": {
+              "line": 9,
+              "character": 24
+            },
+            "end": {
+              "line": 9,
+              "character": 25
+            }
+          },
+          "severity": 1,
+          "source": "reticle",
+          "message": "expected `)`, found `;`"
+        }
+      ]
+    }
+  }
+
+> ask 3 textDocument/hover file:///counter.v 7 13
+< {
+    "jsonrpc": "2.0",
+    "id": 3,
+    "result": {
+      "contents": {
+        "kind": "markdown",
+        "value": "```verilog\nwire [7:0] next;\n```\nnet `next` — `wire [7:0]`, 8 bits"
+      },
+      "range": {
+        "start": {
+          "line": 7,
+          "character": 13
+        },
+        "end": {
+          "line": 7,
+          "character": 17
+        }
+      }
+    }
+  }
+
+> edit file:///counter.v 4 9 16 9 17 "q"
+< {
+    "jsonrpc": "2.0",
+    "method": "textDocument/publishDiagnostics",
+    "params": {
+      "uri": "file:///counter.v",
+      "version": 4,
+      "diagnostics": []
+    }
+  }
+
+> open file:///counter.vhd vhdl counter.vhd
+< {
+    "jsonrpc": "2.0",
+    "method": "textDocument/publishDiagnostics",
+    "params": {
+      "uri": "file:///counter.vhd",
+      "version": 1,
+      "diagnostics": []
+    }
+  }
+
+> edit file:///counter.vhd 2 21 15 21 20 "kount"
+< {
+    "jsonrpc": "2.0",
+    "method": "textDocument/publishDiagnostics",
+    "params": {
+      "uri": "file:///counter.vhd",
+      "version": 2,
+      "diagnostics": [
+        {
+          "range": {
+            "start": {
+              "line": 21,
+              "character": 15
+            },
+            "end": {
+              "line": 21,
+              "character": 20
+            }
+          },
+          "severity": 1,
+          "code": "V0200",
+          "source": "reticle",
+          "message": "cannot find `kount` in this scope\nnote: did you mean `count`?"
+        }
+      ]
+    }
+  }
+
+> edit file:///counter.vhd 3 21 15 21 20 "count"
+< {
+    "jsonrpc": "2.0",
+    "method": "textDocument/publishDiagnostics",
+    "params": {
+      "uri": "file:///counter.vhd",
+      "version": 3,
+      "diagnostics": []
+    }
+  }
+
+> save file:///counter.vhd
+< {
+    "jsonrpc": "2.0",
+    "method": "textDocument/publishDiagnostics",
+    "params": {
+      "uri": "file:///counter.vhd",
+      "version": 3,
+      "diagnostics": []
+    }
+  }
+
+> close file:///counter.v
+< {
+    "jsonrpc": "2.0",
+    "method": "textDocument/publishDiagnostics",
+    "params": {
+      "uri": "file:///counter.v",
+      "diagnostics": []
+    }
+  }
+
+> close file:///counter.vhd
+< {
+    "jsonrpc": "2.0",
+    "method": "textDocument/publishDiagnostics",
+    "params": {
+      "uri": "file:///counter.vhd",
+      "diagnostics": []
+    }
+  }
+
+> request 5 shutdown null
+< {
+    "jsonrpc": "2.0",
+    "id": 5,
+    "result": null
+  }
+
+> notify exit
+

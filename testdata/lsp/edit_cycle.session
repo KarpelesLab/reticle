@@ -1,0 +1,33 @@
+# An edit that breaks a document and one that puts it back, in both
+# languages, watching the published diagnostics follow.
+request 1 initialize {}
+notify initialized {}
+
+# --- Verilog: a syntax error and its repair --------------------------------
+open file:///counter.v verilog counter.v
+
+# Replace the `q` of `assign next = q + 8'd1;` with an opening bracket,
+# which is what the file looks like halfway through an edit.
+edit file:///counter.v 2 9 16 9 17 "("
+
+# The features still answer: the parser recovers, and what it could not
+# place falls back to the last revision that parsed.
+ask 3 textDocument/hover file:///counter.v 7 13
+
+# Put the `q` back.
+edit file:///counter.v 4 9 16 9 17 "q"
+
+# --- VHDL: a name that does not exist and its repair -----------------------
+open file:///counter.vhd vhdl counter.vhd
+
+# Misspell the right-hand `count` of `count <= count;`.
+edit file:///counter.vhd 2 21 15 21 20 "kount"
+edit file:///counter.vhd 3 21 15 21 20 "count"
+save file:///counter.vhd
+
+# Closing clears the diagnostics the client is holding.
+close file:///counter.v
+close file:///counter.vhd
+
+request 5 shutdown null
+notify exit

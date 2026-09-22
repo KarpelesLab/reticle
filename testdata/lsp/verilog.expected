@@ -1,0 +1,536 @@
+> request 1 initialize {"clientInfo":{"name":"golden"}}
+< {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "result": {
+      "capabilities": {
+        "positionEncoding": "utf-16",
+        "textDocumentSync": {
+          "openClose": true,
+          "change": 2,
+          "save": {
+            "includeText": false
+          }
+        },
+        "completionProvider": {
+          "triggerCharacters": [
+            ".",
+            "("
+          ]
+        },
+        "hoverProvider": true,
+        "definitionProvider": true,
+        "referencesProvider": true,
+        "documentSymbolProvider": true,
+        "renameProvider": {
+          "prepareProvider": true
+        },
+        "documentFormattingProvider": true,
+        "documentRangeFormattingProvider": true
+      },
+      "serverInfo": {
+        "name": "reticle",
+        "version": "0.0.0"
+      }
+    }
+  }
+
+> notify initialized {}
+
+> open file:///counter.v verilog counter.v
+< {
+    "jsonrpc": "2.0",
+    "method": "textDocument/publishDiagnostics",
+    "params": {
+      "uri": "file:///counter.v",
+      "version": 1,
+      "diagnostics": []
+    }
+  }
+
+> ask 2 textDocument/hover file:///counter.v 9 9
+< {
+    "jsonrpc": "2.0",
+    "id": 2,
+    "result": {
+      "contents": {
+        "kind": "markdown",
+        "value": "```verilog\nwire [7:0] next;\n```\nnet `next` — `wire [7:0]`, 8 bits"
+      },
+      "range": {
+        "start": {
+          "line": 9,
+          "character": 9
+        },
+        "end": {
+          "line": 9,
+          "character": 13
+        }
+      }
+    }
+  }
+
+> ask 3 textDocument/hover file:///counter.v 22 4
+< {
+    "jsonrpc": "2.0",
+    "id": 3,
+    "result": {
+      "contents": {
+        "kind": "markdown",
+        "value": "```verilog\nmodule counter (\n```\nmodule `counter`\n\nports:\n- `clk`: input wire\n- `rst`: input wire\n- `q`: output reg [7:0]"
+      },
+      "range": {
+        "start": {
+          "line": 22,
+          "character": 2
+        },
+        "end": {
+          "line": 22,
+          "character": 9
+        }
+      }
+    }
+  }
+
+> ask 4 textDocument/definition file:///counter.v 13 14
+< {
+    "jsonrpc": "2.0",
+    "id": 4,
+    "result": {
+      "uri": "file:///counter.v",
+      "range": {
+        "start": {
+          "line": 7,
+          "character": 13
+        },
+        "end": {
+          "line": 7,
+          "character": 17
+        }
+      }
+    }
+  }
+
+> ask 5 textDocument/definition file:///counter.v 22 4
+< {
+    "jsonrpc": "2.0",
+    "id": 5,
+    "result": {
+      "uri": "file:///counter.v",
+      "range": {
+        "start": {
+          "line": 2,
+          "character": 7
+        },
+        "end": {
+          "line": 2,
+          "character": 14
+        }
+      }
+    }
+  }
+
+> ask 6 textDocument/references file:///counter.v 5 19
+< {
+    "jsonrpc": "2.0",
+    "id": 6,
+    "result": [
+      {
+        "uri": "file:///counter.v",
+        "range": {
+          "start": {
+            "line": 5,
+            "character": 19
+          },
+          "end": {
+            "line": 5,
+            "character": 20
+          }
+        }
+      },
+      {
+        "uri": "file:///counter.v",
+        "range": {
+          "start": {
+            "line": 9,
+            "character": 16
+          },
+          "end": {
+            "line": 9,
+            "character": 17
+          }
+        }
+      },
+      {
+        "uri": "file:///counter.v",
+        "range": {
+          "start": {
+            "line": 12,
+            "character": 13
+          },
+          "end": {
+            "line": 12,
+            "character": 14
+          }
+        }
+      },
+      {
+        "uri": "file:///counter.v",
+        "range": {
+          "start": {
+            "line": 13,
+            "character": 9
+          },
+          "end": {
+            "line": 13,
+            "character": 10
+          }
+        }
+      }
+    ]
+  }
+
+> doc 7 textDocument/documentSymbol file:///counter.v
+< {
+    "jsonrpc": "2.0",
+    "id": 7,
+    "result": [
+      {
+        "name": "counter",
+        "detail": "module",
+        "kind": 2,
+        "range": {
+          "start": {
+            "line": 2,
+            "character": 0
+          },
+          "end": {
+            "line": 15,
+            "character": 9
+          }
+        },
+        "selectionRange": {
+          "start": {
+            "line": 2,
+            "character": 7
+          },
+          "end": {
+            "line": 2,
+            "character": 14
+          }
+        },
+        "children": [
+          {
+            "name": "clk",
+            "detail": "input wire",
+            "kind": 8,
+            "range": {
+              "start": {
+                "line": 3,
+                "character": 2
+              },
+              "end": {
+                "line": 3,
+                "character": 22
+              }
+            },
+            "selectionRange": {
+              "start": {
+                "line": 3,
+                "character": 19
+              },
+              "end": {
+                "line": 3,
+                "character": 22
+              }
+            }
+          },
+          {
+            "name": "rst",
+            "detail": "input wire",
+            "kind": 8,
+            "range": {
+              "start": {
+                "line": 4,
+                "character": 2
+              },
+              "end": {
+                "line": 4,
+                "character": 22
+              }
+            },
+            "selectionRange": {
+              "start": {
+                "line": 4,
+                "character": 19
+              },
+              "end": {
+                "line": 4,
+                "character": 22
+              }
+            }
+          },
+          {
+            "name": "q",
+            "detail": "output reg [7:0]",
+            "kind": 8,
+            "range": {
+              "start": {
+                "line": 5,
+                "character": 2
+              },
+              "end": {
+                "line": 5,
+                "character": 20
+              }
+            },
+            "selectionRange": {
+              "start": {
+                "line": 5,
+                "character": 19
+              },
+              "end": {
+                "line": 5,
+                "character": 20
+              }
+            }
+          },
+          {
+            "name": "next",
+            "detail": "wire [7:0]",
+            "kind": 13,
+            "range": {
+              "start": {
+                "line": 7,
+                "character": 2
+              },
+              "end": {
+                "line": 7,
+                "character": 18
+              }
+            },
+            "selectionRange": {
+              "start": {
+                "line": 7,
+                "character": 13
+              },
+              "end": {
+                "line": 7,
+                "character": 17
+              }
+            }
+          },
+          {
+            "name": "always",
+            "detail": "@(posedge clk)",
+            "kind": 24,
+            "range": {
+              "start": {
+                "line": 11,
+                "character": 2
+              },
+              "end": {
+                "line": 14,
+                "character": 5
+              }
+            },
+            "selectionRange": {
+              "start": {
+                "line": 11,
+                "character": 2
+              },
+              "end": {
+                "line": 11,
+                "character": 2
+              }
+            }
+          }
+        ]
+      },
+      {
+        "name": "top",
+        "detail": "module",
+        "kind": 2,
+        "range": {
+          "start": {
+            "line": 17,
+            "character": 0
+          },
+          "end": {
+            "line": 27,
+            "character": 9
+          }
+        },
+        "selectionRange": {
+          "start": {
+            "line": 17,
+            "character": 7
+          },
+          "end": {
+            "line": 17,
+            "character": 10
+          }
+        },
+        "children": [
+          {
+            "name": "clk",
+            "detail": "input wire",
+            "kind": 8,
+            "range": {
+              "start": {
+                "line": 18,
+                "character": 2
+              },
+              "end": {
+                "line": 18,
+                "character": 22
+              }
+            },
+            "selectionRange": {
+              "start": {
+                "line": 18,
+                "character": 19
+              },
+              "end": {
+                "line": 18,
+                "character": 22
+              }
+            }
+          },
+          {
+            "name": "rst",
+            "detail": "input wire",
+            "kind": 8,
+            "range": {
+              "start": {
+                "line": 19,
+                "character": 2
+              },
+              "end": {
+                "line": 19,
+                "character": 22
+              }
+            },
+            "selectionRange": {
+              "start": {
+                "line": 19,
+                "character": 19
+              },
+              "end": {
+                "line": 19,
+                "character": 22
+              }
+            }
+          },
+          {
+            "name": "value",
+            "detail": "output wire [7:0]",
+            "kind": 8,
+            "range": {
+              "start": {
+                "line": 20,
+                "character": 2
+              },
+              "end": {
+                "line": 20,
+                "character": 25
+              }
+            },
+            "selectionRange": {
+              "start": {
+                "line": 20,
+                "character": 20
+              },
+              "end": {
+                "line": 20,
+                "character": 25
+              }
+            }
+          },
+          {
+            "name": "u_counter",
+            "detail": "counter",
+            "kind": 19,
+            "range": {
+              "start": {
+                "line": 22,
+                "character": 10
+              },
+              "end": {
+                "line": 26,
+                "character": 3
+              }
+            },
+            "selectionRange": {
+              "start": {
+                "line": 22,
+                "character": 10
+              },
+              "end": {
+                "line": 22,
+                "character": 19
+              }
+            }
+          }
+        ]
+      }
+    ]
+  }
+
+> ask 8 textDocument/completion file:///counter.v 25 6
+< {
+    "jsonrpc": "2.0",
+    "id": 8,
+    "result": [
+      {
+        "label": "q",
+        "kind": 5,
+        "detail": "output reg [7:0]",
+        "sortText": "0q"
+      }
+    ]
+  }
+
+> doc 9 textDocument/formatting file:///counter.v {"options":{"tabSize":2,"insertSpaces":true}}
+< {
+    "jsonrpc": "2.0",
+    "id": 9,
+    "result": [
+      {
+        "range": {
+          "start": {
+            "line": 2,
+            "character": 0
+          },
+          "end": {
+            "line": 7,
+            "character": 0
+          }
+        },
+        "newText": "module counter (input wire clk, input wire rst, output reg [7:0] q);\n"
+      },
+      {
+        "range": {
+          "start": {
+            "line": 17,
+            "character": 0
+          },
+          "end": {
+            "line": 27,
+            "character": 0
+          }
+        },
+        "newText": "module top (input wire clk, input wire rst, output wire [7:0] value);\n  counter u_counter (.clk(clk), .rst(rst), .q(value));\n"
+      }
+    ]
+  }
+
+> request 10 shutdown null
+< {
+    "jsonrpc": "2.0",
+    "id": 10,
+    "result": null
+  }
+
+> notify exit
+

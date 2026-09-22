@@ -30,7 +30,9 @@
 //! | [`formal`]  | `formal`  | SAT solver, CNF encoding, model checking        |
 //! | [`asic`]    | `asic`    | Liberty, LEF and DEF readers and writers        |
 //! | [`fpga`]    | `fpga`    | FPGA device database, primitive mapping, constraints |
-//! | [`timing`]  | `timing`  | Static timing analysis and clock domain crossings |//! | [`ip`]      | `ip`      | IP and project manifests, bus interfaces, interconnect |
+//! | [`timing`]  | `timing`  | Static timing analysis and clock domain crossings |
+//! | [`ip`]      | `ip`      | IP and project manifests, bus interfaces, interconnect |
+//! | [`lsp`]     | `lsp`     | Language server for Verilog and VHDL             |
 
 #![forbid(unsafe_code)]
 
@@ -67,6 +69,9 @@ pub mod timing;
 
 #[cfg(feature = "ip")]
 pub mod ip;
+
+#[cfg(feature = "lsp")]
+pub mod lsp;
 
 /// The crate version, as recorded in `Cargo.toml`.
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");

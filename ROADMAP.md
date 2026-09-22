@@ -400,8 +400,19 @@ no HDL written by the user beyond a top-level.
 
 ## Phase 9: developer experience
 
-- [ ] Language server (LSP) for both languages: diagnostics as you type,
-      go-to-definition, hover with resolved types and widths, rename.
+- [x] Language server (LSP) for both languages: diagnostics as you type
+      (parse errors, the Verilog lint rules by name, VHDL semantic errors),
+      go-to-definition, references, hover with resolved types and widths,
+      document symbols, completion (including the port names of the unit an
+      instantiation is connecting), rename, and formatting and range
+      formatting through the existing formatters. The wire protocol, JSON
+      included, is hand written; the server is sans-I/O
+      (`Server::handle(Json) -> Vec<Json>`) with the stream behind a thin
+      transport. It answers from the document a request names: there is no
+      workspace index and no elaboration, so a width that depends on a
+      parameter is reported as unknown rather than guessed, and a rename
+      that could reach another file is refused with a reason. See
+      `docs/lsp.md`.
 - [x] Formatter for Verilog and VHDL (`verilog::format`, `vhdl::format`,
       shared `fmt_doc` printer; see `docs/formatting.md`).
 - [ ] Schematic / netlist viewer output (an HTML page rendering the IR)

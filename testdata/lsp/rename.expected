@@ -1,0 +1,245 @@
+> request 1 initialize {}
+< {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "result": {
+      "capabilities": {
+        "positionEncoding": "utf-16",
+        "textDocumentSync": {
+          "openClose": true,
+          "change": 2,
+          "save": {
+            "includeText": false
+          }
+        },
+        "completionProvider": {
+          "triggerCharacters": [
+            ".",
+            "("
+          ]
+        },
+        "hoverProvider": true,
+        "definitionProvider": true,
+        "referencesProvider": true,
+        "documentSymbolProvider": true,
+        "renameProvider": {
+          "prepareProvider": true
+        },
+        "documentFormattingProvider": true,
+        "documentRangeFormattingProvider": true
+      },
+      "serverInfo": {
+        "name": "reticle",
+        "version": "0.0.0"
+      }
+    }
+  }
+
+> notify initialized {}
+
+> open file:///counter.v verilog counter.v
+< {
+    "jsonrpc": "2.0",
+    "method": "textDocument/publishDiagnostics",
+    "params": {
+      "uri": "file:///counter.v",
+      "version": 1,
+      "diagnostics": []
+    }
+  }
+
+> open file:///counter.vhd vhdl counter.vhd
+< {
+    "jsonrpc": "2.0",
+    "method": "textDocument/publishDiagnostics",
+    "params": {
+      "uri": "file:///counter.vhd",
+      "version": 1,
+      "diagnostics": []
+    }
+  }
+
+> ask 2 textDocument/rename file:///counter.v 7 13 {"newName":"counted"}
+< {
+    "jsonrpc": "2.0",
+    "id": 2,
+    "result": {
+      "changes": {
+        "file:///counter.v": [
+          {
+            "range": {
+              "start": {
+                "line": 7,
+                "character": 13
+              },
+              "end": {
+                "line": 7,
+                "character": 17
+              }
+            },
+            "newText": "counted"
+          },
+          {
+            "range": {
+              "start": {
+                "line": 9,
+                "character": 9
+              },
+              "end": {
+                "line": 9,
+                "character": 13
+              }
+            },
+            "newText": "counted"
+          },
+          {
+            "range": {
+              "start": {
+                "line": 13,
+                "character": 14
+              },
+              "end": {
+                "line": 13,
+                "character": 18
+              }
+            },
+            "newText": "counted"
+          }
+        ]
+      }
+    }
+  }
+
+> ask 3 textDocument/prepareRename file:///counter.v 2 7
+< {
+    "jsonrpc": "2.0",
+    "id": 3,
+    "result": null
+  }
+
+> ask 4 textDocument/rename file:///counter.v 2 7 {"newName":"ctr"}
+< {
+    "jsonrpc": "2.0",
+    "id": 4,
+    "error": {
+      "code": -32803,
+      "message": "`counter` is a module name, which other files of the design may use; the server only sees the documents you have open, so it cannot rename it everywhere"
+    }
+  }
+
+> ask 5 textDocument/rename file:///counter.v 7 13 {"newName":"1bad"}
+< {
+    "jsonrpc": "2.0",
+    "id": 5,
+    "error": {
+      "code": -32803,
+      "message": "`1bad` is not a valid identifier"
+    }
+  }
+
+> ask 6 textDocument/rename file:///counter.v 8 0 {"newName":"whatever"}
+< {
+    "jsonrpc": "2.0",
+    "id": 6,
+    "error": {
+      "code": -32803,
+      "message": "there is nothing here that this document declares, so it cannot be renamed"
+    }
+  }
+
+> ask 7 textDocument/rename file:///counter.vhd 14 9 {"newName":"value"}
+< {
+    "jsonrpc": "2.0",
+    "id": 7,
+    "result": {
+      "changes": {
+        "file:///counter.vhd": [
+          {
+            "range": {
+              "start": {
+                "line": 14,
+                "character": 9
+              },
+              "end": {
+                "line": 14,
+                "character": 14
+              }
+            },
+            "newText": "value"
+          },
+          {
+            "range": {
+              "start": {
+                "line": 19,
+                "character": 6
+              },
+              "end": {
+                "line": 19,
+                "character": 11
+              }
+            },
+            "newText": "value"
+          },
+          {
+            "range": {
+              "start": {
+                "line": 21,
+                "character": 6
+              },
+              "end": {
+                "line": 21,
+                "character": 11
+              }
+            },
+            "newText": "value"
+          },
+          {
+            "range": {
+              "start": {
+                "line": 21,
+                "character": 15
+              },
+              "end": {
+                "line": 21,
+                "character": 20
+              }
+            },
+            "newText": "value"
+          },
+          {
+            "range": {
+              "start": {
+                "line": 25,
+                "character": 7
+              },
+              "end": {
+                "line": 25,
+                "character": 12
+              }
+            },
+            "newText": "value"
+          }
+        ]
+      }
+    }
+  }
+
+> ask 8 textDocument/rename file:///counter.vhd 5 8 {"newName":"ctr"}
+< {
+    "jsonrpc": "2.0",
+    "id": 8,
+    "error": {
+      "code": -32803,
+      "message": "`counter` is an entity name, which other files of the design may use; the server only sees the documents you have open, so it cannot rename it everywhere"
+    }
+  }
+
+> request 9 shutdown null
+< {
+    "jsonrpc": "2.0",
+    "id": 9,
+    "result": null
+  }
+
+> notify exit
+

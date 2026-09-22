@@ -1,0 +1,158 @@
+> request 1 initialize {}
+< {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "result": {
+      "capabilities": {
+        "positionEncoding": "utf-16",
+        "textDocumentSync": {
+          "openClose": true,
+          "change": 2,
+          "save": {
+            "includeText": false
+          }
+        },
+        "completionProvider": {
+          "triggerCharacters": [
+            ".",
+            "("
+          ]
+        },
+        "hoverProvider": true,
+        "definitionProvider": true,
+        "referencesProvider": true,
+        "documentSymbolProvider": true,
+        "renameProvider": {
+          "prepareProvider": true
+        },
+        "documentFormattingProvider": true,
+        "documentRangeFormattingProvider": true
+      },
+      "serverInfo": {
+        "name": "reticle",
+        "version": "0.0.0"
+      }
+    }
+  }
+
+> notify initialized {}
+
+> open file:///unicode.v verilog unicode.v
+< {
+    "jsonrpc": "2.0",
+    "method": "textDocument/publishDiagnostics",
+    "params": {
+      "uri": "file:///unicode.v",
+      "version": 1,
+      "diagnostics": []
+    }
+  }
+
+> ask 2 textDocument/hover file:///unicode.v 9 34
+< {
+    "jsonrpc": "2.0",
+    "id": 2,
+    "result": {
+      "contents": {
+        "kind": "markdown",
+        "value": "```verilog\ninput wire [7:0] data\n```\nport `data` — `input wire [7:0]`, 8 bits"
+      },
+      "range": {
+        "start": {
+          "line": 9,
+          "character": 34
+        },
+        "end": {
+          "line": 9,
+          "character": 38
+        }
+      }
+    }
+  }
+
+> ask 3 textDocument/definition file:///unicode.v 9 34
+< {
+    "jsonrpc": "2.0",
+    "id": 3,
+    "result": {
+      "uri": "file:///unicode.v",
+      "range": {
+        "start": {
+          "line": 4,
+          "character": 20
+        },
+        "end": {
+          "line": 4,
+          "character": 24
+        }
+      }
+    }
+  }
+
+> ask 4 textDocument/definition file:///unicode.v 9 39
+< {
+    "jsonrpc": "2.0",
+    "id": 4,
+    "result": null
+  }
+
+> ask 5 textDocument/rename file:///unicode.v 4 20 {"newName":"payload"}
+< {
+    "jsonrpc": "2.0",
+    "id": 5,
+    "result": {
+      "changes": {
+        "file:///unicode.v": [
+          {
+            "range": {
+              "start": {
+                "line": 4,
+                "character": 20
+              },
+              "end": {
+                "line": 4,
+                "character": 24
+              }
+            },
+            "newText": "payload"
+          },
+          {
+            "range": {
+              "start": {
+                "line": 7,
+                "character": 16
+              },
+              "end": {
+                "line": 7,
+                "character": 20
+              }
+            },
+            "newText": "payload"
+          },
+          {
+            "range": {
+              "start": {
+                "line": 9,
+                "character": 34
+              },
+              "end": {
+                "line": 9,
+                "character": 38
+              }
+            },
+            "newText": "payload"
+          }
+        ]
+      }
+    }
+  }
+
+> request 6 shutdown null
+< {
+    "jsonrpc": "2.0",
+    "id": 6,
+    "result": null
+  }
+
+> notify exit
+

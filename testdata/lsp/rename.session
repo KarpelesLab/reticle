@@ -1,0 +1,30 @@
+# Renaming: what the server will do, and what it refuses to do.
+request 1 initialize {}
+notify initialized {}
+open file:///counter.v verilog counter.v
+open file:///counter.vhd vhdl counter.vhd
+
+# A net is local to its module, so every use of it is in this document.
+ask 2 textDocument/rename file:///counter.v 7 13 {"newName":"counted"}
+
+# `prepareRename` on the module name says in advance that it will not be
+# renamed.
+ask 3 textDocument/prepareRename file:///counter.v 2 7
+
+# ... and the rename itself refuses, with a message saying why.
+ask 4 textDocument/rename file:///counter.v 2 7 {"newName":"ctr"}
+
+# A new name that is not an identifier is refused.
+ask 5 textDocument/rename file:///counter.v 7 13 {"newName":"1bad"}
+
+# Nothing under the cursor: a blank line.
+ask 6 textDocument/rename file:///counter.v 8 0 {"newName":"whatever"}
+
+# A VHDL signal renames the same way, case-insensitively matched.
+ask 7 textDocument/rename file:///counter.vhd 14 9 {"newName":"value"}
+
+# A VHDL entity does not: other files may instantiate it.
+ask 8 textDocument/rename file:///counter.vhd 5 8 {"newName":"ctr"}
+
+request 9 shutdown null
+notify exit
