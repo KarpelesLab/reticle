@@ -674,6 +674,36 @@ fn sim_writes_coverage() {
     assert!(report.contains("SF:"), "{report}");
 }
 
+/// `$readmemh` reads its file through a provider the library is handed,
+/// since the library performs no I/O. The command must hand it one that
+/// resolves a relative name against the design's own directory, or every
+/// `$readmemh` in a design run from the command line fails.
+#[test]
+fn sim_loads_readmemh_files_next_to_the_design() {
+    let dir = scratch("sim_readmem");
+    std::fs::copy("testdata/sim/memory.rtl", dir.join("memory.rtl")).unwrap();
+    let expect = std::fs::read_to_string("testdata/sim/memory.expect").unwrap();
+    let hex: String = expect
+        .split("file data.hex\n")
+        .nth(1)
+        .and_then(|rest| rest.split("end-file").next())
+        .expect("the golden carries data.hex")
+        .to_string();
+    std::fs::write(dir.join("data.hex"), &hex).unwrap();
+
+    let design = dir.join("memory.rtl");
+    let (code, stdout, stderr) = run(&["sim", "--quiet", design.to_str().unwrap()]);
+    assert_eq!(code, 0, "{stderr}");
+    // `hex1` is the second byte of the file, so it only comes out right if
+    // the file was actually read.
+    assert!(stdout.contains("hex1=cd"), "{stdout}");
+
+    // Without the file the run says which one it could not read.
+    std::fs::remove_file(dir.join("data.hex")).unwrap();
+    let (_, _, stderr) = run(&["sim", "--quiet", design.to_str().unwrap()]);
+    assert!(stderr.contains("data.hex"), "{stderr}");
+}
+
 #[test]
 fn sim_honours_the_time_limit() {
     let (code, stdout, stderr) = run(&["sim", "--until", "50", "testdata/sim/counter.rtl"]);

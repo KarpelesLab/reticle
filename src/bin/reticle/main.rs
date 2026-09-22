@@ -1625,6 +1625,9 @@ fn sim(args: &Args) -> Result<Outcome, ArgError> {
     let mut options = SimOptions {
         top: args.option("top").map(str::to_string),
         coverage: args.option("coverage").is_some(),
+        // Without this every `$readmemh` fails: the simulator performs no
+        // I/O of its own and reads files only through a provider.
+        files: Some(Box::new(DiskFiles::for_sources(args.positionals()))),
         ..SimOptions::default()
     };
     if let Some(seed) = seed {
@@ -1898,6 +1901,48 @@ fn timing(args: &Args) -> Result<Outcome, ArgError> {
     } else {
         Outcome::Ok
     })
+}
+
+/// Serves `$readmemh` and friends from the filesystem.
+///
+/// The library never touches the disk, so it asks for files through this.
+/// A relative path is tried against each of the directories the design's
+/// sources came from, in order, and then the current directory, which is
+/// how a simulator resolves `$readmemh("prog.hex")` written next to the
+/// testbench that loads it.
+struct DiskFiles {
+    roots: Vec<std::path::PathBuf>,
+}
+
+impl DiskFiles {
+    /// A provider rooted at the directories of `sources`.
+    fn for_sources(sources: &[String]) -> DiskFiles {
+        let mut roots: Vec<std::path::PathBuf> = Vec::new();
+        for source in sources {
+            let dir = Path::new(source)
+                .parent()
+                .filter(|p| !p.as_os_str().is_empty())
+                .unwrap_or(Path::new("."))
+                .to_path_buf();
+            if !roots.contains(&dir) {
+                roots.push(dir);
+            }
+        }
+        roots.push(std::path::PathBuf::from("."));
+        DiskFiles { roots }
+    }
+}
+
+impl reticle::sim::FileProvider for DiskFiles {
+    fn read_file(&self, path: &str) -> Option<String> {
+        let wanted = Path::new(path);
+        if wanted.is_absolute() {
+            return std::fs::read_to_string(wanted).ok();
+        }
+        self.roots
+            .iter()
+            .find_map(|root| std::fs::read_to_string(root.join(wanted)).ok())
+    }
 }
 
 /// `reticle lsp`: the language server over standard input and output.
