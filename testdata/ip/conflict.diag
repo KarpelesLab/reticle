@@ -1,0 +1,20 @@
+error[P0401]: the project's top `top` is not in the design
+ --> projects/conflict/reticle.proj:6:1
+  |
+6 | top top
+  | ^^^^^^^
+  |
+  = note: no elaborated module has that name
+
+error[P0102]: no version of `fifo_sync` satisfies every requirement
+  --> packages/uart_strict/reticle.ip:16:1
+   |
+16 | depends fifo_sync ^2.0.0
+   | ^^^^^^^^^^^^^^^^^^^^^^^^ `conflicted > uart_strict` requires ^2.0.0
+  ::: projects/conflict/reticle.proj:9:1
+   |
+ 9 | depends fifo_sync ^1.0.0 path ../../packages/fifo_sync
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `conflicted` requires ^1.0.0
+   |
+   = note: available: 1.0.4
+

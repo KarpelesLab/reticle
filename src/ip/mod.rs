@@ -380,6 +380,11 @@ pub fn elaborate(
         } else {
             crate::verilog::Dialect::Verilog2005
         };
+        // The frontend takes the diagnostics sink over and declines to
+        // produce a design when it already holds an error, so give it a
+        // fresh one: a dependency that failed to resolve must not stop
+        // the sources that did from being elaborated and reported on.
+        let mut front = Diagnostics::new();
         let mut files = Vec::with_capacity(verilog.len());
         for (id, language) in &verilog {
             let per_file = match language {
@@ -391,12 +396,14 @@ pub fn elaborate(
                 *id,
                 per_file,
                 &mut crate::verilog::NoIncludes,
-                diags,
+                &mut front,
             ));
         }
         let refs: Vec<&crate::verilog::ast::SourceFile> = files.iter().collect();
         let options = crate::verilog::ElabOptions::new(dialect);
-        match crate::verilog::elaborate(&refs, &options, diags) {
+        let design = crate::verilog::elaborate(&refs, &options, &mut front);
+        diags.append(&mut front);
+        match design {
             Some(design) => design,
             None => return out,
         }
@@ -452,12 +459,18 @@ pub fn elaborate(
     if let Some(top) = &project.top {
         match design.module_by_name(top) {
             Some(id) => design.top = Some(id),
-            None => diags.push(
-                Diagnostic::error(format!("the project's top `{top}` is not in the design"))
-                    .with_code(NO_SUCH_TOP)
-                    .with_span(project.span)
-                    .with_note("no elaborated module has that name"),
-            ),
+            None => {
+                // Leave no top at all rather than the root a frontend
+                // happened to pick: a report naming a module the project
+                // never asked for is worse than one naming none.
+                design.top = None;
+                diags.push(
+                    Diagnostic::error(format!("the project's top `{top}` is not in the design"))
+                        .with_code(NO_SUCH_TOP)
+                        .with_span(project.top_span.unwrap_or(project.span))
+                        .with_note("no elaborated module has that name"),
+                );
+            }
         }
     }
 

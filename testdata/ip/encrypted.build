@@ -1,0 +1,14 @@
+sources
+  vendor_pll: sim/vendor_pll_model.v (verilog)
+  encrypted_soc: rtl/top.v (verilog)
+black boxes
+  black box `ddr_phy` from vendor_ddr 2.1.0 (encrypted sources)
+    interface s_axi: 19 ports
+    23 ports in total
+  black box `vendor_pll` from vendor_pll 1.0.0 (the behavioural model `sim/vendor_pll_model.v`)
+    4 ports in total
+design
+  top: top
+  modules: ddr_phy, top, vendor_pll
+rtl
+  3 modules

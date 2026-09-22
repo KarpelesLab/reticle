@@ -1,0 +1,11 @@
+`pragma protect begin_protected
+`pragma protect version = 1
+`pragma protect author = "A Vendor"
+`pragma protect encrypt_agent = "not a real encryptor"
+`pragma protect data_method = "aes128-cbc"
+`pragma protect data_block
+VGhpcyBmaWxlIHN0YW5kcyBpbiBmb3IgYW4gZW5jcnlwdGVkIHZlbmRvciBjb3JlLiBSZXRpY2xl
+IG5ldmVyIHJlYWRzIGl0OiB0aGUgbWFuaWZlc3QgbWFya3MgaXQgYGVuY3J5cHRlZGAsIHNvIHRo
+ZSBwYWNrYWdlIGJlY29tZXMgYSBibGFjayBib3ggYW5kIHRoZSBmaWxlIGlzIHBhc3NlZCB0byB0
+aGUgdmVuZG9yIHRvb2wgdW50b3VjaGVkLg==
+`pragma protect end_protected

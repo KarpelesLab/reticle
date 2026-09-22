@@ -1,0 +1,8 @@
+sources
+  uart_strict: rtl/uart_strict.v (verilog)
+  cdc_sync: rtl/cdc_sync.v (verilog)
+design
+  top: <none>
+  modules: cdc_sync, uart_strict
+rtl
+  2 modules

@@ -1,0 +1,20 @@
+name uart_lite
+version 1.2.0
+license MIT
+description "8N1 UART transmitter with a one-entry FIFO"
+
+top uart_lite
+target ice40
+
+source rtl/uart_lite.v
+
+param BAUD_DIV int 434 1..65535
+
+port clk in
+port rst_n in
+port tx_data in 8
+port tx_valid in
+port tx_ready out
+port tx out
+
+depends fifo_sync ^1.0.0

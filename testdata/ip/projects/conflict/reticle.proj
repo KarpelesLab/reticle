@@ -1,0 +1,10 @@
+# Two requirements that cannot both hold: this project wants
+# `fifo_sync` 1.x, and `uart_strict` wants 2.x. Only 1.0.4 exists, so
+# resolution fails with a diagnostic naming both requirements and the
+# path through the graph that stated each.
+name conflicted
+top top
+
+depends uart_strict ^2.0.0 path ../../packages/uart_strict
+depends fifo_sync ^1.0.0 path ../../packages/fifo_sync
+depends cdc_sync ^0.3.0 path ../../packages/cdc_sync

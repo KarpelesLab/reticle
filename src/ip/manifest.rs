@@ -759,7 +759,9 @@ impl IpManifest {
         for line in &p.lines.clone() {
             p.line = line.clone();
             match line.keyword() {
-                "name" => p.once(&mut name, "name"),
+                "name" => {
+                    p.once(&mut name, "name");
+                }
                 "version" => {
                     if let Some(text) = p.one_word("version") {
                         match Version::parse(text.as_str()) {
@@ -774,9 +776,15 @@ impl IpManifest {
                         }
                     }
                 }
-                "license" => p.once(&mut out.license, "license"),
-                "description" => p.once(&mut out.description, "description"),
-                "top" => p.once(&mut out.top, "top"),
+                "license" => {
+                    p.once(&mut out.license, "license");
+                }
+                "description" => {
+                    p.once(&mut out.description, "description");
+                }
+                "top" => {
+                    p.once(&mut out.top, "top");
+                }
                 "source" => {
                     if let Some(entry) = p.source_entry() {
                         out.sources.push(entry);
@@ -915,6 +923,8 @@ pub struct Project {
     pub testbenches: Vec<String>,
     /// The IP the project pulls in, each with where it comes from.
     pub depends: Vec<Dependency>,
+    /// The span of the `top` line, for a diagnostic about the top.
+    pub top_span: Option<Span>,
     /// The span of the whole manifest file.
     pub span: Span,
 }
@@ -930,6 +940,7 @@ impl Project {
             constraints: Vec::new(),
             testbenches: Vec::new(),
             depends: Vec::new(),
+            top_span: None,
             span,
         }
     }
@@ -960,9 +971,13 @@ impl Project {
         for line in &p.lines.clone() {
             p.line = line.clone();
             match line.keyword() {
-                "name" => p.once(&mut name, "name"),
-                "top" => p.once(&mut out.top, "top"),
-                "device" => p.once(&mut out.device, "device"),
+                "name" => {
+                    p.once(&mut name, "name");
+                }
+                "top" => out.top_span = p.once(&mut out.top, "top"),
+                "device" => {
+                    p.once(&mut out.device, "device");
+                }
                 "source" => {
                     if let Some(entry) = p.source_entry() {
                         out.sources.push(entry);
@@ -1239,15 +1254,16 @@ impl<'a> ManifestParser<'a> {
     }
 
     /// Reads a single-valued keyword into `slot`, reporting a second one.
-    fn once(&mut self, slot: &mut Option<String>, key: &str) {
-        let Some(token) = self.one_word(key) else {
-            return;
-        };
+    /// Returns the line's span when it set the slot, for the keywords
+    /// whose line a later diagnostic wants to point at.
+    fn once(&mut self, slot: &mut Option<String>, key: &str) -> Option<Span> {
+        let token = self.one_word(key)?;
         if slot.is_some() {
             self.duplicate(key);
-            return;
+            return None;
         }
         *slot = Some(token.as_str().to_owned());
+        Some(self.line.span)
     }
 
     /// Reads a repeatable single-word keyword into `list`.

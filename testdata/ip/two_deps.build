@@ -1,0 +1,10 @@
+sources
+  cdc_sync: rtl/cdc_sync.v (verilog)
+  fifo_sync: rtl/fifo_sync.v (verilog)
+  uart_lite: rtl/uart_lite.v (verilog)
+  blinky: rtl/top.v (verilog)
+design
+  top: top
+  modules: cdc_sync, fifo_sync, top, uart_lite
+rtl
+  4 modules

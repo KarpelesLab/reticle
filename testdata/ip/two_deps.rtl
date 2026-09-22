@@ -1,0 +1,127 @@
+top top
+
+module cdc_sync
+  net %clk u1 wire
+  net %rst_n u1 wire
+  net %d u1 wire
+  net %q u1 wire
+  net %sync_q u2 reg
+  port clk in %clk
+  port rst_n in %rst_n
+  port d in %d
+  port q out %q
+  assign %q = %sync_q[1:1]
+  process seq posedge %clk async negedge %rst_n
+    if lnot(%rst_n)
+      %sync_q <= 2'd0
+    else
+      %sync_q <= {%sync_q[0:0], %d}
+    end
+  end
+end
+
+module fifo_sync
+  net %clk u1 wire
+  net %rst_n u1 wire
+  net %wdata u8 wire
+  net %push u1 wire
+  net %pop u1 wire
+  net %rdata u8 wire
+  net %full u1 wire
+  net %empty u1 wire
+  net %data_q u8 reg
+  net %valid_q u1 reg
+  net %rst_sync_n u1 wire
+  port clk in %clk
+  port rst_n in %rst_n
+  port wdata in %wdata
+  port push in %push
+  port pop in %pop
+  port rdata out %rdata
+  port full out %full
+  port empty out %empty
+  instance u_rst_sync of cdc_sync (clk=%clk, rst_n=%rst_n, d=1'd1, q=%rst_sync_n)
+  assign %rdata = %data_q
+  assign %full = %valid_q
+  assign %empty = lnot(%valid_q)
+  process seq posedge %clk async negedge %rst_n
+    if lnot(%rst_n)
+      %data_q <= 8'd0
+      %valid_q <= 1'd0
+    else
+      if lnot(%rst_sync_n)
+        %valid_q <= 1'd0
+      else
+        if land(%push, lnot(%valid_q))
+          %data_q <= %wdata
+          %valid_q <= 1'd1
+        else
+          if land(%pop, %valid_q)
+            %valid_q <= 1'd0
+          end
+        end
+      end
+    end
+  end
+end
+
+module uart_lite
+  net %clk u1 wire
+  net %rst_n u1 wire
+  net %tx_data u8 wire
+  net %tx_valid u1 wire
+  net %tx_ready u1 wire
+  net %tx u1 wire
+  net %fifo_rdata u8 wire
+  net %fifo_full u1 wire
+  net %fifo_empty u1 wire
+  net %bit_index u4 reg
+  net %shifter u10 reg
+  net %busy u1 reg
+  port clk in %clk
+  port rst_n in %rst_n
+  port tx_data in %tx_data
+  port tx_valid in %tx_valid
+  port tx_ready out %tx_ready
+  port tx out %tx
+  instance u_fifo of fifo_sync (clk=%clk, rst_n=%rst_n, wdata=%tx_data, push=land(%tx_valid, lnot(%fifo_full)), pop=land(lnot(%busy), lnot(%fifo_empty)), rdata=%fifo_rdata, full=%fifo_full, empty=%fifo_empty)
+  assign %tx_ready = lnot(%fifo_full)
+  assign %tx = %shifter[0:0]
+  process seq posedge %clk async negedge %rst_n
+    if lnot(%rst_n)
+      %bit_index <= 4'd0
+      %shifter <= 10'd1023
+      %busy <= 1'd0
+    else
+      if lnot(%busy)
+        if lnot(%fifo_empty)
+          %shifter <= {1'd1, %fifo_rdata, 1'd0}
+          %bit_index <= 4'd0
+          %busy <= 1'd1
+        end
+      else
+        %shifter <= {1'd1, %shifter[9:1]}
+        %bit_index <= add(%bit_index, 4'd1)
+        if eq(%bit_index, 4'd9)
+          %busy <= 1'd0
+        end
+      end
+    end
+  end
+end
+
+module top
+  net %clk u1 wire
+  net %rst_n u1 wire
+  net %data u8 wire
+  net %valid u1 wire
+  net %ready u1 wire
+  net %tx u1 wire
+  port clk in %clk
+  port rst_n in %rst_n
+  port data in %data
+  port valid in %valid
+  port ready out %ready
+  port tx out %tx
+  instance u_uart of uart_lite (clk=%clk, rst_n=%rst_n, tx_data=%data, tx_valid=%valid, tx_ready=%ready, tx=%tx)
+end

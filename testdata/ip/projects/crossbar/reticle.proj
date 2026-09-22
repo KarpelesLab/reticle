@@ -1,0 +1,11 @@
+# A project whose interconnect is generated rather than written. It
+# brings in one AXI4-Lite subordinate; the test builds a 2x2 crossbar
+# with `ip::Crossbar`, wires it to two instances of that subordinate
+# with `ip::bus::connect`, and then simulates transactions through it.
+#
+# There is no `top` and no `source`: the top level is the generator's
+# output, which is exactly the point of a generator.
+name crossbar_demo
+device ice40-hx1k-tq144
+
+depends axi_regs ^1.0.0 path ../../packages/axi_regs

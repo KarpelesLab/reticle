@@ -1,0 +1,8 @@
+warning[V0023]: no module named `ddr_phy` was found
+  --> rtl/top.v:20:11
+   |
+20 |   ddr_phy u_ddr (
+   |           ^^^^^ instantiated here
+   |
+   = note: the instance is kept as a black box; its ports are not checked
+

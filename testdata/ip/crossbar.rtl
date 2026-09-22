@@ -1,0 +1,574 @@
+top top
+
+module axil_regs
+  net %clk u1 wire
+  net %rst_n u1 wire
+  net %s_awaddr u32 wire
+  net %s_awprot u3 wire
+  net %s_awvalid u1 wire
+  net %s_awready u1 wire
+  net %s_wdata u32 wire
+  net %s_wstrb u4 wire
+  net %s_wvalid u1 wire
+  net %s_wready u1 wire
+  net %s_bresp u2 wire
+  net %s_bvalid u1 wire
+  net %s_bready u1 wire
+  net %s_araddr u32 wire
+  net %s_arprot u3 wire
+  net %s_arvalid u1 wire
+  net %s_arready u1 wire
+  net %s_rdata u32 wire
+  net %s_rresp u2 wire
+  net %s_rvalid u1 wire
+  net %s_rready u1 wire
+  net %r0 u32 reg
+  net %r1 u32 reg
+  net %r2 u32 reg
+  net %r3 u32 reg
+  net %awaddr_q u32 reg
+  net %wdata_q u32 reg
+  net %rdata_q u32 reg
+  net %aw_seen u1 reg
+  net %w_seen u1 reg
+  net %bvalid_q u1 reg
+  net %rvalid_q u1 reg
+  port clk in %clk
+  port rst_n in %rst_n
+  port s_awaddr in %s_awaddr
+  port s_awprot in %s_awprot
+  port s_awvalid in %s_awvalid
+  port s_awready out %s_awready
+  port s_wdata in %s_wdata
+  port s_wstrb in %s_wstrb
+  port s_wvalid in %s_wvalid
+  port s_wready out %s_wready
+  port s_bresp out %s_bresp
+  port s_bvalid out %s_bvalid
+  port s_bready in %s_bready
+  port s_araddr in %s_araddr
+  port s_arprot in %s_arprot
+  port s_arvalid in %s_arvalid
+  port s_arready out %s_arready
+  port s_rdata out %s_rdata
+  port s_rresp out %s_rresp
+  port s_rvalid out %s_rvalid
+  port s_rready in %s_rready
+  assign %s_awready = land(lnot(%aw_seen), lnot(%bvalid_q))
+  assign %s_wready = land(lnot(%w_seen), lnot(%bvalid_q))
+  assign %s_bvalid = %bvalid_q
+  assign %s_bresp = 2'd0
+  assign %s_arready = lnot(%rvalid_q)
+  assign %s_rvalid = %rvalid_q
+  assign %s_rdata = %rdata_q
+  assign %s_rresp = 2'd0
+  process seq posedge %clk async negedge %rst_n
+    if lnot(%rst_n)
+      %r0 <= 32'd0
+      %r1 <= 32'd0
+      %r2 <= 32'd0
+      %r3 <= 32'd0
+      %awaddr_q <= 32'd0
+      %wdata_q <= 32'd0
+      %rdata_q <= 32'd0
+      %aw_seen <= 1'd0
+      %w_seen <= 1'd0
+      %bvalid_q <= 1'd0
+      %rvalid_q <= 1'd0
+    else
+      if land(%s_awvalid, %s_awready)
+        %aw_seen <= 1'd1
+        %awaddr_q <= %s_awaddr
+      end
+      if land(%s_wvalid, %s_wready)
+        %w_seen <= 1'd1
+        %wdata_q <= %s_wdata
+      end
+      if land(land(%aw_seen, %w_seen), lnot(%bvalid_q))
+        case %awaddr_q[3:2]
+          when 2'd0
+            %r0 <= %wdata_q
+          end
+          when 2'd1
+            %r1 <= %wdata_q
+          end
+          when 2'd2
+            %r2 <= %wdata_q
+          end
+          default
+            %r3 <= %wdata_q
+          end
+        end
+        %aw_seen <= 1'd0
+        %w_seen <= 1'd0
+        %bvalid_q <= 1'd1
+      end
+      if land(%bvalid_q, %s_bready)
+        %bvalid_q <= 1'd0
+      end
+      if land(%s_arvalid, %s_arready)
+        case %s_araddr[3:2]
+          when 2'd0
+            %rdata_q <= %r0
+          end
+          when 2'd1
+            %rdata_q <= %r1
+          end
+          when 2'd2
+            %rdata_q <= %r2
+          end
+          default
+            %rdata_q <= %r3
+          end
+        end
+        %rvalid_q <= 1'd1
+      else
+        if land(%rvalid_q, %s_rready)
+          %rvalid_q <= 1'd0
+        end
+      end
+    end
+  end
+end
+
+attr generator = "reticle::ip::interconnect::Crossbar"
+module axil_xbar
+  param ADDR_WIDTH = 32
+  param DATA_WIDTH = 32
+  param MANAGERS = 2
+  param SUBORDINATES = 2
+  net %clk u1 wire
+  net %rst_n u1 wire
+  net %s0_awaddr u32 wire
+  net %s0_awprot u3 wire
+  net %s0_awvalid u1 wire
+  net %s0_awready u1 wire
+  net %s0_wdata u32 wire
+  net %s0_wstrb u4 wire
+  net %s0_wvalid u1 wire
+  net %s0_wready u1 wire
+  net %s0_bresp u2 wire
+  net %s0_bvalid u1 wire
+  net %s0_bready u1 wire
+  net %s0_araddr u32 wire
+  net %s0_arprot u3 wire
+  net %s0_arvalid u1 wire
+  net %s0_arready u1 wire
+  net %s0_rdata u32 wire
+  net %s0_rresp u2 wire
+  net %s0_rvalid u1 wire
+  net %s0_rready u1 wire
+  net %s1_awaddr u32 wire
+  net %s1_awprot u3 wire
+  net %s1_awvalid u1 wire
+  net %s1_awready u1 wire
+  net %s1_wdata u32 wire
+  net %s1_wstrb u4 wire
+  net %s1_wvalid u1 wire
+  net %s1_wready u1 wire
+  net %s1_bresp u2 wire
+  net %s1_bvalid u1 wire
+  net %s1_bready u1 wire
+  net %s1_araddr u32 wire
+  net %s1_arprot u3 wire
+  net %s1_arvalid u1 wire
+  net %s1_arready u1 wire
+  net %s1_rdata u32 wire
+  net %s1_rresp u2 wire
+  net %s1_rvalid u1 wire
+  net %s1_rready u1 wire
+  net %m0_awaddr u32 wire
+  net %m0_awprot u3 wire
+  net %m0_awvalid u1 wire
+  net %m0_awready u1 wire
+  net %m0_wdata u32 wire
+  net %m0_wstrb u4 wire
+  net %m0_wvalid u1 wire
+  net %m0_wready u1 wire
+  net %m0_bresp u2 wire
+  net %m0_bvalid u1 wire
+  net %m0_bready u1 wire
+  net %m0_araddr u32 wire
+  net %m0_arprot u3 wire
+  net %m0_arvalid u1 wire
+  net %m0_arready u1 wire
+  net %m0_rdata u32 wire
+  net %m0_rresp u2 wire
+  net %m0_rvalid u1 wire
+  net %m0_rready u1 wire
+  net %m1_awaddr u32 wire
+  net %m1_awprot u3 wire
+  net %m1_awvalid u1 wire
+  net %m1_awready u1 wire
+  net %m1_wdata u32 wire
+  net %m1_wstrb u4 wire
+  net %m1_wvalid u1 wire
+  net %m1_wready u1 wire
+  net %m1_bresp u2 wire
+  net %m1_bvalid u1 wire
+  net %m1_bready u1 wire
+  net %m1_araddr u32 wire
+  net %m1_arprot u3 wire
+  net %m1_arvalid u1 wire
+  net %m1_arready u1 wire
+  net %m1_rdata u32 wire
+  net %m1_rresp u2 wire
+  net %m1_rvalid u1 wire
+  net %m1_rready u1 wire
+  net %state u2 reg
+  net %grant u1 reg
+  net %sel u2 reg
+  net %rr u1 reg
+  net %addr_done u1 reg
+  net %w_done u1 reg
+  net %req0 u1 wire
+  net %req1 u1 wire
+  net %any_req u1 wire
+  net %nxt_grant u1 wire
+  net %nxt_is_write u1 wire
+  net %nxt_addr u32 wire
+  net %nxt_sel u2 wire
+  net %in_write u1 wire
+  net %in_read u1 wire
+  net %grant_is0 u1 wire
+  net %grant_is1 u1 wire
+  net %sel_is0 u1 wire
+  net %sel_is1 u1 wire
+  net %mgr_awaddr u32 wire
+  net %mgr_awprot u3 wire
+  net %mgr_awvalid u1 wire
+  net %mgr_wdata u32 wire
+  net %mgr_wstrb u4 wire
+  net %mgr_wvalid u1 wire
+  net %mgr_bready u1 wire
+  net %mgr_araddr u32 wire
+  net %mgr_arprot u3 wire
+  net %mgr_arvalid u1 wire
+  net %mgr_rready u1 wire
+  net %no_addr_yet u1 wire
+  net %no_data_yet u1 wire
+  net %write_complete u1 wire
+  net %sub_awready u1 wire
+  net %sub_wready u1 wire
+  net %sub_bvalid u1 wire
+  net %sub_bresp u2 wire
+  net %sub_arready u1 wire
+  net %sub_rvalid u1 wire
+  net %sub_rdata u32 wire
+  net %sub_rresp u2 wire
+  port clk in %clk
+  port rst_n in %rst_n
+  port s0_awaddr in %s0_awaddr
+  port s0_awprot in %s0_awprot
+  port s0_awvalid in %s0_awvalid
+  port s0_awready out %s0_awready
+  port s0_wdata in %s0_wdata
+  port s0_wstrb in %s0_wstrb
+  port s0_wvalid in %s0_wvalid
+  port s0_wready out %s0_wready
+  port s0_bresp out %s0_bresp
+  port s0_bvalid out %s0_bvalid
+  port s0_bready in %s0_bready
+  port s0_araddr in %s0_araddr
+  port s0_arprot in %s0_arprot
+  port s0_arvalid in %s0_arvalid
+  port s0_arready out %s0_arready
+  port s0_rdata out %s0_rdata
+  port s0_rresp out %s0_rresp
+  port s0_rvalid out %s0_rvalid
+  port s0_rready in %s0_rready
+  port s1_awaddr in %s1_awaddr
+  port s1_awprot in %s1_awprot
+  port s1_awvalid in %s1_awvalid
+  port s1_awready out %s1_awready
+  port s1_wdata in %s1_wdata
+  port s1_wstrb in %s1_wstrb
+  port s1_wvalid in %s1_wvalid
+  port s1_wready out %s1_wready
+  port s1_bresp out %s1_bresp
+  port s1_bvalid out %s1_bvalid
+  port s1_bready in %s1_bready
+  port s1_araddr in %s1_araddr
+  port s1_arprot in %s1_arprot
+  port s1_arvalid in %s1_arvalid
+  port s1_arready out %s1_arready
+  port s1_rdata out %s1_rdata
+  port s1_rresp out %s1_rresp
+  port s1_rvalid out %s1_rvalid
+  port s1_rready in %s1_rready
+  port m0_awaddr out %m0_awaddr
+  port m0_awprot out %m0_awprot
+  port m0_awvalid out %m0_awvalid
+  port m0_awready in %m0_awready
+  port m0_wdata out %m0_wdata
+  port m0_wstrb out %m0_wstrb
+  port m0_wvalid out %m0_wvalid
+  port m0_wready in %m0_wready
+  port m0_bresp in %m0_bresp
+  port m0_bvalid in %m0_bvalid
+  port m0_bready out %m0_bready
+  port m0_araddr out %m0_araddr
+  port m0_arprot out %m0_arprot
+  port m0_arvalid out %m0_arvalid
+  port m0_arready in %m0_arready
+  port m0_rdata in %m0_rdata
+  port m0_rresp in %m0_rresp
+  port m0_rvalid in %m0_rvalid
+  port m0_rready out %m0_rready
+  port m1_awaddr out %m1_awaddr
+  port m1_awprot out %m1_awprot
+  port m1_awvalid out %m1_awvalid
+  port m1_awready in %m1_awready
+  port m1_wdata out %m1_wdata
+  port m1_wstrb out %m1_wstrb
+  port m1_wvalid out %m1_wvalid
+  port m1_wready in %m1_wready
+  port m1_bresp in %m1_bresp
+  port m1_bvalid in %m1_bvalid
+  port m1_bready out %m1_bready
+  port m1_araddr out %m1_araddr
+  port m1_arprot out %m1_arprot
+  port m1_arvalid out %m1_arvalid
+  port m1_arready in %m1_arready
+  port m1_rdata in %m1_rdata
+  port m1_rresp in %m1_rresp
+  port m1_rvalid in %m1_rvalid
+  port m1_rready out %m1_rready
+  assign %req0 = or(%s0_awvalid, %s0_arvalid)
+  assign %req1 = or(%s1_awvalid, %s1_arvalid)
+  assign %any_req = or(%req0, %req1)
+  assign %nxt_grant = mux(eq(%rr, 1'd0), mux(%req1, 1'd1, mux(%req0, 1'd0, 1'd0)), mux(eq(%rr, 1'd1), mux(%req0, 1'd0, mux(%req1, 1'd1, 1'd1)), 1'd0))
+  assign %nxt_is_write = mux(eq(%nxt_grant, 1'd0), %s0_awvalid, mux(eq(%nxt_grant, 1'd1), %s1_awvalid, 1'd0))
+  assign %nxt_addr = mux(eq(%nxt_grant, 1'd0), mux(%s0_awvalid, %s0_awaddr, %s0_araddr), mux(eq(%nxt_grant, 1'd1), mux(%s1_awvalid, %s1_awaddr, %s1_araddr), 32'd0))
+  assign %nxt_sel = mux(eq(and(%nxt_addr, 32'd4294963200), 32'd0), 2'd0, mux(eq(and(%nxt_addr, 32'd4294963200), 32'd4096), 2'd1, 2'd2))
+  assign %in_write = eq(%state, 2'd1)
+  assign %in_read = eq(%state, 2'd2)
+  assign %grant_is0 = eq(%grant, 1'd0)
+  assign %grant_is1 = eq(%grant, 1'd1)
+  assign %sel_is0 = eq(%sel, 2'd0)
+  assign %sel_is1 = eq(%sel, 2'd1)
+  assign %mgr_awaddr = mux(eq(%grant, 1'd0), %s0_awaddr, mux(eq(%grant, 1'd1), %s1_awaddr, 32'd0))
+  assign %mgr_awprot = mux(eq(%grant, 1'd0), %s0_awprot, mux(eq(%grant, 1'd1), %s1_awprot, 3'd0))
+  assign %mgr_awvalid = mux(eq(%grant, 1'd0), %s0_awvalid, mux(eq(%grant, 1'd1), %s1_awvalid, 1'd0))
+  assign %mgr_wdata = mux(eq(%grant, 1'd0), %s0_wdata, mux(eq(%grant, 1'd1), %s1_wdata, 32'd0))
+  assign %mgr_wstrb = mux(eq(%grant, 1'd0), %s0_wstrb, mux(eq(%grant, 1'd1), %s1_wstrb, 4'd0))
+  assign %mgr_wvalid = mux(eq(%grant, 1'd0), %s0_wvalid, mux(eq(%grant, 1'd1), %s1_wvalid, 1'd0))
+  assign %mgr_bready = mux(eq(%grant, 1'd0), %s0_bready, mux(eq(%grant, 1'd1), %s1_bready, 1'd0))
+  assign %mgr_araddr = mux(eq(%grant, 1'd0), %s0_araddr, mux(eq(%grant, 1'd1), %s1_araddr, 32'd0))
+  assign %mgr_arprot = mux(eq(%grant, 1'd0), %s0_arprot, mux(eq(%grant, 1'd1), %s1_arprot, 3'd0))
+  assign %mgr_arvalid = mux(eq(%grant, 1'd0), %s0_arvalid, mux(eq(%grant, 1'd1), %s1_arvalid, 1'd0))
+  assign %mgr_rready = mux(eq(%grant, 1'd0), %s0_rready, mux(eq(%grant, 1'd1), %s1_rready, 1'd0))
+  assign %no_addr_yet = lnot(%addr_done)
+  assign %no_data_yet = lnot(%w_done)
+  assign %write_complete = and(%addr_done, %w_done)
+  assign %sub_awready = mux(eq(%sel, 2'd0), %m0_awready, mux(eq(%sel, 2'd1), %m1_awready, %no_addr_yet))
+  assign %sub_wready = mux(eq(%sel, 2'd0), %m0_wready, mux(eq(%sel, 2'd1), %m1_wready, %no_data_yet))
+  assign %sub_bvalid = mux(eq(%sel, 2'd0), %m0_bvalid, mux(eq(%sel, 2'd1), %m1_bvalid, %write_complete))
+  assign %sub_bresp = mux(eq(%sel, 2'd0), %m0_bresp, mux(eq(%sel, 2'd1), %m1_bresp, 2'd3))
+  assign %sub_arready = mux(eq(%sel, 2'd0), %m0_arready, mux(eq(%sel, 2'd1), %m1_arready, %no_addr_yet))
+  assign %sub_rvalid = mux(eq(%sel, 2'd0), %m0_rvalid, mux(eq(%sel, 2'd1), %m1_rvalid, %addr_done))
+  assign %sub_rdata = mux(eq(%sel, 2'd0), %m0_rdata, mux(eq(%sel, 2'd1), %m1_rdata, 32'd0))
+  assign %sub_rresp = mux(eq(%sel, 2'd0), %m0_rresp, mux(eq(%sel, 2'd1), %m1_rresp, 2'd3))
+  assign %m0_awvalid = and(and(%in_write, %sel_is0), %mgr_awvalid)
+  assign %m0_wvalid = and(and(%in_write, %sel_is0), %mgr_wvalid)
+  assign %m0_bready = and(and(%in_write, %sel_is0), %mgr_bready)
+  assign %m0_arvalid = and(and(%in_read, %sel_is0), %mgr_arvalid)
+  assign %m0_rready = and(and(%in_read, %sel_is0), %mgr_rready)
+  assign %m0_awaddr = %mgr_awaddr
+  assign %m0_awprot = %mgr_awprot
+  assign %m0_wdata = %mgr_wdata
+  assign %m0_wstrb = %mgr_wstrb
+  assign %m0_araddr = %mgr_araddr
+  assign %m0_arprot = %mgr_arprot
+  assign %m1_awvalid = and(and(%in_write, %sel_is1), %mgr_awvalid)
+  assign %m1_wvalid = and(and(%in_write, %sel_is1), %mgr_wvalid)
+  assign %m1_bready = and(and(%in_write, %sel_is1), %mgr_bready)
+  assign %m1_arvalid = and(and(%in_read, %sel_is1), %mgr_arvalid)
+  assign %m1_rready = and(and(%in_read, %sel_is1), %mgr_rready)
+  assign %m1_awaddr = %mgr_awaddr
+  assign %m1_awprot = %mgr_awprot
+  assign %m1_wdata = %mgr_wdata
+  assign %m1_wstrb = %mgr_wstrb
+  assign %m1_araddr = %mgr_araddr
+  assign %m1_arprot = %mgr_arprot
+  assign %s0_awready = and(and(%in_write, %grant_is0), %sub_awready)
+  assign %s0_wready = and(and(%in_write, %grant_is0), %sub_wready)
+  assign %s0_bvalid = and(and(%in_write, %grant_is0), %sub_bvalid)
+  assign %s0_arready = and(and(%in_read, %grant_is0), %sub_arready)
+  assign %s0_rvalid = and(and(%in_read, %grant_is0), %sub_rvalid)
+  assign %s0_bresp = %sub_bresp
+  assign %s0_rdata = %sub_rdata
+  assign %s0_rresp = %sub_rresp
+  assign %s1_awready = and(and(%in_write, %grant_is1), %sub_awready)
+  assign %s1_wready = and(and(%in_write, %grant_is1), %sub_wready)
+  assign %s1_bvalid = and(and(%in_write, %grant_is1), %sub_bvalid)
+  assign %s1_arready = and(and(%in_read, %grant_is1), %sub_arready)
+  assign %s1_rvalid = and(and(%in_read, %grant_is1), %sub_rvalid)
+  assign %s1_bresp = %sub_bresp
+  assign %s1_rdata = %sub_rdata
+  assign %s1_rresp = %sub_rresp
+  process arbiter seq posedge %clk async negedge %rst_n
+    if lnot(%rst_n)
+      %state <= 2'd0
+      %grant <= 1'd0
+      %sel <= 2'd0
+      %rr <= 1'd0
+      %addr_done <= 1'd0
+      %w_done <= 1'd0
+    else
+      if eq(%state, 2'd0)
+        if %any_req
+          %grant <= %nxt_grant
+          %rr <= %nxt_grant
+          %sel <= %nxt_sel
+          %state <= mux(%nxt_is_write, 2'd1, 2'd2)
+          %addr_done <= 1'd0
+          %w_done <= 1'd0
+        end
+      else
+        if %in_write
+          if and(%sub_awready, %mgr_awvalid)
+            %addr_done <= 1'd1
+          end
+          if and(%sub_wready, %mgr_wvalid)
+            %w_done <= 1'd1
+          end
+          if and(%sub_bvalid, %mgr_bready)
+            %state <= 2'd0
+          end
+        else
+          if and(%sub_arready, %mgr_arvalid)
+            %addr_done <= 1'd1
+          end
+          if and(%sub_rvalid, %mgr_rready)
+            %state <= 2'd0
+          end
+        end
+      end
+    end
+  end
+end
+
+module top
+  net %clk u1 wire
+  net %rst_n u1 wire
+  net %s0_awaddr u32 wire
+  net %s0_awprot u3 wire
+  net %s0_awvalid u1 wire
+  net %s0_awready u1 wire
+  net %s0_wdata u32 wire
+  net %s0_wstrb u4 wire
+  net %s0_wvalid u1 wire
+  net %s0_wready u1 wire
+  net %s0_bresp u2 wire
+  net %s0_bvalid u1 wire
+  net %s0_bready u1 wire
+  net %s0_araddr u32 wire
+  net %s0_arprot u3 wire
+  net %s0_arvalid u1 wire
+  net %s0_arready u1 wire
+  net %s0_rdata u32 wire
+  net %s0_rresp u2 wire
+  net %s0_rvalid u1 wire
+  net %s0_rready u1 wire
+  net %s1_awaddr u32 wire
+  net %s1_awprot u3 wire
+  net %s1_awvalid u1 wire
+  net %s1_awready u1 wire
+  net %s1_wdata u32 wire
+  net %s1_wstrb u4 wire
+  net %s1_wvalid u1 wire
+  net %s1_wready u1 wire
+  net %s1_bresp u2 wire
+  net %s1_bvalid u1 wire
+  net %s1_bready u1 wire
+  net %s1_araddr u32 wire
+  net %s1_arprot u3 wire
+  net %s1_arvalid u1 wire
+  net %s1_arready u1 wire
+  net %s1_rdata u32 wire
+  net %s1_rresp u2 wire
+  net %s1_rvalid u1 wire
+  net %s1_rready u1 wire
+  net %u_xbar_m0_awaddr u32 wire
+  net %u_xbar_m0_awprot u3 wire
+  net %u_xbar_m0_awvalid u1 wire
+  net %u_xbar_m0_awready u1 wire
+  net %u_xbar_m0_wdata u32 wire
+  net %u_xbar_m0_wstrb u4 wire
+  net %u_xbar_m0_wvalid u1 wire
+  net %u_xbar_m0_wready u1 wire
+  net %u_xbar_m0_bresp u2 wire
+  net %u_xbar_m0_bvalid u1 wire
+  net %u_xbar_m0_bready u1 wire
+  net %u_xbar_m0_araddr u32 wire
+  net %u_xbar_m0_arprot u3 wire
+  net %u_xbar_m0_arvalid u1 wire
+  net %u_xbar_m0_arready u1 wire
+  net %u_xbar_m0_rdata u32 wire
+  net %u_xbar_m0_rresp u2 wire
+  net %u_xbar_m0_rvalid u1 wire
+  net %u_xbar_m0_rready u1 wire
+  net %u_xbar_m1_awaddr u32 wire
+  net %u_xbar_m1_awprot u3 wire
+  net %u_xbar_m1_awvalid u1 wire
+  net %u_xbar_m1_awready u1 wire
+  net %u_xbar_m1_wdata u32 wire
+  net %u_xbar_m1_wstrb u4 wire
+  net %u_xbar_m1_wvalid u1 wire
+  net %u_xbar_m1_wready u1 wire
+  net %u_xbar_m1_bresp u2 wire
+  net %u_xbar_m1_bvalid u1 wire
+  net %u_xbar_m1_bready u1 wire
+  net %u_xbar_m1_araddr u32 wire
+  net %u_xbar_m1_arprot u3 wire
+  net %u_xbar_m1_arvalid u1 wire
+  net %u_xbar_m1_arready u1 wire
+  net %u_xbar_m1_rdata u32 wire
+  net %u_xbar_m1_rresp u2 wire
+  net %u_xbar_m1_rvalid u1 wire
+  net %u_xbar_m1_rready u1 wire
+  port clk in %clk
+  port rst_n in %rst_n
+  port s0_awaddr in %s0_awaddr
+  port s0_awprot in %s0_awprot
+  port s0_awvalid in %s0_awvalid
+  port s0_awready out %s0_awready
+  port s0_wdata in %s0_wdata
+  port s0_wstrb in %s0_wstrb
+  port s0_wvalid in %s0_wvalid
+  port s0_wready out %s0_wready
+  port s0_bresp out %s0_bresp
+  port s0_bvalid out %s0_bvalid
+  port s0_bready in %s0_bready
+  port s0_araddr in %s0_araddr
+  port s0_arprot in %s0_arprot
+  port s0_arvalid in %s0_arvalid
+  port s0_arready out %s0_arready
+  port s0_rdata out %s0_rdata
+  port s0_rresp out %s0_rresp
+  port s0_rvalid out %s0_rvalid
+  port s0_rready in %s0_rready
+  port s1_awaddr in %s1_awaddr
+  port s1_awprot in %s1_awprot
+  port s1_awvalid in %s1_awvalid
+  port s1_awready out %s1_awready
+  port s1_wdata in %s1_wdata
+  port s1_wstrb in %s1_wstrb
+  port s1_wvalid in %s1_wvalid
+  port s1_wready out %s1_wready
+  port s1_bresp out %s1_bresp
+  port s1_bvalid out %s1_bvalid
+  port s1_bready in %s1_bready
+  port s1_araddr in %s1_araddr
+  port s1_arprot in %s1_arprot
+  port s1_arvalid in %s1_arvalid
+  port s1_arready out %s1_arready
+  port s1_rdata out %s1_rdata
+  port s1_rresp out %s1_rresp
+  port s1_rvalid out %s1_rvalid
+  port s1_rready in %s1_rready
+  instance u_xbar of axil_xbar (clk=%clk, rst_n=%rst_n, s0_awaddr=%s0_awaddr, s0_awprot=%s0_awprot, s0_awvalid=%s0_awvalid, s0_awready=%s0_awready, s0_wdata=%s0_wdata, s0_wstrb=%s0_wstrb, s0_wvalid=%s0_wvalid, s0_wready=%s0_wready, s0_bresp=%s0_bresp, s0_bvalid=%s0_bvalid, s0_bready=%s0_bready, s0_araddr=%s0_araddr, s0_arprot=%s0_arprot, s0_arvalid=%s0_arvalid, s0_arready=%s0_arready, s0_rdata=%s0_rdata, s0_rresp=%s0_rresp, s0_rvalid=%s0_rvalid, s0_rready=%s0_rready, s1_awaddr=%s1_awaddr, s1_awprot=%s1_awprot, s1_awvalid=%s1_awvalid, s1_awready=%s1_awready, s1_wdata=%s1_wdata, s1_wstrb=%s1_wstrb, s1_wvalid=%s1_wvalid, s1_wready=%s1_wready, s1_bresp=%s1_bresp, s1_bvalid=%s1_bvalid, s1_bready=%s1_bready, s1_araddr=%s1_araddr, s1_arprot=%s1_arprot, s1_arvalid=%s1_arvalid, s1_arready=%s1_arready, s1_rdata=%s1_rdata, s1_rresp=%s1_rresp, s1_rvalid=%s1_rvalid, s1_rready=%s1_rready, m0_awaddr=%u_xbar_m0_awaddr, m0_awprot=%u_xbar_m0_awprot, m0_awvalid=%u_xbar_m0_awvalid, m0_awready=%u_xbar_m0_awready, m0_wdata=%u_xbar_m0_wdata, m0_wstrb=%u_xbar_m0_wstrb, m0_wvalid=%u_xbar_m0_wvalid, m0_wready=%u_xbar_m0_wready, m0_bresp=%u_xbar_m0_bresp, m0_bvalid=%u_xbar_m0_bvalid, m0_bready=%u_xbar_m0_bready, m0_araddr=%u_xbar_m0_araddr, m0_arprot=%u_xbar_m0_arprot, m0_arvalid=%u_xbar_m0_arvalid, m0_arready=%u_xbar_m0_arready, m0_rdata=%u_xbar_m0_rdata, m0_rresp=%u_xbar_m0_rresp, m0_rvalid=%u_xbar_m0_rvalid, m0_rready=%u_xbar_m0_rready, m1_awaddr=%u_xbar_m1_awaddr, m1_awprot=%u_xbar_m1_awprot, m1_awvalid=%u_xbar_m1_awvalid, m1_awready=%u_xbar_m1_awready, m1_wdata=%u_xbar_m1_wdata, m1_wstrb=%u_xbar_m1_wstrb, m1_wvalid=%u_xbar_m1_wvalid, m1_wready=%u_xbar_m1_wready, m1_bresp=%u_xbar_m1_bresp, m1_bvalid=%u_xbar_m1_bvalid, m1_bready=%u_xbar_m1_bready, m1_araddr=%u_xbar_m1_araddr, m1_arprot=%u_xbar_m1_arprot, m1_arvalid=%u_xbar_m1_arvalid, m1_arready=%u_xbar_m1_arready, m1_rdata=%u_xbar_m1_rdata, m1_rresp=%u_xbar_m1_rresp, m1_rvalid=%u_xbar_m1_rvalid, m1_rready=%u_xbar_m1_rready)
+  instance u_regs0 of axil_regs (clk=%clk, rst_n=%rst_n, s_awaddr=%u_xbar_m0_awaddr, s_awprot=%u_xbar_m0_awprot, s_awvalid=%u_xbar_m0_awvalid, s_awready=%u_xbar_m0_awready, s_wdata=%u_xbar_m0_wdata, s_wstrb=%u_xbar_m0_wstrb, s_wvalid=%u_xbar_m0_wvalid, s_wready=%u_xbar_m0_wready, s_bresp=%u_xbar_m0_bresp, s_bvalid=%u_xbar_m0_bvalid, s_bready=%u_xbar_m0_bready, s_araddr=%u_xbar_m0_araddr, s_arprot=%u_xbar_m0_arprot, s_arvalid=%u_xbar_m0_arvalid, s_arready=%u_xbar_m0_arready, s_rdata=%u_xbar_m0_rdata, s_rresp=%u_xbar_m0_rresp, s_rvalid=%u_xbar_m0_rvalid, s_rready=%u_xbar_m0_rready)
+  instance u_regs1 of axil_regs (clk=%clk, rst_n=%rst_n, s_awaddr=%u_xbar_m1_awaddr, s_awprot=%u_xbar_m1_awprot, s_awvalid=%u_xbar_m1_awvalid, s_awready=%u_xbar_m1_awready, s_wdata=%u_xbar_m1_wdata, s_wstrb=%u_xbar_m1_wstrb, s_wvalid=%u_xbar_m1_wvalid, s_wready=%u_xbar_m1_wready, s_bresp=%u_xbar_m1_bresp, s_bvalid=%u_xbar_m1_bvalid, s_bready=%u_xbar_m1_bready, s_araddr=%u_xbar_m1_araddr, s_arprot=%u_xbar_m1_arprot, s_arvalid=%u_xbar_m1_arvalid, s_arready=%u_xbar_m1_arready, s_rdata=%u_xbar_m1_rdata, s_rresp=%u_xbar_m1_rresp, s_rvalid=%u_xbar_m1_rvalid, s_rready=%u_xbar_m1_rready)
+end

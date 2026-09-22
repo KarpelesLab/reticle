@@ -1,0 +1,7 @@
+sources
+  axi_regs: rtl/axil_regs.v (verilog)
+design
+  top: axil_regs
+  modules: axil_regs
+rtl
+  1 module

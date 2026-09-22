@@ -1,0 +1,27 @@
+# A package with a dependency of its own. It says *what* it needs and
+# never where that lives: the project places `cdc_sync`.
+name fifo_sync
+version 1.0.4
+license MIT
+description "Synchronous FIFO with a synchronised reset"
+
+top fifo_sync
+target ice40
+target ecp5
+
+source rtl/fifo_sync.v
+
+param WIDTH int 8 1..64
+
+port clk in
+port rst_n in
+port wdata in WIDTH
+port push in
+port pop in
+port rdata out WIDTH
+port full out
+port empty out
+
+testbench tb/fifo_sync_tb.v
+
+depends cdc_sync ^0.3.0

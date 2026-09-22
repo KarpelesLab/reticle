@@ -1,0 +1,94 @@
+top top
+
+module vendor_pll
+  net %clk_in u1 wire
+  net %rst_n u1 wire
+  net %clk_out u1 wire
+  net %locked u1 wire
+  net %locked_q u1 reg
+  port clk_in in %clk_in
+  port rst_n in %rst_n
+  port clk_out out %clk_out
+  port locked out %locked
+  assign %clk_out = %clk_in
+  assign %locked = %locked_q
+  process seq posedge %clk_in async negedge %rst_n
+    if lnot(%rst_n)
+      %locked_q <= 1'd0
+    else
+      %locked_q <= 1'd1
+    end
+  end
+end
+
+module top
+  net %clk u1 wire
+  net %rst_n u1 wire
+  net %ddr_ck u1 wire
+  net %ddr_dq u32 wire
+  net %pll_locked u1 wire
+  net %pll_clk u1 wire
+  port clk in %clk
+  port rst_n in %rst_n
+  port ddr_ck out %ddr_ck
+  port ddr_dq inout %ddr_dq
+  port pll_locked out %pll_locked
+  instance u_pll of vendor_pll (clk_in=%clk, rst_n=%rst_n, clk_out=%pll_clk, locked=%pll_locked)
+  instance u_ddr of ddr_phy (clk=%pll_clk, rst_n=%rst_n, ddr_ck=%ddr_ck, ddr_dq=%ddr_dq)
+end
+
+attr blackbox = 1
+attr ip_name = "vendor_ddr"
+attr ip_version = "2.1.0"
+attr ip_license = "proprietary"
+attr ip_source = "encrypted sources"
+module ddr_phy blackbox
+  param DATA_WIDTH = 32
+  param ADDR_WIDTH = 32
+  net %clk u1 wire
+  net %rst_n u1 wire
+  net %ddr_ck u1 wire
+  net %ddr_dq u32 wire
+  net %s_axi_awaddr u32 wire
+  net %s_axi_awprot u3 wire
+  net %s_axi_awvalid u1 wire
+  net %s_axi_awready u1 wire
+  net %s_axi_wdata u32 wire
+  net %s_axi_wstrb u4 wire
+  net %s_axi_wvalid u1 wire
+  net %s_axi_wready u1 wire
+  net %s_axi_bresp u2 wire
+  net %s_axi_bvalid u1 wire
+  net %s_axi_bready u1 wire
+  net %s_axi_araddr u32 wire
+  net %s_axi_arprot u3 wire
+  net %s_axi_arvalid u1 wire
+  net %s_axi_arready u1 wire
+  net %s_axi_rdata u32 wire
+  net %s_axi_rresp u2 wire
+  net %s_axi_rvalid u1 wire
+  net %s_axi_rready u1 wire
+  port clk in %clk
+  port rst_n in %rst_n
+  port ddr_ck out %ddr_ck
+  port ddr_dq inout %ddr_dq
+  port s_axi_awaddr in %s_axi_awaddr
+  port s_axi_awprot in %s_axi_awprot
+  port s_axi_awvalid in %s_axi_awvalid
+  port s_axi_awready out %s_axi_awready
+  port s_axi_wdata in %s_axi_wdata
+  port s_axi_wstrb in %s_axi_wstrb
+  port s_axi_wvalid in %s_axi_wvalid
+  port s_axi_wready out %s_axi_wready
+  port s_axi_bresp out %s_axi_bresp
+  port s_axi_bvalid out %s_axi_bvalid
+  port s_axi_bready in %s_axi_bready
+  port s_axi_araddr in %s_axi_araddr
+  port s_axi_arprot in %s_axi_arprot
+  port s_axi_arvalid in %s_axi_arvalid
+  port s_axi_arready out %s_axi_arready
+  port s_axi_rdata out %s_axi_rdata
+  port s_axi_rresp out %s_axi_rresp
+  port s_axi_rvalid out %s_axi_rvalid
+  port s_axi_rready in %s_axi_rready
+end

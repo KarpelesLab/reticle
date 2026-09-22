@@ -1,0 +1,20 @@
+# An encrypted vendor core. The manifest is plain text even though the
+# source is not, which is what lets Reticle build a black box with the
+# right interface.
+name vendor_ddr
+version 2.1.0
+license proprietary
+description "Encrypted DDR3 PHY, supplied by the vendor"
+
+top ddr_phy
+
+source rtl/ddr_phy.vp language verilog encrypted
+
+param DATA_WIDTH int 32 8..64
+param ADDR_WIDTH int 32 16..32
+
+port clk in
+port rst_n in
+port ddr_ck out
+port ddr_dq inout DATA_WIDTH
+interface s_axi axi4lite subordinate prefix s_axi_

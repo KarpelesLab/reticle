@@ -1,0 +1,17 @@
+# The other half of the encrypted story: the implementation is
+# encrypted, but the vendor ships a behavioural model, so simulation
+# runs the model and the report says so.
+name vendor_pll
+version 1.0.0
+license proprietary
+description "Encrypted PLL with a behavioural model"
+
+top vendor_pll
+
+source rtl/vendor_pll.vp language verilog encrypted
+model sim/vendor_pll_model.v
+
+port clk_in in
+port rst_n in
+port clk_out out
+port locked out

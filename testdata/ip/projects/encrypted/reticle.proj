@@ -1,0 +1,12 @@
+# A design around two encrypted vendor cores. `vendor_ddr` has no
+# readable source at all and becomes a black box with the ports its
+# manifest declares; `vendor_pll` ships a behavioural model, which is
+# what simulation runs instead.
+name encrypted_soc
+top top
+device ecp5-45f-CABGA381
+
+source rtl/top.v
+
+depends vendor_ddr ^2.0.0 path ../../packages/vendor_ddr
+depends vendor_pll ^1.0.0 path ../../packages/vendor_pll

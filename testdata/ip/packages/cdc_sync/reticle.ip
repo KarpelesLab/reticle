@@ -1,0 +1,14 @@
+# A leaf package: nothing depends on anything below it.
+name cdc_sync
+version 0.3.1
+license MIT
+description "Two flip-flop clock-domain-crossing synchroniser"
+
+top cdc_sync
+
+source rtl/cdc_sync.v
+
+port clk in
+port rst_n in
+port d in
+port q out

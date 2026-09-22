@@ -1,0 +1,19 @@
+# The subordinate the generated crossbar is tested against. Its
+# `interface` line is what `bus::match_ports` checks the RTL against.
+name axi_regs
+version 1.0.0
+license MIT
+description "Four 32-bit registers behind an AXI4-Lite subordinate port"
+
+top axil_regs
+target ice40
+target ecp5
+
+source rtl/axil_regs.v
+
+param DATA_WIDTH int 32 32..32
+param ADDR_WIDTH int 32 4..32
+
+port clk in
+port rst_n in
+interface s_axi axi4lite subordinate prefix s_

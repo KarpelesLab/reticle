@@ -102,6 +102,10 @@ pub struct ResolvedIp {
     pub origin: DepSource,
     /// An opaque location the provider can find the package's files
     /// again from; a directory, for [`PathProvider`].
+    ///
+    /// It is also used as the display prefix of the package's sources in
+    /// the source map, so two packages that both ship `rtl/top.v` are
+    /// told apart in a diagnostic.
     pub root: String,
     /// The display path of the manifest, used as the source file's name.
     pub manifest_path: String,
@@ -840,7 +844,7 @@ impl Resolver {
 
         // Load the project's own sources, then each selected package's,
         // in dependency order.
-        let root = load_sources(&mut self.map, &project.sources, &mut |path| {
+        let root = load_sources(&mut self.map, "", &project.sources, &mut |path| {
             provider.read_root(project, path)
         });
         let order = dependency_order(&selected, &candidates, project);
@@ -857,13 +861,16 @@ impl Resolver {
             };
             let ip = candidate.ip;
             let manifest = candidate.manifest;
-            let sources = load_sources(&mut self.map, &manifest.sources, &mut |path| {
+            let sources = load_sources(&mut self.map, &ip.root, &manifest.sources, &mut |path| {
                 provider.read(&ip, path)
             });
             let model = manifest.model.as_ref().and_then(|entry| {
-                load_sources(&mut self.map, std::slice::from_ref(entry), &mut |path| {
-                    provider.read(&ip, path)
-                })
+                load_sources(
+                    &mut self.map,
+                    &ip.root,
+                    std::slice::from_ref(entry),
+                    &mut |path| provider.read(&ip, path),
+                )
                 .pop()
             });
             packages.push(Package {
@@ -889,15 +896,24 @@ impl Resolver {
 /// unavailable files with no [`SourceId`].
 fn load_sources(
     map: &mut SourceMap,
+    prefix: &str,
     entries: &[SourceEntry],
     read: &mut dyn FnMut(&str) -> Option<String>,
 ) -> Vec<LoadedSource> {
     let mut out = Vec::new();
     for entry in entries {
+        // The name in the map is the package's root plus the manifest's
+        // own path, so two packages that both ship `rtl/top.v` are told
+        // apart in a diagnostic.
+        let name = if prefix.is_empty() {
+            entry.path.clone()
+        } else {
+            format!("{prefix}/{}", entry.path)
+        };
         let file = if entry.encrypted {
             None
         } else {
-            read(&entry.path).and_then(|text| map.add(entry.path.clone(), text).ok())
+            read(&entry.path).and_then(|text| map.add(name, text).ok())
         };
         out.push(LoadedSource {
             path: entry.path.clone(),

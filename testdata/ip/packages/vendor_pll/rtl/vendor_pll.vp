@@ -1,0 +1,8 @@
+`pragma protect begin_protected
+`pragma protect version = 1
+`pragma protect author = "A Vendor"
+`pragma protect data_method = "aes128-cbc"
+`pragma protect data_block
+VGhlIHJlYWwgUExMLiBOb3QgcmVhZCBieSBSZXRpY2xlOyB0aGUgYmVoYXZpb3VyYWwgbW9kZWwg
+bmV4dCB0byBpdCBpcyB3aGF0IHNpbXVsYXRpb24gdXNlcy4=
+`pragma protect end_protected

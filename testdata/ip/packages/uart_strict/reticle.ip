@@ -1,0 +1,16 @@
+# Exists to make a version conflict: it insists on a major version of
+# `fifo_sync` that nothing in the tree provides.
+name uart_strict
+version 2.0.0
+license MIT
+description "A UART built against the next major FIFO"
+
+top uart_strict
+
+source rtl/uart_strict.v
+
+port clk in
+port rst_n in
+port tx out
+
+depends fifo_sync ^2.0.0

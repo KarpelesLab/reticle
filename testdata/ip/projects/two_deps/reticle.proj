@@ -1,0 +1,13 @@
+# A complete project with two dependencies. `uart_lite` needs
+# `fifo_sync` as well, so the graph is a diamond; `fifo_sync` needs
+# `cdc_sync`, which this project places even though it never names it
+# in its own sources.
+name blinky
+top top
+device ice40-hx1k-tq144
+
+source rtl/top.v
+
+depends uart_lite ^1.2.0 path ../../packages/uart_lite
+depends fifo_sync ^1.0.0 path ../../packages/fifo_sync
+depends cdc_sync ^0.3.0 path ../../packages/cdc_sync

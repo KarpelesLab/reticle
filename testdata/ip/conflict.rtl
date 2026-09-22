@@ -1,0 +1,37 @@
+module uart_strict
+  net %clk u1 wire
+  net %rst_n u1 wire
+  net %tx u1 wire
+  net %tx_q u1 reg
+  port clk in %clk
+  port rst_n in %rst_n
+  port tx out %tx
+  assign %tx = %tx_q
+  process seq posedge %clk async negedge %rst_n
+    if lnot(%rst_n)
+      %tx_q <= 1'd1
+    else
+      %tx_q <= not(%tx_q)
+    end
+  end
+end
+
+module cdc_sync
+  net %clk u1 wire
+  net %rst_n u1 wire
+  net %d u1 wire
+  net %q u1 wire
+  net %sync_q u2 reg
+  port clk in %clk
+  port rst_n in %rst_n
+  port d in %d
+  port q out %q
+  assign %q = %sync_q[1:1]
+  process seq posedge %clk async negedge %rst_n
+    if lnot(%rst_n)
+      %sync_q <= 2'd0
+    else
+      %sync_q <= {%sync_q[0:0], %d}
+    end
+  end
+end
