@@ -42,7 +42,7 @@ Early, but the middle of the pipeline runs end to end. What works today:
 | Synthesis | process lowering, flip-flop / latch / memory / FSM inference, optimisation passes, AIG optimiser, LUT and standard-cell mapping, post-synthesis equivalence checking |
 | Emission | Verilog, VHDL, Yosys JSON, BLIF, EDIF |
 | Formal | CDCL SAT solver, bit-blaster, bounded model checking, k-induction, equivalence checking |
-| ASIC | Liberty, LEF and DEF readers and writers |
+| ASIC | Liberty, LEF and DEF readers and writers, standard-cell mapping with flip-flop matching, SDC output and an OpenROAD hand-off |
 | Timing | static timing analysis with setup and hold, path reports, clock domain crossing checks |
 | IP | manifests with dependency resolution and a lock file, bus interfaces, generated interconnect, encrypted-core black boxes |
 | Tooling | Verilog and VHDL formatters, a language server for both |
