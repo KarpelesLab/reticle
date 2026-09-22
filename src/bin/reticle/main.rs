@@ -33,6 +33,7 @@ Commands:
   check    Parse and check source files
   fmt      Format Verilog and VHDL source
   synth    Synthesise a design to a technology-independent netlist
+  fpga     Synthesise and map for an FPGA, and export the place-and-route inputs
   emit     Write a design out in another format
   sim      Simulate a design and print its output
   verify   Prove or refute a design's assertions
@@ -69,6 +70,25 @@ Options:
   --quiet   Print diagnostics only, no summary line
 ";
 
+const FPGA_USAGE: &str = "\
+Usage: reticle fpga [options] <design.v|design.rtl>...
+
+Runs the whole target flow: generic synthesis, then block-RAM, DSP,
+carry, IO and clock-buffer mapping, then LUT covering, then a rewrite to
+the device's own primitives. Writes the netlist and constraints that
+nextpnr reads.
+
+Options:
+  --device <name>    Target device; required (see --list-devices)
+  --list-devices     List the built-in devices and exit
+  --constraints <f>  Read pin and placement constraints from an .rcf file
+  --top <module>     Treat this module as the top
+  --output-dir <d>   Write <top>.json and the constraints here (default: .)
+  --netlist <file>   Also write the mapped design in the .rtl text format
+  --report           Print the mapping report to stderr
+  --quiet            Suppress the summary line
+";
+
 const SYNTH_USAGE: &str = "\
 Usage: reticle synth [options] <design.rtl>
 
@@ -82,6 +102,8 @@ Options:
   --max-iterations <n>  Optimisation-loop cap (default 8)
   --lut <k>           Also map the logic onto k-input lookup tables (2..8)
   --gates             Also map the logic onto the generic gate library
+  --verify            Prove the optimised netlist equivalent to the
+                      unoptimised lowering (slow)
   --report            Print the pass log and cell counts to stderr
   --quiet             Suppress the summary line
 ";
@@ -142,6 +164,7 @@ fn main() -> ExitCode {
         "check" => run(check, rest, CHECK_USAGE),
         "fmt" => run(fmt, rest, FMT_USAGE),
         "synth" => run(synth, rest, SYNTH_USAGE),
+        "fpga" => run(fpga, rest, FPGA_USAGE),
         "emit" => run(emit_cmd, rest, EMIT_USAGE),
         "sim" => run(sim, rest, SIM_USAGE),
         "verify" => run(verify, rest, VERIFY_USAGE),
@@ -159,6 +182,7 @@ fn help_text(command: Option<&str>) -> &'static str {
         Some("check") => CHECK_USAGE,
         Some("fmt") => FMT_USAGE,
         Some("synth") => SYNTH_USAGE,
+        Some("fpga") => FPGA_USAGE,
         Some("emit") => EMIT_USAGE,
         Some("sim") => SIM_USAGE,
         Some("verify") => VERIFY_USAGE,
@@ -221,7 +245,12 @@ fn spec_for(usage: &str) -> Spec {
     } else if std::ptr::eq(usage, SYNTH_USAGE) {
         Spec {
             options: &["output", "top", "fsm", "max-iterations", "lut"],
-            flags: &["report", "quiet", "gates"],
+            flags: &["report", "quiet", "gates", "verify"],
+        }
+    } else if std::ptr::eq(usage, FPGA_USAGE) {
+        Spec {
+            options: &["device", "constraints", "top", "output-dir", "netlist"],
+            flags: &["list-devices", "report", "quiet"],
         }
     } else if std::ptr::eq(usage, EMIT_USAGE) {
         Spec {
@@ -657,6 +686,7 @@ fn synth(args: &Args) -> Result<Outcome, ArgError> {
     if let Some(n) = args.u32_option("max-iterations")? {
         options.max_iterations = n;
     }
+    options.verify_equivalence = args.flag("verify");
     if let Some(top) = args.option("top") {
         match design.module_by_name(top) {
             Some(id) => design.top = Some(id),
@@ -712,6 +742,135 @@ fn synth(args: &Args) -> Result<Outcome, ArgError> {
     }
     if !args.flag("quiet") {
         eprintln!("note: synthesised {} module(s)", design.modules.len());
+    }
+    Ok(Outcome::Ok)
+}
+
+/// `reticle fpga`: the whole target flow, ending in nextpnr's inputs.
+fn fpga(args: &Args) -> Result<Outcome, ArgError> {
+    use reticle::fpga::{
+        Constraints, FpgaOptions, builtin_devices, check_nextpnr_json, export_nextpnr,
+        synthesize_for, target,
+    };
+
+    if args.flag("list-devices") {
+        for device in builtin_devices().devices().iter() {
+            println!(
+                "{:<16} {:<10} {}-LUT",
+                device.name, device.family, device.lut_size
+            );
+        }
+        return Ok(Outcome::Ok);
+    }
+
+    let Some(device_name) = args.option("device") else {
+        return Ok(Outcome::Usage(
+            "no device given; pass --device, or --list-devices to see them".into(),
+        ));
+    };
+    let Some(device) = target(device_name) else {
+        let known: Vec<&str> = builtin_devices()
+            .devices()
+            .iter()
+            .map(|d| d.name.as_str())
+            .collect();
+        return Ok(Outcome::Usage(format!(
+            "unknown device `{device_name}`; known devices are {}",
+            known.join(", ")
+        )));
+    };
+
+    let (mut design, mut map) = match load_design(args)? {
+        Ok(pair) => pair,
+        Err(outcome) => return Ok(outcome),
+    };
+    let Some(top) = design.top else {
+        return Ok(Outcome::Usage(
+            "the design names no top module; pass --top".into(),
+        ));
+    };
+
+    // Constraints come from the file first, then from attributes in the
+    // source, so an attribute cannot silently override an explicit pin.
+    let mut diags = Diagnostics::new();
+    let mut constraints = Constraints::new();
+    if let Some(path) = args.option("constraints") {
+        let Some(id) = load(&mut map, path, &mut diags) else {
+            report(&mut diags, &map);
+            return Ok(Outcome::Failed);
+        };
+        let text = map.file(id).text().to_string();
+        constraints = Constraints::parse(&text, id, &mut diags);
+    }
+    constraints.merge_attrs(&design, top, &mut diags);
+    constraints.check(&design, device, &mut diags);
+    if report(&mut diags, &map) {
+        return Ok(Outcome::Failed);
+    }
+
+    let options = FpgaOptions::default();
+    let mut diags = Diagnostics::new();
+    let flow = match synthesize_for(&mut design, top, device, &constraints, &options, &mut diags) {
+        Ok(report) => report,
+        Err(err) => {
+            report(&mut diags, &map);
+            eprintln!("error: {err}");
+            return Ok(Outcome::Failed);
+        }
+    };
+    let failed = report(&mut diags, &map);
+    if args.flag("report") {
+        eprint!("{}", flow.to_text());
+    }
+    if failed {
+        return Ok(Outcome::Failed);
+    }
+
+    // Check the netlist against the device before writing it, so a file
+    // nextpnr would reject never reaches the disk unnoticed.
+    let problems = check_nextpnr_json(&design, top, device, &constraints);
+    if !problems.is_empty() {
+        for problem in &problems {
+            eprintln!("error: {problem}");
+        }
+        return Ok(Outcome::Failed);
+    }
+
+    let inputs = match export_nextpnr(&design, top, device, &constraints) {
+        Ok(inputs) => inputs,
+        Err(err) => {
+            eprintln!("error: {err}");
+            return Ok(Outcome::Failed);
+        }
+    };
+
+    let dir = std::path::Path::new(args.option("output-dir").unwrap_or("."));
+    let top_name = design.modules[top].name.as_str().to_string();
+    let json_path = dir.join(format!("{top_name}.json"));
+    let constraints_path = dir.join(&inputs.constraints_name);
+    for (path, text) in [
+        (&json_path, &inputs.json),
+        (&constraints_path, &inputs.pcf_or_lpf),
+    ] {
+        if let Err(err) = std::fs::write(path, text) {
+            eprintln!("error: cannot write `{}`: {err}", path.display());
+            return Ok(Outcome::Failed);
+        }
+    }
+    if let Some(path) = args.option("netlist")
+        && let Err(message) = write_out(Some(path), &design.to_text())
+    {
+        eprintln!("error: {message}");
+        return Ok(Outcome::Failed);
+    }
+
+    if !args.flag("quiet") {
+        eprintln!(
+            "note: wrote {} and {}",
+            json_path.display(),
+            constraints_path.display()
+        );
+        eprintln!("note: place and route with: {}", inputs.args.join(" "));
     }
     Ok(Outcome::Ok)
 }

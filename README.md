@@ -39,7 +39,7 @@ Early, but the middle of the pipeline runs end to end. What works today:
 | VHDL-2008 | lexer, parser, semantic analysis with bundled std and ieee packages; elaboration in progress |
 | Unified IR | design model, validator, round-tripping `.rtl` text format |
 | Simulation | event-driven 4-state simulator, VCD and FST waveforms, Rust co-simulation API |
-| Synthesis | process lowering, flip-flop / latch / memory / FSM inference, optimisation passes, AIG optimiser, LUT and standard-cell mapping |
+| Synthesis | process lowering, flip-flop / latch / memory / FSM inference, optimisation passes, AIG optimiser, LUT and standard-cell mapping, post-synthesis equivalence checking |
 | Emission | Verilog, VHDL, Yosys JSON, BLIF, EDIF |
 | Formal | CDCL SAT solver, bit-blaster, bounded model checking, k-induction, equivalence checking |
 | ASIC | Liberty, LEF and DEF readers and writers |
@@ -56,7 +56,12 @@ reticle synth   --report --lut 4 --output netlist.rtl counter.v
 reticle emit    --format verilog netlist.rtl
 reticle sim     --vcd waves.vcd --fst waves.fst testbench.v counter.v
 reticle verify  --depth 20 --trace cex.vcd design.rtl
+reticle fpga    --device ice40-hx1k-tq144 --constraints pins.rcf blinky.v
 ```
+
+`reticle fpga` runs the whole target flow and writes the netlist and
+constraints that nextpnr reads, checking first that every cell is a
+primitive the device actually has.
 
 Several source files are elaborated together, so a testbench and the
 module it instantiates are given on one command line. A design already in

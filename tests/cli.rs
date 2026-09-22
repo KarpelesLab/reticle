@@ -312,6 +312,82 @@ fn sim_runs_a_testbench_and_dumps_a_waveform() {
 }
 
 #[test]
+fn fpga_lists_devices() {
+    let (code, stdout, stderr) = run(&["fpga", "--list-devices"]);
+    assert_eq!(code, 0, "{stderr}");
+    assert!(stdout.contains("ice40-hx1k-tq144"), "{stdout}");
+    assert!(stdout.contains("ecp5-45f-CABGA381"), "{stdout}");
+}
+
+#[test]
+fn fpga_runs_the_whole_flow() {
+    let dir = scratch("fpga_flow");
+    let (code, _, stderr) = run(&[
+        "fpga",
+        "--device",
+        "ice40-hx1k-tq144",
+        "--constraints",
+        "testdata/fpga/blinky_ice40.rcf",
+        "--output-dir",
+        dir.to_str().unwrap(),
+        "--report",
+        "testdata/fpga/blinky_ice40.rtl",
+    ]);
+    assert_eq!(code, 0, "{stderr}");
+    // The report names the device primitives the design mapped onto.
+    assert!(stderr.contains("SB_LUT4"), "{stderr}");
+    assert!(stderr.contains("nextpnr-ice40"), "{stderr}");
+
+    let json = std::fs::read_to_string(dir.join("blinky.json")).unwrap();
+    // Every cell must be a device primitive: a generic `$` cell would be
+    // rejected by nextpnr.
+    assert!(
+        !json.contains("\"type\": \"$"),
+        "generic cell in the netlist"
+    );
+    assert!(json.contains("SB_LUT4"), "{json}");
+
+    let pcf = std::fs::read_to_string(dir.join("blinky.pcf")).unwrap();
+    assert!(pcf.contains("set_io clk"), "{pcf}");
+}
+
+#[test]
+fn fpga_needs_a_known_device() {
+    let (code, _, stderr) = run(&["fpga", "testdata/fpga/blinky_ice40.rtl"]);
+    assert_eq!(code, 2);
+    assert!(stderr.contains("no device given"), "{stderr}");
+
+    let (code, _, stderr) = run(&[
+        "fpga",
+        "--device",
+        "nosuchpart",
+        "testdata/fpga/blinky_ice40.rtl",
+    ]);
+    assert_eq!(code, 2);
+    assert!(stderr.contains("unknown device"), "{stderr}");
+}
+
+#[test]
+fn fpga_checks_constraints_against_the_device() {
+    let dir = scratch("fpga_wrong_pins");
+    // ECP5 pin names on an iCE40 part: the checker must catch it before
+    // anything is written.
+    let (code, _, stderr) = run(&[
+        "fpga",
+        "--device",
+        "ice40-hx1k-tq144",
+        "--constraints",
+        "testdata/fpga/blinky_ecp5.rcf",
+        "--output-dir",
+        dir.to_str().unwrap(),
+        "testdata/fpga/blinky_ice40.rtl",
+    ]);
+    assert_eq!(code, 1, "{stderr}");
+    assert!(stderr.contains("has no pin named"), "{stderr}");
+    assert!(!dir.join("blinky.json").exists(), "wrote a netlist anyway");
+}
+
+#[test]
 fn sim_writes_an_fst_waveform() {
     let dir = scratch("sim_fst");
     let fst = dir.join("counter.fst");
