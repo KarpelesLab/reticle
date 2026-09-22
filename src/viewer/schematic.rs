@@ -169,6 +169,11 @@ fn wires(h: &mut Html, graph: &Graph, layout: &Layout) {
             Some(w) if w > 1 => format!("{} /{w}", edge.label),
             _ => edge.label.clone(),
         };
+        // Cut the label to the room before the next box, so a long net
+        // name is shortened rather than painted over a cell.
+        let Some(text) = fit(&text, label_room(layout, at)) else {
+            continue;
+        };
         let (x, y) = (format!("{}", at.x + 7), format!("{}", at.y - 5));
         let mut attrs: Vec<(&str, &str)> = vec![("class", "label"), ("x", &x), ("y", &y)];
         if edge.net.is_some() {
@@ -177,6 +182,37 @@ fn wires(h: &mut Html, graph: &Graph, layout: &Layout) {
         h.element("text", &attrs, &text);
     }
     h.close();
+}
+
+/// The horizontal room a wire label has at `at`, before the first box to
+/// its right that shares the band the text occupies.
+fn label_room(layout: &Layout, at: Point) -> i32 {
+    let start = at.x + 7;
+    // The text sits on the baseline `at.y - 5`, so it covers roughly the
+    // nine units above the wire.
+    let (top, bottom) = (at.y - 14, at.y - 4);
+    layout
+        .nodes
+        .iter()
+        .filter(|node| node.x > start && node.y < bottom && node.y + node.height > top)
+        .map(|node| node.x - start)
+        .min()
+        .unwrap_or(i32::MAX)
+}
+
+/// Cuts `text` to what fits in `room` units of 10px monospaced type, or
+/// returns `None` when there is not even room for an ellipsis.
+fn fit(text: &str, room: i32) -> Option<String> {
+    let chars = i32::try_from(text.chars().count()).unwrap_or(i32::MAX);
+    if chars * 6 + 6 <= room {
+        return Some(text.to_owned());
+    }
+    let keep = usize::try_from((room - 6) / 6).unwrap_or(0);
+    if keep < 2 {
+        return None;
+    }
+    let kept: String = text.chars().take(keep - 1).collect();
+    Some(format!("{kept}\u{2026}"))
 }
 
 /// The boxes, their labels and their pins.
