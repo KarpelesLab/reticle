@@ -1,0 +1,23 @@
+// Output ports connected to a slice and to a concatenation of slices.
+top top
+
+module split
+  net %d u8 wire
+  net %hi u4 wire
+  net %lo u4 wire
+  port d in %d
+  port hi out %hi
+  port lo out %lo
+  assign %hi = %d[7:4]
+  assign %lo = %d[3:0]
+end
+
+module top
+  net %din u8 wire
+  net %a u4 wire
+  net %b u8 wire
+  port din in %din
+  port a out %a
+  port b out %b
+  instance u0 of split (d=%din, hi={%a[3:2], %a[1:0]}, lo=%b[3:0])
+end

@@ -1,0 +1,21 @@
+// An output port connected to a slice of a concatenation: the validator
+// accepts it, but it has no lvalue form, so flattening reports it.
+top top
+
+module leaf
+  net %a u8 wire
+  net %y u8 wire
+  port a in %a
+  port y out %y
+  assign %y = not(%a)
+end
+
+module top
+  net %x u8 wire
+  net %hi u4 wire
+  net %lo u4 wire
+  port x in %x
+  port hi out %hi
+  port lo out %lo
+  instance u0 of leaf (a=%x, y={%hi, %lo}[7:0])
+end

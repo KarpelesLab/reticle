@@ -1,0 +1,25 @@
+// An inout port: the pad's net and the parent's net are merged.
+top top
+
+module pad
+  net %io u1 wire
+  net %oe u1 wire
+  net %d u1 wire
+  port io inout %io
+  port oe in %oe
+  port d in %d
+  cell t0 tristate (a=%d, en=%oe) -> (y=%io)
+end
+
+module top
+  net %pin u1 wire
+  net %oe u1 wire
+  net %dout u1 wire
+  net %din u1 wire
+  port pin inout %pin
+  port oe in %oe
+  port dout in %dout
+  port din out %din
+  instance u0 of pad (io=%pin, oe=%oe, d=%dout)
+  assign %din = %pin
+end

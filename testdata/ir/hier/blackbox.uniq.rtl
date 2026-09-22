@@ -1,0 +1,27 @@
+top top
+
+module bb blackbox
+  net %a u4 wire
+  net %y u4 wire
+  port a in %a
+  port y out %y
+end
+
+module wrap
+  net %a u4 wire
+  net %y u4 wire
+  port a in %a
+  port y out %y
+  instance u_bb of bb (a=%a, y=%y)
+end
+
+module top
+  net %x u4 wire
+  net %o u4 wire
+  net %e u4 wire
+  port x in %x
+  port o out %o
+  port e out %e
+  instance u_wrap of wrap (a=%x, y=%o)
+  instance u_ext of extern_thing (x=%x, y=%e)
+end

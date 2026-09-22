@@ -1,0 +1,60 @@
+top top
+
+module leaf
+  net %a u8 wire
+  net %b u8 wire
+  net %y u8 wire
+  port a in %a
+  port b in %b
+  port y out %y
+  assign %y = add(%a, %b)
+end
+
+module mid
+  net %clk u1 wire
+  net %d u8 wire
+  net %q u8 reg
+  net %s u8 wire
+  port clk in %clk
+  port d in %d
+  port q out %q
+  instance u_leaf of leaf (a=%d, b=8'd1, y=%s)
+  process step seq posedge %clk
+    %q <= %s
+  end
+end
+
+module top
+  net %clk u1 wire
+  net %x u8 wire
+  net %o0 u8 wire
+  net %o1 u8 wire
+  net %"m0.q" u8 reg
+  net %"m0.s" u8 wire
+  net %"m0.u_leaf.b" u8 wire
+  net %"m0.u_leaf.y" u8 wire
+  net %"m1.d" u8 wire
+  net %"m1.q" u8 reg
+  net %"m1.s" u8 wire
+  net %"m1.u_leaf.b" u8 wire
+  net %"m1.u_leaf.y" u8 wire
+  port clk in %clk
+  port x in %x
+  port o0 out %o0
+  port o1 out %o1
+  assign %o0 = %"m0.q"
+  assign %"m0.u_leaf.y" = add(%x, %"m0.u_leaf.b")
+  assign %"m0.u_leaf.b" = 8'd1
+  assign %"m0.s" = %"m0.u_leaf.y"
+  assign %"m1.d" = add(%x, 8'd2)
+  assign %o1 = %"m1.q"
+  assign %"m1.u_leaf.y" = add(%"m1.d", %"m1.u_leaf.b")
+  assign %"m1.u_leaf.b" = 8'd1
+  assign %"m1.s" = %"m1.u_leaf.y"
+  process "m0.step" seq posedge %clk
+    %"m0.q" <= %"m0.s"
+  end
+  process "m1.step" seq posedge %clk
+    %"m1.q" <= %"m1.s"
+  end
+end

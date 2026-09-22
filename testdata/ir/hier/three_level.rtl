@@ -1,0 +1,41 @@
+// Three levels: `top` instantiates `mid` twice, `mid` instantiates `leaf`.
+// `m0` connects plain nets (merged on flattening), `m1` feeds an
+// expression (an assign), and both outputs come back through a register.
+top top
+
+module leaf
+  net %a u8 wire
+  net %b u8 wire
+  net %y u8 wire
+  port a in %a
+  port b in %b
+  port y out %y
+  assign %y = add(%a, %b)
+end
+
+module mid
+  net %clk u1 wire
+  net %d u8 wire
+  net %q u8 reg
+  net %s u8 wire
+  port clk in %clk
+  port d in %d
+  port q out %q
+  instance u_leaf of leaf (a=%d, b=8'd1, y=%s)
+  process step seq posedge %clk
+    %q <= %s
+  end
+end
+
+module top
+  net %clk u1 wire
+  net %x u8 wire
+  net %o0 u8 wire
+  net %o1 u8 wire
+  port clk in %clk
+  port x in %x
+  port o0 out %o0
+  port o1 out %o1
+  instance m0 of mid (clk=%clk, d=%x, q=%o0)
+  instance m1 of mid (clk=%clk, d=add(%x, 8'd2), q=%o1)
+end

@@ -164,7 +164,7 @@ product; everything else is a producer or consumer of it.
 - [x] Attributes on every object (`keep`, `ram_style`, `async_reg`,
       user-defined) carried from the source `(* *)` / VHDL attribute
       specifications.
-- [ ] Flattening, hierarchy preservation flags, unique-ification of
+- [x] Flattening, hierarchy preservation flags, unique-ification of
       parameterised modules.
 - [x] Textual IR format (`.rtl`) that round-trips, for golden tests and
       debugging.

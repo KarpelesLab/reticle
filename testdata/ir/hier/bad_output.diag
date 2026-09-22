@@ -1,0 +1,8 @@
+error[I0032]: instance `u0` connects output port `y` of module `leaf` to an expression that cannot be driven
+  --> bad_output.rtl:20:3
+   |
+20 |   instance u0 of leaf (a=%x, y={%hi, %lo}[7:0])
+   |   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: an output must be connected to a net, a slice of a net or a concatenation of those
+

@@ -1,0 +1,31 @@
+top top
+
+attr uniquified_from = "core"
+module core$1
+  net %a u4 wire
+  net %y u4 wire
+  port a in %a
+  port y out %y
+  assign %y = not(%a)
+end
+
+module top
+  net %x u4 wire
+  net %o0 u4 wire
+  net %o1 u4 wire
+  port x in %x
+  port o0 out %o0
+  port o1 out %o1
+  attr keep_hierarchy = 1
+  instance u_keep of core$1 (a=%x, y=%o0)
+  instance u_flat of core$2 (a=%x, y=%o1)
+end
+
+attr uniquified_from = "core"
+module core$2
+  net %a u4 wire
+  net %y u4 wire
+  port a in %a
+  port y out %y
+  assign %y = not(%a)
+end

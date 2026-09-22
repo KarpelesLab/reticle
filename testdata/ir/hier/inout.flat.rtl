@@ -1,0 +1,24 @@
+top top
+
+module pad
+  net %io u1 wire
+  net %oe u1 wire
+  net %d u1 wire
+  port io inout %io
+  port oe in %oe
+  port d in %d
+  cell t0 tristate (a=%d, en=%oe) -> (y=%io)
+end
+
+module top
+  net %pin u1 wire
+  net %oe u1 wire
+  net %dout u1 wire
+  net %din u1 wire
+  port pin inout %pin
+  port oe in %oe
+  port dout in %dout
+  port din out %din
+  assign %din = %pin
+  cell "u0.t0" tristate (a=%dout, en=%oe) -> (y=%pin)
+end

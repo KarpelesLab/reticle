@@ -194,8 +194,87 @@ reports the problem with a span.
 `ir::walk` provides `Module::for_each_expr`, `for_each_root_expr`,
 `for_each_stmt`, `map_nets`, `map_exprs`, `rename_net`,
 `remove_unused_nets`, `gc_exprs`, and `Design::instances_of`, `children`,
-`topological_order`. Flattening and unique-ification are not implemented
-yet.
+`topological_order`. `ir::hier` provides the hierarchy passes below.
+
+## Hierarchy
+
+`ir::hier` reshapes the module tree.
+
+### Flattening
+
+`Design::flatten(top, &FlattenOptions) -> Result<FlattenReport,
+Diagnostics>` inlines the whole sub-tree of `top` into `top`. Every inlined
+instance contributes a copy of the child's nets, memories, expressions,
+assigns, processes and cells, named `instance<sep>object`; several
+instances of one module therefore produce independent copies. Copies keep
+the child's spans, so diagnostics raised later still point into the source
+the child was written in.
+
+```
+FlattenOptions {
+    keep_hierarchy_attr: bool,   // honour `keep_hierarchy` (default true)
+    separator: String,           // between path and name (default ".")
+    max_depth: Option<u32>,      // Some(0) inlines nothing, Some(1) one level
+    annotate_paths: bool,        // record the path in an `origin` attribute
+}
+```
+
+Port connections become:
+
+| Port    | Connection                | Result                                  |
+|---------|---------------------------|-----------------------------------------|
+| `in`    | a plain net of equal type | the two nets are merged, no assign       |
+| `in`    | anything else             | `assign <child port net> = <expression>` |
+| `out`   | net, slice or concat      | `assign <connection> = <child port net>` |
+| `inout` | a plain net of equal type | the two nets are merged                  |
+
+Merging keeps the parent's net, so a chain of direct connections collapses
+onto the top-level net and costs nothing. Instances stay in place, under
+their hierarchical name, when they are unresolved, when their module is a
+black box, when the instance or the module carries `keep_hierarchy`, or
+when `max_depth` cuts the recursion off. `FlattenReport` counts the
+instances inlined per module, the instances kept, the depth reached and the
+nets, cells, processes and assigns of the result. Nothing is committed when
+a connection cannot be inlined; the design is left untouched and the
+diagnostics are returned:
+
+| Code    | Meaning                                                            |
+|---------|--------------------------------------------------------------------|
+| `I0030` | The module to flatten, or an instance target, is not in the design |
+| `I0031` | The hierarchy is recursive and cannot be flattened                 |
+| `I0032` | An output port is connected to something that cannot be driven     |
+| `I0033` | An inout port is not connected to a plain net of the same type     |
+
+### Unique-ification
+
+`Design::uniquify() -> UniquifyReport` gives every instantiation of a
+multiply instantiated module its own module, named `<name>$1`, `<name>$2`,
+... with `attrs["uniquified_from"]` holding the original name, so placement
+constraints, per-instance attributes and formal properties can be attached
+to one instantiation without affecting the others. The first copy reuses
+the original module, so existing `ModuleId`s stay valid; the design's top
+is never renamed. Modules are processed from the top down, so splitting a
+module also splits everything below it.
+
+`Design::dedup() -> DedupReport` is the inverse: modules whose text
+rendering is identical once their name and `uniquified_from` are ignored
+are merged, instances are repointed at the survivor, and a survivor that is
+the last of its group takes its original name back. `uniquify` followed by
+`dedup` reproduces the design it started from.
+`Design::remove_unused_modules(top)` drops what `top` no longer reaches.
+
+### Queries
+
+- `Design::hier_paths(top) -> Vec<(String, ModuleId)>`: every instance path
+  under `top`, depth first in declaration order.
+- `Design::resolve_path(top, "u0.u1.state") -> Option<(Vec<InstanceId>,
+  NetId)>`: the instances walked through and the net named at the end. At
+  every step the rest of the path is first tried as a net name, so the
+  flattened net `u0.state` resolves just as well as the hierarchical one.
+- `Design::instance_count(top)`: instances in the whole sub-tree.
+
+Examples live in `testdata/ir/hier/*.rtl` with their `.flat.rtl`,
+`.uniq.rtl` and `.diag` expectations, driven by `tests/ir_hier.rs`.
 
 ## The `.rtl` text format
 

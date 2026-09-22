@@ -41,6 +41,15 @@
 //!   cells, named processes) and modules are unique per design, because the
 //!   text format refers to objects by name.
 //!
+//! # Hierarchy
+//!
+//! [`hier`] holds the passes that reshape the module tree:
+//! [`Design::flatten`] inlines a sub-tree into one module,
+//! [`Design::uniquify`] gives every instantiation its own copy of a module
+//! (and [`Design::dedup`] merges them back), and
+//! [`Design::hier_paths`], [`Design::resolve_path`] and
+//! [`Design::instance_count`] answer questions about the tree.
+//!
 //! # Text format
 //!
 //! [`Design::to_text`] and [`Design::parse_text`] convert to and from the
@@ -76,6 +85,7 @@ pub mod cell;
 pub mod design;
 pub mod emit;
 pub mod expr;
+pub mod hier;
 pub mod process;
 pub mod text;
 pub mod types;
@@ -90,6 +100,7 @@ pub use design::{
     NetId, NetKind, Param, Port, PortDir,
 };
 pub use expr::{BinaryOp, Expr, ExprId, ExprKind, TypeError, UnaryOp, infer_type};
+pub use hier::{DedupReport, FlattenOptions, FlattenReport, UniquifyReport};
 pub use process::{
     AssignKind, Block, CaseArm, CaseKind, CaseQualifier, Delay, Edge, Lvalue, Polarity, Process,
     ProcessId, ProcessKind, ReportSeverity, Stmt, StmtKind, TimeUnit, Timescale, WaitKind,
