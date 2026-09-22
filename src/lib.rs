@@ -30,6 +30,7 @@
 //! | [`formal`]  | `formal`  | SAT solver, CNF encoding, model checking        |
 //! | [`asic`]    | `asic`    | Liberty, LEF and DEF readers and writers        |
 //! | [`fpga`]    | `fpga`    | FPGA device database, primitive mapping, constraints |
+//! | [`timing`]  | `timing`  | Static timing analysis                          |
 
 #![forbid(unsafe_code)]
 
@@ -60,6 +61,9 @@ pub mod asic;
 
 #[cfg(feature = "fpga")]
 pub mod fpga;
+
+#[cfg(feature = "timing")]
+pub mod timing;
 
 /// The crate version, as recorded in `Cargo.toml`.
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");

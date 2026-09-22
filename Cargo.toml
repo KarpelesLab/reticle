@@ -49,6 +49,14 @@ fpga = ["synth"]
 # Liberty / LEF / DEF handling and standard-cell mapping.
 asic = ["synth"]
 
+# --- analysis over a mapped netlist ---
+# Static timing analysis and clock domain crossing analysis. The graph,
+# the delay models and the analyses need nothing but the IR, so this is an
+# empty feature: with `asic` also on it gains a Liberty delay model, and
+# with `fpga` also on it reads clocks and path exceptions straight from a
+# `Constraints` value. See `docs/timing.md`.
+timing = []
+
 # --- verification & tooling ---
 # Formal: bounded model checking and equivalence checking over the IR, built
 # on an in-crate SAT solver.
@@ -59,7 +67,7 @@ lsp = []
 # The `reticle` command-line tool (gates the binary target below). It drives
 # every stage, so it turns them all on, including `formal` which is otherwise
 # off by default.
-cli = ["verilog", "vhdl", "sim", "synth", "formal", "fpga"]
+cli = ["verilog", "vhdl", "sim", "synth", "formal", "fpga", "timing"]
 
 # --- dependencies ---
 # Reticle is written from scratch and ships no foreign code: hand-written
