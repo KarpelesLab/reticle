@@ -210,7 +210,11 @@ pub fn gzip_compress(data: &[u8]) -> Vec<u8> {
     let mut out = vec![0x1f, 0x8b, 0x08, 0x00, 0, 0, 0, 0, 0x00, 0xff];
     out.extend_from_slice(&deflate(data));
     out.extend_from_slice(&crc32(data).to_le_bytes());
-    let size = u32::try_from(data.len() % (1 << 32)).expect("masked to 32 bits");
+    // The gzip trailer records the length modulo 2^32. `1 << 32` does not
+    // fit a 32-bit `usize`, so the reduction is done in `u64`, which keeps
+    // this compiling for wasm32 and other 32-bit targets.
+    let len = u64::try_from(data.len()).expect("a slice length fits u64");
+    let size = u32::try_from(len % (1u64 << 32)).expect("masked to 32 bits");
     out.extend_from_slice(&size.to_le_bytes());
     out
 }
