@@ -1,0 +1,21 @@
+# AMBA APB, from ARM IHI 0024 (AMBA APB Protocol Specification).
+#
+# Directions are the manager's ("requester" in the fifth revision of the
+# specification). `pstrb` and `pprot` arrived with APB4 and are optional
+# so an APB2 or APB3 peripheral still matches.
+
+bus apb
+  param ADDR_WIDTH 32
+  param DATA_WIDTH 32
+
+  signal paddr out ADDR_WIDTH
+  signal pprot out 3 optional
+  signal psel out 1
+  signal penable out 1
+  signal pwrite out 1
+  signal pwdata out DATA_WIDTH
+  signal pstrb out DATA_WIDTH/8 optional
+  signal pready in 1
+  signal prdata in DATA_WIDTH
+  signal pslverr in 1 optional
+end

@@ -1,0 +1,45 @@
+# Wishbone B4, from the OpenCores Wishbone specification.
+#
+# The specification spells every signal with the suffix of the side that
+# drives it (`DAT_O` on the manager is `DAT_I` on the subordinate), which
+# no single naming convention can match. Reticle uses the neutral SoC
+# spelling instead: `dat_w` is always manager-to-subordinate and `dat_r`
+# always subordinate-to-manager, whichever side the port is on.
+#
+# Directions below are the manager's.
+
+bus wishbone
+  param ADDR_WIDTH 32
+  param DATA_WIDTH 32
+
+  signal adr out ADDR_WIDTH
+  signal dat_w out DATA_WIDTH
+  signal dat_r in DATA_WIDTH
+  signal sel out DATA_WIDTH/8 optional
+  signal we out 1
+  signal stb out 1
+  signal cyc out 1
+  signal ack in 1
+  signal err in 1 optional
+  signal rty in 1 optional
+end
+
+# The B4 pipelined mode: the same signals plus `stall`, which lets a
+# subordinate hold off the next request while the current one is still in
+# flight.
+bus wishbone_pipelined
+  param ADDR_WIDTH 32
+  param DATA_WIDTH 32
+
+  signal adr out ADDR_WIDTH
+  signal dat_w out DATA_WIDTH
+  signal dat_r in DATA_WIDTH
+  signal sel out DATA_WIDTH/8 optional
+  signal we out 1
+  signal stb out 1
+  signal cyc out 1
+  signal stall in 1
+  signal ack in 1
+  signal err in 1 optional
+  signal rty in 1 optional
+end

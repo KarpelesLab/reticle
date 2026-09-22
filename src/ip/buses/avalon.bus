@@ -1,0 +1,23 @@
+# Avalon Memory-Mapped, from the Intel Avalon Interface Specifications.
+#
+# Directions are the host's (Reticle's "manager"). Everything an Avalon
+# agent may leave out is optional here, so a read-only or write-only
+# peripheral still matches: only the address, the two command strobes,
+# the data paths and `waitrequest` are required.
+
+bus avalon_mm
+  param ADDR_WIDTH 32
+  param DATA_WIDTH 32
+  param BURST_WIDTH 1
+
+  signal address out ADDR_WIDTH
+  signal byteenable out DATA_WIDTH/8 optional
+  signal read out 1
+  signal write out 1
+  signal writedata out DATA_WIDTH
+  signal readdata in DATA_WIDTH
+  signal readdatavalid in 1 optional
+  signal waitrequest in 1
+  signal burstcount out BURST_WIDTH optional
+  signal response in 2 optional
+end

@@ -57,6 +57,13 @@ asic = ["synth"]
 # `Constraints` value. See `docs/timing.md`.
 timing = []
 
+# IP integration: the IP and project manifest formats, dependency
+# resolution and the lock file, bus interface abstractions, interconnect
+# generators and black-box handling for encrypted vendor cores. It needs
+# both frontends because a project's sources and its dependencies' sources
+# are dispatched by extension and may be in either language.
+ip = ["verilog", "vhdl"]
+
 # --- verification & tooling ---
 # Formal: bounded model checking and equivalence checking over the IR, built
 # on an in-crate SAT solver.
@@ -67,7 +74,7 @@ lsp = []
 # The `reticle` command-line tool (gates the binary target below). It drives
 # every stage, so it turns them all on, including `formal` which is otherwise
 # off by default.
-cli = ["verilog", "vhdl", "sim", "synth", "formal", "fpga", "timing"]
+cli = ["verilog", "vhdl", "sim", "synth", "formal", "fpga", "timing", "ip"]
 
 # --- dependencies ---
 # Reticle is written from scratch and ships no foreign code: hand-written

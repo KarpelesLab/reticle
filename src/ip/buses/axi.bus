@@ -1,0 +1,123 @@
+# The AXI family, from ARM IHI 0022 (AMBA AXI and ACE Protocol
+# Specification) and IHI 0051 (AMBA AXI4-Stream Protocol Specification).
+#
+# Every direction below is the direction seen by the *manager*; a
+# subordinate's ports are the mirror image, and a monitor reads them all.
+# Signal names are the specification's, lower-cased and without the
+# per-side suffix, so one name matches `s_axi_awaddr` on the subordinate
+# and `m_axi_awaddr` on the manager once the prefix is stripped.
+#
+# The clock and the reset are not listed: they are usually shared between
+# several interfaces, so an IP declares them with `port` lines.
+
+bus axi4lite
+  param ADDR_WIDTH 32
+  param DATA_WIDTH 32
+
+  # Write address channel.
+  signal awaddr out ADDR_WIDTH
+  signal awprot out 3 optional
+  signal awvalid out 1
+  signal awready in 1
+
+  # Write data channel.
+  signal wdata out DATA_WIDTH
+  signal wstrb out DATA_WIDTH/8 optional
+  signal wvalid out 1
+  signal wready in 1
+
+  # Write response channel.
+  signal bresp in 2 optional
+  signal bvalid in 1
+  signal bready out 1
+
+  # Read address channel.
+  signal araddr out ADDR_WIDTH
+  signal arprot out 3 optional
+  signal arvalid out 1
+  signal arready in 1
+
+  # Read data channel.
+  signal rdata in DATA_WIDTH
+  signal rresp in 2 optional
+  signal rvalid in 1
+  signal rready out 1
+end
+
+bus axi4
+  param ADDR_WIDTH 32
+  param DATA_WIDTH 32
+  param ID_WIDTH 4
+  param USER_WIDTH 1
+
+  # Write address channel.
+  signal awid out ID_WIDTH optional
+  signal awaddr out ADDR_WIDTH
+  signal awlen out 8 optional
+  signal awsize out 3 optional
+  signal awburst out 2 optional
+  signal awlock out 1 optional
+  signal awcache out 4 optional
+  signal awprot out 3 optional
+  signal awqos out 4 optional
+  signal awregion out 4 optional
+  signal awuser out USER_WIDTH optional
+  signal awvalid out 1
+  signal awready in 1
+
+  # Write data channel.
+  signal wdata out DATA_WIDTH
+  signal wstrb out DATA_WIDTH/8 optional
+  signal wlast out 1
+  signal wuser out USER_WIDTH optional
+  signal wvalid out 1
+  signal wready in 1
+
+  # Write response channel.
+  signal bid in ID_WIDTH optional
+  signal bresp in 2 optional
+  signal buser in USER_WIDTH optional
+  signal bvalid in 1
+  signal bready out 1
+
+  # Read address channel.
+  signal arid out ID_WIDTH optional
+  signal araddr out ADDR_WIDTH
+  signal arlen out 8 optional
+  signal arsize out 3 optional
+  signal arburst out 2 optional
+  signal arlock out 1 optional
+  signal arcache out 4 optional
+  signal arprot out 3 optional
+  signal arqos out 4 optional
+  signal arregion out 4 optional
+  signal aruser out USER_WIDTH optional
+  signal arvalid out 1
+  signal arready in 1
+
+  # Read data channel.
+  signal rid in ID_WIDTH optional
+  signal rdata in DATA_WIDTH
+  signal rresp in 2 optional
+  signal rlast in 1
+  signal ruser in USER_WIDTH optional
+  signal rvalid in 1
+  signal rready out 1
+end
+
+bus axi4stream
+  param DATA_WIDTH 32
+  param ID_WIDTH 4
+  param DEST_WIDTH 4
+  param USER_WIDTH 1
+
+  signal tdata out DATA_WIDTH
+  signal tstrb out DATA_WIDTH/8 optional
+  signal tkeep out DATA_WIDTH/8 optional
+  signal tlast out 1 optional
+  signal tid out ID_WIDTH optional
+  signal tdest out DEST_WIDTH optional
+  signal tuser out USER_WIDTH optional
+  signal tvalid out 1
+  signal tready in 1
+end
