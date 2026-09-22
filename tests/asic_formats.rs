@@ -242,8 +242,11 @@ fn netlist_becomes_an_unplaced_def() {
 #[test]
 #[ignore = "needs a PDK Liberty file; set RETICLE_LIBERTY"]
 fn parses_a_real_pdk_liberty_file() {
+    // Skip rather than fail when the variable is unset, so a blanket
+    // `cargo test -- --ignored` stays clean on a machine with no PDK.
     let Some(path) = std::env::var_os("RETICLE_LIBERTY") else {
-        panic!("set RETICLE_LIBERTY to a .lib file");
+        eprintln!("RETICLE_LIBERTY is not set, skipping");
+        return;
     };
     let path = PathBuf::from(path);
     let text = fs::read_to_string(&path).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
