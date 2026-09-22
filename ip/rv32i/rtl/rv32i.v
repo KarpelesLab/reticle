@@ -35,8 +35,11 @@
 //   `mtvec`, `mepc`, `mcause`, `mie`, `mip`, `mcycle` / `mcycleh` and
 //   `minstret` / `minstreth`, plus `misa`, `mvendorid`, `marchid`,
 //   `mimpid` and `mhartid` as read-only constants. An unknown CSR, or a
-//   write to one whose address says it is read only, is an illegal
-//   instruction.
+//   write to one whose address says it is read only — the top two bits
+//   of a CSR number, which is how `mvendorid` and its three neighbours
+//   are protected — is an illegal instruction. `misa`, `mip` and the two
+//   counters have writable numbers but nothing behind them to write, so
+//   a write to those is legal and has no effect.
 //
 //   Traps. A synchronous exception writes `mepc` with the address of the
 //   instruction that caused it, `mcause` with the code below, pushes MIE
@@ -74,10 +77,9 @@
 //   RV32I only: no M (multiply and divide), no A, no C, no floating
 //   point, no B. Machine mode only: no user or supervisor mode, no PMP,
 //   no virtual memory, no `mideleg` / `medeleg`, no `mtval`, no
-//   `mcountinhibit` and no counters beyond `mcycle` and `minstret` —
-//   which are read only here, so a write to them is accepted and
-//   ignored. `mtvec` is direct mode only: the low two bits read as zero
-//   and vectored mode is not implemented.
+//   `mcountinhibit` and no counters beyond `mcycle` and `minstret`,
+//   which are read only here. `mtvec` is direct mode only: the low two
+//   bits read as zero and vectored mode is not implemented.
 //
 //   Misaligned loads and stores trap rather than being emulated. There is
 //   no bus error input, so a memory that cannot answer must simply not
