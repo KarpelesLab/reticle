@@ -244,8 +244,20 @@ technology cells.
 - [x] Optimisation: constant folding, dead code elimination, redundant
       register removal, common subexpression merging, width reduction,
       mux and logic simplification, retiming (later).
-- [ ] Arithmetic lowering: adders, multipliers, comparators, shifters, with
+- [x] Arithmetic lowering: adders, multipliers, comparators, shifters, with
       a choice of architectures; DSP block inference hooks for phase 6.
+      `synth::arith` has five adders (ripple, carry-select, lookahead,
+      Kogge-Stone, Brent-Kung), four multipliers (array, radix-4 Booth,
+      Wallace, Dadda; signed and unsigned), ripple and prefix comparators,
+      barrel and funnel shifters, and the combinational restoring divider
+      up to a width threshold above which it says to pipeline instead.
+      Every one is proved equivalent to the generic cell it replaces with
+      `formal::check_equivalent`, and the cell and depth measurements are
+      in `docs/arithmetic.md`, generated from the test. The `ArithLower`
+      pass belongs after the optimiser and before technology mapping, and
+      is opt-in until it has been measured on picorv32 and NEORV32.
+      `arith::dsp_candidates` is the recognition side phase 6 consumes;
+      mapping to device primitives stays in `fpga::primitives`.
 - [x] Cellify: replace the expression trees that survive in cell inputs and
       continuous assigns with discrete cells, so the netlist formats (JSON,
       BLIF, EDIF) can express a synthesised design without technology
