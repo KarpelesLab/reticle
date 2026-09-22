@@ -10,18 +10,41 @@
 //! 1. **Simulation** with random input vectors sorts nodes into candidate
 //!    equivalence classes by their signature (the vector of simulated
 //!    values, normalised so a node and its complement land in one class).
-//! 2. **Proof**, for each node against the representative of its class,
-//!    in topological order. When the union of the two cones depends on at
-//!    most [`FraigOptions::max_exhaustive`] inputs it is checked
-//!    exhaustively by simulating every pattern. Otherwise, with the
-//!    `formal` feature, the two cones are encoded in CNF (Tseitin) and the
-//!    crate's SAT solver is asked for a distinguishing input under a
-//!    conflict limit; a counter-example is added to the simulation vectors
-//!    so it also separates other false candidates, as in ABC's `fraig`.
-//!    Without the feature, large candidates are left alone.
+//!    That is [`SimClasses`].
+//! 2. **Proof**, for each node against the earlier members of its class,
+//!    in topological order, merging a node as soon as one candidate is
+//!    proved equal. That is [`sweep`], which asks a [`Prover`] about each
+//!    candidate pair; a disproof that comes with a distinguishing input
+//!    pattern is fed back into the simulation ([`SimClasses::refine`]),
+//!    which splits every class the pattern separates, so a false
+//!    candidate is not proposed again.
 //!
-//! Proven merges are recorded in a [`Forward`] map and applied with
+//! The same two halves serve two masters. [`fraig`], the optimisation
+//! pass, proves candidates with a cone-local [`Prover`]: when the union
+//! of the two cones depends on at most [`FraigOptions::max_exhaustive`]
+//! inputs it is checked exhaustively by simulating every pattern;
+//! otherwise, with the `formal` feature, the two cones are encoded in CNF
+//! and handed to a fresh SAT solver under a conflict limit. Without the
+//! feature, large candidates are left alone. The equivalence checker's
+//! SAT sweeping (`formal::sweep`, after Kuehlmann and Krohm, "Equivalence
+//! checking using cuts and heaps", DAC 1997, and Mishchenko, Chatterjee,
+//! Brayton, Eén, "Improvements to combinational equivalence checking",
+//! ICCAD 2006) plugs in a prover built on one incremental solver instead,
+//! whose learnt clauses carry over from one pair to the next.
+//!
+//! Merges are recorded in a [`Forward`] map; [`fraig`] applies them with
 //! [`Aig::rebuild_with`] at the end.
+//!
+//! # Soundness
+//!
+//! A merge is only as good as its proof. [`sweep`] merges a node for
+//! exactly two reasons: the prover returned [`Verdict::Equal`], which a
+//! prover may only do on a complete argument (an exhaustive truth table
+//! or an unsatisfiable SAT query, never simulation alone), or
+//! [`Prover::visit`] found the node *structurally* identical to an
+//! earlier one once the merges below it are applied. As a cheap check on
+//! both, debug builds assert that every merged pair agrees on every
+//! simulation vector seen so far, which a wrong merge usually does not.
 
 use std::collections::{HashMap, HashSet};
 
@@ -63,15 +86,356 @@ impl Default for FraigOptions {
     }
 }
 
-/// The signature of a node normalised so that its complement has the same
-/// key; the flag says whether it was complemented.
-fn normalise(sig: &[u64]) -> (Vec<u64>, bool) {
-    if sig[0] & 1 == 1 {
-        (sig.iter().map(|w| !w).collect(), true)
-    } else {
-        (sig.to_vec(), false)
+// ---------------------------------------------------------------------------
+// Simulation and candidate classes
+// ---------------------------------------------------------------------------
+
+/// Marks a node that belongs to no class (it has been merged away).
+const NO_CLASS: u32 = u32::MAX;
+
+/// Bit-parallel simulation signatures of every node of an [`Aig`], and
+/// the partition of the nodes into candidate equivalence classes they
+/// induce.
+///
+/// Two nodes share a class when their signatures are equal *or
+/// complementary*: each signature is normalised so that the first
+/// simulated pattern reads 0, and [`SimClasses::phase`] remembers
+/// whether that took a complement. The constant node has the all-zero
+/// signature, so a node that simulates to a constant is a candidate for
+/// merging into it.
+///
+/// Simulation uses [`Aig::simulate`], 64 patterns per `u64` word. The
+/// random patterns come from a seeded [`Rng`], so the classes (and
+/// everything decided from them) are deterministic. Patterns added later
+/// by [`SimClasses::refine`] (counter-examples from failed proofs) are
+/// packed 64 to a word as well.
+#[derive(Clone, Debug)]
+pub struct SimClasses {
+    /// Simulated values per node, one `Vec` of words each.
+    sigs: Vec<Vec<u64>>,
+    /// The normalisation phase of each node: true when its first
+    /// simulated pattern reads 1.
+    phase: Vec<bool>,
+    /// The class of each node, or [`NO_CLASS`] once it is merged.
+    class: Vec<u32>,
+    /// The members of each class, in increasing node order.
+    members: Vec<Vec<u32>>,
+    /// Patterns already packed into the last refinement word (0 when no
+    /// refinement word is open).
+    packed: usize,
+    /// Number of refinement patterns added.
+    refinements: usize,
+}
+
+impl SimClasses {
+    /// Simulates `aig` over `64 * words` seeded random patterns and
+    /// partitions its nodes by normalised signature. Classes are numbered
+    /// in order of their smallest member.
+    pub fn new(aig: &Aig, seed: u64, words: usize) -> SimClasses {
+        let words = words.max(1);
+        let mut rng = Rng::new(seed);
+        let flat: Vec<u64> = (0..aig.inputs().len() * words)
+            .map(|_| rng.next_u64())
+            .collect();
+        let vals = aig.simulate(&flat, words);
+        let sigs: Vec<Vec<u64>> = (0..aig.len())
+            .map(|i| vals[i * words..(i + 1) * words].to_vec())
+            .collect();
+        let phase: Vec<bool> = sigs.iter().map(|s| s[0] & 1 == 1).collect();
+        let mut index: HashMap<Vec<u64>, u32> = HashMap::new();
+        let mut class = Vec::with_capacity(aig.len());
+        let mut members: Vec<Vec<u32>> = Vec::new();
+        for (i, sig) in sigs.iter().enumerate() {
+            let key: Vec<u64> = if phase[i] {
+                sig.iter().map(|w| !w).collect()
+            } else {
+                sig.clone()
+            };
+            let next = u32::try_from(members.len()).expect("class count fits u32");
+            let c = *index.entry(key).or_insert(next);
+            if c == next {
+                members.push(Vec::new());
+            }
+            members[c as usize].push(u32::try_from(i).expect("node index"));
+            class.push(c);
+        }
+        SimClasses {
+            sigs,
+            phase,
+            class,
+            members,
+            packed: 0,
+            refinements: 0,
+        }
+    }
+
+    /// Whether node `id`'s signature was complemented to normalise it.
+    pub fn phase(&self, id: u32) -> bool {
+        self.phase[id as usize]
+    }
+
+    /// The simulated values of node `id`, one word per 64 patterns.
+    pub fn signature(&self, id: u32) -> &[u64] {
+        &self.sigs[id as usize]
+    }
+
+    /// Number of refinement patterns added so far.
+    pub fn refinements(&self) -> usize {
+        self.refinements
+    }
+
+    /// Number of classes with more than one member: the candidate
+    /// equivalences still standing.
+    pub fn open_classes(&self) -> usize {
+        self.members.iter().filter(|m| m.len() > 1).count()
+    }
+
+    /// The candidates for merging node `id`: the members of its class
+    /// that come before it, in increasing order, each as the edge `id`
+    /// would equal (complemented when the two signatures are).
+    pub fn candidates(&self, id: u32) -> Vec<Edge> {
+        let c = self.class[id as usize];
+        if c == NO_CLASS {
+            return Vec::new();
+        }
+        let p = self.phase(id);
+        self.members[c as usize]
+            .iter()
+            .take_while(|&&m| m < id)
+            .map(|&m| Edge::new(m, p ^ self.phase(m)))
+            .collect()
+    }
+
+    /// True when `id` and `target` agree on every pattern simulated so
+    /// far: a necessary condition for them to be equal.
+    pub fn agree(&self, id: u32, target: Edge) -> bool {
+        let mask = if target.is_complement() { !0 } else { 0 };
+        self.sigs[id as usize]
+            .iter()
+            .zip(&self.sigs[target.index()])
+            .all(|(&a, &b)| a == b ^ mask)
+    }
+
+    /// Takes `id` out of its class, once it has been merged into another
+    /// node and can no longer be anyone's candidate.
+    pub fn remove(&mut self, id: u32) {
+        let c = std::mem::replace(&mut self.class[id as usize], NO_CLASS);
+        if c != NO_CLASS {
+            self.members[c as usize].retain(|&m| m != id);
+        }
+    }
+
+    /// Adds the input pattern `pattern` (one value per primary input, in
+    /// [`Aig::inputs`] order) to the simulation and splits every class
+    /// whose members it tells apart.
+    ///
+    /// This is what makes a counter-example useful beyond the pair it
+    /// refuted: every other candidate pair it separates is gone too.
+    /// Patterns are packed 64 to a word; the open word is re-simulated
+    /// over the whole graph each time, one pass of the simulator.
+    pub fn refine(&mut self, aig: &Aig, pattern: &[bool]) {
+        assert_eq!(pattern.len(), aig.inputs().len(), "one value per input");
+        if self.packed == 0 || self.packed == 64 {
+            for sig in &mut self.sigs {
+                sig.push(0);
+            }
+            self.packed = 0;
+        }
+        let bit = 1u64 << self.packed;
+        let words: Vec<u64> = aig
+            .inputs()
+            .iter()
+            .zip(pattern)
+            .map(|(&pi, &v)| {
+                let w = *self.sigs[pi as usize].last().expect("an open word");
+                if v { w | bit } else { w & !bit }
+            })
+            .collect();
+        let vals = aig.simulate(&words, 1);
+        for (sig, v) in self.sigs.iter_mut().zip(vals) {
+            *sig.last_mut().expect("an open word") = v;
+        }
+        self.packed += 1;
+        self.refinements += 1;
+        self.split_on_last_word();
+    }
+
+    /// The normalised value of node `m` in the last word.
+    fn last_word(&self, m: u32) -> u64 {
+        let w = *self.sigs[m as usize].last().expect("a word");
+        if self.phase(m) { !w } else { w }
+    }
+
+    /// Splits every class by its members' normalised values in the last
+    /// word; the group of the smallest member keeps the class number, and
+    /// new classes are numbered in member order, so the result is
+    /// deterministic.
+    fn split_on_last_word(&mut self) {
+        let classes = self.members.len();
+        for c in 0..classes {
+            if self.members[c].len() < 2 {
+                continue;
+            }
+            let first = self.last_word(self.members[c][0]);
+            if self.members[c].iter().all(|&m| self.last_word(m) == first) {
+                continue;
+            }
+            let old = std::mem::take(&mut self.members[c]);
+            let mut groups: HashMap<u64, u32> = HashMap::new();
+            groups.insert(first, u32::try_from(c).expect("class index"));
+            for m in old {
+                let v = self.last_word(m);
+                let next = u32::try_from(self.members.len()).expect("class count fits u32");
+                let g = *groups.entry(v).or_insert(next);
+                if g == next {
+                    self.members.push(Vec::new());
+                }
+                self.members[g as usize].push(m);
+                self.class[m as usize] = g;
+            }
+        }
     }
 }
+
+// ---------------------------------------------------------------------------
+// The sweep
+// ---------------------------------------------------------------------------
+
+/// The outcome of trying to prove a candidate pair.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Verdict {
+    /// The nodes are equivalent (with the candidate's phase). Only a
+    /// complete argument may return this: an exhaustive check or an
+    /// unsatisfiable SAT query, never simulation.
+    Equal,
+    /// They are not. The pattern, when there is one, is an input
+    /// assignment (one value per primary input) on which they differ;
+    /// [`sweep`] adds it to the simulation to split the classes.
+    Differ(Option<Vec<bool>>),
+    /// Could not be decided within the prover's limits.
+    Unknown,
+}
+
+/// Decides candidate pairs for [`sweep`].
+pub trait Prover {
+    /// Called once for every AND node, in topological order, before its
+    /// candidates are tried. Returns `Some(edge)` when the node is already
+    /// known to equal `edge` without a proof: when, after the merges made
+    /// so far, it is the AND of two edges that fold, or that an earlier
+    /// node already combines. `edge` must be resolved through `fwd`. The
+    /// default knows nothing.
+    fn visit(&mut self, aig: &Aig, fwd: &mut Forward, node: u32) -> Option<Edge> {
+        let _ = (aig, fwd, node);
+        None
+    }
+
+    /// Decides whether `node` equals `target`, an edge to an earlier node
+    /// that is not itself merged.
+    fn prove(&mut self, aig: &Aig, fwd: &mut Forward, node: u32, target: Edge) -> Verdict;
+}
+
+/// What [`sweep`] did.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct SweepCounts {
+    /// Nodes merged because [`Prover::visit`] found them structurally
+    /// equal to an earlier node.
+    pub structural: usize,
+    /// Nodes merged on a proof ([`Verdict::Equal`]).
+    pub proved: usize,
+    /// Candidate pairs refuted ([`Verdict::Differ`]).
+    pub disproved: usize,
+    /// Candidate pairs left undecided ([`Verdict::Unknown`]).
+    pub unknown: usize,
+}
+
+impl SweepCounts {
+    /// Every node merged, for either reason.
+    pub fn merged(&self) -> usize {
+        self.structural + self.proved
+    }
+}
+
+/// Walks the AND nodes of `aig` in topological order and merges each into
+/// the first candidate of its class that `prover` proves equal, trying at
+/// most `max_attempts` candidates per node. Merges go into `fwd` (which
+/// must cover every node of `aig`) and take the node out of `classes`.
+///
+/// A refuting counter-example refines `classes` on the spot, after which
+/// the node's candidates are recomputed: the pattern separates the pair
+/// it came from, so the refuted candidate is not proposed again, and a
+/// candidate the prover could not decide is not retried for this node.
+pub fn sweep(
+    aig: &Aig,
+    classes: &mut SimClasses,
+    fwd: &mut Forward,
+    prover: &mut dyn Prover,
+    max_attempts: usize,
+) -> SweepCounts {
+    let mut counts = SweepCounts::default();
+    let max_attempts = max_attempts.max(1);
+    for id in 0..aig.len() {
+        let id = u32::try_from(id).expect("node index");
+        if !aig.is_and(id) {
+            continue;
+        }
+        debug_assert!(!fwd.is_replaced(id), "nodes are merged when visited");
+        if let Some(edge) = prover.visit(aig, fwd, id) {
+            debug_assert!(
+                classes.agree(id, edge),
+                "structural merge of n{id} into {edge:?} contradicts simulation"
+            );
+            fwd.set(id, edge);
+            classes.remove(id);
+            counts.structural += 1;
+            continue;
+        }
+        let mut tried: HashSet<Edge> = HashSet::new();
+        'node: loop {
+            let fresh: Vec<Edge> = classes
+                .candidates(id)
+                .into_iter()
+                .filter(|e| !tried.contains(e))
+                .collect();
+            for target in fresh {
+                if tried.len() >= max_attempts {
+                    break 'node;
+                }
+                tried.insert(target);
+                match prover.prove(aig, fwd, id, target) {
+                    Verdict::Equal => {
+                        debug_assert!(
+                            classes.agree(id, target),
+                            "proved merge of n{id} into {target:?} contradicts simulation"
+                        );
+                        fwd.set(id, target);
+                        classes.remove(id);
+                        counts.proved += 1;
+                        break 'node;
+                    }
+                    Verdict::Differ(Some(pattern)) => {
+                        counts.disproved += 1;
+                        classes.refine(aig, &pattern);
+                        debug_assert!(
+                            !classes.agree(id, target),
+                            "a counter-example must separate n{id} from {target:?}"
+                        );
+                        // The classes changed: start over from the
+                        // node's new candidates.
+                        continue 'node;
+                    }
+                    Verdict::Differ(None) => counts.disproved += 1,
+                    Verdict::Unknown => counts.unknown += 1,
+                }
+            }
+            break;
+        }
+    }
+    counts
+}
+
+// ---------------------------------------------------------------------------
+// The optimisation pass
+// ---------------------------------------------------------------------------
 
 /// The nodes of the cones of `roots` in topological order and the inputs
 /// they depend on, or `None` when the traversal exceeds `max_nodes`.
@@ -141,16 +505,6 @@ fn simulate_cone(
     values
 }
 
-/// The outcome of trying to prove a candidate.
-enum Verdict {
-    /// The nodes are equivalent (with the candidate's phase).
-    Equal,
-    /// They are not: the candidate class splits here.
-    Differ,
-    /// Could not be decided within the limits.
-    Unknown,
-}
-
 /// Checks `node` against `target` exhaustively when the cones are small
 /// enough.
 fn prove_exhaustive(
@@ -177,7 +531,7 @@ fn prove_exhaustive(
     Some(if tn == tt {
         Verdict::Equal
     } else {
-        Verdict::Differ
+        Verdict::Differ(None)
     })
 }
 
@@ -225,7 +579,7 @@ fn prove_sat(
             SolveResult::Unsat => {}
             // A satisfying assignment is an input pattern on which the
             // two cones disagree, so they are not equivalent.
-            SolveResult::Sat => return Verdict::Differ,
+            SolveResult::Sat => return Verdict::Differ(None),
             SolveResult::Unknown => return Verdict::Unknown,
         }
     }
@@ -243,73 +597,37 @@ fn prove_sat(
     Verdict::Unknown
 }
 
-/// Functionally reduces `aig`; returns the number of nodes merged.
-pub fn fraig(aig: &mut Aig, opts: &FraigOptions) -> usize {
-    let n = aig.len();
-    let num_inputs = aig.inputs().len();
-    let words = opts.words.max(1);
-    let mut rng = Rng::new(opts.seed);
-    let patterns: Vec<Vec<u64>> = (0..num_inputs)
-        .map(|_| (0..words).map(|_| rng.next_u64()).collect())
-        .collect();
-    let sig = simulate_all(aig, &patterns, words);
-    let mut fwd = Forward::identity(n);
-    // A candidate class holds every node with the same signature, not just
-    // a representative: when a candidate is disproved the class has to
-    // split, so the next node with that signature must still be able to
-    // try the other members.
-    let mut classes: HashMap<Vec<u64>, Vec<u32>> = HashMap::new();
-    let mut merged = 0;
+/// The prover of [`fraig`]: exhaustive simulation of small cones, a
+/// fresh SAT solver per pair for the rest (with the `formal` feature).
+struct ConeProver<'o> {
+    opts: &'o FraigOptions,
+}
 
-    for id in 0..n {
-        let id = u32::try_from(id).expect("node index");
-        if fwd.is_replaced(id) {
-            continue;
-        }
-        let (key, phase) = normalise(&sig[id as usize]);
-        let members: Vec<u32> = classes.get(&key).cloned().unwrap_or_default();
-        if !aig.is_and(id) {
-            // Inputs and the constant are always their own representative.
-            classes.entry(key).or_default().push(id);
-            continue;
-        }
-        let mut proved = false;
-        for &m in members.iter().take(opts.max_attempts.max(1)) {
-            let (_, m_phase) = normalise(&sig[m as usize]);
-            let target = Edge::new(m, phase ^ m_phase);
-            let verdict = match prove_exhaustive(aig, &mut fwd, id, target, opts) {
-                Some(v) => v,
-                None => prove_sat(aig, &mut fwd, id, target, opts),
-            };
-            match verdict {
-                Verdict::Equal => {
-                    fwd.set(id, target);
-                    merged += 1;
-                    proved = true;
-                    break;
-                }
-                // The signature did not separate them but the function
-                // does (or the proof gave up): try the next member.
-                Verdict::Differ | Verdict::Unknown => {}
-            }
-        }
-        if !proved {
-            classes.entry(key).or_default().push(id);
+impl Prover for ConeProver<'_> {
+    fn prove(&mut self, aig: &Aig, fwd: &mut Forward, node: u32, target: Edge) -> Verdict {
+        match prove_exhaustive(aig, fwd, node, target, self.opts) {
+            Some(v) => v,
+            None => prove_sat(aig, fwd, node, target, self.opts),
         }
     }
+}
+
+/// Functionally reduces `aig`; returns the number of nodes merged.
+pub fn fraig(aig: &mut Aig, opts: &FraigOptions) -> usize {
+    let mut classes = SimClasses::new(aig, opts.seed, opts.words);
+    let mut fwd = Forward::identity(aig.len());
+    let counts = sweep(
+        aig,
+        &mut classes,
+        &mut fwd,
+        &mut ConeProver { opts },
+        opts.max_attempts,
+    );
+    let merged = counts.merged();
     if merged > 0 {
         *aig = aig.rebuild_with(&mut fwd);
     }
     merged
-}
-
-/// Simulates the whole graph and returns one signature per node.
-fn simulate_all(aig: &Aig, patterns: &[Vec<u64>], words: usize) -> Vec<Vec<u64>> {
-    let flat: Vec<u64> = patterns.iter().flat_map(|p| p.iter().copied()).collect();
-    let vals = aig.simulate(&flat, words);
-    (0..aig.len())
-        .map(|i| vals[i * words..(i + 1) * words].to_vec())
-        .collect()
 }
 
 #[cfg(test)]
