@@ -1,0 +1,17 @@
+DesignFile
+  DesignUnit @1:1
+    Architecture rtl @1:1 of e
+      Signal @2:3 x, y, z : bit
+      Begin
+      Process @10:3
+        Begin
+        If @12:5
+          Arm @12:5 <error>
+            SignalAssign @13:7 y <= '1'
+        While @15:5 <error>
+          Null @16:7
+        Case @18:5 <error>
+          When @19:7 others
+            Null @19:22
+        SignalAssign @22:5 z <= x
+      SignalAssign @24:3 y <= x

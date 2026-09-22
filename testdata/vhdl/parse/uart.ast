@@ -1,0 +1,111 @@
+DesignFile
+  DesignUnit @1:1
+    Library @1:1 ieee
+    Use @2:1 ieee.std_logic_1164.all
+    Use @3:1 ieee.numeric_std.all
+    Package uart_pkg @5:1
+      Constant @6:3 DATA_BITS : natural := 8
+      Constant @7:3 STOP_BITS : natural := 1
+      Type uart_state_t @9:3 is (idle, start, data, stop)
+      Subtype byte_t @11:3 is std_logic_vector((- DATA_BITS 1) downto 0)
+      SubprogramDecl @13:3 function baud_divisor return natural
+        Param @13:25 clk_hz : natural
+        Param @13:43 baud : natural
+      SubprogramDecl @14:3 procedure send_byte
+        Param @14:23 signal tx : out std_logic
+        Param @14:50 constant value : in byte_t
+      Component uart_tx @16:3
+        Generic @17:14 DIVISOR : positive
+        Port @19:7 clk : in std_logic
+        Port @20:7 rst_n : in std_logic
+        Port @21:7 din : in byte_t
+        Port @22:7 valid : in std_logic
+        Port @23:7 ready : out std_logic
+        Port @24:7 tx : out std_logic
+  DesignUnit @29:1
+    PackageBody uart_pkg @29:1
+      SubprogramBody @30:3 function baud_divisor return natural
+        Param @30:25 clk_hz : natural
+        Param @30:43 baud : natural
+        Begin
+        Return @32:5 (/ (paren (+ clk_hz (/ baud 2))) baud)
+      SubprogramBody @35:3 procedure send_byte
+        Param @35:23 signal tx : out std_logic
+        Param @35:50 constant value : in byte_t
+        Begin
+        SignalAssign @37:5 tx <= '0'
+        For @38:5 i in value'range
+          SignalAssign @39:7 tx <= value(i)
+        SignalAssign @41:5 tx <= '1'
+  DesignUnit @45:1
+    Library @45:1 ieee
+    Use @46:1 ieee.std_logic_1164.all
+    Use @47:1 ieee.numeric_std.all
+    Use @48:1 work.uart_pkg.all
+    Entity uart_tx @50:1
+      Generic @51:12 DIVISOR : positive
+      Port @53:5 clk : in std_logic
+      Port @54:5 rst_n : in std_logic
+      Port @55:5 din : in byte_t
+      Port @56:5 valid : in std_logic
+      Port @57:5 ready : out std_logic
+      Port @58:5 tx : out std_logic
+  DesignUnit @62:1
+    Architecture rtl @62:1 of uart_tx
+      Signal @63:3 state : uart_state_t := idle
+      Signal @64:3 shift : byte_t
+      Signal @65:3 bit_idx : natural range 0 to (- DATA_BITS 1)
+      Signal @66:3 baud_cnt : natural range 0 to (- DIVISOR 1)
+      Signal @67:3 tick : std_logic
+      Begin
+      Process baud @69:3 (clk, rst_n)
+        Begin
+        If @71:5
+          Arm @71:5 (= rst_n '0')
+            SignalAssign @72:7 baud_cnt <= 0
+            SignalAssign @73:7 tick <= '0'
+          Arm @74:5 rising_edge(clk)
+            If @75:7
+              Arm @75:7 (= baud_cnt (- DIVISOR 1))
+                SignalAssign @76:9 baud_cnt <= 0
+                SignalAssign @77:9 tick <= '1'
+              Else
+                SignalAssign @79:9 baud_cnt <= (+ baud_cnt 1)
+                SignalAssign @80:9 tick <= '0'
+      Process fsm @85:3 (clk, rst_n)
+        Variable @86:5 next_idx : natural
+        Begin
+        If @88:5
+          Arm @88:5 (= rst_n '0')
+            SignalAssign @89:7 state <= idle
+            SignalAssign @90:7 tx <= '1'
+          Arm @91:5 rising_edge(clk)
+            Case @92:7 state
+              When @93:9 idle
+                SignalAssign @94:11 tx <= '1'
+                If @95:11
+                  Arm @95:11 (= valid '1')
+                    SignalAssign @96:13 shift <= din
+                    SignalAssign @97:13 bit_idx <= 0
+                    SignalAssign @98:13 state <= start
+              When @100:9 start
+                If @101:11
+                  Arm @101:11 (= tick '1')
+                    SignalAssign @102:13 tx <= '0'
+                    SignalAssign @103:13 state <= data
+              When @105:9 data
+                If @106:11
+                  Arm @106:11 (= tick '1')
+                    SignalAssign @107:13 tx <= shift(bit_idx)
+                    VarAssign @108:13 next_idx := (+ bit_idx 1)
+                    If @109:13
+                      Arm @109:13 (= next_idx DATA_BITS)
+                        SignalAssign @110:15 state <= stop
+                      Else
+                        SignalAssign @112:15 bit_idx <= next_idx
+              When @115:9 stop
+                If @116:11
+                  Arm @116:11 (= tick '1')
+                    SignalAssign @117:13 tx <= '1'
+                    SignalAssign @118:13 state <= idle
+      SignalAssign @124:3 ready <= '1' when (= state idle) else '0'

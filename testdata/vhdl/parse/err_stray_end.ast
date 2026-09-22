@@ -1,0 +1,9 @@
+DesignFile
+  DesignUnit @1:1
+    Architecture rtl @1:1 of e
+      Begin
+      Process p @3:3 (clk)
+        Begin
+        SignalAssign @5:5 y <= x
+        SignalAssign @7:5 z <= y
+      SignalAssign @10:3 q <= z

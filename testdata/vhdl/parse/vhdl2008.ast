@@ -1,0 +1,69 @@
+DesignFile
+  DesignUnit @2:1
+    Library @2:1 ieee
+    Use @3:1 ieee.std_logic_1164.all
+    Package gen_pkg @5:1
+      Generic @7:5 type data_t
+      Generic @8:5 DEPTH : positive := 16
+      Generic @9:5 function eq return boolean is <>
+        Param @9:17 a, b : data_t
+      Generic @10:5 package inner is new work.other_pkg generic map (<>)
+      Generic @11:5 package dflt is new work.other_pkg generic map (default)
+      Type mem_t @13:3 is array (0 to (- DEPTH 1)) of data_t
+      SubprogramDecl @14:3 function is_full return boolean
+        Param @14:20 cnt : natural
+  DesignUnit @17:1
+    PackageInstantiation byte_pkg @17:1 is new work.gen_pkg generic map (data_t => std_logic_vector(7 downto 0), DEPTH => 32)
+  DesignUnit @20:1
+    Entity top @20:1
+      Port @22:5 clk, a, b, c, d : in std_logic
+      Port @23:5 sel : in std_logic_vector(1 downto 0)
+      Port @24:5 y, q : out std_logic
+  DesignUnit @28:1
+    Architecture rtl @28:1 of top
+      Subtype rvec @29:3 is (resolved) std_logic_vector
+      Subtype rrec @30:3 is (a resolved, b (resolved)) some_rec_t
+      Signal @31:3 ok : boolean
+      Signal @32:3 state : std_logic_vector(3 downto 0)
+      Signal @33:3 v : std_logic_vector(7 downto 0)
+      Alias @34:3 probe is <<signal .top.dut.state : std_logic_vector>>
+      Alias @35:3 cst is <<constant @lib.pkg.cst : integer>>
+      Alias @36:3 up is <<variable ^.^.sibling.v : bit>>
+      SharedVariable @37:3 counter : integer := 0
+      Begin
+      SignalAssign @39:3 ok <= (and (and (and (?= a b) (not (paren (?/= c d)))) (paren (?< e f))) (paren (?>= g h)))
+      SignalAssign @40:3 q <= (?? valid)
+      SignalAssign @41:3 y <= (and v)
+      SignalAssign @42:3 y <= (and (or v) (nand w))
+      Process comb @44:3 (all)
+        Variable @45:5 t : std_logic
+        Begin
+        VarAssign @47:5 t := a when (= sel "00") else b when (= sel "01") else c
+        VarAssign @48:5 t := with sel select a when "00", b when "01", '0' when others
+        SignalAssign @52:5 y <= t
+        Case? @53:5 sel
+          When @54:7 "1-"
+            SignalAssign @54:20 y <= '1'
+          When @55:7 "0-"
+            SignalAssign @55:20 y <= '0'
+          When @56:7 others
+            SignalAssign @56:22 y <= 'X'
+        SignalAssign @58:5 y <= with sel select? a when "1-", b when others
+      SignalAssign @63:3 probe <= force "0000"
+      SignalAssign @64:3 probe <= force in "1111" when (= a '1') else "0000"
+      SignalAssign @65:3 probe <= release
+      SignalAssign @66:3 probe <= release out
+      SignalAssign @67:3 <<signal ^.^.sibling : bit>> <= '1'
+      SignalAssign @68:3 x <= <<constant @lib.pkg.cst : integer>>
+      Instance u @70:3 entity work.sub
+        PortMap (clk => clk, d => inertial v, q => open)
+      IfGenerate g @73:3
+        Arm @73:7 (= a '1')
+          SignalAssign @74:5 y <= '1'
+        Else @76:5
+          SignalAssign @76:5 y <= '0'
+      Process proc @79:3
+        Variable @80:5 p : integer
+        Begin
+        VarAssign @82:5 p := 1 when (= a '1') else 0
+        Wait @83:5

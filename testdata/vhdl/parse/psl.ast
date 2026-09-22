@@ -1,0 +1,8 @@
+DesignFile
+  DesignUnit @1:1
+    Entity checker @1:1
+      Port @2:9 clk, req, ack : in bit
+  DesignUnit @5:1
+    Architecture psl_arch @5:1 of checker
+      Begin
+      Assert @12:3 (or (= req '0') (= ack '1')) report "plain assertion"

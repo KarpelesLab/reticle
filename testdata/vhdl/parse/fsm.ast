@@ -1,0 +1,44 @@
+DesignFile
+  DesignUnit @1:1
+    Library @1:1 ieee
+    Use @2:1 ieee.std_logic_1164.all
+    Entity traffic_light @4:1
+      Port @6:5 clk : in std_logic
+      Port @7:5 reset : in std_logic
+      Port @8:5 button : in std_logic
+      Port @9:5 red : out std_logic
+      Port @10:5 amber : out std_logic
+      Port @11:5 green : out std_logic
+  DesignUnit @15:1
+    Architecture behav @15:1 of traffic_light
+      Type state_t @16:3 is (s_red, s_red_amber, s_green, s_amber)
+      Signal @17:3 state, next_state : state_t
+      Attribute fsm_encoding @18:3 : string
+      AttributeSpec fsm_encoding @19:3 of state : signal is "one-hot"
+      Begin
+      Process sync @21:3 (clk, reset)
+        Begin
+        If @23:5
+          Arm @23:5 (= reset '1')
+            SignalAssign @24:7 state <= s_red
+          Arm @25:5 (and clk'event (= clk '1'))
+            SignalAssign @26:7 state <= next_state
+      Process comb @30:3 (state, button)
+        Begin
+        SignalAssign @32:5 next_state <= state
+        Case @33:5 state
+          When @34:7 s_red
+            If @35:9
+              Arm @35:9 (= button '1')
+                SignalAssign @36:11 next_state <= s_red_amber
+          When @38:7 s_red_amber
+            SignalAssign @39:9 next_state <= s_green
+          When @40:7 s_green
+            SignalAssign @41:9 next_state <= s_amber
+          When @42:7 s_amber
+            SignalAssign @43:9 next_state <= s_red
+          When @44:7 others
+            SignalAssign @45:9 next_state <= s_red
+      SignalAssign @49:3 red <= with state select '1' when s_red | s_red_amber, '0' when others
+      SignalAssign @53:3 amber <= '1' when (or (= state s_red_amber) (= state s_amber)) else '0'
+      SignalAssign @54:3 green <= '1' when (= state s_green) else '0'

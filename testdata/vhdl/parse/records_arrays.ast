@@ -1,0 +1,50 @@
+DesignFile
+  DesignUnit @1:1
+    Library @1:1 ieee
+    Use @2:1 ieee.std_logic_1164.all
+    Use @3:1 ieee.numeric_std.all
+    Package bus_pkg @5:1
+      Type word_t @6:3 is array (natural range <>) of std_logic_vector(31 downto 0)
+      Type mem_t @7:3 is array (0 to 255) of std_logic_vector(7 downto 0)
+      Type matrix_t @8:3 is array (natural range <>, natural range <>) of integer
+      Type grid_t @9:3 is array (0 to 3, 1 to 2) of bit
+      Type axi_req_t @11:3 is record
+        Element @12:5 addr : std_logic_vector(31 downto 0)
+        Element @13:5 data : std_logic_vector(31 downto 0)
+        Element @14:5 strb : std_logic_vector(3 downto 0)
+        Element @15:5 valid : std_logic
+        Element @16:5 id, user : natural
+      Type axi_rsp_t @19:3 is record
+        Element @20:5 data : std_logic_vector(31 downto 0)
+        Element @21:5 resp : std_logic_vector(1 downto 0)
+        Element @22:5 ready : std_logic
+      Type packet_t @26:3 is record
+        Element @27:5 header : std_logic_vector
+        Element @28:5 payload : word_t
+      Subtype short_packet_t @30:3 is packet_t(header(7 downto 0), payload(0 to 1)(15 downto 0))
+      Subtype open_words_t @31:3 is word_t(open)(15 downto 0)
+      Constant @33:3 REQ_INIT : axi_req_t := (agg addr => (agg others => '0'), data => x"0000_0000", strb => "1111", valid => '0', id | user => 0)
+      Constant @40:3 TABLE : mem_t := (agg 0 => x"01", 1 to 3 => x"FF", others => x"00")
+      Constant @41:3 M : matrix_t(0 to 1, 0 to 1) := (agg (agg 1, 2), (agg 3, 4))
+  DesignUnit @44:1
+    Entity slice_user @44:1
+      Port @46:5 req : in work.bus_pkg.axi_req_t
+      Port @47:5 rsp : out work.bus_pkg.axi_rsp_t
+      Port @48:5 v : in std_logic_vector(15 downto 0)
+  DesignUnit @52:1
+    Architecture rtl @52:1 of slice_user
+      Signal @53:3 lo, hi : std_logic_vector(7 downto 0)
+      Signal @54:3 words : work.bus_pkg.word_t(0 to 3)
+      Alias @55:3 top_bit : std_logic is v(15)
+      Alias @56:3 low_byte : std_logic_vector(7 downto 0) is v(7 downto 0)
+      Begin
+      SignalAssign @58:3 lo <= v(7 downto 0)
+      SignalAssign @59:3 hi <= v(v'high downto 8)
+      SignalAssign @60:3 rsp.data <= (& req.addr(31 downto 16) req.data(15 downto 0))
+      SignalAssign @61:3 rsp.data(3 downto 0) <= req.strb
+      SignalAssign @62:3 rsp.resp <= "00"
+      SignalAssign @63:3 rsp.ready <= req.valid
+      SignalAssign @64:3 words(0) <= req.addr
+      SignalAssign @65:3 words(1)(7 downto 0) <= lo
+      SignalAssign @66:3 words(2 to 3) <= (agg others => (agg others => '0'))
+      SignalAssign @67:3 (agg lo, hi) <= v

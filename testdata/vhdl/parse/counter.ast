@@ -1,0 +1,29 @@
+DesignFile
+  DesignUnit @1:1
+    Library @1:1 ieee
+    Use @2:1 ieee.std_logic_1164.all
+    Use @3:1 ieee.numeric_std.all
+    Entity counter @6:1
+      Generic @8:5 WIDTH : positive := 8
+      Generic @9:5 T_CLK : time := 10 ns
+      Port @12:5 clk : in std_logic
+      Port @13:5 rst : in std_logic
+      Port @14:5 en : in std_logic
+      Port @15:5 count : out std_logic_vector((- WIDTH 1) downto 0)
+      Port @16:5 wrap : out std_logic
+  DesignUnit @20:1
+    Architecture rtl @20:1 of counter
+      Signal @21:3 cnt : unsigned((- WIDTH 1) downto 0) := (agg others => '0')
+      Begin
+      Process @23:3 (clk)
+        Begin
+        If @25:5
+          Arm @25:5 rising_edge(clk)
+            If @26:7
+              Arm @26:7 (= rst '1')
+                SignalAssign @27:9 cnt <= (agg others => '0')
+              Arm @28:7 (= en '1')
+                SignalAssign @29:9 cnt <= (+ cnt 1)
+      SignalAssign @34:3 count <= std_logic_vector(cnt)
+      SignalAssign @35:3 wrap <= '1' when (and (= cnt (- (** 2 WIDTH) 1)) (= en '1')) else '0'
+      Assert @37:3 (<= WIDTH 32) report (& (& "WIDTH " integer'image(WIDTH)) " exceeds 32") severity failure

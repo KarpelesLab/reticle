@@ -1,0 +1,30 @@
+warning: PSL directives are not supported; skipped
+ --> psl.vhd:8:3
+  |
+8 |   default clock is rising_edge(clk);
+  |   ^^^^^^^ PSL directive starts here
+
+warning: PSL directives are not supported; skipped
+ --> psl.vhd:9:3
+  |
+9 |   assert always (req -> next ack);
+  |   ^^^^^^ PSL directive starts here
+
+warning: PSL directives are not supported; skipped
+  --> psl.vhd:10:3
+   |
+10 |   assume never (req and ack);
+   |   ^^^^^^ PSL directive starts here
+
+warning: PSL directives are not supported; skipped
+  --> psl.vhd:11:3
+   |
+11 |   cover (req and ack);
+   |   ^^^^^ PSL directive starts here
+
+warning: PSL directives are not supported; skipped
+  --> psl.vhd:13:3
+   |
+13 |   restrict (req);
+   |   ^^^^^^^^ PSL directive starts here
+

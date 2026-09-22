@@ -1,0 +1,36 @@
+DesignFile
+  DesignUnit @1:1
+    Library @1:1 ieee
+    Use @2:1 ieee.std_logic_1164.all
+    Use @3:1 std.textio.all
+    Package misc_pkg @5:1
+      SharedVariable @6:3 counter : integer := 0
+      Variable @7:3 plain_var : integer
+      Signal @8:3 s1, s2 : bit register
+      Signal @9:3 b : bit bus := '0'
+      File @10:3 log_file : text open write_mode is "log.txt"
+      File @11:3 in_file : text is "in.txt"
+      File @12:3 bare : text
+      GroupTemplate pin_pair @13:3 is (signal, signal)
+      GroupTemplate timing @14:3 is (label <>)
+      Group p1 @15:3 : pin_pair (a, b)
+      Group t1 @16:3 : timing (u0, u1, u2)
+      Disconnect @17:3 s1, s2 : bit after 5 ns
+      Disconnect @18:3 others : bit after 1 ns
+      Disconnect @19:3 all : bit after 0 ns
+      Use @20:3 work.other_pkg.all
+      Use @21:3 work.other_pkg.item, work.third_pkg."+"
+      Package nested @23:3
+        Constant @24:5 K : integer := 1
+      PackageBody nested @27:3
+      PackageInstantiation nested_inst @30:3 is new work.gen_pkg generic map (N => 4)
+  DesignUnit @33:1
+    Architecture a @33:1 of e
+      Component c @34:3
+        Port @35:11 x : in bit
+      ConfigurationSpec @37:3 for u0 : c use entity work.c_impl(rtl)
+      ConfigurationSpec @38:3 for u1, u2 : c use configuration work.c_cfg generic map (N => 1) port map (x => x)
+      ConfigurationSpec @39:3 for others : c use open
+      ConfigurationSpec @40:3 for all : c use entity work.c_impl port map (x => x)
+      ConfigurationSpec @41:3 for u3 : c use entity work.c_impl
+      Begin

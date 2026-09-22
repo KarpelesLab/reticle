@@ -1,0 +1,98 @@
+DesignFile
+  DesignUnit @1:1
+    Library @1:1 ieee
+    Use @2:1 ieee.std_logic_1164.all
+    Use @3:1 std.textio.all
+    Entity tb @5:1
+  DesignUnit @8:1
+    Architecture sim @8:1 of tb
+      Signal @9:3 clk : std_logic := '0'
+      Signal @10:3 done : boolean := false
+      Signal @11:3 v : std_logic_vector(7 downto 0)
+      Begin
+      SignalAssign @13:3 clk <= (not clk) after 5 ns when (not done) else unaffected
+      Process stim @15:3
+        Variable @16:5 i, j : integer := 0
+        Variable @17:5 l : line
+        Variable @18:5 arr : bit_vector(0 to 7)
+        Begin
+        Wait @20:5
+        Wait @21:5 for 10 ns
+        Wait @22:5 on clk
+        Wait @23:5 on clk, done
+        Wait @24:5 until (= clk '1')
+        Wait @25:5 until rising_edge(clk) for 100 ns
+        Wait @26:5 on clk until (= clk '1') for 1 us
+        VarAssign @28:5 i := 0
+        VarAssign @29:5 i := (+ i 1)
+        SignalAssign @30:5 v <= (agg others => '0')
+        SignalAssign @31:5 v(0) <= '1'
+        VarAssign @32:5 (agg arr(0), arr(1)) := bit_vector'("10")
+        For outer @34:5 k in 0 to 7
+          For inner @35:7 m in v'range
+            Next @36:9 inner when (= m k)
+            Exit @37:9 outer when (= k 5)
+            Next @38:9
+            Exit @39:9
+        For @43:5 n in natural range 1 to 3
+          Null @44:7
+        For @47:5 e in some_enum
+          VarAssign @48:7 i := (+ i 1)
+        While @51:5 (< i 10)
+          VarAssign @52:7 i := (+ i 1)
+          If @53:7
+            Arm @53:7 (= i 5)
+              Next @54:9
+        Loop forever @58:5
+          Exit @59:7 forever when (> i 20)
+          VarAssign @60:7 i := (+ i 1)
+        If @63:5
+          Arm @63:5 (= i 0)
+            VarAssign @64:7 j := 1
+          Arm @65:5 (= i 1)
+            VarAssign @66:7 j := 2
+          Arm @67:5 (= i 2)
+            VarAssign @68:7 j := 3
+          Else
+            VarAssign @70:7 j := 4
+        If @73:5
+          Arm @73:5 (= i 0)
+            Null @73:19
+        If lbl @75:5
+          Arm @75:11 (> j 0)
+            VarAssign @76:7 j := 0
+        Case @79:5 i
+          When @80:7 0
+            VarAssign @80:17 j := 1
+          When @81:7 1 | 2
+            VarAssign @81:21 j := 2
+          When @82:7 3 to 5
+            VarAssign @82:22 j := 3
+          When @83:7 others
+            Null @83:22
+        Case sel @86:5 v(1 downto 0)
+          When @87:7 "00"
+            VarAssign @88:9 j := 0
+            VarAssign @89:9 i := 0
+          When @90:7 others
+        Report @93:5 "done" severity note
+        Report @94:5 (& "value is " integer'image(i))
+        Assert @95:5 (/= i 0)
+        Assert @96:5 (/= i 0) report "zero"
+        Assert @97:5 (/= i 0) report "zero" severity warning
+        Call @98:5 write(l, string'("hello"))
+        Call @99:5 writeline(output, l)
+        Call @100:5 std.env.finish
+        SignalAssign @101:5 done <= true
+        Wait @102:5
+      Process fn @105:3
+        SubprogramBody @106:5 function inc return integer
+          Param @106:18 x : integer
+          Begin
+          Return @108:7 (+ x 1)
+        SubprogramBody @110:5 procedure p
+          Begin
+          Return @112:7
+        Begin
+        Call @115:5 p
+        Wait @116:5

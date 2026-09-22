@@ -127,7 +127,7 @@ and compiled like user code.
 - [x] Lexer: case-insensitive identifiers, extended identifiers, character
       and string literals, bit-string literals, based literals, physical
       literals.
-- [ ] Parser: design units (entity, architecture, package, package body,
+- [x] Parser: design units (entity, architecture, package, package body,
       configuration, context), declarations, concurrent statements
       (processes, signal assignment, component and entity instantiation,
       generate, block), sequential statements, subprograms, records,

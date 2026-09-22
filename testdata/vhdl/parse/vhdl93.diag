@@ -1,0 +1,12 @@
+warning: `process (all)` requires VHDL-2008
+  --> vhdl93.vhd:23:17
+   |
+23 |   p2 : process (all)
+   |                 ^^^ not valid in VHDL-93
+
+warning: `else` in generate statements requires VHDL-2008
+  --> vhdl93.vhd:30:3
+   |
+30 |   else generate
+   |   ^^^^ not valid in VHDL-93
+

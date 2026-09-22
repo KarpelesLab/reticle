@@ -1,0 +1,48 @@
+DesignFile
+  DesignUnit @1:1
+    Library @1:1 ieee
+    Use @2:1 ieee.std_logic_1164.all
+    Entity adder @4:1
+      Port @5:9 a, b : in bit
+      Port @5:24 s, c : out bit
+  DesignUnit @8:1
+    Architecture gate @8:1 of adder
+      Begin
+      SignalAssign @10:3 s <= (xor a b)
+      SignalAssign @11:3 c <= (and a b)
+  DesignUnit @14:1
+    Entity top @14:1
+  DesignUnit @17:1
+    Architecture structural @17:1 of top
+      Component adder @18:3
+        Port @19:11 a, b : in bit
+        Port @19:26 s, c : out bit
+      Signal @21:3 x, y, s0, c0, s1, c1 : bit
+      ConfigurationSpec @22:3 for u0 : adder use entity work.adder(gate)
+      ConfigurationSpec @23:3 for others : adder use entity work.adder port map (a => a, b => b, s => s, c => c)
+      Begin
+      Instance u0 @26:3 component adder
+        PortMap (x, y, s0, c0)
+      Instance u1 @27:3 component adder
+        PortMap (a => x, b => y, s => s1, c => c1)
+      ForGenerate g @28:3 i in 0 to 1
+        Instance ug @29:5 component adder
+          PortMap (x, y, open, open)
+  DesignUnit @33:1
+    Configuration top_cfg @33:1 of top
+      Use @34:3 work.all
+      BlockConfig @35:3 for structural
+        ComponentConfig @36:5 for u0 : adder
+          Binding use entity work.adder(gate)
+        ComponentConfig @39:5 for u1 : adder
+          Binding use configuration work.adder_cfg generic map (W => 1) port map (a => a, b => b, s => s, c => c)
+        ComponentConfig @44:5 for all : adder
+          Binding use open
+        BlockConfig @47:5 for g(0)
+          ComponentConfig @48:7 for ug : adder
+            Binding use entity work.adder
+        BlockConfig @52:5 for g(1 to 1)
+          ComponentConfig @53:7 for others : adder
+  DesignUnit @59:1
+    Configuration adder_cfg @59:1 of adder
+      BlockConfig @60:3 for gate

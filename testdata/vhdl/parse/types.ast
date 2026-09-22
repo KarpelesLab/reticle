@@ -1,0 +1,31 @@
+DesignFile
+  DesignUnit @1:1
+    Package types_pkg @1:1
+      Type color @2:3 is (red, green, blue)
+      Type bit_char @3:3 is ('0', '1', 'X', 'Z')
+      Type mixed @4:3 is (a, 'b', c, \D\)
+      Type small_int @5:3 is range 0 to 255
+      Type down_int @6:3 is range 10 downto (- 10)
+      Type voltage @7:3 is range (- 1.0e3) to 1.0e3
+      Type distance @8:3 is range 0 to 1E9 units um
+        Unit mm @11:7 = 1000 um
+        Unit cm @12:7 = 10 mm
+        Unit m @13:7 = 100 cm
+      Type duration @15:3 is range 0 to integer'high units fs
+        Unit ps @15:54 = 1000 fs
+      Type word @16:3 is array (15 downto 0) of bit
+      Type memory @17:3 is array (natural range <>) of word
+      Type cube @18:3 is array (1 to 2, 1 to 2, 1 to 2) of real
+      Type ranged @19:3 is array (small_int range <>) of bit
+      Type by_enum @20:3 is array (color) of natural
+      Type by_range @21:3 is array (color range red to green) of natural
+      Type node @22:3
+      Type node_ptr @23:3 is access node
+      Type node @24:3 is record
+        Element @25:5 value : integer
+        Element @26:5 next_node : node_ptr
+      Type int_file @28:3 is file of integer
+      Type text @29:3 is file of string
+      Type str_ptr @30:3 is access string
+      Type cstr_ptr @31:3 is access string(1 to 10)
+      Subtype ptr_sub @32:3 is node_ptr

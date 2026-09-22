@@ -1,0 +1,10 @@
+DesignFile
+  DesignUnit @1:1
+    Library @1:1 ieee
+    Use @2:1 ieee.std_logic_1164.all
+    Entity first @4:1
+      Port @5:9 a : in bit
+  DesignUnit @10:1
+    Architecture rtl @10:1 of first
+      Begin
+      SignalAssign @12:3 y <= a

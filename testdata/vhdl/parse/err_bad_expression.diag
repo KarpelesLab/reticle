@@ -1,0 +1,60 @@
+error: expected expression, found `;`
+ --> err_bad_expression.vhd:3:30
+  |
+3 |   constant K : integer := 1 +;
+  |                              ^
+
+error: expected `)`, found `;`
+ --> err_bad_expression.vhd:4:33
+  |
+4 |   constant J : integer := (1 + 2;
+  |                                 ^
+
+error: expected expression, found `;`
+ --> err_bad_expression.vhd:6:11
+  |
+6 |   x <= y +;
+  |           ^
+
+error: expected expression, found `;`
+ --> err_bad_expression.vhd:7:13
+  |
+7 |   y <= x and;
+  |             ^
+
+error: expected `)`, found `;`
+ --> err_bad_expression.vhd:8:10
+  |
+8 |   z <= (x;
+  |          ^
+
+error: expected `;`, found `@`
+ --> err_bad_expression.vhd:9:10
+  |
+9 |   x <= y @ z;
+  |          ^
+
+error: expected expression, found `then`
+  --> err_bad_expression.vhd:12:12
+   |
+12 |     if x = then
+   |            ^^^^
+
+error: expected expression, found `loop`
+  --> err_bad_expression.vhd:15:11
+   |
+15 |     while loop
+   |           ^^^^
+
+error: expected expression, found `is`
+  --> err_bad_expression.vhd:18:10
+   |
+18 |     case is
+   |          ^^
+
+error: expected expression, found `;`
+  --> err_bad_expression.vhd:21:13
+   |
+21 |     wait for;
+   |             ^
+

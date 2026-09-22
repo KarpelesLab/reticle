@@ -1,0 +1,36 @@
+error: `and` and `or` cannot be mixed without parentheses
+ --> err_mixed_logical.vhd:3:16
+  |
+3 |   y <= a and b or c;
+  |                ^^
+3 |   y <= a and b or c;
+  |          --- first operator here
+
+error: `nand` is not associative; use parentheses
+ --> err_mixed_logical.vhd:4:17
+  |
+4 |   z <= a nand b nand c;
+  |                 ^^^^
+
+error: `xor` and `and` cannot be mixed without parentheses
+ --> err_mixed_logical.vhd:5:16
+  |
+5 |   w <= a xor b and c or d;
+  |                ^^^
+5 |   w <= a xor b and c or d;
+  |          --- first operator here
+
+error: `xor` and `or` cannot be mixed without parentheses
+ --> err_mixed_logical.vhd:5:22
+  |
+5 |   w <= a xor b and c or d;
+  |                      ^^
+5 |   w <= a xor b and c or d;
+  |          --- first operator here
+
+error: `**` is not associative; use parentheses
+ --> err_mixed_logical.vhd:7:15
+  |
+7 |   p <= 2 ** 3 ** 4;
+  |               ^^
+

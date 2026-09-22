@@ -1,0 +1,17 @@
+DesignFile
+  DesignUnit @1:1
+    Entity e @1:1
+  DesignUnit @4:1
+    Architecture rtl @4:1 of e
+      Begin
+      Process p @6:3
+        Begin
+        Loop l1 @8:5
+          Exit @9:7
+        If @11:5
+          Arm @11:5 x
+            Null @12:7
+      ForGenerate @16:3 i in 0 to 3
+        SignalAssign @17:5 y(i) <= x(i)
+      Block b @20:3
+        Begin

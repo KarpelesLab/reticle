@@ -1,0 +1,89 @@
+DesignFile
+  DesignUnit @1:1
+    Library @1:1 ieee
+    Use @2:1 ieee.std_logic_1164.all
+    Package util_pkg @4:1
+      SubprogramDecl @5:3 function log2 return natural
+        Param @5:17 n : positive
+      SubprogramDecl @6:3 function "+" return std_logic_vector
+        Param @6:16 a, b : std_logic_vector
+      SubprogramDecl @7:3 function max return integer
+        Param @7:16 a, b : integer := 0
+      SubprogramDecl @8:3 impure function rand return real
+      SubprogramDecl @9:3 pure function is_one return boolean
+        Param @9:24 constant s : std_logic
+      SubprogramDecl @10:3 procedure swap
+        Param @10:18 variable a, b : inout integer
+      SubprogramDecl @11:3 procedure pulse
+        Param @11:19 signal s : out std_logic
+        Param @11:45 constant width : in time := 10 ns
+      SubprogramDecl @12:3 procedure read_all
+        Param @12:22 file f : text
+      SubprogramDecl @15:3 function generic_max return t
+        Generic @16:14 type t
+        Generic @16:22 function ">" return boolean is <>
+          Param @16:35 l, r : t
+        Param @17:16 a, b : t
+      SubprogramInstantiation @18:3 function int_max is new generic_max generic map (t => integer)
+      SubprogramInstantiation @19:3 function int_max2 is new generic_max[integer, integer return integer] generic map (t => integer, ">" => ">")
+  DesignUnit @23:1
+    PackageBody util_pkg @23:1
+      SubprogramBody @24:3 function log2 return natural
+        Param @24:17 n : positive
+        Variable @25:5 r : natural := 0
+        Variable @26:5 v : positive := n
+        Begin
+        While @28:5 (> v 1)
+          VarAssign @29:7 v := (/ v 2)
+          VarAssign @30:7 r := (+ r 1)
+        Return @32:5 r
+      SubprogramBody @35:3 function "+" return std_logic_vector
+        Param @35:16 a, b : std_logic_vector
+        Begin
+        Return @37:5 (xor a b)
+      SubprogramBody @40:3 function max return integer
+        Param @40:16 a, b : integer := 0
+        Begin
+        If @42:5
+          Arm @42:5 (> a b)
+            Return @43:7 a
+          Else
+            Return @45:7 b
+      SubprogramBody @49:3 impure function rand return real
+        Variable @50:5 seed1, seed2 : positive := 1
+        Variable @51:5 r : real
+        Begin
+        Call @53:5 uniform(seed1, seed2, r)
+        Return @54:5 r
+      SubprogramBody @57:3 pure function is_one return boolean
+        Param @57:24 constant s : std_logic
+        Begin
+        Return @59:5 (= s '1')
+      SubprogramBody @62:3 procedure swap
+        Param @62:18 variable a, b : inout integer
+        Variable @63:5 t : integer := a
+        Begin
+        VarAssign @65:5 a := b
+        VarAssign @66:5 b := t
+      SubprogramBody @69:3 procedure pulse
+        Param @69:19 signal s : out std_logic
+        Param @69:45 constant width : in time := 10 ns
+        Begin
+        SignalAssign @71:5 s <= '1', '0' after width
+        Wait @72:5 for width
+      SubprogramBody @75:3 procedure read_all
+        Param @75:22 file f : text
+        Variable @76:5 l : line
+        Begin
+        While @78:5 (not endfile(f))
+          Call @79:7 readline(f, l)
+      SubprogramBody @83:3 function generic_max return t
+        Generic @84:14 type t
+        Generic @84:22 function ">" return boolean is <>
+          Param @84:35 l, r : t
+        Param @85:16 a, b : t
+        Begin
+        If @87:5
+          Arm @87:5 (> a b)
+            Return @88:7 a
+        Return @90:5 b

@@ -1,0 +1,35 @@
+DesignFile
+  DesignUnit @1:1
+    Library @1:1 ieee
+    Use @2:1 ieee.std_logic_1164.all
+    Entity empty_ent @4:1
+  DesignUnit @7:1
+    Entity \Extended Name\ @7:1
+  DesignUnit @10:1
+    Entity modes @10:1
+      Generic @12:5 constant W : positive := 8
+      Generic @13:5 LATENCY : natural range 0 to 3 := 1
+      Generic @14:5 NAME : string := "modes"
+      Generic @15:5 PERIOD : time := 5 ns
+      Generic @16:5 SCALE : real := 1.5e-3
+      Port @19:5 signal clk : in std_logic
+      Port @20:5 a_in : in std_logic_vector((- W 1) downto 0) := (agg others => '0')
+      Port @21:5 b_out : out std_logic_vector((- W 1) downto 0)
+      Port @22:5 c_io : inout std_logic
+      Port @23:5 d_buf : buffer std_logic
+      Port @24:5 e_lnk : linkage std_logic
+      Port @25:5 f_bus : in std_logic bus
+      Port @26:5 no_mode : std_logic
+      Constant @28:3 HALF : time := (/ PERIOD 2)
+      Signal @29:3 internal : std_logic
+      Attribute keep @30:3 : boolean
+      AttributeSpec keep @31:3 of internal : signal is true
+      Begin
+      Assert @33:3 (> W 0) report "W must be positive" severity error
+      Process passive @34:3 (clk)
+        Begin
+        Assert @36:5 (/= clk 'X') report "clk is X"
+      Assert check @38:3 postponed (<= LATENCY 3)
+  DesignUnit @41:1
+    Architecture empty @41:1 of empty_ent
+      Begin

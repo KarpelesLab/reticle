@@ -1,0 +1,12 @@
+error: expected `end loop`, found `end if`
+ --> err_missing_end.vhd:8:9
+  |
+8 |     end if;
+  |         ^^
+
+error: expected `end case`, found `end process`
+  --> err_missing_end.vhd:16:7
+   |
+16 |   end process p2;
+   |       ^^^^^^^
+

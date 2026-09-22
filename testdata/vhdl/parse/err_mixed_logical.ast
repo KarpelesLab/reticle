@@ -1,0 +1,8 @@
+DesignFile
+  DesignUnit @1:1
+    Architecture rtl @1:1 of e
+      Begin
+      SignalAssign @3:3 y <= (or (and a b) c)
+      SignalAssign @4:3 z <= (nand (nand a b) c)
+      SignalAssign @5:3 w <= (or (and (xor a b) c) d)
+      SignalAssign @6:3 ok <= (or (paren (and a b)) c)

@@ -1,0 +1,18 @@
+error: expected `:`, found identifier `positive`
+ --> err_interface.vhd:4:7
+  |
+4 |     M positive;
+  |       ^^^^^^^^
+
+error: expected `)`, found `;`
+ --> err_interface.vhd:9:30
+  |
+9 |     b : bit_vector(3 downto 0;
+  |                              ^
+
+error: trailing `;` before `)`
+  --> err_interface.vhd:11:3
+   |
+11 |   );
+   |   ^
+

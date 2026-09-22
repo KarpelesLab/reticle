@@ -1,0 +1,12 @@
+DesignFile
+  DesignUnit @1:1
+    Context proj_ctx @1:1
+      Library @2:3 ieee
+      Use @3:3 ieee.std_logic_1164.all, ieee.numeric_std.all
+      ContextRef @4:3 ieee.ieee_std_context
+  DesignUnit @7:1
+    Library @7:1 work
+    ContextRef @8:1 work.proj_ctx
+    Entity uses_ctx @10:1
+      Port @11:9 a : in std_logic
+      Port @11:27 y : out unsigned(3 downto 0)

@@ -1,0 +1,20 @@
+DesignFile
+  DesignUnit @1:1
+    Architecture rtl @1:1 of e
+      Begin
+      Process p1 @3:3 (clk)
+        Begin
+        If @5:5
+          Arm @5:5 rising_edge(clk)
+            For @6:7 i in 0 to 3
+              SignalAssign @7:9 x(i) <= y(i)
+      Process p2 @11:3 (clk)
+        Begin
+        Case @13:5 s
+          When @14:7 '0'
+            SignalAssign @14:19 y <= '1'
+          When @15:7 others
+            SignalAssign @15:22 y <= '0'
+      SignalAssign @18:3 y <= z
+  DesignUnit @21:1
+    Entity next_unit @21:1

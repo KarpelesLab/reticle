@@ -1,0 +1,12 @@
+error: `end loop` does not close anything open
+ --> err_stray_end.vhd:6:9
+  |
+6 |     end loop;
+  |         ^^^^
+
+error: `end if` does not close anything open
+ --> err_stray_end.vhd:9:7
+  |
+9 |   end if;
+  |       ^^
+

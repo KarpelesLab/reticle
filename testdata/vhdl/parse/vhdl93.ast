@@ -1,0 +1,27 @@
+DesignFile
+  DesignUnit @3:1
+    Library @3:1 ieee
+    Use @4:1 ieee.std_logic_1164.all
+    Entity legacy @6:1
+      Port @7:9 clk : in std_logic
+      Port @7:29 default : in std_logic
+      Port @7:53 force : out std_logic
+  DesignUnit @10:1
+    Architecture rtl @10:1 of legacy
+      Signal @11:3 context : std_logic
+      Signal @12:3 parameter : integer
+      Begin
+      Process @14:3 (clk)
+        Begin
+        If @16:5
+          Arm @16:5 (and clk'event (= clk '1'))
+            SignalAssign @17:7 context <= default
+      SignalAssign @21:3 force <= context
+      Process p2 @23:3 (all)
+        Begin
+        SignalAssign @25:5 parameter <= 1
+      IfGenerate g @28:3
+        Arm @28:7 (= parameter 1)
+          SignalAssign @29:5 force <= '1'
+        Else @31:5
+          SignalAssign @31:5 force <= '0'

@@ -1,0 +1,44 @@
+error: `end f` does not match `e`
+ --> err_labels.vhd:2:12
+  |
+2 | end entity f;
+  |            ^
+1 | entity e is
+  |        - declared as `e` here
+
+error: `end l2` does not match `l1`
+  --> err_labels.vhd:10:14
+   |
+10 |     end loop l2;
+   |              ^^
+ 8 |     l1 : loop
+   |     -- declared as `l1` here
+
+error: `end oops` names a construct that has no label
+  --> err_labels.vhd:13:12
+   |
+13 |     end if oops;
+   |            ^^^^
+
+error: `end q` does not match `p`
+  --> err_labels.vhd:14:15
+   |
+14 |   end process q;
+   |               ^
+ 6 |   p : process
+   |   - declared as `p` here
+
+error: a generate statement requires a label
+  --> err_labels.vhd:16:3
+   |
+16 |   for i in 0 to 3 generate
+   |   ^^^
+
+error: `end c` does not match `b`
+  --> err_labels.vhd:22:13
+   |
+22 |   end block c;
+   |             ^
+20 |   b : block
+   |   - declared as `b` here
+

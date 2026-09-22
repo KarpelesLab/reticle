@@ -1,0 +1,24 @@
+error: expected `;`, found `signal`
+ --> err_missing_semicolon.vhd:7:3
+  |
+7 |   signal z : bit;
+  |   ^^^^^^
+
+error: expected `;`, found `begin`
+ --> err_missing_semicolon.vhd:9:1
+  |
+9 | begin
+  | ^^^^^
+
+error: expected `;`, found identifier `z`
+  --> err_missing_semicolon.vhd:11:3
+   |
+11 |   z <= x;
+   |   ^
+
+error: expected `;`, found `end`
+  --> err_missing_semicolon.vhd:17:5
+   |
+17 |     end if;
+   |     ^^^
+

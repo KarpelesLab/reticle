@@ -1,0 +1,46 @@
+DesignFile
+  DesignUnit @1:1
+    Library @1:1 ieee
+    Use @2:1 ieee.std_logic_1164.all
+    Entity shift_reg @4:1
+      Generic @6:5 N : positive := 4
+      Generic @7:5 MODE : string := "left"
+      Generic @8:5 INIT : std_logic_vector := x"0"
+      Port @11:5 clk : in std_logic
+      Port @12:5 d : in std_logic
+      Port @13:5 q : out std_logic_vector((- N 1) downto 0)
+  DesignUnit @17:1
+    Architecture gen @17:1 of shift_reg
+      Signal @18:3 stage : std_logic_vector(N downto 0)
+      Begin
+      SignalAssign @20:3 stage(0) <= d
+      ForGenerate chain @22:3 i in 0 to (- N 1)
+        Signal @23:5 tap : std_logic
+        Begin
+        Process ff @25:5 (clk)
+          Begin
+          If @27:7
+            Arm @27:7 rising_edge(clk)
+              SignalAssign @28:9 tap <= stage(i)
+        SignalAssign @31:5 stage((+ i 1)) <= tap
+      IfGenerate dir @34:3
+        Arm @34:9 (= MODE "left")
+          SignalAssign @35:5 q <= stage(N downto 1)
+        Arm @36:3 (= MODE "right")
+          SignalAssign @37:5 q <= stage(1 to N)
+        Else @39:5
+          SignalAssign @39:5 q <= (agg others => 'X')
+      CaseGenerate width @42:3 N
+        When @43:5 one: 1
+          Assert @44:7 false report "single stage" severity note
+        When @45:5 2 | 3
+          Assert @46:7 false report "small" severity note
+        When @47:5 others
+          Assert null_stmt @48:7 true
+      ForGenerate nested @51:3 r in 0 to 1
+        ForGenerate inner @52:5 c in 0 to 1
+          Block dummy @53:7
+            Begin
+      IfGenerate labelled @59:3
+        Arm @59:14 alt: (> N 8)
+          Assert @61:5 false

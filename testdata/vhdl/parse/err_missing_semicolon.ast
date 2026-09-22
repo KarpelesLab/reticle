@@ -1,0 +1,17 @@
+DesignFile
+  DesignUnit @1:1
+    Entity e @1:1
+      Port @2:9 a : in bit
+      Port @2:21 y : out bit
+  DesignUnit @5:1
+    Architecture rtl @5:1 of e
+      Signal @6:3 x : bit
+      Signal @7:3 z : bit
+      Constant @8:3 K : integer := 1
+      Begin
+      SignalAssign @12:3 y <= z
+      Process @13:3 (a)
+        Begin
+        If @15:5
+          Arm @15:5 (= a '1')
+            SignalAssign @16:7 x <= '0'

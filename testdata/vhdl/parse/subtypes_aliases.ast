@@ -1,0 +1,50 @@
+DesignFile
+  DesignUnit @1:1
+    Library @1:1 ieee
+    Use @2:1 ieee.std_logic_1164.all
+    Package sub_pkg @4:1
+      Subtype byte @5:3 is std_logic_vector(7 downto 0)
+      Subtype nibble @6:3 is bit_vector(3 downto 0)
+      Subtype small @7:3 is integer range 0 to 15
+      Subtype down @8:3 is natural range 15 downto 0
+      Subtype rbit @9:3 is resolved std_logic
+      Subtype rvec @10:3 is resolved std_logic_vector(3 downto 0)
+      Subtype rvec_e @11:3 is (resolved) std_logic_vector(3 downto 0)
+      Subtype idx @12:3 is natural range byte'range
+      Subtype word_arr @13:3 is work.types_pkg.memory(0 to 3)
+      Subtype two_d @14:3 is work.types_pkg.cube(1 to 1, 1 to 2, 1 to 1)
+      Subtype same @15:3 is byte
+      Alias @17:3 byte_alias is byte
+      Alias @18:3 slv_and is "and"[std_logic_vector, std_logic_vector return std_logic_vector]
+      Alias @19:3 to_int is work.util.to_integer[byte return integer]
+      Alias @20:3 hi_lit is red[return color]
+      Alias @21:3 \ext alias\ is \Extended Name\
+      Alias @22:3 'z' is 'Z'[return std_logic]
+      Alias @23:3 "&&" is "and"[bit, bit return bit]
+      Attribute enum_encoding @25:3 : string
+      Attribute max_delay @26:3 : time
+      Attribute syn_keep @27:3 : boolean
+      AttributeSpec enum_encoding @28:3 of color : type is "001 010 100"
+      AttributeSpec max_delay @29:3 of "and"[bit, bit return bit] : function is 1 ns
+      AttributeSpec syn_keep @30:3 of others : signal is true
+      AttributeSpec syn_keep @31:3 of all : variable is false
+      AttributeSpec syn_keep @32:3 of a, b, 'c' : literal is true
+      AttributeSpec syn_keep @33:3 of gen_label : label is true
+      AttributeSpec syn_keep @34:3 of sub_pkg : package is true
+      AttributeSpec syn_keep @35:3 of ent : entity is true
+      AttributeSpec syn_keep @36:3 of arch : architecture is true
+      AttributeSpec syn_keep @37:3 of cfg : configuration is true
+      AttributeSpec syn_keep @38:3 of p : procedure is true
+      AttributeSpec syn_keep @39:3 of t : subtype is true
+      AttributeSpec syn_keep @40:3 of c : constant is true
+      AttributeSpec syn_keep @41:3 of comp : component is true
+      AttributeSpec syn_keep @42:3 of u : units is true
+      AttributeSpec syn_keep @43:3 of g : group is true
+      AttributeSpec syn_keep @44:3 of f : file is true
+  DesignUnit @47:1
+    Architecture a @47:1 of e
+      Signal @48:3 v : std_logic_vector(7 downto 0)
+      Alias @49:3 top : std_logic is v(7)
+      Alias @50:3 low : std_logic_vector(3 downto 0) is v(3 downto 0)
+      Alias @51:3 rev : std_logic_vector(0 to 7) is v
+      Begin

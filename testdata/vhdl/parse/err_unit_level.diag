@@ -1,0 +1,18 @@
+error: expected `is`, found `port`
+ --> err_unit_level.vhd:5:3
+  |
+5 |   port (a : in bit);
+  |   ^^^^
+
+error: expected a design unit (`entity`, `architecture`, `package`, `configuration` or `context`), found identifier `this`
+ --> err_unit_level.vhd:8:1
+  |
+8 | this is not a design unit at all;
+  | ^^^^
+
+error: expected `;`, found end of file
+  --> err_unit_level.vhd:18:1
+   |
+18 | 
+   | ^
+

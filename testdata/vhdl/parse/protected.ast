@@ -1,0 +1,23 @@
+DesignFile
+  DesignUnit @1:1
+    Package counter_pkg @1:1
+      Type counter_t @2:3 is protected
+        SubprogramDecl @3:5 procedure increment
+          Param @3:25 by : in natural := 1
+        SubprogramDecl @4:5 impure function value return natural
+        SubprogramDecl @5:5 procedure reset
+  DesignUnit @9:1
+    PackageBody counter_pkg @9:1
+      Type counter_t @10:3 is protected body
+        Variable @11:5 count : natural := 0
+        SubprogramBody @13:5 procedure increment
+          Param @13:25 by : in natural := 1
+          Begin
+          VarAssign @15:7 count := (+ count by)
+        SubprogramBody @18:5 impure function value return natural
+          Begin
+          Return @20:7 count
+        SubprogramBody @23:5 procedure reset
+          Begin
+          VarAssign @25:7 count := 0
+      SharedVariable @29:3 shared_counter : counter_t

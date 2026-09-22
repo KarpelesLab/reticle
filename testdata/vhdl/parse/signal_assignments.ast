@@ -1,0 +1,39 @@
+DesignFile
+  DesignUnit @1:1
+    Library @1:1 ieee
+    Use @2:1 ieee.std_logic_1164.all
+    Entity assigns @4:1
+      Port @5:9 a, b, c, clk : in std_logic
+      Port @5:38 sel : in std_logic_vector(1 downto 0)
+      Port @6:9 y, z : out std_logic
+      Port @6:31 v : out std_logic_vector(3 downto 0)
+  DesignUnit @9:1
+    Architecture rtl @9:1 of assigns
+      Signal @10:3 g : boolean
+      Signal @11:3 t : std_logic
+      Begin
+      SignalAssign @13:3 y <= a
+      SignalAssign @14:3 y <= a after 1 ns
+      SignalAssign @15:3 y <= '0', '1' after 5 ns, '0' after 10 ns
+      SignalAssign @16:3 y <= transport a after 2 ns
+      SignalAssign @17:3 y <= reject 1 ns inertial b
+      SignalAssign @18:3 y <= inertial c
+      SignalAssign @19:3 z <= unaffected
+      SignalAssign @20:3 z <= null after 1 ns
+      SignalAssign cond @22:3 y <= a when (= sel "00") else b when (= sel "01") else c
+      SignalAssign cond_noelse @23:3 y <= a when (= sel "00")
+      SignalAssign cond_un @24:3 y <= a when g else unaffected
+      SignalAssign @26:3 z <= with sel select a when "00", b when "01" | "10", c after 1 ns when others
+      Block gb @31:3 guard ((= clk '1'))
+        Begin
+        SignalAssign @33:5 t <= guarded a
+        SignalAssign @34:5 t <= guarded transport b after 3 ns
+        SignalAssign @35:5 t <= guarded with sel select a when "00", b when others
+      SignalAssign @38:3 (agg v(0), v(1), v(2), v(3)) <= std_logic_vector'(agg a, b, c, a)
+      SignalAssign @39:3 v(1 downto 0) <= (agg others => '1')
+      SignalAssign @40:3 v(3 downto 2) <= (& b c)
+      SignalAssign post @42:3 postponed y <= (and a b)
+      SignalAssign @43:3 postponed z <= (not a)
+      Call pc @44:3 postponed report_it(a)
+      Call @45:3 call_it(a, b)
+      Call @46:3 work.pkg.log("hello")

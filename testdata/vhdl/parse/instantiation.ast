@@ -1,0 +1,43 @@
+DesignFile
+  DesignUnit @1:1
+    Library @1:1 ieee
+    Use @2:1 ieee.std_logic_1164.all
+    Use @3:1 ieee.numeric_std.all
+    Entity wrapper @5:1
+      Port @6:9 clk : in std_logic
+      Port @6:29 a : in unsigned(7 downto 0)
+      Port @6:58 y : out std_logic_vector(7 downto 0)
+  DesignUnit @9:1
+    Architecture structural @9:1 of wrapper
+      Component reg @10:3
+        Generic @11:14 W : positive := 8
+        Generic @11:33 INIT : std_logic_vector := x"00"
+        Port @12:11 clk : in std_logic
+        Port @12:31 d : in std_logic_vector((- W 1) downto 0)
+        Port @13:11 q : out std_logic_vector((- W 1) downto 0)
+        Port @13:53 en : in std_logic := '1'
+      Signal @15:3 d, q : std_logic_vector(7 downto 0)
+      Begin
+      Instance u_pos @17:3 component reg
+        PortMap (clk, d, q)
+      Instance u_named @18:3 component reg
+        GenericMap (W => 8, INIT => x"FF")
+        PortMap (clk => clk, d => d, q => q, en => open)
+      Instance u_conv @21:3 component reg
+        PortMap (clk => clk, d => std_logic_vector(a), unsigned(q) => a, en => '1')
+      Instance u_partial @23:3 component reg
+        PortMap (clk => clk, d(3 downto 0) => d(7 downto 4), d(7 downto 4) => d(3 downto 0), q => q)
+      Instance u_comp_kw @25:3 component reg
+        PortMap (clk, d, q)
+      Instance u_ent @26:3 entity work.reg
+        PortMap (clk, d, q)
+      Instance u_ent_arch @27:3 entity work.reg(rtl)
+        GenericMap (8)
+        PortMap (clk, d, q)
+      Instance u_cfg @30:3 configuration work.reg_cfg
+        PortMap (clk => clk, d => d, q => q)
+      Instance u_bare @31:3 component reg
+      Instance u_lib @32:3 component work.reg
+      Instance u_fn @33:3 component reg
+        PortMap (clk => clk, d => to_slv(a, 8), q => q)
+      SignalAssign @34:3 y <= q

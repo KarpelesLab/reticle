@@ -1,0 +1,31 @@
+DesignFile
+  DesignUnit @1:1
+    Entity blocks @1:1
+      Port @2:9 clk, en : in bit
+      Port @2:27 y : out bit
+  DesignUnit @5:1
+    Architecture rtl @5:1 of blocks
+      Signal @6:3 a, b : bit
+      Begin
+      Block plain @8:3
+        Begin
+        SignalAssign @10:5 a <= clk
+      Block guarded_blk @13:3 guard ((= en '1'))
+        Signal @14:5 local : bit
+        Begin
+        SignalAssign @16:5 local <= guarded a
+        SignalAssign @17:5 y <= local
+      Block mapped @20:3
+        Generic @21:14 W : positive := 1
+        GenericMap (W => 2)
+        Port @23:11 i : in bit
+        Port @23:23 o : out bit
+        PortMap (i => a, o => b)
+        Constant @25:5 K : integer := W
+        Begin
+        SignalAssign @27:5 o <= i
+      Block outer @30:3
+        Begin
+        Block inner @32:5
+          Begin
+          SignalAssign @34:7 b <= a
