@@ -21,7 +21,19 @@ exclude = [
     ".github",
     "/ip",
     "testdata/corpus",
+    # The browser playground and the C example are documentation, not crate
+    # sources: `web/` is a hand-written `.js` wrapper plus an `.html` page
+    # that only mean anything next to a `.wasm` the consumer builds, and
+    # `examples/ffi/` is C. Neither is reachable from `src/`, so shipping
+    # them would only grow every download. They live in the repository;
+    # see `docs/wasm.md` and `docs/ffi.md`.
+    "/web",
+    "/examples",
 ]
+
+# `examples/ffi/` holds C, not Rust. Cargo's example auto-discovery would
+# otherwise look for a target there.
+autoexamples = false
 
 [package.metadata.docs.rs]
 all-features = true
@@ -73,6 +85,21 @@ timing = []
 # are dispatched by extension and may be in either language.
 ip = ["verilog", "vhdl"]
 
+# --- embedding ---
+# The C ABI in `src/ffi`: opaque handles over the frontends, the IR, the
+# simulator and synthesis, for a tool written in another language. It is
+# the one module allowed to use `unsafe` (see `src/lib.rs`). Every entry
+# point is exported unconditionally so `src/ffi/reticle.h` describes one
+# fixed ABI; a call into a stage that was not compiled in returns
+# `RETICLE_ERR_UNSUPPORTED` rather than vanishing from the symbol table.
+# See `docs/ffi.md`.
+ffi = []
+# The WebAssembly surface in `src/wasm`: the same operations as the C API,
+# exported as plain `extern "C"` functions over linear memory with an
+# allocator pair, so no bindgen is needed. `web/reticle.js` wraps them.
+# See `docs/wasm.md`.
+wasm = []
+
 # --- verification & tooling ---
 # Formal: bounded model checking and equivalence checking over the IR, built
 # on an in-crate SAT solver.
@@ -108,9 +135,14 @@ required-features = ["cli"]
 [lints.rust]
 missing_docs = "warn"
 unreachable_pub = "warn"
-# A compiler has no business touching raw memory. Forbid, not deny: there is
-# no anticipated module that would need to opt back in.
-unsafe_code = "forbid"
+# Deny, not forbid: the crate has exactly one module that must opt back
+# in, `src/ffi` (and `src/wasm`, which is the same boundary in another
+# shape). A C ABI cannot be expressed without raw pointers, and `forbid`
+# cannot be overridden even locally, so the level is `deny` and the two
+# boundary modules carry a scoped `#![allow(unsafe_code)]` with the
+# invariant for every block written next to it. Nothing else in the crate
+# may opt in; a compiler has no business touching raw memory.
+unsafe_code = "deny"
 
 [lints.clippy]
 # Hardware descriptions are full of bit widths and shift amounts; make lossy

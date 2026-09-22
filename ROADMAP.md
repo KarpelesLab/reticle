@@ -434,9 +434,11 @@ no HDL written by the user beyond a top-level.
       shared `fmt_doc` printer; see `docs/formatting.md`).
 - [ ] Schematic / netlist viewer output (an HTML page rendering the IR)
       and documentation generation from source comments and port lists.
-- [ ] WebAssembly build of the frontends and simulator for a browser
-      playground.
-- [ ] C API for embedding the frontends and simulator in other tools.
+- [x] WebAssembly build of the frontends and simulator for a browser
+      playground (`wasm` feature, `web/reticle.js` and `web/index.html`;
+      see `docs/wasm.md`).
+- [x] C API for embedding the frontends and simulator in other tools
+      (`ffi` feature, `src/ffi/reticle.h`; see `docs/ffi.md`).
 - [ ] Incremental compilation: cache elaborated modules keyed on source
       hash so large designs re-simulate quickly after a small edit.
 

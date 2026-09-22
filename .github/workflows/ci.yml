@@ -39,6 +39,15 @@ jobs:
       - name: Clippy (all features, warnings denied)
         run: cargo clippy --all-targets --all-features -- -D warnings
 
+      # `tests/ffi_c_example.rs` links `examples/ffi/demo.c` against a real
+      # static library, which is the only check that `src/ffi/reticle.h`
+      # describes the symbols a C compiler actually finds. Cargo does not
+      # build a staticlib during `cargo test`, and a nested cargo would
+      # block on the same lock, so it is built here; without it that test
+      # skips with a message.
+      - name: Static library for the C example
+        run: cargo rustc --lib --all-features --crate-type staticlib
+
       - name: Test (all features)
         run: cargo test --all-features
 
@@ -59,7 +68,7 @@ jobs:
       - name: Each feature alone
         run: |
           set -e
-          for f in "" verilog vhdl sim synth formal fpga asic timing ip lsp cli; do
+          for f in "" verilog vhdl sim synth formal fpga asic timing ip lsp ffi wasm cli; do
             echo "::group::features=${f:-none}"
             if [ -z "$f" ]; then
               cargo clippy --no-default-features --all-targets -- -D warnings
@@ -76,6 +85,28 @@ jobs:
         run: |
           rustup toolchain install 1.89 --profile minimal
           cargo +1.89 check --all-features
+
+  wasm:
+    name: WebAssembly
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@v2
+
+      # The browser playground in `web/` is only useful if the library
+      # keeps compiling for the browser; nothing else in CI would catch a
+      # 32-bit or filesystem assumption creeping back in. See docs/wasm.md.
+      - name: Build for wasm32-unknown-unknown
+        run: |
+          cargo rustc --lib --target wasm32-unknown-unknown --release \
+            --no-default-features --features wasm,verilog,vhdl,sim,synth \
+            --crate-type cdylib
+
+      - name: Report the module size
+        run: ls -l target/wasm32-unknown-unknown/release/reticle.wasm
 
   package:
     name: Publishable crate

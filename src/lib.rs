@@ -33,8 +33,20 @@
 //! | [`timing`]  | `timing`  | Static timing analysis and clock domain crossings |
 //! | [`ip`]      | `ip`      | IP and project manifests, bus interfaces, interconnect |
 //! | [`lsp`]     | `lsp`     | Language server for Verilog and VHDL             |
+//! | [`ffi`]     | `ffi`     | C ABI for embedding the compiler in another tool |
+//! | [`wasm`]    | `wasm`    | WebAssembly surface for the browser playground   |
+//!
+//! # `unsafe`
+//!
+//! `unsafe_code` is denied crate-wide rather than forbidden. `forbid`
+//! cannot be lifted even locally, and [`ffi`] and [`wasm`] have to hand raw
+//! pointers across an ABI boundary, which no safe formulation expresses.
+//! Those two modules are therefore the only place in the crate that opts
+//! back in, each with a file-scoped `#![allow(unsafe_code)]` and a comment
+//! on every block naming the invariant it relies on. Every other module
+//! stays safe; a compiler has no business touching raw memory.
 
-#![forbid(unsafe_code)]
+#![deny(unsafe_code)]
 
 pub mod diag;
 pub mod fmt_doc;
@@ -72,6 +84,12 @@ pub mod ip;
 
 #[cfg(feature = "lsp")]
 pub mod lsp;
+
+#[cfg(feature = "ffi")]
+pub mod ffi;
+
+#[cfg(feature = "wasm")]
+pub mod wasm;
 
 /// The crate version, as recorded in `Cargo.toml`.
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
