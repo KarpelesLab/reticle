@@ -981,9 +981,16 @@ impl Importer<'_> {
             let local = sanitise_name(&name);
             let (prefix, inferred) = self.prefix_of(&local, &maps, &bus, ports);
             if inferred {
-                self.report.note_approximated(format!(
-                    "interface {name}: no port map, prefix `{prefix}` taken from the name"
-                ));
+                // With no port map there is nothing to measure the
+                // prefix against, so say which of the two guesses was
+                // made rather than printing an empty one.
+                let how = if prefix.is_empty() {
+                    "its ports carry no prefix".to_owned()
+                } else {
+                    format!("the prefix `{prefix}` comes from its name")
+                };
+                self.report
+                    .note_approximated(format!("interface {name}: no port map, so {how}"));
             }
 
             for (_, physical) in &maps {
