@@ -1000,7 +1000,10 @@ fn asic(args: &Args) -> Result<Outcome, ArgError> {
         &mut design,
         top,
         &library,
-        &AsicOptions::default(),
+        &AsicOptions {
+            synth: synth_options(args.positionals()),
+            ..AsicOptions::default()
+        },
         &mut diags,
     );
     let failed = report(&mut diags, &map);
@@ -1115,7 +1118,7 @@ fn build(args: &Args) -> Result<Outcome, ArgError> {
 
     if args.flag("synth") {
         let mut diags = Diagnostics::new();
-        let options = reticle::synth::SynthOptions::default();
+        let options = synth_options(std::slice::from_ref(&manifest));
         let stats = reticle::synth::run(&mut design, &options, &mut diags);
         if report(&mut diags, map) {
             return Ok(Outcome::Failed);
@@ -1381,7 +1384,9 @@ fn synth(args: &Args) -> Result<Outcome, ArgError> {
         Err(outcome) => return Ok(outcome),
     };
 
-    let mut options = SynthOptions::default();
+    let mut options = SynthOptions {
+        ..synth_options(args.positionals())
+    };
     if let Some(name) = args.option("fsm") {
         match FsmEncoding::from_attr(name) {
             Some(encoding) => options.fsm_encoding = encoding,
@@ -1517,7 +1522,10 @@ fn fpga(args: &Args) -> Result<Outcome, ArgError> {
         return Ok(Outcome::Failed);
     }
 
-    let options = FpgaOptions::default();
+    let options = FpgaOptions {
+        synth: synth_options(args.positionals()),
+        ..FpgaOptions::default()
+    };
     let mut diags = Diagnostics::new();
     let flow = match synthesize_for(&mut design, top, device, &constraints, &options, &mut diags) {
         Ok(report) => report,
@@ -1810,7 +1818,7 @@ fn timing(args: &Args) -> Result<Outcome, ArgError> {
     let mut diags = Diagnostics::new();
     let has_processes = design.modules.iter().any(|(_, m)| !m.processes.is_empty());
     if has_processes {
-        let options = reticle::synth::SynthOptions::default();
+        let options = synth_options(args.positionals());
         reticle::synth::run(&mut design, &options, &mut diags);
         if report(&mut diags, &map) {
             return Ok(Outcome::Failed);
@@ -1942,6 +1950,20 @@ impl reticle::sim::FileProvider for DiskFiles {
         self.roots
             .iter()
             .find_map(|root| std::fs::read_to_string(root.join(wanted)).ok())
+    }
+}
+
+/// Synthesis options that can read the files a design names.
+///
+/// Synthesis turns `$readmemh` into a memory's initial contents, and like
+/// the simulator it reads files only through a provider it is handed.
+/// Without one a ROM loaded that way comes out of synthesis empty, with a
+/// warning; every command that synthesises goes through here so none of
+/// them forgets.
+fn synth_options(sources: &[String]) -> reticle::synth::SynthOptions {
+    reticle::synth::SynthOptions {
+        files: Some(std::rc::Rc::new(DiskFiles::for_sources(sources))),
+        ..reticle::synth::SynthOptions::default()
     }
 }
 
@@ -2099,7 +2121,7 @@ fn viewer(args: &Args) -> Result<Outcome, ArgError> {
     }
     if args.flag("synth") {
         let mut diags = Diagnostics::new();
-        let options = reticle::synth::SynthOptions::default();
+        let options = synth_options(args.positionals());
         reticle::synth::run(&mut design, &options, &mut diags);
         if report(&mut diags, &map) {
             return Ok(Outcome::Failed);

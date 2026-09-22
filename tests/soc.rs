@@ -619,6 +619,60 @@ fn reticle(dir: &Path, args: &[&str]) -> (i32, String, String) {
     )
 }
 
+/// `reticle fpga` exports the system-on-chip with its program in the
+/// ROM's block RAMs, from the command line, the way a user with a board
+/// would produce the files `nextpnr-ice40` reads.
+///
+/// Three fixes meet here: synthesis loads the ROM from `$readmemh` through
+/// the file provider the binary hands it, the FPGA flow flattens the
+/// design, and block RAM mapping carries a memory's initial contents into
+/// `INIT_*` parameters. Before them the exported ROM was blank.
+#[cfg(feature = "cli")]
+#[test]
+fn reticle_fpga_exports_the_rom_with_the_program_in_it() {
+    let Some(dir) = example() else { return };
+    let out = Path::new(env!("CARGO_TARGET_TMPDIR")).join("soc-fpga-cli");
+    let _ = fs::remove_dir_all(&out);
+    fs::create_dir_all(&out).expect("a scratch directory");
+    let out_arg = out.to_string_lossy().into_owned();
+    let (code, _, err) = reticle(
+        &dir,
+        &[
+            "fpga",
+            "--device",
+            DEVICE,
+            "--constraints",
+            "board/hx8k_breakout.rcf",
+            "--output-dir",
+            &out_arg,
+            "--quiet",
+            "rtl/soc_top.v",
+            "../../ip/rv32i/rtl/rv32i.v",
+            "../../ip/uart/rtl/uart_tx.v",
+            "../../ip/uart/rtl/uart_rx.v",
+            "../../ip/uart/rtl/uart.v",
+        ],
+    );
+    assert_eq!(code, 0, "reticle fpga failed:\n{err}");
+
+    let json = fs::read_to_string(out.join("soc_top.json")).expect("the netlist");
+    // The ROM's block RAMs carry `INIT_*` parameters holding the program;
+    // a blank ROM would have every one of them all zeroes.
+    let rom_inits: Vec<&str> = json
+        .split("\"INIT_")
+        .skip(1)
+        .filter_map(|rest| rest.split('"').nth(2))
+        .collect();
+    assert!(
+        !rom_inits.is_empty(),
+        "no block RAM carries INIT parameters"
+    );
+    assert!(
+        rom_inits.iter().any(|v| v.chars().any(|c| c != '0')),
+        "every INIT parameter is zero: the ROM was exported blank"
+    );
+}
+
 #[cfg(feature = "cli")]
 #[test]
 fn reticle_build_builds_the_project() {
@@ -636,13 +690,12 @@ fn reticle_build_builds_the_project() {
         err.contains("note: built `soc`: 5 module(s) from 5 source(s)"),
         "{err}"
     );
-    // The binary gives synthesis no file provider yet, so the one thing
-    // it says is that the ROM image could not be loaded, naming the file
-    // (`synthesis_loads_the_contents_readmemh_names` shows the library
-    // loading it when given one).
+    // The binary hands synthesis a file provider rooted at the manifest's
+    // directory, so `$readmemh` loads the ROM image and there is nothing to
+    // say about it. It once reported the image could not be loaded.
     assert!(
-        err.contains("the contents of `sw/hello.hex` could not be loaded into `rom`"),
-        "{err}"
+        !err.contains("could not be loaded"),
+        "the ROM image was not loaded:\n{err}"
     );
     assert!(!err.contains("simulation-only statement dropped"), "{err}");
     let lock = fs::read_to_string(&lock).expect("a lock file");
