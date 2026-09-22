@@ -1,0 +1,16 @@
+device: ecp5-45f-CABGA381
+io:
+  clk (1 bits) -> TRELLIS_IO at pin G2 as LVCMOS33
+  d (1 bits) -> TRELLIS_IO
+  q (1 bits) -> TRELLIS_IO
+pll:
+  sys -> EHXPLLL from clk at 25.000 MHz: 125.000 MHz for 125.000 MHz asked (+0.0 ppm), vco 500.000 MHz, CLKI_DIV=1 CLKFB_DIV=5 CLKOP_DIV=4 CLKOP_CPHASE=3
+clocks:
+  sys (8 flip-flops) -> DCCA
+logic:
+  0 LUTs, depth 0
+netlist:
+  1 x DCCA
+  1 x EHXPLLL
+  8 x TRELLIS_FF
+  3 x TRELLIS_IO

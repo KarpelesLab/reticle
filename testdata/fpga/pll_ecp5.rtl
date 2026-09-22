@@ -1,0 +1,17 @@
+top pllshift
+
+module pllshift
+  net %clk u1 wire
+  attr clock_mhz = 125
+  net %sys u1 wire
+  net %d u1 wire
+  net %q u1 wire
+  net %sr u8 wire
+  net %next u8 wire
+  port clk in %clk
+  port d in %d
+  port q out %q
+  assign %next = {%sr[6:0], %d}
+  assign %q = %sr[7:7]
+  cell sr dff pos (clk=%sys, d=%next) -> (q=%sr)
+end

@@ -146,6 +146,7 @@ pub mod constraints;
 pub mod device;
 pub mod flow;
 pub mod place;
+pub mod pll;
 pub mod primitives;
 pub mod route;
 pub mod techcells;
@@ -165,7 +166,7 @@ pub use constraints::{
 pub use device::{
     BelKind, BelRole, BramPort, BramPortRole, BramShape, ClockRegion, ClockResources, Device,
     DeviceDb, DspShape, FfFeatures, FfReset, FfVariant, Grid, IoBank, IoStandard, Pin, PinKind,
-    PinName, PllShape, Site,
+    PinName, PllDivider, PllDividerRole, PllFeedback, PllShape, Site,
 };
 pub use flow::{
     FlowError, FlowReport, NetlistProblem, NextpnrInputs, PnrOptions, PnrResult, VendorInputs,
@@ -177,9 +178,10 @@ pub use place::{
     Instance, NetPin, Netlist, PlaceError, PlaceOptions, Placement, PlacementReport, Signal, hpwl,
     place,
 };
+pub use pll::PllSolution;
 pub use primitives::{
     BramFallback, BramMapping, CarryMapping, ClockMapping, DspMapping, IoMapping, MapOptions,
-    MapReport, map,
+    MapReport, PllMapping, map,
 };
 pub use route::{Iteration, Route, RouteError, RouteOptions, Routing, RoutingReport, route};
 pub use techcells::{CellMapReport, map_cells};

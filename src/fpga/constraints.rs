@@ -73,7 +73,9 @@ use super::device::{Device, PinName};
 use super::text::{Line, Token, tokenize};
 use crate::diag::{Diagnostic, Diagnostics, Severity};
 use crate::ir::expr::operands;
-use crate::ir::{AttrValue, Attrs, CellKind, Design, ExprId, Module, ModuleId, ProcessKind};
+use crate::ir::{
+    AttrValue, Attrs, CellKind, Design, ExprId, Module, ModuleId, PortDir, ProcessKind, StmtKind,
+};
 use crate::source::{SourceId, Span};
 
 /// Diagnostic code for a malformed line in a `.rcf` file.
@@ -497,7 +499,11 @@ impl Constraints {
                     origin: Origin::Attribute,
                 });
             }
-            if let Some(period) = attr_f64(attrs, &["clock_period", "period"]) {
+            if let Some(period) = attr_f64(attrs, &["clock_period", "period"]).or_else(|| {
+                attr_f64(attrs, &["clock_mhz"])
+                    .filter(|mhz| *mhz > 0.0)
+                    .map(|mhz| 1000.0 / mhz)
+            }) {
                 out.clocks.push(ClockDef {
                     name: port.name.as_str().to_owned(),
                     net: net.name.as_str().to_owned(),
@@ -506,6 +512,30 @@ impl Constraints {
                     origin: Origin::Attribute,
                 });
             }
+        }
+        // An internal net may carry a clock too, which is how a design
+        // asks for a generated one in its source:
+        // `(* clock_mhz = 48 *) wire sys;` with nothing driving `sys` is
+        // a request for a PLL, and `fpga::primitives` answers it.
+        for (id, net) in module.nets.iter() {
+            if module.ports.iter().any(|p| p.net == id) {
+                continue;
+            }
+            let attrs = &net.attrs;
+            let Some(period) = attr_f64(attrs, &["clock_period"]).or_else(|| {
+                attr_f64(attrs, &["clock_mhz"])
+                    .filter(|mhz| *mhz > 0.0)
+                    .map(|mhz| 1000.0 / mhz)
+            }) else {
+                continue;
+            };
+            out.clocks.push(ClockDef {
+                name: net.name.as_str().to_owned(),
+                net: net.name.as_str().to_owned(),
+                period_ns: period,
+                span: net.span,
+                origin: Origin::Attribute,
+            });
         }
         let objects = module
             .instances
@@ -879,6 +909,16 @@ impl Constraints {
 
     fn check_timing(&self, module: &Module, diags: &mut Diagnostics) {
         let clock_nets = clock_driven_nets(module);
+        // A clock constrained on a net nothing drives is one the design
+        // asks a PLL for, and the PLL is fed from a clock constrained on
+        // an input port — which then clocks no flip-flop directly and
+        // must not be called useless for it.
+        let driven = driven_nets(module);
+        let feeds_a_pll = self.clocks.iter().any(|clock| {
+            module
+                .net_by_name(&clock.net)
+                .is_some_and(|net| !driven.get(net.index()).copied().unwrap_or(true))
+        });
         let mut seen: Vec<&str> = Vec::new();
         for clock in &self.clocks {
             if seen.contains(&clock.name.as_str()) {
@@ -908,7 +948,12 @@ impl Constraints {
                     .with_code(BAD_CLOCK)
                     .with_span(clock.span),
                 );
-            } else if !clock_nets.iter().any(|n| n == &clock.net) {
+            } else if !clock_nets.iter().any(|n| n == &clock.net)
+                && !(feeds_a_pll
+                    && module
+                        .port(&clock.net)
+                        .is_some_and(|p| p.dir == PortDir::In))
+            {
                 diags.push(
                     Diagnostic::warning(format!(
                         "net `{}` does not clock anything in `{}`",
@@ -1252,6 +1297,72 @@ fn timing_point_names(module: &Module) -> Vec<String> {
 }
 
 /// The nets that reach a flip-flop clock pin, by name.
+/// For every net of `module`, whether something may drive it: an input
+/// or inout port, a continuous assignment, a cell output, an assignment
+/// in a process, or an instance connection.
+///
+/// It errs towards "driven", since [`super::primitives`] uses the answer
+/// to decide whether a PLL may be wired onto a net: an instance
+/// connection counts whatever its direction, since which connections are
+/// outputs is the other module's business.
+pub(crate) fn driven_nets(module: &Module) -> Vec<bool> {
+    let mut driven = vec![false; module.nets.len()];
+    let mark = |net: crate::ir::NetId, driven: &mut Vec<bool>| {
+        if let Some(slot) = driven.get_mut(net.index()) {
+            *slot = true;
+        }
+    };
+    for port in &module.ports {
+        if port.dir != PortDir::Out {
+            mark(port.net, &mut driven);
+        }
+    }
+    for assign in &module.assigns {
+        for net in assign.target.nets() {
+            mark(net, &mut driven);
+        }
+    }
+    for (_, cell) in module.cells.iter() {
+        for (_, net) in &cell.outputs {
+            mark(*net, &mut driven);
+        }
+    }
+    let mut written = Vec::new();
+    module.for_each_stmt(|stmt| {
+        if let StmtKind::Assign { target, .. } = &stmt.kind {
+            written.extend(target.nets());
+        }
+    });
+    for net in written {
+        mark(net, &mut driven);
+    }
+    let mut touched = Vec::new();
+    for (_, instance) in module.instances.iter() {
+        for (_, expr) in &instance.connections {
+            collect_net_ids(module, *expr, &mut touched);
+        }
+    }
+    for net in touched {
+        mark(net, &mut driven);
+    }
+    driven
+}
+
+/// Every net `id` reads, into `out`.
+fn collect_net_ids(module: &Module, id: ExprId, out: &mut Vec<crate::ir::NetId>) {
+    let mut stack = vec![id];
+    while let Some(id) = stack.pop() {
+        let Some(node) = module.exprs.get(id) else {
+            continue;
+        };
+        if let Some(net) = node.as_net() {
+            out.push(net);
+            continue;
+        }
+        stack.extend(operands(&node.kind));
+    }
+}
+
 fn clock_driven_nets(module: &Module) -> Vec<String> {
     let mut nets = Vec::new();
     for (_, cell) in module.cells.iter() {

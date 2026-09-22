@@ -787,6 +787,26 @@ pub struct Pin {
 }
 
 /// The shape of one PLL or clock generator.
+///
+/// Everything [`super::pll::solve`] needs to configure one is here as
+/// data: the frequency ranges, the three divider fields with the
+/// parameter each is written to and how the written value relates to the
+/// division it performs, where the feedback is taken from, and any
+/// parameter that follows from the solution (a phase that must track the
+/// output divider, a loop-filter setting chosen by the phase detector's
+/// frequency). A shape without dividers or without an `out` port is
+/// recorded but cannot be instantiated, and a design asking for one is
+/// told so.
+///
+/// In the `.dev` text all of it is one `pll` line:
+///
+/// ```text
+/// pll SB_PLL40_CORE input 10 133 pfd 10 133 vco 533 1066 outputs 1 count 1
+///     feedback vco divide ref DIVR 0 15 offset 1 divide feedback DIVF 0 63 offset 1
+///     divide out DIVQ 1 6 pow2 band FILTER_RANGE 17=1 26=2 44=3 66=4 101=5 134=6
+///     port ref=REFERENCECLK out=PLLOUTCORE lock=LOCK tie RESETB=1 BYPASS=0
+///     param FEEDBACK_PATH="SIMPLE"
+/// ```
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PllShape {
     /// The primitive name (`SB_PLL40_CORE`, `EHXPLLL`).
@@ -797,6 +817,172 @@ pub struct PllShape {
     pub vco_mhz: Option<(u32, u32)>,
     /// How many independent outputs the block has.
     pub outputs: u32,
+    /// How many of these blocks the device has, when known. Several
+    /// `pll` lines may describe one physical block used different ways
+    /// (`SB_PLL40_CORE` and `SB_PLL40_PAD`), in which case they carry the
+    /// same count and the device has that many in all, not that many of
+    /// each.
+    pub count: Option<u32>,
+    /// The phase-detector frequency range in MHz — the reference after
+    /// the reference divider — when known.
+    pub pfd_mhz: Option<(u32, u32)>,
+    /// Where the feedback divider takes its clock from.
+    pub feedback: PllFeedback,
+    /// The divider fields, in file order.
+    pub dividers: Vec<PllDivider>,
+    /// Parameters computed from a divider's written value: `(parameter,
+    /// divider role, offset)`, so the ECP5's `CLKOP_CPHASE`, which must
+    /// be one less than `CLKOP_DIV` for no phase shift, is
+    /// `("CLKOP_CPHASE", Output, -1)`.
+    pub derived: Vec<(String, PllDividerRole, i64)>,
+    /// Parameters chosen by the phase-detector frequency: for each, the
+    /// bands as `(upper bound in MHz, exclusive; value)`, lowest first.
+    /// iCE40's `FILTER_RANGE` is one.
+    pub bands: Vec<(String, Vec<(u32, i64)>)>,
+    /// Abstract role to port name: `ref` (the reference clock in), `out`
+    /// (the generated clock), `fb` (the feedback input, wired to `out`
+    /// when the feedback is taken from the output), `lock`.
+    pub ports: Vec<(String, String)>,
+    /// Input ports tied to a constant so the block runs: an active-low
+    /// reset held high, a bypass held low.
+    pub ties: Vec<(String, bool)>,
+    /// Parameters every instance carries, in file order.
+    pub params: Vec<(String, AttrValue)>,
+}
+
+impl PllShape {
+    /// A PLL with a name and nothing else, which cannot be configured.
+    pub fn new(name: impl Into<String>) -> Self {
+        PllShape {
+            name: name.into(),
+            input_mhz: None,
+            vco_mhz: None,
+            outputs: 1,
+            count: None,
+            pfd_mhz: None,
+            feedback: PllFeedback::Vco,
+            dividers: Vec::new(),
+            derived: Vec::new(),
+            bands: Vec::new(),
+            ports: Vec::new(),
+            ties: Vec::new(),
+            params: Vec::new(),
+        }
+    }
+
+    /// The port name playing `role`, if the database records one.
+    pub fn port(&self, role: &str) -> Option<&str> {
+        self.ports
+            .iter()
+            .find(|(r, _)| r == role)
+            .map(|(_, n)| n.as_str())
+    }
+
+    /// The divider playing `role`, if the database records one.
+    pub fn divider(&self, role: PllDividerRole) -> Option<&PllDivider> {
+        self.dividers.iter().find(|d| d.role == role)
+    }
+
+    /// True when the database says enough to configure and connect the
+    /// block: all three dividers, a VCO range, and `ref` and `out` ports.
+    pub fn is_configurable(&self) -> bool {
+        PllDividerRole::ALL
+            .iter()
+            .all(|role| self.divider(*role).is_some())
+            && self.vco_mhz.is_some()
+            && self.port("ref").is_some()
+            && self.port("out").is_some()
+    }
+}
+
+/// Where a PLL's feedback divider takes its clock from, which decides
+/// how the three dividers combine.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum PllFeedback {
+    /// From the VCO: `vco = in / ref * feedback`, `out = vco / out`
+    /// (iCE40 `SIMPLE` feedback).
+    Vco,
+    /// From the output: `out = in / ref * feedback`, `vco = out * out`
+    /// (ECP5 `CLKOP` feedback).
+    Output,
+}
+
+impl PllFeedback {
+    /// The keyword used in the text format: `vco` or `out`.
+    pub fn keyword(self) -> &'static str {
+        match self {
+            PllFeedback::Vco => "vco",
+            PllFeedback::Output => "out",
+        }
+    }
+}
+
+/// Which of the three dividers of a PLL one field is.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub enum PllDividerRole {
+    /// Divides the reference before the phase detector.
+    Reference,
+    /// Divides the clock fed back to the phase detector, and so
+    /// multiplies.
+    Feedback,
+    /// Divides the VCO down to the output.
+    Output,
+}
+
+impl PllDividerRole {
+    /// Every role, in a fixed order.
+    pub const ALL: [PllDividerRole; 3] = [
+        PllDividerRole::Reference,
+        PllDividerRole::Feedback,
+        PllDividerRole::Output,
+    ];
+
+    /// The keyword used in the text format: `ref`, `feedback` or `out`.
+    pub fn keyword(self) -> &'static str {
+        match self {
+            PllDividerRole::Reference => "ref",
+            PllDividerRole::Feedback => "feedback",
+            PllDividerRole::Output => "out",
+        }
+    }
+
+    /// The role with the given keyword.
+    pub fn from_keyword(word: &str) -> Option<PllDividerRole> {
+        PllDividerRole::ALL
+            .into_iter()
+            .find(|r| r.keyword() == word)
+    }
+}
+
+/// One divider field of a PLL: the parameter it is written to, the range
+/// of values that parameter takes, and what division a value means.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PllDivider {
+    /// Which of the three dividers this is.
+    pub role: PllDividerRole,
+    /// The parameter carrying it (`DIVR`, `CLKI_DIV`).
+    pub param: String,
+    /// The smallest value the parameter may hold.
+    pub min: u32,
+    /// The largest value the parameter may hold.
+    pub max: u32,
+    /// Added to the parameter's value to give the division, for a field
+    /// that stores `divisor - 1` (iCE40's `DIVR` and `DIVF`).
+    pub offset: u32,
+    /// True when the division is two to the power of the value (iCE40's
+    /// `DIVQ`); `offset` is then ignored.
+    pub power_of_two: bool,
+}
+
+impl PllDivider {
+    /// The division the parameter value `value` performs.
+    pub fn divisor(&self, value: u32) -> u64 {
+        if self.power_of_two {
+            1u64 << value.min(62)
+        } else {
+            u64::from(value) + u64::from(self.offset)
+        }
+    }
 }
 
 /// A rectangular part of the tile grid a clock network covers.
@@ -999,7 +1185,12 @@ impl Device {
         }
         for pll in self.clock_resources.plls.iter().filter(|p| p.name == name) {
             found = true;
-            let _ = pll;
+            for (_, port) in &pll.ports {
+                push(port);
+            }
+            for (port, _) in &pll.ties {
+                push(port);
+            }
         }
         found.then_some(ports)
     }
@@ -1126,6 +1317,55 @@ impl Device {
                 line.push_str(&format!(" vco {lo} {hi}"));
             }
             line.push_str(&format!(" outputs {}", pll.outputs));
+            if let Some(count) = pll.count {
+                line.push_str(&format!(" count {count}"));
+            }
+            if let Some((lo, hi)) = pll.pfd_mhz {
+                line.push_str(&format!(" pfd {lo} {hi}"));
+            }
+            if !pll.dividers.is_empty() {
+                line.push_str(&format!(" feedback {}", pll.feedback.keyword()));
+            }
+            for divider in &pll.dividers {
+                line.push_str(&format!(
+                    " divide {} {} {} {}",
+                    divider.role.keyword(),
+                    quote(&divider.param),
+                    divider.min,
+                    divider.max
+                ));
+                if divider.power_of_two {
+                    line.push_str(" pow2");
+                } else if divider.offset != 0 {
+                    line.push_str(&format!(" offset {}", divider.offset));
+                }
+            }
+            for (param, role, offset) in &pll.derived {
+                line.push_str(&format!(
+                    " derive {} {} {offset}",
+                    quote(param),
+                    role.keyword()
+                ));
+            }
+            for (param, bands) in &pll.bands {
+                line.push_str(&format!(" band {}", quote(param)));
+                for (upper, value) in bands {
+                    line.push_str(&format!(" {upper}={value}"));
+                }
+            }
+            if !pll.ports.is_empty() {
+                line.push_str(" port");
+                for (role, name) in &pll.ports {
+                    line.push_str(&format!(" {role}={name}"));
+                }
+            }
+            if !pll.ties.is_empty() {
+                line.push_str(" tie");
+                for (port, level) in &pll.ties {
+                    line.push_str(&format!(" {port}={}", u8::from(*level)));
+                }
+            }
+            write_params(&mut line, "param", &pll.params);
             out.push_str(&line);
             out.push('\n');
         }
@@ -1959,31 +2199,122 @@ impl<'a> Parser<'a> {
 
     fn pll(&mut self, line: &'a Line) -> Option<PllShape> {
         let name = self.word(line, 1, "a PLL name")?.to_owned();
-        let mut pll = PllShape {
-            name,
-            input_mhz: None,
-            vco_mhz: None,
-            outputs: 1,
-        };
+        let mut pll = PllShape::new(name);
         let mut index = 2;
         while let Some(token) = line.get(index) {
             index += 1;
             match token.as_str() {
-                "input" | "vco" => {
+                "input" | "vco" | "pfd" => {
                     let key = token.as_str().to_owned();
                     let lo = self.number_at(line, index, "a frequency in MHz")?;
                     let hi = self.number_at(line, index + 1, "a frequency in MHz")?;
                     index += 2;
-                    if key == "input" {
-                        pll.input_mhz = Some((lo, hi));
-                    } else {
-                        pll.vco_mhz = Some((lo, hi));
+                    match key.as_str() {
+                        "input" => pll.input_mhz = Some((lo, hi)),
+                        "vco" => pll.vco_mhz = Some((lo, hi)),
+                        _ => pll.pfd_mhz = Some((lo, hi)),
                     }
                 }
                 "outputs" => {
                     let value = self.number_at(line, index, "a number of outputs")?;
                     index += 1;
                     pll.outputs = value;
+                }
+                "count" => {
+                    let value = self.number_at(line, index, "a count")?;
+                    index += 1;
+                    pll.count = Some(value);
+                }
+                "feedback" => {
+                    let word = self.word(line, index, "`vco` or `out` after `feedback`")?;
+                    index += 1;
+                    pll.feedback = match word {
+                        "vco" => PllFeedback::Vco,
+                        "out" => PllFeedback::Output,
+                        other => {
+                            let span = line.tokens[index - 1].span;
+                            self.unknown(span, format!("unknown PLL feedback `{other}`"));
+                            return None;
+                        }
+                    };
+                }
+                "divide" => {
+                    let role = self.pll_role(line, index)?;
+                    let param = self
+                        .word(line, index + 1, "a divider parameter")?
+                        .to_owned();
+                    let min = self.number_at(line, index + 2, "the smallest divider value")?;
+                    let max = self.number_at(line, index + 3, "the largest divider value")?;
+                    index += 4;
+                    let mut divider = PllDivider {
+                        role,
+                        param,
+                        min,
+                        max,
+                        offset: 0,
+                        power_of_two: false,
+                    };
+                    match line.get(index).map(Token::as_str) {
+                        Some("pow2") => {
+                            divider.power_of_two = true;
+                            index += 1;
+                        }
+                        Some("offset") => {
+                            divider.offset = self.number_at(line, index + 1, "an offset")?;
+                            index += 2;
+                        }
+                        _ => {}
+                    }
+                    if min > max {
+                        self.error(
+                            line.span,
+                            format!("divider `{}` runs from {min} down to {max}", divider.param),
+                        );
+                    }
+                    pll.dividers.push(divider);
+                }
+                "derive" => {
+                    let param = self.word(line, index, "a derived parameter")?.to_owned();
+                    let role = self.pll_role(line, index + 1)?;
+                    let offset = self.signed_at(line, index + 2)?;
+                    index += 3;
+                    pll.derived.push((param, role, offset));
+                }
+                "band" => {
+                    let param = self.word(line, index, "a banded parameter")?.to_owned();
+                    index += 1;
+                    let mut bands = Vec::new();
+                    for (upper, value) in self.pairs(line, &mut index) {
+                        match (upper.parse::<u32>(), value.parse::<i64>()) {
+                            (Ok(upper), Ok(value)) => bands.push((upper, value)),
+                            _ => self.error(
+                                line.span,
+                                format!("expected `<MHz>=<value>` in band `{param}`"),
+                            ),
+                        }
+                    }
+                    pll.bands.push((param, bands));
+                }
+                "port" => pll.ports.extend(self.pairs(line, &mut index)),
+                "tie" => {
+                    for (port, level) in self.pairs(line, &mut index) {
+                        match level.as_str() {
+                            "0" => pll.ties.push((port, false)),
+                            "1" => pll.ties.push((port, true)),
+                            _ => self.error(
+                                line.span,
+                                format!("port `{port}` can be tied to 0 or 1, not `{level}`"),
+                            ),
+                        }
+                    }
+                }
+                "param" => {
+                    let params: Vec<(String, AttrValue)> = self
+                        .pairs(line, &mut index)
+                        .into_iter()
+                        .map(|(key, value)| (key, parse_value(&value)))
+                        .collect();
+                    pll.params.extend(params);
                 }
                 other => {
                     let span = token.span;
@@ -1992,6 +2323,40 @@ impl<'a> Parser<'a> {
             }
         }
         Some(pll)
+    }
+
+    /// The divider role named at `index`.
+    fn pll_role(&mut self, line: &'a Line, index: usize) -> Option<PllDividerRole> {
+        let word = self.word(line, index, "`ref`, `feedback` or `out`")?;
+        match PllDividerRole::from_keyword(word) {
+            Some(role) => Some(role),
+            None => {
+                let span = line.tokens[index].span;
+                self.unknown(span, format!("unknown PLL divider `{word}`"));
+                None
+            }
+        }
+    }
+
+    /// A signed integer at `index`.
+    fn signed_at(&mut self, line: &'a Line, index: usize) -> Option<i64> {
+        let token = match line.get(index) {
+            Some(token) => token,
+            None => {
+                self.error(line.span, "expected a signed number");
+                return None;
+            }
+        };
+        match token.as_str().parse::<i64>() {
+            Ok(value) => Some(value),
+            Err(_) => {
+                self.error(
+                    token.span,
+                    format!("expected a signed number, found `{token}`"),
+                );
+                None
+            }
+        }
     }
 
     fn site(&mut self, line: &'a Line) -> Option<Site> {
@@ -2344,6 +2709,49 @@ end
     }
 
     #[test]
+    fn a_pll_line_carries_what_the_solver_needs() {
+        let text = concat!(
+            "device a\n",
+            "  family f\n",
+            "  pll P input 10 133 vco 533 1066 outputs 1 count 2 pfd 10 133 feedback out ",
+            "divide ref R 0 15 offset 1 divide feedback F 1 64 divide out Q 1 6 pow2 ",
+            "derive PH out -1 band FR 17=1 134=2 port ref=REF out=OUT fb=FB ",
+            "tie RSTN=1 BYP=0 param MODE=\"SIMPLE\"\n",
+            "  pll BAD divide sideways R 0 1 tie X=2\n",
+            "end\n"
+        );
+        let mut map = SourceMap::new();
+        let file = map.add("a.dev", text).unwrap();
+        let mut diags = Diagnostics::new();
+        let db = DeviceDb::parse(text, file, &mut diags);
+        let rendered = diags.render(&map);
+        assert!(
+            rendered.contains("unknown PLL divider `sideways`"),
+            "{rendered}"
+        );
+        let device = db.get("a").unwrap();
+        let pll = &device.clock_resources.plls[0];
+        assert!(pll.is_configurable());
+        assert_eq!(pll.count, Some(2));
+        assert_eq!(pll.feedback, PllFeedback::Output);
+        assert_eq!(
+            pll.divider(PllDividerRole::Reference).unwrap().divisor(0),
+            1
+        );
+        assert_eq!(pll.divider(PllDividerRole::Output).unwrap().divisor(3), 8);
+        assert_eq!(pll.derived, [("PH".to_owned(), PllDividerRole::Output, -1)]);
+        assert_eq!(pll.bands[0].1, [(17, 1), (134, 2)]);
+        assert_eq!(pll.port("fb"), Some("FB"));
+        assert_eq!(
+            pll.ties,
+            [("RSTN".to_owned(), true), ("BYP".to_owned(), false)]
+        );
+        // And it writes back to itself.
+        let again = Device::parse(&device.to_text(), file, &mut Diagnostics::new()).unwrap();
+        assert_eq!(again.clock_resources.plls[0], *pll);
+    }
+
+    #[test]
     fn a_mode_clause_is_parsed_and_written() {
         let text = concat!(
             "device a\n",
@@ -2399,10 +2807,13 @@ end
                 .unwrap()
                 .contains(&"P".to_owned())
         );
-        // A PLL is declared but has no recorded ports: "declared, ports
-        // unknown" is a `Some(empty)`, not a `None`.
-        assert_eq!(ecp5.primitive_ports("EHXPLLL"), Some(Vec::new()));
-        // A carry unit without a port map likewise.
+        // A PLL's ports are its port map and the pins it ties.
+        let pll = ecp5.primitive_ports("EHXPLLL").unwrap();
+        for port in ["CLKI", "CLKOP", "CLKFB", "RST", "STDBY"] {
+            assert!(pll.contains(&port.to_owned()), "{port}");
+        }
+        // A carry unit without a port map is "declared, ports unknown":
+        // a `Some(empty)`, not a `None`.
         assert_eq!(ecp5.primitive_ports("CCU2C"), Some(Vec::new()));
     }
 }

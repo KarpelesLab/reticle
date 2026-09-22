@@ -1,0 +1,344 @@
+{
+  "creator": "reticle",
+  "modules": {
+    "pllshift": {
+      "attributes": {
+        "top": 1
+      },
+      "ports": {
+        "clk": { "direction": "input", "bits": [ 2 ] },
+        "d": { "direction": "input", "bits": [ 3 ] },
+        "q": { "direction": "output", "bits": [ 4 ] }
+      },
+      "cells": {
+        "clk$io0": {
+          "hide_name": 0,
+          "type": "SB_IO",
+          "parameters": {
+            "PIN_TYPE": 1
+          },
+          "attributes": {
+            "port": "clk",
+            "pin": "21",
+            "io_standard": "LVCMOS33"
+          },
+          "port_directions": {
+            "PACKAGE_PIN": "input",
+            "D_IN_0": "output"
+          },
+          "connections": {
+            "PACKAGE_PIN": [ 2 ],
+            "D_IN_0": [ 5 ]
+          }
+        },
+        "d$io0": {
+          "hide_name": 0,
+          "type": "SB_IO",
+          "parameters": {
+            "PIN_TYPE": 1
+          },
+          "attributes": {
+            "port": "d"
+          },
+          "port_directions": {
+            "PACKAGE_PIN": "input",
+            "D_IN_0": "output"
+          },
+          "connections": {
+            "PACKAGE_PIN": [ 3 ],
+            "D_IN_0": [ 15 ]
+          }
+        },
+        "q$io0": {
+          "hide_name": 0,
+          "type": "SB_IO",
+          "parameters": {
+            "PIN_TYPE": 25
+          },
+          "attributes": {
+            "port": "q"
+          },
+          "port_directions": {
+            "D_OUT_0": "input",
+            "PACKAGE_PIN": "output"
+          },
+          "connections": {
+            "D_OUT_0": [ 7 ],
+            "PACKAGE_PIN": [ 4 ]
+          }
+        },
+        "sys$pll": {
+          "hide_name": 0,
+          "type": "SB_PLL40_CORE",
+          "parameters": {
+            "FEEDBACK_PATH": "SIMPLE",
+            "PLLOUT_SELECT": "GENCLK",
+            "DIVR": 0,
+            "DIVF": 63,
+            "DIVQ": 4,
+            "FILTER_RANGE": 1
+          },
+          "attributes": {
+            "frequency_mhz": "48.000000"
+          },
+          "port_directions": {
+            "REFERENCECLK": "input",
+            "RESETB": "input",
+            "BYPASS": "input",
+            "PLLOUTCORE": "output"
+          },
+          "connections": {
+            "REFERENCECLK": [ 5 ],
+            "RESETB": [ "1" ],
+            "BYPASS": [ "0" ],
+            "PLLOUTCORE": [ 6 ]
+          }
+        },
+        "sys$gbuf": {
+          "hide_name": 0,
+          "type": "SB_GB",
+          "parameters": {},
+          "attributes": {},
+          "port_directions": {
+            "USER_SIGNAL_TO_GLOBAL_BUFFER": "input",
+            "GLOBAL_BUFFER_OUTPUT": "output"
+          },
+          "connections": {
+            "USER_SIGNAL_TO_GLOBAL_BUFFER": [ 6 ],
+            "GLOBAL_BUFFER_OUTPUT": [ 16 ]
+          }
+        },
+        "sr$ff0": {
+          "hide_name": 0,
+          "type": "SB_DFF",
+          "parameters": {},
+          "attributes": {},
+          "port_directions": {
+            "C": "input",
+            "D": "input",
+            "Q": "output"
+          },
+          "connections": {
+            "C": [ 16 ],
+            "D": [ 15 ],
+            "Q": [ 8 ]
+          }
+        },
+        "sr$ff1": {
+          "hide_name": 0,
+          "type": "SB_DFF",
+          "parameters": {},
+          "attributes": {},
+          "port_directions": {
+            "C": "input",
+            "D": "input",
+            "Q": "output"
+          },
+          "connections": {
+            "C": [ 16 ],
+            "D": [ 8 ],
+            "Q": [ 9 ]
+          }
+        },
+        "sr$ff2": {
+          "hide_name": 0,
+          "type": "SB_DFF",
+          "parameters": {},
+          "attributes": {},
+          "port_directions": {
+            "C": "input",
+            "D": "input",
+            "Q": "output"
+          },
+          "connections": {
+            "C": [ 16 ],
+            "D": [ 9 ],
+            "Q": [ 10 ]
+          }
+        },
+        "sr$ff3": {
+          "hide_name": 0,
+          "type": "SB_DFF",
+          "parameters": {},
+          "attributes": {},
+          "port_directions": {
+            "C": "input",
+            "D": "input",
+            "Q": "output"
+          },
+          "connections": {
+            "C": [ 16 ],
+            "D": [ 10 ],
+            "Q": [ 11 ]
+          }
+        },
+        "sr$ff4": {
+          "hide_name": 0,
+          "type": "SB_DFF",
+          "parameters": {},
+          "attributes": {},
+          "port_directions": {
+            "C": "input",
+            "D": "input",
+            "Q": "output"
+          },
+          "connections": {
+            "C": [ 16 ],
+            "D": [ 11 ],
+            "Q": [ 12 ]
+          }
+        },
+        "sr$ff5": {
+          "hide_name": 0,
+          "type": "SB_DFF",
+          "parameters": {},
+          "attributes": {},
+          "port_directions": {
+            "C": "input",
+            "D": "input",
+            "Q": "output"
+          },
+          "connections": {
+            "C": [ 16 ],
+            "D": [ 12 ],
+            "Q": [ 13 ]
+          }
+        },
+        "sr$ff6": {
+          "hide_name": 0,
+          "type": "SB_DFF",
+          "parameters": {},
+          "attributes": {},
+          "port_directions": {
+            "C": "input",
+            "D": "input",
+            "Q": "output"
+          },
+          "connections": {
+            "C": [ 16 ],
+            "D": [ 13 ],
+            "Q": [ 14 ]
+          }
+        },
+        "sr$ff7": {
+          "hide_name": 0,
+          "type": "SB_DFF",
+          "parameters": {},
+          "attributes": {},
+          "port_directions": {
+            "C": "input",
+            "D": "input",
+            "Q": "output"
+          },
+          "connections": {
+            "C": [ 16 ],
+            "D": [ 14 ],
+            "Q": [ 7 ]
+          }
+        }
+      },
+      "netnames": {
+        "clk": {
+          "hide_name": 0,
+          "bits": [ 5 ],
+          "attributes": {}
+        },
+        "sys": {
+          "hide_name": 0,
+          "bits": [ 6 ],
+          "attributes": {}
+        },
+        "q": {
+          "hide_name": 0,
+          "bits": [ 7 ],
+          "attributes": {}
+        },
+        "sr": {
+          "hide_name": 0,
+          "bits": [ 8, 9, 10, 11, 12, 13, 14, 7 ],
+          "attributes": {}
+        },
+        "next": {
+          "hide_name": 0,
+          "bits": [ 15, 8, 9, 10, 11, 12, 13, 14 ],
+          "attributes": {}
+        },
+        "clk$pad": {
+          "hide_name": 0,
+          "bits": [ 2 ],
+          "attributes": {}
+        },
+        "clk$in0": {
+          "hide_name": 0,
+          "bits": [ 5 ],
+          "attributes": {}
+        },
+        "d$pad": {
+          "hide_name": 0,
+          "bits": [ 3 ],
+          "attributes": {}
+        },
+        "d$in0": {
+          "hide_name": 0,
+          "bits": [ 15 ],
+          "attributes": {}
+        },
+        "q$pad": {
+          "hide_name": 0,
+          "bits": [ 4 ],
+          "attributes": {}
+        },
+        "q$pin0": {
+          "hide_name": 0,
+          "bits": [ 4 ],
+          "attributes": {}
+        },
+        "sys$gb": {
+          "hide_name": 0,
+          "bits": [ 16 ],
+          "attributes": {}
+        },
+        "sr$q0": {
+          "hide_name": 0,
+          "bits": [ 8 ],
+          "attributes": {}
+        },
+        "sr$q1": {
+          "hide_name": 0,
+          "bits": [ 9 ],
+          "attributes": {}
+        },
+        "sr$q2": {
+          "hide_name": 0,
+          "bits": [ 10 ],
+          "attributes": {}
+        },
+        "sr$q3": {
+          "hide_name": 0,
+          "bits": [ 11 ],
+          "attributes": {}
+        },
+        "sr$q4": {
+          "hide_name": 0,
+          "bits": [ 12 ],
+          "attributes": {}
+        },
+        "sr$q5": {
+          "hide_name": 0,
+          "bits": [ 13 ],
+          "attributes": {}
+        },
+        "sr$q6": {
+          "hide_name": 0,
+          "bits": [ 14 ],
+          "attributes": {}
+        },
+        "sr$q7": {
+          "hide_name": 0,
+          "bits": [ 7 ],
+          "attributes": {}
+        }
+      }
+    }
+  }
+}

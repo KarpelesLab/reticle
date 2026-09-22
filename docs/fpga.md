@@ -24,6 +24,61 @@ writes its bitstream, without calling another program.
 
 `fpga::implement` is synthesis plus all three in one call.
 
+## Generated clocks: PLLs
+
+A design asks for a clock frequency the board does not have by
+declaring the clock net, using it, **leaving it undriven**, and
+constraining it — next to the constraint that says what the input clock
+is:
+
+```text
+# pins.rcf
+set_io clk 21
+create_clock -name osc -period 83.333333 clk     # the iCEstick's 12 MHz
+create_clock -name sys -period 20.833333 sys     # 48 MHz, please
+```
+
+or, in the source, `(* clock_mhz = 48 *) wire sys;`. A clock constraint
+on a net nothing drives is a request; one on a net something drives (a
+divider in logic, say) describes a clock that already exists and is left
+alone. `fpga::primitives` answers a request by instantiating the
+device's PLL from the clock constrained on an input port, with
+`fpga::pll::solve` choosing the dividers:
+
+```text
+pll:
+  sys -> SB_PLL40_CORE from clk at 12.000 MHz: 48.000 MHz for 48.000 MHz asked (+0.0 ppm),
+         vco 768.000 MHz, DIVR=0 DIVF=63 DIVQ=4 FILTER_RANGE=1
+```
+
+The solver searches every legal combination of the three dividers and
+keeps the one closest to the request, with the phase detector and the
+VCO inside their windows; nothing in it names a family. What it needs is
+on the device's `pll` line: the ranges, each divider's parameter and how
+its value relates to the division (`offset 1` for a field that stores
+`divisor - 1`, `pow2` for one that stores an exponent), whether the
+feedback comes from the VCO or the output, parameters that follow from
+the answer (`derive CLKOP_CPHASE out -1`), parameters banded by the
+phase-detector frequency (`band FILTER_RANGE 17=1 26=2 …`), the ports,
+the pins to tie, and how many PLLs the die has.
+
+The achieved frequency and the error are reported, always, and an error
+over 1 % is also a warning (`F0303`): 74.25 MHz from the ULX3S's 25 MHz
+comes out at 75 MHz on the ECP5, because the phase detector's lower
+limit leaves only six reference dividers, and the tool says so rather
+than quietly running the display 1 % fast. Measured over each family's
+whole range in 0.1 MHz steps:
+
+| PLL | reference | median error | 90th percentile | worst |
+|-----|-----------|--------------|-----------------|-------|
+| iCE40 `SB_PLL40_CORE` | 12 MHz | 0.39 % | 0.75 % | 1.1 % |
+| ECP5 `EHXPLLL` | 25 MHz | 0.30 % | 1.4 % | 10.7 % (at the bottom of the range) |
+
+A request that cannot be met — no PLL described, no input clock to
+start from, every PLL of the die already in use, a reference outside the
+input range — is an error naming which, and the net is left undriven for
+the netlist check to find.
+
 ## Read this first: the architecture is synthetic
 
 Placement and routing need to know what wire is where, which

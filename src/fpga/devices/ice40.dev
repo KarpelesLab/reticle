@@ -28,6 +28,21 @@
 #   * SB_IO's PIN_TYPE values below (6'b000001 for a plain input,
 #     6'b011001 for a plain output, 6'b101001 for a tristatable one) are
 #     the ones every published iCE40 design uses. Medium-high confidence.
+#   * SB_PLL40_CORE / SB_PLL40_PAD: the ranges (reference 10-133 MHz,
+#     phase detector 10-133 MHz, VCO 533-1066 MHz), the fields (DIVR 4
+#     bits storing divisor-1, DIVF 7 bits storing divisor-1, DIVQ 1-6
+#     storing a power of two) and the FILTER_RANGE bands by phase-detector
+#     frequency (below 17, 26, 44, 66, 101 MHz, and above) are the ones
+#     Project IceStorm's `icepll` uses for SIMPLE feedback, which is what
+#     every published iCE40 design gets its settings from. HIGH confidence
+#     for the ranges and fields, MEDIUM for the exact band edges.
+#     RESETB is active low and tied high, BYPASS tied low. `count` is the
+#     number of PLLs on the die (one on the 1K parts, two on the 8K); the
+#     CORE and PAD lines are the same block used two ways. The PAD form
+#     takes its reference straight from a package pin rather than from
+#     the fabric, so its reference is recorded as `pad`, not `ref`, and
+#     Reticle — which generates a clock from the fabric-side net — uses
+#     the CORE form.
 #   * Resource counts (1280 logic cells and 16 block RAMs on the 1K parts,
 #     7680 and 32 on the 8K) are the datasheet figures. High confidence.
 #   * The tile grid is the array size used by Project IceStorm's chip
@@ -114,8 +129,8 @@ device ice40-lp1k-tq144
   pin 99 io bank io
   global_buffers 8
   clock_region global 0 0 13 17
-  pll SB_PLL40_CORE input 10 133 vco 533 1066 outputs 1
-  pll SB_PLL40_PAD input 10 133 vco 533 1066 outputs 1
+  pll SB_PLL40_CORE input 10 133 vco 533 1066 outputs 1 count 1 pfd 10 133 feedback vco divide ref DIVR 0 15 offset 1 divide feedback DIVF 0 127 offset 1 divide out DIVQ 1 6 pow2 band FILTER_RANGE 17=1 26=2 44=3 66=4 101=5 134=6 port ref=REFERENCECLK out=PLLOUTCORE lock=LOCK tie RESETB=1 BYPASS=0 param FEEDBACK_PATH="SIMPLE" PLLOUT_SELECT="GENCLK"
+  pll SB_PLL40_PAD input 10 133 vco 533 1066 outputs 1 count 1 pfd 10 133 feedback vco divide ref DIVR 0 15 offset 1 divide feedback DIVF 0 127 offset 1 divide out DIVQ 1 6 pow2 band FILTER_RANGE 17=1 26=2 44=3 66=4 101=5 134=6 port pad=PACKAGEPIN out=PLLOUTCORE lock=LOCK tie RESETB=1 BYPASS=0 param FEEDBACK_PATH="SIMPLE" PLLOUT_SELECT="GENCLK"
   grid 14 18
 end
 
@@ -182,8 +197,8 @@ device ice40-hx1k-tq144
   pin 99 io bank io
   global_buffers 8
   clock_region global 0 0 13 17
-  pll SB_PLL40_CORE input 10 133 vco 533 1066 outputs 1
-  pll SB_PLL40_PAD input 10 133 vco 533 1066 outputs 1
+  pll SB_PLL40_CORE input 10 133 vco 533 1066 outputs 1 count 1 pfd 10 133 feedback vco divide ref DIVR 0 15 offset 1 divide feedback DIVF 0 127 offset 1 divide out DIVQ 1 6 pow2 band FILTER_RANGE 17=1 26=2 44=3 66=4 101=5 134=6 port ref=REFERENCECLK out=PLLOUTCORE lock=LOCK tie RESETB=1 BYPASS=0 param FEEDBACK_PATH="SIMPLE" PLLOUT_SELECT="GENCLK"
+  pll SB_PLL40_PAD input 10 133 vco 533 1066 outputs 1 count 1 pfd 10 133 feedback vco divide ref DIVR 0 15 offset 1 divide feedback DIVF 0 127 offset 1 divide out DIVQ 1 6 pow2 band FILTER_RANGE 17=1 26=2 44=3 66=4 101=5 134=6 port pad=PACKAGEPIN out=PLLOUTCORE lock=LOCK tie RESETB=1 BYPASS=0 param FEEDBACK_PATH="SIMPLE" PLLOUT_SELECT="GENCLK"
   grid 14 18
 end
 
@@ -243,7 +258,7 @@ device ice40-hx8k-ct256
   pin J3 clock bank io
   global_buffers 8
   clock_region global 0 0 33 33
-  pll SB_PLL40_CORE input 10 133 vco 533 1066 outputs 1
-  pll SB_PLL40_PAD input 10 133 vco 533 1066 outputs 1
+  pll SB_PLL40_CORE input 10 133 vco 533 1066 outputs 1 count 2 pfd 10 133 feedback vco divide ref DIVR 0 15 offset 1 divide feedback DIVF 0 127 offset 1 divide out DIVQ 1 6 pow2 band FILTER_RANGE 17=1 26=2 44=3 66=4 101=5 134=6 port ref=REFERENCECLK out=PLLOUTCORE lock=LOCK tie RESETB=1 BYPASS=0 param FEEDBACK_PATH="SIMPLE" PLLOUT_SELECT="GENCLK"
+  pll SB_PLL40_PAD input 10 133 vco 533 1066 outputs 1 count 2 pfd 10 133 feedback vco divide ref DIVR 0 15 offset 1 divide feedback DIVF 0 127 offset 1 divide out DIVQ 1 6 pow2 band FILTER_RANGE 17=1 26=2 44=3 66=4 101=5 134=6 port pad=PACKAGEPIN out=PLLOUTCORE lock=LOCK tie RESETB=1 BYPASS=0 param FEEDBACK_PATH="SIMPLE" PLLOUT_SELECT="GENCLK"
   grid 34 34
 end

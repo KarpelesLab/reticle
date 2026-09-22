@@ -1,0 +1,7 @@
+# A shift register clocked from `sys`, which nothing in the design
+# drives: the constraint on it asks for 48 MHz, the constraint on `clk`
+# says the iCEstick's oscillator gives 12, and the difference is an
+# `SB_PLL40_CORE` with the dividers `icepll -i 12 -o 48` prints.
+set_io -io_standard LVCMOS33 clk 21
+create_clock -name osc -period 83.333333 clk
+create_clock -name sys -period 20.833333 sys

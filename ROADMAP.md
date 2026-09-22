@@ -297,9 +297,14 @@ FPGA:
       clock buffers, carry chains, and the family's own LUT and flip-flop
       primitives with their parameters (`SB_LUT4` / `SB_DFF*`, `LUT4` /
       `TRELLIS_FF`), chosen per bit from the variants the device file
-      declares. (Instantiating a PLL from a clock constraint is still
-      open; a design that wants one instantiates it. The narrow width
-      modes of a block RAM are wired in bit order, which iCE40 permutes.)
+      declares, with a shared inverter where the family lacks a reset or
+      enable polarity. A memory under the block RAM threshold is built
+      from distributed RAM or flip-flops, a register file with more
+      readers than a block has ports is duplicated across blocks, and a
+      clock constraint on an undriven net instantiates a PLL whose
+      dividers `fpga::pll::solve` chooses, with the achieved frequency
+      and error reported. (The narrow width modes of a block RAM are
+      wired in bit order, which iCE40 permutes.)
 - [x] Vendor and open-flow interop: `fpga::synthesize_for` runs the whole
       target flow (synthesis, primitives, LUT mapping, clean-up, device
       cells) and JSON export hands the result to nextpnr (iCE40 and ECP5;

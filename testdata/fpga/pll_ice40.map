@@ -1,0 +1,16 @@
+device: ice40-hx1k-tq144
+io:
+  clk (1 bits) -> SB_IO at pin 21 as LVCMOS33
+  d (1 bits) -> SB_IO
+  q (1 bits) -> SB_IO
+pll:
+  sys -> SB_PLL40_CORE from clk at 12.000 MHz: 48.000 MHz for 48.000 MHz asked (+0.0 ppm), vco 768.000 MHz, DIVR=0 DIVF=63 DIVQ=4 FILTER_RANGE=1
+clocks:
+  sys (8 flip-flops) -> SB_GB
+logic:
+  0 LUTs, depth 0
+netlist:
+  8 x SB_DFF
+  1 x SB_GB
+  3 x SB_IO
+  1 x SB_PLL40_CORE

@@ -2,16 +2,17 @@
 //!
 //! [`map`] rewrites one module in place so that what a device does in
 //! hard logic is expressed as that device's primitives, and everything
-//! else is left for the technology mapper. Five things happen, in this
+//! else is left for the technology mapper. Six things happen, in this
 //! order, each of them optional ([`MapOptions`]) and each of them
 //! reported ([`MapReport`]):
 //!
 //! | Step | What it recognises | What it emits |
 //! |------|--------------------|---------------|
-//! | Block RAM | a [`Memory`] with its `MemRdPort` / `MemWrPort` cells | one block per width x depth slice, plus address decoding and output muxing as cells |
+//! | Block RAM | a [`Memory`] with its `MemRdPort` / `MemWrPort` cells | one block per width x depth slice (per read port, when the block has too few), plus address decoding and output muxing as cells; or, below the threshold, the memory built out of logic |
 //! | DSP | a `Mul`, and a `Mul` feeding an `Add` | one multiplier or multiply-accumulate block |
 //! | Carry | an `Add` at least `min_carry_width` bits wide | a chain of carry primitives plus `Xor` cells for the sums |
 //! | IO buffers | every top-level port | one IO primitive per bit, carrying the constraints' `io_standard`, `drive`, `slew` and `pullup` |
+//! | PLLs | a clock constraint on a net nothing drives | the device's PLL, its dividers solved by [`super::pll::solve`], fed from the clock constrained on an input port |
 //! | Clock buffers | a net driving many flip-flop clock pins | a global buffer, with the clock pins moved onto it |
 //!
 //! Every primitive becomes a [`CellKind::Blackbox`] named after the
@@ -64,7 +65,8 @@ use std::collections::BTreeMap;
 use std::fmt::Write as _;
 
 use super::constraints::Constraints;
-use super::device::{BelKind, BelRole, BramShape, Device};
+use super::device::{BelKind, BelRole, BramShape, Device, PllFeedback, PllShape};
+use super::pll::PllSolution;
 use crate::diag::{Diagnostic, Diagnostics};
 use crate::ir::expr::operands;
 use crate::ir::{
@@ -79,6 +81,10 @@ pub const NO_BLOCK_RAM: &str = "F0300";
 pub const NO_GLOBAL_BUFFER: &str = "F0301";
 /// Diagnostic code for an IO buffer Reticle could not wire completely.
 pub const PARTIAL_IO: &str = "F0302";
+/// Diagnostic code for a clock constraint no PLL of the device can meet.
+pub const NO_PLL: &str = "F0303";
+/// Diagnostic code for an IO register or delay the device cannot build.
+pub const NO_IO_REGISTER: &str = "F0304";
 
 /// Which mapping steps run, and the thresholds they use.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -98,6 +104,9 @@ pub struct MapOptions {
     pub infer_dsp: bool,
     /// Insert an IO buffer at every top-level port.
     pub insert_io_buffers: bool,
+    /// Instantiate a PLL for a clock constraint on a net nothing drives,
+    /// from the clock constrained on an input port.
+    pub infer_pll: bool,
     /// Put heavily used clocks on a global buffer.
     pub insert_clock_buffers: bool,
     /// How many flip-flop clock pins a net must drive to earn one.
@@ -116,6 +125,7 @@ impl Default for MapOptions {
             max_logic_bits: 4096,
             infer_dsp: true,
             insert_io_buffers: true,
+            infer_pll: true,
             insert_clock_buffers: true,
             global_buffer_threshold: 8,
             map_carry: true,
@@ -230,6 +240,57 @@ pub struct ClockMapping {
     pub reason: Option<String>,
 }
 
+/// One PLL instantiated because a clock constraint asked for a frequency
+/// the input clock does not have.
+///
+/// Frequencies are whole hertz so that the report compares exactly; the
+/// solver's own [`super::pll::PllSolution`] keeps the unrounded values.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PllMapping {
+    /// The net the PLL drives: the one the constraint named.
+    pub net: String,
+    /// The input clock it is generated from.
+    pub source: String,
+    /// The primitive used.
+    pub primitive: String,
+    /// The input clock's frequency.
+    pub input_hz: u64,
+    /// The frequency the constraint asked for.
+    pub requested_hz: u64,
+    /// The frequency the chosen dividers give.
+    pub achieved_hz: u64,
+    /// The VCO frequency of that setting.
+    pub vco_hz: u64,
+    /// Every parameter the setting fixes, with its value.
+    pub params: Vec<(String, i64)>,
+}
+
+impl PllMapping {
+    /// How far the achieved frequency is from the request, in parts per
+    /// million; positive when it is above.
+    pub fn error_ppm(&self) -> f64 {
+        if self.requested_hz == 0 {
+            return 0.0;
+        }
+        let achieved = hz_to_f64(self.achieved_hz);
+        let requested = hz_to_f64(self.requested_hz);
+        (achieved - requested) / requested * 1e6
+    }
+}
+
+/// Hertz as a float. Clock frequencies are below 2^53 Hz by nine orders
+/// of magnitude, where the conversion is exact.
+fn hz_to_f64(hz: u64) -> f64 {
+    let high = u32::try_from(hz >> 32).unwrap_or(u32::MAX);
+    let low = u32::try_from(hz & 0xFFFF_FFFF).unwrap_or(0);
+    f64::from(high) * 4_294_967_296.0 + f64::from(low)
+}
+
+/// Megahertz, for a report line.
+fn mhz(hz: u64) -> String {
+    format!("{:.3} MHz", hz_to_f64(hz) / 1e6)
+}
+
 /// One adder expanded onto the carry chain.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CarryMapping {
@@ -259,6 +320,8 @@ pub struct MapReport {
     pub io_buffers: Vec<IoMapping>,
     /// Clock nets and what became of them.
     pub clocks: Vec<ClockMapping>,
+    /// PLLs instantiated for clock constraints.
+    pub plls: Vec<PllMapping>,
     /// Adders expanded onto the carry chain.
     pub carry_chains: Vec<CarryMapping>,
     /// Anything a step declined to do, in the order it was decided.
@@ -273,6 +336,7 @@ impl MapReport {
             && self.dsps.is_empty()
             && self.io_buffers.is_empty()
             && self.clocks.is_empty()
+            && self.plls.is_empty()
             && self.carry_chains.is_empty()
             && self.notes.is_empty()
     }
@@ -360,6 +424,31 @@ impl MapReport {
                 out.push('\n');
             }
         }
+        if !self.plls.is_empty() {
+            out.push_str("pll:\n");
+            for item in &self.plls {
+                let params: Vec<String> = item
+                    .params
+                    .iter()
+                    .map(|(key, value)| format!("{key}={value}"))
+                    .collect();
+                let _ = writeln!(
+                    out,
+                    "  {} -> {} from {} at {}: {} for {} asked ({:+.1} ppm), vco {}, {}",
+                    item.net,
+                    item.primitive,
+                    item.source,
+                    mhz(item.input_hz),
+                    mhz(item.achieved_hz),
+                    mhz(item.requested_hz),
+                    // Rounded first, so that a tiny negative error does
+                    // not print as `-0.0`.
+                    (item.error_ppm() * 10.0).round() / 10.0 + 0.0,
+                    mhz(item.vco_hz),
+                    params.join(" ")
+                );
+            }
+        }
         if !self.clocks.is_empty() {
             out.push_str("clocks:\n");
             for item in &self.clocks {
@@ -437,6 +526,9 @@ pub fn map(
     }
     if options.insert_io_buffers {
         mapper.io_buffers(module);
+    }
+    if options.infer_pll {
+        mapper.clock_generators(module);
     }
     if options.insert_clock_buffers {
         mapper.clock_buffers(module);
@@ -2387,6 +2479,202 @@ impl Mapper<'_> {
         });
     }
 
+    // --- clock generators ---------------------------------------------------
+
+    /// Instantiates a PLL for every clock constraint that names a net
+    /// nothing drives, generating it from a clock constrained on an input
+    /// port.
+    ///
+    /// That is how a design asks for a frequency: it declares the clock
+    /// net, uses it, and constrains it to the period it wants, next to
+    /// the constraint that states what the board's oscillator provides.
+    /// A constrained net that *is* driven — by a divider in logic, say —
+    /// is a description of a clock that already exists and is left
+    /// alone.
+    fn clock_generators(&mut self, module: &mut Module) {
+        if self.constraints.clocks.is_empty() {
+            return;
+        }
+        let driven = super::constraints::driven_nets(module);
+        let mut sources: Vec<(String, NetId, f64)> = Vec::new();
+        let mut wanted: Vec<(String, NetId, f64, Span)> = Vec::new();
+        for clock in &self.constraints.clocks {
+            let Some(net) = module.net_by_name(&clock.net) else {
+                continue;
+            };
+            let frequency = clock.frequency_mhz();
+            if frequency <= 0.0 {
+                continue;
+            }
+            let is_input = module
+                .port(&clock.net)
+                .is_some_and(|p| p.dir == PortDir::In);
+            if is_input {
+                sources.push((clock.net.clone(), net, frequency));
+            } else if !driven.get(net.index()).copied().unwrap_or(true) {
+                wanted.push((clock.net.clone(), net, frequency, clock.span));
+            }
+        }
+        if wanted.is_empty() {
+            return;
+        }
+        let shapes: Vec<PllShape> = self
+            .device
+            .clock_resources
+            .plls
+            .iter()
+            .filter(|p| p.is_configurable())
+            .cloned()
+            .collect();
+        // Several lines may describe one physical block used different
+        // ways, so the budget is the largest count, not their sum.
+        let budget = shapes.iter().filter_map(|p| p.count).max();
+        let mut used = 0u32;
+        for (name, net, frequency, span) in wanted {
+            let refuse = |this: &mut Self, why: String| {
+                this.diags.push(
+                    Diagnostic::error(format!(
+                        "clock `{name}` asks for {frequency:.3} MHz and nothing drives it, but no \
+                         PLL can be built for it: {why}"
+                    ))
+                    .with_code(NO_PLL)
+                    .with_span(span),
+                );
+                this.note(format!("clock `{name}` gets no PLL: {why}"));
+            };
+            if shapes.is_empty() {
+                refuse(
+                    self,
+                    format!(
+                        "`{}` describes no PLL with its dividers and ports",
+                        self.device.name
+                    ),
+                );
+                continue;
+            }
+            if budget.is_some_and(|b| used >= b) {
+                refuse(
+                    self,
+                    format!(
+                        "`{}` has {} PLL(s) and they are all in use",
+                        self.device.name,
+                        budget.unwrap_or(0)
+                    ),
+                );
+                continue;
+            }
+            let mut best: Option<(usize, usize, PllSolution)> = None;
+            let mut reasons: Vec<String> = Vec::new();
+            for (source_index, (_, source, input)) in sources.iter().enumerate() {
+                if *source == net {
+                    continue;
+                }
+                for (shape_index, shape) in shapes.iter().enumerate() {
+                    match super::pll::solve(shape, *input, frequency) {
+                        Ok(solution) => {
+                            let better = best.as_ref().is_none_or(|(_, _, b)| {
+                                solution.error_mhz().abs() < b.error_mhz().abs()
+                            });
+                            if better {
+                                best = Some((source_index, shape_index, solution));
+                            }
+                        }
+                        Err(why) => reasons.push(why),
+                    }
+                }
+            }
+            let Some((source_index, shape_index, solution)) = best else {
+                let why = if sources.is_empty() {
+                    "no clock is constrained on an input port to generate it from".to_owned()
+                } else {
+                    reasons.join("; ")
+                };
+                refuse(self, why);
+                continue;
+            };
+            used += 1;
+            let (source_name, source, _) = &sources[source_index];
+            let shape = &shapes[shape_index];
+            self.emit_pll(module, shape, &solution, *source, net, span);
+            let mapping = PllMapping {
+                net: name.clone(),
+                source: source_name.clone(),
+                primitive: shape.name.clone(),
+                input_hz: super::pll::to_hz(solution.input_mhz),
+                requested_hz: super::pll::to_hz(solution.requested_mhz),
+                achieved_hz: super::pll::to_hz(solution.achieved_mhz),
+                vco_hz: super::pll::to_hz(solution.vco_mhz),
+                params: solution.params.clone(),
+            };
+            // A PLL a percent off is still a PLL, and whether that is
+            // close enough is the designer's call; past that it deserves
+            // to be said out loud rather than found in a report.
+            if solution.error_ppm().abs() > 10_000.0 {
+                self.diags.push(
+                    Diagnostic::warning(format!(
+                        "clock `{name}` asks for {frequency:.3} MHz and the nearest `{}` can make \
+                         from `{source_name}` is {:.3} MHz ({:+.1} %)",
+                        shape.name,
+                        solution.achieved_mhz,
+                        solution.error_ppm() / 1e4
+                    ))
+                    .with_code(NO_PLL)
+                    .with_span(span),
+                );
+            }
+            self.report.plls.push(mapping);
+        }
+    }
+
+    /// Instantiates one PLL, configured by `solution`, from `source` to
+    /// `out`.
+    fn emit_pll(
+        &mut self,
+        module: &mut Module,
+        shape: &PllShape,
+        solution: &PllSolution,
+        source: NetId,
+        out: NetId,
+        span: Span,
+    ) {
+        let reference = net_expr(module, source, span);
+        let mut inputs = vec![(Name::new(shape.port("ref").unwrap_or("REF")), reference)];
+        // Feedback taken from the output is wired back from the output,
+        // which is what the formula the solver used assumes.
+        if shape.feedback == PllFeedback::Output
+            && let Some(port) = shape.port("fb")
+        {
+            let feedback = net_expr(module, out, span);
+            inputs.push((Name::new(port), feedback));
+        }
+        for (port, level) in &shape.ties {
+            let value = const_expr(module, Const::from_bool(*level), span);
+            inputs.push((Name::new(port.clone()), value));
+        }
+        let name = module.nets[out].name.as_str().to_owned();
+        let cell = add_cell(
+            module,
+            &format!("{name}$pll"),
+            CellKind::Blackbox(Name::new(shape.name.clone())),
+            inputs,
+            vec![(Name::new(shape.port("out").unwrap_or("OUT")), out)],
+            span,
+        );
+        let target = &mut module.cells[cell];
+        for (key, value) in &shape.params {
+            target.params.set(Name::new(key.clone()), value.clone());
+        }
+        for (key, value) in &solution.params {
+            target
+                .params
+                .set(Name::new(key.clone()), AttrValue::Int(*value));
+        }
+        target.attrs.set(
+            "frequency_mhz",
+            AttrValue::String(format!("{:.6}", solution.achieved_mhz)),
+        );
+    }
+
     // --- clock buffers ------------------------------------------------------
 
     fn clock_buffers(&mut self, module: &mut Module) {
@@ -3520,6 +3808,199 @@ mod tests {
         let top = design.add_module(b.finish());
         design.top = Some(top);
         (design, top, map)
+    }
+
+    /// A design with an input clock `clk` and one flip-flop on each of
+    /// `generated`, internal nets that nothing drives.
+    fn generated_clocks(generated: &[&str]) -> (Design, ModuleId, SourceMap) {
+        let (map, span) = span();
+        let mut b = ModuleBuilder::new("top", span);
+        let _clk = b.input("clk", Type::bit());
+        let d = b.input("d", Type::bit());
+        let d_e = b.net(d);
+        for (i, name) in generated.iter().enumerate() {
+            let net = b.add_net(*name, Type::bit());
+            let net_e = b.net(net);
+            let q = b.add_net(format!("q{i}"), Type::bit());
+            b.cell(
+                format!("ff{i}"),
+                CellKind::Dff {
+                    clk_pos: true,
+                    has_enable: false,
+                    reset: None,
+                },
+                vec![(Name::new("clk"), net_e), (Name::new("d"), d_e)],
+                vec![(Name::new("q"), q)],
+            );
+        }
+        let mut design = Design::new();
+        let top = design.add_module(b.finish());
+        design.top = Some(top);
+        (design, top, map)
+    }
+
+    /// Clock constraints, each `(net, MHz)`.
+    fn clocks(clocks: &[(&str, f64)]) -> Constraints {
+        let (_map, span) = span();
+        let mut constraints = Constraints::new();
+        for (net, mhz) in clocks {
+            constraints
+                .clocks
+                .push(super::super::constraints::ClockDef {
+                    name: (*net).to_owned(),
+                    net: (*net).to_owned(),
+                    period_ns: 1000.0 / mhz,
+                    span,
+                    origin: super::super::constraints::Origin::File,
+                });
+        }
+        constraints
+    }
+
+    fn pll_options() -> MapOptions {
+        MapOptions {
+            insert_io_buffers: false,
+            insert_clock_buffers: false,
+            ..MapOptions::default()
+        }
+    }
+
+    #[test]
+    fn a_clock_constraint_on_an_undriven_net_instantiates_a_pll() {
+        let (mut design, top, _map) = generated_clocks(&["sys"]);
+        let constraints = clocks(&[("clk", 12.0), ("sys", 48.0)]);
+        let mut diags = Diagnostics::new();
+        let report = map(
+            &mut design,
+            top,
+            target("ice40-hx1k-tq144").unwrap(),
+            &constraints,
+            &pll_options(),
+            &mut diags,
+        );
+        assert_eq!(diags.len(), 0, "{:?}", diags.iter().next());
+        let pll = &report.plls[0];
+        assert_eq!(pll.net, "sys");
+        assert_eq!(pll.source, "clk");
+        assert_eq!(pll.primitive, "SB_PLL40_CORE");
+        assert_eq!(pll.achieved_hz, 48_000_000);
+        assert_eq!(pll.error_ppm(), 0.0);
+        assert_eq!(cells_named(&design, top, "SB_PLL40_CORE"), 1);
+        assert!(report.to_text().contains("sys -> SB_PLL40_CORE from clk"));
+        assert!(!validate(&design).has_errors());
+    }
+
+    #[test]
+    fn a_driven_clock_is_described_not_generated() {
+        // `sys` is driven here, by an assignment from `clk`: the
+        // constraint describes a clock that exists, so no PLL.
+        let (mut design, top, _map) = generated_clocks(&["sys"]);
+        let module = design.module_mut(top);
+        let span = module.span;
+        let (clk, sys) = (
+            module.net_by_name("clk").unwrap(),
+            module.net_by_name("sys").unwrap(),
+        );
+        let value = net_expr(module, clk, span);
+        add_assign(module, sys, value, span);
+        let constraints = clocks(&[("clk", 12.0), ("sys", 48.0)]);
+        let mut diags = Diagnostics::new();
+        let report = map(
+            &mut design,
+            top,
+            target("ice40-hx1k-tq144").unwrap(),
+            &constraints,
+            &pll_options(),
+            &mut diags,
+        );
+        assert!(report.plls.is_empty());
+        assert_eq!(diags.len(), 0);
+    }
+
+    #[test]
+    fn a_pll_that_cannot_be_built_is_reported() {
+        // No input clock to generate it from.
+        let (mut design, top, sources) = generated_clocks(&["sys"]);
+        let mut diags = Diagnostics::new();
+        let report = map(
+            &mut design,
+            top,
+            target("ice40-hx1k-tq144").unwrap(),
+            &clocks(&[("sys", 48.0)]),
+            &pll_options(),
+            &mut diags,
+        );
+        assert!(report.plls.is_empty());
+        let text = diags.render(&sources);
+        assert!(
+            text.contains("no clock is constrained on an input port"),
+            "{text}"
+        );
+        assert!(text.contains(NO_PLL), "{text}");
+
+        // A device that describes no PLL.
+        let (mut design, top, sources) = generated_clocks(&["sys"]);
+        let mut diags = Diagnostics::new();
+        map(
+            &mut design,
+            top,
+            target("generic").unwrap(),
+            &clocks(&[("clk", 12.0), ("sys", 48.0)]),
+            &pll_options(),
+            &mut diags,
+        );
+        let text = diags.render(&sources);
+        assert!(text.contains("describes no PLL"), "{text}");
+
+        // An HX1K has one PLL, so the second generated clock is refused.
+        let (mut design, top, sources) = generated_clocks(&["a", "b"]);
+        let mut diags = Diagnostics::new();
+        let report = map(
+            &mut design,
+            top,
+            target("ice40-hx1k-tq144").unwrap(),
+            &clocks(&[("clk", 12.0), ("a", 48.0), ("b", 36.0)]),
+            &pll_options(),
+            &mut diags,
+        );
+        assert_eq!(report.plls.len(), 1);
+        let text = diags.render(&sources);
+        assert!(
+            text.contains("has 1 PLL(s) and they are all in use"),
+            "{text}"
+        );
+    }
+
+    #[test]
+    fn a_pll_far_off_the_request_is_warned_about() {
+        // 25 MHz to 74.25 MHz on the ECP5 comes out at 75 MHz, one per
+        // cent off: built, and said out loud.
+        let (mut design, top, sources) = generated_clocks(&["pix"]);
+        let mut diags = Diagnostics::new();
+        let report = map(
+            &mut design,
+            top,
+            target("ecp5-45f-CABGA381").unwrap(),
+            &clocks(&[("clk", 25.0), ("pix", 74.25)]),
+            &pll_options(),
+            &mut diags,
+        );
+        assert_eq!(report.plls[0].achieved_hz, 75_000_000);
+        let text = diags.render(&sources);
+        assert!(text.contains("the nearest `EHXPLLL` can make"), "{text}");
+        // The feedback is wired from the output, as FEEDBK_PATH says.
+        let module = design.module(top);
+        let (_, cell) = module
+            .cells
+            .iter()
+            .find(|(_, c)| matches!(&c.kind, CellKind::Blackbox(n) if n.as_str() == "EHXPLLL"))
+            .unwrap();
+        let fb = cell.input("CLKFB").unwrap();
+        assert_eq!(
+            module.exprs[fb].as_net(),
+            module.net_by_name("pix"),
+            "CLKFB is wired to CLKOP"
+        );
     }
 
     #[test]

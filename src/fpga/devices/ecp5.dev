@@ -44,6 +44,20 @@
 #     pins deep — so nothing about 16x4 is written in Rust. INITVAL is
 #     not emitted: the fallback that uses this primitive declines a
 #     memory with initial contents rather than loading them.
+#   * EHXPLLL: the ranges (reference 8-400 MHz, VCO 400-800 MHz) and the
+#     fields (CLKI_DIV 1-128, CLKFB_DIV 1-80, CLKOP_DIV 1-128, each
+#     storing the divisor itself) are those Project Trellis' `ecppll`
+#     uses, with CLKOP feedback: CLKFB is wired to CLKOP and the output is
+#     the input times CLKFB_DIV over CLKI_DIV. MEDIUM-HIGH confidence. The
+#     phase-detector minimum is recorded as 4 MHz where `ecppll` uses
+#     3.125: the file holds whole MHz, and rounding up only forbids
+#     settings, it never allows a wrong one. CLKOP_CPHASE is written as
+#     CLKOP_DIV - 1 for an output with no phase shift; LOW-MEDIUM
+#     confidence, and it moves the output's phase, not its frequency. The
+#     dynamic phase inputs are tied low with DPHASE_SOURCE disabled.
+#     `count` is two PLLs on the 25F and four on the 45F (datasheet,
+#     medium-high confidence). Only CLKOP is used; CLKOS, CLKOS2 and
+#     CLKOS3 are not configured.
 #   * MULT18X18D is an 18x18 signed multiplier with a 36-bit product and
 #     up to three pipeline stages. High confidence for the arithmetic,
 #     MEDIUM confidence for the port names recorded here (bus form again).
@@ -151,7 +165,7 @@ device ecp5-25f-CABGA381
   pin E2 io bank io
   pin H3 io bank io
   global_buffers 16
-  pll EHXPLLL input 8 400 vco 400 800 outputs 4
+  pll EHXPLLL input 8 400 vco 400 800 outputs 4 count 2 pfd 4 400 feedback out divide ref CLKI_DIV 1 128 divide feedback CLKFB_DIV 1 80 divide out CLKOP_DIV 1 128 derive CLKOP_CPHASE out -1 port ref=CLKI out=CLKOP fb=CLKFB lock=LOCK tie RST=0 STDBY=0 PHASESEL0=0 PHASESEL1=0 PHASEDIR=0 PHASESTEP=0 PHASELOADREG=0 PLLWAKESYNC=0 ENCLKOP=0 param PLLRST_ENA="DISABLED" INTFB_WAKE="DISABLED" STDBY_ENABLE="DISABLED" DPHASE_SOURCE="DISABLED" OUTDIVIDER_MUXA="DIVA" OUTDIVIDER_MUXB="DIVB" OUTDIVIDER_MUXC="DIVC" OUTDIVIDER_MUXD="DIVD" CLKOP_ENABLE="ENABLED" CLKOP_FPHASE=0 FEEDBK_PATH="CLKOP"
 end
 
 device ecp5-45f-CABGA381
@@ -230,5 +244,5 @@ device ecp5-45f-CABGA381
   pin E2 io bank io
   pin H3 io bank io
   global_buffers 16
-  pll EHXPLLL input 8 400 vco 400 800 outputs 4
+  pll EHXPLLL input 8 400 vco 400 800 outputs 4 count 4 pfd 4 400 feedback out divide ref CLKI_DIV 1 128 divide feedback CLKFB_DIV 1 80 divide out CLKOP_DIV 1 128 derive CLKOP_CPHASE out -1 port ref=CLKI out=CLKOP fb=CLKFB lock=LOCK tie RST=0 STDBY=0 PHASESEL0=0 PHASESEL1=0 PHASEDIR=0 PHASESTEP=0 PHASELOADREG=0 PLLWAKESYNC=0 ENCLKOP=0 param PLLRST_ENA="DISABLED" INTFB_WAKE="DISABLED" STDBY_ENABLE="DISABLED" DPHASE_SOURCE="DISABLED" OUTDIVIDER_MUXA="DIVA" OUTDIVIDER_MUXB="DIVB" OUTDIVIDER_MUXC="DIVC" OUTDIVIDER_MUXD="DIVD" CLKOP_ENABLE="ENABLED" CLKOP_FPHASE=0 FEEDBK_PATH="CLKOP"
 end

@@ -1,0 +1,469 @@
+{
+  "creator": "reticle",
+  "modules": {
+    "pllshift": {
+      "attributes": {
+        "top": 1
+      },
+      "ports": {
+        "clk": { "direction": "input", "bits": [ 2 ] },
+        "d": { "direction": "input", "bits": [ 3 ] },
+        "q": { "direction": "output", "bits": [ 4 ] }
+      },
+      "cells": {
+        "clk$io0": {
+          "hide_name": 0,
+          "type": "TRELLIS_IO",
+          "parameters": {
+            "DIR": "INPUT"
+          },
+          "attributes": {
+            "port": "clk",
+            "pin": "G2",
+            "io_standard": "LVCMOS33"
+          },
+          "port_directions": {
+            "B": "input",
+            "O": "output"
+          },
+          "connections": {
+            "B": [ 2 ],
+            "O": [ 5 ]
+          }
+        },
+        "d$io0": {
+          "hide_name": 0,
+          "type": "TRELLIS_IO",
+          "parameters": {
+            "DIR": "INPUT"
+          },
+          "attributes": {
+            "port": "d"
+          },
+          "port_directions": {
+            "B": "input",
+            "O": "output"
+          },
+          "connections": {
+            "B": [ 3 ],
+            "O": [ 15 ]
+          }
+        },
+        "q$io0": {
+          "hide_name": 0,
+          "type": "TRELLIS_IO",
+          "parameters": {
+            "DIR": "OUTPUT"
+          },
+          "attributes": {
+            "port": "q"
+          },
+          "port_directions": {
+            "I": "input",
+            "B": "output"
+          },
+          "connections": {
+            "I": [ 7 ],
+            "B": [ 4 ]
+          }
+        },
+        "sys$pll": {
+          "hide_name": 0,
+          "type": "EHXPLLL",
+          "parameters": {
+            "PLLRST_ENA": "DISABLED",
+            "INTFB_WAKE": "DISABLED",
+            "STDBY_ENABLE": "DISABLED",
+            "DPHASE_SOURCE": "DISABLED",
+            "OUTDIVIDER_MUXA": "DIVA",
+            "OUTDIVIDER_MUXB": "DIVB",
+            "OUTDIVIDER_MUXC": "DIVC",
+            "OUTDIVIDER_MUXD": "DIVD",
+            "CLKOP_ENABLE": "ENABLED",
+            "CLKOP_FPHASE": 0,
+            "FEEDBK_PATH": "CLKOP",
+            "CLKI_DIV": 1,
+            "CLKFB_DIV": 5,
+            "CLKOP_DIV": 4,
+            "CLKOP_CPHASE": 3
+          },
+          "attributes": {
+            "frequency_mhz": "125.000000"
+          },
+          "port_directions": {
+            "CLKI": "input",
+            "CLKFB": "input",
+            "RST": "input",
+            "STDBY": "input",
+            "PHASESEL0": "input",
+            "PHASESEL1": "input",
+            "PHASEDIR": "input",
+            "PHASESTEP": "input",
+            "PHASELOADREG": "input",
+            "PLLWAKESYNC": "input",
+            "ENCLKOP": "input",
+            "CLKOP": "output"
+          },
+          "connections": {
+            "CLKI": [ 5 ],
+            "CLKFB": [ 6 ],
+            "RST": [ "0" ],
+            "STDBY": [ "0" ],
+            "PHASESEL0": [ "0" ],
+            "PHASESEL1": [ "0" ],
+            "PHASEDIR": [ "0" ],
+            "PHASESTEP": [ "0" ],
+            "PHASELOADREG": [ "0" ],
+            "PLLWAKESYNC": [ "0" ],
+            "ENCLKOP": [ "0" ],
+            "CLKOP": [ 6 ]
+          }
+        },
+        "sys$gbuf": {
+          "hide_name": 0,
+          "type": "DCCA",
+          "parameters": {},
+          "attributes": {},
+          "port_directions": {
+            "CLKI": "input",
+            "CE": "input",
+            "CLKO": "output"
+          },
+          "connections": {
+            "CLKI": [ 6 ],
+            "CE": [ "1" ],
+            "CLKO": [ 16 ]
+          }
+        },
+        "sr$ff0": {
+          "hide_name": 0,
+          "type": "TRELLIS_FF",
+          "parameters": {
+            "GSR": "DISABLED",
+            "REGMODE": "FF",
+            "CEMUX": 1,
+            "CLKMUX": "CLK",
+            "LSRMUX": "LSR",
+            "SRMODE": "LSR_OVER_CE",
+            "REGSET": "RESET"
+          },
+          "attributes": {},
+          "port_directions": {
+            "CLK": "input",
+            "DI": "input",
+            "CE": "input",
+            "LSR": "input",
+            "Q": "output"
+          },
+          "connections": {
+            "CLK": [ 16 ],
+            "DI": [ 15 ],
+            "CE": [ "1" ],
+            "LSR": [ "0" ],
+            "Q": [ 8 ]
+          }
+        },
+        "sr$ff1": {
+          "hide_name": 0,
+          "type": "TRELLIS_FF",
+          "parameters": {
+            "GSR": "DISABLED",
+            "REGMODE": "FF",
+            "CEMUX": 1,
+            "CLKMUX": "CLK",
+            "LSRMUX": "LSR",
+            "SRMODE": "LSR_OVER_CE",
+            "REGSET": "RESET"
+          },
+          "attributes": {},
+          "port_directions": {
+            "CLK": "input",
+            "DI": "input",
+            "CE": "input",
+            "LSR": "input",
+            "Q": "output"
+          },
+          "connections": {
+            "CLK": [ 16 ],
+            "DI": [ 8 ],
+            "CE": [ "1" ],
+            "LSR": [ "0" ],
+            "Q": [ 9 ]
+          }
+        },
+        "sr$ff2": {
+          "hide_name": 0,
+          "type": "TRELLIS_FF",
+          "parameters": {
+            "GSR": "DISABLED",
+            "REGMODE": "FF",
+            "CEMUX": 1,
+            "CLKMUX": "CLK",
+            "LSRMUX": "LSR",
+            "SRMODE": "LSR_OVER_CE",
+            "REGSET": "RESET"
+          },
+          "attributes": {},
+          "port_directions": {
+            "CLK": "input",
+            "DI": "input",
+            "CE": "input",
+            "LSR": "input",
+            "Q": "output"
+          },
+          "connections": {
+            "CLK": [ 16 ],
+            "DI": [ 9 ],
+            "CE": [ "1" ],
+            "LSR": [ "0" ],
+            "Q": [ 10 ]
+          }
+        },
+        "sr$ff3": {
+          "hide_name": 0,
+          "type": "TRELLIS_FF",
+          "parameters": {
+            "GSR": "DISABLED",
+            "REGMODE": "FF",
+            "CEMUX": 1,
+            "CLKMUX": "CLK",
+            "LSRMUX": "LSR",
+            "SRMODE": "LSR_OVER_CE",
+            "REGSET": "RESET"
+          },
+          "attributes": {},
+          "port_directions": {
+            "CLK": "input",
+            "DI": "input",
+            "CE": "input",
+            "LSR": "input",
+            "Q": "output"
+          },
+          "connections": {
+            "CLK": [ 16 ],
+            "DI": [ 10 ],
+            "CE": [ "1" ],
+            "LSR": [ "0" ],
+            "Q": [ 11 ]
+          }
+        },
+        "sr$ff4": {
+          "hide_name": 0,
+          "type": "TRELLIS_FF",
+          "parameters": {
+            "GSR": "DISABLED",
+            "REGMODE": "FF",
+            "CEMUX": 1,
+            "CLKMUX": "CLK",
+            "LSRMUX": "LSR",
+            "SRMODE": "LSR_OVER_CE",
+            "REGSET": "RESET"
+          },
+          "attributes": {},
+          "port_directions": {
+            "CLK": "input",
+            "DI": "input",
+            "CE": "input",
+            "LSR": "input",
+            "Q": "output"
+          },
+          "connections": {
+            "CLK": [ 16 ],
+            "DI": [ 11 ],
+            "CE": [ "1" ],
+            "LSR": [ "0" ],
+            "Q": [ 12 ]
+          }
+        },
+        "sr$ff5": {
+          "hide_name": 0,
+          "type": "TRELLIS_FF",
+          "parameters": {
+            "GSR": "DISABLED",
+            "REGMODE": "FF",
+            "CEMUX": 1,
+            "CLKMUX": "CLK",
+            "LSRMUX": "LSR",
+            "SRMODE": "LSR_OVER_CE",
+            "REGSET": "RESET"
+          },
+          "attributes": {},
+          "port_directions": {
+            "CLK": "input",
+            "DI": "input",
+            "CE": "input",
+            "LSR": "input",
+            "Q": "output"
+          },
+          "connections": {
+            "CLK": [ 16 ],
+            "DI": [ 12 ],
+            "CE": [ "1" ],
+            "LSR": [ "0" ],
+            "Q": [ 13 ]
+          }
+        },
+        "sr$ff6": {
+          "hide_name": 0,
+          "type": "TRELLIS_FF",
+          "parameters": {
+            "GSR": "DISABLED",
+            "REGMODE": "FF",
+            "CEMUX": 1,
+            "CLKMUX": "CLK",
+            "LSRMUX": "LSR",
+            "SRMODE": "LSR_OVER_CE",
+            "REGSET": "RESET"
+          },
+          "attributes": {},
+          "port_directions": {
+            "CLK": "input",
+            "DI": "input",
+            "CE": "input",
+            "LSR": "input",
+            "Q": "output"
+          },
+          "connections": {
+            "CLK": [ 16 ],
+            "DI": [ 13 ],
+            "CE": [ "1" ],
+            "LSR": [ "0" ],
+            "Q": [ 14 ]
+          }
+        },
+        "sr$ff7": {
+          "hide_name": 0,
+          "type": "TRELLIS_FF",
+          "parameters": {
+            "GSR": "DISABLED",
+            "REGMODE": "FF",
+            "CEMUX": 1,
+            "CLKMUX": "CLK",
+            "LSRMUX": "LSR",
+            "SRMODE": "LSR_OVER_CE",
+            "REGSET": "RESET"
+          },
+          "attributes": {},
+          "port_directions": {
+            "CLK": "input",
+            "DI": "input",
+            "CE": "input",
+            "LSR": "input",
+            "Q": "output"
+          },
+          "connections": {
+            "CLK": [ 16 ],
+            "DI": [ 14 ],
+            "CE": [ "1" ],
+            "LSR": [ "0" ],
+            "Q": [ 7 ]
+          }
+        }
+      },
+      "netnames": {
+        "clk": {
+          "hide_name": 0,
+          "bits": [ 5 ],
+          "attributes": {}
+        },
+        "sys": {
+          "hide_name": 0,
+          "bits": [ 6 ],
+          "attributes": {
+            "clock_mhz": 125
+          }
+        },
+        "q": {
+          "hide_name": 0,
+          "bits": [ 7 ],
+          "attributes": {}
+        },
+        "sr": {
+          "hide_name": 0,
+          "bits": [ 8, 9, 10, 11, 12, 13, 14, 7 ],
+          "attributes": {}
+        },
+        "next": {
+          "hide_name": 0,
+          "bits": [ 15, 8, 9, 10, 11, 12, 13, 14 ],
+          "attributes": {}
+        },
+        "clk$pad": {
+          "hide_name": 0,
+          "bits": [ 2 ],
+          "attributes": {}
+        },
+        "clk$in0": {
+          "hide_name": 0,
+          "bits": [ 5 ],
+          "attributes": {}
+        },
+        "d$pad": {
+          "hide_name": 0,
+          "bits": [ 3 ],
+          "attributes": {}
+        },
+        "d$in0": {
+          "hide_name": 0,
+          "bits": [ 15 ],
+          "attributes": {}
+        },
+        "q$pad": {
+          "hide_name": 0,
+          "bits": [ 4 ],
+          "attributes": {}
+        },
+        "q$pin0": {
+          "hide_name": 0,
+          "bits": [ 4 ],
+          "attributes": {}
+        },
+        "sys$gb": {
+          "hide_name": 0,
+          "bits": [ 16 ],
+          "attributes": {}
+        },
+        "sr$q0": {
+          "hide_name": 0,
+          "bits": [ 8 ],
+          "attributes": {}
+        },
+        "sr$q1": {
+          "hide_name": 0,
+          "bits": [ 9 ],
+          "attributes": {}
+        },
+        "sr$q2": {
+          "hide_name": 0,
+          "bits": [ 10 ],
+          "attributes": {}
+        },
+        "sr$q3": {
+          "hide_name": 0,
+          "bits": [ 11 ],
+          "attributes": {}
+        },
+        "sr$q4": {
+          "hide_name": 0,
+          "bits": [ 12 ],
+          "attributes": {}
+        },
+        "sr$q5": {
+          "hide_name": 0,
+          "bits": [ 13 ],
+          "attributes": {}
+        },
+        "sr$q6": {
+          "hide_name": 0,
+          "bits": [ 14 ],
+          "attributes": {}
+        },
+        "sr$q7": {
+          "hide_name": 0,
+          "bits": [ 7 ],
+          "attributes": {}
+        }
+      }
+    }
+  }
+}

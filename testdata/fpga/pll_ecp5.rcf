@@ -1,0 +1,7 @@
+# The same shift register on the ULX3S: its 25 MHz oscillator, and a
+# `sys` clock asked for at 125 MHz — five times the input, which an
+# `EHXPLLL` makes exactly, with its feedback wired from its own output.
+# The request is a `clock_mhz` attribute on the net in the design rather
+# than a line here, which is the other way to ask.
+set_io -io_standard LVCMOS33 clk G2
+create_clock -name osc -period 40.0 clk

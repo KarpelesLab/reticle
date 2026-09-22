@@ -1,0 +1,51 @@
+top pllshift
+
+module pllshift
+  net %clk u1 wire
+  net %sys u1 wire
+  net %q u1 wire
+  net %sr u8 wire
+  net %next u8 wire
+  net %clk$pad u1 wire
+  net %clk$in0 u1 wire
+  net %d$pad u1 wire
+  net %d$in0 u1 wire
+  net %q$pad u1 wire
+  net %q$pin0 u1 wire
+  net %sys$gb u1 wire
+  net %sr$q0 u1 wire
+  net %sr$q1 u1 wire
+  net %sr$q2 u1 wire
+  net %sr$q3 u1 wire
+  net %sr$q4 u1 wire
+  net %sr$q5 u1 wire
+  net %sr$q6 u1 wire
+  net %sr$q7 u1 wire
+  port clk in %clk$pad
+  port d in %d$pad
+  port q out %q$pad
+  assign %clk = %clk$in0
+  assign %q = %sr[7:7]
+  assign %next = {%sr[6:6], %sr[5:5], %sr[4:4], %sr[3:3], %sr[2:2], %sr[1:1], %sr[0:0], %d$in0}
+  assign %q$pad = %q$pin0
+  assign %sr = {%sr$q7, %sr$q6, %sr$q5, %sr$q4, %sr$q3, %sr$q2, %sr$q1, %sr$q0}
+  attr port = "clk"
+  attr pin = "21"
+  attr io_standard = "LVCMOS33"
+  cell clk$io0 blackbox SB_IO #(PIN_TYPE=6'd1) (PACKAGE_PIN=%clk$pad) -> (D_IN_0=%clk$in0)
+  attr port = "d"
+  cell d$io0 blackbox SB_IO #(PIN_TYPE=6'd1) (PACKAGE_PIN=%d$pad) -> (D_IN_0=%d$in0)
+  attr port = "q"
+  cell q$io0 blackbox SB_IO #(PIN_TYPE=6'd25) (D_OUT_0=%q) -> (PACKAGE_PIN=%q$pin0)
+  attr frequency_mhz = "48.000000"
+  cell sys$pll blackbox SB_PLL40_CORE #(FEEDBACK_PATH="SIMPLE", PLLOUT_SELECT="GENCLK", DIVR=0, DIVF=63, DIVQ=4, FILTER_RANGE=1) (REFERENCECLK=%clk, RESETB=1'd1, BYPASS=1'd0) -> (PLLOUTCORE=%sys)
+  cell sys$gbuf blackbox SB_GB (USER_SIGNAL_TO_GLOBAL_BUFFER=%sys) -> (GLOBAL_BUFFER_OUTPUT=%sys$gb)
+  cell sr$ff0 blackbox SB_DFF (C=%sys$gb, D=%next[0:0]) -> (Q=%sr$q0)
+  cell sr$ff1 blackbox SB_DFF (C=%sys$gb, D=%next[1:1]) -> (Q=%sr$q1)
+  cell sr$ff2 blackbox SB_DFF (C=%sys$gb, D=%next[2:2]) -> (Q=%sr$q2)
+  cell sr$ff3 blackbox SB_DFF (C=%sys$gb, D=%next[3:3]) -> (Q=%sr$q3)
+  cell sr$ff4 blackbox SB_DFF (C=%sys$gb, D=%next[4:4]) -> (Q=%sr$q4)
+  cell sr$ff5 blackbox SB_DFF (C=%sys$gb, D=%next[5:5]) -> (Q=%sr$q5)
+  cell sr$ff6 blackbox SB_DFF (C=%sys$gb, D=%next[6:6]) -> (Q=%sr$q6)
+  cell sr$ff7 blackbox SB_DFF (C=%sys$gb, D=%next[7:7]) -> (Q=%sr$q7)
+end
