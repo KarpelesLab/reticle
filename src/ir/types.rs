@@ -128,223 +128,22 @@ impl fmt::Display for Type {
     }
 }
 
-/// One 4-state bit.
+/// One 4-state bit; re-exported from [`crate::logic`].
+pub use crate::logic::Bit;
+
+/// A constant bit vector: [`crate::logic::Logic`] under its IR name.
 ///
-/// Will be replaced by the bit type of `logic::Logic` when that module
-/// lands; the IR only needs to store and compare bits, not operate on them.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub enum Bit4 {
-    /// Logic low.
-    Zero,
-    /// Logic high.
-    One,
-    /// Unknown.
-    X,
-    /// High impedance.
-    Z,
-}
+/// Constants in the IR are plain `Logic` values so the frontends' constant
+/// evaluation, the simulator and constant folding share one representation
+/// and one set of operators. The text format renders them through
+/// [`text`](super::text) in a canonical Verilog-style sized form.
+pub type Const = crate::logic::Logic;
 
-impl Bit4 {
-    /// The character used for this bit in literals.
-    pub fn as_char(self) -> char {
-        match self {
-            Bit4::Zero => '0',
-            Bit4::One => '1',
-            Bit4::X => 'x',
-            Bit4::Z => 'z',
-        }
-    }
-
-    /// Parses one of `0 1 x z` (either case); `None` for anything else.
-    pub fn from_char(c: char) -> Option<Bit4> {
-        match c {
-            '0' => Some(Bit4::Zero),
-            '1' => Some(Bit4::One),
-            'x' | 'X' => Some(Bit4::X),
-            'z' | 'Z' => Some(Bit4::Z),
-            _ => None,
-        }
-    }
-
-    /// True for `0` and `1`.
-    pub fn is_two_state(self) -> bool {
-        matches!(self, Bit4::Zero | Bit4::One)
-    }
-}
-
-/// A constant bit vector with a width and a signedness flag.
-///
-/// `bits[0]` is the least significant bit and `bits.len() == width` always
-/// holds for values built through the constructors. The fields are public
-/// so passes can pattern-match, but new values should go through
-/// [`Const::new`], [`Const::from_u64`] and friends, which maintain the
-/// invariant.
-///
-/// This type is a placeholder for `logic::Logic` and intentionally offers
-/// no arithmetic.
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
-pub struct Const {
-    /// Number of bits.
-    pub width: u32,
-    /// True when the value is two's complement.
-    pub signed: bool,
-    /// The bits, least significant first.
-    pub bits: Vec<Bit4>,
-}
-
-impl Const {
-    /// Builds a constant from bits (least significant first); the width is
-    /// the number of bits.
-    pub fn new(bits: Vec<Bit4>, signed: bool) -> Self {
-        Const {
-            width: super::arena::narrow(bits.len()),
-            signed,
-            bits,
-        }
-    }
-
-    /// An unsigned constant holding the low `width` bits of `value`.
-    ///
-    /// Bits beyond the width are discarded; widths above 64 are zero
-    /// extended.
-    pub fn from_u64(width: u32, value: u64) -> Self {
-        let bits = (0..width)
-            .map(|i| {
-                if i < 64 && (value >> i) & 1 == 1 {
-                    Bit4::One
-                } else {
-                    Bit4::Zero
-                }
-            })
-            .collect();
-        Const {
-            width,
-            signed: false,
-            bits,
-        }
-    }
-
-    /// A signed constant holding the low `width` bits of `value`'s two's
-    /// complement representation, sign extended past 64 bits.
-    pub fn from_i64(width: u32, value: i64) -> Self {
-        let bits = (0..width)
-            .map(|i| {
-                let shift = i.min(63);
-                if (value >> shift) & 1 == 1 {
-                    Bit4::One
-                } else {
-                    Bit4::Zero
-                }
-            })
-            .collect();
-        Const {
-            width,
-            signed: true,
-            bits,
-        }
-    }
-
-    /// A constant of `width` bits all set to `bit`.
-    pub fn filled(width: u32, bit: Bit4) -> Self {
-        Const {
-            width,
-            signed: false,
-            bits: vec![bit; super::arena::widen(width)],
-        }
-    }
-
-    /// A constant of `width` unknown (`x`) bits.
-    pub fn undef(width: u32) -> Self {
-        Self::filled(width, Bit4::X)
-    }
-
-    /// A single bit.
-    pub fn bit(bit: Bit4) -> Self {
-        Self::filled(1, bit)
-    }
-
-    /// The constant `1'b0`.
-    pub fn zero() -> Self {
-        Self::bit(Bit4::Zero)
-    }
-
-    /// The constant `1'b1`.
-    pub fn one() -> Self {
-        Self::bit(Bit4::One)
-    }
-
-    /// The type of this constant.
-    pub fn ty(&self) -> Type {
-        Type::Bits {
-            width: self.width,
-            signed: self.signed,
-        }
-    }
-
-    /// True when every bit is `0` or `1`.
-    pub fn is_two_state(&self) -> bool {
-        self.bits.iter().all(|b| b.is_two_state())
-    }
-
-    /// The value as an unsigned integer when it is two-state and no set bit
-    /// lies above bit 63; `None` otherwise.
-    pub fn to_u64(&self) -> Option<u64> {
-        let mut value = 0u64;
-        for (i, bit) in self.bits.iter().enumerate() {
-            match bit {
-                Bit4::Zero => {}
-                Bit4::One if i < 64 => value |= 1 << i,
-                Bit4::One | Bit4::X | Bit4::Z => return None,
-            }
-        }
-        Some(value)
-    }
-
-    /// True when the value is two-state and equal to zero.
-    pub fn is_zero(&self) -> bool {
-        self.bits.iter().all(|b| *b == Bit4::Zero)
-    }
-
-    /// The same bits with the signedness flag replaced.
-    pub fn with_signed(mut self, signed: bool) -> Self {
-        self.signed = signed;
-        self
-    }
-
-    /// The bits as a string, most significant first (`10xz`).
-    pub fn to_binary_string(&self) -> String {
-        self.bits.iter().rev().map(|b| b.as_char()).collect()
-    }
-}
-
-impl fmt::Display for Const {
-    /// Renders the constant as a Verilog-style sized literal, which is also
-    /// its canonical form in the text format: decimal for two-state values
-    /// up to 64 bits (`8'd255`, `8'sd255`), hexadecimal for wider two-state
-    /// values, binary when any bit is `x` or `z` (`4'b10xz`).
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let s = if self.signed { "s" } else { "" };
-        if self.width <= 64
-            && let Some(v) = self.to_u64()
-        {
-            return write!(f, "{}'{s}d{v}", self.width);
-        }
-        if self.is_two_state() {
-            write!(f, "{}'{s}h", self.width)?;
-            let mut digits = String::new();
-            for chunk in self.bits.chunks(4) {
-                let mut nibble = 0u8;
-                for (i, bit) in chunk.iter().enumerate() {
-                    if *bit == Bit4::One {
-                        nibble |= 1 << i;
-                    }
-                }
-                digits.push(char::from_digit(u32::from(nibble), 16).unwrap_or('0'));
-            }
-            let digits: String = digits.chars().rev().collect();
-            return f.write_str(&digits);
-        }
-        write!(f, "{}'{s}b{}", self.width, self.to_binary_string())
+/// The IR type of a constant: `Bits` with its width and signedness.
+pub fn const_type(c: &Const) -> Type {
+    Type::Bits {
+        width: c.width(),
+        signed: c.is_signed(),
     }
 }
 
@@ -372,29 +171,11 @@ mod tests {
     }
 
     #[test]
-    fn const_construction_and_display() {
-        let c = Const::from_u64(8, 255);
-        assert_eq!(c.to_string(), "8'd255");
-        assert_eq!(c.to_u64(), Some(255));
-        assert_eq!(c.ty(), Type::bits(8));
-        assert_eq!(Const::from_u64(4, 0x1f).to_u64(), Some(0xf));
-        assert_eq!(Const::from_i64(8, -1).to_string(), "8'sd255");
-        assert_eq!(Const::from_i64(70, -2).bits[69], Bit4::One);
-        assert_eq!(Const::undef(4).to_string(), "4'bxxxx");
+    fn const_type_follows_width_and_sign() {
+        assert_eq!(const_type(&Const::from_u64(255, 8)), Type::bits(8));
         assert_eq!(
-            Const::new(vec![Bit4::Z, Bit4::X, Bit4::One, Bit4::Zero], false).to_string(),
-            "4'b01xz"
+            const_type(&Const::from_i64(-1, 8)),
+            Type::bits(8).with_signed(true)
         );
-        assert!(Const::zero().is_zero());
-        assert_eq!(Const::one().to_string(), "1'd1");
-        let wide = Const::from_u64(72, u64::MAX);
-        assert_eq!(wide.to_string(), "72'h00ffffffffffffffff");
-        assert_eq!(wide.to_u64(), Some(u64::MAX));
-        let mut top = Const::from_u64(65, 0);
-        top.bits[64] = Bit4::One;
-        assert_eq!(top.to_string(), "65'h10000000000000000");
-        assert_eq!(Const::from_u64(3, 5).to_binary_string(), "101");
-        assert_eq!(Bit4::from_char('X'), Some(Bit4::X));
-        assert_eq!(Bit4::from_char('q'), None);
     }
 }

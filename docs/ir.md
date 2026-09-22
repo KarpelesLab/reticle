@@ -65,10 +65,13 @@ Type::String                      simulation-only
 Memories are not `Array`-typed nets: they are separate objects because
 inference and simulation treat them as storage with ports.
 
-`Const { width, signed, bits: Vec<Bit4> }` is a small 4-state constant
-(`Bit4 = Zero | One | X | Z`, least significant bit first). It is a
-placeholder for `logic::Logic` and offers no arithmetic. `Name` wraps a
-`String` and will become an interned `Symbol`.
+`Const` is `logic::Logic`, the crate-wide 4-state bit vector, so constant
+folding, the simulator and the frontends share one representation and one
+operator set. The text format renders constants in a canonical sized form:
+decimal for two-state values up to 64 bits (`8'd255`, `8'sd255`),
+hexadecimal above that, binary when any bit is `x` or `z` (`4'b10xz`); it
+accepts any Verilog-style literal on input. `Name` wraps a `String` and
+will become an interned `Symbol`.
 
 ### Expressions
 

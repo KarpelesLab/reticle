@@ -183,7 +183,7 @@ mod tests {
         let mut attrs = Attrs::new();
         attrs.set("keep", 1);
         attrs.set("ram_style", "block");
-        attrs.set("init", Const::from_u64(4, 9));
+        attrs.set("init", Const::from_u64(9, 4));
         attrs.set("keep", 0);
         assert_eq!(attrs.len(), 3);
         let keys: Vec<_> = attrs.iter().map(|(k, _)| k.as_str()).collect();

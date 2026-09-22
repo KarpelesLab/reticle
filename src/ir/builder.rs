@@ -223,12 +223,12 @@ impl ModuleBuilder {
 
     /// An unsigned constant of `width` bits holding `value`.
     pub fn const_u64(&mut self, width: u32, value: u64) -> ExprId {
-        self.constant(Const::from_u64(width, value))
+        self.constant(Const::from_u64(value, width))
     }
 
     /// A signed constant of `width` bits holding `value`.
     pub fn const_i64(&mut self, width: u32, value: i64) -> ExprId {
-        self.constant(Const::from_i64(width, value))
+        self.constant(Const::from_i64(value, width))
     }
 
     /// A single-bit constant.
@@ -758,7 +758,7 @@ impl BlockBuilder {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ir::types::Bit4;
+    use crate::ir::types::Bit;
     use crate::source::SourceMap;
 
     fn span() -> Span {
@@ -804,9 +804,12 @@ mod tests {
         let st = b.string("hi");
         assert_eq!(b.module().expr(st).ty, Type::String);
         let c = b.const_i64(4, -1);
-        assert_eq!(b.module().expr(c).as_const().unwrap().to_string(), "4'sd15");
+        assert_eq!(
+            b.module().expr(c).as_const().unwrap(),
+            &Const::from_i64(-1, 4)
+        );
         let bit = b.const_bit(true);
-        assert_eq!(b.module().expr(bit).as_const().unwrap().bits, [Bit4::One]);
+        assert_eq!(b.module().expr(bit).as_const().unwrap().bits(), [Bit::One]);
         // Ill-typed nodes fall back to the first operand's type.
         let bad = b.and(an, sl);
         assert_eq!(b.module().expr(bad).ty, Type::bits(8));

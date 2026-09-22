@@ -87,7 +87,7 @@ pub use process::{
     AssignKind, Block, CaseArm, CaseKind, CaseQualifier, Delay, Edge, Lvalue, Polarity, Process,
     ProcessId, ProcessKind, ReportSeverity, Stmt, StmtKind, TimeUnit, Timescale, WaitKind,
 };
-pub use types::{Bit4, Const, Type};
+pub use types::{Bit, Const, Type};
 
 #[doc(no_inline)]
 pub use crate::source::Span;

@@ -492,7 +492,7 @@ pub fn infer_type(module: &Module, kind: &ExprKind) -> Result<Type, TypeError> {
         }
     };
     match kind {
-        ExprKind::Const(c) => Ok(c.ty()),
+        ExprKind::Const(c) => Ok(super::types::const_type(c)),
         ExprKind::String(_) => Ok(Type::String),
         ExprKind::Net(net) => module
             .nets

@@ -183,7 +183,7 @@ impl<'a> Checker<'a> {
                     );
                 }
                 for c in init {
-                    if c.ty().width() != mem.elem.width() {
+                    if Some(c.width()) != mem.elem.width() {
                         self.error(
                             "I0013",
                             mem.span,
@@ -736,7 +736,7 @@ impl<'a> Checker<'a> {
                 if let Some(reset) = reset {
                     let rst = self.cell_input_width(cell, "rst");
                     rule(self, one(rst), "`rst` must be one bit");
-                    if q.is_some() && Some(reset.value.width) != q {
+                    if q.is_some() && Some(reset.value.width()) != q {
                         self.error(
                             "I0020",
                             span,
@@ -785,13 +785,14 @@ impl<'a> Checker<'a> {
                 rule(self, a == Some(*k), "`a` must have `k` bits");
                 rule(self, one(y), "`y` must be one bit");
                 let expected = if *k < 32 { Some(1u32 << k) } else { None };
-                if expected != Some(init.width) {
+                if expected != Some(init.width()) {
                     self.error(
                         "I0020",
                         span,
                         format!(
                             "cell `{}` (lut): table has {} bits, expected 2^{k}",
-                            cell.name, init.width
+                            cell.name,
+                            init.width()
                         ),
                     );
                 }
@@ -1167,7 +1168,7 @@ mod tests {
         let rd = b.mem_read(mem, addr);
         b.assign(y, rd);
         let mut m = b.finish();
-        m.memories[mem].init = Some(vec![Const::from_u64(8, 0); 5]);
+        m.memories[mem].init = Some(vec![Const::from_u64(0, 8); 5]);
         assert_eq!(codes(&validate_module(&m)), ["I0012"]);
     }
 
@@ -1181,7 +1182,7 @@ mod tests {
         p.mem_write(mem, addr, v, None);
         b.end_process(p);
         let mut m = b.finish();
-        m.memories[mem].init = Some(vec![Const::from_u64(4, 0)]);
+        m.memories[mem].init = Some(vec![Const::from_u64(0, 4)]);
         assert_eq!(codes(&validate_module(&m)), ["I0013"]);
     }
 
@@ -1239,7 +1240,7 @@ mod tests {
                 reset: Some(Reset {
                     asynchronous: true,
                     active_high: false,
-                    value: Const::from_u64(3, 0),
+                    value: Const::from_u64(0, 3),
                 }),
             },
             vec![
@@ -1287,7 +1288,7 @@ mod tests {
             "l",
             CellKind::Lut {
                 k: 4,
-                init: Const::from_u64(16, 0x8000),
+                init: Const::from_u64(0x8000, 16),
             },
             vec![(Name::new("a"), an)],
             vec![(Name::new("y"), y)],

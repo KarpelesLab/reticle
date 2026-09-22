@@ -375,7 +375,7 @@ mod tests {
             reset: Some(Reset {
                 asynchronous: false,
                 active_high: true,
-                value: Const::zero(),
+                value: Const::zero(1),
             }),
         };
         assert_eq!(dff.input_ports(), ["clk", "d", "en", "rst"]);

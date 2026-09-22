@@ -60,7 +60,7 @@ use super::process::{
     AssignKind, Block, CaseArm, CaseKind, CaseQualifier, Delay, Edge, Lvalue, Polarity, Process,
     ProcessKind, ReportSeverity, Stmt, StmtKind, TimeUnit, Timescale, WaitKind,
 };
-use super::types::{Bit4, Const, Type};
+use super::types::{Const, Type};
 use crate::diag::{Diagnostic, Diagnostics};
 use crate::source::{SourceId, Span};
 
@@ -157,7 +157,7 @@ fn name(n: &Name) -> String {
 
 fn attr_value(v: &AttrValue) -> String {
     match v {
-        AttrValue::Const(c) => c.to_string(),
+        AttrValue::Const(c) => const_text(c),
         AttrValue::String(s) => quoted(s),
         AttrValue::Int(i) => i.to_string(),
     }
@@ -314,7 +314,7 @@ impl<'a> Printer<'a> {
                 self.line("init");
             }
             for chunk in init.chunks(8) {
-                let items: Vec<String> = chunk.iter().map(Const::to_string).collect();
+                let items: Vec<String> = chunk.iter().map(const_text).collect();
                 self.line(&format!("init {}", items.join(" ")));
             }
             self.indent -= 1;
@@ -598,9 +598,10 @@ impl<'a> Printer<'a> {
                 {
                     let _ = write!(
                         kind,
-                        " {} {} {value}",
+                        " {} {} {}",
                         if *asynchronous { "arst" } else { "srst" },
-                        if *active_high { "pos" } else { "neg" }
+                        if *active_high { "pos" } else { "neg" },
+                        const_text(value)
                     );
                 }
             }
@@ -611,7 +612,7 @@ impl<'a> Printer<'a> {
                 }
             }
             CellKind::Lut { k, init } => {
-                let _ = write!(kind, " {k} {init}");
+                let _ = write!(kind, " {k} {}", const_text(init));
             }
             CellKind::Blackbox(n) => {
                 let _ = write!(kind, " {}", name(n));
@@ -662,7 +663,7 @@ impl<'a> Printer<'a> {
 
     fn expr_inner(&self, expr: &Expr) -> String {
         match &expr.kind {
-            ExprKind::Const(c) => c.to_string(),
+            ExprKind::Const(c) => const_text(c),
             ExprKind::String(s) => quoted(s),
             ExprKind::Net(n) => self.net_ref(*n),
             ExprKind::Slice { base, hi, lo } => format!("{}[{hi}:{lo}]", self.base(*base)),
@@ -1174,82 +1175,10 @@ impl Parser {
     // --- literals and types ------------------------------------------------
 
     fn parse_const(&mut self, raw: &str, span: Span) -> PResult<Const> {
-        let Some((width, rest)) = raw.split_once('\'') else {
-            return self.fail(span, "malformed literal");
-        };
-        let Ok(width) = width.replace('_', "").parse::<u32>() else {
-            return self.fail(span, "literal width does not fit in 32 bits");
-        };
-        let (signed, rest) = match rest.strip_prefix(['s', 'S']) {
-            Some(r) => (true, r),
-            None => (false, rest),
-        };
-        let mut chars = rest.chars();
-        let base = chars.next().map(|c| c.to_ascii_lowercase());
-        let digits: String = chars.filter(|c| *c != '_').collect();
-        if digits.is_empty() {
-            return self.fail(span, "literal has no digits");
+        match Const::parse_verilog(raw) {
+            Ok(c) => Ok(c),
+            Err(err) => self.fail(span, format!("malformed literal: {err}")),
         }
-        let bits_per_digit = match base {
-            Some('b') => 1,
-            Some('o') => 3,
-            Some('h') => 4,
-            Some('d') => 0,
-            _ => return self.fail(span, "literal base must be one of b, o, d, h"),
-        };
-        let mut bits: Vec<Bit4> = Vec::new();
-        if bits_per_digit == 0 {
-            if let Some(single) = Bit4::from_char(digits.chars().next().unwrap_or('0'))
-                && digits.len() == 1
-                && !single.is_two_state()
-            {
-                bits = vec![single; super::arena::widen(width)];
-            } else {
-                let Ok(value) = digits.parse::<u128>() else {
-                    return self.fail(span, "decimal literal is too large; use hexadecimal");
-                };
-                for i in 0..width.min(128) {
-                    bits.push(if (value >> i) & 1 == 1 {
-                        Bit4::One
-                    } else {
-                        Bit4::Zero
-                    });
-                }
-            }
-        } else {
-            for digit in digits.chars().rev() {
-                let digit = if digit == '?' { 'z' } else { digit };
-                match Bit4::from_char(digit) {
-                    Some(b) if !b.is_two_state() => {
-                        bits.extend(std::iter::repeat_n(b, bits_per_digit));
-                    }
-                    _ => {
-                        let Some(v) = digit.to_digit(16).filter(|v| *v < (1 << bits_per_digit))
-                        else {
-                            return self.fail(span, format!("invalid digit `{digit}` in literal"));
-                        };
-                        for i in 0..bits_per_digit {
-                            bits.push(if (v >> i) & 1 == 1 {
-                                Bit4::One
-                            } else {
-                                Bit4::Zero
-                            });
-                        }
-                    }
-                }
-            }
-        }
-        // Extend with the top bit when it is x/z (Verilog rule), else zero.
-        let fill = match bits.last() {
-            Some(b) if !b.is_two_state() => *b,
-            _ => Bit4::Zero,
-        };
-        bits.resize(super::arena::widen(width), fill);
-        Ok(Const {
-            width,
-            signed,
-            bits,
-        })
     }
 
     fn expect_const(&mut self) -> PResult<Const> {
@@ -2365,8 +2294,54 @@ impl Parser {
     }
 }
 
+/// Renders a constant in the text format's canonical form: decimal for
+/// two-state values up to 64 bits (`8'd255`, `8'sd255`), hexadecimal for
+/// wider two-state values, binary when any bit is `x` or `z` (`4'b10xz`).
+fn const_text(c: &Const) -> String {
+    let s = if c.is_signed() { "s" } else { "" };
+    let width = c.width();
+    if width <= 64
+        && let Some(v) = c.to_u64()
+    {
+        return format!("{width}'{s}d{v}");
+    }
+    if c.is_fully_known() {
+        let mut digits = String::new();
+        let mut lo = 0;
+        while lo < width {
+            let hi = (lo + 3).min(width - 1);
+            let nibble = c.slice(hi, lo).to_u64().unwrap_or(0);
+            digits.push(char::from_digit(u32::try_from(nibble).unwrap_or(0), 16).unwrap_or('0'));
+            lo += 4;
+        }
+        let digits: String = digits.chars().rev().collect();
+        return format!("{width}'{s}h{digits}");
+    }
+    format!("{width}'{s}b{}", c.to_binary_string())
+}
+
 #[cfg(test)]
 mod tests {
+    use super::const_text;
+    use crate::ir::Bit;
+
+    #[test]
+    fn const_text_is_canonical() {
+        assert_eq!(const_text(&Const::from_u64(255, 8)), "8'd255");
+        assert_eq!(const_text(&Const::from_i64(-1, 8)), "8'sd255");
+        assert_eq!(const_text(&Const::x(4)), "4'bxxxx");
+        assert_eq!(
+            const_text(&Const::from_bits(&[Bit::Z, Bit::X, Bit::One, Bit::Zero])),
+            "4'b01xz"
+        );
+        assert_eq!(const_text(&Const::from_u64(1, 1)), "1'd1");
+        let wide = Const::from_u64(u64::MAX, 72);
+        assert_eq!(const_text(&wide), "72'h00ffffffffffffffff");
+        let mut top = Const::zero(65);
+        top.set_bit(64, Bit::One);
+        assert_eq!(const_text(&top), "65'h10000000000000000");
+    }
+
     use super::*;
     use crate::ir::builder::ModuleBuilder;
     use crate::ir::validate::validate;
@@ -2628,7 +2603,7 @@ end
             ),
             (
                 "module m\n  net %a u1 wire\n  assign %a = 1'q0\nend\n",
-                "literal base",
+                "invalid base `q`",
             ),
             (
                 "module m\n  net %a u1 wire\n  assign %a = frob(%a)\nend\n",
@@ -2650,7 +2625,7 @@ end
             ("module m\n  ~\nend\n", "unexpected character `~`"),
             (
                 "module m\n  net %a u1 wire\n  assign %a = 9999999999999999999999'd0\nend\n",
-                "does not fit",
+                "invalid size",
             ),
             (
                 "module m\n  timescale 1 xs / 1 ps\nend\n",
