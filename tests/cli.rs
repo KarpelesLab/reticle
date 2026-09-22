@@ -488,6 +488,65 @@ fn sim_writes_an_fst_waveform() {
 }
 
 #[test]
+fn sim_checks_assertions() {
+    // A property the counter satisfies.
+    let (code, _, stderr) = run(&[
+        "sim",
+        "--quiet",
+        "--assert",
+        "assert property (@(posedge clk) rst |=> q == 0);",
+        "testdata/sim/counter.rtl",
+    ]);
+    assert_eq!(code, 0, "{stderr}");
+    assert!(stderr.contains("held over"), "{stderr}");
+
+    // One it does not: the counter passes 8, and a failing assertion
+    // must make the run fail so it can gate a build.
+    let (code, _, stderr) = run(&[
+        "sim",
+        "--quiet",
+        "--assert",
+        "assert property (@(posedge clk) q < 8);",
+        "testdata/sim/counter.rtl",
+    ]);
+    assert_eq!(code, 1, "{stderr}");
+    assert!(stderr.contains("FAILED"), "{stderr}");
+    // The report says what the values were, not just that it broke.
+    assert!(stderr.contains("sampled values"), "{stderr}");
+}
+
+#[test]
+fn sim_writes_coverage() {
+    let dir = scratch("sim_coverage");
+
+    let text = dir.join("cov.txt");
+    let (code, _, stderr) = run(&[
+        "sim",
+        "--quiet",
+        "--coverage",
+        text.to_str().unwrap(),
+        "testdata/sim/counter.rtl",
+    ]);
+    assert_eq!(code, 0, "{stderr}");
+    let report = std::fs::read_to_string(&text).unwrap();
+    assert!(report.contains("line coverage"), "{report}");
+
+    // A `.info` name selects LCOV, so existing viewers can read it.
+    let lcov = dir.join("cov.info");
+    let (code, _, stderr) = run(&[
+        "sim",
+        "--quiet",
+        "--coverage",
+        lcov.to_str().unwrap(),
+        "testdata/sim/counter.rtl",
+    ]);
+    assert_eq!(code, 0, "{stderr}");
+    let report = std::fs::read_to_string(&lcov).unwrap();
+    assert!(report.starts_with("TN:"), "{report}");
+    assert!(report.contains("SF:"), "{report}");
+}
+
+#[test]
 fn sim_honours_the_time_limit() {
     let (code, stdout, stderr) = run(&["sim", "--until", "50", "testdata/sim/counter.rtl"]);
     assert_eq!(code, 0, "{stderr}");

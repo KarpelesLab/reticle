@@ -38,7 +38,7 @@ Early, but the middle of the pipeline runs end to end. What works today:
 | Verilog / SystemVerilog | preprocessor, lexer, parser, 28-rule linter, elaboration and lowering to the IR |
 | VHDL-2008 | lexer, parser, semantic analysis, elaboration and lowering to the IR, with std, std_logic_1164, numeric_std, numeric_bit, math_real and the Synopsys packages bundled |
 | Unified IR | design model, validator, round-tripping `.rtl` text format |
-| Simulation | event-driven 4-state simulator, VCD and FST waveforms, Rust co-simulation API |
+| Simulation | event-driven 4-state simulator, VCD and FST waveforms, concurrent assertions over an SVA and PSL subset, line and toggle coverage, an interactive session, Rust co-simulation API |
 | Synthesis | process lowering, flip-flop / latch / memory / FSM inference, optimisation passes, AIG optimiser, LUT and standard-cell mapping, post-synthesis equivalence checking |
 | Emission | Verilog, VHDL, Yosys JSON, BLIF, EDIF |
 | Formal | CDCL SAT solver, bit-blaster, bounded model checking, k-induction, equivalence checking |
@@ -57,7 +57,7 @@ reticle check   counter.v counter.vhd design.rtl
 reticle fmt     --write counter.v
 reticle synth   --report --lut 4 --output netlist.rtl counter.vhd
 reticle emit    --format verilog netlist.rtl
-reticle sim     --vcd waves.vcd --fst waves.fst testbench.v counter.v
+reticle sim     --vcd waves.vcd --coverage cov.info testbench.v counter.v
 reticle verify  --depth 20 --trace cex.vcd design.rtl
 reticle fpga    --device ice40-hx1k-tq144 --constraints pins.rcf blinky.v
 reticle timing  --constraints clocks.rcf design.v

@@ -147,6 +147,10 @@ Options:
   --seed <n>       Seed for $random (default 1)
   --vcd <file>     Write a VCD waveform here
   --fst <file>     Write a GTKWave FST waveform here
+  --assert <expr>  Add a concurrent assertion; repeatable via a file with
+                   --assert-file
+  --assert-file <f>  Read one assertion per non-empty, non-# line
+  --coverage <file>  Write a coverage report here (.info writes LCOV)
   --quiet          Suppress the summary line
 ";
 
@@ -310,7 +314,16 @@ fn spec_for(usage: &str) -> Spec {
         }
     } else if std::ptr::eq(usage, SIM_USAGE) {
         Spec {
-            options: &["top", "until", "seed", "vcd", "fst"],
+            options: &[
+                "top",
+                "until",
+                "seed",
+                "vcd",
+                "fst",
+                "assert",
+                "assert-file",
+                "coverage",
+            ],
             flags: &["quiet"],
         }
     } else {
@@ -1098,13 +1111,14 @@ fn sim(args: &Args) -> Result<Outcome, ArgError> {
 
     let until = args.u64_option("until")?;
     let seed = args.u64_option("seed")?;
-    let (design, map) = match load_design(args)? {
+    let (design, mut map) = match load_design(args)? {
         Ok(pair) => pair,
         Err(outcome) => return Ok(outcome),
     };
 
     let mut options = SimOptions {
         top: args.option("top").map(str::to_string),
+        coverage: args.option("coverage").is_some(),
         ..SimOptions::default()
     };
     if let Some(seed) = seed {
@@ -1118,6 +1132,51 @@ fn sim(args: &Args) -> Result<Outcome, ArgError> {
             return Ok(Outcome::Failed);
         }
     };
+    // Assertions are added before the run so they see every clock edge.
+    let mut assertions: Vec<String> = Vec::new();
+    if let Some(text) = args.option("assert") {
+        assertions.push(text.to_string());
+    }
+    if let Some(path) = args.option("assert-file") {
+        match std::fs::read_to_string(path) {
+            Ok(text) => assertions.extend(
+                text.lines()
+                    .map(str::trim)
+                    .filter(|line| !line.is_empty() && !line.starts_with('#'))
+                    .map(str::to_string),
+            ),
+            Err(err) => {
+                eprintln!("error: cannot read `{path}`: {err}");
+                return Ok(Outcome::Failed);
+            }
+        }
+    }
+    if !assertions.is_empty() {
+        // The text came from the command line, not a file in the map, so
+        // give it a span into a synthetic source so errors still render.
+        let mut added = Diagnostics::new();
+        let joined = assertions.join("\n");
+        let id = match map.add("<--assert>".to_string(), joined.clone()) {
+            Ok(id) => id,
+            Err(err) => {
+                eprintln!("error: cannot hold the assertion text: {err}");
+                return Ok(Outcome::Failed);
+            }
+        };
+        let mut at = 0u32;
+        for text in &assertions {
+            let len = u32::try_from(text.len()).unwrap_or(0);
+            let span = reticle::source::Span::new(id, at, at + len);
+            at += len + 1;
+            if let Err(diag) = sim.add_assertion_text(text, span) {
+                added.push(diag);
+            }
+        }
+        if report(&mut added, &map) {
+            return Ok(Outcome::Failed);
+        }
+    }
+
     let dump = args.option("vcd");
     if dump.is_some() {
         sim.enable_vcd();
@@ -1133,7 +1192,43 @@ fn sim(args: &Args) -> Result<Outcome, ArgError> {
 
     print!("{}", sim.output());
     let mut messages = sim.take_messages();
-    let failed = report(&mut messages, &map);
+    let mut failed = report(&mut messages, &map);
+
+    if sim.assertion_count() > 0 {
+        let mut broken = 0usize;
+        for result in sim.assertion_results() {
+            let verdict = if result.kind == reticle::sim::assertion::property::DirectiveKind::Cover
+            {
+                format!("{} match(es)", result.passes)
+            } else if result.failures > 0 {
+                broken += 1;
+                format!("FAILED {} time(s)", result.failures)
+            } else {
+                format!("held over {} attempt(s)", result.attempts)
+            };
+            eprintln!("  {}: {verdict}", result.name);
+        }
+        if broken > 0 {
+            failed = true;
+        }
+    }
+
+    if let Some(path) = args.option("coverage") {
+        match sim.coverage() {
+            Some(report_) => {
+                let text = if path.ends_with(".info") {
+                    report_.to_lcov(&map)
+                } else {
+                    report_.render(&map)
+                };
+                if let Err(message) = write_out(Some(path), &text) {
+                    eprintln!("error: {message}");
+                    return Ok(Outcome::Failed);
+                }
+            }
+            None => eprintln!("warning: the run collected no coverage"),
+        }
+    }
 
     if let Some(path) = dump {
         let mut text = String::new();
