@@ -62,6 +62,14 @@
 //! crossing domains, clock gating, latch-based synchronisers, and
 //! multi-cycle protocols where the destination is qualified by an enable
 //! that the analysis cannot see is safe.
+//!
+//! Storage has to be in the IR's own primitives. A netlist already
+//! mapped to library or vendor cells keeps its flip-flops in
+//! [`crate::ir::CellKind::Blackbox`] cells, whose insides nothing here
+//! knows, so run the crossing analysis before technology mapping — which
+//! is where it belongs anyway, since a crossing is a property of the
+//! design, not of the cells it ends up in. The report says so when it
+//! finds a module in that state.
 
 use std::fmt::Write as _;
 
@@ -889,7 +897,22 @@ impl<'a> Cdc<'a> {
         });
         let mut domains = self.domains;
         domains.sort_by(|a, b| a.name.cmp(&b.name));
-        if domains.len() < 2 && crossings.is_empty() {
+        if self.flops.is_empty() {
+            let boxes = self
+                .module
+                .cells
+                .values()
+                .filter(|c| matches!(c.kind, CellKind::Blackbox(_)))
+                .count();
+            if boxes > 0 {
+                self.notes.push(format!(
+                    "the module has no sequential primitives and {boxes} black-box cell(s); \
+                     storage inside a black box is not recognised, so run the crossing analysis \
+                     before technology mapping"
+                ));
+            }
+        }
+        if domains.len() < 2 && crossings.is_empty() && self.notes.is_empty() {
             self.notes
                 .push("the design has one clock domain; nothing crosses".to_owned());
         }

@@ -211,7 +211,11 @@ A timing report that hides its assumptions is worse than none.
   rather than evaluated: safe for setup, possibly optimistic for hold.
 - On the CDC side: **asynchronous resets crossing domains**, clock
   gating, latch-based synchronisers, and protocols where the destination
-  is qualified by an enable the analysis cannot see is safe.
+  is qualified by an enable the analysis cannot see is safe. Storage also
+  has to be in the IR's own primitives: a netlist already mapped to
+  library cells keeps its flip-flops in black boxes, so run the crossing
+  analysis before technology mapping. The report says so when it meets a
+  module in that state.
 
 ## Test data
 
