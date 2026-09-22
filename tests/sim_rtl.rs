@@ -7,6 +7,7 @@
 //! no-validate                  skip ir::validate (designs with deliberate multiple drivers)
 //! file <name>                  provide a file for $readmem*; contents until `end-file`
 //! vcd                          enable VCD capture before running
+//! coverage                     collect line and toggle coverage
 //! run <n><unit>                run for a delay (ns, ps, us, ...) or ticks when no unit
 //! run                          run until $finish or no events
 //! step                         one time slot
@@ -23,6 +24,8 @@
 //! assert <directive>           add a concurrent assertion (SVA / PSL text)
 //! expect-assert <name> k=v ... counts of one directive: attempts, passes,
 //!                              vacuous, failures, disabled, incomplete, cycles
+//! expect-coverage              the rendered coverage report, until `end-coverage`
+//! expect-lcov                  the LCOV `.info` output, until `end-lcov`
 //! ```
 //!
 //! Expectations are hand-written: there is no update mode. Any error
@@ -88,6 +91,7 @@ fn first_difference(expected: &str, actual: &str) -> String {
 struct Script {
     validate: bool,
     vcd: bool,
+    coverage: bool,
     files: MemoryFiles,
     commands: Vec<(usize, String, Vec<String>)>,
 }
@@ -97,6 +101,7 @@ fn parse_script(text: &str) -> Script {
     let mut script = Script {
         validate: true,
         vcd: false,
+        coverage: false,
         files: MemoryFiles::new(),
         commands: Vec::new(),
     };
@@ -114,6 +119,8 @@ fn parse_script(text: &str) -> Script {
         let terminator = match cmd {
             "file" => Some("end-file"),
             "expect-output" => Some("end-output"),
+            "expect-coverage" => Some("end-coverage"),
+            "expect-lcov" => Some("end-lcov"),
             _ => None,
         };
         if let Some(end) = terminator {
@@ -130,6 +137,7 @@ fn parse_script(text: &str) -> Script {
         match cmd {
             "no-validate" => script.validate = false,
             "vcd" => script.vcd = true,
+            "coverage" => script.coverage = true,
             "file" => {
                 let mut content = block.join("\n");
                 content.push('\n');
@@ -160,6 +168,7 @@ fn run_case(path: &Path) -> Result<(), String> {
     }
     let options = SimOptions {
         files: Some(Box::new(script.files)),
+        coverage: script.coverage,
         ..SimOptions::default()
     };
     let mut sim = Simulator::new(&design, options).map_err(|d| d.render(&map))?;
@@ -293,6 +302,27 @@ fn run_case(path: &Path) -> Result<(), String> {
                     if got != want {
                         failures.push(fail(format!("{name}.{key} is {got}, expected {want}")));
                     }
+                }
+            }
+            "expect-coverage" | "expect-lcov" => {
+                let Some(report) = sim.coverage() else {
+                    failures.push(fail("coverage was not collected".into()));
+                    continue;
+                };
+                let got = if cmd == "expect-lcov" {
+                    report.to_lcov(&map)
+                } else {
+                    report.render(&map)
+                };
+                let mut want = block.join("\n");
+                if !block.is_empty() {
+                    want.push('\n');
+                }
+                if got != want {
+                    failures.push(fail(format!(
+                        "{cmd} differs\n{}\n--- actual ---\n{got}",
+                        first_difference(&want, &got)
+                    )));
                 }
             }
             "expect-vcd" => {

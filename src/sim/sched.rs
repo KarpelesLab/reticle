@@ -245,6 +245,9 @@ impl<'d> Simulator<'d> {
 
     /// Notifies everything that depends on `sig` of a change.
     pub(crate) fn propagate(&mut self, sig: SigId, old: &Logic, new: &Logic) {
+        if self.coverage.is_some() {
+            self.cover_toggle(sig, old, new);
+        }
         if !self.assert_clocks.is_empty() {
             self.note_assertion_edge(sig, old, new);
         }

@@ -18,8 +18,9 @@
 //! `z` yields to the other driver, agreeing values win, and `0` against
 //! `1` (or any `x`) gives `x`.
 
-use crate::ir::{NetKind, Type};
+use crate::ir::{Name, NetKind, Type};
 use crate::logic::{Bit, Logic};
+use crate::source::Span;
 
 use super::elab::{MemId, SigId};
 
@@ -315,6 +316,10 @@ pub(crate) struct Signal {
     pub(crate) name: String,
     /// The declared type of that net.
     pub(crate) ty: Type,
+    /// The module that declares it, for coverage reports.
+    pub(crate) module: Name,
+    /// Where it is declared, for coverage reports.
+    pub(crate) span: Span,
     /// Wire or register semantics for driver resolution and `release`.
     pub(crate) kind: NetKind,
     /// The current resolved value (what drivers and processes produced).
@@ -411,9 +416,13 @@ mod tests {
 
     #[test]
     fn signal_effective_value() {
+        let mut map = crate::source::SourceMap::new();
+        let file = map.add("value", "").unwrap();
         let mut s = Signal {
             name: "a".into(),
             ty: Type::bits(4),
+            module: Name::new("m"),
+            span: Span::new(file, 0, 0),
             kind: NetKind::Wire,
             value: l("4'd3"),
             forced: None,

@@ -330,6 +330,7 @@ impl<'d> Simulator<'d> {
             assert_watch: Vec::new(),
             assert_sample: Vec::new(),
             assert_clocks: Vec::new(),
+            coverage: None,
         };
         let top_name = design.modules[top].name.to_string();
         let mut chain = Vec::new();
@@ -341,6 +342,9 @@ impl<'d> Simulator<'d> {
             return Err(diags);
         }
         sim.messages = diags;
+        if sim.options.coverage {
+            sim.init_coverage();
+        }
         sim.schedule_time_zero();
         Ok(sim)
     }
@@ -376,7 +380,10 @@ impl<'d> Simulator<'d> {
         for (nid, net) in m.nets.iter() {
             let sig = match aliases.get(nid.index()).copied().flatten() {
                 Some(sig) => sig,
-                None => self.new_signal(format!("{path}.{}", net.name), &net.ty, net.kind),
+                None => {
+                    let full = format!("{path}.{}", net.name);
+                    self.new_signal(full, &net.ty, net.kind, m.name.clone(), net.span)
+                }
             };
             nets.push(sig);
         }
@@ -543,7 +550,14 @@ impl<'d> Simulator<'d> {
 
     /// Allocates a signal. Wires start at `z` (undriven), registers and
     /// variables at `x`.
-    fn new_signal(&mut self, name: String, ty: &Type, kind: NetKind) -> SigId {
+    fn new_signal(
+        &mut self,
+        name: String,
+        ty: &Type,
+        kind: NetKind,
+        module: crate::ir::Name,
+        span: crate::source::Span,
+    ) -> SigId {
         let width = flat_width(ty);
         let value = match kind {
             NetKind::Wire => Logic::z(width),
@@ -553,6 +567,8 @@ impl<'d> Simulator<'d> {
         self.signals.push(Signal {
             name,
             ty: ty.clone(),
+            module,
+            span,
             kind,
             value: value.with_signed(ty.is_signed()),
             forced: None,

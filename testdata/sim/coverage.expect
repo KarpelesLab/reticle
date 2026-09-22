@@ -1,0 +1,56 @@
+# `%idle` never becomes 1, so the `%q = 2'd3` statement never runs and the
+# `idle` net never toggles either way.
+coverage
+run
+expect-finished
+expect-coverage
+coverage
+========
+
+line coverage: 9/10 statements (90.0%)
+
+  files
+    coverage.rtl      9/10     90.0%
+
+  modules
+    cov_tb      9/10     90.0%
+
+  uncovered lines
+    coverage.rtl:21 (cov_tb)
+
+toggle coverage: 2/4 bits (50.0%)
+
+  modules
+    cov_tb      2/4      50.0%
+
+  untoggled bits
+    cov_tb.idle[0]  never toggled
+    cov_tb.q[1]  never fell
+end-coverage
+expect-lcov
+TN:
+SF:coverage.rtl
+BRDA:8,0,0,1
+BRDA:8,0,1,1
+BRDA:9,0,0,1
+BRDA:9,0,1,1
+BRDA:9,0,2,1
+BRDA:9,0,3,0
+BRDA:10,0,0,0
+BRDA:10,0,1,0
+BRF:8
+BRH:5
+DA:12,6
+DA:13,5
+DA:16,1
+DA:17,1
+DA:18,1
+DA:19,1
+DA:20,1
+DA:21,0
+DA:23,1
+DA:26,3
+LF:10
+LH:9
+end_of_record
+end-lcov

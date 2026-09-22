@@ -22,6 +22,7 @@
 //! | `vcd.rs`      | VCD waveform writer                                          |
 //! | `api.rs`      | The public co-simulation API                                 |
 //! | `assertion/`  | Concurrent assertions: an SVA / PSL subset as automata       |
+//! | `coverage.rs` | Line and toggle coverage, rendered as text or LCOV           |
 //!
 //! # Elaboration
 //!
@@ -105,6 +106,15 @@
 //! [`Simulator::add_assertion_text`] add one; [`Simulator::assertion_results`]
 //! reports what happened.
 //!
+//! # Coverage
+//!
+//! With [`SimOptions::coverage`] on, the run records how often each
+//! statement executed and, per net bit, whether it was seen going `0` to
+//! `1` and `1` to `0`. [`Simulator::coverage`] returns a
+//! [`CoverageReport`], which renders as text or as LCOV `.info`. With the
+//! flag off nothing is allocated and nothing is recorded; see
+//! [`coverage`].
+//!
 //! # Not yet here
 //!
 //! The cycle-based fast mode and inertial delay on continuous assignments
@@ -118,6 +128,7 @@ use crate::logic::Logic;
 
 mod api;
 pub mod assertion;
+pub mod coverage;
 mod elab;
 mod eval;
 pub mod fst;
@@ -129,6 +140,7 @@ mod vcd;
 
 pub use api::{MemHandle, NetHandle};
 pub use assertion::{AssertionId, AssertionResult};
+pub use coverage::{CoverageReport, LineRecord, ToggleRecord};
 pub use sys::{FileProvider, MemoryFiles};
 pub use value::Value;
 
@@ -165,6 +177,11 @@ pub struct SimOptions {
     /// Files for `$readmemh` / `$readmemb`; `None` makes every read fail
     /// with a diagnostic.
     pub files: Option<Box<dyn FileProvider>>,
+    /// Collect line and toggle coverage ([`Simulator::coverage`]).
+    ///
+    /// Off by default: an uninstrumented run allocates no tables and does
+    /// no accounting.
+    pub coverage: bool,
 }
 
 impl Default for SimOptions {
@@ -175,6 +192,7 @@ impl Default for SimOptions {
             max_process_steps: 10_000_000,
             max_slot_events: 1_000_000,
             files: None,
+            coverage: false,
         }
     }
 }
@@ -187,6 +205,7 @@ impl std::fmt::Debug for SimOptions {
             .field("max_process_steps", &self.max_process_steps)
             .field("max_slot_events", &self.max_slot_events)
             .field("files", &self.files.is_some())
+            .field("coverage", &self.coverage)
             .finish()
     }
 }
@@ -233,6 +252,7 @@ pub struct Simulator<'d> {
     assert_sample: Vec<Logic>,
     /// Clock signals of the assertions, sorted.
     assert_clocks: Vec<elab::SigId>,
+    coverage: Option<Box<coverage::Coverage>>,
 }
 
 impl std::fmt::Debug for Simulator<'_> {

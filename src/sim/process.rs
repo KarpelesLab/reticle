@@ -237,6 +237,9 @@ impl<'d> Simulator<'d> {
                 frame.pc += 1;
                 stmt
             };
+            if self.coverage.is_some() {
+                self.cover_stmt(stmt.span);
+            }
             match self.exec(pid, inst, stmt) {
                 Flow::Next => {}
                 Flow::Push(frame) => {

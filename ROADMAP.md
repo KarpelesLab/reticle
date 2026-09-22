@@ -214,7 +214,7 @@ user-facing simulator and as the reference model for every synthesis pass
       (Verilator's niche), selectable per run.
 - [x] Assertions: immediate assertions, a useful subset of SVA / PSL
       (sequences, `|->`, `|=>`, `##n`) checked during simulation.
-- [ ] Coverage: line and toggle coverage reports.
+- [x] Coverage: line and toggle coverage reports.
 
 Done when: the standard testbenches of the phase 1 and 2 corpora run to
 completion with matching output, and a Rust-driven testbench of a UART

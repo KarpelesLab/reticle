@@ -1,0 +1,28 @@
+// A design with a statement that never runs and a net that never
+// toggles, so the coverage report in the `.expect` script has something
+// to leave uncovered.
+top cov_tb
+
+module cov_tb
+  timescale 1 ns / 1 ps
+  net %clk u1 reg
+  net %q u2 reg
+  net %idle u1 reg
+  process clkgen free
+    wait for 8'd5
+    %clk = not(%clk)
+  end
+  process stim initial
+    %clk = 1'd0
+    %q = 2'd0
+    %idle = 1'd0
+    wait for 8'd28
+    if %idle
+      %q = 2'd3
+    end
+    finish
+  end
+  process count seq posedge %clk
+    %q <= add(%q, 2'd1)
+  end
+end
