@@ -1,12 +1,14 @@
-//! Static timing analysis.
+//! Static timing analysis and clock domain crossing analysis.
 //!
-//! Three pieces, over a module in cell form:
+//! Two analyses over a module in cell form, sharing one view of what a
+//! netlist's clocks and flip-flops are:
 //!
 //! | Module    | What it does                                               |
 //! |-----------|------------------------------------------------------------|
 //! | [`graph`] | Builds the timing graph: pins as nodes, delay arcs as edges |
 //! | [`delay`] | Delay models: unit, Liberty (`asic`), FPGA primitives       |
 //! | [`sta`]   | Arrival and required times, slack, path reports             |
+//! | [`cdc`]   | Clock domain crossings and how they are (or are not) synchronised |
 //!
 //! ```no_run
 //! # #[cfg(feature = "timing")] {
@@ -75,11 +77,18 @@
 //!   flip-flop is not recognised; constrain it with its own
 //!   `create_clock` or it becomes a domain named after its net.
 //! - **Signal integrity, IR drop and temperature inversion.**
+//!
+//! The crossing analysis in [`cdc`] is explicit about a second kind of
+//! limit: which of its classifications are structural facts and which are
+//! guesses it reports as unverified. Its module documentation has the
+//! list.
 
+pub mod cdc;
 pub mod delay;
 pub mod graph;
 pub mod sta;
 
+pub use cdc::{CdcReport, Crossing, CrossingKind, Domain, Reconvergence, analyze_cdc_with};
 pub use delay::{DelayModel, Edge, FpgaModel, PrimitiveTiming, Sense, Transition, UnitModel};
 pub use graph::{Arc, ArcKind, Pin, PinId, TimingGraph, flatten_for_timing};
 pub use sta::{
@@ -90,5 +99,7 @@ pub use sta::{
 #[cfg(feature = "asic")]
 pub use delay::LibertyModel;
 
+#[cfg(feature = "fpga")]
+pub use cdc::analyze_cdc;
 #[cfg(feature = "fpga")]
 pub use sta::analyze;

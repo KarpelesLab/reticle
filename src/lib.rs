@@ -30,7 +30,7 @@
 //! | [`formal`]  | `formal`  | SAT solver, CNF encoding, model checking        |
 //! | [`asic`]    | `asic`    | Liberty, LEF and DEF readers and writers        |
 //! | [`fpga`]    | `fpga`    | FPGA device database, primitive mapping, constraints |
-//! | [`timing`]  | `timing`  | Static timing analysis                          |
+//! | [`timing`]  | `timing`  | Static timing analysis and clock domain crossings |
 
 #![forbid(unsafe_code)]
 
