@@ -251,6 +251,9 @@ impl<'d> Simulator<'d> {
         if !self.assert_clocks.is_empty() {
             self.note_assertion_edge(sig, old, new);
         }
+        if !self.breaks.is_empty() {
+            self.check_breakpoints(sig, new);
+        }
         if let Some(vcd) = &mut self.vcd {
             vcd.change(
                 self.now,
@@ -286,6 +289,22 @@ impl<'d> Simulator<'d> {
             }
         }
         self.sig_waiters[sig.idx()].extend(keep);
+    }
+
+    /// Records the breakpoints a change on `sig` fires.
+    fn check_breakpoints(&mut self, sig: SigId, new: &Logic) {
+        for b in &self.breaks {
+            if b.sig != sig {
+                continue;
+            }
+            let hit = match &b.value {
+                Some(want) => want.clone().as_unsigned() == new.clone().as_unsigned(),
+                None => true,
+            };
+            if hit && !self.break_hits.contains(&b.id) {
+                self.break_hits.push(b.id);
+            }
+        }
     }
 
     /// Writes one memory element and schedules the memory's readers.

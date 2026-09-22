@@ -67,6 +67,31 @@ pub struct NetHandle(pub(crate) SigId);
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct MemHandle(pub(crate) MemId);
 
+/// A breakpoint added with [`Simulator::add_breakpoint`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct BreakId(u32);
+
+impl BreakId {
+    /// The number the breakpoint was given, counted from zero and never
+    /// reused.
+    pub fn number(self) -> u32 {
+        self.0
+    }
+
+    /// The breakpoint with a given number, for a driver that parses one
+    /// out of a command.
+    pub fn from_number(number: u32) -> BreakId {
+        BreakId(number)
+    }
+}
+
+/// One breakpoint: a net, and optionally the value it must take.
+pub(crate) struct Breakpoint {
+    pub(crate) id: u32,
+    pub(crate) sig: SigId,
+    pub(crate) value: Option<Logic>,
+}
+
 impl<'d> Simulator<'d> {
     /// Elaborates `design` for simulation.
     ///
@@ -166,6 +191,33 @@ impl<'d> Simulator<'d> {
         out
     }
 
+    /// Every memory with its hierarchical name, in hierarchy order.
+    pub fn memories(&self) -> Vec<(String, MemHandle)> {
+        let mut out = Vec::new();
+        for state in &self.instances {
+            for (mid, mem) in state.m.memories.iter() {
+                out.push((
+                    format!("{}.{}", state.path, mem.name),
+                    MemHandle(state.mems[mid.index()]),
+                ));
+            }
+        }
+        out
+    }
+
+    /// The hierarchical path of every instance, top first.
+    pub fn instance_paths(&self) -> Vec<String> {
+        self.instances.iter().map(|i| i.path.clone()).collect()
+    }
+
+    /// The module name of the instance at `path`, or `None` when there is
+    /// no such instance.
+    pub fn instance_module(&self, path: &str) -> Option<&str> {
+        let parts: Vec<&str> = path.split('.').collect();
+        let inst = self.find_instance(&parts)?;
+        Some(self.instances[inst.idx()].m.name.as_str())
+    }
+
     /// The hierarchical name of the net a handle was created from (the
     /// first net mapped to the signal).
     pub fn net_name(&self, net: NetHandle) -> &str {
@@ -262,7 +314,7 @@ impl<'d> Simulator<'d> {
                 return;
             }
             self.run_slot();
-            if self.status != Status::Running {
+            if self.status != Status::Running || !self.break_hits.is_empty() {
                 return;
             }
             match self.next_time() {
@@ -308,9 +360,9 @@ impl<'d> Simulator<'d> {
         }
     }
 
-    /// Runs until `$finish`, `$stop` or no event is left.
+    /// Runs until `$finish`, `$stop`, a breakpoint or no event is left.
     pub fn run(&mut self) {
-        while self.step() && self.status == Status::Running {}
+        while self.break_hits.is_empty() && self.step() && self.status == Status::Running {}
     }
 
     /// The text produced by `$display` and friends so far.
@@ -334,6 +386,62 @@ impl<'d> Simulator<'d> {
         std::mem::take(&mut self.messages)
     }
 
+    /// Stops a run when `net` changes, optionally only when it changes to
+    /// `value`.
+    ///
+    /// The check runs where a change is propagated, and the run stops at
+    /// the end of that time slot, so the design has settled when control
+    /// comes back. [`Simulator::take_breakpoint_hits`] says which
+    /// breakpoints fired.
+    pub fn add_breakpoint(&mut self, net: NetHandle, value: Option<Logic>) -> BreakId {
+        let id = self.next_break;
+        self.next_break = self.next_break.saturating_add(1);
+        self.breaks.push(super::api::Breakpoint {
+            id,
+            sig: net.0,
+            value,
+        });
+        BreakId(id)
+    }
+
+    /// Removes one breakpoint; false when there is none with that id.
+    pub fn remove_breakpoint(&mut self, id: BreakId) -> bool {
+        let before = self.breaks.len();
+        self.breaks.retain(|b| b.id != id.0);
+        self.break_hits.retain(|h| *h != id.0);
+        self.breaks.len() != before
+    }
+
+    /// Removes every breakpoint, returning how many there were.
+    pub fn clear_breakpoints(&mut self) -> usize {
+        let n = self.breaks.len();
+        self.breaks.clear();
+        self.break_hits.clear();
+        n
+    }
+
+    /// The net and value of one breakpoint.
+    pub fn breakpoint(&self, id: BreakId) -> Option<(NetHandle, Option<Logic>)> {
+        let b = self.breaks.iter().find(|b| b.id == id.0)?;
+        Some((NetHandle(b.sig), b.value.clone()))
+    }
+
+    /// Every breakpoint, in the order they were added.
+    pub fn breakpoints(&self) -> Vec<(BreakId, NetHandle, Option<Logic>)> {
+        self.breaks
+            .iter()
+            .map(|b| (BreakId(b.id), NetHandle(b.sig), b.value.clone()))
+            .collect()
+    }
+
+    /// The breakpoints that fired since the last call, clearing the list.
+    pub fn take_breakpoint_hits(&mut self) -> Vec<BreakId> {
+        std::mem::take(&mut self.break_hits)
+            .into_iter()
+            .map(BreakId)
+            .collect()
+    }
+
     /// Starts VCD capture: the header and a snapshot of every net are
     /// written now, and every later change is recorded. Calling it again
     /// restarts the capture.
@@ -344,6 +452,11 @@ impl<'d> Simulator<'d> {
     /// The VCD text captured so far, if capture is enabled.
     pub fn vcd(&self) -> Option<&str> {
         self.vcd.as_ref().map(|v| v.text())
+    }
+
+    /// Stops VCD capture, returning the text captured so far.
+    pub fn disable_vcd(&mut self) -> Option<String> {
+        self.vcd.take().map(|v| v.text().to_owned())
     }
 
     /// Writes the captured VCD text to `out`; a no-op when capture is off.

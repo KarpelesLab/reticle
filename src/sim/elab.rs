@@ -331,6 +331,9 @@ impl<'d> Simulator<'d> {
             assert_sample: Vec::new(),
             assert_clocks: Vec::new(),
             coverage: None,
+            breaks: Vec::new(),
+            break_hits: Vec::new(),
+            next_break: 0,
         };
         let top_name = design.modules[top].name.to_string();
         let mut chain = Vec::new();

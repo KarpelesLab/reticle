@@ -23,6 +23,7 @@
 //! | `api.rs`      | The public co-simulation API                                 |
 //! | `assertion/`  | Concurrent assertions: an SVA / PSL subset as automata       |
 //! | `coverage.rs` | Line and toggle coverage, rendered as text or LCOV           |
+//! | `interactive.rs` | The sans-I/O command session behind interactive mode      |
 //!
 //! # Elaboration
 //!
@@ -115,6 +116,15 @@
 //! flag off nothing is allocated and nothing is recorded; see
 //! [`coverage`].
 //!
+//! # Interactive mode
+//!
+//! [`interactive::Session`] is a command interpreter over a [`Simulator`]:
+//! `run`, `step`, `break`, `force`, `print`, `watch`, `dump` and the rest,
+//! taking a command line and returning the text to show, so the same
+//! session drives a terminal or a test. Breakpoints are part of the
+//! simulator itself ([`Simulator::add_breakpoint`]) and stop a run at the
+//! end of the time slot the change happened in.
+//!
 //! # Not yet here
 //!
 //! The cycle-based fast mode and inertial delay on continuous assignments
@@ -132,15 +142,17 @@ pub mod coverage;
 mod elab;
 mod eval;
 pub mod fst;
+pub mod interactive;
 mod process;
 mod sched;
 mod sys;
 mod value;
 mod vcd;
 
-pub use api::{MemHandle, NetHandle};
+pub use api::{BreakId, MemHandle, NetHandle};
 pub use assertion::{AssertionId, AssertionResult};
 pub use coverage::{CoverageReport, LineRecord, ToggleRecord};
+pub use interactive::{Response, Session, SessionError};
 pub use sys::{FileProvider, MemoryFiles};
 pub use value::Value;
 
@@ -253,6 +265,9 @@ pub struct Simulator<'d> {
     /// Clock signals of the assertions, sorted.
     assert_clocks: Vec<elab::SigId>,
     coverage: Option<Box<coverage::Coverage>>,
+    breaks: Vec<api::Breakpoint>,
+    break_hits: Vec<u32>,
+    next_break: u32,
 }
 
 impl std::fmt::Debug for Simulator<'_> {

@@ -205,7 +205,7 @@ user-facing simulator and as the reference model for every synthesis pass
       `wait for`), `wait until`, `$time`, `$finish`, `$display` / `report`
       family with correct formatting.
 - [x] Waveform output: VCD, then FST (compressed, GTKWave native).
-- [ ] Interactive mode: run to time, step, force / release, dump.
+- [x] Interactive mode: run to time, step, force / release, dump.
 - [x] Rust co-simulation API: drive inputs, read outputs, await edges, from
       a Rust test (`#[test]` that instantiates a DUT), in the spirit of
       cocotb but with types. This is how the in-crate IP library is tested.

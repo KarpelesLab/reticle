@@ -1,0 +1,48 @@
+# Driving the counter of `counter.rtl` from the command session: watch the
+# reset, stop the run when the count reaches three, poke the count and let
+# the design run to `$finish`.
+design counter.rtl
+
+> time
+time = 0
+> where
+counter_tb (module counter_tb) at time 0, running
+> scope
+scope = counter_tb
+> watch rst
+watching counter_tb.rst
+> break q 8'd3
+breakpoint 0 on counter_tb.q = 8'h03
+> run
+0: counter_tb.rst = 1'h1
+12000: counter_tb.rst = 1'h0
+breakpoint 0 on counter_tb.q = 8'h03
+stopped at time 35000
+> print q
+counter_tb.q = 8'h03
+> time
+time = 35000
+> delete
+deleted 1 breakpoints
+> force q 8'd200
+forced counter_tb.q = 8'hc8
+> print counter_tb.q
+counter_tb.q = 8'hc8
+> release q
+released counter_tb.q
+> dump on
+dump on
+> step
+stepped to time 40000
+> print nowhere
+! unknown net `nowhere`
+> frobnicate
+! unknown command `frobnicate`; `help` lists them
+> run
+finished at time 112000
+> dump off
+dump off
+> where
+counter_tb (module counter_tb) at time 112000, finished
+> quit
+quit
