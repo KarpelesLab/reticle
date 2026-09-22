@@ -436,16 +436,28 @@ and first-party IP should drop into a design as easily as a Rust crate.
 - [x] The Reticle IP library, each block with a Rust co-simulation test and
       a documented resource footprint per target: FIFOs (sync / async),
       CDC synchronisers (level and pulse), UART, SPI, I²C, PWM, timers, an
-      AXI4-Lite GPIO and block RAM wrappers. Eleven packages under `ip/`,
-      written in Verilog-2005, driven through `sim::Simulator` by
+      AXI4-Lite GPIO and block RAM wrappers. Fourteen packages under
+      `ip/`, written in Verilog-2005, driven through `sim::Simulator` by
       `tests/ip_library.rs`, and measured for LUT4, LUT6, iCE40 and ECP5 in
       a table that test generates. The AXI4-Lite crossbar and the Wishbone
       arbiter are the interconnect, under generators above. See
       `docs/ip-library.md`.
-- [ ] The larger library blocks: SDRAM / HyperRAM controllers, Ethernet MAC
-      (RMII / RGMII), USB device, HDMI/DVI output and a small RISC-V core.
-      Each of the first four needs device primitives the FPGA backend does
-      not configure yet (DDR registers, PLLs, IO delays).
+- [x] The larger library blocks, the three the FPGA backend can support:
+      `rv32i`, the whole RV32I base integer set in a multi-cycle
+      machine-mode core with traps, interrupts and the machine CSRs, tested
+      by assembling RISC-V machine code and running it — every instruction
+      class, an array summed in a loop and Fibonacci computed recursively
+      on a stack; `eth_mac_rmii`, an Ethernet MAC over RMII with the frame
+      check sequence computed and checked, tested by looping its
+      transmitter into its receiver and by rejecting a frame with a flipped
+      dibit; and `spiflash_xip`, a read-only execute-in-place path from a
+      serial flash, tested against a flash model on the four wires.
+- [ ] The library blocks that need device primitives first: SDRAM and
+      HyperRAM controllers, a USB device, HDMI/DVI output and RGMII. Each
+      needs something the FPGA backend does not configure yet — DDR
+      registers and IO delays for a memory controller's strobe, PLLs for a
+      pixel clock or a USB high-speed engine. RMII was reachable precisely
+      because it is single data rate.
 - [x] Registry: a static index (git repository of manifests) that
       `reticle add` searches, in the style of a crates.io index: one file
       per package under a name-derived path, one line per release with
