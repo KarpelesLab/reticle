@@ -39,11 +39,12 @@ Early, but the middle of the pipeline runs end to end. What works today:
 | VHDL-2008 | lexer, parser, semantic analysis with bundled std and ieee packages; elaboration in progress |
 | Unified IR | design model, validator, round-tripping `.rtl` text format |
 | Simulation | event-driven 4-state simulator, VCD and FST waveforms, Rust co-simulation API |
-| Synthesis | process lowering, flip-flop / latch / memory / FSM inference, optimisation passes |
+| Synthesis | process lowering, flip-flop / latch / memory / FSM inference, optimisation passes, AIG optimiser, LUT and standard-cell mapping |
 | Emission | Verilog, VHDL, Yosys JSON, BLIF, EDIF |
 | Formal | CDCL SAT solver, bit-blaster, bounded model checking, k-induction, equivalence checking |
 | ASIC | Liberty, LEF and DEF readers and writers |
 | Tooling | Verilog and VHDL formatters |
+| FPGA | device database (iCE40, ECP5, generic), primitive mapping, placement and IO constraints, nextpnr and vendor export |
 
 Verilog goes all the way through, from source to a synthesised netlist, a
 simulation or a proof. VHDL parses and checks; its path to the IR is next.
@@ -51,7 +52,7 @@ simulation or a proof. VHDL parses and checks; its path to the IR is next.
 ```sh
 reticle check   counter.v counter.vhd design.rtl
 reticle fmt     --write counter.v
-reticle synth   --report --output netlist.rtl counter.v
+reticle synth   --report --lut 4 --output netlist.rtl counter.v
 reticle emit    --format verilog netlist.rtl
 reticle sim     --vcd waves.vcd --fst waves.fst testbench.v counter.v
 reticle verify  --depth 20 --trace cex.vcd design.rtl

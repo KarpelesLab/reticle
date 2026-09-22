@@ -219,6 +219,38 @@ fn fmt_refuses_an_unparseable_file() {
 }
 
 #[test]
+fn synth_maps_to_luts_and_gates() {
+    let (code, stdout, stderr) = run(&[
+        "synth",
+        "--lut",
+        "4",
+        "--quiet",
+        "testdata/verilog/parse/counter.v",
+    ]);
+    assert_eq!(code, 0, "{stderr}");
+    assert!(stdout.contains("lut 4"), "{stdout}");
+
+    let (code, stdout, stderr) = run(&[
+        "synth",
+        "--gates",
+        "--quiet",
+        "testdata/verilog/parse/counter.v",
+    ]);
+    assert_eq!(code, 0, "{stderr}");
+    assert!(stdout.contains("blackbox"), "{stdout}");
+
+    // Option validation happens before any file is opened, so a bad flag is
+    // a usage error even when the design does not exist.
+    let (code, _, stderr) = run(&["synth", "--lut", "9", "nowhere.rtl"]);
+    assert_eq!(code, 2);
+    assert!(stderr.contains("out of range"), "{stderr}");
+
+    let (code, _, stderr) = run(&["synth", "--lut", "4", "--gates", "nowhere.rtl"]);
+    assert_eq!(code, 2);
+    assert!(stderr.contains("pick one"), "{stderr}");
+}
+
+#[test]
 fn synth_output_defaults_to_stdout() {
     let (code, stdout, stderr) = run(&["synth", "--quiet", "testdata/ir/counter.rtl"]);
     assert_eq!(code, 0, "{stderr}");

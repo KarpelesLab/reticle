@@ -80,6 +80,8 @@ Options:
   --top <module>      Treat this module as the top
   --fsm <encoding>    auto, binary, one-hot, gray or none
   --max-iterations <n>  Optimisation-loop cap (default 8)
+  --lut <k>           Also map the logic onto k-input lookup tables (2..8)
+  --gates             Also map the logic onto the generic gate library
   --report            Print the pass log and cell counts to stderr
   --quiet             Suppress the summary line
 ";
@@ -218,8 +220,8 @@ fn spec_for(usage: &str) -> Spec {
         }
     } else if std::ptr::eq(usage, SYNTH_USAGE) {
         Spec {
-            options: &["output", "top", "fsm", "max-iterations"],
-            flags: &["report", "quiet"],
+            options: &["output", "top", "fsm", "max-iterations", "lut"],
+            flags: &["report", "quiet", "gates"],
         }
     } else if std::ptr::eq(usage, EMIT_USAGE) {
         Spec {
@@ -620,6 +622,22 @@ impl reticle::verilog::IncludeResolver for IncludesFrom {
 fn synth(args: &Args) -> Result<Outcome, ArgError> {
     use reticle::synth::{FsmEncoding, SynthOptions};
 
+    // Validate the options before touching the filesystem, so a bad flag is
+    // reported as a usage error rather than masked by a missing file.
+    let lut = args.u32_option("lut")?;
+    if let Some(k) = lut
+        && !(2..=8).contains(&k)
+    {
+        return Ok(Outcome::Usage(format!(
+            "`--lut {k}` is out of range; k must be 2 to 8"
+        )));
+    }
+    if lut.is_some() && args.flag("gates") {
+        return Ok(Outcome::Usage(
+            "--lut and --gates are different targets; pick one".into(),
+        ));
+    }
+
     let (mut design, map) = match load_design(args)? {
         Ok(pair) => pair,
         Err(outcome) => return Ok(outcome),
@@ -654,6 +672,39 @@ fn synth(args: &Args) -> Result<Outcome, ArgError> {
     }
     if failed {
         return Ok(Outcome::Failed);
+    }
+
+    // Technology mapping is a separate step: generic synthesis first, so
+    // inference still sees arithmetic and memories, then the logic that is
+    // left over is covered by LUTs or gates.
+    if lut.is_some() || args.flag("gates") {
+        use reticle::synth::cells::GateLibrary;
+        use reticle::synth::techmap::{MapOptions, Target, map_module};
+
+        let library = GateLibrary::generic();
+        let target = match lut {
+            Some(k) => Target::Lut(k),
+            None => Target::Gates(&library),
+        };
+        let map_options = MapOptions {
+            target,
+            ..MapOptions::default()
+        };
+        let ids: Vec<_> = design.modules.iter().map(|(id, _)| id).collect();
+        for id in ids {
+            let stats = map_module(&mut design.modules[id], &map_options);
+            if args.flag("report") {
+                eprintln!(
+                    "map {}: {} cells, depth {}, area {:.0} (aig {} -> {} nodes)",
+                    design.modules[id].name,
+                    stats.cells,
+                    stats.depth,
+                    stats.area,
+                    stats.before.nodes,
+                    stats.after.nodes
+                );
+            }
+        }
     }
     if let Err(message) = write_out(args.option("output"), &design.to_text()) {
         eprintln!("error: {message}");
