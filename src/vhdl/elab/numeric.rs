@@ -42,6 +42,19 @@
 //! and are reported otherwise. The `to_string` family lowers to the same
 //! `$to_string`-style IR calls `ieee.std_logic_1164` uses, since the
 //! simulator implements those.
+//!
+//! Two smaller departures, both where the IR has no node for what the
+//! package says:
+//!
+//! - `?=` and `?/=` become the IR's case equality, which compares `x`
+//!   and `z` as themselves, where the package returns `'X'` whenever
+//!   either operand holds an unknown. The static folding in
+//!   [`crate::vhdl::sema::builtin`] does return `'X'`, and this matches
+//!   how `ieee.std_logic_1164`'s own matching operators already lower.
+//! - `sll`, `srl`, `sla` and `sra` reverse direction for a negative
+//!   count, which is honoured for a count known at elaboration but not
+//!   for one computed at run time; a negative count there shifts the
+//!   value away instead.
 
 use crate::ir::{BinaryOp, ExprId, Type};
 use crate::logic::Logic;
