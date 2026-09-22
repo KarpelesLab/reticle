@@ -19,6 +19,7 @@
 //! |-------------|-----------|-------------------------------------------------|
 //! | [`source`]  | always    | Source files, byte spans, line/column lookup    |
 //! | [`diag`]    | always    | Diagnostics and their text rendering            |
+//! | [`fmt_doc`] | always    | Document printer and diff behind the formatters |
 //! | [`intern`]  | always    | Identifier interning (`Symbol`)                 |
 //! | [`logic`]   | always    | Four-state bit vectors and `std_ulogic`         |
 //! | [`verilog`] | `verilog` | Verilog / SystemVerilog frontend                |
@@ -32,6 +33,7 @@
 #![forbid(unsafe_code)]
 
 pub mod diag;
+pub mod fmt_doc;
 pub mod intern;
 pub mod ir;
 pub mod logic;
