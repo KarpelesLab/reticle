@@ -1,0 +1,13 @@
+# Lattice iCE40-HX8K breakout board (ICE40HX8K-B-EVN).
+#
+# J3 is the 12 MHz oscillator. B12 and B10 are the FPGA's side of the
+# second channel of the on-board FTDI chip, which the host sees as a
+# serial port: the computer transmits on B12 and receives on B10. The
+# board has no reset button, and computer_top needs none: it resets
+# itself when the FPGA is configured, and the 6502's own RES sequence
+# runs from there.
+set_io -io_standard LVCMOS33 clk J3
+set_io -io_standard LVCMOS33 uart_tx B12
+set_io -io_standard LVCMOS33 uart_rx B10
+create_clock -name sys -period 83.333 clk
+clock_domain sys clk

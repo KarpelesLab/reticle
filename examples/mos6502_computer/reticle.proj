@@ -1,0 +1,23 @@
+# A MOS 6502 computer that prints a line over a serial port.
+#
+# The processor and the UART come from the Reticle IP library in this
+# repository's ip/ directory; rtl/computer_top.v is the only HDL written
+# for the project. See README.md for how to build, simulate and program
+# it. examples/soc is the same system built around a RISC-V core, and the
+# two are meant to be read side by side.
+name mos6502_computer
+top computer_top
+
+# The same part examples/soc targets: the iCE40 HX8K on the Lattice
+# breakout board. mos6502 is about three quarters of rv32i's size and
+# still does not fit an HX1K — the core alone is about 1730 SB_LUT4 and
+# the HX1K has 1280 — and this is the board whose serial port is wired
+# to an FTDI channel the host can open.
+device ice40-hx8k-ct256
+
+source rtl/computer_top.v
+constraints board/hx8k_breakout.rcf
+testbench tb/computer_tb.v
+
+depends mos6502 ^1.0.0 path ../../ip/mos6502
+depends uart ^1.0.0 path ../../ip/uart

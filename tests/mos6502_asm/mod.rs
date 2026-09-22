@@ -533,9 +533,53 @@ struct Statement<'s> {
     rest: &'s str,
 }
 
-/// A line without its comment: everything before the first `;`.
+/// A line without its comment: everything before the first `;` that is
+/// not inside a string.
 fn strip_comment(line: &str) -> &str {
-    line.split_once(';').map_or(line, |(head, _)| head)
+    let mut quoted = false;
+    let mut escaped = false;
+    for (at, c) in line.char_indices() {
+        match c {
+            _ if escaped => escaped = false,
+            '\\' if quoted => escaped = true,
+            '"' => quoted = !quoted,
+            ';' if !quoted => return &line[..at],
+            _ => {}
+        }
+    }
+    line
+}
+
+/// The bytes of a `.string` operand, without the terminating NUL.
+fn string_literal(text: &str) -> Result<Vec<u8>, String> {
+    let inner = text
+        .trim()
+        .strip_prefix('"')
+        .and_then(|t| t.strip_suffix('"'))
+        .ok_or_else(|| format!("`{text}` is not a quoted string"))?;
+    let mut out = Vec::new();
+    let mut chars = inner.chars();
+    while let Some(c) = chars.next() {
+        let c = if c == '\\' {
+            match chars.next() {
+                Some('n') => '\n',
+                Some('r') => '\r',
+                Some('t') => '\t',
+                Some('0') => '\0',
+                Some('\\') => '\\',
+                Some('"') => '"',
+                other => return Err(format!("unknown escape `\\{}`", other.unwrap_or(' '))),
+            }
+        } else {
+            c
+        };
+        let byte = u8::try_from(u32::from(c))
+            .ok()
+            .filter(u8::is_ascii)
+            .ok_or_else(|| format!("`{c}` is not ASCII"))?;
+        out.push(byte);
+    }
+    Ok(out)
 }
 
 /// Whether `name` can be a label.
@@ -598,6 +642,8 @@ fn shape_size(op: &str, rest: &str, symbols: &Symbols) -> Result<Option<u16>, St
 /// - `.equ name, value` defines a constant;
 /// - `.byte a, b, …` and `.word a, b, …` place bytes and little-endian
 ///   words;
+/// - `.string "text"` (or `.asciz`) places the bytes and a terminating
+///   NUL, with the escapes `\n`, `\r`, `\t`, `\0`, `\\` and `\"`;
 /// - `.res n` skips `n` bytes.
 ///
 /// An error names the line it is on.
@@ -642,6 +688,11 @@ pub(crate) fn assemble(source: &str) -> Result<Image, String> {
                 0
             }
             ".byte" => u16::try_from(rest.split(',').count()).map_err(|_| at("too many".into()))?,
+            ".string" | ".asciz" => {
+                let bytes = string_literal(rest).map_err(at)?;
+                u16::try_from(bytes.len() + 1)
+                    .map_err(|_| at("the string is too long".to_owned()))?
+            }
             ".word" => {
                 2 * u16::try_from(rest.split(',').count()).map_err(|_| at("too many".into()))?
             }
@@ -672,6 +723,15 @@ pub(crate) fn assemble(source: &str) -> Result<Image, String> {
         let mut addr = statement.addr;
         match statement.op.as_str() {
             ".org" | ".equ" | ".set" | ".res" => {}
+            ".string" | ".asciz" => {
+                // The bytes, then the NUL every 6502 string routine stops on.
+                let mut bytes = string_literal(statement.rest).map_err(at)?;
+                bytes.push(0);
+                for byte in bytes {
+                    place(addr, byte, line)?;
+                    addr = addr.wrapping_add(1);
+                }
+            }
             ".byte" => {
                 for item in statement.rest.split(',') {
                     let (value, _) = symbols.value(item).map_err(at)?;
