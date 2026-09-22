@@ -1,0 +1,23 @@
+keyword@4:1 module
+ident@4:8 cond
+punct@4:12 ;
+keyword@6:5 wire
+ident@6:10 a_on
+punct@6:14 ;
+keyword@10:9 wire
+ident@10:14 b_off_a_on
+punct@10:24 ;
+keyword@12:13 wire
+ident@12:18 c_off
+punct@12:23 ;
+keyword@31:5 wire
+ident@31:10 level
+punct@31:15 ;
+keyword@40:5 wire
+ident@40:10 after_undef
+punct@40:21 ;
+keyword@43:45 wire
+ident@43:50 y
+punct@43:51 ;
+keyword@48:1 endmodule
+eof@49:1

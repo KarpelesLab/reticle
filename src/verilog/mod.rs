@@ -1,11 +1,82 @@
 //! Verilog / SystemVerilog frontend (IEEE 1364-2005 and the synthesisable and
 //! testbench subset of IEEE 1800).
 //!
-//! Planned layout, per phase 1 of `ROADMAP.md`:
+//! Layout, per phase 1 of `ROADMAP.md`:
 //!
-//! - `preprocess`: compiler directives, macros, includes.
-//! - `lex`: tokens with spans.
-//! - `parse`: AST with error recovery.
+//! - [`preprocess`]: compiler directives, macros, includes, producing
+//!   expanded text plus a [`SpanMap`] back to the original files.
+//! - [`token`]: the token set, keywords gated by [`Dialect`].
+//! - [`lex`]: tokens with spans, from raw or preprocessed text.
+//! - `parse`: AST with error recovery (not yet written).
 //! - `elab`: name resolution, parameters, generate, width inference.
 //! - `lower`: AST to [`crate::ir`].
 //! - `lint`: AST-level checks that need no synthesis.
+//!
+//! [`lex_source`] is the entry point that runs the preprocessor and lexer
+//! together, which is what the parser will consume.
+
+pub mod lex;
+pub mod preprocess;
+pub mod token;
+
+pub use lex::{CommentKind, Lexed, Lexer};
+pub use preprocess::{IncludeResolver, NoIncludes, Preprocessed, Preprocessor, SpanMap};
+pub use token::{Dialect, Keyword, Punct, Token, TokenKind};
+
+use crate::diag::Diagnostics;
+use crate::source::{SourceId, SourceMap};
+
+/// Preprocesses and lexes the file `id` of `map`.
+///
+/// Included files are added to `map` through `resolver`; every token's span
+/// points into the original files (a token from a macro expansion reports
+/// the use site). Problems go to `diags`; the token stream always ends with
+/// [`TokenKind::Eof`] so a parser can proceed after errors.
+///
+/// ```
+/// use reticle::diag::Diagnostics;
+/// use reticle::source::SourceMap;
+/// use reticle::verilog::{Dialect, Keyword, NoIncludes, TokenKind, lex_source};
+///
+/// let mut map = SourceMap::new();
+/// let id = map.add("t.sv", "`define T logic\n`T x;").unwrap();
+/// let mut diags = Diagnostics::new();
+/// let tokens = lex_source(&mut map, id, Dialect::SystemVerilog, &mut NoIncludes, &mut diags);
+/// assert!(diags.is_empty());
+/// assert_eq!(tokens[0].kind, TokenKind::Keyword(Keyword::Logic));
+/// assert_eq!(map.file(id).loc(tokens[0].span.start).line, 2);
+/// ```
+pub fn lex_source(
+    map: &mut SourceMap,
+    id: SourceId,
+    dialect: Dialect,
+    resolver: &mut dyn IncludeResolver,
+    diags: &mut Diagnostics,
+) -> Vec<Token> {
+    lex_source_full(map, id, dialect, resolver, diags).tokens
+}
+
+/// Like [`lex_source`] but also returns the comments, for tooling that
+/// wants them.
+pub fn lex_source_full(
+    map: &mut SourceMap,
+    id: SourceId,
+    dialect: Dialect,
+    resolver: &mut dyn IncludeResolver,
+    diags: &mut Diagnostics,
+) -> Lexed {
+    let pre = Preprocessor::new().run(map, id, resolver, diags);
+    let mut lexed = Lexer::new(&pre.text, id, dialect, diags)
+        .with_span_map(&pre.spans)
+        .run();
+    // The expansion may end early (an inactive `ifdef` reaching the end of
+    // the file, or an include as the last thing), which would put the end
+    // of input somewhere in the middle of the root file. Pin it to the end.
+    if let Some(eof) = lexed.tokens.last_mut()
+        && eof.kind == TokenKind::Eof
+    {
+        let len = u32::try_from(map.file(id).text().len()).expect("source length fits u32");
+        eof.span = crate::source::Span::new(id, len, len);
+    }
+    lexed
+}

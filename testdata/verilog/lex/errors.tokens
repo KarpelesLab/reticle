@@ -1,0 +1,255 @@
+keyword@1:1 module
+ident@1:8 errors
+punct@1:14 ;
+keyword@3:5 wire
+ident@3:10 a
+punct@3:12 =
+error@3:14 4'b102
+punct@3:20 ;
+keyword@4:5 wire
+ident@4:10 b
+punct@4:12 =
+error@4:14 8'h
+punct@4:17 ;
+keyword@5:5 wire
+ident@5:10 c
+punct@5:12 =
+error@5:14 3'd1x
+punct@5:19 ;
+keyword@6:5 wire
+ident@6:10 d
+punct@6:12 =
+error@6:14 8'o9
+punct@6:18 ;
+keyword@8:5 wire
+ident@8:10 e
+punct@8:12 =
+string@8:14 "open"
+keyword@9:5 wire
+ident@9:10 f
+punct@9:12 =
+string@9:14 "bad q escape"
+punct@9:29 ;
+keyword@10:5 wire
+ident@10:10 g
+punct@10:12 =
+string@10:14 "octal too big "
+punct@10:34 ;
+keyword@11:5 wire
+ident@11:10 h
+punct@11:12 =
+string@11:14 "hex needs digits "
+punct@11:35 ;
+keyword@13:5 wire
+ident@13:10 i
+punct@13:12 =
+ident@13:14 a
+error@13:16 §
+ident@13:18 b
+punct@13:19 ;
+keyword@14:5 wire
+ident@14:10 j
+punct@14:12 =
+error@14:14 \
+punct@14:16 ;
+keyword@16:5 wire
+ident@16:10 k
+punct@16:12 =
+punct@16:24 ;
+punct@17:21 (
+number@17:22 1
+punct@17:23 )
+keyword@19:5 wire
+ident@19:10 l
+punct@19:12 =
+punct@19:19 ;
+keyword@20:5 wire
+ident@20:10 m
+punct@20:12 =
+punct@20:25 ;
+keyword@21:5 wire
+ident@21:10 n
+punct@21:12 =
+punct@21:16 ;
+keyword@23:5 wire
+ident@23:10 o
+punct@23:12 =
+punct@23:16 ;
+keyword@26:5 wire
+ident@26:10 p
+punct@26:12 =
+punct@26:16 ;
+keyword@37:5 wire
+ident@37:10 q
+punct@37:12 =
+string@37:14 "unterminated string, then an unterminated conditional"
+eof@40:1
+--- diagnostics
+error: invalid digit `2` in binary literal
+ --> errors.v:3:14
+  |
+3 |     wire a = 4'b102;
+  |              ^^^^^^
+
+error: hexadecimal literal has no digits
+ --> errors.v:4:14
+  |
+4 |     wire b = 8'h;
+  |              ^^^
+
+error: decimal literal may be a single `x` or `z`, not mixed with digits
+ --> errors.v:5:14
+  |
+5 |     wire c = 3'd1x;
+  |              ^^^^^
+
+error: invalid digit `9` in octal literal
+ --> errors.v:6:14
+  |
+6 |     wire d = 8'o9;
+  |              ^^^^
+
+error: unterminated string literal
+ --> errors.v:8:14
+  |
+8 |     wire e = "open
+  |              ^^^^^
+
+error: unknown escape sequence `\q`
+ --> errors.v:9:19
+  |
+9 |     wire f = "bad \q escape";
+  |                   ^^
+
+error: octal escape exceeds \377
+  --> errors.v:10:29
+   |
+10 |     wire g = "octal too big \777";
+   |                             ^^^^
+
+error: `\x` escape needs hex digits
+  --> errors.v:11:32
+   |
+11 |     wire h = "hex needs digits \x";
+   |                                ^^
+
+error: unexpected character `§`
+  --> errors.v:13:16
+   |
+13 |     wire i = a § b;
+   |                ^
+
+error: escaped identifier has no characters
+  --> errors.v:14:14
+   |
+14 |     wire j = \ ;
+   |              ^
+
+error: undefined macro `UNDEFINED`
+  --> errors.v:16:14
+   |
+16 |     wire k = `UNDEFINED;
+   |              ^^^^^^^^^^
+
+error: undefined macro `MACRO_WITH_ARGS`
+  --> errors.v:17:5
+   |
+17 |     `MACRO_WITH_ARGS(1)
+   |     ^^^^^^^^^^^^^^^^
+
+error: macro `F` takes 2 argument(s) but 1 were given
+  --> errors.v:19:14
+   |
+19 |     wire l = `F(1);
+   |              ^^^^^
+
+error: macro `F` takes 2 argument(s) but 3 were given
+  --> errors.v:20:14
+   |
+20 |     wire m = `F(1, 2, 3);
+   |              ^^^^^^^^^^^
+
+error: macro `F` takes arguments but none were given
+  --> errors.v:21:14
+   |
+21 |     wire n = `F;
+   |              ^^
+
+error: recursive expansion of macro `R`
+  --> errors.v:23:14
+   |
+23 |     wire o = `R;
+   |              ^^
+
+error: recursive expansion of macro `S`
+  --> errors.v:26:14
+   |
+26 |     wire p = `S;
+   |              ^^
+
+error: `` `endif `` without a matching `` `ifdef ``
+  --> errors.v:27:5
+   |
+27 |     `endif
+   |     ^^^^^^
+
+error: `` `else `` without a matching `` `ifdef ``
+  --> errors.v:28:5
+   |
+28 |     `else
+   |     ^^^^^
+
+error: cannot find include file `missing.vh`
+  --> errors.v:29:5
+   |
+29 |     `include "missing.vh"
+   |     ^^^^^^^^^^^^^^^^^^^^^
+
+error: expected a quoted file name after `` `include ``
+  --> errors.v:30:5
+   |
+30 |     `include nope
+   |     ^^^^^^^^^
+
+error: expected a macro name after the directive
+  --> errors.v:31:5
+   |
+31 |     `define
+   |     ^^^^^^^
+
+error: expected a macro name after the directive
+  --> errors.v:32:5
+   |
+32 |     `define 9x
+   |     ^^^^^^^^
+
+error: expected a macro name after the directive
+  --> errors.v:33:5
+   |
+33 |     `ifdef
+   |     ^^^^^^
+
+error: duplicate `` `else ``
+  --> errors.v:35:20
+   |
+35 |     `ifdef X `else `else `endif
+   |                    ^^^^^
+
+error: `` `elsif `` after `` `else ``
+  --> errors.v:36:30
+   |
+36 |     `ifndef X `elsif Y `else `elsif Z `endif
+   |                              ^^^^^^
+
+error: unterminated string literal
+  --> errors.v:37:14
+   |
+37 |     wire q = "unterminated string, then an unterminated conditional
+   |              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+error: unterminated conditional directive
+  --> errors.v:38:5
+   |
+38 |     `ifdef ALSO_UNTERMINATED
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^
+

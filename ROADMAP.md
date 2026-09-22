@@ -89,10 +89,10 @@ very well defined, which makes it the fastest route to a working end-to-end
 pipeline. Target is IEEE 1364-2005 plus the synthesisable and testbench
 parts of SystemVerilog (IEEE 1800) that people actually use.
 
-- [ ] Preprocessor: `` `define `` / `` `ifdef `` / `` `include `` / macros with
+- [x] Preprocessor: `` `define `` / `` `ifdef `` / `` `include `` / macros with
       arguments, `` `timescale ``, `` `default_nettype ``, with spans that
       trace through expansions.
-- [ ] Lexer: full token set, numeric literals with bases and `x`/`z` digits,
+- [x] Lexer: full token set, numeric literals with bases and `x`/`z` digits,
       escaped identifiers, attributes `(* ... *)`.
 - [ ] Parser: modules, ports (ANSI and non-ANSI), parameters, nets, regs,
       `always` / `always_ff` / `always_comb` / `always_latch`, `initial`,

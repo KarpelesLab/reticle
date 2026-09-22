@@ -1,0 +1,23 @@
+keyword@2:1 module
+ident@2:8 unicode
+punct@2:15 ;
+keyword@2:27 wire
+ident@2:32 a
+punct@2:33 ;
+keyword@3:5 initial
+system@3:13 display
+punct@3:21 (
+string@3:22 "héllo wörld ✓"
+punct@3:37 )
+punct@3:38 ;
+keyword@3:40 wire
+ident@3:45 b
+punct@3:46 ;
+keyword@5:18 wire
+ident@5:23 c
+punct@5:24 ;
+keyword@6:5 wire
+escaped@6:10 é$
+punct@6:14 ;
+keyword@7:1 endmodule
+eof@8:1

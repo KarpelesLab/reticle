@@ -1,0 +1,59 @@
+keyword@1:1 module
+ident@1:8 strings
+punct@1:15 ;
+keyword@2:5 initial
+keyword@2:13 begin
+system@3:9 display
+punct@3:17 (
+string@3:18 "plain"
+punct@3:25 )
+punct@3:26 ;
+system@4:9 display
+punct@4:17 (
+string@4:18 "tab\there, newline\nthere"
+punct@4:45 )
+punct@4:46 ;
+system@5:9 display
+punct@5:17 (
+string@5:18 "quote \" and backslash \\"
+punct@5:45 )
+punct@5:46 ;
+system@6:9 display
+punct@6:17 (
+string@6:18 "octal AB hex C bell \u{7} ff \u{c} vt \u{b}"
+punct@6:63 )
+punct@6:64 ;
+system@7:9 display
+punct@7:17 (
+string@7:18 "percent %d %h %%"
+punct@7:36 ,
+ident@7:38 a
+punct@7:39 ,
+ident@7:41 b
+punct@7:42 )
+punct@7:43 ;
+system@8:9 display
+punct@8:17 (
+string@8:18 "continued across lines"
+punct@9:14 )
+punct@9:15 ;
+system@10:9 display
+punct@10:17 (
+string@10:18 ""
+punct@10:20 )
+punct@10:21 ;
+system@11:9 write
+punct@11:15 (
+string@11:16 "no newline"
+punct@11:28 )
+punct@11:29 ;
+system@12:9 sformatf
+punct@12:18 (
+string@12:19 "%0d"
+punct@12:24 ,
+string@12:26 "`not_a_macro"
+punct@12:40 )
+punct@12:41 ;
+keyword@13:5 end
+keyword@14:1 endmodule
+eof@15:1

@@ -1,0 +1,18 @@
+keyword@2:13 module
+ident@2:20 c
+punct@2:21 ;
+keyword@5:5 wire
+ident@5:23 a
+punct@5:30 ;
+keyword@9:5 wire
+ident@9:10 b
+punct@9:11 ;
+keyword@10:1 endmodule
+eof@13:1
+--- diagnostics
+error: unterminated block comment
+  --> comments.v:11:1
+   |
+11 | /* unterminated block comment swallows the rest
+   | ^^
+
