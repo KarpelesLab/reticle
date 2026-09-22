@@ -1,0 +1,23 @@
+// A small mapped netlist: the cells carry a `lib_cell` attribute naming
+// the library cell of testdata/asic/cells.lib, so `def::from_netlist`
+// turns it into a DEF that a place-and-route tool can read.
+top counter
+
+module counter
+  net %clk u1 wire
+  net %rst_n u1 wire
+  net %d u2 wire
+  net %q u2 wire
+  net %n_inv u1 wire
+  net %n_nand u1 wire
+  port clk in %clk
+  port rst_n in %rst_n
+  port d in %d
+  port q out %q
+  attr lib_cell = "demo_sc_hd__inv_1"
+  cell u_inv blackbox demo_sc_hd__inv_1 (A=%d[0:0]) -> (Y=%n_inv)
+  attr lib_cell = "demo_sc_hd__nand2_1"
+  cell u_nand blackbox demo_sc_hd__nand2_1 (A=%n_inv, B=%d[1:1]) -> (Y=%n_nand)
+  attr lib_cell = "demo_sc_hd__dfrtp_2bit"
+  cell u_ff dff pos arst neg 2'd0 (clk=%clk, d={%n_nand, %n_inv}, rst=%rst_n) -> (q=%q)
+end

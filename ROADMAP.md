@@ -264,8 +264,8 @@ FPGA:
       bitstream tool with everything else done in Reticle.
 
 ASIC:
-- [ ] Liberty (`.lib`) parser: cells, pins, functions, timing tables.
-- [ ] LEF / DEF read and write.
+- [x] Liberty (`.lib`) parser: cells, pins, functions, timing tables.
+- [x] LEF / DEF read and write.
 - [ ] Standard-cell mapping through phase 5 against a Liberty library, with
       an open PDK (SKY130 or IHP SG13G2) as the reference target.
 - [ ] Hand-off to OpenROAD for placement and routing, later an own flow.

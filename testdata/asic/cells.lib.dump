@@ -1,0 +1,13 @@
+library demo_sc_hd__tt_025C_1v80: 5 cells (time 1ns, capacitance 1pf, voltage 1V)
+demo_sc_hd__dfrtp_1  area=20.0192  seq  Q=IQ  ff(IQ,IQ_N) data=D clock=CLK clear=!RESET_B
+demo_sc_hd__dfrtp_2bit  area=38.4512  seq  dont_use  Q[1]=IQ  Q[0]=IQ  QN0=IQ_N  QN1=IQ_N  ff(IQ,IQ_N) data=D clock=CLK clear=!RESET_B
+demo_sc_hd__einvn_1  area=8.7584  Z=!A z=TE_B
+demo_sc_hd__inv_1  area=3.7536  Y=!A
+demo_sc_hd__nand2_1  area=5.0048  Y=!(A&B)
+
+inv A->Y combinational negative_unate: rise(0.04,0.002)=0.0420 fall(0.04,0.002)=0.0360 slew(0.04,0.002)=0.0300
+inv A->Y interpolated rise(0.10,0.005)=0.073000
+dfrtp D setup_rising from CLK: rise=0.0780 fall=0.0730
+dfrtp D hold_rising from CLK: rise=-0.0200 fall=-0.0180
+demo_sc_hd__inv_1.Y = !A truth_table(A) = 0x1
+demo_sc_hd__nand2_1.Y = !(A&B) truth_table(A,B) = 0x7

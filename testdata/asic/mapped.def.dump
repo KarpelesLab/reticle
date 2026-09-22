@@ -1,0 +1,30 @@
+VERSION 5.8 ;
+DIVIDERCHAR "/" ;
+BUSBITCHARS "[]" ;
+DESIGN counter ;
+UNITS DISTANCE MICRONS 1000 ;
+DIEAREA ( 0 0 ) ( 9200 10880 ) ;
+COMPONENTS 3 ;
+  - u_inv demo_sc_hd__inv_1 + UNPLACED ;
+  - u_nand demo_sc_hd__nand2_1 + UNPLACED ;
+  - u_ff demo_sc_hd__dfrtp_2bit + UNPLACED ;
+END COMPONENTS
+PINS 6 ;
+  - clk + NET clk + DIRECTION INPUT ;
+  - rst_n + NET rst_n + DIRECTION INPUT ;
+  - d[0] + NET d[0] + DIRECTION INPUT ;
+  - d[1] + NET d[1] + DIRECTION INPUT ;
+  - q[0] + NET q[0] + DIRECTION OUTPUT ;
+  - q[1] + NET q[1] + DIRECTION OUTPUT ;
+END PINS
+NETS 8 ;
+  - clk ( PIN clk ) ( u_ff clk ) ;
+  - rst_n ( PIN rst_n ) ( u_ff rst ) ;
+  - d[0] ( PIN d[0] ) ( u_inv A ) ;
+  - d[1] ( PIN d[1] ) ( u_nand B ) ;
+  - q[0] ( PIN q[0] ) ( u_ff q[0] ) ;
+  - q[1] ( PIN q[1] ) ( u_ff q[1] ) ;
+  - n_inv ( u_inv Y ) ( u_nand A ) ( u_ff d[0] ) ;
+  - n_nand ( u_nand Y ) ( u_ff d[1] ) ;
+END NETS
+END DESIGN

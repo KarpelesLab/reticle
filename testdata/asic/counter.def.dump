@@ -1,0 +1,52 @@
+VERSION 5.8 ;
+DIVIDERCHAR "/" ;
+BUSBITCHARS "[]" ;
+DESIGN counter ;
+TECHNOLOGY demo ;
+UNITS DISTANCE MICRONS 1000 ;
+PROPERTYDEFINITIONS
+  COMPONENT source STRING ;
+  NET criticality INTEGER RANGE 0 10 ;
+END PROPERTYDEFINITIONS
+DIEAREA ( 0 0 ) ( 9200 10880 ) ;
+ROW ROW_0 demohd 0 0 N DO 20 BY 1 STEP 460 0 ;
+ROW ROW_1 demohd 0 2720 FS DO 20 BY 1 STEP 460 0 ;
+ROW ROW_2 demohd 0 5440 N DO 20 BY 1 STEP 460 0 ;
+ROW ROW_3 demohd 0 8160 FS DO 20 BY 1 STEP 460 0 ;
+TRACKS X 230 DO 20 STEP 460 LAYER li1 ;
+TRACKS Y 170 DO 32 STEP 340 LAYER met1 ;
+GCELLGRID X 0 DO 3 STEP 4600 ;
+GCELLGRID Y 0 DO 3 STEP 5440 ;
+VIAS 1 ;
+  - mcon_fixed + RECT li1 ( -85 -85 ) ( 85 85 ) + RECT mcon ( -85 -85 ) ( 85 85 ) + RECT met1 ( -85 -95 ) ( 85 95 ) ;
+END VIAS
+REGIONS 1 ;
+  - core_region ( 460 2720 ) ( 8740 8160 ) + TYPE GUIDE ;
+END REGIONS
+COMPONENTS 4 ;
+  - u_inv demo_sc_hd__inv_1 + SOURCE NETLIST + PLACED ( 1380 2720 ) FS + PROPERTY source rtl ;
+  - u_nand demo_sc_hd__nand2_1 + FIXED ( 2760 2720 ) FS + WEIGHT 2 + REGION core_region ;
+  - u_ff demo_sc_hd__dfrtp_1 + PLACED ( 4600 5440 ) N ;
+  - u_spare demo_sc_hd__inv_1 + UNPLACED + HALO SOFT 460 0 460 0 ;
+END COMPONENTS
+PINS 3 ;
+  - clk + NET clk + DIRECTION INPUT + USE CLOCK + LAYER met1 ( -70 -170 ) ( 70 170 ) + FIXED ( 0 5440 ) N ;
+  - d + NET d + DIRECTION INPUT + USE SIGNAL + LAYER met1 ( -70 -170 ) ( 70 170 ) + PLACED ( 0 6800 ) N ;
+  - q + NET q + DIRECTION OUTPUT + USE SIGNAL + PORT + LAYER met1 ( -70 -170 ) ( 70 170 ) + PLACED ( 9200 6800 ) S ;
+END PINS
+BLOCKAGES 1 ;
+  - PLACEMENT + SOFT RECT ( 8280 8160 ) ( 9200 10880 ) ;
+END BLOCKAGES
+SPECIALNETS 1 ;
+  - VPWR ( * VPWR ) + USE POWER + ROUTED met1 480 + SHAPE STRIPE ( 0 2720 ) ( 9200 * ) ;
+END SPECIALNETS
+NETS 4 ;
+  - clk ( PIN clk ) ( u_ff CLK ) + USE CLOCK ;
+  - d ( PIN d ) ( u_inv A ) + USE SIGNAL ;
+  - n_inv ( u_inv Y ) ( u_nand A + SYNTHESIZED ) + USE SIGNAL + WEIGHT 3 + ROUTED li1 ( 2185 3060 ) ( 2185 4080 ) mcon_fixed NEW met1 ( 2185 4080 ) ( 2945 4080 ) + PROPERTY criticality 7 ;
+  - q ( PIN q ) ( u_ff Q ) + USE SIGNAL ;
+END NETS
+GROUPS 1 ;
+  - logic u_inv u_nand + REGION core_region ;
+END GROUPS
+END DESIGN
