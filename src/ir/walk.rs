@@ -13,9 +13,8 @@
 //! - **Hierarchy queries** on [`Design`]: [`Design::instances_of`],
 //!   [`Design::children`] and [`Design::topological_order`].
 //!
-//! Flattening (`Design::flatten`) and unique-ification of parameterised
-//! modules are not implemented yet; they belong to the same phase of the
-//! roadmap and will live here.
+//! Flattening, unique-ification and hierarchical path lookup build on
+//! these primitives but live next door in [`super::hier`].
 
 use super::Name;
 use super::design::{Design, InstanceId, Module, ModuleId, ModuleRef, NetId};
