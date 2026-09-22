@@ -27,6 +27,7 @@ Rules that every change must follow. CI enforces most of them.
 - **Commits** are self-contained: build, lint and tests pass at every
   commit. Messages follow Conventional Commits so release-plz can derive
   versions and changelogs: `feat(verilog): add lexer`, `fix(diag): ...`,
-  `docs:`, `test:`, `refactor:`, `chore:`, `ci:`. A `!` after the type or
-  a `BREAKING CHANGE:` footer marks an incompatible change. One summary
-  line, blank line, then why and what.
+  `docs:`, `test:`, `refactor:`, `chore:`, `ci:`. One summary line, blank
+  line, then why and what. While the version is `0.0.x` there is no
+  stable API to break, so never use `!` or a `BREAKING CHANGE:` footer;
+  those start meaning something once a `0.1.0` is cut.
