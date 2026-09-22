@@ -498,8 +498,20 @@ no HDL written by the user beyond a top-level.
       see `docs/wasm.md`).
 - [x] C API for embedding the frontends and simulator in other tools
       (`ffi` feature, `src/ffi/reticle.h`; see `docs/ffi.md`).
-- [ ] Incremental compilation: cache elaborated modules keyed on source
-      hash so large designs re-simulate quickly after a small edit.
+- [x] Incremental compilation: cache elaborated modules keyed on source
+      hash so large designs re-simulate quickly after a small edit
+      (`cache` feature, `reticle cache`). The store is content addressed:
+      a module's key is the digest of the source text of every file that
+      defines it, the elaboration options, the parameter set, the compiler
+      version, the feature set and the keys of its dependencies, so
+      editing a leaf invalidates everything above it and nothing below.
+      Artefacts are the IR's `.rtl` text, which already round-trips
+      exactly; synthesised modules are cached too, under a key that adds
+      the synthesis options. `Storage` is a four-method trait with an
+      in-memory backend in the library and a directory-backed one in the
+      binary, so the library stays sans-I/O. Measured: 2.6x on a
+      631-module Verilog design, 3.1x with synthesis, 6x on VHDL, and
+      slower than not caching on a cold build — see `docs/cache.md`.
 
 ## Non-goals (for now)
 

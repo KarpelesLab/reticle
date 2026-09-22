@@ -22,6 +22,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the same memory port `rv32i` puts on its instruction side. Each has a
   manifest, a co-simulation test and a measured footprint in
   `docs/ip-library.md`.
+- Incremental compilation behind the new `cache` feature: a
+  content-addressed store of elaborated and synthesised modules, keyed on
+  the source text that produced them, the options, the parameter set, the
+  compiler version, the feature set and the keys of their dependencies.
+  Editing a leaf invalidates it and everything above it; editing a
+  top-level file invalidates only that module. Artefacts are the IR's
+  `.rtl` text, so an entry is inspectable by hand. `Storage` is a
+  four-method trait — the library ships the in-memory backend and the
+  `reticle cache` command supplies a directory-backed one — with eviction
+  by total size in least-recently-used order and a `verify` that catches a
+  store damaged behind the build's back. See `docs/cache.md`, which
+  includes the cases where the cache does not help.
+
 - VHDL: the remaining bundled standard libraries — `ieee.numeric_std`,
   `ieee.numeric_bit`, `ieee.math_real`, `ieee.std_logic_textio` and the
   Synopsys `std_logic_arith`, `std_logic_unsigned` and `std_logic_signed`.
