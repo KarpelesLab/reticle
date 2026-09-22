@@ -595,6 +595,10 @@ fn drivable(subject: &Subject, csim: &CompiledSim<'_>) -> Vec<(NetHandle, u32)> 
         .collect()
 }
 
+/// How many times each timed loop is repeated; the fastest is reported,
+/// because a slow repetition measures the machine and not the engine.
+const REPEATS: u32 = 5;
+
 /// Cycles per second for both engines on one design.
 fn measure(subject: &Subject, cycles: u64) -> Option<(f64, f64, ProgramStats)> {
     let options = CompileOptions {
@@ -620,18 +624,21 @@ fn measure(subject: &Subject, cycles: u64) -> Option<(f64, f64, ProgramStats)> {
         _ => (Logic::zero(1), Logic::ones(1)),
     };
 
-    let start = Instant::now();
-    for c in 0..cycles {
-        let v = &vectors[usize::try_from(c).unwrap_or(0) % vectors.len()];
-        for ((h, _), value) in inputs.iter().zip(v) {
-            csim.set(*h, value.clone());
+    let mut compiled = f64::INFINITY;
+    for _ in 0..REPEATS {
+        let start = Instant::now();
+        for c in 0..cycles {
+            let v = &vectors[usize::try_from(c).unwrap_or(0) % vectors.len()];
+            for ((h, _), value) in inputs.iter().zip(v) {
+                csim.set(*h, value.clone());
+            }
+            if let Some(clk) = clock {
+                csim.set(clk, active.clone());
+            }
+            csim.step();
         }
-        if let Some(clk) = clock {
-            csim.set(clk, active.clone());
-        }
-        csim.step();
+        compiled = compiled.min(start.elapsed().as_secs_f64());
     }
-    let compiled = start.elapsed().as_secs_f64();
 
     let mut sim = Simulator::new(
         &subject.design,
@@ -647,20 +654,23 @@ fn measure(subject: &Subject, cycles: u64) -> Option<(f64, f64, ProgramStats)> {
         .filter_map(|(h, _)| sim.net(csim.net_name(*h)))
         .collect();
     let sim_clock = clock.and_then(|c| sim.net(csim.net_name(c)));
-    let start = Instant::now();
-    for c in 0..cycles {
-        let v = &vectors[usize::try_from(c).unwrap_or(0) % vectors.len()];
-        for (h, value) in handles.iter().zip(v) {
-            sim.set(*h, value.clone());
-        }
-        if let Some(clk) = sim_clock {
-            sim.set(clk, idle.clone());
+    let mut event = f64::INFINITY;
+    for _ in 0..REPEATS {
+        let start = Instant::now();
+        for c in 0..cycles {
+            let v = &vectors[usize::try_from(c).unwrap_or(0) % vectors.len()];
+            for (h, value) in handles.iter().zip(v) {
+                sim.set(*h, value.clone());
+            }
+            if let Some(clk) = sim_clock {
+                sim.set(clk, idle.clone());
+                sim.run_for(1);
+                sim.set(clk, active.clone());
+            }
             sim.run_for(1);
-            sim.set(clk, active.clone());
         }
-        sim.run_for(1);
+        event = event.min(start.elapsed().as_secs_f64());
     }
-    let event = start.elapsed().as_secs_f64();
     Some((event, compiled, stats))
 }
 

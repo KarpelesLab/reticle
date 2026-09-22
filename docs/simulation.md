@@ -172,7 +172,9 @@ queue at all.
 ```rust
 use reticle::sim::compiled::{CompileOptions, CompiledSim};
 
-let mut sim = CompiledSim::new(&design, CompileOptions::default())?;
+// The counter has no initial value, so say what uninitialised means.
+let options = CompileOptions { zero_init: true, ..CompileOptions::default() };
+let mut sim = CompiledSim::new(&design, options)?;
 let rst = sim.net("counter.rst").unwrap();
 let q = sim.net("counter.q").unwrap();
 sim.set(rst, Logic::from_bool(true));
@@ -242,55 +244,67 @@ assertions, `$display`, `$write`, `$finish` and `$stop` do survive, and
 ### Measured speed-up
 
 `cargo test --release --features sim,verilog --test sim_compiled --
---ignored --nocapture` prints this table; the numbers below are from one
-machine (a 2024 x86-64 laptop, `--release`, `lto = "thin"`), so read the
-ratios, not the absolutes. Both loops include the cost of driving the
-inputs through `Logic`, which a real testbench also pays.
+--ignored --nocapture` prints this table. Each timed loop runs five times
+and the fastest is kept, because a slow repetition measures the machine
+and not the engine; the numbers are still from one x86-64 box with
+`--release` and `lto = "thin"`, so read the ratios, not the absolutes.
+Both loops include the cost of driving the inputs through `Logic`, which
+a real testbench also pays.
 
 | Design | Program | Event sim | Compiled | Speed-up |
 |--------|---------|-----------|----------|----------|
-| `testdata/synth/counter_en.rtl` | 0 comb + 12 edge ops, 2 regs / 9 bits | 2.06 M cycles/s | 12.32 M cycles/s | 6.0x |
-| `testdata/synth/fsm.rtl` | 1 comb + 26 edge ops, 1 reg / 2 bits | 2.19 M cycles/s | 7.37 M cycles/s | 3.4x |
-| `testdata/synth/adder_tree.rtl` | 12 comb ops, no state | 0.43 M cycles/s | 18.05 M cycles/s | 42.4x |
-| `testdata/synth/ram_regread.rtl` | 2 comb + 4 edge ops, 1 reg / 8 bits, 16×8 RAM | 1.56 M cycles/s | 10.65 M cycles/s | 6.8x |
-| `testdata/synth/mux_tree.rtl` | 13 comb ops, no state | 2.19 M cycles/s | 7.92 M cycles/s | 3.6x |
-| `testdata/synth/counter_en.cells.rtl` | 2 comb + 6 edge ops, 2 regs / 9 bits | 0.59 M cycles/s | 5.21 M cycles/s | 8.8x |
-| `ip/uart_tx` | 7 comb + 40 edge ops, 4 regs / 31 bits | 1.21 M cycles/s | 4.31 M cycles/s | 3.6x |
-| `ip/uart` | 16 comb + 126 edge ops, 13 regs / 72 bits | 0.42 M cycles/s | 1.74 M cycles/s | 4.2x |
-| `ip/fifo_sync` | 17 comb + 21 edge ops, 3 regs / 18 bits, 16×8 RAM | 0.58 M cycles/s | 5.55 M cycles/s | 9.5x |
-| `ip/spi_master` | 17 comb + 90 edge ops, 10 regs / 53 bits | 0.54 M cycles/s | 2.21 M cycles/s | 4.1x |
-| `ip/i2c_master` | 20 comb + 222 edge ops, 14 regs / 41 bits | 0.40 M cycles/s | 1.11 M cycles/s | 2.8x |
-| `ip/axil_gpio` | 25 comb + 97 edge ops, 13 regs / 148 bits | 0.31 M cycles/s | 1.80 M cycles/s | 5.8x |
+| `testdata/synth/counter_en.rtl` | 0 comb + 12 edge ops, 2 regs / 9 bits | 2.01 M cycles/s | 4.47 M cycles/s | 2.2x |
+| `testdata/synth/fsm.rtl` | 1 comb + 26 edge ops, 1 reg / 2 bits | 2.45 M cycles/s | 6.58 M cycles/s | 2.7x |
+| `testdata/synth/adder_tree.rtl` | 12 comb ops, no state | 0.49 M cycles/s | 20.24 M cycles/s | 41.2x |
+| `testdata/synth/ram_regread.rtl` | 2 comb + 4 edge ops, 1 reg / 8 bits, 16x8 RAM | 1.52 M cycles/s | 10.09 M cycles/s | 6.6x |
+| `testdata/synth/mux_tree.rtl` | 13 comb ops, no state | 2.08 M cycles/s | 8.09 M cycles/s | 3.9x |
+| `testdata/synth/counter_en.cells.rtl` | 2 comb + 6 edge ops, 2 regs / 9 bits | 0.52 M cycles/s | 13.15 M cycles/s | 25.1x |
+| `ip/uart_tx` | 7 comb + 39 edge ops, 4 regs / 31 bits | 1.25 M cycles/s | 4.65 M cycles/s | 3.7x |
+| `ip/uart` | 16 comb + 125 edge ops, 13 regs / 72 bits | 0.43 M cycles/s | 1.90 M cycles/s | 4.4x |
+| `ip/fifo_sync` | 17 comb + 20 edge ops, 3 regs / 18 bits, 16x8 RAM | 0.62 M cycles/s | 5.83 M cycles/s | 9.5x |
+| `ip/spi_master` | 17 comb + 89 edge ops, 10 regs / 53 bits | 0.58 M cycles/s | 2.39 M cycles/s | 4.1x |
+| `ip/i2c_master` | 20 comb + 219 edge ops, 14 regs / 41 bits | 0.40 M cycles/s | 1.16 M cycles/s | 2.9x |
+| `ip/axil_gpio` | 25 comb + 96 edge ops, 13 regs / 148 bits | 0.32 M cycles/s | 1.87 M cycles/s | 5.8x |
 
-So: three to ten times on real blocks, and forty on a design that is
-nothing but combinational logic. Where the rest of the time goes is worth
-saying plainly, because 3x is not the order of magnitude a compiled
-simulator is supposed to be worth:
+So: three to ten times on the IP blocks, and forty on a design that is
+nothing but combinational logic. Two caveats before the analysis. The two
+`counter_en` rows swing between runs — 2.2x to 8x for the process form,
+9x to 30x for the cell form — because those programs are six to twelve
+operations long and what is really being timed is the stimulus; the rows
+with more than about twenty operations repeat to within a few percent.
+And "M cycles/s" here is a cycle of *this* harness, one input vector and
+one clock edge, not a wall-clock claim about any particular design.
 
+Where the rest of the time goes is worth saying plainly, because 3x is
+not the order of magnitude a compiled simulator is supposed to be worth:
+
+- **Driving the inputs is in the loop, and it allocates.** Every `set`
+  takes a `Logic` by value, and cloning one out of the stimulus pool
+  allocates two `Vec`s. On `counter_en` that is six allocations per cycle
+  against twelve engine operations, which is both most of the compiled
+  time and the reason that row is not repeatable. Both engines pay it, so
+  it understates the ratio rather than inflating it — but it means the
+  small rows measure the allocator.
 - **These designs are tiny.** The event simulator's per-cycle cost is
   dominated by scheduling, which is roughly constant; the compiled
-  engine's is proportional to the program. On a 20-operation block the
+  engine's is proportional to the program. On a twelve-operation block the
   constant is most of the event simulator's time and the ratio is large
-  (`adder_tree`); on a 200-operation block the ratio shrinks
-  (`i2c_master`). The advantage would grow again with design size, because
-  the event simulator also re-evaluates a net every time one of its inputs
-  changes while the compiled engine evaluates it exactly once — but that
-  needs a design big enough to measure, and the corpus has none yet.
-- **Driving the inputs is in the loop.** Every `set` builds a `Logic`,
-  which allocates. Both engines pay it, so it understates the ratio rather
-  than inflating it, but on a block with a handful of narrow inputs it is
-  a real share of the compiled engine's time.
+  (`adder_tree`); on a two-hundred-operation block it shrinks
+  (`i2c_master`). The advantage should grow again with design size,
+  because the event simulator re-evaluates a net every time one of its
+  inputs changes while the compiled engine evaluates it exactly once — but
+  that needs a design big enough to measure, and the corpus has none yet.
 - **The lowering is not an optimiser.** A `case` becomes a chain of
   guarded merges, one `Mux` per arm per assigned signal, which is why
-  `i2c_master` needs 222 operations per edge for 41 bits of state.
-  Constant folding and common subexpression elimination run, but nothing
-  else: no dead-value elimination, no mux-tree flattening, no
-  specialisation of a whole word-wide operation into one machine
-  instruction beyond the one-word fast path. Those are the next thing to
-  do if the number has to be bigger.
-- **It is an interpreter.** Each operation costs a `match` and two
-  bounds-checked slice indexings. Generating Rust or a threaded dispatch
-  table would remove that, and would be the step after the optimiser.
+  `i2c_master` needs 219 operations per edge for 41 bits of state.
+  Constant folding and common subexpression elimination run, and nothing
+  else: no dead-value elimination, no mux-tree flattening, no merging of
+  a chain of one-bit operations into one word-wide one. That is the first
+  thing to do if the number has to be bigger.
+- **It is an interpreter.** Each operation costs a `match` on the opcode
+  and a few bounds-checked slice indexings into the register file.
+  Generating Rust, or a threaded dispatch table, would remove that, and
+  would be the step after the optimiser.
 
 ## Tests
 
