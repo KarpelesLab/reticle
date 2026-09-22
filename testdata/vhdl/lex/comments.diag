@@ -1,0 +1,32 @@
+note: tool directive `protect` ignored
+ --> comments.vhd:9:1
+  |
+9 | `protect begin_protected
+  | ^^^^^^^^^^^^^^^^^^^^^^^^
+  |
+  = note: reticle does not act on tool directives
+
+note: tool directive `protect` ignored
+  --> comments.vhd:10:1
+   |
+10 | `protect key_keyowner = "Reticle", key_method = "rsa"
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: reticle does not act on tool directives
+
+note: tool directive `protect` ignored
+  --> comments.vhd:11:1
+   |
+11 | `protect end_protected
+   | ^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: reticle does not act on tool directives
+
+note: tool directive ignored
+  --> comments.vhd:12:1
+   |
+12 | `
+   | ^
+   |
+   = note: reticle does not act on tool directives
+

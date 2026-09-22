@@ -1,0 +1,8 @@
+Line@1:1 -- Every literal form, all well-formed.
+Line@2:1 -- Decimal integers, with underscores and exponents.
+Line@4:1 -- Decimal reals.
+Line@6:1 -- Based literals: integer and real, with exponents and underscores.
+Line@8:1 -- Physical literals are an abstract literal followed by a unit name.
+Line@10:1 -- Character literals, including the delimiters themselves.
+Line@12:1 -- String literals; doubled quotes, and the percent replacement.
+Line@14:1 -- Bit-string literals: bases, signedness, length prefixes, both delimiters.

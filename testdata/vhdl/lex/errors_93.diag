@@ -1,0 +1,30 @@
+error: bit-string base specifier `ux` requires VHDL-2008
+ --> errors_93.vhd:3:6
+  |
+3 | a <= ux"F";
+  |      ^^
+
+error: bit-string base specifier `d` requires VHDL-2008
+ --> errors_93.vhd:4:6
+  |
+4 | b <= d"9";
+  |      ^
+
+error: bit-string literal length prefix requires VHDL-2008
+ --> errors_93.vhd:5:6
+  |
+5 | c <= 8x"F";
+  |      ^
+
+error: bit-string base specifier `sb` requires VHDL-2008
+ --> errors_93.vhd:6:6
+  |
+6 | d <= sb"1" & x"F";
+  |      ^^
+
+warning: delimited comments require VHDL-2008
+ --> errors_93.vhd:7:1
+  |
+7 | /* delimited comment */
+  | ^^ `/* ... */` comment in VHDL-93 mode
+

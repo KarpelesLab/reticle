@@ -1,0 +1,2 @@
+Line@1:1 -- Every delimiter and compound delimiter, spaced and packed.
+Line@5:1 -- Tokens that look compound but are not.

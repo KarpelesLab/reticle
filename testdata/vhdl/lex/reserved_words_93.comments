@@ -1,0 +1,4 @@
+Line@1:1 -- lex: vhdl93
+Line@2:1 -- In VHDL-93 mode the 2008 additions are ordinary identifiers, which real
+Line@3:1 -- legacy code relies on (`default` and `parameter` as signal names).
+Line@8:1 -- The 1993 words are still reserved.

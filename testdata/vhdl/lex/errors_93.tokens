@@ -1,0 +1,25 @@
+Ident@3:1 a
+Le@3:3 <=
+BitStringLit@3:6 ux"F"
+Semi@3:11 ;
+Ident@4:1 b
+Le@4:3 <=
+BitStringLit@4:6 d"9"
+Semi@4:10 ;
+Ident@5:1 c
+Le@5:3 <=
+BitStringLit@5:6 8x"F"
+Semi@5:11 ;
+Ident@6:1 d
+Le@6:3 <=
+BitStringLit@6:6 sb"1"
+Amp@6:12 &
+BitStringLit@6:14 x"F"
+Semi@6:18 ;
+Ident@8:1 e
+Le@8:3 <=
+Ident@8:6 a
+QEq@8:8 ?=
+Ident@8:11 b
+Semi@8:12 ;
+Eof@9:1 

@@ -124,7 +124,7 @@ overload resolution, packages, generics on packages and subprograms,
 `numeric_std`, `math_real`, `textio`) which must be provided in source form
 and compiled like user code.
 
-- [ ] Lexer: case-insensitive identifiers, extended identifiers, character
+- [x] Lexer: case-insensitive identifiers, extended identifiers, character
       and string literals, bit-string literals, based literals, physical
       literals.
 - [ ] Parser: design units (entity, architecture, package, package body,
