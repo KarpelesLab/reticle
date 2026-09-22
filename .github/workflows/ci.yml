@@ -51,12 +51,27 @@ jobs:
         with:
           components: clippy
       - uses: Swatinem/rust-cache@v2
-      - name: Library only, no features
-        run: cargo clippy --no-default-features -- -D warnings
-      - name: Each frontend alone
+
+      # Every stage must build on its own: a module that quietly depends on
+      # another feature's types breaks the lean builds a consumer asks for.
+      # `--all-targets` matters here, since an unguarded integration test is
+      # the usual way this regresses.
+      - name: Each feature alone
         run: |
-          cargo clippy --no-default-features --features verilog -- -D warnings
-          cargo clippy --no-default-features --features vhdl -- -D warnings
+          set -e
+          for f in "" verilog vhdl sim synth formal fpga asic lsp cli; do
+            echo "::group::features=${f:-none}"
+            if [ -z "$f" ]; then
+              cargo clippy --no-default-features --all-targets -- -D warnings
+            else
+              cargo clippy --no-default-features --features "$f" --all-targets -- -D warnings
+            fi
+            echo "::endgroup::"
+          done
+
+      - name: Tests without default features
+        run: cargo test --no-default-features
+
       - name: MSRV
         run: |
           rustup toolchain install 1.89 --profile minimal

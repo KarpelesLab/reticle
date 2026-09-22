@@ -17,6 +17,8 @@
 //! | `formal_init`        | `reset` (default), `zero` or `free`                  |
 //! | `formal_match_state` | match state by name in equivalence (default 1)       |
 
+#![cfg(feature = "formal")]
+
 use std::fs;
 use std::path::{Path, PathBuf};
 

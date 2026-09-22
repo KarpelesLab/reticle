@@ -25,6 +25,8 @@
 //! Expectations are hand-written: there is no update mode. Any error
 //! diagnostic not covered by an `expect-message` fails the test.
 
+#![cfg(feature = "sim")]
+
 use std::fs;
 use std::path::{Path, PathBuf};
 

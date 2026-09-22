@@ -13,6 +13,7 @@
 //! mode. Run with `UPDATE_EXPECT=1` to rewrite the expectation files.
 
 #![cfg(feature = "vhdl")]
+#![cfg(feature = "vhdl")]
 
 use std::fs;
 use std::path::{Path, PathBuf};

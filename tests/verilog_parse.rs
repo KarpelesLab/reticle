@@ -11,6 +11,7 @@
 //! when the parser reported anything.
 
 #![cfg(feature = "verilog")]
+#![cfg(feature = "verilog")]
 
 use std::fs;
 use std::path::{Path, PathBuf};

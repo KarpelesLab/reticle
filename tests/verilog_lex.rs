@@ -16,6 +16,7 @@
 //! `` `include `` paths are looked up in `testdata/verilog/lex/include/`.
 
 #![cfg(feature = "verilog")]
+#![cfg(feature = "verilog")]
 
 use std::fmt::Write as _;
 use std::fs;

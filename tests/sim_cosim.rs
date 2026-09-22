@@ -1,6 +1,8 @@
 //! Rust co-simulation tests: designs built with `ModuleBuilder` or parsed
 //! from `.rtl` text, driven through the `sim::Simulator` API.
 
+#![cfg(feature = "sim")]
+
 use std::cell::RefCell;
 use std::rc::Rc;
 use std::time::Instant;

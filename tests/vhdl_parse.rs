@@ -12,6 +12,7 @@
 //! files.
 
 #![cfg(feature = "vhdl")]
+#![cfg(feature = "vhdl")]
 
 use std::fs;
 use std::path::{Path, PathBuf};
