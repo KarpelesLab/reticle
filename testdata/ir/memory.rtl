@@ -1,0 +1,25 @@
+top ram
+
+module ram
+  net %clk u1 wire
+  net %we u1 wire
+  net %addr u4 wire
+  net %wdata u8 wire
+  net %rdata u8 reg
+  net %rom_out u8 wire
+  port clk in %clk
+  port we in %we
+  port addr in %addr
+  port wdata in %wdata
+  port rdata out %rdata
+  port rom_out out %rom_out
+  attr ram_style = "block"
+  memory @mem 16 x u8
+  memory @rom 4 x u8
+    init 8'd222 8'd173 8'd190 8'd239
+  assign %rom_out = @rom[%addr[1:0]]
+  process seq posedge %clk
+    memwrite @mem[%addr] = %wdata enable %we
+    %rdata <= @mem[%addr]
+  end
+end

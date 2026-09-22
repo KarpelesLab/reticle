@@ -1,0 +1,26 @@
+top pll_wrap
+
+attr vendor = "lattice"
+module SB_PLL40_CORE blackbox
+  param DIVF = 7'd63
+  net %REFERENCECLK u1 wire
+  net %PLLOUTCORE u1 wire
+  net %LOCK u1 wire
+  port REFERENCECLK in %REFERENCECLK
+  port PLLOUTCORE out %PLLOUTCORE
+  port LOCK out %LOCK
+end
+
+module pll_wrap
+  net %clk_in u1 wire
+  net %clk_out u1 wire
+  net %locked u1 wire
+  net %led u1 wire
+  port clk_in in %clk_in
+  port clk_out out %clk_out
+  port locked out %locked
+  port led out %led
+  attr keep = 1
+  instance pll of SB_PLL40_CORE #(DIVF=7'd63, FEEDBACK_PATH="SIMPLE") (REFERENCECLK=%clk_in, PLLOUTCORE=%clk_out, LOCK=%locked)
+  instance blink of vendor_blinky (clk=%clk_out, led=%led)
+end

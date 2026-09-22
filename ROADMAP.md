@@ -152,19 +152,19 @@ instantiating a Verilog module simulates correctly.
 Defined alongside phase 1, but stable by the end of phase 2. The IR is the
 product; everything else is a producer or consumer of it.
 
-- [ ] Hierarchical `Design`: modules with ports, parameters kept as
+- [x] Hierarchical `Design`: modules with ports, parameters kept as
       metadata, instances, nets, and a `Process` form (structured
       statements with sensitivity, for simulation and for synthesis lowering)
       next to a `Cell` form (combinational and sequential primitives, for
       after synthesis). Both coexist in one module.
-- [ ] Typed bit vectors, memories (arrays) as first-class objects, signed
+- [x] Typed bit vectors, memories (arrays) as first-class objects, signed
       and unsigned arithmetic cells with explicit widths.
-- [ ] Attributes on every object (`keep`, `ram_style`, `async_reg`,
+- [x] Attributes on every object (`keep`, `ram_style`, `async_reg`,
       user-defined) carried from the source `(* *)` / VHDL attribute
       specifications.
 - [ ] Flattening, hierarchy preservation flags, unique-ification of
       parameterised modules.
-- [ ] Textual IR format (`.rtl`) that round-trips, for golden tests and
+- [x] Textual IR format (`.rtl`) that round-trips, for golden tests and
       debugging.
 - [ ] Emitters: structural and behavioural Verilog, VHDL, JSON (Yosys-
       compatible shape so nextpnr and existing viewers accept it), BLIF,

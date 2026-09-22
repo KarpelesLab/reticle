@@ -1,0 +1,35 @@
+top counter_synth
+
+module counter_synth
+  net %clk u1 wire
+  net %rst u1 wire
+  net %en u1 wire
+  net %q u4 wire
+  net %q_next u4 wire
+  net %inc u4 wire
+  net %carry u1 wire
+  net %sel u1 wire
+  net %lut_out u1 wire
+  net %mem_out u8 wire
+  net %waddr u3 wire
+  net %wdata u8 wire
+  net %we u1 wire
+  port clk in %clk
+  port rst in %rst
+  port en in %en
+  port q out %q
+  port waddr in %waddr
+  port wdata in %wdata
+  port we in %we
+  port mem_out out %mem_out
+  memory @buf 8 x u8
+  cell add0 add (a=%q, b=4'd1) -> (y=%inc)
+  cell mux0 mux (a=%q, b=%inc, s=%en) -> (y=%q_next)
+  cell ff0 dff pos srst pos 4'd0 (clk=%clk, d=%q_next, rst=%rst) -> (q=%q)
+  cell red0 ror (a=%q) -> (y=%carry)
+  cell and0 and (a=%carry, b=%en) -> (y=%sel)
+  cell lut0 lut 2 4'd6 (a={%sel, %carry}) -> (y=%lut_out)
+  cell rd0 memrd @buf (addr=%q[2:0]) -> (data=%mem_out)
+  cell wr0 memwr @buf clocked (addr=%waddr, data=%wdata, en=%we, clk=%clk) -> ()
+  cell bb0 blackbox SB_GB (USER_SIGNAL_TO_GLOBAL_BUFFER=%lut_out) -> ()
+end

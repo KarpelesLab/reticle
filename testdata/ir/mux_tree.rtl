@@ -1,0 +1,36 @@
+top mux4
+
+module mux4
+  net %sel u2 wire
+  net %a u8 wire
+  net %b u8 wire
+  net %c u8 wire
+  net %d u8 wire
+  net %lo u8 wire
+  net %hi u8 wire
+  net %y u8 wire
+  net %y2 u8 reg
+  port sel in %sel
+  port a in %a
+  port b in %b
+  port c in %c
+  port d in %d
+  port y out %y
+  port y2 out %y2
+  assign %lo = mux(%sel[0:0], %b, %a)
+  assign %hi = mux(%sel[1:1], %d, %c)
+  assign %y = mux(%sel[1:1], %hi, %lo)
+  process decode comb
+    case %sel unique
+      when 2'd0
+        %y2 = %a
+      end
+      when 2'd1
+        %y2 = %b
+      end
+      when 2'd2, 2'd3
+        %y2 = mux(%sel[0:0], %d, %c)
+      end
+    end
+  end
+end
