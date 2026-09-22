@@ -378,11 +378,19 @@ and first-party IP should drop into a design as easily as a Rust crate.
       to express in HDL (wide crossbars, CORDIC tables, filter banks). The
       crossbar and the arbiter are the first two; the arithmetic generators
       are still to come.
-- [ ] The Reticle IP library, each block with a Rust co-simulation test and
+- [x] The Reticle IP library, each block with a Rust co-simulation test and
       a documented resource footprint per target: FIFOs (sync / async),
-      CDC synchronisers, UART, SPI, I²C, PWM, timers, block RAM wrappers,
-      SDRAM / HyperRAM controllers, Ethernet MAC (RMII / RGMII), USB device,
-      HDMI/DVI output, a small RISC-V core, AXI / Wishbone interconnect.
+      CDC synchronisers (level and pulse), UART, SPI, I²C, PWM, timers, an
+      AXI4-Lite GPIO and block RAM wrappers. Eleven packages under `ip/`,
+      written in Verilog-2005, driven through `sim::Simulator` by
+      `tests/ip_library.rs`, and measured for LUT4, LUT6, iCE40 and ECP5 in
+      a table that test generates. The AXI4-Lite crossbar and the Wishbone
+      arbiter are the interconnect, under generators above. See
+      `docs/ip-library.md`.
+- [ ] The larger library blocks: SDRAM / HyperRAM controllers, Ethernet MAC
+      (RMII / RGMII), USB device, HDMI/DVI output and a small RISC-V core.
+      Each of the first four needs device primitives the FPGA backend does
+      not configure yet (DDR registers, PLLs, IO delays).
 - [ ] Registry: a static index (git repository of manifests) that
       `reticle add` searches, in the style of a crates.io index.
 

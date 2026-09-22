@@ -525,5 +525,10 @@ kind does have.
   do not have to change when the registry arrives.
 - **`` `include `` is not followed** during a project build: a package
   lists its files in its manifest, which is what the provider reads.
-- **IP-XACT import**, the Reticle IP library itself and the registry index
-  are the rest of phase 8.
+- **IP-XACT import** and the registry index are the rest of phase 8.
+
+The first-party IP library is in `ip/` and has its own document,
+[`ip-library.md`](ip-library.md): eleven Verilog-2005 packages — the two
+FIFOs, the two clock domain crossings, a UART, an SPI master, an I²C
+master, a PWM, a timer, an AXI4-Lite GPIO and the block RAM wrappers —
+each with a co-simulation test and a measured resource footprint.
