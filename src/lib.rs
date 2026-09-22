@@ -26,6 +26,7 @@
 //! | [`ir`]      | always    | The unified design IR                           |
 //! | [`sim`]     | `sim`     | Event-driven simulator                          |
 //! | [`synth`]   | `synth`   | Synthesis passes and technology mapping         |
+//! | [`formal`]  | `formal`  | SAT solver, CNF encoding, model checking        |
 
 #![forbid(unsafe_code)]
 
@@ -46,6 +47,9 @@ pub mod sim;
 
 #[cfg(feature = "synth")]
 pub mod synth;
+
+#[cfg(feature = "formal")]
+pub mod formal;
 
 /// The crate version, as recorded in `Cargo.toml`.
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");

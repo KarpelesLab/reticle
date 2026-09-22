@@ -278,7 +278,8 @@ timing reported.
 
 ## Phase 7: verification and formal
 
-- [ ] SAT solver (CDCL) in-crate, with a bit-blaster from IR to CNF.
+- [x] SAT solver (CDCL) in-crate, with a Tseitin CNF builder.
+- [ ] Bit-blaster from IR to CNF.
 - [ ] Bounded model checking of assertions and `assume` / `cover`
       properties over unrolled IR, with counter-example traces as VCD.
 - [ ] k-induction for unbounded proofs on suitable designs.
