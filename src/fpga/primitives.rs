@@ -8,7 +8,7 @@
 //!
 //! | Step | What it recognises | What it emits |
 //! |------|--------------------|---------------|
-//! | Block RAM | a [`Memory`] with its `MemRdPort` / `MemWrPort` cells | one block per width x depth slice (per read port, when the block has too few), plus address decoding and output muxing as cells; or, below the threshold, the memory built out of logic |
+//! | Block RAM | a [`Memory`] with its `MemRdPort` / `MemWrPort` cells | one block per width x depth slice (per read port, when the block has too few), carrying its slice of the initial contents, plus address decoding and output muxing as cells; or, below the threshold, the memory built out of logic |
 //! | DSP | a `Mul`, and a `Mul` feeding an `Add` | one multiplier or multiply-accumulate block |
 //! | Carry | an `Add` at least `min_carry_width` bits wide | a chain of carry primitives plus `Xor` cells for the sums |
 //! | IO buffers | every top-level port | one IO primitive per bit, carrying the constraints' `io_standard`, `drive`, `slew` and `pullup`; for a port with a `ddr` clock, one per *two* bits with both edges registered (in the buffer where the family's buffer does it, in a `ddr_in` / `ddr_out` register beside it where it does not); and an `iodelay` element where a delay is asked for |
@@ -48,13 +48,28 @@
 //! this part" is the useful answer. [`BramFallback`] says which of these
 //! happened and what was built.
 //!
-//! # Known gap
+//! # Block RAM wiring and contents
 //!
-//! A block RAM configured in a mode narrower than its widest one is
-//! connected to the low bits of the primitive's data port. Some families
-//! (iCE40 among them) also permute the data bits in the narrow modes;
-//! Reticle does not apply that permutation yet, and the report says so
-//! whenever a narrow mode is used.
+//! How a mode puts a word on the pins and in the contents is the
+//! database's [`BramModeLayout`], not Rust: the data pins a narrow mode
+//! uses (the iCE40 spreads 512x8 over pins 0, 2, .., 14), where the word
+//! address starts on the address port and what the pins below it are
+//! tied to (the ECP5 addresses in units of its narrowest mode, so its
+//! 18-bit mode starts at pin 4, with the write byte enables tied high),
+//! and where each bit of each word sits in the rows the initialisation
+//! parameters hold.
+//!
+//! A memory with initial contents ([`Memory::init`]) gets them in every
+//! block: each block the width and depth slices it holds, every copy of
+//! a duplicated memory the same, `x` and `z` bits and words past the
+//! end of the contents as 0. When the database cannot say where they go
+//! — a primitive without the `init` flag, no `init_params`, a mode
+//! without a layout — the memory is still mapped and the loss is a
+//! warning ([`NO_BRAM_INIT`]), never a silence: the netlist's blocks
+//! start blank, and a ROM in them would read zeros on the device.
+//!
+//! [`Memory::init`]: crate::ir::Memory::init
+//! [`BramModeLayout`]: super::device::BramModeLayout
 //!
 //! [`Memory`]: crate::ir::Memory
 //! [`DspShape`]: super::device::DspShape
@@ -65,12 +80,15 @@ use std::collections::BTreeMap;
 use std::fmt::Write as _;
 
 use super::constraints::{Constraints, IoAttrs};
-use super::device::{BelKind, BelRole, BramShape, Device, PllFeedback, PllShape};
+use super::device::{
+    BelKind, BelRole, BramInitLayout, BramInitParams, BramModeLayout, BramShape, Device,
+    PllFeedback, PllShape,
+};
 use super::pll::PllSolution;
 use crate::diag::{Diagnostic, Diagnostics};
 use crate::ir::expr::operands;
 use crate::ir::{
-    Assign, AttrValue, Attrs, Cell, CellId, CellKind, Const, Design, Expr, ExprId, ExprKind,
+    Assign, AttrValue, Attrs, Bit, Cell, CellId, CellKind, Const, Design, Expr, ExprId, ExprKind,
     Lvalue, MemoryId, Module, ModuleId, Name, Net, NetId, NetKind, PortDir, Type, infer_type,
 };
 use crate::source::Span;
@@ -85,6 +103,9 @@ pub const PARTIAL_IO: &str = "F0302";
 pub const NO_PLL: &str = "F0303";
 /// Diagnostic code for an IO register or delay the device cannot build.
 pub const NO_IO_REGISTER: &str = "F0304";
+/// Diagnostic code for a memory whose initial contents the block RAMs it
+/// was mapped to cannot hold.
+pub const NO_BRAM_INIT: &str = "F0305";
 
 /// Which mapping steps run, and the thresholds they use.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -153,8 +174,14 @@ pub struct BramMapping {
     pub deep: u32,
     /// How many copies of the contents there are: one, or one per read
     /// port when the memory wanted more ports than one block has, all
-    /// written together from the memory's single write port.
+    /// written together from the memory's single write port (or, for a
+    /// read-only memory, never written at all).
     pub copies: u32,
+    /// The blocks carry the memory's initial contents in their
+    /// initialisation parameters. False for a memory without any, and
+    /// for one whose contents the blocks could not hold, which is then
+    /// reported as a warning ([`NO_BRAM_INIT`]).
+    pub initialised: bool,
 }
 
 impl BramMapping {
@@ -372,6 +399,9 @@ impl MapReport {
                 );
                 if item.copies > 1 {
                     let _ = write!(out, ", {} copies, one per read port", item.copies);
+                }
+                if item.initialised {
+                    out.push_str(", initialised");
                 }
                 out.push_str(")\n");
             }
@@ -899,9 +929,11 @@ impl Mapper<'_> {
         // duplication: one copy of the contents per read port, each with
         // one read and one write port of its own, all written together
         // from the one write port. It costs read ports, not silicon
-        // behaviour, so it is only right when there is exactly one
+        // behaviour, so it is only right when there is at most one
         // writer — two writers would need the copies kept in step, which
-        // the blocks cannot do between them.
+        // the blocks cannot do between them. A ROM (no writer at all) is
+        // the easy case: every copy holds the same initial contents and
+        // nothing ever changes them.
         let groups = match allocate_ports(shape, reads.len(), writes.len()) {
             Some((read_slots, write_slots)) => vec![BramCopy {
                 reads: reads.clone(),
@@ -909,22 +941,24 @@ impl Mapper<'_> {
                 write_slots,
                 index: 0,
             }],
-            None if writes.len() == 1 && reads.len() > 1 => match allocate_ports(shape, 1, 1) {
-                Some((read_slots, write_slots)) => reads
-                    .iter()
-                    .enumerate()
-                    .map(|(index, id)| BramCopy {
-                        reads: vec![*id],
-                        read_slots: read_slots.clone(),
-                        write_slots: write_slots.clone(),
-                        index,
-                    })
-                    .collect(),
-                None => {
-                    let reason = port_shortfall(shape, reads.len(), writes.len());
-                    return give_up(self, reason, true);
+            None if writes.len() <= 1 && reads.len() > 1 => {
+                match allocate_ports(shape, 1, writes.len()) {
+                    Some((read_slots, write_slots)) => reads
+                        .iter()
+                        .enumerate()
+                        .map(|(index, id)| BramCopy {
+                            reads: vec![*id],
+                            read_slots: read_slots.clone(),
+                            write_slots: write_slots.clone(),
+                            index,
+                        })
+                        .collect(),
+                    None => {
+                        let reason = port_shortfall(shape, reads.len(), writes.len());
+                        return give_up(self, reason, true);
+                    }
                 }
-            },
+            }
             None => {
                 let reason = port_shortfall(shape, reads.len(), writes.len());
                 return give_up(self, reason, true);
@@ -933,20 +967,21 @@ impl Mapper<'_> {
         let copies = u32::try_from(groups.len()).unwrap_or(1);
 
         let shape = shape.clone();
-        if mode.0 < shape.width_modes.iter().map(|(w, _)| *w).max().unwrap_or(0) {
-            self.note(format!(
-                "memory `{name}` uses the narrow {}x{} mode of {}; the data bits are connected in order, which some families permute",
-                mode.0, mode.1, shape.name
-            ));
-        }
+        let layout = shape.layout_for_mode(mode);
         if copies > 1 {
+            let how = if writes.is_empty() {
+                "each holding the same initial contents"
+            } else {
+                "written together"
+            };
             self.note(format!(
                 "memory `{name}` has {} read ports and one `{}` serves one, so its contents are \
-                 held in {copies} copies written together",
+                 held in {copies} copies {how}",
                 reads.len(),
                 shape.name
             ));
         }
+        let initialise = self.bram_contents(module, mem, &shape, &layout, mode);
         for copy in &groups {
             let plan = BramPlan {
                 mode,
@@ -956,6 +991,8 @@ impl Mapper<'_> {
                 write_slots: copy.write_slots.clone(),
                 copy: copy.index,
                 copies: groups.len(),
+                layout: layout.clone(),
+                initialise,
             };
             self.emit_bram(module, mem, &shape, &plan, &copy.reads, &writes);
         }
@@ -968,10 +1005,75 @@ impl Mapper<'_> {
             wide,
             deep,
             copies,
+            initialised: initialise,
         });
         let mut replaced = reads;
         replaced.extend(writes);
         Some(replaced)
+    }
+
+    /// Decides whether the blocks of a memory mapped to `shape` in `mode`
+    /// can carry its initial contents: true when the memory has some and
+    /// the database says where they go. A memory with contents the blocks
+    /// cannot hold is a warning, never a silence: its netlist's blocks
+    /// start blank, so a ROM would read zeros on the board.
+    fn bram_contents(
+        &mut self,
+        module: &Module,
+        mem: MemoryId,
+        shape: &BramShape,
+        layout: &BramModeLayout,
+        mode: (u32, u32),
+    ) -> bool {
+        let memory = &module.memories[mem];
+        let Some(init) = &memory.init else {
+            return false;
+        };
+        let (mode_width, mode_depth) = mode;
+        let device = &self.device.name;
+        let primitive = &shape.name;
+        let problem = match (&shape.init_params, &layout.init) {
+            _ if !shape.init_supported => Some(format!(
+                "`{device}` declares no way to initialise `{primitive}` (no `init` flag)"
+            )),
+            (None, _) => Some(format!(
+                "`{device}`'s database does not say which parameters hold `{primitive}`'s \
+                 contents (no `init_params`)"
+            )),
+            (_, None) => Some(format!(
+                "`{device}`'s database does not say where the words of `{primitive}`'s \
+                 {mode_width}x{mode_depth} mode sit in its contents"
+            )),
+            (Some(params), Some(words)) => init_layout_problem(params, words, mode).map(|why| {
+                format!(
+                    "`{device}`'s layout for the {mode_width}x{mode_depth} mode of \
+                     `{primitive}` does not fit its contents: {why}"
+                )
+            }),
+        };
+        let name = memory.name.as_str().to_owned();
+        if let Some(problem) = problem {
+            self.diags.push(
+                Diagnostic::warning(format!(
+                    "memory `{name}` has initial contents that its block RAMs will not hold: \
+                     {problem}"
+                ))
+                .with_code(NO_BRAM_INIT)
+                .with_span(memory.span)
+                .with_note(format!(
+                    "the `{primitive}` cells start blank, so on the device the memory reads \
+                     zeros until it is written"
+                )),
+            );
+            return false;
+        }
+        if init.iter().any(|word| !word.is_fully_known()) {
+            self.note(format!(
+                "memory `{name}` has `x` or `z` bits in its initial contents; the block RAMs \
+                 hold them as 0"
+            ));
+        }
+        true
     }
 
     /// Picks the shape and mode that uses fewest blocks, preferring the
@@ -1031,6 +1133,15 @@ impl Mapper<'_> {
             .iter()
             .map(|(k, v)| (Name::new(k.clone()), v.clone()))
             .collect();
+        let layout = &plan.layout;
+        // The contents, when they go into the blocks: `bram_contents`
+        // checked that the database describes where.
+        let contents = match (&memory.init, &shape.init_params, &layout.init) {
+            (Some(init), Some(params), Some(words)) if plan.initialise => {
+                Some((init.clone(), params.clone(), words.clone()))
+            }
+            _ => None,
+        };
 
         // One port description per read and write port of the memory,
         // resolved once so the per-block loop only wires things up.
@@ -1047,12 +1158,20 @@ impl Mapper<'_> {
         // so it is built once per port.
         let read_addrs: Vec<ExprId> = read_ports
             .iter()
-            .map(|port| self.block_addr(module, port, prim_addr_bits, span))
+            .map(|port| self.block_addr(module, port, prim_addr_bits, layout, mode_depth, span))
             .collect();
         let write_addrs: Vec<ExprId> = write_ports
             .iter()
-            .map(|port| self.block_addr(module, port, prim_addr_bits, span))
+            .map(|port| self.block_addr(module, port, prim_addr_bits, layout, mode_depth, span))
             .collect();
+        // How many data pins a block uses: as many as the mode is wide,
+        // unless the mode spreads its bits, in which case up to the
+        // highest pin it uses.
+        let data_pins = layout
+            .data_bits
+            .iter()
+            .max()
+            .map_or(mode_width, |top| top + 1);
 
         // For each read port, the value read by each depth slice.
         let mut rows: Vec<Vec<ExprId>> = vec![Vec::new(); read_ports.len()];
@@ -1097,12 +1216,29 @@ impl Mapper<'_> {
                         let net = add_net(
                             module,
                             &format!("{base}$rd{index}_w{w}_d{d}"),
-                            Type::bits(mode_width),
+                            Type::bits(data_pins),
                             span,
                         );
                         outputs.push((Name::new(name), net));
                         let value = net_expr(module, net, span);
-                        let part = slice_expr(module, value, hi - lo, 0, span);
+                        let part = if layout.data_bits.is_empty() {
+                            slice_expr(module, value, hi - lo, 0, span)
+                        } else {
+                            // Data bit `j` comes off the pin the mode puts
+                            // it on; most significant first.
+                            let bits: Vec<ExprId> = (0..=hi - lo)
+                                .rev()
+                                .map(|j| {
+                                    let pin = layout.data_bit(j);
+                                    slice_expr(module, value, pin, pin, span)
+                                })
+                                .collect();
+                            if bits.len() == 1 {
+                                bits[0]
+                            } else {
+                                expr(module, ExprKind::Concat(bits), span)
+                            }
+                        };
                         row_parts[index].push(part);
                     }
                 }
@@ -1132,8 +1268,12 @@ impl Mapper<'_> {
                     if let Some(name) = map.signal("din")
                         && let Some(data) = port.data
                     {
-                        let part = slice_expr(module, data, hi, lo, span);
-                        let value = self.resize(module, part, mode_width, span);
+                        let value = if layout.data_bits.is_empty() {
+                            let part = slice_expr(module, data, hi, lo, span);
+                            self.resize(module, part, mode_width, span)
+                        } else {
+                            spread_data(module, data, layout, lo, hi, data_pins, span)
+                        };
                         inputs.push((Name::new(name), value));
                     }
                 }
@@ -1147,6 +1287,13 @@ impl Mapper<'_> {
                 );
                 for (key, value) in &mode_params {
                     module.cells[cell].params.set(key.clone(), value.clone());
+                }
+                if let Some((init, params, words)) = &contents {
+                    // Every copy holds the whole contents; this block
+                    // holds its width slice of its depth slice of them.
+                    for (key, value) in block_contents(init, width, params, words, mode, w, d) {
+                        module.cells[cell].params.set(key, value);
+                    }
                 }
                 module.cells[cell].attrs.set("memory", memory_name.clone());
             }
@@ -1232,17 +1379,39 @@ impl Mapper<'_> {
     }
 
     /// The address a block sees, zero-extended to the primitive's width.
+    ///
+    /// A mode whose word address starts above bit 0 of the address port
+    /// ([`BramModeLayout::addr_low`]) gets the word address, as wide as
+    /// the mode's depth needs, shifted up to there, with the bits below
+    /// tied to the mode's pad.
     fn block_addr(
         &mut self,
         module: &mut Module,
         port: &PortWiring,
         prim_addr_bits: u32,
+        layout: &BramModeLayout,
+        mode_depth: u32,
         span: Span,
     ) -> ExprId {
-        match port.low {
-            Some(addr) => self.resize(module, addr, prim_addr_bits, span),
-            None => const_expr(module, Const::zero(prim_addr_bits.max(1)), span),
+        if layout.addr_low == 0 {
+            return match port.low {
+                Some(addr) => self.resize(module, addr, prim_addr_bits, span),
+                None => const_expr(module, Const::zero(prim_addr_bits.max(1)), span),
+            };
         }
+        let word_bits = addr_bits(u64::from(mode_depth)).max(1);
+        let word = match port.low {
+            Some(addr) => self.resize(module, addr, word_bits, span),
+            None => const_expr(module, Const::zero(word_bits), span),
+        };
+        let pad = layout
+            .addr_pad
+            .clone()
+            .unwrap_or_else(|| Const::zero(layout.addr_low));
+        let pad = const_expr(module, pad, span);
+        let pad = self.resize(module, pad, layout.addr_low, span);
+        let joined = expr(module, ExprKind::Concat(vec![word, pad]), span);
+        self.resize(module, joined, prim_addr_bits, span)
     }
 
     /// The enable a block at depth slice `d` sees: the port's enable and
@@ -3224,6 +3393,12 @@ struct BramPlan {
     copy: usize,
     /// How many copies there are in all.
     copies: usize,
+    /// How the mode places a word on the pins and in the contents.
+    layout: BramModeLayout,
+    /// Write the memory's initial contents into every block's
+    /// initialisation parameters; decided, and any loss reported, by
+    /// [`Mapper::bram_contents`].
+    initialise: bool,
 }
 
 impl BramPlan {
@@ -3251,6 +3426,148 @@ struct BramCopy {
     write_slots: Vec<usize>,
     /// Which copy this is.
     index: usize,
+}
+
+/// Bits `lo..=hi` of `data` placed on the data pins a mode spreads them
+/// over ([`BramModeLayout::data_bits`]), `pins` wide, with every pin the
+/// mode does not use tied to 0.
+fn spread_data(
+    module: &mut Module,
+    data: ExprId,
+    layout: &BramModeLayout,
+    lo: u32,
+    hi: u32,
+    pins: u32,
+    span: Span,
+) -> ExprId {
+    // Most significant pin first, runs of unused pins as one constant.
+    let mut parts: Vec<ExprId> = Vec::new();
+    let mut zeros = 0u32;
+    for pin in (0..pins).rev() {
+        let bit = layout
+            .data_bits
+            .iter()
+            .position(|p| *p == pin)
+            .and_then(|j| u32::try_from(j).ok())
+            .and_then(|j| lo.checked_add(j))
+            .filter(|bit| *bit <= hi);
+        match bit {
+            Some(bit) => {
+                if zeros > 0 {
+                    parts.push(const_expr(module, Const::zero(zeros), span));
+                    zeros = 0;
+                }
+                parts.push(slice_expr(module, data, bit, bit, span));
+            }
+            None => zeros += 1,
+        }
+    }
+    if zeros > 0 {
+        parts.push(const_expr(module, Const::zero(zeros), span));
+    }
+    if parts.len() == 1 {
+        parts[0]
+    } else {
+        expr(module, ExprKind::Concat(parts), span)
+    }
+}
+
+/// Why a mode's contents layout cannot be used with `params`, or `None`
+/// when it can: the words of a row times the rows must be the mode's
+/// depth, and every row bit must fall inside a slot.
+fn init_layout_problem(
+    params: &BramInitParams,
+    layout: &BramInitLayout,
+    mode: (u32, u32),
+) -> Option<String> {
+    let (mode_width, mode_depth) = mode;
+    let per_row = u64::try_from(layout.words.len()).unwrap_or(u64::MAX);
+    let rows = params.total_rows();
+    if per_row.saturating_mul(rows) != u64::from(mode_depth) {
+        return Some(format!(
+            "{per_row} word(s) per row over {rows} rows is not {mode_depth} words"
+        ));
+    }
+    for word in &layout.words {
+        if u32::try_from(word.len()).ok() != Some(mode_width) {
+            return Some(format!(
+                "a word lists {} bits, not {mode_width}",
+                word.len()
+            ));
+        }
+        if let Some(bit) = word.iter().find(|bit| **bit >= params.slot) {
+            return Some(format!(
+                "row bit {bit} is outside a {}-bit row",
+                params.slot
+            ));
+        }
+    }
+    None
+}
+
+/// The initialisation parameters of the block that holds bits
+/// `w * mode_width ..` of words `d * mode_depth ..` of a memory `width`
+/// bits wide with initial contents `init`.
+///
+/// Word `a` of the block (counted from its first) keeps its data bit `j`
+/// where [`BramInitLayout::locate`] says; a bit that is not a known `1`,
+/// and every word past the end of `init`, is 0. Every parameter is
+/// written, so the block's contents are stated in full.
+fn block_contents(
+    init: &[Const],
+    width: u32,
+    params: &BramInitParams,
+    layout: &BramInitLayout,
+    mode: (u32, u32),
+    w: u32,
+    d: u32,
+) -> Vec<(Name, AttrValue)> {
+    let (mode_width, mode_depth) = mode;
+    let rows = params.total_rows();
+    let rows_per_param = u64::from(params.rows.max(1));
+    let mut values: Vec<Const> = (0..params.count)
+        .map(|_| Const::zero(params.param_width()))
+        .collect();
+    let first = u64::from(d) * u64::from(mode_depth);
+    for local in 0..u64::from(mode_depth) {
+        let Some(word) = usize::try_from(first + local)
+            .ok()
+            .and_then(|index| init.get(index))
+        else {
+            break;
+        };
+        for j in 0..mode_width {
+            let Some(bit) = w
+                .checked_mul(mode_width)
+                .and_then(|base| base.checked_add(j))
+                .filter(|bit| *bit < width)
+            else {
+                break;
+            };
+            if word.get(bit) != Some(Bit::One) {
+                continue;
+            }
+            let Some((row, at)) = layout.locate(local, j, rows) else {
+                continue;
+            };
+            let within = u32::try_from(row % rows_per_param).unwrap_or(0);
+            let Some(value) = usize::try_from(row / rows_per_param)
+                .ok()
+                .and_then(|index| values.get_mut(index))
+            else {
+                continue;
+            };
+            let position = within * params.slot + at;
+            if position < value.width() {
+                value.set_bit(position, Bit::One);
+            }
+        }
+    }
+    values
+        .into_iter()
+        .zip(0u32..)
+        .map(|(value, index)| (Name::new(params.name(index)), AttrValue::Const(value)))
+        .collect()
 }
 
 /// Why a block RAM shape cannot serve a memory's ports.
@@ -3607,11 +3924,10 @@ mod tests {
         assert_eq!(item.mode, (2, 2048));
         assert_eq!((item.wide, item.deep), (1, 2));
         assert_eq!(cells_named(&design, top, "SB_RAM40_4K"), 2);
+        // The 2x2048 mode reads and writes on data pins 3 and 11, which
+        // the database says, so there is nothing left to warn about.
         assert!(
-            report
-                .notes
-                .iter()
-                .any(|n| n.contains("narrow 2x2048 mode")),
+            !report.notes.iter().any(|n| n.contains("narrow")),
             "{:?}",
             report.notes
         );
@@ -3975,6 +4291,240 @@ mod tests {
             "{:?}",
             report.bram_fallbacks
         );
+    }
+
+    /// Gives the memory of a [`memory_design`] the contents `word(a)`.
+    fn preload(design: &mut Design, top: ModuleId, word: impl Fn(u64) -> u64) {
+        let module = design.module_mut(top);
+        let mem = module.memories.ids().next().unwrap();
+        let memory = &mut module.memories[mem];
+        let width = memory.elem.width().unwrap();
+        memory.init = Some(
+            (0..memory.size)
+                .map(|a| Const::from_u64(word(a) & ((1 << width) - 1), width))
+                .collect(),
+        );
+    }
+
+    /// The block RAM cell called `name`.
+    fn bram_cell<'a>(design: &'a Design, top: ModuleId, name: &str) -> &'a Cell {
+        design
+            .module(top)
+            .cells
+            .iter()
+            .map(|(_, c)| c)
+            .find(|c| c.name.as_str() == name)
+            .unwrap_or_else(|| panic!("no cell {name}"))
+    }
+
+    /// Bit `bit` of initialisation parameter `param` of `cell`.
+    fn init_bit(cell: &Cell, param: &str, bit: u32) -> bool {
+        match cell.params.get(param) {
+            Some(AttrValue::Const(c)) => c.bit(bit) == Bit::One,
+            other => panic!("{param} of {} is {other:?}", cell.name),
+        }
+    }
+
+    #[test]
+    fn ice40_narrow_modes_spread_their_bits_and_their_contents() {
+        // 512x8 on SB_RAM40_4K: the row is address bits 7..0, address
+        // bit 8 picks the even or the odd bits of the row, and data bit
+        // j is on data pin 2j.
+        let (mut design, top, _map) = memory_design(8, 512);
+        preload(&mut design, top, |a| a * 37 + 11);
+        let options = MapOptions {
+            insert_io_buffers: false,
+            insert_clock_buffers: false,
+            ..MapOptions::default()
+        };
+        let report = run(&mut design, top, "ice40-hx1k-tq144", &options);
+        let item = &report.block_rams[0];
+        assert_eq!(item.mode, (8, 512));
+        assert!(item.initialised);
+        let cell = bram_cell(&design, top, "ram$ram_w0_d0");
+        for a in 0..512u32 {
+            let word = (u64::from(a) * 37 + 11) & 0xff;
+            let (row, sub) = (a % 256, a / 256);
+            for j in 0..8 {
+                let param = format!("INIT_{:X}", row / 16);
+                let at = (row % 16) * 16 + 2 * j + sub;
+                assert_eq!(init_bit(cell, &param, at), (word >> j) & 1 == 1, "{a}.{j}");
+            }
+        }
+        // Pins 0, 2, .., 14 carry the data both ways, the odd ones
+        // written as 0.
+        let module = design.module(top);
+        let wdata = cell.input("WDATA").unwrap();
+        assert_eq!(expr_width(module, wdata), 15);
+        let rdata = cell.output("RDATA").unwrap();
+        assert_eq!(net_width(module, rdata), 15);
+        let text = design.to_text();
+        assert!(
+            text.contains(
+                "WDATA={%wdata[7:7], 1'd0, %wdata[6:6], 1'd0, %wdata[5:5], 1'd0, %wdata[4:4], \
+                 1'd0, %wdata[3:3], 1'd0, %wdata[2:2], 1'd0, %wdata[1:1], 1'd0, %wdata[0:0]}"
+            ),
+            "{text}"
+        );
+        assert!(
+            text.contains("{%ram$rd0_w0_d0[14:14], %ram$rd0_w0_d0[12:12]"),
+            "{text}"
+        );
+
+        // 4096x1 in the 2048x2 mode, two blocks deep: the second holds
+        // words 2048 and up, word `l` of a block in row l % 256, row bit
+        // l / 256.
+        let (mut design, top, _map) = memory_design(1, 4096);
+        preload(&mut design, top, |a| u64::from(a % 3 == 0));
+        let report = run(&mut design, top, "ice40-hx1k-tq144", &options);
+        assert_eq!(report.block_rams[0].mode, (2, 2048));
+        for d in 0..2u32 {
+            let cell = bram_cell(&design, top, &format!("ram$ram_w0_d{d}"));
+            for local in 0..2048u32 {
+                let a = d * 2048 + local;
+                let (row, sub) = (local % 256, local / 256);
+                let param = format!("INIT_{:X}", row / 16);
+                let at = (row % 16) * 16 + sub;
+                assert_eq!(init_bit(cell, &param, at), a % 3 == 0, "word {a}");
+            }
+        }
+    }
+
+    #[test]
+    fn ecp5_addresses_and_contents_follow_the_database() {
+        // 2048x9 on DP16KD: the word address starts at address pin 3,
+        // two words share a row (bits 8..0 and 17..9), and each
+        // INITVAL_nn holds sixteen rows in 20-bit slots.
+        let (mut design, top, _map) = memory_design(9, 2048);
+        preload(&mut design, top, |a| a ^ (a >> 3));
+        let options = MapOptions {
+            insert_io_buffers: false,
+            insert_clock_buffers: false,
+            ..MapOptions::default()
+        };
+        let report = run(&mut design, top, "ecp5-45f-CABGA381", &options);
+        let item = &report.block_rams[0];
+        assert_eq!((item.mode, item.blocks()), ((9, 2048), 1));
+        assert!(item.initialised);
+        let cell = bram_cell(&design, top, "ram$ram_w0_d0");
+        match cell.params.get("INITVAL_3F") {
+            Some(AttrValue::Const(c)) => assert_eq!(c.width(), 320),
+            other => panic!("{other:?}"),
+        }
+        for a in 0..2048u32 {
+            let word = (u64::from(a) ^ (u64::from(a) >> 3)) & 0x1ff;
+            let (row, sub) = (a / 2, a % 2);
+            for j in 0..9 {
+                let param = format!("INITVAL_{:02X}", row / 16);
+                let at = (row % 16) * 20 + 9 * sub + j;
+                assert_eq!(init_bit(cell, &param, at), (word >> j) & 1 == 1, "{a}.{j}");
+            }
+        }
+        let text = design.to_text();
+        assert!(text.contains("ADA={%raddr, 3'd0}"), "{text}");
+        assert!(text.contains("ADB={%waddr, 3'd0}"), "{text}");
+
+        // 1024x18 ties the two pins below the address, the write byte
+        // enables, high.
+        let (mut design, top, _map) = memory_design(18, 1024);
+        run(&mut design, top, "ecp5-45f-CABGA381", &options);
+        let text = design.to_text();
+        assert!(text.contains("ADB={%waddr, 4'd3}"), "{text}");
+    }
+
+    #[test]
+    fn contents_a_block_cannot_hold_are_reported() {
+        // The generic RAMB says it can be initialised and not how: the
+        // memory still becomes block RAM, blank, and the loss is a
+        // warning rather than a silence.
+        let (mut design, top, _map) = memory_design(8, 512);
+        preload(&mut design, top, |a| a);
+        let mut diags = Diagnostics::new();
+        let report = map(
+            &mut design,
+            top,
+            target("generic").unwrap(),
+            &Constraints::new(),
+            &MapOptions {
+                insert_io_buffers: false,
+                ..MapOptions::default()
+            },
+            &mut diags,
+        );
+        assert_eq!(report.block_rams.len(), 1);
+        assert!(!report.block_rams[0].initialised);
+        let lost: Vec<_> = diags
+            .iter()
+            .filter(|d| d.code == Some(NO_BRAM_INIT))
+            .collect();
+        assert_eq!(lost.len(), 1);
+        assert_eq!(lost[0].severity, crate::diag::Severity::Warning);
+        assert!(
+            lost[0].message.contains("no `init_params`"),
+            "{}",
+            lost[0].message
+        );
+        assert!(cells_named(&design, top, "RAMB") == 1);
+        let cell = design
+            .module(top)
+            .cells
+            .iter()
+            .map(|(_, c)| c)
+            .find(|c| matches!(&c.kind, CellKind::Blackbox(n) if n.as_str() == "RAMB"))
+            .unwrap();
+        assert!(
+            cell.params
+                .iter()
+                .all(|(k, _)| !k.as_str().starts_with("INIT"))
+        );
+    }
+
+    #[test]
+    fn a_rom_read_twice_gets_one_initialised_copy_per_read() {
+        // No write port, two read ports, one read port per SB_RAM40_4K:
+        // two copies, each holding every word.
+        let (mut design, top, _map) = memory_design(8, 256);
+        {
+            let module = design.module_mut(top);
+            let wr = module
+                .cells
+                .iter()
+                .find(|(_, c)| c.name.as_str() == "wr")
+                .map(|(id, _)| id)
+                .unwrap();
+            module.cells.retain(|id, _| id != wr);
+        }
+        add_second_read(&mut design, top, true);
+        preload(&mut design, top, |a| 255 - a);
+        let options = MapOptions {
+            insert_io_buffers: false,
+            insert_clock_buffers: false,
+            ..MapOptions::default()
+        };
+        let report = run(&mut design, top, "ice40-hx1k-tq144", &options);
+        let item = &report.block_rams[0];
+        assert_eq!((item.copies, item.blocks()), (2, 2));
+        assert!(item.initialised);
+        assert!(
+            report
+                .notes
+                .iter()
+                .any(|n| n.contains("same initial contents")),
+            "{:?}",
+            report.notes
+        );
+        for copy in 0..2 {
+            let cell = bram_cell(&design, top, &format!("ram$c{copy}$ram_w0_d0"));
+            assert!(cell.input("WE").is_none() && cell.input("WDATA").is_none());
+            for a in 0..256u32 {
+                let param = format!("INIT_{:X}", a / 16);
+                for j in 0..8 {
+                    let at = (a % 16) * 16 + j;
+                    let want = ((255 - a) >> j) & 1 == 1;
+                    assert_eq!(init_bit(cell, &param, at), want, "copy {copy} word {a}");
+                }
+            }
+        }
     }
 
     /// A design with `q = a * b` and, optionally, an accumulator.

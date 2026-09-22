@@ -287,12 +287,23 @@ fn add_tracks(tile: &mut TileType, per_group: usize) {
 /// track of the same index in the other three groups, which is how a
 /// signal turns a corner without passing through a bel.
 fn add_track_muxes(muxes: &mut Muxes, outputs: &[WireRef], per_group: usize) {
+    let grouped: Vec<(WireRef, usize)> = outputs
+        .iter()
+        .enumerate()
+        .map(|(t, output)| (output.clone(), t % LOCAL_GROUPS))
+        .collect();
+    add_track_muxes_grouped(muxes, &grouped, per_group);
+}
+
+/// [`add_track_muxes`] with the group each output reaches given
+/// explicitly rather than taken from its position.
+fn add_track_muxes_grouped(muxes: &mut Muxes, outputs: &[(WireRef, usize)], per_group: usize) {
     let spans = spans();
     for g in 0..LOCAL_GROUPS {
         for k in 0..per_group {
             let track = WireRef::local(local(g, k));
-            for (t, output) in outputs.iter().enumerate() {
-                if t % LOCAL_GROUPS == g {
+            for (output, group) in outputs {
+                if *group == g {
                     muxes.add(output.clone(), track.clone());
                 }
             }
@@ -591,15 +602,32 @@ fn ramb_tile() -> TileType {
 
     let mut muxes = Muxes::default();
     for (index, name) in inputs.iter().enumerate() {
-        muxes.add_all(
-            &group(index % LOCAL_GROUPS, LOCALS_PER_GROUP),
-            &WireRef::local(name),
-        );
+        let g = name
+            .strip_prefix("p1_din")
+            .and_then(|bit| bit.parse().ok())
+            .map_or(index % LOCAL_GROUPS, ram_data_group);
+        muxes.add_all(&group(g, LOCALS_PER_GROUP), &WireRef::local(name));
     }
-    let driven: Vec<WireRef> = outputs.iter().map(WireRef::local).collect();
-    add_track_muxes(&mut muxes, &driven, LOCALS_PER_GROUP);
+    let driven: Vec<(WireRef, usize)> = outputs
+        .iter()
+        .enumerate()
+        .map(|(bit, name)| (WireRef::local(name), ram_data_group(bit)))
+        .collect();
+    add_track_muxes_grouped(&mut muxes, &driven, LOCALS_PER_GROUP);
     tile.pips = muxes.finish(&mut bits);
     tile
+}
+
+/// The local group block RAM data bit `bit` reaches, for its write data
+/// pin and its read data pin alike.
+///
+/// It is `(bit + bit / 4) % 4` rather than `bit % 4` so that the pins a
+/// narrow mode uses — every second, fourth or eighth one on an iCE40,
+/// whose 512x8 mode reads and writes on pins 0, 2, .., 14 — still spread
+/// over all four groups instead of crowding into one or two, which the
+/// router cannot resolve. Every group still gets four of the sixteen.
+fn ram_data_group(bit: usize) -> usize {
+    (bit + bit / LOCAL_GROUPS) % LOCAL_GROUPS
 }
 
 /// The upper half of a block RAM: routing only, but it has a bitmap of
