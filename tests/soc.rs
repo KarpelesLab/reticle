@@ -98,6 +98,13 @@ use reticle::verilog::{Dialect, ElabOptions, NoIncludes, elaborate, parse_source
 #[path = "rv32i_asm/mod.rs"]
 mod asm;
 
+/// The 8N1 receiver that reads the line off the pin's waveform, shared
+/// with `tests/mos6502_computer.rs`.
+#[path = "serial/mod.rs"]
+mod serial;
+
+use serial::{Waveform, decode_uart};
+
 /// The line `sw/hello.s` prints.
 const HELLO: &str = "Hello from Reticle\n";
 
@@ -394,52 +401,6 @@ fn the_soc_synthesises_without_errors_or_latches() {
 // ---------------------------------------------------------------------------
 // Simulation
 // ---------------------------------------------------------------------------
-
-/// A wire's changes, as `(time, level)` in the order they happened, with
-/// `None` for a level that is not 0 or 1.
-type Waveform = Vec<(u64, Option<bool>)>;
-
-/// Decodes 8N1 frames from the transitions of a serial line.
-///
-/// A frame starts at a falling edge from idle; each bit is sampled in its
-/// middle, `bit` ticks apart, and the start bit must still be low there
-/// and the stop bit high.
-fn decode_uart(edges: &[(u64, Option<bool>)], bit: u64) -> Result<Vec<u8>, String> {
-    let level_at = |t: u64| -> Option<bool> {
-        edges
-            .iter()
-            .take_while(|(when, _)| *when <= t)
-            .last()
-            .and_then(|(_, level)| *level)
-    };
-    let mut out = Vec::new();
-    let mut from = 0u64;
-    loop {
-        let start = edges
-            .windows(2)
-            .find(|w| w[1].0 >= from && w[0].1 == Some(true) && w[1].1 == Some(false))
-            .map(|w| w[1].0);
-        let Some(start) = start else { break };
-        let sample = |k: u64| level_at(start + k * bit + bit / 2);
-        if sample(0) != Some(false) {
-            return Err(format!("a start bit at {start} is not low in its middle"));
-        }
-        let mut byte = 0u8;
-        for k in 0..8 {
-            match sample(k + 1) {
-                Some(true) => byte |= 1 << k,
-                Some(false) => {}
-                None => return Err(format!("data bit {k} of the frame at {start} is x")),
-            }
-        }
-        if sample(9) != Some(true) {
-            return Err(format!("the frame at {start} has no stop bit"));
-        }
-        out.push(byte);
-        from = start + 9 * bit + bit / 2;
-    }
-    Ok(out)
-}
 
 #[test]
 fn the_line_comes_out_of_the_serial_wire() {
