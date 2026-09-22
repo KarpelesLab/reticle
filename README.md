@@ -1,6 +1,8 @@
 # reticle
 
 [![CI](https://github.com/KarpelesLab/reticle/actions/workflows/ci.yml/badge.svg)](https://github.com/KarpelesLab/reticle/actions/workflows/ci.yml)
+[![crates.io](https://img.shields.io/crates/v/reticle.svg)](https://crates.io/crates/reticle)
+[![docs.rs](https://img.shields.io/docsrs/reticle)](https://docs.rs/reticle)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
 A VHDL / Verilog compiler written **from scratch in Rust**, with no foreign
