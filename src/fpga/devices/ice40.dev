@@ -1,0 +1,182 @@
+# Lattice iCE40 LP/HX, as much of it as Reticle can state confidently.
+#
+# Provenance and confidence, stated per group because it differs:
+#
+#   * Primitive names and ports (SB_LUT4, SB_CARRY, SB_DFF*, SB_IO, SB_GB,
+#     SB_RAM40_4K, SB_PLL40_*) come from the SiliconBlue / Lattice iCE
+#     Technology Library, which every published iCE40 design and the
+#     Yosys `synth_ice40` pass use verbatim. High confidence.
+#   * Logic cell: 4-input LUT plus one carry bit plus one flip-flop; the
+#     clock, clock enable and set/reset of the eight logic cells in a tile
+#     are shared, which is why `shared_reset` is set. High confidence.
+#   * SB_RAM40_4K: 4096 bits, configurable 256x16, 512x8, 1024x4 and
+#     2048x2, one read port and one write port with independent clocks,
+#     contents initialisable through INIT_0..INIT_F. High confidence.
+#     The 16-bit mode has a bit-granular MASK input rather than byte
+#     enables, so `byte_enable` is deliberately not set. READ_MODE and
+#     WRITE_MODE select the width, 0 for 16 bits through 3 for 2 bits.
+#   * SB_IO's PIN_TYPE values below (6'b000001 for a plain input,
+#     6'b011001 for a plain output, 6'b101001 for a tristatable one) are
+#     the ones every published iCE40 design uses. Medium-high confidence.
+#   * Resource counts (1280 logic cells and 16 block RAMs on the 1K parts,
+#     7680 and 32 on the 8K) are the datasheet figures. High confidence.
+#   * The tile grid is the array size used by Project IceStorm's chip
+#     database (0..13 x 0..17 for the 1K dice, 0..33 x 0..33 for the 8K).
+#     It is consistent with the logic-cell counts above, but Reticle only
+#     uses it as a bounding box for placement regions. Medium confidence.
+#   * No DSP blocks: multipliers exist only on the UltraPlus parts.
+#   * IO: the iCE40 IO buffer has no programmable drive strength or slew
+#     rate, so the standards below carry only a bank voltage. The parts
+#     have four IO banks (0 top, 1 right, 2 bottom, 3 left), but Reticle
+#     cannot state which package pin is in which bank, so a single
+#     synthetic bank named `io` holds every recorded pin. Do not read the
+#     bank name as silicon truth.
+#   * PIN LISTS ARE PARTIAL AND DERIVED FROM BOARD FILES, NOT FROM THE
+#     PACKAGE DRAWINGS. The tq144 entries are the pins the Lattice
+#     iCEstick uses (12 MHz oscillator, the five LEDs, the FTDI UART and
+#     the PMOD header); the ct256 entries are the pins the Lattice iCE40
+#     HX8K Breakout Board uses (12 MHz oscillator and the eight LEDs).
+#     They are enough to constrain the designs those boards run and are
+#     marked `io`/`clock` accordingly; every other pin of both packages is
+#     missing, and a constraint naming one is reported as unknown. Add the
+#     rest from the datasheet before trusting this file for a new board.
+
+device ice40-lp1k-tq144
+  family ice40
+  package tq144
+  speed lp
+  lut_size 4
+  ff enable sync_reset async_reset shared_reset init 0
+  bel SB_LUT4 lut count 1280 port i=I0,I1,I2,I3 o=O param LUT_INIT=16'h0000
+  bel SB_CARRY carry port ci=CI i0=I0 i1=I1 co=CO
+  bel SB_DFF ff count 1280 port clk=C d=D q=Q en=E rst=R
+  bel SB_IO io port pad=PACKAGE_PIN din=D_IN_0 dout=D_OUT_0 oe=OUTPUT_ENABLE param_in PIN_TYPE=6'b000001 param_out PIN_TYPE=6'b011001 param_inout PIN_TYPE=6'b101001 param_pullup PULLUP=1
+  bel SB_GB gb count 8 port i=USER_SIGNAL_TO_GLOBAL_BUFFER o=GLOBAL_BUFFER_OUTPUT
+  bram SB_RAM40_4K
+    ports 2
+    mode 16 256 param READ_MODE=0 WRITE_MODE=0
+    mode 8 512 param READ_MODE=1 WRITE_MODE=1
+    mode 4 1024 param READ_MODE=2 WRITE_MODE=2
+    mode 2 2048 param READ_MODE=3 WRITE_MODE=3
+    flags dual_port init
+    port read clk=RCLK en=RE addr=RADDR dout=RDATA ce=RCLKE
+    port write clk=WCLK en=WE addr=WADDR din=WDATA ce=WCLKE
+  end
+  io_standard LVCMOS33 vccio 3.3
+  io_standard LVCMOS25 vccio 2.5
+  io_standard LVCMOS18 vccio 1.8
+  io_standard SB_LVDS_INPUT vccio 2.5 differential
+  bank io vccio 3.3,2.5,1.8
+  pin 8 io bank io
+  pin 9 io bank io
+  pin 21 clock bank io
+  pin 78 io bank io
+  pin 79 io bank io
+  pin 80 io bank io
+  pin 81 io bank io
+  pin 87 io bank io
+  pin 88 io bank io
+  pin 89 io bank io
+  pin 90 io bank io
+  pin 95 io bank io
+  pin 96 io bank io
+  pin 97 io bank io
+  pin 98 io bank io
+  pin 99 io bank io
+  global_buffers 8
+  clock_region global 0 0 13 17
+  pll SB_PLL40_CORE input 10 133 vco 533 1066 outputs 1
+  pll SB_PLL40_PAD input 10 133 vco 533 1066 outputs 1
+  grid 14 18
+end
+
+device ice40-hx1k-tq144
+  family ice40
+  package tq144
+  speed hx
+  lut_size 4
+  ff enable sync_reset async_reset shared_reset init 0
+  bel SB_LUT4 lut count 1280 port i=I0,I1,I2,I3 o=O param LUT_INIT=16'h0000
+  bel SB_CARRY carry port ci=CI i0=I0 i1=I1 co=CO
+  bel SB_DFF ff count 1280 port clk=C d=D q=Q en=E rst=R
+  bel SB_IO io port pad=PACKAGE_PIN din=D_IN_0 dout=D_OUT_0 oe=OUTPUT_ENABLE param_in PIN_TYPE=6'b000001 param_out PIN_TYPE=6'b011001 param_inout PIN_TYPE=6'b101001 param_pullup PULLUP=1
+  bel SB_GB gb count 8 port i=USER_SIGNAL_TO_GLOBAL_BUFFER o=GLOBAL_BUFFER_OUTPUT
+  bram SB_RAM40_4K
+    ports 2
+    mode 16 256 param READ_MODE=0 WRITE_MODE=0
+    mode 8 512 param READ_MODE=1 WRITE_MODE=1
+    mode 4 1024 param READ_MODE=2 WRITE_MODE=2
+    mode 2 2048 param READ_MODE=3 WRITE_MODE=3
+    flags dual_port init
+    port read clk=RCLK en=RE addr=RADDR dout=RDATA ce=RCLKE
+    port write clk=WCLK en=WE addr=WADDR din=WDATA ce=WCLKE
+  end
+  io_standard LVCMOS33 vccio 3.3
+  io_standard LVCMOS25 vccio 2.5
+  io_standard LVCMOS18 vccio 1.8
+  io_standard SB_LVDS_INPUT vccio 2.5 differential
+  bank io vccio 3.3,2.5,1.8
+  pin 8 io bank io
+  pin 9 io bank io
+  pin 21 clock bank io
+  pin 78 io bank io
+  pin 79 io bank io
+  pin 80 io bank io
+  pin 81 io bank io
+  pin 87 io bank io
+  pin 88 io bank io
+  pin 89 io bank io
+  pin 90 io bank io
+  pin 95 io bank io
+  pin 96 io bank io
+  pin 97 io bank io
+  pin 98 io bank io
+  pin 99 io bank io
+  global_buffers 8
+  clock_region global 0 0 13 17
+  pll SB_PLL40_CORE input 10 133 vco 533 1066 outputs 1
+  pll SB_PLL40_PAD input 10 133 vco 533 1066 outputs 1
+  grid 14 18
+end
+
+device ice40-hx8k-ct256
+  family ice40
+  package ct256
+  speed hx
+  lut_size 4
+  ff enable sync_reset async_reset shared_reset init 0
+  bel SB_LUT4 lut count 7680 port i=I0,I1,I2,I3 o=O param LUT_INIT=16'h0000
+  bel SB_CARRY carry port ci=CI i0=I0 i1=I1 co=CO
+  bel SB_DFF ff count 7680 port clk=C d=D q=Q en=E rst=R
+  bel SB_IO io port pad=PACKAGE_PIN din=D_IN_0 dout=D_OUT_0 oe=OUTPUT_ENABLE param_in PIN_TYPE=6'b000001 param_out PIN_TYPE=6'b011001 param_inout PIN_TYPE=6'b101001 param_pullup PULLUP=1
+  bel SB_GB gb count 8 port i=USER_SIGNAL_TO_GLOBAL_BUFFER o=GLOBAL_BUFFER_OUTPUT
+  bram SB_RAM40_4K
+    ports 2
+    mode 16 256 param READ_MODE=0 WRITE_MODE=0
+    mode 8 512 param READ_MODE=1 WRITE_MODE=1
+    mode 4 1024 param READ_MODE=2 WRITE_MODE=2
+    mode 2 2048 param READ_MODE=3 WRITE_MODE=3
+    flags dual_port init
+    port read clk=RCLK en=RE addr=RADDR dout=RDATA ce=RCLKE
+    port write clk=WCLK en=WE addr=WADDR din=WDATA ce=WCLKE
+  end
+  io_standard LVCMOS33 vccio 3.3
+  io_standard LVCMOS25 vccio 2.5
+  io_standard LVCMOS18 vccio 1.8
+  io_standard SB_LVDS_INPUT vccio 2.5 differential
+  bank io vccio 3.3,2.5,1.8
+  pin A1 io bank io
+  pin A2 io bank io
+  pin B3 io bank io
+  pin B4 io bank io
+  pin B5 io bank io
+  pin C3 io bank io
+  pin C4 io bank io
+  pin C5 io bank io
+  pin J3 clock bank io
+  global_buffers 8
+  clock_region global 0 0 33 33
+  pll SB_PLL40_CORE input 10 133 vco 533 1066 outputs 1
+  pll SB_PLL40_PAD input 10 133 vco 533 1066 outputs 1
+  grid 34 34
+end

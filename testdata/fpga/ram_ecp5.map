@@ -1,0 +1,10 @@
+device: ecp5-45f-CABGA381
+block RAM:
+  mem (512x8) -> 1 x DP16KD in 18x1024 mode (1 wide, 1 deep)
+io:
+  clk (1 bits) -> TRELLIS_IO at pin G2 as LVCMOS33
+  we (1 bits) -> TRELLIS_IO at pin B2 as LVCMOS33
+  waddr (9 bits) -> TRELLIS_IO
+  raddr (9 bits) -> TRELLIS_IO
+  wdata (8 bits) -> TRELLIS_IO
+  rdata (8 bits) -> TRELLIS_IO

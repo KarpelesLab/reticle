@@ -1,0 +1,15 @@
+top blinky
+
+module blinky
+  net %clk u1 wire
+  net %rst u1 wire
+  net %led u1 wire
+  net %count u8 wire
+  net %next u8 wire
+  port clk in %clk
+  port rst in %rst
+  port led out %led
+  cell inc add (a=%count, b=8'd1) -> (y=%next)
+  cell counter dff pos srst pos 8'd0 (clk=%clk, d=%next, rst=%rst) -> (q=%count)
+  assign %led = %count[7:7]
+end

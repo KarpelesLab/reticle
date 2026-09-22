@@ -1,0 +1,85 @@
+top blinky
+
+module blinky
+  net %clk u1 wire
+  net %rst u1 wire
+  net %led u1 wire
+  net %count u8 wire
+  net %next u8 wire
+  net %inc$h0 u1 wire
+  net %inc$s0 u1 wire
+  net %inc$c0 u1 wire
+  net %inc$h1 u1 wire
+  net %inc$s1 u1 wire
+  net %inc$c1 u1 wire
+  net %inc$h2 u1 wire
+  net %inc$s2 u1 wire
+  net %inc$c2 u1 wire
+  net %inc$h3 u1 wire
+  net %inc$s3 u1 wire
+  net %inc$c3 u1 wire
+  net %inc$h4 u1 wire
+  net %inc$s4 u1 wire
+  net %inc$c4 u1 wire
+  net %inc$h5 u1 wire
+  net %inc$s5 u1 wire
+  net %inc$c5 u1 wire
+  net %inc$h6 u1 wire
+  net %inc$s6 u1 wire
+  net %inc$c6 u1 wire
+  net %inc$h7 u1 wire
+  net %inc$s7 u1 wire
+  net %clk$pad u1 wire
+  net %clk$in0 u1 wire
+  net %rst$pad u1 wire
+  net %rst$in0 u1 wire
+  net %led$pad u1 wire
+  net %led$pin0 u1 wire
+  net %clk$gb u1 wire
+  port clk in %clk$pad
+  port rst in %rst$pad
+  port led out %led$pad
+  assign %led = %count[7:7]
+  assign %next = {%inc$s7, %inc$s6, %inc$s5, %inc$s4, %inc$s3, %inc$s2, %inc$s1, %inc$s0}
+  assign %clk = %clk$in0
+  assign %rst = %rst$in0
+  assign %led$pad = %led$pin0
+  cell counter dff pos srst pos 8'd0 (clk=%clk$gb, d=%next, rst=%rst) -> (q=%count)
+  cell inc$xor0a xor (a=%count[0:0], b=8'd1[0:0]) -> (y=%inc$h0)
+  cell inc$xor0b xor (a=%inc$h0, b=1'd0) -> (y=%inc$s0)
+  cell inc$carry0 blackbox SB_CARRY (CI=1'd0, I0=%count[0:0], I1=8'd1[0:0]) -> (CO=%inc$c0)
+  cell inc$xor1a xor (a=%count[1:1], b=8'd1[1:1]) -> (y=%inc$h1)
+  cell inc$xor1b xor (a=%inc$h1, b=%inc$c0) -> (y=%inc$s1)
+  cell inc$carry1 blackbox SB_CARRY (CI=%inc$c0, I0=%count[1:1], I1=8'd1[1:1]) -> (CO=%inc$c1)
+  cell inc$xor2a xor (a=%count[2:2], b=8'd1[2:2]) -> (y=%inc$h2)
+  cell inc$xor2b xor (a=%inc$h2, b=%inc$c1) -> (y=%inc$s2)
+  cell inc$carry2 blackbox SB_CARRY (CI=%inc$c1, I0=%count[2:2], I1=8'd1[2:2]) -> (CO=%inc$c2)
+  cell inc$xor3a xor (a=%count[3:3], b=8'd1[3:3]) -> (y=%inc$h3)
+  cell inc$xor3b xor (a=%inc$h3, b=%inc$c2) -> (y=%inc$s3)
+  cell inc$carry3 blackbox SB_CARRY (CI=%inc$c2, I0=%count[3:3], I1=8'd1[3:3]) -> (CO=%inc$c3)
+  cell inc$xor4a xor (a=%count[4:4], b=8'd1[4:4]) -> (y=%inc$h4)
+  cell inc$xor4b xor (a=%inc$h4, b=%inc$c3) -> (y=%inc$s4)
+  cell inc$carry4 blackbox SB_CARRY (CI=%inc$c3, I0=%count[4:4], I1=8'd1[4:4]) -> (CO=%inc$c4)
+  cell inc$xor5a xor (a=%count[5:5], b=8'd1[5:5]) -> (y=%inc$h5)
+  cell inc$xor5b xor (a=%inc$h5, b=%inc$c4) -> (y=%inc$s5)
+  cell inc$carry5 blackbox SB_CARRY (CI=%inc$c4, I0=%count[5:5], I1=8'd1[5:5]) -> (CO=%inc$c5)
+  cell inc$xor6a xor (a=%count[6:6], b=8'd1[6:6]) -> (y=%inc$h6)
+  cell inc$xor6b xor (a=%inc$h6, b=%inc$c5) -> (y=%inc$s6)
+  cell inc$carry6 blackbox SB_CARRY (CI=%inc$c5, I0=%count[6:6], I1=8'd1[6:6]) -> (CO=%inc$c6)
+  cell inc$xor7a xor (a=%count[7:7], b=8'd1[7:7]) -> (y=%inc$h7)
+  cell inc$xor7b xor (a=%inc$h7, b=%inc$c6) -> (y=%inc$s7)
+  attr port = "clk"
+  attr pin = "21"
+  attr io_standard = "LVCMOS33"
+  cell clk$io0 blackbox SB_IO #(PIN_TYPE=6'd1) (PACKAGE_PIN=%clk$pad) -> (D_IN_0=%clk$in0)
+  attr port = "rst"
+  attr pin = "8"
+  attr io_standard = "LVCMOS33"
+  cell rst$io0 blackbox SB_IO #(PIN_TYPE=6'd1) (PACKAGE_PIN=%rst$pad) -> (D_IN_0=%rst$in0)
+  attr port = "led"
+  attr pin = "99"
+  attr io_standard = "LVCMOS33"
+  attr pullup = 0
+  cell led$io0 blackbox SB_IO #(PIN_TYPE=6'd25) (D_OUT_0=%led) -> (PACKAGE_PIN=%led$pin0)
+  cell clk$gbuf blackbox SB_GB (USER_SIGNAL_TO_GLOBAL_BUFFER=%clk) -> (GLOBAL_BUFFER_OUTPUT=%clk$gb)
+end

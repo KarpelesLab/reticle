@@ -1,0 +1,6 @@
+# nextpnr PCF written by reticle for ice40-hx1k-tq144 (ice40)
+set_io clk 21
+set_io we 8
+set_io rdata[0] 99
+set_frequency clk 12.000
+# not expressible in this format: 1 placement region(s), 1 keep_hierarchy constraint(s), 1 path exception(s), io standards, drive, slew

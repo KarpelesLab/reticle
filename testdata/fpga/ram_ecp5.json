@@ -1,0 +1,964 @@
+{
+  "creator": "reticle",
+  "modules": {
+    "ram512": {
+      "attributes": {
+        "top": 1
+      },
+      "ports": {
+        "clk": { "direction": "input", "bits": [ 2 ] },
+        "we": { "direction": "input", "bits": [ 3 ] },
+        "waddr": { "direction": "input", "bits": [ 4, 5, 6, 7, 8, 9, 10, 11, 12 ] },
+        "raddr": { "direction": "input", "bits": [ 13, 14, 15, 16, 17, 18, 19, 20, 21 ] },
+        "wdata": { "direction": "input", "bits": [ 22, 23, 24, 25, 26, 27, 28, 29 ] },
+        "rdata": { "direction": "output", "bits": [ 30, 31, 32, 33, 34, 35, 36, 37 ] }
+      },
+      "cells": {
+        "mem$ram_w0_d0": {
+          "hide_name": 0,
+          "type": "DP16KD",
+          "parameters": {
+            "DATA_WIDTH_A": 18,
+            "DATA_WIDTH_B": 18
+          },
+          "attributes": {
+            "memory": "mem"
+          },
+          "port_directions": {
+            "ADA": "input",
+            "CLKA": "input",
+            "CEA": "input",
+            "ADB": "input",
+            "CLKB": "input",
+            "CEB": "input",
+            "WEB": "input",
+            "DIB": "input",
+            "DOA": "output"
+          },
+          "connections": {
+            "ADA": [ 49, 50, 51, 52, 53, 54, 55, 56, 57, "0", "0", "0", "0", "0" ],
+            "CLKA": [ 38 ],
+            "CEA": [ "1" ],
+            "ADB": [ 40, 41, 42, 43, 44, 45, 46, 47, 48, "0", "0", "0", "0", "0" ],
+            "CLKB": [ 38 ],
+            "CEB": [ 39 ],
+            "WEB": [ 39 ],
+            "DIB": [ 58, 59, 60, 61, 62, 63, 64, 65, "0", "0", "0", "0", "0", "0", "0", "0", "0", "0" ],
+            "DOA": [ 66, 67, 68, 69, 70, 71, 72, 73, 74, 75, 76, 77, 78, 79, 80, 81, 82, 83 ]
+          }
+        },
+        "clk$io0": {
+          "hide_name": 0,
+          "type": "TRELLIS_IO",
+          "parameters": {
+            "DIR": "INPUT"
+          },
+          "attributes": {
+            "port": "clk",
+            "pin": "G2",
+            "io_standard": "LVCMOS33",
+            "drive": 8
+          },
+          "port_directions": {
+            "B": "input",
+            "O": "output"
+          },
+          "connections": {
+            "B": [ 2 ],
+            "O": [ 38 ]
+          }
+        },
+        "we$io0": {
+          "hide_name": 0,
+          "type": "TRELLIS_IO",
+          "parameters": {
+            "DIR": "INPUT"
+          },
+          "attributes": {
+            "port": "we",
+            "pin": "B2",
+            "io_standard": "LVCMOS33"
+          },
+          "port_directions": {
+            "B": "input",
+            "O": "output"
+          },
+          "connections": {
+            "B": [ 3 ],
+            "O": [ 39 ]
+          }
+        },
+        "waddr$io0": {
+          "hide_name": 0,
+          "type": "TRELLIS_IO",
+          "parameters": {
+            "DIR": "INPUT"
+          },
+          "attributes": {
+            "port": "waddr"
+          },
+          "port_directions": {
+            "B": "input",
+            "O": "output"
+          },
+          "connections": {
+            "B": [ 4 ],
+            "O": [ 40 ]
+          }
+        },
+        "waddr$io1": {
+          "hide_name": 0,
+          "type": "TRELLIS_IO",
+          "parameters": {
+            "DIR": "INPUT"
+          },
+          "attributes": {
+            "port": "waddr"
+          },
+          "port_directions": {
+            "B": "input",
+            "O": "output"
+          },
+          "connections": {
+            "B": [ 5 ],
+            "O": [ 41 ]
+          }
+        },
+        "waddr$io2": {
+          "hide_name": 0,
+          "type": "TRELLIS_IO",
+          "parameters": {
+            "DIR": "INPUT"
+          },
+          "attributes": {
+            "port": "waddr"
+          },
+          "port_directions": {
+            "B": "input",
+            "O": "output"
+          },
+          "connections": {
+            "B": [ 6 ],
+            "O": [ 42 ]
+          }
+        },
+        "waddr$io3": {
+          "hide_name": 0,
+          "type": "TRELLIS_IO",
+          "parameters": {
+            "DIR": "INPUT"
+          },
+          "attributes": {
+            "port": "waddr"
+          },
+          "port_directions": {
+            "B": "input",
+            "O": "output"
+          },
+          "connections": {
+            "B": [ 7 ],
+            "O": [ 43 ]
+          }
+        },
+        "waddr$io4": {
+          "hide_name": 0,
+          "type": "TRELLIS_IO",
+          "parameters": {
+            "DIR": "INPUT"
+          },
+          "attributes": {
+            "port": "waddr"
+          },
+          "port_directions": {
+            "B": "input",
+            "O": "output"
+          },
+          "connections": {
+            "B": [ 8 ],
+            "O": [ 44 ]
+          }
+        },
+        "waddr$io5": {
+          "hide_name": 0,
+          "type": "TRELLIS_IO",
+          "parameters": {
+            "DIR": "INPUT"
+          },
+          "attributes": {
+            "port": "waddr"
+          },
+          "port_directions": {
+            "B": "input",
+            "O": "output"
+          },
+          "connections": {
+            "B": [ 9 ],
+            "O": [ 45 ]
+          }
+        },
+        "waddr$io6": {
+          "hide_name": 0,
+          "type": "TRELLIS_IO",
+          "parameters": {
+            "DIR": "INPUT"
+          },
+          "attributes": {
+            "port": "waddr"
+          },
+          "port_directions": {
+            "B": "input",
+            "O": "output"
+          },
+          "connections": {
+            "B": [ 10 ],
+            "O": [ 46 ]
+          }
+        },
+        "waddr$io7": {
+          "hide_name": 0,
+          "type": "TRELLIS_IO",
+          "parameters": {
+            "DIR": "INPUT"
+          },
+          "attributes": {
+            "port": "waddr"
+          },
+          "port_directions": {
+            "B": "input",
+            "O": "output"
+          },
+          "connections": {
+            "B": [ 11 ],
+            "O": [ 47 ]
+          }
+        },
+        "waddr$io8": {
+          "hide_name": 0,
+          "type": "TRELLIS_IO",
+          "parameters": {
+            "DIR": "INPUT"
+          },
+          "attributes": {
+            "port": "waddr"
+          },
+          "port_directions": {
+            "B": "input",
+            "O": "output"
+          },
+          "connections": {
+            "B": [ 12 ],
+            "O": [ 48 ]
+          }
+        },
+        "raddr$io0": {
+          "hide_name": 0,
+          "type": "TRELLIS_IO",
+          "parameters": {
+            "DIR": "INPUT"
+          },
+          "attributes": {
+            "port": "raddr"
+          },
+          "port_directions": {
+            "B": "input",
+            "O": "output"
+          },
+          "connections": {
+            "B": [ 13 ],
+            "O": [ 49 ]
+          }
+        },
+        "raddr$io1": {
+          "hide_name": 0,
+          "type": "TRELLIS_IO",
+          "parameters": {
+            "DIR": "INPUT"
+          },
+          "attributes": {
+            "port": "raddr"
+          },
+          "port_directions": {
+            "B": "input",
+            "O": "output"
+          },
+          "connections": {
+            "B": [ 14 ],
+            "O": [ 50 ]
+          }
+        },
+        "raddr$io2": {
+          "hide_name": 0,
+          "type": "TRELLIS_IO",
+          "parameters": {
+            "DIR": "INPUT"
+          },
+          "attributes": {
+            "port": "raddr"
+          },
+          "port_directions": {
+            "B": "input",
+            "O": "output"
+          },
+          "connections": {
+            "B": [ 15 ],
+            "O": [ 51 ]
+          }
+        },
+        "raddr$io3": {
+          "hide_name": 0,
+          "type": "TRELLIS_IO",
+          "parameters": {
+            "DIR": "INPUT"
+          },
+          "attributes": {
+            "port": "raddr"
+          },
+          "port_directions": {
+            "B": "input",
+            "O": "output"
+          },
+          "connections": {
+            "B": [ 16 ],
+            "O": [ 52 ]
+          }
+        },
+        "raddr$io4": {
+          "hide_name": 0,
+          "type": "TRELLIS_IO",
+          "parameters": {
+            "DIR": "INPUT"
+          },
+          "attributes": {
+            "port": "raddr"
+          },
+          "port_directions": {
+            "B": "input",
+            "O": "output"
+          },
+          "connections": {
+            "B": [ 17 ],
+            "O": [ 53 ]
+          }
+        },
+        "raddr$io5": {
+          "hide_name": 0,
+          "type": "TRELLIS_IO",
+          "parameters": {
+            "DIR": "INPUT"
+          },
+          "attributes": {
+            "port": "raddr"
+          },
+          "port_directions": {
+            "B": "input",
+            "O": "output"
+          },
+          "connections": {
+            "B": [ 18 ],
+            "O": [ 54 ]
+          }
+        },
+        "raddr$io6": {
+          "hide_name": 0,
+          "type": "TRELLIS_IO",
+          "parameters": {
+            "DIR": "INPUT"
+          },
+          "attributes": {
+            "port": "raddr"
+          },
+          "port_directions": {
+            "B": "input",
+            "O": "output"
+          },
+          "connections": {
+            "B": [ 19 ],
+            "O": [ 55 ]
+          }
+        },
+        "raddr$io7": {
+          "hide_name": 0,
+          "type": "TRELLIS_IO",
+          "parameters": {
+            "DIR": "INPUT"
+          },
+          "attributes": {
+            "port": "raddr"
+          },
+          "port_directions": {
+            "B": "input",
+            "O": "output"
+          },
+          "connections": {
+            "B": [ 20 ],
+            "O": [ 56 ]
+          }
+        },
+        "raddr$io8": {
+          "hide_name": 0,
+          "type": "TRELLIS_IO",
+          "parameters": {
+            "DIR": "INPUT"
+          },
+          "attributes": {
+            "port": "raddr"
+          },
+          "port_directions": {
+            "B": "input",
+            "O": "output"
+          },
+          "connections": {
+            "B": [ 21 ],
+            "O": [ 57 ]
+          }
+        },
+        "wdata$io0": {
+          "hide_name": 0,
+          "type": "TRELLIS_IO",
+          "parameters": {
+            "DIR": "INPUT"
+          },
+          "attributes": {
+            "port": "wdata"
+          },
+          "port_directions": {
+            "B": "input",
+            "O": "output"
+          },
+          "connections": {
+            "B": [ 22 ],
+            "O": [ 58 ]
+          }
+        },
+        "wdata$io1": {
+          "hide_name": 0,
+          "type": "TRELLIS_IO",
+          "parameters": {
+            "DIR": "INPUT"
+          },
+          "attributes": {
+            "port": "wdata"
+          },
+          "port_directions": {
+            "B": "input",
+            "O": "output"
+          },
+          "connections": {
+            "B": [ 23 ],
+            "O": [ 59 ]
+          }
+        },
+        "wdata$io2": {
+          "hide_name": 0,
+          "type": "TRELLIS_IO",
+          "parameters": {
+            "DIR": "INPUT"
+          },
+          "attributes": {
+            "port": "wdata"
+          },
+          "port_directions": {
+            "B": "input",
+            "O": "output"
+          },
+          "connections": {
+            "B": [ 24 ],
+            "O": [ 60 ]
+          }
+        },
+        "wdata$io3": {
+          "hide_name": 0,
+          "type": "TRELLIS_IO",
+          "parameters": {
+            "DIR": "INPUT"
+          },
+          "attributes": {
+            "port": "wdata"
+          },
+          "port_directions": {
+            "B": "input",
+            "O": "output"
+          },
+          "connections": {
+            "B": [ 25 ],
+            "O": [ 61 ]
+          }
+        },
+        "wdata$io4": {
+          "hide_name": 0,
+          "type": "TRELLIS_IO",
+          "parameters": {
+            "DIR": "INPUT"
+          },
+          "attributes": {
+            "port": "wdata"
+          },
+          "port_directions": {
+            "B": "input",
+            "O": "output"
+          },
+          "connections": {
+            "B": [ 26 ],
+            "O": [ 62 ]
+          }
+        },
+        "wdata$io5": {
+          "hide_name": 0,
+          "type": "TRELLIS_IO",
+          "parameters": {
+            "DIR": "INPUT"
+          },
+          "attributes": {
+            "port": "wdata"
+          },
+          "port_directions": {
+            "B": "input",
+            "O": "output"
+          },
+          "connections": {
+            "B": [ 27 ],
+            "O": [ 63 ]
+          }
+        },
+        "wdata$io6": {
+          "hide_name": 0,
+          "type": "TRELLIS_IO",
+          "parameters": {
+            "DIR": "INPUT"
+          },
+          "attributes": {
+            "port": "wdata"
+          },
+          "port_directions": {
+            "B": "input",
+            "O": "output"
+          },
+          "connections": {
+            "B": [ 28 ],
+            "O": [ 64 ]
+          }
+        },
+        "wdata$io7": {
+          "hide_name": 0,
+          "type": "TRELLIS_IO",
+          "parameters": {
+            "DIR": "INPUT"
+          },
+          "attributes": {
+            "port": "wdata"
+          },
+          "port_directions": {
+            "B": "input",
+            "O": "output"
+          },
+          "connections": {
+            "B": [ 29 ],
+            "O": [ 65 ]
+          }
+        },
+        "rdata$io0": {
+          "hide_name": 0,
+          "type": "TRELLIS_IO",
+          "parameters": {
+            "DIR": "OUTPUT"
+          },
+          "attributes": {
+            "port": "rdata"
+          },
+          "port_directions": {
+            "I": "input",
+            "B": "output"
+          },
+          "connections": {
+            "I": [ 66 ],
+            "B": [ 30 ]
+          }
+        },
+        "rdata$io1": {
+          "hide_name": 0,
+          "type": "TRELLIS_IO",
+          "parameters": {
+            "DIR": "OUTPUT"
+          },
+          "attributes": {
+            "port": "rdata"
+          },
+          "port_directions": {
+            "I": "input",
+            "B": "output"
+          },
+          "connections": {
+            "I": [ 67 ],
+            "B": [ 31 ]
+          }
+        },
+        "rdata$io2": {
+          "hide_name": 0,
+          "type": "TRELLIS_IO",
+          "parameters": {
+            "DIR": "OUTPUT"
+          },
+          "attributes": {
+            "port": "rdata"
+          },
+          "port_directions": {
+            "I": "input",
+            "B": "output"
+          },
+          "connections": {
+            "I": [ 68 ],
+            "B": [ 32 ]
+          }
+        },
+        "rdata$io3": {
+          "hide_name": 0,
+          "type": "TRELLIS_IO",
+          "parameters": {
+            "DIR": "OUTPUT"
+          },
+          "attributes": {
+            "port": "rdata"
+          },
+          "port_directions": {
+            "I": "input",
+            "B": "output"
+          },
+          "connections": {
+            "I": [ 69 ],
+            "B": [ 33 ]
+          }
+        },
+        "rdata$io4": {
+          "hide_name": 0,
+          "type": "TRELLIS_IO",
+          "parameters": {
+            "DIR": "OUTPUT"
+          },
+          "attributes": {
+            "port": "rdata"
+          },
+          "port_directions": {
+            "I": "input",
+            "B": "output"
+          },
+          "connections": {
+            "I": [ 70 ],
+            "B": [ 34 ]
+          }
+        },
+        "rdata$io5": {
+          "hide_name": 0,
+          "type": "TRELLIS_IO",
+          "parameters": {
+            "DIR": "OUTPUT"
+          },
+          "attributes": {
+            "port": "rdata"
+          },
+          "port_directions": {
+            "I": "input",
+            "B": "output"
+          },
+          "connections": {
+            "I": [ 71 ],
+            "B": [ 35 ]
+          }
+        },
+        "rdata$io6": {
+          "hide_name": 0,
+          "type": "TRELLIS_IO",
+          "parameters": {
+            "DIR": "OUTPUT"
+          },
+          "attributes": {
+            "port": "rdata"
+          },
+          "port_directions": {
+            "I": "input",
+            "B": "output"
+          },
+          "connections": {
+            "I": [ 72 ],
+            "B": [ 36 ]
+          }
+        },
+        "rdata$io7": {
+          "hide_name": 0,
+          "type": "TRELLIS_IO",
+          "parameters": {
+            "DIR": "OUTPUT"
+          },
+          "attributes": {
+            "port": "rdata"
+          },
+          "port_directions": {
+            "I": "input",
+            "B": "output"
+          },
+          "connections": {
+            "I": [ 73 ],
+            "B": [ 37 ]
+          }
+        }
+      },
+      "memories": {
+        "mem": {
+          "hide_name": 0,
+          "attributes": {
+            "mapped_to": "DP16KD"
+          },
+          "width": 8,
+          "start_offset": 0,
+          "size": 512
+        }
+      },
+      "netnames": {
+        "clk": {
+          "hide_name": 0,
+          "bits": [ 38 ],
+          "attributes": {}
+        },
+        "we": {
+          "hide_name": 0,
+          "bits": [ 39 ],
+          "attributes": {}
+        },
+        "waddr": {
+          "hide_name": 0,
+          "bits": [ 40, 41, 42, 43, 44, 45, 46, 47, 48 ],
+          "attributes": {}
+        },
+        "raddr": {
+          "hide_name": 0,
+          "bits": [ 49, 50, 51, 52, 53, 54, 55, 56, 57 ],
+          "attributes": {}
+        },
+        "wdata": {
+          "hide_name": 0,
+          "bits": [ 58, 59, 60, 61, 62, 63, 64, 65 ],
+          "attributes": {}
+        },
+        "rdata": {
+          "hide_name": 0,
+          "bits": [ 66, 67, 68, 69, 70, 71, 72, 73 ],
+          "attributes": {}
+        },
+        "mem$rd0_w0_d0": {
+          "hide_name": 0,
+          "bits": [ 66, 67, 68, 69, 70, 71, 72, 73, 74, 75, 76, 77, 78, 79, 80, 81, 82, 83 ],
+          "attributes": {}
+        },
+        "clk$pad": {
+          "hide_name": 0,
+          "bits": [ 2 ],
+          "attributes": {}
+        },
+        "clk$in0": {
+          "hide_name": 0,
+          "bits": [ 38 ],
+          "attributes": {}
+        },
+        "we$pad": {
+          "hide_name": 0,
+          "bits": [ 3 ],
+          "attributes": {}
+        },
+        "we$in0": {
+          "hide_name": 0,
+          "bits": [ 39 ],
+          "attributes": {}
+        },
+        "waddr$pad": {
+          "hide_name": 0,
+          "bits": [ 4, 5, 6, 7, 8, 9, 10, 11, 12 ],
+          "attributes": {}
+        },
+        "waddr$in0": {
+          "hide_name": 0,
+          "bits": [ 40 ],
+          "attributes": {}
+        },
+        "waddr$in1": {
+          "hide_name": 0,
+          "bits": [ 41 ],
+          "attributes": {}
+        },
+        "waddr$in2": {
+          "hide_name": 0,
+          "bits": [ 42 ],
+          "attributes": {}
+        },
+        "waddr$in3": {
+          "hide_name": 0,
+          "bits": [ 43 ],
+          "attributes": {}
+        },
+        "waddr$in4": {
+          "hide_name": 0,
+          "bits": [ 44 ],
+          "attributes": {}
+        },
+        "waddr$in5": {
+          "hide_name": 0,
+          "bits": [ 45 ],
+          "attributes": {}
+        },
+        "waddr$in6": {
+          "hide_name": 0,
+          "bits": [ 46 ],
+          "attributes": {}
+        },
+        "waddr$in7": {
+          "hide_name": 0,
+          "bits": [ 47 ],
+          "attributes": {}
+        },
+        "waddr$in8": {
+          "hide_name": 0,
+          "bits": [ 48 ],
+          "attributes": {}
+        },
+        "raddr$pad": {
+          "hide_name": 0,
+          "bits": [ 13, 14, 15, 16, 17, 18, 19, 20, 21 ],
+          "attributes": {}
+        },
+        "raddr$in0": {
+          "hide_name": 0,
+          "bits": [ 49 ],
+          "attributes": {}
+        },
+        "raddr$in1": {
+          "hide_name": 0,
+          "bits": [ 50 ],
+          "attributes": {}
+        },
+        "raddr$in2": {
+          "hide_name": 0,
+          "bits": [ 51 ],
+          "attributes": {}
+        },
+        "raddr$in3": {
+          "hide_name": 0,
+          "bits": [ 52 ],
+          "attributes": {}
+        },
+        "raddr$in4": {
+          "hide_name": 0,
+          "bits": [ 53 ],
+          "attributes": {}
+        },
+        "raddr$in5": {
+          "hide_name": 0,
+          "bits": [ 54 ],
+          "attributes": {}
+        },
+        "raddr$in6": {
+          "hide_name": 0,
+          "bits": [ 55 ],
+          "attributes": {}
+        },
+        "raddr$in7": {
+          "hide_name": 0,
+          "bits": [ 56 ],
+          "attributes": {}
+        },
+        "raddr$in8": {
+          "hide_name": 0,
+          "bits": [ 57 ],
+          "attributes": {}
+        },
+        "wdata$pad": {
+          "hide_name": 0,
+          "bits": [ 22, 23, 24, 25, 26, 27, 28, 29 ],
+          "attributes": {}
+        },
+        "wdata$in0": {
+          "hide_name": 0,
+          "bits": [ 58 ],
+          "attributes": {}
+        },
+        "wdata$in1": {
+          "hide_name": 0,
+          "bits": [ 59 ],
+          "attributes": {}
+        },
+        "wdata$in2": {
+          "hide_name": 0,
+          "bits": [ 60 ],
+          "attributes": {}
+        },
+        "wdata$in3": {
+          "hide_name": 0,
+          "bits": [ 61 ],
+          "attributes": {}
+        },
+        "wdata$in4": {
+          "hide_name": 0,
+          "bits": [ 62 ],
+          "attributes": {}
+        },
+        "wdata$in5": {
+          "hide_name": 0,
+          "bits": [ 63 ],
+          "attributes": {}
+        },
+        "wdata$in6": {
+          "hide_name": 0,
+          "bits": [ 64 ],
+          "attributes": {}
+        },
+        "wdata$in7": {
+          "hide_name": 0,
+          "bits": [ 65 ],
+          "attributes": {}
+        },
+        "rdata$pad": {
+          "hide_name": 0,
+          "bits": [ 30, 31, 32, 33, 34, 35, 36, 37 ],
+          "attributes": {}
+        },
+        "rdata$pin0": {
+          "hide_name": 0,
+          "bits": [ 30 ],
+          "attributes": {}
+        },
+        "rdata$pin1": {
+          "hide_name": 0,
+          "bits": [ 31 ],
+          "attributes": {}
+        },
+        "rdata$pin2": {
+          "hide_name": 0,
+          "bits": [ 32 ],
+          "attributes": {}
+        },
+        "rdata$pin3": {
+          "hide_name": 0,
+          "bits": [ 33 ],
+          "attributes": {}
+        },
+        "rdata$pin4": {
+          "hide_name": 0,
+          "bits": [ 34 ],
+          "attributes": {}
+        },
+        "rdata$pin5": {
+          "hide_name": 0,
+          "bits": [ 35 ],
+          "attributes": {}
+        },
+        "rdata$pin6": {
+          "hide_name": 0,
+          "bits": [ 36 ],
+          "attributes": {}
+        },
+        "rdata$pin7": {
+          "hide_name": 0,
+          "bits": [ 37 ],
+          "attributes": {}
+        }
+      }
+    }
+  }
+}

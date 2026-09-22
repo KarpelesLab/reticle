@@ -1,0 +1,9 @@
+device: ice40-hx1k-tq144
+carry:
+  inc (8 bits) -> 7 x SB_CARRY
+io:
+  clk (1 bits) -> SB_IO at pin 21 as LVCMOS33
+  rst (1 bits) -> SB_IO at pin 8 as LVCMOS33
+  led (1 bits) -> SB_IO at pin 99 as LVCMOS33
+clocks:
+  clk (8 flip-flops) -> SB_GB

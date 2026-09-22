@@ -1,0 +1,202 @@
+{
+  "creator": "reticle",
+  "modules": {
+    "blinky": {
+      "attributes": {
+        "top": 1
+      },
+      "ports": {
+        "clk": { "direction": "input", "bits": [ 2 ] },
+        "rst": { "direction": "input", "bits": [ 3 ] },
+        "led": { "direction": "output", "bits": [ 4 ] }
+      },
+      "cells": {
+        "inc": {
+          "hide_name": 0,
+          "type": "$add",
+          "parameters": {
+            "A_SIGNED": 0,
+            "B_SIGNED": 0,
+            "A_WIDTH": 8,
+            "B_WIDTH": 8,
+            "Y_WIDTH": 8
+          },
+          "attributes": {},
+          "port_directions": {
+            "A": "input",
+            "B": "input",
+            "Y": "output"
+          },
+          "connections": {
+            "A": [ 8, 9, 10, 11, 12, 13, 14, 7 ],
+            "B": [ "1", "0", "0", "0", "0", "0", "0", "0" ],
+            "Y": [ 15, 16, 17, 18, 19, 20, 21, 22 ]
+          }
+        },
+        "counter": {
+          "hide_name": 0,
+          "type": "$sdff",
+          "parameters": {
+            "WIDTH": 8,
+            "CLK_POLARITY": 1,
+            "SRST_POLARITY": 1,
+            "SRST_VALUE": 0
+          },
+          "attributes": {},
+          "port_directions": {
+            "CLK": "input",
+            "SRST": "input",
+            "D": "input",
+            "Q": "output"
+          },
+          "connections": {
+            "CLK": [ 23 ],
+            "SRST": [ 6 ],
+            "D": [ 15, 16, 17, 18, 19, 20, 21, 22 ],
+            "Q": [ 8, 9, 10, 11, 12, 13, 14, 7 ]
+          }
+        },
+        "clk$io0": {
+          "hide_name": 0,
+          "type": "TRELLIS_IO",
+          "parameters": {
+            "DIR": "INPUT"
+          },
+          "attributes": {
+            "port": "clk",
+            "pin": "G2",
+            "io_standard": "LVCMOS33",
+            "drive": 8,
+            "slew": "fast"
+          },
+          "port_directions": {
+            "B": "input",
+            "O": "output"
+          },
+          "connections": {
+            "B": [ 2 ],
+            "O": [ 5 ]
+          }
+        },
+        "rst$io0": {
+          "hide_name": 0,
+          "type": "TRELLIS_IO",
+          "parameters": {
+            "DIR": "INPUT"
+          },
+          "attributes": {
+            "port": "rst",
+            "pin": "B2",
+            "io_standard": "LVCMOS33"
+          },
+          "port_directions": {
+            "B": "input",
+            "O": "output"
+          },
+          "connections": {
+            "B": [ 3 ],
+            "O": [ 6 ]
+          }
+        },
+        "led$io0": {
+          "hide_name": 0,
+          "type": "TRELLIS_IO",
+          "parameters": {
+            "DIR": "OUTPUT",
+            "PULLMODE": "UP"
+          },
+          "attributes": {
+            "port": "led",
+            "pin": "C1",
+            "io_standard": "LVCMOS33",
+            "pullup": 1
+          },
+          "port_directions": {
+            "I": "input",
+            "B": "output"
+          },
+          "connections": {
+            "I": [ 7 ],
+            "B": [ 4 ]
+          }
+        },
+        "clk$gbuf": {
+          "hide_name": 0,
+          "type": "DCCA",
+          "parameters": {},
+          "attributes": {},
+          "port_directions": {
+            "CLKI": "input",
+            "CLKO": "output"
+          },
+          "connections": {
+            "CLKI": [ 5 ],
+            "CLKO": [ 23 ]
+          }
+        }
+      },
+      "netnames": {
+        "clk": {
+          "hide_name": 0,
+          "bits": [ 5 ],
+          "attributes": {}
+        },
+        "rst": {
+          "hide_name": 0,
+          "bits": [ 6 ],
+          "attributes": {}
+        },
+        "led": {
+          "hide_name": 0,
+          "bits": [ 7 ],
+          "attributes": {}
+        },
+        "count": {
+          "hide_name": 0,
+          "bits": [ 8, 9, 10, 11, 12, 13, 14, 7 ],
+          "attributes": {}
+        },
+        "next": {
+          "hide_name": 0,
+          "bits": [ 15, 16, 17, 18, 19, 20, 21, 22 ],
+          "attributes": {}
+        },
+        "clk$pad": {
+          "hide_name": 0,
+          "bits": [ 2 ],
+          "attributes": {}
+        },
+        "clk$in0": {
+          "hide_name": 0,
+          "bits": [ 5 ],
+          "attributes": {}
+        },
+        "rst$pad": {
+          "hide_name": 0,
+          "bits": [ 3 ],
+          "attributes": {}
+        },
+        "rst$in0": {
+          "hide_name": 0,
+          "bits": [ 6 ],
+          "attributes": {}
+        },
+        "led$pad": {
+          "hide_name": 0,
+          "bits": [ 4 ],
+          "attributes": {}
+        },
+        "led$pin0": {
+          "hide_name": 0,
+          "bits": [ 4 ],
+          "attributes": {}
+        },
+        "clk$gb": {
+          "hide_name": 0,
+          "bits": [ 23 ],
+          "attributes": {}
+        }
+      }
+    }
+  }
+}

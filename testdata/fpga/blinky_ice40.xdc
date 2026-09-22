@@ -1,0 +1,10 @@
+# Vivado XDC written by reticle for ice40-hx1k-tq144 (ice40)
+set_property PACKAGE_PIN 21 [get_ports {clk}]
+set_property IOSTANDARD LVCMOS33 [get_ports {clk}]
+set_property PACKAGE_PIN 8 [get_ports {rst}]
+set_property IOSTANDARD LVCMOS33 [get_ports {rst}]
+set_property PACKAGE_PIN 99 [get_ports {led}]
+set_property IOSTANDARD LVCMOS33 [get_ports {led}]
+set_property PULLUP FALSE [get_ports {led}]
+create_clock -name sys -period 83.333 [get_ports {clk}]
+set_false_path -from [get_ports {rst}]

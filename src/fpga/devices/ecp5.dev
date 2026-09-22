@@ -1,0 +1,136 @@
+# Lattice ECP5 (LFE5U-25F and LFE5U-45F in CABGA381).
+#
+# Provenance and confidence, stated per group because it differs:
+#
+#   * Primitive names and ports are the ones the open flow uses, that is
+#     the cells Yosys' `synth_ecp5` emits and nextpnr-ecp5 consumes: LUT4
+#     (A, B, C, D -> Z with INIT), TRELLIS_FF (CLK, DI, CE, LSR -> Q),
+#     CCU2C for the carry chain, TRELLIS_IO (B, I, O, T with DIR) for IO,
+#     DCCA for a clock buffer, DP16KD for block RAM, MULT18X18D for the
+#     multiplier and EHXPLLL for the PLL. High confidence for the names
+#     and for the LUT, FF, IO and clock-buffer ports.
+#   * DP16KD: 18 kbit (16 kbit plus parity), true dual port, each port
+#     configurable 16384x1, 8192x2, 4096x4, 2048x9 or 1024x18, contents
+#     initialisable through INITVAL_00.. . High confidence for the modes;
+#     the port names recorded here are the bus forms (ADA, DIA, DOA and
+#     the B side), which is what a Yosys JSON netlist carries and what
+#     nextpnr splits into bits. Lattice Diamond wants the per-bit form
+#     (ADA0, ADA1, ...); Reticle does not emit that yet.
+#   * MULT18X18D is an 18x18 signed multiplier with a 36-bit product and
+#     up to three pipeline stages. High confidence for the arithmetic,
+#     MEDIUM confidence for the port names recorded here (bus form again).
+#   * Resource counts (24k LUTs, 56 block RAMs and 28 multipliers on the
+#     25F; 44k LUTs, 108 and 54 on the 45F) are the datasheet figures.
+#     Medium-high confidence.
+#   * The carry unit CCU2C computes two sum bits and their carry inside
+#     the cell, which does not match the simple (ci, i0, i1) -> co model
+#     Reticle maps carry chains onto, so no port map is recorded and
+#     carry mapping declines for this family with a note. That is
+#     deliberate: an approximate mapping would be worse than none.
+#   * No tile grid is recorded: Reticle cannot state the ECP5 tile array
+#     size, and a wrong bounding box would silently accept or reject
+#     placement regions. Region constraints are therefore reported as
+#     uncheckable on these parts.
+#   * IO: the standards and their drive strengths are the usual LVCMOS
+#     set; medium confidence for the exact drive lists, high for the
+#     names and for SLEWRATE being FAST or SLOW. The ECP5 has eight IO
+#     banks, but since the pin list below is partial and Reticle cannot
+#     state which bank each pin is in, a single synthetic bank named `io`
+#     holds every recorded pin. Do not read the bank name as silicon
+#     truth.
+#   * PIN LISTS ARE PARTIAL AND DERIVED FROM A BOARD FILE, NOT FROM THE
+#     PACKAGE DRAWINGS. The entries below are the 25 MHz oscillator and
+#     the eight LEDs of the ULX3S board, whose FPGA is a CABGA381 ECP5;
+#     Lattice publishes the same pinout for the 25F, 45F and 85F in that
+#     package, which is why they are listed for both parts here. Every
+#     other pin is missing, and a constraint naming one is reported as
+#     unknown. Add the rest from the datasheet before trusting this file
+#     for a new board.
+
+device ecp5-25f-CABGA381
+  family ecp5
+  package CABGA381
+  speed 6
+  lut_size 4
+  ff enable sync_reset async_reset shared_reset
+  bel LUT4 lut count 24288 port i=A,B,C,D o=Z param INIT=16'h0000
+  bel CCU2C carry
+  bel TRELLIS_FF ff count 24288 port clk=CLK d=DI q=Q en=CE rst=LSR
+  bel TRELLIS_IO io port pad=B din=O dout=I oe=T param_in DIR="INPUT" param_out DIR="OUTPUT" param_inout DIR="BIDIR" param_pullup PULLMODE="UP"
+  bel DCCA gb count 16 port i=CLKI o=CLKO en=CE
+  bel TRELLIS_DPR16X4 lutram
+  bram DP16KD
+    ports 2
+    mode 18 1024 param DATA_WIDTH_A=18 DATA_WIDTH_B=18
+    mode 9 2048 param DATA_WIDTH_A=9 DATA_WIDTH_B=9
+    mode 4 4096 param DATA_WIDTH_A=4 DATA_WIDTH_B=4
+    mode 2 8192 param DATA_WIDTH_A=2 DATA_WIDTH_B=2
+    mode 1 16384 param DATA_WIDTH_A=1 DATA_WIDTH_B=1
+    flags dual_port init
+    port rw clk=CLKA en=CEA addr=ADA din=DIA dout=DOA we=WEA rst=RSTA
+    port rw clk=CLKB en=CEB addr=ADB din=DIB dout=DOB we=WEB rst=RSTB
+  end
+  dsp MULT18X18D a 18 b 18 p 36 accumulator stages 3 port a=A b=B c=C p=P clk=CLK0
+  io_standard LVCMOS33 vccio 3.3 drive 4,8,12,16,20 slew slow,fast
+  io_standard LVCMOS25 vccio 2.5 drive 4,8,12,16 slew slow,fast
+  io_standard LVCMOS18 vccio 1.8 drive 4,8,12,16 slew slow,fast
+  io_standard LVCMOS15 vccio 1.5 drive 4,8 slew slow,fast
+  io_standard LVCMOS12 vccio 1.2 drive 2,4,8 slew slow,fast
+  io_standard LVDS vccio 2.5 differential
+  bank io vccio 3.3,2.5,1.8,1.5,1.2
+  pin G2 clock bank io
+  pin B2 io bank io
+  pin C1 io bank io
+  pin C2 io bank io
+  pin D1 io bank io
+  pin D2 io bank io
+  pin E1 io bank io
+  pin E2 io bank io
+  pin H3 io bank io
+  global_buffers 16
+  pll EHXPLLL input 8 400 vco 400 800 outputs 4
+end
+
+device ecp5-45f-CABGA381
+  family ecp5
+  package CABGA381
+  speed 6
+  lut_size 4
+  ff enable sync_reset async_reset shared_reset
+  bel LUT4 lut count 43848 port i=A,B,C,D o=Z param INIT=16'h0000
+  bel CCU2C carry
+  bel TRELLIS_FF ff count 43848 port clk=CLK d=DI q=Q en=CE rst=LSR
+  bel TRELLIS_IO io port pad=B din=O dout=I oe=T param_in DIR="INPUT" param_out DIR="OUTPUT" param_inout DIR="BIDIR" param_pullup PULLMODE="UP"
+  bel DCCA gb count 16 port i=CLKI o=CLKO en=CE
+  bel TRELLIS_DPR16X4 lutram
+  bram DP16KD
+    ports 2
+    mode 18 1024 param DATA_WIDTH_A=18 DATA_WIDTH_B=18
+    mode 9 2048 param DATA_WIDTH_A=9 DATA_WIDTH_B=9
+    mode 4 4096 param DATA_WIDTH_A=4 DATA_WIDTH_B=4
+    mode 2 8192 param DATA_WIDTH_A=2 DATA_WIDTH_B=2
+    mode 1 16384 param DATA_WIDTH_A=1 DATA_WIDTH_B=1
+    flags dual_port init
+    port rw clk=CLKA en=CEA addr=ADA din=DIA dout=DOA we=WEA rst=RSTA
+    port rw clk=CLKB en=CEB addr=ADB din=DIB dout=DOB we=WEB rst=RSTB
+  end
+  dsp MULT18X18D a 18 b 18 p 36 accumulator stages 3 port a=A b=B c=C p=P clk=CLK0
+  io_standard LVCMOS33 vccio 3.3 drive 4,8,12,16,20 slew slow,fast
+  io_standard LVCMOS25 vccio 2.5 drive 4,8,12,16 slew slow,fast
+  io_standard LVCMOS18 vccio 1.8 drive 4,8,12,16 slew slow,fast
+  io_standard LVCMOS15 vccio 1.5 drive 4,8 slew slow,fast
+  io_standard LVCMOS12 vccio 1.2 drive 2,4,8 slew slow,fast
+  io_standard LVDS vccio 2.5 differential
+  bank io vccio 3.3,2.5,1.8,1.5,1.2
+  pin G2 clock bank io
+  pin B2 io bank io
+  pin C1 io bank io
+  pin C2 io bank io
+  pin D1 io bank io
+  pin D2 io bank io
+  pin E1 io bank io
+  pin E2 io bank io
+  pin H3 io bank io
+  global_buffers 16
+  pll EHXPLLL input 8 400 vco 400 800 outputs 4
+end

@@ -1,0 +1,19 @@
+top ram512
+
+module ram512
+  net %clk u1 wire
+  net %we u1 wire
+  net %waddr u9 wire
+  net %raddr u9 wire
+  net %wdata u8 wire
+  net %rdata u8 wire
+  port clk in %clk
+  port we in %we
+  port waddr in %waddr
+  port raddr in %raddr
+  port wdata in %wdata
+  port rdata out %rdata
+  memory @mem 512 x u8
+  cell wr memwr @mem clocked (addr=%waddr, data=%wdata, en=%we, clk=%clk) -> ()
+  cell rd memrd @mem clocked (addr=%raddr, clk=%clk, en=1'd1) -> (data=%rdata)
+end

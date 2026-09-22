@@ -1,0 +1,11 @@
+# Vivado XDC written by reticle for ecp5-45f-CABGA381 (ecp5)
+set_property PACKAGE_PIN G2 [get_ports {clk}]
+set_property IOSTANDARD LVCMOS33 [get_ports {clk}]
+set_property DRIVE 8 [get_ports {clk}]
+set_property SLEW FAST [get_ports {clk}]
+set_property PACKAGE_PIN B2 [get_ports {rst}]
+set_property IOSTANDARD LVCMOS33 [get_ports {rst}]
+set_property PACKAGE_PIN C1 [get_ports {led}]
+set_property IOSTANDARD LVCMOS33 [get_ports {led}]
+set_property PULLUP TRUE [get_ports {led}]
+create_clock -name sys -period 40.000 [get_ports {clk}]

@@ -1,0 +1,12 @@
+device: ice40-hx1k-tq144
+block RAM:
+  mem (512x8) -> 1 x SB_RAM40_4K in 8x512 mode (1 wide, 1 deep)
+io:
+  clk (1 bits) -> SB_IO at pin 21 as LVCMOS33
+  we (1 bits) -> SB_IO at pin 8 as LVCMOS33
+  waddr (9 bits) -> SB_IO
+  raddr (9 bits) -> SB_IO
+  wdata (8 bits) -> SB_IO
+  rdata (8 bits) -> SB_IO
+notes:
+  memory `mem` uses the narrow 8x512 mode of SB_RAM40_4K; the data bits are connected in order, which some families permute

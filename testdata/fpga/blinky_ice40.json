@@ -1,0 +1,770 @@
+{
+  "creator": "reticle",
+  "modules": {
+    "blinky": {
+      "attributes": {
+        "top": 1
+      },
+      "ports": {
+        "clk": { "direction": "input", "bits": [ 2 ] },
+        "rst": { "direction": "input", "bits": [ 3 ] },
+        "led": { "direction": "output", "bits": [ 4 ] }
+      },
+      "cells": {
+        "counter": {
+          "hide_name": 0,
+          "type": "$sdff",
+          "parameters": {
+            "WIDTH": 8,
+            "CLK_POLARITY": 1,
+            "SRST_POLARITY": 1,
+            "SRST_VALUE": 0
+          },
+          "attributes": {},
+          "port_directions": {
+            "CLK": "input",
+            "SRST": "input",
+            "D": "input",
+            "Q": "output"
+          },
+          "connections": {
+            "CLK": [ 38 ],
+            "SRST": [ 6 ],
+            "D": [ 15, 16, 17, 18, 19, 20, 21, 22 ],
+            "Q": [ 8, 9, 10, 11, 12, 13, 14, 7 ]
+          }
+        },
+        "inc$xor0a": {
+          "hide_name": 0,
+          "type": "$xor",
+          "parameters": {
+            "A_SIGNED": 0,
+            "B_SIGNED": 0,
+            "A_WIDTH": 1,
+            "B_WIDTH": 1,
+            "Y_WIDTH": 1
+          },
+          "attributes": {},
+          "port_directions": {
+            "A": "input",
+            "B": "input",
+            "Y": "output"
+          },
+          "connections": {
+            "A": [ 8 ],
+            "B": [ "1" ],
+            "Y": [ 23 ]
+          }
+        },
+        "inc$xor0b": {
+          "hide_name": 0,
+          "type": "$xor",
+          "parameters": {
+            "A_SIGNED": 0,
+            "B_SIGNED": 0,
+            "A_WIDTH": 1,
+            "B_WIDTH": 1,
+            "Y_WIDTH": 1
+          },
+          "attributes": {},
+          "port_directions": {
+            "A": "input",
+            "B": "input",
+            "Y": "output"
+          },
+          "connections": {
+            "A": [ 23 ],
+            "B": [ "0" ],
+            "Y": [ 15 ]
+          }
+        },
+        "inc$carry0": {
+          "hide_name": 0,
+          "type": "SB_CARRY",
+          "parameters": {},
+          "attributes": {},
+          "port_directions": {
+            "CI": "input",
+            "I0": "input",
+            "I1": "input",
+            "CO": "output"
+          },
+          "connections": {
+            "CI": [ "0" ],
+            "I0": [ 8 ],
+            "I1": [ "1" ],
+            "CO": [ 24 ]
+          }
+        },
+        "inc$xor1a": {
+          "hide_name": 0,
+          "type": "$xor",
+          "parameters": {
+            "A_SIGNED": 0,
+            "B_SIGNED": 0,
+            "A_WIDTH": 1,
+            "B_WIDTH": 1,
+            "Y_WIDTH": 1
+          },
+          "attributes": {},
+          "port_directions": {
+            "A": "input",
+            "B": "input",
+            "Y": "output"
+          },
+          "connections": {
+            "A": [ 9 ],
+            "B": [ "0" ],
+            "Y": [ 25 ]
+          }
+        },
+        "inc$xor1b": {
+          "hide_name": 0,
+          "type": "$xor",
+          "parameters": {
+            "A_SIGNED": 0,
+            "B_SIGNED": 0,
+            "A_WIDTH": 1,
+            "B_WIDTH": 1,
+            "Y_WIDTH": 1
+          },
+          "attributes": {},
+          "port_directions": {
+            "A": "input",
+            "B": "input",
+            "Y": "output"
+          },
+          "connections": {
+            "A": [ 25 ],
+            "B": [ 24 ],
+            "Y": [ 16 ]
+          }
+        },
+        "inc$carry1": {
+          "hide_name": 0,
+          "type": "SB_CARRY",
+          "parameters": {},
+          "attributes": {},
+          "port_directions": {
+            "CI": "input",
+            "I0": "input",
+            "I1": "input",
+            "CO": "output"
+          },
+          "connections": {
+            "CI": [ 24 ],
+            "I0": [ 9 ],
+            "I1": [ "0" ],
+            "CO": [ 26 ]
+          }
+        },
+        "inc$xor2a": {
+          "hide_name": 0,
+          "type": "$xor",
+          "parameters": {
+            "A_SIGNED": 0,
+            "B_SIGNED": 0,
+            "A_WIDTH": 1,
+            "B_WIDTH": 1,
+            "Y_WIDTH": 1
+          },
+          "attributes": {},
+          "port_directions": {
+            "A": "input",
+            "B": "input",
+            "Y": "output"
+          },
+          "connections": {
+            "A": [ 10 ],
+            "B": [ "0" ],
+            "Y": [ 27 ]
+          }
+        },
+        "inc$xor2b": {
+          "hide_name": 0,
+          "type": "$xor",
+          "parameters": {
+            "A_SIGNED": 0,
+            "B_SIGNED": 0,
+            "A_WIDTH": 1,
+            "B_WIDTH": 1,
+            "Y_WIDTH": 1
+          },
+          "attributes": {},
+          "port_directions": {
+            "A": "input",
+            "B": "input",
+            "Y": "output"
+          },
+          "connections": {
+            "A": [ 27 ],
+            "B": [ 26 ],
+            "Y": [ 17 ]
+          }
+        },
+        "inc$carry2": {
+          "hide_name": 0,
+          "type": "SB_CARRY",
+          "parameters": {},
+          "attributes": {},
+          "port_directions": {
+            "CI": "input",
+            "I0": "input",
+            "I1": "input",
+            "CO": "output"
+          },
+          "connections": {
+            "CI": [ 26 ],
+            "I0": [ 10 ],
+            "I1": [ "0" ],
+            "CO": [ 28 ]
+          }
+        },
+        "inc$xor3a": {
+          "hide_name": 0,
+          "type": "$xor",
+          "parameters": {
+            "A_SIGNED": 0,
+            "B_SIGNED": 0,
+            "A_WIDTH": 1,
+            "B_WIDTH": 1,
+            "Y_WIDTH": 1
+          },
+          "attributes": {},
+          "port_directions": {
+            "A": "input",
+            "B": "input",
+            "Y": "output"
+          },
+          "connections": {
+            "A": [ 11 ],
+            "B": [ "0" ],
+            "Y": [ 29 ]
+          }
+        },
+        "inc$xor3b": {
+          "hide_name": 0,
+          "type": "$xor",
+          "parameters": {
+            "A_SIGNED": 0,
+            "B_SIGNED": 0,
+            "A_WIDTH": 1,
+            "B_WIDTH": 1,
+            "Y_WIDTH": 1
+          },
+          "attributes": {},
+          "port_directions": {
+            "A": "input",
+            "B": "input",
+            "Y": "output"
+          },
+          "connections": {
+            "A": [ 29 ],
+            "B": [ 28 ],
+            "Y": [ 18 ]
+          }
+        },
+        "inc$carry3": {
+          "hide_name": 0,
+          "type": "SB_CARRY",
+          "parameters": {},
+          "attributes": {},
+          "port_directions": {
+            "CI": "input",
+            "I0": "input",
+            "I1": "input",
+            "CO": "output"
+          },
+          "connections": {
+            "CI": [ 28 ],
+            "I0": [ 11 ],
+            "I1": [ "0" ],
+            "CO": [ 30 ]
+          }
+        },
+        "inc$xor4a": {
+          "hide_name": 0,
+          "type": "$xor",
+          "parameters": {
+            "A_SIGNED": 0,
+            "B_SIGNED": 0,
+            "A_WIDTH": 1,
+            "B_WIDTH": 1,
+            "Y_WIDTH": 1
+          },
+          "attributes": {},
+          "port_directions": {
+            "A": "input",
+            "B": "input",
+            "Y": "output"
+          },
+          "connections": {
+            "A": [ 12 ],
+            "B": [ "0" ],
+            "Y": [ 31 ]
+          }
+        },
+        "inc$xor4b": {
+          "hide_name": 0,
+          "type": "$xor",
+          "parameters": {
+            "A_SIGNED": 0,
+            "B_SIGNED": 0,
+            "A_WIDTH": 1,
+            "B_WIDTH": 1,
+            "Y_WIDTH": 1
+          },
+          "attributes": {},
+          "port_directions": {
+            "A": "input",
+            "B": "input",
+            "Y": "output"
+          },
+          "connections": {
+            "A": [ 31 ],
+            "B": [ 30 ],
+            "Y": [ 19 ]
+          }
+        },
+        "inc$carry4": {
+          "hide_name": 0,
+          "type": "SB_CARRY",
+          "parameters": {},
+          "attributes": {},
+          "port_directions": {
+            "CI": "input",
+            "I0": "input",
+            "I1": "input",
+            "CO": "output"
+          },
+          "connections": {
+            "CI": [ 30 ],
+            "I0": [ 12 ],
+            "I1": [ "0" ],
+            "CO": [ 32 ]
+          }
+        },
+        "inc$xor5a": {
+          "hide_name": 0,
+          "type": "$xor",
+          "parameters": {
+            "A_SIGNED": 0,
+            "B_SIGNED": 0,
+            "A_WIDTH": 1,
+            "B_WIDTH": 1,
+            "Y_WIDTH": 1
+          },
+          "attributes": {},
+          "port_directions": {
+            "A": "input",
+            "B": "input",
+            "Y": "output"
+          },
+          "connections": {
+            "A": [ 13 ],
+            "B": [ "0" ],
+            "Y": [ 33 ]
+          }
+        },
+        "inc$xor5b": {
+          "hide_name": 0,
+          "type": "$xor",
+          "parameters": {
+            "A_SIGNED": 0,
+            "B_SIGNED": 0,
+            "A_WIDTH": 1,
+            "B_WIDTH": 1,
+            "Y_WIDTH": 1
+          },
+          "attributes": {},
+          "port_directions": {
+            "A": "input",
+            "B": "input",
+            "Y": "output"
+          },
+          "connections": {
+            "A": [ 33 ],
+            "B": [ 32 ],
+            "Y": [ 20 ]
+          }
+        },
+        "inc$carry5": {
+          "hide_name": 0,
+          "type": "SB_CARRY",
+          "parameters": {},
+          "attributes": {},
+          "port_directions": {
+            "CI": "input",
+            "I0": "input",
+            "I1": "input",
+            "CO": "output"
+          },
+          "connections": {
+            "CI": [ 32 ],
+            "I0": [ 13 ],
+            "I1": [ "0" ],
+            "CO": [ 34 ]
+          }
+        },
+        "inc$xor6a": {
+          "hide_name": 0,
+          "type": "$xor",
+          "parameters": {
+            "A_SIGNED": 0,
+            "B_SIGNED": 0,
+            "A_WIDTH": 1,
+            "B_WIDTH": 1,
+            "Y_WIDTH": 1
+          },
+          "attributes": {},
+          "port_directions": {
+            "A": "input",
+            "B": "input",
+            "Y": "output"
+          },
+          "connections": {
+            "A": [ 14 ],
+            "B": [ "0" ],
+            "Y": [ 35 ]
+          }
+        },
+        "inc$xor6b": {
+          "hide_name": 0,
+          "type": "$xor",
+          "parameters": {
+            "A_SIGNED": 0,
+            "B_SIGNED": 0,
+            "A_WIDTH": 1,
+            "B_WIDTH": 1,
+            "Y_WIDTH": 1
+          },
+          "attributes": {},
+          "port_directions": {
+            "A": "input",
+            "B": "input",
+            "Y": "output"
+          },
+          "connections": {
+            "A": [ 35 ],
+            "B": [ 34 ],
+            "Y": [ 21 ]
+          }
+        },
+        "inc$carry6": {
+          "hide_name": 0,
+          "type": "SB_CARRY",
+          "parameters": {},
+          "attributes": {},
+          "port_directions": {
+            "CI": "input",
+            "I0": "input",
+            "I1": "input",
+            "CO": "output"
+          },
+          "connections": {
+            "CI": [ 34 ],
+            "I0": [ 14 ],
+            "I1": [ "0" ],
+            "CO": [ 36 ]
+          }
+        },
+        "inc$xor7a": {
+          "hide_name": 0,
+          "type": "$xor",
+          "parameters": {
+            "A_SIGNED": 0,
+            "B_SIGNED": 0,
+            "A_WIDTH": 1,
+            "B_WIDTH": 1,
+            "Y_WIDTH": 1
+          },
+          "attributes": {},
+          "port_directions": {
+            "A": "input",
+            "B": "input",
+            "Y": "output"
+          },
+          "connections": {
+            "A": [ 7 ],
+            "B": [ "0" ],
+            "Y": [ 37 ]
+          }
+        },
+        "inc$xor7b": {
+          "hide_name": 0,
+          "type": "$xor",
+          "parameters": {
+            "A_SIGNED": 0,
+            "B_SIGNED": 0,
+            "A_WIDTH": 1,
+            "B_WIDTH": 1,
+            "Y_WIDTH": 1
+          },
+          "attributes": {},
+          "port_directions": {
+            "A": "input",
+            "B": "input",
+            "Y": "output"
+          },
+          "connections": {
+            "A": [ 37 ],
+            "B": [ 36 ],
+            "Y": [ 22 ]
+          }
+        },
+        "clk$io0": {
+          "hide_name": 0,
+          "type": "SB_IO",
+          "parameters": {
+            "PIN_TYPE": 1
+          },
+          "attributes": {
+            "port": "clk",
+            "pin": "21",
+            "io_standard": "LVCMOS33"
+          },
+          "port_directions": {
+            "PACKAGE_PIN": "input",
+            "D_IN_0": "output"
+          },
+          "connections": {
+            "PACKAGE_PIN": [ 2 ],
+            "D_IN_0": [ 5 ]
+          }
+        },
+        "rst$io0": {
+          "hide_name": 0,
+          "type": "SB_IO",
+          "parameters": {
+            "PIN_TYPE": 1
+          },
+          "attributes": {
+            "port": "rst",
+            "pin": "8",
+            "io_standard": "LVCMOS33"
+          },
+          "port_directions": {
+            "PACKAGE_PIN": "input",
+            "D_IN_0": "output"
+          },
+          "connections": {
+            "PACKAGE_PIN": [ 3 ],
+            "D_IN_0": [ 6 ]
+          }
+        },
+        "led$io0": {
+          "hide_name": 0,
+          "type": "SB_IO",
+          "parameters": {
+            "PIN_TYPE": 25
+          },
+          "attributes": {
+            "port": "led",
+            "pin": "99",
+            "io_standard": "LVCMOS33",
+            "pullup": 0
+          },
+          "port_directions": {
+            "D_OUT_0": "input",
+            "PACKAGE_PIN": "output"
+          },
+          "connections": {
+            "D_OUT_0": [ 7 ],
+            "PACKAGE_PIN": [ 4 ]
+          }
+        },
+        "clk$gbuf": {
+          "hide_name": 0,
+          "type": "SB_GB",
+          "parameters": {},
+          "attributes": {},
+          "port_directions": {
+            "USER_SIGNAL_TO_GLOBAL_BUFFER": "input",
+            "GLOBAL_BUFFER_OUTPUT": "output"
+          },
+          "connections": {
+            "USER_SIGNAL_TO_GLOBAL_BUFFER": [ 5 ],
+            "GLOBAL_BUFFER_OUTPUT": [ 38 ]
+          }
+        }
+      },
+      "netnames": {
+        "clk": {
+          "hide_name": 0,
+          "bits": [ 5 ],
+          "attributes": {}
+        },
+        "rst": {
+          "hide_name": 0,
+          "bits": [ 6 ],
+          "attributes": {}
+        },
+        "led": {
+          "hide_name": 0,
+          "bits": [ 7 ],
+          "attributes": {}
+        },
+        "count": {
+          "hide_name": 0,
+          "bits": [ 8, 9, 10, 11, 12, 13, 14, 7 ],
+          "attributes": {}
+        },
+        "next": {
+          "hide_name": 0,
+          "bits": [ 15, 16, 17, 18, 19, 20, 21, 22 ],
+          "attributes": {}
+        },
+        "inc$h0": {
+          "hide_name": 0,
+          "bits": [ 23 ],
+          "attributes": {}
+        },
+        "inc$s0": {
+          "hide_name": 0,
+          "bits": [ 15 ],
+          "attributes": {}
+        },
+        "inc$c0": {
+          "hide_name": 0,
+          "bits": [ 24 ],
+          "attributes": {}
+        },
+        "inc$h1": {
+          "hide_name": 0,
+          "bits": [ 25 ],
+          "attributes": {}
+        },
+        "inc$s1": {
+          "hide_name": 0,
+          "bits": [ 16 ],
+          "attributes": {}
+        },
+        "inc$c1": {
+          "hide_name": 0,
+          "bits": [ 26 ],
+          "attributes": {}
+        },
+        "inc$h2": {
+          "hide_name": 0,
+          "bits": [ 27 ],
+          "attributes": {}
+        },
+        "inc$s2": {
+          "hide_name": 0,
+          "bits": [ 17 ],
+          "attributes": {}
+        },
+        "inc$c2": {
+          "hide_name": 0,
+          "bits": [ 28 ],
+          "attributes": {}
+        },
+        "inc$h3": {
+          "hide_name": 0,
+          "bits": [ 29 ],
+          "attributes": {}
+        },
+        "inc$s3": {
+          "hide_name": 0,
+          "bits": [ 18 ],
+          "attributes": {}
+        },
+        "inc$c3": {
+          "hide_name": 0,
+          "bits": [ 30 ],
+          "attributes": {}
+        },
+        "inc$h4": {
+          "hide_name": 0,
+          "bits": [ 31 ],
+          "attributes": {}
+        },
+        "inc$s4": {
+          "hide_name": 0,
+          "bits": [ 19 ],
+          "attributes": {}
+        },
+        "inc$c4": {
+          "hide_name": 0,
+          "bits": [ 32 ],
+          "attributes": {}
+        },
+        "inc$h5": {
+          "hide_name": 0,
+          "bits": [ 33 ],
+          "attributes": {}
+        },
+        "inc$s5": {
+          "hide_name": 0,
+          "bits": [ 20 ],
+          "attributes": {}
+        },
+        "inc$c5": {
+          "hide_name": 0,
+          "bits": [ 34 ],
+          "attributes": {}
+        },
+        "inc$h6": {
+          "hide_name": 0,
+          "bits": [ 35 ],
+          "attributes": {}
+        },
+        "inc$s6": {
+          "hide_name": 0,
+          "bits": [ 21 ],
+          "attributes": {}
+        },
+        "inc$c6": {
+          "hide_name": 0,
+          "bits": [ 36 ],
+          "attributes": {}
+        },
+        "inc$h7": {
+          "hide_name": 0,
+          "bits": [ 37 ],
+          "attributes": {}
+        },
+        "inc$s7": {
+          "hide_name": 0,
+          "bits": [ 22 ],
+          "attributes": {}
+        },
+        "clk$pad": {
+          "hide_name": 0,
+          "bits": [ 2 ],
+          "attributes": {}
+        },
+        "clk$in0": {
+          "hide_name": 0,
+          "bits": [ 5 ],
+          "attributes": {}
+        },
+        "rst$pad": {
+          "hide_name": 0,
+          "bits": [ 3 ],
+          "attributes": {}
+        },
+        "rst$in0": {
+          "hide_name": 0,
+          "bits": [ 6 ],
+          "attributes": {}
+        },
+        "led$pad": {
+          "hide_name": 0,
+          "bits": [ 4 ],
+          "attributes": {}
+        },
+        "led$pin0": {
+          "hide_name": 0,
+          "bits": [ 4 ],
+          "attributes": {}
+        },
+        "clk$gb": {
+          "hide_name": 0,
+          "bits": [ 38 ],
+          "attributes": {}
+        }
+      }
+    }
+  }
+}

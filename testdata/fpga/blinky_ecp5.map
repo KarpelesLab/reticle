@@ -1,0 +1,9 @@
+device: ecp5-45f-CABGA381
+io:
+  clk (1 bits) -> TRELLIS_IO at pin G2 as LVCMOS33
+  rst (1 bits) -> TRELLIS_IO at pin B2 as LVCMOS33
+  led (1 bits) -> TRELLIS_IO at pin C1 as LVCMOS33
+clocks:
+  clk (8 flip-flops) -> DCCA
+notes:
+  `ecp5-45f-CABGA381` describes the carry element `CCU2C` without a (ci, i0, i1, co) port map, so 1 adder(s) stay generic

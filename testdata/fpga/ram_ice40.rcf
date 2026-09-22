@@ -1,0 +1,11 @@
+# Only the scalars are pinned; the address and data buses are left to the
+# placer, which is legal: Reticle checks what is stated, not that
+# everything is stated.
+set_io -io_standard LVCMOS33 clk 21
+set_io -io_standard LVCMOS33 we 8
+set_io -io_standard LVCMOS33 rdata[0] 99
+create_clock -name sys -period 83.333 clk
+region core 1 1 6 6
+assign rd region core
+keep_hierarchy wr
+set_multicycle_path 2 -from waddr -to rdata

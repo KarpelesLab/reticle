@@ -1,0 +1,81 @@
+# The generic family: a plausible FPGA that is not any real part.
+#
+# Provenance: none, and deliberately so. Every number here is Reticle's
+# own invention, chosen to be typical rather than to match silicon:
+# a k-input LUT with a flip-flop, one 16 kbit block RAM with the usual
+# power-of-two width modes, one 18x18 multiplier with an accumulator, a
+# carry chain, an IO buffer, a global clock buffer and a 32x32 tile grid.
+# The primitive names (LUT, FF, CARRY, IOBUF, BUFG, RAMB, MULT) are
+# Reticle's own.
+#
+# It exists for two jobs:
+#
+#   * as the target for tests, so unit tests exercise mapping without
+#     depending on what a real family happens to offer, and
+#   * as the fallback for a part Reticle has no database for, so a design
+#     can still be mapped, checked and exported while someone writes the
+#     real `.dev` file.
+#
+# There are no package pins: a pin constraint against a generic device is
+# reported as unknown, which is the honest answer. `generic` has 4-input
+# LUTs and `generic-k6` has 6-input ones; a family with another LUT size
+# is one more copy of this block with `lut_size` changed.
+
+device generic
+  family generic
+  lut_size 4
+  ff enable sync_reset async_reset
+  bel LUT lut port i=I o=O param INIT=16'h0000
+  bel FF ff port clk=C d=D q=Q en=E rst=R
+  bel CARRY carry port ci=CI i0=I0 i1=I1 co=CO
+  bel IOBUF io port pad=PAD din=I dout=O oe=OE param_in DIR="INPUT" param_out DIR="OUTPUT" param_inout DIR="BIDIR" param_pullup PULLUP=1
+  bel BUFG gb count 16 port i=I o=O
+  bram RAMB
+    ports 2
+    mode 16 1024 param DATA_WIDTH=16
+    mode 8 2048 param DATA_WIDTH=8
+    mode 4 4096 param DATA_WIDTH=4
+    mode 2 8192 param DATA_WIDTH=2
+    mode 1 16384 param DATA_WIDTH=1
+    flags dual_port init
+    port read clk=RCLK en=RE addr=RADDR dout=RDATA
+    port write clk=WCLK en=WE addr=WADDR din=WDATA
+  end
+  dsp MULT a 18 b 18 p 36 accumulator stages 1 port a=A b=B c=C p=P
+  io_standard LVCMOS33 vccio 3.3 drive 4,8,12 slew slow,fast
+  io_standard LVCMOS18 vccio 1.8 drive 4,8 slew slow,fast
+  global_buffers 16
+  clock_region global 0 0 31 31
+  site X0Y0 lc 0 0
+  site X1Y0 lc 1 0
+  grid 32 32
+end
+
+device generic-k6
+  family generic
+  lut_size 6
+  ff enable sync_reset async_reset
+  bel LUT lut port i=I o=O param INIT=64'h0000000000000000
+  bel FF ff port clk=C d=D q=Q en=E rst=R
+  bel CARRY carry port ci=CI i0=I0 i1=I1 co=CO
+  bel IOBUF io port pad=PAD din=I dout=O oe=OE param_in DIR="INPUT" param_out DIR="OUTPUT" param_inout DIR="BIDIR" param_pullup PULLUP=1
+  bel BUFG gb count 32 port i=I o=O
+  bram RAMB
+    ports 2
+    mode 32 1024 param DATA_WIDTH=32
+    mode 16 2048 param DATA_WIDTH=16
+    mode 8 4096 param DATA_WIDTH=8
+    mode 4 8192 param DATA_WIDTH=4
+    mode 2 16384 param DATA_WIDTH=2
+    mode 1 32768 param DATA_WIDTH=1
+    flags byte_enable dual_port init
+    port read clk=RCLK en=RE addr=RADDR dout=RDATA
+    port write clk=WCLK en=WE addr=WADDR din=WDATA
+  end
+  dsp MULT a 25 b 18 p 48 preadder accumulator stages 3 port a=A b=B c=C p=P
+  io_standard LVCMOS33 vccio 3.3 drive 4,8,12 slew slow,fast
+  io_standard LVCMOS18 vccio 1.8 drive 4,8 slew slow,fast
+  global_buffers 32
+  clock_region global 0 0 63 63
+  grid 64 64
+end

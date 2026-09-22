@@ -1,0 +1,41 @@
+top blinky
+
+module blinky
+  net %clk u1 wire
+  net %rst u1 wire
+  net %led u1 wire
+  net %count u8 wire
+  net %next u8 wire
+  net %clk$pad u1 wire
+  net %clk$in0 u1 wire
+  net %rst$pad u1 wire
+  net %rst$in0 u1 wire
+  net %led$pad u1 wire
+  net %led$pin0 u1 wire
+  net %clk$gb u1 wire
+  port clk in %clk$pad
+  port rst in %rst$pad
+  port led out %led$pad
+  assign %led = %count[7:7]
+  assign %clk = %clk$in0
+  assign %rst = %rst$in0
+  assign %led$pad = %led$pin0
+  cell inc add (a=%count, b=8'd1) -> (y=%next)
+  cell counter dff pos srst pos 8'd0 (clk=%clk$gb, d=%next, rst=%rst) -> (q=%count)
+  attr port = "clk"
+  attr pin = "G2"
+  attr io_standard = "LVCMOS33"
+  attr drive = 8
+  attr slew = "fast"
+  cell clk$io0 blackbox TRELLIS_IO #(DIR="INPUT") (B=%clk$pad) -> (O=%clk$in0)
+  attr port = "rst"
+  attr pin = "B2"
+  attr io_standard = "LVCMOS33"
+  cell rst$io0 blackbox TRELLIS_IO #(DIR="INPUT") (B=%rst$pad) -> (O=%rst$in0)
+  attr port = "led"
+  attr pin = "C1"
+  attr io_standard = "LVCMOS33"
+  attr pullup = 1
+  cell led$io0 blackbox TRELLIS_IO #(DIR="OUTPUT", PULLMODE="UP") (I=%led) -> (B=%led$pin0)
+  cell clk$gbuf blackbox DCCA (CLKI=%clk) -> (CLKO=%clk$gb)
+end

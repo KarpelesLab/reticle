@@ -29,6 +29,7 @@
 //! | [`synth`]   | `synth`   | Synthesis passes and technology mapping         |
 //! | [`formal`]  | `formal`  | SAT solver, CNF encoding, model checking        |
 //! | [`asic`]    | `asic`    | Liberty, LEF and DEF readers and writers        |
+//! | [`fpga`]    | `fpga`    | FPGA device database, primitive mapping, constraints |
 
 #![forbid(unsafe_code)]
 
@@ -56,6 +57,9 @@ pub mod formal;
 
 #[cfg(feature = "asic")]
 pub mod asic;
+
+#[cfg(feature = "fpga")]
+pub mod fpga;
 
 /// The crate version, as recorded in `Cargo.toml`.
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");

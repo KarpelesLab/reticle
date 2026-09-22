@@ -1,0 +1,9 @@
+# An iCEstick blinky: the 12 MHz oscillator, a reset on the FTDI pin and
+# the first LED. See src/fpga/devices/ice40.dev for where these pin
+# numbers come from.
+set_io -io_standard LVCMOS33 clk 21
+set_io -io_standard LVCMOS33 rst 8
+set_io -io_standard LVCMOS33 -pullup no led 99
+create_clock -name sys -period 83.333 clk
+clock_domain sys clk
+set_false_path -from rst

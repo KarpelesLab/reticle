@@ -256,15 +256,18 @@ approach is to interoperate with existing open tools first so real hardware
 runs early, then replace them piece by piece.
 
 FPGA:
-- [ ] Device database format describing a family's primitives, LUT size,
-      FF features, block RAM and DSP shapes, IO and clock resources.
-- [ ] Primitive mapping: block RAM and DSP inference, IO buffers, clock
-      management blocks, carry chains.
-- [ ] Vendor and open-flow interop: JSON export to nextpnr (iCE40, ECP5,
-      Gowin), structural Verilog + XDC / SDC constraints for Vivado and
-      Quartus, so a design synthesised by Reticle can be placed by existing
-      tools from day one.
-- [ ] Placement constraints as a first-class language: pin assignment, IO
+- [x] Device database format describing a family's primitives, LUT size,
+      FF features, block RAM and DSP shapes, IO and clock resources. The
+      `.dev` text format round-trips; iCE40, ECP5 and a generic family are
+      compiled in.
+- [x] Primitive mapping: block RAM and DSP inference, IO buffers, global
+      clock buffers, carry chains. (Instantiating a PLL from a clock
+      constraint is still open; a design that wants one instantiates it.)
+- [x] Vendor and open-flow interop: JSON export to nextpnr (iCE40 and
+      ECP5; Gowin needs a device file), structural Verilog + XDC / SDC
+      constraints for Vivado and Quartus, so a design synthesised by
+      Reticle can be placed by existing tools from day one.
+- [x] Placement constraints as a first-class language: pin assignment, IO
       standards, placement regions (pblocks), keep-hierarchy, relative
       placement macros, clock domains. Declared in the source via attributes
       or in a constraints file, and checked against the device database.
