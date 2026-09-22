@@ -39,17 +39,23 @@
 //! models that enforce it. `sdram_ctrl` answers to an SDRAM model that
 //! records every datasheet timing the controller breaks — and a test
 //! that gives the model a slower part proves it would notice.
+//! `hyperram_ctrl` answers to a HyperRAM model that insists on the
+//! initial latency, through the DDR IO registers modelled in quarter
+//! cycles. `dvi_tx`'s TMDS encoder is checked against the DVI
+//! specification's algorithm for every byte from every running disparity
+//! it can reach.
 //!
-//! Four tests here came from gaps in Reticle rather than in the blocks,
+//! Five tests here came from gaps in Reticle rather than in the blocks,
 //! found by writing real HDL, which is the argument for a first-party
 //! library in the first place:
 //! `ice40_flip_flops_take_an_active_low_reset_through_one_inverter`,
 //! `small_memories_become_logic_after_the_fpga_flow`,
-//! `function_locals_are_not_reported_as_unreset_registers` and
-//! `a_two_read_port_register_file_is_duplicated_across_block_rams`.
-//! Each once asserted that its gap was *still there*; each now holds the
-//! fix, and the paragraph in `docs/ip-library.md` it points at says what
-//! the fix is.
+//! `function_locals_are_not_reported_as_unreset_registers`,
+//! `a_two_read_port_register_file_is_duplicated_across_block_rams` and
+//! `a_project_top_that_is_also_instantiated_with_an_override_is_lost`.
+//! The first four once asserted that their gap was *still there* and
+//! now hold the fix; the fifth still pins an open gap. The paragraph in
+//! `docs/ip-library.md` each points at says which.
 //!
 //! Set `UPDATE_EXPECT=1` to rewrite the footprint table in
 //! `docs/ip-library.md` after an intended change, and read the diff: a
@@ -210,7 +216,28 @@ const VARIANTS: &[Variant] = &[
         top: "hyperram_ctrl",
         params: &[("ADDR_WIDTH", "22"), ("CK_DELAY", "100")],
     },
+    Variant {
+        package: "dvi_tx",
+        top: "dvi_tx",
+        params: &[("MODE", "0")],
+    },
+    Variant {
+        package: "dvi_tx_pll",
+        top: "dvi_tx_pll",
+        params: &[("MODE", "0")],
+    },
 ];
+
+/// Board constraints a variant needs to go through the FPGA flow, as
+/// `.rcf` text: the clock a PLL is fed from, which only a board can
+/// say. Everything else a block needs, its own attributes state.
+fn board_constraints(variant: &Variant) -> &'static str {
+    match variant.top {
+        // A 25 MHz oscillator, which both families' PLLs take.
+        "dvi_tx_pll" => "create_clock -name ref -period 40.0 clk_ref\n",
+        _ => "",
+    }
+}
 
 /// The devices the footprint table reports, besides the generic LUT
 /// mappings.
@@ -592,7 +619,10 @@ fn measure_device(variant: &Variant, label: &str, device: &str) -> Measurement {
     // The block's own attributes are constraints too: a `ddr` port is
     // built with its double-data-rate register, as a user's flow would.
     let mut diags = Diagnostics::new();
-    let mut constraints = Constraints::new();
+    let mut map = SourceMap::new();
+    let rcf = board_constraints(variant);
+    let file = map.add("board.rcf", rcf).expect("the constraints fit");
+    let mut constraints = Constraints::parse(rcf, file, &mut diags);
     constraints.merge_attrs(&design, id, &mut diags);
     let options = FpgaOptions::default();
     let report = fpga::synthesize_for(&mut design, id, device, &constraints, &options, &mut diags)
@@ -5305,6 +5335,432 @@ fn the_hyperram_model_catches_a_controller_with_the_wrong_latency() {
 }
 
 // ---------------------------------------------------------------------------
+// dvi_tx
+// ---------------------------------------------------------------------------
+
+/// The TMDS encoder exactly as the DVI 1.0 specification writes it, in
+/// section 3.2.2's flow chart, with the running disparity an unbounded
+/// integer. Returns the symbol, bit 0 first on the wire, and the new
+/// disparity.
+fn tmds_reference(d: u8, cnt: i32) -> (u16, i32) {
+    let n1_d = d.count_ones();
+    let bit = |v: u8, i: u32| (v >> i) & 1;
+    let mut q_m: u16 = u16::from(bit(d, 0));
+    let xnor = n1_d > 4 || (n1_d == 4 && bit(d, 0) == 0);
+    for i in 1..8 {
+        let prev = (q_m >> (i - 1)) & 1;
+        let b = u16::from(bit(d, i));
+        let next = if xnor { !(prev ^ b) & 1 } else { prev ^ b };
+        q_m |= next << i;
+    }
+    if !xnor {
+        q_m |= 1 << 8;
+    }
+    let q_m8 = (q_m >> 8) & 1;
+    let low = q_m & 0xFF;
+    let n1 = i32::try_from(low.count_ones()).expect("eight bits");
+    let n0 = 8 - n1;
+    if cnt == 0 || n1 == n0 {
+        let q9 = 1 - q_m8;
+        let body = if q_m8 == 1 { low } else { !low & 0xFF };
+        let q = (q9 << 9) | (q_m8 << 8) | body;
+        let cnt = if q_m8 == 0 {
+            cnt + (n0 - n1)
+        } else {
+            cnt + (n1 - n0)
+        };
+        (q, cnt)
+    } else if (cnt > 0 && n1 > n0) || (cnt < 0 && n0 > n1) {
+        let q = (1 << 9) | (q_m8 << 8) | (!low & 0xFF);
+        (q, cnt + 2 * i32::from(q_m8) + (n0 - n1))
+    } else {
+        let q = (q_m8 << 8) | low;
+        (q, cnt - 2 * (1 - i32::from(q_m8)) + (n1 - n0))
+    }
+}
+
+/// The four control-period symbols, by {C1, C0}.
+const TMDS_CONTROL: [u16; 4] = [
+    0b11_0101_0100,
+    0b00_1010_1011,
+    0b01_0101_0100,
+    0b10_1010_1011,
+];
+
+/// What a TMDS receiver makes of a symbol: a control pair, or a byte.
+/// Written from the decoder half of the specification, which undoes the
+/// encoder without knowing the disparity.
+fn tmds_decode(q: u16) -> Result<u8, u8> {
+    if let Some(c) = TMDS_CONTROL.iter().position(|s| *s == q) {
+        return Err(u8::try_from(c).expect("two bits"));
+    }
+    let mut body = q & 0xFF;
+    if q >> 9 & 1 == 1 {
+        body = !body & 0xFF;
+    }
+    let xor = q >> 8 & 1 == 1;
+    let mut d = body & 1;
+    for i in 1..8 {
+        let b = (body >> i) & 1;
+        let prev = (body >> (i - 1)) & 1;
+        let bit = if xor { b ^ prev } else { !(b ^ prev) & 1 };
+        d |= bit << i;
+    }
+    Ok(u8::try_from(d).expect("eight bits"))
+}
+
+/// Every running disparity the algorithm can reach from zero, each with
+/// the shortest run of bytes that reaches it.
+fn tmds_reachable() -> BTreeMap<i32, Vec<u8>> {
+    let mut paths: BTreeMap<i32, Vec<u8>> = BTreeMap::new();
+    paths.insert(0, Vec::new());
+    let mut frontier = vec![0i32];
+    while !frontier.is_empty() {
+        let mut next = Vec::new();
+        for cnt in frontier {
+            let path = paths[&cnt].clone();
+            for d in 0..=255u8 {
+                let (_, after) = tmds_reference(d, cnt);
+                if let std::collections::btree_map::Entry::Vacant(e) = paths.entry(after) {
+                    let mut p = path.clone();
+                    p.push(d);
+                    e.insert(p);
+                    next.push(after);
+                }
+            }
+        }
+        frontier = next;
+    }
+    paths
+}
+
+#[test]
+fn tmds_encoder_matches_the_specification_for_every_byte_in_every_disparity() {
+    // The disparity the algorithm can reach is bounded, and the block's
+    // six-bit register holds all of it.
+    let reachable = tmds_reachable();
+    let lowest = *reachable.keys().next().expect("zero at least");
+    let highest = *reachable.keys().last().expect("zero at least");
+    assert!(
+        lowest >= -32 && highest <= 31,
+        "the disparity reaches {lowest}..{highest}, beyond six bits"
+    );
+    assert!(lowest < 0 && highest > 0, "both signs are reachable");
+
+    let design = design_of("dvi_tx", "tmds_encoder", &[]);
+    let mut sim = simulate(&design, "tmds_encoder");
+    let clk = top_net(&sim, "clk");
+    let rst_n = top_net(&sim, "rst_n");
+    let en = top_net(&sim, "en");
+    let de = top_net(&sim, "de");
+    let c = top_net(&sim, "c");
+    let d = top_net(&sim, "d");
+    let q = top_net(&sim, "q");
+    let cnt = top_net(&sim, "cnt");
+    sim.set(en, bit(true));
+    sim.set(de, bit(false));
+    sim.set(c, word(2, 0));
+    sim.set(d, word(8, 0));
+    reset(&mut sim, clk, rst_n);
+
+    let hw_cnt = |sim: &Simulator<'_>| -> i32 {
+        let raw = i32::try_from(get_u64(sim, cnt)).expect("six bits");
+        if raw >= 32 { raw - 64 } else { raw }
+    };
+
+    // The control period first: each pair its symbol, and the disparity
+    // back to zero.
+    for (pair, symbol) in TMDS_CONTROL.iter().enumerate() {
+        sim.set(de, bit(false));
+        sim.set(c, word(2, pair as u64));
+        cycle(&mut sim, clk, HALF);
+        assert_eq!(get_u64(&sim, q), u64::from(*symbol), "control {pair:02b}");
+        assert_eq!(hw_cnt(&sim), 0);
+    }
+
+    // Then every byte from every disparity the encoder can be in: a
+    // control symbol to zero it, the shortest run of bytes to the
+    // disparity wanted, checked on the way, and the byte under test.
+    let mut checked = 0;
+    for (start, path) in &reachable {
+        for value in 0..=255u8 {
+            sim.set(de, bit(false));
+            sim.set(c, word(2, 0));
+            cycle(&mut sim, clk, HALF);
+            sim.set(de, bit(true));
+            let mut model = 0;
+            for byte in path.iter().copied().chain(std::iter::once(value)) {
+                sim.set(d, word(8, u64::from(byte)));
+                cycle(&mut sim, clk, HALF);
+                let (symbol, after) = tmds_reference(byte, model);
+                assert_eq!(
+                    get_u64(&sim, q),
+                    u64::from(symbol),
+                    "byte {byte:#04x} at disparity {model} (testing {value:#04x} at {start})"
+                );
+                assert_eq!(
+                    hw_cnt(&sim),
+                    after,
+                    "disparity after {byte:#04x} at {model}"
+                );
+                assert_eq!(tmds_decode(symbol), Ok(byte), "the symbol decodes back");
+                model = after;
+            }
+            checked += 1;
+        }
+    }
+    assert_eq!(checked, 256 * reachable.len());
+
+    // `en` low holds everything.
+    sim.set(en, bit(false));
+    let before = get_u64(&sim, q);
+    sim.set(d, word(8, 0x5A));
+    cycle(&mut sim, clk, HALF);
+    assert_eq!(get_u64(&sim, q), before, "no enable, no new symbol");
+}
+
+/// One standard mode's numbers, as VESA and CEA-861 publish them.
+struct VideoMode {
+    mode: &'static str,
+    h: [u64; 4],
+    v: [u64; 4],
+    sync_high: bool,
+}
+
+const VIDEO_MODES: [VideoMode; 3] = [
+    VideoMode {
+        mode: "0",
+        h: [640, 16, 96, 48],
+        v: [480, 10, 2, 33],
+        sync_high: false,
+    },
+    VideoMode {
+        mode: "1",
+        h: [800, 40, 128, 88],
+        v: [600, 1, 4, 23],
+        sync_high: true,
+    },
+    VideoMode {
+        mode: "2",
+        h: [1280, 110, 40, 220],
+        v: [720, 5, 5, 20],
+        sync_high: true,
+    },
+];
+
+/// The raster for one mode, counted: a whole frame and the start of the
+/// next, every pixel enabled.
+fn check_video_mode(m: &VideoMode) {
+    let design = design_of("dvi_tx", "video_timing", &[("MODE", m.mode)]);
+    let mut sim = simulate(&design, "video_timing");
+    let clk = top_net(&sim, "clk");
+    let rst_n = top_net(&sim, "rst_n");
+    let en = top_net(&sim, "en");
+    let de = top_net(&sim, "de");
+    let hsync = top_net(&sim, "hsync");
+    let vsync = top_net(&sim, "vsync");
+    let frame = top_net(&sim, "frame");
+    let x = top_net(&sim, "x");
+    let y = top_net(&sim, "y");
+    sim.set(en, bit(true));
+    reset(&mut sim, clk, rst_n);
+
+    let h_total: u64 = m.h.iter().sum();
+    let v_total: u64 = m.v.iter().sum();
+    let active = |s: bool| s == m.sync_high;
+
+    // Walk one frame pixel by pixel and compare with where each pixel
+    // must be.
+    let mut visible = 0u64;
+    let mut hsync_pixels = 0u64;
+    let mut vsync_lines = BTreeSet::new();
+    for line in 0..v_total {
+        for pixel in 0..h_total {
+            let on = high(&sim, de);
+            let want = pixel < m.h[0] && line < m.v[0];
+            assert_eq!(on, want, "mode {}: de at ({pixel}, {line})", m.mode);
+            if on {
+                visible += 1;
+                assert_eq!(get_u64(&sim, x), pixel);
+                assert_eq!(get_u64(&sim, y), line);
+            }
+            let h_sync = pixel >= m.h[0] + m.h[1] && pixel < m.h[0] + m.h[1] + m.h[2];
+            assert_eq!(
+                active(high(&sim, hsync)),
+                h_sync,
+                "mode {}: hsync at pixel {pixel}",
+                m.mode
+            );
+            if h_sync && line == 0 {
+                hsync_pixels += 1;
+            }
+            let v_sync = line >= m.v[0] + m.v[1] && line < m.v[0] + m.v[1] + m.v[2];
+            assert_eq!(
+                active(high(&sim, vsync)),
+                v_sync,
+                "mode {}: vsync on line {line}",
+                m.mode
+            );
+            if v_sync {
+                vsync_lines.insert(line);
+            }
+            assert_eq!(high(&sim, frame), line == 0 && pixel == 0);
+            cycle(&mut sim, clk, HALF);
+        }
+    }
+    assert_eq!(visible, m.h[0] * m.v[0], "mode {}: visible pixels", m.mode);
+    assert_eq!(hsync_pixels, m.h[2], "mode {}: hsync width", m.mode);
+    assert_eq!(
+        vsync_lines.len() as u64,
+        m.v[2],
+        "mode {}: vsync lines",
+        m.mode
+    );
+    // And the frame wraps to the top left.
+    assert!(high(&sim, frame), "mode {}: the next frame starts", m.mode);
+    assert_eq!(get_u64(&sim, x), 0);
+    assert_eq!(get_u64(&sim, y), 0);
+}
+
+#[test]
+fn video_timing_counts_640x480() {
+    check_video_mode(&VIDEO_MODES[0]);
+}
+
+#[test]
+fn video_timing_counts_800x600() {
+    check_video_mode(&VIDEO_MODES[1]);
+}
+
+#[test]
+fn video_timing_counts_1280x720() {
+    check_video_mode(&VIDEO_MODES[2]);
+}
+
+#[test]
+fn dvi_tx_serialises_what_it_encodes() {
+    let design = design_of("dvi_tx", "dvi_tx", &[("MODE", "0")]);
+    let mut sim = simulate(&design, "dvi_tx");
+    let clk = top_net(&sim, "clk_x5");
+    let rst_n = top_net(&sim, "rst_n");
+    let pix_en = top_net(&sim, "pix_en");
+    let x = top_net(&sim, "x");
+    let y = top_net(&sim, "y");
+    let colour = [top_net(&sim, "b"), top_net(&sim, "g"), top_net(&sim, "r")];
+    let lanes = [
+        top_net(&sim, "tmds_d0"),
+        top_net(&sim, "tmds_d1"),
+        top_net(&sim, "tmds_d2"),
+        top_net(&sim, "tmds_clk"),
+    ];
+    // A pattern that differs on every lane: blue x ^ y, green y, red x.
+    let pattern = |px: u64, py: u64| -> [u8; 3] {
+        let [x0, ..] = px.to_le_bytes();
+        let [y0, ..] = py.to_le_bytes();
+        [x0 ^ y0, y0, x0]
+    };
+    for net in colour {
+        sim.set(net, word(8, 0));
+    }
+    reset(&mut sim, clk, rst_n);
+
+    // Two whole lines and a little more, as bits on each lane.
+    let mode = &VIDEO_MODES[0];
+    let h_total: u64 = mode.h.iter().sum();
+    let cycles = 5 * (2 * h_total + 4);
+    let mut bits: [Vec<u8>; 4] = [Vec::new(), Vec::new(), Vec::new(), Vec::new()];
+    let mut pix_ens = 0u64;
+    for _ in 0..cycles {
+        // The colour for the pixel `x`, `y` name, ready before the next
+        // pixel edge.
+        let values = pattern(get_u64(&sim, x), get_u64(&sim, y));
+        for (net, value) in colour.iter().zip(values) {
+            sim.set(*net, word(8, u64::from(value)));
+        }
+        if high(&sim, pix_en) {
+            pix_ens += 1;
+        }
+        cycle(&mut sim, clk, HALF);
+        for (lane, net) in lanes.iter().enumerate() {
+            let pair = get_u64(&sim, *net);
+            // The low bit leaves on the rising edge, first.
+            bits[lane].push((pair & 1) as u8);
+            bits[lane].push((pair >> 1 & 1) as u8);
+        }
+    }
+    assert!(pix_ens >= 2 * h_total, "one pixel enable in five cycles");
+
+    // The clock lane is five ones and five zeros, and its rising edge is
+    // where every symbol starts.
+    let start = bits[3]
+        .windows(10)
+        .position(|w| w == [1, 1, 1, 1, 1, 0, 0, 0, 0, 0])
+        .expect("the clock pattern appears");
+    let symbols = |lane: usize| -> Vec<u16> {
+        bits[lane][start..]
+            .as_chunks::<10>()
+            .0
+            .iter()
+            .map(|c| {
+                c.iter()
+                    .enumerate()
+                    .fold(0u16, |acc, (i, b)| acc | u16::from(*b) << i)
+            })
+            .collect()
+    };
+    for s in symbols(3) {
+        assert_eq!(s, 0b00_0001_1111, "the clock lane never slips");
+    }
+
+    // Find the first symbol of pixel (0, 0): the first data symbol after
+    // reset, which is where the raster starts.
+    let lane0 = symbols(0);
+    let first = lane0
+        .iter()
+        .position(|s| tmds_decode(*s).is_ok())
+        .expect("a data symbol");
+    let mut disparities = [0i32; 3];
+    let mut checked = 0;
+    let two_lines = usize::try_from(2 * h_total).expect("fits");
+    for (lane, disparity) in disparities.iter_mut().enumerate() {
+        let stream = symbols(lane);
+        for (i, symbol) in stream[first..].iter().enumerate().take(two_lines) {
+            let i = i as u64;
+            let (px, py) = (i % h_total, i / h_total);
+            let visible = px < mode.h[0] && py < mode.v[0];
+            if visible {
+                let byte = pattern(px, py)[lane];
+                let (expect, after) = tmds_reference(byte, *disparity);
+                assert_eq!(*symbol, expect, "lane {lane}, pixel ({px}, {py})");
+                *disparity = after;
+                checked += 1;
+            } else {
+                // Blanking: hsync on lane 0 (active low in this mode),
+                // vsync inactive, and nothing on the other two.
+                let h_sync = px >= mode.h[0] + mode.h[1] && px < mode.h[0] + mode.h[1] + mode.h[2];
+                let c = if lane == 0 {
+                    // {vsync, hsync}, both active low here.
+                    0b10 | u16::from(!h_sync)
+                } else {
+                    0
+                };
+                assert_eq!(
+                    tmds_decode(*symbol),
+                    Err(u8::try_from(c).expect("two bits")),
+                    "lane {lane}, blanking pixel ({px}, {py})"
+                );
+                *disparity = 0;
+            }
+        }
+    }
+    assert_eq!(
+        checked,
+        3 * 2 * mode.h[0],
+        "every visible pixel of two lines, on three lanes"
+    );
+}
+
+// ---------------------------------------------------------------------------
 // Two more compiler gaps the larger blocks ran into
 // ---------------------------------------------------------------------------
 
@@ -5559,4 +6015,169 @@ fn an_asynchronous_register_file_takes_the_logic_fallback() {
     assert_eq!(fallback.style, "distributed LUT RAM");
     assert_eq!(fallback.primitive.as_deref(), Some("TRELLIS_DPR16X4"));
     assert!(fpga::check_nextpnr_json(&design, id, device, &Constraints::new()).is_empty());
+}
+
+/// Builds a one-package project entirely from text, the package in
+/// `pkg/`, and returns the module names the build produced and the
+/// diagnostics it rendered.
+fn build_project_from_text(manifest: &str, source: &str, top: &str) -> (Vec<String>, String) {
+    let files: BTreeMap<String, String> = [
+        ("pkg/reticle.ip".to_owned(), manifest.to_owned()),
+        ("pkg/rtl/pkg.v".to_owned(), source.to_owned()),
+    ]
+    .into_iter()
+    .collect();
+    let project_text = format!("name gap_check\ntop {top}\n\ndepends pkg * path pkg\n");
+    let mut map = SourceMap::new();
+    let mut diags = Diagnostics::new();
+    let project = ip::load_project(&mut map, "reticle.proj", &project_text, &mut diags)
+        .expect("the project parses");
+    let mut provider = PathProvider::new(".", |path: &str| files.get(path).cloned());
+    let mut resolved = ip::resolve(map, &project, &mut provider, &mut diags);
+    assert!(
+        resolved.is_complete(),
+        "{}",
+        diags.render(resolved.source_map())
+    );
+    let build = ip::elaborate(&project, &mut resolved, &mut diags);
+    let names = build
+        .design
+        .map(|d| {
+            d.modules
+                .iter()
+                .map(|(_, m)| m.name.as_str().to_owned())
+                .collect()
+        })
+        .unwrap_or_default();
+    (names, diags.render(resolved.source_map()))
+}
+
+/// The code `ip::elaborate` reports for a project top it cannot find.
+const PROJECT_TOP_GAP: &str = "P0401";
+
+/// A project whose top is a module another module in the same sources
+/// instantiates *with a parameter override* does not build.
+///
+/// Found writing `dvi_tx`, whose package ships the block and a wrapper
+/// that instantiates it as `dvi_tx #(.MODE(MODE))`. `ip::elaborate`
+/// elaborates the Verilog with `ElabOptions::new(dialect)` and never
+/// passes the project's `top` as `with_top`, so the frontend picks the
+/// roots itself — modules nothing instantiates — and elaborates
+/// everything else only as their instances. An instance with a
+/// parameter override is elaborated under a name derived from the
+/// override, so no module keeps the plain name, and the project's top
+/// is then reported missing (`P0401`) although its source is right
+/// there. The same module elaborates as a top through
+/// `verilog::elaborate` with `with_top`, which is what `design_of` in
+/// this file does, so only a project build meets it.
+///
+/// This test pins the gap. When `ip::elaborate` passes the top through,
+/// flip the assertions: the build should succeed and name `leaf`.
+#[test]
+fn a_project_top_that_is_also_instantiated_with_an_override_is_lost() {
+    let manifest =
+        "name pkg\nversion 1.0.0\nlicense MIT\ndescription \"gap\"\ntop leaf\nsource rtl/pkg.v\n";
+    let source = "\
+module leaf #(parameter W = 1) (input wire [W-1:0] a, output wire [W-1:0] y);
+    assign y = ~a;
+endmodule
+module wrap #(parameter W = 1) (input wire [W-1:0] a, output wire [W-1:0] y);
+    leaf #(.W(W)) u (.a(a), .y(y));
+endmodule
+";
+    let (names, rendered) = build_project_from_text(manifest, source, "leaf");
+    assert!(
+        rendered.contains(PROJECT_TOP_GAP),
+        "the gap is fixed — flip this test. The build said:\n{rendered}\nmodules: {names:?}"
+    );
+    assert!(
+        !names.iter().any(|n| n == "leaf"),
+        "no module keeps the plain name `leaf`: {names:?}"
+    );
+
+    // Without the override the same instance keeps its name, and the
+    // project builds: the override is what loses it.
+    let source = source.replace("leaf #(.W(W)) u", "leaf u");
+    let (names, rendered) = build_project_from_text(manifest, &source, "leaf");
+    assert!(!rendered.contains(PROJECT_TOP_GAP), "{rendered}");
+    assert!(names.iter().any(|n| n == "leaf"), "{names:?}");
+}
+
+/// The pixel rate is an enable, not a clock, so the whole transmitter is
+/// one domain and nothing crosses: the serialisers are loaded by the
+/// clock that shifts them.
+#[test]
+fn dvi_tx_is_one_clock_domain() {
+    let kinds = crossings("dvi_tx", "dvi_tx", &[("MODE", "0")]);
+    assert!(
+        kinds.is_empty(),
+        "dvi_tx should have no crossing: {kinds:?}"
+    );
+}
+
+/// The wrapper's five-times clock comes out of each family's PLL, fed
+/// from the board clock, and every TMDS lane leaves through a
+/// double-data-rate output register on it.
+#[test]
+fn dvi_tx_pll_takes_its_clock_from_the_pll_and_its_lanes_through_ddr() {
+    let variant = VARIANTS
+        .iter()
+        .find(|v| v.top == "dvi_tx_pll")
+        .expect("dvi_tx_pll is measured");
+    for (device_name, primitive, ddr) in [
+        ("ice40-hx1k-tq144", "SB_PLL40_CORE", "SB_IO"),
+        ("ecp5-45f-CABGA381", "EHXPLLL", "ODDRX1F"),
+    ] {
+        let (mut design, id) = flattened(variant.package, variant.top, variant.params);
+        let device = fpga::target(device_name).expect("a built-in device");
+        let mut diags = Diagnostics::new();
+        let mut map = SourceMap::new();
+        let rcf = board_constraints(variant);
+        let file = map.add("board.rcf", rcf).expect("fits");
+        let mut constraints = Constraints::parse(rcf, file, &mut diags);
+        constraints.merge_attrs(&design, id, &mut diags);
+        let report = fpga::synthesize_for(
+            &mut design,
+            id,
+            device,
+            &constraints,
+            &FpgaOptions::default(),
+            &mut diags,
+        )
+        .expect("the flow runs");
+        assert!(
+            !diags.has_errors(),
+            "{device_name}:\n{}",
+            diags.render(&map)
+        );
+
+        let pll = report
+            .primitives
+            .plls
+            .first()
+            .unwrap_or_else(|| panic!("{device_name}: no PLL was built"));
+        assert_eq!(pll.primitive, primitive);
+        assert_eq!(pll.net, "clk_x5");
+        assert_eq!(pll.source, "clk_ref");
+        assert_eq!(pll.input_hz, 25_000_000);
+        assert_eq!(pll.requested_hz, 126_000_000);
+        assert!(
+            pll.error_ppm().abs() < 10_000.0,
+            "{device_name}: {} Hz is more than 1 % off",
+            pll.achieved_hz
+        );
+
+        for lane in ["tmds_d0", "tmds_d1", "tmds_d2", "tmds_clk"] {
+            let io = report
+                .primitives
+                .io_buffers
+                .iter()
+                .find(|b| b.port == lane)
+                .unwrap_or_else(|| panic!("{device_name}: no buffer for {lane}"));
+            assert_eq!(io.bits, 1, "{device_name}: {lane} is one pin");
+            let (clock, register) = io.ddr.clone().expect("a DDR lane");
+            assert_eq!(clock, "clk_x5", "{device_name}: {lane}");
+            assert_eq!(register, ddr, "{device_name}: {lane}");
+        }
+    }
 }

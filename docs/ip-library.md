@@ -2,7 +2,7 @@
 
 The first-party half of phase 8. [`docs/ip.md`](ip.md) describes the
 machinery — the manifest formats, the resolver, the bus model, the black
-boxes. This document describes the **blocks**: sixteen pieces of HDL
+boxes. This document describes the **blocks**: eighteen pieces of HDL
 that drop into a design the way a crate drops into a Rust program, each
 with a manifest, a Rust co-simulation test, and a resource footprint that
 was measured rather than guessed.
@@ -15,6 +15,8 @@ ip/
   axil_gpio/     reticle.ip  rtl/axil_gpio.v
   cdc_pulse/     reticle.ip  rtl/cdc_pulse.v
   cdc_sync/      reticle.ip  rtl/cdc_sync.v
+  dvi_tx/        reticle.ip  rtl/tmds_encoder.v  rtl/video_timing.v  rtl/dvi_tx.v
+  dvi_tx_pll/    reticle.ip  rtl/dvi_tx_pll.v
   eth_mac_rmii/  reticle.ip  rtl/eth_mac_rmii.v
   fifo_async/    reticle.ip  rtl/fifo_async.v
   fifo_sync/     reticle.ip  rtl/fifo_sync.v
@@ -57,13 +59,16 @@ It is distributed as part of the repository instead.
 | `spiflash_xip` | `spiflash_xip` | execute-in-place SPI flash reader, read only and cache-less | — |
 | `sdram_ctrl` | `sdram_ctrl` | SDR SDRAM controller for x16 parts: power-up sequence, refresh, open rows per bank, datasheet timings in nanoseconds | — |
 | `hyperram_ctrl` | `hyperram_ctrl` | HyperBus controller: command-address, fixed or variable latency, DDR data and RWDS, register access | — |
+| `dvi_tx` | `dvi_tx`, `tmds_encoder`, `video_timing` | DVI output: 640x480, 800x600 and 1280x720 timings, TMDS 8b/10b with DC balance, 10:1 serialisation through DDR outputs | — |
+| `dvi_tx_pll` | `dvi_tx_pll` | `dvi_tx` with its five-times clock from the device's PLL | `dvi_tx` |
 
-The last three are the **larger blocks**, and they are larger in a
-particular way: each is a whole protocol or a whole machine rather than a
-part of one, so each is where a shortcut would have been invisible. They
-also fit together. `spiflash_xip` presents the memory port `rv32i` puts
-on its instruction side, so a processor executing straight out of a
-serial flash is the two of them and one wire.
+`rv32i`, `eth_mac_rmii` and `spiflash_xip` are the **larger blocks**,
+and they are larger in a particular way: each is a whole protocol or a
+whole machine rather than a part of one, so each is where a shortcut
+would have been invisible. They also fit together. `spiflash_xip`
+presents the memory port `rv32i` puts on its instruction side, so a
+processor executing straight out of a serial flash is the two of them
+and one wire.
 
 `sdram_ctrl` is the first of the blocks that **need a device
 primitive**, the ones phase 8 waited on the FPGA backend for: it forwards
@@ -73,7 +78,10 @@ footprint carries an `ODDRX1F` and the iCE40 row an `SB_IO` in DDR mode.
 `hyperram_ctrl` puts every HyperBus pin through one — nine `IDDRX1F` and
 ten `ODDRX1F` on the ECP5 — and asks for an IO delay on CK, the
 `DELAYG` that moves each clock edge into the middle of the byte it
-clocks.
+clocks. `dvi_tx` serialises through them, and `dvi_tx_pll` gets its
+five-times pixel clock from a `clock_mhz` attribute on a net nothing
+drives, which is how a design asks for a PLL: an `SB_PLL40_CORE` or an
+`EHXPLLL` appears in its footprint, fed from the board's 25 MHz.
 
 Everything is **Verilog-2005**, deliberately: it is the path this
 compiler exercises hardest, and it is the dialect every other tool reads.
@@ -249,6 +257,30 @@ is the part that matters:
   model's own contents. A controller built believing the part is at
   five clocks, or at seven, is caught by the model, and so is one that
   does not wait out the recovery time.
+- **`dvi_tx`** — the TMDS encoder is where these blocks are usually
+  wrong, so it is tested **exhaustively against the specification's own
+  algorithm**, written out in Rust from the DVI 1.0 flow chart with an
+  unbounded disparity. A search from zero finds every running disparity
+  the algorithm can reach (−8 to +8, in steps of two), and for each of
+  those nine states and each of the 256 bytes the encoder is driven into
+  the state by the shortest byte sequence, checked on the way, and then
+  given the byte: the symbol and the disparity it leaves, read from the
+  register, must be the specification's, and the symbol must decode back
+  to the byte through an independent decoder. The four control symbols
+  are checked too. `video_timing` is walked through a whole frame of
+  each of the three modes, every pixel compared with where `de`, the two
+  syncs, `x`, `y` and `frame` must be for VESA's and CEA-861's numbers.
+  And the whole transmitter is run for two lines of 640 x 480 with a
+  pattern on every lane: the serial bits are collected from the DDR
+  ports, the clock lane is checked to be 1111100000 at every symbol, the
+  symbols are cut at its edges and compared with the reference encoder's
+  for every visible pixel on all three lanes, and blanking is checked to
+  carry hsync on lane 0 exactly where the mode puts it. The transmitter
+  is also asserted to be **one clock domain** — the pixel rate is an
+  enable — so `timing::analyze_cdc` finds nothing crossing, and
+  `dvi_tx_pll` is taken through the FPGA flow for both families, which
+  must build the PLL from the 25 MHz reference within 1 % of 126 MHz and
+  put every lane through a DDR register on the PLL's clock.
 
 ### What the processor actually executes
 
@@ -408,14 +440,24 @@ exactly what this table is for.
 | `hyperram_ctrl` | `hyperram_ctrl` | ADDR_WIDTH=22, CK_DELAY=100 | LUT6 | 26 x dff, 187 x lut | 7 |
 | `hyperram_ctrl` | `hyperram_ctrl` | ADDR_WIDTH=22, CK_DELAY=100 | iCE40 HX1K | 13 x SB_CARRY, 102 x SB_DFFER, 4 x SB_DFFES, 11 x SB_DFFR, 1 x SB_DFFS, 1 x SB_GB, 91 x SB_IO, 213 x SB_LUT4 | 8 |
 | `hyperram_ctrl` | `hyperram_ctrl` | ADDR_WIDTH=22, CK_DELAY=100 | ECP5 45F | 1 x DCCA, 1 x DELAYG, 9 x IDDRX1F, 214 x LUT4, 10 x ODDRX1F, 118 x TRELLIS_FF, 91 x TRELLIS_IO | 7 |
+| `dvi_tx` | `dvi_tx` | MODE=0 | LUT4 | 18 x dff, 480 x lut | 9 |
+| `dvi_tx` | `dvi_tx` | MODE=0 | LUT6 | 18 x dff, 363 x lut | 7 |
+| `dvi_tx` | `dvi_tx` | MODE=0 | iCE40 HX1K | 187 x SB_CARRY, 72 x SB_DFFER, 52 x SB_DFFR, 1 x SB_GB, 57 x SB_IO, 569 x SB_LUT4 | 8 |
+| `dvi_tx` | `dvi_tx` | MODE=0 | ECP5 45F | 1 x DCCA, 480 x LUT4, 4 x ODDRX1F, 124 x TRELLIS_FF, 57 x TRELLIS_IO | 9 |
+| `dvi_tx_pll` | `dvi_tx_pll` | MODE=0 | LUT4 | 18 x dff, 480 x lut | 9 |
+| `dvi_tx_pll` | `dvi_tx_pll` | MODE=0 | LUT6 | 18 x dff, 363 x lut | 7 |
+| `dvi_tx_pll` | `dvi_tx_pll` | MODE=0 | iCE40 HX1K | 187 x SB_CARRY, 72 x SB_DFFER, 52 x SB_DFFR, 1 x SB_GB, 57 x SB_IO, 569 x SB_LUT4, 1 x SB_PLL40_CORE | 8 |
+| `dvi_tx_pll` | `dvi_tx_pll` | MODE=0 | ECP5 45F | 1 x DCCA, 1 x EHXPLLL, 480 x LUT4, 4 x ODDRX1F, 124 x TRELLIS_FF, 57 x TRELLIS_IO | 9 |
 <!-- end footprints -->
 
-### Four things writing these blocks found
+### Five things writing these blocks found
 
-All four were gaps in Reticle itself rather than in the blocks, and each
-is pinned down by a test. Two were found by the original eleven blocks
-and two by writing the three larger ones. **All four have since been
-fixed**, and their tests now hold the fix rather than the gap.
+All five were gaps in Reticle itself rather than in the blocks, and each
+is pinned down by a test. Two were found by the original eleven blocks,
+two by writing the three larger ones, and one by the blocks that need
+device primitives. **The first four have since been fixed**, and their
+tests now hold the fix rather than the gap; the fifth is described last
+and is still open.
 
 **iCE40 flip-flops refused an active-low reset. Fixed.** Every block
 resets on `negedge rst_n`, which is the convention the rest of this
@@ -538,6 +580,26 @@ read was given a block whose clock pin nothing drove.
 `an_asynchronous_register_file_takes_the_logic_fallback` hold the two
 halves, and `regfile_ecp5` in `testdata/fpga/` takes the same shape
 through the whole flow.
+
+**A project loses a top that its own sources instantiate with a
+parameter override. Open.** `dvi_tx`'s package first shipped the
+transmitter and a wrapper around it, `dvi_tx_pll`, which instantiates it
+as `dvi_tx #(.MODE(MODE))`. A project whose top is `dvi_tx` then failed
+to build with `P0401`, "the project's top `dvi_tx` is not in the
+design", although the source is right there. `ip::elaborate` elaborates
+the Verilog with `ElabOptions::new(dialect)` and never passes the
+project's `top` through `with_top`, so the frontend chooses the roots
+itself — the modules nothing instantiates — and elaborates everything
+else only as their instances; an instance with a parameter override is
+elaborated under a name derived from the override (`leaf$W_1`, even
+when the value is the default), so no module keeps the plain name. The
+same module elaborates as a top through `verilog::elaborate` with
+`with_top`, so only a project build meets it.
+`a_project_top_that_is_also_instantiated_with_an_override_is_lost`
+holds a ten-line reproduction, and checks that the same design builds
+once the override is removed; the likely fix is passing `project.top`
+as the elaboration top. Until then the wrapper is a package of its own,
+`dvi_tx_pll`, which depends on `dvi_tx` and so never shares its sources.
 
 ## What is not here yet
 

@@ -1,0 +1,35 @@
+# dvi_tx: DVI video output for 640x480, 800x600 or 1280x720 at 60 Hz.
+# The block runs on a clock five times the pixel rate and serialises
+# each TMDS symbol through double-data-rate output registers (`ddr =
+# "clk_x5"` in the source), two bits per pin per cycle. The package
+# `dvi_tx_pll` is the same block with that clock asked of the device's
+# PLL. `tmds_encoder` and `video_timing` are usable alone.
+name dvi_tx
+version 1.0.0
+license MIT
+description "DVI transmitter: standard video timings, TMDS 8b/10b encoding with DC balance, 10:1 serialisation through DDR outputs"
+
+top dvi_tx
+target ice40
+target ecp5
+
+source rtl/tmds_encoder.v
+source rtl/video_timing.v
+source rtl/dvi_tx.v
+
+param MODE int 0 0..2
+
+port clk_x5 in
+port rst_n in
+port pix_en out
+port de out
+port frame out
+port x out 12
+port y out 12
+port r in 8
+port g in 8
+port b in 8
+port tmds_d0 out 2
+port tmds_d1 out 2
+port tmds_d2 out 2
+port tmds_clk out 2
