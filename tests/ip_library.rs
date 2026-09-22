@@ -65,17 +65,19 @@
 //! a USB host model sending real packets, NRZI and bit stuffing and
 //! CRCs included, on a clock a little off the device's.
 //!
-//! Six tests here came from gaps in Reticle rather than in the blocks,
+//! Seven tests here came from gaps in Reticle rather than in the blocks,
 //! found by writing real HDL, which is the argument for a first-party
 //! library in the first place:
 //! `ice40_flip_flops_take_an_active_low_reset_through_one_inverter`,
 //! `small_memories_become_logic_after_the_fpga_flow`,
 //! `function_locals_are_not_reported_as_unreset_registers`,
 //! `a_two_read_port_register_file_is_duplicated_across_block_rams`,
-//! `a_project_top_that_is_also_instantiated_with_an_override_keeps_its_name`
-//! and `a_zero_step_io_delay_builds_nothing`. Each once asserted that its
-//! gap was *still there*, so fixing it failed the test and named what to
-//! change; all six now hold the fix. The paragraph in
+//! `a_project_top_that_is_also_instantiated_with_an_override_keeps_its_name`,
+//! `a_zero_step_io_delay_builds_nothing` and
+//! `a_comment_above_a_parameter_still_moves_into_the_port_list`. Each
+//! asserts that its gap is *still there*, so fixing it fails the test and
+//! names what to change; the first six now hold their fix and the
+//! seventh, which the 6502 found, still holds its gap. The paragraph in
 //! `docs/ip-library.md` each points at records what was wrong.
 //!
 //! Set `UPDATE_EXPECT=1` to rewrite the footprint table in
@@ -108,6 +110,7 @@ use reticle::synth::{SynthOptions, run as synth_run};
 use reticle::timing::cdc::{CrossingKind, analyze_cdc_with};
 use reticle::timing::graph::flatten_for_timing;
 use reticle::timing::sta::TimingSpec;
+use reticle::verilog::format::{FormatOptions, format_source};
 use reticle::verilog::{Dialect, ElabOptions, NoIncludes, elaborate, parse_source};
 
 // ---------------------------------------------------------------------------
@@ -3116,6 +3119,56 @@ fn rv32i_runs_a_recursive_function_on_the_stack() {
             cpu.retired
         );
     }
+}
+
+/// A comment above a parameter is re-attached to the first *port*.
+///
+/// `mos6502` and `rv32i` both document their parameters the way every
+/// block documents its ports — a `//` line above the declaration — and
+/// `reticle fmt` lifts those lines out of the `#(...)` list and stacks
+/// them in front of the first entry of the `(...)` list. No comment is
+/// lost, which is the property `verilog::format`'s own corpus test
+/// checks ("the set of comments" is preserved), but each one then sits
+/// above something it does not describe: `DECIMAL_MODE`'s sentence ends
+/// up above `clk`. A formatter that moves a sentence onto a different
+/// declaration is worse than one that reindents badly, because the file
+/// still looks right.
+///
+/// That is why neither core's source is run through `reticle fmt`, and
+/// this test asserts the gap is **still there**: the fix — anchoring a
+/// leading comment to the parameter it precedes in
+/// `verilog::format::comments`, the same way a port's leading comment is
+/// already anchored — makes it fail, and this paragraph is where to look
+/// when it does.
+#[test]
+fn a_comment_above_a_parameter_still_moves_into_the_port_list() {
+    const SOURCE: &str = "\
+module m #(
+    // How wide the data bus is.
+    parameter WIDTH = 8
+) (
+    // The clock.
+    input  wire clk,
+    output wire q
+);
+    assign q = clk;
+endmodule
+";
+    let formatted = format_source(SOURCE, Dialect::Verilog2005, &FormatOptions::default())
+        .unwrap_or_else(|d| panic!("the sample does not format: {} problem(s)", d.len()));
+    let (parameters, ports) = formatted
+        .split_once(") (")
+        .expect("a parameter list and then a port list");
+    assert!(
+        !parameters.contains("How wide the data bus is"),
+        "the comment above `WIDTH` stayed in the parameter list, which means \
+         `verilog::format::comments` now anchors it to the parameter: delete this \
+         test and format both cores' sources.\n{formatted}"
+    );
+    assert!(
+        ports.contains("// How wide the data bus is.\n  // The clock.\n  input  wire clk"),
+        "the comment moved somewhere new again:\n{formatted}"
+    );
 }
 
 // ---------------------------------------------------------------------------

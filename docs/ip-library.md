@@ -621,14 +621,14 @@ exactly what this table is for.
 | `usb_device_fs_pll` | `usb_device_fs_pll` | VID=16'h1209, PID=16'h0001 | ECP5 45F | 1 x DCCA, 1 x EHXPLLL, 541 x LUT4, 242 x TRELLIS_FF, 17 x TRELLIS_IO | 9 |
 <!-- end footprints -->
 
-### Six things writing these blocks found
+### Seven things writing these blocks found
 
-All six were gaps in Reticle itself rather than in the blocks, and each
-is pinned down by a test. Two were found by the original eleven blocks,
-two by writing the three larger ones, and two by the blocks that need
-device primitives. **The first four have since been fixed**, and their
-tests now hold the fix rather than the gap; the last two are described
-last and are still open.
+All seven were gaps in Reticle itself rather than in the blocks, and
+each is pinned down by a test. Two were found by the original eleven
+blocks, two by writing the three larger ones, two by the blocks that
+need device primitives, and one by the 6502. **The first six have since
+been fixed**, and their tests now hold the fix rather than the gap; the
+seventh is described last and is still open.
 
 **iCE40 flip-flops refused an active-low reset. Fixed.** Every block
 resets on `negedge rst_n`, which is the convention the rest of this
@@ -780,6 +780,65 @@ nothing on every such pin and the iCE40 an `F0304` warning for a delay
 nobody asked for. A zero-step delay now builds nothing and warns about
 nothing. `a_zero_step_io_delay_builds_nothing` holds the fix on both
 families.
+
+**A comment above a parameter moves into the port list. Open.**
+Both processors document their parameters the way every block documents
+its ports — a `//` line above the declaration, since that is where a
+user looks first:
+
+```verilog
+module mos6502 #(
+    // 1 builds the packed binary-coded decimal arithmetic ADC and SBC
+    // use when the D flag is set; 0 leaves D a flag nothing reads.
+    parameter DECIMAL_MODE = 1
+) (
+    input wire clk,
+```
+
+`reticle fmt` lifts those lines out of the `#(...)` list and stacks them
+in front of the first entry of the `(...)` list, so `DECIMAL_MODE`'s
+sentence comes back sitting above `clk`. No comment is *lost* — the
+formatter's own corpus property is that the set of comments survives, and
+it does — but each one ends up documenting something else, and the file
+still looks right, which is the worst way for a formatter to be wrong.
+It reproduces in ten lines:
+
+```verilog
+module m #(
+    // How wide the data bus is.
+    parameter WIDTH = 8
+) (
+    // The clock.
+    input  wire clk,
+    output wire q
+);
+    assign q = clk;
+endmodule
+```
+
+becomes
+
+```verilog
+module m #(
+  parameter WIDTH = 8
+) (
+  // How wide the data bus is.
+  // The clock.
+  input  wire clk,
+  output wire q
+);
+  assign q = clk;
+endmodule
+```
+
+No golden file under `testdata/verilog/format/` has a comment inside a
+parameter list, which is why it had not been seen. The fix is to anchor
+a leading comment to the parameter it precedes in
+`verilog::format::comments`, the same way one is already anchored to a
+port. Until then neither core's source goes through the formatter, and
+`a_comment_above_a_parameter_still_moves_into_the_port_list` asserts
+that the gap is still there, so closing it fails that test and points
+at this paragraph.
 
 ## What is not here yet
 
