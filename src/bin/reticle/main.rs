@@ -40,9 +40,10 @@ Commands:
   help     Show this message, or `reticle help <command>`
   version  Show the version
 
-`synth`, `emit`, `sim` and `verify` take either Verilog sources (.v, .sv,
-elaborated to the IR) or a design already in the `.rtl` IR text format.
-VHDL parses and checks today; its path to the IR is still in progress.
+`synth`, `emit`, `sim` and `verify` take Verilog (.v, .sv), VHDL (.vhd,
+.vhdl) or a design already in the `.rtl` IR text format. Sources of one
+language elaborate together, so a testbench and the modules it
+instantiates go on one command line.
 
 Run `reticle help <command>` for a command's options.
 ";
@@ -359,14 +360,11 @@ fn load_design(args: &Args) -> Result<Result<(Design, SourceMap), Outcome>, ArgE
             }
         }
     }
-    if kinds.contains(&Input::Vhdl) {
-        return Ok(Err(Outcome::Usage(
-            "VHDL does not reach the IR yet; use `reticle check` on it for now".into(),
-        )));
-    }
     if kinds.windows(2).any(|w| w[0] != w[1]) {
         return Ok(Err(Outcome::Usage(
-            "cannot mix .rtl with Verilog sources; an .rtl file is already a whole design".into(),
+            "every input must be the same kind: one .rtl design, or Verilog \
+             sources, or VHDL sources"
+                .into(),
         )));
     }
 
@@ -391,6 +389,44 @@ fn load_design(args: &Args) -> Result<Result<(Design, SourceMap), Outcome>, ArgE
                 report(&mut errors, &map);
                 Ok(Err(Outcome::Failed))
             }
+        };
+    }
+
+    if kinds[0] == Input::Vhdl {
+        // VHDL analyses against the bundled std and ieee libraries, then
+        // elaborates the analysed tree.
+        use reticle::vhdl::sema::Design as VhdlDesign;
+
+        let mut library =
+            VhdlDesign::with_stdlib(&mut map, reticle::vhdl::Standard::default(), &mut diags);
+        if report(&mut diags, &map) {
+            eprintln!("error: the bundled VHDL libraries failed to parse");
+            return Ok(Err(Outcome::Failed));
+        }
+        for path in paths {
+            let Some(id) = load(&mut map, path, &mut diags) else {
+                continue;
+            };
+            library.add_source(&map, id, "work", &mut diags);
+        }
+        if report(&mut diags, &map) {
+            return Ok(Err(Outcome::Failed));
+        }
+
+        let mut diags = Diagnostics::new();
+        let analysis = library.analyze(&map, &mut diags);
+        if report(&mut diags, &map) {
+            return Ok(Err(Outcome::Failed));
+        }
+
+        let mut options = reticle::vhdl::ElabOptions::new();
+        options.top = args.option("top").map(str::to_string);
+        let mut diags = Diagnostics::new();
+        let design = reticle::vhdl::elaborate(&analysis, &options, &mut diags);
+        let failed = report(&mut diags, &map);
+        return match design {
+            Some(design) if !failed => Ok(Ok((design, map))),
+            _ => Ok(Err(Outcome::Failed)),
         };
     }
 

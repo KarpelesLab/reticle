@@ -153,11 +153,35 @@ fn design_inputs_must_be_one_kind() {
         "testdata/verilog/parse/counter.v",
     ]);
     assert_eq!(code, 2);
-    assert!(stderr.contains("cannot mix"), "{stderr}");
+    assert!(stderr.contains("same kind"), "{stderr}");
 
-    let (code, _, stderr) = run(&["synth", "testdata/vhdl/parse/counter.vhd"]);
+    let (code, _, stderr) = run(&[
+        "synth",
+        "testdata/ir/counter.rtl",
+        "testdata/vhdl/elab/counter_sync.vhd",
+    ]);
     assert_eq!(code, 2);
-    assert!(stderr.contains("does not reach the IR yet"), "{stderr}");
+    assert!(stderr.contains("same kind"), "{stderr}");
+}
+
+#[test]
+fn synth_reads_vhdl_directly() {
+    let (code, stdout, stderr) = run(&["synth", "--quiet", "testdata/vhdl/elab/counter_sync.vhd"]);
+    assert_eq!(code, 0, "{stderr}");
+    assert!(stdout.contains("dff"), "{stdout}");
+
+    // An `if rst = '1' ... elsif rising_edge(clk)` process is an
+    // asynchronous reset, and must not be demoted to a synchronous one.
+    let (code, stdout, stderr) = run(&["synth", "--quiet", "testdata/vhdl/elab/counter_async.vhd"]);
+    assert_eq!(code, 0, "{stderr}");
+    assert!(
+        stdout.contains("arst"),
+        "expected an async reset:\n{stdout}"
+    );
+    assert!(
+        !stderr.contains("no asynchronous reset inferred"),
+        "{stderr}"
+    );
 }
 
 #[test]

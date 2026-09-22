@@ -36,7 +36,7 @@ Early, but the middle of the pipeline runs end to end. What works today:
 | Stage | State |
 |-------|-------|
 | Verilog / SystemVerilog | preprocessor, lexer, parser, 28-rule linter, elaboration and lowering to the IR |
-| VHDL-2008 | lexer, parser, semantic analysis with bundled std and ieee packages; elaboration in progress |
+| VHDL-2008 | lexer, parser, semantic analysis with bundled std and ieee packages, elaboration and lowering to the IR |
 | Unified IR | design model, validator, round-tripping `.rtl` text format |
 | Simulation | event-driven 4-state simulator, VCD and FST waveforms, Rust co-simulation API |
 | Synthesis | process lowering, flip-flop / latch / memory / FSM inference, optimisation passes, AIG optimiser, LUT and standard-cell mapping, post-synthesis equivalence checking |
@@ -46,13 +46,13 @@ Early, but the middle of the pipeline runs end to end. What works today:
 | Tooling | Verilog and VHDL formatters |
 | FPGA | device database (iCE40, ECP5, generic), primitive mapping, placement and IO constraints, nextpnr and vendor export |
 
-Verilog goes all the way through, from source to a synthesised netlist, a
-simulation or a proof. VHDL parses and checks; its path to the IR is next.
+Both languages go all the way through, from source to a synthesised
+netlist, a simulation or a proof.
 
 ```sh
 reticle check   counter.v counter.vhd design.rtl
 reticle fmt     --write counter.v
-reticle synth   --report --lut 4 --output netlist.rtl counter.v
+reticle synth   --report --lut 4 --output netlist.rtl counter.vhd
 reticle emit    --format verilog netlist.rtl
 reticle sim     --vcd waves.vcd --fst waves.fst testbench.v counter.v
 reticle verify  --depth 20 --trace cex.vcd design.rtl
@@ -63,9 +63,9 @@ reticle fpga    --device ice40-hx1k-tq144 --constraints pins.rcf blinky.v
 constraints that nextpnr reads, checking first that every cell is a
 primitive the device actually has.
 
-Several source files are elaborated together, so a testbench and the
-module it instantiates are given on one command line. A design already in
-the `.rtl` IR text format is accepted anywhere a source file is.
+Sources of one language are elaborated together, so a testbench and the
+modules it instantiates go on one command line. A design already in the
+`.rtl` IR text format is accepted anywhere a source file is.
 
 ## Building
 

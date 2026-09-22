@@ -41,8 +41,8 @@ use std::collections::{BTreeMap, BTreeSet, HashMap};
 use crate::diag::{Diagnostic, Diagnostics};
 use crate::ir::walk::{stmt_exprs, stmt_nets, walk_block};
 use crate::ir::{
-    AttrValue, CellKind, Const, Edge, ExprId, ExprKind, Lvalue, Memory, Module, NetId, NetKind,
-    Polarity, Process, ProcessKind, Reset, UnaryOp, expr::operands,
+    AttrValue, BinaryOp, CellKind, Const, Edge, ExprId, ExprKind, Lvalue, Memory, Module, NetId,
+    NetKind, Polarity, Process, ProcessKind, Reset, UnaryOp, expr::operands,
 };
 use crate::source::Span;
 use crate::synth::eval::eval_closed;
@@ -548,6 +548,67 @@ impl Ctx<'_> {
     }
 }
 
+/// Peels a reset condition down to the net it tests, and says whether the
+/// reset is active high.
+///
+/// Frontends spell the same test differently: Verilog's `if (!rst_n)`
+/// arrives as `not(rst_n)`, while VHDL's `if rst = '1'` arrives as
+/// `eq(rst, 1'd1)`. Both mean the same register, so both must be
+/// recognised; missing one silently demotes an asynchronous reset to a
+/// synchronous one, which is a change in hardware behaviour rather than a
+/// missed optimisation.
+///
+/// Only `Eq` and `Ne` against a one-bit constant are peeled, not the
+/// case-equality operators, whose result differs when the tested net is
+/// `x` or `z`.
+fn reset_polarity(exec: &Exec<'_>, cond: ExprId) -> (ExprId, bool) {
+    let mut expr = cond;
+    let mut active_high = true;
+    // Bounded: a reset condition is a handful of nodes, and a cycle in the
+    // expression arena would be a bug elsewhere.
+    for _ in 0..8 {
+        match exec.m.expr(expr).kind {
+            ExprKind::Unary {
+                op: UnaryOp::Not | UnaryOp::LogicNot,
+                expr: inner,
+            } if exec.m.expr(inner).ty.is_bit() => {
+                active_high = !active_high;
+                expr = inner;
+            }
+            ExprKind::Binary {
+                op: op @ (BinaryOp::Eq | BinaryOp::Ne),
+                lhs,
+                rhs,
+            } => {
+                // One side must be a one-bit constant; the other is the net.
+                let (net_side, constant) = match (
+                    exec.m.expr(lhs).as_const().cloned(),
+                    exec.m.expr(rhs).as_const().cloned(),
+                ) {
+                    (None, Some(c)) => (lhs, c),
+                    (Some(c), None) => (rhs, c),
+                    _ => break,
+                };
+                if constant.width() != 1 || !exec.m.expr(net_side).ty.is_bit() {
+                    break;
+                }
+                let Some(bit) = constant.to_u64() else {
+                    // A comparison against `x` or `z` never holds; leave it
+                    // alone rather than guessing a polarity.
+                    break;
+                };
+                let tests_one = (bit == 1) == (op == BinaryOp::Eq);
+                if !tests_one {
+                    active_high = !active_high;
+                }
+                expr = net_side;
+            }
+            _ => break,
+        }
+    }
+    (expr, active_high)
+}
+
 /// Peels a reset off the top of a symbolic value: `Mux { cond, Const, rest }`
 /// where `cond` is an asynchronous control edge (async reset) or any
 /// condition when the process has none (sync reset). Returns the reset
@@ -581,14 +642,7 @@ fn split_reset(
     if value.width() != width {
         return (None, sid);
     }
-    // Split `not(x)` into an active-low reset on `x`.
-    let (rst, active_high) = match exec.m.expr(cond).kind {
-        ExprKind::Unary {
-            op: UnaryOp::Not | UnaryOp::LogicNot,
-            expr,
-        } if exec.m.expr(expr).ty.is_bit() => (expr, false),
-        _ => (cond, true),
-    };
+    let (rst, active_high) = reset_polarity(exec, cond);
     let rst_net = exec.m.expr(rst).as_net();
     let asynchronous = match rst_net.and_then(|n| resets.iter().find(|e| e.net == n)) {
         Some(edge) => {
@@ -961,6 +1015,71 @@ mod tests {
             t.contains("cell r$ff dff pos en (clk=%clk, d=%d, en=not(%rst))"),
             "{t}"
         );
+    }
+
+    /// Frontends spell the reset test differently, and the shape must not
+    /// decide whether the reset is asynchronous. VHDL's `rst = '1'` arrives
+    /// as `eq(rst, 1'd1)`; demoting that to a synchronous reset changes the
+    /// hardware, so it is a correctness bug rather than a missed
+    /// optimisation.
+    #[test]
+    fn equality_reset_tests_are_asynchronous_too() {
+        for tested_bit in [0u64, 1] {
+            let mut b = ModuleBuilder::new("eqrst", span());
+            let clk = b.input("clk", Type::bit());
+            let rst = b.input("rst", Type::bit());
+            let d = b.input("d", Type::bits(8));
+            let q = b.output_reg("q", Type::bits(8));
+            let (rstv, dv) = (b.net(rst), b.net(d));
+            let tested = b.const_u64(1, tested_bit);
+            let cond = b.eq(rstv, tested);
+            let zero = b.const_u64(8, 0);
+            let mut reset = b.block();
+            reset.nonblocking(q, zero);
+            let mut keep = b.block();
+            keep.nonblocking(q, dv);
+            let edge = if tested_bit == 1 {
+                Edge::pos(rst)
+            } else {
+                Edge::neg(rst)
+            };
+            let mut p = b.process(
+                Some("seq"),
+                ProcessKind::Sequential {
+                    clocks: vec![Edge::pos(clk)],
+                    resets: vec![edge],
+                },
+            );
+            p.if_(cond, reset.finish(), keep.finish());
+            b.end_process(p);
+
+            let mut m = b.finish();
+            let (_, diags) = lower(&mut m);
+
+            let cell = m
+                .cells
+                .iter()
+                .map(|(_, c)| c)
+                .find(|c| matches!(c.kind, CellKind::Dff { .. }))
+                .expect("no flip-flop inferred");
+            let CellKind::Dff { reset, .. } = &cell.kind else {
+                unreachable!()
+            };
+            let reset = reset.as_ref().expect("no reset inferred");
+            assert!(
+                reset.asynchronous,
+                "rst = '{tested_bit}' should stay asynchronous"
+            );
+            assert_eq!(
+                reset.active_high,
+                tested_bit == 1,
+                "wrong polarity for rst = '{tested_bit}'"
+            );
+            assert!(
+                !diags.iter().any(|d| d.message.contains("no asynchronous")),
+                "warned despite inferring the reset"
+            );
+        }
     }
 
     #[test]
