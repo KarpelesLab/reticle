@@ -333,7 +333,8 @@ no HDL written by the user beyond a top-level.
 
 - [ ] Language server (LSP) for both languages: diagnostics as you type,
       go-to-definition, hover with resolved types and widths, rename.
-- [ ] Formatter for Verilog and VHDL.
+- [x] Formatter for Verilog and VHDL (`verilog::format`, `vhdl::format`,
+      shared `fmt_doc` printer; see `docs/formatting.md`).
 - [ ] Schematic / netlist viewer output (an HTML page rendering the IR)
       and documentation generation from source comments and port lists.
 - [ ] WebAssembly build of the frontends and simulator for a browser
