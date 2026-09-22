@@ -1,0 +1,5 @@
+alias_user.d : signal word_t
+alias_user.hi : signal bit_vector(7 downto 0)
+alias_user.p : signal bit
+alias_user(rtl).upper : signal bit_vector(7 downto 0)
+alias_user(rtl).top_bit : signal bit

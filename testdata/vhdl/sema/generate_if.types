@@ -1,0 +1,3 @@
+gen_if.INVERT : constant boolean
+gen_if.d : signal bit
+gen_if.q : signal bit

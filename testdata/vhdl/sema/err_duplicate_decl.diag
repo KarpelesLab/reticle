@@ -1,0 +1,24 @@
+error[V0202]: `clk` is already declared in this region
+ --> err_duplicate_decl.vhd:5:5
+  |
+5 |     clk : in  bit;
+  |     ^^^ redeclared here
+4 |     clk : in  bit;
+  |     --- first declared here
+
+error[V0202]: `S` is already declared in this region
+  --> err_duplicate_decl.vhd:12:10
+   |
+12 |   signal S : integer;
+   |          ^ redeclared here
+11 |   signal s : bit;
+   |          - first declared here
+
+error[V0202]: `t_t` is already declared in this region
+  --> err_duplicate_decl.vhd:14:8
+   |
+14 |   type t_t is range 0 to 3;
+   |        ^^^ redeclared here
+13 |   type t_t is (a, b);
+   |        --- first declared here
+

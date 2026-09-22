@@ -1,0 +1,16 @@
+error[V0405]: a function must not contain a `wait` statement
+ --> err_wait_in_process.vhd:9:5
+  |
+9 |     wait for 10 ns;
+  |     ^^^^^^^^^^^^^^^
+
+error[V0404]: a process with a sensitivity list must not contain a `wait` statement
+  --> err_wait_in_process.vhd:25:5
+   |
+25 |     wait until clk = '1';
+   |     ^^^^^^^^^^^^^^^^^^^^^ `wait` here
+23 |   p : process (clk)
+   |                --- sensitivity list here
+   |
+   = note: remove the sensitivity list, or the `wait`
+

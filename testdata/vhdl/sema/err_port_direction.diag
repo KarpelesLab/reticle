@@ -1,0 +1,20 @@
+error[V0503]: cannot connect `in` port `pi` to `out` port `y`
+  --> err_port_direction.vhd:26:29
+   |
+26 |     port map (a => pi, y => pi, z => s);
+   |                             ^^ `pi` is `in`
+ 5 |     y : out bit;
+   |     - `y` is `out`
+   |
+   = note: an `in` port cannot be driven; declare `pi` as `out` or `inout`
+
+error[V0503]: cannot connect `in` port `pi` to `inout` port `z`
+  --> err_port_direction.vhd:29:37
+   |
+29 |     port map (a => s, y => po, z => pi);
+   |                                     ^^ `pi` is `in`
+ 6 |     z : inout bit
+   |     - `z` is `inout`
+   |
+   = note: an `in` port cannot be driven; declare `pi` as `out` or `inout`
+

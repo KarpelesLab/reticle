@@ -1,0 +1,16 @@
+error[V0200]: cannot find `std_logic` in this scope
+ --> err_missing_use.vhd:4:15
+  |
+4 |     clk : in  std_logic;
+  |               ^^^^^^^^^ not found in this scope
+  |
+  = note: `std_logic` is declared in `ieee.std_logic_1164`; add `library ieee; use ieee.std_logic_1164.all;`
+
+error[V0200]: cannot find `std_logic_vector` in this scope
+ --> err_missing_use.vhd:5:15
+  |
+5 |     q   : out std_logic_vector(7 downto 0)
+  |               ^^^^^^^^^^^^^^^^ not found in this scope
+  |
+  = note: `std_logic_vector` is declared in `ieee.std_logic_1164`; add `library ieee; use ieee.std_logic_1164.all;`
+

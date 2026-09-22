@@ -1,0 +1,7 @@
+counter.WIDTH : constant positive
+counter.clk : signal std_logic
+counter.rst : signal std_logic
+counter.en : signal std_logic
+counter.full : signal std_logic
+counter(rtl).TOP : constant natural
+counter(rtl).cnt : signal natural range 0 to 255 = 0

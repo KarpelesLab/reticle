@@ -1,0 +1,5 @@
+util_pkg.DATA_BITS : constant natural = 8
+util_pkg.ALL_ONES : constant byte_t = "11111111"
+pkg_user.go : signal bit
+pkg_user.q : signal byte_t
+pkg_user.f : signal bit

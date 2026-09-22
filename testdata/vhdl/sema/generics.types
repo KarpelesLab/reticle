@@ -1,0 +1,11 @@
+gen.WIDTH : constant positive
+gen.DEPTH : constant natural
+gen.PERIOD : constant time
+gen.RATIO : constant real
+gen.NAME : constant string
+gen.DEBUG : constant boolean
+gen.d : signal bit_vector(7 downto 0)
+gen.q : signal bit_vector(7 downto 0)
+gen(rtl).TOTAL : constant natural
+gen(rtl).HALF : constant real
+gen(rtl).TWICE : constant time

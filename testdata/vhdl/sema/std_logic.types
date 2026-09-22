@@ -1,0 +1,10 @@
+slv_user.clk : signal std_logic
+slv_user.a : signal std_logic_vector(7 downto 0)
+slv_user.b : signal std_logic_vector(7 downto 0)
+slv_user.sel : signal std_logic
+slv_user.y : signal std_logic_vector(7 downto 0)
+slv_user.z : signal std_logic
+slv_user.ok : signal boolean
+slv_user(rtl).MASK : constant std_logic_vector(7 downto 0) = "11110000"
+slv_user(rtl).t : signal std_logic_vector(7 downto 0)
+slv_user(rtl).e : signal std_ulogic

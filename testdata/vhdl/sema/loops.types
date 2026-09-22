@@ -1,0 +1,2 @@
+loops.d : signal bit_vector(7 downto 0)
+loops.q : signal natural

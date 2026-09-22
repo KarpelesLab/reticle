@@ -1,0 +1,3 @@
+gen_for.d : signal bit_vector(7 downto 0)
+gen_for.q : signal bit_vector(7 downto 0)
+gen_for(rtl).t : signal bit_vector(7 downto 0)

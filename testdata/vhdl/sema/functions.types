@@ -1,0 +1,5 @@
+fn_user.q : signal integer
+fn_user(rtl).A : constant integer
+fn_user(rtl).B : constant real
+fn_user(rtl).W : constant natural
+fn_user(rtl).v : signal bit_vector(3 downto 0)

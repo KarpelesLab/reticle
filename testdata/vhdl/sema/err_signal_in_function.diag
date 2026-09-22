@@ -1,0 +1,10 @@
+error[V0405]: function `bad` assigns to signal `shared_flag`
+  --> err_signal_in_function.vhd:13:5
+   |
+13 |     shared_flag <= '1';
+   |     ^^^^^^^^^^^ a function must not assign a signal
+ 3 |   signal shared_flag : bit;
+   |          ----------- declared here
+   |
+   = note: a function computes a value; use a procedure to drive signals
+

@@ -1,0 +1,16 @@
+error[V0408]: this case does not cover every value of `mode_t`
+  --> err_case_incomplete.vhd:15:5
+   |
+15 |     case mode is
+   |     ^^^^^^^^^^^^ missing: fast
+   |
+   = note: add the missing alternatives, or a `when others =>` alternative
+
+error[V0408]: choice `1` appears twice in this case
+  --> err_case_incomplete.vhd:26:12
+   |
+26 |       when 1      => q <= 2;
+   |            ^ duplicate choice
+25 |       when 1      => q <= 1;
+   |            - first used here
+

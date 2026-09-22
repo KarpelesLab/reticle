@@ -134,12 +134,21 @@ and compiled like user code.
       (processes, signal assignment, component and entity instantiation,
       generate, block), sequential statements, subprograms, records,
       arrays, access types, files, attributes, aliases, protected types.
-- [ ] Semantic analysis: the VHDL type system, overload resolution,
+- [x] Semantic analysis: the VHDL type system, overload resolution,
       implicit operators, attribute evaluation (`'length`, `'range`,
       `'event`, `'image`...), library and `use` clause visibility, design
-      unit dependency ordering, conversion functions.
-- [ ] Bundled standard libraries (`std`, `ieee`) compiled from a clean-room
-      source set shipped inside the crate.
+      unit dependency ordering, conversion functions. The result is an
+      annotated AST (`vhdl::sema::Analysis`): arenas of declarations and
+      types plus span-keyed side tables giving every name its declaration,
+      every expression its type and static value, and every call its
+      target, so elaboration and lowering walk the parser's tree.
+- [x] Bundled standard libraries: `std.standard`, `std.textio`, `std.env`
+      and `ieee.std_logic_1164`, written from scratch and shipped as VHDL
+      source inside the crate, analysed by the same front end as user code.
+- [ ] The remaining bundled libraries: `ieee.numeric_std`,
+      `ieee.numeric_bit`, `ieee.math_real`, `ieee.std_logic_textio` and the
+      Synopsys legacy packages. Until they land, naming one yields a single
+      "not bundled" diagnostic rather than a cascade.
 - [ ] Elaboration: generic maps, port maps with conversions, generate
       statements, configuration resolution, default bindings.
 - [ ] Lowering to IR, including `std_logic` resolution as explicit IR

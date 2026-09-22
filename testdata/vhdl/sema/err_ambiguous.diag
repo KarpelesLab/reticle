@@ -1,0 +1,18 @@
+error[V0302]: ambiguous use of operator `=`
+  --> err_ambiguous.vhd:33:8
+   |
+33 |   a <= red = blue;
+   |        ^^^^^^^^^^ several visible operators match
+   |
+   = note: candidate: predefined "="(t1, t1) return boolean
+   = note: candidate: predefined "="(t2, t2) return boolean
+
+error[V0302]: ambiguous use of operator `=`
+  --> err_ambiguous.vhd:36:8
+   |
+36 |   b <= f(1) = f(2);
+   |        ^^^^^^^^^^^ several visible operators match
+   |
+   = note: candidate: predefined "="(integer, integer) return boolean
+   = note: candidate: predefined "="(boolean, boolean) return boolean
+

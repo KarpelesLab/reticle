@@ -1,0 +1,11 @@
+val_pkg.P : constant natural = 1
+val_pkg.V : constant colour_t = blue
+val_pkg.S : constant colour_t = green
+val_pkg.R : constant colour_t = green
+val_pkg.IM : constant string = "blue"
+val_pkg.BK : constant colour_t = red
+val_pkg.NI : constant string = "42"
+val_pkg.NV : constant integer = 17
+val_pkg.NP : constant integer = 5
+val_pkg.BH : constant integer = 2147483647
+attr_value.q : signal natural

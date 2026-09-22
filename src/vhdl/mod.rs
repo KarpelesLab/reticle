@@ -16,8 +16,16 @@
 //!   tests and debugging.
 //! - [`format`](mod@format): the source formatter, laying the tree back
 //!   out with the comments and blank lines put back in place.
-//! - `sema`: types, overload resolution, attributes, visibility (planned).
-//! - `stdlib`: the `std` and `ieee` libraries, shipped as source (planned).
+//! - [`sema`]: the type model, overload resolution, attribute evaluation,
+//!   visibility and static evaluation. [`sema::Design`] collects parsed
+//!   files into libraries and [`sema::Design::analyze`] returns an
+//!   [`sema::Analysis`]: the AST annotated through side tables rather than
+//!   rewritten, so the elaboration and lowering passes walk the same tree.
+//! - [`stdlib`]: the `std` and `ieee` libraries, shipped as VHDL source and
+//!   analysed like user code. `std.standard`, `std.textio`, `std.env` and
+//!   `ieee.std_logic_1164` are bundled; `ieee.numeric_std` and the other
+//!   `ieee` packages are not yet, and naming one yields one clear
+//!   diagnostic.
 //! - `elab`: generics, port maps, generate, configurations (planned).
 //! - `lower`: to [`crate::ir`], with explicit `std_logic` resolution
 //!   (planned).
@@ -42,10 +50,13 @@ pub mod ast_dump;
 pub mod format;
 pub mod lex;
 pub mod parse;
+pub mod sema;
+pub mod stdlib;
 pub mod token;
 
 pub use lex::{CommentKind, Lexed, Lexer, lex_source};
 pub use parse::Parser;
+pub use sema::{Analysis, DeclId, Design, TypeId};
 pub use token::{Standard, Token, TokenKind};
 
 use crate::diag::Diagnostics;
@@ -64,4 +75,37 @@ pub fn parse_source(
 ) -> ast::DesignFile {
     let tokens = lex_source(map, id, standard, diags);
     Parser::new(&tokens, standard).parse_design_file(diags)
+}
+
+/// Parses and analyses one file against the bundled `std` and `ieee`
+/// libraries, compiling it into the `work` library.
+///
+/// This is the one-file convenience entry point; a design of several files
+/// (or one that needs more than one library) builds a [`sema::Design`],
+/// adds each source to it and calls [`sema::Design::analyze`], so that the
+/// units are ordered by their dependencies rather than by file order.
+///
+/// ```
+/// use reticle::diag::Diagnostics;
+/// use reticle::source::SourceMap;
+/// use reticle::vhdl::{Standard, analyze_source};
+///
+/// let mut map = SourceMap::new();
+/// let src = "entity t is port (clk : in bit); end entity;\n\
+///            architecture a of t is signal s : bit; begin s <= clk; end;";
+/// let id = map.add("t.vhd", src).unwrap();
+/// let mut diags = Diagnostics::new();
+/// let analysis = analyze_source(&mut map, id, Standard::Vhdl2008, &mut diags);
+/// assert!(!diags.has_errors(), "{}", diags.render(&map));
+/// assert!(analysis.unit("work", "t").is_some());
+/// ```
+pub fn analyze_source(
+    map: &mut SourceMap,
+    id: SourceId,
+    standard: Standard,
+    diags: &mut Diagnostics,
+) -> Analysis {
+    let mut design = Design::with_stdlib(map, standard, diags);
+    design.add_source(map, id, "work", diags);
+    design.analyze(map, diags)
 }

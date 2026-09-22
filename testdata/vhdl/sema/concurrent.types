@@ -1,0 +1,8 @@
+concurrent.a : signal bit
+concurrent.b : signal bit
+concurrent.c : signal bit
+concurrent.sel : signal bit_vector(1 downto 0)
+concurrent.y : signal bit
+concurrent.z : signal bit
+concurrent.w : signal bit
+concurrent(rtl).t : signal bit

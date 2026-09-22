@@ -1,0 +1,7 @@
+sub_pkg.MAXB : constant byte_t = 255
+sub_pkg.MAXN : constant nibble_t = 15
+sub_user.n : signal nibble_t
+sub_user.w : signal word_t
+sub_user.b : signal byte_t
+sub_user.f : signal rflag_t
+sub_user(rtl).acc : signal byte_t = 0

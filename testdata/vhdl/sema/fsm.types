@@ -1,0 +1,7 @@
+fsm.clk : signal std_logic
+fsm.rst : signal std_logic
+fsm.go : signal std_logic
+fsm.busy : signal std_logic
+fsm.done : signal std_logic
+fsm(rtl).state : signal state_t
+fsm(rtl).next_state : signal state_t

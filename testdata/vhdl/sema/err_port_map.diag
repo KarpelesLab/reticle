@@ -1,0 +1,32 @@
+error[V0501]: port `d` has no association
+  --> err_port_map.vhd:26:8
+   |
+26 |   u1 : entity work.leaf
+   |        ^^^^^^^^^^^^^^^^ this port map does not associate `d`
+ 6 |     d   : in  bit;
+   |     - declared here
+
+error[V0502]: no formal `data` in this port map
+  --> err_port_map.vhd:28:27
+   |
+28 |     port map (clk => clk, data => s, q => q);
+   |                           ^^^^
+   |
+   = note: available: clk, d, q
+
+error[V0501]: port `d` has no association
+  --> err_port_map.vhd:30:8
+   |
+30 |   u2 : entity work.leaf
+   |        ^^^^^^^^^^^^^^^^ this port map does not associate `d`
+ 6 |     d   : in  bit;
+   |     - declared here
+
+error[V0501]: generic `WIDTH` has no value and no default
+  --> err_port_map.vhd:34:8
+   |
+34 |   u3 : entity work.leaf
+   |        ^^^^^^^^^^^^^^^^ this instantiation has no generic map
+ 3 |   generic (WIDTH : positive);
+   |            ----- declared here
+

@@ -1,0 +1,5 @@
+phys_pkg.SHORT : constant distance = 5000 um
+phys_pkg.LONG : constant distance = 2000000 um
+phys_pkg.STEP : constant time = 5000000 fs
+phys_pkg.SLOW : constant time = 20000000 fs
+phys_user.d : signal bit

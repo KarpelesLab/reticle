@@ -1,0 +1,14 @@
+attr_pkg.SL : constant small_t = 0
+attr_pkg.SR : constant small_t = 15
+attr_pkg.SH : constant small_t = 15
+attr_pkg.SO : constant small_t = 0
+attr_pkg.SA : constant boolean = true
+attr_pkg.TL : constant tiny_t = 3
+attr_pkg.VL : constant natural = 8
+attr_pkg.VH : constant integer = 7
+attr_pkg.VO : constant integer = 0
+attr_pkg.VA : constant boolean = false
+attr_pkg.UA : constant boolean = true
+attr_range.d : signal vec_t
+attr_range.q : signal bit
+attr_range(rtl).acc : signal bit

@@ -1,0 +1,38 @@
+error[V0300]: a string literal is not a value of `integer`
+  --> err_type_mismatch.vhd:14:29
+   |
+14 |   constant BAD : integer := "hello";
+   |                             ^^^^^^^
+
+error[V0300]: type mismatch: expected `integer`, found `bit`
+  --> err_type_mismatch.vhd:16:12
+   |
+16 |   count <= b;
+   |            ^ `b` is `bit`
+ 4 |     b : in  bit;
+   |     - declared as `bit` here
+
+error[V0300]: type mismatch: expected `boolean`, found `integer`
+  --> err_type_mismatch.vhd:17:12
+   |
+17 |   flag  <= n;
+   |            ^ `n` is `integer`
+ 5 |     n : in  integer;
+   |     - declared as `integer` here
+
+error[V0300]: type mismatch: expected `bit`, found `integer`
+  --> err_type_mismatch.vhd:18:12
+   |
+18 |   q     <= count;
+   |            ^^^^^ `count` is `integer`
+12 |   signal count : integer;
+   |          ----- declared as `integer` here
+
+error[V0300]: type mismatch: expected `bit_vector(3 downto 0)`, found `bit`
+  --> err_type_mismatch.vhd:19:12
+   |
+19 |   v     <= b;
+   |            ^ `b` is `bit`
+ 4 |     b : in  bit;
+   |     - declared as `bit` here
+

@@ -1,0 +1,40 @@
+error[V0401]: cannot assign to constant `LIMIT`
+  --> err_assign_constant.vhd:15:5
+   |
+15 |     LIMIT <= 5;
+   |     ^^^^^ cannot be assigned by a signal assignment
+11 |   constant LIMIT : natural := 10;
+   |            ----- `LIMIT` is declared here
+   |
+   = note: constants cannot be assigned
+
+error[V0401]: cannot assign to generic `WIDTH`
+  --> err_assign_constant.vhd:16:5
+   |
+16 |     WIDTH <= 4;
+   |     ^^^^^ cannot be assigned by a signal assignment
+ 3 |   generic (WIDTH : positive := 8);
+   |            ----- `WIDTH` is declared here
+   |
+   = note: generics are constants
+
+error[V0401]: cannot assign to `in` port `d`
+  --> err_assign_constant.vhd:17:5
+   |
+17 |     d     <= '1';
+   |     ^ `d` cannot be assigned by a signal assignment
+ 5 |     d : in  bit;
+   |     - declared `in` here
+   |
+   = note: change the mode to `out` or `inout` to drive this port
+
+error[V0401]: cannot assign to loop parameter `i`
+  --> err_assign_constant.vhd:19:7
+   |
+19 |       i := 2;
+   |       ^ cannot be assigned by a variable assignment
+18 |     for i in 0 to 3 loop
+   |         - `i` is declared here
+   |
+   = note: a loop parameter is a constant
+

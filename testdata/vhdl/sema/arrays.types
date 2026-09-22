@@ -1,0 +1,11 @@
+arr_pkg.ZERO : constant word_t = "0000000000000000"
+arr_pkg.ONE : constant word_t = "0000000000000001"
+arr_user.d : signal word_t
+arr_user.hi : signal bit
+arr_user.lo : signal bit
+arr_user(rtl).upper : signal bit_vector(7 downto 0)
+arr_user(rtl).lower : signal bit_vector(7 downto 0)
+arr_user(rtl).N : constant natural = 16
+arr_user(rtl).L : constant integer = 15
+arr_user(rtl).R : constant integer = 0
+arr_user(rtl).A : constant boolean = false

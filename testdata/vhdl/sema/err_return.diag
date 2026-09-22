@@ -1,0 +1,18 @@
+error[V0406]: `return` in function `f` needs a value
+  --> err_return.vhd:11:7
+   |
+11 |       return;
+   |       ^^^^^^^ expected a value of `integer`
+
+error[V0300]: a string literal is not a value of `integer`
+  --> err_return.vhd:13:12
+   |
+13 |     return "text";
+   |            ^^^^^^
+
+error[V0406]: `return` in procedure `p` takes no value
+  --> err_return.vhd:18:12
+   |
+18 |     return a;
+   |            ^ a procedure returns nothing
+

@@ -1,0 +1,32 @@
+error[V0203]: a variable cannot be declared in an architecture; use a signal, or `shared variable`
+  --> err_signal_vs_variable.vhd:11:3
+   |
+11 |   variable bad_here : integer := 0;
+   |   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+error[V0203]: a signal cannot be declared in a process; declare it in the architecture
+  --> err_signal_vs_variable.vhd:15:5
+   |
+15 |     signal bad_signal : bit;
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^
+
+error[V0401]: `:=` assigns a variable, but `s` is a signal
+  --> err_signal_vs_variable.vhd:18:5
+   |
+18 |     s := v;
+   |     ^ a signal
+10 |   signal s : bit;
+   |          - declared as a signal here
+   |
+   = note: use `<=` to assign a signal
+
+error[V0401]: `<=` assigns a signal, but `v` is a variable
+  --> err_signal_vs_variable.vhd:19:5
+   |
+19 |     v <= d;
+   |     ^ a variable
+14 |     variable v : bit;
+   |              - declared as a variable here
+   |
+   = note: use `:=` to assign a variable
+

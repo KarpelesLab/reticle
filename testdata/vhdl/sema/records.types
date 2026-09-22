@@ -1,0 +1,5 @@
+rec_pkg.ORIGIN : constant point_t = (x => 0, y => 0)
+rec_pkg.UNIT : constant box_t = (lo => (x => 0, y => 0), hi => (x => 1, y => 1), valid => true)
+rec_user.b : signal box_t
+rec_user.width : signal integer
+rec_user(rtl).span : signal point_t

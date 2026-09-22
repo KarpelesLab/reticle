@@ -1,0 +1,40 @@
+error[V0502]: missing argument `c` in call to `add3`
+  --> err_bad_call.vhd:29:8
+   |
+29 |   q <= add3(1, 2);
+   |        ^^^^^^^^^^ `c` has no default value
+ 3 |   function add3 (a, b, c : integer) return integer;
+   |            ---- `function add3(a : integer; b : integer; c : integer) return integer`
+
+error[V0502]: `add3` takes 3 arguments, but 4 were given
+  --> err_bad_call.vhd:30:8
+   |
+30 |   q <= add3(1, 2, 3, 4);
+   |        ^^^^^^^^^^^^^^^^ too many arguments
+ 3 |   function add3 (a, b, c : integer) return integer;
+   |            ---- `function add3(a : integer; b : integer; c : integer) return integer`
+
+error[V0502]: `add3` has no parameter `bee`
+  --> err_bad_call.vhd:31:21
+   |
+31 |   q <= add3(a => 1, bee => 2, c => 3);
+   |                     ^^^^^^^^ no such parameter
+ 3 |   function add3 (a, b, c : integer) return integer;
+   |            ---- `function add3(a : integer; b : integer; c : integer) return integer`
+
+error[V0300]: argument 3 of `add3` has the wrong type
+  --> err_bad_call.vhd:32:19
+   |
+32 |   q <= add3(1, 2, true);
+   |                   ^^^^ this is `boolean`
+ 3 |   function add3 (a, b, c : integer) return integer;
+   |            ---- `c` is declared `integer` in function add3(a : integer; b : integer; c : integer) return integer
+
+error[V0300]: argument 1 of `pulse` has the wrong type
+  --> err_bad_call.vhd:36:11
+   |
+36 |     pulse(K, 10 ns);
+   |           ^ this is `integer`
+ 4 |   procedure pulse (signal s : out bit; constant width : in time);
+   |             ----- `s` is declared `bit` in procedure pulse(s : bit; width : time)
+
