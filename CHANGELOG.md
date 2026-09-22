@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.2](https://github.com/KarpelesLab/reticle/compare/v0.0.1...v0.0.2) - 2026-09-22
+
+### Added
+
+- *(examples)* add a MOS 6502 computer built from the IP library
+- *(ip)* add a MOS 6502 core to the library
+
+### Fixed
+
+- *(test)* stop the language server goldens depending on the version
+- *(test)* stop the FST goldens depending on the crate version
+
+### Other
+
+- add a guide to packaging a CPU as Reticle IP
+- *(test)* share the 8N1 waveform decoder between the examples
+- *(verilog)* pin the formatter moving a parameter's comment
+
 ## [0.0.1](https://github.com/KarpelesLab/reticle/compare/v0.0.0...v0.0.1) - 2026-09-22
 
 ### Added
