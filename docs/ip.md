@@ -783,7 +783,9 @@ kind does have.
   the list above says it skips. Nothing writes IP-XACT back out.
 
 The first-party IP library is in `ip/` and has its own document,
-[`ip-library.md`](ip-library.md): eleven Verilog-2005 packages — the two
-FIFOs, the two clock domain crossings, a UART, an SPI master, an I²C
-master, a PWM, a timer, an AXI4-Lite GPIO and the block RAM wrappers —
-each with a co-simulation test and a measured resource footprint.
+[`ip-library.md`](ip-library.md): fourteen Verilog-2005 packages — the
+two FIFOs, the two clock domain crossings, a UART, an SPI master, an I²C
+master, a PWM, a timer, an AXI4-Lite GPIO, the block RAM wrappers, an
+RV32I processor core, an Ethernet MAC over RMII and an execute-in-place
+SPI flash reader — each with a co-simulation test and a measured
+resource footprint.

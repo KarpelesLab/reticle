@@ -1,0 +1,38 @@
+# rv32i: the whole RV32I base integer set in a multi-cycle machine-mode
+# core, with separate instruction and data ports that share one
+# request/ready handshake. RESET_VECTOR is where it fetches from after
+# reset; REGFILE_BRAM picks a clocked register file over an
+# asynchronously read one.
+name rv32i
+version 1.0.0
+license MIT
+description "Multi-cycle RV32I core with machine-mode CSRs, traps and interrupts, and separate instruction and data ports"
+
+top rv32i
+target ice40
+target ecp5
+
+source rtl/rv32i.v
+
+param RESET_VECTOR bits 32'h00000000
+param REGFILE_BRAM int 0 0..1
+
+port clk in
+port rst_n in
+port imem_addr out 32
+port imem_req out
+port imem_ready in
+port imem_rdata in 32
+port dmem_addr out 32
+port dmem_req out
+port dmem_we out
+port dmem_be out 4
+port dmem_wdata out 32
+port dmem_ready in
+port dmem_rdata in 32
+port irq_timer in
+port irq_software in
+port irq_external in
+port dbg_pc out 32
+port dbg_retire out
+port dbg_trap out

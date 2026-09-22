@@ -1,0 +1,34 @@
+# spiflash_xip: a read-only execute-in-place path from a serial NOR
+# flash. The memory port is the one `rv32i` puts on its instruction
+# side; the three parameters are the reset values of the configuration
+# registers, which can be rewritten while the block is idle.
+name spiflash_xip
+version 1.0.0
+license MIT
+description "Execute-in-place SPI flash reader: a word read becomes a flash read command, with a configurable divisor, command and dummy cycles"
+
+top spiflash_xip
+target ice40
+target ecp5
+
+source rtl/spiflash_xip.v
+
+param READ_CMD bits 8'h03
+param CLK_DIV int 2 0..255
+param DUMMY_CYCLES int 0 0..255
+
+port clk in
+port rst_n in
+port mem_addr in 32
+port mem_req in
+port mem_ready out
+port mem_rdata out 32
+port cfg_addr in 2
+port cfg_we in
+port cfg_wdata in 32
+port cfg_rdata out 32
+port busy out
+port sclk out
+port cs_n out
+port mosi out
+port miso in

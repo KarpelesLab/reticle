@@ -2,27 +2,30 @@
 
 The first-party half of phase 8. [`docs/ip.md`](ip.md) describes the
 machinery — the manifest formats, the resolver, the bus model, the black
-boxes. This document describes the **blocks**: eleven pieces of HDL that
-drop into a design the way a crate drops into a Rust program, each with a
-manifest, a Rust co-simulation test, and a resource footprint that was
-measured rather than guessed.
+boxes. This document describes the **blocks**: fourteen pieces of HDL
+that drop into a design the way a crate drops into a Rust program, each
+with a manifest, a Rust co-simulation test, and a resource footprint that
+was measured rather than guessed.
 
 They live at the top of the repository, in `ip/`, one directory per
 package:
 
 ```text
 ip/
-  axil_gpio/    reticle.ip  rtl/axil_gpio.v
-  cdc_pulse/    reticle.ip  rtl/cdc_pulse.v
-  cdc_sync/     reticle.ip  rtl/cdc_sync.v
-  fifo_async/   reticle.ip  rtl/fifo_async.v
-  fifo_sync/    reticle.ip  rtl/fifo_sync.v
-  i2c_master/   reticle.ip  rtl/i2c_master.v
-  pwm/          reticle.ip  rtl/pwm.v
-  ram_wrapper/  reticle.ip  rtl/ram_sp.v  rtl/ram_sdp.v
-  spi_master/   reticle.ip  rtl/spi_master.v
-  timer/        reticle.ip  rtl/timer.v
-  uart/         reticle.ip  rtl/uart_tx.v  rtl/uart_rx.v  rtl/uart.v
+  axil_gpio/     reticle.ip  rtl/axil_gpio.v
+  cdc_pulse/     reticle.ip  rtl/cdc_pulse.v
+  cdc_sync/      reticle.ip  rtl/cdc_sync.v
+  eth_mac_rmii/  reticle.ip  rtl/eth_mac_rmii.v
+  fifo_async/    reticle.ip  rtl/fifo_async.v
+  fifo_sync/     reticle.ip  rtl/fifo_sync.v
+  i2c_master/    reticle.ip  rtl/i2c_master.v
+  pwm/           reticle.ip  rtl/pwm.v
+  ram_wrapper/   reticle.ip  rtl/ram_sp.v  rtl/ram_sdp.v
+  rv32i/         reticle.ip  rtl/rv32i.v
+  spi_master/    reticle.ip  rtl/spi_master.v
+  spiflash_xip/  reticle.ip  rtl/spiflash_xip.v
+  timer/         reticle.ip  rtl/timer.v
+  uart/          reticle.ip  rtl/uart_tx.v  rtl/uart_rx.v  rtl/uart.v
 ```
 
 `ip/` is in the `exclude` list of `Cargo.toml`, so the published `.crate`
@@ -47,6 +50,16 @@ It is distributed as part of the repository instead.
 | `timer` | `timer` | prescaled auto-reload down-counter with a pulse and a sticky interrupt | — |
 | `axil_gpio` | `axil_gpio` | AXI4-Lite GPIO subordinate: data, direction and set registers | `cdc_sync` |
 | `ram_wrapper` | `ram_sdp`, `ram_sp` | portable block RAM wrappers, single and simple dual port, optional output register | — |
+| `rv32i` | `rv32i` | the whole RV32I base integer set, multi-cycle, machine-mode CSRs, traps and interrupts | — |
+| `eth_mac_rmii` | `eth_mac_rmii` | Ethernet MAC over RMII: preamble, frame check sequence, inter-frame gap | — |
+| `spiflash_xip` | `spiflash_xip` | execute-in-place SPI flash reader, read only and cache-less | — |
+
+The last three are the **larger blocks**, and they are larger in a
+particular way: each is a whole protocol or a whole machine rather than a
+part of one, so each is where a shortcut would have been invisible. They
+also fit together. `spiflash_xip` presents the memory port `rv32i` puts
+on its instruction side, so a processor executing straight out of a
+serial flash is the two of them and one wire.
 
 Everything is **Verilog-2005**, deliberately: it is the path this
 compiler exercises hardest, and it is the dialect every other tool reads.
@@ -149,6 +162,49 @@ is the part that matters:
   the set register ORing bits in, and bits above WIDTH dropped.
 - **`ram_wrapper`** — both ports of both shapes, with and without the
   output register, and the read-first behaviour on a write.
+- **`rv32i`** — real machine code, assembled in the test and run. See
+  [below](#what-the-processor-actually-executes).
+- **`eth_mac_rmii`** — the transmitter's own pins looped into the
+  receiver, and the frame that comes out compared with the one that went
+  in; the same frame with one dibit flipped in the payload, which still
+  arrives and whose `rx_crc_ok` is low; the transmitted pins decoded
+  independently in Rust and checked against seven octets of 0x55, a
+  0xD5 delimiter, the payload and a check sequence computed by the
+  testbench's own CRC, with the inter-frame gap counted after it; and a
+  hand-driven frame that ends in the middle of an octet, which
+  `rx_error` catches and delivers nothing for.
+- **`spiflash_xip`** — five word reads against a flash model in the
+  style of the `spi_master` slave, which samples `mosi` on the rising
+  edge and presents `miso` on the falling one. The command octet and the
+  address the flash saw are checked, the word is checked to be the four
+  octets assembled little-endian, and `cs_n` is checked to fall a
+  divisor before the first edge and to stay low past the last. Then the
+  configuration registers are rewritten — a different command, eight
+  dummy cycles and half the clock rate — and the reads are checked
+  again, with the model expecting the dummy cycles too.
+
+### What the processor actually executes
+
+`rv32i` is the one block where "it simulates" would mean nothing on its
+own, so its tests assemble RISC-V machine code — from the base ISA's own
+field layout, never from the core's decoder — load it into the
+instruction memory and check the architectural state. Both register-file
+flavours run every program.
+
+| Test | The program |
+|------|-------------|
+| `rv32i_builds_constants_and_pc_relative_addresses` | LUI, AUIPC, ADDI, and a write to `x0` that is dropped; the register file read after each instruction |
+| `rv32i_computes_every_register_immediate_operation` | all nine of ADDI, SLTI, SLTIU, XORI, ORI, ANDI, SLLI, SRLI, SRAI, including SRAI shifting the sign in and SLTIU sign-extending its immediate before comparing unsigned |
+| `rv32i_computes_every_register_register_operation` | all ten of ADD, SUB, SLL, SLT, SLTU, XOR, SRL, SRA, OR, AND, plus a shift amount above 31 to prove only `rs2[4:0]` counts |
+| `rv32i_takes_and_declines_every_branch` | each of the six branches given a pair that makes it jump and a pair that makes it fall through, twelve in all, counted rather than positioned |
+| `rv32i_jumps_and_links` | JAL and JALR linking the right address, jumping to the right one, and JALR clearing bit 0 of its target |
+| `rv32i_loads_and_stores_every_width` | LB, LBU, LH, LHU, LW at every offset in the word, sign extension checked against zero extension, SB and SH landing in one lane and two without touching the rest, and a negative offset |
+| `rv32i_survives_memories_that_make_it_wait` | the same program with zero, one and three wait states on both ports |
+| `rv32i_traps_on_a_misaligned_access_and_on_nonsense` | a handler at `mtvec` that adds up `mcause` and returns past the faulting instruction, driven through causes 4, 6, 2, 3 and 11, then a JALR to an address that is not a multiple of four, which is cause 0 blamed on the jump |
+| `rv32i_reads_and_writes_its_machine_csrs` | CSRRW / CSRRS / CSRRC and the immediate forms over `mstatus`, `mtvec`, `mie`, `mip`, `mhartid`; `mcycle` and `minstret` read twice and their difference checked against the core's own timing; an unknown CSR and a write to a read-only one, both illegal |
+| `rv32i_takes_a_timer_interrupt_and_returns_from_it` | a spin loop with MIE and MTIE set, the timer line raised, the handler entered once with cause 0x80000007 and `mepc` inside the loop, MRET returning into it, and the external and software lines with their own causes |
+| `rv32i_sums_an_array_in_a_loop` | eight words summed through a `lw` / `add` / `addi` / `bne` loop and the total stored past the end of the array |
+| `rv32i_runs_a_recursive_function_on_the_stack` | Fibonacci of ten by the definition: two nested calls per frame, the return address and the argument saved on a stack, 177 calls and about two thousand instructions, and the stack pointer back where it started |
 
 Where a block crosses clock domains, `timing::analyze_cdc` is run over
 the synthesised and flattened netlist and the result is *asserted*, not
@@ -258,13 +314,30 @@ exactly what this table is for.
 | `ram_wrapper` | `ram_sdp` | WIDTH=8, DEPTH=256, OUT_REG=0 | LUT6 | 1 x memory 256x8, 1 x memrd, 1 x memwr | 0 |
 | `ram_wrapper` | `ram_sdp` | WIDTH=8, DEPTH=256, OUT_REG=0 | iCE40 HX1K | 36 x SB_IO, 1 x SB_RAM40_4K | 0 |
 | `ram_wrapper` | `ram_sdp` | WIDTH=8, DEPTH=256, OUT_REG=0 | ECP5 45F | 1 x DP16KD, 36 x TRELLIS_IO | 0 |
+| `rv32i` | `rv32i` | REGFILE_BRAM=0 | LUT4 | 14 x dff, 2436 x lut, 1 x memory 32x32, 2 x memrd, 1 x memwr | 34 |
+| `rv32i` | `rv32i` | REGFILE_BRAM=0 | LUT6 | 14 x dff, 2044 x lut, 1 x memory 32x32, 2 x memrd, 1 x memwr | 28 |
+| `rv32i` | `rv32i` | REGFILE_BRAM=0 | iCE40 HX1K | 220 x SB_CARRY, 1 x SB_GB, 208 x SB_IO, 2325 x SB_LUT4, 14 x dff, 1 x memory 32x32, 2 x memrd, 1 x memwr | 34 |
+| `rv32i` | `rv32i` | REGFILE_BRAM=0 | ECP5 45F | 1 x DCCA, 2438 x LUT4, 358 x TRELLIS_FF, 208 x TRELLIS_IO, 1 x memory 32x32, 2 x memrd, 1 x memwr | 34 |
+| `rv32i` | `rv32i` | REGFILE_BRAM=1 | LUT4 | 16 x dff, 2445 x lut, 1 x memory 32x32, 2 x memrd, 1 x memwr | 34 |
+| `rv32i` | `rv32i` | REGFILE_BRAM=1 | LUT6 | 16 x dff, 2075 x lut, 1 x memory 32x32, 2 x memrd, 1 x memwr | 28 |
+| `rv32i` | `rv32i` | REGFILE_BRAM=1 | iCE40 HX1K | 220 x SB_CARRY, 2 x SB_DFFE, 1 x SB_GB, 208 x SB_IO, 2354 x SB_LUT4, 14 x dff, 1 x memory 32x32, 2 x memrd, 1 x memwr | 34 |
+| `rv32i` | `rv32i` | REGFILE_BRAM=1 | ECP5 45F | 1 x DCCA, 2442 x LUT4, 360 x TRELLIS_FF, 208 x TRELLIS_IO, 1 x memory 32x32, 2 x memrd, 1 x memwr | 34 |
+| `eth_mac_rmii` | `eth_mac_rmii` | IFG_CYCLES=48 | LUT4 | 26 x dff, 305 x lut | 4 |
+| `eth_mac_rmii` | `eth_mac_rmii` | IFG_CYCLES=48 | LUT6 | 26 x dff, 283 x lut | 4 |
+| `eth_mac_rmii` | `eth_mac_rmii` | IFG_CYCLES=48 | iCE40 HX1K | 10 x SB_CARRY, 1 x SB_GB, 34 x SB_IO, 300 x SB_LUT4, 26 x dff | 4 |
+| `eth_mac_rmii` | `eth_mac_rmii` | IFG_CYCLES=48 | ECP5 45F | 1 x DCCA, 305 x LUT4, 194 x TRELLIS_FF, 34 x TRELLIS_IO | 4 |
+| `spiflash_xip` | `spiflash_xip` | CLK_DIV=2, READ_CMD=8'h03, DUMMY_CYCLES=0 | LUT4 | 9 x dff, 177 x lut | 4 |
+| `spiflash_xip` | `spiflash_xip` | CLK_DIV=2, READ_CMD=8'h03, DUMMY_CYCLES=0 | LUT6 | 9 x dff, 166 x lut | 4 |
+| `spiflash_xip` | `spiflash_xip` | CLK_DIV=2, READ_CMD=8'h03, DUMMY_CYCLES=0 | iCE40 HX1K | 7 x SB_CARRY, 1 x SB_GB, 140 x SB_IO, 171 x SB_LUT4, 9 x dff | 4 |
+| `spiflash_xip` | `spiflash_xip` | CLK_DIV=2, READ_CMD=8'h03, DUMMY_CYCLES=0 | ECP5 45F | 1 x DCCA, 177 x LUT4, 108 x TRELLIS_FF, 140 x TRELLIS_IO | 4 |
 <!-- end footprints -->
 
-### Two things the table shows about the toolchain
+### Four things the table shows about the toolchain
 
-Both are gaps in Reticle itself rather than in the blocks, and both are
-pinned down by a test so that fixing one fails the test that describes
-it.
+All four are gaps in Reticle itself rather than in the blocks, and each
+is pinned down by a test so that fixing one fails the test that
+describes it. Two of them were found by the original eleven blocks; the
+other two by writing the three larger ones.
 
 **iCE40 flip-flops refuse an active-low reset.** Every block resets on
 `negedge rst_n`, which is the convention the rest of this repository's IP
@@ -288,13 +361,71 @@ whose 128 bits fall under the 256-bit threshold; the 256 x 8 RAMs above
 it map to `SB_RAM40_4K` and `DP16KD` cleanly.
 `small_memories_are_left_generic_after_the_fpga_flow` holds that one.
 
+**A function call inside an asynchronously reset process warns about the
+function's own locals.** Writing a CRC step, a decode table or a sign
+extension as a Verilog `function` is the readable way to do it, and
+calling one from inside `always @(posedge clk or negedge rst_n)` makes
+flip-flop inference report every argument and every local of that
+function as a register that failed to get an asynchronous reset —
+`S0013`, once per name. The netlist is correct: `proc_lower` inlines the
+call into pure combinational logic and says so in its own log ("regs to
+wires"), and the cells that come out are exactly the ones the function
+computes. It is the diagnostic that is wrong, and it is enough to stop a
+block passing `blocks_synthesise_cleanly`, which insists on no warning
+at all.
+
+`eth_mac_rmii` works around it by calling `crc_step` from a continuous
+assignment and using the resulting wire inside the process, which costs
+nothing and is silent. `function_locals_are_reported_as_unreset_registers`
+holds an eighteen-line reproduction, and checks both that the warning is
+still there and that the netlist beside it is right.
+
+**A register file with two read ports is declined with a reason that
+reads like an acceptance.** `rv32i` keeps x1..x31 in one array with two
+read ports and one write port. On the ECP5 the block RAM mapper turns it
+down with
+
+```text
+`DP16KD` has 2 read and 2 write port(s), the memory needs 2 and 1
+```
+
+Every comparison in that sentence holds — two reads wanted and two
+available, one write wanted and two available — and yet it is a refusal.
+The constraint the sentence leaves out is that a `DP16KD` port is
+*either* a read or a write, so two reads and a write want three ports and
+the device has two. The decision is right; the explanation cannot be
+acted on.
+
+The mapping a real flow applies here is duplication: two block RAMs
+holding the same contents, each with one read port and one write port,
+both written together. That is not done either, so the register file
+shows up in the table as `memory 32x32, 2 x memrd, memwr` on every
+target.
+`a_two_read_port_register_file_is_declined_with_a_contradictory_reason`
+holds both halves.
+
 ## What is not here yet
 
 The roadmap's list for this phase also names SDRAM and HyperRAM
-controllers, an Ethernet MAC, a USB device, HDMI/DVI output and a small
-RISC-V core. None of those is here. They are an order of magnitude larger
-than what is, and each of them wants something the toolchain does not yet
-have — DDR primitives and PLL configuration for the memory controllers
-and the video output, a serial-interface engine for USB. The eleven
-blocks here are the ones a design needs first and the ones that can be
-proved right in a test that runs in a second.
+controllers, a USB device and HDMI/DVI output. None of those is here,
+and none of them can be until the FPGA backend configures the device
+primitives they need: DDR registers and IO delays for a memory
+controller's data strobe, a PLL for the pixel clock a display wants and
+for the 480 Mbit/s a USB high-speed engine wants. `reticle::fpga` maps
+logic, carries, block RAM, IO buffers and clock buffers, and nothing
+else; writing an SDRAM controller against primitives the backend cannot
+emit would produce a block that simulates and can never be built, which
+is worse than not having one.
+
+RMII was the Ethernet interface to pick for exactly that reason: it is
+single data rate, two bits per edge on a clock the PHY provides, so the
+whole MAC is ordinary logic. RGMII, which is DDR on both directions, is
+in the same waiting room as the other four.
+
+The `rv32i` core is big: about 2400 LUT4s, which does not fit an iCE40
+HX1K's 1280 and does fit an ECP5 45F many times over. That is a
+straightforward multi-cycle machine rather than a squeezed one — one
+33-bit adder shared by ADD, SUB, both comparisons and every address, two
+barrel shifters, 64-bit `mcycle` and `minstret`, and word-wide muxes the
+LUT mapper does not pack especially tightly. Making it smaller is worth
+doing and is not worth doing before it is right.
