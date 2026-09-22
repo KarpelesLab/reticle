@@ -1,0 +1,26 @@
+top alu
+
+module alu
+  timescale 1 fs / 1 fs
+  net %op u4 wire
+  net %a u8 wire
+  net %b u8 wire
+  net %y u8 wire
+  net %wide u16 wire
+  net %lt u1 wire
+  net %sa s8 wire
+  net %sb s8 wire
+  net %r s8 wire
+  port op in %op
+  port a in %a
+  port b in %b
+  port y out %y
+  port wide out %wide
+  port lt out %lt
+  assign %sa = resize(%a, s8)
+  assign %sb = resize(%b, s8)
+  assign %r = mux(eq(%op, 4'd0), add(%sa, %sb), mux(eq(%op, 4'd1), sub(%sa, %sb), mux(eq(%op, 4'd2), neg(%sa), mux(eq(%op, 4'd3), mux(lt(%sa, 8'sd0), neg(%sa), %sa), mux(eq(%op, 4'd4), div(%sa, %sb), mux(eq(%op, 4'd5), mod(%sa, %sb), mux(eq(%op, 4'd6), mux(land(ne(mod(%sa, %sb), 8'sd0), xor(lt(mod(%sa, %sb), 8'sd0), lt(%sb, 8'sd0))), add(mod(%sa, %sb), %sb), mod(%sa, %sb)), mux(eq(%op, 4'd7), shl(%sa, 32'd2), mux(eq(%op, 4'd8), sshr(%sa, 32'd2), mux(eq(%op, 4'd9), resize(or(shl(resize(%sa, u8), 32'd3), shr(resize(%sa, u8), 32'd5)), s8), mux(eq(%op, 4'd10), shl(%sa, 32'd1), mux(eq(%op, 4'd11), shr(%sa, 32'd1), mux(eq(%op, 4'd12), resize(%sa[3:0], s8), mux(eq(%op, 4'd13), add(%sa, 8'sd1), mux(eq(%op, 4'd14), mux(lt(%sa, %sb), %sb, %sa), mux(lt(%sa, %sb), %sa, %sb))))))))))))))))
+  assign %y = resize(%r, u8)
+  assign %wide = resize(mul(resize(%sa, s16), resize(%sb, s16)), u16)
+  assign %lt = mux(lt(%sa, %sb), 1'd1, 1'd0)
+end

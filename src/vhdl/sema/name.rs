@@ -344,7 +344,7 @@ impl Checker<'_> {
                                     .with_code("V0107")
                                     .with_label(des.span(), "not available in this build")
                                     .with_note(
-                                        "Reticle bundles `std.standard`, `std.textio`, `std.env` and `ieee.std_logic_1164`",
+                                        "Reticle bundles `std.standard`, `std.textio`, `std.env`, `ieee.std_logic_1164`, `ieee.numeric_std`, `ieee.numeric_bit`, `ieee.math_real`, `ieee.std_logic_textio` and the Synopsys `std_logic_arith` / `std_logic_unsigned` / `std_logic_signed`",
                                     ),
                             );
                             return Prefix::Error;

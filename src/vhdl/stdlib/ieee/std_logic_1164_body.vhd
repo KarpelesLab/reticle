@@ -1,4 +1,8 @@
--- Body of IEEE.STD_LOGIC_1164. Reticle's own implementation.
+-- Body of IEEE.STD_LOGIC_1164.
+--
+-- Clean-room source for Reticle. This file is an original implementation
+-- of the package interface defined by the relevant IEEE standard, written
+-- for Reticle; it is not derived from the IEEE source distribution.
 --
 -- The tables are written out as constants so the semantics are visible and
 -- auditable: `and_table` and friends are indexed by the two operands'

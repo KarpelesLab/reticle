@@ -1,0 +1,20 @@
+error[V0704]: a rotate by an amount that is not static cannot be lowered yet
+  --> error_not_static.vhd:24:54
+   |
+24 |   rot   <= std_logic_vector(rotate_left(unsigned(a), to_integer(unsigned(n))));
+   |                                                      ^^^^^^^^^^^^^^^^^^^^^^^
+
+error[V0701]: `find_leftmost` of a bundled arithmetic package cannot be lowered to the IR yet
+  --> error_not_static.vhd:25:41
+   |
+25 |   first <= std_logic_vector(to_unsigned(find_leftmost(unsigned(a), '1'), 8));
+   |                                         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+error[V0701]: `sqrt` has no body to inline
+  --> error_not_static.vhd:26:49
+   |
+26 |   root  <= std_logic_vector(to_unsigned(integer(sqrt(real(to_integer(unsigned(a))))), 8));
+   |                                                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: `ieee.math_real` is implemented natively; a call to `sqrt` can only be evaluated where its arguments are known at elaboration
+

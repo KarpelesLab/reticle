@@ -65,6 +65,9 @@ pub(crate) struct Syms {
     pub std_logic_1164: Symbol,
     pub math_real: Symbol,
     pub numeric_bit: Symbol,
+    pub std_logic_arith: Symbol,
+    pub std_logic_unsigned: Symbol,
+    pub std_logic_signed: Symbol,
 }
 
 /// The enclosing subprogram, for the rules that depend on it.
@@ -176,6 +179,9 @@ pub(crate) fn run(
             std_logic_1164: i.intern_ci("std_logic_1164"),
             math_real: i.intern_ci("math_real"),
             numeric_bit: i.intern_ci("numeric_bit"),
+            std_logic_arith: i.intern_ci("std_logic_arith"),
+            std_logic_unsigned: i.intern_ci("std_logic_unsigned"),
+            std_logic_signed: i.intern_ci("std_logic_signed"),
         }
     };
     let root = a.root();

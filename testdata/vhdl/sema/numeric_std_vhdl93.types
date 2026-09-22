@@ -1,0 +1,4 @@
+counter93.clk : signal std_logic
+counter93.q : signal std_logic_vector(7 downto 0)
+counter93(rtl).step : constant unsigned(7 downto 0) = "00000001"
+counter93(rtl).cnt : signal unsigned(7 downto 0)

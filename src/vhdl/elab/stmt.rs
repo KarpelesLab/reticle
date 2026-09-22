@@ -865,11 +865,21 @@ impl<'a> Lowerer<'a, '_> {
             if self.report_not_bundled(d, span) {
                 return None;
             }
+            // A bundled package's subprograms are implemented natively.
+            // The ones with a hardware meaning were lowered before this
+            // point, so reaching here means the call has to be static.
+            let note = match self.bundled_package_of(d) {
+                Some(pkg) => format!(
+                    "`{pkg}` is implemented natively; a call to `{spelling}` can only be \
+                     evaluated where its arguments are known at elaboration"
+                ),
+                None => "a `foreign` or undefined subprogram cannot be lowered".to_owned(),
+            };
             self.report(
                 Diagnostic::error(format!("`{spelling}` has no body to inline"))
                     .with_code(codes::UNSUPPORTED)
                     .with_span(span)
-                    .with_note("a `foreign` or undefined subprogram cannot be lowered"),
+                    .with_note(note),
             );
             return None;
         };

@@ -72,20 +72,26 @@
 //! | `std` | `textio` | declarations complete, subprograms `foreign` |
 //! | `std` | `env` | complete, subprograms `foreign` |
 //! | `ieee` | `std_logic_1164` | complete, with a body |
+//! | `ieee` | `numeric_std` | declarations complete, all `foreign`, bodies native |
+//! | `ieee` | `numeric_bit` | declarations complete, sharing `numeric_std`'s core |
+//! | `ieee` | `math_real` | constants and functions, functions `foreign` over `f64` |
+//! | `ieee` | `std_logic_textio` | declarations complete, all `foreign` |
+//! | `ieee` | `std_logic_arith` | the Synopsys interface, all `foreign` |
+//! | `ieee` | `std_logic_unsigned` | the Synopsys interface, all `foreign` |
+//! | `ieee` | `std_logic_signed` | the Synopsys interface, all `foreign` |
 //!
-//! Not bundled yet: `ieee.numeric_std`, `ieee.numeric_bit`,
-//! `ieee.math_real`, `ieee.std_logic_textio` and the Synopsys legacy
-//! packages (`std_logic_arith`, `std_logic_unsigned`,
-//! `std_logic_signed`). A `use` clause naming one of them produces a
-//! single `V0107` error saying the package is not bundled, and analysis
-//! carries on with the rest of the design rather than cascading into
-//! unknown-identifier errors for every `unsigned` and `to_integer` that
-//! follows. [`crate::vhdl::stdlib::missing_package_note`] holds the list.
+//! The arithmetic packages ship their *declarations* as VHDL and mark
+//! every subprogram `attribute foreign`; [`builtin`] is the body for a
+//! static call and `crate::vhdl::elab`'s `numeric` module for one that is
+//! not. Both work over [`crate::logic::Logic`], so a folded constant and
+//! a simulated signal agree by construction.
 //!
-//! Because `numeric_std` is missing, arithmetic on `unsigned` and
-//! `signed` cannot be analysed yet; [`constant`] already implements the
-//! static folding for it (see [`builtin`]), so adding the package is a
-//! matter of writing the source, not of changing the analyser.
+//! Not bundled yet: `ieee.fixed_pkg`, `ieee.float_pkg` and
+//! `ieee.numeric_std_unsigned`. A `use` clause naming one of them
+//! produces a single `V0107` error saying the package is not bundled, and
+//! analysis carries on with the rest of the design rather than cascading
+//! into unknown-identifier errors for every name that follows.
+//! [`crate::vhdl::stdlib::missing_package_note`] holds the list.
 //!
 //! # Diagnostics
 //!
@@ -1777,11 +1783,29 @@ end package p;
     #[test]
     fn an_unbundled_package_is_named_in_the_diagnostic() {
         let (map, diags, _) =
-            analyze("library ieee;\nuse ieee.numeric_std.all;\npackage p is\nend package p;\n");
+            analyze("library ieee;\nuse ieee.fixed_pkg.all;\npackage p is\nend package p;\n");
         let r = diags.render(&map);
-        assert!(r.contains("numeric_std"), "{r}");
+        assert!(r.contains("fixed_pkg"), "{r}");
         assert!(r.contains("not bundled"), "{r}");
         assert_eq!(diags.error_count(), 1, "{r}");
+    }
+
+    /// The arithmetic packages are bundled, so naming one is not an
+    /// error and its types are visible.
+    #[test]
+    fn the_arithmetic_packages_are_visible() {
+        let (map, diags, a) = analyze(
+            "library ieee;\n\
+             use ieee.std_logic_1164.all;\n\
+             use ieee.numeric_std.all;\n\
+             package p is\n\
+            \x20 constant a : unsigned(7 downto 0) := to_unsigned(200, 8);\n\
+            \x20 constant b : signed(7 downto 0) := to_signed(-7, 8);\n\
+            \x20 constant c : integer := to_integer(a) + to_integer(b);\n\
+             end package p;\n",
+        );
+        assert!(!diags.has_errors(), "{}", diags.render(&map));
+        assert_eq!(value_of(&a, "c").as_deref(), Some("193"));
     }
 
     #[test]

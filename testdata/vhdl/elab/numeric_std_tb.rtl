@@ -1,0 +1,94 @@
+top tb
+
+module accum
+  timescale 1 fs / 1 fs
+  net %clk u1 wire
+  net %rst u1 wire
+  net %inc u8 wire
+  net %sum u8 wire
+  net %acc u8 reg
+  port clk in %clk
+  port rst in %rst
+  port inc in %inc
+  port sum out %sum
+  assign %sum = %acc
+  process initial
+    %acc = 8'd0
+  end
+  process seq posedge %clk
+    if eq(%rst, 1'd1)
+      %acc <= 8'd0
+    else
+      %acc <= add(%acc, %inc)
+    end
+  end
+end
+
+module tb
+  timescale 1 fs / 1 fs
+  net %clk u1 reg
+  net %rst u1 reg
+  net %inc u8 reg
+  net %sum u8 wire
+  net %"clocking.i" s32 var
+  net %"stimulus.a" u8 var
+  net %"stimulus.b" u8 var
+  net %"stimulus.s" s8 var
+  net %"stimulus.t" s8 var
+  instance uut of accum (clk=%clk, rst=%rst, inc=%inc, sum=%sum)
+  process initial
+    %clk = 1'd0
+  end
+  process initial
+    %rst = 1'd1
+  end
+  process initial
+    %inc = 8'd0
+  end
+  process clocking free
+    forever
+      for %"clocking.i" = 32'sd0; le(%"clocking.i", 32'sd7); %"clocking.i" = add(%"clocking.i", 32'sd1)
+        wait for 64'sd5000000
+        %clk <= 1'd1
+        wait for 64'sd5000000
+        %clk <= 1'd0
+      end
+      wait until 1'd0
+    end
+  end
+  process stimulus free
+    forever
+      assert note 1'd0 report "start"
+      %inc <= 8'd10
+      wait for 64'sd12000000
+      %rst <= 1'd0
+      wait for 64'sd30000000
+      assert error eq(resize(resize(%sum, u32), s32), 32'sd30) report "accumulator wrong"
+      %"stimulus.a" = 8'd200
+      %"stimulus.b" = 8'd100
+      assert error eq(resize(resize(add(%"stimulus.a", %"stimulus.b"), u32), s32), 32'sd44) report "unsigned add did not wrap"
+      assert error eq(resize(resize(sub(%"stimulus.a", %"stimulus.b"), u32), s32), 32'sd100) report "unsigned sub wrong"
+      assert error eq(resize(resize(div(%"stimulus.a", %"stimulus.b"), u32), s32), 32'sd2) report "unsigned div wrong"
+      assert error eq(resize(resize(mod(%"stimulus.a", %"stimulus.b"), u32), s32), 32'sd0) report "unsigned rem wrong"
+      assert error eq(resize(resize(sub(%"stimulus.b", %"stimulus.a"), u32), s32), 32'sd156) report "unsigned sub did not wrap"
+      assert error gt(%"stimulus.a", %"stimulus.b") report "unsigned compare wrong"
+      %"stimulus.s" = 8'sd249
+      %"stimulus.t" = 8'sd3
+      assert error eq(resize(add(%"stimulus.s", %"stimulus.t"), s32), 32'sd4294967292) report "signed add wrong"
+      assert error eq(resize(mul(resize(%"stimulus.s", s16), resize(%"stimulus.t", s16)), s32), 32'sd4294967275) report "signed mul wrong"
+      assert error eq(resize(div(%"stimulus.s", %"stimulus.t"), s32), 32'sd4294967294) report "signed div wrong"
+      assert error eq(resize(mod(%"stimulus.s", %"stimulus.t"), s32), 32'sd4294967295) report "signed rem wrong"
+      assert error eq(resize(mux(land(ne(mod(%"stimulus.s", %"stimulus.t"), 8'sd0), xor(lt(mod(%"stimulus.s", %"stimulus.t"), 8'sd0), lt(%"stimulus.t", 8'sd0))), add(mod(%"stimulus.s", %"stimulus.t"), %"stimulus.t"), mod(%"stimulus.s", %"stimulus.t")), s32), 32'sd2) report "signed mod wrong"
+      assert error eq(resize(neg(%"stimulus.s"), s32), 32'sd7) report "signed negate wrong"
+      assert error eq(resize(mux(lt(%"stimulus.s", 8'sd0), neg(%"stimulus.s"), %"stimulus.s"), s32), 32'sd7) report "signed abs wrong"
+      assert error lt(%"stimulus.s", %"stimulus.t") report "signed compare wrong"
+      assert error eq(resize(sshr(%"stimulus.s", 32'd1), s32), 32'sd4294967292) report "signed shift wrong"
+      assert error eq(resize(resize(shl(%"stimulus.b", 32'd1), u32), s32), 32'sd200) report "unsigned shift wrong"
+      assert error eq(resize(resize(shr(%"stimulus.a", 32'd4), u32), s32), 32'sd12) report "unsigned shift wrong"
+      assert error eq(resize(resize(%"stimulus.s", s16), s32), 32'sd4294967289) report "resize wider wrong"
+      assert error eq(resize(resize(resize(%"stimulus.b", u4), u32), s32), 32'sd4) report "resize narrower wrong"
+      assert note 1'd0 report "done"
+      wait until 1'd0
+    end
+  end
+end

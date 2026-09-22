@@ -13,6 +13,34 @@
 //! must see exactly those names and profiles; the *bodies* are Reticle's
 //! own code and are not derived from the IEEE source distribution.
 //!
+//! # Declarations in VHDL, bodies in Rust
+//!
+//! Two shapes are used, and which one a package takes is a deliberate
+//! choice rather than an accident:
+//!
+//! - `std_logic_1164` carries a VHDL **body**, because its nine-state
+//!   tables *are* the specification and are best read as tables.
+//! - every other package declares its subprograms and marks each one
+//!   `attribute foreign ... is "reticle: builtin"`, which leaves the
+//!   package without a body and hands the implementation to Rust.
+//!
+//! For the arithmetic packages the second shape is the better design, not
+//! merely the cheaper one. `unsigned` and `signed` are arrays of logic
+//! values with arithmetic on them, and [`crate::logic::Logic`] already
+//! implements every operation they need — add, subtract, multiply,
+//! divide, both remainders, comparisons, shifts and resize, signed and
+//! unsigned, four-state throughout. Folding a static
+//! `to_unsigned(1, 8) + 3` natively is far faster than interpreting a
+//! VHDL body, gives exactly the answer the simulator would give because
+//! it is the same code, and keeps the bundled text down to the profiles a
+//! design has to see.
+//!
+//! The Rust side lives in two places: [`crate::vhdl::sema::builtin`]
+//! folds a call whose arguments are all static, and
+//! `crate::vhdl::elab`'s `numeric` module lowers one that is not to the
+//! matching IR operator with explicit `Resize` nodes, since the IR
+//! requires operands of equal width.
+//!
 //! # What is bundled
 //!
 //! | Library | Package | State |
@@ -21,15 +49,21 @@
 //! | `std` | `textio` | declarations complete; every subprogram is `attribute foreign` and implemented by the simulator |
 //! | `std` | `env` | complete (LRM 16.5), all `foreign` |
 //! | `ieee` | `std_logic_1164` | complete, with a body |
+//! | `ieee` | `numeric_std` | declarations complete (LRM 16.9), all `foreign`, bodies native |
+//! | `ieee` | `numeric_bit` | declarations complete (LRM 16.10), all `foreign`, sharing `numeric_std`'s core |
+//! | `ieee` | `math_real` | constants and functions, functions `foreign` over `f64` |
+//! | `ieee` | `std_logic_textio` | declarations complete, all `foreign` |
+//! | `ieee` | `std_logic_arith` | the Synopsys interface, all `foreign` |
+//! | `ieee` | `std_logic_unsigned` | the Synopsys interface, all `foreign` |
+//! | `ieee` | `std_logic_signed` | the Synopsys interface, all `foreign` |
 //!
 //! # What is not bundled yet
 //!
-//! `ieee.numeric_std`, `ieee.numeric_bit`, `ieee.math_real`,
-//! `ieee.std_logic_textio` and the Synopsys legacy packages
-//! (`std_logic_arith`, `std_logic_unsigned`, `std_logic_signed`) are not
-//! shipped yet. A design that names one gets a single diagnostic from
-//! [`super::sema`] saying the package is not bundled, rather than a
-//! cascade of unknown-identifier errors; see
+//! The VHDL-2008 packages that build further on `numeric_std`:
+//! `ieee.fixed_pkg`, `ieee.float_pkg` and `ieee.numeric_std_unsigned`.
+//! They are listed in [`MISSING`], so a design that names one gets a
+//! single diagnostic from [`super::sema`] saying the package is not
+//! bundled rather than a cascade of unknown-identifier errors; see
 //! [`missing_package_note`].
 //!
 //! # Adding a package
@@ -77,6 +111,41 @@ pub const SOURCES: &[Source] = &[
         name: "std_logic_1164_body.vhd",
         text: include_str!("ieee/std_logic_1164_body.vhd"),
     },
+    Source {
+        library: "ieee",
+        name: "numeric_std.vhd",
+        text: include_str!("ieee/numeric_std.vhd"),
+    },
+    Source {
+        library: "ieee",
+        name: "numeric_bit.vhd",
+        text: include_str!("ieee/numeric_bit.vhd"),
+    },
+    Source {
+        library: "ieee",
+        name: "math_real.vhd",
+        text: include_str!("ieee/math_real.vhd"),
+    },
+    Source {
+        library: "ieee",
+        name: "std_logic_textio.vhd",
+        text: include_str!("ieee/std_logic_textio.vhd"),
+    },
+    Source {
+        library: "ieee",
+        name: "std_logic_arith.vhd",
+        text: include_str!("ieee/std_logic_arith.vhd"),
+    },
+    Source {
+        library: "ieee",
+        name: "std_logic_unsigned.vhd",
+        text: include_str!("ieee/std_logic_unsigned.vhd"),
+    },
+    Source {
+        library: "ieee",
+        name: "std_logic_signed.vhd",
+        text: include_str!("ieee/std_logic_signed.vhd"),
+    },
 ];
 
 /// The packages that a design may reasonably expect in `ieee` (or `std`)
@@ -85,41 +154,25 @@ pub const SOURCES: &[Source] = &[
 ///
 /// Keeping the list here rather than in the checker means the diagnostic
 /// and [`SOURCES`] are updated in the same file when a package lands.
+///
+/// The remaining entries are the VHDL-2008 packages that build further on
+/// `numeric_std`: a design naming one gets a single `V0107` rather than
+/// an error for every name it uses.
 pub const MISSING: &[(&str, &str, &str)] = &[
     (
         "ieee",
-        "numeric_std",
-        "`ieee.numeric_std` is not bundled yet; `unsigned`, `signed` and their arithmetic are unavailable",
+        "fixed_pkg",
+        "`ieee.fixed_pkg` is not bundled yet; the fixed-point types are unavailable",
     ),
     (
         "ieee",
-        "numeric_bit",
-        "`ieee.numeric_bit` is not bundled yet",
+        "float_pkg",
+        "`ieee.float_pkg` is not bundled yet; the floating-point types are unavailable",
     ),
     (
         "ieee",
-        "math_real",
-        "`ieee.math_real` is not bundled yet; the real-valued maths functions are unavailable",
-    ),
-    (
-        "ieee",
-        "std_logic_textio",
-        "`ieee.std_logic_textio` is not bundled yet; `std.textio` covers the predefined types",
-    ),
-    (
-        "ieee",
-        "std_logic_arith",
-        "`ieee.std_logic_arith` is a Synopsys package and is not bundled",
-    ),
-    (
-        "ieee",
-        "std_logic_unsigned",
-        "`ieee.std_logic_unsigned` is a Synopsys package and is not bundled",
-    ),
-    (
-        "ieee",
-        "std_logic_signed",
-        "`ieee.std_logic_signed` is a Synopsys package and is not bundled",
+        "numeric_std_unsigned",
+        "`ieee.numeric_std_unsigned` is not bundled yet; `ieee.numeric_std` or `ieee.std_logic_unsigned` covers the same arithmetic",
     ),
 ];
 
@@ -150,12 +203,40 @@ mod tests {
         assert_eq!(SOURCES[0].name, "standard.vhd");
     }
 
+    /// Every bundled file must say, in its own text, that it is an
+    /// original implementation rather than a copy of the standard's.
+    #[test]
+    fn sources_carry_a_provenance_header() {
+        for s in SOURCES {
+            let head: String = s.text.lines().take(20).collect::<Vec<_>>().join("\n");
+            assert!(
+                head.to_ascii_lowercase()
+                    .contains("clean-room source for reticle"),
+                "{} has no provenance header",
+                s.name
+            );
+        }
+    }
+
     #[test]
     fn missing_packages_are_reported_case_insensitively() {
-        assert!(missing_package_note("ieee", "numeric_std").is_some());
-        assert!(missing_package_note("IEEE", "NUMERIC_STD").is_some());
+        assert!(missing_package_note("ieee", "fixed_pkg").is_some());
+        assert!(missing_package_note("IEEE", "FIXED_PKG").is_some());
         assert!(missing_package_note("ieee", "std_logic_1164").is_none());
-        assert!(missing_package_note("work", "numeric_std").is_none());
+        assert!(missing_package_note("work", "fixed_pkg").is_none());
+        // The packages that landed are no longer reported as missing.
+        for p in [
+            "numeric_std",
+            "numeric_bit",
+            "math_real",
+            "std_logic_textio",
+            "std_logic_arith",
+            "std_logic_unsigned",
+            "std_logic_signed",
+        ] {
+            assert!(missing_package_note("ieee", p).is_none(), "{p}");
+            assert!(SOURCES.iter().any(|s| s.name == format!("{p}.vhd")), "{p}");
+        }
         // Nothing in MISSING is also in SOURCES.
         for (_, p, _) in MISSING {
             assert!(

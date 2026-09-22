@@ -138,10 +138,21 @@
 //! not. The operators and conversions of `ieee.std_logic_1164` are
 //! recognised by name and lowered to the same nodes rather than having
 //! their nine-state lookup tables inlined; `is_x` becomes the IR's
-//! `$isunknown` call. A call into a package Reticle does not bundle yet is
-//! `V0710` — in practice `use ieee.numeric_std.all` is already stopped by
-//! the analyser's `V0107`, which names the package and says it is not
-//! bundled.
+//! `$isunknown` call.
+//!
+//! **The arithmetic packages** — `ieee.numeric_std`, `ieee.numeric_bit`
+//! and the Synopsys `std_logic_arith`, `std_logic_unsigned` and
+//! `std_logic_signed` — declare every subprogram `attribute foreign` and
+//! have no VHDL body to inline, so the `numeric` module lowers them
+//! directly: one IR node per operation, with the operands resized to the
+//! width the package's own definition gives the result (the longer
+//! operand for `+`, `-`, `/`, `rem` and `mod`, the sum of the lengths for
+//! `*`, the vector's length when the other operand is an integer). See
+//! that module for the signedness rule, which for the two
+//! `std_logic_vector` packages comes from the package rather than the
+//! operand type. A call into a package Reticle does not bundle at all is
+//! `V0710` — in practice a `use` clause naming one is already stopped by
+//! the analyser's `V0107`.
 //!
 //! # `std_logic` resolution
 //!
@@ -193,6 +204,7 @@ mod conc;
 mod eval;
 mod expr;
 mod lower;
+mod numeric;
 mod spans;
 mod stmt;
 mod types;

@@ -248,7 +248,7 @@ fn missing_package_is_reported_once() {
     let src = "\
 library ieee;
 use ieee.std_logic_1164.all;
-use ieee.numeric_std.all;
+use ieee.fixed_pkg.all;
 
 entity t is
   port (clk : in std_logic);
@@ -263,7 +263,7 @@ end architecture;
     let (map, diags, _) = analyze("t.vhd", src);
     let rendered = diags.render(&map);
     assert!(
-        rendered.contains("numeric_std"),
+        rendered.contains("fixed_pkg"),
         "the diagnostic does not name the package:\n{rendered}"
     );
     assert!(
@@ -272,6 +272,272 @@ end architecture;
     );
     // Exactly one error: the rest of the design still analyses.
     assert_eq!(diags.error_count(), 1, "expected one error:\n{rendered}");
+}
+
+/// The operands the operator tables below are written against, declared
+/// once at the head of the generated package.
+const PROBES: &str = "\
+  constant u200 : unsigned(7 downto 0) := to_unsigned(200, 8);
+  constant u100 : unsigned(7 downto 0) := to_unsigned(100, 8);
+  constant u3   : unsigned(3 downto 0) := to_unsigned(3, 4);
+  constant u15  : unsigned(3 downto 0) := to_unsigned(15, 4);
+  constant sm7  : signed(7 downto 0) := to_signed(-7, 8);
+  constant sp7  : signed(7 downto 0) := to_signed(7, 8);
+  constant sp3  : signed(7 downto 0) := to_signed(3, 8);
+  constant sm3  : signed(7 downto 0) := to_signed(-3, 8);
+  constant sm8  : signed(7 downto 0) := to_signed(-8, 8);
+  constant smin : signed(7 downto 0) := to_signed(-128, 8);
+  constant sone : signed(7 downto 0) := to_signed(1, 8);
+  constant sm1  : signed(3 downto 0) := to_signed(-1, 4);
+";
+
+/// Analyses one package holding [`PROBES`] and one constant per case, and
+/// compares each folded value with the expected text.
+///
+/// Everything goes through one analysis, so a whole table costs one pass;
+/// a mismatch names the expression that broke.
+fn check_constants(package: &str, cases: &[(&str, &str, &str)]) {
+    use reticle::vhdl::sema::DeclKind;
+
+    let mut src = format!(
+        "library ieee;\nuse ieee.std_logic_1164.all;\nuse {package}.all;\n\
+         package cases is\n{PROBES}"
+    );
+    for (i, (ty, expr, _)) in cases.iter().enumerate() {
+        src.push_str(&format!("  constant c{i} : {ty} := {expr};\n"));
+    }
+    src.push_str("end package cases;\n");
+
+    let (map, diags, analysis) = analyze("cases.vhd", &src);
+    assert!(
+        !diags.has_errors(),
+        "the probe package did not analyse:\n{}",
+        diags.render(&map)
+    );
+    let work = analysis.interner.get_ci("work");
+    let region = analysis
+        .units
+        .iter()
+        .find(|u| Some(u.library) == work)
+        .and_then(|u| u.region)
+        .expect("the probe package has a region");
+    let probe_count = PROBES.lines().count();
+    let mut seen = 0;
+    for (n, &d) in analysis.region(region).decls.iter().enumerate() {
+        if n < probe_count {
+            continue;
+        }
+        let decl = analysis.decl(d);
+        let DeclKind::Object { ty, .. } = decl.kind else {
+            continue;
+        };
+        let (_, expr, expected) = cases[seen];
+        let actual = analysis
+            .decl_value(d)
+            .map(|v| analysis.describe_value(v, ty))
+            .unwrap_or_else(|| "<not static>".to_owned());
+        assert_eq!(&actual, expected, "`{expr}` folded to {actual}");
+        seen += 1;
+    }
+    assert_eq!(seen, cases.len(), "not every case produced a constant");
+}
+
+/// Every `ieee.numeric_std` operator that yields a vector, against a
+/// hand-computed answer, through the real analyser.
+///
+/// The golden corpus covers the same ground in bulk; this table exists so
+/// a regression names the operator that broke, and so the edge cases that
+/// catch real bugs live in one place: mixed operand widths, wrapping at
+/// the width, the two remainder signs, and narrowing a signed value.
+#[test]
+fn numeric_std_vector_operators_fold() {
+    let u8t = "unsigned(7 downto 0)";
+    let u16t = "unsigned(15 downto 0)";
+    let u4t = "unsigned(3 downto 0)";
+    let s8t = "signed(7 downto 0)";
+    let s16t = "signed(15 downto 0)";
+    let s4t = "signed(3 downto 0)";
+    let s1t = "signed(0 downto 0)";
+    check_constants(
+        "ieee.numeric_std",
+        &[
+            // Conversions, including an integer too big for the width.
+            (u8t, "to_unsigned(200, 8)", "\"11001000\""),
+            (s8t, "to_signed(-7, 8)", "\"11111001\""),
+            (u8t, "to_unsigned(300, 8)", "\"00101100\""),
+            // Addition and subtraction, wrapping at the width.
+            (u8t, "u200 + u100", "\"00101100\""),
+            (u8t, "u100 - u200", "\"10011100\""),
+            (s8t, "sm7 + sp3", "\"11111100\""),
+            (s8t, "smin - sone", "\"01111111\""),
+            // Mixed widths: the shorter operand is extended, not cut.
+            (u8t, "u200 + u3", "\"11001011\""),
+            (u8t, "u3 + u200", "\"11001011\""),
+            (s8t, "sm7 + sm1", "\"11111000\""),
+            // An integer operand takes the vector's length.
+            (u8t, "u200 + 55", "\"11111111\""),
+            (u8t, "55 + u200", "\"11111111\""),
+            (s8t, "sm7 - 1", "\"11111000\""),
+            // Multiplication is as wide as both operands together.
+            (u16t, "u200 * u100", "\"0100111000100000\""),
+            (s16t, "sm7 * sp3", "\"1111111111101011\""),
+            (s16t, "smin * smin", "\"0100000000000000\""),
+            // Division truncates towards zero; `rem` takes the sign of
+            // the dividend and `mod` the sign of the divisor.
+            (s8t, "sm7 / sp3", "\"11111110\""),
+            (s8t, "sp7 / sm3", "\"11111110\""),
+            (s8t, "sm7 rem sp3", "\"11111111\""),
+            (s8t, "sm7 mod sp3", "\"00000010\""),
+            (s8t, "sp7 rem sm3", "\"00000001\""),
+            (s8t, "sp7 mod sm3", "\"11111110\""),
+            (u8t, "u200 rem u100", "\"00000000\""),
+            (u8t, "u200 / u100", "\"00000010\""),
+            // Sign and magnitude. The most negative value has no
+            // positive counterpart, so `abs` of it is itself.
+            (s8t, "-sm7", "\"00000111\""),
+            (s8t, "abs(sm7)", "\"00000111\""),
+            (s8t, "abs(smin)", "\"10000000\""),
+            // Resizing: growing extends, narrowing an unsigned truncates
+            // and narrowing a signed keeps the sign bit.
+            (u16t, "resize(u200, 16)", "\"0000000011001000\""),
+            (s16t, "resize(sm7, 16)", "\"1111111111111001\""),
+            (u4t, "resize(u200, 4)", "\"1000\""),
+            (s4t, "resize(sm7, 4)", "\"1001\""),
+            (s1t, "resize(sm7, 1)", "\"1\""),
+            // Shifts. A right shift of a signed value fills with the
+            // sign bit, except `srl`, which is always logical.
+            (u8t, "shift_left(u200, 1)", "\"10010000\""),
+            (u8t, "shift_right(u200, 4)", "\"00001100\""),
+            (s8t, "shift_right(sm8, 1)", "\"11111100\""),
+            (s8t, "sm8 srl 1", "\"01111100\""),
+            (u8t, "u200 sll 1", "\"10010000\""),
+            (u8t, "u200 srl 9", "\"00000000\""),
+            // A rotate keeps every bit, and by the width is a no-op.
+            (u8t, "rotate_left(u200, 3)", "\"01000110\""),
+            (u8t, "rotate_right(u200, 3)", "\"00011001\""),
+            (u8t, "rotate_left(u200, 8)", "\"11001000\""),
+            // Extrema, and the element-wise logic.
+            (u8t, "maximum(u200, u100)", "\"11001000\""),
+            (s8t, "minimum(sm7, sp3)", "\"11111001\""),
+            (u8t, "u200 and u100", "\"01000000\""),
+            (u8t, "u200 xor u100", "\"10101100\""),
+            (u8t, "not u200", "\"00110111\""),
+        ],
+    );
+}
+
+/// The `ieee.numeric_std` operations that answer with something other
+/// than a vector: the comparisons, the tests and `to_integer`.
+#[test]
+fn numeric_std_predicates_fold() {
+    let b = "boolean";
+    let i = "integer";
+    let l = "std_ulogic";
+    check_constants(
+        "ieee.numeric_std",
+        &[
+            (b, "u200 > u100", "true"),
+            (b, "u200 < u100", "false"),
+            // Comparing different widths extends rather than truncates,
+            // so 15 in four bits does not beat 200 in eight.
+            (b, "u3 < u200", "true"),
+            (b, "u200 >= u15", "true"),
+            (b, "sm1 > sm7", "true"),
+            (b, "sm7 < sp3", "true"),
+            (b, "u200 > 100", "true"),
+            (b, "sm7 < 0", "true"),
+            (b, "u200 = 200", "true"),
+            (b, "sm7 /= -8", "true"),
+            // The matching operators answer with a logic value.
+            (l, "u200 ?= u200", "'1'"),
+            (l, "u200 ?/= u100", "'1'"),
+            (l, "u100 ?< u200", "'1'"),
+            (l, "u200 ?>= u100", "'1'"),
+            // Don't-cares in the pattern match anything.
+            (b, "std_match(u200, unsigned'(\"11--1000\"))", "true"),
+            (b, "std_match(u200, unsigned'(\"10--1000\"))", "false"),
+            (b, "is_x(u200)", "false"),
+            (i, "find_leftmost(u200, '1')", "7"),
+            (i, "find_rightmost(u200, '1')", "3"),
+            (i, "find_leftmost(to_unsigned(0, 8), '1')", "-1"),
+            (i, "to_integer(u200)", "200"),
+            (i, "to_integer(sm7)", "-7"),
+            (i, "to_integer(resize(u200, 16))", "200"),
+            (i, "to_integer(resize(sm7, 4))", "-7"),
+            // The 2008 reductions.
+            (l, "or u200", "'1'"),
+            (l, "and u200", "'0'"),
+            (l, "xor u200", "'1'"),
+        ],
+    );
+}
+
+/// `ieee.numeric_bit` is the same core over `bit`, so the same table of
+/// answers holds with the two-state element encoding.
+#[test]
+fn numeric_bit_shares_the_core() {
+    let u8t = "unsigned(7 downto 0)";
+    let s8t = "signed(7 downto 0)";
+    let b = "boolean";
+    let i = "integer";
+    check_constants(
+        "ieee.numeric_bit",
+        &[
+            (u8t, "u200 + u100", "\"00101100\""),
+            (u8t, "u200 + u3", "\"11001011\""),
+            (s8t, "sm7 rem sp3", "\"11111111\""),
+            (s8t, "sm7 mod sp3", "\"00000010\""),
+            (s8t, "abs(sm7)", "\"00000111\""),
+            (s8t, "shift_right(sm8, 1)", "\"11111100\""),
+            ("signed(3 downto 0)", "resize(sm7, 4)", "\"1001\""),
+            (b, "sm7 < sp3", "true"),
+            (i, "to_integer(sm7)", "-7"),
+            (i, "find_leftmost(u200, '1')", "7"),
+            ("bit", "xor u200", "'1'"),
+        ],
+    );
+}
+
+/// Every arithmetic package that landed is usable: a `use` clause naming
+/// one, and the types and functions it declares, analyse without error.
+#[test]
+fn bundled_arithmetic_packages_are_usable() {
+    for (pkg, body) in [
+        (
+            "numeric_std",
+            "constant c : unsigned(7 downto 0) := to_unsigned(5, 8);",
+        ),
+        (
+            "numeric_bit",
+            "constant c : signed(7 downto 0) := to_signed(-5, 8);",
+        ),
+        ("math_real", "constant c : real := sqrt(2.0) * math_pi;"),
+        (
+            "std_logic_arith",
+            "constant c : unsigned(3 downto 0) := conv_unsigned(9, 4);",
+        ),
+        (
+            "std_logic_unsigned",
+            "constant c : integer := conv_integer(std_logic_vector'(\"1010\"));",
+        ),
+        (
+            "std_logic_signed",
+            "constant c : integer := conv_integer(std_logic_vector'(\"1010\"));",
+        ),
+    ] {
+        let src = format!(
+            "library ieee;\n\
+             use ieee.std_logic_1164.all;\n\
+             use ieee.{pkg}.all;\n\
+             package p is\n  {body}\nend package;\n"
+        );
+        let (map, diags, _) = analyze("t.vhd", &src);
+        assert!(
+            !diags.has_errors(),
+            "`ieee.{pkg}` is not usable:\n{}",
+            diags.render(&map)
+        );
+    }
 }
 
 /// A package Reticle has never heard of is a plain unknown-unit error.

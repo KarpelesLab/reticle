@@ -1,0 +1,43 @@
+top legacy
+
+module legacy
+  timescale 1 fs / 1 fs
+  net %clk u1 wire
+  net %rst u1 wire
+  net %q u8 wire
+  net %wide u12 wire
+  net %over u1 wire
+  net %cnt u8 reg
+  port clk in %clk
+  port rst in %rst
+  port q out %q
+  port wide out %wide
+  port over out %over
+  assign %q = %cnt
+  assign %wide = resize(resize(mul(resize(resize(%cnt, u32), s32), 32'sd3), s12), u12)
+  assign %over = mux(ge(%cnt, 8'd250), 1'd1, 1'd0)
+  process seq posedge %clk
+    if eq(%rst, 1'd1)
+      %cnt <= 8'd0
+    else
+      %cnt <= add(%cnt, 8'd1)
+    end
+  end
+end
+
+module legacy_signed
+  timescale 1 fs / 1 fs
+  net %a u8 wire
+  net %b u8 wire
+  net %y u8 wire
+  net %neg u1 wire
+  net %lss u1 wire
+  port a in %a
+  port b in %b
+  port y out %y
+  port neg out %neg
+  port lss out %lss
+  assign %y = resize(sub(resize(%a, s8), resize(%b, s8)), u8)
+  assign %neg = mux(lt(resize(%a, s8), 8'sd0), 1'd1, 1'd0)
+  assign %lss = mux(lt(resize(%a, s8), resize(%b, s8)), 1'd1, 1'd0)
+end

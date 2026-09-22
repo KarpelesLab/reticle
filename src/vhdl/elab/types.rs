@@ -23,9 +23,12 @@
 //! | a record                                | one wide vector    | first field in the most significant bits |
 //!
 //! Signedness comes from the type: integer and physical types are signed,
-//! and so is an array whose base type is named `signed` (the
-//! `ieee.numeric_std` subtype, once that package is bundled); everything
-//! else is unsigned, `std_logic_vector` included.
+//! and so is an array named `signed` anywhere in its subtype chain — the
+//! `ieee.numeric_std` and `ieee.numeric_bit` types, and the Synopsys
+//! `std_logic_arith` one, see [`is_signed_array`]. Everything else is
+//! unsigned, `std_logic_vector` included; the arithmetic of
+//! `ieee.std_logic_signed` is signed because of the package the operator
+//! comes from, not because of the operand type.
 //!
 //! # Enumeration encodings in the output
 //!
@@ -248,6 +251,32 @@ impl Layout {
     }
 }
 
+/// True when `ty` is an array type whose arithmetic is two's complement:
+/// `ieee.numeric_std`'s `signed`, `ieee.numeric_bit`'s, or the Synopsys
+/// `std_logic_arith` type of the same name.
+///
+/// The declared name is the only thing that tells the two apart —
+/// `unsigned` and `signed` are declared side by side as arrays of the same
+/// element type — so the name is what is tested. The whole subtype chain
+/// is walked because VHDL-2008 declares `signed` as a resolved subtype of
+/// `unresolved_signed`, and a design's own
+/// `subtype word is signed(15 downto 0)` adds a further link.
+pub(crate) fn is_signed_array(a: &Analysis, ty: TypeId) -> bool {
+    let mut cur = ty;
+    loop {
+        if a.ty(cur).name.is_some_and(|n| {
+            let s = a.name(n);
+            s.eq_ignore_ascii_case("signed") || s.eq_ignore_ascii_case("unresolved_signed")
+        }) {
+            return true;
+        }
+        match a.ty(cur).kind {
+            TypeKind::Subtype { parent, .. } => cur = parent,
+            _ => return false,
+        }
+    }
+}
+
 /// The number of bits needed to hold `n` distinct positions.
 pub(crate) fn encoding_width(n: usize) -> u32 {
     let mut bits = 1;
@@ -406,11 +435,7 @@ fn layout_inner<'a>(
                 return unsupported(env, "an array of `real` or `string`");
             }
             let width = elem.width.saturating_mul(len);
-            let signed = env
-                .analysis()
-                .ty(base)
-                .name
-                .is_some_and(|n| env.analysis().name(n).eq_ignore_ascii_case("signed"));
+            let signed = is_signed_array(env.analysis(), ty);
             let left = i64::try_from(left).unwrap_or(0);
             Some(Layout {
                 ty,

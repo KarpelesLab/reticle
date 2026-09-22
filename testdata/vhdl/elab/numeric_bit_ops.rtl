@@ -1,0 +1,28 @@
+top bitops
+
+module bitops
+  timescale 1 fs / 1 fs
+  net %a u8 wire
+  net %b u8 wire
+  net %sum u8 wire
+  net %dif u8 wire
+  net %prd u16 wire
+  net %shr u8 wire
+  net %lss u1 wire
+  net %ua u8 wire
+  net %sb s8 wire
+  port a in %a
+  port b in %b
+  port sum out %sum
+  port dif out %dif
+  port prd out %prd
+  port shr out %shr
+  port lss out %lss
+  assign %ua = %a
+  assign %sb = resize(%b, s8)
+  assign %sum = add(%ua, 8'd1)
+  assign %dif = resize(sub(resize(%a, s8), %sb), u8)
+  assign %prd = mul(resize(%ua, u16), resize(%b, u16))
+  assign %shr = resize(sshr(%sb, 32'd2), u8)
+  assign %lss = mux(lt(%sb, 8'sd0), 1'd1, 1'd0)
+end

@@ -236,6 +236,44 @@ fn survives_the_sema_corpus() {
     );
 }
 
+/// The `ieee.numeric_std` testbench simulates and every one of its
+/// hand-computed checks holds. This is the strongest evidence that the
+/// native builtins are right: the arithmetic is lowered to IR operators
+/// and then actually run.
+#[cfg(feature = "sim")]
+#[test]
+fn numeric_std_arithmetic_simulates() {
+    use reticle::sim::{SimOptions, Simulator};
+
+    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("testdata/vhdl/elab/numeric_std_tb.vhd");
+    let text = normalise(&fs::read_to_string(&path).expect("read the testbench"));
+
+    let mut map = SourceMap::new();
+    let mut diags = Diagnostics::new();
+    let mut vhdl = VhdlDesign::with_stdlib(&mut map, Standard::Vhdl2008, &mut diags);
+    let id = map.add("numeric_std_tb.vhd".to_owned(), text).unwrap();
+    vhdl.add_source(&map, id, "work", &mut diags);
+    let analysis = vhdl.analyze(&map, &mut diags);
+    assert!(!diags.has_errors(), "{}", diags.render(&map));
+    let design = elaborate(&analysis, &ElabOptions::new().with_top("tb"), &mut diags)
+        .unwrap_or_else(|| panic!("the testbench should elaborate:\n{}", diags.render(&map)));
+
+    let mut sim = Simulator::new(&design, SimOptions::default())
+        .unwrap_or_else(|d| panic!("the testbench should load:\n{}", d.render(&map)));
+    sim.run();
+    let messages = sim.messages().render(&map);
+    assert!(
+        messages.contains("start") && messages.contains("done"),
+        "the testbench did not run to the end:\n{messages}"
+    );
+    // Every assertion in the file reports on failure, so any `wrong` in
+    // the output names an operator whose result did not match.
+    assert!(
+        !messages.contains("wrong"),
+        "an arithmetic check failed:\n{messages}"
+    );
+}
+
 /// The lowered testbench simulates, and reports what it was written to
 /// report: the strongest evidence that the lowering is right.
 #[cfg(feature = "sim")]

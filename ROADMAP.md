@@ -145,10 +145,17 @@ and compiled like user code.
 - [x] Bundled standard libraries: `std.standard`, `std.textio`, `std.env`
       and `ieee.std_logic_1164`, written from scratch and shipped as VHDL
       source inside the crate, analysed by the same front end as user code.
-- [ ] The remaining bundled libraries: `ieee.numeric_std`,
+- [x] The remaining bundled libraries: `ieee.numeric_std`,
       `ieee.numeric_bit`, `ieee.math_real`, `ieee.std_logic_textio` and the
-      Synopsys legacy packages. Until they land, naming one yields a single
-      "not bundled" diagnostic rather than a cascade.
+      Synopsys legacy packages (`std_logic_arith`, `std_logic_unsigned`,
+      `std_logic_signed`). Each ships its *declarations* as VHDL, which is
+      what a design has to see, and marks every subprogram `attribute
+      foreign`; the bodies are native Rust over `logic::Logic`, shared
+      between the analyser's constant folding (`sema::builtin`) and the
+      elaborator's lowering to IR operators (`elab::numeric`). A package
+      Reticle still does not ship — `fixed_pkg`, `float_pkg`,
+      `numeric_std_unsigned` — yields a single "not bundled" diagnostic
+      rather than a cascade.
 - [x] Elaboration: generic maps, port maps with conversions, generate
       statements, configuration resolution, default bindings.
 - [x] Lowering to IR, including `std_logic` resolution as explicit IR

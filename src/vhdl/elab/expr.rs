@@ -154,7 +154,7 @@ impl<'a> Lowerer<'a, '_> {
     }
 
     /// Resizes a node to `width`, keeping its signedness.
-    fn widen(&mut self, id: ExprId, width: u32, signed: bool) -> ExprId {
+    pub(crate) fn widen(&mut self, id: ExprId, width: u32, signed: bool) -> ExprId {
         let ty = self.b.module().expr(id).ty.clone();
         if ty == (Type::Bits { width, signed }) {
             return id;
@@ -247,7 +247,7 @@ impl<'a> Lowerer<'a, '_> {
 
     // --- the main walk -----------------------------------------------------
 
-    fn build(
+    pub(crate) fn build(
         &mut self,
         e: &'a ast::Expr,
         want: Option<&Layout>,
@@ -458,7 +458,18 @@ impl<'a> Lowerer<'a, '_> {
             Some(CallTarget::Conversion(t)) => {
                 let arg = first_expr(args)?;
                 let (id, from) = self.build(arg, None, sink)?;
-                let to = self.layout_of_type(t, span)?;
+                // A conversion to an unconstrained array type takes its
+                // length from the operand (clause 9.3.6), which is what
+                // `std_logic_vector(count)` relies on.
+                let to = match self.layout_of_type_quiet(t, span) {
+                    Some(l) => l,
+                    None if from.array().is_some() => Layout {
+                        ty: t,
+                        signed: types::is_signed_array(self.a(), t),
+                        ..from.clone()
+                    },
+                    None => self.layout_of_type(t, span)?,
+                };
                 Some((self.convert(id, &from, &to, span), to))
             }
             Some(CallTarget::Subprogram(d)) => self.subprogram_expr(d, args, span, want, sink),
@@ -474,8 +485,8 @@ impl<'a> Lowerer<'a, '_> {
                 });
                 let lhs = it.next()?;
                 match it.next() {
-                    Some(rhs) => self.operator(sym, Some(lhs), rhs, span, want, sink),
-                    None => self.operator(sym, None, lhs, span, want, sink),
+                    Some(rhs) => self.operator_sym(sym, Some(lhs), rhs, span, want, sink),
+                    None => self.operator_sym(sym, None, lhs, span, want, sink),
                 }
             }
             Some(CallTarget::Predefined(name)) => {
@@ -863,7 +874,7 @@ impl<'a> Lowerer<'a, '_> {
             Some(CallTarget::Subprogram(d)) => {
                 self.subprogram_operator(d, &[operand], span, want, sink)
             }
-            _ => self.operator(op.as_str(), None, operand, span, want, sink),
+            _ => self.operator_sym(op.as_str(), None, operand, span, want, sink),
         }
     }
 
@@ -880,7 +891,7 @@ impl<'a> Lowerer<'a, '_> {
             Some(CallTarget::Subprogram(d)) => {
                 self.subprogram_operator(d, &[lhs, rhs], span, want, sink)
             }
-            _ => self.operator(op.as_str(), Some(lhs), rhs, span, want, sink),
+            _ => self.operator_sym(op.as_str(), Some(lhs), rhs, span, want, sink),
         }
     }
 
@@ -889,7 +900,7 @@ impl<'a> Lowerer<'a, '_> {
     /// `want` is the layout the context expects, which is what gives an
     /// operand of an unconstrained type (a string literal, the result of a
     /// function returning `std_ulogic_vector`) its width.
-    fn operator(
+    pub(crate) fn operator_sym(
         &mut self,
         sym: &str,
         lhs: Option<&'a ast::Expr>,
@@ -1095,10 +1106,13 @@ impl<'a> Lowerer<'a, '_> {
         if let Some(sym) = self.bundled_operator(d) {
             let sym: &str = sym;
             return match args {
-                [only] => self.operator(sym, None, only, span, want, sink),
-                [lhs, rhs] => self.operator(sym, Some(lhs), rhs, span, want, sink),
+                [only] => self.operator_sym(sym, None, only, span, want, sink),
+                [lhs, rhs] => self.operator_sym(sym, Some(lhs), rhs, span, want, sink),
                 _ => None,
             };
+        }
+        if let Some(pkg) = self.arith_package(d) {
+            return self.numeric_call(pkg, d, args, span, want, sink);
         }
         let actuals: Vec<Actual<'a>> = args.iter().map(|e| Actual::Expr(e)).collect();
         self.inline_function(d, &actuals, span, want, sink)
@@ -1120,12 +1134,15 @@ impl<'a> Lowerer<'a, '_> {
             });
             let first = it.next()?;
             return match it.next() {
-                Some(second) => self.operator(sym, Some(first), second, span, want, sink),
-                None => self.operator(sym, None, first, span, want, sink),
+                Some(second) => self.operator_sym(sym, Some(first), second, span, want, sink),
+                None => self.operator_sym(sym, None, first, span, want, sink),
             };
         }
         if let Some((id, layout)) = self.bundled_function(d, args, span, sink) {
             return Some((id, layout));
+        }
+        if let Some(pkg) = self.arith_package(d) {
+            return self.numeric_assoc_call(pkg, d, args, span, want, sink);
         }
         let actuals: Vec<Actual<'a>> = args.iter().map(Actual::Assoc).collect();
         self.inline_function(d, &actuals, span, want, sink)

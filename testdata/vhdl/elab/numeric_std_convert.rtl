@@ -1,0 +1,30 @@
+top convert
+
+module convert
+  timescale 1 fs / 1 fs
+  param width = 8
+  net %sel u3 wire
+  net %step u8 wire
+  net %base u8 wire
+  net %sum u8 wire
+  net %small u4 wire
+  net %big u16 wire
+  net %seed u8 wire
+  net %limit s32 wire
+  net %index s32 wire
+  net %acc u8 wire
+  port sel in %sel
+  port step in %step
+  port base out %base
+  port sum out %sum
+  port small out %small
+  port big out %big
+  assign %seed = 8'd37
+  assign %limit = add(resize(resize(%seed, u32), s32), 32'sd3)
+  assign %index = resize(resize(%sel, u32), s32)
+  assign %acc = add(%seed, %step)
+  assign %base = %seed
+  assign %sum = %acc
+  assign %small = resize(%acc, u4)
+  assign %big = resize(resize(mul(%limit, %index), s16), u16)
+end
