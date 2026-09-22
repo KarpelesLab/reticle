@@ -1,0 +1,9 @@
+# Thirty-two words of thirty-two bits with two clocked read ports and
+# one write port: the shape `rv32i` puts on its register file, and the
+# one a `DP16KD` cannot serve from a single block, since each of its two
+# ports is either a read or a write. The answer is duplication — two
+# copies of the contents, each answering one reader, both written
+# together — which is why this case shows four `DP16KD` rather than two.
+set_io -io_standard LVCMOS33 clk G2
+set_io -io_standard LVCMOS33 we B2
+create_clock -name sys -period 40.0 clk

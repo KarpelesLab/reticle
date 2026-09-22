@@ -3955,34 +3955,34 @@ endmodule
 /// `F0300`: a memory that does not fit the device's block RAM.
 const BRAM_SHAPE_GAP: &str = "F0300";
 
-/// A register file with two read ports and one write port is declined
-/// with a reason that reads as though it should have been accepted.
+/// A register file with two read ports and one write port is duplicated
+/// across block RAMs.
 ///
-/// `rv32i` holds x1..x31 in one array with two asynchronous — or, with
-/// REGFILE_BRAM, two clocked — read ports and one write port. On the
-/// ECP5 that is turned down with
+/// `rv32i` holds x1..x31 in one array with two read ports and one write
+/// port. A `DP16KD` has two physical ports and each of them is *either*
+/// a read or a write, so one block cannot serve three accesses; the
+/// mapper used to say so with
 ///
 /// ```text
-/// `DP16KD` has 2 port(s) and each serves either a read or a write,
-/// but the memory needs 3 (2 read, 1 write)
+/// `DP16KD` has 2 read and 2 write port(s), the memory needs 2 and 1
 /// ```
 ///
-/// That sentence used to report the readable and writable port counts
-/// separately, which both looked satisfiable and left the reader with
-/// nothing to act on. The decision was always right; only the
-/// explanation was wrong, and it now names the constraint that applies.
+/// where every comparison held and it was still a refusal, because the
+/// constraint it left out was the one that applied. That wording was
+/// fixed first; what the mapper does about it is fixed here.
 ///
-/// What remains is the fix a real flow would apply: duplicate the
-/// memory into two block RAMs holding the same contents, each with one
-/// read and one write port, written together. That is not done, so the
-/// register file still stays generic in the footprint table, and this
-/// test holds that gap.
+/// The answer a real flow gives is duplication: one copy of the contents
+/// per read port, each with one read and one write port of its own, all
+/// written together from the one writer. With `REGFILE_BRAM = 1` the two
+/// reads are clocked, which is the shape a block RAM has, and the file
+/// now maps onto four `DP16KD` — two copies, two blocks wide each, since
+/// thirty-two bits do not fit one block's eighteen.
 #[test]
-fn a_two_read_port_register_file_is_declined_for_a_stated_reason() {
+fn a_two_read_port_register_file_is_duplicated_across_block_rams() {
     let variant = VARIANTS
         .iter()
-        .find(|v| v.package == "rv32i")
-        .expect("rv32i is in the catalogue");
+        .find(|v| v.package == "rv32i" && v.params == [("REGFILE_BRAM", "1")])
+        .expect("rv32i with a clocked register file is in the catalogue");
     let (mut design, id) = flattened(variant.package, variant.top, variant.params);
     let device = fpga::target("ecp5-45f-CABGA381").expect("the ECP5 device");
     let mut diags = Diagnostics::new();
@@ -3996,37 +3996,76 @@ fn a_two_read_port_register_file_is_declined_for_a_stated_reason() {
     )
     .expect("the flow runs");
 
-    let reason = report
+    let mapping = report
         .primitives
-        .bram_fallbacks
+        .block_rams
         .iter()
-        .find(|f| f.memory.as_str() == "regs")
-        .map(|f| f.reason.clone())
-        .expect("the register file falls back");
-    // The reason now states the constraint that actually applies: a port
-    // serves one access, so a 2-read, 1-write file wants three of them.
+        .find(|m| m.memory.as_str() == "regs")
+        .expect("the register file is a block RAM now");
+    assert_eq!(mapping.primitive, "DP16KD");
+    assert_eq!(mapping.copies, 2, "one copy per read port");
+    assert_eq!(mapping.blocks(), 4);
+    assert_eq!(report.count("DP16KD"), 4);
     assert!(
-        reason.contains("each serves either a read or a write"),
-        "the reason has changed: {reason}"
+        report
+            .primitives
+            .bram_fallbacks
+            .iter()
+            .all(|f| f.memory.as_str() != "regs"),
+        "the register file should not fall back at all"
     );
     assert!(
-        reason.contains("needs 3 (2 read, 1 write)"),
-        "the reason should name the total it needs: {reason}"
+        !diags.iter().any(|d| d.code == Some(BRAM_SHAPE_GAP)),
+        "nothing about the register file is refused now"
     );
-    assert!(
-        diags.iter().any(|d| d.code == Some(BRAM_SHAPE_GAP)),
-        "the fallback should be reported as {BRAM_SHAPE_GAP}"
-    );
-    // The fallback it names is now performed — the ECP5's distributed
-    // RAM — so the netlist is usable; what is still missing is the block
-    // RAM a real flow would duplicate the file into.
+    assert!(fpga::check_nextpnr_json(&design, id, device, &Constraints::new()).is_empty());
+}
+
+/// The asynchronous register file is *not* given a block RAM, and the
+/// reason says so.
+///
+/// With `REGFILE_BRAM = 0` the same array is read combinationally, which
+/// no block RAM does — its own header says that variant wants
+/// distributed RAM or flip-flops. Duplication does not change that, so
+/// the memory takes the logic fallback and the refusal names the
+/// property that decided it.
+#[test]
+fn an_asynchronous_register_file_takes_the_logic_fallback() {
+    let variant = VARIANTS
+        .iter()
+        .find(|v| v.package == "rv32i" && v.params == [("REGFILE_BRAM", "0")])
+        .expect("rv32i with an asynchronous register file is in the catalogue");
+    let (mut design, id) = flattened(variant.package, variant.top, variant.params);
+    let device = fpga::target("ecp5-45f-CABGA381").expect("the ECP5 device");
+    let mut diags = Diagnostics::new();
+    let report = fpga::synthesize_for(
+        &mut design,
+        id,
+        device,
+        &Constraints::new(),
+        &FpgaOptions::default(),
+        &mut diags,
+    )
+    .expect("the flow runs");
+
     let fallback = report
         .primitives
         .bram_fallbacks
         .iter()
         .find(|f| f.memory.as_str() == "regs")
         .expect("the register file falls back");
+    assert!(
+        fallback.reason.contains("asynchronous read port"),
+        "the reason has changed: {}",
+        fallback.reason
+    );
+    // It is not a *warning*: reading a small array combinationally is a
+    // design decision, not a mistake, and `ram_style = "block"` is what
+    // turns it into one (`F0300`). The report is where it is recorded.
+    assert!(!diags.iter().any(|d| d.code == Some(BRAM_SHAPE_GAP)));
+    // And the fallback it names is performed: the ECP5's distributed RAM.
     assert!(fallback.built);
     assert_eq!(fallback.style, "distributed LUT RAM");
+    assert_eq!(fallback.primitive.as_deref(), Some("TRELLIS_DPR16X4"));
     assert!(fpga::check_nextpnr_json(&design, id, device, &Constraints::new()).is_empty());
 }

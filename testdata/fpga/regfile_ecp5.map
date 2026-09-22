@@ -1,0 +1,19 @@
+device: ecp5-45f-CABGA381
+block RAM:
+  regs (32x32) -> 4 x DP16KD in 18x1024 mode (2 wide, 1 deep, 2 copies, one per read port)
+io:
+  clk (1 bits) -> TRELLIS_IO at pin G2 as LVCMOS33
+  we (1 bits) -> TRELLIS_IO at pin B2 as LVCMOS33
+  wa (5 bits) -> TRELLIS_IO
+  wd (32 bits) -> TRELLIS_IO
+  ra1 (5 bits) -> TRELLIS_IO
+  ra2 (5 bits) -> TRELLIS_IO
+  rd1 (32 bits) -> TRELLIS_IO
+  rd2 (32 bits) -> TRELLIS_IO
+notes:
+  memory `regs` has 2 read ports and one `DP16KD` serves one, so its contents are held in 2 copies written together
+logic:
+  0 LUTs, depth 0
+netlist:
+  4 x DP16KD
+  113 x TRELLIS_IO

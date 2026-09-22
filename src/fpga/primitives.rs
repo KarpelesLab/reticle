@@ -141,12 +141,16 @@ pub struct BramMapping {
     pub wide: u32,
     /// How many blocks stacked carry the depth.
     pub deep: u32,
+    /// How many copies of the contents there are: one, or one per read
+    /// port when the memory wanted more ports than one block has, all
+    /// written together from the memory's single write port.
+    pub copies: u32,
 }
 
 impl BramMapping {
     /// Total number of blocks used.
     pub fn blocks(&self) -> u32 {
-        self.wide * self.deep
+        self.wide * self.deep * self.copies
     }
 }
 
@@ -280,9 +284,9 @@ impl MapReport {
         if !self.block_rams.is_empty() || !self.bram_fallbacks.is_empty() {
             out.push_str("block RAM:\n");
             for item in &self.block_rams {
-                let _ = writeln!(
+                let _ = write!(
                     out,
-                    "  {} ({}x{}) -> {} x {} in {}x{} mode ({} wide, {} deep)",
+                    "  {} ({}x{}) -> {} x {} in {}x{} mode ({} wide, {} deep",
                     item.memory,
                     item.depth,
                     item.data_width,
@@ -293,6 +297,10 @@ impl MapReport {
                     item.wide,
                     item.deep
                 );
+                if item.copies > 1 {
+                    let _ = write!(out, ", {} copies, one per read port", item.copies);
+                }
+                out.push_str(")\n");
             }
             for item in &self.bram_fallbacks {
                 let _ = write!(out, "  {} -> {}", item.memory, item.style);
@@ -748,6 +756,25 @@ impl Mapper<'_> {
         if reads.is_empty() && writes.is_empty() {
             return give_up(self, "it has no ports".to_owned(), false);
         }
+        // A block RAM reads on a clock edge. Giving one a read port that
+        // has no clock would leave the block's clock pin unconnected and
+        // the netlist reading a cycle late: the honest answer is that
+        // this memory is distributed RAM or flip-flops, which is exactly
+        // where the fallback puts it.
+        if reads.iter().any(|id| {
+            matches!(
+                module.cells[*id].kind,
+                CellKind::MemRdPort { clocked: false, .. }
+            )
+        }) {
+            return give_up(
+                self,
+                "a block RAM reads on a clock edge and this memory has an asynchronous read \
+                 port"
+                    .to_owned(),
+                forced,
+            );
+        }
 
         let Some((shape_index, mode, wide, deep)) = self.choose_bram(width, depth) else {
             return give_up(
@@ -760,29 +787,43 @@ impl Mapper<'_> {
             );
         };
         let shape = &self.device.block_rams[shape_index];
-        let Some((read_slots, write_slots)) = allocate_ports(shape, reads.len(), writes.len())
-        else {
-            // A port serves one access, read or write, so the constraint
-            // is the total, not the read and write counts separately.
-            // Reporting those separately produced a message where both
-            // halves looked satisfiable: a 2-read, 1-write register file
-            // against a shape with 2 readable and 2 writable ports reads
-            // as though it fits, when in fact it wants three ports.
-            let usable = shape
-                .port_map
-                .iter()
-                .filter(|p| !p.signals.is_empty())
-                .count();
-            let wanted = reads.len() + writes.len();
-            let reason = format!(
-                "`{}` has {usable} port(s) and each serves either a read or a write, \
-                 but the memory needs {wanted} ({} read, {} write)",
-                shape.name,
-                reads.len(),
-                writes.len()
-            );
-            return give_up(self, reason, true);
+        // One block, every port of the memory on a port of it. When that
+        // does not fit, the answer a real flow gives a register file is
+        // duplication: one copy of the contents per read port, each with
+        // one read and one write port of its own, all written together
+        // from the one write port. It costs read ports, not silicon
+        // behaviour, so it is only right when there is exactly one
+        // writer — two writers would need the copies kept in step, which
+        // the blocks cannot do between them.
+        let groups = match allocate_ports(shape, reads.len(), writes.len()) {
+            Some((read_slots, write_slots)) => vec![BramCopy {
+                reads: reads.clone(),
+                read_slots,
+                write_slots,
+                index: 0,
+            }],
+            None if writes.len() == 1 && reads.len() > 1 => match allocate_ports(shape, 1, 1) {
+                Some((read_slots, write_slots)) => reads
+                    .iter()
+                    .enumerate()
+                    .map(|(index, id)| BramCopy {
+                        reads: vec![*id],
+                        read_slots: read_slots.clone(),
+                        write_slots: write_slots.clone(),
+                        index,
+                    })
+                    .collect(),
+                None => {
+                    let reason = port_shortfall(shape, reads.len(), writes.len());
+                    return give_up(self, reason, true);
+                }
+            },
+            None => {
+                let reason = port_shortfall(shape, reads.len(), writes.len());
+                return give_up(self, reason, true);
+            }
         };
+        let copies = u32::try_from(groups.len()).unwrap_or(1);
 
         let shape = shape.clone();
         if mode.0 < shape.width_modes.iter().map(|(w, _)| *w).max().unwrap_or(0) {
@@ -791,14 +832,26 @@ impl Mapper<'_> {
                 mode.0, mode.1, shape.name
             ));
         }
-        let plan = BramPlan {
-            mode,
-            wide,
-            deep,
-            read_slots,
-            write_slots,
-        };
-        self.emit_bram(module, mem, &shape, &plan, &reads, &writes);
+        if copies > 1 {
+            self.note(format!(
+                "memory `{name}` has {} read ports and one `{}` serves one, so its contents are \
+                 held in {copies} copies written together",
+                reads.len(),
+                shape.name
+            ));
+        }
+        for copy in &groups {
+            let plan = BramPlan {
+                mode,
+                wide,
+                deep,
+                read_slots: copy.read_slots.clone(),
+                write_slots: copy.write_slots.clone(),
+                copy: copy.index,
+                copies: groups.len(),
+            };
+            self.emit_bram(module, mem, &shape, &plan, &copy.reads, &writes);
+        }
         self.report.block_rams.push(BramMapping {
             memory: name,
             primitive: shape.name.clone(),
@@ -807,6 +860,7 @@ impl Mapper<'_> {
             mode,
             wide,
             deep,
+            copies,
         });
         let mut replaced = reads;
         replaced.extend(writes);
@@ -852,7 +906,9 @@ impl Mapper<'_> {
     ) {
         let (mode, wide, deep) = (plan.mode, plan.wide, plan.deep);
         let memory = &module.memories[mem];
-        let base = memory.name.as_str().to_owned();
+        let memory_name = memory.name.as_str().to_owned();
+        // Two copies of one memory must not name their nets alike.
+        let base = plan.tag(&memory_name);
         let span = memory.span;
         let width = memory.elem.width().unwrap_or(0);
         let size = memory.size;
@@ -985,7 +1041,7 @@ impl Mapper<'_> {
                 for (key, value) in &mode_params {
                     module.cells[cell].params.set(key.clone(), value.clone());
                 }
-                module.cells[cell].attrs.set("memory", base.clone());
+                module.cells[cell].attrs.set("memory", memory_name.clone());
             }
             for (index, parts) in row_parts.into_iter().enumerate() {
                 let mut parts = parts;
@@ -2483,6 +2539,58 @@ struct BramPlan {
     read_slots: Vec<usize>,
     /// Which physical port of the block each write port uses.
     write_slots: Vec<usize>,
+    /// Which copy of the contents this is.
+    copy: usize,
+    /// How many copies there are in all.
+    copies: usize,
+}
+
+impl BramPlan {
+    /// The prefix a cell or net of this copy is named with.
+    fn tag(&self, base: &str) -> String {
+        if self.copies > 1 {
+            format!("{base}$c{}", self.copy)
+        } else {
+            base.to_owned()
+        }
+    }
+}
+
+/// One copy of a memory's contents, with the read ports it serves.
+///
+/// There is one of these unless the memory wants more ports than a block
+/// has, in which case there is one per read port; see
+/// [`Mapper::block_ram`].
+struct BramCopy {
+    /// The memory's read port cells this copy answers.
+    reads: Vec<CellId>,
+    /// Which physical port of the block each of `reads` uses.
+    read_slots: Vec<usize>,
+    /// Which physical port of the block each write port uses.
+    write_slots: Vec<usize>,
+    /// Which copy this is.
+    index: usize,
+}
+
+/// Why a block RAM shape cannot serve a memory's ports.
+///
+/// A port serves one access, read or write, so the constraint is the
+/// total, not the read and write counts separately. Reporting those
+/// separately produced a message where both halves looked satisfiable: a
+/// 2-read, 1-write register file against a shape with 2 readable and 2
+/// writable ports reads as though it fits, when in fact it wants three.
+fn port_shortfall(shape: &BramShape, reads: usize, writes: usize) -> String {
+    let usable = shape
+        .port_map
+        .iter()
+        .filter(|p| !p.signals.is_empty())
+        .count();
+    format!(
+        "`{}` has {usable} port(s) and each serves either a read or a write, but the memory \
+         needs {} ({reads} read, {writes} write)",
+        shape.name,
+        reads + writes
+    )
 }
 
 /// Gives every read and every write port of a memory a physical port of
@@ -2974,27 +3082,41 @@ mod tests {
         assert!(text.contains("is left as a memory"), "{text}");
     }
 
-    #[test]
-    fn a_memory_with_too_many_ports_falls_back() {
-        let (mut design, top, sources) = memory_design(8, 512);
-        // A second read port: more than one SB_RAM40_4K can serve.
+    /// Adds a second read port to the memory of [`memory_design`].
+    fn add_second_read(design: &mut Design, top: ModuleId, clocked: bool) {
         let module = design.module_mut(top);
         let mem = module.memories.ids().next().unwrap();
         let span = module.span;
         let addr = module.nets.find(|n| n.name.as_str() == "raddr").unwrap();
+        let clk = module.nets.find(|n| n.name.as_str() == "clk").unwrap();
         let out = add_net(module, "rdata2", Type::bits(8), span);
         let addr_e = net_expr(module, addr, span);
+        let mut inputs = vec![(Name::new("addr"), addr_e)];
+        if clocked {
+            let clk_e = net_expr(module, clk, span);
+            let one = const_expr(module, Const::ones(1), span);
+            inputs.push((Name::new("clk"), clk_e));
+            inputs.push((Name::new("en"), one));
+        }
         add_cell(
             module,
             "rd2",
-            CellKind::MemRdPort {
-                mem,
-                clocked: false,
-            },
-            vec![(Name::new("addr"), addr_e)],
+            CellKind::MemRdPort { mem, clocked },
+            inputs,
             vec![(Name::new("data"), out)],
             span,
         );
+    }
+
+    #[test]
+    fn a_second_read_port_duplicates_the_block_ram() {
+        // One `SB_RAM40_4K` has one read port and one write port, and
+        // this memory wants two reads and a write. The answer a real
+        // flow gives a register file is duplication: two blocks holding
+        // the same contents, each serving one reader, both written
+        // together from the one writer.
+        let (mut design, top, _sources) = memory_design(8, 512);
+        add_second_read(&mut design, top, true);
         let mut diags = Diagnostics::new();
         let report = map(
             &mut design,
@@ -3004,9 +3126,84 @@ mod tests {
             &MapOptions::default(),
             &mut diags,
         );
+        assert!(report.bram_fallbacks.is_empty(), "{report:?}");
+        let item = &report.block_rams[0];
+        assert_eq!(item.copies, 2);
+        assert_eq!(item.blocks(), 2);
+        assert_eq!(cells_named(&design, top, "SB_RAM40_4K"), 2);
+        assert!(report.to_text().contains("2 copies, one per read port"));
+        assert!(
+            report
+                .notes
+                .iter()
+                .any(|n| n.contains("held in 2 copies written together")),
+            "{:?}",
+            report.notes
+        );
+        // Both copies see the same write, and each answers one reader.
+        let module = design.module(top);
+        for name in ["rdata", "rdata2"] {
+            let net = module.nets.find(|n| n.name.as_str() == name).unwrap();
+            assert!(
+                module.assigns.iter().any(|a| a.target == Lvalue::Net(net)),
+                "`{name}` is not driven"
+            );
+        }
+        assert!(!validate(&design).has_errors());
+    }
+
+    #[test]
+    fn a_memory_with_too_many_ports_falls_back() {
+        // Two readers and two writers: duplication cannot help, since
+        // the copies would have to be kept in step between them.
+        let (mut design, top, sources) = memory_design(8, 512);
+        add_second_read(&mut design, top, true);
+        let module = design.module_mut(top);
+        let mem = module.memories.ids().next().unwrap();
+        let span = module.span;
+        let addr = module.nets.find(|n| n.name.as_str() == "waddr").unwrap();
+        let data = module.nets.find(|n| n.name.as_str() == "wdata").unwrap();
+        let clk = module.nets.find(|n| n.name.as_str() == "clk").unwrap();
+        let (addr_e, data_e, clk_e) = (
+            net_expr(module, addr, span),
+            net_expr(module, data, span),
+            net_expr(module, clk, span),
+        );
+        let one = const_expr(module, Const::ones(1), span);
+        add_cell(
+            module,
+            "wr2",
+            CellKind::MemWrPort { mem, clocked: true },
+            vec![
+                (Name::new("addr"), addr_e),
+                (Name::new("data"), data_e),
+                (Name::new("en"), one),
+                (Name::new("clk"), clk_e),
+            ],
+            vec![],
+            span,
+        );
+        // The logic fallback is switched off here: what this test is
+        // about is the reason, and four thousand flip-flops take a
+        // while to build.
+        let options = MapOptions {
+            max_logic_bits: 0,
+            insert_io_buffers: false,
+            insert_clock_buffers: false,
+            ..MapOptions::default()
+        };
+        let mut diags = Diagnostics::new();
+        let report = map(
+            &mut design,
+            top,
+            target("ice40-hx1k-tq144").unwrap(),
+            &Constraints::new(),
+            &options,
+            &mut diags,
+        );
         assert!(report.block_rams.is_empty());
         // The reason names the constraint that applies: a port serves one
-        // access, so two reads and a write want three of them.
+        // access, so two reads and two writes want four of them.
         assert!(
             report.bram_fallbacks[0]
                 .reason
@@ -3017,12 +3214,44 @@ mod tests {
         assert!(
             report.bram_fallbacks[0]
                 .reason
-                .contains("needs 3 (2 read, 1 write)"),
+                .contains("needs 4 (2 read, 2 write)"),
             "{:?}",
             report.bram_fallbacks
         );
         let text = diags.render(&sources);
         assert!(text.contains("does not fit a block RAM"), "{text}");
+    }
+
+    #[test]
+    fn an_asynchronous_read_port_never_becomes_a_block_ram() {
+        // A block RAM reads on a clock edge. A memory read
+        // combinationally is a different circuit, so it goes to logic
+        // however well it would otherwise fit.
+        let (mut design, top, _sources) = memory_design(8, 512);
+        add_second_read(&mut design, top, false);
+        let options = MapOptions {
+            max_logic_bits: 0,
+            insert_io_buffers: false,
+            insert_clock_buffers: false,
+            ..MapOptions::default()
+        };
+        let mut diags = Diagnostics::new();
+        let report = map(
+            &mut design,
+            top,
+            target("ice40-hx1k-tq144").unwrap(),
+            &Constraints::new(),
+            &options,
+            &mut diags,
+        );
+        assert!(report.block_rams.is_empty());
+        assert!(
+            report.bram_fallbacks[0]
+                .reason
+                .contains("asynchronous read port"),
+            "{:?}",
+            report.bram_fallbacks
+        );
     }
 
     /// A design with `q = a * b` and, optionally, an accumulator.

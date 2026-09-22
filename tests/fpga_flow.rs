@@ -45,7 +45,7 @@ use reticle::ir::validate::validate;
 use reticle::source::SourceMap;
 
 /// The cases, each with the built-in device it targets.
-const CASES: [(&str, &str); 8] = [
+const CASES: [(&str, &str); 9] = [
     ("blinky_ice40", "ice40-hx1k-tq144"),
     ("ram_ice40", "ice40-hx1k-tq144"),
     ("logicram_ice40", "ice40-hx1k-tq144"),
@@ -53,6 +53,7 @@ const CASES: [(&str, &str); 8] = [
     ("blinky_ecp5", "ecp5-45f-CABGA381"),
     ("ram_ecp5", "ecp5-45f-CABGA381"),
     ("logicram_ecp5", "ecp5-45f-CABGA381"),
+    ("regfile_ecp5", "ecp5-45f-CABGA381"),
     ("clkbuf_ecp5", "ecp5-45f-CABGA381"),
 ];
 
@@ -259,7 +260,7 @@ fn exports_are_acceptable_netlists() {
 /// the block RAM, the clock buffer, the LUTs and the flip-flops.
 #[test]
 fn every_layer_of_the_flow_is_exercised() {
-    let expected: [(&str, &[&str]); 8] = [
+    let expected: [(&str, &[&str]); 9] = [
         (
             "blinky_ice40",
             &["SB_LUT4", "SB_CARRY", "SB_IO", "SB_GB", "SB_DFFSR"],
@@ -273,6 +274,8 @@ fn every_layer_of_the_flow_is_exercised() {
         ("ram_ecp5", &["DP16KD", "TRELLIS_IO"]),
         // The same memory on a family that has one.
         ("logicram_ecp5", &["TRELLIS_DPR16X4", "TRELLIS_IO"]),
+        // Two read ports and one write port: the contents duplicated.
+        ("regfile_ecp5", &["DP16KD", "TRELLIS_IO"]),
         ("clkbuf_ecp5", &["DCCA", "TRELLIS_FF", "TRELLIS_IO"]),
     ];
     for (name, device_name) in CASES {

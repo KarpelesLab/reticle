@@ -1,0 +1,24 @@
+top regfile
+
+module regfile
+  net %clk u1 wire
+  net %we u1 wire
+  net %wa u5 wire
+  net %wd u32 wire
+  net %ra1 u5 wire
+  net %ra2 u5 wire
+  net %rd1 u32 wire
+  net %rd2 u32 wire
+  port clk in %clk
+  port we in %we
+  port wa in %wa
+  port wd in %wd
+  port ra1 in %ra1
+  port ra2 in %ra2
+  port rd1 out %rd1
+  port rd2 out %rd2
+  memory @regs 32 x u32
+  cell wr memwr @regs clocked (addr=%wa, data=%wd, en=%we, clk=%clk) -> ()
+  cell rd1 memrd @regs clocked (addr=%ra1, clk=%clk, en=1'd1) -> (data=%rd1)
+  cell rd2 memrd @regs clocked (addr=%ra2, clk=%clk, en=1'd1) -> (data=%rd2)
+end

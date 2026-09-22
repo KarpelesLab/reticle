@@ -1,0 +1,393 @@
+top regfile
+
+module regfile
+  net %clk u1 wire
+  net %we u1 wire
+  net %wa u5 wire
+  net %wd u32 wire
+  net %ra1 u5 wire
+  net %ra2 u5 wire
+  net %rd1 u32 wire
+  net %rd2 u32 wire
+  net %regs$c0$rd0_w0_d0 u18 wire
+  net %regs$c0$rd0_w1_d0 u18 wire
+  net %regs$c1$rd0_w0_d0 u18 wire
+  net %regs$c1$rd0_w1_d0 u18 wire
+  net %clk$pad u1 wire
+  net %clk$in0 u1 wire
+  net %we$pad u1 wire
+  net %we$in0 u1 wire
+  net %wa$pad u5 wire
+  net %wa$in0 u1 wire
+  net %wa$in1 u1 wire
+  net %wa$in2 u1 wire
+  net %wa$in3 u1 wire
+  net %wa$in4 u1 wire
+  net %wd$pad u32 wire
+  net %wd$in0 u1 wire
+  net %wd$in1 u1 wire
+  net %wd$in2 u1 wire
+  net %wd$in3 u1 wire
+  net %wd$in4 u1 wire
+  net %wd$in5 u1 wire
+  net %wd$in6 u1 wire
+  net %wd$in7 u1 wire
+  net %wd$in8 u1 wire
+  net %wd$in9 u1 wire
+  net %wd$in10 u1 wire
+  net %wd$in11 u1 wire
+  net %wd$in12 u1 wire
+  net %wd$in13 u1 wire
+  net %wd$in14 u1 wire
+  net %wd$in15 u1 wire
+  net %wd$in16 u1 wire
+  net %wd$in17 u1 wire
+  net %wd$in18 u1 wire
+  net %wd$in19 u1 wire
+  net %wd$in20 u1 wire
+  net %wd$in21 u1 wire
+  net %wd$in22 u1 wire
+  net %wd$in23 u1 wire
+  net %wd$in24 u1 wire
+  net %wd$in25 u1 wire
+  net %wd$in26 u1 wire
+  net %wd$in27 u1 wire
+  net %wd$in28 u1 wire
+  net %wd$in29 u1 wire
+  net %wd$in30 u1 wire
+  net %wd$in31 u1 wire
+  net %ra1$pad u5 wire
+  net %ra1$in0 u1 wire
+  net %ra1$in1 u1 wire
+  net %ra1$in2 u1 wire
+  net %ra1$in3 u1 wire
+  net %ra1$in4 u1 wire
+  net %ra2$pad u5 wire
+  net %ra2$in0 u1 wire
+  net %ra2$in1 u1 wire
+  net %ra2$in2 u1 wire
+  net %ra2$in3 u1 wire
+  net %ra2$in4 u1 wire
+  net %rd1$pad u32 wire
+  net %rd1$pin0 u1 wire
+  net %rd1$pin1 u1 wire
+  net %rd1$pin2 u1 wire
+  net %rd1$pin3 u1 wire
+  net %rd1$pin4 u1 wire
+  net %rd1$pin5 u1 wire
+  net %rd1$pin6 u1 wire
+  net %rd1$pin7 u1 wire
+  net %rd1$pin8 u1 wire
+  net %rd1$pin9 u1 wire
+  net %rd1$pin10 u1 wire
+  net %rd1$pin11 u1 wire
+  net %rd1$pin12 u1 wire
+  net %rd1$pin13 u1 wire
+  net %rd1$pin14 u1 wire
+  net %rd1$pin15 u1 wire
+  net %rd1$pin16 u1 wire
+  net %rd1$pin17 u1 wire
+  net %rd1$pin18 u1 wire
+  net %rd1$pin19 u1 wire
+  net %rd1$pin20 u1 wire
+  net %rd1$pin21 u1 wire
+  net %rd1$pin22 u1 wire
+  net %rd1$pin23 u1 wire
+  net %rd1$pin24 u1 wire
+  net %rd1$pin25 u1 wire
+  net %rd1$pin26 u1 wire
+  net %rd1$pin27 u1 wire
+  net %rd1$pin28 u1 wire
+  net %rd1$pin29 u1 wire
+  net %rd1$pin30 u1 wire
+  net %rd1$pin31 u1 wire
+  net %rd2$pad u32 wire
+  net %rd2$pin0 u1 wire
+  net %rd2$pin1 u1 wire
+  net %rd2$pin2 u1 wire
+  net %rd2$pin3 u1 wire
+  net %rd2$pin4 u1 wire
+  net %rd2$pin5 u1 wire
+  net %rd2$pin6 u1 wire
+  net %rd2$pin7 u1 wire
+  net %rd2$pin8 u1 wire
+  net %rd2$pin9 u1 wire
+  net %rd2$pin10 u1 wire
+  net %rd2$pin11 u1 wire
+  net %rd2$pin12 u1 wire
+  net %rd2$pin13 u1 wire
+  net %rd2$pin14 u1 wire
+  net %rd2$pin15 u1 wire
+  net %rd2$pin16 u1 wire
+  net %rd2$pin17 u1 wire
+  net %rd2$pin18 u1 wire
+  net %rd2$pin19 u1 wire
+  net %rd2$pin20 u1 wire
+  net %rd2$pin21 u1 wire
+  net %rd2$pin22 u1 wire
+  net %rd2$pin23 u1 wire
+  net %rd2$pin24 u1 wire
+  net %rd2$pin25 u1 wire
+  net %rd2$pin26 u1 wire
+  net %rd2$pin27 u1 wire
+  net %rd2$pin28 u1 wire
+  net %rd2$pin29 u1 wire
+  net %rd2$pin30 u1 wire
+  net %rd2$pin31 u1 wire
+  port clk in %clk$pad
+  port we in %we$pad
+  port wa in %wa$pad
+  port wd in %wd$pad
+  port ra1 in %ra1$pad
+  port ra2 in %ra2$pad
+  port rd1 out %rd1$pad
+  port rd2 out %rd2$pad
+  assign %clk = %clk$in0
+  assign %we = %we$in0
+  assign %wa = {%wa$in4, %wa$in3, %wa$in2, %wa$in1, %wa$in0}
+  assign %wd = {%wd$in31, %wd$in30, %wd$in29, %wd$in28, %wd$in27, %wd$in26, %wd$in25, %wd$in24, %wd$in23, %wd$in22, %wd$in21, %wd$in20, %wd$in19, %wd$in18, %wd$in17, %wd$in16, %wd$in15, %wd$in14, %wd$in13, %wd$in12, %wd$in11, %wd$in10, %wd$in9, %wd$in8, %wd$in7, %wd$in6, %wd$in5, %wd$in4, %wd$in3, %wd$in2, %wd$in1, %wd$in0}
+  assign %ra1 = {%ra1$in4, %ra1$in3, %ra1$in2, %ra1$in1, %ra1$in0}
+  assign %ra2 = {%ra2$in4, %ra2$in3, %ra2$in2, %ra2$in1, %ra2$in0}
+  assign %rd1 = {%regs$c0$rd0_w1_d0[13:13], %regs$c0$rd0_w1_d0[12:12], %regs$c0$rd0_w1_d0[11:11], %regs$c0$rd0_w1_d0[10:10], %regs$c0$rd0_w1_d0[9:9], %regs$c0$rd0_w1_d0[8:8], %regs$c0$rd0_w1_d0[7:7], %regs$c0$rd0_w1_d0[6:6], %regs$c0$rd0_w1_d0[5:5], %regs$c0$rd0_w1_d0[4:4], %regs$c0$rd0_w1_d0[3:3], %regs$c0$rd0_w1_d0[2:2], %regs$c0$rd0_w1_d0[1:1], %regs$c0$rd0_w1_d0[0:0], %regs$c0$rd0_w0_d0[17:17], %regs$c0$rd0_w0_d0[16:16], %regs$c0$rd0_w0_d0[15:15], %regs$c0$rd0_w0_d0[14:14], %regs$c0$rd0_w0_d0[13:13], %regs$c0$rd0_w0_d0[12:12], %regs$c0$rd0_w0_d0[11:11], %regs$c0$rd0_w0_d0[10:10], %regs$c0$rd0_w0_d0[9:9], %regs$c0$rd0_w0_d0[8:8], %regs$c0$rd0_w0_d0[7:7], %regs$c0$rd0_w0_d0[6:6], %regs$c0$rd0_w0_d0[5:5], %regs$c0$rd0_w0_d0[4:4], %regs$c0$rd0_w0_d0[3:3], %regs$c0$rd0_w0_d0[2:2], %regs$c0$rd0_w0_d0[1:1], %regs$c0$rd0_w0_d0[0:0]}
+  assign %rd2 = {%regs$c1$rd0_w1_d0[13:13], %regs$c1$rd0_w1_d0[12:12], %regs$c1$rd0_w1_d0[11:11], %regs$c1$rd0_w1_d0[10:10], %regs$c1$rd0_w1_d0[9:9], %regs$c1$rd0_w1_d0[8:8], %regs$c1$rd0_w1_d0[7:7], %regs$c1$rd0_w1_d0[6:6], %regs$c1$rd0_w1_d0[5:5], %regs$c1$rd0_w1_d0[4:4], %regs$c1$rd0_w1_d0[3:3], %regs$c1$rd0_w1_d0[2:2], %regs$c1$rd0_w1_d0[1:1], %regs$c1$rd0_w1_d0[0:0], %regs$c1$rd0_w0_d0[17:17], %regs$c1$rd0_w0_d0[16:16], %regs$c1$rd0_w0_d0[15:15], %regs$c1$rd0_w0_d0[14:14], %regs$c1$rd0_w0_d0[13:13], %regs$c1$rd0_w0_d0[12:12], %regs$c1$rd0_w0_d0[11:11], %regs$c1$rd0_w0_d0[10:10], %regs$c1$rd0_w0_d0[9:9], %regs$c1$rd0_w0_d0[8:8], %regs$c1$rd0_w0_d0[7:7], %regs$c1$rd0_w0_d0[6:6], %regs$c1$rd0_w0_d0[5:5], %regs$c1$rd0_w0_d0[4:4], %regs$c1$rd0_w0_d0[3:3], %regs$c1$rd0_w0_d0[2:2], %regs$c1$rd0_w0_d0[1:1], %regs$c1$rd0_w0_d0[0:0]}
+  assign %rd1$pad = {%rd1$pin31, %rd1$pin30, %rd1$pin29, %rd1$pin28, %rd1$pin27, %rd1$pin26, %rd1$pin25, %rd1$pin24, %rd1$pin23, %rd1$pin22, %rd1$pin21, %rd1$pin20, %rd1$pin19, %rd1$pin18, %rd1$pin17, %rd1$pin16, %rd1$pin15, %rd1$pin14, %rd1$pin13, %rd1$pin12, %rd1$pin11, %rd1$pin10, %rd1$pin9, %rd1$pin8, %rd1$pin7, %rd1$pin6, %rd1$pin5, %rd1$pin4, %rd1$pin3, %rd1$pin2, %rd1$pin1, %rd1$pin0}
+  assign %rd2$pad = {%rd2$pin31, %rd2$pin30, %rd2$pin29, %rd2$pin28, %rd2$pin27, %rd2$pin26, %rd2$pin25, %rd2$pin24, %rd2$pin23, %rd2$pin22, %rd2$pin21, %rd2$pin20, %rd2$pin19, %rd2$pin18, %rd2$pin17, %rd2$pin16, %rd2$pin15, %rd2$pin14, %rd2$pin13, %rd2$pin12, %rd2$pin11, %rd2$pin10, %rd2$pin9, %rd2$pin8, %rd2$pin7, %rd2$pin6, %rd2$pin5, %rd2$pin4, %rd2$pin3, %rd2$pin2, %rd2$pin1, %rd2$pin0}
+  attr memory = "regs"
+  cell regs$c0$ram_w0_d0 blackbox DP16KD #(DATA_WIDTH_A=18, DATA_WIDTH_B=18) (ADA=resize(%ra1, u14), CLKA=%clk, CEA=1'd1, ADB=resize(%wa, u14), CLKB=%clk, CEB=%we, WEB=%we, DIB=%wd[17:0]) -> (DOA=%regs$c0$rd0_w0_d0)
+  attr memory = "regs"
+  cell regs$c0$ram_w1_d0 blackbox DP16KD #(DATA_WIDTH_A=18, DATA_WIDTH_B=18) (ADA=resize(%ra1, u14), CLKA=%clk, CEA=1'd1, ADB=resize(%wa, u14), CLKB=%clk, CEB=%we, WEB=%we, DIB=resize(%wd[31:18], u18)) -> (DOA=%regs$c0$rd0_w1_d0)
+  attr memory = "regs"
+  cell regs$c1$ram_w0_d0 blackbox DP16KD #(DATA_WIDTH_A=18, DATA_WIDTH_B=18) (ADA=resize(%ra2, u14), CLKA=%clk, CEA=1'd1, ADB=resize(%wa, u14), CLKB=%clk, CEB=%we, WEB=%we, DIB=%wd[17:0]) -> (DOA=%regs$c1$rd0_w0_d0)
+  attr memory = "regs"
+  cell regs$c1$ram_w1_d0 blackbox DP16KD #(DATA_WIDTH_A=18, DATA_WIDTH_B=18) (ADA=resize(%ra2, u14), CLKA=%clk, CEA=1'd1, ADB=resize(%wa, u14), CLKB=%clk, CEB=%we, WEB=%we, DIB=resize(%wd[31:18], u18)) -> (DOA=%regs$c1$rd0_w1_d0)
+  attr port = "clk"
+  attr pin = "G2"
+  attr io_standard = "LVCMOS33"
+  cell clk$io0 blackbox TRELLIS_IO #(DIR="INPUT") (B=%clk$pad) -> (O=%clk$in0)
+  attr port = "we"
+  attr pin = "B2"
+  attr io_standard = "LVCMOS33"
+  cell we$io0 blackbox TRELLIS_IO #(DIR="INPUT") (B=%we$pad) -> (O=%we$in0)
+  attr port = "wa"
+  cell wa$io0 blackbox TRELLIS_IO #(DIR="INPUT") (B=%wa$pad[0:0]) -> (O=%wa$in0)
+  attr port = "wa"
+  cell wa$io1 blackbox TRELLIS_IO #(DIR="INPUT") (B=%wa$pad[1:1]) -> (O=%wa$in1)
+  attr port = "wa"
+  cell wa$io2 blackbox TRELLIS_IO #(DIR="INPUT") (B=%wa$pad[2:2]) -> (O=%wa$in2)
+  attr port = "wa"
+  cell wa$io3 blackbox TRELLIS_IO #(DIR="INPUT") (B=%wa$pad[3:3]) -> (O=%wa$in3)
+  attr port = "wa"
+  cell wa$io4 blackbox TRELLIS_IO #(DIR="INPUT") (B=%wa$pad[4:4]) -> (O=%wa$in4)
+  attr port = "wd"
+  cell wd$io0 blackbox TRELLIS_IO #(DIR="INPUT") (B=%wd$pad[0:0]) -> (O=%wd$in0)
+  attr port = "wd"
+  cell wd$io1 blackbox TRELLIS_IO #(DIR="INPUT") (B=%wd$pad[1:1]) -> (O=%wd$in1)
+  attr port = "wd"
+  cell wd$io2 blackbox TRELLIS_IO #(DIR="INPUT") (B=%wd$pad[2:2]) -> (O=%wd$in2)
+  attr port = "wd"
+  cell wd$io3 blackbox TRELLIS_IO #(DIR="INPUT") (B=%wd$pad[3:3]) -> (O=%wd$in3)
+  attr port = "wd"
+  cell wd$io4 blackbox TRELLIS_IO #(DIR="INPUT") (B=%wd$pad[4:4]) -> (O=%wd$in4)
+  attr port = "wd"
+  cell wd$io5 blackbox TRELLIS_IO #(DIR="INPUT") (B=%wd$pad[5:5]) -> (O=%wd$in5)
+  attr port = "wd"
+  cell wd$io6 blackbox TRELLIS_IO #(DIR="INPUT") (B=%wd$pad[6:6]) -> (O=%wd$in6)
+  attr port = "wd"
+  cell wd$io7 blackbox TRELLIS_IO #(DIR="INPUT") (B=%wd$pad[7:7]) -> (O=%wd$in7)
+  attr port = "wd"
+  cell wd$io8 blackbox TRELLIS_IO #(DIR="INPUT") (B=%wd$pad[8:8]) -> (O=%wd$in8)
+  attr port = "wd"
+  cell wd$io9 blackbox TRELLIS_IO #(DIR="INPUT") (B=%wd$pad[9:9]) -> (O=%wd$in9)
+  attr port = "wd"
+  cell wd$io10 blackbox TRELLIS_IO #(DIR="INPUT") (B=%wd$pad[10:10]) -> (O=%wd$in10)
+  attr port = "wd"
+  cell wd$io11 blackbox TRELLIS_IO #(DIR="INPUT") (B=%wd$pad[11:11]) -> (O=%wd$in11)
+  attr port = "wd"
+  cell wd$io12 blackbox TRELLIS_IO #(DIR="INPUT") (B=%wd$pad[12:12]) -> (O=%wd$in12)
+  attr port = "wd"
+  cell wd$io13 blackbox TRELLIS_IO #(DIR="INPUT") (B=%wd$pad[13:13]) -> (O=%wd$in13)
+  attr port = "wd"
+  cell wd$io14 blackbox TRELLIS_IO #(DIR="INPUT") (B=%wd$pad[14:14]) -> (O=%wd$in14)
+  attr port = "wd"
+  cell wd$io15 blackbox TRELLIS_IO #(DIR="INPUT") (B=%wd$pad[15:15]) -> (O=%wd$in15)
+  attr port = "wd"
+  cell wd$io16 blackbox TRELLIS_IO #(DIR="INPUT") (B=%wd$pad[16:16]) -> (O=%wd$in16)
+  attr port = "wd"
+  cell wd$io17 blackbox TRELLIS_IO #(DIR="INPUT") (B=%wd$pad[17:17]) -> (O=%wd$in17)
+  attr port = "wd"
+  cell wd$io18 blackbox TRELLIS_IO #(DIR="INPUT") (B=%wd$pad[18:18]) -> (O=%wd$in18)
+  attr port = "wd"
+  cell wd$io19 blackbox TRELLIS_IO #(DIR="INPUT") (B=%wd$pad[19:19]) -> (O=%wd$in19)
+  attr port = "wd"
+  cell wd$io20 blackbox TRELLIS_IO #(DIR="INPUT") (B=%wd$pad[20:20]) -> (O=%wd$in20)
+  attr port = "wd"
+  cell wd$io21 blackbox TRELLIS_IO #(DIR="INPUT") (B=%wd$pad[21:21]) -> (O=%wd$in21)
+  attr port = "wd"
+  cell wd$io22 blackbox TRELLIS_IO #(DIR="INPUT") (B=%wd$pad[22:22]) -> (O=%wd$in22)
+  attr port = "wd"
+  cell wd$io23 blackbox TRELLIS_IO #(DIR="INPUT") (B=%wd$pad[23:23]) -> (O=%wd$in23)
+  attr port = "wd"
+  cell wd$io24 blackbox TRELLIS_IO #(DIR="INPUT") (B=%wd$pad[24:24]) -> (O=%wd$in24)
+  attr port = "wd"
+  cell wd$io25 blackbox TRELLIS_IO #(DIR="INPUT") (B=%wd$pad[25:25]) -> (O=%wd$in25)
+  attr port = "wd"
+  cell wd$io26 blackbox TRELLIS_IO #(DIR="INPUT") (B=%wd$pad[26:26]) -> (O=%wd$in26)
+  attr port = "wd"
+  cell wd$io27 blackbox TRELLIS_IO #(DIR="INPUT") (B=%wd$pad[27:27]) -> (O=%wd$in27)
+  attr port = "wd"
+  cell wd$io28 blackbox TRELLIS_IO #(DIR="INPUT") (B=%wd$pad[28:28]) -> (O=%wd$in28)
+  attr port = "wd"
+  cell wd$io29 blackbox TRELLIS_IO #(DIR="INPUT") (B=%wd$pad[29:29]) -> (O=%wd$in29)
+  attr port = "wd"
+  cell wd$io30 blackbox TRELLIS_IO #(DIR="INPUT") (B=%wd$pad[30:30]) -> (O=%wd$in30)
+  attr port = "wd"
+  cell wd$io31 blackbox TRELLIS_IO #(DIR="INPUT") (B=%wd$pad[31:31]) -> (O=%wd$in31)
+  attr port = "ra1"
+  cell ra1$io0 blackbox TRELLIS_IO #(DIR="INPUT") (B=%ra1$pad[0:0]) -> (O=%ra1$in0)
+  attr port = "ra1"
+  cell ra1$io1 blackbox TRELLIS_IO #(DIR="INPUT") (B=%ra1$pad[1:1]) -> (O=%ra1$in1)
+  attr port = "ra1"
+  cell ra1$io2 blackbox TRELLIS_IO #(DIR="INPUT") (B=%ra1$pad[2:2]) -> (O=%ra1$in2)
+  attr port = "ra1"
+  cell ra1$io3 blackbox TRELLIS_IO #(DIR="INPUT") (B=%ra1$pad[3:3]) -> (O=%ra1$in3)
+  attr port = "ra1"
+  cell ra1$io4 blackbox TRELLIS_IO #(DIR="INPUT") (B=%ra1$pad[4:4]) -> (O=%ra1$in4)
+  attr port = "ra2"
+  cell ra2$io0 blackbox TRELLIS_IO #(DIR="INPUT") (B=%ra2$pad[0:0]) -> (O=%ra2$in0)
+  attr port = "ra2"
+  cell ra2$io1 blackbox TRELLIS_IO #(DIR="INPUT") (B=%ra2$pad[1:1]) -> (O=%ra2$in1)
+  attr port = "ra2"
+  cell ra2$io2 blackbox TRELLIS_IO #(DIR="INPUT") (B=%ra2$pad[2:2]) -> (O=%ra2$in2)
+  attr port = "ra2"
+  cell ra2$io3 blackbox TRELLIS_IO #(DIR="INPUT") (B=%ra2$pad[3:3]) -> (O=%ra2$in3)
+  attr port = "ra2"
+  cell ra2$io4 blackbox TRELLIS_IO #(DIR="INPUT") (B=%ra2$pad[4:4]) -> (O=%ra2$in4)
+  attr port = "rd1"
+  cell rd1$io0 blackbox TRELLIS_IO #(DIR="OUTPUT") (I=%rd1[0:0]) -> (B=%rd1$pin0)
+  attr port = "rd1"
+  cell rd1$io1 blackbox TRELLIS_IO #(DIR="OUTPUT") (I=%rd1[1:1]) -> (B=%rd1$pin1)
+  attr port = "rd1"
+  cell rd1$io2 blackbox TRELLIS_IO #(DIR="OUTPUT") (I=%rd1[2:2]) -> (B=%rd1$pin2)
+  attr port = "rd1"
+  cell rd1$io3 blackbox TRELLIS_IO #(DIR="OUTPUT") (I=%rd1[3:3]) -> (B=%rd1$pin3)
+  attr port = "rd1"
+  cell rd1$io4 blackbox TRELLIS_IO #(DIR="OUTPUT") (I=%rd1[4:4]) -> (B=%rd1$pin4)
+  attr port = "rd1"
+  cell rd1$io5 blackbox TRELLIS_IO #(DIR="OUTPUT") (I=%rd1[5:5]) -> (B=%rd1$pin5)
+  attr port = "rd1"
+  cell rd1$io6 blackbox TRELLIS_IO #(DIR="OUTPUT") (I=%rd1[6:6]) -> (B=%rd1$pin6)
+  attr port = "rd1"
+  cell rd1$io7 blackbox TRELLIS_IO #(DIR="OUTPUT") (I=%rd1[7:7]) -> (B=%rd1$pin7)
+  attr port = "rd1"
+  cell rd1$io8 blackbox TRELLIS_IO #(DIR="OUTPUT") (I=%rd1[8:8]) -> (B=%rd1$pin8)
+  attr port = "rd1"
+  cell rd1$io9 blackbox TRELLIS_IO #(DIR="OUTPUT") (I=%rd1[9:9]) -> (B=%rd1$pin9)
+  attr port = "rd1"
+  cell rd1$io10 blackbox TRELLIS_IO #(DIR="OUTPUT") (I=%rd1[10:10]) -> (B=%rd1$pin10)
+  attr port = "rd1"
+  cell rd1$io11 blackbox TRELLIS_IO #(DIR="OUTPUT") (I=%rd1[11:11]) -> (B=%rd1$pin11)
+  attr port = "rd1"
+  cell rd1$io12 blackbox TRELLIS_IO #(DIR="OUTPUT") (I=%rd1[12:12]) -> (B=%rd1$pin12)
+  attr port = "rd1"
+  cell rd1$io13 blackbox TRELLIS_IO #(DIR="OUTPUT") (I=%rd1[13:13]) -> (B=%rd1$pin13)
+  attr port = "rd1"
+  cell rd1$io14 blackbox TRELLIS_IO #(DIR="OUTPUT") (I=%rd1[14:14]) -> (B=%rd1$pin14)
+  attr port = "rd1"
+  cell rd1$io15 blackbox TRELLIS_IO #(DIR="OUTPUT") (I=%rd1[15:15]) -> (B=%rd1$pin15)
+  attr port = "rd1"
+  cell rd1$io16 blackbox TRELLIS_IO #(DIR="OUTPUT") (I=%rd1[16:16]) -> (B=%rd1$pin16)
+  attr port = "rd1"
+  cell rd1$io17 blackbox TRELLIS_IO #(DIR="OUTPUT") (I=%rd1[17:17]) -> (B=%rd1$pin17)
+  attr port = "rd1"
+  cell rd1$io18 blackbox TRELLIS_IO #(DIR="OUTPUT") (I=%rd1[18:18]) -> (B=%rd1$pin18)
+  attr port = "rd1"
+  cell rd1$io19 blackbox TRELLIS_IO #(DIR="OUTPUT") (I=%rd1[19:19]) -> (B=%rd1$pin19)
+  attr port = "rd1"
+  cell rd1$io20 blackbox TRELLIS_IO #(DIR="OUTPUT") (I=%rd1[20:20]) -> (B=%rd1$pin20)
+  attr port = "rd1"
+  cell rd1$io21 blackbox TRELLIS_IO #(DIR="OUTPUT") (I=%rd1[21:21]) -> (B=%rd1$pin21)
+  attr port = "rd1"
+  cell rd1$io22 blackbox TRELLIS_IO #(DIR="OUTPUT") (I=%rd1[22:22]) -> (B=%rd1$pin22)
+  attr port = "rd1"
+  cell rd1$io23 blackbox TRELLIS_IO #(DIR="OUTPUT") (I=%rd1[23:23]) -> (B=%rd1$pin23)
+  attr port = "rd1"
+  cell rd1$io24 blackbox TRELLIS_IO #(DIR="OUTPUT") (I=%rd1[24:24]) -> (B=%rd1$pin24)
+  attr port = "rd1"
+  cell rd1$io25 blackbox TRELLIS_IO #(DIR="OUTPUT") (I=%rd1[25:25]) -> (B=%rd1$pin25)
+  attr port = "rd1"
+  cell rd1$io26 blackbox TRELLIS_IO #(DIR="OUTPUT") (I=%rd1[26:26]) -> (B=%rd1$pin26)
+  attr port = "rd1"
+  cell rd1$io27 blackbox TRELLIS_IO #(DIR="OUTPUT") (I=%rd1[27:27]) -> (B=%rd1$pin27)
+  attr port = "rd1"
+  cell rd1$io28 blackbox TRELLIS_IO #(DIR="OUTPUT") (I=%rd1[28:28]) -> (B=%rd1$pin28)
+  attr port = "rd1"
+  cell rd1$io29 blackbox TRELLIS_IO #(DIR="OUTPUT") (I=%rd1[29:29]) -> (B=%rd1$pin29)
+  attr port = "rd1"
+  cell rd1$io30 blackbox TRELLIS_IO #(DIR="OUTPUT") (I=%rd1[30:30]) -> (B=%rd1$pin30)
+  attr port = "rd1"
+  cell rd1$io31 blackbox TRELLIS_IO #(DIR="OUTPUT") (I=%rd1[31:31]) -> (B=%rd1$pin31)
+  attr port = "rd2"
+  cell rd2$io0 blackbox TRELLIS_IO #(DIR="OUTPUT") (I=%rd2[0:0]) -> (B=%rd2$pin0)
+  attr port = "rd2"
+  cell rd2$io1 blackbox TRELLIS_IO #(DIR="OUTPUT") (I=%rd2[1:1]) -> (B=%rd2$pin1)
+  attr port = "rd2"
+  cell rd2$io2 blackbox TRELLIS_IO #(DIR="OUTPUT") (I=%rd2[2:2]) -> (B=%rd2$pin2)
+  attr port = "rd2"
+  cell rd2$io3 blackbox TRELLIS_IO #(DIR="OUTPUT") (I=%rd2[3:3]) -> (B=%rd2$pin3)
+  attr port = "rd2"
+  cell rd2$io4 blackbox TRELLIS_IO #(DIR="OUTPUT") (I=%rd2[4:4]) -> (B=%rd2$pin4)
+  attr port = "rd2"
+  cell rd2$io5 blackbox TRELLIS_IO #(DIR="OUTPUT") (I=%rd2[5:5]) -> (B=%rd2$pin5)
+  attr port = "rd2"
+  cell rd2$io6 blackbox TRELLIS_IO #(DIR="OUTPUT") (I=%rd2[6:6]) -> (B=%rd2$pin6)
+  attr port = "rd2"
+  cell rd2$io7 blackbox TRELLIS_IO #(DIR="OUTPUT") (I=%rd2[7:7]) -> (B=%rd2$pin7)
+  attr port = "rd2"
+  cell rd2$io8 blackbox TRELLIS_IO #(DIR="OUTPUT") (I=%rd2[8:8]) -> (B=%rd2$pin8)
+  attr port = "rd2"
+  cell rd2$io9 blackbox TRELLIS_IO #(DIR="OUTPUT") (I=%rd2[9:9]) -> (B=%rd2$pin9)
+  attr port = "rd2"
+  cell rd2$io10 blackbox TRELLIS_IO #(DIR="OUTPUT") (I=%rd2[10:10]) -> (B=%rd2$pin10)
+  attr port = "rd2"
+  cell rd2$io11 blackbox TRELLIS_IO #(DIR="OUTPUT") (I=%rd2[11:11]) -> (B=%rd2$pin11)
+  attr port = "rd2"
+  cell rd2$io12 blackbox TRELLIS_IO #(DIR="OUTPUT") (I=%rd2[12:12]) -> (B=%rd2$pin12)
+  attr port = "rd2"
+  cell rd2$io13 blackbox TRELLIS_IO #(DIR="OUTPUT") (I=%rd2[13:13]) -> (B=%rd2$pin13)
+  attr port = "rd2"
+  cell rd2$io14 blackbox TRELLIS_IO #(DIR="OUTPUT") (I=%rd2[14:14]) -> (B=%rd2$pin14)
+  attr port = "rd2"
+  cell rd2$io15 blackbox TRELLIS_IO #(DIR="OUTPUT") (I=%rd2[15:15]) -> (B=%rd2$pin15)
+  attr port = "rd2"
+  cell rd2$io16 blackbox TRELLIS_IO #(DIR="OUTPUT") (I=%rd2[16:16]) -> (B=%rd2$pin16)
+  attr port = "rd2"
+  cell rd2$io17 blackbox TRELLIS_IO #(DIR="OUTPUT") (I=%rd2[17:17]) -> (B=%rd2$pin17)
+  attr port = "rd2"
+  cell rd2$io18 blackbox TRELLIS_IO #(DIR="OUTPUT") (I=%rd2[18:18]) -> (B=%rd2$pin18)
+  attr port = "rd2"
+  cell rd2$io19 blackbox TRELLIS_IO #(DIR="OUTPUT") (I=%rd2[19:19]) -> (B=%rd2$pin19)
+  attr port = "rd2"
+  cell rd2$io20 blackbox TRELLIS_IO #(DIR="OUTPUT") (I=%rd2[20:20]) -> (B=%rd2$pin20)
+  attr port = "rd2"
+  cell rd2$io21 blackbox TRELLIS_IO #(DIR="OUTPUT") (I=%rd2[21:21]) -> (B=%rd2$pin21)
+  attr port = "rd2"
+  cell rd2$io22 blackbox TRELLIS_IO #(DIR="OUTPUT") (I=%rd2[22:22]) -> (B=%rd2$pin22)
+  attr port = "rd2"
+  cell rd2$io23 blackbox TRELLIS_IO #(DIR="OUTPUT") (I=%rd2[23:23]) -> (B=%rd2$pin23)
+  attr port = "rd2"
+  cell rd2$io24 blackbox TRELLIS_IO #(DIR="OUTPUT") (I=%rd2[24:24]) -> (B=%rd2$pin24)
+  attr port = "rd2"
+  cell rd2$io25 blackbox TRELLIS_IO #(DIR="OUTPUT") (I=%rd2[25:25]) -> (B=%rd2$pin25)
+  attr port = "rd2"
+  cell rd2$io26 blackbox TRELLIS_IO #(DIR="OUTPUT") (I=%rd2[26:26]) -> (B=%rd2$pin26)
+  attr port = "rd2"
+  cell rd2$io27 blackbox TRELLIS_IO #(DIR="OUTPUT") (I=%rd2[27:27]) -> (B=%rd2$pin27)
+  attr port = "rd2"
+  cell rd2$io28 blackbox TRELLIS_IO #(DIR="OUTPUT") (I=%rd2[28:28]) -> (B=%rd2$pin28)
+  attr port = "rd2"
+  cell rd2$io29 blackbox TRELLIS_IO #(DIR="OUTPUT") (I=%rd2[29:29]) -> (B=%rd2$pin29)
+  attr port = "rd2"
+  cell rd2$io30 blackbox TRELLIS_IO #(DIR="OUTPUT") (I=%rd2[30:30]) -> (B=%rd2$pin30)
+  attr port = "rd2"
+  cell rd2$io31 blackbox TRELLIS_IO #(DIR="OUTPUT") (I=%rd2[31:31]) -> (B=%rd2$pin31)
+end

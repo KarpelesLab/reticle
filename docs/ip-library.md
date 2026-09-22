@@ -320,8 +320,8 @@ exactly what this table is for.
 | `rv32i` | `rv32i` | REGFILE_BRAM=0 | ECP5 45F | 1 x DCCA, 2486 x LUT4, 32 x TRELLIS_DPR16X4, 358 x TRELLIS_FF, 208 x TRELLIS_IO | 34 |
 | `rv32i` | `rv32i` | REGFILE_BRAM=1 | LUT4 | 16 x dff, 2445 x lut, 1 x memory 32x32, 2 x memrd, 1 x memwr | 34 |
 | `rv32i` | `rv32i` | REGFILE_BRAM=1 | LUT6 | 16 x dff, 2075 x lut, 1 x memory 32x32, 2 x memrd, 1 x memwr | 28 |
-| `rv32i` | `rv32i` | REGFILE_BRAM=1 | iCE40 HX1K | 220 x SB_CARRY, 1090 x SB_DFFE, 292 x SB_DFFER, 66 x SB_DFFR, 1 x SB_GB, 208 x SB_IO, 5143 x SB_LUT4 | 34 |
-| `rv32i` | `rv32i` | REGFILE_BRAM=1 | ECP5 45F | 1 x DCCA, 2509 x LUT4, 32 x TRELLIS_DPR16X4, 424 x TRELLIS_FF, 208 x TRELLIS_IO | 34 |
+| `rv32i` | `rv32i` | REGFILE_BRAM=1 | iCE40 HX1K | 220 x SB_CARRY, 2 x SB_DFFE, 292 x SB_DFFER, 66 x SB_DFFR, 1 x SB_GB, 208 x SB_IO, 2355 x SB_LUT4, 4 x SB_RAM40_4K | 34 |
+| `rv32i` | `rv32i` | REGFILE_BRAM=1 | ECP5 45F | 1 x DCCA, 4 x DP16KD, 2445 x LUT4, 360 x TRELLIS_FF, 208 x TRELLIS_IO | 34 |
 | `eth_mac_rmii` | `eth_mac_rmii` | IFG_CYCLES=48 | LUT4 | 26 x dff, 305 x lut | 4 |
 | `eth_mac_rmii` | `eth_mac_rmii` | IFG_CYCLES=48 | LUT6 | 26 x dff, 283 x lut | 4 |
 | `eth_mac_rmii` | `eth_mac_rmii` | IFG_CYCLES=48 | iCE40 HX1K | 10 x SB_CARRY, 127 x SB_DFFER, 64 x SB_DFFES, 3 x SB_DFFR, 1 x SB_GB, 34 x SB_IO, 301 x SB_LUT4 | 4 |
@@ -336,9 +336,8 @@ exactly what this table is for.
 
 All four were gaps in Reticle itself rather than in the blocks, and each
 is pinned down by a test. Two were found by the original eleven blocks
-and two by writing the three larger ones. **Three have since been
-fixed**, and their tests now hold the fix rather than the gap; the
-fourth is half fixed, and its paragraph says which half.
+and two by writing the three larger ones. **All four have since been
+fixed**, and their tests now hold the fix rather than the gap.
 
 **iCE40 flip-flops refused an active-low reset. Fixed.** Every block
 resets on `negedge rst_n`, which is the convention the rest of this
@@ -417,7 +416,7 @@ one per local and per argument.
 eighteen-line reproduction and now checks the warning is absent.
 
 **A register file with two read ports was declined with a reason that
-read like an acceptance. The reason is fixed; the mapping gap remains.**
+read like an acceptance. Fixed, twice over.**
 `rv32i` keeps x1..x31 in one array with two read ports and one write
 port. On the ECP5 the block RAM mapper turned it down with
 
@@ -436,13 +435,31 @@ acted on. It now names the constraint that applies:
 but the memory needs 3 (2 read, 1 write)
 ```
 
-What remains is the mapping a real flow would apply here: duplication,
-two block RAMs holding the same contents, each with one read port and one
-write port, both written together. That is not done, so the register file
-takes the logic fallback instead — thirty-two `TRELLIS_DPR16X4` on the
-ECP5, a thousand flip-flops on the iCE40, both visible in the table.
-`a_two_read_port_register_file_is_declined_for_a_stated_reason` holds the
-wording and that remaining gap.
+The mapping a real flow applies here is **duplication**: one copy of the
+contents per read port, each block with one read and one write port of
+its own, all written together from the one writer. That is what the
+mapper does now, whenever the memory has exactly one write port and more
+read ports than a block can serve — two writers would need the copies
+kept in step between them, which the blocks cannot do, and that case is
+still declined with the sentence above. `BramMapping::copies` reports the
+factor.
+
+With `REGFILE_BRAM = 1` the two reads are clocked, which is the shape a
+block RAM has, and the register file maps onto **four `DP16KD`**: two
+copies, two blocks wide each, since thirty-two bits do not fit one
+block's eighteen. With `REGFILE_BRAM = 0` the same array is read
+combinationally and no block RAM does that — the core's own header says
+that variant wants distributed RAM or flip-flops — so it takes the logic
+fallback instead, thirty-two `TRELLIS_DPR16X4` on the ECP5 and a thousand
+flip-flops on the iCE40. Both are in the table.
+
+That asynchronous check is new too, and it matters beyond the register
+file: before it, *any* memory over the threshold with a combinational
+read was given a block whose clock pin nothing drove.
+`a_two_read_port_register_file_is_duplicated_across_block_rams` and
+`an_asynchronous_register_file_takes_the_logic_fallback` hold the two
+halves, and `regfile_ecp5` in `testdata/fpga/` takes the same shape
+through the whole flow.
 
 ## What is not here yet
 
