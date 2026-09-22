@@ -134,6 +134,134 @@ fn copy_dir(from: &Path, to: &Path) {
 }
 
 #[test]
+fn search_finds_packages_in_an_index() {
+    let (code, stdout, stderr) = run(&["search", "--index", "testdata/ip/registry/index", "fifo"]);
+    assert_eq!(code, 0, "{stderr}");
+    assert!(stdout.contains("fifo_sync"), "{stdout}");
+}
+
+#[test]
+fn add_writes_a_dependency_into_the_manifest() {
+    let dir = scratch("add_dep");
+    copy_dir(Path::new("testdata/ip"), &dir);
+    let manifest = dir.join("projects/mixed/reticle.proj");
+    let index = dir.join("registry/index");
+
+    // --dry-run prints the result and leaves the file alone.
+    let before = std::fs::read_to_string(&manifest).unwrap();
+    let (code, stdout, stderr) = run(&[
+        "add",
+        "--dry-run",
+        "--index",
+        index.to_str().unwrap(),
+        "--project",
+        manifest.to_str().unwrap(),
+        "uart_lite",
+        "^1.2.0",
+    ]);
+    assert_eq!(code, 0, "{stderr}");
+    assert!(stdout.contains("depends uart_lite ^1.2.0"), "{stdout}");
+    assert_eq!(std::fs::read_to_string(&manifest).unwrap(), before);
+
+    // Without it the manifest is rewritten, keeping its comments.
+    let (code, _, stderr) = run(&[
+        "add",
+        "--index",
+        index.to_str().unwrap(),
+        "--project",
+        manifest.to_str().unwrap(),
+        "uart_lite",
+    ]);
+    assert_eq!(code, 0, "{stderr}");
+    let after = std::fs::read_to_string(&manifest).unwrap();
+    assert!(after.contains("depends uart_lite"), "{after}");
+    assert!(
+        after.contains("# A project whose top is Verilog"),
+        "comments lost"
+    );
+}
+
+#[test]
+fn asic_maps_onto_a_liberty_library() {
+    let (code, stdout, stderr) = run(&[
+        "asic",
+        "--liberty",
+        "testdata/asic/reticle_sc.lib",
+        "testdata/verilog/parse/counter.v",
+    ]);
+    assert_eq!(code, 0, "{stderr}");
+    assert!(stdout.contains("mapped onto"), "{stdout}");
+    assert!(stdout.contains("DFF"), "{stdout}");
+}
+
+/// A library of only an inverter and a two-input NAND is functionally
+/// complete. It used to panic the mapper, which had no way to invert a
+/// gate's output and so could not build a plain AND.
+#[test]
+fn asic_maps_onto_a_minimal_library_without_panicking() {
+    let (code, stdout, stderr) = run(&[
+        "asic",
+        "--liberty",
+        "testdata/asic/cells.lib",
+        "testdata/verilog/parse/counter.v",
+    ]);
+    assert_eq!(code, 0, "{stderr}");
+    assert!(!stderr.contains("panicked"), "{stderr}");
+    assert!(stdout.contains("nand2"), "{stdout}");
+}
+
+#[test]
+fn sim_runs_an_interactive_script() {
+    let mut child = std::process::Command::new(env!("CARGO_BIN_EXE_reticle"))
+        .args(["sim", "--interactive", "testdata/sim/counter.rtl"])
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .expect("spawn reticle");
+    {
+        use std::io::Write;
+        let stdin = child.stdin.as_mut().unwrap();
+        stdin.write_all(b"run 20000\nprint q\nquit\n").unwrap();
+    }
+    let out = child.wait_with_output().unwrap();
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(out.status.success(), "{stdout}");
+    assert!(stdout.contains("ran to time 20000"), "{stdout}");
+    assert!(stdout.contains("counter_tb.q"), "{stdout}");
+    // No prompt is printed when standard input is not a terminal, so a
+    // scripted transcript stays clean.
+    assert!(!stdout.contains("reticle>"), "{stdout}");
+}
+
+#[test]
+fn lsp_answers_the_initialize_handshake() {
+    let body = r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"capabilities":{}}}"#;
+    let message = format!("Content-Length: {}\r\n\r\n{body}", body.len());
+    let mut child = std::process::Command::new(env!("CARGO_BIN_EXE_reticle"))
+        .arg("lsp")
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .spawn()
+        .expect("spawn reticle");
+    {
+        use std::io::Write;
+        child
+            .stdin
+            .as_mut()
+            .unwrap()
+            .write_all(message.as_bytes())
+            .unwrap();
+    }
+    // Closing standard input ends the session, so the server exits.
+    drop(child.stdin.take());
+    let out = child.wait_with_output().unwrap();
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(stdout.starts_with("Content-Length:"), "{stdout}");
+    assert!(stdout.contains("\"capabilities\""), "{stdout}");
+}
+
+#[test]
 fn check_accepts_every_frontend() {
     let (code, _, stderr) = run(&[
         "check",

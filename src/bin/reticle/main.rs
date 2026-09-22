@@ -32,14 +32,18 @@ Usage: reticle <command> [options] [files...]
 
 Commands:
   build    Resolve a project's IP dependencies and elaborate it
+  search   Search an IP registry index
+  add      Add an IP dependency to a project from a registry index
   check    Parse and check source files
   fmt      Format Verilog and VHDL source
   synth    Synthesise a design to a technology-independent netlist
   fpga     Synthesise and map for an FPGA, and export the place-and-route inputs
+  asic     Map onto a Liberty standard-cell library and export for OpenROAD
   emit     Write a design out in another format
   sim      Simulate a design and print its output
   verify   Prove or refute a design's assertions
   timing   Report static timing and clock domain crossings
+  lsp      Run the language server over standard input and output
   cache    Build incrementally against a cache of elaborated modules
   viewer   Write the design out as browsable HTML: schematics and reference
   help     Show this message, or `reticle help <command>`
@@ -106,6 +110,44 @@ Options:
   --list          List the entries and exit
   --clear         Remove every entry and exit
   --quiet         Suppress the summary line
+";
+
+const SEARCH_USAGE: &str = "\
+Usage: reticle search --index <path> <query>
+
+Searches an IP registry index by package name and description. The index
+is either one file or a directory tree of files, as a crates.io-style
+index is laid out.
+
+Options:
+  --index <path>  The index file or directory
+";
+
+const ADD_USAGE: &str = "\
+Usage: reticle add --index <path> <package> [requirement]
+
+Adds a dependency on <package> to the project manifest, choosing the
+newest release the requirement allows (default: any). The manifest is
+rewritten in place with its comments and layout kept.
+
+Options:
+  --index <path>    The index file or directory
+  --project <file>  The project manifest (default reticle.proj)
+  --dry-run         Print the rewritten manifest instead of saving it
+";
+
+const ASIC_USAGE: &str = "\
+Usage: reticle asic --liberty <file.lib> [options] <design>...
+
+Synthesises, maps onto the standard cells of a Liberty library, and
+reports area and the critical path.
+
+Options:
+  --liberty <file>  The Liberty library to map onto; required
+  --top <module>    Treat this module as the top
+  --output <file>   Write the mapped netlist as .rtl
+  --verilog <file>  Write the mapped netlist as structural Verilog
+  --quiet           Suppress the summary line
 ";
 
 const CHECK_USAGE: &str = "\
@@ -180,6 +222,9 @@ Options:
                    --assert-file
   --assert-file <f>  Read one assertion per non-empty, non-# line
   --coverage <file>  Write a coverage report here (.info writes LCOV)
+  --interactive    Read commands from standard input instead of running
+                   to the end: run, step, break, force, print, watch, ...
+                   (type `help` at the prompt)
   --quiet          Suppress the summary line
 ";
 
@@ -226,6 +271,14 @@ Options:
   --quiet            Suppress the summary line
 ";
 
+const LSP_USAGE: &str = "\
+Usage: reticle lsp
+
+Runs the Verilog and VHDL language server, speaking the Language Server
+Protocol over standard input and output. An editor starts it; it is not
+meant to be typed at. It takes no options.
+";
+
 const VERIFY_USAGE: &str = "\
 Usage: reticle verify [options] <design.rtl>
 
@@ -257,6 +310,9 @@ fn main() -> ExitCode {
             ExitCode::SUCCESS
         }
         "build" => run(build, rest, BUILD_USAGE),
+        "search" => run(search, rest, SEARCH_USAGE),
+        "add" => run(add, rest, ADD_USAGE),
+        "asic" => run(asic, rest, ASIC_USAGE),
         "check" => run(check, rest, CHECK_USAGE),
         "fmt" => run(fmt, rest, FMT_USAGE),
         "synth" => run(synth, rest, SYNTH_USAGE),
@@ -265,6 +321,7 @@ fn main() -> ExitCode {
         "sim" => run(sim, rest, SIM_USAGE),
         "verify" => run(verify, rest, VERIFY_USAGE),
         "timing" => run(timing, rest, TIMING_USAGE),
+        "lsp" => run(lsp, rest, LSP_USAGE),
         "cache" => run(cache_cmd, rest, CACHE_USAGE),
         "viewer" => run(viewer, rest, VIEWER_USAGE),
         other => {
@@ -279,6 +336,9 @@ fn main() -> ExitCode {
 fn help_text(command: Option<&str>) -> &'static str {
     match command {
         Some("build") => BUILD_USAGE,
+        Some("search") => SEARCH_USAGE,
+        Some("add") => ADD_USAGE,
+        Some("asic") => ASIC_USAGE,
         Some("check") => CHECK_USAGE,
         Some("fmt") => FMT_USAGE,
         Some("synth") => SYNTH_USAGE,
@@ -287,6 +347,7 @@ fn help_text(command: Option<&str>) -> &'static str {
         Some("sim") => SIM_USAGE,
         Some("verify") => VERIFY_USAGE,
         Some("timing") => TIMING_USAGE,
+        Some("lsp") => LSP_USAGE,
         Some("cache") => CACHE_USAGE,
         Some("viewer") => VIEWER_USAGE,
         _ => USAGE,
@@ -335,7 +396,22 @@ fn run(command: fn(&Args) -> Result<Outcome, ArgError>, argv: &[String], usage: 
 fn spec_for(usage: &str) -> Spec {
     // Kept as one match rather than parsed out of the text: a static table
     // is checked by the compiler, a parsed one is not.
-    if std::ptr::eq(usage, BUILD_USAGE) {
+    if std::ptr::eq(usage, SEARCH_USAGE) {
+        Spec {
+            options: &["index"],
+            flags: &[],
+        }
+    } else if std::ptr::eq(usage, ADD_USAGE) {
+        Spec {
+            options: &["index", "project"],
+            flags: &["dry-run"],
+        }
+    } else if std::ptr::eq(usage, ASIC_USAGE) {
+        Spec {
+            options: &["liberty", "top", "output", "verilog"],
+            flags: &["quiet"],
+        }
+    } else if std::ptr::eq(usage, BUILD_USAGE) {
         Spec {
             options: &["output", "lock"],
             flags: &["no-lock", "synth", "report", "quiet"],
@@ -367,6 +443,11 @@ fn spec_for(usage: &str) -> Spec {
             options: &["device", "constraints", "top", "output-dir", "netlist"],
             flags: &["list-devices", "report", "quiet"],
         }
+    } else if std::ptr::eq(usage, LSP_USAGE) {
+        Spec {
+            options: &[],
+            flags: &[],
+        }
     } else if std::ptr::eq(usage, TIMING_USAGE) {
         Spec {
             options: &["constraints", "period", "top", "paths", "device"],
@@ -394,7 +475,7 @@ fn spec_for(usage: &str) -> Spec {
                 "assert-file",
                 "coverage",
             ],
-            flags: &["quiet"],
+            flags: &["quiet", "interactive"],
         }
     } else {
         Spec {
@@ -711,6 +792,251 @@ fn cache_cmd(args: &Args) -> Result<Outcome, ArgError> {
         );
     }
     Ok(if failed { Outcome::Failed } else { Outcome::Ok })
+}
+
+/// Reads a registry index from one file or a directory tree of files.
+fn load_index(
+    path: &str,
+    map: &mut SourceMap,
+    diags: &mut Diagnostics,
+) -> Option<reticle::ip::registry::Index> {
+    use reticle::ip::registry::Index;
+
+    // A directory is walked in sorted order, so the same tree always
+    // yields the same index regardless of how the filesystem lists it.
+    fn files_under(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
+        let Ok(entries) = std::fs::read_dir(dir) else {
+            return;
+        };
+        let mut entries: Vec<_> = entries.filter_map(Result::ok).map(|e| e.path()).collect();
+        entries.sort();
+        for entry in entries {
+            if entry.is_dir() {
+                files_under(&entry, out);
+            } else {
+                out.push(entry);
+            }
+        }
+    }
+
+    let root = std::path::Path::new(path);
+    let mut files = Vec::new();
+    if root.is_dir() {
+        files_under(root, &mut files);
+    } else {
+        files.push(root.to_path_buf());
+    }
+    if files.is_empty() {
+        diags.push(Diagnostic::error(format!("`{path}` holds no index files")));
+        return None;
+    }
+
+    let mut index = Index::new();
+    for file in files {
+        let name = file.to_string_lossy().into_owned();
+        let Some(id) = load(map, &name, diags) else {
+            continue;
+        };
+        let text = map.file(id).text().to_string();
+        for entry in Index::parse(&text, id, diags).entries() {
+            index.insert(entry.clone());
+        }
+    }
+    Some(index)
+}
+
+/// `reticle search`: find packages in a registry index.
+fn search(args: &Args) -> Result<Outcome, ArgError> {
+    let Some(index_path) = args.option("index") else {
+        return Ok(Outcome::Usage("no index given; pass --index".into()));
+    };
+    let query = match args.positionals() {
+        [one] => one.clone(),
+        [] => return Ok(Outcome::Usage("no search query given".into())),
+        many => many.join(" "),
+    };
+    let mut map = SourceMap::new();
+    let mut diags = Diagnostics::new();
+    let Some(index) = load_index(index_path, &mut map, &mut diags) else {
+        report(&mut diags, &map);
+        return Ok(Outcome::Failed);
+    };
+    if report(&mut diags, &map) {
+        return Ok(Outcome::Failed);
+    }
+    let matches = index.search(&query);
+    if matches.is_empty() {
+        eprintln!("note: nothing in the index matches `{query}`");
+        return Ok(Outcome::Ok);
+    }
+    for m in matches {
+        let yanked = if m.yanked { "  (yanked)" } else { "" };
+        match &m.description {
+            Some(text) => println!("{} {}  {text}{yanked}", m.name, m.version),
+            None => println!("{} {}{yanked}", m.name, m.version),
+        }
+    }
+    Ok(Outcome::Ok)
+}
+
+/// `reticle add`: add a dependency to a project from a registry index.
+fn add(args: &Args) -> Result<Outcome, ArgError> {
+    use reticle::ip::manifest::VersionReq;
+    use reticle::ip::registry::{ProjectFile, add as add_dependency};
+
+    let Some(index_path) = args.option("index") else {
+        return Ok(Outcome::Usage("no index given; pass --index".into()));
+    };
+    let (name, req_text) = match args.positionals() {
+        [name] => (name.clone(), "*".to_string()),
+        [name, req] => (name.clone(), req.clone()),
+        [] => return Ok(Outcome::Usage("no package named".into())),
+        _ => {
+            return Ok(Outcome::Usage(
+                "expected a package and at most one requirement".into(),
+            ));
+        }
+    };
+    let Some(req) = VersionReq::parse(&req_text) else {
+        return Ok(Outcome::Usage(format!(
+            "`{req_text}` is not a version requirement; use 1.2.3, ^1.2.3, >=1.2.3 or *"
+        )));
+    };
+
+    let manifest = args.option("project").unwrap_or("reticle.proj").to_string();
+    let text = match std::fs::read_to_string(&manifest) {
+        Ok(text) => text,
+        Err(err) => {
+            eprintln!("error: cannot read `{manifest}`: {err}");
+            return Ok(Outcome::Failed);
+        }
+    };
+
+    let mut map = SourceMap::new();
+    let mut diags = Diagnostics::new();
+    let Some(project) = reticle::ip::load_project(&mut map, manifest.clone(), &text, &mut diags)
+    else {
+        report(&mut diags, &map);
+        return Ok(Outcome::Failed);
+    };
+    let Some(index) = load_index(index_path, &mut map, &mut diags) else {
+        report(&mut diags, &map);
+        return Ok(Outcome::Failed);
+    };
+    if report(&mut diags, &map) {
+        return Ok(Outcome::Failed);
+    }
+
+    let file = ProjectFile {
+        project: &project,
+        text: &text,
+    };
+    let added = match add_dependency(&file, &name, &req, &index) {
+        Ok(added) => added,
+        Err(err) => {
+            let mut one = Diagnostics::new();
+            one.push(err.diagnostic());
+            report(&mut one, &map);
+            return Ok(Outcome::Failed);
+        }
+    };
+
+    if args.flag("dry-run") {
+        print!("{}", added.text);
+        return Ok(Outcome::Ok);
+    }
+    if let Err(err) = std::fs::write(&manifest, &added.text) {
+        eprintln!("error: cannot write `{manifest}`: {err}");
+        return Ok(Outcome::Failed);
+    }
+    eprintln!("note: added {name} {} to {manifest}", added.version);
+    Ok(Outcome::Ok)
+}
+
+/// `reticle asic`: map onto a Liberty library and report area and timing.
+fn asic(args: &Args) -> Result<Outcome, ArgError> {
+    use reticle::asic::liberty::Library;
+    use reticle::asic::{AsicOptions, synthesize_asic};
+
+    let Some(lib_path) = args.option("liberty") else {
+        return Ok(Outcome::Usage("no library given; pass --liberty".into()));
+    };
+    let (mut design, mut map) = match load_design(args)? {
+        Ok(pair) => pair,
+        Err(outcome) => return Ok(outcome),
+    };
+
+    let mut diags = Diagnostics::new();
+    let Some(id) = load(&mut map, lib_path, &mut diags) else {
+        report(&mut diags, &map);
+        return Ok(Outcome::Failed);
+    };
+    let text = map.file(id).text().to_string();
+    let Some(library) = Library::parse(&text, id, &mut diags) else {
+        report(&mut diags, &map);
+        return Ok(Outcome::Failed);
+    };
+    if report(&mut diags, &map) {
+        return Ok(Outcome::Failed);
+    }
+
+    let top = match args.option("top") {
+        Some(name) => match design.module_by_name(name) {
+            Some(id) => id,
+            None => return Ok(Outcome::Usage(format!("no module named `{name}`"))),
+        },
+        None => match design.top {
+            Some(id) => id,
+            None => {
+                return Ok(Outcome::Usage(
+                    "the design names no top module; pass --top".into(),
+                ));
+            }
+        },
+    };
+
+    let mut diags = Diagnostics::new();
+    let result = synthesize_asic(
+        &mut design,
+        top,
+        &library,
+        &AsicOptions::default(),
+        &mut diags,
+    );
+    let failed = report(&mut diags, &map);
+    let report_ = match result {
+        Ok(report_) => report_,
+        Err(err) => {
+            eprintln!("error: {err}");
+            return Ok(Outcome::Failed);
+        }
+    };
+    print!("{}", report_.to_text());
+    if failed {
+        return Ok(Outcome::Failed);
+    }
+
+    if let Some(path) = args.option("output")
+        && let Err(message) = write_out(Some(path), &design.to_text())
+    {
+        eprintln!("error: {message}");
+        return Ok(Outcome::Failed);
+    }
+    if let Some(path) = args.option("verilog") {
+        match reticle::ir::emit::emit(&design, reticle::ir::emit::Format::Verilog) {
+            Ok(text) => {
+                if let Err(message) = write_out(Some(path), &text) {
+                    eprintln!("error: {message}");
+                    return Ok(Outcome::Failed);
+                }
+            }
+            Err(err) => {
+                eprintln!("error: {err}");
+                return Ok(Outcome::Failed);
+            }
+        }
+    }
+    Ok(Outcome::Ok)
 }
 
 /// `reticle build`: resolve a project's IP and elaborate it.
@@ -1357,6 +1683,10 @@ fn sim(args: &Args) -> Result<Outcome, ArgError> {
         }
     }
 
+    if args.flag("interactive") {
+        return Ok(interactive(sim));
+    }
+
     let dump = args.option("vcd");
     if dump.is_some() {
         sim.enable_vcd();
@@ -1568,6 +1898,74 @@ fn timing(args: &Args) -> Result<Outcome, ArgError> {
     } else {
         Outcome::Ok
     })
+}
+
+/// `reticle lsp`: the language server over standard input and output.
+fn lsp(args: &Args) -> Result<Outcome, ArgError> {
+    if !args.positionals().is_empty() {
+        return Ok(Outcome::Usage(
+            "`lsp` takes no files; the editor opens them".into(),
+        ));
+    }
+    let stdin = std::io::stdin();
+    let mut input = stdin.lock();
+    let stdout = std::io::stdout();
+    let mut output = stdout.lock();
+    match reticle::lsp::stdio::serve(&mut input, &mut output) {
+        Ok(()) => Ok(Outcome::Ok),
+        Err(err) => {
+            eprintln!("error: the language server stopped: {err}");
+            Ok(Outcome::Failed)
+        }
+    }
+}
+
+/// Drives an interactive session from standard input.
+///
+/// Each line is one command. A prompt is written only when standard input
+/// is a terminal, so the same command works from a script or a pipe
+/// without prompts interleaved into the transcript.
+fn interactive(sim: reticle::sim::Simulator<'_>) -> Outcome {
+    use std::io::{BufRead, IsTerminal, Write};
+
+    let mut session = reticle::sim::interactive::Session::new(sim);
+    let prompt = std::io::stdin().is_terminal();
+    let stdin = std::io::stdin();
+    let mut failed = false;
+    loop {
+        if prompt {
+            print!("reticle> ");
+            let _ = std::io::stdout().flush();
+        }
+        let mut line = String::new();
+        match stdin.lock().read_line(&mut line) {
+            Ok(0) => break,
+            Ok(_) => {}
+            Err(err) => {
+                eprintln!("error: cannot read a command: {err}");
+                return Outcome::Failed;
+            }
+        }
+        match session.execute(&line) {
+            Ok(response) => {
+                let text = response.text();
+                let text = text.trim_end_matches('\n');
+                if !text.is_empty() {
+                    println!("{text}");
+                }
+                if response.quit {
+                    break;
+                }
+            }
+            Err(err) => {
+                // A mistyped command is not fatal at a prompt, but a script
+                // that contained one should not report success.
+                eprintln!("error: {err}");
+                failed = true;
+            }
+        }
+    }
+    if failed { Outcome::Failed } else { Outcome::Ok }
 }
 
 /// `reticle verify`: bounded model checking, then induction.

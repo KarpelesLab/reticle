@@ -55,17 +55,22 @@ netlist, a simulation or a proof.
 
 ```sh
 reticle build   --synth reticle.proj
+reticle search  --index registry/ fifo
+reticle add     --index registry/ uart_lite ^1.2.0
 reticle check   counter.v counter.vhd design.rtl
 reticle fmt     --write counter.v
 reticle synth   --report --lut 4 --output netlist.rtl counter.vhd
 reticle emit    --format verilog netlist.rtl
 reticle sim     --vcd waves.vcd --coverage cov.info testbench.v counter.v
+reticle sim     --interactive testbench.v counter.v
 reticle verify  --depth 20 --trace cex.vcd design.rtl
 reticle fpga    --device ice40-hx1k-tq144 --constraints pins.rcf blinky.v
+reticle asic    --liberty cells.lib --verilog netlist.v counter.v
 reticle timing  --constraints clocks.rcf design.v
 reticle timing  --cdc design.v
 reticle cache   --top top --output design.rtl leaf.v mid.v top.v
 reticle viewer  --synth --output-dir docs/design counter.v
+reticle lsp     # started by an editor, speaks the Language Server Protocol
 ```
 
 `reticle fpga` runs the whole target flow and writes the netlist and
