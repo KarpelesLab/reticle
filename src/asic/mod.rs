@@ -1,8 +1,20 @@
-//! ASIC file formats: Liberty, LEF and DEF.
+//! ASIC targets: the Liberty, LEF and DEF formats, standard-cell
+//! mapping and the hand-off to a place-and-route tool.
 //!
-//! This module holds the readers and writers for the three text formats an
-//! ASIC flow exchanges with a standard-cell library and a place-and-route
-//! tool:
+//! This is the ASIC half of phase 6 of `ROADMAP.md`. [`synthesize_asic`]
+//! is the whole flow in one call — generic synthesis, flip-flop
+//! legalisation, standard-cell mapping against a Liberty library,
+//! flip-flop mapping and drive strengths — and it reports the area and
+//! the critical path together. [`export_openroad`] then returns the
+//! netlist, the constraints, an OpenROAD script and a DEF, which
+//! [`check_physical`] verifies against the library before the tool sees
+//! them. Reticle ships no process data: the Liberty and the LEF are the
+//! PDK's, and `docs/asic.md` says exactly which files to point at.
+//!
+//! # The formats
+//!
+//! The readers and writers for the three text formats an ASIC flow
+//! exchanges with a standard-cell library and a place-and-route tool:
 //!
 //! - [`liberty`]: the Synopsys Liberty (`.lib`) format that describes a
 //!   cell library's functions, pins, timing and power tables. Reticle reads
@@ -22,14 +34,42 @@
 //! rejected, and deterministic output from the writers so the files can be
 //! snapshot-tested.
 //!
-//! The types here are plain data. Nothing depends on the synthesis passes;
-//! the mapper in `synth` is a consumer of [`liberty::Library`], not the other
-//! way round.
+//! The format types are plain data and depend on nothing else; the
+//! mapper in `synth` is a consumer of [`liberty::Library`], not the
+//! other way round.
+//!
+//! # The flow
+//!
+//! - [`library`]: [`StdCells`] is the translation from a
+//!   [`liberty::Library`] to what the mapper wants — single-output
+//!   combinational cells as truth tables with an area and a delay per
+//!   pin — plus the flip-flop matcher, which picks a sequential cell for
+//!   an inferred `dff` on edge, reset and enable, inserting an inverter
+//!   where the library lacks a polarity. Cells it cannot use are
+//!   reported, never silently dropped.
+//! - [`flow`]: [`synthesize_asic`] and the passes it runs, plus
+//!   [`logic_model`], which turns a mapped netlist back into generic IR
+//!   cells so it can be simulated and proved equivalent to the design it
+//!   came from.
+//! - [`sdc`]: [`AsicConstraints`] and the SDC writer.
+//! - [`openroad`]: [`export_openroad`] and [`check_physical`].
+//!
+//! Everything here still returns values: no file is written and no tool
+//! is run.
 
 pub mod def;
+pub mod flow;
 pub mod lef;
 mod lefdef;
 pub mod liberty;
+pub mod library;
+pub mod openroad;
+pub mod sdc;
+
+pub use flow::{AsicError, AsicOptions, AsicReport, AsicTiming, logic_model, synthesize_asic};
+pub use library::{FlopCell, FlopMatch, FlopPlan, FlopRequest, LibraryOptions, StdCells};
+pub use openroad::{Floorplan, OpenRoadInputs, OpenRoadOptions, check_physical, export_openroad};
+pub use sdc::{AsicConstraints, Clock, PortDelay};
 
 use std::fmt;
 

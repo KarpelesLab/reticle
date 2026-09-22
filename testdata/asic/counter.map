@@ -1,0 +1,20 @@
+module `counter` mapped onto `reticle_demo_sc_tt_025C_1v80`
+library: 19 cells offered to the mapper, 6 skipped
+  1 x 6 inputs, beyond the truth-table width limit
+  1 x a tri-state output
+  1 x marked `dont_use`
+  1 x more than one output pin
+  2 x no output pin (a physical-only cell)
+logic: 11 cells, depth 3
+sequential: 4 flip-flop cells
+  0 enable(s) and 1 reset(s) moved into the data path, 0 inverter(s) inserted
+netlist: 15 cells
+  4 x AND2_X1
+  2 x AOI21_X1
+  4 x DFFE_X1
+  2 x NOR2_X1
+  3 x NOR3_X1
+area: 176.4192
+timing (liberty(reticle_demo_sc_tt_025C_1v80) delays):
+  worst setup slack 1.524, worst hold slack 0.334, 0 violation(s)
+  worst path: u_reg$ff0/CLK -> u_reg$ff0/D (setup check), 2.373 of delay

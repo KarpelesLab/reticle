@@ -1,0 +1,61 @@
+top counter
+
+module counter
+  net %clk u1 wire
+  net %rst u1 wire
+  net %en u1 wire
+  net %q u4 wire
+  net %carry u1 wire
+  net %u_reg$rst u4 wire
+  net %$g0 u1 wire
+  net %$g1 u1 wire
+  net %$g2 u1 wire
+  net %$g3 u1 wire
+  net %$g4 u1 wire
+  net %$g5 u1 wire
+  net %$g6 u1 wire
+  net %$g7 u1 wire
+  net %$g8 u1 wire
+  net %$g9 u1 wire
+  net %u_reg$q0 u1 wire
+  net %u_reg$q1 u1 wire
+  net %u_reg$q2 u1 wire
+  net %u_reg$q3 u1 wire
+  port clk in %clk
+  port rst in %rst
+  port en in %en
+  port q out %q
+  port carry out %carry
+  assign %u_reg$rst = {%$g3, %$g6, %$g8, %$g9}
+  assign %q = {%u_reg$q3, %u_reg$q2, %u_reg$q1, %u_reg$q0}
+  attr lib_cell = "AND2_X1"
+  cell $g10 blackbox AND2_X1 (A=%q[0:0], B=%q[1:1]) -> (Y=%$g0)
+  attr lib_cell = "AOI21_X1"
+  cell $g11 blackbox AOI21_X1 (A1=%q[2:2], A2=%$g0, B=%q[3:3]) -> (Y=%$g1)
+  attr lib_cell = "AND2_X1"
+  cell $g12 blackbox AND2_X1 (A=%q[2:2], B=%q[3:3]) -> (Y=%$g2)
+  attr lib_cell = "AND2_X1"
+  cell $g13 blackbox AND2_X1 (A=%$g0, B=%$g2) -> (Y=%carry)
+  attr lib_cell = "NOR3_X1"
+  cell $g14 blackbox NOR3_X1 (A=%rst, B=%carry, C=%$g1) -> (Y=%$g3)
+  attr lib_cell = "AND2_X1"
+  cell $g15 blackbox AND2_X1 (A=%q[2:2], B=%$g0) -> (Y=%$g4)
+  attr lib_cell = "AOI21_X1"
+  cell $g16 blackbox AOI21_X1 (A1=%q[0:0], A2=%q[1:1], B=%q[2:2]) -> (Y=%$g5)
+  attr lib_cell = "NOR3_X1"
+  cell $g17 blackbox NOR3_X1 (A=%rst, B=%$g5, C=%$g4) -> (Y=%$g6)
+  attr lib_cell = "NOR2_X1"
+  cell $g18 blackbox NOR2_X1 (A=%q[0:0], B=%q[1:1]) -> (Y=%$g7)
+  attr lib_cell = "NOR3_X1"
+  cell $g19 blackbox NOR3_X1 (A=%rst, B=%$g0, C=%$g7) -> (Y=%$g8)
+  attr lib_cell = "NOR2_X1"
+  cell $g20 blackbox NOR2_X1 (A=%q[0:0], B=%rst) -> (Y=%$g9)
+  attr lib_cell = "DFFE_X1"
+  cell u_reg$ff0 blackbox DFFE_X1 (CLK=%clk, D=%u_reg$rst[0:0], E=%en) -> (Q=%u_reg$q0)
+  attr lib_cell = "DFFE_X1"
+  cell u_reg$ff1 blackbox DFFE_X1 (CLK=%clk, D=%u_reg$rst[1:1], E=%en) -> (Q=%u_reg$q1)
+  attr lib_cell = "DFFE_X1"
+  cell u_reg$ff2 blackbox DFFE_X1 (CLK=%clk, D=%u_reg$rst[2:2], E=%en) -> (Q=%u_reg$q2)
+  attr lib_cell = "DFFE_X1"
+  cell u_reg$ff3 blackbox DFFE_X1 (CLK=%clk, D=%u_reg$rst[3:3], E=%en) -> (Q=%u_reg$q3)
+end

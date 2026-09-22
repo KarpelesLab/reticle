@@ -1,0 +1,16 @@
+// One flip-flop that toggles, with an asynchronous active-high reset.
+// The synthetic library only has an active-low reset pin, so mapping it
+// has to insert an inverter -- the gap the FPGA side leaves open.
+top toggle
+
+module toggle
+  net %clk u1 wire
+  net %rst u1 wire
+  net %q u1 wire
+  net %n u1 wire
+  port clk in %clk
+  port rst in %rst
+  port q out %q
+  cell u_inv not (a=%q) -> (y=%n)
+  cell u_ff dff pos arst pos 1'd0 (clk=%clk, d=%n, rst=%rst) -> (q=%q)
+end

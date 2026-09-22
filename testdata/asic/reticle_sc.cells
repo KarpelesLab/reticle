@@ -1,0 +1,32 @@
+library `reticle_demo_sc_tt_025C_1v80`: 19 mapper cells, 5 flip-flops, 6 skipped
+delays measured at slew 0.0546 and load 0.006
+  gate AND2_X1 (A, B) -> Y area=6.256 tt=0x8 delays=[0.07659, 0.07819]
+  gate AOI21_X1 (A1, A2, B) -> Y area=6.256 tt=0x7 delays=[0.09279, 0.09412, 0.09549]
+  gate BUF_X1 (A) -> Y area=5.0048 tt=0x2 delays=[0.07299]
+  gate BUF_X2 (A) -> Y area=6.256 tt=0x2 delays=[0.05499]
+  gate BUF_X4 (A) -> Y area=8.7584 tt=0x2 delays=[0.04599]
+  gate INV_X1 (A) -> Y area=3.7536 tt=0x1 delays=[0.06219]
+  gate INV_X2 (A) -> Y area=5.0048 tt=0x1 delays=[0.04419]
+  gate INV_X4 (A) -> Y area=7.5072 tt=0x1 delays=[0.03519]
+  gate MUX2_X1 (A0, A1, S) -> Y area=10.0096 tt=0xca delays=[0.09999, 0.10189, 0.10379]
+  gate NAND2_X1 (A, B) -> Y area=5.0048 tt=0x7 delays=[0.0743, 0.0753]
+  gate NAND2_X2 (A, B) -> Y area=7.5072 tt=0x7 delays=[0.0503, 0.0513]
+  gate NAND3_X1 (A, B, C) -> Y area=6.256 tt=0x7f delays=[0.0963, 0.0975, 0.0986]
+  gate NOR2_X1 (A, B) -> Y area=5.0048 tt=0x1 delays=[0.09729, 0.09849]
+  gate NOR2_X2 (A, B) -> Y area=7.5072 tt=0x1 delays=[0.06489, 0.06609]
+  gate NOR3_X1 (A, B, C) -> Y area=6.256 tt=0x1 delays=[0.13239, 0.13389, 0.13549]
+  gate OAI21_X1 (A1, A2, B) -> Y area=6.256 tt=0x1f delays=[0.08649, 0.08789, 0.08929]
+  gate OR2_X1 (A, B) -> Y area=6.256 tt=0xe delays=[0.07839, 0.08009]
+  gate XNOR2_X1 (A, B) -> Y area=8.7584 tt=0x9 delays=[0.10539, 0.10739]
+  gate XOR2_X1 (A, B) -> Y area=8.7584 tt=0x6 delays=[0.10539, 0.10739]
+  flop DFFE_X1 (CLK, D -> Q enable=E) area=27.5264
+  flop DFFN_X1 (!CLK, D -> Q) area=23.7728
+  flop DFFR_X1 (CLK, D -> Q clear=!RN) area=25.024
+  flop DFFS_X1 (CLK, D -> Q preset=!SN) area=25.024
+  flop DFF_X1 (CLK, D -> Q) area=22.5216
+  skipped DLY_X1: marked `dont_use`
+  skipped EBUFN_X1: a tri-state output
+  skipped FA_X1: more than one output pin
+  skipped MUX4_X1: 6 inputs, beyond the truth-table width limit
+  skipped FILL_X1: no output pin (a physical-only cell)
+  skipped TAP_X1: no output pin (a physical-only cell)

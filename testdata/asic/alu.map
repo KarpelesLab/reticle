@@ -1,0 +1,22 @@
+module `alu` mapped onto `reticle_demo_sc_tt_025C_1v80`
+library: 19 cells offered to the mapper, 6 skipped
+  1 x 6 inputs, beyond the truth-table width limit
+  1 x a tri-state output
+  1 x marked `dont_use`
+  1 x more than one output pin
+  2 x no output pin (a physical-only cell)
+logic: 68 cells, depth 6
+sequential: 0 flip-flop cells
+netlist: 68 cells
+  5 x AND2_X1
+  15 x AOI21_X1
+  36 x INV_X1
+  1 x MUX2_X1
+  5 x NOR2_X1
+  2 x OAI21_X1
+  1 x XNOR2_X1
+  3 x XOR2_X1
+area: 342.8288
+timing (liberty(reticle_demo_sc_tt_025C_1v80) delays):
+  worst setup slack 1.744, worst hold slack 0.579, 0 violation(s)
+  worst path: a -> y (setup check), 1.806 of delay

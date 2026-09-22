@@ -1,0 +1,6 @@
+note: flip-flop `u_reg`: the synchronous reset became a multiplexer on `d`
+  --> counter.rtl:19:3
+   |
+19 |   cell u_reg dff pos en srst pos 4'd0 (clk=%clk, d=%next, en=%en, rst=%rst) -> (q=%q)
+   |   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+

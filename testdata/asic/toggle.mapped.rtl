@@ -1,0 +1,18 @@
+top toggle
+
+module toggle
+  net %clk u1 wire
+  net %rst u1 wire
+  net %q u1 wire
+  net %n u1 wire
+  net %rst$n u1 wire
+  port clk in %clk
+  port rst in %rst
+  port q out %q
+  attr lib_cell = "DFFR_X1"
+  cell u_ff blackbox DFFR_X1 (CLK=%clk, D=%n, RN=%rst$n) -> (Q=%q)
+  attr lib_cell = "INV_X1"
+  cell $g0 blackbox INV_X1 (A=%q) -> (Y=%n)
+  attr lib_cell = "INV_X1"
+  cell rst$n$inv blackbox INV_X1 (A=%rst) -> (Y=%rst$n)
+end

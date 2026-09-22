@@ -1,0 +1,217 @@
+top alu
+
+module alu
+  net %a u4 wire
+  net %b u4 wire
+  net %op u2 wire
+  net %y u4 wire
+  net %$g0 u1 wire
+  net %$g1 u1 wire
+  net %$g2 u1 wire
+  net %$g3 u1 wire
+  net %$g4 u1 wire
+  net %$g5 u1 wire
+  net %$g6 u1 wire
+  net %$g7 u1 wire
+  net %$g8 u1 wire
+  net %$g9 u1 wire
+  net %$g10 u1 wire
+  net %$g11 u1 wire
+  net %$g12 u1 wire
+  net %$g13 u1 wire
+  net %$g14 u1 wire
+  net %$g15 u1 wire
+  net %$g16 u1 wire
+  net %$g17 u1 wire
+  net %$g18 u1 wire
+  net %$g19 u1 wire
+  net %$g20 u1 wire
+  net %$g21 u1 wire
+  net %$g22 u1 wire
+  net %$g23 u1 wire
+  net %$g24 u1 wire
+  net %$g25 u1 wire
+  net %$g26 u1 wire
+  net %$g27 u1 wire
+  net %$g28 u1 wire
+  net %$g29 u1 wire
+  net %$g30 u1 wire
+  net %$g31 u1 wire
+  net %$g32 u1 wire
+  net %$g33 u1 wire
+  net %$g34 u1 wire
+  net %$g35 u1 wire
+  net %$g36 u1 wire
+  net %$g37 u1 wire
+  net %$g38 u1 wire
+  net %$g39 u1 wire
+  net %$g40 u1 wire
+  net %$g41 u1 wire
+  net %$g42 u1 wire
+  net %$g43 u1 wire
+  net %$g44 u1 wire
+  net %$g45 u1 wire
+  net %$g46 u1 wire
+  net %$g47 u1 wire
+  net %$g48 u1 wire
+  net %$g49 u1 wire
+  net %$g50 u1 wire
+  net %$g51 u1 wire
+  net %$g52 u1 wire
+  net %$g53 u1 wire
+  net %$g54 u1 wire
+  net %$g55 u1 wire
+  net %$g56 u1 wire
+  net %$g57 u1 wire
+  net %$g58 u1 wire
+  net %$g59 u1 wire
+  net %$g60 u1 wire
+  net %$g61 u1 wire
+  net %$g62 u1 wire
+  net %$g63 u1 wire
+  net %$g64 u1 wire
+  net %$g65 u1 wire
+  net %$g66 u1 wire
+  net %$g67 u1 wire
+  port a in %a
+  port b in %b
+  port op in %op
+  port y out %y
+  assign %y = {%$g21, %$g44, %$g61, %$g67}
+  attr lib_cell = "NOR2_X1"
+  cell $g68 blackbox NOR2_X1 (A=%a[1:1], B=%b[1:1]) -> (Y=%$g0)
+  attr lib_cell = "AND2_X1"
+  cell $g69 blackbox AND2_X1 (A=%a[1:1], B=%b[1:1]) -> (Y=%$g1)
+  attr lib_cell = "AND2_X1"
+  cell $g70 blackbox AND2_X1 (A=%a[0:0], B=%b[0:0]) -> (Y=%$g2)
+  attr lib_cell = "INV_X1"
+  cell $g71 blackbox INV_X1 (A=%$g0) -> (Y=%$g3)
+  attr lib_cell = "AOI21_X1"
+  cell $g72 blackbox AOI21_X1 (A1=%$g2, A2=%$g3, B=%$g1) -> (Y=%$g4)
+  attr lib_cell = "NOR2_X1"
+  cell $g73 blackbox NOR2_X1 (A=%a[2:2], B=%b[2:2]) -> (Y=%$g5)
+  attr lib_cell = "NOR2_X1"
+  cell $g74 blackbox NOR2_X1 (A=%$g5, B=%$g4) -> (Y=%$g6)
+  attr lib_cell = "AND2_X1"
+  cell $g75 blackbox AND2_X1 (A=%a[2:2], B=%b[2:2]) -> (Y=%$g7)
+  attr lib_cell = "INV_X1"
+  cell $g76 blackbox INV_X1 (A=%op[0:0]) -> (Y=%$g8)
+  attr lib_cell = "INV_X1"
+  cell $g77 blackbox INV_X1 (A=%$g7) -> (Y=%$g9)
+  attr lib_cell = "INV_X1"
+  cell $g78 blackbox INV_X1 (A=%$g6) -> (Y=%$g10)
+  attr lib_cell = "AOI21_X1"
+  cell $g79 blackbox AOI21_X1 (A1=%$g9, A2=%$g10, B=%$g8) -> (Y=%$g11)
+  attr lib_cell = "XOR2_X1"
+  cell $g80 blackbox XOR2_X1 (A=%a[3:3], B=%b[3:3]) -> (Y=%$g12)
+  attr lib_cell = "XNOR2_X1"
+  cell $g81 blackbox XNOR2_X1 (A=%$g12, B=%$g11) -> (Y=%$g13)
+  attr lib_cell = "INV_X1"
+  cell $g82 blackbox INV_X1 (A=%a[3:3]) -> (Y=%$g14)
+  attr lib_cell = "INV_X1"
+  cell $g83 blackbox INV_X1 (A=%b[3:3]) -> (Y=%$g15)
+  attr lib_cell = "INV_X1"
+  cell $g84 blackbox INV_X1 (A=%op[0:0]) -> (Y=%$g16)
+  attr lib_cell = "AOI21_X1"
+  cell $g85 blackbox AOI21_X1 (A1=%$g14, A2=%$g15, B=%$g16) -> (Y=%$g17)
+  attr lib_cell = "AOI21_X1"
+  cell $g86 blackbox AOI21_X1 (A1=%a[3:3], A2=%b[3:3], B=%$g17) -> (Y=%$g18)
+  attr lib_cell = "INV_X1"
+  cell $g87 blackbox INV_X1 (A=%$g18) -> (Y=%$g19)
+  attr lib_cell = "INV_X1"
+  cell $g88 blackbox INV_X1 (A=%$g13) -> (Y=%$g20)
+  attr lib_cell = "MUX2_X1"
+  cell $g89 blackbox MUX2_X1 (A0=%$g19, A1=%$g20, S=%op[1:1]) -> (Y=%$g21)
+  attr lib_cell = "INV_X1"
+  cell $g90 blackbox INV_X1 (A=%a[1:1]) -> (Y=%$g22)
+  attr lib_cell = "INV_X1"
+  cell $g91 blackbox INV_X1 (A=%b[1:1]) -> (Y=%$g23)
+  attr lib_cell = "INV_X1"
+  cell $g92 blackbox INV_X1 (A=%$g2) -> (Y=%$g24)
+  attr lib_cell = "AOI21_X1"
+  cell $g93 blackbox AOI21_X1 (A1=%$g22, A2=%$g23, B=%$g24) -> (Y=%$g25)
+  attr lib_cell = "INV_X1"
+  cell $g94 blackbox INV_X1 (A=%op[0:0]) -> (Y=%$g26)
+  attr lib_cell = "INV_X1"
+  cell $g95 blackbox INV_X1 (A=%$g1) -> (Y=%$g27)
+  attr lib_cell = "INV_X1"
+  cell $g96 blackbox INV_X1 (A=%$g25) -> (Y=%$g28)
+  attr lib_cell = "AOI21_X1"
+  cell $g97 blackbox AOI21_X1 (A1=%$g27, A2=%$g28, B=%$g26) -> (Y=%$g29)
+  attr lib_cell = "XOR2_X1"
+  cell $g98 blackbox XOR2_X1 (A=%a[2:2], B=%b[2:2]) -> (Y=%$g30)
+  attr lib_cell = "INV_X1"
+  cell $g99 blackbox INV_X1 (A=%op[1:1]) -> (Y=%$g31)
+  attr lib_cell = "AOI21_X1"
+  cell $g100 blackbox AOI21_X1 (A1=%$g30, A2=%$g29, B=%$g31) -> (Y=%$g32)
+  attr lib_cell = "INV_X1"
+  cell $g101 blackbox INV_X1 (A=%$g4) -> (Y=%$g33)
+  attr lib_cell = "AOI21_X1"
+  cell $g102 blackbox AOI21_X1 (A1=%op[0:0], A2=%$g33, B=%$g30) -> (Y=%$g34)
+  attr lib_cell = "INV_X1"
+  cell $g103 blackbox INV_X1 (A=%a[2:2]) -> (Y=%$g35)
+  attr lib_cell = "INV_X1"
+  cell $g104 blackbox INV_X1 (A=%b[2:2]) -> (Y=%$g36)
+  attr lib_cell = "INV_X1"
+  cell $g105 blackbox INV_X1 (A=%op[0:0]) -> (Y=%$g37)
+  attr lib_cell = "AOI21_X1"
+  cell $g106 blackbox AOI21_X1 (A1=%$g35, A2=%$g36, B=%$g37) -> (Y=%$g38)
+  attr lib_cell = "INV_X1"
+  cell $g107 blackbox INV_X1 (A=%$g7) -> (Y=%$g39)
+  attr lib_cell = "INV_X1"
+  cell $g108 blackbox INV_X1 (A=%$g38) -> (Y=%$g40)
+  attr lib_cell = "AOI21_X1"
+  cell $g109 blackbox AOI21_X1 (A1=%$g39, A2=%$g40, B=%op[1:1]) -> (Y=%$g41)
+  attr lib_cell = "INV_X1"
+  cell $g110 blackbox INV_X1 (A=%$g41) -> (Y=%$g42)
+  attr lib_cell = "INV_X1"
+  cell $g111 blackbox INV_X1 (A=%$g32) -> (Y=%$g43)
+  attr lib_cell = "OAI21_X1"
+  cell $g112 blackbox OAI21_X1 (A1=%$g34, A2=%$g43, B=%$g42) -> (Y=%$g44)
+  attr lib_cell = "AND2_X1"
+  cell $g113 blackbox AND2_X1 (A=%op[0:0], B=%$g2) -> (Y=%$g45)
+  attr lib_cell = "XOR2_X1"
+  cell $g114 blackbox XOR2_X1 (A=%a[1:1], B=%b[1:1]) -> (Y=%$g46)
+  attr lib_cell = "INV_X1"
+  cell $g115 blackbox INV_X1 (A=%op[1:1]) -> (Y=%$g47)
+  attr lib_cell = "INV_X1"
+  cell $g116 blackbox INV_X1 (A=%$g46) -> (Y=%$g48)
+  attr lib_cell = "INV_X1"
+  cell $g117 blackbox INV_X1 (A=%$g45) -> (Y=%$g49)
+  attr lib_cell = "AOI21_X1"
+  cell $g118 blackbox AOI21_X1 (A1=%$g48, A2=%$g49, B=%$g47) -> (Y=%$g50)
+  attr lib_cell = "AND2_X1"
+  cell $g119 blackbox AND2_X1 (A=%$g46, B=%$g45) -> (Y=%$g51)
+  attr lib_cell = "INV_X1"
+  cell $g120 blackbox INV_X1 (A=%a[1:1]) -> (Y=%$g52)
+  attr lib_cell = "INV_X1"
+  cell $g121 blackbox INV_X1 (A=%b[1:1]) -> (Y=%$g53)
+  attr lib_cell = "INV_X1"
+  cell $g122 blackbox INV_X1 (A=%op[0:0]) -> (Y=%$g54)
+  attr lib_cell = "AOI21_X1"
+  cell $g123 blackbox AOI21_X1 (A1=%$g52, A2=%$g53, B=%$g54) -> (Y=%$g55)
+  attr lib_cell = "INV_X1"
+  cell $g124 blackbox INV_X1 (A=%$g1) -> (Y=%$g56)
+  attr lib_cell = "INV_X1"
+  cell $g125 blackbox INV_X1 (A=%$g55) -> (Y=%$g57)
+  attr lib_cell = "AOI21_X1"
+  cell $g126 blackbox AOI21_X1 (A1=%$g56, A2=%$g57, B=%op[1:1]) -> (Y=%$g58)
+  attr lib_cell = "INV_X1"
+  cell $g127 blackbox INV_X1 (A=%$g58) -> (Y=%$g59)
+  attr lib_cell = "INV_X1"
+  cell $g128 blackbox INV_X1 (A=%$g50) -> (Y=%$g60)
+  attr lib_cell = "OAI21_X1"
+  cell $g129 blackbox OAI21_X1 (A1=%$g51, A2=%$g60, B=%$g59) -> (Y=%$g61)
+  attr lib_cell = "NOR2_X1"
+  cell $g130 blackbox NOR2_X1 (A=%op[0:0], B=%op[1:1]) -> (Y=%$g62)
+  attr lib_cell = "NOR2_X1"
+  cell $g131 blackbox NOR2_X1 (A=%a[0:0], B=%b[0:0]) -> (Y=%$g63)
+  attr lib_cell = "INV_X1"
+  cell $g132 blackbox INV_X1 (A=%$g63) -> (Y=%$g64)
+  attr lib_cell = "INV_X1"
+  cell $g133 blackbox INV_X1 (A=%$g62) -> (Y=%$g65)
+  attr lib_cell = "AOI21_X1"
+  cell $g134 blackbox AOI21_X1 (A1=%$g64, A2=%$g65, B=%$g2) -> (Y=%$g66)
+  attr lib_cell = "AOI21_X1"
+  cell $g135 blackbox AOI21_X1 (A1=%op[1:1], A2=%$g2, B=%$g66) -> (Y=%$g67)
+end

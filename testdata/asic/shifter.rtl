@@ -1,0 +1,21 @@
+// A 4-bit shift register with a clock enable and an asynchronous
+// active-low reset. The library has a flip-flop with an enable and one
+// with a reset, but none with both, so the enable becomes a feedback
+// multiplexer on `d` and the reset keeps its pin.
+top shifter
+
+module shifter
+  net %clk u1 wire
+  net %rst_n u1 wire
+  net %en u1 wire
+  net %d u1 wire
+  net %q u4 wire
+  net %next u4 wire
+  port clk in %clk
+  port rst_n in %rst_n
+  port en in %en
+  port d in %d
+  port q out %q
+  assign %next = {%q[2:0], %d}
+  cell u_reg dff pos en arst neg 4'd0 (clk=%clk, d=%next, en=%en, rst=%rst_n) -> (q=%q)
+end

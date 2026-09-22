@@ -1,0 +1,21 @@
+// A 4-bit counter with a clock enable and a synchronous reset. The
+// synthetic library has neither as a pin on a flip-flop that also has
+// the other, so both end up as multiplexers on `d` before mapping.
+top counter
+
+module counter
+  net %clk u1 wire
+  net %rst u1 wire
+  net %en u1 wire
+  net %q u4 wire
+  net %next u4 wire
+  net %carry u1 wire
+  port clk in %clk
+  port rst in %rst
+  port en in %en
+  port q out %q
+  port carry out %carry
+  cell u_inc add (a=%q, b=4'd1) -> (y=%next)
+  cell u_reg dff pos en srst pos 4'd0 (clk=%clk, d=%next, en=%en, rst=%rst) -> (q=%q)
+  cell u_carry rand (a=%q) -> (y=%carry)
+end

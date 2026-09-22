@@ -1,0 +1,29 @@
+// A small combinational block: four operations over two 4-bit words,
+// selected by `op`. Mapped onto standard cells it becomes a pile of
+// gates with no sequential element, which is what makes it the case the
+// equivalence check can settle outright.
+top alu
+
+module alu
+  net %a u4 wire
+  net %b u4 wire
+  net %op u2 wire
+  net %y u4 wire
+  net %t_and u4 wire
+  net %t_or u4 wire
+  net %t_xor u4 wire
+  net %t_sum u4 wire
+  net %m0 u4 wire
+  net %m1 u4 wire
+  port a in %a
+  port b in %b
+  port op in %op
+  port y out %y
+  cell u_and and (a=%a, b=%b) -> (y=%t_and)
+  cell u_or or (a=%a, b=%b) -> (y=%t_or)
+  cell u_xor xor (a=%a, b=%b) -> (y=%t_xor)
+  cell u_add add (a=%a, b=%b) -> (y=%t_sum)
+  cell u_m0 mux (a=%t_and, b=%t_or, s=%op[0:0]) -> (y=%m0)
+  cell u_m1 mux (a=%t_xor, b=%t_sum, s=%op[0:0]) -> (y=%m1)
+  cell u_m2 mux (a=%m0, b=%m1, s=%op[1:1]) -> (y=%y)
+end

@@ -1,0 +1,41 @@
+top shifter
+
+module shifter
+  net %clk u1 wire
+  net %rst_n u1 wire
+  net %en u1 wire
+  net %d u1 wire
+  net %q u4 wire
+  net %u_reg$en u4 wire
+  net %$g0 u1 wire
+  net %$g1 u1 wire
+  net %$g2 u1 wire
+  net %$g3 u1 wire
+  net %u_reg$q0 u1 wire
+  net %u_reg$q1 u1 wire
+  net %u_reg$q2 u1 wire
+  net %u_reg$q3 u1 wire
+  port clk in %clk
+  port rst_n in %rst_n
+  port en in %en
+  port d in %d
+  port q out %q
+  assign %u_reg$en = {%$g0, %$g1, %$g2, %$g3}
+  assign %q = {%u_reg$q3, %u_reg$q2, %u_reg$q1, %u_reg$q0}
+  attr lib_cell = "MUX2_X1"
+  cell $g4 blackbox MUX2_X1 (A0=%q[3:3], A1=%q[2:2], S=%en) -> (Y=%$g0)
+  attr lib_cell = "MUX2_X1"
+  cell $g5 blackbox MUX2_X1 (A0=%q[2:2], A1=%q[1:1], S=%en) -> (Y=%$g1)
+  attr lib_cell = "MUX2_X1"
+  cell $g6 blackbox MUX2_X1 (A0=%q[1:1], A1=%q[0:0], S=%en) -> (Y=%$g2)
+  attr lib_cell = "MUX2_X1"
+  cell $g7 blackbox MUX2_X1 (A0=%q[0:0], A1=%d, S=%en) -> (Y=%$g3)
+  attr lib_cell = "DFFR_X1"
+  cell u_reg$ff0 blackbox DFFR_X1 (CLK=%clk, D=%u_reg$en[0:0], RN=%rst_n) -> (Q=%u_reg$q0)
+  attr lib_cell = "DFFR_X1"
+  cell u_reg$ff1 blackbox DFFR_X1 (CLK=%clk, D=%u_reg$en[1:1], RN=%rst_n) -> (Q=%u_reg$q1)
+  attr lib_cell = "DFFR_X1"
+  cell u_reg$ff2 blackbox DFFR_X1 (CLK=%clk, D=%u_reg$en[2:2], RN=%rst_n) -> (Q=%u_reg$q2)
+  attr lib_cell = "DFFR_X1"
+  cell u_reg$ff3 blackbox DFFR_X1 (CLK=%clk, D=%u_reg$en[3:3], RN=%rst_n) -> (Q=%u_reg$q3)
+end
