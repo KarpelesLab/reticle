@@ -2,7 +2,7 @@
 
 The first-party half of phase 8. [`docs/ip.md`](ip.md) describes the
 machinery — the manifest formats, the resolver, the bus model, the black
-boxes. This document describes the **blocks**: fourteen pieces of HDL
+boxes. This document describes the **blocks**: fifteen pieces of HDL
 that drop into a design the way a crate drops into a Rust program, each
 with a manifest, a Rust co-simulation test, and a resource footprint that
 was measured rather than guessed.
@@ -22,6 +22,7 @@ ip/
   pwm/           reticle.ip  rtl/pwm.v
   ram_wrapper/   reticle.ip  rtl/ram_sp.v  rtl/ram_sdp.v
   rv32i/         reticle.ip  rtl/rv32i.v
+  sdram_ctrl/    reticle.ip  rtl/sdram_ctrl.v
   spi_master/    reticle.ip  rtl/spi_master.v
   spiflash_xip/  reticle.ip  rtl/spiflash_xip.v
   timer/         reticle.ip  rtl/timer.v
@@ -53,6 +54,7 @@ It is distributed as part of the repository instead.
 | `rv32i` | `rv32i` | the whole RV32I base integer set, multi-cycle, machine-mode CSRs, traps and interrupts | — |
 | `eth_mac_rmii` | `eth_mac_rmii` | Ethernet MAC over RMII: preamble, frame check sequence, inter-frame gap | — |
 | `spiflash_xip` | `spiflash_xip` | execute-in-place SPI flash reader, read only and cache-less | — |
+| `sdram_ctrl` | `sdram_ctrl` | SDR SDRAM controller for x16 parts: power-up sequence, refresh, open rows per bank, datasheet timings in nanoseconds | — |
 
 The last three are the **larger blocks**, and they are larger in a
 particular way: each is a whole protocol or a whole machine rather than a
@@ -60,6 +62,12 @@ part of one, so each is where a shortcut would have been invisible. They
 also fit together. `spiflash_xip` presents the memory port `rv32i` puts
 on its instruction side, so a processor executing straight out of a
 serial flash is the two of them and one wire.
+
+`sdram_ctrl` is the first of the blocks that **need a device
+primitive**, the ones phase 8 waited on the FPGA backend for: it forwards
+its clock to the part through a double-data-rate output register, which
+it asks for with a `ddr` attribute on the port, so the ECP5 row of its
+footprint carries an `ODDRX1F` and the iCE40 row an `SB_IO` in DDR mode.
 
 Everything is **Verilog-2005**, deliberately: it is the path this
 compiler exercises hardest, and it is the dialect every other tool reads.
@@ -111,6 +119,15 @@ and they are parameters rather than localparams only because
 Verilog-2005 has no way to put a computed width in an ANSI port list
 otherwise. Never override them; overriding `DEPTH` re-evaluates them,
 which `derived_parameters_follow_the_depth_they_come_from` checks.
+
+`sdram_ctrl` takes the same approach further. A manifest has no
+arithmetic, so the timings are declared the way a datasheet states them —
+`T_RCD_NS`, `T_RP_NS`, `T_RAS_NS`, `T_RC_NS`, `T_RFC_NS`, `T_WR_NS`,
+`T_RRD_NS`, `T_REFI_NS` and `T_INIT_US` next to `CLK_MHZ` — and the
+cycle counts `TRCD` to `TINIT` are derived parameters whose defaults do
+the division: rounded up for a minimum, rounded down for the refresh
+interval, which is a maximum. A design states the part and the clock and
+never the cycles.
 
 ## How it is tested
 
@@ -182,6 +199,30 @@ is the part that matters:
   configuration registers are rewritten — a different command, eight
   dummy cycles and half the clock rate — and the reads are checked
   again, with the model expecting the dummy cycles too.
+- **`sdram_ctrl`** — against an SDRAM model written in the test that
+  **enforces the datasheet** rather than storing whatever it is given.
+  It is clocked by the forwarded clock, so it samples the command pins
+  where the part does, and it records a violation for a command before
+  the power-up wait, an ACTIVE before the initialisation sequence or to
+  an open bank, a READ or WRITE to a closed bank or inside tRCD, a
+  PRECHARGE inside tRAS or tWR, an ACTIVE inside tRP, tRC or tRRD,
+  anything inside tRFC or tMRD, a REFRESH with a row open, a refresh
+  interval longer than tREFI, a mode word that is not the one asked for,
+  and the controller driving `dq` while the part does. Read data is on
+  the bus for exactly the one cycle the CAS latency says, with garbage
+  either side. The cycle counts it enforces are computed in Rust from the
+  nanoseconds, independently of the block. Two parts run the same
+  workload — a Micron MT48LC16M16A2 at 75 MHz and CAS latency 2, an ISSI
+  IS42S16400 with a smaller geometry at 48 MHz and CAS latency 3: a row
+  written and read back with one ACTIVE for all thirty-two accesses,
+  each byte enable alone, a row miss and back, every bank at the top of
+  the address space, four hundred pseudo-random accesses across banks
+  and rows, then four refresh intervals of idling and the data read
+  again. And because a model that accepts anything proves nothing,
+  `the_sdram_model_catches_a_controller_that_breaks_the_datasheet` gives
+  the model a part slower than the controller was built for, one timing
+  at a time — tRCD, tRP, tRAS, tRC, tWR and the refresh interval — and
+  requires the model to name the rule each one breaks.
 
 ### What the processor actually executes
 
@@ -242,9 +283,12 @@ through this crate's own tools, at the parameters the row names:
   block RAM / carry / IO / clock-buffer inference, LUT covering and the
   rewrite to the family's own cells.
 
-Each block is measured **as the top of its own design**, so every port
-takes an IO buffer — that is why `axil_gpio` shows 178 `SB_IO`. Dropped
-into a design, those disappear; the logic and the flip-flops do not.
+Each block is measured **as the top of its own design**, with the
+constraints its own source states as attributes merged in, as
+`Constraints::merge_attrs` does in a user's flow. So every port takes an
+IO buffer — that is why `axil_gpio` shows 178 `SB_IO` — and a `ddr`
+port takes its double-data-rate register. Dropped into a design, the
+buffers disappear; the logic and the flip-flops do not.
 
 `LUT depth` is the depth of the mapped combinational network in cells,
 which is the rough shape of the critical path before place and route.
@@ -330,6 +374,10 @@ exactly what this table is for.
 | `spiflash_xip` | `spiflash_xip` | CLK_DIV=2, READ_CMD=8'h03, DUMMY_CYCLES=0 | LUT6 | 9 x dff, 166 x lut | 4 |
 | `spiflash_xip` | `spiflash_xip` | CLK_DIV=2, READ_CMD=8'h03, DUMMY_CYCLES=0 | iCE40 HX1K | 7 x SB_CARRY, 97 x SB_DFFER, 3 x SB_DFFES, 8 x SB_DFFR, 1 x SB_GB, 140 x SB_IO, 172 x SB_LUT4 | 4 |
 | `spiflash_xip` | `spiflash_xip` | CLK_DIV=2, READ_CMD=8'h03, DUMMY_CYCLES=0 | ECP5 45F | 1 x DCCA, 177 x LUT4, 108 x TRELLIS_FF, 140 x TRELLIS_IO | 4 |
+| `sdram_ctrl` | `sdram_ctrl` | CLK_MHZ=50, CAS_LATENCY=2 | LUT4 | 36 x dff, 429 x lut | 10 |
+| `sdram_ctrl` | `sdram_ctrl` | CLK_MHZ=50, CAS_LATENCY=2 | LUT6 | 36 x dff, 348 x lut | 9 |
+| `sdram_ctrl` | `sdram_ctrl` | CLK_MHZ=50, CAS_LATENCY=2 | iCE40 HX1K | 24 x SB_CARRY, 180 x SB_DFFER, 3 x SB_DFFR, 36 x SB_DFFS, 1 x SB_GB, 121 x SB_IO, 418 x SB_LUT4 | 10 |
+| `sdram_ctrl` | `sdram_ctrl` | CLK_MHZ=50, CAS_LATENCY=2 | ECP5 45F | 1 x DCCA, 427 x LUT4, 1 x ODDRX1F, 219 x TRELLIS_FF, 121 x TRELLIS_IO | 10 |
 <!-- end footprints -->
 
 ### Four things writing these blocks found

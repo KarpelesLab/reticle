@@ -35,6 +35,11 @@
 //! summing an array and Fibonacci computed recursively on a stack, so
 //! the whole datapath is proved together and not only piece by piece.
 //!
+//! The blocks that need device primitives are held to their protocol by
+//! models that enforce it. `sdram_ctrl` answers to an SDRAM model that
+//! records every datasheet timing the controller breaks — and a test
+//! that gives the model a slower part proves it would notice.
+//!
 //! Four tests here came from gaps in Reticle rather than in the blocks,
 //! found by writing real HDL, which is the argument for a first-party
 //! library in the first place:
@@ -194,6 +199,11 @@ const VARIANTS: &[Variant] = &[
             ("READ_CMD", "8'h03"),
             ("DUMMY_CYCLES", "0"),
         ],
+    },
+    Variant {
+        package: "sdram_ctrl",
+        top: "sdram_ctrl",
+        params: &[("CLK_MHZ", "50"), ("CAS_LATENCY", "2")],
     },
 ];
 
@@ -574,9 +584,12 @@ fn measure_lut(variant: &Variant, k: u32) -> Measurement {
 fn measure_device(variant: &Variant, label: &str, device: &str) -> Measurement {
     let (mut design, id) = flattened(variant.package, variant.top, variant.params);
     let device = fpga::target(device).unwrap_or_else(|| panic!("no device `{device}`"));
-    let constraints = Constraints::new();
-    let options = FpgaOptions::default();
+    // The block's own attributes are constraints too: a `ddr` port is
+    // built with its double-data-rate register, as a user's flow would.
     let mut diags = Diagnostics::new();
+    let mut constraints = Constraints::new();
+    constraints.merge_attrs(&design, id, &mut diags);
+    let options = FpgaOptions::default();
     let report = fpga::synthesize_for(&mut design, id, device, &constraints, &options, &mut diags)
         .unwrap_or_else(|e| {
             panic!(
@@ -3811,6 +3824,830 @@ fn spiflash_xip_takes_a_new_command_divisor_and_dummy_count() {
     assert_eq!(got, flash_word(&image, 0x20), "at sclk = clk / 2");
     assert_eq!(xip.last_cmd, 0x03);
     assert_eq!(xip.last_addr, 0x20);
+}
+
+// ---------------------------------------------------------------------------
+// sdram_ctrl
+// ---------------------------------------------------------------------------
+
+/// A datasheet's timings, in nanoseconds, and the clock they are read
+/// at. The test turns them into cycles itself, with its own rounding,
+/// rather than asking the block what it derived.
+#[derive(Clone, Copy)]
+struct SdramPart {
+    mhz: u64,
+    cas_latency: u64,
+    row_bits: u32,
+    col_bits: u32,
+    init_refreshes: u64,
+    init_us: u64,
+    rcd_ns: u64,
+    rp_ns: u64,
+    ras_ns: u64,
+    rc_ns: u64,
+    rfc_ns: u64,
+    wr_ns: u64,
+    rrd_ns: u64,
+    refi_ns: u64,
+    mrd: u64,
+}
+
+/// Micron's MT48LC16M16A2 at speed grade -75, run at 75 MHz: every
+/// timing but tRRD rounds up to a cycle count that is not a whole
+/// number of nanoseconds, which is where a rounding mistake would show.
+const MT48LC16M16A2: SdramPart = SdramPart {
+    mhz: 75,
+    cas_latency: 2,
+    row_bits: 13,
+    col_bits: 9,
+    init_refreshes: 2,
+    init_us: 20,
+    rcd_ns: 20,
+    rp_ns: 20,
+    ras_ns: 44,
+    rc_ns: 66,
+    rfc_ns: 66,
+    wr_ns: 15,
+    rrd_ns: 15,
+    refi_ns: 7812,
+    mrd: 2,
+};
+
+/// ISSI's IS42S16400 (8 MiB, twelve row bits and eight column bits) at
+/// CAS latency 3, on a 48 MHz clock.
+const IS42S16400: SdramPart = SdramPart {
+    mhz: 48,
+    cas_latency: 3,
+    row_bits: 12,
+    col_bits: 8,
+    init_refreshes: 8,
+    init_us: 20,
+    rcd_ns: 20,
+    rp_ns: 20,
+    ras_ns: 45,
+    rc_ns: 67,
+    rfc_ns: 67,
+    wr_ns: 14,
+    rrd_ns: 14,
+    refi_ns: 15625,
+    mrd: 2,
+};
+
+impl SdramPart {
+    /// Nanoseconds to cycles, rounded up: a timing is a minimum.
+    fn cycles(&self, ns: u64) -> u64 {
+        (ns * self.mhz).div_ceil(1000)
+    }
+
+    /// The refresh interval, rounded down: it is a maximum.
+    fn refi(&self) -> u64 {
+        self.refi_ns * self.mhz / 1000
+    }
+
+    fn params(&self) -> Vec<(&'static str, String)> {
+        vec![
+            ("CLK_MHZ", self.mhz.to_string()),
+            ("CAS_LATENCY", self.cas_latency.to_string()),
+            ("ROW_BITS", self.row_bits.to_string()),
+            ("COL_BITS", self.col_bits.to_string()),
+            ("INIT_REFRESHES", self.init_refreshes.to_string()),
+            ("T_INIT_US", self.init_us.to_string()),
+            ("T_RCD_NS", self.rcd_ns.to_string()),
+            ("T_RP_NS", self.rp_ns.to_string()),
+            ("T_RAS_NS", self.ras_ns.to_string()),
+            ("T_RC_NS", self.rc_ns.to_string()),
+            ("T_RFC_NS", self.rfc_ns.to_string()),
+            ("T_WR_NS", self.wr_ns.to_string()),
+            ("T_RRD_NS", self.rrd_ns.to_string()),
+            ("T_REFI_NS", self.refi_ns.to_string()),
+            ("T_MRD", self.mrd.to_string()),
+        ]
+    }
+}
+
+/// A behavioural SDRAM that **enforces** the datasheet rather than just
+/// storing data.
+///
+/// It is clocked by what the part actually receives, `sdram_clk`, which
+/// the block drives as `clk` inverted: so the model acts on each falling
+/// edge of `clk`, sampling the command pins the block launched on the
+/// rising edge before. Every command is checked against the state the
+/// part is in and the time since the commands that constrain it, and a
+/// violation is *recorded*, not ignored — the test then fails on the
+/// list. A READ puts its data on `dq` CAS latency edges later for
+/// exactly one cycle and garbage either side of it, so a controller that
+/// captures a cycle early or late reads garbage.
+struct SdramModel {
+    part: SdramPart,
+    trcd: u64,
+    trp: u64,
+    tras: u64,
+    trc: u64,
+    trfc: u64,
+    twr: u64,
+    trrd: u64,
+    tinit: u64,
+    trefi: u64,
+    /// Edges of the part's clock since reset was released.
+    now: u64,
+    /// Sparse contents, by (bank, row, column).
+    cells: BTreeMap<(u64, u64, u64), u16>,
+    open: [Option<u64>; 4],
+    last_act: [Option<u64>; 4],
+    last_pre: [Option<u64>; 4],
+    last_write: [Option<u64>; 4],
+    last_act_any: Option<u64>,
+    last_ref: Option<u64>,
+    last_mrs: Option<u64>,
+    /// Where the current refresh interval started, for the overdue check.
+    refresh_window: Option<u64>,
+    precharged: bool,
+    init_refreshes: u64,
+    cas_programmed: Option<u64>,
+    /// READs in flight: the edge their data appears, and where from.
+    reads: Vec<(u64, u64, u64, u64)>,
+    /// DQM as sampled at each edge, for the read mask's latency of two.
+    dqm_history: Vec<u64>,
+    /// Whether the model drove `dq` for the cycle just started.
+    driving: bool,
+    violations: Vec<String>,
+    /// Commands seen, by name, for the tests that count them.
+    log: Vec<(u64, &'static str)>,
+}
+
+/// The pins as the part saw them at one edge.
+struct SdramPins {
+    cke: bool,
+    cmd: u64,
+    ba: u64,
+    a: u64,
+    dqm: u64,
+    dq: u16,
+    dq_oe: bool,
+}
+
+impl SdramModel {
+    fn new(part: SdramPart) -> SdramModel {
+        SdramModel {
+            trcd: part.cycles(part.rcd_ns),
+            trp: part.cycles(part.rp_ns),
+            tras: part.cycles(part.ras_ns),
+            trc: part.cycles(part.rc_ns),
+            trfc: part.cycles(part.rfc_ns),
+            twr: part.cycles(part.wr_ns),
+            trrd: part.cycles(part.rrd_ns),
+            tinit: part.init_us * part.mhz,
+            trefi: part.refi(),
+            part,
+            now: 0,
+            cells: BTreeMap::new(),
+            open: [None; 4],
+            last_act: [None; 4],
+            last_pre: [None; 4],
+            last_write: [None; 4],
+            last_act_any: None,
+            last_ref: None,
+            last_mrs: None,
+            refresh_window: None,
+            precharged: false,
+            init_refreshes: 0,
+            cas_programmed: None,
+            reads: Vec::new(),
+            dqm_history: Vec::new(),
+            driving: false,
+            violations: Vec::new(),
+            log: Vec::new(),
+        }
+    }
+
+    fn violation(&mut self, what: String) {
+        // One line per problem is enough to act on; a controller that is
+        // wrong once is usually wrong every cycle after.
+        if self.violations.len() < 20 {
+            self.violations.push(format!("edge {}: {what}", self.now));
+        }
+    }
+
+    /// `since` edges must have passed since `then`, or it is a violation
+    /// named `what`.
+    fn spacing(&mut self, then: Option<u64>, since: u64, what: &str) {
+        if let Some(then) = then {
+            let gap = self.now - then;
+            if gap < since {
+                self.violation(format!("{what}: {gap} cycle(s), the part needs {since}"));
+            }
+        }
+    }
+
+    fn initialised(&self) -> bool {
+        self.precharged
+            && self.init_refreshes >= self.part.init_refreshes
+            && self.cas_programmed.is_some()
+    }
+
+    fn count(&self, what: &str) -> usize {
+        self.log.iter().filter(|(_, c)| *c == what).count()
+    }
+
+    /// One edge of the part's clock. Returns what the part drives on `dq`
+    /// until the next one.
+    fn edge(&mut self, pins: &SdramPins) -> u64 {
+        self.now += 1;
+        self.dqm_history.push(pins.dqm);
+
+        // Refresh overdue: once the part is running, no gap between two
+        // AUTO REFRESH commands may exceed tREFI.
+        if self.initialised()
+            && let Some(start) = self.refresh_window
+            && self.now - start > self.trefi
+        {
+            let late = self.now - start;
+            self.violation(format!(
+                "refresh overdue: {late} cycles since the last, tREFI is {}",
+                self.trefi
+            ));
+            // Once per lapse rather than on every edge after it.
+            self.refresh_window = Some(self.now);
+        }
+
+        // The data bus: the controller must not drive while the part does.
+        if pins.dq_oe && self.driving {
+            self.violation("bus contention: the controller drives dq during read data".into());
+        }
+
+        let name = match pins.cmd {
+            0b1111 | 0b0111 => None,
+            0b0011 => Some("ACTIVE"),
+            0b0101 => Some("READ"),
+            0b0100 => Some("WRITE"),
+            0b0010 => Some("PRECHARGE"),
+            0b0001 => Some("REFRESH"),
+            0b0000 => Some("MODE"),
+            _ => Some("other"),
+        };
+        if let Some(name) = name {
+            self.log.push((self.now, name));
+            if !pins.cke {
+                self.violation(format!("{name} with CKE low"));
+            }
+            if self.now <= self.tinit {
+                self.violation(format!(
+                    "{name} before the {}-cycle power-up wait is over",
+                    self.tinit
+                ));
+            }
+            let (refresh, trfc) = (self.last_ref, self.trfc);
+            self.spacing(refresh, trfc, &format!("{name} after REFRESH (tRFC)"));
+            let (mode, tmrd) = (self.last_mrs, self.part.mrd);
+            self.spacing(mode, tmrd, &format!("{name} after MODE (tMRD)"));
+        }
+        let bank = usize::try_from(pins.ba).expect("two bits");
+        let a10 = pins.a & (1 << 10) != 0;
+        match name {
+            Some("ACTIVE") => {
+                if !self.initialised() {
+                    self.violation("ACTIVE before the initialisation sequence is complete".into());
+                }
+                if self.open[bank].is_some() {
+                    self.violation(format!("ACTIVE to bank {bank}, which is already open"));
+                }
+                let (p, trp) = (self.last_pre[bank], self.trp);
+                self.spacing(p, trp, "ACTIVE after PRECHARGE (tRP)");
+                let (a, trc) = (self.last_act[bank], self.trc);
+                self.spacing(a, trc, "ACTIVE after ACTIVE to one bank (tRC)");
+                let (any, trrd) = (self.last_act_any, self.trrd);
+                self.spacing(any, trrd, "ACTIVE after ACTIVE to another bank (tRRD)");
+                if pins.a >> self.part.row_bits != 0 {
+                    self.violation(format!("row {:#x} is out of range", pins.a));
+                }
+                self.open[bank] = Some(pins.a);
+                self.last_act[bank] = Some(self.now);
+                self.last_act_any = Some(self.now);
+            }
+            Some(op @ ("READ" | "WRITE")) => {
+                let col = pins.a & ((1 << 10) - 1);
+                if a10 {
+                    self.violation(format!(
+                        "{op} with auto-precharge, which this model does not do"
+                    ));
+                }
+                if col >> self.part.col_bits != 0 {
+                    self.violation(format!("column {col:#x} is out of range"));
+                }
+                match self.open[bank] {
+                    None => self.violation(format!("{op} to bank {bank}, which has no open row")),
+                    Some(row) => {
+                        let (a, trcd) = (self.last_act[bank], self.trcd);
+                        self.spacing(a, trcd, &format!("{op} after ACTIVE (tRCD)"));
+                        let key = (bank as u64, row, col);
+                        if op == "WRITE" {
+                            if !pins.dq_oe {
+                                self.violation("WRITE with the data bus not driven".into());
+                            }
+                            let old = self.cells.get(&key).copied().unwrap_or(0);
+                            let mut new = old;
+                            if pins.dqm & 1 == 0 {
+                                new = (new & 0xFF00) | (pins.dq & 0x00FF);
+                            }
+                            if pins.dqm & 2 == 0 {
+                                new = (new & 0x00FF) | (pins.dq & 0xFF00);
+                            }
+                            self.cells.insert(key, new);
+                            self.last_write[bank] = Some(self.now);
+                        } else {
+                            let cl = self.cas_programmed.unwrap_or(self.part.cas_latency);
+                            self.reads.push((self.now + cl, key.0, key.1, key.2));
+                        }
+                    }
+                }
+            }
+            Some("PRECHARGE") => {
+                let banks: Vec<usize> = if a10 { (0..4).collect() } else { vec![bank] };
+                for b in banks {
+                    if self.open[b].is_some() {
+                        let (a, tras) = (self.last_act[b], self.tras);
+                        self.spacing(a, tras, "PRECHARGE after ACTIVE (tRAS)");
+                        let (w, twr) = (self.last_write[b], self.twr);
+                        self.spacing(w, twr, "PRECHARGE after WRITE (tWR)");
+                    }
+                    self.open[b] = None;
+                    self.last_pre[b] = Some(self.now);
+                }
+                if a10 {
+                    self.precharged = true;
+                }
+            }
+            Some("REFRESH") => {
+                if !self.precharged {
+                    self.violation("REFRESH before the first PRECHARGE ALL".into());
+                }
+                if self.open.iter().any(Option::is_some) {
+                    self.violation("REFRESH with a row open".into());
+                }
+                for b in 0..4 {
+                    let (p, trp) = (self.last_pre[b], self.trp);
+                    self.spacing(p, trp, "REFRESH after PRECHARGE (tRP)");
+                }
+                if self.cas_programmed.is_none() {
+                    self.init_refreshes += 1;
+                }
+                self.last_ref = Some(self.now);
+                self.refresh_window = Some(self.now);
+            }
+            Some("MODE") => {
+                if !self.precharged || self.open.iter().any(Option::is_some) {
+                    self.violation("MODE with the banks not all precharged".into());
+                }
+                if self.init_refreshes < self.part.init_refreshes {
+                    self.violation(format!(
+                        "MODE after {} refresh(es), the part asks for {}",
+                        self.init_refreshes, self.part.init_refreshes
+                    ));
+                }
+                for b in 0..4 {
+                    let (p, trp) = (self.last_pre[b], self.trp);
+                    self.spacing(p, trp, "MODE after PRECHARGE (tRP)");
+                }
+                // Burst length 1, sequential, standard operation.
+                let cl = (pins.a >> 4) & 7;
+                if pins.a & !0x70 != 0 || pins.ba != 0 {
+                    self.violation(format!("mode word {:#x} is not burst length 1", pins.a));
+                }
+                if cl != self.part.cas_latency {
+                    self.violation(format!(
+                        "CAS latency {cl} programmed, the test runs {}",
+                        self.part.cas_latency
+                    ));
+                }
+                self.cas_programmed = Some(cl);
+                self.last_mrs = Some(self.now);
+            }
+            Some("other") => {
+                self.violation(format!("unexpected command {:04b}", pins.cmd));
+            }
+            _ => {}
+        }
+
+        // What the part drives from this edge to the next: the read due
+        // now, masked by DQM as it was two edges ago, or garbage that
+        // changes every cycle.
+        let garbage = (self.now.wrapping_mul(0x9E37) ^ 0x5A5A) & 0xFFFF;
+        let due: Vec<(u64, u64, u64, u64)> = self
+            .reads
+            .iter()
+            .copied()
+            .filter(|r| r.0 == self.now)
+            .collect();
+        self.reads.retain(|r| r.0 != self.now);
+        self.driving = !due.is_empty();
+        match due.first() {
+            Some(&(_, b, row, col)) => {
+                let value = u64::from(self.cells.get(&(b, row, col)).copied().unwrap_or(0));
+                let mask = self
+                    .dqm_history
+                    .len()
+                    .checked_sub(3)
+                    .map_or(0, |i| self.dqm_history[i]);
+                let mut out = value;
+                if mask & 1 != 0 {
+                    out = (out & 0xFF00) | (garbage & 0xFF);
+                }
+                if mask & 2 != 0 {
+                    out = (out & 0x00FF) | (garbage & 0xFF00);
+                }
+                out
+            }
+            None => garbage,
+        }
+    }
+}
+
+/// The controller, its user port and the model on its pins.
+struct Sdram<'d> {
+    sim: Simulator<'d>,
+    clk: NetHandle,
+    req_valid: NetHandle,
+    req_ready: NetHandle,
+    req_we: NetHandle,
+    req_addr: NetHandle,
+    req_wdata: NetHandle,
+    req_be: NetHandle,
+    rd_data: NetHandle,
+    rd_valid: NetHandle,
+    init_done: NetHandle,
+    pins: [NetHandle; 10],
+    dq_i: NetHandle,
+    addr_width: u32,
+    model: SdramModel,
+    /// Cycles of `clk` since reset.
+    cycles: u64,
+}
+
+impl<'d> Sdram<'d> {
+    fn new(design: &'d Design, part: SdramPart) -> Sdram<'d> {
+        let sim = simulate(design, "sdram_ctrl");
+        let pin = |n: &str| top_net(&sim, n);
+        let pins = [
+            pin("sdram_cke"),
+            pin("sdram_cs_n"),
+            pin("sdram_ras_n"),
+            pin("sdram_cas_n"),
+            pin("sdram_we_n"),
+            pin("sdram_ba"),
+            pin("sdram_a"),
+            pin("sdram_dqm"),
+            pin("sdram_dq_o"),
+            pin("sdram_dq_oe"),
+        ];
+        let mut s = Sdram {
+            clk: pin("clk"),
+            req_valid: pin("req_valid"),
+            req_ready: pin("req_ready"),
+            req_we: pin("req_we"),
+            req_addr: pin("req_addr"),
+            req_wdata: pin("req_wdata"),
+            req_be: pin("req_be"),
+            rd_data: pin("rd_data"),
+            rd_valid: pin("rd_valid"),
+            init_done: pin("init_done"),
+            dq_i: pin("sdram_dq_i"),
+            pins,
+            addr_width: part.row_bits + 2 + part.col_bits,
+            model: SdramModel::new(part),
+            cycles: 0,
+            sim,
+        };
+        let rst_n = top_net(&s.sim, "rst_n");
+        s.sim.set(s.req_valid, bit(false));
+        s.sim.set(s.req_we, bit(false));
+        s.sim.set(s.req_addr, word(s.addr_width, 0));
+        s.sim.set(s.req_wdata, word(16, 0));
+        s.sim.set(s.req_be, word(2, 0));
+        s.sim.set(s.dq_i, word(16, 0));
+        let clk = s.clk;
+        reset(&mut s.sim, clk, rst_n);
+        // The forwarded clock is `clk` inverted, for as long as it runs.
+        assert_eq!(get_u64(&s.sim, top_net(&s.sim, "sdram_clk")), 0b10);
+        s
+    }
+
+    /// One cycle of `clk`: the rising edge the controller acts on, then
+    /// the falling one the part acts on.
+    fn tick(&mut self) {
+        self.sim.run_for(HALF);
+        self.sim.set(self.clk, bit(true));
+        self.sim.run_for(HALF);
+        self.sim.set(self.clk, bit(false));
+        self.sim.run_for(0);
+        let [cke, cs, ras, cas, we, ba, a, dqm, dq, oe] = self.pins;
+        let pins = SdramPins {
+            cke: high(&self.sim, cke),
+            cmd: (get_u64(&self.sim, cs) << 3)
+                | (get_u64(&self.sim, ras) << 2)
+                | (get_u64(&self.sim, cas) << 1)
+                | get_u64(&self.sim, we),
+            ba: get_u64(&self.sim, ba),
+            a: get_u64(&self.sim, a),
+            dqm: get_u64(&self.sim, dqm),
+            dq: u16::try_from(get_u64(&self.sim, dq)).expect("sixteen bits"),
+            dq_oe: high(&self.sim, oe),
+        };
+        let out = self.model.edge(&pins);
+        self.sim.set(self.dq_i, word(16, out));
+        self.cycles += 1;
+    }
+
+    fn wait_for_init(&mut self) {
+        for _ in 0..(self.model.tinit + 2000) {
+            if high(&self.sim, self.init_done) {
+                return;
+            }
+            self.tick();
+        }
+        panic!("init_done never rose");
+    }
+
+    /// Offers one request and waits for it to be taken. A read then
+    /// waits for its data too, and returns it.
+    fn request(&mut self, we: bool, addr: u64, data: u16, be: u64) -> Option<u16> {
+        self.sim.set(self.req_we, bit(we));
+        self.sim.set(self.req_addr, word(self.addr_width, addr));
+        self.sim.set(self.req_wdata, word(16, u64::from(data)));
+        self.sim.set(self.req_be, word(2, be));
+        self.sim.set(self.req_valid, bit(true));
+        let mut taken = false;
+        for _ in 0..400 {
+            let ready = high(&self.sim, self.req_ready);
+            self.tick();
+            if ready {
+                taken = true;
+                break;
+            }
+        }
+        assert!(taken, "the request for {addr:#x} was never taken");
+        self.sim.set(self.req_valid, bit(false));
+        if we {
+            return None;
+        }
+        for _ in 0..400 {
+            self.tick();
+            if high(&self.sim, self.rd_valid) {
+                return Some(u16::try_from(get_u64(&self.sim, self.rd_data)).expect("16 bits"));
+            }
+        }
+        panic!("the read of {addr:#x} never answered");
+    }
+
+    fn idle(&mut self, cycles: u64) {
+        for _ in 0..cycles {
+            self.tick();
+        }
+    }
+
+    fn assert_clean(&self) {
+        assert!(
+            self.model.violations.is_empty(),
+            "the SDRAM model caught the controller breaking the datasheet:\n  {}",
+            self.model.violations.join("\n  ")
+        );
+    }
+}
+
+fn sdram_design(part: SdramPart) -> Design {
+    let params = part.params();
+    let refs: Vec<(&str, &str)> = params.iter().map(|(n, v)| (*n, v.as_str())).collect();
+    design_of("sdram_ctrl", "sdram_ctrl", &refs)
+}
+
+/// The word address of (row, bank, column), as the block maps it.
+fn sdram_addr(part: SdramPart, row: u64, bank: u64, col: u64) -> u64 {
+    (row << (part.col_bits + 2)) | (bank << part.col_bits) | col
+}
+
+/// Runs a mixed workload against one part and checks every read.
+fn sdram_workload(part: SdramPart) {
+    let design = sdram_design(part);
+    let mut ram = Sdram::new(&design, part);
+    ram.wait_for_init();
+    assert!(
+        ram.model.initialised(),
+        "init_done rose before the part was initialised"
+    );
+    assert!(
+        ram.cycles > ram.model.tinit,
+        "init_done before the power-up wait"
+    );
+    assert_eq!(ram.model.count("REFRESH") as u64, part.init_refreshes);
+
+    let mut reference: BTreeMap<u64, u16> = BTreeMap::new();
+    let write =
+        |ram: &mut Sdram<'_>, reference: &mut BTreeMap<u64, u16>, addr: u64, data: u16, be: u64| {
+            ram.request(true, addr, data, be);
+            let mut new = reference.get(&addr).copied().unwrap_or(0);
+            if be & 1 != 0 {
+                new = (new & 0xFF00) | (data & 0x00FF);
+            }
+            if be & 2 != 0 {
+                new = (new & 0x00FF) | (data & 0xFF00);
+            }
+            reference.insert(addr, new);
+        };
+
+    // A row filled and read back: one ACTIVE for the lot.
+    let row_a = sdram_addr(part, 5, 1, 0);
+    let refs_before = ram.model.count("REFRESH");
+    let acts_before = ram.model.count("ACTIVE");
+    for col in 0..16u16 {
+        write(
+            &mut ram,
+            &mut reference,
+            row_a + u64::from(col),
+            0x1000 + col * 0x0101,
+            3,
+        );
+    }
+    for col in 0..16u16 {
+        let got = ram
+            .request(false, row_a + u64::from(col), 0, 0)
+            .expect("a read");
+        assert_eq!(got, 0x1000 + col * 0x0101, "row hit, column {col}");
+    }
+    let acts = ram.model.count("ACTIVE") - acts_before;
+    let refs = ram.model.count("REFRESH") - refs_before;
+    assert!(
+        acts <= 1 + refs,
+        "32 accesses to one row took {acts} ACTIVE commands with {refs} refresh(es) between"
+    );
+    assert!(acts >= 1);
+
+    // Byte enables: each octet alone, then neither.
+    let addr = sdram_addr(part, 5, 1, 3);
+    write(&mut ram, &mut reference, addr, 0xAB00, 2);
+    write(&mut ram, &mut reference, addr, 0x00CD, 1);
+    write(&mut ram, &mut reference, addr, 0xFFFF, 0);
+    let expect = reference[&addr];
+    assert_eq!(expect, 0xABCD);
+    assert_eq!(ram.request(false, addr, 0, 0), Some(0xABCD), "byte enables");
+
+    // A row miss in the same bank, and back: precharge, activate, both
+    // ways, with the first row's data intact.
+    let row_b = sdram_addr(part, 9, 1, 0);
+    write(&mut ram, &mut reference, row_b + 7, 0xBEEF, 3);
+    assert_eq!(
+        ram.request(false, row_a + 7, 0, 0),
+        Some(reference[&(row_a + 7)])
+    );
+    assert_eq!(ram.request(false, row_b + 7, 0, 0), Some(0xBEEF));
+
+    // Every bank, and the top of the address space.
+    let top_row = (1u64 << part.row_bits) - 1;
+    let top_col = (1u64 << part.col_bits) - 1;
+    for bank in 0..4u16 {
+        let a = sdram_addr(part, top_row, u64::from(bank), top_col);
+        write(&mut ram, &mut reference, a, 0xC000 | bank, 3);
+        let n = u64::from(bank);
+        let b = sdram_addr(part, n, n, n);
+        write(&mut ram, &mut reference, b, 0xD000 | bank, 3);
+    }
+    for bank in 0..4u16 {
+        let a = sdram_addr(part, top_row, u64::from(bank), top_col);
+        assert_eq!(ram.request(false, a, 0, 0), Some(0xC000 | bank));
+        let n = u64::from(bank);
+        let b = sdram_addr(part, n, n, n);
+        assert_eq!(ram.request(false, b, 0, 0), Some(0xD000 | bank));
+    }
+
+    // A pseudo-random stream over a handful of rows in every bank,
+    // mixing reads, writes and partial writes, long enough to cross
+    // several refreshes in the middle of traffic.
+    let mut seed = 0x1234_5678u32;
+    let mut next = || {
+        seed = seed.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+        u64::from(seed >> 8)
+    };
+    let space = 1u64 << ram.addr_width;
+    let mut reads = 0;
+    for _ in 0..400 {
+        let r = next();
+        let row = (r >> 4) % 4;
+        let bank = (r >> 8) & 3;
+        let col = (r >> 10) % 6;
+        let addr = sdram_addr(part, row * 97 % (1 << part.row_bits), bank, col) % space;
+        if r & 3 == 0 || !reference.contains_key(&addr) {
+            let be = match r & 0x30 {
+                0x00 => 1,
+                0x10 => 2,
+                _ => 3,
+            };
+            write(
+                &mut ram,
+                &mut reference,
+                addr,
+                u16::try_from(next() & 0xFFFF).expect("16 bits"),
+                be,
+            );
+        } else {
+            let got = ram.request(false, addr, 0, 0).expect("a read");
+            assert_eq!(got, reference[&addr], "read of {addr:#x}");
+            reads += 1;
+        }
+    }
+    assert!(
+        reads > 100,
+        "the stream should be mostly reads, got {reads}"
+    );
+
+    // Left alone, it keeps refreshing on time, and the data survives.
+    let before = ram.model.count("REFRESH");
+    let idle = ram.model.trefi * 4;
+    ram.idle(idle);
+    let during = ram.model.count("REFRESH") - before;
+    assert!(
+        during as u64 >= 4,
+        "{during} refresh(es) in {idle} idle cycles with tREFI {}",
+        ram.model.trefi
+    );
+    for (addr, value) in reference.iter().take(40) {
+        assert_eq!(
+            ram.request(false, *addr, 0, 0),
+            Some(*value),
+            "after the idle spell"
+        );
+    }
+
+    let total = ram.model.count("REFRESH");
+    assert!(total > 8, "the run crossed {total} refreshes");
+    ram.assert_clean();
+}
+
+#[test]
+fn sdram_ctrl_keeps_the_datasheet_at_cas_latency_2() {
+    sdram_workload(MT48LC16M16A2);
+}
+
+#[test]
+fn sdram_ctrl_keeps_the_datasheet_at_cas_latency_3() {
+    sdram_workload(IS42S16400);
+}
+
+#[test]
+fn sdram_ctrl_derives_its_cycle_counts_from_nanoseconds() {
+    // tRAS 44 ns at 75 MHz is 3.3 cycles, so 4; tWR 15 ns is 1.125, so 2;
+    // the refresh interval, a maximum, rounds down: 585.9 to 585.
+    let design = sdram_design(MT48LC16M16A2);
+    let module = design.top_module().expect("a top");
+    let port = module.port("req_addr").expect("req_addr");
+    assert_eq!(module.nets[port.net].ty.width(), Some(24), "13 + 2 + 9");
+    let part = MT48LC16M16A2;
+    assert_eq!(part.cycles(part.ras_ns), 4);
+    assert_eq!(part.cycles(part.wr_ns), 2);
+    assert_eq!(part.refi(), 585);
+
+    let design = sdram_design(IS42S16400);
+    let module = design.top_module().expect("a top");
+    let port = module.port("req_addr").expect("req_addr");
+    assert_eq!(module.nets[port.net].ty.width(), Some(22), "12 + 2 + 8");
+    let port = module.port("sdram_a").expect("sdram_a");
+    assert_eq!(module.nets[port.net].ty.width(), Some(12));
+}
+
+/// The model is not a pushover: a part stricter than the one the
+/// controller was built for is caught, each time by the rule the
+/// difference breaks. Without this, the clean runs above would prove
+/// nothing about the model.
+#[test]
+fn the_sdram_model_catches_a_controller_that_breaks_the_datasheet() {
+    type Stricter = fn(&mut SdramPart);
+    let cases: [(Stricter, &str); 6] = [
+        (|p| p.rcd_ns = 30, "tRCD"),
+        (|p| p.rp_ns = 30, "tRP"),
+        (|p| p.ras_ns = 80, "tRAS"),
+        (|p| p.rc_ns = 100, "tRC"),
+        (|p| p.wr_ns = 40, "tWR"),
+        (|p| p.refi_ns = 3000, "refresh overdue"),
+    ];
+    let design = sdram_design(MT48LC16M16A2);
+    for (stricter, rule) in cases {
+        let mut part = MT48LC16M16A2;
+        stricter(&mut part);
+        let mut ram = Sdram::new(&design, part);
+        ram.wait_for_init();
+        // A write to one row of a bank after another: every one a row
+        // miss straight after a write, which is where the row timings
+        // bite; then a read of each, and a long wait for the refresh.
+        for i in 0..6u64 {
+            ram.request(true, sdram_addr(part, i, 0, 1), 0x1111, 3);
+        }
+        for i in 0..6u64 {
+            ram.request(false, sdram_addr(part, i, 0, 1), 0, 0);
+        }
+        ram.idle(MT48LC16M16A2.refi() * 2);
+        assert!(
+            ram.model.violations.iter().any(|v| v.contains(rule)),
+            "a part needing more should break {rule}, the model saw: {:?}",
+            ram.model.violations
+        );
+    }
 }
 
 // ---------------------------------------------------------------------------

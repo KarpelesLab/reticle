@@ -1,0 +1,67 @@
+# sdram_ctrl: a single-data-rate SDRAM controller for the common x16
+# parts. The timings are stated as the datasheet states them, in
+# nanoseconds, next to the clock in MHz; TRCD to TINIT are derived from
+# them (rounded up to whole cycles, the refresh interval rounded down)
+# and ADDR_WIDTH from the geometry. Never override a derived one.
+# `sdram_clk` is a double-data-rate output (`ddr = "clk"` in the
+# source): the clock forwarded to the part, inverted.
+name sdram_ctrl
+version 1.0.0
+license MIT
+description "Single-data-rate SDRAM controller: power-up sequence, periodic refresh, open-row tracking per bank and datasheet timings in nanoseconds"
+
+top sdram_ctrl
+target ice40
+target ecp5
+
+source rtl/sdram_ctrl.v
+
+param CLK_MHZ int 50 1..200
+param CAS_LATENCY int 2 2..3
+param ROW_BITS int 13 11..13
+param COL_BITS int 9 8..10
+param INIT_REFRESHES int 8 1..15
+param T_INIT_US int 200 1..1000
+param T_RCD_NS int 20 1..1000
+param T_RP_NS int 20 1..1000
+param T_RAS_NS int 44 1..1000
+param T_RC_NS int 66 1..1000
+param T_RFC_NS int 66 1..1000
+param T_WR_NS int 15 1..1000
+param T_RRD_NS int 15 1..1000
+param T_REFI_NS int 7812 1000..100000
+param T_MRD int 2 1..15
+param TRCD int 1 1..200
+param TRP int 1 1..200
+param TRAS int 3 1..200
+param TRC int 4 1..200
+param TRFC int 4 1..200
+param TWR int 1 1..200
+param TRRD int 1 1..200
+param TREFI int 390 1..20000
+param TINIT int 10000 1..200000
+param ADDR_WIDTH int 24 21..25
+
+port clk in
+port rst_n in
+port req_valid in
+port req_ready out
+port req_we in
+port req_addr in ADDR_WIDTH
+port req_wdata in 16
+port req_be in 2
+port rd_data out 16
+port rd_valid out
+port init_done out
+port sdram_clk out 2
+port sdram_cke out
+port sdram_cs_n out
+port sdram_ras_n out
+port sdram_cas_n out
+port sdram_we_n out
+port sdram_ba out 2
+port sdram_a out ROW_BITS
+port sdram_dqm out 2
+port sdram_dq_o out 16
+port sdram_dq_oe out
+port sdram_dq_i in 16
