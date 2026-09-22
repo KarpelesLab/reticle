@@ -7,3 +7,10 @@ clocks:
   clk (8 flip-flops) -> DCCA
 notes:
   `ecp5-45f-CABGA381` describes the carry element `CCU2C` without a (ci, i0, i1, co) port map, so 1 adder(s) stay generic
+logic:
+  10 LUTs, depth 3
+netlist:
+  1 x DCCA
+  10 x LUT4
+  8 x TRELLIS_FF
+  3 x TRELLIS_IO

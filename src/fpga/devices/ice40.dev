@@ -9,6 +9,16 @@
 #   * Logic cell: 4-input LUT plus one carry bit plus one flip-flop; the
 #     clock, clock enable and set/reset of the eight logic cells in a tile
 #     are shared, which is why `shared_reset` is set. High confidence.
+#   * The twenty SB_DFF* lines are the whole family, named by the library's
+#     own scheme SB_DFF[N][E][S][S|R]: `N` a falling clock edge, `E` a
+#     clock enable, a leading `S` a synchronous rather than asynchronous
+#     set or reset, and the final `R`/`S` a reset (to 0, pin `R`) or a set
+#     (to 1, pin `S`). Both are active high, which is why no variant is
+#     marked `active_low`: an active-low reset has to be inverted in logic
+#     first, and flip-flop mapping says so rather than mapping it wrongly.
+#     `count` is the number of flip-flops on the die and is recorded once,
+#     on the plain variant; they are all the same flip-flop configured
+#     differently. High confidence.
 #   * SB_RAM40_4K: 4096 bits, configurable 256x16, 512x8, 1024x4 and
 #     2048x2, one read port and one write port with independent clocks,
 #     contents initialisable through INIT_0..INIT_F. High confidence.
@@ -49,7 +59,26 @@ device ice40-lp1k-tq144
   ff enable sync_reset async_reset shared_reset init 0
   bel SB_LUT4 lut count 1280 port i=I0,I1,I2,I3 o=O param LUT_INIT=16'h0000
   bel SB_CARRY carry port ci=CI i0=I0 i1=I1 co=CO
-  bel SB_DFF ff count 1280 port clk=C d=D q=Q en=E rst=R
+  bel SB_DFF ff count 1280 mode posedge port clk=C d=D q=Q
+  bel SB_DFFSR ff mode posedge,sync_reset port clk=C d=D q=Q rst=R
+  bel SB_DFFR ff mode posedge,async_reset port clk=C d=D q=Q rst=R
+  bel SB_DFFSS ff mode posedge,sync_set port clk=C d=D q=Q rst=S
+  bel SB_DFFS ff mode posedge,async_set port clk=C d=D q=Q rst=S
+  bel SB_DFFE ff mode posedge,enable port clk=C d=D q=Q en=E
+  bel SB_DFFESR ff mode posedge,enable,sync_reset port clk=C d=D q=Q en=E rst=R
+  bel SB_DFFER ff mode posedge,enable,async_reset port clk=C d=D q=Q en=E rst=R
+  bel SB_DFFESS ff mode posedge,enable,sync_set port clk=C d=D q=Q en=E rst=S
+  bel SB_DFFES ff mode posedge,enable,async_set port clk=C d=D q=Q en=E rst=S
+  bel SB_DFFN ff mode negedge port clk=C d=D q=Q
+  bel SB_DFFNSR ff mode negedge,sync_reset port clk=C d=D q=Q rst=R
+  bel SB_DFFNR ff mode negedge,async_reset port clk=C d=D q=Q rst=R
+  bel SB_DFFNSS ff mode negedge,sync_set port clk=C d=D q=Q rst=S
+  bel SB_DFFNS ff mode negedge,async_set port clk=C d=D q=Q rst=S
+  bel SB_DFFNE ff mode negedge,enable port clk=C d=D q=Q en=E
+  bel SB_DFFNESR ff mode negedge,enable,sync_reset port clk=C d=D q=Q en=E rst=R
+  bel SB_DFFNER ff mode negedge,enable,async_reset port clk=C d=D q=Q en=E rst=R
+  bel SB_DFFNESS ff mode negedge,enable,sync_set port clk=C d=D q=Q en=E rst=S
+  bel SB_DFFNES ff mode negedge,enable,async_set port clk=C d=D q=Q en=E rst=S
   bel SB_IO io port pad=PACKAGE_PIN din=D_IN_0 dout=D_OUT_0 oe=OUTPUT_ENABLE param_in PIN_TYPE=6'b000001 param_out PIN_TYPE=6'b011001 param_inout PIN_TYPE=6'b101001 param_pullup PULLUP=1
   bel SB_GB gb count 8 port i=USER_SIGNAL_TO_GLOBAL_BUFFER o=GLOBAL_BUFFER_OUTPUT
   bram SB_RAM40_4K
@@ -98,7 +127,26 @@ device ice40-hx1k-tq144
   ff enable sync_reset async_reset shared_reset init 0
   bel SB_LUT4 lut count 1280 port i=I0,I1,I2,I3 o=O param LUT_INIT=16'h0000
   bel SB_CARRY carry port ci=CI i0=I0 i1=I1 co=CO
-  bel SB_DFF ff count 1280 port clk=C d=D q=Q en=E rst=R
+  bel SB_DFF ff count 1280 mode posedge port clk=C d=D q=Q
+  bel SB_DFFSR ff mode posedge,sync_reset port clk=C d=D q=Q rst=R
+  bel SB_DFFR ff mode posedge,async_reset port clk=C d=D q=Q rst=R
+  bel SB_DFFSS ff mode posedge,sync_set port clk=C d=D q=Q rst=S
+  bel SB_DFFS ff mode posedge,async_set port clk=C d=D q=Q rst=S
+  bel SB_DFFE ff mode posedge,enable port clk=C d=D q=Q en=E
+  bel SB_DFFESR ff mode posedge,enable,sync_reset port clk=C d=D q=Q en=E rst=R
+  bel SB_DFFER ff mode posedge,enable,async_reset port clk=C d=D q=Q en=E rst=R
+  bel SB_DFFESS ff mode posedge,enable,sync_set port clk=C d=D q=Q en=E rst=S
+  bel SB_DFFES ff mode posedge,enable,async_set port clk=C d=D q=Q en=E rst=S
+  bel SB_DFFN ff mode negedge port clk=C d=D q=Q
+  bel SB_DFFNSR ff mode negedge,sync_reset port clk=C d=D q=Q rst=R
+  bel SB_DFFNR ff mode negedge,async_reset port clk=C d=D q=Q rst=R
+  bel SB_DFFNSS ff mode negedge,sync_set port clk=C d=D q=Q rst=S
+  bel SB_DFFNS ff mode negedge,async_set port clk=C d=D q=Q rst=S
+  bel SB_DFFNE ff mode negedge,enable port clk=C d=D q=Q en=E
+  bel SB_DFFNESR ff mode negedge,enable,sync_reset port clk=C d=D q=Q en=E rst=R
+  bel SB_DFFNER ff mode negedge,enable,async_reset port clk=C d=D q=Q en=E rst=R
+  bel SB_DFFNESS ff mode negedge,enable,sync_set port clk=C d=D q=Q en=E rst=S
+  bel SB_DFFNES ff mode negedge,enable,async_set port clk=C d=D q=Q en=E rst=S
   bel SB_IO io port pad=PACKAGE_PIN din=D_IN_0 dout=D_OUT_0 oe=OUTPUT_ENABLE param_in PIN_TYPE=6'b000001 param_out PIN_TYPE=6'b011001 param_inout PIN_TYPE=6'b101001 param_pullup PULLUP=1
   bel SB_GB gb count 8 port i=USER_SIGNAL_TO_GLOBAL_BUFFER o=GLOBAL_BUFFER_OUTPUT
   bram SB_RAM40_4K
@@ -147,7 +195,26 @@ device ice40-hx8k-ct256
   ff enable sync_reset async_reset shared_reset init 0
   bel SB_LUT4 lut count 7680 port i=I0,I1,I2,I3 o=O param LUT_INIT=16'h0000
   bel SB_CARRY carry port ci=CI i0=I0 i1=I1 co=CO
-  bel SB_DFF ff count 7680 port clk=C d=D q=Q en=E rst=R
+  bel SB_DFF ff count 7680 mode posedge port clk=C d=D q=Q
+  bel SB_DFFSR ff mode posedge,sync_reset port clk=C d=D q=Q rst=R
+  bel SB_DFFR ff mode posedge,async_reset port clk=C d=D q=Q rst=R
+  bel SB_DFFSS ff mode posedge,sync_set port clk=C d=D q=Q rst=S
+  bel SB_DFFS ff mode posedge,async_set port clk=C d=D q=Q rst=S
+  bel SB_DFFE ff mode posedge,enable port clk=C d=D q=Q en=E
+  bel SB_DFFESR ff mode posedge,enable,sync_reset port clk=C d=D q=Q en=E rst=R
+  bel SB_DFFER ff mode posedge,enable,async_reset port clk=C d=D q=Q en=E rst=R
+  bel SB_DFFESS ff mode posedge,enable,sync_set port clk=C d=D q=Q en=E rst=S
+  bel SB_DFFES ff mode posedge,enable,async_set port clk=C d=D q=Q en=E rst=S
+  bel SB_DFFN ff mode negedge port clk=C d=D q=Q
+  bel SB_DFFNSR ff mode negedge,sync_reset port clk=C d=D q=Q rst=R
+  bel SB_DFFNR ff mode negedge,async_reset port clk=C d=D q=Q rst=R
+  bel SB_DFFNSS ff mode negedge,sync_set port clk=C d=D q=Q rst=S
+  bel SB_DFFNS ff mode negedge,async_set port clk=C d=D q=Q rst=S
+  bel SB_DFFNE ff mode negedge,enable port clk=C d=D q=Q en=E
+  bel SB_DFFNESR ff mode negedge,enable,sync_reset port clk=C d=D q=Q en=E rst=R
+  bel SB_DFFNER ff mode negedge,enable,async_reset port clk=C d=D q=Q en=E rst=R
+  bel SB_DFFNESS ff mode negedge,enable,sync_set port clk=C d=D q=Q en=E rst=S
+  bel SB_DFFNES ff mode negedge,enable,async_set port clk=C d=D q=Q en=E rst=S
   bel SB_IO io port pad=PACKAGE_PIN din=D_IN_0 dout=D_OUT_0 oe=OUTPUT_ENABLE param_in PIN_TYPE=6'b000001 param_out PIN_TYPE=6'b011001 param_inout PIN_TYPE=6'b101001 param_pullup PULLUP=1
   bel SB_GB gb count 8 port i=USER_SIGNAL_TO_GLOBAL_BUFFER o=GLOBAL_BUFFER_OUTPUT
   bram SB_RAM40_4K

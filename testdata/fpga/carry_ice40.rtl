@@ -1,0 +1,20 @@
+top adder8
+
+module adder8
+  net %clk u1 wire
+  net %a u8 wire
+  net %b u8 wire
+  net %sum u8 wire
+  net %s u8 wire
+  net %carry u1 wire
+  net %wide u9 wire
+  port clk in %clk
+  port a in %a
+  port b in %b
+  port sum out %sum
+  port carry out %carry
+  cell widen add (a={1'd0, %a}, b={1'd0, %b}) -> (y=%wide)
+  assign %s = %wide[7:0]
+  assign %carry = %wide[8:8]
+  cell reg dff pos (clk=%clk, d=%s) -> (q=%sum)
+end

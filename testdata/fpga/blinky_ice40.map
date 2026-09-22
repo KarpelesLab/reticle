@@ -7,3 +7,11 @@ io:
   led (1 bits) -> SB_IO at pin 99 as LVCMOS33
 clocks:
   clk (8 flip-flops) -> SB_GB
+logic:
+  8 LUTs, depth 1
+netlist:
+  7 x SB_CARRY
+  8 x SB_DFFSR
+  1 x SB_GB
+  3 x SB_IO
+  8 x SB_LUT4

@@ -1,0 +1,19 @@
+top shift8
+
+module shift8
+  net %clk u1 wire
+  net %rst u1 wire
+  net %en u1 wire
+  net %d u1 wire
+  net %q u1 wire
+  net %sr u8 wire
+  net %next u8 wire
+  port clk in %clk
+  port rst in %rst
+  port en in %en
+  port d in %d
+  port q out %q
+  assign %next = {%sr[6:0], %d}
+  assign %q = %sr[7:7]
+  cell sr dff pos en arst pos 8'd0 (clk=%clk, d=%next, en=%en, rst=%rst) -> (q=%sr)
+end

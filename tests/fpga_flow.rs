@@ -1,13 +1,16 @@
-//! Golden tests for the FPGA flow: constraints, mapping and hand-off.
+//! Golden tests for the FPGA flow: constraints, the whole mapping
+//! pipeline, the netlist check and the hand-off.
 //!
 //! Each case under `testdata/fpga/` is a design in the IR text format
 //! (`<name>.rtl`) plus its constraints (`<name>.rcf`), and is taken all
-//! the way to the files a place-and-route tool would be handed:
+//! the way to the files a place-and-route tool would be handed by
+//! `fpga::synthesize_for`, which is synthesis, primitive mapping, LUT
+//! mapping, clean-up and the rewrite to the device's own primitives:
 //!
 //! | File | What it holds |
 //! |------|----------------|
-//! | `<name>.diag` | everything the constraint check and the mapper reported |
-//! | `<name>.map` | the mapping report |
+//! | `<name>.diag` | everything the constraint check and the flow reported |
+//! | `<name>.map` | the flow report |
 //! | `<name>.<device>.rtl` | the mapped design |
 //! | `<name>.pcf` / `<name>.lpf` | the nextpnr constraints for the family |
 //! | `<name>.xdc` | the Vivado constraints |
@@ -16,14 +19,19 @@
 //! Constraints are checked against the *input* design, before mapping,
 //! because that is the design the user wrote the names of.
 //!
+//! Every exported netlist is also run through `fpga::check_nextpnr_json`,
+//! which validates it against the device database: only primitives the
+//! device declares, only ports they have, one driver per net, constants
+//! the family's packer can tie, and pin constraints the package and the
+//! design both know. A golden file that no longer passes that check is a
+//! regression even when it is otherwise unchanged.
+//!
 //! Set `UPDATE_EXPECT=1` to rewrite the expectations after an intended
 //! change, and read the diff before committing it.
 //!
-//! One test is `#[ignore]`d: it runs `nextpnr-<family>` over the exported
-//! JSON when one is installed, and reports what it said. It is not part
-//! of the normal run because the export is not complete until technology
-//! mapping lands (see `fpga::flow`), and because nothing in this crate
-//! may depend on an external tool.
+//! One test runs the real `nextpnr-<family>` over the export. It is not
+//! ignored: when no such tool is installed it says so and returns, the
+//! way the other environment-dependent tests in this repository do.
 
 #![cfg(feature = "fpga")]
 
@@ -31,17 +39,19 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use reticle::diag::Diagnostics;
-use reticle::fpga::{self, Constraints, Device, MapOptions};
+use reticle::fpga::{self, Constraints, Device, FlowReport, FpgaOptions};
 use reticle::ir::Design;
 use reticle::ir::validate::validate;
 use reticle::source::SourceMap;
 
 /// The cases, each with the built-in device it targets.
-const CASES: [(&str, &str); 4] = [
+const CASES: [(&str, &str); 6] = [
     ("blinky_ice40", "ice40-hx1k-tq144"),
     ("ram_ice40", "ice40-hx1k-tq144"),
+    ("carry_ice40", "ice40-hx1k-tq144"),
     ("blinky_ecp5", "ecp5-45f-CABGA381"),
     ("ram_ecp5", "ecp5-45f-CABGA381"),
+    ("clkbuf_ecp5", "ecp5-45f-CABGA381"),
 ];
 
 fn dir() -> PathBuf {
@@ -96,7 +106,7 @@ struct Run {
     constraints: Constraints,
     device: &'static Device,
     diagnostics: String,
-    report: String,
+    report: FlowReport,
 }
 
 fn run_case(name: &str, device_name: &str) -> Run {
@@ -125,14 +135,15 @@ fn run_case(name: &str, device_name: &str) -> Run {
     constraints.merge_attrs(&design, top, &mut diags);
     constraints.check(&design, device, &mut diags);
 
-    let report = fpga::map(
+    let report = fpga::synthesize_for(
         &mut design,
         top,
         device,
         &constraints,
-        &MapOptions::default(),
+        &FpgaOptions::default(),
         &mut diags,
-    );
+    )
+    .unwrap_or_else(|e| panic!("{name}: the flow failed: {e}\n{}", diags.render(&sources)));
     let problems = validate(&design);
     assert!(
         !problems.has_errors(),
@@ -146,7 +157,7 @@ fn run_case(name: &str, device_name: &str) -> Run {
         constraints,
         device,
         diagnostics: diags.render(&sources),
-        report: report.to_text(),
+        report,
     }
 }
 
@@ -158,7 +169,7 @@ fn golden_fpga_flow() {
         let top = run.design.top.unwrap();
 
         expect(&format!("{name}.diag"), &run.diagnostics, &mut failures);
-        expect(&format!("{name}.map"), &run.report, &mut failures);
+        expect(&format!("{name}.map"), &run.report.to_text(), &mut failures);
 
         let mapped = run.design.to_text();
         expect(
@@ -210,15 +221,75 @@ fn golden_fpga_flow() {
     assert!(failures.is_empty(), "{}", failures.join("\n\n"));
 }
 
+/// Every exported netlist is one the device can actually hold: only
+/// primitives it declares, wired to ports they have, one driver per net.
+#[test]
+fn exports_are_acceptable_netlists() {
+    for (name, device_name) in CASES {
+        let run = run_case(name, device_name);
+        let top = run.design.top.unwrap();
+        let problems = fpga::check_nextpnr_json(&run.design, top, run.device, &run.constraints);
+        assert!(
+            problems.is_empty(),
+            "{name}: the exported netlist is not acceptable:\n{}",
+            problems
+                .iter()
+                .map(|p| format!("  {p}"))
+                .collect::<Vec<_>>()
+                .join("\n")
+        );
+        // Nothing generic survives: every cell type is a device primitive.
+        for (cell, count) in &run.report.netlist {
+            assert!(
+                !cell.starts_with('$'),
+                "{name}: {count} generic `{cell}` cell(s) are left"
+            );
+            assert!(
+                run.device.primitive_ports(cell).is_some(),
+                "{name}: `{cell}` is not a primitive of `{}`",
+                run.device.name
+            );
+        }
+    }
+}
+
+/// The flow reaches the primitives each case is about: the carry chain,
+/// the block RAM, the clock buffer, the LUTs and the flip-flops.
+#[test]
+fn every_layer_of_the_flow_is_exercised() {
+    let expected: [(&str, &[&str]); 6] = [
+        (
+            "blinky_ice40",
+            &["SB_LUT4", "SB_CARRY", "SB_IO", "SB_GB", "SB_DFFSR"],
+        ),
+        ("ram_ice40", &["SB_RAM40_4K", "SB_IO"]),
+        ("carry_ice40", &["SB_CARRY", "SB_LUT4", "SB_DFF"]),
+        ("blinky_ecp5", &["LUT4", "TRELLIS_FF", "TRELLIS_IO", "DCCA"]),
+        ("ram_ecp5", &["DP16KD", "TRELLIS_IO"]),
+        ("clkbuf_ecp5", &["DCCA", "TRELLIS_FF", "TRELLIS_IO"]),
+    ];
+    for (name, device_name) in CASES {
+        let run = run_case(name, device_name);
+        let wanted = expected
+            .iter()
+            .find(|(case, _)| *case == name)
+            .map(|(_, cells)| *cells)
+            .unwrap_or(&[]);
+        for cell in wanted {
+            assert!(
+                run.report.count(cell) > 0,
+                "{name}: no `{cell}` in {:?}",
+                run.report.netlist
+            );
+        }
+    }
+}
+
 /// The constraints file names the pins of the device it targets, and the
-/// device database knows them: a clean case produces no diagnostics at
-/// all.
+/// device database knows them: a clean case produces no errors at all.
 #[test]
 fn constraints_check_cleanly() {
     for (name, device_name) in CASES {
-        if !name.starts_with("blinky") {
-            continue;
-        }
         let run = run_case(name, device_name);
         assert!(
             !run.diagnostics.contains("error["),
@@ -228,15 +299,16 @@ fn constraints_check_cleanly() {
     }
 }
 
-/// Runs the real place-and-route tool over the export, when one is
-/// installed. Ignored by default; run with
-/// `cargo test --all-features --test fpga_flow -- --ignored --nocapture`.
+/// Runs the real place-and-route tool over the export when one is
+/// installed, and says what it said. When none is installed the test
+/// prints why and returns, since nothing in this crate may depend on an
+/// external tool being present.
 #[test]
-#[ignore = "needs nextpnr installed; the export is not complete before technology mapping"]
 fn nextpnr_reads_the_export() {
     use std::process::Command;
 
     let mut ran = 0;
+    let mut failed = Vec::new();
     for (name, device_name) in CASES {
         let run = run_case(name, device_name);
         let top = run.design.top.unwrap();
@@ -262,13 +334,23 @@ fn nextpnr_reads_the_export() {
             .output()
             .unwrap_or_else(|e| panic!("{name}: cannot run {tool}: {e}"));
         ran += 1;
+        let log = String::from_utf8_lossy(&output.stderr).to_string();
         println!(
-            "{name}: {} {} -> {}\n{}",
-            tool,
+            "{name}: {tool} {} -> {}\n{log}",
             inputs.args[1..].join(" "),
-            output.status,
-            String::from_utf8_lossy(&output.stderr)
+            output.status
         );
+        if !output.status.success() {
+            failed.push(format!("{name}: {tool} exited with {}", output.status));
+        }
     }
-    println!("{ran} of {} cases were run", CASES.len());
+    if ran == 0 {
+        println!(
+            "no nextpnr is installed, so the export was checked against the device \
+             database only (see `exports_are_acceptable_netlists`)"
+        );
+        return;
+    }
+    assert!(failed.is_empty(), "{}", failed.join("\n"));
+    println!("{ran} of {} cases were placed and routed", CASES.len());
 }

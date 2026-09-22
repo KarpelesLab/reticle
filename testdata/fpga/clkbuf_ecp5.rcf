@@ -1,0 +1,9 @@
+# An eight-stage shift register: eight flip-flops on one clock, which is
+# what earns the clock a global buffer (a DCCA on this family).
+set_io -io_standard LVCMOS33 clk G2
+set_io -io_standard LVCMOS33 rst B2
+set_io -io_standard LVCMOS33 en C1
+set_io -io_standard LVCMOS33 d C2
+set_io -io_standard LVCMOS33 q D1
+create_clock -name sys -period 40.0 clk
+clock_domain sys clk

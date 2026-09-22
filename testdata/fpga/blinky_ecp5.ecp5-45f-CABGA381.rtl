@@ -13,15 +13,33 @@ module blinky
   net %led$pad u1 wire
   net %led$pin0 u1 wire
   net %clk$gb u1 wire
+  net %$lut0 u1 wire
+  net %$lut1 u1 wire
+  net %$lut2 u1 wire
+  net %$lut3 u1 wire
+  net %$lut4 u1 wire
+  net %$lut5 u1 wire
+  net %$lut6 u1 wire
+  net %$lut7 u1 wire
+  net %$lut8 u1 wire
+  net %$lut9 u1 wire
+  net %counter$q0 u1 wire
+  net %counter$q1 u1 wire
+  net %counter$q2 u1 wire
+  net %counter$q3 u1 wire
+  net %counter$q4 u1 wire
+  net %counter$q5 u1 wire
+  net %counter$q6 u1 wire
+  net %counter$q7 u1 wire
   port clk in %clk$pad
   port rst in %rst$pad
   port led out %led$pad
-  assign %led = %count[7:7]
   assign %clk = %clk$in0
   assign %rst = %rst$in0
+  assign %led = %count[7:7]
+  assign %next = {%$lut2, %$lut3, %$lut4, %$lut5, %$lut6, %$lut7, %$lut8, %$lut9}
   assign %led$pad = %led$pin0
-  cell inc add (a=%count, b=8'd1) -> (y=%next)
-  cell counter dff pos srst pos 8'd0 (clk=%clk$gb, d=%next, rst=%rst) -> (q=%count)
+  assign %count = {%counter$q7, %counter$q6, %counter$q5, %counter$q4, %counter$q3, %counter$q2, %counter$q1, %counter$q0}
   attr port = "clk"
   attr pin = "G2"
   attr io_standard = "LVCMOS33"
@@ -37,5 +55,23 @@ module blinky
   attr io_standard = "LVCMOS33"
   attr pullup = 1
   cell led$io0 blackbox TRELLIS_IO #(DIR="OUTPUT", PULLMODE="UP") (I=%led) -> (B=%led$pin0)
-  cell clk$gbuf blackbox DCCA (CLKI=%clk) -> (CLKO=%clk$gb)
+  cell clk$gbuf blackbox DCCA (CLKI=%clk, CE=1'd1) -> (CLKO=%clk$gb)
+  cell $lut10 blackbox LUT4 #(INIT=16'd32768) (A={%count[3:3], %count[2:2], %count[1:1], %count[0:0]}[0:0], B={%count[3:3], %count[2:2], %count[1:1], %count[0:0]}[1:1], C={%count[3:3], %count[2:2], %count[1:1], %count[0:0]}[2:2], D={%count[3:3], %count[2:2], %count[1:1], %count[0:0]}[3:3]) -> (Z=%$lut0)
+  cell $lut11 blackbox LUT4 #(INIT=16'd32768) (A={%$lut0, %count[6:6], %count[5:5], %count[4:4]}[0:0], B={%$lut0, %count[6:6], %count[5:5], %count[4:4]}[1:1], C={%$lut0, %count[6:6], %count[5:5], %count[4:4]}[2:2], D={%$lut0, %count[6:6], %count[5:5], %count[4:4]}[3:3]) -> (Z=%$lut1)
+  cell $lut12 blackbox LUT4 #(INIT=16'd26214) (A={%$lut1, %count[7:7]}[0:0], B={%$lut1, %count[7:7]}[1:1], C=1'd0, D=1'd0) -> (Z=%$lut2)
+  cell $lut13 blackbox LUT4 #(INIT=16'd30960) (A={%$lut0, %count[6:6], %count[5:5], %count[4:4]}[0:0], B={%$lut0, %count[6:6], %count[5:5], %count[4:4]}[1:1], C={%$lut0, %count[6:6], %count[5:5], %count[4:4]}[2:2], D={%$lut0, %count[6:6], %count[5:5], %count[4:4]}[3:3]) -> (Z=%$lut3)
+  cell $lut14 blackbox LUT4 #(INIT=16'd27756) (A={%$lut0, %count[5:5], %count[4:4]}[0:0], B={%$lut0, %count[5:5], %count[4:4]}[1:1], C={%$lut0, %count[5:5], %count[4:4]}[2:2], D=1'd0) -> (Z=%$lut4)
+  cell $lut15 blackbox LUT4 #(INIT=16'd26214) (A={%$lut0, %count[4:4]}[0:0], B={%$lut0, %count[4:4]}[1:1], C=1'd0, D=1'd0) -> (Z=%$lut5)
+  cell $lut16 blackbox LUT4 #(INIT=16'd32640) (A={%count[3:3], %count[2:2], %count[1:1], %count[0:0]}[0:0], B={%count[3:3], %count[2:2], %count[1:1], %count[0:0]}[1:1], C={%count[3:3], %count[2:2], %count[1:1], %count[0:0]}[2:2], D={%count[3:3], %count[2:2], %count[1:1], %count[0:0]}[3:3]) -> (Z=%$lut6)
+  cell $lut17 blackbox LUT4 #(INIT=16'd30840) (A={%count[2:2], %count[1:1], %count[0:0]}[0:0], B={%count[2:2], %count[1:1], %count[0:0]}[1:1], C={%count[2:2], %count[1:1], %count[0:0]}[2:2], D=1'd0) -> (Z=%$lut7)
+  cell $lut18 blackbox LUT4 #(INIT=16'd26214) (A={%count[1:1], %count[0:0]}[0:0], B={%count[1:1], %count[0:0]}[1:1], C=1'd0, D=1'd0) -> (Z=%$lut8)
+  cell $lut19 blackbox LUT4 #(INIT=16'd21845) (A=%count[0:0], B=1'd0, C=1'd0, D=1'd0) -> (Z=%$lut9)
+  cell counter$ff0 blackbox TRELLIS_FF #(GSR="DISABLED", REGMODE="FF", CEMUX=1, CLKMUX="CLK", LSRMUX="LSR", SRMODE="LSR_OVER_CE", REGSET="RESET") (CLK=%clk$gb, DI=%next[0:0], CE=1'd1, LSR=%rst) -> (Q=%counter$q0)
+  cell counter$ff1 blackbox TRELLIS_FF #(GSR="DISABLED", REGMODE="FF", CEMUX=1, CLKMUX="CLK", LSRMUX="LSR", SRMODE="LSR_OVER_CE", REGSET="RESET") (CLK=%clk$gb, DI=%next[1:1], CE=1'd1, LSR=%rst) -> (Q=%counter$q1)
+  cell counter$ff2 blackbox TRELLIS_FF #(GSR="DISABLED", REGMODE="FF", CEMUX=1, CLKMUX="CLK", LSRMUX="LSR", SRMODE="LSR_OVER_CE", REGSET="RESET") (CLK=%clk$gb, DI=%next[2:2], CE=1'd1, LSR=%rst) -> (Q=%counter$q2)
+  cell counter$ff3 blackbox TRELLIS_FF #(GSR="DISABLED", REGMODE="FF", CEMUX=1, CLKMUX="CLK", LSRMUX="LSR", SRMODE="LSR_OVER_CE", REGSET="RESET") (CLK=%clk$gb, DI=%next[3:3], CE=1'd1, LSR=%rst) -> (Q=%counter$q3)
+  cell counter$ff4 blackbox TRELLIS_FF #(GSR="DISABLED", REGMODE="FF", CEMUX=1, CLKMUX="CLK", LSRMUX="LSR", SRMODE="LSR_OVER_CE", REGSET="RESET") (CLK=%clk$gb, DI=%next[4:4], CE=1'd1, LSR=%rst) -> (Q=%counter$q4)
+  cell counter$ff5 blackbox TRELLIS_FF #(GSR="DISABLED", REGMODE="FF", CEMUX=1, CLKMUX="CLK", LSRMUX="LSR", SRMODE="LSR_OVER_CE", REGSET="RESET") (CLK=%clk$gb, DI=%next[5:5], CE=1'd1, LSR=%rst) -> (Q=%counter$q5)
+  cell counter$ff6 blackbox TRELLIS_FF #(GSR="DISABLED", REGMODE="FF", CEMUX=1, CLKMUX="CLK", LSRMUX="LSR", SRMODE="LSR_OVER_CE", REGSET="RESET") (CLK=%clk$gb, DI=%next[6:6], CE=1'd1, LSR=%rst) -> (Q=%counter$q6)
+  cell counter$ff7 blackbox TRELLIS_FF #(GSR="DISABLED", REGMODE="FF", CEMUX=1, CLKMUX="CLK", LSRMUX="LSR", SRMODE="LSR_OVER_CE", REGSET="RESET") (CLK=%clk$gb, DI=%next[7:7], CE=1'd1, LSR=%rst) -> (Q=%counter$q7)
 end

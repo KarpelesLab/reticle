@@ -1,0 +1,19 @@
+device: ice40-hx1k-tq144
+carry:
+  widen (9 bits) -> 8 x SB_CARRY
+io:
+  clk (1 bits) -> SB_IO at pin 21 as LVCMOS33
+  a (8 bits) -> SB_IO
+  b (8 bits) -> SB_IO
+  sum (8 bits) -> SB_IO
+  carry (1 bits) -> SB_IO at pin 99 as LVCMOS33
+clocks:
+  clk (8 flip-flops) -> SB_GB
+logic:
+  8 LUTs, depth 1
+netlist:
+  8 x SB_CARRY
+  8 x SB_DFF
+  1 x SB_GB
+  26 x SB_IO
+  8 x SB_LUT4

@@ -1,0 +1,1265 @@
+{
+  "creator": "reticle",
+  "modules": {
+    "adder8": {
+      "attributes": {
+        "top": 1
+      },
+      "ports": {
+        "clk": { "direction": "input", "bits": [ 2 ] },
+        "a": { "direction": "input", "bits": [ 3, 4, 5, 6, 7, 8, 9, 10 ] },
+        "b": { "direction": "input", "bits": [ 11, 12, 13, 14, 15, 16, 17, 18 ] },
+        "sum": { "direction": "output", "bits": [ 19, 20, 21, 22, 23, 24, 25, 26 ] },
+        "carry": { "direction": "output", "bits": [ 27 ] }
+      },
+      "cells": {
+        "widen$carry0": {
+          "hide_name": 0,
+          "type": "SB_CARRY",
+          "parameters": {},
+          "attributes": {},
+          "port_directions": {
+            "CI": "input",
+            "I0": "input",
+            "I1": "input",
+            "CO": "output"
+          },
+          "connections": {
+            "CI": [ "0" ],
+            "I0": [ 29 ],
+            "I1": [ 37 ],
+            "CO": [ 62 ]
+          }
+        },
+        "widen$carry1": {
+          "hide_name": 0,
+          "type": "SB_CARRY",
+          "parameters": {},
+          "attributes": {},
+          "port_directions": {
+            "CI": "input",
+            "I0": "input",
+            "I1": "input",
+            "CO": "output"
+          },
+          "connections": {
+            "CI": [ 62 ],
+            "I0": [ 30 ],
+            "I1": [ 38 ],
+            "CO": [ 63 ]
+          }
+        },
+        "widen$carry2": {
+          "hide_name": 0,
+          "type": "SB_CARRY",
+          "parameters": {},
+          "attributes": {},
+          "port_directions": {
+            "CI": "input",
+            "I0": "input",
+            "I1": "input",
+            "CO": "output"
+          },
+          "connections": {
+            "CI": [ 63 ],
+            "I0": [ 31 ],
+            "I1": [ 39 ],
+            "CO": [ 64 ]
+          }
+        },
+        "widen$carry3": {
+          "hide_name": 0,
+          "type": "SB_CARRY",
+          "parameters": {},
+          "attributes": {},
+          "port_directions": {
+            "CI": "input",
+            "I0": "input",
+            "I1": "input",
+            "CO": "output"
+          },
+          "connections": {
+            "CI": [ 64 ],
+            "I0": [ 32 ],
+            "I1": [ 40 ],
+            "CO": [ 65 ]
+          }
+        },
+        "widen$carry4": {
+          "hide_name": 0,
+          "type": "SB_CARRY",
+          "parameters": {},
+          "attributes": {},
+          "port_directions": {
+            "CI": "input",
+            "I0": "input",
+            "I1": "input",
+            "CO": "output"
+          },
+          "connections": {
+            "CI": [ 65 ],
+            "I0": [ 33 ],
+            "I1": [ 41 ],
+            "CO": [ 66 ]
+          }
+        },
+        "widen$carry5": {
+          "hide_name": 0,
+          "type": "SB_CARRY",
+          "parameters": {},
+          "attributes": {},
+          "port_directions": {
+            "CI": "input",
+            "I0": "input",
+            "I1": "input",
+            "CO": "output"
+          },
+          "connections": {
+            "CI": [ 66 ],
+            "I0": [ 34 ],
+            "I1": [ 42 ],
+            "CO": [ 67 ]
+          }
+        },
+        "widen$carry6": {
+          "hide_name": 0,
+          "type": "SB_CARRY",
+          "parameters": {},
+          "attributes": {},
+          "port_directions": {
+            "CI": "input",
+            "I0": "input",
+            "I1": "input",
+            "CO": "output"
+          },
+          "connections": {
+            "CI": [ 67 ],
+            "I0": [ 35 ],
+            "I1": [ 43 ],
+            "CO": [ 68 ]
+          }
+        },
+        "widen$carry7": {
+          "hide_name": 0,
+          "type": "SB_CARRY",
+          "parameters": {},
+          "attributes": {},
+          "port_directions": {
+            "CI": "input",
+            "I0": "input",
+            "I1": "input",
+            "CO": "output"
+          },
+          "connections": {
+            "CI": [ 68 ],
+            "I0": [ 36 ],
+            "I1": [ 44 ],
+            "CO": [ 61 ]
+          }
+        },
+        "clk$io0": {
+          "hide_name": 0,
+          "type": "SB_IO",
+          "parameters": {
+            "PIN_TYPE": 1
+          },
+          "attributes": {
+            "port": "clk",
+            "pin": "21",
+            "io_standard": "LVCMOS33"
+          },
+          "port_directions": {
+            "PACKAGE_PIN": "input",
+            "D_IN_0": "output"
+          },
+          "connections": {
+            "PACKAGE_PIN": [ 2 ],
+            "D_IN_0": [ 28 ]
+          }
+        },
+        "a$io0": {
+          "hide_name": 0,
+          "type": "SB_IO",
+          "parameters": {
+            "PIN_TYPE": 1
+          },
+          "attributes": {
+            "port": "a"
+          },
+          "port_directions": {
+            "PACKAGE_PIN": "input",
+            "D_IN_0": "output"
+          },
+          "connections": {
+            "PACKAGE_PIN": [ 3 ],
+            "D_IN_0": [ 29 ]
+          }
+        },
+        "a$io1": {
+          "hide_name": 0,
+          "type": "SB_IO",
+          "parameters": {
+            "PIN_TYPE": 1
+          },
+          "attributes": {
+            "port": "a"
+          },
+          "port_directions": {
+            "PACKAGE_PIN": "input",
+            "D_IN_0": "output"
+          },
+          "connections": {
+            "PACKAGE_PIN": [ 4 ],
+            "D_IN_0": [ 30 ]
+          }
+        },
+        "a$io2": {
+          "hide_name": 0,
+          "type": "SB_IO",
+          "parameters": {
+            "PIN_TYPE": 1
+          },
+          "attributes": {
+            "port": "a"
+          },
+          "port_directions": {
+            "PACKAGE_PIN": "input",
+            "D_IN_0": "output"
+          },
+          "connections": {
+            "PACKAGE_PIN": [ 5 ],
+            "D_IN_0": [ 31 ]
+          }
+        },
+        "a$io3": {
+          "hide_name": 0,
+          "type": "SB_IO",
+          "parameters": {
+            "PIN_TYPE": 1
+          },
+          "attributes": {
+            "port": "a"
+          },
+          "port_directions": {
+            "PACKAGE_PIN": "input",
+            "D_IN_0": "output"
+          },
+          "connections": {
+            "PACKAGE_PIN": [ 6 ],
+            "D_IN_0": [ 32 ]
+          }
+        },
+        "a$io4": {
+          "hide_name": 0,
+          "type": "SB_IO",
+          "parameters": {
+            "PIN_TYPE": 1
+          },
+          "attributes": {
+            "port": "a"
+          },
+          "port_directions": {
+            "PACKAGE_PIN": "input",
+            "D_IN_0": "output"
+          },
+          "connections": {
+            "PACKAGE_PIN": [ 7 ],
+            "D_IN_0": [ 33 ]
+          }
+        },
+        "a$io5": {
+          "hide_name": 0,
+          "type": "SB_IO",
+          "parameters": {
+            "PIN_TYPE": 1
+          },
+          "attributes": {
+            "port": "a"
+          },
+          "port_directions": {
+            "PACKAGE_PIN": "input",
+            "D_IN_0": "output"
+          },
+          "connections": {
+            "PACKAGE_PIN": [ 8 ],
+            "D_IN_0": [ 34 ]
+          }
+        },
+        "a$io6": {
+          "hide_name": 0,
+          "type": "SB_IO",
+          "parameters": {
+            "PIN_TYPE": 1
+          },
+          "attributes": {
+            "port": "a"
+          },
+          "port_directions": {
+            "PACKAGE_PIN": "input",
+            "D_IN_0": "output"
+          },
+          "connections": {
+            "PACKAGE_PIN": [ 9 ],
+            "D_IN_0": [ 35 ]
+          }
+        },
+        "a$io7": {
+          "hide_name": 0,
+          "type": "SB_IO",
+          "parameters": {
+            "PIN_TYPE": 1
+          },
+          "attributes": {
+            "port": "a"
+          },
+          "port_directions": {
+            "PACKAGE_PIN": "input",
+            "D_IN_0": "output"
+          },
+          "connections": {
+            "PACKAGE_PIN": [ 10 ],
+            "D_IN_0": [ 36 ]
+          }
+        },
+        "b$io0": {
+          "hide_name": 0,
+          "type": "SB_IO",
+          "parameters": {
+            "PIN_TYPE": 1
+          },
+          "attributes": {
+            "port": "b"
+          },
+          "port_directions": {
+            "PACKAGE_PIN": "input",
+            "D_IN_0": "output"
+          },
+          "connections": {
+            "PACKAGE_PIN": [ 11 ],
+            "D_IN_0": [ 37 ]
+          }
+        },
+        "b$io1": {
+          "hide_name": 0,
+          "type": "SB_IO",
+          "parameters": {
+            "PIN_TYPE": 1
+          },
+          "attributes": {
+            "port": "b"
+          },
+          "port_directions": {
+            "PACKAGE_PIN": "input",
+            "D_IN_0": "output"
+          },
+          "connections": {
+            "PACKAGE_PIN": [ 12 ],
+            "D_IN_0": [ 38 ]
+          }
+        },
+        "b$io2": {
+          "hide_name": 0,
+          "type": "SB_IO",
+          "parameters": {
+            "PIN_TYPE": 1
+          },
+          "attributes": {
+            "port": "b"
+          },
+          "port_directions": {
+            "PACKAGE_PIN": "input",
+            "D_IN_0": "output"
+          },
+          "connections": {
+            "PACKAGE_PIN": [ 13 ],
+            "D_IN_0": [ 39 ]
+          }
+        },
+        "b$io3": {
+          "hide_name": 0,
+          "type": "SB_IO",
+          "parameters": {
+            "PIN_TYPE": 1
+          },
+          "attributes": {
+            "port": "b"
+          },
+          "port_directions": {
+            "PACKAGE_PIN": "input",
+            "D_IN_0": "output"
+          },
+          "connections": {
+            "PACKAGE_PIN": [ 14 ],
+            "D_IN_0": [ 40 ]
+          }
+        },
+        "b$io4": {
+          "hide_name": 0,
+          "type": "SB_IO",
+          "parameters": {
+            "PIN_TYPE": 1
+          },
+          "attributes": {
+            "port": "b"
+          },
+          "port_directions": {
+            "PACKAGE_PIN": "input",
+            "D_IN_0": "output"
+          },
+          "connections": {
+            "PACKAGE_PIN": [ 15 ],
+            "D_IN_0": [ 41 ]
+          }
+        },
+        "b$io5": {
+          "hide_name": 0,
+          "type": "SB_IO",
+          "parameters": {
+            "PIN_TYPE": 1
+          },
+          "attributes": {
+            "port": "b"
+          },
+          "port_directions": {
+            "PACKAGE_PIN": "input",
+            "D_IN_0": "output"
+          },
+          "connections": {
+            "PACKAGE_PIN": [ 16 ],
+            "D_IN_0": [ 42 ]
+          }
+        },
+        "b$io6": {
+          "hide_name": 0,
+          "type": "SB_IO",
+          "parameters": {
+            "PIN_TYPE": 1
+          },
+          "attributes": {
+            "port": "b"
+          },
+          "port_directions": {
+            "PACKAGE_PIN": "input",
+            "D_IN_0": "output"
+          },
+          "connections": {
+            "PACKAGE_PIN": [ 17 ],
+            "D_IN_0": [ 43 ]
+          }
+        },
+        "b$io7": {
+          "hide_name": 0,
+          "type": "SB_IO",
+          "parameters": {
+            "PIN_TYPE": 1
+          },
+          "attributes": {
+            "port": "b"
+          },
+          "port_directions": {
+            "PACKAGE_PIN": "input",
+            "D_IN_0": "output"
+          },
+          "connections": {
+            "PACKAGE_PIN": [ 18 ],
+            "D_IN_0": [ 44 ]
+          }
+        },
+        "sum$io0": {
+          "hide_name": 0,
+          "type": "SB_IO",
+          "parameters": {
+            "PIN_TYPE": 25
+          },
+          "attributes": {
+            "port": "sum"
+          },
+          "port_directions": {
+            "D_OUT_0": "input",
+            "PACKAGE_PIN": "output"
+          },
+          "connections": {
+            "D_OUT_0": [ 45 ],
+            "PACKAGE_PIN": [ 19 ]
+          }
+        },
+        "sum$io1": {
+          "hide_name": 0,
+          "type": "SB_IO",
+          "parameters": {
+            "PIN_TYPE": 25
+          },
+          "attributes": {
+            "port": "sum"
+          },
+          "port_directions": {
+            "D_OUT_0": "input",
+            "PACKAGE_PIN": "output"
+          },
+          "connections": {
+            "D_OUT_0": [ 46 ],
+            "PACKAGE_PIN": [ 20 ]
+          }
+        },
+        "sum$io2": {
+          "hide_name": 0,
+          "type": "SB_IO",
+          "parameters": {
+            "PIN_TYPE": 25
+          },
+          "attributes": {
+            "port": "sum"
+          },
+          "port_directions": {
+            "D_OUT_0": "input",
+            "PACKAGE_PIN": "output"
+          },
+          "connections": {
+            "D_OUT_0": [ 47 ],
+            "PACKAGE_PIN": [ 21 ]
+          }
+        },
+        "sum$io3": {
+          "hide_name": 0,
+          "type": "SB_IO",
+          "parameters": {
+            "PIN_TYPE": 25
+          },
+          "attributes": {
+            "port": "sum"
+          },
+          "port_directions": {
+            "D_OUT_0": "input",
+            "PACKAGE_PIN": "output"
+          },
+          "connections": {
+            "D_OUT_0": [ 48 ],
+            "PACKAGE_PIN": [ 22 ]
+          }
+        },
+        "sum$io4": {
+          "hide_name": 0,
+          "type": "SB_IO",
+          "parameters": {
+            "PIN_TYPE": 25
+          },
+          "attributes": {
+            "port": "sum"
+          },
+          "port_directions": {
+            "D_OUT_0": "input",
+            "PACKAGE_PIN": "output"
+          },
+          "connections": {
+            "D_OUT_0": [ 49 ],
+            "PACKAGE_PIN": [ 23 ]
+          }
+        },
+        "sum$io5": {
+          "hide_name": 0,
+          "type": "SB_IO",
+          "parameters": {
+            "PIN_TYPE": 25
+          },
+          "attributes": {
+            "port": "sum"
+          },
+          "port_directions": {
+            "D_OUT_0": "input",
+            "PACKAGE_PIN": "output"
+          },
+          "connections": {
+            "D_OUT_0": [ 50 ],
+            "PACKAGE_PIN": [ 24 ]
+          }
+        },
+        "sum$io6": {
+          "hide_name": 0,
+          "type": "SB_IO",
+          "parameters": {
+            "PIN_TYPE": 25
+          },
+          "attributes": {
+            "port": "sum"
+          },
+          "port_directions": {
+            "D_OUT_0": "input",
+            "PACKAGE_PIN": "output"
+          },
+          "connections": {
+            "D_OUT_0": [ 51 ],
+            "PACKAGE_PIN": [ 25 ]
+          }
+        },
+        "sum$io7": {
+          "hide_name": 0,
+          "type": "SB_IO",
+          "parameters": {
+            "PIN_TYPE": 25
+          },
+          "attributes": {
+            "port": "sum"
+          },
+          "port_directions": {
+            "D_OUT_0": "input",
+            "PACKAGE_PIN": "output"
+          },
+          "connections": {
+            "D_OUT_0": [ 52 ],
+            "PACKAGE_PIN": [ 26 ]
+          }
+        },
+        "carry$io0": {
+          "hide_name": 0,
+          "type": "SB_IO",
+          "parameters": {
+            "PIN_TYPE": 25
+          },
+          "attributes": {
+            "port": "carry",
+            "pin": "99",
+            "io_standard": "LVCMOS33"
+          },
+          "port_directions": {
+            "D_OUT_0": "input",
+            "PACKAGE_PIN": "output"
+          },
+          "connections": {
+            "D_OUT_0": [ 61 ],
+            "PACKAGE_PIN": [ 27 ]
+          }
+        },
+        "clk$gbuf": {
+          "hide_name": 0,
+          "type": "SB_GB",
+          "parameters": {},
+          "attributes": {},
+          "port_directions": {
+            "USER_SIGNAL_TO_GLOBAL_BUFFER": "input",
+            "GLOBAL_BUFFER_OUTPUT": "output"
+          },
+          "connections": {
+            "USER_SIGNAL_TO_GLOBAL_BUFFER": [ 28 ],
+            "GLOBAL_BUFFER_OUTPUT": [ 69 ]
+          }
+        },
+        "$lut8": {
+          "hide_name": 1,
+          "type": "SB_LUT4",
+          "parameters": {
+            "LUT_INIT": 38550
+          },
+          "attributes": {},
+          "port_directions": {
+            "I0": "input",
+            "I1": "input",
+            "I2": "input",
+            "I3": "input",
+            "O": "output"
+          },
+          "connections": {
+            "I0": [ 36 ],
+            "I1": [ 44 ],
+            "I2": [ 68 ],
+            "I3": [ "0" ],
+            "O": [ 60 ]
+          }
+        },
+        "$lut9": {
+          "hide_name": 1,
+          "type": "SB_LUT4",
+          "parameters": {
+            "LUT_INIT": 38550
+          },
+          "attributes": {},
+          "port_directions": {
+            "I0": "input",
+            "I1": "input",
+            "I2": "input",
+            "I3": "input",
+            "O": "output"
+          },
+          "connections": {
+            "I0": [ 35 ],
+            "I1": [ 43 ],
+            "I2": [ 67 ],
+            "I3": [ "0" ],
+            "O": [ 59 ]
+          }
+        },
+        "$lut10": {
+          "hide_name": 1,
+          "type": "SB_LUT4",
+          "parameters": {
+            "LUT_INIT": 38550
+          },
+          "attributes": {},
+          "port_directions": {
+            "I0": "input",
+            "I1": "input",
+            "I2": "input",
+            "I3": "input",
+            "O": "output"
+          },
+          "connections": {
+            "I0": [ 34 ],
+            "I1": [ 42 ],
+            "I2": [ 66 ],
+            "I3": [ "0" ],
+            "O": [ 58 ]
+          }
+        },
+        "$lut11": {
+          "hide_name": 1,
+          "type": "SB_LUT4",
+          "parameters": {
+            "LUT_INIT": 38550
+          },
+          "attributes": {},
+          "port_directions": {
+            "I0": "input",
+            "I1": "input",
+            "I2": "input",
+            "I3": "input",
+            "O": "output"
+          },
+          "connections": {
+            "I0": [ 33 ],
+            "I1": [ 41 ],
+            "I2": [ 65 ],
+            "I3": [ "0" ],
+            "O": [ 57 ]
+          }
+        },
+        "$lut12": {
+          "hide_name": 1,
+          "type": "SB_LUT4",
+          "parameters": {
+            "LUT_INIT": 38550
+          },
+          "attributes": {},
+          "port_directions": {
+            "I0": "input",
+            "I1": "input",
+            "I2": "input",
+            "I3": "input",
+            "O": "output"
+          },
+          "connections": {
+            "I0": [ 32 ],
+            "I1": [ 40 ],
+            "I2": [ 64 ],
+            "I3": [ "0" ],
+            "O": [ 56 ]
+          }
+        },
+        "$lut13": {
+          "hide_name": 1,
+          "type": "SB_LUT4",
+          "parameters": {
+            "LUT_INIT": 38550
+          },
+          "attributes": {},
+          "port_directions": {
+            "I0": "input",
+            "I1": "input",
+            "I2": "input",
+            "I3": "input",
+            "O": "output"
+          },
+          "connections": {
+            "I0": [ 31 ],
+            "I1": [ 39 ],
+            "I2": [ 63 ],
+            "I3": [ "0" ],
+            "O": [ 55 ]
+          }
+        },
+        "$lut14": {
+          "hide_name": 1,
+          "type": "SB_LUT4",
+          "parameters": {
+            "LUT_INIT": 38550
+          },
+          "attributes": {},
+          "port_directions": {
+            "I0": "input",
+            "I1": "input",
+            "I2": "input",
+            "I3": "input",
+            "O": "output"
+          },
+          "connections": {
+            "I0": [ 30 ],
+            "I1": [ 38 ],
+            "I2": [ 62 ],
+            "I3": [ "0" ],
+            "O": [ 54 ]
+          }
+        },
+        "$lut15": {
+          "hide_name": 1,
+          "type": "SB_LUT4",
+          "parameters": {
+            "LUT_INIT": 26214
+          },
+          "attributes": {},
+          "port_directions": {
+            "I0": "input",
+            "I1": "input",
+            "I2": "input",
+            "I3": "input",
+            "O": "output"
+          },
+          "connections": {
+            "I0": [ 29 ],
+            "I1": [ 37 ],
+            "I2": [ "0" ],
+            "I3": [ "0" ],
+            "O": [ 53 ]
+          }
+        },
+        "reg$ff0": {
+          "hide_name": 0,
+          "type": "SB_DFF",
+          "parameters": {},
+          "attributes": {},
+          "port_directions": {
+            "C": "input",
+            "D": "input",
+            "Q": "output"
+          },
+          "connections": {
+            "C": [ 69 ],
+            "D": [ 53 ],
+            "Q": [ 45 ]
+          }
+        },
+        "reg$ff1": {
+          "hide_name": 0,
+          "type": "SB_DFF",
+          "parameters": {},
+          "attributes": {},
+          "port_directions": {
+            "C": "input",
+            "D": "input",
+            "Q": "output"
+          },
+          "connections": {
+            "C": [ 69 ],
+            "D": [ 54 ],
+            "Q": [ 46 ]
+          }
+        },
+        "reg$ff2": {
+          "hide_name": 0,
+          "type": "SB_DFF",
+          "parameters": {},
+          "attributes": {},
+          "port_directions": {
+            "C": "input",
+            "D": "input",
+            "Q": "output"
+          },
+          "connections": {
+            "C": [ 69 ],
+            "D": [ 55 ],
+            "Q": [ 47 ]
+          }
+        },
+        "reg$ff3": {
+          "hide_name": 0,
+          "type": "SB_DFF",
+          "parameters": {},
+          "attributes": {},
+          "port_directions": {
+            "C": "input",
+            "D": "input",
+            "Q": "output"
+          },
+          "connections": {
+            "C": [ 69 ],
+            "D": [ 56 ],
+            "Q": [ 48 ]
+          }
+        },
+        "reg$ff4": {
+          "hide_name": 0,
+          "type": "SB_DFF",
+          "parameters": {},
+          "attributes": {},
+          "port_directions": {
+            "C": "input",
+            "D": "input",
+            "Q": "output"
+          },
+          "connections": {
+            "C": [ 69 ],
+            "D": [ 57 ],
+            "Q": [ 49 ]
+          }
+        },
+        "reg$ff5": {
+          "hide_name": 0,
+          "type": "SB_DFF",
+          "parameters": {},
+          "attributes": {},
+          "port_directions": {
+            "C": "input",
+            "D": "input",
+            "Q": "output"
+          },
+          "connections": {
+            "C": [ 69 ],
+            "D": [ 58 ],
+            "Q": [ 50 ]
+          }
+        },
+        "reg$ff6": {
+          "hide_name": 0,
+          "type": "SB_DFF",
+          "parameters": {},
+          "attributes": {},
+          "port_directions": {
+            "C": "input",
+            "D": "input",
+            "Q": "output"
+          },
+          "connections": {
+            "C": [ 69 ],
+            "D": [ 59 ],
+            "Q": [ 51 ]
+          }
+        },
+        "reg$ff7": {
+          "hide_name": 0,
+          "type": "SB_DFF",
+          "parameters": {},
+          "attributes": {},
+          "port_directions": {
+            "C": "input",
+            "D": "input",
+            "Q": "output"
+          },
+          "connections": {
+            "C": [ 69 ],
+            "D": [ 60 ],
+            "Q": [ 52 ]
+          }
+        }
+      },
+      "netnames": {
+        "clk": {
+          "hide_name": 0,
+          "bits": [ 28 ],
+          "attributes": {}
+        },
+        "a": {
+          "hide_name": 0,
+          "bits": [ 29, 30, 31, 32, 33, 34, 35, 36 ],
+          "attributes": {}
+        },
+        "b": {
+          "hide_name": 0,
+          "bits": [ 37, 38, 39, 40, 41, 42, 43, 44 ],
+          "attributes": {}
+        },
+        "sum": {
+          "hide_name": 0,
+          "bits": [ 45, 46, 47, 48, 49, 50, 51, 52 ],
+          "attributes": {}
+        },
+        "s": {
+          "hide_name": 0,
+          "bits": [ 53, 54, 55, 56, 57, 58, 59, 60 ],
+          "attributes": {}
+        },
+        "carry": {
+          "hide_name": 0,
+          "bits": [ 61 ],
+          "attributes": {}
+        },
+        "widen$c0": {
+          "hide_name": 0,
+          "bits": [ 62 ],
+          "attributes": {}
+        },
+        "widen$c1": {
+          "hide_name": 0,
+          "bits": [ 63 ],
+          "attributes": {}
+        },
+        "widen$c2": {
+          "hide_name": 0,
+          "bits": [ 64 ],
+          "attributes": {}
+        },
+        "widen$c3": {
+          "hide_name": 0,
+          "bits": [ 65 ],
+          "attributes": {}
+        },
+        "widen$c4": {
+          "hide_name": 0,
+          "bits": [ 66 ],
+          "attributes": {}
+        },
+        "widen$c5": {
+          "hide_name": 0,
+          "bits": [ 67 ],
+          "attributes": {}
+        },
+        "widen$c6": {
+          "hide_name": 0,
+          "bits": [ 68 ],
+          "attributes": {}
+        },
+        "widen$c7": {
+          "hide_name": 0,
+          "bits": [ 61 ],
+          "attributes": {}
+        },
+        "clk$pad": {
+          "hide_name": 0,
+          "bits": [ 2 ],
+          "attributes": {}
+        },
+        "clk$in0": {
+          "hide_name": 0,
+          "bits": [ 28 ],
+          "attributes": {}
+        },
+        "a$pad": {
+          "hide_name": 0,
+          "bits": [ 3, 4, 5, 6, 7, 8, 9, 10 ],
+          "attributes": {}
+        },
+        "a$in0": {
+          "hide_name": 0,
+          "bits": [ 29 ],
+          "attributes": {}
+        },
+        "a$in1": {
+          "hide_name": 0,
+          "bits": [ 30 ],
+          "attributes": {}
+        },
+        "a$in2": {
+          "hide_name": 0,
+          "bits": [ 31 ],
+          "attributes": {}
+        },
+        "a$in3": {
+          "hide_name": 0,
+          "bits": [ 32 ],
+          "attributes": {}
+        },
+        "a$in4": {
+          "hide_name": 0,
+          "bits": [ 33 ],
+          "attributes": {}
+        },
+        "a$in5": {
+          "hide_name": 0,
+          "bits": [ 34 ],
+          "attributes": {}
+        },
+        "a$in6": {
+          "hide_name": 0,
+          "bits": [ 35 ],
+          "attributes": {}
+        },
+        "a$in7": {
+          "hide_name": 0,
+          "bits": [ 36 ],
+          "attributes": {}
+        },
+        "b$pad": {
+          "hide_name": 0,
+          "bits": [ 11, 12, 13, 14, 15, 16, 17, 18 ],
+          "attributes": {}
+        },
+        "b$in0": {
+          "hide_name": 0,
+          "bits": [ 37 ],
+          "attributes": {}
+        },
+        "b$in1": {
+          "hide_name": 0,
+          "bits": [ 38 ],
+          "attributes": {}
+        },
+        "b$in2": {
+          "hide_name": 0,
+          "bits": [ 39 ],
+          "attributes": {}
+        },
+        "b$in3": {
+          "hide_name": 0,
+          "bits": [ 40 ],
+          "attributes": {}
+        },
+        "b$in4": {
+          "hide_name": 0,
+          "bits": [ 41 ],
+          "attributes": {}
+        },
+        "b$in5": {
+          "hide_name": 0,
+          "bits": [ 42 ],
+          "attributes": {}
+        },
+        "b$in6": {
+          "hide_name": 0,
+          "bits": [ 43 ],
+          "attributes": {}
+        },
+        "b$in7": {
+          "hide_name": 0,
+          "bits": [ 44 ],
+          "attributes": {}
+        },
+        "sum$pad": {
+          "hide_name": 0,
+          "bits": [ 19, 20, 21, 22, 23, 24, 25, 26 ],
+          "attributes": {}
+        },
+        "sum$pin0": {
+          "hide_name": 0,
+          "bits": [ 19 ],
+          "attributes": {}
+        },
+        "sum$pin1": {
+          "hide_name": 0,
+          "bits": [ 20 ],
+          "attributes": {}
+        },
+        "sum$pin2": {
+          "hide_name": 0,
+          "bits": [ 21 ],
+          "attributes": {}
+        },
+        "sum$pin3": {
+          "hide_name": 0,
+          "bits": [ 22 ],
+          "attributes": {}
+        },
+        "sum$pin4": {
+          "hide_name": 0,
+          "bits": [ 23 ],
+          "attributes": {}
+        },
+        "sum$pin5": {
+          "hide_name": 0,
+          "bits": [ 24 ],
+          "attributes": {}
+        },
+        "sum$pin6": {
+          "hide_name": 0,
+          "bits": [ 25 ],
+          "attributes": {}
+        },
+        "sum$pin7": {
+          "hide_name": 0,
+          "bits": [ 26 ],
+          "attributes": {}
+        },
+        "carry$pad": {
+          "hide_name": 0,
+          "bits": [ 27 ],
+          "attributes": {}
+        },
+        "carry$pin0": {
+          "hide_name": 0,
+          "bits": [ 27 ],
+          "attributes": {}
+        },
+        "clk$gb": {
+          "hide_name": 0,
+          "bits": [ 69 ],
+          "attributes": {}
+        },
+        "$lut0": {
+          "hide_name": 1,
+          "bits": [ 60 ],
+          "attributes": {}
+        },
+        "$lut1": {
+          "hide_name": 1,
+          "bits": [ 59 ],
+          "attributes": {}
+        },
+        "$lut2": {
+          "hide_name": 1,
+          "bits": [ 58 ],
+          "attributes": {}
+        },
+        "$lut3": {
+          "hide_name": 1,
+          "bits": [ 57 ],
+          "attributes": {}
+        },
+        "$lut4": {
+          "hide_name": 1,
+          "bits": [ 56 ],
+          "attributes": {}
+        },
+        "$lut5": {
+          "hide_name": 1,
+          "bits": [ 55 ],
+          "attributes": {}
+        },
+        "$lut6": {
+          "hide_name": 1,
+          "bits": [ 54 ],
+          "attributes": {}
+        },
+        "$lut7": {
+          "hide_name": 1,
+          "bits": [ 53 ],
+          "attributes": {}
+        },
+        "reg$q0": {
+          "hide_name": 0,
+          "bits": [ 45 ],
+          "attributes": {}
+        },
+        "reg$q1": {
+          "hide_name": 0,
+          "bits": [ 46 ],
+          "attributes": {}
+        },
+        "reg$q2": {
+          "hide_name": 0,
+          "bits": [ 47 ],
+          "attributes": {}
+        },
+        "reg$q3": {
+          "hide_name": 0,
+          "bits": [ 48 ],
+          "attributes": {}
+        },
+        "reg$q4": {
+          "hide_name": 0,
+          "bits": [ 49 ],
+          "attributes": {}
+        },
+        "reg$q5": {
+          "hide_name": 0,
+          "bits": [ 50 ],
+          "attributes": {}
+        },
+        "reg$q6": {
+          "hide_name": 0,
+          "bits": [ 51 ],
+          "attributes": {}
+        },
+        "reg$q7": {
+          "hide_name": 0,
+          "bits": [ 52 ],
+          "attributes": {}
+        }
+      }
+    }
+  }
+}

@@ -396,6 +396,9 @@ struct Mapper<'a> {
 }
 
 // --- small IR helpers -------------------------------------------------------
+//
+// The ones marked `pub(super)` are shared with [`super::techcells`],
+// which builds the same kind of cells one step later in the flow.
 
 /// Adds an expression node, typed by the operator rules.
 ///
@@ -403,7 +406,7 @@ struct Mapper<'a> {
 /// would be a bug in this module, so it falls back to the first operand's
 /// type and lets `ir::validate` report it with a span, exactly as
 /// `ModuleBuilder` does.
-fn expr(module: &mut Module, kind: ExprKind, span: Span) -> ExprId {
+pub(super) fn expr(module: &mut Module, kind: ExprKind, span: Span) -> ExprId {
     let ty = match infer_type(module, &kind) {
         Ok(ty) => ty,
         Err(_) => operands(&kind)
@@ -414,16 +417,22 @@ fn expr(module: &mut Module, kind: ExprKind, span: Span) -> ExprId {
     module.add_expr(Expr::new(kind, ty, span))
 }
 
-fn net_expr(module: &mut Module, net: NetId, span: Span) -> ExprId {
+pub(super) fn net_expr(module: &mut Module, net: NetId, span: Span) -> ExprId {
     expr(module, ExprKind::Net(net), span)
 }
 
-fn const_expr(module: &mut Module, value: Const, span: Span) -> ExprId {
+pub(super) fn const_expr(module: &mut Module, value: Const, span: Span) -> ExprId {
     expr(module, ExprKind::Const(value), span)
 }
 
 /// `base[hi:lo]`, or `base` itself when the slice covers everything.
-fn slice_expr(module: &mut Module, base: ExprId, hi: u32, lo: u32, span: Span) -> ExprId {
+pub(super) fn slice_expr(
+    module: &mut Module,
+    base: ExprId,
+    hi: u32,
+    lo: u32,
+    span: Span,
+) -> ExprId {
     let width = module.exprs.get(base).and_then(|e| e.ty.width());
     if lo == 0 && width == Some(hi + 1) {
         return base;
@@ -445,7 +454,7 @@ fn unique_name(module: &Module, base: &str) -> Name {
     unreachable!("a unique name always exists")
 }
 
-fn add_net(module: &mut Module, base: &str, ty: Type, span: Span) -> NetId {
+pub(super) fn add_net(module: &mut Module, base: &str, ty: Type, span: Span) -> NetId {
     let name = unique_name(module, base);
     module.nets.push(Net {
         name,
@@ -456,7 +465,7 @@ fn add_net(module: &mut Module, base: &str, ty: Type, span: Span) -> NetId {
     })
 }
 
-fn add_cell(
+pub(super) fn add_cell(
     module: &mut Module,
     base: &str,
     kind: CellKind,
@@ -476,7 +485,7 @@ fn add_cell(
     })
 }
 
-fn add_assign(module: &mut Module, target: NetId, value: ExprId, span: Span) {
+pub(super) fn add_assign(module: &mut Module, target: NetId, value: ExprId, span: Span) {
     module.assigns.push(Assign {
         target: Lvalue::Net(target),
         value,
@@ -1663,11 +1672,20 @@ impl Mapper<'_> {
                 span,
             );
             let source = net_expr(module, net, span);
+            let mut inputs = vec![(Name::new(bel.port("i").unwrap_or("i")), source)];
+            // A buffer with an enable (the ECP5's `DCCA` has a `CE`) is
+            // always on: nothing gates a clock here, and leaving the pin
+            // unconnected would let the tool decide what an unenabled
+            // clock buffer does.
+            if let Some(port) = bel.port("en") {
+                let one = const_expr(module, Const::ones(1), span);
+                inputs.push((Name::new(port), one));
+            }
             add_cell(
                 module,
                 &format!("{name}$gbuf"),
                 CellKind::Blackbox(Name::new(bel.name.clone())),
-                vec![(Name::new(bel.port("i").unwrap_or("i")), source)],
+                inputs,
                 vec![(Name::new(bel.port("o").unwrap_or("o")), buffered)],
                 span,
             );

@@ -6,7 +6,13 @@
 # power-of-two width modes, one 18x18 multiplier with an accumulator, a
 # carry chain, an IO buffer, a global clock buffer and a 32x32 tile grid.
 # The primitive names (LUT, FF, CARRY, IOBUF, BUFG, RAMB, MULT) are
-# Reticle's own.
+# Reticle's own, and so are the flip-flop's parameters: one FF primitive
+# covers every combination of clock edge, clock enable and set/reset,
+# selected by CLK_EDGE, RESET ("NONE", "SYNC" or "ASYNC"), RESET_VALUE
+# and RESET_POLARITY, in the spirit of the ECP5's TRELLIS_FF. The set of
+# `mode` lines is deliberately complete, so a mapping that declines on a
+# generic device declines because the *design* asks for something no FPGA
+# flip-flop does, not because the file is short.
 #
 # It exists for two jobs:
 #
@@ -26,7 +32,42 @@ device generic
   lut_size 4
   ff enable sync_reset async_reset
   bel LUT lut port i=I o=O param INIT=16'h0000
-  bel FF ff port clk=C d=D q=Q en=E rst=R
+  bel FF ff mode posedge port clk=C d=D q=Q param CLK_EDGE="RISING" RESET="NONE" RESET_VALUE=0 RESET_POLARITY=1
+  bel FF ff mode posedge,sync_reset port clk=C d=D q=Q rst=R param CLK_EDGE="RISING" RESET="SYNC" RESET_VALUE=0 RESET_POLARITY=1
+  bel FF ff mode posedge,sync_reset,active_low port clk=C d=D q=Q rst=R param CLK_EDGE="RISING" RESET="SYNC" RESET_VALUE=0 RESET_POLARITY=0
+  bel FF ff mode posedge,async_reset port clk=C d=D q=Q rst=R param CLK_EDGE="RISING" RESET="ASYNC" RESET_VALUE=0 RESET_POLARITY=1
+  bel FF ff mode posedge,async_reset,active_low port clk=C d=D q=Q rst=R param CLK_EDGE="RISING" RESET="ASYNC" RESET_VALUE=0 RESET_POLARITY=0
+  bel FF ff mode posedge,sync_set port clk=C d=D q=Q rst=R param CLK_EDGE="RISING" RESET="SYNC" RESET_VALUE=1 RESET_POLARITY=1
+  bel FF ff mode posedge,sync_set,active_low port clk=C d=D q=Q rst=R param CLK_EDGE="RISING" RESET="SYNC" RESET_VALUE=1 RESET_POLARITY=0
+  bel FF ff mode posedge,async_set port clk=C d=D q=Q rst=R param CLK_EDGE="RISING" RESET="ASYNC" RESET_VALUE=1 RESET_POLARITY=1
+  bel FF ff mode posedge,async_set,active_low port clk=C d=D q=Q rst=R param CLK_EDGE="RISING" RESET="ASYNC" RESET_VALUE=1 RESET_POLARITY=0
+  bel FF ff mode posedge,enable port clk=C d=D q=Q en=E param CLK_EDGE="RISING" RESET="NONE" RESET_VALUE=0 RESET_POLARITY=1
+  bel FF ff mode posedge,enable,sync_reset port clk=C d=D q=Q en=E rst=R param CLK_EDGE="RISING" RESET="SYNC" RESET_VALUE=0 RESET_POLARITY=1
+  bel FF ff mode posedge,enable,sync_reset,active_low port clk=C d=D q=Q en=E rst=R param CLK_EDGE="RISING" RESET="SYNC" RESET_VALUE=0 RESET_POLARITY=0
+  bel FF ff mode posedge,enable,async_reset port clk=C d=D q=Q en=E rst=R param CLK_EDGE="RISING" RESET="ASYNC" RESET_VALUE=0 RESET_POLARITY=1
+  bel FF ff mode posedge,enable,async_reset,active_low port clk=C d=D q=Q en=E rst=R param CLK_EDGE="RISING" RESET="ASYNC" RESET_VALUE=0 RESET_POLARITY=0
+  bel FF ff mode posedge,enable,sync_set port clk=C d=D q=Q en=E rst=R param CLK_EDGE="RISING" RESET="SYNC" RESET_VALUE=1 RESET_POLARITY=1
+  bel FF ff mode posedge,enable,sync_set,active_low port clk=C d=D q=Q en=E rst=R param CLK_EDGE="RISING" RESET="SYNC" RESET_VALUE=1 RESET_POLARITY=0
+  bel FF ff mode posedge,enable,async_set port clk=C d=D q=Q en=E rst=R param CLK_EDGE="RISING" RESET="ASYNC" RESET_VALUE=1 RESET_POLARITY=1
+  bel FF ff mode posedge,enable,async_set,active_low port clk=C d=D q=Q en=E rst=R param CLK_EDGE="RISING" RESET="ASYNC" RESET_VALUE=1 RESET_POLARITY=0
+  bel FF ff mode negedge port clk=C d=D q=Q param CLK_EDGE="FALLING" RESET="NONE" RESET_VALUE=0 RESET_POLARITY=1
+  bel FF ff mode negedge,sync_reset port clk=C d=D q=Q rst=R param CLK_EDGE="FALLING" RESET="SYNC" RESET_VALUE=0 RESET_POLARITY=1
+  bel FF ff mode negedge,sync_reset,active_low port clk=C d=D q=Q rst=R param CLK_EDGE="FALLING" RESET="SYNC" RESET_VALUE=0 RESET_POLARITY=0
+  bel FF ff mode negedge,async_reset port clk=C d=D q=Q rst=R param CLK_EDGE="FALLING" RESET="ASYNC" RESET_VALUE=0 RESET_POLARITY=1
+  bel FF ff mode negedge,async_reset,active_low port clk=C d=D q=Q rst=R param CLK_EDGE="FALLING" RESET="ASYNC" RESET_VALUE=0 RESET_POLARITY=0
+  bel FF ff mode negedge,sync_set port clk=C d=D q=Q rst=R param CLK_EDGE="FALLING" RESET="SYNC" RESET_VALUE=1 RESET_POLARITY=1
+  bel FF ff mode negedge,sync_set,active_low port clk=C d=D q=Q rst=R param CLK_EDGE="FALLING" RESET="SYNC" RESET_VALUE=1 RESET_POLARITY=0
+  bel FF ff mode negedge,async_set port clk=C d=D q=Q rst=R param CLK_EDGE="FALLING" RESET="ASYNC" RESET_VALUE=1 RESET_POLARITY=1
+  bel FF ff mode negedge,async_set,active_low port clk=C d=D q=Q rst=R param CLK_EDGE="FALLING" RESET="ASYNC" RESET_VALUE=1 RESET_POLARITY=0
+  bel FF ff mode negedge,enable port clk=C d=D q=Q en=E param CLK_EDGE="FALLING" RESET="NONE" RESET_VALUE=0 RESET_POLARITY=1
+  bel FF ff mode negedge,enable,sync_reset port clk=C d=D q=Q en=E rst=R param CLK_EDGE="FALLING" RESET="SYNC" RESET_VALUE=0 RESET_POLARITY=1
+  bel FF ff mode negedge,enable,sync_reset,active_low port clk=C d=D q=Q en=E rst=R param CLK_EDGE="FALLING" RESET="SYNC" RESET_VALUE=0 RESET_POLARITY=0
+  bel FF ff mode negedge,enable,async_reset port clk=C d=D q=Q en=E rst=R param CLK_EDGE="FALLING" RESET="ASYNC" RESET_VALUE=0 RESET_POLARITY=1
+  bel FF ff mode negedge,enable,async_reset,active_low port clk=C d=D q=Q en=E rst=R param CLK_EDGE="FALLING" RESET="ASYNC" RESET_VALUE=0 RESET_POLARITY=0
+  bel FF ff mode negedge,enable,sync_set port clk=C d=D q=Q en=E rst=R param CLK_EDGE="FALLING" RESET="SYNC" RESET_VALUE=1 RESET_POLARITY=1
+  bel FF ff mode negedge,enable,sync_set,active_low port clk=C d=D q=Q en=E rst=R param CLK_EDGE="FALLING" RESET="SYNC" RESET_VALUE=1 RESET_POLARITY=0
+  bel FF ff mode negedge,enable,async_set port clk=C d=D q=Q en=E rst=R param CLK_EDGE="FALLING" RESET="ASYNC" RESET_VALUE=1 RESET_POLARITY=1
+  bel FF ff mode negedge,enable,async_set,active_low port clk=C d=D q=Q en=E rst=R param CLK_EDGE="FALLING" RESET="ASYNC" RESET_VALUE=1 RESET_POLARITY=0
   bel CARRY carry port ci=CI i0=I0 i1=I1 co=CO
   bel IOBUF io port pad=PAD din=I dout=O oe=OE param_in DIR="INPUT" param_out DIR="OUTPUT" param_inout DIR="BIDIR" param_pullup PULLUP=1
   bel BUFG gb count 16 port i=I o=O
@@ -56,7 +97,42 @@ device generic-k6
   lut_size 6
   ff enable sync_reset async_reset
   bel LUT lut port i=I o=O param INIT=64'h0000000000000000
-  bel FF ff port clk=C d=D q=Q en=E rst=R
+  bel FF ff mode posedge port clk=C d=D q=Q param CLK_EDGE="RISING" RESET="NONE" RESET_VALUE=0 RESET_POLARITY=1
+  bel FF ff mode posedge,sync_reset port clk=C d=D q=Q rst=R param CLK_EDGE="RISING" RESET="SYNC" RESET_VALUE=0 RESET_POLARITY=1
+  bel FF ff mode posedge,sync_reset,active_low port clk=C d=D q=Q rst=R param CLK_EDGE="RISING" RESET="SYNC" RESET_VALUE=0 RESET_POLARITY=0
+  bel FF ff mode posedge,async_reset port clk=C d=D q=Q rst=R param CLK_EDGE="RISING" RESET="ASYNC" RESET_VALUE=0 RESET_POLARITY=1
+  bel FF ff mode posedge,async_reset,active_low port clk=C d=D q=Q rst=R param CLK_EDGE="RISING" RESET="ASYNC" RESET_VALUE=0 RESET_POLARITY=0
+  bel FF ff mode posedge,sync_set port clk=C d=D q=Q rst=R param CLK_EDGE="RISING" RESET="SYNC" RESET_VALUE=1 RESET_POLARITY=1
+  bel FF ff mode posedge,sync_set,active_low port clk=C d=D q=Q rst=R param CLK_EDGE="RISING" RESET="SYNC" RESET_VALUE=1 RESET_POLARITY=0
+  bel FF ff mode posedge,async_set port clk=C d=D q=Q rst=R param CLK_EDGE="RISING" RESET="ASYNC" RESET_VALUE=1 RESET_POLARITY=1
+  bel FF ff mode posedge,async_set,active_low port clk=C d=D q=Q rst=R param CLK_EDGE="RISING" RESET="ASYNC" RESET_VALUE=1 RESET_POLARITY=0
+  bel FF ff mode posedge,enable port clk=C d=D q=Q en=E param CLK_EDGE="RISING" RESET="NONE" RESET_VALUE=0 RESET_POLARITY=1
+  bel FF ff mode posedge,enable,sync_reset port clk=C d=D q=Q en=E rst=R param CLK_EDGE="RISING" RESET="SYNC" RESET_VALUE=0 RESET_POLARITY=1
+  bel FF ff mode posedge,enable,sync_reset,active_low port clk=C d=D q=Q en=E rst=R param CLK_EDGE="RISING" RESET="SYNC" RESET_VALUE=0 RESET_POLARITY=0
+  bel FF ff mode posedge,enable,async_reset port clk=C d=D q=Q en=E rst=R param CLK_EDGE="RISING" RESET="ASYNC" RESET_VALUE=0 RESET_POLARITY=1
+  bel FF ff mode posedge,enable,async_reset,active_low port clk=C d=D q=Q en=E rst=R param CLK_EDGE="RISING" RESET="ASYNC" RESET_VALUE=0 RESET_POLARITY=0
+  bel FF ff mode posedge,enable,sync_set port clk=C d=D q=Q en=E rst=R param CLK_EDGE="RISING" RESET="SYNC" RESET_VALUE=1 RESET_POLARITY=1
+  bel FF ff mode posedge,enable,sync_set,active_low port clk=C d=D q=Q en=E rst=R param CLK_EDGE="RISING" RESET="SYNC" RESET_VALUE=1 RESET_POLARITY=0
+  bel FF ff mode posedge,enable,async_set port clk=C d=D q=Q en=E rst=R param CLK_EDGE="RISING" RESET="ASYNC" RESET_VALUE=1 RESET_POLARITY=1
+  bel FF ff mode posedge,enable,async_set,active_low port clk=C d=D q=Q en=E rst=R param CLK_EDGE="RISING" RESET="ASYNC" RESET_VALUE=1 RESET_POLARITY=0
+  bel FF ff mode negedge port clk=C d=D q=Q param CLK_EDGE="FALLING" RESET="NONE" RESET_VALUE=0 RESET_POLARITY=1
+  bel FF ff mode negedge,sync_reset port clk=C d=D q=Q rst=R param CLK_EDGE="FALLING" RESET="SYNC" RESET_VALUE=0 RESET_POLARITY=1
+  bel FF ff mode negedge,sync_reset,active_low port clk=C d=D q=Q rst=R param CLK_EDGE="FALLING" RESET="SYNC" RESET_VALUE=0 RESET_POLARITY=0
+  bel FF ff mode negedge,async_reset port clk=C d=D q=Q rst=R param CLK_EDGE="FALLING" RESET="ASYNC" RESET_VALUE=0 RESET_POLARITY=1
+  bel FF ff mode negedge,async_reset,active_low port clk=C d=D q=Q rst=R param CLK_EDGE="FALLING" RESET="ASYNC" RESET_VALUE=0 RESET_POLARITY=0
+  bel FF ff mode negedge,sync_set port clk=C d=D q=Q rst=R param CLK_EDGE="FALLING" RESET="SYNC" RESET_VALUE=1 RESET_POLARITY=1
+  bel FF ff mode negedge,sync_set,active_low port clk=C d=D q=Q rst=R param CLK_EDGE="FALLING" RESET="SYNC" RESET_VALUE=1 RESET_POLARITY=0
+  bel FF ff mode negedge,async_set port clk=C d=D q=Q rst=R param CLK_EDGE="FALLING" RESET="ASYNC" RESET_VALUE=1 RESET_POLARITY=1
+  bel FF ff mode negedge,async_set,active_low port clk=C d=D q=Q rst=R param CLK_EDGE="FALLING" RESET="ASYNC" RESET_VALUE=1 RESET_POLARITY=0
+  bel FF ff mode negedge,enable port clk=C d=D q=Q en=E param CLK_EDGE="FALLING" RESET="NONE" RESET_VALUE=0 RESET_POLARITY=1
+  bel FF ff mode negedge,enable,sync_reset port clk=C d=D q=Q en=E rst=R param CLK_EDGE="FALLING" RESET="SYNC" RESET_VALUE=0 RESET_POLARITY=1
+  bel FF ff mode negedge,enable,sync_reset,active_low port clk=C d=D q=Q en=E rst=R param CLK_EDGE="FALLING" RESET="SYNC" RESET_VALUE=0 RESET_POLARITY=0
+  bel FF ff mode negedge,enable,async_reset port clk=C d=D q=Q en=E rst=R param CLK_EDGE="FALLING" RESET="ASYNC" RESET_VALUE=0 RESET_POLARITY=1
+  bel FF ff mode negedge,enable,async_reset,active_low port clk=C d=D q=Q en=E rst=R param CLK_EDGE="FALLING" RESET="ASYNC" RESET_VALUE=0 RESET_POLARITY=0
+  bel FF ff mode negedge,enable,sync_set port clk=C d=D q=Q en=E rst=R param CLK_EDGE="FALLING" RESET="SYNC" RESET_VALUE=1 RESET_POLARITY=1
+  bel FF ff mode negedge,enable,sync_set,active_low port clk=C d=D q=Q en=E rst=R param CLK_EDGE="FALLING" RESET="SYNC" RESET_VALUE=1 RESET_POLARITY=0
+  bel FF ff mode negedge,enable,async_set port clk=C d=D q=Q en=E rst=R param CLK_EDGE="FALLING" RESET="ASYNC" RESET_VALUE=1 RESET_POLARITY=1
+  bel FF ff mode negedge,enable,async_set,active_low port clk=C d=D q=Q en=E rst=R param CLK_EDGE="FALLING" RESET="ASYNC" RESET_VALUE=1 RESET_POLARITY=0
   bel CARRY carry port ci=CI i0=I0 i1=I1 co=CO
   bel IOBUF io port pad=PAD din=I dout=O oe=OE param_in DIR="INPUT" param_out DIR="OUTPUT" param_inout DIR="BIDIR" param_pullup PULLUP=1
   bel BUFG gb count 32 port i=I o=O

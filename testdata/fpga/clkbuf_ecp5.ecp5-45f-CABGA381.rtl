@@ -1,0 +1,70 @@
+top shift8
+
+module shift8
+  net %clk u1 wire
+  net %rst u1 wire
+  net %en u1 wire
+  net %q u1 wire
+  net %sr u8 wire
+  net %next u8 wire
+  net %clk$pad u1 wire
+  net %clk$in0 u1 wire
+  net %rst$pad u1 wire
+  net %rst$in0 u1 wire
+  net %en$pad u1 wire
+  net %en$in0 u1 wire
+  net %d$pad u1 wire
+  net %d$in0 u1 wire
+  net %q$pad u1 wire
+  net %q$pin0 u1 wire
+  net %clk$gb u1 wire
+  net %sr$q0 u1 wire
+  net %sr$q1 u1 wire
+  net %sr$q2 u1 wire
+  net %sr$q3 u1 wire
+  net %sr$q4 u1 wire
+  net %sr$q5 u1 wire
+  net %sr$q6 u1 wire
+  net %sr$q7 u1 wire
+  port clk in %clk$pad
+  port rst in %rst$pad
+  port en in %en$pad
+  port d in %d$pad
+  port q out %q$pad
+  assign %clk = %clk$in0
+  assign %rst = %rst$in0
+  assign %en = %en$in0
+  assign %q = %sr[7:7]
+  assign %next = {%sr[6:6], %sr[5:5], %sr[4:4], %sr[3:3], %sr[2:2], %sr[1:1], %sr[0:0], %d$in0}
+  assign %q$pad = %q$pin0
+  assign %sr = {%sr$q7, %sr$q6, %sr$q5, %sr$q4, %sr$q3, %sr$q2, %sr$q1, %sr$q0}
+  attr port = "clk"
+  attr pin = "G2"
+  attr io_standard = "LVCMOS33"
+  cell clk$io0 blackbox TRELLIS_IO #(DIR="INPUT") (B=%clk$pad) -> (O=%clk$in0)
+  attr port = "rst"
+  attr pin = "B2"
+  attr io_standard = "LVCMOS33"
+  cell rst$io0 blackbox TRELLIS_IO #(DIR="INPUT") (B=%rst$pad) -> (O=%rst$in0)
+  attr port = "en"
+  attr pin = "C1"
+  attr io_standard = "LVCMOS33"
+  cell en$io0 blackbox TRELLIS_IO #(DIR="INPUT") (B=%en$pad) -> (O=%en$in0)
+  attr port = "d"
+  attr pin = "C2"
+  attr io_standard = "LVCMOS33"
+  cell d$io0 blackbox TRELLIS_IO #(DIR="INPUT") (B=%d$pad) -> (O=%d$in0)
+  attr port = "q"
+  attr pin = "D1"
+  attr io_standard = "LVCMOS33"
+  cell q$io0 blackbox TRELLIS_IO #(DIR="OUTPUT") (I=%q) -> (B=%q$pin0)
+  cell clk$gbuf blackbox DCCA (CLKI=%clk, CE=1'd1) -> (CLKO=%clk$gb)
+  cell sr$ff0 blackbox TRELLIS_FF #(GSR="DISABLED", REGMODE="FF", CEMUX="CE", CLKMUX="CLK", LSRMUX="LSR", SRMODE="ASYNC", REGSET="RESET") (CLK=%clk$gb, DI=%next[0:0], CE=%en, LSR=%rst) -> (Q=%sr$q0)
+  cell sr$ff1 blackbox TRELLIS_FF #(GSR="DISABLED", REGMODE="FF", CEMUX="CE", CLKMUX="CLK", LSRMUX="LSR", SRMODE="ASYNC", REGSET="RESET") (CLK=%clk$gb, DI=%next[1:1], CE=%en, LSR=%rst) -> (Q=%sr$q1)
+  cell sr$ff2 blackbox TRELLIS_FF #(GSR="DISABLED", REGMODE="FF", CEMUX="CE", CLKMUX="CLK", LSRMUX="LSR", SRMODE="ASYNC", REGSET="RESET") (CLK=%clk$gb, DI=%next[2:2], CE=%en, LSR=%rst) -> (Q=%sr$q2)
+  cell sr$ff3 blackbox TRELLIS_FF #(GSR="DISABLED", REGMODE="FF", CEMUX="CE", CLKMUX="CLK", LSRMUX="LSR", SRMODE="ASYNC", REGSET="RESET") (CLK=%clk$gb, DI=%next[3:3], CE=%en, LSR=%rst) -> (Q=%sr$q3)
+  cell sr$ff4 blackbox TRELLIS_FF #(GSR="DISABLED", REGMODE="FF", CEMUX="CE", CLKMUX="CLK", LSRMUX="LSR", SRMODE="ASYNC", REGSET="RESET") (CLK=%clk$gb, DI=%next[4:4], CE=%en, LSR=%rst) -> (Q=%sr$q4)
+  cell sr$ff5 blackbox TRELLIS_FF #(GSR="DISABLED", REGMODE="FF", CEMUX="CE", CLKMUX="CLK", LSRMUX="LSR", SRMODE="ASYNC", REGSET="RESET") (CLK=%clk$gb, DI=%next[5:5], CE=%en, LSR=%rst) -> (Q=%sr$q5)
+  cell sr$ff6 blackbox TRELLIS_FF #(GSR="DISABLED", REGMODE="FF", CEMUX="CE", CLKMUX="CLK", LSRMUX="LSR", SRMODE="ASYNC", REGSET="RESET") (CLK=%clk$gb, DI=%next[6:6], CE=%en, LSR=%rst) -> (Q=%sr$q6)
+  cell sr$ff7 blackbox TRELLIS_FF #(GSR="DISABLED", REGMODE="FF", CEMUX="CE", CLKMUX="CLK", LSRMUX="LSR", SRMODE="ASYNC", REGSET="RESET") (CLK=%clk$gb, DI=%next[7:7], CE=%en, LSR=%rst) -> (Q=%sr$q7)
+end

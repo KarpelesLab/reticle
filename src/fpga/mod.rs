@@ -2,9 +2,14 @@
 //! hand-off to a place-and-route tool.
 //!
 //! This is the front half of the FPGA side of phase 6 of `ROADMAP.md`:
-//! everything between a synthesised netlist and a placer. The placer and
-//! router themselves are the next phase; until they land, [`flow`] hands
-//! the design to nextpnr or to a vendor tool.
+//! everything between a design and a placer. [`flow::synthesize_for`] is
+//! the whole of it in one call — generic synthesis, primitive mapping,
+//! LUT mapping, clean-up, and the rewrite to the family's own cell names
+//! — and the result is a netlist of nothing but primitives the device
+//! declares, which [`flow::check_nextpnr_json`] verifies and
+//! [`flow::export_nextpnr`] hands over. The placer and router themselves
+//! are the next phase; until they land, [`flow`] gives the design to
+//! nextpnr or to a vendor tool.
 //!
 //! # The device-database model
 //!
@@ -34,11 +39,20 @@
 //!    per-direction parameters (`param_in`, `param_out`, `param_inout`).
 //!    A global buffer needs `i` and `o`. A carry element needs `ci`,
 //!    `i0`, `i1` and `co`. A block RAM needs a `port` line per physical
-//!    port naming its `clk`, `en`, `addr`, `din`, `dout` and `we`.
-//! 3. Parse it with [`DeviceDb::parse`] and use it directly, or add it to
+//!    port naming its `clk`, `en`, `addr`, `din`, `dout` and `we`. A LUT
+//!    needs its input pins in order (`i=I0,I1,I2,I3`), its output, and
+//!    the parameter it takes its truth table in, declared with a default
+//!    as wide as the family expects (`param LUT_INIT=16'h0000`).
+//! 3. Declare one `bel ... ff` line per flip-flop the family offers,
+//!    each with a `mode` clause saying exactly what it does (see
+//!    [`FfVariant`]) and the parameters it needs. A behaviour with no
+//!    line is one Reticle will report rather than approximate, so the
+//!    completeness of this list is the completeness of the family's
+//!    flip-flop support.
+//! 4. Parse it with [`DeviceDb::parse`] and use it directly, or add it to
 //!    `src/fpga/devices/` and list it in [`BUILTIN_FILES`] to compile it
 //!    in. No other Rust changes are needed.
-//! 4. Teach [`flow`] the command line of the place-and-route tool for the
+//! 5. Teach [`flow`] the command line of the place-and-route tool for the
 //!    family, which is the one piece that cannot be data.
 //!
 //! # Pipeline
@@ -46,18 +60,33 @@
 //! ```no_run
 //! # use reticle::diag::Diagnostics;
 //! # use reticle::ir::{Design, ModuleId};
-//! # use reticle::fpga::{self, MapOptions, Constraints};
+//! # use reticle::fpga::{self, Constraints, FpgaOptions};
 //! # fn go(design: &mut Design, top: ModuleId, rcf: &str, diags: &mut Diagnostics) {
 //! # let file = unimplemented!();
 //! let device = fpga::target("ice40-hx1k-tq144").expect("built-in device");
 //! let mut constraints = Constraints::parse(rcf, file, diags);
 //! constraints.merge_attrs(design, top, diags);
 //! constraints.check(design, device, diags);
-//! let report = fpga::map(design, top, device, &constraints, &MapOptions::default(), diags);
+//!
+//! // Synthesis, block RAM / DSP / carry / IO / clock mapping, LUT
+//! // mapping, clean-up, and the device's own cell names.
+//! let report =
+//!     fpga::synthesize_for(design, top, device, &constraints, &FpgaOptions::default(), diags)
+//!         .expect("the flow");
+//!
+//! // Nothing generic is left, every port exists, every net has one
+//! // driver: what comes back is what nextpnr would have complained about.
+//! let problems = fpga::check_nextpnr_json(design, top, device, &constraints);
+//! assert!(problems.is_empty());
+//!
 //! let inputs = fpga::export_nextpnr(design, top, device, &constraints).unwrap();
 //! # let _ = (report, inputs);
 //! # }
 //! ```
+//!
+//! The steps are public one by one ([`map`] for the primitives,
+//! [`map_cells`] for the LUT and flip-flop rename), so a caller who wants
+//! a different pipeline builds it; `synthesize_for` is the common path.
 //!
 //! The library returns the files and the argument list; running the tool
 //! is the caller's business, as everywhere else in Reticle.
@@ -66,6 +95,7 @@ pub mod constraints;
 pub mod device;
 pub mod flow;
 pub mod primitives;
+pub mod techcells;
 mod text;
 
 use std::sync::OnceLock;
@@ -76,14 +106,20 @@ pub use constraints::{
 };
 pub use device::{
     BelKind, BelRole, BramPort, BramPortRole, BramShape, ClockRegion, ClockResources, Device,
-    DeviceDb, DspShape, FfFeatures, Grid, IoBank, IoStandard, Pin, PinKind, PinName, PllShape,
-    Site,
+    DeviceDb, DspShape, FfFeatures, FfReset, FfVariant, Grid, IoBank, IoStandard, Pin, PinKind,
+    PinName, PllShape, Site,
 };
-pub use flow::{FlowError, NextpnrInputs, VendorInputs, export_nextpnr, export_vendor};
+pub use flow::{
+    FlowError, FlowReport, NetlistProblem, NextpnrInputs, VendorInputs, check_nextpnr_json,
+    constant_convention, export_nextpnr, export_vendor,
+};
+#[cfg(feature = "synth")]
+pub use flow::{FpgaOptions, synthesize_for};
 pub use primitives::{
     BramFallback, BramMapping, CarryMapping, ClockMapping, DspMapping, IoMapping, MapOptions,
     MapReport, map,
 };
+pub use techcells::{CellMapReport, map_cells};
 
 use crate::diag::Diagnostics;
 use crate::source::SourceMap;
@@ -201,6 +237,81 @@ mod tests {
                 if let Some(bank) = &pin.bank {
                     assert!(device.io_bank(bank).is_some(), "{}", device.name);
                 }
+            }
+        }
+    }
+
+    /// Every built-in family can build the flip-flops synthesis infers,
+    /// and says with its `mode` clauses exactly which ones.
+    #[test]
+    fn built_ins_declare_their_flip_flops() {
+        for device in builtin_devices().devices() {
+            let variants: Vec<(String, FfVariant)> = device
+                .ff_variants()
+                .map(|(bel, variant)| (bel.name.clone(), variant))
+                .collect();
+            assert!(
+                !variants.is_empty(),
+                "{} declares no flip-flop",
+                device.name
+            );
+            // The four shapes every synthesised design produces.
+            for (clk_pos, has_enable) in [(true, false), (true, true), (false, false)] {
+                let plain = FfVariant {
+                    clk_pos,
+                    has_enable,
+                    reset: None,
+                };
+                assert!(
+                    device.ff_variant(plain).is_some(),
+                    "{} has no flip-flop with {}",
+                    device.name,
+                    plain.describe()
+                );
+                for asynchronous in [false, true] {
+                    for sets in [false, true] {
+                        let variant = FfVariant {
+                            reset: Some(FfReset {
+                                asynchronous,
+                                sets,
+                                active_high: true,
+                            }),
+                            ..plain
+                        };
+                        assert!(
+                            device.ff_variant(variant).is_some(),
+                            "{} has no flip-flop with {}",
+                            device.name,
+                            variant.describe()
+                        );
+                    }
+                }
+            }
+            // No two lines may claim the same behaviour, or which one
+            // mapping picks would depend on file order for no reason.
+            for (index, (name, variant)) in variants.iter().enumerate() {
+                assert!(
+                    !variants[..index].iter().any(|(_, other)| other == variant),
+                    "{}: `{name}` repeats the mode {}",
+                    device.name,
+                    variant.flags()
+                );
+                let bel = device.ff_variant(*variant).expect("just listed");
+                assert!(
+                    bel.has_ports(&["clk", "d", "q"]),
+                    "{}: `{name}` has no (clk, d, q) port map",
+                    device.name
+                );
+                assert!(
+                    !variant.has_enable || bel.port("en").is_some(),
+                    "{}: `{name}` has a clock enable but no `en` port",
+                    device.name
+                );
+                assert!(
+                    variant.reset.is_none() || bel.port("rst").is_some(),
+                    "{}: `{name}` has a set/reset but no `rst` port",
+                    device.name
+                );
             }
         }
     }

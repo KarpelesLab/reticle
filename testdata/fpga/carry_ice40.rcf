@@ -1,0 +1,8 @@
+# A registered 8-bit adder with its carry out: the design that exercises
+# the iCE40 carry chain. Only the scalars are pinned; the operand buses
+# are left to the placer, which is legal.
+set_io -io_standard LVCMOS33 clk 21
+set_io -io_standard LVCMOS33 carry 99
+set_io -io_standard LVCMOS33 sum[0] 98
+create_clock -name sys -period 83.333 clk
+clock_domain sys clk

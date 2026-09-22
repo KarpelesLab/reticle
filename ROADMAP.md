@@ -265,12 +265,21 @@ FPGA:
       `.dev` text format round-trips; iCE40, ECP5 and a generic family are
       compiled in.
 - [x] Primitive mapping: block RAM and DSP inference, IO buffers, global
-      clock buffers, carry chains. (Instantiating a PLL from a clock
-      constraint is still open; a design that wants one instantiates it.)
-- [x] Vendor and open-flow interop: JSON export to nextpnr (iCE40 and
-      ECP5; Gowin needs a device file), structural Verilog + XDC / SDC
+      clock buffers, carry chains, and the family's own LUT and flip-flop
+      primitives with their parameters (`SB_LUT4` / `SB_DFF*`, `LUT4` /
+      `TRELLIS_FF`), chosen per bit from the variants the device file
+      declares. (Instantiating a PLL from a clock constraint is still
+      open; a design that wants one instantiates it. The narrow width
+      modes of a block RAM are wired in bit order, which iCE40 permutes.)
+- [x] Vendor and open-flow interop: `fpga::synthesize_for` runs the whole
+      target flow (synthesis, primitives, LUT mapping, clean-up, device
+      cells) and JSON export hands the result to nextpnr (iCE40 and ECP5;
+      Gowin needs a device file), with structural Verilog + XDC / SDC
       constraints for Vivado and Quartus, so a design synthesised by
-      Reticle can be placed by existing tools from day one.
+      Reticle can be placed by existing tools from day one. The exported
+      netlist holds nothing but primitives the device database declares,
+      which `fpga::check_nextpnr_json` verifies cell by cell, port by
+      port and net by net before the tool sees it.
 - [x] Placement constraints as a first-class language: pin assignment, IO
       standards, placement regions (pblocks), keep-hierarchy, relative
       placement macros, clock domains. Declared in the source via attributes

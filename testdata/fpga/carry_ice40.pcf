@@ -1,0 +1,6 @@
+# nextpnr PCF written by reticle for ice40-hx1k-tq144 (ice40)
+set_io clk 21
+set_io carry 99
+set_io sum[0] 98
+set_frequency clk 12.000
+# not expressible in this format: io standards, drive, slew

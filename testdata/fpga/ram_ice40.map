@@ -10,3 +10,8 @@ io:
   rdata (8 bits) -> SB_IO
 notes:
   memory `mem` uses the narrow 8x512 mode of SB_RAM40_4K; the data bits are connected in order, which some families permute
+logic:
+  0 LUTs, depth 0
+netlist:
+  36 x SB_IO
+  1 x SB_RAM40_4K

@@ -1,0 +1,15 @@
+device: ecp5-45f-CABGA381
+io:
+  clk (1 bits) -> TRELLIS_IO at pin G2 as LVCMOS33
+  rst (1 bits) -> TRELLIS_IO at pin B2 as LVCMOS33
+  en (1 bits) -> TRELLIS_IO at pin C1 as LVCMOS33
+  d (1 bits) -> TRELLIS_IO at pin C2 as LVCMOS33
+  q (1 bits) -> TRELLIS_IO at pin D1 as LVCMOS33
+clocks:
+  clk (8 flip-flops) -> DCCA
+logic:
+  0 LUTs, depth 0
+netlist:
+  1 x DCCA
+  8 x TRELLIS_FF
+  5 x TRELLIS_IO

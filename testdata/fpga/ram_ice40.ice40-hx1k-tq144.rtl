@@ -56,14 +56,12 @@ module ram512
   port raddr in %raddr$pad
   port wdata in %wdata$pad
   port rdata out %rdata$pad
-  attr mapped_to = "SB_RAM40_4K"
-  memory @mem 512 x u8
-  assign %rdata = %mem$rd0_w0_d0
   assign %clk = %clk$in0
   assign %we = %we$in0
   assign %waddr = {%waddr$in8, %waddr$in7, %waddr$in6, %waddr$in5, %waddr$in4, %waddr$in3, %waddr$in2, %waddr$in1, %waddr$in0}
   assign %raddr = {%raddr$in8, %raddr$in7, %raddr$in6, %raddr$in5, %raddr$in4, %raddr$in3, %raddr$in2, %raddr$in1, %raddr$in0}
   assign %wdata = {%wdata$in7, %wdata$in6, %wdata$in5, %wdata$in4, %wdata$in3, %wdata$in2, %wdata$in1, %wdata$in0}
+  assign %rdata = {%mem$rd0_w0_d0[7:7], %mem$rd0_w0_d0[6:6], %mem$rd0_w0_d0[5:5], %mem$rd0_w0_d0[4:4], %mem$rd0_w0_d0[3:3], %mem$rd0_w0_d0[2:2], %mem$rd0_w0_d0[1:1], %mem$rd0_w0_d0[0:0]}
   assign %rdata$pad = {%rdata$pin7, %rdata$pin6, %rdata$pin5, %rdata$pin4, %rdata$pin3, %rdata$pin2, %rdata$pin1, %rdata$pin0}
   attr memory = "mem"
   cell mem$ram_w0_d0 blackbox SB_RAM40_4K #(READ_MODE=1, WRITE_MODE=1) (RADDR=resize(%raddr, u11), RCLK=%clk, RE=1'd1, RCLKE=1'd1, WADDR=resize(%waddr, u11), WCLK=%clk, WE=%we, WCLKE=%we, WDATA=%wdata) -> (RDATA=%mem$rd0_w0_d0)

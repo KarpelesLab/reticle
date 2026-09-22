@@ -9,6 +9,23 @@
 #     DCCA for a clock buffer, DP16KD for block RAM, MULT18X18D for the
 #     multiplier and EHXPLLL for the PLL. High confidence for the names
 #     and for the LUT, FF, IO and clock-buffer ports.
+#   * The ECP5 has one flip-flop, TRELLIS_FF, configured by parameters
+#     rather than one primitive per behaviour, so the lines below are one
+#     parameter set each of the same primitive: CLKMUX "CLK" or "INV"
+#     for the clock edge, CEMUX "CE" or "1" for the clock enable, LSRMUX
+#     "LSR" or "INV" for the set/reset polarity, REGSET "RESET" or "SET"
+#     for what it forces, and SRMODE "LSR_OVER_CE" for a synchronous
+#     set/reset (which then has priority over the enable, as the IR's
+#     flip-flop does) or "ASYNC" for an asynchronous one. GSR is
+#     "DISABLED" so the global set/reset does not silently reset a design
+#     that did not ask for it, and REGMODE is "FF" rather than "LATCH".
+#     These are the parameter names and values Yosys' `synth_ecp5` emits
+#     and nextpnr-ecp5 reads; MEDIUM-HIGH confidence for the spelling of
+#     each value, high for which knobs exist. An `active_low` variant is
+#     the same flip-flop with LSRMUX="INV", which is how a design with an
+#     `rst_n` maps without a LUT in front of every flop; MEDIUM
+#     confidence, since the inverting mux is documented by Project Trellis
+#     rather than by Lattice.
 #   * DP16KD: 18 kbit (16 kbit plus parity), true dual port, each port
 #     configurable 16384x1, 8192x2, 4096x4, 2048x9 or 1024x18, contents
 #     initialisable through INITVAL_00.. . High confidence for the modes;
@@ -55,7 +72,42 @@ device ecp5-25f-CABGA381
   ff enable sync_reset async_reset shared_reset
   bel LUT4 lut count 24288 port i=A,B,C,D o=Z param INIT=16'h0000
   bel CCU2C carry
-  bel TRELLIS_FF ff count 24288 port clk=CLK d=DI q=Q en=CE rst=LSR
+  bel TRELLIS_FF ff count 24288 mode posedge port clk=CLK d=DI q=Q en=CE rst=LSR param GSR="DISABLED" REGMODE="FF" CEMUX="1" CLKMUX="CLK" LSRMUX="LSR" SRMODE="LSR_OVER_CE" REGSET="RESET"
+  bel TRELLIS_FF ff mode posedge,sync_reset port clk=CLK d=DI q=Q en=CE rst=LSR param GSR="DISABLED" REGMODE="FF" CEMUX="1" CLKMUX="CLK" LSRMUX="LSR" SRMODE="LSR_OVER_CE" REGSET="RESET"
+  bel TRELLIS_FF ff mode posedge,sync_reset,active_low port clk=CLK d=DI q=Q en=CE rst=LSR param GSR="DISABLED" REGMODE="FF" CEMUX="1" CLKMUX="CLK" LSRMUX="INV" SRMODE="LSR_OVER_CE" REGSET="RESET"
+  bel TRELLIS_FF ff mode posedge,async_reset port clk=CLK d=DI q=Q en=CE rst=LSR param GSR="DISABLED" REGMODE="FF" CEMUX="1" CLKMUX="CLK" LSRMUX="LSR" SRMODE="ASYNC" REGSET="RESET"
+  bel TRELLIS_FF ff mode posedge,async_reset,active_low port clk=CLK d=DI q=Q en=CE rst=LSR param GSR="DISABLED" REGMODE="FF" CEMUX="1" CLKMUX="CLK" LSRMUX="INV" SRMODE="ASYNC" REGSET="RESET"
+  bel TRELLIS_FF ff mode posedge,sync_set port clk=CLK d=DI q=Q en=CE rst=LSR param GSR="DISABLED" REGMODE="FF" CEMUX="1" CLKMUX="CLK" LSRMUX="LSR" SRMODE="LSR_OVER_CE" REGSET="SET"
+  bel TRELLIS_FF ff mode posedge,sync_set,active_low port clk=CLK d=DI q=Q en=CE rst=LSR param GSR="DISABLED" REGMODE="FF" CEMUX="1" CLKMUX="CLK" LSRMUX="INV" SRMODE="LSR_OVER_CE" REGSET="SET"
+  bel TRELLIS_FF ff mode posedge,async_set port clk=CLK d=DI q=Q en=CE rst=LSR param GSR="DISABLED" REGMODE="FF" CEMUX="1" CLKMUX="CLK" LSRMUX="LSR" SRMODE="ASYNC" REGSET="SET"
+  bel TRELLIS_FF ff mode posedge,async_set,active_low port clk=CLK d=DI q=Q en=CE rst=LSR param GSR="DISABLED" REGMODE="FF" CEMUX="1" CLKMUX="CLK" LSRMUX="INV" SRMODE="ASYNC" REGSET="SET"
+  bel TRELLIS_FF ff mode posedge,enable port clk=CLK d=DI q=Q en=CE rst=LSR param GSR="DISABLED" REGMODE="FF" CEMUX="CE" CLKMUX="CLK" LSRMUX="LSR" SRMODE="LSR_OVER_CE" REGSET="RESET"
+  bel TRELLIS_FF ff mode posedge,enable,sync_reset port clk=CLK d=DI q=Q en=CE rst=LSR param GSR="DISABLED" REGMODE="FF" CEMUX="CE" CLKMUX="CLK" LSRMUX="LSR" SRMODE="LSR_OVER_CE" REGSET="RESET"
+  bel TRELLIS_FF ff mode posedge,enable,sync_reset,active_low port clk=CLK d=DI q=Q en=CE rst=LSR param GSR="DISABLED" REGMODE="FF" CEMUX="CE" CLKMUX="CLK" LSRMUX="INV" SRMODE="LSR_OVER_CE" REGSET="RESET"
+  bel TRELLIS_FF ff mode posedge,enable,async_reset port clk=CLK d=DI q=Q en=CE rst=LSR param GSR="DISABLED" REGMODE="FF" CEMUX="CE" CLKMUX="CLK" LSRMUX="LSR" SRMODE="ASYNC" REGSET="RESET"
+  bel TRELLIS_FF ff mode posedge,enable,async_reset,active_low port clk=CLK d=DI q=Q en=CE rst=LSR param GSR="DISABLED" REGMODE="FF" CEMUX="CE" CLKMUX="CLK" LSRMUX="INV" SRMODE="ASYNC" REGSET="RESET"
+  bel TRELLIS_FF ff mode posedge,enable,sync_set port clk=CLK d=DI q=Q en=CE rst=LSR param GSR="DISABLED" REGMODE="FF" CEMUX="CE" CLKMUX="CLK" LSRMUX="LSR" SRMODE="LSR_OVER_CE" REGSET="SET"
+  bel TRELLIS_FF ff mode posedge,enable,sync_set,active_low port clk=CLK d=DI q=Q en=CE rst=LSR param GSR="DISABLED" REGMODE="FF" CEMUX="CE" CLKMUX="CLK" LSRMUX="INV" SRMODE="LSR_OVER_CE" REGSET="SET"
+  bel TRELLIS_FF ff mode posedge,enable,async_set port clk=CLK d=DI q=Q en=CE rst=LSR param GSR="DISABLED" REGMODE="FF" CEMUX="CE" CLKMUX="CLK" LSRMUX="LSR" SRMODE="ASYNC" REGSET="SET"
+  bel TRELLIS_FF ff mode posedge,enable,async_set,active_low port clk=CLK d=DI q=Q en=CE rst=LSR param GSR="DISABLED" REGMODE="FF" CEMUX="CE" CLKMUX="CLK" LSRMUX="INV" SRMODE="ASYNC" REGSET="SET"
+  bel TRELLIS_FF ff mode negedge port clk=CLK d=DI q=Q en=CE rst=LSR param GSR="DISABLED" REGMODE="FF" CEMUX="1" CLKMUX="INV" LSRMUX="LSR" SRMODE="LSR_OVER_CE" REGSET="RESET"
+  bel TRELLIS_FF ff mode negedge,sync_reset port clk=CLK d=DI q=Q en=CE rst=LSR param GSR="DISABLED" REGMODE="FF" CEMUX="1" CLKMUX="INV" LSRMUX="LSR" SRMODE="LSR_OVER_CE" REGSET="RESET"
+  bel TRELLIS_FF ff mode negedge,sync_reset,active_low port clk=CLK d=DI q=Q en=CE rst=LSR param GSR="DISABLED" REGMODE="FF" CEMUX="1" CLKMUX="INV" LSRMUX="INV" SRMODE="LSR_OVER_CE" REGSET="RESET"
+  bel TRELLIS_FF ff mode negedge,async_reset port clk=CLK d=DI q=Q en=CE rst=LSR param GSR="DISABLED" REGMODE="FF" CEMUX="1" CLKMUX="INV" LSRMUX="LSR" SRMODE="ASYNC" REGSET="RESET"
+  bel TRELLIS_FF ff mode negedge,async_reset,active_low port clk=CLK d=DI q=Q en=CE rst=LSR param GSR="DISABLED" REGMODE="FF" CEMUX="1" CLKMUX="INV" LSRMUX="INV" SRMODE="ASYNC" REGSET="RESET"
+  bel TRELLIS_FF ff mode negedge,sync_set port clk=CLK d=DI q=Q en=CE rst=LSR param GSR="DISABLED" REGMODE="FF" CEMUX="1" CLKMUX="INV" LSRMUX="LSR" SRMODE="LSR_OVER_CE" REGSET="SET"
+  bel TRELLIS_FF ff mode negedge,sync_set,active_low port clk=CLK d=DI q=Q en=CE rst=LSR param GSR="DISABLED" REGMODE="FF" CEMUX="1" CLKMUX="INV" LSRMUX="INV" SRMODE="LSR_OVER_CE" REGSET="SET"
+  bel TRELLIS_FF ff mode negedge,async_set port clk=CLK d=DI q=Q en=CE rst=LSR param GSR="DISABLED" REGMODE="FF" CEMUX="1" CLKMUX="INV" LSRMUX="LSR" SRMODE="ASYNC" REGSET="SET"
+  bel TRELLIS_FF ff mode negedge,async_set,active_low port clk=CLK d=DI q=Q en=CE rst=LSR param GSR="DISABLED" REGMODE="FF" CEMUX="1" CLKMUX="INV" LSRMUX="INV" SRMODE="ASYNC" REGSET="SET"
+  bel TRELLIS_FF ff mode negedge,enable port clk=CLK d=DI q=Q en=CE rst=LSR param GSR="DISABLED" REGMODE="FF" CEMUX="CE" CLKMUX="INV" LSRMUX="LSR" SRMODE="LSR_OVER_CE" REGSET="RESET"
+  bel TRELLIS_FF ff mode negedge,enable,sync_reset port clk=CLK d=DI q=Q en=CE rst=LSR param GSR="DISABLED" REGMODE="FF" CEMUX="CE" CLKMUX="INV" LSRMUX="LSR" SRMODE="LSR_OVER_CE" REGSET="RESET"
+  bel TRELLIS_FF ff mode negedge,enable,sync_reset,active_low port clk=CLK d=DI q=Q en=CE rst=LSR param GSR="DISABLED" REGMODE="FF" CEMUX="CE" CLKMUX="INV" LSRMUX="INV" SRMODE="LSR_OVER_CE" REGSET="RESET"
+  bel TRELLIS_FF ff mode negedge,enable,async_reset port clk=CLK d=DI q=Q en=CE rst=LSR param GSR="DISABLED" REGMODE="FF" CEMUX="CE" CLKMUX="INV" LSRMUX="LSR" SRMODE="ASYNC" REGSET="RESET"
+  bel TRELLIS_FF ff mode negedge,enable,async_reset,active_low port clk=CLK d=DI q=Q en=CE rst=LSR param GSR="DISABLED" REGMODE="FF" CEMUX="CE" CLKMUX="INV" LSRMUX="INV" SRMODE="ASYNC" REGSET="RESET"
+  bel TRELLIS_FF ff mode negedge,enable,sync_set port clk=CLK d=DI q=Q en=CE rst=LSR param GSR="DISABLED" REGMODE="FF" CEMUX="CE" CLKMUX="INV" LSRMUX="LSR" SRMODE="LSR_OVER_CE" REGSET="SET"
+  bel TRELLIS_FF ff mode negedge,enable,sync_set,active_low port clk=CLK d=DI q=Q en=CE rst=LSR param GSR="DISABLED" REGMODE="FF" CEMUX="CE" CLKMUX="INV" LSRMUX="INV" SRMODE="LSR_OVER_CE" REGSET="SET"
+  bel TRELLIS_FF ff mode negedge,enable,async_set port clk=CLK d=DI q=Q en=CE rst=LSR param GSR="DISABLED" REGMODE="FF" CEMUX="CE" CLKMUX="INV" LSRMUX="LSR" SRMODE="ASYNC" REGSET="SET"
+  bel TRELLIS_FF ff mode negedge,enable,async_set,active_low port clk=CLK d=DI q=Q en=CE rst=LSR param GSR="DISABLED" REGMODE="FF" CEMUX="CE" CLKMUX="INV" LSRMUX="INV" SRMODE="ASYNC" REGSET="SET"
   bel TRELLIS_IO io port pad=B din=O dout=I oe=T param_in DIR="INPUT" param_out DIR="OUTPUT" param_inout DIR="BIDIR" param_pullup PULLMODE="UP"
   bel DCCA gb count 16 port i=CLKI o=CLKO en=CE
   bel TRELLIS_DPR16X4 lutram
@@ -99,7 +151,42 @@ device ecp5-45f-CABGA381
   ff enable sync_reset async_reset shared_reset
   bel LUT4 lut count 43848 port i=A,B,C,D o=Z param INIT=16'h0000
   bel CCU2C carry
-  bel TRELLIS_FF ff count 43848 port clk=CLK d=DI q=Q en=CE rst=LSR
+  bel TRELLIS_FF ff count 43848 mode posedge port clk=CLK d=DI q=Q en=CE rst=LSR param GSR="DISABLED" REGMODE="FF" CEMUX="1" CLKMUX="CLK" LSRMUX="LSR" SRMODE="LSR_OVER_CE" REGSET="RESET"
+  bel TRELLIS_FF ff mode posedge,sync_reset port clk=CLK d=DI q=Q en=CE rst=LSR param GSR="DISABLED" REGMODE="FF" CEMUX="1" CLKMUX="CLK" LSRMUX="LSR" SRMODE="LSR_OVER_CE" REGSET="RESET"
+  bel TRELLIS_FF ff mode posedge,sync_reset,active_low port clk=CLK d=DI q=Q en=CE rst=LSR param GSR="DISABLED" REGMODE="FF" CEMUX="1" CLKMUX="CLK" LSRMUX="INV" SRMODE="LSR_OVER_CE" REGSET="RESET"
+  bel TRELLIS_FF ff mode posedge,async_reset port clk=CLK d=DI q=Q en=CE rst=LSR param GSR="DISABLED" REGMODE="FF" CEMUX="1" CLKMUX="CLK" LSRMUX="LSR" SRMODE="ASYNC" REGSET="RESET"
+  bel TRELLIS_FF ff mode posedge,async_reset,active_low port clk=CLK d=DI q=Q en=CE rst=LSR param GSR="DISABLED" REGMODE="FF" CEMUX="1" CLKMUX="CLK" LSRMUX="INV" SRMODE="ASYNC" REGSET="RESET"
+  bel TRELLIS_FF ff mode posedge,sync_set port clk=CLK d=DI q=Q en=CE rst=LSR param GSR="DISABLED" REGMODE="FF" CEMUX="1" CLKMUX="CLK" LSRMUX="LSR" SRMODE="LSR_OVER_CE" REGSET="SET"
+  bel TRELLIS_FF ff mode posedge,sync_set,active_low port clk=CLK d=DI q=Q en=CE rst=LSR param GSR="DISABLED" REGMODE="FF" CEMUX="1" CLKMUX="CLK" LSRMUX="INV" SRMODE="LSR_OVER_CE" REGSET="SET"
+  bel TRELLIS_FF ff mode posedge,async_set port clk=CLK d=DI q=Q en=CE rst=LSR param GSR="DISABLED" REGMODE="FF" CEMUX="1" CLKMUX="CLK" LSRMUX="LSR" SRMODE="ASYNC" REGSET="SET"
+  bel TRELLIS_FF ff mode posedge,async_set,active_low port clk=CLK d=DI q=Q en=CE rst=LSR param GSR="DISABLED" REGMODE="FF" CEMUX="1" CLKMUX="CLK" LSRMUX="INV" SRMODE="ASYNC" REGSET="SET"
+  bel TRELLIS_FF ff mode posedge,enable port clk=CLK d=DI q=Q en=CE rst=LSR param GSR="DISABLED" REGMODE="FF" CEMUX="CE" CLKMUX="CLK" LSRMUX="LSR" SRMODE="LSR_OVER_CE" REGSET="RESET"
+  bel TRELLIS_FF ff mode posedge,enable,sync_reset port clk=CLK d=DI q=Q en=CE rst=LSR param GSR="DISABLED" REGMODE="FF" CEMUX="CE" CLKMUX="CLK" LSRMUX="LSR" SRMODE="LSR_OVER_CE" REGSET="RESET"
+  bel TRELLIS_FF ff mode posedge,enable,sync_reset,active_low port clk=CLK d=DI q=Q en=CE rst=LSR param GSR="DISABLED" REGMODE="FF" CEMUX="CE" CLKMUX="CLK" LSRMUX="INV" SRMODE="LSR_OVER_CE" REGSET="RESET"
+  bel TRELLIS_FF ff mode posedge,enable,async_reset port clk=CLK d=DI q=Q en=CE rst=LSR param GSR="DISABLED" REGMODE="FF" CEMUX="CE" CLKMUX="CLK" LSRMUX="LSR" SRMODE="ASYNC" REGSET="RESET"
+  bel TRELLIS_FF ff mode posedge,enable,async_reset,active_low port clk=CLK d=DI q=Q en=CE rst=LSR param GSR="DISABLED" REGMODE="FF" CEMUX="CE" CLKMUX="CLK" LSRMUX="INV" SRMODE="ASYNC" REGSET="RESET"
+  bel TRELLIS_FF ff mode posedge,enable,sync_set port clk=CLK d=DI q=Q en=CE rst=LSR param GSR="DISABLED" REGMODE="FF" CEMUX="CE" CLKMUX="CLK" LSRMUX="LSR" SRMODE="LSR_OVER_CE" REGSET="SET"
+  bel TRELLIS_FF ff mode posedge,enable,sync_set,active_low port clk=CLK d=DI q=Q en=CE rst=LSR param GSR="DISABLED" REGMODE="FF" CEMUX="CE" CLKMUX="CLK" LSRMUX="INV" SRMODE="LSR_OVER_CE" REGSET="SET"
+  bel TRELLIS_FF ff mode posedge,enable,async_set port clk=CLK d=DI q=Q en=CE rst=LSR param GSR="DISABLED" REGMODE="FF" CEMUX="CE" CLKMUX="CLK" LSRMUX="LSR" SRMODE="ASYNC" REGSET="SET"
+  bel TRELLIS_FF ff mode posedge,enable,async_set,active_low port clk=CLK d=DI q=Q en=CE rst=LSR param GSR="DISABLED" REGMODE="FF" CEMUX="CE" CLKMUX="CLK" LSRMUX="INV" SRMODE="ASYNC" REGSET="SET"
+  bel TRELLIS_FF ff mode negedge port clk=CLK d=DI q=Q en=CE rst=LSR param GSR="DISABLED" REGMODE="FF" CEMUX="1" CLKMUX="INV" LSRMUX="LSR" SRMODE="LSR_OVER_CE" REGSET="RESET"
+  bel TRELLIS_FF ff mode negedge,sync_reset port clk=CLK d=DI q=Q en=CE rst=LSR param GSR="DISABLED" REGMODE="FF" CEMUX="1" CLKMUX="INV" LSRMUX="LSR" SRMODE="LSR_OVER_CE" REGSET="RESET"
+  bel TRELLIS_FF ff mode negedge,sync_reset,active_low port clk=CLK d=DI q=Q en=CE rst=LSR param GSR="DISABLED" REGMODE="FF" CEMUX="1" CLKMUX="INV" LSRMUX="INV" SRMODE="LSR_OVER_CE" REGSET="RESET"
+  bel TRELLIS_FF ff mode negedge,async_reset port clk=CLK d=DI q=Q en=CE rst=LSR param GSR="DISABLED" REGMODE="FF" CEMUX="1" CLKMUX="INV" LSRMUX="LSR" SRMODE="ASYNC" REGSET="RESET"
+  bel TRELLIS_FF ff mode negedge,async_reset,active_low port clk=CLK d=DI q=Q en=CE rst=LSR param GSR="DISABLED" REGMODE="FF" CEMUX="1" CLKMUX="INV" LSRMUX="INV" SRMODE="ASYNC" REGSET="RESET"
+  bel TRELLIS_FF ff mode negedge,sync_set port clk=CLK d=DI q=Q en=CE rst=LSR param GSR="DISABLED" REGMODE="FF" CEMUX="1" CLKMUX="INV" LSRMUX="LSR" SRMODE="LSR_OVER_CE" REGSET="SET"
+  bel TRELLIS_FF ff mode negedge,sync_set,active_low port clk=CLK d=DI q=Q en=CE rst=LSR param GSR="DISABLED" REGMODE="FF" CEMUX="1" CLKMUX="INV" LSRMUX="INV" SRMODE="LSR_OVER_CE" REGSET="SET"
+  bel TRELLIS_FF ff mode negedge,async_set port clk=CLK d=DI q=Q en=CE rst=LSR param GSR="DISABLED" REGMODE="FF" CEMUX="1" CLKMUX="INV" LSRMUX="LSR" SRMODE="ASYNC" REGSET="SET"
+  bel TRELLIS_FF ff mode negedge,async_set,active_low port clk=CLK d=DI q=Q en=CE rst=LSR param GSR="DISABLED" REGMODE="FF" CEMUX="1" CLKMUX="INV" LSRMUX="INV" SRMODE="ASYNC" REGSET="SET"
+  bel TRELLIS_FF ff mode negedge,enable port clk=CLK d=DI q=Q en=CE rst=LSR param GSR="DISABLED" REGMODE="FF" CEMUX="CE" CLKMUX="INV" LSRMUX="LSR" SRMODE="LSR_OVER_CE" REGSET="RESET"
+  bel TRELLIS_FF ff mode negedge,enable,sync_reset port clk=CLK d=DI q=Q en=CE rst=LSR param GSR="DISABLED" REGMODE="FF" CEMUX="CE" CLKMUX="INV" LSRMUX="LSR" SRMODE="LSR_OVER_CE" REGSET="RESET"
+  bel TRELLIS_FF ff mode negedge,enable,sync_reset,active_low port clk=CLK d=DI q=Q en=CE rst=LSR param GSR="DISABLED" REGMODE="FF" CEMUX="CE" CLKMUX="INV" LSRMUX="INV" SRMODE="LSR_OVER_CE" REGSET="RESET"
+  bel TRELLIS_FF ff mode negedge,enable,async_reset port clk=CLK d=DI q=Q en=CE rst=LSR param GSR="DISABLED" REGMODE="FF" CEMUX="CE" CLKMUX="INV" LSRMUX="LSR" SRMODE="ASYNC" REGSET="RESET"
+  bel TRELLIS_FF ff mode negedge,enable,async_reset,active_low port clk=CLK d=DI q=Q en=CE rst=LSR param GSR="DISABLED" REGMODE="FF" CEMUX="CE" CLKMUX="INV" LSRMUX="INV" SRMODE="ASYNC" REGSET="RESET"
+  bel TRELLIS_FF ff mode negedge,enable,sync_set port clk=CLK d=DI q=Q en=CE rst=LSR param GSR="DISABLED" REGMODE="FF" CEMUX="CE" CLKMUX="INV" LSRMUX="LSR" SRMODE="LSR_OVER_CE" REGSET="SET"
+  bel TRELLIS_FF ff mode negedge,enable,sync_set,active_low port clk=CLK d=DI q=Q en=CE rst=LSR param GSR="DISABLED" REGMODE="FF" CEMUX="CE" CLKMUX="INV" LSRMUX="INV" SRMODE="LSR_OVER_CE" REGSET="SET"
+  bel TRELLIS_FF ff mode negedge,enable,async_set port clk=CLK d=DI q=Q en=CE rst=LSR param GSR="DISABLED" REGMODE="FF" CEMUX="CE" CLKMUX="INV" LSRMUX="LSR" SRMODE="ASYNC" REGSET="SET"
+  bel TRELLIS_FF ff mode negedge,enable,async_set,active_low port clk=CLK d=DI q=Q en=CE rst=LSR param GSR="DISABLED" REGMODE="FF" CEMUX="CE" CLKMUX="INV" LSRMUX="INV" SRMODE="ASYNC" REGSET="SET"
   bel TRELLIS_IO io port pad=B din=O dout=I oe=T param_in DIR="INPUT" param_out DIR="OUTPUT" param_inout DIR="BIDIR" param_pullup PULLMODE="UP"
   bel DCCA gb count 16 port i=CLKI o=CLKO en=CE
   bel TRELLIS_DPR16X4 lutram

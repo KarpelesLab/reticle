@@ -29,6 +29,7 @@
 //!   lut_size 4
 //!   ff enable sync_reset async_reset shared_reset init 0
 //!   bel SB_LUT4 lut port i=I0,I1,I2,I3 o=O param LUT_INIT=16'h0000
+//!   bel SB_DFFESR ff mode posedge,enable,sync_reset port clk=C d=D q=Q en=E rst=R
 //!   bel SB_IO io port pad=PACKAGE_PIN din=D_IN_0 dout=D_OUT_0 oe=OUTPUT_ENABLE
 //!   bram SB_RAM40_4K
 //!     ports 2
@@ -61,11 +62,20 @@
 //!
 //! Primitives differ in what they call their pins, so the database carries
 //! the names: a [`BelKind`] maps abstract roles (`pad`, `din`, `dout`,
-//! `oe`, `i`, `o`, `ci`, `co`) onto the primitive's port names, and a
+//! `oe`, `i`, `o`, `ci`, `co`, `clk`, `d`, `q`, `en`, `rst`) onto the
+//! primitive's port names, and a
 //! [`BramShape`] and [`DspShape`] do the same for their ports. Primitive
 //! mapping ([`super::primitives`]) is written against the roles, so it
 //! works for any family whose file fills them in, and it declines to map
 //! (with a note) when a role it needs is missing.
+//!
+//! A flip-flop carries one more piece of data: its `mode` clause, an
+//! [`FfVariant`] saying exactly which flip-flop the primitive is (clock
+//! edge, clock enable, kind and polarity of set or reset). A family
+//! declares one `bel ... ff` line per combination it offers, whether
+//! those are different primitives (iCE40) or one primitive with different
+//! parameters (ECP5), and [`super::techcells`] maps an inferred flip-flop
+//! onto the line that matches it exactly.
 
 use std::fmt;
 
@@ -99,6 +109,162 @@ pub struct FfFeatures {
     /// The value the flop holds after configuration, when it is fixed;
     /// `None` when each flop can be initialised independently.
     pub init_value: Option<bool>,
+}
+
+/// What the set/reset input of one flip-flop primitive does.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct FfReset {
+    /// True when the input takes effect immediately, false when it takes
+    /// effect on the clock edge.
+    pub asynchronous: bool,
+    /// True when the input forces a one (a *set*), false when it forces a
+    /// zero (a *reset*).
+    pub sets: bool,
+    /// True when the input is active high.
+    pub active_high: bool,
+}
+
+impl FfReset {
+    /// The `.dev` keyword for the kind of input: `sync_reset`,
+    /// `async_reset`, `sync_set` or `async_set`.
+    pub fn keyword(self) -> &'static str {
+        match (self.asynchronous, self.sets) {
+            (false, false) => "sync_reset",
+            (true, false) => "async_reset",
+            (false, true) => "sync_set",
+            (true, true) => "async_set",
+        }
+    }
+
+    /// The reset named by a `.dev` keyword, active high.
+    pub fn from_keyword(word: &str) -> Option<FfReset> {
+        let (asynchronous, sets) = match word {
+            "sync_reset" => (false, false),
+            "async_reset" => (true, false),
+            "sync_set" => (false, true),
+            "async_set" => (true, true),
+            _ => return None,
+        };
+        Some(FfReset {
+            asynchronous,
+            sets,
+            active_high: true,
+        })
+    }
+}
+
+/// Exactly what one flip-flop primitive does.
+///
+/// A family offers one flip-flop per combination of clock edge, clock
+/// enable and set/reset, either as separate primitives (iCE40's `SB_DFF`,
+/// `SB_DFFE`, `SB_DFFESR`, ...) or as one primitive configured by
+/// parameters (ECP5's `TRELLIS_FF` with its `CLKMUX`, `CEMUX`, `LSRMUX`,
+/// `SRMODE` and `REGSET`). The database declares one `bel ... ff` line per
+/// combination either way, and [`super::techcells`] picks the line whose
+/// variant equals the inferred flip-flop exactly. Nothing is approximated:
+/// a combination the device does not declare is reported rather than
+/// mapped onto a near miss.
+///
+/// In the `.dev` text this is the `mode` clause, a comma-separated list of
+/// `posedge` / `negedge`, `enable`, one of `sync_reset` / `async_reset` /
+/// `sync_set` / `async_set`, and `active_low`:
+///
+/// ```text
+/// bel SB_DFFER ff mode negedge,enable,async_reset port clk=C d=D q=Q en=E rst=R
+/// ```
+///
+/// The set or reset pin plays the `rst` port role whether it sets or
+/// resets, since which of the two it does is what the variant states.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct FfVariant {
+    /// True when the flip-flop captures on the rising clock edge.
+    pub clk_pos: bool,
+    /// True when the primitive has a clock enable.
+    pub has_enable: bool,
+    /// The set/reset input, or `None` when the primitive has none.
+    pub reset: Option<FfReset>,
+}
+
+impl FfVariant {
+    /// A plain positive-edge flip-flop with no enable and no reset.
+    pub fn plain() -> FfVariant {
+        FfVariant {
+            clk_pos: true,
+            has_enable: false,
+            reset: None,
+        }
+    }
+
+    /// The `mode` clause describing this variant, in canonical order, so
+    /// that parsing it back yields the same value.
+    pub fn flags(self) -> String {
+        let mut out = String::from(if self.clk_pos { "posedge" } else { "negedge" });
+        if self.has_enable {
+            out.push_str(",enable");
+        }
+        if let Some(reset) = self.reset {
+            out.push(',');
+            out.push_str(reset.keyword());
+            if !reset.active_high {
+                out.push_str(",active_low");
+            }
+        }
+        out
+    }
+
+    /// Parses a `mode` clause, returning `None` on an unknown flag.
+    ///
+    /// ```
+    /// use reticle::fpga::FfVariant;
+    /// let v = FfVariant::parse("negedge,enable,async_reset").unwrap();
+    /// assert!(!v.clk_pos && v.has_enable);
+    /// assert!(v.reset.unwrap().asynchronous);
+    /// assert_eq!(v.flags(), "negedge,enable,async_reset");
+    /// assert!(FfVariant::parse("posedge,nonsense").is_none());
+    /// ```
+    pub fn parse(text: &str) -> Option<FfVariant> {
+        let mut variant = FfVariant::plain();
+        let mut active_low = false;
+        for flag in text.split(',').filter(|f| !f.is_empty()) {
+            match flag {
+                "posedge" => variant.clk_pos = true,
+                "negedge" => variant.clk_pos = false,
+                "enable" => variant.has_enable = true,
+                "active_low" => active_low = true,
+                other => variant.reset = Some(FfReset::from_keyword(other)?),
+            }
+        }
+        if active_low {
+            variant.reset.as_mut()?.active_high = false;
+        }
+        Some(variant)
+    }
+
+    /// A phrase naming the variant, for diagnostics.
+    pub fn describe(self) -> String {
+        let mut out = String::from(if self.clk_pos {
+            "a rising clock edge"
+        } else {
+            "a falling clock edge"
+        });
+        if self.has_enable {
+            out.push_str(", a clock enable");
+        }
+        match self.reset {
+            Some(reset) => {
+                out.push_str(", an active-");
+                out.push_str(if reset.active_high { "high " } else { "low " });
+                out.push_str(if reset.asynchronous {
+                    "asynchronous "
+                } else {
+                    "synchronous "
+                });
+                out.push_str(if reset.sets { "set" } else { "reset" });
+            }
+            None => out.push_str(" and no set or reset"),
+        }
+        out
+    }
 }
 
 /// What a [`BelKind`] is for.
@@ -201,6 +367,10 @@ pub struct BelKind {
     /// IO conventions (`PIN_TYPE` on iCE40, `DIR` and `PULLMODE` on ECP5)
     /// as data rather than as code.
     pub cond_params: Vec<(String, Vec<(String, AttrValue)>)>,
+    /// For a primitive with role [`BelRole::Ff`], exactly which flip-flop
+    /// it is; `None` for every other role, and for a flip-flop whose file
+    /// does not say (which makes flip-flop mapping decline for it).
+    pub ff: Option<FfVariant>,
 }
 
 impl BelKind {
@@ -213,6 +383,7 @@ impl BelKind {
             ports: Vec::new(),
             params: Vec::new(),
             cond_params: Vec::new(),
+            ff: None,
         }
     }
 
@@ -222,6 +393,31 @@ impl BelKind {
             .iter()
             .find(|(r, _)| r == role)
             .map(|(_, n)| n.as_str())
+    }
+
+    /// The port names playing `role`, splitting the comma-separated form a
+    /// role with several ports uses: a LUT's `i=I0,I1,I2,I3` is four
+    /// ports, in that order, input 0 first.
+    ///
+    /// ```
+    /// let device = reticle::fpga::target("ice40-hx1k-tq144").unwrap();
+    /// let lut = device.bel(reticle::fpga::BelRole::Lut).unwrap();
+    /// assert_eq!(lut.port_names("i"), ["I0", "I1", "I2", "I3"]);
+    /// assert_eq!(lut.port_names("nope"), Vec::<&str>::new());
+    /// ```
+    pub fn port_names(&self, role: &str) -> Vec<&str> {
+        self.port(role)
+            .map(|name| name.split(',').collect())
+            .unwrap_or_default()
+    }
+
+    /// Every port name the primitive has, in file order, with the
+    /// comma-separated entries split out.
+    pub fn all_port_names(&self) -> Vec<&str> {
+        self.ports
+            .iter()
+            .flat_map(|(_, names)| names.split(','))
+            .collect()
     }
 
     /// The parameters this primitive takes in the situation `condition`
@@ -681,6 +877,82 @@ impl Device {
         self.bels.iter().find(|b| b.name == name)
     }
 
+    /// The flip-flop primitive that behaves exactly like `variant`.
+    ///
+    /// A family whose flip-flops are one primitive configured by
+    /// parameters declares one `bel` line per variant under the same name;
+    /// the first matching line wins, so the file's order decides.
+    ///
+    /// ```
+    /// use reticle::fpga::{FfReset, FfVariant, target};
+    /// let device = target("ice40-hx1k-tq144").unwrap();
+    /// let variant = FfVariant {
+    ///     clk_pos: true,
+    ///     has_enable: true,
+    ///     reset: Some(FfReset { asynchronous: false, sets: false, active_high: true }),
+    /// };
+    /// assert_eq!(device.ff_variant(variant).unwrap().name, "SB_DFFESR");
+    /// ```
+    pub fn ff_variant(&self, variant: FfVariant) -> Option<&BelKind> {
+        self.bels
+            .iter()
+            .find(|b| b.role == BelRole::Ff && b.ff == Some(variant))
+    }
+
+    /// Every flip-flop variant the device declares, in file order.
+    pub fn ff_variants(&self) -> impl Iterator<Item = (&BelKind, FfVariant)> {
+        self.bels
+            .iter()
+            .filter(|b| b.role == BelRole::Ff)
+            .filter_map(|b| b.ff.map(|v| (b, v)))
+    }
+
+    /// The port names of the primitive `name`, or `None` when the device
+    /// declares no primitive by that name.
+    ///
+    /// Every kind of primitive is covered: the [`BelKind`]s (several of
+    /// which may share a name, as the flip-flop variants of a family with
+    /// parameter-configured flops do, in which case the union of their
+    /// ports is returned), the block RAMs, the DSP blocks and the PLLs.
+    /// The result is what a netlist may connect, which is what
+    /// [`super::flow::check_nextpnr_json`] checks each cell against.
+    /// A primitive the database records without a port map yields an
+    /// empty list, meaning "declared, ports unknown".
+    pub fn primitive_ports(&self, name: &str) -> Option<Vec<String>> {
+        let mut found = false;
+        let mut ports: Vec<String> = Vec::new();
+        let mut push = |port: &str| {
+            if !ports.iter().any(|p| p == port) {
+                ports.push(port.to_owned());
+            }
+        };
+        for bel in self.bels.iter().filter(|b| b.name == name) {
+            found = true;
+            for port in bel.all_port_names() {
+                push(port);
+            }
+        }
+        for bram in self.block_rams.iter().filter(|b| b.name == name) {
+            found = true;
+            for port in &bram.port_map {
+                for (_, signal) in &port.signals {
+                    push(signal);
+                }
+            }
+        }
+        for dsp in self.dsps.iter().filter(|d| d.name == name) {
+            found = true;
+            for (_, port) in &dsp.ports {
+                push(port);
+            }
+        }
+        for pll in self.clock_resources.plls.iter().filter(|p| p.name == name) {
+            found = true;
+            let _ = pll;
+        }
+        found.then_some(ports)
+    }
+
     /// The package pin with the given name.
     pub fn pin(&self, name: &str) -> Option<&Pin> {
         self.pins.iter().find(|p| p.name == name)
@@ -865,6 +1137,9 @@ fn write_bel(bel: &BelKind) -> String {
     let mut line = format!("bel {} {}", quote(&bel.name), bel.role.keyword());
     if let Some(count) = bel.count {
         line.push_str(&format!(" count {count}"));
+    }
+    if let Some(ff) = bel.ff {
+        line.push_str(&format!(" mode {}", ff.flags()));
     }
     line.push_str(&write_pairs("port", &bel.ports));
     write_params(&mut line, "param", &bel.params);
@@ -1332,6 +1607,20 @@ impl<'a> Parser<'a> {
                     let count = self.number_at(line, index, "a count")?;
                     index += 1;
                     bel.count = Some(count);
+                }
+                "mode" => {
+                    let Some(token) = line.get(index) else {
+                        self.error(line.span, "expected flip-flop mode flags after `mode`");
+                        break;
+                    };
+                    index += 1;
+                    match FfVariant::parse(token.as_str()) {
+                        Some(variant) => bel.ff = Some(variant),
+                        None => {
+                            let (span, text) = (token.span, token.as_str().to_owned());
+                            self.unknown(span, format!("unknown flip-flop mode `{text}`"));
+                        }
+                    }
                 }
                 "port" => bel.ports.extend(self.pairs(line, &mut index)),
                 keyword if keyword == "param" || keyword.starts_with("param_") => {
@@ -1936,5 +2225,108 @@ end
         assert!(!BramPortRole::Read.writes());
         assert_eq!(BramPortRole::from_keyword("nope"), None);
         assert!(DeviceDb::new().is_empty());
+    }
+
+    #[test]
+    fn flip_flop_modes_round_trip() {
+        // Every combination the model can express writes and parses back
+        // to itself, which is what keeps a `.dev` file diffable.
+        for clk_pos in [true, false] {
+            for has_enable in [true, false] {
+                for reset in [
+                    None,
+                    Some("sync_reset"),
+                    Some("async_reset"),
+                    Some("sync_set"),
+                    Some("async_set"),
+                ] {
+                    for active_high in [true, false] {
+                        if reset.is_none() && !active_high {
+                            continue;
+                        }
+                        let variant = FfVariant {
+                            clk_pos,
+                            has_enable,
+                            reset: reset.map(|word| FfReset {
+                                active_high,
+                                ..FfReset::from_keyword(word).unwrap()
+                            }),
+                        };
+                        let flags = variant.flags();
+                        assert_eq!(FfVariant::parse(&flags), Some(variant), "{flags}");
+                        assert!(!variant.describe().is_empty());
+                    }
+                }
+            }
+        }
+        assert_eq!(FfVariant::parse("posedge"), Some(FfVariant::plain()));
+        // `active_low` without a set or reset says nothing, so it is not
+        // a mode at all.
+        assert_eq!(FfVariant::parse("posedge,active_low"), None);
+        assert_eq!(FfVariant::parse("sideways"), None);
+        assert_eq!(FfReset::from_keyword("nope"), None);
+    }
+
+    #[test]
+    fn a_mode_clause_is_parsed_and_written() {
+        let text = concat!(
+            "device a\n",
+            "  family f\n",
+            "  bel FF ff mode negedge,enable,async_set,active_low port clk=C d=D q=Q en=E rst=S\n",
+            "  bel FF2 ff mode sideways port clk=C\n",
+            "  bel FF3 ff mode\n",
+            "end\n"
+        );
+        let (device, diags) = parse(text);
+        let device = device.unwrap();
+        assert!(
+            diags.contains("unknown flip-flop mode `sideways`"),
+            "{diags}"
+        );
+        assert!(diags.contains("expected flip-flop mode flags"), "{diags}");
+        let ff = device.bel_named("FF").unwrap();
+        let variant = ff.ff.unwrap();
+        assert!(!variant.clk_pos && variant.has_enable);
+        let reset = variant.reset.unwrap();
+        assert!(reset.asynchronous && reset.sets && !reset.active_high);
+        assert_eq!(device.ff_variant(variant).unwrap().name, "FF");
+        assert_eq!(device.ff_variant(FfVariant::plain()), None);
+        assert_eq!(device.ff_variants().count(), 1);
+        assert!(
+            device
+                .to_text()
+                .contains("mode negedge,enable,async_set,active_low")
+        );
+        // A `ff` bel with no mode is not a variant mapping can choose.
+        assert!(device.bel_named("FF3").is_some_and(|b| b.ff.is_none()));
+    }
+
+    #[test]
+    fn primitive_ports_cover_every_kind_of_primitive() {
+        let device = super::super::target("ice40-hx1k-tq144").unwrap();
+        assert!(device.primitive_ports("SB_NONESUCH").is_none());
+        let lut = device.primitive_ports("SB_LUT4").unwrap();
+        assert_eq!(lut, ["I0", "I1", "I2", "I3", "O"]);
+        // The flip-flop variants share one name on some families and not
+        // on others; either way the union of their pins is the answer.
+        let ff = device.primitive_ports("SB_DFFESR").unwrap();
+        assert_eq!(ff, ["C", "D", "Q", "E", "R"]);
+        let ram = device.primitive_ports("SB_RAM40_4K").unwrap();
+        assert!(ram.contains(&"RDATA".to_owned()) && ram.contains(&"WCLKE".to_owned()));
+        let ecp5 = super::super::target("ecp5-45f-CABGA381").unwrap();
+        assert_eq!(
+            ecp5.primitive_ports("TRELLIS_FF").unwrap(),
+            ["CLK", "DI", "Q", "CE", "LSR"]
+        );
+        assert!(
+            ecp5.primitive_ports("MULT18X18D")
+                .unwrap()
+                .contains(&"P".to_owned())
+        );
+        // A PLL is declared but has no recorded ports: "declared, ports
+        // unknown" is a `Some(empty)`, not a `None`.
+        assert_eq!(ecp5.primitive_ports("EHXPLLL"), Some(Vec::new()));
+        // A carry unit without a port map likewise.
+        assert_eq!(ecp5.primitive_ports("CCU2C"), Some(Vec::new()));
     }
 }
