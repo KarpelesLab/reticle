@@ -1,0 +1,11 @@
+warning[L0005]: `y` has more than one driver
+  --> multiple_drivers.v:11:12
+   |
+11 |     assign y = b;                 // second driver of the same bit
+   |            ^
+10 |     assign y = a;
+   |            - also driven by a continuous assignment
+   |
+   = note: a net or variable driven from two processes resolves to x
+   = note: lint: multiple-drivers, disable with `// reticle-lint: off multiple-drivers` or `(* lint_off = "multiple-drivers" *)`
+

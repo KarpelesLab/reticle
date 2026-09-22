@@ -1,0 +1,26 @@
+warning[L0002]: input `enable` of `unused` is never read
+ --> unused_signal.v:5:23
+  |
+5 |     input  wire       enable,
+  |                       ^^^^^^
+  |
+  = note: lint: unused-input, disable with `// reticle-lint: off unused-input` or `(* lint_off = "unused-input" *)`
+
+warning[L0001]: `scratch` is never read
+ --> unused_signal.v:9:16
+  |
+9 |     wire [7:0] scratch;        // never read
+  |                ^^^^^^^
+  |
+  = note: declared in `unused`; remove it, or name it with a leading `_`
+  = note: lint: unused-signal, disable with `// reticle-lint: off unused-signal` or `(* lint_off = "unused-signal" *)`
+
+warning[L0001]: `counter` is never read
+  --> unused_signal.v:10:16
+   |
+10 |     reg  [3:0] counter;        // written, never read
+   |                ^^^^^^^
+   |
+   = note: declared in `unused`; remove it, or name it with a leading `_`
+   = note: lint: unused-signal, disable with `// reticle-lint: off unused-signal` or `(* lint_off = "unused-signal" *)`
+

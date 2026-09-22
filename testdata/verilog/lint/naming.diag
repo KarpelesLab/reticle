@@ -1,0 +1,49 @@
+warning[L0025]: module `BadName` is not snake_case
+ --> naming.v:3:8
+  |
+3 | module BadName #(parameter width = 4) (
+  |        ^^^^^^^
+  |
+  = note: lint: naming, disable with `// reticle-lint: off naming` or `(* lint_off = "naming" *)`
+
+warning[L0025]: parameter `width` is not UPPER_CASE
+ --> naming.v:3:28
+  |
+3 | module BadName #(parameter width = 4) (
+  |                            ^^^^^
+  |
+  = note: lint: naming, disable with `// reticle-lint: off naming` or `(* lint_off = "naming" *)`
+
+warning[L0025]: signal `CK` is not snake_case
+ --> naming.v:4:28
+  |
+4 |     input  wire            CK,
+  |                            ^^
+  |
+  = note: lint: naming, disable with `// reticle-lint: off naming` or `(* lint_off = "naming" *)`
+
+warning[L0025]: signal `Q` is not snake_case
+ --> naming.v:6:28
+  |
+6 |     output reg [width-1:0] Q
+  |                            ^
+  |
+  = note: lint: naming, disable with `// reticle-lint: off naming` or `(* lint_off = "naming" *)`
+
+warning[L0025]: clock `CK` is not named `clk...`
+ --> naming.v:8:14
+  |
+8 |     always @(posedge CK or negedge rst)
+  |              ^^^^^^^^^^
+  |
+  = note: lint: naming, disable with `// reticle-lint: off naming` or `(* lint_off = "naming" *)`
+
+warning[L0025]: `rst` is active low but not named `rst_n`
+ --> naming.v:8:28
+  |
+8 |     always @(posedge CK or negedge rst)
+  |                            ^^^^^^^^^^^
+  |
+  = note: suffix an active-low signal with `_n`
+  = note: lint: naming, disable with `// reticle-lint: off naming` or `(* lint_off = "naming" *)`
+

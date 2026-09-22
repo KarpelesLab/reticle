@@ -1,0 +1,44 @@
+warning[L0011]: reset `rst_n` is tested with the wrong polarity
+  --> reset_style.v:17:13
+   |
+17 |         if (rst_n) q1 <= 1'b0;           // active high, declared active low
+   |             ^^^^^
+16 |     always @(posedge clk or negedge rst_n)
+   |                             ------------- declared as `negedge`
+   |
+   = note: `negedge rst_n` resets when the level is low, so test `!rst_n`
+   = note: lint: reset-style, disable with `// reticle-lint: off reset-style` or `(* lint_off = "reset-style" *)`
+
+warning[L0011]: reset `rst` is not tested first
+  --> reset_style.v:22:18
+   |
+22 |         else if (rst) q2 <= 1'b0;
+   |                  ^^^
+21 |         if (en)       q2 <= d;           // the reset comes second
+   |             -- this condition comes before it
+   |
+   = note: an asynchronous reset must take priority over everything else
+   = note: lint: reset-style, disable with `// reticle-lint: off reset-style` or `(* lint_off = "reset-style" *)`
+
+warning[L0011]: asynchronous `posedge rst` is not tested in the block
+  --> reset_style.v:24:29
+   |
+24 |     always @(posedge clk or posedge rst)
+   |                             ^^^^^^^^^^^
+25 |         q3 <= d;                         // the reset is never tested
+   |         -------- this body never checks it
+   |
+   = note: an asynchronous reset must be the first condition of the block
+   = note: lint: reset-style, disable with `// reticle-lint: off reset-style` or `(* lint_off = "reset-style" *)`
+
+warning[L0011]: synchronous reset `srst` in a block with an asynchronous reset
+  --> reset_style.v:29:18
+   |
+29 |         else if (srst)  q4 <= 1'b0;      // resets in one block
+   |                  ^^^^
+27 |     always @(posedge clk or negedge arst_n)
+   |            -------------------------------- asynchronous reset declared here
+   |
+   = note: mixing the two reset styles in one block confuses synthesis
+   = note: lint: reset-style, disable with `// reticle-lint: off reset-style` or `(* lint_off = "reset-style" *)`
+

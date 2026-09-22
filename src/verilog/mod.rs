@@ -15,7 +15,8 @@
 //! - `elab`: name resolution, parameters, generate, width inference (not
 //!   yet written).
 //! - `lower`: AST to [`crate::ir`].
-//! - `lint`: AST-level checks that need no synthesis.
+//! - [`lint`]: AST-level checks that need no synthesis, run over the tree
+//!   plus the lexer's comments (see `docs/lints.md`).
 //!
 //! [`lex_source`] runs the preprocessor and lexer; [`parse_source`] runs
 //! all three stages and is the entry point elaboration will consume.
@@ -23,6 +24,7 @@
 pub mod ast;
 pub mod ast_dump;
 pub mod lex;
+pub mod lint;
 pub mod parse;
 pub mod preprocess;
 pub mod token;

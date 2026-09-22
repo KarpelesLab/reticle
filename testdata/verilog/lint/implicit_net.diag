@@ -1,0 +1,18 @@
+warning[L0006]: `mid` is used in a port connection without being declared
+ --> implicit_net.v:8:24
+  |
+8 |     leaf u0 (.i(a), .o(mid));     // `mid` is never declared
+  |                        ^^^
+  |
+  = note: Verilog creates an implicit 1-bit wire; declare it, or use `default_nettype none`
+  = note: lint: implicit-net, disable with `// reticle-lint: off implicit-net` or `(* lint_off = "implicit-net" *)`
+
+warning[L0006]: `stray` is used in a continuous assignment without being declared
+ --> implicit_net.v:9:12
+  |
+9 |     assign stray = a;             // so is `stray`
+  |            ^^^^^
+  |
+  = note: Verilog creates an implicit 1-bit wire; declare it, or use `default_nettype none`
+  = note: lint: implicit-net, disable with `// reticle-lint: off implicit-net` or `(* lint_off = "implicit-net" *)`
+

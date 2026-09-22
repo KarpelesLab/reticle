@@ -1,0 +1,35 @@
+note[L0024]: TODO comment
+ --> deprecated.v:1:1
+  |
+1 | // TODO: drop the defparam once the instance carries the parameter.
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  |
+  = note: lint: todo-comment, disable with `// reticle-lint: off todo-comment` or `(* lint_off = "todo-comment" *)`
+
+note[L0023]: `` `include `` of the design file `other.v`
+ --> deprecated.v:4:1
+  |
+4 | `include "other.v"
+  | ^^^^^^^^^^^^^^^^^^
+  |
+  = note: include headers (`.vh`, `.svh`) only; list design files in the build
+  = note: lint: deprecated-construct, disable with `// reticle-lint: off deprecated-construct` or `(* lint_off = "deprecated-construct" *)`
+
+note[L0023]: `defparam` is deprecated
+  --> deprecated.v:15:14
+   |
+15 |     defparam u0.W = 4;
+   |              ^^^^^^^^
+   |
+   = note: override the parameter at the instance: `m #(.W(8)) u0 (...)`
+   = note: lint: deprecated-construct, disable with `// reticle-lint: off deprecated-construct` or `(* lint_off = "deprecated-construct" *)`
+
+note[L0023]: `wait` is not synthesisable
+  --> deprecated.v:18:9
+   |
+18 |         wait (mid) y <= mid;
+   |         ^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: use an `always` block sensitive to the condition's signals
+   = note: lint: deprecated-construct, disable with `// reticle-lint: off deprecated-construct` or `(* lint_off = "deprecated-construct" *)`
+

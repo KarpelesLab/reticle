@@ -1,0 +1,31 @@
+warning[L0010]: sensitivity list leaves out `b`
+  --> sensitivity.v:11:12
+   |
+11 |     always @(a) y = a & b;               // `b` is missing
+   |            ^^^^
+11 |     always @(a) y = a & b;               // `b` is missing
+   |                         - read here
+   |
+   = note: use `always @*` so the list cannot go stale
+   = note: lint: sensitivity-list, disable with `// reticle-lint: off sensitivity-list` or `(* lint_off = "sensitivity-list" *)`
+
+warning[L0010]: sensitivity list mixes edge and level sensitivity
+  --> sensitivity.v:13:29
+   |
+13 |     always @(posedge clk or b) z <= a;   // an edge next to a level
+   |                             ^
+13 |     always @(posedge clk or b) z <= a;   // an edge next to a level
+   |            ------------------- in this list
+   |
+   = note: an edge-triggered block must list only edges
+   = note: lint: sensitivity-list, disable with `// reticle-lint: off sensitivity-list` or `(* lint_off = "sensitivity-list" *)`
+
+warning[L0010]: `always @*` reads nothing
+  --> sensitivity.v:15:12
+   |
+15 |     always @* w = 1'b0;                  // reads nothing at all
+   |            ^^
+   |
+   = note: the block will never run again after time zero
+   = note: lint: sensitivity-list, disable with `// reticle-lint: off sensitivity-list` or `(* lint_off = "sensitivity-list" *)`
+

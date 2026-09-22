@@ -1,0 +1,33 @@
+warning[L0026]: line is 75 characters, the limit is 60
+ --> whitespace.v:2:61
+  |
+2 | // lint-config: off:all warn:line-length warn:trailing-whitespace warn:tabs
+  |                                                             ^^^^^^^^^^^^^^^
+  |
+  = note: lint: line-length, disable with `// reticle-lint: off line-length` or `(* lint_off = "line-length" *)`
+
+warning[L0027]: trailing whitespace
+ --> whitespace.v:4:41
+  |
+4 | module ws (input wire a, output wire y);   
+  |                                         ^^^
+  |
+  = note: lint: trailing-whitespace, disable with `// reticle-lint: off trailing-whitespace` or `(* lint_off = "trailing-whitespace" *)`
+
+warning[L0028]: tab character
+ --> whitespace.v:5:1
+  |
+5 | 	assign y = a;
+  | ^
+  |
+  = note: indent with spaces; a tab is displayed differently everywhere
+  = note: lint: tabs, disable with `// reticle-lint: off tabs` or `(* lint_off = "tabs" *)`
+
+warning[L0026]: line is 69 characters, the limit is 60
+ --> whitespace.v:6:61
+  |
+6 |     // this comment is deliberately longer than sixty characters wide
+  |                                                             ^^^^^^^^^
+  |
+  = note: lint: line-length, disable with `// reticle-lint: off line-length` or `(* lint_off = "line-length" *)`
+

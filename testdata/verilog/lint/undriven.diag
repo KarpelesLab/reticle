@@ -1,0 +1,17 @@
+warning[L0004]: output `z` of `undriven` is never driven
+ --> undriven.v:6:17
+  |
+6 |     output wire z    // never driven
+  |                 ^
+  |
+  = note: lint: undriven-output, disable with `// reticle-lint: off undriven-output` or `(* lint_off = "undriven-output" *)`
+
+warning[L0003]: `mid` is never assigned
+ --> undriven.v:8:10
+  |
+8 |     wire mid;        // never driven
+  |          ^^^
+  |
+  = note: it will read as x (or z for a net) forever
+  = note: lint: undriven-signal, disable with `// reticle-lint: off undriven-signal` or `(* lint_off = "undriven-signal" *)`
+

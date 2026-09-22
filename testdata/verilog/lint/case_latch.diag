@@ -1,0 +1,31 @@
+warning[L0012]: `case` covers 2 of 4 values and has no `default`
+  --> case_latch.sv:11:15
+   |
+11 |         case (sel)               // 2 of 4 values, no default
+   |               ^^^
+   |
+   = note: add a `default` arm, or cover the remaining values
+   = note: lint: incomplete-case, disable with `// reticle-lint: off incomplete-case` or `(* lint_off = "incomplete-case" *)`
+
+warning[L0013]: `y` is not assigned on every path, inferring a latch
+  --> case_latch.sv:12:19
+   |
+12 |             2'd0: y = 4'b0001;
+   |                   ^
+10 |     always_comb begin
+   |     ----------------- in this combinational block
+   |
+   = note: assign a default value first, or complete every `if` and `case`
+   = note: lint: latch-inferred, disable with `// reticle-lint: off latch-inferred` or `(* lint_off = "latch-inferred" *)`
+
+warning[L0013]: `hit` is not assigned on every path, inferring a latch
+  --> case_latch.sv:17:25
+   |
+17 |     always_comb if (en) hit = 1'b1;   // no `else`: a latch
+   |                         ^^^
+17 |     always_comb if (en) hit = 1'b1;   // no `else`: a latch
+   |     ------------------------------- in this combinational block
+   |
+   = note: assign a default value first, or complete every `if` and `case`
+   = note: lint: latch-inferred, disable with `// reticle-lint: off latch-inferred` or `(* lint_off = "latch-inferred" *)`
+

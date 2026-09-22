@@ -1,0 +1,29 @@
+warning[L0007]: blocking assignment to `q` in an edge-triggered block
+  --> assignment_styles.sv:11:30
+   |
+11 |     always_ff @(posedge clk) q = a;      // `=` in an edge-triggered block
+   |                              ^^^^^^
+   |
+   = note: use `<=` in `always_ff`; blocking assignments to a register race with reads of it
+   = note: lint: blocking-in-sequential, disable with `// reticle-lint: off blocking-in-sequential` or `(* lint_off = "blocking-in-sequential" *)`
+
+warning[L0008]: non-blocking assignment to `y` in a combinational block
+  --> assignment_styles.sv:13:17
+   |
+13 |     always_comb y <= a & b;              // `<=` in a combinational block
+   |                 ^^^^^^^^^^^
+   |
+   = note: use `=` in `always_comb`
+   = note: lint: nonblocking-in-comb, disable with `// reticle-lint: off nonblocking-in-comb` or `(* lint_off = "nonblocking-in-comb" *)`
+
+warning[L0009]: `z` is assigned with both `=` and `<=`
+  --> assignment_styles.sv:16:32
+   |
+16 |     always_comb                z  = b;
+   |                                ^
+15 |     always_ff @(posedge clk) z <= a;     // `z` is written both ways
+   |                              - first assigned here
+   |
+   = note: mixing the two styles for one variable is not synthesisable
+   = note: lint: mixed-assignment-styles, disable with `// reticle-lint: off mixed-assignment-styles` or `(* lint_off = "mixed-assignment-styles" *)`
+

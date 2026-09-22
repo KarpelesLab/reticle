@@ -1,0 +1,30 @@
+warning[L0017]: literal needs 9 bits but `seed` is 8 bits wide
+  --> widths.v:10:22
+   |
+10 |     reg [7:0] seed = 9'h1ff;      // the literal needs nine bits
+   |                      ^^^^^^
+10 |     reg [7:0] seed = 9'h1ff;      // the literal needs nine bits
+   |               ---- declared here
+   |
+   = note: the extra bits are dropped
+   = note: lint: width-mismatch, disable with `// reticle-lint: off width-mismatch` or `(* lint_off = "width-mismatch" *)`
+
+warning[L0017]: width mismatch: the target is 8 bits, the value 6 bits
+  --> widths.v:12:12
+   |
+12 |     assign wide   = {b, c};       // six bits into eight
+   |            ^^^^^^^^^^^^^^^
+12 |     assign wide   = {b, c};       // six bits into eight
+   |                     ------ this value is zero-extended
+   |
+   = note: lint: width-mismatch, disable with `// reticle-lint: off width-mismatch` or `(* lint_off = "width-mismatch" *)`
+
+warning[L0018]: unsized literal `1` in a concatenation
+  --> widths.v:14:25
+   |
+14 |     assign narrow = {b, 1};       // an unsized literal is 32 bits here
+   |                         ^
+   |
+   = note: an unsized literal is 32 bits here; write its width, as in `1'b0`
+   = note: lint: unsized-literal-in-concat, disable with `// reticle-lint: off unsized-literal-in-concat` or `(* lint_off = "unsized-literal-in-concat" *)`
+

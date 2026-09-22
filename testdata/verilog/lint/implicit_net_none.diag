@@ -1,0 +1,9 @@
+warning[L0006]: `mid` is used in a port connection without being declared
+ --> implicit_net_none.v:9:24
+  |
+9 |     leaf u0 (.i(a), .o(mid));
+  |                        ^^^
+  |
+  = note: `default_nettype none` is in effect, so no implicit net is created
+  = note: lint: implicit-net, disable with `// reticle-lint: off implicit-net` or `(* lint_off = "implicit-net" *)`
+

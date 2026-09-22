@@ -1,0 +1,45 @@
+note[L0019]: instance of `leaf` connects 5 ports by position
+ --> port_connection.v:9:10
+  |
+9 |     leaf u0 (w, w, w, w, y0);                            // five by position
+  |          ^^^^^^^^^^^^^^^^^^^
+  |
+  = note: name the connections (`.clk(clk)`) so a port list change is caught
+  = note: lint: port-connection, disable with `// reticle-lint: off port-connection` or `(* lint_off = "port-connection" *)`
+
+note[L0019]: `y` is left unconnected
+  --> port_connection.v:10:42
+   |
+10 |     leaf u1 (.a(w), .b(w), .c(w), .d(w), .y());          // output left open
+   |                                          ^^^^
+   |
+   = note: an unconnected input floats; an unconnected output is fine
+   = note: lint: port-connection, disable with `// reticle-lint: off port-connection` or `(* lint_off = "port-connection" *)`
+
+note[L0019]: instance of `leaf` uses `.*`
+  --> port_connection.v:11:10
+   |
+11 |     leaf u2 (.*);                                        // connected by name
+   |          ^^^^^^^
+   |
+   = note: `.*` hides which signals are connected; name them instead
+   = note: lint: port-connection, disable with `// reticle-lint: off port-connection` or `(* lint_off = "port-connection" *)`
+
+note[L0019]: instance of `leaf` connects 5 ports by position
+  --> port_connection.v:12:10
+   |
+12 |     leaf u3 (w, w, w, , y1);                             // an empty slot
+   |          ^^^^^^^^^^^^^^^^^^
+   |
+   = note: name the connections (`.clk(clk)`) so a port list change is caught
+   = note: lint: port-connection, disable with `// reticle-lint: off port-connection` or `(* lint_off = "port-connection" *)`
+
+note[L0019]: port 4 of `leaf` is left unconnected
+  --> port_connection.v:12:23
+   |
+12 |     leaf u3 (w, w, w, , y1);                             // an empty slot
+   |                       ^
+   |
+   = note: an unconnected input floats; an unconnected output is fine
+   = note: lint: port-connection, disable with `// reticle-lint: off port-connection` or `(* lint_off = "port-connection" *)`
+

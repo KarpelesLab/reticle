@@ -1,0 +1,27 @@
+warning[L0014]: `casex` treats `x` in the subject as a wildcard
+ --> case_xz.v:5:16
+  |
+5 |         casex (op)
+  |                ^^
+  |
+  = note: use `casez`, whose wildcard is `?` / `z` only
+  = note: lint: case-x-z, disable with `// reticle-lint: off case-x-z` or `(* lint_off = "case-x-z" *)`
+
+warning[L0014]: an `x` or `z` in a `case` arm matches nothing
+  --> case_xz.v:11:13
+   |
+11 |             4'b1x0z: y = 1'b1;
+   |             ^^^^^^^
+   |
+   = note: `case` compares bit for bit; use `casez` for wildcards
+   = note: lint: case-x-z, disable with `// reticle-lint: off case-x-z` or `(* lint_off = "case-x-z" *)`
+
+warning[L0014]: `x` in a `casez` arm matches nothing
+  --> case_xz.v:16:13
+   |
+16 |             4'b1?x?: y = 1'b1;
+   |             ^^^^^^^
+   |
+   = note: `casez` treats `?` and `z` as wildcards, not `x`
+   = note: lint: case-x-z, disable with `// reticle-lint: off case-x-z` or `(* lint_off = "case-x-z" *)`
+

@@ -107,9 +107,11 @@ parts of SystemVerilog (IEEE 1800) that people actually use.
       (context-determined expression widths, sign extension), function
       inlining for constant evaluation.
 - [ ] Lowering to IR.
-- [ ] Linter rules on the AST that do not need synthesis (unused signals,
+- [x] Linter rules on the AST that do not need synthesis (unused signals,
       implicit width truncation, latches from incomplete `case`, multiple
-      drivers, blocking/non-blocking misuse).
+      drivers, blocking/non-blocking misuse). 28 rules with levels
+      configurable by name and `(* lint_off *)` / `// reticle-lint: off`
+      suppressions; see `docs/lints.md`.
 
 Done when: every module in a curated corpus (own tests plus permissively
 licensed open designs such as picorv32 and the SERV core) parses, elaborates

@@ -1,0 +1,27 @@
+note[L0020]: `adder` uses a Verilog-1995 port list
+ --> style_ports.v:4:8
+  |
+4 | module adder(a, b, sum);
+  |        ^^^^^
+  |
+  = note: declare the direction and type in the header: `module m(input wire clk, ...)`
+  = note: lint: non-ansi-ports, disable with `// reticle-lint: off non-ansi-ports` or `(* lint_off = "non-ansi-ports" *)`
+
+warning[L0021]: the file never sets `` `default_nettype none ``
+ --> style_ports.v:4:8
+  |
+4 | module adder(a, b, sum);
+  |        ^^^^^
+  |
+  = note: without it a typo in a signal name becomes a silent one-bit wire
+  = note: lint: missing-default-nettype, disable with `// reticle-lint: off missing-default-nettype` or `(* lint_off = "missing-default-nettype" *)`
+
+warning[L0022]: signal `bit` is a reserved word in SystemVerilog
+ --> style_ports.v:7:18
+  |
+7 |     wire   [3:0] bit;          // `bit` is a SystemVerilog keyword
+  |                  ^^^
+  |
+  = note: the file is parsed as Verilog-2005; rename it so the code stays portable
+  = note: lint: keyword-as-identifier, disable with `// reticle-lint: off keyword-as-identifier` or `(* lint_off = "keyword-as-identifier" *)`
+

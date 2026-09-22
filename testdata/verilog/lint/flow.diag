@@ -1,0 +1,38 @@
+warning[L0015]: this statement is unreachable after `return`
+ --> flow.sv:7:13
+  |
+7 |             clamp = 0;            // unreachable
+  |             ^^^^^^^^^^
+6 |             return x;
+  |             --------- control leaves the block here
+  |
+  = note: lint: unreachable-statement, disable with `// reticle-lint: off unreachable-statement` or `(* lint_off = "unreachable-statement" *)`
+
+warning[L0016]: this condition is always true
+  --> flow.sv:12:13
+   |
+12 |         if (1) y = 1'b0;          // always true
+   |             ^
+   |
+   = note: the `else` branch, if any, is dead code
+   = note: lint: constant-condition, disable with `// reticle-lint: off constant-condition` or `(* lint_off = "constant-condition" *)`
+
+warning[L0016]: this loop condition is always false
+  --> flow.sv:13:16
+   |
+13 |         while (0) y = 1'b1;       // never runs
+   |                ^
+   |
+   = note: the body never runs
+   = note: lint: constant-condition, disable with `// reticle-lint: off constant-condition` or `(* lint_off = "constant-condition" *)`
+
+warning[L0015]: this statement is unreachable after `$finish`
+  --> flow.sv:15:9
+   |
+15 |         $display("never");        // unreachable
+   |         ^^^^^^^^^^^^^^^^^^
+14 |         $finish;
+   |         -------- control leaves the block here
+   |
+   = note: lint: unreachable-statement, disable with `// reticle-lint: off unreachable-statement` or `(* lint_off = "unreachable-statement" *)`
+
