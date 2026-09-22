@@ -35,24 +35,31 @@ Early, but the middle of the pipeline runs end to end. What works today:
 
 | Stage | State |
 |-------|-------|
-| Verilog / SystemVerilog | preprocessor, lexer, parser; elaboration in progress |
-| VHDL-2008 | lexer, parser; semantic analysis in progress |
+| Verilog / SystemVerilog | preprocessor, lexer, parser, 28-rule linter, elaboration and lowering to the IR |
+| VHDL-2008 | lexer, parser, semantic analysis with bundled std and ieee packages; elaboration in progress |
 | Unified IR | design model, validator, round-tripping `.rtl` text format |
 | Simulation | event-driven 4-state simulator, VCD and FST waveforms, Rust co-simulation API |
 | Synthesis | process lowering, flip-flop / latch / memory / FSM inference, optimisation passes |
 | Emission | Verilog, VHDL, Yosys JSON, BLIF, EDIF |
 | Formal | CDCL SAT solver, bit-blaster, bounded model checking, k-induction, equivalence checking |
+| ASIC | Liberty, LEF and DEF readers and writers |
+| Tooling | Verilog and VHDL formatters |
 
-The frontends parse and check real designs but do not yet lower to the IR,
-so the stages after elaboration take `.rtl` input for the moment:
+Verilog goes all the way through, from source to a synthesised netlist, a
+simulation or a proof. VHDL parses and checks; its path to the IR is next.
 
 ```sh
-reticle check      counter.v counter.vhd design.rtl
-reticle synth      --report --output netlist.rtl design.rtl
-reticle emit       --format verilog netlist.rtl
-reticle sim        --vcd waves.vcd --fst waves.fst testbench.rtl
-reticle verify     --depth 20 --trace cex.vcd design.rtl
+reticle check   counter.v counter.vhd design.rtl
+reticle fmt     --write counter.v
+reticle synth   --report --output netlist.rtl counter.v
+reticle emit    --format verilog netlist.rtl
+reticle sim     --vcd waves.vcd --fst waves.fst testbench.v counter.v
+reticle verify  --depth 20 --trace cex.vcd design.rtl
 ```
+
+Several source files are elaborated together, so a testbench and the
+module it instantiates are given on one command line. A design already in
+the `.rtl` IR text format is accepted anywhere a source file is.
 
 ## Building
 

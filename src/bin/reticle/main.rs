@@ -31,6 +31,7 @@ Usage: reticle <command> [options] [files...]
 
 Commands:
   check    Parse and check source files
+  fmt      Format Verilog and VHDL source
   synth    Synthesise a design to a technology-independent netlist
   emit     Write a design out in another format
   sim      Simulate a design and print its output
@@ -38,11 +39,24 @@ Commands:
   help     Show this message, or `reticle help <command>`
   version  Show the version
 
-Designs are read from the `.rtl` IR text format. The Verilog and VHDL
-frontends parse and check today; lowering them to the IR is in progress,
-so `synth`, `emit`, `sim` and `verify` take `.rtl` input for now.
+`synth`, `emit`, `sim` and `verify` take either Verilog sources (.v, .sv,
+elaborated to the IR) or a design already in the `.rtl` IR text format.
+VHDL parses and checks today; its path to the IR is still in progress.
 
 Run `reticle help <command>` for a command's options.
+";
+
+const FMT_USAGE: &str = "Usage: reticle fmt [options] [files...]
+
+Formats Verilog (.v, .sv) and VHDL (.vhd, .vhdl) source. With no option
+the formatted text goes to stdout; a file is only rewritten with --write.
+
+Options:
+  --write    Rewrite each file in place
+  --check    Report which files would change and exit 1 if any would
+  --diff     Print a unified diff instead of the formatted text
+  --width <n>    Line width to aim for (default 100)
+  --indent <n>   Spaces per level, or `tab` (default 2)
 ";
 
 const CHECK_USAGE: &str = "\
@@ -124,6 +138,7 @@ fn main() -> ExitCode {
             ExitCode::SUCCESS
         }
         "check" => run(check, rest, CHECK_USAGE),
+        "fmt" => run(fmt, rest, FMT_USAGE),
         "synth" => run(synth, rest, SYNTH_USAGE),
         "emit" => run(emit_cmd, rest, EMIT_USAGE),
         "sim" => run(sim, rest, SIM_USAGE),
@@ -140,6 +155,7 @@ fn main() -> ExitCode {
 fn help_text(command: Option<&str>) -> &'static str {
     match command {
         Some("check") => CHECK_USAGE,
+        Some("fmt") => FMT_USAGE,
         Some("synth") => SYNTH_USAGE,
         Some("emit") => EMIT_USAGE,
         Some("sim") => SIM_USAGE,
@@ -194,6 +210,11 @@ fn spec_for(usage: &str) -> Spec {
         Spec {
             options: &[],
             flags: &["quiet"],
+        }
+    } else if std::ptr::eq(usage, FMT_USAGE) {
+        Spec {
+            options: &["width", "indent"],
+            flags: &["write", "check", "diff"],
         }
     } else if std::ptr::eq(usage, SYNTH_USAGE) {
         Spec {
@@ -264,33 +285,261 @@ fn extension(path: &str) -> Option<String> {
         .map(str::to_ascii_lowercase)
 }
 
-/// Loads exactly one `.rtl` design named on the command line.
+/// What kind of source the files on the command line are.
+#[derive(PartialEq, Eq, Clone, Copy)]
+enum Input {
+    /// A design already in the `.rtl` IR text format.
+    Rtl,
+    /// Verilog or SystemVerilog, to be elaborated into the IR.
+    Verilog,
+    /// VHDL, which parses but does not reach the IR yet.
+    Vhdl,
+}
+
+/// Classifies a path by extension.
+fn classify(path: &str) -> Option<Input> {
+    match extension(path).as_deref() {
+        Some("rtl") => Some(Input::Rtl),
+        Some("v" | "sv" | "vh" | "svh") => Some(Input::Verilog),
+        Some("vhd" | "vhdl") => Some(Input::Vhdl),
+        _ => None,
+    }
+}
+
+/// Loads the design named on the command line.
+///
+/// Either one `.rtl` file, read straight into the IR, or one or more
+/// Verilog sources, which are preprocessed, parsed and elaborated. Mixing
+/// the two is rejected, since an `.rtl` file is already a whole design.
 fn load_design(args: &Args) -> Result<Result<(Design, SourceMap), Outcome>, ArgError> {
     let paths = args.positionals();
-    let path = match paths {
-        [one] => one.clone(),
-        [] => return Ok(Err(Outcome::Usage("no input file given".into()))),
-        _ => {
+    if paths.is_empty() {
+        return Ok(Err(Outcome::Usage("no input file given".into())));
+    }
+
+    let mut kinds: Vec<Input> = Vec::new();
+    for path in paths {
+        match classify(path) {
+            Some(kind) => kinds.push(kind),
+            None => {
+                return Ok(Err(Outcome::Usage(format!(
+                    "`{path}` has no recognised extension; expected .rtl, .v, .sv, .vhd or .vhdl"
+                ))));
+            }
+        }
+    }
+    if kinds.contains(&Input::Vhdl) {
+        return Ok(Err(Outcome::Usage(
+            "VHDL does not reach the IR yet; use `reticle check` on it for now".into(),
+        )));
+    }
+    if kinds.windows(2).any(|w| w[0] != w[1]) {
+        return Ok(Err(Outcome::Usage(
+            "cannot mix .rtl with Verilog sources; an .rtl file is already a whole design".into(),
+        )));
+    }
+
+    let mut map = SourceMap::new();
+    let mut diags = Diagnostics::new();
+
+    if kinds[0] == Input::Rtl {
+        if paths.len() != 1 {
             return Ok(Err(Outcome::Usage(format!(
-                "expected one input file, got {}",
+                "expected one .rtl file, got {}",
                 paths.len()
             ))));
         }
-    };
+        let Some(id) = load(&mut map, &paths[0], &mut diags) else {
+            report(&mut diags, &map);
+            return Ok(Err(Outcome::Failed));
+        };
+        let text = map.file(id).text().to_string();
+        return match Design::parse_text(&text, id) {
+            Ok(design) => Ok(Ok((design, map))),
+            Err(mut errors) => {
+                report(&mut errors, &map);
+                Ok(Err(Outcome::Failed))
+            }
+        };
+    }
+
+    // Verilog: parse every file, then elaborate them together so a design
+    // split across files resolves its instances.
+    let mut files = Vec::new();
+    for path in paths {
+        let Some(id) = load(&mut map, path, &mut diags) else {
+            continue;
+        };
+        let dialect = extension(path)
+            .as_deref()
+            .and_then(reticle::verilog::Dialect::for_extension)
+            .unwrap_or_default();
+        let mut resolver = IncludesFrom(path.clone());
+        files.push(reticle::verilog::parse_source(
+            &mut map,
+            id,
+            dialect,
+            &mut resolver,
+            &mut diags,
+        ));
+    }
+    if report(&mut diags, &map) {
+        return Ok(Err(Outcome::Failed));
+    }
+
+    let dialect = extension(&paths[0])
+        .as_deref()
+        .and_then(reticle::verilog::Dialect::for_extension)
+        .unwrap_or_default();
+    let mut options = reticle::verilog::ElabOptions::new(dialect);
+    options.top = args.option("top").map(str::to_string);
+    let refs: Vec<&reticle::verilog::ast::SourceFile> = files.iter().collect();
+    let mut diags = Diagnostics::new();
+    let design = reticle::verilog::elaborate(&refs, &options, &mut diags);
+    let failed = report(&mut diags, &map);
+    match design {
+        Some(design) if !failed => Ok(Ok((design, map))),
+        _ => Ok(Err(Outcome::Failed)),
+    }
+}
+
+/// `reticle fmt`: lay source back out in one house style.
+fn fmt(args: &Args) -> Result<Outcome, ArgError> {
+    use reticle::fmt_doc::{FormatOptions, Indent};
+
+    let paths = args.positionals();
+    if paths.is_empty() {
+        return Ok(Outcome::Usage("no input file given".into()));
+    }
+    if args.flag("write") && args.flag("check") {
+        return Ok(Outcome::Usage(
+            "--write and --check do opposite things; pick one".into(),
+        ));
+    }
+
+    let mut options = FormatOptions::default();
+    if let Some(width) = args.u32_option("width")? {
+        options.line_width = width as usize;
+    }
+    if let Some(indent) = args.option("indent") {
+        options.indent = if indent.eq_ignore_ascii_case("tab") {
+            Indent::Tabs
+        } else {
+            match indent.parse::<usize>() {
+                Ok(n) => Indent::Spaces(n),
+                Err(_) => {
+                    return Ok(Outcome::Usage(format!(
+                        "`--indent {indent}` is not a number of spaces or `tab`"
+                    )));
+                }
+            }
+        };
+    }
+
     let mut map = SourceMap::new();
     let mut diags = Diagnostics::new();
-    let Some(id) = load(&mut map, &path, &mut diags) else {
-        report(&mut diags, &map);
-        return Ok(Err(Outcome::Failed));
-    };
-    let text = map.file(id).text().to_string();
-    match Design::parse_text(&text, id) {
-        Ok(design) => Ok(Ok((design, map))),
-        Err(mut errors) => {
-            report(&mut errors, &map);
-            Ok(Err(Outcome::Failed))
+    let mut would_change = Vec::new();
+    let mut failed = false;
+
+    for path in paths {
+        let Some(kind) = classify(path) else {
+            diags.push(
+                Diagnostic::error(format!("`{path}` is not a Verilog or VHDL source"))
+                    .with_note("expected .v, .sv, .vh, .svh, .vhd or .vhdl"),
+            );
+            failed = true;
+            continue;
+        };
+        let text = match std::fs::read_to_string(path) {
+            Ok(text) => text,
+            Err(err) => {
+                diags.push(Diagnostic::error(format!("cannot read `{path}`: {err}")));
+                failed = true;
+                continue;
+            }
+        };
+
+        let result = match kind {
+            Input::Verilog => {
+                let dialect = extension(path)
+                    .as_deref()
+                    .and_then(reticle::verilog::Dialect::for_extension)
+                    .unwrap_or_default();
+                reticle::verilog::format::format_check(&text, dialect, &options)
+            }
+            Input::Vhdl => reticle::vhdl::format::format_check(
+                &text,
+                reticle::vhdl::Standard::default(),
+                &options,
+            ),
+            Input::Rtl => {
+                diags.push(
+                    Diagnostic::error(format!("`{path}` is an IR file, not HDL source"))
+                        .with_note("the .rtl text format is already canonical"),
+                );
+                failed = true;
+                continue;
+            }
+        };
+
+        let check = match result {
+            Ok(check) => check,
+            Err(mut errors) => {
+                // The file does not parse, so formatting it would risk
+                // damaging it. Report and leave it alone.
+                let id = match map.add(path.clone(), text) {
+                    Ok(id) => id,
+                    Err(err) => {
+                        diags.push(Diagnostic::error(format!("cannot load `{path}`: {err}")));
+                        failed = true;
+                        continue;
+                    }
+                };
+                let _ = id;
+                diags.append(&mut errors);
+                failed = true;
+                continue;
+            }
+        };
+
+        if check.changed {
+            would_change.push(path.clone());
+        }
+        if args.flag("check") {
+            if check.changed && args.flag("diff") {
+                print!("{}", check.diff);
+            }
+        } else if args.flag("write") {
+            if check.changed
+                && let Err(err) = std::fs::write(path, &check.formatted)
+            {
+                diags.push(Diagnostic::error(format!("cannot write `{path}`: {err}")));
+                failed = true;
+            }
+        } else if args.flag("diff") {
+            print!("{}", check.diff);
+        } else {
+            print!("{}", check.formatted);
         }
     }
+
+    // The diagnostics above carry no spans (they are file-level), so an
+    // empty map renders them fine.
+    if report(&mut diags, &map) {
+        failed = true;
+    }
+
+    if args.flag("check") && !would_change.is_empty() {
+        for path in &would_change {
+            eprintln!("would reformat {path}");
+        }
+        eprintln!("{} file(s) would change", would_change.len());
+        return Ok(Outcome::Failed);
+    }
+    if args.flag("write") && !would_change.is_empty() {
+        eprintln!("reformatted {} file(s)", would_change.len());
+    }
+    Ok(if failed { Outcome::Failed } else { Outcome::Ok })
 }
 
 /// `reticle check`: parse every file and report what is wrong with it.

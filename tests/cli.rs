@@ -124,6 +124,101 @@ fn synth_lowers_a_process_to_a_flip_flop() {
 }
 
 #[test]
+fn synth_reads_verilog_directly() {
+    let (code, stdout, stderr) = run(&["synth", "--quiet", "testdata/verilog/parse/counter.v"]);
+    assert_eq!(code, 0, "{stderr}");
+    // The always block became a flip-flop, so the process form is gone.
+    assert!(stdout.contains("dff"), "{stdout}");
+    assert!(!stdout.contains("process"), "{stdout}");
+}
+
+#[test]
+fn sim_elaborates_several_verilog_files_together() {
+    let (code, stdout, stderr) = run(&[
+        "sim",
+        "testdata/verilog/elab/testbench.v",
+        "testdata/verilog/elab/counter.v",
+    ]);
+    assert_eq!(code, 0, "{stderr}");
+    // $monitor output from the testbench, with the DUT actually counting.
+    assert!(stdout.contains("t=0 q=0"), "{stdout}");
+    assert!(stdout.contains("q=4"), "{stdout}");
+}
+
+#[test]
+fn design_inputs_must_be_one_kind() {
+    let (code, _, stderr) = run(&[
+        "synth",
+        "testdata/ir/counter.rtl",
+        "testdata/verilog/parse/counter.v",
+    ]);
+    assert_eq!(code, 2);
+    assert!(stderr.contains("cannot mix"), "{stderr}");
+
+    let (code, _, stderr) = run(&["synth", "testdata/vhdl/parse/counter.vhd"]);
+    assert_eq!(code, 2);
+    assert!(stderr.contains("does not reach the IR yet"), "{stderr}");
+}
+
+#[test]
+fn fmt_formats_checks_and_writes() {
+    let source = "testdata/verilog/parse/counter.v";
+
+    // Default: formatted text on stdout, file untouched.
+    let before = std::fs::read_to_string(source).unwrap();
+    let (code, stdout, stderr) = run(&["fmt", source]);
+    assert_eq!(code, 0, "{stderr}");
+    assert!(stdout.contains("module counter"), "{stdout}");
+    assert_eq!(std::fs::read_to_string(source).unwrap(), before);
+
+    // A deliberately misformatted copy: --check reports it and fails.
+    let dir = scratch("fmt_write");
+    let ugly = dir.join("ugly.v");
+    std::fs::write(
+        &ugly,
+        "module m(input a,output y);assign y=a;endmodule
+",
+    )
+    .unwrap();
+    let (code, _, stderr) = run(&["fmt", "--check", ugly.to_str().unwrap()]);
+    assert_eq!(code, 1, "{stderr}");
+    assert!(stderr.contains("would reformat"), "{stderr}");
+
+    // --write fixes it, and a second --check then passes.
+    let (code, _, stderr) = run(&["fmt", "--write", ugly.to_str().unwrap()]);
+    assert_eq!(code, 0, "{stderr}");
+    assert!(stderr.contains("reformatted 1 file"), "{stderr}");
+    let (code, _, _) = run(&["fmt", "--check", ugly.to_str().unwrap()]);
+    assert_eq!(code, 0);
+
+    // --write and --check contradict each other.
+    let (code, _, stderr) = run(&["fmt", "--write", "--check", source]);
+    assert_eq!(code, 2);
+    assert!(stderr.contains("pick one"), "{stderr}");
+}
+
+#[test]
+fn fmt_refuses_an_unparseable_file() {
+    let dir = scratch("fmt_broken");
+    let broken = dir.join("broken.v");
+    std::fs::write(
+        &broken,
+        "module m(;;; endmodule
+",
+    )
+    .unwrap();
+    let (code, stdout, _) = run(&["fmt", broken.to_str().unwrap()]);
+    assert_eq!(code, 1);
+    // Nothing was emitted, so a bad file can never be truncated by a
+    // careless shell redirect.
+    assert!(stdout.is_empty(), "{stdout}");
+    assert_eq!(
+        std::fs::read_to_string(&broken).unwrap(),
+        "module m(;;; endmodule\n"
+    );
+}
+
+#[test]
 fn synth_output_defaults_to_stdout() {
     let (code, stdout, stderr) = run(&["synth", "--quiet", "testdata/ir/counter.rtl"]);
     assert_eq!(code, 0, "{stderr}");
