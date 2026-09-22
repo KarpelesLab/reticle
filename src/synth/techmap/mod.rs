@@ -423,7 +423,11 @@ impl Emitter for GateEmitter<'_> {
             }
             fanins[pin] = signal;
         }
-        Some(self.push(&gate, fanins))
+        let out = self.push(&gate, fanins);
+        if m.output_invert {
+            return Some(self.inverter(Signal::Node(out)));
+        }
+        Some(out)
     }
 
     fn inverter(&mut self, input: Signal) -> u32 {
@@ -507,12 +511,13 @@ impl Cost for GateCost<'_> {
     fn delay(&self, function: &TruthTable, _inputs: usize) -> f64 {
         match self.library.match_function(function) {
             Some((gate, m)) => {
-                let inv = if m.inverters() > 0 {
-                    self.library.inverter().map_or(0.0, Gate::max_delay)
-                } else {
-                    0.0
-                };
-                gate.max_delay() + inv
+                let inv_delay = self.library.inverter().map_or(0.0, Gate::max_delay);
+                // An inverted input sits in front of the gate and an
+                // inverted output after it, so they add rather than
+                // overlap.
+                let front = if m.invert != 0 { inv_delay } else { 0.0 };
+                let back = if m.output_invert { inv_delay } else { 0.0 };
+                gate.max_delay() + front + back
             }
             None => 1.0,
         }
@@ -1046,6 +1051,50 @@ mod tests {
             "{:?}",
             net.histogram()
         );
+    }
+
+    /// A library of only an inverter and a two-input NAND is functionally
+    /// complete, so it must cover any function. NAND2 with inverted inputs
+    /// gives NAND or OR but never AND, so an AND node, the one operation
+    /// an AIG is made of, needs the inversion on the output. Before output
+    /// inversion was supported this panicked with "the cover only chose
+    /// implementable cuts".
+    #[test]
+    fn a_nand_and_inverter_library_covers_everything() {
+        use crate::synth::aig::truth::TruthTable;
+        let v = |n: usize, i: usize| TruthTable::var(n, i);
+        let mut b = GateLibrary::builder("nand_only");
+        b.gate("INV", &["A"], v(1, 0).not(), 1.0, &[1.0]);
+        b.gate(
+            "NAND2",
+            &["A", "B"],
+            v(2, 0).and(&v(2, 1)).not(),
+            1.0,
+            &[1.0, 1.0],
+        );
+        let lib = b.finish();
+
+        // The AND of two inputs has no direct match, only its complement.
+        let and = v(2, 0).and(&v(2, 1));
+        let (gate, m) = lib.match_function(&and).expect("AND through NAND and INV");
+        assert_eq!(gate.name, "NAND2");
+        assert!(m.output_invert, "{m:?}");
+
+        // And the whole sample network, which the full library maps with
+        // XOR cells, now maps onto NAND2 and INV alone, correctly.
+        let aig = sample();
+        let net = gate_map(&aig, &lib);
+        for g in &net.gates {
+            assert!(g.gate == "NAND2" || g.gate == "INV", "used {}", g.gate);
+        }
+        for pat in 0..16u32 {
+            let ins: Vec<bool> = (0..4).map(|i| (pat >> i) & 1 == 1).collect();
+            assert_eq!(
+                simulate_gates(&net, &lib, &ins),
+                aig.eval(&ins),
+                "pattern {pat}"
+            );
+        }
     }
 
     #[test]

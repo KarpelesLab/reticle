@@ -99,12 +99,22 @@ pub struct GateMatch {
     /// Bit `v` set: variable `v` must be complemented before it reaches
     /// its pin, which costs an inverter.
     pub invert: u32,
+    /// The gate computes the complement of the wanted function, so its
+    /// output needs an inverter.
+    ///
+    /// This is what lets a small library cover everything. A library of
+    /// only `INV` and `NAND2` is functionally complete, but `NAND2` with
+    /// any combination of inverted inputs yields NAND or OR, never AND:
+    /// AND needs the inversion on the output. Without this, an AND node,
+    /// the one operation an AIG is made of, had no match and the mapper
+    /// panicked.
+    pub output_invert: bool,
 }
 
 impl GateMatch {
-    /// Number of inverters this match needs on its inputs.
+    /// Number of inverters this match needs, on its inputs and output.
     pub fn inverters(&self) -> u32 {
-        self.invert.count_ones()
+        self.invert.count_ones() + u32::from(self.output_invert)
     }
 }
 
@@ -241,6 +251,7 @@ impl GateLibrary {
                                 gate: i,
                                 wiring: wiring.clone(),
                                 invert: var_mask,
+                                output_invert: false,
                             },
                         );
                     }
@@ -262,9 +273,18 @@ impl GateLibrary {
         if function.vars() > 4 {
             return None;
         }
-        let key = u16::try_from(function.extend(4).as_u64() & 0xFFFF).expect("16 bits");
-        let m = self.index.get(&key)?;
-        Some((&self.gates[m.gate], m.clone()))
+        let key = |f: &TruthTable| u16::try_from(f.extend(4).as_u64() & 0xFFFF).expect("16 bits");
+        if let Some(m) = self.index.get(&key(function)) {
+            return Some((&self.gates[m.gate], m.clone()));
+        }
+        // No gate computes it directly: try its complement and put an
+        // inverter on the output. Only possible when there is an inverter,
+        // which `gate_map` already requires.
+        self.inverter()?;
+        let m = self.index.get(&key(&function.not()))?;
+        let mut m = m.clone();
+        m.output_invert = true;
+        Some((&self.gates[m.gate], m))
     }
 
     /// The cost of implementing `function`: the gate's area plus an
