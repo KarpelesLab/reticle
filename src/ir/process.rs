@@ -372,6 +372,57 @@ impl ReportSeverity {
     }
 }
 
+/// Which memory file task a [`StmtKind::MemFile`] performs (IEEE
+/// 1364-2005 §17.2.9, and `$writememh` / `$writememb` of IEEE 1800-2017
+/// §21.5).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub enum MemFileOp {
+    /// `$readmemh`: load hexadecimal words.
+    ReadHex,
+    /// `$readmemb`: load binary words.
+    ReadBin,
+    /// `$writememh`: save the contents as hexadecimal words.
+    WriteHex,
+    /// `$writememb`: save the contents as binary words.
+    WriteBin,
+}
+
+impl MemFileOp {
+    /// Every operation, in a fixed order.
+    pub const ALL: [MemFileOp; 4] = [
+        MemFileOp::ReadHex,
+        MemFileOp::ReadBin,
+        MemFileOp::WriteHex,
+        MemFileOp::WriteBin,
+    ];
+
+    /// The keyword in the text format, which is also the Verilog task name
+    /// without its `$`.
+    pub fn keyword(self) -> &'static str {
+        match self {
+            MemFileOp::ReadHex => "readmemh",
+            MemFileOp::ReadBin => "readmemb",
+            MemFileOp::WriteHex => "writememh",
+            MemFileOp::WriteBin => "writememb",
+        }
+    }
+
+    /// The operation with the given keyword (without the `$`).
+    pub fn from_keyword(name: &str) -> Option<MemFileOp> {
+        MemFileOp::ALL.into_iter().find(|op| op.keyword() == name)
+    }
+
+    /// True for the two loads.
+    pub fn is_read(self) -> bool {
+        matches!(self, MemFileOp::ReadHex | MemFileOp::ReadBin)
+    }
+
+    /// True for the hexadecimal forms.
+    pub fn is_hex(self) -> bool {
+        matches!(self, MemFileOp::ReadHex | MemFileOp::WriteHex)
+    }
+}
+
 /// The payload of a statement.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum StmtKind {
@@ -455,6 +506,31 @@ pub enum StmtKind {
         name: Name,
         /// Arguments; string literals are [`super::ExprKind::String`].
         args: Vec<ExprId>,
+    },
+    /// Load a whole memory from a file, or save it to one: `$readmemh`,
+    /// `$readmemb`, `$writememh`, `$writememb`.
+    ///
+    /// The memory is named by id, as [`StmtKind::MemWrite`] names it,
+    /// because the task works on the memory itself rather than on a word
+    /// of it, and no expression denotes a whole memory. The file format
+    /// and the address rules are in [`super::memfile`].
+    MemFile {
+        /// Which task.
+        op: MemFileOp,
+        /// The memory loaded or saved.
+        mem: MemoryId,
+        /// The file name: a string, or a bit vector holding one.
+        file: ExprId,
+        /// The first address, in the IR's zero-based element numbering;
+        /// absent means the lowest.
+        start: Option<ExprId>,
+        /// The last address, in the same numbering; absent means the
+        /// highest. Only present with `start`.
+        end: Option<ExprId>,
+        /// The address that `@hex` lines in the file give element 0: the
+        /// declared lowest index of the memory, so 0 unless it was
+        /// declared with another bound (`reg [7:0] m [16:31]` has 16).
+        base: i64,
     },
     /// Write one memory element, optionally gated.
     MemWrite {

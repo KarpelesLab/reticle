@@ -950,6 +950,31 @@ impl<'a> Printer<'a> {
                     self.out.line(&format!("{name}({});", args.join(", ")));
                 }
             }
+            StmtKind::MemFile {
+                op,
+                mem,
+                file,
+                start,
+                end,
+                base,
+            } => {
+                let mut args = vec![
+                    self.expr(*file)?,
+                    ident(self.module.memories[*mem].name.as_str()),
+                ];
+                for addr in start.iter().chain(end.iter()) {
+                    args.push(self.expr(*addr)?);
+                }
+                if *base != 0 {
+                    // The memory is declared from 0 here, so `@` addresses
+                    // in the file no longer line up with it.
+                    self.out.line(&format!(
+                        "// the file's `@` addresses count element 0 as {base}"
+                    ));
+                }
+                self.out
+                    .line(&format!("${}({});", op.keyword(), args.join(", ")));
+            }
             StmtKind::MemWrite {
                 mem,
                 addr,

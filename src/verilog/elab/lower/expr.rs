@@ -458,7 +458,12 @@ impl<'cx, 'ast> Lowerer<'cx, 'ast> {
     }
 
     /// The IR address expression for `mem[index]`.
-    fn mem_address(&mut self, mem: MemoryId, index: &'ast Expr, sink: &mut Sink<'_>) -> ExprId {
+    pub(super) fn mem_address(
+        &mut self,
+        mem: MemoryId,
+        index: &'ast Expr,
+        sink: &mut Sink<'_>,
+    ) -> ExprId {
         let range = self.mems[mem.index()].range;
         let size = self.b.module().memories[mem].size;
         let bits = bits_needed(size.saturating_sub(1)).max(1);

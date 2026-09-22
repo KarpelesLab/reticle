@@ -11,7 +11,8 @@
 //! | `$monitor*`, `$monitoron`, `$monitoroff` | Output whenever an argument changes, once per slot (§17.1.3) |
 //! | `$finish`, `$stop` | End or pause the run (§17.4) |
 //! | `$fatal` `$error` `$warning` `$info`, `report` | Severity reports; `$fatal` ends the run |
-//! | `$readmemh` `$readmemb` | Load a memory from a [`FileProvider`] (§17.2.8); the memory is passed as an `@mem[0]` read |
+//! | `$readmemh` `$readmemb` | Load a memory from a [`FileProvider`] (§17.2.9); the IR carries them as [`StmtKind::MemFile`](crate::ir::StmtKind::MemFile), which names the memory itself |
+//! | `$writememh` `$writememb` | Save a memory's contents, which [`Simulator::written_files`] hands back |
 //! | `$timeformat` | Sets the `%t` format (§17.3.2) |
 //! | `$dumpvars` `$dumpfile` `$dumpon` `$dumpoff` `$dumpall` | `$dumpvars` enables VCD capture; the rest are accepted and ignored |
 //! | `$time` `$stime` `$realtime` | The current time in the module's unit (§17.7) |
@@ -24,48 +25,16 @@
 //! nibble, one bit per `%b` character). Unknown tasks are warned about once
 //! and ignored; unknown functions return `x` of their cached type.
 
-use std::collections::BTreeMap;
 use std::fmt::Write;
 
 use crate::diag::Diagnostic;
-use crate::ir::{ExprId, ExprKind, ReportSeverity, Span, Type};
+use crate::ir::memfile;
+use crate::ir::{ExprId, ExprKind, MemFileOp, MemoryId, ReportSeverity, Span, Type};
 use crate::logic::{Bit, Logic};
 
 use super::Simulator;
-use super::elab::{InstId, MemId, ProcId};
+use super::elab::{InstId, ProcId};
 use super::value::{Value, flat_width, logic_to_string};
-
-/// Supplies file contents to `$readmemh` / `$readmemb` without the
-/// simulator touching the filesystem.
-pub trait FileProvider {
-    /// The text of the file named `path`, or `None` when it does not exist.
-    fn read_file(&self, path: &str) -> Option<String>;
-}
-
-/// An in-memory [`FileProvider`]: a map from names to contents.
-#[derive(Clone, Debug, Default)]
-pub struct MemoryFiles {
-    files: BTreeMap<String, String>,
-}
-
-impl MemoryFiles {
-    /// An empty provider.
-    pub fn new() -> Self {
-        Self::default()
-    }
-
-    /// Adds (or replaces) a file.
-    pub fn insert(&mut self, name: impl Into<String>, text: impl Into<String>) -> &mut Self {
-        self.files.insert(name.into(), text.into());
-        self
-    }
-}
-
-impl FileProvider for MemoryFiles {
-    fn read_file(&self, path: &str) -> Option<String> {
-        self.files.get(path).cloned()
-    }
-}
 
 /// The `%t` format set by `$timeformat`.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -319,80 +288,6 @@ fn xorshift(state: &mut u64) -> u64 {
     x.wrapping_mul(0x2545_F491_4F6C_DD1D)
 }
 
-/// Parses `$readmem` text into `(address, value)` pairs.
-///
-/// Whitespace-separated tokens; `//` and `/* */` comments; `@hex` sets the
-/// address; digits may contain `_`, `x` and `z`.
-pub(crate) fn parse_readmem(
-    text: &str,
-    hex: bool,
-    width: u32,
-) -> Result<Vec<(u64, Logic)>, String> {
-    let mut out = Vec::new();
-    let mut addr = 0u64;
-    let mut chars = text.chars().peekable();
-    let mut token = String::new();
-    let mut in_line_comment = false;
-    let mut in_block_comment = false;
-    let flush =
-        |token: &mut String, addr: &mut u64, out: &mut Vec<(u64, Logic)>| -> Result<(), String> {
-            if token.is_empty() {
-                return Ok(());
-            }
-            if let Some(a) = token.strip_prefix('@') {
-                *addr = u64::from_str_radix(&a.replace('_', ""), 16)
-                    .map_err(|_| format!("bad address `{token}`"))?;
-            } else {
-                let literal = format!(
-                    "{}'{}{}",
-                    width,
-                    if hex { 'h' } else { 'b' },
-                    token.replace('_', "")
-                );
-                let value = Logic::parse_verilog(&literal)
-                    .map_err(|e| format!("bad value `{token}`: {e}"))?;
-                out.push((*addr, value));
-                *addr += 1;
-            }
-            token.clear();
-            Ok(())
-        };
-    while let Some(c) = chars.next() {
-        if in_line_comment {
-            if c == '\n' {
-                in_line_comment = false;
-            }
-            continue;
-        }
-        if in_block_comment {
-            if c == '*' && chars.peek() == Some(&'/') {
-                chars.next();
-                in_block_comment = false;
-            }
-            continue;
-        }
-        if c == '/' && chars.peek() == Some(&'/') {
-            chars.next();
-            flush(&mut token, &mut addr, &mut out)?;
-            in_line_comment = true;
-            continue;
-        }
-        if c == '/' && chars.peek() == Some(&'*') {
-            chars.next();
-            flush(&mut token, &mut addr, &mut out)?;
-            in_block_comment = true;
-            continue;
-        }
-        if c.is_whitespace() {
-            flush(&mut token, &mut addr, &mut out)?;
-        } else {
-            token.push(c);
-        }
-    }
-    flush(&mut token, &mut addr, &mut out)?;
-    Ok(out)
-}
-
 impl<'d> Simulator<'d> {
     /// The current time in the instance's time unit, rounded.
     pub(crate) fn module_time(&self, inst: InstId) -> u64 {
@@ -601,15 +496,6 @@ impl<'d> Simulator<'d> {
         );
     }
 
-    /// The memory an argument designates: a `MemRead` of it.
-    fn mem_arg(&self, inst: InstId, e: ExprId) -> Option<MemId> {
-        let state = &self.instances[inst.idx()];
-        match state.m.exprs.get(e)?.kind {
-            ExprKind::MemRead { mem, .. } => state.mems.get(mem.index()).copied(),
-            _ => None,
-        }
-    }
-
     /// Executes a system task. Returns `false` when the process must
     /// suspend (`$finish`, `$stop`).
     pub(crate) fn exec_syscall(
@@ -688,8 +574,15 @@ impl<'d> Simulator<'d> {
                 self.report(inst, severity, &text, span);
                 true
             }
-            "$readmemh" | "$readmemb" => {
-                self.readmem(inst, name == "$readmemh", args, span);
+            "$readmemh" | "$readmemb" | "$writememh" | "$writememb" => {
+                // A frontend lowers these to `StmtKind::MemFile`; as a
+                // plain call they have no memory to work on.
+                self.messages.push(
+                    Diagnostic::error(format!(
+                        "`{name}` as a system call names no memory; it must be a memory file statement"
+                    ))
+                    .with_span(span),
+                );
                 true
             }
             "$timeformat" => {
@@ -725,53 +618,94 @@ impl<'d> Simulator<'d> {
         }
     }
 
-    /// `$readmemh` / `$readmemb`.
-    fn readmem(&mut self, inst: InstId, hex: bool, args: &[ExprId], span: Span) {
-        let Some(Value::Str(path)) = args.first().map(|a| self.eval(inst, *a)) else {
+    /// `$readmemh`, `$readmemb`, `$writememh` and `$writememb`
+    /// ([`crate::ir::StmtKind::MemFile`]).
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn mem_file(
+        &mut self,
+        inst: InstId,
+        op: MemFileOp,
+        mem: MemoryId,
+        file: ExprId,
+        start: Option<ExprId>,
+        end: Option<ExprId>,
+        base: i64,
+        span: Span,
+    ) {
+        let task = format!("${}", op.keyword());
+        let Some(path) = file_name(&self.eval(inst, file)) else {
             self.messages.push(
-                Diagnostic::error("$readmem needs a file name as first argument").with_span(span),
-            );
-            return;
-        };
-        let Some(mem) = args.get(1).and_then(|a| self.mem_arg(inst, *a)) else {
-            self.messages.push(
-                Diagnostic::error("$readmem needs a memory (`@mem[0]`) as second argument")
+                Diagnostic::error(format!("{task} needs a file name as first argument"))
                     .with_span(span),
             );
             return;
         };
-        let start = args.get(2).and_then(|a| self.eval_logic(inst, *a).to_u64());
-        let end = args.get(3).and_then(|a| self.eval_logic(inst, *a).to_u64());
-        let text = self.options.files.as_ref().and_then(|f| f.read_file(&path));
-        let Some(text) = text else {
-            self.messages
-                .push(Diagnostic::error(format!("$readmem: cannot read `{path}`")).with_span(span));
+        let Some(mid) = self.instances[inst.idx()].mems.get(mem.index()).copied() else {
             return;
         };
-        let width = self.memories[mem.idx()].elem_width;
-        match parse_readmem(&text, hex, width) {
-            Ok(entries) => {
-                let base = start.unwrap_or(0);
-                for (offset, value) in entries {
-                    let addr = base.saturating_add(offset);
-                    if end.is_some_and(|e| addr > e) {
-                        break;
-                    }
-                    if !self.write_mem(mem, addr, &value) {
-                        self.messages.push(
-                            Diagnostic::warning(format!(
-                                "$readmem: address {addr} is outside `{}`",
-                                self.memories[mem.idx()].name
-                            ))
+        let mut bound = |e: Option<ExprId>| -> Result<Option<u64>, ()> {
+            match e {
+                None => Ok(None),
+                Some(e) => self.eval_logic(inst, e).to_u64().map(Some).ok_or(()),
+            }
+        };
+        let (Ok(start), Ok(end)) = (bound(start), bound(end)) else {
+            self.messages
+                .push(Diagnostic::error(format!("{task}: an address is unknown")).with_span(span));
+            return;
+        };
+        let (name, width, size) = {
+            let m = &self.memories[mid.idx()];
+            (
+                m.name.clone(),
+                m.elem_width,
+                u64::try_from(m.data.len()).unwrap_or(u64::MAX),
+            )
+        };
+        if !op.is_read() {
+            let (first, last) = match memfile::window(size, start, end) {
+                Ok(w) => w,
+                Err(e) => {
+                    self.messages
+                        .push(Diagnostic::error(format!("{task}: {e}")).with_span(span));
+                    return;
+                }
+            };
+            let data = &self.memories[mid.idx()].data;
+            let words: Vec<(u64, crate::logic::Logic)> = walk(first, last)
+                .filter_map(|a| {
+                    let w = data.get(usize::try_from(a).ok()?)?;
+                    Some((a, w.clone()))
+                })
+                .collect();
+            let text = memfile::render(&words, op.is_hex(), base);
+            self.written.insert(path, text);
+            return;
+        }
+        let text = match self.written.get(&path) {
+            Some(text) => Some(text.clone()),
+            None => self.options.files.as_ref().and_then(|f| f.read_file(&path)),
+        };
+        let Some(text) = text else {
+            self.messages
+                .push(Diagnostic::error(format!("{task}: cannot read `{path}`")).with_span(span));
+            return;
+        };
+        match memfile::load(&text, op.is_hex(), width, size, start, end, base) {
+            Ok(loaded) => {
+                for (addr, value) in loaded.words {
+                    self.write_mem(mid, addr, &value);
+                }
+                for w in loaded.warnings {
+                    self.messages.push(
+                        Diagnostic::warning(format!("{task}: `{path}` into `{name}`: {w}"))
                             .with_span(span),
-                        );
-                        break;
-                    }
+                    );
                 }
             }
-            Err(e) => self
-                .messages
-                .push(Diagnostic::error(format!("$readmem: `{path}`: {e}")).with_span(span)),
+            Err(e) => self.messages.push(
+                Diagnostic::error(format!("{task}: `{path}` into `{name}`: {e}")).with_span(span),
+            ),
         }
     }
 
@@ -878,6 +812,26 @@ impl<'d> Simulator<'d> {
     }
 }
 
+/// The file name a `$readmem*` argument holds: a string, or the ASCII
+/// text of a bit vector (a string parameter or a `reg` holding one).
+fn file_name(v: &Value) -> Option<String> {
+    match v {
+        Value::Str(s) => Some(s.clone()),
+        Value::Bits(l) => memfile::name_from_bits(l),
+        _ => None,
+    }
+}
+
+/// The addresses from `first` to `last` inclusive, downwards when `last`
+/// is the smaller.
+fn walk(first: u64, last: u64) -> Box<dyn Iterator<Item = u64>> {
+    if first <= last {
+        Box::new(first..=last)
+    } else {
+        Box::new((last..=first).rev())
+    }
+}
+
 /// Removes trailing zeros of the mantissa in an exponent form.
 fn trim_exponent_zeros(s: &str) -> String {
     match s.split_once(['e', 'E']) {
@@ -952,37 +906,10 @@ mod tests {
     }
 
     #[test]
-    fn readmem_parsing() {
-        let text = "// header\n@2 ab cd /* skip */ 1_0\n@0 ff\n";
-        let entries = parse_readmem(text, true, 8).unwrap();
-        assert_eq!(
-            entries,
-            vec![
-                (2, l("8'hab")),
-                (3, l("8'hcd")),
-                (4, l("8'h10")),
-                (0, l("8'hff"))
-            ]
-        );
-        let bin = parse_readmem("1x 01", false, 2).unwrap();
-        assert_eq!(bin, vec![(0, l("2'b1x")), (1, l("2'b01"))]);
-        assert!(parse_readmem("@zz", true, 8).is_err());
-        assert!(parse_readmem("gg", true, 8).is_err());
-    }
-
-    #[test]
     fn random_is_deterministic() {
         let mut a = 42u64;
         let mut b = 42u64;
         assert_eq!(xorshift(&mut a), xorshift(&mut b));
         assert_ne!(xorshift(&mut a), xorshift(&mut a));
-    }
-
-    #[test]
-    fn memory_files() {
-        let mut files = MemoryFiles::new();
-        files.insert("a.hex", "00");
-        assert_eq!(files.read_file("a.hex").as_deref(), Some("00"));
-        assert_eq!(files.read_file("b.hex"), None);
     }
 }

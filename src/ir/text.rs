@@ -57,8 +57,8 @@ use super::design::{
 };
 use super::expr::{BinaryOp, Expr, ExprId, ExprKind, UnaryOp, infer_type, operands};
 use super::process::{
-    AssignKind, Block, CaseArm, CaseKind, CaseQualifier, Delay, Edge, Lvalue, Polarity, Process,
-    ProcessKind, ReportSeverity, Stmt, StmtKind, TimeUnit, Timescale, WaitKind,
+    AssignKind, Block, CaseArm, CaseKind, CaseQualifier, Delay, Edge, Lvalue, MemFileOp, Polarity,
+    Process, ProcessKind, ReportSeverity, Stmt, StmtKind, TimeUnit, Timescale, WaitKind,
 };
 use super::types::{Const, Type};
 use crate::diag::{Diagnostic, Diagnostics};
@@ -517,6 +517,29 @@ impl<'a> Printer<'a> {
             }
             StmtKind::SysCall { name: n, args } => {
                 self.line(&format!("sys {}({})", name(n), self.args(args)));
+            }
+            StmtKind::MemFile {
+                op,
+                mem,
+                file,
+                start,
+                end,
+                base,
+            } => {
+                let mut line = format!(
+                    "{}({}, {}",
+                    op.keyword(),
+                    self.expr(*file),
+                    self.mem_ref(*mem)
+                );
+                for addr in start.iter().chain(end.iter()) {
+                    let _ = write!(line, ", {}", self.expr(*addr));
+                }
+                line.push(')');
+                if *base != 0 {
+                    let _ = write!(line, " base {base}");
+                }
+                self.line(&line);
             }
             StmtKind::MemWrite {
                 mem,
@@ -1987,6 +2010,50 @@ impl Parser {
                         let args = self.args_until(")")?;
                         self.expect_newline()?;
                         StmtKind::SysCall { name: n, args }
+                    }
+                    "readmemh" | "readmemb" | "writememh" | "writememb" => {
+                        let op = MemFileOp::from_keyword(&w).expect("one of the four keywords");
+                        self.expect_punct("(")?;
+                        let file = self.expr()?;
+                        self.expect_punct(",")?;
+                        let Tok::Mem(m) = self.peek().clone() else {
+                            return self.unexpected("a memory reference (`@name`)");
+                        };
+                        let span = self.peek_span();
+                        self.bump();
+                        let mem = self.lookup_mem(&m, span)?;
+                        let mut start_addr = None;
+                        let mut end_addr = None;
+                        if self.eat_punct(",") {
+                            start_addr = Some(self.expr()?);
+                            if self.eat_punct(",") {
+                                end_addr = Some(self.expr()?);
+                            }
+                        }
+                        self.expect_punct(")")?;
+                        let base = if self.eat_word("base") {
+                            let negative = self.eat_punct("-");
+                            let span = self.peek_span();
+                            let magnitude = self.expect_int()?;
+                            let signed = i64::try_from(magnitude)
+                                .ok()
+                                .map(|v| if negative { -v } else { v });
+                            match signed {
+                                Some(v) => v,
+                                None => return self.fail(span, "base does not fit in 64 bits"),
+                            }
+                        } else {
+                            0
+                        };
+                        self.expect_newline()?;
+                        StmtKind::MemFile {
+                            op,
+                            mem,
+                            file,
+                            start: start_addr,
+                            end: end_addr,
+                            base,
+                        }
                     }
                     "memwrite" => {
                         let Tok::Mem(m) = self.peek().clone() else {

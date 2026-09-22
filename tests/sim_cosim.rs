@@ -491,11 +491,12 @@ top t
 module t
   memory @m 8 x u4
   process initial
-    sys $readmemb(\"bits.txt\", @m[4'd0], 8'd2, 8'd4)
-    sys $readmemh(\"missing.hex\", @m[4'd0])
-    sys $readmemh(\"bad.hex\", @m[4'd0])
-    sys $readmemh(4'd0, @m[4'd0])
-    sys $readmemh(\"bits.txt\", 4'd0)
+    readmemb(\"bits.txt\", @m, 8'd2, 8'd4)
+    readmemh(\"missing.hex\", @m)
+    readmemh(\"bad.hex\", @m)
+    readmemh(4'd0, @m)
+    sys $readmemh(\"bits.txt\", @m[4'd0])
+    readmemh(\"high.hex\", @m) base 16
   end
 end
 ";
@@ -503,7 +504,8 @@ end
     let mut files = MemoryFiles::new();
     files
         .insert("bits.txt", "0001 0010 0011 0100 0101")
-        .insert("bad.hex", "@zz");
+        .insert("bad.hex", "@zz")
+        .insert("high.hex", "@17 e");
     let opts = SimOptions {
         files: Some(Box::new(files)),
         ..SimOptions::default()
@@ -515,17 +517,44 @@ end
     assert_eq!(sim.get_mem(m, 2), Some(l("4'd1")));
     assert_eq!(sim.get_mem(m, 4), Some(l("4'd3")));
     assert_eq!(sim.get_mem(m, 5), Some(l("4'hx")));
-    let errors: Vec<String> = sim
-        .messages()
-        .iter()
-        .filter(|d| d.is_error())
-        .map(|d| d.message.clone())
-        .collect();
-    assert_eq!(errors.len(), 4, "{errors:?}");
-    assert!(errors[0].contains("cannot read `missing.hex`"));
-    assert!(errors[1].contains("bad address"));
-    assert!(errors[2].contains("file name"));
-    assert!(errors[3].contains("needs a memory"));
+    // `@17` with element 0 at address 16 is element 1.
+    assert_eq!(sim.get_mem(m, 7), Some(l("4'd14")));
+    let messages: Vec<String> = sim.messages().iter().map(|d| d.message.clone()).collect();
+    assert_eq!(messages.len(), 5, "{messages:?}");
+    assert!(messages[0].contains("more words than the 3 element(s) loaded"));
+    assert!(messages[1].contains("cannot read `missing.hex`"));
+    assert!(messages[2].contains("bad address"));
+    assert!(messages[3].contains("file name"));
+    assert!(messages[4].contains("names no memory"));
+}
+
+#[test]
+fn writemem_hands_the_file_back() {
+    let text = "\
+top t
+module t
+  memory @m 4 x u4
+    init 4'd1 4'd2 4'd3 4'bxz01
+  process initial
+    writememh(\"all.hex\", @m)
+    writememb(\"part.bin\", @m, 2'd2, 2'd1) base 8
+    readmemh(\"all.hex\", @m, 2'd0, 2'd0)
+  end
+end
+";
+    let design = parse(text);
+    let mut sim = Simulator::new(&design, SimOptions::default()).unwrap();
+    sim.run();
+    let written = sim.written_files();
+    assert_eq!(written["all.hex"], "1\n2\n3\nx\n");
+    // Downwards from element 2, so every word carries its address, in
+    // the file's numbering.
+    assert_eq!(written["part.bin"], "@a\n0011\n@9\n0010\n");
+    // A saved file reads back in the same run, without a provider; the
+    // one-element range makes the rest of it a warning.
+    let messages: Vec<String> = sim.messages().iter().map(|d| d.message.clone()).collect();
+    assert_eq!(messages.len(), 1, "{messages:?}");
+    assert!(messages[0].contains("more words"), "{messages:?}");
 }
 
 #[test]

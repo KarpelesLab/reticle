@@ -71,13 +71,17 @@
 //! | Code    | Meaning                                                      |
 //! |---------|--------------------------------------------------------------|
 //! | `S0001` | The design is not valid; synthesis did not run               |
-//! | `S0010` .. `S0020` | Process lowering and FSM extraction (see [`proc`], [`fsm`]) |
+//! | `S0010` .. `S0020` | Process lowering and FSM extraction (see [`proc`], [`fsm`]); `S0018` is a `$readmemh` file that could not be loaded |
 //! | `S0030` | A construct [`cellify`] cannot turn into cells               |
 //! | `S0031` | The post-synthesis equivalence check found a difference      |
 //! | `S0032` | The post-synthesis equivalence check is inconclusive         |
 //! | `S0033` | `verify_equivalence` without the `formal` feature            |
 
+use std::fmt;
+use std::rc::Rc;
+
 use crate::diag::{Diagnostic, Diagnostics};
+use crate::ir::memfile::FileProvider;
 use crate::ir::{Design, Module, ModuleId};
 
 pub mod arith;
@@ -142,7 +146,7 @@ impl FsmEncoding {
 }
 
 /// Knobs for [`run`].
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct SynthOptions {
     /// Replace the expression trees left in cell inputs and continuous
     /// assignments with discrete cells ([`cellify::Cellify`]), so the
@@ -168,6 +172,28 @@ pub struct SynthOptions {
     /// the `formal` feature; without it, asking for the check is a warning
     /// (`S0033`).
     pub verify_equivalence: bool,
+    /// Where the files `$readmemh` / `$readmemb` name in an `initial`
+    /// block are read from, so that their words become the memory's
+    /// initial contents ([`crate::ir::Memory::init`]). The library does no
+    /// I/O: without a provider every such load is skipped with warning
+    /// `S0018`, which names the file. The simulator reads through the same
+    /// trait ([`crate::ir::memfile`]).
+    pub files: Option<Rc<dyn FileProvider>>,
+}
+
+impl fmt::Debug for SynthOptions {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("SynthOptions")
+            .field("cellify", &self.cellify)
+            .field("fsm_encoding", &self.fsm_encoding)
+            .field("keep_hierarchy", &self.keep_hierarchy)
+            .field("max_iterations", &self.max_iterations)
+            .field("max_unroll", &self.max_unroll)
+            .field("validate", &self.validate)
+            .field("verify_equivalence", &self.verify_equivalence)
+            .field("files", &self.files.is_some())
+            .finish()
+    }
 }
 
 impl Default for SynthOptions {
@@ -180,6 +206,7 @@ impl Default for SynthOptions {
             max_unroll: 1 << 16,
             validate: cfg!(debug_assertions),
             verify_equivalence: false,
+            files: None,
         }
     }
 }

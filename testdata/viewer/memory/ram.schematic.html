@@ -129,22 +129,22 @@ ol.src li:target { background: var(--comb); outline: 1px solid var(--comb-line);
 </div>
 <div class="canvas">
   <div class="frame">
-    <svg class="schematic" id="schematic" viewBox="0 0 515 354" preserveAspectRatio="xMinYMin meet" role="img">
+    <svg class="schematic" id="schematic" viewBox="0 0 546 420" preserveAspectRatio="xMinYMin meet" role="img">
       <title>schematic of module ram</title>
       <g id="view">
         <g class="wires">
-          <polyline class="wire bus" points="311,120 323,120 323,147 351,147" data-net="rdata" />
-          <polyline class="wire bus" points="308,254 323,254 323,227 351,227" data-net="rom_out" />
-          <polyline class="wire" points="164,67 176,67 176,120 212,120" data-net="clk" />
-          <polyline class="wire bus" points="164,307 176,307 176,138 212,138" data-net="addr" />
-          <polyline class="wire bus" points="164,227 200,227 200,156 212,156" data-net="wdata" />
-          <polyline class="wire" points="164,147 188,147 188,174 212,174" data-net="we" />
-          <polyline class="wire bus" points="164,307 188,307 188,254 212,254" data-net="addr" />
-          <text class="label" x="318" y="115" data-net="rdata">rda…</text>
-          <text class="label" x="315" y="249" data-net="rom_out">r… /8</text>
+          <polyline class="wire bus" points="342,153 354,153 354,180 382,180" data-net="rdata" />
+          <polyline class="wire bus" points="339,287 354,287 354,260 382,260" data-net="rom_out" />
+          <polyline class="wire" points="164,67 207,67 207,153 243,153" data-net="clk" />
+          <polyline class="wire bus" points="164,307 207,307 207,171 243,171" data-net="addr" />
+          <polyline class="wire bus" points="164,227 231,227 231,189 243,189" data-net="wdata" />
+          <polyline class="wire" points="164,147 219,147 219,207 243,207" data-net="we" />
+          <polyline class="wire bus" points="164,307 219,307 219,287 243,287" data-net="addr" />
+          <text class="label" x="349" y="148" data-net="rdata">rda…</text>
+          <text class="label" x="346" y="282" data-net="rom_out">r… /8</text>
           <text class="label" x="171" y="62" data-net="clk">clk</text>
           <text class="label" x="171" y="302" data-net="addr">addr /4</text>
-          <text class="label" x="171" y="222" data-net="wdata">w… /8</text>
+          <text class="label" x="171" y="222" data-net="wdata">wdata /8</text>
           <text class="label" x="171" y="142" data-net="we">we</text>
         </g>
         <g class="nodes">
@@ -172,34 +172,38 @@ ol.src li:target { background: var(--comb); outline: 1px solid var(--comb-line);
             <text class="label" x="77" y="216">wdata</text>
             <circle class="pin" cx="164" cy="227" r="3" data-net="wdata" />
           </g>
-          <g class="node port" data-detail="4" data-search="port out rdata" data-cx="399" data-cy="137">
-            <polygon class="box" points="362,108 436,108 447,137 436,166 362,166 351,137" />
-            <text class="kind" x="360" y="125">port out</text>
-            <text class="label" x="360" y="136">rdata</text>
-            <circle class="pin" cx="351" cy="147" r="3" data-net="rdata" />
+          <g class="node port" data-detail="4" data-search="port out rdata" data-cx="430" data-cy="170">
+            <polygon class="box" points="393,141 467,141 478,170 467,199 393,199 382,170" />
+            <text class="kind" x="391" y="158">port out</text>
+            <text class="label" x="391" y="169">rdata</text>
+            <circle class="pin" cx="382" cy="180" r="3" data-net="rdata" />
           </g>
-          <g class="node port" data-detail="5" data-search="port out rom_out" data-cx="399" data-cy="217">
-            <polygon class="box" points="362,188 436,188 447,217 436,246 362,246 351,217" />
-            <text class="kind" x="360" y="205">port out</text>
-            <text class="label" x="360" y="216">rom_out</text>
-            <circle class="pin" cx="351" cy="227" r="3" data-net="rom_out" />
+          <g class="node port" data-detail="5" data-search="port out rom_out" data-cx="430" data-cy="250">
+            <polygon class="box" points="393,221 467,221 478,250 467,279 393,279 382,250" />
+            <text class="kind" x="391" y="238">port out</text>
+            <text class="label" x="391" y="249">rom_out</text>
+            <circle class="pin" cx="382" cy="260" r="3" data-net="rom_out" />
           </g>
-          <g class="node seq" data-detail="6" data-search="addr clk process seq rdata trigger wdata we" data-cx="261" data-cy="137">
-            <rect class="box" x="212" y="81" width="99" height="112" rx="4" />
-            <text class="kind" x="221" y="98">process seq</text>
-            <circle class="pin" cx="212" cy="120" r="3" data-net="clk" />
-            <polyline class="clkmark" points="215,115 222,120 215,125" />
-            <text class="pinname" x="226" y="123">trigger</text>
-            <circle class="pin" cx="212" cy="138" r="3" data-net="addr" />
-            <circle class="pin" cx="212" cy="156" r="3" data-net="wdata" />
-            <circle class="pin" cx="212" cy="174" r="3" data-net="we" />
-            <circle class="pin" cx="311" cy="120" r="3" data-net="rdata" />
+          <g class="node seq" data-detail="6" data-search="addr clk process seq rdata trigger wdata we" data-cx="292" data-cy="170">
+            <rect class="box" x="243" y="114" width="99" height="112" rx="4" />
+            <text class="kind" x="252" y="131">process seq</text>
+            <circle class="pin" cx="243" cy="153" r="3" data-net="clk" />
+            <polyline class="clkmark" points="246,148 253,153 246,158" />
+            <text class="pinname" x="257" y="156">trigger</text>
+            <circle class="pin" cx="243" cy="171" r="3" data-net="addr" />
+            <circle class="pin" cx="243" cy="189" r="3" data-net="wdata" />
+            <circle class="pin" cx="243" cy="207" r="3" data-net="we" />
+            <circle class="pin" cx="342" cy="153" r="3" data-net="rdata" />
           </g>
-          <g class="node comb" data-detail="7" data-search="assign rom[addr[1:0]] rom_out" data-cx="260" data-cy="244">
-            <rect class="box" x="212" y="215" width="96" height="58" rx="4" />
-            <text class="kind" x="221" y="232">assign</text>
-            <circle class="pin" cx="212" cy="254" r="3" />
-            <circle class="pin" cx="308" cy="254" r="3" data-net="rom_out" />
+          <g class="node inst" data-detail="7" data-search="process initial" data-cx="131" data-cy="370">
+            <rect class="box" x="68" y="348" width="127" height="44" rx="4" />
+            <text class="kind" x="77" y="365">process initial</text>
+          </g>
+          <g class="node comb" data-detail="8" data-search="assign rom[addr[1:0]] rom_out" data-cx="291" data-cy="277">
+            <rect class="box" x="243" y="248" width="96" height="58" rx="4" />
+            <text class="kind" x="252" y="265">assign</text>
+            <circle class="pin" cx="243" cy="287" r="3" />
+            <circle class="pin" cx="339" cy="287" r="3" data-net="rom_out" />
           </g>
         </g>
       </g>
@@ -336,10 +340,22 @@ ol.src li:target { background: var(--comb); outline: 1px solid var(--comb-line);
         <dd>rdata</dd>
       </dl>
       <p class="loc">
-        <a href="source/0-memory.rtl.html#L21">memory.rtl:21:3</a>
+        <a href="source/0-memory.rtl.html#L22">memory.rtl:22:3</a>
       </p>
     </div>
     <div class="detail" id="d7" hidden="hidden">
+      <h3>process initial</h3>
+      <dl>
+        <dt>kind</dt>
+        <dd>process initial</dd>
+        <dt>process</dt>
+        <dd>initial</dd>
+      </dl>
+      <p class="loc">
+        <a href="source/0-memory.rtl.html#L26">memory.rtl:26:3</a>
+      </p>
+    </div>
+    <div class="detail" id="d8" hidden="hidden">
       <h3>assign</h3>
       <dl>
         <dt>kind</dt>
@@ -352,7 +368,7 @@ ol.src li:target { background: var(--comb); outline: 1px solid var(--comb-line);
         <dd>rom_out</dd>
       </dl>
       <p class="loc">
-        <a href="source/0-memory.rtl.html#L20">memory.rtl:20:3</a>
+        <a href="source/0-memory.rtl.html#L21">memory.rtl:21:3</a>
       </p>
     </div>
   </aside>

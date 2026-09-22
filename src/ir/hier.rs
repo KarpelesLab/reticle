@@ -597,7 +597,7 @@ fn remap_memories(module: &mut Module, base: usize) {
                 lvalue_memories(lvalue, &shift);
             }
         }
-        StmtKind::MemWrite { mem, .. } => shift(mem),
+        StmtKind::MemWrite { mem, .. } | StmtKind::MemFile { mem, .. } => shift(mem),
         _ => {}
     });
     for (_, cell) in module.cells.iter_mut() {

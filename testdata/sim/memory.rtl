@@ -19,7 +19,7 @@ module memtest
     %rdata <= @mem[%addr]
   end
   process initial
-    sys $readmemh("data.hex", @hexmem[4'd0])
+    readmemh("data.hex", @hexmem)
     %clk = 1'd0
     %addr = 4'd3
     %wdata = 8'd77

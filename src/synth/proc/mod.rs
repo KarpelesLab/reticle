@@ -25,20 +25,28 @@
 //!   path condition. Memory reads in continuous assigns become unclocked
 //!   `memrd` ports too, so no `MemRead` expression survives.
 //! - **`initial`** blocks that only assign constants set the `init`
-//!   attribute of the nets and the initial contents of memories.
+//!   attribute of the nets and the initial contents of memories. A
+//!   `$readmemh` / `$readmemb` there loads its file through
+//!   [`SynthOptions::files`] and counts as constant writes of every word;
+//!   a file that cannot be loaded is reported with `S0018`, naming it (a
+//!   warning when no provider was given, an error when the provider lacks
+//!   the file or it does not parse), and the memory gets nothing from it.
 //!
 //! Limits: one clock per process; `Type::Array` nets, waits, `forever`,
 //! non-constant loop bounds, and `break` / `continue` under a non-constant
 //! condition are reported with `S0010` and the process is left in place.
 //! Only one asynchronous control per register is expressible; a second
 //! one is treated as synchronous (`S0013`). Simulation-only statements are
-//! dropped with note `S0014`.
+//! dropped with note `S0014`, and so is a memory file task anywhere else
+//! (`$writememh`, or `$readmemh` outside an `initial` block).
 
 mod exec;
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::rc::Rc;
 
 use crate::diag::{Diagnostic, Diagnostics};
+use crate::ir::memfile::FileProvider;
 use crate::ir::walk::{stmt_exprs, stmt_nets, walk_block};
 use crate::ir::{
     AttrValue, BinaryOp, CellKind, Const, Edge, ExprId, ExprKind, Lvalue, Memory, Module, NetId,
@@ -54,6 +62,7 @@ use exec::{En, Exec, Failed, Flow, HOLD, MemWrite, Mode, SId};
 /// The process-lowering pass; see the module docs.
 pub struct ProcLower {
     max_unroll: u32,
+    files: Option<Rc<dyn FileProvider>>,
 }
 
 impl ProcLower {
@@ -61,6 +70,7 @@ impl ProcLower {
     pub fn new(options: &SynthOptions) -> Self {
         ProcLower {
             max_unroll: options.max_unroll,
+            files: options.files.clone(),
         }
     }
 }
@@ -119,6 +129,7 @@ impl Pass for ProcLower {
                 diags,
                 stats: &mut stats,
                 max_unroll: self.max_unroll,
+                files: self.files.as_deref(),
                 external: &external,
             };
             let ok = match &process.kind {
@@ -166,6 +177,8 @@ struct Ctx<'a> {
     diags: &'a mut Diagnostics,
     stats: &'a mut PassStats,
     max_unroll: u32,
+    /// Files for `$readmemh` / `$readmemb`.
+    files: Option<&'a dyn FileProvider>,
     /// True for nets read outside the process being lowered.
     external: &'a dyn Fn(NetId) -> bool,
 }
@@ -186,7 +199,14 @@ struct FfPlan {
 
 impl Ctx<'_> {
     fn exec(&mut self, process: &Process, mode: Mode) -> Result<Exec<'_>, Failed> {
-        let mut exec = Exec::new(self.m, self.diags, mode, process.span, self.max_unroll);
+        let mut exec = Exec::new(
+            self.m,
+            self.diags,
+            mode,
+            process.span,
+            self.max_unroll,
+            self.files,
+        );
         match exec.exec_block(&process.body) {
             Ok(Flow::Next) => {}
             Ok(Flow::Break | Flow::Continue) => {

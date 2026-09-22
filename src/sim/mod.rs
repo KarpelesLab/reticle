@@ -4,9 +4,9 @@
 //! instance tree, and runs its processes, continuous assignments and cells
 //! under one scheduler that implements both the Verilog stratified event
 //! queue and the VHDL delta cycle. It is 4-state throughout ([`Logic`]),
-//! sans-I/O (`$display` text and VCD data are accumulated and handed back
-//! as strings; `$readmemh` reads through a caller-supplied
-//! [`FileProvider`]), and drivable from Rust through [`Simulator`], which is
+//! sans-I/O (`$display` text, VCD data and `$writememh` files are
+//! accumulated and handed back as strings; `$readmemh` reads through a
+//! caller-supplied [`FileProvider`]), and drivable from Rust through [`Simulator`], which is
 //! how testbenches are written as `#[test]`s.
 //!
 //! # Layout
@@ -18,7 +18,7 @@
 //! | `eval.rs`     | Expression evaluation over the IR arena                      |
 //! | `sched.rs`    | The scheduler: regions, time wheel, signal propagation       |
 //! | `process.rs`  | Process execution as a resumable frame stack                 |
-//! | `sys.rs`      | System tasks, `$display` formatting, `$random`, `$readmem*`  |
+//! | `sys.rs`      | System tasks, `$display` formatting, `$random`, `$readmem*`, `$writemem*` |
 //! | `vcd.rs`      | VCD waveform writer                                          |
 //! | `api.rs`      | The public co-simulation API                                 |
 //! | `assertion/`  | Concurrent assertions: an SVA / PSL subset as automata       |
@@ -162,11 +162,11 @@ mod sys;
 mod value;
 mod vcd;
 
+pub use crate::ir::memfile::{FileProvider, MemoryFiles};
 pub use api::{BreakId, MemHandle, NetHandle};
 pub use assertion::{AssertionId, AssertionResult};
 pub use coverage::{CoverageReport, LineRecord, ToggleRecord};
 pub use interactive::{Response, Session, SessionError};
-pub use sys::{FileProvider, MemoryFiles};
 pub use value::Value;
 
 use elab::{CellState, Driver, InstanceState, MemState, ProcId};
@@ -200,7 +200,8 @@ pub struct SimOptions {
     /// zero-delay oscillation.
     pub max_slot_events: u64,
     /// Files for `$readmemh` / `$readmemb`; `None` makes every read fail
-    /// with a diagnostic.
+    /// with a diagnostic, except of a file `$writememh` / `$writememb`
+    /// saved earlier in the run ([`Simulator::written_files`]).
     pub files: Option<Box<dyn FileProvider>>,
     /// Collect line and toggle coverage ([`Simulator::coverage`]).
     ///
@@ -271,6 +272,8 @@ pub struct Simulator<'d> {
     rng: u64,
     time_format: TimeFormat,
     warned_calls: Vec<String>,
+    /// Files saved by `$writememh` / `$writememb`, by name.
+    written: BTreeMap<String, String>,
     assertions: Vec<assertion::runtime::Checker>,
     /// Signals any assertion reads, sorted, with their sampled values.
     assert_watch: Vec<elab::SigId>,

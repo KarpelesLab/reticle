@@ -302,6 +302,7 @@ impl<'a> Sim<'a> {
             StmtKind::Forever { .. }
             | StmtKind::Wait(_)
             | StmtKind::SysCall { .. }
+            | StmtKind::MemFile { .. }
             | StmtKind::Assert { .. }
             | StmtKind::Finish
             | StmtKind::Stop => Flow::Next,

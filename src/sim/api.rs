@@ -47,6 +47,7 @@
 //! requested time is reached, `$finish` executes, or `$stop` pauses; a
 //! paused simulation resumes with the next run call.
 
+use std::collections::BTreeMap;
 use std::fmt;
 use std::io;
 
@@ -373,6 +374,14 @@ impl<'d> Simulator<'d> {
     /// Takes the output text, leaving it empty.
     pub fn take_output(&mut self) -> String {
         std::mem::take(&mut self.output)
+    }
+
+    /// The files `$writememh` / `$writememb` saved so far, by the name the
+    /// task gave, in the format `$readmemh` / `$readmemb` read. Nothing is
+    /// written to disk; a later `$readmem*` of the same name in this run
+    /// reads the saved text rather than asking the file provider.
+    pub fn written_files(&self) -> &BTreeMap<String, String> {
+        &self.written
     }
 
     /// Runtime diagnostics: assertion reports, unknown tasks, stuck

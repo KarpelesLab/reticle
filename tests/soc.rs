@@ -14,8 +14,8 @@
 //! | `hello_hex_is_the_assembled_source` | the checked-in ROM image is `sw/hello.s` assembled by the shared encoders in `tests/rv32i_asm` |
 //! | `the_assembler_matches_hand_encoded_instructions` | the text front end of that assembler, against encodings worked by hand |
 //! | `the_project_resolves_and_elaborates` | the manifest builds through `ip::resolve` and `ip::elaborate`, from exactly two library packages and one user source |
-//! | `the_soc_synthesises_without_errors_or_latches` | generic synthesis reports no error, no warning and no latch |
-//! | `the_line_comes_out_of_the_serial_wire` | the testbench runs, and the exact line is decoded from the waveform of `uart_tx` |
+//! | `the_soc_synthesises_without_errors_or_latches` | generic synthesis reports no error, no warning and no latch, and the ROM's initial contents are `sw/hello.hex`, loaded by the design's own `$readmemh` |
+//! | `the_line_comes_out_of_the_serial_wire` | the testbench runs, the ROM loads through `$readmemh`, and the exact line is decoded from the waveform of `uart_tx` |
 //! | `the_soc_maps_onto_the_hx8k_and_exports_for_nextpnr` | the iCE40 flow fits it on an HX8K, every cell a device primitive, and writes the JSON and PCF `nextpnr-ice40` reads |
 //! | `reticle_build_builds_the_project` | the same through the binary |
 //! | `reticle_sim_cannot_run_the_testbench_yet` | what the binary does with the testbench today, pinned |
@@ -29,27 +29,27 @@
 //!
 //! # Gaps this found
 //!
-//! Building the example exposed eight defects in Reticle. Each open one
-//! is reproduced in a few lines by a test at the end of this file that
-//! asserts the gap is *still there*, so fixing one fails its test and
-//! points here:
+//! Building the example exposed eight defects in Reticle, each reproduced
+//! in a few lines by a test at the end of this file. Every one is fixed,
+//! and each test once asserted its gap was *still there*, so fixing it
+//! failed the test and named what to change. They now assert the fix.
 //!
-//! - `a_system_task_without_parentheses_is_dropped`: `$finish;` is
-//!   lowered as an expression and silently discarded; only `$finish(0);`
-//!   stops a simulation. The testbench uses `$finish(0)` for that reason.
-//! - `readmemh_in_verilog_never_reaches_the_simulator`: the Verilog
-//!   lowering passes `$readmemh`'s memory as a string naming it, and the
-//!   simulator only accepts a memory read (`@mem[0]`), so every
-//!   `$readmemh` in Verilog fails with "needs a memory". `reticle sim`
-//!   also gives the simulator no file provider, so it could not read the
-//!   file even then.
-//! - `synthesis_drops_the_contents_readmemh_loads`: synthesis drops the
-//!   call with a note, so the ROM of a netlist is empty.
-//! - `displaying_a_memory_word_prints_the_memory_name`: `$display("%h",
-//!   mem[1])` prints the memory's name rather than the word.
+//! Four were in the frontend, the simulator and synthesis:
 //!
-//! Four more were in the FPGA backend and are fixed; their tests now
-//! assert the fix:
+//! - `a_system_task_without_parentheses_runs`: `$finish;` was lowered as
+//!   an expression and silently discarded; it is now the same call as
+//!   `$finish(0);`, and the testbench says `$finish;`.
+//! - `readmemh_in_verilog_loads_the_memory_in_the_simulator`: the Verilog
+//!   lowering passed `$readmemh`'s memory as a string naming it, which the
+//!   simulator refused. The IR now has a statement for the memory file
+//!   tasks that names the memory itself (`StmtKind::MemFile`).
+//! - `synthesis_loads_the_contents_readmemh_names`: synthesis dropped the
+//!   call with a note, so the ROM of a netlist was empty. It now reads the
+//!   file through `SynthOptions::files` into `Memory::init`.
+//! - `displaying_a_memory_word_prints_the_word`: `$display("%h", mem[1])`
+//!   printed the memory's name rather than the word.
+//!
+//! Four were in the FPGA backend:
 //!
 //! - `the_hx8k_database_knows_the_breakout_boards_uart_pins`: the HX8K's
 //!   device database listed only the breakout board's LEDs and clock, so
@@ -64,12 +64,10 @@
 //!   mapped the top module alone, so a design with any instance was
 //!   refused.
 //!
-//! Until the second and third are fixed, [`preload_rom`] puts the program
-//! into the ROM's initial contents in the IR, which the simulator, generic
-//! synthesis and block RAM mapping honour. It is the one step here that a
-//! user of the binary cannot take, and it stands exactly where `$readmemh`
-//! should have done the work: the ROM holds `sw/hello.hex`, word for word,
-//! before the first clock edge, and in the exported netlist's block RAMs.
+//! The ROM is loaded the way the design says, by `$readmemh` in
+//! `soc_top`: the simulator and synthesis read `sw/hello.hex` through a
+//! file provider ([`example_files`]), since the library does no I/O, and
+//! block RAM mapping carries those contents into the exported netlist.
 //!
 //! `examples/` is not in the published crate, so every test that needs the
 //! example skips with a message when it is absent.
@@ -90,7 +88,7 @@ use std::rc::Rc;
 use reticle::diag::{Diagnostics, Severity};
 use reticle::fpga::{self, Constraints, FpgaOptions};
 use reticle::ip::{self, Elaboration, PathProvider, Project, SourceEntry};
-use reticle::ir::{CellKind, Delay, Design, TimeUnit};
+use reticle::ir::{CellKind, Delay, Design, MemFileOp, StmtKind, TimeUnit};
 use reticle::logic::Logic;
 use reticle::sim::{MemoryFiles, SimOptions, Simulator};
 use reticle::source::SourceMap;
@@ -222,17 +220,27 @@ fn testbench_design(dir: &Path) -> Design {
     built.elaboration.design.expect("the testbench elaborates")
 }
 
-/// Puts the program into `soc_top.rom`'s initial contents.
-///
-/// This stands in for `$readmemh`, which Reticle does not yet honour from
-/// Verilog in either the simulator or synthesis (see the module docs and
-/// the tests at the end). The initial contents are what both of them
-/// read, and block RAM mapping puts them into the block RAMs' `INIT_*`
-/// parameters (`block_ram_carries_the_contents_it_is_initialised_with`).
-fn preload_rom(design: &mut Design, words: &[u32]) {
+/// The files the design reads, for the simulator and synthesis: the
+/// ROM image `soc_top`'s `$readmemh` names, relative to the project.
+fn example_files(dir: &Path) -> MemoryFiles {
+    let mut files = MemoryFiles::new();
+    files.insert("sw/hello.hex", read(dir, "sw/hello.hex"));
+    files
+}
+
+/// Synthesis options that let `$readmemh` load the ROM.
+fn synth_options(dir: &Path) -> SynthOptions {
+    SynthOptions {
+        files: Some(Rc::new(example_files(dir))),
+        ..SynthOptions::default()
+    }
+}
+
+/// The initial contents of `soc_top`'s ROM, as words.
+fn rom_init(design: &Design) -> Option<Vec<u32>> {
     let module = design
         .modules
-        .iter_mut()
+        .iter()
         .map(|(_, m)| m)
         // A testbench that overrides a parameter gets a specialised copy,
         // `soc_top$CLK_DIV_104`; there is only ever one.
@@ -240,18 +248,18 @@ fn preload_rom(design: &mut Design, words: &[u32]) {
         .expect("soc_top is in the design");
     let rom = module
         .memories
-        .iter_mut()
+        .iter()
         .map(|(_, m)| m)
         .find(|m| m.name.as_str() == "rom")
         .expect("soc_top has a memory called rom");
-    let size = usize::try_from(rom.size).expect("a small ROM");
-    assert!(words.len() <= size, "the program does not fit the ROM");
-    let mut init: Vec<_> = words
-        .iter()
-        .map(|w| Logic::from_u64(u64::from(*w), 32))
-        .collect();
-    init.resize(size, Logic::from_u64(0, 32));
-    rom.init = Some(init);
+    rom.init.as_ref().map(|init| {
+        init.iter()
+            .map(|w| {
+                w.to_u64()
+                    .map_or(u32::MAX, |v| u32::try_from(v).expect("32 bits"))
+            })
+            .collect()
+    })
 }
 
 // ---------------------------------------------------------------------------
@@ -358,14 +366,18 @@ fn complaints(diags: &Diagnostics) -> Vec<String> {
 fn the_soc_synthesises_without_errors_or_latches() {
     let Some(dir) = example() else { return };
     let mut design = soc_design(&dir);
-    preload_rom(&mut design, &rom_image(&dir));
+    assert_eq!(rom_init(&design), None, "the ROM starts empty");
     let mut diags = Diagnostics::new();
-    synth_run(&mut design, &SynthOptions::default(), &mut diags);
+    synth_run(&mut design, &synth_options(&dir), &mut diags);
     assert!(
         complaints(&diags).is_empty(),
         "synthesis complained:\n  {}",
         complaints(&diags).join("\n  ")
     );
+    // `$readmemh` put the program into the ROM, word for word, and the
+    // note about dropped simulation-only statements is gone with it.
+    assert_eq!(rom_init(&design), Some(rom_image(&dir)));
+    assert!(!diags.iter().any(|d| d.code == Some("S0014")));
     let latches: usize = design
         .modules
         .iter()
@@ -436,12 +448,9 @@ fn the_line_comes_out_of_the_serial_wire() {
     assert!(bench.contains(&format!("localparam CLK_DIV  = {CLK_DIV};")));
     assert!(bench.contains(&format!("localparam HALF     = {HALF_NS};")));
 
-    let mut design = testbench_design(&dir);
-    preload_rom(&mut design, &rom_image(&dir));
-    let mut files = MemoryFiles::new();
-    files.insert("sw/hello.hex", read(&dir, "sw/hello.hex"));
+    let design = testbench_design(&dir);
     let options = SimOptions {
-        files: Some(Box::new(files)),
+        files: Some(Box::new(example_files(&dir))),
         ..SimOptions::default()
     };
     let mut sim = Simulator::new(&design, options).expect("the testbench simulates");
@@ -468,15 +477,16 @@ fn the_line_comes_out_of_the_serial_wire() {
     // The testbench's own receiver agrees, and printed it.
     assert_eq!(sim.output(), HELLO);
 
-    // The only message is the `$readmemh` that Reticle cannot yet run
-    // from Verilog; `preload_rom` did its work.
+    // `$readmemh` loaded the program, and nothing else was said.
     let messages: Vec<String> = sim.messages().iter().map(|d| d.message.clone()).collect();
-    assert!(
-        messages
-            .iter()
-            .all(|m| m.contains("$readmem needs a memory")),
-        "unexpected simulator messages: {messages:?}"
-    );
+    assert!(messages.is_empty(), "simulator messages: {messages:?}");
+    let rom = sim.memory("soc_tb.dut.rom").expect("the ROM");
+    let words = rom_image(&dir);
+    for (i, word) in words.iter().enumerate() {
+        let index = u64::try_from(i).expect("a small ROM");
+        let got = sim.get_mem(rom, index).and_then(|v| v.to_u64());
+        assert_eq!(got, Some(u64::from(*word)), "ROM word {i}");
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -487,8 +497,6 @@ fn the_line_comes_out_of_the_serial_wire() {
 fn the_soc_maps_onto_the_hx8k_and_exports_for_nextpnr() {
     let Some(dir) = example() else { return };
     let mut design = soc_design(&dir);
-    preload_rom(&mut design, &rom_image(&dir));
-    // `synthesize_for` flattens the hierarchy itself.
     let top = design.top.expect("a top");
 
     let device = fpga::target(DEVICE).expect("the HX8K is a built-in device");
@@ -505,15 +513,12 @@ fn the_soc_maps_onto_the_hx8k_and_exports_for_nextpnr() {
     assert!(diags.is_empty(), "{}", diags.render(&map));
 
     let mut diags = Diagnostics::new();
-    let flow = fpga::synthesize_for(
-        &mut design,
-        top,
-        device,
-        &constraints,
-        &FpgaOptions::default(),
-        &mut diags,
-    )
-    .unwrap_or_else(|e| panic!("the HX8K flow failed: {e:?}"));
+    let options = FpgaOptions {
+        synth: synth_options(&dir),
+        ..FpgaOptions::default()
+    };
+    let flow = fpga::synthesize_for(&mut design, top, device, &constraints, &options, &mut diags)
+        .unwrap_or_else(|e| panic!("the HX8K flow failed: {e:?}"));
     let errors: Vec<String> = diags
         .iter()
         .filter(|d| d.severity >= Severity::Error)
@@ -631,23 +636,31 @@ fn reticle_build_builds_the_project() {
         err.contains("note: built `soc`: 5 module(s) from 5 source(s)"),
         "{err}"
     );
-    // The one note synthesis gives is the `$readmemh` it drops; see
-    // `synthesis_drops_the_contents_readmemh_loads`.
-    assert!(err.contains("simulation-only statement dropped"), "{err}");
-    assert!(!err.contains("warning"), "{err}");
+    // The binary gives synthesis no file provider yet, so the one thing
+    // it says is that the ROM image could not be loaded, naming the file
+    // (`synthesis_loads_the_contents_readmemh_names` shows the library
+    // loading it when given one).
+    assert!(
+        err.contains("the contents of `sw/hello.hex` could not be loaded into `rom`"),
+        "{err}"
+    );
+    assert!(!err.contains("simulation-only statement dropped"), "{err}");
     let lock = fs::read_to_string(&lock).expect("a lock file");
     assert!(lock.contains("rv32i") && lock.contains("uart"), "{lock}");
 }
 
-#[cfg(feature = "cli")]
+/// `reticle sim` runs the testbench from the command line, the way a user
+/// would: the testbench, their top-level and the library sources the build
+/// report lists, with the design's own `$readmemh` loading the program
+/// from disk.
+///
+/// This took three fixes to reach. The frontend had to hand `$readmemh`
+/// the memory rather than its name, the simulator had to accept it, and
+/// the binary had to give the library a file provider, since the library
+/// performs no I/O. The test once asserted that the run timed out with
+/// nothing on the serial line; it now asserts the line.
 #[test]
-fn reticle_sim_cannot_run_the_testbench_yet() {
-    // How a user would run the testbench from the command line: the
-    // testbench, their top-level and the library sources the build report
-    // lists. Today the ROM cannot be loaded (see
-    // `readmemh_in_verilog_never_reaches_the_simulator`), so the core runs
-    // nothing and the testbench times out. When this starts printing the
-    // line, flip it to assert `HELLO` and delete `preload_rom`.
+fn reticle_sim_runs_the_testbench() {
     let Some(dir) = example() else { return };
     let (code, out, err) = reticle(
         &dir,
@@ -662,11 +675,10 @@ fn reticle_sim_cannot_run_the_testbench_yet() {
             "../../ip/uart/rtl/uart.v",
         ],
     );
-    assert_ne!(code, 0);
-    assert!(err.contains("$readmem needs a memory"), "{err}");
-    assert_eq!(
-        out, "soc_tb: timed out with nothing but \"\" received\n",
-        "reticle sim now does something different; see the comment above"
+    assert_eq!(code, 0, "{err}");
+    assert!(
+        out.contains(HELLO.trim_end()),
+        "the line did not come out of `reticle sim`:\n{out}\n{err}"
     );
 }
 
@@ -696,36 +708,44 @@ fn verilog(text: &str) -> Design {
 }
 
 #[test]
-fn a_system_task_without_parentheses_is_dropped() {
+fn a_system_task_without_parentheses_runs() {
     // IEEE 1364-2005 §17.4.1: `$finish;` and `$finish(n);` are the same
-    // task. The Verilog lowering sends a bare system identifier down the
-    // expression path (`expr_stmt` in src/verilog/elab/lower/stmt.rs
-    // handles a bare `Ident` as a task call but not a `SystemIdent`), so
-    // the statement vanishes without a diagnostic and the simulation runs
-    // on. Fixed, the first process stops the run at 10 and nothing is
-    // printed; flip the assertions and let the testbench say `$finish;`.
-    let design = verilog(
+    // task. The Verilog lowering used to send a bare system identifier
+    // down the expression path, so the statement vanished without a
+    // diagnostic and the simulation ran on. Now the first process stops
+    // the run at 10, after `$display;` printed an empty line.
+    let bare = verilog(
         "module t;\n\
-         initial begin #10 $finish; end\n\
+         initial begin #5 $display; #5 $finish; end\n\
          initial begin #20 $display(\"still running\"); end\n\
          endmodule\n",
     );
-    let mut sim = Simulator::new(&design, SimOptions::default()).expect("simulates");
+    let mut sim = Simulator::new(&bare, SimOptions::default()).expect("simulates");
     sim.run();
-    assert!(!sim.finished(), "`$finish;` works now; see the comment");
-    assert_eq!(sim.output(), "still running\n");
+    assert!(sim.finished(), "`$finish;` did not end the run");
+    assert_eq!(sim.time(), sim.ticks(Delay::new(10, TimeUnit::Ns)));
+    assert_eq!(sim.output(), "\n");
 
-    // With parentheses it works.
+    // It lowers exactly as the parenthesised form does.
+    let parenthesised = verilog(
+        "module t;\n\
+         initial begin #5 $display(); #5 $finish(0); end\n\
+         initial begin #20 $display(\"still running\"); end\n\
+         endmodule\n",
+    );
+    assert_eq!(bare.to_text(), parenthesised.to_text());
+
+    // `$stop;` pauses, and the next run resumes.
     let design = verilog(
         "module t;\n\
-         initial begin #10 $finish(0); end\n\
-         initial begin #20 $display(\"still running\"); end\n\
+         initial begin #10 $stop; $display(\"resumed\"); end\n\
          endmodule\n",
     );
     let mut sim = Simulator::new(&design, SimOptions::default()).expect("simulates");
     sim.run();
-    assert!(sim.finished());
     assert_eq!(sim.output(), "");
+    sim.run();
+    assert_eq!(sim.output(), "resumed\n");
 }
 
 /// A memory loaded from a file and read back, as every ROM is written.
@@ -736,14 +756,22 @@ const READMEMH: &str = "module t (input wire clk, input wire [1:0] a, output reg
      endmodule\n";
 
 #[test]
-fn readmemh_in_verilog_never_reaches_the_simulator() {
-    // The Verilog lowering passes the memory to `$readmemh` as a string
-    // holding its name (src/verilog/elab/lower/stmt.rs, the `readmemh`
-    // arm of `system_task`), while the simulator only accepts a memory
-    // read, `@rom[0]` in the IR (`mem_arg` in src/sim/sys.rs). So no
-    // `$readmemh` written in Verilog loads anything, whatever the file
-    // provider holds. Fixed, `rom[1]` reads 8'h22.
+fn readmemh_in_verilog_loads_the_memory_in_the_simulator() {
+    // The Verilog lowering used to pass the memory to `$readmemh` as a
+    // string holding its name, while the simulator only accepted a
+    // memory read, so no `$readmemh` written in Verilog loaded anything.
+    // The IR now carries the memory file tasks as a statement that names
+    // the memory by id.
     let design = verilog(READMEMH);
+    let top = design.top_module().expect("a top");
+    let mut loads = Vec::new();
+    top.for_each_stmt(|s| {
+        if let StmtKind::MemFile { op, mem, .. } = &s.kind {
+            loads.push((*op, top.memories[*mem].name.to_string()));
+        }
+    });
+    assert_eq!(loads, [(MemFileOp::ReadHex, "rom".to_owned())]);
+
     let mut files = MemoryFiles::new();
     files.insert("rom.hex", "11 22 33 44");
     let options = SimOptions {
@@ -753,68 +781,86 @@ fn readmemh_in_verilog_never_reaches_the_simulator() {
     let mut sim = Simulator::new(&design, options).expect("simulates");
     sim.run_for(1);
     let rom = sim.memory("t.rom").expect("the memory");
-    assert!(
-        sim.get_mem(rom, 1).and_then(|v| v.to_u64()).is_none(),
-        "`$readmemh` works from Verilog now; see the comment"
-    );
-    let messages: Vec<String> = sim.messages().iter().map(|d| d.message.clone()).collect();
-    assert_eq!(
-        messages,
-        ["$readmem needs a memory (`@mem[0]`) as second argument"]
-    );
+    assert_eq!(sim.get_mem(rom, 1).and_then(|v| v.to_u64()), Some(0x22));
+    assert!(sim.messages().is_empty(), "{:?}", sim.messages());
 }
 
 #[test]
-fn synthesis_drops_the_contents_readmemh_loads() {
-    // Synthesis treats `$readmemh` like `$display`: a simulation-only
-    // statement, dropped with note S0014 (src/synth/proc/exec.rs). The
-    // memory keeps no initial contents, so the ROM of every netlist built
-    // from this source is empty, and on an iCE40 its block RAMs would be
-    // configured blank. Every other synthesis tool reads the file here;
-    // Reticle would need a file provider in `SynthOptions` to, since the
-    // library does no I/O. Fixed, `rom` carries four initial words.
+fn synthesis_loads_the_contents_readmemh_names() {
+    // Synthesis used to treat `$readmemh` like `$display`, dropping it
+    // with note S0014, so the ROM of every netlist built from this source
+    // was empty. It now reads the file through the provider in
+    // `SynthOptions`, as every other synthesis tool reads it, and the
+    // words become the memory's initial contents.
+    let mut design = verilog(READMEMH);
+    let mut files = MemoryFiles::new();
+    files.insert("rom.hex", "11 22 33 44");
+    let options = SynthOptions {
+        files: Some(Rc::new(files)),
+        ..SynthOptions::default()
+    };
+    let mut diags = Diagnostics::new();
+    synth_run(&mut design, &options, &mut diags);
+    assert!(diags.is_empty(), "{diags:?}");
+    let init = |design: &Design| {
+        let top = design.top_module().expect("a top");
+        top.memories
+            .iter()
+            .find(|(_, m)| m.name.as_str() == "rom")
+            .map(|(_, m)| m.init.clone())
+            .expect("the ROM survives")
+    };
+    assert_eq!(
+        init(&design),
+        Some(
+            [0x11, 0x22, 0x33, 0x44]
+                .map(|w| Logic::from_u64(w, 8))
+                .to_vec()
+        )
+    );
+
+    // Without a provider the library cannot read the file, and says so,
+    // naming it, rather than building an empty ROM in silence.
     let mut design = verilog(READMEMH);
     let mut diags = Diagnostics::new();
     synth_run(&mut design, &SynthOptions::default(), &mut diags);
-    assert!(
-        diags
-            .iter()
-            .any(|d| d.code == Some("S0014") && d.severity == Severity::Note),
-        "the `$readmemh` is no longer dropped; see the comment"
-    );
-    let top = design.top_module().expect("a top");
-    let init = top
-        .memories
+    let warnings: Vec<&str> = diags
         .iter()
-        .find(|(_, m)| m.name.as_str() == "rom")
-        .map(|(_, m)| m.init.clone());
-    assert!(
-        matches!(init, Some(None)),
-        "the ROM has contents now; see the comment"
+        .filter(|d| d.code == Some("S0018") && d.severity == Severity::Warning)
+        .map(|d| d.message.as_str())
+        .collect();
+    assert_eq!(
+        warnings,
+        ["the contents of `rom.hex` could not be loaded into `rom`: synthesis was given no files"]
     );
+    assert_eq!(init(&design), None);
 }
 
 #[test]
-fn displaying_a_memory_word_prints_the_memory_name() {
-    // `syscall_args` asks `scope_argument` whether each argument names a
-    // scope or an array, and `resolve_path` resolves `mem[1]` to the
-    // memory itself, ignoring the index. So the word is replaced by the
-    // memory's name, and `%h` prints "mem" in hex. Fixed, this prints
-    // "42 42".
+fn displaying_a_memory_word_prints_the_word() {
+    // `syscall_args` asked `scope_argument` whether each argument names a
+    // scope or an array, and name resolution sees through `mem[1]` to the
+    // memory itself, so the word was replaced by the memory's name. An
+    // element is now a value like any other, in every format.
     let design = verilog(
         "module t;\n\
          reg [7:0] mem [0:3];\n\
          reg [7:0] v;\n\
+         reg [1:0] i;\n\
          initial begin\n\
          mem[1] = 8'h42;\n\
          v = mem[1];\n\
+         i = 1;\n\
          $display(\"%h %h\", mem[1], v);\n\
+         $display(\"%d|%0d|%b|%o|%x|%c|%s\", mem[1], mem[i], mem[1], mem[1], mem[1], mem[1], mem[1]);\n\
+         $display(mem[1]);\n\
+         $displayh(mem[i]);\n\
          end\n\
          endmodule\n",
     );
     let mut sim = Simulator::new(&design, SimOptions::default()).expect("simulates");
     sim.run();
-    assert_eq!(sim.output(), "6d656d 42\n", "fixed? see the comment");
+    assert_eq!(sim.output(), "42 42\n 66|66|01000010|102|42|B|B\n 66\n42\n");
 }
 
 #[test]

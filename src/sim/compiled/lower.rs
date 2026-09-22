@@ -1930,6 +1930,11 @@ impl<'d> Lowerer<'d> {
             | StmtKind::Stop
                 if ctx.prologue => {}
             StmtKind::SysCall { name, args } => self.syscall(ctx, name.as_str(), args, stmt.span),
+            StmtKind::MemFile { op, .. } => self.err(
+                ctx.label.clone(),
+                Reason::UnsupportedTask(format!("${}", op.keyword())),
+                Some(stmt.span),
+            ),
             StmtKind::Assert {
                 cond,
                 severity,

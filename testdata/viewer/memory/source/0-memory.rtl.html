@@ -113,7 +113,7 @@ ol.src li:target { background: var(--comb); outline: 1px solid var(--comb-line);
       <span class="brand">reticle viewer</span>
     </header>
     <main class="wide"><h1>memory.rtl
-  <span class="kind"> 26 lines</span>
+  <span class="kind"> 32 lines</span>
 </h1>
 <ol class="src">
   <li id="L1">top ram</li>
@@ -135,13 +135,19 @@ ol.src li:target { background: var(--comb); outline: 1px solid var(--comb-line);
   <li id="L17">  memory @mem 16 x u8</li>
   <li id="L18">  memory @rom 4 x u8</li>
   <li id="L19">    init 8&#39;d222 8&#39;d173 8&#39;d190 8&#39;d239</li>
-  <li id="L20">  assign %rom_out = @rom[%addr[1:0]]</li>
-  <li id="L21">  process seq posedge %clk</li>
-  <li id="L22">    memwrite @mem[%addr] = %wdata enable %we</li>
-  <li id="L23">    %rdata &lt;= @mem[%addr]</li>
-  <li id="L24">  end</li>
-  <li id="L25">end</li>
-  <li id="L26"></li>
+  <li id="L20">  memory @img 8 x u4</li>
+  <li id="L21">  assign %rom_out = @rom[%addr[1:0]]</li>
+  <li id="L22">  process seq posedge %clk</li>
+  <li id="L23">    memwrite @mem[%addr] = %wdata enable %we</li>
+  <li id="L24">    %rdata &lt;= @mem[%addr]</li>
+  <li id="L25">  end</li>
+  <li id="L26">  process initial</li>
+  <li id="L27">    readmemh(&quot;img.hex&quot;, @img)</li>
+  <li id="L28">    readmemb(&quot;img.bin&quot;, @img, 3&#39;d2, 3&#39;d5) base 16</li>
+  <li id="L29">    writememh(&quot;out.hex&quot;, @img, 3&#39;d7) base -8</li>
+  <li id="L30">  end</li>
+  <li id="L31">end</li>
+  <li id="L32"></li>
 </ol>
     </main>
   </body>

@@ -7,10 +7,6 @@
 // checks the stop bit, all at CLK_DIV clocks per bit — the rate the SoC
 // is built with. Every received line is printed with $display; the run
 // ends after the first one, or with a message if nothing arrives.
-//
-// `$finish(0)` rather than `$finish`: Reticle drops a system task written
-// without parentheses today (tests/soc.rs pins it), and IEEE 1364 treats
-// the two as the same call, so this form works everywhere.
 `timescale 1ns / 1ns
 
 module soc_tb;
@@ -58,11 +54,11 @@ module soc_tb;
                 #(BIT_TIME);
                 if (uart_tx !== 1'b1) begin
                     $display("soc_tb: framing error at %0t", $time);
-                    $finish(0);
+                    $finish;
                 end
                 if (rx_byte == 8'h0A) begin
                     $display("%s", line);
-                    $finish(0);
+                    $finish;
                 end
                 line = {line[8*63-1:0], rx_byte};
             end
@@ -72,6 +68,6 @@ module soc_tb;
     initial begin
         #(TIMEOUT);
         $display("soc_tb: timed out with nothing but \"%s\" received", line);
-        $finish(0);
+        $finish;
     end
 endmodule

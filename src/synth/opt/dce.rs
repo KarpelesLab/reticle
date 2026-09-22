@@ -130,7 +130,9 @@ impl Liveness {
             walk_block(&p.body, &mut |s| {
                 stmt_exprs(s, &mut |e| expr_work.push(e));
                 crate::ir::walk::stmt_nets(s, &mut |n| net_work.push(n));
-                if let crate::ir::StmtKind::MemWrite { mem, .. } = s.kind {
+                if let crate::ir::StmtKind::MemWrite { mem, .. }
+                | crate::ir::StmtKind::MemFile { mem, .. } = s.kind
+                {
                     mem_work.push(mem);
                 }
                 if let crate::ir::StmtKind::Assign {
@@ -265,7 +267,9 @@ pub(crate) fn map_memories(m: &mut Module, f: impl Fn(MemoryId) -> MemoryId) {
         lvalue(&mut a.target, &f);
     }
     m.for_each_stmt_mut(|s| match &mut s.kind {
-        crate::ir::StmtKind::MemWrite { mem, .. } => *mem = f(*mem),
+        crate::ir::StmtKind::MemWrite { mem, .. } | crate::ir::StmtKind::MemFile { mem, .. } => {
+            *mem = f(*mem);
+        }
         crate::ir::StmtKind::Assign { target, .. } => lvalue(target, &f),
         crate::ir::StmtKind::For { init, step, .. } => {
             for (lv, _) in init.iter_mut().chain(step.iter_mut()) {

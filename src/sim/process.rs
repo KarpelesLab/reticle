@@ -530,6 +530,17 @@ impl<'d> Simulator<'d> {
                     Flow::Suspend
                 }
             }
+            StmtKind::MemFile {
+                op,
+                mem,
+                file,
+                start,
+                end,
+                base,
+            } => {
+                self.mem_file(inst, *op, *mem, *file, *start, *end, *base, stmt.span);
+                Flow::Next
+            }
             StmtKind::MemWrite {
                 mem,
                 addr,

@@ -58,6 +58,7 @@ module tb
       sys $display("FAIL: %0d errors", %errors)
     end
     wait for 64'd100
+    finish
   end
   process initial
     block watchdog

@@ -326,6 +326,7 @@ impl<'d> Simulator<'d> {
             rng,
             time_format: super::sys::TimeFormat::for_precision(precision_fs),
             warned_calls: Vec::new(),
+            written: std::collections::BTreeMap::new(),
             assertions: Vec::new(),
             assert_watch: Vec::new(),
             assert_sample: Vec::new(),

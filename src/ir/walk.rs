@@ -83,6 +83,12 @@ pub fn stmt_exprs(stmt: &Stmt, f: &mut dyn FnMut(ExprId)) {
         StmtKind::Repeat { count, .. } => f(*count),
         StmtKind::Wait(WaitKind::Delay(e) | WaitKind::Until(e)) => f(*e),
         StmtKind::SysCall { args, .. } => args.iter().copied().for_each(f),
+        StmtKind::MemFile {
+            file, start, end, ..
+        } => {
+            f(*file);
+            start.iter().chain(end.iter()).copied().for_each(f);
+        }
         StmtKind::MemWrite {
             addr,
             value,
@@ -172,6 +178,12 @@ fn stmt_expr_slots(stmt: &mut Stmt, f: &mut dyn FnMut(&mut ExprId)) {
         StmtKind::Repeat { count, .. } => f(count),
         StmtKind::Wait(WaitKind::Delay(e) | WaitKind::Until(e)) => f(e),
         StmtKind::SysCall { args, .. } => args.iter_mut().for_each(f),
+        StmtKind::MemFile {
+            file, start, end, ..
+        } => {
+            f(file);
+            start.iter_mut().chain(end.iter_mut()).for_each(f);
+        }
         StmtKind::MemWrite {
             addr,
             value,

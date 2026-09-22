@@ -55,12 +55,16 @@ resolves the two packages, writes `reticle.lock`, elaborates the design
 and synthesises it:
 
 ```text
-note[S0014]: 1 simulation-only statement dropped (system call)
+warning[S0018]: the contents of `sw/hello.hex` could not be loaded into `rom`: synthesis was given no files
   ...
 note: built `soc`: 5 module(s) from 5 source(s)
 ```
 
-The note is the `$readmemh`; see [known gaps](#known-gaps) below.
+Synthesis turns the ROM's `$readmemh` into the memory's initial
+contents, reading the file through a provider that the library is given
+(`SynthOptions::files`); the binary does not give it one yet, so it says
+the ROM is left empty rather than building an empty ROM in silence.
+`tests/soc.rs` gives it one and checks the ROM holds the program.
 
 ## Testing
 
@@ -74,8 +78,8 @@ cargo test --all-features --test soc
 |------|---------------|
 | `hello_hex_is_the_assembled_source` | `sw/hello.hex` is `sw/hello.s` assembled |
 | `the_project_resolves_and_elaborates` | the manifest builds from exactly two library packages and `rtl/soc_top.v` |
-| `the_soc_synthesises_without_errors_or_latches` | synthesis has no error, no warning and no latch |
-| `the_line_comes_out_of_the_serial_wire` | the testbench runs, and `Hello from Reticle\n` is decoded from the waveform of `uart_tx` |
+| `the_soc_synthesises_without_errors_or_latches` | synthesis has no error, no warning and no latch, and the ROM's initial contents are `sw/hello.hex`, loaded by `$readmemh` |
+| `the_line_comes_out_of_the_serial_wire` | the testbench runs, the ROM loads through `$readmemh`, and `Hello from Reticle\n` is decoded from the waveform of `uart_tx` |
 | `the_soc_maps_onto_the_hx8k_and_exports_for_nextpnr` | the iCE40 flow flattens it, fits it on the HX8K with the program in the ROM's block RAMs, and writes `soc_top.json` and `soc_top.pcf` |
 | `reticle_build_builds_the_project` | `reticle build --synth` on the manifest |
 | `reticle_sim_cannot_run_the_testbench_yet` | what `reticle sim` does with the testbench today |
@@ -159,36 +163,21 @@ blank; the files `tests/soc.rs` writes are the ones with the program in.
 
 ## Known gaps
 
-Building this example found eight defects in Reticle. Each open one is
-reproduced in a few lines by a test at the end of `tests/soc.rs` that
-asserts the defect is still there, so fixing one fails its test and
-points back here.
+Building this example found eight defects in Reticle, each reproduced in
+a few lines by a test at the end of `tests/soc.rs`. All eight are fixed.
+Each test once asserted its defect was still there, so fixing it failed
+the test and pointed back here; they now assert the fix.
 
-| Test | The defect | What it costs this example |
-|------|------------|----------------------------|
-| `a_system_task_without_parentheses_is_dropped` | `$finish;` is lowered as an expression and silently discarded; `$finish(0);` works | the testbench says `$finish(0)` |
-| `readmemh_in_verilog_never_reaches_the_simulator` | the Verilog frontend passes `$readmemh`'s memory as a name, the simulator wants a memory read, so every call fails with "needs a memory"; `reticle sim` also gives the simulator no file access | the ROM cannot be loaded as written |
-| `synthesis_drops_the_contents_readmemh_loads` | synthesis drops `$readmemh` with a note | the synthesised ROM is empty |
-| `displaying_a_memory_word_prints_the_memory_name` | `$display("%h", mem[1])` prints the memory's name | nothing; found while chasing the `$readmemh` one |
-
-Until the `$readmemh` defects are fixed, `tests/soc.rs` puts the words of
-`sw/hello.hex` into the ROM's initial contents in the IR (`preload_rom`)
-before simulating and synthesising. That is the one step the binary
-cannot take, which is why `reticle sim` on the testbench times out today
-instead of printing the line, and why the ROM `reticle fpga` exports is
-blank while the one the library flow in `tests/soc.rs` exports is not.
-
-Four more defects it found are fixed, and their tests now assert the
-fix: block RAM carries a memory's initial contents in the INIT layout
-each family's device file states, and says so when it cannot
-(`block_ram_carries_the_contents_it_is_initialised_with`); a ROM read
-from two ports is duplicated across block RAMs like a written memory
-(`a_rom_with_two_read_ports_is_duplicated_across_block_rams`); the
-HX8K's pin list has the board's serial and flash pins and treats a pin
-it does not list as unchecked rather than wrong
-(`the_hx8k_database_knows_the_breakout_boards_uart_pins`); and the FPGA
-flow flattens the design itself, so `reticle fpga` maps a design with
-instances (`reticle_fpga_flattens_a_design_with_instances`).
+| Test | The defect, now fixed |
+|------|-----------------------|
+| `a_system_task_without_parentheses_runs` | `$finish;` was lowered as an expression and silently discarded; the testbench now says `$finish;` |
+| `readmemh_in_verilog_loads_the_memory_in_the_simulator` | the Verilog frontend passed `$readmemh`'s memory as a name, which the simulator refused; the IR now names the memory itself |
+| `synthesis_loads_the_contents_readmemh_names` | synthesis dropped `$readmemh` with a note, leaving the ROM empty; it now loads the file into the memory's initial contents |
+| `displaying_a_memory_word_prints_the_word` | `$display("%h", mem[1])` printed the memory's name |
+| `block_ram_carries_the_contents_it_is_initialised_with` | a memory mapped to `SB_RAM40_4K` got no `INIT_*` parameters, so the exported ROM was blank; it now carries its contents in the layout each family's device file states |
+| `a_rom_with_two_read_ports_is_duplicated_across_block_rams` | a read-only memory read from two ports stayed a generic cell; it is now duplicated like a written one |
+| `the_hx8k_database_knows_the_breakout_boards_uart_pins` | the HX8K's pin list had only the board's LEDs and clock; it now has the serial and flash pins and treats an unlisted pin as unchecked rather than wrong |
+| `reticle_fpga_flattens_a_design_with_instances` | the FPGA flow mapped the top module alone, so any design with an instance was refused |
 
 ## What this proves, and what it does not
 
@@ -199,8 +188,9 @@ Proved here, by `cargo test`:
   `rtl/soc_top.v` the only user HDL;
 - synthesis accepts it with no error, warning or latch;
 - the testbench, simulated, carries exactly `Hello from Reticle\n` on the
-  serial wire, decoded from the pin's waveform, with the program in the
-  ROM;
+  serial wire, decoded from the pin's waveform, with the program loaded
+  into the ROM by the design's own `$readmemh`;
+- synthesis gives the ROM that program as its initial contents;
 - the iCE40 flow maps every cell to an HX8K primitive, fits in a third of
   the part, puts the program into the ROM's block RAMs, and exports the
   JSON and PCF that `nextpnr-ice40` reads, with no problem left for
@@ -213,8 +203,5 @@ Not proved:
   where the iCE40 block RAM layout comes from is stated, with its
   confidence, in `src/fpga/devices/ice40.dev`, not checked against a
   part;
-- that `reticle sim` runs the testbench, or that `reticle fpga` exports
-  the ROM with the program in it, from the command line: both wait on
-  the `$readmemh` defects above;
 - timing: nothing here checks that the design closes at 12 MHz on the
   real part.

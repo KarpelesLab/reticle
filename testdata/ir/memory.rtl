@@ -17,9 +17,15 @@ module ram
   memory @mem 16 x u8
   memory @rom 4 x u8
     init 8'd222 8'd173 8'd190 8'd239
+  memory @img 8 x u4
   assign %rom_out = @rom[%addr[1:0]]
   process seq posedge %clk
     memwrite @mem[%addr] = %wdata enable %we
     %rdata <= @mem[%addr]
+  end
+  process initial
+    readmemh("img.hex", @img)
+    readmemb("img.bin", @img, 3'd2, 3'd5) base 16
+    writememh("out.hex", @img, 3'd7) base -8
   end
 end

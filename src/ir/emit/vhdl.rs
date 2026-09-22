@@ -1567,6 +1567,11 @@ impl<'a> Printer<'a> {
                 self.load_shadows();
             }
             StmtKind::SysCall { name, args } => self.syscall(name.as_str(), args)?,
+            StmtKind::MemFile { op, .. } => {
+                let name = op.keyword();
+                self.out
+                    .line(&format!("null; -- ${name} has no VHDL equivalent"));
+            }
             StmtKind::MemWrite {
                 mem,
                 addr,

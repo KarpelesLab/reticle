@@ -513,22 +513,22 @@ by path, an HX8K target (the core alone outgrows the HX1K), one
 top-level of user HDL with a ROM, a RAM and a memory-mapped UART, and a
 program that prints a line. `tests/soc.rs` shows it **builds** (through
 `ip::resolve` / `ip::elaborate` and `reticle build --synth`, with no
-latch), **simulates its testbench** with `Hello from Reticle\n` decoded
-from the waveform of the serial pin (through the library: `reticle sim`
-cannot load the ROM yet), and **maps** onto the HX8K (2368
+latch, and the ROM's initial contents loaded by its own `$readmemh`),
+**simulates its testbench** with `Hello from Reticle\n` decoded from the
+waveform of the serial pin (through the library, which is handed the hex
+file: the binary gives `$readmemh` no file provider yet, so `reticle sim`
+cannot load the ROM), and **maps** onto the HX8K (2368
 LUT4s, 10 block RAMs) with the JSON and PCF `nextpnr-ice40` reads
 exported. It does **not** show it running on a board, and cannot yet:
 no board is attached, Reticle's own iCE40 place and route is a synthetic
 fabric, and building the example found eight defects (each pinned in
-`tests/soc.rs`), four of which stood between it and working silicon —
-`$readmemh` from Verilog loads nothing in the simulator and is dropped
-by synthesis, block RAM was mapped without its `INIT_*` contents, and
-`reticle fpga` did not flatten. The last two are fixed (the ROM's block
-RAMs now carry the program, and `reticle fpga` maps the SoC), as are the
-HX8K pin list and ROM duplication; while the `$readmemh` ones are open
-the test preloads the ROM in the IR and runs the iCE40 flow through the
-library. Open until those are fixed and the board run has been done by
-hand.
+`tests/soc.rs`), all of which are now fixed: `$finish;`, `$readmemh`
+in the simulator and in synthesis, a memory word in `$display`, block
+RAM initial contents, ROM duplication, the HX8K pin list, and flattening
+in the FPGA flow. The system-on-chip now simulates and exports from the
+command line with its program loaded by its own `$readmemh`. Open only
+until the board run has been done by hand, which needs hardware and the
+IceStorm tools that are not on this machine.
 
 ## Phase 9: developer experience
 

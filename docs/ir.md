@@ -124,6 +124,7 @@ Edge { net, polarity: Pos | Neg | Any }
 | `Block { name, body }` | |
 | `Wait(Delay(e) \| Event(edges) \| Until(e))` | |
 | `SysCall { name, args }` | `$display` and friends, VHDL `report` |
+| `MemFile { op, mem, file, start, end, base }` | `$readmemh` `$readmemb` `$writememh` `$writememb` (`op`); names the memory by id, as no expression denotes a whole memory; `start`/`end` are zero-based element addresses, `base` is the address `@hex` lines in the file give element 0 |
 | `MemWrite { mem, addr, value, enable }` | |
 | `Assert { cond, severity: Note\|Warning\|Error\|Failure, message }` | |
 | `Finish`, `Stop`, `Break`, `Continue` | |
@@ -358,12 +359,18 @@ forever  ...  end
 block [<name>]  ...  end
 wait for <expr> | wait on posedge %clk, %a | wait until <expr>
 sys <name>(<args>)
+readmemh|readmemb|writememh|writememb(<file>, @<mem>[, <start>[, <end>]]) [base <n>]
 memwrite @<mem>[<addr>] = <expr> [enable <expr>]
 assert note|warning|error|failure <expr> [report <args>]
 finish | stop | break | continue
 ```
 
 Lvalues: `%n`, `%n[7:0]`, `%n[<expr>]`, `{<lvalue>, ...}`, `@m[<expr>]`.
+
+`base` is omitted when it is 0. The file format the memory file
+statements read and write, and their address rules, are in
+`ir::memfile`, which the simulator and synthesis share with the
+`FileProvider` trait they read files through.
 
 ### Expressions
 

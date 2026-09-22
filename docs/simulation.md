@@ -4,8 +4,10 @@
 form. It flattens a hierarchical `Design` into an instance tree and runs it
 under one scheduler that implements both the Verilog stratified event queue
 and the VHDL delta cycle. It is sans-I/O: `$display` text, VCD data and
-coverage come back as values, and `$readmemh` reads through a
-caller-supplied `FileProvider`.
+coverage come back as values, `$readmemh` / `$readmemb` read through a
+caller-supplied `FileProvider` (the one synthesis reads through too), and
+what `$writememh` / `$writememb` save comes back from
+`Simulator::written_files`.
 
 The API reference (`cargo doc --features sim`) has the per-item details; the
 module docs of `sim`, `sim::assertion`, `sim::coverage` and

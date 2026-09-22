@@ -17,9 +17,11 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
 use crate::diag::{Diagnostic, Diagnostics};
+use crate::ir::memfile::{self, FileProvider};
 use crate::ir::{
     AssignKind, BinaryOp, Block, CaseKind, CaseQualifier, CellId, CellKind, Const, ExprId,
-    ExprKind, Lvalue, MemoryId, Module, NetId, Stmt, StmtKind, Type, UnaryOp, expr::operands,
+    ExprKind, Lvalue, MemFileOp, MemoryId, Module, NetId, Stmt, StmtKind, Type, UnaryOp,
+    expr::operands,
 };
 use crate::source::Span;
 use crate::synth::PassStats;
@@ -130,6 +132,9 @@ pub(super) struct Exec<'a> {
     pub mode: Mode,
     /// Loop unrolling cap.
     pub max_unroll: u32,
+    /// Where `$readmemh` / `$readmemb` files come from; `None` when the
+    /// caller gave synthesis no files.
+    pub files: Option<&'a dyn FileProvider>,
     /// Span of the process, for objects without a better one.
     pub span: Span,
     nodes: Vec<SNode>,
@@ -187,12 +192,14 @@ impl<'a> Exec<'a> {
         mode: Mode,
         span: Span,
         max_unroll: u32,
+        files: Option<&'a dyn FileProvider>,
     ) -> Self {
         let mut exec = Exec {
             m,
             diags,
             mode,
             max_unroll,
+            files,
             span,
             nodes: Vec::new(),
             node_ids: HashMap::new(),
@@ -719,6 +726,21 @@ impl<'a> Exec<'a> {
                 self.dropped.push((span, "system call"));
                 Ok(Flow::Next)
             }
+            StmtKind::MemFile {
+                op,
+                mem,
+                file,
+                start,
+                end,
+                base,
+            } => {
+                if self.mode == Mode::Initial && op.is_read() {
+                    self.load_mem_file(*op, *mem, *file, (*start, *end), *base, span)?;
+                } else {
+                    self.dropped.push((span, "memory file task"));
+                }
+                Ok(Flow::Next)
+            }
             StmtKind::Assert { .. } => {
                 self.dropped.push((span, "assertion"));
                 Ok(Flow::Next)
@@ -746,6 +768,94 @@ impl<'a> Exec<'a> {
             StmtKind::Break => Ok(Flow::Break),
             StmtKind::Continue => Ok(Flow::Continue),
         }
+    }
+
+    /// `$readmemh` / `$readmemb` in an `initial` block: the file's words
+    /// become constant writes, which the caller turns into the memory's
+    /// initial contents like any other constant write.
+    ///
+    /// A file that cannot be had is reported, naming it, and loads
+    /// nothing: a warning (`S0018`) when synthesis was given no files at
+    /// all, an error when the provider does not have this one or its text
+    /// does not parse. The rest of the process still lowers.
+    fn load_mem_file(
+        &mut self,
+        op: MemFileOp,
+        mem: MemoryId,
+        file: ExprId,
+        (start, end): (Option<ExprId>, Option<ExprId>),
+        base: i64,
+        span: Span,
+    ) -> Result<(), Failed> {
+        let task = format!("${}", op.keyword());
+        let name = match &self.m.exprs[file].kind {
+            ExprKind::String(s) => Some(s.clone()),
+            _ => self
+                .try_const(file)
+                .and_then(|c| memfile::name_from_bits(&c)),
+        };
+        let Some(path) = name else {
+            return Err(self.error(span, format!("the file name of `{task}` is not constant")));
+        };
+        let mut bounds = [None, None];
+        for (slot, e) in bounds.iter_mut().zip([start, end]) {
+            if let Some(e) = e {
+                let Some(a) = self.try_const(e).and_then(|c| c.to_u64()) else {
+                    return Err(self.error(span, format!("an address of `{task}` is not constant")));
+                };
+                *slot = Some(a);
+            }
+        }
+        let memory = &self.m.memories[mem];
+        let mem_name = memory.name.clone();
+        let width = memory.elem.width().unwrap_or(0);
+        let size = memory.size;
+        let Some(files) = self.files else {
+            self.diags.push(
+                Diagnostic::warning(format!(
+                    "the contents of `{path}` could not be loaded into `{mem_name}`: synthesis was given no files"
+                ))
+                .with_code("S0018")
+                .with_label(span, "this load is skipped")
+                .with_note("the library reads files only through a provider (`SynthOptions::files`); without one the memory gets no initial contents from this file"),
+            );
+            return Ok(());
+        };
+        let loaded = match files.read_file(&path) {
+            None => Err(format!("`{path}` was not found")),
+            Some(text) => {
+                memfile::load(&text, op.is_hex(), width, size, bounds[0], bounds[1], base)
+                    .map_err(|e| format!("`{path}`: {e}"))
+            }
+        };
+        let loaded = match loaded {
+            Ok(l) => l,
+            Err(e) => {
+                self.diags.push(
+                    Diagnostic::error(format!(
+                        "the contents of `{path}` could not be loaded into `{mem_name}`: {e}"
+                    ))
+                    .with_code("S0018")
+                    .with_span(span),
+                );
+                return Ok(());
+            }
+        };
+        for w in loaded.warnings {
+            self.diags.push(
+                Diagnostic::warning(format!("`{path}` into `{mem_name}`: {w}"))
+                    .with_code("S0018")
+                    .with_span(span),
+            );
+        }
+        let addr_width = (64 - size.saturating_sub(1).leading_zeros()).max(1);
+        for (addr, word) in loaded.words {
+            let a = mk_const(self.m, Const::from_u64(addr, addr_width), span);
+            let d = mk_const(self.m, word, span);
+            self.mem_write(mem, a, d, None, span);
+        }
+        self.stats.bump("memory files loaded", 1);
+        Ok(())
     }
 
     fn loop_cond(&mut self, cond: ExprId, span: Span) -> Result<bool, Failed> {

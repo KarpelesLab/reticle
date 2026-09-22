@@ -42,8 +42,8 @@ use super::design::{
 };
 use super::expr::{BinaryOp, Expr, ExprId, ExprKind, UnaryOp, infer_type};
 use super::process::{
-    AssignKind, Block, CaseArm, CaseKind, CaseQualifier, Delay, Edge, Lvalue, Process, ProcessId,
-    ProcessKind, ReportSeverity, Stmt, StmtKind, WaitKind,
+    AssignKind, Block, CaseArm, CaseKind, CaseQualifier, Delay, Edge, Lvalue, MemFileOp, Process,
+    ProcessId, ProcessKind, ReportSeverity, Stmt, StmtKind, WaitKind,
 };
 use super::types::{Const, Type};
 use crate::source::Span;
@@ -706,6 +706,21 @@ impl BlockBuilder {
         self.push(StmtKind::SysCall {
             name: name.into(),
             args,
+        });
+    }
+
+    /// `$readmemh` and friends: load `mem` from the file named by `file`,
+    /// or save it there, over the whole memory. Start and end addresses
+    /// and a base go through [`BlockBuilder::push`] with a
+    /// [`StmtKind::MemFile`].
+    pub fn mem_file(&mut self, op: MemFileOp, mem: MemoryId, file: ExprId) {
+        self.push(StmtKind::MemFile {
+            op,
+            mem,
+            file,
+            start: None,
+            end: None,
+            base: 0,
         });
     }
 

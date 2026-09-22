@@ -498,6 +498,25 @@ impl<'a> Checker<'a> {
                     self.expr_exists(*arg, span);
                 }
             }
+            StmtKind::MemFile {
+                op,
+                mem,
+                file,
+                start,
+                end,
+                ..
+            } => {
+                self.expr_exists(*file, span);
+                if self.module.memories.get(*mem).is_none() {
+                    let what = op.keyword();
+                    self.error("I0003", span, format!("`{what}` of missing memory {mem}"));
+                }
+                for addr in start.iter().chain(end.iter()) {
+                    if self.expr_exists(*addr, span) {
+                        self.check_mem_addr(*mem, *addr, span);
+                    }
+                }
+            }
             StmtKind::MemWrite {
                 mem,
                 addr,

@@ -25,9 +25,10 @@ use crate::source::Span;
 use crate::verilog::ast::{self, AssignOp, Expr, ExprKind, ForInit, Stmt, StmtKind as AstStmt};
 
 use super::super::codes;
+use super::super::constant::Evaluator;
 use super::super::decls;
 use super::super::scope::Symbol;
-use super::super::types::{self, Packed};
+use super::super::types::{self, Packed, bits_needed};
 use super::super::width::{self, Info};
 use super::{Ctx, Lowerer, Sink};
 
@@ -458,8 +459,12 @@ impl<'cx, 'ast> Lowerer<'cx, 'ast> {
                 self.assign_expr(target, op, None, span, out);
             }
             ExprKind::Call { callee, args } => self.call_stmt(callee, args, span, out),
-            ExprKind::Ident(_) | ExprKind::Member { .. } | ExprKind::Scoped { .. } => {
-                // A task called without parentheses.
+            ExprKind::Ident(_)
+            | ExprKind::Member { .. }
+            | ExprKind::Scoped { .. }
+            | ExprKind::SystemIdent(_) => {
+                // A task called without parentheses: `$finish;` is the
+                // same call as `$finish();` (IEEE 1364-2005 §17.4.1).
                 self.call_stmt(e, &[], span, out);
             }
             ExprKind::Cast { expr, .. } => {
@@ -523,28 +528,9 @@ impl<'cx, 'ast> Lowerer<'cx, 'ast> {
                 out.span = span;
                 out.assert(cond, severity, msg);
             }
-            "readmemh" | "readmemb" => {
-                // The IR has no memory-valued expression, so the memory is
-                // named by a string argument.
-                let mut ids = Vec::new();
-                for (i, a) in args.iter().enumerate() {
-                    let Some(v) = &a.value else { continue };
-                    if i == 1
-                        && let Some(Symbol::Memory { .. }) =
-                            self.env.probe(|env| env.resolve_path(v))
-                        && let Some(path) = super::path_components(v)
-                    {
-                        self.b.span = v.span;
-                        let name = self.env.qualified(&path.join("."));
-                        let id = self.b.string(name);
-                        ids.push(id);
-                        continue;
-                    }
-                    let id = self.expr(v, None, &mut Sink::Proc(out));
-                    ids.push(id);
-                }
-                out.span = span;
-                out.syscall(format!("${name}"), ids);
+            "readmemh" | "readmemb" | "writememh" | "writememb" => {
+                let op = ir::MemFileOp::from_keyword(name).expect("one of the four tasks");
+                self.mem_file_task(op, args, span, out);
             }
             _ => {
                 let ids = self.syscall_args(args, out);
@@ -554,11 +540,92 @@ impl<'cx, 'ast> Lowerer<'cx, 'ast> {
         }
     }
 
+    /// `$readmemh(file, mem [, start [, end]])` and its three siblings,
+    /// as a [`StmtKind::MemFile`] that names the memory itself.
+    ///
+    /// The start and end addresses are translated into the IR's
+    /// zero-based numbering like any index; the memory's declared lowest
+    /// index becomes the statement's `base`, which is what `@hex` lines in
+    /// the file are measured against.
+    fn mem_file_task(
+        &mut self,
+        op: ir::MemFileOp,
+        args: &'ast [ast::Arg],
+        span: Span,
+        out: &mut BlockBuilder,
+    ) {
+        let task = format!("${}", op.keyword());
+        let values: Vec<Option<&'ast Expr>> = args.iter().map(|a| a.value.as_ref()).collect();
+        let usage = "a file name, a memory, and optionally a start and an end address";
+        let (Some(Some(file)), Some(Some(target))) = (values.first(), values.get(1)) else {
+            self.env
+                .error(codes::ARGUMENTS, span, format!("`{task}` takes {usage}"));
+            return;
+        };
+        if values.len() > 4 || (values.len() == 4 && values[2].is_none()) {
+            self.env
+                .error(codes::ARGUMENTS, span, format!("`{task}` takes {usage}"));
+            return;
+        }
+        let mem = match self.env.probe(|env| env.resolve_path(target)) {
+            Some(Symbol::Memory { mem, .. }) if !matches!(target.kind, ExprKind::Index { .. }) => {
+                mem
+            }
+            _ => {
+                self.env.error(
+                    codes::TYPE,
+                    target.span,
+                    format!("the second argument of `{task}` must be a memory (an unpacked array)"),
+                );
+                return;
+            }
+        };
+        let file = self.expr(file, None, &mut Sink::Proc(out));
+        let range = self.mems[mem.index()].range;
+        let size = self.b.module().memories[mem].size;
+        let mut bounds = [None, None];
+        for (slot, v) in bounds.iter_mut().zip(values.iter().skip(2)) {
+            let Some(v) = v else { continue };
+            let constant = self.env.probe(|env| Evaluator::new(env).eval_i64(v).ok());
+            *slot = Some(match constant {
+                // The usual case, folded so the IR shows the element.
+                Some(i) => match range.element_offset(i) {
+                    Some(offset) => {
+                        self.b.span = v.span;
+                        self.b
+                            .const_u64(bits_needed(size.saturating_sub(1)).max(1), offset)
+                    }
+                    None => {
+                        self.env.error(
+                            codes::OUT_OF_RANGE,
+                            v.span,
+                            format!("address {i} is outside {range}"),
+                        );
+                        return;
+                    }
+                },
+                None => self.mem_address(mem, v, &mut Sink::Proc(out)),
+            });
+        }
+        let [start, end] = bounds;
+        let base = range.low();
+        out.span = span;
+        out.push(StmtKind::MemFile {
+            op,
+            mem,
+            file,
+            start,
+            end,
+            base,
+        });
+    }
+
     /// Lowers the arguments of a system task.
     ///
-    /// An argument that names a scope, an instance or an array rather than
-    /// a value (`$dumpvars(0, tb)`, `$readmemh(f, mem)`) becomes a string
-    /// holding its name, since the IR has no expression for those.
+    /// An argument that names a scope, an instance or a whole array rather
+    /// than a value (`$dumpvars(0, tb)`) becomes a string holding its
+    /// name, since the IR has no expression for those. An element of an
+    /// array (`mem[1]`) is a value like any other.
     fn syscall_args(&mut self, args: &'ast [ast::Arg], out: &mut BlockBuilder) -> Vec<ExprId> {
         let mut ids = Vec::new();
         for a in args {
@@ -580,6 +647,9 @@ impl<'cx, 'ast> Lowerer<'cx, 'ast> {
     fn scope_argument(&mut self, e: &'ast Expr) -> Option<String> {
         let sym = self.env.probe(|env| env.resolve_path(e))?;
         let qualified = match sym {
+            // Name resolution sees through a select to what is selected
+            // from, so `mem[1]` resolves to `mem`; the word is meant.
+            Symbol::Memory { .. } if matches!(e.kind, ExprKind::Index { .. }) => return None,
             Symbol::Memory { mem, .. } => {
                 return Some(self.b.module().memories[mem].name.to_string());
             }

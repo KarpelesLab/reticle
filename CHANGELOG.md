@@ -43,3 +43,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   shared between the analyser's constant folding and the elaborator's
   lowering to IR operators. A design using `unsigned` or `signed`
   arithmetic now analyses, elaborates and simulates.
+
+### Fixed
+
+- Verilog `$readmemh`, `$readmemb`, `$writememh` and `$writememb`, with
+  their optional start and end addresses. The IR has a statement for
+  them, `StmtKind::MemFile`, that names the memory itself; the Verilog
+  frontend used to pass the memory as a string, which the simulator
+  refused, so no `$readmemh` written in Verilog loaded anything. The
+  simulator now loads through its `FileProvider` and hands saved files
+  back through `Simulator::written_files`; synthesis reads an
+  `initial` block's `$readmemh` through the same trait, given in the new
+  `SynthOptions::files`, into the memory's initial contents, and says
+  which file it could not load (`S0018`) instead of dropping the call.
+  The trait and `MemoryFiles` moved to `ir::memfile` and are still
+  re-exported from `sim`.
+- Verilog: a system task written without parentheses (`$finish;`,
+  `$stop;`, `$display;`) is the same call as its parenthesised form; it
+  used to be dropped without a word.
+- Verilog: a memory element in a `$display`-family argument
+  (`$display("%h", mem[1])`) prints the word, not the memory's name.

@@ -56,6 +56,13 @@
 //! `.rtl` text format described in [`text`] and in `docs/ir.md`. It
 //! round-trips exactly and is what golden tests compare.
 //!
+//! # Memory files
+//!
+//! [`StmtKind::MemFile`] is `$readmemh` and its siblings; [`memfile`] has
+//! the file format, the address rules and the [`memfile::FileProvider`]
+//! trait through which the simulator and synthesis read files without
+//! the library doing I/O.
+//!
 //! # Emitters
 //!
 //! [`emit`] renders a design as Verilog, VHDL, Yosys JSON, BLIF or EDIF
@@ -86,6 +93,7 @@ pub mod design;
 pub mod emit;
 pub mod expr;
 pub mod hier;
+pub mod memfile;
 pub mod process;
 pub mod text;
 pub mod types;
@@ -102,8 +110,8 @@ pub use design::{
 pub use expr::{BinaryOp, Expr, ExprId, ExprKind, TypeError, UnaryOp, infer_type};
 pub use hier::{DedupReport, FlattenOptions, FlattenReport, UniquifyReport};
 pub use process::{
-    AssignKind, Block, CaseArm, CaseKind, CaseQualifier, Delay, Edge, Lvalue, Polarity, Process,
-    ProcessId, ProcessKind, ReportSeverity, Stmt, StmtKind, TimeUnit, Timescale, WaitKind,
+    AssignKind, Block, CaseArm, CaseKind, CaseQualifier, Delay, Edge, Lvalue, MemFileOp, Polarity,
+    Process, ProcessId, ProcessKind, ReportSeverity, Stmt, StmtKind, TimeUnit, Timescale, WaitKind,
 };
 pub use types::{Bit, Const, Type};
 
