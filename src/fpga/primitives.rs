@@ -667,10 +667,21 @@ impl Mapper<'_> {
         let shape = &self.device.block_rams[shape_index];
         let Some((read_slots, write_slots)) = allocate_ports(shape, reads.len(), writes.len())
         else {
-            let readable = shape.port_map.iter().filter(|p| p.role.reads()).count();
-            let writable = shape.port_map.iter().filter(|p| p.role.writes()).count();
+            // A port serves one access, read or write, so the constraint
+            // is the total, not the read and write counts separately.
+            // Reporting those separately produced a message where both
+            // halves looked satisfiable: a 2-read, 1-write register file
+            // against a shape with 2 readable and 2 writable ports reads
+            // as though it fits, when in fact it wants three ports.
+            let usable = shape
+                .port_map
+                .iter()
+                .filter(|p| !p.signals.is_empty())
+                .count();
+            let wanted = reads.len() + writes.len();
             let reason = format!(
-                "`{}` has {readable} read and {writable} write port(s), the memory needs {} and {}",
+                "`{}` has {usable} port(s) and each serves either a read or a write, \
+                 but the memory needs {wanted} ({} read, {} write)",
                 shape.name,
                 reads.len(),
                 writes.len()
@@ -2064,10 +2075,19 @@ mod tests {
             &mut diags,
         );
         assert!(report.block_rams.is_empty());
+        // The reason names the constraint that applies: a port serves one
+        // access, so two reads and a write want three of them.
         assert!(
             report.bram_fallbacks[0]
                 .reason
-                .contains("1 read and 1 write port(s)"),
+                .contains("each serves either a read or a write"),
+            "{:?}",
+            report.bram_fallbacks
+        );
+        assert!(
+            report.bram_fallbacks[0]
+                .reason
+                .contains("needs 3 (2 read, 1 write)"),
             "{:?}",
             report.bram_fallbacks
         );

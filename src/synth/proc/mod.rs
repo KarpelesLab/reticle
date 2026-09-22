@@ -177,6 +177,11 @@ struct FfPlan {
     en: En,
     d: ExprId,
     span: Span,
+    /// The process has asynchronous controls but this net is not assigned
+    /// a constant under one of them. Whether that deserves a warning is
+    /// only known once the net turns out to be a flip-flop, so the
+    /// decision is carried here rather than reported on the spot.
+    unreset: bool,
 }
 
 impl Ctx<'_> {
@@ -445,12 +450,20 @@ impl Ctx<'_> {
             }
         };
         let mut exec = self.exec(process, Mode::Seq)?;
+        // Only a net the process assigns non-blockingly is meant to be a
+        // register. A blocking assignment inside a clocked block is a
+        // temporary, computed and consumed within the cycle, and an
+        // inlined Verilog function leaves one per local and per argument:
+        // warning that those have no asynchronous reset is noise about
+        // something that is not a register.
+        let intended_registers: std::collections::BTreeSet<NetId> =
+            exec.nba.keys().copied().collect();
         let values = Self::final_values(&mut exec, span)?;
         let mut plans = Vec::new();
         for (net, sid) in values {
             Self::check_driver(&mut exec, net, span)?;
             let assigned_at = exec.assigned_spans.get(&net).copied().unwrap_or(span);
-            let (reset, rest) = split_reset(&mut exec, sid, net, resets, assigned_at);
+            let (reset, rest, unreset) = split_reset(&mut exec, sid, net, resets, assigned_at);
             let (en, d) = exec.extract(rest, net);
             let d = match d {
                 Some(d) => exec.lower(d, net, assigned_at),
@@ -462,6 +475,7 @@ impl Ctx<'_> {
                 en,
                 d,
                 span: assigned_at,
+                unreset: unreset && intended_registers.contains(&net),
             });
         }
         // Count how often each read-port data net is used, to decide which
@@ -524,6 +538,22 @@ impl Ctx<'_> {
                 inputs.push(("rst", rst));
                 r
             });
+            // Now that the net is certainly a flip-flop, a missing
+            // asynchronous reset is worth saying. Reporting it earlier
+            // warned about process temporaries, such as the locals an
+            // inlined Verilog function leaves behind, which never become
+            // registers at all.
+            if plan.unreset {
+                let name = self.m.nets[plan.net].name.clone();
+                self.diags.push(
+                    Diagnostic::warning(format!(
+                        "`{name}` is assigned in a process with asynchronous controls but not as a constant under one of them; no asynchronous reset inferred"
+                    ))
+                    .with_code("S0013")
+                    .with_span(plan.span)
+                    .with_note("the register only reacts to the clock; check the reset branch"),
+                );
+            }
             let name = format!("{}$ff", self.m.nets[plan.net].name);
             add_cell(
                 self.m,
@@ -619,28 +649,19 @@ fn split_reset(
     net: NetId,
     resets: &[Edge],
     span: Span,
-) -> (Option<(Reset, ExprId)>, SId) {
+) -> (Option<(Reset, ExprId)>, SId, bool) {
     let exec::SNode::Mux { cond, then_, else_ } = exec.get(sid).clone() else {
-        if !resets.is_empty() {
-            warn_no_async(exec, net, span);
-        }
-        return (None, sid);
+        return (None, sid, !resets.is_empty());
     };
     let exec::SNode::Expr(value) = exec.get(then_).clone() else {
-        if !resets.is_empty() {
-            warn_no_async(exec, net, span);
-        }
-        return (None, sid);
+        return (None, sid, !resets.is_empty());
     };
     let Some(value) = exec.m.expr(value).as_const().cloned() else {
-        if !resets.is_empty() {
-            warn_no_async(exec, net, span);
-        }
-        return (None, sid);
+        return (None, sid, !resets.is_empty());
     };
     let width = exec.net_type(net).width().unwrap_or(0);
     if value.width() != width {
-        return (None, sid);
+        return (None, sid, false);
     }
     let (rst, active_high) = reset_polarity(exec, cond);
     let rst_net = exec.m.expr(rst).as_net();
@@ -665,13 +686,12 @@ fn split_reset(
                 true
             }
         }
-        None => {
-            if !resets.is_empty() {
-                warn_no_async(exec, net, span);
-            }
-            false
-        }
+        None => false,
     };
+    // A reset branch was found, so nothing is missing even when the tested
+    // net is not one of the process's asynchronous controls: that is an
+    // ordinary synchronous reset.
+    let unreset = false;
     (
         Some((
             Reset {
@@ -682,19 +702,8 @@ fn split_reset(
             rst,
         )),
         else_,
+        unreset,
     )
-}
-
-fn warn_no_async(exec: &mut Exec<'_>, net: NetId, span: Span) {
-    let name = exec.m.nets[net].name.clone();
-    exec.diags.push(
-        Diagnostic::warning(format!(
-            "`{name}` is assigned in a process with asynchronous controls but not as a constant under one of them; no asynchronous reset inferred"
-        ))
-        .with_code("S0013")
-        .with_span(span)
-        .with_note("the register only reacts to the clock; check the reset branch"),
-    );
 }
 
 /// Writes `data` at `addr` of a memory's initial contents.
@@ -1014,6 +1023,54 @@ mod tests {
         assert!(
             t.contains("cell r$ff dff pos en (clk=%clk, d=%d, en=not(%rst))"),
             "{t}"
+        );
+    }
+
+    /// A blocking assignment inside a clocked block is a temporary, not a
+    /// register, so it must not be warned about for lacking an
+    /// asynchronous reset. Inlining a Verilog function leaves one such
+    /// temporary per local and per argument, which made the warning fire
+    /// for names the user never declared.
+    #[test]
+    fn blocking_temporaries_are_not_unreset_registers() {
+        let mut b = ModuleBuilder::new("tmp", span());
+        let clk = b.input("clk", Type::bit());
+        let rst = b.input("rst", Type::bit());
+        let d = b.input("d", Type::bits(8));
+        let q = b.output_reg("q", Type::bits(8));
+        // A process-local temporary, blocking-assigned then read.
+        let t = b.add_reg("t", Type::bits(8));
+        let (rstv, dv) = (b.net(rst), b.net(d));
+        let one = b.const_u64(8, 1);
+        let zero = b.const_u64(8, 0);
+
+        let mut p = b.process(
+            Some("seq"),
+            ProcessKind::Sequential {
+                clocks: vec![Edge::pos(clk)],
+                resets: vec![Edge::pos(rst)],
+            },
+        );
+        let mut reset = b.block();
+        reset.nonblocking(q, zero);
+        let mut run = b.block();
+        run.blocking(t, dv);
+        let tv = b.net(t);
+        let sum = b.add(tv, one);
+        run.nonblocking(q, sum);
+        p.if_(rstv, reset.finish(), run.finish());
+        b.end_process(p);
+
+        let mut m = b.finish();
+        let (_, diags) = lower(&mut m);
+        let warnings: Vec<&str> = diags
+            .iter()
+            .filter(|d| d.code == Some("S0013"))
+            .map(|d| d.message.as_str())
+            .collect();
+        assert!(
+            warnings.is_empty(),
+            "warned about a blocking temporary: {warnings:?}"
         );
     }
 

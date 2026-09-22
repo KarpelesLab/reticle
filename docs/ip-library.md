@@ -332,12 +332,13 @@ exactly what this table is for.
 | `spiflash_xip` | `spiflash_xip` | CLK_DIV=2, READ_CMD=8'h03, DUMMY_CYCLES=0 | ECP5 45F | 1 x DCCA, 177 x LUT4, 108 x TRELLIS_FF, 140 x TRELLIS_IO | 4 |
 <!-- end footprints -->
 
-### Four things the table shows about the toolchain
+### Four things writing these blocks found
 
-All four are gaps in Reticle itself rather than in the blocks, and each
-is pinned down by a test so that fixing one fails the test that
-describes it. Two of them were found by the original eleven blocks; the
-other two by writing the three larger ones.
+All four were gaps in Reticle itself rather than in the blocks, and each
+is pinned down by a test. Two were found by the original eleven blocks
+and two by writing the three larger ones. **Two have since been fixed**,
+and their tests now hold the fix rather than the gap; the other two
+remain open.
 
 **iCE40 flip-flops refuse an active-low reset.** Every block resets on
 `negedge rst_n`, which is the convention the rest of this repository's IP
@@ -361,48 +362,50 @@ whose 128 bits fall under the 256-bit threshold; the 256 x 8 RAMs above
 it map to `SB_RAM40_4K` and `DP16KD` cleanly.
 `small_memories_are_left_generic_after_the_fpga_flow` holds that one.
 
-**A function call inside an asynchronously reset process warns about the
-function's own locals.** Writing a CRC step, a decode table or a sign
-extension as a Verilog `function` is the readable way to do it, and
-calling one from inside `always @(posedge clk or negedge rst_n)` makes
+**A function call inside an asynchronously reset process warned about
+the function's own locals. Fixed.** Writing a CRC step, a decode table or
+a sign extension as a Verilog `function` is the readable way to do it,
+and calling one from inside `always @(posedge clk or negedge rst_n)` made
 flip-flop inference report every argument and every local of that
-function as a register that failed to get an asynchronous reset —
-`S0013`, once per name. The netlist is correct: `proc_lower` inlines the
-call into pure combinational logic and says so in its own log ("regs to
-wires"), and the cells that come out are exactly the ones the function
-computes. It is the diagnostic that is wrong, and it is enough to stop a
-block passing `blocks_synthesise_cleanly`, which insists on no warning
-at all.
+function as a register that failed to get an asynchronous reset,
+`S0013`, once per name. The netlist was always correct, since the call is
+inlined into pure combinational logic; the diagnostic was wrong, and it
+was enough to stop a block passing `blocks_synthesise_cleanly`, which
+insists on no warning at all.
 
-`eth_mac_rmii` works around it by calling `crc_step` from a continuous
-assignment and using the resulting wire inside the process, which costs
-nothing and is silent. `function_locals_are_reported_as_unreset_registers`
-holds an eighteen-line reproduction, and checks both that the warning is
-still there and that the netlist beside it is right.
+The fix is to warn only about nets the process assigns non-blockingly. A
+blocking assignment inside a clocked block is a temporary, computed and
+consumed within the cycle, and needs no reset; an inlined function leaves
+one per local and per argument.
+`function_locals_are_not_reported_as_unreset_registers` holds an
+eighteen-line reproduction and now checks the warning is absent.
 
-**A register file with two read ports is declined with a reason that
-reads like an acceptance.** `rv32i` keeps x1..x31 in one array with two
-read ports and one write port. On the ECP5 the block RAM mapper turns it
-down with
+**A register file with two read ports was declined with a reason that
+read like an acceptance. The reason is fixed; the mapping gap remains.**
+`rv32i` keeps x1..x31 in one array with two read ports and one write
+port. On the ECP5 the block RAM mapper turned it down with
 
 ```text
 `DP16KD` has 2 read and 2 write port(s), the memory needs 2 and 1
 ```
 
 Every comparison in that sentence holds — two reads wanted and two
-available, one write wanted and two available — and yet it is a refusal.
-The constraint the sentence leaves out is that a `DP16KD` port is
-*either* a read or a write, so two reads and a write want three ports and
-the device has two. The decision is right; the explanation cannot be
-acted on.
+available, one write wanted and two available — and yet it was a refusal,
+because the constraint it left out is that a `DP16KD` port is *either* a
+read or a write. The decision was right; the explanation could not be
+acted on. It now names the constraint that applies:
 
-The mapping a real flow applies here is duplication: two block RAMs
-holding the same contents, each with one read port and one write port,
-both written together. That is not done either, so the register file
-shows up in the table as `memory 32x32, 2 x memrd, memwr` on every
-target.
-`a_two_read_port_register_file_is_declined_with_a_contradictory_reason`
-holds both halves.
+```text
+`DP16KD` has 2 port(s) and each serves either a read or a write,
+but the memory needs 3 (2 read, 1 write)
+```
+
+What remains is the mapping a real flow would apply here: duplication,
+two block RAMs holding the same contents, each with one read port and one
+write port, both written together. That is not done, so the register file
+still shows up in the table as `memory 32x32, 2 x memrd, memwr` on every
+target. `a_two_read_port_register_file_is_declined_for_a_stated_reason`
+holds the wording and that remaining gap.
 
 ## What is not here yet
 

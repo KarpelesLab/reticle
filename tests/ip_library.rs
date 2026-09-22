@@ -38,8 +38,8 @@
 //! Four tests here describe gaps in Reticle rather than in the blocks:
 //! `ice40_flip_flops_still_refuse_an_active_low_reset`,
 //! `small_memories_are_left_generic_after_the_fpga_flow`,
-//! `function_locals_are_reported_as_unreset_registers` and
-//! `a_two_read_port_register_file_is_declined_with_a_contradictory_reason`.
+//! `function_locals_are_not_reported_as_unreset_registers` and
+//! `a_two_read_port_register_file_is_declined_for_a_stated_reason`.
 //! Each asserts that the gap is *still there*, so closing one fails the
 //! test that names it and points at the paragraph in
 //! `docs/ip-library.md` to delete. Writing real HDL is how they were
@@ -3827,22 +3827,21 @@ fn design_of_text(name: &str, text: &str) -> Design {
 const FUNCTION_LOCAL_GAP: &str = "S0013";
 
 /// Calling a Verilog function from a process with an asynchronous reset
-/// reports the function's own locals as registers that failed to get one.
+/// must not report the function's own locals as registers that failed to
+/// get one.
 ///
-/// The netlist is right — the call is inlined into pure combinational
-/// logic, and `proc_lower` says so itself by turning the locals into
-/// wires — but flip-flop inference looks at them first and complains
-/// about every argument and every local of the function. A block that
-/// wants a function, which is the readable way to write a CRC step or a
-/// decode table, then cannot be synthesised without a warning, and
-/// `blocks_synthesise_cleanly` above insists on none.
+/// It used to. The netlist was always right — the call is inlined into
+/// pure combinational logic — but flip-flop inference looked at every
+/// argument and every local of the function and complained about each,
+/// so a block that wanted a function, which is the readable way to write
+/// a CRC step or a decode table, could not be synthesised without a
+/// warning, and `blocks_synthesise_cleanly` above insists on none.
 ///
-/// `eth_mac_rmii` works around it by calling `crc_step` from a continuous
-/// assignment and using the wire inside the process. This test holds the
-/// statement so that the day the pass stops counting function locals as
-/// state, it fails and says which workaround to unwind.
+/// The fix was to warn only about nets the process assigns
+/// non-blockingly, since a blocking assignment inside a clocked block is
+/// a temporary and needs no reset. This test holds that fix.
 #[test]
-fn function_locals_are_reported_as_unreset_registers() {
+fn function_locals_are_not_reported_as_unreset_registers() {
     const REPRO: &str = "\
 module fnwarn (
     input  wire       clk,
@@ -3873,10 +3872,8 @@ endmodule
         .map(|d| d.message.as_str())
         .collect();
     assert!(
-        !complaints.is_empty(),
-        "a function call in an asynchronously reset process no longer warns: \
-         drop the `crc_step` wires in ip/eth_mac_rmii/rtl/eth_mac_rmii.v and \
-         refresh docs/ip-library.md"
+        complaints.is_empty(),
+        "a function call in an asynchronously reset process warns again: {complaints:?}"
     );
     for message in &complaints {
         assert!(
@@ -3950,23 +3947,22 @@ const BRAM_SHAPE_GAP: &str = "F0300";
 /// ECP5 that is turned down with
 ///
 /// ```text
-/// `DP16KD` has 2 read and 2 write port(s), the memory needs 2 and 1
+/// `DP16KD` has 2 port(s) and each serves either a read or a write,
+/// but the memory needs 3 (2 read, 1 write)
 /// ```
 ///
-/// Both of those comparisons hold: two reads are wanted and two are
-/// available, one write is wanted and two are available. The real
-/// constraint is the one the sentence does not say — a `DP16KD` port is
-/// *either* a read or a write, so two reads and a write want three ports
-/// and the device has two. The mapping decision is right; the sentence
-/// explaining it is not, and a user reading it has no way to work out
-/// what to change.
+/// That sentence used to report the readable and writable port counts
+/// separately, which both looked satisfiable and left the reader with
+/// nothing to act on. The decision was always right; only the
+/// explanation was wrong, and it now names the constraint that applies.
 ///
-/// The fix a real flow applies is to duplicate the memory: two block
-/// RAMs holding the same contents, each with one read and one write port,
-/// both written together. That is not done here either, so the register
-/// file stays generic in the footprint table.
+/// What remains is the fix a real flow would apply: duplicate the
+/// memory into two block RAMs holding the same contents, each with one
+/// read and one write port, written together. That is not done, so the
+/// register file still stays generic in the footprint table, and this
+/// test holds that gap.
 #[test]
-fn a_two_read_port_register_file_is_declined_with_a_contradictory_reason() {
+fn a_two_read_port_register_file_is_declined_for_a_stated_reason() {
     let variant = VARIANTS
         .iter()
         .find(|v| v.package == "rv32i")
@@ -3991,9 +3987,15 @@ fn a_two_read_port_register_file_is_declined_with_a_contradictory_reason() {
         .find(|f| f.memory.as_str() == "regs")
         .map(|f| f.reason.clone())
         .expect("the register file falls back");
+    // The reason now states the constraint that actually applies: a port
+    // serves one access, so a 2-read, 1-write file wants three of them.
     assert!(
-        reason.contains("2 read and 2 write port(s)") && reason.contains("needs 2 and 1"),
+        reason.contains("each serves either a read or a write"),
         "the reason has changed: {reason}"
+    );
+    assert!(
+        reason.contains("needs 3 (2 read, 1 write)"),
+        "the reason should name the total it needs: {reason}"
     );
     assert!(
         diags.iter().any(|d| d.code == Some(BRAM_SHAPE_GAP)),

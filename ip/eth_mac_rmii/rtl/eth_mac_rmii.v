@@ -117,10 +117,8 @@ module eth_mac_rmii #(
     // One bit of the reflected CRC-32, in transmission order.
     //
     // Called from continuous assignments rather than from inside the
-    // clocked blocks: a function call in a process with an asynchronous
-    // reset makes this compiler report its locals as unreset registers
-    // (see `function_locals_are_reported_as_unreset_registers` in
-    // `tests/ip_library.rs`), and a wire sidesteps it at no cost.
+    // clocked blocks. Either spelling synthesises to the same logic; the
+    // wire form keeps the folding visible next to the state that uses it.
     function [31:0] crc_step;
         input [31:0] crc;
         input        b;
