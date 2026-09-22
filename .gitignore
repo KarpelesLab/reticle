@@ -1,0 +1,8 @@
+/target
+**/*.rs.bk
+*.pdb
+.*.swp
+# Cargo.lock is committed: reticle ships a binary, so reproducible builds matter.
+
+# Claude Code session/worktree state
+.claude/

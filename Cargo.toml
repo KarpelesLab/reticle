@@ -1,0 +1,90 @@
+[package]
+name = "reticle"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.89"
+description = "A from-scratch VHDL / Verilog compiler in pure Rust: frontends, a unified IR, simulation, synthesis and FPGA/ASIC backends, with first-class IP integration."
+repository = "https://github.com/KarpelesLab/reticle"
+license = "MIT"
+keywords = ["vhdl", "verilog", "fpga", "hdl", "synthesis"]
+categories = ["compilers", "hardware-support", "simulation", "development-tools"]
+# Keep the published .crate small: CI config and large test corpora stay out.
+exclude = [
+    ".github",
+    "testdata/corpus",
+]
+
+[package.metadata.docs.rs]
+all-features = true
+
+[lib]
+name = "reticle"
+
+[features]
+# Every stage is a feature so a consumer (or a WebAssembly playground) can
+# compile in only what it needs: a lint-only build wants a frontend and no
+# synthesis, a simulator-only build wants no technology mapping, and so on.
+# The dependency arrows below mirror the pipeline in ROADMAP.md.
+default = ["verilog", "vhdl", "sim", "synth", "cli"]
+
+# --- frontends: source text -> AST -> elaborated design -> IR ---
+# Verilog-2005 plus the synthesisable SystemVerilog subset (IEEE 1800).
+verilog = []
+# VHDL-2008 (IEEE 1076), with VHDL-93 compatibility.
+vhdl = []
+
+# --- middle: passes over the unified IR ---
+# Event-driven 4-state simulator, waveform dumps (VCD/FST), co-simulation API.
+sim = []
+# Technology-independent synthesis: process lowering, FSM/memory/FF inference,
+# logic optimisation, plus generic LUT and cell mapping.
+synth = []
+
+# --- backends & targets (land as they are implemented, see ROADMAP.md) ---
+# FPGA device databases, bitstream-oriented flows and vendor interop.
+fpga = ["synth"]
+# Liberty / LEF / DEF handling and standard-cell mapping.
+asic = ["synth"]
+
+# --- verification & tooling ---
+# Formal: bounded model checking and equivalence checking over the IR, built
+# on an in-crate SAT solver.
+formal = []
+# Language server (LSP) over the frontends.
+lsp = []
+
+# The `reticle` command-line tool (gates the binary target below).
+cli = []
+
+# --- dependencies ---
+# Reticle is written from scratch and ships no foreign code: hand-written
+# lexers/parsers, an in-house IR, simulator, SAT solver and file-format codecs.
+# The CLI parses its own arguments. This keeps the whole toolchain auditable,
+# trivially cross-compilable (including to WebAssembly), and free of version
+# churn from upstream crates. Any exception must be a sibling Karpeles Lab
+# crate and must be justified here, as purecrypto does for `compcol`.
+[dependencies]
+
+[dev-dependencies]
+
+[[bin]]
+name = "reticle"
+path = "src/bin/reticle/main.rs"
+required-features = ["cli"]
+
+[lints.rust]
+missing_docs = "warn"
+unreachable_pub = "warn"
+# A compiler has no business touching raw memory. Forbid, not deny: there is
+# no anticipated module that would need to opt back in.
+unsafe_code = "forbid"
+
+[lints.clippy]
+# Hardware descriptions are full of bit widths and shift amounts; make lossy
+# integer conversions explicit so a `u64 as u32` on a width is never silent.
+cast_possible_truncation = "warn"
+cast_sign_loss = "warn"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1

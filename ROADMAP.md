@@ -1,0 +1,351 @@
+# Reticle roadmap
+
+Reticle is a VHDL / Verilog compiler written from scratch in Rust. The end
+goal is one self-contained toolchain that takes a hardware design from source
+text to a simulated, verified, synthesised and placed result, on FPGA or ASIC,
+without depending on any external EDA program for the parts that matter.
+
+This file is the plan. It is ordered by dependency, not by importance:
+nothing in phase N is started before the parts of phase N-1 it relies on are
+usable. Each phase lists what "done" means so progress is measurable.
+
+The design principles that shape every phase:
+
+- **One IR.** Both languages lower to the same intermediate representation,
+  and every pass after elaboration (simulation, synthesis, formal, emission)
+  works on that IR only. Mixed-language designs are therefore free.
+- **Precise diagnostics.** Every IR object carries a span back to source.
+  Errors say which line, which signal, and why, the way rustc does, not the
+  way vendor tools do.
+- **No foreign code.** Hand-written lexers, parsers, simulator, SAT solver
+  and file codecs. This keeps the crate auditable and portable (including
+  to WebAssembly for a browser playground).
+- **Library first.** The CLI is a thin wrapper. Everything is reachable from
+  Rust so testbenches, generators and build scripts can be written in Rust
+  against the crate directly.
+- **Sans-I/O core.** The compiler never touches the filesystem itself; a
+  `SourceMap` is handed in and artefacts are returned as values. The CLI does
+  the I/O.
+
+## Pipeline overview
+
+```
+  .v / .sv          .vhd
+     │                │
+  verilog::lex     vhdl::lex        (preprocessor, tokens, spans)
+  verilog::parse   vhdl::parse      (AST, per language)
+     │                │
+  verilog::elab    vhdl::elab       (name resolution, types, params/generics,
+     │                │              generate, constant evaluation)
+     └───────┬────────┘
+             ▼
+        ir  (hierarchical netlist + processes, 4-state aware)
+             │
+   ┌─────────┼──────────────┬──────────────┐
+   ▼         ▼              ▼              ▼
+  sim      synth          formal         emit
+ (events, (proc lowering, (BMC, equiv,  (Verilog, VHDL,
+  VCD,     opt, FSM/mem    SAT)          JSON, EDIF, BLIF)
+  cosim)   inference,
+           tech map)
+             │
+      ┌──────┴──────┐
+      ▼             ▼
+    fpga          asic
+  (device DB,   (Liberty, LEF/DEF,
+   placement,    cell mapping,
+   routing,      STA, SDC)
+   bitstream
+   interop)
+```
+
+## Phase 0: foundations
+
+The plumbing every later phase relies on. Small, boring, and worth getting
+right first because every diagnostic and every test goes through it.
+
+- [x] Crate skeleton, feature gates, lints, CI (fmt / clippy / test on
+      Linux, macOS, Windows).
+- [x] `source`: `SourceMap`, `SourceId`, `Span`, line/column lookup.
+- [x] `diag`: diagnostics with severity, primary and secondary labels, notes,
+      and a plain-text renderer with source excerpts. Sorted, deterministic
+      output so tests can snapshot it.
+- [ ] Interner for identifiers (`Symbol`), since HDL designs repeat the same
+      names tens of thousands of times.
+- [ ] `Logic` value type: 4-state (`0 1 X Z`) bit vectors with arbitrary
+      width, plus the 9-state `std_logic` encoding for VHDL (`U X 0 1 Z W L
+      H -`) and the resolution functions between them. Fast paths for 2-state.
+- [ ] Test harness: golden-file tests under `testdata/` (`input.v` +
+      `expected.diag` or `expected.ir`) driven by one integration test.
+- [x] CLI skeleton: `reticle <subcommand>`, `--help`, `--version`, exit codes.
+
+Done when: an unknown-file error from the CLI prints a rustc-style message
+with a source excerpt, and the golden-test runner passes on an empty corpus.
+
+## Phase 1: Verilog frontend
+
+Verilog first because its grammar is smaller and the synthesisable subset is
+very well defined, which makes it the fastest route to a working end-to-end
+pipeline. Target is IEEE 1364-2005 plus the synthesisable and testbench
+parts of SystemVerilog (IEEE 1800) that people actually use.
+
+- [ ] Preprocessor: `` `define `` / `` `ifdef `` / `` `include `` / macros with
+      arguments, `` `timescale ``, `` `default_nettype ``, with spans that
+      trace through expansions.
+- [ ] Lexer: full token set, numeric literals with bases and `x`/`z` digits,
+      escaped identifiers, attributes `(* ... *)`.
+- [ ] Parser: modules, ports (ANSI and non-ANSI), parameters, nets, regs,
+      `always` / `always_ff` / `always_comb` / `always_latch`, `initial`,
+      continuous assigns, instances, `generate`, functions, tasks, `case`
+      variants, `for`/`while`/`repeat`, `logic`, packed/unpacked arrays,
+      `typedef`, `enum`, `struct` (packed), `package` / `import`,
+      `interface` (as a bundle of nets), `$display`-family system tasks.
+      Error recovery so one mistake yields one diagnostic, not fifty.
+- [ ] Elaboration: module hierarchy, parameter overrides (`#(...)` and
+      `defparam`), generate unrolling, constant expression evaluation,
+      implicit nets, width inference and the Verilog sizing rules
+      (context-determined expression widths, sign extension), function
+      inlining for constant evaluation.
+- [ ] Lowering to IR.
+- [ ] Linter rules on the AST that do not need synthesis (unused signals,
+      implicit width truncation, latches from incomplete `case`, multiple
+      drivers, blocking/non-blocking misuse).
+
+Done when: every module in a curated corpus (own tests plus permissively
+licensed open designs such as picorv32 and the SERV core) parses, elaborates
+and lowers without error, and the linter output on them matches golden
+files.
+
+## Phase 2: VHDL frontend
+
+VHDL-2008 with VHDL-93 compatibility. Harder than Verilog: strong typing,
+overload resolution, packages, generics on packages and subprograms,
+`std_logic` resolution, and the standard libraries (`ieee.std_logic_1164`,
+`numeric_std`, `math_real`, `textio`) which must be provided in source form
+and compiled like user code.
+
+- [ ] Lexer: case-insensitive identifiers, extended identifiers, character
+      and string literals, bit-string literals, based literals, physical
+      literals.
+- [ ] Parser: design units (entity, architecture, package, package body,
+      configuration, context), declarations, concurrent statements
+      (processes, signal assignment, component and entity instantiation,
+      generate, block), sequential statements, subprograms, records,
+      arrays, access types, files, attributes, aliases, protected types.
+- [ ] Semantic analysis: the VHDL type system, overload resolution,
+      implicit operators, attribute evaluation (`'length`, `'range`,
+      `'event`, `'image`...), library and `use` clause visibility, design
+      unit dependency ordering, conversion functions.
+- [ ] Bundled standard libraries (`std`, `ieee`) compiled from a clean-room
+      source set shipped inside the crate.
+- [ ] Elaboration: generic maps, port maps with conversions, generate
+      statements, configuration resolution, default bindings.
+- [ ] Lowering to IR, including `std_logic` resolution as explicit IR
+      resolution nodes so mixed-language designs get the right semantics.
+
+Done when: the same bar as phase 1, on a VHDL corpus (own tests plus open
+designs such as NEORV32), and a mixed-language design with a VHDL top
+instantiating a Verilog module simulates correctly.
+
+## Phase 3: IR and design database
+
+Defined alongside phase 1, but stable by the end of phase 2. The IR is the
+product; everything else is a producer or consumer of it.
+
+- [ ] Hierarchical `Design`: modules with ports, parameters kept as
+      metadata, instances, nets, and a `Process` form (structured
+      statements with sensitivity, for simulation and for synthesis lowering)
+      next to a `Cell` form (combinational and sequential primitives, for
+      after synthesis). Both coexist in one module.
+- [ ] Typed bit vectors, memories (arrays) as first-class objects, signed
+      and unsigned arithmetic cells with explicit widths.
+- [ ] Attributes on every object (`keep`, `ram_style`, `async_reg`,
+      user-defined) carried from the source `(* *)` / VHDL attribute
+      specifications.
+- [ ] Flattening, hierarchy preservation flags, unique-ification of
+      parameterised modules.
+- [ ] Textual IR format (`.rtl`) that round-trips, for golden tests and
+      debugging.
+- [ ] Emitters: structural and behavioural Verilog, VHDL, JSON (Yosys-
+      compatible shape so nextpnr and existing viewers accept it), BLIF,
+      EDIF.
+
+Done when: `reticle emit --verilog` on a lowered design produces Verilog
+that re-imports to an IR equal to the original, and the JSON output loads
+in nextpnr.
+
+## Phase 4: simulation
+
+An event-driven simulator over the IR's process form. Needed both as the
+user-facing simulator and as the reference model for every synthesis pass
+(a synthesised design must simulate identically to its source).
+
+- [ ] Scheduler implementing the Verilog stratified event queue (active,
+      inactive, NBA, monitor regions) and the VHDL delta cycle model, unified
+      so a mixed design behaves as each language's standard prescribes.
+- [ ] 4-state evaluation, `std_logic` resolution, delays (`#`, `after`,
+      `wait for`), `wait until`, `$time`, `$finish`, `$display` / `report`
+      family with correct formatting.
+- [ ] Waveform output: VCD, then FST (compressed, GTKWave native).
+- [ ] Interactive mode: run to time, step, force / release, dump.
+- [ ] Rust co-simulation API: drive inputs, read outputs, await edges, from
+      a Rust test (`#[test]` that instantiates a DUT), in the spirit of
+      cocotb but with types. This is how the in-crate IP library is tested.
+- [ ] Compiled 2-state fast mode: lower cycle-based designs to straight-line
+      Rust-native evaluation code for a large speed-up on synchronous logic
+      (Verilator's niche), selectable per run.
+- [ ] Assertions: immediate assertions, a useful subset of SVA / PSL
+      (sequences, `|->`, `|=>`, `##n`) checked during simulation.
+- [ ] Coverage: line and toggle coverage reports.
+
+Done when: the standard testbenches of the phase 1 and 2 corpora run to
+completion with matching output, and a Rust-driven testbench of a UART
+transmits and receives a byte.
+
+## Phase 5: synthesis
+
+From the process form of the IR to a netlist of generic cells, then to
+technology cells.
+
+- [ ] Process lowering: sensitivity analysis, flip-flop and latch inference
+      (with reset and enable extraction), mux tree construction from
+      `if` / `case`, `casez` / `casex` and priority handling.
+- [ ] Memory inference: RAM / ROM recognition from arrays, port collection,
+      read-before-write / write-first semantics preserved, initialisation.
+- [ ] FSM extraction and re-encoding (binary, one-hot, gray).
+- [ ] Optimisation: constant folding, dead code elimination, redundant
+      register removal, common subexpression merging, width reduction,
+      mux and logic simplification, retiming (later).
+- [ ] Arithmetic lowering: adders, multipliers, comparators, shifters, with
+      a choice of architectures; DSP block inference hooks for phase 6.
+- [ ] Logic optimisation core: an AIG (and-inverter graph) with structural
+      hashing, rewriting, balancing and FRAIGing, sufficient to stand in for
+      ABC on typical designs.
+- [ ] Generic technology mapping: k-LUT mapping (for FPGAs) and structural
+      cell mapping against a gate library (for ASIC). Area and depth
+      oriented modes.
+- [ ] Post-synthesis verification: equivalence check against the pre-
+      synthesis IR through phase 7's engine, and simulation of the mapped
+      netlist through phase 4.
+- [ ] Reports: cell counts, estimated depth, inferred memories and FSMs,
+      with source spans.
+
+Done when: picorv32 and NEORV32 synthesise to a generic LUT4 netlist with
+cell counts within a small margin of Yosys, and the mapped netlist passes
+the equivalence check.
+
+## Phase 6: targets, placement and physical design
+
+The part that turns a netlist into something that runs on a chip. The
+approach is to interoperate with existing open tools first so real hardware
+runs early, then replace them piece by piece.
+
+FPGA:
+- [ ] Device database format describing a family's primitives, LUT size,
+      FF features, block RAM and DSP shapes, IO and clock resources.
+- [ ] Primitive mapping: block RAM and DSP inference, IO buffers, clock
+      management blocks, carry chains.
+- [ ] Vendor and open-flow interop: JSON export to nextpnr (iCE40, ECP5,
+      Gowin), structural Verilog + XDC / SDC constraints for Vivado and
+      Quartus, so a design synthesised by Reticle can be placed by existing
+      tools from day one.
+- [ ] Placement constraints as a first-class language: pin assignment, IO
+      standards, placement regions (pblocks), keep-hierarchy, relative
+      placement macros, clock domains. Declared in the source via attributes
+      or in a constraints file, and checked against the device database.
+- [ ] Own placer (analytic then simulated-annealing refinement) and router
+      (PathFinder-style negotiated congestion) for open families, starting
+      with iCE40 as the smallest useful target.
+- [ ] Bitstream generation for open families, or hand-off to the vendor
+      bitstream tool with everything else done in Reticle.
+
+ASIC:
+- [ ] Liberty (`.lib`) parser: cells, pins, functions, timing tables.
+- [ ] LEF / DEF read and write.
+- [ ] Standard-cell mapping through phase 5 against a Liberty library, with
+      an open PDK (SKY130 or IHP SG13G2) as the reference target.
+- [ ] Hand-off to OpenROAD for placement and routing, later an own flow.
+
+Shared:
+- [ ] Static timing analysis: SDC constraints, clock definitions, setup /
+      hold, false and multicycle paths, reports with source spans.
+- [ ] Clock domain crossing analysis using the IR's knowledge of clocks.
+
+Done when: a blinky and a UART echo run on an iCE40 board with the whole
+flow inside Reticle, the same designs run on an ECP5 and a Xilinx 7-series
+board through interop, and a small block maps onto SKY130 cells with
+timing reported.
+
+## Phase 7: verification and formal
+
+- [ ] SAT solver (CDCL) in-crate, with a bit-blaster from IR to CNF.
+- [ ] Bounded model checking of assertions and `assume` / `cover`
+      properties over unrolled IR, with counter-example traces as VCD.
+- [ ] k-induction for unbounded proofs on suitable designs.
+- [ ] Combinational and sequential equivalence checking, used by phase 5's
+      self-check.
+- [ ] Reachability-based lint (dead states, unreachable branches).
+
+Done when: an incorrect FIFO with a full/empty assertion yields a counter-
+example trace, and the fixed FIFO is proven by induction.
+
+## Phase 8: IP integration and the Reticle IP library
+
+The reason this project exists beyond "another synthesiser". Third-party
+and first-party IP should drop into a design as easily as a Rust crate.
+
+- [ ] IP package manifest (`reticle.toml` in the IP's directory): sources
+      per language, top entity, parameters with types and ranges, bus
+      interfaces exposed, target constraints, licence, version.
+- [ ] Project manifest for the user's design: dependencies on IP packages
+      by path, git URL or registry, target device, constraints files,
+      testbenches. `reticle build`, `reticle sim`, `reticle test` read it.
+- [ ] Bus interface abstraction: AXI4 / AXI4-Lite / AXI-Stream, Wishbone,
+      APB, Avalon, described once so port maps are generated and checked,
+      with interconnect (crossbar / arbiter) generation.
+- [ ] Vendor and encrypted IP: black-box declarations from a stub, so a
+      design using an encrypted core still elaborates, lints, and simulates
+      with a behavioural model, and is emitted for the vendor tool to fill.
+- [ ] IP-XACT import for existing IP catalogues.
+- [ ] Generators: parameterised IP written in Rust against the IR builder
+      API (the way Chisel or Amaranth do it), for blocks that are painful
+      to express in HDL (wide crossbars, CORDIC tables, filter banks).
+- [ ] The Reticle IP library, each block with a Rust co-simulation test and
+      a documented resource footprint per target: FIFOs (sync / async),
+      CDC synchronisers, UART, SPI, I²C, PWM, timers, block RAM wrappers,
+      SDRAM / HyperRAM controllers, Ethernet MAC (RMII / RGMII), USB device,
+      HDMI/DVI output, a small RISC-V core, AXI / Wishbone interconnect.
+- [ ] Registry: a static index (git repository of manifests) that
+      `reticle add` searches, in the style of a crates.io index.
+
+Done when: a project manifest pulling in a UART and a RISC-V core from the
+library builds, simulates its testbench, and runs on an iCE40 board with
+no HDL written by the user beyond a top-level.
+
+## Phase 9: developer experience
+
+- [ ] Language server (LSP) for both languages: diagnostics as you type,
+      go-to-definition, hover with resolved types and widths, rename.
+- [ ] Formatter for Verilog and VHDL.
+- [ ] Schematic / netlist viewer output (an HTML page rendering the IR)
+      and documentation generation from source comments and port lists.
+- [ ] WebAssembly build of the frontends and simulator for a browser
+      playground.
+- [ ] C API for embedding the frontends and simulator in other tools.
+- [ ] Incremental compilation: cache elaborated modules keyed on source
+      hash so large designs re-simulate quickly after a small edit.
+
+## Non-goals (for now)
+
+- Full SystemVerilog UVM class-based verification. Classes, constrained
+  random and the UVM library are a project on their own; the co-simulation
+  API in Rust covers the same need with better tooling.
+- Analog / mixed-signal (Verilog-AMS, VHDL-AMS).
+- Replacing vendor bitstream tools for closed families. Interop is the
+  strategy there until the formats are documented.
+
+## Versioning
+
+`0.x` until phase 5 lands. Each phase with a "done when" that is met is a
+minor release. The IR text format and the `reticle.toml` manifests get
+stability guarantees at 1.0; the Rust API does not before then.
