@@ -1,0 +1,29 @@
+top hier_top
+
+module leaf$W_8
+  param W = 32'sd8
+  net %a u8 wire
+  net %y u8 wire
+  port a in %a
+  port y out %y
+  assign %y = not(%a)
+end
+
+module mid$W_8
+  param W = 32'sd8
+  net %a u8 wire
+  net %y u8 wire
+  net %t u8 wire
+  port a in %a
+  port y out %y
+  instance u_leaf of leaf$W_8 (a=%a, y=%t)
+  assign %y = xor(%t, 8'd255)
+end
+
+module hier_top
+  net %a u8 wire
+  net %y u8 wire
+  port a in %a
+  port y out %y
+  instance u_mid of mid$W_8 (a=%a, y=%y)
+end

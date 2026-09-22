@@ -1,0 +1,41 @@
+top counter
+
+module counter
+  timescale 1 ns / 1 ps
+  param WIDTH = 32'sd8
+  param RESET_VALUE = 8'd0
+  net %clk u1 wire
+  net %rst_n u1 wire
+  net %en u1 wire
+  net %up u1 wire
+  net %load u1 wire
+  net %d u8 wire
+  net %q u8 reg
+  net %wrap u1 wire
+  port clk in %clk
+  port rst_n in %rst_n
+  port en in %en
+  port up in %up
+  port load in %load
+  port d in %d
+  port q out %q
+  port wrap out %wrap
+  assign %wrap = mux(%up, rand(%q), rnor(%q))
+  process seq posedge %clk async negedge %rst_n
+    if lnot(%rst_n)
+      %q <= 8'd0
+    else
+      if %load
+        %q <= %d
+      else
+        if %en
+          if %up
+            %q <= add(%q, 8'd1)
+          else
+            %q <= sub(%q, 8'd1)
+          end
+        end
+      end
+    end
+  end
+end

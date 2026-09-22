@@ -1,0 +1,24 @@
+warning[V0004]: input `bus_ready` of `producer` is not connected
+  --> sv_interface.sv:23:14
+   |
+23 |     producer u_src  (.bus(bus), .d(d));
+   |              ^^^^^^^^^^^^^^^^^^^^^^^^^ instantiated here
+   |
+   = note: an unconnected input reads as x
+
+warning[V0004]: input `bus_data` of `consumer` is not connected
+  --> sv_interface.sv:24:14
+   |
+24 |     consumer u_sink (.bus(bus), .q(q));
+   |              ^^^^^^^^^^^^^^^^^^^^^^^^^ instantiated here
+   |
+   = note: an unconnected input reads as x
+
+warning[V0004]: input `bus_valid` of `consumer` is not connected
+  --> sv_interface.sv:24:14
+   |
+24 |     consumer u_sink (.bus(bus), .q(q));
+   |              ^^^^^^^^^^^^^^^^^^^^^^^^^ instantiated here
+   |
+   = note: an unconnected input reads as x
+

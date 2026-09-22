@@ -1,0 +1,8 @@
+error[V0001]: cannot find `rst_m` in this scope
+ --> error_undefined.v:4:14
+  |
+4 |         q <= rst_m;
+  |              ^^^^^ not declared here
+  |
+  = note: did you mean `rst_n`?
+

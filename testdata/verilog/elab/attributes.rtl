@@ -1,0 +1,20 @@
+top attributed
+
+attr keep_hierarchy = "yes"
+module attributed
+  net %clk u1 wire
+  net %d u1 wire
+  net %q u1 reg
+  attr keep = 1
+  net %internal u1 wire
+  port clk in %clk
+  port d in %d
+  port q out %q
+  attr ram_style = "block"
+  memory @mem 4 x u8
+  assign %internal = %d
+  attr fsm_encoding = "one-hot"
+  process seq posedge %clk
+    %q <= %internal
+  end
+end

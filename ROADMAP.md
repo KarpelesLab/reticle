@@ -101,12 +101,12 @@ parts of SystemVerilog (IEEE 1800) that people actually use.
       `typedef`, `enum`, `struct` (packed), `package` / `import`,
       `interface` (as a bundle of nets), `$display`-family system tasks.
       Error recovery so one mistake yields one diagnostic, not fifty.
-- [ ] Elaboration: module hierarchy, parameter overrides (`#(...)` and
+- [x] Elaboration: module hierarchy, parameter overrides (`#(...)` and
       `defparam`), generate unrolling, constant expression evaluation,
       implicit nets, width inference and the Verilog sizing rules
       (context-determined expression widths, sign extension), function
       inlining for constant evaluation.
-- [ ] Lowering to IR.
+- [x] Lowering to IR.
 - [x] Linter rules on the AST that do not need synthesis (unused signals,
       implicit width truncation, latches from incomplete `case`, multiple
       drivers, blocking/non-blocking misuse). 28 rules with levels

@@ -1,0 +1,8 @@
+warning[V0023]: no module named `vendor_ram` was found
+ --> blackbox.v:8:29
+  |
+8 |     vendor_ram #(.WIDTH(8)) u_ram (
+  |                             ^^^^^ instantiated here
+  |
+  = note: the instance is kept as a black box; its ports are not checked
+

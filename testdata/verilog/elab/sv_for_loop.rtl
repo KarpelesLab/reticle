@@ -1,0 +1,39 @@
+top sv_for_loop
+
+module sv_for_loop
+  net %d u8 wire
+  net %ones u4 reg
+  net %first_set u3 reg
+  net %"loop$1.i" s32 var
+  net %"lowest_set$3.v" u8 var
+  net %"lowest_set$3.lowest_set" u3 var
+  net %"lowest_set$3.$returned" u1 var
+  net %"lowest_set$3.loop$4.i" s32 var
+  port d in %d
+  port ones out %ones
+  port first_set out %first_set
+  assign %first_set = %"lowest_set$3.lowest_set"
+  process comb
+    %ones = 4'd0
+    for %"loop$1.i" = 32'sd0; lt(%"loop$1.i", 32'sd8); %"loop$1.i" = add(%"loop$1.i", 32'sd1)
+      %ones = add(%ones, {3'd0, %d[%"loop$1.i"]})
+    end
+  end
+  process comb$2 comb
+    %"lowest_set$3.v" = %d
+    %"lowest_set$3.$returned" = 1'd0
+    for %"lowest_set$3.loop$4.i" = 32'sd0; lt(%"lowest_set$3.loop$4.i", 32'sd8); %"lowest_set$3.loop$4.i" = add(%"lowest_set$3.loop$4.i", 32'sd1)
+      if %"lowest_set$3.v"[%"lowest_set$3.loop$4.i"]
+        %"lowest_set$3.lowest_set" = %"lowest_set$3.loop$4.i"[2:0]
+        %"lowest_set$3.$returned" = 1'd1
+      end
+      if %"lowest_set$3.$returned"
+        break
+      end
+    end
+    if lnot(%"lowest_set$3.$returned")
+      %"lowest_set$3.lowest_set" = 3'd7
+      %"lowest_set$3.$returned" = 1'd1
+    end
+  end
+end

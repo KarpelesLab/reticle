@@ -1,0 +1,45 @@
+top adder
+
+module adder
+  net %a u4 wire
+  net %b u4 wire
+  net %cin u1 wire
+  net %sum u4 wire
+  net %cout u1 wire
+  port a in %a
+  port b in %b
+  port cin in %cin
+  port sum out %sum
+  port cout out %cout
+  assign {%cout, %sum} = add(add(resize(%a, u5), resize(%b, u5)), resize(%cin, u5))
+end
+
+module regs
+  net %clk u1 wire
+  net %d u8 wire
+  net %q u8 reg
+  port clk in %clk
+  port d in %d
+  port q out %q
+  process seq posedge %clk
+    %q <= %d
+  end
+end
+
+module regs2
+  net %clk u1 wire
+  net %d u8 wire
+  net %q u8 reg
+  port clk in %clk
+  port d in %d
+  port q out %q
+  process seq posedge %clk
+    %q <= %d
+  end
+end
+
+module none
+end
+
+module empty_parens
+end

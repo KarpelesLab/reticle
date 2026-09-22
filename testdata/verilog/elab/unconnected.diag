@@ -1,0 +1,8 @@
+warning[V0004]: input `b` of `uc_leaf` is not connected
+ --> unconnected.v:7:13
+  |
+7 |     uc_leaf u0 (.a(a), .y(y));
+  |             ^^^^^^^^^^^^^^^^^ instantiated here
+  |
+  = note: an unconnected input reads as x
+

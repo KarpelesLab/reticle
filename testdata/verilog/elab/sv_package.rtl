@@ -1,0 +1,20 @@
+top sv_package
+
+module sv_package
+  net %clk u1 wire
+  net %a u8 wire
+  net %q u8 reg
+  net %width_out u32 reg
+  net %"double$1.v" u8 var
+  net %"double$1.double" u8 var
+  port clk in %clk
+  port a in %a
+  port q out %q
+  port width_out out %width_out
+  assign %width_out = 32'd8
+  process seq posedge %clk
+    %"double$1.v" = %a
+    %"double$1.double" = shl(%"double$1.v", 32'd1)
+    %q <= %"double$1.double"
+  end
+end

@@ -1,0 +1,69 @@
+top tb
+
+module tb
+  timescale 1 ns / 1 ps
+  net %clk u1 reg
+  net %rst u1 reg
+  net %d u8 reg
+  net %q u8 wire
+  net %errors s32 reg
+  net %fd s32 reg
+  net %"check$2.expected" u8 var
+  net %"check$3.expected" u8 var
+  instance dut of counter (clk=%clk, rst_n=not(%rst), en=1'd1, up=1'd1, load=1'd0, d=%d, q=%q)
+  process initial
+    %clk = 1'd0
+  end
+  process initial
+    %errors = 32'sd0
+  end
+  process free
+    forever
+      wait for 64'd5
+      %clk = not(%clk)
+    end
+  end
+  process initial
+    sys $dumpfile("tb.vcd")
+    sys $dumpvars(32'sd0, "tb")
+    sys $monitor("t=%0t q=%0d", call $time() as u64, %q)
+    %d = 8'd0
+    %rst = 1'd1
+    repeat 32'sd2
+      wait on posedge %clk
+    end
+    wait for 64'd1
+    %rst = 1'd0
+    wait on posedge %clk
+    wait for 64'd1
+    %"check$2.expected" = 8'd1
+    if cne(%q, %"check$2.expected")
+      sys $display("%0t: FAIL q=%h expected=%h", call $time() as u64, %q, %"check$2.expected")
+      %errors = add(%errors, 32'sd1)
+    end
+    repeat 32'sd10
+      wait on negedge %clk
+    end
+    %"check$3.expected" = 8'd11
+    if cne(%q, %"check$3.expected")
+      sys $display("%0t: FAIL q=%h expected=%h", call $time() as u64, %q, %"check$3.expected")
+      %errors = add(%errors, 32'sd1)
+    end
+    %fd = call $fopen("log.txt", "w") as s32
+    sys $fdisplay(%fd, "errors=%0d", %errors)
+    sys $fclose(%fd)
+    if eq(%errors, 32'sd0)
+      sys $display("PASS")
+    else
+      sys $display("FAIL: %0d errors", %errors)
+    end
+    wait for 64'd100
+  end
+  process initial
+    block watchdog
+      wait for 64'd100000
+      sys $display("timeout")
+      finish
+    end
+  end
+end

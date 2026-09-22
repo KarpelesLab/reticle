@@ -1,0 +1,6 @@
+error[V0006]: module `epo_leaf` has no parameter `DEPTH` to override
+ --> error_param_override.v:7:16
+  |
+7 |     epo_leaf #(.DEPTH(8)) u0 (.a(a), .y(y));
+  |                ^^^^^^^^^
+

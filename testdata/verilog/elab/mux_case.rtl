@@ -1,0 +1,32 @@
+top mux4
+
+module mux4
+  net %sel u2 wire
+  net %a u8 wire
+  net %b u8 wire
+  net %c u8 wire
+  net %d u8 wire
+  net %y u8 reg
+  port sel in %sel
+  port a in %a
+  port b in %b
+  port c in %c
+  port d in %d
+  port y out %y
+  process comb
+    case %sel
+      when 2'd0
+        %y = %a
+      end
+      when 2'd1
+        %y = %b
+      end
+      when 2'd2
+        %y = %c
+      end
+      default
+        %y = %d
+      end
+    end
+  end
+end

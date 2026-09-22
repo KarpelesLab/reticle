@@ -1,0 +1,11 @@
+top blackbox_user
+
+module blackbox_user
+  net %clk u1 wire
+  net %d u8 wire
+  net %q u8 wire
+  port clk in %clk
+  port d in %d
+  port q out %q
+  instance u_ram of vendor_ram (clk=%clk, d=%d, q=%q)
+end

@@ -1,0 +1,8 @@
+error[V0005]: `y` is 8 bits wide but is connected to 4 bits
+ --> error_output_width.v:7:25
+  |
+7 |     eow_leaf u0 (.a(a), .y(y));
+  |                         ^^^^^ width mismatch on an output connection
+  |
+  = note: an output connection must match the port exactly
+

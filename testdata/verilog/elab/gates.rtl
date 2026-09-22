@@ -1,0 +1,34 @@
+top gate_shapes
+
+module gate_shapes
+  net %a u1 wire
+  net %b u1 wire
+  net %c u1 wire
+  net %y_and u1 wire
+  net %y_or u1 wire
+  net %y_xor u1 wire
+  net %y_nand u1 wire
+  net %y_nor u1 wire
+  net %y_xnor u1 wire
+  net %y_buf u1 wire
+  net %y_not u1 wire
+  port a in %a
+  port b in %b
+  port c in %c
+  port y_and out %y_and
+  port y_or out %y_or
+  port y_xor out %y_xor
+  port y_nand out %y_nand
+  port y_nor out %y_nor
+  port y_xnor out %y_xnor
+  port y_buf out %y_buf
+  port y_not out %y_not
+  assign %y_and = and(and(%a, %b), %c)
+  assign %y_or = or(%a, %b)
+  assign %y_xor = xor(%a, %b)
+  assign %y_nand = not(and(%a, %b))
+  assign %y_nor = not(or(%a, %b))
+  assign %y_xnor = not(xor(%a, %b))
+  assign %y_buf = %a
+  assign %y_not = not(%a)
+end

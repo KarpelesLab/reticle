@@ -1,0 +1,20 @@
+top tristate
+
+module tristate
+  net %a u1 wire
+  net %en u1 wire
+  net %y0 u1 wire
+  net %y1 u1 wire
+  net %y2 u1 wire
+  net %y3 u1 wire
+  port a in %a
+  port en in %en
+  port y0 out %y0
+  port y1 out %y1
+  port y2 out %y2
+  port y3 out %y3
+  cell t0 tristate (a=%a, en=%en) -> (y=%y0)
+  cell t1 tristate (a=%a, en=lnot(%en)) -> (y=%y1)
+  cell t2 tristate (a=not(%a), en=%en) -> (y=%y2)
+  cell t3 tristate (a=not(%a), en=lnot(%en)) -> (y=%y3)
+end

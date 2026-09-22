@@ -1,0 +1,16 @@
+warning[V0007]: value is truncated from 16 bits to 8 in this assignment
+ --> truncation.v:7:12
+  |
+7 |     assign narrow = wide;
+  |            ^^^^^^^^^^^^^ 16 bits wide
+  |
+  = note: `narrow` is 8 bits wide
+
+warning[V0007]: value is truncated from 8 bits to 4 in this assignment
+  --> truncation.v:10:9
+   |
+10 |         tiny = 8'hff;
+   |         ^^^^^^^^^^^^^ 8 bits wide
+   |
+   = note: `tiny` is 4 bits wide
+

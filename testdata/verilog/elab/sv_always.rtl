@@ -1,0 +1,28 @@
+top sv_always
+
+module sv_always
+  net %clk u1 wire
+  net %rst u1 wire
+  net %a u8 wire
+  net %b u8 wire
+  net %q u8 reg
+  net %sum u8 reg
+  net %next u8 reg
+  port clk in %clk
+  port rst in %rst
+  port a in %a
+  port b in %b
+  port q out %q
+  port sum out %sum
+  assign %sum = %next
+  process comb
+    %next = add(%a, %b)
+  end
+  process seq posedge %clk
+    if %rst
+      %q <= 8'd0
+    else
+      %q <= %next
+    end
+  end
+end

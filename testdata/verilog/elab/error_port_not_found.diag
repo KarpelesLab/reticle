@@ -1,0 +1,8 @@
+error[V0003]: module `epn_leaf` has no port `missing`
+ --> error_port_not_found.v:7:33
+  |
+7 |     epn_leaf u0 (.a(a), .y(y), .missing(a));
+  |                                 ^^^^^^^ no such port
+  |
+  = note: its ports are: a, y
+

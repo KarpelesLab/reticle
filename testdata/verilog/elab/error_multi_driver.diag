@@ -1,0 +1,10 @@
+error[V0008]: `q` is driven from more than one place
+ --> error_multi_driver.v:7:9
+  |
+7 |         q <= b;
+  |         ^^^^^^^ driven here by a procedural block
+4 |         q <= a;
+  |         ------- driven here by a procedural block
+  |
+  = note: a signal must have exactly one driver
+

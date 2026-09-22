@@ -1,0 +1,6 @@
+error[V0013]: unsupported construct: `fork` / `join` (no parallel processes in the IR)
+ --> error_unsupported.sv:4:9
+  |
+4 |         fork
+  |         ^^^^ not supported by this version of reticle
+

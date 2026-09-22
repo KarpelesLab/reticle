@@ -1,0 +1,44 @@
+top params_two
+
+module scaler$WIDTH_8$STEP_1
+  param WIDTH = 32'sd8
+  param STEP = 32'sd1
+  net %clk u1 wire
+  net %d u8 wire
+  net %q u8 reg
+  port clk in %clk
+  port d in %d
+  port q out %q
+  process seq posedge %clk
+    %q <= add(%d, 8'd1)
+  end
+end
+
+module scaler$WIDTH_16$STEP_4
+  param WIDTH = 32'sd16
+  param STEP = 32'sd4
+  net %clk u1 wire
+  net %d u16 wire
+  net %q u16 reg
+  port clk in %clk
+  port d in %d
+  port q out %q
+  process seq posedge %clk
+    %q <= add(%d, 16'd4)
+  end
+end
+
+module params_two
+  net %clk u1 wire
+  net %small_in u8 wire
+  net %big_in u16 wire
+  net %small_out u8 wire
+  net %big_out u16 wire
+  port clk in %clk
+  port small_in in %small_in
+  port big_in in %big_in
+  port small_out out %small_out
+  port big_out out %big_out
+  instance u_small of scaler$WIDTH_8$STEP_1 (clk=%clk, d=%small_in, q=%small_out)
+  instance u_big of scaler$WIDTH_16$STEP_4 (clk=%clk, d=%big_in, q=%big_out)
+end

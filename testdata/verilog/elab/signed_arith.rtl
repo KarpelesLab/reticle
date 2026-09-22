@@ -1,0 +1,25 @@
+top signed_arith
+
+module signed_arith
+  net %a s8 wire
+  net %b s8 wire
+  net %u u8 wire
+  net %mul s16 wire
+  net %sum s9 wire
+  net %lt u1 wire
+  net %ult u1 wire
+  net %neg s8 wire
+  port a in %a
+  port b in %b
+  port u in %u
+  port mul out %mul
+  port sum out %sum
+  port lt out %lt
+  port ult out %ult
+  port neg out %neg
+  assign %mul = mul(resize(%a, s16), resize(%b, s16))
+  assign %sum = add(resize(%a, s9), resize(%b, s9))
+  assign %lt = lt(%a, %b)
+  assign %ult = lt(resize(%a, u8), %u)
+  assign %neg = neg(%a)
+end

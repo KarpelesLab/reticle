@@ -1,0 +1,14 @@
+top truncation
+
+module truncation
+  net %wide u16 wire
+  net %narrow u8 wire
+  net %tiny u4 reg
+  port wide in %wide
+  port narrow out %narrow
+  port tiny out %tiny
+  assign %narrow = resize(%wide, u8)
+  process comb
+    %tiny = 4'd15
+  end
+end

@@ -1,0 +1,21 @@
+top delays
+
+module delays
+  timescale 1 ns / 1 ps
+  net %a u1 wire
+  net %y u1 wire
+  net %clk u1 reg
+  port a in %a
+  port y out %y
+  port clk out %clk
+  assign %y = not(%a) after 3 ns
+  process initial
+    %clk = 1'd0
+  end
+  process free
+    forever
+      wait for 64'd5
+      %clk = not(%clk)
+    end
+  end
+end

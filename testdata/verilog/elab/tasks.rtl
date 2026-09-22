@@ -1,0 +1,22 @@
+top tasks
+
+module tasks
+  net %clk u1 wire
+  net %d u8 wire
+  net %q u8 reg
+  net %parity u1 reg
+  net %"compute$1.value" u8 var
+  net %"compute$1.result" u8 var
+  net %"compute$1.odd" u1 var
+  port clk in %clk
+  port d in %d
+  port q out %q
+  port parity out %parity
+  process seq posedge %clk
+    %"compute$1.value" = %d
+    %"compute$1.result" = add(%"compute$1.value", 8'd1)
+    %"compute$1.odd" = rxor(%"compute$1.value")
+    %q = %"compute$1.result"
+    %parity = %"compute$1.odd"
+  end
+end

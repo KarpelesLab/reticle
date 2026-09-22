@@ -1,0 +1,20 @@
+top clog2_params
+
+module clog2_params
+  param DEPTH = 32'sd100
+  param WIDTH = 32'sd8
+  param AW = 32'sd7
+  net %clk u1 wire
+  net %addr u7 wire
+  net %addr_bits u32 reg
+  net %q u8 reg
+  port clk in %clk
+  port addr in %addr
+  port addr_bits out %addr_bits
+  port q out %q
+  memory @store 100 x u8
+  assign %addr_bits = 32'd7
+  process seq posedge %clk
+    %q <= @store[%addr]
+  end
+end

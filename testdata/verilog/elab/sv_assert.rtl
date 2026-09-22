@@ -1,0 +1,14 @@
+top sv_assert
+
+module sv_assert
+  net %clk u1 wire
+  net %req u1 wire
+  net %ack u1 wire
+  port clk in %clk
+  port req in %req
+  port ack in %ack
+  process seq posedge %clk
+    assert error lnot(land(%req, %ack)) report "req and ack at the same time"
+    assert error lor(%req, lnot(%ack))
+  end
+end

@@ -1,0 +1,131 @@
+top uart_tx
+
+module uart_tx
+  param CLK_DIV = 32'sd868
+  param IDLE = 2'd0
+  param START = 2'd1
+  param DATA = 2'd2
+  param STOP = 2'd3
+  net %clk u1 wire
+  net %rst u1 wire
+  net %data u8 wire
+  net %valid u1 wire
+  net %ready u1 reg
+  net %txd u1 reg
+  net %state u2 reg
+  net %baud_cnt u16 reg
+  net %bit_idx u3 reg
+  net %shreg u8 reg
+  net %tick u1 wire
+  port clk in %clk
+  port rst in %rst
+  port data in %data
+  port valid in %valid
+  port ready out %ready
+  port txd out %txd
+  assign %tick = eq(resize(%baud_cnt, u32), 32'd867)
+  process seq posedge %clk
+    if %rst
+      %state <= 2'd0
+      %baud_cnt <= 16'd0
+      %bit_idx <= 3'd0
+      %txd <= 1'd1
+      %ready <= 1'd1
+    else
+      if eq(%state, 2'd0)
+        %baud_cnt <= 16'd0
+      else
+        %baud_cnt <= mux(%tick, 16'd0, add(%baud_cnt, 16'd1))
+      end
+      case %state
+        when 2'd0
+          %txd <= 1'd1
+          if land(%valid, %ready)
+            %shreg <= %data
+            %ready <= 1'd0
+            %state <= 2'd1
+          end
+        end
+        when 2'd1
+          %txd <= 1'd0
+          if %tick
+            %state <= 2'd2
+          end
+        end
+        when 2'd2
+          %txd <= %shreg[resize(%bit_idx, u4)]
+          if %tick
+            if eq(%bit_idx, 3'd7)
+              %bit_idx <= 3'd0
+              %state <= 2'd3
+            else
+              %bit_idx <= add(%bit_idx, 3'd1)
+            end
+          end
+        end
+        when 2'd3
+          %txd <= 1'd1
+          if %tick
+            %state <= 2'd0
+            %ready <= 1'd1
+          end
+        end
+        default
+          %state <= 2'd0
+        end
+      end
+    end
+  end
+end
+
+module uart_rx
+  param CLK_DIV = 32'sd868
+  net %clk u1 wire
+  net %rst u1 wire
+  net %rxd u1 wire
+  net %data u8 reg
+  net %valid u1 reg
+  net %sync u2 reg
+  net %cnt u16 reg
+  net %bit_cnt u4 reg
+  net %busy u1 reg
+  net %rx u1 wire
+  port clk in %clk
+  port rst in %rst
+  port rxd in %rxd
+  port data out %data
+  port valid out %valid
+  assign %rx = %sync[1:1]
+  process seq posedge %clk
+    %sync <= {%sync[0:0], %rxd}
+  end
+  process seq posedge %clk
+    %valid <= 1'd0
+    if %rst
+      %busy <= 1'd0
+      %cnt <= 16'd0
+      %bit_cnt <= 4'd0
+    else
+      if lnot(%busy)
+        if lnot(%rx)
+          %busy <= 1'd1
+          %cnt <= 16'd434
+        end
+      else
+        if eq(resize(%cnt, u32), 32'd867)
+          %cnt <= 16'd0
+          if lt(%bit_cnt, 4'd8)
+            %data <= {%rx, %data[7:1]}
+            %bit_cnt <= add(%bit_cnt, 4'd1)
+          else
+            %busy <= 1'd0
+            %bit_cnt <= 4'd0
+            %valid <= %rx
+          end
+        else
+          %cnt <= add(%cnt, 16'd1)
+        end
+      end
+    end
+  end
+end

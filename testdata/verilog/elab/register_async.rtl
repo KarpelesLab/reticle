@@ -1,0 +1,24 @@
+top register_async
+
+module register_async
+  param WIDTH = 32'sd8
+  net %clk u1 wire
+  net %rst_n u1 wire
+  net %en u1 wire
+  net %d u8 wire
+  net %q u8 reg
+  port clk in %clk
+  port rst_n in %rst_n
+  port en in %en
+  port d in %d
+  port q out %q
+  process seq posedge %clk async negedge %rst_n
+    if lnot(%rst_n)
+      %q <= 8'd0
+    else
+      if %en
+        %q <= %d
+      end
+    end
+  end
+end

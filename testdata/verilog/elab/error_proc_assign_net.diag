@@ -1,0 +1,10 @@
+error[V0009]: `q` is a net and cannot be assigned from a procedural block
+ --> error_proc_assign_net.v:4:9
+  |
+4 |         q <= d;
+  |         ^ procedural assignment
+2 | module error_proc_assign_net(input wire clk, input wire d, output wire q);
+  |                                                                        - declared as a net here
+  |
+  = note: declare it as `reg` or `logic` to assign it here
+

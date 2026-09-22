@@ -1,0 +1,54 @@
+top sync_fifo
+
+module sync_fifo
+  param WIDTH = 32'sd8
+  param DEPTH = 32'sd16
+  param OUTPUT_REG = 1'd1
+  param AW = 32'sd4
+  param BYTES = 32'sd1
+  net %clk u1 wire
+  net %rst u1 wire
+  net %wr_en u1 wire
+  net %wr_data u8 wire
+  net %full u1 reg
+  net %rd_en u1 wire
+  net %rd_data u8 reg
+  net %empty u1 reg
+  net %count u5 reg
+  net %wr_ptr u5 reg
+  net %rd_ptr u5 reg
+  net %rd_word u8 reg
+  net %parity u1 reg
+  port clk in %clk
+  port rst in %rst
+  port wr_en in %wr_en
+  port wr_data in %wr_data
+  port full out %full
+  port rd_en in %rd_en
+  port rd_data out %rd_data
+  port empty out %empty
+  port count out %count
+  memory @mem 16 x u8
+  assign %full = land(ne(%wr_ptr[4:4], %rd_ptr[4:4]), eq(%wr_ptr[3:0], %rd_ptr[3:0]))
+  assign %empty = eq(%wr_ptr, %rd_ptr)
+  assign %count = sub(%wr_ptr, %rd_ptr)
+  assign %rd_word = @mem[%rd_ptr[3:0]]
+  assign %parity[0:0] = rxor(%wr_data[7:0])
+  process seq posedge %clk
+    if %rst
+      %wr_ptr <= 5'd0
+      %rd_ptr <= 5'd0
+    else
+      if land(%wr_en, lnot(%full))
+        @mem[%wr_ptr[3:0]] <= %wr_data
+        %wr_ptr <= add(%wr_ptr, 5'd1)
+      end
+      if land(%rd_en, lnot(%empty))
+        %rd_ptr <= add(%rd_ptr, 5'd1)
+      end
+    end
+  end
+  process seq posedge %clk
+    %rd_data <= %rd_word
+  end
+end

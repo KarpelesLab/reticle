@@ -1,0 +1,10 @@
+error[V0012]: constant function `fact` calls itself
+ --> error_recursion.v:7:29
+  |
+7 |             else fact = n * fact(n - 1);
+  |                             ^^^^^^^^^^^ recursive call
+3 |     function integer fact;
+  |                      ---- function declared here
+  |
+  = note: recursion is not supported in constant functions
+

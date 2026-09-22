@@ -1,0 +1,13 @@
+top constant_fn
+
+module constant_fn
+  param DEPTH = 32'sd64
+  param AW = 32'sd6
+  net %a u8 wire
+  net %y u8 wire
+  net %addr u6 wire
+  port a in %a
+  port y out %y
+  assign %addr = %a[5:0]
+  assign %y = {2'd0, %addr}
+end

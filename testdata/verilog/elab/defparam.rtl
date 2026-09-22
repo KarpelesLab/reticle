@@ -1,0 +1,18 @@
+top defparam_top
+
+module dp_leaf$W_8
+  param W = 32'sd8
+  net %a u8 wire
+  net %y u8 wire
+  port a in %a
+  port y out %y
+  assign %y = %a
+end
+
+module defparam_top
+  net %a u8 wire
+  net %y u8 wire
+  port a in %a
+  port y out %y
+  instance u0 of dp_leaf$W_8 (a=%a, y=%y)
+end

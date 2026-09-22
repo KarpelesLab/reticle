@@ -1,0 +1,34 @@
+top functions
+
+module functions
+  net %clk u1 wire
+  net %a u8 wire
+  net %b u8 wire
+  net %sum u9 reg
+  net %big u8 reg
+  net %"add9$1.x" u8 var
+  net %"add9$1.y" u8 var
+  net %"add9$1.add9" u9 var
+  net %"maximum$2.x" u8 var
+  net %"maximum$2.y" u8 var
+  net %"maximum$2.maximum" u8 var
+  port clk in %clk
+  port a in %a
+  port b in %b
+  port sum out %sum
+  port big out %big
+  process seq posedge %clk
+    %"add9$1.x" = %a
+    %"add9$1.y" = %b
+    %"add9$1.add9" = add({1'd0, %"add9$1.x"}, {1'd0, %"add9$1.y"})
+    %sum <= %"add9$1.add9"
+    %"maximum$2.x" = %a
+    %"maximum$2.y" = %b
+    if gt(%"maximum$2.x", %"maximum$2.y")
+      %"maximum$2.maximum" = %"maximum$2.x"
+    else
+      %"maximum$2.maximum" = %"maximum$2.y"
+    end
+    %big <= %"maximum$2.maximum"
+  end
+end

@@ -1,0 +1,28 @@
+top shifts
+
+module shifts
+  net %d u16 wire
+  net %amount u4 wire
+  net %index u4 wire
+  net %left u16 wire
+  net %right u16 wire
+  net %arith u16 wire
+  net %nibble u4 wire
+  net %dynamic_up u4 wire
+  net %bit_sel u1 wire
+  port d in %d
+  port amount in %amount
+  port index in %index
+  port left out %left
+  port right out %right
+  port arith out %arith
+  port nibble out %nibble
+  port dynamic_up out %dynamic_up
+  port bit_sel out %bit_sel
+  assign %left = shl(%d, %amount)
+  assign %right = shr(%d, %amount)
+  assign %arith = resize(sshr(resize(%d, s16), %amount), u16)
+  assign %nibble = %d[7:4]
+  assign %dynamic_up = %d[resize(%index, u5) +: 4]
+  assign %bit_sel = %d[resize(%index, u5)]
+end

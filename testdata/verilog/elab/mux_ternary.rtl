@@ -1,0 +1,19 @@
+top mux_expr
+
+module mux_expr
+  net %s u1 wire
+  net %a u4 wire
+  net %b u4 wire
+  net %y u4 wire
+  net %wide u8 wire
+  net %rep u4 wire
+  port s in %s
+  port a in %a
+  port b in %b
+  port y out %y
+  port wide out %wide
+  port rep out %rep
+  assign %y = mux(%s, %a, %b)
+  assign %wide = {%a, %b}
+  assign %rep = {4{%s}}
+end

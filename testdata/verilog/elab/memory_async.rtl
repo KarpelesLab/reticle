@@ -1,0 +1,28 @@
+top memory_async
+
+module memory_async
+  net %clk u1 wire
+  net %we u1 wire
+  net %waddr u4 wire
+  net %wdata u16 wire
+  net %raddr_a u4 wire
+  net %raddr_b u4 wire
+  net %rdata_a u16 wire
+  net %rdata_b u16 wire
+  port clk in %clk
+  port we in %we
+  port waddr in %waddr
+  port wdata in %wdata
+  port raddr_a in %raddr_a
+  port raddr_b in %raddr_b
+  port rdata_a out %rdata_a
+  port rdata_b out %rdata_b
+  memory @regs 16 x u16
+  assign %rdata_a = @regs[%raddr_a]
+  assign %rdata_b = @regs[%raddr_b]
+  process seq posedge %clk
+    if %we
+      @regs[%waddr] <= %wdata
+    end
+  end
+end

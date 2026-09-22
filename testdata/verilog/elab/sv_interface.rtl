@@ -1,0 +1,39 @@
+top sv_interface
+
+module producer
+  net %bus_data u8 wire
+  net %bus_valid u1 wire
+  net %bus_ready u1 wire
+  net %d u8 wire
+  port bus_data out %bus_data
+  port bus_valid out %bus_valid
+  port bus_ready in %bus_ready
+  port d in %d
+  assign %bus_data = %d
+  assign %bus_valid = 1'd1
+end
+
+module consumer
+  net %bus_data u8 wire
+  net %bus_valid u1 wire
+  net %bus_ready u1 wire
+  net %q u8 reg
+  port bus_data in %bus_data
+  port bus_valid in %bus_valid
+  port bus_ready out %bus_ready
+  port q out %q
+  assign %bus_ready = 1'd1
+  assign %q = mux(%bus_valid, %bus_data, 8'd0)
+end
+
+module sv_interface
+  net %d u8 wire
+  net %q u8 reg
+  net %"bus.data" u8 reg
+  net %"bus.valid" u1 reg
+  net %"bus.ready" u1 reg
+  port d in %d
+  port q out %q
+  instance u_src of producer (bus_data=%"bus.data", bus_valid=%"bus.valid", bus_ready=%"bus.ready", d=%d)
+  instance u_sink of consumer (bus_data=%"bus.data", bus_valid=%"bus.valid", bus_ready=%"bus.ready", q=%q)
+end

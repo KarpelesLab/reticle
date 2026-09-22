@@ -1,0 +1,38 @@
+top sv_typedef
+
+module sv_typedef
+  net %clk u1 wire
+  net %rst_n u1 wire
+  net %go u1 wire
+  net %busy u1 reg
+  net %state u2 reg
+  net %counter u8 reg
+  port clk in %clk
+  port rst_n in %rst_n
+  port go in %go
+  port busy out %busy
+  assign %busy = eq(%state, 2'd1)
+  process seq posedge %clk async negedge %rst_n
+    if lnot(%rst_n)
+      %state <= 2'd0
+      %counter <= 8'd0
+    else
+      case %state
+        when 2'd0
+          if %go
+            %state <= 2'd1
+          end
+        end
+        when 2'd1
+          %counter <= add(%counter, 8'd1)
+          if eq(%counter, 8'd255)
+            %state <= 2'd2
+          end
+        end
+        default
+          %state <= 2'd0
+        end
+      end
+    end
+  end
+end

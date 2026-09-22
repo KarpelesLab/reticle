@@ -1,0 +1,25 @@
+top memory_sync
+
+module memory_sync
+  param AW = 32'sd4
+  param DW = 32'sd8
+  net %clk u1 wire
+  net %we u1 wire
+  net %waddr u4 wire
+  net %wdata u8 wire
+  net %raddr u4 wire
+  net %rdata u8 reg
+  port clk in %clk
+  port we in %we
+  port waddr in %waddr
+  port wdata in %wdata
+  port raddr in %raddr
+  port rdata out %rdata
+  memory @mem 16 x u8
+  process seq posedge %clk
+    if %we
+      @mem[%waddr] <= %wdata
+    end
+    %rdata <= @mem[%raddr]
+  end
+end

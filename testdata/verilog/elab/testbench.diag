@@ -1,0 +1,16 @@
+warning[V0023]: no module named `counter` was found
+  --> testbench.v:14:26
+   |
+14 |     counter #(.WIDTH(8)) dut (
+   |                          ^^^ instantiated here
+   |
+   = note: the instance is kept as a black box; its ports are not checked
+
+warning[V0004]: port `wrap` of `counter` is not connected
+  --> testbench.v:22:10
+   |
+22 |         .wrap  ()
+   |          ^^^^ instantiated here
+   |
+   = note: an unconnected input reads as x
+

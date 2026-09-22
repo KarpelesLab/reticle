@@ -1,0 +1,6 @@
+error[V0010]: `q` is a variable and cannot be continuously assigned
+ --> error_cont_assign_reg.v:3:12
+  |
+3 |     assign q = d;
+  |            ^
+

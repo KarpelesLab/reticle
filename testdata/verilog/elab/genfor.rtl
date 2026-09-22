@@ -1,0 +1,23 @@
+top genfor
+
+module genfor
+  param N = 32'sd4
+  net %a u4 wire
+  net %b u4 wire
+  net %y u4 wire
+  net %"g_bit[0].t" u1 wire
+  net %"g_bit[1].t" u1 wire
+  net %"g_bit[2].t" u1 wire
+  net %"g_bit[3].t" u1 wire
+  port a in %a
+  port b in %b
+  port y out %y
+  assign %"g_bit[0].t" = and(%a[0:0], %b[0:0])
+  assign %y[0:0] = %"g_bit[0].t"
+  assign %"g_bit[1].t" = and(%a[1:1], %b[1:1])
+  assign %y[1:1] = or(%"g_bit[1].t", %a[0:0])
+  assign %"g_bit[2].t" = and(%a[2:2], %b[2:2])
+  assign %y[2:2] = or(%"g_bit[2].t", %a[1:1])
+  assign %"g_bit[3].t" = and(%a[3:3], %b[3:3])
+  assign %y[3:3] = or(%"g_bit[3].t", %a[2:2])
+end

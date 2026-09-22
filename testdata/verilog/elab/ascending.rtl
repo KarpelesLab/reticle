@@ -1,0 +1,22 @@
+top ascending
+
+module ascending
+  net %up u8 wire
+  net %high u8 wire
+  net %sel u3 wire
+  net %up_bit u1 wire
+  net %high_bit u1 wire
+  net %up_slice u4 wire
+  net %high_slice u4 wire
+  port up in %up
+  port high in %high
+  port sel in %sel
+  port up_bit out %up_bit
+  port high_bit out %high_bit
+  port up_slice out %up_slice
+  port high_slice out %high_slice
+  assign %up_bit = %up[sub(4'd7, resize(%sel, u4))]
+  assign %high_bit = %high[7:7]
+  assign %up_slice = %up[7:4]
+  assign %high_slice = %high[3:0]
+end

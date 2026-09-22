@@ -1,0 +1,15 @@
+top function_cont
+
+module function_cont
+  net %a u4 wire
+  net %y u4 wire
+  net %"reverse$2.v" u4 var
+  net %"reverse$2.reverse" u4 var
+  port a in %a
+  port y out %y
+  assign %y = %"reverse$2.reverse"
+  process comb$1 comb
+    %"reverse$2.v" = %a
+    %"reverse$2.reverse" = {%"reverse$2.v"[0:0], %"reverse$2.v"[1:1], %"reverse$2.v"[2:2], %"reverse$2.v"[3:3]}
+  end
+end

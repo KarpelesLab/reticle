@@ -14,17 +14,19 @@
 //!   tests and debugging.
 //! - [`format`](mod@format): the source formatter, the tree laid back out
 //!   in one house style with the comments and directives put back.
-//! - `elab`: name resolution, parameters, generate, width inference (not
-//!   yet written).
-//! - `lower`: AST to [`crate::ir`].
+//! - [`elab`]: name resolution, types, parameters, generate unrolling,
+//!   constant evaluation, width inference, and lowering to
+//!   [`crate::ir`].
 //! - [`lint`]: AST-level checks that need no synthesis, run over the tree
 //!   plus the lexer's comments (see `docs/lints.md`).
 //!
-//! [`lex_source`] runs the preprocessor and lexer; [`parse_source`] runs
-//! all three stages and is the entry point elaboration will consume.
+//! [`lex_source`] runs the preprocessor and lexer, [`parse_source`] adds
+//! the parser, and [`elaborate`] turns the parsed files into a validated
+//! [`crate::ir::Design`].
 
 pub mod ast;
 pub mod ast_dump;
+pub mod elab;
 pub mod format;
 pub mod lex;
 pub mod lint;
@@ -32,6 +34,7 @@ pub mod parse;
 pub mod preprocess;
 pub mod token;
 
+pub use elab::{ElabOptions, elaborate, elaborate_file};
 pub use lex::{CommentKind, Lexed, Lexer};
 pub use parse::{ParseError, Parser};
 pub use preprocess::{IncludeResolver, NoIncludes, Preprocessed, Preprocessor, SpanMap};

@@ -1,0 +1,22 @@
+top sv_struct
+
+module sv_struct
+  net %clk u1 wire
+  net %data_in u8 wire
+  net %valid_in u1 wire
+  net %data_out u8 reg
+  net %valid_out u1 reg
+  net %p u12 reg
+  port clk in %clk
+  port data_in in %data_in
+  port valid_in in %valid_in
+  port data_out out %data_out
+  port valid_out out %valid_out
+  assign %data_out = %p[7:0]
+  assign %valid_out = %p[11:11]
+  process seq posedge %clk
+    %p[11:11] <= %valid_in
+    %p[10:8] <= 3'd2
+    %p[7:0] <= %data_in
+  end
+end

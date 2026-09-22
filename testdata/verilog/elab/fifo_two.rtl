@@ -1,0 +1,112 @@
+top fifo_two
+
+module small_fifo$WIDTH_8$DEPTH_4$OUTPUT_REG_1
+  param WIDTH = 32'sd8
+  param DEPTH = 32'sd4
+  param OUTPUT_REG = 1'd1
+  param AW = 32'sd2
+  net %clk u1 wire
+  net %rst u1 wire
+  net %push u1 wire
+  net %din u8 wire
+  net %pop u1 wire
+  net %dout u8 reg
+  net %level u3 reg
+  net %wr_ptr u3 reg
+  net %rd_ptr u3 reg
+  net %word u8 reg
+  port clk in %clk
+  port rst in %rst
+  port push in %push
+  port din in %din
+  port pop in %pop
+  port dout out %dout
+  port level out %level
+  memory @mem 4 x u8
+  assign %level = sub(%wr_ptr, %rd_ptr)
+  assign %word = @mem[%rd_ptr[1:0]]
+  process seq posedge %clk
+    if %rst
+      %wr_ptr <= 3'd0
+      %rd_ptr <= 3'd0
+    else
+      if %push
+        @mem[%wr_ptr[1:0]] <= %din
+        %wr_ptr <= add(%wr_ptr, 3'd1)
+      end
+      if %pop
+        %rd_ptr <= add(%rd_ptr, 3'd1)
+      end
+    end
+  end
+  process seq posedge %clk
+    %dout <= %word
+  end
+end
+
+module small_fifo$WIDTH_16$DEPTH_8$OUTPUT_REG_0
+  param WIDTH = 32'sd16
+  param DEPTH = 32'sd8
+  param OUTPUT_REG = 1'd0
+  param AW = 32'sd3
+  net %clk u1 wire
+  net %rst u1 wire
+  net %push u1 wire
+  net %din u16 wire
+  net %pop u1 wire
+  net %dout u16 reg
+  net %level u4 reg
+  net %wr_ptr u4 reg
+  net %rd_ptr u4 reg
+  net %word u16 reg
+  port clk in %clk
+  port rst in %rst
+  port push in %push
+  port din in %din
+  port pop in %pop
+  port dout out %dout
+  port level out %level
+  memory @mem 8 x u16
+  assign %level = sub(%wr_ptr, %rd_ptr)
+  assign %word = @mem[%rd_ptr[2:0]]
+  assign %dout = %word
+  process seq posedge %clk
+    if %rst
+      %wr_ptr <= 4'd0
+      %rd_ptr <= 4'd0
+    else
+      if %push
+        @mem[%wr_ptr[2:0]] <= %din
+        %wr_ptr <= add(%wr_ptr, 4'd1)
+      end
+      if %pop
+        %rd_ptr <= add(%rd_ptr, 4'd1)
+      end
+    end
+  end
+end
+
+module fifo_two
+  net %clk u1 wire
+  net %rst u1 wire
+  net %push u1 wire
+  net %pop u1 wire
+  net %narrow_in u8 wire
+  net %wide_in u16 wire
+  net %narrow_out u8 reg
+  net %wide_out u16 reg
+  net %narrow_level u3 reg
+  net %wide_level u4 reg
+  port clk in %clk
+  port rst in %rst
+  port push in %push
+  port pop in %pop
+  port narrow_in in %narrow_in
+  port wide_in in %wide_in
+  port narrow_out out %narrow_out
+  port wide_out out %wide_out
+  port narrow_level out %narrow_level
+  port wide_level out %wide_level
+  instance u_narrow of small_fifo$WIDTH_8$DEPTH_4$OUTPUT_REG_1 (clk=%clk, rst=%rst, push=%push, din=%narrow_in, pop=%pop, dout=%narrow_out, level=%narrow_level)
+  instance u_wide of small_fifo$WIDTH_16$DEPTH_8$OUTPUT_REG_0 (clk=%clk, rst=%rst, push=%push, din=%wide_in, pop=%pop, dout=%wide_out, level=%wide_level)
+end

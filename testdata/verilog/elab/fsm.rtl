@@ -1,0 +1,72 @@
+top traffic_light
+
+module traffic_light
+  net %clk u1 wire
+  net %rst_n u1 wire
+  net %car_waiting u1 wire
+  net %red u1 reg
+  net %yellow u1 reg
+  net %green u1 reg
+  net %state u2 reg
+  net %next_state u2 reg
+  net %timer u4 reg
+  net %timer_done u1 reg
+  port clk in %clk
+  port rst_n in %rst_n
+  port car_waiting in %car_waiting
+  port red out %red
+  port yellow out %yellow
+  port green out %green
+  assign %timer_done = rand(%timer)
+  process seq posedge %clk async negedge %rst_n
+    if lnot(%rst_n)
+      %state <= 2'd0
+    else
+      %state <= %next_state
+    end
+  end
+  process seq posedge %clk
+    if ne(%state, %next_state)
+      %timer <= 4'd0
+    else
+      %timer <= add(%timer, 4'd1)
+    end
+  end
+  process comb
+    %next_state = %state
+    case %state unique
+      when 2'd0
+        if land(%timer_done, %car_waiting)
+          %next_state = 2'd1
+        end
+      end
+      when 2'd1
+        if %timer_done
+          %next_state = 2'd2
+        end
+      end
+      when 2'd2
+        if %timer[1:1]
+          %next_state = 2'd0
+        end
+      end
+    end
+  end
+  process comb
+    {%red, %yellow, %green} = 3'd0
+    case %state priority
+      when 2'd0
+        %red = 1'd1
+      end
+      when 2'd1
+        %green = 1'd1
+      end
+      when 2'd2
+        %yellow = 1'd1
+      end
+      default
+        %red = 1'd1
+      end
+    end
+  end
+end
