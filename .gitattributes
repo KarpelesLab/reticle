@@ -1,0 +1,14 @@
+# Golden files are compared byte for byte, and several are pulled in with
+# `include_str!`, so line endings must not depend on the platform: a CRLF
+# checkout on Windows made `ir::builder::tests::builds_the_golden_counter`
+# fail while Linux and macOS passed.
+* text=auto eol=lf
+
+# FST waveform goldens are binary and must never be rewritten.
+*.fst binary
+
+# These two fixtures are deliberately CRLF: they prove the formatters read
+# and normalise Windows line endings. Normalising them would silently
+# delete what they test.
+testdata/verilog/format/crlf.v -text
+testdata/vhdl/format/crlf.vhd -text
