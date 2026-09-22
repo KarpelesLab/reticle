@@ -14,8 +14,16 @@
 //! |----------|--------------|
 //! | [`synthesize_for`] | source-level IR to a netlist of `device`'s primitives |
 //! | [`check_nextpnr_json`] | validates that netlist against the device database |
+//! | [`place_and_route`] | that netlist onto a device's own fabric, and its bitstream |
+//! | [`implement`] | both of the above in one call, source to bitstream |
 //! | [`export_nextpnr`] | a Yosys-style JSON netlist and a `.pcf` / `.lpf`, for `nextpnr-ice40` / `nextpnr-ecp5` |
 //! | [`export_vendor`] | structural Verilog and an `.xdc` / `.sdc`, for Vivado, Quartus or Diamond |
+//!
+//! There are therefore two ways out of a synthesised design: hand it to
+//! nextpnr or a vendor tool, or take it the rest of the way here. The
+//! second needs a routing architecture for the part ([`super::arch`]),
+//! which exists for iCE40 and is *synthetic*: read
+//! [`super::arch::synthetic`] before believing a bitstream it produced.
 //!
 //! # The order of the flow, and why it is that order
 //!
@@ -70,8 +78,14 @@ use std::collections::BTreeMap;
 use std::error::Error;
 use std::fmt;
 
+use std::sync::Arc;
+
+use super::arch::{Arch, RoutingGraph};
+use super::bitstream::Bitstream;
 use super::constraints::Constraints;
 use super::device::Device;
+use super::place::{Netlist, PlaceOptions, Placement, PlacementReport};
+use super::route::{RouteOptions, Routing, RoutingReport};
 use super::techcells::CellMapReport;
 #[cfg(feature = "synth")]
 use crate::diag::Diagnostics;
@@ -95,6 +109,19 @@ pub enum FlowError {
     /// Generic synthesis reported errors, so nothing was mapped. The
     /// errors themselves are in the diagnostics the caller passed in.
     Synthesis,
+    /// No routing architecture is known for the device, so the design
+    /// cannot be placed and routed in Reticle. It can still be exported.
+    NoArchitecture {
+        /// The device that has none.
+        device: String,
+    },
+    /// Placement failed.
+    Placement(super::place::PlaceError),
+    /// Routing failed.
+    Routing(super::route::RouteError),
+    /// The bitstream could not be built from the placed and routed
+    /// design, which means the architecture contradicts itself.
+    Bitstream(super::bitstream::BitstreamError),
 }
 
 impl fmt::Display for FlowError {
@@ -109,6 +136,14 @@ impl fmt::Display for FlowError {
             FlowError::Synthesis => {
                 f.write_str("the design could not be synthesised; see the reported errors")
             }
+            FlowError::NoArchitecture { device } => write!(
+                f,
+                "no routing architecture is known for `{device}`, so Reticle cannot place \
+                 and route it; export it to nextpnr or a vendor tool instead"
+            ),
+            FlowError::Placement(err) => write!(f, "placement failed: {err}"),
+            FlowError::Routing(err) => write!(f, "routing failed: {err}"),
+            FlowError::Bitstream(err) => write!(f, "the bitstream could not be built: {err}"),
         }
     }
 }
@@ -117,8 +152,29 @@ impl Error for FlowError {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         match self {
             FlowError::Emit(err) => Some(err),
+            FlowError::Placement(err) => Some(err),
+            FlowError::Routing(err) => Some(err),
+            FlowError::Bitstream(err) => Some(err),
             _ => None,
         }
+    }
+}
+
+impl From<super::place::PlaceError> for FlowError {
+    fn from(err: super::place::PlaceError) -> Self {
+        FlowError::Placement(err)
+    }
+}
+
+impl From<super::route::RouteError> for FlowError {
+    fn from(err: super::route::RouteError) -> Self {
+        FlowError::Routing(err)
+    }
+}
+
+impl From<super::bitstream::BitstreamError> for FlowError {
+    fn from(err: super::bitstream::BitstreamError) -> Self {
+        FlowError::Bitstream(err)
     }
 }
 
@@ -347,6 +403,224 @@ fn cell_types(design: &Design, module: ModuleId) -> Vec<(String, usize)> {
         *counts.entry(name).or_default() += 1;
     }
     counts.into_iter().collect()
+}
+
+// ---------------------------------------------------------------------------
+// Placement, routing and the bitstream
+// ---------------------------------------------------------------------------
+
+/// Knobs for [`place_and_route`].
+#[derive(Clone, Debug)]
+pub struct PnrOptions {
+    /// The routing architecture to use, or `None` for the built-in one
+    /// serving the device.
+    ///
+    /// This is where a real, IceStorm-derived database is dropped in:
+    /// parse it with [`Arch::parse`] and hand it over. Nothing else in
+    /// the flow changes.
+    ///
+    /// [`Arch::parse`]: super::arch::Arch::parse
+    pub arch: Option<Arch>,
+    /// How placement behaves.
+    pub place: PlaceOptions,
+    /// How routing behaves.
+    pub route: RouteOptions,
+    /// Build the bitstream. Turning it off stops after routing, which is
+    /// what a caller who only wants a placement report does.
+    pub bitstream: bool,
+}
+
+impl Default for PnrOptions {
+    fn default() -> Self {
+        PnrOptions {
+            arch: None,
+            place: PlaceOptions::default(),
+            route: RouteOptions::default(),
+            bitstream: true,
+        }
+    }
+}
+
+impl PnrOptions {
+    /// The defaults: the built-in architecture for the part, and a
+    /// bitstream at the end.
+    pub fn new() -> Self {
+        PnrOptions::default()
+    }
+}
+
+/// What [`place_and_route`] produced.
+///
+/// The architecture and its expanded graph come along because the
+/// placement and the routing are indices into them: a site number means
+/// nothing without [`PnrResult::graph`].
+#[derive(Clone, Debug)]
+pub struct PnrResult {
+    /// The architecture that was used.
+    pub arch: Arch,
+    /// Its expanded graph, shared rather than copied.
+    pub graph: Arc<RoutingGraph>,
+    /// The netlist the placer and the router worked on.
+    pub netlist: Netlist,
+    /// Which site each instance sits on.
+    pub placement: Placement,
+    /// What placement did.
+    pub placement_report: PlacementReport,
+    /// Which pips carry which signal.
+    pub routing: Routing,
+    /// What routing did.
+    pub routing_report: RoutingReport,
+    /// The bitstream, when [`PnrOptions::bitstream`] asked for one.
+    pub bitstream: Option<Bitstream>,
+}
+
+impl PnrResult {
+    /// Checks that the routing really implements the netlist, by walking
+    /// every sink back to its driver; see [`Routing::verify`].
+    pub fn verify(&self) -> Vec<String> {
+        self.routing
+            .verify(&self.netlist, &self.graph, &self.placement)
+    }
+
+    /// The placement and routing reports, one after the other.
+    pub fn to_text(&self) -> String {
+        let mut out = self.placement_report.to_text();
+        out.push_str(&self.routing_report.to_text());
+        if let Some(bitstream) = &self.bitstream {
+            out.push_str(&format!(
+                "bitstream:\n  {} of {} bit(s) set over {} tile(s)\n",
+                bitstream.ones(),
+                bitstream.format.bits(),
+                bitstream.format.tiles.len()
+            ));
+        }
+        out
+    }
+}
+
+/// Places, routes and (optionally) writes the bitstream for a netlist
+/// that [`synthesize_for`] has already produced.
+///
+/// The three stages are [`place`](super::place::place),
+/// [`route`](super::route::route) and
+/// [`generate`](super::bitstream::generate), and each reports what it
+/// did: [`PnrResult::placement_report`] gives the wirelength before and
+/// after annealing, [`PnrResult::routing_report`] the overuse of every
+/// rip-up iteration, and [`PnrResult::to_text`] prints both.
+///
+/// The design is not modified.
+///
+/// # Errors
+///
+/// [`FlowError::NoArchitecture`] when the part has no routing
+/// architecture, and [`FlowError::Placement`], [`FlowError::Routing`] or
+/// [`FlowError::Bitstream`] when a stage could not finish. Every one of
+/// those says which cell, which signal or which wire, so a failure is
+/// actionable rather than a shrug.
+pub fn place_and_route(
+    design: &Design,
+    module: ModuleId,
+    device: &Device,
+    constraints: &Constraints,
+    options: &PnrOptions,
+) -> Result<PnrResult, FlowError> {
+    if design.modules.get(module).is_none() {
+        return Err(FlowError::NoSuchModule);
+    }
+    let (arch, graph) = match &options.arch {
+        Some(arch) => {
+            let graph = Arc::new(arch.build_graph());
+            (arch.clone(), graph)
+        }
+        None => {
+            let arch = super::arch::architecture_for(&device.name).ok_or_else(|| {
+                FlowError::NoArchitecture {
+                    device: device.name.clone(),
+                }
+            })?;
+            let graph = super::arch::builtin_graph_for(&device.name).ok_or_else(|| {
+                FlowError::NoArchitecture {
+                    device: device.name.clone(),
+                }
+            })?;
+            (arch.clone(), graph)
+        }
+    };
+
+    let netlist = Netlist::build(design, module, device, &graph)?;
+    let (placement, placement_report) =
+        super::place::place(&netlist, &arch, &graph, constraints, &options.place)?;
+    let (routing, routing_report) =
+        super::route::route(&netlist, &graph, &placement, &options.route)?;
+    let bitstream = if options.bitstream {
+        Some(super::bitstream::generate(
+            design, module, &arch, &graph, &netlist, &placement, &routing,
+        )?)
+    } else {
+        None
+    };
+    Ok(PnrResult {
+        arch,
+        graph,
+        netlist,
+        placement,
+        placement_report,
+        routing,
+        routing_report,
+        bitstream,
+    })
+}
+
+/// A design taken all the way: the synthesis report and the
+/// place-and-route result.
+#[cfg(feature = "synth")]
+#[derive(Clone, Debug)]
+pub struct Implementation {
+    /// What [`synthesize_for`] did.
+    pub flow: FlowReport,
+    /// What [`place_and_route`] did.
+    pub pnr: PnrResult,
+}
+
+#[cfg(feature = "synth")]
+impl Implementation {
+    /// The bitstream, when one was asked for.
+    pub fn bitstream(&self) -> Option<&Bitstream> {
+        self.pnr.bitstream.as_ref()
+    }
+
+    /// Every report, in the order the stages ran.
+    pub fn to_text(&self) -> String {
+        let mut out = self.flow.to_text();
+        out.push_str(&self.pnr.to_text());
+        out
+    }
+}
+
+/// Source-level IR to a bitstream, in one call.
+///
+/// [`synthesize_for`] followed by [`place_and_route`], with the design
+/// left mapped for the device. This is the whole FPGA flow inside
+/// Reticle; what comes out is only as trustworthy as the architecture it
+/// used, and the one that ships is synthetic
+/// ([`super::arch::synthetic`]).
+///
+/// # Errors
+///
+/// Everything either of the two stages can report.
+#[cfg(feature = "synth")]
+pub fn implement(
+    design: &mut Design,
+    module: ModuleId,
+    device: &Device,
+    constraints: &Constraints,
+    options: &FpgaOptions,
+    pnr: &PnrOptions,
+    diags: &mut Diagnostics,
+) -> Result<Implementation, FlowError> {
+    let flow = synthesize_for(design, module, device, constraints, options, diags)?;
+    let pnr = place_and_route(design, module, device, constraints, pnr)?;
+    Ok(Implementation { flow, pnr })
 }
 
 /// One thing wrong with an exported netlist.

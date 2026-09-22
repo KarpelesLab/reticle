@@ -1272,7 +1272,17 @@ impl DeviceDb {
         };
         let mut db = DeviceDb::new();
         while let Some(line) = parser.peek() {
-            if line.keyword() == "device" {
+            if line.keyword() == "arch" {
+                // A routing architecture ([`super::arch`]) may share a
+                // file with the devices it serves. Its grammar is flat,
+                // so skipping it is skipping to its `end`.
+                parser.bump();
+                while let Some(line) = parser.bump() {
+                    if line.keyword() == "end" {
+                        break;
+                    }
+                }
+            } else if line.keyword() == "device" {
                 let span = line.span;
                 if let Some(device) = parser.device() {
                     if db.get(&device.name).is_some() {

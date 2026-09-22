@@ -1,0 +1,60 @@
+# A hand-written routing architecture, three tiles wide and two tall.
+#
+# It is here to exercise the `.arch` reader on something a person wrote
+# rather than something Rust generated, and to show the whole grammar in
+# one screen. It describes no real silicon at all; the built-in iCE40-like
+# architecture (src/fpga/arch/synthetic.rs) is the one the flow uses, and
+# it is synthetic too.
+#
+# The fabric: every tile has one local track and one east-going span-2
+# line, one LUT bel and one flip-flop bel. A global clock net reaches
+# every flip-flop. That is enough to place and route a chain of logic and
+# to write a bitstream for it.
+
+arch tiny
+  family test
+  part tiny-part
+  grid 3 2
+  asc_device tiny
+  global clk
+
+  tiletype logic asc logic_tile bits 4 8
+
+  wire logic local span 0 0
+  wire logic sp2e span 2 0
+  wire logic lut_i0 span 0 0
+  wire logic lut_i1 span 0 0
+  wire logic lut_o span 0 0
+  wire logic ff_d span 0 0
+  wire logic ff_q span 0 0
+  wire logic ff_clk span 0 0
+
+  bel logic lut lut pin i0=lut_i0 pin i1=lut_i1 pin o=lut_o
+  config logic lut cell SB_LUT4 bits 0.0
+  config logic lut param LUT_INIT 0 0.1
+  config logic lut param LUT_INIT 1 0.2
+  config logic lut param LUT_INIT 2 0.3
+  config logic lut param LUT_INIT 3 0.4
+
+  bel logic ff ff pin clk=ff_clk pin d=ff_d pin q=ff_q
+  config logic ff cell SB_DFF bits 0.5
+
+  # The local track collects both outputs and whatever arrives on a
+  # span-2 line from the west; the two bits are the multiplexer's code.
+  pip logic lut_o local bits 1.0
+  pip logic ff_q local bits 1.1
+  pip logic sp2e@-2,0 local bits 1.0,1.1
+
+  # What the local track can reach.
+  pip logic local lut_i0 bits 2.0
+  pip logic local lut_i1 bits 2.1
+  pip logic local ff_d bits 2.2
+  pip logic local sp2e bits 2.3
+
+  # The clock reaches every flip-flop directly.
+  pip logic *clk ff_clk bits 3.0
+
+  tiles logic rect 0 0 2 1
+  pinmap A X0Y0/lut
+  pinmap B X2Y1/ff
+end

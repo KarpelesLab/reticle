@@ -1,0 +1,47 @@
+routing:
+  iteration 1: 312 pips, 19 overused node(s), 19 total overuse
+  iteration 2: 314 pips, 22 overused node(s), 23 total overuse
+  iteration 3: 332 pips, 14 overused node(s), 14 total overuse
+  iteration 4: 350 pips, 8 overused node(s), 8 total overuse
+  iteration 5: 357 pips, 2 overused node(s), 2 total overuse
+  iteration 6: 356 pips, 2 overused node(s), 2 total overuse
+  iteration 7: 356 pips, 2 overused node(s), 2 total overuse
+  iteration 8: 364 pips, 0 overused node(s), 0 total overuse
+  routed 36 signal(s) with 364 pips over 400 node(s)
+signals:
+  clk 10 pip(s)
+  raddr[0] 13 pip(s)
+  raddr[1] 8 pip(s)
+  raddr[2] 10 pip(s)
+  raddr[3] 5 pip(s)
+  raddr[4] 11 pip(s)
+  raddr[5] 10 pip(s)
+  raddr[6] 8 pip(s)
+  raddr[7] 7 pip(s)
+  raddr[8] 11 pip(s)
+  rdata[0] 10 pip(s)
+  rdata[1] 10 pip(s)
+  rdata[2] 9 pip(s)
+  rdata[3] 14 pip(s)
+  rdata[4] 9 pip(s)
+  rdata[5] 9 pip(s)
+  rdata[6] 12 pip(s)
+  rdata[7] 9 pip(s)
+  waddr[0] 11 pip(s)
+  waddr[1] 11 pip(s)
+  waddr[2] 14 pip(s)
+  waddr[3] 8 pip(s)
+  waddr[4] 11 pip(s)
+  waddr[5] 9 pip(s)
+  waddr[6] 11 pip(s)
+  waddr[7] 8 pip(s)
+  waddr[8] 13 pip(s)
+  wdata[0] 13 pip(s)
+  wdata[1] 10 pip(s)
+  wdata[2] 10 pip(s)
+  wdata[3] 10 pip(s)
+  wdata[4] 11 pip(s)
+  wdata[5] 10 pip(s)
+  wdata[6] 8 pip(s)
+  wdata[7] 8 pip(s)
+  we 13 pip(s)

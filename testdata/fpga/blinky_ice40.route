@@ -1,0 +1,34 @@
+routing:
+  iteration 1: 177 pips, 6 overused node(s), 8 total overuse
+  iteration 2: 185 pips, 4 overused node(s), 4 total overuse
+  iteration 3: 190 pips, 2 overused node(s), 2 total overuse
+  iteration 4: 195 pips, 1 overused node(s), 1 total overuse
+  iteration 5: 198 pips, 0 overused node(s), 0 total overuse
+  routed 26 signal(s) with 198 pips over 224 node(s)
+signals:
+  clk 6 pip(s)
+  clk$gb 8 pip(s)
+  count[0] 9 pip(s)
+  count[1] 12 pip(s)
+  count[2] 7 pip(s)
+  count[3] 3 pip(s)
+  count[4] 10 pip(s)
+  count[5] 11 pip(s)
+  count[6] 10 pip(s)
+  inc$c0 11 pip(s)
+  inc$c1 6 pip(s)
+  inc$c2 4 pip(s)
+  inc$c3 9 pip(s)
+  inc$c4 6 pip(s)
+  inc$c5 13 pip(s)
+  inc$c6 3 pip(s)
+  led 10 pip(s)
+  next[0] 8 pip(s)
+  next[1] 6 pip(s)
+  next[2] 5 pip(s)
+  next[3] 2 pip(s)
+  next[4] 5 pip(s)
+  next[5] 4 pip(s)
+  next[6] 1 pip(s)
+  next[7] 1 pip(s)
+  rst 28 pip(s)

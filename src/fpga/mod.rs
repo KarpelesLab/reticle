@@ -1,15 +1,28 @@
-//! FPGA targets: device database, primitive mapping, constraints and
-//! hand-off to a place-and-route tool.
+//! FPGA targets: device database, primitive mapping, constraints,
+//! placement, routing, bitstreams and hand-off to other tools.
 //!
-//! This is the front half of the FPGA side of phase 6 of `ROADMAP.md`:
-//! everything between a design and a placer. [`flow::synthesize_for`] is
-//! the whole of it in one call — generic synthesis, primitive mapping,
-//! LUT mapping, clean-up, and the rewrite to the family's own cell names
-//! — and the result is a netlist of nothing but primitives the device
-//! declares, which [`flow::check_nextpnr_json`] verifies and
-//! [`flow::export_nextpnr`] hands over. The placer and router themselves
-//! are the next phase; until they land, [`flow`] gives the design to
-//! nextpnr or to a vendor tool.
+//! This is the FPGA side of phase 6 of `ROADMAP.md`, and it now runs the
+//! whole way. [`flow::synthesize_for`] takes a design to a netlist of one
+//! device's primitives — generic synthesis, primitive mapping, LUT
+//! mapping, clean-up, and the rewrite to the family's own cell names —
+//! and from there a caller has two ways on:
+//!
+//! - **out**: [`flow::check_nextpnr_json`] verifies the netlist against
+//!   the device database and [`flow::export_nextpnr`] or
+//!   [`flow::export_vendor`] hands it to nextpnr, Vivado or Quartus;
+//! - **through**: [`flow::place_and_route`] places it ([`mod@place`]), routes
+//!   it ([`mod@route`]) and writes its bitstream ([`bitstream`]) against a
+//!   routing architecture ([`arch`]). [`flow::implement`] is synthesis
+//!   and that in one call, source to bitstream.
+//!
+//! The second way needs a routing architecture for the part, and the one
+//! that ships is **synthetic**: an iCE40-shaped fabric, not an iCE40.
+//! [`arch::synthetic`] says exactly what it borrows and what it invents,
+//! and [`bitstream`] says exactly what its output is and is not. Nothing
+//! in the placer, the router or the bitstream writer knows the
+//! difference: a real database derived from Project IceStorm replaces it
+//! by parsing a file ([`arch::Arch::parse`], then
+//! [`flow::PnrOptions::arch`]), with no code change.
 //!
 //! # The device-database model
 //!
@@ -90,16 +103,61 @@
 //!
 //! The library returns the files and the argument list; running the tool
 //! is the caller's business, as everywhere else in Reticle.
+//!
+//! # All the way to a bitstream
+//!
+//! ```no_run
+//! # use reticle::diag::Diagnostics;
+//! # use reticle::ir::{Design, ModuleId};
+//! # use reticle::fpga::{self, Constraints, FpgaOptions, PnrOptions};
+//! # fn go(design: &mut Design, top: ModuleId, constraints: &Constraints,
+//! #       diags: &mut Diagnostics) {
+//! let device = fpga::target("ice40-hx1k-tq144").expect("built-in device");
+//! let done = fpga::implement(
+//!     design,
+//!     top,
+//!     device,
+//!     constraints,
+//!     &FpgaOptions::default(),
+//!     &PnrOptions::new(),
+//!     diags,
+//! )
+//! .expect("the flow");
+//!
+//! // What every stage did: cells, wirelength before and after
+//! // annealing, the overuse of each routing iteration, and the bits.
+//! print!("{}", done.to_text());
+//!
+//! // The routing really implements the netlist: every sink walks back
+//! // to its driver.
+//! assert!(done.pnr.verify().is_empty());
+//!
+//! let asc = done.bitstream().expect("a bitstream").write_asc();
+//! # let _ = asc;
+//! # }
+//! ```
+//!
+//! See `docs/fpga.md` for the `.arch` format and for what a real iCE40
+//! database would have to supply.
 
+pub mod arch;
+pub mod bitstream;
 pub mod constraints;
 pub mod device;
 pub mod flow;
+pub mod place;
 pub mod primitives;
+pub mod route;
 pub mod techcells;
 mod text;
 
 use std::sync::OnceLock;
 
+pub use arch::{
+    Arch, ArchSite, BelDecl, ConfigBit, ConfigEntry, NodeId, Pip, PipDecl, PipId, RoutingGraph,
+    TileType, Wire, WireDecl, WireRef, architecture_for, builtin_architectures, builtin_graph_for,
+};
+pub use bitstream::{Bitstream, BitstreamError, BitstreamFormat, TileFormat};
 pub use constraints::{
     ClockDef, ClockDomain, Constraints, IoAttrs, MulticyclePath, Origin, PathSpec, PinAssignment,
     Region, RegionAssignment, Rloc, matches_glob,
@@ -110,15 +168,20 @@ pub use device::{
     PinName, PllShape, Site,
 };
 pub use flow::{
-    FlowError, FlowReport, NetlistProblem, NextpnrInputs, VendorInputs, check_nextpnr_json,
-    constant_convention, export_nextpnr, export_vendor,
+    FlowError, FlowReport, NetlistProblem, NextpnrInputs, PnrOptions, PnrResult, VendorInputs,
+    check_nextpnr_json, constant_convention, export_nextpnr, export_vendor, place_and_route,
 };
 #[cfg(feature = "synth")]
-pub use flow::{FpgaOptions, synthesize_for};
+pub use flow::{FpgaOptions, Implementation, implement, synthesize_for};
+pub use place::{
+    Instance, NetPin, Netlist, PlaceError, PlaceOptions, Placement, PlacementReport, Signal, hpwl,
+    place,
+};
 pub use primitives::{
     BramFallback, BramMapping, CarryMapping, ClockMapping, DspMapping, IoMapping, MapOptions,
     MapReport, map,
 };
+pub use route::{Iteration, Route, RouteError, RouteOptions, Routing, RoutingReport, route};
 pub use techcells::{CellMapReport, map_cells};
 
 use crate::diag::Diagnostics;
