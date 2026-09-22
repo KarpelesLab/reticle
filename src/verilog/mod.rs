@@ -12,6 +12,8 @@
 //! - [`parse`]: recursive descent with error recovery.
 //! - [`ast_dump`]: a deterministic text rendering of the tree, for golden
 //!   tests and debugging.
+//! - [`format`](mod@format): the source formatter, the tree laid back out
+//!   in one house style with the comments and directives put back.
 //! - `elab`: name resolution, parameters, generate, width inference (not
 //!   yet written).
 //! - `lower`: AST to [`crate::ir`].
@@ -23,6 +25,7 @@
 
 pub mod ast;
 pub mod ast_dump;
+pub mod format;
 pub mod lex;
 pub mod lint;
 pub mod parse;
