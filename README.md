@@ -24,7 +24,8 @@ Reticle is intended to grow into one self-contained hardware toolchain:
   on an in-crate SAT solver.
 - **IP integration**: a manifest format for third-party IP, bus interface
   abstractions (AXI, Wishbone, APB), black-box handling for encrypted vendor
-  cores, and a first-party IP library tested through the simulator.
+  cores, a static registry index, an IP-XACT importer, and a first-party IP
+  library tested through the simulator.
 
 The full plan, ordered by dependency and with a definition of done for each
 phase, is in [ROADMAP.md](ROADMAP.md).
@@ -44,7 +45,7 @@ Early, but the middle of the pipeline runs end to end. What works today:
 | Formal | CDCL SAT solver, bit-blaster, bounded model checking, k-induction, equivalence checking |
 | ASIC | Liberty, LEF and DEF readers and writers, standard-cell mapping with flip-flop matching, SDC output and an OpenROAD hand-off |
 | Timing | static timing analysis with setup and hold, path reports, clock domain crossing checks |
-| IP | manifests with dependency resolution and a lock file, bus interfaces, generated interconnect, encrypted-core black boxes |
+| IP | manifests with dependency resolution and a lock file, bus interfaces, generated interconnect, encrypted-core black boxes, a static registry index, IP-XACT import |
 | Tooling | Verilog and VHDL formatters, a language server for both |
 | Embedding | C ABI for use from another tool, and a WebAssembly build with a browser playground under `web/` |
 | FPGA | device database (iCE40, ECP5, generic), primitive mapping, placement and IO constraints, nextpnr and vendor export |

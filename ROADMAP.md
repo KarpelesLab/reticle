@@ -408,7 +408,18 @@ and first-party IP should drop into a design as easily as a Rust crate.
 - [x] Vendor and encrypted IP: black-box declarations from a stub, so a
       design using an encrypted core still elaborates, lints, and simulates
       with a behavioural model, and is emitted for the vendor tool to fill.
-- [ ] IP-XACT import for existing IP catalogues.
+- [x] IP-XACT import for existing IP catalogues: `ipxact::import` reads a
+      component description — IEEE 1685-2009 with the `spirit` namespace,
+      1685-2014 and 1685-2022 with `ipxact`, since catalogues are a mix —
+      and produces a `reticle.ip` plus a report of what was translated,
+      approximated and dropped. VLNV to package name and version, model
+      ports with directions and vector bounds evaluated against the
+      component's parameters, file sets to `source` lines, parameters to
+      `param` lines, and bus interfaces matched against the built-in bus
+      set by a documented VLNV table; memory maps become a description
+      rather than invented logic. The XML reader it needs is
+      `src/ip/xml.rs`, which refuses external entities and DTDs on
+      purpose. See `docs/ip.md`.
 - [x] Generators: parameterised IP written in Rust against the IR builder
       API (the way Chisel or Amaranth do it), for blocks that are painful
       to express in HDL (wide crossbars, CORDIC tables, filter banks). The
@@ -427,8 +438,17 @@ and first-party IP should drop into a design as easily as a Rust crate.
       (RMII / RGMII), USB device, HDMI/DVI output and a small RISC-V core.
       Each of the first four needs device primitives the FPGA backend does
       not configure yet (DDR registers, PLLs, IO delays).
-- [ ] Registry: a static index (git repository of manifests) that
-      `reticle add` searches, in the style of a crates.io index.
+- [x] Registry: a static index (git repository of manifests) that
+      `reticle add` searches, in the style of a crates.io index: one file
+      per package under a name-derived path, one line per release with
+      checksum, dependencies and a yanked flag, in the same line-oriented
+      format as the manifests. `Index` parses, renders, searches with a
+      deterministic ranking and selects versions; `RegistryProvider` is a
+      `SourceProvider`, so a registry dependency resolves like a path one
+      through a caller-supplied fetcher; `registry::add` picks the best
+      version and rewrites the project manifest, keeping its comments and
+      layout. The `reticle add` and `reticle search` commands themselves
+      are phase 9.
 
 Done when: a project manifest pulling in a UART and a RISC-V core from the
 library builds, simulates its testbench, and runs on an iCE40 board with

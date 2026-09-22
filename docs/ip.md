@@ -4,8 +4,9 @@ Third-party and first-party IP should drop into a design the way a crate
 drops into a Rust program. `reticle::ip` (Cargo feature `ip`) is what makes
 that true: a manifest format for packages and projects, a dependency
 resolver with a lock file, bus interfaces described once and then both
-generated and checked, interconnect generators, and black boxes for
-encrypted vendor cores.
+generated and checked, interconnect generators, black boxes for encrypted
+vendor cores, a static registry index to find packages in, and an importer
+for catalogues that already describe their IP in IP-XACT.
 
 This document is the format reference and one complete worked example. The
 API reference (`cargo doc --features ip`) has the per-item details.
@@ -119,9 +120,11 @@ depends     cdc_sync  *       registry
 
 `where` is `path <dir>`, `git <url> [rev <r>]` or `registry`. The library
 itself does no I/O and no networking: the `PathProvider` it ships resolves
-`path` dependencies through a caller-supplied closure and declines `git`
-and `registry` with a clear diagnostic, so the CLI (or a WebAssembly
-playground, or a test) is the only thing that ever opens a file.
+`path` dependencies through a caller-supplied closure, `RegistryProvider`
+resolves `registry` ones through an index and another closure (see [the
+registry](#the-registry-a-static-index)), and `git` is still declined with a
+clear diagnostic. The CLI — or a WebAssembly playground, or a test — is the
+only thing that ever opens a file.
 
 ## Version requirements
 
@@ -505,6 +508,249 @@ with `DECERR` while leaving the bus usable. That is what proves the
 generator, rather than a golden netlist that could be wrong in exactly the
 same way twice.
 
+## The registry: a static index
+
+A registry is what the crates.io index is: a **git repository of
+manifests**, one file per package and one line per released version. There
+is no server and no API — cloning or pulling the repository is the whole
+protocol, `git log` is the audit trail, and a mirror is a clone.
+
+`registry::index_path` puts each package where its name says, so no
+directory grows past the packages sharing four leading characters:
+
+| Name | Path |
+|------|------|
+| `a` | `1/a` |
+| `ab` | `2/ab` |
+| `abc` | `3/a/abc` |
+| `fifo_sync` | `fi/fo/fifo_sync` |
+
+Each file is the same line-oriented format as everything else here:
+
+```text
+package fifo_sync 1.0.0 checksum 6f1e… description "A synchronous FIFO"
+package fifo_sync 1.0.4 checksum 91a2… description "A synchronous FIFO" depends cdc_sync ^0.3.0
+package fifo_sync 1.1.0 checksum 0c77… yanked
+```
+
+After the name and the version the words come in a fixed order: `checksum
+<word>`, then `yanked` if it is, then `description "<text>"` if it has one,
+then one `depends <name> <requirement>` per dependency. A line is a
+*summary* of a manifest — enough to resolve a whole graph without fetching
+anything, and nothing more.
+
+What the checksum covers, and with which algorithm, is the publisher's
+business: Reticle ships no hash function, so verification belongs next to
+the bytes, in the fetcher. The field is carried so a lock file can be
+checked against the index next time round.
+
+The API over it:
+
+| Call | What it does |
+|------|--------------|
+| `Index::parse` / `Index::to_text` | read and write index text |
+| `Index::files` | every `(path, contents)` pair, for writing the tree out |
+| `Index::search(query)` | substring and prefix over names and descriptions |
+| `Index::versions(name)` | every release, oldest first |
+| `Index::best(name, &req)` | the highest release satisfying `req` |
+| `IndexEntry::from_manifest` | summarise a `reticle.ip` for publication |
+
+`search` ranks by how the package matched — exact name, then name prefix,
+then name substring, then description — and breaks ties by name, so the
+same query over the same index always returns the same list. Each package
+appears once, showing the newest version that is neither yanked nor a
+pre-release. `best` skips yanked releases unless the requirement names one
+exactly, which is what lets a lock file keep building after a yank.
+
+### Resolving through it
+
+`RegistryProvider` implements the same `SourceProvider` trait `PathProvider`
+does, so a registry dependency resolves exactly like a path one:
+
+```rust
+let mut provider = RegistryProvider::new(&index, |path: &str| cache.get(path))
+    .with_root("."); // where the project's own sources are
+let resolved = Resolver::new(map).resolve(&project, &mut provider, &mut diags);
+```
+
+The library still performs no I/O. The provider is handed a path like
+`fifo_sync-1.0.4/reticle.ip` and the closure answers it from whatever the
+caller has: a checkout, a cache directory, or a bundle compiled into a
+WebAssembly module.
+
+### `reticle add`
+
+`registry::add(&ProjectFile::new(&project, &text), name, &req, &index)` is
+the library half of the command a user types. It picks the best version the
+index offers, writes the `depends` line into the manifest **text**, and
+returns the rewritten text along with the version it chose and the line it
+wrote.
+
+The rewrite keeps every comment, every blank line and the existing
+alignment, and puts the new line where it belongs: in name order when the
+file is already in name order, after the last `depends` line otherwise, and
+after a blank line at the end of the file when there are none. A tool that
+reformats a file it was asked to add one line to is a tool nobody lets near
+their repository twice.
+
+```text
+# The IP this needs.
+depends     cdc_sync ^0.3.0 registry
+depends     fifo_sync ^1.0.0 registry   <- added here, aligned like its neighbours
+depends     uart_lite ^1.2.0 registry
+```
+
+`AddError` covers the three ways it can refuse: no such package (with a
+"did you mean"), no release satisfying the requirement (listing what there
+is, yanked ones marked), and a package the project already depends on
+(pointing at the line that has it).
+
+## IP-XACT import
+
+A catalogue that already describes its IP in IP-XACT does not have to be
+rewritten. `ipxact::import(xml, &ImportOptions::new(file), &mut diags)`
+reads one **component** description and produces a `reticle.ip` plus a
+report of what happened to every part of it.
+
+The root element's namespace decides which revision is being read, because
+the prefix is only a spelling and real catalogues are a mix:
+
+| Namespace | Read as |
+|-----------|---------|
+| `…/SPIRIT/1685-2009` | IEEE 1685-2009, usually spelled `spirit:` |
+| `…/IPXACT/1685-2014` | IEEE 1685-2014, `ipxact:` |
+| `…/IPXACT/1685-2022` | IEEE 1685-2022, `ipxact:` |
+
+An older SPIRIT namespace (1.2 to 1.5) is read as 1685-2009 and said to be.
+Anything else is an error: guessing at a schema nobody has named is how an
+importer silently loses half a component. Both spellings of everything that
+moved between revisions are handled — `wire/vector` against
+`wire/vectors/vector`, `modelParameters` against a component
+instantiation's `moduleParameters`, port maps on the `busInterface` against
+port maps on its `abstractionType`, and `master`/`slave` against
+`initiator`/`target`.
+
+### What maps to what
+
+| IP-XACT | `reticle.ip` |
+|---------|--------------|
+| VLNV `name`, `version` | `name`, `version` |
+| `description` | `description`, with the memory maps appended |
+| a view's model or module name | `top` |
+| `model/ports/port` (wire ports) | `port <name> <dir> [width]` |
+| `fileSets/fileSet/file` | `source <path> [language <lang>]` |
+| `parameters`, `modelParameters`, `moduleParameters` | `param <name> <type> [default] [lo..hi]` |
+| `busInterfaces/busInterface` | `interface <name> <bus> <role> [prefix <p>]` |
+| `memoryMaps` | a phrase in `description` |
+
+Vector bounds are expressions over the component's parameters
+(`ADDR_WIDTH-1` down to `0`), so they are evaluated against the parameters'
+values — integers, `+ - * / %`, parentheses, and names resolved by
+parameter name *or* by `parameterId`. A bound that does not evaluate but
+has the shape `PARAM-1` or `PARAM/n-1` becomes the manifest's own derived
+width, which is exactly what carries a `DATA_WIDTH/8` byte strobe across.
+Anything else is reported and the **port is dropped**: a width Reticle had
+to invent would be worse than a missing line, because nobody would ever
+check it.
+
+Memory maps and address blocks become a phrase in the description —
+`memory map REGS: CTRL at 0x40000000 range 0x1000 width 32` — and nothing
+else. A register map is not logic, and inventing logic from one is how an
+importer produces a design that looks right and is not.
+
+### The bus mapping
+
+A `busType` is a VLNV of its own. Its name is normalised (upper case,
+everything but letters and digits removed) and looked up:
+
+| `busType` name | Reticle bus | Note |
+|----------------|-------------|------|
+| `AXI4LITE`, `AXILITE` | `axi4lite` | |
+| `AXI4STREAM`, `AXISTREAM`, `AXIS` | `axi4stream` | |
+| `AXI4` | `axi4` | |
+| `AXI3`, `AXI` | `axi4` | approximated: AXI4 is the closest built-in |
+| `APB`, `APB2`, `APB3`, `APB4` | `apb` | |
+| `WISHBONE`, `WISHBONEB4`, `WB` | `wishbone` | |
+| `WISHBONEPIPELINED`, `WBPIPELINED` | `wishbone_pipelined` | |
+| `AVALON`, `AVALONMM`, `AVALONMEMORYMAPPED` | `avalon_mm` | |
+
+`ImportOptions::with_bus` adds to that table, for a site with its own `.bus`
+files. A bus nothing matches is **not** guessed at: the interface is dropped
+with a diagnostic naming the whole VLNV, and its ports stay in the manifest
+as plain `port` lines, so the component loses an abstraction but never a
+signal.
+
+The port-name prefix comes from the port maps — a physical `s_axi_awaddr`
+for the logical `AWADDR` leaves `s_axi_` — and from the interface's own name
+when there are none. Ports a recognised interface stands for are not written
+again as `port` lines, since the `interface` line already declares them.
+
+### Silence is the enemy
+
+`ImportedIp::report` has three lists — `translated`, `approximated`,
+`dropped` — and `describe()` renders them:
+
+```text
+translated
+  standard IEEE 1685-2014 (ipxact)
+  component reticle.example:peripherals:axil_gpio:2.1 -> package axil_gpio 2.1.0
+  interface S_AXI: amba.com:AMBA4:AXI4-Lite:r0p0_0 -> axi4lite subordinate (prefix `s_axi_`, 5 signals)
+approximated
+  version `2.1`: the missing numbers are zero, giving 2.1.0
+  parameter GPIO_WIDTH: the default `ADDR_WIDTH-4` evaluates to 8
+dropped
+  port scan_mode: a phantom port is not in the HDL
+  interface M_AHB: no bus matches amba.com:AMBA3:AHBLite:r2p0_0 (1 ports kept as plain ports)
+  file syn/axil_gpio.sdc: the type `SDC` is not an HDL source
+  vendorExtensions: vendor extensions are not read
+```
+
+An import that quietly halves a component is the failure that bites months
+later, when a synthesised design turns out to be missing an interrupt line
+nobody noticed had gone. Everything interesting is a diagnostic as well.
+
+Version strings are the other place a catalogue and a resolver disagree.
+IP-XACT leaves the VLNV version as free text, so `1.2` becomes `1.2.0`,
+`1.2.3.4` keeps its first three numbers, `2.0.1_beta` becomes
+`2.0.1-beta`, and `r1p3` — which names no number at all — becomes
+`0.0.0-r1p3`, sorting below every release. Each is reported, and
+`ImportOptions::with_version` overrides all of it.
+
+### What is not read
+
+`import` reads a `component`, and says so when handed a design, a catalogue,
+a bus definition or an abstraction definition. Within a component,
+transactional (TLM) ports, `vendorExtensions`, `choices`, `cpus`,
+`channels`, `whiteboxElements`, `indirectInterfaces`, address spaces,
+register field details and a view's file-set references are skipped, most of
+them with a line in the report. Every file set is imported, in document
+order, since which of them a view refers to is not followed.
+
+### The XML reader
+
+IP-XACT is XML and the crate has no parser, so `ip::xml` is one: elements,
+attributes, namespaces resolved to URIs, text, CDATA, comments, processing
+instructions, self-closing tags, the five predefined entities and numeric
+character references. A malformed document produces exactly **one**
+diagnostic, with a span, and no tree; nothing is guessed.
+
+There are no DTDs, no external entities and no schema validation, and the
+refusal is deliberate. An entity reference that is not one of the five
+predefined ones, and a `<!DOCTYPE>` with an internal subset or an external
+identifier, are both errors:
+
+```text
+error[P0504]: Reticle will not resolve the entity `&xxe;`
+  = note: only `&amp;`, `&lt;`, `&gt;`, `&quot;`, `&apos;` and numeric references are
+          read: Reticle parses no DTD and never fetches an external entity, so expand
+          the document before importing it
+```
+
+Resolving external entities is how XML parsers become file-disclosure and
+request-forgery holes, and a document that needs one can be expanded by
+whatever wrote it. The library performs no I/O in any case, so there would
+be nowhere for a resolved entity to come from.
+
 ## Diagnostic codes
 
 | Range | Where |
@@ -513,19 +759,28 @@ same way twice.
 | `P0101`–`P0105` | resolution: not found, conflict, cycle, name mismatch, unsupported source |
 | `P0201`–`P0205` | buses: missing signal, direction, width, unknown bus, `.bus` syntax |
 | `P0301` | lock file syntax |
+| `P0401`–`P0404` | building: no such top, unknown language, (retired), invalid design |
+| `P0501`–`P0507` | XML: syntax, mismatched tag, entity, refused entity or DTD, duplicate attribute, unbound prefix, nesting |
+| `P0601`–`P0608` | IP-XACT: unknown standard, not a component, missing element, odd version, unresolved expression, unknown bus, unknown file type, unknown direction |
+| `P0701`–`P0704` | registry: index syntax, no such package, no such version, already a dependency |
 
 An unknown key comes with a "did you mean" over the keys that manifest
 kind does have.
 
 ## What is not here yet
 
-- **`git` and `registry` dependencies are declined.** Fetching one is
-  network I/O, which the library does not do; vendor the package or use a
-  checkout and a `path` dependency. The grammar is there so the manifests
-  do not have to change when the registry arrives.
+- **A `git` dependency is declined.** Fetching one is network I/O, which
+  the library does not do; vendor the package or use a checkout and a
+  `path` dependency. A `registry` dependency now resolves through
+  `RegistryProvider`, whose fetcher the caller supplies for the same
+  reason.
+- **No `reticle add` command yet.** `registry::add` is the library half
+  and is tested; wiring it to the binary, along with `reticle search`
+  and a place to keep the index checkout, is phase 9 work.
 - **`` `include `` is not followed** during a project build: a package
   lists its files in its manifest, which is what the provider reads.
-- **IP-XACT import** and the registry index are the rest of phase 8.
+- **The IP-XACT import reads components only**, and within one skips what
+  the list above says it skips. Nothing writes IP-XACT back out.
 
 The first-party IP library is in `ip/` and has its own document,
 [`ip-library.md`](ip-library.md): eleven Verilog-2005 packages — the two
