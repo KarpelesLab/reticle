@@ -31,9 +31,28 @@ phase, is in [ROADMAP.md](ROADMAP.md).
 
 ## Status
 
-Phase 0 (foundations). The source map, span and diagnostic machinery exist
-and are tested; no frontend is implemented yet. `reticle check file.v`
-exercises the plumbing only.
+Early, but the middle of the pipeline runs end to end. What works today:
+
+| Stage | State |
+|-------|-------|
+| Verilog / SystemVerilog | preprocessor, lexer, parser; elaboration in progress |
+| VHDL-2008 | lexer, parser; semantic analysis in progress |
+| Unified IR | design model, validator, round-tripping `.rtl` text format |
+| Simulation | event-driven 4-state simulator, VCD, Rust co-simulation API |
+| Synthesis | process lowering, flip-flop / latch / memory / FSM inference, optimisation passes |
+| Emission | Verilog, VHDL, Yosys JSON, BLIF, EDIF |
+| Formal | CDCL SAT solver, bit-blaster, bounded model checking, k-induction, equivalence checking |
+
+The frontends parse and check real designs but do not yet lower to the IR,
+so the stages after elaboration take `.rtl` input for the moment:
+
+```sh
+reticle check      counter.v counter.vhd design.rtl
+reticle synth      --report --output netlist.rtl design.rtl
+reticle emit       --format verilog netlist.rtl
+reticle sim        --vcd waves.vcd testbench.rtl
+reticle verify     --depth 20 --trace cex.vcd design.rtl
+```
 
 ## Building
 

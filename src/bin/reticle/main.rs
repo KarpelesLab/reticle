@@ -1,16 +1,28 @@
 //! The `reticle` command-line tool.
 //!
-//! A thin wrapper over the library: it loads files into a
-//! [`reticle::source::SourceMap`], invokes the requested stage and prints
-//! diagnostics. Argument parsing is hand-written to keep the crate free of
-//! dependencies.
+//! A thin wrapper over the library: it reads files, calls one stage and
+//! prints the result. Everything it does is reachable from Rust through the
+//! `reticle` crate, which is the supported way to script the compiler; this
+//! binary exists for the common one-shot operations.
 //!
-//! Exit codes: 0 on success, 1 when errors were reported, 2 on usage errors.
+//! The library is sans-I/O, so this is the only place that touches the
+//! filesystem. Argument parsing is hand-written (see [`args`]) because the
+//! crate ships no dependencies.
+//!
+//! Exit codes: 0 on success, 1 when errors were reported or a check failed,
+//! 2 on usage errors.
 
+mod args;
+
+use std::path::Path;
 use std::process::ExitCode;
 
+use args::{ArgError, Args, Spec};
+
 use reticle::diag::{Diagnostic, Diagnostics};
-use reticle::source::SourceMap;
+use reticle::ir::Design;
+use reticle::ir::emit::{self, Format};
+use reticle::source::{SourceId, SourceMap};
 
 const USAGE: &str = "\
 reticle: a VHDL / Verilog compiler
@@ -18,31 +30,103 @@ reticle: a VHDL / Verilog compiler
 Usage: reticle <command> [options] [files...]
 
 Commands:
-  check    Load the given source files and report diagnostics
-  help     Show this message
+  check    Parse and check source files
+  synth    Synthesise a design to a technology-independent netlist
+  emit     Write a design out in another format
+  sim      Simulate a design and print its output
+  verify   Prove or refute a design's assertions
+  help     Show this message, or `reticle help <command>`
   version  Show the version
 
+Designs are read from the `.rtl` IR text format. The Verilog and VHDL
+frontends parse and check today; lowering them to the IR is in progress,
+so `synth`, `emit`, `sim` and `verify` take `.rtl` input for now.
+
+Run `reticle help <command>` for a command's options.
+";
+
+const CHECK_USAGE: &str = "\
+Usage: reticle check [files...]
+
+Parses each file and reports diagnostics. `.rtl` files are additionally
+validated against the IR's structural rules.
+
 Options:
-  -h, --help     Show this message
-  -V, --version  Show the version
+  --quiet   Print diagnostics only, no summary line
+";
+
+const SYNTH_USAGE: &str = "\
+Usage: reticle synth [options] <design.rtl>
+
+Lowers processes to cells, infers flip-flops, latches and memories, then
+optimises. Writes the resulting netlist in the `.rtl` format.
+
+Options:
+  --output <file>     Write the netlist here (default: stdout)
+  --top <module>      Treat this module as the top
+  --fsm <encoding>    auto, binary, one-hot, gray or none
+  --max-iterations <n>  Optimisation-loop cap (default 8)
+  --report            Print the pass log and cell counts to stderr
+  --quiet             Suppress the summary line
+";
+
+const EMIT_USAGE: &str = "\
+Usage: reticle emit [options] <design.rtl>
+
+Options:
+  --format <fmt>   verilog, vhdl, json, blif or edif (default verilog)
+  --output <file>  Write here (default: stdout)
+";
+
+const SIM_USAGE: &str = "\
+Usage: reticle sim [options] <design.rtl>
+
+Runs the design until $finish, until no events remain, or until the time
+limit. Text from $display and report statements goes to stdout.
+
+Options:
+  --top <module>   Instantiate this module as the root
+  --until <ticks>  Stop at this time (in the design's precision)
+  --seed <n>       Seed for $random (default 1)
+  --vcd <file>     Write a VCD waveform here
+  --quiet          Suppress the summary line
+";
+
+const VERIFY_USAGE: &str = "\
+Usage: reticle verify [options] <design.rtl>
+
+Bounded model checking followed by k-induction over the nets marked with
+the `formal_assert`, `formal_assume` and `formal_cover` attributes.
+
+Options:
+  --top <module>   Check this module (default: the design's top)
+  --depth <n>      Bounded-check depth (default 20)
+  --max-k <n>      Largest induction depth to try (default 10)
+  --init <mode>    reset, zero or free (default reset)
+  --trace <file>   Write the counter-example as VCD here
 ";
 
 fn main() -> ExitCode {
-    let args: Vec<String> = std::env::args().skip(1).collect();
-    let Some(command) = args.first().map(String::as_str) else {
+    let argv: Vec<String> = std::env::args().skip(1).collect();
+    let Some(command) = argv.first().map(String::as_str) else {
         eprint!("{USAGE}");
         return ExitCode::from(2);
     };
+    let rest = &argv[1..];
     match command {
         "help" | "-h" | "--help" => {
-            print!("{USAGE}");
+            print!("{}", help_text(rest.first().map(String::as_str)));
             ExitCode::SUCCESS
         }
         "version" | "-V" | "--version" => {
             println!("reticle {}", reticle::VERSION);
             ExitCode::SUCCESS
         }
-        "check" => check(&args[1..]),
+        "check" => run(check, rest, CHECK_USAGE),
+        "synth" => run(synth, rest, SYNTH_USAGE),
+        "emit" => run(emit_cmd, rest, EMIT_USAGE),
+        "sim" => run(sim, rest, SIM_USAGE),
+        "verify" => run(verify, rest, VERIFY_USAGE),
         other => {
             eprintln!("error: unknown command `{other}`\n");
             eprint!("{USAGE}");
@@ -51,61 +135,442 @@ fn main() -> ExitCode {
     }
 }
 
-/// Loads every named file and reports what can be reported at this stage.
-///
-/// The frontends are not implemented yet (see `ROADMAP.md`), so this only
-/// exercises the I/O and diagnostic plumbing: missing files are errors, and
-/// files with an extension no frontend claims are warnings.
-fn check(paths: &[String]) -> ExitCode {
-    if paths.is_empty() {
-        eprintln!("error: `check` needs at least one source file\n");
-        eprint!("{USAGE}");
-        return ExitCode::from(2);
+/// The help text for one command, or the overview.
+fn help_text(command: Option<&str>) -> &'static str {
+    match command {
+        Some("check") => CHECK_USAGE,
+        Some("synth") => SYNTH_USAGE,
+        Some("emit") => EMIT_USAGE,
+        Some("sim") => SIM_USAGE,
+        Some("verify") => VERIFY_USAGE,
+        _ => USAGE,
     }
+}
 
+/// What a command reports back.
+enum Outcome {
+    /// The command did its job.
+    Ok,
+    /// The command ran and found a problem in the user's design.
+    Failed,
+    /// The command was invoked wrongly; its usage text is printed.
+    Usage(String),
+}
+
+/// Runs one command, turning its outcome into an exit code.
+fn run(command: fn(&Args) -> Result<Outcome, ArgError>, argv: &[String], usage: &str) -> ExitCode {
+    let spec = spec_for(usage);
+    let args = match Args::parse(argv, &spec) {
+        Ok(args) => args,
+        Err(err) => {
+            eprintln!("error: {err}\n");
+            eprint!("{usage}");
+            return ExitCode::from(2);
+        }
+    };
+    match command(&args) {
+        Ok(Outcome::Ok) => ExitCode::SUCCESS,
+        Ok(Outcome::Failed) => ExitCode::from(1),
+        Ok(Outcome::Usage(message)) => {
+            eprintln!("error: {message}\n");
+            eprint!("{usage}");
+            ExitCode::from(2)
+        }
+        Err(err) => {
+            eprintln!("error: {err}\n");
+            eprint!("{usage}");
+            ExitCode::from(2)
+        }
+    }
+}
+
+/// The accepted options for a command, keyed off its usage text so the two
+/// can never drift apart.
+fn spec_for(usage: &str) -> Spec {
+    // Kept as one match rather than parsed out of the text: a static table
+    // is checked by the compiler, a parsed one is not.
+    if std::ptr::eq(usage, CHECK_USAGE) {
+        Spec {
+            options: &[],
+            flags: &["quiet"],
+        }
+    } else if std::ptr::eq(usage, SYNTH_USAGE) {
+        Spec {
+            options: &["output", "top", "fsm", "max-iterations"],
+            flags: &["report", "quiet"],
+        }
+    } else if std::ptr::eq(usage, EMIT_USAGE) {
+        Spec {
+            options: &["format", "output"],
+            flags: &[],
+        }
+    } else if std::ptr::eq(usage, SIM_USAGE) {
+        Spec {
+            options: &["top", "until", "seed", "vcd"],
+            flags: &["quiet"],
+        }
+    } else {
+        Spec {
+            options: &["top", "depth", "max-k", "init", "trace"],
+            flags: &[],
+        }
+    }
+}
+
+/// Reads a file into the map, reporting failures as diagnostics.
+fn load(map: &mut SourceMap, path: &str, diags: &mut Diagnostics) -> Option<SourceId> {
+    let text = match std::fs::read_to_string(path) {
+        Ok(text) => text,
+        Err(err) => {
+            diags.push(Diagnostic::error(format!("cannot read `{path}`: {err}")));
+            return None;
+        }
+    };
+    match map.add(path.to_string(), text) {
+        Ok(id) => Some(id),
+        Err(err) => {
+            diags.push(Diagnostic::error(format!("cannot load `{path}`: {err}")));
+            None
+        }
+    }
+}
+
+/// Writes to a file, or to stdout when no path is given.
+fn write_out(path: Option<&str>, text: &str) -> Result<(), String> {
+    match path {
+        None => {
+            print!("{text}");
+            Ok(())
+        }
+        Some(path) => {
+            std::fs::write(path, text).map_err(|err| format!("cannot write `{path}`: {err}"))
+        }
+    }
+}
+
+/// Prints diagnostics and says whether any were errors.
+fn report(diags: &mut Diagnostics, map: &SourceMap) -> bool {
+    diags.sort();
+    eprint!("{}", diags.render(map));
+    diags.has_errors()
+}
+
+/// The lowercase extension of a path, if it has one.
+fn extension(path: &str) -> Option<String> {
+    Path::new(path)
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(str::to_ascii_lowercase)
+}
+
+/// Loads exactly one `.rtl` design named on the command line.
+fn load_design(args: &Args) -> Result<Result<(Design, SourceMap), Outcome>, ArgError> {
+    let paths = args.positionals();
+    let path = match paths {
+        [one] => one.clone(),
+        [] => return Ok(Err(Outcome::Usage("no input file given".into()))),
+        _ => {
+            return Ok(Err(Outcome::Usage(format!(
+                "expected one input file, got {}",
+                paths.len()
+            ))));
+        }
+    };
     let mut map = SourceMap::new();
     let mut diags = Diagnostics::new();
-    for path in paths {
-        let text = match std::fs::read_to_string(path) {
-            Ok(text) => text,
-            Err(err) => {
-                diags.push(Diagnostic::error(format!("cannot read `{path}`: {err}")));
-                continue;
-            }
-        };
-        if let Err(err) = map.add(path.clone(), text) {
-            diags.push(Diagnostic::error(format!("cannot load `{path}`: {err}")));
-            continue;
+    let Some(id) = load(&mut map, &path, &mut diags) else {
+        report(&mut diags, &map);
+        return Ok(Err(Outcome::Failed));
+    };
+    let text = map.file(id).text().to_string();
+    match Design::parse_text(&text, id) {
+        Ok(design) => Ok(Ok((design, map))),
+        Err(mut errors) => {
+            report(&mut errors, &map);
+            Ok(Err(Outcome::Failed))
         }
-        let known = matches!(
-            std::path::Path::new(path)
-                .extension()
-                .and_then(|e| e.to_str())
-                .map(str::to_ascii_lowercase)
-                .as_deref(),
-            Some("v" | "sv" | "vh" | "svh" | "vhd" | "vhdl")
-        );
-        if !known {
-            diags.push(
-                Diagnostic::warning(format!("`{path}` has no recognised HDL extension"))
-                    .with_note("expected .v, .sv, .vh, .svh, .vhd or .vhdl"),
-            );
+    }
+}
+
+/// `reticle check`: parse every file and report what is wrong with it.
+fn check(args: &Args) -> Result<Outcome, ArgError> {
+    let paths = args.positionals();
+    if paths.is_empty() {
+        return Ok(Outcome::Usage("no input file given".into()));
+    }
+    let mut map = SourceMap::new();
+    let mut diags = Diagnostics::new();
+    let mut checked = 0usize;
+
+    for path in paths {
+        let Some(id) = load(&mut map, path, &mut diags) else {
+            continue;
+        };
+        let text = map.file(id).text().to_string();
+        match extension(path).as_deref() {
+            Some("rtl") => match Design::parse_text(&text, id) {
+                Ok(design) => {
+                    let mut errors = reticle::ir::validate::validate(&design);
+                    diags.append(&mut errors);
+                    checked += 1;
+                }
+                Err(mut errors) => diags.append(&mut errors),
+            },
+            Some("v" | "sv" | "vh" | "svh") => {
+                let mut resolver = IncludesFrom(path.clone());
+                let dialect = extension(path)
+                    .as_deref()
+                    .and_then(reticle::verilog::Dialect::for_extension)
+                    .unwrap_or_default();
+                let file = reticle::verilog::parse_source(
+                    &mut map,
+                    id,
+                    dialect,
+                    &mut resolver,
+                    &mut diags,
+                );
+                checked += file.items.len().min(1);
+            }
+            Some("vhd" | "vhdl") => {
+                let file = reticle::vhdl::parse_source(
+                    &map,
+                    id,
+                    reticle::vhdl::Standard::default(),
+                    &mut diags,
+                );
+                checked += file.units.len().min(1);
+            }
+            _ => diags.push(
+                Diagnostic::warning(format!("`{path}` has no recognised extension"))
+                    .with_note("expected .rtl, .v, .sv, .vh, .svh, .vhd or .vhdl"),
+            ),
         }
     }
 
-    diags.sort();
-    eprint!("{}", diags.render(&map));
-    if diags.has_errors() {
-        eprintln!(
-            "error: could not check {} file(s); {} error(s) emitted",
-            paths.len(),
-            diags.error_count()
-        );
-        return ExitCode::from(1);
+    let failed = report(&mut diags, &map);
+    if !args.flag("quiet") && !failed {
+        eprintln!("note: checked {checked} file(s), no errors");
     }
-    eprintln!(
-        "note: loaded {} file(s); no frontend is implemented yet, see ROADMAP.md",
-        map.len()
-    );
-    ExitCode::SUCCESS
+    Ok(if failed { Outcome::Failed } else { Outcome::Ok })
+}
+
+/// Resolves `` `include `` relative to the including file's directory.
+struct IncludesFrom(String);
+
+impl reticle::verilog::IncludeResolver for IncludesFrom {
+    fn resolve(&mut self, path: &str, _from: SourceId) -> Option<(String, String)> {
+        let base = Path::new(&self.0).parent().unwrap_or(Path::new("."));
+        let full = base.join(path);
+        let text = std::fs::read_to_string(&full).ok()?;
+        Some((full.to_string_lossy().into_owned(), text))
+    }
+}
+
+/// `reticle synth`: processes to cells, then optimisation.
+fn synth(args: &Args) -> Result<Outcome, ArgError> {
+    use reticle::synth::{FsmEncoding, SynthOptions};
+
+    let (mut design, map) = match load_design(args)? {
+        Ok(pair) => pair,
+        Err(outcome) => return Ok(outcome),
+    };
+
+    let mut options = SynthOptions::default();
+    if let Some(name) = args.option("fsm") {
+        match FsmEncoding::from_attr(name) {
+            Some(encoding) => options.fsm_encoding = encoding,
+            None => {
+                return Ok(Outcome::Usage(format!(
+                    "`--fsm {name}` is not one of auto, binary, one-hot, gray, none"
+                )));
+            }
+        }
+    }
+    if let Some(n) = args.u32_option("max-iterations")? {
+        options.max_iterations = n;
+    }
+    if let Some(top) = args.option("top") {
+        match design.module_by_name(top) {
+            Some(id) => design.top = Some(id),
+            None => return Ok(Outcome::Usage(format!("no module named `{top}`"))),
+        }
+    }
+
+    let mut diags = Diagnostics::new();
+    let stats = reticle::synth::run(&mut design, &options, &mut diags);
+    let failed = report(&mut diags, &map);
+    if args.flag("report") {
+        eprint!("{}", stats.render(Some(&map)));
+    }
+    if failed {
+        return Ok(Outcome::Failed);
+    }
+    if let Err(message) = write_out(args.option("output"), &design.to_text()) {
+        eprintln!("error: {message}");
+        return Ok(Outcome::Failed);
+    }
+    if !args.flag("quiet") {
+        eprintln!("note: synthesised {} module(s)", design.modules.len());
+    }
+    Ok(Outcome::Ok)
+}
+
+/// `reticle emit`: write the design in another format.
+fn emit_cmd(args: &Args) -> Result<Outcome, ArgError> {
+    let name = args.option("format").unwrap_or("verilog");
+    let Some(format) = Format::from_name(name) else {
+        return Ok(Outcome::Usage(format!(
+            "`--format {name}` is not one of verilog, vhdl, json, blif, edif"
+        )));
+    };
+    let (design, _map) = match load_design(args)? {
+        Ok(pair) => pair,
+        Err(outcome) => return Ok(outcome),
+    };
+    match emit::emit(&design, format) {
+        Ok(text) => {
+            if let Err(message) = write_out(args.option("output"), &text) {
+                eprintln!("error: {message}");
+                return Ok(Outcome::Failed);
+            }
+            Ok(Outcome::Ok)
+        }
+        Err(err) => {
+            eprintln!("error: {err}");
+            Ok(Outcome::Failed)
+        }
+    }
+}
+
+/// `reticle sim`: run the design and print what it says.
+fn sim(args: &Args) -> Result<Outcome, ArgError> {
+    use reticle::sim::{SimOptions, Simulator, Status};
+
+    let until = args.u64_option("until")?;
+    let seed = args.u64_option("seed")?;
+    let (design, map) = match load_design(args)? {
+        Ok(pair) => pair,
+        Err(outcome) => return Ok(outcome),
+    };
+
+    let mut options = SimOptions {
+        top: args.option("top").map(str::to_string),
+        ..SimOptions::default()
+    };
+    if let Some(seed) = seed {
+        options.seed = seed;
+    }
+
+    let mut sim = match Simulator::new(&design, options) {
+        Ok(sim) => sim,
+        Err(mut errors) => {
+            report(&mut errors, &map);
+            return Ok(Outcome::Failed);
+        }
+    };
+    let dump = args.option("vcd");
+    if dump.is_some() {
+        sim.enable_vcd();
+    }
+
+    match until {
+        Some(time) => sim.run_until(time),
+        None => sim.run(),
+    }
+
+    print!("{}", sim.output());
+    let mut messages = sim.take_messages();
+    let failed = report(&mut messages, &map);
+
+    if let Some(path) = dump {
+        let mut text = String::new();
+        if sim.dump_vcd(&mut text).is_err() {
+            eprintln!("error: could not render the waveform");
+            return Ok(Outcome::Failed);
+        }
+        if let Err(message) = write_out(Some(path), &text) {
+            eprintln!("error: {message}");
+            return Ok(Outcome::Failed);
+        }
+    }
+
+    if !args.flag("quiet") {
+        let reason = match (sim.status(), until) {
+            (Status::Finished, _) => "finished",
+            (Status::Stopped, _) => "stopped at $stop",
+            (Status::Running, Some(_)) => "reached the time limit",
+            (Status::Running, None) => "ran out of events",
+        };
+        eprintln!("note: {reason} at time {}", sim.time());
+    }
+    Ok(if failed { Outcome::Failed } else { Outcome::Ok })
+}
+
+/// `reticle verify`: bounded model checking, then induction.
+fn verify(args: &Args) -> Result<Outcome, ArgError> {
+    use reticle::formal::{InitMode, Verdict, VerifyOptions};
+
+    let depth = args.u32_option("depth")?;
+    let max_k = args.u32_option("max-k")?;
+    let init = match args.option("init") {
+        None => InitMode::Reset,
+        Some("reset") => InitMode::Reset,
+        Some("zero") => InitMode::Zero,
+        Some("free") => InitMode::Free,
+        Some(other) => {
+            return Ok(Outcome::Usage(format!(
+                "`--init {other}` is not one of reset, zero, free"
+            )));
+        }
+    };
+
+    let (design, map) = match load_design(args)? {
+        Ok(pair) => pair,
+        Err(outcome) => return Ok(outcome),
+    };
+
+    let module = match args.option("top") {
+        Some(name) => match design.module_by_name(name) {
+            Some(id) => id,
+            None => return Ok(Outcome::Usage(format!("no module named `{name}`"))),
+        },
+        None => match design.top {
+            Some(id) => id,
+            None => {
+                return Ok(Outcome::Usage(
+                    "the design names no top module; pass --top".into(),
+                ));
+            }
+        },
+    };
+
+    let mut options = VerifyOptions {
+        init,
+        ..VerifyOptions::default()
+    };
+    if let Some(depth) = depth {
+        options.depth = depth;
+    }
+    if let Some(k) = max_k {
+        options.max_k = k;
+    }
+
+    let mut report_ = reticle::formal::verify(&design, module, &options);
+    print!("{}", report_.render());
+    let failed = report(&mut report_.diags, &map);
+
+    if let (Some(path), Some(trace)) = (args.option("trace"), report_.trace.as_ref()) {
+        let vcd = trace.to_vcd(design.modules[module].name.as_str());
+        if let Err(message) = write_out(Some(path), &vcd) {
+            eprintln!("error: {message}");
+            return Ok(Outcome::Failed);
+        }
+    }
+
+    let refuted = matches!(report_.verdict, Verdict::Failed { .. } | Verdict::Unknown);
+    Ok(if failed || refuted {
+        Outcome::Failed
+    } else {
+        Outcome::Ok
+    })
 }

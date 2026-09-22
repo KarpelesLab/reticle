@@ -218,6 +218,10 @@ technology cells.
       mux and logic simplification, retiming (later).
 - [ ] Arithmetic lowering: adders, multipliers, comparators, shifters, with
       a choice of architectures; DSP block inference hooks for phase 6.
+- [ ] Cellify: replace the expression trees that survive in cell inputs and
+      continuous assigns with discrete cells, so the netlist formats (JSON,
+      BLIF, EDIF) can express a synthesised design without technology
+      mapping first. `reticle emit --format json` needs this today.
 - [ ] Logic optimisation core: an AIG (and-inverter graph) with structural
       hashing, rewriting, balancing and FRAIGing, sufficient to stand in for
       ABC on typical designs.

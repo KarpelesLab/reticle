@@ -53,8 +53,10 @@ formal = []
 # Language server (LSP) over the frontends.
 lsp = []
 
-# The `reticle` command-line tool (gates the binary target below).
-cli = []
+# The `reticle` command-line tool (gates the binary target below). It drives
+# every stage, so it turns them all on, including `formal` which is otherwise
+# off by default.
+cli = ["verilog", "vhdl", "sim", "synth", "formal"]
 
 # --- dependencies ---
 # Reticle is written from scratch and ships no foreign code: hand-written
