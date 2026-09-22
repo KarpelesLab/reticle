@@ -89,13 +89,15 @@
 //! outputs with [`Simulator::get`]. `$display` text accumulates in
 //! [`Simulator::output`], runtime problems in [`Simulator::messages`], and
 //! [`Simulator::enable_vcd`] starts a waveform capture that
-//! [`Simulator::vcd`] returns as text.
+//! [`Simulator::vcd`] returns as text. [`Simulator::enable_fst`] captures
+//! the same changes for [`Simulator::dump_fst`] to write in GTKWave's
+//! compressed FST format; see [`fst`].
 //!
 //! # Not yet here
 //!
-//! The cycle-based fast mode, FST output, inertial delay on continuous
-//! assignments (transport delay is used) and SVA/PSL sequences are later
-//! roadmap items.
+//! The cycle-based fast mode, inertial delay on continuous assignments
+//! (transport delay is used) and SVA/PSL sequences are later roadmap
+//! items.
 
 use std::collections::{BTreeMap, VecDeque};
 

@@ -19,6 +19,8 @@
 //! one cross-checks the DEFLATE codec against `python3 -c 'import zlib'`,
 //! the other feeds a golden to GTKWave's `fst2vcd` / `fstdump`.
 
+#![cfg(feature = "sim")]
+
 use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
