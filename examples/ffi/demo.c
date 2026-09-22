@@ -93,7 +93,12 @@ int main(void) {
     }
     printf(")\n");
 
-    /* A panic inside the library is a status code, never an unwind. */
+    /*
+     * A panic inside the library is a status code, never an unwind
+     * through these frames. Rust's default hook still prints the panic
+     * message to stderr, so the line about a deliberate panic below is
+     * this check working, not a failure.
+     */
     if (reticle_self_test_panic() != RETICLE_ERR_PANIC) {
         fprintf(stderr, "the panic guard is not working\n");
         return 1;
