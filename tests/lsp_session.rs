@@ -44,7 +44,13 @@ use reticle::lsp::server::Server;
 
 /// Line endings are normalised so a CRLF checkout compares equal.
 fn normalise(text: &str) -> String {
-    text.replace("\r\n", "\n")
+    // The server reports its own version in the `initialize` response,
+    // which is right, but a golden that pinned it would fail at every
+    // release for a reason that has nothing to do with the protocol. The
+    // real version is checked once, separately, in `the_server_reports_its_version`.
+    let text = text.replace("\r\n", "\n");
+    let current = format!("\"version\": \"{}\"", reticle::VERSION);
+    text.replace(&current, "\"version\": \"<version>\"")
 }
 
 fn corpus() -> PathBuf {
@@ -235,7 +241,7 @@ fn golden() {
 
     let mut failures = Vec::new();
     for case in &cases {
-        let actual = run(case);
+        let actual = normalise(&run(case));
         let expect_path = case.with_extension("expected");
         let expected = fs::read_to_string(&expect_path).map(|t| normalise(&t));
         match expected {

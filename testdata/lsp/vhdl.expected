@@ -30,7 +30,7 @@
       },
       "serverInfo": {
         "name": "reticle",
-        "version": "0.0.0"
+        "version": "<version>"
       }
     }
   }
