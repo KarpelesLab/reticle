@@ -1,0 +1,20 @@
+# A RISC-V system on chip that prints a line over a serial port.
+#
+# The processor and the UART come from the Reticle IP library in this
+# repository's ip/ directory; rtl/soc_top.v is the only HDL written for
+# the project. See README.md for how to build, simulate and program it.
+name soc
+top soc_top
+
+# The iCE40 HX8K, on the iCE40-HX8K breakout board. Not the HX1K of the
+# iCEstick: rv32i alone needs about 2400 four-input LUTs and the HX1K has
+# 1280, while the HX8K has 7680, and 32 block RAMs for the register file,
+# the ROM and the RAM.
+device ice40-hx8k-ct256
+
+source rtl/soc_top.v
+constraints board/hx8k_breakout.rcf
+testbench tb/soc_tb.v
+
+depends rv32i ^1.0.0 path ../../ip/rv32i
+depends uart ^1.0.0 path ../../ip/uart

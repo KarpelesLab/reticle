@@ -508,6 +508,25 @@ Done when: a project manifest pulling in a UART and a RISC-V core from the
 library builds, simulates its testbench, and runs on an iCE40 board with
 no HDL written by the user beyond a top-level.
 
+Where that stands: `examples/soc` is that project — `rv32i` and `uart`
+by path, an HX8K target (the core alone outgrows the HX1K), one
+top-level of user HDL with a ROM, a RAM and a memory-mapped UART, and a
+program that prints a line. `tests/soc.rs` shows it **builds** (through
+`ip::resolve` / `ip::elaborate` and `reticle build --synth`, with no
+latch), **simulates its testbench** with `Hello from Reticle\n` decoded
+from the waveform of the serial pin (through the library: `reticle sim`
+cannot load the ROM yet), and **maps** onto the HX8K (2368
+LUT4s, 10 block RAMs) with the JSON and PCF `nextpnr-ice40` reads
+exported. It does **not** show it running on a board, and cannot yet:
+no board is attached, Reticle's own iCE40 place and route is a synthetic
+fabric, and building the example found eight defects (each pinned in
+`tests/soc.rs`), four of which stand between it and working silicon —
+`$readmemh` from Verilog loads nothing in the simulator and is dropped
+by synthesis, block RAM is mapped without its `INIT_*` contents, and
+`reticle fpga` does not flatten — so the test preloads the ROM in the IR
+and runs the iCE40 flow through the library. Open until those are fixed
+and the board run has been done by hand.
+
 ## Phase 9: developer experience
 
 - [x] Language server (LSP) for both languages: diagnostics as you type
