@@ -2,7 +2,7 @@
 
 The first-party half of phase 8. [`docs/ip.md`](ip.md) describes the
 machinery — the manifest formats, the resolver, the bus model, the black
-boxes. This document describes the **blocks**: eighteen pieces of HDL
+boxes. This document describes the **blocks**: nineteen pieces of HDL
 that drop into a design the way a crate drops into a Rust program, each
 with a manifest, a Rust co-simulation test, and a resource footprint that
 was measured rather than guessed.
@@ -17,7 +17,8 @@ ip/
   cdc_sync/      reticle.ip  rtl/cdc_sync.v
   dvi_tx/        reticle.ip  rtl/tmds_encoder.v  rtl/video_timing.v  rtl/dvi_tx.v
   dvi_tx_pll/    reticle.ip  rtl/dvi_tx_pll.v
-  eth_mac_rmii/  reticle.ip  rtl/eth_mac_rmii.v
+  eth_mac_rgmii/ reticle.ip  rtl/eth_mac_rgmii.v
+  eth_mac_rmii/  reticle.ip  rtl/eth_mac_tx.v  rtl/eth_mac_rx.v  rtl/eth_mac_rmii.v
   fifo_async/    reticle.ip  rtl/fifo_async.v
   fifo_sync/     reticle.ip  rtl/fifo_sync.v
   hyperram_ctrl/ reticle.ip  rtl/hyperram_ctrl.v
@@ -55,12 +56,13 @@ It is distributed as part of the repository instead.
 | `axil_gpio` | `axil_gpio` | AXI4-Lite GPIO subordinate: data, direction and set registers | `cdc_sync` |
 | `ram_wrapper` | `ram_sdp`, `ram_sp` | portable block RAM wrappers, single and simple dual port, optional output register | — |
 | `rv32i` | `rv32i` | the whole RV32I base integer set, multi-cycle, machine-mode CSRs, traps and interrupts | — |
-| `eth_mac_rmii` | `eth_mac_rmii` | Ethernet MAC over RMII: preamble, frame check sequence, inter-frame gap | — |
+| `eth_mac_rmii` | `eth_mac_rmii`, `eth_mac_tx`, `eth_mac_rx` | Ethernet MAC over RMII: preamble, frame check sequence, inter-frame gap | — |
 | `spiflash_xip` | `spiflash_xip` | execute-in-place SPI flash reader, read only and cache-less | — |
 | `sdram_ctrl` | `sdram_ctrl` | SDR SDRAM controller for x16 parts: power-up sequence, refresh, open rows per bank, datasheet timings in nanoseconds | — |
 | `hyperram_ctrl` | `hyperram_ctrl` | HyperBus controller: command-address, fixed or variable latency, DDR data and RWDS, register access | — |
 | `dvi_tx` | `dvi_tx`, `tmds_encoder`, `video_timing` | DVI output: 640x480, 800x600 and 1280x720 timings, TMDS 8b/10b with DC balance, 10:1 serialisation through DDR outputs | — |
 | `dvi_tx_pll` | `dvi_tx_pll` | `dvi_tx` with its five-times clock from the device's PLL | `dvi_tx` |
+| `eth_mac_rgmii` | `eth_mac_rgmii` | gigabit Ethernet MAC over RGMII: the RMII MAC's frame logic an octet a cycle behind DDR IO, optional IO delays | `eth_mac_rmii` |
 
 `rv32i`, `eth_mac_rmii` and `spiflash_xip` are the **larger blocks**,
 and they are larger in a particular way: each is a whole protocol or a
@@ -82,6 +84,12 @@ clocks. `dvi_tx` serialises through them, and `dvi_tx_pll` gets its
 five-times pixel clock from a `clock_mhz` attribute on a net nothing
 drives, which is how a design asks for a PLL: an `SB_PLL40_CORE` or an
 `EHXPLLL` appears in its footprint, fed from the board's 25 MHz.
+`eth_mac_rgmii` is `eth_mac_rmii`'s frame logic — the same `eth_mac_tx`
+and `eth_mac_rx`, which the RMII block was split into so both could
+share them, eight bits a cycle instead of two — behind DDR registers on
+every RGMII pin, with the clock skew RGMII needs available from the IO
+delay element: six `DELAYG` in its ECP5 row. The split cost the RMII
+block nothing; its footprint did not move by a cell.
 
 Everything is **Verilog-2005**, deliberately: it is the path this
 compiler exercises hardest, and it is the dialect every other tool reads.
@@ -281,6 +289,22 @@ is the part that matters:
   `dvi_tx_pll` is taken through the FPGA flow for both families, which
   must build the PLL from the 25 MHz reference within 1 % of 126 MHz and
   put every lane through a DDR register on the PLL's clock.
+- **`eth_mac_rgmii`** — the transmitter's pins looped into the
+  receiver's, as the RMII test does, through the DDR registers modelled
+  as the backend builds them: what the output registers take at one edge
+  is on the pins, low nibble then high, for the next cycle, and the input
+  registers hand the pair over at the edge after. A 64-octet frame and a
+  one-octet frame come back intact with a good check sequence, and the
+  transmitter takes an octet **every** cycle, which is what gigabit
+  means. The pins are decoded in Rust: TX_CTL's two halves always agree,
+  TXC is 2'b01 so it rises with every low nibble, and the octets are
+  seven 0x55, 0xD5, the payload and the testbench's own check sequence,
+  followed by a gap of at least twelve cycles. A bit flipped in the
+  payload arrives with `rx_crc_ok` low, and RX_CTL's halves made to
+  disagree mid-frame — the PHY's receive error — raise `rx_error` and
+  withhold the frame's last octet. `timing::analyze_cdc` must find
+  exactly two domains, `tx_clk` and `rgmii_rxc`, and nothing crossing
+  between them.
 
 ### What the processor actually executes
 
@@ -448,6 +472,10 @@ exactly what this table is for.
 | `dvi_tx_pll` | `dvi_tx_pll` | MODE=0 | LUT6 | 18 x dff, 363 x lut | 7 |
 | `dvi_tx_pll` | `dvi_tx_pll` | MODE=0 | iCE40 HX1K | 187 x SB_CARRY, 72 x SB_DFFER, 52 x SB_DFFR, 1 x SB_GB, 57 x SB_IO, 569 x SB_LUT4, 1 x SB_PLL40_CORE | 8 |
 | `dvi_tx_pll` | `dvi_tx_pll` | MODE=0 | ECP5 45F | 1 x DCCA, 1 x EHXPLLL, 480 x LUT4, 4 x ODDRX1F, 124 x TRELLIS_FF, 57 x TRELLIS_IO | 9 |
+| `eth_mac_rgmii` | `eth_mac_rgmii` | IFG_CYCLES=12, TX_DELAY=80, RX_DELAY=80 | LUT4 | 28 x dff, 396 x lut | 5 |
+| `eth_mac_rgmii` | `eth_mac_rgmii` | IFG_CYCLES=12, TX_DELAY=80, RX_DELAY=80 | LUT6 | 28 x dff, 349 x lut | 4 |
+| `eth_mac_rgmii` | `eth_mac_rgmii` | IFG_CYCLES=12, TX_DELAY=80, RX_DELAY=80 | iCE40 HX1K | 10 x SB_CARRY, 119 x SB_DFFER, 64 x SB_DFFES, 7 x SB_DFFR, 2 x SB_GB, 39 x SB_IO, 393 x SB_LUT4 | 5 |
+| `eth_mac_rgmii` | `eth_mac_rgmii` | IFG_CYCLES=12, TX_DELAY=80, RX_DELAY=80 | ECP5 45F | 2 x DCCA, 6 x DELAYG, 5 x IDDRX1F, 394 x LUT4, 6 x ODDRX1F, 190 x TRELLIS_FF, 39 x TRELLIS_IO | 5 |
 <!-- end footprints -->
 
 ### Five things writing these blocks found

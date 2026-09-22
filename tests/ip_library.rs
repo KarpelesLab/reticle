@@ -43,7 +43,8 @@
 //! initial latency, through the DDR IO registers modelled in quarter
 //! cycles. `dvi_tx`'s TMDS encoder is checked against the DVI
 //! specification's algorithm for every byte from every running disparity
-//! it can reach.
+//! it can reach. `eth_mac_rgmii` loops its double-data-rate pins into
+//! itself the way the RMII test does.
 //!
 //! Five tests here came from gaps in Reticle rather than in the blocks,
 //! found by writing real HDL, which is the argument for a first-party
@@ -225,6 +226,11 @@ const VARIANTS: &[Variant] = &[
         package: "dvi_tx_pll",
         top: "dvi_tx_pll",
         params: &[("MODE", "0")],
+    },
+    Variant {
+        package: "eth_mac_rgmii",
+        top: "eth_mac_rgmii",
+        params: &[("IFG_CYCLES", "12"), ("TX_DELAY", "80"), ("RX_DELAY", "80")],
     },
 ];
 
@@ -5758,6 +5764,285 @@ fn dvi_tx_serialises_what_it_encodes() {
         3 * 2 * mode.h[0],
         "every visible pixel of two lines, on three lanes"
     );
+}
+
+// ---------------------------------------------------------------------------
+// eth_mac_rgmii
+// ---------------------------------------------------------------------------
+
+/// The RGMII MAC with its transmit pins looped into its receive pins,
+/// through the IO registers as the FPGA backend builds them.
+///
+/// A double-data-rate output register takes the port at a rising edge
+/// and drives its low half for the first half of the next cycle and its
+/// high half for the second; a double-data-rate input register samples
+/// the pin on both edges and gives the fabric the pair at the next
+/// rising edge. RGMII sends the clock with the data, edge aligned, and
+/// the receiving end — the PHY's internal delay, or RX_DELAY here —
+/// moves the sampling point into the middle of each half. So what the
+/// transmit registers took at one edge is what the receive registers
+/// hand over at the next, which is what this loop does, a cycle at a
+/// time. Transmit and receive share one clock here, as they do in a
+/// PHY's loopback mode.
+struct Rgmii<'d> {
+    sim: Simulator<'d>,
+    tx_clk: NetHandle,
+    rxc: NetHandle,
+    txc: NetHandle,
+    txd: NetHandle,
+    tx_ctl: NetHandle,
+    rxd: NetHandle,
+    rx_ctl: NetHandle,
+    tx_data: NetHandle,
+    tx_valid: NetHandle,
+    tx_ready: NetHandle,
+    tx_last: NetHandle,
+    tx_underrun: NetHandle,
+    rx_data: NetHandle,
+    rx_valid: NetHandle,
+    rx_last: NetHandle,
+    rx_crc_ok: NetHandle,
+    rx_error: NetHandle,
+    /// What the transmit pins carried, cycle by cycle: TX_CTL's two
+    /// halves and the octet the two nibbles make.
+    wire: Vec<(u64, u8)>,
+}
+
+impl<'d> Rgmii<'d> {
+    fn new(design: &'d Design) -> Rgmii<'d> {
+        let sim = simulate(design, "eth_mac_rgmii");
+        let pin = |n: &str| top_net(&sim, n);
+        let mut m = Rgmii {
+            tx_clk: pin("tx_clk"),
+            rxc: pin("rgmii_rxc"),
+            txc: pin("rgmii_txc"),
+            txd: pin("rgmii_txd"),
+            tx_ctl: pin("rgmii_tx_ctl"),
+            rxd: pin("rgmii_rxd"),
+            rx_ctl: pin("rgmii_rx_ctl"),
+            tx_data: pin("tx_data"),
+            tx_valid: pin("tx_valid"),
+            tx_ready: pin("tx_ready"),
+            tx_last: pin("tx_last"),
+            tx_underrun: pin("tx_underrun"),
+            rx_data: pin("rx_data"),
+            rx_valid: pin("rx_valid"),
+            rx_last: pin("rx_last"),
+            rx_crc_ok: pin("rx_crc_ok"),
+            rx_error: pin("rx_error"),
+            wire: Vec::new(),
+            sim,
+        };
+        let rst_n = top_net(&m.sim, "rst_n");
+        m.sim.set(m.tx_valid, bit(false));
+        m.sim.set(m.tx_last, bit(false));
+        m.sim.set(m.tx_data, word(8, 0));
+        m.sim.set(m.rxd, word(8, 0));
+        m.sim.set(m.rx_ctl, word(2, 0));
+        m.sim.set(m.rxc, bit(false));
+        m.sim.set(rst_n, bit(false));
+        m.sim.run_for(HALF);
+        m.tick(|_, _| None);
+        m.tick(|_, _| None);
+        m.sim.set(rst_n, bit(true));
+        // The reset synchronisers release each half two edges later.
+        for _ in 0..3 {
+            m.tick(|_, _| None);
+        }
+        m.wire.clear();
+        m
+    }
+
+    /// One cycle. `damage` may replace what the receive pins see, given
+    /// the cycle number on the wire and the (ctl, octet) the transmitter
+    /// drove.
+    fn tick(&mut self, damage: impl Fn(usize, (u64, u8)) -> Option<(u64, u8)>) {
+        // The output registers take the ports at this rising edge.
+        let ctl = get_u64(&self.sim, self.tx_ctl);
+        let octet = u8::try_from(get_u64(&self.sim, self.txd)).expect("eight bits");
+        assert_eq!(
+            get_u64(&self.sim, self.txc),
+            0b01,
+            "TXC rises with each low nibble and falls with each high one"
+        );
+        let n = self.wire.len();
+        self.wire.push((ctl, octet));
+        let (ctl, octet) = damage(n, (ctl, octet)).unwrap_or((ctl, octet));
+
+        self.sim.run_for(HALF);
+        self.sim.set(self.tx_clk, bit(true));
+        self.sim.set(self.rxc, bit(true));
+        self.sim.run_for(HALF);
+        self.sim.set(self.tx_clk, bit(false));
+        self.sim.set(self.rxc, bit(false));
+        // Both halves have been on the pins and sampled; the fabric sees
+        // them at the next rising edge.
+        self.sim.set(self.rxd, word(8, u64::from(octet)));
+        self.sim.set(self.rx_ctl, word(2, ctl));
+    }
+}
+
+/// Sends `frame` with the transmitter looped into the receiver, returning
+/// what came out, whether the check sequence held and whether the
+/// receiver flagged an error.
+fn rgmii_loopback(
+    frame: &[u8],
+    damage: impl Fn(usize, (u64, u8)) -> Option<(u64, u8)> + Copy,
+) -> (Vec<u8>, bool, bool, Vec<(u64, u8)>) {
+    let design = design_of("eth_mac_rgmii", "eth_mac_rgmii", &[("IFG_CYCLES", "12")]);
+    let mut mac = Rgmii::new(&design);
+    mac.sim.set(mac.tx_data, word(8, u64::from(frame[0])));
+    mac.sim.set(mac.tx_valid, bit(true));
+    mac.sim.set(mac.tx_last, bit(frame.len() == 1));
+
+    let mut sent = 0usize;
+    let mut got = Vec::new();
+    let mut crc_ok = false;
+    let mut error = false;
+    let mut done = false;
+    let mut taken_in_a_row = 0usize;
+    let mut longest_run = 0usize;
+    for _ in 0..400 {
+        let taken = high(&mac.sim, mac.tx_valid) && high(&mac.sim, mac.tx_ready);
+        mac.tick(damage);
+        if taken {
+            taken_in_a_row += 1;
+            longest_run = longest_run.max(taken_in_a_row);
+            sent += 1;
+            if sent < frame.len() {
+                mac.sim.set(mac.tx_data, word(8, u64::from(frame[sent])));
+                mac.sim.set(mac.tx_last, bit(sent == frame.len() - 1));
+            } else {
+                mac.sim.set(mac.tx_valid, bit(false));
+                mac.sim.set(mac.tx_last, bit(false));
+            }
+        } else {
+            taken_in_a_row = 0;
+        }
+        if high(&mac.sim, mac.rx_error) {
+            error = true;
+            done = true;
+        }
+        if high(&mac.sim, mac.rx_valid) {
+            got.push(octet(get_u64(&mac.sim, mac.rx_data)));
+            if high(&mac.sim, mac.rx_last) {
+                crc_ok = high(&mac.sim, mac.rx_crc_ok);
+                done = true;
+            }
+        }
+        if done && sent == frame.len() {
+            // Let the gap go out too, for the tests that count it.
+            for _ in 0..20 {
+                mac.tick(damage);
+            }
+            break;
+        }
+    }
+    assert_eq!(sent, frame.len(), "the transmitter took every octet");
+    assert!(done, "the frame never finished arriving");
+    assert!(!high(&mac.sim, mac.tx_underrun), "no underrun");
+    assert_eq!(
+        longest_run,
+        frame.len(),
+        "gigabit: one octet taken every cycle, the whole frame in one run"
+    );
+    (got, crc_ok, error, mac.wire)
+}
+
+fn rgmii_frame() -> Vec<u8> {
+    (0..64u8)
+        .map(|i| i.wrapping_mul(29).wrapping_add(3))
+        .collect()
+}
+
+#[test]
+fn eth_mac_rgmii_loops_a_frame_from_its_transmitter_into_its_receiver() {
+    let frame = rgmii_frame();
+    let (got, crc_ok, error, _) = rgmii_loopback(&frame, |_, _| None);
+    assert!(!error);
+    assert_eq!(got, frame, "every octet, in order");
+    assert!(crc_ok, "and the check sequence held");
+
+    let (got, crc_ok, _, _) = rgmii_loopback(&[0x5A], |_, _| None);
+    assert_eq!(got, vec![0x5A], "a one-octet frame still comes back");
+    assert!(crc_ok);
+}
+
+#[test]
+fn eth_mac_rgmii_puts_a_standard_frame_on_the_wire() {
+    let frame = rgmii_frame();
+    let (_, _, _, wire) = rgmii_loopback(&frame, |_, _| None);
+    // TX_CTL is the enable on both edges — enable, and enable XOR an
+    // error that is never sent — so it is 00 or 11 and nothing else.
+    assert!(
+        wire.iter().all(|(ctl, _)| *ctl == 0 || *ctl == 3),
+        "TX_CTL's halves disagree: {wire:?}"
+    );
+    let first = wire.iter().position(|(ctl, _)| *ctl == 3).expect("a frame");
+    let len = wire[first..]
+        .iter()
+        .position(|(ctl, _)| *ctl == 0)
+        .expect("and its end");
+    let octets: Vec<u8> = wire[first..first + len].iter().map(|(_, o)| *o).collect();
+    let mut expected = vec![0x55; 7];
+    expected.push(0xD5);
+    expected.extend_from_slice(&frame);
+    expected.extend_from_slice(&eth_fcs(&frame));
+    assert_eq!(octets, expected, "preamble, delimiter, payload, FCS");
+    let gap = wire[first + len..]
+        .iter()
+        .take_while(|(ctl, _)| *ctl == 0)
+        .count();
+    assert!(
+        gap >= 12,
+        "the inter-frame gap is 96 bit times, got {gap} cycles"
+    );
+}
+
+#[test]
+fn eth_mac_rgmii_rejects_a_damaged_frame_and_one_the_phy_flags() {
+    let frame = rgmii_frame();
+    // One bit of one octet in the payload: past eight of preamble and
+    // delimiter, and two cycles of IO registers and synchroniser.
+    let (got, crc_ok, error, _) =
+        rgmii_loopback(&frame, |n, (ctl, o)| (n == 30).then_some((ctl, o ^ 0x10)));
+    assert!(!error, "a damaged frame is still well formed");
+    assert_eq!(got.len(), frame.len());
+    assert_ne!(got, frame);
+    assert!(!crc_ok, "the check sequence is what says it is bad");
+
+    // RX_CTL's falling half disagreeing with its rising half is the
+    // PHY's receive error: the frame is dropped and reported.
+    let (got, _, error, _) = rgmii_loopback(&frame, |n, (ctl, o)| {
+        (n == 30 && ctl == 3).then_some((1, o))
+    });
+    assert!(error, "rx_error for a frame the PHY flagged");
+    assert!(
+        got.len() < frame.len(),
+        "and the last octet is not delivered for it"
+    );
+}
+
+/// Transmit and receive are two clock domains, and nothing crosses
+/// between them: each half is released from reset by its own
+/// synchroniser and runs on its own clock.
+#[test]
+fn eth_mac_rgmii_keeps_its_two_clock_domains_apart() {
+    let (mut design, id) = flattened("eth_mac_rgmii", "eth_mac_rgmii", &[]);
+    let mut diags = Diagnostics::new();
+    synth_run(&mut design, &SynthOptions::default(), &mut diags);
+    let module = flatten_for_timing(&design, id).expect("a flat module");
+    let report = analyze_cdc_with(&module, &TimingSpec::default());
+    let mut clocks: Vec<&str> = report.domains.iter().map(|d| d.net.as_str()).collect();
+    clocks.sort_unstable();
+    assert_eq!(clocks, ["rgmii_rxc", "tx_clk"], "one domain per direction");
+
+    let kinds = crossings("eth_mac_rgmii", "eth_mac_rgmii", &[]);
+    assert!(
+        !kinds.contains(&CrossingKind::Unsynchronised),
+        "an unsynchronised crossing in eth_mac_rgmii: {kinds:?}"
+    );
+    assert!(kinds.is_empty(), "nothing should cross: {kinds:?}");
 }
 
 // ---------------------------------------------------------------------------

@@ -1,7 +1,8 @@
 # eth_mac_rmii: a 100 Mbit/s Ethernet MAC over RMII, which is single
 # data rate and so needs no DDR register, PLL or IO delay. Transmit and
 # receive both run in the `ref_clk` domain; IFG_CYCLES is the
-# inter-frame gap in reference-clock cycles.
+# inter-frame gap in reference-clock cycles. The frame logic is
+# `eth_mac_tx` and `eth_mac_rx`, which `eth_mac_rgmii` shares.
 name eth_mac_rmii
 version 1.0.0
 license MIT
@@ -11,6 +12,8 @@ top eth_mac_rmii
 target ice40
 target ecp5
 
+source rtl/eth_mac_tx.v
+source rtl/eth_mac_rx.v
 source rtl/eth_mac_rmii.v
 
 param IFG_CYCLES int 48 12..255

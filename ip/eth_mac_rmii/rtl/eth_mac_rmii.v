@@ -3,9 +3,12 @@
 // What it does
 //   RMII is single data rate: one 50 MHz reference clock shared with the
 //   PHY, two bits of data per edge, which is 100 Mbit/s and one octet
-//   every four cycles. That is the whole reason this block exists and the
-//   MII or RGMII ones do not — nothing here needs a DDR register, a PLL
-//   or an IO delay, so it is ordinary logic that any device can build.
+//   every four cycles. Nothing here needs a DDR register, a PLL or an IO
+//   delay, so it is ordinary logic that any device can build.
+//
+//   The frame logic is `eth_mac_tx` and `eth_mac_rx`, in this package,
+//   two bits a cycle; `eth_mac_rgmii` uses the same two modules eight
+//   bits a cycle behind a double-data-rate front end.
 //
 //   Everything runs in the `ref_clk` domain, the user side included.
 //   There is no clock crossing inside the block on purpose: a MAC that
@@ -109,247 +112,29 @@ module eth_mac_rmii #(
     output wire       rx_crc_ok,
     output wire       rx_error
 );
-    // What the check sequence leaves behind when a frame and its own FCS
-    // have both gone through it.
-    localparam [31:0] CRC_RESIDUE = 32'hDEBB_20E3;
-    localparam [7:0]  IFG_LAST    = IFG_CYCLES - 1;
+    eth_mac_tx #(.DW(2), .IFG_CYCLES(IFG_CYCLES)) u_tx (
+        .clk         (ref_clk),
+        .rst_n       (rst_n),
+        .tx_en       (tx_en),
+        .txd         (txd),
+        .tx_data     (tx_data),
+        .tx_valid    (tx_valid),
+        .tx_ready    (tx_ready),
+        .tx_last     (tx_last),
+        .tx_busy     (tx_busy),
+        .tx_underrun (tx_underrun)
+    );
 
-    // One bit of the reflected CRC-32, in transmission order.
-    //
-    // Called from continuous assignments rather than from inside the
-    // clocked blocks. Either spelling synthesises to the same logic; the
-    // wire form keeps the folding visible next to the state that uses it.
-    function [31:0] crc_step;
-        input [31:0] crc;
-        input        b;
-        begin
-            crc_step = (crc[0] ^ b) ? ((crc >> 1) ^ 32'hEDB8_8320) : (crc >> 1);
-        end
-    endfunction
-
-    // -----------------------------------------------------------------
-    // Transmit.
-    // -----------------------------------------------------------------
-    localparam [2:0] T_IDLE = 3'd0;
-    localparam [2:0] T_PRE  = 3'd1;
-    localparam [2:0] T_DATA = 3'd2;
-    localparam [2:0] T_FCS  = 3'd3;
-    localparam [2:0] T_IFG  = 3'd4;
-
-    reg [2:0]  tx_state;
-    reg [7:0]  tx_shift;
-    reg [1:0]  tx_dibit;
-    reg [2:0]  tx_pre;
-    reg [31:0] tx_crc;
-    reg [31:0] tx_fcs;
-    reg [3:0]  tx_fcs_cnt;
-    reg [7:0]  tx_ifg;
-    reg        tx_last_q;
-    reg        tx_under_q;
-
-    wire tx_byte_end = (tx_dibit == 2'd3);
-    wire tx_sending  = (tx_state == T_PRE) | (tx_state == T_DATA) | (tx_state == T_FCS);
-
-    // The two bits going out this cycle, folded into the check sequence.
-    wire [31:0] tx_crc_a = crc_step(tx_crc, tx_shift[0]);
-    wire [31:0] tx_crc_b = crc_step(tx_crc_a, tx_shift[1]);
-
-    assign tx_en = tx_sending;
-    assign txd = ~tx_sending      ? 2'b00
-               : (tx_state == T_FCS) ? tx_fcs[1:0]
-               :                       tx_shift[1:0];
-    assign tx_ready = ((tx_state == T_PRE) & (tx_pre == 3'd7) & tx_byte_end)
-                    | ((tx_state == T_DATA) & tx_byte_end & ~tx_last_q);
-    assign tx_busy = (tx_state != T_IDLE);
-    assign tx_underrun = tx_under_q;
-
-    always @(posedge ref_clk or negedge rst_n) begin
-        if (!rst_n) begin
-            tx_state   <= T_IDLE;
-            tx_shift   <= 8'd0;
-            tx_dibit   <= 2'd0;
-            tx_pre     <= 3'd0;
-            tx_crc     <= 32'hFFFF_FFFF;
-            tx_fcs     <= 32'd0;
-            tx_fcs_cnt <= 4'd0;
-            tx_ifg     <= 8'd0;
-            tx_last_q  <= 1'b0;
-            tx_under_q <= 1'b0;
-        end else begin
-            case (tx_state)
-                T_IDLE: begin
-                    if (tx_valid) begin
-                        tx_state   <= T_PRE;
-                        tx_pre     <= 3'd0;
-                        tx_dibit   <= 2'd0;
-                        tx_shift   <= 8'h55;
-                        tx_crc     <= 32'hFFFF_FFFF;
-                        tx_last_q  <= 1'b0;
-                        tx_under_q <= 1'b0;
-                    end
-                end
-                T_PRE: begin
-                    tx_dibit <= tx_dibit + 2'd1;
-                    tx_shift <= {2'b00, tx_shift[7:2]};
-                    if (tx_byte_end) begin
-                        if (tx_pre == 3'd7) begin
-                            // The delimiter has gone out; the first
-                            // octet of the frame follows it.
-                            tx_state   <= T_DATA;
-                            tx_shift   <= tx_valid ? tx_data : 8'h00;
-                            tx_last_q  <= tx_valid & tx_last;
-                            tx_under_q <= ~tx_valid;
-                        end else begin
-                            tx_pre   <= tx_pre + 3'd1;
-                            tx_shift <= (tx_pre == 3'd6) ? 8'hD5 : 8'h55;
-                        end
-                    end
-                end
-                T_DATA: begin
-                    tx_dibit <= tx_dibit + 2'd1;
-                    tx_shift <= {2'b00, tx_shift[7:2]};
-                    tx_crc   <= tx_crc_b;
-                    if (tx_byte_end) begin
-                        if (tx_last_q) begin
-                            tx_state   <= T_FCS;
-                            tx_fcs     <= ~tx_crc_b;
-                            tx_fcs_cnt <= 4'd0;
-                        end else begin
-                            tx_shift  <= tx_valid ? tx_data : 8'h00;
-                            tx_last_q <= tx_valid & tx_last;
-                            if (!tx_valid) tx_under_q <= 1'b1;
-                        end
-                    end
-                end
-                T_FCS: begin
-                    tx_fcs     <= {2'b00, tx_fcs[31:2]};
-                    tx_fcs_cnt <= tx_fcs_cnt + 4'd1;
-                    if (tx_fcs_cnt == 4'd15) begin
-                        tx_state <= T_IFG;
-                        tx_ifg   <= 8'd0;
-                    end
-                end
-                default: begin
-                    tx_ifg <= tx_ifg + 8'd1;
-                    if (tx_ifg == IFG_LAST) tx_state <= T_IDLE;
-                end
-            endcase
-        end
-    end
-
-    // -----------------------------------------------------------------
-    // Receive.
-    // -----------------------------------------------------------------
-    localparam [1:0] R_IDLE = 2'd0;
-    localparam [1:0] R_PRE  = 2'd1;
-    localparam [1:0] R_DATA = 2'd2;
-
-    reg [1:0]  rx_state;
-    reg [7:0]  rx_sr;
-    reg [1:0]  rx_dibit;
-    reg [31:0] rx_crc;
-    reg [2:0]  rx_fill;
-    reg        rx_er_q;
-    // The five octets held back, newest first. Four of them turn out to
-    // be the check sequence, and the fifth is the last octet of data.
-    reg [7:0]  hold0;
-    reg [7:0]  hold1;
-    reg [7:0]  hold2;
-    reg [7:0]  hold3;
-    reg [7:0]  hold4;
-
-    reg [7:0] rx_data_q;
-    reg       rx_valid_q;
-    reg       rx_last_q;
-    reg       rx_ok_q;
-    reg       rx_error_q;
-
-    wire [31:0] rx_crc_a = crc_step(rx_crc, rxd[0]);
-    wire [31:0] rx_crc_b = crc_step(rx_crc_a, rxd[1]);
-    wire [7:0]  rx_byte  = {rxd, rx_sr[7:2]};
-    wire        rx_byte_end = (rx_dibit == 2'd3);
-
-    assign rx_data   = rx_data_q;
-    assign rx_valid  = rx_valid_q;
-    assign rx_last   = rx_last_q;
-    assign rx_crc_ok = rx_ok_q;
-    assign rx_error  = rx_error_q;
-
-    always @(posedge ref_clk or negedge rst_n) begin
-        if (!rst_n) begin
-            rx_state   <= R_IDLE;
-            rx_sr      <= 8'd0;
-            rx_dibit   <= 2'd0;
-            rx_crc     <= 32'hFFFF_FFFF;
-            rx_fill    <= 3'd0;
-            rx_er_q    <= 1'b0;
-            hold0      <= 8'd0;
-            hold1      <= 8'd0;
-            hold2      <= 8'd0;
-            hold3      <= 8'd0;
-            hold4      <= 8'd0;
-            rx_data_q  <= 8'd0;
-            rx_valid_q <= 1'b0;
-            rx_last_q  <= 1'b0;
-            rx_ok_q    <= 1'b0;
-            rx_error_q <= 1'b0;
-        end else begin
-            rx_valid_q <= 1'b0;
-            rx_last_q  <= 1'b0;
-            rx_error_q <= 1'b0;
-            case (rx_state)
-                R_IDLE: begin
-                    rx_er_q <= 1'b0;
-                    if (crs_dv) rx_state <= R_PRE;
-                end
-                R_PRE: begin
-                    rx_er_q <= rx_er_q | rx_er;
-                    if (!crs_dv) begin
-                        // A carrier that never became a frame. Not an
-                        // error, just noise on the line.
-                        rx_state <= R_IDLE;
-                    end else if (rxd == 2'b11) begin
-                        rx_state <= R_DATA;
-                        rx_crc   <= 32'hFFFF_FFFF;
-                        rx_dibit <= 2'd0;
-                        rx_fill  <= 3'd0;
-                    end
-                end
-                R_DATA: begin
-                    if (!crs_dv) begin
-                        rx_state <= R_IDLE;
-                        if ((rx_dibit == 2'd0) && (rx_fill == 3'd5) && !rx_er_q) begin
-                            // The pipeline holds the last octet of data
-                            // and the four of check sequence behind it.
-                            rx_data_q  <= hold4;
-                            rx_valid_q <= 1'b1;
-                            rx_last_q  <= 1'b1;
-                            rx_ok_q    <= (rx_crc == CRC_RESIDUE);
-                        end else begin
-                            rx_error_q <= 1'b1;
-                        end
-                    end else begin
-                        rx_er_q  <= rx_er_q | rx_er;
-                        rx_crc   <= rx_crc_b;
-                        rx_dibit <= rx_dibit + 2'd1;
-                        rx_sr    <= {rxd, rx_sr[7:2]};
-                        if (rx_byte_end) begin
-                            hold0 <= rx_byte;
-                            hold1 <= hold0;
-                            hold2 <= hold1;
-                            hold3 <= hold2;
-                            hold4 <= hold3;
-                            if (rx_fill == 3'd5) begin
-                                rx_data_q  <= hold4;
-                                rx_valid_q <= 1'b1;
-                            end else begin
-                                rx_fill <= rx_fill + 3'd1;
-                            end
-                        end
-                    end
-                end
-                default: rx_state <= R_IDLE;
-            endcase
-        end
-    end
+    eth_mac_rx #(.DW(2)) u_rx (
+        .clk       (ref_clk),
+        .rst_n     (rst_n),
+        .crs_dv    (crs_dv),
+        .rxd       (rxd),
+        .rx_er     (rx_er),
+        .rx_data   (rx_data),
+        .rx_valid  (rx_valid),
+        .rx_last   (rx_last),
+        .rx_crc_ok (rx_crc_ok),
+        .rx_error  (rx_error)
+    );
 endmodule

@@ -1,0 +1,41 @@
+# eth_mac_rgmii: a gigabit Ethernet MAC over RGMII, the frame logic of
+# `eth_mac_rmii` eight bits a cycle behind a double-data-rate front end
+# (`ddr` attributes on the pins, two bits per pin). Transmit runs on
+# `tx_clk`, receive on `rgmii_rxc`; TX_DELAY and RX_DELAY are IO delay
+# steps for a PHY that does not add the RGMII clock skew itself.
+name eth_mac_rgmii
+version 1.0.0
+license MIT
+description "Gigabit Ethernet MAC over RGMII: the RMII MAC's frame logic an octet a cycle behind DDR IO registers, with optional IO delays"
+
+top eth_mac_rgmii
+target ice40
+target ecp5
+
+source rtl/eth_mac_rgmii.v
+
+depends eth_mac_rmii ^1.0.0
+
+param IFG_CYCLES int 12 3..255
+param TX_DELAY int 0 0..127
+param RX_DELAY int 0 0..127
+
+port tx_clk in
+port rst_n in
+port rgmii_txc out 2
+port rgmii_txd out 8
+port rgmii_tx_ctl out 2
+port rgmii_rxc in
+port rgmii_rxd in 8
+port rgmii_rx_ctl in 2
+port tx_data in 8
+port tx_valid in
+port tx_ready out
+port tx_last in
+port tx_busy out
+port tx_underrun out
+port rx_data out 8
+port rx_valid out
+port rx_last out
+port rx_crc_ok out
+port rx_error out
