@@ -30,12 +30,12 @@
 //   shorter than one destination clock period. Use `cdc_pulse` for those.
 //
 // Why the stages are written out rather than generated
-//   A chain written as `sync_q <= {sync_q[STAGES-2:0], d}` is one
-//   multi-bit register, and both this compiler's flip-flop inference and
-//   every static CDC checker then see a single flop, not a chain. Four
-//   separately named registers infer four separate flip-flops, which is
-//   the shape `timing::analyze_cdc` recognises as a synchroniser. The
-//   stages beyond STAGES drive nothing and are removed by dead code
+//   A chain written as `sync_q <= {sync_q[STAGES-2:0], d}` infers one
+//   multi-bit register rather than a chain of flops. Reticle's
+//   `timing::analyze_cdc` recognises that shape too, so either spelling
+//   is checked correctly here, but not every external CDC tool does, and
+//   separate registers also let a placer keep the pair close. The stages
+//   beyond STAGES drive nothing and are removed by dead code
 //   elimination, so the cost is exactly STAGES * WIDTH flip-flops.
 module cdc_sync #(
     // Bits synchronised side by side.

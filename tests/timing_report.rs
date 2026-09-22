@@ -56,7 +56,13 @@ mod golden {
         ];
         #[cfg(feature = "asic")]
         cases.push("liberty");
-        cases.extend(["cdc_unsync", "cdc_sync2", "cdc_reconverge", "async_fifo"]);
+        cases.extend([
+            "cdc_unsync",
+            "cdc_sync2",
+            "cdc_reconverge",
+            "cdc_shift_sync",
+            "async_fifo",
+        ]);
         cases
     }
 
@@ -277,6 +283,40 @@ mod golden {
 
     /// The crossing classifications, and which of them are claimed as
     /// proved.
+    /// The idiom `sync <= {sync[N-2:0], d};` infers one N-bit flip-flop
+    /// rather than a chain, and used to be reported as an unsynchronised
+    /// crossing: a false alarm on the most common way of writing a
+    /// synchroniser. It must be a note, and must count as one bit
+    /// crossing rather than an N-bit bus.
+    #[test]
+    fn a_shifting_synchroniser_is_not_a_false_alarm() {
+        use reticle::timing::cdc::CrossingKind;
+
+        let (_, cdc) = run("cdc_shift_sync");
+        assert!(
+            !cdc.contains("unsynchronised"),
+            "the shift-register idiom was called unsynchronised:\n{cdc}"
+        );
+        assert!(!cdc.contains("gray bus"), "counted as a bus:\n{cdc}");
+
+        let case = load("cdc_shift_sync");
+        let top = case.design.top.expect("a top");
+        let module = reticle::timing::graph::flatten_for_timing(&case.design, top)
+            .expect("the case flattens");
+        let report = reticle::timing::cdc::analyze_cdc(&module, &case.constraints);
+        assert_eq!(report.crossings.len(), 1, "{cdc}");
+        assert!(
+            matches!(
+                report.crossings[0].kind,
+                CrossingKind::Synchroniser { depth: 2 }
+            ),
+            "{:?}",
+            report.crossings[0].kind
+        );
+        assert!(report.crossings[0].proven);
+        assert!(!report.has_errors());
+    }
+
     #[test]
     fn crossing_classifications() {
         use reticle::diag::Severity;

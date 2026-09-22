@@ -38,6 +38,10 @@
 //!
 //! **Not provable, and reported as unverified** (`proven: false`):
 //!
+//! A synchroniser is recognised whether it is written as separately
+//! named flip-flops or as one shifting register
+//! (`sync <= {sync[N-2:0], d};`), which infers a single N-bit flop.
+//!
 //! - A **gray-coded bus** ([`CrossingKind::GrayBus`]): several bits
 //!   crossing together through their own synchronisers. Whether the
 //!   source is gray-coded is a property of the *values* the source
@@ -75,7 +79,8 @@ use std::fmt::Write as _;
 
 use crate::diag::Severity;
 use crate::ir::{
-    Cell, CellId, CellKind, ExprKind, MemoryId, Module, NetId, expr::operands, walk::lvalue_exprs,
+    Cell, CellId, CellKind, Expr, ExprKind, MemoryId, Module, NetId, expr::operands,
+    walk::lvalue_exprs,
 };
 use crate::source::{SourceMap, Span};
 
@@ -590,6 +595,65 @@ impl<'a> Cdc<'a> {
     /// domain, on that flop's `d` pin, with nothing in between.
     ///
     /// Returns the depth of the chain.
+    /// The stage count when `flop` is a synchroniser written as a single
+    /// shifting register rather than as separately named flip-flops.
+    ///
+    /// The idiom `sync <= {sync[N-2:0], d};` infers one N-bit flip-flop
+    /// whose `d` is a concatenation of its own output shifted by one and
+    /// the incoming bit, so the flop-to-flop walk in
+    /// [`Self::synchroniser_depth`] never sees a second stage and the
+    /// crossing was reported as unsynchronised. That is the most common
+    /// way the thing is written, so the false positive mattered more than
+    /// most.
+    ///
+    /// Only the exact shape counts: two concatenated parts, one of them a
+    /// slice of this flop's own output covering every bit but one, the
+    /// other a single bit. Anything else falls through to the general
+    /// walk, since a partial match is not evidence of anything.
+    fn shift_register_depth(&self, flop: usize) -> Option<usize> {
+        let cell = &self.module.cells[self.flops[flop].id];
+        let q = *self.flops[flop].outputs.first()?;
+        let width = self.module.nets[q].ty.width()?;
+        if width < 2 {
+            return None;
+        }
+        let d = cell
+            .inputs
+            .iter()
+            .find(|(port, _)| port.as_str() == "d")
+            .map(|(_, expr)| *expr)?;
+        let ExprKind::Concat(parts) = &self.module.exprs.get(d)?.kind else {
+            return None;
+        };
+        if parts.len() != 2 {
+            return None;
+        }
+
+        // Either shift direction: new data at the bottom with the old
+        // bits above it, or the mirror image.
+        let shapes = [(parts[0], parts[1]), (parts[1], parts[0])];
+        for (kept, incoming) in shapes {
+            let Some(kept_expr) = self.module.exprs.get(kept) else {
+                continue;
+            };
+            let ExprKind::Slice { base, hi, lo } = kept_expr.kind else {
+                continue;
+            };
+            let keeps_all_but_one = (hi == width - 2 && lo == 0) || (hi == width - 1 && lo == 1);
+            if !keeps_all_but_one {
+                continue;
+            }
+            if self.module.exprs.get(base).and_then(Expr::as_net) != Some(q) {
+                continue;
+            }
+            if self.module.exprs.get(incoming)?.ty.width() != Some(1) {
+                continue;
+            }
+            return usize::try_from(width).ok();
+        }
+        None
+    }
+
     fn synchroniser_depth(&self, flop: usize) -> usize {
         let mut depth = 1;
         let mut at = flop;
@@ -717,8 +781,14 @@ impl<'a> Cdc<'a> {
             if foreign.is_empty() {
                 continue;
             }
-            let depth = self.synchroniser_depth(dest);
-            let synchronised = !fanin.through_logic && foreign.len() == 1 && depth >= 2;
+            // A shifting synchroniser's `d` is a concatenation, which the
+            // general fan-in walk counts as logic between the domains. The
+            // shape check above has already proved there is none, so it
+            // stands in for that test rather than being added to it.
+            let shifting = self.shift_register_depth(dest);
+            let depth = shifting.unwrap_or_else(|| self.synchroniser_depth(dest));
+            let synchronised =
+                foreign.len() == 1 && depth >= 2 && (shifting.is_some() || !fanin.through_logic);
             // Group the foreign sources by their domain so one crossing
             // is reported per (source domain, destination flop).
             let mut by_domain: Vec<(usize, Vec<usize>)> = Vec::new();
@@ -796,10 +866,15 @@ impl<'a> Cdc<'a> {
                 .collect();
             // Count bits, not cells: a netlist may keep a bus in one
             // wide flip-flop or split it into one per bit, and both are
-            // the same crossing.
+            // the same crossing. A shifting synchroniser is the exception
+            // and counts as one bit however deep it is, because its width
+            // is stages rather than data.
             let bits: usize = members
                 .iter()
                 .map(|d| {
+                    if self.shift_register_depth(*d).is_some() {
+                        return 1;
+                    }
                     self.flops[*d]
                         .outputs
                         .iter()

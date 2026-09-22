@@ -1,0 +1,17 @@
+top shiftsync
+
+module shiftsync
+  net %aclk u1 wire
+  net %bclk u1 wire
+  net %d u1 wire
+  net %q u1 wire
+  net %src u1 wire
+  net %sync u2 wire
+  port aclk in %aclk
+  port bclk in %bclk
+  port d in %d
+  port q out %q
+  assign %q = %sync[1:1]
+  cell src$ff dff pos (clk=%aclk, d=%d) -> (q=%src)
+  cell sync$ff dff pos (clk=%bclk, d={%sync[0:0], %src}) -> (q=%sync)
+end
