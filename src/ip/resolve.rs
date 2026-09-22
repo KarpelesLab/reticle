@@ -840,7 +840,6 @@ impl Resolver {
         let selected = walk.select();
         let errors = std::mem::take(&mut walk.errors);
         let mut candidates = std::mem::take(&mut walk.candidates);
-        let requirements = std::mem::take(&mut walk.requirements);
 
         // Load the project's own sources, then each selected package's,
         // in dependency order.
@@ -881,7 +880,7 @@ impl Resolver {
             });
         }
 
-        let lock = build_lock(&packages, &requirements, project);
+        let lock = build_lock(&packages, project);
         Resolved {
             map: self.map,
             root,
@@ -1140,11 +1139,13 @@ fn visit_order(
     }
 }
 
-fn build_lock(
-    packages: &[Package],
-    requirements: &BTreeMap<String, Vec<Requirement>>,
-    project: &Project,
-) -> LockFile {
+/// Writes down what was selected and the requirement edges between the
+/// selections.
+///
+/// Only edges between *selected* packages are recorded: a requirement on
+/// something that could not be resolved belongs in the errors, not in a
+/// lock file that claims to describe a reproducible build.
+fn build_lock(packages: &[Package], project: &Project) -> LockFile {
     let mut lock = LockFile::new();
     let mut sorted: Vec<&Package> = packages.iter().collect();
     sorted.sort_by(|a, b| a.name().cmp(b.name()));
@@ -1173,9 +1174,6 @@ fn build_lock(
             }
         }
     }
-    // Anything required but never selected is a failed resolution; the
-    // errors say so, and the lock file stays silent about it.
-    let _ = requirements;
     for (from, to, req) in edges {
         if let Some(req) = VersionReq::parse(&req) {
             lock.requires.push((from, to, req));

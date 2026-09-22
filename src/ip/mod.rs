@@ -4,7 +4,9 @@
 //! This is phase 8 of `ROADMAP.md`, and the reason the project exists
 //! beyond "another synthesiser": third-party and first-party IP should
 //! drop into a design the way a crate drops into a Rust program. That
-//! needs four things, and this module is those four things.
+//! needs a way to describe a package, a way to find one, a way to
+//! connect one, a way to build one, and a way to use one nobody may
+//! read; this module is those five things.
 //!
 //! | File | Role |
 //! |------|------|
