@@ -48,12 +48,14 @@
 //! paused simulation resumes with the next run call.
 
 use std::fmt;
+use std::io;
 
 use crate::diag::Diagnostics;
 use crate::ir::{Delay, Design, NetKind};
 use crate::logic::Logic;
 
 use super::elab::{InstId, MemId, SigId};
+use super::fst::FstCapture;
 use super::value::resolve_all;
 use super::{SimOptions, Simulator, Status};
 
@@ -350,5 +352,33 @@ impl<'d> Simulator<'d> {
             Some(v) => out.write_str(v.text()),
             None => Ok(()),
         }
+    }
+
+    /// Starts FST capture, the binary counterpart of
+    /// [`Simulator::enable_vcd`].
+    ///
+    /// A snapshot of every net is taken now and every later change is
+    /// recorded through the same callback mechanism as
+    /// [`Simulator::on_change`], so the capture holds exactly the changes a
+    /// VCD of the same run would. The returned [`FstCapture`] is the handle
+    /// on it: hold it and pass it to [`Simulator::dump_fst`]. Calling this
+    /// again starts a second, independent capture.
+    ///
+    /// See [`sim::fst`](crate::sim::fst) for the file layout.
+    pub fn enable_fst(&mut self) -> FstCapture {
+        self.build_fst()
+    }
+
+    /// Writes `capture` to `out` as a complete FST file, ending at the
+    /// current simulation time.
+    ///
+    /// The capture is left running, so a long run may be dumped more than
+    /// once.
+    ///
+    /// # Errors
+    ///
+    /// Propagates the failure of `out`.
+    pub fn dump_fst(&self, capture: &FstCapture, out: &mut dyn io::Write) -> io::Result<()> {
+        out.write_all(&capture.to_bytes(self.now))
     }
 }

@@ -106,6 +106,7 @@ use crate::logic::Logic;
 mod api;
 mod elab;
 mod eval;
+pub mod fst;
 mod process;
 mod sched;
 mod sys;

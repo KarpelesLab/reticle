@@ -188,7 +188,7 @@ user-facing simulator and as the reference model for every synthesis pass
 - [x] 4-state evaluation, `std_logic` resolution, delays (`#`, `after`,
       `wait for`), `wait until`, `$time`, `$finish`, `$display` / `report`
       family with correct formatting.
-- [ ] Waveform output: VCD, then FST (compressed, GTKWave native).
+- [x] Waveform output: VCD, then FST (compressed, GTKWave native).
 - [ ] Interactive mode: run to time, step, force / release, dump.
 - [x] Rust co-simulation API: drive inputs, read outputs, await edges, from
       a Rust test (`#[test]` that instantiates a DUT), in the spirit of
