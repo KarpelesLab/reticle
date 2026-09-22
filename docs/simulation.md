@@ -257,18 +257,18 @@ a real testbench also pays.
 
 | Design | Program | Event sim | Compiled | Speed-up |
 |--------|---------|-----------|----------|----------|
-| `testdata/synth/counter_en.rtl` | 0 comb + 12 edge ops, 2 regs / 9 bits | 2.01 M cycles/s | 4.47 M cycles/s | 2.2x |
-| `testdata/synth/fsm.rtl` | 1 comb + 26 edge ops, 1 reg / 2 bits | 2.45 M cycles/s | 6.58 M cycles/s | 2.7x |
-| `testdata/synth/adder_tree.rtl` | 12 comb ops, no state | 0.49 M cycles/s | 20.24 M cycles/s | 41.2x |
-| `testdata/synth/ram_regread.rtl` | 2 comb + 4 edge ops, 1 reg / 8 bits, 16x8 RAM | 1.52 M cycles/s | 10.09 M cycles/s | 6.6x |
-| `testdata/synth/mux_tree.rtl` | 13 comb ops, no state | 2.08 M cycles/s | 8.09 M cycles/s | 3.9x |
-| `testdata/synth/counter_en.cells.rtl` | 2 comb + 6 edge ops, 2 regs / 9 bits | 0.52 M cycles/s | 13.15 M cycles/s | 25.1x |
-| `ip/uart_tx` | 7 comb + 39 edge ops, 4 regs / 31 bits | 1.25 M cycles/s | 4.65 M cycles/s | 3.7x |
-| `ip/uart` | 16 comb + 125 edge ops, 13 regs / 72 bits | 0.43 M cycles/s | 1.90 M cycles/s | 4.4x |
-| `ip/fifo_sync` | 17 comb + 20 edge ops, 3 regs / 18 bits, 16x8 RAM | 0.62 M cycles/s | 5.83 M cycles/s | 9.5x |
-| `ip/spi_master` | 17 comb + 89 edge ops, 10 regs / 53 bits | 0.58 M cycles/s | 2.39 M cycles/s | 4.1x |
-| `ip/i2c_master` | 20 comb + 219 edge ops, 14 regs / 41 bits | 0.40 M cycles/s | 1.16 M cycles/s | 2.9x |
-| `ip/axil_gpio` | 25 comb + 96 edge ops, 13 regs / 148 bits | 0.32 M cycles/s | 1.87 M cycles/s | 5.8x |
+| `testdata/synth/counter_en.rtl` | 0 comb + 12 edge ops, 2 regs / 9 bits | 2.12 M cycles/s | 12.26 M cycles/s | 5.8x |
+| `testdata/synth/fsm.rtl` | 1 comb + 26 edge ops, 1 reg / 2 bits | 2.39 M cycles/s | 7.01 M cycles/s | 2.9x |
+| `testdata/synth/adder_tree.rtl` | 12 comb ops, no state | 0.49 M cycles/s | 20.30 M cycles/s | 41.6x |
+| `testdata/synth/ram_regread.rtl` | 2 comb + 4 edge ops, 1 reg / 8 bits, 16x8 RAM | 1.77 M cycles/s | 11.28 M cycles/s | 6.4x |
+| `testdata/synth/mux_tree.rtl` | 13 comb ops, no state | 2.47 M cycles/s | 9.23 M cycles/s | 3.7x |
+| `testdata/synth/counter_en.cells.rtl` | 2 comb + 6 edge ops, 2 regs / 9 bits | 0.72 M cycles/s | 5.31 M cycles/s | 7.4x |
+| `ip/uart_tx` | 7 comb + 40 edge ops, 4 regs / 31 bits | 1.22 M cycles/s | 4.07 M cycles/s | 3.3x |
+| `ip/uart` | 18 comb + 126 edge ops, 13 regs / 72 bits | 0.42 M cycles/s | 1.65 M cycles/s | 3.9x |
+| `ip/fifo_sync` | 18 comb + 21 edge ops, 3 regs / 18 bits, 16x8 RAM | 0.59 M cycles/s | 5.19 M cycles/s | 8.8x |
+| `ip/spi_master` | 17 comb + 90 edge ops, 10 regs / 53 bits | 0.56 M cycles/s | 2.09 M cycles/s | 3.8x |
+| `ip/i2c_master` | 21 comb + 220 edge ops, 14 regs / 41 bits | 0.40 M cycles/s | 1.07 M cycles/s | 2.7x |
+| `ip/axil_gpio` | 26 comb + 97 edge ops, 13 regs / 148 bits | 0.32 M cycles/s | 1.82 M cycles/s | 5.6x |
 
 So: three to ten times on the IP blocks, and forty on a design that is
 nothing but combinational logic. Two caveats before the analysis. The two
@@ -300,7 +300,7 @@ not the order of magnitude a compiled simulator is supposed to be worth:
   that needs a design big enough to measure, and the corpus has none yet.
 - **The lowering is not an optimiser.** A `case` becomes a chain of
   guarded merges, one `Mux` per arm per assigned signal, which is why
-  `i2c_master` needs 219 operations per edge for 41 bits of state.
+  `i2c_master` needs 220 operations per edge for 41 bits of state.
   Constant folding and common subexpression elimination run, and nothing
   else: no dead-value elimination, no mux-tree flattening, no merging of
   a chain of one-bit operations into one word-wide one. That is the first
