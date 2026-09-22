@@ -81,6 +81,27 @@ Sources of one language are elaborated together, so a testbench and the
 modules it instantiates go on one command line. A design already in the
 `.rtl` IR text format is accepted anywhere a source file is.
 
+## Worked examples and guides
+
+Two complete systems are built out of the IP library in `examples/`,
+each with a project manifest, one file of user HDL and a test that drives
+it from the manifest to the files `nextpnr-ice40` reads:
+
+- [`examples/soc`](examples/soc) — a RISC-V system on chip around
+  [`ip/rv32i`](ip/rv32i) and [`ip/uart`](ip/uart) that prints a line over
+  a serial port.
+- [`examples/mos6502_computer`](examples/mos6502_computer) — the same
+  system around [`ip/mos6502`](ip/mos6502): one bus, RAM at the bottom
+  for zero page and the stack, ROM at the top for the vectors.
+
+[`docs/writing-a-cpu.md`](docs/writing-a-cpu.md) is the guide behind
+those two: how to package a processor as IP, from the manifest and the
+bus contract to testing a core so the test cannot agree with a wrong
+core, cycle accuracy, interrupts and reset, reproducing documented
+quirks, and what the two cores cost on real parts. The machinery itself
+is in [`docs/ip.md`](docs/ip.md) and the blocks in
+[`docs/ip-library.md`](docs/ip-library.md).
+
 ## Building
 
 ```sh

@@ -549,6 +549,23 @@ command line with its program loaded by its own `$readmemh`. Open only
 until the board run has been done by hand, which needs hardware and the
 IceStorm tools that are not on this machine.
 
+The second processor has the same treatment: `examples/mos6502_computer`
+is `mos6502` and `uart` by path on the same HX8K, one top-level with a
+ROM at the top of the address space (the vectors at `$FFFA`-`$FFFF` are
+read before anything could have written anywhere), a RAM at the bottom
+(zero page and the stack have nowhere else to be) and a memory-mapped
+UART, and a 6502 program that
+prints the same line. `tests/mos6502_computer.rs` drives it through
+exactly the steps `tests/soc.rs` drives the first through, and it maps
+onto the HX8K in 1714 `SB_LUT4` and 6 block RAMs, with the program *and*
+the vectors read back byte for byte out of the `INIT_*` parameters of
+the four `SB_RAM40_4K` the ROM becomes. Building it found no
+new defect in Reticle. `docs/writing-a-cpu.md` is the guide the two
+examples and the two cores are the worked material for: the manifest,
+the bus contract, testing a core so the test cannot agree with a wrong
+core, cycle accuracy, interrupts and reset, documented quirks, and the
+resource cost.
+
 ## Phase 9: developer experience
 
 - [x] Language server (LSP) for both languages: diagnostics as you type

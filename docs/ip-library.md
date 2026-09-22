@@ -2,7 +2,9 @@
 
 The first-party half of phase 8. [`docs/ip.md`](ip.md) describes the
 machinery — the manifest formats, the resolver, the bus model, the black
-boxes. This document describes the **blocks**: twenty-two pieces of HDL
+boxes — and [`docs/writing-a-cpu.md`](writing-a-cpu.md) describes how to
+package a processor, using this library's two as the worked examples.
+This document describes the **blocks**: twenty-two pieces of HDL
 that drop into a design the way a crate drops into a Rust program, each
 with a manifest, a Rust co-simulation test, and a resource footprint that
 was measured rather than guessed.
@@ -96,6 +98,15 @@ binary-coded decimal arithmetic, which is where most 6502
 implementations are wrong and which `DECIMAL_MODE` can compile out. The
 two of them between them exercise almost disjoint parts of the
 toolchain.
+
+What is general about packaging a processor and what is specific to each
+of those two — the manifest, the bus contract, testing a core so the test
+cannot agree with a wrong core, cycle accuracy, interrupts and reset,
+reproducing documented quirks, and what the cores cost — is drawn out in
+[`writing-a-cpu.md`](writing-a-cpu.md), with both of them as the worked
+examples. Each is also dropped into a whole system: `rv32i` in
+[`examples/soc`](../examples/soc) and `mos6502` in
+[`examples/mos6502_computer`](../examples/mos6502_computer).
 
 `sdram_ctrl` is the first of the blocks that **need a device
 primitive**, the ones phase 8 waited on the FPGA backend for: it forwards
