@@ -796,17 +796,23 @@ module cells
   net %q_next u4 wire
   net %is2 u1 wire
   net %parity u1 wire
+  net %all_set u1 wire
+  net %any_set u1 wire
   port clk in %clk
   port rst in %rst
   port en in %en
   port q out %q
   port is2 out %is2
   port parity out %parity
+  port all_set out %all_set
+  port any_set out %any_set
   cell add0 add (a=%q, b=4'd1) -> (y=%inc)
   cell mux0 mux (a=%q, b=%inc, s=%en) -> (y=%q_next)
   cell ff0 dff pos arst pos 4'd0 (clk=%clk, d=%q_next, rst=%rst) -> (q=%q)
   cell eq0 eq (a=%q, b=4'd2) -> (y=%is2)
   cell rx0 rxor (a=%q) -> (y=%parity)
+  cell ra0 rand (a=%q) -> (y=%all_set)
+  cell ro0 ror (a=%q) -> (y=%any_set)
 end
 ",
     );
@@ -823,6 +829,11 @@ end
     assert_eq!(sim.get(q).to_u64(), Some(2));
     assert_eq!(sim.get(sim.net("cells.is2").unwrap()).to_u64(), Some(1));
     assert_eq!(sim.get(sim.net("cells.parity").unwrap()).to_u64(), Some(1));
+    // Three reductions of the same net: they share an operand, a width
+    // and a signedness, so nothing but the operator distinguishes them
+    // and sharing one for another would go unnoticed.
+    assert_eq!(sim.get(sim.net("cells.all_set").unwrap()).to_u64(), Some(0));
+    assert_eq!(sim.get(sim.net("cells.any_set").unwrap()).to_u64(), Some(1));
     // The asynchronous reset clears the flop between edges.
     sim.set(rst, Logic::from_bool(true));
     assert_eq!(sim.get(q).to_u64(), Some(0));

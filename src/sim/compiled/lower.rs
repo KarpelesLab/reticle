@@ -68,6 +68,62 @@ type ValId = u32;
 /// unbounded.
 const MAX_UNROLL: u32 = 100_000;
 
+/// Tags that name an operation kind in the [`Key`] used for common
+/// subexpression elimination.
+///
+/// One namespace for every kind, structural and operator alike: two
+/// different operations must never produce the same key, or one would
+/// silently return the other's value -- a `rand` cell and a `ror` cell on
+/// the same net both yield one unsigned bit from one operand, and nothing
+/// but the tag tells them apart. Each operator gets its own tag, and the
+/// same tag is used whether the operation came from an expression, a cell
+/// or one of the lowering's own helpers, which is what lets those share a
+/// value.
+mod tag {
+    use crate::ir::{BinaryOp, UnaryOp};
+
+    /// Width change.
+    pub(super) const RESIZE: u16 = 1;
+    /// Two-way select.
+    pub(super) const MUX: u16 = 2;
+    /// Constant bit range.
+    pub(super) const EXTRACT: u16 = 3;
+    /// Constant bit range replacement.
+    pub(super) const INSERT: u16 = 4;
+    /// Computed element replacement.
+    pub(super) const DYN_INSERT: u16 = 5;
+    /// Computed element select.
+    pub(super) const DYN_INDEX: u16 = 6;
+    /// Computed bit range.
+    pub(super) const DYN_EXTRACT: u16 = 7;
+    /// Concatenation.
+    pub(super) const CONCAT: u16 = 8;
+    /// Replication.
+    pub(super) const REPLICATE: u16 = 9;
+    /// Asynchronous memory read.
+    pub(super) const MEM_READ: u16 = 10;
+    /// One-hot select.
+    pub(super) const PMUX: u16 = 11;
+    /// Lookup table.
+    pub(super) const LUT: u16 = 12;
+    /// Base of the unary operators.
+    const UNARY: u16 = 100;
+    /// Base of the binary operators.
+    const BINARY: u16 = 200;
+
+    /// The tag of one unary operator.
+    pub(super) fn unary(op: UnaryOp) -> u16 {
+        let i = UnaryOp::ALL.iter().position(|o| *o == op).unwrap_or(0);
+        UNARY + u16::try_from(i).unwrap_or(0)
+    }
+
+    /// The tag of one binary operator.
+    pub(super) fn binary(op: BinaryOp) -> u16 {
+        let i = BinaryOp::ALL.iter().position(|o| *o == op).unwrap_or(0);
+        BINARY + u16::try_from(i).unwrap_or(0)
+    }
+}
+
 /// A cached operation, for common subexpression elimination.
 #[derive(Clone, PartialEq, Eq, Hash)]
 struct Key {
@@ -420,9 +476,16 @@ impl<'d> Lowerer<'d> {
         if s.width == width {
             return self.alias(v, signed);
         }
-        self.emit(seq, 1, &[], &[v], width, signed, true, |dst, a| {
-            Op::Resize { dst, a: a[0] }
-        })
+        self.emit(
+            seq,
+            tag::RESIZE,
+            &[],
+            &[v],
+            width,
+            signed,
+            true,
+            |dst, a| Op::Resize { dst, a: a[0] },
+        )
     }
 
     // -- structural scan -------------------------------------------------
@@ -1280,13 +1343,20 @@ impl<'d> Lowerer<'d> {
         Some(if polarity == Polarity::Pos {
             level
         } else {
-            self.emit(false, 2, &[], &[level], 1, false, true, |dst, a| {
-                Op::Unary {
+            self.emit(
+                false,
+                tag::unary(UnaryOp::LogicNot),
+                &[],
+                &[level],
+                1,
+                false,
+                true,
+                |dst, a| Op::Unary {
                     op: UnaryOp::LogicNot,
                     dst,
                     a: a[0],
-                }
-            })
+                },
+            )
         })
     }
 
@@ -1317,11 +1387,20 @@ impl<'d> Lowerer<'d> {
         if self.slot(v).width == 1 {
             return self.alias(v, false);
         }
-        self.emit(seq, 5, &[], &[v], 1, false, true, |dst, a| Op::Unary {
-            op: UnaryOp::ReduceOr,
-            dst,
-            a: a[0],
-        })
+        self.emit(
+            seq,
+            tag::unary(UnaryOp::ReduceOr),
+            &[],
+            &[v],
+            1,
+            false,
+            true,
+            |dst, a| Op::Unary {
+                op: UnaryOp::ReduceOr,
+                dst,
+                a: a[0],
+            },
+        )
     }
 
     // -- the clock edge --------------------------------------------------
@@ -1401,11 +1480,20 @@ impl<'d> Lowerer<'d> {
                         let active = if rst.active_high {
                             r
                         } else {
-                            self.emit(true, 2, &[], &[r], 1, false, true, |dst, a| Op::Unary {
-                                op: UnaryOp::LogicNot,
-                                dst,
-                                a: a[0],
-                            })
+                            self.emit(
+                                true,
+                                tag::unary(UnaryOp::LogicNot),
+                                &[],
+                                &[r],
+                                1,
+                                false,
+                                true,
+                                |dst, a| Op::Unary {
+                                    op: UnaryOp::LogicNot,
+                                    dst,
+                                    a: a[0],
+                                },
+                            )
                         };
                         value = self.mux(true, active, value, rv, width, signed);
                     }
@@ -1752,14 +1840,21 @@ impl<'d> Lowerer<'d> {
             let m = self.case_match(ctx, subject, kind, *value, span);
             cond = Some(match cond {
                 None => m,
-                Some(prev) => self.emit(ctx.seq, 3, &[], &[prev, m], 1, false, true, |dst, a| {
-                    Op::Binary {
+                Some(prev) => self.emit(
+                    ctx.seq,
+                    tag::binary(BinaryOp::Or),
+                    &[],
+                    &[prev, m],
+                    1,
+                    false,
+                    true,
+                    |dst, a| Op::Binary {
                         op: BinaryOp::Or,
                         dst,
                         a: a[0],
                         b: a[1],
-                    }
-                }),
+                    },
+                ),
             });
         }
         let Some(cond) = cond else {
@@ -1874,13 +1969,20 @@ impl<'d> Lowerer<'d> {
         let then_nba = std::mem::replace(&mut ctx.nba, base_nba.clone());
         let then_nba_def = std::mem::replace(&mut ctx.nba_def, base_nba_def.clone());
 
-        let ncond = self.emit(ctx.seq, 2, &[], &[cond], 1, false, true, |dst, a| {
-            Op::Unary {
+        let ncond = self.emit(
+            ctx.seq,
+            tag::unary(UnaryOp::LogicNot),
+            &[],
+            &[cond],
+            1,
+            false,
+            true,
+            |dst, a| Op::Unary {
                 op: UnaryOp::LogicNot,
                 dst,
                 a: a[0],
-            }
-        });
+            },
+        );
         ctx.guard = Some(self.and_guard(ctx.seq, base_guard, ncond));
         else_f(self, ctx);
         let else_cur = std::mem::take(&mut ctx.cur);
@@ -1925,14 +2027,21 @@ impl<'d> Lowerer<'d> {
     fn and_guard(&mut self, seq: bool, guard: Option<ValId>, cond: ValId) -> ValId {
         match guard {
             None => cond,
-            Some(g) => self.emit(seq, 4, &[], &[g, cond], 1, false, true, |dst, a| {
-                Op::Binary {
+            Some(g) => self.emit(
+                seq,
+                tag::binary(BinaryOp::And),
+                &[],
+                &[g, cond],
+                1,
+                false,
+                true,
+                |dst, a| Op::Binary {
                     op: BinaryOp::And,
                     dst,
                     a: a[0],
                     b: a[1],
-                }
-            }),
+                },
+            ),
         }
     }
 
@@ -2156,7 +2265,7 @@ impl<'d> Lowerer<'d> {
                 let i = self.expr(ctx, *index);
                 self.emit(
                     ctx.seq,
-                    10,
+                    tag::DYN_INDEX,
                     &[i64::from(ew), i64::try_from(count).unwrap_or(i64::MAX)],
                     &[b, i],
                     ew,
@@ -2182,7 +2291,7 @@ impl<'d> Lowerer<'d> {
                 let up = *up;
                 self.emit(
                     ctx.seq,
-                    11,
+                    tag::DYN_EXTRACT,
                     &[i64::from(up)],
                     &[b, o],
                     *width,
@@ -2202,12 +2311,19 @@ impl<'d> Lowerer<'d> {
                     .iter()
                     .map(|v| self.slot(*v).width)
                     .fold(0u32, u32::saturating_add);
-                self.emit(ctx.seq, 12, &[], &vals, width, false, true, |dst, a| {
-                    Op::Concat {
+                self.emit(
+                    ctx.seq,
+                    tag::CONCAT,
+                    &[],
+                    &vals,
+                    width,
+                    false,
+                    true,
+                    |dst, a| Op::Concat {
                         dst,
                         parts: a.to_vec().into_boxed_slice(),
-                    }
-                })
+                    },
+                )
             }
             ExprKind::Replicate { count, expr } => {
                 let v = self.expr(ctx, *expr);
@@ -2215,7 +2331,7 @@ impl<'d> Lowerer<'d> {
                 let width = self.slot(v).width.saturating_mul(count);
                 self.emit(
                     ctx.seq,
-                    13,
+                    tag::REPLICATE,
                     &[i64::from(count)],
                     &[v],
                     width,
@@ -2239,8 +2355,7 @@ impl<'d> Lowerer<'d> {
                 };
                 self.emit(
                     ctx.seq,
-                    14 + u16::try_from(UnaryOp::ALL.iter().position(|o| *o == op).unwrap_or(0))
-                        .unwrap_or(0),
+                    tag::unary(op),
                     &[],
                     &[v],
                     width,
@@ -2308,8 +2423,7 @@ impl<'d> Lowerer<'d> {
     /// A binary operator, sized exactly as the event simulator's shared
     /// kernel sizes it.
     fn binop(&mut self, ctx: &mut Ctx<'d>, op: BinaryOp, a: ValId, b: ValId) -> ValId {
-        let tag = 40
-            + u16::try_from(BinaryOp::ALL.iter().position(|o| *o == op).unwrap_or(0)).unwrap_or(0);
+        let tag = tag::binary(op);
         let (sa, sb) = (self.slot(a), self.slot(b));
         let (a, b, width, signed) = if op.is_shift() || op == BinaryOp::Pow {
             (a, b, sa.width, sa.signed)
@@ -2349,20 +2463,34 @@ impl<'d> Lowerer<'d> {
         if a == b {
             return a;
         }
-        self.emit(seq, 6, &[], &[cond, a, b], width, signed, true, |dst, s| {
-            Op::Mux {
+        self.emit(
+            seq,
+            tag::MUX,
+            &[],
+            &[cond, a, b],
+            width,
+            signed,
+            true,
+            |dst, s| Op::Mux {
                 dst,
                 s: s[0],
                 a: s[1],
                 b: s[2],
-            }
-        })
+            },
+        )
     }
 
     fn extract(&mut self, seq: bool, v: ValId, lo: i64, width: u32) -> ValId {
-        self.emit(seq, 7, &[lo], &[v], width, false, true, |dst, a| {
-            Op::Extract { dst, a: a[0], lo }
-        })
+        self.emit(
+            seq,
+            tag::EXTRACT,
+            &[lo],
+            &[v],
+            width,
+            false,
+            true,
+            |dst, a| Op::Extract { dst, a: a[0], lo },
+        )
     }
 
     fn insert(
@@ -2376,7 +2504,7 @@ impl<'d> Lowerer<'d> {
     ) -> ValId {
         self.emit(
             seq,
-            8,
+            tag::INSERT,
             &[lo],
             &[base, part],
             width,
@@ -2405,7 +2533,7 @@ impl<'d> Lowerer<'d> {
     ) -> ValId {
         self.emit(
             seq,
-            9,
+            tag::DYN_INSERT,
             &[i64::from(elem), i64::try_from(count).unwrap_or(i64::MAX)],
             &[base, part, index],
             width,
@@ -2426,7 +2554,7 @@ impl<'d> Lowerer<'d> {
         let idx = u32::try_from(mem.idx()).expect("memory index fits");
         self.emit(
             seq,
-            15,
+            tag::MEM_READ,
             &[i64::from(idx)],
             &[addr],
             width,
@@ -2462,10 +2590,8 @@ impl<'d> Lowerer<'d> {
                 (s.width, s.signed)
             };
             Some(
-                low.emit(ctx.seq, 20, &[], &[a], w, sg, true, |dst, x| Op::Unary {
-                    op,
-                    dst,
-                    a: x[0],
+                low.emit(ctx.seq, tag::unary(op), &[], &[a], w, sg, true, |dst, x| {
+                    Op::Unary { op, dst, a: x[0] }
                 }),
             )
         };
@@ -2508,7 +2634,7 @@ impl<'d> Lowerer<'d> {
                 let signed = self.slot(a).signed;
                 Some(self.emit(
                     ctx.seq,
-                    21,
+                    tag::PMUX,
                     &[],
                     &[s, a, b],
                     width,
@@ -2536,7 +2662,7 @@ impl<'d> Lowerer<'d> {
                 self.fold_prog.luts.push(table);
                 Some(self.emit(
                     ctx.seq,
-                    22,
+                    tag::LUT,
                     &[i64::from(idx)],
                     &[a],
                     1,

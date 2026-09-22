@@ -78,7 +78,7 @@ testdata/synth/async_reg.cells.rtl
   async_reg: eligible (4 comb ops, 4 edge ops, 2 registers, 8 bits)
 
 testdata/synth/async_reg.rtl
-  async_reg: eligible (3 comb ops, 7 edge ops, 2 registers, 8 bits)
+  async_reg: eligible (3 comb ops, 6 edge ops, 2 registers, 8 bits)
 
 testdata/synth/async_reg.synth.rtl
   async_reg: eligible (3 comb ops, 5 edge ops, 2 registers, 8 bits)
