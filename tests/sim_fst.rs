@@ -40,6 +40,12 @@ fn sim_dir() -> PathBuf {
 }
 
 /// The golden path of a case.
+/// The writer string every golden is built with.
+///
+/// Fixed on purpose: the default carries the crate version, which would
+/// make the goldens change at every release.
+const GOLDEN_VERSION: &str = "Reticle goldens";
+
 fn golden_path(name: &str) -> PathBuf {
     sim_dir().join("fst").join(format!("{name}.fst"))
 }
@@ -55,6 +61,11 @@ fn capture(name: &str, configure: impl FnOnce(&fst::FstCapture)) -> (Vec<u8>, St
         .unwrap_or_else(|d| panic!("{}", d.render(&map)));
     sim.enable_vcd();
     let fst_capture = sim.enable_fst();
+    // The writer stamps `Reticle <version>` into the header by default, so
+    // a golden built with it would change on every release and break these
+    // tests for a reason that has nothing to do with the format. Real
+    // output keeps the real version; the goldens pin one.
+    fst_capture.set_version(GOLDEN_VERSION);
     configure(&fst_capture);
     sim.run();
     let mut bytes = Vec::new();
@@ -199,11 +210,7 @@ fn goldens_parse_back() {
     for name in CASES {
         let bytes = fs::read(golden_path(name)).unwrap();
         let file = fst::read(&bytes).unwrap_or_else(|e| panic!("{name}.fst: {e}"));
-        assert_eq!(
-            file.version,
-            format!("Reticle {}", reticle::VERSION),
-            "{name}"
-        );
+        assert_eq!(file.version, GOLDEN_VERSION, "{name}");
         assert_eq!(file.date, "Thu Jan  1 00:00:00 1970", "{name}");
         assert_eq!(file.vars.len() as u64, file.var_count, "{name}");
         assert_eq!(file.lengths.len(), file.frame.len(), "{name}");

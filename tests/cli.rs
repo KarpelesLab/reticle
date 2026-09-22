@@ -608,11 +608,26 @@ fn sim_writes_an_fst_waveform() {
     ]);
     assert_eq!(code, 0, "{stderr}");
 
-    // Byte-identical to the golden the FST tests check against a real
-    // GTKWave reader, so the CLI path is covered by that validation too.
-    let written = std::fs::read(&fst).unwrap();
-    let golden = std::fs::read("testdata/sim/fst/counter.fst").unwrap();
-    assert_eq!(written, golden, "CLI FST differs from the golden");
+    // Compared through the crate's own FST reader rather than byte for
+    // byte: the writer stamps `Reticle <version>` into the header, so a
+    // byte comparison against a golden breaks on every release. What must
+    // match is what a waveform viewer would show, so compare the decoded
+    // variables and value changes. The golden itself is the one the FST
+    // tests check against GTKWave's reference reader, so the command's
+    // output is covered by that validation too.
+    let written =
+        reticle::sim::fst::read(&std::fs::read(&fst).unwrap()).expect("the command's FST decodes");
+    let golden = reticle::sim::fst::read(&std::fs::read("testdata/sim/fst/counter.fst").unwrap())
+        .expect("the golden decodes");
+    assert_eq!(
+        written.vars, golden.vars,
+        "the command's FST declares different variables"
+    );
+    assert_eq!(
+        written.changes, golden.changes,
+        "the command's FST holds different value changes"
+    );
+    assert_eq!(written.end_time, golden.end_time);
 }
 
 #[test]
