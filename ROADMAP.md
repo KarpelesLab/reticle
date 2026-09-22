@@ -75,8 +75,10 @@ right first because every diagnostic and every test goes through it.
 - [x] `Logic` value type: 4-state (`0 1 X Z`) bit vectors with arbitrary
       width, plus the 9-state `std_logic` encoding for VHDL (`U X 0 1 Z W L
       H -`) and the resolution functions between them. Fast paths for 2-state.
-- [ ] Test harness: golden-file tests under `testdata/` (`input.v` +
-      `expected.diag` or `expected.ir`) driven by one integration test.
+- [x] Test harness: golden-file tests under `testdata/`, one integration
+      test per stage, each rewriting its expectations under
+      `UPDATE_EXPECT=1`. Thirty-three test binaries, twenty-four of them
+      golden-driven.
 - [x] CLI skeleton: `reticle <subcommand>`, `--help`, `--version`, exit codes.
 
 Done when: an unknown-file error from the CLI prints a rustc-style message
@@ -253,8 +255,8 @@ technology cells.
       (the engine cannot read the process form, so process lowering is the
       one pass taken on trust; the module docs say so). Simulation of the
       mapped netlist through phase 4 is still open.
-- [ ] Reports: cell counts, estimated depth, inferred memories and FSMs,
-      with source spans.
+- [x] Reports: cell counts, estimated combinational depth, inferred
+      memories, flip-flops, latches and FSMs, with source spans.
 
 Done when: picorv32 and NEORV32 synthesise to a generic LUT4 netlist with
 cell counts within a small margin of Yosys, and the mapped netlist passes

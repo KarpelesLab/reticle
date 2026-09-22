@@ -13,7 +13,7 @@
 use std::collections::BTreeMap;
 use std::fmt::Write as _;
 
-use crate::ir::{CellKind, Design, Module};
+use crate::ir::{CellId, CellKind, Design, ExprId, Module, NetId};
 use crate::source::{SourceMap, Span};
 use crate::synth::PassStats;
 
@@ -52,6 +52,11 @@ pub struct ModuleReport {
     pub processes: usize,
     /// Inferred storage, in cell order.
     pub storage: Vec<StorageItem>,
+    /// Longest chain of combinational cells between two registers, ports
+    /// or memory ports. An estimate of logic depth before technology
+    /// mapping, so it counts generic cells rather than gates or levels of
+    /// lookup table.
+    pub depth: usize,
 }
 
 /// The summary of a design.
@@ -160,6 +165,7 @@ impl Report {
             instances: m.instances.len(),
             processes: m.processes.len(),
             storage,
+            depth: combinational_depth(m),
         }
     }
 
@@ -170,11 +176,12 @@ impl Report {
             let _ = writeln!(out, "module {}", module.name);
             let _ = writeln!(
                 out,
-                "  nets: {}  assigns: {}  instances: {}  cells: {}",
+                "  nets: {}  assigns: {}  instances: {}  cells: {}  depth: {}",
                 module.nets,
                 module.assigns,
                 module.instances,
-                module.cells.iter().map(|(_, n)| n).sum::<usize>()
+                module.cells.iter().map(|(_, n)| n).sum::<usize>(),
+                module.depth
             );
             if module.processes > 0 {
                 let _ = writeln!(out, "  unsynthesised processes: {}", module.processes);
@@ -257,8 +264,138 @@ impl SynthStats {
     }
 }
 
+/// Every net an expression reads.
+fn expr_nets(m: &Module, root: ExprId) -> Vec<NetId> {
+    let mut out = Vec::new();
+    let mut stack = vec![root];
+    while let Some(id) = stack.pop() {
+        let Some(expr) = m.exprs.get(id) else {
+            continue;
+        };
+        if let Some(net) = expr.as_net() {
+            out.push(net);
+        }
+        stack.extend(crate::ir::expr::operands(&expr.kind));
+    }
+    out
+}
+
+/// The longest chain of combinational cells in `m`.
+///
+/// Registers, memory ports, instances and module ports start a chain at
+/// zero, so this measures logic between state, which is what determines
+/// how fast the module can be clocked. It is an estimate: the cells are
+/// still generic, so one `add` counts as one level although it becomes
+/// many gates. A combinational loop, which the validator rejects but a
+/// hand-written netlist may contain, stops the walk rather than hanging.
+fn combinational_depth(m: &Module) -> usize {
+    // Depth of the signal each net carries, by net index.
+    let mut depth_of: Vec<usize> = vec![0; m.nets.len()];
+    // Cells whose inputs are all ready, processed in dependency order.
+    let mut driver: Vec<Option<CellId>> = vec![None; m.nets.len()];
+    for (id, cell) in m.cells.iter() {
+        if !cell.kind.is_combinational() {
+            continue;
+        }
+        for (_, net) in &cell.outputs {
+            driver[net.index()] = Some(id);
+        }
+    }
+
+    // Longest path by memoised depth-first search, with a visiting mark
+    // so a cycle is broken instead of recursed forever.
+    #[derive(Clone, Copy, PartialEq)]
+    enum Mark {
+        New,
+        Visiting,
+        Done,
+    }
+    let mut mark = vec![Mark::New; m.nets.len()];
+    let mut stack: Vec<(NetId, bool)> = Vec::new();
+
+    for net in m.nets.ids() {
+        if mark[net.index()] != Mark::New {
+            continue;
+        }
+        stack.push((net, false));
+        while let Some((net, returning)) = stack.pop() {
+            if returning {
+                let mut best = 0;
+                if let Some(cell) = driver[net.index()] {
+                    for (_, expr) in &m.cells[cell].inputs {
+                        for input in expr_nets(m, *expr) {
+                            best = best.max(depth_of[input.index()]);
+                        }
+                    }
+                    best += 1;
+                }
+                depth_of[net.index()] = best;
+                mark[net.index()] = Mark::Done;
+                continue;
+            }
+            match mark[net.index()] {
+                Mark::Done => continue,
+                // A loop: leave this net at zero and carry on, so the
+                // report still comes out.
+                Mark::Visiting => continue,
+                Mark::New => {}
+            }
+            mark[net.index()] = Mark::Visiting;
+            stack.push((net, true));
+            if let Some(cell) = driver[net.index()] {
+                for (_, expr) in &m.cells[cell].inputs {
+                    for input in expr_nets(m, *expr) {
+                        if mark[input.index()] == Mark::New {
+                            stack.push((input, false));
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    depth_of.into_iter().max().unwrap_or(0)
+}
+
 #[cfg(test)]
 mod tests {
+    /// Depth counts combinational cells between state, so a chain of
+    /// three gates is three and a register breaks the chain.
+    #[test]
+    fn depth_counts_logic_between_registers() {
+        use crate::diag::Diagnostics;
+        use crate::ir::builder::ModuleBuilder;
+        use crate::ir::{ProcessKind, Type};
+        use crate::source::SourceMap;
+        use crate::synth::Pass;
+
+        let mut map = SourceMap::new();
+        let file = map.add("t", "").unwrap();
+        let span = Span::new(file, 0, 0);
+
+        let mut b = ModuleBuilder::new("chain", span);
+        let clk = b.input("clk", Type::bit());
+        let a = b.input("a", Type::bit());
+        let c = b.input("c", Type::bit());
+        let y = b.output_reg("y", Type::bit());
+        let (av, cv) = (b.net(a), b.net(c));
+        // Three levels of logic feeding one register.
+        let l1 = b.and(av, cv);
+        let l2 = b.or(l1, av);
+        let l3 = b.xor(l2, cv);
+        let mut p = b.process(Some("reg"), ProcessKind::posedge(clk));
+        p.nonblocking(y, l3);
+        b.end_process(p);
+        let mut m = b.finish();
+
+        let mut diags = Diagnostics::new();
+        crate::synth::proc::ProcLower::default().run(&mut m, &mut diags);
+        crate::synth::cellify::Cellify.run(&mut m, &mut diags);
+
+        let report = Report::of_module(&m);
+        assert_eq!(report.depth, 3, "{}", m.to_text());
+    }
+
     use super::*;
     use crate::ir::Design;
 
