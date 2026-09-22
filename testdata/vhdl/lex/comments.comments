@@ -1,0 +1,12 @@
+Line@1:1 -- A line comment at the very start.
+Line@2:13 -- trailing comment with Unicode: é ü 日本語 🙂
+Line@3:13 --no space after the dashes
+Line@4:1 --
+Line@5:1 -- Empty comment above; a comment containing "quotes" and 'ticks' below.
+Line@6:1 -- "unterminated string inside a comment is fine 'x
+Line@7:9 ---- extra dashes
+Line@8:1 -- Tool directives are recorded, skipped, and noted.
+ToolDirective@9:1 `protect begin_protected
+ToolDirective@10:1 `protect key_keyowner = "Reticle", key_method = "rsa"
+ToolDirective@11:1 `protect end_protected
+ToolDirective@12:1 `

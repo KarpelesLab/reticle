@@ -1,0 +1,3 @@
+Line@1:1 -- Error recovery: every problem yields one diagnostic and lexing goes on.
+Line@21:12 -- fine again
+Delimited@22:1 /* unterminated delimited comment, must be last\nu <= 1;\n

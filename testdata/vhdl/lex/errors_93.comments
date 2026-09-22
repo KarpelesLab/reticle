@@ -1,0 +1,3 @@
+Line@1:1 -- lex: vhdl93
+Line@2:1 -- VHDL-2008 lexical features used in VHDL-93 mode: lexed, but diagnosed.
+Delimited@7:1 /* delimited comment */

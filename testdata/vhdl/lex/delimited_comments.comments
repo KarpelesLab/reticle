@@ -1,0 +1,7 @@
+Delimited@1:1 /* VHDL-2008 delimited comments. */
+Delimited@2:8 /* inline */
+Delimited@3:3 /*\n   * Multi-line, with Unicode: 日本語 🙂 and a -- inside,\n   * and "quotes" and a nested-looking /* opener.\n   */
+Delimited@7:20 /* comment between tokens */
+Delimited@9:8 /**/
+Delimited@9:20 /* right after a token */
+Delimited@10:7 /*tight*/

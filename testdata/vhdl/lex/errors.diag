@@ -1,0 +1,146 @@
+error: unterminated string literal
+ --> errors.vhd:2:6
+  |
+2 | a <= "unterminated string
+  |      ^^^^^^^^^^^^^^^^^^^^ expected `"`
+  |
+  = note: string literals cannot span lines
+
+error: unterminated string literal
+ --> errors.vhd:3:6
+  |
+3 | b <= %also unterminated
+  |      ^^^^^^^^^^^^^^^^^^ expected `%`
+  |
+  = note: string literals cannot span lines
+
+error: unterminated extended identifier
+ --> errors.vhd:4:6
+  |
+4 | c <= \unterminated extended
+  |      ^^^^^^^^^^^^^^^^^^^^^^ expected `\`
+  |
+  = note: extended identifiers cannot span lines
+
+error: extended identifier is empty
+ --> errors.vhd:5:6
+  |
+5 | d <= \\;
+  |      ^^
+
+error: base 17 is not in the range 2 to 16
+ --> errors.vhd:6:6
+  |
+6 | e <= 17#10#;
+  |      ^^
+
+error: digit `9` is not valid in base 8
+ --> errors.vhd:7:9
+  |
+7 | f <= 8#79#;
+  |         ^
+
+error: unterminated based literal
+ --> errors.vhd:8:6
+  |
+8 | g <= 16#FF;
+  |      ^^^^^ expected a closing `#`
+
+error: underscore must separate two digits
+ --> errors.vhd:9:8
+  |
+9 | h <= 1__0 + 1_ + 16#_F# + 2#1_#;
+  |        ^
+
+error: literal ends with an underscore
+ --> errors.vhd:9:13
+  |
+9 | h <= 1__0 + 1_ + 16#_F# + 2#1_#;
+  |             ^^
+
+error: underscore must separate two digits
+ --> errors.vhd:9:21
+  |
+9 | h <= 1__0 + 1_ + 16#_F# + 2#1_#;
+  |                     ^
+
+error: literal ends with an underscore
+ --> errors.vhd:9:29
+  |
+9 | h <= 1__0 + 1_ + 16#_F# + 2#1_#;
+  |                             ^^
+
+error: integer literal cannot have a negative exponent
+  --> errors.vhd:10:6
+   |
+10 | i <= 1E-3;
+   |      ^^^^
+
+error: integer literal cannot have a negative exponent
+  --> errors.vhd:11:6
+   |
+11 | j <= 2#101#E-1;
+   |      ^^^^^^^^^
+
+error: based literal has no digits
+  --> errors.vhd:12:9
+   |
+12 | k <= 16##;
+   |         ^
+
+error: identifier contains consecutive underscores
+  --> errors.vhd:13:6
+   |
+13 | l <= bad__name + trailing_;
+   |      ^^^^^^^^^
+
+error: identifier ends with an underscore
+  --> errors.vhd:13:18
+   |
+13 | l <= bad__name + trailing_;
+   |                  ^^^^^^^^^
+
+error: illegal character `$`
+  --> errors.vhd:14:8
+   |
+14 | m <= a $ b;
+   |        ^
+
+error: character literal `日` is not a Latin-1 graphic character
+  --> errors.vhd:15:6
+   |
+15 | n <= '日';
+   |      ^^^
+
+error: unterminated bit-string literal
+  --> errors.vhd:16:6
+   |
+16 | o <= x"unterminated bit string
+   |      ^^^^^^^^^^^^^^^^^^^^^^^^^ expected `"`
+
+error: illegal character `€`
+  --> errors.vhd:17:8
+   |
+17 | p <= a € b;
+   |        ^
+
+error: based literal has no digits after the point
+  --> errors.vhd:19:11
+   |
+19 | r <= 16#F.#;
+   |           ^
+
+error: illegal character `~`
+  --> errors.vhd:20:8
+   |
+20 | s <= a ~ b;
+   |        ^
+
+error: unterminated delimited comment
+  --> errors.vhd:22:1
+   |
+22 | /* unterminated delimited comment, must be last
+   | ^^ comment opened here
+   |
+   = note: expected `*/` before the end of the file
+

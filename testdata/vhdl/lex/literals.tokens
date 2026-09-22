@@ -1,0 +1,76 @@
+Integer@3:1 0
+Integer@3:3 42
+Integer@3:6 1_000_000
+Integer@3:16 1E3
+Integer@3:20 1e+3
+Integer@3:25 12E0
+Real@5:1 3.14
+Real@5:6 0.5
+Real@5:10 1_0.0_1
+Real@5:18 1.0E-3
+Real@5:25 2.5e+2
+Real@5:32 6.02e23
+Integer@7:1 2#1010#
+Integer@7:9 8#777#
+Integer@7:16 16#FF#
+Integer@7:23 16#ff_ff#
+Integer@7:33 10#42#E2
+Real@7:42 2#1.1#
+Real@7:49 16#F.8#e-1
+Integer@7:60 16#DEAD_BEEF#
+Integer@9:1 10
+Ident@9:4 ns
+Real@9:7 1.5
+Ident@9:11 us
+Ident@11:1 c
+ColonEq@11:3 :=
+LParen@11:6 (
+CharLit@11:7 a
+Comma@11:10 ,
+CharLit@11:12 Z
+Comma@11:15 ,
+CharLit@11:17 0
+Comma@11:20 ,
+CharLit@11:22 1
+Comma@11:25 ,
+CharLit@11:27  
+Comma@11:30 ,
+CharLit@11:32 '
+Comma@11:35 ,
+CharLit@11:37 "
+Comma@11:40 ,
+CharLit@11:42 (
+Comma@11:45 ,
+CharLit@11:47 )
+Comma@11:50 ,
+CharLit@11:52 \
+Comma@11:55 ,
+CharLit@11:57 é
+RParen@11:60 )
+Semi@11:61 ;
+StringLit@13:1 
+StringLit@13:4 hello
+StringLit@13:12 say "hi"
+StringLit@13:25 percent
+StringLit@13:35 100% sure
+StringLit@13:48 x % y
+StringLit@13:56 a "quoted" b
+BitStringLit@15:1 b"1010"
+BitStringLit@15:9 B"1_0"
+BitStringLit@15:16 o"777"
+BitStringLit@15:23 X"FF"
+BitStringLit@15:29 x"f_f"
+BitStringLit@15:36 ub"1"
+BitStringLit@15:42 UO"7"
+BitStringLit@15:48 ux"F"
+BitStringLit@15:54 sb"1010"
+BitStringLit@15:63 SO"7"
+BitStringLit@15:69 sx"F"
+BitStringLit@16:1 d"255"
+BitStringLit@16:8 8x"F_F"
+BitStringLit@16:16 12UX"ABC"
+BitStringLit@16:26 16SB"1111"
+BitStringLit@16:37 4b%1010%
+BitStringLit@16:46 x"ZZ"
+BitStringLit@16:52 x"--"
+Eof@17:1 
