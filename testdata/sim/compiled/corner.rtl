@@ -1,0 +1,319 @@
+// Corner cases for compiled fast mode, run through both engines by
+// `tests/sim_compiled.rs`.
+//
+// Each module here is something the corpus in `testdata/sim` and
+// `testdata/synth` does not reach, and every one of them was a divergence
+// between the two engines at some point: a blocking assignment in a
+// clocked process, a value wider than a machine word, signed division and
+// arithmetic shifts, `**` with a signed base and an unsigned exponent,
+// `case` items that are not the subject's width, an unrolled loop, a
+// computed part-select, and an asynchronous reset whose register another
+// driver also reads.
+//
+// They live in a subdirectory because `tests/sim_rtl.rs` wants a
+// `.expect` script for every `.rtl` beside it; these are compared against
+// the event simulator instead of against a transcript.
+
+module blocking
+  net %clk u1 wire
+  net %en u1 wire
+  net %d u8 wire
+  net %count u8 reg
+  net %gated u8 reg
+  net %t u8 var
+  net %piped u8 reg
+  port clk in %clk
+  port en in %en
+  port d in %d
+  port count out %count
+  port gated out %gated
+  port piped out %piped
+  process free_running seq posedge %clk
+    %count = add(%count, 8'd1)
+  end
+  process guarded seq posedge %clk
+    if %en
+      %gated = %d
+    end
+  end
+  process pipeline seq posedge %clk
+    %t = add(%d, 8'd1)
+    %piped <= %t
+  end
+end
+
+module wide
+  net %clk u1 wire
+  net %a u96 wire
+  net %b u96 wire
+  net %sum u96 wire
+  net %prod u96 wire
+  net %diff u96 wire
+  net %top u32 wire
+  net %shifted u96 wire
+  net %acc u96 reg
+  port clk in %clk
+  port a in %a
+  port b in %b
+  port sum out %sum
+  port prod out %prod
+  port diff out %diff
+  port top out %top
+  port shifted out %shifted
+  port acc out %acc
+  assign %sum = add(%a, %b)
+  assign %prod = mul(%a, %b)
+  assign %diff = sub(%a, %b)
+  assign %top = %sum[95:64]
+  assign %shifted = shr(%a, %b)
+  process acc_p seq posedge %clk
+    %acc <= add(%acc, %sum)
+  end
+end
+
+module signs
+  net %a s8 wire
+  net %b s8 wire
+  net %n u8 wire
+  net %wide s16 wire
+  net %quot s8 wire
+  net %rem s8 wire
+  net %nz s8 wire
+  net %less u1 wire
+  net %asr s8 wire
+  net %lsr s8 wire
+  net %shl s8 wire
+  port a in %a
+  port b in %b
+  port n in %n
+  port wide out %wide
+  port nz out %nz
+  port quot out %quot
+  port rem out %rem
+  port less out %less
+  port asr out %asr
+  port lsr out %lsr
+  port shl out %shl
+  assign %wide = resize(%a, s16)
+  // Bit 0 forced high: a zero divisor has no two-state answer.
+  assign %nz = or(%b, 8'sd1)
+  assign %quot = div(%a, %nz)
+  assign %rem = mod(%a, %nz)
+  assign %less = lt(%a, %b)
+  assign %asr = sshr(%a, %n)
+  assign %lsr = shr(%a, %n)
+  assign %shl = shl(%a, %n)
+end
+
+module wide_shifts
+  net %a s96 wire
+  net %n u8 wire
+  net %asr s96 wire
+  net %lsr s96 wire
+  net %shl s96 wire
+  port a in %a
+  port n in %n
+  port asr out %asr
+  port lsr out %lsr
+  port shl out %shl
+  assign %asr = sshr(%a, %n)
+  assign %lsr = shr(%a, %n)
+  assign %shl = shl(%a, %n)
+end
+
+module power
+  net %a s8 wire
+  net %b u4 wire
+  net %e s4 wire
+  net %base s8 wire
+  net %unsigned_exp s16 wire
+  net %signed_exp s16 wire
+  port a in %a
+  port b in %b
+  port e in %e
+  port base out %base
+  port unsigned_exp out %unsigned_exp
+  port signed_exp out %signed_exp
+  // A zero base with a negative exponent is the one `**` case with no
+  // two-state answer.
+  assign %base = or(%a, 8'sd1)
+  assign %unsigned_exp = resize(pow(%base, %b), s16)
+  assign %signed_exp = resize(pow(%base, %e), s16)
+end
+
+module sized
+  net %sub u4 wire
+  net %wide u8 wire
+  net %hit u2 reg
+  net %zhit u2 reg
+  port sub in %sub
+  port wide in %wide
+  port hit out %hit
+  port zhit out %zhit
+  process wide_item comb
+    case %sub
+      when 8'd17
+        %hit = 2'd1
+      end
+      default
+        %hit = 2'd0
+      end
+    end
+  end
+  process narrow_item comb
+    casez %wide
+      when 4'bzz01
+        %zhit = 2'd1
+      end
+      default
+        %zhit = 2'd0
+      end
+    end
+  end
+end
+
+module popcount
+  net %in u8 wire
+  net %count u4 reg
+  net %i u4 var
+  port in in %in
+  port count out %count
+  process sum comb
+    %count = 4'd0
+    for %i = 4'd0; lt(%i, 4'd8); %i = add(%i, 4'd1)
+      %count = add(%count, resize(%in[%i], u4))
+    end
+  end
+end
+
+module split
+  net %in u12 wire
+  net %off u4 wire
+  net %hi u4 wire
+  net %mid u4 wire
+  net %lo u4 wire
+  net %rep u12 wire
+  net %uoff u3 wire
+  net %doff u3 wire
+  net %up u4 wire
+  net %down u4 wire
+  port in in %in
+  port off in %off
+  port hi out %hi
+  port mid out %mid
+  port lo out %lo
+  port rep out %rep
+  port uoff out %uoff
+  port doff out %doff
+  port up out %up
+  port down out %down
+  assign {%hi, %mid, %lo} = %in
+  assign %rep = {3{%in[3:0]}}
+  // Kept inside the operand: a select that runs off the end reads `x`
+  // in the event simulator and zero here.
+  assign %uoff = %off[2:0]
+  assign %doff = or(%off[2:0], 3'd3)
+  assign %up = %in[%uoff +: 4]
+  assign %down = %in[%doff -: 4]
+end
+
+module shared_reset
+  net %clk u1 wire
+  net %rst u1 wire
+  net %a u8 reg
+  net %b u8 reg
+  net %sum u8 wire
+  port clk in %clk
+  port rst in %rst
+  port a out %a
+  port b out %b
+  port sum out %sum
+  assign %sum = add(%a, 8'd1)
+  process p seq posedge %clk async posedge %rst
+    if %rst
+      %a <= 8'd0
+      %b <= add(%a, 8'd1)
+    else
+      %a <= add(%a, 8'd1)
+      %b <= 8'd7
+    end
+  end
+end
+
+module chained_reset
+  net %clk u1 wire
+  net %rst_n u1 wire
+  net %d u4 wire
+  net %sync_n u1 reg
+  net %q u4 reg
+  net %q2 u4 wire
+  port clk in %clk
+  port rst_n in %rst_n
+  port d in %d
+  port sync_n out %sync_n
+  port q out %q
+  port q2 out %q2
+  assign %q2 = add(%q, %q)
+  process user seq posedge %clk async negedge %sync_n
+    if lnot(%sync_n)
+      %q <= 4'd0
+    else
+      %q <= %d
+    end
+  end
+  process syncer seq posedge %clk async negedge %rst_n
+    if lnot(%rst_n)
+      %sync_n <= 1'd0
+    else
+      %sync_n <= 1'd1
+    end
+  end
+end
+
+module reductions
+  net %clk u1 wire
+  net %rst u1 wire
+  net %en u1 wire
+  net %q u4 wire
+  net %inc u4 wire
+  net %q_next u4 wire
+  net %is2 u1 wire
+  net %parity u1 wire
+  net %all_set u1 wire
+  net %any_set u1 wire
+  port clk in %clk
+  port rst in %rst
+  port en in %en
+  port q out %q
+  port is2 out %is2
+  port parity out %parity
+  port all_set out %all_set
+  port any_set out %any_set
+  cell add0 add (a=%q, b=4'd1) -> (y=%inc)
+  cell mux0 mux (a=%q, b=%inc, s=%en) -> (y=%q_next)
+  cell ff0 dff pos arst pos 4'd0 (clk=%clk, d=%q_next, rst=%rst) -> (q=%q)
+  cell eq0 eq (a=%q, b=4'd2) -> (y=%is2)
+  cell rx0 rxor (a=%q) -> (y=%parity)
+  cell ra0 rand (a=%q) -> (y=%all_set)
+  cell ro0 ror (a=%q) -> (y=%any_set)
+end
+
+module elements
+  net %clk u1 wire
+  net %we u1 wire
+  net %addr u2 wire
+  net %d u8 wire
+  net %regs [4]u8 reg
+  net %rd u8 wire
+  port clk in %clk
+  port we in %we
+  port addr in %addr
+  port d in %d
+  port rd out %rd
+  assign %rd = %regs[%addr]
+  process p seq posedge %clk
+    if %we
+      %regs[%addr] <= %d
+    end
+  end
+end

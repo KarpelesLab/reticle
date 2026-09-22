@@ -119,15 +119,18 @@
 //!   known and the values are already two-state — but it is not
 //!   implemented, and a caller that needs a waveform should use the event
 //!   simulator.
-//! - **Asynchronous reset between edges.** An asynchronous reset is
-//!   sampled at the clock edge, like a synchronous one. A testbench that
-//!   changes inputs once per cycle sees no difference at the sample point;
-//!   one that pulses a reset between two edges does.
+//! - **Side effects once per cycle.** A `$display` or an immediate
+//!   assertion runs once per [`CompiledSim::step`], whichever kind of
+//!   process it is in. The event simulator runs the ones in a
+//!   combinational process once per delta cycle the process is triggered
+//!   in, which may be several times in a cycle or none at all.
 //!
 //! What *is* here besides the run: `$display` and `$write` (formatted by
 //! the same code the event simulator uses, so the text is identical),
 //! `$finish`, `$stop`, memories with the event simulator's read-old write
-//! semantics, and everything the time-zero initialisers did, because
+//! semantics, asynchronous resets (applied before the settle, so a
+//! register clears the moment its reset asserts, as it does in the event
+//! simulator), and everything the time-zero initialisers did, because
 //! compiled mode gets its initial state by running the event simulator's
 //! time zero.
 //!

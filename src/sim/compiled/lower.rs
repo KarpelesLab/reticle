@@ -197,6 +197,13 @@ struct Ctx<'d> {
     def: BTreeMap<SigId, Vec<u64>>,
     nba: BTreeMap<SigId, ValId>,
     nba_def: BTreeMap<SigId, Vec<u64>>,
+    /// Signals some path assigned blockingly, and non-blockingly. The
+    /// masks cannot answer this: a clocked unit seeds them full, because
+    /// a register that no path assigns holds, and a conditional
+    /// assignment intersects back to empty. These accumulate across both
+    /// arms of a branch, which is what "some path" means.
+    wrote: BTreeSet<SigId>,
+    wrote_nba: BTreeSet<SigId>,
     writes: BTreeSet<SigId>,
     label: String,
     span: Span,
@@ -215,6 +222,9 @@ pub(crate) struct Lowerer<'d> {
     cse: HashMap<Key, (ValId, bool)>,
     consts: HashMap<(u32, bool, Vec<u64>), ValId>,
     cursor: usize,
+    /// True while the asynchronous-reset prologue is being emitted, where
+    /// values may not be shared with the rest of the program.
+    in_prologue: bool,
     comb: Vec<Op>,
     seq: Vec<Op>,
     side: Vec<Op>,
@@ -300,6 +310,7 @@ pub(crate) fn build(
         cse: HashMap::new(),
         consts: HashMap::new(),
         cursor: 0,
+        in_prologue: false,
         comb: Vec::new(),
         seq: Vec::new(),
         side: Vec::new(),
@@ -330,6 +341,7 @@ impl<'d> Lowerer<'d> {
         if !self.errors.is_empty() {
             return Err(self.errors);
         }
+        self.check_blocking_races();
         self.lower_async_resets();
         for i in order {
             self.lower_unit(&units[i]);
@@ -467,7 +479,15 @@ impl<'d> Lowerer<'d> {
             srcs: srcs.to_vec(),
             imm: imm.to_vec(),
         };
-        if let Some((v, in_seq)) = self.cse.get(&key)
+        // The asynchronous-reset prologue is the one part of the
+        // program that is not in single assignment form: it writes a
+        // register's own slot. Everything it computes therefore reads a
+        // register from *before* that write, so sharing such a value with
+        // the rest of the program — or with a later prologue entry —
+        // would hand out a pre-reset value. A folded constant is exempt:
+        // it depends on nothing that changes.
+        if !self.in_prologue
+            && let Some((v, in_seq)) = self.cse.get(&key)
             && (!*in_seq || seq)
         {
             return *v;
@@ -489,7 +509,9 @@ impl<'d> Lowerer<'d> {
             } else {
                 self.comb.push(op);
             }
-            self.cse.insert(key, (dst, seq));
+            if !self.in_prologue {
+                self.cse.insert(key, (dst, seq));
+            }
         }
         dst
     }
@@ -1047,6 +1069,98 @@ impl<'d> Lowerer<'d> {
         }
     }
 
+    /// Rejects a net one clocked process writes blockingly and another
+    /// clocked unit reads.
+    ///
+    /// The event simulator makes a blocking write visible the instant it
+    /// happens, so whether the reader sees the old or the new value
+    /// depends on which process the scheduler runs first. Compiled mode
+    /// has no such order — every clocked unit reads the committed state —
+    /// so a design that depends on one is refused rather than given the
+    /// answer compiled mode happens to produce.
+    fn check_blocking_races(&mut self) {
+        let mut writers: BTreeMap<SigId, (usize, Span)> = BTreeMap::new();
+        for p in 0..self.sim.procs.len() {
+            let process: &'d Process = self.sim.procs[p].process;
+            if !matches!(process.kind, ProcessKind::Sequential { .. }) {
+                continue;
+            }
+            let inst = self.sim.procs[p].inst;
+            for sig in self.blocking_writes(inst, &process.body) {
+                writers.entry(sig).or_insert((p, process.span));
+            }
+        }
+        if writers.is_empty() {
+            return;
+        }
+        let mut reads: Vec<(usize, BTreeSet<SigId>)> = Vec::new();
+        for p in 0..self.sim.procs.len() {
+            let process: &'d Process = self.sim.procs[p].process;
+            if !matches!(process.kind, ProcessKind::Sequential { .. }) {
+                continue;
+            }
+            let inst = self.sim.procs[p].inst;
+            let mut nets = BTreeSet::new();
+            let mut mems = BTreeSet::new();
+            block_reads(self.module(inst), &process.body, &mut nets, &mut mems);
+            reads.push((p, nets.iter().map(|n| self.sig_of(inst, *n)).collect()));
+        }
+        // A clocked cell reads at the edge too.
+        let mut cell_reads: BTreeSet<SigId> = BTreeSet::new();
+        for c in 0..self.sim.cells.len() {
+            let inst = self.sim.cells[c].inst;
+            let cell: &'d Cell = self.sim.cells[c].cell;
+            if cell.kind.is_combinational() {
+                continue;
+            }
+            let m = self.module(inst);
+            for (_, e) in &cell.inputs {
+                let mut nets = BTreeSet::new();
+                let mut mems = BTreeSet::new();
+                expr_reads(m, *e, &mut nets, &mut mems);
+                for n in nets {
+                    cell_reads.insert(self.sig_of(inst, n));
+                }
+            }
+        }
+        let clashes: Vec<(SigId, Span)> = writers
+            .iter()
+            .filter(|(sig, (p, _))| {
+                cell_reads.contains(sig) || reads.iter().any(|(q, set)| q != p && set.contains(sig))
+            })
+            .map(|(sig, (_, span))| (*sig, *span))
+            .collect();
+        for (sig, span) in clashes {
+            let net = self.sig_name(sig);
+            self.err(net, Reason::BlockingRace, Some(span));
+        }
+    }
+
+    /// The signals a block assigns with a *blocking* assignment.
+    fn blocking_writes(&self, inst: InstId, body: &Block) -> BTreeSet<SigId> {
+        let mut out = BTreeSet::new();
+        let mut targets = Vec::new();
+        crate::ir::walk::walk_block(body, &mut |stmt| match &stmt.kind {
+            StmtKind::Assign {
+                target,
+                kind: AssignKind::Blocking,
+                ..
+            } => {
+                let t = self.sim.target_from_lvalue(inst, target);
+                self.target_writes(&t, &mut targets);
+            }
+            StmtKind::For { init, step, .. } => {
+                for (lv, _) in init.iter().chain(step.iter()) {
+                    let t = self.sim.target_from_lvalue(inst, lv);
+                    self.target_writes(&t, &mut targets);
+                }
+            }
+            _ => {}
+        });
+        out.extend(targets.into_iter().map(|(sig, _)| sig));
+        out
+    }
+
     fn check_coverage(&mut self) {
         for i in 0..self.covered.len() {
             let Some(mask) = self.covered[i].clone() else {
@@ -1076,6 +1190,8 @@ impl<'d> Lowerer<'d> {
             def: BTreeMap::new(),
             nba: BTreeMap::new(),
             nba_def: BTreeMap::new(),
+            wrote: BTreeSet::new(),
+            wrote_nba: BTreeSet::new(),
             writes: BTreeSet::new(),
             label,
             span,
@@ -1093,13 +1209,17 @@ impl<'d> Lowerer<'d> {
             let base = self.env[sig.idx()].expect("every signal has a value");
             ctx.cur.insert(*sig, base);
             ctx.nba.insert(*sig, base);
+            // A clocked unit holds what no path assigns, so its
+            // blocking view starts fully defined; a combinational one
+            // latches, so its starts empty and the coverage check is what
+            // reports the latch.
             let mask = if ctx.hold {
                 full_mask(width)
             } else {
                 empty_mask(width)
             };
-            ctx.def.insert(*sig, mask.clone());
-            ctx.nba_def.insert(*sig, mask);
+            ctx.def.insert(*sig, mask);
+            ctx.nba_def.insert(*sig, empty_mask(width));
         }
     }
 
@@ -1167,9 +1287,9 @@ impl<'d> Lowerer<'d> {
                 let base = self.env[sig.idx()].expect("driven signal has a base");
                 let new = self.dyn_insert(ctx.seq, base, part, idx, *elem, *count, full, signed);
                 self.env[sig.idx()] = Some(new);
-                if let Some(mask) = &mut self.covered[sig.idx()] {
-                    mark(mask, 0, full);
-                }
+                // Which element it drove is not known until it runs, so
+                // no bit of the net counts as driven and the coverage
+                // check reports the rest as undriven.
             }
             Target::Mem { .. } => {
                 self.err(ctx.label.clone(), Reason::MemoryOutsideEdge, Some(ctx.span));
@@ -1225,14 +1345,10 @@ impl<'d> Lowerer<'d> {
                 .unwrap_or_else(|| full_mask(width));
             let nba_def = ctx.nba_def.get(&sig).cloned().unwrap_or_default();
             let def = ctx.def.get(&sig).cloned().unwrap_or_default();
-            let nba_any = !words::is_zero(&nba_def);
-            let blocking_any = !words::is_zero(&def);
-            if nba_any && blocking_any {
-                self.err(
-                    unit.label.clone(),
-                    Reason::NonBlockingReadBack,
-                    Some(unit.span),
-                );
+            let nba_any = ctx.wrote_nba.contains(&sig);
+            if nba_any && ctx.wrote.contains(&sig) {
+                let name = self.sig_name(sig);
+                self.err(name, Reason::MixedAssignment, Some(unit.span));
                 continue;
             }
             let (value, mask) = if nba_any {
@@ -1297,9 +1413,11 @@ impl<'d> Lowerer<'d> {
                 }
             }
         }
+        self.in_prologue = true;
         for entry in order {
             self.emit_async_reset(&entry);
         }
+        self.in_prologue = false;
     }
 
     /// Every asynchronous reset in the design, with the signal its
@@ -1518,11 +1636,16 @@ impl<'d> Lowerer<'d> {
             self.block(&mut ctx, &process.body);
             let sigs: Vec<SigId> = ctx.writes.iter().copied().collect();
             for sig in sigs {
-                let nba_any = ctx
-                    .nba_def
-                    .get(&sig)
-                    .is_some_and(|m| !words::is_zero(m) && ctx.nba[&sig] != ctx.cur[&sig]);
-                let value = if nba_any {
+                // A non-blocking write wins over a blocking one, since it
+                // lands last; both to the same net in one process is a
+                // race with itself, and the base a partial non-blocking
+                // write would build on is not one this form can name.
+                if ctx.wrote_nba.contains(&sig) && ctx.wrote.contains(&sig) {
+                    let name = self.sig_name(sig);
+                    self.err(name, Reason::MixedAssignment, Some(process.span));
+                    continue;
+                }
+                let value = if ctx.wrote_nba.contains(&sig) {
                     ctx.nba[&sig]
                 } else {
                     ctx.cur[&sig]
@@ -1978,14 +2101,25 @@ impl<'d> Lowerer<'d> {
         item: ExprId,
         span: Span,
     ) -> ValId {
-        let width = self.slot(subject).width;
+        // The event simulator harmonises the subject and the item to the
+        // wider of the two and resizes both, so a wide item is not
+        // truncated and a narrow one's zero extension is a run of care
+        // bits, not of wildcards.
+        let item_width = ctx
+            .m
+            .exprs
+            .get(item)
+            .and_then(|n| n.ty.width())
+            .unwrap_or(0);
+        let width = self.slot(subject).width.max(item_width);
+        let subject = self.resize(ctx.seq, subject, width, self.slot(subject).signed);
         let literal = ctx
             .m
             .exprs
             .get(item)
             .and_then(|n| n.as_const())
             .filter(|c| c.has_unknown())
-            .cloned();
+            .map(|c| c.resize(width));
         if let Some(c) = literal {
             let care: Vec<u64> = match kind {
                 CaseKind::Plain => {
@@ -2089,24 +2223,32 @@ impl<'d> Lowerer<'d> {
         let else_nba_def = std::mem::take(&mut ctx.nba_def);
         ctx.guard = base_guard;
 
-        ctx.cur = self.merge(ctx.seq, cond, &then_cur, &else_cur);
-        ctx.nba = self.merge(ctx.seq, cond, &then_nba, &else_nba);
+        ctx.cur = self.merge(ctx.seq, cond, &base_cur, &then_cur, &else_cur);
+        ctx.nba = self.merge(ctx.seq, cond, &base_nba, &then_nba, &else_nba);
         ctx.def = merge_masks(&then_def, &else_def);
         ctx.nba_def = merge_masks(&then_nba_def, &else_nba_def);
     }
 
+    /// Merges the two arms' views of a signal map.
+    ///
+    /// An arm that did not touch a signal keeps what it had on entry, so
+    /// the fallback matters: the map the arms started from, and failing
+    /// that the signal's value before the unit ran. Taking the one arm
+    /// that did write it would apply the write on both paths.
     fn merge(
         &mut self,
         seq: bool,
         cond: ValId,
+        base: &BTreeMap<SigId, ValId>,
         then_map: &BTreeMap<SigId, ValId>,
         else_map: &BTreeMap<SigId, ValId>,
     ) -> BTreeMap<SigId, ValId> {
         let mut out = BTreeMap::new();
         let keys: BTreeSet<SigId> = then_map.keys().chain(else_map.keys()).copied().collect();
         for sig in keys {
-            let t = then_map.get(&sig).copied();
-            let e = else_map.get(&sig).copied();
+            let entry = base.get(&sig).copied().or(self.env[sig.idx()]);
+            let t = then_map.get(&sig).copied().or(entry);
+            let e = else_map.get(&sig).copied().or(entry);
             let value = match (t, e) {
                 (Some(t), Some(e)) if t == e => t,
                 (Some(t), Some(e)) => {
@@ -2164,7 +2306,7 @@ impl<'d> Lowerer<'d> {
                 let width = self.sig_width(sig);
                 let signed = self.sig_signed(sig);
                 let v = self.resize(ctx.seq, value, width, signed);
-                self.store(ctx, sig, v, None, nba);
+                self.store(ctx, sig, v, Some((0, width)), nba);
             }
             Lvalue::Slice { net, hi, lo } => {
                 let sig = self.sig_of(ctx.inst, *net);
@@ -2256,6 +2398,10 @@ impl<'d> Lowerer<'d> {
         })
     }
 
+    /// Records an assignment in the local view.
+    ///
+    /// `range` is the bits the assignment named; `None` is a computed
+    /// index, which writes one element but not one this form can name.
     fn store(
         &mut self,
         ctx: &mut Ctx<'d>,
@@ -2277,9 +2423,17 @@ impl<'d> Lowerer<'d> {
         };
         map.insert(sig, value);
         let mask = defs.entry(sig).or_insert_with(|| empty_mask(width));
-        match range {
-            Some((lo, w)) => mark(mask, lo, w),
-            None => mark(mask, 0, width),
+        // A computed index defines one element, but not one we can name,
+        // so it defines nothing as far as completeness goes: a unit whose
+        // only write to a net is `net[i] = ...` really does latch every
+        // element the index misses.
+        if let Some((lo, w)) = range {
+            mark(mask, lo, w);
+        }
+        if nba {
+            ctx.wrote_nba.insert(sig);
+        } else {
+            ctx.wrote.insert(sig);
         }
     }
 
@@ -2485,9 +2639,7 @@ impl<'d> Lowerer<'d> {
                 let c = self.condition(ctx, *cond);
                 let t = self.expr(ctx, *then_);
                 let f = self.expr(ctx, *else_);
-                let width = self.slot(t).width.max(self.slot(f).width);
-                let signed = self.slot(t).signed && self.slot(f).signed;
-                self.mux(ctx.seq, c, f, t, width, signed)
+                self.select(ctx, c, f, t, span)
             }
             ExprKind::Resize {
                 expr,
@@ -2523,8 +2675,12 @@ impl<'d> Lowerer<'d> {
     fn binop(&mut self, ctx: &mut Ctx<'d>, op: BinaryOp, a: ValId, b: ValId) -> ValId {
         let tag = tag::binary(op);
         let (sa, sb) = (self.slot(a), self.slot(b));
-        let (a, b, width, signed) = if op.is_shift() || op == BinaryOp::Pow {
+        let (a, b, width, signed) = if op.is_shift() {
             (a, b, sa.width, sa.signed)
+        } else if op == BinaryOp::Pow {
+            // The exponent is self-determined and keeps its own width,
+            // but it does decide the result's signedness.
+            (a, b, sa.width, sa.signed && sb.signed)
         } else if op.is_logical() {
             (a, b, 1, false)
         } else {
@@ -2545,6 +2701,36 @@ impl<'d> Lowerer<'d> {
                 b: s[1],
             }
         })
+    }
+
+    /// A two-way select whose result type does not depend on which arm
+    /// runs.
+    ///
+    /// Expression evaluation returns the taken branch *unchanged*, so the
+    /// result carries that branch's own width and signedness. A
+    /// straight-line form has to pick one at compile time, and the only
+    /// case where that is the same answer is arms that already agree —
+    /// which is what a well-formed IR has, since `infer_type` requires
+    /// equal widths. Anything else is refused rather than guessed at.
+    fn select(
+        &mut self,
+        ctx: &mut Ctx<'d>,
+        cond: ValId,
+        zero: ValId,
+        one: ValId,
+        span: Span,
+    ) -> ValId {
+        let (a, b) = (self.slot(zero), self.slot(one));
+        if a.width != b.width || a.signed != b.signed {
+            self.err(
+                ctx.label.clone(),
+                Reason::UnsupportedExpression("a select whose arms differ in width or signedness"),
+                Some(span),
+            );
+        }
+        let width = a.width.max(b.width);
+        let signed = a.signed && b.signed;
+        self.mux(ctx.seq, cond, zero, one, width, signed)
     }
 
     fn mux(
@@ -2720,16 +2906,25 @@ impl<'d> Lowerer<'d> {
                 let a = input(self, ctx, "a")?;
                 let b = input(self, ctx, "b")?;
                 let s = input(self, ctx, "s")?;
-                let width = self.slot(a).width.max(self.slot(b).width);
-                let signed = self.slot(a).signed && self.slot(b).signed;
-                Some(self.mux(ctx.seq, s, a, b, width, signed))
+                Some(self.select(ctx, s, a, b, cell.span))
             }
             CellKind::Pmux => {
                 let a = input(self, ctx, "a")?;
                 let b = input(self, ctx, "b")?;
                 let s = input(self, ctx, "s")?;
                 let width = self.slot(a).width;
+                // With nothing selected the result is the default, with
+                // its signedness; with something selected it is a slice
+                // of `b`, which is unsigned. One answer only when the
+                // default is unsigned too.
                 let signed = self.slot(a).signed;
+                if signed {
+                    self.err(
+                        ctx.label.clone(),
+                        Reason::UnsupportedExpression("a signed one-hot multiplexer"),
+                        Some(cell.span),
+                    );
+                }
                 Some(self.emit(
                     ctx.seq,
                     tag::PMUX,

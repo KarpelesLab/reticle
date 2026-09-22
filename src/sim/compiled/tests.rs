@@ -996,3 +996,314 @@ end
     );
     assert!(has(&problems, &Reason::AsyncResetLogic));
 }
+
+/// A blocking assignment in a clocked process is a register update like
+/// any other; the discriminator that decides whether to take the
+/// non-blocking or the blocking result used to answer "non-blocking" for
+/// a process that had only ever assigned blockingly, and the register
+/// never moved.
+#[test]
+fn clocked_blocking_assignments_reach_the_register() {
+    let design = parse(
+        "\
+module blocking
+  net %clk u1 wire
+  net %en u1 wire
+  net %d u8 wire
+  net %count u8 reg
+  net %gated u8 reg
+  net %t u8 var
+  net %piped u8 reg
+  port clk in %clk
+  port en in %en
+  port d in %d
+  port count out %count
+  port gated out %gated
+  port piped out %piped
+  process free_running seq posedge %clk
+    %count = add(%count, 8'd1)
+  end
+  process guarded seq posedge %clk
+    if %en
+      %gated = %d
+    end
+  end
+  process pipeline seq posedge %clk
+    %t = add(%d, 8'd1)
+    %piped <= %t
+  end
+end
+",
+    );
+    let mut sim = check(&design, options()).unwrap().compile();
+    let en = sim.net("blocking.en").unwrap();
+    let d = sim.net("blocking.d").unwrap();
+    let count = sim.net("blocking.count").unwrap();
+    let gated = sim.net("blocking.gated").unwrap();
+    let piped = sim.net("blocking.piped").unwrap();
+    sim.set(d, Logic::from_u64(40, 8));
+    sim.set(en, Logic::from_bool(false));
+    sim.run_cycles(5);
+    assert_eq!(sim.get(count).to_u64(), Some(5));
+    assert_eq!(sim.get(gated).to_u64(), Some(0), "the enable holds it");
+    assert_eq!(sim.get(piped).to_u64(), Some(41));
+    sim.set(en, Logic::from_bool(true));
+    sim.step();
+    assert_eq!(sim.get(gated).to_u64(), Some(40));
+    assert_eq!(sim.get(count).to_u64(), Some(6));
+}
+
+/// A clocked blocking write another clocked unit reads is a race in the
+/// event simulator too; compiled mode has no process order to lose it to,
+/// so it refuses.
+#[test]
+fn a_clocked_blocking_write_another_process_reads_is_refused() {
+    let problems = refuse(
+        "\
+module race
+  net %clk u1 wire
+  net %d u4 wire
+  net %t u4 reg
+  net %q u4 reg
+  port clk in %clk
+  port d in %d
+  port q out %q
+  process p1 seq posedge %clk
+    %t = %d
+  end
+  process p2 seq posedge %clk
+    %q <= %t
+  end
+end
+",
+    );
+    assert!(has(&problems, &Reason::BlockingRace));
+}
+
+/// Blocking and non-blocking assignments to one net inside one process
+/// race with each other; which wins depends on where the partial write
+/// lands, which a straight-line form cannot express.
+#[test]
+fn mixing_assignment_kinds_on_one_net_is_refused() {
+    let problems = refuse(
+        "\
+module mixed
+  net %clk u1 wire
+  net %d u4 wire
+  net %e u8 wire
+  net %q u8 reg
+  port clk in %clk
+  port d in %d
+  port e in %e
+  port q out %q
+  process p seq posedge %clk
+    %q = %e
+    %q[3:0] <= %d
+  end
+end
+",
+    );
+    assert!(has(&problems, &Reason::MixedAssignment));
+}
+
+/// A write through a computed index names one element but not one the
+/// completeness check can see, so every element it misses is latched —
+/// which is what the event simulator does and what has to be reported.
+#[test]
+fn a_computed_index_does_not_count_as_driving_a_net() {
+    let problems = refuse(
+        "\
+module scatter
+  net %i u3 wire
+  net %a u1 wire
+  net %y u8 reg
+  port i in %i
+  port a in %a
+  port y out %y
+  process p comb
+    %y[%i] = %a
+  end
+end
+",
+    );
+    assert!(has(&problems, &Reason::Latch));
+
+    let problems = refuse(
+        "\
+module scatter2
+  net %i u3 wire
+  net %a u1 wire
+  net %y u8 wire
+  port i in %i
+  port a in %a
+  port y out %y
+  assign %y[%i] = %a
+end
+",
+    );
+    assert!(has(&problems, &Reason::PartiallyDriven));
+}
+
+/// Expression evaluation returns the taken arm of a select unchanged, so
+/// arms that differ in width or signedness have no single result type.
+#[test]
+fn a_select_whose_arms_disagree_is_refused() {
+    let problems = refuse(
+        "\
+module arms
+  net %c u1 wire
+  net %a s8 wire
+  net %b u8 wire
+  net %y s16 wire
+  port c in %c
+  port a in %a
+  port b in %b
+  port y out %y
+  assign %y = resize(mux(%c, %a, %b), s16)
+end
+",
+    );
+    assert!(
+        problems
+            .iter()
+            .any(|p| matches!(p.reason, Reason::UnsupportedExpression(_)))
+    );
+}
+
+/// `**` takes its width from the base and its signedness from both
+/// operands, so a signed base with an unsigned exponent is unsigned.
+#[test]
+fn a_power_is_signed_only_when_both_operands_are() {
+    let design = parse(
+        "\
+module power
+  net %a s8 wire
+  net %b u4 wire
+  net %y s16 wire
+  net %z s16 wire
+  net %e s4 wire
+  port a in %a
+  port b in %b
+  port e in %e
+  port y out %y
+  port z out %z
+  assign %y = resize(pow(%a, %b), s16)
+  assign %z = resize(pow(%a, %e), s16)
+end
+",
+    );
+    let mut sim = check(&design, options()).unwrap().compile();
+    let a = sim.net("power.a").unwrap();
+    let b = sim.net("power.b").unwrap();
+    let e = sim.net("power.e").unwrap();
+    sim.set(a, Logic::from_i64(-3, 8));
+    sim.set(b, Logic::from_u64(3, 4));
+    sim.set(e, Logic::from_i64(3, 4));
+    // (-3)**3 = -27 = 8'he5. Unsigned exponent: the result is unsigned,
+    // so widening it to 16 bits fills with zeros.
+    assert_eq!(sim.get(sim.net("power.y").unwrap()).to_u64(), Some(0x00e5));
+    // Signed exponent: the result is signed and the widening sign fills.
+    assert_eq!(sim.get(sim.net("power.z").unwrap()).to_i64(), Some(-27));
+}
+
+/// A `case` harmonises the subject and the item to the wider of the two,
+/// so a wide item is not truncated into a match and a narrow wildcard
+/// does not turn the subject's high bits into don't-cares.
+#[test]
+fn case_items_are_sized_against_the_subject() {
+    let design = parse(
+        "\
+module sized
+  net %sub u4 wire
+  net %wide u8 wire
+  net %hit u2 reg
+  net %zhit u2 reg
+  port sub in %sub
+  port wide in %wide
+  port hit out %hit
+  port zhit out %zhit
+  process wide_item comb
+    case %sub
+      when 8'd17
+        %hit = 2'd1
+      end
+      default
+        %hit = 2'd0
+      end
+    end
+  end
+  process narrow_item comb
+    casez %wide
+      when 4'bzz01
+        %zhit = 2'd1
+      end
+      default
+        %zhit = 2'd0
+      end
+    end
+  end
+end
+",
+    );
+    let mut sim = check(&design, options()).unwrap().compile();
+    let sub = sim.net("sized.sub").unwrap();
+    let wide = sim.net("sized.wide").unwrap();
+    let hit = sim.net("sized.hit").unwrap();
+    let zhit = sim.net("sized.zhit").unwrap();
+    // 8'd17 is 8'b0001_0001: a four-bit subject can never equal it.
+    for v in 0..16u64 {
+        sim.set(sub, Logic::from_u64(v, 4));
+        assert_eq!(sim.get(hit).to_u64(), Some(0), "subject {v}");
+    }
+    // The item widens with zeros, so the subject's high nibble must be
+    // zero as well; only the low bits are wildcards.
+    sim.set(wide, Logic::from_u64(0x01, 8));
+    assert_eq!(sim.get(zhit).to_u64(), Some(1));
+    sim.set(wide, Logic::from_u64(0xf1, 8));
+    assert_eq!(sim.get(zhit).to_u64(), Some(0));
+}
+
+/// The prologue reads a register before it forces it, so nothing it
+/// computes may be shared with a driver that runs after the force.
+#[test]
+fn the_reset_prologue_does_not_share_its_reads() {
+    let design = parse(
+        "\
+module shared
+  net %clk u1 wire
+  net %rst u1 wire
+  net %a u8 reg
+  net %b u8 reg
+  net %sum u8 wire
+  port clk in %clk
+  port rst in %rst
+  port a out %a
+  port b out %b
+  port sum out %sum
+  assign %sum = add(%a, 8'd1)
+  process p seq posedge %clk async posedge %rst
+    if %rst
+      %a <= 8'd0
+      %b <= add(%a, 8'd1)
+    else
+      %a <= add(%a, 8'd1)
+      %b <= 8'd7
+    end
+  end
+end
+",
+    );
+    let mut sim = check(&design, options()).unwrap().compile();
+    let rst = sim.net("shared.rst").unwrap();
+    let a = sim.net("shared.a").unwrap();
+    let sum = sim.net("shared.sum").unwrap();
+    sim.set(rst, Logic::from_bool(false));
+    sim.run_cycles(3);
+    assert_eq!(sim.get(a).to_u64(), Some(3));
+    assert_eq!(sim.get(sum).to_u64(), Some(4));
+    // The reset clears `a` before the settle, so `sum` is 1, not 4: the
+    // prologue's own `add(a, 1)` must not be what the driver reuses.
+    sim.set(rst, Logic::from_bool(true));
+    assert_eq!(sim.get(a).to_u64(), Some(0));
+    assert_eq!(sim.get(sum).to_u64(), Some(1));
+}

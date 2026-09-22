@@ -675,17 +675,23 @@ impl State {
 
 /// One-word shift by an amount that may be far wider than the value.
 fn shift_word(v: u64, amount: u64, width: u32, right: bool, fill: bool) -> u64 {
-    let filler = if fill { u64::MAX } else { 0 };
+    let mask = mask_word(width);
     if amount >= u64::from(width) {
-        return filler;
+        return if fill { mask } else { 0 };
     }
     // The amount is below the width, which is at most 64.
     let n = u32::try_from(amount).expect("checked against the width");
-    if right {
-        let extended = if fill { v | !mask_word(width) } else { v };
-        extended >> n
+    if !right {
+        return (v << n) & mask;
+    }
+    let shifted = (v & mask) >> n;
+    if fill {
+        // The vacated bits are the top `n` of the width, which is not the
+        // top `n` of the word: filling by widening `v` would only reach
+        // bit 63 and would reach nothing at all at a width of 64.
+        shifted | (mask & !(mask >> n))
     } else {
-        v << n
+        shifted
     }
 }
 
@@ -781,6 +787,37 @@ mod tests {
                         let dw = if op.is_predicate() { 1 } else { width };
                         let dsigned = !op.is_predicate() && signed;
                         check_binary(op, &a, &b, dw, dsigned);
+                    }
+                }
+            }
+        }
+    }
+
+    /// A random operand's low word is almost always at or above the
+    /// width, so the fuzzing above only ever shifts everything out. Every
+    /// shift amount below the width is where the one-word fast path can
+    /// differ from the kernels, and where `>>>` used to stop sign
+    /// filling once the amount passed `64 - width`.
+    #[test]
+    fn every_shift_amount_matches_the_event_kernels() {
+        let mut seed = 0x5EED_1234u64;
+        let mut next = move || {
+            seed ^= seed >> 12;
+            seed ^= seed << 25;
+            seed ^= seed >> 27;
+            seed.wrapping_mul(0x2545_F491_4F6C_DD1D)
+        };
+        for width in [1u32, 4, 8, 31, 32, 33, 40, 48, 60, 63, 64, 65, 96] {
+            for signed in [false, true] {
+                for _ in 0..8 {
+                    let mut w = vec![next(); words::words_for(width)];
+                    words::mask_top(&mut w, width);
+                    let a = Logic::from_planes(width, signed, w.clone(), vec![0; w.len()]);
+                    for amount in 0..=u64::from(width) + 1 {
+                        let b = Logic::from_u64(amount, 16).with_signed(signed);
+                        for op in [BinaryOp::Shl, BinaryOp::Shr, BinaryOp::Sshr] {
+                            check_binary(op, &a, &b, width, signed);
+                        }
                     }
                 }
             }

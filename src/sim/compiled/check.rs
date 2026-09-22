@@ -17,6 +17,7 @@
 //! | no level-sensitive storage | a `dlatch` cell, a combinational process that does not assign on every path |
 //! | one driver per bit | two drivers of the same bit, a `tristate` cell, an unresolved black box |
 //! | no combinational loop | a cycle in the dependency graph of the combinational units |
+//! | no race between processes | a clocked blocking write another clocked unit reads, or one net a process assigns both blockingly and non-blockingly |
 //! | no `x` or `z` that matters | a constant with unknown bits, a state element still unknown after time zero |
 //!
 //! The last one is where [`CompileOptions::zero_init`] comes in: a design
@@ -129,6 +130,9 @@ pub enum Reason {
     /// another clocked unit reads it, so the result depends on the order
     /// the two run in.
     BlockingRace,
+    /// One process assigns the same net both blockingly and
+    /// non-blockingly.
+    MixedAssignment,
     /// A memory written outside a clock edge.
     MemoryOutsideEdge,
     /// A loop whose trip count is not fixed at compile time.
@@ -194,6 +198,9 @@ impl fmt::Display for Reason {
             ),
             Reason::BlockingRace => f.write_str(
                 "a clocked blocking assignment is read by another clocked unit, so the result depends on process order",
+            ),
+            Reason::MixedAssignment => f.write_str(
+                "assigned both blockingly and non-blockingly by one process, which race with each other",
             ),
             Reason::MemoryOutsideEdge => {
                 f.write_str("the memory is written outside a clock edge")
@@ -325,6 +332,7 @@ mod tests {
             Reason::IncompleteSensitivity,
             Reason::NonBlockingReadBack,
             Reason::BlockingRace,
+            Reason::MixedAssignment,
             Reason::MemoryOutsideEdge,
             Reason::DynamicLoopBound,
             Reason::UnknownConstant("4'bxx01".into()),

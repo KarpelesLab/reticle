@@ -222,6 +222,7 @@ be:
 | no level-sensitive storage | a `dlatch`, or a combinational unit that leaves a bit unassigned on some path |
 | one driver per bit | two drivers of the same bit, `tristate`, an unresolved black box |
 | no combinational loop | a cycle among the combinational units |
+| no race between processes | a clocked blocking write another clocked unit reads, or one net a process assigns both blockingly and non-blockingly |
 | no `x` or `z` that matters | a literal with unknown bits, a state element still unknown after time zero |
 
 `CompileOptions::zero_init` answers the last one for registers and
@@ -239,7 +240,10 @@ simulator yields `x` have no two-state answer and resolve as zero: a
 select outside its operand, division or remainder by zero, and a `Pmux`
 with several select bits set (which takes the lowest). Immediate
 assertions, `$display`, `$write`, `$finish` and `$stop` do survive, and
-`$display` is formatted by the same code the event simulator uses.
+`$display` is formatted by the same code the event simulator uses — but
+they all run once per `step()`, where the event simulator runs the ones
+in a combinational process once per delta cycle the process is triggered
+in, which may be more than once or not at all.
 
 ### Measured speed-up
 

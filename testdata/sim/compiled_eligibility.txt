@@ -65,6 +65,20 @@ testdata/sim/wire_conflict.rtl
       also wires.y2: several drivers write the same bits, which needs wire resolution
       also wires.y: several drivers write the same bits, which needs wire resolution
 
+testdata/sim/compiled/corner.rtl
+  blocking: eligible (0 comb ops, 8 edge ops, 4 registers, 32 bits)
+  wide: eligible (5 comb ops, 2 edge ops, 1 registers, 96 bits)
+  signs: eligible (8 comb ops, 0 edge ops, 0 registers, 0 bits)
+  wide_shifts: eligible (3 comb ops, 0 edge ops, 0 registers, 0 bits)
+  power: eligible (5 comb ops, 0 edge ops, 0 registers, 0 bits)
+  sized: eligible (8 comb ops, 0 edge ops, 0 registers, 0 bits)
+  popcount: eligible (24 comb ops, 0 edge ops, 0 registers, 0 bits)
+  split: eligible (8 comb ops, 0 edge ops, 0 registers, 0 bits)
+  shared_reset: eligible (4 comb ops, 5 edge ops, 2 registers, 16 bits)
+  chained_reset: eligible (5 comb ops, 8 edge ops, 2 registers, 5 bits)
+  reductions: eligible (7 comb ops, 2 edge ops, 1 registers, 4 bits)
+  elements: eligible (1 comb ops, 4 edge ops, 1 registers, 32 bits)
+
 testdata/synth/adder_tree.cells.rtl
   adder_tree: eligible (14 comb ops, 0 edge ops, 0 registers, 0 bits)
 
@@ -75,13 +89,13 @@ testdata/synth/adder_tree.synth.rtl
   adder_tree: eligible (14 comb ops, 0 edge ops, 0 registers, 0 bits)
 
 testdata/synth/async_reg.cells.rtl
-  async_reg: eligible (4 comb ops, 4 edge ops, 2 registers, 8 bits)
+  async_reg: eligible (5 comb ops, 5 edge ops, 2 registers, 8 bits)
 
 testdata/synth/async_reg.rtl
-  async_reg: eligible (3 comb ops, 6 edge ops, 2 registers, 8 bits)
+  async_reg: eligible (3 comb ops, 7 edge ops, 2 registers, 8 bits)
 
 testdata/synth/async_reg.synth.rtl
-  async_reg: eligible (3 comb ops, 5 edge ops, 2 registers, 8 bits)
+  async_reg: eligible (4 comb ops, 6 edge ops, 2 registers, 8 bits)
 
 testdata/synth/blocking_ssa.cells.rtl
   blocking_ssa: eligible (5 comb ops, 0 edge ops, 0 registers, 0 bits)

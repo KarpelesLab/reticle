@@ -146,7 +146,7 @@ struct Subject {
 
 fn corpus() -> Vec<Subject> {
     let mut out = Vec::new();
-    for dir in ["testdata/sim", "testdata/synth"] {
+    for dir in ["testdata/sim", "testdata/sim/compiled", "testdata/synth"] {
         for path in rtl_files(dir) {
             let Some(design) = parse_rtl(&path) else {
                 continue;
