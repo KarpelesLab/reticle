@@ -1,0 +1,39 @@
+top ddrio
+
+module ddrio
+  net %clk u1 wire
+  attr ddr = "clk"
+  net %tx u4 wire
+  net %clk$pad u1 wire
+  net %clk$in0 u1 wire
+  net %rx$pad u1 wire
+  net %rx$in0 u1 wire
+  net %rx$dly0 u1 wire
+  net %rx$q0 u1 wire
+  net %rx$q0_n u1 wire
+  net %tx$pad u2 wire
+  net %tx$pin0 u1 wire
+  net %tx$d0 u1 wire
+  net %tx$pin1 u1 wire
+  net %tx$d1 u1 wire
+  port clk in %clk$pad
+  port rx in %rx$pad
+  port tx out %tx$pad
+  assign %clk = %clk$in0
+  assign %tx = {%rx$q0_n, %rx$q0, %rx$q0_n, %rx$q0}
+  assign %tx$pad = {%tx$pin1, %tx$pin0}
+  attr port = "clk"
+  attr pin = "G2"
+  attr io_standard = "LVCMOS33"
+  cell clk$io0 blackbox TRELLIS_IO #(DIR="INPUT") (B=%clk$pad) -> (O=%clk$in0)
+  attr port = "rx"
+  cell rx$io0 blackbox TRELLIS_IO #(DIR="INPUT") (B=%rx$pad) -> (O=%rx$in0)
+  cell rx$delay0 blackbox DELAYG #(DEL_MODE="USER_DEFINED", DEL_VALUE=20) (A=%rx$in0) -> (Z=%rx$dly0)
+  cell rx$iddr0 blackbox IDDRX1F (D=%rx$dly0, SCLK=%clk, RST=1'd0) -> (Q0=%rx$q0, Q1=%rx$q0_n)
+  cell tx$oddr0 blackbox ODDRX1F (D0=%tx[0:0], D1=%tx[2:2], SCLK=%clk, RST=1'd0) -> (Q=%tx$d0)
+  attr port = "tx"
+  cell tx$io0 blackbox TRELLIS_IO #(DIR="OUTPUT") (I=%tx$d0) -> (B=%tx$pin0)
+  cell tx$oddr1 blackbox ODDRX1F (D0=%tx[1:1], D1=%tx[3:3], SCLK=%clk, RST=1'd0) -> (Q=%tx$d1)
+  attr port = "tx"
+  cell tx$io1 blackbox TRELLIS_IO #(DIR="OUTPUT") (I=%tx$d1) -> (B=%tx$pin1)
+end

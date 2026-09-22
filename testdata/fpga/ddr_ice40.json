@@ -1,0 +1,163 @@
+{
+  "creator": "reticle",
+  "modules": {
+    "ddrio": {
+      "attributes": {
+        "top": 1
+      },
+      "ports": {
+        "clk": { "direction": "input", "bits": [ 2 ] },
+        "rx": { "direction": "input", "bits": [ 3 ] },
+        "tx": { "direction": "output", "bits": [ 4, 5 ] }
+      },
+      "cells": {
+        "clk$io0": {
+          "hide_name": 0,
+          "type": "SB_IO",
+          "parameters": {
+            "PIN_TYPE": 1
+          },
+          "attributes": {
+            "port": "clk",
+            "pin": "21",
+            "io_standard": "LVCMOS33"
+          },
+          "port_directions": {
+            "PACKAGE_PIN": "input",
+            "D_IN_0": "output"
+          },
+          "connections": {
+            "PACKAGE_PIN": [ 2 ],
+            "D_IN_0": [ 6 ]
+          }
+        },
+        "rx$io0": {
+          "hide_name": 0,
+          "type": "SB_IO",
+          "parameters": {
+            "PIN_TYPE": 0
+          },
+          "attributes": {
+            "port": "rx"
+          },
+          "port_directions": {
+            "PACKAGE_PIN": "input",
+            "INPUT_CLK": "input",
+            "CLOCK_ENABLE": "input",
+            "D_IN_0": "output",
+            "D_IN_1": "output"
+          },
+          "connections": {
+            "PACKAGE_PIN": [ 3 ],
+            "INPUT_CLK": [ 6 ],
+            "CLOCK_ENABLE": [ "1" ],
+            "D_IN_0": [ 7 ],
+            "D_IN_1": [ 8 ]
+          }
+        },
+        "tx$io0": {
+          "hide_name": 0,
+          "type": "SB_IO",
+          "parameters": {
+            "PIN_TYPE": 16
+          },
+          "attributes": {
+            "port": "tx"
+          },
+          "port_directions": {
+            "D_OUT_0": "input",
+            "D_OUT_1": "input",
+            "OUTPUT_CLK": "input",
+            "CLOCK_ENABLE": "input",
+            "PACKAGE_PIN": "output"
+          },
+          "connections": {
+            "D_OUT_0": [ 7 ],
+            "D_OUT_1": [ 7 ],
+            "OUTPUT_CLK": [ 6 ],
+            "CLOCK_ENABLE": [ "1" ],
+            "PACKAGE_PIN": [ 4 ]
+          }
+        },
+        "tx$io1": {
+          "hide_name": 0,
+          "type": "SB_IO",
+          "parameters": {
+            "PIN_TYPE": 16
+          },
+          "attributes": {
+            "port": "tx"
+          },
+          "port_directions": {
+            "D_OUT_0": "input",
+            "D_OUT_1": "input",
+            "OUTPUT_CLK": "input",
+            "CLOCK_ENABLE": "input",
+            "PACKAGE_PIN": "output"
+          },
+          "connections": {
+            "D_OUT_0": [ 8 ],
+            "D_OUT_1": [ 8 ],
+            "OUTPUT_CLK": [ 6 ],
+            "CLOCK_ENABLE": [ "1" ],
+            "PACKAGE_PIN": [ 5 ]
+          }
+        }
+      },
+      "netnames": {
+        "clk": {
+          "hide_name": 0,
+          "bits": [ 6 ],
+          "attributes": {}
+        },
+        "tx": {
+          "hide_name": 0,
+          "bits": [ 7, 8, 7, 8 ],
+          "attributes": {
+            "ddr": "clk"
+          }
+        },
+        "clk$pad": {
+          "hide_name": 0,
+          "bits": [ 2 ],
+          "attributes": {}
+        },
+        "clk$in0": {
+          "hide_name": 0,
+          "bits": [ 6 ],
+          "attributes": {}
+        },
+        "rx$pad": {
+          "hide_name": 0,
+          "bits": [ 3 ],
+          "attributes": {}
+        },
+        "rx$in0": {
+          "hide_name": 0,
+          "bits": [ 7 ],
+          "attributes": {}
+        },
+        "rx$in0_n": {
+          "hide_name": 0,
+          "bits": [ 8 ],
+          "attributes": {}
+        },
+        "tx$pad": {
+          "hide_name": 0,
+          "bits": [ 4, 5 ],
+          "attributes": {}
+        },
+        "tx$pin0": {
+          "hide_name": 0,
+          "bits": [ 4 ],
+          "attributes": {}
+        },
+        "tx$pin1": {
+          "hide_name": 0,
+          "bits": [ 5 ],
+          "attributes": {}
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,6 @@
+# The same ports on the ECP5, whose TRELLIS_IO does not register both
+# edges: each pin is a TRELLIS_IO with an IDDRX1F or ODDRX1F beside it.
+# `rx` also asks for an input delay of 20 steps, which is a DELAYG
+# between the buffer and the register.
+set_io -io_standard LVCMOS33 clk G2
+create_clock -name sys -period 40.0 clk

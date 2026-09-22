@@ -1,0 +1,13 @@
+top ddrio
+
+module ddrio
+  net %clk u1 wire
+  attr ddr = "clk"
+  net %rx u2 wire
+  attr ddr = "clk"
+  net %tx u4 wire
+  port clk in %clk
+  port rx in %rx
+  port tx out %tx
+  assign %tx = {%rx, %rx}
+end

@@ -857,19 +857,22 @@ pub fn check_nextpnr_json(
     // The pin constraints, against the package and the design.
     for pin in &constraints.pins {
         let signal = pin.signal();
-        match device.pin(&pin.pin) {
-            None => push(
+        // Options stated as attributes without a pin (a standard, a DDR
+        // clock) place nothing, so there is no package pin to check.
+        let placed = (!pin.pin.is_empty()).then(|| device.pin(&pin.pin));
+        match placed {
+            Some(None) => push(
                 &signal,
                 format!("`{}` has no package pin `{}`", device.name, pin.pin),
             ),
-            Some(found) if !found.kind.is_io() => push(
+            Some(Some(found)) if !found.kind.is_io() => push(
                 &signal,
                 format!(
                     "package pin `{}` is a {} pin, which a design cannot drive",
                     pin.pin, found.kind
                 ),
             ),
-            Some(_) => {}
+            Some(Some(_)) | None => {}
         }
         if m.port(&pin.port).is_none() {
             push(

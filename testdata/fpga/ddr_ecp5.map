@@ -1,0 +1,12 @@
+device: ecp5-45f-CABGA381
+io:
+  clk (1 bits) -> TRELLIS_IO at pin G2 as LVCMOS33
+  rx (1 bits) -> TRELLIS_IO, double data rate on clk (IDDRX1F), delayed 20 step(s) (DELAYG)
+  tx (2 bits) -> TRELLIS_IO, double data rate on clk (ODDRX1F)
+logic:
+  0 LUTs, depth 0
+netlist:
+  1 x DELAYG
+  1 x IDDRX1F
+  2 x ODDRX1F
+  4 x TRELLIS_IO

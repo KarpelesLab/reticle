@@ -1,0 +1,7 @@
+# One DDR input pin and two DDR output pins, stated as `ddr` attributes on
+# the ports in the design. `rx` is two bits on one pin, bit 0 captured on
+# the rising edge of `clk` and bit 1 on the falling one; `tx` is four bits
+# on two pins the same way. The iCE40's SB_IO registers both edges
+# itself, so each pin is one SB_IO with the DDR PIN_TYPE and nothing else.
+set_io -io_standard LVCMOS33 clk 21
+create_clock -name sys -period 40.0 clk

@@ -1,0 +1,9 @@
+device: ice40-hx1k-tq144
+io:
+  clk (1 bits) -> SB_IO at pin 21 as LVCMOS33
+  rx (1 bits) -> SB_IO, double data rate on clk (SB_IO)
+  tx (2 bits) -> SB_IO, double data rate on clk (SB_IO)
+logic:
+  0 LUTs, depth 0
+netlist:
+  4 x SB_IO

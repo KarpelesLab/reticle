@@ -14,8 +14,8 @@
 #     clock enable, a leading `S` a synchronous rather than asynchronous
 #     set or reset, and the final `R`/`S` a reset (to 0, pin `R`) or a set
 #     (to 1, pin `S`). Both are active high, which is why no variant is
-#     marked `active_low`: an active-low reset has to be inverted in logic
-#     first, and flip-flop mapping says so rather than mapping it wrongly.
+#     marked `active_low`: an active-low reset is inverted in logic
+#     first, by one LUT per reset net that flip-flop mapping inserts.
 #     `count` is the number of flip-flops on the die and is recorded once,
 #     on the plain variant; they are all the same flip-flop configured
 #     differently. High confidence.
@@ -28,6 +28,15 @@
 #   * SB_IO's PIN_TYPE values below (6'b000001 for a plain input,
 #     6'b011001 for a plain output, 6'b101001 for a tristatable one) are
 #     the ones every published iCE40 design uses. Medium-high confidence.
+#     SB_IO also registers both clock edges itself, which is the iCE40's
+#     DDR IO: D_IN_0 / D_IN_1 capture the pad on the rising / falling edge
+#     of INPUT_CLK, D_OUT_0 / D_OUT_1 are launched on the rising / falling
+#     edge of OUTPUT_CLK. PIN_TYPE 6'b000000 is "no output, input
+#     registered" (PIN_INPUT_DDR shares the registered code) and
+#     6'b010000 is PIN_OUTPUT_DDR, from the iCE Technology Library's
+#     PIN_TYPE table. MEDIUM-HIGH confidence. The family has no
+#     programmable IO delay, so none is declared and a request for one is
+#     reported.
 #   * SB_PLL40_CORE / SB_PLL40_PAD: the ranges (reference 10-133 MHz,
 #     phase detector 10-133 MHz, VCO 533-1066 MHz), the fields (DIVR 4
 #     bits storing divisor-1, DIVF 7 bits storing divisor-1, DIVQ 1-6
@@ -94,7 +103,7 @@ device ice40-lp1k-tq144
   bel SB_DFFNER ff mode negedge,enable,async_reset port clk=C d=D q=Q en=E rst=R
   bel SB_DFFNESS ff mode negedge,enable,sync_set port clk=C d=D q=Q en=E rst=S
   bel SB_DFFNES ff mode negedge,enable,async_set port clk=C d=D q=Q en=E rst=S
-  bel SB_IO io port pad=PACKAGE_PIN din=D_IN_0 dout=D_OUT_0 oe=OUTPUT_ENABLE param_in PIN_TYPE=6'b000001 param_out PIN_TYPE=6'b011001 param_inout PIN_TYPE=6'b101001 param_pullup PULLUP=1
+  bel SB_IO io port pad=PACKAGE_PIN din=D_IN_0 dout=D_OUT_0 oe=OUTPUT_ENABLE din1=D_IN_1 dout1=D_OUT_1 iclk=INPUT_CLK oclk=OUTPUT_CLK ce=CLOCK_ENABLE param_in PIN_TYPE=6'b000001 param_out PIN_TYPE=6'b011001 param_inout PIN_TYPE=6'b101001 param_pullup PULLUP=1 param_ddr_in PIN_TYPE=6'b000000 param_ddr_out PIN_TYPE=6'b010000
   bel SB_GB gb count 8 port i=USER_SIGNAL_TO_GLOBAL_BUFFER o=GLOBAL_BUFFER_OUTPUT
   bram SB_RAM40_4K
     ports 2
@@ -162,7 +171,7 @@ device ice40-hx1k-tq144
   bel SB_DFFNER ff mode negedge,enable,async_reset port clk=C d=D q=Q en=E rst=R
   bel SB_DFFNESS ff mode negedge,enable,sync_set port clk=C d=D q=Q en=E rst=S
   bel SB_DFFNES ff mode negedge,enable,async_set port clk=C d=D q=Q en=E rst=S
-  bel SB_IO io port pad=PACKAGE_PIN din=D_IN_0 dout=D_OUT_0 oe=OUTPUT_ENABLE param_in PIN_TYPE=6'b000001 param_out PIN_TYPE=6'b011001 param_inout PIN_TYPE=6'b101001 param_pullup PULLUP=1
+  bel SB_IO io port pad=PACKAGE_PIN din=D_IN_0 dout=D_OUT_0 oe=OUTPUT_ENABLE din1=D_IN_1 dout1=D_OUT_1 iclk=INPUT_CLK oclk=OUTPUT_CLK ce=CLOCK_ENABLE param_in PIN_TYPE=6'b000001 param_out PIN_TYPE=6'b011001 param_inout PIN_TYPE=6'b101001 param_pullup PULLUP=1 param_ddr_in PIN_TYPE=6'b000000 param_ddr_out PIN_TYPE=6'b010000
   bel SB_GB gb count 8 port i=USER_SIGNAL_TO_GLOBAL_BUFFER o=GLOBAL_BUFFER_OUTPUT
   bram SB_RAM40_4K
     ports 2
@@ -230,7 +239,7 @@ device ice40-hx8k-ct256
   bel SB_DFFNER ff mode negedge,enable,async_reset port clk=C d=D q=Q en=E rst=R
   bel SB_DFFNESS ff mode negedge,enable,sync_set port clk=C d=D q=Q en=E rst=S
   bel SB_DFFNES ff mode negedge,enable,async_set port clk=C d=D q=Q en=E rst=S
-  bel SB_IO io port pad=PACKAGE_PIN din=D_IN_0 dout=D_OUT_0 oe=OUTPUT_ENABLE param_in PIN_TYPE=6'b000001 param_out PIN_TYPE=6'b011001 param_inout PIN_TYPE=6'b101001 param_pullup PULLUP=1
+  bel SB_IO io port pad=PACKAGE_PIN din=D_IN_0 dout=D_OUT_0 oe=OUTPUT_ENABLE din1=D_IN_1 dout1=D_OUT_1 iclk=INPUT_CLK oclk=OUTPUT_CLK ce=CLOCK_ENABLE param_in PIN_TYPE=6'b000001 param_out PIN_TYPE=6'b011001 param_inout PIN_TYPE=6'b101001 param_pullup PULLUP=1 param_ddr_in PIN_TYPE=6'b000000 param_ddr_out PIN_TYPE=6'b010000
   bel SB_GB gb count 8 port i=USER_SIGNAL_TO_GLOBAL_BUFFER o=GLOBAL_BUFFER_OUTPUT
   bram SB_RAM40_4K
     ports 2

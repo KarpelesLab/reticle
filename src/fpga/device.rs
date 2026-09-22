@@ -341,13 +341,27 @@ pub enum BelRole {
     Dsp,
     /// A PLL or other clock generator; its shape is in [`PllShape`].
     Pll,
+    /// A double-data-rate input register beside the IO buffer: `d` from
+    /// the pad side, `clk`, and `q0` / `q1` for the bits captured on the
+    /// rising and the falling edge (ECP5 `IDDRX1F`). A family whose IO
+    /// buffer registers both edges itself (iCE40 `SB_IO`) declares none
+    /// and says so on the buffer instead; see [`super::primitives`].
+    DdrIn,
+    /// A double-data-rate output register: `d0` / `d1` for the bits
+    /// launched on the rising and the falling edge, `clk`, and `q` to the
+    /// pad side (ECP5 `ODDRX1F`).
+    DdrOut,
+    /// A programmable delay between an IO buffer and the fabric: `i`,
+    /// `o`, and the parameter carrying the delay declared under the
+    /// condition `value` with its largest setting (ECP5 `DELAYG`).
+    IoDelay,
     /// Anything else the family wants recorded.
     Other,
 }
 
 impl BelRole {
     /// Every role, in a fixed order.
-    pub const ALL: [BelRole; 10] = [
+    pub const ALL: [BelRole; 13] = [
         BelRole::Lut,
         BelRole::Ff,
         BelRole::Carry,
@@ -357,6 +371,9 @@ impl BelRole {
         BelRole::Bram,
         BelRole::Dsp,
         BelRole::Pll,
+        BelRole::DdrIn,
+        BelRole::DdrOut,
+        BelRole::IoDelay,
         BelRole::Other,
     ];
 
@@ -372,6 +389,9 @@ impl BelRole {
             BelRole::Bram => "bram",
             BelRole::Dsp => "dsp",
             BelRole::Pll => "pll",
+            BelRole::DdrIn => "ddr_in",
+            BelRole::DdrOut => "ddr_out",
+            BelRole::IoDelay => "iodelay",
             BelRole::Other => "other",
         }
     }

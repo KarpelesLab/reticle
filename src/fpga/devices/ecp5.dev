@@ -58,6 +58,16 @@
 #     `count` is two PLLs on the 25F and four on the 45F (datasheet,
 #     medium-high confidence). Only CLKOP is used; CLKOS, CLKOS2 and
 #     CLKOS3 are not configured.
+#   * IDDRX1F / ODDRX1F are the x1 gearing DDR registers that sit beside
+#     TRELLIS_IO: D and SCLK in, Q0 (rising edge) and Q1 (falling edge)
+#     out for input; D0, D1 and SCLK in, Q out for output; RST held low.
+#     DELAYG is the static input/output delay, A in and Z out, with
+#     DEL_MODE "USER_DEFINED" and DEL_VALUE the number of steps, 0 to 127.
+#     These are the names nextpnr-ecp5 accepts and Yosys' ECP5 cell
+#     library declares; MEDIUM confidence for the delay's parameter range,
+#     medium-high for the rest. The `value` condition on DELAYG is how
+#     this file says which parameter carries the delay and its largest
+#     setting.
 #   * MULT18X18D is an 18x18 signed multiplier with a 36-bit product and
 #     up to three pipeline stages. High confidence for the arithmetic,
 #     MEDIUM confidence for the port names recorded here (bus form again).
@@ -135,6 +145,9 @@ device ecp5-25f-CABGA381
   bel TRELLIS_FF ff mode negedge,enable,async_set,active_low port clk=CLK d=DI q=Q en=CE rst=LSR param GSR="DISABLED" REGMODE="FF" CEMUX="CE" CLKMUX="INV" LSRMUX="INV" SRMODE="ASYNC" REGSET="SET"
   bel TRELLIS_IO io port pad=B din=O dout=I oe=T param_in DIR="INPUT" param_out DIR="OUTPUT" param_inout DIR="BIDIR" param_pullup PULLMODE="UP"
   bel DCCA gb count 16 port i=CLKI o=CLKO en=CE
+  bel IDDRX1F ddr_in port d=D clk=SCLK rst=RST q0=Q0 q1=Q1
+  bel ODDRX1F ddr_out port d0=D0 d1=D1 clk=SCLK rst=RST q=Q
+  bel DELAYG iodelay port i=A o=Z param DEL_MODE="USER_DEFINED" param_value DEL_VALUE=127
   bel TRELLIS_DPR16X4 lutram port wclk=WCK we=WRE waddr=WAD0,WAD1,WAD2,WAD3 din=DI0,DI1,DI2,DI3 raddr=RAD0,RAD1,RAD2,RAD3 dout=DO0,DO1,DO2,DO3 param WCKMUX="WCK" WREMUX="WRE"
   bram DP16KD
     ports 2
@@ -214,6 +227,9 @@ device ecp5-45f-CABGA381
   bel TRELLIS_FF ff mode negedge,enable,async_set,active_low port clk=CLK d=DI q=Q en=CE rst=LSR param GSR="DISABLED" REGMODE="FF" CEMUX="CE" CLKMUX="INV" LSRMUX="INV" SRMODE="ASYNC" REGSET="SET"
   bel TRELLIS_IO io port pad=B din=O dout=I oe=T param_in DIR="INPUT" param_out DIR="OUTPUT" param_inout DIR="BIDIR" param_pullup PULLMODE="UP"
   bel DCCA gb count 16 port i=CLKI o=CLKO en=CE
+  bel IDDRX1F ddr_in port d=D clk=SCLK rst=RST q0=Q0 q1=Q1
+  bel ODDRX1F ddr_out port d0=D0 d1=D1 clk=SCLK rst=RST q=Q
+  bel DELAYG iodelay port i=A o=Z param DEL_MODE="USER_DEFINED" param_value DEL_VALUE=127
   bel TRELLIS_DPR16X4 lutram port wclk=WCK we=WRE waddr=WAD0,WAD1,WAD2,WAD3 din=DI0,DI1,DI2,DI3 raddr=RAD0,RAD1,RAD2,RAD3 dout=DO0,DO1,DO2,DO3 param WCKMUX="WCK" WREMUX="WRE"
   bram DP16KD
     ports 2

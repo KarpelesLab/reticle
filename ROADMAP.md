@@ -303,7 +303,9 @@ FPGA:
       readers than a block has ports is duplicated across blocks, and a
       clock constraint on an undriven net instantiates a PLL whose
       dividers `fpga::pll::solve` chooses, with the achieved frequency
-      and error reported. (The narrow width modes of a block RAM are
+      and error reported. A port with a `ddr` clock gets double-data-rate
+      registers and one with an `io_delay` a delay element, both from
+      the device file. (The narrow width modes of a block RAM are
       wired in bit order, which iCE40 permutes.)
 - [x] Vendor and open-flow interop: `fpga::synthesize_for` runs the whole
       target flow (synthesis, primitives, LUT mapping, clean-up, device
@@ -470,11 +472,14 @@ and first-party IP should drop into a design as easily as a Rust crate.
       dibit; and `spiflash_xip`, a read-only execute-in-place path from a
       serial flash, tested against a flash model on the four wires.
 - [ ] The library blocks that need device primitives first: SDRAM and
-      HyperRAM controllers, a USB device, HDMI/DVI output and RGMII. Each
-      needs something the FPGA backend does not configure yet — DDR
-      registers and IO delays for a memory controller's strobe, PLLs for a
-      pixel clock or a USB high-speed engine. RMII was reachable precisely
-      because it is single data rate.
+      HyperRAM controllers, a USB device, HDMI/DVI output and RGMII. The
+      primitives are now configured — DDR input and output registers
+      from a `ddr` attribute (iCE40 `SB_IO`, ECP5 `IDDRX1F` /
+      `ODDRX1F`), IO delays from `io_delay` (ECP5 `DELAYG`), and PLLs
+      from a clock constraint on an undriven net with the dividers
+      solved and the error reported (iCE40 `SB_PLL40_CORE`, ECP5
+      `EHXPLLL`) — so this item is unblocked; the blocks themselves are
+      not written yet.
 - [x] Registry: a static index (git repository of manifests) that
       `reticle add` searches, in the style of a crates.io index: one file
       per package under a name-derived path, one line per release with

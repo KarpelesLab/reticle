@@ -1,0 +1,31 @@
+top ddrio
+
+module ddrio
+  net %clk u1 wire
+  attr ddr = "clk"
+  net %tx u4 wire
+  net %clk$pad u1 wire
+  net %clk$in0 u1 wire
+  net %rx$pad u1 wire
+  net %rx$in0 u1 wire
+  net %rx$in0_n u1 wire
+  net %tx$pad u2 wire
+  net %tx$pin0 u1 wire
+  net %tx$pin1 u1 wire
+  port clk in %clk$pad
+  port rx in %rx$pad
+  port tx out %tx$pad
+  assign %clk = %clk$in0
+  assign %tx = {%rx$in0_n, %rx$in0, %rx$in0_n, %rx$in0}
+  assign %tx$pad = {%tx$pin1, %tx$pin0}
+  attr port = "clk"
+  attr pin = "21"
+  attr io_standard = "LVCMOS33"
+  cell clk$io0 blackbox SB_IO #(PIN_TYPE=6'd1) (PACKAGE_PIN=%clk$pad) -> (D_IN_0=%clk$in0)
+  attr port = "rx"
+  cell rx$io0 blackbox SB_IO #(PIN_TYPE=6'd0) (PACKAGE_PIN=%rx$pad, INPUT_CLK=%clk, CLOCK_ENABLE=1'd1) -> (D_IN_0=%rx$in0, D_IN_1=%rx$in0_n)
+  attr port = "tx"
+  cell tx$io0 blackbox SB_IO #(PIN_TYPE=6'd16) (D_OUT_0=%tx[0:0], D_OUT_1=%tx[2:2], OUTPUT_CLK=%clk, CLOCK_ENABLE=1'd1) -> (PACKAGE_PIN=%tx$pin0)
+  attr port = "tx"
+  cell tx$io1 blackbox SB_IO #(PIN_TYPE=6'd16) (D_OUT_0=%tx[1:1], D_OUT_1=%tx[3:3], OUTPUT_CLK=%clk, CLOCK_ENABLE=1'd1) -> (PACKAGE_PIN=%tx$pin1)
+end

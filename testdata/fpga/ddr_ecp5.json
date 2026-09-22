@@ -1,0 +1,242 @@
+{
+  "creator": "reticle",
+  "modules": {
+    "ddrio": {
+      "attributes": {
+        "top": 1
+      },
+      "ports": {
+        "clk": { "direction": "input", "bits": [ 2 ] },
+        "rx": { "direction": "input", "bits": [ 3 ] },
+        "tx": { "direction": "output", "bits": [ 4, 5 ] }
+      },
+      "cells": {
+        "clk$io0": {
+          "hide_name": 0,
+          "type": "TRELLIS_IO",
+          "parameters": {
+            "DIR": "INPUT"
+          },
+          "attributes": {
+            "port": "clk",
+            "pin": "G2",
+            "io_standard": "LVCMOS33"
+          },
+          "port_directions": {
+            "B": "input",
+            "O": "output"
+          },
+          "connections": {
+            "B": [ 2 ],
+            "O": [ 6 ]
+          }
+        },
+        "rx$io0": {
+          "hide_name": 0,
+          "type": "TRELLIS_IO",
+          "parameters": {
+            "DIR": "INPUT"
+          },
+          "attributes": {
+            "port": "rx"
+          },
+          "port_directions": {
+            "B": "input",
+            "O": "output"
+          },
+          "connections": {
+            "B": [ 3 ],
+            "O": [ 9 ]
+          }
+        },
+        "rx$delay0": {
+          "hide_name": 0,
+          "type": "DELAYG",
+          "parameters": {
+            "DEL_MODE": "USER_DEFINED",
+            "DEL_VALUE": 20
+          },
+          "attributes": {},
+          "port_directions": {
+            "A": "input",
+            "Z": "output"
+          },
+          "connections": {
+            "A": [ 9 ],
+            "Z": [ 10 ]
+          }
+        },
+        "rx$iddr0": {
+          "hide_name": 0,
+          "type": "IDDRX1F",
+          "parameters": {},
+          "attributes": {},
+          "port_directions": {
+            "D": "input",
+            "SCLK": "input",
+            "RST": "input",
+            "Q0": "output",
+            "Q1": "output"
+          },
+          "connections": {
+            "D": [ 10 ],
+            "SCLK": [ 6 ],
+            "RST": [ "0" ],
+            "Q0": [ 7 ],
+            "Q1": [ 8 ]
+          }
+        },
+        "tx$oddr0": {
+          "hide_name": 0,
+          "type": "ODDRX1F",
+          "parameters": {},
+          "attributes": {},
+          "port_directions": {
+            "D0": "input",
+            "D1": "input",
+            "SCLK": "input",
+            "RST": "input",
+            "Q": "output"
+          },
+          "connections": {
+            "D0": [ 7 ],
+            "D1": [ 7 ],
+            "SCLK": [ 6 ],
+            "RST": [ "0" ],
+            "Q": [ 11 ]
+          }
+        },
+        "tx$io0": {
+          "hide_name": 0,
+          "type": "TRELLIS_IO",
+          "parameters": {
+            "DIR": "OUTPUT"
+          },
+          "attributes": {
+            "port": "tx"
+          },
+          "port_directions": {
+            "I": "input",
+            "B": "output"
+          },
+          "connections": {
+            "I": [ 11 ],
+            "B": [ 4 ]
+          }
+        },
+        "tx$oddr1": {
+          "hide_name": 0,
+          "type": "ODDRX1F",
+          "parameters": {},
+          "attributes": {},
+          "port_directions": {
+            "D0": "input",
+            "D1": "input",
+            "SCLK": "input",
+            "RST": "input",
+            "Q": "output"
+          },
+          "connections": {
+            "D0": [ 8 ],
+            "D1": [ 8 ],
+            "SCLK": [ 6 ],
+            "RST": [ "0" ],
+            "Q": [ 12 ]
+          }
+        },
+        "tx$io1": {
+          "hide_name": 0,
+          "type": "TRELLIS_IO",
+          "parameters": {
+            "DIR": "OUTPUT"
+          },
+          "attributes": {
+            "port": "tx"
+          },
+          "port_directions": {
+            "I": "input",
+            "B": "output"
+          },
+          "connections": {
+            "I": [ 12 ],
+            "B": [ 5 ]
+          }
+        }
+      },
+      "netnames": {
+        "clk": {
+          "hide_name": 0,
+          "bits": [ 6 ],
+          "attributes": {}
+        },
+        "tx": {
+          "hide_name": 0,
+          "bits": [ 7, 8, 7, 8 ],
+          "attributes": {
+            "ddr": "clk"
+          }
+        },
+        "clk$pad": {
+          "hide_name": 0,
+          "bits": [ 2 ],
+          "attributes": {}
+        },
+        "clk$in0": {
+          "hide_name": 0,
+          "bits": [ 6 ],
+          "attributes": {}
+        },
+        "rx$pad": {
+          "hide_name": 0,
+          "bits": [ 3 ],
+          "attributes": {}
+        },
+        "rx$in0": {
+          "hide_name": 0,
+          "bits": [ 9 ],
+          "attributes": {}
+        },
+        "rx$dly0": {
+          "hide_name": 0,
+          "bits": [ 10 ],
+          "attributes": {}
+        },
+        "rx$q0": {
+          "hide_name": 0,
+          "bits": [ 7 ],
+          "attributes": {}
+        },
+        "rx$q0_n": {
+          "hide_name": 0,
+          "bits": [ 8 ],
+          "attributes": {}
+        },
+        "tx$pad": {
+          "hide_name": 0,
+          "bits": [ 4, 5 ],
+          "attributes": {}
+        },
+        "tx$pin0": {
+          "hide_name": 0,
+          "bits": [ 4 ],
+          "attributes": {}
+        },
+        "tx$d0": {
+          "hide_name": 0,
+          "bits": [ 11 ],
+          "attributes": {}
+        },
+        "tx$pin1": {
+          "hide_name": 0,
+          "bits": [ 5 ],
+          "attributes": {}
+        },
+        "tx$d1": {
+          "hide_name": 0,
+          "bits": [ 12 ],
+          "attributes": {}
+        }
+      }
+    }
+  }
+}

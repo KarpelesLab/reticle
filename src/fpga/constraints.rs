@@ -16,6 +16,7 @@
 //!    # pins
 //!    set_io -io_standard LVCMOS33 -drive 8 -pullup yes clk 21
 //!    set_io led[0] 99
+//!    set_io -ddr clk -delay 12 dq[0] A3
 //!
 //!    # placement
 //!    region core 0 0 7 7
@@ -31,8 +32,10 @@
 //!    ```
 //!
 //! 2. Attributes on the IR, read by [`Constraints::merge_attrs`]: `(* PIN
-//!    = "A3" *)` (also `LOC`), `io_standard`, `drive`, `slew`, `pullup` on
-//!    a port's net, and `keep_hierarchy`, `rloc` and `region` on an
+//!    = "A3" *)` (also `LOC`), `io_standard`, `drive`, `slew`, `pullup`,
+//!    `ddr` (the clock of a double-data-rate register at the pin) and
+//!    `io_delay` on a port's net, `clock_period` or `clock_mhz` on any
+//!    net, and `keep_hierarchy`, `rloc` and `region` on an
 //!    instance, a cell or a module. Attribute names are matched
 //!    case-insensitively, so `(* PIN *)` and `(* pin *)` are the same
 //!    constraint.
@@ -136,6 +139,15 @@ pub struct IoAttrs {
     /// `Some(true)` enables the pull-up, `Some(false)` disables it
     /// explicitly, `None` leaves it to the tool's default.
     pub pullup: Option<bool>,
+    /// The clock of a double-data-rate register at the pin, when the port
+    /// is one. A DDR port carries twice as many bits as it has pins: bit
+    /// `i` and bit `i + N` of an `2N`-bit port share pin `i`, the low
+    /// half on the rising edge of this clock and the high half on the
+    /// falling one.
+    pub ddr: Option<String>,
+    /// A delay between the pin and the fabric, in the device's own delay
+    /// steps, on a family that has a programmable one.
+    pub delay: Option<u32>,
 }
 
 impl IoAttrs {
@@ -160,6 +172,12 @@ impl IoAttrs {
         }
         if self.pullup.is_none() {
             self.pullup = other.pullup;
+        }
+        if self.ddr.is_none() {
+            self.ddr = other.ddr.clone();
+        }
+        if self.delay.is_none() {
+            self.delay = other.delay;
         }
     }
 }
@@ -949,6 +967,10 @@ impl Constraints {
                     .with_span(clock.span),
                 );
             } else if !clock_nets.iter().any(|n| n == &clock.net)
+                && !self
+                    .pins
+                    .iter()
+                    .any(|p| p.io.ddr.as_deref() == Some(clock.net.as_str()))
                 && !(feeds_a_pll
                     && module
                         .port(&clock.net)
@@ -1519,6 +1541,8 @@ fn io_attrs_of(attrs: &Attrs) -> IoAttrs {
         drive: attr_u32(attrs, &["drive"]),
         slew: attr_str(attrs, &["slew", "slewrate"]).map(|s| s.to_ascii_lowercase()),
         pullup: attr_bool(attrs, &["pullup", "pullmode"]),
+        ddr: attr_str(attrs, &["ddr", "ddr_clock"]),
+        delay: attr_u32(attrs, &["io_delay", "delay_value"]),
     }
 }
 
@@ -1668,7 +1692,10 @@ impl<'a> LineParser<'a> {
     }
 
     fn set_io(&mut self, out: &mut Constraints) {
-        let (options, words) = self.split(&["io_standard", "drive", "slew", "pullup"], &["nowarn"]);
+        let (options, words) = self.split(
+            &["io_standard", "drive", "slew", "pullup", "ddr", "delay"],
+            &["nowarn"],
+        );
         if !self.expect_count(&words, 2, "a port and a pin: `set_io <port> <pin>`") {
             return;
         }
@@ -1678,6 +1705,8 @@ impl<'a> LineParser<'a> {
                 "io_standard" => io.io_standard = Some(value.as_str().to_owned()),
                 "drive" => io.drive = self.number(value),
                 "slew" => io.slew = Some(value.as_str().to_ascii_lowercase()),
+                "ddr" => io.ddr = Some(value.as_str().to_owned()),
+                "delay" => io.delay = self.number(value),
                 "pullup" => {
                     io.pullup = match value.as_str() {
                         "yes" | "true" | "1" => Some(true),
@@ -2302,7 +2331,11 @@ set_multicycle_path 2 -from d -to q
             drive: Some(4),
             slew: Some("fast".into()),
             pullup: Some(false),
+            ddr: Some("clk".into()),
+            delay: Some(12),
         });
+        assert_eq!(io.ddr.as_deref(), Some("clk"));
+        assert_eq!(io.delay, Some(12));
         assert_eq!(io.drive, Some(4));
         assert!(!io.is_empty());
     }

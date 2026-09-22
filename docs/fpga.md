@@ -79,6 +79,50 @@ start from, every PLL of the die already in use, a reference outside the
 input range — is an error naming which, and the net is left undriven for
 the netlist check to find.
 
+## Double-data-rate IO and IO delays
+
+A port becomes a **double-data-rate** port by naming the clock of its
+registers — `(* ddr = "clk" *)` on the port, or `set_io -ddr clk …` —
+and it then carries **two bits per pin**: a `2N`-bit port is `N` pins,
+and bit `i` and bit `i + N` share pin `i`, the low half on the rising
+edge and the high half on the falling one. That is the whole convention;
+the design sees an ordinary vector twice as wide as the bus, and the
+netlist's port is as wide as the bus. An odd width, an `inout` port or a
+clock that does not exist is an error (`F0304`) and the port is
+buffered as an ordinary one.
+
+How the two edges are registered comes from the device file, not from
+the family name:
+
+- a family whose **IO buffer registers both edges** declares the extra
+  pins on it (`din1`, `dout1`, `iclk`, `oclk`, optionally `ce`) and the
+  parameters that select the mode (`param_ddr_in`, `param_ddr_out`).
+  The iCE40's `SB_IO` is one: `D_IN_0` / `D_IN_1` and `D_OUT_0` /
+  `D_OUT_1` with `PIN_TYPE` `6'b000000` and `6'b010000`;
+- a family whose buffer does not declares a **register beside it**, a
+  `bel … ddr_in` with `d`, `clk`, `q0`, `q1` and a `bel … ddr_out` with
+  `d0`, `d1`, `clk`, `q` (reset pins, when declared, are tied inactive).
+  The ECP5's `IDDRX1F` and `ODDRX1F` are those.
+
+An **IO delay** — `(* io_delay = 20 *)` or `set_io -delay 20 …`, in the
+device's own steps — is a `bel … iodelay` with `i` and `o` between the
+buffer and the fabric (or the DDR register). The parameter carrying the
+number of steps is the one declared under the condition `value`, with
+its largest setting as the value: `param_value DEL_VALUE=127` on the
+ECP5's `DELAYG`. A family without one (iCE40) and a delay past the
+largest setting are both warnings, and the port is built without it.
+
+```text
+io:
+  rx (1 bits) -> TRELLIS_IO, double data rate on clk (IDDRX1F), delayed 20 step(s) (DELAYG)
+  tx (2 bits) -> TRELLIS_IO, double data rate on clk (ODDRX1F)
+```
+
+`ddr_ice40` and `ddr_ecp5` in `testdata/fpga/` take the same two ports
+through the whole flow on both families. The synthetic placement
+architecture has no wires for the extra DDR pins, so a DDR design goes
+out to nextpnr rather than through Reticle's own placer.
+
 ## Read this first: the architecture is synthetic
 
 Placement and routing need to know what wire is where, which

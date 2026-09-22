@@ -11,7 +11,7 @@
 //! | Block RAM | a [`Memory`] with its `MemRdPort` / `MemWrPort` cells | one block per width x depth slice (per read port, when the block has too few), plus address decoding and output muxing as cells; or, below the threshold, the memory built out of logic |
 //! | DSP | a `Mul`, and a `Mul` feeding an `Add` | one multiplier or multiply-accumulate block |
 //! | Carry | an `Add` at least `min_carry_width` bits wide | a chain of carry primitives plus `Xor` cells for the sums |
-//! | IO buffers | every top-level port | one IO primitive per bit, carrying the constraints' `io_standard`, `drive`, `slew` and `pullup` |
+//! | IO buffers | every top-level port | one IO primitive per bit, carrying the constraints' `io_standard`, `drive`, `slew` and `pullup`; for a port with a `ddr` clock, one per *two* bits with both edges registered (in the buffer where the family's buffer does it, in a `ddr_in` / `ddr_out` register beside it where it does not); and an `iodelay` element where a delay is asked for |
 //! | PLLs | a clock constraint on a net nothing drives | the device's PLL, its dividers solved by [`super::pll::solve`], fed from the clock constrained on an input port |
 //! | Clock buffers | a net driving many flip-flop clock pins | a global buffer, with the clock pins moved onto it |
 //!
@@ -64,7 +64,7 @@
 use std::collections::BTreeMap;
 use std::fmt::Write as _;
 
-use super::constraints::Constraints;
+use super::constraints::{Constraints, IoAttrs};
 use super::device::{BelKind, BelRole, BramShape, Device, PllFeedback, PllShape};
 use super::pll::PllSolution;
 use crate::diag::{Diagnostic, Diagnostics};
@@ -218,12 +218,21 @@ pub struct IoMapping {
     pub port: String,
     /// The primitive used.
     pub primitive: String,
-    /// How many buffers, one per bit.
+    /// How many buffers, one per pin: one per bit, or one per two bits
+    /// for a double-data-rate port.
     pub bits: u32,
     /// The pin the constraints assign, if any.
     pub pin: Option<String>,
     /// The IO standard the constraints ask for, if any.
     pub io_standard: Option<String>,
+    /// For a double-data-rate port, the clock of its registers and the
+    /// primitive that registers both edges: the IO buffer itself on a
+    /// family whose buffer does (iCE40 `SB_IO`), a register beside it on
+    /// one that does not (ECP5 `IDDRX1F` / `ODDRX1F`).
+    pub ddr: Option<(String, String)>,
+    /// The delay put between the pin and the fabric, in the device's
+    /// steps, and the primitive that provides it.
+    pub delay: Option<(u32, String)>,
 }
 
 /// One clock net considered for a global buffer.
@@ -420,6 +429,12 @@ impl MapReport {
                 }
                 if let Some(standard) = &item.io_standard {
                     let _ = write!(out, " as {standard}");
+                }
+                if let Some((clock, primitive)) = &item.ddr {
+                    let _ = write!(out, ", double data rate on {clock} ({primitive})");
+                }
+                if let Some((steps, primitive)) = &item.delay {
+                    let _ = write!(out, ", delayed {steps} step(s) ({primitive})");
                 }
                 out.push('\n');
             }
@@ -2355,97 +2370,158 @@ impl Mapper<'_> {
         let assignment = self.constraints.pin_of(&name, None);
         let io = assignment.map(|a| a.io.clone()).unwrap_or_default();
         let pin = assignment.map(|a| a.pin.clone()).filter(|p| !p.is_empty());
+        // A double-data-rate register or a delay is a property of the
+        // whole port, however it was stated: on the port, or on any one
+        // of its bits.
+        let stated = |pick: &dyn Fn(&IoAttrs) -> bool| {
+            self.constraints
+                .pins
+                .iter()
+                .filter(|p| p.port == name)
+                .find(|p| pick(&p.io))
+                .map(|p| p.io.clone())
+        };
+        let ddr_clock = stated(&|io| io.ddr.is_some()).and_then(|io| io.ddr);
+        let delay_steps = stated(&|io| io.delay.is_some()).and_then(|io| io.delay);
+        let ddr =
+            ddr_clock.and_then(|clock| self.ddr_plan(module, bel, &name, dir, width, &clock, span));
+        let delay = delay_steps.and_then(|steps| {
+            if matches!(ddr, Some(DdrPlan::InBuffer { .. })) {
+                self.io_warning(
+                    &name,
+                    span,
+                    "a delay cannot sit between a pad and the IO buffer that registers it, so \
+                     it is not applied",
+                );
+                return None;
+            }
+            self.delay_plan(&name, steps, span)
+        });
+        let pins = if ddr.is_some() { width / 2 } else { width };
 
-        let pad = add_net(module, &format!("{name}$pad"), Type::bits(width), span);
+        let pad = add_net(module, &format!("{name}$pad"), Type::bits(pins), span);
         module.ports[index].net = pad;
         let pad_value = net_expr(module, pad, span);
+        let core_value = net_expr(module, core, span);
 
-        let dir_key = match dir {
-            PortDir::In => "in",
-            PortDir::Out => "out",
-            PortDir::InOut => "inout",
+        let dir_key = match (dir, &ddr) {
+            (PortDir::In, Some(DdrPlan::InBuffer { .. })) => "ddr_in",
+            (PortDir::Out, Some(DdrPlan::InBuffer { .. })) => "ddr_out",
+            (PortDir::In, _) => "in",
+            (PortDir::Out, _) => "out",
+            (PortDir::InOut, _) => "inout",
         };
-        let mut core_bits = Vec::new();
+        let site = IoSite {
+            port: &name,
+            pin: pin.as_deref(),
+            io: &io,
+            conditions: dir_key,
+            span,
+        };
+        // What the fabric sees, least significant first: the rising-edge
+        // half, then the falling-edge half for a DDR port.
+        let mut low_bits = Vec::new();
+        let mut high_bits = Vec::new();
         let mut pad_bits = Vec::new();
-        for bit in 0..width {
-            let mut inputs = Vec::new();
-            let mut outputs = Vec::new();
+        for bit in 0..pins {
             let pad_bit = slice_expr(module, pad_value, bit, bit, span);
-            match dir {
-                PortDir::In => {
-                    inputs.push((Name::new(bel.port("pad").unwrap_or("pad")), pad_bit));
+            let pad_port = Name::new(bel.port("pad").unwrap_or("pad"));
+            match (dir, &ddr) {
+                (PortDir::In, Some(DdrPlan::InBuffer { clk })) => {
+                    let clk = net_expr(module, *clk, span);
+                    let lo = add_net(module, &format!("{name}$in{bit}"), Type::bit(), span);
+                    let hi = add_net(module, &format!("{name}$in{bit}_n"), Type::bit(), span);
+                    let mut inputs = vec![(pad_port, pad_bit)];
+                    inputs.push((Name::new(bel.port("iclk").unwrap_or("iclk")), clk));
+                    if let Some(ce) = bel.port("ce") {
+                        let one = const_expr(module, Const::ones(1), span);
+                        inputs.push((Name::new(ce), one));
+                    }
+                    let outputs = vec![
+                        (Name::new(bel.port("din").unwrap_or("din")), lo),
+                        (Name::new(bel.port("din1").unwrap_or("din1")), hi),
+                    ];
+                    self.io_cell(module, bel, &site, bit, inputs, outputs);
+                    low_bits.push(net_expr(module, lo, span));
+                    high_bits.push(net_expr(module, hi, span));
                 }
-                PortDir::Out | PortDir::InOut => {
+                (PortDir::Out, Some(DdrPlan::InBuffer { clk })) => {
+                    let clk = net_expr(module, *clk, span);
                     let net = add_net(module, &format!("{name}$pin{bit}"), Type::bit(), span);
-                    outputs.push((Name::new(bel.port("pad").unwrap_or("pad")), net));
-                    let value = net_expr(module, net, span);
-                    pad_bits.push(value);
+                    let lo = slice_expr(module, core_value, bit, bit, span);
+                    let hi = slice_expr(module, core_value, bit + pins, bit + pins, span);
+                    let mut inputs = vec![
+                        (Name::new(bel.port("dout").unwrap_or("dout")), lo),
+                        (Name::new(bel.port("dout1").unwrap_or("dout1")), hi),
+                        (Name::new(bel.port("oclk").unwrap_or("oclk")), clk),
+                    ];
+                    if let Some(ce) = bel.port("ce") {
+                        let one = const_expr(module, Const::ones(1), span);
+                        inputs.push((Name::new(ce), one));
+                    }
+                    self.io_cell(module, bel, &site, bit, inputs, vec![(pad_port, net)]);
+                    pad_bits.push(net_expr(module, net, span));
                 }
-            }
-            if dir == PortDir::In
-                && let Some(port_name) = bel.port("din")
-            {
-                let net = add_net(module, &format!("{name}$in{bit}"), Type::bit(), span);
-                outputs.push((Name::new(port_name), net));
-                let value = net_expr(module, net, span);
-                core_bits.push(value);
-            }
-            if matches!(dir, PortDir::Out | PortDir::InOut)
-                && let Some(port_name) = bel.port("dout")
-            {
-                let core_value = net_expr(module, core, span);
-                let core_bit = slice_expr(module, core_value, bit, bit, span);
-                inputs.push((Name::new(port_name), core_bit));
-            }
-            if dir == PortDir::InOut
-                && let Some(port_name) = bel.port("oe")
-            {
-                let one = const_expr(module, Const::ones(1), span);
-                inputs.push((Name::new(port_name), one));
-            }
-            let cell = add_cell(
-                module,
-                &format!("{name}$io{bit}"),
-                CellKind::Blackbox(Name::new(bel.name.clone())),
-                inputs,
-                outputs,
-                span,
-            );
-            for (key, value) in &bel.params {
-                module.cells[cell].params.set(key.clone(), value.clone());
-            }
-            for (key, value) in bel.params_when(dir_key) {
-                module.cells[cell].params.set(key.clone(), value.clone());
-            }
-            if io.pullup == Some(true) {
-                for (key, value) in bel.params_when("pullup") {
-                    module.cells[cell].params.set(key.clone(), value.clone());
+                (PortDir::In, beside) => {
+                    let mut outputs = Vec::new();
+                    let mut from_pad = None;
+                    if let Some(port_name) = bel.port("din") {
+                        let net = add_net(module, &format!("{name}$in{bit}"), Type::bit(), span);
+                        outputs.push((Name::new(port_name), net));
+                        from_pad = Some(net_expr(module, net, span));
+                    }
+                    self.io_cell(module, bel, &site, bit, vec![(pad_port, pad_bit)], outputs);
+                    let Some(value) = from_pad else { continue };
+                    let value = match &delay {
+                        Some(plan) => self.emit_delay(module, plan, value, &name, bit, span),
+                        None => value,
+                    };
+                    match beside {
+                        Some(DdrPlan::Beside { bel: reg, clk }) => {
+                            let (lo, hi) =
+                                self.emit_ddr_in(module, reg, *clk, value, &name, bit, span);
+                            low_bits.push(lo);
+                            high_bits.push(hi);
+                        }
+                        _ => low_bits.push(value),
+                    }
                 }
-            }
-            let attrs = &mut module.cells[cell].attrs;
-            attrs.set("port", name.clone());
-            if let Some(pin) = &pin {
-                attrs.set("pin", pin.clone());
-            }
-            if let Some(standard) = &io.io_standard {
-                attrs.set("io_standard", standard.clone());
-            }
-            if let Some(drive) = io.drive {
-                attrs.set("drive", i64::from(drive));
-            }
-            if let Some(slew) = &io.slew {
-                attrs.set("slew", slew.clone());
-            }
-            if let Some(pullup) = io.pullup {
-                attrs.set("pullup", i64::from(pullup));
+                (PortDir::Out | PortDir::InOut, beside) => {
+                    let net = add_net(module, &format!("{name}$pin{bit}"), Type::bit(), span);
+                    pad_bits.push(net_expr(module, net, span));
+                    let mut value = match beside {
+                        Some(DdrPlan::Beside { bel: reg, clk }) => {
+                            let lo = slice_expr(module, core_value, bit, bit, span);
+                            let hi = slice_expr(module, core_value, bit + pins, bit + pins, span);
+                            self.emit_ddr_out(module, reg, *clk, (lo, hi), &name, bit, span)
+                        }
+                        _ => slice_expr(module, core_value, bit, bit, span),
+                    };
+                    if let Some(plan) = &delay {
+                        value = self.emit_delay(module, plan, value, &name, bit, span);
+                    }
+                    let mut inputs = Vec::new();
+                    if let Some(port_name) = bel.port("dout") {
+                        inputs.push((Name::new(port_name), value));
+                    }
+                    if dir == PortDir::InOut
+                        && let Some(port_name) = bel.port("oe")
+                    {
+                        let one = const_expr(module, Const::ones(1), span);
+                        inputs.push((Name::new(port_name), one));
+                    }
+                    self.io_cell(module, bel, &site, bit, inputs, vec![(pad_port, net)]);
+                }
             }
         }
-        if !core_bits.is_empty() {
-            core_bits.reverse();
-            let value = if core_bits.len() == 1 {
-                core_bits[0]
+        let mut fabric = low_bits;
+        fabric.extend(high_bits);
+        if !fabric.is_empty() {
+            fabric.reverse();
+            let value = if fabric.len() == 1 {
+                fabric[0]
             } else {
-                expr(module, ExprKind::Concat(core_bits), span)
+                expr(module, ExprKind::Concat(fabric), span)
             };
             add_assign(module, core, value, span);
         }
@@ -2470,13 +2546,322 @@ impl Mapper<'_> {
                 ),
             );
         }
+        let ddr_report = ddr.as_ref().map(|plan| match plan {
+            DdrPlan::InBuffer { clk } => {
+                (module.nets[*clk].name.as_str().to_owned(), bel.name.clone())
+            }
+            DdrPlan::Beside { bel: reg, clk } => {
+                (module.nets[*clk].name.as_str().to_owned(), reg.name.clone())
+            }
+        });
         self.report.io_buffers.push(IoMapping {
             port: name,
             primitive: bel.name.clone(),
-            bits: width,
+            bits: pins,
             pin,
             io_standard: io.io_standard,
+            ddr: ddr_report,
+            delay: delay.map(|plan| (plan.steps, plan.bel.name.clone())),
         });
+    }
+
+    /// One IO buffer cell, with the parameters its direction and options
+    /// select and the constraints that produced it as attributes.
+    fn io_cell(
+        &mut self,
+        module: &mut Module,
+        bel: &BelKind,
+        site: &IoSite<'_>,
+        bit: u32,
+        inputs: Vec<(Name, ExprId)>,
+        outputs: Vec<(Name, NetId)>,
+    ) -> CellId {
+        let cell = add_cell(
+            module,
+            &format!("{}$io{bit}", site.port),
+            CellKind::Blackbox(Name::new(bel.name.clone())),
+            inputs,
+            outputs,
+            site.span,
+        );
+        for (key, value) in &bel.params {
+            module.cells[cell].params.set(key.clone(), value.clone());
+        }
+        for (key, value) in bel.params_when(site.conditions) {
+            module.cells[cell].params.set(key.clone(), value.clone());
+        }
+        let io = site.io;
+        if io.pullup == Some(true) {
+            for (key, value) in bel.params_when("pullup") {
+                module.cells[cell].params.set(key.clone(), value.clone());
+            }
+        }
+        let attrs = &mut module.cells[cell].attrs;
+        attrs.set("port", site.port.to_owned());
+        if let Some(pin) = site.pin {
+            attrs.set("pin", pin.to_owned());
+        }
+        if let Some(standard) = &io.io_standard {
+            attrs.set("io_standard", standard.clone());
+        }
+        if let Some(drive) = io.drive {
+            attrs.set("drive", i64::from(drive));
+        }
+        if let Some(slew) = &io.slew {
+            attrs.set("slew", slew.clone());
+        }
+        if let Some(pullup) = io.pullup {
+            attrs.set("pullup", i64::from(pullup));
+        }
+        cell
+    }
+
+    /// A warning about an IO option that could not be honoured.
+    fn io_warning(&mut self, port: &str, span: Span, why: &str) {
+        self.diags.push(
+            Diagnostic::warning(format!("port `{port}`: {why}"))
+                .with_code(NO_IO_REGISTER)
+                .with_span(span),
+        );
+        self.note(format!("port `{port}`: {why}"));
+    }
+
+    /// How a double-data-rate port is built on this device, or `None`
+    /// (with an error saying why) when it cannot be, in which case the
+    /// port is buffered as an ordinary one.
+    #[allow(clippy::too_many_arguments)]
+    fn ddr_plan(
+        &mut self,
+        module: &Module,
+        bel: &BelKind,
+        port: &str,
+        dir: PortDir,
+        width: u32,
+        clock: &str,
+        span: Span,
+    ) -> Option<DdrPlan> {
+        let refuse = |this: &mut Self, why: String| {
+            this.diags.push(
+                Diagnostic::error(format!(
+                    "port `{port}` asks for double-data-rate registers, but {why}"
+                ))
+                .with_code(NO_IO_REGISTER)
+                .with_span(span)
+                .with_note("it is buffered as an ordinary port, one pin per bit"),
+            );
+            this.note(format!("port `{port}` is not double data rate: {why}"));
+            None
+        };
+        if dir == PortDir::InOut {
+            return refuse(self, "a bidirectional one is not supported".to_owned());
+        }
+        if !width.is_multiple_of(2) {
+            return refuse(
+                self,
+                format!(
+                    "it is {width} bits wide, and a DDR port carries two bits per pin: the \
+                     rising-edge half, then the falling-edge half"
+                ),
+            );
+        }
+        let Some(clk) = module.net_by_name(clock) else {
+            return refuse(self, format!("there is no clock net `{clock}`"));
+        };
+        let (own, conditions, beside_role, beside_ports): (&[&str], &str, BelRole, &[&str]) =
+            if dir == PortDir::In {
+                (
+                    &["din", "din1", "iclk"],
+                    "ddr_in",
+                    BelRole::DdrIn,
+                    &["d", "clk", "q0", "q1"],
+                )
+            } else {
+                (
+                    &["dout", "dout1", "oclk"],
+                    "ddr_out",
+                    BelRole::DdrOut,
+                    &["d0", "d1", "clk", "q"],
+                )
+            };
+        if bel.has_ports(own) && !bel.params_when(conditions).is_empty() {
+            return Some(DdrPlan::InBuffer { clk });
+        }
+        if let Some(reg) = self.device.bel(beside_role)
+            && reg.has_ports(beside_ports)
+        {
+            return Some(DdrPlan::Beside {
+                bel: reg.clone(),
+                clk,
+            });
+        }
+        refuse(
+            self,
+            format!(
+                "`{}` declares neither an IO buffer that registers both edges nor a `{}` register",
+                self.device.name,
+                beside_role.keyword()
+            ),
+        )
+    }
+
+    /// The delay element for a port, or `None` (with a warning) when the
+    /// device has none or cannot delay that far.
+    fn delay_plan(&mut self, port: &str, steps: u32, span: Span) -> Option<DelayPlan> {
+        let Some(bel) = self.device.bel(BelRole::IoDelay).cloned() else {
+            self.io_warning(
+                port,
+                span,
+                &format!(
+                    "`{}` has no programmable IO delay, so the {steps}-step delay asked for is \
+                     not applied",
+                    self.device.name
+                ),
+            );
+            return None;
+        };
+        let Some((param, max)) = bel
+            .params_when("value")
+            .first()
+            .map(|(key, value)| (key.clone(), value.as_int().unwrap_or(0)))
+        else {
+            self.io_warning(
+                port,
+                span,
+                &format!(
+                    "the database does not say which parameter of `{}` carries the delay",
+                    bel.name
+                ),
+            );
+            return None;
+        };
+        if !bel.has_ports(&["i", "o"]) {
+            self.io_warning(
+                port,
+                span,
+                &format!("`{}` has no (i, o) port map", bel.name),
+            );
+            return None;
+        }
+        if i64::from(steps) > max {
+            self.io_warning(
+                port,
+                span,
+                &format!(
+                    "`{}` delays at most {max} steps and {steps} were asked for, so the delay is \
+                     not applied",
+                    bel.name
+                ),
+            );
+            return None;
+        }
+        Some(DelayPlan { bel, param, steps })
+    }
+
+    /// One delay element on `value`, returning the delayed signal.
+    fn emit_delay(
+        &mut self,
+        module: &mut Module,
+        plan: &DelayPlan,
+        value: ExprId,
+        port: &str,
+        bit: u32,
+        span: Span,
+    ) -> ExprId {
+        let out = add_net(module, &format!("{port}$dly{bit}"), Type::bit(), span);
+        let cell = add_cell(
+            module,
+            &format!("{port}$delay{bit}"),
+            CellKind::Blackbox(Name::new(plan.bel.name.clone())),
+            vec![(Name::new(plan.bel.port("i").unwrap_or("i")), value)],
+            vec![(Name::new(plan.bel.port("o").unwrap_or("o")), out)],
+            span,
+        );
+        for (key, value) in &plan.bel.params {
+            module.cells[cell].params.set(key.clone(), value.clone());
+        }
+        module.cells[cell]
+            .params
+            .set(plan.param.clone(), AttrValue::Int(i64::from(plan.steps)));
+        net_expr(module, out, span)
+    }
+
+    /// A DDR input register beside the IO buffer, returning the bits
+    /// captured on the rising and on the falling edge.
+    #[allow(clippy::too_many_arguments)]
+    fn emit_ddr_in(
+        &mut self,
+        module: &mut Module,
+        reg: &BelKind,
+        clk: NetId,
+        value: ExprId,
+        port: &str,
+        bit: u32,
+        span: Span,
+    ) -> (ExprId, ExprId) {
+        let clock = net_expr(module, clk, span);
+        let lo = add_net(module, &format!("{port}$q{bit}"), Type::bit(), span);
+        let hi = add_net(module, &format!("{port}$q{bit}_n"), Type::bit(), span);
+        let mut inputs = vec![
+            (Name::new(reg.port("d").unwrap_or("d")), value),
+            (Name::new(reg.port("clk").unwrap_or("clk")), clock),
+        ];
+        if let Some(rst) = reg.port("rst") {
+            let zero = const_expr(module, Const::zero(1), span);
+            inputs.push((Name::new(rst), zero));
+        }
+        let cell = add_cell(
+            module,
+            &format!("{port}$iddr{bit}"),
+            CellKind::Blackbox(Name::new(reg.name.clone())),
+            inputs,
+            vec![
+                (Name::new(reg.port("q0").unwrap_or("q0")), lo),
+                (Name::new(reg.port("q1").unwrap_or("q1")), hi),
+            ],
+            span,
+        );
+        for (key, value) in &reg.params {
+            module.cells[cell].params.set(key.clone(), value.clone());
+        }
+        (net_expr(module, lo, span), net_expr(module, hi, span))
+    }
+
+    /// A DDR output register beside the IO buffer, launching `bits.0` on
+    /// the rising edge and `bits.1` on the falling one.
+    #[allow(clippy::too_many_arguments)]
+    fn emit_ddr_out(
+        &mut self,
+        module: &mut Module,
+        reg: &BelKind,
+        clk: NetId,
+        bits: (ExprId, ExprId),
+        port: &str,
+        bit: u32,
+        span: Span,
+    ) -> ExprId {
+        let clock = net_expr(module, clk, span);
+        let out = add_net(module, &format!("{port}$d{bit}"), Type::bit(), span);
+        let mut inputs = vec![
+            (Name::new(reg.port("d0").unwrap_or("d0")), bits.0),
+            (Name::new(reg.port("d1").unwrap_or("d1")), bits.1),
+            (Name::new(reg.port("clk").unwrap_or("clk")), clock),
+        ];
+        if let Some(rst) = reg.port("rst") {
+            let zero = const_expr(module, Const::zero(1), span);
+            inputs.push((Name::new(rst), zero));
+        }
+        let cell = add_cell(
+            module,
+            &format!("{port}$oddr{bit}"),
+            CellKind::Blackbox(Name::new(reg.name.clone())),
+            inputs,
+            vec![(Name::new(reg.port("q").unwrap_or("q")), out)],
+            span,
+        );
+        for (key, value) in &reg.params {
+            module.cells[cell].params.set(key.clone(), value.clone());
+        }
+        net_expr(module, out, span)
     }
 
     // --- clock generators ---------------------------------------------------
@@ -2920,6 +3305,48 @@ fn allocate_ports(
         write_slots.push(pick(false, &mut taken)?);
     }
     Some((read_slots, write_slots))
+}
+
+/// How one double-data-rate port is built.
+enum DdrPlan {
+    /// The IO buffer registers both edges itself (iCE40 `SB_IO`), on
+    /// this clock.
+    InBuffer {
+        /// The clock net.
+        clk: NetId,
+    },
+    /// A register beside the buffer does (ECP5 `IDDRX1F` / `ODDRX1F`).
+    Beside {
+        /// The register primitive.
+        bel: BelKind,
+        /// The clock net.
+        clk: NetId,
+    },
+}
+
+/// The delay element one port gets.
+struct DelayPlan {
+    /// The primitive.
+    bel: BelKind,
+    /// The parameter carrying the number of steps.
+    param: String,
+    /// How many steps.
+    steps: u32,
+}
+
+/// What every IO buffer cell of one port shares.
+struct IoSite<'a> {
+    /// The port's name, which the cells are named after.
+    port: &'a str,
+    /// The package pin, if one is assigned.
+    pin: Option<&'a str>,
+    /// The electrical options.
+    io: &'a IoAttrs,
+    /// The condition selecting the buffer's direction parameters (`in`,
+    /// `out`, `inout`, `ddr_in`, `ddr_out`).
+    conditions: &'a str,
+    /// The span the new objects carry.
+    span: Span,
 }
 
 /// What the database says the device's distributed RAM primitive is.
@@ -3687,6 +4114,68 @@ mod tests {
         let report = run(&mut design, top, "ecp5-25f-CABGA381", &options);
         assert!(report.carry_chains.is_empty());
         assert!(report.notes[0].contains("without a (ci, i0, i1, co) port map"));
+    }
+
+    #[test]
+    fn ddr_ports_that_cannot_be_built_are_named() {
+        // A three-bit DDR port has no pin for its odd bit; a clock that
+        // does not exist cannot clock anything; the iCE40 has no IO
+        // delay; and the ECP5's goes to 127 steps, not 500.
+        let (mut sources, span) = span();
+        let mut b = ModuleBuilder::new("top", span);
+        let _clk = b.input("clk", Type::bit());
+        let odd = b.input("odd", Type::bits(3));
+        let lost = b.input("lost", Type::bits(2));
+        let slow = b.input("slow", Type::bits(1));
+        let q = b.output("q", Type::bits(6));
+        let parts = vec![b.net(odd), b.net(lost), b.net(slow)];
+        let all = b.concat(parts);
+        b.assign(q, all);
+        let mut design = Design::new();
+        let top = design.add_module(b.finish());
+        design.top = Some(top);
+        let rcf = concat!(
+            "set_io -ddr clk odd 8\n",
+            "set_io -ddr nowhere lost 9\n",
+            "set_io -delay 500 slow 78\n",
+        );
+        let file = sources.add("top.rcf", rcf).unwrap();
+        let mut diags = Diagnostics::new();
+        let constraints = Constraints::parse(rcf, file, &mut diags);
+        assert!(!diags.has_errors(), "{}", diags.render(&sources));
+        let report = map_with(
+            &mut design,
+            top,
+            "ice40-hx1k-tq144",
+            &constraints,
+            &mut diags,
+        );
+        let text = diags.render(&sources);
+        assert!(text.contains("it is 3 bits wide"), "{text}");
+        assert!(text.contains("there is no clock net `nowhere`"), "{text}");
+        assert!(text.contains("has no programmable IO delay"), "{text}");
+        // Every one of them is still buffered, as an ordinary port.
+        for port in ["odd", "lost", "slow"] {
+            let item = report.io_buffers.iter().find(|i| i.port == port).unwrap();
+            assert_eq!(item.ddr, None, "{port}");
+            assert_eq!(item.delay, None, "{port}");
+        }
+        assert!(!validate(&design).has_errors());
+
+        let (mut design, top, _) = generated_clocks(&[]);
+        let rcf = "set_io -delay 500 d G2\n";
+        let file = sources.add("ecp5.rcf", rcf).unwrap();
+        let mut diags = Diagnostics::new();
+        let constraints = Constraints::parse(rcf, file, &mut diags);
+        map_with(
+            &mut design,
+            top,
+            "ecp5-45f-CABGA381",
+            &constraints,
+            &mut diags,
+        );
+        let text = diags.render(&sources);
+        assert!(text.contains("delays at most 127 steps"), "{text}");
     }
 
     #[test]

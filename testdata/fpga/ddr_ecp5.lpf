@@ -1,0 +1,4 @@
+# nextpnr LPF written by reticle for ecp5-45f-CABGA381 (ecp5)
+LOCATE COMP "clk" SITE "G2";
+IOBUF PORT "clk" IO_TYPE=LVCMOS33;
+FREQUENCY PORT "clk" 25.000 MHZ;

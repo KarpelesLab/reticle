@@ -464,20 +464,39 @@ through the whole flow.
 ## What is not here yet
 
 The roadmap's list for this phase also names SDRAM and HyperRAM
-controllers, a USB device and HDMI/DVI output. None of those is here,
-and none of them can be until the FPGA backend configures the device
-primitives they need: DDR registers and IO delays for a memory
+controllers, a USB device, HDMI/DVI output and RGMII. None of those is
+here yet. They waited on the FPGA backend configuring the device
+primitives they need — DDR registers and IO delays for a memory
 controller's data strobe, a PLL for the pixel clock a display wants and
-for the 480 Mbit/s a USB high-speed engine wants. `reticle::fpga` maps
-logic, carries, block RAM, IO buffers and clock buffers, and nothing
-else; writing an SDRAM controller against primitives the backend cannot
-emit would produce a block that simulates and can never be built, which
-is worse than not having one.
+for the 480 Mbit/s a USB high-speed engine wants — because writing an
+SDRAM controller against primitives the backend cannot emit would
+produce a block that simulates and can never be built, which is worse
+than not having one.
 
-RMII was the Ethernet interface to pick for exactly that reason: it is
-single data rate, two bits per edge on a clock the PHY provides, so the
-whole MAC is ordinary logic. RGMII, which is DDR on both directions, is
-in the same waiting room as the other four.
+**That prerequisite is now met**, for both families the repository
+ships (see [`docs/fpga.md`](fpga.md)):
+
+- a port with a `ddr` attribute is two bits per pin, registered on both
+  edges — in the iCE40's `SB_IO` itself, or in an `IDDRX1F` /
+  `ODDRX1F` beside the ECP5's buffer;
+- an `io_delay` attribute puts a `DELAYG` between an ECP5 pin and the
+  fabric (the iCE40 has no programmable delay, and says so);
+- a clock constraint on a net nothing drives instantiates the device's
+  PLL, with `fpga::pll::solve` choosing the dividers and the report
+  stating the frequency reached and the error: 125 MHz from the ULX3S's
+  25 is exact, 74.25 MHz comes out at 75.
+
+What is still missing is the blocks themselves, and a word of caution
+for whoever writes them: every one of those primitives is checked
+against the device database and the netlist checker, not against
+silicon, and the simulator treats a primitive as a black box, so a DDR
+block's tests will have to model the two edges at the port the way the
+convention in `docs/fpga.md` states them.
+
+RMII was the Ethernet interface to pick first for exactly that reason:
+it is single data rate, two bits per edge on a clock the PHY provides,
+so the whole MAC is ordinary logic. RGMII, which is DDR on both
+directions, is now buildable too.
 
 The `rv32i` core is big: about 2400 LUT4s, which does not fit an iCE40
 HX1K's 1280 and does fit an ECP5 45F many times over. That is a
