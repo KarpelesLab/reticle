@@ -911,3 +911,88 @@ end
     sim.set(off, Logic::from_u64(12, 4));
     assert_eq!(sim.get(sim.net("split.part").unwrap()).to_u64(), Some(0));
 }
+
+/// A reset synchroniser: one register's asynchronous reset drives
+/// another's. The overrides have to be applied in dependency order, and
+/// the process that depends is declared first here so source order would
+/// get it wrong.
+#[test]
+fn a_reset_that_comes_from_a_register_is_applied_first() {
+    let design = parse(
+        "\
+module chained
+  net %clk u1 wire
+  net %rst_n u1 wire
+  net %d u4 wire
+  net %sync_n u1 reg
+  net %q u4 reg
+  port clk in %clk
+  port rst_n in %rst_n
+  port d in %d
+  port sync_n out %sync_n
+  port q out %q
+  process user seq posedge %clk async negedge %sync_n
+    if lnot(%sync_n)
+      %q <= 4'd0
+    else
+      %q <= %d
+    end
+  end
+  process syncer seq posedge %clk async negedge %rst_n
+    if lnot(%rst_n)
+      %sync_n <= 1'd0
+    else
+      %sync_n <= 1'd1
+    end
+  end
+end
+",
+    );
+    let mut sim = check(&design, options()).unwrap().compile();
+    let rst_n = sim.net("chained.rst_n").unwrap();
+    let d = sim.net("chained.d").unwrap();
+    let q = sim.net("chained.q").unwrap();
+    let sync_n = sim.net("chained.sync_n").unwrap();
+    sim.set(rst_n, Logic::from_bool(true));
+    sim.set(d, Logic::from_u64(9, 4));
+    sim.run_cycles(3);
+    assert_eq!(sim.get(sync_n).to_u64(), Some(1));
+    assert_eq!(sim.get(q).to_u64(), Some(9));
+    // Both registers clear in the same settle, without a clock edge.
+    sim.set(rst_n, Logic::from_bool(false));
+    assert_eq!(sim.get(sync_n).to_u64(), Some(0));
+    assert_eq!(sim.get(q).to_u64(), Some(0));
+}
+
+/// Two asynchronous resets that reset each other have no order to be
+/// applied in.
+#[test]
+fn resets_that_depend_on_each_other_are_refused() {
+    let problems = refuse(
+        "\
+module knot
+  net %clk u1 wire
+  net %a u1 reg
+  net %b u1 reg
+  port clk in %clk
+  port a out %a
+  port b out %b
+  process pa seq posedge %clk async negedge %b
+    if lnot(%b)
+      %a <= 1'd0
+    else
+      %a <= 1'd1
+    end
+  end
+  process pb seq posedge %clk async negedge %a
+    if lnot(%a)
+      %b <= 1'd0
+    else
+      %b <= 1'd1
+    end
+  end
+end
+",
+    );
+    assert!(has(&problems, &Reason::AsyncResetLogic));
+}

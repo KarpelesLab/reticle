@@ -153,6 +153,29 @@ struct Unit {
     span: Span,
 }
 
+/// Where one asynchronous reset comes from.
+#[derive(Clone, Copy, Debug)]
+enum AsyncSource {
+    /// A clocked process with an `async` sensitivity entry.
+    Process(usize),
+    /// A `dff` cell with an asynchronous reset.
+    Cell(usize),
+}
+
+/// One asynchronous reset: what makes it active and what it forces.
+struct AsyncReset {
+    id: usize,
+    inst: InstId,
+    source: AsyncSource,
+    /// The signal the reset condition reads.
+    cond: SigId,
+    polarity: Polarity,
+    /// The signals the reset forces; used to order the prologue.
+    targets: Vec<SigId>,
+    label: String,
+    span: Span,
+}
+
 /// The process-local view of the design while one unit is executed.
 struct Ctx<'d> {
     inst: InstId,
@@ -1251,30 +1274,137 @@ impl<'d> Lowerer<'d> {
     /// agree. The price is that the reset must be readable before the
     /// settle, which is why it has to come from an input or a register.
     fn lower_async_resets(&mut self) {
+        let mut entries = self.async_entries();
+        // A reset may itself come from a register with an asynchronous
+        // reset — a reset synchroniser is exactly that — so an override
+        // has to be emitted after the override of whatever its condition
+        // reads. Repeatedly take an entry nothing else still has to
+        // produce; what is left over is a cycle among the resets.
+        let mut order = Vec::with_capacity(entries.len());
+        while !entries.is_empty() {
+            let ready = entries.iter().position(|e| {
+                !entries
+                    .iter()
+                    .any(|o| o.id != e.id && o.targets.contains(&e.cond))
+            });
+            match ready {
+                Some(i) => order.push(entries.remove(i)),
+                None => {
+                    for e in &entries {
+                        self.err(e.label.clone(), Reason::AsyncResetLogic, Some(e.span));
+                    }
+                    return;
+                }
+            }
+        }
+        for entry in order {
+            self.emit_async_reset(&entry);
+        }
+    }
+
+    /// Every asynchronous reset in the design, with the signal its
+    /// condition reads and the signals it forces.
+    fn async_entries(&mut self) -> Vec<AsyncReset> {
+        let mut out: Vec<AsyncReset> = Vec::new();
         for p in 0..self.sim.procs.len() {
             let process: &'d Process = self.sim.procs[p].process;
             let ProcessKind::Sequential { resets, .. } = &process.kind else {
                 continue;
             };
-            if resets.is_empty() {
-                continue;
-            }
             let inst = self.sim.procs[p].inst;
             let label = format!("process {}", self.sim.procs[p].name);
-            let writes = self.block_writes(inst, &process.body);
+            let targets: Vec<SigId> = self
+                .block_writes(inst, &process.body)
+                .into_iter()
+                .map(|(sig, _)| sig)
+                .collect();
             for edge in resets {
-                let sig = self.sig_of(inst, edge.net);
-                let Some(active) = self.reset_condition(sig, edge.polarity, &label, process.span)
-                else {
+                if edge.polarity == Polarity::Any {
+                    self.err(label.clone(), Reason::AsyncResetLogic, Some(process.span));
                     continue;
+                }
+                out.push(AsyncReset {
+                    id: out.len(),
+                    inst,
+                    source: AsyncSource::Process(p),
+                    cond: self.sig_of(inst, edge.net),
+                    polarity: edge.polarity,
+                    targets: targets.clone(),
+                    label: label.clone(),
+                    span: process.span,
+                });
+            }
+        }
+        for c in 0..self.sim.cells.len() {
+            let inst = self.sim.cells[c].inst;
+            let cell: &'d Cell = self.sim.cells[c].cell;
+            let CellKind::Dff { reset: Some(r), .. } = &cell.kind else {
+                continue;
+            };
+            if !r.asynchronous {
+                continue;
+            }
+            let label = format!("cell {}.{}", self.sim.instances[inst.idx()].path, cell.name);
+            let Some(q) = cell.output("q") else { continue };
+            let m = self.module(inst);
+            let rst = cell.input("rst").and_then(|e| m.exprs.get(e));
+            let Some(ExprKind::Net(n)) = rst.map(|node| &node.kind) else {
+                self.err(label, Reason::AsyncResetLogic, Some(cell.span));
+                continue;
+            };
+            out.push(AsyncReset {
+                id: out.len(),
+                inst,
+                source: AsyncSource::Cell(c),
+                cond: self.sig_of(inst, *n),
+                polarity: if r.active_high {
+                    Polarity::Pos
+                } else {
+                    Polarity::Neg
+                },
+                targets: vec![self.sig_of(inst, q)],
+                label,
+                span: cell.span,
+            });
+        }
+        out
+    }
+
+    /// Emits one reset's override: the condition, the value it forces,
+    /// and the `Mux` that applies it to the register's current state.
+    fn emit_async_reset(&mut self, entry: &AsyncReset) {
+        let Some(active) =
+            self.reset_condition(entry.cond, entry.polarity, &entry.label, entry.span)
+        else {
+            return;
+        };
+        match entry.source {
+            AsyncSource::Cell(c) => {
+                let cell: &'d Cell = self.sim.cells[c].cell;
+                let CellKind::Dff { reset: Some(r), .. } = &cell.kind else {
+                    return;
                 };
-                let width = self.sig_width(sig);
+                let Some(&target) = entry.targets.first() else {
+                    return;
+                };
+                let width = self.sig_width(target);
+                let signed = self.sig_signed(target);
+                let value = self.constant(&r.value.resize(width).with_signed(signed));
+                self.force_on_reset(target, active, value);
+            }
+            AsyncSource::Process(p) => {
+                let process: &'d Process = self.sim.procs[p].process;
+                // Run the body with the reset forced active: the branch
+                // folds, so only the reset arm is lowered, and what it
+                // leaves in the local view is the reset value.
+                let width = self.sig_width(entry.cond);
                 let level =
-                    self.constant(&Logic::from_bool(edge.polarity == Polarity::Pos).resize(width));
-                let mut ctx = self.new_ctx(inst, false, label.clone(), process.span);
+                    self.constant(&Logic::from_bool(entry.polarity == Polarity::Pos).resize(width));
+                let writes = self.block_writes(entry.inst, &process.body);
+                let mut ctx = self.new_ctx(entry.inst, false, entry.label.clone(), entry.span);
                 ctx.hold = true;
                 ctx.prologue = true;
-                ctx.force.insert(sig, level);
+                ctx.force.insert(entry.cond, level);
                 self.seed(&mut ctx, &writes);
                 self.block(&mut ctx, &process.body);
                 let targets: Vec<SigId> = ctx.writes.iter().copied().collect();
@@ -1290,38 +1420,6 @@ impl<'d> Lowerer<'d> {
                     self.force_on_reset(target, active, value);
                 }
             }
-        }
-        for c in 0..self.sim.cells.len() {
-            let inst = self.sim.cells[c].inst;
-            let cell: &'d Cell = self.sim.cells[c].cell;
-            let CellKind::Dff { reset: Some(r), .. } = &cell.kind else {
-                continue;
-            };
-            if !r.asynchronous {
-                continue;
-            }
-            let label = format!("cell {}.{}", self.sim.instances[inst.idx()].path, cell.name);
-            let Some(q) = cell.output("q") else { continue };
-            let target = self.sig_of(inst, q);
-            let m = self.module(inst);
-            let rst = cell.input("rst").and_then(|e| m.exprs.get(e));
-            let Some(ExprKind::Net(n)) = rst.map(|node| &node.kind) else {
-                self.err(label, Reason::AsyncResetLogic, Some(cell.span));
-                continue;
-            };
-            let sig = self.sig_of(inst, *n);
-            let polarity = if r.active_high {
-                Polarity::Pos
-            } else {
-                Polarity::Neg
-            };
-            let Some(active) = self.reset_condition(sig, polarity, &label, cell.span) else {
-                continue;
-            };
-            let width = self.sig_width(target);
-            let signed = self.sig_signed(target);
-            let value = self.constant(&r.value.resize(width).with_signed(signed));
-            self.force_on_reset(target, active, value);
         }
     }
 
