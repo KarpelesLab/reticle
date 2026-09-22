@@ -166,7 +166,7 @@ product; everything else is a producer or consumer of it.
       parameterised modules.
 - [x] Textual IR format (`.rtl`) that round-trips, for golden tests and
       debugging.
-- [ ] Emitters: structural and behavioural Verilog, VHDL, JSON (Yosys-
+- [x] Emitters: structural and behavioural Verilog, VHDL, JSON (Yosys-
       compatible shape so nextpnr and existing viewers accept it), BLIF,
       EDIF.
 

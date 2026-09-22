@@ -1,0 +1,1 @@
+tristate.rtl:16:3: cell `drv`: BLIF cannot express `tristate`; map the design to gates or LUTs first

@@ -1,0 +1,72 @@
+top gates
+
+module inv
+  net %a u1 wire
+  net %y u1 wire
+  port a in %a
+  port y out %y
+  cell n0 not (a=%a) -> (y=%y)
+end
+
+module gates
+  net %clk u1 wire
+  net %rst u1 wire
+  net %en u1 wire
+  net %a u2 wire
+  net %b u2 wire
+  net %s u1 wire
+  net %sel u3 wire
+  net %n u2 wire
+  net %o u2 wire
+  net %x u2 wire
+  net %m u2 wire
+  net %p u2 wire
+  net %all u1 wire
+  net %any u1 wire
+  net %par u1 wire
+  net %f u1 wire
+  net %q u2 reg
+  attr init = 2'd1
+  net %r u2 reg
+  net %l u2 reg
+  net %copy u2 wire
+  net %inv_out u1 wire
+  net %bb_out u1 wire
+  port clk in %clk
+  port rst in %rst
+  port en in %en
+  port a in %a
+  port b in %b
+  port s in %s
+  port sel in %sel
+  port n out %n
+  port o out %o
+  port x out %x
+  port m out %m
+  port p out %p
+  port all out %all
+  port any out %any
+  port par out %par
+  port f out %f
+  port q out %q
+  port r out %r
+  port l out %l
+  port copy out %copy
+  port inv_out out %inv_out
+  port bb_out out %bb_out
+  instance u_inv of inv (a=%s, y=%inv_out)
+  assign %copy = {%a[0:0], 1'd1}
+  cell not0 not (a=%a) -> (y=%n)
+  cell or0 or (a=%a, b=%b) -> (y=%o)
+  cell xor0 xor (a=%a, b=2'd3) -> (y=%x)
+  cell mux0 mux (a=%a, b=%b, s=%s) -> (y=%m)
+  cell pmux0 pmux (a=%a, b={%b, %a, %n}, s=%sel) -> (y=%p)
+  cell rand0 rand (a=%a) -> (y=%all)
+  cell ror0 ror (a=%a) -> (y=%any)
+  cell rxor0 rxor (a={%a, %b}) -> (y=%par)
+  cell lut0 lut 3 8'd150 (a={%s, %a}) -> (y=%f)
+  cell ff0 dff pos (clk=%clk, d=%a) -> (q=%q)
+  cell ff1 dff neg en srst neg 2'd2 (clk=%clk, d=%b, en=%en, rst=%rst) -> (q=%r)
+  cell lat0 dlatch (en=%en, d=%m) -> (q=%l)
+  cell bb0 blackbox SB_LUT4 #(LUT_INIT=16'd32768) (I0=%s, I1=%all, I2=1'd0, I3=1'bx) -> (O=%bb_out)
+end

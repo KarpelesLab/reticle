@@ -1,0 +1,1 @@
+netlist.rtl:26:3: cell `add0`: BLIF cannot express `add`; map the design to gates or LUTs first

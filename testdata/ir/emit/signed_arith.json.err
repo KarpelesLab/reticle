@@ -1,0 +1,1 @@
+signed_arith.rtl:80:17: `add` is not a netlist connection; synthesise the design to cells first

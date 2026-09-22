@@ -1,0 +1,19 @@
+top io_pad
+
+module io_pad
+  net %oe u1 wire
+  net %d u4 wire
+  net %pad u4 wire
+  net %din u4 wire
+  net %bit u1 wire
+  net %bit_pad u1 wire
+  port oe in %oe
+  port d in %d
+  port pad inout %pad
+  port din out %din
+  port bit in %bit
+  port bit_pad inout %bit_pad
+  cell drv tristate (a=%d, en=%oe) -> (y=%pad)
+  cell rd buf (a=%pad) -> (y=%din)
+  cell drv1 tristate (a=%bit, en=%oe) -> (y=%bit_pad)
+end

@@ -1,0 +1,82 @@
+top datapath
+
+module datapath
+  net %clk u1 wire
+  net %rst_n u1 wire
+  net %en u1 wire
+  net %a s8 wire
+  net %b s8 wire
+  net %u u8 wire
+  net %v u8 wire
+  net %n u3 wire
+  net %sel u2 wire
+  net %sum s8 wire
+  net %diff u8 wire
+  net %prod s8 wire
+  net %quot s8 wire
+  net %rem u8 wire
+  net %shl s8 wire
+  net %shr u8 wire
+  net %sshr s8 wire
+  net %eq u1 wire
+  net %ne u1 wire
+  net %lt u1 wire
+  net %le u1 wire
+  net %gt u1 wire
+  net %ge u1 wire
+  net %pm u8 wire
+  net %q s8 reg
+  net %q2 u8 reg
+  net %rd u8 reg
+  net %raddr u2 wire
+  net %waddr u2 wire
+  port clk in %clk
+  port rst_n in %rst_n
+  port en in %en
+  port a in %a
+  port b in %b
+  port u in %u
+  port v in %v
+  port n in %n
+  port sel in %sel
+  port sum out %sum
+  port diff out %diff
+  port prod out %prod
+  port quot out %quot
+  port rem out %rem
+  port shl out %shl
+  port shr out %shr
+  port sshr out %sshr
+  port eq out %eq
+  port ne out %ne
+  port lt out %lt
+  port le out %le
+  port gt out %gt
+  port ge out %ge
+  port pm out %pm
+  port q out %q
+  port q2 out %q2
+  port rd out %rd
+  port raddr in %raddr
+  port waddr in %waddr
+  memory @buf 4 x u8
+  cell add0 add (a=%a, b=%b) -> (y=%sum)
+  cell sub0 sub (a=%u, b=%v) -> (y=%diff)
+  cell mul0 mul (a=%a, b=%b) -> (y=%prod)
+  cell div0 div (a=%a, b=%b) -> (y=%quot)
+  cell mod0 mod (a=%u, b=%v) -> (y=%rem)
+  cell shl0 shl (a=%a, b=%n) -> (y=%shl)
+  cell shr0 shr (a=%u, b=%n) -> (y=%shr)
+  cell sshr0 sshr (a=%a, b=%n) -> (y=%sshr)
+  cell eq0 eq (a=%a, b=%b) -> (y=%eq)
+  cell ne0 ne (a=%u, b=%v) -> (y=%ne)
+  cell lt0 lt (a=%a, b=%b) -> (y=%lt)
+  cell le0 le (a=%a, b=%b) -> (y=%le)
+  cell gt0 gt (a=%u, b=%v) -> (y=%gt)
+  cell ge0 ge (a=%u, b=%v) -> (y=%ge)
+  cell pmux0 pmux (a=%u, b={%v, %diff}, s=%sel) -> (y=%pm)
+  cell ff0 dff pos en arst neg 8'sd0 (clk=%clk, d=%sum, en=%en, rst=%rst_n) -> (q=%q)
+  cell ff1 dff neg arst pos 8'd255 (clk=%clk, d=%diff, rst=%en) -> (q=%q2)
+  cell rd0 memrd @buf clocked (addr=%raddr, clk=%clk, en=%en) -> (data=%rd)
+  cell wr0 memwr @buf (addr=%waddr, data=%u, en=%en) -> ()
+end

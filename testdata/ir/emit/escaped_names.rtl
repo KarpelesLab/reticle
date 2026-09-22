@@ -1,0 +1,43 @@
+top Top
+
+module Top
+  net %input u1 wire
+  net %entity u1 wire
+  net %"a b" u2 wire
+  net %Foo u2 wire
+  net %foo u2 wire
+  net %"9lives" u1 wire
+  net %reticle_x u1 wire
+  net %_under u1 wire
+  net %a$b u1 wire
+  net %resize u4 wire
+  net %"q[0]" u1 wire
+  net %clk_i u1 wire
+  net %mod u1 wire
+  port clk in %clk_i
+  port input in %input
+  port entity in %entity
+  port "a b" in %"a b"
+  port Foo in %Foo
+  port foo out %foo
+  port "9lives" out %"9lives"
+  port reticle_x out %reticle_x
+  port _under out %_under
+  port a$b out %a$b
+  port resize out %resize
+  port "q[0]" out %"q[0]"
+  port mod out %mod
+  attr keep = 1
+  instance "u.0" of "vendor cell" #("INIT VAL"=4'd9) (in=%input, "out port"=%mod)
+  assign %foo = and(%Foo, %"a b")
+  assign %"9lives" = or(%input, %entity)
+  assign %reticle_x = %"9lives"
+  assign %_under = not(%input)
+  assign %a$b = xor(%input, %entity)
+  assign %resize = resize(%Foo, u4)
+  assign %"q[0]" = %Foo[0:0]
+  attr "ram style" = "block"
+  process always seq posedge %clk_i
+    %mod <= %entity
+  end
+end

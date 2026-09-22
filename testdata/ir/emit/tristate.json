@@ -1,0 +1,106 @@
+{
+  "creator": "reticle",
+  "modules": {
+    "io_pad": {
+      "attributes": {
+        "top": 1
+      },
+      "ports": {
+        "oe": { "direction": "input", "bits": [ 2 ] },
+        "d": { "direction": "input", "bits": [ 3, 4, 5, 6 ] },
+        "pad": { "direction": "inout", "bits": [ 8, 9, 10, 11 ] },
+        "din": { "direction": "output", "bits": [ 12, 13, 14, 15 ] },
+        "bit": { "direction": "input", "bits": [ 7 ] },
+        "bit_pad": { "direction": "inout", "bits": [ 16 ] }
+      },
+      "cells": {
+        "drv": {
+          "hide_name": 0,
+          "type": "$tribuf",
+          "parameters": {
+            "WIDTH": 4
+          },
+          "attributes": {},
+          "port_directions": {
+            "A": "input",
+            "EN": "input",
+            "Y": "output"
+          },
+          "connections": {
+            "A": [ 3, 4, 5, 6 ],
+            "EN": [ 2 ],
+            "Y": [ 8, 9, 10, 11 ]
+          }
+        },
+        "rd": {
+          "hide_name": 0,
+          "type": "$pos",
+          "parameters": {
+            "A_SIGNED": 0,
+            "A_WIDTH": 4,
+            "Y_WIDTH": 4
+          },
+          "attributes": {},
+          "port_directions": {
+            "A": "input",
+            "Y": "output"
+          },
+          "connections": {
+            "A": [ 8, 9, 10, 11 ],
+            "Y": [ 12, 13, 14, 15 ]
+          }
+        },
+        "drv1": {
+          "hide_name": 0,
+          "type": "$tribuf",
+          "parameters": {
+            "WIDTH": 1
+          },
+          "attributes": {},
+          "port_directions": {
+            "A": "input",
+            "EN": "input",
+            "Y": "output"
+          },
+          "connections": {
+            "A": [ 7 ],
+            "EN": [ 2 ],
+            "Y": [ 16 ]
+          }
+        }
+      },
+      "netnames": {
+        "oe": {
+          "hide_name": 0,
+          "bits": [ 2 ],
+          "attributes": {}
+        },
+        "d": {
+          "hide_name": 0,
+          "bits": [ 3, 4, 5, 6 ],
+          "attributes": {}
+        },
+        "pad": {
+          "hide_name": 0,
+          "bits": [ 8, 9, 10, 11 ],
+          "attributes": {}
+        },
+        "din": {
+          "hide_name": 0,
+          "bits": [ 12, 13, 14, 15 ],
+          "attributes": {}
+        },
+        "bit": {
+          "hide_name": 0,
+          "bits": [ 7 ],
+          "attributes": {}
+        },
+        "bit_pad": {
+          "hide_name": 0,
+          "bits": [ 16 ],
+          "attributes": {}
+        }
+      }
+    }
+  }
+}

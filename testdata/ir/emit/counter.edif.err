@@ -1,0 +1,1 @@
+counter.rtl:15:3: module `counter` still has process `count`; EDIF takes the cell form only, synthesise first

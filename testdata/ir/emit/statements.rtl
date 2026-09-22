@@ -1,0 +1,117 @@
+top tb
+
+module tb
+  timescale 1 ns / 1 ps
+  net %clk u1 reg
+  net %rst_n u1 reg
+  net %d u8 reg
+  net %q u8 reg
+  net %cnt u8 var
+  net %i u8 var
+  net %j u8 var
+  net %tick int var
+  net %ready u1 wire
+  net %hi u4 reg
+  net %lo u4 reg
+  net %mode u2 wire
+  net %out u4 reg
+  net %ok u1 wire
+  net %sense u4 reg
+  net %addr u2 reg
+  port ready in %ready
+  port mode in %mode
+  port q out %q
+  memory @mem 4 x u8
+  assign %ok = call $onehot(%mode) as u1
+  process reset_ff seq posedge %clk async negedge %rst_n
+    if lnot(%rst_n)
+      %q <= 8'd0
+    else
+      %q <= %d
+    end
+  end
+  process clock free
+    %clk = 1'd0
+    forever
+      wait for 8'd5
+      %clk = not(%clk)
+    end
+  end
+  process main initial
+    %rst_n = 1'd0
+    %d = 8'd0
+    %cnt = 8'd0
+    %tick = sub(%tick, %tick)
+    sys $display("start %d", %cnt)
+    wait for 8'd12
+    %rst_n = 1'd1
+    wait on posedge %clk
+    for %i = 8'd0; lt(%i, 8'd4); %i = add(%i, 8'd1)
+      if eq(%i, 8'd2)
+        continue
+      end
+      %d = add(%d, %i)
+      memwrite @mem[%i[1:0]] = %d
+      wait on posedge %clk
+    end
+    %j = 8'd0
+    while lt(%j, 8'd10)
+      %j = add(%j, 8'd1)
+      if ge(%j, 8'd3)
+        break
+      end
+    end
+    %cnt = resize(%tick, u8)
+    repeat 8'd2
+      %cnt = add(%cnt, 8'd1)
+    end
+    block named
+      %d <= 8'd7 after 2 ns
+      {%hi, %lo} = %d
+    end
+    wait until %ready
+    assert error eq(%q, 8'd7) report "q is %h not 7", %q
+    assert note 1'd1
+    sys $write("done\n")
+    sys $finish()
+    stop
+    finish
+  end
+  process decode comb
+    case %mode unique
+      when 2'd0
+        %out = %hi
+      end
+      when 2'd1, 2'd2
+        %out = %lo
+      end
+      default
+        %out = 4'd0
+      end
+    end
+  end
+  process wild comb
+    casez %d
+      when 8'b1zzzzzzz
+        %addr = 2'd3
+      end
+      when 8'b01xxxxxx
+        %addr = 2'd2
+      end
+      default
+        %addr = 2'd0
+      end
+    end
+  end
+  process mixed sensitive %d, %hi
+    case %d
+      when %q
+        %sense = %hi
+      end
+      when 8'd1
+        %sense = %lo
+      end
+    end
+    %sense[0:0] = %ready
+  end
+end

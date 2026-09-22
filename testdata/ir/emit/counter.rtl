@@ -1,0 +1,24 @@
+top counter
+
+module counter
+  timescale 1 ns / 1 ps
+  param WIDTH = 8
+  net %clk u1 wire
+  net %rst u1 wire
+  net %en u1 wire
+  attr keep = 1
+  net %q u8 reg
+  port clk in %clk
+  port rst in %rst
+  port en in %en
+  port q out %q
+  process count seq posedge %clk
+    if %rst
+      %q <= 8'd0
+    else
+      if %en
+        %q <= add(%q, 8'd1)
+      end
+    end
+  end
+end

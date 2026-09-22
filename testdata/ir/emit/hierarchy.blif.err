@@ -1,0 +1,1 @@
+hierarchy.rtl:10:15: `add` is not a netlist connection; synthesise the design to cells first

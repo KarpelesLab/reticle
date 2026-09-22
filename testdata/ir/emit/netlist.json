@@ -1,0 +1,282 @@
+{
+  "creator": "reticle",
+  "modules": {
+    "counter_synth": {
+      "attributes": {
+        "top": 1
+      },
+      "ports": {
+        "clk": { "direction": "input", "bits": [ 2 ] },
+        "rst": { "direction": "input", "bits": [ 3 ] },
+        "en": { "direction": "input", "bits": [ 4 ] },
+        "q": { "direction": "output", "bits": [ 17, 18, 19, 20 ] },
+        "waddr": { "direction": "input", "bits": [ 5, 6, 7 ] },
+        "wdata": { "direction": "input", "bits": [ 8, 9, 10, 11, 12, 13, 14, 15 ] },
+        "we": { "direction": "input", "bits": [ 16 ] },
+        "mem_out": { "direction": "output", "bits": [ 21, 22, 23, 24, 25, 26, 27, 28 ] }
+      },
+      "cells": {
+        "add0": {
+          "hide_name": 0,
+          "type": "$add",
+          "parameters": {
+            "A_SIGNED": 0,
+            "B_SIGNED": 0,
+            "A_WIDTH": 4,
+            "B_WIDTH": 4,
+            "Y_WIDTH": 4
+          },
+          "attributes": {},
+          "port_directions": {
+            "A": "input",
+            "B": "input",
+            "Y": "output"
+          },
+          "connections": {
+            "A": [ 17, 18, 19, 20 ],
+            "B": [ "1", "0", "0", "0" ],
+            "Y": [ 33, 34, 35, 36 ]
+          }
+        },
+        "mux0": {
+          "hide_name": 0,
+          "type": "$mux",
+          "parameters": {
+            "WIDTH": 4
+          },
+          "attributes": {},
+          "port_directions": {
+            "A": "input",
+            "B": "input",
+            "S": "input",
+            "Y": "output"
+          },
+          "connections": {
+            "A": [ 17, 18, 19, 20 ],
+            "B": [ 33, 34, 35, 36 ],
+            "S": [ 4 ],
+            "Y": [ 29, 30, 31, 32 ]
+          }
+        },
+        "ff0": {
+          "hide_name": 0,
+          "type": "$sdff",
+          "parameters": {
+            "WIDTH": 4,
+            "CLK_POLARITY": 1,
+            "SRST_POLARITY": 1,
+            "SRST_VALUE": 0
+          },
+          "attributes": {},
+          "port_directions": {
+            "CLK": "input",
+            "SRST": "input",
+            "D": "input",
+            "Q": "output"
+          },
+          "connections": {
+            "CLK": [ 2 ],
+            "SRST": [ 3 ],
+            "D": [ 29, 30, 31, 32 ],
+            "Q": [ 17, 18, 19, 20 ]
+          }
+        },
+        "red0": {
+          "hide_name": 0,
+          "type": "$reduce_or",
+          "parameters": {
+            "A_SIGNED": 0,
+            "A_WIDTH": 4,
+            "Y_WIDTH": 1
+          },
+          "attributes": {},
+          "port_directions": {
+            "A": "input",
+            "Y": "output"
+          },
+          "connections": {
+            "A": [ 17, 18, 19, 20 ],
+            "Y": [ 37 ]
+          }
+        },
+        "and0": {
+          "hide_name": 0,
+          "type": "$and",
+          "parameters": {
+            "A_SIGNED": 0,
+            "B_SIGNED": 0,
+            "A_WIDTH": 1,
+            "B_WIDTH": 1,
+            "Y_WIDTH": 1
+          },
+          "attributes": {},
+          "port_directions": {
+            "A": "input",
+            "B": "input",
+            "Y": "output"
+          },
+          "connections": {
+            "A": [ 37 ],
+            "B": [ 4 ],
+            "Y": [ 38 ]
+          }
+        },
+        "lut0": {
+          "hide_name": 0,
+          "type": "$lut",
+          "parameters": {
+            "WIDTH": 2,
+            "LUT": 6
+          },
+          "attributes": {},
+          "port_directions": {
+            "A": "input",
+            "Y": "output"
+          },
+          "connections": {
+            "A": [ 37, 38 ],
+            "Y": [ 39 ]
+          }
+        },
+        "rd0": {
+          "hide_name": 0,
+          "type": "$memrd",
+          "parameters": {
+            "MEMID": "\\buf",
+            "ABITS": 3,
+            "WIDTH": 8,
+            "CLK_ENABLE": 0,
+            "CLK_POLARITY": 1,
+            "TRANSPARENT": 0
+          },
+          "attributes": {},
+          "port_directions": {
+            "CLK": "input",
+            "EN": "input",
+            "ADDR": "input",
+            "DATA": "output"
+          },
+          "connections": {
+            "CLK": [ "x" ],
+            "EN": [ "1" ],
+            "ADDR": [ 17, 18, 19 ],
+            "DATA": [ 21, 22, 23, 24, 25, 26, 27, 28 ]
+          }
+        },
+        "wr0": {
+          "hide_name": 0,
+          "type": "$memwr",
+          "parameters": {
+            "MEMID": "\\buf",
+            "ABITS": 3,
+            "WIDTH": 8,
+            "CLK_ENABLE": 1,
+            "CLK_POLARITY": 1,
+            "PRIORITY": 8
+          },
+          "attributes": {},
+          "port_directions": {
+            "CLK": "input",
+            "EN": "input",
+            "ADDR": "input",
+            "DATA": "input"
+          },
+          "connections": {
+            "CLK": [ 2 ],
+            "EN": [ 16, 16, 16, 16, 16, 16, 16, 16 ],
+            "ADDR": [ 5, 6, 7 ],
+            "DATA": [ 8, 9, 10, 11, 12, 13, 14, 15 ]
+          }
+        },
+        "bb0": {
+          "hide_name": 0,
+          "type": "SB_GB",
+          "parameters": {},
+          "attributes": {},
+          "port_directions": {
+            "USER_SIGNAL_TO_GLOBAL_BUFFER": "input"
+          },
+          "connections": {
+            "USER_SIGNAL_TO_GLOBAL_BUFFER": [ 39 ]
+          }
+        }
+      },
+      "memories": {
+        "buf": {
+          "hide_name": 0,
+          "attributes": {},
+          "width": 8,
+          "start_offset": 0,
+          "size": 8
+        }
+      },
+      "netnames": {
+        "clk": {
+          "hide_name": 0,
+          "bits": [ 2 ],
+          "attributes": {}
+        },
+        "rst": {
+          "hide_name": 0,
+          "bits": [ 3 ],
+          "attributes": {}
+        },
+        "en": {
+          "hide_name": 0,
+          "bits": [ 4 ],
+          "attributes": {}
+        },
+        "q": {
+          "hide_name": 0,
+          "bits": [ 17, 18, 19, 20 ],
+          "attributes": {}
+        },
+        "q_next": {
+          "hide_name": 0,
+          "bits": [ 29, 30, 31, 32 ],
+          "attributes": {}
+        },
+        "inc": {
+          "hide_name": 0,
+          "bits": [ 33, 34, 35, 36 ],
+          "attributes": {}
+        },
+        "carry": {
+          "hide_name": 0,
+          "bits": [ 37 ],
+          "attributes": {}
+        },
+        "sel": {
+          "hide_name": 0,
+          "bits": [ 38 ],
+          "attributes": {}
+        },
+        "lut_out": {
+          "hide_name": 0,
+          "bits": [ 39 ],
+          "attributes": {}
+        },
+        "mem_out": {
+          "hide_name": 0,
+          "bits": [ 21, 22, 23, 24, 25, 26, 27, 28 ],
+          "attributes": {}
+        },
+        "waddr": {
+          "hide_name": 0,
+          "bits": [ 5, 6, 7 ],
+          "attributes": {}
+        },
+        "wdata": {
+          "hide_name": 0,
+          "bits": [ 8, 9, 10, 11, 12, 13, 14, 15 ],
+          "attributes": {}
+        },
+        "we": {
+          "hide_name": 0,
+          "bits": [ 16 ],
+          "attributes": {}
+        }
+      }
+    }
+  }
+}

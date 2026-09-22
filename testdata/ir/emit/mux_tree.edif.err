@@ -1,0 +1,1 @@
+mux_tree.rtl:23:3: module `mux4` still has process `decode`; EDIF takes the cell form only, synthesise first

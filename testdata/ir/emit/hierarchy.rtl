@@ -1,0 +1,25 @@
+top top
+
+module adder
+  net %a u4 wire
+  net %b u4 wire
+  net %y u4 wire
+  port a in %a
+  port b in %b
+  port y out %y
+  assign %y = add(%a, %b)
+end
+
+module top
+  net %x u4 wire
+  net %y u4 wire
+  net %z u4 wire
+  net %t u4 wire
+  net %s u4 wire
+  port x in %x
+  port y in %y
+  port z in %z
+  port s out %s
+  instance u0 of adder (a=%x, b=%y, y=%t)
+  instance u1 of adder (a=%t, b=%z, y=%s)
+end

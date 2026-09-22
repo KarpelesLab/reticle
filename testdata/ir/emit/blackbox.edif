@@ -1,0 +1,63 @@
+(edif pll_wrap
+  (edifVersion 2 0 0)
+  (edifLevel 0)
+  (keywordMap (keywordLevel 0))
+  (status (written (timeStamp 1970 1 1 0 0 0) (program "reticle")))
+  (external LIB
+    (edifLevel 0)
+    (technology (numberDefinition))
+    (cell SB_PLL40_CORE (cellType GENERIC)
+      (view VIEW_NETLIST (viewType NETLIST)
+        (interface
+          (port REFERENCECLK (direction INPUT))
+          (port PLLOUTCORE (direction OUTPUT))
+          (port LOCK (direction OUTPUT))
+        )
+      )
+    )
+    (cell vendor_blinky (cellType GENERIC)
+      (view VIEW_NETLIST (viewType NETLIST)
+        (interface
+          (port clk (direction INPUT))
+          (port led (direction INPUT))
+        )
+      )
+    )
+  )
+  (library DESIGN
+    (edifLevel 0)
+    (technology (numberDefinition))
+    (cell pll_wrap (cellType GENERIC)
+      (view VIEW_NETLIST (viewType NETLIST)
+        (interface
+          (port clk_in (direction INPUT))
+          (port clk_out (direction OUTPUT))
+          (port locked (direction OUTPUT))
+          (port led (direction OUTPUT))
+        )
+        (contents
+          (instance pll (viewRef VIEW_NETLIST (cellRef SB_PLL40_CORE (libraryRef LIB))) (property DIVF (integer 63)) (property FEEDBACK_PATH (string "SIMPLE")) (property keep (integer 1)))
+          (instance blink (viewRef VIEW_NETLIST (cellRef vendor_blinky (libraryRef LIB))))
+          (net clk_in (joined
+            (portRef clk_in)
+            (portRef REFERENCECLK (instanceRef pll))
+          ))
+          (net clk_out (joined
+            (portRef clk_out)
+            (portRef PLLOUTCORE (instanceRef pll))
+            (portRef clk (instanceRef blink))
+          ))
+          (net locked (joined
+            (portRef locked)
+            (portRef LOCK (instanceRef pll))
+          ))
+          (net led (joined
+            (portRef led)
+            (portRef led (instanceRef blink))
+          ))
+        )
+      )
+    )
+  )
+  (design pll_wrap (cellRef pll_wrap (libraryRef DESIGN)))
+)

@@ -1,0 +1,104 @@
+{
+  "creator": "reticle",
+  "modules": {
+    "SB_PLL40_CORE": {
+      "attributes": {
+        "vendor": "lattice",
+        "blackbox": 1
+      },
+      "parameter_default_values": {
+        "DIVF": 63
+      },
+      "ports": {
+        "REFERENCECLK": { "direction": "input", "bits": [ 2 ] },
+        "PLLOUTCORE": { "direction": "output", "bits": [ 3 ] },
+        "LOCK": { "direction": "output", "bits": [ 4 ] }
+      },
+      "cells": {
+      "netnames": {
+        "REFERENCECLK": {
+          "hide_name": 0,
+          "bits": [ 2 ],
+          "attributes": {}
+        },
+        "PLLOUTCORE": {
+          "hide_name": 0,
+          "bits": [ 3 ],
+          "attributes": {}
+        },
+        "LOCK": {
+          "hide_name": 0,
+          "bits": [ 4 ],
+          "attributes": {}
+        }
+      }
+    },
+    "pll_wrap": {
+      "attributes": {
+        "top": 1
+      },
+      "ports": {
+        "clk_in": { "direction": "input", "bits": [ 2 ] },
+        "clk_out": { "direction": "output", "bits": [ 3 ] },
+        "locked": { "direction": "output", "bits": [ 4 ] },
+        "led": { "direction": "output", "bits": [ 5 ] }
+      },
+      "cells": {
+        "pll": {
+          "hide_name": 0,
+          "type": "SB_PLL40_CORE",
+          "parameters": {
+            "DIVF": 63,
+            "FEEDBACK_PATH": "SIMPLE"
+          },
+          "attributes": {
+            "keep": 1
+          },
+          "port_directions": {
+            "REFERENCECLK": "input",
+            "PLLOUTCORE": "output",
+            "LOCK": "output"
+          },
+          "connections": {
+            "REFERENCECLK": [ 2 ],
+            "PLLOUTCORE": [ 3 ],
+            "LOCK": [ 4 ]
+          }
+        },
+        "blink": {
+          "hide_name": 0,
+          "type": "vendor_blinky",
+          "parameters": {},
+          "attributes": {},
+          "port_directions": {},
+          "connections": {
+            "clk": [ 3 ],
+            "led": [ 5 ]
+          }
+        }
+      },
+      "netnames": {
+        "clk_in": {
+          "hide_name": 0,
+          "bits": [ 2 ],
+          "attributes": {}
+        },
+        "clk_out": {
+          "hide_name": 0,
+          "bits": [ 3 ],
+          "attributes": {}
+        },
+        "locked": {
+          "hide_name": 0,
+          "bits": [ 4 ],
+          "attributes": {}
+        },
+        "led": {
+          "hide_name": 0,
+          "bits": [ 5 ],
+          "attributes": {}
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,85 @@
+.model gates
+.inputs clk rst en a[0] a[1] b[0] b[1] s sel[0] sel[1] sel[2]
+.outputs n[0] n[1] o[0] o[1] x[0] x[1] m[0] m[1] p[0] p[1] all any par f q[0] q[1] r[0] r[1] l[0] l[1] copy[0] copy[1] inv_out bb_out
+.names $false
+.names $true
+1
+.names $undef
+.names a[0] n[0]
+0 1
+.names a[1] n[1]
+0 1
+.names a[0] b[0] o[0]
+1- 1
+-1 1
+.names a[1] b[1] o[1]
+1- 1
+-1 1
+.names a[0] $true x[0]
+10 1
+01 1
+.names a[1] $true x[1]
+10 1
+01 1
+.names a[0] b[0] s m[0]
+1-0 1
+-11 1
+.names a[1] b[1] s m[1]
+1-0 1
+-11 1
+.names a[0] n[0] a[0] b[0] sel[0] sel[1] sel[2] p[0]
+1---000 1
+-1--1-- 1
+--1--1- 1
+---1--1 1
+.names a[1] n[1] a[1] b[1] sel[0] sel[1] sel[2] p[1]
+1---000 1
+-1--1-- 1
+--1--1- 1
+---1--1 1
+.names a[0] a[1] all
+11 1
+.names a[0] a[1] any
+1- 1
+-1 1
+.names b[0] b[1] rxor0.x1
+10 1
+01 1
+.names rxor0.x1 a[0] rxor0.x2
+10 1
+01 1
+.names rxor0.x2 a[1] par
+10 1
+01 1
+.names a[0] a[1] s f
+100 1
+010 1
+001 1
+111 1
+.latch a[0] q[0] re clk 2
+.latch a[1] q[1] re clk 2
+.names rst en b[0] r[0] ff1.d3
+111- 1
+10-1 1
+.latch ff1.d3 r[0] fe clk 1
+.names rst en b[1] r[1] ff1.d4
+0--- 1
+111- 1
+10-1 1
+.latch ff1.d4 r[1] fe clk 0
+.latch m[0] l[0] ah en 2
+.latch m[1] l[1] ah en 2
+.subckt SB_LUT4 I0=s I1=all I2=$false I3=$undef O=bb_out
+.subckt inv a=s y=inv_out
+.names $true copy[0]
+1 1
+.names a[0] copy[1]
+1 1
+.end
+
+.model inv
+.inputs a
+.outputs y
+.names a y
+0 1
+.end

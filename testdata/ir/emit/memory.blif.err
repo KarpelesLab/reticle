@@ -1,0 +1,1 @@
+memory.rtl:21:3: module `ram` still has a process; BLIF takes the cell form only, synthesise first

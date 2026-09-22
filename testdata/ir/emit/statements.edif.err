@@ -1,0 +1,1 @@
+statements.rtl:26:3: module `tb` still has process `reset_ff`; EDIF takes the cell form only, synthesise first

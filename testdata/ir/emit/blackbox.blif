@@ -1,0 +1,6 @@
+.model pll_wrap
+.inputs clk_in
+.outputs clk_out locked led
+.subckt SB_PLL40_CORE REFERENCECLK=clk_in PLLOUTCORE=clk_out LOCK=locked
+.subckt vendor_blinky clk=clk_out led=led
+.end

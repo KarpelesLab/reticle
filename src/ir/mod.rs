@@ -47,6 +47,12 @@
 //! `.rtl` text format described in [`text`] and in `docs/ir.md`. It
 //! round-trips exactly and is what golden tests compare.
 //!
+//! # Emitters
+//!
+//! [`emit`] renders a design as Verilog, VHDL, Yosys JSON, BLIF or EDIF
+//! text; the HDL emitters take both forms, the netlist formats the cell
+//! form only.
+//!
 //! # Building
 //!
 //! [`builder::ModuleBuilder`] is the ergonomic way to construct modules
@@ -68,6 +74,7 @@ pub mod attr;
 pub mod builder;
 pub mod cell;
 pub mod design;
+pub mod emit;
 pub mod expr;
 pub mod process;
 pub mod text;

@@ -1,0 +1,113 @@
+top alu
+
+module alu
+  net %a s8 wire
+  net %b s8 wire
+  net %u u8 wire
+  net %n u3 wire
+  net %sum s8 wire
+  net %diff s8 wire
+  net %prod s8 wire
+  net %quot s8 wire
+  net %rem s8 wire
+  net %pw s8 wire
+  net %asr s8 wire
+  net %usr u8 wire
+  net %lsr s8 wire
+  net %shl s8 wire
+  net %lt u1 wire
+  net %ge u1 wire
+  net %eq u1 wire
+  net %mixed u8 wire
+  net %ext s16 wire
+  net %zext u16 wire
+  net %trunc u4 wire
+  net %sext_sum s16 wire
+  net %trunc_sum u4 wire
+  net %neg s8 wire
+  net %sel s8 wire
+  net %cat u16 wire
+  net %rep u16 wire
+  net %bit u1 wire
+  net %part u4 wire
+  net %part_dn u4 wire
+  net %par u1 wire
+  net %wild u1 wire
+  net %exact u1 wire
+  net %lnot u1 wire
+  net %land u1 wire
+  net %nested s8 wire
+  net %clk u1 wire
+  net %uq u8 reg
+  port a in %a
+  port b in %b
+  port u in %u
+  port n in %n
+  port sum out %sum
+  port diff out %diff
+  port prod out %prod
+  port quot out %quot
+  port rem out %rem
+  port pw out %pw
+  port asr out %asr
+  port usr out %usr
+  port lsr out %lsr
+  port shl out %shl
+  port lt out %lt
+  port ge out %ge
+  port eq out %eq
+  port mixed out %mixed
+  port ext out %ext
+  port zext out %zext
+  port trunc out %trunc
+  port sext_sum out %sext_sum
+  port trunc_sum out %trunc_sum
+  port neg out %neg
+  port sel out %sel
+  port cat out %cat
+  port rep out %rep
+  port bit out %bit
+  port part out %part
+  port part_dn out %part_dn
+  port par out %par
+  port wild out %wild
+  port exact out %exact
+  port lnot out %lnot
+  port land out %land
+  port nested out %nested
+  port clk in %clk
+  port uq out %uq
+  assign %sum = add(%a, %b)
+  assign %diff = sub(%a, %b)
+  assign %prod = mul(%a, %b)
+  assign %quot = div(%a, %b)
+  assign %rem = mod(%a, %b)
+  assign %pw = pow(%a, 8'sd2)
+  assign %asr = sshr(%a, %n)
+  assign %usr = sshr(%u, %n)
+  assign %lsr = shr(%a, %n)
+  assign %shl = shl(%a, 8'd1)
+  assign %lt = lt(%a, %b)
+  assign %ge = ge(%a, 8'sd0)
+  assign %eq = eq(%u, resize(%a, u8))
+  assign %mixed = add(%u, resize(%a, u8))
+  assign %ext = resize(%a, s16)
+  assign %zext = resize(%a, u16)
+  assign %trunc = resize(%a, u4)
+  assign %sext_sum = resize(add(%a, %b), s16)
+  assign %trunc_sum = resize(add(%u, %u), u4)
+  assign %neg = neg(%a)
+  assign %sel = mux(%lt, %a, %b)
+  assign %cat = {%a, %u}
+  assign %rep = {2{%u}}
+  assign %bit = %a[%n]
+  assign %part = %u[%n +: 4]
+  assign %part_dn = add(%a, %b)[8'd7 -: 4]
+  assign %par = rxor(%u)
+  assign %wild = weq(%u, 8'b1xxx0zz1)
+  assign %exact = ceq(%u, 8'bxxxxxxxx)
+  assign %lnot = lnot(%u)
+  assign %land = land(%lt, %ge)
+  assign %nested = sub(%a, add(%b, mul(%a, 8'sd3)))
+  cell ff dff pos (clk=not(%clk), d=%u) -> (q=%uq)
+end
