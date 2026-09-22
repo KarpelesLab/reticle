@@ -1,0 +1,26 @@
+top dup_logic
+
+module dup_logic
+  net %clk u1 wire
+  net %a u4 wire
+  net %b u4 wire
+  net %y1 u4 wire
+  net %y2 u4 wire
+  net %q1 u4 wire
+  net %q2 u4 wire
+  net %t1 u4 wire
+  net %q1$ff$and u4 wire
+  port clk in %clk
+  port a in %a
+  port b in %b
+  port y1 out %y1
+  port y2 out %y2
+  port q1 out %q1
+  port q2 out %q2
+  assign %y2 = %y1
+  assign %q2 = %q1
+  cell t1$add add (a=%a, b=%b) -> (y=%t1)
+  cell y1$xor xor (a=%t1, b=%a) -> (y=%y1)
+  cell q1$ff$and and (a=%t1, b=%b) -> (y=%q1$ff$and)
+  cell q1$ff dff pos (clk=%clk, d=%q1$ff$and) -> (q=%q1)
+end

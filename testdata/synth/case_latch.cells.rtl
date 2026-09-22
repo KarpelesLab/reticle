@@ -1,0 +1,36 @@
+top case_latch
+
+module case_latch
+  net %sel u2 wire
+  net %a u4 wire
+  net %b u4 wire
+  net %y u4 wire
+  net %z u4 wire
+  net %z$pmux u4 wire
+  net %y$pmux$or u4 wire
+  net %y$pmux$and u4 wire
+  net %y$pmux$eq u1 wire
+  net %y$pmux$eq_2 u1 wire
+  net %y$pmux$eq_3 u1 wire
+  net %y$pmux$eq_4 u1 wire
+  net %z$pmux$xor u4 wire
+  net %z$pmux$or u1 wire
+  net %z$latch$or u1 wire
+  port sel in %sel
+  port a in %a
+  port b in %b
+  port y out %y
+  port z out %z
+  cell y$pmux$or or (a=%a, b=%b) -> (y=%y$pmux$or)
+  cell y$pmux$and and (a=%a, b=%b) -> (y=%y$pmux$and)
+  cell y$pmux$eq eq (a=%sel, b=2'd3) -> (y=%y$pmux$eq)
+  cell y$pmux$eq_2 eq (a=%sel, b=2'd2) -> (y=%y$pmux$eq_2)
+  cell y$pmux$eq_3 eq (a=%sel, b=2'd1) -> (y=%y$pmux$eq_3)
+  cell y$pmux$eq_4 eq (a=%sel, b=2'd0) -> (y=%y$pmux$eq_4)
+  cell y$pmux pmux (a=4'bxxxx, b={%y$pmux$or, %y$pmux$and, %b, %a}, s={%y$pmux$eq, %y$pmux$eq_2, %y$pmux$eq_3, %y$pmux$eq_4}) -> (y=%y)
+  cell z$pmux$xor xor (a=%a, b=%b) -> (y=%z$pmux$xor)
+  cell z$pmux$or or (a=%y$pmux$eq_3, b=%y$pmux$eq_2) -> (y=%z$pmux$or)
+  cell z$pmux pmux (a=4'bxxxx, b={%z$pmux$xor, %a}, s={%z$pmux$or, %y$pmux$eq_4}) -> (y=%z$pmux)
+  cell z$latch$or or (a=%y$pmux$eq_4, b=%z$pmux$or) -> (y=%z$latch$or)
+  cell z$latch dlatch (en=%z$latch$or, d=%z$pmux) -> (q=%z)
+end

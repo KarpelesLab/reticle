@@ -1,0 +1,20 @@
+top counter_en
+
+module counter_en
+  net %clk u1 wire
+  net %rst u1 wire
+  net %en u1 wire
+  net %q u8 wire
+  net %wrap u1 wire
+  net %q$ff$add u8 wire
+  net %wrap$ff$eq u1 wire
+  port clk in %clk
+  port rst in %rst
+  port en in %en
+  port q out %q
+  port wrap out %wrap
+  cell q$ff$add add (a=%q, b=8'd1) -> (y=%q$ff$add)
+  cell q$ff dff pos en srst pos 8'd0 (clk=%clk, d=%q$ff$add, en=%en, rst=%rst) -> (q=%q)
+  cell wrap$ff$eq eq (a=%q, b=8'd255) -> (y=%wrap$ff$eq)
+  cell wrap$ff dff pos en srst pos 1'd0 (clk=%clk, d=%wrap$ff$eq, en=%en, rst=%rst) -> (q=%wrap)
+end

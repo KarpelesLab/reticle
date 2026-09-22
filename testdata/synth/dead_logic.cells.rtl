@@ -1,0 +1,15 @@
+top dead_logic
+
+module dead_logic
+  net %clk u1 wire
+  net %a u4 wire
+  net %b u4 wire
+  net %y u4 wire
+  net %tmp u4 wire
+  port clk in %clk
+  port a in %a
+  port b in %b
+  port y out %y
+  cell tmp$and and (a=%a, b=%b) -> (y=%tmp)
+  cell y$or or (a=%tmp, b=%b) -> (y=%y)
+end

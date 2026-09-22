@@ -1,0 +1,17 @@
+top unsynth
+
+module unsynth
+  net %clk u1 wire
+  net %a u1 wire
+  net %y u1 wire
+  attr init = 8'd0
+  net %count u8 reg
+  port clk in %clk
+  port a in %a
+  port y out %y
+  process ticker free
+    wait for 8'd10
+    %count = add(%count, 8'd1)
+  end
+  cell y$ff dff pos (clk=%clk, d=%a) -> (q=%y)
+end

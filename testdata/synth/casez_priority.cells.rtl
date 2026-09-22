@@ -1,0 +1,30 @@
+top casez_priority
+
+module casez_priority
+  net %req u4 wire
+  net %grant u2 wire
+  net %valid u1 wire
+  net %grant$eq u1 wire
+  net %grant$eq_2 u1 wire
+  net %grant$eq_3 u1 wire
+  net %grant$eq_4 u1 wire
+  net %grant$mux u2 wire
+  net %grant$mux_2 u2 wire
+  net %grant$mux_3 u2 wire
+  net %valid$or u1 wire
+  net %valid$or_2 u1 wire
+  port req in %req
+  port grant out %grant
+  port valid out %valid
+  cell grant$eq eq (a=%req[0:0], b=1'd1) -> (y=%grant$eq)
+  cell grant$eq_2 eq (a=%req[1:1], b=1'd1) -> (y=%grant$eq_2)
+  cell grant$eq_3 eq (a=%req[2:2], b=1'd1) -> (y=%grant$eq_3)
+  cell grant$eq_4 eq (a=%req[3:3], b=1'd1) -> (y=%grant$eq_4)
+  cell grant$mux mux (a=2'd0, b=2'd3, s=%grant$eq_4) -> (y=%grant$mux)
+  cell grant$mux_2 mux (a=%grant$mux, b=2'd2, s=%grant$eq_3) -> (y=%grant$mux_2)
+  cell grant$mux_3 mux (a=%grant$mux_2, b=2'd1, s=%grant$eq_2) -> (y=%grant$mux_3)
+  cell grant$mux_4 mux (a=%grant$mux_3, b=2'd0, s=%grant$eq) -> (y=%grant)
+  cell valid$or or (a=%grant$eq_3, b=%grant$eq_4) -> (y=%valid$or)
+  cell valid$or_2 or (a=%grant$eq_2, b=%valid$or) -> (y=%valid$or_2)
+  cell valid$or_3 or (a=%grant$eq, b=%valid$or_2) -> (y=%valid)
+end

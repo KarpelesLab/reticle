@@ -37,7 +37,7 @@ vhdl = []
 # Event-driven 4-state simulator, waveform dumps (VCD/FST), co-simulation API.
 sim = []
 # Technology-independent synthesis: process lowering, FSM/memory/FF inference,
-# logic optimisation, plus generic LUT and cell mapping.
+# logic optimisation, cellification, plus generic LUT and cell mapping.
 synth = []
 
 # --- backends & targets (land as they are implemented, see ROADMAP.md) ---

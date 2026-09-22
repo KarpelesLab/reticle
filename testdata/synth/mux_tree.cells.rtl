@@ -1,0 +1,28 @@
+top mux_tree
+
+module mux_tree
+  net %a u1 wire
+  net %b u1 wire
+  net %c u1 wire
+  net %x u8 wire
+  net %y u8 wire
+  net %out u8 wire
+  net %flag u1 wire
+  net %out$mux u8 wire
+  net %out$add u8 wire
+  net %out$mux_2 u8 wire
+  net %flag$not u1 wire
+  port a in %a
+  port b in %b
+  port c in %c
+  port x in %x
+  port y in %y
+  port out out %out
+  port flag out %flag
+  cell out$mux mux (a=%y, b=%x, s=%b) -> (y=%out$mux)
+  cell out$add add (a=%x, b=%y) -> (y=%out$add)
+  cell out$mux_2 mux (a=8'd0, b=%out$add, s=%c) -> (y=%out$mux_2)
+  cell out$mux_3 mux (a=%out$mux_2, b=%out$mux, s=%a) -> (y=%out)
+  cell flag$not not (a=%b) -> (y=%flag$not)
+  cell flag$and and (a=%a, b=%flag$not) -> (y=%flag)
+end

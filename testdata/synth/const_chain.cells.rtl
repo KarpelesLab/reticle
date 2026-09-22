@@ -1,0 +1,23 @@
+top const_chain
+
+module const_chain
+  net %a u8 wire
+  net %s u1 wire
+  net %y u8 wire
+  net %z u8 wire
+  net %w u4 wire
+  net %f u1 wire
+  net %g u8 wire
+  port a in %a
+  port s in %s
+  port y out %y
+  port z out %z
+  port w out %w
+  port f out %f
+  port g out %g
+  assign %y = %a
+  assign %z = resize(%a[3:0], u8)
+  assign %w = %a[7:4]
+  assign %f = %s
+  assign %g = %a
+end

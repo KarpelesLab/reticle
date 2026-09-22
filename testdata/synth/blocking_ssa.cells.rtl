@@ -1,0 +1,21 @@
+top blocking_ssa
+
+module blocking_ssa
+  net %a u4 wire
+  net %b u4 wire
+  net %c u4 wire
+  net %y u4 wire
+  net %y$and u4 wire
+  net %y$or u4 wire
+  net %y$eq u1 wire
+  net %y$mux u4 wire
+  port a in %a
+  port b in %b
+  port c in %c
+  port y out %y
+  cell y$and and (a=%a, b=%b) -> (y=%y$and)
+  cell y$or or (a=%y$and, b=%c) -> (y=%y$or)
+  cell y$eq eq (a=%y$or, b=4'd0) -> (y=%y$eq)
+  cell y$mux mux (a=%y$or, b=4'd15, s=%y$eq) -> (y=%y$mux)
+  cell y$xor xor (a=%y$mux, b=%a) -> (y=%y)
+end

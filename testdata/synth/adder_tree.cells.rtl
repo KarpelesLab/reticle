@@ -1,0 +1,15 @@
+top adder_tree
+
+module adder_tree
+  net %a u16 wire
+  net %sum u8 wire
+  net %sum$add u5 wire
+  net %sum$add_2 u6 wire
+  net %sum$add_3 u7 wire
+  port a in %a
+  port sum out %sum
+  assign %sum = resize(%sum$add_3, u8)
+  cell sum$add add (a=resize(%a[3:0], u5), b=resize(%a[7:4], u5)) -> (y=%sum$add)
+  cell sum$add_2 add (a=resize(%sum$add, u6), b=resize(%a[11:8], u6)) -> (y=%sum$add_2)
+  cell sum$add_3 add (a=resize(%sum$add_2, u7), b=resize(%a[15:12], u7)) -> (y=%sum$add_3)
+end

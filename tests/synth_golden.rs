@@ -1,11 +1,15 @@
 //! Golden tests for the synthesis pipeline.
 //!
-//! Every `testdata/synth/<name>.rtl` (process form) is parsed, validated,
-//! run through [`reticle::synth::run`] with the default options, and the
-//! resulting `.rtl` text must match `<name>.synth.rtl`. Diagnostics are
-//! rendered and compared with `<name>.diag` when that file exists (or when
-//! any diagnostic was produced). The output design must validate. Set
-//! `UPDATE_EXPECT=1` to rewrite the expectations after an intended change.
+//! Every `testdata/synth/<name>.rtl` (process form) is parsed, validated
+//! and run through [`reticle::synth::run`] twice: once with
+//! `cellify` off, whose result must match `<name>.synth.rtl` (the
+//! expression form the optimisation loop leaves), and once with the
+//! default options, whose result must match `<name>.cells.rtl` (the
+//! netlist of cells the default pipeline produces). Both must validate
+//! and print back identically. Diagnostics are rendered and compared with
+//! `<name>.diag` when that file exists (or when any diagnostic was
+//! produced). Set `UPDATE_EXPECT=1` to rewrite the expectations after an
+//! intended change.
 
 #![cfg(feature = "synth")]
 
@@ -25,7 +29,7 @@ fn inputs() -> Vec<PathBuf> {
         .map(|entry| entry.unwrap().path())
         .filter(|p| {
             let name = p.file_name().unwrap().to_string_lossy();
-            name.ends_with(".rtl") && !name.ends_with(".synth.rtl")
+            name.ends_with(".rtl") && !name.ends_with(".synth.rtl") && !name.ends_with(".cells.rtl")
         })
         .collect();
     paths.sort();
@@ -93,40 +97,67 @@ fn golden_synthesis() {
             continue;
         }
 
+        // Two expectations per design: the expression form the
+        // optimisation loop leaves (`.synth.rtl`), and what the default
+        // pipeline produces once `cellify` has turned every expression
+        // into cells (`.cells.rtl`).
+        let mut expressions = design.clone();
+        let mut ignored = Diagnostics::new();
+        let stats = run(
+            &mut expressions,
+            &SynthOptions {
+                validate: true,
+                cellify: false,
+                ..SynthOptions::default()
+            },
+            &mut ignored,
+        );
+        assert!(stats.iterations >= 1, "{name}: pipeline did not run");
+
         let mut diags = Diagnostics::new();
         let options = SynthOptions {
             validate: true,
             ..SynthOptions::default()
         };
-        let stats = run(&mut design, &options, &mut diags);
-        assert!(stats.iterations >= 1, "{name}: pipeline did not run");
+        run(&mut design, &options, &mut diags);
         diags.sort();
 
-        let problems = validate(&design);
-        if problems.has_errors() {
-            failures.push(format!("{name}: output invalid\n{}", problems.render(&map)));
+        for (design, suffix) in [(&expressions, "synth"), (&design, "cells")] {
+            let problems = validate(design);
+            if problems.has_errors() {
+                failures.push(format!(
+                    "{name}: {suffix} output invalid\n{}",
+                    problems.render(&map)
+                ));
+            }
+            let printed = design.to_text();
+            check(
+                &path.with_file_name(format!("{stem}.{suffix}.rtl")),
+                &printed,
+                update,
+                &mut failures,
+            );
+
+            // The printed result must load back and print identically.
+            let mut map2 = SourceMap::new();
+            let file2 = map2.add(name.clone(), printed.clone()).unwrap();
+            match Design::parse_text(&printed, file2) {
+                Ok(again) => {
+                    if again.to_text() != printed {
+                        failures.push(format!(
+                            "{name}: {suffix} output is not a print fixed point"
+                        ));
+                    }
+                }
+                Err(diags) => failures.push(format!(
+                    "{name}: {suffix} output does not parse\n{}",
+                    diags.render(&map2)
+                )),
+            }
         }
 
-        let out_path = path.with_file_name(format!("{stem}.synth.rtl"));
-        check(&out_path, &design.to_text(), update, &mut failures);
         let diag_path = path.with_file_name(format!("{stem}.diag"));
         check(&diag_path, &diags.render(&map), update, &mut failures);
-
-        // The printed result must load back and print identically.
-        let printed = design.to_text();
-        let mut map2 = SourceMap::new();
-        let file2 = map2.add(name.clone(), printed.clone()).unwrap();
-        match Design::parse_text(&printed, file2) {
-            Ok(again) => {
-                if again.to_text() != printed {
-                    failures.push(format!("{name}: output is not a print fixed point"));
-                }
-            }
-            Err(diags) => failures.push(format!(
-                "{name}: output does not parse\n{}",
-                diags.render(&map2)
-            )),
-        }
     }
 
     assert!(failures.is_empty(), "\n{}", failures.join("\n"));

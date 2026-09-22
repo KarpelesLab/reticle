@@ -18,6 +18,12 @@
 //!    [`SynthOptions::max_iterations`]): [`opt::ConstFold`], [`opt::Dce`],
 //!    [`fsm::Fsm`] (when enabled), [`opt::Merge`], [`opt::ConstFold`],
 //!    [`opt::WReduce`], [`opt::FfOpt`], [`opt::Dce`].
+//! 3. [`cellify::Cellify`] (unless [`SynthOptions::cellify`] is off),
+//!    followed by [`opt::Merge`] and [`opt::Dce`]: the expression trees
+//!    that survived in cell inputs and continuous assignments become
+//!    discrete cells, so the design can be written as a netlist. It runs
+//!    after the loop because the optimiser is most effective on the
+//!    expression form.
 //!
 //! Every pass implements [`Pass`] and reports [`PassStats`]; a
 //! [`PassManager`] runs a custom sequence when the default is not wanted.
@@ -27,10 +33,13 @@
 //!
 //! # Output conventions
 //!
-//! - Combinational logic stays as expression trees on `assign` statements
-//!   and cell inputs: `if` becomes a `mux(...)` ternary, a priority `case`
-//!   a chain of them, a parallel `case` a `pmux` cell. Nothing is broken
-//!   into gate-level cells yet; that is technology mapping's job.
+//! - Combinational logic is built as expression trees on `assign`
+//!   statements and cell inputs: `if` becomes a `mux(...)` ternary, a
+//!   priority `case` a chain of them, a parallel `case` a `pmux` cell.
+//!   [`cellify::Cellify`] then turns each operator into a cell of the
+//!   matching kind, leaving only netlist connections (constants, nets,
+//!   slices, concatenations, resizes) on the ports. Nothing is broken
+//!   down to gate level; that is technology mapping's job.
 //! - `dff` cells: `rst` (synchronous or asynchronous) has priority over
 //!   `en`, matching the `if (rst) ... else if (en) ...` shape they are
 //!   inferred from.
@@ -53,10 +62,20 @@
 //!
 //! [`report`] summarises the result (cell counts, inferred storage with
 //! source spans) as text.
+//!
+//! # Diagnostics
+//!
+//! | Code    | Meaning                                                      |
+//! |---------|--------------------------------------------------------------|
+//! | `S0001` | The design is not valid; synthesis did not run               |
+//! | `S0010` .. `S0020` | Process lowering and FSM extraction (see [`proc`], [`fsm`]) |
+//! | `S0030` | A construct [`cellify`] cannot turn into cells               |
+//! | `S0031` .. `S0033` | Reserved for post-synthesis verification          |
 
 use crate::diag::{Diagnostic, Diagnostics};
 use crate::ir::{Design, Module, ModuleId};
 
+pub mod cellify;
 pub mod eval;
 pub mod fsm;
 pub mod opt;
@@ -116,6 +135,10 @@ impl FsmEncoding {
 /// Knobs for [`run`].
 #[derive(Clone, Debug)]
 pub struct SynthOptions {
+    /// Replace the expression trees left in cell inputs and continuous
+    /// assignments with discrete cells ([`cellify::Cellify`]), so the
+    /// result can be written as a netlist. On by default.
+    pub cellify: bool,
     /// How state registers are re-encoded.
     pub fsm_encoding: FsmEncoding,
     /// Reserved for the flattening step of a later phase: when true,
@@ -135,6 +158,7 @@ pub struct SynthOptions {
 impl Default for SynthOptions {
     fn default() -> Self {
         SynthOptions {
+            cellify: true,
             fsm_encoding: FsmEncoding::Auto,
             keep_hierarchy: true,
             max_iterations: 8,
@@ -306,6 +330,17 @@ pub fn run(design: &mut Design, options: &SynthOptions, diags: &mut Diagnostics)
         stats.iterations += 1;
         if !changed {
             break;
+        }
+    }
+
+    if options.cellify {
+        let s = run_pass(&cellify::Cellify, design, options, diags);
+        stats.passes.push(("cellify".to_owned(), s));
+        // Share the cells the rewrite duplicated, then collect the nets and
+        // expression nodes it orphaned.
+        for pass in [&opt::Merge as &dyn Pass, &opt::Dce] {
+            let s = run_pass(pass, design, options, diags);
+            stats.passes.push((pass.name().to_owned(), s));
         }
     }
 
