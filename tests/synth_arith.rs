@@ -18,13 +18,16 @@
 //! proved too and not merely the sum.
 //!
 //! Two exceptions, both stated rather than hidden. The **multipliers**
-//! are proved at 1, 2, 3, 7 and 8 bits in every run (the full `2n`-bit
-//! product to 6); at 13 and 16 the miter of two structurally different
-//! multipliers is the textbook hard instance for a CDCL solver, so that
-//! proof is a separate `#[ignore]`d test and those widths are covered in
-//! the ordinary run by
-//! `wide_multipliers_match_over_random_vectors`, which is a check and
-//! not a proof. The **dividers** are proved to 8 bits, which is the
+//! are proved at every width, including the full `2n`-bit product at
+//! 7 and 8 bits, but the 16-bit proofs of the Booth and tree
+//! architectures run in optimised test builds only (`cargo test
+//! --release`): the miter of two structurally different multipliers is
+//! the textbook hard instance for SAT, SAT sweeping does not change that
+//! (the two share no internal signal to merge), and what settles it is
+//! enumerating all `2^32` inputs, half a minute a pair optimised and
+//! half an hour unoptimised. An unoptimised run covers those six pairs
+//! with `wide_multipliers_match_over_random_vectors`, which is a check
+//! and not a proof. The **dividers** are proved to 8 bits, which is the
 //! default width threshold: above it the pass leaves the cell generic,
 //! so there is nothing there to prove.
 //!
@@ -64,9 +67,9 @@ use reticle::synth::report::Report;
 #[cfg(feature = "formal")]
 const WIDTHS: [u32; 7] = [1, 2, 3, 7, 8, 13, 16];
 
-/// The widths the multipliers are proved at in every run; see
-/// `equivalence::wide_multipliers_match_the_generic_cell` for the other
-/// two and why they are apart.
+/// The widths the truncated multipliers are proved at alongside the
+/// other architectures; 13 and 16 bits have tests of their own (see
+/// `equivalence::thirteen_bits` and `equivalence::sixteen_bits` for why).
 #[cfg(feature = "formal")]
 const NARROW: [u32; 5] = [1, 2, 3, 7, 8];
 
@@ -900,9 +903,9 @@ fn to_text(module: &Module) -> String {
 /// Feeds `module` every corner case and `count` random vectors,
 /// comparing the output against `model`.
 ///
-/// This is a *check*, not a proof, and exists for the two widths where
-/// `check_equivalent` is impractical; see
-/// `equivalence::wide_multipliers_match_the_generic_cell`.
+/// This is a *check*, not a proof. It exists for the 16-bit Booth and
+/// tree multipliers, whose proof is too slow for an unoptimised build;
+/// see `equivalence::sixteen_bits`.
 fn check_over_vectors(
     what: &str,
     module: &Module,
@@ -954,9 +957,8 @@ fn check_over_vectors(
     }
 }
 
-/// The widths `check_equivalent` cannot reach for a multiplier, checked
-/// over vectors instead so a regression at those widths is still
-/// caught by an ordinary test run.
+/// The wide multipliers over vectors, so that an unoptimised test run,
+/// which skips the 16-bit proofs, still catches a regression there.
 #[test]
 fn wide_multipliers_match_over_random_vectors() {
     for arch in MultiplierArch::ALL {
@@ -1361,13 +1363,20 @@ fn a_shared_product_is_not_a_multiply_add() {
 mod equivalence {
     use super::*;
 
-    use reticle::formal::{EquivOptions, check_equivalent};
+    use std::collections::BTreeMap;
+
+    use common::CellEval;
+    use reticle::formal::{
+        EquivEngine, EquivOptions, EquivOutcome, EquivReport, SweepOptions, check_equivalent,
+    };
+    use reticle::logic::Logic;
 
     /// Proves `built` computes what `reference` does, for every input.
     ///
-    /// Both modules are combinational, so the check is a single SAT
-    /// call on the miter: `Equivalent` means *proved*, over all
-    /// `2^inputs` vectors, not sampled.
+    /// Both modules are combinational, so the default engine decides the
+    /// miter outright (a direct SAT attempt, then SAT sweeping, or
+    /// exhaustive simulation when the inputs are few): `Equivalent`
+    /// means *proved*, over all `2^inputs` vectors, not sampled.
     fn assert_equivalent(what: &str, reference: Module, built: Module) {
         let mut design = Design::new();
         let a = design.add_module(reference);
@@ -1444,52 +1453,472 @@ mod equivalence {
         }
     }
 
-    /// The two remaining widths of [`WIDTHS`] for the multipliers.
+    /// Proves one multiplier architecture against the generic cell with
+    /// `options`, and returns the report for its statistics.
+    fn prove_multiplier(
+        arch: MultiplierArch,
+        w: u32,
+        signed: bool,
+        out: u32,
+        options: &EquivOptions,
+    ) -> EquivReport {
+        let mut design = Design::new();
+        let a = design.add_module(multiplier_reference("generic", w, signed, out));
+        let b = design.add_module(multiplier_built(
+            "built",
+            w,
+            signed,
+            out,
+            MultiplierOptions::new(arch),
+        ));
+        let report = check_equivalent(&design, a, b, options);
+        assert!(
+            report.equivalent(),
+            "{} multiplier, {w} bits to {out}, signed {signed}: {}",
+            arch.name(),
+            report.render("generic", "built")
+        );
+        report
+    }
+
+    /// The full `2n`-bit product at seven and eight bits, for every
+    /// architecture and both signednesses.
     ///
-    /// The miter of two *structurally different* multipliers is the
-    /// textbook hard instance for a CDCL solver: the tree architectures
-    /// share no internal equivalence with the reference's row-at-a-time
-    /// array, so there is nothing for the solver to propagate and it
-    /// falls back on case splitting. At eight bits every pairing here
-    /// is proved in seconds; at thirteen and sixteen it is minutes to
-    /// hours, which is why this test is ignored by default rather than
-    /// deleted. Run it with
-    ///
-    /// ```sh
-    /// cargo test --features synth,formal --test synth_arith -- --ignored
-    /// ```
-    ///
-    /// The same widths are covered in every run by
-    /// `wide_multipliers_match_over_random_vectors`, which is a check
-    /// and not a proof and says so.
+    /// Sixteen inputs are few enough that the engine settles each pair by
+    /// simulating all `2^16` input patterns (1024 words) unless the
+    /// direct attempt already has: a proof, in milliseconds.
     #[test]
-    #[ignore = "a 13- or 16-bit multiplier miter can take hours of SAT"]
-    fn wide_multipliers_match_the_generic_cell() {
+    fn full_multipliers_at_seven_and_eight_bits_match_the_generic_cell() {
         for arch in MultiplierArch::ALL {
             for signed in [false, true] {
                 for w in [7u32, 8] {
-                    assert_equivalent(
-                        &format!("{} full multiplier, {w} bits, signed {signed}", arch.name()),
-                        multiplier_reference("generic", w, signed, 2 * w),
-                        multiplier_built("built", w, signed, 2 * w, MultiplierOptions::new(arch)),
-                    );
-                }
-                for w in [13u32, 16] {
-                    assert_equivalent(
-                        &format!("{} multiplier, {w} bits, signed {signed}", arch.name()),
-                        multiplier_reference("generic", w, signed, w),
-                        multiplier_built("built", w, signed, w, MultiplierOptions::new(arch)),
-                    );
+                    prove_multiplier(arch, w, signed, 2 * w, &EquivOptions::default());
                 }
             }
         }
+    }
+
+    /// The array multiplier at the two wide widths: its row-at-a-time
+    /// accumulation is the generic cell's own, so both sides blast to the
+    /// same gates and the miter folds to a constant before any search.
+    #[test]
+    fn wide_array_multipliers_match_the_generic_cell() {
+        for w in [13u32, 16] {
+            for signed in [false, true] {
+                prove_multiplier(
+                    MultiplierArch::Array,
+                    w,
+                    signed,
+                    w,
+                    &EquivOptions::default(),
+                );
+            }
+        }
+    }
+
+    /// A 13-bit multiplier from a tree or a Booth recoding against the
+    /// generic cell's array.
+    ///
+    /// SAT sweeping does not make these easy: a carry-save tree and a
+    /// row-at-a-time array share no internal signal beyond the partial
+    /// products and the low output bits, so the sweep merges those and
+    /// what is left is as hard as the whole miter was (the numbers are in
+    /// `docs/arithmetic.md`). Twenty-six inputs are still few enough to
+    /// enumerate: `2^20` words of simulation, within the default
+    /// [`SweepOptions::exhaustive_budget`], a fraction of a second
+    /// optimised and some seconds not.
+    fn thirteen_bits(arch: MultiplierArch) {
+        for signed in [false, true] {
+            let report = prove_multiplier(arch, 13, signed, 13, &EquivOptions::default());
+            if let Some(stats) = report.sweep {
+                assert!(stats.exhaustive, "{stats:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn booth4_multipliers_at_thirteen_bits_match_the_generic_cell() {
+        thirteen_bits(MultiplierArch::Booth4);
+    }
+
+    #[test]
+    fn wallace_multipliers_at_thirteen_bits_match_the_generic_cell() {
+        thirteen_bits(MultiplierArch::Wallace);
+    }
+
+    #[test]
+    fn dadda_multipliers_at_thirteen_bits_match_the_generic_cell() {
+        thirteen_bits(MultiplierArch::Dadda);
+    }
+
+    /// A 16-bit multiplier from a tree or a Booth recoding against the
+    /// generic cell's array: all `2^32` input patterns, enumerated.
+    ///
+    /// That is a proof, and about half a minute a pair in an optimised
+    /// build; unoptimised it is closer to half an hour, which is why these
+    /// run in release test builds only:
+    ///
+    /// ```sh
+    /// cargo test --release --features synth,formal --test synth_arith sixteen
+    /// ```
+    ///
+    /// Neither SAT sweeping nor the monolithic miter settles these pairs
+    /// in hours; `docs/arithmetic.md` has the measurements and the
+    /// reason.
+    fn sixteen_bits(arch: MultiplierArch) {
+        let options = EquivOptions {
+            engine: EquivEngine::Sweep(SweepOptions {
+                exhaustive_budget: u64::MAX,
+                ..SweepOptions::default()
+            }),
+            ..EquivOptions::default()
+        };
+        for signed in [false, true] {
+            prove_multiplier(arch, 16, signed, 16, &options);
+        }
+    }
+
+    #[test]
+    #[cfg_attr(
+        debug_assertions,
+        ignore = "2^32 patterns: half a minute optimised; run with --release"
+    )]
+    fn booth4_multipliers_at_sixteen_bits_match_the_generic_cell() {
+        sixteen_bits(MultiplierArch::Booth4);
+    }
+
+    #[test]
+    #[cfg_attr(
+        debug_assertions,
+        ignore = "2^32 patterns: half a minute optimised; run with --release"
+    )]
+    fn wallace_multipliers_at_sixteen_bits_match_the_generic_cell() {
+        sixteen_bits(MultiplierArch::Wallace);
+    }
+
+    #[test]
+    #[cfg_attr(
+        debug_assertions,
+        ignore = "2^32 patterns: half a minute optimised; run with --release"
+    )]
+    fn dadda_multipliers_at_sixteen_bits_match_the_generic_cell() {
+        sixteen_bits(MultiplierArch::Dadda);
+    }
+
+    /// `module` run through the AIG optimiser (balancing, rewriting,
+    /// refactoring) and written back as `And` / `Not` cells: the same
+    /// function with most of its structure changed, which is what
+    /// post-synthesis verification compares a netlist against.
+    fn optimised(module: &Module) -> Module {
+        use reticle::synth::aig;
+
+        let (mut g, mapping) = aig::from_module(module);
+        let options = aig::AigOptions {
+            fraig: false,
+            ..aig::AigOptions::default()
+        };
+        aig::optimize(&mut g, &options);
+        let mut out = module.clone();
+        aig::to_module(&g, &mapping, &mut out);
+        out.name = Name::new("optimised");
+        checked(out)
+    }
+
+    /// Where SAT sweeping pays: a 16-bit multiplier of each architecture
+    /// against its own optimised netlist, truncated and as a full signed
+    /// product. The two share most of their internal signals without
+    /// sharing their gates, so the sweep proves those bottom-up and the
+    /// outputs follow in milliseconds; the same Dadda pair handed whole to
+    /// the solver took ten minutes at sixteen bits, optimised.
+    #[test]
+    fn multipliers_match_their_optimised_netlists() {
+        for arch in MultiplierArch::ALL {
+            for (signed, out) in [(false, 16u32), (true, 32)] {
+                let built =
+                    multiplier_built("built", 16, signed, out, MultiplierOptions::new(arch));
+                let mut design = Design::new();
+                let a = design.add_module(optimised(&built));
+                let b = design.add_module(built);
+                let report = check_equivalent(&design, a, b, &EquivOptions::default());
+                assert!(
+                    report.equivalent(),
+                    "{} multiplier, 16 bits to {out}: {}",
+                    arch.name(),
+                    report.render("optimised", "built")
+                );
+                let stats = report.sweep.expect("too hard for the direct attempt");
+                assert!(!stats.exhaustive && stats.proved > 0, "{stats:?}");
+                assert_eq!(stats.remaining, 0, "the miter collapses: {stats:?}");
+            }
+        }
+    }
+
+    /// The input values of a counter-example trace, by port name.
+    fn trace_inputs(outcome: &EquivOutcome) -> BTreeMap<String, Logic> {
+        let EquivOutcome::Different { trace, .. } = outcome else {
+            panic!("expected a difference, got {outcome:?}");
+        };
+        trace.frames[0].inputs.iter().cloned().collect()
+    }
+
+    /// The value of output `y` of `module` on the given port values.
+    fn output_y(module: &Module, ports: &BTreeMap<String, Logic>) -> u64 {
+        let mut inputs = BTreeMap::new();
+        for (name, value) in ports {
+            inputs.insert(module.net_by_name(name).expect("a port"), value.clone());
+        }
+        let y = module.net_by_name("y").expect("a `y` port");
+        CellEval::new(module)
+            .eval(&inputs)
+            .get(&y)
+            .and_then(Logic::to_u64)
+            .expect("a known output")
+    }
+
+    /// `module` with its `index`-th `Xor` cell turned into an `Or`: one
+    /// wrong gate, which differs from the right one only when both of its
+    /// inputs are 1.
+    fn with_wrong_gate(module: &Module, index: usize) -> Module {
+        let mut out = module.clone();
+        let (_, cell) = out
+            .cells
+            .iter_mut()
+            .filter(|(_, c)| c.kind == CellKind::Xor)
+            .nth(index)
+            .expect("enough xor cells");
+        cell.kind = CellKind::Or;
+        out.name = Name::new("buggy");
+        out
+    }
+
+    /// How many of `count` random input vectors tell `a` and `b` apart,
+    /// by bit-parallel simulation of both.
+    fn disagreements(a: &Module, b: &Module, count: usize) -> usize {
+        use reticle::synth::aig::{self, Aig};
+
+        let (ga, _) = aig::from_module(a);
+        let (gb, _) = aig::from_module(b);
+        assert_eq!(ga.inputs().len(), gb.inputs().len());
+        let words = count.div_ceil(64);
+        let mut rng = common::Rng::new(0xB06);
+        let patterns: Vec<u64> = (0..ga.inputs().len() * words)
+            .map(|_| rng.next_u64())
+            .collect();
+        let (va, vb) = (ga.simulate(&patterns, words), gb.simulate(&patterns, words));
+        (0..words)
+            .map(|w| {
+                let diff = ga
+                    .outputs()
+                    .iter()
+                    .zip(gb.outputs())
+                    .fold(0u64, |acc, (&x, &y)| {
+                        acc | (Aig::sim_value(&va, words, x, w) ^ Aig::sim_value(&vb, words, y, w))
+                    });
+                diff.count_ones() as usize
+            })
+            .sum()
+    }
+
+    /// The soundness test the sweep must pass: one wrong gate deep inside
+    /// a 16-bit Dadda multiplier, chosen to be as rarely visible as the
+    /// sampled candidates allow, must be reported as a difference — with
+    /// a counter-example that really tells the two netlists apart when
+    /// both are evaluated on it — however the check is configured. A
+    /// sweep that merged a pair it had not proved would call this pair
+    /// equivalent.
+    #[test]
+    fn a_wrong_gate_deep_in_a_multiplier_is_found() {
+        let good = multiplier_built(
+            "good",
+            16,
+            false,
+            16,
+            MultiplierOptions::new(MultiplierArch::Dadda),
+        );
+        let xors = good
+            .cells
+            .values()
+            .filter(|c| c.kind == CellKind::Xor)
+            .count();
+        // Candidates from the middle of the tree; the one whose mutation
+        // the fewest random vectors notice.
+        let (rate, index) = (xors / 4..3 * xors / 4)
+            .step_by(xors / 16)
+            .map(|i| (disagreements(&good, &with_wrong_gate(&good, i), 4096), i))
+            .filter(|&(rate, _)| rate > 0)
+            .min()
+            .expect("a visible mutation");
+        let buggy = with_wrong_gate(&good, index);
+        assert!(rate < 4096, "{rate} of 4096 vectors disagree");
+
+        let sweep_only = EquivOptions {
+            engine: EquivEngine::Sweep(SweepOptions {
+                quick_conflicts: 0,
+                exhaustive_budget: 0,
+                ..SweepOptions::default()
+            }),
+            ..EquivOptions::default()
+        };
+        let references = [
+            (
+                "the generic cell",
+                multiplier_reference("generic", 16, false, 16),
+            ),
+            ("the optimised netlist", optimised(&good)),
+            ("the right netlist", good.clone()),
+        ];
+        for (label, reference) in references {
+            for (engine, options) in [
+                ("default", EquivOptions::default()),
+                ("sweep", sweep_only.clone()),
+            ] {
+                let mut design = Design::new();
+                let a = design.add_module(reference.clone());
+                let b = design.add_module(buggy.clone());
+                let report = check_equivalent(&design, a, b, &options);
+                let ports = trace_inputs(&report.outcome);
+                // Both netlists, evaluated on the counter-example.
+                assert_ne!(
+                    output_y(&good, &ports),
+                    output_y(&buggy, &ports),
+                    "against {label} ({engine}): the counter-example does not distinguish them"
+                );
+                let (x, y) = (ports["a"].to_u64().unwrap(), ports["b"].to_u64().unwrap());
+                assert_eq!(output_y(&good, &ports), x.wrapping_mul(y) & 0xFFFF);
+            }
+        }
+    }
+
+    /// The verdict, without the evidence.
+    fn kind(outcome: &EquivOutcome) -> &'static str {
+        match outcome {
+            EquivOutcome::Equivalent(_) => "equivalent",
+            EquivOutcome::Different { .. } => "different",
+            EquivOutcome::Unknown { .. } => "unknown",
+        }
+    }
+
+    /// The sweep and the monolithic engine must agree on every question
+    /// the monolithic one can finish: the architectures against their
+    /// generic cells at small widths, and the same with one wrong gate.
+    /// The sweep runs with neither the direct attempt nor exhaustive
+    /// simulation, so it is the sweep that answers, and exhaustive
+    /// simulation is checked on its own as well.
+    #[test]
+    fn the_sweep_agrees_with_the_monolithic_engine() {
+        let engines = [
+            ("monolithic", EquivEngine::Monolithic),
+            (
+                "sweep",
+                EquivEngine::Sweep(SweepOptions {
+                    quick_conflicts: 0,
+                    exhaustive_budget: 0,
+                    ..SweepOptions::default()
+                }),
+            ),
+            (
+                "simulation",
+                EquivEngine::Sweep(SweepOptions {
+                    quick_conflicts: 0,
+                    exhaustive_budget: u64::MAX,
+                    ..SweepOptions::default()
+                }),
+            ),
+        ];
+        let mut pairs: Vec<(String, Module, Module)> = Vec::new();
+        for arch in AdderArch::ALL {
+            for w in [1u32, 3, 8] {
+                pairs.push((
+                    format!("{} adder, {w} bits", arch.name()),
+                    adder_reference("generic", w),
+                    adder_built("built", w, AdderOptions::new(arch)),
+                ));
+            }
+            pairs.push((
+                format!("{} subtractor, 7 bits", arch.name()),
+                subtractor_reference("generic", 7),
+                subtractor_built("built", 7, AdderOptions::new(arch)),
+            ));
+        }
+        for arch in MultiplierArch::ALL {
+            for (w, out) in [(2u32, 2u32), (5, 5), (4, 8)] {
+                for signed in [false, true] {
+                    pairs.push((
+                        format!("{} multiplier, {w} to {out}, signed {signed}", arch.name()),
+                        multiplier_reference("generic", w, signed, out),
+                        multiplier_built("built", w, signed, out, MultiplierOptions::new(arch)),
+                    ));
+                }
+            }
+        }
+        for arch in CompareArch::ALL {
+            for signed in [false, true] {
+                pairs.push((
+                    format!("{} comparator pair, 7 bits, signed {signed}", arch.name()),
+                    compare_pair_reference("generic", 7, signed),
+                    compare_pair_built("built", 7, signed, arch),
+                ));
+            }
+        }
+        for signed in [false, true] {
+            pairs.push((
+                format!("divider, 4 bits, signed {signed}"),
+                divider_reference("generic", 4, signed),
+                divider_built("built", 4, signed, AdderOptions::default()),
+            ));
+        }
+        // One wrong gate in each of a few of them, which may or may not be
+        // visible: the engines must agree either way.
+        let mut wrong = Vec::new();
+        for (what, reference, built) in &pairs {
+            let xors = built
+                .cells
+                .values()
+                .filter(|c| c.kind == CellKind::Xor)
+                .count();
+            if xors > 2 && wrong.len() < 24 {
+                wrong.push((
+                    format!("{what}, one wrong gate"),
+                    reference.clone(),
+                    with_wrong_gate(built, xors / 2),
+                ));
+            }
+        }
+        pairs.extend(wrong);
+
+        let mut differences = 0;
+        for (what, reference, built) in pairs {
+            let mut design = Design::new();
+            let a = design.add_module(reference);
+            let b = design.add_module(built);
+            let verdicts: Vec<(&str, &str)> = engines
+                .iter()
+                .map(|(name, engine)| {
+                    let options = EquivOptions {
+                        engine: engine.clone(),
+                        ..EquivOptions::default()
+                    };
+                    (
+                        *name,
+                        kind(&check_equivalent(&design, a, b, &options).outcome),
+                    )
+                })
+                .collect();
+            assert!(
+                verdicts.iter().all(|v| v.1 == verdicts[0].1),
+                "{what}: {verdicts:?}"
+            );
+            assert_ne!(verdicts[0].1, "unknown", "{what}");
+            differences += usize::from(verdicts[0].1 == "different");
+        }
+        assert!(differences > 5, "only {differences} differences exercised");
     }
 
     /// The full product is where signedness stops being free: the
     /// Baugh-Wooley correction and the Booth recoding are both proved
     /// here. A full product is twice as wide as a truncated one, so its
     /// miter is the hard case sooner: up to six bits here, and seven and
-    /// eight in `wide_multipliers_match_the_generic_cell`.
+    /// eight in `full_multipliers_at_seven_and_eight_bits_match_the_generic_cell`.
     #[test]
     fn full_multipliers_match_the_generic_cell() {
         for arch in MultiplierArch::ALL {

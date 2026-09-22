@@ -38,14 +38,17 @@ use std::collections::HashMap;
 
 use super::sat::{Lit, Solver, Var};
 
-/// A gate in normalised form, the key of the structural hash table.
+/// A gate in normalised form: the key of the structural hash table, and
+/// the definition of the variable the gate introduced, which
+/// [`CnfBuilder::gate`] exposes so that a circuit can be read back out of
+/// the clauses (as [`super::sweep`] does to sweep it).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-enum Gate {
+pub enum Gate {
     /// `a & b` with `a < b`.
     And(Lit, Lit),
     /// `a ^ b` with both positive and `a < b`.
     Xor(Lit, Lit),
-    /// `c ? t : e` with `c` and `t` positive.
+    /// `c ? t : e` with `c` and `t` positive: condition, then, else.
     Ite(Lit, Lit, Lit),
 }
 
@@ -61,6 +64,12 @@ pub struct CnfBuilder {
     /// `bounds[i]..bounds[i + 1]` is clause `i` in `lits`.
     bounds: Vec<usize>,
     gates: HashMap<Gate, Lit>,
+    /// The gate defining each variable, indexed by variable; `None` for
+    /// the constant and for free variables.
+    defs: Vec<Option<Gate>>,
+    /// Indices of the clauses added through [`CnfBuilder::add_clause`]
+    /// (and its wrappers) rather than by a gate's encoding.
+    constraints: Vec<usize>,
 }
 
 impl Default for CnfBuilder {
@@ -77,6 +86,8 @@ impl CnfBuilder {
             lits: Vec::new(),
             bounds: vec![0],
             gates: HashMap::new(),
+            defs: vec![None],
+            constraints: Vec::new(),
         };
         b.add_unit(b.true_lit());
         b
@@ -106,6 +117,7 @@ impl CnfBuilder {
     pub fn new_var(&mut self) -> Lit {
         let v = Var::new(self.num_vars);
         self.num_vars += 1;
+        self.defs.push(None);
         Lit::pos(v)
     }
 
@@ -114,10 +126,46 @@ impl CnfBuilder {
         (0..n).map(|_| self.new_var()).collect()
     }
 
-    /// Adds a clause verbatim.
+    /// Adds a clause verbatim. It is a *constraint*: part of the formula,
+    /// but not the definition of any gate (see
+    /// [`CnfBuilder::constraints`]).
     pub fn add_clause(&mut self, lits: &[Lit]) {
+        self.constraints.push(self.num_clauses());
+        self.push_clause(lits);
+    }
+
+    /// Adds one clause of a gate's definition.
+    fn push_clause(&mut self, lits: &[Lit]) {
         self.lits.extend_from_slice(lits);
         self.bounds.push(self.lits.len());
+    }
+
+    /// Records the gate `key` as the definition of its fresh output `y`.
+    fn define(&mut self, key: Gate, y: Lit) {
+        self.gates.insert(key, y);
+        self.defs[y.var().index() as usize] = Some(key);
+    }
+
+    /// The gate whose output is `v`, or `None` for the constant and for a
+    /// free variable (an input, from the circuit's point of view).
+    ///
+    /// Every gate output is a fresh variable created after its operands,
+    /// so reading the definitions in variable order is a topological
+    /// walk of the circuit.
+    pub fn gate(&self, v: Var) -> Option<Gate> {
+        self.defs.get(v.index() as usize).copied().flatten()
+    }
+
+    /// The clauses that are not part of any gate's definition: the unit
+    /// fixing the constant, and everything added through
+    /// [`CnfBuilder::add_clause`], [`CnfBuilder::add_unit`] and
+    /// [`CnfBuilder::add_eq`]. The gate clauses only define outputs in
+    /// terms of inputs and are satisfiable for every input assignment,
+    /// so these are what actually constrain the formula.
+    pub fn constraints(&self) -> impl Iterator<Item = &[Lit]> {
+        self.constraints
+            .iter()
+            .map(|&i| &self.lits[self.bounds[i]..self.bounds[i + 1]])
     }
 
     /// Asserts `l`.
@@ -197,10 +245,10 @@ impl CnfBuilder {
             return y;
         }
         let y = self.new_var();
-        self.add_clause(&[!y, a]);
-        self.add_clause(&[!y, b]);
-        self.add_clause(&[y, !a, !b]);
-        self.gates.insert(key, y);
+        self.push_clause(&[!y, a]);
+        self.push_clause(&[!y, b]);
+        self.push_clause(&[y, !a, !b]);
+        self.define(key, y);
         y
     }
 
@@ -227,11 +275,11 @@ impl CnfBuilder {
                 Some(&y) => y,
                 None => {
                     let y = self.new_var();
-                    self.add_clause(&[!y, a, b]);
-                    self.add_clause(&[!y, !a, !b]);
-                    self.add_clause(&[y, !a, b]);
-                    self.add_clause(&[y, a, !b]);
-                    self.gates.insert(key, y);
+                    self.push_clause(&[!y, a, b]);
+                    self.push_clause(&[!y, !a, !b]);
+                    self.push_clause(&[y, !a, b]);
+                    self.push_clause(&[y, a, !b]);
+                    self.define(key, y);
                     y
                 }
             }
@@ -293,14 +341,14 @@ impl CnfBuilder {
             Some(&y) => y,
             None => {
                 let y = self.new_var();
-                self.add_clause(&[!y, !c, t]);
-                self.add_clause(&[!y, c, e]);
-                self.add_clause(&[y, !c, !t]);
-                self.add_clause(&[y, c, !e]);
+                self.push_clause(&[!y, !c, t]);
+                self.push_clause(&[!y, c, e]);
+                self.push_clause(&[y, !c, !t]);
+                self.push_clause(&[y, c, !e]);
                 // Redundant but propagation-strengthening.
-                self.add_clause(&[!y, t, e]);
-                self.add_clause(&[y, !t, !e]);
-                self.gates.insert(key, y);
+                self.push_clause(&[!y, t, e]);
+                self.push_clause(&[y, !t, !e]);
+                self.define(key, y);
                 y
             }
         };
@@ -677,6 +725,32 @@ mod tests {
         unsat.add_unit(p1);
         unsat.add_unit(!p2);
         assert_eq!(unsat.into_solver().solve(), SolveResult::Unsat);
+    }
+
+    #[test]
+    fn gates_can_be_read_back() {
+        let mut b = CnfBuilder::new();
+        let x = b.new_var();
+        let y = b.new_var();
+        let z = b.new_var();
+        let g = b.and(x, !y);
+        let h = b.xor(!x, z);
+        let m = b.ite(!x, y, z);
+        assert_eq!(b.gate(x.var()), None);
+        assert_eq!(b.gate(b.true_lit().var()), None);
+        assert_eq!(b.gate(g.var()), Some(Gate::And(x, !y)));
+        // Signs are pulled out of an xor and a negative condition swaps
+        // the branches.
+        assert_eq!(b.gate(h.var()), Some(Gate::Xor(x, z)));
+        assert!(h.is_neg());
+        assert_eq!(b.gate(m.var()), Some(Gate::Ite(x, z, y)));
+        // Only the constant's unit so far; then an explicit constraint.
+        assert_eq!(b.constraints().collect::<Vec<_>>(), [&[b.true_lit()][..]]);
+        b.add_eq(g, h);
+        let constraints: Vec<&[Lit]> = b.constraints().collect();
+        assert_eq!(constraints.len(), 3);
+        assert_eq!(constraints[1], &[!g, h]);
+        assert_eq!(b.clauses().count(), 1 + 3 + 4 + 6 + 2);
     }
 
     #[test]

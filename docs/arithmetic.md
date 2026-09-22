@@ -393,8 +393,9 @@ replaces, not tested against it. `tests/synth_arith.rs` builds each
 operation twice — once out of the generic cells (`add`, `mul`, `lt`,
 `shl`, `div`, …) and once out of the architecture — and hands the pair
 to `formal::check_equivalent`. Both modules are combinational, so the
-miter is a single SAT call and `Equivalent` means *for every input
-vector*, exhaustively, not sampled.
+checker decides the miter outright, by SAT, SAT sweeping or exhaustive
+simulation (see `docs/equivalence.md`), and `Equivalent` means *for
+every input vector*, not sampled.
 
 The widths are 1, 2, 3, 7, 8, 13 and 16: one bit, powers of two, one
 below a power of two, and two odd widths, which between them catch the
@@ -416,29 +417,75 @@ architecture fails immediately rather than in the integration suite.
 
 ### Two limits, stated rather than hidden
 
-**Multipliers at 13 and 16 bits are checked, not proved.** The miter of
-two structurally *different* multipliers is the textbook hard instance
-for a CDCL solver: a Wallace or Dadda tree shares no internal
-equivalence with the reference's row-at-a-time array, so there is
-nothing to propagate and the solver falls back on case splitting. The
-truncated product — the `mul` cell the pass replaces — is proved at 1,
-2, 3, 7 and 8 bits in seconds; the full `2n`-bit product, which is twice
-as wide and so hard sooner, is proved up to 6 bits in every run, and at
-7 and 8 bits takes about ten minutes. At 16 bits the truncated proof
-did not finish in forty minutes. So the proof at those widths is a
-separate `#[ignore]`d test —
+**The 16-bit Booth and tree multipliers are proved in optimised builds
+only.** The miter of two structurally *different* multipliers is the
+textbook hard instance for SAT. Until the equivalence checker learned
+SAT sweeping, the multiplier proofs at 13 and 16 bits, and the full
+`2n`-bit product at 7 and 8, sat in an `#[ignore]`d test: the full
+8-bit product took about ten minutes a pair (unoptimised, by the look of
+it: 5 to 8 seconds optimised), and the 16-bit truncated product did not
+finish in forty.
+
+SAT sweeping proves internal equivalences bottom-up and merges them, and
+it turns out not to be what settles these pairs. A Wallace or Dadda
+tree, or a Booth recoding, shares no internal signal with the
+reference's row-at-a-time array beyond the partial products and the low
+output bits. The sweep merges those, and what is left is the whole
+problem. Measured in an optimised build, the sweep alone against the
+monolithic miter, truncated product:
+
+| Pair | Monolithic | SAT sweep alone | Default engine |
+|---|---|---|---|
+| Booth, 10 bits | 1.7 s | 2.2 s | 4 ms |
+| Booth, 11 bits | 17 s | 14 s | 14 ms |
+| Wallace, 11 bits | 38 s | 40 s | 13 ms |
+| Wallace, 12 bits | not run | 343 s | 62 ms |
+| Dadda, 11 bits | 66 s | 53 s | 14 ms |
+| Dadda, full signed 8-bit product | 8.2 s | 11 s | 0.6 ms |
+| Booth, 13 bits | not run | not run | 0.30 s |
+| Dadda, 16 bits | did not finish in 30 min | not run | 28 s |
+
+Both SAT engines grow by five to eight times per bit, so neither
+reaches 16 bits in hours. That is the problem, not the implementation:
+the tools that prove multipliers at 32 bits and beyond use algebraic
+reasoning over the adder structure, which Reticle does not have. What
+the sweep *does* do for multipliers is prove one against a
+*restructured version of itself*: a 16-bit multiplier of every
+architecture against its own AIG-optimised netlist, the question
+post-synthesis verification asks, in milliseconds, where the monolithic
+miter took 18 seconds at 12 bits, four minutes at 14 and ten at 16
+(`multipliers_match_their_optimised_netlists`).
+
+What settles the pairs in the table is the checker's other complete
+method: **exhaustive simulation**, used when every input pattern can be
+tried within `SweepOptions::exhaustive_budget`. Sixteen inputs (a full
+8-bit product) are 1024 words of bit-parallel simulation, a
+millisecond. Twenty-six inputs (a 13-bit multiplier) are `2^20` words, a
+third of a second optimised and some fifteen seconds unoptimised, still
+within the default budget. So every run of the test suite now proves:
+
+- every architecture at 1, 2, 3, 7 and 8 bits, truncated;
+- every architecture's full product at 1 to 8 bits, signed and
+  unsigned (7 and 8 by simulation);
+- every architecture at 13 bits, truncated (Booth and trees by
+  simulation, the array by structural hashing: its accumulation is the
+  generic cell's own, so the miter folds to a constant);
+- the array at 16 bits.
+
+Thirty-two inputs are `2^26` words: about 28 seconds a pair optimised
+and half an hour unoptimised. So the 16-bit Booth, Wallace and Dadda
+proofs (`*_multipliers_at_sixteen_bits_match_the_generic_cell`) run in
+optimised test builds and are skipped in unoptimised ones:
 
 ```sh
-cargo test --features synth,formal --test synth_arith -- --ignored
+cargo test --release --features synth,formal --test synth_arith sixteen
 ```
 
-— and the ordinary run covers them with
-`wide_multipliers_match_over_random_vectors`, which feeds every corner
-case and two hundred random vectors through the netlist. That is a
-check and not a proof, and the difference is the reason this paragraph
-exists. Closing it properly means SAT sweeping the miter (the FRAIG
-machinery in `synth::aig` already exists) rather than handing it whole
-to the solver.
+The six pairs take under three minutes there. An unoptimised run still
+covers those widths with `wide_multipliers_match_over_random_vectors`,
+which feeds every corner case and two hundred random vectors through
+the netlist. That is a check and not a proof, which is why this
+paragraph exists.
 
 **Dividers are proved to 8 bits**, which is exactly the default width
 threshold. Above it the pass leaves the cell generic, so there is

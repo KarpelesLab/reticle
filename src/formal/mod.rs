@@ -20,6 +20,11 @@
 //!   Stålmarck 2000), with the simple-path strengthening.
 //! - [`equiv`]: combinational and sequential equivalence checking of two
 //!   modules through a miter, the self-check of the synthesis flow.
+//! - [`sweep`]: SAT sweeping (Kuehlmann and Krohm 1997; Mishchenko et
+//!   al. 2005/2006), the engine that decides a combinational miter by
+//!   proving and merging its internal equivalences bottom-up, so that
+//!   structurally different implementations of one function do not
+//!   become one exponentially hard SAT problem.
 //! - [`trace`]: counter-example traces rendered as text or VCD.
 //! - [`reach`]: reachability-based lint (constant selects, dead enables,
 //!   dead FSM states).
@@ -70,6 +75,7 @@ pub mod equiv;
 pub mod induct;
 pub mod reach;
 pub mod sat;
+pub mod sweep;
 pub mod trace;
 pub mod unroll;
 
@@ -78,10 +84,15 @@ use std::fmt::Write;
 pub use blast::{BlastOptions, BlastedFrame, Blaster, PropertyKind};
 pub use bmc::{BmcOptions, BmcOutcome, BmcReport, CoverOutcome, bmc};
 pub use cnf::CnfBuilder;
-pub use equiv::{EquivOptions, EquivOutcome, EquivProof, EquivReport, check_equivalent};
+pub use equiv::{
+    EquivEngine, EquivOptions, EquivOutcome, EquivProof, EquivReport, check_equivalent,
+};
 pub use induct::{InductOptions, InductOutcome, InductReport, induct};
 pub use reach::{ReachOptions, ReachReport, reach_lint};
 pub use sat::{Lit, SolveResult, Solver, Var};
+#[cfg(feature = "synth")]
+pub use sweep::sweep_cnf;
+pub use sweep::{SweepOptions, SweepOutcome, SweepResult, SweepStats};
 pub use trace::{Trace, TraceFrame};
 pub use unroll::{InitMode, Transition, Unrolling};
 

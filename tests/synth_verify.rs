@@ -201,3 +201,30 @@ fn golden_designs_at_a_deeper_bound() {
         assert_eq!(verdict(&report), *want, "{name}: {}", report.render());
     }
 }
+
+/// The combinational goldens decided by SAT sweeping alone (no direct
+/// attempt, no exhaustive simulation) and by the monolithic engine: the
+/// verdicts must match the table and each other. The sequential goldens
+/// do not sweep, so the engines cannot differ on them.
+#[test]
+fn the_sweep_agrees_with_the_monolithic_engine() {
+    use reticle::formal::{EquivEngine, SweepOptions};
+
+    let with = |engine: EquivEngine| {
+        let mut options = options();
+        options.equiv.engine = engine;
+        options
+    };
+    let monolithic = with(EquivEngine::Monolithic);
+    let sweep = with(EquivEngine::Sweep(SweepOptions {
+        quick_conflicts: 0,
+        exhaustive_budget: 0,
+        ..SweepOptions::default()
+    }));
+    for (name, want) in EXPECTED {
+        let old = verdict(&check(name, &monolithic));
+        let new = check(name, &sweep);
+        assert_eq!(old, *want, "{name}, monolithic");
+        assert_eq!(verdict(&new), *want, "{name}, sweep: {}", new.render());
+    }
+}

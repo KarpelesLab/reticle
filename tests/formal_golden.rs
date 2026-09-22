@@ -163,3 +163,74 @@ fn golden_formal_designs() {
 
     assert!(failures.is_empty(), "\n{}", failures.join("\n"));
 }
+
+/// The verdict of an equivalence check, without its evidence.
+#[cfg(feature = "synth")]
+fn verdict(outcome: &reticle::formal::EquivOutcome) -> String {
+    use reticle::formal::EquivOutcome;
+    match outcome {
+        EquivOutcome::Equivalent(proof) => format!("equivalent {proof:?}"),
+        EquivOutcome::Different { frame, .. } => format!("different at {frame}"),
+        EquivOutcome::Unknown { depth } => format!("unknown {depth:?}"),
+    }
+}
+
+/// Every equivalence golden, decided by the monolithic engine and by
+/// SAT sweeping alone (no direct attempt, no exhaustive simulation):
+/// the verdicts must match, and a difference the sweep reports must come
+/// with a trace that shows it.
+#[cfg(feature = "synth")]
+#[test]
+fn the_sweep_agrees_with_the_monolithic_engine() {
+    use reticle::formal::{EquivEngine, EquivOutcome, SweepOptions};
+
+    let sweep = EquivEngine::Sweep(SweepOptions {
+        quick_conflicts: 0,
+        exhaustive_budget: 0,
+        ..SweepOptions::default()
+    });
+    let mut checked = 0;
+    for path in golden_files() {
+        let name = path.file_name().unwrap().to_string_lossy().into_owned();
+        let text = fs::read_to_string(&path).unwrap();
+        let mut map = SourceMap::new();
+        let file = map.add(name.clone(), text.clone()).unwrap();
+        let design = Design::parse_text(&text, file).unwrap();
+        let top = design.top.expect("a top");
+        let m = design.module(top);
+        if attr_str(m, "formal_mode") != Some("equiv") {
+            continue;
+        }
+        let other = design
+            .module_by_name(attr_str(m, "formal_other").unwrap())
+            .unwrap();
+        let options = |engine: EquivEngine| EquivOptions {
+            depth: attr_u32(m, "formal_depth", 20),
+            max_k: attr_u32(m, "formal_k", 10),
+            init: init_mode(m),
+            match_state_by_name: attr_u32(m, "formal_match_state", 1) != 0,
+            engine,
+            ..EquivOptions::default()
+        };
+        let old = check_equivalent(&design, top, other, &options(EquivEngine::Monolithic));
+        let new = check_equivalent(&design, top, other, &options(sweep.clone()));
+        assert_eq!(verdict(&old.outcome), verdict(&new.outcome), "{name}");
+        if let EquivOutcome::Different {
+            properties, trace, ..
+        } = &new.outcome
+        {
+            // The miter's outputs are the two modules' outputs side by
+            // side, so a real difference shows in the trace itself.
+            let last = trace.frames.last().expect("a frame");
+            let half = last.outputs.len() / 2;
+            assert!(!properties.is_empty(), "{name}");
+            assert!(
+                (0..half).any(|i| last.outputs[i].1 != last.outputs[half + i].1),
+                "{name}: the trace shows no difference\n{}",
+                trace.render()
+            );
+        }
+        checked += 1;
+    }
+    assert!(checked >= 4, "only {checked} equivalence goldens");
+}

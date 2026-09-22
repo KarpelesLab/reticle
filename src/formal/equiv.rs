@@ -9,7 +9,14 @@
 //!
 //! - **Combinational** (neither module has state): the miter has one
 //!   frame; a satisfying assignment of "some output differs" is a
-//!   distinguishing input vector. This is BMC at depth 0.
+//!   distinguishing input vector. By default ([`EquivEngine::Sweep`]) the
+//!   frame is given a short direct attempt and then decided by SAT
+//!   sweeping ([`super::sweep`]): internal equivalences between the two
+//!   modules are proved and merged bottom-up, so the output comparison is
+//!   left with little or nothing to do. [`EquivEngine::Monolithic`] hands
+//!   the whole frame to the solver instead, which is BMC at depth 0; it
+//!   is there for comparison, and it is what runs without the `synth`
+//!   feature, since the sweep works on [`crate::synth::aig`]'s graph.
 //! - **Sequential** (either module has state): the miter's state is the
 //!   union of both states, started from matched reset states, and the
 //!   comparison must hold in every frame. BMC to
@@ -28,6 +35,9 @@
 //! whether the outputs would have diverged later; the failing property's
 //! name says which register.
 //!
+//! The sequential case does not sweep yet: its bounded search and
+//! induction solve the unrolled miter directly.
+//!
 //! Ports are matched by name; a port missing on one side, or one whose
 //! width or direction differs, is an error (`F0017`). `assume` properties
 //! of both modules constrain the shared inputs. Their own `assert`
@@ -40,6 +50,9 @@ use super::bmc::{BmcOptions, BmcOutcome, bmc_system};
 use super::cnf::CnfBuilder;
 use super::induct::{InductOptions, InductOutcome, induct_system};
 use super::sat::Lit;
+#[cfg(feature = "synth")]
+use super::sat::SolveResult;
+use super::sweep::{SweepOptions, SweepStats};
 use super::trace::Trace;
 use super::unroll::{InitMode, Transition};
 use crate::diag::{Diagnostic, Diagnostics};
@@ -61,6 +74,8 @@ pub struct EquivOptions {
     pub conflict_limit: Option<u64>,
     /// Options of the bit-blaster.
     pub blast: BlastOptions,
+    /// How a combinational miter is decided.
+    pub engine: EquivEngine,
 }
 
 impl Default for EquivOptions {
@@ -72,7 +87,33 @@ impl Default for EquivOptions {
             match_state_by_name: true,
             conflict_limit: None,
             blast: BlastOptions::default(),
+            engine: EquivEngine::default(),
         }
+    }
+}
+
+/// How [`check_equivalent`] decides a combinational miter. Both are
+/// complete; they differ in how long a hard pair takes.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum EquivEngine {
+    /// SAT sweeping ([`super::sweep`]): after a direct attempt of
+    /// [`SweepOptions::quick_conflicts`] conflicts, the internal
+    /// equivalences of the miter are proved and merged bottom-up and the
+    /// outputs decided on what is left, under
+    /// [`EquivOptions::conflict_limit`]. Without the `synth` feature,
+    /// which provides the graph it sweeps, this is
+    /// [`EquivEngine::Monolithic`].
+    Sweep(SweepOptions),
+    /// The whole miter in one SAT call, under
+    /// [`EquivOptions::conflict_limit`]. Exponentially hard for
+    /// structurally different implementations of one function (two
+    /// multiplier architectures, say); kept for comparison.
+    Monolithic,
+}
+
+impl Default for EquivEngine {
+    fn default() -> Self {
+        EquivEngine::Sweep(SweepOptions::default())
     }
 }
 
@@ -117,6 +158,9 @@ pub struct EquivReport {
     pub outcome: EquivOutcome,
     /// Warnings, and errors when the check could not run.
     pub diags: Diagnostics,
+    /// What the sweep did, when a combinational miter was decided by
+    /// sweeping (and not by the direct attempt before it).
+    pub sweep: Option<SweepStats>,
 }
 
 impl EquivReport {
@@ -426,6 +470,7 @@ pub fn check_equivalent(
     let unknown = |diags: Diagnostics| EquivReport {
         outcome: EquivOutcome::Unknown { depth: None },
         diags,
+        sweep: None,
     };
     let ba = match Blaster::new(design.module(a), &options.blast) {
         Ok(b) => b,
@@ -447,28 +492,13 @@ pub fn check_equivalent(
     let (ma, mb) = (design.module(a), design.module(b));
 
     if !miter.is_sequential() {
-        let opts = BmcOptions {
-            depth: 0,
-            init: InitMode::Free,
-            conflict_limit: options.conflict_limit,
-            blast: options.blast.clone(),
+        let (outcome, mut d, sweep) = combinational(&miter, options);
+        diags.append(&mut d);
+        return EquivReport {
+            outcome,
+            diags,
+            sweep,
         };
-        let mut r = bmc_system(&miter, &opts);
-        diags.append(&mut r.diags);
-        let outcome = match r.outcome {
-            BmcOutcome::Safe { .. } => EquivOutcome::Equivalent(EquivProof::Combinational),
-            BmcOutcome::Failed {
-                frame,
-                properties,
-                trace,
-            } => EquivOutcome::Different {
-                frame,
-                properties,
-                trace,
-            },
-            BmcOutcome::Unknown { .. } => EquivOutcome::Unknown { depth: None },
-        };
-        return EquivReport { outcome, diags };
     }
 
     if options.init == InitMode::Reset {
@@ -510,6 +540,7 @@ pub fn check_equivalent(
                     trace,
                 },
                 diags,
+                sweep: None,
             };
         }
         BmcOutcome::Unknown { .. } => return unknown(diags),
@@ -539,7 +570,137 @@ pub fn check_equivalent(
             depth: Some(options.depth),
         },
     };
-    EquivReport { outcome, diags }
+    EquivReport {
+        outcome,
+        diags,
+        sweep: None,
+    }
+}
+
+/// Decides a combinational miter with the engine `options` asks for.
+fn combinational(
+    miter: &Miter<'_>,
+    options: &EquivOptions,
+) -> (EquivOutcome, Diagnostics, Option<SweepStats>) {
+    #[cfg(feature = "synth")]
+    if let EquivEngine::Sweep(sweep) = &options.engine {
+        let quick = options
+            .conflict_limit
+            .map_or(sweep.quick_conflicts, |l| l.min(sweep.quick_conflicts));
+        if quick > 0 {
+            // The solver is deterministic and a conflict limit only stops
+            // it, so a miter decided here gets exactly the verdict and the
+            // counter-example the monolithic engine would give it.
+            let (outcome, diags) = monolithic(miter, options, Some(quick));
+            if !matches!(outcome, EquivOutcome::Unknown { .. }) {
+                return (outcome, diags, None);
+            }
+        }
+        let (outcome, diags, stats) = swept(miter, options, sweep);
+        return (outcome, diags, Some(stats));
+    }
+    let (outcome, diags) = monolithic(miter, options, options.conflict_limit);
+    (outcome, diags, None)
+}
+
+/// The whole miter as one SAT call: BMC at depth 0.
+fn monolithic(
+    miter: &Miter<'_>,
+    options: &EquivOptions,
+    conflict_limit: Option<u64>,
+) -> (EquivOutcome, Diagnostics) {
+    let opts = BmcOptions {
+        depth: 0,
+        init: InitMode::Free,
+        conflict_limit,
+        blast: options.blast.clone(),
+    };
+    let r = bmc_system(miter, &opts);
+    let outcome = match r.outcome {
+        BmcOutcome::Safe { .. } => EquivOutcome::Equivalent(EquivProof::Combinational),
+        BmcOutcome::Failed {
+            frame,
+            properties,
+            trace,
+        } => EquivOutcome::Different {
+            frame,
+            properties,
+            trace,
+        },
+        BmcOutcome::Unknown { .. } => EquivOutcome::Unknown { depth: None },
+    };
+    (outcome, r.diags)
+}
+
+/// The miter decided by SAT sweeping. A distinguishing input the sweep
+/// finds is replayed on the miter's own formula, and only a replay that
+/// really shows an output differing is reported, with the trace read
+/// from that replay.
+#[cfg(feature = "synth")]
+fn swept(
+    miter: &Miter<'_>,
+    options: &EquivOptions,
+    sweep: &SweepOptions,
+) -> (EquivOutcome, Diagnostics, SweepStats) {
+    use super::sweep::{SweepOutcome, sweep_cnf};
+    use super::unroll::Unrolling;
+
+    let mut diags = Diagnostics::new();
+    let mut unrolling = Unrolling::new(miter, InitMode::Free);
+    let bad = unrolling.bad(0);
+    let result = sweep_cnf(unrolling.cnf(), &[bad], sweep, options.conflict_limit);
+    let outcome = match result.outcome {
+        SweepOutcome::Unsat => {
+            let has_assumes = !unrolling.frames()[0].assumes.is_empty();
+            if has_assumes && unrolling.solve(&[]) == SolveResult::Unsat {
+                diags.push(
+                    Diagnostic::warning(format!(
+                        "the assumptions of `{}` cannot all hold for 1 frames: every assert is vacuously true",
+                        miter.name()
+                    ))
+                    .with_code("F0016"),
+                );
+            }
+            EquivOutcome::Equivalent(EquivProof::Combinational)
+        }
+        SweepOutcome::Sat(assignment) => {
+            let mut assumptions = vec![bad];
+            assumptions.extend(assignment.iter().map(|&(v, value)| Lit::new(v, !value)));
+            let replayed = unrolling.solve(&assumptions) == SolveResult::Sat;
+            debug_assert!(replayed, "the sweep's counter-example does not replay");
+            if replayed {
+                let solver = unrolling.solver();
+                let properties = unrolling.frames()[0]
+                    .asserts
+                    .iter()
+                    .filter(|p| solver.value(p.lit.var()) == Some(p.lit.is_neg()))
+                    .map(|p| p.name.clone())
+                    .collect();
+                EquivOutcome::Different {
+                    frame: 0,
+                    properties,
+                    trace: unrolling.trace(1),
+                }
+            } else {
+                // The sweep's model does not violate the miter: a bug in
+                // the sweep, and never a reason to report a difference.
+                let (outcome, mut d) = monolithic(miter, options, options.conflict_limit);
+                diags.append(&mut d);
+                outcome
+            }
+        }
+        SweepOutcome::Unknown => {
+            diags.push(
+                Diagnostic::warning(format!(
+                    "equivalence check of `{}` gave up: conflict limit reached after sweeping",
+                    miter.name()
+                ))
+                .with_code("F0019"),
+            );
+            EquivOutcome::Unknown { depth: None }
+        }
+    };
+    (outcome, diags, result.stats)
 }
 
 #[cfg(test)]
