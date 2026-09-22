@@ -291,11 +291,26 @@ FPGA:
       standards, placement regions (pblocks), keep-hierarchy, relative
       placement macros, clock domains. Declared in the source via attributes
       or in a constraints file, and checked against the device database.
-- [ ] Own placer (analytic then simulated-annealing refinement) and router
+- [x] Own placer (analytic then simulated-annealing refinement) and router
       (PathFinder-style negotiated congestion) for open families, starting
-      with iCE40 as the smallest useful target.
-- [ ] Bitstream generation for open families, or hand-off to the vendor
+      with iCE40 as the smallest useful target. The routing architecture
+      is data too (`fpga::arch`, an `arch` section of the `.dev` text
+      format): tiles on a grid, wires with spans, pips with their
+      configuration bits, and which wire each bel pin reaches, expanded
+      into a `RoutingGraph`. The placer solves a quadratic net model by
+      conjugate gradient, legalises onto sites and refines by simulated
+      annealing over a half-perimeter cost, honouring fixed pins,
+      regions, `keep_hierarchy` and `rloc` macros. See `docs/fpga.md`.
+- [x] Bitstream generation for open families, or hand-off to the vendor
       bitstream tool with everything else done in Reticle.
+      `fpga::bitstream` writes the IceStorm-style `.asc` and reads it
+      back; every bit position comes from the architecture file, not
+      from Rust. **The architecture that ships is synthetic**: an
+      iCE40-shaped fabric, not an iCE40, because Project IceStorm's chip
+      database is not here and must not be invented. The flow, the
+      algorithms and the formats are real and tested end to end; a real
+      database replaces the built-in one by parsing a file, with no code
+      change. `docs/fpga.md` lists exactly what it would have to supply.
 
 ASIC:
 - [x] Liberty (`.lib`) parser: cells, pins, functions, timing tables.
