@@ -243,7 +243,7 @@ impl<F: FnMut(&str) -> Option<String>> SourceProvider for PathProvider<F> {
 /// Lexical is the right kind of resolution here: the library has no
 /// filesystem to ask about symlinks, and a tidy path is what ends up in
 /// the lock file and in diagnostics.
-fn join(base: &str, path: &str) -> String {
+pub(super) fn join(base: &str, path: &str) -> String {
     if path.starts_with('/') {
         return normalise(path);
     }

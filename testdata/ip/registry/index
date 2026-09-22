@@ -1,0 +1,5 @@
+package axi_regs 1.0.0 checksum 656baf7adb913b54 description "Four 32-bit registers behind an AXI4-Lite subordinate port"
+package cdc_sync 0.3.1 checksum 9b9f7d21fb1370ad description "Two flip-flop clock-domain-crossing synchroniser"
+package fifo_sync 1.0.4 checksum d6e11b2449a8f296 description "Synchronous FIFO with a synchronised reset" depends cdc_sync ^0.3.0
+package gray_counter 0.2.0 checksum 608fc6a6beb57808 description "Binary counter with a gray-coded output"
+package uart_lite 1.2.0 checksum 88aedaf6e60fec88 description "8N1 UART transmitter with a one-entry FIFO" depends fifo_sync ^1.0.0

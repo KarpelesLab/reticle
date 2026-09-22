@@ -15,6 +15,7 @@
 //! | [`bus`] | bus interfaces as data; port-map generation and checking |
 //! | [`interconnect`] | crossbar and arbiter generators over the IR builder |
 //! | [`blackbox`] | encrypted and vendor IP as stubs |
+//! | [`registry`] | the static index, `RegistryProvider` and `reticle add` |
 //! | [`ipxact`] | importing an existing IP-XACT catalogue |
 //! | [`xml`] | the XML reader [`ipxact`] needs, and nothing more |
 //!
@@ -90,10 +91,17 @@
 //! the same definitions, so a generated crossbar passes the checker by
 //! construction.
 //!
-//! # Bringing in IP somebody else described
+//! # Finding IP, and bringing it in
 //!
-//! A catalogue that already describes its IP in IP-XACT does not have to
-//! be rewritten: [`ipxact::import`] reads a component description — 1685-2009's `spirit` spelling or
+//! [`registry`] is the index `reticle add` searches: a git repository of
+//! manifests, one file per package and one line per release, laid out
+//! the way a crates.io index is. [`RegistryProvider`] makes a registry
+//! dependency resolve exactly as a path one does, through a
+//! caller-supplied fetcher, because the library still does no I/O.
+//!
+//! [`ipxact`] goes the other way. A catalogue that already describes its
+//! IP in IP-XACT does not have to be rewritten: [`ipxact::import`] reads
+//! a component description — 1685-2009's `spirit` spelling or
 //! 1685-2014's and 1685-2022's `ipxact` one — and produces a manifest
 //! plus a report of everything that was approximated or dropped, since
 //! an import that loses half a component quietly is worse than one that
@@ -142,6 +150,7 @@ pub mod bus;
 pub mod interconnect;
 pub mod ipxact;
 pub mod manifest;
+pub mod registry;
 pub mod resolve;
 mod text;
 pub mod xml;
@@ -155,6 +164,9 @@ pub use ipxact::{ImportOptions, ImportReport, ImportedIp, Standard, Vlnv};
 pub use manifest::{
     DepSource, Dependency, InterfaceDecl, IpManifest, Language, ParamDecl, ParamType, PortDecl,
     Project, SourceEntry, Version, VersionReq,
+};
+pub use registry::{
+    AddError, AddedProject, Index, IndexEntry, Match, MatchKind, ProjectFile, RegistryProvider,
 };
 pub use resolve::{
     LoadedSource, LockFile, LockedPackage, Package, PathProvider, ResolveError, Resolved,
