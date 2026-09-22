@@ -100,7 +100,7 @@ fn the_c_example_compiles_and_runs() {
     let Some(library) = static_library() else {
         println!(
             "skipping: no static library to link against. Build one with\n  \
-             cargo rustc --features ffi --crate-type staticlib\n\
+             cargo rustc --lib --features ffi --crate-type staticlib\n\
              (tools/check.sh and CI do this before running the tests)"
         );
         return;

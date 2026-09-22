@@ -8,7 +8,7 @@
  *
  * Build it against a static library (see docs/ffi.md for the shared one):
  *
- *   cargo rustc --release --features ffi --crate-type staticlib
+ *   cargo rustc --lib --release --features ffi --crate-type staticlib
  *   cc -I src/ffi -o demo examples/ffi/demo.c \
  *      target/release/libreticle.a -lpthread -ldl -lm
  *   ./demo

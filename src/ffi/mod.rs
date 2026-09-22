@@ -49,8 +49,8 @@
 //! # Building
 //!
 //! ```sh
-//! cargo rustc --release --features ffi --crate-type cdylib     # libreticle.so
-//! cargo rustc --release --features ffi --crate-type staticlib  # libreticle.a
+//! cargo rustc --lib --release --features ffi --crate-type cdylib     # libreticle.so
+//! cargo rustc --lib --release --features ffi --crate-type staticlib  # libreticle.a
 //! ```
 //!
 //! `docs/ffi.md` has the full recipe, including the link flags a static
