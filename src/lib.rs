@@ -19,6 +19,8 @@
 //! |-------------|-----------|-------------------------------------------------|
 //! | [`source`]  | always    | Source files, byte spans, line/column lookup    |
 //! | [`diag`]    | always    | Diagnostics and their text rendering            |
+//! | [`intern`]  | always    | Identifier interning (`Symbol`)                 |
+//! | [`logic`]   | always    | Four-state bit vectors and `std_ulogic`         |
 //! | [`verilog`] | `verilog` | Verilog / SystemVerilog frontend                |
 //! | [`vhdl`]    | `vhdl`    | VHDL frontend                                   |
 //! | [`ir`]      | always    | The unified design IR                           |
@@ -28,7 +30,9 @@
 #![forbid(unsafe_code)]
 
 pub mod diag;
+pub mod intern;
 pub mod ir;
+pub mod logic;
 pub mod source;
 
 #[cfg(feature = "verilog")]

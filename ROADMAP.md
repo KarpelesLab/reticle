@@ -70,9 +70,9 @@ right first because every diagnostic and every test goes through it.
 - [x] `diag`: diagnostics with severity, primary and secondary labels, notes,
       and a plain-text renderer with source excerpts. Sorted, deterministic
       output so tests can snapshot it.
-- [ ] Interner for identifiers (`Symbol`), since HDL designs repeat the same
+- [x] Interner for identifiers (`Symbol`), since HDL designs repeat the same
       names tens of thousands of times.
-- [ ] `Logic` value type: 4-state (`0 1 X Z`) bit vectors with arbitrary
+- [x] `Logic` value type: 4-state (`0 1 X Z`) bit vectors with arbitrary
       width, plus the 9-state `std_logic` encoding for VHDL (`U X 0 1 Z W L
       H -`) and the resolution functions between them. Fast paths for 2-state.
 - [ ] Test harness: golden-file tests under `testdata/` (`input.v` +
