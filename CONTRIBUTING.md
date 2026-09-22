@@ -25,4 +25,8 @@ Rules that every change must follow. CI enforces most of them.
 - **Deterministic output.** Sort before rendering; never iterate a
   `HashMap` into user-visible output.
 - **Commits** are self-contained: build, lint and tests pass at every
-  commit. Message: one summary line, blank line, why and what.
+  commit. Messages follow Conventional Commits so release-plz can derive
+  versions and changelogs: `feat(verilog): add lexer`, `fix(diag): ...`,
+  `docs:`, `test:`, `refactor:`, `chore:`, `ci:`. A `!` after the type or
+  a `BREAKING CHANGE:` footer marks an incompatible change. One summary
+  line, blank line, then why and what.
