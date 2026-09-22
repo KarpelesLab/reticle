@@ -80,6 +80,7 @@
 use crate::diag::{Diagnostic, Diagnostics};
 use crate::ir::{Design, Module, ModuleId};
 
+pub mod arith;
 pub mod cellify;
 pub mod eval;
 pub mod fsm;
