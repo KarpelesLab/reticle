@@ -100,6 +100,15 @@ ffi = []
 # See `docs/wasm.md`.
 wasm = []
 
+# Incremental compilation: a content-addressed cache of elaborated (and
+# synthesised) modules, keyed on the source text and options that produced
+# them, so a re-run after a small edit only redoes what changed. The store
+# is sans-I/O like the rest of the library: the in-memory backend ships
+# here and the CLI supplies a directory-backed one. It needs no other
+# feature to compile; with `verilog`, `vhdl` or `synth` also on it caches
+# those stages' output. See `docs/cache.md`.
+cache = []
+
 # --- verification & tooling ---
 # Formal: bounded model checking and equivalence checking over the IR, built
 # on an in-crate SAT solver.
@@ -114,7 +123,7 @@ lsp = ["verilog", "vhdl"]
 # The `reticle` command-line tool (gates the binary target below). It drives
 # every stage, so it turns them all on, including `formal` which is otherwise
 # off by default.
-cli = ["verilog", "vhdl", "sim", "synth", "formal", "fpga", "timing", "ip", "lsp"]
+cli = ["verilog", "vhdl", "sim", "synth", "formal", "fpga", "timing", "ip", "lsp", "cache"]
 
 # --- dependencies ---
 # Reticle is written from scratch and ships no foreign code: hand-written

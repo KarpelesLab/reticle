@@ -40,7 +40,7 @@ cargo test --all-features
 # `cli` alone is what catches the binary using a module its feature does not
 # enable.
 step "Each feature alone"
-for f in "" verilog vhdl sim synth formal fpga asic timing ip lsp ffi wasm cli; do
+for f in "" verilog vhdl sim synth formal fpga asic timing ip lsp cache ffi wasm cli; do
     printf '  features=%s\n' "${f:-none}"
     if [ -z "$f" ]; then
         cargo clippy --no-default-features --all-targets -- -D warnings

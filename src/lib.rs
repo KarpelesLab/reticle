@@ -33,6 +33,7 @@
 //! | [`timing`]  | `timing`  | Static timing analysis and clock domain crossings |
 //! | [`ip`]      | `ip`      | IP and project manifests, bus interfaces, interconnect |
 //! | [`lsp`]     | `lsp`     | Language server for Verilog and VHDL             |
+//! | [`cache`]   | `cache`   | Incremental builds over a content-addressed store |
 //! | [`ffi`]     | `ffi`     | C ABI for embedding the compiler in another tool |
 //! | [`wasm`]    | `wasm`    | WebAssembly surface for the browser playground   |
 //!
@@ -84,6 +85,9 @@ pub mod ip;
 
 #[cfg(feature = "lsp")]
 pub mod lsp;
+
+#[cfg(feature = "cache")]
+pub mod cache;
 
 #[cfg(feature = "ffi")]
 pub mod ffi;
