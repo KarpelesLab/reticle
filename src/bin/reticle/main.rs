@@ -37,6 +37,7 @@ Commands:
   emit     Write a design out in another format
   sim      Simulate a design and print its output
   verify   Prove or refute a design's assertions
+  timing   Report static timing and clock domain crossings
   help     Show this message, or `reticle help <command>`
   version  Show the version
 
@@ -132,6 +133,24 @@ Options:
   --quiet          Suppress the summary line
 ";
 
+const TIMING_USAGE: &str = "\
+Usage: reticle timing [options] <design.v|design.vhd|design.rtl>...
+
+Reports setup and hold slack over the synthesised netlist, and the clock
+domain crossings it can find. The design is synthesised first unless it
+is already a netlist.
+
+Options:
+  --constraints <f>  Read create_clock and path exceptions from an .rcf file
+  --period <ns>      Period for a clock no constraint names (default 10)
+  --top <module>     Analyse this module
+  --paths <n>        Worst paths to report (default 10)
+  --hold             Report hold instead of setup
+  --cdc              Report clock domain crossings instead of timing
+  --summary          Print only the per-clock summary
+  --device <name>    Use the FPGA delay placeholders for this device family
+";
+
 const VERIFY_USAGE: &str = "\
 Usage: reticle verify [options] <design.rtl>
 
@@ -169,6 +188,7 @@ fn main() -> ExitCode {
         "emit" => run(emit_cmd, rest, EMIT_USAGE),
         "sim" => run(sim, rest, SIM_USAGE),
         "verify" => run(verify, rest, VERIFY_USAGE),
+        "timing" => run(timing, rest, TIMING_USAGE),
         other => {
             eprintln!("error: unknown command `{other}`\n");
             eprint!("{USAGE}");
@@ -187,6 +207,7 @@ fn help_text(command: Option<&str>) -> &'static str {
         Some("emit") => EMIT_USAGE,
         Some("sim") => SIM_USAGE,
         Some("verify") => VERIFY_USAGE,
+        Some("timing") => TIMING_USAGE,
         _ => USAGE,
     }
 }
@@ -252,6 +273,11 @@ fn spec_for(usage: &str) -> Spec {
         Spec {
             options: &["device", "constraints", "top", "output-dir", "netlist"],
             flags: &["list-devices", "report", "quiet"],
+        }
+    } else if std::ptr::eq(usage, TIMING_USAGE) {
+        Spec {
+            options: &["constraints", "period", "top", "paths", "device"],
+            flags: &["hold", "cdc", "summary"],
         }
     } else if std::ptr::eq(usage, EMIT_USAGE) {
         Spec {
@@ -1015,6 +1041,130 @@ fn sim(args: &Args) -> Result<Outcome, ArgError> {
         eprintln!("note: {reason} at time {}", sim.time());
     }
     Ok(if failed { Outcome::Failed } else { Outcome::Ok })
+}
+
+/// `reticle timing`: slack over the netlist, and crossing analysis.
+fn timing(args: &Args) -> Result<Outcome, ArgError> {
+    use reticle::fpga::Constraints;
+    use reticle::timing::cdc::analyze_cdc_with;
+    use reticle::timing::delay::{DelayModel, FpgaModel, UnitModel};
+    use reticle::timing::graph::flatten_for_timing;
+    use reticle::timing::sta::{TimingOptions, TimingSpec, analyze_with};
+
+    let paths = args.u32_option("paths")?;
+    let period = match args.option("period") {
+        None => 10.0_f64,
+        Some(text) => match text.parse::<f64>() {
+            Ok(value) if value > 0.0 => value,
+            _ => {
+                return Ok(Outcome::Usage(format!(
+                    "`--period {text}` is not a positive number of nanoseconds"
+                )));
+            }
+        },
+    };
+
+    let (mut design, mut map) = match load_design(args)? {
+        Ok(pair) => pair,
+        Err(outcome) => return Ok(outcome),
+    };
+
+    // Timing needs the cell form, so synthesise unless the design already
+    // has one. A design still holding processes has no arcs to walk.
+    let mut diags = Diagnostics::new();
+    let has_processes = design.modules.iter().any(|(_, m)| !m.processes.is_empty());
+    if has_processes {
+        let options = reticle::synth::SynthOptions::default();
+        reticle::synth::run(&mut design, &options, &mut diags);
+        if report(&mut diags, &map) {
+            return Ok(Outcome::Failed);
+        }
+    }
+
+    let top = match args.option("top") {
+        Some(name) => match design.module_by_name(name) {
+            Some(id) => id,
+            None => return Ok(Outcome::Usage(format!("no module named `{name}`"))),
+        },
+        None => match design.top {
+            Some(id) => id,
+            None => {
+                return Ok(Outcome::Usage(
+                    "the design names no top module; pass --top".into(),
+                ));
+            }
+        },
+    };
+
+    let module = match flatten_for_timing(&design, top) {
+        Ok(module) => module,
+        Err(mut errors) => {
+            report(&mut errors, &map);
+            return Ok(Outcome::Failed);
+        }
+    };
+
+    let mut diags = Diagnostics::new();
+    let mut constraints = Constraints::new();
+    if let Some(path) = args.option("constraints") {
+        let Some(id) = load(&mut map, path, &mut diags) else {
+            report(&mut diags, &map);
+            return Ok(Outcome::Failed);
+        };
+        let text = map.file(id).text().to_string();
+        constraints = Constraints::parse(&text, id, &mut diags);
+        if report(&mut diags, &map) {
+            return Ok(Outcome::Failed);
+        }
+    }
+    let spec = TimingSpec::from_constraints(&constraints);
+
+    if args.flag("cdc") {
+        let report_ = analyze_cdc_with(&module, &spec);
+        print!("{}", report_.render_sources(&map));
+        return Ok(if report_.has_errors() {
+            Outcome::Failed
+        } else {
+            Outcome::Ok
+        });
+    }
+
+    let mut options = TimingOptions {
+        check_setup: !args.flag("hold"),
+        check_hold: args.flag("hold"),
+        default_period: period,
+        ..TimingOptions::default()
+    };
+    if let Some(n) = paths {
+        options.max_paths = n as usize;
+    }
+
+    // The delay numbers for a device family are placeholders, which the
+    // report says; the unit model is honest about being a unit model.
+    let fpga_model;
+    let unit_model;
+    let model: &dyn DelayModel = match args.option("device") {
+        Some(_) => {
+            fpga_model = FpgaModel::placeholders();
+            &fpga_model
+        }
+        None => {
+            unit_model = UnitModel::new();
+            &unit_model
+        }
+    };
+
+    let report_ = analyze_with(&module, &options, model, &spec);
+    if args.flag("summary") {
+        print!("{}", report_.render_summary());
+    } else {
+        print!("{}", report_.render_sources(&map));
+    }
+    Ok(if report_.has_violations() {
+        Outcome::Failed
+    } else {
+        Outcome::Ok
+    })
 }
 
 /// `reticle verify`: bounded model checking, then induction.

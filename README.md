@@ -43,6 +43,7 @@ Early, but the middle of the pipeline runs end to end. What works today:
 | Emission | Verilog, VHDL, Yosys JSON, BLIF, EDIF |
 | Formal | CDCL SAT solver, bit-blaster, bounded model checking, k-induction, equivalence checking |
 | ASIC | Liberty, LEF and DEF readers and writers |
+| Timing | static timing analysis with setup and hold, path reports, clock domain crossing checks |
 | Tooling | Verilog and VHDL formatters |
 | FPGA | device database (iCE40, ECP5, generic), primitive mapping, placement and IO constraints, nextpnr and vendor export |
 
@@ -57,6 +58,8 @@ reticle emit    --format verilog netlist.rtl
 reticle sim     --vcd waves.vcd --fst waves.fst testbench.v counter.v
 reticle verify  --depth 20 --trace cex.vcd design.rtl
 reticle fpga    --device ice40-hx1k-tq144 --constraints pins.rcf blinky.v
+reticle timing  --constraints clocks.rcf design.v
+reticle timing  --cdc design.v
 ```
 
 `reticle fpga` runs the whole target flow and writes the netlist and

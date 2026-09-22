@@ -440,6 +440,53 @@ fn sim_honours_the_time_limit() {
 }
 
 #[test]
+fn timing_reports_slack_with_a_path() {
+    let (code, stdout, stderr) = run(&["timing", "--paths", "1", "testdata/timing/reg2reg.rtl"]);
+    assert_eq!(code, 0, "{stderr}");
+    assert!(stdout.contains("timing summary"), "{stdout}");
+    assert!(stdout.contains("slack"), "{stdout}");
+    // The report walks the path pin by pin, not just a number.
+    assert!(stdout.contains("startpoint:"), "{stdout}");
+    assert!(stdout.contains("data required time"), "{stdout}");
+
+    let (code, stdout, stderr) = run(&["timing", "--summary", "testdata/timing/reg2reg.rtl"]);
+    assert_eq!(code, 0, "{stderr}");
+    assert!(!stdout.contains("startpoint:"), "--summary printed a path");
+}
+
+#[test]
+fn timing_synthesises_source_first() {
+    // A .v file still holds processes, which have no timing arcs; the
+    // command must synthesise before analysing rather than report nothing.
+    let (code, stdout, stderr) = run(&["timing", "testdata/verilog/parse/counter.v"]);
+    assert_eq!(code, 0, "{stderr}");
+    assert!(stdout.contains("timing summary"), "{stdout}");
+    assert!(stdout.contains("q$ff/d"), "{stdout}");
+}
+
+#[test]
+fn cdc_separates_a_bug_from_a_synchroniser() {
+    // An unsynchronised crossing is the bug everyone is looking for, so it
+    // is an error and the exit code says so.
+    let (code, stdout, stderr) = run(&["timing", "--cdc", "testdata/timing/cdc_unsync.rtl"]);
+    assert_eq!(code, 1, "{stderr}");
+    assert!(stdout.contains("unsynchronised"), "{stdout}");
+
+    // A proper two-flop synchroniser is not.
+    let (code, stdout, stderr) = run(&["timing", "--cdc", "testdata/timing/cdc_sync2.rtl"]);
+    assert_eq!(code, 0, "{stderr}");
+    assert!(stdout.contains("synchroniser"), "{stdout}");
+}
+
+#[test]
+fn timing_survives_a_combinational_loop() {
+    // Reported, not hung: the whole point of detecting the loop.
+    let (code, stdout, stderr) = run(&["timing", "testdata/timing/comb_loop.rtl"]);
+    assert_eq!(code, 0, "{stderr}");
+    assert!(stdout.contains("combinational loop"), "{stdout}");
+}
+
+#[test]
 fn verify_proves_a_good_design() {
     let (code, stdout, stderr) = run(&["verify", "--depth", "12", "testdata/formal/fifo_good.rtl"]);
     assert_eq!(code, 0, "{stderr}");
