@@ -12,7 +12,6 @@
 //! at all.
 
 #![cfg(feature = "verilog")]
-#![cfg(feature = "verilog")]
 
 use std::fs;
 use std::path::{Path, PathBuf};
