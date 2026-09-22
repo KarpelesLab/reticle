@@ -1,0 +1,2 @@
+create_clock -name fast -period 10 fast
+create_clock -name slow -period 15 slow

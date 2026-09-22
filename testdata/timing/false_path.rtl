@@ -1,0 +1,23 @@
+// A configuration register that never changes while the design runs:
+// its path into the datapath is cut with set_false_path.
+top false_path
+
+module false_path
+  net %clk u1 wire
+  net %cfg u1 wire
+  net %d u1 wire
+  net %q u1 wire
+  net %cfgq u1 wire
+  net %dq u1 wire
+  net %sel u1 wire
+  net %slow u1 wire
+  port clk in %clk
+  port cfg in %cfg
+  port d in %d
+  port q out %q
+  cell cfgreg dff pos (clk=%clk, d=%cfg) -> (q=%cfgq)
+  cell datareg dff pos (clk=%clk, d=%d) -> (q=%dq)
+  cell stage1 xor (a=%cfgq, b=%dq) -> (y=%slow)
+  cell pick and (a=%slow, b=%dq) -> (y=%sel)
+  cell out dff pos (clk=%clk, d=%sel) -> (q=%q)
+end

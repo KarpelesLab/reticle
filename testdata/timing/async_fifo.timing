@@ -1,0 +1,162 @@
+timing summary for module `async_fifo` (unit delays, ideal clocks)
+  clock            period    waveform      source
+  rclk             13.000  0.000  6.500      rclk
+  wclk             10.000  0.000  5.000      wclk
+  group                      check   endpoints  violating   worst slack  endpoint
+  rclk -> rclk               setup           9          0         8.800  rgray_reg/d
+  rclk -> rclk               hold            9          3        -0.100  rbin_reg/en
+  rclk -> wclk               setup           4          0         0.800  wbin_reg/en
+  rclk -> wclk               hold            4          0         8.900  wbin_reg/en
+  wclk -> rclk               setup           1          0         0.000  rptr_in_wclk
+  wclk -> rclk               hold            1          0        13.000  rptr_in_wclk
+  wclk -> wclk               setup           4          0         5.800  wgray_reg/d
+  wclk -> wclk               hold            4          0         0.900  rg_sync2/d
+
+path 1 of 12: hold slack -0.100 (VIOLATED)
+  startpoint: ren (port clocked by rclk)
+  endpoint:   rbin_reg/en (flip-flop clocked by rclk)
+      incr     total  edge  pin
+     0.000     0.000    r   ren                      launch port
+     0.000     0.000    r   rbin_reg/en              net ren
+     0.000            data arrival time
+     0.000            capture edge rclk at 0.000 (launch rclk at 0.000)
+     0.100            hold
+     0.100            data required time
+    -0.100            slack (VIOLATED)
+
+path 2 of 12: hold slack -0.100 (VIOLATED)
+  startpoint: ren (port clocked by rclk)
+  endpoint:   rd/en (memory read port clocked by rclk)
+      incr     total  edge  pin
+     0.000     0.000    r   ren                      launch port
+     0.000     0.000    r   rd/en                    net ren
+     0.000            data arrival time
+     0.000            capture edge rclk at 0.000 (launch rclk at 0.000)
+     0.100            hold
+     0.100            data required time
+    -0.100            slack (VIOLATED)
+
+path 3 of 12: hold slack -0.100 (VIOLATED)
+  startpoint: ren (port clocked by rclk)
+  endpoint:   rgray_reg/en (flip-flop clocked by rclk)
+      incr     total  edge  pin
+     0.000     0.000    r   ren                      launch port
+     0.000     0.000    r   rgray_reg/en             net ren
+     0.000            data arrival time
+     0.000            capture edge rclk at 0.000 (launch rclk at 0.000)
+     0.100            hold
+     0.100            data required time
+    -0.100            slack (VIOLATED)
+
+path 4 of 12: setup slack 0.000 (met)
+  startpoint: rg_sync2/clk (flip-flop clocked by wclk)
+  endpoint:   rptr_in_wclk (port clocked by rclk)
+      incr     total  edge  pin
+     0.000     0.000    r   rg_sync2/clk             clock wclk
+     1.000     1.000    r   rg_sync2/q               cell dff
+     0.000     1.000    r   rptr_in_wclk             net rg_safe
+     1.000            data arrival time
+     1.000            capture edge rclk at 91.000 (launch wclk at 90.000)
+     0.000            setup
+     1.000            data required time
+     0.000            slack (met)
+
+path 5 of 12: setup slack 0.800 (met)
+  startpoint: wen (port clocked by rclk)
+  endpoint:   wbin_reg/en (flip-flop clocked by wclk)
+      incr     total  edge  pin
+     0.000     0.000    r   wen                      launch port
+     0.000     0.000    r   wbin_reg/en              net wen
+     0.000            data arrival time
+     1.000            capture edge wclk at 40.000 (launch rclk at 39.000)
+    -0.200            setup
+     0.800            data required time
+     0.800            slack (met)
+
+path 6 of 12: setup slack 0.800 (met)
+  startpoint: wen (port clocked by rclk)
+  endpoint:   wgray_reg/en (flip-flop clocked by wclk)
+      incr     total  edge  pin
+     0.000     0.000    r   wen                      launch port
+     0.000     0.000    r   wgray_reg/en             net wen
+     0.000            data arrival time
+     1.000            capture edge wclk at 40.000 (launch rclk at 39.000)
+    -0.200            setup
+     0.800            data required time
+     0.800            slack (met)
+
+path 7 of 12: setup slack 0.800 (met)
+  startpoint: wdata (port clocked by rclk)
+  endpoint:   wr/data (memory write port clocked by wclk)
+      incr     total  edge  pin
+     0.000     0.000    r   wdata                    launch port
+     0.000     0.000    r   wr/data                  net wdata
+     0.000            data arrival time
+     1.000            capture edge wclk at 40.000 (launch rclk at 39.000)
+    -0.200            setup
+     0.800            data required time
+     0.800            slack (met)
+
+path 8 of 12: setup slack 0.800 (met)
+  startpoint: wen (port clocked by rclk)
+  endpoint:   wr/en (memory write port clocked by wclk)
+      incr     total  edge  pin
+     0.000     0.000    r   wen                      launch port
+     0.000     0.000    r   wr/en                    net wen
+     0.000            data arrival time
+     1.000            capture edge wclk at 40.000 (launch rclk at 39.000)
+    -0.200            setup
+     0.800            data required time
+     0.800            slack (met)
+
+path 9 of 12: hold slack 0.900 (met)
+  startpoint: rbin_reg/clk (flip-flop clocked by rclk)
+  endpoint:   rd/addr (memory read port clocked by rclk)
+      incr     total  edge  pin
+     0.000     0.000    r   rbin_reg/clk             clock rclk
+     1.000     1.000    r   rbin_reg/q               cell dff
+     0.000     1.000    r   rd/addr                  net rbin
+     1.000            data arrival time
+     0.000            capture edge rclk at 0.000 (launch rclk at 0.000)
+     0.100            hold
+     0.100            data required time
+     0.900            slack (met)
+
+path 10 of 12: hold slack 0.900 (met)
+  startpoint: rg_sync1/clk (flip-flop clocked by wclk)
+  endpoint:   rg_sync2/d (flip-flop clocked by wclk)
+      incr     total  edge  pin
+     0.000     0.000    r   rg_sync1/clk             clock wclk
+     1.000     1.000    r   rg_sync1/q               cell dff
+     0.000     1.000    r   rg_sync2/d               net rg_meta
+     1.000            data arrival time
+     0.000            capture edge wclk at 0.000 (launch wclk at 0.000)
+     0.100            hold
+     0.100            data required time
+     0.900            slack (met)
+
+path 11 of 12: hold slack 0.900 (met)
+  startpoint: wg_sync1/clk (flip-flop clocked by rclk)
+  endpoint:   wg_sync2/d (flip-flop clocked by rclk)
+      incr     total  edge  pin
+     0.000     0.000    r   wg_sync1/clk             clock rclk
+     1.000     1.000    r   wg_sync1/q               cell dff
+     0.000     1.000    r   wg_sync2/d               net wg_meta
+     1.000            data arrival time
+     0.000            capture edge rclk at 0.000 (launch rclk at 0.000)
+     0.100            hold
+     0.100            data required time
+     0.900            slack (met)
+
+path 12 of 12: hold slack 0.900 (met)
+  startpoint: wbin_reg/clk (flip-flop clocked by wclk)
+  endpoint:   wr/addr (memory write port clocked by wclk)
+      incr     total  edge  pin
+     0.000     0.000    r   wbin_reg/clk             clock wclk
+     1.000     1.000    r   wbin_reg/q               cell dff
+     0.000     1.000    r   wr/addr                  net wbin
+     1.000            data arrival time
+     0.000            capture edge wclk at 0.000 (launch wclk at 0.000)
+     0.100            hold
+     0.100            data required time
+     0.900            slack (met)

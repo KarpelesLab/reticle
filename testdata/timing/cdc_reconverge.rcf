@@ -1,0 +1,4 @@
+create_clock -name aclk -period 10 aclk
+create_clock -name bclk -period 7 bclk
+set_false_path -from srcff0 -to sync0a
+set_false_path -from srcff1 -to sync1a

@@ -1,0 +1,3 @@
+create_clock -name sys -period 10 clk
+set_multicycle_path 2 -setup -from mul_a -to mul_q
+set_multicycle_path 2 -setup -from mul_b -to mul_q

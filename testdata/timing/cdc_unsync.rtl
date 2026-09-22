@@ -1,0 +1,22 @@
+// The bug everyone is looking for: a flip-flop clocked by `aclk` feeds,
+// through an AND, a flip-flop clocked by `bclk`, with nothing in
+// between to resolve the metastability.
+top cdc_unsync
+
+module cdc_unsync
+  net %aclk u1 wire
+  net %bclk u1 wire
+  net %d u1 wire
+  net %en u1 wire
+  net %q u1 wire
+  net %flag u1 wire
+  net %gated u1 wire
+  port aclk in %aclk
+  port bclk in %bclk
+  port d in %d
+  port en in %en
+  port q out %q
+  cell src dff pos (clk=%aclk, d=%d) -> (q=%flag)
+  cell g and (a=%flag, b=%en) -> (y=%gated)
+  cell dst dff pos (clk=%bclk, d=%gated) -> (q=%q)
+end

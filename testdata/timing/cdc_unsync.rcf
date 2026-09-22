@@ -1,0 +1,2 @@
+create_clock -name aclk -period 10 aclk
+create_clock -name bclk -period 7 bclk

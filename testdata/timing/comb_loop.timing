@@ -1,0 +1,37 @@
+timing summary for module `comb_loop` (unit delays, ideal clocks)
+  clock            period    waveform      source
+  sys              10.000  0.000  5.000      clk
+  group                      check   endpoints  violating   worst slack  endpoint
+  sys -> sys                 setup           1          0         9.000  y
+  sys -> sys                 hold            1          0         1.000  y
+
+path 1 of 2: hold slack 1.000 (met)
+  startpoint: keep/clk (flip-flop clocked by sys)
+  endpoint:   y (port clocked by sys)
+      incr     total  edge  pin
+     0.000     0.000    r   keep/clk                 clock sys
+     1.000     1.000    r   keep/q                   cell dff
+     0.000     1.000    r   y                        net y
+     1.000            data arrival time
+     0.000            capture edge sys at 0.000 (launch sys at 0.000)
+     0.000            hold
+     0.000            data required time
+     1.000            slack (met)
+
+path 2 of 2: setup slack 9.000 (met)
+  startpoint: keep/clk (flip-flop clocked by sys)
+  endpoint:   y (port clocked by sys)
+      incr     total  edge  pin
+     0.000     0.000    r   keep/clk                 clock sys
+     1.000     1.000    r   keep/q                   cell dff
+     0.000     1.000    r   y                        net y
+     1.000            data arrival time
+    10.000            capture edge sys at 10.000 (launch sys at 0.000)
+     0.000            setup
+    10.000            data required time
+     9.000            slack (met)
+
+combinational loops: 1
+  g1/b -> g1/y -> g2/a -> g2/y -> ...
+
+note: 1 combinational loop(s) found; the pins on them have no arrival time

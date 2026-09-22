@@ -1,0 +1,19 @@
+// The simplest register-to-register path there is, so the numbers in
+// reg2reg.timing can be checked by hand: one clock-to-Q arc and one AND.
+top reg2reg
+
+module reg2reg
+  net %clk u1 wire
+  net %d u1 wire
+  net %b u1 wire
+  net %q u1 wire
+  net %mid u1 wire
+  net %gated u1 wire
+  port clk in %clk
+  port d in %d
+  port b in %b
+  port q out %q
+  cell ff1 dff pos (clk=%clk, d=%d) -> (q=%mid)
+  cell g and (a=%mid, b=%b) -> (y=%gated)
+  cell ff2 dff pos (clk=%clk, d=%gated) -> (q=%q)
+end

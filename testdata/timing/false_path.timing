@@ -1,0 +1,112 @@
+timing summary for module `false_path` (unit delays, ideal clocks)
+  clock            period    waveform      source
+  sys              10.000  0.000  5.000      clk
+  group                      check   endpoints  violating   worst slack  endpoint
+  sys -> sys                 setup           4          0         6.800  out/d
+  sys -> sys                 hold            4          2        -0.100  cfgreg/d
+
+path 1 of 8: hold slack -0.100 (VIOLATED)
+  startpoint: cfg (port clocked by sys)
+  endpoint:   cfgreg/d (flip-flop clocked by sys)
+      incr     total  edge  pin
+     0.000     0.000    r   cfg                      launch port
+     0.000     0.000    r   cfgreg/d                 net cfg
+     0.000            data arrival time
+     0.000            capture edge sys at 0.000 (launch sys at 0.000)
+     0.100            hold
+     0.100            data required time
+    -0.100            slack (VIOLATED)
+
+path 2 of 8: hold slack -0.100 (VIOLATED)
+  startpoint: d (port clocked by sys)
+  endpoint:   datareg/d (flip-flop clocked by sys)
+      incr     total  edge  pin
+     0.000     0.000    r   d                        launch port
+     0.000     0.000    r   datareg/d                net d
+     0.000            data arrival time
+     0.000            capture edge sys at 0.000 (launch sys at 0.000)
+     0.100            hold
+     0.100            data required time
+    -0.100            slack (VIOLATED)
+
+path 3 of 8: hold slack 1.000 (met)
+  startpoint: out/clk (flip-flop clocked by sys)
+  endpoint:   q (port clocked by sys)
+      incr     total  edge  pin
+     0.000     0.000    r   out/clk                  clock sys
+     1.000     1.000    r   out/q                    cell dff
+     0.000     1.000    r   q                        net q
+     1.000            data arrival time
+     0.000            capture edge sys at 0.000 (launch sys at 0.000)
+     0.000            hold
+     0.000            data required time
+     1.000            slack (met)
+
+path 4 of 8: hold slack 1.900 (met)
+  startpoint: datareg/clk (flip-flop clocked by sys)
+  endpoint:   out/d (flip-flop clocked by sys)
+      incr     total  edge  pin
+     0.000     0.000    r   datareg/clk              clock sys
+     1.000     1.000    r   datareg/q                cell dff
+     0.000     1.000    r   pick/b                   net dq
+     1.000     2.000    r   pick/y                   cell and
+     0.000     2.000    r   out/d                    net sel
+     2.000            data arrival time
+     0.000            capture edge sys at 0.000 (launch sys at 0.000)
+     0.100            hold
+     0.100            data required time
+     1.900            slack (met)
+
+path 5 of 8: setup slack 6.800 (met)
+  startpoint: datareg/clk (flip-flop clocked by sys)
+  endpoint:   out/d (flip-flop clocked by sys)
+      incr     total  edge  pin
+     0.000     0.000    r   datareg/clk              clock sys
+     1.000     1.000    r   datareg/q                cell dff
+     0.000     1.000    r   stage1/b                 net dq
+     1.000     2.000    f   stage1/y                 cell xor
+     0.000     2.000    f   pick/a                   net slow
+     1.000     3.000    f   pick/y                   cell and
+     0.000     3.000    f   out/d                    net sel
+     3.000            data arrival time
+    10.000            capture edge sys at 10.000 (launch sys at 0.000)
+    -0.200            setup
+     9.800            data required time
+     6.800            slack (met)
+
+path 6 of 8: setup slack 9.000 (met)
+  startpoint: out/clk (flip-flop clocked by sys)
+  endpoint:   q (port clocked by sys)
+      incr     total  edge  pin
+     0.000     0.000    r   out/clk                  clock sys
+     1.000     1.000    r   out/q                    cell dff
+     0.000     1.000    r   q                        net q
+     1.000            data arrival time
+    10.000            capture edge sys at 10.000 (launch sys at 0.000)
+     0.000            setup
+    10.000            data required time
+     9.000            slack (met)
+
+path 7 of 8: setup slack 9.800 (met)
+  startpoint: cfg (port clocked by sys)
+  endpoint:   cfgreg/d (flip-flop clocked by sys)
+      incr     total  edge  pin
+     0.000     0.000    r   cfg                      launch port
+     0.000     0.000    r   cfgreg/d                 net cfg
+     0.000            data arrival time
+    10.000            capture edge sys at 10.000 (launch sys at 0.000)
+    -0.200            setup
+     9.800            data required time
+     9.800            slack (met)
+
+path 8 of 8: setup slack 9.800 (met)
+  startpoint: d (port clocked by sys)
+  endpoint:   datareg/d (flip-flop clocked by sys)
+      incr     total  edge  pin
+     0.000     0.000    r   d                        launch port
+     0.000     0.000    r   datareg/d                net d
+     0.000            data arrival time
+    10.000            capture edge sys at 10.000 (launch sys at 0.000)
+    -0.200            setup
+     9.800            data required time
+     9.800            slack (met)

@@ -1,0 +1,16 @@
+// A combinational loop: reported, not walked into.
+top comb_loop
+
+module comb_loop
+  net %clk u1 wire
+  net %a u1 wire
+  net %y u1 wire
+  net %t u1 wire
+  net %r u1 wire
+  port clk in %clk
+  port a in %a
+  port y out %y
+  cell g1 and (a=%a, b=%r) -> (y=%t)
+  cell g2 not (a=%t) -> (y=%r)
+  cell keep dff pos (clk=%clk, d=%r) -> (q=%y)
+end

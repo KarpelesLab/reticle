@@ -1,0 +1,57 @@
+// A four-deep asynchronous FIFO: the RAM is written on `wclk` and read
+// on `rclk`, and each side keeps its pointer twice, once in binary for
+// addressing and once gray coded (`ptr ^ (ptr >> 1)`) for crossing. The
+// gray copy is registered, so what crosses comes straight out of a
+// flip-flop into a two-flop synchroniser in the other domain.
+//
+// The shape is recognisable from the netlist. That the pointers really
+// are gray coded is not, which is what the report says.
+top async_fifo
+
+module async_fifo
+  memory @ram 4 x u8
+  net %wclk u1 wire
+  net %rclk u1 wire
+  net %wen u1 wire
+  net %ren u1 wire
+  net %wdata u8 wire
+  net %rdata u8 wire
+  net %wbin u2 wire
+  net %wnext u2 wire
+  net %wsh u2 wire
+  net %wgraynext u2 wire
+  net %wgray u2 wire
+  net %wg_meta u2 wire
+  net %wg_safe u2 wire
+  net %rbin u2 wire
+  net %rnext u2 wire
+  net %rsh u2 wire
+  net %rgraynext u2 wire
+  net %rgray u2 wire
+  net %rg_meta u2 wire
+  net %rg_safe u2 wire
+  port wclk in %wclk
+  port rclk in %rclk
+  port wen in %wen
+  port ren in %ren
+  port wdata in %wdata
+  port rdata out %rdata
+  port wptr_in_rclk out %wg_safe
+  port rptr_in_wclk out %rg_safe
+  cell winc add (a=%wbin, b=2'd1) -> (y=%wnext)
+  cell wbin_reg dff pos en (clk=%wclk, d=%wnext, en=%wen) -> (q=%wbin)
+  cell wshift shr (a=%wnext, b=2'd1) -> (y=%wsh)
+  cell wgray_gen xor (a=%wnext, b=%wsh) -> (y=%wgraynext)
+  cell wgray_reg dff pos en (clk=%wclk, d=%wgraynext, en=%wen) -> (q=%wgray)
+  cell wg_sync1 dff pos (clk=%rclk, d=%wgray) -> (q=%wg_meta)
+  cell wg_sync2 dff pos (clk=%rclk, d=%wg_meta) -> (q=%wg_safe)
+  cell rinc add (a=%rbin, b=2'd1) -> (y=%rnext)
+  cell rbin_reg dff pos en (clk=%rclk, d=%rnext, en=%ren) -> (q=%rbin)
+  cell rshift shr (a=%rnext, b=2'd1) -> (y=%rsh)
+  cell rgray_gen xor (a=%rnext, b=%rsh) -> (y=%rgraynext)
+  cell rgray_reg dff pos en (clk=%rclk, d=%rgraynext, en=%ren) -> (q=%rgray)
+  cell rg_sync1 dff pos (clk=%wclk, d=%rgray) -> (q=%rg_meta)
+  cell rg_sync2 dff pos (clk=%wclk, d=%rg_meta) -> (q=%rg_safe)
+  cell wr memwr @ram clocked (addr=%wbin, data=%wdata, en=%wen, clk=%wclk) -> ()
+  cell rd memrd @ram clocked (addr=%rbin, clk=%rclk, en=%ren) -> (data=%rdata)
+end

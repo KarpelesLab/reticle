@@ -1,0 +1,20 @@
+// The same crossing done properly: a two-flop synchroniser in the
+// destination domain, with no logic in the chain and no other load on
+// the intermediate flip-flop.
+top cdc_sync2
+
+module cdc_sync2
+  net %aclk u1 wire
+  net %bclk u1 wire
+  net %d u1 wire
+  net %q u1 wire
+  net %flag u1 wire
+  net %meta u1 wire
+  port aclk in %aclk
+  port bclk in %bclk
+  port d in %d
+  port q out %q
+  cell src dff pos (clk=%aclk, d=%d) -> (q=%flag)
+  cell sync1 dff pos (clk=%bclk, d=%flag) -> (q=%meta)
+  cell sync2 dff pos (clk=%bclk, d=%meta) -> (q=%q)
+end

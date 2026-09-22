@@ -1,0 +1,111 @@
+timing summary for module `multicycle` (unit delays, ideal clocks)
+  clock            period    waveform      source
+  sys              10.000  0.000  5.000      clk
+  group                      check   endpoints  violating   worst slack  endpoint
+  sys -> sys                 setup           4          0         9.000  y
+  sys -> sys                 hold            4          2        -0.100  mul_a/d
+
+path 1 of 8: hold slack -0.100 (VIOLATED)
+  startpoint: a (port clocked by sys)
+  endpoint:   mul_a/d (flip-flop clocked by sys)
+      incr     total  edge  pin
+     0.000     0.000    r   a                        launch port
+     0.000     0.000    r   mul_a/d                  net a
+     0.000            data arrival time
+     0.000            capture edge sys at 0.000 (launch sys at 0.000)
+     0.100            hold
+     0.100            data required time
+    -0.100            slack (VIOLATED)
+
+path 2 of 8: hold slack -0.100 (VIOLATED)
+  startpoint: b (port clocked by sys)
+  endpoint:   mul_b/d (flip-flop clocked by sys)
+      incr     total  edge  pin
+     0.000     0.000    r   b                        launch port
+     0.000     0.000    r   mul_b/d                  net b
+     0.000            data arrival time
+     0.000            capture edge sys at 0.000 (launch sys at 0.000)
+     0.100            hold
+     0.100            data required time
+    -0.100            slack (VIOLATED)
+
+path 3 of 8: hold slack 1.000 (met)
+  startpoint: mul_q/clk (flip-flop clocked by sys)
+  endpoint:   y (port clocked by sys)
+      incr     total  edge  pin
+     0.000     0.000    r   mul_q/clk                clock sys
+     1.000     1.000    r   mul_q/q                  cell dff
+     0.000     1.000    r   y                        net y
+     1.000            data arrival time
+     0.000            capture edge sys at 0.000 (launch sys at 0.000)
+     0.000            hold
+     0.000            data required time
+     1.000            slack (met)
+
+path 4 of 8: hold slack 1.900 (met)
+  startpoint: mul_a/clk (flip-flop clocked by sys)
+  endpoint:   mul_q/d (flip-flop clocked by sys)
+      incr     total  edge  pin
+     0.000     0.000    r   mul_a/clk                clock sys
+     1.000     1.000    r   mul_a/q                  cell dff
+     0.000     1.000    r   mul/a                    net aq
+     1.000     2.000    f   mul/y                    cell mul
+     0.000     2.000    f   mul_q/d                  net prod
+     2.000            data arrival time
+     0.000            capture edge sys at 0.000 (launch sys at 0.000)
+     0.100            hold
+     0.100            data required time
+     1.900            slack (met)
+
+path 5 of 8: setup slack 9.000 (met)
+  startpoint: mul_q/clk (flip-flop clocked by sys)
+  endpoint:   y (port clocked by sys)
+      incr     total  edge  pin
+     0.000     0.000    r   mul_q/clk                clock sys
+     1.000     1.000    r   mul_q/q                  cell dff
+     0.000     1.000    r   y                        net y
+     1.000            data arrival time
+    10.000            capture edge sys at 10.000 (launch sys at 0.000)
+     0.000            setup
+    10.000            data required time
+     9.000            slack (met)
+
+path 6 of 8: setup slack 9.800 (met)
+  startpoint: a (port clocked by sys)
+  endpoint:   mul_a/d (flip-flop clocked by sys)
+      incr     total  edge  pin
+     0.000     0.000    r   a                        launch port
+     0.000     0.000    r   mul_a/d                  net a
+     0.000            data arrival time
+    10.000            capture edge sys at 10.000 (launch sys at 0.000)
+    -0.200            setup
+     9.800            data required time
+     9.800            slack (met)
+
+path 7 of 8: setup slack 9.800 (met)
+  startpoint: b (port clocked by sys)
+  endpoint:   mul_b/d (flip-flop clocked by sys)
+      incr     total  edge  pin
+     0.000     0.000    r   b                        launch port
+     0.000     0.000    r   mul_b/d                  net b
+     0.000            data arrival time
+    10.000            capture edge sys at 10.000 (launch sys at 0.000)
+    -0.200            setup
+     9.800            data required time
+     9.800            slack (met)
+
+path 8 of 8: setup slack 17.800 (met)
+  startpoint: mul_a/clk (flip-flop clocked by sys)
+  endpoint:   mul_q/d (flip-flop clocked by sys)
+  multicycle: 2 periods
+      incr     total  edge  pin
+     0.000     0.000    r   mul_a/clk                clock sys
+     1.000     1.000    r   mul_a/q                  cell dff
+     0.000     1.000    r   mul/a                    net aq
+     1.000     2.000    f   mul/y                    cell mul
+     0.000     2.000    f   mul_q/d                  net prod
+     2.000            data arrival time
+    20.000            capture edge sys at 20.000 (launch sys at 0.000)
+    -0.200            setup
+    19.800            data required time
+    17.800            slack (met)

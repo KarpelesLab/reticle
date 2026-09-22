@@ -1,0 +1,4 @@
+create_clock -name wclk -period 10 wclk
+create_clock -name rclk -period 13 rclk
+set_false_path -from wgray_reg -to wg_sync1
+set_false_path -from rgray_reg -to rg_sync1

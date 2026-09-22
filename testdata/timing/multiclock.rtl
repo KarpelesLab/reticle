@@ -1,0 +1,19 @@
+// Two unrelated clocks, so the capture edge is the tightest pair of
+// edges rather than a whole period.
+top multiclock
+
+module multiclock
+  net %fast u1 wire
+  net %slow u1 wire
+  net %d u1 wire
+  net %q u1 wire
+  net %mid u1 wire
+  net %inv u1 wire
+  port fast in %fast
+  port slow in %slow
+  port d in %d
+  port q out %q
+  cell src dff pos (clk=%fast, d=%d) -> (q=%mid)
+  cell n not (a=%mid) -> (y=%inv)
+  cell dst dff pos (clk=%slow, d=%inv) -> (q=%q)
+end

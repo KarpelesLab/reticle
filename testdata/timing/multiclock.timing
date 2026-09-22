@@ -1,0 +1,91 @@
+timing summary for module `multiclock` (unit delays, ideal clocks)
+  clock            period    waveform      source
+  fast             10.000  0.000  5.000      fast
+  slow             15.000  0.000  7.500      slow
+  group                      check   endpoints  violating   worst slack  endpoint
+  fast -> fast               setup           1          0         9.800  src/d
+  fast -> fast               hold            1          1        -0.100  src/d
+  fast -> slow               setup           1          0         2.800  dst/d
+  fast -> slow               hold            1          0        11.900  dst/d
+  slow -> fast               setup           1          0         4.000  q
+  slow -> fast               hold            1          0         6.000  q
+
+path 1 of 6: hold slack -0.100 (VIOLATED)
+  startpoint: d (port clocked by fast)
+  endpoint:   src/d (flip-flop clocked by fast)
+      incr     total  edge  pin
+     0.000     0.000    r   d                        launch port
+     0.000     0.000    r   src/d                    net d
+     0.000            data arrival time
+     0.000            capture edge fast at 0.000 (launch fast at 0.000)
+     0.100            hold
+     0.100            data required time
+    -0.100            slack (VIOLATED)
+
+path 2 of 6: setup slack 2.800 (met)
+  startpoint: src/clk (flip-flop clocked by fast)
+  endpoint:   dst/d (flip-flop clocked by slow)
+      incr     total  edge  pin
+     0.000     0.000    r   src/clk                  clock fast
+     1.000     1.000    r   src/q                    cell dff
+     0.000     1.000    r   n/a                      net mid
+     1.000     2.000    f   n/y                      cell not
+     0.000     2.000    f   dst/d                    net inv
+     2.000            data arrival time
+     5.000            capture edge slow at 15.000 (launch fast at 10.000)
+    -0.200            setup
+     4.800            data required time
+     2.800            slack (met)
+
+path 3 of 6: setup slack 4.000 (met)
+  startpoint: dst/clk (flip-flop clocked by slow)
+  endpoint:   q (port clocked by fast)
+      incr     total  edge  pin
+     0.000     0.000    r   dst/clk                  clock slow
+     1.000     1.000    r   dst/q                    cell dff
+     0.000     1.000    r   q                        net q
+     1.000            data arrival time
+     5.000            capture edge fast at 20.000 (launch slow at 15.000)
+     0.000            setup
+     5.000            data required time
+     4.000            slack (met)
+
+path 4 of 6: hold slack 6.000 (met)
+  startpoint: dst/clk (flip-flop clocked by slow)
+  endpoint:   q (port clocked by fast)
+      incr     total  edge  pin
+     0.000     0.000    r   dst/clk                  clock slow
+     1.000     1.000    r   dst/q                    cell dff
+     0.000     1.000    r   q                        net q
+     1.000            data arrival time
+    -5.000            capture edge fast at 10.000 (launch slow at 15.000)
+     0.000            hold
+    -5.000            data required time
+     6.000            slack (met)
+
+path 5 of 6: setup slack 9.800 (met)
+  startpoint: d (port clocked by fast)
+  endpoint:   src/d (flip-flop clocked by fast)
+      incr     total  edge  pin
+     0.000     0.000    r   d                        launch port
+     0.000     0.000    r   src/d                    net d
+     0.000            data arrival time
+    10.000            capture edge fast at 10.000 (launch fast at 0.000)
+    -0.200            setup
+     9.800            data required time
+     9.800            slack (met)
+
+path 6 of 6: hold slack 11.900 (met)
+  startpoint: src/clk (flip-flop clocked by fast)
+  endpoint:   dst/d (flip-flop clocked by slow)
+      incr     total  edge  pin
+     0.000     0.000    r   src/clk                  clock fast
+     1.000     1.000    r   src/q                    cell dff
+     0.000     1.000    r   n/a                      net mid
+     1.000     2.000    f   n/y                      cell not
+     0.000     2.000    f   dst/d                    net inv
+     2.000            data arrival time
+   -10.000            capture edge slow at 0.000 (launch fast at 10.000)
+     0.100            hold
+    -9.900            data required time
+    11.900            slack (met)

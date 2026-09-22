@@ -1,0 +1,90 @@
+timing summary for module `cdc_unsync` (unit delays, ideal clocks)
+  clock            period    waveform      source
+  aclk             10.000  0.000  5.000      aclk
+  bclk              7.000  0.000  3.500      bclk
+  group                      check   endpoints  violating   worst slack  endpoint
+  aclk -> aclk               setup           1          0         9.800  src/d
+  aclk -> aclk               hold            1          1        -0.100  src/d
+  aclk -> bclk               setup           1          1        -1.200  dst/d
+  aclk -> bclk               hold            1          0         6.900  dst/d
+  bclk -> aclk               setup           1          0         0.000  q
+  bclk -> aclk               hold            1          0        10.000  q
+
+path 1 of 6: setup slack -1.200 (VIOLATED)
+  startpoint: src/clk (flip-flop clocked by aclk)
+  endpoint:   dst/d (flip-flop clocked by bclk)
+      incr     total  edge  pin
+     0.000     0.000    r   src/clk                  clock aclk
+     1.000     1.000    r   src/q                    cell dff
+     0.000     1.000    r   g/a                      net flag
+     1.000     2.000    r   g/y                      cell and
+     0.000     2.000    r   dst/d                    net gated
+     2.000            data arrival time
+     1.000            capture edge bclk at 21.000 (launch aclk at 20.000)
+    -0.200            setup
+     0.800            data required time
+    -1.200            slack (VIOLATED)
+
+path 2 of 6: hold slack -0.100 (VIOLATED)
+  startpoint: d (port clocked by aclk)
+  endpoint:   src/d (flip-flop clocked by aclk)
+      incr     total  edge  pin
+     0.000     0.000    r   d                        launch port
+     0.000     0.000    r   src/d                    net d
+     0.000            data arrival time
+     0.000            capture edge aclk at 0.000 (launch aclk at 0.000)
+     0.100            hold
+     0.100            data required time
+    -0.100            slack (VIOLATED)
+
+path 3 of 6: setup slack 0.000 (met)
+  startpoint: dst/clk (flip-flop clocked by bclk)
+  endpoint:   q (port clocked by aclk)
+      incr     total  edge  pin
+     0.000     0.000    r   dst/clk                  clock bclk
+     1.000     1.000    r   dst/q                    cell dff
+     0.000     1.000    r   q                        net q
+     1.000            data arrival time
+     1.000            capture edge aclk at 50.000 (launch bclk at 49.000)
+     0.000            setup
+     1.000            data required time
+     0.000            slack (met)
+
+path 4 of 6: hold slack 6.900 (met)
+  startpoint: en (port clocked by aclk)
+  endpoint:   dst/d (flip-flop clocked by bclk)
+      incr     total  edge  pin
+     0.000     0.000    r   en                       launch port
+     0.000     0.000    r   g/b                      net en
+     1.000     1.000    r   g/y                      cell and
+     0.000     1.000    r   dst/d                    net gated
+     1.000            data arrival time
+    -6.000            capture edge bclk at 14.000 (launch aclk at 20.000)
+     0.100            hold
+    -5.900            data required time
+     6.900            slack (met)
+
+path 5 of 6: setup slack 9.800 (met)
+  startpoint: d (port clocked by aclk)
+  endpoint:   src/d (flip-flop clocked by aclk)
+      incr     total  edge  pin
+     0.000     0.000    r   d                        launch port
+     0.000     0.000    r   src/d                    net d
+     0.000            data arrival time
+    10.000            capture edge aclk at 10.000 (launch aclk at 0.000)
+    -0.200            setup
+     9.800            data required time
+     9.800            slack (met)
+
+path 6 of 6: hold slack 10.000 (met)
+  startpoint: dst/clk (flip-flop clocked by bclk)
+  endpoint:   q (port clocked by aclk)
+      incr     total  edge  pin
+     0.000     0.000    r   dst/clk                  clock bclk
+     1.000     1.000    r   dst/q                    cell dff
+     0.000     1.000    r   q                        net q
+     1.000            data arrival time
+    -9.000            capture edge aclk at 40.000 (launch bclk at 49.000)
+     0.000            hold
+    -9.000            data required time
+    10.000            slack (met)

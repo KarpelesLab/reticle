@@ -1,0 +1,21 @@
+// A standard-cell netlist: black boxes named after the cells in
+// liberty.lib, so the non-linear delay model is the one doing the work.
+top liberty
+
+module liberty
+  net %clk u1 wire
+  net %d u1 wire
+  net %e u1 wire
+  net %q u1 wire
+  net %a u1 wire
+  net %nb u1 wire
+  net %g u1 wire
+  port clk in %clk
+  port d in %d
+  port e in %e
+  port q out %q
+  cell ff1 blackbox DFFX1 (CK=%clk, D=%d) -> (Q=%a)
+  cell inv1 blackbox INVX1 (A=%a) -> (Y=%nb)
+  cell and1 blackbox AND2X1 (A=%nb, B=%e) -> (Y=%g)
+  cell ff2 blackbox DFFX1 (CK=%clk, D=%g) -> (Q=%q)
+end

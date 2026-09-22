@@ -1,0 +1,20 @@
+// A multiplier that is given two clock periods to settle.
+top multicycle
+
+module multicycle
+  net %clk u1 wire
+  net %a u4 wire
+  net %b u4 wire
+  net %y u4 wire
+  net %aq u4 wire
+  net %bq u4 wire
+  net %prod u4 wire
+  port clk in %clk
+  port a in %a
+  port b in %b
+  port y out %y
+  cell mul_a dff pos (clk=%clk, d=%a) -> (q=%aq)
+  cell mul_b dff pos (clk=%clk, d=%b) -> (q=%bq)
+  cell mul mul (a=%aq, b=%bq) -> (y=%prod)
+  cell mul_q dff pos (clk=%clk, d=%prod) -> (q=%y)
+end

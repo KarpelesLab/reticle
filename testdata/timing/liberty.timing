@@ -1,0 +1,87 @@
+timing summary for module `liberty` (liberty(tiny) delays, ideal clocks)
+  clock            period    waveform      source
+  sys               2.000  0.000  1.000      clk
+  group                      check   endpoints  violating   worst slack  endpoint
+  sys -> sys                 setup           3          0         1.631  ff2/D
+  sys -> sys                 hold            3          1        -0.020  ff1/D
+
+path 1 of 6: hold slack -0.020 (VIOLATED)
+  startpoint: d (port clocked by sys)
+  endpoint:   ff1/D (DFFX1 clocked by sys)
+      incr     total  edge  pin
+     0.000     0.000    r   d                        launch port
+     0.000     0.000    r   ff1/D                    net d
+     0.000            data arrival time
+     0.000            capture edge sys at 0.000 (launch sys at 0.000)
+     0.020            hold
+     0.020            data required time
+    -0.020            slack (VIOLATED)
+
+path 2 of 6: hold slack 0.034 (met)
+  startpoint: e (port clocked by sys)
+  endpoint:   ff2/D (DFFX1 clocked by sys)
+      incr     total  edge  pin
+     0.000     0.000    f   e                        launch port
+     0.000     0.000    f   and1/B                   net e
+     0.056     0.056    f   and1/Y                   cell AND2X1
+     0.000     0.056    f   ff2/D                    net g
+     0.056            data arrival time
+     0.000            capture edge sys at 0.000 (launch sys at 0.000)
+     0.022            hold
+     0.022            data required time
+     0.034            slack (met)
+
+path 3 of 6: hold slack 0.187 (met)
+  startpoint: ff2/CK (DFFX1 clocked by sys)
+  endpoint:   q (port clocked by sys)
+      incr     total  edge  pin
+     0.000     0.000    r   ff2/CK                   clock sys
+     0.187     0.187    f   ff2/Q                    cell DFFX1
+     0.000     0.187    f   q                        net q
+     0.187            data arrival time
+     0.000            capture edge sys at 0.000 (launch sys at 0.000)
+     0.000            hold
+     0.000            data required time
+     0.187            slack (met)
+
+path 4 of 6: setup slack 1.631 (met)
+  startpoint: ff1/CK (DFFX1 clocked by sys)
+  endpoint:   ff2/D (DFFX1 clocked by sys)
+      incr     total  edge  pin
+     0.000     0.000    r   ff1/CK                   clock sys
+     0.207     0.207    r   ff1/Q                    cell DFFX1
+     0.000     0.207    r   inv1/A                   net a
+     0.024     0.231    f   inv1/Y                   cell INVX1
+     0.000     0.231    f   and1/A                   net nb
+     0.054     0.286    f   and1/Y                   cell AND2X1
+     0.000     0.286    f   ff2/D                    net g
+     0.286            data arrival time
+     2.000            capture edge sys at 2.000 (launch sys at 0.000)
+    -0.083            setup
+     1.917            data required time
+     1.631            slack (met)
+
+path 5 of 6: setup slack 1.793 (met)
+  startpoint: ff2/CK (DFFX1 clocked by sys)
+  endpoint:   q (port clocked by sys)
+      incr     total  edge  pin
+     0.000     0.000    r   ff2/CK                   clock sys
+     0.207     0.207    r   ff2/Q                    cell DFFX1
+     0.000     0.207    r   q                        net q
+     0.207            data arrival time
+     2.000            capture edge sys at 2.000 (launch sys at 0.000)
+     0.000            setup
+     2.000            data required time
+     1.793            slack (met)
+
+path 6 of 6: setup slack 1.920 (met)
+  startpoint: d (port clocked by sys)
+  endpoint:   ff1/D (DFFX1 clocked by sys)
+      incr     total  edge  pin
+     0.000     0.000    r   d                        launch port
+     0.000     0.000    r   ff1/D                    net d
+     0.000            data arrival time
+     2.000            capture edge sys at 2.000 (launch sys at 0.000)
+    -0.080            setup
+     1.920            data required time
+     1.920            slack (met)

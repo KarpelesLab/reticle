@@ -1,0 +1,34 @@
+// Two control bits each cross through their own, correct, two-flop
+// synchroniser, and are then recombined by one AND in the destination
+// domain. Each synchroniser is fine; the pair is not, because the two
+// bits can resolve on different destination clock edges.
+top cdc_reconverge
+
+module cdc_reconverge
+
+  net %aclk u1 wire
+  net %bclk u1 wire
+  net %d0 u1 wire
+  net %d1 u1 wire
+  net %q u1 wire
+  net %src0 u1 wire
+  net %src1 u1 wire
+  net %meta0 u1 wire
+  net %meta1 u1 wire
+  net %safe0 u1 wire
+  net %safe1 u1 wire
+  net %both u1 wire
+  port aclk in %aclk
+  port bclk in %bclk
+  port d0 in %d0
+  port d1 in %d1
+  port q out %q
+  cell srcff0 dff pos (clk=%aclk, d=%d0) -> (q=%src0)
+  cell srcff1 dff pos (clk=%aclk, d=%d1) -> (q=%src1)
+  cell sync0a dff pos (clk=%bclk, d=%src0) -> (q=%meta0)
+  cell sync0b dff pos (clk=%bclk, d=%meta0) -> (q=%safe0)
+  cell sync1a dff pos (clk=%bclk, d=%src1) -> (q=%meta1)
+  cell sync1b dff pos (clk=%bclk, d=%meta1) -> (q=%safe1)
+  cell recombine and (a=%safe0, b=%safe1) -> (y=%both)
+  cell cap dff pos (clk=%bclk, d=%both) -> (q=%q)
+end
