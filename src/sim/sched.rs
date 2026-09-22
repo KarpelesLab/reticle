@@ -128,8 +128,10 @@ impl<'d> Simulator<'d> {
         self.timed.entry(t).or_default().push(ev);
     }
 
-    /// Runs the current time slot to quiescence, then the monitor region.
+    /// Runs the current time slot to quiescence, then the concurrent
+    /// assertions and the monitor region.
     pub(crate) fn run_slot(&mut self) {
+        self.sample_assertions();
         let mut count = 0u64;
         loop {
             if self.status != Status::Running {
@@ -165,6 +167,7 @@ impl<'d> Simulator<'d> {
             }
             break;
         }
+        self.run_assertions();
         self.monitor_region();
     }
 
@@ -242,6 +245,9 @@ impl<'d> Simulator<'d> {
 
     /// Notifies everything that depends on `sig` of a change.
     pub(crate) fn propagate(&mut self, sig: SigId, old: &Logic, new: &Logic) {
+        if !self.assert_clocks.is_empty() {
+            self.note_assertion_edge(sig, old, new);
+        }
         if let Some(vcd) = &mut self.vcd {
             vcd.change(
                 self.now,

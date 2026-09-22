@@ -326,6 +326,10 @@ impl<'d> Simulator<'d> {
             rng,
             time_format: super::sys::TimeFormat::for_precision(precision_fs),
             warned_calls: Vec::new(),
+            assertions: Vec::new(),
+            assert_watch: Vec::new(),
+            assert_sample: Vec::new(),
+            assert_clocks: Vec::new(),
         };
         let top_name = design.modules[top].name.to_string();
         let mut chain = Vec::new();

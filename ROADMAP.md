@@ -212,7 +212,7 @@ user-facing simulator and as the reference model for every synthesis pass
 - [ ] Compiled 2-state fast mode: lower cycle-based designs to straight-line
       Rust-native evaluation code for a large speed-up on synchronous logic
       (Verilator's niche), selectable per run.
-- [ ] Assertions: immediate assertions, a useful subset of SVA / PSL
+- [x] Assertions: immediate assertions, a useful subset of SVA / PSL
       (sequences, `|->`, `|=>`, `##n`) checked during simulation.
 - [ ] Coverage: line and toggle coverage reports.
 

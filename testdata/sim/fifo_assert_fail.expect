@@ -1,0 +1,14 @@
+# The queue is full from the posedge at 45 ns on and `push` never drops, so
+# the attempts started at the clocking events at 55, 65, 75 and 85 ns each
+# find `full && push` and fail in the cycle they started in.
+assert no_push_when_full: assert property (@(posedge clk) full |-> !push)
+run
+expect-finished
+expect-time 92ns
+expect fifo_tb.count = 3'd4
+expect-assert no_push_when_full cycles=9 attempts=9 passes=0 vacuous=5 failures=4 incomplete=0
+expect-message assertion `no_push_when_full` failed at cycle 5
+expect-message the attempt started at cycle 5
+expect-message failed at cycle 6
+expect-message failed at cycle 7
+expect-message failed at cycle 8

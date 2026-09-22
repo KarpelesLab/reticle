@@ -20,6 +20,9 @@
 //! expect-output                the $display text so far, lines until `end-output`
 //! expect-message <substring>   some diagnostic contains the text
 //! expect-vcd                   the captured VCD equals <name>.vcd
+//! assert <directive>           add a concurrent assertion (SVA / PSL text)
+//! expect-assert <name> k=v ... counts of one directive: attempts, passes,
+//!                              vacuous, failures, disabled, incomplete, cycles
 //! ```
 //!
 //! Expectations are hand-written: there is no update mode. Any error
@@ -259,6 +262,38 @@ fn run_case(path: &Path) -> Result<(), String> {
                     failures.push(fail(format!("no diagnostic contains `{rest}`")));
                 }
                 expected_messages.push(rest.to_owned());
+            }
+            "assert" => {
+                let span = reticle::source::Span::new(file, 0, 0);
+                match sim.add_assertion_text(rest, span) {
+                    Ok(_) => {}
+                    Err(d) => failures.push(fail(format!("bad assertion: {}", d.message))),
+                }
+            }
+            "expect-assert" => {
+                let (name, wanted) = rest.split_once(' ').unwrap_or((rest, ""));
+                let results = sim.assertion_results();
+                let Some(result) = results.iter().find(|r| r.name == name) else {
+                    failures.push(fail(format!("no assertion named `{name}`")));
+                    continue;
+                };
+                for item in wanted.split_whitespace() {
+                    let (key, value) = item.split_once('=').expect("expect-assert key=value");
+                    let want: u64 = value.parse().expect("expect-assert count");
+                    let got = match key {
+                        "attempts" => result.attempts,
+                        "passes" => result.passes,
+                        "vacuous" => result.vacuous,
+                        "failures" => result.failures,
+                        "disabled" => result.disabled,
+                        "incomplete" => result.incomplete,
+                        "cycles" => result.cycles,
+                        other => panic!("unknown assertion count `{other}`"),
+                    };
+                    if got != want {
+                        failures.push(fail(format!("{name}.{key} is {got}, expected {want}")));
+                    }
+                }
             }
             "expect-vcd" => {
                 let golden = fs::read_to_string(path.with_extension("vcd"))

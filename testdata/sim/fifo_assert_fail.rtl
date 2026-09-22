@@ -1,0 +1,44 @@
+// The same FIFO as `fifo_assert.rtl` with a testbench that keeps pushing
+// after the queue is full, so the `full |-> !push` property fails. The
+// `.expect` script pins the cycle each failing attempt is reported at.
+top fifo_tb
+
+module fifo_tb
+  timescale 1 ns / 1 ps
+  net %clk u1 reg
+  net %rst u1 reg
+  net %push u1 reg
+  net %pop u1 reg
+  net %count u3 reg
+  net %full u1 wire
+  net %empty u1 wire
+  assign %full = eq(%count, 3'd4)
+  assign %empty = eq(%count, 3'd0)
+  process fifo seq posedge %clk
+    if %rst
+      %count <= 3'd0
+    else
+      if and(%push, not(%full))
+        %count <= add(%count, 3'd1)
+      end
+      if and(%pop, not(%empty))
+        %count <= sub(%count, 3'd1)
+      end
+    end
+  end
+  process clkgen free
+    wait for 8'd5
+    %clk = not(%clk)
+  end
+  process stim initial
+    %clk = 1'd0
+    %rst = 1'd1
+    %push = 1'd0
+    %pop = 1'd0
+    wait for 8'd12
+    %rst = 1'd0
+    %push = 1'd1
+    wait for 8'd80
+    finish
+  end
+end

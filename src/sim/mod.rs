@@ -21,6 +21,7 @@
 //! | `sys.rs`      | System tasks, `$display` formatting, `$random`, `$readmem*`  |
 //! | `vcd.rs`      | VCD waveform writer                                          |
 //! | `api.rs`      | The public co-simulation API                                 |
+//! | `assertion/`  | Concurrent assertions: an SVA / PSL subset as automata       |
 //!
 //! # Elaboration
 //!
@@ -93,11 +94,21 @@
 //! the same changes for [`Simulator::dump_fst`] to write in GTKWave's
 //! compressed FST format; see [`fst`].
 //!
+//! # Assertions
+//!
+//! Immediate assertions are statements and run in `process.rs`. *Concurrent*
+//! assertions live in [`assertion`]: a property over a clocking event,
+//! compiled to an automaton over boolean predicates and evaluated once per
+//! clock edge with one attempt started per cycle. The supported subset of
+//! SVA and PSL — and what is deliberately left out — is listed in that
+//! module's docs. [`Simulator::add_assertion`] and
+//! [`Simulator::add_assertion_text`] add one; [`Simulator::assertion_results`]
+//! reports what happened.
+//!
 //! # Not yet here
 //!
-//! The cycle-based fast mode, inertial delay on continuous assignments
-//! (transport delay is used) and SVA/PSL sequences are later roadmap
-//! items.
+//! The cycle-based fast mode and inertial delay on continuous assignments
+//! (transport delay is used) are later roadmap items.
 
 use std::collections::{BTreeMap, VecDeque};
 
@@ -106,6 +117,7 @@ use crate::ir::{Design, ExprId};
 use crate::logic::Logic;
 
 mod api;
+pub mod assertion;
 mod elab;
 mod eval;
 pub mod fst;
@@ -116,6 +128,7 @@ mod value;
 mod vcd;
 
 pub use api::{MemHandle, NetHandle};
+pub use assertion::{AssertionId, AssertionResult};
 pub use sys::{FileProvider, MemoryFiles};
 pub use value::Value;
 
@@ -214,6 +227,12 @@ pub struct Simulator<'d> {
     rng: u64,
     time_format: TimeFormat,
     warned_calls: Vec<String>,
+    assertions: Vec<assertion::runtime::Checker>,
+    /// Signals any assertion reads, sorted, with their sampled values.
+    assert_watch: Vec<elab::SigId>,
+    assert_sample: Vec<Logic>,
+    /// Clock signals of the assertions, sorted.
+    assert_clocks: Vec<elab::SigId>,
 }
 
 impl std::fmt::Debug for Simulator<'_> {
@@ -224,6 +243,7 @@ impl std::fmt::Debug for Simulator<'_> {
             .field("instances", &self.instances.len())
             .field("signals", &self.signals.len())
             .field("processes", &self.procs.len())
+            .field("assertions", &self.assertions.len())
             .finish_non_exhaustive()
     }
 }

@@ -1,0 +1,13 @@
+# Posedges at 5, 15, 25, ... ns; reset released at 12 ns, pushes from 12 to
+# 52 ns fill the queue, and nothing pushes once `full` is set. Nine clocking
+# events: the first five sample `full` low (vacuous), the next three sample
+# it high with `push` low (real passes), and the last one is vacuous again
+# because a pop has taken the count back to three.
+assert no_push_when_full: assert property (@(posedge clk) full |-> !push)
+assert pushed: cover property (@(posedge clk) push && !full)
+run
+expect-finished
+expect-time 92ns
+expect fifo_tb.count = 3'd2
+expect-assert no_push_when_full cycles=9 attempts=9 passes=3 vacuous=6 failures=0 incomplete=0
+expect-assert pushed cycles=9 attempts=9 passes=4
