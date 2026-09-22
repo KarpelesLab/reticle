@@ -1,0 +1,299 @@
+top alu
+
+module alu
+  net %a u4 wire
+  net %b u4 wire
+  net %sum u4 wire
+  net %diff u4 wire
+  net %prod u4 wire
+  net %shifted u4 wire
+  net %below u1 wire
+  net %add0_t u4 wire
+  net %sub0_t u4 wire
+  net %mul0_t u4 wire
+  net %shl0_t u4 wire
+  net %lt_t u1 wire
+  net %add0_n0 u1 wire
+  net %add0_n1 u1 wire
+  net %add0_n2 u1 wire
+  net %add0_n3 u1 wire
+  net %add0_n4 u1 wire
+  net %add0_n5 u1 wire
+  net %add0_n6 u1 wire
+  net %add0_n7 u1 wire
+  net %add0_n8 u1 wire
+  net %add0_n9 u1 wire
+  net %add0_n10 u1 wire
+  net %add0_n11 u1 wire
+  net %add0_n12 u1 wire
+  net %add0_n13 u1 wire
+  net %add0_n14 u1 wire
+  net %add0_n15 u1 wire
+  net %add0_n16 u1 wire
+  net %add0_n17 u1 wire
+  net %add0_n18 u1 wire
+  net %add0_n19 u1 wire
+  net %add0_n20 u1 wire
+  net %add0_n21 u1 wire
+  net %add0_n22 u1 wire
+  net %add0_n23 u1 wire
+  net %add0_n24 u1 wire
+  net %sub0_n0 u1 wire
+  net %sub0_n1 u1 wire
+  net %sub0_n2 u1 wire
+  net %sub0_n3 u1 wire
+  net %sub0_n4 u1 wire
+  net %sub0_n5 u1 wire
+  net %sub0_n6 u1 wire
+  net %sub0_n7 u1 wire
+  net %sub0_n8 u1 wire
+  net %sub0_n9 u1 wire
+  net %sub0_n10 u1 wire
+  net %sub0_n11 u1 wire
+  net %sub0_n12 u1 wire
+  net %sub0_n13 u1 wire
+  net %sub0_n14 u1 wire
+  net %sub0_n15 u1 wire
+  net %sub0_n16 u1 wire
+  net %sub0_n17 u1 wire
+  net %sub0_n18 u1 wire
+  net %sub0_n19 u1 wire
+  net %sub0_n20 u1 wire
+  net %sub0_n21 u1 wire
+  net %sub0_n22 u1 wire
+  net %sub0_n23 u1 wire
+  net %sub0_n24 u1 wire
+  net %sub0_n25 u1 wire
+  net %sub0_n26 u1 wire
+  net %sub0_n27 u1 wire
+  net %sub0_n28 u1 wire
+  net %sub0_n29 u1 wire
+  net %sub0_n30 u1 wire
+  net %sub0_n31 u1 wire
+  net %sub0_n32 u1 wire
+  net %sub0_n33 u1 wire
+  net %mul0_n0 u1 wire
+  net %mul0_n1 u1 wire
+  net %mul0_n2 u1 wire
+  net %mul0_n3 u1 wire
+  net %mul0_n4 u1 wire
+  net %mul0_n5 u1 wire
+  net %mul0_n6 u1 wire
+  net %mul0_n7 u1 wire
+  net %mul0_n8 u1 wire
+  net %mul0_n9 u1 wire
+  net %mul0_n10 u1 wire
+  net %mul0_n11 u1 wire
+  net %mul0_n12 u1 wire
+  net %mul0_n13 u1 wire
+  net %mul0_n14 u1 wire
+  net %mul0_n15 u1 wire
+  net %mul0_n16 u1 wire
+  net %mul0_n17 u1 wire
+  net %mul0_n18 u1 wire
+  net %mul0_n19 u1 wire
+  net %mul0_n20 u1 wire
+  net %mul0_n21 u1 wire
+  net %mul0_n22 u1 wire
+  net %mul0_n23 u1 wire
+  net %mul0_n24 u1 wire
+  net %mul0_n25 u1 wire
+  net %mul0_n26 u1 wire
+  net %mul0_n27 u1 wire
+  net %mul0_n28 u1 wire
+  net %mul0_n29 u1 wire
+  net %mul0_n30 u1 wire
+  net %mul0_n31 u1 wire
+  net %mul0_n32 u1 wire
+  net %mul0_n33 u1 wire
+  net %mul0_n34 u1 wire
+  net %shl0_n0 u1 wire
+  net %shl0_n1 u1 wire
+  net %shl0_n2 u1 wire
+  net %shl0_n3 u1 wire
+  net %shl0_n4 u1 wire
+  net %shl0_n5 u1 wire
+  net %shl0_n6 u1 wire
+  net %shl0_n7 u1 wire
+  net %shl0_n8 u1 wire
+  net %shl0_n9 u1 wire
+  net %shl0_n10 u1 wire
+  net %shl0_n11 u1 wire
+  net %shl0_n12 u1 wire
+  net %shl0_n13 u1 wire
+  net %shl0_n14 u1 wire
+  net %shl0_n15 u1 wire
+  net %lt0_n0 u1 wire
+  net %lt0_n1 u1 wire
+  net %lt0_n2 u1 wire
+  net %lt0_n3 u1 wire
+  net %lt0_n4 u1 wire
+  net %lt0_n5 u1 wire
+  net %lt0_n6 u1 wire
+  net %lt0_n7 u1 wire
+  net %lt0_n8 u1 wire
+  net %lt0_n9 u1 wire
+  net %lt0_n10 u1 wire
+  net %lt0_n11 u1 wire
+  net %lt0_n12 u1 wire
+  net %lt0_n13 u1 wire
+  net %lt0_n14 u1 wire
+  net %lt0_n15 u1 wire
+  net %lt0_n16 u1 wire
+  net %lt0_n17 u1 wire
+  net %lt0_n18 u1 wire
+  net %lt0_n19 u1 wire
+  net %lt0_n20 u1 wire
+  net %lt0_n21 u1 wire
+  net %lt0_n22 u1 wire
+  port a in %a
+  port b in %b
+  port sum out %sum
+  port diff out %diff
+  port prod out %prod
+  port shifted out %shifted
+  port below out %below
+  assign %sum = %add0_t
+  assign %diff = %sub0_t
+  assign %prod = %mul0_t
+  assign %shifted = %shl0_t
+  assign %below = %lt_t
+  assign %add0_t = {%add0_n24, %add0_n23, %add0_n22, %add0_n4}
+  assign %sub0_t = {%sub0_n32, %sub0_n31, %sub0_n30, %sub0_n29}
+  assign %mul0_t = {%mul0_n34, %mul0_n33, %mul0_n20, %mul0_n0}
+  assign %shl0_t = {%shl0_n15, %shl0_n14, %shl0_n13, %shl0_n12}
+  assign %lt_t = %lt0_n22
+  cell add0_g0 and (a=%a[0:0], b=%b[0:0]) -> (y=%add0_n0)
+  cell add0_g1 and (a=%a[1:1], b=%b[1:1]) -> (y=%add0_n1)
+  cell add0_g2 and (a=%a[2:2], b=%b[2:2]) -> (y=%add0_n2)
+  cell add0_g3 and (a=%a[3:3], b=%b[3:3]) -> (y=%add0_n3)
+  cell add0_g4 xor (a=%a[0:0], b=%b[0:0]) -> (y=%add0_n4)
+  cell add0_g5 xor (a=%a[1:1], b=%b[1:1]) -> (y=%add0_n5)
+  cell add0_g6 xor (a=%a[2:2], b=%b[2:2]) -> (y=%add0_n6)
+  cell add0_g7 xor (a=%a[3:3], b=%b[3:3]) -> (y=%add0_n7)
+  cell add0_g8 and (a=%add0_n5, b=%add0_n0) -> (y=%add0_n8)
+  cell add0_g9 or (a=%add0_n1, b=%add0_n8) -> (y=%add0_n9)
+  cell add0_g10 and (a=%add0_n5, b=%add0_n4) -> (y=%add0_n10)
+  cell add0_g11 and (a=%add0_n6, b=%add0_n1) -> (y=%add0_n11)
+  cell add0_g12 or (a=%add0_n2, b=%add0_n11) -> (y=%add0_n12)
+  cell add0_g13 and (a=%add0_n6, b=%add0_n5) -> (y=%add0_n13)
+  cell add0_g14 and (a=%add0_n7, b=%add0_n2) -> (y=%add0_n14)
+  cell add0_g15 or (a=%add0_n3, b=%add0_n14) -> (y=%add0_n15)
+  cell add0_g16 and (a=%add0_n7, b=%add0_n6) -> (y=%add0_n16)
+  cell add0_g17 and (a=%add0_n13, b=%add0_n0) -> (y=%add0_n17)
+  cell add0_g18 or (a=%add0_n12, b=%add0_n17) -> (y=%add0_n18)
+  cell add0_g19 and (a=%add0_n16, b=%add0_n9) -> (y=%add0_n19)
+  cell add0_g20 or (a=%add0_n15, b=%add0_n19) -> (y=%add0_n20)
+  cell add0_g21 and (a=%add0_n16, b=%add0_n10) -> (y=%add0_n21)
+  cell add0_g22 xor (a=%add0_n5, b=%add0_n0) -> (y=%add0_n22)
+  cell add0_g23 xor (a=%add0_n6, b=%add0_n9) -> (y=%add0_n23)
+  cell add0_g24 xor (a=%add0_n7, b=%add0_n18) -> (y=%add0_n24)
+  cell sub0_g0 not (a=%b[0:0]) -> (y=%sub0_n0)
+  cell sub0_g1 not (a=%b[1:1]) -> (y=%sub0_n1)
+  cell sub0_g2 not (a=%b[2:2]) -> (y=%sub0_n2)
+  cell sub0_g3 not (a=%b[3:3]) -> (y=%sub0_n3)
+  cell sub0_g4 and (a=%a[0:0], b=%sub0_n0) -> (y=%sub0_n4)
+  cell sub0_g5 and (a=%a[1:1], b=%sub0_n1) -> (y=%sub0_n5)
+  cell sub0_g6 and (a=%a[2:2], b=%sub0_n2) -> (y=%sub0_n6)
+  cell sub0_g7 and (a=%a[3:3], b=%sub0_n3) -> (y=%sub0_n7)
+  cell sub0_g8 xor (a=%a[0:0], b=%sub0_n0) -> (y=%sub0_n8)
+  cell sub0_g9 xor (a=%a[1:1], b=%sub0_n1) -> (y=%sub0_n9)
+  cell sub0_g10 xor (a=%a[2:2], b=%sub0_n2) -> (y=%sub0_n10)
+  cell sub0_g11 xor (a=%a[3:3], b=%sub0_n3) -> (y=%sub0_n11)
+  cell sub0_g12 or (a=%sub0_n4, b=%sub0_n8) -> (y=%sub0_n12)
+  cell sub0_g13 and (a=%sub0_n9, b=%sub0_n4) -> (y=%sub0_n13)
+  cell sub0_g14 or (a=%sub0_n5, b=%sub0_n13) -> (y=%sub0_n14)
+  cell sub0_g15 and (a=%sub0_n9, b=%sub0_n8) -> (y=%sub0_n15)
+  cell sub0_g16 and (a=%sub0_n10, b=%sub0_n5) -> (y=%sub0_n16)
+  cell sub0_g17 or (a=%sub0_n6, b=%sub0_n16) -> (y=%sub0_n17)
+  cell sub0_g18 and (a=%sub0_n10, b=%sub0_n9) -> (y=%sub0_n18)
+  cell sub0_g19 and (a=%sub0_n11, b=%sub0_n6) -> (y=%sub0_n19)
+  cell sub0_g20 or (a=%sub0_n7, b=%sub0_n19) -> (y=%sub0_n20)
+  cell sub0_g21 and (a=%sub0_n11, b=%sub0_n10) -> (y=%sub0_n21)
+  cell sub0_g22 or (a=%sub0_n14, b=%sub0_n15) -> (y=%sub0_n22)
+  cell sub0_g23 and (a=%sub0_n18, b=%sub0_n12) -> (y=%sub0_n23)
+  cell sub0_g24 or (a=%sub0_n17, b=%sub0_n23) -> (y=%sub0_n24)
+  cell sub0_g25 and (a=%sub0_n21, b=%sub0_n14) -> (y=%sub0_n25)
+  cell sub0_g26 or (a=%sub0_n20, b=%sub0_n25) -> (y=%sub0_n26)
+  cell sub0_g27 and (a=%sub0_n21, b=%sub0_n15) -> (y=%sub0_n27)
+  cell sub0_g28 or (a=%sub0_n26, b=%sub0_n27) -> (y=%sub0_n28)
+  cell sub0_g29 not (a=%sub0_n8) -> (y=%sub0_n29)
+  cell sub0_g30 xor (a=%sub0_n9, b=%sub0_n12) -> (y=%sub0_n30)
+  cell sub0_g31 xor (a=%sub0_n10, b=%sub0_n22) -> (y=%sub0_n31)
+  cell sub0_g32 xor (a=%sub0_n11, b=%sub0_n24) -> (y=%sub0_n32)
+  cell sub0_g33 not (a=%sub0_n28) -> (y=%sub0_n33)
+  cell mul0_g0 and (a=%a[0:0], b=%b[0:0]) -> (y=%mul0_n0)
+  cell mul0_g1 and (a=%a[1:1], b=%b[0:0]) -> (y=%mul0_n1)
+  cell mul0_g2 and (a=%a[2:2], b=%b[0:0]) -> (y=%mul0_n2)
+  cell mul0_g3 and (a=%a[3:3], b=%b[0:0]) -> (y=%mul0_n3)
+  cell mul0_g4 and (a=%a[0:0], b=%b[1:1]) -> (y=%mul0_n4)
+  cell mul0_g5 and (a=%a[1:1], b=%b[1:1]) -> (y=%mul0_n5)
+  cell mul0_g6 and (a=%a[2:2], b=%b[1:1]) -> (y=%mul0_n6)
+  cell mul0_g7 and (a=%a[0:0], b=%b[2:2]) -> (y=%mul0_n7)
+  cell mul0_g8 and (a=%a[1:1], b=%b[2:2]) -> (y=%mul0_n8)
+  cell mul0_g9 and (a=%a[0:0], b=%b[3:3]) -> (y=%mul0_n9)
+  cell mul0_g10 xor (a=%mul0_n3, b=%mul0_n6) -> (y=%mul0_n10)
+  cell mul0_g11 and (a=%mul0_n3, b=%mul0_n6) -> (y=%mul0_n11)
+  cell mul0_g12 xor (a=%mul0_n2, b=%mul0_n5) -> (y=%mul0_n12)
+  cell mul0_g13 and (a=%mul0_n2, b=%mul0_n5) -> (y=%mul0_n13)
+  cell mul0_g14 xor (a=%mul0_n8, b=%mul0_n9) -> (y=%mul0_n14)
+  cell mul0_g15 xor (a=%mul0_n14, b=%mul0_n10) -> (y=%mul0_n15)
+  cell mul0_g16 mux (a=%mul0_n8, b=%mul0_n10, s=%mul0_n14) -> (y=%mul0_n16)
+  cell mul0_g17 and (a=%mul0_n1, b=%mul0_n4) -> (y=%mul0_n17)
+  cell mul0_g18 and (a=%mul0_n7, b=%mul0_n12) -> (y=%mul0_n18)
+  cell mul0_g19 and (a=%mul0_n13, b=%mul0_n15) -> (y=%mul0_n19)
+  cell mul0_g20 xor (a=%mul0_n1, b=%mul0_n4) -> (y=%mul0_n20)
+  cell mul0_g21 xor (a=%mul0_n7, b=%mul0_n12) -> (y=%mul0_n21)
+  cell mul0_g22 xor (a=%mul0_n13, b=%mul0_n15) -> (y=%mul0_n22)
+  cell mul0_g23 and (a=%mul0_n20, b=%mul0_n0) -> (y=%mul0_n23)
+  cell mul0_g24 and (a=%mul0_n21, b=%mul0_n17) -> (y=%mul0_n24)
+  cell mul0_g25 or (a=%mul0_n18, b=%mul0_n24) -> (y=%mul0_n25)
+  cell mul0_g26 and (a=%mul0_n21, b=%mul0_n20) -> (y=%mul0_n26)
+  cell mul0_g27 and (a=%mul0_n22, b=%mul0_n18) -> (y=%mul0_n27)
+  cell mul0_g28 or (a=%mul0_n19, b=%mul0_n27) -> (y=%mul0_n28)
+  cell mul0_g29 and (a=%mul0_n22, b=%mul0_n21) -> (y=%mul0_n29)
+  cell mul0_g30 and (a=%mul0_n29, b=%mul0_n17) -> (y=%mul0_n30)
+  cell mul0_g31 or (a=%mul0_n28, b=%mul0_n30) -> (y=%mul0_n31)
+  cell mul0_g32 and (a=%mul0_n29, b=%mul0_n23) -> (y=%mul0_n32)
+  cell mul0_g33 xor (a=%mul0_n21, b=%mul0_n17) -> (y=%mul0_n33)
+  cell mul0_g34 xor (a=%mul0_n22, b=%mul0_n25) -> (y=%mul0_n34)
+  cell shl0_g0 not (a=%b[0:0]) -> (y=%shl0_n0)
+  cell shl0_g1 and (a=%shl0_n0, b=%a[0:0]) -> (y=%shl0_n1)
+  cell shl0_g2 mux (a=%a[1:1], b=%a[0:0], s=%b[0:0]) -> (y=%shl0_n2)
+  cell shl0_g3 mux (a=%a[2:2], b=%a[1:1], s=%b[0:0]) -> (y=%shl0_n3)
+  cell shl0_g4 mux (a=%a[3:3], b=%a[2:2], s=%b[0:0]) -> (y=%shl0_n4)
+  cell shl0_g5 not (a=%b[1:1]) -> (y=%shl0_n5)
+  cell shl0_g6 and (a=%shl0_n5, b=%shl0_n1) -> (y=%shl0_n6)
+  cell shl0_g7 and (a=%shl0_n5, b=%shl0_n2) -> (y=%shl0_n7)
+  cell shl0_g8 mux (a=%shl0_n3, b=%shl0_n1, s=%b[1:1]) -> (y=%shl0_n8)
+  cell shl0_g9 mux (a=%shl0_n4, b=%shl0_n2, s=%b[1:1]) -> (y=%shl0_n9)
+  cell shl0_g10 or (a=%b[2:2], b=%b[3:3]) -> (y=%shl0_n10)
+  cell shl0_g11 not (a=%shl0_n10) -> (y=%shl0_n11)
+  cell shl0_g12 and (a=%shl0_n11, b=%shl0_n6) -> (y=%shl0_n12)
+  cell shl0_g13 and (a=%shl0_n11, b=%shl0_n7) -> (y=%shl0_n13)
+  cell shl0_g14 and (a=%shl0_n11, b=%shl0_n8) -> (y=%shl0_n14)
+  cell shl0_g15 and (a=%shl0_n11, b=%shl0_n9) -> (y=%shl0_n15)
+  cell lt0_g0 not (a=%a[0:0]) -> (y=%lt0_n0)
+  cell lt0_g1 and (a=%lt0_n0, b=%b[0:0]) -> (y=%lt0_n1)
+  cell lt0_g2 xor (a=%a[0:0], b=%b[0:0]) -> (y=%lt0_n2)
+  cell lt0_g3 not (a=%a[1:1]) -> (y=%lt0_n3)
+  cell lt0_g4 and (a=%lt0_n3, b=%b[1:1]) -> (y=%lt0_n4)
+  cell lt0_g5 xor (a=%a[1:1], b=%b[1:1]) -> (y=%lt0_n5)
+  cell lt0_g6 not (a=%a[2:2]) -> (y=%lt0_n6)
+  cell lt0_g7 and (a=%lt0_n6, b=%b[2:2]) -> (y=%lt0_n7)
+  cell lt0_g8 xor (a=%a[2:2], b=%b[2:2]) -> (y=%lt0_n8)
+  cell lt0_g9 not (a=%a[3:3]) -> (y=%lt0_n9)
+  cell lt0_g10 and (a=%lt0_n9, b=%b[3:3]) -> (y=%lt0_n10)
+  cell lt0_g11 xor (a=%a[3:3], b=%b[3:3]) -> (y=%lt0_n11)
+  cell lt0_g12 not (a=%lt0_n2) -> (y=%lt0_n12)
+  cell lt0_g13 not (a=%lt0_n5) -> (y=%lt0_n13)
+  cell lt0_g14 not (a=%lt0_n8) -> (y=%lt0_n14)
+  cell lt0_g15 not (a=%lt0_n11) -> (y=%lt0_n15)
+  cell lt0_g16 and (a=%lt0_n13, b=%lt0_n1) -> (y=%lt0_n16)
+  cell lt0_g17 or (a=%lt0_n4, b=%lt0_n16) -> (y=%lt0_n17)
+  cell lt0_g18 and (a=%lt0_n15, b=%lt0_n7) -> (y=%lt0_n18)
+  cell lt0_g19 or (a=%lt0_n10, b=%lt0_n18) -> (y=%lt0_n19)
+  cell lt0_g20 and (a=%lt0_n15, b=%lt0_n14) -> (y=%lt0_n20)
+  cell lt0_g21 and (a=%lt0_n20, b=%lt0_n17) -> (y=%lt0_n21)
+  cell lt0_g22 or (a=%lt0_n19, b=%lt0_n21) -> (y=%lt0_n22)
+end
