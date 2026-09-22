@@ -51,13 +51,34 @@
 //! declares: the clock edge, whether there is a clock enable, and the
 //! kind and polarity of the set or reset. The *value* the reset loads
 //! decides set versus reset per bit, so a register reset to `8'b00010000`
-//! becomes seven resetting flip-flops and one setting one. When the
-//! device declares no variant matching a bit — an iCE40 flip-flop with an
-//! active-low reset, say, since `SB_DFF*` set and reset pins are active
-//! high — the cell is left generic and a diagnostic says exactly which
-//! flip-flop was wanted and which ones the device has. Leaving it generic
-//! rather than approximating it is deliberate: [`super::flow`]'s netlist
-//! check then reports the cell as not a device primitive, and the user
+//! becomes seven resetting flip-flops and one setting one.
+//!
+//! # Polarity the family does not have
+//!
+//! Every `SB_DFF*` set and reset pin is active high, and
+//! `always @(posedge clk or negedge rst_n)` is how nearly all real HDL is
+//! written, so matching polarity exactly would refuse most designs on
+//! iCE40. It is not refused: when the device declares the same flip-flop
+//! with the *other* polarity, the net feeding the pin is inverted and
+//! that primitive is used. The same is done for a clock enable whose
+//! polarity the family lacks (`enable_low` in a `mode` clause).
+//!
+//! The inverter is one of the device's own LUTs, and there is **one per
+//! net**, not one per flip-flop: a reset fanning out to two hundred flops
+//! costs one LUT, which is what a vendor flow does too.
+//! [`CellMapReport::inverted`] lists the nets and
+//! [`CellMapReport::inverters`] counts them. This mirrors
+//! [`crate::asic::library`], which inserts an inverter rather than
+//! refusing a polarity no standard cell has.
+//!
+//! What is *not* fixed this way is the **clock edge**. Inverting a clock
+//! makes a second clock network with its own skew and duty-cycle
+//! distortion, which is a physical-design decision and not a mapper's to
+//! take, so a design wanting an edge the family does not declare is still
+//! reported ([`NO_FF_VARIANT`]) and left generic — as is a polarity on a
+//! device that declares no LUT to invert with. Leaving such a cell
+//! generic rather than approximating it is deliberate: [`super::flow`]'s
+//! netlist check then reports it as not a device primitive, and the user
 //! sees one honest error instead of a netlist that simulates differently
 //! from the design.
 //!
@@ -65,6 +86,7 @@
 //! [`BelRole::Ff`]: super::device::BelRole::Ff
 //! [`FfVariant`]: super::device::FfVariant
 
+use std::collections::BTreeMap;
 use std::fmt::Write as _;
 
 use super::device::{BelKind, BelRole, Device, FfReset, FfVariant};
@@ -72,7 +94,7 @@ use super::primitives::{add_assign, add_cell, add_net, const_expr, expr, net_exp
 use crate::diag::{Diagnostic, Diagnostics};
 use crate::ir::{
     AttrValue, Bit, Cell, CellId, CellKind, Const, Design, ExprId, ExprKind, Module, ModuleId,
-    Name, Type,
+    Name, NetId, Type,
 };
 
 /// Diagnostic code for a flip-flop the device has no primitive for.
@@ -88,12 +110,24 @@ pub struct CellMapReport {
     pub primitives: Vec<(String, u32)>,
     /// The cells that stayed generic, as `(cell, why)`, in cell order.
     pub declined: Vec<(String, String)>,
+    /// Nets given an inverter because the device declares no flip-flop of
+    /// the polarity the design asked for, as `(net, which pin it feeds)`.
+    ///
+    /// One entry per net, however many flip-flops share it; the inverter
+    /// itself is counted in `primitives` like any other LUT.
+    pub inverted: Vec<(String, String)>,
 }
 
 impl CellMapReport {
     /// True when nothing was rewritten and nothing was declined.
     pub fn is_empty(&self) -> bool {
-        self.primitives.is_empty() && self.declined.is_empty()
+        self.primitives.is_empty() && self.declined.is_empty() && self.inverted.is_empty()
+    }
+
+    /// How many polarity inverters were inserted, which is how many nets
+    /// needed one.
+    pub fn inverters(&self) -> usize {
+        self.inverted.len()
     }
 
     /// How many instances of `primitive` were produced.
@@ -114,6 +148,9 @@ impl CellMapReport {
         let mut out = String::new();
         for (name, count) in &self.primitives {
             let _ = writeln!(out, "  {count} x {name}");
+        }
+        for (net, pin) in &self.inverted {
+            let _ = writeln!(out, "  {net} inverted for the {pin} the device has");
         }
         for (cell, why) in &self.declined {
             let _ = writeln!(out, "  {cell} stays generic ({why})");
@@ -318,15 +355,165 @@ fn map_flip_flops(
         .filter(|(_, c)| matches!(c.kind, CellKind::Dff { .. }))
         .map(|(id, _)| id)
         .collect();
+    if ffs.is_empty() {
+        return;
+    }
+    let mut ctx = FfCtx {
+        device,
+        lut: device.bel(BelRole::Lut).cloned(),
+        inverted: BTreeMap::new(),
+        report,
+        diags,
+    };
     let mut replaced: Vec<CellId> = Vec::new();
     for id in ffs {
-        if map_flip_flop(module, device, id, report, diags) {
+        if map_flip_flop(module, &mut ctx, id) {
             replaced.push(id);
         }
     }
     if !replaced.is_empty() {
         module.cells.retain(|id, _| !replaced.contains(&id));
     }
+}
+
+/// What flip-flop mapping carries from one cell to the next.
+///
+/// The inverter cache is the whole reason this exists: a reset net that
+/// two hundred flip-flops read is inverted once, not two hundred times.
+struct FfCtx<'a> {
+    /// The device being mapped onto.
+    device: &'a Device,
+    /// Its LUT primitive, which is what an inverter is built from;
+    /// `None` when the device declares none, in which case no polarity
+    /// can be fixed and a mismatch is reported as before.
+    lut: Option<BelKind>,
+    /// The complement of each net that has one, by net.
+    inverted: BTreeMap<NetId, NetId>,
+    /// Where the counts, the inversions and the declines go.
+    report: &'a mut CellMapReport,
+    /// Where the refusals go.
+    diags: &'a mut Diagnostics,
+}
+
+impl FfCtx<'_> {
+    /// The expression carrying the complement of `signal`, building the
+    /// inverter the first time a net asks for one.
+    ///
+    /// The inverter is a one-input LUT of the device's own kind, mapped
+    /// by the same path as any other LUT so that it picks up the
+    /// family's parameter name, its width and its pin order with no
+    /// special case. `pin` names what the complement feeds, for the
+    /// report.
+    fn invert(
+        &mut self,
+        module: &mut Module,
+        signal: ExprId,
+        pin: &str,
+        span: crate::source::Span,
+    ) -> ExprId {
+        let bel = self
+            .lut
+            .clone()
+            .expect("a polarity is only flipped when the device has a LUT");
+        let key = module.expr(signal).as_net();
+        if let Some(net) = key.and_then(|net| self.inverted.get(&net)) {
+            return net_expr(module, *net, span);
+        }
+        let base = match key {
+            Some(net) => format!("{}$n", module.nets[net].name),
+            None => "ff$n".to_owned(),
+        };
+        let out = add_net(module, &base, Type::bit(), span);
+        let cell = add_cell(
+            module,
+            &format!("{base}$inv"),
+            CellKind::Lut {
+                k: 1,
+                // Bit `i` is the output for input pattern `i`: a one for
+                // a zero in, a zero for a one in.
+                init: Const::from_u64(0b01, 2),
+            },
+            vec![(Name::new("a"), signal)],
+            vec![(Name::new("y"), out)],
+            span,
+        );
+        map_lut(module, self.device, &bel, cell, self.report, self.diags);
+        let named = match key {
+            Some(net) => {
+                self.inverted.insert(net, out);
+                module.nets[net].name.as_str().to_owned()
+            }
+            None => base,
+        };
+        self.report.inverted.push((named, pin.to_owned()));
+        net_expr(module, out, span)
+    }
+
+    /// The clock enable and set/reset one bit presents to its primitive,
+    /// inverted where that primitive's pin has the other polarity.
+    fn control(
+        &mut self,
+        module: &mut Module,
+        matched: &FfMatch,
+        signals: (Option<ExprId>, Option<ExprId>),
+        span: crate::source::Span,
+    ) -> (Option<ExprId>, Option<ExprId>) {
+        let (en, rst) = signals;
+        let en = match (matched.invert_enable, en) {
+            (true, Some(e)) => Some(self.invert(module, e, "clock enable", span)),
+            (_, other) => other,
+        };
+        let rst = match (matched.invert_reset, rst) {
+            (true, Some(e)) => Some(self.invert(module, e, "set/reset", span)),
+            (_, other) => other,
+        };
+        (en, rst)
+    }
+}
+
+/// One device flip-flop that can implement what a bit asked for, and
+/// which of its inputs has to be inverted on the way in.
+struct FfMatch {
+    /// The primitive to instantiate.
+    bel: BelKind,
+    /// True when the set/reset net must be inverted first.
+    invert_reset: bool,
+    /// True when the clock-enable net must be inverted first.
+    invert_enable: bool,
+}
+
+/// The device flip-flop to use for `want`, inverting a set/reset or a
+/// clock enable when that is what it takes.
+///
+/// Candidates are tried in order of cost: the exact variant first, then
+/// one inversion, then two. The clock edge is never inverted; see the
+/// module docs.
+fn resolve_variant(device: &Device, want: FfVariant, can_invert: bool) -> Option<FfMatch> {
+    let options: [(Option<FfVariant>, bool, bool); 4] = [
+        (Some(want), false, false),
+        (want.with_flipped_reset(), true, false),
+        (want.with_flipped_enable(), false, true),
+        (
+            want.with_flipped_reset()
+                .and_then(FfVariant::with_flipped_enable),
+            true,
+            true,
+        ),
+    ];
+    for (variant, invert_reset, invert_enable) in options {
+        let Some(variant) = variant else { continue };
+        if (invert_reset || invert_enable) && !can_invert {
+            continue;
+        }
+        if let Some(bel) = device.ff_variant(variant) {
+            return Some(FfMatch {
+                bel: bel.clone(),
+                invert_reset,
+                invert_enable,
+            });
+        }
+    }
+    None
 }
 
 /// The variant bit `bit` of `cell` needs.
@@ -342,6 +529,9 @@ fn variant_of(kind: &CellKind, bit: u32) -> FfVariant {
     FfVariant {
         clk_pos: *clk_pos,
         has_enable: *has_enable,
+        // The IR's clock enable is active high; a family whose only
+        // enable pin is active low gets an inverter, not a refusal.
+        enable_active_high: true,
         reset: reset.as_ref().map(|r| FfReset {
             asynchronous: r.asynchronous,
             // An `x` in the reset value is a don't-care; taking it as a
@@ -354,20 +544,15 @@ fn variant_of(kind: &CellKind, bit: u32) -> FfVariant {
 
 /// Maps one flip-flop; returns true when the original cell is to be
 /// removed because per-bit primitives replaced it.
-fn map_flip_flop(
-    module: &mut Module,
-    device: &Device,
-    id: CellId,
-    report: &mut CellMapReport,
-    diags: &mut Diagnostics,
-) -> bool {
+fn map_flip_flop(module: &mut Module, ctx: &mut FfCtx<'_>, id: CellId) -> bool {
+    let device = ctx.device;
     let cell = &module.cells[id];
     let kind = cell.kind.clone();
     let name = cell.name.as_str().to_owned();
     let span = cell.span;
     let (Some(clk), Some(d), Some(q)) = (cell.input("clk"), cell.input("d"), cell.output("q"))
     else {
-        report
+        ctx.report
             .declined
             .push((name, "the cell is not wired".to_owned()));
         return false;
@@ -379,13 +564,14 @@ fn map_flip_flop(
     // Every bit must be mappable before anything is rewritten, so that a
     // register with one impossible bit is reported whole rather than left
     // half converted.
-    let mut bels: Vec<BelKind> = Vec::with_capacity(usize::try_from(width).unwrap_or(0));
+    let can_invert = ctx.lut.is_some();
+    let mut matches: Vec<FfMatch> = Vec::with_capacity(usize::try_from(width).unwrap_or(0));
     for bit in 0..width {
         let variant = variant_of(&kind, bit);
-        match device.ff_variant(variant) {
-            Some(bel) => bels.push(bel.clone()),
+        match resolve_variant(device, variant, can_invert) {
+            Some(matched) => matches.push(matched),
             None => {
-                diags.push(
+                ctx.diags.push(
                     Diagnostic::error(format!(
                         "`{}` has no flip-flop with {}",
                         device.name,
@@ -403,7 +589,7 @@ fn map_flip_flop(
                         declared_variants(device)
                     )),
                 );
-                report.declined.push((
+                ctx.report.declined.push((
                     name,
                     format!(
                         "`{}` has no flip-flop with {}",
@@ -417,7 +603,9 @@ fn map_flip_flop(
     }
 
     if width == 1 {
-        let bel = &bels[0];
+        let matched = &matches[0];
+        let (en, rst) = ctx.control(module, matched, (en, rst), span);
+        let bel = &matched.bel;
         let mut inputs = vec![
             (Name::new(bel.port("clk").unwrap_or("C")), clk),
             (Name::new(bel.port("d").unwrap_or("D")), d),
@@ -429,13 +617,15 @@ fn map_flip_flop(
         cell.inputs = inputs;
         cell.outputs = vec![(out, q)];
         set_params(cell, bel);
-        report.bump(&bel.name, 1);
+        ctx.report.bump(&bel.name, 1);
         return false;
     }
 
     let mut bits = Vec::with_capacity(usize::try_from(width).unwrap_or(0));
     for bit in 0..width {
-        let bel = &bels[usize::try_from(bit).unwrap_or(0)];
+        let matched = &matches[usize::try_from(bit).unwrap_or(0)];
+        let (en, rst) = ctx.control(module, matched, (en, rst), span);
+        let bel = &matched.bel;
         let net = add_net(module, &format!("{name}$q{bit}"), Type::bit(), span);
         let d_bit = slice_expr(module, d, bit, bit, span);
         let mut inputs = vec![
@@ -452,7 +642,7 @@ fn map_flip_flop(
             span,
         );
         set_params(&mut module.cells[new], bel);
-        report.bump(&bel.name, 1);
+        ctx.report.bump(&bel.name, 1);
         bits.push(net_expr(module, net, span));
     }
     bits.reverse();
@@ -697,10 +887,11 @@ mod tests {
     }
 
     #[test]
-    fn a_flip_flop_the_device_cannot_build_is_reported() {
-        // An iCE40 set/reset is active high, so an active-low one has no
-        // primitive at all.
-        let (mut design, top, map) = design_with(
+    fn an_active_low_reset_is_inverted_onto_the_polarity_ice40_has() {
+        // Every iCE40 set/reset is active high, and `negedge rst_n` is
+        // how nearly all HDL is written, so the mapper inverts the net
+        // and uses `SB_DFFR` rather than refusing.
+        let (mut design, top, _map) = design_with(
             CellKind::Dff {
                 clk_pos: true,
                 has_enable: false,
@@ -715,6 +906,117 @@ mod tests {
         let mut diags = Diagnostics::new();
         let device = target("ice40-hx1k-tq144").unwrap();
         let report = map_cells(&mut design, top, device, &mut diags);
+        assert_eq!(diags.len(), 0, "{:?}", diags.iter().next());
+        assert_eq!(cells_named(&design, top, "SB_DFFR"), 1);
+        assert!(report.declined.is_empty());
+        // One inverter, named after the net it complements, and it is an
+        // ordinary LUT of the family: the design's own LUT plus this one.
+        assert_eq!(report.inverters(), 1);
+        assert_eq!(
+            report.inverted,
+            [("rst".to_owned(), "set/reset".to_owned())]
+        );
+        assert_eq!(cells_named(&design, top, "SB_LUT4"), 2);
+        assert!(report.to_text().contains("rst inverted for the set/reset"));
+        assert!(!validate(&design).has_errors());
+
+        // The inverter really computes a complement: bit `i` of the
+        // truth table is the output for input pattern `i`, and with I1,
+        // I2 and I3 tied low that is 16'h5555.
+        let inv = design
+            .module(top)
+            .cells
+            .iter()
+            .find(|(_, c)| c.name.as_str() == "rst$n$inv")
+            .map(|(_, c)| c.clone())
+            .expect("the inverter");
+        let AttrValue::Const(init) = inv.params.get("LUT_INIT").unwrap() else {
+            panic!("LUT_INIT is not a constant")
+        };
+        assert_eq!(init.to_u64(), Some(0x5555));
+    }
+
+    #[test]
+    fn one_inverter_serves_every_flip_flop_on_the_net() {
+        // A four-bit register is four `SB_DFFR`s, and the reset they
+        // share costs one LUT between them, not four.
+        let (mut design, top, _map) = design_with(
+            CellKind::Dff {
+                clk_pos: true,
+                has_enable: false,
+                reset: Some(Reset {
+                    asynchronous: true,
+                    active_high: false,
+                    value: Const::zero(4),
+                }),
+            },
+            4,
+        );
+        let mut diags = Diagnostics::new();
+        let device = target("ice40-hx1k-tq144").unwrap();
+        let report = map_cells(&mut design, top, device, &mut diags);
+        assert_eq!(diags.len(), 0, "{:?}", diags.iter().next());
+        assert_eq!(cells_named(&design, top, "SB_DFFR"), 4);
+        assert_eq!(report.inverters(), 1);
+        assert_eq!(cells_named(&design, top, "SB_LUT4"), 2);
+        assert!(!validate(&design).has_errors());
+    }
+
+    #[test]
+    fn a_clock_edge_the_device_lacks_is_still_reported() {
+        // Inverting a clock would make a second clock network, so it is
+        // not something the mapper does: a family with no falling-edge
+        // flip-flop is reported, not approximated.
+        let (mut design, top, map) = design_with(
+            CellKind::Dff {
+                clk_pos: false,
+                has_enable: false,
+                reset: None,
+            },
+            1,
+        );
+        let mut device = target("ice40-hx1k-tq144").unwrap().clone();
+        device.bels.retain(|b| b.ff.is_none_or(|v| v.clk_pos));
+        let mut diags = Diagnostics::new();
+        let report = map_cells(&mut design, top, &device, &mut diags);
+        assert!(diags.has_errors());
+        let text = diags.render(&map);
+        assert!(
+            text.contains("has no flip-flop with a falling clock edge"),
+            "{text}"
+        );
+        assert_eq!(report.declined.len(), 1);
+        assert_eq!(report.inverters(), 0);
+        // The cell is untouched, so nothing silently changed meaning.
+        assert!(
+            design
+                .module(top)
+                .cells
+                .iter()
+                .any(|(_, c)| matches!(c.kind, CellKind::Dff { .. }))
+        );
+    }
+
+    #[test]
+    fn a_device_with_no_lut_cannot_fix_a_polarity() {
+        // The inverter is one of the device's own LUTs, so a family that
+        // declares none is back to an exact match or a refusal.
+        let (mut design, top, map) = design_with(
+            CellKind::Dff {
+                clk_pos: true,
+                has_enable: false,
+                reset: Some(Reset {
+                    asynchronous: true,
+                    active_high: false,
+                    value: Const::zero(1),
+                }),
+            },
+            1,
+        );
+        let mut device = target("ice40-hx1k-tq144").unwrap().clone();
+        device.bels.retain(|b| b.role != BelRole::Lut);
+        let mut diags = Diagnostics::new();
+        let report = map_cells(&mut design, top, &device, &mut diags);
         assert!(diags.has_errors());
         let text = diags.render(&map);
         assert!(
@@ -724,16 +1026,40 @@ mod tests {
             "{text}"
         );
         assert!(text.contains("SB_DFFR"), "{text}");
-        assert_eq!(report.declined.len(), 1);
-        assert_eq!(report.count("SB_DFF"), 0);
-        // The cell is untouched, so nothing silently changed meaning.
-        assert!(
-            design
-                .module(top)
-                .cells
-                .iter()
-                .any(|(_, c)| matches!(c.kind, CellKind::Dff { .. }))
+        assert_eq!(report.inverters(), 0);
+        assert_eq!(report.declined.len(), 2, "the LUT is declined too");
+    }
+
+    #[test]
+    fn an_enable_polarity_the_device_lacks_is_inverted_too() {
+        // No shipped family has an active-low clock enable, so this is a
+        // device whose `SB_DFFE` has been re-declared with one: the
+        // enable net is inverted exactly as a reset would be.
+        let (mut design, top, _map) = design_with(
+            CellKind::Dff {
+                clk_pos: true,
+                has_enable: true,
+                reset: None,
+            },
+            1,
         );
+        let mut device = target("ice40-hx1k-tq144").unwrap().clone();
+        for bel in &mut device.bels {
+            if let Some(variant) = &mut bel.ff
+                && variant.has_enable
+            {
+                variant.enable_active_high = false;
+            }
+        }
+        let mut diags = Diagnostics::new();
+        let report = map_cells(&mut design, top, &device, &mut diags);
+        assert_eq!(diags.len(), 0, "{:?}", diags.iter().next());
+        assert_eq!(cells_named(&design, top, "SB_DFFE"), 1);
+        assert_eq!(
+            report.inverted,
+            [("en".to_owned(), "clock enable".to_owned())]
+        );
+        assert!(!validate(&design).has_errors());
     }
 
     #[test]

@@ -299,6 +299,12 @@ impl FlowReport {
                 let _ = writeln!(out, "  {count} x {name}");
             }
         }
+        if !self.device_cells.inverted.is_empty() {
+            out.push_str("inverted:\n");
+            for (net, pin) in &self.device_cells.inverted {
+                let _ = writeln!(out, "  {net} -> the {pin} polarity the device has");
+            }
+        }
         if !self.device_cells.declined.is_empty() {
             out.push_str("unmapped:\n");
             for (cell, why) in &self.device_cells.declined {

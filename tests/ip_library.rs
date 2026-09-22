@@ -35,16 +35,16 @@
 //! summing an array and Fibonacci computed recursively on a stack, so
 //! the whole datapath is proved together and not only piece by piece.
 //!
-//! Four tests here describe gaps in Reticle rather than in the blocks:
-//! `ice40_flip_flops_still_refuse_an_active_low_reset`,
-//! `small_memories_are_left_generic_after_the_fpga_flow`,
+//! Four tests here came from gaps in Reticle rather than in the blocks,
+//! found by writing real HDL, which is the argument for a first-party
+//! library in the first place:
+//! `ice40_flip_flops_take_an_active_low_reset_through_one_inverter`,
+//! `small_memories_become_logic_after_the_fpga_flow`,
 //! `function_locals_are_not_reported_as_unreset_registers` and
-//! `a_two_read_port_register_file_is_declined_for_a_stated_reason`.
-//! Each asserts that the gap is *still there*, so closing one fails the
-//! test that names it and points at the paragraph in
-//! `docs/ip-library.md` to delete. Writing real HDL is how they were
-//! found, which is the argument for a first-party library in the first
-//! place.
+//! `a_two_read_port_register_file_is_duplicated_across_block_rams`.
+//! Each once asserted that its gap was *still there*; each now holds the
+//! fix, and the paragraph in `docs/ip-library.md` it points at says what
+//! the fix is.
 //!
 //! Set `UPDATE_EXPECT=1` to rewrite the footprint table in
 //! `docs/ip-library.md` after an intended change, and read the diff: a
@@ -543,18 +543,6 @@ fn contents(design: &Design, id: ModuleId) -> String {
         .join(", ")
 }
 
-/// `F0310`: the device has no flip-flop of the shape a cell needs.
-///
-/// Every block in this library resets on `negedge rst_n`, which is the
-/// convention the rest of this repository's IP uses and the one nearly
-/// all real HDL uses. The iCE40 family's `SB_DFF*` primitives all reset
-/// *high*, and `fpga::primitives` declines the mismatch instead of
-/// inverting the reset net, so those flip-flops stay generic. That is a
-/// gap in the primitive mapper, not in the blocks, and it is recorded
-/// rather than worked around: `ice40_flip_flops_need_an_active_high_reset`
-/// below pins it down, and the footprint table shows what it costs.
-const RESET_POLARITY_GAP: &str = "F0310";
-
 /// One measured line of the table.
 struct Measurement {
     target: String,
@@ -598,7 +586,7 @@ fn measure_device(variant: &Variant, label: &str, device: &str) -> Measurement {
         });
     let unexpected: Vec<String> = diags
         .iter()
-        .filter(|d| d.severity >= Severity::Error && d.code != Some(RESET_POLARITY_GAP))
+        .filter(|d| d.severity >= Severity::Error)
         .map(|d| format!("{}: {}", d.code.unwrap_or("-"), d.message))
         .collect();
     assert!(
@@ -696,21 +684,24 @@ fn footprints_match_the_documentation() {
 // The compiler gaps this library ran into
 // ---------------------------------------------------------------------------
 
-/// The iCE40 flip-flop mapping declines an active-low reset.
+/// The iCE40 flip-flop mapping takes an active-low reset, through one
+/// shared inverter.
 ///
-/// Pinned down here rather than described in prose, so that the day
-/// `fpga::primitives` learns to invert a reset net this test fails and
-/// says which document to update. Every `SB_DFF*` variant resets high;
-/// the mapper matches polarity exactly instead of putting an inverter in
-/// front, so `always @(posedge clk or negedge rst_n)` — the way nearly
-/// all real HDL is written — leaves generic flip-flops behind.
+/// Every block in this library resets on `negedge rst_n`, which is the
+/// convention the rest of this repository's IP uses and the one nearly
+/// all real HDL uses; every `SB_DFF*` primitive resets *high*. This used
+/// to be `F0310` and a netlist full of generic `dff` cells. It is now an
+/// inverter on the reset net and the active-high primitive, the way
+/// `asic::library` has always handled a polarity a library lacks — and
+/// the inverter is shared, so a reset reaching many flip-flops costs one
+/// LUT and not one per flop.
 #[test]
-fn ice40_flip_flops_still_refuse_an_active_low_reset() {
+fn ice40_flip_flops_take_an_active_low_reset_through_one_inverter() {
     let variant = &VARIANTS[2]; // cdc_sync, two flops and nothing else
     let (mut design, id) = flattened(variant.package, variant.top, variant.params);
     let device = fpga::target("ice40-hx1k-tq144").expect("the iCE40 device");
     let mut diags = Diagnostics::new();
-    let _ = fpga::synthesize_for(
+    let report = fpga::synthesize_for(
         &mut design,
         id,
         device,
@@ -719,22 +710,30 @@ fn ice40_flip_flops_still_refuse_an_active_low_reset() {
         &mut diags,
     )
     .expect("the flow runs");
-    let refusals: Vec<&str> = diags
+    let refusals: Vec<String> = diags
         .iter()
-        .filter(|d| d.code == Some(RESET_POLARITY_GAP))
-        .map(|d| d.message.as_str())
+        .filter(|d| d.severity >= Severity::Error)
+        .map(|d| format!("{}: {}", d.code.unwrap_or("-"), d.message))
         .collect();
     assert!(
-        !refusals.is_empty(),
-        "the iCE40 flip-flop mapping now accepts an active-low reset: drop \
-         RESET_POLARITY_GAP and refresh docs/ip-library.md"
+        refusals.is_empty(),
+        "the iCE40 flip-flop mapping refuses something:\n  {}",
+        refusals.join("\n  ")
     );
-    for message in &refusals {
-        assert!(
-            message.contains("active-low"),
-            "unexpected {RESET_POLARITY_GAP}: {message}"
-        );
-    }
+    // Both flops are real primitives now, and nothing generic is left.
+    assert_eq!(report.device_cells.count("SB_DFFR"), 2);
+    assert!(
+        report
+            .netlist
+            .iter()
+            .all(|(name, _)| !name.starts_with('$'))
+    );
+    // One inverter for the reset net the two flops share.
+    assert_eq!(report.device_cells.inverters(), 1);
+    let (net, pin) = &report.device_cells.inverted[0];
+    assert!(net.contains("rst_n"), "the inverted net is `{net}`");
+    assert_eq!(pin, "set/reset");
+    assert!(fpga::check_nextpnr_json(&design, id, device, &Constraints::new()).is_empty());
 }
 
 /// A memory below the block-RAM threshold is reported as falling back to

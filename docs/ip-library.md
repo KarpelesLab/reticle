@@ -260,51 +260,51 @@ exactly what this table is for.
 |-------|-----|------------|--------|-------|-----------|
 | `fifo_sync` | `fifo_sync` | WIDTH=8, DEPTH=16, FWFT=0 | LUT4 | 3 x dff, 27 x lut, 1 x memory 16x8, 1 x memrd, 1 x memwr | 3 |
 | `fifo_sync` | `fifo_sync` | WIDTH=8, DEPTH=16, FWFT=0 | LUT6 | 3 x dff, 22 x lut, 1 x memory 16x8, 1 x memrd, 1 x memwr | 2 |
-| `fifo_sync` | `fifo_sync` | WIDTH=8, DEPTH=16, FWFT=0 | iCE40 HX1K | 8 x SB_CARRY, 1 x SB_GB, 27 x SB_IO, 25 x SB_LUT4, 3 x dff, 1 x memory 16x8, 1 x memrd, 1 x memwr | 3 |
+| `fifo_sync` | `fifo_sync` | WIDTH=8, DEPTH=16, FWFT=0 | iCE40 HX1K | 8 x SB_CARRY, 18 x SB_DFFER, 1 x SB_GB, 27 x SB_IO, 26 x SB_LUT4, 1 x memory 16x8, 1 x memrd, 1 x memwr | 3 |
 | `fifo_sync` | `fifo_sync` | WIDTH=8, DEPTH=16, FWFT=0 | ECP5 45F | 1 x DCCA, 27 x LUT4, 18 x TRELLIS_FF, 27 x TRELLIS_IO, 1 x memory 16x8, 1 x memrd, 1 x memwr | 3 |
 | `fifo_sync` | `fifo_sync` | WIDTH=8, DEPTH=16, FWFT=1 | LUT4 | 2 x dff, 27 x lut, 1 x memory 16x8, 1 x memrd, 1 x memwr | 3 |
 | `fifo_sync` | `fifo_sync` | WIDTH=8, DEPTH=16, FWFT=1 | LUT6 | 2 x dff, 22 x lut, 1 x memory 16x8, 1 x memrd, 1 x memwr | 2 |
-| `fifo_sync` | `fifo_sync` | WIDTH=8, DEPTH=16, FWFT=1 | iCE40 HX1K | 8 x SB_CARRY, 1 x SB_GB, 27 x SB_IO, 25 x SB_LUT4, 2 x dff, 1 x memory 16x8, 1 x memrd, 1 x memwr | 3 |
+| `fifo_sync` | `fifo_sync` | WIDTH=8, DEPTH=16, FWFT=1 | iCE40 HX1K | 8 x SB_CARRY, 10 x SB_DFFER, 1 x SB_GB, 27 x SB_IO, 26 x SB_LUT4, 1 x memory 16x8, 1 x memrd, 1 x memwr | 3 |
 | `fifo_sync` | `fifo_sync` | WIDTH=8, DEPTH=16, FWFT=1 | ECP5 45F | 1 x DCCA, 27 x LUT4, 10 x TRELLIS_FF, 27 x TRELLIS_IO, 1 x memory 16x8, 1 x memrd, 1 x memwr | 3 |
 | `cdc_sync` | `cdc_sync` | WIDTH=1, STAGES=2 | LUT4 | 2 x dff | 0 |
 | `cdc_sync` | `cdc_sync` | WIDTH=1, STAGES=2 | LUT6 | 2 x dff | 0 |
-| `cdc_sync` | `cdc_sync` | WIDTH=1, STAGES=2 | iCE40 HX1K | 4 x SB_IO, 2 x dff | 0 |
+| `cdc_sync` | `cdc_sync` | WIDTH=1, STAGES=2 | iCE40 HX1K | 2 x SB_DFFR, 4 x SB_IO, 1 x SB_LUT4 | 0 |
 | `cdc_sync` | `cdc_sync` | WIDTH=1, STAGES=2 | ECP5 45F | 2 x TRELLIS_FF, 4 x TRELLIS_IO | 0 |
 | `cdc_sync` | `cdc_sync` | WIDTH=8, STAGES=3 | LUT4 | 3 x dff | 0 |
 | `cdc_sync` | `cdc_sync` | WIDTH=8, STAGES=3 | LUT6 | 3 x dff | 0 |
-| `cdc_sync` | `cdc_sync` | WIDTH=8, STAGES=3 | iCE40 HX1K | 1 x SB_GB, 18 x SB_IO, 3 x dff | 0 |
+| `cdc_sync` | `cdc_sync` | WIDTH=8, STAGES=3 | iCE40 HX1K | 24 x SB_DFFR, 1 x SB_GB, 18 x SB_IO, 1 x SB_LUT4 | 0 |
 | `cdc_sync` | `cdc_sync` | WIDTH=8, STAGES=3 | ECP5 45F | 1 x DCCA, 24 x TRELLIS_FF, 18 x TRELLIS_IO | 0 |
 | `cdc_pulse` | `cdc_pulse` | (defaults) | LUT4 | 6 x dff, 4 x lut | 1 |
 | `cdc_pulse` | `cdc_pulse` | (defaults) | LUT6 | 6 x dff, 4 x lut | 1 |
-| `cdc_pulse` | `cdc_pulse` | (defaults) | iCE40 HX1K | 7 x SB_IO, 4 x SB_LUT4, 6 x dff | 1 |
+| `cdc_pulse` | `cdc_pulse` | (defaults) | iCE40 HX1K | 1 x SB_DFFER, 5 x SB_DFFR, 7 x SB_IO, 6 x SB_LUT4 | 1 |
 | `cdc_pulse` | `cdc_pulse` | (defaults) | ECP5 45F | 4 x LUT4, 6 x TRELLIS_FF, 7 x TRELLIS_IO | 1 |
 | `fifo_async` | `fifo_async` | WIDTH=8, DEPTH=16 | LUT4 | 10 x dff, 41 x lut, 1 x memory 16x8, 1 x memrd, 1 x memwr | 4 |
 | `fifo_async` | `fifo_async` | WIDTH=8, DEPTH=16 | LUT6 | 10 x dff, 37 x lut, 1 x memory 16x8, 1 x memrd, 1 x memwr | 3 |
-| `fifo_async` | `fifo_async` | WIDTH=8, DEPTH=16 | iCE40 HX1K | 8 x SB_CARRY, 2 x SB_GB, 24 x SB_IO, 40 x SB_LUT4, 10 x dff, 1 x memory 16x8, 1 x memrd, 1 x memwr | 4 |
+| `fifo_async` | `fifo_async` | WIDTH=8, DEPTH=16 | iCE40 HX1K | 8 x SB_CARRY, 41 x SB_DFFR, 1 x SB_DFFS, 2 x SB_GB, 24 x SB_IO, 42 x SB_LUT4, 1 x memory 16x8, 1 x memrd, 1 x memwr | 4 |
 | `fifo_async` | `fifo_async` | WIDTH=8, DEPTH=16 | ECP5 45F | 2 x DCCA, 41 x LUT4, 42 x TRELLIS_FF, 24 x TRELLIS_IO, 1 x memory 16x8, 1 x memrd, 1 x memwr | 4 |
 | `uart` | `uart` | CLK_DIV=104 | LUT4 | 13 x dff, 119 x lut | 6 |
 | `uart` | `uart` | CLK_DIV=104 | LUT6 | 13 x dff, 109 x lut | 5 |
-| `uart` | `uart` | CLK_DIV=104 | iCE40 HX1K | 33 x SB_CARRY, 1 x SB_GB, 24 x SB_IO, 123 x SB_LUT4, 13 x dff | 4 |
+| `uart` | `uart` | CLK_DIV=104 | iCE40 HX1K | 33 x SB_CARRY, 26 x SB_DFFER, 10 x SB_DFFES, 34 x SB_DFFR, 2 x SB_DFFS, 1 x SB_GB, 24 x SB_IO, 124 x SB_LUT4 | 4 |
 | `uart` | `uart` | CLK_DIV=104 | ECP5 45F | 1 x DCCA, 119 x LUT4, 72 x TRELLIS_FF, 24 x TRELLIS_IO | 6 |
 | `spi_master` | `spi_master` | CPOL=0, CPHA=0, CLK_DIV=4, WIDTH=8 | LUT4 | 10 x dff, 87 x lut | 6 |
 | `spi_master` | `spi_master` | CPOL=0, CPHA=0, CLK_DIV=4, WIDTH=8 | LUT6 | 10 x dff, 80 x lut | 4 |
-| `spi_master` | `spi_master` | CPOL=0, CPHA=0, CLK_DIV=4, WIDTH=8 | iCE40 HX1K | 22 x SB_CARRY, 1 x SB_GB, 25 x SB_IO, 71 x SB_LUT4, 10 x dff | 3 |
+| `spi_master` | `spi_master` | CPOL=0, CPHA=0, CLK_DIV=4, WIDTH=8 | iCE40 HX1K | 22 x SB_CARRY, 35 x SB_DFFER, 1 x SB_DFFES, 17 x SB_DFFR, 1 x SB_GB, 25 x SB_IO, 72 x SB_LUT4 | 3 |
 | `spi_master` | `spi_master` | CPOL=0, CPHA=0, CLK_DIV=4, WIDTH=8 | ECP5 45F | 1 x DCCA, 87 x LUT4, 53 x TRELLIS_FF, 25 x TRELLIS_IO | 6 |
 | `i2c_master` | `i2c_master` | CLK_DIV=30 | LUT4 | 14 x dff, 116 x lut | 7 |
 | `i2c_master` | `i2c_master` | CLK_DIV=30 | LUT6 | 14 x dff, 90 x lut | 4 |
-| `i2c_master` | `i2c_master` | CLK_DIV=30 | iCE40 HX1K | 18 x SB_CARRY, 1 x SB_GB, 30 x SB_IO, 116 x SB_LUT4, 14 x dff | 3 |
+| `i2c_master` | `i2c_master` | CLK_DIV=30 | iCE40 HX1K | 18 x SB_CARRY, 20 x SB_DFFER, 4 x SB_DFFES, 17 x SB_DFFR, 1 x SB_GB, 30 x SB_IO, 117 x SB_LUT4 | 3 |
 | `i2c_master` | `i2c_master` | CLK_DIV=30 | ECP5 45F | 1 x DCCA, 116 x LUT4, 41 x TRELLIS_FF, 30 x TRELLIS_IO | 7 |
 | `pwm` | `pwm` | WIDTH=8 | LUT4 | 2 x dff, 23 x lut | 6 |
 | `pwm` | `pwm` | WIDTH=8 | LUT6 | 2 x dff, 17 x lut | 4 |
-| `pwm` | `pwm` | WIDTH=8 | iCE40 HX1K | 7 x SB_CARRY, 1 x SB_GB, 21 x SB_IO, 20 x SB_LUT4, 2 x dff | 6 |
+| `pwm` | `pwm` | WIDTH=8 | iCE40 HX1K | 7 x SB_CARRY, 8 x SB_DFFER, 8 x SB_DFFR, 1 x SB_GB, 21 x SB_IO, 21 x SB_LUT4 | 6 |
 | `pwm` | `pwm` | WIDTH=8 | ECP5 45F | 1 x DCCA, 23 x LUT4, 16 x TRELLIS_FF, 21 x TRELLIS_IO | 6 |
 | `timer` | `timer` | WIDTH=16, PRESCALE_WIDTH=8 | LUT4 | 4 x dff, 61 x lut | 5 |
 | `timer` | `timer` | WIDTH=16, PRESCALE_WIDTH=8 | LUT6 | 4 x dff, 51 x lut | 4 |
-| `timer` | `timer` | WIDTH=16, PRESCALE_WIDTH=8 | iCE40 HX1K | 7 x SB_CARRY, 1 x SB_GB, 47 x SB_IO, 55 x SB_LUT4, 4 x dff | 5 |
+| `timer` | `timer` | WIDTH=16, PRESCALE_WIDTH=8 | iCE40 HX1K | 7 x SB_CARRY, 17 x SB_DFFER, 9 x SB_DFFR, 1 x SB_GB, 47 x SB_IO, 56 x SB_LUT4 | 5 |
 | `timer` | `timer` | WIDTH=16, PRESCALE_WIDTH=8 | ECP5 45F | 1 x DCCA, 61 x LUT4, 26 x TRELLIS_FF, 47 x TRELLIS_IO | 5 |
 | `axil_gpio` | `axil_gpio` | WIDTH=8 | LUT4 | 11 x dff, 47 x lut | 2 |
 | `axil_gpio` | `axil_gpio` | WIDTH=8 | LUT6 | 11 x dff, 38 x lut | 1 |
-| `axil_gpio` | `axil_gpio` | WIDTH=8 | iCE40 HX1K | 1 x SB_GB, 178 x SB_IO, 47 x SB_LUT4, 11 x dff | 2 |
+| `axil_gpio` | `axil_gpio` | WIDTH=8 | iCE40 HX1K | 116 x SB_DFFER, 16 x SB_DFFR, 1 x SB_GB, 178 x SB_IO, 48 x SB_LUT4 | 2 |
 | `axil_gpio` | `axil_gpio` | WIDTH=8 | ECP5 45F | 1 x DCCA, 47 x LUT4, 132 x TRELLIS_FF, 178 x TRELLIS_IO | 2 |
 | `ram_wrapper` | `ram_sp` | WIDTH=8, DEPTH=256, OUT_REG=0 | LUT4 | 1 x lut, 1 x memory 256x8, 1 x memrd, 1 x memwr | 1 |
 | `ram_wrapper` | `ram_sp` | WIDTH=8, DEPTH=256, OUT_REG=0 | LUT6 | 1 x lut, 1 x memory 256x8, 1 x memrd, 1 x memwr | 1 |
@@ -316,19 +316,19 @@ exactly what this table is for.
 | `ram_wrapper` | `ram_sdp` | WIDTH=8, DEPTH=256, OUT_REG=0 | ECP5 45F | 1 x DP16KD, 36 x TRELLIS_IO | 0 |
 | `rv32i` | `rv32i` | REGFILE_BRAM=0 | LUT4 | 14 x dff, 2436 x lut, 1 x memory 32x32, 2 x memrd, 1 x memwr | 34 |
 | `rv32i` | `rv32i` | REGFILE_BRAM=0 | LUT6 | 14 x dff, 2044 x lut, 1 x memory 32x32, 2 x memrd, 1 x memwr | 28 |
-| `rv32i` | `rv32i` | REGFILE_BRAM=0 | iCE40 HX1K | 220 x SB_CARRY, 1 x SB_GB, 208 x SB_IO, 2325 x SB_LUT4, 14 x dff, 1 x memory 32x32, 2 x memrd, 1 x memwr | 34 |
+| `rv32i` | `rv32i` | REGFILE_BRAM=0 | iCE40 HX1K | 220 x SB_CARRY, 292 x SB_DFFER, 66 x SB_DFFR, 1 x SB_GB, 208 x SB_IO, 2326 x SB_LUT4, 1 x memory 32x32, 2 x memrd, 1 x memwr | 34 |
 | `rv32i` | `rv32i` | REGFILE_BRAM=0 | ECP5 45F | 1 x DCCA, 2438 x LUT4, 358 x TRELLIS_FF, 208 x TRELLIS_IO, 1 x memory 32x32, 2 x memrd, 1 x memwr | 34 |
 | `rv32i` | `rv32i` | REGFILE_BRAM=1 | LUT4 | 16 x dff, 2445 x lut, 1 x memory 32x32, 2 x memrd, 1 x memwr | 34 |
 | `rv32i` | `rv32i` | REGFILE_BRAM=1 | LUT6 | 16 x dff, 2075 x lut, 1 x memory 32x32, 2 x memrd, 1 x memwr | 28 |
-| `rv32i` | `rv32i` | REGFILE_BRAM=1 | iCE40 HX1K | 220 x SB_CARRY, 2 x SB_DFFE, 1 x SB_GB, 208 x SB_IO, 2354 x SB_LUT4, 14 x dff, 1 x memory 32x32, 2 x memrd, 1 x memwr | 34 |
+| `rv32i` | `rv32i` | REGFILE_BRAM=1 | iCE40 HX1K | 220 x SB_CARRY, 2 x SB_DFFE, 292 x SB_DFFER, 66 x SB_DFFR, 1 x SB_GB, 208 x SB_IO, 2355 x SB_LUT4, 1 x memory 32x32, 2 x memrd, 1 x memwr | 34 |
 | `rv32i` | `rv32i` | REGFILE_BRAM=1 | ECP5 45F | 1 x DCCA, 2442 x LUT4, 360 x TRELLIS_FF, 208 x TRELLIS_IO, 1 x memory 32x32, 2 x memrd, 1 x memwr | 34 |
 | `eth_mac_rmii` | `eth_mac_rmii` | IFG_CYCLES=48 | LUT4 | 26 x dff, 305 x lut | 4 |
 | `eth_mac_rmii` | `eth_mac_rmii` | IFG_CYCLES=48 | LUT6 | 26 x dff, 283 x lut | 4 |
-| `eth_mac_rmii` | `eth_mac_rmii` | IFG_CYCLES=48 | iCE40 HX1K | 10 x SB_CARRY, 1 x SB_GB, 34 x SB_IO, 300 x SB_LUT4, 26 x dff | 4 |
+| `eth_mac_rmii` | `eth_mac_rmii` | IFG_CYCLES=48 | iCE40 HX1K | 10 x SB_CARRY, 127 x SB_DFFER, 64 x SB_DFFES, 3 x SB_DFFR, 1 x SB_GB, 34 x SB_IO, 301 x SB_LUT4 | 4 |
 | `eth_mac_rmii` | `eth_mac_rmii` | IFG_CYCLES=48 | ECP5 45F | 1 x DCCA, 305 x LUT4, 194 x TRELLIS_FF, 34 x TRELLIS_IO | 4 |
 | `spiflash_xip` | `spiflash_xip` | CLK_DIV=2, READ_CMD=8'h03, DUMMY_CYCLES=0 | LUT4 | 9 x dff, 177 x lut | 4 |
 | `spiflash_xip` | `spiflash_xip` | CLK_DIV=2, READ_CMD=8'h03, DUMMY_CYCLES=0 | LUT6 | 9 x dff, 166 x lut | 4 |
-| `spiflash_xip` | `spiflash_xip` | CLK_DIV=2, READ_CMD=8'h03, DUMMY_CYCLES=0 | iCE40 HX1K | 7 x SB_CARRY, 1 x SB_GB, 140 x SB_IO, 171 x SB_LUT4, 9 x dff | 4 |
+| `spiflash_xip` | `spiflash_xip` | CLK_DIV=2, READ_CMD=8'h03, DUMMY_CYCLES=0 | iCE40 HX1K | 7 x SB_CARRY, 97 x SB_DFFER, 3 x SB_DFFES, 8 x SB_DFFR, 1 x SB_GB, 140 x SB_IO, 172 x SB_LUT4 | 4 |
 | `spiflash_xip` | `spiflash_xip` | CLK_DIV=2, READ_CMD=8'h03, DUMMY_CYCLES=0 | ECP5 45F | 1 x DCCA, 177 x LUT4, 108 x TRELLIS_FF, 140 x TRELLIS_IO | 4 |
 <!-- end footprints -->
 
@@ -336,20 +336,32 @@ exactly what this table is for.
 
 All four were gaps in Reticle itself rather than in the blocks, and each
 is pinned down by a test. Two were found by the original eleven blocks
-and two by writing the three larger ones. **Two have since been fixed**,
-and their tests now hold the fix rather than the gap; the other two
-remain open.
+and two by writing the three larger ones. **All four have since been
+fixed**, and their tests now hold the fix rather than the gap.
 
-**iCE40 flip-flops refuse an active-low reset.** Every block resets on
-`negedge rst_n`, which is the convention the rest of this repository's IP
-uses and the one nearly all real HDL uses. Every `SB_DFF*` primitive the
-iCE40 database declares resets *high*, and `fpga::primitives` matches
-polarity exactly instead of putting an inverter in front of the reset
-net, so it reports `F0310` and leaves generic `dff` cells behind. That is
-why the iCE40 rows show `dff` where the ECP5 rows show `TRELLIS_FF`, and
-it means the iCE40 target cannot presently finish a design written the
-usual way. `ice40_flip_flops_still_refuse_an_active_low_reset` holds the
-statement.
+**iCE40 flip-flops refused an active-low reset. Fixed.** Every block
+resets on `negedge rst_n`, which is the convention the rest of this
+repository's IP uses and the one nearly all real HDL uses. Every
+`SB_DFF*` primitive the iCE40 database declares resets *high*, and
+`fpga::techcells` used to match polarity exactly instead of putting an
+inverter in front of the reset net, so it reported `F0310` and left
+generic `dff` cells behind — which is why the iCE40 rows used to show
+`dff` where the ECP5 rows show `TRELLIS_FF`, and why the iCE40 target
+could not finish a design written the usual way.
+
+The fix is the one `asic::library` has always applied to a polarity no
+standard cell has: use the primitive with the other polarity and invert
+the net feeding it. The inverter is one of the device's own LUTs, and
+there is **one per net**, not one per flip-flop, so `cdc_sync`'s reset
+costs one `SB_LUT4` between its two flops and `rv32i`'s costs one
+between three hundred. The same is done for a clock-enable polarity a
+family lacks, which is now expressible in a `.dev` `mode` clause as
+`enable_low`. What is *not* inverted is the clock: a wrong edge would
+mean a second clock network with its own skew, which is a
+physical-design decision rather than a mapper's, so it is still reported.
+`fpga::CellMapReport::inverted` lists the nets and
+`ice40_flip_flops_take_an_active_low_reset_through_one_inverter` holds
+the fix.
 
 **A memory below the block-RAM threshold is left generic.**
 `fpga::primitives` decides that a memory too small for a block RAM will

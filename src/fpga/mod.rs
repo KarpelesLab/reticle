@@ -323,6 +323,7 @@ mod tests {
                 let plain = FfVariant {
                     clk_pos,
                     has_enable,
+                    enable_active_high: true,
                     reset: None,
                 };
                 assert!(

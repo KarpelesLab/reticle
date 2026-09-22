@@ -166,8 +166,8 @@ impl FfReset {
 /// mapped onto a near miss.
 ///
 /// In the `.dev` text this is the `mode` clause, a comma-separated list of
-/// `posedge` / `negedge`, `enable`, one of `sync_reset` / `async_reset` /
-/// `sync_set` / `async_set`, and `active_low`:
+/// `posedge` / `negedge`, `enable` or `enable_low`, one of `sync_reset` /
+/// `async_reset` / `sync_set` / `async_set`, and `active_low`:
 ///
 /// ```text
 /// bel SB_DFFER ff mode negedge,enable,async_reset port clk=C d=D q=Q en=E rst=R
@@ -175,12 +175,21 @@ impl FfReset {
 ///
 /// The set or reset pin plays the `rst` port role whether it sets or
 /// resets, since which of the two it does is what the variant states.
+///
+/// A polarity the family does not declare is not a refusal: [`super::techcells`]
+/// inverts the net feeding the pin, once per net, and counts the
+/// inverters it added. Only the *clock edge* is matched strictly, since
+/// inverting a clock would create a second clock network.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct FfVariant {
     /// True when the flip-flop captures on the rising clock edge.
     pub clk_pos: bool,
     /// True when the primitive has a clock enable.
     pub has_enable: bool,
+    /// True when that clock enable is active high. Meaningless, and held
+    /// at `true`, when `has_enable` is false, so that two variants that
+    /// behave the same compare equal.
+    pub enable_active_high: bool,
     /// The set/reset input, or `None` when the primitive has none.
     pub reset: Option<FfReset>,
 }
@@ -191,6 +200,7 @@ impl FfVariant {
         FfVariant {
             clk_pos: true,
             has_enable: false,
+            enable_active_high: true,
             reset: None,
         }
     }
@@ -200,7 +210,11 @@ impl FfVariant {
     pub fn flags(self) -> String {
         let mut out = String::from(if self.clk_pos { "posedge" } else { "negedge" });
         if self.has_enable {
-            out.push_str(",enable");
+            out.push_str(if self.enable_active_high {
+                ",enable"
+            } else {
+                ",enable_low"
+            });
         }
         if let Some(reset) = self.reset {
             out.push(',');
@@ -217,9 +231,10 @@ impl FfVariant {
     /// ```
     /// use reticle::fpga::FfVariant;
     /// let v = FfVariant::parse("negedge,enable,async_reset").unwrap();
-    /// assert!(!v.clk_pos && v.has_enable);
+    /// assert!(!v.clk_pos && v.has_enable && v.enable_active_high);
     /// assert!(v.reset.unwrap().asynchronous);
     /// assert_eq!(v.flags(), "negedge,enable,async_reset");
+    /// assert!(!FfVariant::parse("posedge,enable_low").unwrap().enable_active_high);
     /// assert!(FfVariant::parse("posedge,nonsense").is_none());
     /// ```
     pub fn parse(text: &str) -> Option<FfVariant> {
@@ -230,6 +245,10 @@ impl FfVariant {
                 "posedge" => variant.clk_pos = true,
                 "negedge" => variant.clk_pos = false,
                 "enable" => variant.has_enable = true,
+                "enable_low" => {
+                    variant.has_enable = true;
+                    variant.enable_active_high = false;
+                }
                 "active_low" => active_low = true,
                 other => variant.reset = Some(FfReset::from_keyword(other)?),
             }
@@ -240,6 +259,33 @@ impl FfVariant {
         Some(variant)
     }
 
+    /// The same variant with the set/reset input's polarity flipped, or
+    /// `None` when it has no set/reset at all.
+    ///
+    /// This is what [`super::techcells`] asks for before giving up on a
+    /// flip-flop: the other polarity plus an inverter on the net is the
+    /// same circuit.
+    pub fn with_flipped_reset(self) -> Option<FfVariant> {
+        let mut reset = self.reset?;
+        reset.active_high = !reset.active_high;
+        Some(FfVariant {
+            reset: Some(reset),
+            ..self
+        })
+    }
+
+    /// The same variant with the clock enable's polarity flipped, or
+    /// `None` when it has no clock enable.
+    pub fn with_flipped_enable(self) -> Option<FfVariant> {
+        if !self.has_enable {
+            return None;
+        }
+        Some(FfVariant {
+            enable_active_high: !self.enable_active_high,
+            ..self
+        })
+    }
+
     /// A phrase naming the variant, for diagnostics.
     pub fn describe(self) -> String {
         let mut out = String::from(if self.clk_pos {
@@ -248,7 +294,11 @@ impl FfVariant {
             "a falling clock edge"
         });
         if self.has_enable {
-            out.push_str(", a clock enable");
+            out.push_str(if self.enable_active_high {
+                ", a clock enable"
+            } else {
+                ", an active-low clock enable"
+            });
         }
         match self.reset {
             Some(reset) => {
@@ -889,6 +939,7 @@ impl Device {
     /// let variant = FfVariant {
     ///     clk_pos: true,
     ///     has_enable: true,
+    ///     enable_active_high: true,
     ///     reset: Some(FfReset { asynchronous: false, sets: false, active_high: true }),
     /// };
     /// assert_eq!(device.ff_variant(variant).unwrap().name, "SB_DFFESR");
@@ -2242,7 +2293,7 @@ end
         // Every combination the model can express writes and parses back
         // to itself, which is what keeps a `.dev` file diffable.
         for clk_pos in [true, false] {
-            for has_enable in [true, false] {
+            for (has_enable, enable_active_high) in [(false, true), (true, true), (true, false)] {
                 for reset in [
                     None,
                     Some("sync_reset"),
@@ -2257,6 +2308,7 @@ end
                         let variant = FfVariant {
                             clk_pos,
                             has_enable,
+                            enable_active_high,
                             reset: reset.map(|word| FfReset {
                                 active_high,
                                 ..FfReset::from_keyword(word).unwrap()
@@ -2265,6 +2317,20 @@ end
                         let flags = variant.flags();
                         assert_eq!(FfVariant::parse(&flags), Some(variant), "{flags}");
                         assert!(!variant.describe().is_empty());
+                        // Flipping a polarity twice is the identity, and
+                        // flipping one the variant has not is refused.
+                        assert_eq!(
+                            variant
+                                .with_flipped_reset()
+                                .and_then(FfVariant::with_flipped_reset),
+                            reset.map(|_| variant)
+                        );
+                        assert_eq!(
+                            variant
+                                .with_flipped_enable()
+                                .and_then(FfVariant::with_flipped_enable),
+                            has_enable.then_some(variant)
+                        );
                     }
                 }
             }
