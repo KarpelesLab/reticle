@@ -46,7 +46,7 @@ Early, but the middle of the pipeline runs end to end. What works today:
 | ASIC | Liberty, LEF and DEF readers and writers, standard-cell mapping with flip-flop matching, SDC output and an OpenROAD hand-off |
 | Timing | static timing analysis with setup and hold, path reports, clock domain crossing checks |
 | IP | manifests with dependency resolution and a lock file, bus interfaces, generated interconnect, encrypted-core black boxes, a static registry index, IP-XACT import |
-| Tooling | Verilog and VHDL formatters, a language server for both, an incremental build cache |
+| Tooling | Verilog and VHDL formatters, a language server for both, an incremental build cache, an HTML schematic and reference viewer |
 | Embedding | C ABI for use from another tool, and a WebAssembly build with a browser playground under `web/` |
 | FPGA | device database (iCE40, ECP5, generic), primitive mapping, placement and IO constraints, nextpnr and vendor export |
 
@@ -65,6 +65,7 @@ reticle fpga    --device ice40-hx1k-tq144 --constraints pins.rcf blinky.v
 reticle timing  --constraints clocks.rcf design.v
 reticle timing  --cdc design.v
 reticle cache   --top top --output design.rtl leaf.v mid.v top.v
+reticle viewer  --synth --output-dir docs/design counter.v
 ```
 
 `reticle fpga` runs the whole target flow and writes the netlist and
@@ -86,6 +87,8 @@ cargo test
 Every stage is a Cargo feature (`verilog`, `vhdl`, `sim`, `synth`, `fpga`,
 `asic`, `formal`, `lsp`, `cache`, `cli`); the default set is the frontends,
 simulator, synthesis and the CLI. See `Cargo.toml`.
+`asic`, `formal`, `lsp`, `viewer`, `cli`); the default set is the
+frontends, simulator, synthesis and the CLI. See `Cargo.toml`.
 
 ## Design principles
 

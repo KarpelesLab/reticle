@@ -491,8 +491,17 @@ no HDL written by the user beyond a top-level.
       `docs/lsp.md`.
 - [x] Formatter for Verilog and VHDL (`verilog::format`, `vhdl::format`,
       shared `fmt_doc` printer; see `docs/formatting.md`).
-- [ ] Schematic / netlist viewer output (an HTML page rendering the IR)
+- [x] Schematic / netlist viewer output (an HTML page rendering the IR)
       and documentation generation from source comments and port lists.
+      `viewer::render(design, &SourceMap, &ViewerOptions) -> Site` returns
+      the pages as `(path, contents)` pairs, so the library stays sans-I/O
+      and `reticle viewer` writes them. The schematic lays the cell form
+      out as a layered graph — longest-path ranking, barycentre ordering,
+      orthogonal wires through channels between the columns — and draws it
+      as inline SVG with pan, zoom, net highlighting, per-cell details and
+      a search box, in a page that loads nothing from the network. The
+      reference pages take their prose from the lexers' comment side
+      tables. See `docs/viewer.md`.
 - [x] WebAssembly build of the frontends and simulator for a browser
       playground (`wasm` feature, `web/reticle.js` and `web/index.html`;
       see `docs/wasm.md`).

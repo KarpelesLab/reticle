@@ -1,0 +1,605 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>counter_en schematic</title>
+    <style>
+:root {
+  --bg: #fbfbfa; --fg: #1d2021; --dim: #6b7378; --line: #d6d9dc;
+  --panel: #ffffff; --accent: #1d6fb8; --comb: #eef3f8; --comb-line: #7a9cbb;
+  --seq: #fdf0e0; --seq-line: #c6852a; --port: #e9f4ec; --port-line: #4c8f63;
+  --inst: #f1edf8; --inst-line: #7c6bab; --wire: #7c8790; --hot: #d1440a;
+  --mono: ui-monospace, 'DejaVu Sans Mono', Menlo, Consolas, monospace;
+  --sans: system-ui, -apple-system, 'Segoe UI', 'DejaVu Sans', sans-serif;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #16191c; --fg: #e4e6e8; --dim: #97a0a6; --line: #333a40;
+    --panel: #1d2125; --accent: #6db3f2; --comb: #23303b; --comb-line: #5b87ad;
+    --seq: #382b1b; --seq-line: #d29a45; --port: #1e3327; --port-line: #5ea678;
+    --inst: #2a2440; --inst-line: #9385c9; --wire: #79858e; --hot: #ff7a45;
+  }
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--fg);
+  font-family: var(--sans); font-size: 15px; line-height: 1.5; }
+header.top { display: flex; justify-content: space-between; align-items: baseline;
+  gap: 1rem; padding: 0.6rem 1rem; border-bottom: 1px solid var(--line);
+  background: var(--panel); position: sticky; top: 0; z-index: 2; }
+.crumbs { font-family: var(--mono); font-size: 13px; }
+.crumbs .sep { color: var(--dim); margin: 0 0.35rem; }
+.crumbs .here { font-weight: 600; }
+.brand { color: var(--dim); font-size: 12px; letter-spacing: 0.08em; text-transform: uppercase; }
+main { padding: 1rem; margin: 0 auto; }
+main.narrow { max-width: 70rem; }
+a { color: var(--accent); text-decoration: none; }
+a:hover { text-decoration: underline; }
+h1 { font-size: 1.5rem; margin: 0.2rem 0 0.4rem; }
+h2 { font-size: 1.1rem; margin: 1.6rem 0 0.4rem; border-bottom: 1px solid var(--line);
+  padding-bottom: 0.2rem; }
+h1 .kind, .loc { color: var(--dim); font-weight: 400; font-size: 0.8rem; font-family: var(--mono); }
+p.desc { margin: 0.4rem 0 1rem; max-width: 46rem; white-space: pre-wrap; }
+p.none, td.none { color: var(--dim); font-style: italic; }
+table { border-collapse: collapse; width: 100%; font-size: 14px; }
+th, td { text-align: left; padding: 0.3rem 0.6rem; border-bottom: 1px solid var(--line);
+  vertical-align: top; }
+th { color: var(--dim); font-weight: 600; font-size: 12px; text-transform: uppercase;
+  letter-spacing: 0.04em; }
+td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
+code, td.mono { font-family: var(--mono); font-size: 13px; }
+ul.tree { list-style: none; padding-left: 1.1rem; margin: 0.2rem 0; border-left: 1px solid var(--line); }
+ul.tree li { padding: 0.1rem 0; font-family: var(--mono); font-size: 13px; }
+.toolbar { display: flex; gap: 0.5rem; align-items: center; flex-wrap: wrap; margin-bottom: 0.5rem; }
+.toolbar input { font: inherit; font-size: 13px; padding: 0.25rem 0.5rem;
+  border: 1px solid var(--line); border-radius: 4px; background: var(--panel);
+  color: var(--fg); min-width: 14rem; }
+.toolbar button { font: inherit; font-size: 13px; padding: 0.25rem 0.6rem;
+  border: 1px solid var(--line); border-radius: 4px; background: var(--panel);
+  color: var(--fg); cursor: pointer; }
+.toolbar .hint { color: var(--dim); font-size: 12px; }
+.canvas { display: flex; gap: 0.75rem; align-items: stretch; flex-wrap: wrap; }
+.frame { flex: 1 1 28rem; border: 1px solid var(--line); border-radius: 6px;
+  background: var(--panel); overflow: hidden; }
+svg.schematic { display: block; width: 100%; height: 72vh; touch-action: none; cursor: grab; }
+aside.info { flex: 0 1 17rem; border: 1px solid var(--line); border-radius: 6px;
+  background: var(--panel); padding: 0.6rem 0.8rem; font-size: 13px; overflow: auto;
+  max-height: 72vh; }
+aside.info h3 { margin: 0 0 0.4rem; font-size: 0.95rem; font-family: var(--mono); }
+aside.info dl { margin: 0; display: grid; grid-template-columns: auto 1fr; gap: 0.15rem 0.6rem; }
+aside.info dt { color: var(--dim); font-size: 12px; }
+aside.info dd { margin: 0; font-family: var(--mono); font-size: 12px; overflow-wrap: anywhere; }
+.legend { display: flex; gap: 0.9rem; flex-wrap: wrap; color: var(--dim); font-size: 12px;
+  margin-top: 0.5rem; }
+.legend span::before { content: ''; display: inline-block; width: 0.7rem; height: 0.7rem;
+  margin-right: 0.3rem; border: 1px solid var(--line); vertical-align: -1px; }
+.legend .l-comb::before { background: var(--comb); border-color: var(--comb-line); }
+.legend .l-seq::before { background: var(--seq); border-color: var(--seq-line); }
+.legend .l-port::before { background: var(--port); border-color: var(--port-line); }
+.legend .l-inst::before { background: var(--inst); border-color: var(--inst-line); }
+.box { fill: var(--comb); stroke: var(--comb-line); stroke-width: 1; }
+.seq .box { fill: var(--seq); stroke: var(--seq-line); stroke-width: 2; }
+.port .box { fill: var(--port); stroke: var(--port-line); }
+.inst .box { fill: var(--inst); stroke: var(--inst-line); stroke-width: 1.5; }
+.kind { fill: var(--fg); font-family: var(--mono); font-size: 12px; font-weight: 600; }
+.label { fill: var(--dim); font-family: var(--mono); font-size: 10px; }
+.pinname { fill: var(--dim); font-family: var(--mono); font-size: 9px; }
+.pin { fill: var(--wire); stroke: none; }
+.wire { fill: none; stroke: var(--wire); stroke-width: 1.4; stroke-linejoin: round; }
+.wire.bus { stroke-width: 2.6; }
+.clkmark { fill: none; stroke: var(--seq-line); stroke-width: 1.4; }
+.node { cursor: pointer; }
+polyline.hl { stroke: var(--hot); }
+circle.hl { fill: var(--hot); }
+text.hl { fill: var(--hot); }
+.hl-node .box { stroke: var(--hot); }
+.found .box { stroke: var(--hot); stroke-dasharray: 4 2; }
+.sel .box { stroke: var(--accent); stroke-width: 2.5; }
+ol.src { font-family: var(--mono); font-size: 12px; background: var(--panel);
+  border: 1px solid var(--line); border-radius: 6px; padding: 0.6rem 0.6rem 0.6rem 4rem;
+  overflow-x: auto; }
+ol.src li { white-space: pre; padding: 0 0.3rem; }
+ol.src li:target { background: var(--comb); outline: 1px solid var(--comb-line); }
+
+    </style>
+  </head>
+  <body>
+    <header class="top">
+      <nav class="crumbs">
+        <a href="index.html">index</a>
+        <span class="sep">/</span>
+        <span class="here">counter_en (schematic)</span>
+      </nav>
+      <span class="brand">reticle viewer</span>
+    </header>
+    <main class="wide"><h1>counter_en
+  <span class="kind"> schematic</span>
+</h1>
+<p class="loc">
+  <a href="source/0-counter_en.cells.rtl.html#L3">counter_en.cells.rtl:3:1</a> · 
+  <a href="counter_en.doc.html">documentation</a> · 
+  <a href="index.html">index</a>
+</p>
+<div class="toolbar">
+  <input type="search" id="search" placeholder="find a cell or a net" aria-label="find a cell or a net" />
+  <button type="button" id="zoom-out">−</button>
+  <button type="button" id="zoom-in">+</button>
+  <button type="button" id="zoom-reset">reset</button>
+  <span class="hint">drag to pan, wheel to zoom, hover a wire to trace it, click a cell for its details</span>
+</div>
+<div class="canvas">
+  <div class="frame">
+    <svg class="schematic" id="schematic" viewBox="0 0 828 473" preserveAspectRatio="xMinYMin meet" role="img">
+      <title>schematic of module counter_en</title>
+      <g id="view">
+        <g class="wires">
+          <polyline class="wire bus" points="332,231 356,231 356,140 636,140 636,141 664,141" data-net="q" />
+          <polyline class="wire" points="624,204 636,204 636,221 664,221" data-net="wrap" />
+          <polyline class="wire bus" points="332,231 380,231 380,386 392,386" data-net="q" />
+          <polyline class="wire" points="290,393 344,393 344,404 392,404" />
+          <polyline class="wire" points="164,101 188,101 188,231 236,231" data-net="clk" />
+          <polyline class="wire bus" points="488,386 500,386 500,445 188,445 188,249 236,249" data-net="q$ff$add" />
+          <polyline class="wire" points="164,261 212,261 212,267 236,267" data-net="en" />
+          <polyline class="wire" points="164,181 176,181 176,285 236,285" data-net="rst" />
+          <polyline class="wire bus" points="332,231 344,231 344,232 392,232" data-net="q" />
+          <polyline class="wire" points="302,159 368,159 368,250 392,250" />
+          <polyline class="wire" points="164,101 176,101 176,123 344,123 344,168 500,168 500,204 528,204" data-net="clk" />
+          <polyline class="wire" points="488,232 500,232 500,222 528,222" data-net="wrap$ff$eq" />
+          <polyline class="wire" points="164,261 224,261 224,357 356,357 356,322 512,322 512,240 528,240" data-net="en" />
+          <polyline class="wire" points="164,181 200,181 200,329 344,329 344,294 500,294 500,258 528,258" data-net="rst" />
+          <text class="label" x="339" y="226" data-net="q">q /8</text>
+          <text class="label" x="631" y="199" data-net="wrap">wrap</text>
+          <text class="label" x="171" y="96" data-net="clk">clk</text>
+          <text class="label" x="495" y="381" data-net="q$ff$add">q$ff$add /8</text>
+          <text class="label" x="171" y="256" data-net="en">en</text>
+          <text class="label" x="171" y="176" data-net="rst">rst</text>
+          <text class="label" x="495" y="227" data-net="wrap$ff$eq">wrap$ff$eq</text>
+        </g>
+        <g class="nodes">
+          <g class="node port" data-detail="0" data-search="clk port in" data-cx="116" data-cy="91">
+            <polygon class="box" points="68,62 153,62 164,91 153,120 68,120" />
+            <text class="kind" x="77" y="79">port in</text>
+            <text class="label" x="77" y="90">clk</text>
+            <circle class="pin" cx="164" cy="101" r="3" data-net="clk" />
+          </g>
+          <g class="node port" data-detail="1" data-search="port in rst" data-cx="116" data-cy="171">
+            <polygon class="box" points="68,142 153,142 164,171 153,200 68,200" />
+            <text class="kind" x="77" y="159">port in</text>
+            <text class="label" x="77" y="170">rst</text>
+            <circle class="pin" cx="164" cy="181" r="3" data-net="rst" />
+          </g>
+          <g class="node port" data-detail="2" data-search="en port in" data-cx="116" data-cy="251">
+            <polygon class="box" points="68,222 153,222 164,251 153,280 68,280" />
+            <text class="kind" x="77" y="239">port in</text>
+            <text class="label" x="77" y="250">en</text>
+            <circle class="pin" cx="164" cy="261" r="3" data-net="en" />
+          </g>
+          <g class="node port" data-detail="3" data-search="port out q" data-cx="712" data-cy="131">
+            <polygon class="box" points="675,102 749,102 760,131 749,160 675,160 664,131" />
+            <text class="kind" x="673" y="119">port out</text>
+            <text class="label" x="673" y="130">q</text>
+            <circle class="pin" cx="664" cy="141" r="3" data-net="q" />
+          </g>
+          <g class="node port" data-detail="4" data-search="port out wrap" data-cx="712" data-cy="211">
+            <polygon class="box" points="675,182 749,182 760,211 749,240 675,240 664,211" />
+            <text class="kind" x="673" y="199">port out</text>
+            <text class="label" x="673" y="210">wrap</text>
+            <circle class="pin" cx="664" cy="221" r="3" data-net="wrap" />
+          </g>
+          <g class="node comb" data-detail="5" data-search="8&#39;d1 a add b q q$ff$add y" data-cx="440" data-cy="385">
+            <rect class="box" x="392" y="347" width="96" height="76" rx="4" />
+            <text class="kind" x="401" y="364">add</text>
+            <text class="label" x="401" y="375">q$ff$add</text>
+            <circle class="pin" cx="392" cy="386" r="3" data-net="q" />
+            <text class="pinname" x="399" y="389">a</text>
+            <circle class="pin" cx="392" cy="404" r="3" />
+            <text class="pinname" x="399" y="407">b</text>
+            <circle class="pin" cx="488" cy="386" r="3" data-net="q$ff$add" />
+            <text class="pinname" x="481" y="389" text-anchor="end">y</text>
+          </g>
+          <g class="node seq" data-detail="6" data-search="clk d dff pos en q q$ff q$ff$add rst" data-cx="284" data-cy="248">
+            <rect class="box" x="236" y="192" width="96" height="112" rx="4" />
+            <text class="kind" x="245" y="209">dff pos</text>
+            <text class="label" x="245" y="220">q$ff</text>
+            <circle class="pin" cx="236" cy="231" r="3" data-net="clk" />
+            <polyline class="clkmark" points="239,226 246,231 239,236" />
+            <text class="pinname" x="250" y="234">clk</text>
+            <circle class="pin" cx="236" cy="249" r="3" data-net="q$ff$add" />
+            <text class="pinname" x="243" y="252">d</text>
+            <circle class="pin" cx="236" cy="267" r="3" data-net="en" />
+            <text class="pinname" x="243" y="270">en</text>
+            <circle class="pin" cx="236" cy="285" r="3" data-net="rst" />
+            <text class="pinname" x="243" y="288">rst</text>
+            <circle class="pin" cx="332" cy="231" r="3" data-net="q" />
+            <text class="pinname" x="325" y="234" text-anchor="end">q</text>
+          </g>
+          <g class="node comb" data-detail="7" data-search="8&#39;d255 a b eq q wrap$ff$eq y" data-cx="440" data-cy="231">
+            <rect class="box" x="392" y="193" width="96" height="76" rx="4" />
+            <text class="kind" x="401" y="210">eq</text>
+            <text class="label" x="401" y="221">wrap$ff$eq</text>
+            <circle class="pin" cx="392" cy="232" r="3" data-net="q" />
+            <text class="pinname" x="399" y="235">a</text>
+            <circle class="pin" cx="392" cy="250" r="3" />
+            <text class="pinname" x="399" y="253">b</text>
+            <circle class="pin" cx="488" cy="232" r="3" data-net="wrap$ff$eq" />
+            <text class="pinname" x="481" y="235" text-anchor="end">y</text>
+          </g>
+          <g class="node seq" data-detail="8" data-search="clk d dff pos en q rst wrap wrap$ff wrap$ff$eq" data-cx="576" data-cy="221">
+            <rect class="box" x="528" y="165" width="96" height="112" rx="4" />
+            <text class="kind" x="537" y="182">dff pos</text>
+            <text class="label" x="537" y="193">wrap$ff</text>
+            <circle class="pin" cx="528" cy="204" r="3" data-net="clk" />
+            <polyline class="clkmark" points="531,199 538,204 531,209" />
+            <text class="pinname" x="542" y="207">clk</text>
+            <circle class="pin" cx="528" cy="222" r="3" data-net="wrap$ff$eq" />
+            <text class="pinname" x="535" y="225">d</text>
+            <circle class="pin" cx="528" cy="240" r="3" data-net="en" />
+            <text class="pinname" x="535" y="243">en</text>
+            <circle class="pin" cx="528" cy="258" r="3" data-net="rst" />
+            <text class="pinname" x="535" y="261">rst</text>
+            <circle class="pin" cx="624" cy="204" r="3" data-net="wrap" />
+            <text class="pinname" x="617" y="207" text-anchor="end">q</text>
+          </g>
+          <g class="node konst" data-detail="9" data-search="8&#39;d1" data-cx="263" data-cy="393">
+            <polygon class="box" points="270,382 290,393 270,404" />
+            <text class="kind" x="238" y="397">8&#39;d1</text>
+            <circle class="pin" cx="290" cy="393" r="3" />
+          </g>
+          <g class="node konst" data-detail="10" data-search="8&#39;d255" data-cx="269" data-cy="159">
+            <polygon class="box" points="282,148 302,159 282,170" />
+            <text class="kind" x="238" y="163">8&#39;d255</text>
+            <circle class="pin" cx="302" cy="159" r="3" />
+          </g>
+        </g>
+      </g>
+    </svg>
+  </div>
+  <aside class="info" id="info">
+    <p id="info-empty" class="none">Click a cell to see its parameters and where it came from.</p>
+    <div class="detail" id="d0" hidden="hidden">
+      <h3>clk</h3>
+      <dl>
+        <dt>kind</dt>
+        <dd>port in</dd>
+        <dt>direction</dt>
+        <dd>in</dd>
+        <dt>net</dt>
+        <dd>clk</dd>
+        <dt>type</dt>
+        <dd>u1</dd>
+        <dt>out clk</dt>
+        <dd>clk</dd>
+      </dl>
+      <p class="loc">
+        <a href="source/0-counter_en.cells.rtl.html#L11">counter_en.cells.rtl:11:3</a>
+      </p>
+    </div>
+    <div class="detail" id="d1" hidden="hidden">
+      <h3>rst</h3>
+      <dl>
+        <dt>kind</dt>
+        <dd>port in</dd>
+        <dt>direction</dt>
+        <dd>in</dd>
+        <dt>net</dt>
+        <dd>rst</dd>
+        <dt>type</dt>
+        <dd>u1</dd>
+        <dt>out rst</dt>
+        <dd>rst</dd>
+      </dl>
+      <p class="loc">
+        <a href="source/0-counter_en.cells.rtl.html#L12">counter_en.cells.rtl:12:3</a>
+      </p>
+    </div>
+    <div class="detail" id="d2" hidden="hidden">
+      <h3>en</h3>
+      <dl>
+        <dt>kind</dt>
+        <dd>port in</dd>
+        <dt>direction</dt>
+        <dd>in</dd>
+        <dt>net</dt>
+        <dd>en</dd>
+        <dt>type</dt>
+        <dd>u1</dd>
+        <dt>out en</dt>
+        <dd>en</dd>
+      </dl>
+      <p class="loc">
+        <a href="source/0-counter_en.cells.rtl.html#L13">counter_en.cells.rtl:13:3</a>
+      </p>
+    </div>
+    <div class="detail" id="d3" hidden="hidden">
+      <h3>q</h3>
+      <dl>
+        <dt>kind</dt>
+        <dd>port out</dd>
+        <dt>direction</dt>
+        <dd>out</dd>
+        <dt>net</dt>
+        <dd>q</dd>
+        <dt>type</dt>
+        <dd>u8</dd>
+        <dt>in q</dt>
+        <dd>q</dd>
+      </dl>
+      <p class="loc">
+        <a href="source/0-counter_en.cells.rtl.html#L14">counter_en.cells.rtl:14:3</a>
+      </p>
+    </div>
+    <div class="detail" id="d4" hidden="hidden">
+      <h3>wrap</h3>
+      <dl>
+        <dt>kind</dt>
+        <dd>port out</dd>
+        <dt>direction</dt>
+        <dd>out</dd>
+        <dt>net</dt>
+        <dd>wrap</dd>
+        <dt>type</dt>
+        <dd>u1</dd>
+        <dt>in wrap</dt>
+        <dd>wrap</dd>
+      </dl>
+      <p class="loc">
+        <a href="source/0-counter_en.cells.rtl.html#L15">counter_en.cells.rtl:15:3</a>
+      </p>
+    </div>
+    <div class="detail" id="d5" hidden="hidden">
+      <h3>q$ff$add</h3>
+      <dl>
+        <dt>kind</dt>
+        <dd>add</dd>
+        <dt>cell</dt>
+        <dd>add</dd>
+        <dt>in a</dt>
+        <dd>q</dd>
+        <dt>in b</dt>
+        <dd>8&#39;d1</dd>
+        <dt>out y</dt>
+        <dd>q$ff$add</dd>
+      </dl>
+      <p class="loc">
+        <a href="source/0-counter_en.cells.rtl.html#L16">counter_en.cells.rtl:16:3</a>
+      </p>
+    </div>
+    <div class="detail" id="d6" hidden="hidden">
+      <h3>q$ff</h3>
+      <dl>
+        <dt>kind</dt>
+        <dd>dff pos</dd>
+        <dt>cell</dt>
+        <dd>dff</dd>
+        <dt>clock</dt>
+        <dd>posedge</dd>
+        <dt>enable</dt>
+        <dd>yes</dd>
+        <dt>reset</dt>
+        <dd>sync active-high, value 8&#39;d0</dd>
+        <dt>in clk</dt>
+        <dd>clk</dd>
+        <dt>in d</dt>
+        <dd>q$ff$add</dd>
+        <dt>in en</dt>
+        <dd>en</dd>
+        <dt>in rst</dt>
+        <dd>rst</dd>
+        <dt>out q</dt>
+        <dd>q</dd>
+      </dl>
+      <p class="loc">
+        <a href="source/0-counter_en.cells.rtl.html#L17">counter_en.cells.rtl:17:3</a>
+      </p>
+    </div>
+    <div class="detail" id="d7" hidden="hidden">
+      <h3>wrap$ff$eq</h3>
+      <dl>
+        <dt>kind</dt>
+        <dd>eq</dd>
+        <dt>cell</dt>
+        <dd>eq</dd>
+        <dt>in a</dt>
+        <dd>q</dd>
+        <dt>in b</dt>
+        <dd>8&#39;d255</dd>
+        <dt>out y</dt>
+        <dd>wrap$ff$eq</dd>
+      </dl>
+      <p class="loc">
+        <a href="source/0-counter_en.cells.rtl.html#L18">counter_en.cells.rtl:18:3</a>
+      </p>
+    </div>
+    <div class="detail" id="d8" hidden="hidden">
+      <h3>wrap$ff</h3>
+      <dl>
+        <dt>kind</dt>
+        <dd>dff pos</dd>
+        <dt>cell</dt>
+        <dd>dff</dd>
+        <dt>clock</dt>
+        <dd>posedge</dd>
+        <dt>enable</dt>
+        <dd>yes</dd>
+        <dt>reset</dt>
+        <dd>sync active-high, value 1&#39;d0</dd>
+        <dt>in clk</dt>
+        <dd>clk</dd>
+        <dt>in d</dt>
+        <dd>wrap$ff$eq</dd>
+        <dt>in en</dt>
+        <dd>en</dd>
+        <dt>in rst</dt>
+        <dd>rst</dd>
+        <dt>out q</dt>
+        <dd>wrap</dd>
+      </dl>
+      <p class="loc">
+        <a href="source/0-counter_en.cells.rtl.html#L19">counter_en.cells.rtl:19:3</a>
+      </p>
+    </div>
+    <div class="detail" id="d9" hidden="hidden">
+      <h3>8&#39;d1</h3>
+      <dl>
+        <dt>kind</dt>
+        <dd>8&#39;d1</dd>
+        <dt>constant</dt>
+        <dd>8&#39;d1</dd>
+        <dt>out </dt>
+        <dd>8&#39;d1</dd>
+      </dl>
+      <p class="loc">
+        <a href="source/0-counter_en.cells.rtl.html#L16">counter_en.cells.rtl:16:3</a>
+      </p>
+    </div>
+    <div class="detail" id="d10" hidden="hidden">
+      <h3>8&#39;d255</h3>
+      <dl>
+        <dt>kind</dt>
+        <dd>8&#39;d255</dd>
+        <dt>constant</dt>
+        <dd>8&#39;d255</dd>
+        <dt>out </dt>
+        <dd>8&#39;d255</dd>
+      </dl>
+      <p class="loc">
+        <a href="source/0-counter_en.cells.rtl.html#L18">counter_en.cells.rtl:18:3</a>
+      </p>
+    </div>
+  </aside>
+</div>
+<p class="legend">
+  <span class="l-comb">combinational</span>
+  <span class="l-seq">state</span>
+  <span class="l-inst">instance or process</span>
+  <span class="l-port">port</span>
+  <span>4 cells, 2 holding state, 14 wires</span>
+</p>
+    </main>
+    <script>
+(function () {
+  var svg = document.getElementById('schematic');
+  if (!svg) { return; }
+  var view = document.getElementById('view');
+  var info = document.getElementById('info');
+  var tx = 0, ty = 0, scale = 1;
+  function apply() {
+    view.setAttribute('transform', 'translate(' + tx.toFixed(2) + ' ' + ty.toFixed(2) +
+      ') scale(' + scale.toFixed(4) + ')');
+  }
+  function zoom(factor, cx, cy) {
+    var next = Math.min(8, Math.max(0.05, scale * factor));
+    factor = next / scale;
+    tx = cx - (cx - tx) * factor;
+    ty = cy - (cy - ty) * factor;
+    scale = next;
+    apply();
+  }
+  function centre() {
+    var r = svg.getBoundingClientRect();
+    return [r.width / 2, r.height / 2];
+  }
+  var down = false, lastX = 0, lastY = 0, moved = 0;
+  svg.addEventListener('pointerdown', function (e) {
+    down = true; moved = 0; lastX = e.clientX; lastY = e.clientY;
+    svg.setPointerCapture(e.pointerId); svg.style.cursor = 'grabbing';
+  });
+  svg.addEventListener('pointermove', function (e) {
+    if (!down) { return; }
+    var dx = e.clientX - lastX, dy = e.clientY - lastY;
+    moved += Math.abs(dx) + Math.abs(dy);
+    tx += dx; ty += dy; lastX = e.clientX; lastY = e.clientY;
+    apply();
+  });
+  function release(e) {
+    down = false; svg.style.cursor = 'grab';
+    if (svg.hasPointerCapture(e.pointerId)) { svg.releasePointerCapture(e.pointerId); }
+  }
+  svg.addEventListener('pointerup', release);
+  svg.addEventListener('pointercancel', release);
+  svg.addEventListener('wheel', function (e) {
+    e.preventDefault();
+    var r = svg.getBoundingClientRect();
+    zoom(e.deltaY > 0 ? 1 / 1.12 : 1.12, e.clientX - r.left, e.clientY - r.top);
+  }, { passive: false });
+
+  var netted = svg.querySelectorAll('[data-net]');
+  var nodes = svg.querySelectorAll('.node');
+  for (var i = 0; i !== netted.length; i++) { netted[i].nodeOwner = netted[i].closest('.node'); }
+
+  function highlight(net) {
+    for (var j = 0; j !== nodes.length; j++) { nodes[j].classList.remove('hl-node'); }
+    for (var k = 0; k !== netted.length; k++) {
+      var el = netted[k];
+      if (net !== null && el.getAttribute('data-net') === net) {
+        el.classList.add('hl');
+        if (el.nodeOwner) { el.nodeOwner.classList.add('hl-node'); }
+      } else {
+        el.classList.remove('hl');
+      }
+    }
+  }
+  svg.addEventListener('pointerover', function (e) {
+    var t = e.target.closest ? e.target.closest('[data-net]') : null;
+    highlight(t ? t.getAttribute('data-net') : null);
+  });
+  svg.addEventListener('pointerleave', function () { highlight(null); });
+
+  var selected = null;
+  function select(node) {
+    if (selected) { selected.classList.remove('sel'); }
+    selected = node;
+    var panes = info ? info.querySelectorAll('.detail') : [];
+    for (var j = 0; j !== panes.length; j++) { panes[j].hidden = true; }
+    var empty = document.getElementById('info-empty');
+    if (!node) { if (empty) { empty.hidden = false; } return; }
+    node.classList.add('sel');
+    if (empty) { empty.hidden = true; }
+    var pane = document.getElementById('d' + node.getAttribute('data-detail'));
+    if (pane) { pane.hidden = false; }
+  }
+  svg.addEventListener('click', function (e) {
+    if (moved > 4) { return; }
+    select(e.target.closest ? e.target.closest('.node') : null);
+  });
+
+  var search = document.getElementById('search');
+  if (search) {
+    search.addEventListener('input', function () {
+      var q = search.value.trim().toLowerCase();
+      var first = null;
+      for (var j = 0; j !== nodes.length; j++) {
+        var hay = nodes[j].getAttribute('data-search') || '';
+        var hit = q !== '' && hay.indexOf(q) !== -1;
+        nodes[j].classList.toggle('found', hit);
+        if (hit && first === null) { first = nodes[j]; }
+      }
+      if (first) {
+        var c = centre();
+        tx = c[0] - parseFloat(first.getAttribute('data-cx')) * scale;
+        ty = c[1] - parseFloat(first.getAttribute('data-cy')) * scale;
+        apply();
+      }
+    });
+  }
+  function reset() { tx = 0; ty = 0; scale = 1; apply(); }
+  var zin = document.getElementById('zoom-in');
+  var zout = document.getElementById('zoom-out');
+  var zfit = document.getElementById('zoom-reset');
+  if (zin) { zin.addEventListener('click', function () { var c = centre(); zoom(1.25, c[0], c[1]); }); }
+  if (zout) { zout.addEventListener('click', function () { var c = centre(); zoom(0.8, c[0], c[1]); }); }
+  if (zfit) { zfit.addEventListener('click', reset); }
+  document.addEventListener('keydown', function (e) {
+    if (e.target && e.target.tagName === 'INPUT') { return; }
+    var c = centre();
+    if (e.key === '+' || e.key === '=') { zoom(1.25, c[0], c[1]); }
+    else if (e.key === '-') { zoom(0.8, c[0], c[1]); }
+    else if (e.key === '0') { reset(); }
+    else if (e.key === 'Escape') { select(null); highlight(null); }
+  });
+  apply();
+})();
+
+    </script>
+  </body>
+</html>

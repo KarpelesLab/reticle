@@ -120,10 +120,18 @@ formal = []
 # Verilog linter) directly, so it needs both. See `docs/lsp.md`.
 lsp = ["verilog", "vhdl"]
 
+# Schematic and documentation viewer: renders a design as a set of
+# self-contained HTML pages (inline SVG schematics, per-module reference
+# pages, an index). It reads nothing but the IR and a `SourceMap`, so it is
+# an empty feature; with `verilog` or `vhdl` also on, `viewer::Comments`
+# gains the constructors that read those lexers' comment side tables.
+# See `docs/viewer.md`.
+viewer = []
+
 # The `reticle` command-line tool (gates the binary target below). It drives
 # every stage, so it turns them all on, including `formal` which is otherwise
 # off by default.
-cli = ["verilog", "vhdl", "sim", "synth", "formal", "fpga", "timing", "ip", "lsp", "cache"]
+cli = ["verilog", "vhdl", "sim", "synth", "formal", "fpga", "timing", "ip", "lsp", "cache", "viewer"]
 
 # --- dependencies ---
 # Reticle is written from scratch and ships no foreign code: hand-written

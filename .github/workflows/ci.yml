@@ -68,7 +68,7 @@ jobs:
       - name: Each feature alone
         run: |
           set -e
-          for f in "" verilog vhdl sim synth formal fpga asic timing ip lsp cache ffi wasm cli; do
+          for f in "" verilog vhdl sim synth formal fpga asic timing ip lsp cache viewer ffi wasm cli; do
             echo "::group::features=${f:-none}"
             if [ -z "$f" ]; then
               cargo clippy --no-default-features --all-targets -- -D warnings

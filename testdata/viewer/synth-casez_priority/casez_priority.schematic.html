@@ -1,0 +1,898 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>casez_priority schematic</title>
+    <style>
+:root {
+  --bg: #fbfbfa; --fg: #1d2021; --dim: #6b7378; --line: #d6d9dc;
+  --panel: #ffffff; --accent: #1d6fb8; --comb: #eef3f8; --comb-line: #7a9cbb;
+  --seq: #fdf0e0; --seq-line: #c6852a; --port: #e9f4ec; --port-line: #4c8f63;
+  --inst: #f1edf8; --inst-line: #7c6bab; --wire: #7c8790; --hot: #d1440a;
+  --mono: ui-monospace, 'DejaVu Sans Mono', Menlo, Consolas, monospace;
+  --sans: system-ui, -apple-system, 'Segoe UI', 'DejaVu Sans', sans-serif;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #16191c; --fg: #e4e6e8; --dim: #97a0a6; --line: #333a40;
+    --panel: #1d2125; --accent: #6db3f2; --comb: #23303b; --comb-line: #5b87ad;
+    --seq: #382b1b; --seq-line: #d29a45; --port: #1e3327; --port-line: #5ea678;
+    --inst: #2a2440; --inst-line: #9385c9; --wire: #79858e; --hot: #ff7a45;
+  }
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--fg);
+  font-family: var(--sans); font-size: 15px; line-height: 1.5; }
+header.top { display: flex; justify-content: space-between; align-items: baseline;
+  gap: 1rem; padding: 0.6rem 1rem; border-bottom: 1px solid var(--line);
+  background: var(--panel); position: sticky; top: 0; z-index: 2; }
+.crumbs { font-family: var(--mono); font-size: 13px; }
+.crumbs .sep { color: var(--dim); margin: 0 0.35rem; }
+.crumbs .here { font-weight: 600; }
+.brand { color: var(--dim); font-size: 12px; letter-spacing: 0.08em; text-transform: uppercase; }
+main { padding: 1rem; margin: 0 auto; }
+main.narrow { max-width: 70rem; }
+a { color: var(--accent); text-decoration: none; }
+a:hover { text-decoration: underline; }
+h1 { font-size: 1.5rem; margin: 0.2rem 0 0.4rem; }
+h2 { font-size: 1.1rem; margin: 1.6rem 0 0.4rem; border-bottom: 1px solid var(--line);
+  padding-bottom: 0.2rem; }
+h1 .kind, .loc { color: var(--dim); font-weight: 400; font-size: 0.8rem; font-family: var(--mono); }
+p.desc { margin: 0.4rem 0 1rem; max-width: 46rem; white-space: pre-wrap; }
+p.none, td.none { color: var(--dim); font-style: italic; }
+table { border-collapse: collapse; width: 100%; font-size: 14px; }
+th, td { text-align: left; padding: 0.3rem 0.6rem; border-bottom: 1px solid var(--line);
+  vertical-align: top; }
+th { color: var(--dim); font-weight: 600; font-size: 12px; text-transform: uppercase;
+  letter-spacing: 0.04em; }
+td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
+code, td.mono { font-family: var(--mono); font-size: 13px; }
+ul.tree { list-style: none; padding-left: 1.1rem; margin: 0.2rem 0; border-left: 1px solid var(--line); }
+ul.tree li { padding: 0.1rem 0; font-family: var(--mono); font-size: 13px; }
+.toolbar { display: flex; gap: 0.5rem; align-items: center; flex-wrap: wrap; margin-bottom: 0.5rem; }
+.toolbar input { font: inherit; font-size: 13px; padding: 0.25rem 0.5rem;
+  border: 1px solid var(--line); border-radius: 4px; background: var(--panel);
+  color: var(--fg); min-width: 14rem; }
+.toolbar button { font: inherit; font-size: 13px; padding: 0.25rem 0.6rem;
+  border: 1px solid var(--line); border-radius: 4px; background: var(--panel);
+  color: var(--fg); cursor: pointer; }
+.toolbar .hint { color: var(--dim); font-size: 12px; }
+.canvas { display: flex; gap: 0.75rem; align-items: stretch; flex-wrap: wrap; }
+.frame { flex: 1 1 28rem; border: 1px solid var(--line); border-radius: 6px;
+  background: var(--panel); overflow: hidden; }
+svg.schematic { display: block; width: 100%; height: 72vh; touch-action: none; cursor: grab; }
+aside.info { flex: 0 1 17rem; border: 1px solid var(--line); border-radius: 6px;
+  background: var(--panel); padding: 0.6rem 0.8rem; font-size: 13px; overflow: auto;
+  max-height: 72vh; }
+aside.info h3 { margin: 0 0 0.4rem; font-size: 0.95rem; font-family: var(--mono); }
+aside.info dl { margin: 0; display: grid; grid-template-columns: auto 1fr; gap: 0.15rem 0.6rem; }
+aside.info dt { color: var(--dim); font-size: 12px; }
+aside.info dd { margin: 0; font-family: var(--mono); font-size: 12px; overflow-wrap: anywhere; }
+.legend { display: flex; gap: 0.9rem; flex-wrap: wrap; color: var(--dim); font-size: 12px;
+  margin-top: 0.5rem; }
+.legend span::before { content: ''; display: inline-block; width: 0.7rem; height: 0.7rem;
+  margin-right: 0.3rem; border: 1px solid var(--line); vertical-align: -1px; }
+.legend .l-comb::before { background: var(--comb); border-color: var(--comb-line); }
+.legend .l-seq::before { background: var(--seq); border-color: var(--seq-line); }
+.legend .l-port::before { background: var(--port); border-color: var(--port-line); }
+.legend .l-inst::before { background: var(--inst); border-color: var(--inst-line); }
+.box { fill: var(--comb); stroke: var(--comb-line); stroke-width: 1; }
+.seq .box { fill: var(--seq); stroke: var(--seq-line); stroke-width: 2; }
+.port .box { fill: var(--port); stroke: var(--port-line); }
+.inst .box { fill: var(--inst); stroke: var(--inst-line); stroke-width: 1.5; }
+.kind { fill: var(--fg); font-family: var(--mono); font-size: 12px; font-weight: 600; }
+.label { fill: var(--dim); font-family: var(--mono); font-size: 10px; }
+.pinname { fill: var(--dim); font-family: var(--mono); font-size: 9px; }
+.pin { fill: var(--wire); stroke: none; }
+.wire { fill: none; stroke: var(--wire); stroke-width: 1.4; stroke-linejoin: round; }
+.wire.bus { stroke-width: 2.6; }
+.clkmark { fill: none; stroke: var(--seq-line); stroke-width: 1.4; }
+.node { cursor: pointer; }
+polyline.hl { stroke: var(--hot); }
+circle.hl { fill: var(--hot); }
+text.hl { fill: var(--hot); }
+.hl-node .box { stroke: var(--hot); }
+.found .box { stroke: var(--hot); stroke-dasharray: 4 2; }
+.sel .box { stroke: var(--accent); stroke-width: 2.5; }
+ol.src { font-family: var(--mono); font-size: 12px; background: var(--panel);
+  border: 1px solid var(--line); border-radius: 6px; padding: 0.6rem 0.6rem 0.6rem 4rem;
+  overflow-x: auto; }
+ol.src li { white-space: pre; padding: 0 0.3rem; }
+ol.src li:target { background: var(--comb); outline: 1px solid var(--comb-line); }
+
+    </style>
+  </head>
+  <body>
+    <header class="top">
+      <nav class="crumbs">
+        <a href="index.html">index</a>
+        <span class="sep">/</span>
+        <span class="here">casez_priority (schematic)</span>
+      </nav>
+      <span class="brand">reticle viewer</span>
+    </header>
+    <main class="wide"><h1>casez_priority
+  <span class="kind"> schematic</span>
+</h1>
+<p class="loc">
+  <a href="source/0-casez_priority.cells.rtl.html#L3">casez_priority.cells.rtl:3:1</a> · 
+  <a href="casez_priority.doc.html">documentation</a> · 
+  <a href="index.html">index</a>
+</p>
+<div class="toolbar">
+  <input type="search" id="search" placeholder="find a cell or a net" aria-label="find a cell or a net" />
+  <button type="button" id="zoom-out">−</button>
+  <button type="button" id="zoom-in">+</button>
+  <button type="button" id="zoom-reset">reset</button>
+  <span class="hint">drag to pan, wheel to zoom, hover a wire to trace it, click a cell for its details</span>
+</div>
+<div class="canvas">
+  <div class="frame">
+    <svg class="schematic" id="schematic" viewBox="0 0 1136 613" preserveAspectRatio="xMinYMin meet" role="img">
+      <title>schematic of module casez_priority</title>
+      <g id="view">
+        <g class="wires">
+          <polyline class="wire bus" points="932,235 944,235 944,227 972,227" data-net="grant" />
+          <polyline class="wire" points="788,444 800,444 800,330 944,330 944,307 972,307" data-net="valid" />
+          <polyline class="wire bus" points="164,267 176,267 176,67 224,67" data-net="req" />
+          <polyline class="wire" points="122,151 188,151 188,85 224,85" />
+          <polyline class="wire bus" points="164,267 188,267 188,165 224,165" data-net="req" />
+          <polyline class="wire" points="122,195 200,195 200,183 224,183" />
+          <polyline class="wire bus" points="164,267 200,267 200,351 224,351" data-net="req" />
+          <polyline class="wire" points="122,319 176,319 176,369 224,369" />
+          <polyline class="wire bus" points="164,267 212,267 212,449 224,449" data-net="req" />
+          <polyline class="wire" points="122,363 188,363 188,467 224,467" />
+          <polyline class="wire" points="278,235 332,235 332,376 404,376" />
+          <polyline class="wire" points="278,279 368,279 368,394 404,394" />
+          <polyline class="wire" points="320,449 332,449 332,412 404,412" data-net="grant$eq_4" />
+          <polyline class="wire bus" points="500,376 512,376 512,305 548,305" data-net="grant$mux" />
+          <polyline class="wire" points="458,236 524,236 524,323 548,323" />
+          <polyline class="wire" points="320,351 380,351 380,312 536,312 536,341 548,341" data-net="grant$eq_3" />
+          <polyline class="wire bus" points="644,305 680,305 680,328 692,328" data-net="grant$mux_2" />
+          <polyline class="wire" points="602,205 668,205 668,346 692,346" />
+          <polyline class="wire" points="320,165 332,165 332,200 512,200 512,241 656,241 656,364 692,364" data-net="grant$eq_2" />
+          <polyline class="wire bus" points="788,328 812,328 812,235 836,235" data-net="grant$mux_3" />
+          <polyline class="wire" points="746,256 824,256 824,253 836,253" />
+          <polyline class="wire" points="320,67 332,67 332,118 512,118 512,169 656,169 656,220 800,220 800,271 836,271" data-net="grant$eq" />
+          <polyline class="wire" points="320,351 392,351 392,548 404,548" data-net="grant$eq_3" />
+          <polyline class="wire" points="320,449 368,449 368,566 404,566" data-net="grant$eq_4" />
+          <polyline class="wire" points="320,165 356,165 356,484 524,484 524,449 548,449" data-net="grant$eq_2" />
+          <polyline class="wire" points="500,548 512,548 512,467 548,467" data-net="valid$or" />
+          <polyline class="wire" points="320,67 344,67 344,456 512,456 512,385 656,385 656,444 692,444" data-net="grant$eq" />
+          <polyline class="wire" points="644,449 668,449 668,462 692,462" data-net="valid$or_2" />
+          <text class="label" x="939" y="230" data-net="grant">grant /2</text>
+          <text class="label" x="795" y="439" data-net="valid">valid</text>
+          <text class="label" x="171" y="262" data-net="req">req /4</text>
+          <text class="label" x="327" y="444" data-net="grant$eq_4">grant$eq_4</text>
+          <text class="label" x="507" y="371" data-net="grant$mux">grant$mux /2</text>
+          <text class="label" x="327" y="346" data-net="grant$eq_3">grant$eq_3</text>
+          <text class="label" x="651" y="300" data-net="grant$mux_2">grant$mux_2 /2</text>
+          <text class="label" x="327" y="160" data-net="grant$eq_2">grant$eq_2</text>
+          <text class="label" x="795" y="323" data-net="grant$mux_3">grant$mux_3 /2</text>
+          <text class="label" x="327" y="62" data-net="grant$eq">grant$eq</text>
+          <text class="label" x="507" y="543" data-net="valid$or">valid$or</text>
+          <text class="label" x="651" y="444" data-net="valid$or_2">valid$or_2</text>
+        </g>
+        <g class="nodes">
+          <g class="node port" data-detail="0" data-search="port in req" data-cx="116" data-cy="257">
+            <polygon class="box" points="68,228 153,228 164,257 153,286 68,286" />
+            <text class="kind" x="77" y="245">port in</text>
+            <text class="label" x="77" y="256">req</text>
+            <circle class="pin" cx="164" cy="267" r="3" data-net="req" />
+          </g>
+          <g class="node port" data-detail="1" data-search="grant port out" data-cx="1020" data-cy="217">
+            <polygon class="box" points="983,188 1057,188 1068,217 1057,246 983,246 972,217" />
+            <text class="kind" x="981" y="205">port out</text>
+            <text class="label" x="981" y="216">grant</text>
+            <circle class="pin" cx="972" cy="227" r="3" data-net="grant" />
+          </g>
+          <g class="node port" data-detail="2" data-search="port out valid" data-cx="1020" data-cy="297">
+            <polygon class="box" points="983,268 1057,268 1068,297 1057,326 983,326 972,297" />
+            <text class="kind" x="981" y="285">port out</text>
+            <text class="label" x="981" y="296">valid</text>
+            <circle class="pin" cx="972" cy="307" r="3" data-net="valid" />
+          </g>
+          <g class="node comb" data-detail="3" data-search="1&#39;d1 a b eq grant$eq req[0] y" data-cx="272" data-cy="66">
+            <rect class="box" x="224" y="28" width="96" height="76" rx="4" />
+            <text class="kind" x="233" y="45">eq</text>
+            <text class="label" x="233" y="56">grant$eq</text>
+            <circle class="pin" cx="224" cy="67" r="3" />
+            <text class="pinname" x="231" y="70">a</text>
+            <circle class="pin" cx="224" cy="85" r="3" />
+            <text class="pinname" x="231" y="88">b</text>
+            <circle class="pin" cx="320" cy="67" r="3" data-net="grant$eq" />
+            <text class="pinname" x="313" y="70" text-anchor="end">y</text>
+          </g>
+          <g class="node comb" data-detail="4" data-search="1&#39;d1 a b eq grant$eq_2 req[1] y" data-cx="272" data-cy="164">
+            <rect class="box" x="224" y="126" width="96" height="76" rx="4" />
+            <text class="kind" x="233" y="143">eq</text>
+            <text class="label" x="233" y="154">grant$eq_2</text>
+            <circle class="pin" cx="224" cy="165" r="3" />
+            <text class="pinname" x="231" y="168">a</text>
+            <circle class="pin" cx="224" cy="183" r="3" />
+            <text class="pinname" x="231" y="186">b</text>
+            <circle class="pin" cx="320" cy="165" r="3" data-net="grant$eq_2" />
+            <text class="pinname" x="313" y="168" text-anchor="end">y</text>
+          </g>
+          <g class="node comb" data-detail="5" data-search="1&#39;d1 a b eq grant$eq_3 req[2] y" data-cx="272" data-cy="350">
+            <rect class="box" x="224" y="312" width="96" height="76" rx="4" />
+            <text class="kind" x="233" y="329">eq</text>
+            <text class="label" x="233" y="340">grant$eq_3</text>
+            <circle class="pin" cx="224" cy="351" r="3" />
+            <text class="pinname" x="231" y="354">a</text>
+            <circle class="pin" cx="224" cy="369" r="3" />
+            <text class="pinname" x="231" y="372">b</text>
+            <circle class="pin" cx="320" cy="351" r="3" data-net="grant$eq_3" />
+            <text class="pinname" x="313" y="354" text-anchor="end">y</text>
+          </g>
+          <g class="node comb" data-detail="6" data-search="1&#39;d1 a b eq grant$eq_4 req[3] y" data-cx="272" data-cy="448">
+            <rect class="box" x="224" y="410" width="96" height="76" rx="4" />
+            <text class="kind" x="233" y="427">eq</text>
+            <text class="label" x="233" y="438">grant$eq_4</text>
+            <circle class="pin" cx="224" cy="449" r="3" />
+            <text class="pinname" x="231" y="452">a</text>
+            <circle class="pin" cx="224" cy="467" r="3" />
+            <text class="pinname" x="231" y="470">b</text>
+            <circle class="pin" cx="320" cy="449" r="3" data-net="grant$eq_4" />
+            <text class="pinname" x="313" y="452" text-anchor="end">y</text>
+          </g>
+          <g class="node comb" data-detail="7" data-search="2&#39;d0 2&#39;d3 a b grant$eq_4 grant$mux mux s y" data-cx="452" data-cy="384">
+            <rect class="box" x="404" y="337" width="96" height="94" rx="4" />
+            <text class="kind" x="413" y="354">mux</text>
+            <text class="label" x="413" y="365">grant$mux</text>
+            <circle class="pin" cx="404" cy="376" r="3" />
+            <text class="pinname" x="411" y="379">a</text>
+            <circle class="pin" cx="404" cy="394" r="3" />
+            <text class="pinname" x="411" y="397">b</text>
+            <circle class="pin" cx="404" cy="412" r="3" data-net="grant$eq_4" />
+            <text class="pinname" x="411" y="415">s</text>
+            <circle class="pin" cx="500" cy="376" r="3" data-net="grant$mux" />
+            <text class="pinname" x="493" y="379" text-anchor="end">y</text>
+          </g>
+          <g class="node comb" data-detail="8" data-search="2&#39;d2 a b grant$eq_3 grant$mux grant$mux_2 mux s y" data-cx="596" data-cy="313">
+            <rect class="box" x="548" y="266" width="96" height="94" rx="4" />
+            <text class="kind" x="557" y="283">mux</text>
+            <text class="label" x="557" y="294">grant$mux_2</text>
+            <circle class="pin" cx="548" cy="305" r="3" data-net="grant$mux" />
+            <text class="pinname" x="555" y="308">a</text>
+            <circle class="pin" cx="548" cy="323" r="3" />
+            <text class="pinname" x="555" y="326">b</text>
+            <circle class="pin" cx="548" cy="341" r="3" data-net="grant$eq_3" />
+            <text class="pinname" x="555" y="344">s</text>
+            <circle class="pin" cx="644" cy="305" r="3" data-net="grant$mux_2" />
+            <text class="pinname" x="637" y="308" text-anchor="end">y</text>
+          </g>
+          <g class="node comb" data-detail="9" data-search="2&#39;d1 a b grant$eq_2 grant$mux_2 grant$mux_3 mux s y" data-cx="740" data-cy="336">
+            <rect class="box" x="692" y="289" width="96" height="94" rx="4" />
+            <text class="kind" x="701" y="306">mux</text>
+            <text class="label" x="701" y="317">grant$mux_3</text>
+            <circle class="pin" cx="692" cy="328" r="3" data-net="grant$mux_2" />
+            <text class="pinname" x="699" y="331">a</text>
+            <circle class="pin" cx="692" cy="346" r="3" />
+            <text class="pinname" x="699" y="349">b</text>
+            <circle class="pin" cx="692" cy="364" r="3" data-net="grant$eq_2" />
+            <text class="pinname" x="699" y="367">s</text>
+            <circle class="pin" cx="788" cy="328" r="3" data-net="grant$mux_3" />
+            <text class="pinname" x="781" y="331" text-anchor="end">y</text>
+          </g>
+          <g class="node comb" data-detail="10" data-search="2&#39;d0 a b grant grant$eq grant$mux_3 grant$mux_4 mux s y" data-cx="884" data-cy="243">
+            <rect class="box" x="836" y="196" width="96" height="94" rx="4" />
+            <text class="kind" x="845" y="213">mux</text>
+            <text class="label" x="845" y="224">grant$mux_4</text>
+            <circle class="pin" cx="836" cy="235" r="3" data-net="grant$mux_3" />
+            <text class="pinname" x="843" y="238">a</text>
+            <circle class="pin" cx="836" cy="253" r="3" />
+            <text class="pinname" x="843" y="256">b</text>
+            <circle class="pin" cx="836" cy="271" r="3" data-net="grant$eq" />
+            <text class="pinname" x="843" y="274">s</text>
+            <circle class="pin" cx="932" cy="235" r="3" data-net="grant" />
+            <text class="pinname" x="925" y="238" text-anchor="end">y</text>
+          </g>
+          <g class="node comb" data-detail="11" data-search="a b grant$eq_3 grant$eq_4 or valid$or y" data-cx="452" data-cy="547">
+            <rect class="box" x="404" y="509" width="96" height="76" rx="4" />
+            <text class="kind" x="413" y="526">or</text>
+            <text class="label" x="413" y="537">valid$or</text>
+            <circle class="pin" cx="404" cy="548" r="3" data-net="grant$eq_3" />
+            <text class="pinname" x="411" y="551">a</text>
+            <circle class="pin" cx="404" cy="566" r="3" data-net="grant$eq_4" />
+            <text class="pinname" x="411" y="569">b</text>
+            <circle class="pin" cx="500" cy="548" r="3" data-net="valid$or" />
+            <text class="pinname" x="493" y="551" text-anchor="end">y</text>
+          </g>
+          <g class="node comb" data-detail="12" data-search="a b grant$eq_2 or valid$or valid$or_2 y" data-cx="596" data-cy="448">
+            <rect class="box" x="548" y="410" width="96" height="76" rx="4" />
+            <text class="kind" x="557" y="427">or</text>
+            <text class="label" x="557" y="438">valid$or_2</text>
+            <circle class="pin" cx="548" cy="449" r="3" data-net="grant$eq_2" />
+            <text class="pinname" x="555" y="452">a</text>
+            <circle class="pin" cx="548" cy="467" r="3" data-net="valid$or" />
+            <text class="pinname" x="555" y="470">b</text>
+            <circle class="pin" cx="644" cy="449" r="3" data-net="valid$or_2" />
+            <text class="pinname" x="637" y="452" text-anchor="end">y</text>
+          </g>
+          <g class="node comb" data-detail="13" data-search="a b grant$eq or valid valid$or_2 valid$or_3 y" data-cx="740" data-cy="443">
+            <rect class="box" x="692" y="405" width="96" height="76" rx="4" />
+            <text class="kind" x="701" y="422">or</text>
+            <text class="label" x="701" y="433">valid$or_3</text>
+            <circle class="pin" cx="692" cy="444" r="3" data-net="grant$eq" />
+            <text class="pinname" x="699" y="447">a</text>
+            <circle class="pin" cx="692" cy="462" r="3" data-net="valid$or_2" />
+            <text class="pinname" x="699" y="465">b</text>
+            <circle class="pin" cx="788" cy="444" r="3" data-net="valid" />
+            <text class="pinname" x="781" y="447" text-anchor="end">y</text>
+          </g>
+          <g class="node konst" data-detail="14" data-search="1&#39;d1" data-cx="95" data-cy="151">
+            <polygon class="box" points="102,140 122,151 102,162" />
+            <text class="kind" x="70" y="155">1&#39;d1</text>
+            <circle class="pin" cx="122" cy="151" r="3" />
+          </g>
+          <g class="node konst" data-detail="15" data-search="1&#39;d1" data-cx="95" data-cy="195">
+            <polygon class="box" points="102,184 122,195 102,206" />
+            <text class="kind" x="70" y="199">1&#39;d1</text>
+            <circle class="pin" cx="122" cy="195" r="3" />
+          </g>
+          <g class="node konst" data-detail="16" data-search="1&#39;d1" data-cx="95" data-cy="319">
+            <polygon class="box" points="102,308 122,319 102,330" />
+            <text class="kind" x="70" y="323">1&#39;d1</text>
+            <circle class="pin" cx="122" cy="319" r="3" />
+          </g>
+          <g class="node konst" data-detail="17" data-search="1&#39;d1" data-cx="95" data-cy="363">
+            <polygon class="box" points="102,352 122,363 102,374" />
+            <text class="kind" x="70" y="367">1&#39;d1</text>
+            <circle class="pin" cx="122" cy="363" r="3" />
+          </g>
+          <g class="node konst" data-detail="18" data-search="2&#39;d0" data-cx="251" data-cy="235">
+            <polygon class="box" points="258,224 278,235 258,246" />
+            <text class="kind" x="226" y="239">2&#39;d0</text>
+            <circle class="pin" cx="278" cy="235" r="3" />
+          </g>
+          <g class="node konst" data-detail="19" data-search="2&#39;d3" data-cx="251" data-cy="279">
+            <polygon class="box" points="258,268 278,279 258,290" />
+            <text class="kind" x="226" y="283">2&#39;d3</text>
+            <circle class="pin" cx="278" cy="279" r="3" />
+          </g>
+          <g class="node konst" data-detail="20" data-search="2&#39;d2" data-cx="431" data-cy="236">
+            <polygon class="box" points="438,225 458,236 438,247" />
+            <text class="kind" x="406" y="240">2&#39;d2</text>
+            <circle class="pin" cx="458" cy="236" r="3" />
+          </g>
+          <g class="node konst" data-detail="21" data-search="2&#39;d1" data-cx="575" data-cy="205">
+            <polygon class="box" points="582,194 602,205 582,216" />
+            <text class="kind" x="550" y="209">2&#39;d1</text>
+            <circle class="pin" cx="602" cy="205" r="3" />
+          </g>
+          <g class="node konst" data-detail="22" data-search="2&#39;d0" data-cx="719" data-cy="256">
+            <polygon class="box" points="726,245 746,256 726,267" />
+            <text class="kind" x="694" y="260">2&#39;d0</text>
+            <circle class="pin" cx="746" cy="256" r="3" />
+          </g>
+        </g>
+      </g>
+    </svg>
+  </div>
+  <aside class="info" id="info">
+    <p id="info-empty" class="none">Click a cell to see its parameters and where it came from.</p>
+    <div class="detail" id="d0" hidden="hidden">
+      <h3>req</h3>
+      <dl>
+        <dt>kind</dt>
+        <dd>port in</dd>
+        <dt>direction</dt>
+        <dd>in</dd>
+        <dt>net</dt>
+        <dd>req</dd>
+        <dt>type</dt>
+        <dd>u4</dd>
+        <dt>out req</dt>
+        <dd>req</dd>
+      </dl>
+      <p class="loc">
+        <a href="source/0-casez_priority.cells.rtl.html#L16">casez_priority.cells.rtl:16:3</a>
+      </p>
+    </div>
+    <div class="detail" id="d1" hidden="hidden">
+      <h3>grant</h3>
+      <dl>
+        <dt>kind</dt>
+        <dd>port out</dd>
+        <dt>direction</dt>
+        <dd>out</dd>
+        <dt>net</dt>
+        <dd>grant</dd>
+        <dt>type</dt>
+        <dd>u2</dd>
+        <dt>in grant</dt>
+        <dd>grant</dd>
+      </dl>
+      <p class="loc">
+        <a href="source/0-casez_priority.cells.rtl.html#L17">casez_priority.cells.rtl:17:3</a>
+      </p>
+    </div>
+    <div class="detail" id="d2" hidden="hidden">
+      <h3>valid</h3>
+      <dl>
+        <dt>kind</dt>
+        <dd>port out</dd>
+        <dt>direction</dt>
+        <dd>out</dd>
+        <dt>net</dt>
+        <dd>valid</dd>
+        <dt>type</dt>
+        <dd>u1</dd>
+        <dt>in valid</dt>
+        <dd>valid</dd>
+      </dl>
+      <p class="loc">
+        <a href="source/0-casez_priority.cells.rtl.html#L18">casez_priority.cells.rtl:18:3</a>
+      </p>
+    </div>
+    <div class="detail" id="d3" hidden="hidden">
+      <h3>grant$eq</h3>
+      <dl>
+        <dt>kind</dt>
+        <dd>eq</dd>
+        <dt>cell</dt>
+        <dd>eq</dd>
+        <dt>in a</dt>
+        <dd>req[0]</dd>
+        <dt>in b</dt>
+        <dd>1&#39;d1</dd>
+        <dt>out y</dt>
+        <dd>grant$eq</dd>
+      </dl>
+      <p class="loc">
+        <a href="source/0-casez_priority.cells.rtl.html#L19">casez_priority.cells.rtl:19:3</a>
+      </p>
+    </div>
+    <div class="detail" id="d4" hidden="hidden">
+      <h3>grant$eq_2</h3>
+      <dl>
+        <dt>kind</dt>
+        <dd>eq</dd>
+        <dt>cell</dt>
+        <dd>eq</dd>
+        <dt>in a</dt>
+        <dd>req[1]</dd>
+        <dt>in b</dt>
+        <dd>1&#39;d1</dd>
+        <dt>out y</dt>
+        <dd>grant$eq_2</dd>
+      </dl>
+      <p class="loc">
+        <a href="source/0-casez_priority.cells.rtl.html#L20">casez_priority.cells.rtl:20:3</a>
+      </p>
+    </div>
+    <div class="detail" id="d5" hidden="hidden">
+      <h3>grant$eq_3</h3>
+      <dl>
+        <dt>kind</dt>
+        <dd>eq</dd>
+        <dt>cell</dt>
+        <dd>eq</dd>
+        <dt>in a</dt>
+        <dd>req[2]</dd>
+        <dt>in b</dt>
+        <dd>1&#39;d1</dd>
+        <dt>out y</dt>
+        <dd>grant$eq_3</dd>
+      </dl>
+      <p class="loc">
+        <a href="source/0-casez_priority.cells.rtl.html#L21">casez_priority.cells.rtl:21:3</a>
+      </p>
+    </div>
+    <div class="detail" id="d6" hidden="hidden">
+      <h3>grant$eq_4</h3>
+      <dl>
+        <dt>kind</dt>
+        <dd>eq</dd>
+        <dt>cell</dt>
+        <dd>eq</dd>
+        <dt>in a</dt>
+        <dd>req[3]</dd>
+        <dt>in b</dt>
+        <dd>1&#39;d1</dd>
+        <dt>out y</dt>
+        <dd>grant$eq_4</dd>
+      </dl>
+      <p class="loc">
+        <a href="source/0-casez_priority.cells.rtl.html#L22">casez_priority.cells.rtl:22:3</a>
+      </p>
+    </div>
+    <div class="detail" id="d7" hidden="hidden">
+      <h3>grant$mux</h3>
+      <dl>
+        <dt>kind</dt>
+        <dd>mux</dd>
+        <dt>cell</dt>
+        <dd>mux</dd>
+        <dt>in a</dt>
+        <dd>2&#39;d0</dd>
+        <dt>in b</dt>
+        <dd>2&#39;d3</dd>
+        <dt>in s</dt>
+        <dd>grant$eq_4</dd>
+        <dt>out y</dt>
+        <dd>grant$mux</dd>
+      </dl>
+      <p class="loc">
+        <a href="source/0-casez_priority.cells.rtl.html#L23">casez_priority.cells.rtl:23:3</a>
+      </p>
+    </div>
+    <div class="detail" id="d8" hidden="hidden">
+      <h3>grant$mux_2</h3>
+      <dl>
+        <dt>kind</dt>
+        <dd>mux</dd>
+        <dt>cell</dt>
+        <dd>mux</dd>
+        <dt>in a</dt>
+        <dd>grant$mux</dd>
+        <dt>in b</dt>
+        <dd>2&#39;d2</dd>
+        <dt>in s</dt>
+        <dd>grant$eq_3</dd>
+        <dt>out y</dt>
+        <dd>grant$mux_2</dd>
+      </dl>
+      <p class="loc">
+        <a href="source/0-casez_priority.cells.rtl.html#L24">casez_priority.cells.rtl:24:3</a>
+      </p>
+    </div>
+    <div class="detail" id="d9" hidden="hidden">
+      <h3>grant$mux_3</h3>
+      <dl>
+        <dt>kind</dt>
+        <dd>mux</dd>
+        <dt>cell</dt>
+        <dd>mux</dd>
+        <dt>in a</dt>
+        <dd>grant$mux_2</dd>
+        <dt>in b</dt>
+        <dd>2&#39;d1</dd>
+        <dt>in s</dt>
+        <dd>grant$eq_2</dd>
+        <dt>out y</dt>
+        <dd>grant$mux_3</dd>
+      </dl>
+      <p class="loc">
+        <a href="source/0-casez_priority.cells.rtl.html#L25">casez_priority.cells.rtl:25:3</a>
+      </p>
+    </div>
+    <div class="detail" id="d10" hidden="hidden">
+      <h3>grant$mux_4</h3>
+      <dl>
+        <dt>kind</dt>
+        <dd>mux</dd>
+        <dt>cell</dt>
+        <dd>mux</dd>
+        <dt>in a</dt>
+        <dd>grant$mux_3</dd>
+        <dt>in b</dt>
+        <dd>2&#39;d0</dd>
+        <dt>in s</dt>
+        <dd>grant$eq</dd>
+        <dt>out y</dt>
+        <dd>grant</dd>
+      </dl>
+      <p class="loc">
+        <a href="source/0-casez_priority.cells.rtl.html#L26">casez_priority.cells.rtl:26:3</a>
+      </p>
+    </div>
+    <div class="detail" id="d11" hidden="hidden">
+      <h3>valid$or</h3>
+      <dl>
+        <dt>kind</dt>
+        <dd>or</dd>
+        <dt>cell</dt>
+        <dd>or</dd>
+        <dt>in a</dt>
+        <dd>grant$eq_3</dd>
+        <dt>in b</dt>
+        <dd>grant$eq_4</dd>
+        <dt>out y</dt>
+        <dd>valid$or</dd>
+      </dl>
+      <p class="loc">
+        <a href="source/0-casez_priority.cells.rtl.html#L27">casez_priority.cells.rtl:27:3</a>
+      </p>
+    </div>
+    <div class="detail" id="d12" hidden="hidden">
+      <h3>valid$or_2</h3>
+      <dl>
+        <dt>kind</dt>
+        <dd>or</dd>
+        <dt>cell</dt>
+        <dd>or</dd>
+        <dt>in a</dt>
+        <dd>grant$eq_2</dd>
+        <dt>in b</dt>
+        <dd>valid$or</dd>
+        <dt>out y</dt>
+        <dd>valid$or_2</dd>
+      </dl>
+      <p class="loc">
+        <a href="source/0-casez_priority.cells.rtl.html#L28">casez_priority.cells.rtl:28:3</a>
+      </p>
+    </div>
+    <div class="detail" id="d13" hidden="hidden">
+      <h3>valid$or_3</h3>
+      <dl>
+        <dt>kind</dt>
+        <dd>or</dd>
+        <dt>cell</dt>
+        <dd>or</dd>
+        <dt>in a</dt>
+        <dd>grant$eq</dd>
+        <dt>in b</dt>
+        <dd>valid$or_2</dd>
+        <dt>out y</dt>
+        <dd>valid</dd>
+      </dl>
+      <p class="loc">
+        <a href="source/0-casez_priority.cells.rtl.html#L29">casez_priority.cells.rtl:29:3</a>
+      </p>
+    </div>
+    <div class="detail" id="d14" hidden="hidden">
+      <h3>1&#39;d1</h3>
+      <dl>
+        <dt>kind</dt>
+        <dd>1&#39;d1</dd>
+        <dt>constant</dt>
+        <dd>1&#39;d1</dd>
+        <dt>out </dt>
+        <dd>1&#39;d1</dd>
+      </dl>
+      <p class="loc">
+        <a href="source/0-casez_priority.cells.rtl.html#L19">casez_priority.cells.rtl:19:3</a>
+      </p>
+    </div>
+    <div class="detail" id="d15" hidden="hidden">
+      <h3>1&#39;d1</h3>
+      <dl>
+        <dt>kind</dt>
+        <dd>1&#39;d1</dd>
+        <dt>constant</dt>
+        <dd>1&#39;d1</dd>
+        <dt>out </dt>
+        <dd>1&#39;d1</dd>
+      </dl>
+      <p class="loc">
+        <a href="source/0-casez_priority.cells.rtl.html#L20">casez_priority.cells.rtl:20:3</a>
+      </p>
+    </div>
+    <div class="detail" id="d16" hidden="hidden">
+      <h3>1&#39;d1</h3>
+      <dl>
+        <dt>kind</dt>
+        <dd>1&#39;d1</dd>
+        <dt>constant</dt>
+        <dd>1&#39;d1</dd>
+        <dt>out </dt>
+        <dd>1&#39;d1</dd>
+      </dl>
+      <p class="loc">
+        <a href="source/0-casez_priority.cells.rtl.html#L21">casez_priority.cells.rtl:21:3</a>
+      </p>
+    </div>
+    <div class="detail" id="d17" hidden="hidden">
+      <h3>1&#39;d1</h3>
+      <dl>
+        <dt>kind</dt>
+        <dd>1&#39;d1</dd>
+        <dt>constant</dt>
+        <dd>1&#39;d1</dd>
+        <dt>out </dt>
+        <dd>1&#39;d1</dd>
+      </dl>
+      <p class="loc">
+        <a href="source/0-casez_priority.cells.rtl.html#L22">casez_priority.cells.rtl:22:3</a>
+      </p>
+    </div>
+    <div class="detail" id="d18" hidden="hidden">
+      <h3>2&#39;d0</h3>
+      <dl>
+        <dt>kind</dt>
+        <dd>2&#39;d0</dd>
+        <dt>constant</dt>
+        <dd>2&#39;d0</dd>
+        <dt>out </dt>
+        <dd>2&#39;d0</dd>
+      </dl>
+      <p class="loc">
+        <a href="source/0-casez_priority.cells.rtl.html#L23">casez_priority.cells.rtl:23:3</a>
+      </p>
+    </div>
+    <div class="detail" id="d19" hidden="hidden">
+      <h3>2&#39;d3</h3>
+      <dl>
+        <dt>kind</dt>
+        <dd>2&#39;d3</dd>
+        <dt>constant</dt>
+        <dd>2&#39;d3</dd>
+        <dt>out </dt>
+        <dd>2&#39;d3</dd>
+      </dl>
+      <p class="loc">
+        <a href="source/0-casez_priority.cells.rtl.html#L23">casez_priority.cells.rtl:23:3</a>
+      </p>
+    </div>
+    <div class="detail" id="d20" hidden="hidden">
+      <h3>2&#39;d2</h3>
+      <dl>
+        <dt>kind</dt>
+        <dd>2&#39;d2</dd>
+        <dt>constant</dt>
+        <dd>2&#39;d2</dd>
+        <dt>out </dt>
+        <dd>2&#39;d2</dd>
+      </dl>
+      <p class="loc">
+        <a href="source/0-casez_priority.cells.rtl.html#L24">casez_priority.cells.rtl:24:3</a>
+      </p>
+    </div>
+    <div class="detail" id="d21" hidden="hidden">
+      <h3>2&#39;d1</h3>
+      <dl>
+        <dt>kind</dt>
+        <dd>2&#39;d1</dd>
+        <dt>constant</dt>
+        <dd>2&#39;d1</dd>
+        <dt>out </dt>
+        <dd>2&#39;d1</dd>
+      </dl>
+      <p class="loc">
+        <a href="source/0-casez_priority.cells.rtl.html#L25">casez_priority.cells.rtl:25:3</a>
+      </p>
+    </div>
+    <div class="detail" id="d22" hidden="hidden">
+      <h3>2&#39;d0</h3>
+      <dl>
+        <dt>kind</dt>
+        <dd>2&#39;d0</dd>
+        <dt>constant</dt>
+        <dd>2&#39;d0</dd>
+        <dt>out </dt>
+        <dd>2&#39;d0</dd>
+      </dl>
+      <p class="loc">
+        <a href="source/0-casez_priority.cells.rtl.html#L26">casez_priority.cells.rtl:26:3</a>
+      </p>
+    </div>
+  </aside>
+</div>
+<p class="legend">
+  <span class="l-comb">combinational</span>
+  <span class="l-seq">state</span>
+  <span class="l-inst">instance or process</span>
+  <span class="l-port">port</span>
+  <span>11 cells, 0 holding state, 28 wires</span>
+</p>
+    </main>
+    <script>
+(function () {
+  var svg = document.getElementById('schematic');
+  if (!svg) { return; }
+  var view = document.getElementById('view');
+  var info = document.getElementById('info');
+  var tx = 0, ty = 0, scale = 1;
+  function apply() {
+    view.setAttribute('transform', 'translate(' + tx.toFixed(2) + ' ' + ty.toFixed(2) +
+      ') scale(' + scale.toFixed(4) + ')');
+  }
+  function zoom(factor, cx, cy) {
+    var next = Math.min(8, Math.max(0.05, scale * factor));
+    factor = next / scale;
+    tx = cx - (cx - tx) * factor;
+    ty = cy - (cy - ty) * factor;
+    scale = next;
+    apply();
+  }
+  function centre() {
+    var r = svg.getBoundingClientRect();
+    return [r.width / 2, r.height / 2];
+  }
+  var down = false, lastX = 0, lastY = 0, moved = 0;
+  svg.addEventListener('pointerdown', function (e) {
+    down = true; moved = 0; lastX = e.clientX; lastY = e.clientY;
+    svg.setPointerCapture(e.pointerId); svg.style.cursor = 'grabbing';
+  });
+  svg.addEventListener('pointermove', function (e) {
+    if (!down) { return; }
+    var dx = e.clientX - lastX, dy = e.clientY - lastY;
+    moved += Math.abs(dx) + Math.abs(dy);
+    tx += dx; ty += dy; lastX = e.clientX; lastY = e.clientY;
+    apply();
+  });
+  function release(e) {
+    down = false; svg.style.cursor = 'grab';
+    if (svg.hasPointerCapture(e.pointerId)) { svg.releasePointerCapture(e.pointerId); }
+  }
+  svg.addEventListener('pointerup', release);
+  svg.addEventListener('pointercancel', release);
+  svg.addEventListener('wheel', function (e) {
+    e.preventDefault();
+    var r = svg.getBoundingClientRect();
+    zoom(e.deltaY > 0 ? 1 / 1.12 : 1.12, e.clientX - r.left, e.clientY - r.top);
+  }, { passive: false });
+
+  var netted = svg.querySelectorAll('[data-net]');
+  var nodes = svg.querySelectorAll('.node');
+  for (var i = 0; i !== netted.length; i++) { netted[i].nodeOwner = netted[i].closest('.node'); }
+
+  function highlight(net) {
+    for (var j = 0; j !== nodes.length; j++) { nodes[j].classList.remove('hl-node'); }
+    for (var k = 0; k !== netted.length; k++) {
+      var el = netted[k];
+      if (net !== null && el.getAttribute('data-net') === net) {
+        el.classList.add('hl');
+        if (el.nodeOwner) { el.nodeOwner.classList.add('hl-node'); }
+      } else {
+        el.classList.remove('hl');
+      }
+    }
+  }
+  svg.addEventListener('pointerover', function (e) {
+    var t = e.target.closest ? e.target.closest('[data-net]') : null;
+    highlight(t ? t.getAttribute('data-net') : null);
+  });
+  svg.addEventListener('pointerleave', function () { highlight(null); });
+
+  var selected = null;
+  function select(node) {
+    if (selected) { selected.classList.remove('sel'); }
+    selected = node;
+    var panes = info ? info.querySelectorAll('.detail') : [];
+    for (var j = 0; j !== panes.length; j++) { panes[j].hidden = true; }
+    var empty = document.getElementById('info-empty');
+    if (!node) { if (empty) { empty.hidden = false; } return; }
+    node.classList.add('sel');
+    if (empty) { empty.hidden = true; }
+    var pane = document.getElementById('d' + node.getAttribute('data-detail'));
+    if (pane) { pane.hidden = false; }
+  }
+  svg.addEventListener('click', function (e) {
+    if (moved > 4) { return; }
+    select(e.target.closest ? e.target.closest('.node') : null);
+  });
+
+  var search = document.getElementById('search');
+  if (search) {
+    search.addEventListener('input', function () {
+      var q = search.value.trim().toLowerCase();
+      var first = null;
+      for (var j = 0; j !== nodes.length; j++) {
+        var hay = nodes[j].getAttribute('data-search') || '';
+        var hit = q !== '' && hay.indexOf(q) !== -1;
+        nodes[j].classList.toggle('found', hit);
+        if (hit && first === null) { first = nodes[j]; }
+      }
+      if (first) {
+        var c = centre();
+        tx = c[0] - parseFloat(first.getAttribute('data-cx')) * scale;
+        ty = c[1] - parseFloat(first.getAttribute('data-cy')) * scale;
+        apply();
+      }
+    });
+  }
+  function reset() { tx = 0; ty = 0; scale = 1; apply(); }
+  var zin = document.getElementById('zoom-in');
+  var zout = document.getElementById('zoom-out');
+  var zfit = document.getElementById('zoom-reset');
+  if (zin) { zin.addEventListener('click', function () { var c = centre(); zoom(1.25, c[0], c[1]); }); }
+  if (zout) { zout.addEventListener('click', function () { var c = centre(); zoom(0.8, c[0], c[1]); }); }
+  if (zfit) { zfit.addEventListener('click', reset); }
+  document.addEventListener('keydown', function (e) {
+    if (e.target && e.target.tagName === 'INPUT') { return; }
+    var c = centre();
+    if (e.key === '+' || e.key === '=') { zoom(1.25, c[0], c[1]); }
+    else if (e.key === '-') { zoom(0.8, c[0], c[1]); }
+    else if (e.key === '0') { reset(); }
+    else if (e.key === 'Escape') { select(null); highlight(null); }
+  });
+  apply();
+})();
+
+    </script>
+  </body>
+</html>

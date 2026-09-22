@@ -41,6 +41,7 @@ Commands:
   verify   Prove or refute a design's assertions
   timing   Report static timing and clock domain crossings
   cache    Build incrementally against a cache of elaborated modules
+  viewer   Write the design out as browsable HTML: schematics and reference
   help     Show this message, or `reticle help <command>`
   version  Show the version
 
@@ -200,6 +201,31 @@ Options:
   --device <name>    Use the FPGA delay placeholders for this device family
 ";
 
+const VIEWER_USAGE: &str = "\
+Usage: reticle viewer [options] <design.v|design.vhd|design.rtl>...
+
+Renders the design as a small static site: an index, a schematic page
+per module and a reference page per module. Every page is
+self-contained — no scripts, fonts or images are fetched — so it opens
+from file:// and can be attached to a bug report.
+
+The schematic is drawn from the cell form, so run it on a netlist, or
+pass --synth to synthesise first; a module still in process form is
+drawn one box per process instead.
+
+Options:
+  --output-dir <d>   Write the pages here (default: viewer)
+  --top <module>     Treat this module as the top
+  --module <names>   Render only these modules (comma separated)
+  --title <text>     Heading of the index page
+  --synth            Synthesise first, so the schematic shows cells
+  --max-nodes <n>    Skip a schematic with more boxes than this (default 1500)
+  --no-schematic     Skip the schematic pages
+  --no-doc           Skip the reference pages
+  --no-source        Skip the source listings
+  --quiet            Suppress the summary line
+";
+
 const VERIFY_USAGE: &str = "\
 Usage: reticle verify [options] <design.rtl>
 
@@ -240,6 +266,7 @@ fn main() -> ExitCode {
         "verify" => run(verify, rest, VERIFY_USAGE),
         "timing" => run(timing, rest, TIMING_USAGE),
         "cache" => run(cache_cmd, rest, CACHE_USAGE),
+        "viewer" => run(viewer, rest, VIEWER_USAGE),
         other => {
             eprintln!("error: unknown command `{other}`\n");
             eprint!("{USAGE}");
@@ -261,6 +288,7 @@ fn help_text(command: Option<&str>) -> &'static str {
         Some("verify") => VERIFY_USAGE,
         Some("timing") => TIMING_USAGE,
         Some("cache") => CACHE_USAGE,
+        Some("viewer") => VIEWER_USAGE,
         _ => USAGE,
     }
 }
@@ -343,6 +371,11 @@ fn spec_for(usage: &str) -> Spec {
         Spec {
             options: &["constraints", "period", "top", "paths", "device"],
             flags: &["hold", "cdc", "summary"],
+        }
+    } else if std::ptr::eq(usage, VIEWER_USAGE) {
+        Spec {
+            options: &["output-dir", "top", "module", "title", "max-nodes"],
+            flags: &["synth", "no-schematic", "no-doc", "no-source", "quiet"],
         }
     } else if std::ptr::eq(usage, EMIT_USAGE) {
         Spec {
@@ -1604,4 +1637,109 @@ fn verify(args: &Args) -> Result<Outcome, ArgError> {
     } else {
         Outcome::Ok
     })
+}
+
+/// `reticle viewer`: render the design as a browsable static site.
+fn viewer(args: &Args) -> Result<Outcome, ArgError> {
+    use reticle::viewer::{ViewerOptions, render};
+
+    let max_nodes = args.u64_option("max-nodes")?;
+    let (mut design, map) = match load_design(args)? {
+        Ok(pair) => pair,
+        Err(outcome) => return Ok(outcome),
+    };
+    if let Some(top) = args.option("top") {
+        match design.module_by_name(top) {
+            Some(id) => design.top = Some(id),
+            None => return Ok(Outcome::Usage(format!("no module named `{top}`"))),
+        }
+    }
+    if args.flag("synth") {
+        let mut diags = Diagnostics::new();
+        let options = reticle::synth::SynthOptions::default();
+        reticle::synth::run(&mut design, &options, &mut diags);
+        if report(&mut diags, &map) {
+            return Ok(Outcome::Failed);
+        }
+    }
+
+    let mut options = ViewerOptions {
+        comments: collect_comments(&map),
+        schematics: !args.flag("no-schematic"),
+        docs: !args.flag("no-doc"),
+        sources: !args.flag("no-source"),
+        ..ViewerOptions::default()
+    };
+    options.title = match (args.option("title"), design.top_module()) {
+        (Some(title), _) => title.to_string(),
+        (None, Some(top)) => format!("{} \u{2014} design reference", top.name),
+        (None, None) => "Design reference".to_string(),
+    };
+    if let Some(names) = args.option("module") {
+        options.only = names
+            .split(',')
+            .map(|name| name.trim().to_string())
+            .filter(|name| !name.is_empty())
+            .collect();
+    }
+    if let Some(n) = max_nodes {
+        options.max_nodes = usize::try_from(n).unwrap_or(usize::MAX);
+    }
+
+    let site = render(&design, &map, &options);
+    let dir = Path::new(args.option("output-dir").unwrap_or("viewer"));
+    for (path, contents) in &site.files {
+        let target = dir.join(path);
+        if let Some(parent) = target.parent()
+            && let Err(err) = std::fs::create_dir_all(parent)
+        {
+            eprintln!("error: cannot create `{}`: {err}", parent.display());
+            return Ok(Outcome::Failed);
+        }
+        if let Err(err) = std::fs::write(&target, contents) {
+            eprintln!("error: cannot write `{}`: {err}", target.display());
+            return Ok(Outcome::Failed);
+        }
+    }
+    if !args.flag("quiet") {
+        eprintln!(
+            "wrote {} page{}; open {}",
+            site.len(),
+            if site.len() == 1 { "" } else { "s" },
+            dir.join("index.html").display()
+        );
+    }
+    Ok(Outcome::Ok)
+}
+
+/// Lexes every HDL source in the map for its comments.
+///
+/// Neither frontend attaches comments to its tree; both keep them in a
+/// side table the lexer fills, which is what the documentation view reads.
+/// Re-lexing is cheap next to elaboration, and it keeps `load_design`
+/// unchanged for every other command.
+fn collect_comments(map: &SourceMap) -> reticle::viewer::Comments {
+    let mut comments = reticle::viewer::Comments::new();
+    for (id, file) in map.files() {
+        match classify(file.name()) {
+            Some(Input::Verilog) => {
+                let dialect = extension(file.name())
+                    .as_deref()
+                    .and_then(reticle::verilog::Dialect::for_extension)
+                    .unwrap_or_default();
+                let mut diags = Diagnostics::new();
+                let lexed =
+                    reticle::verilog::Lexer::new(file.text(), id, dialect, &mut diags).run();
+                comments.add_verilog(&lexed);
+            }
+            Some(Input::Vhdl) => {
+                let mut diags = Diagnostics::new();
+                let standard = reticle::vhdl::Standard::default();
+                let lexed = reticle::vhdl::Lexer::new(file.text(), id, standard).lex(&mut diags);
+                comments.add_vhdl(&lexed);
+            }
+            Some(Input::Rtl) | None => {}
+        }
+    }
+    comments
 }
