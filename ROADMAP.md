@@ -298,9 +298,25 @@ ASIC:
 - [ ] Hand-off to OpenROAD for placement and routing, later an own flow.
 
 Shared:
-- [ ] Static timing analysis: SDC constraints, clock definitions, setup /
-      hold, false and multicycle paths, reports with source spans.
-- [ ] Clock domain crossing analysis using the IR's knowledge of clocks.
+- [x] Static timing analysis: the `timing` feature builds a pin-level
+      timing graph (cell arcs, net arcs, sequential cells breaking it),
+      propagates arrival and required times forwards and backwards with
+      rise and fall kept apart, and reports slack per end point and the
+      N worst paths with source spans. Clocks, false paths and
+      multicycle paths come from `Constraints` (`create_clock`,
+      `set_false_path`, `set_multicycle_path`); ideal and propagated
+      clock modes, input and output delays, and setup and hold are all
+      supported. Delays come from a `DelayModel`: a unit model, a
+      Liberty non-linear model over `asic::liberty`, and a table of
+      FPGA primitive numbers. Combinational loops are reported rather
+      than walked into. See `docs/timing.md`.
+- [x] Clock domain crossing analysis using the IR's knowledge of clocks:
+      every flip-flop is assigned a domain by tracing its clock pin to a
+      source, and each crossing is classified as an unsynchronised
+      crossing, a two-flop synchroniser, a gray-coded bus, a handshake
+      or an asynchronous FIFO, with reconvergent synchronisers reported
+      separately. Every finding says whether it is a structural fact or
+      an unverifiable guess.
 
 Done when: a blinky and a UART echo run on an iCE40 board with the whole
 flow inside Reticle, the same designs run on an ECP5 and a Xilinx 7-series
