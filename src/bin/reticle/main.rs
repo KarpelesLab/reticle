@@ -13,6 +13,7 @@
 //! 2 on usage errors.
 
 mod args;
+mod cache_store;
 
 use std::path::Path;
 use std::process::ExitCode;
@@ -39,6 +40,7 @@ Commands:
   sim      Simulate a design and print its output
   verify   Prove or refute a design's assertions
   timing   Report static timing and clock domain crossings
+  cache    Build incrementally against a cache of elaborated modules
   help     Show this message, or `reticle help <command>`
   version  Show the version
 
@@ -77,6 +79,32 @@ Options:
   --synth          Synthesise the elaborated design
   --report         Print what was resolved and elaborated
   --quiet          Suppress the summary line
+";
+
+const CACHE_USAGE: &str = "\
+Usage: reticle cache [options] [files...]
+
+Builds a design incrementally. Every module is keyed on the source text
+that produced it, the options, and its dependencies' keys, so a re-run
+after a small edit only re-elaborates what changed. Entries live one per
+file under --dir and are plain text with a short header.
+
+Editing a file invalidates that module and every module above it in the
+hierarchy; modules below it, and unrelated ones, are read back from the
+store.
+
+Options:
+  --dir <d>       Cache directory (default .reticle-cache)
+  --top <module>  Treat this module as the top
+  --output <f>    Write the resulting design here as .rtl
+  --synth         Also synthesise, caching the netlists separately
+  --only-top      Build just the top module, not every module
+  --max-size <n>  Evict least-recently-used entries past n bytes
+  --stats         Print what hit and what missed, module by module
+  --verify        Check every entry against its content and exit
+  --list          List the entries and exit
+  --clear         Remove every entry and exit
+  --quiet         Suppress the summary line
 ";
 
 const CHECK_USAGE: &str = "\
@@ -211,6 +239,7 @@ fn main() -> ExitCode {
         "sim" => run(sim, rest, SIM_USAGE),
         "verify" => run(verify, rest, VERIFY_USAGE),
         "timing" => run(timing, rest, TIMING_USAGE),
+        "cache" => run(cache_cmd, rest, CACHE_USAGE),
         other => {
             eprintln!("error: unknown command `{other}`\n");
             eprint!("{USAGE}");
@@ -231,6 +260,7 @@ fn help_text(command: Option<&str>) -> &'static str {
         Some("sim") => SIM_USAGE,
         Some("verify") => VERIFY_USAGE,
         Some("timing") => TIMING_USAGE,
+        Some("cache") => CACHE_USAGE,
         _ => USAGE,
     }
 }
@@ -281,6 +311,13 @@ fn spec_for(usage: &str) -> Spec {
         Spec {
             options: &["output", "lock"],
             flags: &["no-lock", "synth", "report", "quiet"],
+        }
+    } else if std::ptr::eq(usage, CACHE_USAGE) {
+        Spec {
+            options: &["dir", "top", "output", "max-size"],
+            flags: &[
+                "synth", "only-top", "stats", "verify", "list", "clear", "quiet",
+            ],
         }
     } else if std::ptr::eq(usage, CHECK_USAGE) {
         Spec {
@@ -531,6 +568,116 @@ fn load_design(args: &Args) -> Result<Result<(Design, SourceMap), Outcome>, ArgE
         Some(design) if !failed => Ok(Ok((design, map))),
         _ => Ok(Err(Outcome::Failed)),
     }
+}
+
+/// `reticle cache`: build incrementally against a store on disk.
+fn cache_cmd(args: &Args) -> Result<Outcome, ArgError> {
+    use reticle::cache::{BuildOptions, Cache, Language, SourceUnit, build};
+
+    let dir = args.option("dir").unwrap_or(".reticle-cache");
+    let mut storage = cache_store::FileStorage::new(dir);
+
+    if args.flag("clear") {
+        let mut cache = Cache::new(&mut storage);
+        let removed = cache.len();
+        cache.clear();
+        if !args.flag("quiet") {
+            println!("removed {removed} entries from {dir}");
+        }
+        return Ok(Outcome::Ok);
+    }
+
+    if args.flag("verify") {
+        let cache = Cache::new(&mut storage);
+        let bad = cache.verify();
+        for corruption in &bad {
+            eprintln!("error: {corruption}");
+        }
+        if !args.flag("quiet") {
+            println!(
+                "{} entries, {} bytes, {} damaged",
+                cache.len(),
+                cache.total_bytes(),
+                bad.len()
+            );
+        }
+        return Ok(if bad.is_empty() {
+            Outcome::Ok
+        } else {
+            Outcome::Failed
+        });
+    }
+
+    if args.flag("list") {
+        let cache = Cache::new(&mut storage);
+        for key in cache.keys() {
+            match cache.peek(key) {
+                Some(entry) => println!("{key}  {:>8}  {}", entry.size(), entry.producer),
+                None => println!("{key}  {:>8}  <unreadable>", "?"),
+            }
+        }
+        if !args.flag("quiet") {
+            println!("{} entries, {} bytes", cache.len(), cache.total_bytes());
+        }
+        return Ok(Outcome::Ok);
+    }
+
+    let paths = args.positionals();
+    if paths.is_empty() {
+        return Ok(Outcome::Usage("no input file given".into()));
+    }
+
+    let mut units = Vec::with_capacity(paths.len());
+    for path in paths {
+        match std::fs::read_to_string(path) {
+            Ok(text) => units.push(SourceUnit::new(path.clone(), text)),
+            Err(err) => {
+                eprintln!("error: cannot read {path}: {err}");
+                return Ok(Outcome::Failed);
+            }
+        }
+    }
+
+    let mut options = BuildOptions::new(Language::Verilog);
+    options.top = args.option("top").map(str::to_string);
+    options.only_top = args.flag("only-top");
+    options.capacity = args.u64_option("max-size")?;
+    // The library has no clock; the CLI does, so entries get a timestamp.
+    options.created = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs());
+    if args.flag("synth") {
+        options.synth = Some(reticle::synth::SynthOptions::default());
+    }
+
+    let mut diags = Diagnostics::new();
+    let result = build(&units, &options, &mut storage, &mut diags);
+    let failed = report(&mut diags, &result.sources);
+
+    if args.flag("stats") {
+        print!("{}", result.report());
+    }
+
+    let Some(design) = &result.design else {
+        return Ok(Outcome::Failed);
+    };
+    if let Some(path) = args.option("output")
+        && let Err(err) = write_out(Some(path), &design.to_text())
+    {
+        eprintln!("error: {err}");
+        return Ok(Outcome::Failed);
+    }
+
+    if !args.flag("quiet") {
+        eprintln!(
+            "{}: {} modules, {} cache hits, {} misses",
+            result.top.as_deref().unwrap_or("<no top>"),
+            design.modules.len(),
+            result.hits,
+            result.misses
+        );
+    }
+    Ok(if failed { Outcome::Failed } else { Outcome::Ok })
 }
 
 /// `reticle build`: resolve a project's IP and elaborate it.
