@@ -1,0 +1,21 @@
+top counter
+
+// An 8-bit counter with a synchronous reset that asserts `q < 200`. From
+// reset the counter reaches 200 after 200 frames, so bounded model
+// checking to depth 210 reports the violation at frame 200 with a trace.
+attr formal_mode = "verify"
+attr formal_depth = 210
+module counter
+  net %clk u1 wire
+  net %rst u1 wire
+  net %q u8 wire
+  net %inc u8 wire
+  attr formal_assert = 1
+  net %q_lt_200 u1 wire
+  port clk in %clk
+  port rst in %rst
+  port q out %q
+  cell add0 add (a=%q, b=8'd1) -> (y=%inc)
+  cell ff0 dff pos srst pos 8'd0 (clk=%clk, d=%inc, rst=%rst) -> (q=%q)
+  assign %q_lt_200 = lt(%q, 8'd200)
+end

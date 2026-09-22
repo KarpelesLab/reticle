@@ -1,0 +1,1 @@
+equivalence adder_ref vs adder_ripple: EQUIVALENT (combinational)

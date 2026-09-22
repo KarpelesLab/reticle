@@ -1,0 +1,46 @@
+top adder_ref
+
+// Combinational equivalence: a 4-bit `add` cell against a hand-built
+// ripple-carry adder. The miter's single frame has no satisfying
+// disagreement, so the two are equivalent.
+attr formal_mode = "equiv"
+attr formal_other = "adder_ripple"
+module adder_ref
+  net %a u4 wire
+  net %b u4 wire
+  net %y u4 wire
+  port a in %a
+  port b in %b
+  port y out %y
+  cell add0 add (a=%a, b=%b) -> (y=%y)
+end
+
+module adder_ripple
+  net %a u4 wire
+  net %b u4 wire
+  net %y u4 wire
+  net %x0 u1 wire
+  net %x1 u1 wire
+  net %x2 u1 wire
+  net %x3 u1 wire
+  net %c0 u1 wire
+  net %c1 u1 wire
+  net %c2 u1 wire
+  net %s1 u1 wire
+  net %s2 u1 wire
+  net %s3 u1 wire
+  port a in %a
+  port b in %b
+  port y out %y
+  assign %x0 = xor(%a[0:0], %b[0:0])
+  assign %c0 = and(%a[0:0], %b[0:0])
+  assign %x1 = xor(%a[1:1], %b[1:1])
+  assign %s1 = xor(%x1, %c0)
+  assign %c1 = or(and(%a[1:1], %b[1:1]), and(%x1, %c0))
+  assign %x2 = xor(%a[2:2], %b[2:2])
+  assign %s2 = xor(%x2, %c1)
+  assign %c2 = or(and(%a[2:2], %b[2:2]), and(%x2, %c1))
+  assign %x3 = xor(%a[3:3], %b[3:3])
+  assign %s3 = xor(%x3, %c2)
+  assign %y = {%s3, %s2, %s1, %x0}
+end

@@ -1,0 +1,37 @@
+top counter_mux
+
+// Sequential equivalence of two enabled counters: one gates the increment
+// through a `?:`, the other adds the zero-extended enable. Both name their
+// register `q`, so state matching by name makes "outputs and states agree"
+// 1-inductive from reset.
+attr formal_mode = "equiv"
+attr formal_other = "counter_add"
+module counter_mux
+  net %clk u1 wire
+  net %rst u1 wire
+  net %en u1 wire
+  net %q u4 wire
+  net %inc u4 wire
+  net %d u4 wire
+  port clk in %clk
+  port rst in %rst
+  port en in %en
+  port q out %q
+  assign %inc = add(%q, 4'd1)
+  assign %d = mux(%en, %inc, %q)
+  cell ff dff pos srst pos 4'd0 (clk=%clk, d=%d, rst=%rst) -> (q=%q)
+end
+
+module counter_add
+  net %clk u1 wire
+  net %rst u1 wire
+  net %en u1 wire
+  net %q u4 wire
+  net %d u4 wire
+  port clk in %clk
+  port rst in %rst
+  port en in %en
+  port q out %q
+  assign %d = add(%q, resize(%en, u4))
+  cell ff dff pos srst pos 4'd0 (clk=%clk, d=%d, rst=%rst) -> (q=%q)
+end

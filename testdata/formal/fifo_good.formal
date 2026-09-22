@@ -1,0 +1,10 @@
+module fifo: PROVED (every assert is 1-inductive)
+  cover `fills`: reached at frame 4
+  witness for `fills`:
+    frame | clk rst push pop din | count wr_ptr rd_ptr mem[0] mem[1] mem[2] mem[3] | dout full empty
+    ------+----------------------+-------------------------------------------------+----------------
+        0 |   0   0    1   0  00 |   000     00     00     00     00     00     00 |   00    0     1
+        1 |   0   0    1   0  00 |   001     01     00     00     00     00     00 |   00    0     0
+        2 |   0   0    1   0  00 |   010     10     00     00     00     00     00 |   00    0     0
+        3 |   0   0    1   0  00 |   011     11     00     00     00     00     00 |   00    0     0
+        4 |   0   1    0   0  00 |   100     00     00     00     00     00     00 |   00    1     0

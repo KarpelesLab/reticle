@@ -1,0 +1,5 @@
+equivalence adder_ref vs adder_wrong: DIFFERENT at frame 0 (`y`)
+  trace:
+    frame |    a    b | adder_ref.y adder_wrong.y
+    ------+-----------+--------------------------
+        0 | 0111 1011 |        0010          1010

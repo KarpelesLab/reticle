@@ -1,0 +1,20 @@
+top cover3
+
+// A 2-bit counter with a trivially true assert and a cover on `q == 3`,
+// which is first reachable in frame 3.
+attr formal_mode = "verify"
+module cover3
+  net %clk u1 wire
+  net %q u2 wire
+  net %inc u2 wire
+  attr formal_assert = 1
+  net %in_range u1 wire
+  attr formal_cover = 1
+  net %at_three u1 wire
+  port clk in %clk
+  port q out %q
+  assign %inc = add(%q, 2'd1)
+  cell ff dff pos srst pos 2'd0 (clk=%clk, d=%inc, rst=1'd0) -> (q=%q)
+  assign %in_range = le(%q, 2'd3)
+  assign %at_three = eq(%q, 2'd3)
+end

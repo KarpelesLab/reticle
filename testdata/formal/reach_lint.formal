@@ -1,0 +1,26 @@
+reach lint fsm: 14 probe values checked, 4 unreachable
+
+warning[F0023]: FSM state `state` never takes value 3 within 11 frames
+  --> reach_lint.rtl:14:3
+   |
+14 |   net %state u2 wire
+   |   ^^^^^^^^^^^^^^^^^^
+
+warning[F0021]: select of mux `dead_mux` is constant 0 within 11 frames: input `b` is never chosen
+  --> reach_lint.rtl:35:3
+   |
+35 |   cell dead_mux mux (a=%state, b=2'd0, s=%dead_sel) -> (y=%y)
+   |   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning[F0022]: enable of flip-flop `never` is never 1 within 11 frames: the register never loads
+  --> reach_lint.rtl:37:3
+   |
+37 |   cell never dff pos en (clk=%clk, d=%in, en=%dead_sel) -> (q=%held)
+   |   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning[F0021]: condition of this `?:` is constant 0 within 11 frames: the then branch is never taken
+  --> reach_lint.rtl:38:15
+   |
+38 |   assign %w = mux(%dead_sel, 2'd1, %state)
+   |               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+

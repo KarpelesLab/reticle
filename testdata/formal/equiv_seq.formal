@@ -1,0 +1,1 @@
+equivalence counter_mux vs counter_add: EQUIVALENT (1-inductive from reset)

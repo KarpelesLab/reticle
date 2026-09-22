@@ -279,13 +279,13 @@ timing reported.
 ## Phase 7: verification and formal
 
 - [x] SAT solver (CDCL) in-crate, with a Tseitin CNF builder.
-- [ ] Bit-blaster from IR to CNF.
-- [ ] Bounded model checking of assertions and `assume` / `cover`
+- [x] Bit-blaster from IR to CNF.
+- [x] Bounded model checking of assertions and `assume` / `cover`
       properties over unrolled IR, with counter-example traces as VCD.
-- [ ] k-induction for unbounded proofs on suitable designs.
-- [ ] Combinational and sequential equivalence checking, used by phase 5's
+- [x] k-induction for unbounded proofs on suitable designs.
+- [x] Combinational and sequential equivalence checking, used by phase 5's
       self-check.
-- [ ] Reachability-based lint (dead states, unreachable branches).
+- [x] Reachability-based lint (dead states, unreachable branches).
 
 Done when: an incorrect FIFO with a full/empty assertion yields a counter-
 example trace, and the fixed FIFO is proven by induction.

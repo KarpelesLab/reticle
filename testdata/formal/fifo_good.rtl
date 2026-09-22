@@ -1,0 +1,55 @@
+top fifo
+
+// A four-entry FIFO in cell form. `count` tracks the occupancy, `full` and
+// `empty` derive from it, and pushes are blocked while full. The asserts
+// (`count <= 4`, never full and empty at once) are 1-inductive, so
+// k-induction proves them; the cover shows the FIFO can fill up.
+attr formal_mode = "verify"
+module fifo
+  net %clk u1 wire
+  net %rst u1 wire
+  net %push u1 wire
+  net %pop u1 wire
+  net %din u8 wire
+  net %dout u8 wire
+  net %full u1 wire
+  net %empty u1 wire
+  net %count u3 wire
+  net %wr_ptr u2 wire
+  net %rd_ptr u2 wire
+  net %do_push u1 wire
+  net %do_pop u1 wire
+  net %count_next u3 wire
+  net %wr_next u2 wire
+  net %rd_next u2 wire
+  attr formal_assert = 1
+  net %count_ok u1 wire
+  attr formal_assert = 1
+  net %not_both u1 wire
+  attr formal_cover = 1
+  net %fills u1 wire
+  port clk in %clk
+  port rst in %rst
+  port push in %push
+  port pop in %pop
+  port din in %din
+  port dout out %dout
+  port full out %full
+  port empty out %empty
+  memory @mem 4 x u8
+  assign %full = eq(%count, 3'd4)
+  assign %empty = eq(%count, 3'd0)
+  assign %do_push = and(%push, not(%full))
+  assign %do_pop = and(%pop, not(%empty))
+  assign %count_next = sub(add(%count, resize(%do_push, u3)), resize(%do_pop, u3))
+  assign %wr_next = add(%wr_ptr, resize(%do_push, u2))
+  assign %rd_next = add(%rd_ptr, resize(%do_pop, u2))
+  cell count_ff dff pos srst pos 3'd0 (clk=%clk, d=%count_next, rst=%rst) -> (q=%count)
+  cell wr_ff dff pos srst pos 2'd0 (clk=%clk, d=%wr_next, rst=%rst) -> (q=%wr_ptr)
+  cell rd_ff dff pos srst pos 2'd0 (clk=%clk, d=%rd_next, rst=%rst) -> (q=%rd_ptr)
+  cell wr memwr @mem clocked (addr=%wr_ptr, data=%din, en=%do_push, clk=%clk) -> ()
+  cell rd memrd @mem (addr=%rd_ptr) -> (data=%dout)
+  assign %count_ok = le(%count, 3'd4)
+  assign %not_both = not(and(%full, %empty))
+  assign %fills = %full
+end

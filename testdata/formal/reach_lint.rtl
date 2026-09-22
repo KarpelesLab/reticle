@@ -1,0 +1,39 @@
+top fsm
+
+// Reachability lint. The 2-bit state register cycles 0 -> 1 -> 2 -> 0, so
+// value 3 is dead: the mux and the `?:` selected by `state == 3` are
+// constant, and the flip-flop it enables never loads. The mux on the free
+// input `in` is live and draws no finding.
+attr formal_mode = "reach"
+attr formal_depth = 10
+module fsm
+  net %clk u1 wire
+  net %rst u1 wire
+  net %in u1 wire
+  attr fsm_state = 1
+  net %state u2 wire
+  net %inc u2 wire
+  net %at_two u1 wire
+  net %next u2 wire
+  net %dead_sel u1 wire
+  net %y u2 wire
+  net %z u2 wire
+  net %held u1 wire
+  net %w u2 wire
+  port clk in %clk
+  port rst in %rst
+  port in in %in
+  port y out %y
+  port z out %z
+  port held out %held
+  port w out %w
+  assign %inc = add(%state, 2'd1)
+  assign %at_two = eq(%state, 2'd2)
+  assign %next = mux(%at_two, 2'd0, %inc)
+  cell st dff pos srst pos 2'd0 (clk=%clk, d=%next, rst=%rst) -> (q=%state)
+  assign %dead_sel = eq(%state, 2'd3)
+  cell dead_mux mux (a=%state, b=2'd0, s=%dead_sel) -> (y=%y)
+  cell live_mux mux (a=%state, b=2'd0, s=%in) -> (y=%z)
+  cell never dff pos en (clk=%clk, d=%in, en=%dead_sel) -> (q=%held)
+  assign %w = mux(%dead_sel, 2'd1, %state)
+end

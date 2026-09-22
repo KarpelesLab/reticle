@@ -1,0 +1,56 @@
+top sel_ref
+
+// Combinational equivalence of a 4:1 mux plus a 2-to-4 decoder written
+// two ways: a tree of `?:` and a shift, against a `pmux` cell over
+// one-hot compares.
+attr formal_mode = "equiv"
+attr formal_other = "sel_alt"
+module sel_ref
+  net %sel u2 wire
+  net %a u4 wire
+  net %b u4 wire
+  net %c u4 wire
+  net %d u4 wire
+  net %lo u4 wire
+  net %hi u4 wire
+  net %y u4 wire
+  net %dec u4 wire
+  port sel in %sel
+  port a in %a
+  port b in %b
+  port c in %c
+  port d in %d
+  port y out %y
+  port dec out %dec
+  assign %lo = mux(%sel[0:0], %b, %a)
+  assign %hi = mux(%sel[0:0], %d, %c)
+  assign %y = mux(%sel[1:1], %hi, %lo)
+  assign %dec = shl(4'd1, %sel)
+end
+
+module sel_alt
+  net %sel u2 wire
+  net %a u4 wire
+  net %b u4 wire
+  net %c u4 wire
+  net %d u4 wire
+  net %s0 u1 wire
+  net %s1 u1 wire
+  net %s2 u1 wire
+  net %s3 u1 wire
+  net %y u4 wire
+  net %dec u4 wire
+  port sel in %sel
+  port a in %a
+  port b in %b
+  port c in %c
+  port d in %d
+  port y out %y
+  port dec out %dec
+  assign %s0 = eq(%sel, 2'd0)
+  assign %s1 = eq(%sel, 2'd1)
+  assign %s2 = eq(%sel, 2'd2)
+  assign %s3 = eq(%sel, 2'd3)
+  cell pm pmux (a=4'd0, b={%d, %c, %b, %a}, s={%s3, %s2, %s1, %s0}) -> (y=%y)
+  assign %dec = {%s3, %s2, %s1, %s0}
+end
