@@ -27,7 +27,10 @@
 //!
 //! # The order of the flow, and why it is that order
 //!
-//! [`synthesize_for`] runs five steps, and the order is the whole point:
+//! [`synthesize_for`] runs five steps, and the order is the whole point.
+//! Before them it flattens the module ([`Design::flatten`]), since a
+//! place-and-route tool wants one netlist and every step below works on
+//! one module; `keep_hierarchy` instances and black boxes stay.
 //!
 //! 1. **Generic synthesis** ([`synth::run`]): processes become cells,
 //!    flip-flops, latches, memories and state machines are inferred, and
@@ -109,6 +112,11 @@ pub enum FlowError {
     /// Generic synthesis reported errors, so nothing was mapped. The
     /// errors themselves are in the diagnostics the caller passed in.
     Synthesis,
+    /// The hierarchy under the module could not be flattened (a
+    /// recursive hierarchy, a connection that cannot be inlined), so
+    /// nothing was mapped. The reasons are in the diagnostics the caller
+    /// passed in.
+    Hierarchy,
     /// No routing architecture is known for the device, so the design
     /// cannot be placed and routed in Reticle. It can still be exported.
     NoArchitecture {
@@ -135,6 +143,9 @@ impl fmt::Display for FlowError {
             ),
             FlowError::Synthesis => {
                 f.write_str("the design could not be synthesised; see the reported errors")
+            }
+            FlowError::Hierarchy => {
+                f.write_str("the design could not be flattened; see the reported errors")
             }
             FlowError::NoArchitecture { device } => write!(
                 f,
@@ -234,6 +245,12 @@ pub struct FpgaOptions {
     /// primitives. Turning this off leaves a generic netlist, which is
     /// useful for comparing mappers but is not something nextpnr reads.
     pub device_cells: bool,
+    /// Inline the module's whole hierarchy into it first, with
+    /// [`Design::flatten`] and its default options: an instance marked
+    /// `keep_hierarchy` and an instance of a black box stay instances.
+    /// A place-and-route tool wants one flat netlist, so this is on by
+    /// default; a caller that has flattened already loses nothing.
+    pub flatten: bool,
 }
 
 #[cfg(feature = "synth")]
@@ -245,6 +262,7 @@ impl Default for FpgaOptions {
             lut_size: None,
             area_passes: 2,
             device_cells: true,
+            flatten: true,
         }
     }
 }
@@ -255,6 +273,9 @@ impl Default for FpgaOptions {
 pub struct FlowReport {
     /// The device the design was mapped for.
     pub device: String,
+    /// How many instances flattening inlined into the module; zero for a
+    /// module that was flat already.
+    pub inlined: usize,
     /// What primitive mapping did (block RAM, DSP, carry, IO, clocks).
     pub primitives: super::primitives::MapReport,
     /// What the rewrite to device cells did.
@@ -287,7 +308,11 @@ impl FlowReport {
     /// then the logic, then the netlist by cell type.
     pub fn to_text(&self) -> String {
         use std::fmt::Write as _;
-        let mut out = self.primitives.to_text();
+        let mut out = String::new();
+        if self.inlined > 0 {
+            let _ = writeln!(out, "hierarchy:\n  {} instance(s) inlined", self.inlined);
+        }
+        out.push_str(&self.primitives.to_text());
         let _ = writeln!(
             out,
             "logic:\n  {} LUTs, depth {}",
@@ -324,16 +349,22 @@ impl FlowReport {
 /// netlist ended up holding. Run [`check_nextpnr_json`] afterwards to
 /// find out whether a place-and-route tool will take the result.
 ///
-/// Only `module` is mapped. A hierarchical design should be flattened
-/// first ([`crate::ir::hier`]), since a place-and-route tool wants one
-/// flat netlist.
+/// Only `module` is mapped, and first its whole hierarchy is inlined into
+/// it ([`Design::flatten`], unless [`FpgaOptions::flatten`] is off), since
+/// a place-and-route tool wants one flat netlist. Instances marked
+/// `keep_hierarchy` and instances of black boxes stay instances. The
+/// modules below are left in the design, unmapped, so every [`ModuleId`]
+/// the caller holds stays valid; [`export_nextpnr`] writes only what
+/// `module` still reaches.
 ///
 /// # Errors
 ///
 /// [`FlowError::NoSuchModule`] when the id does not belong to the design,
-/// and [`FlowError::Synthesis`] when generic synthesis rejected the
-/// design (an invalid IR, for instance), in which case the design is left
-/// as synthesis left it and the errors are in `diags`.
+/// [`FlowError::Hierarchy`] when the hierarchy cannot be flattened, in
+/// which case the design is untouched, and [`FlowError::Synthesis`] when
+/// generic synthesis rejected the design (an invalid IR, for instance),
+/// in which case the design is left as synthesis left it. The errors are
+/// in `diags`.
 #[cfg(feature = "synth")]
 pub fn synthesize_for(
     design: &mut Design,
@@ -355,11 +386,35 @@ pub fn synthesize_for(
         ..FlowReport::default()
     };
 
+    // 0. One flat netlist. Flattening replaces the module in place, so
+    // its id, and every other id the caller holds, stays valid.
+    if options.flatten {
+        match design.flatten(module, &crate::ir::hier::FlattenOptions::default()) {
+            Ok(flat) => report.inlined = flat.inlined_total,
+            Err(mut problems) => {
+                diags.append(&mut problems);
+                return Err(FlowError::Hierarchy);
+            }
+        }
+    }
+
     // 1. Generic synthesis. Its own diagnostics decide whether the rest
     // of the flow is worth running at all, so they are collected apart
     // from whatever the caller already had.
+    // Only what `module` still reaches is synthesised: after flattening,
+    // the modules it inlined are dead copies, and synthesising them too
+    // would cost time and report every one of their warnings twice.
+    // Synthesis skips a black box, so the others are marked as one for
+    // the duration and given back their flag afterwards.
+    let skipped = unreachable_modules(design, module);
+    for id in &skipped {
+        design.modules[*id].blackbox = true;
+    }
     let mut synth_diags = Diagnostics::new();
     let _ = synth_run(design, &options.synth, &mut synth_diags);
+    for id in &skipped {
+        design.modules[*id].blackbox = false;
+    }
     let refused = synth_diags.has_errors();
     diags.append(&mut synth_diags);
     if refused {
@@ -392,6 +447,27 @@ pub fn synthesize_for(
 
     report.netlist = cell_types(design, module);
     Ok(report)
+}
+
+/// The modules that are not black boxes and that `module` does not reach
+/// through its instances, in id order.
+#[cfg(feature = "synth")]
+fn unreachable_modules(design: &Design, module: ModuleId) -> Vec<ModuleId> {
+    let mut reached = vec![false; design.modules.len()];
+    let mut stack = vec![module];
+    while let Some(id) = stack.pop() {
+        match reached.get_mut(id.index()) {
+            Some(mark) if !*mark => *mark = true,
+            _ => continue,
+        }
+        stack.extend(design.children(id));
+    }
+    design
+        .modules
+        .iter()
+        .filter(|(id, m)| !m.blackbox && !reached.get(id.index()).copied().unwrap_or(true))
+        .map(|(id, _)| id)
+        .collect()
 }
 
 /// Every cell type in a module with how many there are, sorted by type.
@@ -662,7 +738,11 @@ impl fmt::Display for NetlistProblem {
 ///   constant convention can tie (see [`constant_convention`]); an `x`
 ///   or `z` reaches the tool as a bit with no driver at all;
 /// - every `set_io` names a package pin the device has, that pin is an
-///   IO pin, and the design has the port it constrains.
+///   IO pin, and the design has the port it constrains. On a device
+///   whose pin list is marked partial ([`Device::pins_partial`]) a pin
+///   missing from the list is not a problem: the list cannot tell a
+///   missing pin from an unlisted one, and [`Constraints::check`] has
+///   already warned that it is unchecked.
 ///
 /// The result is a list of problems, empty when there is nothing wrong.
 /// Its order is fixed: the checks run in the order above and each walks
@@ -861,6 +941,10 @@ pub fn check_nextpnr_json(
         // clock) place nothing, so there is no package pin to check.
         let placed = (!pin.pin.is_empty()).then(|| device.pin(&pin.pin));
         match placed {
+            // A pin list the database marks partial cannot say that a pin
+            // is missing, only that it does not know it; nextpnr, which
+            // has the package, is the one to refuse it.
+            Some(None) if device.pins_partial => {}
             Some(None) => push(
                 &signal,
                 format!("`{}` has no package pin `{}`", device.name, pin.pin),
@@ -917,9 +1001,13 @@ pub fn export_nextpnr(
         return Err(FlowError::NoSuchModule);
     }
     // nextpnr picks the top module out of the JSON by its `top`
-    // attribute, so say which one this export is about.
+    // attribute, so say which one this export is about. Only what it
+    // reaches goes in: the modules flattening inlined into it are dead
+    // copies, unmapped, and have no business in the tool's input.
     let mut design = design.clone();
     design.top = Some(module);
+    design.remove_unused_modules(module);
+    let module = design.top.unwrap_or(module);
     let json = emit_json(&design)?;
     let top = design.module(module).name.as_str().to_owned();
     match device.family.as_str() {
@@ -1053,6 +1141,103 @@ mod tests {
     use crate::ir::builder::ModuleBuilder;
     use crate::ir::{CellKind, Id, Name, Type};
     use crate::source::{SourceMap, Span};
+
+    /// Two adders instantiated in a top that comes second in the arena.
+    const HIERARCHY: &str = "top top\n\
+        module adder\n  net %a u4 wire\n  net %b u4 wire\n  net %y u4 wire\n\
+        port a in %a\n  port b in %b\n  port y out %y\n  assign %y = add(%a, %b)\nend\n\
+        module top\n  net %x u4 wire\n  net %y u4 wire\n  net %z u4 wire\n  net %t u4 wire\n\
+        net %s u4 wire\n  port x in %x\n  port y in %y\n  port z in %z\n  port s out %s\n\
+        instance u0 of adder (a=%x, b=%y, y=%t)\n  instance u1 of adder (a=%t, b=%z, y=%s)\n\
+        end\n";
+
+    #[test]
+    fn the_flow_flattens_the_hierarchy_first() {
+        let mut map = SourceMap::new();
+        let file = map.add("h.rtl", HIERARCHY).unwrap();
+        let mut design = Design::parse_text(HIERARCHY, file).unwrap();
+        let top = design.top.unwrap();
+        let device = target("ice40-hx1k-tq144").unwrap();
+        let mut diags = Diagnostics::new();
+        let report = synthesize_for(
+            &mut design,
+            top,
+            device,
+            &Constraints::new(),
+            &FpgaOptions::default(),
+            &mut diags,
+        )
+        .unwrap();
+        assert!(!diags.has_errors(), "{}", diags.render(&map));
+        assert_eq!(report.inlined, 2);
+        assert!(
+            report
+                .to_text()
+                .starts_with("hierarchy:\n  2 instance(s) inlined\n")
+        );
+        // The id the caller holds still names the top, now flat.
+        assert_eq!(design.modules[top].name.as_str(), "top");
+        assert!(design.modules[top].instances.is_empty());
+        let problems = check_nextpnr_json(&design, top, device, &Constraints::new());
+        assert!(problems.is_empty(), "{problems:?}");
+        // The inlined module is left in the design, but not in the export.
+        assert_eq!(design.modules.len(), 2);
+        let inputs = export_nextpnr(&design, top, device, &Constraints::new()).unwrap();
+        assert!(inputs.json.contains("\"top\": {"));
+        assert!(!inputs.json.contains("\"adder\": {"));
+
+        // Turned off, the instances stay and the check says so.
+        let mut design = Design::parse_text(HIERARCHY, file).unwrap();
+        let options = FpgaOptions {
+            flatten: false,
+            ..FpgaOptions::default()
+        };
+        let mut diags = Diagnostics::new();
+        let report = synthesize_for(
+            &mut design,
+            top,
+            device,
+            &Constraints::new(),
+            &options,
+            &mut diags,
+        )
+        .unwrap();
+        assert_eq!(report.inlined, 0);
+        let problems = check_nextpnr_json(&design, top, device, &Constraints::new());
+        assert!(
+            problems
+                .iter()
+                .any(|p| p.message.starts_with("an instance is left")),
+            "{problems:?}"
+        );
+    }
+
+    #[test]
+    fn a_hierarchy_that_cannot_be_flattened_is_an_error() {
+        // A module that instantiates itself.
+        let text = "top r\nmodule r\n  net %a u1 wire\n  port a in %a\n  \
+                    instance again of r (a=%a)\nend\n";
+        let mut map = SourceMap::new();
+        let file = map.add("r.rtl", text).unwrap();
+        let mut design = Design::parse_text(text, file).unwrap();
+        let top = design.top.unwrap();
+        let mut diags = Diagnostics::new();
+        let err = synthesize_for(
+            &mut design,
+            top,
+            target("generic").unwrap(),
+            &Constraints::new(),
+            &FpgaOptions::default(),
+            &mut diags,
+        )
+        .unwrap_err();
+        assert_eq!(err, FlowError::Hierarchy);
+        assert_eq!(
+            err.to_string(),
+            "the design could not be flattened; see the reported errors"
+        );
+        assert!(diags.has_errors());
+    }
 
     /// A one-flop design with a clock and an output.
     fn blinky() -> (Design, ModuleId, SourceMap) {
