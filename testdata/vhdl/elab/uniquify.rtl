@@ -1,0 +1,35 @@
+top pair
+
+module shifter
+  timescale 1 fs / 1 fs
+  param WIDTH = 4
+  net %d u4 wire
+  net %q u4 wire
+  port d in %d
+  port q out %q
+  assign %q = %d
+end
+
+module shifter$WIDTH_8
+  timescale 1 fs / 1 fs
+  param WIDTH = 8
+  net %d u8 wire
+  net %q u8 wire
+  port d in %d
+  port q out %q
+  assign %q = %d
+end
+
+module pair
+  timescale 1 fs / 1 fs
+  net %a u4 wire
+  net %b u8 wire
+  net %x u4 wire
+  net %y u8 wire
+  port a in %a
+  port b in %b
+  port x out %x
+  port y out %y
+  instance u4 of shifter (d=%a, q=%x)
+  instance u8 of shifter$WIDTH_8 (d=%b, q=%y)
+end

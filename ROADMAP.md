@@ -149,9 +149,9 @@ and compiled like user code.
       `ieee.numeric_bit`, `ieee.math_real`, `ieee.std_logic_textio` and the
       Synopsys legacy packages. Until they land, naming one yields a single
       "not bundled" diagnostic rather than a cascade.
-- [ ] Elaboration: generic maps, port maps with conversions, generate
+- [x] Elaboration: generic maps, port maps with conversions, generate
       statements, configuration resolution, default bindings.
-- [ ] Lowering to IR, including `std_logic` resolution as explicit IR
+- [x] Lowering to IR, including `std_logic` resolution as explicit IR
       resolution nodes so mixed-language designs get the right semantics.
 
 Done when: the same bar as phase 1, on a VHDL corpus (own tests plus open

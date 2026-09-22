@@ -1,0 +1,20 @@
+error[V0707]: an access type has no representation in the IR
+  --> error_access.vhd:15:14
+   |
+15 |     variable head : cell_ptr;
+   |              ^^^^
+   |
+   = note: access, file and protected types are not synthesisable
+
+error[V0707]: `head` cannot be assigned
+  --> error_access.vhd:17:5
+   |
+17 |     head := new cell_t'(value => 1, next_cell => null);
+   |     ^^^^
+
+error[V0704]: `head` has no value at elaboration
+  --> error_access.vhd:18:10
+   |
+18 |     q <= head.value;
+   |          ^^^^
+

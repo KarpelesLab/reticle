@@ -1,0 +1,13 @@
+top aliases
+
+module aliases
+  timescale 1 fs / 1 fs
+  net %d u16 wire
+  net %hi u8 wire
+  net %top u1 wire
+  port d in %d
+  port hi out %hi
+  port top out %top
+  assign %hi = %d[15:8]
+  assign %top = %d[15:15]
+end

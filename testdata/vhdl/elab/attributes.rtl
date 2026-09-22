@@ -1,0 +1,18 @@
+top attributes
+
+module attributes
+  timescale 1 fs / 1 fs
+  net %clk u1 wire
+  net %d u1 wire
+  net %q u1 reg
+  attr keep = 1
+  attr ram_style = "distributed"
+  net %stage u1 reg
+  port clk in %clk
+  port d in %d
+  port q out %q
+  process seq posedge %clk
+    %stage <= %d
+    %q <= %stage
+  end
+end

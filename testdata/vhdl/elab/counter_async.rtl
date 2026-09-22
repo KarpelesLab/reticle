@@ -1,0 +1,23 @@
+top counter_async
+
+module counter_async
+  timescale 1 fs / 1 fs
+  net %clk u1 wire
+  net %rst u1 wire
+  net %q s32 wire
+  net %cnt s32 reg
+  port clk in %clk
+  port rst in %rst
+  port q out %q
+  assign %q = %cnt
+  process initial
+    %cnt = 32'sd0
+  end
+  process seq posedge %clk async posedge %rst
+    if eq(%rst, 1'd1)
+      %cnt <= 32'sd0
+    else
+      %cnt <= add(%cnt, 32'sd1)
+    end
+  end
+end

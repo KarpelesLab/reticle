@@ -1,0 +1,22 @@
+top package_function
+
+module package_function
+  timescale 1 fs / 1 fs
+  net %d u8 wire
+  net %p u1 wire
+  net %"parity$2.v" u8 var
+  net %"parity$2.result" u1 var
+  net %"parity$2.t" u1 var
+  net %"parity$2.i" s32 var
+  port d in %d
+  port p out %p
+  assign %p = %"parity$2.result"
+  process comb$1 comb
+    %"parity$2.v" = %d
+    %"parity$2.t" = 1'd0
+    for %"parity$2.i" = 32'sd7; ge(%"parity$2.i", 32'sd0); %"parity$2.i" = sub(%"parity$2.i", 32'sd1)
+      %"parity$2.t" = xor(%"parity$2.t", %"parity$2.v"[%"parity$2.i" +: 1])
+    end
+    %"parity$2.result" = %"parity$2.t"
+  end
+end

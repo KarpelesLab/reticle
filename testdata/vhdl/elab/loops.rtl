@@ -1,0 +1,32 @@
+top loops
+
+module loops
+  timescale 1 fs / 1 fs
+  net %d u8 wire
+  net %n s32 reg
+  net %m s32 reg
+  net %count s32 var
+  net %i s32 var
+  net %a s32 var
+  port d in %d
+  port n out %n
+  port m out %m
+  process sensitive %d
+    %count = 32'sd0
+    for %a = 32'sd7; ge(%a, 32'sd0); %a = sub(%a, 32'sd1)
+      if eq(%d[%a +: 1], 1'd0)
+        continue
+      end
+      %count = add(%count, 32'sd1)
+    end
+    %n <= %count
+    %i = 32'sd0
+    while lt(%i, 32'sd8)
+      if eq(%d[%i +: 1], 1'd1)
+        break
+      end
+      %i = add(%i, 32'sd1)
+    end
+    %m <= %i
+  end
+end

@@ -1,0 +1,22 @@
+top resolution
+
+module resolution
+  timescale 1 fs / 1 fs
+  net %a u1 wire
+  net %b u1 wire
+  net %ea u1 wire
+  net %eb u1 wire
+  net %bus_o u1 wire
+  net %net_s u1 wire
+  net %net_s$d0 u1 wire
+  net %net_s$d1 u1 wire
+  port a in %a
+  port b in %b
+  port ea in %ea
+  port eb in %eb
+  port bus_o out %bus_o
+  assign %bus_o = %net_s
+  assign %net_s = mux(ceq(%net_s$d0, 1'bz), %net_s$d1, mux(ceq(%net_s$d1, 1'bz), %net_s$d0, 1'bx))
+  cell tri$1 tristate (a=%a, en=eq(%ea, 1'd1)) -> (y=%net_s$d0)
+  cell tri$2 tristate (a=%b, en=eq(%eb, 1'd1)) -> (y=%net_s$d1)
+end

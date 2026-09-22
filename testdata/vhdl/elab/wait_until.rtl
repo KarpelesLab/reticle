@@ -1,0 +1,14 @@
+top wait_until
+
+module wait_until
+  timescale 1 fs / 1 fs
+  net %clk u1 wire
+  net %d u4 wire
+  net %q u4 reg
+  port clk in %clk
+  port d in %d
+  port q out %q
+  process seq posedge %clk
+    %q <= %d
+  end
+end

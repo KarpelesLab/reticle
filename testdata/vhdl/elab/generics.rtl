@@ -1,0 +1,17 @@
+top generics$WIDTH_4
+
+module generics$WIDTH_4
+  timescale 1 fs / 1 fs
+  param WIDTH = 4
+  param DEPTH = 16
+  param NAME = "gen"
+  param DEBUG = 0
+  net %d u4 wire
+  net %q u4 wire
+  port d in %d
+  port q out %q
+  assign %q = %d
+  process initial
+    assert failure 1'd1 report "empty gen"
+  end
+end

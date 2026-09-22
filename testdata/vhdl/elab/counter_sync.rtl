@@ -1,0 +1,25 @@
+top counter_sync
+
+module counter_sync
+  timescale 1 fs / 1 fs
+  param WIDTH = 8
+  net %clk u1 wire
+  net %rst u1 wire
+  net %en u1 wire
+  net %q u8 wire
+  net %cnt u8 reg
+  port clk in %clk
+  port rst in %rst
+  port en in %en
+  port q out %q
+  assign %q = %cnt
+  process seq posedge %clk
+    if eq(%rst, 1'd1)
+      %cnt <= 8'd0
+    else
+      if eq(%en, 1'd1)
+        %cnt <= xor(%cnt, 8'd1)
+      end
+    end
+  end
+end

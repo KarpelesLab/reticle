@@ -1,0 +1,41 @@
+top top
+
+module adder
+  timescale 1 fs / 1 fs
+  param WIDTH = 4
+  net %a u4 wire
+  net %b u4 wire
+  net %y u4 wire
+  port a in %a
+  port b in %b
+  port y out %y
+  assign %y = xor(%a, %b)
+end
+
+module adder$WIDTH_8
+  timescale 1 fs / 1 fs
+  param WIDTH = 8
+  net %a u8 wire
+  net %b u8 wire
+  net %y u8 wire
+  port a in %a
+  port b in %b
+  port y out %y
+  assign %y = xor(%a, %b)
+end
+
+module top
+  timescale 1 fs / 1 fs
+  net %p u4 wire
+  net %q u4 wire
+  net %r u8 wire
+  net %s u4 wire
+  net %t u8 wire
+  port p in %p
+  port q in %q
+  port r in %r
+  port s out %s
+  port t out %t
+  instance u_small of adder (a=%p, b=%q, y=%s)
+  instance u_wide of adder$WIDTH_8 (a=%r, b=%r, y=%t)
+end

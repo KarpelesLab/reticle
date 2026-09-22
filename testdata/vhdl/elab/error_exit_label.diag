@@ -1,0 +1,6 @@
+error[V0701]: `exit` naming a loop other than the innermost one cannot be lowered to the IR yet
+  --> error_exit_label.vhd:18:9
+   |
+18 |         exit outer when d(a) = '1';
+   |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+

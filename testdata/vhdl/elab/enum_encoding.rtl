@@ -1,0 +1,32 @@
+top enum_encoding
+
+module enum_encoding
+  timescale 1 fs / 1 fs
+  net %sel u3 wire
+  net %ok u1 wire
+  attr enum_type = "colour_t"
+  attr enum_literals = "red,orange,yellow,green,blue,indigo,violet"
+  net %colour u3 reg
+  port sel in %sel
+  port ok out %ok
+  assign %ok = eq(%colour, 3'd6)
+  process initial
+    %colour = 3'd3
+  end
+  process sensitive %sel
+    case %sel
+      when 3'd0
+        %colour <= 3'd0
+      end
+      when 3'd1
+        %colour <= 3'd1
+      end
+      when 3'd2
+        %colour <= 3'd2
+      end
+      default
+        %colour <= 3'd6
+      end
+    end
+  end
+end

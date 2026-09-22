@@ -1,0 +1,12 @@
+top tristate
+
+module tristate
+  timescale 1 fs / 1 fs
+  net %d u8 wire
+  net %en u1 wire
+  net %io u8 wire
+  port d in %d
+  port en in %en
+  port io inout %io
+  cell tri$1 tristate (a=%d, en=eq(%en, 1'd1)) -> (y=%io)
+end

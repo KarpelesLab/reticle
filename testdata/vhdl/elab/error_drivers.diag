@@ -1,0 +1,12 @@
+error[V0706]: signal `net_s` has 2 drivers but its subtype has no resolution function
+  --> error_drivers.vhd:10:10
+   |
+10 |   signal net_s : bit;
+   |          ^^^^^
+12 |   net_s <= a;
+   |   ---------- driven here
+13 |   net_s <= b;
+   |   ---------- driven here
+   |
+   = note: use a resolved subtype such as `std_logic`, or drive the signal from one place
+

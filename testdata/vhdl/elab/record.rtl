@@ -1,0 +1,19 @@
+top record_ports
+
+module record_ports
+  timescale 1 fs / 1 fs
+  net %d u8 wire
+  net %valid u1 wire
+  net %hi u4 wire
+  net %ok u1 wire
+  net %frame u11 wire
+  port d in %d
+  port valid in %valid
+  port hi out %hi
+  port ok out %ok
+  assign %frame[10:3] = %d
+  assign %frame[2:1] = 2'd2
+  assign %frame[0:0] = %valid
+  assign %hi = %frame[10:7]
+  assign %ok = %frame[0:0]
+end

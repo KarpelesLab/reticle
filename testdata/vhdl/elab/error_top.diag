@@ -1,0 +1,3 @@
+error[V0700]: no entity named `nowhere` to use as the top
+  = note: the design declares: only_entity
+

@@ -1,0 +1,6 @@
+error[V0701]: a process testing more than one clock edge cannot be lowered to the IR yet
+  --> error_dual_edge.vhd:18:5
+   |
+18 |     if rising_edge(clk) then
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^
+

@@ -1,0 +1,31 @@
+top procedure_call
+
+module procedure_call
+  timescale 1 fs / 1 fs
+  net %d u4 wire
+  net %q u4 reg
+  net %n s32 reg
+  net %ones s32 var
+  net %"invert$1.v" u4 var
+  net %"count_ones$2.v" u4 var
+  net %"count_ones$2.total" s32 var
+  net %"count_ones$2.c" s32 var
+  net %"count_ones$2.i" s32 var
+  port d in %d
+  port q out %q
+  port n out %n
+  process sensitive %d
+    %"invert$1.v" = %d
+    %q <= not(%"invert$1.v")
+    %"count_ones$2.v" = %d
+    %"count_ones$2.c" = 32'sd0
+    for %"count_ones$2.i" = 32'sd3; ge(%"count_ones$2.i", 32'sd0); %"count_ones$2.i" = sub(%"count_ones$2.i", 32'sd1)
+      if eq(%"count_ones$2.v"[%"count_ones$2.i" +: 1], 1'd1)
+        %"count_ones$2.c" = add(%"count_ones$2.c", 32'sd1)
+      end
+    end
+    %"count_ones$2.total" = %"count_ones$2.c"
+    %ones = %"count_ones$2.total"
+    %n <= %ones
+  end
+end

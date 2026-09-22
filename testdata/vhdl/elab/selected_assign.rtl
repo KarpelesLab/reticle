@@ -1,0 +1,14 @@
+top selected_assign
+
+module selected_assign
+  timescale 1 fs / 1 fs
+  net %a u1 wire
+  net %b u1 wire
+  net %sel u2 wire
+  net %z u1 wire
+  port a in %a
+  port b in %b
+  port sel in %sel
+  port z out %z
+  assign %z = mux(eq(%sel, 2'd0), %a, mux(lor(eq(%sel, 2'd1), eq(%sel, 2'd2)), %b, 1'd0))
+end

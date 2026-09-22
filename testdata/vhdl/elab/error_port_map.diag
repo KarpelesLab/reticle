@@ -1,0 +1,8 @@
+error[V0501]: port `q` is `out`, so its actual must be a signal
+  --> error_port_map.vhd:26:48
+   |
+26 |   u1 : entity work.sink port map (d => a, q => (a and b));
+   |                                                ^^^^^^^^^ this is an expression, not a signal
+ 6 |     q : out bit
+   |     - declared `out` here
+

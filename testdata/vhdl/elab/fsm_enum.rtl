@@ -1,0 +1,46 @@
+top fsm_enum
+
+module fsm_enum
+  timescale 1 fs / 1 fs
+  net %clk u1 wire
+  net %rst u1 wire
+  net %go u1 wire
+  net %busy u1 wire
+  attr enum_type = "state_t"
+  attr enum_literals = "idle,load,run,done"
+  net %state u2 reg
+  attr enum_type = "state_t"
+  attr enum_literals = "idle,load,run,done"
+  net %next_state u2 reg
+  port clk in %clk
+  port rst in %rst
+  port go in %go
+  port busy out %busy
+  assign %busy = mux(eq(%state, 2'd0), 1'd0, 1'd1)
+  process sync seq posedge %clk
+    if eq(%rst, 1'd1)
+      %state <= 2'd0
+    else
+      %state <= %next_state
+    end
+  end
+  process next_logic comb
+    %next_state <= %state
+    case %state
+      when 2'd0
+        if eq(%go, 1'd1)
+          %next_state <= 2'd1
+        end
+      end
+      when 2'd1
+        %next_state <= 2'd2
+      end
+      when 2'd2
+        %next_state <= 2'd3
+      end
+      when 2'd3
+        %next_state <= 2'd0
+      end
+    end
+  end
+end

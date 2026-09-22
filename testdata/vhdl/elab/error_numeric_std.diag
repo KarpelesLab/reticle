@@ -1,0 +1,8 @@
+error[V0107]: `ieee.numeric_std` is not bundled yet; `unsigned`, `signed` and their arithmetic are unavailable
+ --> error_numeric_std.vhd:5:10
+  |
+5 | use ieee.numeric_std.all;
+  |          ^^^^^^^^^^^ not available in this build
+  |
+  = note: Reticle bundles `std.standard`, `std.textio`, `std.env` and `ieee.std_logic_1164`
+

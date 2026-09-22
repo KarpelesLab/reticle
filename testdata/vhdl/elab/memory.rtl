@@ -1,0 +1,22 @@
+top memory
+
+module memory
+  timescale 1 fs / 1 fs
+  net %clk u1 wire
+  net %we u1 wire
+  net %addr s32 wire
+  net %din u8 wire
+  net %dout u8 wire
+  port clk in %clk
+  port we in %we
+  port addr in %addr
+  port din in %din
+  port dout out %dout
+  memory @ram 16 x u8
+  assign %dout = @ram[%addr]
+  process seq posedge %clk
+    if eq(%we, 1'd1)
+      @ram[%addr] <= %din
+    end
+  end
+end

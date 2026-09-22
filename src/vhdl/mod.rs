@@ -26,9 +26,10 @@
 //!   `ieee.std_logic_1164` are bundled; `ieee.numeric_std` and the other
 //!   `ieee` packages are not yet, and naming one yields one clear
 //!   diagnostic.
-//! - `elab`: generics, port maps, generate, configurations (planned).
-//! - `lower`: to [`crate::ir`], with explicit `std_logic` resolution
-//!   (planned).
+//! - [`elab`]: elaboration and lowering to [`crate::ir`] — top selection,
+//!   architecture binding, generics, generate unrolling, port maps and
+//!   configurations, with explicit `std_logic` resolution. [`elaborate`]
+//!   turns an [`Analysis`] into a validated [`crate::ir::Design`].
 //!
 //! ```
 //! use reticle::diag::Diagnostics;
@@ -47,6 +48,7 @@
 
 pub mod ast;
 pub mod ast_dump;
+pub mod elab;
 pub mod format;
 pub mod lex;
 pub mod parse;
@@ -54,6 +56,7 @@ pub mod sema;
 pub mod stdlib;
 pub mod token;
 
+pub use elab::{ElabOptions, elaborate};
 pub use lex::{CommentKind, Lexed, Lexer, lex_source};
 pub use parse::Parser;
 pub use sema::{Analysis, DeclId, Design, TypeId};

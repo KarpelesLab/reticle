@@ -1,0 +1,8 @@
+error[V0703]: generic `WIDTH` has no value
+ --> error_generic.vhd:4:12
+  |
+4 |   generic (WIDTH : positive);
+  |            ^^^^^
+  |
+  = note: give it a default or a value in the generic map
+

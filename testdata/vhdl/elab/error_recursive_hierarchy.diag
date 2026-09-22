@@ -1,0 +1,6 @@
+error[V0709]: entity `error_recursive_hierarchy` instantiates itself
+  --> error_recursive_hierarchy.vhd:12:3
+   |
+12 |   inner : entity work.error_recursive_hierarchy port map (d => d, q => q);
+   |   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ recursive instantiation
+

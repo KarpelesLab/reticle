@@ -1,0 +1,14 @@
+error[V0704]: `bit_vector` is unconstrained here
+ --> error_unconstrained.vhd:4:5
+  |
+4 |     d : in  bit_vector;
+  |     ^
+  |
+  = note: give the object an index constraint so its width is known
+
+error[V0704]: `d` has no value at elaboration
+  --> error_unconstrained.vhd:11:8
+   |
+11 |   q <= d(0);
+   |        ^
+

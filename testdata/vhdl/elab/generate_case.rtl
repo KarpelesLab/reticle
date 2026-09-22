@@ -1,0 +1,13 @@
+top generate_case
+
+module generate_case
+  timescale 1 fs / 1 fs
+  param MODE = 1
+  net %a u1 wire
+  net %b u1 wire
+  net %q u1 wire
+  port a in %a
+  port b in %b
+  port q out %q
+  assign %q = or(%a, %b)
+end

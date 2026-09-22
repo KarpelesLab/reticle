@@ -1,0 +1,23 @@
+top comb_process
+
+module comb_process
+  timescale 1 fs / 1 fs
+  net %a u1 wire
+  net %b u1 wire
+  net %c u1 wire
+  net %y u1 reg
+  net %z u1 reg
+  net %t u1 reg
+  port a in %a
+  port b in %b
+  port c in %c
+  port y out %y
+  port z out %z
+  process explicit sensitive %a, %b
+    %t <= and(%a, %b)
+  end
+  process all_list comb
+    %y <= xor(%t, %c)
+    %z <= not(%t)
+  end
+end

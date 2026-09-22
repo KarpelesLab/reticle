@@ -1,0 +1,13 @@
+top delays
+
+module delays
+  timescale 1 fs / 1 fs
+  net %a u1 wire
+  net %y u1 wire
+  net %z u1 wire
+  port a in %a
+  port y out %y
+  port z out %z
+  assign %y = not(%a) after 5 ns
+  assign %z = %a after 2500 ps
+end

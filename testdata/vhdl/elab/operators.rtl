@@ -1,0 +1,31 @@
+top operators
+
+module operators
+  timescale 1 fs / 1 fs
+  net %a s32 wire
+  net %b s32 wire
+  net %v u8 wire
+  net %w u4 wire
+  net %sum s32 wire
+  net %r_rem s32 wire
+  net %r_mod s32 wire
+  net %cat u12 wire
+  net %red u1 wire
+  net %cmp u1 wire
+  port a in %a
+  port b in %b
+  port v in %v
+  port w in %w
+  port sum out %sum
+  port r_rem out %r_rem
+  port r_mod out %r_mod
+  port cat out %cat
+  port red out %red
+  port cmp out %cmp
+  assign %sum = sub(add(%a, mul(%b, 32'sd2)), 32'sd1)
+  assign %r_rem = mod(%a, 32'sd3)
+  assign %r_mod = mux(land(ne(mod(sub(%a, 32'sd200), 32'sd7), 32'sd0), xor(lt(mod(sub(%a, 32'sd200), 32'sd7), 32'sd0), lt(32'sd7, 32'sd0))), add(mod(sub(%a, 32'sd200), 32'sd7), 32'sd7), mod(sub(%a, 32'sd200), 32'sd7))
+  assign %cat = {%v, %w}
+  assign %red = rxor(%v)
+  assign %cmp = and(lt(%a, %b), ne(%v, 8'd0))
+end

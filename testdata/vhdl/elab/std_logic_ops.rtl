@@ -1,0 +1,23 @@
+top std_logic_ops
+
+module std_logic_ops
+  timescale 1 fs / 1 fs
+  net %a u8 wire
+  net %b u8 wire
+  net %s u1 wire
+  net %y u8 wire
+  net %z u1 wire
+  net %v u8 wire
+  net %u u1 wire
+  port a in %a
+  port b in %b
+  port s in %s
+  port y out %y
+  port z out %z
+  port v out %v
+  port u out %u
+  assign %y = or(and(%a, 8'd240), and(%b, 8'd15))
+  assign %z = xor(%s, %a[0:0])
+  assign %v = %a
+  assign %u = call $isunknown(%b) as u1
+end

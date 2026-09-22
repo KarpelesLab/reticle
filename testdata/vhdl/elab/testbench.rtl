@@ -1,0 +1,50 @@
+top tb
+
+module dut
+  timescale 1 fs / 1 fs
+  net %clk u1 wire
+  net %d u1 wire
+  net %q u1 reg
+  port clk in %clk
+  port d in %d
+  port q out %q
+  process seq posedge %clk
+    %q <= %d
+  end
+end
+
+module tb
+  timescale 1 fs / 1 fs
+  net %clk u1 reg
+  net %d u1 reg
+  net %q u1 wire
+  net %"clocking.i" s32 var
+  instance uut of dut (clk=%clk, d=%d, q=%q)
+  process initial
+    %clk = 1'd0
+  end
+  process initial
+    %d = 1'd0
+  end
+  process clocking free
+    forever
+      for %"clocking.i" = 32'sd0; le(%"clocking.i", 32'sd3); %"clocking.i" = add(%"clocking.i", 32'sd1)
+        wait for 64'sd5000000
+        %clk <= 1'd1
+        wait for 64'sd5000000
+        %clk <= 1'd0
+      end
+      wait until 1'd0
+    end
+  end
+  process stimulus free
+    forever
+      assert note 1'd0 report "start"
+      %d <= 1'd1
+      wait for 64'sd12000000
+      assert error eq(%q, 1'd1) report "q did not follow d"
+      assert note 1'd0 report "done"
+      wait until 1'd0
+    end
+  end
+end

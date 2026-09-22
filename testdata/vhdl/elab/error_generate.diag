@@ -1,0 +1,6 @@
+error[V0704]: a generate range must be static after elaboration
+  --> error_generate.vhd:13:16
+   |
+13 |   g : for i in 0 to n generate
+   |                ^^^^^^
+

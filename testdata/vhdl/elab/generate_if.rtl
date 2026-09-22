@@ -1,0 +1,11 @@
+top generate_if
+
+module generate_if
+  timescale 1 fs / 1 fs
+  param INVERT = 1
+  net %d u1 wire
+  net %q u1 wire
+  port d in %d
+  port q out %q
+  assign %q = not(%d)
+end

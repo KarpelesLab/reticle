@@ -1,0 +1,31 @@
+top wrapper
+
+module leaf
+  timescale 1 fs / 1 fs
+  net %d u1 wire
+  net %q u1 wire
+  port d in %d
+  port q out %q
+  assign %q = %d
+end
+
+module leaf$arch_inverting
+  timescale 1 fs / 1 fs
+  net %d u1 wire
+  net %q u1 wire
+  port d in %d
+  port q out %q
+  assign %q = not(%d)
+end
+
+module wrapper
+  timescale 1 fs / 1 fs
+  net %d u1 wire
+  net %a u1 wire
+  net %b u1 wire
+  port d in %d
+  port a out %a
+  port b out %b
+  instance u_default of leaf (d=%d, q=%a)
+  instance u_inverting of leaf$arch_inverting (d=%d, q=%b)
+end

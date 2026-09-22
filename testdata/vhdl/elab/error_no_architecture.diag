@@ -1,0 +1,6 @@
+error[V0714]: entity `error_no_architecture` has no architecture
+ --> error_no_architecture.vhd:2:8
+  |
+2 | entity error_no_architecture is
+  |        ^^^^^^^^^^^^^^^^^^^^^
+

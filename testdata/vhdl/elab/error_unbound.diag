@@ -1,0 +1,8 @@
+error[V0702]: component `missing_cell` binds to no entity
+  --> error_unbound.vhd:18:3
+   |
+18 |   u0 : component missing_cell port map (a => d, y => q);
+   |   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: the default binding needs an entity of the same name in the working library, or a configuration specification
+

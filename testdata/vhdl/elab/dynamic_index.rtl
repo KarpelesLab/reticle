@@ -1,0 +1,20 @@
+top dynamic_index
+
+module dynamic_index
+  timescale 1 fs / 1 fs
+  net %d u8 wire
+  net %u u8 wire
+  net %sel s32 wire
+  net %bit_d u1 wire
+  net %bit_u u1 wire
+  net %nib u4 wire
+  port d in %d
+  port u in %u
+  port sel in %sel
+  port bit_d out %bit_d
+  port bit_u out %bit_u
+  port nib out %nib
+  assign %bit_d = %d[%sel +: 1]
+  assign %bit_u = %u[sub(32'sd7, %sel) +: 1]
+  assign %nib = %d[7:4]
+end

@@ -1,0 +1,31 @@
+top cfg_top
+
+module cell_impl$arch_buffered
+  timescale 1 fs / 1 fs
+  net %d u1 wire
+  net %q u1 wire
+  port d in %d
+  port q out %q
+  assign %q = %d
+end
+
+module cell_impl
+  timescale 1 fs / 1 fs
+  net %d u1 wire
+  net %q u1 wire
+  port d in %d
+  port q out %q
+  assign %q = not(%d)
+end
+
+module cfg_top
+  timescale 1 fs / 1 fs
+  net %din u1 wire
+  net %x u1 wire
+  net %y u1 wire
+  port din in %din
+  port x out %x
+  port y out %y
+  instance u_buf of cell_impl$arch_buffered (d=%din, q=%x)
+  instance u_inv of cell_impl (d=%din, q=%y)
+end

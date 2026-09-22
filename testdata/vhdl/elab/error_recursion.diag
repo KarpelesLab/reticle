@@ -1,0 +1,10 @@
+error[V0705]: `total` calls itself
+  --> error_recursion.vhd:15:16
+   |
+15 |     return v + total(v - 1);
+   |                ^^^^^^^^^^^^ recursive call
+10 |   function total (v : integer) return integer is
+   |            ----- declared here
+   |
+   = note: a recursive subprogram cannot be inlined
+
