@@ -16,6 +16,13 @@
 //! `vga_out` drives. [`Signal`] is the whole of the difference — what
 //! value counts as white, and how many pixels the block's output
 //! register puts between the raster and the pin.
+//!
+//! `examples/nes` uses the raster half of it and none of the text half:
+//! its picture is a doubled 256 x 240 frame buffer and not a grid of
+//! character cells, so it asks [`Video::visible`] for the pixels and
+//! compares them itself. What it shares is everything that ties a
+//! simulation's times to a raster's pixels — which is the part worth
+//! having written once.
 
 #![allow(dead_code)]
 
@@ -148,6 +155,12 @@ pub(crate) struct Signal {
     /// Pixels between the raster naming a pixel and the signal carrying
     /// its colour. A block whose outputs are registered has one.
     pub(crate) delay: i64,
+    /// Pixels between the raster and the two **sync** pins, which is not
+    /// always `delay`: the syncs come straight out of the raster through
+    /// the same output register, so anything the colour goes through and
+    /// they do not — a frame buffer's read register, for one — puts the
+    /// two numbers apart.
+    pub(crate) sync_delay: i64,
 }
 
 impl Signal {
@@ -156,6 +169,9 @@ impl Signal {
     pub(crate) const DVI: Signal = Signal {
         white: 0x00FF_FFFF,
         delay: 0,
+        // A DVI link carries its syncs inside TMDS control symbols and
+        // has no pin for them, so nothing reads this.
+        sync_delay: 0,
     };
 
     /// The twelve VGA pins of a four-bit-per-channel ladder. `vga_out`
@@ -165,6 +181,25 @@ impl Signal {
     pub(crate) const VGA4: Signal = Signal {
         white: 0x0FFF,
         delay: 1,
+        sync_delay: 1,
+    };
+
+    /// The same twelve pins, with a frame buffer in front of them.
+    ///
+    /// `examples/nes` reads its colour out of a memory through a
+    /// register, and its VGA testbench runs the raster at one pixel per
+    /// clock — so that register costs a whole pixel on top of
+    /// `vga_out`'s own. On the board the raster takes one pixel in four
+    /// and the register settles inside the other three, which is why
+    /// this is a property of the testbench's clocking and not of the
+    /// design. `white` is unused: that path's picture is in colour and
+    /// nothing asks it to name a glyph.
+    pub(crate) const VGA4_BUFFERED: Signal = Signal {
+        white: 0x0FFF,
+        delay: 2,
+        // The syncs are still one pixel behind: they leave through
+        // `vga_out`'s output register and through nothing else.
+        sync_delay: 1,
     };
 }
 
@@ -272,6 +307,26 @@ impl Video {
         self.samples[*cursor].1
     }
 
+    /// Every visible pixel of frame `frame`, in raster order: `V_ACTIVE`
+    /// rows of `H_ACTIVE`, blanking left out.
+    ///
+    /// This is the whole of the active area and nothing else, so a
+    /// caller that has its own idea of what the picture should be — a
+    /// frame buffer rather than a page of text — can compare all
+    /// 307,200 of them against it and need nothing else from here.
+    pub(crate) fn visible(&self, frame: i64) -> Vec<Pixel> {
+        let base = frame * FRAME_PIXELS;
+        let mut cursor = 0usize;
+        let mut out =
+            Vec::with_capacity(usize::try_from(H_ACTIVE * V_ACTIVE).expect("a small frame"));
+        for y in 0..V_ACTIVE {
+            for x in 0..H_ACTIVE {
+                out.push(self.at(&mut cursor, base + y * H_TOTAL + x));
+            }
+        }
+        out
+    }
+
     /// Everything of frame `frame` that is visible and outside the
     /// picture is black, which is what proves the picture is centred
     /// rather than merely the right size.
@@ -375,11 +430,12 @@ impl Video {
         active: bool,
     ) {
         // The pins are sampled the way the colour is: the value a pin
-        // held at a pixel is the last change at or before it, and the
-        // syncs leave through the same register as the colour, so
-        // `origin` is theirs too.
+        // held at a pixel is the last change at or before it.
+        // The syncs have their own delay, which is `vga_out`'s output
+        // register and nothing else; `self.origin` carries the colour's.
+        let origin = self.origin + (self.signal.sync_delay - self.signal.delay) * self.period;
         let level = |wave: &[(u64, Option<bool>)], pixel: i64| -> bool {
-            let when = self.origin + pixel * self.period;
+            let when = origin + pixel * self.period;
             wave.iter()
                 .take_while(|(t, _)| i64::try_from(*t).expect("a sane time") <= when)
                 .last()

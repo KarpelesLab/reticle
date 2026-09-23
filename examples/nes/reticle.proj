@@ -2,13 +2,22 @@
 #
 # The processor is `mos6502` with DECIMAL_MODE = 0, which is what the
 # processor in an NES is; the picture unit is `ppu2c02`; the video output
-# is `dvi_tx`. All three come from the Reticle IP library in this
-# repository's ip/ directory. The HDL written for the project is the
-# console board, the frame buffer and the top level, and nothing else.
+# is `dvi_tx` on one board and `vga_out` on another. All four come from
+# the Reticle IP library in this repository's ip/ directory. The HDL
+# written for the project is the console board, the frame buffer and the
+# two top levels, and nothing else.
 #
 # No part of any commercial cartridge is here and none is needed: the
 # program in sw/ and the tiles it draws were written for this example.
 # See README.md.
+#
+# Two tops, one console. `top` below is `nes_top`, the ECP5 DVI build
+# that `device` and `constraints` go with; `nes_basys3` is the same
+# console and frame buffer behind `vga_out` for a Digilent Basys 3,
+# built with `--device xc7a35t-cpg236 --constraints board/basys3.rcf`
+# and measured by `the_console_maps_onto_the_artix7_for_the_basys3` in
+# tests/nes.rs. A project manifest names one device and one top, so the
+# second target is a command line and not a second `device` line.
 name nes
 top nes_top
 
@@ -21,9 +30,12 @@ device ecp5-45f-CABGA381
 source rtl/nes_console.v
 source rtl/nes_video.v
 source rtl/nes_top.v
+source rtl/nes_basys3.v
 constraints board/ecp5_dvi.rcf
 testbench tb/nes_tb.v
+testbench tb/nes_vga_tb.v
 
 depends mos6502 ^1.0.0 path ../../ip/mos6502
 depends ppu2c02 ^1.0.0 path ../../ip/ppu2c02
 depends dvi_tx ^1.0.0 path ../../ip/dvi_tx
+depends vga_out ^1.0.0 path ../../ip/vga_out

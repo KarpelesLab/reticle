@@ -63,6 +63,7 @@
     feature = "fpga"
 ))]
 
+use std::cell::RefCell;
 use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -70,8 +71,8 @@ use std::rc::Rc;
 
 use reticle::diag::{Diagnostics, Severity};
 use reticle::fpga::{self, Constraints, FpgaOptions};
-use reticle::ip::{self, Elaboration, PathProvider, Project};
-use reticle::ir::{CellKind, Design};
+use reticle::ip::{self, Elaboration, PathProvider, Project, SourceEntry};
+use reticle::ir::{CellKind, Delay, Design, TimeUnit};
 use reticle::sim::{MemoryFiles, SimOptions, Simulator};
 use reticle::source::SourceMap;
 use reticle::synth::{SynthOptions, run as synth_run};
@@ -81,12 +82,25 @@ use reticle::synth::{SynthOptions, run as synth_run};
 #[path = "mos6502_asm/mod.rs"]
 mod asm;
 
+/// The raster decoder that turns a video signal's waveform into pixels,
+/// shared with `tests/apple2.rs`. Only the raster half of it is used
+/// here — `examples/nes` draws a frame buffer and not a page of text —
+/// but that half is the whole of what ties a simulation's times to a
+/// 640 x 480 raster's pixels, and writing it twice would be writing the
+/// VESA numbers twice.
+#[path = "video/mod.rs"]
+mod video;
+
 // ---------------------------------------------------------------------------
 // The machine's constants, as the documentation of the part states them
 // ---------------------------------------------------------------------------
 
 /// The part the project targets.
 const DEVICE: &str = "ecp5-45f-CABGA381";
+
+/// The part on a Digilent Basys 3, which `nes_basys3` and
+/// `board/basys3.rcf` are the second target for.
+const BASYS3_DEVICE: &str = "xc7a35t-cpg236";
 
 /// The small iCE40 the other two examples fit on.
 const SMALL_DEVICE: &str = "ice40-hx8k-ct256";
@@ -386,6 +400,29 @@ fn console_design(dir: &Path) -> Design {
         .expect("the project elaborates to a design")
 }
 
+/// One testbench's design: the project with that `testbench` line added
+/// as a source and the testbench as the top.
+///
+/// The example has two, one per video path, and each is named here so
+/// that a project which stopped listing one would fail rather than
+/// quietly build the other.
+fn testbench_design(dir: &Path, bench: &str, top: &str) -> Design {
+    let built = build(dir, |project| {
+        assert!(
+            project.testbenches.iter().any(|t| t == bench),
+            "reticle.proj does not list {bench}"
+        );
+        project.sources.push(SourceEntry {
+            path: bench.to_owned(),
+            language: None,
+            encrypted: false,
+            span: project.span,
+        });
+        project.top = Some(top.to_owned());
+    });
+    built.elaboration.design.expect("the testbench elaborates")
+}
+
 /// The files the design reads: the two hex images its `$readmemh`
 /// statements name, relative to the project.
 fn example_files(dir: &Path) -> MemoryFiles {
@@ -432,11 +469,23 @@ fn the_project_resolves_and_elaborates() {
             ("dvi_tx", "rtl/tmds_encoder.v"),
             ("dvi_tx", "rtl/video_timing.v"),
             ("dvi_tx", "rtl/dvi_tx.v"),
+            ("vga_out", "rtl/vga_out.v"),
             ("nes", "rtl/nes_console.v"),
             ("nes", "rtl/nes_video.v"),
             ("nes", "rtl/nes_top.v"),
+            ("nes", "rtl/nes_basys3.v"),
         ],
-        "the processor, the picture unit and the transmitter come from the library"
+        "the processor, the picture unit and the two video outputs come from the library"
+    );
+    // `vga_out` reaches the build through its own `depends dvi_tx`, and
+    // `video_timing` appears once for both video paths and not twice.
+    assert_eq!(
+        owners
+            .iter()
+            .filter(|(_, path)| *path == "rtl/video_timing.v")
+            .count(),
+        1,
+        "the raster was pulled in twice"
     );
     assert!(built.elaboration.blackboxes.is_empty());
     assert!(built.elaboration.skipped.is_empty());
@@ -1541,6 +1590,232 @@ fn the_console_maps_onto_the_ecp5_and_exports_for_nextpnr() {
 }
 
 // ---------------------------------------------------------------------------
+// The Artix-7 flow, for the Basys 3
+// ---------------------------------------------------------------------------
+
+#[test]
+fn the_console_maps_onto_the_artix7_for_the_basys3() {
+    let Some(dir) = example() else { return };
+    let mut design = build(&dir, |project| {
+        project.top = Some("nes_basys3".to_owned());
+    })
+    .elaboration
+    .design
+    .expect("the project elaborates");
+    let top = design.top.expect("a top");
+
+    let device = fpga::target(BASYS3_DEVICE).expect("the XC7A35T is a built-in device");
+    let mut map = SourceMap::new();
+    let rcf = read(&dir, "board/basys3.rcf");
+    let file = map
+        .add("board/basys3.rcf", rcf.clone())
+        .expect("the constraints fit");
+    let mut diags = Diagnostics::new();
+    let mut constraints = Constraints::parse(&rcf, file, &mut diags);
+    constraints.merge_attrs(&design, top, &mut diags);
+    constraints.check(&design, device, &mut diags);
+    let said: Vec<String> = diags
+        .iter()
+        .map(|d| format!("{}: {}", d.code.unwrap_or("-"), d.message))
+        .collect();
+    assert!(said.is_empty(), "the constraints were not clean: {said:#?}");
+
+    let mut diags = Diagnostics::new();
+    let options = FpgaOptions {
+        synth: synth_options(&dir),
+        ..FpgaOptions::default()
+    };
+    let flow = fpga::synthesize_for(&mut design, top, device, &constraints, &options, &mut diags)
+        .unwrap_or_else(|e| panic!("the Artix-7 flow failed: {e:?}"));
+    let errors: Vec<String> = diags
+        .iter()
+        .filter(|d| d.severity >= Severity::Error)
+        .map(|d| d.message.clone())
+        .collect();
+    assert!(errors.is_empty(), "the Artix-7 flow reported: {errors:?}");
+
+    // The footprint, for the README and for anyone reading the log.
+    println!("{BASYS3_DEVICE}:");
+    for (cell, count) in &flow.netlist {
+        println!("  {count:>5} x {cell}");
+    }
+    println!("  {} LUTs, depth {}", flow.luts, flow.lut_depth);
+    for bram in &flow.primitives.block_rams {
+        println!(
+            "  {} -> {} x RAMB18E1 in {}x{} mode, {} cop(ies), initialised {}",
+            bram.memory,
+            bram.blocks(),
+            bram.mode.0,
+            bram.mode.1,
+            bram.copies,
+            bram.initialised
+        );
+    }
+
+    // It fits, with room. The part has 20800 LUT6, 41600 flip-flops and
+    // 100 RAMB18E1, which `the_artix7_matches_its_datasheet_figures` in
+    // tests/fpga_flow.rs holds to the datasheet.
+    //
+    // The last measured footprint was 3786 LUT6, 80 CARRY4, 1082
+    // flip-flops and 39 RAMB18E1, depth 23. The same console behind
+    // `dvi_tx` on the same part is 4184 LUT6, 137 CARRY4, 1154
+    // flip-flops and the same 39 RAMB18E1, depth 24 — a part it cannot
+    // actually be built for, but a fair measure of what the three TMDS
+    // encoders, their running-disparity registers and the three
+    // serialisers cost. Dropping them is the whole difference: 398
+    // LUT6, 57 CARRY4 and 72 flip-flops, and the memory is untouched
+    // because the frame buffer is on the other side of the swap. The
+    // bounds below are loose enough to survive an unrelated change and
+    // tight enough that the carry chain or the saving silently going
+    // away fails here.
+    let luts = flow.count("LUT6");
+    let brams = flow.count("RAMB18E1");
+    let carries = flow.count("CARRY4");
+    let flops: usize = ["FDRE", "FDSE", "FDCE", "FDPE"]
+        .iter()
+        .map(|kind| flow.count(kind))
+        .sum();
+    assert!(
+        (55..=110).contains(&carries),
+        "{carries} CARRY4 is not the carry chain this console has"
+    );
+    assert!(luts > 2500, "{luts} LUT6 is too few for a console");
+    assert!(
+        luts < 4184,
+        "{luts} LUT6 is no better than the DVI build, which is the saving this target is for"
+    );
+    assert!(
+        flops < 1154,
+        "{flops} flip-flops is no better than the DVI build's 1154"
+    );
+    assert_eq!(brams, 39, "the memory is not the ECP5 build's 39 blocks");
+    assert!(luts <= 20_800, "{luts} LUT6 does not fit the XC7A35T");
+    assert!(brams <= 100, "{brams} RAMB18E1 does not fit the XC7A35T");
+    assert!(flops <= 41_600, "{flops} flip-flops do not fit");
+    assert!(
+        flow.netlist.iter().all(|(cell, _)| !cell.starts_with('$')),
+        "a generic cell survived: {:?}",
+        flow.netlist
+    );
+    assert!(
+        !diags.iter().any(|d| d.code == Some("F0305")),
+        "a memory lost its initial contents: {}",
+        diags.render(&map)
+    );
+
+    // No PLL and no double-data-rate register anywhere, which is the
+    // whole reason this target exists: the pixel rate is a divider, not
+    // a clock, and a colour bit is an ordinary output.
+    assert!(
+        flow.primitives.plls.is_empty(),
+        "the VGA path asked for a PLL"
+    );
+    for buffer in &flow.primitives.io_buffers {
+        assert!(
+            buffer.ddr.is_none(),
+            "{} came out double data rate",
+            buffer.port
+        );
+    }
+    // And `dvi_tx` came along as a dependency of `vga_out` but left
+    // nothing behind: the encoders and the serialisers are not
+    // instantiated, so no netlist cell belongs to one.
+    assert_eq!(flow.count("ODDR"), 0);
+
+    // Every memory the machine has is still in block RAM, and the
+    // cartridge still carries the program and the tiles.
+    let mut in_block: Vec<&str> = flow
+        .primitives
+        .block_rams
+        .iter()
+        .map(|b| b.memory.as_str())
+        .collect();
+    in_block.sort_unstable();
+    assert_eq!(
+        in_block,
+        [
+            "u_console.chr",
+            "u_console.nt",
+            "u_console.prg",
+            "u_console.ram",
+            "u_console.u_ppu.oam",
+            "u_video.fb",
+        ],
+        "a memory did not become block RAM"
+    );
+    for name in ["u_console.prg", "u_console.chr"] {
+        let rom = flow
+            .primitives
+            .block_rams
+            .iter()
+            .find(|b| b.memory == name)
+            .expect("the cartridge's memory");
+        assert!(rom.initialised, "{name} carries no contents");
+    }
+
+    // Every cell is a primitive the part has, wired to pins it has.
+    let problems: Vec<String> = fpga::check_nextpnr_json(&design, top, device, &constraints)
+        .into_iter()
+        .map(|p| format!("{}: {}", p.object, p.message))
+        .collect();
+    assert!(problems.is_empty(), "{problems:?}");
+
+    // The three files Vivado reads, and the command line that runs them.
+    let inputs = fpga::export_vendor(&design, top, device, &constraints).expect("the export");
+    assert!(
+        inputs.script.contains("-part xc7a35tcpg236-1"),
+        "{}",
+        inputs.script
+    );
+    assert_eq!(
+        inputs.args,
+        vec!["vivado", "-mode", "batch", "-source", "nes_basys3.tcl"]
+    );
+    for step in [
+        "read_verilog nes_basys3.v",
+        "read_xdc nes_basys3.xdc",
+        "synth_design -top nes_basys3",
+        "place_design",
+        "route_design",
+        "write_bitstream -force nes_basys3.bit",
+    ] {
+        assert!(inputs.script.contains(step), "the script lacks `{step}`");
+    }
+    // Every pin of the board file reaches the XDC, VGA and all.
+    for pin in &constraints.pins {
+        if pin.pin.is_empty() {
+            continue;
+        }
+        assert!(
+            device.pin(&pin.pin).is_some(),
+            "`{}` is not a pin of the part",
+            pin.pin
+        );
+        let line = format!(
+            "set_property PACKAGE_PIN {} [get_ports {{{}}}]",
+            pin.pin,
+            pin.signal()
+        );
+        assert!(inputs.xdc.contains(&line), "the XDC lacks `{line}`");
+    }
+    for pin in ["vga_r[0]", "vga_b[3]", "vga_hsync", "vga_vsync", "clk"] {
+        assert!(
+            inputs.xdc.contains(&format!("[get_ports {{{pin}}}]")),
+            "the XDC lacks {pin}"
+        );
+    }
+
+    // The files a board needs, where a reader can pick them up.
+    let out = Path::new(env!("CARGO_TARGET_TMPDIR")).join("nes-basys3");
+    fs::create_dir_all(&out).expect("a scratch directory");
+    fs::write(out.join("nes_basys3.v"), &inputs.verilog).expect("write the netlist");
+    fs::write(out.join("nes_basys3.xdc"), &inputs.xdc).expect("write the XDC");
+    fs::write(out.join("nes_basys3.tcl"), &inputs.script).expect("write the script");
+    println!("wrote {}/nes_basys3.{{v,xdc,tcl}}", out.display());
+    println!("then: {}", inputs.args.join(" "));
+}
+
+// ---------------------------------------------------------------------------
 // The binary
 // ---------------------------------------------------------------------------
 
@@ -1585,7 +1860,7 @@ fn reticle_build_builds_the_project() {
     );
     assert_eq!(code, 0, "reticle build failed:\n{err}");
     assert!(
-        err.contains("note: built `nes`: 9 module(s) from 9 source(s)"),
+        err.contains("note: built `nes`: 11 module(s) from 11 source(s)"),
         "{err}"
     );
     assert!(
@@ -1594,7 +1869,7 @@ fn reticle_build_builds_the_project() {
     );
     assert!(!err.contains("simulation-only statement dropped"), "{err}");
     let lock = fs::read_to_string(&lock).expect("a lock file");
-    for package in ["mos6502", "ppu2c02", "dvi_tx"] {
+    for package in ["mos6502", "ppu2c02", "dvi_tx", "vga_out"] {
         assert!(lock.contains(package), "{lock}");
     }
 }
@@ -1990,6 +2265,356 @@ fn the_screen_doubles_the_console_onto_the_tmds_lanes() {
         checked += 1;
     }
     assert!(checked > 400, "only {checked} columns were compared");
+}
+
+// ---------------------------------------------------------------------------
+// The other screen: the VGA pins of a Digilent Basys 3
+//
+// `the_screen_doubles_the_console_onto_the_tmds_lanes` above reads a
+// painted frame buffer off four TMDS pins, and
+// `the_frame_comes_out_of_the_video_port` reads a real frame off the
+// console's video port. This section does both jobs at once, on the
+// board this repository's owner can actually buy: the demo's own frame,
+// through the frame buffer, the doubling, the palette and `vga_out`,
+// read back off the twelve colour pins and the two sync pins of a VGA
+// socket.
+//
+// It can be one simulation where the DVI path could not, and the reason
+// is arithmetic: `dvi_tx` runs at five times the pixel rate, so one
+// 640 x 480 frame through it is 2.1 million cycles, while VGA needs no
+// faster clock at all and `tb/nes_vga_tb.v` takes one pixel per clock.
+// ---------------------------------------------------------------------------
+
+/// The 2C02's sixty-four colours as `ip/ppu2c02`'s `ppu_palette` gives
+/// them, transcribed here and laid out the way that table is: four rows
+/// of sixteen, hue across and level down.
+///
+/// This is the **reference**, not a reading of the design: the test
+/// below works out what each pin has to carry from this array, so a
+/// colour that came out of the hardware is never compared with itself.
+/// `KNOWN` above is eight of these read off the same table
+/// independently, and `the_palette_is_the_one_the_tmds_test_reads_by_hand`
+/// holds the two transcriptions together.
+///
+/// $xE and $xF are black on every real part, and `ppu_palette` gives
+/// $xD of the two dark rows black as well rather than something below
+/// where the signal is supposed to go; the blacks down the right-hand
+/// side of the table are the part and not a gap in it.
+const PALETTE: [[u8; 3]; 64] = [
+    // Level $0x — the dark row.
+    [0x54, 0x54, 0x54], // $00
+    [0x00, 0x1E, 0x74], // $01
+    [0x08, 0x10, 0x90], // $02
+    [0x30, 0x00, 0x88], // $03
+    [0x44, 0x00, 0x64], // $04
+    [0x5C, 0x00, 0x30], // $05
+    [0x54, 0x04, 0x00], // $06
+    [0x3C, 0x18, 0x00], // $07
+    [0x20, 0x2A, 0x00], // $08
+    [0x08, 0x3A, 0x00], // $09
+    [0x00, 0x40, 0x00], // $0A
+    [0x00, 0x3C, 0x00], // $0B
+    [0x00, 0x32, 0x3C], // $0C
+    [0x00, 0x00, 0x00], // $0D
+    [0x00, 0x00, 0x00], // $0E
+    [0x00, 0x00, 0x00], // $0F
+    // Level $1x.
+    [0x98, 0x96, 0x98], // $10
+    [0x08, 0x4C, 0xC4], // $11
+    [0x30, 0x32, 0xEC], // $12
+    [0x5C, 0x1E, 0xE4], // $13
+    [0x88, 0x14, 0xB0], // $14
+    [0xA0, 0x14, 0x64], // $15
+    [0x98, 0x22, 0x20], // $16
+    [0x78, 0x3C, 0x00], // $17
+    [0x54, 0x5A, 0x00], // $18
+    [0x28, 0x72, 0x00], // $19
+    [0x08, 0x7C, 0x00], // $1A
+    [0x00, 0x76, 0x28], // $1B
+    [0x00, 0x66, 0x78], // $1C
+    [0x00, 0x00, 0x00], // $1D
+    [0x00, 0x00, 0x00], // $1E
+    [0x00, 0x00, 0x00], // $1F
+    // Level $2x — the bright row most graphics live in.
+    [0xEC, 0xEE, 0xEC], // $20
+    [0x4C, 0x9A, 0xEC], // $21
+    [0x78, 0x7C, 0xEC], // $22
+    [0xB0, 0x62, 0xEC], // $23
+    [0xE4, 0x54, 0xEC], // $24
+    [0xEC, 0x58, 0xB4], // $25
+    [0xEC, 0x6A, 0x64], // $26
+    [0xD4, 0x88, 0x20], // $27
+    [0xA0, 0xAA, 0x00], // $28
+    [0x74, 0xC4, 0x00], // $29
+    [0x4C, 0xD0, 0x20], // $2A
+    [0x38, 0xCC, 0x6C], // $2B
+    [0x38, 0xB4, 0xCC], // $2C
+    [0x3C, 0x3C, 0x3C], // $2D
+    [0x00, 0x00, 0x00], // $2E
+    [0x00, 0x00, 0x00], // $2F
+    // Level $3x — the pale row.
+    [0xEC, 0xEE, 0xEC], // $30
+    [0xA8, 0xCC, 0xEC], // $31
+    [0xBC, 0xBC, 0xEC], // $32
+    [0xD4, 0xB2, 0xEC], // $33
+    [0xEC, 0xAE, 0xEC], // $34
+    [0xEC, 0xAE, 0xD4], // $35
+    [0xEC, 0xB4, 0xB0], // $36
+    [0xE4, 0xC4, 0x90], // $37
+    [0xCC, 0xD2, 0x78], // $38
+    [0xB4, 0xDE, 0x78], // $39
+    [0xA8, 0xE2, 0x90], // $3A
+    [0x98, 0xE2, 0xB4], // $3B
+    [0xA0, 0xD6, 0xE4], // $3C
+    [0xA0, 0xA2, 0xA0], // $3D
+    [0x00, 0x00, 0x00], // $3E
+    [0x00, 0x00, 0x00], // $3F
+];
+
+/// A colour as a Basys 3 renders it: the top four bits of each channel,
+/// in the order `tb/nes_vga_tb.v`'s `vga_rgb` puts the twelve pins.
+///
+/// `vga_out` truncates rather than rounds — `ip/vga_out/README.md` says
+/// why — so this is a shift and nothing else. It is the whole of what
+/// makes the board's picture different from the ECP5's, and the
+/// difference is worth a number:
+/// `four_bits_a_channel_merges_one_pair_of_the_palette` has it.
+fn basys3_colour(rgb: [u8; 3]) -> u32 {
+    (u32::from(rgb[0] >> 4) << 8) | (u32::from(rgb[1] >> 4) << 4) | u32::from(rgb[2] >> 4)
+}
+
+#[test]
+fn the_palette_is_the_one_the_tmds_test_reads_by_hand() {
+    for (index, colour) in KNOWN {
+        assert_eq!(
+            PALETTE[usize::from(index)],
+            colour,
+            "the two transcriptions of palette entry {index:#04x} disagree"
+        );
+    }
+}
+
+#[test]
+fn four_bits_a_channel_merges_one_pair_of_the_palette() {
+    // What the board costs the picture, as a number rather than a
+    // warning. Sixty-four entries are not sixty-four colours even at
+    // full depth — ten of them are black and $20 and $30 are the same
+    // white — and truncating to four bits a channel merges exactly one
+    // more pair.
+    let distinct = |depth: fn([u8; 3]) -> u32| -> BTreeMap<u32, Vec<usize>> {
+        let mut out: BTreeMap<u32, Vec<usize>> = BTreeMap::new();
+        for (index, colour) in PALETTE.iter().enumerate() {
+            out.entry(depth(*colour)).or_default().push(index);
+        }
+        out
+    };
+    let full = distinct(|c| (u32::from(c[0]) << 16) | (u32::from(c[1]) << 8) | u32::from(c[2]));
+    let board = distinct(basys3_colour);
+    assert_eq!(full.len(), 54, "the full-depth palette is 54 colours");
+    assert_eq!(board.len(), 53, "the Basys 3 palette is 53 colours");
+
+    // And which pair, so that README.md can name it: every two entries
+    // the board cannot tell apart but the DVI path can.
+    let mut merged: Vec<(usize, usize)> = Vec::new();
+    for entries in board.values() {
+        for (i, a) in entries.iter().enumerate() {
+            for b in &entries[i + 1..] {
+                if PALETTE[*a] != PALETTE[*b] {
+                    merged.push((*a, *b));
+                }
+            }
+        }
+    }
+    assert_eq!(
+        merged,
+        [(0x09, 0x0B)],
+        "some other pair of the palette collides at four bits a channel"
+    );
+    assert_eq!(PALETTE[0x09], [0x08, 0x3A, 0x00]);
+    assert_eq!(PALETTE[0x0B], [0x00, 0x3C, 0x00]);
+    assert_eq!(basys3_colour(PALETTE[0x09]), 0x030);
+}
+
+/// The VGA testbench's clock: half a period in nanoseconds, and one
+/// pixel per period.
+const VGA_HALF_NS: u64 = 20;
+
+/// Where the doubled picture sits on the 640 x 480 raster: 256 columns
+/// doubled is 512, and centring that leaves 64 either side. This is the
+/// arithmetic and not a reading of `rtl/nes_video.v`.
+const BAND_LEFT: usize = (640 - 2 * SCREEN_W) / 2;
+
+#[test]
+fn the_frame_comes_out_of_the_vga_pins() {
+    let Some(dir) = example() else { return };
+    let bench = read(&dir, "tb/nes_vga_tb.v");
+    assert!(
+        bench.contains(&format!("localparam HALF    = {VGA_HALF_NS};")),
+        "the testbench's clock is not the one this test decodes"
+    );
+    // Four bits a channel, which is the Basys 3's resistor ladder.
+    assert!(
+        bench.contains(".BPC       (4)"),
+        "the testbench is not 4 bpc"
+    );
+
+    let design = testbench_design(&dir, "tb/nes_vga_tb.v", "nes_vga_tb");
+    let mut sim = Simulator::new(&design, sim_options(&dir)).expect("the testbench simulates");
+
+    // Everything sampled here is a **pin**: the twelve colour bits and
+    // the two syncs that leave `vga_out`, and `de`, which is the raster
+    // the picture is measured against. Nothing inside the console, the
+    // frame buffer or the palette is looked at.
+    let de = sim.net("nes_vga_tb.de").expect("the testbench has de");
+    let rgb = sim
+        .net("nes_vga_tb.vga_rgb")
+        .expect("the testbench has vga_rgb");
+    let hsync = sim
+        .net("nes_vga_tb.vga_hsync")
+        .expect("the testbench has vga_hsync");
+    let vsync = sim
+        .net("nes_vga_tb.vga_vsync")
+        .expect("the testbench has vga_vsync");
+
+    let watch = |sim: &mut Simulator<'_>, net| -> Rc<RefCell<Vec<(u64, Option<bool>)>>> {
+        let wave: Rc<RefCell<Vec<(u64, Option<bool>)>>> = Rc::default();
+        let sink = Rc::clone(&wave);
+        sim.on_change(net, move |time, value| {
+            sink.borrow_mut()
+                .push((time, value.to_u64().map(|v| v == 1)));
+        });
+        wave
+    };
+    let de_wave = watch(&mut sim, de);
+    let hsync_wave = watch(&mut sim, hsync);
+    let vsync_wave = watch(&mut sim, vsync);
+    let rgb_wave: Rc<RefCell<video::Colours>> = Rc::default();
+    let sink = Rc::clone(&rgb_wave);
+    sim.on_change(rgb, move |time, value| {
+        let colour = value
+            .to_u64()
+            .map(|v| u32::try_from(v).expect("twelve bits"));
+        sink.borrow_mut().push((time, colour));
+    });
+
+    // The nametable the program wrote. It is the one input to the model
+    // that has to come from the run; the tiles and the program are read
+    // from the sources below.
+    let nt_handle = sim
+        .memory("nes_vga_tb.u_console.nt")
+        .expect("the console has nametable memory");
+
+    sim.run();
+    assert!(sim.finished(), "the testbench did not reach $finish");
+    let messages: Vec<String> = sim.messages().iter().map(|d| d.message.clone()).collect();
+    assert!(messages.is_empty(), "simulator messages: {messages:?}");
+    // The testbench says when it froze the frame buffer and when the
+    // raster had drawn a whole frame; reaching the timeout instead says
+    // so in the same place.
+    let said = sim.output().to_owned();
+    print!("{said}");
+    assert!(
+        said.contains("frame 0 recorded"),
+        "the testbench did not record a frame:\n{said}"
+    );
+
+    let nt: Vec<u8> = (0..2048)
+        .map(|i| {
+            let value = sim
+                .get_mem(nt_handle, i)
+                .and_then(|v| v.to_u64())
+                .unwrap_or_else(|| panic!("nametable byte {i} was never written"));
+            u8::try_from(value).expect("a byte")
+        })
+        .collect();
+
+    let period = sim.ticks(Delay::new(2 * VGA_HALF_NS, TimeUnit::Ns));
+    let screen = video::Video::new(
+        &de_wave.borrow(),
+        &rgb_wave.borrow(),
+        period,
+        sim.time(),
+        video::Signal::VGA4_BUFFERED,
+    );
+
+    // The two sync pins, on every one of the 525 lines. 640 x 480 at 60
+    // Hz has negative syncs, so the level a pulse has is low.
+    screen.syncs_are_the_rasters(0, &hsync_wave.borrow(), &vsync_wave.borrow(), false);
+
+    // What the console drew, worked out from the nametable it wrote, the
+    // tiles the cartridge holds and the palette the program sent — the
+    // same model `the_frame_comes_out_of_the_video_port` uses, and the
+    // same hash between the two, so nothing about the picture is stated
+    // twice.
+    let chr = chr_bytes(&dir);
+    let program = assemble(&dir, "sw/demo.s");
+    let (mut palette, sprites) = demo_tables(&program);
+    palette[2] = demo_star_colour(FRAME);
+    let indices = expected_frame(FRAME, &nt, &chr, &palette, &demo_oam(&sprites, FRAME));
+    assert_eq!(
+        frame_hash(&indices),
+        FRAME_HASH,
+        "the testbench did not freeze the frame the other tests are about"
+    );
+
+    // ...and what that has to look like at a socket: every console pixel
+    // twice across and twice down, centred, everything around it black,
+    // and every colour truncated to the four bits a channel the board's
+    // ladder has. The truncation is done here, on the reference palette;
+    // nothing in `want` has been through the design.
+    let width = usize::try_from(video::H_ACTIVE).expect("a small raster");
+    let height = usize::try_from(video::V_ACTIVE).expect("a small raster");
+    let want: Vec<u32> = (0..width * height)
+        .map(|at| {
+            let (x, y) = (at % width, at / width);
+            if !(BAND_LEFT..BAND_LEFT + 2 * SCREEN_W).contains(&x) {
+                return 0;
+            }
+            let index = indices[(y / 2) * SCREEN_W + (x - BAND_LEFT) / 2];
+            basys3_colour(PALETTE[usize::from(index)])
+        })
+        .collect();
+
+    // A tripwire against the whole comparison passing for a boring
+    // reason: this frame really is a picture, in several colours, and a
+    // one-pixel shift of it would put 8720 pixels wrong.
+    let mut colours = want.clone();
+    colours.sort_unstable();
+    colours.dedup();
+    println!(
+        "the frame is {} colours at four bits a channel",
+        colours.len()
+    );
+    assert!(
+        colours.len() >= 6,
+        "the frame is {} colour(s), which is not a picture",
+        colours.len()
+    );
+
+    let got = screen.visible(0);
+    assert_eq!(got.len(), want.len(), "the frame is not 640 x 480");
+    if let Some(at) = got
+        .iter()
+        .zip(want.iter())
+        .position(|(a, b)| *a != Some(*b))
+    {
+        let (x, y) = (at % width, at / width);
+        let wrong = got
+            .iter()
+            .zip(want.iter())
+            .filter(|(a, b)| **a != Some(**b))
+            .count();
+        panic!(
+            "the picture at the VGA pins is not the one the nametable, the tiles and \
+             the truncated palette describe.\n{wrong} of {} pixels differ; the first \
+             is ({x}, {y}), where the pins said {:?} and the documentation says \
+             {:#05x}\n\nwhat the console drew:\n{}",
+            got.len(),
+            got[at],
+            want[at],
+            sketch(&indices)
+        );
+    }
 }
 
 #[test]

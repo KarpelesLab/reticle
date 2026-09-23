@@ -1,0 +1,56 @@
+# A Digilent Basys 3 (Xilinx XC7A35T-1CPG236C), for `nes_basys3`.
+#
+# PROVENANCE: every pin name below is transcribed from the comment block
+# in examples/soc/board/basys3.rcf, which is itself a transcription of
+# Digilent's published `Basys-3-Master.xdc`
+# (github.com/Digilent/digilent-xdc). HIGH confidence that these are the
+# balls those signals are wired to on a Basys 3 rev B and that they are
+# IO balls of the CPG236 package; see `src/fpga/devices/xc7.dev` for the
+# rest of the list and for what else about this part is and is not
+# verified. examples/apple2/board/basys3.rcf is the same transcription
+# for the other example that targets this board, and the twelve colour
+# pins and the two syncs are the same fourteen lines there.
+#
+# NOTHING HERE HAS BEEN RUN ON A BOARD OR THROUGH VIVADO. What the test
+# suite checks is that every pin named here is one the device database
+# records, that every port of `nes_basys3` has a pin, and that the
+# netlist and the XDC the flow writes hold only primitives the part has.
+# Whether Vivado accepts the result and whether a monitor locks to what
+# comes out of the socket are separate claims and this file makes
+# neither.
+#
+# W5 is the board's single 100 MHz oscillator. There is no other clock
+# source, which is why rtl/nes_basys3.v divides it by four for the pixel
+# rate rather than asking a PLL for 25.175 MHz, and by nineteen for the
+# picture unit's dot rate.
+#
+# The console has no serial port, no sound and no controller, so unlike
+# examples/apple2 and examples/soc this design uses none of the board's
+# other connectors: five ports, fifteen pins, and the picture is all of
+# it.
+#
+# VIDEO: the Basys 3's video output is VGA at twelve bits, four per
+# channel, through a resistor ladder to a DE-15 socket. Bit 0 of each
+# channel is the least significant — the largest resistor of the ladder.
+# Four bits a channel is what the board has, so `vga_out` truncates the
+# palette's eight; README.md says which pair of the sixty-four entries
+# stops being two colours because of it.
+set_io -io_standard LVCMOS33 clk W5
+
+set_io -io_standard LVCMOS33 vga_r[0] G19
+set_io -io_standard LVCMOS33 vga_r[1] H19
+set_io -io_standard LVCMOS33 vga_r[2] J19
+set_io -io_standard LVCMOS33 vga_r[3] N19
+set_io -io_standard LVCMOS33 vga_g[0] J17
+set_io -io_standard LVCMOS33 vga_g[1] H17
+set_io -io_standard LVCMOS33 vga_g[2] G17
+set_io -io_standard LVCMOS33 vga_g[3] D17
+set_io -io_standard LVCMOS33 vga_b[0] N18
+set_io -io_standard LVCMOS33 vga_b[1] L18
+set_io -io_standard LVCMOS33 vga_b[2] K18
+set_io -io_standard LVCMOS33 vga_b[3] J18
+set_io -io_standard LVCMOS33 vga_hsync P19
+set_io -io_standard LVCMOS33 vga_vsync R19
+
+create_clock -name sys -period 10.0 clk
+clock_domain sys clk
