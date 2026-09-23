@@ -1734,13 +1734,12 @@ fn dce_keeps_no_reference_to_a_memory_it_removed() {
     );
 }
 
-/// `unique_name` used to look every candidate up with a scan of the
-/// whole module, so a memory lowered into hundreds of cells that all
-/// want the same base name cost a scan per cell per cell. Twelve small
-/// arrays in one module took six minutes; this is the shape, and it now
-/// takes under a second.
-#[test]
-fn lowering_many_small_memories_is_not_quadratic() {
+/// The shape that `unique_name` used to choke on: several small arrays
+/// in one module, each lowered into hundreds of cells that all want the
+/// same base name. Every candidate was looked up with a scan of the
+/// whole module, so the cost grew with the square of the cell count and
+/// twelve arrays took six minutes.
+fn many_small_memories_source(arrays: usize) -> String {
     let mut source = String::from(
         "module many_small_memories (\n\
          \x20   input  wire       clk,\n\
@@ -1750,37 +1749,65 @@ fn lowering_many_small_memories_is_not_quadratic() {
          );\n\
          \x20   integer i;\n",
     );
-    for i in 0..12 {
+    for i in 0..arrays {
         source.push_str(&format!("    reg [7:0] m{i} [0:7];\n"));
     }
     source.push_str("    always @(posedge clk) begin\n");
-    for i in 0..12 {
+    for i in 0..arrays {
         source.push_str(&format!("        m{i}[slot] <= value + 8'd{i};\n"));
     }
     source.push_str("    end\n    always @* begin\n        out = 8'd0;\n");
     source.push_str("        for (i = 0; i < 8; i = i + 1) begin\n");
-    for i in 0..12 {
+    for i in 0..arrays {
         source.push_str(&format!("            out = out ^ m{i}[i];\n"));
     }
     source.push_str("        end\n    end\nendmodule\n");
+    source
+}
 
-    let start = std::time::Instant::now();
-    let (_, report) = flow_of("many_small_memories", &source);
-    let took = start.elapsed();
+/// Lowering that shape must not cost the square of the cell count.
+///
+/// This asks about the *shape* of the cost, not its size, because a wall
+/// clock says as much about the machine as about the code. The first
+/// version of this test allowed sixty seconds, which is five times what
+/// the shape costs here and less than a loaded Windows CI runner needs:
+/// it went red on Windows while the code was correct.
+///
+/// So the run is timed twice, at four arrays and at sixteen, in the same
+/// process on the same machine, and the two are compared to each other.
+/// Four times the arrays is four times the cells, so lowering that is
+/// linear in the cells takes about four times as long and the quadratic
+/// version took about sixteen. Measured here the ratio is 5.0 rather
+/// than 4.0, because the pass is not perfectly linear and the part of
+/// the flow that does not scale is small; eight sits between 5 and 16
+/// with room on both sides, and unlike a number of seconds it means the
+/// same thing on every machine.
+#[test]
+fn lowering_many_small_memories_is_not_quadratic() {
+    let run = |arrays: usize| {
+        let source = many_small_memories_source(arrays);
+        let start = std::time::Instant::now();
+        let (_, report) = flow_of("many_small_memories", &source);
+        let took = start.elapsed();
+        assert!(
+            report
+                .netlist
+                .iter()
+                .all(|(cell, _)| !cell.starts_with('$')),
+            "the flow left a generic cell with {arrays} arrays: {:?}",
+            report.netlist
+        );
+        took
+    };
+
+    let small = run(4);
+    let big = run(16);
+    let ratio = big.as_secs_f64() / small.as_secs_f64().max(f64::MIN_POSITIVE);
     assert!(
-        report
-            .netlist
-            .iter()
-            .all(|(cell, _)| !cell.starts_with('$')),
-        "the flow left a generic cell: {:?}",
-        report.netlist
-    );
-    // Sixty seconds is not a benchmark, it is a tripwire: the shape that
-    // provoked this took six minutes, and an unoptimised build of the
-    // fixed flow takes well under one.
-    assert!(
-        took.as_secs() < 60,
-        "lowering twelve small memories took {took:?}"
+        ratio < 8.0,
+        "four times the arrays multiplied the time by {ratio:.1} \
+         ({small:?} for four, {big:?} for sixteen), which is the quadratic \
+         lowering coming back rather than a slow machine"
     );
 }
 
