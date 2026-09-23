@@ -26,6 +26,7 @@ ip/
   hyperram_ctrl/ reticle.ip  rtl/hyperram_ctrl.v
   i2c_master/    reticle.ip  rtl/i2c_master.v
   mos6502/       reticle.ip  rtl/mos6502.v
+  ppu2c02/       reticle.ip  rtl/ppu_palette.v  rtl/ppu2c02.v  README.md
   pwm/           reticle.ip  rtl/pwm.v
   ram_wrapper/   reticle.ip  rtl/ram_sp.v  rtl/ram_sdp.v
   rv32i/         reticle.ip  rtl/rv32i.v
@@ -71,6 +72,17 @@ It is distributed as part of the repository instead.
 | `eth_mac_rgmii` | `eth_mac_rgmii` | gigabit Ethernet MAC over RGMII: the RMII MAC's frame logic an octet a cycle behind DDR IO, optional IO delays | `eth_mac_rmii` |
 | `usb_device_fs` | `usb_device_fs`, `usb_fs_rx`, `usb_fs_tx` | USB full-speed device: NRZI, bit stuffing, SYNC and EOP, CRC5 and CRC16 checked, a control endpoint that enumerates | — |
 | `usb_device_fs_pll` | `usb_device_fs_pll` | `usb_device_fs` with its 48 MHz from the device's PLL and a 12 MHz board clock | `usb_device_fs` |
+| `ppu2c02` | `ppu2c02`, `ppu_palette` | NES-compatible picture unit: 256x240 raster, nametables and attributes, scrolling through `v`/`t`/`x`/`w`, 8x8 sprites with per-line evaluation, priority and sprite zero hit | — |
+
+`ppu2c02` is the one block with a page of its own,
+[`ip/ppu2c02/README.md`](../ip/ppu2c02/README.md), because it is the one
+whose *subject* needs a statement rather than only its behaviour: it is
+implemented from the published description of a machine, and no game
+data, character data or lockout logic is in this repository. It is used
+by [`examples/nes`](../examples/nes), which runs a demo written for that
+example and nothing else. It is not in the footprint table below, which
+measures the blocks `tests/ip_library.rs` takes through the flow; its
+numbers are on its own page and in `tests/nes.rs`.
 
 `rv32i`, `mos6502`, `eth_mac_rmii` and `spiflash_xip` are the **larger
 blocks**, and they are larger in a particular way: each is a whole

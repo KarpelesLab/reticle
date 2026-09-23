@@ -588,6 +588,17 @@ HX8K, by six times on block RAM. Building it found two defects in
 `fpga::constraints`, both about a design still hierarchical when its
 board file is checked; both are fixed with a regression test.
 
+A fourth system takes the same processor somewhere it has to be right
+about more than arithmetic: `examples/nes` is an NES-compatible console,
+`mos6502` with `DECIMAL_MODE = 0` — which is what the processor in an
+NES is — plus a new library block, `ip/ppu2c02`, and `dvi_tx` for the
+picture, on an ECP5 45F at 5409 `LUT4` and 39 `DP16KD`. It runs a demo
+written for the example and contains no part of any commercial
+cartridge. `tests/nes.rs` compares every one of a frame's 61,440 pixels
+against a frame buffer computed from the nametable, the tiles and the
+palette by the documented rules, and building it found two defects in
+the FPGA flow, both fixed with a regression test each.
+
 ## Phase 9: developer experience
 
 - [x] Language server (LSP) for both languages: diagnostics as you type

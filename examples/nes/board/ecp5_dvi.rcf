@@ -1,0 +1,20 @@
+# An ECP5 45F on a CABGA381 package, with a DVI connector on four pins.
+#
+# `clk_x5` is five times the 640 x 480 pixel clock: 125.875 MHz, asked
+# of the board as 126, which is 0.1 % fast and well inside what a
+# monitor accepts. A board would more likely have a 25 MHz oscillator
+# and make this with the device's PLL, which is what `ip/dvi_tx_pll`
+# does; README.md has the change.
+#
+# Each TMDS lane is one pin here and one differential pair on a real
+# connector: on the ECP5 a pseudo-differential IO standard (LVCMOS33D)
+# makes the pair out of one output, which is a line in this file and not
+# a change to the design.
+set_io -io_standard LVCMOS33 clk_x5 G2
+set_io -io_standard LVCMOS33 tmds_d0 B2
+set_io -io_standard LVCMOS33 tmds_d1 C1
+set_io -io_standard LVCMOS33 tmds_d2 C2
+set_io -io_standard LVCMOS33 tmds_clk D1
+
+create_clock -name pix5 -period 7.937 clk_x5
+clock_domain pix5 clk_x5

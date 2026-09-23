@@ -112,6 +112,14 @@ from the manifest to the files `nextpnr` reads:
   generator written for the example. Its test decodes the 40 x 24
   character screen back out of a whole frame of video.
 
+- [`examples/nes`](examples/nes) — an NES-compatible console around
+  [`ip/mos6502`](ip/mos6502) with `DECIMAL_MODE = 0`, which is what the
+  processor in an NES is, plus [`ip/ppu2c02`](ip/ppu2c02) and
+  [`ip/dvi_tx`](ip/dvi_tx). It runs a demo written for the example and
+  contains no part of any commercial cartridge; the test compares every
+  one of a frame's 61,440 pixels against a frame buffer computed from the
+  documentation.
+
 [`docs/writing-a-cpu.md`](docs/writing-a-cpu.md) is the guide behind
 those two: how to package a processor as IP, from the manifest and the
 bus contract to testing a core so the test cannot agree with a wrong

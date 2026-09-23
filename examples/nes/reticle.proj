@@ -1,0 +1,29 @@
+# An NES-compatible console, running a demo written for this example.
+#
+# The processor is `mos6502` with DECIMAL_MODE = 0, which is what the
+# processor in an NES is; the picture unit is `ppu2c02`; the video output
+# is `dvi_tx`. All three come from the Reticle IP library in this
+# repository's ip/ directory. The HDL written for the project is the
+# console board, the frame buffer and the top level, and nothing else.
+#
+# No part of any commercial cartridge is here and none is needed: the
+# program in sw/ and the tiles it draws were written for this example.
+# See README.md.
+name nes
+top nes_top
+
+# The ECP5 45F. The console alone is about the size of the iCE40 HX8K
+# the other two examples use, and then the frame buffer wants 24 KiB of
+# block RAM and the transmitter wants 126 MHz; README.md has the
+# numbers, including the ones that say why the small part is out.
+device ecp5-45f-CABGA381
+
+source rtl/nes_console.v
+source rtl/nes_video.v
+source rtl/nes_top.v
+constraints board/ecp5_dvi.rcf
+testbench tb/nes_tb.v
+
+depends mos6502 ^1.0.0 path ../../ip/mos6502
+depends ppu2c02 ^1.0.0 path ../../ip/ppu2c02
+depends dvi_tx ^1.0.0 path ../../ip/dvi_tx
