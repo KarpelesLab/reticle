@@ -1,0 +1,8 @@
+# A thousand sixteen-bit words with six of them preloaded: exactly one
+# RAMB18E1 in its 16-bit mode, whose contents go into INIT_00 and whose
+# word address sits on ADDRARDADDR[13:4]. Only the scalars are pinned.
+set_io -io_standard LVCMOS33 clk W5
+set_io -io_standard LVCMOS33 we V17
+set_io -io_standard LVCMOS33 rdata[0] U16
+create_clock -name sys -period 10.0 clk
+clock_domain sys clk

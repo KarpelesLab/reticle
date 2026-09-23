@@ -45,7 +45,7 @@ use reticle::ir::validate::validate;
 use reticle::source::SourceMap;
 
 /// The cases, each with the built-in device it targets.
-const CASES: [(&str, &str); 13] = [
+const CASES: [(&str, &str); 16] = [
     ("blinky_ice40", "ice40-hx1k-tq144"),
     ("ram_ice40", "ice40-hx1k-tq144"),
     ("logicram_ice40", "ice40-hx1k-tq144"),
@@ -59,6 +59,9 @@ const CASES: [(&str, &str); 13] = [
     ("clkbuf_ecp5", "ecp5-45f-CABGA381"),
     ("pll_ecp5", "ecp5-45f-CABGA381"),
     ("ddr_ecp5", "ecp5-45f-CABGA381"),
+    ("blinky_xc7", "xc7a35t-cpg236"),
+    ("ram_xc7", "xc7a35t-cpg236"),
+    ("pll_xc7", "xc7a35t-cpg236"),
 ];
 
 fn dir() -> PathBuf {
@@ -203,27 +206,38 @@ fn golden_fpga_flow() {
             )),
         }
 
-        let inputs = fpga::export_nextpnr(&run.design, top, run.device, &run.constraints)
-            .unwrap_or_else(|e| panic!("{name}: nextpnr export failed: {e}"));
-        // The golden file is named after the case, not after the module,
-        // so two cases of one family cannot collide; the extension is the
-        // one the export asks for.
-        let extension = Path::new(&inputs.constraints_name)
-            .extension()
-            .and_then(|e| e.to_str())
-            .unwrap_or("pcf");
-        expect(
-            &format!("{name}.{extension}"),
-            &inputs.pcf_or_lpf,
-            &mut failures,
-        );
-        expect(&format!("{name}.json"), &inputs.json, &mut failures);
-        assert_eq!(inputs.args[0], format!("nextpnr-{}", run.device.family));
+        // Only the families with a nextpnr back end have a JSON export;
+        // a family whose route is a vendor tool answers with the error
+        // that says so, which is checked in `a_vendor_family_says_so`.
+        if fpga::pnr_route(&run.device.family) == Some(fpga::PnrRoute::Nextpnr) {
+            let inputs = fpga::export_nextpnr(&run.design, top, run.device, &run.constraints)
+                .unwrap_or_else(|e| panic!("{name}: nextpnr export failed: {e}"));
+            // The golden file is named after the case, not after the
+            // module, so two cases of one family cannot collide; the
+            // extension is the one the export asks for.
+            let extension = Path::new(&inputs.constraints_name)
+                .extension()
+                .and_then(|e| e.to_str())
+                .unwrap_or("pcf");
+            expect(
+                &format!("{name}.{extension}"),
+                &inputs.pcf_or_lpf,
+                &mut failures,
+            );
+            expect(&format!("{name}.json"), &inputs.json, &mut failures);
+            assert_eq!(inputs.args[0], format!("nextpnr-{}", run.device.family));
+        }
 
         let vendor = fpga::export_vendor(&run.design, top, run.device, &run.constraints)
             .unwrap_or_else(|e| panic!("{name}: vendor export failed: {e}"));
         expect(&format!("{name}.xdc"), &vendor.xdc, &mut failures);
         assert!(vendor.verilog.contains("module "), "{name}: empty Verilog");
+        // The Verilog and the script are the files a vendor flow reads,
+        // so they are goldens too on the family whose route that is.
+        if fpga::pnr_route(&run.device.family) == Some(fpga::PnrRoute::Vendor) {
+            expect(&format!("{name}.v"), &vendor.verilog, &mut failures);
+            expect(&format!("{name}.tcl"), &vendor.script, &mut failures);
+        }
     }
     assert!(failures.is_empty(), "{}", failures.join("\n\n"));
 }
@@ -264,7 +278,7 @@ fn exports_are_acceptable_netlists() {
 /// the block RAM, the clock buffer, the LUTs and the flip-flops.
 #[test]
 fn every_layer_of_the_flow_is_exercised() {
-    let expected: [(&str, &[&str]); 13] = [
+    let expected: [(&str, &[&str]); 16] = [
         (
             "blinky_ice40",
             &["SB_LUT4", "SB_CARRY", "SB_IO", "SB_GB", "SB_DFFSR"],
@@ -289,6 +303,18 @@ fn every_layer_of_the_flow_is_exercised() {
         // element sits in front of it where one was asked for.
         ("ddr_ice40", &["SB_IO"]),
         ("ddr_ecp5", &["TRELLIS_IO", "IDDRX1F", "ODDRX1F", "DELAYG"]),
+        // The 7 series: a different IO primitive for each direction, a
+        // six-input LUT, and one flip-flop per kind of reset. The
+        // counter resets to 16, so one of its bits loads a one (FDSE)
+        // and the rest load zeros (FDRE); the output register resets
+        // asynchronously (FDCE).
+        (
+            "blinky_xc7",
+            &["LUT6", "FDRE", "FDSE", "FDCE", "IBUF", "OBUF", "BUFG"],
+        ),
+        ("ram_xc7", &["RAMB18E1", "IBUF", "OBUF"]),
+        // A PLL whose feedback loop is closed outside the block.
+        ("pll_xc7", &["PLLE2_BASE", "BUFG", "FDRE"]),
     ];
     for (name, device_name) in CASES {
         let run = run_case(name, device_name);
@@ -333,6 +359,9 @@ fn nextpnr_reads_the_export() {
     let mut failed = Vec::new();
     for (name, device_name) in CASES {
         let run = run_case(name, device_name);
+        if fpga::pnr_route(&run.device.family) != Some(fpga::PnrRoute::Nextpnr) {
+            continue;
+        }
         let top = run.design.top.unwrap();
         let inputs = fpga::export_nextpnr(&run.design, top, run.device, &run.constraints).unwrap();
         let tool = &inputs.args[0];
@@ -490,4 +519,242 @@ fn the_logic_fallback_answers_like_the_memory_it_replaced() {
     assert_eq!(report.bram_fallbacks[0].style, "flip-flops");
     assert!(!validate(&lowered).has_errors());
     assert_eq!(exercise(&lowered), wanted);
+}
+
+// ---------------------------------------------------------------------------
+// Xilinx 7 series
+//
+// Nothing below has been run on a part. What these check is what the
+// files say: that every cell is a primitive the device database
+// declares, that the block RAM carries the contents the design gave it,
+// that the constraints name pins Digilent's board file names, and that
+// the family's unsupported corners are reported rather than silently
+// mis-built.
+// ---------------------------------------------------------------------------
+
+/// The 7 series has no nextpnr back end in Reticle, and the export says
+/// so by name instead of failing obscurely or writing half a file.
+#[test]
+fn a_vendor_family_declines_the_nextpnr_export() {
+    let run = run_case("blinky_xc7", "xc7a35t-cpg236");
+    let top = run.design.top.unwrap();
+    assert_eq!(
+        fpga::pnr_route(&run.device.family),
+        Some(fpga::PnrRoute::Vendor)
+    );
+    let err = fpga::export_nextpnr(&run.design, top, run.device, &run.constraints)
+        .expect_err("the 7 series has no nextpnr flow");
+    let message = err.to_string();
+    for wanted in ["xc7", "xc7a35t-cpg236", "Vivado", "export_vendor"] {
+        assert!(
+            message.contains(wanted),
+            "`{message}` does not name {wanted}"
+        );
+    }
+}
+
+/// What a Basys 3 owner is actually handed: three files, named the way
+/// the script names them, holding a netlist of real primitives and a
+/// part string Vivado understands.
+#[test]
+fn the_basys3_export_is_the_three_files_vivado_reads() {
+    let run = run_case("blinky_xc7", "xc7a35t-cpg236");
+    let top = run.design.top.unwrap();
+    let inputs = fpga::export_vendor(&run.design, top, run.device, &run.constraints)
+        .expect("the vendor export");
+
+    // The part string Vivado wants is the die, the package and the
+    // speed grade run together.
+    assert!(
+        inputs.script.contains("-part xc7a35tcpg236-1"),
+        "{}",
+        inputs.script
+    );
+    assert_eq!(
+        inputs.args,
+        vec!["vivado", "-mode", "batch", "-source", "blinky.tcl"]
+    );
+    for step in [
+        "read_verilog blinky.v",
+        "read_xdc blinky.xdc",
+        "synth_design -top blinky",
+        "place_design",
+        "route_design",
+        "write_bitstream -force blinky.bit",
+    ] {
+        assert!(inputs.script.contains(step), "the script lacks `{step}`");
+    }
+
+    // The netlist instantiates 7-series primitives, with the pins those
+    // primitives have. `IBUF` takes the pad on `I` and `OBUF` on `O`,
+    // which is the reason the family needs one buffer per direction.
+    for instance in [
+        "IBUF clk$io0",
+        "OBUF led$io0",
+        "BUFG clk$gbuf",
+        "FDSE #(.INIT(1'b1))",
+        "FDCE #(.INIT(1'b0))",
+    ] {
+        assert!(
+            inputs.verilog.contains(instance),
+            "the Verilog lacks `{instance}`"
+        );
+    }
+    assert!(inputs.verilog.contains("LUT6 #(.INIT(64'h"));
+
+    // The XDC places the board's pins, and they are pins the part has.
+    for line in [
+        "set_property PACKAGE_PIN W5 [get_ports {clk}]",
+        "set_property IOSTANDARD LVCMOS33 [get_ports {sw[0]}]",
+        "set_property PACKAGE_PIN U16 [get_ports {led[0]}]",
+        "create_clock -name sys -period 10.000 [get_ports {clk}]",
+    ] {
+        assert!(inputs.xdc.contains(line), "the XDC lacks `{line}`");
+    }
+    for pin in ["W5", "U18", "V17", "U16"] {
+        let found = run.device.pin(pin).expect("a pin the database knows");
+        assert!(found.kind.is_io(), "{pin} cannot carry a signal");
+    }
+    assert_eq!(
+        run.device.pin("W5").unwrap().kind,
+        reticle::fpga::PinKind::Clock
+    );
+}
+
+/// Every pin constraint the board file states survives into the XDC,
+/// and every pin it names is one the device database lists, so a typo
+/// is an error here rather than a surprise in Vivado.
+#[test]
+fn the_board_constraints_round_trip_through_the_xdc() {
+    for case in ["blinky_xc7", "ram_xc7", "pll_xc7"] {
+        let run = run_case(case, "xc7a35t-cpg236");
+        let top = run.design.top.unwrap();
+        let xdc = fpga::export_vendor(&run.design, top, run.device, &run.constraints)
+            .expect("the vendor export")
+            .xdc;
+        assert!(
+            !run.diagnostics.contains("error["),
+            "{case}: {}",
+            run.diagnostics
+        );
+        for pin in &run.constraints.pins {
+            if pin.pin.is_empty() {
+                continue;
+            }
+            assert!(
+                run.device.pin(&pin.pin).is_some(),
+                "{case}: `{}` is not a pin of the part",
+                pin.pin
+            );
+            let line = format!(
+                "set_property PACKAGE_PIN {} [get_ports {{{}}}]",
+                pin.pin,
+                pin.signal()
+            );
+            assert!(xdc.contains(&line), "{case}: the XDC lacks `{line}`");
+        }
+    }
+}
+
+/// A memory with initial contents keeps them: the block RAM's
+/// `INIT_00` holds the words the design named, least significant word
+/// in the low bits, and every one of the sixty-four parameters is
+/// written so that the block's contents are stated in full.
+#[test]
+fn a_block_ram_carries_its_contents_into_the_netlist() {
+    let run = run_case("ram_xc7", "xc7a35t-cpg236");
+    assert_eq!(run.report.count("RAMB18E1"), 1);
+    let text = run.design.to_text();
+    // cafe, babe, dead, beef, 0001, 8000 as sixteen-bit words, word 0
+    // lowest: the six the design gave, then zeros.
+    assert!(
+        text.contains(
+            "INIT_00=256'h000000000000000000000000000000000000000080000001beefdeadbabecafe"
+        ),
+        "the contents are not in INIT_00"
+    );
+    for index in 0..64u32 {
+        assert!(
+            text.contains(&format!("INIT_{index:02X}=")),
+            "INIT_{index:02X} is missing"
+        );
+    }
+    // The 16-bit mode's word address sits on the top ten address pins,
+    // with the four below it tied low, which is how the 7-series block
+    // addresses in units of its narrowest mode.
+    assert!(text.contains("ADDRARDADDR={%raddr, 4'd0}"), "{text}");
+    // A whole-word write drives every byte enable, not just the first.
+    assert!(text.contains("WEBWE={%we, %we, %we, %we}"), "{text}");
+}
+
+/// The things this family cannot do are said out loud. A carry chain is
+/// declined with the reason rather than approximated, and the blocks
+/// Reticle cannot wire correctly are simply not declared.
+#[test]
+fn the_unsupported_corners_are_reported() {
+    use reticle::fpga::BelRole;
+    let run = run_case("blinky_xc7", "xc7a35t-cpg236");
+    let notes = run.report.to_text();
+    assert!(
+        notes.contains("CARRY4") && notes.contains("stay generic"),
+        "the carry chain is declined without saying so:\n{notes}"
+    );
+    // Declining is not the same as mis-building: the adder is still
+    // there, as LUT6s, and the netlist check is happy with it.
+    assert!(run.report.count("LUT6") > 0);
+    let top = run.design.top.unwrap();
+    assert!(fpga::check_nextpnr_json(&run.design, top, run.device, &run.constraints).is_empty());
+
+    let device = fpga::target("xc7a35t-cpg236").expect("the part");
+    assert!(
+        device.bel(BelRole::DdrIn).is_none() && device.bel(BelRole::DdrOut).is_none(),
+        "the 7-series file declares a DDR register it cannot wire"
+    );
+    assert!(device.bel(BelRole::IoDelay).is_none());
+    assert!(device.dsps.is_empty(), "DSP48E1 is deliberately undeclared");
+}
+
+/// The part's own figures, so that a change to the device file that
+/// contradicts the datasheet fails here.
+#[test]
+fn the_artix7_matches_its_datasheet_figures() {
+    use reticle::fpga::BelRole;
+    let device = fpga::target("xc7a35t-cpg236").expect("the part");
+    assert_eq!(device.family, "xc7");
+    assert_eq!(device.lut_size, 6);
+    assert_eq!(device.bel(BelRole::Lut).unwrap().name, "LUT6");
+    assert_eq!(device.bel(BelRole::Lut).unwrap().count, Some(20_800));
+    assert_eq!(device.bel(BelRole::Ff).unwrap().count, Some(41_600));
+    assert_eq!(device.clock_resources.global_buffers, 32);
+    // 100 RAMB18E1 of 18 kbit; Reticle uses the 16 kbit of data and
+    // leaves the parity bits, which is what the device file says.
+    assert_eq!(device.block_rams.len(), 1);
+    assert_eq!(device.block_rams[0].name, "RAMB18E1");
+    assert_eq!(device.block_rams[0].bits(), 16_384);
+    assert!(device.block_rams[0].has_byte_enable);
+    // One clock generator of each kind in each of the five tiles.
+    let plls: Vec<&str> = device
+        .clock_resources
+        .plls
+        .iter()
+        .map(|p| p.name.as_str())
+        .collect();
+    assert_eq!(plls, ["PLLE2_BASE", "MMCME2_BASE"]);
+    for pll in &device.clock_resources.plls {
+        assert_eq!(pll.count, Some(5));
+        assert!(pll.is_configurable());
+        // The loop is closed outside the block, so both ends are named.
+        assert_eq!(pll.port("fbout"), Some("CLKFBOUT"));
+        assert_eq!(pll.port("fb"), Some("CLKFBIN"));
+    }
+    // The carry element is recorded without a port map, which is what
+    // makes carry mapping decline rather than guess.
+    assert!(!device.bel(BelRole::Carry).unwrap().has_ports(&["ci"]));
+    // No tile grid: Reticle cannot state the SLICE array of this part.
+    assert!(device.tile_grid.is_none());
+    // The pin list is the Basys 3's, and it is not the whole package.
+    assert!(device.pins_partial);
+    assert!(device.pin("B18").is_some(), "the UART receive pin");
+    assert!(device.pin("A18").is_some(), "the UART transmit pin");
+    assert!(device.pin("G19").is_some(), "the first VGA red bit");
 }

@@ -1,0 +1,17 @@
+device: xc7a35t-cpg236
+io:
+  clk (1 bits) -> IBUF at pin W5 as LVCMOS33
+  d (1 bits) -> IBUF at pin V17 as LVCMOS33
+  q (1 bits) -> OBUF at pin U16 as LVCMOS33
+pll:
+  sys -> PLLE2_BASE from clk at 100.000 MHz: 50.000 MHz for 50.000 MHz asked (+0.0 ppm), vco 800.000 MHz, DIVCLK_DIVIDE=1 CLKFBOUT_MULT=8 CLKOUT0_DIVIDE=16
+clocks:
+  sys (8 flip-flops) -> BUFG
+logic:
+  0 LUTs, depth 0
+netlist:
+  1 x BUFG
+  8 x FDRE
+  2 x IBUF
+  1 x OBUF
+  1 x PLLE2_BASE

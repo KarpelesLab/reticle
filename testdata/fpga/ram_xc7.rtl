@@ -1,0 +1,20 @@
+top ram1k
+
+module ram1k
+  net %clk u1 wire
+  net %we u1 wire
+  net %waddr u10 wire
+  net %raddr u10 wire
+  net %wdata u16 wire
+  net %rdata u16 wire
+  port clk in %clk
+  port we in %we
+  port waddr in %waddr
+  port raddr in %raddr
+  port wdata in %wdata
+  port rdata out %rdata
+  memory @mem 1024 x u16
+    init 16'hcafe 16'hbabe 16'hdead 16'hbeef 16'h0001 16'h8000
+  cell wr memwr @mem clocked (addr=%waddr, data=%wdata, en=%we, clk=%clk) -> ()
+  cell rd memrd @mem clocked (addr=%raddr, clk=%clk, en=1'd1) -> (data=%rdata)
+end

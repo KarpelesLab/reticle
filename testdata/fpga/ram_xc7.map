@@ -1,0 +1,16 @@
+device: xc7a35t-cpg236
+block RAM:
+  mem (1024x16) -> 1 x RAMB18E1 in 16x1024 mode (1 wide, 1 deep, initialised)
+io:
+  clk (1 bits) -> IBUF at pin W5 as LVCMOS33
+  we (1 bits) -> IBUF at pin V17 as LVCMOS33
+  waddr (10 bits) -> IBUF
+  raddr (10 bits) -> IBUF
+  wdata (16 bits) -> IBUF
+  rdata (16 bits) -> OBUF
+logic:
+  0 LUTs, depth 0
+netlist:
+  38 x IBUF
+  16 x OBUF
+  1 x RAMB18E1

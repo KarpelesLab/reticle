@@ -1,0 +1,21 @@
+top blinky
+
+module blinky
+  net %clk u1 wire
+  net %rst u1 wire
+  net %sw u4 wire
+  net %led u4 wire
+  net %count u8 wire
+  net %next u8 wire
+  net %tick u1 wire
+  net %mix u4 wire
+  port clk in %clk
+  port rst in %rst
+  port sw in %sw
+  port led out %led
+  cell inc add (a=%count, b=8'd1) -> (y=%next)
+  cell counter dff pos srst pos 8'd16 (clk=%clk, d=%next, rst=%rst) -> (q=%count)
+  assign %tick = %count[0:0]
+  assign %mix = xor(%count[7:4], %sw)
+  cell out dff pos en arst pos 4'd0 (clk=%clk, d=%mix, en=%tick, rst=%rst) -> (q=%led)
+end

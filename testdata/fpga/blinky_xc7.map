@@ -1,0 +1,20 @@
+device: xc7a35t-cpg236
+io:
+  clk (1 bits) -> IBUF at pin W5 as LVCMOS33
+  rst (1 bits) -> IBUF at pin U18 as LVCMOS33
+  sw (4 bits) -> IBUF
+  led (4 bits) -> OBUF
+clocks:
+  clk (12 flip-flops) -> BUFG
+notes:
+  `xc7a35t-cpg236` describes the carry element `CARRY4` without a (ci, i0, i1, co) port map, so 1 adder(s) stay generic
+logic:
+  13 LUTs, depth 2
+netlist:
+  1 x BUFG
+  4 x FDCE
+  7 x FDRE
+  1 x FDSE
+  6 x IBUF
+  13 x LUT6
+  4 x OBUF

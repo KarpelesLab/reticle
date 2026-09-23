@@ -1,0 +1,13 @@
+# The same shift register on a Basys 3: its 100 MHz oscillator, and a
+# `sys` clock asked for at 50 MHz, which a PLLE2_BASE makes exactly with
+# DIVCLK_DIVIDE=1, CLKFBOUT_MULT=8 (an 800 MHz VCO, the bottom of the
+# -1 grade's band) and CLKOUT0_DIVIDE=16. The request is a `clock_mhz`
+# attribute on the net rather than a line here.
+#
+# What to look for in the export: CLKFBOUT is wired back to CLKFBIN on a
+# net of its own. A 7-series PLL does not close that loop inside the
+# block, and one left open would lock onto nothing.
+set_io -io_standard LVCMOS33 clk W5
+set_io -io_standard LVCMOS33 d V17
+set_io -io_standard LVCMOS33 q U16
+create_clock -name osc -period 10.0 clk

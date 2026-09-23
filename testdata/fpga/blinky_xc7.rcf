@@ -1,0 +1,23 @@
+# A Basys 3 blinky: the board's 100 MHz oscillator on W5, the centre
+# pushbutton as a reset, four slide switches and four LEDs. Every pin
+# here is a line of Digilent's published Basys-3-Master.xdc; see
+# src/fpga/devices/xc7.dev for the provenance of the whole list.
+#
+# The counter resets to 16 rather than to 0, which is what makes four of
+# its eight bits reset and one of them set: the 7 series has no flip-flop
+# that does both, so the bit that loads a one becomes an FDSE and the
+# rest FDREs. The output register resets asynchronously and has a clock
+# enable, so it is an FDCE.
+set_io -io_standard LVCMOS33 clk W5
+set_io -io_standard LVCMOS33 rst U18
+set_io -io_standard LVCMOS33 sw[0] V17
+set_io -io_standard LVCMOS33 sw[1] V16
+set_io -io_standard LVCMOS33 sw[2] W16
+set_io -io_standard LVCMOS33 sw[3] W17
+set_io -io_standard LVCMOS33 -drive 12 -slew slow led[0] U16
+set_io -io_standard LVCMOS33 -drive 12 -slew slow led[1] E19
+set_io -io_standard LVCMOS33 -drive 12 -slew slow led[2] U19
+set_io -io_standard LVCMOS33 -drive 12 -slew slow led[3] V19
+create_clock -name sys -period 10.0 clk
+clock_domain sys clk
+set_false_path -from rst
