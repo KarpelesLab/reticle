@@ -1,0 +1,42 @@
+# vga_out: VGA video output for 640x480, 800x600 or 1280x720 at 60 Hz.
+# The raster is `dvi_tx`'s `video_timing`, reached through the `depends`
+# line below rather than copied into this package, so the timings and the
+# sync polarities are stated once for both video paths. What this block
+# adds is a colour truncation to the board's bits per channel, a gate
+# that forces black outside the active area, and two sync pins. No
+# encoding, no serialiser and no double-data-rate output, which is why it
+# builds for a part — the Xilinx 7 series, for one — whose device file
+# declares no DDR register and whose board has a resistor ladder and no
+# TMDS connector.
+name vga_out
+version 1.0.0
+license MIT
+description "VGA transmitter: standard video timings, colour truncated to the board's bits per channel, blanking forced to black, syncs at the mode's polarity"
+
+top vga_out
+target ice40
+target ecp5
+target xc7
+
+source rtl/vga_out.v
+
+depends dvi_tx ^1.0.0
+
+param MODE int 0 0..2
+param BPC int 4 1..8
+
+port clk in
+port rst_n in
+port pix_en in
+port de out
+port frame out
+port x out 12
+port y out 12
+port r in 8
+port g in 8
+port b in 8
+port vga_r out BPC
+port vga_g out BPC
+port vga_b out BPC
+port vga_hsync out
+port vga_vsync out
