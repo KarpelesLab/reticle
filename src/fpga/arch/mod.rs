@@ -499,7 +499,22 @@ fn clamp_span(origin: u32, span: i32, target: u32) -> u32 {
 }
 
 /// One programmable interconnect point of the graph.
-#[derive(Clone, Debug, PartialEq, Eq)]
+///
+/// # Why the bits are not here
+///
+/// They used to be: a `Vec<ConfigBit>` of its own, per pip. That is
+/// fine for a fabric declared at 14 × 18 tiles and hopeless for a real
+/// one. An `INT_L` has 3636 pips and an `xc7a50t` has 5650 `INT_L`s, so
+/// a whole die is 20.6 million pips; with a vector each that is around
+/// 96 bytes a pip before any routing happens, and the vectors hold
+/// 5650 identical copies of the same 3636 patterns.
+///
+/// So the patterns are **interned**: every distinct list of bits is
+/// stored once in the graph and a pip keeps a [`BitsId`] into it.
+/// [`RoutingGraph::pip_bits`] reads them back. A pip is 20 bytes, and
+/// [`RoutingGraph::heap_bytes`] measures what the whole graph costs
+/// rather than estimating it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Pip {
     /// The node the pip reads.
     pub from: NodeId,
@@ -507,14 +522,18 @@ pub struct Pip {
     pub to: NodeId,
     /// The tile that holds it, which is the tile its bits live in.
     pub tile: (u32, u32),
-    /// The bits to set in that tile to switch it on.
-    pub config_bits: Vec<ConfigBit>,
+    /// Which interned bit pattern switches it on; read it with
+    /// [`RoutingGraph::bits`].
+    pub bits: BitsId,
 }
 
 /// An index into [`RoutingGraph::nodes`].
 pub type NodeId = u32;
 /// An index into [`RoutingGraph::pips`].
 pub type PipId = u32;
+/// An index into a [`RoutingGraph`]'s table of configuration bit
+/// patterns; see [`Pip`].
+pub type BitsId = u32;
 
 /// One placeable location of the graph.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -562,6 +581,10 @@ pub struct RoutingGraph {
     /// How many declared pips and bel pins were dropped because their
     /// wire reference left the grid.
     pub dangling: usize,
+    /// Every distinct configuration bit pattern, end to end.
+    bit_pool: Vec<ConfigBit>,
+    /// Where each interned pattern starts and how long it is.
+    bit_spans: Vec<(u32, u32)>,
     /// Start of each node's outgoing pip list in `out_pips`.
     out_start: Vec<u32>,
     /// Outgoing pips, grouped by source node.
@@ -627,6 +650,29 @@ impl RoutingGraph {
             index.get(&(ox, oy, wref.name.clone())).copied()
         };
 
+        // Every distinct bit pattern once. A pattern belongs to a tile
+        // *type*, so every tile of that type would otherwise store its
+        // own copy; on a real 7-series fabric that is thousands of
+        // copies of each.
+        let mut bit_pool: Vec<ConfigBit> = Vec::new();
+        let mut bit_spans: Vec<(u32, u32)> = vec![(0, 0)];
+        let mut interned: HashMap<Vec<ConfigBit>, BitsId> = HashMap::new();
+        interned.insert(Vec::new(), 0);
+        let mut intern = |bits: &[ConfigBit]| -> BitsId {
+            if bits.is_empty() {
+                return 0;
+            }
+            if let Some(id) = interned.get(bits) {
+                return *id;
+            }
+            let id = BitsId::try_from(bit_spans.len()).expect("bit patterns fit in 2^32");
+            let start = u32::try_from(bit_pool.len()).expect("bit pool fits in 2^32");
+            bit_pool.extend_from_slice(bits);
+            bit_spans.push((start, u32::try_from(bits.len()).unwrap_or(0)));
+            interned.insert(bits.to_vec(), id);
+            id
+        };
+
         let mut pips: Vec<Pip> = Vec::new();
         let mut sites: Vec<ArchSite> = Vec::new();
         for y in 0..arch.height {
@@ -662,7 +708,7 @@ impl RoutingGraph {
                         from,
                         to,
                         tile: (x, y),
-                        config_bits: pip.bits.clone(),
+                        bits: intern(&pip.bits),
                     });
                 }
             }
@@ -677,6 +723,8 @@ impl RoutingGraph {
             width: arch.width,
             height: arch.height,
             dangling,
+            bit_pool,
+            bit_spans,
             out_start,
             out_pips,
             in_start,
@@ -704,6 +752,56 @@ impl RoutingGraph {
     /// The pip a pip id names.
     pub fn pip(&self, pip: PipId) -> &Pip {
         &self.pips[pip as usize]
+    }
+
+    /// The bits an interned pattern holds; see [`Pip`].
+    ///
+    /// Pattern 0 is always the empty one, which is what the model means
+    /// by a connection that is always there.
+    pub fn bits(&self, id: BitsId) -> &[ConfigBit] {
+        let (start, len) = self.bit_spans[id as usize];
+        &self.bit_pool[start as usize..start as usize + len as usize]
+    }
+
+    /// The bits that switch a pip on.
+    pub fn pip_bits(&self, pip: PipId) -> &[ConfigBit] {
+        self.bits(self.pips[pip as usize].bits)
+    }
+
+    /// How many distinct bit patterns the pips share between them.
+    pub fn bit_patterns(&self) -> usize {
+        self.bit_spans.len()
+    }
+
+    /// How many bytes the graph holds, counting every allocation it owns.
+    ///
+    /// This is a measurement and not an estimate: it is what decides how
+    /// much of a real fabric fits, so it is computed from the vectors
+    /// themselves rather than written down in a comment that can drift.
+    /// A [`Wire`]'s name is counted as its own bytes plus its `String`
+    /// header, which is where most of what is left now goes.
+    pub fn heap_bytes(&self) -> usize {
+        use std::mem::size_of;
+        let mut bytes = self.nodes.capacity() * size_of::<Wire>();
+        for node in &self.nodes {
+            bytes += node.name.capacity();
+        }
+        bytes += self.pips.capacity() * size_of::<Pip>();
+        bytes += self.bit_pool.capacity() * size_of::<ConfigBit>();
+        bytes += self.bit_spans.capacity() * size_of::<(u32, u32)>();
+        bytes += (self.out_start.capacity() + self.in_start.capacity()) * size_of::<u32>();
+        bytes += (self.out_pips.capacity() + self.in_pips.capacity()) * size_of::<PipId>();
+        for site in &self.sites {
+            bytes += size_of::<ArchSite>()
+                + site.name.capacity()
+                + site.kind.capacity()
+                + site.bel.capacity()
+                + site.pins.capacity() * size_of::<(String, NodeId)>();
+            for (role, _) in &site.pins {
+                bytes += role.capacity();
+            }
+        }
+        bytes
     }
 
     /// The site of that name.

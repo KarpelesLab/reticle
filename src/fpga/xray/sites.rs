@@ -91,45 +91,52 @@ fn site_coordinate(name: &str) -> Option<(u32, u32)> {
     Some((x.parse().ok()?, y.parse().ok()?))
 }
 
+/// The part of a site name before its coordinates: `SLICE_X10Y0` is
+/// `SLICE`, `IOB_X0Y11` is `IOB`.
+fn site_family(name: &str) -> &str {
+    name.rsplit_once('_').map_or(name, |(head, _)| head)
+}
+
 /// Which of a tile's sites the feature prefix `prefix` describes.
 ///
 /// # The rule, and how it was arrived at
 ///
-/// A prefix is `<BASE>_<AXIS><index>`. The sites it can mean are the
-/// tile's sites whose *type* is `BASE` (`SLICEL_X0` in a `CLBLM_L`, where
-/// the tile holds one `SLICEM` and one `SLICEL`, so the type settles it
-/// outright) or, failing that, whose *name* begins `BASE_` (`IOB_Y0` and
-/// the sites `IOB_X0Y11`, `IOB_X0Y12`). Those candidates are then ranked
-/// along the axis and `index` picks one.
+/// A prefix is `<BASE>_<AXIS><index>`, and the index is the site's
+/// position **within its tile**, counted over every site of the same
+/// family. The family is the part of a site's name before its
+/// coordinates: `SLICE`, `IOB`, `ILOGIC`. `BASE` is the site's *type*,
+/// which is not always the family — a `CLBLM_L` holds `SLICE_X10Y0` of
+/// type `SLICEM` and `SLICE_X11Y0` of type `SLICEL`, and its prefixes
+/// are `SLICEM_X0` and `SLICEL_X1`: one family, two types, positions 0
+/// and 1.
+///
+/// So the family is found from the type where the tile has one of that
+/// type (`SLICEM` → `SLICE`) and taken to be `BASE` itself where it does
+/// not (`IOB_Y0`, whose sites are typed `IOB33S` and `IOB33M`). Every
+/// site of that family is then ranked along the axis and `index` picks
+/// one; where the type was known it is checked, so a tile that breaks
+/// the assumption gives nothing rather than the wrong site.
 ///
 /// **`X` ranks ascending and `Y` ranks descending.** The `X` direction
-/// follows from `CLBLM_L`, where the type match is unambiguous: its
-/// `SLICEM_X0` is `SLICE_X10Y0` and its `SLICEL_X1` is `SLICE_X11Y0`, so
-/// index 0 is the *lower* `X`. The `Y` direction is the surprising one
-/// and is **measured**: over the four Vivado harness designs in
-/// `artix7/harness/`, ten IO tiles configure exactly one of their two
-/// halves, and in all ten the half named `_Y0` is the one serving the
-/// *higher* site `Y` — prjxray numbers a bel by its position down the
-/// tile as the grid draws it, and the grid's rows run opposite to a
-/// site's `Y`. `tests/fpga_xray.rs` re-measures it against the database
-/// rather than trusting this paragraph.
+/// follows from `CLBLM_L`, where the type settles which slice is which:
+/// its `SLICEM_X0` is `SLICE_X10Y0`, the *lower* `X`. The `Y` direction
+/// is the surprising one and is **measured**: over the four Vivado
+/// harness designs in `artix7/harness/`, ten IO tiles configure exactly
+/// one of their two halves, and in all ten the half named `_Y0` is the
+/// one serving the *higher* site `Y` — prjxray numbers a bel by its
+/// position down the tile as the grid draws it, and the grid's rows run
+/// opposite to a site's `Y`. `tests/fpga_xray.rs` re-measures it against
+/// the database rather than trusting this paragraph.
 pub(super) fn site_of_prefix<'a>(tile: &'a XrayTile, prefix: &str) -> Option<&'a (String, String)> {
     let (base, axis, index) = split_prefix(prefix)?;
 
-    let by_type: Vec<&(String, String)> = tile
+    let typed = tile.sites.iter().find(|(_, kind)| kind == base);
+    let family = typed.map_or(base, |(name, _)| site_family(name));
+    let mut candidates: Vec<&(String, String)> = tile
         .sites
         .iter()
-        .filter(|(_, site_type)| site_type == base)
+        .filter(|(name, _)| site_family(name) == family)
         .collect();
-    let mut candidates = if by_type.is_empty() {
-        let head = format!("{base}_");
-        tile.sites
-            .iter()
-            .filter(|(name, _)| name.starts_with(&head))
-            .collect::<Vec<_>>()
-    } else {
-        by_type
-    };
     if candidates.is_empty() {
         return None;
     }
@@ -139,7 +146,15 @@ pub(super) fn site_of_prefix<'a>(tile: &'a XrayTile, prefix: &str) -> Option<&'a
         Axis::Y => candidates
             .sort_by_key(|(name, _)| site_coordinate(name).map(|c| std::cmp::Reverse(c.1))),
     }
-    candidates.get(index as usize).copied()
+    let picked = candidates.get(index as usize).copied()?;
+    if typed.is_some() && picked.1 != base {
+        // The tile does hold a site of this type, but not at this
+        // position: the numbering assumption above does not describe
+        // this tile, and naming the wrong site would be worse than
+        // naming none.
+        return None;
+    }
+    Some(picked)
 }
 
 // ---------------------------------------------------------------------------
@@ -222,7 +237,7 @@ pub(super) fn bel_pins(tile_type: &str, prefix: &str, sub: &str) -> Vec<BelPin> 
     // from); `xc7.dev` calls the same two roles `din` and `dout`. The
     // pad itself is deliberately absent: it is a package ball, not a
     // wire the router can reach, and a design's port net ends there.
-    if base == "IOB" && (tile_type.ends_with("IOB33") || tile_type.ends_with("IOB18")) {
+    if base == "IOB" && (tile_type == "LIOB33" || tile_type == "RIOB33") {
         return vec![
             BelPin {
                 role: "din",

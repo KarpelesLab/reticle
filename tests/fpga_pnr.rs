@@ -289,11 +289,11 @@ fn the_bitstream_round_trips() {
 
         // Every pip the router used contributed its bits.
         for route in done.pnr.routing.routes() {
-            for pip in &route.pips {
-                let pip = done.pnr.graph.pip(*pip);
-                for bit in &pip.config_bits {
+            for id in &route.pips {
+                let tile = done.pnr.graph.pip(*id).tile;
+                for bit in done.pnr.graph.pip_bits(*id) {
                     assert_eq!(
-                        bitstream.get(pip.tile, *bit),
+                        bitstream.get(tile, *bit),
                         Some(true),
                         "{name}: a pip's bit is not set"
                     );

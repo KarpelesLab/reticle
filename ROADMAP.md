@@ -355,14 +355,26 @@ FPGA:
       --bitstream <file>` takes `examples/basys3/sw_led.v` to a 2.19 MB
       `.bit` whose IDCODE, frame addresses, frame count, packet sequence
       and both CRCs agree with a bitstream Vivado made for the same
-      part. **It is not routed and it configures nothing**: the database
-      ships bit positions but not the tile-type wire lists that say
-      which wire a bel pin reaches. The `xc7a50t` is also 20.6 million
-      pips, which this crate's routing graph cannot hold, so the loader
-      takes a region and refuses a larger one with the numbers.
-      `docs/fpga-xray.md` says what is established, what the fabric
-      measures, and what remains before an LED could light. NOTHING
-      PRODUCED BY ANY OF IT HAS BEEN LOADED INTO A PART.
+      part. `docs/fpga-xray.md` says what is established, what the
+      fabric measures, and what remains before an LED could light.
+      NOTHING PRODUCED BY ANY OF IT HAS BEEN LOADED INTO A PART.
+- [x] And routed. `ppips_<type>.db` turned out to hold the fixed wiring
+      between a site pin and the interconnect, which is what phase one
+      was missing; `fpga::xray::sites` supplies the pin *names* from
+      UG474 and UG471 and the three orientations the database only
+      implies, each re-derived by a test. `sw_led` places and routes on
+      the real fabric — 3 of 3 signals, 71 pips, 85 configuration bits —
+      and `XrayDatabase::decode` reads a bitstream back into the
+      database's own feature names so that Reticle's can be compared
+      with the working one `prjxray-db` ships for the same board. On the
+      three IO blocks and two IO-logic tiles the milestone uses, the two
+      agree **feature for feature**; the interconnect between them
+      differs, because two routers chose two legal paths with the same
+      ends. Interning the pips' bit patterns brought a pip to twenty
+      bytes, so the whole `xc7a50t` is now a graph this crate can hold:
+      30.9 million edges, 1386 MiB, about eight seconds. Still nothing
+      loaded into a part, and Vivado's own bitstream sets 1315 bits that
+      nothing in the database names.
 - [x] The other half of that sentence: a **JTAG programmer**, so a
       bitstream can be loaded into a board without a vendor tool.
       `reticle program <file.bit>` drives an FTDI FT2232H over USB and

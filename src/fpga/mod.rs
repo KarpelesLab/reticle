@@ -34,13 +34,19 @@
 //!
 //! What comes out is a structurally valid Xilinx bitstream whose IDCODE,
 //! frame addresses, frame count, packet sequence and CRCs agree with one
-//! Vivado made for the same part, and which **is not routed and
-//! configures nothing**, because the database ships bit positions and
-//! not the tile-type wire lists that say which wire a bel pin reaches.
-//! `docs/fpga-xray.md` sets out what is established, what the fabric
-//! measures (18 055 tiles and 20.6 million pips, which is more than this
-//! crate's routing graph can hold) and what remains. **Nothing produced
-//! by any of it has been loaded into a part.**
+//! Vivado made for the same part. The milestone design —
+//! `examples/basys3/sw_led.v`, two switches through a lookup table to an
+//! LED — places and routes on it, and decoded back into the database's
+//! own feature names by [`XrayDatabase::decode`] the configuration it
+//! puts on the IO blocks and IO logic is identical to what Vivado put
+//! there for the same three pins of the same board.
+//!
+//! That is the strongest thing that can be said without a cable, and it
+//! is not "it works". `docs/fpga-xray.md` sets out what is established,
+//! what the fabric measures (18 055 tiles, 30.9 million graph edges and
+//! 1386 MiB for the whole die) and what remains — including the 1315
+//! bits of Vivado's own bitstream that nothing in the database names.
+//! **Nothing produced by any of it has been loaded into a part.**
 //!
 //! # The device-database model
 //!
@@ -209,7 +215,10 @@ pub use techcells::{CellMapReport, map_cells};
 pub use xc7::{
     BitHeader, FrameAddress, FrameData, FrameLayout, FrameMap, Part, TileBits, Xc7Error,
 };
-pub use xray::{XrayDatabase, XrayError, XrayFabric, XrayOptions, XrayStats};
+pub use xray::{
+    Decoded, Ppip, PpipKind, SiteCoverage, XrayDatabase, XrayError, XrayFabric, XrayOptions,
+    XrayStats,
+};
 
 use crate::diag::Diagnostics;
 use crate::source::SourceMap;

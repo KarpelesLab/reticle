@@ -15,7 +15,7 @@
 //! will not program a part. Swapping in a real database makes it one
 //! without a line of code changing here, because nothing in this module
 //! knows what a bit *means*: every position comes from the architecture,
-//! as a [`Pip`](super::arch::Pip)'s `config_bits` or a bel's
+//! as a [`Pip`](super::arch::Pip)'s interned bits or a bel's
 //! [`ConfigEntry`]. What such a database has to supply is listed in
 //! [`super::arch`].
 //!
@@ -38,7 +38,7 @@
 //!
 //! # What ends up set
 //!
-//! - every pip a route uses contributes its `config_bits` in the tile
+//! - every pip a route uses contributes its bits in the tile
 //!   that holds it;
 //! - every placed cell contributes the bits its bel's
 //!   [`ConfigEntry::Cell`] entry gives for that primitive (which is how
@@ -639,10 +639,10 @@ pub fn generate(
     }
 
     for route in routing.routes() {
-        for pip in &route.pips {
-            let pip = graph.pip(*pip);
-            for bit in &pip.config_bits {
-                bitstream.set(pip.tile, *bit)?;
+        for id in &route.pips {
+            let tile = graph.pip(*id).tile;
+            for bit in graph.pip_bits(*id) {
+                bitstream.set(tile, *bit)?;
             }
         }
     }

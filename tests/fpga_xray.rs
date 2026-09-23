@@ -36,7 +36,7 @@ use std::path::Path;
 use reticle::fpga::xc7::{
     self, BitHeader, Command, FrameAddress, Packet, Register, WORDS_PER_FRAME,
 };
-use reticle::fpga::xray::{GridRegion, XrayDatabase, XrayError, XrayOptions};
+use reticle::fpga::xray::{Decoded, GridRegion, XrayDatabase, XrayError, XrayOptions};
 use reticle::ir::memfile::FileProvider;
 
 /// The Basys 3's part, and the IDCODE `part.json` gives it.
@@ -133,20 +133,77 @@ fn the_flow_refuses_a_database_for_another_part() {
     assert!(matches!(err, XrayError::WrongPart { .. }), "{err}");
 }
 
+/// A region bigger than the limit is refused with the numbers, not with
+/// a dead machine.
+///
+/// The whole `xc7a50t` does fit now — see
+/// [`the_whole_die_is_a_graph_this_crate_can_hold`] for what it costs —
+/// so the refusal is shown with a limit small enough to trip it, which
+/// is also the case a user hits on a part larger than their memory.
 #[test]
-fn the_whole_die_is_measured_and_refused_with_numbers() {
+fn a_region_past_the_limit_is_refused_with_numbers() {
     let Some(root) = chipdb() else { return };
     let db = XrayDatabase::open(&DiskFiles, &root, DEVICE, &XrayOptions::new()).unwrap();
-    // No region is the whole `xc7a50t`, which this crate's routing graph
-    // cannot hold. The loader counts before it allocates, so this is a
-    // measurement rather than a crash.
-    let err = db.load(&DiskFiles, &XrayOptions::new()).unwrap_err();
+    let mut options = XrayOptions::new();
+    options.max_pips = 1_000_000;
+    let err = db.load(&DiskFiles, &options).unwrap_err();
     let XrayError::TooLarge { pips, tiles, limit } = err else {
-        panic!("the whole die loaded, which this crate's graph cannot hold: {err}");
+        panic!("a million-edge limit did not stop the whole die: {err}");
     };
-    eprintln!("whole die: {tiles} tile(s), {pips} pip(s), limit {limit}");
+    eprintln!("whole die: {tiles} tile(s), {pips} edge(s), limit {limit}");
     assert_eq!(tiles, 18_055);
     assert!(pips > 20_000_000, "{pips}");
+    assert_eq!(limit, 1_000_000);
+    // And the message carries all three numbers, because "too large" on
+    // its own tells nobody what to do about it.
+    let text = db.load(&DiskFiles, &options).unwrap_err().to_string();
+    for number in ["18055", "1000000"] {
+        assert!(text.contains(number), "{text}");
+    }
+}
+
+/// The whole die, expanded into a routing graph, measured.
+///
+/// This is what phase one could not do: with a `Vec<ConfigBit>` per pip
+/// the same 3636 interconnect patterns were copied into each of 5650
+/// tiles. Interning them (see `fpga::Pip`) brings a pip down to twenty
+/// bytes and the whole `xc7a50t` inside two gigabytes.
+///
+/// It is `#[ignore]`d because it allocates that two gigabytes and takes
+/// about eight seconds; `cargo test -- --ignored` runs it. The numbers
+/// it prints are the ones `docs/fpga-xray.md` quotes.
+#[test]
+#[ignore = "allocates about 2 GiB and takes about 8 s; run it with --ignored"]
+fn the_whole_die_is_a_graph_this_crate_can_hold() {
+    let Some(root) = chipdb() else { return };
+    let db = XrayDatabase::open(&DiskFiles, &root, DEVICE, &XrayOptions::new()).unwrap();
+    // No region is the whole `xc7a50t`, and the default limit is set
+    // from the measurement below rather than from a guess.
+    let fabric = db.load(&DiskFiles, &XrayOptions::new()).unwrap();
+    assert_eq!(fabric.stats.tiles_loaded, 18_055);
+    let started = std::time::Instant::now();
+    let graph = fabric.arch.build_graph();
+    let bytes = graph.heap_bytes();
+    eprintln!(
+        "whole die: {} node(s), {} pip(s) ({} declared edges dropped at the grid's edge), \
+         {} distinct bit pattern(s), {} MiB, built in {:?}",
+        graph.nodes.len(),
+        graph.pips.len(),
+        graph.dangling,
+        graph.bit_patterns(),
+        bytes / (1024 * 1024),
+        started.elapsed()
+    );
+    if let Ok(status) = std::fs::read_to_string("/proc/self/status") {
+        for line in status.lines().filter(|l| l.starts_with("VmHWM")) {
+            eprintln!("peak {line}");
+        }
+    }
+    assert!(graph.pips.len() > 30_000_000, "{}", graph.pips.len());
+    // The patterns are shared: five thousand interconnect tiles do not
+    // each own a copy.
+    assert!(graph.bit_patterns() < 20_000, "{}", graph.bit_patterns());
+    assert!(bytes < 2 * 1024 * 1024 * 1024, "{bytes} bytes");
 }
 
 #[test]
@@ -485,11 +542,17 @@ fn the_milestone_design_reaches_a_bit_file() {
     let Some(features) = milestone(&root) else {
         return;
     };
-    for (tile, feature) in &features {
+    eprintln!("{}", features.to_text());
+    for (tile, feature) in &features.features {
         eprintln!("  {tile}.{feature}");
     }
+    // Every bit this flow sets, it can name. That is not true of
+    // Vivado's bitstream and it is the difference between the two that
+    // matters; see `the_io_path_is_the_one_vivado_built`.
+    assert_eq!(features.unexplained, 0, "a bit this flow set has no name");
     let has = |needle: &str| {
         features
+            .features
             .iter()
             .any(|(t, f)| format!("{t}.{f}").contains(needle))
     };
@@ -517,7 +580,10 @@ fn the_milestone_design_reaches_a_bit_file() {
     assert!(has("INT_L_X0Y3.IMUX_L34."), "the led out of the fabric");
     // And a lookup table with a truth table in it.
     assert!(
-        features.iter().any(|(_, f)| f.contains("LUT.INIT[")),
+        features
+            .features
+            .iter()
+            .any(|(_, f)| f.contains("LUT.INIT[")),
         "the lut"
     );
 }
@@ -527,7 +593,7 @@ fn the_milestone_design_reaches_a_bit_file() {
 ///
 /// `None` when the crate was published without `examples/`.
 #[cfg(all(feature = "verilog", feature = "synth"))]
-fn milestone(root: &str) -> Option<Vec<(String, String)>> {
+fn milestone(root: &str) -> Option<Decoded> {
     use reticle::diag::Diagnostics;
     use reticle::fpga::place::{PlaceOptions, place};
     use reticle::fpga::{Constraints, FpgaOptions, Netlist, bitstream, synthesize_for, target};
@@ -698,7 +764,7 @@ fn milestone(root: &str) -> Option<Vec<(String, String)>> {
 /// Reading it back through the same decoder gives an oracle: not a
 /// story about what a bitstream ought to contain, but what one that
 /// works does contain.
-fn vivado(root: &str) -> Option<Vec<(String, String)>> {
+fn vivado(root: &str) -> Option<Decoded> {
     let bytes = harness(root)?;
     let db = XrayDatabase::open(&DiskFiles, root, DEVICE, &XrayOptions::new()).unwrap();
     let part = db.part(&DiskFiles).unwrap();
@@ -710,15 +776,6 @@ fn vivado(root: &str) -> Option<Vec<(String, String)>> {
     }
     let frames = xc7::FrameData::from_stream(part.layout.clone(), bit.frames.clone()).unwrap();
     Some(db.decode(&DiskFiles, &frames).unwrap())
-}
-
-/// Every feature a decoding sets in one tile.
-fn at<'a>(features: &'a [(String, String)], tile: &str) -> Vec<&'a str> {
-    features
-        .iter()
-        .filter(|(t, _)| t == tile)
-        .map(|(_, f)| f.as_str())
-        .collect()
 }
 
 /// **The oracle.** What Reticle writes for the milestone's IO path,
@@ -746,42 +803,36 @@ fn the_io_path_is_the_one_vivado_built() {
     // `LIOB33_X0Y11` holds V17 and V16, and both designs drive both of
     // them as inputs, so the whole tile has to agree.
     assert_eq!(
-        at(&ours, "LIOB33_X0Y11"),
-        at(&theirs, "LIOB33_X0Y11"),
+        ours.at("LIOB33_X0Y11"),
+        theirs.at("LIOB33_X0Y11"),
         "the two switches' input buffers"
     );
     // `LIOI3_X0Y11` is the input logic behind them, likewise both
     // halves in both designs.
     assert_eq!(
-        at(&ours, "LIOI3_X0Y11"),
-        at(&theirs, "LIOI3_X0Y11"),
+        ours.at("LIOI3_X0Y11"),
+        theirs.at("LIOI3_X0Y11"),
         "the two switches' input logic"
     );
     // `LIOB33_X0Y3` holds U16 (LED 0) and U15 (LED 5). The harness
     // drives both; the milestone drives only LED 0, so ours is the
     // half of theirs that belongs to `IOB_Y1`, which is `IOB_X0Y3`,
     // which is U16.
-    let theirs_led: Vec<&str> = at(&theirs, "LIOB33_X0Y3")
+    let theirs_led: Vec<&str> = theirs
+        .at("LIOB33_X0Y3")
         .into_iter()
         .filter(|f| f.starts_with("IOB_Y1."))
         .collect();
-    assert_eq!(
-        at(&ours, "LIOB33_X0Y3"),
-        theirs_led,
-        "LED 0's output buffer"
-    );
-    let theirs_ologic: Vec<&str> = at(&theirs, "LIOI3_X0Y3")
+    assert_eq!(ours.at("LIOB33_X0Y3"), theirs_led, "LED 0's output buffer");
+    let theirs_ologic: Vec<&str> = theirs
+        .at("LIOI3_X0Y3")
         .into_iter()
         .filter(|f| f.starts_with("OLOGIC_Y1."))
         .collect();
-    assert_eq!(
-        at(&ours, "LIOI3_X0Y3"),
-        theirs_ologic,
-        "LED 0's output logic"
-    );
+    assert_eq!(ours.at("LIOI3_X0Y3"), theirs_ologic, "LED 0's output logic");
     // And it is not vacuous: these are real features with real bits.
-    assert_eq!(at(&ours, "LIOI3_X0Y3").len(), 3);
-    assert_eq!(at(&ours, "LIOB33_X0Y3").len(), 3);
+    assert_eq!(ours.at("LIOI3_X0Y3").len(), 3);
+    assert_eq!(ours.at("LIOB33_X0Y3").len(), 3);
 
     // ---- The interconnect. A different legal route, same ends. ----
     //
@@ -790,8 +841,9 @@ fn the_io_path_is_the_one_vivado_built() {
     // carries it from there is the router's business and the two
     // routers disagree. So the *source* of the first pip and the
     // *destination* of the last are what must match, not the pip.
-    let source_at = |features: &[(String, String)], tile: &str| -> Vec<String> {
-        at(features, tile)
+    let source_at = |features: &Decoded, tile: &str| -> Vec<String> {
+        features
+            .at(tile)
             .iter()
             .filter_map(|f| f.split_once('.').map(|(_, from)| from.to_owned()))
             .filter(|from| from.starts_with("LOGIC_OUTS"))
@@ -804,8 +856,9 @@ fn the_io_path_is_the_one_vivado_built() {
     );
     assert_eq!(source_at(&ours, "INT_L_X0Y11"), vec!["LOGIC_OUTS_L18"]);
 
-    let dest_at = |features: &[(String, String)], tile: &str| -> Vec<String> {
-        at(features, tile)
+    let dest_at = |features: &Decoded, tile: &str| -> Vec<String> {
+        features
+            .at(tile)
             .iter()
             .filter_map(|f| f.split_once('.').map(|(to, _)| to.to_owned()))
             .filter(|to| to.starts_with("IMUX"))
@@ -821,9 +874,25 @@ fn the_io_path_is_the_one_vivado_built() {
     // Where they do differ, say so out loud rather than hiding it.
     for tile in ["INT_L_X0Y11", "INT_L_X0Y3"] {
         eprintln!("{tile}:");
-        eprintln!("  vivado:  {:?}", at(&theirs, tile));
-        eprintln!("  reticle: {:?}", at(&ours, tile));
+        eprintln!("  vivado:  {:?}", theirs.at(tile));
+        eprintln!("  reticle: {:?}", ours.at(tile));
     }
+
+    // ---- And the size of what this comparison does not cover. ----
+    //
+    // Every bit Reticle sets has a name. Most of Vivado's do not: its
+    // bitstream configures a whole design plus whatever a real
+    // configuration needs that nothing in the database names. That
+    // difference is the honest measure of how far this is from a
+    // working bitstream, and it belongs in the output of the test that
+    // otherwise reads like a success.
+    eprintln!("reticle: {}", ours.to_text());
+    eprintln!("vivado:  {}", theirs.to_text());
+    assert_eq!(ours.unexplained, 0);
+    assert!(
+        theirs.unexplained > 0,
+        "vivado's bitstream is fully explained by the database, which would be a surprise"
+    );
 }
 
 /// The two orientations this loader had to measure rather than assume,
@@ -849,7 +918,7 @@ fn the_orientations_the_site_tables_assume_are_the_databases() {
     // B18 (switch 16, an input, `IOB_X0Y112`). `IOB_X0Y112` is the
     // higher site Y, so if `_Y0` is the higher half then `IOB_Y0` is
     // the input and `IOB_Y1` the output.
-    let tile = at(&theirs, "LIOB33_X0Y111");
+    let tile = theirs.at("LIOB33_X0Y111");
     assert!(
         tile.iter()
             .any(|f| f.starts_with("IOB_Y0.") && f.ends_with(".IN")),
@@ -860,7 +929,7 @@ fn the_orientations_the_site_tables_assume_are_the_databases() {
             .any(|f| f.starts_with("IOB_Y1.") && f.contains(".DRIVE.")),
         "IOB_Y1 should be the output half: {tile:?}"
     );
-    let ioi = at(&theirs, "LIOI3_X0Y111");
+    let ioi = theirs.at("LIOI3_X0Y111");
     assert!(ioi.contains(&"ILOGIC_Y0.ZINV_D"), "{ioi:?}");
     assert!(ioi.contains(&"OLOGIC_Y1.OMUX.D1"), "{ioi:?}");
 
@@ -905,4 +974,68 @@ fn the_orientations_the_site_tables_assume_are_the_databases() {
         l_l.trim_start_matches("CLBLL")
     );
     assert_ne!(m, l_m);
+}
+
+/// What a routing graph of a real fabric costs, measured rather than
+/// estimated.
+///
+/// Phase one found the blocker: every pip owned a `Vec<ConfigBit>`, and
+/// on a fabric where one `INT_L` has 3636 pips and the die has 5650 of
+/// them that is thousands of identical copies of each pattern. The
+/// patterns are interned now, and this says by how much: the whole
+/// region's pips share a few thousand distinct patterns between them,
+/// and a pip itself is a fixed twenty bytes.
+///
+/// It is a ratio test, not a wall-clock one. The absolute number depends
+/// on the machine; what must hold is that growing the region grows the
+/// graph roughly in proportion to its pips and that the pattern table
+/// does *not* grow with it, because a pattern belongs to a tile type.
+#[test]
+fn a_real_fabrics_graph_is_measured_and_the_bits_are_shared() {
+    let Some(root) = chipdb() else { return };
+    let db = XrayDatabase::open(&DiskFiles, &root, DEVICE, &XrayOptions::new()).unwrap();
+
+    let mut measured = Vec::new();
+    for region in [small_region(), GridRegion::new(0, 60, 40, 150)] {
+        let fabric = db
+            .load(&DiskFiles, &XrayOptions::new().with_region(region))
+            .unwrap();
+        let graph = fabric.arch.build_graph();
+        let bytes = graph.heap_bytes();
+        eprintln!(
+            "{} tile(s): {} node(s), {} pip(s), {} distinct bit pattern(s), \
+             {} MiB, {} byte(s) per pip",
+            fabric.stats.tiles_loaded,
+            graph.nodes.len(),
+            graph.pips.len(),
+            graph.bit_patterns(),
+            bytes / (1024 * 1024),
+            bytes / graph.pips.len().max(1)
+        );
+        measured.push((graph.pips.len(), graph.bit_patterns(), bytes));
+    }
+
+    let (small_pips, small_patterns, small_bytes) = measured[0];
+    let (big_pips, big_patterns, big_bytes) = measured[1];
+    assert!(big_pips > small_pips * 2, "the second region is not bigger");
+
+    // The interned table is per tile *type*, so a region several times
+    // the size shares almost exactly the same patterns.
+    assert!(
+        big_patterns < small_patterns * 2,
+        "the bit patterns grew with the region: {small_patterns} then {big_patterns}"
+    );
+
+    // And the graph grows with its pips rather than faster: doubling the
+    // pips must not more than double the bytes per pip.
+    let small_per_pip = small_bytes as f64 / small_pips as f64;
+    let big_per_pip = big_bytes as f64 / big_pips as f64;
+    assert!(
+        big_per_pip < small_per_pip * 2.0,
+        "cost per pip grew from {small_per_pip:.0} to {big_per_pip:.0} bytes"
+    );
+    // A pip itself is twenty bytes; the rest is nodes, their names and
+    // the two adjacency lists. If this ever exceeds a few hundred bytes
+    // a pip, something has started allocating per pip again.
+    assert!(big_per_pip < 400.0, "{big_per_pip:.0} bytes per pip");
 }

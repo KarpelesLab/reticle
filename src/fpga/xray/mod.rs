@@ -39,6 +39,7 @@
 //! | `<family>/<fabric>/tilegrid.json` | every tile: name, type, grid position, sites, and where its bits live in the frames |
 //! | `<family>/<fabric>/tileconn.json` | which wire of a tile is the same metal as which wire of its neighbour |
 //! | `<family>/segbits_<type>.db` | which bits switch on which pip and which bel feature |
+//! | `<family>/ppips_<type>.db` | the fixed, unprogrammable wiring inside a tile — which is how a site pin reaches the interconnect |
 //!
 //! `part.yaml` is ignored: it says the same as `part.json` and would need
 //! a YAML parser. `devices.yaml` is read by a deliberately narrow reader
@@ -69,16 +70,19 @@
 //!    a real 7-series architecture does not round-trip through the text
 //!    format the way the synthetic one does.
 //!
-//! # And one gap in the data
+//! # And what the data does not name
 //!
 //! `prjxray-db` ships the *bits*, not the tile-type wire and pip lists
 //! (prjxray's own `tile_type_*.json` is generated from Vivado and is not
 //! in the repository). Two things follow:
 //!
-//! - **Which wire a bel pin reaches is not in the database.** The loader
-//!   therefore declares bels with no pins. A placer can put a cell on a
-//!   real `SLICEL`; a router cannot yet get a signal to it. This is the
-//!   single biggest thing standing between here and a lit LED.
+//! - **A site pin has no name in the database.** The wiring *is* there:
+//!   `ppips_<type>.db` records the fixed connection between a site pin's
+//!   wire and the interconnect, and that is what
+//!   [`PpipKind::Always`] is read for. What is missing is only the pin's
+//!   *name* — `A1`, `O6`, `I`, `O` — and which of those wires carries
+//!   it. `src/fpga/xray/sites.rs` supplies that from Xilinx's public
+//!   user guides and says, entry by entry, where each line came from.
 //! - **Whether a three-part feature `TYPE.A.B` is a pip or a bel
 //!   feature has to be inferred.** The rule is in [`is_pip_feature`]: it
 //!   is a pip unless `A` also heads a longer feature of the same tile
@@ -86,20 +90,46 @@
 //!   makes `SLICEL_X0` a site, so `CLBLL_L.SLICEL_X0.CLKINV` is a bel
 //!   feature and not a pip). It classifies every `INT_L` feature as a pip
 //!   and every `CLBLL_L` one as a bel feature, which is right; the three
-//!   `LIOB33.DIFF.*` features are the known place it is wrong.
+//!   `LIOB33.DIFF.*` features are the known place it is wrong, and
+//!   because `DIFF` carries no `_X<n>` or `_Y<n>` suffix it at least
+//!   never claims to be a site.
 //!
 //! # Scale
 //!
 //! The `xc7a50t` fabric is 18 055 tiles and, by the database's own
 //! `element_counts.csv`, 7 857 396 nodes. Its `segbits` add up to about
-//! 23.5 million features over the die, of which 20.5 million are pips in
-//! the 5650 interconnect tiles. Expanding all of that into a
-//! [`RoutingGraph`](super::arch::RoutingGraph) is not something this
-//! crate's representation can hold in a sane amount of memory, so
-//! [`XrayOptions::region`] says which rectangle of tiles gets wires, pips
-//! and bels, and [`XrayOptions::max_pips`] stops with the numbers rather
-//! than with an allocation failure. The frame map always covers the whole
-//! part, so the bitstream is a whole-part bitstream whatever the region.
+//! 23.5 million features over the die, of which 20.6 million are pips in
+//! the 5650 interconnect tiles.
+//!
+//! Phase one could not expand that into a
+//! [`RoutingGraph`](super::arch::RoutingGraph) at all, because every pip
+//! owned a `Vec<ConfigBit>` and the same 3636 patterns were copied into
+//! each of 5650 interconnect tiles. The patterns are interned now (see
+//! [`Pip`](super::arch::Pip)) and the whole die does fit — **measured**,
+//! not estimated:
+//!
+//! | | |
+//! |---|---|
+//! | graph edges declared | 44 304 488 |
+//! | graph edges kept | 30 918 986 (20.6 M programmable, the rest fixed wiring and tile joins) |
+//! | nodes | 6 081 818 |
+//! | distinct bit patterns | 9774 |
+//! | [`RoutingGraph::heap_bytes`](super::arch::RoutingGraph::heap_bytes) | 1386 MiB |
+//! | peak resident while building | 2.0 GiB |
+//! | time to build | about 8 s in a release build |
+//!
+//! Two gigabytes is still more than a small design should pay, so
+//! [`XrayOptions::region`] still says which rectangle of tiles gets
+//! wires, pips and bels, and [`XrayOptions::max_pips`] still stops with
+//! the numbers rather than with an allocation failure — the default is
+//! now set from the measurement above. The frame map always covers the
+//! whole part, so the bitstream is a whole-part bitstream whatever the
+//! region.
+//!
+//! What is left is the nodes: a [`Wire`](super::arch::Wire) owns its
+//! name as a `String`, and six million of those are most of what
+//! remains. Interning those too is the next thing worth doing, and it
+//! was not needed to route the milestone.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::error::Error;
@@ -245,9 +275,20 @@ pub struct XrayOptions {
     /// Which tiles get wires, pips and bels. `None` is the whole die,
     /// which for `xc7a50t` will hit [`XrayOptions::max_pips`].
     pub region: Option<GridRegion>,
-    /// The largest number of pips the loader will build before refusing
-    /// with [`XrayError::TooLarge`]. It counts first and allocates after,
-    /// so the refusal costs nothing.
+    /// The largest number of graph edges the loader will build before
+    /// refusing with [`XrayError::TooLarge`]. It counts first and
+    /// allocates after, so the refusal costs nothing.
+    ///
+    /// The number counted is the edges the architecture *declares*. Not
+    /// all of them survive into the graph: one that references a tile
+    /// the grid does not have there is dropped and counted in
+    /// [`RoutingGraph::dangling`](super::arch::RoutingGraph::dangling).
+    /// For the whole `xc7a50t` that is 44 304 488 declared and
+    /// 30 918 986 kept.
+    ///
+    /// The default is set from a measurement and not from a guess: that
+    /// graph is 1386 MiB resident, 2.0 GiB at peak, built in about
+    /// eight seconds. See the module docs.
     pub max_pips: usize,
     /// Which IO standard every buffer of the design is configured for.
     ///
@@ -267,9 +308,12 @@ impl Default for XrayOptions {
             region: None,
             // Four million pips is about a gigabyte once each one owns a
             // list of configuration bits, which is as far as a desktop
-            // machine goes without swapping. The whole `xc7a50t` is five
-            // times that; see the module docs.
-            max_pips: 16_000_000,
+            // The whole `xc7a50t` declares 44 304 488 edges and keeps
+            // 30 918 986 of them, which is about two gigabytes at peak
+            // now that a pip is twenty bytes and its bits are shared. A
+            // part that wants more than that is refused with the
+            // numbers rather than with a dead machine.
+            max_pips: 48_000_000,
             io_standard: "LVCMOS33".to_owned(),
         }
     }
@@ -688,8 +732,27 @@ impl XrayDatabase {
             height.saturating_sub(1),
         ));
 
+        let conn = self.tileconn(files)?;
+
         // Count before allocating, so a region that will not fit is
-        // refused with numbers instead of a dead machine.
+        // refused with numbers instead of a dead machine. The count is
+        // of graph *edges*, which is what costs memory: the pips that
+        // have bits, the fixed connections `ppips` adds, and two per
+        // wire pair of every join whose other end is a tile type the
+        // region also holds. That is exactly what `build_arch` declares;
+        // the graph then drops the ones that fall off the grid, so this
+        // is a tight upper bound rather than a loose one.
+        let in_region_types: HashSet<&str> = tiles
+            .iter()
+            .filter(|t| region.contains(t.grid_x, t.grid_y))
+            .map(|t| t.tile_type.as_str())
+            .collect();
+        let mut join_edges: HashMap<&str, usize> = HashMap::new();
+        for c in &conn {
+            if in_region_types.contains(c.types.1.as_str()) {
+                *join_edges.entry(c.types.0.as_str()).or_default() += c.pairs.len() * 2;
+            }
+        }
         let mut wanted = 0usize;
         let mut in_region = 0usize;
         for tile in &tiles {
@@ -697,9 +760,17 @@ impl XrayDatabase {
                 continue;
             }
             in_region += 1;
-            if let Some(set) = features.get(&tile.tile_type) {
+            let name = tile.tile_type.as_str();
+            if let Some(set) = features.get(name) {
                 wanted += set.pip_count();
             }
+            if let Some(ppips) = fixed.get(name) {
+                wanted += ppips
+                    .iter()
+                    .filter(|p| p.kind == parse::PpipKind::Always)
+                    .count();
+            }
+            wanted += join_edges.get(name).copied().unwrap_or(0);
         }
         if wanted > options.max_pips {
             return Err(XrayError::TooLarge {
@@ -709,7 +780,6 @@ impl XrayDatabase {
             });
         }
 
-        let conn = self.tileconn(files)?;
         let mut arch = self.build_arch(
             &tiles, &features, &fixed, &conn, region, &part, standard, &mut stats,
         );
@@ -738,8 +808,14 @@ impl XrayDatabase {
     /// would match an empty bitstream everywhere; `IN_TERM.NONE` is such
     /// a feature and its absence from the output means nothing.
     ///
-    /// The result is sorted by tile name and then by feature name, so
-    /// two decodings can be compared line by line.
+    /// [`Decoded::features`] is sorted by tile name and then by feature
+    /// name, so two decodings can be compared line by line, and the rest
+    /// of [`Decoded`] accounts for every set bit: how many a named
+    /// feature explains, how many fall in a tile whose bits nothing
+    /// names, and how many fall outside every tile the grid has. That
+    /// accounting is the honest part. A decoding that names forty
+    /// features and leaves two thousand bits unexplained has not
+    /// understood the bitstream, and saying so is the point.
     ///
     /// # Errors
     ///
@@ -749,7 +825,7 @@ impl XrayDatabase {
         &self,
         files: &dyn FileProvider,
         data: &super::xc7::FrameData,
-    ) -> Result<Vec<(String, String)>, XrayError> {
+    ) -> Result<Decoded, XrayError> {
         let tiles = self.tiles(files)?;
 
         // Where the set bits are, by frame address, so a tile only has
@@ -776,12 +852,26 @@ impl XrayDatabase {
             }
         }
 
+        let total: usize = set.values().map(Vec::len).sum();
+
+        // Every set bit, so that one a feature explains can be struck
+        // off and whatever is left can be counted rather than glossed.
+        let mut unexplained: HashSet<(u32, u32, u32)> = HashSet::new();
+        for (address, here) in &set {
+            for (word, bit) in here {
+                unexplained.insert((*address, *word, *bit));
+            }
+        }
+
         let mut features: HashMap<String, FeatureSet> = HashMap::new();
         let mut out = Vec::new();
+        let mut tiles_touched = 0usize;
+        let mut tiles_unnamed = 0usize;
         for tile in &tiles {
             // The tile's own bits, in the tile-local coordinates a
-            // `segbits` line uses.
-            let mut ones: HashSet<ConfigBit> = HashSet::new();
+            // `segbits` line uses, remembering where each came from so
+            // a matched feature can strike it off.
+            let mut ones: HashMap<ConfigBit, (u32, u32, u32)> = HashMap::new();
             for (_, window) in &tile.bits {
                 for row in 0..window.frames {
                     let Some(address) = window.baseaddr.checked_add(row) else {
@@ -794,13 +884,17 @@ impl XrayDatabase {
                         if *word < window.offset || *word >= window.offset + window.words {
                             continue;
                         }
-                        ones.insert(ConfigBit::new(row, (*word - window.offset) * 32 + *bit));
+                        ones.insert(
+                            ConfigBit::new(row, (*word - window.offset) * 32 + *bit),
+                            (address, *word, *bit),
+                        );
                     }
                 }
             }
             if ones.is_empty() {
                 continue;
             }
+            tiles_touched += 1;
 
             if !features.contains_key(&tile.tile_type) {
                 let path = format!(
@@ -818,19 +912,35 @@ impl XrayDatabase {
             let Some(known) = features.get(&tile.tile_type) else {
                 continue;
             };
+            if known.features().is_empty() {
+                tiles_unnamed += 1;
+                continue;
+            }
             for feature in known.features() {
                 if feature.ones.is_empty() {
                     continue;
                 }
-                if feature.ones.iter().all(|b| ones.contains(b))
-                    && feature.zeros.iter().all(|b| !ones.contains(b))
+                if feature.ones.iter().all(|b| ones.contains_key(b))
+                    && feature.zeros.iter().all(|b| !ones.contains_key(b))
                 {
                     out.push((tile.name.clone(), feature.name.clone()));
+                    for bit in &feature.ones {
+                        if let Some(where_it_is) = ones.get(bit) {
+                            unexplained.remove(where_it_is);
+                        }
+                    }
                 }
             }
         }
         out.sort();
-        Ok(out)
+        out.dedup();
+        Ok(Decoded {
+            features: out,
+            bits: total,
+            unexplained: unexplained.len(),
+            tiles: tiles_touched,
+            tiles_without_a_segbits_file: tiles_unnamed,
+        })
     }
 
     /// A region that covers the tiles the given package pins sit in,
@@ -1218,6 +1328,58 @@ impl XrayDatabase {
 /// One `tileconn` entry seen from the tile type that owns it: the type
 /// at the other end, the grid delta to it, and the wire pairs.
 type Join<'a> = (&'a str, i32, i32, &'a [(String, String)]);
+
+/// What [`XrayDatabase::decode`] made of a bitstream.
+///
+/// The three counts after [`Decoded::features`] are what keeps the
+/// decoding honest: a list of feature names on its own looks like
+/// understanding, and the difference between [`Decoded::bits`] and
+/// [`Decoded::unexplained`] says how much of it there really is.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Decoded {
+    /// Tile name and feature name, sorted, one per feature the bits
+    /// satisfy.
+    pub features: Vec<(String, String)>,
+    /// How many bits the image sets in all.
+    pub bits: usize,
+    /// How many of those no named feature accounts for. A bit is
+    /// accounted for when it is one of the `one` bits of a feature that
+    /// matched.
+    pub unexplained: usize,
+    /// How many tiles hold at least one set bit.
+    pub tiles: usize,
+    /// Of those, how many have no `segbits` file at all, so nothing
+    /// their bits say could have been named.
+    pub tiles_without_a_segbits_file: usize,
+}
+
+impl Decoded {
+    /// A report, one fact per line.
+    pub fn to_text(&self) -> String {
+        use std::fmt::Write as _;
+        let mut out = String::new();
+        let _ = writeln!(
+            out,
+            "decoded: {} bit(s) over {} tile(s) into {} feature(s); \
+             {} bit(s) unexplained, {} tile(s) with no segbits file",
+            self.bits,
+            self.tiles,
+            self.features.len(),
+            self.unexplained,
+            self.tiles_without_a_segbits_file
+        );
+        out
+    }
+
+    /// Every feature this decoding found in one tile.
+    pub fn at(&self, tile: &str) -> Vec<&str> {
+        self.features
+            .iter()
+            .filter(|(t, _)| t == tile)
+            .map(|(_, f)| f.as_str())
+            .collect()
+    }
+}
 
 /// A loaded fabric: the part, the architecture and the frame map, which
 /// only mean anything together.
