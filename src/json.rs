@@ -1,9 +1,17 @@
 //! A JSON parser and serialiser, hand written.
 //!
-//! The crate takes no dependencies, so the language server brings its own
-//! JSON. The subset is exactly what JSON-RPC and LSP need, which is all of
-//! RFC 8259 minus any tolerance for extensions: no comments, no trailing
-//! commas, no `NaN`.
+//! The crate takes no dependencies, so it brings its own JSON. The subset
+//! is all of RFC 8259 minus any tolerance for extensions: no comments, no
+//! trailing commas, no `NaN`.
+//!
+//! Two callers share it, which is why it sits at the crate root rather
+//! than inside either of them: the language server, whose whole wire
+//! protocol is JSON-RPC (it is re-exported as `lsp::json` for the
+//! callers that knew it there), and the FPGA side's Project X-Ray
+//! database reader (`fpga::xray`), whose `tilegrid.json`,
+//! `tileconn.json` and `part.json` are the fabric description. The two
+//! have nothing else in common; writing the parser twice would be the
+//! only alternative to this module.
 //!
 //! Two decisions are worth stating.
 //!
@@ -18,7 +26,7 @@
 //!   too large for an `i64`, parses as a float.
 //!
 //! ```
-//! use reticle::lsp::json::Json;
+//! use reticle::json::Json;
 //!
 //! let v = Json::parse(r#"{"jsonrpc":"2.0","id":1,"method":"shutdown"}"#).unwrap();
 //! assert_eq!(v.get("method").and_then(Json::as_str), Some("shutdown"));

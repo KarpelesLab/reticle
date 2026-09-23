@@ -57,6 +57,13 @@ pub mod ir;
 pub mod logic;
 pub mod source;
 
+// Hand-written JSON, shared by the language server (JSON-RPC) and the
+// FPGA side's Project X-Ray database reader (`tilegrid.json` and its
+// neighbours). It is compiled only for the builds that have one of
+// those, so a lint-only or simulation-only build does not carry it.
+#[cfg(any(feature = "lsp", feature = "fpga"))]
+pub mod json;
+
 #[cfg(feature = "verilog")]
 pub mod verilog;
 

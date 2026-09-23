@@ -83,13 +83,19 @@
 pub mod analysis;
 pub mod features;
 pub mod index;
-pub mod json;
 pub mod protocol;
 pub mod server;
 pub mod stdio;
 pub mod text;
 pub mod verilog;
 pub mod vhdl;
+
+/// The crate's JSON parser and serialiser.
+///
+/// It moved to the crate root when the FPGA side's Project X-Ray
+/// database reader turned out to need the same parser; this is the same
+/// module under the name the language server's callers already use.
+pub use crate::json;
 
 pub use analysis::{Document, DocumentStore, Language};
 pub use json::Json;
