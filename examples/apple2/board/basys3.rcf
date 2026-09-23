@@ -1,0 +1,61 @@
+# A Digilent Basys 3 (Xilinx XC7A35T-1CPG236C), for `apple2_basys3`.
+#
+# PROVENANCE: every pin name below is transcribed from the comment block
+# in examples/soc/board/basys3.rcf, which is itself a transcription of
+# Digilent's published `Basys-3-Master.xdc`
+# (github.com/Digilent/digilent-xdc). HIGH confidence that these are the
+# balls those signals are wired to on a Basys 3 rev B and that they are
+# IO balls of the CPG236 package; see `src/fpga/devices/xc7.dev` for the
+# rest of the list and for what else about this part is and is not
+# verified.
+#
+# NOTHING HERE HAS BEEN RUN ON A BOARD OR THROUGH VIVADO. What the test
+# suite checks is that every pin named here is one the device database
+# records, that every port of `apple2_basys3` has a pin, and that the
+# netlist and the XDC the flow writes hold only primitives the part has.
+# Whether Vivado accepts the result and whether a monitor locks to what
+# comes out of the socket are separate claims and this file makes
+# neither.
+#
+# W5 is the board's single 100 MHz oscillator. There is no other clock
+# source, which is why rtl/apple2_basys3.v divides it by four for the
+# pixel rate rather than asking a PLL for 25.175 MHz.
+#
+# B18 and A18 are the FPGA's side of the on-board USB-UART bridge, named
+# from the FPGA's point of view: `RsRx` (B18) is the pin the FPGA
+# RECEIVES on and `RsTx` (A18) the pin it TRANSMITS on, so uart_rx goes
+# to B18 and uart_tx to A18.
+#
+# CLK_DIV: the design divides `clk` for its UART, and `clk` here is 100
+# MHz, so 115200 baud is 868 clocks a bit. That is the default of
+# `apple2_basys3`, unlike `apple2_top`, whose 126 MHz wants 1094.
+#
+# VIDEO: the Basys 3's video output is VGA at twelve bits, four per
+# channel, through a resistor ladder to a DE-15 socket. Bit 0 of each
+# channel is the least significant — the largest resistor of the ladder.
+set_io -io_standard LVCMOS33 clk W5
+set_io -io_standard LVCMOS33 uart_tx A18
+set_io -io_standard LVCMOS33 uart_rx B18
+
+set_io -io_standard LVCMOS33 vga_r[0] G19
+set_io -io_standard LVCMOS33 vga_r[1] H19
+set_io -io_standard LVCMOS33 vga_r[2] J19
+set_io -io_standard LVCMOS33 vga_r[3] N19
+set_io -io_standard LVCMOS33 vga_g[0] J17
+set_io -io_standard LVCMOS33 vga_g[1] H17
+set_io -io_standard LVCMOS33 vga_g[2] G17
+set_io -io_standard LVCMOS33 vga_g[3] D17
+set_io -io_standard LVCMOS33 vga_b[0] N18
+set_io -io_standard LVCMOS33 vga_b[1] L18
+set_io -io_standard LVCMOS33 vga_b[2] K18
+set_io -io_standard LVCMOS33 vga_b[3] J18
+set_io -io_standard LVCMOS33 vga_hsync P19
+set_io -io_standard LVCMOS33 vga_vsync R19
+
+# The speaker. The Basys 3 has no audio output of any kind, so $C030
+# leaves through pin 1 of Pmod header JA and wants a piezo, an amplifier
+# or an oscilloscope on the other end.
+set_io -io_standard LVCMOS33 speaker J1
+
+create_clock -name sys -period 10.0 clk
+clock_domain sys clk

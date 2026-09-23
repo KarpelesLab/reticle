@@ -100,7 +100,19 @@ mod asm;
 #[path = "serial/mod.rs"]
 mod serial;
 
+/// The 40 x 24 text screen read back off a video signal's waveform, and
+/// the font as drawn. Both video tests below use it: the DVI one samples
+/// the colour bus the machine hands to `dvi_tx` and the VGA one samples
+/// the pins `vga_out` drives, and `video::Signal` is the whole of the
+/// difference between them.
+#[path = "video/mod.rs"]
+mod video;
+
 use serial::{Waveform, decode_uart};
+use video::{
+    CELL_H, COLS, Cell, Colours, Glyph, ROWS, Signal, Video, as_text, ascii_glyph, expect_row,
+    font_art, glyph_ascii, test_card,
+};
 
 // ---------------------------------------------------------------------------
 // The machine's shape, stated here rather than read out of the design
@@ -133,31 +145,8 @@ const VEC_NMI: u16 = 0xFFFA;
 const VEC_RES: u16 = 0xFFFC;
 const VEC_IRQ: u16 = 0xFFFE;
 
-/// The VESA DMT timing of the mode `dvi_tx` calls MODE 0, written out
-/// here rather than read from `video_timing`: 640 active pixels, 16 front
-/// porch, 96 sync, 48 back porch; 480 active lines, 10, 2 and 33.
-const H_ACTIVE: i64 = 640;
-const H_TOTAL: i64 = 640 + 16 + 96 + 48;
-const V_ACTIVE: i64 = 480;
-const V_TOTAL: i64 = 480 + 10 + 2 + 33;
-/// Pixel slots in one frame, blanking and all.
-const FRAME_PIXELS: i64 = H_TOTAL * V_TOTAL;
-
-/// The text screen: 40 columns of 24 rows, in cells seven dots wide and
-/// eight scan lines tall, every dot drawn twice.
-const COLS: usize = 40;
-const ROWS: usize = 24;
-const CELL_W: usize = 7;
-const CELL_H: usize = 8;
-const SCALE: i64 = 2;
-/// Where the picture sits on the raster, centred.
-const PIC_W: i64 = (COLS * CELL_W) as i64 * SCALE;
-const PIC_H: i64 = (ROWS * CELL_H) as i64 * SCALE;
-const X_LEFT: i64 = (H_ACTIVE - PIC_W) / 2;
-const Y_TOP: i64 = (V_ACTIVE - PIC_H) / 2;
-
-/// A lit dot, in text: white.
-const WHITE: u32 = 0x00FF_FFFF;
+/// The raster, the picture's place on it and the font are in
+/// `tests/video/mod.rs`, which both of the video tests below share.
 
 /// The display code of the monitor's cursor: flashing, glyph $1F, which
 /// is ASCII `_`.
@@ -295,22 +284,25 @@ fn machine_design(dir: &Path) -> Design {
         .expect("the project elaborates to a design")
 }
 
-/// The testbench's design: the project with its `testbench` line added as
-/// a source and the testbench as the top.
-fn testbench_design(dir: &Path) -> Design {
+/// One testbench's design: the project with that `testbench` line added
+/// as a source and the testbench as the top.
+///
+/// The example has two, one per video path, and each is named here so
+/// that a project which stopped listing one would fail rather than
+/// quietly build the other.
+fn testbench_design(dir: &Path, bench: &str, top: &str) -> Design {
     let built = build(dir, |project| {
-        let bench = project
-            .testbenches
-            .first()
-            .expect("a testbench line")
-            .clone();
+        assert!(
+            project.testbenches.iter().any(|t| t == bench),
+            "reticle.proj does not list {bench}"
+        );
         project.sources.push(SourceEntry {
-            path: bench,
+            path: bench.to_owned(),
             language: None,
             encrypted: false,
             span: project.span,
         });
-        project.top = Some("apple2_tb".to_owned());
+        project.top = Some(top.to_owned());
     });
     built.elaboration.design.expect("the testbench elaborates")
 }
@@ -351,48 +343,6 @@ fn memory_init(design: &Design, name: &str) -> Option<Vec<Option<u8>>> {
 // The font, as drawn
 // ---------------------------------------------------------------------------
 
-/// One glyph: eight rows of seven dots.
-type Glyph = [[bool; CELL_W]; CELL_H];
-
-/// Reads `sw/font.txt`: every `glyph` line and the eight lines after it.
-///
-/// The eight-lines-after rule is the whole grammar, and it has to be,
-/// because an art line may itself begin with `#`.
-fn font_art(text: &str) -> Vec<Glyph> {
-    let lines: Vec<&str> = text.lines().collect();
-    let mut out = Vec::new();
-    for (at, line) in lines.iter().enumerate() {
-        let Some(rest) = line.strip_prefix("glyph ") else {
-            continue;
-        };
-        let index =
-            usize::from_str_radix(rest.split_whitespace().next().expect("a glyph index"), 16)
-                .expect("a hexadecimal glyph index");
-        assert_eq!(index, out.len(), "the glyphs are out of order");
-        let mut glyph = [[false; CELL_W]; CELL_H];
-        for (row, art) in glyph.iter_mut().enumerate() {
-            let source = lines
-                .get(at + 1 + row)
-                .unwrap_or_else(|| panic!("glyph {index:02X} is cut short"));
-            let dots: Vec<char> = source.chars().collect();
-            assert_eq!(
-                dots.len(),
-                CELL_W,
-                "glyph {index:02X} row {row} is `{source}`, which is not {CELL_W} dots"
-            );
-            for (column, dot) in art.iter_mut().enumerate() {
-                *dot = match dots[column] {
-                    '#' => true,
-                    '.' => false,
-                    other => panic!("glyph {index:02X} row {row} has a `{other}` in it"),
-                };
-            }
-        }
-        out.push(glyph);
-    }
-    out
-}
-
 /// The 512 bytes of the character generator: eight rows for each of 64
 /// glyphs, the leftmost dot in bit 0.
 fn font_bytes(glyphs: &[Glyph]) -> Vec<u8> {
@@ -410,28 +360,6 @@ fn font_bytes(glyphs: &[Glyph]) -> Vec<u8> {
         }
     }
     out
-}
-
-/// The ASCII a glyph index stands for: 00..1F are $40..$5F and 20..3F are
-/// $20..$3F, which is how the display code's low six bits address the
-/// character generator.
-fn glyph_ascii(index: usize) -> u8 {
-    let index = u8::try_from(index).expect("a small glyph index");
-    if index < 32 {
-        0x40 + index
-    } else {
-        0x20 + (index - 32)
-    }
-}
-
-/// The glyph index of an ASCII character, the other way round.
-fn ascii_glyph(c: u8) -> usize {
-    assert!((0x20..=0x5F).contains(&c), "{c:#04x} is not in the font");
-    if c >= 0x40 {
-        (c - 0x40) as usize
-    } else {
-        (c - 0x20) as usize + 32
-    }
 }
 
 #[test]
@@ -746,258 +674,11 @@ fn the_machine_synthesises_without_errors_or_latches() {
 // ---------------------------------------------------------------------------
 // Reading the screen off the video signal
 // ---------------------------------------------------------------------------
-
-/// A pixel's colour, or `None` if the signal was `x` there.
-type Pixel = Option<u32>;
-
-/// A colour bus's changes, as `(time, value)`, which is what
-/// `serial::Waveform` is for a one-bit net.
-type Colours = Vec<(u64, Pixel)>;
-
-/// What one character cell turned out to be: a glyph of the font, and
-/// whether it was drawn inverted.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-struct Cell {
-    glyph: usize,
-    inverse: bool,
-}
-
-/// The video signal, tied to the raster.
-///
-/// Nothing here reads the design: the raster's arithmetic is the VESA
-/// timing at the top of this file, the pixel period is the testbench's
-/// clock, and the picture's place on the raster is 560 x 384 centred in
-/// 640 x 480. The only thing taken from the simulation is when each
-/// signal changed.
-struct Video {
-    /// Every change of the colour, by pixel number.
-    samples: Vec<(i64, Pixel)>,
-    /// The last pixel the run reached.
-    end: i64,
-}
-
-impl Video {
-    fn new(de_wave: &[(u64, Option<bool>)], rgb_wave: &Colours, period: u64, end: u64) -> Video {
-        let period = i64::try_from(period).expect("a sane period");
-
-        // `de` is high from the moment the raster leaves reset, because
-        // it starts at x = 0, y = 0 and that pixel is visible. So the
-        // first *falling* edge is the end of the first visible line, 640
-        // pixels in, and that is what ties simulation time to pixel
-        // number.
-        let falls: Vec<u64> = de_wave
-            .iter()
-            .filter(|(_, level)| *level == Some(false))
-            .map(|(when, _)| *when)
-            .collect();
-        assert!(!falls.is_empty(), "`de` never went low: there is no raster");
-        let origin = i64::try_from(falls[0]).expect("a sane time") - H_ACTIVE * period;
-
-        // Every one of those falling edges is at the same place on its
-        // own line, so the whole raster is checked by checking them: a
-        // line is H_TOTAL pixels and a frame is V_ACTIVE visible lines
-        // followed by V_TOTAL - V_ACTIVE blank ones.
-        for (index, when) in falls.iter().enumerate() {
-            let line = i64::try_from(index).expect("a sane count");
-            let pixel = (line / V_ACTIVE) * FRAME_PIXELS + (line % V_ACTIVE) * H_TOTAL + H_ACTIVE;
-            assert_eq!(
-                i64::try_from(*when).expect("a sane time"),
-                origin + pixel * period,
-                "the {index}th end of a visible line is not where the raster says"
-            );
-        }
-
-        // The pixel each change of the colour belongs to. A change lands
-        // on a clock edge, which is the start of a pixel.
-        let mut samples: Vec<(i64, Pixel)> = Vec::with_capacity(rgb_wave.len());
-        // Everything before the raster was let go is the machine booting
-        // against a frozen `x` and `y`; only the colour it left behind
-        // matters, and it becomes the colour pixel 0 starts from.
-        let mut before = None;
-        for (when, value) in rgb_wave {
-            let offset = i64::try_from(*when).expect("a sane time") - origin;
-            if offset < 0 {
-                before = Some(*value);
-                continue;
-            }
-            assert_eq!(
-                offset.rem_euclid(period),
-                0,
-                "the colour changed between pixels, at {when}"
-            );
-            samples.push((offset / period, *value));
-        }
-        samples.sort_by_key(|(pixel, _)| *pixel);
-        samples.insert(0, (-1, before.expect("the colour was never driven")));
-        assert!(samples.len() > 1, "the colour never changed");
-        Video {
-            samples,
-            end: (i64::try_from(end).expect("a sane time") - origin) / period,
-        }
-    }
-
-    /// The colour of one pixel of the raster. `cursor` walks forward, so
-    /// the caller must ask in raster order.
-    fn at(&self, cursor: &mut usize, pixel: i64) -> Pixel {
-        assert!(
-            pixel <= self.end,
-            "pixel {pixel} is past the end of the run"
-        );
-        while *cursor + 1 < self.samples.len() && self.samples[*cursor + 1].0 <= pixel {
-            *cursor += 1;
-        }
-        assert!(
-            self.samples[*cursor].0 <= pixel,
-            "nothing drove the colour before pixel {pixel}"
-        );
-        self.samples[*cursor].1
-    }
-
-    /// Everything of frame `frame` that is visible and outside the
-    /// picture is black, which is what proves the picture is centred
-    /// rather than merely the right size.
-    fn border_is_black(&self, frame: i64) {
-        let base = frame * FRAME_PIXELS;
-        let mut cursor = 0usize;
-        for y in 0..V_ACTIVE {
-            for x in [0, X_LEFT - 1, X_LEFT + PIC_W, H_ACTIVE - 1] {
-                if (Y_TOP..Y_TOP + PIC_H).contains(&y) && (X_LEFT..X_LEFT + PIC_W).contains(&x) {
-                    continue;
-                }
-                assert_eq!(
-                    self.at(&mut cursor, base + y * H_TOTAL + x),
-                    Some(0),
-                    "the border at ({x}, {y}) of frame {frame} is not black"
-                );
-            }
-        }
-    }
-
-    /// Text rows `rows` of frame `frame`, read back as characters.
-    ///
-    /// On the way it undoes the pixel doubling and proves it *was*
-    /// doubling: every dot of the picture is a square of four identical
-    /// pixels.
-    fn rows(&self, frame: i64, rows: std::ops::Range<usize>, glyphs: &[Glyph]) -> Vec<Vec<Cell>> {
-        let base = frame * FRAME_PIXELS;
-        let mut cursor = 0usize;
-        let mut out = Vec::new();
-        let scale = usize::try_from(SCALE).expect("a small scale");
-        for row in rows {
-            // The sixteen scan lines of this row, 560 pixels each.
-            let top = Y_TOP + i64::try_from(row * CELL_H * scale).expect("a small screen");
-            let tall = i64::try_from(CELL_H * scale).expect("a small cell");
-            let mut lines = Vec::with_capacity(CELL_H * scale);
-            for line in 0..tall {
-                let y = top + line;
-                let pixels: Vec<Pixel> = (0..PIC_W)
-                    .map(|column| self.at(&mut cursor, base + y * H_TOTAL + X_LEFT + column))
-                    .collect();
-                lines.push(pixels);
-            }
-            // Each dot is a 2 x 2 square.
-            let mut dots = vec![vec![None; CELL_W * COLS]; CELL_H];
-            for (dy, line) in dots.iter_mut().enumerate() {
-                for (dx, dot) in line.iter_mut().enumerate() {
-                    let colour = lines[dy * scale][dx * scale];
-                    for (oy, ox) in [(0, 1), (1, 0), (1, 1)] {
-                        assert_eq!(
-                            lines[dy * scale + oy][dx * scale + ox],
-                            colour,
-                            "the dot at ({dx}, {dy}) of row {row} is not a square of four pixels"
-                        );
-                    }
-                    *dot = colour;
-                }
-            }
-            // And cut it into cells, matching each against the font.
-            let mut line = Vec::with_capacity(COLS);
-            for column in 0..COLS {
-                let mut pattern = [[false; CELL_W]; CELL_H];
-                for (dy, art) in pattern.iter_mut().enumerate() {
-                    for (dx, lit) in art.iter_mut().enumerate() {
-                        *lit = match dots[dy][column * CELL_W + dx] {
-                            Some(0) => false,
-                            Some(WHITE) => true,
-                            other => panic!(
-                                "the cell at ({column}, {row}) has {other:?} in it, which is \
-                                 neither black nor white"
-                            ),
-                        };
-                    }
-                }
-                line.push(match_glyph(&pattern, glyphs, column, row));
-            }
-            out.push(line);
-        }
-        out
-    }
-}
-
-/// The glyph, and the polarity, a cell was drawn with.
-fn match_glyph(pattern: &Glyph, glyphs: &[Glyph], column: usize, row: usize) -> Cell {
-    let found = glyphs.iter().enumerate().find_map(|(glyph, art)| {
-        for inverse in [false, true] {
-            if (0..CELL_H).all(|dy| (0..CELL_W).all(|dx| art[dy][dx] ^ inverse == pattern[dy][dx]))
-            {
-                return Some(Cell { glyph, inverse });
-            }
-        }
-        None
-    });
-    found.unwrap_or_else(|| {
-        let art: String = pattern
-            .iter()
-            .map(|r| {
-                r.iter()
-                    .map(|d| if *d { '#' } else { '.' })
-                    .collect::<String>()
-                    + "\n"
-            })
-            .collect();
-        panic!("the cell at ({column}, {row}) is in no font:\n{art}")
-    })
-}
-
-/// A row of the expected screen: text, left-aligned, the rest spaces.
-fn expect_row(text: &str) -> Vec<Cell> {
-    assert!(text.len() <= COLS, "`{text}` is wider than the screen");
-    let mut row: Vec<Cell> = text
-        .bytes()
-        .map(|c| Cell {
-            glyph: ascii_glyph(c),
-            inverse: false,
-        })
-        .collect();
-    while row.len() < COLS {
-        row.push(Cell {
-            glyph: ascii_glyph(b' '),
-            inverse: false,
-        });
-    }
-    row
-}
-
-/// The test card the monitor's `T` command paints: glyph 7 * row + column,
-/// so that no two rows are alike and no two columns of a row are.
-fn test_card(row: usize, column: usize) -> Cell {
-    Cell {
-        glyph: (7 * row + column) & 0x3F,
-        inverse: false,
-    }
-}
-
-/// The screen as text, one row per line, for a message.
-fn as_text(rows: &[Vec<Cell>]) -> String {
-    rows.iter()
-        .map(|row| {
-            row.iter()
-                .map(|c| glyph_ascii(c.glyph) as char)
-                .collect::<String>()
-                + "\n"
-        })
-        .collect()
-}
+//
+// The decoder is `tests/video/mod.rs`: the raster's own arithmetic, the
+// font as `sw/font.txt` draws it, and a picture cut into character
+// cells. Nothing in it reads the design, and both of the tests below
+// hand it the same screen off two different signals.
 
 #[test]
 fn the_screen_comes_out_of_the_video_signal() {
@@ -1011,7 +692,7 @@ fn the_screen_comes_out_of_the_video_signal() {
     let glyphs = font_art(&read(&dir, "sw/font.txt"));
     let rom = monitor(&dir);
 
-    let design = testbench_design(&dir);
+    let design = testbench_design(&dir, "tb/apple2_tb.v", "apple2_tb");
     let options = SimOptions {
         files: Some(Box::new(example_files(&dir))),
         ..SimOptions::default()
@@ -1059,7 +740,13 @@ fn the_screen_comes_out_of_the_video_signal() {
     assert!(messages.is_empty(), "simulator messages: {messages:?}");
 
     let period = sim.ticks(Delay::new(2 * HALF_NS, TimeUnit::Ns));
-    let video = Video::new(&de_wave.borrow(), &rgb_wave.borrow(), period, sim.time());
+    let video = Video::new(
+        &de_wave.borrow(),
+        &rgb_wave.borrow(),
+        period,
+        sim.time(),
+        Signal::DVI,
+    );
 
     // What the monitor drew, and why. Rows 0 to 2 are its banner; rows 3
     // to 8 are the session the testbench typed; row 9 onwards is the test
@@ -1192,6 +879,148 @@ fn the_screen_comes_out_of_the_video_signal() {
         .filter(|w| w[0].is_some() && w[1].is_some() && w[0] != w[1])
         .count();
     assert_eq!(moves, BEEP_TOGGLES, "the machine did not beep");
+}
+
+/// The first row the `T` command paints over in `tb/apple2_vga_tb.v`:
+/// the banner is three rows and the one command it types is one more.
+const VGA_CARD_TOP: usize = 4;
+
+#[test]
+fn the_screen_comes_out_of_the_vga_pins() {
+    let Some(dir) = example() else { return };
+    let bench = read(&dir, "tb/apple2_vga_tb.v");
+    assert!(bench.contains(&format!("localparam HALF     = {HALF_NS};")));
+    assert!(bench.contains(&format!("localparam CLK_DIV  = {CLK_DIV};")));
+    // Four bits a channel, which is the Basys 3's resistor ladder and
+    // what `Signal::VGA4` decodes.
+    assert!(bench.contains(".BPC       (4)"), "the testbench is not 4 bpc");
+    let glyphs = font_art(&read(&dir, "sw/font.txt"));
+
+    let design = testbench_design(&dir, "tb/apple2_vga_tb.v", "apple2_vga_tb");
+    let options = SimOptions {
+        files: Some(Box::new(example_files(&dir))),
+        ..SimOptions::default()
+    };
+    let mut sim = Simulator::new(&design, options).expect("the testbench simulates");
+
+    // Everything sampled here is a **pin**: the twelve colour bits and
+    // the two syncs that leave `vga_out`, and `de`, which is the raster
+    // the picture is measured against. Nothing inside `apple2` is
+    // looked at.
+    let de = sim.net("apple2_vga_tb.de").expect("the testbench has de");
+    let rgb = sim
+        .net("apple2_vga_tb.vga_rgb")
+        .expect("the testbench has vga_rgb");
+    let hsync = sim
+        .net("apple2_vga_tb.vga_hsync")
+        .expect("the testbench has vga_hsync");
+    let vsync = sim
+        .net("apple2_vga_tb.vga_vsync")
+        .expect("the testbench has vga_vsync");
+
+    let de_wave: Rc<RefCell<Waveform>> = Rc::default();
+    let sink = Rc::clone(&de_wave);
+    sim.on_change(de, move |time, value| {
+        sink.borrow_mut()
+            .push((time, value.to_u64().map(|v| v == 1)));
+    });
+    let rgb_wave: Rc<RefCell<Colours>> = Rc::default();
+    let sink = Rc::clone(&rgb_wave);
+    sim.on_change(rgb, move |time, value| {
+        let colour = value
+            .to_u64()
+            .map(|v| u32::try_from(v).expect("twelve bits"));
+        sink.borrow_mut().push((time, colour));
+    });
+    let hsync_wave: Rc<RefCell<Waveform>> = Rc::default();
+    let sink = Rc::clone(&hsync_wave);
+    sim.on_change(hsync, move |time, value| {
+        sink.borrow_mut()
+            .push((time, value.to_u64().map(|v| v == 1)));
+    });
+    let vsync_wave: Rc<RefCell<Waveform>> = Rc::default();
+    let sink = Rc::clone(&vsync_wave);
+    sim.on_change(vsync, move |time, value| {
+        sink.borrow_mut()
+            .push((time, value.to_u64().map(|v| v == 1)));
+    });
+
+    sim.run();
+    assert!(sim.finished(), "the testbench did not reach $finish");
+    let messages: Vec<String> = sim.messages().iter().map(|d| d.message.clone()).collect();
+    assert!(messages.is_empty(), "simulator messages: {messages:?}");
+
+    let period = sim.ticks(Delay::new(2 * HALF_NS, TimeUnit::Ns));
+    let video = Video::new(
+        &de_wave.borrow(),
+        &rgb_wave.borrow(),
+        period,
+        sim.time(),
+        Signal::VGA4,
+    );
+
+    // The two sync pins, on every one of the 525 lines. 640 x 480 at 60
+    // Hz has negative syncs, so the level a pulse has is low — which is
+    // the mode's own polarity arriving at a socket, and is the one thing
+    // about a VGA signal that has no counterpart on the DVI path, where
+    // the syncs travel inside TMDS control symbols.
+    video.syncs_are_the_rasters(0, &hsync_wave.borrow(), &vsync_wave.borrow(), false);
+
+    // What the monitor drew. Rows 0 to 2 are its banner and row 3 is the
+    // one command this testbench types; row 4 onwards is the test card
+    // the `T` command paints over whatever is left, with the next prompt
+    // and its cursor on top of the first two cells of it. Twenty-one of
+    // the twenty-four rows are therefore different from every other row,
+    // which is what makes this a test of the interleaved line order and
+    // not only of the character generator.
+    let mut expected: Vec<Vec<Cell>> = Vec::new();
+
+    let mut title = expect_row("    RETICLE APPLE ][ COMPATIBLE 6502    ");
+    for cell in &mut title {
+        cell.inverse = true;
+    }
+    expected.push(title);
+
+    let mut attributes = expect_row("ATTRIBUTES: NORMAL INVERSE FLASHING");
+    for cell in &mut attributes[19..27] {
+        cell.inverse = true;
+    }
+    // The flashing word is in its dark phase in frame 0, because the
+    // machine's frame counter starts at zero and the raster is let go at
+    // the top of that frame. `the_screen_comes_out_of_the_video_signal`
+    // is the test that watches it change.
+    expected.push(attributes);
+
+    expected.push(expect_row("TEXT 40X24  $0400 INTERLEAVED"));
+    expected.push(expect_row("]T"));
+
+    for row in VGA_CARD_TOP..ROWS {
+        expected.push((0..COLS).map(|column| test_card(row, column)).collect());
+    }
+    expected[VGA_CARD_TOP][0] = Cell {
+        glyph: ascii_glyph(b']'),
+        inverse: false,
+    };
+    expected[VGA_CARD_TOP][1] = Cell {
+        glyph: CURSOR_GLYPH,
+        inverse: false,
+    };
+    assert_eq!(expected.len(), ROWS);
+
+    // The picture is centred in the raster and everything around it is
+    // black, which on this path is also the proof that the blanking gate
+    // did not leak: a pixel outside the picture and a pixel outside the
+    // active area are read the same way, off the same pins.
+    video.border_is_black(0);
+    let screen = video.rows(0, 0..ROWS, &glyphs);
+    for row in 0..ROWS {
+        assert_eq!(
+            screen[row],
+            expected[row],
+            "row {row} of the VGA screen reads\n{}",
+            as_text(&screen[row..row + 1])
+        );
+    }
 }
 
 // ---------------------------------------------------------------------------

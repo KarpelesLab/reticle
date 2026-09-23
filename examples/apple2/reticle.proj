@@ -1,13 +1,22 @@
 # An Apple II-compatible computer: a 6502, 48 KiB, the interleaved text
-# page, the soft switches, and DVI video.
+# page, the soft switches, and video — DVI on one board, VGA on another.
 #
-# The processor is `mos6502`, the video output is `dvi_tx` and the
-# terminal that serves as the keyboard is `uart`, all from the Reticle IP
-# library in this repository's ip/ directory. The three files in rtl/ are
-# the only HDL written for the project, and sw/ holds the machine's own
-# software: a monitor ROM and a character generator, both written for
-# this example. **No Apple ROM is included and none is needed** — see
-# README.md, which says exactly what is and is not Apple's here.
+# The processor is `mos6502`, the video output is `dvi_tx` or `vga_out`
+# and the terminal that serves as the keyboard is `uart`, all from the
+# Reticle IP library in this repository's ip/ directory. The four files
+# in rtl/ are the only HDL written for the project, and sw/ holds the
+# machine's own software: a monitor ROM and a character generator, both
+# written for this example. **No Apple ROM is included and none is
+# needed** — see README.md, which says exactly what is and is not
+# Apple's here.
+#
+# Two tops, one machine. `top` below is `apple2_top`, the ECP5 DVI build
+# that `device` and `constraints` go with; `apple2_basys3` is the same
+# `apple2` behind `vga_out` for a Digilent Basys 3, built with
+# `--device xc7a35t-cpg236 --constraints board/basys3.rcf` and measured
+# by `the_machine_maps_onto_the_artix7_for_the_basys3` in
+# tests/apple2.rs. A project manifest names one device and one top, so
+# the second target is a command line and not a second `device` line.
 name apple2
 top apple2_top
 
@@ -20,9 +29,12 @@ device ecp5-45f-CABGA381
 source rtl/apple2_video.v
 source rtl/apple2.v
 source rtl/apple2_top.v
+source rtl/apple2_basys3.v
 constraints board/ulx3s.rcf
 testbench tb/apple2_tb.v
+testbench tb/apple2_vga_tb.v
 
 depends mos6502 ^1.0.0 path ../../ip/mos6502
 depends uart ^1.0.0 path ../../ip/uart
 depends dvi_tx ^1.0.0 path ../../ip/dvi_tx
+depends vga_out ^1.0.0 path ../../ip/vga_out
