@@ -134,6 +134,11 @@ pub(crate) type Pixel = Option<u32>;
 /// `serial::Waveform` is for a one-bit net.
 pub(crate) type Colours = Vec<(u64, Pixel)>;
 
+/// A one-bit pin's changes, which is what `de`, `vga_hsync` and
+/// `vga_vsync` arrive as. It is `serial::Waveform` by another name, for
+/// a test that has no serial wire in it to borrow the name from.
+pub(crate) type Levels = Vec<(u64, Option<bool>)>;
+
 /// What one character cell turned out to be: a glyph of the font, and
 /// whether it was drawn inverted.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]

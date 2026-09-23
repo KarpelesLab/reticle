@@ -2493,8 +2493,8 @@ fn the_frame_comes_out_of_the_vga_pins() {
         .net("nes_vga_tb.vga_vsync")
         .expect("the testbench has vga_vsync");
 
-    let watch = |sim: &mut Simulator<'_>, net| -> Rc<RefCell<Vec<(u64, Option<bool>)>>> {
-        let wave: Rc<RefCell<Vec<(u64, Option<bool>)>>> = Rc::default();
+    let watch = |sim: &mut Simulator<'_>, net| -> Rc<RefCell<video::Levels>> {
+        let wave: Rc<RefCell<video::Levels>> = Rc::default();
         let sink = Rc::clone(&wave);
         sim.on_change(net, move |time, value| {
             sink.borrow_mut()
