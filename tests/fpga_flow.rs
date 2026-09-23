@@ -572,7 +572,7 @@ fn the_basys3_export_is_the_three_files_vivado_reads() {
     // The part string Vivado wants is the die, the package and the
     // speed grade run together.
     assert!(
-        inputs.script.contains("-part xc7a35tcpg236-1"),
+        inputs.script.contains("-part {xc7a35tcpg236-1}"),
         "{}",
         inputs.script
     );
@@ -580,13 +580,16 @@ fn the_basys3_export_is_the_three_files_vivado_reads() {
         inputs.args,
         vec!["vivado", "-mode", "batch", "-source", "blinky.tcl"]
     );
+    // Every name is braced. Tcl substitutes `$NAME` inside a bare word,
+    // and a module specialised by `--param` carries a `$`, so an
+    // unbraced name would send Vivado looking for a variable.
     for step in [
-        "read_verilog blinky.v",
-        "read_xdc blinky.xdc",
-        "synth_design -top blinky",
+        "read_verilog {blinky.v}",
+        "read_xdc {blinky.xdc}",
+        "synth_design -top {blinky}",
         "place_design",
         "route_design",
-        "write_bitstream -force blinky.bit",
+        "write_bitstream -force {blinky.bit}",
     ] {
         assert!(inputs.script.contains(step), "the script lacks `{step}`");
     }

@@ -101,6 +101,7 @@ store.
 Options:
   --dir <d>       Cache directory (default .reticle-cache)
   --top <module>  Treat this module as the top
+  --param <N=V>   Override a top-level parameter or generic; repeatable
   --output <f>    Write the resulting design here as .rtl
   --synth         Also synthesise, caching the netlists separately
   --only-top      Build just the top module, not every module
@@ -145,6 +146,7 @@ reports area and the critical path.
 Options:
   --liberty <file>  The Liberty library to map onto; required
   --top <module>    Treat this module as the top
+  --param <N=V>     Override a top-level parameter or generic; repeatable
   --output <file>   Write the mapped netlist as .rtl
   --verilog <file>  Write the mapped netlist as structural Verilog
   --quiet           Suppress the summary line
@@ -157,6 +159,7 @@ Parses each file and reports diagnostics. `.rtl` files are additionally
 validated against the IR's structural rules.
 
 Options:
+  --param <N=V>  Override a top-level parameter or generic; repeatable
   --quiet   Print diagnostics only, no summary line
 ";
 
@@ -173,6 +176,7 @@ Options:
   --list-devices     List the built-in devices and exit
   --constraints <f>  Read pin and placement constraints from an .rcf file
   --top <module>     Treat this module as the top
+  --param <N=V>      Override a top-level parameter or generic; repeatable
   --output-dir <d>   Write <top>.json and the constraints here (default: .)
   --netlist <file>   Also write the mapped design in the .rtl text format
   --report           Print the mapping report to stderr
@@ -188,6 +192,7 @@ optimises. Writes the resulting netlist in the `.rtl` format.
 Options:
   --output <file>     Write the netlist here (default: stdout)
   --top <module>      Treat this module as the top
+  --param <N=V>       Override a top-level parameter or generic; repeatable
   --fsm <encoding>    auto, binary, one-hot, gray or none
   --max-iterations <n>  Optimisation-loop cap (default 8)
   --lut <k>           Also map the logic onto k-input lookup tables (2..8)
@@ -204,6 +209,7 @@ Usage: reticle emit [options] <design.rtl>
 Options:
   --format <fmt>   verilog, vhdl, json, blif or edif (default verilog)
   --output <file>  Write here (default: stdout)
+  --param <N=V>    Override a top-level parameter or generic; repeatable
 ";
 
 const SIM_USAGE: &str = "\
@@ -214,6 +220,7 @@ limit. Text from $display and report statements goes to stdout.
 
 Options:
   --top <module>   Instantiate this module as the root
+  --param <N=V>    Override a top-level parameter or generic; repeatable
   --until <ticks>  Stop at this time (in the design's precision)
   --seed <n>       Seed for $random (default 1)
   --vcd <file>     Write a VCD waveform here
@@ -239,6 +246,7 @@ Options:
   --constraints <f>  Read create_clock and path exceptions from an .rcf file
   --period <ns>      Period for a clock no constraint names (default 10)
   --top <module>     Analyse this module
+  --param <N=V>      Override a top-level parameter or generic; repeatable
   --paths <n>        Worst paths to report (default 10)
   --hold             Report hold instead of setup
   --cdc              Report clock domain crossings instead of timing
@@ -261,6 +269,7 @@ drawn one box per process instead.
 Options:
   --output-dir <d>   Write the pages here (default: viewer)
   --top <module>     Treat this module as the top
+  --param <N=V>      Override a top-level parameter or generic; repeatable
   --module <names>   Render only these modules (comma separated)
   --title <text>     Heading of the index page
   --synth            Synthesise first, so the schematic shows cells
@@ -287,6 +296,7 @@ the `formal_assert`, `formal_assume` and `formal_cover` attributes.
 
 Options:
   --top <module>   Check this module (default: the design's top)
+  --param <N=V>    Override a top-level parameter or generic; repeatable
   --depth <n>      Bounded-check depth (default 20)
   --max-k <n>      Largest induction depth to try (default 10)
   --init <mode>    reset, zero or free (default reset)
@@ -400,21 +410,25 @@ fn spec_for(usage: &str) -> Spec {
         Spec {
             options: &["index"],
             flags: &[],
+            repeated: &[],
         }
     } else if std::ptr::eq(usage, ADD_USAGE) {
         Spec {
             options: &["index", "project"],
             flags: &["dry-run"],
+            repeated: &[],
         }
     } else if std::ptr::eq(usage, ASIC_USAGE) {
         Spec {
             options: &["liberty", "top", "output", "verilog"],
             flags: &["quiet"],
+            repeated: &["param"],
         }
     } else if std::ptr::eq(usage, BUILD_USAGE) {
         Spec {
             options: &["output", "lock"],
             flags: &["no-lock", "synth", "report", "quiet"],
+            repeated: &[],
         }
     } else if std::ptr::eq(usage, CACHE_USAGE) {
         Spec {
@@ -422,46 +436,55 @@ fn spec_for(usage: &str) -> Spec {
             flags: &[
                 "synth", "only-top", "stats", "verify", "list", "clear", "quiet",
             ],
+            repeated: &["param"],
         }
     } else if std::ptr::eq(usage, CHECK_USAGE) {
         Spec {
             options: &[],
             flags: &["quiet"],
+            repeated: &["param"],
         }
     } else if std::ptr::eq(usage, FMT_USAGE) {
         Spec {
             options: &["width", "indent"],
             flags: &["write", "check", "diff"],
+            repeated: &[],
         }
     } else if std::ptr::eq(usage, SYNTH_USAGE) {
         Spec {
             options: &["output", "top", "fsm", "max-iterations", "lut"],
             flags: &["report", "quiet", "gates", "verify"],
+            repeated: &["param"],
         }
     } else if std::ptr::eq(usage, FPGA_USAGE) {
         Spec {
             options: &["device", "constraints", "top", "output-dir", "netlist"],
             flags: &["list-devices", "report", "quiet"],
+            repeated: &["param"],
         }
     } else if std::ptr::eq(usage, LSP_USAGE) {
         Spec {
             options: &[],
             flags: &[],
+            repeated: &[],
         }
     } else if std::ptr::eq(usage, TIMING_USAGE) {
         Spec {
             options: &["constraints", "period", "top", "paths", "device"],
             flags: &["hold", "cdc", "summary"],
+            repeated: &["param"],
         }
     } else if std::ptr::eq(usage, VIEWER_USAGE) {
         Spec {
             options: &["output-dir", "top", "module", "title", "max-nodes"],
             flags: &["synth", "no-schematic", "no-doc", "no-source", "quiet"],
+            repeated: &["param"],
         }
     } else if std::ptr::eq(usage, EMIT_USAGE) {
         Spec {
             options: &["format", "output"],
             flags: &[],
+            repeated: &["param"],
         }
     } else if std::ptr::eq(usage, SIM_USAGE) {
         Spec {
@@ -476,11 +499,13 @@ fn spec_for(usage: &str) -> Spec {
                 "coverage",
             ],
             flags: &["quiet", "interactive"],
+            repeated: &["param"],
         }
     } else {
         Spec {
             options: &["top", "depth", "max-k", "init", "trace"],
             flags: &[],
+            repeated: &["param"],
         }
     }
 }
@@ -557,6 +582,26 @@ fn classify(path: &str) -> Option<Input> {
 /// Either one `.rtl` file, read straight into the IR, or one or more
 /// Verilog sources, which are preprocessed, parsed and elaborated. Mixing
 /// the two is rejected, since an `.rtl` file is already a whole design.
+/// Splits each `--param NAME=VALUE` into its two halves.
+///
+/// The value is whatever follows the first `=`, so `--param S="a=b"`
+/// keeps its own equals sign. The elaborator parses it as a literal of
+/// the source language and keeps it as a string when it is not one, so
+/// nothing here has to know the difference.
+fn param_overrides(args: &Args) -> Result<Vec<(String, String)>, ArgError> {
+    args.repeated("param")
+        .iter()
+        .map(|text| match text.split_once('=') {
+            Some((name, value)) if !name.is_empty() => Ok((name.to_string(), value.to_string())),
+            _ => Err(ArgError::BadValue {
+                option: "param".to_string(),
+                value: text.clone(),
+                expected: "a `NAME=VALUE` pair",
+            }),
+        })
+        .collect()
+}
+
 fn load_design(args: &Args) -> Result<Result<(Design, SourceMap), Outcome>, ArgError> {
     let paths = args.positionals();
     if paths.is_empty() {
@@ -635,6 +680,7 @@ fn load_design(args: &Args) -> Result<Result<(Design, SourceMap), Outcome>, ArgE
 
         let mut options = reticle::vhdl::ElabOptions::new();
         options.top = args.option("top").map(str::to_string);
+        options.generics = param_overrides(args)?;
         let mut diags = Diagnostics::new();
         let design = reticle::vhdl::elaborate(&analysis, &options, &mut diags);
         let failed = report(&mut diags, &map);
@@ -674,6 +720,7 @@ fn load_design(args: &Args) -> Result<Result<(Design, SourceMap), Outcome>, ArgE
         .unwrap_or_default();
     let mut options = reticle::verilog::ElabOptions::new(dialect);
     options.top = args.option("top").map(str::to_string);
+    options.params = param_overrides(args)?;
     let refs: Vec<&reticle::verilog::ast::SourceFile> = files.iter().collect();
     let mut diags = Diagnostics::new();
     let design = reticle::verilog::elaborate(&refs, &options, &mut diags);
@@ -1575,10 +1622,15 @@ fn fpga(args: &Args) -> Result<Outcome, ArgError> {
                     return Ok(Outcome::Failed);
                 }
             };
+            // The file names come from the export, not from `top_name`:
+            // a module specialised by `--param` is called something like
+            // `soc_top$CLK_DIV_868`, and the export flattens that into a
+            // name a shell and a file system can both hold.
+            let stem = inputs.stem;
             files = vec![
-                (dir.join(format!("{top_name}.v")), inputs.verilog),
-                (dir.join(format!("{top_name}.xdc")), inputs.xdc),
-                (dir.join(format!("{top_name}.tcl")), inputs.script),
+                (dir.join(format!("{stem}.v")), inputs.verilog),
+                (dir.join(format!("{stem}.xdc")), inputs.xdc),
+                (dir.join(format!("{stem}.tcl")), inputs.script),
             ];
             command = inputs.args;
         }

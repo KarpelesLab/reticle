@@ -1379,7 +1379,7 @@ fn the_machine_maps_onto_the_artix7_for_the_basys3() {
     // The three files Vivado reads, and the command line that runs them.
     let inputs = fpga::export_vendor(&design, top, device, &constraints).expect("the export");
     assert!(
-        inputs.script.contains("-part xc7a35tcpg236-1"),
+        inputs.script.contains("-part {xc7a35tcpg236-1}"),
         "{}",
         inputs.script
     );
@@ -1387,13 +1387,16 @@ fn the_machine_maps_onto_the_artix7_for_the_basys3() {
         inputs.args,
         vec!["vivado", "-mode", "batch", "-source", "apple2_basys3.tcl"]
     );
+    // Every name is braced. Tcl substitutes `$NAME` inside a bare word,
+    // and a module specialised by `--param` carries a `$`, so an
+    // unbraced name would send Vivado looking for a variable.
     for step in [
-        "read_verilog apple2_basys3.v",
-        "read_xdc apple2_basys3.xdc",
-        "synth_design -top apple2_basys3",
+        "read_verilog {apple2_basys3.v}",
+        "read_xdc {apple2_basys3.xdc}",
+        "synth_design -top {apple2_basys3}",
         "place_design",
         "route_design",
-        "write_bitstream -force apple2_basys3.bit",
+        "write_bitstream -force {apple2_basys3.bit}",
     ] {
         assert!(inputs.script.contains(step), "the script lacks `{step}`");
     }

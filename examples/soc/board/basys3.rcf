@@ -24,7 +24,7 @@
 #
 # CLK_DIV: soc_top divides the clock for its UART. At 100 MHz and 115200
 # baud that is 868, not the 104 the module defaults to for a 12 MHz
-# board, so build this with `-p CLK_DIV=868` or the serial output is
+# board, so build this with `--param CLK_DIV=868` or the serial output is
 # unreadable.
 set_io -io_standard LVCMOS33 clk W5
 set_io -io_standard LVCMOS33 uart_tx A18

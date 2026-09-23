@@ -16,6 +16,7 @@ use std::fmt;
 pub(crate) struct Args {
     flags: Vec<String>,
     options: BTreeMap<String, String>,
+    repeated: BTreeMap<String, Vec<String>>,
     positionals: Vec<String>,
 }
 
@@ -60,6 +61,10 @@ pub(crate) struct Spec {
     pub(crate) options: &'static [&'static str],
     /// Options that take no value.
     pub(crate) flags: &'static [&'static str],
+    /// Options that take a value and may be given more than once, each
+    /// occurrence adding to a list rather than replacing the last. An
+    /// option is in exactly one of the three lists.
+    pub(crate) repeated: &'static [&'static str],
 }
 
 impl Args {
@@ -101,6 +106,21 @@ impl Args {
                     }
                 };
                 args.options.insert(name.to_string(), value);
+            } else if spec.repeated.contains(&name) {
+                let value = match inline {
+                    Some(v) => v,
+                    None => {
+                        let next = argv
+                            .get(i)
+                            .ok_or_else(|| ArgError::MissingValue(name.to_string()))?;
+                        i += 1;
+                        next.clone()
+                    }
+                };
+                args.repeated
+                    .entry(name.to_string())
+                    .or_default()
+                    .push(value);
             } else {
                 return Err(ArgError::Unknown(name.to_string()));
             }
@@ -116,6 +136,12 @@ impl Args {
     /// The option's value, if given.
     pub(crate) fn option(&self, name: &str) -> Option<&str> {
         self.options.get(name).map(String::as_str)
+    }
+
+    /// Every value given for a repeatable option, in the order written.
+    /// Empty when it was not given at all.
+    pub(crate) fn repeated(&self, name: &str) -> &[String] {
+        self.repeated.get(name).map_or(&[], Vec::as_slice)
     }
 
     /// The option parsed as an unsigned integer.
@@ -150,11 +176,60 @@ impl Args {
 
 #[cfg(test)]
 mod tests {
+
+    /// A repeatable option collects every occurrence instead of keeping
+    /// the last, which is what `--param NAME=VALUE` needs.
+    #[test]
+    fn a_repeatable_option_collects_every_occurrence() {
+        const SPEC2: Spec = Spec {
+            options: &["top"],
+            flags: &["quiet"],
+            repeated: &["param"],
+        };
+        let argv: Vec<String> = [
+            "--top",
+            "m",
+            "--param",
+            "A=1",
+            "--param=B=2",
+            "--quiet",
+            "x.v",
+        ]
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
+        let args = Args::parse(&argv, &SPEC2).expect("parses");
+        assert_eq!(args.option("top"), Some("m"));
+        assert!(args.flag("quiet"));
+        assert_eq!(
+            args.repeated("param"),
+            ["A=1".to_string(), "B=2".to_string()]
+        );
+        assert_eq!(args.positionals(), ["x.v".to_string()]);
+        // An option nobody gave is an empty list, not a panic.
+        assert!(args.repeated("other").is_empty());
+    }
+
+    /// A repeatable option still needs its value.
+    #[test]
+    fn a_repeatable_option_without_a_value_is_an_error() {
+        const SPEC2: Spec = Spec {
+            options: &[],
+            flags: &[],
+            repeated: &["param"],
+        };
+        let argv = vec!["--param".to_string()];
+        assert!(matches!(
+            Args::parse(&argv, &SPEC2),
+            Err(ArgError::MissingValue(name)) if name == "param"
+        ));
+    }
     use super::*;
 
     const SPEC: Spec = Spec {
         options: &["top", "depth"],
         flags: &["vcd", "quiet"],
+        repeated: &[],
     };
 
     fn argv(items: &[&str]) -> Vec<String> {

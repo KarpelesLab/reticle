@@ -255,6 +255,30 @@ pub struct VendorInputs {
     /// The command line that runs that script, program first; empty
     /// likewise.
     pub args: Vec<String>,
+    /// What to call the three files, without an extension.
+    ///
+    /// This is the top module's name with anything awkward in a file
+    /// name replaced, which matters once a parameter is overridden:
+    /// specialising `soc_top` with `CLK_DIV=868` names the module
+    /// `soc_top$CLK_DIV_868`, and a `$` in a file name is a variable to
+    /// every shell that meets it. The module keeps its real name inside
+    /// the netlist; only the file is renamed.
+    pub stem: String,
+}
+
+/// A module name made safe to use as a file name.
+///
+/// Everything outside letters, digits, `_`, `-` and `.` becomes `_`.
+fn file_stem(top: &str) -> String {
+    top.chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || matches!(c, '_' | '-' | '.') {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect()
 }
 
 /// Knobs for [`synthesize_for`].
@@ -1207,8 +1231,9 @@ pub fn export_vendor(
         keep_attrs: true,
         blackboxes: false,
     };
+    let stem = file_stem(&top);
     let (script, args) = match device.family.as_str() {
-        "xc7" => (vivado_tcl(device, &top), vivado_args(&top)),
+        "xc7" => (vivado_tcl(device, &top, &stem), vivado_args(&stem)),
         _ => (String::new(), Vec::new()),
     };
     Ok(VendorInputs {
@@ -1217,6 +1242,7 @@ pub fn export_vendor(
         sdc: constraints.write_sdc(device),
         script,
         args,
+        stem,
     })
 }
 
@@ -1243,7 +1269,7 @@ fn vivado_part(device: &Device) -> String {
 /// so `synth_design` has nothing to infer: it elaborates the
 /// instantiations, which is also the point at which Vivado checks that
 /// every primitive and every pin Reticle named really exists.
-fn vivado_tcl(device: &Device, top: &str) -> String {
+fn vivado_tcl(device: &Device, top: &str, stem: &str) -> String {
     use std::fmt::Write as _;
     let part = vivado_part(device);
     let mut out = String::new();
@@ -1252,7 +1278,7 @@ fn vivado_tcl(device: &Device, top: &str) -> String {
         "# Vivado batch script written by reticle for {} ({})",
         device.name, device.family
     );
-    let _ = writeln!(out, "# Run it with: {}", vivado_args(top).join(" "));
+    let _ = writeln!(out, "# Run it with: {}", vivado_args(stem).join(" "));
     let _ = writeln!(
         out,
         "# The netlist is already mapped to 7-series primitives, so this\n\
@@ -1260,32 +1286,88 @@ fn vivado_tcl(device: &Device, top: &str) -> String {
          # anything. Reticle has not run it: what the test suite proves is\n\
          # that the cells and pins are ones the device database declares."
     );
-    let _ = writeln!(out, "create_project -in_memory -part {part}");
-    let _ = writeln!(out, "read_verilog {top}.v");
-    let _ = writeln!(out, "read_xdc {top}.xdc");
-    let _ = writeln!(out, "synth_design -top {top} -part {part}");
+    // Every name is braced. Tcl substitutes `$NAME` inside a bare word,
+    // and a module specialised by a parameter override is called
+    // something like `soc_top$CLK_DIV_868`, so an unbraced name would
+    // have Vivado look up a variable that does not exist. Braces quote
+    // it literally. The module keeps its real name here; only the file
+    // names are the flattened `stem`.
+    let _ = writeln!(out, "create_project -in_memory -part {{{part}}}");
+    let _ = writeln!(out, "read_verilog {{{stem}.v}}");
+    let _ = writeln!(out, "read_xdc {{{stem}.xdc}}");
+    let _ = writeln!(out, "synth_design -top {{{top}}} -part {{{part}}}");
     let _ = writeln!(out, "opt_design");
     let _ = writeln!(out, "place_design");
     let _ = writeln!(out, "route_design");
-    let _ = writeln!(out, "report_utilization -file {top}_utilization.rpt");
-    let _ = writeln!(out, "report_timing_summary -file {top}_timing.rpt");
-    let _ = writeln!(out, "write_bitstream -force {top}.bit");
+    let _ = writeln!(out, "report_utilization -file {{{stem}_utilization.rpt}}");
+    let _ = writeln!(out, "report_timing_summary -file {{{stem}_timing.rpt}}");
+    let _ = writeln!(out, "write_bitstream -force {{{stem}.bit}}");
     out
 }
 
 /// The command line that runs [`vivado_tcl`].
-fn vivado_args(top: &str) -> Vec<String> {
+fn vivado_args(stem: &str) -> Vec<String> {
     vec![
         "vivado".to_owned(),
         "-mode".to_owned(),
         "batch".to_owned(),
         "-source".to_owned(),
-        format!("{top}.tcl"),
+        format!("{stem}.tcl"),
     ]
 }
 
 #[cfg(test)]
 mod tests {
+
+    /// A module specialised by a parameter override carries a `$`, which
+    /// Tcl reads as the start of a variable name. Every name the script
+    /// writes is braced, so Vivado sees the characters rather than a
+    /// lookup that would fail.
+    #[test]
+    fn a_specialised_module_survives_the_vivado_script() {
+        let device = crate::fpga::target("xc7a35t-cpg236").expect("the part");
+        let top = "soc_top$CLK_DIV_868";
+        let stem = file_stem(top);
+        assert_eq!(
+            stem, "soc_top_CLK_DIV_868",
+            "the `$` belongs in no file name"
+        );
+
+        let tcl = vivado_tcl(device, top, &stem);
+        assert!(
+            tcl.contains("synth_design -top {soc_top$CLK_DIV_868}"),
+            "the module name must be braced, or Tcl substitutes it:\n{tcl}"
+        );
+        assert!(
+            tcl.contains("read_verilog {soc_top_CLK_DIV_868.v}"),
+            "the file read must be the one written:\n{tcl}"
+        );
+        assert!(
+            tcl.contains("write_bitstream -force {soc_top_CLK_DIV_868.bit}"),
+            "{tcl}"
+        );
+        // No `$` may sit in a bare word anywhere in the script.
+        for line in tcl.lines().filter(|l| !l.starts_with('#')) {
+            for word in line.split_whitespace() {
+                assert!(
+                    !word.contains('$') || (word.starts_with('{') && word.ends_with('}')),
+                    "unbraced `$` in `{word}`:\n{tcl}"
+                );
+            }
+        }
+        assert_eq!(
+            vivado_args(&stem).last().unwrap(),
+            "soc_top_CLK_DIV_868.tcl"
+        );
+    }
+
+    /// An ordinary name is left exactly as it is.
+    #[test]
+    fn an_ordinary_module_name_is_not_rewritten() {
+        assert_eq!(file_stem("blinky"), "blinky");
+        assert_eq!(file_stem("soc_top"), "soc_top");
+        assert_eq!(file_stem("a-b.c_1"), "a-b.c_1");
+    }
     use super::*;
     use crate::diag::Diagnostics;
     use crate::fpga::{MapOptions, map, target};
