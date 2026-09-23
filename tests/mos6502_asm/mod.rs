@@ -15,8 +15,9 @@
 //! every 6502 assembler accepts: `#$nn` for an immediate, `$nn,x` for
 //! zero page indexed, `($nn,x)` and `($nn),y` for the two indirections,
 //! `($nnnn)` for the indirect jump, `a` or nothing for the accumulator,
-//! and a label for a branch or a jump. It is deliberately small: no
-//! expressions beyond a number or a name, no macros, no segments.
+//! and a label for a branch or a jump, with `<` and `>` in front of a
+//! number or a name for its low and high byte. It is deliberately small:
+//! no other expressions, no macros, no segments.
 //!
 //! One rule needs stating because the assembly is otherwise ambiguous:
 //! **a hexadecimal operand written with three or more digits is an
@@ -456,8 +457,21 @@ struct Symbols {
 
 impl Symbols {
     /// A literal or a defined name, with its digit count.
+    ///
+    /// `<` and `>` in front take the low and the high byte of what
+    /// follows, which is the syntax every 6502 assembler uses and the
+    /// only way a program can put the address of a label into a
+    /// zero-page pointer: `lda #<message` then `lda #>message`. The
+    /// result counts as two hexadecimal digits, because a byte is what
+    /// it is.
     fn value(&self, text: &str) -> Result<(u16, usize), String> {
         let text = text.trim();
+        if let Some(rest) = text.strip_prefix('<') {
+            return self.value(rest).map(|(value, _)| (value & 0xFF, 2));
+        }
+        if let Some(rest) = text.strip_prefix('>') {
+            return self.value(rest).map(|(value, _)| (value >> 8, 2));
+        }
         if let Some((value, digits)) = number(text) {
             let wrapped = u16::try_from(value.rem_euclid(0x1_0000)).expect("sixteen bits");
             return Ok((wrapped, digits));
