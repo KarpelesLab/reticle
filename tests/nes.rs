@@ -1780,7 +1780,7 @@ fn the_console_maps_onto_the_artix7_for_the_basys3() {
     // The three files Vivado reads, and the command line that runs them.
     let inputs = fpga::export_vendor(&design, top, device, &constraints).expect("the export");
     assert!(
-        inputs.script.contains("-part xc7a35tcpg236-1"),
+        inputs.script.contains("-part {xc7a35tcpg236-1}"),
         "{}",
         inputs.script
     );
@@ -1789,12 +1789,12 @@ fn the_console_maps_onto_the_artix7_for_the_basys3() {
         vec!["vivado", "-mode", "batch", "-source", "nes_basys3.tcl"]
     );
     for step in [
-        "read_verilog nes_basys3.v",
-        "read_xdc nes_basys3.xdc",
-        "synth_design -top nes_basys3",
+        "read_verilog {nes_basys3.v}",
+        "read_xdc {nes_basys3.xdc}",
+        "synth_design -top {nes_basys3}",
         "place_design",
         "route_design",
-        "write_bitstream -force nes_basys3.bit",
+        "write_bitstream -force {nes_basys3.bit}",
     ] {
         assert!(inputs.script.contains(step), "the script lacks `{step}`");
     }
