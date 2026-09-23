@@ -109,6 +109,23 @@ wasm = []
 # those stages' output. See `docs/cache.md`.
 cache = []
 
+# --- talking to a board ---
+# Programming a real FPGA over USB, and the `reticle program` command that
+# drives it. `src/program` holds the FTDI MPSSE command encoding (AN_108),
+# the IEEE 1149.1 TAP state machine and the Xilinx 7-series JTAG
+# configuration sequence (UG470) as pure byte-shuffling, plus the thin USB
+# transport that carries it. See `docs/programming.md`.
+#
+# **This is the one feature with a dependency, which is why it is off by
+# default**: `cargo add reticle` has to stay dependency-free for everyone
+# who compiles a design and never touches a cable, and `cli` deliberately
+# does *not* imply it, so the stock binary is dependency-free too. What it
+# adds is one crate and no transitive tree: `rawusb` is a sibling Karpeles
+# Lab crate (MIT, edition 2024, MSRV 1.89) with no dependencies of its
+# own. It is also what keeps `unsafe_code = "deny"` true here — the ioctls
+# live in `rawusb`'s `src/sys/`, and `src/program` stays safe.
+program = ["dep:rawusb"]
+
 # --- verification & tooling ---
 # Formal: bounded model checking and equivalence checking over the IR, built
 # on an in-crate SAT solver.
@@ -140,7 +157,15 @@ cli = ["verilog", "vhdl", "sim", "synth", "formal", "fpga", "timing", "ip", "lsp
 # trivially cross-compilable (including to WebAssembly), and free of version
 # churn from upstream crates. Any exception must be a sibling Karpeles Lab
 # crate and must be justified here, as purecrypto does for `compcol`.
+#
+# There is exactly one exception, and it is optional: `rawusb`, behind the
+# `program` feature. Configuring a real board means speaking USB, which no
+# amount of from-scratch code can do without the operating system; `rawusb`
+# is the Karpeles Lab crate that does it (MIT, no dependencies of its own,
+# edition 2024, MSRV 1.89, the same as this crate). Keeping it optional
+# means a default build still resolves to zero dependencies.
 [dependencies]
+rawusb = { version = "0.1.1", optional = true }
 
 [dev-dependencies]
 

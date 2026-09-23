@@ -35,6 +35,7 @@
 //! | [`lsp`]     | `lsp`     | Language server for Verilog and VHDL             |
 //! | [`cache`]   | `cache`   | Incremental builds over a content-addressed store |
 //! | [`viewer`]  | `viewer`  | Schematic and documentation HTML pages for a design |
+//! | [`program`] | `program` | Configuring a real FPGA over USB: MPSSE, JTAG, UG470 |
 //! | [`ffi`]     | `ffi`     | C ABI for embedding the compiler in another tool |
 //! | [`wasm`]    | `wasm`    | WebAssembly surface for the browser playground   |
 //!
@@ -98,6 +99,13 @@ pub mod lsp;
 pub mod cache;
 #[cfg(feature = "viewer")]
 pub mod viewer;
+
+// Programming a board over USB. This is the one module with a
+// dependency (`rawusb`, optional, see `Cargo.toml`) and the one that
+// reaches outside the process at all; all but its `usb` submodule is
+// pure byte-shuffling, in the same sans-I/O shape as everything else.
+#[cfg(feature = "program")]
+pub mod program;
 
 #[cfg(feature = "ffi")]
 pub mod ffi;

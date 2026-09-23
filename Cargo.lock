@@ -3,5 +3,14 @@
 version = 4
 
 [[package]]
+name = "rawusb"
+version = "0.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0b452918015cba60b96715e240c3adbaf3268c545c664b220d50d7f49597f27b"
+
+[[package]]
 name = "reticle"
 version = "0.0.2"
+dependencies = [
+ "rawusb",
+]
