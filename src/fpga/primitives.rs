@@ -76,7 +76,7 @@
 //! [`Cell::params`]: crate::ir::Cell::params
 //! [`Cell::attrs`]: crate::ir::Cell::attrs
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 use std::fmt::Write as _;
 
 use super::constraints::{Constraints, IoAttrs};
@@ -635,15 +635,45 @@ pub(super) fn slice_expr(
     expr(module, ExprKind::Slice { base, hi, lo }, span)
 }
 
-/// A name no net and no cell of the module uses yet.
+/// A name no net and no cell of the module uses yet: `base`, or `base$1`,
+/// `base$2` and so on until one is free.
+///
+/// The obvious way to write that is a lookup per candidate, and it is
+/// why lowering a memory to logic used to take minutes: the hundreds of
+/// cells one memory becomes all ask for the same base, so candidate `k`
+/// costs `k` scans of every net and cell, and a module with a dozen
+/// small memories spends its afternoon looking up names. One pass
+/// collecting the suffixes already spoken for gives the same answer —
+/// the *smallest* free suffix, so the names are the ones the old loop
+/// produced — for one scan instead of `k` of them.
 fn unique_name(module: &Module, base: &str) -> Name {
-    if module.net_by_name(base).is_none() && module.cell_by_name(base).is_none() {
+    let mut base_taken = false;
+    let mut taken: HashSet<u32> = HashSet::new();
+    {
+        let mut note = |name: &str| {
+            if name == base {
+                base_taken = true;
+            } else if let Some(suffix) = name
+                .strip_prefix(base)
+                .and_then(|rest| rest.strip_prefix('$'))
+                .and_then(|digits| digits.parse::<u32>().ok())
+            {
+                taken.insert(suffix);
+            }
+        };
+        for (_, net) in module.nets.iter() {
+            note(net.name.as_str());
+        }
+        for (_, cell) in module.cells.iter() {
+            note(cell.name.as_str());
+        }
+    }
+    if !base_taken {
         return Name::new(base);
     }
     for suffix in 1u32.. {
-        let candidate = format!("{base}${suffix}");
-        if module.net_by_name(&candidate).is_none() && module.cell_by_name(&candidate).is_none() {
-            return Name::new(candidate);
+        if !taken.contains(&suffix) {
+            return Name::new(format!("{base}${suffix}"));
         }
     }
     unreachable!("a unique name always exists")
