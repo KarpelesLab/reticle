@@ -573,6 +573,21 @@ the bus contract, testing a core so the test cannot agree with a wrong
 core, cycle accuracy, interrupts and reset, documented quirks, and the
 resource cost.
 
+A third system takes the same path to a *screen* rather than to a serial
+line: `examples/apple2` is `mos6502`, `uart` and `dvi_tx` on an
+ECP5 45F, with 48 KiB of two-ported RAM, the Apple II memory map, the
+interleaved text page at `$0400`, and a monitor ROM and character
+generator written for the example (no Apple software is included and none
+is needed). `tests/apple2.rs` samples the RGB and DE the video generator
+hands `dvi_tx` across a whole 640 x 480 frame, rebuilds the picture from
+the VESA timing, cuts it into character cells and asserts the forty
+columns of twenty-four rows that come out, which is the analogue of
+`the_line_comes_out_of_the_serial_wire` for a machine with a screen. It
+fits the 45F in 2755 `LUT4` and 50 `DP16KD`, and it does not fit the
+HX8K, by six times on block RAM. Building it found two defects in
+`fpga::constraints`, both about a design still hierarchical when its
+board file is checked; both are fixed with a regression test.
+
 ## Phase 9: developer experience
 
 - [x] Language server (LSP) for both languages: diagnostics as you type

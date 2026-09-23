@@ -96,9 +96,9 @@ modules it instantiates go on one command line. A design already in the
 
 ## Worked examples and guides
 
-Two complete systems are built out of the IP library in `examples/`,
-each with a project manifest, one file of user HDL and a test that drives
-it from the manifest to the files `nextpnr-ice40` reads:
+Three complete systems are built out of the IP library in `examples/`,
+each with a project manifest, a little user HDL and a test that drives it
+from the manifest to the files `nextpnr` reads:
 
 - [`examples/soc`](examples/soc) — a RISC-V system on chip around
   [`ip/rv32i`](ip/rv32i) and [`ip/uart`](ip/uart) that prints a line over
@@ -106,6 +106,11 @@ it from the manifest to the files `nextpnr-ice40` reads:
 - [`examples/mos6502_computer`](examples/mos6502_computer) — the same
   system around [`ip/mos6502`](ip/mos6502): one bus, RAM at the bottom
   for zero page and the stack, ROM at the top for the vectors.
+- [`examples/apple2`](examples/apple2) — an Apple II-compatible machine
+  with 48 KiB, the interleaved text page at `$0400` and DVI video through
+  [`ip/dvi_tx`](ip/dvi_tx), running a monitor ROM and a character
+  generator written for the example. Its test decodes the 40 x 24
+  character screen back out of a whole frame of video.
 
 [`docs/writing-a-cpu.md`](docs/writing-a-cpu.md) is the guide behind
 those two: how to package a processor as IP, from the manifest and the
