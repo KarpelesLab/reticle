@@ -234,14 +234,48 @@ fn real_slices_become_real_bels() {
         .count();
     assert_eq!(init_bits, 64, "a 7-series LUT has a 64-bit INIT");
 
-    // And the gap that matters: the database does not say which wire a
-    // bel pin reaches, so the bels have no pins. When that stops being
-    // true this assertion is what will notice.
-    assert!(
-        lut.pins.is_empty(),
-        "bel pins came from somewhere: {:?}",
-        lut.pins
-    );
+    // And the gap phase one could not close: which wire a bel pin
+    // reaches. The pin *names* are UG474's and the wires are read off
+    // `ppips_<type>.db`; `xray::sites` says which is which.
+    let pins: Vec<(&str, &str)> = lut
+        .pins
+        .iter()
+        .map(|(role, wire)| (role.as_str(), wire.name.as_str()))
+        .collect();
+    assert_eq!(pins.len(), 7, "six inputs and an output: {pins:?}");
+    assert_eq!(pins[0].0, "i0");
+    assert_eq!(pins[6].0, "o");
+    // Every one of them names a wire the tile type really declares, or
+    // the graph would grow a dangling edge.
+    for (_, wire) in &pins {
+        assert!(clb.has_wire(wire), "{wire} is not a wire of {}", clb.name);
+    }
+    // An IO bel reaches the fabric and deliberately does not reach the
+    // pad: a package ball is not a wire a router can get to.
+    let iob = fabric
+        .arch
+        .tile_types
+        .iter()
+        .find(|t| t.name.ends_with("IOB33"))
+        .expect("the region holds an IO column");
+    let buffer = iob
+        .bels
+        .iter()
+        .find(|b| b.kind == "io")
+        .expect("an IO tile has buffers");
+    assert!(buffer.pin("din").is_some() && buffer.pin("dout").is_some());
+    assert!(buffer.pin("pad").is_none());
+    // And it carries a whole IO standard under the name of the
+    // primitive that wants it.
+    for primitive in ["IBUF", "OBUF"] {
+        assert!(
+            buffer.config.iter().any(|entry| matches!(
+                entry,
+                reticle::fpga::ConfigEntry::Cell { primitive: p, bits } if p == primitive && !bits.is_empty()
+            )),
+            "no bits for {primitive}"
+        );
+    }
 }
 
 #[test]
@@ -438,26 +472,74 @@ fn a_design_reaches_a_real_bitstream() {
 /// frames at addresses `part.json` describes, and those frames into a
 /// UG470 container whose CRCs check.
 ///
-/// It does not prove the design works. It is **not routed**: the
-/// database gives no bel pins, so no signal has a path (see
-/// `docs/fpga-xray.md`). Flipping a switch on a board loaded with this
-/// would do nothing at all.
+/// It does **not** prove the design works. Nothing here has been sent
+/// down a JTAG cable. What it adds to that is the comparison in
+/// [`the_io_path_is_the_one_vivado_built`], which is a different
+/// argument: not "this looks structurally right" but "Vivado's own
+/// bitstream for this board sets these very features in these very
+/// tiles".
 #[test]
 #[cfg(all(feature = "verilog", feature = "synth"))]
 fn the_milestone_design_reaches_a_bit_file() {
+    let Some(root) = chipdb() else { return };
+    let Some(features) = milestone(&root) else {
+        return;
+    };
+    for (tile, feature) in &features {
+        eprintln!("  {tile}.{feature}");
+    }
+    let has = |needle: &str| {
+        features
+            .iter()
+            .any(|(t, f)| format!("{t}.{f}").contains(needle))
+    };
+    // The two switches and the LED, on the sites the package map names:
+    // V17 is `IOB_X0Y11`, the lower half of `LIOB33_X0Y11`, which is the
+    // half prjxray calls `IOB_Y1`.
+    assert!(has("LIOB33_X0Y11.IOB_Y1.LVCMOS25_LVCMOS33_LVTTL.IN"), "sw0");
+    assert!(has("LIOB33_X0Y11.IOB_Y0.LVCMOS25_LVCMOS33_LVTTL.IN"), "sw1");
+    assert!(has("LIOB33_X0Y3.IOB_Y1.LVCMOS33_LVTTL.DRIVE"), "led");
+    // The path through the IO logic, which is where a pad reaches the
+    // interconnect.
+    assert!(
+        has("LIOI3_X0Y11.ILOGIC_Y1.ZINV_D"),
+        "sw0 through the ilogic"
+    );
+    assert!(
+        has("LIOI3_X0Y3.OLOGIC_Y1.OMUX.D1"),
+        "led through the ologic"
+    );
+    // The interconnect ends of that path.
+    assert!(
+        has("INT_L_X0Y11.") && has(".LOGIC_OUTS_L18"),
+        "sw0 into the fabric"
+    );
+    assert!(has("INT_L_X0Y3.IMUX_L34."), "the led out of the fabric");
+    // And a lookup table with a truth table in it.
+    assert!(
+        features.iter().any(|(_, f)| f.contains("LUT.INIT[")),
+        "the lut"
+    );
+}
+
+/// Runs the milestone design and gives back what its bitstream says, in
+/// the database's own feature names.
+///
+/// `None` when the crate was published without `examples/`.
+#[cfg(all(feature = "verilog", feature = "synth"))]
+fn milestone(root: &str) -> Option<Vec<(String, String)>> {
     use reticle::diag::Diagnostics;
     use reticle::fpga::place::{PlaceOptions, place};
     use reticle::fpga::{Constraints, FpgaOptions, Netlist, bitstream, synthesize_for, target};
     use reticle::source::SourceMap;
 
-    let Some(root) = chipdb() else { return };
     let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("examples/basys3");
     let (Ok(verilog), Ok(rcf)) = (
         std::fs::read_to_string(dir.join("sw_led.v")),
         std::fs::read_to_string(dir.join("sw_led.rcf")),
     ) else {
         eprintln!("skipped: `examples/` is not in the published crate");
-        return;
+        return None;
     };
 
     let mut map = SourceMap::new();
@@ -502,7 +584,7 @@ fn the_milestone_design_reaches_a_bit_file() {
 
     // The fabric around the pins the constraints name, which is how a
     // flow picks a region without a human choosing coordinates.
-    let db = XrayDatabase::open(&DiskFiles, &root, DEVICE, &XrayOptions::new()).unwrap();
+    let db = XrayDatabase::open(&DiskFiles, root, DEVICE, &XrayOptions::new()).unwrap();
     let pins: Vec<String> = constraints.pins.iter().map(|p| p.pin.clone()).collect();
     assert_eq!(pins.len(), 3);
     let region = db
@@ -541,6 +623,24 @@ fn the_milestone_design_reaches_a_bit_file() {
         );
     }
 
+    // And it routes. Three signals: a switch each into the lookup table
+    // and the lookup table out to the LED.
+    let (routing, routing_report) = reticle::fpga::route(
+        &netlist,
+        &graph,
+        &placement,
+        &reticle::fpga::RouteOptions::default(),
+    )
+    .unwrap();
+    assert_eq!(netlist.signals.len(), 3);
+    assert_eq!(routing.routed(), 3, "{}", routing.to_text(&netlist, &graph));
+    assert!(
+        routing.verify(&netlist, &graph, &placement).is_empty(),
+        "{:?}",
+        routing.verify(&netlist, &graph, &placement)
+    );
+    eprintln!("{}", routing_report.to_text());
+
     let tiles = bitstream::generate(
         &design,
         top,
@@ -548,15 +648,16 @@ fn the_milestone_design_reaches_a_bit_file() {
         &graph,
         &netlist,
         &placement,
-        &reticle::fpga::Routing::new(netlist.signals.len()),
+        &routing,
     )
     .unwrap();
     // The LUT's INIT for `a ^ b` over six inputs is half the table, and
-    // every one of those bits came from the database.
-    assert_eq!(tiles.ones(), 32, "{}", tiles.to_summary());
+    // every one of those bits came from the database; the rest is the
+    // route and the three buffers.
+    assert!(tiles.ones() > 32, "{}", tiles.to_summary());
 
     let frames = xc7::frames_from_bitstream(&fabric.part, &tiles, &fabric.frames).unwrap();
-    assert_eq!(frames.ones(), 32);
+    assert_eq!(frames.ones(), tiles.ones());
     let used = frames.used_frames();
     assert!(!used.is_empty());
     for address in &used {
@@ -575,8 +676,233 @@ fn the_milestone_design_reaches_a_bit_file() {
         assert_eq!(expected, computed);
     }
     eprintln!(
-        "sw_led: {} byte(s), {} frame(s), 32 configuration bit(s); NOT ROUTED, CONFIGURES NOTHING",
+        "sw_led: {} byte(s), {} frame(s), {} configuration bit(s) — \
+         PLACED AND ROUTED, NEVER LOADED INTO A PART",
         bytes.len(),
-        STREAM_FRAMES
+        STREAM_FRAMES,
+        frames.ones()
     );
+
+    // And now the part that is worth anything: what does it actually
+    // say, in the database's own vocabulary?
+    Some(db.decode(&DiskFiles, &frames).unwrap())
+}
+
+/// Decodes the Vivado bitstream `prjxray-db` ships for this very board.
+///
+/// `artix7/harness/basys3/swbut/design.bit` is a real, working
+/// 2 192 111-byte bitstream, made by Vivado 2017.2 for a
+/// `7a35tcpg236`, and it wires the Basys 3's sixteen switches to its
+/// sixteen LEDs. Two of those switches are `V17` and `V16` and one of
+/// those LEDs is `U16` — the very three pins the milestone design uses.
+/// Reading it back through the same decoder gives an oracle: not a
+/// story about what a bitstream ought to contain, but what one that
+/// works does contain.
+fn vivado(root: &str) -> Option<Vec<(String, String)>> {
+    let bytes = harness(root)?;
+    let db = XrayDatabase::open(&DiskFiles, root, DEVICE, &XrayOptions::new()).unwrap();
+    let part = db.part(&DiskFiles).unwrap();
+    let bit = xc7::read_bit(&bytes).unwrap();
+    // Every CRC in Vivado's own file checks against our calculation,
+    // which is the phase-one invariant this leans on.
+    for (expected, computed) in &bit.crc_checks {
+        assert_eq!(expected, computed);
+    }
+    let frames = xc7::FrameData::from_stream(part.layout.clone(), bit.frames.clone()).unwrap();
+    Some(db.decode(&DiskFiles, &frames).unwrap())
+}
+
+/// Every feature a decoding sets in one tile.
+fn at<'a>(features: &'a [(String, String)], tile: &str) -> Vec<&'a str> {
+    features
+        .iter()
+        .filter(|(t, _)| t == tile)
+        .map(|(_, f)| f.as_str())
+        .collect()
+}
+
+/// **The oracle.** What Reticle writes for the milestone's IO path,
+/// against what Vivado wrote for the same three pins of the same board.
+///
+/// This is the strongest thing that can be said without a JTAG cable,
+/// and it is not the same as "it works". It says: decode both
+/// bitstreams into the database's own feature names, look at the tiles
+/// the milestone's signals pass through, and the site configuration is
+/// **identical** — the same IO standard features on the same halves of
+/// the same IO blocks, the same input-logic and output-logic features
+/// on the same halves of the same IO logic tiles. The routing differs,
+/// because two routers chose two different legal paths across the same
+/// interconnect; where it differs, the *ends* still agree, and the
+/// assertions below say which is which.
+#[test]
+#[cfg(all(feature = "verilog", feature = "synth"))]
+fn the_io_path_is_the_one_vivado_built() {
+    let Some(root) = chipdb() else { return };
+    let Some(theirs) = vivado(&root) else { return };
+    let Some(ours) = milestone(&root) else { return };
+
+    // ---- The IO blocks. Identical, feature for feature. ----
+    //
+    // `LIOB33_X0Y11` holds V17 and V16, and both designs drive both of
+    // them as inputs, so the whole tile has to agree.
+    assert_eq!(
+        at(&ours, "LIOB33_X0Y11"),
+        at(&theirs, "LIOB33_X0Y11"),
+        "the two switches' input buffers"
+    );
+    // `LIOI3_X0Y11` is the input logic behind them, likewise both
+    // halves in both designs.
+    assert_eq!(
+        at(&ours, "LIOI3_X0Y11"),
+        at(&theirs, "LIOI3_X0Y11"),
+        "the two switches' input logic"
+    );
+    // `LIOB33_X0Y3` holds U16 (LED 0) and U15 (LED 5). The harness
+    // drives both; the milestone drives only LED 0, so ours is the
+    // half of theirs that belongs to `IOB_Y1`, which is `IOB_X0Y3`,
+    // which is U16.
+    let theirs_led: Vec<&str> = at(&theirs, "LIOB33_X0Y3")
+        .into_iter()
+        .filter(|f| f.starts_with("IOB_Y1."))
+        .collect();
+    assert_eq!(
+        at(&ours, "LIOB33_X0Y3"),
+        theirs_led,
+        "LED 0's output buffer"
+    );
+    let theirs_ologic: Vec<&str> = at(&theirs, "LIOI3_X0Y3")
+        .into_iter()
+        .filter(|f| f.starts_with("OLOGIC_Y1."))
+        .collect();
+    assert_eq!(
+        at(&ours, "LIOI3_X0Y3"),
+        theirs_ologic,
+        "LED 0's output logic"
+    );
+    // And it is not vacuous: these are real features with real bits.
+    assert_eq!(at(&ours, "LIOI3_X0Y3").len(), 3);
+    assert_eq!(at(&ours, "LIOB33_X0Y3").len(), 3);
+
+    // ---- The interconnect. A different legal route, same ends. ----
+    //
+    // A pad reaches the fabric on `LOGIC_OUTS_L18` of its own
+    // interconnect row, and leaves it on `IMUX_L34`; which long line
+    // carries it from there is the router's business and the two
+    // routers disagree. So the *source* of the first pip and the
+    // *destination* of the last are what must match, not the pip.
+    let source_at = |features: &[(String, String)], tile: &str| -> Vec<String> {
+        at(features, tile)
+            .iter()
+            .filter_map(|f| f.split_once('.').map(|(_, from)| from.to_owned()))
+            .filter(|from| from.starts_with("LOGIC_OUTS"))
+            .collect()
+    };
+    assert_eq!(
+        source_at(&ours, "INT_L_X0Y11"),
+        source_at(&theirs, "INT_L_X0Y11"),
+        "V17 leaves the input logic on the same wire in both"
+    );
+    assert_eq!(source_at(&ours, "INT_L_X0Y11"), vec!["LOGIC_OUTS_L18"]);
+
+    let dest_at = |features: &[(String, String)], tile: &str| -> Vec<String> {
+        at(features, tile)
+            .iter()
+            .filter_map(|f| f.split_once('.').map(|(to, _)| to.to_owned()))
+            .filter(|to| to.starts_with("IMUX"))
+            .collect()
+    };
+    assert_eq!(
+        dest_at(&ours, "INT_L_X0Y3"),
+        dest_at(&theirs, "INT_L_X0Y3"),
+        "U16 enters the output logic on the same wire in both"
+    );
+    assert_eq!(dest_at(&ours, "INT_L_X0Y3"), vec!["IMUX_L34"]);
+
+    // Where they do differ, say so out loud rather than hiding it.
+    for tile in ["INT_L_X0Y11", "INT_L_X0Y3"] {
+        eprintln!("{tile}:");
+        eprintln!("  vivado:  {:?}", at(&theirs, tile));
+        eprintln!("  reticle: {:?}", at(&ours, tile));
+    }
+}
+
+/// The two orientations this loader had to measure rather than assume,
+/// re-derived from the database so the tables in `xray::sites` cannot
+/// drift away from it.
+///
+/// 1. Which half of an IO tile prjxray's `_Y0` means. The harness
+///    designs say: `design.json`'s `required_features` names the tiles
+///    and `design.txt` names the pins, and every tile that configures
+///    exactly one half agrees that `_Y0` is the *higher* site `Y`.
+///    Here that is checked from the bitstream instead, on the one tile
+///    of the Basys 3 harness that holds one input and one output.
+/// 2. Which tile wires belong to which slice of a `CLBLL`. The
+///    `ppips` files say: the interconnect index a slice pin uses is the
+///    same in a `CLBLM`, where the site types settle which slice is
+///    which.
+#[test]
+fn the_orientations_the_site_tables_assume_are_the_databases() {
+    let Some(root) = chipdb() else { return };
+    let Some(theirs) = vivado(&root) else { return };
+
+    // `LIOB33_X0Y111` holds A18 (LED 16, an output, `IOB_X0Y111`) and
+    // B18 (switch 16, an input, `IOB_X0Y112`). `IOB_X0Y112` is the
+    // higher site Y, so if `_Y0` is the higher half then `IOB_Y0` is
+    // the input and `IOB_Y1` the output.
+    let tile = at(&theirs, "LIOB33_X0Y111");
+    assert!(
+        tile.iter()
+            .any(|f| f.starts_with("IOB_Y0.") && f.ends_with(".IN")),
+        "IOB_Y0 should be the input half: {tile:?}"
+    );
+    assert!(
+        tile.iter()
+            .any(|f| f.starts_with("IOB_Y1.") && f.contains(".DRIVE.")),
+        "IOB_Y1 should be the output half: {tile:?}"
+    );
+    let ioi = at(&theirs, "LIOI3_X0Y111");
+    assert!(ioi.contains(&"ILOGIC_Y0.ZINV_D"), "{ioi:?}");
+    assert!(ioi.contains(&"OLOGIC_Y1.OMUX.D1"), "{ioi:?}");
+
+    // And the slice wires, from `ppips_*.db` directly.
+    let read = |name: &str| {
+        std::fs::read_to_string(format!("{root}/artix7/ppips_{name}.db")).unwrap_or_default()
+    };
+    let feeds = |text: &str, wire: &str| -> Option<String> {
+        text.lines()
+            .filter_map(|l| {
+                let mut w = l.split_whitespace();
+                let full = w.next()?;
+                let mut parts = full.split('.');
+                let _ = parts.next()?;
+                let to = parts.next()?;
+                let from = parts.next()?;
+                (to == wire).then(|| from.to_owned())
+            })
+            .next()
+    };
+    let clbll = read("clbll_l");
+    let clblm = read("clblm_l");
+    if clbll.is_empty() || clblm.is_empty() {
+        eprintln!("skipped: the checkout has no `ppips_clb*.db`");
+        return;
+    }
+    // In a `CLBLM` the `M` wires are the `SLICEM`'s, and the `SLICEM`
+    // is the tile's X-index-0 site. Whatever interconnect index feeds
+    // its `A1` must feed the X-index-0 slice of a `CLBLL` too.
+    let m = feeds(&clblm, "CLBLM_M_A1").expect("CLBLM_M_A1");
+    let ll = feeds(&clbll, "CLBLL_LL_A1").expect("CLBLL_LL_A1");
+    assert_eq!(
+        m.trim_start_matches("CLBLM"),
+        ll.trim_start_matches("CLBLL"),
+        "`CLBLL_LL` is the X-index-0 slice because it shares the \
+         interconnect index of a CLBLM's SLICEM"
+    );
+    let l_m = feeds(&clblm, "CLBLM_L_A1").expect("CLBLM_L_A1");
+    let l_l = feeds(&clbll, "CLBLL_L_A1").expect("CLBLL_L_A1");
+    assert_eq!(
+        l_m.trim_start_matches("CLBLM"),
+        l_l.trim_start_matches("CLBLL")
+    );
+    assert_ne!(m, l_m);
 }

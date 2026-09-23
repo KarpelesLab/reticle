@@ -1819,6 +1819,30 @@ fn write_xc7_bitstream(
         }
     }
 
+    // Every constrained pin's IO standard has to be the one the loader
+    // will give every buffer, because the bits are a per-load table (see
+    // `XrayOptions::io_standard`). Two standards in one design is a
+    // refusal rather than a silent choice between them.
+    let mut standards: Vec<&str> = constraints
+        .pins
+        .iter()
+        .filter_map(|p| p.io.io_standard.as_deref())
+        .collect();
+    standards.sort_unstable();
+    standards.dedup();
+    match standards.as_slice() {
+        [] => {}
+        [one] => options.io_standard = (*one).to_owned(),
+        many => {
+            return Err(format!(
+                "the constraints ask for {} io standards ({}); this flow configures one \
+                 standard for the whole design",
+                many.len(),
+                many.join(", ")
+            ));
+        }
+    }
+
     let db =
         XrayDatabase::open(&files, &root, &device.name, &options).map_err(|e| e.to_string())?;
 
@@ -1857,12 +1881,16 @@ fn write_xc7_bitstream(
     )
     .map_err(|e| e.to_string())?;
 
-    // Routing on this fabric needs bel pins, and the database does not
-    // ship them. Attempt it, and say plainly when it does not happen
-    // rather than writing a file that implies it did.
+    // A route that fails says why. Writing the file anyway is the right
+    // thing — a partly configured bitstream is still worth looking at —
+    // but the reason goes in the report rather than into a shrug.
+    let mut failure = None;
     let (routing, routed) = match route(&netlist, &graph, &placement, &RouteOptions::default()) {
         Ok((routing, report)) => (routing, report.signals),
-        Err(_) => (reticle::fpga::Routing::new(netlist.signals.len()), 0),
+        Err(e) => {
+            failure = Some(e.to_string());
+            (reticle::fpga::Routing::new(netlist.signals.len()), 0)
+        }
     };
 
     let tiles = bitstream::generate(
@@ -1909,12 +1937,15 @@ fn write_xc7_bitstream(
         "note: {routed} of {} signal(s) routed\n",
         netlist.signals.len()
     ));
-    if routed < netlist.signals.len() || placement_report.off_fabric > 0 {
+    if let Some(reason) = &failure {
+        note.push_str(&format!("warning: the router gave up: {reason}\n"));
+    }
+    if routed < netlist.signals.len() {
         note.push_str(
-            "warning: the design is NOT FULLY ROUTED. The chip database ships bit positions but \
-             not the tile-type wire lists that say which wire a bel pin reaches, so a bel has no \
-             pins and a signal has no path to one. What was written is a structurally valid \
-             bitstream that configures nothing.\n",
+            "warning: the design is NOT FULLY ROUTED. A signal with no path contributes nothing \
+             to the bitstream, so what was written configures less than the design asks for. \
+             `docs/fpga-xray.md` lists the bel pins and site paths this flow knows about; a \
+             signal that needs one it does not is the usual reason.\n",
         );
     }
     note.push_str(

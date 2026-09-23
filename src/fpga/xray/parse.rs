@@ -7,8 +7,8 @@
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
-use super::{Feature, FeatureSet, XrayError, XrayTile};
-use crate::fpga::arch::{BelDecl, ConfigBit, ConfigEntry};
+use super::{Feature, FeatureSet, XrayError, XrayTile, sites};
+use crate::fpga::arch::{BelDecl, ConfigBit, ConfigEntry, WireRef};
 use crate::fpga::xc7::{ConfigRow, FrameLayout, Part, TileBits};
 use crate::json::Json;
 
@@ -161,6 +161,87 @@ pub(super) fn segbits(text: &str, path: &str) -> Result<FeatureSet, XrayError> {
         features.push(Feature { name, ones, zeros });
     }
     Ok(FeatureSet::new(features))
+}
+
+/// What a `ppips_<type>.db` line says about a connection that carries no
+/// configuration bits of its own.
+///
+/// prjxray calls these *pseudo* pips: Vivado reports them as pips, and
+/// they are not programmable. The three words it writes mean three quite
+/// different things, and only one of them is a piece of metal.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PpipKind {
+    /// The connection is simply there. This is the fixed wire between a
+    /// site pin and its tile's interconnect wires —
+    /// `CLBLL_L.CLBLL_L_A1.CLBLL_IMUX6 always` is a slice's `A1` pin
+    /// reaching interconnect index 6 — and it is the one kind the
+    /// architecture can take at face value.
+    Always,
+    /// The connection is on unless something else drives the same wire.
+    /// `INT_L.BYP_ALT0.VCC_WIRE default` is a tie-off, not a route, and
+    /// treating it as metal would offer the router a constant one
+    /// everywhere.
+    Default,
+    /// Vivado reports the connection but it goes *through* a site:
+    /// `CLBLL_L.CLBLL_L_A.CLBLL_L_A1 hint` is a lookup table used as a
+    /// wire. Taking it would let the router route through logic that a
+    /// cell is sitting on.
+    Hint,
+}
+
+/// One line of a `ppips_<type>.db` file.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Ppip {
+    /// The wire it drives, without the leading tile type.
+    pub to: String,
+    /// The wire it reads.
+    pub from: String,
+    /// Which of the three kinds it is.
+    pub kind: PpipKind,
+}
+
+/// Reads a `ppips_<type>.db` file.
+///
+/// Each line is `<TILE_TYPE>.<dest>.<source> <kind>`. A line whose kind
+/// is not one of the three words is skipped rather than refused: a
+/// vocabulary this loader has not seen is the database saying something
+/// new, and guessing at it would be worse than ignoring it.
+///
+/// # Errors
+///
+/// None today; the signature matches the other readers so a future
+/// stricter reading does not change every caller.
+pub(super) fn ppips(text: &str, _path: &str) -> Result<Vec<Ppip>, XrayError> {
+    let mut out = Vec::new();
+    for line in text.lines() {
+        let line = line.trim();
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        let mut words = line.split_whitespace();
+        let (Some(full), Some(kind)) = (words.next(), words.next()) else {
+            continue;
+        };
+        let kind = match kind {
+            "always" => PpipKind::Always,
+            "default" => PpipKind::Default,
+            "hint" => PpipKind::Hint,
+            _ => continue,
+        };
+        // The leading tile type is the same on every line of the file.
+        let Some((_, rest)) = full.split_once('.') else {
+            continue;
+        };
+        let Some((to, from)) = rest.split_once('.') else {
+            continue;
+        };
+        out.push(Ppip {
+            to: to.to_owned(),
+            from: from.to_owned(),
+            kind,
+        });
+    }
+    Ok(out)
 }
 
 /// Reads `part.json`: the IDCODE and the frame layout.
@@ -459,9 +540,7 @@ fn site_kind(site_type: &str) -> &'static str {
 /// The site prefixes a tile type's features use, in name order.
 ///
 /// `CLBLL_L` gives `["SLICEL_X0", "SLICEL_X1"]`, which is the
-/// vocabulary its bels are named in. The order is the order
-/// [`tilegrid`] puts a tile's own site names in, so the two zip: the
-/// i-th site of a tile is the i-th prefix.
+/// vocabulary its bels are named in.
 pub(super) fn site_prefixes(features: &FeatureSet) -> Vec<&str> {
     let mut out: Vec<&str> = features.sites().iter().map(String::as_str).collect();
     out.sort_unstable();
@@ -472,17 +551,20 @@ pub(super) fn site_prefixes(features: &FeatureSet) -> Vec<&str> {
 /// to name to reach it.
 ///
 /// The site is `SLICE_X0Y0` in `tilegrid.json` and the bel is
-/// `SLICEL_X0`, because a bel belongs to the tile *type* and a site
-/// name does not. They are matched by position in each list. A tile
-/// type with no features at all keeps the site's own name, which at
-/// least names something.
+/// `SLICEL_X0`, because a bel belongs to the tile *type* and a site name
+/// does not. [`sites::site_of_prefix`] is the matching rule and says how
+/// it was arrived at; a site no prefix claims keeps its own name, which
+/// at least names something.
 pub(super) fn bel_of_site(tile: &XrayTile, site: &str, features: &FeatureSet) -> Option<String> {
-    let index = tile.sites.iter().position(|(name, _)| name == site)?;
-    let prefixes = site_prefixes(features);
-    Some(match prefixes.get(index) {
-        Some(prefix) => (*prefix).to_owned(),
-        None => site.to_owned(),
-    })
+    if !tile.sites.iter().any(|(name, _)| name == site) {
+        return None;
+    }
+    for prefix in site_prefixes(features) {
+        if sites::site_of_prefix(tile, prefix).is_some_and(|(name, _)| name == site) {
+            return Some(prefix.to_owned());
+        }
+    }
+    Some(site.to_owned())
 }
 
 /// The bels of one tile type, from its sites and its features.
@@ -499,21 +581,34 @@ pub(super) fn bel_of_site(tile: &XrayTile, site: &str, features: &FeatureSet) ->
 /// an `ff` bel, and the carry chain a `carry` bel. Anything else
 /// attaches to a bel named after the site prefix itself.
 ///
-/// # What is missing, and it is the important part
+/// # Pins
 ///
-/// **No pins.** Which wire a LUT input or a flip-flop output reaches is
-/// in prjxray's `tile_type_*.json`, which `prjxray-db` does not ship.
-/// A bel with no pins can be placed onto and cannot be routed to, so a
-/// design taken through this loader gets a real placement and no
-/// connections. See `docs/fpga-xray.md`.
-pub(super) fn bels_of(tile: &XrayTile, features: &FeatureSet) -> Vec<BelDecl> {
+/// Which wire a bel pin reaches is **not** in `prjxray-db` under that
+/// name: prjxray keeps site pin names in `tile_type_*.json`, which it
+/// generates from Vivado and does not ship. [`mod@super::sites`] supplies
+/// the pin names from Xilinx's public user guides and reads the wire each
+/// one sits on off `ppips_<type>.db`, and this function asks it. A pin
+/// whose wire the tile type does not declare is dropped and counted in
+/// `unresolved`, because a table that has drifted from the database must
+/// say so rather than produce a dangling edge.
+///
+/// Bels [`mod@super::sites`] has no entry for still come out with no
+/// pins: placeable, unroutable, and reported as such.
+pub(super) fn bels_of(
+    tile: &XrayTile,
+    features: &FeatureSet,
+    wires: &HashSet<&str>,
+    standard: Option<&sites::IoStandard>,
+    coverage: &mut sites::SiteCoverage,
+) -> Vec<BelDecl> {
     let prefixes = site_prefixes(features);
 
-    // Zip the feature files' site prefixes onto the tile's sites, in
-    // name order, which is the order both lists are in.
+    // Which site of this tile each feature prefix means, and therefore
+    // what kind of thing can be placed on it.
+    let by_prefix = sites::sites_by_prefix(tile, &prefixes);
     let mut kinds: HashMap<&str, &str> = HashMap::new();
-    for (index, prefix) in prefixes.iter().enumerate() {
-        let site_type = tile.sites.get(index).map_or("", |(_, kind)| kind.as_str());
+    for prefix in &prefixes {
+        let site_type = by_prefix.get(*prefix).map_or("", |(_, kind)| kind.as_str());
         kinds.insert(prefix, site_kind(site_type));
     }
 
@@ -534,20 +629,34 @@ pub(super) fn bels_of(tile: &XrayTile, features: &FeatureSet) -> Vec<BelDecl> {
     }
 
     let mut bels: BTreeMap<String, BelDecl> = BTreeMap::new();
+    let mut attach = |bels: &mut BTreeMap<String, BelDecl>,
+                      name: String,
+                      kind: &str,
+                      prefix: &str,
+                      sub: &str| {
+        let mut bel = BelDecl::new(name.clone(), kind);
+        for pin in sites::bel_pins(&tile.tile_type, prefix, sub) {
+            if wires.contains(pin.wire.as_str()) {
+                bel.pins
+                    .push((pin.role.to_owned(), WireRef::local(pin.wire)));
+                coverage.pins += 1;
+            } else {
+                coverage.pins_unresolved += 1;
+            }
+        }
+        bels.insert(name, bel);
+    };
     for prefix in &prefixes {
         let kind = kinds.get(prefix).copied().unwrap_or("other");
         if kind == "slice" {
             for sub in subs.get(prefix).into_iter().flatten() {
                 if let Some(sub_kind) = slice_sub_kind(sub) {
-                    let name = format!("{prefix}_{sub}");
-                    bels.insert(name.clone(), BelDecl::new(name, sub_kind));
+                    attach(&mut bels, format!("{prefix}_{sub}"), sub_kind, prefix, sub);
                 }
             }
         }
-        bels.insert(
-            (*prefix).to_owned(),
-            BelDecl::new(*prefix, if kind == "slice" { "site" } else { kind }),
-        );
+        let site_kind = if kind == "slice" { "site" } else { kind };
+        attach(&mut bels, (*prefix).to_owned(), site_kind, prefix, "");
     }
 
     // Now attach every feature to the bel it names.
@@ -590,6 +699,52 @@ pub(super) fn bels_of(tile: &XrayTile, features: &FeatureSet) -> Vec<BelDecl> {
                 primitive: tail,
                 bits: feature.ones.clone(),
             }),
+        }
+    }
+
+    // An IO buffer's standard. The features above are attached one to a
+    // `ConfigEntry::Cell` keyed on the database's own tail, which no
+    // primitive is ever named after, so they are inert. These are the
+    // ones that fire: the whole set of features a buffer of the chosen
+    // standard needs, gathered under the name of the primitive that
+    // wants them.
+    if let Some(standard) = standard {
+        for prefix in &prefixes {
+            if kinds.get(prefix).copied() != Some("io") {
+                continue;
+            }
+            let Some(index) = sites::prefix_index(prefix) else {
+                continue;
+            };
+            for (primitive, input) in sites::IO_PRIMITIVES {
+                let names = if input {
+                    standard.input
+                } else {
+                    standard.output
+                };
+                let mut bits = Vec::new();
+                let mut missing: Vec<String> = Vec::new();
+                for name in names {
+                    let name = sites::with_index(name, index);
+                    match features.feature(&name) {
+                        Some(feature) => bits.extend(feature.ones.iter().copied()),
+                        None => missing.push(name),
+                    }
+                }
+                if !missing.is_empty() {
+                    // Half an IO standard is worse than none: it would be
+                    // a buffer configured for a voltage nobody asked for.
+                    coverage.io_unresolved += missing.len();
+                    continue;
+                }
+                if let Some(bel) = bels.get_mut(*prefix) {
+                    bel.config.push(ConfigEntry::Cell {
+                        primitive: primitive.to_owned(),
+                        bits,
+                    });
+                    coverage.io_buffers += 1;
+                }
+            }
         }
     }
 

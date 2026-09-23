@@ -111,8 +111,10 @@ use crate::ir::memfile::FileProvider;
 use crate::json::Json;
 
 mod parse;
+mod sites;
 
-pub use parse::{fabric_of, family_directory, is_pip_feature};
+pub use parse::{Ppip, PpipKind, fabric_of, family_directory, is_pip_feature};
+pub use sites::{SiteCoverage, io_standards};
 
 /// Why a Project X-Ray database could not be read.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -138,6 +140,13 @@ pub enum XrayError {
         /// What the loader could say about why.
         message: String,
     },
+    /// The IO standard asked for is not one this flow has bits for.
+    NoSuchIoStandard {
+        /// What was asked for.
+        wanted: String,
+        /// What there is.
+        known: Vec<String>,
+    },
     /// The region asked for is bigger than the graph representation can
     /// hold, with the numbers that say so.
     TooLarge {
@@ -161,6 +170,12 @@ impl fmt::Display for XrayError {
             XrayError::WrongPart { device, message } => {
                 write!(f, "no chip database for `{device}`: {message}")
             }
+            XrayError::NoSuchIoStandard { wanted, known } => write!(
+                f,
+                "no bits are known for the io standard `{wanted}`; this flow can configure \
+                 only {}, and an io standard is a voltage, so it will not substitute one",
+                known.join(", ")
+            ),
             XrayError::TooLarge { pips, limit, tiles } => write!(
                 f,
                 "that region is {tiles} tile(s) and {pips} pip(s), past the limit of {limit}; \
@@ -234,6 +249,15 @@ pub struct XrayOptions {
     /// with [`XrayError::TooLarge`]. It counts first and allocates after,
     /// so the refusal costs nothing.
     pub max_pips: usize,
+    /// Which IO standard every buffer of the design is configured for.
+    ///
+    /// It is one setting for the whole load rather than one per pin
+    /// because the bits come from a table read off Vivado's own
+    /// bitstream and only one standard has been read — see
+    /// [`io_standards`]. A name that is not in that list is refused with
+    /// [`XrayError::NoSuchIoStandard`]: an IO standard is a voltage, and
+    /// quietly substituting a different one is how a board is damaged.
+    pub io_standard: String,
 }
 
 impl Default for XrayOptions {
@@ -245,7 +269,8 @@ impl Default for XrayOptions {
             // list of configuration bits, which is as far as a desktop
             // machine goes without swapping. The whole `xc7a50t` is five
             // times that; see the module docs.
-            max_pips: 4_000_000,
+            max_pips: 16_000_000,
+            io_standard: "LVCMOS33".to_owned(),
         }
     }
 }
@@ -259,6 +284,12 @@ impl XrayOptions {
     /// The same options restricted to a region.
     pub fn with_region(mut self, region: GridRegion) -> XrayOptions {
         self.region = Some(region);
+        self
+    }
+
+    /// The same options with a different IO standard.
+    pub fn with_io_standard(mut self, standard: impl Into<String>) -> XrayOptions {
+        self.io_standard = standard.into();
         self
     }
 }
@@ -291,8 +322,15 @@ pub struct XrayStats {
     pub pips: usize,
     /// Of those, the zero-bit pips that `tileconn.json` asked for.
     pub joins: usize,
+    /// Fixed connections inside a tile, one per tile *type*, taken from
+    /// the `always` lines of `ppips_<type>.db`. This is the wiring
+    /// between a site pin and the interconnect, and without it a bel
+    /// pin reaches nothing.
+    pub fixed: usize,
     /// Bels declared in the loaded region.
     pub bels: usize,
+    /// What the hand-written site tables covered.
+    pub coverage: SiteCoverage,
     /// Frames the part has, pad frames included.
     pub frames: usize,
     /// Tiles with a window in the frame map, which is the whole part.
@@ -325,6 +363,7 @@ impl XrayStats {
             "  loaded: {} tile(s) of {} type(s), {} wire(s), {} pip(s) ({} join(s)), {} bel(s)",
             self.tiles_loaded, self.tile_types_loaded, self.wires, self.pips, self.joins, self.bels
         );
+        out.push_str(&self.coverage.to_text());
         let _ = writeln!(out, "  frame map: {} tile(s)", self.mapped_tiles);
         out
     }
@@ -400,6 +439,11 @@ impl FeatureSet {
     /// Every feature, in file order.
     pub fn features(&self) -> &[Feature] {
         &self.features
+    }
+
+    /// The feature of that name, without its leading tile type.
+    pub fn feature(&self, name: &str) -> Option<&Feature> {
+        self.features.iter().find(|f| f.name == name)
     }
 
     /// The first components that head a feature of three parts or more,
@@ -563,6 +607,15 @@ impl XrayDatabase {
         files: &dyn FileProvider,
         options: &XrayOptions,
     ) -> Result<XrayFabric, XrayError> {
+        let standard = sites::io_standard(&options.io_standard).ok_or_else(|| {
+            XrayError::NoSuchIoStandard {
+                wanted: options.io_standard.clone(),
+                known: sites::io_standards()
+                    .into_iter()
+                    .map(str::to_owned)
+                    .collect(),
+            }
+        })?;
         let part = self.part(files)?;
         let tiles = self.tiles(files)?;
         let mut stats = XrayStats {
@@ -604,6 +657,23 @@ impl XrayDatabase {
             };
             features.insert((*name).to_owned(), parse::segbits(&text, &path)?);
         }
+
+        // And every tile type's pseudo-pips, which are what say how a
+        // site pin reaches the interconnect. They carry no bits, so
+        // reading them all costs almost nothing.
+        let mut fixed: HashMap<String, Vec<parse::Ppip>> = HashMap::new();
+        for name in &types {
+            let path = format!(
+                "{}/{}/ppips_{}.db",
+                self.root,
+                self.family,
+                name.to_lowercase()
+            );
+            let Some(text) = files.read_file(&path) else {
+                continue;
+            };
+            fixed.insert((*name).to_owned(), parse::ppips(&text, &path)?);
+        }
         for tile in &tiles {
             if let Some(set) = features.get(&tile.tile_type) {
                 stats.features_die += u64::try_from(set.features().len()).unwrap_or(0);
@@ -640,7 +710,9 @@ impl XrayDatabase {
         }
 
         let conn = self.tileconn(files)?;
-        let mut arch = self.build_arch(&tiles, &features, &conn, region, &part, &mut stats);
+        let mut arch = self.build_arch(
+            &tiles, &features, &fixed, &conn, region, &part, standard, &mut stats,
+        );
         arch.pinmap = self.pinmap(files, &tiles, &features, region)?;
         stats.tiles_loaded = in_region;
 
@@ -650,6 +722,115 @@ impl XrayDatabase {
             frames,
             stats,
         })
+    }
+
+    /// Reads a bitstream back into the database's own feature names.
+    ///
+    /// This is the inverse of everything else here, and it exists so
+    /// that a bitstream can be *checked against another bitstream*
+    /// rather than against a story about what it should contain: decode
+    /// Vivado's file and decode Reticle's, and the difference is a list
+    /// of feature names a human can read.
+    ///
+    /// A feature is reported when every bit its `segbits` line says must
+    /// be one is one and every bit it says must be zero is zero. A
+    /// feature with no `one` bits at all is never reported, because it
+    /// would match an empty bitstream everywhere; `IN_TERM.NONE` is such
+    /// a feature and its absence from the output means nothing.
+    ///
+    /// The result is sorted by tile name and then by feature name, so
+    /// two decodings can be compared line by line.
+    ///
+    /// # Errors
+    ///
+    /// Those of [`XrayDatabase::tiles`] and of reading the `segbits`
+    /// files.
+    pub fn decode(
+        &self,
+        files: &dyn FileProvider,
+        data: &super::xc7::FrameData,
+    ) -> Result<Vec<(String, String)>, XrayError> {
+        let tiles = self.tiles(files)?;
+
+        // Where the set bits are, by frame address, so a tile only has
+        // to look at frames that hold something.
+        let mut set: HashMap<u32, Vec<(u32, u32)>> = HashMap::new();
+        for (position, address) in data.layout().order().iter().enumerate() {
+            let Some(address) = address else { continue };
+            let Some(frame) = data.frame(position) else {
+                continue;
+            };
+            let mut here = Vec::new();
+            for (word, value) in frame.iter().enumerate() {
+                if *value == 0 {
+                    continue;
+                }
+                for bit in 0..32u32 {
+                    if (*value >> bit) & 1 == 1 {
+                        here.push((u32::try_from(word).unwrap_or(0), bit));
+                    }
+                }
+            }
+            if !here.is_empty() {
+                set.insert(address.to_u32(), here);
+            }
+        }
+
+        let mut features: HashMap<String, FeatureSet> = HashMap::new();
+        let mut out = Vec::new();
+        for tile in &tiles {
+            // The tile's own bits, in the tile-local coordinates a
+            // `segbits` line uses.
+            let mut ones: HashSet<ConfigBit> = HashSet::new();
+            for (_, window) in &tile.bits {
+                for row in 0..window.frames {
+                    let Some(address) = window.baseaddr.checked_add(row) else {
+                        continue;
+                    };
+                    let Some(here) = set.get(&address) else {
+                        continue;
+                    };
+                    for (word, bit) in here {
+                        if *word < window.offset || *word >= window.offset + window.words {
+                            continue;
+                        }
+                        ones.insert(ConfigBit::new(row, (*word - window.offset) * 32 + *bit));
+                    }
+                }
+            }
+            if ones.is_empty() {
+                continue;
+            }
+
+            if !features.contains_key(&tile.tile_type) {
+                let path = format!(
+                    "{}/{}/segbits_{}.db",
+                    self.root,
+                    self.family,
+                    tile.tile_type.to_lowercase()
+                );
+                let set = match files.read_file(&path) {
+                    Some(text) => parse::segbits(&text, &path)?,
+                    None => FeatureSet::default(),
+                };
+                features.insert(tile.tile_type.clone(), set);
+            }
+            let Some(known) = features.get(&tile.tile_type) else {
+                continue;
+            };
+            for feature in known.features() {
+                if feature.ones.is_empty() {
+                    continue;
+                }
+                if feature.ones.iter().all(|b| ones.contains(b))
+                    && feature.zeros.iter().all(|b| !ones.contains(b))
+                {
+                    out.push((tile.name.clone(), feature.name.clone()));
+                }
+            }
+        }
+        out.sort();
+        Ok(out)
     }
 
     /// A region that covers the tiles the given package pins sit in,
@@ -802,13 +983,16 @@ impl XrayDatabase {
     }
 
     /// Turns the parsed files into an [`Arch`].
+    #[allow(clippy::too_many_arguments)]
     fn build_arch(
         &self,
         tiles: &[XrayTile],
         features: &HashMap<String, FeatureSet>,
+        fixed: &HashMap<String, Vec<parse::Ppip>>,
         conn: &[parse::TileConn],
         region: GridRegion,
         part: &Part,
+        standard: &sites::IoStandard,
         stats: &mut XrayStats,
     ) -> Arch {
         let mut width = 0u32;
@@ -857,15 +1041,36 @@ impl XrayDatabase {
         arch.asc_device = part.name.clone();
 
         let empty = FeatureSet::default();
+        let no_ppips: Vec<parse::Ppip> = Vec::new();
         let mut index_of: HashMap<&str, usize> = HashMap::new();
         for (name, (rows, cols)) in &used {
             let mut tile_type = TileType::new(*name, *name, *rows, *cols);
             let set = features.get(*name).unwrap_or(&empty);
+            let ppips = fixed.get(*name).unwrap_or(&no_ppips);
+
+            // A fixed path through a site is declared here rather than
+            // taken from `ppips`, because it is not free: see
+            // `sites::pass_throughs`. Where the two describe the same
+            // pair, this one wins, or the router would find a copy of
+            // the hop with no bits on it and turn nothing on.
+            let passes = sites::pass_throughs(name);
+            let overridden: HashSet<(&str, &str)> = passes
+                .iter()
+                .map(|p| (p.to.as_str(), p.from.as_str()))
+                .collect();
 
             let mut wires: BTreeSet<&str> = BTreeSet::new();
             for (to, from, _) in set.pips() {
                 wires.insert(to);
                 wires.insert(from);
+            }
+            for ppip in ppips.iter().filter(|p| p.kind == parse::PpipKind::Always) {
+                wires.insert(ppip.to.as_str());
+                wires.insert(ppip.from.as_str());
+            }
+            for pass in &passes {
+                wires.insert(pass.to.as_str());
+                wires.insert(pass.from.as_str());
             }
             for (_, _, _, pairs) in joins.get(*name).into_iter().flatten() {
                 for (mine, _) in pairs.iter() {
@@ -893,6 +1098,42 @@ impl XrayDatabase {
                     to: WireRef::local(to),
                     bits: feature.ones.clone(),
                 });
+            }
+            // The fixed wiring inside a tile: a site pin reaching its
+            // interconnect wires. Only `always` is metal; see
+            // [`parse::PpipKind`] for why the other two are not.
+            for ppip in ppips.iter().filter(|p| p.kind == parse::PpipKind::Always) {
+                if overridden.contains(&(ppip.to.as_str(), ppip.from.as_str())) {
+                    continue;
+                }
+                tile_type.pips.push(PipDecl {
+                    from: WireRef::local(ppip.from.clone()),
+                    to: WireRef::local(ppip.to.clone()),
+                    bits: Vec::new(),
+                });
+                stats.fixed += 1;
+            }
+            for pass in &passes {
+                let mut bits = Vec::new();
+                let mut missing = false;
+                for feature in &pass.features {
+                    match set.feature(feature) {
+                        Some(f) => bits.extend(f.ones.iter().copied()),
+                        None => missing = true,
+                    }
+                }
+                if missing {
+                    // Better no path than a path that turns on half a
+                    // site: the design fails to route and says so.
+                    stats.coverage.pass_throughs_unresolved += 1;
+                    continue;
+                }
+                tile_type.pips.push(PipDecl {
+                    from: WireRef::local(pass.from.clone()),
+                    to: WireRef::local(pass.to.clone()),
+                    bits,
+                });
+                stats.coverage.pass_throughs += 1;
             }
             for (other, dx, dy, pairs) in joins.get(*name).into_iter().flatten() {
                 if !used.contains_key(other) {
@@ -931,7 +1172,16 @@ impl XrayDatabase {
                 continue;
             };
             let set = features.get(&tile.tile_type).unwrap_or(&empty);
-            arch.tile_types[*index].bels = parse::bels_of(tile, set);
+            // A pin may only name a wire the tile type really declares,
+            // so the wire list is handed in and a pin that misses it is
+            // counted rather than left to dangle.
+            let declared: HashSet<&str> = arch.tile_types[*index]
+                .wires
+                .iter()
+                .map(|w| w.name.as_str())
+                .collect();
+            let bels = parse::bels_of(tile, set, &declared, Some(standard), &mut stats.coverage);
+            arch.tile_types[*index].bels = bels;
         }
 
         for tile in tiles {

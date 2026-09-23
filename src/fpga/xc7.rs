@@ -410,6 +410,29 @@ impl FrameData {
         FrameData { layout, words }
     }
 
+    /// An image taken from a stream of words in the order
+    /// [`FrameLayout::order`] gives, which is the order a `.bit` file
+    /// writes them in and the order [`Bit::frames`] gives them back.
+    ///
+    /// This is how a bitstream somebody else wrote becomes something
+    /// that can be asked which bits it sets.
+    ///
+    /// # Errors
+    ///
+    /// [`Xc7Error::Malformed`] when the stream is not exactly the
+    /// layout's length, because a partial image would answer questions
+    /// wrongly rather than refuse them.
+    pub fn from_stream(layout: FrameLayout, words: Vec<u32>) -> Result<FrameData, Xc7Error> {
+        if words.len() != layout.words() {
+            return Err(Xc7Error::Malformed(format!(
+                "the stream is {} word(s) and this layout is {}",
+                words.len(),
+                layout.words()
+            )));
+        }
+        Ok(FrameData { layout, words })
+    }
+
     /// The layout it was built in.
     pub fn layout(&self) -> &FrameLayout {
         &self.layout
