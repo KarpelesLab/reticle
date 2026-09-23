@@ -55,6 +55,18 @@ impl Pass for Dce {
             u64::try_from(before - m.assigns.len()).unwrap_or(u64::MAX),
         );
 
+        // Collect the expressions first. A dead `MemRead` still names the
+        // memory it read, and `map_memories` walks *every* expression, so
+        // renumbering before the collection would ask the remap for a
+        // memory that is going away — which is not a wrong answer, it is
+        // no answer at all. Once the cells and assigns that reached those
+        // expressions are gone the expressions are unreachable, so the
+        // collection takes them and nothing dead is left holding an id.
+        stats.bump(
+            "expressions collected",
+            u64::try_from(m.gc_exprs()).unwrap_or(u64::MAX),
+        );
+
         let dead_mems = live.memories.iter().filter(|l| !**l).count();
         if dead_mems > 0 {
             let remap = m.memories.retain(|id, _| live.memories[id.index()]);
@@ -64,11 +76,6 @@ impl Pass for Dce {
                 u64::try_from(dead_mems).unwrap_or(u64::MAX),
             );
         }
-
-        stats.bump(
-            "expressions collected",
-            u64::try_from(m.gc_exprs()).unwrap_or(u64::MAX),
-        );
         stats.bump(
             "nets removed",
             u64::try_from(m.remove_unused_nets()).unwrap_or(u64::MAX),
