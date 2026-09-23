@@ -10,6 +10,18 @@ module blinky (.clk(clk$pad), .rst(rst$pad), .sw(sw$pad), .led(led$pad));
   wire [7:0] next;
   wire tick;
   wire [3:0] mix;
+  wire inc$p3;
+  wire inc$p2;
+  wire inc$p1;
+  wire inc$p0;
+  wire [3:0] inc$o0;
+  wire [3:0] inc$co0;
+  wire inc$p7;
+  wire inc$p6;
+  wire inc$p5;
+  wire inc$p4;
+  wire [3:0] inc$o1;
+  wire [3:0] inc$co1;
   wire clk$pad;
   wire clk$in0;
   wire rst$pad;
@@ -29,15 +41,6 @@ module blinky (.clk(clk$pad), .rst(rst$pad), .sw(sw$pad), .led(led$pad));
   wire \$lut1 ;
   wire \$lut2 ;
   wire \$lut3 ;
-  wire \$lut4 ;
-  wire \$lut5 ;
-  wire \$lut6 ;
-  wire \$lut7 ;
-  wire \$lut8 ;
-  wire \$lut9 ;
-  wire \$lut10 ;
-  wire \$lut11 ;
-  wire \$lut12 ;
   wire counter$q0;
   wire counter$q1;
   wire counter$q2;
@@ -58,86 +61,37 @@ module blinky (.clk(clk$pad), .rst(rst$pad), .sw(sw$pad), .led(led$pad));
     input [1:0] x;
     reticle_bits_2_1_1 = x[1:1];
   endfunction
-  function [0:0] reticle_bits_3_0_0;
-    input [2:0] x;
-    reticle_bits_3_0_0 = x[0:0];
-  endfunction
-  function [0:0] reticle_bits_3_1_1;
-    input [2:0] x;
-    reticle_bits_3_1_1 = x[1:1];
-  endfunction
-  function [0:0] reticle_bits_3_2_2;
-    input [2:0] x;
-    reticle_bits_3_2_2 = x[2:2];
-  endfunction
-  function [0:0] reticle_bits_4_0_0;
-    input [3:0] x;
-    reticle_bits_4_0_0 = x[0:0];
-  endfunction
-  function [0:0] reticle_bits_4_1_1;
-    input [3:0] x;
-    reticle_bits_4_1_1 = x[1:1];
-  endfunction
-  function [0:0] reticle_bits_4_2_2;
-    input [3:0] x;
-    reticle_bits_4_2_2 = x[2:2];
-  endfunction
-  function [0:0] reticle_bits_4_3_3;
-    input [3:0] x;
-    reticle_bits_4_3_3 = x[3:3];
-  endfunction
-  function [0:0] reticle_bits_5_0_0;
-    input [4:0] x;
-    reticle_bits_5_0_0 = x[0:0];
-  endfunction
-  function [0:0] reticle_bits_5_1_1;
-    input [4:0] x;
-    reticle_bits_5_1_1 = x[1:1];
-  endfunction
-  function [0:0] reticle_bits_5_2_2;
-    input [4:0] x;
-    reticle_bits_5_2_2 = x[2:2];
-  endfunction
-  function [0:0] reticle_bits_5_3_3;
-    input [4:0] x;
-    reticle_bits_5_3_3 = x[3:3];
-  endfunction
-  function [0:0] reticle_bits_5_4_4;
-    input [4:0] x;
-    reticle_bits_5_4_4 = x[4:4];
-  endfunction
-  function [0:0] reticle_bits_6_0_0;
-    input [5:0] x;
-    reticle_bits_6_0_0 = x[0:0];
-  endfunction
-  function [0:0] reticle_bits_6_1_1;
-    input [5:0] x;
-    reticle_bits_6_1_1 = x[1:1];
-  endfunction
-  function [0:0] reticle_bits_6_2_2;
-    input [5:0] x;
-    reticle_bits_6_2_2 = x[2:2];
-  endfunction
-  function [0:0] reticle_bits_6_3_3;
-    input [5:0] x;
-    reticle_bits_6_3_3 = x[3:3];
-  endfunction
-  function [0:0] reticle_bits_6_4_4;
-    input [5:0] x;
-    reticle_bits_6_4_4 = x[4:4];
-  endfunction
-  function [0:0] reticle_bits_6_5_5;
-    input [5:0] x;
-    reticle_bits_6_5_5 = x[5:5];
-  endfunction
   assign clk = clk$in0;
   assign rst = rst$in0;
-  assign next = {\$lut5 , \$lut6 , \$lut7 , \$lut8 , \$lut9 , \$lut10 , \$lut11 , \$lut12 };
+  assign next = {inc$o1[3], inc$o1[2], inc$o1[1], inc$o1[0], inc$o0[3], inc$o0[2], inc$o0[1], inc$o0[0]};
   assign tick = count[0];
   assign mix = {\$lut0 , \$lut1 , \$lut2 , \$lut3 };
+  assign inc$p3 = count[3];
+  assign inc$p2 = count[2];
+  assign inc$p1 = count[1];
+  assign inc$p7 = count[7];
+  assign inc$p6 = count[6];
+  assign inc$p5 = count[5];
+  assign inc$p4 = count[4];
   assign led$pad = {led$pin3, led$pin2, led$pin1, led$pin0};
   assign count = {counter$q7, counter$q6, counter$q5, counter$q4, counter$q3, counter$q2, counter$q1, counter$q0};
   assign led = {out$q3, out$q2, out$q1, out$q0};
+  CARRY4 inc$carry0 (
+    .S({inc$p3, inc$p2, inc$p1, inc$p0}),
+    .DI({count[3], count[2], count[1], count[0]}),
+    .CYINIT(1'b0),
+    .CI(1'b0),
+    .O(inc$o0),
+    .CO(inc$co0)
+  );
+  CARRY4 inc$carry1 (
+    .S({inc$p7, inc$p6, inc$p5, inc$p4}),
+    .DI({count[7], count[6], count[5], count[4]}),
+    .CI(inc$co0[3]),
+    .CYINIT(1'b0),
+    .O(inc$o1),
+    .CO(inc$co1)
+  );
   (* port = "clk", pin = "W5", io_standard = "LVCMOS33" *)
   IBUF clk$io0 (
     .I(clk$pad),
@@ -192,7 +146,7 @@ module blinky (.clk(clk$pad), .rst(rst$pad), .sw(sw$pad), .led(led$pad));
     .I(clk),
     .O(clk$gb)
   );
-  LUT6 #(.INIT(64'h6666666666666666)) \$lut13  (
+  LUT6 #(.INIT(64'h6666666666666666)) \$lut4  (
     .I0(reticle_bits_2_0_0({sw$in3, count[7]})),
     .I1(reticle_bits_2_1_1({sw$in3, count[7]})),
     .I2(1'b0),
@@ -201,7 +155,7 @@ module blinky (.clk(clk$pad), .rst(rst$pad), .sw(sw$pad), .led(led$pad));
     .I5(1'b0),
     .O(\$lut0 )
   );
-  LUT6 #(.INIT(64'h6666666666666666)) \$lut14  (
+  LUT6 #(.INIT(64'h6666666666666666)) \$lut5  (
     .I0(reticle_bits_2_0_0({sw$in2, count[6]})),
     .I1(reticle_bits_2_1_1({sw$in2, count[6]})),
     .I2(1'b0),
@@ -210,7 +164,7 @@ module blinky (.clk(clk$pad), .rst(rst$pad), .sw(sw$pad), .led(led$pad));
     .I5(1'b0),
     .O(\$lut1 )
   );
-  LUT6 #(.INIT(64'h6666666666666666)) \$lut15  (
+  LUT6 #(.INIT(64'h6666666666666666)) \$lut6  (
     .I0(reticle_bits_2_0_0({sw$in1, count[5]})),
     .I1(reticle_bits_2_1_1({sw$in1, count[5]})),
     .I2(1'b0),
@@ -219,7 +173,7 @@ module blinky (.clk(clk$pad), .rst(rst$pad), .sw(sw$pad), .led(led$pad));
     .I5(1'b0),
     .O(\$lut2 )
   );
-  LUT6 #(.INIT(64'h6666666666666666)) \$lut16  (
+  LUT6 #(.INIT(64'h6666666666666666)) \$lut7  (
     .I0(reticle_bits_2_0_0({sw$in0, count[4]})),
     .I1(reticle_bits_2_1_1({sw$in0, count[4]})),
     .I2(1'b0),
@@ -228,86 +182,14 @@ module blinky (.clk(clk$pad), .rst(rst$pad), .sw(sw$pad), .led(led$pad));
     .I5(1'b0),
     .O(\$lut3 )
   );
-  LUT6 #(.INIT(64'h8000000000000000)) \$lut17  (
-    .I0(reticle_bits_6_0_0({count[5], count[4], count[3], count[2], count[1], count[0]})),
-    .I1(reticle_bits_6_1_1({count[5], count[4], count[3], count[2], count[1], count[0]})),
-    .I2(reticle_bits_6_2_2({count[5], count[4], count[3], count[2], count[1], count[0]})),
-    .I3(reticle_bits_6_3_3({count[5], count[4], count[3], count[2], count[1], count[0]})),
-    .I4(reticle_bits_6_4_4({count[5], count[4], count[3], count[2], count[1], count[0]})),
-    .I5(reticle_bits_6_5_5({count[5], count[4], count[3], count[2], count[1], count[0]})),
-    .O(\$lut4 )
-  );
-  LUT6 #(.INIT(64'h6c6c6c6c6c6c6c6c)) \$lut18  (
-    .I0(reticle_bits_3_0_0({\$lut4 , count[7], count[6]})),
-    .I1(reticle_bits_3_1_1({\$lut4 , count[7], count[6]})),
-    .I2(reticle_bits_3_2_2({\$lut4 , count[7], count[6]})),
-    .I3(1'b0),
-    .I4(1'b0),
-    .I5(1'b0),
-    .O(\$lut5 )
-  );
-  LUT6 #(.INIT(64'h6666666666666666)) \$lut19  (
-    .I0(reticle_bits_2_0_0({\$lut4 , count[6]})),
-    .I1(reticle_bits_2_1_1({\$lut4 , count[6]})),
-    .I2(1'b0),
-    .I3(1'b0),
-    .I4(1'b0),
-    .I5(1'b0),
-    .O(\$lut6 )
-  );
-  LUT6 #(.INIT(64'h7fffffff80000000)) \$lut20  (
-    .I0(reticle_bits_6_0_0({count[5], count[4], count[3], count[2], count[1], count[0]})),
-    .I1(reticle_bits_6_1_1({count[5], count[4], count[3], count[2], count[1], count[0]})),
-    .I2(reticle_bits_6_2_2({count[5], count[4], count[3], count[2], count[1], count[0]})),
-    .I3(reticle_bits_6_3_3({count[5], count[4], count[3], count[2], count[1], count[0]})),
-    .I4(reticle_bits_6_4_4({count[5], count[4], count[3], count[2], count[1], count[0]})),
-    .I5(reticle_bits_6_5_5({count[5], count[4], count[3], count[2], count[1], count[0]})),
-    .O(\$lut7 )
-  );
-  LUT6 #(.INIT(64'h7fff80007fff8000)) \$lut21  (
-    .I0(reticle_bits_5_0_0({count[4], count[3], count[2], count[1], count[0]})),
-    .I1(reticle_bits_5_1_1({count[4], count[3], count[2], count[1], count[0]})),
-    .I2(reticle_bits_5_2_2({count[4], count[3], count[2], count[1], count[0]})),
-    .I3(reticle_bits_5_3_3({count[4], count[3], count[2], count[1], count[0]})),
-    .I4(reticle_bits_5_4_4({count[4], count[3], count[2], count[1], count[0]})),
-    .I5(1'b0),
-    .O(\$lut8 )
-  );
-  LUT6 #(.INIT(64'h7f807f807f807f80)) \$lut22  (
-    .I0(reticle_bits_4_0_0({count[3], count[2], count[1], count[0]})),
-    .I1(reticle_bits_4_1_1({count[3], count[2], count[1], count[0]})),
-    .I2(reticle_bits_4_2_2({count[3], count[2], count[1], count[0]})),
-    .I3(reticle_bits_4_3_3({count[3], count[2], count[1], count[0]})),
-    .I4(1'b0),
-    .I5(1'b0),
-    .O(\$lut9 )
-  );
-  LUT6 #(.INIT(64'h7878787878787878)) \$lut23  (
-    .I0(reticle_bits_3_0_0({count[2], count[1], count[0]})),
-    .I1(reticle_bits_3_1_1({count[2], count[1], count[0]})),
-    .I2(reticle_bits_3_2_2({count[2], count[1], count[0]})),
-    .I3(1'b0),
-    .I4(1'b0),
-    .I5(1'b0),
-    .O(\$lut10 )
-  );
-  LUT6 #(.INIT(64'h6666666666666666)) \$lut24  (
-    .I0(reticle_bits_2_0_0({count[1], count[0]})),
-    .I1(reticle_bits_2_1_1({count[1], count[0]})),
-    .I2(1'b0),
-    .I3(1'b0),
-    .I4(1'b0),
-    .I5(1'b0),
-    .O(\$lut11 )
-  );
-  LUT6 #(.INIT(64'h5555555555555555)) \$lut25  (
+  LUT6 #(.INIT(64'h5555555555555555)) \$lut8  (
     .I0(count[0]),
     .I1(1'b0),
     .I2(1'b0),
     .I3(1'b0),
     .I4(1'b0),
     .I5(1'b0),
-    .O(\$lut12 )
+    .O(inc$p0)
   );
   FDRE #(.INIT(1'b0)) counter$ff0 (
     .C(clk$gb),

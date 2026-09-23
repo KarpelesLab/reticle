@@ -82,7 +82,7 @@ use std::fmt::Write as _;
 use super::constraints::{Constraints, IoAttrs};
 use super::device::{
     BelKind, BelRole, BramInitLayout, BramInitParams, BramModeLayout, BramShape, Device,
-    PllFeedback, PllShape,
+    PllFeedback, PllShape, WideCarry,
 };
 use super::pll::PllSolution;
 use crate::diag::{Diagnostic, Diagnostics};
@@ -2432,7 +2432,8 @@ impl Mapper<'_> {
         let Some(bel) = self.device.bel(BelRole::Carry).cloned() else {
             return;
         };
-        if !bel.has_ports(&["ci", "i0", "i1", "co"]) {
+        let wide = bel.wide_carry().is_some();
+        if !wide && !bel.has_ports(&["ci", "i0", "i1", "co"]) {
             let adders = module
                 .cells
                 .iter()
@@ -2467,12 +2468,21 @@ impl Mapper<'_> {
             };
             let name = cell.name.as_str().to_owned();
             let span = cell.span;
-            self.emit_carry(module, &bel, &name, a, b, y, width, span);
+            let primitives = match bel.wide_carry() {
+                Some(shape) => {
+                    self.emit_wide_carry(module, &bel, shape, &name, a, b, y, width, span);
+                    width.div_ceil(shape.width)
+                }
+                None => {
+                    self.emit_carry(module, &bel, &name, a, b, y, width, span);
+                    width.saturating_sub(1)
+                }
+            };
             self.report.carry_chains.push(CarryMapping {
                 cell: name,
                 primitive: bel.name.clone(),
                 width,
-                primitives: width.saturating_sub(1),
+                primitives,
             });
             removed.push(add);
         }
@@ -2541,6 +2551,124 @@ impl Mapper<'_> {
                 );
                 carry = net_expr(module, next, span);
             }
+        }
+        sums.reverse();
+        let value = expr(module, ExprKind::Concat(sums), span);
+        add_assign(module, y, value, span);
+    }
+
+    /// The same adder onto a [`WideCarry`] element: a chain of instances,
+    /// each covering `shape.width` bits.
+    ///
+    /// Per bit it emits one XOR — the propagate `a ^ b`, which becomes a
+    /// LUT — and wires the generate source to `a`. The sums come out of
+    /// the element itself, so unlike the one-bit path there is no second
+    /// XOR. The instances chain top carry out to next carry in; the first
+    /// one's carry in is the adder's, which is a constant zero, since the
+    /// `add` cell has no carry-in port (a design that wants one widens
+    /// the operands, and the extra bit falls out of this chain like any
+    /// other).
+    ///
+    /// A width that is not a multiple of `shape.width` leaves the top
+    /// lanes of the last instance over. They are tied to zero on both
+    /// inputs and their outputs are not read: a lane with propagate 0 and
+    /// generate 0 answers carry out 0, so nothing downstream sees them
+    /// either.
+    #[allow(clippy::too_many_arguments)]
+    fn emit_wide_carry(
+        &mut self,
+        module: &mut Module,
+        bel: &BelKind,
+        shape: WideCarry<'_>,
+        name: &str,
+        a: ExprId,
+        b: ExprId,
+        y: NetId,
+        width: u32,
+        span: Span,
+    ) {
+        let lanes = shape.width;
+        let blocks = width.div_ceil(lanes);
+        // Sum bits, least significant first; reversed into a concat at
+        // the end, which is how the one-bit path builds its result too.
+        let mut sums: Vec<ExprId> = Vec::with_capacity(usize::try_from(width).unwrap_or(0));
+        // The carry into the next instance, from the one below it.
+        let mut chain: Option<ExprId> = None;
+        for block in 0..blocks {
+            // `Concat` is most significant first, so the lanes are walked
+            // from the top of the instance down.
+            let mut propagate = Vec::with_capacity(usize::try_from(lanes).unwrap_or(0));
+            let mut data = Vec::with_capacity(usize::try_from(lanes).unwrap_or(0));
+            for lane in (0..lanes).rev() {
+                let bit = block * lanes + lane;
+                if bit >= width {
+                    propagate.push(const_expr(module, Const::zero(1), span));
+                    data.push(const_expr(module, Const::zero(1), span));
+                    continue;
+                }
+                let a_bit = slice_expr(module, a, bit, bit, span);
+                let b_bit = slice_expr(module, b, bit, bit, span);
+                let p = add_net(module, &format!("{name}$p{bit}"), Type::bit(), span);
+                add_cell(
+                    module,
+                    &format!("{name}$xor{bit}"),
+                    CellKind::Xor,
+                    vec![(Name::new("a"), a_bit), (Name::new("b"), b_bit)],
+                    vec![(Name::new("y"), p)],
+                    span,
+                );
+                propagate.push(net_expr(module, p, span));
+                data.push(slice_expr(module, a, bit, bit, span));
+            }
+            let propagate = expr(module, ExprKind::Concat(propagate), span);
+            let data = expr(module, ExprKind::Concat(data), span);
+            let sum_net = add_net(module, &format!("{name}$o{block}"), Type::bits(lanes), span);
+            let carry_net = add_net(
+                module,
+                &format!("{name}$co{block}"),
+                Type::bits(lanes),
+                span,
+            );
+            let mut inputs = vec![
+                (Name::new(shape.propagate), propagate),
+                (Name::new(shape.data), data),
+            ];
+            // Which pin the carry into this instance goes on, and which
+            // one has to be held at zero: the silicon ORs the two, so the
+            // one not in use is a constant rather than left dangling.
+            // The chain takes `ci` where the family has it, and the
+            // constant carry in of the first instance takes `cyinit`.
+            let (driven, tied) = match (shape.carry_in, shape.init) {
+                (Some(ci), init) if chain.is_some() => (ci, init),
+                (ci, Some(init)) => (init, ci),
+                (Some(ci), None) => (ci, None),
+                (None, None) => unreachable!("a wide carry has at least one carry input"),
+            };
+            let carry = chain.unwrap_or_else(|| const_expr(module, Const::zero(1), span));
+            inputs.push((Name::new(driven), carry));
+            if let Some(tied) = tied {
+                let zero = const_expr(module, Const::zero(1), span);
+                inputs.push((Name::new(tied), zero));
+            }
+            add_cell(
+                module,
+                &format!("{name}$carry{block}"),
+                CellKind::Blackbox(Name::new(bel.name.clone())),
+                inputs,
+                vec![
+                    (Name::new(shape.sum), sum_net),
+                    (Name::new(shape.carry_out), carry_net),
+                ],
+                span,
+            );
+            let sum_expr = net_expr(module, sum_net, span);
+            for lane in 0..lanes {
+                if block * lanes + lane < width {
+                    sums.push(slice_expr(module, sum_expr, lane, lane, span));
+                }
+            }
+            let carry_expr = net_expr(module, carry_net, span);
+            chain = Some(slice_expr(module, carry_expr, lanes - 1, lanes - 1, span));
         }
         sums.reverse();
         let value = expr(module, ExprKind::Concat(sums), span);

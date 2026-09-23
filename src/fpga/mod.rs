@@ -166,7 +166,7 @@ pub use constraints::{
 pub use device::{
     BelKind, BelRole, BramPort, BramPortRole, BramShape, ClockRegion, ClockResources, Device,
     DeviceDb, DspShape, FfFeatures, FfReset, FfVariant, Grid, IoBank, IoStandard, Pin, PinKind,
-    PinName, PllDivider, PllDividerRole, PllFeedback, PllShape, Site,
+    PinName, PllDivider, PllDividerRole, PllFeedback, PllShape, Site, WideCarry,
 };
 pub use flow::{
     FlowError, FlowReport, NetlistProblem, NextpnrInputs, PnrOptions, PnrResult, PnrRoute,

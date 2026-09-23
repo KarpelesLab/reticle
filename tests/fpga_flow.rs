@@ -305,13 +305,15 @@ fn every_layer_of_the_flow_is_exercised() {
         ("ddr_ice40", &["SB_IO"]),
         ("ddr_ecp5", &["TRELLIS_IO", "IDDRX1F", "ODDRX1F", "DELAYG"]),
         // The 7 series: a different IO primitive for each direction, a
-        // six-input LUT, and one flip-flop per kind of reset. The
-        // counter resets to 16, so one of its bits loads a one (FDSE)
-        // and the rest load zeros (FDRE); the output register resets
-        // asynchronously (FDCE).
+        // six-input LUT, the four-bit carry element, and one flip-flop
+        // per kind of reset. The counter resets to 16, so one of its
+        // bits loads a one (FDSE) and the rest load zeros (FDRE); the
+        // output register resets asynchronously (FDCE).
         (
             "blinky_xc7",
-            &["LUT6", "FDRE", "FDSE", "FDCE", "IBUF", "OBUF", "BUFG"],
+            &[
+                "LUT6", "CARRY4", "FDRE", "FDSE", "FDCE", "IBUF", "OBUF", "BUFG",
+            ],
         ),
         ("ram_xc7", &["RAMB18E1", "IBUF", "OBUF"]),
         // The same memory below the block RAM threshold, on the
@@ -691,20 +693,20 @@ fn a_block_ram_carries_its_contents_into_the_netlist() {
     assert!(text.contains("WEBWE={%we, %we, %we, %we}"), "{text}");
 }
 
-/// The things this family cannot do are said out loud. A carry chain is
-/// declined with the reason rather than approximated, and the blocks
+/// The things this family cannot do are said out loud, and the blocks
 /// Reticle cannot wire correctly are simply not declared.
 #[test]
 fn the_unsupported_corners_are_reported() {
     use reticle::fpga::BelRole;
     let run = run_case("blinky_xc7", "xc7a35t-cpg236");
     let notes = run.report.to_text();
+    // The carry chain is no longer one of them: the counter's adder is
+    // on CARRY4, four bits an instance, and nothing declines it.
     assert!(
-        notes.contains("CARRY4") && notes.contains("stay generic"),
-        "the carry chain is declined without saying so:\n{notes}"
+        !notes.contains("stay generic"),
+        "the carry chain is declined again:\n{notes}"
     );
-    // Declining is not the same as mis-building: the adder is still
-    // there, as LUT6s, and the netlist check is happy with it.
+    assert_eq!(run.report.count("CARRY4"), 2, "an 8-bit adder is two CARRY4");
     assert!(run.report.count("LUT6") > 0);
     let top = run.design.top.unwrap();
     assert!(fpga::check_nextpnr_json(&run.design, top, run.device, &run.constraints).is_empty());
@@ -751,9 +753,14 @@ fn the_artix7_matches_its_datasheet_figures() {
         assert_eq!(pll.port("fbout"), Some("CLKFBOUT"));
         assert_eq!(pll.port("fb"), Some("CLKFBIN"));
     }
-    // The carry element is recorded without a port map, which is what
-    // makes carry mapping decline rather than guess.
-    assert!(!device.bel(BelRole::Carry).unwrap().has_ports(&["ci"]));
+    // The carry element is the four-bit kind: a propagate, a generate
+    // source, its own sums, and two ways in.
+    let carry = device.bel(BelRole::Carry).unwrap();
+    assert_eq!(carry.carry_width, Some(4));
+    assert_eq!(carry.all_port_names(), ["CI", "CYINIT", "S", "DI", "O", "CO"]);
+    let wide = carry.wide_carry().expect("a wide carry");
+    assert_eq!((wide.propagate, wide.data), ("S", "DI"));
+    assert_eq!((wide.sum, wide.carry_out), ("O", "CO"));
     // No tile grid: Reticle cannot state the SLICE array of this part.
     assert!(device.tile_grid.is_none());
     // The pin list is the Basys 3's, and it is not the whole package.

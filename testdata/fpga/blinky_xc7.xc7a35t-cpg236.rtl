@@ -8,6 +8,18 @@ module blinky
   net %next u8 wire
   net %tick u1 wire
   net %mix u4 wire
+  net %inc$p3 u1 wire
+  net %inc$p2 u1 wire
+  net %inc$p1 u1 wire
+  net %inc$p0 u1 wire
+  net %inc$o0 u4 wire
+  net %inc$co0 u4 wire
+  net %inc$p7 u1 wire
+  net %inc$p6 u1 wire
+  net %inc$p5 u1 wire
+  net %inc$p4 u1 wire
+  net %inc$o1 u4 wire
+  net %inc$co1 u4 wire
   net %clk$pad u1 wire
   net %clk$in0 u1 wire
   net %rst$pad u1 wire
@@ -27,15 +39,6 @@ module blinky
   net %$lut1 u1 wire
   net %$lut2 u1 wire
   net %$lut3 u1 wire
-  net %$lut4 u1 wire
-  net %$lut5 u1 wire
-  net %$lut6 u1 wire
-  net %$lut7 u1 wire
-  net %$lut8 u1 wire
-  net %$lut9 u1 wire
-  net %$lut10 u1 wire
-  net %$lut11 u1 wire
-  net %$lut12 u1 wire
   net %counter$q0 u1 wire
   net %counter$q1 u1 wire
   net %counter$q2 u1 wire
@@ -54,12 +57,21 @@ module blinky
   port led out %led$pad
   assign %clk = %clk$in0
   assign %rst = %rst$in0
-  assign %next = {%$lut5, %$lut6, %$lut7, %$lut8, %$lut9, %$lut10, %$lut11, %$lut12}
+  assign %next = {%inc$o1[3:3], %inc$o1[2:2], %inc$o1[1:1], %inc$o1[0:0], %inc$o0[3:3], %inc$o0[2:2], %inc$o0[1:1], %inc$o0[0:0]}
   assign %tick = %count[0:0]
   assign %mix = {%$lut0, %$lut1, %$lut2, %$lut3}
+  assign %inc$p3 = %count[3:3]
+  assign %inc$p2 = %count[2:2]
+  assign %inc$p1 = %count[1:1]
+  assign %inc$p7 = %count[7:7]
+  assign %inc$p6 = %count[6:6]
+  assign %inc$p5 = %count[5:5]
+  assign %inc$p4 = %count[4:4]
   assign %led$pad = {%led$pin3, %led$pin2, %led$pin1, %led$pin0}
   assign %count = {%counter$q7, %counter$q6, %counter$q5, %counter$q4, %counter$q3, %counter$q2, %counter$q1, %counter$q0}
   assign %led = {%out$q3, %out$q2, %out$q1, %out$q0}
+  cell inc$carry0 blackbox CARRY4 (S={%inc$p3, %inc$p2, %inc$p1, %inc$p0}, DI={%count[3:3], %count[2:2], %count[1:1], %count[0:0]}, CYINIT=1'd0, CI=1'd0) -> (O=%inc$o0, CO=%inc$co0)
+  cell inc$carry1 blackbox CARRY4 (S={%inc$p7, %inc$p6, %inc$p5, %inc$p4}, DI={%count[7:7], %count[6:6], %count[5:5], %count[4:4]}, CI=%inc$co0[3:3], CYINIT=1'd0) -> (O=%inc$o1, CO=%inc$co1)
   attr port = "clk"
   attr pin = "W5"
   attr io_standard = "LVCMOS33"
@@ -85,19 +97,11 @@ module blinky
   attr port = "led"
   cell led$io3 blackbox OBUF (I=%led[3:3]) -> (O=%led$pin3)
   cell clk$gbuf blackbox BUFG (I=%clk) -> (O=%clk$gb)
-  cell $lut13 blackbox LUT6 #(INIT=64'd7378697629483820646) (I0={%sw$in3, %count[7:7]}[0:0], I1={%sw$in3, %count[7:7]}[1:1], I2=1'd0, I3=1'd0, I4=1'd0, I5=1'd0) -> (O=%$lut0)
-  cell $lut14 blackbox LUT6 #(INIT=64'd7378697629483820646) (I0={%sw$in2, %count[6:6]}[0:0], I1={%sw$in2, %count[6:6]}[1:1], I2=1'd0, I3=1'd0, I4=1'd0, I5=1'd0) -> (O=%$lut1)
-  cell $lut15 blackbox LUT6 #(INIT=64'd7378697629483820646) (I0={%sw$in1, %count[5:5]}[0:0], I1={%sw$in1, %count[5:5]}[1:1], I2=1'd0, I3=1'd0, I4=1'd0, I5=1'd0) -> (O=%$lut2)
-  cell $lut16 blackbox LUT6 #(INIT=64'd7378697629483820646) (I0={%sw$in0, %count[4:4]}[0:0], I1={%sw$in0, %count[4:4]}[1:1], I2=1'd0, I3=1'd0, I4=1'd0, I5=1'd0) -> (O=%$lut3)
-  cell $lut17 blackbox LUT6 #(INIT=64'd9223372036854775808) (I0={%count[5:5], %count[4:4], %count[3:3], %count[2:2], %count[1:1], %count[0:0]}[0:0], I1={%count[5:5], %count[4:4], %count[3:3], %count[2:2], %count[1:1], %count[0:0]}[1:1], I2={%count[5:5], %count[4:4], %count[3:3], %count[2:2], %count[1:1], %count[0:0]}[2:2], I3={%count[5:5], %count[4:4], %count[3:3], %count[2:2], %count[1:1], %count[0:0]}[3:3], I4={%count[5:5], %count[4:4], %count[3:3], %count[2:2], %count[1:1], %count[0:0]}[4:4], I5={%count[5:5], %count[4:4], %count[3:3], %count[2:2], %count[1:1], %count[0:0]}[5:5]) -> (O=%$lut4)
-  cell $lut18 blackbox LUT6 #(INIT=64'd7812738666512280684) (I0={%$lut4, %count[7:7], %count[6:6]}[0:0], I1={%$lut4, %count[7:7], %count[6:6]}[1:1], I2={%$lut4, %count[7:7], %count[6:6]}[2:2], I3=1'd0, I4=1'd0, I5=1'd0) -> (O=%$lut5)
-  cell $lut19 blackbox LUT6 #(INIT=64'd7378697629483820646) (I0={%$lut4, %count[6:6]}[0:0], I1={%$lut4, %count[6:6]}[1:1], I2=1'd0, I3=1'd0, I4=1'd0, I5=1'd0) -> (O=%$lut6)
-  cell $lut20 blackbox LUT6 #(INIT=64'd9223372034707292160) (I0={%count[5:5], %count[4:4], %count[3:3], %count[2:2], %count[1:1], %count[0:0]}[0:0], I1={%count[5:5], %count[4:4], %count[3:3], %count[2:2], %count[1:1], %count[0:0]}[1:1], I2={%count[5:5], %count[4:4], %count[3:3], %count[2:2], %count[1:1], %count[0:0]}[2:2], I3={%count[5:5], %count[4:4], %count[3:3], %count[2:2], %count[1:1], %count[0:0]}[3:3], I4={%count[5:5], %count[4:4], %count[3:3], %count[2:2], %count[1:1], %count[0:0]}[4:4], I5={%count[5:5], %count[4:4], %count[3:3], %count[2:2], %count[1:1], %count[0:0]}[5:5]) -> (O=%$lut7)
-  cell $lut21 blackbox LUT6 #(INIT=64'd9223231301513871360) (I0={%count[4:4], %count[3:3], %count[2:2], %count[1:1], %count[0:0]}[0:0], I1={%count[4:4], %count[3:3], %count[2:2], %count[1:1], %count[0:0]}[1:1], I2={%count[4:4], %count[3:3], %count[2:2], %count[1:1], %count[0:0]}[2:2], I3={%count[4:4], %count[3:3], %count[2:2], %count[1:1], %count[0:0]}[3:3], I4={%count[4:4], %count[3:3], %count[2:2], %count[1:1], %count[0:0]}[4:4], I5=1'd0) -> (O=%$lut8)
-  cell $lut22 blackbox LUT6 #(INIT=64'd9187483429707480960) (I0={%count[3:3], %count[2:2], %count[1:1], %count[0:0]}[0:0], I1={%count[3:3], %count[2:2], %count[1:1], %count[0:0]}[1:1], I2={%count[3:3], %count[2:2], %count[1:1], %count[0:0]}[2:2], I3={%count[3:3], %count[2:2], %count[1:1], %count[0:0]}[3:3], I4=1'd0, I5=1'd0) -> (O=%$lut9)
-  cell $lut23 blackbox LUT6 #(INIT=64'd8680820740569200760) (I0={%count[2:2], %count[1:1], %count[0:0]}[0:0], I1={%count[2:2], %count[1:1], %count[0:0]}[1:1], I2={%count[2:2], %count[1:1], %count[0:0]}[2:2], I3=1'd0, I4=1'd0, I5=1'd0) -> (O=%$lut10)
-  cell $lut24 blackbox LUT6 #(INIT=64'd7378697629483820646) (I0={%count[1:1], %count[0:0]}[0:0], I1={%count[1:1], %count[0:0]}[1:1], I2=1'd0, I3=1'd0, I4=1'd0, I5=1'd0) -> (O=%$lut11)
-  cell $lut25 blackbox LUT6 #(INIT=64'd6148914691236517205) (I0=%count[0:0], I1=1'd0, I2=1'd0, I3=1'd0, I4=1'd0, I5=1'd0) -> (O=%$lut12)
+  cell $lut4 blackbox LUT6 #(INIT=64'd7378697629483820646) (I0={%sw$in3, %count[7:7]}[0:0], I1={%sw$in3, %count[7:7]}[1:1], I2=1'd0, I3=1'd0, I4=1'd0, I5=1'd0) -> (O=%$lut0)
+  cell $lut5 blackbox LUT6 #(INIT=64'd7378697629483820646) (I0={%sw$in2, %count[6:6]}[0:0], I1={%sw$in2, %count[6:6]}[1:1], I2=1'd0, I3=1'd0, I4=1'd0, I5=1'd0) -> (O=%$lut1)
+  cell $lut6 blackbox LUT6 #(INIT=64'd7378697629483820646) (I0={%sw$in1, %count[5:5]}[0:0], I1={%sw$in1, %count[5:5]}[1:1], I2=1'd0, I3=1'd0, I4=1'd0, I5=1'd0) -> (O=%$lut2)
+  cell $lut7 blackbox LUT6 #(INIT=64'd7378697629483820646) (I0={%sw$in0, %count[4:4]}[0:0], I1={%sw$in0, %count[4:4]}[1:1], I2=1'd0, I3=1'd0, I4=1'd0, I5=1'd0) -> (O=%$lut3)
+  cell $lut8 blackbox LUT6 #(INIT=64'd6148914691236517205) (I0=%count[0:0], I1=1'd0, I2=1'd0, I3=1'd0, I4=1'd0, I5=1'd0) -> (O=%inc$p0)
   cell counter$ff0 blackbox FDRE #(INIT=1'd0) (C=%clk$gb, D=%next[0:0], CE=1'd1, R=%rst) -> (Q=%counter$q0)
   cell counter$ff1 blackbox FDRE #(INIT=1'd0) (C=%clk$gb, D=%next[1:1], CE=1'd1, R=%rst) -> (Q=%counter$q1)
   cell counter$ff2 blackbox FDRE #(INIT=1'd0) (C=%clk$gb, D=%next[2:2], CE=1'd1, R=%rst) -> (Q=%counter$q2)

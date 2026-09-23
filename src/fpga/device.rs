@@ -115,6 +115,37 @@
 //! and [`Device::io_bel`] picks between them. A line with no `for`
 //! serves every direction, which is what the one-buffer families say.
 //!
+//! # Carry elements, one bit or several
+//!
+//! Most families expose a one-bit carry: two operand bits and a carry in,
+//! a carry out, and the sum XORed outside. That is four roles and no
+//! more:
+//!
+//! ```text
+//! bel SB_CARRY carry port ci=CI i0=I0 i1=I1 co=CO
+//! ```
+//!
+//! Xilinx's `CARRY4` is the other shape: four bits per instance, a
+//! *propagate* (`a ^ b`, from a LUT) rather than two operands, a
+//! generate source it falls back on, and sum pins of its own. A family
+//! with that shape writes a `width` and six roles:
+//!
+//! ```text
+//! bel CARRY4 carry width 4 port ci=CI cyinit=CYINIT p=S di=DI s=O co=CO
+//! ```
+//!
+//! `width` is how many bits one instance covers; `p` is the propagate
+//! input and `di` the generate source, both that many bits wide; `s` is
+//! the sum output and `co` the carry out of every bit, also that wide,
+//! with `co`'s top bit feeding the next instance's `ci`. `ci` and
+//! `cyinit` are the two one-bit ways in — the chain below and the
+//! fabric — and a family needs at least one of them; where both exist
+//! the chain goes on `ci` and the constant on `cyinit`. See
+//! [`WideCarry`] for the model mapping assumes, and
+//! [`BelKind::wide_carry`] for how the two shapes are told apart: a
+//! `carry` line with neither form is "declared, unmapped", which is what
+//! the ECP5's `CCU2C` still is.
+//!
 //! # Wide block RAM pins
 //!
 //! A block RAM signal whose pin is several bits wide and takes the same
@@ -484,6 +515,10 @@ pub struct BelKind {
     /// IO conventions (`PIN_TYPE` on iCE40, `DIR` and `PULLMODE` on ECP5)
     /// as data rather than as code.
     pub cond_params: Vec<(String, Vec<(String, AttrValue)>)>,
+    /// For a primitive with role [`BelRole::Carry`], how many bits of
+    /// carry one instance covers, from its `width` clause; `None` for the
+    /// one-bit form every other family uses. See [`BelKind::wide_carry`].
+    pub carry_width: Option<u32>,
     /// For a primitive with role [`BelRole::Ff`], exactly which flip-flop
     /// it is; `None` for every other role, and for a flip-flop whose file
     /// does not say (which makes flip-flop mapping decline for it).
@@ -509,6 +544,7 @@ impl BelKind {
             ports: Vec::new(),
             params: Vec::new(),
             cond_params: Vec::new(),
+            carry_width: None,
             ff: None,
             io_dirs: Vec::new(),
         }
@@ -561,6 +597,97 @@ impl BelKind {
     pub fn has_ports(&self, roles: &[&str]) -> bool {
         roles.iter().all(|r| self.port(r).is_some())
     }
+
+    /// The wide-carry shape this primitive describes, or `None` when it
+    /// is not one.
+    ///
+    /// A carry element is *wide* when its line carries a `width` and the
+    /// roles a [`WideCarry`] needs; anything else — including a `carry`
+    /// line with no ports at all — answers `None`, which leaves the
+    /// one-bit `(ci, i0, i1) -> co` path and the "declined with a note"
+    /// path exactly as they were.
+    ///
+    /// ```
+    /// use reticle::fpga::BelRole;
+    /// let device = reticle::fpga::target("xc7a35t-cpg236").unwrap();
+    /// let carry = device.bel(BelRole::Carry).unwrap();
+    /// let wide = carry.wide_carry().unwrap();
+    /// assert_eq!((wide.width, wide.propagate, wide.sum), (4, "S", "O"));
+    /// // The iCE40's carry is the one-bit kind, so it is not one.
+    /// let ice40 = reticle::fpga::target("ice40-hx1k-tq144").unwrap();
+    /// assert!(ice40.bel(BelRole::Carry).unwrap().wide_carry().is_none());
+    /// ```
+    pub fn wide_carry(&self) -> Option<WideCarry<'_>> {
+        if self.role != BelRole::Carry {
+            return None;
+        }
+        let width = self.carry_width?;
+        if width == 0 {
+            return None;
+        }
+        let carry_in = self.port("ci");
+        let init = self.port("cyinit");
+        if carry_in.is_none() && init.is_none() {
+            return None;
+        }
+        Some(WideCarry {
+            width,
+            propagate: self.port("p")?,
+            data: self.port("di")?,
+            sum: self.port("s")?,
+            carry_out: self.port("co")?,
+            carry_in,
+            init,
+        })
+    }
+}
+
+/// A carry element several bits wide that takes a *propagate* and
+/// computes its own sums: the Xilinx 7-series `CARRY4` and its like.
+///
+/// The one-bit element [`super::primitives`] maps onto by default takes
+/// two operand bits and a carry in and answers a carry out, with the sum
+/// XORed outside it. This is the other shape the fabrics use, and it
+/// differs in three ways at once: it covers [`width`](Self::width) bits
+/// per instance, it takes the propagate `a ^ b` (a LUT computes it)
+/// rather than the two operands, and its `sum` pins are the adder's
+/// result, so no XOR follows it.
+///
+/// Its model, which `CARRY4` states and which mapping relies on:
+///
+/// ```text
+/// sum[i]     = propagate[i] ^ carry[i]
+/// carry[0]   = the instance's carry in
+/// carry[i+1] = carry_out[i] = propagate[i] ? carry[i] : data[i]
+/// ```
+///
+/// so `data` is the bit the element falls back on where the propagate is
+/// zero, which for `a + b` is `a` itself (`a == b` there, so either
+/// operand would do).
+///
+/// The two carry inputs are both optional and at least one must be
+/// present: `carry_in` is the pin fed from the instance below, `init`
+/// the pin fed from the fabric or a constant. A family with only one of
+/// them names only that one; a family with both — `CI` and `CYINIT` on
+/// the 7-series, where the silicon ORs them and only one may be driven —
+/// gets the chain on `carry_in` and the constant on `init`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct WideCarry<'a> {
+    /// How many bits of the adder one instance covers.
+    pub width: u32,
+    /// The propagate input, `width` bits wide (`S`).
+    pub propagate: &'a str,
+    /// The generate source, `width` bits wide (`DI`).
+    pub data: &'a str,
+    /// The sum output, `width` bits wide (`O`).
+    pub sum: &'a str,
+    /// The carry output of each bit, `width` bits wide (`CO`); its top
+    /// bit is the next instance's carry in.
+    pub carry_out: &'a str,
+    /// The one-bit carry input from the instance below (`CI`).
+    pub carry_in: Option<&'a str>,
+    /// The one-bit carry input from the fabric or a constant (`CYINIT`).
+    pub init: Option<&'a str>,
 }
 
 /// Which side of a block RAM one physical port is.
@@ -1711,6 +1838,9 @@ fn write_bel(bel: &BelKind) -> String {
     if let Some(count) = bel.count {
         line.push_str(&format!(" count {count}"));
     }
+    if let Some(width) = bel.carry_width {
+        line.push_str(&format!(" width {width}"));
+    }
     if let Some(ff) = bel.ff {
         line.push_str(&format!(" mode {}", ff.flags()));
     }
@@ -2279,6 +2409,11 @@ impl<'a> Parser<'a> {
                     let count = self.number_at(line, index, "a count")?;
                     index += 1;
                     bel.count = Some(count);
+                }
+                "width" => {
+                    let width = self.number_at(line, index, "a carry width")?;
+                    index += 1;
+                    bel.carry_width = Some(width);
                 }
                 "mode" => {
                     let Some(token) = line.get(index) else {

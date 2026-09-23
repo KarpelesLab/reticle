@@ -33,10 +33,10 @@
 #     [`super::techcells`] widens a narrower truth table by repeating it
 #     and ties the unused inputs low. A LUT5 is half a LUT6 on this
 #     fabric, so nothing is lost but a line in a report.
-#   * CARRY4 is declared WITHOUT A PORT MAP, deliberately, which is what
-#     makes carry mapping decline for this family with a note, exactly
-#     as it declines for the ECP5's CCU2C. Its behaviour is not in doubt
-#     — from `cells_sim.v`, HIGH confidence:
+#   * CARRY4 is declared with the `width 4` port map, which is the
+#     `.dev` format's wide-carry form, and adders are mapped onto it.
+#     Its behaviour is not in doubt — from `cells_sim.v`, HIGH
+#     confidence:
 #
 #         O  = S ^ {CO[2:0], CI | CYINIT}
 #         CO[0] = S[0] ? (CI | CYINIT) : DI[0]
@@ -46,14 +46,19 @@
 #     generate source (usually a itself), O the sum, CO the carry out of
 #     each of the four bits, and CI (from the slice below) and CYINIT
 #     (from the fabric or a constant) are the two ways in, of which
-#     exactly one may be used. The reason for declining is that Reticle
-#     maps carry chains onto a one-bit `(ci, i0, i1) -> co` element with
-#     the sum XORed outside it, and CARRY4 is four bits wide, computes
-#     its own sums, and takes a propagate rather than two operands.
-#     Forcing it into that shape would be wrong in a way that only a
-#     part would show, so adders go to LUT6s until the mapper learns the
-#     four-bit shape. This costs area and depth; it does not cost
-#     correctness.
+#     exactly one may be driven. The port map says exactly that:
+#     `p=S di=DI s=O co=CO` with `ci=CI cyinit=CYINIT`, and mapping
+#     emits one XOR per bit for S, wires DI to `a`, chains CO[3] into the
+#     next instance's CI with its CYINIT tied low, and gives the first
+#     instance its carry in on CYINIT with CI tied low — which is what
+#     Yosys' own 7-series carry mapping does with the same primitive.
+#     HIGH confidence in the wiring; it is checked against the model
+#     above, exhaustively at 1..9 bits and by SAT proof at 16 and 32, in
+#     `tests/fpga_carry.rs`. It has still never been run on a part.
+#     An adder narrower than `min_carry_width` (four bits by default,
+#     which is exactly one CARRY4) stays in LUT6s, as does a `sub`: the
+#     IR's `sub` cell is not lowered through the carry path on any
+#     family.
 #   * Flip-flops: FDRE (synchronous reset R), FDSE (synchronous set S),
 #     FDCE (asynchronous clear CLR), FDPE (asynchronous preset PRE),
 #     each with D, CE, C and Q, each with a one-bit INIT, and each with
@@ -285,7 +290,7 @@ device xc7a35t-cpg236
   bel LUT3 lut port i=I0,I1,I2 o=O param INIT=8'h00
   bel LUT2 lut port i=I0,I1 o=O param INIT=4'h0
   bel LUT1 lut port i=I0 o=O param INIT=2'h0
-  bel CARRY4 carry
+  bel CARRY4 carry width 4 port ci=CI cyinit=CYINIT p=S di=DI s=O co=CO
   bel FDRE ff count 41600 mode posedge port clk=C d=D q=Q en=CE rst=R param INIT=1'b0
   bel FDRE ff mode posedge,enable port clk=C d=D q=Q en=CE rst=R param INIT=1'b0
   bel FDRE ff mode posedge,sync_reset port clk=C d=D q=Q en=CE rst=R param INIT=1'b0
