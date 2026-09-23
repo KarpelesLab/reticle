@@ -517,9 +517,10 @@ PLP all see it — and ADC and SBC simply ignore it.
 `src/fpga/devices/xc7.dev` describes the Artix-7 of the Digilent Basys 3
 and `reticle fpga --device xc7a35t-cpg236` takes a design all the way to
 the files Vivado reads. Two reasons, both honest: that family declares
-no double-data-rate register, so `sdram_ctrl`, `hyperram_ctrl`, `dvi_tx`
-and `eth_mac_rgmii` are *correctly refused* on it rather than measured,
-and a third device makes this test take about four and a half minutes.
+no double-data-rate register, so every block that asks for one is
+*correctly refused* on it rather than measured — the run stops at
+`sdram_ctrl`, the first of them — and a third device makes this test
+take about four and a half minutes.
 Adding it is one line — the `DEVICES` list in `tests/ip_library.rs` —
 once `IDDR` and `ODDR` are in the device file. `docs/fpga.md` says what
 that family does and does not support.
