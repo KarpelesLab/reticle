@@ -1,0 +1,65 @@
+# Digilent Basys 3 (Xilinx XC7A35T-1CPG236C).
+#
+# PROVENANCE: every pin name below is a line of Digilent's published
+# `Basys-3-Master.xdc` (github.com/Digilent/digilent-xdc), fetched and
+# transcribed rather than recalled. HIGH confidence that they are the
+# balls those signals are wired to on a Basys 3 rev B, and that they are
+# IO balls of the CPG236 package. See `src/fpga/devices/xc7.dev` for the
+# rest of the list and for what else about this part is and is not
+# verified. NOTHING HERE HAS BEEN RUN ON A BOARD.
+#
+# W5 is the board's single 100 MHz oscillator. There is no other clock
+# source and no crystal socket.
+#
+# B18 and A18 are the FPGA's side of the on-board USB-UART bridge, which
+# the host sees as a serial port: the FPGA RECEIVES on B18 (Digilent
+# calls it `RsRx`) and TRANSMITS on A18 (`RsTx`). Note that this is the
+# opposite naming from the iCE40 breakout file next to this one, where
+# the pins are named from the FPGA's side; the pins themselves are what
+# matters and the mapping below is FPGA transmit -> A18.
+#
+# The board has no reset button wired to a dedicated pin. soc_top needs
+# none — it resets itself when the FPGA is configured — but if you want
+# one, the five pushbuttons are U18 (centre), T18 (up), W19 (left), T17
+# (right) and U17 (down), all active high with no external pull.
+#
+# CLK_DIV: soc_top divides the clock for its UART. At 100 MHz and 115200
+# baud that is 868, not the 104 the module defaults to for a 12 MHz
+# board, so build this with `-p CLK_DIV=868` or the serial output is
+# unreadable.
+set_io -io_standard LVCMOS33 clk W5
+set_io -io_standard LVCMOS33 uart_tx A18
+set_io -io_standard LVCMOS33 uart_rx B18
+create_clock -name sys -period 10.0 clk
+clock_domain sys clk
+
+# The rest of the board, for a design that wants it. These are comments
+# because this project's top has no such ports and a constraint naming a
+# port the design lacks is an error; uncomment the lines your top
+# declares. The pin names are the same transcription as above.
+#
+# Sixteen slide switches, sw[0] at the left-hand end of the row:
+#   V17 V16 W16 W17 W15 V15 W14 W13 V2 T3 T2 R3 W2 U1 T1 R2
+# Sixteen LEDs above them, led[0] at the same end:
+#   U16 E19 U19 V19 W18 U15 U14 V14 V13 V3 W3 U3 P3 N3 P1 L1
+# The four-digit seven-segment display: segments a..g are
+#   W7 W6 U8 V8 U5 V5 U7, the decimal point is V7, and the four digit
+#   anodes are U2 U4 V4 W4. Segments and anodes are both ACTIVE LOW.
+# Pmod headers, pins 1-4 then 7-10 of each:
+#   JA  J1 L2 J2 G2 H1 K2 H2 G3
+#   JB  A14 A16 B15 B16 A15 A17 C15 C16
+#   JC  K17 M18 N17 P18 L17 M19 P17 R18
+#   JXADC J3 L3 M2 N2 K3 M3 M1 N1
+# PS/2: clock C17, data B17, both wanting a pull-up.
+#
+# VIDEO. The Basys 3 has NO HDMI AND NO DVI CONNECTOR. Its video output
+# is VGA at twelve bits, four per channel, through a resistor ladder to
+# a DE-15 socket:
+#   red   G19 H19 J19 N19      (bit 0 first)
+#   green J17 H17 G17 D17
+#   blue  N18 L18 K18 J18
+#   hsync P19   vsync R19
+# The `ip/dvi_tx` package in this repository drives TMDS differential
+# pairs and CANNOT drive this board. Its `video_timing` module, which is
+# counters and sync generation and nothing else, is reusable unchanged
+# for a VGA path; the serialiser and the TMDS encoder are not.
