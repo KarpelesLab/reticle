@@ -252,7 +252,7 @@ From this directory:
 reticle build --synth reticle.proj
 ```
 
-resolves the three packages, writes `reticle.lock`, elaborates the design
+resolves the four packages, writes `reticle.lock`, elaborates the design
 and synthesises it. Synthesis turns both `$readmemh`s into the memories'
 initial contents, reading the files through a provider the binary gives
 it.
@@ -272,7 +272,7 @@ cargo test --all-features --test apple2
 | `monitor_hex_is_the_assembled_source` | `sw/monitor.hex` is `sw/monitor.s` assembled, inside the ROM, with the three vectors pointing at the labels the source names |
 | `the_assembler_takes_the_low_and_high_byte_of_an_address` | the `<` and `>` the assembler gained for this |
 | `the_monitors_line_table_is_the_documented_interleave` | the ROM's 48-byte line table is `$0400 + 128 * (N mod 8) + 40 * (N div 8)`, computed in the test from the formula |
-| `the_project_resolves_and_elaborates` | the manifest builds from exactly three library packages and the three files in `rtl/` |
+| `the_project_resolves_and_elaborates` | the manifest builds from exactly four library packages and the four files in `rtl/`, with `video_timing` reached once and not twice |
 | `the_machine_synthesises_without_errors_or_latches` | synthesis has no error, no warning and no latch, and the ROM and the character generator hold what their files say, with everything the files did not name still `x` |
 | **`the_screen_comes_out_of_the_video_signal`** | **the whole chain** — see below |
 | **`the_screen_comes_out_of_the_vga_pins`** | **the same screen off the VGA pins** — see below |

@@ -47,10 +47,11 @@ sources, like `examples/apple2` — gets exactly one copy of
 
 The consequence worth knowing: depending on `vga_out` pulls in the whole
 of `dvi_tx`, encoders and serialisers included, as *sources*. They
-elaborate; nothing instantiates them, so nothing survives into a
-netlist. `the_apple2_maps_onto_the_artix7_for_the_basys3` in
-`tests/apple2.rs` is the evidence — no `tmds_encoder` cell appears in
-the Basys 3 netlist.
+elaborate; nothing instantiates them, so nothing reaches a netlist.
+`the_machine_maps_onto_the_artix7_for_the_basys3` in `tests/apple2.rs`
+is the evidence — the Basys 3 netlist has no double-data-rate register
+and no PLL in it, which is what a serialiser would have brought, and it
+maps for a part whose device file declares neither.
 
 ## Ports
 

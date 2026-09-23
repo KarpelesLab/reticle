@@ -51,7 +51,7 @@
 //! | `the_font_tells_its_glyphs_apart` | no two of the 128 patterns a cell can show — 64 glyphs, normal and inverse — are the same, so reading a cell back off the screen has one answer |
 //! | `monitor_hex_is_the_assembled_source` | `sw/monitor.hex` is `sw/monitor.s` assembled, inside the ROM, with the three vectors pointing at the labels the source names |
 //! | `the_monitors_line_table_is_the_documented_interleave` | the ROM's line table is $0400 + 128 * (N mod 8) + 40 * (N div 8), computed here from the formula |
-//! | `the_project_resolves_and_elaborates` | the manifest builds from exactly three library packages and three user sources |
+//! | `the_project_resolves_and_elaborates` | the manifest builds from exactly four library packages and four user sources, with `video_timing` pulled in once for both video paths |
 //! | `the_machine_synthesises_without_errors_or_latches` | synthesis has no error, no warning and no latch, and both memories hold what their files say |
 //! | `the_screen_comes_out_of_the_video_signal` | the whole chain: forty by twenty-four characters decoded from two frames of video, the session decoded again off `uart_tx` (which is also what proves the keyboard, since the testbench typed it), and the speaker counted |
 //! | `the_screen_comes_out_of_the_vga_pins` | the same screen decoded off the *pins* `vga_out` drives — twelve colour bits and two syncs — with the syncs checked on every line of the frame |
@@ -609,11 +609,23 @@ fn the_project_resolves_and_elaborates() {
             ("dvi_tx", "rtl/tmds_encoder.v"),
             ("dvi_tx", "rtl/video_timing.v"),
             ("dvi_tx", "rtl/dvi_tx.v"),
+            ("vga_out", "rtl/vga_out.v"),
             ("apple2", "rtl/apple2_video.v"),
             ("apple2", "rtl/apple2.v"),
             ("apple2", "rtl/apple2_top.v"),
+            ("apple2", "rtl/apple2_basys3.v"),
         ],
-        "the user's HDL is the three files in rtl/; everything else is the library"
+        "the user's HDL is the four files in rtl/; everything else is the library"
+    );
+    // `vga_out` reaches the build through its own `depends dvi_tx`, and
+    // `video_timing` appears once for both video paths and not twice.
+    assert_eq!(
+        owners
+            .iter()
+            .filter(|(_, path)| *path == "rtl/video_timing.v")
+            .count(),
+        1,
+        "the raster was pulled in twice"
     );
     assert!(built.elaboration.blackboxes.is_empty());
     assert!(built.elaboration.skipped.is_empty());
