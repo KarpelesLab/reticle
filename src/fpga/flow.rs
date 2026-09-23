@@ -109,6 +109,18 @@ pub enum FlowError {
         /// The device that named it.
         device: String,
     },
+    /// The family's route to a bitstream is a vendor tool, not nextpnr,
+    /// so [`export_nextpnr`] has nothing to produce for it. This is not
+    /// a missing feature of the device: [`export_vendor`] takes the same
+    /// design the rest of the way.
+    VendorOnly {
+        /// The family as the device database spells it.
+        family: String,
+        /// The device that named it.
+        device: String,
+        /// The tool that does read this family's export.
+        tool: &'static str,
+    },
     /// Generic synthesis reported errors, so nothing was mapped. The
     /// errors themselves are in the diagnostics the caller passed in.
     Synthesis,
@@ -140,6 +152,16 @@ impl fmt::Display for FlowError {
             FlowError::UnknownFamily { family, device } => write!(
                 f,
                 "no place-and-route flow is known for family `{family}` (device `{device}`)"
+            ),
+            FlowError::VendorOnly {
+                family,
+                device,
+                tool,
+            } => write!(
+                f,
+                "family `{family}` (device `{device}`) has no nextpnr back end in Reticle: \
+                 export it for {tool} with `fpga::export_vendor`, which writes the structural \
+                 Verilog, the XDC and the script that runs it"
             ),
             FlowError::Synthesis => {
                 f.write_str("the design could not be synthesised; see the reported errors")
@@ -214,6 +236,10 @@ pub struct NextpnrInputs {
 }
 
 /// Everything a vendor tool needs for one run.
+///
+/// The file names the script refers to are the plain `<top>.v`,
+/// `<top>.xdc` and `<top>.tcl`; write the three next to each other and
+/// run [`VendorInputs::args`].
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct VendorInputs {
     /// The netlist as structural Verilog.
@@ -222,6 +248,13 @@ pub struct VendorInputs {
     pub xdc: String,
     /// The constraints as SDC, for a flow that wants timing separately.
     pub sdc: String,
+    /// A script that reads the two files above, implements the design
+    /// for this part and writes its bitstream; empty for a family whose
+    /// vendor tool Reticle cannot name.
+    pub script: String,
+    /// The command line that runs that script, program first; empty
+    /// likewise.
+    pub args: Vec<String>,
 }
 
 /// Knobs for [`synthesize_for`].
@@ -983,6 +1016,45 @@ pub fn constant_convention(family: &str) -> Option<&'static str> {
         "ecp5" => {
             Some("nextpnr-ecp5 ties a `0` or `1` bit to the GND and VCC nets its packer creates")
         }
+        "xc7" => Some(
+            "a `0` or `1` bit is a Verilog constant that Vivado drives from the GND and VCC \
+             primitives it inserts",
+        ),
+        _ => None,
+    }
+}
+
+/// Which tool takes a family's export the rest of the way.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum PnrRoute {
+    /// [`export_nextpnr`]: a JSON netlist and a `.pcf` / `.lpf`.
+    Nextpnr,
+    /// [`export_vendor`]: structural Verilog, an `.xdc` and a script.
+    Vendor,
+}
+
+/// The route Reticle recommends for `family`, or `None` when it knows of
+/// none (the invented `generic` family, or a database a project wrote
+/// itself).
+///
+/// This is the one piece of a family that cannot be data: which program
+/// reads the export, and therefore which files [`reticle fpga`] should
+/// write. The two supported open families go to nextpnr; the 7 series
+/// goes to Vivado, because Reticle has no Project X-Ray database and
+/// will not pretend to.
+///
+/// ```
+/// use reticle::fpga::{PnrRoute, pnr_route};
+/// assert_eq!(pnr_route("ice40"), Some(PnrRoute::Nextpnr));
+/// assert_eq!(pnr_route("xc7"), Some(PnrRoute::Vendor));
+/// assert_eq!(pnr_route("generic"), None);
+/// ```
+///
+/// [`reticle fpga`]: https://docs.rs/reticle
+pub fn pnr_route(family: &str) -> Option<PnrRoute> {
+    match family {
+        "ice40" | "ecp5" => Some(PnrRoute::Nextpnr),
+        "xc7" => Some(PnrRoute::Vendor),
         _ => None,
     }
 }
@@ -1022,6 +1094,14 @@ pub fn export_nextpnr(
             pcf_or_lpf: constraints.write_lpf(device),
             constraints_name: format!("{top}.lpf"),
             args: ecp5_args(device, &top),
+        }),
+        // Not a silent failure and not a half-written file: the family
+        // has a route, it is just not this one, and the message says
+        // which function takes it.
+        "xc7" => Err(FlowError::VendorOnly {
+            family: "xc7".to_owned(),
+            device: device.name.clone(),
+            tool: "Vivado",
         }),
         other => Err(FlowError::UnknownFamily {
             family: other.to_owned(),
@@ -1120,17 +1200,88 @@ pub fn export_vendor(
     }
     let mut design = design.clone();
     design.top = Some(module);
+    let top = design.module(module).name.as_str().to_owned();
     let options = VerilogOptions {
         structural_only: false,
         ansi_ports: true,
         keep_attrs: true,
         blackboxes: false,
     };
+    let (script, args) = match device.family.as_str() {
+        "xc7" => (vivado_tcl(device, &top), vivado_args(&top)),
+        _ => (String::new(), Vec::new()),
+    };
     Ok(VendorInputs {
         verilog: emit_verilog_with(&design, &options)?,
         xdc: constraints.write_xdc(device),
         sdc: constraints.write_sdc(device),
+        script,
+        args,
     })
+}
+
+/// The Vivado part string for a 7-series device.
+///
+/// Vivado spells a part as the die, the package and the speed grade run
+/// together: `xc7a35tcpg236-1`. The device database holds the three
+/// separately — the device name's first component is the die, `package`
+/// is the package and `speed` is the grade — so nothing about this part
+/// in particular is written here.
+fn vivado_part(device: &Device) -> String {
+    let die = device.name.split('-').next().unwrap_or(&device.name);
+    let mut part = format!("{die}{}", device.package);
+    if !device.speed_grade.is_empty() {
+        part.push('-');
+        part.push_str(&device.speed_grade);
+    }
+    part
+}
+
+/// A Vivado batch script that implements the export.
+///
+/// The netlist is already a structural netlist of 7-series primitives,
+/// so `synth_design` has nothing to infer: it elaborates the
+/// instantiations, which is also the point at which Vivado checks that
+/// every primitive and every pin Reticle named really exists.
+fn vivado_tcl(device: &Device, top: &str) -> String {
+    use std::fmt::Write as _;
+    let part = vivado_part(device);
+    let mut out = String::new();
+    let _ = writeln!(
+        out,
+        "# Vivado batch script written by reticle for {} ({})",
+        device.name, device.family
+    );
+    let _ = writeln!(out, "# Run it with: {}", vivado_args(top).join(" "));
+    let _ = writeln!(
+        out,
+        "# The netlist is already mapped to 7-series primitives, so this\n\
+         # elaborates and checks the instantiations rather than inferring\n\
+         # anything. Reticle has not run it: what the test suite proves is\n\
+         # that the cells and pins are ones the device database declares."
+    );
+    let _ = writeln!(out, "create_project -in_memory -part {part}");
+    let _ = writeln!(out, "read_verilog {top}.v");
+    let _ = writeln!(out, "read_xdc {top}.xdc");
+    let _ = writeln!(out, "synth_design -top {top} -part {part}");
+    let _ = writeln!(out, "opt_design");
+    let _ = writeln!(out, "place_design");
+    let _ = writeln!(out, "route_design");
+    let _ = writeln!(out, "report_utilization -file {top}_utilization.rpt");
+    let _ = writeln!(out, "report_timing_summary -file {top}_timing.rpt");
+    let _ = writeln!(out, "write_bitstream -force {top}.bit");
+    out
+}
+
+/// The command line that runs [`vivado_tcl`].
+fn vivado_args(top: &str) -> Vec<String> {
+    vec![
+        "vivado".to_owned(),
+        "-mode".to_owned(),
+        "batch".to_owned(),
+        "-source".to_owned(),
+        format!("{top}.tcl"),
+    ]
 }
 
 #[cfg(test)]

@@ -1467,8 +1467,8 @@ fn synth(args: &Args) -> Result<Outcome, ArgError> {
 /// `reticle fpga`: the whole target flow, ending in nextpnr's inputs.
 fn fpga(args: &Args) -> Result<Outcome, ArgError> {
     use reticle::fpga::{
-        Constraints, FpgaOptions, builtin_devices, check_nextpnr_json, export_nextpnr,
-        synthesize_for, target,
+        Constraints, FpgaOptions, PnrRoute, builtin_devices, check_nextpnr_json, export_nextpnr,
+        export_vendor, pnr_route, synthesize_for, target,
     };
 
     if args.flag("list-devices") {
@@ -1557,22 +1557,47 @@ fn fpga(args: &Args) -> Result<Outcome, ArgError> {
         return Ok(Outcome::Failed);
     }
 
-    let inputs = match export_nextpnr(&design, top, device, &constraints) {
-        Ok(inputs) => inputs,
-        Err(err) => {
-            eprintln!("error: {err}");
-            return Ok(Outcome::Failed);
-        }
-    };
-
     let dir = std::path::Path::new(args.option("output-dir").unwrap_or("."));
     let top_name = design.modules[top].name.as_str().to_string();
-    let json_path = dir.join(format!("{top_name}.json"));
-    let constraints_path = dir.join(&inputs.constraints_name);
-    for (path, text) in [
-        (&json_path, &inputs.json),
-        (&constraints_path, &inputs.pcf_or_lpf),
-    ] {
+
+    // Which files to write is the one part of a family that is not data:
+    // the open families go to nextpnr, the 7 series to Vivado. A family
+    // with no route at all falls through to the nextpnr export, whose
+    // error names it.
+    let files: Vec<(std::path::PathBuf, String)>;
+    let command: Vec<String>;
+    match pnr_route(&device.family) {
+        Some(PnrRoute::Vendor) => {
+            let inputs = match export_vendor(&design, top, device, &constraints) {
+                Ok(inputs) => inputs,
+                Err(err) => {
+                    eprintln!("error: {err}");
+                    return Ok(Outcome::Failed);
+                }
+            };
+            files = vec![
+                (dir.join(format!("{top_name}.v")), inputs.verilog),
+                (dir.join(format!("{top_name}.xdc")), inputs.xdc),
+                (dir.join(format!("{top_name}.tcl")), inputs.script),
+            ];
+            command = inputs.args;
+        }
+        _ => {
+            let inputs = match export_nextpnr(&design, top, device, &constraints) {
+                Ok(inputs) => inputs,
+                Err(err) => {
+                    eprintln!("error: {err}");
+                    return Ok(Outcome::Failed);
+                }
+            };
+            files = vec![
+                (dir.join(format!("{top_name}.json")), inputs.json),
+                (dir.join(&inputs.constraints_name), inputs.pcf_or_lpf),
+            ];
+            command = inputs.args;
+        }
+    }
+    for (path, text) in &files {
         if let Err(err) = std::fs::write(path, text) {
             eprintln!("error: cannot write `{}`: {err}", path.display());
             return Ok(Outcome::Failed);
@@ -1586,12 +1611,12 @@ fn fpga(args: &Args) -> Result<Outcome, ArgError> {
     }
 
     if !args.flag("quiet") {
-        eprintln!(
-            "note: wrote {} and {}",
-            json_path.display(),
-            constraints_path.display()
-        );
-        eprintln!("note: place and route with: {}", inputs.args.join(" "));
+        let names: Vec<String> = files
+            .iter()
+            .map(|(path, _)| path.display().to_string())
+            .collect();
+        eprintln!("note: wrote {}", names.join(", "));
+        eprintln!("note: place and route with: {}", command.join(" "));
     }
     Ok(Outcome::Ok)
 }

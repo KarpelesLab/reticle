@@ -169,8 +169,9 @@ pub use device::{
     PinName, PllDivider, PllDividerRole, PllFeedback, PllShape, Site,
 };
 pub use flow::{
-    FlowError, FlowReport, NetlistProblem, NextpnrInputs, PnrOptions, PnrResult, VendorInputs,
-    check_nextpnr_json, constant_convention, export_nextpnr, export_vendor, place_and_route,
+    FlowError, FlowReport, NetlistProblem, NextpnrInputs, PnrOptions, PnrResult, PnrRoute,
+    VendorInputs, check_nextpnr_json, constant_convention, export_nextpnr, export_vendor,
+    place_and_route, pnr_route,
 };
 #[cfg(feature = "synth")]
 pub use flow::{FpgaOptions, Implementation, implement, synthesize_for};
