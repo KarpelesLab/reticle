@@ -98,7 +98,6 @@ fn go(args: &Args) -> Result<Outcome, Fault> {
     let clock = args
         .u32_option("clock")?
         .unwrap_or(program::DEFAULT_CLOCK_HZ);
-    let divisor = reticle::program::ftdi::divisor_for(clock);
 
     // The file is read and checked first: a malformed bitstream must be
     // found before a cable is opened, not after the part has been
@@ -130,17 +129,27 @@ fn go(args: &Args) -> Result<Outcome, Fault> {
     }
 
     let cable = usb::Cable::open(args.option("device"))?;
+    // The divisor depends on which FTDI part the adapter has, so it can
+    // only be worked out once the cable is open.
+    let chip = cable.chip();
+    let divisor = reticle::program::ftdi::divisor_for_chip(chip, clock);
     say(&format!(
-        "adapter {}, TCK {} Hz",
+        "adapter {}, {:?}, TCK {} Hz",
         cable.serial(),
-        reticle::program::ftdi::clock_hz(divisor)
+        chip,
+        reticle::program::ftdi::clock_hz_on(chip, divisor)
     ));
     let (pins, dirs) = program::BASYS3_PINS;
-    cable.run(&xilinx::init_job(divisor, pins, dirs))?;
+    cable.run(&xilinx::init_job_for(chip, divisor, pins, dirs))?;
 
     // Nothing has been written to the part yet, and nothing will be if
     // this does not match.
-    let job = xilinx::idcode_job();
+    // Read it the way that needs no vendor knowledge: after
+    // Test-Logic-Reset every 1149.1 part with an identifier presents it,
+    // whatever its instruction register's width. Shifting a Xilinx
+    // instruction at a Gowin part reads all zeros, which is
+    // indistinguishable from an unplugged board.
+    let job = reticle::program::jtag::idcode_after_reset();
     let idcode = job.capture_u32(0, &cable.run(&job)?)?;
     if !xilinx::idcode_matches(idcode, expected) {
         return Err(ProgramError::IdcodeMismatch {

@@ -119,6 +119,59 @@ pub fn opcode_name(opcode: u8) -> Option<&'static str> {
     })
 }
 
+/// Which FTDI part the adapter has, because the MPSSE differs between
+/// them in two ways that both matter.
+///
+/// The H series clocks the state machine from 60 MHz and offers three
+/// opcodes the older parts do not have. A C or D part clocks from
+/// 12 MHz and answers any of those three with `0xFA`, "bad command",
+/// which leaves the engine in a state where nothing works afterwards.
+/// Sending them regardless is why a Digilent Basys 3 (an FT2232H) was
+/// fine and a Sipeed adapter (an FT2232D) read an IDCODE of all zeros.
+///
+/// The part is told apart by `bcdDevice`, which FTDI sets per silicon:
+/// `0x0500` is the FT2232C/D, `0x0700` the FT2232H, `0x0800` the
+/// FT4232H and `0x0900` the FT232H. AN_233 §2 lists them.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Chip {
+    /// FT2232C, FT2232D and their relatives: 12 MHz, no H-only opcodes.
+    Legacy,
+    /// FT2232H, FT4232H, FT232H: 60 MHz once the prescaler is off.
+    HighSpeed,
+}
+
+impl Chip {
+    /// The part `bcdDevice` describes, or `None` for one this code has
+    /// never been tried against — better to refuse than to guess at a
+    /// clock and blame the board for the silence.
+    #[must_use]
+    pub fn from_bcd_device(bcd: u16) -> Option<Chip> {
+        match bcd {
+            0x0400 | 0x0500 | 0x0600 => Some(Chip::Legacy),
+            0x0700 | 0x0800 | 0x0900 => Some(Chip::HighSpeed),
+            _ => None,
+        }
+    }
+
+    /// The clock the divisor divides. On an H part this is the rate
+    /// after [`CMD_DISABLE_DIV5`]; on a legacy part there is no
+    /// prescaler to turn off and the master clock is 12 MHz.
+    #[must_use]
+    pub fn master_clock_hz(self) -> u32 {
+        match self {
+            Chip::Legacy => 12_000_000,
+            Chip::HighSpeed => 60_000_000,
+        }
+    }
+
+    /// The fastest TCK the part can produce, which is the master clock
+    /// halved (divisor 0).
+    #[must_use]
+    pub fn max_clock_hz(self) -> u32 {
+        self.master_clock_hz() / 2
+    }
+}
+
 /// The MPSSE master clock on an H-series part once [`CMD_DISABLE_DIV5`]
 /// has been sent (AN_108 §3.8.2).
 pub const MASTER_CLOCK_HZ: u32 = 60_000_000;
@@ -134,10 +187,16 @@ pub const MAX_BYTES_PER_COMMAND: usize = 65_536;
 /// board is not a place to overshoot a clock.
 #[must_use]
 pub fn divisor_for(hz: u32) -> u16 {
+    divisor_for_chip(Chip::HighSpeed, hz)
+}
+
+/// The divisor that gets closest to `hz` on `chip` without exceeding it.
+#[must_use]
+pub fn divisor_for_chip(chip: Chip, hz: u32) -> u16 {
     if hz == 0 {
         return u16::MAX;
     }
-    let half = u64::from(MASTER_CLOCK_HZ) / 2;
+    let half = u64::from(chip.master_clock_hz()) / 2;
     let div = half.div_ceil(u64::from(hz)).saturating_sub(1);
     u16::try_from(div.min(u64::from(u16::MAX))).unwrap_or(u16::MAX)
 }
@@ -145,7 +204,13 @@ pub fn divisor_for(hz: u32) -> u16 {
 /// The clock a divisor actually produces, for reporting it back.
 #[must_use]
 pub fn clock_hz(divisor: u16) -> u32 {
-    MASTER_CLOCK_HZ / ((u32::from(divisor) + 1) * 2)
+    clock_hz_on(Chip::HighSpeed, divisor)
+}
+
+/// The clock a divisor produces on `chip`.
+#[must_use]
+pub fn clock_hz_on(chip: Chip, divisor: u16) -> u32 {
+    chip.master_clock_hz() / ((u32::from(divisor) + 1) * 2)
 }
 
 /// A buffer of MPSSE commands under construction, and how many bytes of
@@ -209,9 +274,21 @@ impl Mpsse {
     ///
     /// AN_135 §4.2 gives this same list in this same order.
     pub fn configure(&mut self, divisor: u16) {
-        self.opcode(CMD_DISABLE_DIV5);
-        self.opcode(CMD_DISABLE_ADAPTIVE);
-        self.opcode(CMD_DISABLE_3PHASE);
+        self.configure_chip(Chip::HighSpeed, divisor);
+    }
+
+    /// The same, for a named part.
+    ///
+    /// The first three opcodes exist only on the H series. A C or D part
+    /// answers each with `0xFA` and stops obeying, so they are sent only
+    /// where they exist; the divisor and the loopback command are common
+    /// to both.
+    pub fn configure_chip(&mut self, chip: Chip, divisor: u16) {
+        if chip == Chip::HighSpeed {
+            self.opcode(CMD_DISABLE_DIV5);
+            self.opcode(CMD_DISABLE_ADAPTIVE);
+            self.opcode(CMD_DISABLE_3PHASE);
+        }
         let [lo, hi] = divisor.to_le_bytes();
         self.bytes.extend_from_slice(&[CMD_SET_DIVISOR, lo, hi]);
         self.opcode(CMD_LOOPBACK_OFF);
@@ -436,6 +513,62 @@ mod tests {
     }
 
     /// `configure` is the documented opening sequence, divisor included.
+    #[test]
+    fn the_bcd_device_field_names_the_silicon() {
+        // AN_233 §2. The two this has met: a Digilent Basys 3 reports
+        // 0x0700 and a Sipeed adapter 0x0500.
+        assert_eq!(Chip::from_bcd_device(0x0700), Some(Chip::HighSpeed));
+        assert_eq!(Chip::from_bcd_device(0x0500), Some(Chip::Legacy));
+        assert_eq!(Chip::from_bcd_device(0x0900), Some(Chip::HighSpeed));
+        // A part nobody here has tried is refused, not guessed at: the
+        // wrong master clock reads as a dead board.
+        assert_eq!(Chip::from_bcd_device(0x0200), None);
+    }
+
+    #[test]
+    fn each_part_divides_its_own_master_clock() {
+        // 60 MHz and 12 MHz, so the same divisor means different clocks
+        // and the same clock means different divisors.
+        assert_eq!(Chip::HighSpeed.master_clock_hz(), 60_000_000);
+        assert_eq!(Chip::Legacy.master_clock_hz(), 12_000_000);
+        assert_eq!(clock_hz_on(Chip::HighSpeed, 0), 30_000_000);
+        assert_eq!(clock_hz_on(Chip::Legacy, 0), 6_000_000);
+        for hz in [100_000, 1_000_000, 6_000_000] {
+            for chip in [Chip::Legacy, Chip::HighSpeed] {
+                let got = clock_hz_on(chip, divisor_for_chip(chip, hz));
+                assert!(got <= hz, "{chip:?} at {hz} Hz overshot to {got} Hz");
+            }
+        }
+    }
+
+    #[test]
+    fn a_legacy_part_is_not_sent_the_opcodes_it_lacks() {
+        // 0x8A, 0x8B and 0x8D exist only on the H series; a C or D
+        // answers each with `0xFA` and then obeys nothing, which is how
+        // a Sipeed FT2232D came to read an IDCODE of all zeros.
+        let mut legacy = Mpsse::new();
+        legacy.configure_chip(Chip::Legacy, 0x0005);
+        let bytes = legacy.commands().to_vec();
+        for opcode in [CMD_DISABLE_DIV5, CMD_DISABLE_ADAPTIVE, CMD_DISABLE_3PHASE] {
+            assert!(
+                !bytes.contains(&opcode),
+                "sent {opcode:#04x} to a legacy part"
+            );
+        }
+        // The divisor and the loopback command are common to both.
+        assert!(bytes.windows(3).any(|w| w == [CMD_SET_DIVISOR, 0x05, 0x00]));
+        assert!(bytes.contains(&CMD_LOOPBACK_OFF));
+
+        let mut high = Mpsse::new();
+        high.configure_chip(Chip::HighSpeed, 0x0005);
+        for opcode in [CMD_DISABLE_DIV5, CMD_DISABLE_ADAPTIVE, CMD_DISABLE_3PHASE] {
+            assert!(
+                high.commands().contains(&opcode),
+                "{opcode:#04x} belongs on an H part"
+            );
+        }
+    }
+
     #[test]
     fn configure_emits_the_documented_opening_sequence() {
         let mut m = Mpsse::new();

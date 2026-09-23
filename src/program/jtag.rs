@@ -581,6 +581,23 @@ impl Scan {
     }
 }
 
+/// Reads the 32-bit data register straight after Test-Logic-Reset.
+///
+/// This asks nothing about the vendor. IEEE 1149.1 says a part that has
+/// an `IDCODE` register loads that instruction on entering
+/// Test-Logic-Reset, so the first 32 bits shifted out of DR afterwards
+/// are its identifier, whoever made it. Shifting an instruction first
+/// means knowing the instruction register's width, and that differs:
+/// Xilinx 7-series is 6 bits, a Gowin GW2A is 8. Getting it wrong reads
+/// all zeros, which looks exactly like a board that is not plugged in.
+#[must_use]
+pub fn idcode_after_reset() -> Job {
+    let mut scan = Scan::new();
+    scan.reset();
+    let _ = scan.read_dr(32);
+    scan.finish()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

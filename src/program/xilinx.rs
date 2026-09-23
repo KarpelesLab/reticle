@@ -336,8 +336,17 @@ pub const STARTUP_IDLE_CYCLES: usize = 2_000;
 /// [`super::BASYS3_PINS`].
 #[must_use]
 pub fn init_job(divisor: u16, pins: u8, dirs: u8) -> Job {
+    init_job_for(super::ftdi::Chip::HighSpeed, divisor, pins, dirs)
+}
+
+/// The same, for a named FTDI part.
+///
+/// A C or D part does not have the three opcodes an H part opens with
+/// and answers each of them "bad command", after which it obeys nothing.
+#[must_use]
+pub fn init_job_for(chip: super::ftdi::Chip, divisor: u16, pins: u8, dirs: u8) -> Job {
     let mut mpsse = super::ftdi::Mpsse::new();
-    mpsse.configure(divisor);
+    mpsse.configure_chip(chip, divisor);
     mpsse.set_pins_low(pins, dirs);
     mpsse.set_pins_high(0x00, 0x00);
     let mut scan = Scan::from_mpsse(mpsse);

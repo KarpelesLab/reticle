@@ -79,6 +79,7 @@ pub struct Cable {
     out_endpoint: u8,
     packet_size: usize,
     serial: String,
+    chip: ftdi::Chip,
 }
 
 /// Turns a `rawusb` error into ours, with the operation that failed.
@@ -159,7 +160,11 @@ impl Cable {
                 .unwrap_or_default();
             found.push(this.clone());
             if serial.is_none_or(|wanted| wanted == this) {
-                candidates.push((handle, this));
+                // `bcdDevice` says which FTDI silicon this is, which
+                // decides the MPSSE clock; keep it while the device is
+                // still in scope.
+                let bcd = device.device_descriptor().device_version.0;
+                candidates.push((handle, this, bcd));
             }
         }
 
@@ -171,10 +176,19 @@ impl Cable {
         }
         if candidates.len() > 1 {
             return Err(ProgramError::Ambiguous(
-                candidates.into_iter().map(|(_, s)| s).collect(),
+                candidates.into_iter().map(|(_, s, _)| s).collect(),
             ));
         }
-        let (handle, serial) = candidates.pop().expect("exactly one candidate");
+        let (handle, serial, bcd) = candidates.pop().expect("exactly one candidate");
+
+        // Which FTDI part this is decides the MPSSE master clock and
+        // whether the H-only opcodes may be sent at all.
+        let Some(chip) = ftdi::Chip::from_bcd_device(bcd) else {
+            return Err(ProgramError::Usb(format!(
+                "the adapter reports bcdDevice {bcd:#06x}, which is not an FTDI part this \
+                 knows the MPSSE clock of; refusing rather than guessing at a clock"
+            )));
+        };
 
         let (in_endpoint, out_endpoint, packet_size) = endpoints(&handle)?;
 
@@ -200,6 +214,7 @@ impl Cable {
             out_endpoint,
             packet_size,
             serial,
+            chip,
         };
         cable.enter_mpsse()?;
         Ok(cable)
@@ -209,6 +224,12 @@ impl Cable {
     #[must_use]
     pub fn serial(&self) -> &str {
         &self.serial
+    }
+
+    /// Which FTDI part the adapter has.
+    #[must_use]
+    pub fn chip(&self) -> ftdi::Chip {
+        self.chip
     }
 
     /// Runs a job: writes its commands and reads back exactly as many
