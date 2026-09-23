@@ -24,6 +24,24 @@
 //! by parsing a file ([`arch::Arch::parse`], then
 //! [`flow::PnrOptions::arch`]), with no code change.
 //!
+//! # A real fabric, for the Xilinx 7 series
+//!
+//! That last sentence has been tested. [`xray`] reads Project X-Ray's
+//! chip database — public domain, supplied by the user, never fetched by
+//! this crate — into the same [`arch::Arch`], and [`xc7`] writes the
+//! 7-series configuration container from Xilinx UG470. [`bitstream`] did
+//! not change a line.
+//!
+//! What comes out is a structurally valid Xilinx bitstream whose IDCODE,
+//! frame addresses, frame count, packet sequence and CRCs agree with one
+//! Vivado made for the same part, and which **is not routed and
+//! configures nothing**, because the database ships bit positions and
+//! not the tile-type wire lists that say which wire a bel pin reaches.
+//! `docs/fpga-xray.md` sets out what is established, what the fabric
+//! measures (18 055 tiles and 20.6 million pips, which is more than this
+//! crate's routing graph can hold) and what remains. **Nothing produced
+//! by any of it has been loaded into a part.**
+//!
 //! # The device-database model
 //!
 //! A [`Device`] is *data*, not code: LUT size, flip-flop features, the

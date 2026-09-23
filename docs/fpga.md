@@ -30,7 +30,7 @@ writes its bitstream, without calling another program.
 |--------|-------|-----------|---------------------|
 | `ice40` | `ice40-lp1k-tq144`, `ice40-hx1k-tq144`, `ice40-hx8k-ct256` | `nextpnr-ice40` | yes, on a **synthetic** fabric — read the section below |
 | `ecp5` | `ecp5-25f-CABGA381`, `ecp5-45f-CABGA381` | `nextpnr-ecp5` | no architecture |
-| `xc7` | `xc7a35t-cpg236` (Artix-7, Digilent Basys 3) | **Vivado** | no architecture |
+| `xc7` | `xc7a35t-cpg236` (Artix-7, Digilent Basys 3) | **Vivado** | yes, on the **real** fabric, with a chip database the user supplies — see [`fpga-xray.md`](fpga-xray.md) |
 | `generic` | `generic`, `generic-k6` | none; it is not a real part | no architecture |
 
 `fpga::pnr_route` answers which of the two exports a family takes, and
@@ -239,6 +239,14 @@ run over its output here. What the tests prove is narrower and exact:
 
 Whether Vivado accepts the netlist, and whether the result blinks an
 LED, are separate claims and this repository makes neither.
+
+Reticle can also write the 7-series bitstream itself, without Vivado,
+from Project X-Ray's chip database. That is a separate document —
+[`fpga-xray.md`](fpga-xray.md) — because it is a separate claim: what
+comes out is a structurally valid Xilinx bitstream, checked against one
+Vivado made for the same part, and it is **not routed and configures
+nothing**. The reason, the measured size of the fabric, and the list of
+what remains are all there.
 
 ### What is in the device file
 
@@ -449,7 +457,11 @@ and what it invents. In short:
 
 So a placement, a routing and a bitstream produced here are *structurally*
 correct and *electrically* meaningless: the `.asc` has the right shape and
-reads back to the same bits, and it will not program a part. What the
+reads back to the same bits, and it will not program a part. **This is
+still true.** Nothing in the 7-series work described in
+[`fpga-xray.md`](fpga-xray.md) touches this fabric; the iCE40 database is
+still not here, the positions below are still invented, and an `.asc`
+from them still programs nothing. What the
 tests prove is that the algorithms are right — the placer respects the
 constraints, the router reaches every sink from its driver, the bitstream
 round-trips — and that the flow is reproducible byte for byte.

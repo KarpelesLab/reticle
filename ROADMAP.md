@@ -347,6 +347,22 @@ FPGA:
       algorithms and the formats are real and tested end to end; a real
       database replaces the built-in one by parsing a file, with no code
       change. `docs/fpga.md` lists exactly what it would have to supply.
+- [x] That claim, tested. `fpga::xray` reads Project X-Ray's chip
+      database (`f4pga/prjxray-db`, CC0-1.0, supplied by the user and
+      never fetched) into the same `Arch`, and `fpga::xc7` writes the
+      Xilinx 7-series configuration container from UG470. Nothing in
+      `fpga::bitstream` changed. `reticle fpga --chipdb <dir>
+      --bitstream <file>` takes `examples/basys3/sw_led.v` to a 2.19 MB
+      `.bit` whose IDCODE, frame addresses, frame count, packet sequence
+      and both CRCs agree with a bitstream Vivado made for the same
+      part. **It is not routed and it configures nothing**: the database
+      ships bit positions but not the tile-type wire lists that say
+      which wire a bel pin reaches. The `xc7a50t` is also 20.6 million
+      pips, which this crate's routing graph cannot hold, so the loader
+      takes a region and refuses a larger one with the numbers.
+      `docs/fpga-xray.md` says what is established, what the fabric
+      measures, and what remains before an LED could light. NOTHING
+      PRODUCED BY ANY OF IT HAS BEEN LOADED INTO A PART.
 
 ASIC:
 - [x] Liberty (`.lib`) parser: cells, pins, functions, timing tables.

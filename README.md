@@ -87,8 +87,22 @@ reticle fpga --device xc7a35t-cpg236 --constraints board/basys3.rcf blinky.v
 vivado -mode batch -source blinky.tcl
 ```
 
-Nothing in the 7-series support has been run on silicon; `docs/fpga.md`
-says exactly what the tests do and do not prove.
+Reticle can also write the 7-series bitstream itself, from Project
+X-Ray's chip database (public domain, supplied by the user, never
+fetched by Reticle):
+
+```sh
+reticle fpga --device xc7a35t-cpg236 --chipdb ~/prjxray-db \
+    --constraints examples/basys3/sw_led.rcf \
+    --bitstream sw_led.bit examples/basys3/sw_led.v
+```
+
+Nothing in the 7-series support has been run on silicon, and the
+bitstream that command writes is structurally valid and **configures
+nothing** — it is not routed, for a reason
+[`docs/fpga-xray.md`](docs/fpga-xray.md) sets out along with everything
+else that is and is not established. `docs/fpga.md` says the same for
+the rest of the 7-series support.
 
 Sources of one language are elaborated together, so a testbench and the
 modules it instantiates go on one command line. A design already in the
