@@ -12,11 +12,10 @@
 # source and no crystal socket.
 #
 # B18 and A18 are the FPGA's side of the on-board USB-UART bridge, which
-# the host sees as a serial port: the FPGA RECEIVES on B18 (Digilent
-# calls it `RsRx`) and TRANSMITS on A18 (`RsTx`). Note that this is the
-# opposite naming from the iCE40 breakout file next to this one, where
-# the pins are named from the FPGA's side; the pins themselves are what
-# matters and the mapping below is FPGA transmit -> A18.
+# the host sees as a serial port. Digilent names both from the FPGA's
+# point of view, as the iCE40 file next to this one does: `RsRx` (B18)
+# is the pin the FPGA RECEIVES on and `RsTx` (A18) the pin it
+# TRANSMITS on, so uart_rx goes to B18 and uart_tx to A18.
 #
 # The board has no reset button wired to a dedicated pin. soc_top needs
 # none — it resets itself when the FPGA is configured — but if you want
@@ -44,7 +43,10 @@ clock_domain sys clk
 #   U16 E19 U19 V19 W18 U15 U14 V14 V13 V3 W3 U3 P3 N3 P1 L1
 # The four-digit seven-segment display: segments a..g are
 #   W7 W6 U8 V8 U5 V5 U7, the decimal point is V7, and the four digit
-#   anodes are U2 U4 V4 W4. Segments and anodes are both ACTIVE LOW.
+#   anodes are U2 U4 V4 W4. Segments and anode enables are both ACTIVE
+#   LOW (Digilent's reference manual; the display is common anode and
+#   the anodes are switched by PNP transistors). MEDIUM-HIGH
+#   confidence: the pins are transcribed, the polarity is recalled.
 # Pmod headers, pins 1-4 then 7-10 of each:
 #   JA  J1 L2 J2 G2 H1 K2 H2 G3
 #   JB  A14 A16 B15 B16 A15 A17 C15 C16
