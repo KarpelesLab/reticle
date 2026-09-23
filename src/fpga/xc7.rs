@@ -1391,7 +1391,9 @@ mod tests {
         let part = tiny_part();
         let mut data = FrameData::empty(part.layout.clone());
         data.set(FrameAddress::from_u32(1), 7, 3).unwrap();
-        data.set(FrameAddress::from_u32(0x0080_0002), 100, 31)
+        // Block 1 of the bottom half, which is the tiny part's second
+        // row: 1 << 23 | 1 << 22 | minor 2.
+        data.set(FrameAddress::from_u32(0x00C0_0002), 100, 31)
             .unwrap();
         let header = BitHeader::new("tiny;UserID=0XFFFFFFFF", "7atiny");
         let bytes = write_bit(&header, &part, &data).unwrap();

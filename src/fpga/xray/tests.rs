@@ -297,10 +297,13 @@ fn a_whole_database_loads_from_memory() {
     // The pip, plus the two directions of the one join.
     assert_eq!(fabric.stats.pips, 3);
     assert_eq!(fabric.stats.joins, 2);
-    // Only the pin whose site the grid really has.
+    // Only the pin whose site the grid really has, and named the way
+    // the architecture names bels rather than the way `tilegrid.json`
+    // names sites: `SLICE_X0Y0` is the first site of the tile, so it is
+    // the first site prefix the features use.
     assert_eq!(
         fabric.arch.pinmap,
-        vec![("V17".to_owned(), "X10Y155/SLICE_X0Y0".to_owned())]
+        vec![("V17".to_owned(), "X10Y155/SLICEL_X0".to_owned())]
     );
     fabric.check_idcode(0x0362_d093).unwrap();
 
