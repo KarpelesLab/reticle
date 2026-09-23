@@ -3,9 +3,9 @@
 //
 // This is the machine, without anything to do with a monitor. It takes
 // a clock and a dot enable and it produces a picture on `vid_*`, one
-// pixel per enabled clock. `nes_top` is what puts a framebuffer and a
-// DVI transmitter behind that port; `tb/nes_console_tb.v` is what runs
-// it on its own.
+// pixel per enabled clock. `nes_top` is what puts a frame buffer and a
+// DVI transmitter behind that port; `tb/nes_tb.v` is what runs it on
+// its own.
 //
 // The two library blocks it is built from are `mos6502` and `ppu2c02`.
 // Everything else on this page is the console board: 2 KiB of work RAM,

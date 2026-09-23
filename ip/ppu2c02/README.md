@@ -85,6 +85,7 @@ example are:
 | `the_write_latch_is_shared_by_2005_and_2006` | one `w` toggle between the two registers, the interleaving that allows, and a read of $2002 putting it back — all read off the address pins, because with rendering off the block puts `v` on them every dot |
 | `sprite_zero_hits_on_the_dot_the_pixels_meet` | the flag goes up on exactly the dot where sprite zero's own opaque pixel meets an opaque background pixel, and stays down for a whole line when the background is turned off |
 | `nine_sprites_on_a_line_set_the_overflow_flag` | eight sprites on one line and nine on the next, and which line the flag goes up on |
+| `the_data_port_reads_one_access_behind_and_steps_by_what_2000_says` | the buffered `$2007` read, the palette read that is not buffered, `$3F10` being another way of writing `$3F00`, and `$2000`'s increment and nametable bits |
 | `the_frame_comes_out_of_the_video_port` | a whole frame, pixel by pixel, against a frame buffer computed from the nametable, the pattern table and the palette by the documented rules and by nothing this block does |
 
 The last one is the important one, and

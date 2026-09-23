@@ -40,6 +40,7 @@
 //! | `sprite_zero_hits_on_the_dot_the_pixels_meet` | the flag goes up on exactly the dot where sprite zero's opaque pixel meets an opaque background pixel, and not a dot earlier |
 //! | `nine_sprites_on_a_line_set_the_overflow_flag` | eight sprites on one line and nine on the next, and the line the flag goes up on |
 //! | `the_write_latch_is_shared_by_2005_and_2006` | the single `w` toggle, the interleaving it allows, and a read of $2002 putting it back |
+//! | `the_data_port_reads_one_access_behind_and_steps_by_what_2000_says` | a $2007 read gives the byte fetched for the previous one, the palette is not buffered and $3F10 is $3F00, and $2000's increment and nametable bits |
 //! | `oam_dma_copies_a_page_and_stops_the_processor` | $4014 costs the documented 513 processor cycles and the processor retires nothing in them |
 //! | `the_console_maps_onto_the_ecp5_and_exports_for_nextpnr` | the ECP5 flow fits it, every cell a device primitive, every memory in block RAM, and the JSON and LPF `nextpnr-ecp5` reads — and the block RAM arithmetic that says why the HX8K of the other two examples is out |
 //! | `reticle_build_builds_the_project` | the same through the binary |
@@ -1962,4 +1963,78 @@ fn the_screen_doubles_the_console_onto_the_tmds_lanes() {
         checked += 1;
     }
     assert!(checked > 400, "only {checked} columns were compared");
+}
+
+#[test]
+fn the_data_port_reads_one_access_behind_and_steps_by_what_2000_says() {
+    let Some(dir) = example() else { return };
+    let design = ppu_design(&dir);
+    let mut ppu = Ppu::boot(&design);
+
+    let v = |ppu: &mut Ppu<'_>| {
+        ppu.step();
+        ppu.bus
+    };
+
+    // A byte into nametable memory through $2007.
+    ppu.read(2);
+    ppu.write(6, 0x20);
+    ppu.write(6, 0x00);
+    ppu.write(7, 0x5A);
+    assert_eq!(ppu.mem[0x2000], 0x5A, "the write did not reach the bus");
+    assert_eq!(v(&mut ppu), 0x2001, "and `v` stepped by one");
+
+    // Reading it back takes two goes. The part answers a read of $2007
+    // with the byte it fetched for the *previous* one and only then
+    // starts the fetch, so a program that wants the byte at an address
+    // reads twice and throws the first away.
+    ppu.read(2);
+    ppu.write(6, 0x20);
+    ppu.write(6, 0x00);
+    let first = ppu.read(7);
+    ppu.step();
+    let second = ppu.read(7);
+    assert_eq!(first, 0x00, "the first read is the buffer, which was empty");
+    assert_eq!(second, 0x5A, "the second read is the byte");
+
+    // The palette is not on that bus and is not buffered: a read of it
+    // answers straight away.
+    ppu.read(2);
+    ppu.write(6, 0x3F);
+    ppu.write(6, 0x01);
+    ppu.write(7, 0x11);
+    ppu.read(2);
+    ppu.write(6, 0x3F);
+    ppu.write(6, 0x01);
+    assert_eq!(ppu.read(7), 0x11, "a palette read is answered at once");
+
+    // $3F10 is not an entry of its own: it is $3F00, which is why a
+    // program writing all 32 bytes from $3F00 overwrites four of them on
+    // the way past.
+    ppu.read(2);
+    ppu.write(6, 0x3F);
+    ppu.write(6, 0x10);
+    ppu.write(7, 0x29);
+    ppu.read(2);
+    ppu.write(6, 0x3F);
+    ppu.write(6, 0x00);
+    assert_eq!(ppu.read(7), 0x29, "$3F10 is another way of writing $3F00");
+
+    // $2000 bit 2 makes a $2007 access step down a row of the nametable
+    // rather than along it, which is how a program writes a column.
+    ppu.write(0, 0x04);
+    ppu.read(2);
+    ppu.write(6, 0x21);
+    ppu.write(6, 0x00);
+    ppu.write(7, 0x01);
+    assert_eq!(v(&mut ppu), 0x2120, "the step is 32 with $2000 bit 2 set");
+
+    // ...and $2000's low two bits are the nametable, which go into `t`
+    // and reach `v` through the *second* half of a $2006 pair. Writing
+    // $2000 between the two halves is what shows where they go.
+    ppu.read(2);
+    ppu.write(6, 0x00); // first: t[13:8] = 0, t[14] = 0
+    ppu.write(0, 0x02); // nametable 2, which is bit 11 of `t`
+    ppu.write(6, 0x55); // second: `v` takes t[14:8] and this byte
+    assert_eq!(v(&mut ppu), 0x0855, "$2000 bits 1-0 are bits 11-10 of `t`");
 }

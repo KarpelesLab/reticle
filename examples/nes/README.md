@@ -258,6 +258,7 @@ cargo test --all-features --test nes
 | `sprite_zero_hits_on_the_dot_the_pixels_meet` | the flag on exactly the dot the two opaque pixels meet, and never with the background off |
 | `nine_sprites_on_a_line_set_the_overflow_flag` | eight on one line and nine on the next |
 | `the_write_latch_is_shared_by_2005_and_2006` | one `w` toggle between the two registers, read off the address pins |
+| `the_data_port_reads_one_access_behind_and_steps_by_what_2000_says` | the buffered `$2007` read, the palette read that is not buffered, `$3F10` being `$3F00`, and `$2000`'s increment and nametable bits |
 | `oam_dma_copies_a_page_and_stops_the_processor` | 513 processor cycles, and nothing retired in them |
 | `the_console_maps_onto_the_ecp5_and_exports_for_nextpnr` | the ECP5 flow fits it, every cell a primitive, every memory in block RAM, and the files `nextpnr-ecp5` reads |
 | `reticle_build_builds_the_project` | `reticle build --synth` on the manifest |
@@ -298,8 +299,10 @@ The ECP5 flow in `tests/nes.rs`, for `ecp5-45f-CABGA381`:
 | `TRELLIS_IO` | 5 | — |
 | `DCCA` | 1 | 16 |
 
-Logic depth 25, against `examples/mos6502_computer`'s 23 — the picture
-unit's longest path is about as long as the processor's.
+Logic depth 25 — a four-input LUT on an ECP5, so not directly comparable
+with `examples/mos6502_computer`'s 23 on an iCE40, but the same order:
+adding a picture unit and a serialiser to a 6502 did not make the
+longest path much longer.
 
 Every memory in the machine is in block RAM:
 
