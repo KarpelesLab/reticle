@@ -336,8 +336,11 @@ pub struct CarryMapping {
     pub primitive: String,
     /// How many bits the adder had.
     pub width: u32,
-    /// How many carry primitives the chain uses: one per bit except the
-    /// last, whose carry-out nothing reads.
+    /// How many carry primitives the chain uses. On a one-bit element
+    /// that is one per bit except the last, whose carry-out nothing
+    /// reads; on a [`WideCarry`] element it is one per `width` bits of
+    /// it, rounded up, and the lanes left over in the last instance are
+    /// tied off.
     pub primitives: u32,
 }
 
