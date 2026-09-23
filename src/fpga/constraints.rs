@@ -414,7 +414,15 @@ impl Constraints {
                 .find(|p| p.port == pin.port && p.bit == pin.bit)
             {
                 Some(existing) => {
-                    if existing.pin != pin.pin {
+                    // An assignment with no pin name is not a pin
+                    // assignment at all: `from_attrs` makes one to carry
+                    // the electrical options of a port whose attributes
+                    // name no pin — `(* ddr = "clk_x5" *)`, say — and
+                    // those options are merged below rather than
+                    // overridden. Calling that an override printed
+                    // "overriding pin  from a source attribute", with a
+                    // hole where the pin should be, for every such port.
+                    if existing.pin != pin.pin && !existing.pin.is_empty() && !pin.pin.is_empty() {
                         diags.push(
                             Diagnostic::new(
                                 Severity::Note,
@@ -626,7 +634,7 @@ impl Constraints {
         };
         self.check_pins(module, device, diags);
         self.check_placement(module, device, diags);
-        self.check_timing(module, diags);
+        self.check_timing(design, module, diags);
     }
 
     fn check_pins(&self, module: &Module, device: &Device, diags: &mut Diagnostics) {
@@ -961,18 +969,32 @@ impl Constraints {
         }
     }
 
-    fn check_timing(&self, module: &Module, diags: &mut Diagnostics) {
+    fn check_timing(&self, design: &Design, module: &Module, diags: &mut Diagnostics) {
         let clock_nets = clock_driven_nets(module);
         // A clock constrained on a net nothing drives is one the design
         // asks a PLL for, and the PLL is fed from a clock constrained on
         // an input port — which then clocks no flip-flop directly and
         // must not be called useless for it.
-        let driven = driven_nets(module);
-        let feeds_a_pll = self.clocks.iter().any(|clock| {
-            module
-                .net_by_name(&clock.net)
-                .is_some_and(|net| !driven.get(net.index()).copied().unwrap_or(true))
-        });
+        //
+        // "Nothing drives" has to mean "nothing writes", which is why
+        // this is `written_nets` and not `driven_nets`: the latter counts
+        // every net an instance touches, and the net a design asks a PLL
+        // for is touched by every block that uses it. Checked before
+        // flattening — which is when a board file is checked — that hid
+        // every PLL request in a hierarchical design behind a warning
+        // saying its reference clock clocked nothing.
+        let written = written_nets(design, module);
+        // And a *request* is a net nothing writes that something still
+        // reads: an unwritten net nothing reads either is a constraint on
+        // nothing, which is worth the warning.
+        let read = read_nets(module);
+        let generated = |net: &str| -> bool {
+            module.net_by_name(net).is_some_and(|id| {
+                !written.get(id.index()).copied().unwrap_or(true)
+                    && read.get(id.index()).copied().unwrap_or(false)
+            })
+        };
+        let feeds_a_pll = self.clocks.iter().any(|clock| generated(&clock.net));
         let mut seen: Vec<&str> = Vec::new();
         for clock in &self.clocks {
             if seen.contains(&clock.name.as_str()) {
@@ -1007,6 +1029,7 @@ impl Constraints {
                     .pins
                     .iter()
                     .any(|p| p.io.ddr.as_deref() == Some(clock.net.as_str()))
+                && !generated(&clock.net)
                 && !(feeds_a_pll
                     && module
                         .port(&clock.net)
@@ -1364,25 +1387,111 @@ fn timing_point_names(module: &Module) -> Vec<String> {
 /// connection counts whatever its direction, since which connections are
 /// outputs is the other module's business.
 pub(crate) fn driven_nets(module: &Module) -> Vec<bool> {
-    let mut driven = vec![false; module.nets.len()];
-    let mark = |net: crate::ir::NetId, driven: &mut Vec<bool>| {
-        if let Some(slot) = driven.get_mut(net.index()) {
-            *slot = true;
+    let mut driven = driven_without_instances(module);
+    let mut touched = Vec::new();
+    for (_, instance) in module.instances.iter() {
+        for (_, expr) in &instance.connections {
+            collect_net_ids(module, *expr, &mut touched);
         }
-    };
+    }
+    for net in touched {
+        mark_net(net, &mut driven);
+    }
+    driven
+}
+
+/// For every net of `module`, whether something in it *writes* the net,
+/// with each instance connection resolved by the direction of the port it
+/// reaches.
+///
+/// This is [`driven_nets`] without its deliberate conservatism about
+/// instances, and the difference matters in exactly one place: telling a
+/// request for a generated clock — a net the design uses and nothing
+/// writes, which is how `docs/fpga.md` says a design asks for a PLL —
+/// apart from a clock a block produces. A black box keeps the
+/// conservative answer, since nothing here knows which way its ports go.
+fn written_nets(design: &Design, module: &Module) -> Vec<bool> {
+    let mut driven = driven_without_instances(module);
+    let mut touched = Vec::new();
+    for (_, instance) in module.instances.iter() {
+        let target = instance.module.id().and_then(|id| design.modules.get(id));
+        for (name, expr) in &instance.connections {
+            let writes = match target {
+                Some(target) => target
+                    .port(name.as_str())
+                    .is_none_or(|port| port.dir != PortDir::In),
+                None => true,
+            };
+            if writes {
+                collect_net_ids(module, *expr, &mut touched);
+            }
+        }
+    }
+    for net in touched {
+        mark_net(net, &mut driven);
+    }
+    driven
+}
+
+/// For every net of `module`, whether something reads it: an output or
+/// inout port, the value of a continuous assignment, a cell input or an
+/// instance connection.
+///
+/// Together with [`written_nets`] this is what says a net is a *request*
+/// for a generated clock — used, and written by nothing — rather than a
+/// constraint on a net nobody touches, which is still worth a warning.
+/// A net read only from inside a process is not counted, which is the
+/// same limit `clock_driven_nets` already has.
+fn read_nets(module: &Module) -> Vec<bool> {
+    let mut read = vec![false; module.nets.len()];
+    let mut nets = Vec::new();
+    for port in &module.ports {
+        if port.dir != PortDir::In {
+            nets.push(port.net);
+        }
+    }
+    for assign in &module.assigns {
+        collect_net_ids(module, assign.value, &mut nets);
+    }
+    for (_, cell) in module.cells.iter() {
+        for (_, expr) in &cell.inputs {
+            collect_net_ids(module, *expr, &mut nets);
+        }
+    }
+    for (_, instance) in module.instances.iter() {
+        for (_, expr) in &instance.connections {
+            collect_net_ids(module, *expr, &mut nets);
+        }
+    }
+    for net in nets {
+        mark_net(net, &mut read);
+    }
+    read
+}
+
+/// Marks one net, ignoring an id from another module.
+fn mark_net(net: crate::ir::NetId, driven: &mut [bool]) {
+    if let Some(slot) = driven.get_mut(net.index()) {
+        *slot = true;
+    }
+}
+
+/// The part of [`driven_nets`] that does not look at instances.
+fn driven_without_instances(module: &Module) -> Vec<bool> {
+    let mut driven = vec![false; module.nets.len()];
     for port in &module.ports {
         if port.dir != PortDir::Out {
-            mark(port.net, &mut driven);
+            mark_net(port.net, &mut driven);
         }
     }
     for assign in &module.assigns {
         for net in assign.target.nets() {
-            mark(net, &mut driven);
+            mark_net(net, &mut driven);
         }
     }
     for (_, cell) in module.cells.iter() {
         for (_, net) in &cell.outputs {
-            mark(*net, &mut driven);
+            mark_net(*net, &mut driven);
         }
     }
     let mut written = Vec::new();
@@ -1392,16 +1501,7 @@ pub(crate) fn driven_nets(module: &Module) -> Vec<bool> {
         }
     });
     for net in written {
-        mark(net, &mut driven);
-    }
-    let mut touched = Vec::new();
-    for (_, instance) in module.instances.iter() {
-        for (_, expr) in &instance.connections {
-            collect_net_ids(module, *expr, &mut touched);
-        }
-    }
-    for net in touched {
-        mark(net, &mut driven);
+        mark_net(net, &mut driven);
     }
     driven
 }
@@ -1930,7 +2030,7 @@ mod tests {
     use super::*;
     use crate::fpga::target;
     use crate::ir::builder::ModuleBuilder;
-    use crate::ir::{CellKind, Design, Name, Type};
+    use crate::ir::{CellKind, Design, ModuleRef, Name, Type};
     use crate::source::SourceMap;
 
     fn parse(text: &str) -> (Constraints, Diagnostics, SourceMap) {
@@ -2388,5 +2488,106 @@ set_multicycle_path 2 -from d -to q
         assert_eq!(io.delay, Some(12));
         assert_eq!(io.drive, Some(4));
         assert!(!io.is_empty());
+    }
+
+    /// A port whose attributes carry electrical options but no pin has no
+    /// pin to override, and saying it does printed a message with a hole
+    /// where the pin name should be.
+    ///
+    /// `(* ddr = "clk_x5" *) output wire [1:0] tmds_d0` is the shape that
+    /// found it: `from_attrs` makes an assignment to no pin so the DDR
+    /// option reaches the IO buffer, and merging a board file that does
+    /// name a pin then reported "overriding pin  from a source
+    /// attribute", once per lane. See `examples/apple2`.
+    #[test]
+    fn options_without_a_pin_do_not_override_a_pin() {
+        let mut map = SourceMap::new();
+        let file = map.add("top.v", "").unwrap();
+        let span = Span::new(file, 0, 0);
+        let mut b = ModuleBuilder::new("top", span);
+        let lane = b.output("lane", Type::bits(2));
+        b.module_mut().nets[lane].attrs.set("ddr", "clk");
+        let mut design = Design::new();
+        let top = design.add_module(b.finish());
+        design.top = Some(top);
+
+        let rcf = "set_io lane B2\n";
+        let rcf_file = map.add("top.rcf", rcf).unwrap();
+        let mut diags = Diagnostics::new();
+        let mut constraints = Constraints::parse(rcf, rcf_file, &mut diags);
+        constraints.merge_attrs(&design, top, &mut diags);
+        assert!(diags.is_empty(), "{}", diags.render(&map));
+        // The pin is the file's and the option is the attribute's, which
+        // is the merge rule working; the note was the only thing wrong.
+        let pin = constraints.pin_of("lane", None).unwrap();
+        assert_eq!(pin.pin, "B2");
+        assert_eq!(pin.io.ddr.as_deref(), Some("clk"));
+    }
+
+    /// The reference clock of a PLL request clocks nothing *directly*,
+    /// and must not be called useless for it — including when the design
+    /// is still hierarchical, which is when a board file is checked.
+    ///
+    /// The net the design wants the PLL to make is used by the blocks it
+    /// feeds, so `driven_nets`, which counts a net an instance touches
+    /// whichever way its port goes, called it driven and the request went
+    /// unrecognised. `written_nets` resolves the direction, and a
+    /// request is now a net nothing writes and something reads — which
+    /// also clears the second half of the same false positive, the
+    /// warning about the generated net itself. A constrained net that is
+    /// neither written nor read is still a constraint on nothing and
+    /// still warns; `checks_placement_and_timing` holds that. See
+    /// `examples/apple2`, whose top is a PLL, a `dvi_tx` and a machine.
+    #[test]
+    fn a_pll_reference_clock_is_recognised_through_an_instance() {
+        let mut map = SourceMap::new();
+        let file = map.add("top.v", "").unwrap();
+        let span = Span::new(file, 0, 0);
+
+        // The leaf: something with a clock input, so the generated clock
+        // has a reader and no writer.
+        let mut leaf = ModuleBuilder::new("leaf", span);
+        let leaf_clk = leaf.input("clk", Type::bit());
+        let leaf_q = leaf.output("q", Type::bit());
+        let clk_e = leaf.net(leaf_clk);
+        leaf.cell(
+            "ff",
+            CellKind::Dff {
+                clk_pos: true,
+                has_enable: false,
+                reset: None,
+            },
+            vec![(Name::new("clk"), clk_e), (Name::new("d"), clk_e)],
+            vec![(Name::new("q"), leaf_q)],
+        );
+
+        let mut top = ModuleBuilder::new("top", span);
+        let clk_ref = top.input("clk_ref", Type::bit());
+        let q = top.output("q", Type::bit());
+        let fast = top.add_net("fast", Type::bit());
+        top.module_mut().nets[fast].attrs.set("clock_mhz", 126);
+        let fast_e = top.net(fast);
+        let q_e = top.net(q);
+        top.instance(
+            "u_leaf",
+            ModuleRef::Unresolved(Name::new("leaf")),
+            vec![(Name::new("clk"), fast_e), (Name::new("q"), q_e)],
+        );
+        let _ = clk_ref;
+
+        let mut design = Design::new();
+        design.add_module(leaf.finish());
+        let top_id = design.add_module(top.finish());
+        assert_eq!(design.resolve_instances(), 1);
+        design.top = Some(top_id);
+
+        let rcf = "set_io clk_ref G2\nset_io q B2\ncreate_clock -name ref -period 40.0 clk_ref\n";
+        let rcf_file = map.add("top.rcf", rcf).unwrap();
+        let mut diags = Diagnostics::new();
+        let mut constraints = Constraints::parse(rcf, rcf_file, &mut diags);
+        constraints.merge_attrs(&design, top_id, &mut diags);
+        constraints.check(&design, target("ecp5-45f-CABGA381").unwrap(), &mut diags);
+        let said: Vec<&str> = diags.iter().map(|d| d.message.as_str()).collect();
+        assert!(said.is_empty(), "{said:?}");
     }
 }
