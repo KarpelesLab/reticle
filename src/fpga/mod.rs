@@ -151,6 +151,8 @@ pub mod primitives;
 pub mod route;
 pub mod techcells;
 mod text;
+pub mod xc7;
+pub mod xray;
 
 use std::sync::OnceLock;
 
@@ -186,6 +188,10 @@ pub use primitives::{
 };
 pub use route::{Iteration, Route, RouteError, RouteOptions, Routing, RoutingReport, route};
 pub use techcells::{CellMapReport, map_cells};
+pub use xc7::{
+    BitHeader, FrameAddress, FrameData, FrameLayout, FrameMap, Part, TileBits, Xc7Error,
+};
+pub use xray::{XrayDatabase, XrayError, XrayFabric, XrayOptions, XrayStats};
 
 use crate::diag::Diagnostics;
 use crate::source::SourceMap;
