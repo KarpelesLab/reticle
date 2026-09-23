@@ -197,10 +197,10 @@ Xilinx 7 series only, and only with a chip database:
                      read from RETICLE_CHIPDB. Reticle never fetches it;
                      see docs/fpga-xray.md for the command that does.
   --bitstream <file> Write a 7-series .bit here, from the real fabric.
-                     NOTHING PRODUCED THIS WAY HAS BEEN LOADED INTO A
-                     PART; what is established is that the container is
-                     the one UG470 describes and that its frames are at
-                     addresses the part really has.
+                     One design written this way has run on a Basys 3:
+                     examples/basys3/sw_led.v, a lookup table and three
+                     pins. Nothing larger has been tried on a part, and
+                     nothing with a clock can be built yet.
   --region <box>     Which tiles of the fabric to load, as x0,y0,x1,y1 in
                      the database's grid coordinates. The default is a
                      box around the constrained pins, because the whole
@@ -1772,14 +1772,15 @@ fn fpga(args: &Args) -> Result<Outcome, ArgError> {
 
 /// Writes a Xilinx 7-series `.bit` from a real chip database.
 ///
-/// # NOTHING PRODUCED HERE HAS BEEN LOADED INTO A PART
+/// # One design written here has configured a part
 ///
-/// What this establishes is that the container is the one UG470
-/// describes, that its IDCODE is the one the device file and the
-/// database agree on, and that every frame it writes is at an address
-/// the part really has. It does not establish that the frames configure
-/// anything, and the note it returns says so when the design is not
-/// routed.
+/// `examples/basys3/sw_led.v` — a lookup table and three pins — ran on a
+/// Basys 3 on 2026-09-24. For anything else, what this establishes is
+/// that the container is the one UG470 describes, that its IDCODE is the
+/// one the device file and the database agree on, and that every frame
+/// it writes is at an address the part really has. It does not establish
+/// that the frames configure anything, and the note it returns says so
+/// when the design is not routed.
 ///
 /// The database never comes from the library: it is read here, through
 /// a `FileProvider`, from a directory the user named.
@@ -1949,8 +1950,9 @@ fn write_xc7_bitstream(
         );
     }
     note.push_str(
-        "warning: NOTHING PRODUCED BY THIS FLOW HAS BEEN LOADED INTO A PART. See \
-         docs/fpga-xray.md for what is and is not established.\n",
+        "note: one design from this flow has run on a part: a lookup table \
+         and three pins on a Basys 3. Nothing larger has been tried, and \
+         nothing with a clock can be built yet. See docs/fpga-xray.md.\n",
     );
     Ok(note)
 }

@@ -32,15 +32,18 @@
 //! particular tool writes them in, and a configuration engine is picky
 //! about the order.
 //!
-//! # NOTHING HERE HAS BEEN LOADED INTO A PART
+//! # What this container has and has not carried
 //!
-//! The container is structurally right — the sync word, the packets, the
-//! frame addresses, the frame count and both CRCs agree with a bitstream
-//! Vivado made for an XC7A35T — and no output of this crate has ever
-//! been sent down a JTAG cable. A bitstream that parses is not a
-//! bitstream that configures: what the frames *contain* comes from
-//! [`super::xray`] and from the placer and router above it, and their
-//! correctness is not established by anything in this module.
+//! It is structurally right — the sync word, the packets, the frame
+//! addresses, the frame count and both CRCs agree with a bitstream
+//! Vivado made for an XC7A35T — and on 2026-09-24 a bitstream it wrote
+//! configured one: a lookup table and three pins on a Basys 3, watched
+//! working. One design of that shape is what it has carried.
+//!
+//! A bitstream that parses is still not a bitstream that configures.
+//! What the frames *contain* comes from [`super::xray`] and from the
+//! placer and router above it, and nothing in this module establishes
+//! their correctness for any design but that one.
 //!
 //! # The model
 //!

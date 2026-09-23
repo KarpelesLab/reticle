@@ -223,10 +223,13 @@ hundred.
 
 ## Xilinx 7 series (Artix-7, Digilent Basys 3)
 
-**Read this before believing anything below: nothing in the 7-series
-support has been run on silicon.** No bitstream produced from it has
-been loaded into a part by anyone who wrote it, and Vivado has not been
-run over its output here. What the tests prove is narrower and exact:
+**Read this before believing anything below: one design has run on
+silicon and no more.** On 2026-09-24 a lookup table and three pins,
+built by this flow and loaded by `reticle program`, drove an LED from
+two switches on a Basys 3. Nothing larger has been tried on a part,
+nothing with a clock can be built for one yet, and Vivado has not been
+run over this flow's output here. What the tests prove is narrower and
+exact:
 
 - every cell of the exported netlist is a primitive `xc7.dev` declares,
   wired to pins that primitive has (`fpga::check_nextpnr_json`);

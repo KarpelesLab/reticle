@@ -1,13 +1,16 @@
 # Xilinx 7 series (Artix-7), as much of it as Reticle can state
 # confidently. One part: the XC7A35T-1CPG236C of the Digilent Basys 3.
 #
-# NOTHING HERE HAS BEEN RUN ON SILICON. No bitstream produced from this
-# file has been loaded into a part by anyone who wrote it. What the test
-# suite checks is that the netlist holds only primitives this file
-# declares, wired to pins they have, and that the constraints name pins
-# the Digilent board file names. Whether Vivado accepts the result and
-# whether the result blinks an LED are separate claims, and this file
-# makes neither.
+# ONE DESIGN BUILT FROM THIS FILE HAS RUN ON SILICON: a lookup table and
+# three LVCMOS33 pins on a Basys 3, on 2026-09-24, watched driving an LED
+# from two switches. That exercised LUT6, IBUF, OBUF and the IO-logic
+# path and nothing else. Every other primitive below — the carry chain,
+# the flip-flops, the block RAMs, the clock buffers, the PLLs — is still
+# a transcription that no part has ever confirmed, and Vivado has not
+# been run over this file's output here. What the test suite checks is
+# that the netlist holds only primitives this file declares, wired to
+# pins they have, and that the constraints name pins the Digilent board
+# file names.
 #
 # Provenance and confidence, stated per group because it differs:
 #

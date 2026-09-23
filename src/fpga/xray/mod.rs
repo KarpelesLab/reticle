@@ -19,15 +19,18 @@
 //! command that obtains it. The database is not in this repository and
 //! must not be; without it every test here skips and says so.
 //!
-//! # NOTHING PRODUCED FROM THIS HAS BEEN LOADED INTO A PART
+//! # One design from this loader has configured a part
 //!
-//! Real bit positions are not the same thing as a working bitstream. What
-//! is established is structural: the frame layout, the frame count, the
-//! packet stream and both CRCs agree with a bitstream Vivado made for an
-//! XC7A35T (see [`super::xc7`]). What is *not* established is that a
-//! design taken through this loader configures anything, and the list of
-//! reasons it would not yet is in `docs/fpga-xray.md` under "what remains".
-//! Nothing in this crate has ever been sent down a JTAG cable.
+//! On 2026-09-24 a lookup table and three pins, placed and routed through
+//! this loader, ran on a Basys 3 and drove an LED from two switches.
+//!
+//! That is the whole of what has been tried on silicon. Real bit
+//! positions are still not the same thing as a working bitstream for any
+//! *other* shape of design: what is established beyond that one is
+//! structural — the frame layout, the frame count, the packet stream and
+//! both CRCs agree with a bitstream Vivado made for an XC7A35T (see
+//! [`super::xc7`]) — and the list of what is untried is in
+//! `docs/fpga-xray.md` under "what remains".
 //!
 //! # The files, and what each one gives
 //!

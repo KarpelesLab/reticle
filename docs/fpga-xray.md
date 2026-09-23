@@ -1,27 +1,35 @@
 # A real Xilinx 7-series fabric, and a real `.bit`
 
-## Nothing produced by this has been loaded into a part
+## One design produced by this has run on a real part
 
-No bitstream this flow writes has been sent down a JTAG cable by anyone
-who wrote it. No LED has been lit. This document says exactly what *is*
-established and exactly what is missing.
+On 2026-09-24 the milestone design — two slide switches through one
+lookup table to one LED — was built by this flow from Verilog, loaded
+onto a Digilent Basys 3 (XC7A35T-1CPG236C) by `reticle program`, and
+**confirmed working by a person flipping the switches**: LED 0 followed
+the exclusive-or of SW0 and SW1 through all four combinations. No vendor
+tool took part at any step.
 
-The milestone design — two slide switches through one lookup table to
-one LED on a Digilent Basys 3 — now **places and routes**, and the
-bitstream it writes is not a story about a bitstream: decoded back into
-the database's own feature names, the configuration it puts on the three
-IO blocks and the two IO-logic tiles is **identical, feature for
-feature, to what Vivado put there** in the working bitstream
-`prjxray-db` ships for this same board. The routing between them is
-different, because two routers chose two different legal paths; the ends
-of those paths are the same wires. That comparison is
-`tests/fpga_xray.rs::the_io_path_is_the_one_vivado_built`, and it is the
-strongest thing that can be said here without a cable.
+That is one design, of one lookup table and three pins, on one board. It
+establishes that the chain from Verilog to configured silicon closes.
+**It does not establish that anything larger works**, and the list at the
+end of this document of what is untried on a part — anything with a
+clock, a flip-flop, a memory, a carry chain, or an IO standard other than
+LVCMOS33 — is unchanged by it.
 
-It is still not "it works". What is claimed is *structurally valid and
-plausibly right, unverified on silicon*. The list of what stands between
-that and a lit LED is at the end of this document, and it is shorter
-than it was but it is not empty.
+Before the cable, the strongest statement available was a comparison, and
+it is still worth having because it is what predicted the result:
+decoded back into the database's own feature names, the configuration
+this flow puts on the three IO blocks and the two IO-logic tiles is
+**identical, feature for feature, to what Vivado put there** in the
+working bitstream `prjxray-db` ships for this same board. The routing
+between them differs, because two routers chose two different legal
+paths; the ends of those paths are the same wires. That comparison is
+`tests/fpga_xray.rs::the_io_path_is_the_one_vivado_built`.
+
+One thing the LED settled that no test could: Vivado's bitstream sets
+1315 bits that nothing in the database names, and it was an open question
+whether some of them were configuration a part needs. For a design of
+this shape, they are not.
 
 What is established structurally, checked against a bitstream Vivado
 made for the very part in question:

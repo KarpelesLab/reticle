@@ -19,14 +19,18 @@
 //! export RETICLE_CHIPDB=$PWD
 //! ```
 //!
-//! # NOTHING CHECKED HERE HAS BEEN LOADED INTO A PART
+//! # What these tests can and cannot reach
 //!
-//! What these tests establish is structural: that the container is the
-//! one UG470 describes, that its frame addresses and frame count are the
-//! ones `part.json` states, that both CRCs are right by an independent
+//! They establish structure: that the container is the one UG470
+//! describes, that its frame addresses and frame count are the ones
+//! `part.json` states, that both CRCs are right by an independent
 //! calculation, that the writer's output reads back identically, and
 //! that all of that agrees with a bitstream Vivado made for this very
-//! part. None of it says a design built this way configures anything.
+//! part.
+//!
+//! None of that says a design configures anything — only a board can.
+//! One has: `sw_led` drove an LED on a Basys 3 on 2026-09-24. No test
+//! here can reach that, which is why the structural checks stay.
 //! See `docs/fpga-xray.md`.
 
 #![cfg(feature = "fpga")]

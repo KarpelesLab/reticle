@@ -357,7 +357,8 @@ FPGA:
       and both CRCs agree with a bitstream Vivado made for the same
       part. `docs/fpga-xray.md` says what is established, what the
       fabric measures, and what remains before an LED could light.
-      NOTHING PRODUCED BY ANY OF IT HAS BEEN LOADED INTO A PART.
+      At this point none of it had been loaded into a part; the two
+      entries below close that.
 - [x] And routed. `ppips_<type>.db` turned out to hold the fixed wiring
       between a site pin and the interconnect, which is what phase one
       was missing; `fpga::xray::sites` supplies the pin *names* from
@@ -372,9 +373,18 @@ FPGA:
       differs, because two routers chose two legal paths with the same
       ends. Interning the pips' bit patterns brought a pip to twenty
       bytes, so the whole `xc7a50t` is now a graph this crate can hold:
-      30.9 million edges, 1386 MiB, about eight seconds. Still nothing
-      loaded into a part, and Vivado's own bitstream sets 1315 bits that
-      nothing in the database names.
+      30.9 million edges, 1386 MiB, about eight seconds.
+- [x] **And it lights the LED.** On 2026-09-24 `sw_led`, built by this
+      flow from Verilog and loaded by `reticle program`, ran on a
+      Digilent Basys 3: a person flipped SW0 and SW1 and LED 0 followed
+      the exclusive-or through all four combinations. Verilog to
+      configured silicon, no vendor tool at any step. It also settled a
+      question no test could: Vivado's own bitstream sets 1315 bits that
+      nothing in the database names, and for a design of this shape they
+      are not needed. **That is one lookup table and three LVCMOS33 pins
+      on one board.** Nothing larger has been tried on a part, and
+      nothing with a clock, a flip-flop or a memory can be built for one
+      yet.
 - [x] The other half of that sentence: a **JTAG programmer**, so a
       bitstream can be loaded into a board without a vendor tool.
       `reticle program <file.bit>` drives an FTDI FT2232H over USB and

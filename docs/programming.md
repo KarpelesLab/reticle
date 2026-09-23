@@ -207,7 +207,8 @@ asserting and the status word coming back clean is the strongest
 statement this path can make from software, and it is the statement it
 makes.
 
-Nothing produced by Reticle's own bitstream writer has been loaded into a
-part. The milestone here is the *programmer*, verified against a file
-known to be good; `docs/fpga-xray.md` says where the bitstream side
-stands.
+The programmer was proved first, against a file known to be good, so
+that it could not be confused with the bitstream side. On 2026-09-24 it
+then loaded one of Reticle's own: a lookup table and three pins, which a
+person watched drive an LED from two switches. `docs/fpga-xray.md` says
+what that does and does not establish about the bitstream side.

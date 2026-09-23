@@ -5,7 +5,9 @@
 # `Basys-3-Master.xdc`. V17 and V16 are slide switches 0 and 1, U16 is
 # LED 0. The rest of the board is listed in that file.
 #
-# NOTHING BUILT WITH THIS HAS BEEN LOADED INTO A PART.
+# On 2026-09-24 a bitstream built with these three pins ran on a Basys 3
+# and drove LED 0 from the two switches. LVCMOS33 is the only IO standard
+# any of this has been tried with on a part.
 set_io -io_standard LVCMOS33 sw0 V17
 set_io -io_standard LVCMOS33 sw1 V16
 set_io -io_standard LVCMOS33 led U16

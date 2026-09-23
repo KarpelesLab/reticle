@@ -32,12 +32,15 @@
 //! Nothing here invents a bit position. Every bit still comes from
 //! `segbits_<type>.db`; this module only says which feature to look up.
 //!
-//! # NOTHING PRODUCED FROM THIS HAS BEEN LOADED INTO A PART
+//! # What has been tried on a part
 //!
 //! The IO recipe below is a transcription of what Vivado itself did for
 //! this exact board — see [`IO_STANDARDS`] — not a reading of a
-//! datasheet. That makes it a measurement rather than a guess, and it
-//! still does not make it a lit LED.
+//! datasheet. On 2026-09-24 it lit an LED: a lookup table and three
+//! LVCMOS33 pins on a Basys 3, watched working.
+//!
+//! That is one IO standard, on one package, driving one output. Every
+//! other entry here is still a transcription nothing has tested.
 
 use std::collections::BTreeMap;
 

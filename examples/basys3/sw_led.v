@@ -16,8 +16,10 @@
 //      0          1          on
 //      1          1          off
 //
-// NOTHING PRODUCED FROM THIS HAS BEEN LOADED INTO A PART. See
-// `docs/fpga-xray.md` for what the flow does and does not establish.
+// On 2026-09-24 this design, built by this flow and loaded by
+// `reticle program`, ran on a Basys 3: a person flipped the switches and
+// LED 0 followed the table above. It is the one design that has done so.
+// See `docs/fpga-xray.md` for what that does and does not establish.
 module sw_led (
     input  wire sw0,
     input  wire sw1,

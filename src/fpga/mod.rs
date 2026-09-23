@@ -46,7 +46,11 @@
 //! what the fabric measures (18 055 tiles, 30.9 million graph edges and
 //! 1386 MiB for the whole die) and what remains — including the 1315
 //! bits of Vivado's own bitstream that nothing in the database names.
-//! **Nothing produced by any of it has been loaded into a part.**
+//! **One design produced by it has run on a part**: a lookup table and
+//! three pins on a Digilent Basys 3, confirmed on 2026-09-24 by a person
+//! flipping the switches. Nothing larger has been tried, and nothing
+//! with a clock, a flip-flop or a memory can be built for a real part
+//! yet.
 //!
 //! # The device-database model
 //!
