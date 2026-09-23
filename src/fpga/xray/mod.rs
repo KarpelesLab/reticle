@@ -641,7 +641,7 @@ impl XrayDatabase {
 
         let conn = self.tileconn(files)?;
         let mut arch = self.build_arch(&tiles, &features, &conn, region, &part, &mut stats);
-        arch.pinmap = self.pinmap(files, &tiles)?;
+        arch.pinmap = self.pinmap(files, &tiles, &features, region)?;
         stats.tiles_loaded = in_region;
 
         Ok(XrayFabric {
@@ -650,6 +650,60 @@ impl XrayDatabase {
             frames,
             stats,
         })
+    }
+
+    /// A region that covers the tiles the given package pins sit in,
+    /// with `margin` tiles of fabric around them.
+    ///
+    /// This is how a flow picks a region without a human choosing
+    /// coordinates: the design's constrained pins say where on the die
+    /// it has to be, and the logic that serves them has to be near. It
+    /// is a convenience over [`XrayDatabase::tiles`], not a placement
+    /// decision — the region it gives is where the loader will *look*,
+    /// and a design that does not fit in it fails to place rather than
+    /// spilling outside it.
+    ///
+    /// `None` when none of the pins names a site the grid has.
+    ///
+    /// # Errors
+    ///
+    /// Those of [`XrayDatabase::tiles`].
+    pub fn region_for_pins(
+        &self,
+        files: &dyn FileProvider,
+        pins: &[String],
+        margin: u32,
+    ) -> Result<Option<GridRegion>, XrayError> {
+        let tiles = self.tiles(files)?;
+        let path = format!(
+            "{}/{}/{}/package_pins.csv",
+            self.root, self.family, self.part_dir
+        );
+        let text = self.read(files, &path, "the package pin map")?;
+        let wanted: HashSet<&str> = pins.iter().map(String::as_str).collect();
+        let sites: HashSet<String> = parse::package_pins(&text)
+            .into_iter()
+            .filter(|(pin, _)| wanted.contains(pin.as_str()))
+            .map(|(_, site)| site)
+            .collect();
+
+        let mut region: Option<GridRegion> = None;
+        for tile in &tiles {
+            if !tile.sites.iter().any(|(name, _)| sites.contains(name)) {
+                continue;
+            }
+            let here = GridRegion::around(tile.grid_x, tile.grid_y, margin);
+            region = Some(match region {
+                None => here,
+                Some(r) => GridRegion {
+                    x0: r.x0.min(here.x0),
+                    y0: r.y0.min(here.y0),
+                    x1: r.x1.max(here.x1),
+                    y1: r.y1.max(here.y1),
+                },
+            });
+        }
+        Ok(region)
     }
 
     /// Every tile of `tilegrid.json`, in name order.
@@ -678,30 +732,47 @@ impl XrayDatabase {
         parse::tileconn(&json, &path)
     }
 
-    /// The package pin to site map, restricted to sites the grid has.
+    /// The package pin to site map, in the architecture's own site
+    /// names.
+    ///
+    /// A package pin names a site (`IOB_X0Y26`) and the architecture
+    /// names a bel (`IOB_Y0`), because a bel belongs to a tile type and
+    /// a site name does not; [`parse::bel_of_site`] is the translation,
+    /// and without it a constrained pin resolves to nothing. Pins whose
+    /// site is outside the loaded region are dropped, since there is no
+    /// site for them to name.
     fn pinmap(
         &self,
         files: &dyn FileProvider,
         tiles: &[XrayTile],
+        features: &HashMap<String, FeatureSet>,
+        region: GridRegion,
     ) -> Result<Vec<(String, String)>, XrayError> {
         let path = format!(
             "{}/{}/{}/package_pins.csv",
             self.root, self.family, self.part_dir
         );
         let text = self.read(files, &path, "the package pin map")?;
-        let sites: HashMap<&str, (u32, u32, &str)> = tiles
-            .iter()
-            .flat_map(|t| {
-                t.sites
-                    .iter()
-                    .map(move |(name, _)| (name.as_str(), (t.grid_x, t.grid_y, t.name.as_str())))
-            })
-            .collect();
+        let mut where_is: HashMap<&str, &XrayTile> = HashMap::new();
+        for tile in tiles {
+            if !region.contains(tile.grid_x, tile.grid_y) {
+                continue;
+            }
+            for (name, _) in &tile.sites {
+                where_is.insert(name.as_str(), tile);
+            }
+        }
+        let empty = FeatureSet::default();
         let mut out = Vec::new();
         for (pin, site) in parse::package_pins(&text) {
-            if let Some((x, y, _)) = sites.get(site.as_str()) {
-                out.push((pin, format!("X{x}Y{y}/{site}")));
-            }
+            let Some(tile) = where_is.get(site.as_str()) else {
+                continue;
+            };
+            let set = features.get(&tile.tile_type).unwrap_or(&empty);
+            let Some(bel) = parse::bel_of_site(tile, &site, set) else {
+                continue;
+            };
+            out.push((pin, format!("X{}Y{}/{bel}", tile.grid_x, tile.grid_y)));
         }
         Ok(out)
     }

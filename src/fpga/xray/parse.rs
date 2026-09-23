@@ -456,6 +456,35 @@ fn site_kind(site_type: &str) -> &'static str {
     }
 }
 
+/// The site prefixes a tile type's features use, in name order.
+///
+/// `CLBLL_L` gives `["SLICEL_X0", "SLICEL_X1"]`, which is the
+/// vocabulary its bels are named in. The order is the order
+/// [`tilegrid`] puts a tile's own site names in, so the two zip: the
+/// i-th site of a tile is the i-th prefix.
+pub(super) fn site_prefixes(features: &FeatureSet) -> Vec<&str> {
+    let mut out: Vec<&str> = features.sites().iter().map(String::as_str).collect();
+    out.sort_unstable();
+    out
+}
+
+/// The bel name a tile's site becomes, which is what a package pin has
+/// to name to reach it.
+///
+/// The site is `SLICE_X0Y0` in `tilegrid.json` and the bel is
+/// `SLICEL_X0`, because a bel belongs to the tile *type* and a site
+/// name does not. They are matched by position in each list. A tile
+/// type with no features at all keeps the site's own name, which at
+/// least names something.
+pub(super) fn bel_of_site(tile: &XrayTile, site: &str, features: &FeatureSet) -> Option<String> {
+    let index = tile.sites.iter().position(|(name, _)| name == site)?;
+    let prefixes = site_prefixes(features);
+    Some(match prefixes.get(index) {
+        Some(prefix) => (*prefix).to_owned(),
+        None => site.to_owned(),
+    })
+}
+
 /// The bels of one tile type, from its sites and its features.
 ///
 /// A bel has to be named in the tile type's own vocabulary, because it
@@ -478,9 +507,7 @@ fn site_kind(site_type: &str) -> &'static str {
 /// design taken through this loader gets a real placement and no
 /// connections. See `docs/fpga-xray.md`.
 pub(super) fn bels_of(tile: &XrayTile, features: &FeatureSet) -> Vec<BelDecl> {
-    let prefixes: Vec<&String> = features.sites().iter().collect();
-    let mut prefixes: Vec<&str> = prefixes.into_iter().map(String::as_str).collect();
-    prefixes.sort_unstable();
+    let prefixes = site_prefixes(features);
 
     // Zip the feature files' site prefixes onto the tile's sites, in
     // name order, which is the order both lists are in.

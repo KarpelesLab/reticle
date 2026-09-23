@@ -181,6 +181,20 @@ Options:
   --netlist <file>   Also write the mapped design in the .rtl text format
   --report           Print the mapping report to stderr
   --quiet            Suppress the summary line
+
+Xilinx 7 series only, and only with a chip database:
+  --chipdb <dir>     A Project X-Ray database (f4pga/prjxray-db). Also
+                     read from RETICLE_CHIPDB. Reticle never fetches it;
+                     see docs/fpga-xray.md for the command that does.
+  --bitstream <file> Write a 7-series .bit here, from the real fabric.
+                     NOTHING PRODUCED THIS WAY HAS BEEN LOADED INTO A
+                     PART; what is established is that the container is
+                     the one UG470 describes and that its frames are at
+                     addresses the part really has.
+  --region <box>     Which tiles of the fabric to load, as x0,y0,x1,y1 in
+                     the database's grid coordinates. The default is a
+                     box around the constrained pins, because the whole
+                     die is 20 million pips and will not fit.
 ";
 
 const SYNTH_USAGE: &str = "\
@@ -458,7 +472,16 @@ fn spec_for(usage: &str) -> Spec {
         }
     } else if std::ptr::eq(usage, FPGA_USAGE) {
         Spec {
-            options: &["device", "constraints", "top", "output-dir", "netlist"],
+            options: &[
+                "device",
+                "constraints",
+                "top",
+                "output-dir",
+                "netlist",
+                "chipdb",
+                "bitstream",
+                "region",
+            ],
             flags: &["list-devices", "report", "quiet"],
             repeated: &["param"],
         }
@@ -1662,6 +1685,23 @@ fn fpga(args: &Args) -> Result<Outcome, ArgError> {
         return Ok(Outcome::Failed);
     }
 
+    // The 7-series bitstream, which needs a chip database the user
+    // supplies. Everything above this point is the same flow every
+    // family takes.
+    if let Some(path) = args.option("bitstream") {
+        match write_xc7_bitstream(args, &design, top, device, &constraints, path) {
+            Ok(note) => {
+                if !args.flag("quiet") {
+                    eprint!("{note}");
+                }
+            }
+            Err(message) => {
+                eprintln!("error: {message}");
+                return Ok(Outcome::Failed);
+            }
+        }
+    }
+
     if !args.flag("quiet") {
         let names: Vec<String> = files
             .iter()
@@ -1671,6 +1711,160 @@ fn fpga(args: &Args) -> Result<Outcome, ArgError> {
         eprintln!("note: place and route with: {}", command.join(" "));
     }
     Ok(Outcome::Ok)
+}
+
+/// Writes a Xilinx 7-series `.bit` from a real chip database.
+///
+/// # NOTHING PRODUCED HERE HAS BEEN LOADED INTO A PART
+///
+/// What this establishes is that the container is the one UG470
+/// describes, that its IDCODE is the one the device file and the
+/// database agree on, and that every frame it writes is at an address
+/// the part really has. It does not establish that the frames configure
+/// anything, and the note it returns says so when the design is not
+/// routed.
+///
+/// The database never comes from the library: it is read here, through
+/// a `FileProvider`, from a directory the user named.
+fn write_xc7_bitstream(
+    args: &Args,
+    design: &reticle::ir::Design,
+    top: reticle::ir::ModuleId,
+    device: &reticle::fpga::Device,
+    constraints: &reticle::fpga::Constraints,
+    path: &str,
+) -> Result<String, String> {
+    use reticle::fpga::place::{PlaceOptions, place};
+    use reticle::fpga::route::{RouteOptions, route};
+    use reticle::fpga::xc7::{self, BitHeader};
+    use reticle::fpga::xray::{GridRegion, XrayDatabase, XrayOptions};
+    use reticle::fpga::{Netlist, bitstream};
+
+    let root = args
+        .option("chipdb")
+        .map(str::to_owned)
+        .or_else(|| std::env::var("RETICLE_CHIPDB").ok())
+        .ok_or_else(|| {
+            "`--bitstream` needs a chip database: pass --chipdb <dir> or set RETICLE_CHIPDB. \
+             Reticle never fetches one; see docs/fpga-xray.md"
+                .to_owned()
+        })?;
+
+    let files = DiskFiles::for_sources(&[]);
+    let mut options = XrayOptions::new();
+    if let Some(text) = args.option("region") {
+        let numbers: Result<Vec<u32>, _> = text.split(',').map(str::parse::<u32>).collect();
+        match numbers {
+            Ok(n) if n.len() == 4 => {
+                options.region = Some(GridRegion::new(n[0], n[1], n[2], n[3]));
+            }
+            _ => return Err(format!("`--region {text}` is not `x0,y0,x1,y1`")),
+        }
+    }
+
+    let db =
+        XrayDatabase::open(&files, &root, &device.name, &options).map_err(|e| e.to_string())?;
+
+    // Without an explicit region, load the fabric around the pins the
+    // constraints name. The whole die does not fit; the loader would
+    // refuse it with the numbers, which is not a useful default.
+    if options.region.is_none() {
+        let pins: Vec<String> = constraints.pins.iter().map(|p| p.pin.clone()).collect();
+        options.region = db
+            .region_for_pins(&files, &pins, 12)
+            .map_err(|e| e.to_string())?;
+        if options.region.is_none() {
+            return Err(
+                "no constrained pin names a site this database has, so there is nowhere to \
+                 load the fabric around; pass --region x0,y0,x1,y1"
+                    .to_owned(),
+            );
+        }
+    }
+
+    let fabric = db.load(&files, &options).map_err(|e| e.to_string())?;
+
+    // Refuse before writing anything if the database is for another die.
+    if let Some(idcode) = device.idcode {
+        fabric.check_idcode(idcode).map_err(|e| e.to_string())?;
+    }
+
+    let graph = fabric.arch.build_graph();
+    let netlist = Netlist::build(design, top, device, &graph).map_err(|e| e.to_string())?;
+    let (placement, placement_report) = place(
+        &netlist,
+        &fabric.arch,
+        &graph,
+        constraints,
+        &PlaceOptions::default(),
+    )
+    .map_err(|e| e.to_string())?;
+
+    // Routing on this fabric needs bel pins, and the database does not
+    // ship them. Attempt it, and say plainly when it does not happen
+    // rather than writing a file that implies it did.
+    let (routing, routed) = match route(&netlist, &graph, &placement, &RouteOptions::default()) {
+        Ok((routing, report)) => (routing, report.signals),
+        Err(_) => (reticle::fpga::Routing::new(netlist.signals.len()), 0),
+    };
+
+    let tiles = bitstream::generate(
+        design,
+        top,
+        &fabric.arch,
+        &graph,
+        &netlist,
+        &placement,
+        &routing,
+    )
+    .map_err(|e| e.to_string())?;
+    let frames = xc7::frames_from_bitstream(&fabric.part, &tiles, &fabric.frames)
+        .map_err(|e| e.to_string())?;
+
+    let name = design.modules[top].name.as_str();
+    let header = BitHeader::new(
+        format!("{name};UserID=0XFFFFFFFF;Version=reticle"),
+        fabric
+            .part
+            .name
+            .trim_start_matches("xc")
+            .trim_end_matches("-1"),
+    );
+    let bytes = xc7::write_bit(&header, &fabric.part, &frames).map_err(|e| e.to_string())?;
+    std::fs::write(path, &bytes).map_err(|e| format!("cannot write `{path}`: {e}"))?;
+
+    let mut note = String::new();
+    note.push_str(&fabric.stats.to_text());
+    note.push_str(&format!(
+        "note: wrote {path}, {} byte(s), {} frame(s), {} configuration bit(s) set\n",
+        bytes.len(),
+        fabric.part.layout.frames(),
+        frames.ones()
+    ));
+    note.push_str(&format!(
+        "note: {} instance(s) placed on real sites, {} held at a package pin, \
+         {} pin(s) the fabric gives no wire\n",
+        netlist.instances.len(),
+        placement_report.fixed,
+        placement_report.off_fabric
+    ));
+    note.push_str(&format!(
+        "note: {routed} of {} signal(s) routed\n",
+        netlist.signals.len()
+    ));
+    if routed < netlist.signals.len() || placement_report.off_fabric > 0 {
+        note.push_str(
+            "warning: the design is NOT FULLY ROUTED. The chip database ships bit positions but \
+             not the tile-type wire lists that say which wire a bel pin reaches, so a bel has no \
+             pins and a signal has no path to one. What was written is a structurally valid \
+             bitstream that configures nothing.\n",
+        );
+    }
+    note.push_str(
+        "warning: NOTHING PRODUCED BY THIS FLOW HAS BEEN LOADED INTO A PART. See \
+         docs/fpga-xray.md for what is and is not established.\n",
+    );
+    Ok(note)
 }
 
 /// `reticle emit`: write the design in another format.

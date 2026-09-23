@@ -277,11 +277,19 @@
 #     it from the device name, the package and the speed grade
 #     (`xc7a35t` + `cpg236` + `-1` = `xc7a35tcpg236-1`). Change the
 #     device name and that changes with it.
+#   * `idcode 0x0362d093` is the JTAG IDCODE of this die, transcribed
+#     from the `idcode` member of that same `part.json`, and confirmed
+#     against the `IDCODE` register write in the Vivado-produced Basys 3
+#     bitstream the database ships in `artix7/harness/basys3/swbut/`.
+#     HIGH confidence. It is what `fpga::xray` compares the loaded
+#     database against, so a database for another die is refused before
+#     a bitstream is written rather than after it is loaded.
 
 device xc7a35t-cpg236
   family xc7
   package cpg236
   speed 1
+  idcode 0x0362d093
   lut_size 6
   ff enable sync_reset async_reset shared_reset
   bel LUT6 lut count 20800 port i=I0,I1,I2,I3,I4,I5 o=O param INIT=64'h0000000000000000

@@ -425,3 +425,158 @@ fn a_design_reaches_a_real_bitstream() {
         );
     }
 }
+
+/// The milestone design, all the way from Verilog to a `.bit`: two slide
+/// switches through one LUT to one LED on a Basys 3.
+///
+/// # What this proves, and what it does not
+///
+/// It proves the chain runs: source text, synthesis, mapping onto this
+/// part's own primitives, placement onto real sites read from
+/// `tilegrid.json`, the LUT's truth table through the architecture's
+/// `ConfigEntry::Param` entries into tile bits, those tile bits into
+/// frames at addresses `part.json` describes, and those frames into a
+/// UG470 container whose CRCs check.
+///
+/// It does not prove the design works. It is **not routed**: the
+/// database gives no bel pins, so no signal has a path (see
+/// `docs/fpga-xray.md`). Flipping a switch on a board loaded with this
+/// would do nothing at all.
+#[test]
+#[cfg(all(feature = "verilog", feature = "synth"))]
+fn the_milestone_design_reaches_a_bit_file() {
+    use reticle::diag::Diagnostics;
+    use reticle::fpga::place::{PlaceOptions, place};
+    use reticle::fpga::{Constraints, FpgaOptions, Netlist, bitstream, synthesize_for, target};
+    use reticle::source::SourceMap;
+
+    let Some(root) = chipdb() else { return };
+    let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("examples/basys3");
+    let (Ok(verilog), Ok(rcf)) = (
+        std::fs::read_to_string(dir.join("sw_led.v")),
+        std::fs::read_to_string(dir.join("sw_led.rcf")),
+    ) else {
+        eprintln!("skipped: `examples/` is not in the published crate");
+        return;
+    };
+
+    let mut map = SourceMap::new();
+    let source = map.add("sw_led.v", &verilog).unwrap();
+    let rcf_file = map.add("sw_led.rcf", &rcf).unwrap();
+    let mut diags = Diagnostics::new();
+    let ast = reticle::verilog::parse_source(
+        &mut map,
+        source,
+        reticle::verilog::Dialect::SystemVerilog,
+        &mut reticle::verilog::NoIncludes,
+        &mut diags,
+    );
+    let mut design = reticle::verilog::elaborate_file(
+        &ast,
+        &reticle::verilog::ElabOptions::default(),
+        &mut diags,
+    )
+    .unwrap();
+    assert!(!diags.has_errors(), "{}", diags.render(&map));
+    let top = design.top.unwrap();
+
+    let device = target(DEVICE).unwrap();
+    assert_eq!(
+        device.idcode,
+        Some(IDCODE),
+        "the device file states the IDCODE"
+    );
+    let mut constraints = Constraints::parse(&rcf, rcf_file, &mut diags);
+    constraints.merge_attrs(&design, top, &mut diags);
+    assert!(!diags.has_errors(), "{}", diags.render(&map));
+    synthesize_for(
+        &mut design,
+        top,
+        device,
+        &constraints,
+        &FpgaOptions::default(),
+        &mut diags,
+    )
+    .unwrap();
+    assert!(!diags.has_errors(), "{}", diags.render(&map));
+
+    // The fabric around the pins the constraints name, which is how a
+    // flow picks a region without a human choosing coordinates.
+    let db = XrayDatabase::open(&DiskFiles, &root, DEVICE, &XrayOptions::new()).unwrap();
+    let pins: Vec<String> = constraints.pins.iter().map(|p| p.pin.clone()).collect();
+    assert_eq!(pins.len(), 3);
+    let region = db
+        .region_for_pins(&DiskFiles, &pins, 12)
+        .unwrap()
+        .expect("V17, V16 and U16 are all sites of this package");
+    let mut options = XrayOptions::new();
+    options.region = Some(region);
+    let fabric = db.load(&DiskFiles, &options).unwrap();
+
+    // The refusal that matters: a database for another die never gets as
+    // far as writing a file.
+    fabric.check_idcode(IDCODE).unwrap();
+    assert!(fabric.check_idcode(0x1234_5678).is_err());
+
+    let graph = fabric.arch.build_graph();
+    let netlist = Netlist::build(&design, top, device, &graph).unwrap();
+    // Two input buffers, an output buffer and the LUT that does the work.
+    assert_eq!(netlist.instances.len(), 4);
+    let (placement, report) = place(
+        &netlist,
+        &fabric.arch,
+        &graph,
+        &constraints,
+        &PlaceOptions::default(),
+    )
+    .unwrap();
+    // Every constrained pin is held at the site the package map gives
+    // it, which is the check that the pinmap really names architecture
+    // sites and not `tilegrid.json`'s own site names.
+    assert_eq!(report.fixed, 3, "the three pins are not held");
+    for index in 0..netlist.instances.len() {
+        assert!(
+            placement.site_of(index).is_some(),
+            "instance {index} unplaced"
+        );
+    }
+
+    let tiles = bitstream::generate(
+        &design,
+        top,
+        &fabric.arch,
+        &graph,
+        &netlist,
+        &placement,
+        &reticle::fpga::Routing::new(netlist.signals.len()),
+    )
+    .unwrap();
+    // The LUT's INIT for `a ^ b` over six inputs is half the table, and
+    // every one of those bits came from the database.
+    assert_eq!(tiles.ones(), 32, "{}", tiles.to_summary());
+
+    let frames = xc7::frames_from_bitstream(&fabric.part, &tiles, &fabric.frames).unwrap();
+    assert_eq!(frames.ones(), 32);
+    let used = frames.used_frames();
+    assert!(!used.is_empty());
+    for address in &used {
+        assert!(fabric.part.layout.contains(*address));
+    }
+    eprintln!("the LUT lands in {} frame(s)", used.len());
+
+    let header = BitHeader::new("sw_led;UserID=0XFFFFFFFF;Version=reticle", "7a35tcpg236");
+    let bytes = xc7::write_bit(&header, &fabric.part, &frames).unwrap();
+    let back = xc7::read_bit(&bytes).unwrap();
+    assert_eq!(back.idcode, Some(IDCODE));
+    assert_eq!(back.frame_count(), STREAM_FRAMES);
+    assert_eq!(back.frames, frames.words());
+    assert_eq!(back.start_address, Some(FrameAddress::default()));
+    for (expected, computed) in &back.crc_checks {
+        assert_eq!(expected, computed);
+    }
+    eprintln!(
+        "sw_led: {} byte(s), {} frame(s), 32 configuration bit(s); NOT ROUTED, CONFIGURES NOTHING",
+        bytes.len(),
+        STREAM_FRAMES
+    );
+}

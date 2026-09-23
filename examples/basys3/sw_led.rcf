@@ -1,0 +1,11 @@
+# Digilent Basys 3 (Xilinx XC7A35T-1CPG236C), three pins of it.
+#
+# PROVENANCE: the pin names are transcribed from
+# `examples/soc/board/basys3.rcf`, which transcribes Digilent's published
+# `Basys-3-Master.xdc`. V17 and V16 are slide switches 0 and 1, U16 is
+# LED 0. The rest of the board is listed in that file.
+#
+# NOTHING BUILT WITH THIS HAS BEEN LOADED INTO A PART.
+set_io -io_standard LVCMOS33 sw0 V17
+set_io -io_standard LVCMOS33 sw1 V16
+set_io -io_standard LVCMOS33 led U16

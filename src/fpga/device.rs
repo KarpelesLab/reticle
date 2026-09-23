@@ -1434,6 +1434,14 @@ pub struct Device {
     pub package: String,
     /// The speed grade as the vendor writes it, or empty.
     pub speed_grade: String,
+    /// The JTAG IDCODE of the die, when the device file states one.
+    ///
+    /// A bitstream writes it into the configuration engine's `IDCODE`
+    /// register and the part refuses a stream that names a different
+    /// one, so it is also what lets a flow notice that the chip database
+    /// it loaded is for another die before it emits anything. `None`
+    /// means the file does not say, which is not the same as zero.
+    pub idcode: Option<u32>,
     /// Number of inputs of one lookup table.
     pub lut_size: u32,
     /// What the logic cell's flip-flop can do.
@@ -1471,6 +1479,7 @@ impl Device {
             family: family.into(),
             package: String::new(),
             speed_grade: String::new(),
+            idcode: None,
             lut_size: 4,
             ff: FfFeatures::default(),
             bels: Vec::new(),
@@ -1666,6 +1675,9 @@ impl Device {
         }
         if !self.speed_grade.is_empty() {
             out.push_str(&format!("  speed {}\n", quote(&self.speed_grade)));
+        }
+        if let Some(idcode) = self.idcode {
+            out.push_str(&format!("  idcode {idcode:#010x}\n"));
         }
         out.push_str(&format!("  lut_size {}\n", self.lut_size));
         out.push_str(&format!("  {}\n", write_ff(&self.ff)));
@@ -2252,6 +2264,18 @@ impl<'a> Parser<'a> {
             "speed" => {
                 if let Some(word) = self.word(line, 1, "a speed grade") {
                     device.speed_grade = word.to_owned();
+                }
+            }
+            "idcode" => {
+                if let Some(word) = self.word(line, 1, "a 32-bit IDCODE") {
+                    let body = word.trim_start_matches("0x").trim_start_matches("0X");
+                    match u32::from_str_radix(body, 16) {
+                        Ok(value) => device.idcode = Some(value),
+                        Err(_) => self.error(
+                            line.span,
+                            format!("expected a 32-bit IDCODE in hexadecimal, found `{word}`"),
+                        ),
+                    }
                 }
             }
             "lut_size" => {
