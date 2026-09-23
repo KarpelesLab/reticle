@@ -201,7 +201,7 @@ module apple2_vga_tb;
 
         // `T` paints the character test card over rows 3 to 23, which is
         // everything below the banner and the prompt it is typed at.
-        sendchar(8'h54);                // `T`
+        sendchar("T");
         prompt = 1'b0;
         sendbyte(8'h0d);
         wait (prompt);

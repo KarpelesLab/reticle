@@ -192,18 +192,17 @@ module apple2_tb;
         end
     endtask
 
-    // A whole command line: the text in `cmdbuf`, then the return, then
-    // wait for the prompt the monitor prints when it has finished obeying
-    // it. The text goes through a register rather than an argument
-    // because a string literal is not a vector until something stores it.
-    reg [8*32-1:0] cmdbuf;
-
-    task command(input integer n);
+    // A whole command line: the text, then the return, then wait for the
+    // prompt the monitor prints when it has finished obeying it. The
+    // text is passed in as a string literal, which is an unsigned
+    // integer constant right-justified in the argument, so character
+    // `n - k` of an `n`-character command sits in byte `k - 1`.
+    task command(input [8*32-1:0] text, input integer n);
         integer        k;
         reg [8*32-1:0] rest;
         begin
             for (k = n; k > 0; k = k - 1) begin
-                rest = cmdbuf >> (8 * (k - 1));
+                rest = text >> (8 * (k - 1));
                 sendchar(rest[7:0]);
             end
             prompt = 1'b0;
@@ -224,17 +223,13 @@ module apple2_tb;
 
         // Eight bytes of the ROM: the first instructions of this very
         // monitor, which the test knows from the assembled source.
-        cmdbuf = "E F800";
-        command(6);
+        command("E F800", 6);
         // Eight bytes into RAM, and then the same eight back out.
-        cmdbuf = "D 0300 11 22 33 44 55 66 77 88";
-        command(30);
-        cmdbuf = "E 0300";
-        command(6);
+        command("D 0300 11 22 33 44 55 66 77 88", 30);
+        command("E 0300", 6);
         // Lower case, to show that the monitor folds it: the echo, and
         // the screen, say `T`.
-        cmdbuf = "t";
-        command(1);
+        command("t", 1);
 
         // Nothing writes to the screen from here, so let the raster go.
         // Frame 0 is drawn in full; frame 1 is drawn as far as the row

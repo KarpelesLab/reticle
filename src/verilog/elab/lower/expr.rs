@@ -119,9 +119,27 @@ impl<'cx, 'ast> Lowerer<'cx, 'ast> {
             self.b.span = self.b.module().expr(id).span;
             return self.b.constant(resized);
         }
+        // A string literal in an integral context is not an error.
+        // IEEE 1364-2005 makes a string an unsigned integer constant
+        // whose bits are its characters, so `"T"` is `8'h54`. Folding
+        // already converts one as soon as it is told the width to fill,
+        // but a context that supplies no width leaves the literal a
+        // string node and the width only turns up here. A task argument
+        // is such a context: `sendchar("T")` used to be rejected while
+        // `reg [7:0] c; c = "T";` was accepted, for the same literal.
+        if let ir::ExprKind::String(text) = &self.b.module().expr(id).kind {
+            let bits = constant::string_bits(&text.clone());
+            let bits = if signed {
+                bits.resize(width).with_signed(true)
+            } else {
+                bits.as_unsigned().resize(width)
+            };
+            self.b.span = self.b.module().expr(id).span;
+            return self.b.constant(bits);
+        }
         if !ty.is_bits() {
-            // Strings and reals reaching an integral context: the value
-            // was folded when it was constant, so this is a genuine type
+            // A real reaching an integral context: a constant one was
+            // folded and rounded, so what is left is a genuine type
             // error the IR cannot carry.
             let span = self.b.module().expr(id).span;
             self.env.error(

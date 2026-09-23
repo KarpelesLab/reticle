@@ -287,4 +287,64 @@ mod tests {
         let two = elaborate(&[&file], &opts, &mut diags).unwrap();
         assert_eq!(one.to_text(), two.to_text());
     }
+
+    /// A string literal is an unsigned integer constant, so it may be
+    /// passed where a vector is wanted.
+    ///
+    /// IEEE 1364-2005 makes `"T"` mean `8'h54`. Assigning one to a
+    /// register always worked, because the assignment says how wide the
+    /// value must be before it is folded. A task argument says nothing,
+    /// so the literal stayed a string until the argument was coerced,
+    /// and coercion refused it: `sendchar("T")` was rejected while
+    /// `c = "T";` right beside it was accepted. Two of this repository's
+    /// own testbenches carry a comment about the workaround.
+    #[test]
+    fn a_string_literal_passes_as_a_vector_argument() {
+        let text = "module t;\n\
+             \x20   reg [7:0] last;\n\
+             \x20   reg [15:0] pair;\n\
+             \x20   task sendchar(input [7:0] c);\n\
+             \x20       last = c;\n\
+             \x20   endtask\n\
+             \x20   task sendpair(input [15:0] p);\n\
+             \x20       pair = p;\n\
+             \x20   endtask\n\
+             \x20   initial begin\n\
+             \x20       sendchar(\"T\");\n\
+             \x20       sendpair(\"Hi\");\n\
+             \x20   end\n\
+             endmodule\n";
+        let (design, diags) = elab(text, Dialect::Verilog2005);
+        let design = design.unwrap_or_else(|| panic!("should elaborate:\n{diags}"));
+        let rtl = design.to_text();
+        // `T` is 0x54, which the IR prints in decimal as 84, and `Hi`
+        // is 0x4869, which is 18537: the literal is folded to bits at
+        // the width the argument asks for, rather than reaching the IR
+        // as a string.
+        assert!(rtl.contains("8'd84"), "`T` is not 84 in:\n{rtl}");
+        assert!(rtl.contains("16'd18537"), "`Hi` is not 18537 in:\n{rtl}");
+        assert!(
+            !rtl.contains("\"T\""),
+            "the literal reached the IR as a string:\n{rtl}"
+        );
+    }
+
+    /// A real is still refused where a vector is wanted: the fix above
+    /// is about strings, and must not have opened the other door.
+    #[test]
+    fn a_real_net_is_still_not_a_vector() {
+        let text = "module t;\n\
+             \x20   real r;\n\
+             \x20   reg [7:0] q;\n\
+             \x20   task take(input [7:0] c);\n\
+             \x20       q = c;\n\
+             \x20   endtask\n\
+             \x20   initial take(r);\n\
+             endmodule\n";
+        let (_, diags) = elab(text, Dialect::Verilog2005);
+        assert!(
+            diags.contains("cannot be used as a"),
+            "a real argument should still be refused:\n{diags}"
+        );
+    }
 }
