@@ -52,9 +52,12 @@
 //     do not need to be: the frame buffer is what sits between the two
 //     rasters, and it has always been written by one and read by the
 //     other. What that costs is tearing — the console writes a frame
-//     every 16.98 ms and the screen reads one every 16.78 ms, so the
-//     two edges walk past each other about five times a minute — and
-//     what it buys is one clock domain and no synchronisers.
+//     every 16.98 ms and the screen reads one every 16.80 ms, which is
+//     58.9 frames a second against 59.5, so the seam walks down the
+//     picture about once every one and a half seconds. That is half as
+//     often as the ECP5 build, where the two rates are 1.24 Hz apart
+//     rather than 0.61. What it buys is one clock domain and no
+//     synchronisers.
 //
 //   * the reset. A counter holds `rst_n` low for the first 32768
 //     clocks, 330 microseconds at 100 MHz. An FPGA starts every

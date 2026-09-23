@@ -161,8 +161,11 @@ colour, so it is 64 Ki x 6 bits and `ppu_palette` turns the index into
 RGB one cycle later — inside the four cycles of `clk_x5` that `dvi_tx`
 gives a fetch, and inside the four cycles of the 100 MHz clock that
 `vga_out` gives one on the Basys 3. One buffer, not two, so the two
-rasters walk past each other a few times a minute and the picture tears.
-That is the honest trade for having no clock crossing.
+rasters walk past each other and the picture tears: the two frame rates
+are 1.24 Hz apart on the ECP5 build and 0.61 Hz apart on the Basys 3, so
+the seam walks down the picture about five times every four seconds on
+one board and about once every one and a half seconds on the other. That
+is the honest trade for having no clock crossing.
 
 ### Four bits a channel, on the Basys 3
 

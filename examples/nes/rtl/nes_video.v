@@ -16,11 +16,12 @@
 //
 //   Both sides run on `clk`, so there is no clock crossing here at all:
 //   the console side moves on `en`, which `nes_top` gives it once every
-//   24 cycles, and the transmitter side moves every cycle. What that
-//   costs is tearing — the console writes a frame every 17.0 ms and the
-//   screen reads one every 16.7 ms, so the two edges walk past each
-//   other about twice a minute — and what it buys is one clock domain
-//   and no synchronisers.
+//   24 cycles and `nes_basys3` once every 19, and the transmitter side
+//   moves every cycle. What that costs is tearing — on `nes_top` the
+//   console writes a frame every 17.02 ms and the screen reads one every
+//   16.67 ms, which is 58.8 frames a second against 60.0, so the seam
+//   walks down the picture about five times every four seconds — and
+//   what it buys is one clock domain and no synchronisers.
 //
 //   The frame buffer holds the console's six-bit palette index, not a
 //   colour: 64 Ki entries of six bits, addressed by the pixel's Y and X
