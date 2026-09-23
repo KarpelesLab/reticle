@@ -312,7 +312,14 @@ FPGA:
       cells) and JSON export hands the result to nextpnr (iCE40 and ECP5;
       Gowin needs a device file), with structural Verilog + XDC / SDC
       constraints for Vivado and Quartus, so a design synthesised by
-      Reticle can be placed by existing tools from day one. The exported
+      Reticle can be placed by existing tools from day one.
+      The **Xilinx 7 series** (`xc7a35t-cpg236`, the Artix-7 of the
+      Digilent Basys 3) takes the second route: `reticle fpga` writes
+      the Verilog, the XDC and a Vivado script, and `fpga::pnr_route`
+      is what says which of the two exports a family takes. Nothing in
+      it has been run on silicon; `docs/fpga.md` states per primitive
+      group what is verified and what is not, and what is deliberately
+      left out (CARRY4, RAMB36E1, DSP48E1). The exported
       netlist holds nothing but primitives the device database declares,
       which `fpga::check_nextpnr_json` verifies cell by cell, port by
       port and net by net before the tool sees it.

@@ -11,7 +11,7 @@ writes its bitstream, without calling another program.
    fpga::synthesize_for          synthesis, primitives, LUTs, device cells
         │
         ├── fpga::export_nextpnr ─► nextpnr-ice40 / nextpnr-ecp5
-        ├── fpga::export_vendor  ─► Vivado / Quartus / Diamond
+        ├── fpga::export_vendor  ─► Vivado (7 series) / Quartus / Diamond
         │
         └── fpga::place_and_route
                  │
@@ -23,6 +23,22 @@ writes its bitstream, without calling another program.
 ```
 
 `fpga::implement` is synthesis plus all three in one call.
+
+## Families
+
+| Family | Parts | Route out | Own place and route |
+|--------|-------|-----------|---------------------|
+| `ice40` | `ice40-lp1k-tq144`, `ice40-hx1k-tq144`, `ice40-hx8k-ct256` | `nextpnr-ice40` | yes, on a **synthetic** fabric — read the section below |
+| `ecp5` | `ecp5-25f-CABGA381`, `ecp5-45f-CABGA381` | `nextpnr-ecp5` | no architecture |
+| `xc7` | `xc7a35t-cpg236` (Artix-7, Digilent Basys 3) | **Vivado** | no architecture |
+| `generic` | `generic`, `generic-k6` | none; it is not a real part | no architecture |
+
+`fpga::pnr_route` answers which of the two exports a family takes, and
+it is the one thing about a family that is not data. `reticle fpga`
+asks it and writes the matching files. A family with no nextpnr back end
+does not fail quietly: `fpga::export_nextpnr` returns
+`FlowError::VendorOnly`, which names the family, the device and the tool
+that does read its export.
 
 ## Generated clocks: PLLs
 
@@ -199,6 +215,171 @@ nextpnr, which knows the package. `ice40-hx8k-ct256` is one: it lists
 the iCE40-HX8K breakout board's clock, LEDs, serial port (B12, B10) and
 SPI flash, and the CT256 has over two hundred IO balls more. The tq144
 lists stay strict.
+
+The `xc7a35t-cpg236` list is partial in the same way and for the same
+reason: it is every line of Digilent's published `Basys-3-Master.xdc`
+and nothing else, about a hundred balls of the CPG236's roughly two
+hundred.
+
+## Xilinx 7 series (Artix-7, Digilent Basys 3)
+
+**Read this before believing anything below: nothing in the 7-series
+support has been run on silicon.** No bitstream produced from it has
+been loaded into a part by anyone who wrote it, and Vivado has not been
+run over its output here. What the tests prove is narrower and exact:
+
+- every cell of the exported netlist is a primitive `xc7.dev` declares,
+  wired to pins that primitive has (`fpga::check_nextpnr_json`);
+- a memory's initial contents reach the block RAM's `INIT_00`, in the
+  order the device file states;
+- every pin the constraints name is a pin the device file lists, and it
+  comes out in the XDC;
+- the three files are the ones the script reads, under the names it
+  reads them by.
+
+Whether Vivado accepts the netlist, and whether the result blinks an
+LED, are separate claims and this repository makes neither.
+
+### What is in the device file
+
+`src/fpga/devices/xc7.dev` heads itself with where each group of claims
+came from and how far it is to be trusted, per group, the way
+`ice40.dev` does. The summary:
+
+| Group | Confidence |
+|---|---|
+| primitive names, ports and widths | **high** — read line by line from Yosys' `techlibs/xilinx/cells_sim.v` and `cells_xtra.v` (the latter generated from Vivado's own `unisims`), not recalled |
+| `LUT6` and its `INIT` bit order (`O = INIT[{I5..I0}]`) | **high** |
+| `FDRE` / `FDSE` / `FDCE` / `FDPE` and their `_1` falling-edge twins | **high** |
+| `CARRY4` semantics (stated, not mapped — see below) | **high** |
+| `RAMB18E1` ports, width parameters and address alignment | **high** |
+| `RAMB18E1` contents layout (`INIT_00`..`INIT_3F`) | **medium-high** — the 256-bit-chunks-in-address-order description is UG473's; the row-sharing order in the narrow modes was reasoned from it here |
+| byte write enables (`WEA[1:0]`, `WEBWE[3:0]`) | **high** |
+| `IBUF` / `OBUF` / `IOBUF` / `OBUFT`, `BUFG`, `RAM64X1D` | **high** |
+| `PLLE2_BASE` / `MMCME2_BASE` ports and divider parameters | **high** |
+| their VCO bands (PLL 800–1600, MMCM 600–1200 MHz, −1 grade) | **medium-high** |
+| their phase-detector and input limits | **medium** |
+| 32 global clock buffers | **medium-high** |
+| LVCMOS drive-strength lists | **medium** for the numbers, high for the names |
+| resource counts (20800 LUT6, 41600 FF, 100 RAMB18E1, 5 CMTs) | **high** — datasheet figures |
+| the Basys 3 pin list | **high** that these are the balls Digilent's file names; the transcription was fetched, not recalled |
+| `W5` being a clock-capable ball | **medium-high** |
+
+### What is deliberately left out, and why
+
+- **`CARRY4` is declared without a port map**, which makes carry mapping
+  decline for the family with a note, exactly as it declines for the
+  ECP5's `CCU2C`. Its behaviour is not in doubt and the device file
+  writes it out in full — `O = S ^ {CO[2:0], CI|CYINIT}`,
+  `CO[i] = S[i] ? carry_in : DI[i]` — but Reticle maps carry chains onto
+  a one-bit `(ci, i0, i1) -> co` element with the sum XORed outside it,
+  and `CARRY4` is four bits wide, computes its own sums and takes a
+  *propagate* rather than two operands. Adders therefore go to `LUT6`s.
+  That costs area and depth; it does not cost correctness.
+- **`RAMB36E1` is not declared.** In non-cascaded use its
+  `ADDRARDADDR[15]` must be tied high, and Reticle's address model can
+  pad the bits *below* the word address and not the bits above it, so a
+  `RAMB36E1` declared here would address the wrong half of its array.
+  Fifty `RAMB36E1` and a hundred `RAMB18E1` are the same array seen two
+  ways, so no capacity is lost — only the 36- and 72-bit-wide modes.
+- **`DSP48E1` is not declared.** It does not multiply unless `OPMODE`,
+  `ALUMODE` and `INMODE` are driven with the right constants, and the
+  `.dev` `dsp` line has no way to tie an input. Declaring it would
+  produce a netlist that instantiates a DSP doing something other than
+  the multiply it replaced. Multiplies go to `LUT6`s.
+- **`IDDR` / `ODDR` / `IDELAYE2` are not declared**, so a `ddr` port or
+  an `io_delay` is a warning and an ordinary buffer.
+- **No tile grid**, so a placement region on this part is reported as
+  uncheckable. The XDC still writes pblocks as `SLICE_X..Y..`, which is
+  the right syntax; it is only unchecked here.
+- **The parity bits of the block RAM are unused.** The 18 kbit block is
+  16 kbit of data plus 2 kbit of parity in a second parameter series,
+  and Reticle's contents model has one series, so the width modes are
+  16/8/4/2/1 and the block holds 16 kbit here.
+- **`CLKIN1_PERIOD` is not set.** It is a `real` parameter and the
+  `.dev` model carries integers, sized constants and strings. The output
+  frequency does not depend on it — the three integer dividers set that,
+  and Reticle does write those — but Vivado uses it for jitter and will
+  say so.
+
+### The route out: Vivado, and why not nextpnr-xilinx
+
+There are two ways a 7-series netlist becomes a bitstream, and Reticle
+recommends the first:
+
+1. **Vivado.** Emit structural Verilog of 7-series primitives plus the
+   XDC; Vivado WebPACK, which is free for this part, implements it.
+   This needs no place-and-route database, no fuzzing and no second
+   tool, and the primitives and the constraint syntax are the vendor's
+   own, which is the part of the chain least likely to be wrong.
+2. **nextpnr-xilinx with Project X-Ray.** Fully open, and the honest
+   objection is not ideology: it needs a chip database this repository
+   does not ship and cannot verify, and it would put a second
+   unverified layer under an already unverified one. Until someone can
+   run it on a board and say it works, the recommendation stands.
+
+So `xc7` takes the `export_vendor` route. `reticle fpga --device
+xc7a35t-cpg236 --constraints board.rcf top.v` writes three files:
+
+```
+top.v      structural Verilog: LUT6, FDRE, RAMB18E1, IBUF, OBUF, BUFG, …
+top.xdc    PACKAGE_PIN, IOSTANDARD, DRIVE, SLEW, create_clock, pblocks
+top.tcl    create_project / read_verilog / read_xdc / synth_design /
+           opt_design / place_design / route_design / write_bitstream
+```
+
+and prints the command that runs them:
+
+```
+vivado -mode batch -source top.tcl
+```
+
+The part string comes from the device name, the package and the speed
+grade run together — `xc7a35t` + `cpg236` + `-1` gives
+`xc7a35tcpg236-1` — so nothing about this part in particular is written
+in Rust. `synth_design` has nothing to infer: the netlist is already
+primitives, and elaborating it is also the point at which Vivado checks
+that every cell and pin Reticle named really exists.
+
+`fpga::export_nextpnr` on this family returns `FlowError::VendorOnly`
+naming Vivado and `export_vendor`, rather than a half-written file or a
+generic "unknown family".
+
+### Two things the device model learned here
+
+Both were gaps the 7 series found, and both are general:
+
+- **One IO buffer per direction.** Xilinx has `IBUF`, `OBUF` and
+  `IOBUF`, which do not even agree on what the pad pin is called (`I`,
+  `O`, `IO`). A `bel … io for in|out|inout` line says which directions a
+  buffer serves and `Device::io_bel` picks between them; a line with no
+  `for` serves every direction, which is what iCE40 and ECP5 keep doing.
+- **A block RAM pin several bits wide**, written `we=WEA*2`. The
+  7-series byte write enables are two and four bits, and a memory
+  written a whole word at a time drives all of them alike. Before this,
+  the one-bit write enable would have reached `WEA[0]` and left the rest
+  undriven, writing one byte of each word and dropping the others —
+  silently.
+
+A third is smaller: a PLL whose feedback loop is closed *outside* the
+block (`PLLE2_BASE` wants `CLKFBOUT` wired to `CLKFBIN`) names both ends
+as `fbout` and `fb`, and mapping runs a net between them.
+
+### The board
+
+`examples/soc/board/basys3.rcf` constrains the Basys 3's 100 MHz
+oscillator (W5) and its USB-UART pair (B18 receive, A18 transmit), and
+lists in comments — because a constraint naming a port the design lacks
+is an error — the sixteen switches, sixteen LEDs, seven-segment display,
+five buttons, four Pmod headers and the VGA pins, all transcribed from
+Digilent's master XDC.
+
+**The Basys 3 has no HDMI and no DVI connector.** Its video output is
+VGA at twelve bits, four per channel, through a resistor ladder. The
+`ip/dvi_tx` package in this repository drives TMDS differential pairs
+and cannot drive this board; its `video_timing` module, which is
+counters and sync generation and nothing else, is reusable unchanged for
+a VGA path, and the serialiser and TMDS encoder are not.
 
 ## Read this first: the architecture is synthetic
 
@@ -443,6 +624,15 @@ choice is pinned:
   reader, the placer's legalisation and each kind of constraint, the
   router on small fabrics with known-routable, known-congested and
   known-disconnected cases, and the bitstream round trips.
+- `tests/fpga_flow.rs`: sixteen cases through synthesis, primitive
+  mapping, LUT mapping and the export, with the mapped design, the
+  report, the diagnostics and every exported file as goldens. The three
+  `*_xc7` cases add the Vivado route: `blinky_xc7` for the LUTs, the
+  flip-flops and the per-direction IO buffers, `ram_xc7` for the block
+  RAM's contents, address alignment and byte enables, and `pll_xc7` for
+  the feedback loop closed outside the block. Five further tests check
+  the 7-series claims one by one, and one checks that the nextpnr export
+  declines this family by name.
 - `tests/fpga_pnr.rs`: the three iCE40 designs of `testdata/fpga/`
   through the whole flow, with `<name>.place`, `<name>.route` and
   `<name>.bits` golden files and one full `<name>.asc`. Rewrite them with

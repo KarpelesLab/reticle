@@ -48,7 +48,7 @@ Early, but the middle of the pipeline runs end to end. What works today:
 | IP | manifests with dependency resolution and a lock file, bus interfaces, generated interconnect, encrypted-core black boxes, a static registry index, IP-XACT import |
 | Tooling | Verilog and VHDL formatters, a language server for both, an incremental build cache, an HTML schematic and reference viewer |
 | Embedding | C ABI for use from another tool, and a WebAssembly build with a browser playground under `web/` |
-| FPGA | device database (iCE40, ECP5, generic), primitive mapping, placement and IO constraints, nextpnr and vendor export |
+| FPGA | device database (iCE40, ECP5, Xilinx 7 series, generic), primitive mapping, placement and IO constraints, nextpnr and vendor export |
 
 Both languages go all the way through, from source to a synthesised
 netlist, a simulation or a proof.
@@ -74,8 +74,21 @@ reticle lsp     # started by an editor, speaks the Language Server Protocol
 ```
 
 `reticle fpga` runs the whole target flow and writes the netlist and
-constraints that nextpnr reads, checking first that every cell is a
-primitive the device actually has.
+constraints the next tool reads, checking first that every cell is a
+primitive the device actually has. Which tool that is depends on the
+family: `nextpnr-ice40` and `nextpnr-ecp5` read a JSON netlist and a
+`.pcf` / `.lpf`, and the Xilinx 7 series takes structural Verilog, an
+`.xdc` and a Vivado script instead.
+
+```sh
+# A Digilent Basys 3 (Artix-7 XC7A35T): three files and the command
+# that turns them into a bitstream.
+reticle fpga --device xc7a35t-cpg236 --constraints board/basys3.rcf blinky.v
+vivado -mode batch -source blinky.tcl
+```
+
+Nothing in the 7-series support has been run on silicon; `docs/fpga.md`
+says exactly what the tests do and do not prove.
 
 Sources of one language are elaborated together, so a testbench and the
 modules it instantiates go on one command line. A design already in the
