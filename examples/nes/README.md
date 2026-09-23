@@ -196,8 +196,11 @@ difference, and that is what four bits a channel costs.
 pair, so the numbers on this page cannot drift away from the table.
 
 There is no dithering and no rounding here, and there should not be:
-four bits is what the board has, and a fifth of a level of error is
-below what a ladder built from 1 % resistors can show anyway.
+four bits is what the board has. Rounding to nearest instead of
+truncating would buy half a step in the middle of the range, and would
+cost a saturating add per channel to stop `8'hFF` carrying out of a
+four-bit field — and a four-bit R-2R ladder built from 1 % resistors has
+more error than half a step in its own components.
 
 ## The demo
 
@@ -458,15 +461,17 @@ The 7-series flow in `tests/nes.rs`, for `xc7a35t-cpg236`:
 | `BUFG` | 1 | 1 | 32 |
 | logic depth | 23 | 24 | — |
 
-The middle column is a measurement and not a buildable target: the DVI
-top cannot be built for this part at all, which is the whole reason the
-second one exists. It is there because it is the fair way to say what
-the swap saves — **398 LUT6, 57 CARRY4 and 72 flip-flops**, and a level
-of logic depth. That is three TMDS encoders, their running-disparity
-registers and three 10:1 serialisers gone; the carry chains go with the
-encoders, which count the ones in a byte. The memory does not move,
-because the frame buffer is on the console's side of the swap and the
-console is untouched.
+The middle column is a measurement and not a buildable target. `nes_top`
+cannot be built *for a board* on this part — its four TMDS ports have
+nowhere to go, which the next section quotes — so that column is what
+the flow reports when it is asked for the netlist and not for pins. It
+is here because it is the fair way to say what the swap saves: **398
+LUT6, 57 CARRY4 and 72 flip-flops**, and a level of logic depth. That is
+three TMDS encoders, their running-disparity registers and three 10:1
+serialisers gone, and most of the carry chain goes with the encoders,
+which count the ones in a byte. The memory does not move, because the
+frame buffer is on the console's side of the swap and the console is
+untouched.
 
 For comparison, `examples/apple2` saved 269 LUT6 and 92 flip-flops on
 the same change — a similar number for a much smaller design, which is
@@ -535,9 +540,9 @@ cannot be built for it. Asking the 7-series flow for `nes_top` ends in
 four lines like this one:
 
 ```text
-port tmds_d0 asks for double-data-rate registers, but `xc7a35t-cpg236`
-declares neither an IO buffer that registers both edges nor a `ddr_out`
-register
+error[F0304]: port `tmds_d0` asks for double-data-rate registers, but
+`xc7a35t-cpg236` declares neither an IO buffer that registers both edges
+nor a `ddr_out` register
 ```
 
 Everything else about the console mapped and fitted. VGA was the only
@@ -621,9 +626,10 @@ version, and what the console adds to it:
 
 Proved here, by `cargo test`:
 
-- the manifest resolves `mos6502`, `ppu2c02` and `dvi_tx` from `ip/` and
-  builds, through `ip::resolve` and `ip::elaborate` and through `reticle
-  build`, with three files of user HDL;
+- the manifest resolves `mos6502`, `ppu2c02`, `dvi_tx` and `vga_out` from
+  `ip/` and builds, through `ip::resolve` and `ip::elaborate` and through
+  `reticle build`, with four files of user HDL and with `video_timing`
+  pulled in once for both video paths;
 - synthesis accepts it with no error, warning or latch, and loads both
   cartridge memories from the hex files, leaving every byte the files did
   not name `x`;
@@ -677,7 +683,9 @@ Not proved:
   settles a video output is a monitor, and none has been connected.
 - **timing.** Nothing checks that the design closes at 126 MHz on the
   real part, and 126 MHz through a TMDS serialiser is the most demanding
-  thing in this repository. It is entirely possible that it does not.
+  thing in this repository. It is entirely possible that it does not. The
+  Basys 3 build asks for far less — 100 MHz through logic 23 levels deep,
+  and no serialiser at all — but nothing checks that either.
 - **that a commercial game would run.** It would not, and that is not an
   accident: there is no mapper, no sound, no controller and no 8 x 16
   sprite, and every cartridge worth naming needs at least three of those.
