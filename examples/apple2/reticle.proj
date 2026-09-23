@@ -1,0 +1,28 @@
+# An Apple II-compatible computer: a 6502, 48 KiB, the interleaved text
+# page, the soft switches, and DVI video.
+#
+# The processor is `mos6502`, the video output is `dvi_tx` and the
+# terminal that serves as the keyboard is `uart`, all from the Reticle IP
+# library in this repository's ip/ directory. The three files in rtl/ are
+# the only HDL written for the project, and sw/ holds the machine's own
+# software: a monitor ROM and a character generator, both written for
+# this example. **No Apple ROM is included and none is needed** — see
+# README.md, which says exactly what is and is not Apple's here.
+name apple2
+top apple2_top
+
+# The ECP5 45F: 43848 LUT4s and 108 block RAMs, which is what 48 KiB of
+# two-ported RAM and a DVI transmitter want. README.md reports what this
+# costs on the iCE40 HX8K that examples/soc and examples/mos6502_computer
+# target, and why it does not fit there.
+device ecp5-45f-CABGA381
+
+source rtl/apple2_video.v
+source rtl/apple2.v
+source rtl/apple2_top.v
+constraints board/ulx3s.rcf
+testbench tb/apple2_tb.v
+
+depends mos6502 ^1.0.0 path ../../ip/mos6502
+depends uart ^1.0.0 path ../../ip/uart
+depends dvi_tx ^1.0.0 path ../../ip/dvi_tx

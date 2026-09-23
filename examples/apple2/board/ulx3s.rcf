@@ -1,0 +1,40 @@
+# A CABGA381 ECP5 on a ULX3S-shaped board.
+#
+# Read the pin numbers with care. `src/fpga/devices/ecp5.dev` says in so
+# many words that its pin list for this package is **partial** — it holds
+# the ULX3S board's 25 MHz oscillator and its eight LEDs and nothing else,
+# because those came from a board file rather than from Lattice's package
+# drawings. So this file uses those nine pins and no others: the design
+# has exactly eight signals besides the clock, which is exactly how many
+# the database can check.
+#
+# That means the DVI lanes and the serial port are on pins that a real
+# ULX3S wires to LEDs and not to its GPDI connector or its FTDI bridge.
+# The flow, the netlist and the constraint file are all real; the pinout
+# is a placeholder, and it is a placeholder on purpose rather than a guess
+# at pins nobody here has checked. Putting this on a board means adding
+# the rest of the package to `ecp5.dev` from the datasheet and then
+# writing the four GPDI pairs, `ftdi_rxd` and `ftdi_txd` here. Reticle
+# would tell you if you got it wrong — it checks every pin it knows, and
+# warns about every pin it does not.
+#
+# The DVI lanes leave through double-data-rate output registers on
+# `clk_x5`, which is the `(* ddr = "clk_x5" *)` attribute in
+# rtl/apple2_top.v, so each lane is one pin and not two. A real DVI pair
+# is differential; on the ECP5 the pseudo-differential LVCMOS33D standard
+# makes the pair from one output, which would be a line here on a board
+# whose connector is wired for it.
+set_io -io_standard LVCMOS33 clk_ref  G2
+set_io -io_standard LVCMOS33 tmds_clk B2
+set_io -io_standard LVCMOS33 tmds_d0  C1
+set_io -io_standard LVCMOS33 tmds_d1  C2
+set_io -io_standard LVCMOS33 tmds_d2  D1
+set_io -io_standard LVCMOS33 uart_tx  D2
+set_io -io_standard LVCMOS33 uart_rx  E1
+set_io -io_standard LVCMOS33 speaker  E2
+
+# The board's oscillator: 25 MHz. Everything else in the design runs on
+# `clk_x5`, which rtl/apple2_top.v asks the PLL for at 126 MHz — five
+# times the 640x480 pixel clock of 25.175 MHz, rounded to a whole
+# megahertz, which is 0.1 % fast and well inside what a monitor accepts.
+create_clock -name ref -period 40.0 clk_ref
