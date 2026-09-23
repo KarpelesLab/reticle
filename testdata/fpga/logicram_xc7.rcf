@@ -1,0 +1,10 @@
+# The same sixteen-word memory as `logicram_ice40` and `logicram_ecp5`,
+# below the block RAM threshold, on a family whose distributed RAM is
+# one bit wide and sixty-four deep: eight `RAM64X1D` side by side, one
+# per data bit, with the design's four address bits on the low four of
+# the six address pins and no read multiplexer at all. Reticle reads
+# that shape off the port list in the device file rather than from
+# anything written in Rust.
+set_io -io_standard LVCMOS33 clk W5
+set_io -io_standard LVCMOS33 we V17
+create_clock -name sys -period 10.0 clk

@@ -45,7 +45,7 @@ use reticle::ir::validate::validate;
 use reticle::source::SourceMap;
 
 /// The cases, each with the built-in device it targets.
-const CASES: [(&str, &str); 16] = [
+const CASES: [(&str, &str); 17] = [
     ("blinky_ice40", "ice40-hx1k-tq144"),
     ("ram_ice40", "ice40-hx1k-tq144"),
     ("logicram_ice40", "ice40-hx1k-tq144"),
@@ -61,6 +61,7 @@ const CASES: [(&str, &str); 16] = [
     ("ddr_ecp5", "ecp5-45f-CABGA381"),
     ("blinky_xc7", "xc7a35t-cpg236"),
     ("ram_xc7", "xc7a35t-cpg236"),
+    ("logicram_xc7", "xc7a35t-cpg236"),
     ("pll_xc7", "xc7a35t-cpg236"),
 ];
 
@@ -278,7 +279,7 @@ fn exports_are_acceptable_netlists() {
 /// the block RAM, the clock buffer, the LUTs and the flip-flops.
 #[test]
 fn every_layer_of_the_flow_is_exercised() {
-    let expected: [(&str, &[&str]); 16] = [
+    let expected: [(&str, &[&str]); 17] = [
         (
             "blinky_ice40",
             &["SB_LUT4", "SB_CARRY", "SB_IO", "SB_GB", "SB_DFFSR"],
@@ -313,6 +314,9 @@ fn every_layer_of_the_flow_is_exercised() {
             &["LUT6", "FDRE", "FDSE", "FDCE", "IBUF", "OBUF", "BUFG"],
         ),
         ("ram_xc7", &["RAMB18E1", "IBUF", "OBUF"]),
+        // The same memory below the block RAM threshold, on the
+        // family's own distributed RAM: one bit wide, sixty-four deep.
+        ("logicram_xc7", &["RAM64X1D", "IBUF", "OBUF"]),
         // A PLL whose feedback loop is closed outside the block.
         ("pll_xc7", &["PLLE2_BASE", "BUFG", "FDRE"]),
     ];

@@ -624,14 +624,15 @@ choice is pinned:
   reader, the placer's legalisation and each kind of constraint, the
   router on small fabrics with known-routable, known-congested and
   known-disconnected cases, and the bitstream round trips.
-- `tests/fpga_flow.rs`: sixteen cases through synthesis, primitive
+- `tests/fpga_flow.rs`: seventeen cases through synthesis, primitive
   mapping, LUT mapping and the export, with the mapped design, the
-  report, the diagnostics and every exported file as goldens. The three
+  report, the diagnostics and every exported file as goldens. The four
   `*_xc7` cases add the Vivado route: `blinky_xc7` for the LUTs, the
   flip-flops and the per-direction IO buffers, `ram_xc7` for the block
-  RAM's contents, address alignment and byte enables, and `pll_xc7` for
-  the feedback loop closed outside the block. Five further tests check
-  the 7-series claims one by one, and one checks that the nextpnr export
+  RAM's contents, address alignment and byte enables, `logicram_xc7` for
+  the distributed RAM below the block threshold, and `pll_xc7` for the
+  feedback loop closed outside the block. Five further tests check the
+  7-series claims one by one, and one checks that the nextpnr export
   declines this family by name.
 - `tests/fpga_pnr.rs`: the three iCE40 designs of `testdata/fpga/`
   through the whole flow, with `<name>.place`, `<name>.route` and

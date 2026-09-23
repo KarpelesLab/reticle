@@ -1,0 +1,16 @@
+device: xc7a35t-cpg236
+block RAM:
+  mem -> distributed LUT RAM, 8 x RAM64X1D (128 bits is below the 256 bit threshold)
+io:
+  clk (1 bits) -> IBUF at pin W5 as LVCMOS33
+  we (1 bits) -> IBUF at pin V17 as LVCMOS33
+  waddr (4 bits) -> IBUF
+  raddr (4 bits) -> IBUF
+  wdata (8 bits) -> IBUF
+  rdata (8 bits) -> OBUF
+logic:
+  0 LUTs, depth 0
+netlist:
+  18 x IBUF
+  8 x OBUF
+  8 x RAM64X1D

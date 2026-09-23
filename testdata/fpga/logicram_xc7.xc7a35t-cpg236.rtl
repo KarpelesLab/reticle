@@ -1,0 +1,135 @@
+top ram16
+
+module ram16
+  net %clk u1 wire
+  net %we u1 wire
+  net %waddr u4 wire
+  net %raddr u4 wire
+  net %wdata u8 wire
+  net %rdata u8 wire
+  net %mem$rd0_r0_b0_0 u1 wire
+  net %mem$rd0_r0_b1_0 u1 wire
+  net %mem$rd0_r0_b2_0 u1 wire
+  net %mem$rd0_r0_b3_0 u1 wire
+  net %mem$rd0_r0_b4_0 u1 wire
+  net %mem$rd0_r0_b5_0 u1 wire
+  net %mem$rd0_r0_b6_0 u1 wire
+  net %mem$rd0_r0_b7_0 u1 wire
+  net %clk$pad u1 wire
+  net %clk$in0 u1 wire
+  net %we$pad u1 wire
+  net %we$in0 u1 wire
+  net %waddr$pad u4 wire
+  net %waddr$in0 u1 wire
+  net %waddr$in1 u1 wire
+  net %waddr$in2 u1 wire
+  net %waddr$in3 u1 wire
+  net %raddr$pad u4 wire
+  net %raddr$in0 u1 wire
+  net %raddr$in1 u1 wire
+  net %raddr$in2 u1 wire
+  net %raddr$in3 u1 wire
+  net %wdata$pad u8 wire
+  net %wdata$in0 u1 wire
+  net %wdata$in1 u1 wire
+  net %wdata$in2 u1 wire
+  net %wdata$in3 u1 wire
+  net %wdata$in4 u1 wire
+  net %wdata$in5 u1 wire
+  net %wdata$in6 u1 wire
+  net %wdata$in7 u1 wire
+  net %rdata$pad u8 wire
+  net %rdata$pin0 u1 wire
+  net %rdata$pin1 u1 wire
+  net %rdata$pin2 u1 wire
+  net %rdata$pin3 u1 wire
+  net %rdata$pin4 u1 wire
+  net %rdata$pin5 u1 wire
+  net %rdata$pin6 u1 wire
+  net %rdata$pin7 u1 wire
+  port clk in %clk$pad
+  port we in %we$pad
+  port waddr in %waddr$pad
+  port raddr in %raddr$pad
+  port wdata in %wdata$pad
+  port rdata out %rdata$pad
+  assign %clk = %clk$in0
+  assign %we = %we$in0
+  assign %waddr = {%waddr$in3, %waddr$in2, %waddr$in1, %waddr$in0}
+  assign %raddr = {%raddr$in3, %raddr$in2, %raddr$in1, %raddr$in0}
+  assign %wdata = {%wdata$in7, %wdata$in6, %wdata$in5, %wdata$in4, %wdata$in3, %wdata$in2, %wdata$in1, %wdata$in0}
+  assign %rdata = {%mem$rd0_r0_b7_0, %mem$rd0_r0_b6_0, %mem$rd0_r0_b5_0, %mem$rd0_r0_b4_0, %mem$rd0_r0_b3_0, %mem$rd0_r0_b2_0, %mem$rd0_r0_b1_0, %mem$rd0_r0_b0_0}
+  assign %rdata$pad = {%rdata$pin7, %rdata$pin6, %rdata$pin5, %rdata$pin4, %rdata$pin3, %rdata$pin2, %rdata$pin1, %rdata$pin0}
+  attr memory = "mem"
+  cell mem$dpr0_0_0 blackbox RAM64X1D (WCLK=%clk, WE=%we, A0=%waddr[0:0], A1=%waddr[1:1], A2=%waddr[2:2], A3=%waddr[3:3], A4=1'd0, A5=1'd0, DPRA0=%raddr[0:0], DPRA1=%raddr[1:1], DPRA2=%raddr[2:2], DPRA3=%raddr[3:3], DPRA4=1'd0, DPRA5=1'd0, D=%wdata[0:0]) -> (DPO=%mem$rd0_r0_b0_0)
+  attr memory = "mem"
+  cell mem$dpr0_0_1 blackbox RAM64X1D (WCLK=%clk, WE=%we, A0=%waddr[0:0], A1=%waddr[1:1], A2=%waddr[2:2], A3=%waddr[3:3], A4=1'd0, A5=1'd0, DPRA0=%raddr[0:0], DPRA1=%raddr[1:1], DPRA2=%raddr[2:2], DPRA3=%raddr[3:3], DPRA4=1'd0, DPRA5=1'd0, D=%wdata[1:1]) -> (DPO=%mem$rd0_r0_b1_0)
+  attr memory = "mem"
+  cell mem$dpr0_0_2 blackbox RAM64X1D (WCLK=%clk, WE=%we, A0=%waddr[0:0], A1=%waddr[1:1], A2=%waddr[2:2], A3=%waddr[3:3], A4=1'd0, A5=1'd0, DPRA0=%raddr[0:0], DPRA1=%raddr[1:1], DPRA2=%raddr[2:2], DPRA3=%raddr[3:3], DPRA4=1'd0, DPRA5=1'd0, D=%wdata[2:2]) -> (DPO=%mem$rd0_r0_b2_0)
+  attr memory = "mem"
+  cell mem$dpr0_0_3 blackbox RAM64X1D (WCLK=%clk, WE=%we, A0=%waddr[0:0], A1=%waddr[1:1], A2=%waddr[2:2], A3=%waddr[3:3], A4=1'd0, A5=1'd0, DPRA0=%raddr[0:0], DPRA1=%raddr[1:1], DPRA2=%raddr[2:2], DPRA3=%raddr[3:3], DPRA4=1'd0, DPRA5=1'd0, D=%wdata[3:3]) -> (DPO=%mem$rd0_r0_b3_0)
+  attr memory = "mem"
+  cell mem$dpr0_0_4 blackbox RAM64X1D (WCLK=%clk, WE=%we, A0=%waddr[0:0], A1=%waddr[1:1], A2=%waddr[2:2], A3=%waddr[3:3], A4=1'd0, A5=1'd0, DPRA0=%raddr[0:0], DPRA1=%raddr[1:1], DPRA2=%raddr[2:2], DPRA3=%raddr[3:3], DPRA4=1'd0, DPRA5=1'd0, D=%wdata[4:4]) -> (DPO=%mem$rd0_r0_b4_0)
+  attr memory = "mem"
+  cell mem$dpr0_0_5 blackbox RAM64X1D (WCLK=%clk, WE=%we, A0=%waddr[0:0], A1=%waddr[1:1], A2=%waddr[2:2], A3=%waddr[3:3], A4=1'd0, A5=1'd0, DPRA0=%raddr[0:0], DPRA1=%raddr[1:1], DPRA2=%raddr[2:2], DPRA3=%raddr[3:3], DPRA4=1'd0, DPRA5=1'd0, D=%wdata[5:5]) -> (DPO=%mem$rd0_r0_b5_0)
+  attr memory = "mem"
+  cell mem$dpr0_0_6 blackbox RAM64X1D (WCLK=%clk, WE=%we, A0=%waddr[0:0], A1=%waddr[1:1], A2=%waddr[2:2], A3=%waddr[3:3], A4=1'd0, A5=1'd0, DPRA0=%raddr[0:0], DPRA1=%raddr[1:1], DPRA2=%raddr[2:2], DPRA3=%raddr[3:3], DPRA4=1'd0, DPRA5=1'd0, D=%wdata[6:6]) -> (DPO=%mem$rd0_r0_b6_0)
+  attr memory = "mem"
+  cell mem$dpr0_0_7 blackbox RAM64X1D (WCLK=%clk, WE=%we, A0=%waddr[0:0], A1=%waddr[1:1], A2=%waddr[2:2], A3=%waddr[3:3], A4=1'd0, A5=1'd0, DPRA0=%raddr[0:0], DPRA1=%raddr[1:1], DPRA2=%raddr[2:2], DPRA3=%raddr[3:3], DPRA4=1'd0, DPRA5=1'd0, D=%wdata[7:7]) -> (DPO=%mem$rd0_r0_b7_0)
+  attr port = "clk"
+  attr pin = "W5"
+  attr io_standard = "LVCMOS33"
+  cell clk$io0 blackbox IBUF (I=%clk$pad) -> (O=%clk$in0)
+  attr port = "we"
+  attr pin = "V17"
+  attr io_standard = "LVCMOS33"
+  cell we$io0 blackbox IBUF (I=%we$pad) -> (O=%we$in0)
+  attr port = "waddr"
+  cell waddr$io0 blackbox IBUF (I=%waddr$pad[0:0]) -> (O=%waddr$in0)
+  attr port = "waddr"
+  cell waddr$io1 blackbox IBUF (I=%waddr$pad[1:1]) -> (O=%waddr$in1)
+  attr port = "waddr"
+  cell waddr$io2 blackbox IBUF (I=%waddr$pad[2:2]) -> (O=%waddr$in2)
+  attr port = "waddr"
+  cell waddr$io3 blackbox IBUF (I=%waddr$pad[3:3]) -> (O=%waddr$in3)
+  attr port = "raddr"
+  cell raddr$io0 blackbox IBUF (I=%raddr$pad[0:0]) -> (O=%raddr$in0)
+  attr port = "raddr"
+  cell raddr$io1 blackbox IBUF (I=%raddr$pad[1:1]) -> (O=%raddr$in1)
+  attr port = "raddr"
+  cell raddr$io2 blackbox IBUF (I=%raddr$pad[2:2]) -> (O=%raddr$in2)
+  attr port = "raddr"
+  cell raddr$io3 blackbox IBUF (I=%raddr$pad[3:3]) -> (O=%raddr$in3)
+  attr port = "wdata"
+  cell wdata$io0 blackbox IBUF (I=%wdata$pad[0:0]) -> (O=%wdata$in0)
+  attr port = "wdata"
+  cell wdata$io1 blackbox IBUF (I=%wdata$pad[1:1]) -> (O=%wdata$in1)
+  attr port = "wdata"
+  cell wdata$io2 blackbox IBUF (I=%wdata$pad[2:2]) -> (O=%wdata$in2)
+  attr port = "wdata"
+  cell wdata$io3 blackbox IBUF (I=%wdata$pad[3:3]) -> (O=%wdata$in3)
+  attr port = "wdata"
+  cell wdata$io4 blackbox IBUF (I=%wdata$pad[4:4]) -> (O=%wdata$in4)
+  attr port = "wdata"
+  cell wdata$io5 blackbox IBUF (I=%wdata$pad[5:5]) -> (O=%wdata$in5)
+  attr port = "wdata"
+  cell wdata$io6 blackbox IBUF (I=%wdata$pad[6:6]) -> (O=%wdata$in6)
+  attr port = "wdata"
+  cell wdata$io7 blackbox IBUF (I=%wdata$pad[7:7]) -> (O=%wdata$in7)
+  attr port = "rdata"
+  cell rdata$io0 blackbox OBUF (I=%rdata[0:0]) -> (O=%rdata$pin0)
+  attr port = "rdata"
+  cell rdata$io1 blackbox OBUF (I=%rdata[1:1]) -> (O=%rdata$pin1)
+  attr port = "rdata"
+  cell rdata$io2 blackbox OBUF (I=%rdata[2:2]) -> (O=%rdata$pin2)
+  attr port = "rdata"
+  cell rdata$io3 blackbox OBUF (I=%rdata[3:3]) -> (O=%rdata$pin3)
+  attr port = "rdata"
+  cell rdata$io4 blackbox OBUF (I=%rdata[4:4]) -> (O=%rdata$pin4)
+  attr port = "rdata"
+  cell rdata$io5 blackbox OBUF (I=%rdata[5:5]) -> (O=%rdata$pin5)
+  attr port = "rdata"
+  cell rdata$io6 blackbox OBUF (I=%rdata[6:6]) -> (O=%rdata$pin6)
+  attr port = "rdata"
+  cell rdata$io7 blackbox OBUF (I=%rdata[7:7]) -> (O=%rdata$pin7)
+end
