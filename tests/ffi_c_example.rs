@@ -78,7 +78,21 @@ fn system_libraries() -> Vec<&'static str> {
             "-ladvapi32",
         ]
     } else if cfg!(target_vendor = "apple") {
-        vec!["-lpthread", "-ldl", "-lm", "-framework", "CoreFoundation"]
+        // `IOKit` is macOS's USB stack, which `rawusb` calls and which
+        // the `program` feature therefore pulls into the archive. A C
+        // program linking a Rust staticlib has to name the native
+        // libraries itself; nothing in the archive asks for them. Adding
+        // a feature whose platform backend calls a system framework means
+        // adding it here, or this test goes red on that platform only.
+        vec![
+            "-lpthread",
+            "-ldl",
+            "-lm",
+            "-framework",
+            "CoreFoundation",
+            "-framework",
+            "IOKit",
+        ]
     } else {
         vec!["-lpthread", "-ldl", "-lm"]
     }
