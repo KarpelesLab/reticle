@@ -363,6 +363,25 @@ FPGA:
       `docs/fpga-xray.md` says what is established, what the fabric
       measures, and what remains before an LED could light. NOTHING
       PRODUCED BY ANY OF IT HAS BEEN LOADED INTO A PART.
+- [x] The other half of that sentence: a **JTAG programmer**, so a
+      bitstream can be loaded into a board without a vendor tool.
+      `reticle program <file.bit>` drives an FTDI FT2232H over USB and
+      configures a Xilinx 7-series part — the FTDI MPSSE encoding
+      (AN_108), the IEEE 1149.1 TAP state machine and the UG470
+      configuration sequence are pure, I/O-free library code in
+      `src/program`, tested against a model TAP with no hardware, and
+      only the transport touches a device. It is behind the `program`
+      feature, off by default because it is the one feature with a
+      dependency (`rawusb`), and `cli` does not imply it. SRAM only:
+      there is no flash programming in the crate and a power cycle
+      undoes every attempt. **This is the one part of Reticle that has
+      run on silicon**: a Digilent Basys 3 loaded with Project X-Ray's
+      own Vivado-built harness bitstream reads back the right IDCODE and
+      asserts DONE, and the same file with bits flipped reports
+      CRC_ERROR instead. `docs/programming.md` says what that does and
+      does not establish. It is independent of the line above: what is
+      verified is the programmer, against a file known to be good, not
+      anything this crate wrote.
 
 ASIC:
 - [x] Liberty (`.lib`) parser: cells, pins, functions, timing tables.

@@ -97,12 +97,38 @@ reticle fpga --device xc7a35t-cpg236 --chipdb ~/prjxray-db \
     --bitstream sw_led.bit examples/basys3/sw_led.v
 ```
 
-Nothing in the 7-series support has been run on silicon, and the
-bitstream that command writes is structurally valid and **configures
+The bitstream that command writes is structurally valid and **configures
 nothing** — it is not routed, for a reason
 [`docs/fpga-xray.md`](docs/fpga-xray.md) sets out along with everything
 else that is and is not established. `docs/fpga.md` says the same for
 the rest of the 7-series support.
+
+### Loading one into a board
+
+`reticle program` puts a bitstream into an attached Xilinx 7-series part
+over JTAG, through the FT2232H a Digilent Basys 3 carries on board, with
+no vendor tool and nothing else installed:
+
+```sh
+cargo build --features cli,program
+reticle program --probe        # read IDCODE and status, write nothing
+reticle program design.bit
+```
+
+It writes the part's volatile configuration memory only; a power cycle
+undoes it, and there is no flash programming in the crate at all. The
+FTDI MPSSE encoding, the IEEE 1149.1 TAP state machine and the UG470
+configuration sequence are pure library code in `src/program` with no
+I/O and no `unsafe`, tested against a model TAP rather than against a
+board; only the transport touches a device. It is behind the `program`
+feature, off by default, because it is the one feature with a dependency
+(`rawusb`, a sibling Karpeles Lab crate with none of its own), so
+`cargo add reticle` still resolves to nothing.
+
+This is the one part of Reticle that has been run on real silicon: a
+Basys 3 loaded with Project X-Ray's own Vivado-built harness bitstream
+asserts `DONE`. [`docs/programming.md`](docs/programming.md) says exactly
+what that does and does not establish.
 
 Sources of one language are elaborated together, so a testbench and the
 modules it instantiates go on one command line. A design already in the
