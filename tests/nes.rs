@@ -28,6 +28,19 @@
 //! that every one of them is the colour the palette gives the console
 //! pixel two screen columns wide underneath it.
 //!
+//! The console has a second video path and a second board, and
+//! `the_frame_comes_out_of_the_vga_pins` is the two halves joined: the
+//! demo's own frame, through the frame buffer and the doubling and
+//! `vga_out`, read back off the twelve colour pins and the two sync
+//! pins of a Digilent Basys 3. It can be one simulation where the DVI
+//! path could not be, because VGA needs no clock at five times the
+//! pixel rate. What it compares against is the *truncated* palette:
+//! the board renders four bits a channel, so the test throws away the
+//! low four bits of the reference colours before comparing, and
+//! `four_bits_a_channel_merges_one_pair_of_the_palette` says what that
+//! costs — 54 distinct colours become 53, and the pair that merges is
+//! $09 and $0B.
+//!
 //! | Test | What it proves |
 //! |------|----------------|
 //! | `demo_hex_is_the_assembled_source` | the checked-in program image is `sw/demo.s` assembled by the opcode matrix in `tests/mos6502_asm`, with the three vectors where the part reads them |
@@ -37,12 +50,16 @@
 //! | `the_console_synthesises_without_errors_or_latches` | generic synthesis reports no error, no warning and no latch, and both ROMs hold what the hex files say |
 //! | `the_frame_comes_out_of_the_video_port` | two frames of the demo, every pixel of the second compared against an independently computed framebuffer |
 //! | `the_screen_doubles_the_console_onto_the_tmds_lanes` | and the other half of the chain: a painted frame buffer read back off the four output pins, TMDS symbols decoded, doubled and centred with a black border |
+//! | `the_frame_comes_out_of_the_vga_pins` | both halves at once on the other board: every one of the 307,200 pixels of a 640 x 480 frame decoded off `vga_out`'s twelve colour pins, against the same model doubled and truncated to four bits a channel, with the syncs read off their own pins on every line |
+//! | `the_palette_is_the_one_the_tmds_test_reads_by_hand` | the two transcriptions of `ppu_palette`'s table in this file agree |
+//! | `four_bits_a_channel_merges_one_pair_of_the_palette` | what the Basys 3's four bits a channel cost the palette, as a number and a pair |
 //! | `sprite_zero_hits_on_the_dot_the_pixels_meet` | the flag goes up on exactly the dot where sprite zero's opaque pixel meets an opaque background pixel, and not a dot earlier |
 //! | `nine_sprites_on_a_line_set_the_overflow_flag` | eight sprites on one line and nine on the next, and the line the flag goes up on |
 //! | `the_write_latch_is_shared_by_2005_and_2006` | the single `w` toggle, the interleaving it allows, and a read of $2002 putting it back |
 //! | `the_data_port_reads_one_access_behind_and_steps_by_what_2000_says` | a $2007 read gives the byte fetched for the previous one, the palette is not buffered and $3F10 is $3F00, and $2000's increment and nametable bits |
 //! | `oam_dma_copies_a_page_and_stops_the_processor` | $4014 costs the documented 513 processor cycles and the processor retires nothing in them |
 //! | `the_console_maps_onto_the_ecp5_and_exports_for_nextpnr` | the ECP5 flow fits it, every cell a device primitive, every memory in block RAM, and the JSON and LPF `nextpnr-ecp5` reads — and the block RAM arithmetic that says why the HX8K of the other two examples is out |
+//! | `the_console_maps_onto_the_artix7_for_the_basys3` | the 7-series flow fits `nes_basys3` on the Basys 3's XC7A35T with no PLL and no DDR register anywhere, and writes the netlist, the XDC and the Vivado script |
 //! | `reticle_build_builds_the_project` | the same through the binary |
 //! | `reticle_sim_runs_the_testbench` | and the picture comes out of `reticle sim`, hashed by a testbench that watches the same pins |
 //! | `reticle_fpga_exports_the_cartridge_with_the_program_in_it` | and out of `reticle fpga` |

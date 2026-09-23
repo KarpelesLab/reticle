@@ -596,12 +596,17 @@ A fourth system takes the same processor somewhere it has to be right
 about more than arithmetic: `examples/nes` is an NES-compatible console,
 `mos6502` with `DECIMAL_MODE = 0` — which is what the processor in an
 NES is — plus a new library block, `ip/ppu2c02`, and `dvi_tx` for the
-picture, on an ECP5 45F at 5409 `LUT4` and 39 `DP16KD`. It runs a demo
-written for the example and contains no part of any commercial
-cartridge. `tests/nes.rs` compares every one of a frame's 61,440 pixels
-against a frame buffer computed from the nametable, the tiles and the
-palette by the documented rules, and building it found two defects in
-the FPGA flow, both fixed with a regression test each.
+picture, on an ECP5 45F at 5409 `LUT4` and 39 `DP16KD`, or `vga_out` on
+a Digilent Basys 3 at 3786 `LUT6` and 39 `RAMB18E1` with no PLL and no
+DDR register. It runs a demo written for the example and contains no
+part of any commercial cartridge. `tests/nes.rs` compares every one of a
+frame's 61,440 pixels against a frame buffer computed from the
+nametable, the tiles and the palette by the documented rules, and a
+second test reads a whole 640 x 480 frame back off the twelve VGA colour
+pins and the two sync pins, against the same model with the palette
+truncated to the board's four bits a channel — which merges exactly one
+pair of the sixty-four entries. Building it found two defects in the
+FPGA flow, both fixed with a regression test each.
 
 ## Phase 9: developer experience
 

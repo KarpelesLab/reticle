@@ -363,7 +363,10 @@ is the part that matters:
   ramp on each channel is read back at four, eight and one bits a
   channel: the pins carry the **top** bits of each byte, since the block
   truncates rather than rounds. `ip/vga_out/README.md` says why, and what
-  it costs a picture. `examples/apple2` builds on it for the Basys 3.
+  it costs a picture. `examples/apple2` and `examples/nes` both build on
+  it for the Basys 3, and the NES is where the truncation shows: its
+  palette is in colour, and `examples/nes/README.md` names the one pair
+  of its sixty-four entries that stops being two at four bits a channel.
 - **`eth_mac_rgmii`** — the transmitter's pins looped into the
   receiver's, as the RMII test does, through the DDR registers modelled
   as the backend builds them: what the output registers take at one edge

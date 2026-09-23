@@ -116,10 +116,13 @@ from the manifest to the files `nextpnr` reads:
 - [`examples/nes`](examples/nes) — an NES-compatible console around
   [`ip/mos6502`](ip/mos6502) with `DECIMAL_MODE = 0`, which is what the
   processor in an NES is, plus [`ip/ppu2c02`](ip/ppu2c02) and
-  [`ip/dvi_tx`](ip/dvi_tx). It runs a demo written for the example and
-  contains no part of any commercial cartridge; the test compares every
-  one of a frame's 61,440 pixels against a frame buffer computed from the
-  documentation.
+  [`ip/dvi_tx`](ip/dvi_tx) on an ECP5 or [`ip/vga_out`](ip/vga_out) on a
+  Digilent Basys 3. It runs a demo written for the example and contains
+  no part of any commercial cartridge; the test compares every one of a
+  frame's 61,440 pixels against a frame buffer computed from the
+  documentation, and a second one reads a whole 640 x 480 frame back off
+  the VGA pins with the palette truncated to the board's four bits a
+  channel.
 
 [`docs/writing-a-cpu.md`](docs/writing-a-cpu.md) is the guide behind the
 processors in them: how to package a processor as IP, from the manifest
