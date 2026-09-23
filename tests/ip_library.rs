@@ -261,6 +261,11 @@ const VARIANTS: &[Variant] = &[
         params: &[("MODE", "0")],
     },
     Variant {
+        package: "vga_out",
+        top: "vga_out",
+        params: &[("MODE", "0"), ("BPC", "4")],
+    },
+    Variant {
         package: "eth_mac_rgmii",
         top: "eth_mac_rgmii",
         params: &[("IFG_CYCLES", "12"), ("TX_DELAY", "80"), ("RX_DELAY", "80")],
@@ -7762,6 +7767,302 @@ fn dvi_tx_serialises_what_it_encodes() {
         3 * 2 * mode.h[0],
         "every visible pixel of two lines, on three lanes"
     );
+}
+
+// ---------------------------------------------------------------------------
+// vga_out
+// ---------------------------------------------------------------------------
+
+/// `vga_out` at one mode and one colour width, out of reset, with every
+/// clock edge a pixel.
+///
+/// The five output pins are registered, so they run one pixel behind the
+/// raster: a `tick` passes the pixel `de`, `x` and `y` were naming, and
+/// afterwards the pins carry *that* pixel's colour and syncs. Every test
+/// below reads the fetch side before the tick and the pins after it,
+/// which is why neither ever has to name the delay again.
+struct Vga<'d> {
+    sim: Simulator<'d>,
+    clk: NetHandle,
+    de: NetHandle,
+    x: NetHandle,
+    y: NetHandle,
+    colour: [NetHandle; 3],
+    out: [NetHandle; 3],
+    hsync: NetHandle,
+    vsync: NetHandle,
+}
+
+impl<'d> Vga<'d> {
+    fn new(design: &'d Design) -> Vga<'d> {
+        let mut sim = simulate(design, "vga_out");
+        let clk = top_net(&sim, "clk");
+        let rst_n = top_net(&sim, "rst_n");
+        let pix_en = top_net(&sim, "pix_en");
+        let de = top_net(&sim, "de");
+        let x = top_net(&sim, "x");
+        let y = top_net(&sim, "y");
+        let colour = [
+            top_net(&sim, "r"),
+            top_net(&sim, "g"),
+            top_net(&sim, "b"),
+        ];
+        let out = [
+            top_net(&sim, "vga_r"),
+            top_net(&sim, "vga_g"),
+            top_net(&sim, "vga_b"),
+        ];
+        let hsync = top_net(&sim, "vga_hsync");
+        let vsync = top_net(&sim, "vga_vsync");
+        // One pixel per clock: the block takes its pixel rate as an
+        // enable, so a test that wants every edge to be a pixel ties it
+        // high, exactly as a design on a true pixel clock would.
+        sim.set(pix_en, bit(true));
+        reset(&mut sim, clk, rst_n);
+        Vga {
+            sim,
+            clk,
+            de,
+            x,
+            y,
+            colour,
+            out,
+            hsync,
+            vsync,
+        }
+    }
+
+    /// The colour offered for the pixel the raster is naming now.
+    fn drive(&mut self, rgb: [u64; 3]) {
+        for (net, value) in self.colour.iter().zip(rgb) {
+            self.sim.set(*net, word(8, value));
+        }
+    }
+
+    /// Passes one pixel.
+    fn tick(&mut self) {
+        cycle(&mut self.sim, self.clk, HALF);
+    }
+
+    /// What the three colour pins carry.
+    fn pins(&self) -> [u64; 3] {
+        self.out.map(|net| get_u64(&self.sim, net))
+    }
+}
+
+/// `vga_out` built for one mode, with the Basys 3's four bits a channel.
+fn vga_design(mode: &str, bpc: &str) -> Design {
+    design_of("vga_out", "vga_out", &[("MODE", mode), ("BPC", bpc)])
+}
+
+/// The raster on the pins is the mode's raster.
+///
+/// The numbers come from `VIDEO_MODES` above, which is VESA's table
+/// typed out, and not from the RTL: 640 active pixels, 16 front porch,
+/// 96 sync and 48 back porch, and 480 lines with 10, 2 and 33. Every one
+/// of the 420 000 pixel slots of a frame is checked — `de`, `x` and `y`
+/// on the fetch side, hsync and vsync on the pins a monitor would see —
+/// and the frame is followed round to the top left pixel of the next.
+#[test]
+fn vga_out_draws_the_raster_of_its_mode() {
+    let m = &VIDEO_MODES[0];
+    let design = vga_design(m.mode, "4");
+    let mut vga = Vga::new(&design);
+    let h_total: u64 = m.h.iter().sum();
+    let v_total: u64 = m.v.iter().sum();
+    let active = |level: bool| level == m.sync_high;
+
+    let mut visible = 0u64;
+    let mut hsync_pixels = 0u64;
+    let mut vsync_lines = BTreeSet::new();
+    for line in 0..v_total {
+        for pixel in 0..h_total {
+            let on = high(&vga.sim, vga.de);
+            let want = pixel < m.h[0] && line < m.v[0];
+            assert_eq!(on, want, "de at ({pixel}, {line})");
+            if on {
+                visible += 1;
+                assert_eq!(get_u64(&vga.sim, vga.x), pixel, "x at ({pixel}, {line})");
+                assert_eq!(get_u64(&vga.sim, vga.y), line, "y at ({pixel}, {line})");
+            }
+            vga.tick();
+
+            // The pins now carry the pixel that just went by.
+            let h_sync = pixel >= m.h[0] + m.h[1] && pixel < m.h[0] + m.h[1] + m.h[2];
+            assert_eq!(
+                active(high(&vga.sim, vga.hsync)),
+                h_sync,
+                "hsync at ({pixel}, {line})"
+            );
+            if h_sync && line == 0 {
+                hsync_pixels += 1;
+            }
+            let v_sync = line >= m.v[0] + m.v[1] && line < m.v[0] + m.v[1] + m.v[2];
+            assert_eq!(
+                active(high(&vga.sim, vga.vsync)),
+                v_sync,
+                "vsync at ({pixel}, {line})"
+            );
+            if v_sync {
+                vsync_lines.insert(line);
+            }
+        }
+    }
+    assert_eq!(visible, m.h[0] * m.v[0], "visible pixels");
+    assert_eq!(hsync_pixels, m.h[2], "hsync width");
+    assert_eq!(vsync_lines.len() as u64, m.v[2], "vsync lines");
+    assert_eq!(get_u64(&vga.sim, vga.x), 0, "the next frame starts at x = 0");
+    assert_eq!(get_u64(&vga.sim, vga.y), 0, "the next frame starts at y = 0");
+}
+
+/// The colour pins are black everywhere outside the active area.
+///
+/// This is the one behaviour a VGA block has that a DVI block does not
+/// need: a monitor takes its black level from the back porch, so colour
+/// driven during blanking makes it lose sync or drag that level until
+/// the picture rolls. The test drives white into *every* pixel slot of a
+/// whole frame, blanking and all, so nothing but the block's own gate
+/// can keep it off the pins, and counts the two intervals separately —
+/// 76 800 pixels of horizontal blanking on the visible lines and 36 000
+/// on the lines of the vertical blanking — so a gate that caught only
+/// one of them would fail here.
+#[test]
+fn vga_out_forces_black_through_both_blanking_intervals() {
+    let m = &VIDEO_MODES[0];
+    let design = vga_design(m.mode, "4");
+    let mut vga = Vga::new(&design);
+    let h_total: u64 = m.h.iter().sum();
+    let v_total: u64 = m.v.iter().sum();
+    // Four bits a channel, so full scale on the ladder is 15.
+    let white = [15u64; 3];
+    let black = [0u64; 3];
+    vga.drive([0xFF; 3]);
+
+    let mut lit = 0u64;
+    let mut blanked_across = 0u64;
+    let mut blanked_below = 0u64;
+    for line in 0..v_total {
+        for pixel in 0..h_total {
+            let visible = pixel < m.h[0] && line < m.v[0];
+            vga.tick();
+            assert_eq!(
+                vga.pins(),
+                if visible { white } else { black },
+                "the colour at ({pixel}, {line})"
+            );
+            if visible {
+                lit += 1;
+            } else if line < m.v[0] {
+                blanked_across += 1;
+            } else {
+                blanked_below += 1;
+            }
+        }
+    }
+    assert_eq!(lit, m.h[0] * m.v[0], "the picture");
+    assert_eq!(
+        blanked_across,
+        m.v[0] * (h_total - m.h[0]),
+        "the horizontal blanking of every visible line"
+    );
+    assert_eq!(
+        blanked_below,
+        (v_total - m.v[0]) * h_total,
+        "every line of the vertical blanking"
+    );
+}
+
+/// Each mode's syncs pulse the way that mode says, at the pins.
+///
+/// Mode 0's are negative and modes 1 and 2's are positive, which is
+/// `video_timing`'s rule and is not restated in `vga_out` except as the
+/// level its output register resets to. This test pins both statements
+/// to the same value: the pin's level out of reset, before any pixel has
+/// gone by, must be the level it holds through the back porch of a real
+/// line, and the pulse in between must be the other one, for exactly as
+/// many pixels as the mode's sync is wide.
+///
+/// It costs one line per mode rather than one frame, so vsync is checked
+/// here only for staying idle through the picture; `vga_out` passes it
+/// through the same register as hsync, and
+/// `vga_out_draws_the_raster_of_its_mode` follows it through a whole
+/// 640x480 frame.
+#[test]
+fn vga_out_syncs_idle_at_the_polarity_of_the_mode() {
+    for m in &VIDEO_MODES {
+        let design = vga_design(m.mode, "4");
+        let mut vga = Vga::new(&design);
+        let idle = !m.sync_high;
+        assert_eq!(
+            high(&vga.sim, vga.hsync),
+            idle,
+            "mode {}: hsync out of reset",
+            m.mode
+        );
+        assert_eq!(
+            high(&vga.sim, vga.vsync),
+            idle,
+            "mode {}: vsync out of reset",
+            m.mode
+        );
+
+        let h_total: u64 = m.h.iter().sum();
+        let mut pulse = 0u64;
+        for pixel in 0..h_total {
+            vga.tick();
+            let pulsing = pixel >= m.h[0] + m.h[1] && pixel < m.h[0] + m.h[1] + m.h[2];
+            assert_eq!(
+                high(&vga.sim, vga.hsync),
+                if pulsing { m.sync_high } else { idle },
+                "mode {}: hsync at pixel {pixel}",
+                m.mode
+            );
+            if pulsing {
+                pulse += 1;
+            }
+            assert_eq!(
+                high(&vga.sim, vga.vsync),
+                idle,
+                "mode {}: vsync moved on line 0",
+                m.mode
+            );
+        }
+        assert_eq!(pulse, m.h[2], "mode {}: hsync width", m.mode);
+    }
+}
+
+/// A known pattern in, the pixels out, read off the pins.
+///
+/// Sixty-four consecutive pixels of the first visible line, each a
+/// different colour, with a different ramp on each channel so that two
+/// channels swapped anywhere between the port and the pin would show.
+/// The same pattern is put through three colour widths: the Basys 3's
+/// four bits a channel, the eight of a board with a real DAC, and one,
+/// which is a board with no ladder at all.
+///
+/// What the pins must carry is the **top** `BPC` bits of each byte:
+/// `vga_out` truncates rather than rounds, so `8'h00` is 0 and `8'hFF`
+/// is full scale at every width, and both of those appear in the ramps
+/// below at pixel 0.
+#[test]
+fn vga_out_truncates_the_colour_to_the_boards_width() {
+    for (bpc, width) in [(4u32, "4"), (8, "8"), (1, "1")] {
+        let design = vga_design("0", width);
+        let mut vga = Vga::new(&design);
+        for pixel in 0..64u64 {
+            assert!(high(&vga.sim, vga.de), "pixel {pixel} of line 0 is visible");
+            assert_eq!(get_u64(&vga.sim, vga.x), pixel);
+            assert_eq!(get_u64(&vga.sim, vga.y), 0);
+            let rgb = [pixel * 4, 255 - pixel * 4, pixel * 3 + 7];
+            vga.drive(rgb);
+            vga.tick();
+            assert_eq!(
+                vga.pins(),
+                rgb.map(|v| v >> (8 - bpc)),
+                "pixel {pixel} at {bpc} bit(s) a channel"
+            );
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------

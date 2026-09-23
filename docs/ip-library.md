@@ -4,7 +4,7 @@ The first-party half of phase 8. [`docs/ip.md`](ip.md) describes the
 machinery — the manifest formats, the resolver, the bus model, the black
 boxes — and [`docs/writing-a-cpu.md`](writing-a-cpu.md) describes how to
 package a processor, using this library's two as the worked examples.
-This document describes the **blocks**: twenty-two pieces of HDL
+This document describes the **blocks**: twenty-three pieces of HDL
 that drop into a design the way a crate drops into a Rust program, each
 with a manifest, a Rust co-simulation test, and a resource footprint that
 was measured rather than guessed.
@@ -37,6 +37,7 @@ ip/
   uart/          reticle.ip  rtl/uart_tx.v  rtl/uart_rx.v  rtl/uart.v
   usb_device_fs/ reticle.ip  rtl/usb_fs_rx.v  rtl/usb_fs_tx.v  rtl/usb_device_fs.v
   usb_device_fs_pll/ reticle.ip  rtl/usb_device_fs_pll.v
+  vga_out/       reticle.ip  README.md  rtl/vga_out.v
 ```
 
 `ip/` is in the `exclude` list of `Cargo.toml`, so the published `.crate`
@@ -69,6 +70,7 @@ It is distributed as part of the repository instead.
 | `hyperram_ctrl` | `hyperram_ctrl` | HyperBus controller: command-address, fixed or variable latency, DDR data and RWDS, register access | — |
 | `dvi_tx` | `dvi_tx`, `tmds_encoder`, `video_timing` | DVI output: 640x480, 800x600 and 1280x720 timings, TMDS 8b/10b with DC balance, 10:1 serialisation through DDR outputs | — |
 | `dvi_tx_pll` | `dvi_tx_pll` | `dvi_tx` with its five-times clock from the device's PLL | `dvi_tx` |
+| `vga_out` | `vga_out` | VGA output: the same three timings, colour truncated to the board's bits per channel, blanking forced to black, syncs at the mode's polarity | `dvi_tx` |
 | `eth_mac_rgmii` | `eth_mac_rgmii` | gigabit Ethernet MAC over RGMII: the RMII MAC's frame logic an octet a cycle behind DDR IO, optional IO delays | `eth_mac_rmii` |
 | `usb_device_fs` | `usb_device_fs`, `usb_fs_rx`, `usb_fs_tx` | USB full-speed device: NRZI, bit stuffing, SYNC and EOP, CRC5 and CRC16 checked, a control endpoint that enumerates | — |
 | `usb_device_fs_pll` | `usb_device_fs_pll` | `usb_device_fs` with its 48 MHz from the device's PLL and a 12 MHz board clock | `usb_device_fs` |
@@ -345,6 +347,23 @@ is the part that matters:
   `dvi_tx_pll` is taken through the FPGA flow for both families, which
   must build the PLL from the 25 MHz reference within 1 % of 126 MHz and
   put every lane through a DDR register on the PLL's clock.
+- **`vga_out`** — the same raster with none of the DVI machinery, for a
+  board with a resistor ladder and no TMDS connector. It instantiates
+  `dvi_tx`'s `video_timing` through a `depends` line rather than copying
+  it, so there is one statement of the timings and the sync polarities
+  for both video paths. A whole 640 x 480 frame is walked at the pins
+  against VESA's numbers typed into the test; a second whole frame is
+  walked with white driven into *every* pixel slot, which must reach the
+  pins in the picture and nowhere else — 76 800 blanked pixels across the
+  visible lines and 36 000 below them, counted separately, because a
+  monitor takes its black level from the back porch and colour during
+  blanking makes it roll. Each of the three modes' syncs are checked at
+  the pins to idle at that mode's polarity and to pulse the other way for
+  exactly the mode's sync width. And a 64-pixel pattern with a different
+  ramp on each channel is read back at four, eight and one bits a
+  channel: the pins carry the **top** bits of each byte, since the block
+  truncates rather than rounds. `ip/vga_out/README.md` says why, and what
+  it costs a picture. `examples/apple2` builds on it for the Basys 3.
 - **`eth_mac_rgmii`** — the transmitter's pins looped into the
   receiver's, as the RMII test does, through the DDR registers modelled
   as the backend builds them: what the output registers take at one edge
@@ -642,6 +661,10 @@ exactly what this table is for.
 | `dvi_tx_pll` | `dvi_tx_pll` | MODE=0 | LUT6 | 18 x dff, 363 x lut | 7 |
 | `dvi_tx_pll` | `dvi_tx_pll` | MODE=0 | iCE40 HX1K | 187 x SB_CARRY, 72 x SB_DFFER, 52 x SB_DFFR, 1 x SB_GB, 57 x SB_IO, 569 x SB_LUT4, 1 x SB_PLL40_CORE | 8 |
 | `dvi_tx_pll` | `dvi_tx_pll` | MODE=0 | ECP5 45F | 1 x DCCA, 1 x EHXPLLL, 480 x LUT4, 4 x ODDRX1F, 124 x TRELLIS_FF, 57 x TRELLIS_IO | 9 |
+| `vga_out` | `vga_out` | MODE=0, BPC=4 | LUT4 | 7 x dff, 80 x lut | 4 |
+| `vga_out` | `vga_out` | MODE=0, BPC=4 | LUT6 | 7 x dff, 68 x lut | 3 |
+| `vga_out` | `vga_out` | MODE=0, BPC=4 | iCE40 HX1K | 22 x SB_CARRY, 36 x SB_DFFER, 2 x SB_DFFES, 1 x SB_GB, 67 x SB_IO, 76 x SB_LUT4 | 3 |
+| `vga_out` | `vga_out` | MODE=0, BPC=4 | ECP5 45F | 1 x DCCA, 80 x LUT4, 38 x TRELLIS_FF, 67 x TRELLIS_IO | 4 |
 | `eth_mac_rgmii` | `eth_mac_rgmii` | IFG_CYCLES=12, TX_DELAY=80, RX_DELAY=80 | LUT4 | 28 x dff, 396 x lut | 5 |
 | `eth_mac_rgmii` | `eth_mac_rgmii` | IFG_CYCLES=12, TX_DELAY=80, RX_DELAY=80 | LUT6 | 28 x dff, 349 x lut | 4 |
 | `eth_mac_rgmii` | `eth_mac_rgmii` | IFG_CYCLES=12, TX_DELAY=80, RX_DELAY=80 | iCE40 HX1K | 10 x SB_CARRY, 119 x SB_DFFER, 64 x SB_DFFES, 7 x SB_DFFR, 2 x SB_GB, 39 x SB_IO, 393 x SB_LUT4 | 5 |
