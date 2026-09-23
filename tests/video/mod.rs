@@ -419,12 +419,7 @@ impl Video {
 }
 
 /// The glyph, and the polarity, a cell was drawn with.
-pub(crate) fn match_glyph(
-    pattern: &Glyph,
-    glyphs: &[Glyph],
-    column: usize,
-    row: usize,
-) -> Cell {
+pub(crate) fn match_glyph(pattern: &Glyph, glyphs: &[Glyph], column: usize, row: usize) -> Cell {
     let found = glyphs.iter().enumerate().find_map(|(glyph, art)| {
         for inverse in [false, true] {
             if (0..CELL_H).all(|dy| (0..CELL_W).all(|dx| art[dy][dx] ^ inverse == pattern[dy][dx]))

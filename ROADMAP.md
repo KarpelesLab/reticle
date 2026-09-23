@@ -575,7 +575,8 @@ resource cost.
 
 A third system takes the same path to a *screen* rather than to a serial
 line: `examples/apple2` is `mos6502`, `uart` and `dvi_tx` on an
-ECP5 45F, with 48 KiB of two-ported RAM, the Apple II memory map, the
+ECP5 45F — or the same machine behind `vga_out` on a Digilent Basys 3,
+which has a resistor ladder and no TMDS connector — with 48 KiB of two-ported RAM, the Apple II memory map, the
 interleaved text page at `$0400`, and a monitor ROM and character
 generator written for the example (no Apple software is included and none
 is needed). `tests/apple2.rs` samples the RGB and DE the video generator
@@ -583,8 +584,11 @@ hands `dvi_tx` across a whole 640 x 480 frame, rebuilds the picture from
 the VESA timing, cuts it into character cells and asserts the forty
 columns of twenty-four rows that come out, which is the analogue of
 `the_line_comes_out_of_the_serial_wire` for a machine with a screen. It
-fits the 45F in 2755 `LUT4` and 50 `DP16KD`, and it does not fit the
-HX8K, by six times on block RAM. Building it found two defects in
+fits the 45F in 2755 `LUT4` and 50 `DP16KD`, the Basys 3's XC7A35T in
+1980 `LUT6` and 50 `RAMB18E1` with no PLL and no DDR register, and it
+does not fit the HX8K, by six times on block RAM. A second test reads
+the same screen back off the twelve VGA colour pins and the two sync
+pins. Building it found two defects in
 `fpga::constraints`, both about a design still hierarchical when its
 board file is checked; both are fixed with a regression test.
 

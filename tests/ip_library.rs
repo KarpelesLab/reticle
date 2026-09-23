@@ -7802,11 +7802,7 @@ impl<'d> Vga<'d> {
         let de = top_net(&sim, "de");
         let x = top_net(&sim, "x");
         let y = top_net(&sim, "y");
-        let colour = [
-            top_net(&sim, "r"),
-            top_net(&sim, "g"),
-            top_net(&sim, "b"),
-        ];
+        let colour = [top_net(&sim, "r"), top_net(&sim, "g"), top_net(&sim, "b")];
         let out = [
             top_net(&sim, "vga_r"),
             top_net(&sim, "vga_g"),
@@ -7911,8 +7907,16 @@ fn vga_out_draws_the_raster_of_its_mode() {
     assert_eq!(visible, m.h[0] * m.v[0], "visible pixels");
     assert_eq!(hsync_pixels, m.h[2], "hsync width");
     assert_eq!(vsync_lines.len() as u64, m.v[2], "vsync lines");
-    assert_eq!(get_u64(&vga.sim, vga.x), 0, "the next frame starts at x = 0");
-    assert_eq!(get_u64(&vga.sim, vga.y), 0, "the next frame starts at y = 0");
+    assert_eq!(
+        get_u64(&vga.sim, vga.x),
+        0,
+        "the next frame starts at x = 0"
+    );
+    assert_eq!(
+        get_u64(&vga.sim, vga.y),
+        0,
+        "the next frame starts at y = 0"
+    );
 }
 
 /// The colour pins are black everywhere outside the active area.

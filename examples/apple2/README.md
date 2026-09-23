@@ -1,12 +1,19 @@
 # An Apple II-compatible computer
 
 A machine with a 6502, 48 KiB of RAM, the Apple II memory map, the Apple
-II text screen with its famously scrambled line order, and DVI video. It
+II text screen with its famously scrambled line order, and video. It
 boots into a monitor, prints a banner, beeps, and echoes what you type at
-it. The processor is [`mos6502`](../../ip/mos6502), the video output is
-[`dvi_tx`](../../ip/dvi_tx) and the keyboard is a terminal on
-[`uart`](../../ip/uart), all from Reticle's IP library. Three files in
-`rtl/` are the only HDL written for the project.
+it. The processor is [`mos6502`](../../ip/mos6502) and the keyboard is a
+terminal on [`uart`](../../ip/uart), both from Reticle's IP library. Four
+files in `rtl/` are the only HDL written for the project.
+
+There are **two tops**, one machine. `apple2_top` puts DVI on the end,
+through [`dvi_tx`](../../ip/dvi_tx), for an ECP5 board with a digital
+video connector. `apple2_basys3` puts VGA on the end, through
+[`vga_out`](../../ip/vga_out), for a Digilent Basys 3 — which has a
+resistor ladder and a DE-15 socket and no HDMI or DVI connector at all.
+The computer between them is the same file, because the two blocks have
+the same fetch interface.
 
 **No Apple software is here and none is needed.** Apple's Monitor ROM,
 Integer BASIC, Applesoft BASIC and the Apple II character generator are
@@ -29,16 +36,19 @@ screen instead of a serial line, and so
 
 ```text
 examples/apple2/
-  reticle.proj            the project: mos6502, uart and dvi_tx by path, the ECP5 45F
-  rtl/apple2_top.v        the board: a PLL, dvi_tx, and the machine
+  reticle.proj            the project: mos6502, uart, dvi_tx and vga_out by path
+  rtl/apple2_top.v        one board: a PLL, dvi_tx, and the machine
+  rtl/apple2_basys3.v     the other: a clock divider, vga_out, and the same machine
   rtl/apple2.v            the machine: the 6502, 48 KiB, the ROM, the soft switches
   rtl/apple2_video.v      the video scanner: the interleaved text page and the font
   sw/monitor.s            the monitor ROM, in 6502 assembly
   sw/monitor.hex          it assembled, which the ROM loads with $readmemh
   sw/font.txt             the character generator, drawn as art
   sw/font.hex             it converted, which the character generator loads
-  tb/apple2_tb.v          a testbench that types at the machine and records its video
+  tb/apple2_tb.v          a testbench that types at the machine and records its DVI colour bus
+  tb/apple2_vga_tb.v      a shorter one that records its VGA pins instead
   board/ulx3s.rcf         pins and clock for a CABGA381 ECP5
+  board/basys3.rcf        pins and clock for the Basys 3's XC7A35T
 ```
 
 ## The memory map
@@ -265,7 +275,9 @@ cargo test --all-features --test apple2
 | `the_project_resolves_and_elaborates` | the manifest builds from exactly three library packages and the three files in `rtl/` |
 | `the_machine_synthesises_without_errors_or_latches` | synthesis has no error, no warning and no latch, and the ROM and the character generator hold what their files say, with everything the files did not name still `x` |
 | **`the_screen_comes_out_of_the_video_signal`** | **the whole chain** — see below |
+| **`the_screen_comes_out_of_the_vga_pins`** | **the same screen off the VGA pins** — see below |
 | `the_machine_maps_onto_the_ecp5_and_exports_for_nextpnr` | the ECP5 flow fits it, puts the monitor and the font in block RAM, builds the PLL and the four DDR lanes, and writes the JSON and LPF `nextpnr-ecp5` reads |
+| `the_machine_maps_onto_the_artix7_for_the_basys3` | the 7-series flow fits `apple2_basys3` on an XC7A35T with no PLL and no DDR anywhere, and writes the netlist, the XDC and the Vivado script |
 | `the_machine_does_not_fit_the_ice40_hx8k` | it does not fit the part the other two examples use, and by how much |
 | `reticle_build_builds_the_project` | `reticle build --synth` on the manifest |
 | `reticle_sim_runs_the_testbench` | the banner comes out of `reticle sim` too |
@@ -319,6 +331,37 @@ than four hundred seconds, and each is a deliberate trade:
   a boundary.
 * **the second frame stops after the row it needs.**
 
+### And off the VGA pins
+
+`the_screen_comes_out_of_the_vga_pins` is the same idea one step further
+down the wire. It drives `tb/apple2_vga_tb.v`, which is the same `apple2`
+behind [`vga_out`](../../ip/vga_out) at four bits a channel, and it
+samples **pins**: the twelve colour bits, `vga_hsync` and `vga_vsync`.
+Nothing inside the design is looked at, and the picture is rebuilt, cut
+into cells and matched against `sw/font.txt` by the same decoder — which
+is why that decoder now lives in
+[`tests/video/mod.rs`](../../tests/video/mod.rs), shared by the two
+tests the way `tests/serial/mod.rs` shares the 8N1 receiver. The whole
+of the difference between them is `video::Signal`: what value counts as
+white — `0xFFFFFF` on the colour bus, `0xFFF` at four bits a channel —
+and how many pixels the path is behind the raster, which is one, because
+`vga_out` registers its pins.
+
+It also reads the two sync pins on every one of the 525 lines of the
+frame: one pulse a line in the right 96 pixels, two lines of vertical
+sync at 490 and 491, both **low**, because 640 × 480 at 60 Hz has
+negative syncs. That has no counterpart on the DVI path, where the syncs
+travel inside TMDS control symbols and never reach a pin of their own.
+
+The screen it asserts is shorter to produce than the DVI one's: the
+banner, one typed `T`, and the character test card that paints over rows
+4 to 23. Twenty-one of the twenty-four rows are still different from
+every other row, so the interleaved line order is held just as tightly.
+It costs **85 seconds**, against the DVI test's 95, and it is cheap for
+the same three reasons — one pixel per clock, the raster held in reset
+until the monitor has finished drawing, and a session of one command
+instead of four — plus a fourth: it draws one frame and not two.
+
 ## Resource use
 
 The ECP5 flow in `tests/apple2.rs`, for `ecp5-45f-CABGA381`:
@@ -361,7 +404,7 @@ it *twice*, plus the monitor and the font. Six times the part. There is
 no arrangement of this design that fits an HX8K; a machine with 16 KiB
 and a single-ported screen might, and would be a different example.
 
-## On a board
+## On a board: the ECP5
 
 The flow writes `apple2_top.json` (the netlist, in the Yosys JSON format)
 and `apple2_top.lpf` (the pins) to `target/tmp/apple2/`. With
@@ -431,6 +474,116 @@ F800: 78 D8 A2 FF 9A 2C 10 C0
 `dvi_tx_pll` cannot: nothing in the source drives `clk_x5`, because the
 PLL that does is instantiated by the FPGA flow.
 
+## On a board: the Basys 3
+
+The Basys 3 is the other target, and it exists because the first one
+cannot be built for it. `apple2_top` drives TMDS pairs out of
+double-data-rate registers; the board has no HDMI and no DVI connector,
+and `src/fpga/devices/xc7.dev` declares no DDR register for the part, so
+the flow stops with
+
+```text
+port tmds_d0 is not double data rate: `xc7a35t-cpg236` declares neither
+an IO buffer that registers both edges nor a `ddr_out` register
+```
+
+Everything else about the machine already mapped and fitted. VGA was the
+only missing piece, and `rtl/apple2_basys3.v` is what closes it: the same
+`apple2`, behind [`vga_out`](../../ip/vga_out) instead of `dvi_tx`, with
+four bits a channel into the board's resistor ladder.
+
+Three things differ from the ECP5 build and nothing else does.
+
+* **No PLL.** The Basys 3 has one oscillator, 100 MHz on W5. A two-bit
+  divider makes one pixel in four, so the pixel rate is 25.000 MHz
+  against the mode's nominal 25.175 — 0.7 % slow, a 59.6 Hz frame. DVI
+  needed a PLL because `dvi_tx` runs at five times the pixel rate; VGA
+  does not.
+* **The UART divisor is 868**, not 1094. The divisor is clocks per
+  serial bit on the design's clock, and this board's clock is 100 MHz:
+  100 000 000 / 115200 is 868. Build it with 1094 and the terminal is
+  unreadable.
+* **Twelve colour pins and two sync pins** instead of four TMDS lanes.
+  `board/basys3.rcf` names them, transcribed from the comment block in
+  `examples/soc/board/basys3.rcf`, which is Digilent's published
+  `Basys-3-Master.xdc`. The speaker leaves through pin 1 of Pmod JA,
+  because the board has no audio output of any kind.
+
+The 6502 ends up at 1.786 MHz — one bus cycle every fourteen pixels, as
+on the ECP5 build and as on a real Apple II — against the original's
+1.023 MHz.
+
+### What it costs on an XC7A35T
+
+`the_machine_maps_onto_the_artix7_for_the_basys3`, for
+`xc7a35t-cpg236`:
+
+| Resource | Used | The XC7A35T has |
+|----------|------|-----------------|
+| `LUT6` | 1980 | 20800 |
+| flip-flops (`FDCE` 267, `FDRE` 26, `FDPE` 18) | 311 | 41600 |
+| `RAMB18E1` | 50 | 100 |
+| `BUFG` | 1 | 32 |
+| `IBUF` / `OBUF` | 2 / 16 | — |
+| PLLs, DDR registers | **0** | — |
+
+LUT depth 22. The fifty block RAMs are the same fifty as on the ECP5:
+48 of them are the main memory in 2048 × 8 mode and two copies, one per
+read port, and the monitor and the character generator are one each.
+Half the part's LUTs and half its block RAM are still free.
+
+Note what the VGA path saves: the same design with `dvi_tx` on the end —
+measured before it hit the DDR error — wanted 2249 LUT6 and 403
+flip-flops. The encoders, the running-disparity registers and the three
+10:1 serialisers are 269 LUT6 and 92 flip-flops that VGA simply does not
+need.
+
+### The three files
+
+The test writes them to `target/tmp/apple2-basys3/`:
+
+```text
+apple2_basys3.v      the netlist, as structural Verilog of 7-series primitives
+apple2_basys3.xdc    the pins and the 100 MHz clock
+apple2_basys3.tcl    a Vivado batch script that reads both and writes a bitstream
+```
+
+and the command line is
+
+```sh
+cd target/tmp/apple2-basys3
+vivado -mode batch -source apple2_basys3.tcl
+```
+
+which ends at `apple2_basys3.bit`, for `openFPGALoader -b basys3` or
+Vivado's own hardware manager. The same flow runs from the command line:
+
+```sh
+reticle fpga --device xc7a35t-cpg236 --top apple2_basys3 \
+  --constraints board/basys3.rcf \
+  rtl/apple2_basys3.v rtl/apple2.v rtl/apple2_video.v \
+  ../../ip/mos6502/rtl/mos6502.v \
+  ../../ip/uart/rtl/uart_tx.v ../../ip/uart/rtl/uart_rx.v ../../ip/uart/rtl/uart.v \
+  ../../ip/dvi_tx/rtl/video_timing.v ../../ip/vga_out/rtl/vga_out.v
+```
+
+**None of that has been run.** Vivado has not been started, no bitstream
+exists, no board has been programmed and no monitor has been plugged in.
+What the test suite checks is that every cell in the netlist is a
+primitive `xc7.dev` declares, wired to pins that primitive has; that
+every pin `board/basys3.rcf` names is one the device database records
+and reaches the XDC; that the memories carried their contents; and that
+the script names the part string Vivado wants. Whether Vivado accepts
+the result is a separate claim, and so is whether a monitor locks to
+what leaves the socket.
+
+One thing that *is* worth saying about the picture rather than the
+files: at four bits a channel this machine looks exactly the same as it
+does over DVI. The screen is black and white — `0x000000` and
+`0xFFFFFF` — and truncating either of those to four bits leaves it
+unchanged. A design with gradients or blended colour would not be so
+lucky; `ip/vga_out/README.md` says what truncation costs it.
+
 ## Two defects this found in Reticle
 
 Both are in `src/fpga/constraints.rs`, both are about a design that is
@@ -462,9 +615,9 @@ with a regression test next to the code.
 
 Proved here, by `cargo test`:
 
-- the manifest resolves `mos6502`, `uart` and `dvi_tx` from `ip/` and
-  builds, through `ip::resolve` and `ip::elaborate` and through
-  `reticle build`, with the three files in `rtl/` the only user HDL;
+- the manifest resolves `mos6502`, `uart`, `dvi_tx` and `vga_out` from
+  `ip/` and builds, through `ip::resolve` and `ip::elaborate` and through
+  `reticle build`, with the four files in `rtl/` the only user HDL;
 - synthesis accepts it with no error, warning or latch, and loads the
   monitor and the character generator into their memories, leaving every
   element neither file named `x`;
@@ -472,6 +625,9 @@ Proved here, by `cargo test`:
   whole frame of video by a test that never looks inside the design —
   the interleaved line order, the inverse and flashing attributes, the
   pixel doubling, the centring, and the character generator as drawn;
+- **the screen again, off the VGA pins**: the same forty by twenty-four
+  read back from the twelve colour bits `vga_out` drives, with the two
+  sync pins checked on every line of the frame;
 - the interleave from the other side too: the monitor's line table is the
   documented formula, computed in the test from the formula;
 - the flashing attribute actually alternating, across two frames;
@@ -485,23 +641,40 @@ Proved here, by `cargo test`:
   four double-data-rate lanes, and exporting the JSON and LPF
   `nextpnr-ecp5` reads with nothing left for `check_nextpnr_json` to
   find;
+- the 7-series flow doing the same for `apple2_basys3` on an XC7A35T —
+  1980 LUT6 of 20800, 50 `RAMB18E1` of 100, no PLL and no DDR register
+  anywhere — and writing the netlist, the XDC and the Vivado script;
 - that it does not fit an HX8K, by running the flow for one;
 - `reticle build`, `reticle sim` and `reticle fpga` doing the same from
   the command line.
 
 Not proved, and in one case not built:
 
-- **that it runs on a board.** No board here, no Trellis tools, and
-  `board/ulx3s.rcf` is on placeholder pins for the reason given above.
-  Reticle's own place and route uses a synthetic fabric that cannot
-  program a real part ([`docs/fpga.md`](../../docs/fpga.md)). What is
-  demonstrated stops at the files `nextpnr-ecp5` reads.
+- **that it runs on a board.** No board here, no Trellis tools, no
+  Vivado, and `board/ulx3s.rcf` is on placeholder pins for the reason
+  given above. Reticle's own place and route uses a synthetic fabric that
+  cannot program a real part ([`docs/fpga.md`](../../docs/fpga.md)). What
+  is demonstrated stops at the files `nextpnr-ecp5` and Vivado read.
+  `board/basys3.rcf` is on real pins — Digilent's, transcribed — which
+  makes it a better starting point than `ulx3s.rcf` and still not a
+  working board.
+- **that a monitor locks to the VGA signal.** The timings and the sync
+  polarities are VESA's and the pinout is Digilent's, but a video output
+  is settled by a monitor and none has been connected. The 25.000 MHz
+  pixel rate in particular is 0.7 % below nominal, which is inside what
+  monitors are documented to accept and is not the same as having
+  watched one accept it.
 - **timing.** Nothing here checks that 126 MHz closes on the real part,
   and 126 MHz through a 6502's address decode is the part of this design
   most likely not to.
-- **the TMDS chain.** The frame test stops at the colour `dvi_tx` is
+- **the TMDS chain.** The DVI frame test stops at the colour `dvi_tx` is
   handed; the encoders and serialisers after it are library IP with their
-  own tests, and no test in this file drives both at once.
+  own tests, and no test in this file drives both at once. The VGA test
+  does go all the way to the pins, because on that path there is nothing
+  between the colour and the pin but a truncation and a register.
+- **timing on the Artix-7.** Nothing checks that 100 MHz closes there
+  either, and the 6502's address decode is the same suspect it is on the
+  ECP5.
 - **graphics.** There is no lo-res and no hi-res: `$C050`–`$C057` are not
   decoded, there is no MIXED and no PAGE2, and the screen is always the
   text page at `$0400`. That is a scope line drawn on purpose. The way

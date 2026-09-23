@@ -107,10 +107,12 @@ from the manifest to the files `nextpnr` reads:
   system around [`ip/mos6502`](ip/mos6502): one bus, RAM at the bottom
   for zero page and the stack, ROM at the top for the vectors.
 - [`examples/apple2`](examples/apple2) — an Apple II-compatible machine
-  with 48 KiB, the interleaved text page at `$0400` and DVI video through
-  [`ip/dvi_tx`](ip/dvi_tx), running a monitor ROM and a character
-  generator written for the example. Its test decodes the 40 x 24
-  character screen back out of a whole frame of video.
+  with 48 KiB, the interleaved text page at `$0400` and video through
+  [`ip/dvi_tx`](ip/dvi_tx) on an ECP5 or [`ip/vga_out`](ip/vga_out) on a
+  Digilent Basys 3, running a monitor ROM and a character generator
+  written for the example. Its tests decode the 40 x 24 character screen
+  back out of a whole frame of video — once off the DVI colour bus and
+  once off the VGA pins.
 - [`examples/nes`](examples/nes) — an NES-compatible console around
   [`ip/mos6502`](ip/mos6502) with `DECIMAL_MODE = 0`, which is what the
   processor in an NES is, plus [`ip/ppu2c02`](ip/ppu2c02) and

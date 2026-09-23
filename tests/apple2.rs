@@ -17,6 +17,15 @@
 //! at the text page, at the character generator or at any register inside
 //! the design.
 //!
+//! The machine has two video paths and the same screen comes out of
+//! both, so there are two such tests.
+//! `the_screen_comes_out_of_the_vga_pins` does the same job one step
+//! further down the wire: it reads the picture off the twelve colour
+//! pins and the two sync pins `vga_out` drives for a Basys 3, rather
+//! than off the colour bus `dvi_tx` is handed. The decoder they share
+//! is `tests/video/mod.rs`, the way `tests/serial/mod.rs` is shared by
+//! the tests that end at a serial wire.
+//!
 //! That matters most for the one thing this example exists to build: the
 //! Apple II's interleaved text page, where line N lives at $0400 + 128 *
 //! (N mod 8) + 40 * (N div 8) and not at $0400 + 40 * N. Two tests hold
@@ -45,8 +54,10 @@
 //! | `the_project_resolves_and_elaborates` | the manifest builds from exactly three library packages and three user sources |
 //! | `the_machine_synthesises_without_errors_or_latches` | synthesis has no error, no warning and no latch, and both memories hold what their files say |
 //! | `the_screen_comes_out_of_the_video_signal` | the whole chain: forty by twenty-four characters decoded from two frames of video, the session decoded again off `uart_tx` (which is also what proves the keyboard, since the testbench typed it), and the speaker counted |
+//! | `the_screen_comes_out_of_the_vga_pins` | the same screen decoded off the *pins* `vga_out` drives — twelve colour bits and two syncs — with the syncs checked on every line of the frame |
 //! | `the_assembler_takes_the_low_and_high_byte_of_an_address` | the `<` and `>` operators `tests/mos6502_asm` gained for this example |
 //! | `the_machine_maps_onto_the_ecp5_and_exports_for_nextpnr` | the ECP5 flow fits it, puts the monitor and the font in block RAM, builds the PLL and the DDR outputs, and writes the JSON and LPF `nextpnr-ecp5` reads |
+//! | `the_machine_maps_onto_the_artix7_for_the_basys3` | the 7-series flow fits `apple2_basys3` on the Basys 3's XC7A35T with no PLL and no DDR register anywhere, and writes the netlist, the XDC and the Vivado script |
 //! | `the_machine_does_not_fit_the_ice40_hx8k` | it does not fit the part the other two examples use, and the reason is the 48 KiB of RAM |
 //! | `reticle_build_builds_the_project` | the same through the binary |
 //! | `reticle_sim_runs_the_testbench` | the banner comes out of `reticle sim` too |
@@ -145,8 +156,8 @@ const VEC_NMI: u16 = 0xFFFA;
 const VEC_RES: u16 = 0xFFFC;
 const VEC_IRQ: u16 = 0xFFFE;
 
-/// The raster, the picture's place on it and the font are in
-/// `tests/video/mod.rs`, which both of the video tests below share.
+// The raster, the picture's place on it and the font are in
+// `tests/video/mod.rs`, which both of the video tests below share.
 
 /// The display code of the monitor's cursor: flashing, glyph $1F, which
 /// is ASCII `_`.
@@ -893,7 +904,10 @@ fn the_screen_comes_out_of_the_vga_pins() {
     assert!(bench.contains(&format!("localparam CLK_DIV  = {CLK_DIV};")));
     // Four bits a channel, which is the Basys 3's resistor ladder and
     // what `Signal::VGA4` decodes.
-    assert!(bench.contains(".BPC       (4)"), "the testbench is not 4 bpc");
+    assert!(
+        bench.contains(".BPC       (4)"),
+        "the testbench is not 4 bpc"
+    );
     let glyphs = font_art(&read(&dir, "sw/font.txt"));
 
     let design = testbench_design(&dir, "tb/apple2_vga_tb.v", "apple2_vga_tb");
@@ -1177,6 +1191,219 @@ fn the_machine_maps_onto_the_ecp5_and_exports_for_nextpnr() {
     fs::write(out.join("apple2_top.json"), &inputs.json).expect("write the netlist");
     fs::write(out.join(&inputs.constraints_name), &inputs.pcf_or_lpf).expect("write the LPF");
     println!("wrote {}/apple2_top.json and apple2_top.lpf", out.display());
+    println!("then: {}", inputs.args.join(" "));
+}
+
+// ---------------------------------------------------------------------------
+// The Artix-7 flow, for a Basys 3
+// ---------------------------------------------------------------------------
+
+/// The second target: the part on a Digilent Basys 3.
+const BASYS3_DEVICE: &str = "xc7a35t-cpg236";
+
+/// `apple2_basys3` through the 7-series flow, with the files a Basys 3
+/// owner would hand to Vivado written out at the end.
+///
+/// This is the payoff of `ip/vga_out`. The same design with `dvi_tx` on
+/// the end stops here with
+///
+/// ```text
+/// port tmds_d0 is not double data rate: `xc7a35t-cpg236` declares
+/// neither an IO buffer that registers both edges nor a `ddr_out`
+/// register
+/// ```
+///
+/// because the part's device file declares no DDR register — and the
+/// board has no connector for one either. Everything else about the
+/// machine already fitted; VGA was the only missing piece.
+///
+/// **Vivado has not been run.** What is checked is what the files say:
+/// that every cell is a primitive `src/fpga/devices/xc7.dev` declares,
+/// wired to pins it has; that every pin the board file names is one the
+/// device database records and every port of the top has a pin; that
+/// the memories carried their contents into the netlist; and that the
+/// script names the part string Vivado wants. Whether Vivado accepts
+/// the result, and whether a monitor locks to what leaves the socket,
+/// are separate claims and this test makes neither.
+#[test]
+fn the_machine_maps_onto_the_artix7_for_the_basys3() {
+    let Some(dir) = example() else { return };
+    let mut design = build(&dir, |project| {
+        project.top = Some("apple2_basys3".to_owned());
+    })
+    .elaboration
+    .design
+    .expect("the project elaborates");
+    let top = design.top.expect("a top");
+
+    let device = fpga::target(BASYS3_DEVICE).expect("the XC7A35T is a built-in device");
+    let mut map = SourceMap::new();
+    let rcf = read(&dir, "board/basys3.rcf");
+    let file = map
+        .add("board/basys3.rcf", rcf.clone())
+        .expect("the constraints fit");
+    let mut diags = Diagnostics::new();
+    let mut constraints = Constraints::parse(&rcf, file, &mut diags);
+    constraints.merge_attrs(&design, top, &mut diags);
+    constraints.check(&design, device, &mut diags);
+    let said: Vec<String> = diags
+        .iter()
+        .map(|d| format!("{}: {}", d.code.unwrap_or("-"), d.message))
+        .collect();
+    assert!(said.is_empty(), "the constraints were not clean: {said:#?}");
+
+    let mut diags = Diagnostics::new();
+    let options = FpgaOptions {
+        synth: synth_options(&dir),
+        ..FpgaOptions::default()
+    };
+    let flow = fpga::synthesize_for(&mut design, top, device, &constraints, &options, &mut diags)
+        .unwrap_or_else(|e| panic!("the Artix-7 flow failed: {e:?}"));
+    let errors: Vec<String> = diags
+        .iter()
+        .filter(|d| d.severity >= Severity::Error)
+        .map(|d| d.message.clone())
+        .collect();
+    assert!(errors.is_empty(), "the Artix-7 flow reported: {errors:?}");
+
+    // The footprint, for the README and for anyone reading the log.
+    println!("{BASYS3_DEVICE}:");
+    for (cell, count) in &flow.netlist {
+        println!("  {count:>5} x {cell}");
+    }
+    println!("  {} LUTs, depth {}", flow.luts, flow.lut_depth);
+    for bram in &flow.primitives.block_rams {
+        println!(
+            "  {} -> {} x RAMB18E1 in {}x{} mode, {} cop(ies), initialised {}",
+            bram.memory,
+            bram.blocks(),
+            bram.mode.0,
+            bram.mode.1,
+            bram.copies,
+            bram.initialised
+        );
+    }
+
+    // It fits, with room. The part has 20800 LUT6, 41600 flip-flops and
+    // 100 RAMB18E1, which `the_artix7_matches_its_datasheet_figures` in
+    // tests/fpga_flow.rs holds to the datasheet.
+    let luts = flow.count("LUT6");
+    let brams = flow.count("RAMB18E1");
+    let flops: usize = ["FDRE", "FDSE", "FDCE", "FDPE"]
+        .iter()
+        .map(|kind| flow.count(kind))
+        .sum();
+    assert!(luts > 1000, "{luts} LUT6 is too few for this machine");
+    assert!(luts <= 20_800, "{luts} LUT6 does not fit the XC7A35T");
+    assert!(brams <= 100, "{brams} RAMB18E1 does not fit the XC7A35T");
+    assert!(flops <= 41_600, "{flops} flip-flops do not fit");
+    assert!(
+        flow.netlist.iter().all(|(cell, _)| !cell.starts_with('$')),
+        "a generic cell survived: {:?}",
+        flow.netlist
+    );
+    assert!(
+        !diags.iter().any(|d| d.code == Some("F0305")),
+        "a memory lost its initial contents: {}",
+        diags.render(&map)
+    );
+
+    // No PLL and no double-data-rate register anywhere, which is the
+    // whole reason this target exists: the pixel rate is a divider, not
+    // a clock, and a colour bit is an ordinary output.
+    assert!(
+        flow.primitives.plls.is_empty(),
+        "the VGA path asked for a PLL"
+    );
+    for buffer in &flow.primitives.io_buffers {
+        assert!(
+            buffer.ddr.is_none(),
+            "{} came out double data rate",
+            buffer.port
+        );
+    }
+    // And `dvi_tx` came along as a dependency of `vga_out` but left
+    // nothing behind: the encoders and the serialisers are not
+    // instantiated, so no netlist cell belongs to one.
+    assert_eq!(flow.count("ODDR"), 0);
+
+    // The monitor and the character generator went into block RAM with
+    // their contents, and the 48 KiB of main memory went in twice, once
+    // per read port.
+    let named = |name: &str| {
+        flow.primitives
+            .block_rams
+            .iter()
+            .find(|b| b.memory.rsplit('.').next() == Some(name))
+            .unwrap_or_else(|| panic!("`{name}` is not in block RAM"))
+    };
+    assert!(named("rom").initialised, "the ROM's blocks carry nothing");
+    assert!(named("font").initialised, "the font's blocks carry nothing");
+    assert_eq!(
+        named("ram").copies,
+        2,
+        "two read ports — the processor's and the video's — means two copies"
+    );
+
+    // Every cell is a primitive the part has, wired to pins it has.
+    let problems: Vec<String> = fpga::check_nextpnr_json(&design, top, device, &constraints)
+        .into_iter()
+        .map(|p| format!("{}: {}", p.object, p.message))
+        .collect();
+    assert!(problems.is_empty(), "{problems:?}");
+
+    // The three files Vivado reads, and the command line that runs them.
+    let inputs = fpga::export_vendor(&design, top, device, &constraints).expect("the export");
+    assert!(
+        inputs.script.contains("-part xc7a35tcpg236-1"),
+        "{}",
+        inputs.script
+    );
+    assert_eq!(
+        inputs.args,
+        vec!["vivado", "-mode", "batch", "-source", "apple2_basys3.tcl"]
+    );
+    for step in [
+        "read_verilog apple2_basys3.v",
+        "read_xdc apple2_basys3.xdc",
+        "synth_design -top apple2_basys3",
+        "place_design",
+        "route_design",
+        "write_bitstream -force apple2_basys3.bit",
+    ] {
+        assert!(inputs.script.contains(step), "the script lacks `{step}`");
+    }
+    // Every pin of the board file reaches the XDC, VGA and all.
+    for pin in &constraints.pins {
+        if pin.pin.is_empty() {
+            continue;
+        }
+        assert!(
+            device.pin(&pin.pin).is_some(),
+            "`{}` is not a pin of the part",
+            pin.pin
+        );
+        let line = format!(
+            "set_property PACKAGE_PIN {} [get_ports {{{}}}]",
+            pin.pin,
+            pin.signal()
+        );
+        assert!(inputs.xdc.contains(&line), "the XDC lacks `{line}`");
+    }
+    for pin in ["vga_r[0]", "vga_hsync", "vga_vsync", "clk", "uart_tx"] {
+        assert!(
+            inputs.xdc.contains(&format!("[get_ports {{{pin}}}]")),
+            "the XDC lacks {pin}"
+        );
+    }
+
+    // The files a board needs, where a reader can pick them up.
+    let out = Path::new(env!("CARGO_TARGET_TMPDIR")).join("apple2-basys3");
+    fs::create_dir_all(&out).expect("a scratch directory");
+    fs::write(out.join("apple2_basys3.v"), &inputs.verilog).expect("write the netlist");
+    fs::write(out.join("apple2_basys3.xdc"), &inputs.xdc).expect("write the XDC");
+    fs::write(out.join("apple2_basys3.tcl"), &inputs.script).expect("write the script");
+    println!("wrote {}/apple2_basys3.{{v,xdc,tcl}}", out.display());
     println!("then: {}", inputs.args.join(" "));
 }
 
