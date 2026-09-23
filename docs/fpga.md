@@ -251,7 +251,7 @@ came from and how far it is to be trusted, per group, the way
 | primitive names, ports and widths | **high** — read line by line from Yosys' `techlibs/xilinx/cells_sim.v` and `cells_xtra.v` (the latter generated from Vivado's own `unisims`), not recalled |
 | `LUT6` and its `INIT` bit order (`O = INIT[{I5..I0}]`) | **high** |
 | `FDRE` / `FDSE` / `FDCE` / `FDPE` and their `_1` falling-edge twins | **high** |
-| `CARRY4` semantics (stated, not mapped — see below) | **high** |
+| `CARRY4` semantics, and the wiring adders are mapped onto it with | **high** — the model is `cells_sim.v`'s; the wiring is checked against it exhaustively to eight bits and proved to 32 (`tests/fpga_carry.rs`) |
 | `RAMB18E1` ports, width parameters and address alignment | **high** |
 | `RAMB18E1` contents layout (`INIT_00`..`INIT_3F`) | **medium-high** — the 256-bit-chunks-in-address-order description is UG473's; the row-sharing order in the narrow modes was reasoned from it here |
 | byte write enables (`WEA[1:0]`, `WEBWE[3:0]`) | **high** |
@@ -265,17 +265,53 @@ came from and how far it is to be trusted, per group, the way
 | the Basys 3 pin list | **high** that these are the balls Digilent's file names; the transcription was fetched, not recalled |
 | `W5` being a clock-capable ball | **medium-high** |
 
+### The carry chain
+
+Adders four bits and wider go onto `CARRY4`, one instance per four bits.
+`CARRY4` is not the one-bit `(ci, i0, i1) -> co` element the other
+families expose: it covers four bits, takes the *propagate* `a ^ b`
+rather than two operands, and computes its own sums, which is why the
+`.dev` format grew a second carry shape for it (see below). The wiring
+is Yosys' — a LUT per bit for `S`, `DI` from `a`, `CO[3]` into the next
+instance's `CI`, and the first instance's carry in on `CYINIT` with `CI`
+tied low:
+
+```text
+bel CARRY4 carry width 4 port ci=CI cyinit=CYINIT p=S di=DI s=O co=CO
+```
+
+The model it is wired against is `cells_sim.v`'s, quoted in full in
+`xc7.dev`. `tests/fpga_carry.rs` checks the wiring against that model
+two independent ways — exhaustive simulation of the whole mapped
+netlist at one to eight bits (plain, widened for the carry out, a
+constant operand, both carry-in values) and `formal::check_equivalent`
+proofs at 9, 10, 16, 17 and 32 bits — plus a structural check that `CI`
+and `CYINIT` are used the way the part requires rather than merely the
+way the `CI | CYINIT` model permits.
+
+What it buys, on the two examples that fit the Basys 3's part
+(`fpga::synthesize_for` for `xc7a35t-cpg236`, the same flow with
+`MapOptions::map_carry` off and on):
+
+| Design | `LUT6` before | `LUT6` after | `CARRY4` | LUT depth |
+|---|---|---|---|---|
+| `examples/apple2` (`apple2_basys3`) | 1980 | 1877 (−5.2%) | 85, over 33 adders | 22 → 22 |
+| `examples/nes` (`nes_top`) | 4326 | 4184 (−3.3%) | 137, over 75 adders | 23 → 24 |
+
+Two things that table does not say. A `CARRY4` sits in the slice beside
+its four `LUT6`s and is not a resource they compete for, so the LUTs
+saved are saved outright. And the depth column is the depth of the *LUT*
+graph, which no longer counts an adder at all — the dedicated carry a
+7-series slice has is exactly the path the placeholder timing model in
+`src/timing/delay.rs` cannot price, so the number moving by one either
+way means nothing here.
+
+An adder narrower than four bits (`MapOptions::min_carry_width`, which
+is one whole `CARRY4`) stays in LUTs, and so does a `sub`: the IR's
+`sub` cell is not lowered through the carry path on any family.
+
 ### What is deliberately left out, and why
 
-- **`CARRY4` is declared without a port map**, which makes carry mapping
-  decline for the family with a note, exactly as it declines for the
-  ECP5's `CCU2C`. Its behaviour is not in doubt and the device file
-  writes it out in full — `O = S ^ {CO[2:0], CI|CYINIT}`,
-  `CO[i] = S[i] ? carry_in : DI[i]` — but Reticle maps carry chains onto
-  a one-bit `(ci, i0, i1) -> co` element with the sum XORed outside it,
-  and `CARRY4` is four bits wide, computes its own sums and takes a
-  *propagate* rather than two operands. Adders therefore go to `LUT6`s.
-  That costs area and depth; it does not cost correctness.
 - **`RAMB36E1` is not declared.** In non-cascaded use its
   `ADDRARDADDR[15]` must be tied high, and Reticle's address model can
   pad the bits *below* the word address and not the bits above it, so a
@@ -345,10 +381,20 @@ that every cell and pin Reticle named really exists.
 naming Vivado and `export_vendor`, rather than a half-written file or a
 generic "unknown family".
 
-### Two things the device model learned here
+### Three things the device model learned here
 
-Both were gaps the 7 series found, and both are general:
+All three were gaps the 7 series found, and all three are general:
 
+- **A carry element several bits wide.** The `.dev` `carry` line
+  described one bit: two operand bits and a carry in, a carry out, and
+  the sum XORed outside. A line that says `width N` describes the other
+  shape instead — `p` the propagate, `di` the generate source, `s` the
+  sums the element computes itself, `co` the carry out of each bit, and
+  `ci` / `cyinit` the two ways in — and `BelKind::wide_carry` tells the
+  two apart. The one-bit form is unchanged, so iCE40's `SB_CARRY` and
+  the generic families map exactly as before and the ECP5's `CCU2C`,
+  which is a third shape again (two bits, its own LUTs inside), still
+  declines with its note.
 - **One IO buffer per direction.** Xilinx has `IBUF`, `OBUF` and
   `IOBUF`, which do not even agree on what the pad pin is called (`I`,
   `O`, `IO`). A `bel … io for in|out|inout` line says which directions a
@@ -361,7 +407,7 @@ Both were gaps the 7 series found, and both are general:
   undriven, writing one byte of each word and dropping the others —
   silently.
 
-A third is smaller: a PLL whose feedback loop is closed *outside* the
+A fourth is smaller: a PLL whose feedback loop is closed *outside* the
 block (`PLLE2_BASE` wants `CLKFBOUT` wired to `CLKFBIN`) names both ends
 as `fbout` and `fb`, and mapping runs a net between them.
 

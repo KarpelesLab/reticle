@@ -3595,6 +3595,64 @@ end
     }
 
     #[test]
+    fn a_width_clause_makes_a_carry_element_wide() {
+        let text = concat!(
+            "device a\n",
+            "  family f\n",
+            "  bel WIDE carry width 4 port ci=CI cyinit=CYINIT p=S di=DI s=O co=CO\n",
+            // Only one way in, which is allowed: a family with no
+            // fabric pin names only its chain pin.
+            "  bel CHAIN carry width 2 port ci=CIN p=P di=D s=SUM co=COUT\n",
+            // A width with a role missing is not a wide carry; nor is a
+            // width of zero, nor a width with no way in at all.
+            "  bel SHORT carry width 4 port ci=CI p=S s=O co=CO\n",
+            "  bel ZERO carry width 0 port ci=CI p=S di=DI s=O co=CO\n",
+            "  bel NOWAY carry width 4 port p=S di=DI s=O co=CO\n",
+            // And the one-bit form is untouched by all of this.
+            "  bel NARROW carry port ci=CI i0=I0 i1=I1 co=CO\n",
+            "end\n"
+        );
+        let (device, diags) = parse(text);
+        let device = device.unwrap();
+        assert_eq!(diags, "", "the grammar complained");
+
+        let wide = device.bel_named("WIDE").unwrap().wide_carry().unwrap();
+        assert_eq!(wide.width, 4);
+        assert_eq!(wide.propagate, "S");
+        assert_eq!(wide.data, "DI");
+        assert_eq!(wide.sum, "O");
+        assert_eq!(wide.carry_out, "CO");
+        assert_eq!((wide.carry_in, wide.init), (Some("CI"), Some("CYINIT")));
+
+        let chain = device.bel_named("CHAIN").unwrap().wide_carry().unwrap();
+        assert_eq!(
+            (chain.width, chain.carry_in, chain.init),
+            (2, Some("CIN"), None)
+        );
+
+        for name in ["SHORT", "ZERO", "NOWAY", "NARROW"] {
+            assert!(
+                device.bel_named(name).unwrap().wide_carry().is_none(),
+                "`{name}` was read as a wide carry"
+            );
+        }
+        // A role list alone is not a carry element either: a LUT with a
+        // `width` is still a LUT.
+        assert!(device.bel_named("NARROW").unwrap().has_ports(&["i0"]));
+
+        // The clause survives a round trip through the text format.
+        let again = parse(&device.to_text()).0.unwrap();
+        assert_eq!(again, device);
+        assert!(
+            device
+                .to_text()
+                .contains("bel WIDE carry width 4 port ci=CI cyinit=CYINIT"),
+            "{}",
+            device.to_text()
+        );
+    }
+
+    #[test]
     fn primitive_ports_cover_every_kind_of_primitive() {
         let device = super::super::target("ice40-hx1k-tq144").unwrap();
         assert!(device.primitive_ports("SB_NONESUCH").is_none());

@@ -322,7 +322,7 @@ FPGA:
       is what says which of the two exports a family takes. Nothing in
       it has been run on silicon; `docs/fpga.md` states per primitive
       group what is verified and what is not, and what is deliberately
-      left out (CARRY4, RAMB36E1, DSP48E1).
+      left out (RAMB36E1, DSP48E1). Adders go onto CARRY4.
 - [x] Placement constraints as a first-class language: pin assignment, IO
       standards, placement regions (pblocks), keep-hierarchy, relative
       placement macros, clock domains. Declared in the source via attributes

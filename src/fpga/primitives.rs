@@ -10,7 +10,7 @@
 //! |------|--------------------|---------------|
 //! | Block RAM | a [`Memory`] with its `MemRdPort` / `MemWrPort` cells | one block per width x depth slice (per read port, when the block has too few), carrying its slice of the initial contents, plus address decoding and output muxing as cells; or, below the threshold, the memory built out of logic |
 //! | DSP | a `Mul`, and a `Mul` feeding an `Add` | one multiplier or multiply-accumulate block |
-//! | Carry | an `Add` at least `min_carry_width` bits wide | a chain of carry primitives plus `Xor` cells for the sums |
+//! | Carry | an `Add` at least `min_carry_width` bits wide | a chain of carry primitives: one per bit plus an `Xor` pair for each sum on a one-bit element, or one per `width` bits plus one `Xor` per bit for the propagate on a [`WideCarry`] element, which computes its own sums |
 //! | IO buffers | every top-level port | one IO primitive per bit, carrying the constraints' `io_standard`, `drive`, `slew` and `pullup`; for a port with a `ddr` clock, one per *two* bits with both edges registered (in the buffer where the family's buffer does it, in a `ddr_in` / `ddr_out` register beside it where it does not); and an `iodelay` element where a delay is asked for |
 //! | PLLs | a clock constraint on a net nothing drives | the device's PLL, its dividers solved by [`super::pll::solve`], fed from the clock constrained on an input port |
 //! | Clock buffers | a net driving many flip-flop clock pins | a global buffer, with the clock pins moved onto it |
@@ -4886,6 +4886,56 @@ mod tests {
         let report = run(&mut design, top, "ecp5-25f-CABGA381", &options);
         assert!(report.carry_chains.is_empty());
         assert!(report.notes[0].contains("without a (ci, i0, i1, co) port map"));
+    }
+
+    /// The four-bit shape: one instance per four bits, one XOR per bit
+    /// for the propagate, and nothing left over.
+    ///
+    /// What the chain computes is checked against `CARRY4`'s own model
+    /// in `tests/fpga_carry.rs`, exhaustively and by SAT proof; this is
+    /// only its shape.
+    #[test]
+    fn maps_adders_onto_a_wide_carry_element() {
+        let options = MapOptions {
+            insert_io_buffers: false,
+            insert_clock_buffers: false,
+            ..MapOptions::default()
+        };
+        for (width, instances) in [(4u32, 1usize), (8, 2), (9, 3), (12, 3)] {
+            let (mut design, top, _map) = adder_design(width);
+            let report = run(&mut design, top, "xc7a35t-cpg236", &options);
+            assert_eq!(report.carry_chains[0].primitive, "CARRY4");
+            assert_eq!(report.carry_chains[0].width, width);
+            assert_eq!(
+                report.carry_chains[0].primitives,
+                u32::try_from(instances).unwrap()
+            );
+            assert_eq!(cells_named(&design, top, "CARRY4"), instances);
+            // One XOR per bit, not two: the element computes the sums.
+            assert_eq!(
+                design
+                    .module(top)
+                    .cells
+                    .iter()
+                    .filter(|(_, c)| c.kind == CellKind::Xor)
+                    .count(),
+                usize::try_from(width).unwrap()
+            );
+            assert!(report.notes.is_empty(), "{:?}", report.notes);
+            assert!(
+                report
+                    .to_text()
+                    .contains(&format!("({width} bits) -> {instances} x CARRY4"))
+            );
+        }
+
+        // Below the threshold — which is one whole instance — the adder
+        // is left generic, with nothing said about it.
+        let (mut design, top, _map) = adder_design(3);
+        let report = run(&mut design, top, "xc7a35t-cpg236", &options);
+        assert!(report.carry_chains.is_empty());
+        assert_eq!(cells_named(&design, top, "CARRY4"), 0);
+        assert!(report.notes.is_empty(), "{:?}", report.notes);
     }
 
     #[test]

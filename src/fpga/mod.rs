@@ -438,8 +438,11 @@ mod tests {
         assert_eq!(ecp5.block_rams[0].bits(), 18432);
         assert_eq!(ecp5.dsps[0].p_width, 36);
         assert!(ecp5.tile_grid.is_none());
-        // The ECP5 carry unit is recorded but has no port map, which is
-        // what makes carry mapping decline for the family.
-        assert!(!ecp5.bel(BelRole::Carry).unwrap().has_ports(&["ci"]));
+        // The ECP5 carry unit is recorded but has no port map of either
+        // shape, which is what makes carry mapping decline for the
+        // family: CCU2C is neither the one-bit element nor the wide one.
+        let ccu2c = ecp5.bel(BelRole::Carry).unwrap();
+        assert!(!ccu2c.has_ports(&["ci"]));
+        assert!(ccu2c.wide_carry().is_none());
     }
 }

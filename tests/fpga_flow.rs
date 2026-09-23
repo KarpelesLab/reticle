@@ -706,7 +706,11 @@ fn the_unsupported_corners_are_reported() {
         !notes.contains("stay generic"),
         "the carry chain is declined again:\n{notes}"
     );
-    assert_eq!(run.report.count("CARRY4"), 2, "an 8-bit adder is two CARRY4");
+    assert_eq!(
+        run.report.count("CARRY4"),
+        2,
+        "an 8-bit adder is two CARRY4"
+    );
     assert!(run.report.count("LUT6") > 0);
     let top = run.design.top.unwrap();
     assert!(fpga::check_nextpnr_json(&run.design, top, run.device, &run.constraints).is_empty());
@@ -757,7 +761,10 @@ fn the_artix7_matches_its_datasheet_figures() {
     // source, its own sums, and two ways in.
     let carry = device.bel(BelRole::Carry).unwrap();
     assert_eq!(carry.carry_width, Some(4));
-    assert_eq!(carry.all_port_names(), ["CI", "CYINIT", "S", "DI", "O", "CO"]);
+    assert_eq!(
+        carry.all_port_names(),
+        ["CI", "CYINIT", "S", "DI", "O", "CO"]
+    );
     let wide = carry.wide_carry().expect("a wide carry");
     assert_eq!((wide.propagate, wide.data), ("S", "DI"));
     assert_eq!((wide.sum, wide.carry_out), ("O", "CO"));
