@@ -15,6 +15,15 @@
 mod args;
 mod cache_store;
 
+// The `program` command needs the library's `program` feature, which
+// `cli` deliberately does not turn on: it is the only feature with a
+// dependency, and the stock binary stays dependency-free. Without it the
+// command word is still recognised, and says what to build instead.
+#[cfg(feature = "program")]
+mod program;
+#[cfg(feature = "program")]
+use program::program_cmd;
+
 use std::path::Path;
 use std::process::ExitCode;
 
@@ -46,6 +55,7 @@ Commands:
   lsp      Run the language server over standard input and output
   cache    Build incrementally against a cache of elaborated modules
   viewer   Write the design out as browsable HTML: schematics and reference
+  program  Load a bitstream into an attached FPGA over JTAG
   help     Show this message, or `reticle help <command>`
   version  Show the version
 
@@ -317,6 +327,32 @@ Options:
   --trace <file>   Write the counter-example as VCD here
 ";
 
+const PROGRAM_USAGE: &str = "\
+Usage: reticle program [options] <design.bit>
+
+Loads a bitstream into an attached Xilinx 7-series FPGA over JTAG,
+through an FTDI FT2232H adapter (a Digilent Basys 3 has one on board).
+
+The part's IDCODE is read and checked first, and nothing is written if it
+does not match. Only the volatile configuration memory is written: a
+power cycle undoes it. This command does not program flash and cannot.
+
+Options:
+  --device <serial>  Pick one adapter by serial number, when several are
+                     attached; `--list` shows them
+  --clock <hz>       TCK frequency (default 1000000, maximum 30000000)
+  --expect <idcode>  The IDCODE the part must answer, in hex
+                     (default 0362d093, the XC7A35T on a Basys 3)
+  --list             List attached adapters and exit
+  --probe            Read IDCODE and the status register, and stop
+                     without writing anything
+  --quiet            Do not report progress
+
+Needs the `program` feature, which is off by default because it is the
+only one with a dependency. Build it with:
+  cargo build --features cli,program
+";
+
 fn main() -> ExitCode {
     let argv: Vec<String> = std::env::args().skip(1).collect();
     let Some(command) = argv.first().map(String::as_str) else {
@@ -348,12 +384,26 @@ fn main() -> ExitCode {
         "lsp" => run(lsp, rest, LSP_USAGE),
         "cache" => run(cache_cmd, rest, CACHE_USAGE),
         "viewer" => run(viewer, rest, VIEWER_USAGE),
+        "program" => run(program_cmd, rest, PROGRAM_USAGE),
         other => {
             eprintln!("error: unknown command `{other}`\n");
             eprint!("{USAGE}");
             ExitCode::from(2)
         }
     }
+}
+
+/// `program` without the feature that implements it. The command is
+/// still recognised so the message can say what to do, rather than
+/// "unknown command" for something the usage text lists.
+#[cfg(not(feature = "program"))]
+fn program_cmd(_args: &Args) -> Result<Outcome, ArgError> {
+    eprintln!(
+        "error: this build cannot talk to a board: the `program` feature is off.\n\
+         It is off by default because it is the only feature with a dependency.\n\
+         Rebuild with `cargo build --features cli,program`."
+    );
+    Ok(Outcome::Failed)
 }
 
 /// The help text for one command, or the overview.
@@ -374,6 +424,7 @@ fn help_text(command: Option<&str>) -> &'static str {
         Some("lsp") => LSP_USAGE,
         Some("cache") => CACHE_USAGE,
         Some("viewer") => VIEWER_USAGE,
+        Some("program") => PROGRAM_USAGE,
         _ => USAGE,
     }
 }
@@ -502,6 +553,12 @@ fn spec_for(usage: &str) -> Spec {
             options: &["output-dir", "top", "module", "title", "max-nodes"],
             flags: &["synth", "no-schematic", "no-doc", "no-source", "quiet"],
             repeated: &["param"],
+        }
+    } else if std::ptr::eq(usage, PROGRAM_USAGE) {
+        Spec {
+            options: &["device", "clock", "expect"],
+            flags: &["list", "probe", "quiet"],
+            repeated: &[],
         }
     } else if std::ptr::eq(usage, EMIT_USAGE) {
         Spec {
