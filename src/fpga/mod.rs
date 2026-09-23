@@ -193,9 +193,10 @@ use crate::source::SourceMap;
 ///
 /// The name is only used in diagnostics, which a well-formed file never
 /// produces. Adding a family means adding a file here.
-pub const BUILTIN_FILES: [(&str, &str); 3] = [
+pub const BUILTIN_FILES: [(&str, &str); 4] = [
     ("ice40.dev", include_str!("devices/ice40.dev")),
     ("ecp5.dev", include_str!("devices/ecp5.dev")),
+    ("xc7.dev", include_str!("devices/xc7.dev")),
     ("generic.dev", include_str!("devices/generic.dev")),
 ];
 
@@ -255,6 +256,7 @@ mod tests {
                 "ice40-hx8k-ct256",
                 "ecp5-25f-CABGA381",
                 "ecp5-45f-CABGA381",
+                "xc7a35t-cpg236",
                 "generic",
                 "generic-k6",
             ]
@@ -273,14 +275,25 @@ mod tests {
         for device in builtin_devices().devices() {
             assert!(!device.family.is_empty(), "{}", device.name);
             assert!(device.lut_size >= 3, "{}", device.name);
-            let io = device
-                .bel(BelRole::Io)
-                .unwrap_or_else(|| panic!("{} has no IO buffer", device.name));
-            assert!(
-                io.has_ports(&["pad", "din", "dout"]),
-                "{} IO buffer lacks a port map",
-                device.name
-            );
+            // The buffer for each direction, which is one primitive on a
+            // family with a configurable buffer and three on Xilinx.
+            // An input needs a way in, an output a way out, and both
+            // need the pad.
+            for (direction, roles) in [
+                ("in", &["pad", "din"][..]),
+                ("out", &["pad", "dout"][..]),
+                ("inout", &["pad", "din", "dout", "oe"][..]),
+            ] {
+                let io = device
+                    .io_bel(direction)
+                    .unwrap_or_else(|| panic!("{} has no {direction} IO buffer", device.name));
+                assert!(
+                    io.has_ports(roles),
+                    "{}: the {direction} buffer `{}` lacks {roles:?}",
+                    device.name,
+                    io.name
+                );
+            }
             let gb = device
                 .bel(BelRole::GlobalBuffer)
                 .unwrap_or_else(|| panic!("{} has no global buffer", device.name));

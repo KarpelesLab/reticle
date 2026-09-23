@@ -1,0 +1,442 @@
+# Xilinx 7 series (Artix-7), as much of it as Reticle can state
+# confidently. One part: the XC7A35T-1CPG236C of the Digilent Basys 3.
+#
+# NOTHING HERE HAS BEEN RUN ON SILICON. No bitstream produced from this
+# file has been loaded into a part by anyone who wrote it. What the test
+# suite checks is that the netlist holds only primitives this file
+# declares, wired to pins they have, and that the constraints name pins
+# the Digilent board file names. Whether Vivado accepts the result and
+# whether the result blinks an LED are separate claims, and this file
+# makes neither.
+#
+# Provenance and confidence, stated per group because it differs:
+#
+#   * Primitive names and port lists (LUT1..LUT6, CARRY4, FDRE/FDSE/
+#     FDCE/FDPE and their `_1` negative-edge forms, IBUF, OBUF, OBUFT,
+#     IOBUF, BUFG, RAMB18E1, RAM64X1D, PLLE2_BASE, MMCME2_BASE) were
+#     read from Yosys' `techlibs/xilinx/cells_sim.v` and `cells_xtra.v`
+#     while writing this file. `cells_xtra.v` is generated from Vivado's
+#     own `unisims` library, and `cells_sim.v` is the behavioural model
+#     `synth_xilinx` and every open 7-series flow use. HIGH confidence
+#     for the names, the port names and the port widths; these were
+#     checked line by line against that source, not recalled.
+#   * LUT6: six inputs I0..I5, output O, 64-bit INIT, and the model is
+#     `O = INIT[{I5,I4,I3,I2,I1,I0}]` — I0 the least significant bit of
+#     the index. HIGH confidence (the nested-mux body of `cells_sim.v`
+#     says exactly that). That is also Reticle's own LUT convention, so
+#     the truth table a mapped LUT carries is written out unchanged and
+#     the `i=` list below is in pin order I0 first. `lut_size` is 6, so
+#     technology mapping uses the `generic-k6` six-input path that
+#     already existed rather than anything new.
+#     LUT1..LUT5 are declared too, with their own INIT widths, so that a
+#     netlist check knows them; Reticle itself always emits LUT6, since
+#     [`super::techcells`] widens a narrower truth table by repeating it
+#     and ties the unused inputs low. A LUT5 is half a LUT6 on this
+#     fabric, so nothing is lost but a line in a report.
+#   * CARRY4 is declared WITHOUT A PORT MAP, deliberately, which is what
+#     makes carry mapping decline for this family with a note, exactly
+#     as it declines for the ECP5's CCU2C. Its behaviour is not in doubt
+#     — from `cells_sim.v`, HIGH confidence:
+#
+#         O  = S ^ {CO[2:0], CI | CYINIT}
+#         CO[0] = S[0] ? (CI | CYINIT) : DI[0]
+#         CO[i] = S[i] ? CO[i-1]       : DI[i]      for i = 1, 2, 3
+#
+#     so S is the propagate (usually a XOR b, from a LUT), DI the
+#     generate source (usually a itself), O the sum, CO the carry out of
+#     each of the four bits, and CI (from the slice below) and CYINIT
+#     (from the fabric or a constant) are the two ways in, of which
+#     exactly one may be used. The reason for declining is that Reticle
+#     maps carry chains onto a one-bit `(ci, i0, i1) -> co` element with
+#     the sum XORed outside it, and CARRY4 is four bits wide, computes
+#     its own sums, and takes a propagate rather than two operands.
+#     Forcing it into that shape would be wrong in a way that only a
+#     part would show, so adders go to LUT6s until the mapper learns the
+#     four-bit shape. This costs area and depth; it does not cost
+#     correctness.
+#   * Flip-flops: FDRE (synchronous reset R), FDSE (synchronous set S),
+#     FDCE (asynchronous clear CLR), FDPE (asynchronous preset PRE),
+#     each with D, CE, C and Q, each with a one-bit INIT, and each with
+#     an `_1` twin that captures on the FALLING clock edge. HIGH
+#     confidence: all eight are in `cells_sim.v` with exactly these
+#     pins, and INIT defaults to 0 on FDRE/FDCE and 1 on FDSE/FDPE,
+#     which is what the `param INIT=` values below repeat.
+#     Three consequences worth stating plainly:
+#       - There is no combination of a synchronous and an asynchronous
+#         set/reset on one 7-series flip-flop, and no primitive with
+#         both a set and a reset (FDRSE exists but is a UniSim
+#         convenience, not a slice). One kind per flop, which is what
+#         the eight `mode` lines below say.
+#       - CE exists on every one of them and there is no variant
+#         without it, so a flip-flop that does not want a clock enable
+#         gets CE tied high, and one that does not want a set/reset gets
+#         that pin tied to its inactive level. Reticle already does both
+#         (`techcells::connect_control`); this file just declares the
+#         pins on every line.
+#       - Every control pin is active high and 7-series declares no
+#         inverted variant of it that UG953 documents. An active-low
+#         reset therefore costs one LUT6 inverter per net, which is what
+#         flip-flop mapping inserts and reports, and is what a vendor
+#         flow does too. No `active_low` line is declared.
+#     `shared_reset` is set: the eight flip-flops of a SLICE share one
+#     clock, one CE and one SR, so flops with different control sets
+#     cannot be packed together. That is the analogue of the iCE40's
+#     shared tile controls. HIGH confidence (7-series CLB, UG474).
+#     `init` is deliberately absent from the `ff` line: each flop has
+#     its own INIT and none is forced to a fixed power-up value.
+#   * Block RAM: RAMB18E1 only, and that is a choice with a reason.
+#     RAMB36E1 is described in UG473 and exists in the library, but in
+#     non-cascaded use its ADDRARDADDR[15] and ADDRBWRADDR[15] must be
+#     TIED HIGH (Yosys' own 7-series block RAM mapping writes
+#     `{1'b1, ADDR[14:0]}`; HIGH confidence that the tie is required).
+#     Reticle's address model can pad the bits BELOW the word address
+#     and not the bits above it, so a RAMB36E1 declared here would come
+#     out with that pin at zero and address the wrong half of the array.
+#     Rather than emit that, this file declares the 18 kbit block, of
+#     which the part has a hundred; fifty RAMB36E1 and a hundred
+#     RAMB18E1 are the same array seen two ways, so no capacity is lost,
+#     only the 36-bit-wide and 72-bit-wide modes.
+#   * RAMB18E1 ports and parameters: CLKARDCLK/ENARDEN/ADDRARDADDR[13:0]/
+#     DIADI[15:0]/DOADO[15:0]/WEA[1:0] on the A side and CLKBWRCLK/
+#     ENBWREN/ADDRBWRADDR[13:0]/DIBDI[15:0]/DOBDO[15:0]/WEBWE[3:0] on the
+#     B side, with READ_WIDTH_A/B and WRITE_WIDTH_A/B selecting the
+#     aspect ratio and RAM_MODE="TDP" the true-dual-port mode. HIGH
+#     confidence for the names and widths (read from `cells_sim.v`).
+#     DOA_REG and DOB_REG are set to 0: the optional output pipeline
+#     register is off, so a read appears one clock after the address,
+#     which is the latency Reticle's clocked read port means.
+#     SIM_DEVICE is "7SERIES" rather than the library default
+#     "VIRTEX6", which only affects simulation models.
+#   * RAMB18E1 WIDTHS AND PARITY. The block holds 18 kbit as 16 kbit of
+#     data plus 2 kbit of parity, and the two live in different
+#     parameters: INIT_00..INIT_3F hold the data, INITP_00..INITP_07 the
+#     parity. Reticle's contents model has one parameter series, so this
+#     file uses THE DATA BITS ONLY: the width modes are 16, 8, 4, 2 and
+#     1 bits and the block is 16 kbit here, not 18. The parity pins
+#     (DIPADIP, DIPBDIP, DOPADOP, DOPBDOP) are neither declared nor
+#     connected. What is lost is one bit in nine of the array; what is
+#     gained is that the contents layout below is exact rather than
+#     approximate. The WIDTH parameters still take the values the
+#     silicon uses, which COUNT the parity bits: a 16-bit data mode is
+#     READ_WIDTH_A=18 and an 8-bit one is 9. HIGH confidence that 18/9/
+#     4/2/1 are the legal values; MEDIUM-HIGH that pairing them with a
+#     16/8/4/2/1-bit data connection is right, which is what every
+#     inferred 16-bit block RAM does.
+#   * RAMB18E1 ADDRESS ALIGNMENT (`addr` on each `mode` line). The
+#     address port is 14 bits in every mode and counts in units of the
+#     NARROWEST mode, so a wider mode ignores the low pins: the word
+#     address is ADDR[13:4] for 16-bit words, [13:3] for 8-bit, [13:2],
+#     [13:1] and [13:0] below that. HIGH confidence: it is UG473's port
+#     aspect-ratio table and what Yosys' mapping relies on. The unused
+#     low pins are tied to zero (no `pad` clause), which is what they
+#     are for on this family — unlike the ECP5, where they are the byte
+#     enables.
+#   * RAMB18E1 CONTENTS LAYOUT (`init_params` and `init` on each `mode`
+#     line). INIT_00..INIT_3F are sixty-four 256-bit parameters holding
+#     the 16 kbit of data in address order, INIT_00 the lowest bits of
+#     the array. This file records that as 64 parameters of 16 rows of
+#     16 bits, first row in the low bits, which is 1024 rows and exactly
+#     the 16-bit mode's depth. In a narrower mode consecutive addresses
+#     share a row (`init low`): two 8-bit words in bits 7..0 and 15..8,
+#     four 4-bit words, and so on down to sixteen 1-bit words per row.
+#     MEDIUM-HIGH confidence. The 256-bit-chunks-in-address-order
+#     description is UG473's and is what every published 7-series ROM
+#     initialisation does; the row-sharing order in the narrow modes
+#     follows from it, but was reasoned out here rather than read off a
+#     part or a bitstream.
+#   * BYTE WRITE ENABLES. Set, and genuinely so: WEA is two bits and
+#     WEBWE four, one per byte of the data port, unlike the iCE40's
+#     bit-granular mask or the ECP5's address-pin trick. Reticle has no
+#     byte-granular memory yet, so a write drives every one of those
+#     pins alike (`we=WEA*2`, `we=WEBWE*4`), which is what Yosys' own
+#     mapping does (`wire [3:0] WE_A = {4{PORT_A_WR_EN}}`). HIGH
+#     confidence. Leaving the upper bits unconnected would have written
+#     the low byte and dropped the rest, silently, which is why the
+#     `*N` suffix exists at all.
+#   * Distributed RAM: RAM64X1D, sixty-four words of one bit, one
+#     clocked write port (D, WCLK, WE, A0..A5) and a second, asynchronous
+#     read address (DPRA0..DPRA5 -> DPO). HIGH confidence for the pins
+#     (read from `cells_sim.v`). Reticle reads the shape off the port
+#     list — one `dout` pin wide, six `raddr` pins deep — so nothing
+#     about 64x1 is written in Rust. Its INIT is not emitted: the
+#     fallback that uses this primitive declines a memory with initial
+#     contents rather than loading them.
+#   * IO: IBUF (pad `I`, fabric `O`), OBUF (fabric `I`, pad `O`) and
+#     IOBUF (pad `IO`, `O` in, `I` out, `T` the active-high tristate).
+#     HIGH confidence. Note that the three do not agree on what the pad
+#     pin is called, which is why each is a separate `bel … io for …`
+#     line; see the `.dev` format notes on IO buffers. OBUFT is
+#     declared as `other` so a netlist check knows it: Reticle does not
+#     infer a tristate enable for a port, so it never instantiates one.
+#     IOSTANDARD, DRIVE and SLEW are parameters of these primitives in
+#     the library, but Vivado takes them from the XDC, which is where
+#     Reticle puts them, so no `param_*` clause sets them here.
+#   * IO standards: LVCMOS33 is the only one the Basys 3 uses and the
+#     only one the board's banks are wired for. LVCMOS25/18/15/12 are
+#     listed because the part has them. The drive strengths are the
+#     usual 7-series LVCMOS lists; MEDIUM confidence for the exact
+#     numbers per standard, HIGH for the names and for SLEW being SLOW
+#     or FAST. TMDS_33 and LVDS_25 are NOT listed: the Basys 3 has no
+#     differential connector and Reticle cannot check a pin pair.
+#   * Clock buffer: BUFG, one input, one output. HIGH confidence. The
+#     count of 32 is the number of global clock buffers on a 7-series
+#     die; MEDIUM-HIGH confidence.
+#   * PLLs: PLLE2_BASE and MMCME2_BASE, one of each in each of the
+#     part's five clock management tiles, hence `count 5` on both lines
+#     (they are two blocks, not one used twice, but the `.dev` model
+#     counts a family of clock generators and five is right for each).
+#     The ports and the divider parameters are from `cells_xtra.v`,
+#     which is generated from Vivado's library: HIGH confidence for
+#     CLKIN1/CLKFBIN/CLKFBOUT/CLKOUT0/LOCKED/RST/PWRDWN,
+#     DIVCLK_DIVIDE/CLKFBOUT_MULT/CLKOUT0_DIVIDE on the PLL and
+#     DIVCLK_DIVIDE/CLKFBOUT_MULT_F/CLKOUT0_DIVIDE_F on the MMCM.
+#     The feedback is taken from the VCO — `vco = in / DIVCLK * MULT`,
+#     `out = vco / DIVIDE` — but unlike the iCE40 the loop is not closed
+#     inside the block: CLKFBOUT has to be wired back to CLKFBIN, which
+#     is what the `fbout` port role below tells mapping to do.
+#     Frequency ranges are the -1 speed grade's, from DS181: PLL VCO
+#     800-1600 MHz, MMCM VCO 600-1200 MHz, phase detector 19-450 MHz for
+#     the PLL and 10-450 MHz for the MMCM, input 19-800 MHz and 10-800
+#     MHz. MEDIUM-HIGH confidence for the VCO bands, MEDIUM for the
+#     phase-detector and input limits; they are stated as whole MHz, and
+#     rounding a lower bound up only forbids settings, it never allows a
+#     wrong one.
+#     KNOWN GAP: CLKIN1_PERIOD is a REAL parameter and the `.dev` model
+#     carries integers, sized constants and strings only, so this file
+#     does not set it and it stays at the library default of 0.000.
+#     The output frequency does not depend on it — it is set by the
+#     three integer dividers, which Reticle does write — but Vivado uses
+#     it for jitter, and a design that cares should add
+#     `set_property` / a hand-edited parameter. MEDIUM confidence that
+#     Vivado warns rather than refuses; this has not been run.
+#     CLKOUT1..5 are not configured; only CLKOUT0 is used.
+#   * NO DSP48E1. The part has 90 of them and Reticle declares none, on
+#     purpose. A DSP48E1 does not multiply unless OPMODE, ALUMODE and
+#     INMODE are driven with the right constants (7'b0000101, 4'b0000,
+#     5'b00000 for a plain A*B), and the `.dev` `dsp` line has no way to
+#     state a tied input or a parameter. Declaring the block without
+#     them would produce a netlist that instantiates a DSP doing
+#     something other than the multiply it replaced. Multiplies
+#     therefore go to LUT6s and are correct but large. Teaching the
+#     `dsp` line to tie pins is the fix, and it is not done here.
+#   * NO IDDR/ODDR and NO IDELAYE2. A double-data-rate port is reported
+#     as unbuildable on this family and buffered as an ordinary one; an
+#     IO delay likewise. Both primitives exist on the part; IDELAYE2 in
+#     particular needs an IDELAYCTRL with a 200 MHz reference clock,
+#     which is a board-level obligation Reticle cannot state, and the
+#     DDR registers need a CE pin the `ddr_in`/`ddr_out` roles do not
+#     have. Declaring them half-connected would be worse than the
+#     warning the user gets now.
+#   * NO TILE GRID. Reticle cannot state the SLICE array of an XC7A35T,
+#     and a wrong bounding box would silently accept or reject placement
+#     regions, so none is recorded and a region constraint is reported
+#     as uncheckable. Note that `Constraints::write_xdc` writes pblock
+#     rectangles as `SLICE_X..Y..`, which IS the Xilinx site naming, so
+#     a region a user states by hand comes out in the right syntax; it
+#     is only unchecked here.
+#   * Resource counts: 20800 six-input LUTs, 41600 flip-flops, 100
+#     RAMB18E1 (1800 kbit, of which this file uses 1600 kbit of data),
+#     90 DSP48E1 (undeclared) and 5 clock management tiles, from the
+#     Artix-7 datasheet figures for the XC7A35T. HIGH confidence.
+#   * IO banks: the part has several, and this file records ONE
+#     synthetic bank named `io` holding every listed pin, because
+#     Reticle cannot say which package ball is in which bank. Do not
+#     read the bank name as silicon truth. Its `vccio` list is 3.3 only,
+#     which is what the Basys 3 wires its banks to, not what the part
+#     allows.
+#   * PIN LIST: PARTIAL, AND TAKEN FROM A BOARD FILE, NOT FROM THE
+#     PACKAGE DRAWING. Every pin below is a line of Digilent's published
+#     `Basys-3-Master.xdc` (github.com/Digilent/digilent-xdc), fetched
+#     while writing this file and transcribed, not recalled: the 100 MHz
+#     oscillator W5, the sixteen slide switches, the sixteen LEDs, the
+#     seven-segment segments, decimal point and four anodes, the five
+#     pushbuttons, the USB-UART pair B18/A18, the PS/2 pair, the four
+#     Pmod headers JA/JB/JC/JXADC, and the twelve VGA colour pins with
+#     Hsync and Vsync. HIGH confidence that these are IO balls of the
+#     CPG236 package and that they are wired to what their names say on
+#     a Basys 3 rev B. The CPG236 has roughly a hundred more IO balls
+#     that this file does not list, which is why it says `pins partial`:
+#     a constraint naming an unlisted pin is a warning that Reticle
+#     cannot check it, and Vivado, which has the real package, decides.
+#     W5 is marked `clock` because the board's oscillator drives it and
+#     Digilent's own file puts a `create_clock` on it; MEDIUM-HIGH
+#     confidence that it is a clock-capable (MRCC/SRCC) ball.
+#   * THE BASYS 3 HAS NO HDMI OR DVI CONNECTOR. Its video output is VGA
+#     at 12 bits — four bits per channel through a resistor ladder —
+#     on the pins listed below. The `ip/dvi_tx` package in this
+#     repository drives TMDS differential pairs and CANNOT drive this
+#     board; its `video_timing` module, which is plain counters and
+#     sync generation, is reusable for a VGA path unchanged. Building
+#     that path is not part of this file.
+#   * THE VIVADO PART STRING is not recorded here: `super::flow` builds
+#     it from the device name, the package and the speed grade
+#     (`xc7a35t` + `cpg236` + `-1` = `xc7a35tcpg236-1`). Change the
+#     device name and that changes with it.
+
+device xc7a35t-cpg236
+  family xc7
+  package cpg236
+  speed 1
+  lut_size 6
+  ff enable sync_reset async_reset shared_reset
+  bel LUT6 lut count 20800 port i=I0,I1,I2,I3,I4,I5 o=O param INIT=64'h0000000000000000
+  bel LUT5 lut port i=I0,I1,I2,I3,I4 o=O param INIT=32'h00000000
+  bel LUT4 lut port i=I0,I1,I2,I3 o=O param INIT=16'h0000
+  bel LUT3 lut port i=I0,I1,I2 o=O param INIT=8'h00
+  bel LUT2 lut port i=I0,I1 o=O param INIT=4'h0
+  bel LUT1 lut port i=I0 o=O param INIT=2'h0
+  bel CARRY4 carry
+  bel FDRE ff count 41600 mode posedge port clk=C d=D q=Q en=CE rst=R param INIT=1'b0
+  bel FDRE ff mode posedge,enable port clk=C d=D q=Q en=CE rst=R param INIT=1'b0
+  bel FDRE ff mode posedge,sync_reset port clk=C d=D q=Q en=CE rst=R param INIT=1'b0
+  bel FDRE ff mode posedge,enable,sync_reset port clk=C d=D q=Q en=CE rst=R param INIT=1'b0
+  bel FDSE ff mode posedge,sync_set port clk=C d=D q=Q en=CE rst=S param INIT=1'b1
+  bel FDSE ff mode posedge,enable,sync_set port clk=C d=D q=Q en=CE rst=S param INIT=1'b1
+  bel FDCE ff mode posedge,async_reset port clk=C d=D q=Q en=CE rst=CLR param INIT=1'b0
+  bel FDCE ff mode posedge,enable,async_reset port clk=C d=D q=Q en=CE rst=CLR param INIT=1'b0
+  bel FDPE ff mode posedge,async_set port clk=C d=D q=Q en=CE rst=PRE param INIT=1'b1
+  bel FDPE ff mode posedge,enable,async_set port clk=C d=D q=Q en=CE rst=PRE param INIT=1'b1
+  bel FDRE_1 ff mode negedge port clk=C d=D q=Q en=CE rst=R param INIT=1'b0
+  bel FDRE_1 ff mode negedge,enable port clk=C d=D q=Q en=CE rst=R param INIT=1'b0
+  bel FDRE_1 ff mode negedge,sync_reset port clk=C d=D q=Q en=CE rst=R param INIT=1'b0
+  bel FDRE_1 ff mode negedge,enable,sync_reset port clk=C d=D q=Q en=CE rst=R param INIT=1'b0
+  bel FDSE_1 ff mode negedge,sync_set port clk=C d=D q=Q en=CE rst=S param INIT=1'b1
+  bel FDSE_1 ff mode negedge,enable,sync_set port clk=C d=D q=Q en=CE rst=S param INIT=1'b1
+  bel FDCE_1 ff mode negedge,async_reset port clk=C d=D q=Q en=CE rst=CLR param INIT=1'b0
+  bel FDCE_1 ff mode negedge,enable,async_reset port clk=C d=D q=Q en=CE rst=CLR param INIT=1'b0
+  bel FDPE_1 ff mode negedge,async_set port clk=C d=D q=Q en=CE rst=PRE param INIT=1'b1
+  bel FDPE_1 ff mode negedge,enable,async_set port clk=C d=D q=Q en=CE rst=PRE param INIT=1'b1
+  bel IBUF io for in port pad=I din=O
+  bel OBUF io for out port pad=O dout=I
+  bel IOBUF io for inout port pad=IO din=O dout=I oe=T
+  bel OBUFT other port pad=O dout=I oe=T
+  bel BUFG gb count 32 port i=I o=O
+  bel RAM64X1D lutram port wclk=WCLK we=WE waddr=A0,A1,A2,A3,A4,A5 din=D raddr=DPRA0,DPRA1,DPRA2,DPRA3,DPRA4,DPRA5 dout=DPO
+  bram RAMB18E1
+    ports 2
+    mode 16 1024 param READ_WIDTH_A=18 WRITE_WIDTH_A=18 READ_WIDTH_B=18 WRITE_WIDTH_B=18 RAM_MODE="TDP" DOA_REG=0 DOB_REG=0 SIM_DEVICE="7SERIES" addr 4 init low 0-15
+    mode 8 2048 param READ_WIDTH_A=9 WRITE_WIDTH_A=9 READ_WIDTH_B=9 WRITE_WIDTH_B=9 RAM_MODE="TDP" DOA_REG=0 DOB_REG=0 SIM_DEVICE="7SERIES" addr 3 init low 0-7 8-15
+    mode 4 4096 param READ_WIDTH_A=4 WRITE_WIDTH_A=4 READ_WIDTH_B=4 WRITE_WIDTH_B=4 RAM_MODE="TDP" DOA_REG=0 DOB_REG=0 SIM_DEVICE="7SERIES" addr 2 init low 0-3 4-7 8-11 12-15
+    mode 2 8192 param READ_WIDTH_A=2 WRITE_WIDTH_A=2 READ_WIDTH_B=2 WRITE_WIDTH_B=2 RAM_MODE="TDP" DOA_REG=0 DOB_REG=0 SIM_DEVICE="7SERIES" addr 1 init low 0,1 2,3 4,5 6,7 8,9 10,11 12,13 14,15
+    mode 1 16384 param READ_WIDTH_A=1 WRITE_WIDTH_A=1 READ_WIDTH_B=1 WRITE_WIDTH_B=1 RAM_MODE="TDP" DOA_REG=0 DOB_REG=0 SIM_DEVICE="7SERIES" init low 0 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15
+    flags byte_enable dual_port init
+    init_params INIT_ count 64 digits 2 rows 16 slot 16
+    port rw clk=CLKARDCLK en=ENARDEN addr=ADDRARDADDR din=DIADI dout=DOADO we=WEA*2 rst=RSTRAMARSTRAM
+    port rw clk=CLKBWRCLK en=ENBWREN addr=ADDRBWRADDR din=DIBDI dout=DOBDO we=WEBWE*4 rst=RSTRAMB
+  end
+  io_standard LVCMOS33 vccio 3.3 drive 4,8,12,16 slew slow,fast
+  io_standard LVCMOS25 vccio 2.5 drive 4,8,12,16 slew slow,fast
+  io_standard LVCMOS18 vccio 1.8 drive 4,8,12,16 slew slow,fast
+  io_standard LVCMOS15 vccio 1.5 drive 4,8,12,16 slew slow,fast
+  io_standard LVCMOS12 vccio 1.2 drive 4,8,12 slew slow,fast
+  bank io vccio 3.3
+  pins partial
+  pin W5 clock bank io
+  pin V17 io bank io
+  pin V16 io bank io
+  pin W16 io bank io
+  pin W17 io bank io
+  pin W15 io bank io
+  pin V15 io bank io
+  pin W14 io bank io
+  pin W13 io bank io
+  pin V2 io bank io
+  pin T3 io bank io
+  pin T2 io bank io
+  pin R3 io bank io
+  pin W2 io bank io
+  pin U1 io bank io
+  pin T1 io bank io
+  pin R2 io bank io
+  pin U16 io bank io
+  pin E19 io bank io
+  pin U19 io bank io
+  pin V19 io bank io
+  pin W18 io bank io
+  pin U15 io bank io
+  pin U14 io bank io
+  pin V14 io bank io
+  pin V13 io bank io
+  pin V3 io bank io
+  pin W3 io bank io
+  pin U3 io bank io
+  pin P3 io bank io
+  pin N3 io bank io
+  pin P1 io bank io
+  pin L1 io bank io
+  pin W7 io bank io
+  pin W6 io bank io
+  pin U8 io bank io
+  pin V8 io bank io
+  pin U5 io bank io
+  pin V5 io bank io
+  pin U7 io bank io
+  pin V7 io bank io
+  pin U2 io bank io
+  pin U4 io bank io
+  pin V4 io bank io
+  pin W4 io bank io
+  pin U18 io bank io
+  pin T18 io bank io
+  pin W19 io bank io
+  pin T17 io bank io
+  pin U17 io bank io
+  pin J1 io bank io
+  pin L2 io bank io
+  pin J2 io bank io
+  pin G2 io bank io
+  pin H1 io bank io
+  pin K2 io bank io
+  pin H2 io bank io
+  pin G3 io bank io
+  pin A14 io bank io
+  pin A16 io bank io
+  pin B15 io bank io
+  pin B16 io bank io
+  pin A15 io bank io
+  pin A17 io bank io
+  pin C15 io bank io
+  pin C16 io bank io
+  pin K17 io bank io
+  pin M18 io bank io
+  pin N17 io bank io
+  pin P18 io bank io
+  pin L17 io bank io
+  pin M19 io bank io
+  pin P17 io bank io
+  pin R18 io bank io
+  pin J3 io bank io
+  pin L3 io bank io
+  pin M2 io bank io
+  pin N2 io bank io
+  pin K3 io bank io
+  pin M3 io bank io
+  pin M1 io bank io
+  pin N1 io bank io
+  pin G19 io bank io
+  pin H19 io bank io
+  pin J19 io bank io
+  pin N19 io bank io
+  pin N18 io bank io
+  pin L18 io bank io
+  pin K18 io bank io
+  pin J18 io bank io
+  pin J17 io bank io
+  pin H17 io bank io
+  pin G17 io bank io
+  pin D17 io bank io
+  pin P19 io bank io
+  pin R19 io bank io
+  pin B18 io bank io
+  pin A18 io bank io
+  pin C17 io bank io
+  pin B17 io bank io
+  pin D18 io bank io
+  pin D19 io bank io
+  pin G18 io bank io
+  pin F18 io bank io
+  pin K19 io bank io
+  global_buffers 32
+  pll PLLE2_BASE input 19 800 vco 800 1600 outputs 6 count 5 pfd 19 450 feedback vco divide ref DIVCLK_DIVIDE 1 56 divide feedback CLKFBOUT_MULT 2 64 divide out CLKOUT0_DIVIDE 1 128 port ref=CLKIN1 out=CLKOUT0 fb=CLKFBIN fbout=CLKFBOUT lock=LOCKED tie RST=0 PWRDWN=0 param STARTUP_WAIT="FALSE" BANDWIDTH="OPTIMIZED"
+  pll MMCME2_BASE input 10 800 vco 600 1200 outputs 7 count 5 pfd 10 450 feedback vco divide ref DIVCLK_DIVIDE 1 106 divide feedback CLKFBOUT_MULT_F 2 64 divide out CLKOUT0_DIVIDE_F 1 128 port ref=CLKIN1 out=CLKOUT0 fb=CLKFBIN fbout=CLKFBOUT lock=LOCKED tie RST=0 PWRDWN=0 param STARTUP_WAIT="FALSE" BANDWIDTH="OPTIMIZED"
+end

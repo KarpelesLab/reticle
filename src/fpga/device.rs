@@ -97,6 +97,32 @@
 //! A device whose pin list is known to be incomplete says `pins
 //! partial`, which turns a constraint naming an unlisted pin from an
 //! error into a warning.
+//!
+//! # IO buffers, one per direction
+//!
+//! Most families have one IO buffer configured by a parameter, and one
+//! `bel … io` line describes it. Xilinx has a *different primitive* per
+//! direction — `IBUF`, `OBUF`, `IOBUF` — which do not even agree on the
+//! name of the pad pin (`I`, `O`, `IO`). Such a family declares one line
+//! each with a `for` clause:
+//!
+//! ```text
+//! bel IBUF  io for in    port pad=I  din=O
+//! bel OBUF  io for out   port pad=O  dout=I
+//! bel IOBUF io for inout port pad=IO din=O dout=I oe=T
+//! ```
+//!
+//! and [`Device::io_bel`] picks between them. A line with no `for`
+//! serves every direction, which is what the one-buffer families say.
+//!
+//! # Wide block RAM pins
+//!
+//! A block RAM signal whose pin is several bits wide and takes the same
+//! value on every one of them writes the count after the name:
+//! `we=WEA*2`. The 7-series byte write enables (`WEA[1:0]`,
+//! `WEBWE[3:0]`) are what this is for — a memory written a whole word at
+//! a time drives all of them alike, and leaving the upper bits
+//! unconnected would write one byte and drop the rest.
 
 use std::fmt;
 
@@ -462,6 +488,15 @@ pub struct BelKind {
     /// it is; `None` for every other role, and for a flip-flop whose file
     /// does not say (which makes flip-flop mapping decline for it).
     pub ff: Option<FfVariant>,
+    /// For a primitive with role [`BelRole::Io`], the port directions it
+    /// serves: `in`, `out`, `inout`. Empty means "every direction",
+    /// which is what a family with one configurable buffer (iCE40's
+    /// `SB_IO`, ECP5's `TRELLIS_IO`) says. A family with a *different
+    /// primitive per direction* — Xilinx's `IBUF`, `OBUF` and `IOBUF`,
+    /// which do not even agree on what the pad pin is called — declares
+    /// one `bel` line each with a `for` clause, and
+    /// [`Device::io_bel`] picks between them.
+    pub io_dirs: Vec<String>,
 }
 
 impl BelKind {
@@ -475,6 +510,7 @@ impl BelKind {
             params: Vec::new(),
             cond_params: Vec::new(),
             ff: None,
+            io_dirs: Vec::new(),
         }
     }
 
@@ -577,9 +613,26 @@ pub struct BramPort {
     /// Abstract signal role to port name, in file order: `clk`, `en`,
     /// `ce`, `addr`, `din`, `dout`, `we`, `rst`.
     pub signals: Vec<(String, String)>,
+    /// Signals whose pin is several bits wide and takes the same value
+    /// on every one of them, as `(role, bits)`, for the roles where that
+    /// is so; a role with no entry is one bit. The write enable of a
+    /// family with **byte** write enables is the case this exists for:
+    /// a 7-series `RAMB18E1` has `WEA[1:0]` and `WEBWE[3:0]`, and a
+    /// memory written a whole word at a time drives every one of them
+    /// alike. Written `we=WEA*2` in the text format.
+    pub widths: Vec<(String, u32)>,
 }
 
 impl BramPort {
+    /// How many bits wide the pin playing `role` is; 1 unless the
+    /// database says otherwise.
+    pub fn width(&self, role: &str) -> u32 {
+        self.widths
+            .iter()
+            .find(|(r, _)| r == role)
+            .map_or(1, |(_, bits)| *bits)
+    }
+
     /// The port name playing `role`, if the database records one.
     pub fn signal(&self, role: &str) -> Option<&str> {
         self.signals
@@ -1034,7 +1087,11 @@ pub struct PllShape {
     pub bands: Vec<(String, Vec<(u32, i64)>)>,
     /// Abstract role to port name: `ref` (the reference clock in), `out`
     /// (the generated clock), `fb` (the feedback input, wired to `out`
-    /// when the feedback is taken from the output), `lock`.
+    /// when the feedback is taken from the output), `fbout` (the
+    /// feedback *output* of a block whose loop is closed outside it, as
+    /// the 7-series `PLLE2_BASE` closes `CLKFBOUT` onto `CLKFBIN`; when
+    /// both are named, mapping runs a net between them and `fb` is not
+    /// taken from `out`), `lock`.
     pub ports: Vec<(String, String)>,
     /// Input ports tied to a constant so the block runs: an active-low
     /// reset held high, a bypass held low.
@@ -1305,6 +1362,29 @@ impl Device {
     /// The first primitive with the given role.
     pub fn bel(&self, role: BelRole) -> Option<&BelKind> {
         self.bels.iter().find(|b| b.role == role)
+    }
+
+    /// The IO buffer to use for a port of direction `dir` (`in`, `out`
+    /// or `inout`).
+    ///
+    /// A family with one configurable buffer declares it without a `for`
+    /// clause and gets it back whatever the direction; a family with one
+    /// primitive per direction (Xilinx's `IBUF`, `OBUF`, `IOBUF`)
+    /// declares a line each and gets the matching one. `None` means the
+    /// device describes no buffer that can serve that direction, which
+    /// [`super::primitives`] reports rather than working around.
+    ///
+    /// ```
+    /// use reticle::fpga::target;
+    /// // One buffer for everything: the same primitive every time.
+    /// let ice40 = target("ice40-hx1k-tq144").unwrap();
+    /// assert_eq!(ice40.io_bel("in").unwrap().name, "SB_IO");
+    /// assert_eq!(ice40.io_bel("inout").unwrap().name, "SB_IO");
+    /// ```
+    pub fn io_bel(&self, dir: &str) -> Option<&BelKind> {
+        let io = || self.bels.iter().filter(|b| b.role == BelRole::Io);
+        io().find(|b| b.io_dirs.iter().any(|d| d == dir))
+            .or_else(|| io().find(|b| b.io_dirs.is_empty()))
     }
 
     /// The primitive with the given name.
@@ -1634,6 +1714,9 @@ fn write_bel(bel: &BelKind) -> String {
     if let Some(ff) = bel.ff {
         line.push_str(&format!(" mode {}", ff.flags()));
     }
+    if !bel.io_dirs.is_empty() {
+        line.push_str(&format!(" for {}", join(&bel.io_dirs)));
+    }
     line.push_str(&write_pairs("port", &bel.ports));
     write_params(&mut line, "param", &bel.params);
     for (condition, params) in &bel.cond_params {
@@ -1704,6 +1787,10 @@ fn write_bram(out: &mut String, bram: &BramShape) {
         let mut line = format!("    port {}", port.role.keyword());
         for (role, name) in &port.signals {
             line.push_str(&format!(" {}={}", quote(role), quote(name)));
+            let bits = port.width(role);
+            if bits > 1 {
+                line.push_str(&format!("*{bits}"));
+            }
         }
         out.push_str(&line);
         out.push('\n');
@@ -2207,6 +2294,24 @@ impl<'a> Parser<'a> {
                         }
                     }
                 }
+                "for" => {
+                    let Some(token) = line.get(index) else {
+                        self.error(line.span, "expected port directions after `for`");
+                        break;
+                    };
+                    index += 1;
+                    for word in token.as_str().split(',').filter(|w| !w.is_empty()) {
+                        if matches!(word, "in" | "out" | "inout") {
+                            bel.io_dirs.push(word.to_owned());
+                        } else {
+                            let span = token.span;
+                            self.unknown(
+                                span,
+                                format!("unknown port direction `{word}`, expected `in`, `out` or `inout`"),
+                            );
+                        }
+                    }
+                }
                 "port" => bel.ports.extend(self.pairs(line, &mut index)),
                 keyword if keyword == "param" || keyword.starts_with("param_") => {
                     let keyword = keyword.to_owned();
@@ -2313,8 +2418,35 @@ impl<'a> Parser<'a> {
                         continue;
                     };
                     let mut index = 2;
-                    let signals = self.pairs(line, &mut index);
-                    bram.port_map.push(BramPort { role, signals });
+                    let mut signals = Vec::new();
+                    let mut widths = Vec::new();
+                    for (signal, name) in self.pairs(line, &mut index) {
+                        // `we=WEA*2`: a pin several bits wide that takes
+                        // the same value on each. Only a count of two or
+                        // more is recorded, so that the text round-trips.
+                        match name.split_once('*') {
+                            Some((base, count)) => match count.parse::<u32>() {
+                                Ok(bits) if bits >= 2 => {
+                                    widths.push((signal.clone(), bits));
+                                    signals.push((signal, base.to_owned()));
+                                }
+                                Ok(_) => signals.push((signal, base.to_owned())),
+                                Err(_) => {
+                                    self.error(
+                                        line.span,
+                                        format!("expected a bit count after `*`, found `{count}`"),
+                                    );
+                                    signals.push((signal, base.to_owned()));
+                                }
+                            },
+                            None => signals.push((signal, name)),
+                        }
+                    }
+                    bram.port_map.push(BramPort {
+                        role,
+                        signals,
+                        widths,
+                    });
                 }
                 other => {
                     let span = line.tokens[0].span;

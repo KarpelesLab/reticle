@@ -690,6 +690,16 @@ pub(super) fn add_assign(module: &mut Module, target: NetId, value: ExprId, span
     });
 }
 
+/// `value` on every bit of an `bits`-wide pin; `value` itself when the
+/// pin is one bit, which is every family but a byte-enabled block RAM.
+fn repeat_bits(module: &mut Module, value: ExprId, bits: u32, span: Span) -> ExprId {
+    if bits <= 1 {
+        return value;
+    }
+    let parts = vec![value; usize::try_from(bits).unwrap_or(1)];
+    expr(module, ExprKind::Concat(parts), span)
+}
+
 /// Number of address bits needed to index `depth` elements.
 fn addr_bits(depth: u64) -> u32 {
     if depth <= 1 {
@@ -1260,7 +1270,15 @@ impl Mapper<'_> {
                         inputs.push((Name::new(name), write_ens[index]));
                     }
                     if let Some(name) = map.signal("we") {
-                        inputs.push((Name::new(name), write_ens[index]));
+                        // A family with byte write enables has a pin per
+                        // byte; a memory written a whole word at a time
+                        // drives every one of them alike. Leaving the
+                        // upper bits off would write one byte and drop
+                        // the rest, silently.
+                        let bits = map.width("we");
+                        let name = Name::new(name);
+                        let value = repeat_bits(module, write_ens[index], bits, span);
+                        inputs.push((name, value));
                     }
                     if let Some(name) = map.signal("ce") {
                         inputs.push((Name::new(name), write_ens[index]));
@@ -2517,14 +2535,39 @@ impl Mapper<'_> {
             return;
         }
         for index in 0..module.ports.len() {
-            self.io_buffer(module, &bel, index);
+            self.io_buffer(module, index);
         }
     }
 
-    fn io_buffer(&mut self, module: &mut Module, bel: &BelKind, index: usize) {
+    fn io_buffer(&mut self, module: &mut Module, index: usize) {
         let port = &module.ports[index];
         let name = port.name.as_str().to_owned();
         let dir = port.dir;
+        // Which buffer serves this direction. A family with one
+        // configurable buffer answers the same primitive every time; a
+        // family with one primitive per direction (Xilinx's IBUF, OBUF
+        // and IOBUF) answers a different one, with its own pin names.
+        let direction = match dir {
+            PortDir::In => "in",
+            PortDir::Out => "out",
+            PortDir::InOut => "inout",
+        };
+        let Some(bel) = self.device.io_bel(direction).cloned() else {
+            self.note(format!(
+                "`{}` describes no IO buffer for an `{direction}` port, so `{name}` is left bare",
+                self.device.name
+            ));
+            return;
+        };
+        if !bel.has_ports(&["pad"]) {
+            self.note(format!(
+                "the IO buffer `{}` of `{}` has no `pad` port, so `{name}` is left bare",
+                bel.name, self.device.name
+            ));
+            return;
+        }
+        let bel = &bel;
+        let port = &module.ports[index];
         let core = port.net;
         let span = port.span;
         let Some(width) = module.nets.get(core).and_then(|n| n.ty.width()) else {
@@ -3199,27 +3242,40 @@ impl Mapper<'_> {
         out: NetId,
         span: Span,
     ) {
+        let name = module.nets[out].name.as_str().to_owned();
         let reference = net_expr(module, source, span);
         let mut inputs = vec![(Name::new(shape.port("ref").unwrap_or("REF")), reference)];
-        // Feedback taken from the output is wired back from the output,
-        // which is what the formula the solver used assumes.
-        if shape.feedback == PllFeedback::Output
-            && let Some(port) = shape.port("fb")
-        {
-            let feedback = net_expr(module, out, span);
-            inputs.push((Name::new(port), feedback));
+        let mut outputs = vec![(Name::new(shape.port("out").unwrap_or("OUT")), out)];
+        match (shape.port("fbout"), shape.port("fb")) {
+            // A block that brings its feedback tap out on a pin of its
+            // own and expects the loop closed outside it: the Xilinx
+            // `PLLE2_BASE`, whose `CLKFBOUT` has to reach `CLKFBIN` or
+            // the phase detector sees nothing. The net between them is
+            // the whole loop, and the dividers the solver chose already
+            // assume it is a plain wire.
+            (Some(fbout), Some(fbin)) => {
+                let net = add_net(module, &format!("{name}$fb"), Type::bit(), span);
+                outputs.push((Name::new(fbout), net));
+                inputs.push((Name::new(fbin), net_expr(module, net, span)));
+            }
+            // Feedback taken from the output is wired back from the
+            // output, which is what the formula the solver used assumes.
+            (None, Some(port)) if shape.feedback == PllFeedback::Output => {
+                let feedback = net_expr(module, out, span);
+                inputs.push((Name::new(port), feedback));
+            }
+            _ => {}
         }
         for (port, level) in &shape.ties {
             let value = const_expr(module, Const::from_bool(*level), span);
             inputs.push((Name::new(port.clone()), value));
         }
-        let name = module.nets[out].name.as_str().to_owned();
         let cell = add_cell(
             module,
             &format!("{name}$pll"),
             CellKind::Blackbox(Name::new(shape.name.clone())),
             inputs,
-            vec![(Name::new(shape.port("out").unwrap_or("OUT")), out)],
+            outputs,
             span,
         );
         let target = &mut module.cells[cell];
