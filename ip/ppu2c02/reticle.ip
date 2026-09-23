@@ -1,0 +1,42 @@
+# ppu2c02: the picture processing unit of an NES-compatible console —
+# the 256 x 240 raster, nametables and attribute tables, the pattern
+# fetch pipeline that makes scrolling work, the shared $2005 / $2006
+# write latch, 64 sprites with per-line evaluation, the eight-per-line
+# limit, priority and sprite zero hit. `ppu_palette` in the same package
+# turns the six-bit palette index the video port emits into RGB.
+#
+# Everything here is implemented from the published description of the
+# part's behaviour. The package contains no game data, no character data
+# and no lockout logic, and needs none to run.
+name ppu2c02
+version 1.0.0
+license MIT
+description "NES-compatible picture processing unit: 256x240 raster, nametables, scrolling through v/t/x/w, 8x8 sprites with evaluation, priority and sprite zero hit"
+
+top ppu2c02
+target ice40
+target ecp5
+
+source rtl/ppu_palette.v
+source rtl/ppu2c02.v
+
+port clk in
+port rst_n in
+port en in
+port reg_addr in 3
+port reg_din in 8
+port reg_dout out 8
+port reg_we in
+port reg_re in
+port nmi out
+port vram_addr out 14
+port vram_dout out 8
+port vram_we out
+port vram_din in 8
+port vid_de out
+port vid_x out 8
+port vid_y out 8
+port vid_color out 6
+port vid_frame out
+port dbg_dot out 9
+port dbg_line out 9
