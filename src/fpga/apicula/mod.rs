@@ -1331,18 +1331,16 @@ impl ApiculaDatabase {
         if name.starts_with("LUT")
             && let Some(flags) = bel.get("flags")
         {
-            {
-                for (index, bits) in flags.pairs() {
-                    let Some(index) = index.as_u32() else {
-                        continue;
-                    };
-                    for (row, col) in parse::coords(bits) {
-                        decl.config.push(ConfigEntry::ParamZero {
-                            name: "INIT".to_owned(),
-                            index,
-                            at: ConfigBit::new(row, col),
-                        });
-                    }
+            for (index, bits) in flags.pairs() {
+                let Some(index) = index.as_u32() else {
+                    continue;
+                };
+                for (row, col) in parse::coords(bits) {
+                    decl.config.push(ConfigEntry::ParamZero {
+                        name: "INIT".to_owned(),
+                        index,
+                        at: ConfigBit::new(row, col),
+                    });
                 }
             }
         }
