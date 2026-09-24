@@ -518,9 +518,10 @@ On **2026-09-25** a Great Scott Gadgets Cynthion attached to this
 machine was taken from its analyzer gateware to the Apollo debugger and
 its ECP5's identifier was read, by Reticle's own code, written from the
 sections above and from nothing else. The run is
-`tests/program_apollo.rs::read_the_ecp5_idcode`, and it was performed
-twice: once from gateware mode, which exercised §2, and once from
-debugger mode, which did not.
+`tests/program_apollo.rs::read_the_ecp5_idcode`. It was performed
+several times from two different starting states: the first from
+gateware mode, which exercised §2's handover, and the rest from
+debugger mode, which did not. Every run read the same identifier.
 
 What the board said:
 
