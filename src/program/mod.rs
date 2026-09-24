@@ -153,6 +153,19 @@ pub enum ProgramError {
         /// The serial numbers that were found.
         found: Vec<String>,
     },
+    /// No Cynthion matched.
+    ///
+    /// Separate from [`ProgramError::NoDevice`] because the two look for
+    /// different things and the message has to say which: a user who has
+    /// no FTDI cable attached and a user whose Cynthion is unplugged are
+    /// not helped by the same sentence.
+    NoCynthion {
+        /// The serial number that was asked for, if any.
+        wanted: Option<String>,
+        /// The Cynthions that were found, and whether each is already in
+        /// debugger mode.
+        found: Vec<(String, bool)>,
+    },
     /// More than one adapter is attached and none was named.
     Ambiguous(Vec<String>),
     /// The part on the other end of the cable is not the expected one.
@@ -187,6 +200,31 @@ impl fmt::Display for ProgramError {
                 } else {
                     write!(f, "; attached: {}", found.join(", "))
                 }
+            }
+            ProgramError::NoCynthion { wanted, found } => {
+                match wanted {
+                    Some(serial) => write!(f, "no Cynthion with serial number `{serial}`")?,
+                    None => write!(
+                        f,
+                        "no Cynthion found (looking for USB {:#06x}:{:#06x} in gateware mode \
+                         or {:#06x}:{:#06x} in debugger mode)",
+                        apollo::VENDOR_ID,
+                        apollo::GATEWARE_PRODUCT_ID,
+                        apollo::VENDOR_ID,
+                        apollo::DEBUGGER_PRODUCT_ID
+                    )?,
+                }
+                if found.is_empty() {
+                    return Ok(());
+                }
+                let listed: Vec<String> = found
+                    .iter()
+                    .map(|(serial, debugger)| {
+                        let mode = if *debugger { "debugger" } else { "gateware" };
+                        format!("{serial} ({mode} mode)")
+                    })
+                    .collect();
+                write!(f, "; attached: {}", listed.join(", "))
             }
             ProgramError::Ambiguous(serials) => write!(
                 f,
@@ -496,6 +534,29 @@ mod tests {
 
         let e = ProgramError::Ambiguous(vec!["A".to_owned(), "B".to_owned()]);
         assert!(e.to_string().contains("--device"));
+
+        // A missing Cynthion must not be reported as a missing FTDI
+        // cable: they are different boards and different advice.
+        let e = ProgramError::NoCynthion {
+            wanted: None,
+            found: Vec::new(),
+        };
+        let text = e.to_string();
+        assert!(text.contains("no Cynthion found"), "{text}");
+        assert!(text.contains("0x1d50"), "{text}");
+        assert!(!text.contains("FTDI"), "{text}");
+
+        let e = ProgramError::NoCynthion {
+            wanted: Some("2a5a4adf30c460de".to_owned()),
+            found: vec![("35L6H2CMGJJVCIBAEA3GCLAN74".to_owned(), true)],
+        };
+        let text = e.to_string();
+        assert!(text.contains("2a5a4adf30c460de"), "{text}");
+        assert!(text.contains("35L6H2CMGJJVCIBAEA3GCLAN74"), "{text}");
+        // Which mode each attached board is in is the thing that
+        // explains why the one asked for was not found: the two modes
+        // report unrelated serial numbers.
+        assert!(text.contains("debugger mode"), "{text}");
 
         let e = ProgramError::NotDone(xilinx::Status(0));
         assert!(e.to_string().contains("DONE did not assert"));

@@ -38,9 +38,9 @@ not answer.
 
 A *Verified* section at the end records what the bench later said, so
 this document's claims and the run that tested them can be compared
-without reading the code in between. **Two things in this document were
-wrong when it was written and §9 says which**; the body has been
-corrected and the corrections are marked, because a specification that
+without reading the code in between. **Three things in this document
+were wrong when it was written, and §9 says which**; the body has been
+corrected and each correction is marked, because a specification that
 quietly absorbs its own errors teaches nothing about how far to trust
 the rest of it.
 
@@ -201,15 +201,11 @@ bmRequestType = 0x40   host to device, vendor, recipient device
 bmRequestType = 0xC0   device to host, vendor, recipient device
 ```
 
-That recipient matters. The one request that uses recipient *interface*
-is the handover in §2, and it is answered by the FPGA rather than by
-Apollo.
-
-A device-recipient control transfer belongs to no interface, so nothing
-has to be claimed and nothing has to be detached, `cdc_acm` included.
-The whole of §4 was performed on this board with the kernel's serial
-driver still bound to interfaces 0 and 1 and not one transfer was
-refused.
+That recipient matters. A device-recipient control transfer belongs to
+no interface, so nothing has to be claimed and nothing has to be
+detached, `cdc_acm` included: the whole of §3 and §4 was performed on
+this board with the kernel's serial driver still bound to interfaces 0
+and 1, and not one transfer was refused.
 
 The one request that *is* interface-recipient — §2's handover — is sent
 to the **gateware**, where the stub interface has no driver on it.

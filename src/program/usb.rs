@@ -634,8 +634,9 @@ impl Debugger {
     ///
     /// # Errors
     ///
-    /// [`ProgramError::NoDevice`] when no Cynthion is attached, or when
-    /// one is but never comes back as a debugger — which is the shape a
+    /// [`ProgramError::NoCynthion`] when none is attached, and
+    /// [`ProgramError::Usb`] when one is but never comes back as a
+    /// debugger — which is the shape a
     /// gateware with no Apollo stub takes, and the message says so,
     /// because the only route left is holding the board's PROGRAM button
     /// while plugging it in and no program can do that.
@@ -647,13 +648,9 @@ impl Debugger {
         let before = debugger_serials()?;
         let asked = hand_over(serial)?;
         if asked == 0 {
-            let found = list_cynthions()?
-                .into_iter()
-                .map(|(serial, _)| serial)
-                .collect();
-            return Err(ProgramError::NoDevice {
+            return Err(ProgramError::NoCynthion {
                 wanted: serial.map(str::to_owned),
-                found,
+                found: list_cynthions()?,
             });
         }
 
