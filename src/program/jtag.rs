@@ -383,6 +383,164 @@ pub fn unpack_capture(chunk: &[u8], bits: usize) -> Vec<u8> {
     out
 }
 
+/// One JTAG operation, named rather than encoded.
+///
+/// This is the vocabulary two transports can both speak. An FTDI MPSSE
+/// wants TMS bits and shift opcodes; an Apollo debug microcontroller
+/// wants state numbers and bit counts and has no way to be told a TMS
+/// sequence at all. Neither can be expressed in the other's bytes, but
+/// both can be produced from this.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Op {
+    /// Force `Test-Logic-Reset` from any state, then rest in
+    /// `Run-Test/Idle`.
+    Reset,
+    /// Walk to a state.
+    Goto(TapState),
+    /// Hold `Run-Test/Idle` for this many clocks of TCK.
+    Idle(usize),
+    /// Shift `bits` bits of `data` through a shift state and come back
+    /// to `Run-Test/Idle`, optionally capturing TDO.
+    Shift {
+        /// `Shift-IR` or `Shift-DR`.
+        state: TapState,
+        /// The bits to drive on TDI, packed least-significant first.
+        data: Vec<u8>,
+        /// How many of them.
+        bits: usize,
+        /// Whether TDO is captured.
+        capture: bool,
+    },
+}
+
+/// A sequence of [`Op`]s, with the TAP state tracked as they are added.
+///
+/// A `Plan` is what both transports are built from: [`Scan::apply`]
+/// turns one into MPSSE commands and
+/// [`super::apollo::compile`](super::apollo::compile) turns the same one
+/// into Apollo control requests. It performs no I/O and knows nothing
+/// about either.
+///
+/// The state tracking is the same [`TapState::path_to`] the MPSSE
+/// encoder uses, so a plan that walks somewhere impossible is impossible
+/// to build here rather than discovered on a board.
+#[derive(Clone, Debug)]
+pub struct Plan {
+    ops: Vec<Op>,
+    state: TapState,
+    captures: usize,
+}
+
+impl Default for Plan {
+    fn default() -> Plan {
+        Plan::new()
+    }
+}
+
+impl Plan {
+    /// An empty plan whose TAP is assumed to be in `Test-Logic-Reset`.
+    #[must_use]
+    pub fn new() -> Plan {
+        Plan {
+            ops: Vec::new(),
+            state: TapState::TestLogicReset,
+            captures: 0,
+        }
+    }
+
+    /// The operations, in order.
+    #[must_use]
+    pub fn ops(&self) -> &[Op] {
+        &self.ops
+    }
+
+    /// Where the TAP will be once the plan has run.
+    #[must_use]
+    pub fn state(&self) -> TapState {
+        self.state
+    }
+
+    /// How many captures the plan takes.
+    #[must_use]
+    pub fn capture_count(&self) -> usize {
+        self.captures
+    }
+
+    /// Forces `Test-Logic-Reset` and rests in `Run-Test/Idle`.
+    pub fn reset(&mut self) {
+        self.ops.push(Op::Reset);
+        self.state = TapState::RunTestIdle;
+    }
+
+    /// Walks the TAP to `state`.
+    pub fn goto(&mut self, state: TapState) {
+        if self.state != state {
+            self.ops.push(Op::Goto(state));
+            self.state = state;
+        }
+    }
+
+    /// Holds `Run-Test/Idle` for `cycles` clocks of TCK.
+    pub fn idle(&mut self, cycles: usize) {
+        if cycles == 0 {
+            return;
+        }
+        self.ops.push(Op::Idle(cycles));
+        self.state = TapState::RunTestIdle;
+    }
+
+    /// Shifts `bits` bits of `data` through `Shift-IR`.
+    ///
+    /// # Panics
+    ///
+    /// When `bits` is zero or `data` is too short for it.
+    pub fn shift_ir(&mut self, data: &[u8], bits: usize) {
+        self.push_shift(TapState::ShiftIr, data, bits, false);
+    }
+
+    /// Shifts `bits` bits of `data` through `Shift-DR`, capturing
+    /// nothing.
+    ///
+    /// # Panics
+    ///
+    /// When `bits` is zero or `data` is too short for it.
+    pub fn shift_dr(&mut self, data: &[u8], bits: usize) {
+        self.push_shift(TapState::ShiftDr, data, bits, false);
+    }
+
+    /// Shifts `bits` zero bits through `Shift-DR` while capturing TDO,
+    /// and returns the capture's index.
+    ///
+    /// # Panics
+    ///
+    /// When `bits` is zero.
+    pub fn read_dr(&mut self, bits: usize) -> usize {
+        let index = self.captures;
+        let zeros = vec![0u8; bits.div_ceil(8)];
+        self.push_shift(TapState::ShiftDr, &zeros, bits, true);
+        index
+    }
+
+    fn push_shift(&mut self, state: TapState, data: &[u8], bits: usize, capture: bool) {
+        assert!(bits > 0, "a scan shifts at least one bit");
+        assert!(
+            data.len() >= bits.div_ceil(8),
+            "not enough data for the scan"
+        );
+        if capture {
+            self.captures += 1;
+        }
+        self.ops.push(Op::Shift {
+            state,
+            data: data[..bits.div_ceil(8)].to_vec(),
+            bits,
+            capture,
+        });
+        // Every shift ends where the encoders leave it.
+        self.state = TapState::RunTestIdle;
+    }
+}
+
 /// Builds a [`Job`]: TAP moves and scans, in order.
 ///
 /// The builder tracks the TAP state, so `shift_ir` after `shift_dr`
@@ -517,6 +675,28 @@ impl Scan {
         index
     }
 
+    /// Encodes a [`Plan`] onto this builder, as MPSSE commands.
+    ///
+    /// This is the FTDI half of the two-transport split: the plan says
+    /// what to do and this says how an MPSSE is told to do it. The
+    /// captures a plan declares become this job's captures, in the same
+    /// order, so `Plan::read_dr`'s index is [`Job::capture`]'s index.
+    pub fn apply(&mut self, plan: &Plan) {
+        for op in plan.ops() {
+            match op {
+                Op::Reset => self.reset(),
+                Op::Goto(state) => self.goto(*state),
+                Op::Idle(cycles) => self.idle(*cycles),
+                Op::Shift {
+                    state,
+                    data,
+                    bits,
+                    capture,
+                } => self.shift(*state, data, *bits, *capture),
+            }
+        }
+    }
+
     /// Finishes the job, asking the device to flush any capture.
     #[must_use]
     pub fn finish(mut self) -> Job {
@@ -590,11 +770,24 @@ impl Scan {
 /// means knowing the instruction register's width, and that differs:
 /// Xilinx 7-series is 6 bits, a Gowin GW2A is 8. Getting it wrong reads
 /// all zeros, which looks exactly like a board that is not plugged in.
+///
+/// It is written as a [`Plan`] because both transports need it: the
+/// FTDI cable reads an unknown part's identifier this way and so does
+/// the Apollo debugger on a Cynthion, and one definition of "reset, then
+/// read thirty-two bits" is better than two that can drift apart.
+#[must_use]
+pub fn idcode_plan() -> Plan {
+    let mut plan = Plan::new();
+    plan.reset();
+    let _ = plan.read_dr(32);
+    plan
+}
+
+/// [`idcode_plan`] encoded for an FTDI MPSSE.
 #[must_use]
 pub fn idcode_after_reset() -> Job {
     let mut scan = Scan::new();
-    scan.reset();
-    let _ = scan.read_dr(32);
+    scan.apply(&idcode_plan());
     scan.finish()
 }
 
@@ -804,6 +997,75 @@ mod tests {
         let before = scan.mpsse.len();
         scan.idle(0);
         assert_eq!(scan.mpsse.len(), before);
+    }
+
+    /// A plan encoded onto an MPSSE produces byte for byte what the
+    /// same calls made directly on a [`Scan`] produce.
+    ///
+    /// This is the guard on the transport split: the FTDI path went
+    /// through a [`Plan`] so that Apollo could share the sequences, and
+    /// that is only free if the detour changes nothing.
+    #[test]
+    fn a_plan_encodes_to_the_same_bytes_as_direct_calls() {
+        let mut direct = Scan::new();
+        direct.reset();
+        direct.shift_ir(&[0x09], 6);
+        let a = direct.read_dr(32);
+        direct.idle(100);
+        direct.shift_dr(&[0xAA, 0x55, 0x0F], 20);
+        let b = direct.read_dr(6);
+        let direct = direct.finish();
+
+        let mut plan = Plan::new();
+        plan.reset();
+        plan.shift_ir(&[0x09], 6);
+        let pa = plan.read_dr(32);
+        plan.idle(100);
+        plan.shift_dr(&[0xAA, 0x55, 0x0F], 20);
+        let pb = plan.read_dr(6);
+        let mut scan = Scan::new();
+        scan.apply(&plan);
+        let applied = scan.finish();
+
+        assert_eq!((a, b), (pa, pb));
+        assert_eq!(plan.capture_count(), 2);
+        assert_eq!(applied.commands(), direct.commands());
+        assert_eq!(applied.read_len(), direct.read_len());
+        assert_eq!(applied.capture_count(), direct.capture_count());
+        assert_eq!(plan.state(), TapState::RunTestIdle);
+    }
+
+    /// The `IDCODE` sequence both transports share is still, on the FTDI
+    /// side, exactly what it was before it became a [`Plan`]: reset,
+    /// then a 32-bit capture, ending in `Run-Test/Idle`.
+    #[test]
+    fn the_idcode_plan_is_reset_then_thirty_two_bits() {
+        let plan = idcode_plan();
+        assert_eq!(plan.capture_count(), 1);
+        assert_eq!(plan.ops().len(), 2);
+        assert_eq!(plan.ops()[0], Op::Reset);
+        assert!(matches!(
+            plan.ops()[1],
+            Op::Shift {
+                state: TapState::ShiftDr,
+                bits: 32,
+                capture: true,
+                ..
+            }
+        ));
+        // No instruction is shifted: that is the whole point of reading
+        // an unknown part this way.
+        assert!(!plan.ops().iter().any(|op| matches!(
+            op,
+            Op::Shift {
+                state: TapState::ShiftIr,
+                ..
+            }
+        )));
+
+        let job = idcode_after_reset();
+        assert_eq!(job.capture_count(), 1);
+        assert_eq!(job.read_len(), 5);
     }
 
     /// After any scan the builder is back in `Run-Test/Idle`, which is

@@ -7,17 +7,38 @@
 //! | Module | What it is | Touches a device |
 //! |---|---|---|
 //! | [`ftdi`] | the MPSSE command encoding (FTDI AN_108) | no |
+//! | [`apollo`] | the Cynthion debugger's request set (`docs/apollo-protocol.md`) | no |
 //! | [`jtag`] | the IEEE 1149.1 TAP state machine and scans | no |
 //! | [`xilinx`] | the UG470 configuration sequence | no |
-//! | [`usb`] | opening, claiming and bulk transfers, over `rawusb` | yes |
+//! | [`gowin`] | the Gowin `.fs` container | no |
+//! | [`lattice`] | naming a Lattice part from its `IDCODE` | no |
+//! | [`usb`] | opening, claiming and transfers, over `rawusb` | yes |
 //!
-//! The first three are *sequencers*: pure functions from a request to a
-//! [`Job`](jtag::Job) — a buffer of bytes to send and a description of
-//! what comes back — and from a reply to a decoded value. They are the
-//! same sans-I/O discipline the rest of the crate follows, for the same
-//! reason: the tricky part (bit order, off-by-one lengths, the TAP walk)
-//! becomes unit-testable with no board on the bench, and the part that
-//! cannot be tested that way shrinks to "write these bytes, read those".
+//! Everything but [`usb`] is a *sequencer*: pure functions from a
+//! request to a buffer of bytes to send and a description of what comes
+//! back, and from a reply to a decoded value. They are the same sans-I/O
+//! discipline the rest of the crate follows, for the same reason: the
+//! tricky part (bit order, off-by-one lengths, the TAP walk) becomes
+//! unit-testable with no board on the bench, and the part that cannot be
+//! tested that way shrinks to "write these bytes, read those".
+//!
+//! # Two transports
+//!
+//! There are two ways out of this module to a scan chain, and they have
+//! almost nothing in common:
+//!
+//! - an **FTDI MPSSE** ([`ftdi`], [`usb::Cable`]) — a shift engine, told
+//!   about TMS bits, driven by bulk transfers;
+//! - a **Cynthion's Apollo microcontroller** ([`apollo`],
+//!   [`usb::Debugger`]) — a TAP controller of its own, told about state
+//!   *numbers*, driven by control requests, and with no way to be sent a
+//!   TMS sequence at all.
+//!
+//! What they share is one level above both encodings: [`jtag::Plan`], a
+//! list of named JTAG operations. [`jtag::Scan::apply`] compiles a plan
+//! to MPSSE bytes and [`apollo::compile`] compiles the same plan to
+//! control requests, so [`jtag::idcode_plan`] is written once and both
+//! transports perform it.
 //!
 //! `unsafe` appears nowhere in this module. Every ioctl lives in
 //! `rawusb`'s own `src/sys/`, which is where it belongs.
@@ -60,9 +81,11 @@
 //! board's mode pins either — JTAG configuration works whatever the mode
 //! jumper is set to, which is what makes this the safe way in.
 
+pub mod apollo;
 pub mod ftdi;
 pub mod gowin;
 pub mod jtag;
+pub mod lattice;
 pub mod usb;
 pub mod xilinx;
 

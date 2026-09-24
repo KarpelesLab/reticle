@@ -1,10 +1,22 @@
-//! The USB transport: opening an FTDI adapter and moving [`Job`] bytes
-//! across it.
+//! The USB transport: opening an adapter and moving bytes across it.
 //!
 //! This is the only file in Reticle that touches a device, and it is
 //! deliberately the shallowest: it opens, detaches, claims, writes and
 //! reads. Every decision about *what* to write is made by [`super::ftdi`],
-//! [`super::jtag`] and [`super::xilinx`], which know nothing about USB.
+//! [`super::jtag`], [`super::apollo`] and [`super::xilinx`], which know
+//! nothing about USB.
+//!
+//! There are two devices here, not one:
+//!
+//! | Type | Part | Protocol |
+//! |---|---|---|
+//! | [`Cable`] | an FTDI FT2232H or FT2232D | MPSSE bytes over bulk endpoints |
+//! | [`Debugger`] | a Cynthion's Apollo microcontroller | vendor control requests on endpoint zero |
+//!
+//! They share [`super::jtag::Plan`] and nothing else, because they have
+//! nothing else in common: one is a shift engine told about TMS and the
+//! other is a TAP controller told about states. See
+//! `docs/apollo-protocol.md`.
 //!
 //! It still contains no `unsafe`. [`rawusb`] is Karpeles Lab's own
 //! dependency-free USB crate; its `src/sys/` is where the ioctls live.
@@ -30,8 +42,8 @@ use std::time::{Duration, Instant};
 
 use rawusb::{Context, DeviceHandle, types::Direction};
 
-use super::jtag::Job;
-use super::{FT2232H_PRODUCT_ID, FTDI_VENDOR_ID, MPSSE_INTERFACE, ProgramError, ftdi};
+use super::jtag::{Job, TapState};
+use super::{FT2232H_PRODUCT_ID, FTDI_VENDOR_ID, MPSSE_INTERFACE, ProgramError, apollo, ftdi};
 
 /// `bmRequestType` for an FTDI vendor request to the device, host to
 /// device.
@@ -406,6 +418,602 @@ impl Drop for Cable {
             TRANSFER_TIMEOUT,
         );
         let _ = self.handle.release_interface(self.interface);
+    }
+}
+
+// ---------------------------------------------------------------------
+// The Apollo debugger on a Cynthion
+// ---------------------------------------------------------------------
+
+/// How long any one Apollo control transfer may take. They are all tiny
+/// — the largest data stage in the protocol is 256 bytes — so a long
+/// timeout only delays a clear error.
+const APOLLO_TIMEOUT: Duration = Duration::from_secs(2);
+
+/// How long to wait for the board to come back as the debugger after the
+/// gateware has been asked to give up the USB port. It has to
+/// re-enumerate, which on a loaded bus is not instant.
+const HANDOVER_TIMEOUT: Duration = Duration::from_secs(8);
+
+/// How often to look for it while waiting.
+const HANDOVER_POLL: Duration = Duration::from_millis(100);
+
+/// A Cynthion, opened as its Apollo debug microcontroller.
+///
+/// What comes back from [`Debugger::open`] is a board in debugger mode
+/// with its JTAG pins **not** taken: [`Debugger::run_plan`] takes them
+/// for the length of one plan and releases them again, which is the
+/// smallest window the protocol allows and leaves the board in the state
+/// it was found in.
+///
+/// Nothing this type sends is persistent. It does not reconfigure the
+/// FPGA, hold it offline, or touch either flash; `docs/apollo-protocol.md`
+/// §7 lists the requests that would and says why they are not here.
+pub struct Debugger {
+    handle: DeviceHandle,
+    capability: apollo::Capability,
+    serial: String,
+    /// The gateware device this was reached through, if a handover was
+    /// needed, so [`Debugger::release_usb_to_fpga`] knows there is
+    /// something to put back.
+    handed_over: bool,
+}
+
+/// The serial numbers of every attached Cynthion, in either mode, with
+/// which mode it is in.
+///
+/// # Errors
+///
+/// [`ProgramError::Usb`] when the USB subsystem cannot be reached. A
+/// device that cannot be opened is listed without its serial number
+/// rather than failing the listing.
+pub fn list_cynthions() -> Result<Vec<(String, bool)>, ProgramError> {
+    let context = Context::new().map_err(|e| usb_err("opening the USB subsystem", &e))?;
+    let devices = context
+        .devices()
+        .map_err(|e| usb_err("listing USB devices", &e))?;
+    let mut found = Vec::new();
+    for device in devices {
+        if device.vendor_id() != apollo::VENDOR_ID {
+            continue;
+        }
+        let debugger = match device.product_id() {
+            apollo::DEBUGGER_PRODUCT_ID => true,
+            apollo::GATEWARE_PRODUCT_ID => false,
+            _ => continue,
+        };
+        let serial = device
+            .open()
+            .ok()
+            .and_then(|h| h.read_serial_number_string().ok().flatten())
+            .unwrap_or_else(|| {
+                format!(
+                    "bus {} address {} (no serial number)",
+                    device.bus_number(),
+                    device.address()
+                )
+            });
+        found.push((serial, debugger));
+    }
+    Ok(found)
+}
+
+/// How a debugger is picked out of the ones on the bus.
+enum Pick<'a> {
+    /// The one whose serial number is this, or any if `None`.
+    Serial(Option<&'a str>),
+    /// Any whose serial number is not in this list — which is how a
+    /// board that has just re-enumerated is recognised.
+    ///
+    /// It has to be done this way because **the two modes report
+    /// different serial numbers**: the gateware reports the board's, and
+    /// Apollo reports the microcontroller's, which is a different string
+    /// entirely. Asking for the gateware's serial again after the
+    /// handover would never match.
+    NotAlreadyThere(&'a [String]),
+}
+
+/// Opens a debugger on the bus, if one matches.
+fn find_debugger(pick: &Pick<'_>) -> Result<Option<(DeviceHandle, String)>, ProgramError> {
+    let context = Context::new().map_err(|e| usb_err("opening the USB subsystem", &e))?;
+    let devices = context
+        .devices()
+        .map_err(|e| usb_err("listing USB devices", &e))?;
+    for device in devices {
+        if device.vendor_id() != apollo::VENDOR_ID
+            || device.product_id() != apollo::DEBUGGER_PRODUCT_ID
+        {
+            continue;
+        }
+        let Ok(handle) = device.open() else { continue };
+        let this = handle
+            .read_serial_number_string()
+            .ok()
+            .flatten()
+            .unwrap_or_default();
+        let wanted = match pick {
+            Pick::Serial(serial) => serial.is_none_or(|wanted| wanted == this),
+            Pick::NotAlreadyThere(before) => !before.contains(&this),
+        };
+        if wanted {
+            return Ok(Some((handle, this)));
+        }
+    }
+    Ok(None)
+}
+
+/// The serial numbers of every debugger currently on the bus.
+fn debugger_serials() -> Result<Vec<String>, ProgramError> {
+    Ok(list_cynthions()?
+        .into_iter()
+        .filter_map(|(serial, debugger)| debugger.then_some(serial))
+        .collect())
+}
+
+/// Asks every attached Cynthion gateware to give the USB port back to
+/// its microcontroller, and says how many were asked.
+///
+/// The request goes to the *Apollo stub interface*, which is found by
+/// its descriptor — vendor class, subclass zero, no endpoints — because
+/// its number is a property of whatever gateware happens to be loaded
+/// and not of the protocol.
+fn hand_over(serial: Option<&str>) -> Result<usize, ProgramError> {
+    let context = Context::new().map_err(|e| usb_err("opening the USB subsystem", &e))?;
+    let devices = context
+        .devices()
+        .map_err(|e| usb_err("listing USB devices", &e))?;
+    let mut asked = 0;
+    for device in devices {
+        if device.vendor_id() != apollo::VENDOR_ID
+            || device.product_id() != apollo::GATEWARE_PRODUCT_ID
+        {
+            continue;
+        }
+        let Ok(handle) = device.open() else { continue };
+        let this = handle
+            .read_serial_number_string()
+            .ok()
+            .flatten()
+            .unwrap_or_default();
+        if serial.is_some_and(|wanted| wanted != this) {
+            continue;
+        }
+        let Ok(config) = device.active_config_descriptor() else {
+            continue;
+        };
+        let stub = config.interfaces.iter().find_map(|interface| {
+            let alt = interface.first();
+            (alt.class == apollo::VENDOR_SPECIFIC_CLASS
+                && alt.sub_class == apollo::STUB_SUBCLASS
+                && alt.endpoints.is_empty())
+            .then_some(alt.number)
+        });
+        let Some(stub) = stub else { continue };
+
+        // A control request whose recipient is an interface can be
+        // refused while a driver holds that interface, so take it away
+        // first if anything did bind. Nothing does on Linux today.
+        if handle.kernel_driver_active(stub).unwrap_or(false) {
+            let _ = handle.detach_kernel_driver(stub);
+        }
+        // The device answers the status stage and then drops off the
+        // bus, so a failure here is as likely to mean "it worked and
+        // left" as "it refused". Whether it worked is decided by
+        // whether the debugger turns up, not by this return value.
+        let _ = handle.control_write(
+            apollo::REQ_TYPE_OUT_INTERFACE,
+            apollo::REQUEST_ADVERTISEMENT_STOP,
+            0,
+            u16::from(stub),
+            &[],
+            APOLLO_TIMEOUT,
+        );
+        asked += 1;
+    }
+    Ok(asked)
+}
+
+impl Debugger {
+    /// Opens a Cynthion's Apollo debugger, asking its gateware to give
+    /// up the USB port first if that is what it takes.
+    ///
+    /// If the board is already in debugger mode this is one enumeration
+    /// and nothing is sent. Otherwise the handover of
+    /// `docs/apollo-protocol.md` §2 is performed and the board is waited
+    /// for while it re-enumerates. Neither is persistent: the board
+    /// comes back on a replug, a power cycle, or
+    /// [`Debugger::release_usb_to_fpga`].
+    ///
+    /// `serial` picks one board when several are attached. It is
+    /// matched against **whichever mode the board is in**: the gateware
+    /// reports the board's serial number and Apollo reports the
+    /// microcontroller's, and they are not the same string, so a board
+    /// that has to be handed over is followed across the re-enumeration
+    /// by being the debugger that was not there before rather than by
+    /// its name.
+    ///
+    /// # Errors
+    ///
+    /// [`ProgramError::NoDevice`] when no Cynthion is attached, or when
+    /// one is but never comes back as a debugger — which is the shape a
+    /// gateware with no Apollo stub takes, and the message says so,
+    /// because the only route left is holding the board's PROGRAM button
+    /// while plugging it in and no program can do that.
+    pub fn open(serial: Option<&str>) -> Result<Debugger, ProgramError> {
+        if let Some((handle, found)) = find_debugger(&Pick::Serial(serial))? {
+            return Debugger::from_handle(handle, found, false);
+        }
+
+        let before = debugger_serials()?;
+        let asked = hand_over(serial)?;
+        if asked == 0 {
+            let found = list_cynthions()?
+                .into_iter()
+                .map(|(serial, _)| serial)
+                .collect();
+            return Err(ProgramError::NoDevice {
+                wanted: serial.map(str::to_owned),
+                found,
+            });
+        }
+
+        let deadline = Instant::now() + HANDOVER_TIMEOUT;
+        loop {
+            if let Some((handle, found)) = find_debugger(&Pick::NotAlreadyThere(&before))? {
+                return Debugger::from_handle(handle, found, true);
+            }
+            if Instant::now() >= deadline {
+                return Err(ProgramError::Usb(format!(
+                    "a Cynthion gateware was asked to give up the USB port \
+                     (vendor request {:#04x} to its Apollo stub interface) but no \
+                     debugger {:#06x}:{:#06x} appeared within {} s; if this gateware \
+                     has no Apollo stub the only way in is to hold the board's \
+                     PROGRAM button while plugging it in, and nothing here can do that",
+                    apollo::REQUEST_ADVERTISEMENT_STOP,
+                    apollo::VENDOR_ID,
+                    apollo::DEBUGGER_PRODUCT_ID,
+                    HANDOVER_TIMEOUT.as_secs()
+                )));
+            }
+            std::thread::sleep(HANDOVER_POLL);
+        }
+    }
+
+    fn from_handle(
+        handle: DeviceHandle,
+        serial: String,
+        handed_over: bool,
+    ) -> Result<Debugger, ProgramError> {
+        // A firmware old enough not to have the capability request
+        // stalls it; the fallback is what the protocol document says.
+        let mut reply = [0u8; 8];
+        let capability = match handle.control_read(
+            apollo::REQ_TYPE_IN,
+            apollo::REQUEST_JTAG_GET_INFO,
+            0,
+            0,
+            &mut reply,
+            APOLLO_TIMEOUT,
+        ) {
+            Ok(n) => apollo::Capability::from_reply(&reply[..n]).unwrap_or_default(),
+            Err(_) => apollo::Capability::default(),
+        };
+        Ok(Debugger {
+            handle,
+            capability,
+            serial,
+            handed_over,
+        })
+    }
+
+    /// The board's serial number.
+    #[must_use]
+    pub fn serial(&self) -> &str {
+        &self.serial
+    }
+
+    /// Whether the gateware had to be asked to give up the USB port.
+    #[must_use]
+    pub fn handed_over(&self) -> bool {
+        self.handed_over
+    }
+
+    /// What the firmware said it can do.
+    #[must_use]
+    pub fn capability(&self) -> apollo::Capability {
+        self.capability
+    }
+
+    /// The firmware's own name for itself. It contains `Apollo`.
+    ///
+    /// # Errors
+    ///
+    /// [`ProgramError::Usb`] when the request fails.
+    pub fn id(&self) -> Result<String, ProgramError> {
+        self.string(apollo::REQUEST_GET_ID, "reading the firmware's identifier")
+    }
+
+    /// The firmware version, as the firmware writes it.
+    ///
+    /// # Errors
+    ///
+    /// [`ProgramError::Usb`] when the request fails.
+    pub fn firmware_version(&self) -> Result<String, ProgramError> {
+        self.string(
+            apollo::REQUEST_GET_FIRMWARE_VERSION,
+            "reading the firmware version",
+        )
+    }
+
+    /// The USB API version, major then minor. This is the one to test a
+    /// capability against; the firmware version is for people.
+    ///
+    /// # Errors
+    ///
+    /// [`ProgramError::Usb`] when the request fails.
+    pub fn usb_api_version(&self) -> Result<(u8, u8), ProgramError> {
+        let mut buf = [0u8; 2];
+        let n = self
+            .handle
+            .control_read(
+                apollo::REQ_TYPE_IN,
+                apollo::REQUEST_GET_USB_API_VERSION,
+                0,
+                0,
+                &mut buf,
+                APOLLO_TIMEOUT,
+            )
+            .map_err(|e| usb_err("reading the USB API version", &e))?;
+        if n < 2 {
+            return Err(ProgramError::Usb(format!(
+                "the USB API version came back as {n} byte(s), not 2"
+            )));
+        }
+        Ok((buf[0], buf[1]))
+    }
+
+    /// The TAP state the firmware believes it is in, or `None` for a
+    /// number outside the sixteen.
+    ///
+    /// # Errors
+    ///
+    /// [`ProgramError::Usb`] when the request fails.
+    pub fn tap_state(&self) -> Result<Option<TapState>, ProgramError> {
+        let mut buf = [0u8; 1];
+        let n = self
+            .handle
+            .control_read(
+                apollo::REQ_TYPE_IN,
+                apollo::REQUEST_JTAG_GET_STATE,
+                0,
+                0,
+                &mut buf,
+                APOLLO_TIMEOUT,
+            )
+            .map_err(|e| usb_err("reading the TAP state", &e))?;
+        if n < 1 {
+            return Err(ProgramError::Usb(
+                "the TAP state came back empty".to_owned(),
+            ));
+        }
+        Ok(apollo::state_from_number(buf[0]))
+    }
+
+    /// Compiles a [`super::jtag::Plan`] for this firmware, takes the
+    /// JTAG pins, runs it, and releases them again.
+    ///
+    /// What comes back is the compiled program — which is what knows
+    /// where the captures are — and one reply per read, in order.
+    /// [`apollo::Program::capture_u32`] turns those into a register.
+    ///
+    /// # Errors
+    ///
+    /// [`ProgramError::Usb`] for a transfer the device refused.
+    pub fn run_plan(
+        &self,
+        plan: &super::jtag::Plan,
+    ) -> Result<(apollo::Program, Vec<Vec<u8>>), ProgramError> {
+        self.run_plan_with(plan, self.capability)
+    }
+
+    /// [`run_plan`](Self::run_plan) with a capability of the caller's
+    /// choosing rather than the one the firmware reported.
+    ///
+    /// The only honest use for this is making a device *do less* than it
+    /// said it could, so that a path which would otherwise never run on
+    /// hardware does. Splitting a register across several scans is the
+    /// one that matters: a firmware that reports 2048 bits never splits
+    /// a 32-bit read, so the chunking — and with it the claim that a
+    /// scan without [`apollo::FLAG_ADVANCE_STATE`] stays in the shift
+    /// state — would only ever be exercised against a model. Asking for
+    /// 16-bit chunks makes a real part prove it.
+    ///
+    /// Claiming a *larger* capability than the firmware reported is a
+    /// way to have scans silently truncated, and nothing in this crate
+    /// does it.
+    ///
+    /// # Errors
+    ///
+    /// As [`run_plan`](Self::run_plan).
+    pub fn run_plan_with(
+        &self,
+        plan: &super::jtag::Plan,
+        capability: apollo::Capability,
+    ) -> Result<(apollo::Program, Vec<Vec<u8>>), ProgramError> {
+        let program = apollo::compile(plan, capability);
+        self.command(apollo::REQUEST_JTAG_START, 0, 0, "taking the JTAG pins")?;
+        let replies = self.run(&program);
+        // Release the pins whatever happened; a failed scan must not
+        // leave them driven.
+        let _ = self.command(apollo::REQUEST_JTAG_STOP, 0, 0, "releasing the JTAG pins");
+        Ok((program, replies?))
+    }
+
+    /// Runs an already-compiled program, without taking or releasing the
+    /// JTAG pins.
+    ///
+    /// # Errors
+    ///
+    /// [`ProgramError::Usb`] for a transfer the device refused.
+    pub fn run(&self, program: &apollo::Program) -> Result<Vec<Vec<u8>>, ProgramError> {
+        let mut replies = Vec::new();
+        for step in program.steps() {
+            match step {
+                apollo::Step::Command {
+                    request,
+                    value,
+                    index,
+                } => self.command(*request, *value, *index, "a JTAG request")?,
+                apollo::Step::Write {
+                    request,
+                    value,
+                    index,
+                    data,
+                } => {
+                    self.handle
+                        .control_write(
+                            apollo::REQ_TYPE_OUT,
+                            *request,
+                            *value,
+                            *index,
+                            data,
+                            APOLLO_TIMEOUT,
+                        )
+                        .map(|_| ())
+                        .map_err(|e| {
+                            usb_err(&format!("filling the JTAG out buffer ({request:#04x})"), &e)
+                        })?;
+                }
+                apollo::Step::Read {
+                    request,
+                    value,
+                    index,
+                    len,
+                    ..
+                } => {
+                    let mut buf = vec![0u8; *len];
+                    let n = self
+                        .handle
+                        .control_read(
+                            apollo::REQ_TYPE_IN,
+                            *request,
+                            *value,
+                            *index,
+                            &mut buf,
+                            APOLLO_TIMEOUT,
+                        )
+                        .map_err(|e| {
+                            usb_err(&format!("reading the JTAG in buffer ({request:#04x})"), &e)
+                        })?;
+                    buf.truncate(n);
+                    replies.push(buf);
+                }
+            }
+        }
+        Ok(replies)
+    }
+
+    /// Reads the 32-bit identifier of whatever part is on the chain,
+    /// with no instruction shifted and nothing written.
+    ///
+    /// This is [`super::jtag::idcode_plan`] — five TMS-high clocks' worth
+    /// of `Test-Logic-Reset` and then thirty-two bits out of DR. It asks
+    /// nothing about the vendor and needs no instruction register width,
+    /// which is what makes it the right thing to point at an unknown
+    /// board.
+    ///
+    /// # Errors
+    ///
+    /// [`ProgramError::Usb`] for a transfer the device refused, and
+    /// [`ProgramError::Job`] when the reply is short.
+    pub fn idcode(&self) -> Result<u32, ProgramError> {
+        let (program, replies) = self.run_plan(&super::jtag::idcode_plan())?;
+        Ok(program.capture_u32(0, &replies)?)
+    }
+
+    /// Tells Apollo it may give the USB port back to the FPGA.
+    ///
+    /// **This is not on its own enough to bring the gateware back, and
+    /// on the board this was written against it did nothing visible.**
+    /// The request is accepted, but the port only moves when the FPGA
+    /// asks for it, and a gateware that has been told to stop
+    /// advertising does not start again until the part is reconfigured
+    /// or the board is power cycled. Apollo's own tooling pairs this
+    /// with a reconfiguration; Reticle does not send that request (see
+    /// `docs/apollo-protocol.md` §7), so the honest end of a session is
+    /// this request and then a note to the person holding the board that
+    /// a replug restores it.
+    ///
+    /// Nothing is lost by the board staying in debugger mode: the FPGA
+    /// is still configured with whatever it was configured with, and a
+    /// replug or a power cycle brings it back. It is a USB port's owner,
+    /// not a state of the part.
+    ///
+    /// The handle is consumed because the debugger may leave the bus.
+    ///
+    /// # Errors
+    ///
+    /// [`ProgramError::Usb`] when the request was refused. A device that
+    /// has already left cannot answer, and that is reported as success,
+    /// because it is the outcome that was asked for.
+    pub fn release_usb_to_fpga(self) -> Result<(), ProgramError> {
+        match self.handle.control_write(
+            apollo::REQ_TYPE_OUT,
+            apollo::REQUEST_ALLOW_FPGA_TAKEOVER_USB,
+            0,
+            0,
+            &[],
+            APOLLO_TIMEOUT,
+        ) {
+            Ok(_) => Ok(()),
+            // A device that has gone is a device that did what was
+            // asked; anything else is worth reporting.
+            Err(e) if e.is_timeout() => Ok(()),
+            Err(e) => Err(usb_err("handing the USB port back to the FPGA", &e)),
+        }
+    }
+
+    /// One vendor request with no data stage.
+    fn command(&self, request: u8, value: u16, index: u16, what: &str) -> Result<(), ProgramError> {
+        self.handle
+            .control_write(
+                apollo::REQ_TYPE_OUT,
+                request,
+                value,
+                index,
+                &[],
+                APOLLO_TIMEOUT,
+            )
+            .map(|_| ())
+            .map_err(|e| usb_err(&format!("{what} ({request:#04x})"), &e))
+    }
+
+    /// One vendor request answering with a NUL-terminated string.
+    fn string(&self, request: u8, what: &str) -> Result<String, ProgramError> {
+        let mut buf = [0u8; 256];
+        let n = self
+            .handle
+            .control_read(apollo::REQ_TYPE_IN, request, 0, 0, &mut buf, APOLLO_TIMEOUT)
+            .map_err(|e| usb_err(what, &e))?;
+        let bytes = &buf[..n];
+        let end = bytes.iter().position(|&b| b == 0).unwrap_or(bytes.len());
+        Ok(String::from_utf8_lossy(&bytes[..end]).into_owned())
+    }
+}
+
+impl Drop for Debugger {
+    fn drop(&mut self) {
+        // Release the JTAG pins if a run left them taken. Failures are
+        // not worth reporting: the board may already be gone, and the
+        // pins are released by a power cycle either way.
+        let _ = self.handle.control_write(
+            apollo::REQ_TYPE_OUT,
+            apollo::REQUEST_JTAG_STOP,
+            0,
+            0,
+            &[],
+            APOLLO_TIMEOUT,
+        );
     }
 }
 
