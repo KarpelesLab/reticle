@@ -22,10 +22,20 @@
 //! # Nothing Gowin has been loaded into a part
 //!
 //! The board this was written for — a Sipeed Tang Primer 20K, a
-//! GW2A-LV18PG256C8/I7 — is on the machine and `reticle program
-//! --probe` reads its IDCODE, `0x0000081b`. **That is the whole of what
-//! has touched the hardware.** Nothing here has configured anything, and
-//! the configuration sequence that would is not written.
+//! GW2A-LV18PG256C8/I7 — is on the machine, and its JTAG IDCODE,
+//! `0x0000081b`, has been read from it. **That is the whole of what has
+//! touched the hardware.** Nothing here has configured anything, and the
+//! configuration sequence that would is not written.
+//!
+//! `docs/fpga-gowin.md` opens with a warning that belongs here too:
+//! `reticle program --probe` reads the identifier safely (with
+//! [`jtag::idcode_after_reset`], which needs no instruction) and then
+//! reads the **Xilinx** status register, which shifts a six-bit
+//! instruction at a part whose instruction register is eight bits. Do
+//! not point it at this part. Nothing in this module changed
+//! `src/program/`.
+//!
+//! [`jtag::idcode_after_reset`]: crate::program::jtag::idcode_after_reset
 //!
 //! What *is* established, and against what, is in `docs/fpga-gowin.md`.
 //! The short form: the container agrees byte for byte with a reference
@@ -48,7 +58,7 @@
 //! reports them; `docs/fpga-gowin.md` says what each one holds and which
 //! of them this loader reads.
 //!
-//! The eleven this loader reads:
+//! The ten this loader reads:
 //!
 //! | Key | What is taken from it |
 //! |---|---|
@@ -58,10 +68,14 @@
 //! | `corner_tiles_io` | which edge each of the four corner tiles counts as, which is what makes the `IOLOC` names come out right |
 //! | `packages` | part number to `(package, device, speed grade)` |
 //! | `pinout` | package ball to `IOLOC`, which with the above gives [`Arch::pinmap`] |
-//! | `pin_bank` | which IO bank an `IOLOC` is in |
 //! | `cmd_hdr`, `cmd_ftr` | the `.fs` file's header and footer, byte for byte |
 //! | `const` | the bits every tile of a type always sets |
 //! | `nodes` | the always-connected networks — counted, not used; see below |
+//!
+//! `pin_bank`, which maps an `IOLOC` to an IO bank number, is not read by
+//! the loader: it is where `src/fpga/devices/gowin.dev`'s `bank` clause on
+//! every `pin` line came from, and a device file is data of its own once
+//! written.
 //!
 //! # The three mismatches with Reticle's model
 //!
@@ -75,7 +89,7 @@
 //! one wrinkle is that a tile's size depends on where it is — a GW2A-18's
 //! rows are 24, 26 or 28 bits tall and its columns 60 or 68 wide — so the
 //! die's geometry comes out beside the architecture as a
-//! [`DieLayout`](super::gowin::DieLayout), the way a
+//! [`DieLayout`], the way a
 //! [`FrameMap`](super::xc7::FrameMap) does for the 7 series.
 //!
 //! ## 2. An inter-tile wire is named per tile, and the rule is arithmetic
@@ -164,7 +178,7 @@
 //! is where bit `i` of the sixteen-bit `INIT` lives, and the fuse is set
 //! when that bit is **zero** (`gowin_pack.py::get_LUT4_fuses`: `if lutbit
 //! == '0': bits.update(lutmap[bitnum])`). That is
-//! [`ConfigEntry::ParamZero`](super::arch::ConfigEntry::ParamZero), which
+//! [`ConfigEntry::ParamZero`], which
 //! exists because Project X-Ray stores a flip-flop's `INIT` the same way
 //! round. Getting the polarity backwards inverts every lookup table in
 //! the design.

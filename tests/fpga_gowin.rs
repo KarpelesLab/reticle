@@ -126,7 +126,8 @@ fn the_database_is_one_messagepack_map_of_thirty_eight_fields() {
     // declares its fields in.
     assert_eq!(keys.first(), Some(&"grid"));
     assert_eq!(keys.len(), 38, "{keys:?}");
-    // The eleven fields the loader reads are all there.
+    // The ten fields the loader reads, plus `pin_bank`, which is where
+    // `devices/gowin.dev`'s bank clauses came from.
     for wanted in [
         "grid",
         "tiles",
@@ -259,9 +260,11 @@ fn the_whole_die_is_a_graph_this_crate_can_hold() {
         graph.bit_patterns(),
         graph.pips.len()
     );
-    // Every pip the architecture declares is either kept or dropped, and
-    // the die-edge wraps are among the dropped ones — which is the whole
-    // reason they are dropped.
+    // Every pip the architecture declares is either kept or dropped.
+    // `dangling` counts dropped bel *pins* too, so this equality also says
+    // that over the whole die not one bel pin named a wire its tile has
+    // not got — which is worth knowing, since the bel pin names come from
+    // the database's own portmaps and nothing checks them otherwise.
     assert_eq!(graph.pips.len() + graph.dangling, fabric.stats.pips);
     assert!(
         graph.dangling >= fabric.stats.edge_wraps,

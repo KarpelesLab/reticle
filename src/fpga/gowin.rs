@@ -13,9 +13,12 @@
 //! its output was taken apart. Against that file this module's reader and
 //! writer agree on
 //!
-//! - the ten header lines and the six footer lines, which come from the
-//!   chip database's own `cmd_hdr` and `cmd_ftr` and are written verbatim
-//!   except for the two fields named below;
+//! - all ten header lines, byte for byte, and five of the six footer
+//!   lines. They come from the chip database's own `cmd_hdr` and
+//!   `cmd_ftr` and are written verbatim but for the two fields named
+//!   below; the sixth footer line is the `0x0a` USERCODE, whose command
+//!   and option bytes agree and whose four data bytes `gowin_pack` fills
+//!   in and this module leaves at zero unless a caller asks;
 //! - the row count patched into the last header command (`0x3b`), which
 //!   for a GW2A-18 is 1342, the height of the die bitmap;
 //! - the geometry: 1342 rows of 3376 bits, which is 422 bytes with no

@@ -2,14 +2,18 @@
 # the GW2A-LV18PG256C8/I7 of a Sipeed Tang Primer 20K.
 #
 # NOTHING BUILT FROM THIS FILE HAS BEEN LOADED INTO A PART. The board is
-# on the machine and `reticle program --device "FactoryAIOT Pro" --expect
-# 0000081b --probe` reads its JTAG IDCODE over its FT2232D adapter, and
-# that is the whole of what has touched the hardware. No design has been
-# placed on it, no bitstream has been sent to it, and the JTAG
-# configuration sequence that would send one is not written. Compare
-# `xc7.dev`, where one design of one lookup table and three pins has run
-# on a Basys 3; there is no equivalent sentence here and this file must
-# not be read as if there were.
+# on the machine and its JTAG IDCODE has been read from it over its
+# FT2232D adapter, and that is the whole of what has touched the
+# hardware. No design has been placed on it, no bitstream has been sent
+# to it, and the JTAG configuration sequence that would send one is not
+# written. Compare `xc7.dev`, where one design of one lookup table and
+# three pins has run on a Basys 3; there is no equivalent sentence here
+# and this file must not be read as if there were.
+#
+# AND A WARNING THAT BELONGS WITH THAT ONE: `reticle program --probe`
+# reads the identifier safely and then reads the XILINX status register,
+# which shifts a six-bit instruction at a part whose instruction register
+# is eight bits. Do not point it at this part. See `docs/fpga-gowin.md`.
 #
 # What the test suite does check is that the netlist a design synthesises
 # to holds only primitives this file declares, wired to pins they have,
@@ -25,7 +29,7 @@
 #     flip-flops, 15552 ALUs, 648 distributed RAMs, 384 IO buffers, 46
 #     block RAMs, 12 DSP blocks and 4 PLLs are what you get by counting
 #     the bels of every tile of `GW2A-18.msgpack.xz`'s 55 x 56 grid, and
-#     `tests/fpga_gowin.rs::the_fabric_measures_itself_and_the_documented_ones`
+#     `tests/fpga_gowin.rs::the_fabric_measures_itself_and_the_numbers_are_the_documented_ones`
 #     re-counts them from the database so they cannot drift. They agree
 #     with Gowin's published figures for a GW2A-18 (20736 LUT4, 15552
 #     registers, 828 kbit of block RAM as 46 x 18 kbit, 48 18x18
@@ -224,9 +228,9 @@
 #     Unlike the iCE40's SB_GB or the ECP5's DCCA there is no `gb` bel,
 #     and that is not an omission: on this family a clock enters the
 #     global network *by being routed onto it*, not by instantiating a
-#     buffer. The database says so — the 14 748 entries of its `nodes`
-#     table, 6306 of whose members are typed `GLOBAL_CLK`, are the
-#     network — and a GW2A-18 has no `BUFG` bel anywhere in its grid
+#     buffer. The database says so — 6306 of the 14 748 networks in its
+#     `nodes` table are typed `GLOBAL_CLK`, and they are that network —
+#     and a GW2A-18 has no `BUFG` bel anywhere in its grid
 #     (`gowin_pack` has a `get_BUFG_fuses`, but for the GW5 series).
 #     The things that *do* sit on the clock network — DQCE, DCS, DHCEN,
 #     CLKDIV, CLKDIV2 — are declared `other` below so a netlist check

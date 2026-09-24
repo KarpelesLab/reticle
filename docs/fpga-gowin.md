@@ -2,13 +2,26 @@
 
 ## Nothing here has been loaded into a part
 
-A Sipeed Tang Primer 20K is plugged into this machine. On 2026-09-24
-`reticle program --device "FactoryAIOT Pro" --expect 0000081b --probe`
-read its JTAG IDCODE, `0x0000081b`, through the board's Sipeed FT2232D
-adapter at 12 MHz. **That is the entirety of what has touched the
+A Sipeed Tang Primer 20K is plugged into this machine, and its JTAG
+IDCODE — `0x0000081b` — has been read from it over the board's Sipeed
+FT2232D adapter. **That is the entirety of what has touched the
 hardware.** No design has been placed on it, no bitstream has been sent
 to it, and the JTAG configuration sequence that would send one is not
 written.
+
+> **`reticle program --probe` is not safe to point at this part, and this
+> document does not recommend it.** It does two things. The first is
+> harmless and is where that IDCODE came from:
+> `jtag::idcode_after_reset` needs no instruction at all, because after
+> Test-Logic-Reset every IEEE 1149.1 part with an identifier presents it
+> whatever its instruction register's width. The second is *not*: it
+> reads the Xilinx configuration status register, which shifts a
+> **six-bit** Xilinx instruction, and this part's instruction register is
+> **eight bits**. What that lands on in a Gowin TAP is unknown, and some
+> Gowin instructions are destructive. Giving `reticle program` a Gowin
+> path — and stopping it shifting a Xilinx instruction at a part it has
+> already identified as not Xilinx — is phase two's first job on the
+> programming side. Nothing in this work changed `src/program/`.
 
 Compare `docs/fpga-xray.md`, which opens by saying that one design — one
 lookup table and three pins — has run on a Basys 3 and been watched
@@ -21,12 +34,14 @@ What *is* established, and against what:
 
 - **the container.** `gowin_pack`, Project Apicula's own packer, was run
   for a `GW2A-18` and the file it wrote was taken apart. Against that
-  file, `src/fpga/gowin.rs` agrees on the ten header lines and the six
-  footer lines byte for byte, on the row count patched into the `0x3b`
-  command (1342), on the geometry (1342 rows of 3376 bits, 422 bytes with
-  no padding, 430 bytes and so 3440 characters to a line), on **all 1342
-  row check words**, and on the footer's closing word `0x7334`. That is
-  `tests/fpga_gowin.rs::the_blank_stream_is_the_reference_files_envelope_byte_for_byte`;
+  file, `src/fpga/gowin.rs` agrees on all ten header lines byte for byte
+  (including the row count patched into the `0x3b` command, 1342), on
+  five of the six footer lines byte for byte and on the sixth's command
+  and options — it is the `0x0a` USERCODE, which `gowin_pack` fills in
+  and this does not — on the geometry (1342 rows of 3376 bits, 422 bytes
+  with no padding, 430 bytes and so 3440 characters to a line), on **all
+  1342 row check words**, and on the footer's closing word `0x7334`. That
+  is `tests/fpga_gowin.rs::the_blank_stream_is_the_reference_files_envelope_byte_for_byte`;
   it needs the reference file and skips without it.
 - **the fabric's size.** Every number in the table below is produced by
   the loader from the database and re-checked by a test, not written down
@@ -178,7 +193,7 @@ and whether this loader reads it.
 | `packages` | 21 part numbers to `(package, device, speed)` | yes |
 | `pinout` | `{device: {package: {ball: (IOLOC, [functions])}}}`, nine packages | yes |
 | `sip_cst` | empty here; system-in-package constraints | no |
-| `pin_bank` | 384 `IOLOC`s to an IO bank number, 0..7 | yes |
+| `pin_bank` | 384 `IOLOC`s to an IO bank number, 0..7 | not by the loader; it is where `gowin.dev`'s `bank` clauses came from |
 | `cmd_hdr` | 10 byte strings: the `.fs` file's header commands | yes |
 | `cmd_ftr` | 6 byte strings: its footer | yes |
 | `template` | `nil` here | no |
@@ -548,8 +563,8 @@ accidentally undo.
   should listen.
 - **No global clock buffer.** Not an omission: on this family a clock
   enters the global network *by being routed onto it*, which is what the
-  `nodes` table's 6306 `GLOBAL_CLK` memberships are, and a GW2A-18 has no
-  `BUFG` bel anywhere in its grid.
+  6306 of the `nodes` table's 14 748 networks that are typed `GLOBAL_CLK`
+  are, and a GW2A-18 has no `BUFG` bel anywhere in its grid.
 - **No block RAM.** Two reasons, either sufficient. A block responds only
   when its `BLKSEL[2:0]` input matches its `BLK_SEL` parameter and the
   `bram` model cannot tie an input to a constant, so a declared block
@@ -621,13 +636,17 @@ between it and a lit LED, in rough order of how much stands behind each.
    loaded, so no clock reaches the global network and nothing sequential
    routes. This is a model change of maybe a hundred lines plus the text
    round-trip, and it helps the 7-series loader too.
-3. **A configuration sequence.** Reading this part over JTAG is proven;
-   writing it is not written at all. `reticle program` knows the TAP state
-   machine and the FTDI encoding, and the part's instruction register is
-   **eight bits** where a 7-series' is six, which is why the IDCODE is
-   read with `jtag::idcode_after_reset` — an instruction nothing has to
-   name. What a Gowin part wants after that (the `0x15` / `0x17` / `0x3a`
-   family of instructions, an erase, a status poll) is phase two.
+3. **A configuration sequence, and a programmer that knows it is not
+   talking to a Xilinx part.** Reading this part's identifier over JTAG
+   works; writing it is not written at all. `reticle program` knows the
+   TAP state machine and the FTDI encoding, and the part's instruction
+   register is **eight bits** where a 7-series' is six, which is why the
+   IDCODE is read with `jtag::idcode_after_reset` — an instruction
+   nothing has to name. Two things follow. What a Gowin part wants after
+   that (its own instruction set, an erase, a status poll) has to be
+   written; and `--probe`'s second step, the Xilinx status read, has to
+   stop happening on a part whose IDCODE says it is not Xilinx. See the
+   warning at the top of this document.
 4. **A flip-flop's D pin, and packing.** A Gowin flip-flop's data input
    comes from the LUT beside it inside the slice and has no tile wire —
    the database's flip-flop portmap has no `D` at all, exactly as a
