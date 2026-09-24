@@ -126,6 +126,8 @@ module ram512
   attr port = "wdata"
   cell wdata$io7 blackbox SB_IO #(PIN_TYPE=6'd1) (PACKAGE_PIN=%wdata$pad[7:7]) -> (D_IN_0=%wdata$in7)
   attr port = "rdata"
+  attr pin = "95"
+  attr io_standard = "LVCMOS33"
   cell rdata$io0 blackbox SB_IO #(PIN_TYPE=6'd25) (D_OUT_0=%rdata[0:0]) -> (PACKAGE_PIN=%rdata$pin0)
   attr port = "rdata"
   cell rdata$io1 blackbox SB_IO #(PIN_TYPE=6'd25) (D_OUT_0=%rdata[1:1]) -> (PACKAGE_PIN=%rdata$pin1)

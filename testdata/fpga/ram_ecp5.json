@@ -563,7 +563,9 @@
             "DIR": "OUTPUT"
           },
           "attributes": {
-            "port": "rdata"
+            "port": "rdata",
+            "pin": "C1",
+            "io_standard": "LVCMOS33"
           },
           "port_directions": {
             "I": "input",

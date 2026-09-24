@@ -4,8 +4,8 @@ carry:
 io:
   clk (1 bits) -> IBUF at pin W5 as LVCMOS33
   rst (1 bits) -> IBUF at pin U18 as LVCMOS33
-  sw (4 bits) -> IBUF
-  led (4 bits) -> OBUF
+  sw (4 bits) -> IBUF at pin V17,V16,W16,W17
+  led (4 bits) -> OBUF at pin U16,E19,U19,V19
 clocks:
   clk (12 flip-flops) -> BUFG
 logic:

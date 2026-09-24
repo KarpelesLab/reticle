@@ -164,6 +164,8 @@ module ram1k
   attr port = "wdata"
   cell wdata$io15 blackbox IBUF (I=%wdata$pad[15:15]) -> (O=%wdata$in15)
   attr port = "rdata"
+  attr pin = "U16"
+  attr io_standard = "LVCMOS33"
   cell rdata$io0 blackbox OBUF (I=%rdata[0:0]) -> (O=%rdata$pin0)
   attr port = "rdata"
   cell rdata$io1 blackbox OBUF (I=%rdata[1:1]) -> (O=%rdata$pin1)

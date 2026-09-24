@@ -779,3 +779,66 @@ fn the_artix7_matches_its_datasheet_figures() {
     assert!(device.pin("A18").is_some(), "the UART transmit pin");
     assert!(device.pin("G19").is_some(), "the first VGA red bit");
 }
+
+/// A bus constrained bit by bit puts each bit's buffer on its own pin.
+///
+/// The IO pass used to look up one pin for the whole port, so a bus whose
+/// constraints name `key[0]` and `key[1]` rather than `key` gave every
+/// bit's buffer no pin at all. The nextpnr and Vivado exports write their
+/// constraint files from the constraints themselves and never noticed;
+/// Reticle's own placer reads the buffer's `pin` attribute, and put those
+/// bits on whatever pads it liked — on a board, an output driving a ball
+/// wired to something else.
+#[test]
+fn a_bus_constrained_bit_by_bit_puts_each_bit_on_its_own_pin() {
+    let rtl = "top bus\n\nmodule bus\n  net %key u2 wire\n  net %led u2 wire\n  \
+               port key in %key\n  port led out %led\n  assign %led = %key\nend\n";
+    let rcf = "set_io key[0] T2\nset_io key[1] D7\nset_io led[0] N16\nset_io led[1] N14\n";
+    let device = fpga::target("gw2a-18-pg256").expect("the GW2A-18");
+    let mut sources = SourceMap::new();
+    let file = sources.add("bus.rtl", rtl.to_owned()).unwrap();
+    let mut design = Design::parse_text(rtl, file).expect("the design parses");
+    let top = design.top.expect("a top");
+    let rcf_file = sources.add("bus.rcf", rcf.to_owned()).unwrap();
+    let mut diags = Diagnostics::new();
+    let constraints = Constraints::parse(rcf, rcf_file, &mut diags);
+    let report = fpga::synthesize_for(
+        &mut design,
+        top,
+        device,
+        &constraints,
+        &FpgaOptions::default(),
+        &mut diags,
+    )
+    .expect("the flow runs");
+
+    let mut pins: Vec<(String, String)> = design.modules[top]
+        .cells
+        .iter()
+        .filter_map(|(_, cell)| {
+            let pin = cell.attrs.get("pin")?.as_str()?.to_owned();
+            Some((cell.name.as_str().to_owned(), pin))
+        })
+        .collect();
+    pins.sort();
+    let expect = [
+        ("key$io0", "T2"),
+        ("key$io1", "D7"),
+        ("led$io0", "N16"),
+        ("led$io1", "N14"),
+    ];
+    assert_eq!(
+        pins,
+        expect.map(|(c, p)| (c.to_owned(), p.to_owned())).to_vec()
+    );
+
+    // And the report says so, rather than showing a bus with no pin.
+    let reported: Vec<(&str, Option<&str>)> = report
+        .primitives
+        .io_buffers
+        .iter()
+        .map(|io| (io.port.as_str(), io.pin.as_deref()))
+        .collect();
+    assert!(reported.contains(&("key", Some("T2,D7"))), "{reported:?}");
+    assert!(reported.contains(&("led", Some("N16,N14"))), "{reported:?}");
+}

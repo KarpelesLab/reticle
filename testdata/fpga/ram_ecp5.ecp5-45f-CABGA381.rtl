@@ -127,6 +127,8 @@ module ram512
   attr port = "wdata"
   cell wdata$io7 blackbox TRELLIS_IO #(DIR="INPUT") (B=%wdata$pad[7:7]) -> (O=%wdata$in7)
   attr port = "rdata"
+  attr pin = "C1"
+  attr io_standard = "LVCMOS33"
   cell rdata$io0 blackbox TRELLIS_IO #(DIR="OUTPUT") (I=%rdata[0:0]) -> (B=%rdata$pin0)
   attr port = "rdata"
   cell rdata$io1 blackbox TRELLIS_IO #(DIR="OUTPUT") (I=%rdata[1:1]) -> (B=%rdata$pin1)

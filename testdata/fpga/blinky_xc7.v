@@ -102,42 +102,42 @@ module blinky (.clk(clk$pad), .rst(rst$pad), .sw(sw$pad), .led(led$pad));
     .I(rst$pad),
     .O(rst$in0)
   );
-  (* port = "sw" *)
+  (* port = "sw", pin = "V17", io_standard = "LVCMOS33" *)
   IBUF sw$io0 (
     .I(sw$pad[0]),
     .O(sw$in0)
   );
-  (* port = "sw" *)
+  (* port = "sw", pin = "V16", io_standard = "LVCMOS33" *)
   IBUF sw$io1 (
     .I(sw$pad[1]),
     .O(sw$in1)
   );
-  (* port = "sw" *)
+  (* port = "sw", pin = "W16", io_standard = "LVCMOS33" *)
   IBUF sw$io2 (
     .I(sw$pad[2]),
     .O(sw$in2)
   );
-  (* port = "sw" *)
+  (* port = "sw", pin = "W17", io_standard = "LVCMOS33" *)
   IBUF sw$io3 (
     .I(sw$pad[3]),
     .O(sw$in3)
   );
-  (* port = "led" *)
+  (* port = "led", pin = "U16", io_standard = "LVCMOS33", drive = 12, slew = "slow" *)
   OBUF led$io0 (
     .I(led[0]),
     .O(led$pin0)
   );
-  (* port = "led" *)
+  (* port = "led", pin = "E19", io_standard = "LVCMOS33", drive = 12, slew = "slow" *)
   OBUF led$io1 (
     .I(led[1]),
     .O(led$pin1)
   );
-  (* port = "led" *)
+  (* port = "led", pin = "U19", io_standard = "LVCMOS33", drive = 12, slew = "slow" *)
   OBUF led$io2 (
     .I(led[2]),
     .O(led$pin2)
   );
-  (* port = "led" *)
+  (* port = "led", pin = "V19", io_standard = "LVCMOS33", drive = 12, slew = "slow" *)
   OBUF led$io3 (
     .I(led[3]),
     .O(led$pin3)

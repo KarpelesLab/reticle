@@ -281,7 +281,7 @@ module ram1k (.clk(clk$pad), .we(we$pad), .waddr(waddr$pad), .raddr(raddr$pad), 
     .I(wdata$pad[15]),
     .O(wdata$in15)
   );
-  (* port = "rdata" *)
+  (* port = "rdata", pin = "U16", io_standard = "LVCMOS33" *)
   OBUF rdata$io0 (
     .I(rdata[0]),
     .O(rdata$pin0)

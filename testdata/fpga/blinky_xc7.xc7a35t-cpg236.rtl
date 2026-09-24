@@ -81,20 +81,44 @@ module blinky
   attr io_standard = "LVCMOS33"
   cell rst$io0 blackbox IBUF (I=%rst$pad) -> (O=%rst$in0)
   attr port = "sw"
+  attr pin = "V17"
+  attr io_standard = "LVCMOS33"
   cell sw$io0 blackbox IBUF (I=%sw$pad[0:0]) -> (O=%sw$in0)
   attr port = "sw"
+  attr pin = "V16"
+  attr io_standard = "LVCMOS33"
   cell sw$io1 blackbox IBUF (I=%sw$pad[1:1]) -> (O=%sw$in1)
   attr port = "sw"
+  attr pin = "W16"
+  attr io_standard = "LVCMOS33"
   cell sw$io2 blackbox IBUF (I=%sw$pad[2:2]) -> (O=%sw$in2)
   attr port = "sw"
+  attr pin = "W17"
+  attr io_standard = "LVCMOS33"
   cell sw$io3 blackbox IBUF (I=%sw$pad[3:3]) -> (O=%sw$in3)
   attr port = "led"
+  attr pin = "U16"
+  attr io_standard = "LVCMOS33"
+  attr drive = 12
+  attr slew = "slow"
   cell led$io0 blackbox OBUF (I=%led[0:0]) -> (O=%led$pin0)
   attr port = "led"
+  attr pin = "E19"
+  attr io_standard = "LVCMOS33"
+  attr drive = 12
+  attr slew = "slow"
   cell led$io1 blackbox OBUF (I=%led[1:1]) -> (O=%led$pin1)
   attr port = "led"
+  attr pin = "U19"
+  attr io_standard = "LVCMOS33"
+  attr drive = 12
+  attr slew = "slow"
   cell led$io2 blackbox OBUF (I=%led[2:2]) -> (O=%led$pin2)
   attr port = "led"
+  attr pin = "V19"
+  attr io_standard = "LVCMOS33"
+  attr drive = 12
+  attr slew = "slow"
   cell led$io3 blackbox OBUF (I=%led[3:3]) -> (O=%led$pin3)
   cell clk$gbuf blackbox BUFG (I=%clk) -> (O=%clk$gb)
   cell $lut4 blackbox LUT6 #(INIT=64'd7378697629483820646) (I0={%sw$in3, %count[7:7]}[0:0], I1={%sw$in3, %count[7:7]}[1:1], I2=1'd0, I3=1'd0, I4=1'd0, I5=1'd0) -> (O=%$lut0)

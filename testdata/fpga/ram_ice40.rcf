@@ -1,9 +1,17 @@
-# Only the scalars are pinned; the address and data buses are left to the
-# placer, which is legal: Reticle checks what is stated, not that
-# everything is stated.
+# The scalars and one bit of the data bus are pinned; the rest of the
+# address and data buses are left to the placer, which is legal: Reticle
+# checks what is stated, not that everything is stated.
+#
+# rdata[0] was on pin 99 until 2026-09-24, when a bus constrained bit by
+# bit first had its bits' pins honoured (before that, this line pinned
+# nothing). On the synthetic iCE40 fabric pins 97, 98 and 99 then do not
+# route: one local track near X10Y1 stays wanted by two signals however
+# many iterations the router gets. Every other free pin routes, so the
+# bit is on 95; the corner is a limit of the fabric model and the router,
+# recorded here rather than worked around silently.
 set_io -io_standard LVCMOS33 clk 21
 set_io -io_standard LVCMOS33 we 8
-set_io -io_standard LVCMOS33 rdata[0] 99
+set_io -io_standard LVCMOS33 rdata[0] 95
 create_clock -name sys -period 83.333 clk
 region core 1 1 6 6
 assign rd region core

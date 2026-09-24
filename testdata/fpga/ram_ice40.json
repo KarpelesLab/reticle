@@ -564,7 +564,9 @@
             "PIN_TYPE": 25
           },
           "attributes": {
-            "port": "rdata"
+            "port": "rdata",
+            "pin": "95",
+            "io_standard": "LVCMOS33"
           },
           "port_directions": {
             "D_OUT_0": "input",

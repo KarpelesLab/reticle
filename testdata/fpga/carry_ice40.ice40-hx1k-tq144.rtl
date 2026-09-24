@@ -121,6 +121,8 @@ module adder8
   attr port = "b"
   cell b$io7 blackbox SB_IO #(PIN_TYPE=6'd1) (PACKAGE_PIN=%b$pad[7:7]) -> (D_IN_0=%b$in7)
   attr port = "sum"
+  attr pin = "98"
+  attr io_standard = "LVCMOS33"
   cell sum$io0 blackbox SB_IO #(PIN_TYPE=6'd25) (D_OUT_0=%sum[0:0]) -> (PACKAGE_PIN=%sum$pin0)
   attr port = "sum"
   cell sum$io1 blackbox SB_IO #(PIN_TYPE=6'd25) (D_OUT_0=%sum[1:1]) -> (PACKAGE_PIN=%sum$pin1)

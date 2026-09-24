@@ -2935,6 +2935,22 @@ impl Mapper<'_> {
                 (module.nets[*clk].name.as_str().to_owned(), reg.name.clone())
             }
         });
+        // A bus constrained bit by bit has no whole-port pin; the report
+        // lists the bits' pins instead, least significant first, so a
+        // design whose pins went nowhere does not read like one that is
+        // placed.
+        let pin = pin.or_else(|| {
+            let bits: Option<Vec<String>> = (0..pins)
+                .map(|bit| {
+                    self.constraints
+                        .pins
+                        .iter()
+                        .find(|p| p.port == name && p.bit == Some(bit))
+                        .map(|p| p.pin.clone())
+                })
+                .collect();
+            bits.map(|b| b.join(","))
+        });
         self.report.io_buffers.push(IoMapping {
             port: name,
             primitive: bel.name.clone(),
@@ -2971,7 +2987,18 @@ impl Mapper<'_> {
         for (key, value) in bel.params_when(site.conditions) {
             module.cells[cell].params.set(key.clone(), value.clone());
         }
-        let io = site.io;
+        // A bus is constrained bit by bit (`set_io key[2] C7`), so each
+        // buffer takes its own bit's assignment; `pin_of` falls back to a
+        // whole-port one. Without this every bit of a bus constrained that
+        // way got no pin at all, and a placer that reads the attribute put
+        // it on any pad.
+        let constraints = self.constraints;
+        let assignment = constraints.pin_of(site.port, Some(bit));
+        let io = assignment.map_or(site.io, |a| &a.io);
+        let pin = assignment
+            .map(|a| a.pin.as_str())
+            .filter(|p| !p.is_empty())
+            .or(site.pin);
         if io.pullup == Some(true) {
             for (key, value) in bel.params_when("pullup") {
                 module.cells[cell].params.set(key.clone(), value.clone());
@@ -2979,7 +3006,7 @@ impl Mapper<'_> {
         }
         let attrs = &mut module.cells[cell].attrs;
         attrs.set("port", site.port.to_owned());
-        if let Some(pin) = site.pin {
+        if let Some(pin) = pin {
             attrs.set("pin", pin.to_owned());
         }
         if let Some(standard) = &io.io_standard {
