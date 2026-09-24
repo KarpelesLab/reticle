@@ -1,0 +1,18 @@
+# Sipeed Tang Primer 20K dock: four buttons and four LEDs.
+#
+# PROVENANCE: the dock schematic (Tang_Primer_20K_Dock_3711, sheet
+# P007_Things) and the core board's (Tang_Primer_20K_Core_board_3690).
+# The buttons are `Silicone Key_3` (T2, bank 4), `Silicone Key_4` (D7,
+# bank 6), `Silicone Key_5` (C7, bank 6) and `Silicone Key_2` (T3, bank
+# 4), which a person found to be the button silkscreened S4. Banks 4 and 6
+# are on the core board's +1V5 and the dock pulls the buttons up to 1.5 V.
+# The LEDs are `Orange_LED3`, `2`, `4` and `5` (N16, N14, L14, L16), all in
+# bank 1, on +3V3; N16 is the LED silkscreened LED1.
+set_io -io_standard LVCMOS15 key[0] T2
+set_io -io_standard LVCMOS15 key[1] D7
+set_io -io_standard LVCMOS15 key[2] C7
+set_io -io_standard LVCMOS15 key[3] T3
+set_io -io_standard LVCMOS33 led[0] N16
+set_io -io_standard LVCMOS33 led[1] N14
+set_io -io_standard LVCMOS33 led[2] L14
+set_io -io_standard LVCMOS33 led[3] L16

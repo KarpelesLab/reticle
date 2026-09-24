@@ -17,7 +17,9 @@
 //!
 //! - an **input** buffer gets `default_ibuf_attrs`, an **output** buffer
 //!   `default_obuf_attrs`, and each also gets its bank's `IO_TYPE` and
-//!   `BANK_VCCIO` (`process_IBUF`, `process_OBUF`);
+//!   `BANK_VCCIO` (`process_IBUF`, `process_OBUF`). These are not bel
+//!   entries, because a bel's entries belong to its tile *type* and one
+//!   type of IO tile sits in several banks;
 //! - every **unused** IO gets only its bank's `IO_TYPE` and `BANK_VCCIO`
 //!   (`get_unused_io_fuses`); a bank with nothing in it is set to
 //!   `LVCMOS18` at 1.8 V;
@@ -43,16 +45,25 @@
 //! `LVCMOS33` input sits in a bank supplied at 3.3 V; that is also what
 //! `gowin_pack` writes whenever an output happens to come first.
 //!
-//! **One IO standard for the whole design**, as the 7-series loader does
-//! (`XrayOptions::io_standard`): the buffer bits are worked out once per
-//! load, so two standards in one design are refused by the caller.
+//! # One IO standard per bank
+//!
+//! A bank has one supply, so it has one standard, and every used IO in it
+//! is configured for that standard: [`ApiculaOptions::bank_io_standards`]
+//! names it bank by bank, and [`ApiculaOptions::io_standard`] is the one a
+//! bank gets when nothing names it. `gowin_pack` refuses two standards in
+//! one bank, and so does the command line. The standard has to match what
+//! the *board* supplies the bank with, which no database says: a Tang
+//! Primer 20K dock runs bank 4 at 1.5 V and banks 0, 1 and 3 at 3.3 V.
+//!
+//! [`ApiculaOptions::bank_io_standards`]: super::ApiculaOptions::bank_io_standards
+//! [`ApiculaOptions::io_standard`]: super::ApiculaOptions::io_standard
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use super::attrids;
 use super::parse::{self, CodeRow};
 use super::{ApiculaDatabase, ApiculaError};
-use crate::fpga::arch::{ConfigBit, ConfigEntry, TileType};
+use crate::fpga::arch::ConfigBit;
 
 /// The single-ended standards this configures, and the bank voltage each
 /// implies: `BankDesc._vcc_ios`, the `LVCMOS` rows of it.
@@ -109,9 +120,6 @@ const SLICE_NO_DFF: &[(&str, &str)] = &[
 /// `no_dff0` and `no_dff1`: one register of the pair empty.
 const SLICE_NO_DFF0: &[(&str, &str)] = &[("REG0_REGSET", "RESET")];
 const SLICE_NO_DFF1: &[(&str, &str)] = &[("REG1_REGSET", "RESET")];
-
-/// A slice: its tile, as `(x, y)`, and its index in the tile.
-type SliceAt = ((u32, u32), u32);
 
 /// The slices a logic tile has, `CLS0` to `CLS3`; LUTs and flip-flops
 /// `2i` and `2i+1` are slice `i`.
@@ -201,19 +209,25 @@ fn buffer_codes(
     set
 }
 
-/// One IO the part has, and what it is set to when nothing is placed on it.
+/// One IO the part has, and its bits in every state it can be in.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct IdleIo {
+pub struct IoSite {
     /// Its tile, as `(x, y)`: grid column and row.
     pub tile: (u32, u32),
     /// Its bel, `IOBA` or `IOBB`.
     pub bel: String,
     /// The bank it belongs to.
     pub bank: i64,
-    /// Its bits when its bank has a used IO, and so the design's standard.
-    pub in_used_bank: Vec<ConfigBit>,
-    /// Its bits when its bank has none, and so `LVCMOS18` at 1.8 V.
-    pub in_idle_bank: Vec<ConfigBit>,
+    /// The standard its bank is configured for when used.
+    pub standard: String,
+    /// Its bits with an `IBUF` on it.
+    pub as_input: Vec<ConfigBit>,
+    /// Its bits with an `OBUF` on it.
+    pub as_output: Vec<ConfigBit>,
+    /// Its bits unused, in a bank with a used IO.
+    pub idle_in_used_bank: Vec<ConfigBit>,
+    /// Its bits unused, in a bank with none, and so `LVCMOS18` at 1.8 V.
+    pub idle_in_idle_bank: Vec<ConfigBit>,
 }
 
 /// One IO bank and its two possible settings.
@@ -223,20 +237,26 @@ pub struct Bank {
     pub number: i64,
     /// The tile its bits are in, as `(x, y)`.
     pub tile: (u32, u32),
+    /// The standard it is configured for when used.
+    pub standard: String,
     /// Its bits with a used IO in it.
     pub used: Vec<ConfigBit>,
     /// Its bits with none.
     pub idle: Vec<ConfigBit>,
 }
 
+/// A slice: its tile, as `(x, y)`, and its index in the tile.
+type SliceAt = ((u32, u32), u32);
+
+/// Bits in one tile, the tile as `(x, y)`.
+pub type TileBits = ((u32, u32), Vec<ConfigBit>);
+
 /// Everything outside a placed cell's own bits, worked out once per load
 /// so that writing a stream is only a matter of choosing.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Periphery {
-    /// The IO standard the load configured every buffer for.
-    pub io_standard: String,
     /// Every IO with a bank, in the database's `io_cfg` order.
-    pub ios: Vec<IdleIo>,
+    pub ios: Vec<IoSite>,
     /// Every bank, in order of number.
     pub banks: Vec<Bank>,
     /// Per logic tile type, per slice, the bits of a slice whose LUTs are
@@ -247,25 +267,70 @@ pub struct Periphery {
     pub grid: Vec<Vec<u32>>,
 }
 
+/// Why [`Periphery::bits`] refused a design.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum PeripheryError {
+    /// A primitive on an IO bel this flow does not configure.
+    UnsupportedIo {
+        /// The bel, `X<x>Y<y>/<bel>`.
+        site: String,
+        /// The primitive.
+        primitive: String,
+    },
+}
+
+impl std::fmt::Display for PeripheryError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            PeripheryError::UnsupportedIo { site, primitive } => write!(
+                f,
+                "`{primitive}` on {site} is not an IO buffer this flow configures; it \
+                 configures IBUF and OBUF"
+            ),
+        }
+    }
+}
+
+impl std::error::Error for PeripheryError {}
+
 impl Periphery {
-    /// The bits no placed cell carries, for a design occupying `used`:
-    /// `(tile, bel)` pairs, the tile as `(x, y)`.
-    pub fn bits(&self, used: &BTreeSet<((u32, u32), String)>) -> Vec<((u32, u32), Vec<ConfigBit>)> {
+    /// The IO on `tile`'s bel `bel`, if the part has one there.
+    pub fn io(&self, tile: (u32, u32), bel: &str) -> Option<&IoSite> {
+        self.ios.iter().find(|io| io.tile == tile && io.bel == bel)
+    }
+
+    /// The bits no routed net carries, for a design whose cells occupy
+    /// `used`: `(tile, bel)` to the primitive placed there, the tile as
+    /// `(x, y)`.
+    ///
+    /// # Errors
+    ///
+    /// [`PeripheryError::UnsupportedIo`] for anything but an `IBUF` or an
+    /// `OBUF` on an IO bel.
+    pub fn bits(
+        &self,
+        used: &BTreeMap<((u32, u32), String), String>,
+    ) -> Result<Vec<TileBits>, PeripheryError> {
         let mut out = Vec::new();
+        let placed = |io: &IoSite| used.get(&(io.tile, io.bel.clone()));
         let used_banks: BTreeSet<i64> = self
             .ios
             .iter()
-            .filter(|io| used.contains(&(io.tile, io.bel.clone())))
+            .filter(|io| placed(io).is_some())
             .map(|io| io.bank)
             .collect();
         for io in &self.ios {
-            if used.contains(&(io.tile, io.bel.clone())) {
-                continue;
-            }
-            let bits = if used_banks.contains(&io.bank) {
-                &io.in_used_bank
-            } else {
-                &io.in_idle_bank
+            let bits = match placed(io).map(String::as_str) {
+                Some("IBUF") => &io.as_input,
+                Some("OBUF") => &io.as_output,
+                Some(other) => {
+                    return Err(PeripheryError::UnsupportedIo {
+                        site: format!("X{}Y{}/{}", io.tile.0, io.tile.1, io.bel),
+                        primitive: other.to_owned(),
+                    });
+                }
+                None if used_banks.contains(&io.bank) => &io.idle_in_used_bank,
+                None => &io.idle_in_idle_bank,
             };
             out.push((io.tile, bits.clone()));
         }
@@ -279,10 +344,10 @@ impl Periphery {
         }
 
         // Slices: a used LUT0..5 marks its slice, a used DFF marks its
-        // half of the register pair.
-        // Keyed by (tile, slice): (a LUT, register 0, register 1) used.
+        // half of the register pair. Keyed by (tile, slice): (a LUT,
+        // register 0, register 1) used.
         let mut slices: BTreeMap<SliceAt, (bool, bool, bool)> = BTreeMap::new();
-        for (tile, bel) in used {
+        for (tile, bel) in used.keys() {
             let (index, is_lut) = if let Some(n) = bel.strip_prefix("LUT") {
                 (n, true)
             } else if let Some(n) = bel.strip_prefix("DFF") {
@@ -324,59 +389,28 @@ impl Periphery {
             };
             out.push(((x, y), tables[which].clone()));
         }
-        out
+        Ok(out)
     }
 }
 
 impl ApiculaDatabase {
-    /// The `IBUF` and `OBUF` entries an IO bel of this tile type carries,
-    /// for one IO standard.
-    pub(super) fn io_cells(
-        &self,
-        codes: &Codes,
-        tile_type: u32,
-        bel: &str,
-        standard: &str,
-    ) -> Result<Vec<ConfigEntry>, ApiculaError> {
-        let vccio = bank_vccio(standard)?;
-        let table = self.code_table("longval", tile_type, bel);
-        Ok(vec![
-            ConfigEntry::Cell {
-                primitive: "IBUF".to_owned(),
-                bits: bits(&table, &buffer_codes(codes, IBUF_DEFAULTS, standard, vccio)),
-            },
-            ConfigEntry::Cell {
-                primitive: "OBUF".to_owned(),
-                bits: bits(&table, &buffer_codes(codes, OBUF_DEFAULTS, standard, vccio)),
-            },
-        ])
-    }
-
-    /// Adds the buffer entries to every IO bel of a filled tile type.
-    pub(super) fn configure_io_bels(
-        &self,
-        codes: &Codes,
-        tile_type: u32,
-        into: &mut TileType,
-        standard: &str,
-    ) -> Result<(), ApiculaError> {
-        for bel in &mut into.bels {
-            if bel.kind == "io" {
-                bel.config
-                    .extend(self.io_cells(codes, tile_type, &bel.name, standard)?);
-            }
-        }
-        Ok(())
-    }
-
-    /// Everything [`Periphery`] needs, for one IO standard.
+    /// Everything [`Periphery`] needs: every bank configured for the
+    /// standard `per_bank` names, or `default` when it names none.
     ///
     /// # Errors
     ///
     /// [`ApiculaError::UnsupportedIoStandard`] for a standard not in
     /// [`IO_STANDARDS`].
-    pub fn periphery(&self, standard: &str) -> Result<Periphery, ApiculaError> {
-        let vccio = bank_vccio(standard)?;
+    pub fn periphery(
+        &self,
+        default: &str,
+        per_bank: &BTreeMap<i64, String>,
+    ) -> Result<Periphery, ApiculaError> {
+        bank_vccio(default)?;
+        for standard in per_bank.values() {
+            bank_vccio(standard)?;
+        }
+        let standard_of = |bank: i64| per_bank.get(&bank).map_or(default, String::as_str);
         let idle_vccio = bank_vccio(IDLE_BANK_STANDARD)?;
         let iob = Codes::iob(self);
         let slice = Codes::slice(self);
@@ -409,8 +443,10 @@ impl ApiculaDatabase {
             })
             .unwrap_or_default();
         let ttyp_at = |(x, y): (u32, u32)| grid.get(y as usize)?.get(x as usize).copied();
-
-        let used_codes = iob.set(&[("IO_TYPE", standard), ("BANK_VCCIO", vccio)]);
+        let bank_codes = |standard: &str| {
+            let vccio = bank_vccio(standard).unwrap_or("3.3");
+            iob.set(&[("IO_TYPE", standard), ("BANK_VCCIO", vccio)])
+        };
         let idle_codes = iob.set(&[("IO_TYPE", IDLE_BANK_STANDARD), ("BANK_VCCIO", idle_vccio)]);
 
         let mut ios = Vec::new();
@@ -437,12 +473,17 @@ impl ApiculaDatabase {
             let Some(ttyp) = ttyp_at(tile) else { continue };
             let bel = format!("IOB{half}");
             let table = self.code_table("longval", ttyp, &bel);
-            ios.push(IdleIo {
+            let standard = standard_of(bank);
+            let vccio = bank_vccio(standard)?;
+            ios.push(IoSite {
                 tile,
                 bel,
                 bank,
-                in_used_bank: bits(&table, &used_codes),
-                in_idle_bank: bits(&table, &idle_codes),
+                standard: standard.to_owned(),
+                as_input: bits(&table, &buffer_codes(&iob, IBUF_DEFAULTS, standard, vccio)),
+                as_output: bits(&table, &buffer_codes(&iob, OBUF_DEFAULTS, standard, vccio)),
+                idle_in_used_bank: bits(&table, &bank_codes(standard)),
+                idle_in_idle_bank: bits(&table, &idle_codes),
             });
         }
 
@@ -472,8 +513,7 @@ impl ApiculaDatabase {
         }
 
         let mut banks = Vec::new();
-        let mut used_bank_codes = used_codes.clone();
-        used_bank_codes.extend(iob.set(&[("PULL_STRENGTH", "UNKNOWN")]));
+        let pull = iob.set(&[("PULL_STRENGTH", "UNKNOWN")]);
         for (number, tile) in bank_tiles {
             let Some(ttyp) = ttyp_at(tile) else { continue };
             // `get_bank_fuses`: the rows of this bank, their first code
@@ -495,10 +535,14 @@ impl ApiculaDatabase {
                 out.extend(bits(&io_table, codes));
                 out
             };
+            let standard = standard_of(number);
+            let mut used_codes = bank_codes(standard);
+            used_codes.extend(pull.iter().copied());
             banks.push(Bank {
                 number,
                 tile,
-                used: both(&used_bank_codes),
+                standard: standard.to_owned(),
+                used: both(&used_codes),
                 idle: both(&idle_codes),
             });
         }
@@ -524,7 +568,6 @@ impl ApiculaDatabase {
         }
 
         Ok(Periphery {
-            io_standard: standard.to_owned(),
             ios,
             banks,
             slices,

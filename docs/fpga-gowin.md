@@ -18,11 +18,12 @@ still stand between this flow and a flip-flop.
 
 What stands behind it, and against what each part was checked:
 
-- **every bit, against `gowin_pack`.** For three designs Project
+- **every bit, against `gowin_pack`.** For four designs Project
   Apicula's own packer turns into a `.fs` — nothing at all, two IO
-  buffers, and a buffer-LUT-buffer design routed by hand through 17 pips
-  (`testdata/fpga/gowin/*.json`) — Reticle, given the same placement and
-  routing, writes **the same file byte for byte**: 862, 771 and 842 bits,
+  buffers in one standard and in two, and a buffer-LUT-buffer design
+  routed by hand through 17 pips (`testdata/fpga/gowin/*.json`) —
+  Reticle, given the same placement and routing, writes **the same file
+  byte for byte**: 862, 771, 820 and 842 bits,
   the header, every row's check word, and the footer's checksum. That
   covers the `const` bits, IO buffers, IO banks, every unused IO of the
   ring, a LUT's truth table, the defaults of a slice whose registers are
@@ -136,23 +137,24 @@ never fails the build, and a test never fetches one.
 ### Reproducing the reference files
 
 Three tests compare Reticle's output with a file Project Apicula's own
-packer wrote. `gowin_pack` reads nextpnr's JSON rather than a netlist, so
+packer wrote, four files in all. `gowin_pack` reads nextpnr's JSON rather than a netlist, so
 the inputs are hand-written nextpnr-shaped JSON, placed and (for the LUT)
 routed by hand, in `testdata/fpga/gowin/`:
 
 ```sh
 pip install apycula==0.33
-for d in empty io lut; do
+for d in empty io io15 lut; do
     gowin_pack -d GW2A-18 -o /tmp/$d.fs testdata/fpga/gowin/$d.json
 done
 export RETICLE_GOWIN_FS=/tmp/empty.fs RETICLE_GOWIN_IO_FS=/tmp/io.fs \
-       RETICLE_GOWIN_LUT_FS=/tmp/lut.fs
+       RETICLE_GOWIN_IO15_FS=/tmp/io15.fs RETICLE_GOWIN_LUT_FS=/tmp/lut.fs
 ```
 
 | Input | What is in it | Bits |
 |---|---|---|
 | `empty.json` | nothing | 862 |
 | `io.json` | an `OBUF` on C13 and an `IBUF` on T3, LVCMOS33, connected to nothing | 771 |
+| `io15.json` | the same, with T3 (bank 4) at LVCMOS15 | 820 |
 | `lut.json` | the same buffers, and a LUT4 inverter between them over 17 pips | 842 |
 
 Each is 4 618 782 bytes of ASCII `0`s and `1`s. With `-c` the empty one
@@ -514,10 +516,21 @@ unused IO ring and eight idle banks are the 400 a blank stream lacked
 before this, and with them it is `gowin_pack`'s empty design byte for
 byte.
 
-**One IO standard per design**, as for the 7 series: the buffer bits are
-worked out once per load, from `ApiculaOptions::io_standard`, and the
-command line refuses constraints that ask for two. The standards
-configured are the single-ended `LVCMOS` ones, 1.0 V to 3.3 V.
+**One IO standard per bank.** A bank has one supply, so every used IO in
+it is configured for one standard, and each bank can have its own:
+`ApiculaOptions::bank_io_standards`, with `io_standard` for a bank nothing
+names. The command line takes them from the constraints, pin by pin, and
+refuses two standards in one bank, as `gowin_pack` does. That is also why
+a buffer's bits are not bel entries: those belong to a tile *type*, and
+one type of IO tile sits in several banks. The standards configured are
+the single-ended `LVCMOS` ones, 1.0 V to 3.3 V.
+
+The standard has to be what the **board** supplies the bank with, and no
+database says that. On a Tang Primer 20K the core board's schematic does:
+banks 0, 1 and 3 are on 3.3 V, and bank 4 — the DDR3 bank, which carries
+four of the dock's five buttons — is on **1.5 V**. The first design run
+on the dock configured its button in bank 4 as LVCMOS33 and worked
+anyway; it has since been corrected to LVCMOS15.
 
 ## The `.fs` container
 
@@ -696,8 +709,7 @@ the configuration sequence — and two are not:
    for the case where the registers are empty.
 
 Until both are done, what this flow can put on a part is combinational.
-Beyond that, what is untried: an IO standard other than LVCMOS33, a
-tristate or bidirectional buffer, a pin pull other than the default, and
+Beyond that, what is untried on the part: a tristate or bidirectional buffer, a pin pull other than the default, and
 the DONE, READY and other dual-purpose pins as IO, which `gowin_pack` does
 with flags that set bits in the configuration tile and this flow does not
 write, so it refuses those pins.

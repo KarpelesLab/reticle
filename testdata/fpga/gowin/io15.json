@@ -1,0 +1,79 @@
+{
+ "creator": "handwritten",
+ "modules": {
+  "top": {
+   "settings": {
+    "arch.name": "himbaechel",
+    "arch.type": "gowin",
+    "packer.chipdb": "GW2A-18",
+    "packer.partno": "GW2A-LV18PG256C8/I7"
+   },
+   "attributes": {},
+   "ports": {},
+   "cells": {
+    "led_obuf": {
+     "hide_name": 0,
+     "type": "OBUF",
+     "parameters": {},
+     "attributes": {
+      "NEXTPNR_BEL": "X55Y31/IOBB",
+      "IO_TYPE": "LVCMOS33"
+     },
+     "port_directions": {
+      "I": "input",
+      "O": "output"
+     },
+     "connections": {
+      "I": [
+       "x"
+      ],
+      "O": [
+       5
+      ]
+     }
+    },
+    "sw_ibuf": {
+     "hide_name": 0,
+     "type": "IBUF",
+     "parameters": {},
+     "attributes": {
+      "NEXTPNR_BEL": "X51Y54/IOBB",
+      "IO_TYPE": "LVCMOS15"
+     },
+     "port_directions": {
+      "I": "input",
+      "O": "output"
+     },
+     "connections": {
+      "I": [
+       2
+      ],
+      "O": [
+       3
+      ]
+     }
+    }
+   },
+   "netnames": {
+    "$PACKER_GND": {
+     "hide_name": 1,
+     "bits": [
+      "0"
+     ],
+     "attributes": {
+      "ROUTING": ""
+     }
+    },
+    "$PACKER_VCC": {
+     "hide_name": 1,
+     "bits": [
+      "1"
+     ],
+     "attributes": {
+      "ROUTING": ""
+     }
+    }
+   }
+  }
+ }
+}

@@ -1934,7 +1934,7 @@ fn write_gowin_bitstream(
     constraints: &reticle::fpga::Constraints,
     path: &str,
 ) -> Result<String, String> {
-    use std::collections::BTreeSet;
+    use std::collections::BTreeMap;
 
     use reticle::fpga::apicula::{ApiculaDatabase, ApiculaOptions};
     use reticle::fpga::bitstream;
@@ -1957,30 +1957,43 @@ fn write_gowin_bitstream(
         .map_err(|e| e.to_string())?;
 
     let mut options = ApiculaOptions::new().with_part(part);
-    if let Some(standard) = single_io_standard(constraints)? {
-        options.io_standard = standard;
-    }
 
     // Load the fabric around the constrained pins: the whole die is eight
     // million pips, which routes, but slowly and for nothing. The pin map
-    // does not depend on the region, so a one-tile load finds the pins.
+    // and the banks do not depend on the region, so a one-tile load finds
+    // both.
     let probe = db
         .load(&options.clone().with_region(GridRegion::new(0, 0, 0, 0)))
         .map_err(|e| e.to_string())?;
     let mut bounds: Option<(u32, u32, u32, u32)> = None;
+    // A bank has one supply and so one standard: every constrained pin in
+    // it has to ask for the same one, as `gowin_pack` also insists.
+    let mut per_bank: BTreeMap<i64, (String, String)> = BTreeMap::new();
     for pin in &constraints.pins {
         let Some(site) = probe.arch.site_of_pin(&pin.pin) else {
             continue;
         };
-        let Some((x, y)) = site
-            .split('/')
-            .next()
-            .and_then(|t| t.strip_prefix('X'))
-            .and_then(|t| t.split_once('Y'))
-            .and_then(|(x, y)| Some((x.parse::<u32>().ok()?, y.parse::<u32>().ok()?)))
-        else {
+        let Some(((x, y), bel)) = site.split_once('/').and_then(|(tile, bel)| {
+            let (x, y) = tile.strip_prefix('X')?.split_once('Y')?;
+            Some(((x.parse::<u32>().ok()?, y.parse::<u32>().ok()?), bel))
+        }) else {
             continue;
         };
+        if let (Some(standard), Some(io)) = (&pin.io.io_standard, probe.periphery.io((x, y), bel)) {
+            match per_bank.get(&io.bank) {
+                Some((other, first)) if other != standard => {
+                    return Err(format!(
+                        "pins {first} and {} are both in bank {} and ask for {other} and \
+                         {standard}; a bank has one supply, so one IO standard",
+                        pin.pin, io.bank
+                    ));
+                }
+                Some(_) => {}
+                None => {
+                    per_bank.insert(io.bank, (standard.clone(), pin.pin.clone()));
+                }
+            }
+        }
         bounds = Some(match bounds {
             None => (x, y, x, y),
             Some((x0, y0, x1, y1)) => (x0.min(x), y0.min(y), x1.max(x), y1.max(y)),
@@ -2001,6 +2014,10 @@ fn write_gowin_bitstream(
         (x1 + margin).min(cols.saturating_sub(1)),
         (y1 + margin).min(rows.saturating_sub(1)),
     ));
+    options.bank_io_standards = per_bank
+        .iter()
+        .map(|(bank, (standard, _))| (*bank, standard.clone()))
+        .collect();
     let fabric = db.load(&options).map_err(|e| e.to_string())?;
     if let Some(idcode) = device.idcode {
         fabric.check_idcode(idcode).map_err(|e| e.to_string())?;
@@ -2040,17 +2057,35 @@ fn write_gowin_bitstream(
         .into_iter()
         .map(|(format, bits)| (format.tile, bits))
         .collect();
-    let used: BTreeSet<((u32, u32), String)> = (0..graph.sites.len())
-        .filter(|&site| placement.instance_at(site).is_some())
-        .map(|site| (graph.sites[site].tile, graph.sites[site].bel.clone()))
+    let used: BTreeMap<((u32, u32), String), String> = (0..graph.sites.len())
+        .filter_map(|site| {
+            let instance = placement.instance_at(site)?;
+            let at = &graph.sites[site];
+            Some((
+                (at.tile, at.bel.clone()),
+                netlist.instances[instance].primitive.clone(),
+            ))
+        })
         .collect();
+    let io_banks: Vec<String> =
+        fabric
+            .periphery
+            .banks
+            .iter()
+            .filter(|bank| {
+                fabric.periphery.ios.iter().any(|io| {
+                    io.bank == bank.number && used.contains_key(&(io.tile, io.bel.clone()))
+                })
+            })
+            .map(|bank| format!("bank {} at {}", bank.number, bank.standard))
+            .collect();
     let stream = fabric.stream(&bits, &used).map_err(|e| e.to_string())?;
     let text = stream.to_text();
     std::fs::write(path, &text).map_err(|e| format!("cannot write `{path}`: {e}"))?;
 
     Ok(format!(
         "note: wrote {path}, {} byte(s), {} configuration bit(s) set, {} of {} signal(s) \
-         routed, {} IO at {}\n\
+         routed, IO in {}\n\
          note: one design from this flow, a lookup table between two pins, has run on a \
          Tang Primer 20K and been watched working; nothing clocked routes yet. See \
          docs/fpga-gowin.md.\n",
@@ -2058,10 +2093,7 @@ fn write_gowin_bitstream(
         stream.bitmap.count_ones(),
         routed,
         netlist.signals.len(),
-        used.iter()
-            .filter(|(_, bel)| bel.starts_with("IOB"))
-            .count(),
-        fabric.periphery.io_standard,
+        io_banks.join(", "),
     ))
 }
 

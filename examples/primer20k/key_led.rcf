@@ -1,13 +1,21 @@
 # Sipeed Tang Primer 20K dock, two pins of it.
 #
-# PROVENANCE: T3 and N16 are balls Project Apicula's own
-# `examples/primer20k.cst` names `key_i` and `led[2]`. On the dock, T3 is
-# the button silkscreened S4 and N16 the LED silkscreened LED1, which a
-# person established on 2026-09-24 by pressing one and watching the other:
-# the dock's LED numbering is not Apicula's index.
+# PROVENANCE: the dock schematic (Tang_Primer_20K_Dock_3711, sheet
+# P007_Things) names ball T3 `Silicone Key_2` and ball N16
+# `Orange_LED3`. On the dock, T3 is the button silkscreened S4 and N16 the
+# LED silkscreened LED1, which a person established on 2026-09-24 by
+# pressing one and watching the other: the silkscreen follows neither the
+# net numbers nor Apicula's `examples/primer20k.cst`, which calls N16
+# `led[2]`.
 #
-# C13 and A13, which the same file uses for `led[0]` and `led[1]`, are the
-# part's DONE and READY pins; `reticle fpga` refuses them as IO, because
-# using them so needs a dual-purpose setting this flow does not write.
-set_io -io_standard LVCMOS33 key T3
+# The standards are the banks' supplies, from the core board schematic
+# (Tang_Primer_20K_Core_board_3690): T3 is in bank 4, the DDR3 bank, on
+# +1V5, and the dock pulls the button up to 1.5 V; N16 is in bank 1, on
+# VCCO0&1, which is +3V3. A button pulls its pin low when pressed, and an
+# LED lights when its pin is driven low.
+#
+# C13 and A13, the dock's other two LEDs, are the part's DONE and READY
+# pins; `reticle fpga` refuses them as IO, because using them so needs a
+# dual-purpose setting this flow does not write.
+set_io -io_standard LVCMOS15 key T3
 set_io -io_standard LVCMOS33 led N16
