@@ -9,19 +9,20 @@ hardware.** No design has been placed on it, no bitstream has been sent
 to it, and the JTAG configuration sequence that would send one is not
 written.
 
-> **`reticle program --probe` is not safe to point at this part, and this
-> document does not recommend it.** It does two things. The first is
-> harmless and is where that IDCODE came from:
-> `jtag::idcode_after_reset` needs no instruction at all, because after
-> Test-Logic-Reset every IEEE 1149.1 part with an identifier presents it
-> whatever its instruction register's width. The second is *not*: it
-> reads the Xilinx configuration status register, which shifts a
-> **six-bit** Xilinx instruction, and this part's instruction register is
-> **eight bits**. What that lands on in a Gowin TAP is unknown, and some
-> Gowin instructions are destructive. Giving `reticle program` a Gowin
-> path — and stopping it shifting a Xilinx instruction at a part it has
-> already identified as not Xilinx — is phase two's first job on the
-> programming side. Nothing in this work changed `src/program/`.
+> **`reticle program --probe` stops at the identifier on this part.** It
+> reads the IDCODE with `jtag::idcode_after_reset`, which needs no
+> instruction at all, because after Test-Logic-Reset every IEEE 1149.1
+> part with an identifier presents it whatever its instruction register's
+> width. It then checks the manufacturer field and, finding this is not a
+> Xilinx part, says so and reads nothing further.
+>
+> That check was added because the step after it is *not* safe here: the
+> Xilinx configuration status register is read by shifting a **six-bit**
+> Xilinx instruction, and this part's instruction register is **eight
+> bits**. What those bits land on in a Gowin TAP is unknown, and some
+> Gowin instructions are destructive. `xilinx::is_xilinx` now guards it,
+> and `reticle program` refuses outright to *configure* a part whose
+> IDCODE is not Xilinx's rather than writing anything.
 
 Compare `docs/fpga-xray.md`, which opens by saying that one design — one
 lookup table and three pins — has run on a Basys 3 and been watched
@@ -644,9 +645,10 @@ between it and a lit LED, in rough order of how much stands behind each.
    IDCODE is read with `jtag::idcode_after_reset` — an instruction
    nothing has to name. Two things follow. What a Gowin part wants after
    that (its own instruction set, an erase, a status poll) has to be
-   written; and `--probe`'s second step, the Xilinx status read, has to
-   stop happening on a part whose IDCODE says it is not Xilinx. See the
-   warning at the top of this document.
+   written. `--probe`'s second step, the Xilinx status read, no longer
+   happens on a part whose IDCODE says it is not Xilinx — `is_xilinx`
+   guards it and `program` refuses to configure one at all. See the note
+   at the top of this document.
 4. **A flip-flop's D pin, and packing.** A Gowin flip-flop's data input
    comes from the LUT beside it inside the slice and has no tile wire —
    the database's flip-flop portmap has no `D` at all, exactly as a

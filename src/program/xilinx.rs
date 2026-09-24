@@ -111,6 +111,27 @@ pub fn idcode_matches(read: u32, expected: u32) -> bool {
     read & 0x0FFF_FFFF == expected & 0x0FFF_FFFF
 }
 
+/// The JEDEC manufacturer identifier Xilinx uses, in `IDCODE` bits 11..1
+/// with the mandatory `1` in bit 0 — so `0x093` as a twelve-bit field.
+pub const MANUFACTURER_XILINX: u32 = 0x093;
+
+/// True when an `IDCODE` names a Xilinx part.
+///
+/// Everything else in this module — the status register, the instruction
+/// codes, the six-bit instruction register — is Xilinx's. Shifting any of
+/// it at another vendor's part is not a harmless misread: the instruction
+/// register is a different width, so the bits land on whatever
+/// instruction happens to be at that position. A Gowin GW2A's is eight
+/// bits wide, for one, and this project has a board with one on it.
+///
+/// So the caller checks this before doing anything beyond reading the
+/// identifier, which [`super::jtag::idcode_after_reset`] does without
+/// asking the vendor anything.
+#[must_use]
+pub fn is_xilinx(idcode: u32) -> bool {
+    idcode & 0xFFF == MANUFACTURER_XILINX
+}
+
 /// The revision nibble of an `IDCODE` (bits 31..28).
 #[must_use]
 pub fn idcode_revision(idcode: u32) -> u8 {
@@ -480,6 +501,23 @@ pub fn start_job() -> Job {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn only_a_xilinx_idcode_is_treated_as_one() {
+        // The two parts this project has read over JTAG.
+        assert!(is_xilinx(IDCODE_XC7A35T));
+        assert!(is_xilinx(0x0362_D093));
+        // A Gowin GW2A-18, which answers on a board plugged in here. Its
+        // instruction register is eight bits, not six, so shifting this
+        // module's instructions at it executes whatever lands on those
+        // bits rather than misreading a register.
+        assert!(!is_xilinx(0x0000_081B));
+        // The manufacturer field is bits 11..1 with the mandatory 1 in
+        // bit 0, so the revision nibble must not affect the answer.
+        for revision in 0..16u32 {
+            assert!(is_xilinx((revision << 28) | 0x0362_D093));
+        }
+    }
+
     use super::*;
     use crate::program::jtag::unpack_capture;
 

@@ -163,6 +163,26 @@ fn go(args: &Args) -> Result<Outcome, Fault> {
         xilinx::idcode_revision(idcode)
     ));
 
+    // Everything from here is Xilinx's: the status register, the
+    // instruction codes, and an instruction register six bits wide. A
+    // Gowin GW2A's is eight, so shifting any of it at one does not
+    // misread, it executes whatever instruction those bits land on.
+    // Reading the identifier asked the vendor nothing; this does.
+    if !xilinx::is_xilinx(idcode) {
+        if probe {
+            say(
+                "this is not a Xilinx part, so nothing further was read: the \
+                 status register and the configuration sequence are Xilinx's, \
+                 and its instruction register is not necessarily six bits wide",
+            );
+            return Ok(Outcome::Ok);
+        }
+        return Err(Fault::Failed(format!(
+            "IDCODE {idcode:#010x} is not a Xilinx part, and this command only \
+             knows how to configure a Xilinx 7-series one; nothing was written"
+        )));
+    }
+
     let before = status(&cable)?;
     say(&format!("status before: {before}"));
 
