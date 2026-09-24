@@ -699,6 +699,15 @@ fn the_device_file_and_the_database_agree_pin_for_pin() {
     // The IDCODE, which is the check that stops a bitstream built from one
     // die's database being labelled with another's.
     assert_eq!(device.idcode, db.idcode());
+    // And the package and speed grade, which the database's `packages`
+    // table states for this part number and the device file transcribes.
+    let entry = db
+        .packages()
+        .into_iter()
+        .find(|p| p.part == PART)
+        .expect("the database knows this part");
+    assert_eq!(device.package, entry.package);
+    assert_eq!(device.speed_grade, entry.speed);
     fabric
         .check_idcode(device.idcode.unwrap())
         .expect("the device file and the database agree");

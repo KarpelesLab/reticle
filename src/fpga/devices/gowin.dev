@@ -309,6 +309,13 @@
 #   * NO TILE GRID CHECK BEYOND THE BOUNDING BOX. `grid 56 55` is the
 #     database's own grid, measured. It is a bounding box: a region
 #     constraint is checked against it and nothing finer.
+#   * `speed C8/I7` is the speed-grade string verbatim, not a number:
+#     the chip database's `packages` table maps this part number to
+#     `('PBGA256', 'GW2A-18', 'C8/I7')` and `tests/fpga_gowin.rs` checks
+#     that this line and that table agree. Gowin marks a commercial part
+#     `C8` and the industrial-temperature part on the same die `I7`, and
+#     the pair is one grade, so splitting it would lose which is which.
+#     HIGH confidence; it was read from the database.
 #   * `idcode 0x0000081b` is the value the `.fs` header's `0x06` command
 #     carries in `GW2A-18.msgpack.xz`, and it is the value
 #     `reticle program --probe` reads back from the board over JTAG.
@@ -332,7 +339,7 @@
 device gw2a-18-pg256
   family gowin
   package PBGA256
-  speed 8
+  speed C8/I7
   idcode 0x0000081b
   lut_size 4
   ff enable sync_reset async_reset shared_reset
