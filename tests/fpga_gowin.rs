@@ -18,21 +18,29 @@
 //! missing database must never fail the build**, and a test never
 //! downloads one.
 //!
-//! One test wants a second thing, a reference `.fs` bitstream produced by
-//! Apicula's own packer, and skips separately without it:
+//! Three tests want a second thing, a reference `.fs` bitstream Apicula's
+//! own packer wrote from one of `testdata/fpga/gowin/*.json`, and each
+//! skips separately without its file:
 //!
 //! ```text
 //! pip install apycula==0.33
-//! gowin_pack -d GW2A-18 -o /tmp/empty.fs empty.json   # see docs/fpga-gowin.md
-//! export RETICLE_GOWIN_FS=/tmp/empty.fs
+//! for d in empty io lut; do
+//!     gowin_pack -d GW2A-18 -o /tmp/$d.fs testdata/fpga/gowin/$d.json
+//! done
+//! export RETICLE_GOWIN_FS=/tmp/empty.fs RETICLE_GOWIN_IO_FS=/tmp/io.fs \
+//!        RETICLE_GOWIN_LUT_FS=/tmp/lut.fs
 //! ```
+//!
+//! With them, Reticle's output is `gowin_pack`'s byte for byte for all
+//! three; see `docs/fpga-gowin.md`, *Reproducing the reference files*.
 //!
 //! # What these tests can and cannot reach
 //!
-//! They establish that the loader reads the real database and that the
-//! container agrees with a file the reference packer wrote. **Nothing
-//! here has been loaded into a part**, and no test can reach that. See
-//! `docs/fpga-gowin.md`.
+//! They establish that the loader reads the real database and that what
+//! Reticle writes is what the reference packer writes for the same
+//! placement and routing. Whether a bitstream configures anything, no test
+//! can reach: one did, `examples/primer20k/key_led.v`, watched working on
+//! a Tang Primer 20K on 2026-09-24. See `docs/fpga-gowin.md`.
 
 #![cfg(feature = "apicula")]
 
@@ -42,6 +50,7 @@ use std::path::Path;
 use reticle::fpga::apicula::{
     ApiculaDatabase, ApiculaError, ApiculaOptions, InterTileWire, fuses_for,
 };
+use reticle::fpga::arch::{ConfigEntry, WireRef};
 use reticle::fpga::gowin::{CMD_LOAD_CONFIG, FsStream, crc16_arc, written_width};
 use reticle::fpga::xray::GridRegion;
 use reticle::fpga::{BelRole, PinKind, PllDividerRole, PllFeedback};
@@ -119,17 +128,25 @@ fn open() -> Option<ApiculaDatabase> {
 
 /// The reference `.fs`, or `None` having said why not.
 fn reference_fs() -> Option<String> {
-    let Ok(path) = std::env::var("RETICLE_GOWIN_FS") else {
+    reference_file("RETICLE_GOWIN_FS", "empty.json")
+}
+
+/// A reference bitstream `gowin_pack` wrote from one of
+/// `testdata/fpga/gowin/*.json`, named by `var`, or `None` having said
+/// why not.
+fn reference_file(var: &str, input: &str) -> Option<String> {
+    let Ok(path) = std::env::var(var) else {
         eprintln!(
-            "skipped: needs a reference bitstream; set RETICLE_GOWIN_FS to a `.fs` that \
-             `gowin_pack -d {DEVICE}` produced (see docs/fpga-gowin.md)"
+            "skipped: needs a reference bitstream; set {var} to what \
+             `gowin_pack -d {DEVICE} -o <file> testdata/fpga/gowin/{input}` writes \
+             (see docs/fpga-gowin.md)"
         );
         return None;
     };
     match std::fs::read_to_string(&path) {
         Ok(text) => Some(text),
         Err(err) => {
-            eprintln!("skipped: RETICLE_GOWIN_FS is `{path}` and would not read: {err}");
+            eprintln!("skipped: {var} is `{path}` and would not read: {err}");
             None
         }
     }
@@ -250,9 +267,14 @@ fn the_fabric_measures_itself_and_the_numbers_are_the_documented_ones() {
     );
     assert_eq!(stats.edge_wraps, 16_872);
 
-    // And every configuration entry is a lookup table bit, because the
-    // attribute names nothing else needs are not in the database.
-    assert_eq!(stats.config_entries, luts * 16);
+    // And the configuration entries are a lookup table's sixteen bits per
+    // LUT, and an `IBUF` and an `OBUF` entry per IO bel.
+    let ios: usize = ["IOBA", "IOBB"]
+        .iter()
+        .map(|b| stats.bels_die.get(*b).copied().unwrap_or(0))
+        .sum();
+    assert_eq!(ios, 384);
+    assert_eq!(stats.config_entries, luts * 16 + ios * 2);
 }
 
 #[test]
@@ -419,7 +441,7 @@ fn the_pins_apiculas_own_board_file_names_resolve_to_sites() {
 }
 
 #[test]
-fn the_blank_stream_is_the_reference_files_envelope_byte_for_byte() {
+fn the_blank_stream_is_the_reference_file_byte_for_byte() {
     let Some(db) = open() else { return };
     let Some(reference) = reference_fs() else {
         return;
@@ -444,7 +466,7 @@ fn the_blank_stream_is_the_reference_files_envelope_byte_for_byte() {
     );
 
     // The commands. Every header line is identical, and so is every footer
-    // line but the USERCODE, which `gowin_pack` fills in and this does not.
+    // line, the `0x0a` checksum included.
     assert_eq!(ours.header, theirs.header);
     assert_eq!(ours.header.len(), 10);
     assert_eq!(
@@ -458,13 +480,10 @@ fn the_blank_stream_is_the_reference_files_envelope_byte_for_byte() {
     assert_eq!(theirs.bitmap.rows(), fabric.stats.bitmap_rows);
     assert_eq!(theirs.bitmap.cols(), cols);
     for (index, (mine, theirs)) in ours.footer.iter().zip(&theirs.footer).enumerate() {
-        if mine.first() == Some(&0x0a) {
-            // The USERCODE. `gowin_pack` writes one; this writes zero.
-            assert_eq!(mine[..4], theirs[..4]);
-            continue;
-        }
         assert_eq!(mine, theirs, "footer line {index}");
     }
+    // Which for a design with nothing in it is this.
+    assert_eq!(ours.checksum(), 0xbf45);
 
     // Our own writer's output reads back with every check word verified,
     // which is what `FsStream::parse` does, and the geometry matches.
@@ -477,10 +496,10 @@ fn the_blank_stream_is_the_reference_files_envelope_byte_for_byte() {
     // 0xff bytes, six from the last row and eighteen of the footer's own.
     assert_eq!(crc16_arc(&[0xff; 24], 0), 0x7334);
 
-    // And the bits. Every bit this sets, the reference sets too — the
-    // `const` tables are a subset of what a real packer writes — and the
-    // ones it does not are the unused IO ring, which needs the attribute
-    // names the database does not carry.
+    // And the bits, which are the reference's exactly: the `const` tables
+    // (462 bits) and the configuration of an IO ring and eight banks with
+    // nothing in them (400), which `fpga::apicula::config` works out from
+    // Apicula's attribute names.
     let mut ours_only = 0usize;
     let mut theirs_only = 0usize;
     let mut both = 0usize;
@@ -495,15 +514,214 @@ fn the_blank_stream_is_the_reference_files_envelope_byte_for_byte() {
         }
     }
     eprintln!("bits: {both} in both, {ours_only} only ours, {theirs_only} only the reference's");
-    assert_eq!(both, fabric.stats.const_bits);
-    assert_eq!(
-        ours_only, 0,
-        "every bit this sets is one the reference packer also sets"
+    assert_eq!(fabric.stats.const_bits, 462);
+    assert_eq!(both, 862);
+    assert_eq!((ours_only, theirs_only), (0, 0), "the bitmaps differ");
+    // So the whole file is the reference's, byte for byte.
+    assert_eq!(text, reference);
+}
+
+/// An input buffer on T3 (the dock's button) and an output buffer on
+/// C13 (its first LED), both LVCMOS33 and connected to nothing, configure
+/// the part exactly as `gowin_pack` configures them from
+/// `testdata/fpga/gowin/io.json`: the two buffers, the other IO of their
+/// banks, the banks, and everything idle.
+///
+/// That file lists the output first. `gowin_pack` gives an input-only
+/// bank 1.2 V or 3.3 V depending on that order (see
+/// `fpga::apicula::config`), and this flow always gives it the standard's
+/// voltage, which is what `gowin_pack` writes in this order.
+#[test]
+fn the_io_buffers_are_the_reference_files_byte_for_byte() {
+    let Some(db) = open() else { return };
+    let Some(reference) = reference_file("RETICLE_GOWIN_IO_FS", "io.json") else {
+        return;
+    };
+    let fabric = db
+        .load(
+            &ApiculaOptions::new()
+                .with_part(PART)
+                .with_region(GridRegion::new(50, 30, 55, 54)),
+        )
+        .expect("the region loads");
+    let bel_bits = |(x, y): (u32, u32), primitive: &str| {
+        let tile = fabric.arch.tile_at(x, y).expect("a tile there");
+        let bel = tile.bel("IOBB").expect("an IOBB bel");
+        bel.config
+            .iter()
+            .find_map(|entry| match entry {
+                ConfigEntry::Cell { primitive: p, bits } if p == primitive => Some(bits.clone()),
+                _ => None,
+            })
+            .unwrap_or_else(|| panic!("no {primitive} entry at X{x}Y{y}"))
+    };
+    // The balls resolve to the bels the reference file names.
+    let site = |ball: &str| {
+        fabric
+            .arch
+            .pinmap
+            .iter()
+            .find(|(b, _)| b == ball)
+            .map(|(_, s)| s.clone())
+    };
+    assert_eq!(site("T3").as_deref(), Some("X51Y54/IOBB"));
+    assert_eq!(site("C13").as_deref(), Some("X55Y31/IOBB"));
+
+    let (button, led) = ((51, 54), (55, 31));
+    let design = vec![
+        (button, bel_bits(button, "IBUF")),
+        (led, bel_bits(led, "OBUF")),
+    ];
+    let used: BTreeSet<((u32, u32), String)> = [(button, "IOBB"), (led, "IOBB")]
+        .into_iter()
+        .map(|(tile, bel)| (tile, bel.to_owned()))
+        .collect();
+    let ours = fabric.stream(&design, &used).expect("a stream");
+    let theirs =
+        FsStream::parse(&reference, fabric.stats.bitmap_cols).expect("the reference reads");
+    let differ: Vec<(u32, u32)> = (0..ours.bitmap.rows())
+        .flat_map(|r| (0..ours.bitmap.cols()).map(move |c| (r, c)))
+        .filter(|&(r, c)| ours.bitmap.get(r, c) != theirs.bitmap.get(r, c))
+        .collect();
+    eprintln!(
+        "ours {} bit(s), the reference's {}, {} differ",
+        ours.bitmap.count_ones(),
+        theirs.bitmap.count_ones(),
+        differ.len()
     );
     assert!(
-        theirs_only > 0,
-        "the reference sets bits this does not, and that is the documented gap"
+        differ.is_empty(),
+        "first differences: {:?}",
+        &differ[..differ.len().min(8)]
     );
+    assert_eq!(ours.to_text(), reference);
+}
+
+/// A switch through an inverting LUT to an LED, placed and routed by
+/// hand in `testdata/fpga/gowin/lut.json`: the same two buffers, a LUT4
+/// with `INIT=0x5555` on `X51Y53/LUT0`, and 17 pips. Taking each pip's bits
+/// from the loaded [`Arch`] and the LUT's from its bel's `INIT` entries —
+/// the entries `bitstream::generate` applies — gives `gowin_pack`'s file
+/// byte for byte, which settles the truth table's sense (a fuse is a
+/// zero), the pip bits, and the empty-register defaults of the LUT's
+/// slice.
+#[test]
+fn a_lut_and_its_routes_are_the_reference_files_byte_for_byte() {
+    let Some(db) = open() else { return };
+    let Some(reference) = reference_file("RETICLE_GOWIN_LUT_FS", "lut.json") else {
+        return;
+    };
+    let fabric = db
+        .load(
+            &ApiculaOptions::new()
+                .with_part(PART)
+                .with_region(GridRegion::new(50, 30, 55, 54)),
+        )
+        .expect("the region loads");
+    let arch = &fabric.arch;
+    let cell = |(x, y): (u32, u32), bel: &str, primitive: &str| {
+        let bel = arch
+            .tile_at(x, y)
+            .and_then(|t| t.bel(bel))
+            .expect("the bel");
+        bel.config
+            .iter()
+            .find_map(|entry| match entry {
+                ConfigEntry::Cell { primitive: p, bits } if p == primitive => Some(bits.clone()),
+                _ => None,
+            })
+            .expect("a cell entry")
+    };
+    let mut design = vec![
+        ((51, 54), cell((51, 54), "IOBB", "IBUF")),
+        ((55, 31), cell((55, 31), "IOBB", "OBUF")),
+    ];
+
+    // The LUT: every `INIT` bit that is zero sets its fuses.
+    let init: u16 = 0x5555;
+    let lut = arch
+        .tile_at(51, 53)
+        .and_then(|t| t.bel("LUT0"))
+        .expect("LUT0");
+    let lut_bits = lut
+        .config
+        .iter()
+        .filter_map(|entry| match entry {
+            ConfigEntry::ParamZero { name, index, at } if name == "INIT" => {
+                (init >> index & 1 == 0).then_some(*at)
+            }
+            _ => None,
+        })
+        .collect();
+    design.push(((51, 53), lut_bits));
+
+    // The pips, as the netlist's `ROUTING` attributes list them.
+    let json = std::fs::read_to_string("testdata/fpga/gowin/lut.json").expect("the input");
+    let mut pips = 0;
+    for net in ["sw", "led"] {
+        let key = format!("\"{net}\": {{");
+        let start = json.find(&key).expect("the net");
+        let routing = json[start..]
+            .split("\"ROUTING\": \"")
+            .nth(1)
+            .and_then(|r| r.split('"').next())
+            .expect("its ROUTING");
+        for pip in routing.split(';').skip(1).step_by(3) {
+            if pip.is_empty() {
+                continue;
+            }
+            let mut parts = pip.split('/');
+            let (Some(tile), Some(dst), Some(src)) = (parts.next(), parts.next(), parts.next())
+            else {
+                panic!("a pip `{pip}`")
+            };
+            let (x, y) = tile[1..].split_once('Y').expect("XnYm");
+            let (x, y): (u32, u32) = (x.parse().unwrap(), y.parse().unwrap());
+            let wire = |name: &str| match InterTileWire::parse(name) {
+                Some(w) => {
+                    let (dx, dy) = w.root_offset();
+                    WireRef::at(w.root_name(), dx, dy)
+                }
+                None => WireRef::local(name),
+            };
+            let decl = arch
+                .tile_at(x, y)
+                .and_then(|t| {
+                    t.pips
+                        .iter()
+                        .find(|p| p.to == wire(dst) && p.from == wire(src))
+                })
+                .unwrap_or_else(|| panic!("no pip {pip}"));
+            design.push(((x, y), decl.bits.clone()));
+            pips += 1;
+        }
+    }
+    assert_eq!(pips, 17);
+
+    let used: BTreeSet<((u32, u32), String)> =
+        [((51, 54), "IOBB"), ((55, 31), "IOBB"), ((51, 53), "LUT0")]
+            .into_iter()
+            .map(|(tile, bel)| (tile, bel.to_owned()))
+            .collect();
+    let ours = fabric.stream(&design, &used).expect("a stream");
+    let theirs =
+        FsStream::parse(&reference, fabric.stats.bitmap_cols).expect("the reference reads");
+    let differ: Vec<(u32, u32)> = (0..ours.bitmap.rows())
+        .flat_map(|r| (0..ours.bitmap.cols()).map(move |c| (r, c)))
+        .filter(|&(r, c)| ours.bitmap.get(r, c) != theirs.bitmap.get(r, c))
+        .collect();
+    eprintln!(
+        "ours {} bit(s), the reference's {}, {} differ",
+        ours.bitmap.count_ones(),
+        theirs.bitmap.count_ones(),
+        differ.len()
+    );
+    assert!(
+        differ.is_empty(),
+        "first differences: {:?}",
+        &differ[..differ.len().min(8)]
+    );
+    assert_eq!(ours.to_text(), reference);
 }
 
 #[test]

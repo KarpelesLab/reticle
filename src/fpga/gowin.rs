@@ -579,7 +579,10 @@ impl FsStream {
         Ok(())
     }
 
-    /// Sets the USERCODE in the footer's `0x0a` command.
+    /// Sets the 32-bit value in the footer's `0x0a` command, which Gowin's
+    /// tools call the USERCODE line and fill with a checksum of the
+    /// configuration data unless told otherwise; see
+    /// [`FsStream::fill_checksum`].
     ///
     /// # Errors
     ///
@@ -602,6 +605,55 @@ impl FsStream {
         }
         line[4..8].copy_from_slice(&code.to_be_bytes());
         Ok(())
+    }
+
+    /// The configuration data's checksum, as `gowin_pack` computes it for
+    /// the footer's `0x0a` line (`Bitstream_GW1_2.fill_header_footer`):
+    /// every row of the bitmap in the order the file writes it, highest
+    /// column first, joined end to end and packed into bytes most
+    /// significant bit first, with one zero pad at the very end; then the
+    /// sum of the even-numbered bytes times 256 plus the sum of the odd
+    /// ones, kept to sixteen bits.
+    ///
+    /// It is a checksum and not a USERCODE: that line is where Gowin's
+    /// tools put either, and `gowin_pack` always puts this.
+    pub fn checksum(&self) -> u16 {
+        let (mut even, mut odd) = (0u64, 0u64);
+        let (mut byte, mut filled, mut index) = (0u8, 0u32, 0u64);
+        let mut push = |byte: u8, index: &mut u64| {
+            if index.is_multiple_of(2) {
+                even += u64::from(byte);
+            } else {
+                odd += u64::from(byte);
+            }
+            *index += 1;
+        };
+        let bitmap = &self.bitmap;
+        for row in 0..bitmap.rows() {
+            for col in (0..bitmap.cols()).rev() {
+                byte = (byte << 1) | u8::from(bitmap.get(row, col));
+                filled += 1;
+                if filled == 8 {
+                    push(byte, &mut index);
+                    (byte, filled) = (0, 0);
+                }
+            }
+        }
+        if filled > 0 {
+            push(byte << (8 - filled), &mut index);
+        }
+        u16::try_from((even * 256 + odd) & 0xffff).unwrap_or(0)
+    }
+
+    /// Writes [`FsStream::checksum`] into the footer's `0x0a` line, as
+    /// `gowin_pack` does for every stream it writes.
+    ///
+    /// # Errors
+    ///
+    /// As [`FsStream::set_usercode`].
+    pub fn fill_checksum(&mut self) -> Result<(), GowinError> {
+        let sum = self.checksum();
+        self.set_usercode(u32::from(sum))
     }
 
     /// The IDCODE the header's `0x06` command checks, when it has one.
@@ -1091,13 +1143,36 @@ mod tests {
     }
 
     #[test]
-    fn a_usercode_reaches_the_footer() {
+    fn a_value_reaches_the_footers_0x0a_line() {
+        // 0xbf45 is not a user code: it is the checksum `gowin_pack`
+        // writes for a GW2A-18 design with nothing in it, which is where
+        // the value was first seen. `tests/fpga_gowin.rs` checks that.
         let mut stream = FsStream::new(header(), DieBitmap::new(1, 8), footer()).unwrap();
         stream.set_usercode(0x0000_bf45).unwrap();
         assert_eq!(
             stream.footer[1],
             vec![0x0a, 0x00, 0x00, 0x00, 0x00, 0x00, 0xbf, 0x45]
         );
+    }
+
+    /// Two rows of ten columns: columns 9 and 0 set, then all ten. Written
+    /// highest column first and joined, that is `1000000001 1111111111`,
+    /// which packs to `0x80 0x7f 0xf0` with the last byte padded: the rows
+    /// run on into each other and only the end is padded. The sum is the
+    /// even bytes times 256 plus the odd ones.
+    #[test]
+    fn the_checksum_packs_the_reversed_rows_end_to_end() {
+        let mut bitmap = DieBitmap::new(2, 10);
+        bitmap.set(0, 0);
+        bitmap.set(0, 9);
+        for col in 0..10 {
+            bitmap.set(1, col);
+        }
+        let mut stream = FsStream::new(header(), bitmap, footer()).unwrap();
+        let expect = u16::try_from(((0x80 + 0xf0) * 256 + 0x7f) & 0xffff).unwrap();
+        assert_eq!(stream.checksum(), expect);
+        stream.fill_checksum().unwrap();
+        assert_eq!(stream.footer[1][6..8], expect.to_be_bytes());
     }
 
     #[test]

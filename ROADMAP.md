@@ -417,6 +417,17 @@ FPGA:
       does not establish. It is independent of the line above: what is
       verified is the programmer, against a file known to be good, not
       anything this crate wrote.
+- [x] **A Gowin design on a Gowin part.** On 2026-09-24 a button through
+      one lookup table to an LED went from Verilog to a running Tang
+      Primer 20K (GW2A-18) with no Gowin or Apicula tool: Reticle's place
+      and route over Project Apicula's database, IO buffers, banks,
+      unused IO and slice defaults configured after `gowin_pack`
+      (Apicula's attribute names transcribed and generated), a `.fs`
+      byte-identical to `gowin_pack`'s for three reference designs, and
+      `reticle program` loading it over the dock's JTAG adapter with
+      Gowin's SRAM sequence. A person pressed the button and watched the
+      LED. Nothing clocked routes yet: per-tile pips and LUT/flip-flop
+      packing remain. See `docs/fpga-gowin.md`.
 
 ASIC:
 - [x] Liberty (`.lib`) parser: cells, pins, functions, timing tables.

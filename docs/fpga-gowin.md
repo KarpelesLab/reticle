@@ -1,65 +1,100 @@
-# A real Gowin GW2A fabric, and how far short of a bitstream it stops
+# A real Gowin GW2A fabric, and a design running on one
 
-## Nothing here has been loaded into a part
+## One design produced by this has run on a real part
 
-A Sipeed Tang Primer 20K is plugged into this machine, and its JTAG
-IDCODE — `0x0000081b` — has been read from it over the board's Sipeed
-FT2232D adapter. **That is the entirety of what has touched the
-hardware.** No design has been placed on it, no bitstream has been sent
-to it, and the JTAG configuration sequence that would send one is not
-written.
+On 2026-09-24 `examples/primer20k/key_led.v` — one button through one
+lookup table to one LED — was synthesised, placed, routed and written as
+a `.fs` by `reticle fpga`, loaded into the SRAM of a Sipeed Tang Primer
+20K (a GW2A-LV18PG256C8/I7) by `reticle program`, which read `DONE` set
+and no error, and **confirmed working by a person**: pressing the dock's
+button S4 changed the LED silkscreened LED1, and nothing else responded.
+No Gowin or Apicula tool took part in producing or loading it.
 
-> **`reticle program --probe` stops at the identifier on this part.** It
-> reads the IDCODE with `jtag::idcode_after_reset`, which needs no
-> instruction at all, because after Test-Logic-Reset every IEEE 1149.1
-> part with an identifier presents it whatever its instruction register's
-> width. It then checks the manufacturer field and, finding this is not a
-> Xilinx part, says so and reads nothing further.
->
-> That check was added because the step after it is *not* safe here: the
-> Xilinx configuration status register is read by shifting a **six-bit**
-> Xilinx instruction, and this part's instruction register is **eight
-> bits**. What those bits land on in a Gowin TAP is unknown, and some
-> Gowin instructions are destructive. `xilinx::is_xilinx` now guards it,
-> and `reticle program` refuses outright to *configure* a part whose
-> IDCODE is not Xilinx's rather than writing anything.
+That is one design, of one lookup table and two pins, on one board. It
+establishes that the chain from Verilog to configured Gowin silicon
+closes. **It does not establish that anything larger works**: nothing
+clocked has been tried, and the two gaps *How far this got* lists
+still stand between this flow and a flip-flop.
 
-Compare `docs/fpga-xray.md`, which opens by saying that one design — one
-lookup table and three pins — has run on a Basys 3 and been watched
-driving an LED. **There is no equivalent sentence here and this document
-must not be read as if there were.** What follows is a reading of an open
-database, a device description, a loader and a container, and an honest
-list of the four things that stand between them and a lit LED.
+What stands behind it, and against what each part was checked:
 
-What *is* established, and against what:
-
-- **the container.** `gowin_pack`, Project Apicula's own packer, was run
-  for a `GW2A-18` and the file it wrote was taken apart. Against that
-  file, `src/fpga/gowin.rs` agrees on all ten header lines byte for byte
-  (including the row count patched into the `0x3b` command, 1342), on
-  five of the six footer lines byte for byte and on the sixth's command
-  and options — it is the `0x0a` USERCODE, which `gowin_pack` fills in
-  and this does not — on the geometry (1342 rows of 3376 bits, 422 bytes
-  with no padding, 430 bytes and so 3440 characters to a line), on **all
-  1342 row check words**, and on the footer's closing word `0x7334`. That
-  is `tests/fpga_gowin.rs::the_blank_stream_is_the_reference_files_envelope_byte_for_byte`;
-  it needs the reference file and skips without it.
+- **every bit, against `gowin_pack`.** For three designs Project
+  Apicula's own packer turns into a `.fs` — nothing at all, two IO
+  buffers, and a buffer-LUT-buffer design routed by hand through 17 pips
+  (`testdata/fpga/gowin/*.json`) — Reticle, given the same placement and
+  routing, writes **the same file byte for byte**: 862, 771 and 842 bits,
+  the header, every row's check word, and the footer's checksum. That
+  covers the `const` bits, IO buffers, IO banks, every unused IO of the
+  ring, a LUT's truth table, the defaults of a slice whose registers are
+  empty, and pip bits. See `tests/fpga_gowin.rs`, and *Reproducing the
+  reference files* below for how to make them.
+- **the placement and routing are Reticle's own**, and were checked
+  independently: Apicula's `gowin_unpack`, which knows nothing of Reticle,
+  decodes the `key_led` bitstream to an input buffer on T3 driving a LUT4
+  with `INIT=16'h5555` six hops away, whose output reaches an output buffer
+  on N16 five hops further, with no other path between the two pads.
+- **the loader, against the part.** `reticle program` erases the SRAM,
+  shifts the file and reads the status register, which reads `0x2020`
+  (`DONE` and `MEMORY_ERASE`) after the load: UG290's success value. The
+  sequence is under *Loading it* below, including the one step Gowin's
+  documents leave out.
 - **the fabric's size.** Every number in the table below is produced by
   the loader from the database and re-checked by a test, not written down
   by hand.
 - **the pin map.** All 207 PBGA256 IO balls the database's pinout lists
-  resolve to a site the loaded fabric really has, and ten of them —
-  including the dock's six user LEDs — are the balls Project Apicula's own
-  `examples/primer20k.cst` names for this board.
-- **what a blank bitstream carries.** The `const` tables put 462 bits on a
-  die that has nothing in it. `gowin_pack`'s output for a design with
-  nothing in it sets 862. Every one of Reticle's 462 is one of the
-  reference's 862; the other 400 are the reference packer's configuration
-  of the unused IO ring, and getting those needs the attribute names the
-  database does not carry.
+  resolve to a site the loaded fabric really has. On the dock, ball T3 is
+  button S4 and ball N16 is LED1; Apicula's `examples/primer20k.cst`
+  calls N16 `led[2]`, so its index is not the silkscreen's.
 
-What is **not** established is anything at all about silicon, and the
-largest single reason is in *What the database does not name*.
+## Loading it
+
+```sh
+cargo build --features cli,apicula,program
+reticle fpga --device gw2a-18-pg256 \
+    --constraints examples/primer20k/key_led.rcf \
+    --bitstream key_led.fs examples/primer20k/key_led.v
+reticle program key_led.fs
+```
+
+`apicula` is the feature that reads the database (it needs an xz
+decoder), and `program` the one that talks USB; both are off by default
+because each has a dependency. The database itself is fetched on first
+use into `~/.cache/reticle`.
+
+`reticle program` takes a `.fs` as it takes a `.bit`: it reads the file
+and the IDCODE its `0x06` command names before opening the cable, reads
+the part's identifier, and writes nothing unless the two agree. Only the
+SRAM is written, and a power cycle reloads whatever the board's flash
+holds. The sequence is Gowin's, from UG290 and TN653, in
+`src/program/gowin.rs`:
+
+```text
+CONFIG_ENABLE, wait for edit mode; ERASE_SRAM, NOOP, wait for memory
+erase; XFER_DONE, NOOP, CONFIG_DISABLE, NOOP, wait for edit mode to clear;
+CONFIG_ENABLE, ADDRESS_INITIALIZE, TRANSFER, <the whole .fs through DR>,
+0x0a <checksum>, 0x08, CONFIG_DISABLE, NOOP; read the status register
+```
+
+**The `0x0a`/`0x08` step is not in Gowin's documents** and is not
+optional. Without it the part erased, took the file, and left `DONE`
+clear with no error bit; with it, `DONE` came up. It is what
+openFPGALoader sends on every load, and the value is the checksum the
+file's own footer carries in its `0x0a` command — which `gowin_pack`
+computes, and Reticle now does too (`FsStream::fill_checksum`), as the
+configuration rows joined and summed as sixteen-bit words.
+
+The instruction set is an enum holding only these opcodes, none of which
+reaches flash; the ones that do (`0x16`, the pass-through to the board's
+SPI flash, among them) are listed in `gowin::FORBIDDEN`, and a test keeps
+the two apart. `reticle program --probe` now reads a Gowin part's status
+register with Gowin's own instruction (`0x41`) instead of stopping at the
+identifier.
+
+The dock's adapter is a Sipeed "JTAG Debugger" presenting as an FT2232D
+(`0403:6010`, bcdDevice `0x0500`); `reticle program` drives it with
+openFPGALoader's pin setup for this board, `SIPEED_PINS`. It clocked the
+4.6 Mbit file out in about a second, faster than the 1 MHz TCK asked for,
+which fits the adapter being a microcontroller emulating an FTDI part.
 
 ## Getting the database
 
@@ -98,45 +133,49 @@ if it is not. **CI has neither, nor a board**, and every test that needs
 the database skips with a line saying what is missing. A missing database
 never fails the build, and a test never fetches one.
 
-### And the reference bitstream
+### Reproducing the reference files
 
-One test compares the container against a file the reference packer wrote.
-Producing that file needs `apycula` installed and a minimal nextpnr-shaped
-JSON, because `gowin_pack` reads nextpnr's output rather than a netlist:
+Three tests compare Reticle's output with a file Project Apicula's own
+packer wrote. `gowin_pack` reads nextpnr's JSON rather than a netlist, so
+the inputs are hand-written nextpnr-shaped JSON, placed and (for the LUT)
+routed by hand, in `testdata/fpga/gowin/`:
 
 ```sh
 pip install apycula==0.33
-cat > /tmp/empty.json <<'EOF'
-{
-  "creator": "handwritten",
-  "modules": { "top": {
-    "settings": { "arch.name": "himbaechel", "arch.type": "gowin",
-                  "packer.chipdb": "GW2A-18",
-                  "packer.partno": "GW2A-LV18PG256C8/I7" },
-    "attributes": {}, "ports": {}, "cells": {},
-    "netnames": {
-      "$PACKER_GND": { "hide_name": 1, "bits": ["0"], "attributes": { "ROUTING": "" } },
-      "$PACKER_VCC": { "hide_name": 1, "bits": ["1"], "attributes": { "ROUTING": "" } }
-    }
-  } }
-}
-EOF
-gowin_pack -d GW2A-18 -o /tmp/empty.fs /tmp/empty.json
-export RETICLE_GOWIN_FS=/tmp/empty.fs
+for d in empty io lut; do
+    gowin_pack -d GW2A-18 -o /tmp/$d.fs testdata/fpga/gowin/$d.json
+done
+export RETICLE_GOWIN_FS=/tmp/empty.fs RETICLE_GOWIN_IO_FS=/tmp/io.fs \
+       RETICLE_GOWIN_LUT_FS=/tmp/lut.fs
 ```
 
-That is 4 618 782 bytes of ASCII `0`s and `1`s, and it is the oracle the
-whole of `src/fpga/gowin.rs` was built against. With `-c` it is 699 990
-bytes; the reader handles both and the writer writes the uncompressed
-form.
+| Input | What is in it | Bits |
+|---|---|---|
+| `empty.json` | nothing | 862 |
+| `io.json` | an `OBUF` on C13 and an `IBUF` on T3, LVCMOS33, connected to nothing | 771 |
+| `lut.json` | the same buffers, and a LUT4 inverter between them over 17 pips | 842 |
+
+Each is 4 618 782 bytes of ASCII `0`s and `1`s. With `-c` the empty one
+is 699 990 bytes; the reader handles both and the writer writes the
+uncompressed form.
+
+`io.json` and `lut.json` list the output buffer **first**, and that is
+deliberate. `gowin_pack` means to set a bank's voltage from its outputs
+and to fall back to 1.2 V for a bank of inputs only, but a mutable default
+argument (`make_IoBelDesc(bel, flags={})`) marks every buffer processed
+after the first output as an output as well, so an input-only bank gets
+1.2 V or its standard's voltage depending on the order of the file.
+Reticle always gives a used bank its standard's voltage — an `LVCMOS33`
+input sits in a bank the board supplies at 3.3 V — which is what
+`gowin_pack` writes in this order. In the other order the files differ in
+exactly bank 4's 51 bits.
 
 It is worth being clear about what kind of oracle this is. It is **not** a
 vendor-produced bitstream for this board, the way
 `artix7/harness/basys3/swbut/design.bit` is for the Basys 3. It is an
 independent implementation of the same open format, so agreeing with it
-settles the *container* and settles nothing about the *configuration*. A
-bitstream from the Gowin IDE for this part would be a better oracle and
-none was available here.
+settles that Reticle reads the database as Apicula does; the part itself
+is what settled that the result configures anything.
 
 ## Which die, and why that is a real question
 
@@ -441,41 +480,44 @@ million join edges.
 
 ## What the database does not name
 
-This is the largest gap, and it is not a gap in the loader.
-
 A Gowin bel's configuration is a set of *attribute values*:
 `IO_TYPE=LVCMOS33`, `PULLMODE=NONE`, `SLEWRATE=FAST`, `REGMODE=FF`,
 `SRMODE=ASYNC`. The database encodes those in two steps —
 `logicinfo[<table>]` maps `(attribute id, value id)` to a small integer
 code, and `shortval`/`longval` map tuples of codes to the bits to set —
-and `fuses_for` implements the second step, tested, including the
-negative-code rule above.
+and `fuses_for` implements the second step, including the negative-code
+rule above.
 
 **The attribute and value names are not in the file.** They are Python
-dictionaries in `apycula/attrids.py`, 62 KB of them: `iob_attrids`,
-`iob_attrvals`, `cls_attrids`, `cls_attrvals`, `iologic_*`, `pll_*`,
-`bsram_*`, `dsp_*` and the rest. Without them, a code is a number and
-there is no way to say "this buffer is LVCMOS33".
+dictionaries in `apycula/attrids.py`. The four the flow needs — the IO
+block's and the logic slice's, `iob_attrids`, `iob_attrvals`,
+`cls_attrids` and `cls_attrvals` — are transcribed into
+`src/fpga/apicula/attrids.rs` by `tools/gen-apicula-attrids.py`, which
+records the source file's SHA-256 and carries Apicula's MIT notice.
 
-So, precisely:
+`src/fpga/apicula/config.rs` then does what `gowin_pack` does, function by
+function, and says which:
 
-- the lookup table is here and tested;
-- the names are not, so **no bel is configured except the LUT4**, whose
-  bits are named by position instead;
-- which means **an IO buffer gets its pins and no bits**. A bitstream from
-  this flow would route a signal to a pad and leave the pad
-  unconfigured — not driving, not pulled, with no IO standard.
+- an **input buffer** gets `default_ibuf_attrs` and an **output buffer**
+  `default_obuf_attrs`, each with its bank's `IO_TYPE` and `BANK_VCCIO`;
+- every **unused IO** gets its bank's `IO_TYPE` and `BANK_VCCIO`, and a
+  bank with nothing in it is `LVCMOS18` at 1.8 V;
+- every **bank** gets its standard and voltage, and `PULL_STRENGTH` when
+  used; which tile holds a bank is `Device.bank_tiles`, a Python property
+  and not a field, so it is recomputed from the `BANK<n>` bels;
+- a **slice** whose LUTs are used and whose registers are empty gets the
+  empty registers' state, `REG0_REGSET=RESET` and the rest.
 
-That is also what the 400-bit difference against the reference bitstream
-is: `gowin_pack` configures every *unused* IO of the ring (as an
-`LVCMOS18` input, per its own `get_default_unused_io_type`), and this flow
-configures none of them, used or unused.
+An attribute value `logicinfo` has no code for is dropped, as
+`add_attr_val` drops it: that is how most defaults work. The bits of an
+unused IO ring and eight idle banks are the 400 a blank stream lacked
+before this, and with them it is `gowin_pack`'s empty design byte for
+byte.
 
-Transcribing the tables this needs — with provenance, entry by entry, the
-way `src/fpga/xray/sites.rs` does for Xilinx pin names — is the first
-thing phase two has to do. `attrids.py` is MIT and its ids are
-stable across the database versions that ship with it, which is the reason
-it is a transcription job and not a research one.
+**One IO standard per design**, as for the 7 series: the buffer bits are
+worked out once per load, from `ApiculaOptions::io_standard`, and the
+command line refuses constraints that ask for two. The standards
+configured are the single-ended `LVCMOS` ones, 1.0 V to 3.3 V.
 
 ## The `.fs` container
 
@@ -496,7 +538,7 @@ row of the die bitmap.
 0x3b 0x80 <rows:2>              load configuration: how many rows follow
 <422 bytes> <crc:2> 6 x 0xff    ... 1342 of these, one per bitmap row
 18 x 0xff <crc:2>               end of the grid
-0x0a 0x00 0x00 0x00 <user:4>    USERCODE
+0x0a 0x00 0x00 0x00 <sum:4>     checksum of the configuration data
 8 x 0xff
 0x08 0x00 0x00 0x00             done
 8 x 0xff
@@ -506,8 +548,12 @@ row of the die bitmap.
 **Every byte of that but two fields is data from the chip database.**
 `cmd_hdr` and `cmd_ftr` are arrays of byte strings in the file itself, and
 this module writes them verbatim; the two fields it fills in are the row
-count in the `0x3b` command and, on request, the USERCODE in the `0x0a`
-command. That is the same division of labour `src/fpga/xc7.rs` has with
+count in the `0x3b` command and the `0x0a` command's value. Gowin's tools
+call that line the USERCODE, but `gowin_pack` always fills it with a
+checksum of the configuration data, and so does `FsStream::fill_checksum`:
+every row as the file writes it, joined, packed into bytes and summed as
+sixteen-bit big-endian words. For a design with nothing in it that is
+`0xbf45`. The loader needs it (see *Loading it*). That is the same division of labour `src/fpga/xc7.rs` has with
 `part.json`: the database knows the part and the container knows the
 envelope.
 
@@ -629,46 +675,32 @@ every bank is listed as accepting all five voltages the part supports.
 **Do not read those lists as board truth**; a constraint asking for
 LVCMOS18 on a bank the dock wired to 3.3 V will be accepted.
 
-## How far towards a bitstream this got
+## How far this got
 
-`ApiculaFabric::blank_stream` produces a **structurally complete `.fs`
-file** for a GW2A-18: the right geometry, the database's own commands, the
-row count, all 1342 check words, and the 462 bits the `const` tables
-always set. It is 4 618 782 bytes and it **configures nothing**.
+A combinational design goes from Verilog to a running GW2A-18: through
+synthesis, Reticle's placer and router over Apicula's fabric, the
+configuration above, the `.fs` container and the JTAG loader. Of the four
+gaps this section used to list, two are closed — the attribute names and
+the configuration sequence — and two are not:
 
-That is the honest end of phase one. There is no design in it, because
-there is no way to put one in yet: the four things below are what stand
-between it and a lit LED, in rough order of how much stands behind each.
-
-1. **The attribute names.** Without `attrids.py`'s tables transcribed, an
-   IO buffer has pins and no bits, and so does every flip-flop, IO logic
-   block, PLL and block RAM. This is a transcription job with a clear
-   source and it is the first thing to do.
-2. **Per-tile pips in `Arch`.** Without them the `nodes` table cannot be
+1. **Per-tile pips in `Arch`.** Without them the `nodes` table cannot be
    loaded, so no clock reaches the global network and nothing sequential
    routes. This is a model change of maybe a hundred lines plus the text
    round-trip, and it helps the 7-series loader too.
-3. **A configuration sequence, and a programmer that knows it is not
-   talking to a Xilinx part.** Reading this part's identifier over JTAG
-   works; writing it is not written at all. `reticle program` knows the
-   TAP state machine and the FTDI encoding, and the part's instruction
-   register is **eight bits** where a 7-series' is six, which is why the
-   IDCODE is read with `jtag::idcode_after_reset` — an instruction
-   nothing has to name. Two things follow. What a Gowin part wants after
-   that (its own instruction set, an erase, a status poll) has to be
-   written. `--probe`'s second step, the Xilinx status read, no longer
-   happens on a part whose IDCODE says it is not Xilinx — `is_xilinx`
-   guards it and `program` refuses to configure one at all. See the note
-   at the top of this document.
-4. **A flip-flop's D pin, and packing.** A Gowin flip-flop's data input
+2. **A flip-flop's D pin, and packing.** A Gowin flip-flop's data input
    comes from the LUT beside it inside the slice and has no tile wire —
    the database's flip-flop portmap has no `D` at all, exactly as a
    7-series `AFF`'s does not. Until packing can place a LUT and a
    flip-flop on one slice, a sequential design will not route even with
-   (1) and (2) done.
+   (1) done. The slice defaults for a register pair *are* written already,
+   for the case where the registers are empty.
 
-Until at least 1 and 2 are done, what this flow writes is a bitstream
-whose envelope matches a working one and which contains no design.
+Until both are done, what this flow can put on a part is combinational.
+Beyond that, what is untried: an IO standard other than LVCMOS33, a
+tristate or bidirectional buffer, a pin pull other than the default, and
+the DONE, READY and other dual-purpose pins as IO, which `gowin_pack` does
+with flags that set bits in the configuration tile and this flow does not
+write, so it refuses those pins.
 
 ## Where the code is
 
@@ -678,9 +710,14 @@ whose envelope matches a working one and which contains no design.
 | `src/fpga/gowin.rs` | the `.fs` container: the commands, the die bitmap, CRC-16/ARC, a reader that handles compression |
 | `src/fpga/apicula/mod.rs` | the loader: the database as an `Arch` plus a `DieLayout`, with the measurement and the region |
 | `src/fpga/apicula/parse.rs` | the four derived rules, each with the test that re-derives it |
+| `src/fpga/apicula/attrids.rs` | Apicula's IO and slice attribute names, generated by `tools/gen-apicula-attrids.py` |
+| `src/fpga/apicula/config.rs` | IO buffers, unused IO, banks and slice defaults, after `gowin_pack` |
+| `src/program/gowin.rs` | the JTAG load sequence, SRAM only |
+| `examples/primer20k/` | the design that ran |
+| `testdata/fpga/gowin/` | the inputs of the three reference files |
 | `src/fpga/devices/gowin.dev` | the device: primitives, pins, banks, the PLL, and a reason for each absence |
 | `tests/fpga_gowin.rs` | all of it against the real database, skipping without one |
-| `ApiculaDatabase::nodes`, `code_table`, `logicinfo` | what phase two needs, reachable without re-reading the file |
+| `ApiculaDatabase::nodes`, `code_table`, `logicinfo` | the raw tables, reachable without re-reading the file |
 
-`src/fpga/arch/synthetic.rs` is untouched and still says what it always
-said. `src/fpga/xray/` is untouched. Nothing here changes either.
+`src/fpga/arch/`, `place.rs`, `route.rs` and `bitstream.rs` are untouched:
+as for the 7 series, the graph is generic and the envelope is not.

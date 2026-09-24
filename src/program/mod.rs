@@ -61,6 +61,7 @@
 //! jumper is set to, which is what makes this the safe way in.
 
 pub mod ftdi;
+pub mod gowin;
 pub mod jtag;
 pub mod usb;
 pub mod xilinx;
@@ -108,6 +109,14 @@ pub const MPSSE_INTERFACE: u8 = 0;
 ///
 /// TMS starts high, which is the idle level for a TAP.
 pub const BASYS3_PINS: (u8, u8) = (0x88, 0x8B);
+
+/// The same byte for a Sipeed Tang board's on-board JTAG adapter (a Tang
+/// Primer 20K dock has one): TCK, TDI and TMS as outputs, TMS high, and
+/// nothing else driven. `ADBUS7` means nothing there, so it is left an
+/// input. These are openFPGALoader's numbers for its `ft2232` cable,
+/// which its board table gives the Tang Primer 20K (`cable.hpp`,
+/// `board.hpp`).
+pub const SIPEED_PINS: (u8, u8) = (0x08, 0x0B);
 
 /// Why programming failed.
 #[derive(Debug)]

@@ -2,8 +2,9 @@
 
 `reticle program <design.bit>` loads a bitstream into an attached Xilinx
 7-series FPGA over JTAG, through an FTDI FT2232H, with no vendor tool and
-no external program of any kind. It is the one part of Reticle that
-talks to hardware.
+no external program of any kind; `reticle program <design.fs>` does the
+same for a Gowin GW2A (see *Gowin* below). It is the one part of Reticle
+that talks to hardware.
 
 It is behind the `program` Cargo feature, which is **off by default**:
 
@@ -213,3 +214,38 @@ then loaded two of Reticle's own: a lookup table and three pins, which a
 person watched drive an LED from two switches, and `blink`, a clocked
 counter, which a person watched blink. `docs/fpga-xray.md` says what each does and does not
 establish about the bitstream side.
+
+## Gowin
+
+A `.fs` file is loaded with Gowin's own SRAM sequence (UG290, TN653), in
+`src/program/gowin.rs`: `CONFIG_ENABLE` and a wait for edit mode;
+`ERASE_SRAM` and a wait for the erase; `XFER_DONE` and `CONFIG_DISABLE`;
+then `CONFIG_ENABLE`, `ADDRESS_INITIALIZE`, `TRANSFER`, the whole file
+through DR, the checksum step, `CONFIG_DISABLE`, and a read of the status
+register for `DONE` and no error.
+
+- **The instruction register is eight bits**, not six, which is why each
+  vendor's sequence runs only on a part its identifier names: a Xilinx
+  instruction shifted at a Gowin part executes whatever the bits land on.
+  The identifier is read first with no instruction at all.
+- **SRAM only, by construction.** The opcodes are an enum holding none
+  that reaches flash, and `gowin::FORBIDDEN` lists the ones that do —
+  `0x16` among them, a pass-through to the board's SPI flash — with a test
+  keeping the two apart.
+- **The checksum step (`0x0a`, 32 bits, `0x08`) is not in Gowin's
+  documents**, and without it a GW2A-18 took the file and left `DONE`
+  clear with no error bit. It is what openFPGALoader sends, and the value
+  is the one the file's footer carries.
+- **The file goes through first character first.** Eight characters pack
+  into a byte highest-first, as the file reads, and each byte is
+  bit-reversed for the least-significant-first shift, the correction a
+  `.bit` gets too.
+
+Verified on a Sipeed Tang Primer 20K, whose dock's JTAG adapter is a
+Sipeed "JTAG Debugger" presenting as an FT2232D (`0403:6010`,
+bcdDevice `0x0500`), driven with `program::SIPEED_PINS` (value `0x08`,
+direction `0x0b`: openFPGALoader's for this board). The status read
+`0x6020` (`DONE`, security) with the board's own design running,
+`0x00a0` (edit mode, erased) after the erase, and `0x2020` (`DONE`) after
+loading `examples/primer20k/key_led.v`, which a person then watched
+work. `docs/fpga-gowin.md` has the rest.

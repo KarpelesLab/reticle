@@ -110,20 +110,32 @@ not established, and `docs/fpga.md` says the same for the rest of the
 A second real fabric is read the same way, Gowin's, from Project
 Apicula's prebuilt chip database: `src/fpga/devices/gowin.dev` describes
 the GW2A-18 of a Sipeed Tang Primer 20K and `fpga::apicula` turns that
-database into the same architecture. It stops short of a design in a
-bitstream, and [`docs/fpga-gowin.md`](docs/fpga-gowin.md) says exactly
-where and why. **Nothing Gowin has been loaded into a part.**
+database into the same architecture, and the same place and route write
+a `.fs` for it. One design has run on that board and been watched
+working: a button through a lookup table to an LED
+(`examples/primer20k`). Nothing clocked routes on it yet;
+[`docs/fpga-gowin.md`](docs/fpga-gowin.md) says exactly what is and is
+not established.
+
+```sh
+cargo build --features cli,apicula,program
+reticle fpga --device gw2a-18-pg256 \
+    --constraints examples/primer20k/key_led.rcf \
+    --bitstream key_led.fs examples/primer20k/key_led.v
+reticle program key_led.fs
+```
 
 ### Loading one into a board
 
-`reticle program` puts a bitstream into an attached Xilinx 7-series part
-over JTAG, through the FT2232H a Digilent Basys 3 carries on board, with
-no vendor tool and nothing else installed:
+`reticle program` puts a bitstream into an attached Xilinx 7-series or
+Gowin GW2A part over JTAG, through the FTDI adapter a Digilent Basys 3 or
+a Tang Primer 20K dock carries on board, with no vendor tool and nothing
+else installed:
 
 ```sh
 cargo build --features cli,program
 reticle program --probe        # read IDCODE and status, write nothing
-reticle program design.bit
+reticle program design.bit     # or design.fs
 ```
 
 It writes the part's volatile configuration memory only; a power cycle
@@ -136,9 +148,8 @@ feature, off by default, because it is the one feature with a dependency
 (`rawusb`, a sibling Karpeles Lab crate with none of its own), so
 `cargo add reticle` still resolves to nothing.
 
-This is the one part of Reticle that has been run on real silicon: a
-Basys 3 loaded with Project X-Ray's own Vivado-built harness bitstream
-asserts `DONE`. [`docs/programming.md`](docs/programming.md) says exactly
+It was proved first on a Basys 3, loaded with Project X-Ray's own
+Vivado-built harness bitstream, which asserts `DONE`. [`docs/programming.md`](docs/programming.md) says exactly
 what that does and does not establish.
 
 Sources of one language are elaborated together, so a testbench and the

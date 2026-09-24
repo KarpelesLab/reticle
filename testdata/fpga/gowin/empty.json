@@ -1,0 +1,36 @@
+{
+ "creator": "handwritten",
+ "modules": {
+  "top": {
+   "settings": {
+    "arch.name": "himbaechel",
+    "arch.type": "gowin",
+    "packer.chipdb": "GW2A-18",
+    "packer.partno": "GW2A-LV18PG256C8/I7"
+   },
+   "attributes": {},
+   "ports": {},
+   "cells": {},
+   "netnames": {
+    "$PACKER_GND": {
+     "hide_name": 1,
+     "bits": [
+      "0"
+     ],
+     "attributes": {
+      "ROUTING": ""
+     }
+    },
+    "$PACKER_VCC": {
+     "hide_name": 1,
+     "bits": [
+      "1"
+     ],
+     "attributes": {
+      "ROUTING": ""
+     }
+    }
+   }
+  }
+ }
+}

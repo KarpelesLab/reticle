@@ -495,7 +495,7 @@ fn a_lut_carries_its_truth_table_inverted_because_a_fuse_means_a_zero() {
 }
 
 #[test]
-fn an_io_buffer_gets_its_pins_and_deliberately_no_bits() {
+fn an_io_buffer_gets_its_pins_and_one_entry_per_direction() {
     let db = database();
     let fabric = db.load(&ApiculaOptions::new()).unwrap();
     let io = fabric.arch.tile_at(1, 0).unwrap();
@@ -507,9 +507,18 @@ fn an_io_buffer_gets_its_pins_and_deliberately_no_bits() {
     assert_eq!(buffer.pin("oe").unwrap().name, "B0");
     // No pad pin: a ball is not a wire.
     assert!(buffer.pin("pad").is_none());
-    // No configuration at all, which is the gap the module documents: the
-    // attribute names an IO standard needs are not in the database.
-    assert!(buffer.config.is_empty());
+    // One entry for each way a buffer can be placed. This database has no
+    // `longval` tables, so both are empty here; `tests/fpga_gowin.rs`
+    // checks the real ones against `gowin_pack` bit for bit.
+    let cells: Vec<&str> = buffer
+        .config
+        .iter()
+        .filter_map(|entry| match entry {
+            ConfigEntry::Cell { primitive, bits } if bits.is_empty() => Some(primitive.as_str()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(cells, ["IBUF", "OBUF"]);
     // Nor is the empty-string port a pin.
     assert!(
         buffer.pins.iter().all(|(_, w)| !w.name.is_empty()),
@@ -562,7 +571,9 @@ fn the_measurements_are_the_loaders_own_and_cover_what_is_not_loaded() {
     assert_eq!((stats.nodes, stats.node_members), (1, 2));
     assert_eq!(stats.const_bits, 2);
     assert_eq!(stats.tiles_loaded, 4);
-    assert_eq!(stats.config_entries, 4);
+    // Two LUT bits in each of two logic tiles, and an `IBUF` and an
+    // `OBUF` entry on each of two IO tiles.
+    assert_eq!(stats.config_entries, 4 + 4);
     assert_eq!(stats.idcode, Some(0x0000_081b));
     // And the report says all of it.
     let text = stats.to_text();

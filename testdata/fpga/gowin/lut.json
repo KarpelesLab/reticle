@@ -1,0 +1,149 @@
+{
+ "creator": "handwritten",
+ "modules": {
+  "top": {
+   "settings": {
+    "arch.name": "himbaechel",
+    "arch.type": "gowin",
+    "packer.chipdb": "GW2A-18",
+    "packer.partno": "GW2A-LV18PG256C8/I7"
+   },
+   "attributes": {},
+   "ports": {},
+   "cells": {
+    "led_obuf": {
+     "hide_name": 0,
+     "type": "OBUF",
+     "parameters": {},
+     "attributes": {
+      "NEXTPNR_BEL": "X55Y31/IOBB",
+      "IO_TYPE": "LVCMOS33"
+     },
+     "port_directions": {
+      "I": "input",
+      "O": "output"
+     },
+     "connections": {
+      "I": [
+       4
+      ],
+      "O": [
+       5
+      ]
+     }
+    },
+    "inv_lut": {
+     "hide_name": 0,
+     "type": "LUT4",
+     "parameters": {
+      "INIT": "0101010101010101"
+     },
+     "attributes": {
+      "NEXTPNR_BEL": "X51Y53/LUT0"
+     },
+     "port_directions": {
+      "I0": "input",
+      "I1": "input",
+      "I2": "input",
+      "I3": "input",
+      "F": "output"
+     },
+     "connections": {
+      "I0": [
+       3
+      ],
+      "I1": [
+       "0"
+      ],
+      "I2": [
+       "0"
+      ],
+      "I3": [
+       "0"
+      ],
+      "F": [
+       4
+      ]
+     }
+    },
+    "sw_ibuf": {
+     "hide_name": 0,
+     "type": "IBUF",
+     "parameters": {},
+     "attributes": {
+      "NEXTPNR_BEL": "X51Y54/IOBB",
+      "IO_TYPE": "LVCMOS33"
+     },
+     "port_directions": {
+      "I": "input",
+      "O": "output"
+     },
+     "connections": {
+      "I": [
+       2
+      ],
+      "O": [
+       3
+      ]
+     }
+    }
+   },
+   "netnames": {
+    "$PACKER_GND": {
+     "hide_name": 1,
+     "bits": [
+      "0"
+     ],
+     "attributes": {
+      "ROUTING": ""
+     }
+    },
+    "$PACKER_VCC": {
+     "hide_name": 1,
+     "bits": [
+      "1"
+     ],
+     "attributes": {
+      "ROUTING": ""
+     }
+    },
+    "sw": {
+     "hide_name": 0,
+     "bits": [
+      3
+     ],
+     "attributes": {
+      "ROUTING": "X51Y54/Q6;;1;X51Y54/N100;X51Y54/N100/Q6;1;X51Y53/N200;X51Y53/N200/N101;1;X51Y53/A0;X51Y53/A0/N200;1;"
+     }
+    },
+    "led": {
+     "hide_name": 0,
+     "bits": [
+      4
+     ],
+     "attributes": {
+      "ROUTING": "X51Y53/F0;;1;X51Y53/E200;X51Y53/E200/F0;1;X53Y53/N200;X53Y53/N200/E202;1;X53Y51/N200;X53Y51/N200/N202;1;X53Y49/N200;X53Y49/N200/N202;1;X53Y47/N200;X53Y47/N200/N202;1;X53Y45/N200;X53Y45/N200/N202;1;X53Y43/N200;X53Y43/N200/N202;1;X53Y41/N200;X53Y41/N200/N202;1;X53Y39/N200;X53Y39/N200/N202;1;X53Y37/N200;X53Y37/N200/N202;1;X53Y35/N200;X53Y35/N200/N202;1;X53Y33/N200;X53Y33/N200/N202;1;X53Y31/E200;X53Y31/E200/N202;1;X55Y31/D1;X55Y31/D1/E202;1;"
+     }
+    },
+    "sw_pad": {
+     "hide_name": 0,
+     "bits": [
+      2
+     ],
+     "attributes": {
+      "ROUTING": ""
+     }
+    },
+    "led_pad": {
+     "hide_name": 0,
+     "bits": [
+      5
+     ],
+     "attributes": {
+      "ROUTING": ""
+     }
+    }
+   }
+  }
+ }
+}

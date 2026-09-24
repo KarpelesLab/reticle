@@ -198,23 +198,31 @@ Options:
   --report           Print the mapping report to stderr
   --quiet            Suppress the summary line
 
-Xilinx 7 series only, and only with a chip database:
-  --chipdb <dir>     A Project X-Ray database (f4pga/prjxray-db). Also
-                     read from RETICLE_CHIPDB. Without either, the copy
-                     in ~/.cache/reticle is used, and downloaded there
-                     first if it is missing (see `reticle help fetch`).
+Writing a bitstream, from a real chip database (Xilinx 7 series and
+Gowin GW2A only):
+  --chipdb <dir>     The database: Project X-Ray's (f4pga/prjxray-db) for
+                     the 7 series, also read from RETICLE_CHIPDB; Project
+                     Apicula's for Gowin, also read from RETICLE_GOWINDB.
+                     Without either, the copy in ~/.cache/reticle is used,
+                     and downloaded there first if it is missing (see
+                     `reticle help fetch`).
   --offline          Never download the database; fail if it is missing.
                      RETICLE_OFFLINE=1 does the same.
-  --bitstream <file> Write a 7-series .bit here, from the real fabric.
-                     Two designs written this way have reached a Basys 3:
-                     examples/basys3/sw_led.v, a lookup table and three
-                     pins, and examples/basys3/blink.v, a clocked
-                     counter, both watched working. A carry chain does
-                     not route; see docs/fpga-xray.md.
-  --region <box>     Which tiles of the fabric to load, as x0,y0,x1,y1 in
-                     the database's grid coordinates. The default is a
-                     box around the constrained pins, because the whole
-                     die is 20 million pips and will not fit.
+  --bitstream <file> Place and route with Reticle's own tools and write
+                     a 7-series .bit or a Gowin .fs here. Two designs
+                     written this way have run on a Basys 3
+                     (examples/basys3: a lookup table, and a clocked
+                     counter) and one on a Tang Primer 20K
+                     (examples/primer20k: a lookup table), each watched
+                     working. On the 7 series a carry chain does not
+                     route; on Gowin nothing clocked does yet. See
+                     docs/fpga-xray.md and docs/fpga-gowin.md. For Gowin
+                     this is the only output: there is no nextpnr export.
+  --region <box>     7 series: which tiles of the fabric to load, as
+                     x0,y0,x1,y1 in the database's grid coordinates. The
+                     default is a box around the constrained pins,
+                     because the whole die is 20 million pips and will
+                     not fit.
 ";
 
 const SYNTH_USAGE: &str = "\
@@ -338,24 +346,27 @@ Options:
 ";
 
 const PROGRAM_USAGE: &str = "\
-Usage: reticle program [options] <design.bit>
+Usage: reticle program [options] <design.bit|design.fs>
 
-Loads a bitstream into an attached Xilinx 7-series FPGA over JTAG,
-through an FTDI FT2232H adapter (a Digilent Basys 3 has one on board).
+Loads a bitstream into an attached FPGA over JTAG, through an FTDI
+FT2232 adapter: a Xilinx 7-series .bit (a Digilent Basys 3 has one on
+board), or a Gowin GW2A .fs (so does a Sipeed Tang Primer 20K dock).
 
 The part's IDCODE is read and checked first, and nothing is written if it
-does not match. Only the volatile configuration memory is written: a
-power cycle undoes it. This command does not program flash and cannot.
+does not match the one the file names. Only the volatile configuration
+memory is written: a power cycle undoes it. This command does not program
+flash and cannot.
 
 Options:
   --device <serial>  Pick one adapter by serial number, when several are
                      attached; `--list` shows them
   --clock <hz>       TCK frequency (default 1000000, maximum 30000000)
-  --expect <idcode>  The IDCODE the part must answer, in hex
-                     (default 0362d093, the XC7A35T on a Basys 3)
+  --expect <idcode>  The IDCODE the part must answer, in hex (default:
+                     for a .fs the one it names, for a .bit 0362d093,
+                     the XC7A35T on a Basys 3)
   --list             List attached adapters and exit
-  --probe            Read IDCODE and the status register, and stop
-                     without writing anything
+  --probe            Read IDCODE and, for a Xilinx or Gowin part, its
+                     status register, and stop without writing anything
   --quiet            Do not report progress
 
 Needs the `program` feature, which is off by default because it is the
@@ -1718,6 +1729,12 @@ fn fpga(args: &Args) -> Result<Outcome, ArgError> {
         return Ok(Outcome::Failed);
     }
 
+    // Gowin has no outside place-and-route flow to hand the design to
+    // here: the one way out is Reticle's own, straight to a `.fs`.
+    if device.family == "gowin" {
+        return Ok(gowin_fpga(args, &design, top, device, &constraints));
+    }
+
     // Check the netlist against the device before writing it, so a file
     // nextpnr would reject never reaches the disk unnoticed.
     let problems = check_nextpnr_json(&design, top, device, &constraints);
@@ -1814,6 +1831,240 @@ fn fpga(args: &Args) -> Result<Outcome, ArgError> {
     Ok(Outcome::Ok)
 }
 
+/// The one IO standard the constraints ask for, if they ask for any.
+///
+/// Both chip-database flows configure every buffer for one standard,
+/// because the bits are worked out per load (`XrayOptions::io_standard`,
+/// `ApiculaOptions::io_standard`), so two standards in one design are a
+/// refusal rather than a silent choice between them.
+fn single_io_standard(constraints: &reticle::fpga::Constraints) -> Result<Option<String>, String> {
+    let mut standards: Vec<&str> = constraints
+        .pins
+        .iter()
+        .filter_map(|p| p.io.io_standard.as_deref())
+        .collect();
+    standards.sort_unstable();
+    standards.dedup();
+    match standards.as_slice() {
+        [] => Ok(None),
+        [one] => Ok(Some((*one).to_owned())),
+        many => Err(format!(
+            "the constraints ask for {} io standards ({}); this flow configures one \
+             standard for the whole design",
+            many.len(),
+            many.join(", ")
+        )),
+    }
+}
+
+/// The Gowin parts a device file describes, as Project Apicula names
+/// them: `(device file name, database die, part number)`.
+#[cfg(feature = "apicula")]
+const GOWIN_PARTS: &[(&str, &str, &str)] = &[("gw2a-18-pg256", "GW2A-18", "GW2A-LV18PG256C8/I7")];
+
+/// `reticle fpga` for a Gowin device: the netlist if asked for, then a
+/// `.fs` from Reticle's own place and route over Project Apicula's
+/// database. There is no other way out for this family.
+fn gowin_fpga(
+    args: &Args,
+    design: &reticle::ir::Design,
+    top: reticle::ir::ModuleId,
+    device: &reticle::fpga::Device,
+    constraints: &reticle::fpga::Constraints,
+) -> Outcome {
+    if let Some(path) = args.option("netlist")
+        && let Err(message) = write_out(Some(path), &design.to_text())
+    {
+        eprintln!("error: {message}");
+        return Outcome::Failed;
+    }
+    let Some(path) = args.option("bitstream") else {
+        eprintln!(
+            "error: family `gowin` has no outside place-and-route flow here; pass \
+             --bitstream <file.fs> to place, route and write it with Reticle's own"
+        );
+        return Outcome::Failed;
+    };
+    match write_gowin_bitstream(args, design, top, device, constraints, path) {
+        Ok(note) => {
+            if !args.flag("quiet") {
+                eprint!("{note}");
+            }
+            Outcome::Ok
+        }
+        Err(message) => {
+            eprintln!("error: {message}");
+            Outcome::Failed
+        }
+    }
+}
+
+/// A Gowin `.fs` without the feature that reads the database: the flow
+/// is recognised, so the message can say what to rebuild.
+#[cfg(not(feature = "apicula"))]
+fn write_gowin_bitstream(
+    _args: &Args,
+    _design: &reticle::ir::Design,
+    _top: reticle::ir::ModuleId,
+    _device: &reticle::fpga::Device,
+    _constraints: &reticle::fpga::Constraints,
+    _path: &str,
+) -> Result<String, String> {
+    Err(
+        "this build cannot read a Gowin chip database: the `apicula` feature is off. \
+         It is off by default because it has a dependency (an xz decoder). Rebuild with \
+         `cargo build --features cli,apicula`."
+            .to_owned(),
+    )
+}
+
+/// Writes a Gowin `.fs` from Project Apicula's database.
+///
+/// What is established about the bits this writes, and against what, is
+/// in `docs/fpga-gowin.md`: the IO buffers, banks, unused IO, slice
+/// defaults, LUT truth tables and pips each agree bit for bit with
+/// `gowin_pack` on the same placement and routing. The placement and the
+/// routing here are Reticle's own.
+#[cfg(feature = "apicula")]
+fn write_gowin_bitstream(
+    args: &Args,
+    design: &reticle::ir::Design,
+    top: reticle::ir::ModuleId,
+    device: &reticle::fpga::Device,
+    constraints: &reticle::fpga::Constraints,
+    path: &str,
+) -> Result<String, String> {
+    use std::collections::BTreeSet;
+
+    use reticle::fpga::apicula::{ApiculaDatabase, ApiculaOptions};
+    use reticle::fpga::bitstream;
+    use reticle::fpga::place::{PlaceOptions, place};
+    use reticle::fpga::route::{RouteOptions, route};
+    use reticle::fpga::xray::GridRegion;
+    use reticle::fpga::{Netlist, Routing};
+
+    let Some(&(_, die, part)) = GOWIN_PARTS.iter().find(|(name, _, _)| *name == device.name) else {
+        return Err(format!(
+            "no Project Apicula part is known for device `{}`",
+            device.name
+        ));
+    };
+    let root = datadir::APICULA
+        .locate(args.option("chipdb"), args.flag("offline"))
+        .map_err(|err| format!("`--bitstream` needs a chip database: {err}"))?;
+    let root = root.to_string_lossy().into_owned();
+    let db = ApiculaDatabase::open(&root, die, &DiskFiles::for_sources(&[]))
+        .map_err(|e| e.to_string())?;
+
+    let mut options = ApiculaOptions::new().with_part(part);
+    if let Some(standard) = single_io_standard(constraints)? {
+        options.io_standard = standard;
+    }
+
+    // Load the fabric around the constrained pins: the whole die is eight
+    // million pips, which routes, but slowly and for nothing. The pin map
+    // does not depend on the region, so a one-tile load finds the pins.
+    let probe = db
+        .load(&options.clone().with_region(GridRegion::new(0, 0, 0, 0)))
+        .map_err(|e| e.to_string())?;
+    let mut bounds: Option<(u32, u32, u32, u32)> = None;
+    for pin in &constraints.pins {
+        let Some(site) = probe.arch.site_of_pin(&pin.pin) else {
+            continue;
+        };
+        let Some((x, y)) = site
+            .split('/')
+            .next()
+            .and_then(|t| t.strip_prefix('X'))
+            .and_then(|t| t.split_once('Y'))
+            .and_then(|(x, y)| Some((x.parse::<u32>().ok()?, y.parse::<u32>().ok()?)))
+        else {
+            continue;
+        };
+        bounds = Some(match bounds {
+            None => (x, y, x, y),
+            Some((x0, y0, x1, y1)) => (x0.min(x), y0.min(y), x1.max(x), y1.max(y)),
+        });
+    }
+    let Some((x0, y0, x1, y1)) = bounds else {
+        return Err(
+            "no constrained pin names a ball this part has, so there is nowhere to load the \
+             fabric around"
+                .to_owned(),
+        );
+    };
+    let (cols, rows) = (probe.stats.cols, probe.stats.rows);
+    let margin = 4;
+    options.region = Some(GridRegion::new(
+        x0.saturating_sub(margin),
+        y0.saturating_sub(margin),
+        (x1 + margin).min(cols.saturating_sub(1)),
+        (y1 + margin).min(rows.saturating_sub(1)),
+    ));
+    let fabric = db.load(&options).map_err(|e| e.to_string())?;
+    if let Some(idcode) = device.idcode {
+        fabric.check_idcode(idcode).map_err(|e| e.to_string())?;
+    }
+
+    let graph = fabric.arch.build_graph();
+    let netlist = Netlist::build(design, top, device, &graph).map_err(|e| e.to_string())?;
+    let (placement, _) = place(
+        &netlist,
+        &fabric.arch,
+        &graph,
+        constraints,
+        &PlaceOptions::default(),
+    )
+    .map_err(|e| e.to_string())?;
+    // A route that fails stops here: unlike the 7-series writer, which
+    // writes a partial file to look at, a Gowin `.fs` is meant to be
+    // loaded, and a half-routed one should not exist to be loaded.
+    let (routing, routed): (Routing, usize) =
+        match route(&netlist, &graph, &placement, &RouteOptions::default()) {
+            Ok((routing, report)) => (routing, report.signals),
+            Err(e) => return Err(format!("the design does not route: {e}")),
+        };
+
+    let tiles = bitstream::generate(
+        design,
+        top,
+        &fabric.arch,
+        &graph,
+        &netlist,
+        &placement,
+        &routing,
+    )
+    .map_err(|e| e.to_string())?;
+    let bits: Vec<((u32, u32), Vec<reticle::fpga::arch::ConfigBit>)> = tiles
+        .used_tiles()
+        .into_iter()
+        .map(|(format, bits)| (format.tile, bits))
+        .collect();
+    let used: BTreeSet<((u32, u32), String)> = (0..graph.sites.len())
+        .filter(|&site| placement.instance_at(site).is_some())
+        .map(|site| (graph.sites[site].tile, graph.sites[site].bel.clone()))
+        .collect();
+    let stream = fabric.stream(&bits, &used).map_err(|e| e.to_string())?;
+    let text = stream.to_text();
+    std::fs::write(path, &text).map_err(|e| format!("cannot write `{path}`: {e}"))?;
+
+    Ok(format!(
+        "note: wrote {path}, {} byte(s), {} configuration bit(s) set, {} of {} signal(s) \
+         routed, {} IO at {}\n\
+         note: one design from this flow, a lookup table between two pins, has run on a \
+         Tang Primer 20K and been watched working; nothing clocked routes yet. See \
+         docs/fpga-gowin.md.\n",
+        text.len(),
+        stream.bitmap.count_ones(),
+        routed,
+        netlist.signals.len(),
+        used.iter()
+            .filter(|(_, bel)| bel.starts_with("IOB"))
+            .count(),
+        fabric.periphery.io_standard,
+    ))
+}
+
 /// Whether the mapped design instantiates one of the device's global
 /// clock buffers, which is what decides whether the loaded region has to
 /// reach the column that holds them.
@@ -1885,28 +2136,8 @@ fn write_xc7_bitstream(
         }
     }
 
-    // Every constrained pin's IO standard has to be the one the loader
-    // will give every buffer, because the bits are a per-load table (see
-    // `XrayOptions::io_standard`). Two standards in one design is a
-    // refusal rather than a silent choice between them.
-    let mut standards: Vec<&str> = constraints
-        .pins
-        .iter()
-        .filter_map(|p| p.io.io_standard.as_deref())
-        .collect();
-    standards.sort_unstable();
-    standards.dedup();
-    match standards.as_slice() {
-        [] => {}
-        [one] => options.io_standard = (*one).to_owned(),
-        many => {
-            return Err(format!(
-                "the constraints ask for {} io standards ({}); this flow configures one \
-                 standard for the whole design",
-                many.len(),
-                many.join(", ")
-            ));
-        }
+    if let Some(standard) = single_io_standard(constraints)? {
+        options.io_standard = standard;
     }
 
     let db =
@@ -2404,6 +2635,18 @@ impl reticle::sim::FileProvider for DiskFiles {
         self.roots
             .iter()
             .find_map(|root| std::fs::read_to_string(root.join(wanted)).ok())
+    }
+
+    /// The same search, for a file that is not text: the default would
+    /// read it as UTF-8 and call a compressed chip database missing.
+    fn read_bytes(&self, path: &str) -> Option<Vec<u8>> {
+        let wanted = Path::new(path);
+        if wanted.is_absolute() {
+            return std::fs::read(wanted).ok();
+        }
+        self.roots
+            .iter()
+            .find_map(|root| std::fs::read(root.join(wanted)).ok())
     }
 }
 
