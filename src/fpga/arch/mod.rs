@@ -248,6 +248,24 @@ pub enum ConfigEntry {
         /// Where that bit lives in the tile.
         at: ConfigBit,
     },
+    /// The bit carrying the **complement** of bit `index` of the cell's
+    /// parameter `name`: set when that bit is zero, clear when it is one.
+    ///
+    /// Some databases store a field inverted, and there is no way to say
+    /// so with [`ConfigEntry::Param`] short of inverting the parameter
+    /// itself, which would be a lie about the cell. Project X-Ray marks
+    /// such a field with a leading `Z`: `AFF.ZINI` set means the
+    /// flip-flop's `INIT` is **0**, so a blank bitstream is one whose
+    /// flip-flops all power up at one. Getting that backwards starts a
+    /// counter in the wrong state and nothing else notices.
+    ParamZero {
+        /// The parameter name (`INIT`).
+        name: String,
+        /// Which bit of the parameter's value.
+        index: u32,
+        /// Where its complement lives in the tile.
+        at: ConfigBit,
+    },
 }
 
 /// One placeable element declared by a tile type.

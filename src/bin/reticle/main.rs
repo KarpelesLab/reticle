@@ -1770,6 +1770,27 @@ fn fpga(args: &Args) -> Result<Outcome, ArgError> {
     Ok(Outcome::Ok)
 }
 
+/// Whether the mapped design instantiates one of the device's global
+/// clock buffers, which is what decides whether the loaded region has to
+/// reach the column that holds them.
+fn needs_global_buffer(
+    design: &reticle::ir::Design,
+    top: reticle::ir::ModuleId,
+    device: &reticle::fpga::Device,
+) -> bool {
+    use reticle::fpga::BelRole;
+    use reticle::ir::CellKind;
+    let buffers: Vec<&str> = device
+        .bels
+        .iter()
+        .filter(|b| b.role == BelRole::GlobalBuffer)
+        .map(|b| b.name.as_str())
+        .collect();
+    design.modules[top].cells.iter().any(|(_, cell)| {
+        matches!(&cell.kind, CellKind::Blackbox(name) if buffers.contains(&name.as_str()))
+    })
+}
+
 /// Writes a Xilinx 7-series `.bit` from a real chip database.
 ///
 /// # One design written here has configured a part
@@ -1861,6 +1882,18 @@ fn write_xc7_bitstream(
                  load the fabric around; pass --region x0,y0,x1,y1"
                     .to_owned(),
             );
+        }
+        // A design with a global clock buffer needs the column that
+        // holds one, which is nowhere near a pad. Grow the region to
+        // reach the nearest, and only then: for a combinational design
+        // it would triple the fabric for nothing.
+        if let Some(region) = options.region
+            && needs_global_buffer(design, top, device)
+        {
+            options.region = db
+                .region_with_site_type(&files, region, "BUFGCTRL")
+                .map_err(|e| e.to_string())?
+                .or(Some(region));
         }
     }
 

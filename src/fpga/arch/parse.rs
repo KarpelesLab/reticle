@@ -116,6 +116,14 @@ impl Arch {
                                 at.col
                             ));
                         }
+                        ConfigEntry::ParamZero { name, index, at } => {
+                            out.push_str(&format!(
+                                "{head} paramz {} {index} {}.{}\n",
+                                quote(name),
+                                at.row,
+                                at.col
+                            ));
+                        }
                     }
                 }
             }
@@ -501,7 +509,10 @@ impl<'a> Parser<'a> {
             );
             return;
         }
-        let Some(what) = self.word(line, 3, "`cell` or `param`").map(str::to_owned) else {
+        let Some(what) = self
+            .word(line, 3, "`cell`, `param` or `paramz`")
+            .map(str::to_owned)
+        else {
             return;
         };
         let entry = match what.as_str() {
@@ -519,14 +530,22 @@ impl<'a> Parser<'a> {
                     _ => return,
                 }
             }
-            "param" => {
+            "param" | "paramz" => {
                 let name = self.word(line, 4, "a parameter name").map(str::to_owned);
                 let index = self.number(line, 5, "a bit index");
                 let at = line.get(6).and_then(|t| parse_bit(t.as_str()));
                 match (name, index, at) {
-                    (Some(name), Some(index), Some(at)) => ConfigEntry::Param { name, index, at },
+                    (Some(name), Some(index), Some(at)) if what == "param" => {
+                        ConfigEntry::Param { name, index, at }
+                    }
+                    (Some(name), Some(index), Some(at)) => {
+                        ConfigEntry::ParamZero { name, index, at }
+                    }
                     _ => {
-                        self.error(line.span, "expected `param <name> <index> <row>.<col>`");
+                        self.error(
+                            line.span,
+                            format!("expected `{what} <name> <index> <row>.<col>`"),
+                        );
                         return;
                     }
                 }

@@ -1000,6 +1000,60 @@ impl XrayDatabase {
         Ok(region)
     }
 
+    /// The same region, grown to hold the nearest tile with a site of
+    /// type `site_type`.
+    ///
+    /// A clock is why this exists. [`XrayDatabase::region_for_pins`]
+    /// puts the fabric where the design's pins are, which is right for
+    /// combinational logic and wrong for anything with a global buffer:
+    /// a 7-series `BUFGCTRL` sits in one column in the middle of the
+    /// die, far from any pad, and a clock that cannot reach it cannot be
+    /// routed. Growing the rectangle to the *nearest* such tile, rather
+    /// than to all of them, is what keeps the region a band across the
+    /// die instead of the whole die.
+    ///
+    /// `None` when the part has no site of that type at all.
+    ///
+    /// # Errors
+    ///
+    /// Those of [`XrayDatabase::tiles`].
+    pub fn region_with_site_type(
+        &self,
+        files: &dyn FileProvider,
+        region: GridRegion,
+        site_type: &str,
+    ) -> Result<Option<GridRegion>, XrayError> {
+        let tiles = self.tiles(files)?;
+        let mut best: Option<(u64, u32, u32)> = None;
+        for tile in &tiles {
+            if !tile.sites.iter().any(|(_, kind)| kind == site_type) {
+                continue;
+            }
+            let dx = u64::from(
+                region
+                    .x0
+                    .saturating_sub(tile.grid_x)
+                    .max(tile.grid_x.saturating_sub(region.x1)),
+            );
+            let dy = u64::from(
+                region
+                    .y0
+                    .saturating_sub(tile.grid_y)
+                    .max(tile.grid_y.saturating_sub(region.y1)),
+            );
+            let distance = dx + dy;
+            if best.is_none_or(|(b, _, _)| distance < b) {
+                best = Some((distance, tile.grid_x, tile.grid_y));
+            }
+        }
+        Ok(best.map(|(_, x, y)| GridRegion {
+            x0: region.x0.min(x),
+            y0: region.y0.min(y),
+            x1: region.x1.max(x),
+            y1: region.y1.max(y),
+        }))
+    }
+
     /// Every tile of `tilegrid.json`, in name order.
     ///
     /// # Errors
@@ -1205,11 +1259,45 @@ impl XrayDatabase {
                 });
             }
 
+            // A wire of a clock row costs bits merely to be touched: the
+            // buffer sitting on it has an enable, and prjxray names it
+            // with a one-component feature that is neither a pip nor a
+            // bel feature. Worked out once per tile type, since it is a
+            // property of the wire and not of the pip.
+            // See [`sites::wire_enable_features`].
+            let mut enables: HashMap<&str, Vec<ConfigBit>> = HashMap::new();
+            for wire in &wires {
+                let mut bits = Vec::new();
+                for name in sites::wire_enable_features(wire) {
+                    if let Some(feature) = set.feature(&name) {
+                        bits.extend(feature.ones.iter().copied());
+                    }
+                }
+                if !bits.is_empty() {
+                    enables.insert(wire, bits);
+                }
+            }
+            let enable_bits = |a: &str, b: &str| -> Vec<ConfigBit> {
+                let mut bits = Vec::new();
+                for wire in [a, b] {
+                    if let Some(extra) = enables.get(wire) {
+                        bits.extend(extra.iter().copied());
+                    }
+                }
+                bits
+            };
+
             for (to, from, feature) in set.pips() {
+                let mut bits = feature.ones.clone();
+                let extra = enable_bits(to, from);
+                if !extra.is_empty() {
+                    stats.coverage.wire_enables += 1;
+                    bits.extend(extra);
+                }
                 tile_type.pips.push(PipDecl {
                     from: WireRef::local(from),
                     to: WireRef::local(to),
-                    bits: feature.ones.clone(),
+                    bits,
                 });
             }
             // The fixed wiring inside a tile: a site pin reaching its
@@ -1219,10 +1307,14 @@ impl XrayDatabase {
                 if overridden.contains(&(ppip.to.as_str(), ppip.from.as_str())) {
                     continue;
                 }
+                let bits = enable_bits(&ppip.to, &ppip.from);
+                if !bits.is_empty() {
+                    stats.coverage.wire_enables += 1;
+                }
                 tile_type.pips.push(PipDecl {
                     from: WireRef::local(ppip.from.clone()),
                     to: WireRef::local(ppip.to.clone()),
-                    bits: Vec::new(),
+                    bits,
                 });
                 stats.fixed += 1;
             }
@@ -1241,6 +1333,11 @@ impl XrayDatabase {
                     stats.coverage.pass_throughs_unresolved += 1;
                     continue;
                 }
+                let extra = enable_bits(&pass.to, &pass.from);
+                if !extra.is_empty() {
+                    stats.coverage.wire_enables += 1;
+                    bits.extend(extra);
+                }
                 tile_type.pips.push(PipDecl {
                     from: WireRef::local(pass.from.clone()),
                     to: WireRef::local(pass.to.clone()),
@@ -1253,15 +1350,23 @@ impl XrayDatabase {
                     continue;
                 }
                 for (mine, theirs) in pairs.iter() {
+                    // Only `mine` is a wire of this tile type, so only
+                    // its enable can be charged here; the other end's
+                    // belongs to the tile at the other end and is
+                    // charged by that type's own joins.
+                    let bits = enables.get(mine.as_str()).cloned().unwrap_or_default();
+                    if !bits.is_empty() {
+                        stats.coverage.wire_enables += 2;
+                    }
                     tile_type.pips.push(PipDecl {
                         from: WireRef::local(mine.clone()),
                         to: WireRef::at(theirs.clone(), *dx, *dy),
-                        bits: Vec::new(),
+                        bits: bits.clone(),
                     });
                     tile_type.pips.push(PipDecl {
                         from: WireRef::at(theirs.clone(), *dx, *dy),
                         to: WireRef::local(mine.clone()),
-                        bits: Vec::new(),
+                        bits,
                     });
                 }
             }

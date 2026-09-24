@@ -790,7 +790,9 @@ mod tests {
                 for entry in &bel.config {
                     match entry {
                         ConfigEntry::Cell { bits, .. } => used.extend(bits.iter().copied()),
-                        ConfigEntry::Param { at, .. } => used.push(*at),
+                        ConfigEntry::Param { at, .. } | ConfigEntry::ParamZero { at, .. } => {
+                            used.push(*at);
+                        }
                     }
                 }
             }

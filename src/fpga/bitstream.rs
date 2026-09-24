@@ -634,6 +634,12 @@ pub fn generate(
                         bitstream.set(site.tile, *at)?;
                     }
                 }
+                ConfigEntry::ParamZero { name, index, at } => {
+                    let value = params.and_then(|p| p.get(name));
+                    if !param_bit(value, *index) {
+                        bitstream.set(site.tile, *at)?;
+                    }
+                }
             }
         }
     }

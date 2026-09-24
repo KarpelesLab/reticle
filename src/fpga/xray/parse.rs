@@ -644,6 +644,44 @@ pub(super) fn bels_of(
                 coverage.pins_unresolved += 1;
             }
         }
+        // What a cell of a given primitive costs, where this module
+        // knows: a flip-flop's mode, which the feature names below could
+        // not say by themselves because they are spelled in the
+        // database's vocabulary and not in the device file's.
+        let config = sites::bel_config(&tile.tile_type, prefix, sub);
+        for (primitive, names) in config.cells {
+            let mut bits = Vec::new();
+            let mut missing = false;
+            for name in &names {
+                match features.feature(name) {
+                    Some(feature) => bits.extend(feature.ones.iter().copied()),
+                    None => missing = true,
+                }
+            }
+            if missing {
+                coverage.modes_unresolved += 1;
+                continue;
+            }
+            bel.config.push(ConfigEntry::Cell {
+                primitive: primitive.to_owned(),
+                bits,
+            });
+            coverage.modes += 1;
+        }
+        for (param, index, name) in config.inverted {
+            let Some(feature) = features.feature(&name) else {
+                coverage.modes_unresolved += 1;
+                continue;
+            };
+            for at in &feature.ones {
+                bel.config.push(ConfigEntry::ParamZero {
+                    name: param.to_owned(),
+                    index,
+                    at: *at,
+                });
+            }
+            coverage.modes += 1;
+        }
         bels.insert(name, bel);
     };
     for prefix in &prefixes {
@@ -748,18 +786,69 @@ pub(super) fn bels_of(
         }
     }
 
+    // And the bels the prefix machinery cannot find at all, which today
+    // is the sixteen global clock buffers of a `CLK_BUFG_*` tile: they
+    // share one feature prefix and are told apart by its second
+    // component. See [`sites::extra_bels`].
+    for extra in sites::extra_bels(&tile.tile_type) {
+        let mut bel = BelDecl::new(extra.name.clone(), extra.kind);
+        for pin in extra.pins {
+            if wires.contains(pin.wire.as_str()) {
+                bel.pins
+                    .push((pin.role.to_owned(), WireRef::local(pin.wire)));
+                coverage.pins += 1;
+            } else {
+                coverage.pins_unresolved += 1;
+            }
+        }
+        for (primitive, names) in extra.cells {
+            let mut bits = Vec::new();
+            let mut missing = false;
+            for name in &names {
+                match features.feature(name) {
+                    Some(feature) => bits.extend(feature.ones.iter().copied()),
+                    None => missing = true,
+                }
+            }
+            if missing {
+                coverage.modes_unresolved += 1;
+                continue;
+            }
+            bel.config.push(ConfigEntry::Cell {
+                primitive: primitive.to_owned(),
+                bits,
+            });
+            coverage.modes += 1;
+        }
+        bels.insert(extra.name, bel);
+    }
+
     bels.into_values().collect()
 }
 
 /// What a slice sub-element is, in Reticle's bel vocabulary.
+///
+/// Only the four six-input lookup tables and the four flip-flops beside
+/// them become placeable elements, plus the carry chain. The five-input
+/// halves (`A5LUT`, `A5FF`) are real and are deliberately left out: a
+/// site this module cannot wire is a site the placer will fill and the
+/// router will then fail on, so offering eight flip-flops per slice when
+/// four can be reached would turn a clean refusal into a puzzle.
+/// `PRECYINIT` is left out for the same reason — it is the carry
+/// chain's input mux, not a second carry chain.
 fn slice_sub_kind(sub: &str) -> Option<&'static str> {
-    if sub.ends_with("LUT") {
+    const LETTERS: [&str; 4] = ["A", "B", "C", "D"];
+    if let Some(letter) = sub.strip_suffix("LUT")
+        && LETTERS.contains(&letter)
+    {
         return Some("lut");
     }
-    if sub.ends_with("FF") {
+    if let Some(letter) = sub.strip_suffix("FF")
+        && LETTERS.contains(&letter)
+    {
         return Some("ff");
     }
-    if sub == "CARRY4" || sub == "PRECYINIT" {
+    if sub == "CARRY4" {
         return Some("carry");
     }
     None

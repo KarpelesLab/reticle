@@ -203,8 +203,20 @@ fn a_slice_becomes_luts_flip_flops_and_a_carry() {
     let names: Vec<&str> = bels.iter().map(|b| b.name.as_str()).collect();
     assert!(names.contains(&"SLICEL_X0_ALUT"), "{names:?}");
     assert!(names.contains(&"SLICEL_X0_AFF"), "{names:?}");
-    assert!(names.contains(&"SLICEL_X0_PRECYINIT"), "{names:?}");
     assert!(names.contains(&"SLICEL_X0"), "{names:?}");
+    // `PRECYINIT` is the carry chain's input multiplexer, not a second
+    // carry chain, so it is deliberately not a placeable element: a site
+    // the loader cannot wire is one the placer would fill and the router
+    // would then fail on. The same reasoning leaves out the five-input
+    // halves. See `slice_sub_kind`.
+    assert!(
+        !names.contains(&"SLICEL_X0_PRECYINIT"),
+        "the carry input mux is not a placeable site: {names:?}"
+    );
+    assert!(
+        !names.iter().any(|n| n.ends_with("_A5FF")),
+        "the five-input flip-flop halves cannot be wired: {names:?}"
+    );
 
     let lut = bels.iter().find(|b| b.name == "SLICEL_X0_ALUT").unwrap();
     assert_eq!(lut.kind, "lut");
@@ -223,16 +235,40 @@ fn a_slice_becomes_luts_flip_flops_and_a_carry() {
             },
         ]
     );
-    // A mode feature keeps the database's own name for itself, because
-    // nothing here knows what Reticle would call it.
+    // A flip-flop carries its mode, its initial value and whatever
+    // feature the database names but Reticle has no word for.
+    //
+    // `FDPE` is the rising-edge form and takes no bit; `FDPE_1` is the
+    // falling-edge one and is the clock inverter. `INIT` is a
+    // `ParamZero` rather than a `Param` because the database stores it
+    // inverted — the feature is called `ZINI`, and the bit being *set*
+    // means the initial value is zero. Getting that the wrong way round
+    // starts a counter at the wrong end, which is why it is pinned here.
+    // `ZINI` also appears under its own name, because nothing in this
+    // module knows what Reticle would otherwise call it.
     let ff = bels.iter().find(|b| b.name == "SLICEL_X0_AFF").unwrap();
     assert_eq!(ff.kind, "ff");
     assert_eq!(
         ff.config,
-        vec![ConfigEntry::Cell {
-            primitive: "ZINI".to_owned(),
-            bits: vec![ConfigBit::new(31, 3)],
-        }]
+        vec![
+            ConfigEntry::Cell {
+                primitive: "FDPE".to_owned(),
+                bits: vec![],
+            },
+            ConfigEntry::Cell {
+                primitive: "FDPE_1".to_owned(),
+                bits: vec![ConfigBit::new(20, 1)],
+            },
+            ConfigEntry::ParamZero {
+                name: "INIT".to_owned(),
+                index: 0,
+                at: ConfigBit::new(31, 3),
+            },
+            ConfigEntry::Cell {
+                primitive: "ZINI".to_owned(),
+                bits: vec![ConfigBit::new(31, 3)],
+            },
+        ]
     );
     // The gap that stops a signal reaching any of them.
     assert!(bels.iter().all(|b| b.pins.is_empty()));
