@@ -97,11 +97,14 @@ reticle fpga --device xc7a35t-cpg236 --chipdb ~/prjxray-db \
     --bitstream sw_led.bit examples/basys3/sw_led.v
 ```
 
-The bitstream that command writes is structurally valid and **configures
-nothing** — it is not routed, for a reason
-[`docs/fpga-xray.md`](docs/fpga-xray.md) sets out along with everything
-else that is and is not established. `docs/fpga.md` says the same for
-the rest of the 7-series support.
+Two designs built that way have reached a real Basys 3: `sw_led`, which a
+person watched follow two switches, and `blink.v`, a 100 MHz pad clock
+through a global buffer into twenty-six flip-flops, which routed
+completely and configured the part with `DONE` high — nobody has watched
+its LED yet. A carry chain still does not route.
+[`docs/fpga-xray.md`](docs/fpga-xray.md) sets out exactly what is and is
+not established, and `docs/fpga.md` says the same for the rest of the
+7-series support.
 
 ### Loading one into a board
 

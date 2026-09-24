@@ -382,9 +382,20 @@ FPGA:
       question no test could: Vivado's own bitstream sets 1315 bits that
       nothing in the database names, and for a design of this shape they
       are not needed. **That is one lookup table and three LVCMOS33 pins
-      on one board.** Nothing larger has been tried on a part, and
-      nothing with a clock, a flip-flop or a memory can be built for one
-      yet.
+      on one board.** Nothing larger has been watched working.
+- [x] **A clocked design routes and the part takes it.** On 2026-09-24
+      `blink` — the Basys 3's 100 MHz oscillator through a `BUFG`, down
+      the global clock column, along a leaf network into twenty-six
+      flip-flops, one LED off bit 25 — routed completely (92 of 92
+      signals) and configured the board with `DONE` high and no CRC
+      error. Every feature it puts on the clock pin, on the pad's hop
+      into the clock backbone and on the `BUFGCTRL` is identical to what
+      Vivado put there for the same pin of the same board; the clock row
+      and the rebuffers differ because the two designs drive different
+      halves of the die. **Nobody has watched that LED yet**, so what a
+      clock does on silicon is still unconfirmed. What still cannot be
+      routed is a carry chain — the reason is packing, not a missing
+      table — and a memory. See `docs/fpga-xray.md`.
 - [x] The other half of that sentence: a **JTAG programmer**, so a
       bitstream can be loaded into a board without a vendor tool.
       `reticle program <file.bit>` drives an FTDI FT2232H over USB and

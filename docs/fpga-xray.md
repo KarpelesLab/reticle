@@ -12,9 +12,8 @@ tool took part at any step.
 That is one design, of one lookup table and three pins, on one board. It
 establishes that the chain from Verilog to configured silicon closes.
 **It does not establish that anything larger works**, and the list at the
-end of this document of what is untried on a part — anything with a
-clock, a flip-flop, a memory, a carry chain, or an IO standard other than
-LVCMOS33 — is unchanged by it.
+end of this document of what is untried on a part — a memory, a carry
+chain, or an IO standard other than LVCMOS33 — is unchanged by it.
 
 Before the cable, the strongest statement available was a comparison, and
 it is still worth having because it is what predicted the result:
@@ -55,6 +54,32 @@ What is **not** established is that any of it configures anything *on
 silicon*. The gaps are named below under *What remains before an LED
 could light*.
 
+## And a second, clocked one, which the part accepted
+
+The same day, `examples/basys3/blink.v` — the board's 100 MHz oscillator
+through a `BUFG`, down the global clock column, out along a leaf network
+into twenty-six flip-flops, and one LED off the top bit — was built by
+this flow, **routed completely** (92 of 92 signals), loaded onto the same
+board, and the part answered `DONE` high with no CRC error.
+
+**Nobody has watched that LED.** The design should blink LED 0 at 1.49 Hz
+and whether it does is not known here; a configured part that does
+nothing looks exactly like this from the cable's end. So the honest
+statement is: a clocked design of this shape routes, assembles into a
+`.bit` every bit of which the database can name, and configures the part
+without complaint. Whether the clock arrives is the next thing a person
+with the board can settle in one glance.
+
+What *is* checked, and is the reason to expect it to work, is the same
+comparison that predicted the first milestone, now over the clock:
+decoded back into feature names, the configuration this flow puts on the
+clock pin, on its hop into the clock backbone, and on the `BUFGCTRL` is
+**identical, feature for feature, to what Vivado put there** for the very
+same pin of the very same board. The one clock row and the rebuffers
+differ because the two designs drive different halves of the die, and the
+differences are enumerated below. That comparison is
+`tests/fpga_xray.rs::the_clock_path_is_the_one_vivado_built`.
+
 ## Getting the database
 
 Reticle never fetches anything. The library is sans-I/O: the database
@@ -82,6 +107,13 @@ reticle fpga --device xc7a35t-cpg236 \
     --constraints examples/basys3/sw_led.rcf \
     --bitstream sw_led.bit \
     examples/basys3/sw_led.v
+
+# and the clocked one, which loads the clock column as well and takes a
+# few seconds longer:
+reticle fpga --device xc7a35t-cpg236 \
+    --constraints examples/basys3/blink.rcf \
+    --bitstream blink.bit --report \
+    examples/basys3/blink.v
 ```
 
 `--chipdb <dir>` names the database explicitly; `RETICLE_CHIPDB` is the
@@ -350,6 +382,8 @@ quietly substituting a different one is how a board gets damaged.
 `examples/basys3/sw_led.v`: two slide switches through one LUT to LED 0.
 Combinational, three IO buffers, one LUT, no clock, no global buffer.
 Verified — when it can be verified — by a human flipping a switch.
+`examples/basys3/blink.v` is the clocked one; it has its own section
+below.
 
 A plain `assign led = sw` would not serve. Synthesis turns that into a
 wire, no LUT survives, and nothing carries a truth table into the
@@ -430,17 +464,104 @@ frames are written in an order the configuration engine accepts for a
 full reconfiguration, or that anything else in the 2 192 115 bytes is
 right.
 
+## The clocked design, and how its clock crosses the die
+
+`examples/basys3/blink.v`: the board's 100 MHz oscillator on pin W5,
+through a `BUFG`, into a 26-bit counter, with bit 25 on LED 0 — 1.49 Hz,
+evenly on and off. It maps to one `BUFG`, twenty-six `FDRE` and
+sixty-four `LUT6` three deep, places on real sites, and **routes
+completely**: 92 of 92 signals, 2731 pips, congestion resolved in five
+iterations. The only pins the fabric gives no wire are the two package
+pads, which are balls rather than wires.
+
+The clock's path, and the resources it needs, each of which had to be
+described before any of it moved:
+
+| Stage | What carries it |
+|---|---|
+| the pad | `RIOB33_X43Y25`, `IOB_Y0`: the ordinary LVCMOS33 input recipe |
+| the input logic | `RIOI3_X43Y25`, `ILOGIC_Y0.ZINV_D`, then the `I2GCLK` hop `ppips_rioi3.db` records as free |
+| into the backbone | across the `HCLK` row on `CCIO0` to `HCLK_CMT_L_X106Y26`, where `HCLK_CMT_CK_IN0` costs `HCLK_CMT_CCIO0_ACTIVE` and `_USED` |
+| to the buffer | westwards to `CLK_HROW_BOT_R_X60Y26`, out on `CK_BUFG_CASCO0` (which costs `CLK_HROW_CK_IN_R0_ACTIVE`), up the column to `CLK_BUFG_BOT_R_X60Y48` |
+| the buffer | `BUFGCTRL_X0Y0`: `IN_USE`, `IS_IGNORE1_INVERTED`, `ZINV_CE0`, `ZINV_S0` |
+| down the column | `GCLK0` through `CLK_BUFG_REBUF_X60Y38`, which cuts the track: the `BOT` ← `TOP` pip plus both `GCLK0_ENABLE_*` bits |
+| the clock row | back at `CLK_HROW_BOT_R_X60Y26`: `CK_MUX_OUT_L0` from `R_CK_GCLK0`, `CLK_HROW_R_CK_GCLK0_ACTIVE`, and `BUFHCE_X0Y0`'s `IN_USE` and `ZINV_CE`, out on `CK_BUFHCLK_L0` |
+| the leaves | westwards along the row's `L` half on `HCLK_CK_BUFHCLK0`, tapped in four `HCLK_R` tiles (`ENABLE_BUFFER.HCLK_CK_BUFHCLK0` each) and down `GCLK_B0` into the interconnect |
+| the slices | `CLK_L0` / `CLK_L1` / `CLK0` from `GCLK_*_B0`, then `CLBLM_CLK0` to the slice's `CLK` pin, which `ppips` gives free |
+
+Two of those stages are not pips and are what a clock needs beyond
+routing. The first is the **wire that costs bits to be touched** —
+`_ACTIVE`, `_USED`, `ENABLE_BUFFER.*` — which `xray::sites`'s
+`wire_enable_features` finds by rule rather than by table. The second is
+the **rebuffer enable**, which is the one bit in this whole module that
+belongs to no pip at all: a global clock track is cut at every
+`CLK_BUFG_REBUF` of its column, a route crosses exactly one of them, and
+the others are tiles the route never enters. `XrayFabric::enable_global_clocks`
+switches those on over the whole column once the routing is known, which
+is nextpnr-xilinx's rule; which of the two enables belongs to which side
+of a cut is measured from all four Vivado harness designs and asserted by
+`the_rebuffer_enables_pair_with_the_ends_vivado_marks`.
+
+### The oracle again, on the clock
+
+The Basys 3 harness drives *its* clock from the same pin, W5, so the
+comparison is exact where the two designs want the same thing.
+
+| Tile | Vivado | Reticle |
+|---|---|---|
+| `RIOB33_X43Y25` (W5) | `IOB_Y0`: `IN_ONLY`, `IN`, `PULLTYPE.NONE` | **identical** |
+| `RIOI3_X43Y25` | `ILOGIC_Y0.ZINV_D` | **identical** |
+| `HCLK_CMT_L_X106Y26` | `HCLK_CMT_CCIO0_ACTIVE`, `_USED`, `CK_IN0.CCIO0` | **identical** |
+| `CLK_BUFG_BOT_R_X60Y48` | four `BUFGCTRL_X0Y0` bits, `BUFGCTRL0_I0.CK_MUXED0`, `CK_GCLK0.BUFGCTRL0_O` | **identical, all six** |
+| `CLK_HROW_BOT_R_X60Y26` | the two features of the row the pad arrives at | those two **and** the four Vivado puts in `CLK_HROW_TOP_R_X60Y130` |
+| `CLK_HROW_TOP_R_X60Y130` | `BUFHCE_X0Y0.IN_USE`, `ZINV_CE`, `CK_MUX_OUT_L0.R_CK_GCLK0`, `R_CK_GCLK0_ACTIVE` | nothing |
+| `CLK_BUFG_REBUF_X60Y38` | `GCLK0_ENABLE_BELOW` | that, plus `GCLK0_ENABLE_ABOVE` and the `BOT` ← `TOP` pip |
+| `CLK_BUFG_REBUF_X60Y13` | nothing | both enables |
+| `CLK_BUFG_REBUF_X60Y65` | the `TOP` ← `BOT` pip and both enables | nothing |
+| `HCLK_R_*`, `INT_*` | `HCLK_LEAF_CLK_B_BOT5`, `CLK_L1.GCLK_L_B5` | the same shapes on other tiles and `GCLK0` |
+
+Six rows of that table differ, and they differ for four reasons. None of
+the four is an error:
+
+- **The clock region.** The harness's loads are in the die's top clock
+  region and blink's are in the bottom one. Each design drives the row
+  its flip-flops hang off, so the same four features land in
+  `CLK_HROW_BOT_R_X60Y26` here and in `CLK_HROW_TOP_R_X60Y130` there.
+  Both use `BUFHCE_X0Y0` and `CK_MUX_OUT_L0`, which is the one place the
+  buffer-index mapping in `sites.rs` is corroborated at all.
+- **The direction down the column.** For the same reason the clock leaves
+  the buffer downwards here and upwards there, so blink takes the `BOT` ←
+  `TOP` rebuffer pip that no harness design takes, and the enable pattern
+  is the mirror image of theirs.
+- **`CLK_BUFG_REBUF_X60Y65`, which Reticle leaves alone.** Vivado marks
+  *both* ends of every live segment of the track, and the segment holding
+  the buffer runs from `Y38` up to `Y65`. `Y65` is outside the rectangle
+  of tiles this load covers — the region is the pins grown to reach the
+  nearest `BUFGCTRL`, not the whole column — so there is no tile there to
+  set a bit in. **This is the one difference on the clock path that is
+  not clearly a free choice.** The segment is driven from the buffer in
+  the middle and consumed at `Y38`, whose own enable is set, so nothing
+  in the model says the far end matters; that it does not is an
+  assumption, and the way to remove it is to make the loaded region
+  include the whole rebuffer column rather than a rectangle.
+- **The leaf tiles.** A leaf network taps the horizontal clock beside the
+  interconnect column it feeds, so which `HCLK_R` and which `GCLK_*_B<n>`
+  differ by construction. The test asserts the shape — every `HCLK_*`
+  feature is either the buffer enable or a `HCLK_LEAF_CLK_B_*` pip — and
+  not the tile.
+
 ## What remains before an LED could light
 
 In rough order of how much stands behind each.
 
-1. **A programmer, and a board.** This is now the top of the list rather
-   than the bottom, which is the real change. None is installed here.
-   When one is: load `artix7/harness/basys3/swbut/design.bit` first and
-   confirm the board and the cable work, then load a Reticle bitstream
-   and find out.
+1. **Somebody looking at the board.** `reticle program` exists, the
+   cable works, and `blink.bit` configures the part with `DONE` high.
+   What is missing is a pair of eyes: LED 0 either blinks about three
+   times every two seconds or it does not, and that single observation is
+   worth more than anything else on this list.
 2. **Everything outside the tiles that were compared.** The oracle
-   covers the IO path. It says nothing about the 5420-frame image as a
+   covers the IO path and the clock path. It says nothing about the
+   5420-frame image as a
    whole: whether the unconfigured tiles need bits Vivado sets and
    Reticle does not, whether a tile type has a "default" configuration
    that a zero-filled frame does not give it, or whether the
@@ -461,27 +582,57 @@ In rough order of how much stands behind each.
    but also, very likely, configuration a real part needs and this one
    does not have. That is the largest known unknown, and no amount of
    structural checking will close it.
-3. **Anything with a clock.** A flip-flop has no `D` pin in these tables
-   — its `D` is fed from inside the slice and has no tile wire of its
-   own — and there is no global buffer, no clock tree, no `BUFGCTRL`
-   and no `CLK_HROW` routing. A sequential design will not route.
-4. **Feature-name to primitive-name mapping.** The loader still emits
+3. **A carry chain.** This is now the biggest hole in what the loader can
+   route, and it is not a missing table — it is packing. Three things
+   stand in the way and each is a real piece of work:
+
+   - **`S` has no tile wire.** A `CARRY4`'s four propagate inputs are
+     wired inside the slice to the four lookup tables' `O6` outputs and
+     reach no wire the interconnect can drive. `ppips_clbll_l.db` lists
+     `CLBLL_LL_A.CLBLL_LL_A1 hint`, which is the lookup table used as a
+     wire, and taking a `hint` means putting a cell on that lookup table.
+     So every bit of the propagate needs a lookup table **in the same
+     slice at the same position**, which the placer cannot express: it
+     places bels independently and its only relative-placement mechanism,
+     the `rloc` macro, works in whole tiles.
+   - **The chain must run up one column.** `CIN` comes only from the
+     `COUT` of the slice below (`tileconn` joins `CLBLL_LL_CIN` to the
+     next tile's `CLBLL_LL_COUT_N`), so a seven-element chain needs seven
+     vertically adjacent slices of the same half. Nothing in the placer
+     knows that, and annealing for wirelength does not produce it.
+   - **`CYINIT` is a constant.** An incrementer's carry in is a one, and
+     the bit that says so is `PRECYINIT.C1` — a feature that depends on a
+     *pin being tied to a constant*, which `ConfigEntry` has no variant
+     for. `PRECYINIT.CIN` for the rest of the chain would fit the
+     existing pass-through mechanism; `C1` would not.
+
+   What does work is mapping: `count + 1` becomes seven `CARRY4` with the
+   right wiring, `tests/fpga_carry.rs` proves the chain against the
+   primitive's own model, and the Vivado export path uses it. It is only
+   this loader's placement and routing that cannot. `examples/basys3/blink.v`
+   therefore spells its increment out as a toggle chain, which
+   `the_blink_designs_toggle_chain_is_an_increment` proves equal to
+   `count + 1`, and says so in its header.
+4. **A memory, and a `SLICEM`.** Nothing has looked at `RAMB18E1` or at
+   the distributed RAM features of a `SLICEM`, so a design with either
+   will not route.
+5. **Feature-name to primitive-name mapping.** The loader still emits
    `ConfigEntry::Cell { primitive: "ZINI", .. }` for a flip-flop feature
    because `ZINI` is what the database calls it; Reticle's primitive is
    `FDRE` with `INIT=1'b0`. Nothing connects the two. The IO buffers
    work because `sites.rs` gathers their features under the names `IBUF`
    and `OBUF` explicitly; nothing else does.
-5. **IO standards other than LVCMOS33, and tristate.** `OBUFT` and
+6. **IO standards other than LVCMOS33, and tristate.** `OBUFT` and
    `IOBUF` need `OLOGIC` `T` features that have not been measured, so
    the `io` bel declares no `oe` pin and a tristate design will not
    route. Other standards are refused rather than approximated.
-6. **Six million `String`s.** The routing graph holds the whole die in
+7. **Six million `String`s.** The routing graph holds the whole die in
    1386 MiB, most of it wire names. Interning those is what makes
    whole-die routing comfortable rather than merely possible.
 
-Until at least 1 and 2 are done, what this flow writes is a bitstream
-whose IO configuration matches a working one and which has never
-configured anything.
+Until 1 is done, what this flow writes for a clocked design is a
+bitstream whose every feature on the clock path matches a working one and
+whose effect on silicon nobody has seen.
 
 ## Where the code is
 
@@ -490,10 +641,11 @@ configured anything.
 | `src/fpga/xc7.rs` | the UG470 container: frames, packets, the frame address register, the CRC, the `.bit` wrapper, a reader |
 | `src/fpga/xray/mod.rs` | the loader: the database as an `Arch` plus a `FrameMap`, with the region and the measurement |
 | `src/fpga/xray/parse.rs` | one reader per file of the database |
-| `src/fpga/xray/sites.rs` | the inside of a site: pin names from UG474 and UG471, the wire each sits on, the orientations the database only implies, and the IO recipe read off Vivado's own bitstream |
+| `src/fpga/xray/sites.rs` | the inside of a site: pin names from UG474 and UG471, the wire each sits on, the orientations the database only implies, the IO recipe read off Vivado's own bitstream, and the clock tables — the `BUFGCTRL`, the `BUFHCE` of a clock row, the wires that cost bits to touch and the rebuffer enables |
+| `XrayFabric::enable_global_clocks` | the one bit that belongs to no pip: a global clock's rebuffer enables, over the whole column, once the routing is known |
 | `src/fpga/devices/xc7.dev` | the device: primitives, pins, and now the IDCODE |
 | `tests/fpga_xray.rs` | everything above, against the real database, skipping without it |
-| `examples/basys3/` | the milestone design and its constraints |
+| `examples/basys3/` | the two designs that have reached a part, and their constraints |
 | `XrayDatabase::decode` | the other direction: a bitstream back into the database's feature names, with an accounting of every bit it could not name |
 
 `src/fpga/arch/synthetic.rs` is untouched and still says what it always

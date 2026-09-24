@@ -209,6 +209,8 @@ makes.
 
 The programmer was proved first, against a file known to be good, so
 that it could not be confused with the bitstream side. On 2026-09-24 it
-then loaded one of Reticle's own: a lookup table and three pins, which a
-person watched drive an LED from two switches. `docs/fpga-xray.md` says
-what that does and does not establish about the bitstream side.
+then loaded two of Reticle's own: a lookup table and three pins, which a
+person watched drive an LED from two switches, and `blink`, a clocked
+counter, which the part accepted with `DONE` high and which nobody has
+watched blink. `docs/fpga-xray.md` says what each does and does not
+establish about the bitstream side.
