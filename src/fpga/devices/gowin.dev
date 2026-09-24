@@ -1,0 +1,634 @@
+# Gowin GW2A, as much of it as Reticle can state confidently. One part:
+# the GW2A-LV18PG256C8/I7 of a Sipeed Tang Primer 20K.
+#
+# NOTHING BUILT FROM THIS FILE HAS BEEN LOADED INTO A PART. The board is
+# on the machine and `reticle program --device "FactoryAIOT Pro" --expect
+# 0000081b --probe` reads its JTAG IDCODE over its FT2232D adapter, and
+# that is the whole of what has touched the hardware. No design has been
+# placed on it, no bitstream has been sent to it, and the JTAG
+# configuration sequence that would send one is not written. Compare
+# `xc7.dev`, where one design of one lookup table and three pins has run
+# on a Basys 3; there is no equivalent sentence here and this file must
+# not be read as if there were.
+#
+# What the test suite does check is that the netlist a design synthesises
+# to holds only primitives this file declares, wired to pins they have,
+# and — separately, in `tests/fpga_gowin.rs` — that the fabric
+# `fpga::apicula` loads out of Project Apicula's own chip database has the
+# resources the counts below claim. Several of those counts are
+# *measured from that database* rather than transcribed, which is said
+# where it is true.
+#
+# Provenance and confidence, stated per group because it differs:
+#
+#   * THE RESOURCE COUNTS ARE MEASURED, NOT RECALLED. 20736 LUT4, 15552
+#     flip-flops, 15552 ALUs, 648 distributed RAMs, 384 IO buffers, 46
+#     block RAMs, 12 DSP blocks and 4 PLLs are what you get by counting
+#     the bels of every tile of `GW2A-18.msgpack.xz`'s 55 x 56 grid, and
+#     `tests/fpga_gowin.rs::the_fabric_measures_itself_and_the_documented_ones`
+#     re-counts them from the database so they cannot drift. They agree
+#     with Gowin's published figures for a GW2A-18 (20736 LUT4, 15552
+#     registers, 828 kbit of block RAM as 46 x 18 kbit, 48 18x18
+#     multipliers in 12 blocks, 4 rPLLs). HIGH confidence.
+#   * LUT4: four inputs I0..I3, output F, a 16-bit INIT, and the model is
+#     `F = INIT[{I3,I2,I1,I0}]` with I0 the least significant bit of the
+#     index. HIGH confidence for the pins: the chip database's own bel
+#     portmap for every one of a tile's eight LUTs is
+#     `{'F': 'F<n>', 'I0': 'A<n>', 'I1': 'B<n>', 'I2': 'C<n>', 'I3':
+#     'D<n>'}`, read from the file rather than from a document. That is
+#     also Reticle's own LUT convention, so a mapped truth table is
+#     written out unchanged and the `i=` list below is in pin order.
+#     `lut_size` is 4, which is the same technology-mapping path the
+#     iCE40 and the ECP5 already use.
+#     LUT1..LUT3 are declared too, with their own INIT widths, because
+#     `gowin_pack` accepts them (it has a `get_LUT1_fuses` and so on) and
+#     a netlist check should know them; Reticle itself always emits LUT4,
+#     since [`super::techcells`] widens a narrower table by repeating it.
+#     A NOTE ON THE POLARITY OF THE BITS, which is not visible here and
+#     matters: on this family a configuration fuse is set when an INIT
+#     bit is ZERO. That lives in `fpga::apicula`, which emits
+#     `ConfigEntry::ParamZero`, and it is read off
+#     `gowin_pack.py::get_LUT4_fuses` (`if lutbit == '0': bits.update(
+#     lutmap[bitnum])`). Getting it backwards inverts every lookup table
+#     in a design.
+#   * MUX2_LUT5, MUX2_LUT6, MUX2_LUT7 and MUX2_LUT8 are declared `other`.
+#     They are the wide multiplexers that combine two, four, eight or
+#     sixteen LUT4s, and `gowin_pack` sets no fuses for them at all
+#     (`get_MUX2_LUT5_fuses` returns an empty list) because the
+#     multiplexer is hard-wired between the LUTs. Reticle has no wide-mux
+#     mapping, so it never instantiates one.
+#   * FLIP-FLOPS. Twenty primitives: DFF, DFFE, DFFR, DFFRE, DFFS,
+#     DFFSE, DFFC, DFFCE, DFFP, DFFPE and a DFFN* twin of each that
+#     captures on the FALLING clock edge. HIGH confidence in the NAMES —
+#     that list is exactly the set of `get_DFF*_fuses` methods
+#     `apycula/gowin_pack.py` implements, which is the set of cell types
+#     the reference packer accepts. MEDIUM-HIGH confidence in the PORT
+#     NAMES (D, CLK, Q, CE, and SET / RESET / PRESET / CLEAR): those are
+#     Gowin's *Primitives User Guide* SUG283, which is documentation
+#     rather than a source this machine checked. The four set/reset kinds
+#     map as RESET synchronous-reset, SET synchronous-set, CLEAR
+#     asynchronous-reset, PRESET asynchronous-set, which is also what the
+#     database's `REG0_REGSET` attribute (values `RESET` and `SET`) and
+#     its `SRMODE` attribute (values `ASYNC` and `LSR_OVER_CE`) say
+#     between them.
+#     THREE CONSEQUENCES WORTH STATING PLAINLY:
+#       - A flip-flop with no clock enable is a *different primitive*
+#         from one with an enable, not the same one with CE tied high,
+#         so each combination is its own line and there are twenty.
+#       - There is no combination of a synchronous and an asynchronous
+#         set/reset on one Gowin flip-flop, and none with both a set and
+#         a reset. One kind per flop.
+#       - Every control pin is active high. An active-low reset costs one
+#         LUT4 inverter per net, which is what flip-flop mapping inserts
+#         and reports. (The fabric *can* invert: the database's
+#         `LSR_MUX_LSR` attribute takes the value `INV`. Using it would
+#         need the attribute names the database does not carry — see
+#         `docs/fpga-gowin.md` — so no `active_low` line is declared.)
+#     `shared_reset` IS SET, AND IT IS MEASURED. A logic tile holds six
+#     flip-flops in three pairs, and the database's own portmaps say the
+#     pairs share their control: DFF0 and DFF1 are both
+#     `{'CLK': 'CLK0', 'LSR': 'LSR0', 'CE': 'CE0'}`, DFF2 and DFF3 both
+#     `CLK1/LSR1/CE1`, DFF4 and DFF5 both `CLK2/LSR2/CE2`. So two flops
+#     with different control sets cannot be packed together. HIGH
+#     confidence; this was read out of the file.
+#     `init` is deliberately absent from the `ff` line, and so is
+#     `param INIT=`: the power-up value follows from which primitive is
+#     chosen (DFFR and DFFC to zero, DFFS and DFFP to one) and whether
+#     the Gowin library also accepts an `INIT` parameter on these
+#     primitives was not verified here, so none is written.
+#     A GAP THAT MATTERS FOR ROUTING, NOT FOR THIS FILE: a Gowin
+#     flip-flop's D input comes from the LUT beside it *inside* the
+#     slice and has no tile wire of its own, exactly as a 7-series
+#     `AFF`'s does not. The database's flip-flop portmap has no `D` at
+#     all. Until packing can place a LUT and a flip-flop on one slice,
+#     nothing sequential will route on the fabric `fpga::apicula` builds.
+#   * NO CARRY CHAIN IS DECLARED, and ALU is declared `other`. This is a
+#     choice with a reason, and it is the same shape of reason `xc7.dev`
+#     gives for leaving out the DSP48E1.
+#     Gowin's carry element is the ALU, and the database gives its pins:
+#     `{'COUT', 'CIN', 'SUM': 'F<n>', 'I0', 'I1', 'I3'}` — note that it
+#     has no I2, which is tied inside — and twelve modes, keyed `0`, `1`,
+#     `2`, `3`, `4`, `6`, `7`, `8`, `9`, `C2L`, `ONE2C` and `hadder`.
+#     Apicula's `doc/alu.md` names them: 0 add, 1 sub, 2 addsub, 3 ne, 4
+#     ge, 5 le (which shares 4's pattern, hence its absence), 6 cup, 7
+#     cdn, 8 cupcdn, 9 mul.
+#     In ADD mode the ALU computes `SUM = I0 ^ I1 ^ CIN` and
+#     `COUT = MAJ(I0, I1, CIN)` — a full adder taking the two OPERANDS.
+#     Reticle's `.dev` model has two carry shapes and the ALU is neither:
+#     the one-bit shape (`ci i0 i1 co`, the iCE40's SB_CARRY) computes
+#     only the carry and expects a *separate* LUT to compute the sum,
+#     and the wide shape (`ci cyinit p di s co`, the 7-series CARRY4)
+#     takes a PROPAGATE `p = a ^ b` that a separate LUT computes. The
+#     Gowin ALU is the slice's LUT4 reconfigured, so there is no
+#     separate LUT to put either in — the sum comes out of the same
+#     element. Declaring the ALU under either shape would produce a
+#     netlist with a LUT4 and an ALU competing for one slice, which the
+#     placer cannot satisfy and which no structural check would notice.
+#     So adders stay in LUT4s: correct, and large. Teaching the model a
+#     "carry element that also produces the sum" is the fix, and it is
+#     not done here.
+#   * IO BUFFERS. IBUF (pad `I`, fabric `O`) and OBUF (fabric `I`, pad
+#     `O`) are declared and mapped. HIGH confidence: Gowin's buffer
+#     convention is that `I` is the buffer's input and `O` its output,
+#     and it is confirmed by Project Apicula's own example designs, which
+#     are built for this very board — `examples/blinky-tbuf.v`
+#     instantiates `TBUF(.I, .O, .OEN)`, `examples/emcu-blinky.v`
+#     instantiates `IOBUF(.O, .IO, .I, .OEN)` and `examples/elvds.v`
+#     instantiates `ELVDS_TBUF(.I, .O, .OB, .OEN)`.
+#     TBUF AND IOBUF ARE DECLARED `other` AND NEVER INSTANTIATED, for a
+#     specific reason: their output enable is `OEN` and it is ACTIVE LOW
+#     — every one of those examples writes `.OEN(~key)` or
+#     `.OEN(~gpio_oen[0])`. Reticle's `oe` role is active high and the
+#     `.dev` model has no way to say otherwise, so declaring `oe=OEN`
+#     would give every tristate design an inverted enable: a bus that
+#     drives when it should listen. A tristate port is therefore
+#     reported as unbuildable rather than built backwards. Adding an
+#     `active_low` marker to the `io` line is the fix.
+#     There is no `pad` wire in the fabric either way: a package ball is
+#     not a wire a router can reach, which is what `fpga::xray` says
+#     about the 7-series IO too.
+#     THE DIFFERENTIAL BUFFERS — TLVDS_IBUF, TLVDS_OBUF, TLVDS_TBUF,
+#     TLVDS_IOBUF and the ELVDS_* four the database lists in its
+#     `diff_io_types` field — are declared `other`. Reticle's
+#     constraints model names one pin per port and cannot state a pin
+#     *pair*, so it cannot check that `tmds_d_p[0]` and `tmds_d_n[0]` are
+#     the two halves of one differential pad. The Tang Primer 20K dock's
+#     HDMI connector is exactly this, and it is out of reach until the
+#     model grows a pair.
+#   * NO CONFIGURATION BITS FOR ANY OF THEM. This is the largest gap and
+#     it belongs in this file's account even though it is not a property
+#     of this file. A Gowin bel's configuration is a set of attribute
+#     values (`IO_TYPE=LVCMOS33`, `PULLMODE=NONE`, `REGMODE=FF`), and
+#     the chip database encodes those as small integer *codes* whose
+#     NAMES are not in the file — they are Python dictionaries in
+#     `apycula/attrids.py`. So `fpga::apicula` configures no bel but the
+#     LUT4, whose bits are named by position instead. A bitstream from
+#     this flow would route a signal to a pad and leave the pad
+#     unconfigured. See `docs/fpga-gowin.md`.
+#   * IO STANDARDS. LVCMOS33, LVCMOS25, LVCMOS18, LVCMOS15, LVCMOS12 and
+#     LVTTL33 are listed. HIGH confidence for the NAMES: they are values
+#     of the database's own `IO_TYPE` attribute
+#     (`attrids.iob_attrvals`), and LVCMOS33 is what Apicula's
+#     `examples/primer20k.cst` uses for every ordinary pin of this board.
+#     HIGH confidence that the slew rates are SLOW and FAST, which are
+#     the only two values of the `SLEWRATE` attribute. MEDIUM confidence
+#     for the DRIVE LISTS per standard: the attribute takes many numeric
+#     values and which are legal with which standard was not read off
+#     anything here. Since this flow writes no IO bits at all, a wrong
+#     drive list can only accept or refuse a constraint, never
+#     mis-configure a pad.
+#     THE DIFFERENTIAL STANDARDS (LVDS25, LVDS25E and the rest) ARE NOT
+#     LISTED, for the pin-pair reason above.
+#   * IO BANKS. Eight, `bank0` .. `bank7`, and which ball is in which is
+#     MEASURED: the database's `pin_bank` field maps every `IOLOC` to a
+#     bank number and the `pin` lines below carry it. HIGH confidence.
+#     THE `vccio` LISTS ARE THE PART'S OPTIONS AND NOT THE BOARD'S
+#     WIRING. Every bank is listed as accepting 3.3, 2.5, 1.8, 1.5 and
+#     1.2 volts because the part does. What a Tang Primer 20K dock
+#     actually ties each bank's VCCIO to is not known here, and Reticle
+#     has no way to find out, so a constraint asking for LVCMOS18 on a
+#     bank the board wired to 3.3 V will be accepted. DO NOT READ THESE
+#     LISTS AS BOARD TRUTH. (`xc7.dev` does the opposite — one bank at
+#     3.3 V, because a Basys 3's schematic says so — and the difference
+#     is that a schematic was available there.)
+#   * PIN LIST: COMPLETE FOR THE PACKAGE'S IO BALLS, AND MEASURED. All
+#     207 lines below are the database's own `pinout['GW2A-18']
+#     ['PBGA256']` table, generated from it rather than typed: the ball
+#     name, the bank `pin_bank` puts it in, and in a trailing comment the
+#     special functions the table records for it. The package has 256
+#     balls and the other 49 are power and ground, which the table does
+#     not carry and this file does not list, so the list says `pins`
+#     rather than `pins partial`. HIGH confidence.
+#     A ball is marked `clock` when the database gives it a `GCLKT_n` or
+#     `GCLKC_n` function — sixteen of them, the true and complement
+#     halves of eight differential global clock inputs — and `config`
+#     when it gives it a JTAG, mode, or configuration-flash function.
+#     Those twenty-one `config` balls can usually be used as ordinary IO
+#     and this file does not forbid it; it marks them so a constraint
+#     that lands on `TCK` is visible.
+#     WHAT THIS FILE DOES NOT SAY IS WHICH BOARD NET EACH BALL REACHES.
+#     `xc7.dev` lists Digilent's published board file and can therefore
+#     say "V17 is slide switch 0"; there is no equivalent line here,
+#     because nothing on this machine holds a Tang Primer 20K schematic.
+#     What *is* available, and is used by `tests/fpga_gowin.rs`, is
+#     Project Apicula's own `examples/primer20k.cst`, the constraint file
+#     its `make primer20k` target builds every one of its example designs
+#     with: it names C13, A13, N16, N14, L14 and L16 as the dock's six
+#     user LEDs, T3 as a button, H11 as the clock, and A15/D14 as the
+#     UART pair. Those are cited in the test rather than written into
+#     this file, because a board file is not a device description.
+#   * GLOBAL CLOCKS: eight, and NO CLOCK BUFFER PRIMITIVE IS DECLARED.
+#     `global_buffers 8` is the eight differential global clock inputs
+#     the package's own pinout names (`GCLKT_0` .. `GCLKT_7` with their
+#     `GCLKC_n` complements) — measured, HIGH confidence.
+#     Unlike the iCE40's SB_GB or the ECP5's DCCA there is no `gb` bel,
+#     and that is not an omission: on this family a clock enters the
+#     global network *by being routed onto it*, not by instantiating a
+#     buffer. The database says so — the 14 748 entries of its `nodes`
+#     table, 6306 of whose members are typed `GLOBAL_CLK`, are the
+#     network — and a GW2A-18 has no `BUFG` bel anywhere in its grid
+#     (`gowin_pack` has a `get_BUFG_fuses`, but for the GW5 series).
+#     The things that *do* sit on the clock network — DQCE, DCS, DHCEN,
+#     CLKDIV, CLKDIV2 — are declared `other` below so a netlist check
+#     knows them.
+#   * PLL: one line, rPLL, and IT IS DELIBERATELY NOT CONFIGURABLE.
+#     The ports and parameters are HIGH confidence, read off Apicula's
+#     own `examples/clock-rPLL.v`: CLKIN, CLKFB, CLKOUT, CLKOUTP,
+#     CLKOUTD, CLKOUTD3, LOCK, RESET, RESET_P, and the six-bit IDSEL,
+#     FBDSEL and ODSEL dynamic-select buses, with `CLKFB_SEL="internal"`
+#     and CLKFB tied low for the ordinary internal-feedback case. The
+#     frequency limits are HIGH confidence for a different reason: they
+#     are `apycula/gowin_pll.py`'s own table for `GW2A-18 C8/I7`, which
+#     cites Gowin's DS117E / DS861E / DS226E — phase detector 3 to 500
+#     MHz, VCO 500 to 1250 MHz, output 3.90625 to 625 MHz.
+#     The dividers are `IDIV_SEL + 1` on the reference and
+#     `FBDIV_SEL + 1` on the feedback, both fields 0..63, and the
+#     feedback is taken from the OUTPUT and not the VCO:
+#     `CLKOUT = FCLKIN * (FBDIV_SEL + 1) / (IDIV_SEL + 1)` and
+#     `VCO = CLKOUT * ODIV_SEL`, which is `feedback out` in this
+#     format's terms. All of that is written below.
+#     KNOWN GAP, AND THE REASON THIS PLL CANNOT BE USED: the output
+#     divider `ODIV_SEL` is NOT a contiguous range. Its legal values are
+#     2, 4, 8, 16, 32, 48, 64, 80, 96, 112 and 128, and `PllDivider`
+#     describes a divider as a minimum, a maximum and an offset, so
+#     declaring `divide out ODIV_SEL 2 128` would let `fpga::pll`'s
+#     search choose ODIV_SEL = 3 and write a PLL that does not run at
+#     the frequency it says. Rather than risk that, no `divide out`
+#     clause is written, which makes `PllShape::is_configurable` false,
+#     which makes a design asking for a PLL fail with a message naming
+#     the missing divider. Teaching `PllDivider` an explicit value list
+#     is the fix; everything else the solver needs is already here.
+#   * NO DSP. The part has twelve DSP blocks — 48 MULT18X18, and the
+#     database names every sub-bel of them (MULT9X9, MULT18X18,
+#     MULT36X36, PADD9, PADD18, ALU54D, MULTALU18X18, MULTALU36X18,
+#     MULTADDALU18X18) — and this file declares none of them as a `dsp`.
+#     The reason is `xc7.dev`'s: a Gowin multiplier does not multiply
+#     unless ASEL, BSEL, ASIGN, BSIGN and the mode parameters are driven
+#     with the right constants, and the `.dev` `dsp` line has no way to
+#     state a tied input. Multiplies therefore go to LUT4s. They are
+#     declared `other` so a netlist check knows them.
+#   * NO BLOCK RAM. The part has 46 of them, 828 kbit, and the database
+#     gives the BSRAM bel's whole portmap (DO0..DO35, AD0..AD13,
+#     DI0..DI35, CLK, OCE, CE, RESET, WRE, BLKSEL0..2) and the four
+#     primitive families `gowin_pack` accepts (SP single-port, SDP
+#     semi-dual-port, DP dual-port, ROM). Two things stop it being
+#     declared here, and the first is enough on its own:
+#       - A block is only selected when its `BLKSEL[2:0]` input matches
+#         its `BLK_SEL` parameter, and the `.dev` `bram` model has no way
+#         to tie an input to a constant. A block RAM whose BLKSEL is left
+#         floating never responds, which is a memory that silently reads
+#         zero.
+#       - Its initial contents are 64 parameters `INIT_RAM_00` ..
+#         `INIT_RAM_3F`, and they do NOT live in the die bitmap the rest
+#         of the configuration lives in: `gowin_pack` writes them into a
+#         separate region addressed through a `logicinfo['BSRAM_INIT']`
+#         table. `fpga::gowin` does not write that region, so a ROM built
+#         from this flow would come up blank.
+#     Memories therefore go to distributed logic. The primitives are
+#     declared `other`.
+#   * NO DISTRIBUTED RAM EITHER, and the reason is narrower. The part has
+#     648 of them (the `RAM16` bel of every fourth logic column, 16 words
+#     of 4 bits, whose database portmap is `{'DI', 'CLK', 'WRE', 'WAD',
+#     'RAD', 'DO'}`), and the primitive is RAM16SDP4. The `.dev` `lutram`
+#     line names a wide port as a LIST OF INDIVIDUAL PINS
+#     (`waddr=WAD0,WAD1,WAD2,WAD3`), which is right for the ECP5's
+#     TRELLIS_DPR16X4 and the 7 series' RAM64X1D because those primitives
+#     really do have one port per bit; RAM16SDP4's DI, WAD, RAD and DO
+#     are Verilog VECTORS, so those pin names do not exist and an
+#     instance would not elaborate. Declared `other`.
+#   * NO DDR OR SERDES. ODDR, ODDRC, IDDR, IDDRC, OSER4/8/10,
+#     IDES4/8/10, OVIDEO and IVIDEO all exist on the part and are
+#     declared `other`. A double-data-rate port is reported as
+#     unbuildable and buffered as an ordinary one. Their configuration is
+#     an `IOLOGIC` attribute set, which is the same missing-names problem
+#     as the IO buffer's.
+#   * NO TILE GRID CHECK BEYOND THE BOUNDING BOX. `grid 56 55` is the
+#     database's own grid, measured. It is a bounding box: a region
+#     constraint is checked against it and nothing finer.
+#   * `idcode 0x0000081b` is the value the `.fs` header's `0x06` command
+#     carries in `GW2A-18.msgpack.xz`, and it is the value
+#     `reticle program --probe` reads back from the board over JTAG.
+#     HIGH confidence — it was read from both.
+#     IT DOES NOT IDENTIFY THE DIE. A GW2A-18, a GW2A-18C and a
+#     GW2AR-18C all answer `0x0000081b`, and Apicula ships separate
+#     `GW2A-18` and `GW2A-18C` databases with identical grids, identical
+#     headers and different block-RAM errata. So the IDCODE check stops a
+#     GW1N bitstream reaching a GW2A and nothing finer; which database to
+#     use has to be said, and this file says `GW2A-18` because that is
+#     what Apicula's own `examples/Makefile` uses for a Tang Primer 20K
+#     (`gowin_pack -c -d GW2A-18`, `nextpnr --device
+#     GW2A-LV18PG256C8/I7`).
+#   * THE INSTRUCTION REGISTER IS EIGHT BITS, where a 7 series' is six.
+#     That is not recorded in this file — the `.dev` format has nowhere
+#     to put it — and it is why `reticle program` reads this part's
+#     IDCODE with `jtag::idcode_after_reset`, which needs no instruction
+#     at all. Writing a configuration sequence for this part is phase
+#     two and will need it.
+
+device gw2a-18-pg256
+  family gowin
+  package PBGA256
+  speed 8
+  idcode 0x0000081b
+  lut_size 4
+  ff enable sync_reset async_reset shared_reset
+  bel LUT4 lut count 20736 port i=I0,I1,I2,I3 o=F param INIT=16'h0000
+  bel LUT3 lut port i=I0,I1,I2 o=F param INIT=8'h00
+  bel LUT2 lut port i=I0,I1 o=F param INIT=4'h0
+  bel LUT1 lut port i=I0 o=F param INIT=2'h0
+  bel DFF ff count 15552 mode posedge port clk=CLK d=D q=Q
+  bel DFFE ff mode posedge,enable port clk=CLK d=D q=Q en=CE
+  bel DFFR ff mode posedge,sync_reset port clk=CLK d=D q=Q rst=RESET
+  bel DFFRE ff mode posedge,enable,sync_reset port clk=CLK d=D q=Q en=CE rst=RESET
+  bel DFFS ff mode posedge,sync_set port clk=CLK d=D q=Q rst=SET
+  bel DFFSE ff mode posedge,enable,sync_set port clk=CLK d=D q=Q en=CE rst=SET
+  bel DFFC ff mode posedge,async_reset port clk=CLK d=D q=Q rst=CLEAR
+  bel DFFCE ff mode posedge,enable,async_reset port clk=CLK d=D q=Q en=CE rst=CLEAR
+  bel DFFP ff mode posedge,async_set port clk=CLK d=D q=Q rst=PRESET
+  bel DFFPE ff mode posedge,enable,async_set port clk=CLK d=D q=Q en=CE rst=PRESET
+  bel DFFN ff mode negedge port clk=CLK d=D q=Q
+  bel DFFNE ff mode negedge,enable port clk=CLK d=D q=Q en=CE
+  bel DFFNR ff mode negedge,sync_reset port clk=CLK d=D q=Q rst=RESET
+  bel DFFNRE ff mode negedge,enable,sync_reset port clk=CLK d=D q=Q en=CE rst=RESET
+  bel DFFNS ff mode negedge,sync_set port clk=CLK d=D q=Q rst=SET
+  bel DFFNSE ff mode negedge,enable,sync_set port clk=CLK d=D q=Q en=CE rst=SET
+  bel DFFNC ff mode negedge,async_reset port clk=CLK d=D q=Q rst=CLEAR
+  bel DFFNCE ff mode negedge,enable,async_reset port clk=CLK d=D q=Q en=CE rst=CLEAR
+  bel DFFNP ff mode negedge,async_set port clk=CLK d=D q=Q rst=PRESET
+  bel DFFNPE ff mode negedge,enable,async_set port clk=CLK d=D q=Q en=CE rst=PRESET
+  bel IBUF io for in port pad=I din=O
+  bel OBUF io for out port pad=O dout=I
+  bel TBUF other port pad=O dout=I oe=OEN
+  bel IOBUF other port pad=IO din=O dout=I oe=OEN
+  bel ALU other port ci=CIN co=COUT i0=I0 i1=I1
+  bel MUX2_LUT5 other
+  bel MUX2_LUT6 other
+  bel MUX2_LUT7 other
+  bel MUX2_LUT8 other
+  bel RAM16SDP4 other
+  bel SP other
+  bel SDP other
+  bel DP other
+  bel ROM other
+  bel MULT9X9 other
+  bel MULT18X18 other
+  bel MULT36X36 other
+  bel PADD9 other
+  bel PADD18 other
+  bel ALU54D other
+  bel MULTALU18X18 other
+  bel MULTALU36X18 other
+  bel MULTADDALU18X18 other
+  bel ODDR other
+  bel ODDRC other
+  bel IDDR other
+  bel IDDRC other
+  bel OSER4 other
+  bel OSER8 other
+  bel OSER10 other
+  bel IDES4 other
+  bel IDES8 other
+  bel IDES10 other
+  bel OVIDEO other
+  bel IVIDEO other
+  bel TLVDS_IBUF other
+  bel TLVDS_OBUF other
+  bel TLVDS_TBUF other
+  bel TLVDS_IOBUF other
+  bel ELVDS_IBUF other
+  bel ELVDS_OBUF other
+  bel ELVDS_TBUF other
+  bel ELVDS_IOBUF other
+  bel OSC other
+  bel OSCZ other
+  bel DQCE other
+  bel DCS other
+  bel DHCEN other
+  bel CLKDIV other
+  bel CLKDIV2 other
+  bel GSR other
+  io_standard LVCMOS33 vccio 3.3 drive 4,8,12,16,24 slew slow,fast
+  io_standard LVTTL33 vccio 3.3 drive 4,8,12,16,24 slew slow,fast
+  io_standard LVCMOS25 vccio 2.5 drive 4,8,12,16 slew slow,fast
+  io_standard LVCMOS18 vccio 1.8 drive 4,8,12 slew slow,fast
+  io_standard LVCMOS15 vccio 1.5 drive 4,8 slew slow,fast
+  io_standard LVCMOS12 vccio 1.2 drive 4,8 slew slow,fast
+  bank bank0 vccio 3.3,2.5,1.8,1.5,1.2
+  bank bank1 vccio 3.3,2.5,1.8,1.5,1.2
+  bank bank2 vccio 3.3,2.5,1.8,1.5,1.2
+  bank bank3 vccio 3.3,2.5,1.8,1.5,1.2
+  bank bank4 vccio 3.3,2.5,1.8,1.5,1.2
+  bank bank5 vccio 3.3,2.5,1.8,1.5,1.2
+  bank bank6 vccio 3.3,2.5,1.8,1.5,1.2
+  bank bank7 vccio 3.3,2.5,1.8,1.5,1.2
+  pin A2 io bank bank5
+  pin A3 io bank bank5
+  pin A4 io bank bank5
+  pin A5 io bank bank5
+  pin A6 config bank bank2   # TDI
+  pin A7 config bank bank2   # TCK
+  pin A8 clock bank bank6   # GCLKC_6
+  pin A9 clock bank bank7   # GCLKT_7
+  pin A10 io bank bank6
+  pin A11 io bank bank7
+  pin A12 io bank bank7
+  pin A13 config bank bank3   # READY
+  pin A14 io bank bank7   # LPLL1_C_FB
+  pin A15 io bank bank7
+  pin B1 io bank bank5
+  pin B3 io bank bank5
+  pin B4 io bank bank5
+  pin B5 io bank bank6   # LPLL2_C_FB
+  pin B6 io bank bank5
+  pin B7 io bank bank6
+  pin B8 config bank bank2   # TMS
+  pin B9 io bank bank6
+  pin B10 config bank bank3   # RECONFIG_N
+  pin B11 io bank bank7
+  pin B12 io bank bank7   # LPLL1_C_IN
+  pin B13 io bank bank7   # LPLL1_T_FB
+  pin B14 io bank bank7
+  pin B16 config bank bank3   # MODE1
+  pin C1 io bank bank5
+  pin C2 io bank bank5
+  pin C4 io bank bank6   # LPLL2_T_FB
+  pin C5 io bank bank5
+  pin C6 config bank bank2   # TDO
+  pin C7 io bank bank6
+  pin C8 clock bank bank6   # GCLKT_6
+  pin C9 clock bank bank7   # GCLKC_7
+  pin C10 config bank bank3   # SCLK
+  pin C11 io bank bank7
+  pin C12 io bank bank7   # LPLL1_T_IN
+  pin C13 config bank bank3   # DONE
+  pin C15 config bank bank3   # MODE2
+  pin C16 io bank bank0
+  pin D1 io bank bank5
+  pin D2 io bank bank5
+  pin D3 io bank bank5
+  pin D6 io bank bank5
+  pin D7 io bank bank6
+  pin D8 io bank bank6
+  pin D9 io bank bank6
+  pin D10 io bank bank7
+  pin D11 io bank bank7
+  pin D14 io bank bank1
+  pin D15 io bank bank0
+  pin D16 io bank bank0
+  pin E1 io bank bank5
+  pin E2 io bank bank5
+  pin E3 io bank bank5
+  pin E6 io bank bank6
+  pin E7 io bank bank5
+  pin E8 io bank bank6   # LPLL2_C_IN
+  pin E9 io bank bank6
+  pin E10 io bank bank7
+  pin E11 io bank bank6
+  pin E14 io bank bank0
+  pin E15 io bank bank1
+  pin E16 io bank bank0
+  pin F1 io bank bank5
+  pin F2 io bank bank5
+  pin F3 io bank bank5
+  pin F4 io bank bank5
+  pin F5 io bank bank5
+  pin F7 io bank bank6   # LPLL2_T_IN
+  pin F8 io bank bank6
+  pin F9 io bank bank6
+  pin F10 io bank bank7
+  pin F12 io bank bank0
+  pin F13 io bank bank0
+  pin F14 io bank bank0
+  pin F15 io bank bank0
+  pin F16 io bank bank0
+  pin G1 io bank bank5
+  pin G2 io bank bank5
+  pin G3 io bank bank5
+  pin G4 io bank bank5
+  pin G5 io bank bank5
+  pin G6 io bank bank5
+  pin G11 io bank bank0
+  pin G12 io bank bank0
+  pin G13 io bank bank0
+  pin G14 io bank bank0
+  pin G15 io bank bank0
+  pin G16 io bank bank0
+  pin H1 io bank bank4
+  pin H2 io bank bank5
+  pin H3 io bank bank4
+  pin H4 io bank bank5
+  pin H5 io bank bank4
+  pin H6 io bank bank5
+  pin H11 clock bank bank0   # GCLKT_0
+  pin H12 io bank bank0
+  pin H13 io bank bank0
+  pin H14 io bank bank0
+  pin H15 io bank bank0
+  pin H16 io bank bank0
+  pin J1 clock bank bank5   # GCLKT_5
+  pin J2 io bank bank4
+  pin J3 clock bank bank5   # GCLKC_5
+  pin J4 io bank bank4
+  pin J5 io bank bank4
+  pin J6 io bank bank5
+  pin J11 io bank bank1
+  pin J12 io bank bank0
+  pin J13 clock bank bank0   # GCLKC_0
+  pin J14 io bank bank0
+  pin J15 io bank bank0
+  pin J16 io bank bank0
+  pin K1 io bank bank4
+  pin K2 io bank bank4
+  pin K3 io bank bank4
+  pin K4 io bank bank4
+  pin K5 io bank bank4
+  pin K6 io bank bank4
+  pin K11 io bank bank1
+  pin K12 io bank bank1
+  pin K13 io bank bank1
+  pin K14 clock bank bank1   # GCLKT_1
+  pin K15 clock bank bank1   # GCLKC_1
+  pin K16 io bank bank0
+  pin L1 io bank bank4
+  pin L2 clock bank bank4   # GCLKT_4
+  pin L3 io bank bank4
+  pin L4 io bank bank4
+  pin L5 io bank bank4
+  pin L8 io bank bank3
+  pin L9 io bank bank3
+  pin L10 config bank bank3   # MCLK, D4
+  pin L12 io bank bank1
+  pin L13 io bank bank1
+  pin L14 io bank bank1
+  pin L15 io bank bank0
+  pin L16 io bank bank1
+  pin M1 clock bank bank4   # GCLKC_4
+  pin M2 io bank bank4
+  pin M3 io bank bank4
+  pin M6 io bank bank3
+  pin M7 io bank bank3   # RPLL2_T_FB
+  pin M8 config bank bank3   # SO, D1
+  pin M9 config bank bank3   # MCS_N, D5
+  pin M10 io bank bank2
+  pin M11 clock bank bank2   # GCLKC_2
+  pin M14 io bank bank1
+  pin M15 io bank bank1
+  pin M16 config bank bank3   # MODE0
+  pin N1 io bank bank4
+  pin N2 io bank bank4
+  pin N3 io bank bank4
+  pin N6 io bank bank3
+  pin N7 io bank bank3   # RPLL2_C_FB
+  pin N8 io bank bank3
+  pin N9 config bank bank3   # SSPI_CS_N, D0
+  pin N10 clock bank bank2   # GCLKT_2
+  pin N11 io bank bank2
+  pin N14 io bank bank1
+  pin N15 io bank bank1
+  pin N16 io bank bank1
+  pin P1 io bank bank4
+  pin P2 io bank bank4
+  pin P4 io bank bank4
+  pin P5 io bank bank4
+  pin P6 io bank bank3
+  pin P7 io bank bank3
+  pin P8 io bank bank3
+  pin P9 config bank bank3   # DOUT, WE_N
+  pin P10 config bank bank3   # MI, D7
+  pin P11 io bank bank2
+  pin P12 io bank bank2   # RPLL1_T_FB
+  pin P13 io bank bank2
+  pin P15 io bank bank1
+  pin P16 io bank bank1
+  pin R1 io bank bank4
+  pin R3 io bank bank4
+  pin R4 io bank bank4
+  pin R5 io bank bank4
+  pin R6 io bank bank4
+  pin R7 io bank bank3
+  pin R8 clock bank bank3   # GCLKC_3
+  pin R9 config bank bank3   # FASTRD_N, D3
+  pin R10 config bank bank3   # MO, D6
+  pin R11 io bank bank2
+  pin R12 io bank bank2
+  pin R13 io bank bank2
+  pin R14 io bank bank2   # RPLL1_C_IN
+  pin R16 io bank bank1
+  pin T2 io bank bank4
+  pin T3 io bank bank4
+  pin T4 io bank bank4
+  pin T5 io bank bank4
+  pin T6 io bank bank3
+  pin T7 clock bank bank3   # GCLKT_3
+  pin T8 io bank bank3
+  pin T9 config bank bank3   # DIN, CLKHOLD_N
+  pin T10 config bank bank3   # SI, D2
+  pin T11 io bank bank2
+  pin T12 io bank bank2
+  pin T13 io bank bank2   # RPLL1_C_FB
+  pin T14 io bank bank2
+  pin T15 io bank bank2   # RPLL1_T_IN
+  global_buffers 8
+  pll rPLL input 3 500 vco 500 1250 outputs 4 count 4 pfd 3 500 feedback out divide ref IDIV_SEL 0 63 offset 1 divide feedback FBDIV_SEL 0 63 offset 1 port ref=CLKIN out=CLKOUT lock=LOCK tie RESET=0 RESET_P=0 CLKFB=0 param CLKFB_SEL="internal" CLKOUT_BYPASS="false" CLKOUTP_BYPASS="false" CLKOUTD_BYPASS="false" DYN_IDIV_SEL="false" DYN_FBDIV_SEL="false" DYN_ODIV_SEL="false" DYN_DA_EN="false" PSDA_SEL="0000" DUTYDA_SEL="1000" CLKOUTD_SRC="CLKOUT" CLKOUTD3_SRC="CLKOUT" DEVICE="GW2A-18"
+  grid 56 55
+end
