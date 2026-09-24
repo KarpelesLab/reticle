@@ -106,6 +106,13 @@ its LED yet. A carry chain still does not route.
 not established, and `docs/fpga.md` says the same for the rest of the
 7-series support.
 
+A second real fabric is read the same way, Gowin's, from Project
+Apicula's prebuilt chip database: `src/fpga/devices/gowin.dev` describes
+the GW2A-18 of a Sipeed Tang Primer 20K and `fpga::apicula` turns that
+database into the same architecture. It stops short of a design in a
+bitstream, and [`docs/fpga-gowin.md`](docs/fpga-gowin.md) says exactly
+where and why. **Nothing Gowin has been loaded into a part.**
+
 ### Loading one into a board
 
 `reticle program` puts a bitstream into an attached Xilinx 7-series part
