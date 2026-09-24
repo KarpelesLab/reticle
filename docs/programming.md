@@ -249,3 +249,81 @@ direction `0x0b`: openFPGALoader's for this board). The status read
 `0x00a0` (edit mode, erased) after the erase, and `0x2020` (`DONE`) after
 loading `examples/primer20k/key_led.v`, which a person then watched
 work. `docs/fpga-gowin.md` has the rest.
+
+## A second transport: the Cynthion's Apollo debugger
+
+Everything above goes through an FTDI part. A Great Scott Gadgets
+**Cynthion** has none: its Lattice ECP5 has no JTAG header, and the only
+way to its TAP is to ask the board's debug microcontroller — running
+**Apollo** firmware — to perform scans over USB.
+
+Reticle speaks that protocol too. The wire protocol is written down in
+[`docs/apollo-protocol.md`](apollo-protocol.md), which was written
+**before** the implementation and which the implementation was written
+from; it says for every request where the number came from and whether a
+board has confirmed it.
+
+### What has been done with it
+
+On 2026-09-25 a Cynthion on the author's machine was taken from its
+analyzer gateware to the Apollo debugger and the ECP5's identifier was
+read:
+
+```
+IDCODE 0x21111043
+IDCODE 0x21111043: manufacturer 0x021 (Lattice), part number 0x1111, version 2 — LFE5U-12F (or LAE5U-12F)
+```
+
+The raw value is `0x21111043`. Reading it: bit 0 is 1, as IEEE 1149.1
+requires of an identification register; bits 11..1 are `0x021`, which is
+JEDEC JEP106 bank 1 code `0x21`, Lattice Semiconductor; the part number
+field is `0x1111` and the top nibble is `2`, and that combination is the
+**LFE5U-12F** — the smallest ECP5, 12 kLUT. (`0x4111_1043`, the same
+part number with a different top nibble, is the LFE5U-25F, which is why
+`program::lattice` matches on all thirty-two bits and not on twenty-eight
+the way the Xilinx path does.)
+
+Reading is as far as it goes. **Nothing configures an ECP5**: there is no
+ECP5 configuration sequence in the crate and no ECP5 fabric to make a
+bitstream for. `docs/apollo-protocol.md` §8 says what would be needed.
+
+### Running it
+
+```console
+$ cargo test --features program --test program_apollo -- --ignored --nocapture read_the_ecp5_idcode
+```
+
+The test skips with a message when no Cynthion is attached, so it is safe
+anywhere; `RETICLE_CYNTHION` picks a board by serial number when several
+are.
+
+### Two things to know before pointing it at a board
+
+- **Getting to Apollo takes the USB port away from the FPGA.** A
+  Cynthion running gateware enumerates as the gateware's device; the
+  debugger is behind a handover request that makes the board
+  re-enumerate. Nothing persistent happens — no flash is touched and the
+  FPGA stays configured — but **the board stays in debugger mode until it
+  is replugged or power cycled.** The request that asks for the port back
+  is sent and is accepted, and it is not enough on its own; §6 of the
+  protocol document says why.
+- **The two modes report different serial numbers.** The gateware
+  reports the board's and Apollo reports the microcontroller's, and they
+  are unrelated strings.
+
+### How it fits the rest of `src/program`
+
+Apollo is not an FTDI part with different numbers; it is a different
+shape of device. An MPSSE is a shift engine that the host tells about
+TMS. Apollo owns a TAP controller and takes **state numbers**, and has
+no way to be sent a TMS sequence at all.
+
+So the two transports share nothing at the byte level, and what they do
+share is one level up: `jtag::Plan`, a list of named JTAG operations.
+`jtag::Scan::apply` compiles a plan into MPSSE bytes and
+`apollo::compile` compiles the same plan into control requests, so
+`jtag::idcode_plan` — reset, then thirty-two bits out of DR, with no
+instruction shifted — is written once and both transports perform it.
+`tests/program_jtag.rs` drives the FTDI encoding through a model TAP and
+`tests/program_apollo.rs` does the same for the Apollo one, both with
+nothing attached.

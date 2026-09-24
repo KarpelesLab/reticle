@@ -15,12 +15,15 @@ very different: some were confirmed against the board on the bench, and
 some are a reading of a public source that no device has yet
 contradicted.
 
-**This file was written before any of it was implemented, and the
-implementation was written from this file.** Apollo is BSD-3-Clause and
-copying it would have been allowed; it was not copied, for the same
-reason Reticle's VHDL library carries its own declarations and native
-bodies rather than IEEE's text. A protocol one has written down is one
-one understands.
+**This file was written before any of it was implemented, committed
+before a line of the transport existed, and the implementation was
+written from this file.** Apollo is BSD-3-Clause and copying it would
+have been allowed; it was not copied, for the same reason Reticle's VHDL
+library carries its own declarations and native bodies rather than
+IEEE's text. A protocol one has written down is one one understands —
+and §9 lists three places where writing it down first is the only reason
+the mistakes were found in a document rather than in a board that would
+not answer.
 
 ## Confidence, and what it is based on
 
@@ -35,7 +38,11 @@ one understands.
 
 A *Verified* section at the end records what the bench later said, so
 this document's claims and the run that tested them can be compared
-without reading the code in between.
+without reading the code in between. **Two things in this document were
+wrong when it was written and §9 says which**; the body has been
+corrected and the corrections are marked, because a specification that
+quietly absorbs its own errors teaches nothing about how far to trust
+the rest of it.
 
 ---
 
@@ -44,13 +51,22 @@ without reading the code in between.
 A Cynthion enumerates as **one of two different USB devices**, depending
 on which side of the board owns the port:
 
-| | Vendor | Product | Product string | Interfaces |
+| | Vendor | Product | Manufacturer / product string | Interfaces |
 |---|---|---|---|---|
-| **Gateware mode** | `0x1d50` | `0x615b` | whatever the gateware calls itself ("USB Analyzer") | the gateware's own, plus one *Apollo stub* |
-| **Debugger mode** | `0x1d50` | `0x615c` | "Apollo Debugger" | one vendor-specific interface |
+| **Gateware mode** | `0x1d50` | `0x615b` | "Cynthion Project" / whatever the gateware calls itself ("USB Analyzer") | the gateware's own, plus one *Apollo stub* |
+| **Debugger mode** | `0x1d50` | `0x615c` | "Great Scott Gadgets" / "Cynthion Apollo Debugger" | a CDC-ACM pair and a DFU runtime interface — see §3 |
 
 Both are the same physical port on the same board. The microcontroller
 and the FPGA share it, and exactly one of them drives it at a time.
+
+**The two modes report different serial numbers.** The gateware reports
+the board's — on the board here, `2a5a4adf30c460de` — and the debugger
+reports the microcontroller's, which on the same board is
+`35L6H2CMGJJVCIBAEA3GCLAN74`. They have nothing in common, not even a
+length. A host that identifies a board by serial number and then hands
+it over cannot find it again by that name; it has to follow the board
+across the re-enumeration some other way, such as by being the debugger
+that was not on the bus a moment ago.
 
 `0x1d50` is Openmoko's vendor identifier, which pid.codes administers;
 Great Scott Gadgets hold `0x615b` and `0x615c` under it. Apollo's host
@@ -58,11 +74,14 @@ tooling also recognises a set of `0x1209:…` pid.codes test identifiers
 for development builds, which a general implementation may want and
 which this one does not use.
 
-> *Provenance*: the vendor and product numbers are from Apollo's host
-> package — MEDIUM. `0x1d50:0x615b` with the product string "USB
-> Analyzer", manufacturer "Cynthion Project", `bcdDevice` 1.04 and serial
-> `2a5a4adf30c460de` was **read off the attached board on 2026-09-25**;
-> HIGH for that one.
+> *Provenance*: the vendor and product numbers came from Apollo's host
+> package. Both were then **read off the attached board on 2026-09-25**,
+> before and after a handover: `0x1d50:0x615b` "Cynthion Project" / "USB
+> Analyzer", `bcdDevice` 1.04, serial `2a5a4adf30c460de`, and
+> `0x1d50:0x615c` "Great Scott Gadgets" / "Cynthion Apollo Debugger",
+> `bcdDevice` 1.04, serial `35L6H2CMGJJVCIBAEA3GCLAN74`. HIGH. The
+> differing serial numbers were **not** anticipated when this document
+> was written; see §9.
 
 ### The Apollo stub interface
 
@@ -109,24 +128,37 @@ answers, not Apollo:
 | `wLength` | `0` |
 
 There is no data stage and no reply beyond the status stage. The device
-should **disappear from the bus and re-enumerate** as `0x1d50:0x615c`
-within a second or so, which means the handle the request was sent on is
-dead the moment it succeeds and the new device has to be found by a
-fresh enumeration. Allow several seconds and poll.
+**disappears from the bus and re-enumerates** as `0x1d50:0x615c` within
+a second or so, which means the handle the request was sent on is dead
+the moment it succeeds and the new device has to be found by a fresh
+enumeration. Allow several seconds and poll. The transfer itself may
+come back as an error rather than a success, because the device leaves
+while the host is still looking at it; whether it worked is decided by
+whether the debugger turns up, not by that return value.
 
 Nothing about this is persistent. It changes who drives a USB port; it
 does not touch the FPGA's configuration memory, the FPGA's flash or the
-microcontroller's. A power cycle, a replug, or the request in §6 puts it
-back.
+microcontroller's. A power cycle or a replug puts it back.
 
 The FPGA stays configured and keeps running throughout. It simply no
 longer has a USB host to talk to.
 
-> *Provenance*: the request number, direction and recipient are from
-> Apollo's host package — MEDIUM. The sideband-advertisement mechanism is
-> the reading that explains why the request lives on the gateware and why
-> stopping it is enough — LOW; it is an explanation, not an observation,
-> and the protocol works the same if the mechanism is something else.
+**It is, in practice, one-way for the rest of the session.** §6's
+request is accepted but does not bring the gateware back on its own:
+once a gateware has been told to stop advertising it does not start
+again until the part is reconfigured or the board is power cycled. A
+host that performs this handover should say so to whoever is holding the
+board rather than imply it can undo it.
+
+> *Provenance*: the request number, direction and recipient came from
+> Apollo's host package and were then **sent to the attached board**,
+> which re-enumerated as the debugger within a second; HIGH. The
+> sideband-advertisement mechanism is the reading that explains why the
+> request lives on the gateware and why stopping it is enough — LOW; it
+> is an explanation, not an observation, and the protocol works the same
+> if the mechanism is something else. That the handover does not undo
+> itself is HIGH and was learned the plain way: §6's request was sent,
+> was accepted, and the board stayed a debugger.
 
 ### If there is no stub interface
 
@@ -144,9 +176,25 @@ guess. This one says so.
 
 ## 3. Debugger mode: the device
 
-In debugger mode the board presents one configuration with a single
-vendor-specific interface. **Every request in §3, §4 and §6 is a control
-transfer on endpoint zero with recipient *device*.**
+In debugger mode the board presents one configuration whose interfaces
+have **nothing to do with this protocol**. On the board here they are:
+
+| # | Class | Subclass | What it is |
+|---|---|---|---|
+| 0 | `0x02` | `0x02` | CDC communications — the control half of a serial port |
+| 1 | `0x0A` | `0x00` | CDC data — the data half |
+| 2 | `0xFE` | `0x01` | DFU runtime |
+
+The serial port is the microcontroller's console and the DFU interface
+is how its own firmware is updated; **neither is touched here**, and the
+DFU one is exactly the sort of surface §7 exists to keep away from.
+
+This layout matters for one practical reason: **Linux binds `cdc_acm` to
+interfaces 0 and 1**, so a debugger on the bus already has a kernel
+driver on it. That does not get in the way, because:
+
+**Every request in §3, §4 and §6 is a control transfer on endpoint zero
+with recipient *device*.**
 
 ```
 bmRequestType = 0x40   host to device, vendor, recipient device
@@ -157,13 +205,20 @@ That recipient matters. The one request that uses recipient *interface*
 is the handover in §2, and it is answered by the FPGA rather than by
 Apollo.
 
-Because everything is a device-recipient control transfer, no interface
-needs to be claimed for any of it. Whether a kernel driver binds to the
-debugger's interface is a question for the host and is answered on the
-bench, not here; if one does, it has to be detached like any other.
+A device-recipient control transfer belongs to no interface, so nothing
+has to be claimed and nothing has to be detached, `cdc_acm` included.
+The whole of §4 was performed on this board with the kernel's serial
+driver still bound to interfaces 0 and 1 and not one transfer was
+refused.
 
-> *Provenance*: the request type is from Apollo's host package —
-> MEDIUM.
+The one request that *is* interface-recipient — §2's handover — is sent
+to the **gateware**, where the stub interface has no driver on it.
+
+> *Provenance*: the request type came from Apollo's host package and was
+> then **used against the board** for everything in §3 and §4; HIGH. The
+> interface table was read off the board's descriptors; HIGH. This
+> document originally said debugger mode presents "one vendor-specific
+> interface", which is wrong — see §9.
 
 ### Identification requests
 
@@ -180,10 +235,12 @@ bench, not here; if one does, it has to be detached like any other.
 implementation whether a newer request exists; `0xA2` is a human-facing
 string and should not be parsed for capability.
 
-> *Provenance*: numbers and formats from Apollo's host package — MEDIUM.
-> `0xA1` and `0xA4` are listed for completeness and are not sent by
-> Reticle: there is no reason to blink a board that is not mine and no
-> use here for a voltage.
+> *Provenance*: numbers and formats came from Apollo's host package.
+> `0xA0`, `0xA2` and `0xA3` were then **issued against the board** and
+> answered exactly as described — `Apollo Debug Module`, `v1.1.1`, and
+> the two bytes `1`, `2`. HIGH for those three. `0xA1` and `0xA4` are
+> listed for completeness and were **not sent**: there is no reason to
+> blink a board that is not mine and no use here for a voltage. MEDIUM.
 
 ---
 
@@ -231,8 +288,15 @@ bits and no quirks — 2048 bits is 256 bytes, which is the size of each of
 the firmware's two buffers.
 
 > *Provenance*: the request numbers, the `wValue`/`wIndex` assignments,
-> the eight-byte layout, the quirk bits and the 256-byte buffers are all
-> from Apollo's host package and firmware — MEDIUM throughout.
+> the eight-byte layout, the quirk bits and the 256-byte buffers all came
+> from Apollo's host package and firmware. `0xB8` was then **issued
+> against the board**, which answered with eight bytes decoding to a
+> limit of **2048 bits and quirks `0x00000000`** — the layout is HIGH and
+> the fallback turns out to be exactly what this firmware reports. Nine
+> of the ten requests above were exercised; `0xB4` was not, and stays
+> MEDIUM. Neither quirk bit was set on this board, so both stay MEDIUM:
+> the code that handles them is checked against a model and has never
+> met a firmware that needs it.
 
 ### `0xB5` and `0xB6`, the state numbers
 
@@ -261,7 +325,12 @@ Walking to `Test-Logic-Reset` is the reset: it is reached from any state,
 known or unknown, and a part with an identification register loads
 `IDCODE` on arriving there.
 
-> *Provenance*: the numbering is from Apollo's host package — MEDIUM.
+> *Provenance*: the numbering came from Apollo's host package. Two of
+> the numbers were then **checked against the board**: after walking to
+> `1`, `0xB6` answered `1`, and after walking to `4` it answered `4`.
+> Number `4` is corroborated by the identifier coming back correctly,
+> which it could not have done from any other state. HIGH for `0`, `1`
+> and `4`; MEDIUM for the other thirteen, which were never asked for.
 > The correspondence with IEEE 1149.1's own figure is this document's
 > reading of why that numbering is what it is — LOW, and irrelevant: the
 > numbers are what matter and they are listed.
@@ -286,7 +355,16 @@ buffer is **overwritten** by every scan. So `0xB2` must be read before
 the next `0xB3`, and `0xB0` sent before any `0xB1` that does not fill
 the whole buffer.
 
-> *Provenance*: from Apollo's host package and firmware — MEDIUM.
+> *Provenance*: from Apollo's host package and firmware, and then
+> **checked on the board in the one way that can tell the difference**.
+> A 32-bit identifier read as a single scan and the same identifier read
+> as two 16-bit scans — the first without bit 0, the second with it —
+> gave the same value, `0x21111043`. A scan that ended the shift
+> whether or not the flag was set would have made the second half read
+> a freshly captured register instead of the rest of the first; a scan
+> that never ended it would have left the walk out of step. HIGH for
+> bit 0 and for both buffer lifetimes. MEDIUM for bit 1, which was never
+> set here.
 
 ### Bit order
 
@@ -304,17 +382,22 @@ When quirk bit 0 is set, every one of the first `N / 8` whole bytes is
 bit-reversed by the host on the way out and on the way back; the
 trailing `N mod 8` bits are left as they are.
 
-> *Provenance*: this is the fact the reading of Apollo's host package was
-> **least** sure of — the host code moves between a bit-level
+> *Provenance*: this was the fact the reading of Apollo's host package
+> was **least** sure of — the host code moves between a bit-level
 > representation and bytes in more than one place, and a wrong answer
 > here produces a stream of the right length that decodes to nonsense,
-> which looks exactly like a dead board. It is written down as the
-> above because that is what the firmware's buffers and the quirk's
-> existence imply, and because IEEE 1149.1 is LSB-first. MEDIUM, and
-> **flagged as the thing to settle on the bench first**: an identification
-> register has bit 0 set by the standard and a known manufacturer field,
-> so a single 32-bit read has a right answer that only one byte order
-> produces.
+> which looks exactly like a dead board. It was written down as above
+> because that is what the firmware's buffers and the quirk's existence
+> imply, and because IEEE 1149.1 is LSB-first, and it was flagged as the
+> thing to settle on the bench first.
+>
+> It was settled there, and it was right. The four bytes `0xB2` returned
+> for a 32-bit scan after `Test-Logic-Reset` were `43 10 11 21`, which
+> read as a little-endian `u32` give `0x21111043`: bit 0 set, as IEEE
+> 1149.1 requires of an identification register, and a JEDEC
+> manufacturer field of `0x021`, which is Lattice — on a board whose FPGA
+> is a Lattice ECP5. No other arrangement of those four bytes produces a
+> well-formed identifier of any manufacturer. HIGH, by measurement.
 
 ---
 
@@ -345,27 +428,38 @@ The whole sequence, from a board in gateware mode to a 32-bit `IDCODE`:
 11. `0xBE` — release the JTAG pins.
 
 > *Provenance*: the sequence is assembled from the requests above, not
-> taken from anywhere — MEDIUM, and it is what the implementation was
-> written against.
+> taken from anywhere. It is what the implementation was written
+> against, and it **ran in exactly this order on the attached board**,
+> twice, producing `0x21111043` both times. HIGH.
 
 ---
 
 ## 6. Putting the board back
 
-`0xC2` — host to device, recipient device, no data — tells Apollo to let
-the FPGA have the USB port again. The gateware resumes advertising, the
-debugger disappears from the bus, and the board comes back as whatever
-it was before §2 was ever sent.
+`0xC2` — host to device, recipient device, no data — tells Apollo that
+it *may* let the FPGA have the USB port again.
 
-This is the polite end of a session and costs nothing, but it is not
-required: unplugging, or a power cycle, has the same effect, and so does
-nothing at all once the host stops talking — the board simply stays in
-debugger mode.
+**That is all it does, and on its own it is not enough.** It was sent to
+this board, twice, and was accepted both times with no error; the board
+stayed a debugger. Permission is not the same as a request: the port
+moves when the FPGA asks for it, and a gateware that has been told to
+stop advertising (§2) does not start again by itself. Apollo's own
+tooling pairs this request with a reconfiguration of the FPGA, which is
+`0xC0` and which §7 says this project does not send.
 
-> *Provenance*: the request number is from Apollo's host package —
-> MEDIUM. A failure of it should be non-fatal: a board that has already
-> gone cannot answer, and that is not an error worth failing a read
-> over.
+So the honest way to end a session is: send `0xC2`, and tell whoever is
+holding the board that a replug or a power cycle brings the gateware
+back. Nothing is lost by leaving it: the FPGA is still configured with
+whatever it was configured with, and which side owns a USB port is not a
+state of the part.
+
+> *Provenance*: the request number came from Apollo's host package. Its
+> effect — accepted, and insufficient — is **HIGH and was measured**: the
+> transfer returned success and `lsusb` showed `0x1d50:0x615c` still
+> there afterwards, both immediately and later. The explanation of *why*
+> it is insufficient is LOW; the observation is not. A failure of the
+> request should be non-fatal: a board that has already gone cannot
+> answer, and that is not an error worth failing a read over.
 
 ---
 
@@ -424,8 +518,79 @@ sequence with nowhere to send it is not.
 
 ## 9. Verified
 
-*This section is written after the fact and says what the bench
-confirmed, changed or contradicted. Until it exists, nothing above is
-HIGH except what §1 marks as read off the descriptors.*
+On **2026-09-25** a Great Scott Gadgets Cynthion attached to this
+machine was taken from its analyzer gateware to the Apollo debugger and
+its ECP5's identifier was read, by Reticle's own code, written from the
+sections above and from nothing else. The run is
+`tests/program_apollo.rs::read_the_ecp5_idcode`, and it was performed
+twice: once from gateware mode, which exercised §2, and once from
+debugger mode, which did not.
 
-Pending.
+What the board said:
+
+```
+Cynthion 2a5a4adf30c460de is in gateware mode
+Apollo on 35L6H2CMGJJVCIBAEA3GCLAN74 (the gateware was asked to give up the USB port)
+  identifier: Apollo Debug Module
+  firmware: v1.1.1
+  USB API: 1.2
+  max scan 2048 bits, quirks 0x00000000
+
+IDCODE 0x21111043
+IDCODE 0x21111043: manufacturer 0x021 (Lattice), part number 0x1111, version 2 — LFE5U-12F (or LAE5U-12F)
+the TAP rests in RunTestIdle
+read again in 16-bit chunks: 0x21111043
+after asking for Shift-DR the firmware says Some(ShiftDr)
+```
+
+### Confirmed
+
+- §1's two identities, and the stub interface's descriptor triple.
+- §2: `0xF0` to the stub interface hands the port over, and the board
+  re-enumerates as the debugger in well under a second.
+- §3: every request there is a device-recipient control transfer and
+  none of them needs an interface claimed, with `cdc_acm` bound
+  throughout. `0xA0`, `0xA2`, `0xA3` answer as described.
+- §4: `0xB8`'s eight-byte layout; the state numbers `0`, `1` and `4`,
+  with `0xB6` reading back what `0xB5` was given; `0xB3`'s
+  advance-state flag, proved by reading one 32-bit register as two
+  16-bit scans and getting the same value; the buffer lifetimes.
+- §4's **bit order**, which was the flagged risk and was right.
+- §5's sequence, run in order, twice, with the same result.
+
+### Wrong, and corrected above
+
+1. **§1 and §3: the two modes report different serial numbers**, and
+   this document did not say so because it had not occurred to the
+   author that they would. The gateware reports `2a5a4adf30c460de` and
+   the microcontroller reports `35L6H2CMGJJVCIBAEA3GCLAN74`. Reticle's
+   first implementation matched on the serial number across the
+   handover and could not have found the board it had just handed over;
+   it now follows the board by being the debugger that was not there
+   before. This is the error that a document *not* written from the
+   descriptors would have carried into the field.
+2. **§3: debugger mode is not "one vendor-specific interface".** It is a
+   CDC-ACM pair and a DFU runtime interface, and Linux binds `cdc_acm`
+   to two of the three. The protocol is unaffected — every request is
+   device-recipient — but the claim was false and would have sent an
+   implementer looking for an interface to claim.
+3. **§6 overpromised.** `0xC2` was written up as the request that puts
+   the board back. It is accepted and it does not put the board back;
+   §6 now says what it actually does.
+
+### Still unverified
+
+- `0xB4`, `0xA1`, `0xA4`: never sent.
+- Both quirk bits: this firmware reports neither, so the code that
+  handles them has only ever been checked against a model.
+- Thirteen of the sixteen state numbers.
+- Everything in §7, deliberately: the point of that list is that none of
+  it was put on the wire.
+- The PROGRAM-button route in §2, which was not needed.
+
+### What the board is now
+
+**In debugger mode**, with the analyzer gateware still configured in the
+FPGA and still intact. Nothing was written to either flash and no
+configuration was changed. A replug or a power cycle brings the analyzer
+back; §6 explains why the software request does not.

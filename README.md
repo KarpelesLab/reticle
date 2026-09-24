@@ -152,6 +152,19 @@ It was proved first on a Basys 3, loaded with Project X-Ray's own
 Vivado-built harness bitstream, which asserts `DONE`. [`docs/programming.md`](docs/programming.md) says exactly
 what that does and does not establish.
 
+There is a second transport, for boards with no FTDI part on them: a
+Great Scott Gadgets **Cynthion** reaches its Lattice ECP5 through a debug
+microcontroller running Apollo firmware, over USB control requests.
+[`docs/apollo-protocol.md`](docs/apollo-protocol.md) is Reticle's own
+specification of that wire protocol, written before the implementation
+and the thing the implementation was written from, with the provenance
+and confidence of every fact and a section on what the board later
+contradicted. It reads an `IDCODE` — `0x21111043`, an LFE5U-12F, on the
+board it was tried against — and does not configure an ECP5; there is no
+ECP5 configuration sequence in the crate. The two transports share
+`jtag::Plan` and nothing below it, because an MPSSE is a shift engine
+told about TMS and Apollo is a TAP controller told about states.
+
 Sources of one language are elaborated together, so a testbench and the
 modules it instantiates go on one command line. A design already in the
 `.rtl` IR text format is accepted anywhere a source file is.
