@@ -3,19 +3,20 @@
 //! # Every test here skips without the database
 //!
 //! Apicula's chip database is not in this repository and CI does not have
-//! it. It is prebuilt, though — no vendor IDE is needed — so obtaining it
-//! is one command:
+//! it. It is prebuilt, though — no vendor IDE is needed — and `reticle
+//! fetch apicula` puts the pinned release in the per-user cache, where
+//! these tests find it:
 //!
 //! ```text
-//! pip download --no-deps --no-binary :all: apycula==0.33 -d /tmp/apycula
-//! tar -C /tmp/apycula -xzf /tmp/apycula/apycula-0.33.tar.gz
-//! export RETICLE_GOWINDB=/tmp/apycula/apycula-0.33/apycula
+//! cargo run -- fetch apicula
 //! ```
 //!
 //! That directory holds one `<device>.msgpack.xz` per die; these tests
-//! want `GW2A-18.msgpack.xz`, 375 KB. Without `RETICLE_GOWINDB` each test
-//! prints what it wanted and returns, exactly as `tests/fpga_xray.rs` does
-//! for `prjxray-db`. **A missing database must never fail the build.**
+//! want `GW2A-18.msgpack.xz`, 375 KB. `RETICLE_GOWINDB` names another
+//! directory instead. Without either, each test prints what it wanted and
+//! returns, exactly as `tests/fpga_xray.rs` does for `prjxray-db`. **A
+//! missing database must never fail the build**, and a test never
+//! downloads one.
 //!
 //! One test wants a second thing, a reference `.fs` bitstream produced by
 //! Apicula's own packer, and skips separately without it:
@@ -36,6 +37,7 @@
 #![cfg(feature = "apicula")]
 
 use std::collections::BTreeSet;
+use std::path::Path;
 
 use reticle::fpga::apicula::{
     ApiculaDatabase, ApiculaError, ApiculaOptions, InterTileWire, fuses_for,
@@ -69,14 +71,34 @@ impl FileProvider for DiskFiles {
     }
 }
 
+/// Where `reticle fetch <name>` puts the pinned copy, if it is there.
+///
+/// The name and version are spelled out because a test cannot see the
+/// binary's `datadir` module; a unit test there checks that this file
+/// asks for the version it pins.
+fn fetched(name: &str, version: &str, probe: &str) -> Option<String> {
+    let var = |v| std::env::var(v).ok().filter(|s: &String| !s.is_empty());
+    let root = var("XDG_CACHE_HOME")
+        .or_else(|| var("LOCALAPPDATA").filter(|_| cfg!(windows)))
+        .map(|d| format!("{d}/reticle"))
+        .or_else(|| var("HOME").map(|h| format!("{h}/.cache/reticle")))?;
+    let dir = format!("{root}/{name}/{version}");
+    Path::new(&format!("{dir}/{probe}"))
+        .is_file()
+        .then_some(dir)
+}
+
 /// The database directory, or `None` with a line saying what is missing.
 fn chipdb() -> Option<String> {
     let Ok(root) = std::env::var("RETICLE_GOWINDB") else {
-        eprintln!(
-            "skipped: needs a Project Apicula chip database; set RETICLE_GOWINDB to a \
-             directory holding {DEVICE}.msgpack.xz (see this file's header)"
-        );
-        return None;
+        let pinned = fetched("apicula", "0.33", &format!("{DEVICE}.msgpack.xz"));
+        if pinned.is_none() {
+            eprintln!(
+                "skipped: needs a Project Apicula chip database; run `reticle fetch apicula` \
+                 or set RETICLE_GOWINDB to a directory holding {DEVICE}.msgpack.xz"
+            );
+        }
+        return pinned;
     };
     let probe = format!("{root}/{DEVICE}.msgpack.xz");
     if std::fs::metadata(&probe).is_err() {

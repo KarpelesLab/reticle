@@ -2,21 +2,17 @@
 //!
 //! # Every test here skips without the database
 //!
-//! Project X-Ray's chip database is 35 MB of public-domain data that this
-//! repository does not vendor and CI does not have. Point
-//! `RETICLE_CHIPDB` at a `prjxray-db` checkout to run these; without it
-//! each test prints what it wanted and returns, exactly as
+//! Project X-Ray's chip database is 45 MB of public-domain data that this
+//! repository does not vendor and CI does not have. `reticle fetch
+//! prjxray-db` puts the pinned copy in the per-user cache, where these
+//! tests find it; `RETICLE_CHIPDB` names another copy instead. Without
+//! either, each test prints what it wanted and returns, exactly as
 //! `tests/sim_fst.rs` does for gtkwave and `tests/asic_formats.rs` does
 //! for a PDK Liberty file. **A missing database must never fail the
-//! build.**
+//! build**, and a test never downloads one.
 //!
 //! ```text
-//! git clone --filter=blob:none --no-checkout --depth 1 \
-//!     https://github.com/f4pga/prjxray-db.git
-//! cd prjxray-db && git sparse-checkout set --no-cone \
-//!     '/artix7/*.db' '/artix7/*.csv' '/artix7/xc7a35tcpg236-1/' \
-//!     '/artix7/xc7a50t/' '/artix7/mapping/' '/artix7/harness/'
-//! export RETICLE_CHIPDB=$PWD
+//! cargo run -- fetch prjxray-db
 //! ```
 //!
 //! # What these tests can and cannot reach
@@ -65,13 +61,39 @@ impl FileProvider for DiskFiles {
     }
 }
 
+/// Where `reticle fetch <name>` puts the pinned copy, if it is there.
+///
+/// The name and version are spelled out because a test cannot see the
+/// binary's `datadir` module; a unit test there checks that this file
+/// asks for the version it pins.
+fn fetched(name: &str, version: &str, probe: &str) -> Option<String> {
+    let var = |v| std::env::var(v).ok().filter(|s: &String| !s.is_empty());
+    let root = var("XDG_CACHE_HOME")
+        .or_else(|| var("LOCALAPPDATA").filter(|_| cfg!(windows)))
+        .map(|d| format!("{d}/reticle"))
+        .or_else(|| var("HOME").map(|h| format!("{h}/.cache/reticle")))?;
+    let dir = format!("{root}/{name}/{version}");
+    Path::new(&format!("{dir}/{probe}"))
+        .is_file()
+        .then_some(dir)
+}
+
 /// The database root, or `None` with a line saying what is missing.
 fn chipdb() -> Option<String> {
+    let probe = "artix7/xc7a50t/tilegrid.json";
     let Ok(root) = std::env::var("RETICLE_CHIPDB") else {
-        eprintln!(
-            "skipped: needs a Project X-Ray database; set RETICLE_CHIPDB to a prjxray-db checkout"
+        let pinned = fetched(
+            "prjxray-db",
+            "0a0addedd73e7e4139d52a6d8db4258763e0f1f3",
+            probe,
         );
-        return None;
+        if pinned.is_none() {
+            eprintln!(
+                "skipped: needs a Project X-Ray database; run `reticle fetch prjxray-db` \
+                 or set RETICLE_CHIPDB to a prjxray-db checkout"
+            );
+        }
+        return pinned;
     };
     let probe = format!("{root}/artix7/xc7a50t/tilegrid.json");
     if !Path::new(&probe).exists() {

@@ -63,14 +63,29 @@ largest single reason is in *What the database does not name*.
 
 ## Getting the database
 
-Reticle never fetches anything. The library is sans-I/O: the database
-reaches it through a `FileProvider` the caller supplies, and the caller
-says where it is. The database is not in this repository and must not be.
-
 It is [Project Apicula](https://github.com/YosysHQ/apicula), `apycula` on
-PyPI, **MIT** (copyright 2019 Pepijn de Vos). Unlike Project X-Ray's, it
-**ships prebuilt** — no vendor IDE has to be run — and one file per die is
-all that is needed:
+PyPI, **MIT** (copyright 2019 Pepijn de Vos). It is not in this repository
+and must not be. Unlike Project X-Ray's, it **ships prebuilt** — no vendor
+IDE has to be run — and one file per die is all that is needed.
+
+The command line fetches it:
+
+```sh
+reticle fetch apicula
+```
+
+That downloads the 0.33 wheel from PyPI (4 MB), checks it against the
+SHA-256 PyPI publishes for it, which is built into the binary, and
+unpacks its twelve `<device>.msgpack.xz` files and its licence into
+`$XDG_CACHE_HOME/reticle/apicula/0.33` (`~/.cache/reticle/...` without
+`XDG_CACHE_HOME`). The download is done by the system's `curl`, over
+HTTPS only; the library itself still never fetches anything, and reads
+the files through a `FileProvider` like every other database.
+
+The one this work uses is `GW2A-18.msgpack.xz`: **375 216 bytes
+compressed, 5 993 401 open.** The wheel carries only the package; the
+*source* distribution also carries `doc/` and `examples/`, which are
+where several facts below come from, and is worth having to read them:
 
 ```sh
 pip download --no-deps --no-binary :all: apycula==0.33 -d /tmp/apycula
@@ -78,14 +93,10 @@ tar -C /tmp/apycula -xzf /tmp/apycula/apycula-0.33.tar.gz
 export RETICLE_GOWINDB=/tmp/apycula/apycula-0.33/apycula
 ```
 
-That directory holds thirteen `<device>.msgpack.xz` files. The one this
-work uses is `GW2A-18.msgpack.xz`: **375 216 bytes compressed, 5 993 401
-open.** The source distribution also carries `doc/` and `examples/`, which
-are where several facts below come from.
-
-`RETICLE_GOWINDB` is what `tests/fpga_gowin.rs` reads. **CI has neither
-it nor a board**, and every test that needs the database skips with a line
-saying what is missing. A missing database never fails the build.
+`tests/fpga_gowin.rs` reads `RETICLE_GOWINDB` if it is set and the cache
+if it is not. **CI has neither, nor a board**, and every test that needs
+the database skips with a line saying what is missing. A missing database
+never fails the build, and a test never fetches one.
 
 ### And the reference bitstream
 

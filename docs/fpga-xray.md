@@ -88,13 +88,35 @@ differences are enumerated below. That comparison is
 
 ## Getting the database
 
-Reticle never fetches anything. The library is sans-I/O: the database
-reaches it through a `FileProvider` the caller supplies, and the caller
-says where it is. The database is not in this repository and must not be.
-
 It is [`f4pga/prjxray-db`](https://github.com/f4pga/prjxray-db), Project
-X-Ray's chip database, **CC0-1.0 — public domain**. The whole repository
-is large; about 41 MB of it is needed for the Artix-7:
+X-Ray's chip database, **CC0-1.0 — public domain**. It is not in this
+repository and must not be. The whole repository is large; 275 files and
+45 MB of it are needed for the Artix-7.
+
+**The command line fetches it by itself.** The first `reticle fpga
+--bitstream` that needs it downloads that part into the per-user cache,
+`$XDG_CACHE_HOME/reticle/prjxray-db/<commit>` (`~/.cache/reticle/...`
+without `XDG_CACHE_HOME`), and every later run finds it there. To fetch
+ahead of time, before going offline, or for the tests:
+
+```sh
+reticle fetch prjxray-db
+```
+
+The copy is pinned to one commit, `0a0adde`, and each file is checked
+against a SHA-256 digest recorded from a checkout of that commit and
+built into the binary (`src/bin/reticle/prjxray-db.manifest`). Upstream
+moving on changes nothing here, and a file that does not match is refused
+with nothing installed. The download is done by the system's `curl`,
+over HTTPS only.
+
+**The library still never fetches anything.** It is sans-I/O: the
+database reaches it through a `FileProvider` the caller supplies, rooted
+wherever the caller says. Fetching is the command line's job, in
+`src/bin/reticle/datadir.rs`.
+
+A copy made by hand works just as well, and is what `RETICLE_CHIPDB` or
+`--chipdb <dir>` is for:
 
 ```sh
 git clone --filter=blob:none --no-checkout --depth 1 \
@@ -123,9 +145,14 @@ reticle fpga --device xc7a35t-cpg236 \
 ```
 
 `--chipdb <dir>` names the database explicitly; `RETICLE_CHIPDB` is the
-fallback. **CI has neither**, and every test that needs the database
-skips with a line saying what is missing. A missing database never fails
-the build.
+fallback; the cache comes after both, and a download after that unless
+`--offline` or `RETICLE_OFFLINE=1` forbids it. A path that is named and
+does not hold the database is an error, never a reason to download.
+
+The tests find the database the same way, minus the download:
+`RETICLE_CHIPDB`, then the cache. **CI has neither**, and every test
+that needs the database skips with a line saying what is missing. A
+missing database never fails the build, and a test never fetches one.
 
 ## What each file gives
 

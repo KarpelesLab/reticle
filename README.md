@@ -88,11 +88,12 @@ vivado -mode batch -source blinky.tcl
 ```
 
 Reticle can also write the 7-series bitstream itself, from Project
-X-Ray's chip database (public domain, supplied by the user, never
-fetched by Reticle):
+X-Ray's chip database (public domain). The first run downloads a pinned,
+hash-checked copy into `~/.cache/reticle`; `reticle fetch` does it ahead
+of time, and `--chipdb` points at a copy of your own:
 
 ```sh
-reticle fpga --device xc7a35t-cpg236 --chipdb ~/prjxray-db \
+reticle fpga --device xc7a35t-cpg236 \
     --constraints examples/basys3/sw_led.rcf \
     --bitstream sw_led.bit examples/basys3/sw_led.v
 ```

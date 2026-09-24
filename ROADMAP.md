@@ -348,8 +348,9 @@ FPGA:
       database replaces the built-in one by parsing a file, with no code
       change. `docs/fpga.md` lists exactly what it would have to supply.
 - [x] That claim, tested. `fpga::xray` reads Project X-Ray's chip
-      database (`f4pga/prjxray-db`, CC0-1.0, supplied by the user and
-      never fetched) into the same `Arch`, and `fpga::xc7` writes the
+      database (`f4pga/prjxray-db`, CC0-1.0, never fetched by the
+      library; the command line downloads a pinned, hash-checked copy)
+      into the same `Arch`, and `fpga::xc7` writes the
       Xilinx 7-series configuration container from UG470. Nothing in
       `fpga::bitstream` changed. `reticle fpga --chipdb <dir>
       --bitstream <file>` takes `examples/basys3/sw_led.v` to a 2.19 MB

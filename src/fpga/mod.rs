@@ -27,8 +27,8 @@
 //! # A real fabric, for the Xilinx 7 series
 //!
 //! That last sentence has been tested. [`xray`] reads Project X-Ray's
-//! chip database — public domain, supplied by the user, never fetched by
-//! this crate — into the same [`arch::Arch`], and [`xc7`] writes the
+//! chip database — public domain, handed in by the caller, never fetched
+//! by the library — into the same [`arch::Arch`], and [`xc7`] writes the
 //! 7-series configuration container from Xilinx UG470. [`bitstream`] did
 //! not change a line.
 //!

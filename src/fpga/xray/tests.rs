@@ -4,7 +4,8 @@
 //! The database is 35 MB that this repository does not vendor, so these
 //! feed each reader the shape of the file it reads, taken from the real
 //! one. `tests/fpga_xray.rs` runs the whole loader against the real
-//! database when `RETICLE_CHIPDB` points at one, and skips when it does
+//! database when there is one — named by `RETICLE_CHIPDB`, or fetched
+//! into the cache by `reticle fetch prjxray-db` — and skips when there is
 //! not.
 
 use std::collections::HashSet;

@@ -14,6 +14,9 @@
 
 mod args;
 mod cache_store;
+mod datadir;
+mod sha256;
+mod zip;
 
 // The `program` command needs the library's `program` feature, which
 // `cli` deliberately does not turn on: it is the only feature with a
@@ -23,6 +26,8 @@ mod cache_store;
 mod program;
 #[cfg(feature = "program")]
 use program::program_cmd;
+
+use datadir::fetch_cmd;
 
 use std::path::Path;
 use std::process::ExitCode;
@@ -56,6 +61,7 @@ Commands:
   cache    Build incrementally against a cache of elaborated modules
   viewer   Write the design out as browsable HTML: schematics and reference
   program  Load a bitstream into an attached FPGA over JTAG
+  fetch    Download the chip databases the FPGA flows read
   help     Show this message, or `reticle help <command>`
   version  Show the version
 
@@ -194,8 +200,11 @@ Options:
 
 Xilinx 7 series only, and only with a chip database:
   --chipdb <dir>     A Project X-Ray database (f4pga/prjxray-db). Also
-                     read from RETICLE_CHIPDB. Reticle never fetches it;
-                     see docs/fpga-xray.md for the command that does.
+                     read from RETICLE_CHIPDB. Without either, the copy
+                     in ~/.cache/reticle is used, and downloaded there
+                     first if it is missing (see `reticle help fetch`).
+  --offline          Never download the database; fail if it is missing.
+                     RETICLE_OFFLINE=1 does the same.
   --bitstream <file> Write a 7-series .bit here, from the real fabric.
                      Two designs written this way have reached a Basys 3:
                      examples/basys3/sw_led.v, a lookup table and three
@@ -354,6 +363,32 @@ only one with a dependency. Build it with:
   cargo build --features cli,program
 ";
 
+const FETCH_USAGE: &str = "\
+Usage: reticle fetch [options] [database...]
+
+Downloads chip databases into the per-user cache, where `reticle fpga`
+and the test suite find them without being told. With no database named,
+lists each one and where it is. A database already present is left alone.
+
+`reticle fpga` fetches what it needs by itself; this is for fetching
+ahead of time, before going offline, or for a script.
+
+Databases:
+  prjxray-db  Project X-Ray's Xilinx 7-series database, Artix-7 part (45 MB)
+  apicula     Project Apicula's Gowin databases (a 4 MB download)
+  all         Both
+
+Each is pinned to one upstream version and checked file by file against
+SHA-256 digests built into reticle. The download is done by `curl`.
+The cache is $XDG_CACHE_HOME/reticle, or ~/.cache/reticle without it.
+
+Options:
+  --path     Print only each database's directory, for a script:
+               export RETICLE_CHIPDB=$(reticle fetch --path prjxray-db)
+  --offline  Do not download; fail if a named database is missing.
+             RETICLE_OFFLINE=1 does the same.
+";
+
 fn main() -> ExitCode {
     let argv: Vec<String> = std::env::args().skip(1).collect();
     let Some(command) = argv.first().map(String::as_str) else {
@@ -386,6 +421,7 @@ fn main() -> ExitCode {
         "cache" => run(cache_cmd, rest, CACHE_USAGE),
         "viewer" => run(viewer, rest, VIEWER_USAGE),
         "program" => run(program_cmd, rest, PROGRAM_USAGE),
+        "fetch" => run(fetch_cmd, rest, FETCH_USAGE),
         other => {
             eprintln!("error: unknown command `{other}`\n");
             eprint!("{USAGE}");
@@ -426,6 +462,7 @@ fn help_text(command: Option<&str>) -> &'static str {
         Some("cache") => CACHE_USAGE,
         Some("viewer") => VIEWER_USAGE,
         Some("program") => PROGRAM_USAGE,
+        Some("fetch") => FETCH_USAGE,
         _ => USAGE,
     }
 }
@@ -534,7 +571,7 @@ fn spec_for(usage: &str) -> Spec {
                 "bitstream",
                 "region",
             ],
-            flags: &["list-devices", "report", "quiet"],
+            flags: &["list-devices", "report", "quiet", "offline"],
             repeated: &["param"],
         }
     } else if std::ptr::eq(usage, LSP_USAGE) {
@@ -559,6 +596,12 @@ fn spec_for(usage: &str) -> Spec {
         Spec {
             options: &["device", "clock", "expect"],
             flags: &["list", "probe", "quiet"],
+            repeated: &[],
+        }
+    } else if std::ptr::eq(usage, FETCH_USAGE) {
+        Spec {
+            options: &[],
+            flags: &["path", "offline"],
             repeated: &[],
         }
     } else if std::ptr::eq(usage, EMIT_USAGE) {
@@ -1825,15 +1868,10 @@ fn write_xc7_bitstream(
     use reticle::fpga::xray::{GridRegion, XrayDatabase, XrayOptions};
     use reticle::fpga::{Netlist, bitstream};
 
-    let root = args
-        .option("chipdb")
-        .map(str::to_owned)
-        .or_else(|| std::env::var("RETICLE_CHIPDB").ok())
-        .ok_or_else(|| {
-            "`--bitstream` needs a chip database: pass --chipdb <dir> or set RETICLE_CHIPDB. \
-             Reticle never fetches one; see docs/fpga-xray.md"
-                .to_owned()
-        })?;
+    let root = datadir::PRJXRAY
+        .locate(args.option("chipdb"), args.flag("offline"))
+        .map_err(|err| format!("`--bitstream` needs a chip database: {err}"))?;
+    let root = root.to_string_lossy().into_owned();
 
     let files = DiskFiles::for_sources(&[]);
     let mut options = XrayOptions::new();
