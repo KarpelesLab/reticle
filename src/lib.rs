@@ -65,6 +65,15 @@ pub mod source;
 #[cfg(any(feature = "lsp", feature = "fpga"))]
 pub mod json;
 
+// Hand-written MessagePack, read-only. Its one caller today is the Gowin
+// fabric loader (`fpga::apicula`), whose chip database is a MessagePack
+// map inside an xz stream; it sits at the crate root beside `json` for
+// the same reason, that a second caller is expected and writing the
+// parser twice would be the only alternative. Compiled with the FPGA
+// side, which is the only thing that has a use for it.
+#[cfg(feature = "fpga")]
+pub mod msgpack;
+
 #[cfg(feature = "verilog")]
 pub mod verilog;
 
