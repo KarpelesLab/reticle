@@ -207,15 +207,26 @@ pub const REG_STAT: u32 = 7;
 ///
 /// | Bits | Name | Bits | Name |
 /// |---|---|---|---|
-/// | 26-25 | `BUS_WIDTH` | 10-8 | `MODE` (the M pins) |
-/// | 20-18 | `STARTUP_STATE` | 7 | `GHIGH_B` |
-/// | 16 | `DEC_ERROR` | 6 | `GWE` |
-/// | 15 | `ID_ERROR` | 5 | `GTS_CFG_B` |
-/// | 14 | **`DONE`** (the pin) | 4 | `EOS` |
-/// | 13 | `RELEASE_DONE` | 3 | `DCI_MATCH` |
-/// | 12 | `INIT_B` (the pin) | 2 | `MMCM_LOCK` |
-/// | 11 | `INIT_COMPLETE` | 1 | `PART_SECURED` |
-/// | | | 0 | `CRC_ERROR` |
+/// | 31-27 | *reserved* | 10-8 | `MODE` (the M pins) |
+/// | 26-25 | `BUS_WIDTH` | 7 | `GHIGH_B` |
+/// | 24-21 | *reserved* | 6 | `GWE` |
+/// | 20-18 | `STARTUP_STATE` | 5 | `GTS_CFG_B` |
+/// | 17 | `XADC_OVER_TEMP` | 4 | `EOS` |
+/// | 16 | `DEC_ERROR` | 3 | `DCI_MATCH` |
+/// | 15 | `ID_ERROR` | 2 | `MMCM_LOCK` |
+/// | 14 | **`DONE`** (the pin) | 1 | `PART_SECURED` |
+/// | 13 | `RELEASE_DONE` | 0 | `CRC_ERROR` |
+/// | 12 | `INIT_B` (the pin) | | |
+/// | 11 | `INIT_COMPLETE` | | |
+///
+/// The two reserved ranges are reserved in the specification and are not
+/// always zero on a real part. After configuring an XC7A35T this crate
+/// has seen bits 29 and 30 set every time, and **bit 28 set by a
+/// Vivado-built bitstream and clear by one of Reticle's own**, with every
+/// named field identical. So [`Display`](std::fmt::Display) names what
+/// the table names and then lists any other set bit rather than dropping
+/// it: an unexplained difference is worth seeing, and a decoder that
+/// hides one costs more than it saves.
 ///
 /// The whole word is kept, and [`Display`](std::fmt::Display) prints it
 /// beside the decoded names: a field this crate placed wrongly would be
@@ -300,6 +311,76 @@ impl Status {
         self.0 & (1 << 16) != 0
     }
 
+    /// `PART_SECURED` (bit 1): the part's security level is set.
+    #[must_use]
+    pub fn part_secured(self) -> bool {
+        self.0 >> 1 & 1 == 1
+    }
+
+    /// `DCI_MATCH` (bit 3): every digitally controlled impedance block
+    /// has matched.
+    #[must_use]
+    pub fn dci_match(self) -> bool {
+        self.0 >> 3 & 1 == 1
+    }
+
+    /// `GTS_CFG_B` (bit 5): the global tristate has been released, so IO
+    /// drivers are active.
+    #[must_use]
+    pub fn gts_cfg_b(self) -> bool {
+        self.0 >> 5 & 1 == 1
+    }
+
+    /// `GWE` (bit 6): the global write enable is on, so flip-flops and
+    /// memories may change.
+    #[must_use]
+    pub fn gwe(self) -> bool {
+        self.0 >> 6 & 1 == 1
+    }
+
+    /// `GHIGH_B` (bit 7): the global high signal has been released.
+    #[must_use]
+    pub fn ghigh_b(self) -> bool {
+        self.0 >> 7 & 1 == 1
+    }
+
+    /// `XADC_OVER_TEMP` (bit 17): the analogue-to-digital converter has
+    /// reported an over-temperature shutdown.
+    #[must_use]
+    pub fn xadc_over_temp(self) -> bool {
+        self.0 >> 17 & 1 == 1
+    }
+
+    /// `STARTUP_STATE` (bits 20-18): which of the eight startup phases
+    /// the sequencer is in.
+    #[must_use]
+    pub fn startup_state(self) -> u8 {
+        u8::try_from(self.0 >> 18 & 0b111).unwrap_or(0)
+    }
+
+    /// `BUS_WIDTH` (bits 26-25): 0 is x1, 1 is x8, 2 is x16, 3 is x32.
+    #[must_use]
+    pub fn bus_width(self) -> u8 {
+        u8::try_from(self.0 >> 25 & 0b11).unwrap_or(0)
+    }
+
+    /// Every bit set that no named field in the table accounts for, as
+    /// bit positions.
+    ///
+    /// This is what makes a reserved bit visible. It is how the
+    /// difference between a Vivado bitstream and one of Reticle's own was
+    /// noticed on an XC7A35T: bit 28.
+    #[must_use]
+    pub fn unnamed_bits(self) -> Vec<u32> {
+        // Bits 0 to 20 are all named or part of a named field, as are 25
+        // and 26 (`BUS_WIDTH`). Bits 21 to 24 and 27 to 31 are the two
+        // reserved ranges.
+        const NAMED: u32 = 0x001F_FFFF | 0x0600_0000;
+        (0..32)
+            .filter(|i| self.0 & !NAMED & (1 << i) != 0)
+            .collect()
+    }
+
     /// The bits worth naming in a report, in a fixed order.
     #[must_use]
     pub fn flags(self) -> Vec<(&'static str, bool)> {
@@ -313,6 +394,12 @@ impl Status {
             ("INIT_COMPLETE", self.init_complete()),
             ("EOS", self.end_of_startup()),
             ("MMCM_LOCK", self.mmcm_lock()),
+            ("PART_SECURED", self.part_secured()),
+            ("DCI_MATCH", self.dci_match()),
+            ("GTS_CFG_B", self.gts_cfg_b()),
+            ("GWE", self.gwe()),
+            ("GHIGH_B", self.ghigh_b()),
+            ("XADC_OVER_TEMP", self.xadc_over_temp()),
         ]
     }
 }
@@ -331,7 +418,22 @@ impl std::fmt::Display for Status {
         } else {
             write!(f, "{}", set.join(" "))?;
         }
-        write!(f, ", MODE {:03b}]", self.mode())
+        write!(
+            f,
+            ", MODE {:03b}, STARTUP {}, BUS x{}",
+            self.mode(),
+            self.startup_state(),
+            1u32 << self.bus_width()
+        )?;
+        // Anything the table does not account for is named by its bit
+        // position rather than dropped. A reserved bit that differs
+        // between two bitstreams is exactly the thing worth seeing.
+        let unnamed = self.unnamed_bits();
+        if !unnamed.is_empty() {
+            let list: Vec<String> = unnamed.iter().map(|b| format!("bit{b}")).collect();
+            write!(f, ", reserved {}", list.join("+"))?;
+        }
+        write!(f, "]")
     }
 }
 
@@ -502,6 +604,45 @@ pub fn start_job() -> Job {
 #[cfg(test)]
 mod tests {
     #[test]
+    fn the_status_word_accounts_for_every_bit_it_reads() {
+        // The two readings this project has taken from an XC7A35T after
+        // configuring it: the first with Project X-Ray's Vivado-built
+        // harness bitstream, the second with one Reticle wrote itself.
+        // Every named field is identical; they differ in bit 28 alone,
+        // which UG470 reserves.
+        let vivado = Status(0x7010_7dfc);
+        let ours = Status(0x6010_7dfc);
+
+        for s in [vivado, ours] {
+            assert!(s.done(), "both had finished configuring");
+            assert!(s.release_done() && s.end_of_startup());
+            assert!(s.init_b() && s.init_complete());
+            assert!(s.mmcm_lock());
+            assert!(!s.crc_error() && !s.id_error() && !s.dec_error());
+            assert!(!s.xadc_over_temp());
+            assert_eq!(s.mode(), 0b101, "the M pins select JTAG");
+            assert_eq!(s.startup_state(), 4);
+            assert_eq!(s.bus_width(), 0);
+        }
+
+        // The difference, and the whole point of reporting it: a decoder
+        // that listed only the flags it knows showed these two as
+        // identical, which is how a real difference stayed invisible.
+        assert_eq!(vivado.unnamed_bits(), vec![28, 29, 30]);
+        assert_eq!(ours.unnamed_bits(), vec![29, 30]);
+        assert_eq!(vivado.0 ^ ours.0, 1 << 28);
+
+        // And it reaches the text a person reads.
+        let shown = format!("{vivado}");
+        assert!(shown.contains("reserved bit28+bit29+bit30"), "{shown}");
+        assert!(format!("{ours}").contains("reserved bit29+bit30"));
+        assert!(
+            shown.contains("DONE") && shown.contains("MODE 101"),
+            "{shown}"
+        );
+    }
+
+    #[test]
     fn only_a_xilinx_idcode_is_treated_as_one() {
         // The two parts this project has read over JTAG.
         assert!(is_xilinx(IDCODE_XC7A35T));
@@ -668,13 +809,19 @@ mod tests {
         assert_eq!(Status(u32::MAX).mode(), 0b111);
         assert_eq!(Status(!(0b111 << 8)).mode(), 0);
 
-        assert_eq!(Status(0).to_string(), "0x00000000 [no flags, MODE 000]");
+        // The startup phase and the bus width are fields, so they are
+        // always shown; a reserved bit is shown only when it is set.
+        assert_eq!(
+            Status(0).to_string(),
+            "0x00000000 [no flags, MODE 000, STARTUP 0, BUS x1]"
+        );
         // What an XC7A35T reads back once it is running a design, with
         // its mode pins set to JTAG.
         let running = (1 << 14) | (1 << 13) | (1 << 12) | (1 << 11) | (1 << 4) | (0b101 << 8);
         assert_eq!(
             Status(running).to_string(),
-            "0x00007d10 [DONE RELEASE_DONE INIT_B INIT_COMPLETE EOS, MODE 101]"
+            "0x00007d10 [DONE RELEASE_DONE INIT_B INIT_COMPLETE EOS, \
+             MODE 101, STARTUP 0, BUS x1]"
         );
     }
 
