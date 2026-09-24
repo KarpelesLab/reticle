@@ -168,11 +168,14 @@
 //! See `docs/fpga.md` for the `.arch` format and for what a real iCE40
 //! database would have to supply.
 
+#[cfg(feature = "apicula")]
+pub mod apicula;
 pub mod arch;
 pub mod bitstream;
 pub mod constraints;
 pub mod device;
 pub mod flow;
+pub mod gowin;
 pub mod place;
 pub mod pll;
 pub mod primitives;
@@ -231,10 +234,11 @@ use crate::source::SourceMap;
 ///
 /// The name is only used in diagnostics, which a well-formed file never
 /// produces. Adding a family means adding a file here.
-pub const BUILTIN_FILES: [(&str, &str); 4] = [
+pub const BUILTIN_FILES: [(&str, &str); 5] = [
     ("ice40.dev", include_str!("devices/ice40.dev")),
     ("ecp5.dev", include_str!("devices/ecp5.dev")),
     ("xc7.dev", include_str!("devices/xc7.dev")),
+    ("gowin.dev", include_str!("devices/gowin.dev")),
     ("generic.dev", include_str!("devices/generic.dev")),
 ];
 
@@ -295,6 +299,7 @@ mod tests {
                 "ecp5-25f-CABGA381",
                 "ecp5-45f-CABGA381",
                 "xc7a35t-cpg236",
+                "gw2a-18-pg256",
                 "generic",
                 "generic-k6",
             ]
@@ -317,14 +322,38 @@ mod tests {
             // family with a configurable buffer and three on Xilinx.
             // An input needs a way in, an output a way out, and both
             // need the pad.
+            //
+            // A BIDIRECTIONAL buffer and a GLOBAL CLOCK BUFFER are
+            // required of every family *but Gowin*, and that exception is
+            // deliberate rather than an omission. `devices/gowin.dev`
+            // gives both reasons in full:
+            //
+            //   * a Gowin `IOBUF`'s output enable is `OEN` and it is
+            //     ACTIVE LOW, and the `.dev` `io` line has no way to say
+            //     so, so declaring it would give every tristate design an
+            //     inverted enable — a bus that drives when it should
+            //     listen. It is declared `other` instead, and a tristate
+            //     port is reported as unbuildable;
+            //   * a Gowin clock enters the global network by being
+            //     *routed* onto it and not by instantiating a buffer, so
+            //     there is no `BUFG` bel on a GW2A-18 at all.
+            //
+            // Keeping the requirement for every other family is what
+            // makes this test still catch a file that simply forgot one.
+            let excused = device.family == "gowin";
             for (direction, roles) in [
                 ("in", &["pad", "din"][..]),
                 ("out", &["pad", "dout"][..]),
                 ("inout", &["pad", "din", "dout", "oe"][..]),
             ] {
-                let io = device
-                    .io_bel(direction)
-                    .unwrap_or_else(|| panic!("{} has no {direction} IO buffer", device.name));
+                let Some(io) = device.io_bel(direction) else {
+                    assert!(
+                        excused && direction == "inout",
+                        "{} has no {direction} IO buffer",
+                        device.name
+                    );
+                    continue;
+                };
                 assert!(
                     io.has_ports(roles),
                     "{}: the {direction} buffer `{}` lacks {roles:?}",
@@ -332,10 +361,10 @@ mod tests {
                     io.name
                 );
             }
-            let gb = device
-                .bel(BelRole::GlobalBuffer)
-                .unwrap_or_else(|| panic!("{} has no global buffer", device.name));
-            assert!(gb.has_ports(&["i", "o"]), "{}", device.name);
+            match device.bel(BelRole::GlobalBuffer) {
+                Some(gb) => assert!(gb.has_ports(&["i", "o"]), "{}", device.name),
+                None => assert!(excused, "{} has no global buffer", device.name),
+            }
             for bram in &device.block_rams {
                 assert!(!bram.width_modes.is_empty(), "{}", device.name);
                 // A narrow mode may hold fewer bits than the widest one
