@@ -47,9 +47,9 @@
 //! carried a clock from a pad to twenty-six flip-flops in a bitstream the
 //! same board accepted with `DONE` high on the same day, and every
 //! feature they put on the pin, the backbone hop and the global buffer is
-//! the one Vivado put there for the same pin. **Nobody has watched that
-//! clock do anything**, so what these tables establish is a match, not an
-//! effect.
+//! the one Vivado put there for the same pin. A person watched that
+//! design's LED blink at the rate it was written for, so on that one pin
+//! and that one buffer these tables are an effect, not only a match.
 
 use std::collections::BTreeMap;
 

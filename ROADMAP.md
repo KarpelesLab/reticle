@@ -392,8 +392,9 @@ FPGA:
       into the clock backbone and on the `BUFGCTRL` is identical to what
       Vivado put there for the same pin of the same board; the clock row
       and the rebuffers differ because the two designs drive different
-      halves of the die. **Nobody has watched that LED yet**, so what a
-      clock does on silicon is still unconfirmed. What still cannot be
+      halves of the die. **A person watched that LED blink**, at the
+      rate it was written for to within a hand-timed period, so a clock
+      routed by this flow does work on silicon. What still cannot be
       routed is a carry chain — the reason is packing, not a missing
       table — and a memory. See `docs/fpga-xray.md`.
 - [x] The other half of that sentence: a **JTAG programmer**, so a

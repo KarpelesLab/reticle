@@ -199,10 +199,9 @@ Xilinx 7 series only, and only with a chip database:
   --bitstream <file> Write a 7-series .bit here, from the real fabric.
                      Two designs written this way have reached a Basys 3:
                      examples/basys3/sw_led.v, a lookup table and three
-                     pins, watched working, and examples/basys3/blink.v, a
-                     clocked counter the part accepted with DONE high and
-                     that nobody has watched blink. A carry chain does not
-                     route; see docs/fpga-xray.md.
+                     pins, and examples/basys3/blink.v, a clocked
+                     counter, both watched working. A carry chain does
+                     not route; see docs/fpga-xray.md.
   --region <box>     Which tiles of the fabric to load, as x0,y0,x1,y1 in
                      the database's grid coordinates. The default is a
                      box around the constrained pins, because the whole
@@ -1800,9 +1799,8 @@ fn needs_global_buffer(
 /// `examples/basys3/sw_led.v` — a lookup table and three pins — ran on a
 /// Basys 3 on 2026-09-24 and was watched working. `examples/basys3/blink.v`
 /// — a pad clock through a `BUFG` and the clock tree into twenty-six
-/// flip-flops — was loaded the same day and the part reported `DONE` high
-/// with no CRC error; nobody has watched its LED, so the clock's effect on
-/// silicon is not confirmed.
+/// flip-flops — was loaded the same day and watched blinking at the rate
+/// it was written for.
 ///
 /// For anything else, what this establishes is that the container is the
 /// one UG470 describes, that its IDCODE is the one the device file and the
@@ -2003,10 +2001,9 @@ fn write_xc7_bitstream(
     }
     note.push_str(
         "note: two designs from this flow have been loaded into a part, both on a \
-         Basys 3: a lookup table and three pins, watched working by a person, \
-         and a clocked counter the part accepted with DONE high and that nobody \
-         has yet watched blink. Nothing larger has been tried; a carry chain \
-         does not route. See docs/fpga-xray.md.\n",
+         Basys 3, and a person watched both work: a lookup table and three \
+         pins, and a clocked counter. Nothing larger has been tried; a carry \
+         chain does not route. See docs/fpga-xray.md.\n",
     );
     Ok(note)
 }

@@ -1,6 +1,6 @@
 # A real Xilinx 7-series fabric, and a real `.bit`
 
-## One design produced by this has run on a real part
+## Two designs produced by this have run on a real part
 
 On 2026-09-24 the milestone design — two slide switches through one
 lookup table to one LED — was built by this flow from Verilog, loaded
@@ -54,7 +54,7 @@ What is **not** established is that any of it configures anything *on
 silicon*. The gaps are named below under *What remains before an LED
 could light*.
 
-## And a second, clocked one, which the part accepted
+## And a second, clocked one, which blinks
 
 The same day, `examples/basys3/blink.v` — the board's 100 MHz oscillator
 through a `BUFG`, down the global clock column, out along a leaf network
@@ -62,13 +62,19 @@ into twenty-six flip-flops, and one LED off the top bit — was built by
 this flow, **routed completely** (92 of 92 signals), loaded onto the same
 board, and the part answered `DONE` high with no CRC error.
 
-**Nobody has watched that LED.** The design should blink LED 0 at 1.49 Hz
-and whether it does is not known here; a configured part that does
-nothing looks exactly like this from the cable's end. So the honest
-statement is: a clocked design of this shape routes, assembles into a
-`.bit` every bit of which the database can name, and configures the part
-without complaint. Whether the clock arrives is the next thing a person
-with the board can settle in one glance.
+**A person watched that LED blink**, the same day, loaded again from a
+fresh build. The design should blink LED 0 at 1.49 Hz, a period of
+0.671 s; one period timed by hand with a stopwatch, from one turn-on to
+the next, came to about 0.60 s. That is a single press of a stopwatch
+button, so it establishes that the clock arrives and the counter counts,
+and that the rate is the right one to within what a hand can time: a
+wrong counter bit would be off by a factor of two, and nothing else
+available here could make a 100 MHz oscillator run 11 % fast. It is not
+a measurement of the clock's frequency.
+
+So a clock does travel on silicon the way this flow routes it: from the
+pad, through the `BUFG`, down the global clock column and along a leaf
+network into flip-flops that toggle.
 
 What *is* checked, and is the reason to expect it to work, is the same
 comparison that predicted the first milestone, now over the clock:

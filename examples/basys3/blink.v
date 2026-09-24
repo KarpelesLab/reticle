@@ -19,9 +19,10 @@
 //
 // WHAT HAS BEEN TRIED ON A PART: built by this flow, fully routed, and
 // loaded into a Basys 3 by `reticle program`, which reported `DONE` high
-// with no CRC error. **Nobody has yet watched the LED**, so the line
-// above is what the design should do and not a report of what it did.
-// `docs/fpga-xray.md` says the same in more detail.
+// with no CRC error. On 2026-09-24 a person watched LED 0 blink, and
+// one period timed by hand came to about 0.60 s against the 0.671 s
+// above: the right rate to within a stopwatch press, where a wrong
+// counter bit would be off by two. `docs/fpga-xray.md` has the detail.
 //
 // # Why the increment is spelled out
 //

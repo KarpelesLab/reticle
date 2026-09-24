@@ -29,9 +29,9 @@
 //! part.
 //!
 //! None of that says a design configures anything — only a board can.
-//! One has: `sw_led` drove an LED on a Basys 3 on 2026-09-24. The clocked
-//! design, `blink`, got as far as `DONE` on the same board the same day
-//! and nobody has watched its LED. No test here can reach either fact,
+//! Two have: `sw_led` drove an LED on a Basys 3 on 2026-09-24, and the
+//! clocked design, `blink`, was watched blinking on the same board the
+//! same day. No test here can reach either fact,
 //! which is why the structural checks stay, and the strongest of them is
 //! `the_clock_path_is_the_one_vivado_built`: feature for feature against
 //! what Vivado put on the same clock pin of the same board.

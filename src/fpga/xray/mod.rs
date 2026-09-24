@@ -27,8 +27,8 @@
 //! of the journey: `examples/basys3/blink.v`, a pad clock through a
 //! `BUFG` and the global clock column into twenty-six flip-flops, routed
 //! completely and configured the same board with `DONE` high and no CRC
-//! error. Nobody has watched *that* LED, so what the clock does on
-//! silicon is not confirmed.
+//! error, and a person watched its LED blink at the rate it was written
+//! for.
 //!
 //! That is the whole of what has been tried on silicon. Real bit
 //! positions are still not the same thing as a working bitstream for any
