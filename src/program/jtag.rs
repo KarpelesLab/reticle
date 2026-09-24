@@ -417,7 +417,7 @@ pub enum Op {
 ///
 /// A `Plan` is what both transports are built from: [`Scan::apply`]
 /// turns one into MPSSE commands and
-/// [`super::apollo::compile`](super::apollo::compile) turns the same one
+/// [`super::apollo::compile`] turns the same one
 /// into Apollo control requests. It performs no I/O and knows nothing
 /// about either.
 ///
