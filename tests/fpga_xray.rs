@@ -29,8 +29,12 @@
 //! part.
 //!
 //! None of that says a design configures anything — only a board can.
-//! One has: `sw_led` drove an LED on a Basys 3 on 2026-09-24. No test
-//! here can reach that, which is why the structural checks stay.
+//! One has: `sw_led` drove an LED on a Basys 3 on 2026-09-24. The clocked
+//! design, `blink`, got as far as `DONE` on the same board the same day
+//! and nobody has watched its LED. No test here can reach either fact,
+//! which is why the structural checks stay, and the strongest of them is
+//! `the_clock_path_is_the_one_vivado_built`: feature for feature against
+//! what Vivado put on the same clock pin of the same board.
 //! See `docs/fpga-xray.md`.
 
 #![cfg(feature = "fpga")]
@@ -1042,4 +1046,503 @@ fn a_real_fabrics_graph_is_measured_and_the_bits_are_shared() {
     // the two adjacency lists. If this ever exceeds a few hundred bytes
     // a pip, something has started allocating per pip again.
     assert!(big_per_pip < 400.0, "{big_per_pip:.0} bytes per pip");
+}
+
+// ---------------------------------------------------------------------------
+// A clocked design: `examples/basys3/blink.v`
+// ---------------------------------------------------------------------------
+
+/// What one run of the blink design through the whole flow produced.
+#[cfg(all(feature = "verilog", feature = "synth"))]
+struct Blink {
+    /// Its bitstream, back in the database's own feature names.
+    features: Decoded,
+    /// How many signals routed, and how many there were.
+    signals: (usize, usize),
+    /// Pins the fabric gives no wire, which should be the two pads and
+    /// nothing else.
+    off_fabric: Vec<String>,
+    /// How many flip-flops the clock net reaches.
+    clock_sinks: usize,
+    /// Rebuffer enable bits the column pass added.
+    clock_bits: usize,
+}
+
+/// Runs `examples/basys3/blink.v` exactly as `reticle fpga --bitstream`
+/// does, and gives back what came out.
+///
+/// The one thing this repeats from the CLI rather than sharing with it is
+/// the choice of region: the pins, grown to reach the nearest `BUFGCTRL`,
+/// because a global buffer sits in a column in the middle of the die and
+/// a clock that cannot reach it cannot be routed.
+///
+/// `None` when the crate was published without `examples/`.
+#[cfg(all(feature = "verilog", feature = "synth"))]
+fn blink(root: &str) -> Option<Blink> {
+    use reticle::diag::Diagnostics;
+    use reticle::fpga::place::{PlaceOptions, place};
+    use reticle::fpga::{
+        Constraints, FpgaOptions, Netlist, RouteOptions, bitstream, route, synthesize_for, target,
+    };
+    use reticle::source::SourceMap;
+
+    let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("examples/basys3");
+    let (Ok(verilog), Ok(rcf)) = (
+        std::fs::read_to_string(dir.join("blink.v")),
+        std::fs::read_to_string(dir.join("blink.rcf")),
+    ) else {
+        eprintln!("skipped: `examples/` is not in the published crate");
+        return None;
+    };
+
+    let mut map = SourceMap::new();
+    let source = map.add("blink.v", &verilog).unwrap();
+    let rcf_file = map.add("blink.rcf", &rcf).unwrap();
+    let mut diags = Diagnostics::new();
+    let ast = reticle::verilog::parse_source(
+        &mut map,
+        source,
+        reticle::verilog::Dialect::SystemVerilog,
+        &mut reticle::verilog::NoIncludes,
+        &mut diags,
+    );
+    let mut design = reticle::verilog::elaborate_file(
+        &ast,
+        &reticle::verilog::ElabOptions::default(),
+        &mut diags,
+    )
+    .unwrap();
+    assert!(!diags.has_errors(), "{}", diags.render(&map));
+    let top = design.top.unwrap();
+    let device = target(DEVICE).unwrap();
+    let mut constraints = Constraints::parse(&rcf, rcf_file, &mut diags);
+    constraints.merge_attrs(&design, top, &mut diags);
+    assert!(!diags.has_errors(), "{}", diags.render(&map));
+    synthesize_for(
+        &mut design,
+        top,
+        device,
+        &constraints,
+        &FpgaOptions::default(),
+        &mut diags,
+    )
+    .unwrap();
+    assert!(!diags.has_errors(), "{}", diags.render(&map));
+
+    let db = XrayDatabase::open(&DiskFiles, root, DEVICE, &XrayOptions::new()).unwrap();
+    let pins: Vec<String> = constraints.pins.iter().map(|p| p.pin.clone()).collect();
+    let region = db
+        .region_for_pins(&DiskFiles, &pins, 12)
+        .unwrap()
+        .expect("W5 and U16 are both sites of this package");
+    let region = db
+        .region_with_site_type(&DiskFiles, region, "BUFGCTRL")
+        .unwrap()
+        .expect("the die has a global clock column");
+    let mut options = XrayOptions::new();
+    options.region = Some(region);
+    let fabric = db.load(&DiskFiles, &options).unwrap();
+    fabric.check_idcode(IDCODE).unwrap();
+    eprint!("{}", fabric.stats.to_text());
+
+    let graph = fabric.arch.build_graph();
+    let netlist = Netlist::build(&design, top, device, &graph).unwrap();
+    let (placement, report) = place(
+        &netlist,
+        &fabric.arch,
+        &graph,
+        &constraints,
+        &PlaceOptions::default(),
+    )
+    .unwrap();
+    assert_eq!(report.fixed, 2, "the clock pin and the LED are not held");
+    for index in 0..netlist.instances.len() {
+        assert!(
+            placement.site_of(index).is_some(),
+            "instance {index} unplaced"
+        );
+    }
+
+    let (routing, routing_report) = route(&netlist, &graph, &placement, &RouteOptions::default())
+        .expect("the clocked design does not route");
+    eprintln!("{}", routing_report.to_text());
+    assert!(
+        routing.verify(&netlist, &graph, &placement).is_empty(),
+        "{:?}",
+        routing.verify(&netlist, &graph, &placement)
+    );
+
+    // The clock net: the one driven by the global buffer's output.
+    let mut clock_sinks = 0;
+    for (index, signal) in netlist.signals.iter().enumerate() {
+        let Some(driver) = signal.driver else {
+            continue;
+        };
+        if netlist.instances[netlist.pins[driver].instance].primitive != "BUFG" {
+            continue;
+        }
+        clock_sinks = signal.sinks.len();
+        assert!(
+            routing.route(index).is_some(),
+            "the global buffer's output is not routed"
+        );
+    }
+
+    let mut tiles = bitstream::generate(
+        &design,
+        top,
+        &fabric.arch,
+        &graph,
+        &netlist,
+        &placement,
+        &routing,
+    )
+    .unwrap();
+    let clock_bits = fabric
+        .enable_global_clocks(&graph, &routing, &mut tiles)
+        .unwrap();
+    let frames = xc7::frames_from_bitstream(&fabric.part, &tiles, &fabric.frames).unwrap();
+    let header = BitHeader::new("blink;UserID=0XFFFFFFFF;Version=reticle", "7a35tcpg236");
+    let bytes = xc7::write_bit(&header, &fabric.part, &frames).unwrap();
+    let back = xc7::read_bit(&bytes).unwrap();
+    assert_eq!(back.idcode, Some(IDCODE));
+    assert_eq!(back.frame_count(), STREAM_FRAMES);
+    for (expected, computed) in &back.crc_checks {
+        assert_eq!(expected, computed);
+    }
+
+    Some(Blink {
+        features: db.decode(&DiskFiles, &frames).unwrap(),
+        signals: (routing.routed(), netlist.signals.len()),
+        off_fabric: netlist.off_fabric.clone(),
+        clock_sinks,
+        clock_bits,
+    })
+}
+
+/// **The clocked milestone.** A clock from a pad, through a `BUFG`, down
+/// the global clock column and out along a leaf network to twenty-six
+/// flip-flops — and every feature of that path against the ones Vivado
+/// set for the same pin of the same board.
+///
+/// The Basys 3 harness bitstream drives its own clock from the same pin,
+/// `W5`, so the comparison is exact for as long as the two designs want
+/// the same thing. Where they part company they part for a reason the
+/// assertions name: the harness's loads are in the die's **top** clock
+/// region and blink's are in the **bottom** one, so the same four
+/// features land in `CLK_HROW_BOT_R_X60Y26` here and in
+/// `CLK_HROW_TOP_R_X60Y130` there, and the clock leaves the column
+/// through the rebuffer below the buffer rather than the one above it.
+#[test]
+#[cfg(all(feature = "verilog", feature = "synth"))]
+fn the_clock_path_is_the_one_vivado_built() {
+    let Some(root) = chipdb() else { return };
+    let Some(theirs) = vivado(&root) else { return };
+    let Some(ours) = blink(&root) else { return };
+
+    // ---- It routes, all of it. ----
+    let (routed, signals) = ours.signals;
+    assert_eq!(routed, signals, "{routed} of {signals} signal(s) routed");
+    assert!(signals > 60, "only {signals} signal(s): too small to be it");
+    assert_eq!(ours.clock_sinks, 26, "the clock reaches 26 flip-flops");
+    // The only pins the fabric has no wire for are the two package pads,
+    // which are balls and not wires. Anything else means a primitive
+    // whose pins this loader cannot name, which is how a carry chain
+    // looks.
+    assert_eq!(ours.off_fabric.len(), 2, "{:?}", ours.off_fabric);
+    assert_eq!(ours.features.unexplained, 0);
+
+    // ---- The clock pin. Identical, feature for feature. ----
+    //
+    // `W5` is `IOB_X1Y26`, the `IOB_Y0` half of `RIOB33_X43Y25`, and it
+    // is the harness's clock pin too.
+    for tile in ["RIOB33_X43Y25", "RIOI3_X43Y25"] {
+        assert_eq!(
+            ours.features.at(tile),
+            theirs.at(tile),
+            "the clock pin's {tile}"
+        );
+    }
+    assert_eq!(ours.features.at("RIOI3_X43Y25"), vec!["ILOGIC_Y0.ZINV_D"]);
+    assert_eq!(ours.features.at("RIOB33_X43Y25").len(), 3);
+
+    // ---- The clock-capable input's way into the clock backbone. ----
+    assert_eq!(
+        ours.features.at("HCLK_CMT_L_X106Y26"),
+        theirs.at("HCLK_CMT_L_X106Y26"),
+        "the pad's hop into the clock backbone"
+    );
+
+    // ---- The global buffer. Identical, all six features. ----
+    assert_eq!(
+        ours.features.at("CLK_BUFG_BOT_R_X60Y48"),
+        theirs.at("CLK_BUFG_BOT_R_X60Y48"),
+        "the BUFGCTRL, its input mux and its output"
+    );
+    assert_eq!(ours.features.at("CLK_BUFG_BOT_R_X60Y48").len(), 6);
+
+    // ---- The clock row. Same features, other clock region. ----
+    //
+    // Two of the six features are on the row the pad arrives at, which
+    // both designs share; the other four are on the row the loads hang
+    // off, and the two designs use different rows.
+    let mine = ours.features.at("CLK_HROW_BOT_R_X60Y26");
+    for feature in theirs.at("CLK_HROW_BOT_R_X60Y26") {
+        assert!(mine.contains(&feature), "{feature} missing from {mine:?}");
+    }
+    for feature in theirs.at("CLK_HROW_TOP_R_X60Y130") {
+        assert!(
+            mine.contains(&feature),
+            "{feature}, which vivado put in the top row, is missing from the bottom row: {mine:?}"
+        );
+    }
+    // And that is the whole tile: the same six, no more.
+    assert_eq!(mine.len(), 6, "{mine:?}");
+
+    // ---- The rebuffers. A mirror image, for a route that goes down. ----
+    //
+    // The harness drives its clock up the column and takes the
+    // `TOP` <- `BOT` pip; blink drives it down and takes the other one.
+    // Both enables are on at each rebuffer the track reaches.
+    let rebuf = ours.features.at("CLK_BUFG_REBUF_X60Y38");
+    assert!(rebuf.contains(&"GCLK0_ENABLE_ABOVE"), "{rebuf:?}");
+    assert!(rebuf.contains(&"GCLK0_ENABLE_BELOW"), "{rebuf:?}");
+    assert!(
+        rebuf.contains(&"CLK_BUFG_REBUF_R_CK_GCLK0_BOT.CLK_BUFG_REBUF_R_CK_GCLK0_TOP"),
+        "blink's clock goes down the column: {rebuf:?}"
+    );
+    assert!(
+        theirs
+            .at("CLK_BUFG_REBUF_X60Y65")
+            .contains(&"CLK_BUFG_REBUF_R_CK_GCLK0_TOP.CLK_BUFG_REBUF_R_CK_GCLK0_BOT"),
+        "the harness's clock goes up it"
+    );
+    assert!(ours.clock_bits >= 4, "{} enable bit(s)", ours.clock_bits);
+
+    // ---- And the leaves, which are a shape rather than an equality. ----
+    //
+    // A leaf network taps the horizontal clock in whichever `HCLK_*` tile
+    // sits beside the interconnect column it has to feed, so the tiles
+    // differ between the two designs by construction. What must match is
+    // that each tap costs the buffer enable and drives a `HCLK_LEAF_*`
+    // wire, and that the interconnect takes the clock off a `GCLK_*`.
+    let leaves: Vec<&(String, String)> = ours
+        .features
+        .features
+        .iter()
+        .filter(|(tile, _)| tile.starts_with("HCLK_R_") || tile.starts_with("HCLK_L_"))
+        .collect();
+    assert!(!leaves.is_empty(), "the clock reaches no leaf network");
+    for (tile, feature) in &leaves {
+        assert!(
+            feature == "ENABLE_BUFFER.HCLK_CK_BUFHCLK0" || feature.starts_with("HCLK_LEAF_CLK_B_"),
+            "{tile}.{feature}"
+        );
+    }
+    let into_logic = ours
+        .features
+        .features
+        .iter()
+        .filter(|(tile, feature)| tile.starts_with("INT_") && feature.contains("GCLK"))
+        .count();
+    assert!(
+        into_logic >= 4,
+        "{into_logic} clock pip(s) into logic tiles"
+    );
+
+    // Print both sides of the whole path, so a reader can see what the
+    // assertions above are about.
+    eprintln!("the clock path, vivado then reticle:");
+    for tile in [
+        "RIOB33_X43Y25",
+        "RIOI3_X43Y25",
+        "HCLK_CMT_L_X106Y26",
+        "CLK_HROW_BOT_R_X60Y26",
+        "CLK_HROW_TOP_R_X60Y130",
+        "CLK_BUFG_BOT_R_X60Y48",
+        "CLK_BUFG_REBUF_X60Y13",
+        "CLK_BUFG_REBUF_X60Y38",
+        "CLK_BUFG_REBUF_X60Y65",
+    ] {
+        eprintln!("  {tile}");
+        eprintln!("    vivado:  {:?}", theirs.at(tile));
+        eprintln!("    reticle: {:?}", ours.features.at(tile));
+    }
+    eprintln!("reticle: {}", ours.features.to_text());
+}
+
+/// Which rebuffer enable belongs to which end of a cut global clock
+/// track, re-derived from the four Vivado designs in `artix7/harness/`
+/// rather than trusted to the comment in `xray::sites`.
+///
+/// Each of those designs drives one clock from the middle of the column
+/// up to the row at `Y130`, and each sets exactly the same eleven
+/// `CLK_BUFG_REBUF` features. A live segment of the track runs from one
+/// rebuffer's `TOP` wire to the next one's `BOT` wire, and the eleven are
+/// exactly "both ends of every live segment" — provided `TOP` pairs with
+/// `ENABLE_BELOW`. The other pairing explains none of the four, which is
+/// what this asserts: under it, the rebuffer at the bottom of the live
+/// run would carry `ENABLE_ABOVE` and it carries `ENABLE_BELOW`.
+#[test]
+fn the_rebuffer_enables_pair_with_the_ends_vivado_marks() {
+    let Some(root) = chipdb() else { return };
+    let mut checked = 0;
+    for design in [
+        "basys3/swbut",
+        "arty-a7/swbut",
+        "arty-a7/pmod",
+        "arty-a7/uart",
+    ] {
+        let path = format!("{root}/artix7/harness/{design}/design.json");
+        let Ok(text) = std::fs::read_to_string(&path) else {
+            eprintln!("skipped: the checkout has no `{path}`");
+            continue;
+        };
+        // Every `CLK_BUFG_REBUF` feature the design occupies, as
+        // (tile, feature).
+        let mut features: Vec<(String, String)> = Vec::new();
+        for quoted in text.split('"') {
+            let Some(rest) = quoted.strip_prefix("CLK_BUFG_REBUF_X") else {
+                continue;
+            };
+            // `design.json` spells a pip's feature with dots and a bare
+            // wire with a slash; only the features carry bits.
+            let Some((tile, feature)) = rest.split_once('.') else {
+                continue;
+            };
+            features.push((format!("CLK_BUFG_REBUF_X{tile}"), feature.to_owned()));
+        }
+        if features.is_empty() {
+            continue;
+        }
+        checked += 1;
+
+        // The track, from the one pip's own name.
+        let track = features
+            .iter()
+            .find_map(|(_, f)| f.split("_CK_GCLK").nth(1))
+            .and_then(|tail| tail.split('_').next())
+            .expect("a rebuffer pip names its track")
+            .to_owned();
+
+        // The rebuffers, bottom to top, and which enables each carries.
+        let mut rows: Vec<u32> = features
+            .iter()
+            .filter_map(|(tile, _)| tile.rsplit_once('Y')?.1.parse().ok())
+            .collect();
+        rows.sort_unstable();
+        rows.dedup();
+        assert_eq!(rows.len(), 5, "{design}: {rows:?}");
+        let has = |row: u32, end: &str| -> bool {
+            features.iter().any(|(t, f)| {
+                t.ends_with(&format!("Y{row}")) && *f == format!("GCLK{track}_ENABLE_{end}")
+            })
+        };
+        // The bottom of the live run carries `BELOW` and not `ABOVE`: its
+        // live wire is the `TOP` one, the segment towards the buffer. The
+        // top of the run is the mirror image. Between them, both.
+        let (bottom, top) = (rows[0], rows[rows.len() - 1]);
+        assert!(has(bottom, "BELOW"), "{design}: Y{bottom} ENABLE_BELOW");
+        assert!(!has(bottom, "ABOVE"), "{design}: Y{bottom} ENABLE_ABOVE");
+        assert!(has(top, "ABOVE"), "{design}: Y{top} ENABLE_ABOVE");
+        assert!(!has(top, "BELOW"), "{design}: Y{top} ENABLE_BELOW");
+        for row in &rows[1..rows.len() - 1] {
+            assert!(has(*row, "ABOVE") && has(*row, "BELOW"), "{design}: Y{row}");
+        }
+        // And the eleven features are all of them: eight enables and the
+        // three `TOP` <- `BOT` pips of a clock driven upwards.
+        assert_eq!(features.len(), 11, "{design}: {features:?}");
+        let ups = features
+            .iter()
+            .filter(|(_, f)| f.ends_with(&format!("_CK_GCLK{track}_BOT")))
+            .count();
+        assert_eq!(ups, rows.len() - 2, "{design}: upward pips");
+        eprintln!("{design}: GCLK{track} over rebuffers {rows:?}, 11 features, consistent");
+    }
+    if checked == 0 {
+        eprintln!("skipped: the checkout has no `artix7/harness/*/design.json`");
+    }
+}
+
+/// `examples/basys3/blink.v` spells its increment out as a toggle chain
+/// rather than writing `count + 1`, because a `+` maps onto a `CARRY4`
+/// chain this flow cannot route. The design's comment says the two are
+/// the same thing; this proves it, over all 2^26 values, with Reticle's
+/// own equivalence checker.
+///
+/// **This test needs no chip database.** It is here rather than in
+/// `tests/fpga_carry.rs` because what it guards is a claim in the blink
+/// design, and the design is the subject of the test above.
+#[test]
+#[cfg(all(feature = "verilog", feature = "formal"))]
+fn the_blink_designs_toggle_chain_is_an_increment() {
+    use reticle::diag::Diagnostics;
+    use reticle::formal::{EquivOptions, EquivOutcome, InitMode, check_equivalent};
+    use reticle::source::SourceMap;
+
+    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("examples/basys3/blink.v");
+    let Ok(design_text) = std::fs::read_to_string(&path) else {
+        eprintln!("skipped: `examples/` is not in the published crate");
+        return;
+    };
+    // The obvious way to write the same counter, which is what the
+    // example would say if a carry chain routed.
+    let reference = "
+module blink_ref (
+    input  wire clk,
+    output wire led
+);
+    reg [25:0] count = 26'd0;
+    always @(posedge clk) count <= count + 26'd1;
+    assign led = count[25];
+endmodule
+";
+    let both = format!("{design_text}\n{reference}");
+
+    let mut map = SourceMap::new();
+    let source = map.add("blink_and_reference.v", &both).unwrap();
+    let mut diags = Diagnostics::new();
+    let ast = reticle::verilog::parse_source(
+        &mut map,
+        source,
+        reticle::verilog::Dialect::SystemVerilog,
+        &mut reticle::verilog::NoIncludes,
+        &mut diags,
+    );
+    let mut design = reticle::verilog::elaborate_file(
+        &ast,
+        &reticle::verilog::ElabOptions::default(),
+        &mut diags,
+    )
+    .unwrap();
+    assert!(!diags.has_errors(), "{}", diags.render(&map));
+    // The formal engines read cells, not processes, so both modules go
+    // through synthesis first. That makes this a statement about what the
+    // flow builds rather than only about what the source says.
+    reticle::synth::run(
+        &mut design,
+        &reticle::synth::SynthOptions::default(),
+        &mut diags,
+    );
+    assert!(!diags.has_errors(), "{}", diags.render(&map));
+    let find = |name: &str| {
+        design
+            .modules
+            .iter()
+            .find(|(_, m)| m.name.as_str() == name)
+            .map(|(id, _)| id)
+            .unwrap_or_else(|| panic!("no module `{name}`"))
+    };
+
+    let options = EquivOptions {
+        init: InitMode::Zero,
+        ..EquivOptions::default()
+    };
+    let report = check_equivalent(&design, find("blink"), find("blink_ref"), &options);
+    eprintln!("{}", report.diags.render(&map));
+    assert!(
+        matches!(report.outcome, EquivOutcome::Equivalent { .. }),
+        "the toggle chain is not `count + 1`: {:?}",
+        report.outcome
+    );
 }

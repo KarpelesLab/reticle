@@ -5,7 +5,10 @@
 # `Basys-3-Master.xdc`. W5 is the board's single 100 MHz oscillator and
 # its only clock source; U16 is LED 0.
 #
-# NOTHING BUILT WITH THIS HAS BEEN LOADED INTO A PART.
+# On 2026-09-24 a bitstream built with these two pins was loaded into a
+# Basys 3 and the part reported `DONE` high with no CRC error. Nobody has
+# watched the LED yet, so what the clock does on silicon is not confirmed.
+# LVCMOS33 is the only IO standard any of this has been tried with.
 set_io -io_standard LVCMOS33 clk W5
 set_io -io_standard LVCMOS33 led U16
 create_clock -name sys -period 10.0 clk

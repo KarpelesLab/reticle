@@ -197,10 +197,12 @@ Xilinx 7 series only, and only with a chip database:
                      read from RETICLE_CHIPDB. Reticle never fetches it;
                      see docs/fpga-xray.md for the command that does.
   --bitstream <file> Write a 7-series .bit here, from the real fabric.
-                     One design written this way has run on a Basys 3:
+                     Two designs written this way have reached a Basys 3:
                      examples/basys3/sw_led.v, a lookup table and three
-                     pins. Nothing larger has been tried on a part, and
-                     nothing with a clock can be built yet.
+                     pins, watched working, and examples/basys3/blink.v, a
+                     clocked counter the part accepted with DONE high and
+                     that nobody has watched blink. A carry chain does not
+                     route; see docs/fpga-xray.md.
   --region <box>     Which tiles of the fabric to load, as x0,y0,x1,y1 in
                      the database's grid coordinates. The default is a
                      box around the constrained pins, because the whole
@@ -1793,15 +1795,21 @@ fn needs_global_buffer(
 
 /// Writes a Xilinx 7-series `.bit` from a real chip database.
 ///
-/// # One design written here has configured a part
+/// # Two designs written here have been loaded into a part
 ///
 /// `examples/basys3/sw_led.v` — a lookup table and three pins — ran on a
-/// Basys 3 on 2026-09-24. For anything else, what this establishes is
-/// that the container is the one UG470 describes, that its IDCODE is the
-/// one the device file and the database agree on, and that every frame
-/// it writes is at an address the part really has. It does not establish
-/// that the frames configure anything, and the note it returns says so
-/// when the design is not routed.
+/// Basys 3 on 2026-09-24 and was watched working. `examples/basys3/blink.v`
+/// — a pad clock through a `BUFG` and the clock tree into twenty-six
+/// flip-flops — was loaded the same day and the part reported `DONE` high
+/// with no CRC error; nobody has watched its LED, so the clock's effect on
+/// silicon is not confirmed.
+///
+/// For anything else, what this establishes is that the container is the
+/// one UG470 describes, that its IDCODE is the one the device file and the
+/// database agree on, and that every frame it writes is at an address the
+/// part really has. It does not establish that the frames configure
+/// anything, and the note it returns says so when the design is not
+/// routed.
 ///
 /// The database never comes from the library: it is read here, through
 /// a `FileProvider`, from a directory the user named.
@@ -1927,7 +1935,7 @@ fn write_xc7_bitstream(
         }
     };
 
-    let tiles = bitstream::generate(
+    let mut tiles = bitstream::generate(
         design,
         top,
         &fabric.arch,
@@ -1937,6 +1945,12 @@ fn write_xc7_bitstream(
         &routing,
     )
     .map_err(|e| e.to_string())?;
+    // A global clock's rebuffer enables are the one thing no pip carries:
+    // they belong to the whole column the track runs down. See
+    // `XrayFabric::enable_global_clocks`.
+    let clock_bits = fabric
+        .enable_global_clocks(&graph, &routing, &mut tiles)
+        .map_err(|e| e.to_string())?;
     let frames = xc7::frames_from_bitstream(&fabric.part, &tiles, &fabric.frames)
         .map_err(|e| e.to_string())?;
 
@@ -1971,6 +1985,11 @@ fn write_xc7_bitstream(
         "note: {routed} of {} signal(s) routed\n",
         netlist.signals.len()
     ));
+    if clock_bits > 0 {
+        note.push_str(&format!(
+            "note: {clock_bits} global clock rebuffer enable bit(s) over the column\n"
+        ));
+    }
     if let Some(reason) = &failure {
         note.push_str(&format!("warning: the router gave up: {reason}\n"));
     }
@@ -1983,9 +2002,11 @@ fn write_xc7_bitstream(
         );
     }
     note.push_str(
-        "note: one design from this flow has run on a part: a lookup table \
-         and three pins on a Basys 3. Nothing larger has been tried, and \
-         nothing with a clock can be built yet. See docs/fpga-xray.md.\n",
+        "note: two designs from this flow have been loaded into a part, both on a \
+         Basys 3: a lookup table and three pins, watched working by a person, \
+         and a clocked counter the part accepted with DONE high and that nobody \
+         has yet watched blink. Nothing larger has been tried; a carry chain \
+         does not route. See docs/fpga-xray.md.\n",
     );
     Ok(note)
 }

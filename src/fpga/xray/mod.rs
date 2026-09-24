@@ -19,18 +19,24 @@
 //! command that obtains it. The database is not in this repository and
 //! must not be; without it every test here skips and says so.
 //!
-//! # One design from this loader has configured a part
+//! # Two designs from this loader have reached a part
 //!
 //! On 2026-09-24 a lookup table and three pins, placed and routed through
-//! this loader, ran on a Basys 3 and drove an LED from two switches.
+//! this loader, ran on a Basys 3 and drove an LED from two switches — a
+//! person watched it work. The same day a **clocked** design did the rest
+//! of the journey: `examples/basys3/blink.v`, a pad clock through a
+//! `BUFG` and the global clock column into twenty-six flip-flops, routed
+//! completely and configured the same board with `DONE` high and no CRC
+//! error. Nobody has watched *that* LED, so what the clock does on
+//! silicon is not confirmed.
 //!
 //! That is the whole of what has been tried on silicon. Real bit
 //! positions are still not the same thing as a working bitstream for any
-//! *other* shape of design: what is established beyond that one is
+//! *other* shape of design: what is established beyond those two is
 //! structural — the frame layout, the frame count, the packet stream and
 //! both CRCs agree with a bitstream Vivado made for an XC7A35T (see
-//! [`super::xc7`]) — and the list of what is untried is in
-//! `docs/fpga-xray.md` under "what remains".
+//! [`super::xc7`]) — and the list of what is untried, headed by a carry
+//! chain, is in `docs/fpga-xray.md` under "what remains".
 //!
 //! # The files, and what each one gives
 //!
@@ -793,6 +799,7 @@ impl XrayDatabase {
             part,
             arch,
             frames,
+            clocks: clock_column(&features),
             stats,
         })
     }
@@ -1499,8 +1506,31 @@ pub struct XrayFabric {
     pub arch: Arch,
     /// Where every tile's bits live in the frames, for the whole part.
     pub frames: FrameMap,
+    /// The global clock column's rebuffer enables, which belong to a
+    /// whole column of tiles rather than to any one pip; see
+    /// [`XrayFabric::enable_global_clocks`].
+    pub clocks: ClockColumn,
     /// What the load covered and cost.
     pub stats: XrayStats,
+}
+
+/// The `CLK_BUFG_REBUF` buffer enables, by global clock track.
+///
+/// Every other bit this loader knows about hangs off a pip or off a bel,
+/// and a router that takes the pip or a placer that fills the bel turns
+/// it on. These do not: a global clock track is cut at every rebuffer of
+/// its column, each cut has a buffer enable at each side, and a route
+/// crosses exactly one of the rebuffers. So the bits are kept here,
+/// beside the architecture, and switched on by
+/// [`XrayFabric::enable_global_clocks`] once the routing is known.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct ClockColumn {
+    /// The tile type that holds the rebuffers, empty when the database
+    /// has none.
+    pub tile_type: String,
+    /// Track number to the bits of that track's two enables, which are
+    /// switched on together.
+    pub enables: BTreeMap<u32, Vec<ConfigBit>>,
 }
 
 impl XrayFabric {
@@ -1520,6 +1550,126 @@ impl XrayFabric {
         }
         Ok(())
     }
+
+    /// Switches on the rebuffer enables of every global clock track the
+    /// routing uses, over the whole height of its column, and says how
+    /// many bits that was.
+    ///
+    /// # Why this is not a pip's business
+    ///
+    /// A 7-series global clock leaves its `BUFGCTRL` onto one of 32
+    /// vertical tracks, and the track is **cut** at every
+    /// `CLK_BUFG_REBUF` tile of the column. Each cut has a buffer enable
+    /// on each side (`sites::global_clock_enable` derives which, and says
+    /// how that was measured), and a
+    /// route crosses exactly one rebuffer — the one between the buffer
+    /// and the clock row it is headed for. Every other rebuffer that
+    /// sees the same track is a tile the route never enters, so no pip of
+    /// it is taken and nothing charges its bits.
+    ///
+    /// # What this sets, and whose rule it is
+    ///
+    /// Both enables of the track, in **every** rebuffer of the column.
+    /// That is nextpnr-xilinx's rule — `write_clocking` emits
+    /// `GCLK<n>_ENABLE_ABOVE` and `GCLK<n>_ENABLE_BELOW` in every
+    /// `CLK_BUFG_REBUF` tile for every track the design uses — and it is
+    /// deliberately broader than Vivado's. Vivado marks the two ends of
+    /// each *live* segment and no more: for the four designs in
+    /// `artix7/harness/`, which all drive a clock from the middle of the
+    /// column up to the row at `Y130`, that is eleven features and the
+    /// rebuffers below the buffer keep one enable each.
+    ///
+    /// The broader rule was chosen because the two are not symmetric in
+    /// their failure: an enable set on a track segment nothing uses is a
+    /// buffer driving a track that is already driven by the same clock,
+    /// which is what nextpnr does on this very board, while an enable
+    /// *missing* under a clock is a clock that arrives nowhere and a part
+    /// that configures, reports `DONE` and does nothing. Neither what the
+    /// two words mean nor whether the far end is needed is established
+    /// here; what is established is that two independent tools set it.
+    ///
+    /// # Errors
+    ///
+    /// [`super::bitstream::BitstreamError`] when a rebuffer's bits fall
+    /// outside the tile's bitmap, which would mean the `segbits` file and
+    /// `tilegrid.json` disagree about the tile type's shape.
+    pub fn enable_global_clocks(
+        &self,
+        graph: &super::arch::RoutingGraph,
+        routing: &super::Routing,
+        bits: &mut super::bitstream::Bitstream,
+    ) -> Result<usize, super::bitstream::BitstreamError> {
+        if self.clocks.enables.is_empty() {
+            return Ok(0);
+        }
+        let is_rebuffer = |x: u32, y: u32| -> bool {
+            self.arch
+                .tile_index_at(x, y)
+                .is_some_and(|index| self.arch.tile_types[index].name == self.clocks.tile_type)
+        };
+
+        // The columns and tracks a route crossed a rebuffer of.
+        let mut used: BTreeSet<(u32, u32)> = BTreeSet::new();
+        for route in routing.routes() {
+            for id in &route.pips {
+                let pip = graph.pip(*id);
+                if !is_rebuffer(pip.tile.0, pip.tile.1) {
+                    continue;
+                }
+                for node in [pip.from, pip.to] {
+                    if let Some((_, track)) = sites::global_clock_track(&graph.wire(node).name) {
+                        used.insert((pip.tile.0, track));
+                    }
+                }
+            }
+        }
+
+        let mut count = 0usize;
+        for (x, track) in used {
+            let Some(enables) = self.clocks.enables.get(&track) else {
+                continue;
+            };
+            for y in 0..self.arch.height {
+                if !is_rebuffer(x, y) {
+                    continue;
+                }
+                for bit in enables {
+                    bits.set((x, y), *bit)?;
+                    count += 1;
+                }
+            }
+        }
+        Ok(count)
+    }
+}
+
+/// The global clock rebuffer enables a family's `segbits` files hold.
+///
+/// One tile type has them and `artix7` has one such type
+/// (`CLK_BUFG_REBUF`), so the first in name order wins and a family with
+/// none gives an empty [`ClockColumn`], which makes
+/// [`XrayFabric::enable_global_clocks`] a no-op.
+fn clock_column(features: &HashMap<String, FeatureSet>) -> ClockColumn {
+    let mut names: Vec<&String> = features.keys().collect();
+    names.sort();
+    for name in names {
+        let mut enables: BTreeMap<u32, Vec<ConfigBit>> = BTreeMap::new();
+        for feature in features[name].features() {
+            if let Some(track) = sites::global_clock_enable_track(&feature.name) {
+                enables
+                    .entry(track)
+                    .or_default()
+                    .extend(feature.ones.iter().copied());
+            }
+        }
+        if !enables.is_empty() {
+            return ClockColumn {
+                tile_type: name.clone(),
+                enables,
+            };
+        }
+    }
+    ClockColumn::default()
 }
 
 /// Splits `xc7a35t-cpg236` into its die and its package.

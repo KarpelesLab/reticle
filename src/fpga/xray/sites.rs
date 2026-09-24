@@ -41,6 +41,15 @@
 //!
 //! That is one IO standard, on one package, driving one output. Every
 //! other entry here is still a transcription nothing has tested.
+//!
+//! The clock tables — [`horizontal_clock_buffers`], [`extra_bels`]'s
+//! `BUFGCTRL`, [`wire_enable_features`] and [`global_clock_enable`] —
+//! carried a clock from a pad to twenty-six flip-flops in a bitstream the
+//! same board accepted with `DONE` high on the same day, and every
+//! feature they put on the pin, the backbone hop and the global buffer is
+//! the one Vivado put there for the same pin. **Nobody has watched that
+//! clock do anything**, so what these tables establish is a match, not an
+//! effect.
 
 use std::collections::BTreeMap;
 
@@ -737,10 +746,15 @@ pub(super) fn bel_config(tile_type: &str, prefix: &str, sub: &str) -> BelConfig 
 /// the wire carries anything.
 ///
 /// Rather than a table, this is a rule the database answers: for every
-/// pip of a tile type, look up these three names for each of its local
-/// wires and take the bits of whichever the `segbits` file has. The
-/// three forms cover every such feature in `artix7/`, and outside the
-/// clock rows no tile type has one at all, so the rule costs nothing
+/// pip of a tile type, look up these names for each of its local wires
+/// and take the bits of whichever the `segbits` file has. Three of the
+/// four forms are the wire's own name with a suffix or a prefix; the
+/// fourth is [`global_clock_enable`], which is the one place where the
+/// feature is not named after the wire at all. Between them they cover
+/// **every** one-component feature in `artix7/` that names a clock
+/// resource — the complete list of shapes is `*_ACTIVE`, `*_USED`,
+/// `GCLK<n>_ENABLE_ABOVE` and `GCLK<n>_ENABLE_BELOW` — and outside the
+/// clock tiles no tile type has one at all, so the rule costs nothing
 /// where it does not apply.
 ///
 /// Checked against two working bitstreams: for the Basys 3 clock route
@@ -748,12 +762,98 @@ pub(super) fn bel_config(tile_type: &str, prefix: &str, sub: &str) -> BelConfig 
 /// `HCLK_CMT_CCIO0_USED`, `CLK_HROW_CK_IN_R0_ACTIVE`,
 /// `CLK_HROW_R_CK_GCLK0_ACTIVE` and `ENABLE_BUFFER.HCLK_CK_BUFHCLK0`
 /// that Vivado and nextpnr-xilinx set on the same route.
-pub(super) fn wire_enable_features(wire: &str) -> [String; 3] {
-    [
+pub(super) fn wire_enable_features(wire: &str) -> Vec<String> {
+    let mut out = vec![
         format!("{wire}_ACTIVE"),
         format!("{wire}_USED"),
         format!("ENABLE_BUFFER.{wire}"),
-    ]
+    ];
+    out.extend(global_clock_enable(wire));
+    out
+}
+
+/// The `CLK_BUFG_REBUF` buffer enable that the global-clock wire `wire`
+/// needs before it carries anything, if it is one.
+///
+/// # What a rebuffer is, and why this is not a suffix rule
+///
+/// A global clock leaves its `BUFGCTRL` onto one of the 32 vertical
+/// `GCLK` tracks, and that track is **cut** at every `CLK_BUFG_REBUF`
+/// tile of the column — on the `xc7a50t` at `Y13`, `Y38`, `Y65`, `Y90`,
+/// `Y117` and `Y142`, with the two global buffer tiles at `Y48` and
+/// `Y53` and the three clock rows at `Y26`, `Y78` and `Y130` between
+/// them. Each cut is a pair of wires, `…_CK_GCLK<n>_TOP` above and
+/// `…_CK_GCLK<n>_BOT` below, a pip each way between them, and a buffer
+/// on each side whose enable is a one-component feature:
+/// `GCLK<n>_ENABLE_ABOVE` and `GCLK<n>_ENABLE_BELOW`. **The enable is
+/// named after the track, not after the wire**, so the suffix rule in
+/// [`wire_enable_features`] cannot find it, and a clock that crosses a
+/// rebuffer with the enable clear reaches nothing.
+///
+/// # Which enable belongs to which wire, and how that was settled
+///
+/// Measured, and the names read backwards from the wires' own: the
+/// **`_TOP` wire is enabled by `GCLK<n>_ENABLE_BELOW`** and the `_BOT`
+/// wire by `GCLK<n>_ENABLE_ABOVE`.
+///
+/// All four Vivado designs in `artix7/harness/` route a clock up this
+/// column, and each one sets exactly eleven `CLK_BUFG_REBUF` features:
+/// the `TOP` ← `BOT` pip at `Y65`, `Y90` and `Y117` with **both**
+/// enables at each, `GCLK<n>_ENABLE_BELOW` alone at `Y38`, and
+/// `GCLK<n>_ENABLE_ABOVE` alone at `Y142`. Two of the four put the
+/// buffer in `CLK_BUFG_BOT_R_X60Y48` and two in
+/// `CLK_BUFG_TOP_R_X60Y53`, and one drives `GCLK16` rather than
+/// `GCLK0`, so the index and the tile vary and the pattern does not.
+///
+/// A live track segment spans from one rebuffer's `TOP` wire to the next
+/// one's `BOT` wire, and every one of those 44 features is exactly "each
+/// end of each live segment", with `TOP` ↔ `BELOW`: the segment holding
+/// the global buffer is `Y38`'s `TOP` and `Y65`'s `BOT`, which is
+/// `Y38.ENABLE_BELOW` and `Y65.ENABLE_ABOVE`; the segment holding the
+/// clock row at `Y130` is `Y117`'s `TOP` and `Y142`'s `BOT`, which is
+/// `Y117.ENABLE_BELOW` and `Y142.ENABLE_ABOVE`. The opposite assignment
+/// explains none of the four. `tests/fpga_xray.rs` re-derives it from
+/// those files rather than trusting this paragraph.
+///
+/// What the two words *mean* is not established here, only which wire
+/// each one switches on. Reticle's own blink route runs **down** the
+/// column instead — its flip-flops are in the bottom clock region — so
+/// it takes the `BOT` ← `TOP` pip that no harness design takes, and the
+/// rule puts a mirror image of the harness pattern on the two rebuffers
+/// below the buffer.
+fn global_clock_enable(wire: &str) -> Option<String> {
+    let (side, index) = global_clock_track(wire)?;
+    let end = if side == "TOP" { "BELOW" } else { "ABOVE" };
+    Some(format!("GCLK{index}_ENABLE_{end}"))
+}
+
+/// The global clock track the rebuffer wire `wire` is one end of: the
+/// number in `CLK_BUFG_REBUF_R_CK_GCLK<n>_TOP`, with the side.
+///
+/// This is the same reading as [`global_clock_enable`] and exists
+/// separately because [`super::XrayFabric::enable_global_clocks`] needs
+/// the *number* rather than a feature name: the enables have to be
+/// switched on over the whole column, and a route only ever traverses
+/// the one rebuffer it crosses.
+pub(super) fn global_clock_track(wire: &str) -> Option<(&str, u32)> {
+    let (track, side) = wire.rsplit_once('_')?;
+    if side != "TOP" && side != "BOT" {
+        return None;
+    }
+    let (_, index) = track.rsplit_once("_CK_GCLK")?;
+    Some((side, index.parse().ok()?))
+}
+
+/// The global clock track whose rebuffer enable the one-component
+/// feature `feature` is, which is how a `segbits` file's
+/// `GCLK<n>_ENABLE_ABOVE` is found without a table of all 32.
+pub(super) fn global_clock_enable_track(feature: &str) -> Option<u32> {
+    let rest = feature.strip_prefix("GCLK")?;
+    let (index, end) = rest.split_once("_ENABLE_")?;
+    if end != "ABOVE" && end != "BELOW" {
+        return None;
+    }
+    index.parse().ok()
 }
 
 // ---------------------------------------------------------------------------
@@ -1079,6 +1179,64 @@ mod tests {
                 .all(|h| h.to.ends_with("FF_D")),
             "a data hop must end inside a flip-flop: {p:?}"
         );
+    }
+
+    /// The rebuffer enable is the one wire feature that is not named
+    /// after its wire, and the `TOP` / `BELOW` crossing is the part that
+    /// would be silently wrong if it were guessed.
+    #[test]
+    fn a_global_clock_track_names_the_rebuffer_enable_it_needs() {
+        assert_eq!(
+            global_clock_enable("CLK_BUFG_REBUF_R_CK_GCLK0_TOP").as_deref(),
+            Some("GCLK0_ENABLE_BELOW")
+        );
+        assert_eq!(
+            global_clock_enable("CLK_BUFG_REBUF_R_CK_GCLK0_BOT").as_deref(),
+            Some("GCLK0_ENABLE_ABOVE")
+        );
+        assert_eq!(
+            global_clock_enable("CLK_BUFG_REBUF_R_CK_GCLK16_BOT").as_deref(),
+            Some("GCLK16_ENABLE_ABOVE")
+        );
+        // And it claims nothing about a wire that is not one of those.
+        for wire in [
+            "CLK_BUFG_REBUF_R_CK_GCLK0",
+            "CLK_BUFG_REBUF_LH12_1",
+            "CLK_HROW_R_CK_GCLK0",
+            "HCLK_CK_BUFHCLK0",
+            "CLBLL_LL_A1",
+            "_TOP",
+        ] {
+            assert_eq!(global_clock_enable(wire), None, "{wire}");
+        }
+        // The suffix forms still come first, so a wire that has both is
+        // charged for both.
+        let names = wire_enable_features("CLK_BUFG_REBUF_R_CK_GCLK0_TOP");
+        assert_eq!(names[0], "CLK_BUFG_REBUF_R_CK_GCLK0_TOP_ACTIVE");
+        assert_eq!(names[3], "GCLK0_ENABLE_BELOW");
+        assert_eq!(wire_enable_features("CLBLL_LL_A1").len(), 3);
+    }
+
+    /// The track number, read from a wire and from a feature, is the one
+    /// thing that says a rebuffer enable belongs to *this* clock.
+    #[test]
+    fn a_rebuffer_wire_and_its_feature_name_the_same_track() {
+        assert_eq!(
+            global_clock_track("CLK_BUFG_REBUF_R_CK_GCLK16_BOT"),
+            Some(("BOT", 16))
+        );
+        assert_eq!(global_clock_track("CLK_BUFG_REBUF_R_CK_GCLK16"), None);
+        assert_eq!(global_clock_track("CLK_HROW_R_CK_GCLK0"), None);
+        assert_eq!(global_clock_enable_track("GCLK16_ENABLE_ABOVE"), Some(16));
+        assert_eq!(global_clock_enable_track("GCLK0_ENABLE_BELOW"), Some(0));
+        for feature in [
+            "GCLK0_ENABLE_SIDEWAYS",
+            "GCLKX_ENABLE_ABOVE",
+            "CLK_HROW_R_CK_GCLK0_ACTIVE",
+            "ENABLE_BUFFER.HCLK_CK_BUFHCLK0",
+        ] {
+            assert_eq!(global_clock_enable_track(feature), None, "{feature}");
+        }
     }
 
     #[test]
