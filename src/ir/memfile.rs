@@ -35,6 +35,24 @@ use crate::logic::Bit;
 pub trait FileProvider {
     /// The text of the file named `path`, or `None` when it does not exist.
     fn read_file(&self, path: &str) -> Option<String>;
+
+    /// The *bytes* of the file named `path`, or `None` when it does not
+    /// exist.
+    ///
+    /// The default hands over the text's bytes, which is right for every
+    /// provider whose files are text — the memory files, a `$readmemh`
+    /// data file, a chip database of JSON and CSV. A provider that may be
+    /// asked for a **binary** file has to override it, because
+    /// [`FileProvider::read_file`] cannot represent bytes that are not
+    /// UTF-8 and returns `None` for them, which a caller cannot tell from
+    /// a missing file.
+    ///
+    /// One caller needs it: Project Apicula's Gowin chip database is a
+    /// compressed archive (`<device>.msgpack.xz`), so
+    /// [`fpga::apicula`](crate::fpga::apicula) reads it this way.
+    fn read_bytes(&self, path: &str) -> Option<Vec<u8>> {
+        self.read_file(path).map(String::into_bytes)
+    }
 }
 
 /// An in-memory [`FileProvider`]: a map from names to contents.
