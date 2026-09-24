@@ -3,6 +3,12 @@
 version = 4
 
 [[package]]
+name = "compcol"
+version = "0.6.11"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f6f29da98742f258743e8bb44b09f0cc1cbca2591e709b1bb85ccd6e9111f431"
+
+[[package]]
 name = "rawusb"
 version = "0.1.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -12,5 +18,6 @@ checksum = "33ef47e41f5759d5e4986b9423f5243c4762719ee4049a9f37626a24e5a7cd69"
 name = "reticle"
 version = "0.0.2"
 dependencies = [
+ "compcol",
  "rawusb",
 ]
