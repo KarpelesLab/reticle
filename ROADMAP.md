@@ -428,6 +428,21 @@ FPGA:
       Gowin's SRAM sequence. A person pressed the button and watched the
       LED. Nothing clocked routes yet: per-tile pips and LUT/flip-flop
       packing remain. See `docs/fpga-gowin.md`.
+- [x] **A second programmer transport**, for a board with no FTDI part
+      on it. A Great Scott Gadgets Cynthion reaches its Lattice ECP5
+      through a debug microcontroller running Apollo firmware, over USB
+      control requests. The wire protocol was written down first, as
+      `docs/apollo-protocol.md`, with the provenance and confidence of
+      every fact, and the implementation was written from that document
+      rather than from Apollo's source; the document's own *Verified*
+      section says what the board later confirmed and the three things
+      it contradicted. On 2026-09-25 it read `IDCODE 0x21111043` — JEDEC
+      manufacturer `0x021`, Lattice, an **LFE5U-12F**. The two
+      transports share `jtag::Plan`, a list of named JTAG operations,
+      and nothing below it: an MPSSE is a shift engine told about TMS
+      and Apollo is a TAP controller told about state numbers. **Reading
+      only.** There is no ECP5 configuration sequence in the crate and
+      no ECP5 fabric to aim one at.
 
 ASIC:
 - [x] Liberty (`.lib`) parser: cells, pins, functions, timing tables.
