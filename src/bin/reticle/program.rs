@@ -79,13 +79,29 @@ fn go(args: &Args) -> Result<Outcome, Fault> {
     };
 
     if args.flag("list") {
-        let adapters = usb::list()?;
-        if adapters.is_empty() {
-            println!("no FTDI FT2232H adapter is attached");
-        } else {
-            for serial in adapters {
-                println!("{serial}");
-            }
+        // Every adapter of both kinds, because `--device` takes a serial
+        // and a serial nobody can see is a serial nobody can type. The
+        // old listing showed FTDI cables only, so an attached Cynthion
+        // did not appear at all.
+        let cables = usb::list()?;
+        let cynthions = usb::list_cynthions()?;
+        if cables.is_empty() && cynthions.is_empty() {
+            println!("no programming adapter is attached");
+            return Ok(Outcome::Ok);
+        }
+        for serial in cables {
+            println!("{serial}  FTDI cable");
+        }
+        for (serial, debugger) in cynthions {
+            // A Cynthion reports *unrelated* serial numbers in its two
+            // modes, so which mode this one is in decides which serial
+            // `--device` should be given. Saying which is the point.
+            let mode = if debugger {
+                "Cynthion, Apollo debugger"
+            } else {
+                "Cynthion, running gateware (hands over on demand)"
+            };
+            println!("{serial}  {mode}");
         }
         return Ok(Outcome::Ok);
     }
