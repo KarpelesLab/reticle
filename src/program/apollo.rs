@@ -135,6 +135,62 @@ pub const QUIRK_ALWAYS_BITBANG: u32 = 1 << 1;
 pub const DEFAULT_MAX_SCAN_BITS: u32 = 2048;
 
 // ---------------------------------------------------------------------
+// Requests this crate never sends
+// ---------------------------------------------------------------------
+
+/// Reconfigure the FPGA from the board's flash. **Never sent.** It throws
+/// away whatever configuration is in the part; see [`NOT_SENT`].
+pub const REQUEST_RECONFIGURE_FPGA: u8 = 0xC0;
+
+/// Hold the FPGA offline so the flash bridge can have its pins. **Never
+/// sent.** It stops whatever the board was doing; see [`NOT_SENT`].
+///
+/// This constant exists because it is named in an error message: it is
+/// the first half of how Apollo's own tooling reads a board's flash UID,
+/// which is why Reticle cannot report one for a board that is already a
+/// debugger.
+pub const REQUEST_FORCE_FPGA_OFFLINE: u8 = 0xC1;
+
+/// Set the debug LED pattern. **Never sent**: harmless, and pointless on
+/// a board nobody is watching.
+pub const REQUEST_SET_LED_PATTERN: u8 = 0xA1;
+
+/// Read the microcontroller's ADC. **Never sent**: nothing here wants a
+/// voltage.
+pub const REQUEST_GET_ADC_READING: u8 = 0xA4;
+
+/// Every request `docs/apollo-protocol.md` §7 lists as one this project
+/// does not put on the wire, with why.
+///
+/// It is declared, like [`super::gowin::FORBIDDEN`], so that "we do not
+/// send this" is a checkable claim rather than a promise in prose: a test
+/// asserts that nothing [`compile`] produces is in this list, and nothing
+/// in `src/program` reads these constants except that test and one error
+/// message.
+///
+/// The catch-all this list cannot enumerate is Apollo's **flash bridge**
+/// and its DFU surface, which write something a power cycle does not
+/// undo. That is also where a board's flash UID lives: Apollo's `info`
+/// command reads it by sending [`REQUEST_FORCE_FPGA_OFFLINE`] and then
+/// shifting the ECP5 instruction `LSC_ENTER_BACKGROUND_SPI` (`0x3A`) to
+/// drive the configuration flash directly with the JEDEC `READ_UID`
+/// opcode (`0x4B`). The read itself takes nothing away, but the route to
+/// it crosses two of the three lines in §7, so Reticle does not take it
+/// and reports what it can see instead.
+pub const NOT_SENT: &[(u8, &str)] = &[
+    (
+        REQUEST_RECONFIGURE_FPGA,
+        "reconfigure the FPGA from flash, discarding what is in the part",
+    ),
+    (
+        REQUEST_FORCE_FPGA_OFFLINE,
+        "force the FPGA offline, stopping whatever the board was doing",
+    ),
+    (REQUEST_SET_LED_PATTERN, "set the debug LED pattern"),
+    (REQUEST_GET_ADC_READING, "read an ADC channel"),
+];
+
+// ---------------------------------------------------------------------
 // TAP state numbers
 // ---------------------------------------------------------------------
 

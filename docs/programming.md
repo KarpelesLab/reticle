@@ -1,10 +1,18 @@
 # Programming a board
 
-`reticle program <design.bit>` loads a bitstream into an attached Xilinx
-7-series FPGA over JTAG, through an FTDI FT2232H, with no vendor tool and
-no external program of any kind; `reticle program <design.fs>` does the
-same for a Gowin GW2A (see *Gowin* below). It is the one part of Reticle
-that talks to hardware.
+`reticle program <bitstream>` loads a bitstream into an attached FPGA over
+JTAG, with no vendor tool and no external program of any kind. It is the
+one part of Reticle that talks to hardware. Three families, over two
+transports:
+
+| Family | File | Transport | Section |
+|---|---|---|---|
+| Xilinx 7 series | `.bit` | FTDI FT2232H | the rest of this document |
+| Gowin GW2A | `.fs` | FTDI FT2232H | *Gowin* |
+| Lattice ECP5 | `.bit` | a Cynthion's Apollo microcontroller | *A second transport*, and *Configuring an ECP5* |
+
+Two of those spell a bitstream `.bit`, so which vendor a file belongs to is
+decided by **the bytes and not the extension**.
 
 It is behind the `program` Cargo feature, which is **off by default**:
 
@@ -26,7 +34,10 @@ It writes the part's **volatile configuration memory**. A power cycle
 undoes it, so every attempt is reversible.
 
 It does **not** program the board's QSPI flash, and there is no code in
-the crate that could: `src/program` has no flash commands at all. A bad
+the crate that could: `src/program` has no flash commands at all, and for
+the ECP5, which reaches its configuration flash through a JTAG instruction
+rather than through a command of its own, `program::lattice::NOT_SHIFTED`
+names that instruction and a test asserts no plan carries it. A bad
 flash write is not reversible and is not a risk worth taking to save a
 power cycle. It does not touch the mode pins either — JTAG configuration
 works whatever a board's mode jumper is set to, which is what makes this
@@ -40,17 +51,19 @@ part field is checked against it first, before the cable is even opened.
 
 ```console
 $ reticle program --list
-210183BD4B37
+210183BD4B37  FTDI cable  [USB serial number]
 
 $ reticle program --probe
-adapter 210183BD4B37, TCK 1000000 Hz
-IDCODE 0x0362d093 (revision 0), as expected for 0x0362d093
-status before: 0x70001d0c [INIT_B INIT_COMPLETE MMCM_LOCK, MODE 101]
+adapter 210183BD4B37 (FTDI cable)
+FT2232H, TCK 1000000 Hz
+IDCODE 0x0362d093: Xilinx, revision 0
+status: 0x70001d0c [INIT_B INIT_COMPLETE MMCM_LOCK, MODE 101]
 
 $ reticle program design.bit
 design.bit: top for 7a35tcpg236, built 2019/09/11 17:23:18
-adapter 210183BD4B37, TCK 1000000 Hz
-IDCODE 0x0362d093 (revision 0), as expected for 0x0362d093
+adapter 210183BD4B37 (FTDI cable)
+FT2232H, TCK 1000000 Hz
+IDCODE 0x0362d093 (revision 0), as expected
 status before: 0x70001d0c [INIT_B INIT_COMPLETE MMCM_LOCK, MODE 101]
 status after JPROGRAM: 0x50001d0c [INIT_B INIT_COMPLETE MMCM_LOCK, MODE 101]
   ...
@@ -65,6 +78,54 @@ one adapter when several are attached; with none named and more than one
 attached the command stops rather than guessing. `--clock <hz>` moves
 TCK off its 1 MHz default, and `--expect <idcode>` names another
 7-series part.
+
+### Which adapter, and which transport
+
+`--list` and `--device` cover **both** kinds of adapter, an FTDI cable and
+a Cynthion, and the command works out which transport owns a serial number
+*before it opens anything*:
+
+```console
+$ reticle program --list
+210183BD4B37                FTDI cable  [USB serial number]
+35L6H2CMGJJVCIBAEA3GCLAN74  Cynthion, Apollo debugger  [the microcontroller's own USB serial number]
+```
+
+That order — decide, then open — is deliberate, and it is not just
+tidiness. The two transports have no byte-level protocol in common, so
+"try the FTDI path and fall back to Apollo" would be a retry loop whose
+first attempt lands on whatever device happens to match, and on a machine
+with several boards attached that is how the wrong one gets opened.
+Opening a Cynthion is not free either: reaching Apollo may take the USB
+port away from the board's FPGA, and that is not undone in software. So
+`reticle::program::choose_adapter` is a pure function over a single
+enumeration of the bus, it runs first, and a request the Apollo transport
+cannot serve is refused *before* any handover. It is unit-tested with
+nothing attached, which is where the interesting cases are: two adapters
+and no `--device`, the name of the mode a board is not in, and a flash UID
+that cannot be matched.
+
+The third column says what kind of name each string is, because on a
+Cynthion they are not all the same kind of thing:
+
+- an **FTDI cable**'s serial is its USB serial number, and that is all it
+  is;
+- a **Cynthion in gateware mode** advertises the board's **flash UID** as
+  its USB serial number — sixteen hex digits, the board's stable identity;
+- the **same board in debugger mode** reports the *microcontroller's* own
+  serial number, which is not the flash UID and not derived from it.
+
+Either of a board's two names selects it, as long as it is the name of the
+mode the board is in now. A flash UID aimed at a board that is already a
+debugger is an error that says why rather than a bare "no such adapter":
+Reticle will not read a debugger's flash UID, because Apollo reads one by
+forcing the FPGA offline and driving the board's configuration flash over
+JTAG, and [`docs/apollo-protocol.md`](apollo-protocol.md) §7 is where that
+line is drawn.
+
+A serial that matches nothing is an error listing what *is* attached, with
+what each one is. A serial nobody can see is a serial nobody can type, and
+a serial nobody can identify is one they type into the wrong board.
 
 ### Permissions
 
@@ -87,14 +148,22 @@ something whose entire purpose is to drive a cable:
 | Module | What it is | Touches a device |
 |---|---|---|
 | `program::ftdi` | the MPSSE command encoding (FTDI AN_108, AN_135) | no |
+| `program::apollo` | the Cynthion debugger's request set | no |
 | `program::jtag` | the IEEE 1149.1 TAP state machine and scans | no |
 | `program::xilinx` | the UG470 configuration sequence | no |
-| `program::usb` | opening, detaching, claiming, bulk transfers | yes |
+| `program::gowin` | the Gowin `.fs` container and SRAM sequence | no |
+| `program::lattice` | naming a Lattice part, and the ECP5 SRAM sequence | no |
+| `program::choose_adapter` | which transport a `--device` serial belongs to | no |
+| `program::usb` | opening, detaching, claiming, transfers | yes |
 
-The first three are *sequencers*. Each produces a `jtag::Job` — a buffer
-of bytes to send, plus a description of what the reply means — and
-decodes a reply back into a value. None of them knows what USB is. The
-fourth writes the bytes and reads the bytes, and that is all it does.
+Everything but `usb` is a *sequencer* or a decision. The sequencers each
+produce a `jtag::Job` or an `apollo::Program` — a buffer of bytes or a
+list of control requests to send, plus a description of what the reply
+means — and decode a reply back into a value. None of them knows what USB
+is. `choose_adapter` is a pure function from "what is attached" to "which
+transport", so the one decision with a board on the other end of it is
+testable with no board at all. `usb` writes the bytes and reads the
+bytes, and that is all it does.
 
 `unsafe_code = "deny"` holds throughout: every ioctl is inside `rawusb`'s
 own `src/sys/`.
@@ -283,11 +352,39 @@ part number with a different top nibble, is the LFE5U-25F, which is why
 `program::lattice` matches on all thirty-two bits and not on twenty-eight
 the way the Xilinx path does.)
 
-Reading is as far as it goes. **Nothing configures an ECP5**: there is no
-ECP5 configuration sequence in the crate and no ECP5 fabric to make a
-bitstream for. `docs/apollo-protocol.md` §8 says what would be needed.
+Reading was as far as it went for a day. It is not any more: see
+*Configuring an ECP5* below.
 
 ### Running it
+
+From the command line, which is how a person reaches it:
+
+```console
+$ reticle program --probe --device 35L6H2CMGJJVCIBAEA3GCLAN74
+adapter 35L6H2CMGJJVCIBAEA3GCLAN74 (Cynthion, Apollo debugger)
+Apollo on 35L6H2CMGJJVCIBAEA3GCLAN74
+  identifier: Apollo Debug Module
+  firmware: v1.1.1
+  USB API: 1.2
+  max scan 2048 bits, quirks 0x00000000 (assumed; this firmware has no case for that request)
+IDCODE 0x21111043: manufacturer 0x021 (Lattice), part number 0x1111, version 2 — LFE5U-12F (or LAE5U-12F)
+nothing further was read and nothing was written: reading a status register means shifting some vendor's instruction, and there is no ECP5 configuration sequence in this crate
+```
+
+`--probe` is the whole of what a Cynthion can be asked from here.
+Handing it a `.bit` or a `.fs` is refused, **before the board is
+opened**, because there is no ECP5 configuration sequence in the crate
+and no ECP5 fabric database to build a bitstream with; refusing before
+rather than after matters, since opening the board might have taken its
+USB port away from its FPGA for the rest of the session.
+
+`--clock` does not apply: Apollo owns the TAP and is never told a TCK
+rate. `--expect` does, and it compares all thirty-two bits rather than
+masking the top nibble off as a revision, because on an ECP5 that nibble
+is part of which part it is.
+
+The same read from a test, which is where the transport is checked
+against a model of the debugger rather than against a board:
 
 ```console
 $ cargo test --features program --test program_apollo -- --ignored --nocapture read_the_ecp5_idcode
@@ -297,7 +394,7 @@ The test skips with a message when no Cynthion is attached, so it is safe
 anywhere; `RETICLE_CYNTHION` picks a board by serial number when several
 are.
 
-### Two things to know before pointing it at a board
+### Three things to know before pointing it at a board
 
 - **Getting to Apollo takes the USB port away from the FPGA.** A
   Cynthion running gateware enumerates as the gateware's device; the
@@ -306,10 +403,134 @@ are.
   FPGA stays configured — but **the board stays in debugger mode until it
   is replugged or power cycled.** The request that asks for the port back
   is sent and is accepted, and it is not enough on its own; §6 of the
-  protocol document says why.
-- **The two modes report different serial numbers.** The gateware
-  reports the board's and Apollo reports the microcontroller's, and they
-  are unrelated strings.
+  protocol document says why. The command says all of this on its way
+  through rather than afterwards.
+- **The two modes answer to different names, and only one of them names
+  the board.** In gateware mode the USB serial string is the board's
+  **flash UID**; in debugger mode it is the microcontroller's own serial
+  number. The flash UID is the board's stable identity and the same in
+  both modes, but a debugger does not put it on the bus and no request
+  returns it — so `--device` matches whichever name the board is wearing
+  now, and a handover is followed by watching for the debugger that
+  appeared rather than by matching a name.
+- **The requests this project will not send are a list, not a promise.**
+  `docs/apollo-protocol.md` §7 has it — reconfiguring the FPGA, forcing it
+  offline, the LED pattern, an ADC channel, the flash bridge, DFU — and
+  `apollo::NOT_SENT` is the same list in the code, with a test asserting
+  that nothing the crate compiles ever appears in it. Configuring an ECP5
+  does **not** need any of them, including the one that sounds as though it
+  would: §7 explains that `0xC1` "force the FPGA offline" is itself a JTAG
+  scan of `ISC_ENABLE`, which the configuration sequence shifts anyway.
+
+### Configuring an ECP5
+
+On **2026-09-25**, over the same transport, the LFE5U-12F of the same
+Cynthion r1.4 **took a bitstream into its configuration SRAM and asserted
+`DONE`**. Nothing Lattice had been configured by this project before that.
+
+Four files have gone in, in this order:
+
+| File | Bytes | Built by | Status after |
+|---|---|---|---|
+| `analyzer.bit` | 238 282 | Great Scott Gadgets, for this board | `0x00200100` (`DONE`, no fault) |
+| `leds_alternate.bit` | 98 473 | `reticle fpga` | `0x00200100` |
+| `leds.bit` | 98 473 | `reticle fpga` | `0x00200100` |
+| `leds.bit`, rebuilt (2026-09-26) | 98 474 | `reticle fpga` | `0x00200100` |
+
+The first was deliberately not ours. It is the bitstream the board is
+configured with every time it is plugged in, so if the *sequence* were
+wrong it would have failed there, before any question about the compiler
+arose. `docs/fpga-trellis.md` is the story of the other three, including
+why the third and the fourth differ by one byte: the third lit nothing,
+and the bank setting that was missing from it is a bit.
+
+**What that table does not say is whether anything lit.** `DONE` was high
+after all four, and after the third the board's owner looked and the LEDs
+were dark. The status register is the part confirming it took a
+configuration, and that is all it is; the compiler is judged somewhere
+else.
+
+What a run looks like:
+
+```console
+$ reticle program --device 35L6H2CMGJJVCIBAEA3GCLAN74 /tmp/leds.bit
+/tmp/leds.bit: Lattice ECP5, 98474 bytes, compressed, for IDCODE 0x21111043 (LFE5U-12F (or LAE5U-12F)) — Part: LFE5U-12F-8CABGA256
+adapter 35L6H2CMGJJVCIBAEA3GCLAN74 (Cynthion, Apollo debugger)
+Apollo on 35L6H2CMGJJVCIBAEA3GCLAN74
+  identifier: Apollo Debug Module
+  firmware: v1.1.1
+  USB API: 1.2
+  max scan 2048 bits, quirks 0x00000000 (assumed; this firmware has no case for that request)
+IDCODE 0x21111043: manufacturer 0x021 (Lattice), part number 0x1111, version 2 — LFE5U-12F (or LAE5U-12F)
+status before: 0x00200100 (DONE)
+after LSC_REFRESH, IDCODE 0x21111043
+status after ISC_ENABLE: 0x00200f10 (DONE, ISC_ENABLE)
+status after ISC_ERASE: 0x00200e10 (ISC_ENABLE)
+  10% (9987 of 98478 bytes on the wire)
+  ...
+98474 bytes of bitstream shifted in 0.5 s
+status after ISC_DISABLE: 0x00200100 (DONE)
+DONE is high: the part accepted the bitstream and is running it. Only the volatile configuration SRAM was written; a power cycle reloads the board's flash.
+```
+
+Every line of that is the part answering, not the host assuming, and each
+one is a check that is acted on:
+
+- `status before` puts the `DONE` bit **before** anything on the record.
+- `LSC_REFRESH` restarts configuration, which is what strobing `PROGRAMN`
+  would do, and the identifier is read **again** afterwards. If the part
+  stops answering there, nothing has been erased yet.
+- `ISC_ENABLE` set in the status register is the part confirming it is in
+  configuration mode. A run that does not see it stops.
+- `DONE` **clear** after `ISC_ERASE` is the part confirming it really did
+  throw its configuration away. A run that still sees `DONE` stops, because
+  a part that did not erase will not take a new bitstream either.
+- `DONE` set at the end, with no fault bit, is the whole result.
+
+Between the steps the host **polls** — the ECP5's own `LSC_CHECK_BUSY`,
+counted in reads rather than in seconds. Nothing here sleeps for a fixed
+time, which is also why no test asserts on a clock.
+
+#### What it cannot do
+
+- **Only the volatile configuration SRAM.** A power cycle reloads the part
+  from the board's flash. `program::lattice::NOT_SHIFTED` names the JTAG
+  instructions that would reach something a power cycle does not undo —
+  `LSC_ENTER_BACKGROUND_SPI` above all, which turns the part into a
+  pass-through to the board's configuration flash — and a test walks every
+  plan the module builds to assert none carries one. That is the same guard
+  `gowin::FORBIDDEN` and `apollo::NOT_SENT` get.
+- **Over Apollo only.** The five plans are transport-neutral and
+  `jtag::Scan` would encode them for an FTDI cable, but that pairing has
+  never been run on a part, so `reticle program` refuses an ECP5 `.bit`
+  over a cable rather than trying it.
+- **The part, exactly.** An LFE5U-12F and an LFE5U-25F are the same die
+  with different identifiers, so a bitstream for the wrong one would
+  configure the part and assert `DONE` while doing something else. The
+  identifier is checked against the file's `VERIFY_ID` operand before
+  anything is written, and a file with no `VERIFY_ID` is refused rather
+  than loaded hopefully.
+
+#### Where the sequence came from
+
+`ECP5CommandBasedProgrammer.configure` in Apollo's own host package
+(`apollo_fpga/ecp5.py`, BSD-3-Clause) — the sequence a Cynthion is
+configured with by its vendor's tool — cross-checked against `ecpprog`'s
+`ecp5_program` and against Lattice's TN-02039 for the instruction opcodes
+and the status register's bit positions. The three agree except that
+`ecpprog` omits the undocumented `0x1C` preamble, which Apollo's own source
+comments `# ???`; Reticle keeps it, because reproducing the sequence with
+the fewest unknowns was worth more than dropping a step nobody can
+explain.
+
+One detail is not in any of them in a form that can be copied: the **bit
+order** of the payload. The configuration logic takes the most significant
+bit of the first byte first and a JTAG data register shifts the least
+significant bit of the first byte first, so every byte is reversed and the
+byte order is left alone. `lattice::burst_order` is that, with the argument
+for why it is that and not the other plausible arrangement written next to
+it — and 238 282 bytes of somebody else's bitstream asserting `DONE` is
+the check.
 
 ### How it fits the rest of `src/program`
 

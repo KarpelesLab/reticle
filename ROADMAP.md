@@ -436,13 +436,59 @@ FPGA:
       every fact, and the implementation was written from that document
       rather than from Apollo's source; the document's own *Verified*
       section says what the board later confirmed and the three things
-      it contradicted. On 2026-09-25 it read `IDCODE 0x21111043` — JEDEC
-      manufacturer `0x021`, Lattice, an **LFE5U-12F**. The two
-      transports share `jtag::Plan`, a list of named JTAG operations,
-      and nothing below it: an MPSSE is a shift engine told about TMS
-      and Apollo is a TAP controller told about state numbers. **Reading
-      only.** There is no ECP5 configuration sequence in the crate and
-      no ECP5 fabric to aim one at.
+      it contradicted — one of which has since been corrected again, by
+      the board's owner running Apollo's own tooling. On 2026-09-25 it
+      read `IDCODE 0x21111043` — JEDEC manufacturer `0x021`, Lattice, an
+      **LFE5U-12F** — first from a test and then, the same day, from
+      `reticle program --probe --device <serial>`. The command works out
+      **which kind of adapter carries that serial before it opens
+      anything**, so an FTDI cable and a Cynthion can be attached at once
+      and each is reached by name; the choice is a pure function over one
+      enumeration of the bus, unit-tested with nothing attached, because
+      a fallback between two protocols with nothing in common is how the
+      wrong board gets opened. The two transports share `jtag::Plan`, a
+      list of named JTAG operations, and nothing below it: an MPSSE is a
+      shift engine told about TMS and Apollo is a TAP controller told
+      about state numbers. `apollo::NOT_SENT` is the list of requests
+      that would take a board somewhere a power cycle does not undo, with
+      a test that nothing compiled ever reaches it, and configuring an
+      ECP5 turned out not to need any of them — including the one that
+      sounds as though it would, because Apollo implements "force the FPGA
+      offline" as a JTAG scan of `ISC_ENABLE`.
+- [x] **A Lattice ECP5 took a bitstream this project compiled.** On
+      2026-09-25 a Cynthion r1.4's LFE5U-12F accepted a `.bit` built by
+      `reticle fpga` from `testdata/fpga/cynthion/leds.v` — six output
+      pads tied to a constant, constrained to the board's six FPGA LEDs —
+      and asserted `DONE` with no fault bit, status `0x00200100`. Nothing
+      Lattice had been configured by this project before that. The
+      sequence is `program::lattice`: five `jtag::Plan`s from
+      `LSC_REFRESH` to `ISC_DISABLE`, the instruction set they shift, the
+      status register, and the bit order the payload needs, all sans-I/O
+      and held in **one JTAG session** because releasing the pins between
+      steps hands them back to a UART. `program::lattice::NOT_SHIFTED` is
+      the JTAG-level twin of `apollo::NOT_SENT`: the instructions that
+      reach the board's configuration flash, with a test walking every
+      plan to assert none carries one. SRAM only; a power cycle reloads
+      the part from flash. The fabric is Project Trellis' own database
+      (`src/fpga/trellis`) and the container `src/fpga/ecp5`, which
+      round-trips three of Great Scott Gadgets' own bitstreams for this
+      board byte for byte. **The LEDs were dark the first time somebody
+      looked**, on 2026-09-26, with `DONE` high — which is exactly the
+      difference this file had been careful to keep: a part that accepts a
+      configuration is not a lit LED. What was missing was one bit, the IO
+      bank's `BANK.VCCIO`, in a `BANKREF` tile none of the pads owns;
+      `iodb.json`'s `pio_metadata` says which bank a pad is in, nextpnr's
+      `get_vccio` says which value, and all three reference bitstreams say
+      where the bit is. It is written now, for the banks a design uses and
+      no others, and the corrected bitstream was loaded into the same
+      board the same day — accepted, `DONE`, status `0x00200100`. **Nobody
+      has looked since**, so the claim is "accepted and running, with the
+      one known omission fixed", not "lit". The backend builds the part's
+      geometry and its pads and
+      **no interconnect at all**, so nothing routed, nothing clocked and
+      no lookup table can be built yet, and a design with anything to
+      route is refused by name rather than emitted. See
+      `docs/fpga-trellis.md`.
 
 ASIC:
 - [x] Liberty (`.lib`) parser: cells, pins, functions, timing tables.

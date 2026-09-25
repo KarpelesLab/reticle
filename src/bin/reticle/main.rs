@@ -357,16 +357,32 @@ does not match the one the file names. Only the volatile configuration
 memory is written: a power cycle undoes it. This command does not program
 flash and cannot.
 
+A Great Scott Gadgets Cynthion is reached too, over its Apollo debug
+microcontroller rather than an FTDI part, and it takes `--probe` or a
+Lattice ECP5 .bit. Which transport a serial number belongs to is worked
+out before anything is opened, so a cable and a Cynthion can be attached
+at once, and a file for the wrong one of them is refused before the board
+is touched. Two vendors spell a bitstream `.bit`, so which it is is
+decided by the bytes rather than by the extension.
+
+An ECP5 .bit over an FTDI cable is refused: the configuration sequence is
+transport-neutral but that pairing has never been run on a part.
+
 Options:
   --device <serial>  Pick one adapter by serial number, when several are
-                     attached; `--list` shows them
-  --clock <hz>       TCK frequency (default 1000000, maximum 30000000)
+                     attached; `--list` shows them and says what each one
+                     is. A Cynthion answers to the board's flash UID in
+                     gateware mode and to the microcontroller's own serial
+                     number as a debugger; either selects it
+  --clock <hz>       TCK frequency (default 1000000, maximum 30000000).
+                     Does not apply to a Cynthion: Apollo owns the TAP
   --expect <idcode>  The IDCODE the part must answer, in hex (default:
-                     for a .fs the one it names, for a .bit 0362d093,
-                     the XC7A35T on a Basys 3)
+                     for a .fs or an ECP5 .bit the one it names, for a
+                     Xilinx .bit 0362d093, the XC7A35T on a Basys 3)
   --list             List attached adapters and exit
-  --probe            Read IDCODE and, for a Xilinx or Gowin part, its
-                     status register, and stop without writing anything
+  --probe            Read IDCODE and, for a Xilinx, Gowin or Lattice
+                     part, its status register, and stop without writing
+                     anything
   --quiet            Do not report progress
 
 Needs the `program` feature, which is off by default because it is the

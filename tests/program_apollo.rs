@@ -338,6 +338,81 @@ fn a_program_contains_only_jtag_requests() {
     assert!(!program.steps().is_empty());
 }
 
+/// `docs/apollo-protocol.md` §7's list is a promise, so it is checked
+/// rather than believed: no request the crate ever puts on the wire is one
+/// of the requests that list names.
+///
+/// The set of requests Reticle sends is small and enumerable — the JTAG
+/// ones a plan compiles to, plus the identification and session ones
+/// `usb::Debugger` issues by name — and `apollo::NOT_SENT` is the set it
+/// must not intersect. This is the same guard `gowin::FORBIDDEN` gets, and
+/// it is what makes "this project does not reconfigure a board it does not
+/// own" a property of the code rather than of its prose.
+#[test]
+fn the_requests_this_project_will_not_send_are_never_compiled() {
+    let sent = [
+        apollo::REQUEST_ADVERTISEMENT_STOP,
+        apollo::REQUEST_GET_ID,
+        apollo::REQUEST_GET_FIRMWARE_VERSION,
+        apollo::REQUEST_GET_USB_API_VERSION,
+        apollo::REQUEST_ALLOW_FPGA_TAKEOVER_USB,
+        apollo::REQUEST_JTAG_CLEAR_OUT_BUFFER,
+        apollo::REQUEST_JTAG_SET_OUT_BUFFER,
+        apollo::REQUEST_JTAG_GET_IN_BUFFER,
+        apollo::REQUEST_JTAG_SCAN,
+        apollo::REQUEST_JTAG_RUN_CLOCK,
+        apollo::REQUEST_JTAG_GO_TO_STATE,
+        apollo::REQUEST_JTAG_GET_STATE,
+        apollo::REQUEST_JTAG_GET_INFO,
+        apollo::REQUEST_JTAG_STOP,
+        apollo::REQUEST_JTAG_START,
+    ];
+    for (request, why) in apollo::NOT_SENT {
+        assert!(
+            !sent.contains(request),
+            "{request:#04x} ({why}) is both sent and on the do-not-send list"
+        );
+    }
+
+    // And nothing a plan compiles to is on it either, whatever the plan.
+    let mut plan = jtag::Plan::new();
+    plan.reset();
+    plan.shift_ir(&[0x3A], 8);
+    let _ = plan.read_dr(64);
+    plan.shift_dr(&[0x4B, 0x00], 16);
+    plan.idle(100);
+    let program = apollo::compile(&plan, apollo::Capability::default());
+    for step in program.steps() {
+        let request = match step {
+            apollo::Step::Command { request, .. }
+            | apollo::Step::Write { request, .. }
+            | apollo::Step::Read { request, .. } => *request,
+        };
+        assert!(
+            !apollo::NOT_SENT.iter().any(|(r, _)| *r == request),
+            "a plan compiled to {request:#04x}, which §7 says is never sent"
+        );
+        assert!(
+            sent.contains(&request),
+            "{request:#04x} is not a known request"
+        );
+    }
+
+    // The flash UID is the one thing a person might reasonably expect to
+    // find in this transport and will not: there is no vendor request that
+    // returns it. Apollo's own tooling reads it by forcing the FPGA
+    // offline and then driving the board's configuration flash over JTAG,
+    // and the first of those is on the list above. The plan compiled here
+    // shifts `0x3A` and `0x4B` as *data* on purpose — that is what the
+    // route would look like — and the assertions are that doing so is
+    // still only JTAG requests, and that nothing in the crate does it.
+    assert!(
+        apollo::NOT_SENT
+            .iter()
+            .any(|(r, _)| *r == apollo::REQUEST_FORCE_FPGA_OFFLINE)
+    );
+}
+
 /// The model walks its own TAP, so a compiled walk that skipped
 /// `Capture-DR` would read zeros. This is that check made explicit:
 /// going straight from a shift state back to a shift state, without

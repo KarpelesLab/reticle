@@ -43,7 +43,9 @@ use std::time::{Duration, Instant};
 use rawusb::{Context, DeviceHandle, types::Direction};
 
 use super::jtag::{Job, TapState};
-use super::{FT2232H_PRODUCT_ID, FTDI_VENDOR_ID, MPSSE_INTERFACE, ProgramError, apollo, ftdi};
+use super::{
+    AdapterKind, FT2232H_PRODUCT_ID, FTDI_VENDOR_ID, MPSSE_INTERFACE, ProgramError, apollo, ftdi,
+};
 
 /// `bmRequestType` for an FTDI vendor request to the device, host to
 /// device.
@@ -99,6 +101,107 @@ fn usb_err(what: &str, err: &rawusb::Error) -> ProgramError {
     ProgramError::Usb(format!("{what}: {err}"))
 }
 
+/// One device's serial number, read **without opening it** where the
+/// operating system knows it.
+///
+/// `rawusb::Device::serial_number` reads it from sysfs on Linux, the IOKit
+/// registry on macOS and the parent hub on Windows; a device the system
+/// cannot answer for is opened, once, as a fallback. That is the same
+/// two-step `rawusb::Context::find_device_by_serial` does internally, and
+/// it is spelled out here rather than called because every caller below
+/// wants to *list* or to *classify* devices, not to find one: `--list`
+/// names what is attached and [`super::choose_adapter`] decides which kind
+/// of adapter carries a serial before anything is opened.
+///
+/// Not opening a device that was not asked for is the point. A machine with
+/// several boards on it is the normal case here, and opening somebody's
+/// other board to ask its name is a side effect this has no business
+/// having.
+fn serial_of(device: &rawusb::Device) -> Option<String> {
+    device.serial_number().map(str::to_owned).or_else(|| {
+        device
+            .open()
+            .ok()
+            .and_then(|handle| handle.read_serial_number_string().ok().flatten())
+    })
+}
+
+/// Every attached device whose `(vendor, product)` pair is in `ids`, as
+/// `(product_id, serial)`, in the order the system lists them.
+///
+/// **This is the one function in Reticle that turns the bus into a list of
+/// adapters**, and it is deliberately the only one: it is what
+/// `reticle program --list` prints and what [`super::choose_adapter`]
+/// decides a `--device` value against, so there is one place where a
+/// serial number comes from and one place to change if reading one ever
+/// changes.
+///
+/// Each serial comes from [`serial_of`], so **listing what is attached does
+/// not open it**. That matters here for a reason beyond tidiness: the
+/// version of this before `rawusb` could report a serial from the operating
+/// system opened every FT2232H and every Cynthion on the bus to ask its
+/// name.
+///
+/// A device whose serial cannot be read at all is still listed, with where
+/// it is instead of a name. A serial nobody can read is still an adapter
+/// somebody has attached, and a device node that is not readable is
+/// precisely the case where seeing the adapter is what explains the
+/// failure.
+fn serials_of(ids: &[(u16, u16)]) -> Result<Vec<(u16, String)>, ProgramError> {
+    let context = Context::new().map_err(|e| usb_err("opening the USB subsystem", &e))?;
+    let devices = context
+        .devices()
+        .map_err(|e| usb_err("listing USB devices", &e))?;
+    let mut found = Vec::new();
+    for device in devices {
+        if !ids.contains(&(device.vendor_id(), device.product_id())) {
+            continue;
+        }
+        let serial = serial_of(&device).unwrap_or_else(|| {
+            format!(
+                "bus {} address {} (no serial number)",
+                device.bus_number(),
+                device.address()
+            )
+        });
+        found.push((device.product_id(), serial));
+    }
+    Ok(found)
+}
+
+/// Every attached programming adapter of either kind, in the order the
+/// system lists them.
+///
+/// This is one enumeration of the bus covering both transports, which is
+/// what [`super::choose_adapter`] needs to decide which transport a
+/// `--device` serial belongs to **before anything is opened**. It is also
+/// what `reticle program --list` prints.
+///
+/// # Errors
+///
+/// [`ProgramError::Usb`] when the USB subsystem cannot be reached at all.
+/// An individual device that cannot be opened is listed without its
+/// serial number rather than failing the listing.
+pub fn adapters() -> Result<Vec<super::Adapter>, ProgramError> {
+    let ids = [
+        (FTDI_VENDOR_ID, FT2232H_PRODUCT_ID),
+        (apollo::VENDOR_ID, apollo::GATEWARE_PRODUCT_ID),
+        (apollo::VENDOR_ID, apollo::DEBUGGER_PRODUCT_ID),
+    ];
+    Ok(serials_of(&ids)?
+        .into_iter()
+        .filter_map(|(product, serial)| {
+            let kind = match product {
+                FT2232H_PRODUCT_ID => AdapterKind::Ftdi,
+                apollo::GATEWARE_PRODUCT_ID => AdapterKind::CynthionGateware,
+                apollo::DEBUGGER_PRODUCT_ID => AdapterKind::CynthionDebugger,
+                _ => return None,
+            };
+            Some(super::Adapter { serial, kind })
+        })
+        .collect())
+}
+
 /// The serial numbers of every attached FT2232H, in the order the system
 /// lists them.
 ///
@@ -106,28 +209,12 @@ fn usb_err(what: &str, err: &rawusb::Error) -> ProgramError {
 ///
 /// [`ProgramError::Usb`] when the USB subsystem cannot be reached at
 /// all. A device that cannot be opened (no permission, already in use)
-/// is skipped rather than failing the listing.
+/// is listed without its serial number rather than failing the listing.
 pub fn list() -> Result<Vec<String>, ProgramError> {
-    let context = Context::new().map_err(|e| usb_err("opening the USB subsystem", &e))?;
-    let devices = context
-        .devices()
-        .map_err(|e| usb_err("listing USB devices", &e))?;
-    let mut serials = Vec::new();
-    for device in devices {
-        if device.vendor_id() != FTDI_VENDOR_ID || device.product_id() != FT2232H_PRODUCT_ID {
-            continue;
-        }
-        let Ok(handle) = device.open() else { continue };
-        match handle.read_serial_number_string() {
-            Ok(Some(serial)) => serials.push(serial),
-            _ => serials.push(format!(
-                "bus {} address {} (no serial number)",
-                device.bus_number(),
-                device.address()
-            )),
-        }
-    }
-    Ok(serials)
+    Ok(serials_of(&[(FTDI_VENDOR_ID, FT2232H_PRODUCT_ID)])?
+        .into_iter()
+        .map(|(_, serial)| serial)
+        .collect())
 }
 
 impl Cable {
@@ -452,6 +539,8 @@ const HANDOVER_POLL: Duration = Duration::from_millis(100);
 pub struct Debugger {
     handle: DeviceHandle,
     capability: apollo::Capability,
+    /// Whether `capability` is the firmware's own answer or the fallback.
+    reported: bool,
     serial: String,
     /// The gateware device this was reached through, if a handover was
     /// needed, so [`Debugger::release_usb_to_fpga`] knows there is
@@ -468,34 +557,13 @@ pub struct Debugger {
 /// device that cannot be opened is listed without its serial number
 /// rather than failing the listing.
 pub fn list_cynthions() -> Result<Vec<(String, bool)>, ProgramError> {
-    let context = Context::new().map_err(|e| usb_err("opening the USB subsystem", &e))?;
-    let devices = context
-        .devices()
-        .map_err(|e| usb_err("listing USB devices", &e))?;
-    let mut found = Vec::new();
-    for device in devices {
-        if device.vendor_id() != apollo::VENDOR_ID {
-            continue;
-        }
-        let debugger = match device.product_id() {
-            apollo::DEBUGGER_PRODUCT_ID => true,
-            apollo::GATEWARE_PRODUCT_ID => false,
-            _ => continue,
-        };
-        let serial = device
-            .open()
-            .ok()
-            .and_then(|h| h.read_serial_number_string().ok().flatten())
-            .unwrap_or_else(|| {
-                format!(
-                    "bus {} address {} (no serial number)",
-                    device.bus_number(),
-                    device.address()
-                )
-            });
-        found.push((serial, debugger));
-    }
-    Ok(found)
+    Ok(serials_of(&[
+        (apollo::VENDOR_ID, apollo::GATEWARE_PRODUCT_ID),
+        (apollo::VENDOR_ID, apollo::DEBUGGER_PRODUCT_ID),
+    ])?
+    .into_iter()
+    .map(|(product, serial)| (serial, product == apollo::DEBUGGER_PRODUCT_ID))
+    .collect())
 }
 
 /// How a debugger is picked out of the ones on the bus.
@@ -506,10 +574,22 @@ enum Pick<'a> {
     /// board that has just re-enumerated is recognised.
     ///
     /// It has to be done this way because **the two modes report
-    /// different serial numbers**: the gateware reports the board's, and
-    /// Apollo reports the microcontroller's, which is a different string
-    /// entirely. Asking for the gateware's serial again after the
-    /// handover would never match.
+    /// different serial numbers**: in gateware mode the board advertises
+    /// its flash UID, and as a debugger it reports the microcontroller's
+    /// own string, which is neither the flash UID nor derived from it.
+    /// Asking for the gateware's serial again after the handover would
+    /// never match, and the flash UID cannot be read back from a debugger
+    /// without forcing the FPGA offline and driving the board's
+    /// configuration flash — `docs/apollo-protocol.md` §7's line.
+    ///
+    /// So this is a **heuristic**, and worth naming as one: it identifies
+    /// the board by the fact that a debugger appeared where there was
+    /// none. That is sound for one handover at a time and would pick the
+    /// wrong board if two were handed over at once. Nothing here does
+    /// that — [`hand_over`] is given a serial number when the caller
+    /// named one — but a machine with several Cynthions on it is not a
+    /// hypothetical, so the limit is written down rather than assumed
+    /// away.
     NotAlreadyThere(&'a [String]),
 }
 
@@ -525,19 +605,20 @@ fn find_debugger(pick: &Pick<'_>) -> Result<Option<(DeviceHandle, String)>, Prog
         {
             continue;
         }
-        let Ok(handle) = device.open() else { continue };
-        let this = handle
-            .read_serial_number_string()
-            .ok()
-            .flatten()
-            .unwrap_or_default();
+        // Decided before anything is opened, so a board that was not
+        // asked for is never touched. `Pick::Serial(None)` is "any
+        // debugger", which is the only case that opens without matching a
+        // name.
+        let this = serial_of(&device).unwrap_or_default();
         let wanted = match pick {
             Pick::Serial(serial) => serial.is_none_or(|wanted| wanted == this),
             Pick::NotAlreadyThere(before) => !before.contains(&this),
         };
-        if wanted {
-            return Ok(Some((handle, this)));
+        if !wanted {
+            continue;
         }
+        let Ok(handle) = device.open() else { continue };
+        return Ok(Some((handle, this)));
     }
     Ok(None)
 }
@@ -569,15 +650,15 @@ fn hand_over(serial: Option<&str>) -> Result<usize, ProgramError> {
         {
             continue;
         }
-        let Ok(handle) = device.open() else { continue };
-        let this = handle
-            .read_serial_number_string()
-            .ok()
-            .flatten()
-            .unwrap_or_default();
+        // A gateware advertises its flash UID as its serial number, so
+        // this is the one place a `--device` value that names a *board*
+        // matches a board. Read before opening: a Cynthion running
+        // somebody's gateware that was not asked for is left alone.
+        let this = serial_of(&device).unwrap_or_default();
         if serial.is_some_and(|wanted| wanted != this) {
             continue;
         }
+        let Ok(handle) = device.open() else { continue };
         let Ok(config) = device.active_config_descriptor() else {
             continue;
         };
@@ -624,13 +705,14 @@ impl Debugger {
     /// comes back on a replug, a power cycle, or
     /// [`Debugger::release_usb_to_fpga`].
     ///
-    /// `serial` picks one board when several are attached. It is
-    /// matched against **whichever mode the board is in**: the gateware
-    /// reports the board's serial number and Apollo reports the
-    /// microcontroller's, and they are not the same string, so a board
-    /// that has to be handed over is followed across the re-enumeration
-    /// by being the debugger that was not there before rather than by
-    /// its name.
+    /// `serial` picks one board when several are attached. It is matched
+    /// against **whichever mode the board is in now**: in gateware mode
+    /// the board advertises its flash UID as its USB serial number, and
+    /// as a debugger it reports the microcontroller's own string. They
+    /// are not the same string, so a board that has to be handed over is
+    /// followed across the re-enumeration by being the debugger that was
+    /// not there before rather than by its name. `Pick`, private just
+    /// below, says what that heuristic does and does not cover.
     ///
     /// # Errors
     ///
@@ -681,10 +763,16 @@ impl Debugger {
         serial: String,
         handed_over: bool,
     ) -> Result<Debugger, ProgramError> {
-        // A firmware old enough not to have the capability request
-        // stalls it; the fallback is what the protocol document says.
+        // **Most firmware stalls this**, including the v1.1.1 on the board
+        // this was written against: `REQUEST_JTAG_GET_INFO` is defined by
+        // Apollo's *host* package and has no case in the firmware's
+        // request dispatcher at all. So the fallback is the usual path and
+        // not the exception, and which of the two answered is recorded,
+        // because the fallback's numbers are `DEFAULT_MAX_SCAN_BITS` and
+        // no quirks — indistinguishable, in a printed line, from a
+        // firmware that reported exactly that.
         let mut reply = [0u8; 8];
-        let capability = match handle.control_read(
+        let (capability, reported) = match handle.control_read(
             apollo::REQ_TYPE_IN,
             apollo::REQUEST_JTAG_GET_INFO,
             0,
@@ -692,12 +780,16 @@ impl Debugger {
             &mut reply,
             APOLLO_TIMEOUT,
         ) {
-            Ok(n) => apollo::Capability::from_reply(&reply[..n]).unwrap_or_default(),
-            Err(_) => apollo::Capability::default(),
+            Ok(n) => match apollo::Capability::from_reply(&reply[..n]) {
+                Some(capability) => (capability, true),
+                None => (apollo::Capability::default(), false),
+            },
+            Err(_) => (apollo::Capability::default(), false),
         };
         Ok(Debugger {
             handle,
             capability,
+            reported,
             serial,
             handed_over,
         })
@@ -715,10 +807,27 @@ impl Debugger {
         self.handed_over
     }
 
-    /// What the firmware said it can do.
+    /// What the firmware can do, which is usually what
+    /// [`apollo::Capability::default`] assumes rather than what the
+    /// firmware said: see [`Debugger::capability_reported`].
     #[must_use]
     pub fn capability(&self) -> apollo::Capability {
         self.capability
+    }
+
+    /// Whether [`Debugger::capability`] is the firmware's own answer to
+    /// [`apollo::REQUEST_JTAG_GET_INFO`], rather than the fallback.
+    ///
+    /// It is worth reporting rather than swallowing. The fallback is
+    /// [`apollo::DEFAULT_MAX_SCAN_BITS`] and no quirks, which is exactly
+    /// what a firmware that *did* answer would most likely say, so a
+    /// printed line cannot be told from a measurement unless this is
+    /// printed with it. On the board this was written against — a
+    /// Cynthion r1.4 running Apollo v1.1.1 — it is `false`: the request is
+    /// the host package's and the firmware has no case for it.
+    #[must_use]
+    pub fn capability_reported(&self) -> bool {
+        self.reported
     }
 
     /// The firmware's own name for itself. It contains `Apollo`.
@@ -853,6 +962,34 @@ impl Debugger {
     ///
     /// [`ProgramError::Usb`] for a transfer the device refused.
     pub fn run(&self, program: &apollo::Program) -> Result<Vec<Vec<u8>>, ProgramError> {
+        self.run_with_progress(program, &mut |_, _| {})
+    }
+
+    /// [`run`](Self::run), reporting how much of a long write has gone.
+    ///
+    /// `progress` is called with `(bytes written, bytes total)` after each
+    /// write, where a byte is one of the data stage of a
+    /// `JTAG_SET_OUT_BUFFER`. It exists for the one program whose size is
+    /// a design's rather than a protocol's — a bitstream burst — which on
+    /// a full-speed link takes long enough that silence looks like a hang.
+    ///
+    /// # Errors
+    ///
+    /// As [`run`](Self::run).
+    pub fn run_with_progress(
+        &self,
+        program: &apollo::Program,
+        progress: &mut dyn FnMut(usize, usize),
+    ) -> Result<Vec<Vec<u8>>, ProgramError> {
+        let total: usize = program
+            .steps()
+            .iter()
+            .map(|step| match step {
+                apollo::Step::Write { data, .. } => data.len(),
+                _ => 0,
+            })
+            .sum();
+        let mut written = 0usize;
         let mut replies = Vec::new();
         for step in program.steps() {
             match step {
@@ -880,6 +1017,8 @@ impl Debugger {
                         .map_err(|e| {
                             usb_err(&format!("filling the JTAG out buffer ({request:#04x})"), &e)
                         })?;
+                    written += data.len();
+                    progress(written, total);
                 }
                 apollo::Step::Read {
                     request,
@@ -985,6 +1124,30 @@ impl Debugger {
             .map_err(|e| usb_err(&format!("{what} ({request:#04x})"), &e))
     }
 
+    /// Takes the JTAG pins for as long as the returned guard lives, so
+    /// several plans can be run as **one session**.
+    ///
+    /// [`Debugger::run_plan`] takes the pins and gives them back around
+    /// each plan, which is right for a read and wrong for a
+    /// configuration sequence: a part that has been put into
+    /// configuration mode has to stay there across the steps, and
+    /// `REQUEST_JTAG_STOP` does not just stop driving — Apollo's firmware
+    /// restores the pins to their other function, which is a UART on this
+    /// board. Whatever that does to TCK, it is not "nothing", and a TAP
+    /// that is clocked between two steps of a sequence is a TAP in an
+    /// unknown state.
+    ///
+    /// So the sequence holds the pins from the first instruction to the
+    /// last, and the guard's `Drop` gives them back however it ends.
+    ///
+    /// # Errors
+    ///
+    /// [`ProgramError::Usb`] when the device will not give up the pins.
+    pub fn jtag_session(&self) -> Result<JtagSession<'_>, ProgramError> {
+        self.command(apollo::REQUEST_JTAG_START, 0, 0, "taking the JTAG pins")?;
+        Ok(JtagSession { debugger: self })
+    }
+
     /// One vendor request answering with a NUL-terminated string.
     fn string(&self, request: u8, what: &str) -> Result<String, ProgramError> {
         let mut buf = [0u8; 256];
@@ -995,6 +1158,69 @@ impl Debugger {
         let bytes = &buf[..n];
         let end = bytes.iter().position(|&b| b == 0).unwrap_or(bytes.len());
         Ok(String::from_utf8_lossy(&bytes[..end]).into_owned())
+    }
+}
+
+/// The JTAG pins, held. [`Debugger::jtag_session`] makes one.
+///
+/// Every plan run through this reaches the part without the pins being
+/// released in between, which is what a configuration sequence needs and
+/// what [`Debugger::run_plan`] deliberately does not do.
+pub struct JtagSession<'a> {
+    debugger: &'a Debugger,
+}
+
+impl JtagSession<'_> {
+    /// Runs one plan in this session.
+    ///
+    /// What comes back is the compiled program — which is what knows
+    /// where the captures are — and one reply per read, in order, exactly
+    /// as [`Debugger::run_plan`] returns them.
+    ///
+    /// # Errors
+    ///
+    /// [`ProgramError::Usb`] for a transfer the device refused. The pins
+    /// stay taken: the caller decides whether a failed step is the end of
+    /// the session, and dropping this guard is what releases them.
+    pub fn run_plan(
+        &self,
+        plan: &super::jtag::Plan,
+    ) -> Result<(apollo::Program, Vec<Vec<u8>>), ProgramError> {
+        let program = apollo::compile(plan, self.debugger.capability);
+        let replies = self.debugger.run(&program)?;
+        Ok((program, replies))
+    }
+
+    /// Runs one plan, reporting how much of a long write has gone.
+    ///
+    /// The callback is given `(bytes written, bytes total)` after every
+    /// write step, which for a bitstream burst is once per scan. It exists
+    /// because the burst is the one plan whose size is a design's rather
+    /// than a protocol's, and on a full-speed link it takes long enough
+    /// that silence looks like a hang.
+    ///
+    /// # Errors
+    ///
+    /// As [`run_plan`](Self::run_plan).
+    pub fn run_plan_with_progress(
+        &self,
+        plan: &super::jtag::Plan,
+        progress: &mut dyn FnMut(usize, usize),
+    ) -> Result<(apollo::Program, Vec<Vec<u8>>), ProgramError> {
+        let program = apollo::compile(plan, self.debugger.capability);
+        let replies = self.debugger.run_with_progress(&program, progress)?;
+        Ok((program, replies))
+    }
+}
+
+impl Drop for JtagSession<'_> {
+    fn drop(&mut self) {
+        // However the session ended, the pins go back. A failure here is
+        // not worth reporting: the board may already be gone, and a power
+        // cycle releases them either way.
+        let _ = self
+            .debugger
+            .command(apollo::REQUEST_JTAG_STOP, 0, 0, "releasing the JTAG pins");
     }
 }
 

@@ -159,11 +159,24 @@ microcontroller running Apollo firmware, over USB control requests.
 specification of that wire protocol, written before the implementation
 and the thing the implementation was written from, with the provenance
 and confidence of every fact and a section on what the board later
-contradicted. It reads an `IDCODE` — `0x21111043`, an LFE5U-12F, on the
-board it was tried against — and does not configure an ECP5; there is no
-ECP5 configuration sequence in the crate. The two transports share
-`jtag::Plan` and nothing below it, because an MPSSE is a shift engine
-told about TMS and Apollo is a TAP controller told about states.
+contradicted. The two transports share `jtag::Plan` and nothing below it,
+because an MPSSE is a shift engine told about TMS and Apollo is a TAP
+controller told about states.
+
+Over that transport the Cynthion's **LFE5U-12F has taken a bitstream this
+project compiled from Verilog and asserted `DONE`** — six output pads tied
+to a constant, constrained to the board's six FPGA LEDs, built from
+Project Trellis' own database. The first time, the board's owner looked and
+the **LEDs were dark**: a bank's `BANK.VCCIO` setting, which lives in a
+tile no pad owns, was not being written. That bit is written now and
+checked against what Lattice's own packer wrote for the same board, and the
+corrected bitstream was loaded; nobody has looked since, so the claim is
+"accepted and running, with the one known omission fixed", not "lit".
+[`docs/fpga-trellis.md`](docs/fpga-trellis.md) says what that settles and
+what it does not: the ECP5 backend builds the part's geometry and its pads
+and **no interconnect at all**, so nothing routed and nothing clocked can
+be built yet, and a design with anything to route is refused by name
+rather than turned into a bitstream that could not work.
 
 Sources of one language are elaborated together, so a testbench and the
 modules it instantiates go on one command line. A design already in the

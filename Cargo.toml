@@ -202,7 +202,7 @@ cli = ["verilog", "vhdl", "sim", "synth", "formal", "fpga", "timing", "ip", "lsp
 # what it wrote against SHA-256 digests built into the binary, computed by
 # `src/bin/reticle/sha256.rs`. See `src/bin/reticle/datadir.rs`.
 [dependencies]
-rawusb = { version = "0.1.3", optional = true }
+rawusb = { version = "0.1.4", optional = true }
 compcol = { version = "0.6.11", default-features = false, features = [
     "xz",
     "std",
