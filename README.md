@@ -199,6 +199,22 @@ from the manifest to the files `nextpnr` reads:
   the VGA pins with the palette truncated to the board's four bits a
   channel.
 
+### Somebody else's VHDL
+
+Everything in `examples/` was written here, which is a weak test of a
+compiler. [`docs/vhdl-corpus.md`](docs/vhdl-corpus.md) points the VHDL
+front end at a real, independent library instead — CERN's
+[Colibri](https://gitlab.com/colibri-cern/colibri), 103 sources of
+production gateware with its own self-checking testbenches — and reports
+what happens, which today is: **all 231 of its files parse, 77 of its 103
+design sources analyse without an error, 20 of its 90 entities elaborate,
+and two of them (the 8b/10b codec) have been simulated.** None of its
+testbenches run, because every one of them needs VUnit, UVVM or OSVVM. The
+exercise found eighteen defects in Reticle, all fixed, each pinned by a
+test that needs no corpus; that page lists them and the VHDL that is still
+unsupported. One clone and one environment variable are enough to run it
+yourself.
+
 [`docs/writing-a-cpu.md`](docs/writing-a-cpu.md) is the guide behind the
 processors in them: how to package a processor as IP, from the manifest
 and the bus contract to testing a core so the test cannot agree with a
