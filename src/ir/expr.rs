@@ -500,7 +500,8 @@ pub fn infer_type(module: &Module, kind: &ExprKind) -> Result<Type, TypeError> {
             .map(|n| n.ty.clone())
             .ok_or(TypeError::DanglingNet(*net)),
         ExprKind::Slice { base, hi, lo } => {
-            let len = u64::from(*hi) - u64::from(*lo) + 1;
+            // The length is computed after the bounds are checked: `hi < lo`
+            // is a malformed slice to report, not a subtraction to attempt.
             match ty(*base)? {
                 Type::Bits { width, .. } => {
                     if hi < lo || u64::from(*hi) >= u64::from(*width) {
@@ -516,7 +517,7 @@ pub fn infer_type(module: &Module, kind: &ExprKind) -> Result<Type, TypeError> {
                     }
                     Ok(Type::Array {
                         elem: elem.clone(),
-                        len,
+                        len: u64::from(*hi) - u64::from(*lo) + 1,
                     })
                 }
                 found => Err(TypeError::BadOperand {
@@ -730,6 +731,56 @@ pub fn operands(kind: &ExprKind) -> Vec<ExprId> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ir::{Attrs, Module, Name, Net, NetKind};
+    use crate::source::{SourceMap, Span};
+
+    fn span() -> Span {
+        let mut map = SourceMap::new();
+        let id = map.add("t", "").unwrap();
+        Span::new(id, 0, 0)
+    }
+
+    /// A slice whose bounds are the wrong way round is a malformed node to
+    /// report, not a subtraction to attempt: computing its length first
+    /// panicked with an integer underflow, which a frontend could reach with
+    /// a null slice of a generic-sized vector.
+    ///
+    /// Found by the Colibri corpus; see docs/vhdl-corpus.md.
+    #[test]
+    fn a_reversed_slice_is_an_error_and_not_a_panic() {
+        let span = span();
+        let mut module = Module::new("m", span);
+        let net = module.nets.push(Net {
+            name: Name::new("a"),
+            ty: Type::bits(8),
+            kind: NetKind::Wire,
+            attrs: Attrs::new(),
+            span,
+        });
+        let base = module.add_expr(Expr::new(ExprKind::Net(net), Type::bits(8), span));
+        for (hi, lo) in [(0, 3), (2, 7)] {
+            let kind = ExprKind::Slice { base, hi, lo };
+            assert!(matches!(
+                infer_type(&module, &kind),
+                Err(TypeError::OutOfRange { width: 8 })
+            ));
+        }
+        // An array of the same shape takes the same path.
+        let arr = Type::Array {
+            elem: Box::new(Type::bits(4)),
+            len: 8,
+        };
+        let abase = module.add_expr(Expr::new(ExprKind::Net(net), arr, span));
+        let kind = ExprKind::Slice {
+            base: abase,
+            hi: 1,
+            lo: 5,
+        };
+        assert!(matches!(
+            infer_type(&module, &kind),
+            Err(TypeError::OutOfRange { width: 8 })
+        ));
+    }
 
     #[test]
     fn operator_names_round_trip() {
