@@ -1,0 +1,17 @@
+top slice_target_generic_bounds
+
+module slice_target_generic_bounds
+  timescale 1 fs / 1 fs
+  param WIDTH = 6
+  net %data_i u6 wire
+  net %a_o u12 wire
+  net %b_o u12 wire
+  net %c_o u12 wire
+  port data_i in %data_i
+  port a_o out %a_o
+  port b_o out %b_o
+  port c_o out %c_o
+  assign %a_o[11:6] = %data_i
+  assign %b_o[11:6] = %data_i
+  assign %c_o[11:6] = %data_i
+end

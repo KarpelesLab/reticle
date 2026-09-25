@@ -658,7 +658,7 @@ impl<'a> Lowerer<'a, '_> {
             .map_or(Direction::To, |i| i.bounds.dir)
     }
 
-    fn bound_value(&mut self, b: &crate::vhdl::sema::Bound) -> Option<i64> {
+    pub(crate) fn bound_value(&mut self, b: &crate::vhdl::sema::Bound) -> Option<i64> {
         match b {
             crate::vhdl::sema::Bound::Static(v) => i64::try_from(v.as_int()?).ok(),
             crate::vhdl::sema::Bound::Dynamic(span) => {
@@ -1386,11 +1386,32 @@ impl<'a> Lowerer<'a, '_> {
                     return None;
                 };
                 let arr = layout.array()?.clone();
-                let (l, r) = self.static_range(range)?;
+                let Some((l, r)) = self.static_range(range) else {
+                    self.error(
+                        codes::NOT_STATIC,
+                        range.span(),
+                        "a slice assigned to must have bounds that are static after elaboration",
+                    );
+                    return None;
+                };
                 let (hi, _) = arr.bits_of(l)?;
                 let (_, lo) = arr.bits_of(r)?;
                 let (hi, lo) = if hi >= lo { (hi, lo) } else { (lo, hi) };
-                let out = self.layout_at(*span)?;
+                // The analyser has a layout for the slice's own subtype
+                // unless its bounds came from a generic; the slice of a bit
+                // vector is then the base with the width just computed,
+                // rather than an assignment silently dropped.
+                let out = match self.layout_at(*span) {
+                    Some(out) => out,
+                    None if arr.elem.width == 1 => Layout {
+                        width: hi - lo + 1,
+                        ..layout
+                    },
+                    None => {
+                        self.unsupported(*span, "this slice of an array of multi-bit elements");
+                        return None;
+                    }
+                };
                 Some((Lvalue::Slice { net, hi, lo }, out))
             }
             ast::Name::Attribute { span, .. } => {

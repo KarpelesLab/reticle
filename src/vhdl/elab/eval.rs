@@ -54,7 +54,8 @@ impl<'a> Lowerer<'a, '_> {
                 let lt = self.a().type_of(lhs.span())?;
                 self.fold_binary(*op, &l, &r, lt, *span)
             }
-            ast::Expr::Aggregate(_) | ast::Expr::Allocator { .. } => None,
+            ast::Expr::Aggregate(ag) => self.eval_aggregate(ag),
+            ast::Expr::Allocator { .. } => None,
             ast::Expr::Open(_) | ast::Expr::Error(_) => None,
         }
     }
@@ -82,13 +83,30 @@ impl<'a> Lowerer<'a, '_> {
     }
 
     fn name_reads_object(&mut self, n: &'a ast::Name) -> bool {
-        if let Some(d) = self.a().decl_of(n.span())
-            && matches!(
+        if let Some(d) = self.a().decl_of(n.span()) {
+            if matches!(
                 self.lookup(d),
                 Some(Binding::Net { .. } | Binding::Mem { .. } | Binding::Slice { .. })
-            )
-        {
-            return true;
+            ) {
+                return true;
+            }
+            // A signal or a variable is an object whatever it is bound to.
+            // The analyser folds an expression over a variable with a static
+            // initialiser — `step * 2` where `step : positive := 1` — and
+            // that value is the variable's first, not its value now, which
+            // matters while `super::interp` is executing a loop that
+            // assigns to it.
+            if matches!(
+                self.a().decl(d).kind,
+                DeclKind::Object {
+                    class: ObjectClass::Variable
+                        | ObjectClass::SharedVariable
+                        | ObjectClass::Signal,
+                    ..
+                }
+            ) {
+                return true;
+            }
         }
         match n {
             ast::Name::Selected { prefix, .. } | ast::Name::Slice { prefix, .. } => {
@@ -177,6 +195,40 @@ impl<'a> Lowerer<'a, '_> {
                     let i = self.eval_int(ie)?;
                     arr.get(i).cloned()
                 }
+                // A call to a user-defined function is interpreted, which
+                // is how a width computed by the design's own helper
+                // function becomes a number (see `super::interp`).
+                Some(CallTarget::Subprogram(target)) => match self.eval_static_call(target, args) {
+                    Some(v) => Some(v),
+                    // `minimum` and `maximum` are declared in the bundled
+                    // `std.standard` and implemented natively, so there is
+                    // no body to interpret; they are folded here because a
+                    // width like `maximum(log2ceil(g_SYM), 1)` is exactly
+                    // where they are written.
+                    None => self.eval_extremum(target, args),
+                },
+                // `minimum` and `maximum` of `std.standard`, whose operands
+                // are ordinarily generics and so not locally static. The
+                // rest of the predefined functions (`to_string`, `now`) have
+                // no static value to give.
+                Some(CallTarget::Predefined(name @ ("minimum" | "maximum"))) => {
+                    let mut values = Vec::new();
+                    for arg in args {
+                        let ast::Actual::Expr(e) = &arg.actual else {
+                            return None;
+                        };
+                        values.push(self.eval(e)?);
+                    }
+                    let [l, r] = values.as_slice() else {
+                        return None;
+                    };
+                    let ord = l.compare(r)?;
+                    Some(if (name == "minimum") == ord.is_le() {
+                        l.clone()
+                    } else {
+                        r.clone()
+                    })
+                }
                 Some(CallTarget::Conversion(t)) => {
                     let arg = args.first()?;
                     let ast::Actual::Expr(ie) = &arg.actual else {
@@ -215,6 +267,157 @@ impl<'a> Lowerer<'a, '_> {
                     elems,
                 }))
             }
+            // `x'left`, `x'length` and friends of an object or subtype
+            // whose bounds are only known once the generics are bound. The
+            // analyser folds these when they are locally static; it cannot
+            // when the width came from a generic, and a width is exactly
+            // where they are used.
+            ast::Name::Attribute {
+                prefix, attribute, ..
+            } => self.eval_bound_attribute(prefix, &attribute.name),
+            _ => None,
+        }
+    }
+
+    /// An aggregate of a one-dimensional array subtype whose bounds are
+    /// known once the generics are bound.
+    ///
+    /// `(others => '0')` as a generic's default, or as the initial value of
+    /// a signal whose width came from one, is the common case; positional,
+    /// indexed and range choices are handled too, since a static value has
+    /// to be complete either way.
+    fn eval_aggregate(&mut self, ag: &'a ast::Aggregate) -> Option<Value> {
+        let ty = self.a().type_of(ag.span)?;
+        let bounds = self.a().index_constraint(ty)?;
+        let [b] = bounds.as_slice() else { return None };
+        let b = b.clone();
+        let (left, right) = match b.ints() {
+            Some(pair) => pair,
+            None => (
+                i128::from(self.bound_value(&b.left)?),
+                i128::from(self.bound_value(&b.right)?),
+            ),
+        };
+        let len = match b.dir {
+            ast::Direction::To => right - left + 1,
+            ast::Direction::Downto => left - right + 1,
+        };
+        let len = usize::try_from(len.max(0)).ok()?;
+        let slot = |i: i128| -> Option<usize> {
+            let off = match b.dir {
+                ast::Direction::To => i - left,
+                ast::Direction::Downto => left - i,
+            };
+            usize::try_from(off).ok().filter(|&o| o < len)
+        };
+        let mut elems: Vec<Option<Value>> = vec![None; len];
+        let mut others = None;
+        let mut next = 0usize;
+        for el in &ag.elements {
+            if el.choices.is_empty() {
+                *elems.get_mut(next)? = Some(self.eval(&el.value)?);
+                next += 1;
+                continue;
+            }
+            for c in &el.choices {
+                match c {
+                    ast::Choice::Others(_) => others = Some(self.eval(&el.value)?),
+                    ast::Choice::Expr(e) => {
+                        let i = self.eval_int(e)?;
+                        let v = self.eval(&el.value)?;
+                        *elems.get_mut(slot(i)?)? = Some(v);
+                    }
+                    ast::Choice::Range(r) => {
+                        let (lo, hi) = self.static_range(r)?;
+                        let v = self.eval(&el.value)?;
+                        let (lo, hi) = if lo <= hi { (lo, hi) } else { (hi, lo) };
+                        for i in lo..=hi {
+                            *elems.get_mut(slot(i128::from(i))?)? = Some(v.clone());
+                        }
+                    }
+                }
+            }
+        }
+        let mut out = Vec::with_capacity(len);
+        for e in elems {
+            out.push(match e {
+                Some(v) => v,
+                None => others.clone()?,
+            });
+        }
+        Some(Value::Array(ArrayValue {
+            left,
+            dir: b.dir,
+            elems: out,
+        }))
+    }
+
+    /// `minimum(a, b)` or `maximum(a, b)` of a subprogram with no body of
+    /// its own, over static arguments.
+    fn eval_extremum(
+        &mut self,
+        d: crate::vhdl::sema::DeclId,
+        args: &'a [ast::AssociationElement],
+    ) -> Option<Value> {
+        let spelling = self.a().decl(d).spelling.to_ascii_lowercase();
+        if !matches!(spelling.as_str(), "minimum" | "maximum") {
+            return None;
+        }
+        let [l, r] = args else { return None };
+        let (ast::Actual::Expr(le), ast::Actual::Expr(re)) = (&l.actual, &r.actual) else {
+            return None;
+        };
+        let (lv, rv) = (self.eval(le)?, self.eval(re)?);
+        let least = lv.compare(&rv)?.is_le();
+        Some(if (spelling == "minimum") == least {
+            lv
+        } else {
+            rv
+        })
+    }
+
+    /// One of the bound attributes of the subtype a name denotes.
+    fn eval_bound_attribute(&mut self, prefix: &'a ast::Name, attribute: &str) -> Option<Value> {
+        let attr = attribute.to_ascii_lowercase();
+        if !matches!(
+            attr.as_str(),
+            "left" | "right" | "high" | "low" | "length" | "ascending"
+        ) {
+            return None;
+        }
+        let a = self.a();
+        let ty = a
+            .type_of(prefix.span())
+            .or_else(|| a.decl_of(prefix.span()).and_then(|d| a.decl_type(d)))?;
+        let (bounds, index_ty) = if a.is_scalar(ty) {
+            (a.scalar_range(ty)?, ty)
+        } else {
+            let (indices, _) = a.array_info(ty)?;
+            let first = a.index_constraint(ty)?.into_iter().next()?;
+            (first, indices.first().copied()?)
+        };
+        let left = i128::from(self.bound_value(&bounds.left)?);
+        let right = i128::from(self.bound_value(&bounds.right)?);
+        let ascending = bounds.dir == ast::Direction::To;
+        let as_value = |i: i128| match self.a().class(index_ty) {
+            TypeClass::Enum => u32::try_from(i).ok().map(Value::Enum),
+            _ => Some(Value::Int(i)),
+        };
+        match attr.as_str() {
+            "left" => as_value(left),
+            "right" => as_value(right),
+            "high" => as_value(left.max(right)),
+            "low" => as_value(left.min(right)),
+            "ascending" => Some(Value::from_bool(ascending)),
+            // A null range has length zero, not a negative one.
+            "length" => Some(Value::Int(
+                if ascending {
+                    right - left + 1
+                } else {
+                    left - right + 1
+                }
+                .max(0),
+            )),
             _ => None,
         }
     }

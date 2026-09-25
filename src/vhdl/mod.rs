@@ -22,10 +22,12 @@
 //!   [`sema::Analysis`]: the AST annotated through side tables rather than
 //!   rewritten, so the elaboration and lowering passes walk the same tree.
 //! - [`stdlib`]: the `std` and `ieee` libraries, shipped as VHDL source and
-//!   analysed like user code. `std.standard`, `std.textio`, `std.env` and
-//!   `ieee.std_logic_1164` are bundled; `ieee.numeric_std` and the other
-//!   `ieee` packages are not yet, and naming one yields one clear
-//!   diagnostic.
+//!   analysed like user code. `std.standard`, `std.textio`, `std.env`,
+//!   `ieee.std_logic_1164`, `ieee.numeric_std`, `ieee.numeric_bit`,
+//!   `ieee.math_real`, `ieee.std_logic_textio` and the Synopsys packages are
+//!   bundled; `ieee.fixed_pkg`, `ieee.float_pkg` and
+//!   `ieee.numeric_std_unsigned` are not yet, and naming one yields one
+//!   clear diagnostic.
 //! - [`elab`]: elaboration and lowering to [`crate::ir`] — top selection,
 //!   architecture binding, generics, generate unrolling, port maps and
 //!   configurations, with explicit `std_logic` resolution. [`elaborate`]

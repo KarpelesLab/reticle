@@ -181,6 +181,11 @@ pub(crate) struct Lowerer<'a, 'e> {
     pub in_subprogram: u32,
     /// Variable initialisers waiting to be emitted into the inlined body.
     pub pending_inits: Vec<(NetId, crate::ir::ExprId, Span)>,
+    /// Interpreted calls currently on the stack (see [`super::interp`]).
+    pub interp_depth: usize,
+    /// Statements the interpretation of the outermost static call has
+    /// executed, its budget against a body that never terminates.
+    pub steps: u32,
 }
 
 impl<'a> LayoutEnv<'a> for Lowerer<'a, '_> {
@@ -235,6 +240,8 @@ pub(crate) fn lower_entity<'a>(
         quiet: 0,
         in_subprogram: 0,
         pending_inits: Vec::new(),
+        interp_depth: 0,
+        steps: 0,
     };
     low.b.span = span;
     // VHDL's time resolution limit is a femtosecond, and `wait for`
@@ -1096,8 +1103,12 @@ pub(crate) fn attr_of_value(a: &Analysis, v: &Value, ty: TypeId) -> AttrValue {
 /// A static value as plain text: the characters of a string or bit-string
 /// value, and the analyser's rendering for everything else.
 pub(crate) fn value_text(a: &Analysis, v: &Value, ty: TypeId) -> String {
+    // Only `character` itself has a position that is a code point:
+    // `std_ulogic` and `bit` are enumerations of character literals too, and
+    // mapping their positions to characters spelled `'1'` as U+0003.
     if let Value::Array(arr) = v
-        && a.element_type(ty).is_some_and(|e| a.is_character_type(e))
+        && a.element_type(ty)
+            .is_some_and(|e| a.base_type(e) == a.builtins.character)
         && let Some(text) = arr
             .elems
             .iter()
@@ -1106,7 +1117,13 @@ pub(crate) fn value_text(a: &Analysis, v: &Value, ty: TypeId) -> String {
     {
         return text;
     }
-    a.describe_value(v, ty)
+    let text = a.describe_value(v, ty);
+    // An array is described as the VHDL literal `"1111"`; the quotes are
+    // the literal's, not part of the value an IR parameter carries.
+    match v {
+        Value::Array(_) => text.trim_matches('"').to_owned(),
+        _ => text,
+    }
 }
 
 /// Follows a chain of non-object aliases to the declaration it names.

@@ -1,0 +1,16 @@
+top static_function
+
+module static_function
+  timescale 1 fs / 1 fs
+  param DEPTH = 100
+  param WIDTH = 7
+  net %clk u1 wire
+  net %q u7 wire
+  net %reg u7 reg
+  port clk in %clk
+  port q out %q
+  assign %q = %reg
+  process seq posedge %clk
+    %reg[6:0] <= xor(%reg[6:0], 7'd73)
+  end
+end

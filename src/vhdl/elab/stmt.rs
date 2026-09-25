@@ -242,7 +242,7 @@ impl<'a> Lowerer<'a, '_> {
         }
     }
 
-    fn waveform(
+    pub(crate) fn waveform(
         &mut self,
         target: &Lvalue,
         layout: &Layout,
@@ -743,7 +743,7 @@ impl<'a> Lowerer<'a, '_> {
     /// the point the alias is written, which in a package declaration is
     /// before the body exists; the same profile declared elsewhere with a
     /// body is the one to inline.
-    fn subprogram_with_body(&self, d: DeclId) -> DeclId {
+    pub(crate) fn subprogram_with_body(&self, d: DeclId) -> DeclId {
         // An alias carries a copy of the profile, so follow it first.
         let d = self.cx.alias_target.get(&d).copied().unwrap_or(d);
         let DeclKind::Subprogram { sig, body } = &self.a().decl(d).kind else {

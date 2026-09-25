@@ -1,0 +1,26 @@
+top subtype_and_range_attributes
+
+module subtype_and_range_attributes
+  timescale 1 fs / 1 fs
+  param WIDTH = 6
+  net %clk u1 wire
+  net %data_i u6 wire
+  net %wide_o u12 wire
+  net %all_o u1 wire
+  net %top_o u1 wire
+  net %reg u6 wire
+  net %ones u6 reg
+  port clk in %clk
+  port data_i in %data_i
+  port wide_o out %wide_o
+  port all_o out %all_o
+  port top_o out %top_o
+  assign %reg = %data_i
+  assign %all_o = mux(eq(%reg, 6'd63), 1'd1, 1'd0)
+  assign %wide_o[5:0] = %reg
+  assign %wide_o[11:6] = %ones
+  assign %top_o = %reg[5:5]
+  process initial
+    %ones = 6'd63
+  end
+end

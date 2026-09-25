@@ -203,6 +203,7 @@ pub mod codes;
 mod conc;
 mod eval;
 mod expr;
+mod interp;
 mod lower;
 mod numeric;
 mod spans;
@@ -232,6 +233,16 @@ pub struct ElabOptions {
     pub generics: Vec<(String, String)>,
     /// The library the design was compiled into; `work` when empty.
     pub library: Option<String>,
+    /// Elaborate the top entity alone, leaving the library's other root
+    /// entities out of the design.
+    ///
+    /// By default every entity that nothing instantiates is elaborated, so
+    /// that one call over a set of files yields every design in it. That is
+    /// the wrong shape for a *library*: pointing at one whose entities are
+    /// meant to be instantiated by somebody else, each with its own
+    /// generics, reports every other entity's missing generic alongside the
+    /// one design asked for.
+    pub only_top: bool,
 }
 
 impl ElabOptions {
@@ -243,6 +254,12 @@ impl ElabOptions {
     /// The same options with `top` as the top entity.
     pub fn with_top(mut self, top: impl Into<String>) -> Self {
         self.top = Some(top.into());
+        self
+    }
+
+    /// The same options, elaborating the top entity alone.
+    pub fn only_top(mut self) -> Self {
+        self.only_top = true;
         self
     }
 
@@ -325,9 +342,11 @@ pub fn elaborate(
     if let Some(t) = top {
         order.push(t);
     }
-    for r in &roots {
-        if !order.contains(r) && work.is_none_or(|w| analysis.units[r.index()].library == w) {
-            order.push(*r);
+    if !opts.only_top {
+        for r in &roots {
+            if !order.contains(r) && work.is_none_or(|w| analysis.units[r.index()].library == w) {
+                order.push(*r);
+            }
         }
     }
 

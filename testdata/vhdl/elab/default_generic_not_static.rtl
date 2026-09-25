@@ -1,0 +1,22 @@
+top wrapper
+
+module sized
+  timescale 1 fs / 1 fs
+  param LANES = 2
+  param WIDTH = 4
+  param INIT = "1111"
+  net %d u4 wire
+  net %q u4 wire
+  port d in %d
+  port q out %q
+  assign %q = xor(%d, 4'd15)
+end
+
+module wrapper
+  timescale 1 fs / 1 fs
+  net %d u4 wire
+  net %q u4 wire
+  port d in %d
+  port q out %q
+  instance u of sized (d=%d, q=%q)
+end

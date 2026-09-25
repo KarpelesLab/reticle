@@ -79,6 +79,21 @@ package standard is
   impure function now return delay_length;
   attribute foreign of now : function is "reticle: builtin";
 
+  -- The implicit MINIMUM and MAXIMUM of a scalar type (clause 5.2.6).
+  -- The standard declares these immediately after every scalar type
+  -- declaration; Reticle declares them here for the scalar types this
+  -- package defines, which is what `natural`, `positive` and any other
+  -- integer subtype resolve to. A scalar type declared by user code does
+  -- not get them yet.
+  function minimum (l, r : integer) return integer;
+  function maximum (l, r : integer) return integer;
+  function minimum (l, r : real) return real;
+  function maximum (l, r : real) return real;
+  function minimum (l, r : time) return time;
+  function maximum (l, r : time) return time;
+  attribute foreign of minimum : function is "reticle: builtin";
+  attribute foreign of maximum : function is "reticle: builtin";
+
   subtype natural  is integer range 0 to integer'high;
   subtype positive is integer range 1 to integer'high;
 
