@@ -532,6 +532,7 @@ pub struct Analysis {
     calls: HashMap<Span, CallTarget>,
     ranges: HashMap<Span, RangeInfo>,
     decl_values: HashMap<DeclId, Value>,
+    defaulted: std::collections::HashSet<DeclId>,
     implicit_conditions: std::collections::HashSet<Span>,
     attribute_values: HashMap<(DeclId, Symbol), Value>,
     libraries: Vec<(Symbol, DeclId)>,
@@ -588,6 +589,18 @@ impl Analysis {
     /// The resolved bounds of the discrete range at `span`.
     pub fn range_of(&self, span: Span) -> Option<&RangeInfo> {
         self.ranges.get(&span)
+    }
+
+    /// True when the interface object `id` (a port, generic or parameter)
+    /// was declared with a default expression.
+    ///
+    /// This is a syntactic fact, recorded whether or not the expression
+    /// folded to a value: `g : natural := f(other_generic)` has a default
+    /// even though nothing can be computed for it until elaboration, and an
+    /// association list may leave such a formal out all the same
+    /// (clause 6.5.2).
+    pub fn is_defaulted(&self, id: DeclId) -> bool {
+        self.defaulted.contains(&id)
     }
 
     /// True when the condition expression at `span` is not `boolean` and
@@ -1222,6 +1235,34 @@ impl Analysis {
         id
     }
 
+    /// Adds a declaration that is *not* visible by name.
+    ///
+    /// A record element is recorded this way when `r.f` is resolved, so that
+    /// the lowering pass can find the field behind the span, without `f`
+    /// becoming an ordinary name in the region: the elements of a record are
+    /// reached by selection only (clause 12.3), and putting them in the
+    /// region made a later `f` resolve to the element and a parameter named
+    /// `f` a redeclaration.
+    pub(crate) fn add_hidden_decl(
+        &mut self,
+        region: RegionId,
+        name: Symbol,
+        spelling: impl Into<String>,
+        kind: DeclKind,
+        span: Span,
+    ) -> DeclId {
+        let id = DeclId(u32::try_from(self.decls.len()).expect("decl count"));
+        self.decls.push(Decl {
+            name,
+            spelling: spelling.into(),
+            kind,
+            span,
+            region,
+        });
+        self.regions[region.index()].decls.push(id);
+        id
+    }
+
     /// Makes `decl` potentially visible in `region` under `name`.
     pub(crate) fn add_use(&mut self, region: RegionId, name: Symbol, decl: DeclId) {
         let r = &mut self.regions[region.index()];
@@ -1253,6 +1294,10 @@ impl Analysis {
 
     pub(crate) fn set_range(&mut self, span: Span, info: RangeInfo) {
         self.ranges.insert(span, info);
+    }
+
+    pub(crate) fn set_defaulted(&mut self, id: DeclId) {
+        self.defaulted.insert(id);
     }
 
     pub(crate) fn set_implicit_condition(&mut self, span: Span) {
@@ -1300,6 +1345,7 @@ impl Analysis {
             calls: HashMap::new(),
             ranges: HashMap::new(),
             decl_values: HashMap::new(),
+            defaulted: std::collections::HashSet::new(),
             implicit_conditions: std::collections::HashSet::new(),
             attribute_values: HashMap::new(),
             libraries: Vec::new(),

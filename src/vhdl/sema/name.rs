@@ -384,7 +384,7 @@ impl Checker<'_> {
                         {
                             let (fspan, fty2) = (f.span, f.ty);
                             let region = self.region;
-                            let fdecl = self.a.add_decl(
+                            let fdecl = self.a.add_hidden_decl(
                                 region,
                                 sym,
                                 spelling.clone(),
@@ -962,7 +962,13 @@ impl Checker<'_> {
                     }
                     match &a.actual {
                         Actual::Expr(e) | Actual::Inertial(e) => {
+                            // An actual for an `out` formal is written, not
+                            // read, so an `out` parameter of the caller may
+                            // be passed straight on.
+                            let writing = param.mode == ast::Mode::Out;
+                            self.writing_actual += u32::from(writing);
                             self.resolve(e, param.ty);
+                            self.writing_actual -= u32::from(writing);
                             self.check_static_range(e, param.ty);
                             self.check_actual_object(e, param, span);
                             arg_spans.push(Some(e.span()));
@@ -2190,6 +2196,13 @@ impl Checker<'_> {
 
     /// Reports an attempt to write to an object that cannot be written.
     pub(crate) fn check_writable(&mut self, obj: &ObjInfo, span: Span, what: &str) {
+        // A file object has no mode of its own (clause 4.2.2.1): `file f :
+        // t` as a parameter is neither read nor written, it is opened, and
+        // passing it on to another subprogram's file parameter is how every
+        // file utility is written.
+        if obj.class == ObjectClass::File {
+            return;
+        }
         let dspan = self.a.decl(obj.decl).span;
         let spelling = self.a.decl(obj.decl).spelling.clone();
         match obj.class {
@@ -2237,12 +2250,17 @@ impl Checker<'_> {
 
     /// Reports an attempt to read an object that cannot be read.
     pub(crate) fn check_readable(&mut self, obj: &ObjInfo, span: Span) {
+        if obj.class == ObjectClass::File || self.writing_actual > 0 {
+            return;
+        }
         let Some(m) = obj.mode else { return };
         if m != ast::Mode::Out || !matches!(obj.role, ObjectRole::Port | ObjectRole::Parameter) {
             return;
         }
-        // VHDL-2008 allows reading an `out` port (clause 6.5.2).
-        if self.v2008() && obj.role == ObjectRole::Port {
+        // VHDL-2008 allows reading an `out` port (clause 6.5.2) and an
+        // `out` parameter, whose value before the first assignment is its
+        // subtype's default (clause 4.2.2.3).
+        if self.v2008() {
             return;
         }
         let decl = self.a.decl(obj.decl);
@@ -2260,7 +2278,9 @@ impl Checker<'_> {
         if obj.role == ObjectRole::Port {
             d = d.with_note("use mode `buffer`, or keep an internal signal and assign it to the port (VHDL-2008 allows reading `out` ports)");
         } else {
-            d = d.with_note("use mode `inout` to read the parameter");
+            d = d.with_note(
+                "use mode `inout` to read the parameter (VHDL-2008 allows reading an `out` one)",
+            );
         }
         self.push(d);
     }

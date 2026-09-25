@@ -276,14 +276,20 @@ fn collect_units(
         }
     }
 
+    let work = interner.intern_ci("work");
     // Dependencies: indices into `units`.
+    //
+    // `work` is always scanned for, whatever the libraries are called: it
+    // names whichever library the unit itself is in (clause 13.2), so
+    // `entity work.sub` is a dependency even when no unit is compiled into
+    // a library spelled `work`.
     let library_names: Vec<Symbol> = {
         let mut v: Vec<Symbol> = units.iter().map(|u| u.library).collect();
+        v.push(work);
         v.sort();
         v.dedup();
         v
     };
-    let work = interner.intern_ci("work");
     let find = |units: &[Unit], lib: Symbol, name: Symbol, primary: bool| -> Vec<usize> {
         units
             .iter()
@@ -499,6 +505,45 @@ mod tests {
                 "entity:f"
             ]
         );
+    }
+
+    /// `work` names the unit's own library whatever that library is
+    /// called, so `entity work.sub` orders `sub` first even in a library
+    /// named something else. Missing this put every instantiation of a
+    /// design in the same library before its entity, and the port map was
+    /// then checked against an entity with no ports at all.
+    ///
+    /// Found by the Colibri corpus (compiled into `colibri`, and full of
+    /// `entity work.x`); see docs/vhdl-corpus.md.
+    #[test]
+    fn work_orders_units_of_a_library_of_another_name() {
+        let mut map = SourceMap::new();
+        let id = map
+            .add(
+                "t.vhd",
+                "entity top is end;\n\
+                 architecture a of top is begin\n\
+                   i : entity work.sub port map (x => open);\n\
+                 end;\n\
+                 entity sub is port (x : in bit); end;\n",
+            )
+            .unwrap();
+        let mut diags = Diagnostics::new();
+        let ast = parse_source(&map, id, Standard::Vhdl2008, &mut diags);
+        assert!(diags.is_empty(), "{}", diags.render(&map));
+        let mut interner = Interner::new();
+        let files = vec![AnalyzedFile {
+            source: id,
+            library: interner.intern_ci("colibri"),
+            ast,
+        }];
+        let (units, order) = collect_units(&files, &mut interner, &map, &mut diags);
+        assert!(diags.is_empty());
+        let names: Vec<String> = order
+            .iter()
+            .map(|u| interner.resolve(units[u.index()].name).to_owned())
+            .collect();
+        assert_eq!(names, ["top", "sub", "a"]);
     }
 
     #[test]

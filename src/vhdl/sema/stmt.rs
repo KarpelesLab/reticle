@@ -378,10 +378,14 @@ impl Checker<'_> {
     }
 
     fn has_default(&self, d: DeclId) -> bool {
-        // A generic or port with a default has that default recorded at
-        // the declared name's span; ports of mode `in` without a default
-        // must be connected.
-        self.a.decl_value(d).is_some() || self.a.value_of(self.a.decl(d).span).is_some()
+        // A generic or port declared with a default is recorded as such
+        // whether or not the expression folded, since one that depends on
+        // another generic (`g_WIDTH : natural := log2ceil(g_MODULO)`) has no
+        // value until elaboration and may still be left out of a map. The
+        // value tables are consulted too, for declarations made elsewhere.
+        self.a.is_defaulted(d)
+            || self.a.decl_value(d).is_some()
+            || self.a.value_of(self.a.decl(d).span).is_some()
     }
 
     fn first_required_port(&self, ports: &[DeclId]) -> Option<DeclId> {

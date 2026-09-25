@@ -142,6 +142,10 @@ pub(crate) struct Checker<'a> {
     /// architecture reads its entity's entry and a package body its
     /// package's.
     pub unit_contexts: HashMap<UnitId, RegionId>,
+    /// Non-zero while the actual for a formal of mode `out` is resolved:
+    /// naming an object there writes it rather than reading it, whatever
+    /// the object's own mode is.
+    pub writing_actual: u32,
 }
 
 /// Analyses every unit of `order`.
@@ -199,6 +203,7 @@ pub(crate) fn run(
         library_regions: HashMap::new(),
         context_decls: HashMap::new(),
         unit_contexts: HashMap::new(),
+        writing_actual: 0,
     };
     // Library declarations: every library that has units, plus `std`
     // and `work`.
@@ -1176,10 +1181,11 @@ impl<'a> Checker<'a> {
                         // list can tell that the formal may be left out
                         // (clause 6.5.2) without the value being the
                         // object's own.
-                        if let Some(def) = &o.default
-                            && let Some(v) = self.a.value_of(def.span()).cloned()
-                        {
-                            self.a.set_value(name.span, v);
+                        if let Some(def) = &o.default {
+                            self.a.set_defaulted(d);
+                            if let Some(v) = self.a.value_of(def.span()).cloned() {
+                                self.a.set_value(name.span, v);
+                            }
                         }
                         out.push(d);
                     }

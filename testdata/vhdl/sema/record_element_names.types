@@ -1,0 +1,4 @@
+rec_user.clk_i : signal std_logic
+rec_user.q_o : signal std_logic
+rec_user(rtl).reg : signal state_t
+rec_user(rtl).size : signal std_logic_vector(3 downto 0) = "0001"
