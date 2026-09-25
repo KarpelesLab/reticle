@@ -1,0 +1,8 @@
+error[V0701]: a conditional signal assignment with no `else` cannot be lowered to the IR yet
+  --> error_conditional_no_else.vhd:20:3
+   |
+20 |   q <= d when en = '1';
+   |   ^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: the signal keeps its previous value when the condition is false, which is a latch; add an `else`, or make the condition a clock edge (`t <= v when rising_edge(clk);`) for a register
+

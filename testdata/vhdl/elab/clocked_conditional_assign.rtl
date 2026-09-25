@@ -1,0 +1,23 @@
+top clocked_conditional_assign
+
+module clocked_conditional_assign
+  timescale 1 fs / 1 fs
+  net %clk u1 wire
+  net %d u4 wire
+  net %q u4 wire
+  net %n u4 reg
+  net %reg u4 reg
+  net %cmb u4 wire
+  port clk in %clk
+  port d in %d
+  port q out %q
+  port n out %n
+  assign %cmb = not(%d)
+  assign %q = %reg
+  process seq posedge %clk
+    %reg <= %cmb
+  end
+  process seq negedge %clk
+    %n <= %reg
+  end
+end

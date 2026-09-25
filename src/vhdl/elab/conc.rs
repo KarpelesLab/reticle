@@ -426,6 +426,19 @@ impl<'a> Lowerer<'a, '_> {
     // --- concurrent assignments ---------------------------------------------
 
     fn concurrent_assign(&mut self, sa: &'a ast::SignalAssignment) {
+        // `t <= v when rising_edge(clk);` is a register, and the only way
+        // to write one as a concurrent statement. It is lowered to the
+        // clocked process the `if rising_edge(clk)` idiom would have given,
+        // since a continuous assignment cannot hold a value.
+        if let ast::SignalAssignmentRhs::Conditional(arms) = &sa.rhs
+            && let [arm] = &arms[..]
+            && let Some(cond) = &arm.condition
+            && simple_waveform(arm)
+            && let Some(edge) = self.edge_of(cond)
+        {
+            self.clocked_assign(sa, arm, edge);
+            return;
+        }
         let Some((target, layout)) = self.lvalue(&sa.target, &mut Sink::Cont) else {
             return;
         };
@@ -468,6 +481,40 @@ impl<'a> Lowerer<'a, '_> {
                 self.driver = outer;
             }
         }
+    }
+
+    /// One conditional assignment whose condition is a clock edge, as a
+    /// clocked process.
+    fn clocked_assign(
+        &mut self,
+        sa: &'a ast::SignalAssignment,
+        arm: &'a ast::ConditionalWaveform,
+        edge: Edge,
+    ) {
+        let index = self.b.module().processes.len();
+        let outer = self.driver;
+        self.driver = DriverKey::Process(index);
+        let mut p = self.b.process(
+            None,
+            ProcessKind::Sequential {
+                clocks: vec![edge],
+                resets: Vec::new(),
+            },
+        );
+        p.span = sa.span;
+        if let Some((target, layout)) = self.lvalue(&sa.target, &mut Sink::Proc(&mut p)) {
+            self.waveform(
+                &target,
+                &layout,
+                &arm.waveform,
+                AssignKind::NonBlocking,
+                sa.span,
+                &mut p,
+            );
+        }
+        let pid = self.b.end_process(p);
+        self.attribute_drivers(pid);
+        self.driver = outer;
     }
 
     /// Emits one continuous assignment, or a tristate cell when the value
@@ -528,10 +575,27 @@ impl<'a> Lowerer<'a, '_> {
             return Some(value);
         };
         let c = self.cond(cond, &mut Sink::Cont);
-        let other = match rest.is_empty() {
-            true => self.zero_of(layout),
-            false => self.conditional_value(rest, layout)?,
-        };
+        if rest.is_empty() {
+            // Without an `else` the target keeps its previous value
+            // (clause 11.6), so this is a latch and not a mux against
+            // zero. The clocked shape was taken earlier; anything else has
+            // no IR form yet, and quietly substituting zero would be a
+            // wrong design rather than a missing feature.
+            self.report(
+                Diagnostic::error(
+                    "a conditional signal assignment with no `else` cannot be lowered to the IR yet",
+                )
+                .with_code(codes::UNSUPPORTED)
+                .with_span(first.span)
+                .with_note(
+                    "the signal keeps its previous value when the condition is false, which is a \
+                     latch; add an `else`, or make the condition a clock edge \
+                     (`t <= v when rising_edge(clk);`) for a register",
+                ),
+            );
+            return None;
+        }
+        let other = self.conditional_value(rest, layout)?;
         self.b.span = first.span;
         Some(self.b.mux(c, value, other))
     }
