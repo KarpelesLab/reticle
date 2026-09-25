@@ -1,0 +1,25 @@
+DesignFile
+  DesignUnit @7:1
+    Library @7:1 ieee
+    Use @8:1 ieee.std_logic_1164.all
+    Entity attrs @10:1
+      Port @12:5 data_i : in std_logic_vector(7 downto 0)
+      Port @13:5 sel_i : in integer
+      Port @14:5 data_o : out std_logic_vector(7 downto 0)
+  DesignUnit @18:1
+    Architecture rtl @18:1 of attrs
+      Signal @21:3 copy : data_i'subtype
+      Signal @22:3 zero : data_i'subtype := (agg data_i'range => '0')
+      Signal @23:3 ones : std_logic_vector(3 downto 0) := (agg others => '1')
+      Begin
+      SignalAssign @27:3 copy <= data_i
+      SignalAssign @28:3 data_o(data_i'range) <= (agg data_i'range => '0') when (= sel_i 0) else data_i
+      Process @30:3 (sel_i)
+        Begin
+        Case @32:5 sel_i
+          When @34:7 integer'high
+            Null @34:28
+          When @35:7 0 to 3
+            Null @35:28
+          When @36:7 others
+            Null @36:28

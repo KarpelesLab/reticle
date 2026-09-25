@@ -465,3 +465,23 @@ pub(super) fn is_attribute_name(n: &Name) -> bool {
         _ => false,
     }
 }
+
+/// True for `x'range` and `x'reverse_range`, with or without a dimension,
+/// which *always* denote a range and never a value.
+///
+/// Where the grammar allows either (an aggregate element association or a
+/// case choice, which take a discrete range as readily as an expression)
+/// the parser has an expression in hand and this is how it tells that the
+/// expression was really a range.
+pub(super) fn is_range_attribute(n: &Name) -> bool {
+    let attribute = match n {
+        Name::Attribute { attribute, .. } => attribute,
+        Name::Call { prefix, .. } => match &**prefix {
+            Name::Attribute { attribute, .. } => attribute,
+            _ => return false,
+        },
+        _ => return false,
+    };
+    attribute.name.eq_ignore_ascii_case("range")
+        || attribute.name.eq_ignore_ascii_case("reverse_range")
+}

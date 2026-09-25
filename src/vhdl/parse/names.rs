@@ -136,12 +136,13 @@ impl<'t, 'src> Parser<'t, 'src> {
         }
     }
 
-    /// The identifier after an attribute tick; `range` is a reserved word
-    /// and is accepted too.
+    /// The identifier after an attribute tick; `range` and `subtype` are
+    /// reserved words and are accepted too, since `'range` (LRM 16.2.3) and
+    /// `'subtype` (LRM 16.2.4) are spelled with them.
     fn parse_attribute_designator(&mut self) -> PResult<Ident> {
         match self.kind() {
             TokenKind::Ident | TokenKind::ExtendedIdent => self.parse_ident(),
-            TokenKind::Range => {
+            TokenKind::Range | TokenKind::Subtype => {
                 let t = self.bump();
                 Ok(Ident {
                     name: t.text().to_owned(),
@@ -219,10 +220,17 @@ impl<'t, 'src> Parser<'t, 'src> {
     fn actual_after_expr(&mut self, e: Expr, start: crate::source::Span) -> PResult<Actual> {
         if self.at_any(&[TokenKind::To, TokenKind::Downto, TokenKind::Range]) {
             let r = self.discrete_range_after_expr(e, start)?;
-            Ok(Actual::Range(r))
-        } else {
-            Ok(Actual::Expr(e))
+            return Ok(Actual::Range(r));
         }
+        // `v(other'range)` is a slice of the whole of `other`'s range, not
+        // an index by a value: `'range` never denotes one.
+        if let Expr::Name(n) = &e
+            && super::types::is_range_attribute(n)
+        {
+            let Expr::Name(n) = e else { unreachable!() };
+            return Ok(Actual::Range(DiscreteRange::Range(Range::Attribute(n))));
+        }
+        Ok(Actual::Expr(e))
     }
 
     // --- external names ----------------------------------------------------------

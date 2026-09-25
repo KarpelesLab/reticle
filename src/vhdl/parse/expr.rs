@@ -479,13 +479,23 @@ impl<'t, 'src> Parser<'t, 'src> {
     }
 
     /// Completes a choice whose expression has been parsed.
+    ///
+    /// A bare `x'range` is a choice too — `(v'range => '0')` is an
+    /// aggregate over the whole of `v` — and the expression parser cannot
+    /// tell it apart from a value attribute, so it is turned into a range
+    /// here rather than left to fail as an expression.
     fn choice_after_expr(&mut self, e: Expr, start: Span) -> PResult<Choice> {
         if self.at_any(&[TokenKind::To, TokenKind::Downto, TokenKind::Range]) {
             let r = self.discrete_range_after_expr(e, start)?;
-            Ok(Choice::Range(r))
-        } else {
-            Ok(Choice::Expr(e))
+            return Ok(Choice::Range(r));
         }
+        if let Expr::Name(n) = &e
+            && super::types::is_range_attribute(n)
+        {
+            let Expr::Name(n) = e else { unreachable!() };
+            return Ok(Choice::Range(DiscreteRange::Range(Range::Attribute(n))));
+        }
+        Ok(Choice::Expr(e))
     }
 }
 
