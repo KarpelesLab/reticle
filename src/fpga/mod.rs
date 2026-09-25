@@ -174,6 +174,7 @@ pub mod arch;
 pub mod bitstream;
 pub mod constraints;
 pub mod device;
+pub mod ecp5;
 pub mod flow;
 pub mod gowin;
 pub mod place;
@@ -182,6 +183,7 @@ pub mod primitives;
 pub mod route;
 pub mod techcells;
 mod text;
+pub mod trellis;
 pub mod xc7;
 pub mod xray;
 
@@ -297,6 +299,7 @@ mod tests {
                 "ice40-hx1k-tq144",
                 "ice40-hx8k-ct256",
                 "ecp5-25f-CABGA381",
+                "ecp5-12f-CABGA256",
                 "ecp5-45f-CABGA381",
                 "xc7a35t-cpg236",
                 "gw2a-18-pg256",

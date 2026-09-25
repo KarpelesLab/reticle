@@ -263,6 +263,17 @@ pub struct NetPin {
     pub output: bool,
     /// The signal it carries, or `None` for a constant.
     pub signal: Option<usize>,
+    /// The constant driving it, when [`NetPin::signal`] is `None` because
+    /// the pin is tied rather than wired.
+    ///
+    /// The router does not route a constant — tying one is a property of
+    /// the fabric, not a connection to find — but a fabric that *can* tie
+    /// a pin has to know which constant to tie it to. An ECP5's
+    /// interconnect can drive a wire to a fixed zero or one
+    /// (`CIB.<wire>MUX`), which is how an output pad with a constant
+    /// behind it is configured, and before this field the netlist recorded
+    /// that a pin was tied without recording to what.
+    pub constant: Option<crate::logic::Bit>,
 }
 
 /// One bit of one net: what the router has to connect.
@@ -382,6 +393,7 @@ impl Netlist {
                             .push(format!("{}.{port}[{index}]", cell.name));
                         continue;
                     }
+                    let mut constant = None;
                     let signal = match view.canonical(*bit) {
                         SigBit::Slot(slot) => {
                             let next = out.signals.len();
@@ -401,7 +413,10 @@ impl Netlist {
                             }
                             Some(index)
                         }
-                        SigBit::Const(_) => None,
+                        SigBit::Const(value) => {
+                            constant = Some(value);
+                            None
+                        }
                     };
                     let pin = out.pins.len();
                     out.pins.push(NetPin {
@@ -411,6 +426,7 @@ impl Netlist {
                         role,
                         output,
                         signal,
+                        constant,
                     });
                     pins.push(pin);
                     if let Some(signal) = signal {
@@ -1697,6 +1713,7 @@ mod tests {
                     role: "i0".to_owned(),
                     output: false,
                     signal: Some(i - 1),
+                    constant: None,
                 });
                 netlist.signals[i - 1].sinks.push(pin);
                 pins.push(pin);
@@ -1710,6 +1727,7 @@ mod tests {
                     role: "o".to_owned(),
                     output: true,
                     signal: Some(i),
+                    constant: None,
                 });
                 netlist.signals.push(Signal {
                     name: format!("n{i}"),

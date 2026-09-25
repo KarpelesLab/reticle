@@ -796,6 +796,7 @@ mod tests {
                 role: "o".to_owned(),
                 output: true,
                 signal: Some(i),
+                constant: None,
             });
             netlist.instances.push(Instance {
                 cell: CellId::from_index(netlist.instances.len()),
@@ -814,6 +815,7 @@ mod tests {
                 role: "d".to_owned(),
                 output: false,
                 signal: Some(i),
+                constant: None,
             });
             netlist.instances.push(Instance {
                 cell: CellId::from_index(netlist.instances.len()),
@@ -1132,6 +1134,7 @@ mod tests {
             role: "d".to_owned(),
             output: false,
             signal: Some(0),
+            constant: None,
         });
         netlist.instances.push(Instance {
             cell: CellId::from_index(instance),

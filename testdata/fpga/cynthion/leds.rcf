@@ -1,0 +1,25 @@
+# The six FPGA LEDs of a Great Scott Gadgets Cynthion r1.4.
+#
+# Ball names from Great Scott Gadgets' own Amaranth platform file,
+# `cynthion/python/src/gateware/platform/cynthion_r1_4.py`:
+#
+#     *LEDResources(pins="E13 C13 B14 A15 D12 C11",
+#                   attrs=Attrs(IO_TYPE="LVCMOS33"), invert=True),
+#
+# in that order, so `led_n[0]` is E13 and `led_n[5]` is C11. Confirmed
+# against the r1.4.0 KiCad schematic (nets LED0..LED5, refdes D7 D6 D5 D4
+# D3 D2) and against Project Trellis' `iodb.json` for the caBGA-256,
+# which puts all six on bank 1. `docs/fpga-trellis.md` has the citations.
+#
+# `invert=True` is the polarity: these are active low, and this file
+# cannot say so. The design drives zero to light them; see `leds.v`.
+#
+# Bank 1's VCCIO is 3.3 V, hence LVCMOS33 — the same standard the
+# platform file asks for.
+
+set_io -io_standard LVCMOS33 led_n[0] E13
+set_io -io_standard LVCMOS33 led_n[1] C13
+set_io -io_standard LVCMOS33 led_n[2] B14
+set_io -io_standard LVCMOS33 led_n[3] A15
+set_io -io_standard LVCMOS33 led_n[4] D12
+set_io -io_standard LVCMOS33 led_n[5] C11

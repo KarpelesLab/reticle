@@ -29,7 +29,7 @@ writes its bitstream, without calling another program.
 | Family | Parts | Route out | Own place and route |
 |--------|-------|-----------|---------------------|
 | `ice40` | `ice40-lp1k-tq144`, `ice40-hx1k-tq144`, `ice40-hx8k-ct256` | `nextpnr-ice40` | yes, on a **synthetic** fabric — read the section below |
-| `ecp5` | `ecp5-25f-CABGA381`, `ecp5-45f-CABGA381` | `nextpnr-ecp5` | no architecture |
+| `ecp5` | `ecp5-25f-CABGA381`, `ecp5-12f-CABGA256` (LFE5U-12F, Great Scott Gadgets Cynthion r1.4), `ecp5-45f-CABGA381` | `nextpnr-ecp5` | **pads only**, on the **real** fabric, with a chip database the user supplies — see [`fpga-trellis.md`](fpga-trellis.md) |
 | `xc7` | `xc7a35t-cpg236` (Artix-7, Digilent Basys 3) | **Vivado** | yes, on the **real** fabric, with a chip database the user supplies — see [`fpga-xray.md`](fpga-xray.md) |
 | `gowin` | `gw2a-18-pg256` (GW2A-18, Sipeed Tang Primer 20K) | none yet | **partly**, on the **real** fabric, with a chip database the user supplies — see [`fpga-gowin.md`](fpga-gowin.md) |
 | `generic` | `generic`, `generic-k6` | none; it is not a real part | no architecture |

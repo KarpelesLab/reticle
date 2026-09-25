@@ -1803,10 +1803,26 @@ fn fpga(args: &Args) -> Result<Outcome, ArgError> {
         return Ok(Outcome::Failed);
     }
 
-    // The 7-series bitstream, which needs a chip database the user
-    // supplies. Everything above this point is the same flow every
-    // family takes.
+    // A bitstream from Reticle's own place and route, which needs a chip
+    // database the user supplies. Everything above this point is the same
+    // flow every family takes, and both of these families *also* have an
+    // outside route, which is why this is behind `--bitstream` rather
+    // than a family check the way Gowin's is.
     if let Some(path) = args.option("bitstream") {
+        if device.family == "ecp5" {
+            match write_ecp5_bitstream(args, &design, top, device, &constraints, path) {
+                Ok(note) => {
+                    if !args.flag("quiet") {
+                        eprint!("{note}");
+                    }
+                    return Ok(Outcome::Ok);
+                }
+                Err(message) => {
+                    eprintln!("error: {message}");
+                    return Ok(Outcome::Failed);
+                }
+            }
+        }
         match write_xc7_bitstream(args, &design, top, device, &constraints, path) {
             Ok(note) => {
                 if !args.flag("quiet") {
@@ -2094,6 +2110,165 @@ fn write_gowin_bitstream(
         routed,
         netlist.signals.len(),
         io_banks.join(", "),
+    ))
+}
+
+/// The Lattice ECP5 parts a device file describes, as Project Trellis
+/// names them, with the package its `iodb.json` spells and the speed grade
+/// that goes into the file's metadata string:
+/// `(device file name, database part, database package, speed)`.
+const ECP5_PARTS: &[(&str, &str, &str, &str)] =
+    &[("ecp5-12f-CABGA256", "LFE5U-12F", "CABGA256", "8")];
+
+/// `reticle fpga --bitstream` for a Lattice ECP5: place, route and write a
+/// `.bit` from Project Trellis' database.
+///
+/// **What this can build is narrow and the narrowness is deliberate.**
+/// `src/fpga/trellis/mod.rs` builds the part's geometry and its pads and
+/// **no interconnect at all**, so a design with anything to route is
+/// refused here rather than turned into a bitstream whose nets go
+/// nowhere. A design whose ports are driven by constants builds, and one
+/// has been loaded into a real part and watched; `docs/fpga-trellis.md`
+/// says what that did and did not settle.
+///
+/// Unlike Gowin this is not the family's only route out: `reticle fpga`
+/// without `--bitstream` still exports a netlist and an `.lpf` for
+/// nextpnr, which is a complete flow. This is the from-scratch one.
+fn write_ecp5_bitstream(
+    args: &Args,
+    design: &reticle::ir::Design,
+    top: reticle::ir::ModuleId,
+    device: &reticle::fpga::Device,
+    constraints: &reticle::fpga::Constraints,
+    path: &str,
+) -> Result<String, String> {
+    use reticle::fpga::trellis::{self, TrellisOptions};
+    use reticle::fpga::{Netlist, Routing, bitstream, place, route};
+
+    let Some(&(_, part, package, speed)) =
+        ECP5_PARTS.iter().find(|(name, ..)| *name == device.name)
+    else {
+        return Err(format!(
+            "no Project Trellis part is known for device `{}`; this flow knows {}",
+            device.name,
+            ECP5_PARTS
+                .iter()
+                .map(|(name, ..)| *name)
+                .collect::<Vec<_>>()
+                .join(", ")
+        ));
+    };
+    let root = datadir::TRELLIS
+        .locate(args.option("chipdb"), args.flag("offline"))
+        .map_err(|err| format!("`--bitstream` needs a chip database: {err}"))?;
+    let root = root.to_string_lossy().into_owned();
+    let db = trellis::open(&DiskFiles::for_sources(&[]), &root, part).map_err(|e| e.to_string())?;
+
+    let mut options = TrellisOptions::new();
+    options.package = package.to_owned();
+    if let Some(standard) = single_io_standard(constraints)? {
+        options.io_standard = standard;
+    }
+    let fabric = db.load(&options).map_err(|e| e.to_string())?;
+    // The identifier before anything else: an LFE5U-12F and an LFE5U-25F
+    // are the same die and differ only in it, so a bitstream built from
+    // the wrong half of the database would configure the part and assert
+    // DONE.
+    if let Some(idcode) = device.idcode {
+        fabric.check_idcode(idcode).map_err(|e| e.to_string())?;
+    }
+
+    let graph = fabric.arch.build_graph();
+    let netlist = Netlist::build(design, top, device, &graph).map_err(|e| e.to_string())?;
+
+    // The guard. Nothing here can carry a signal, so a design that needs
+    // one is refused *before* a file is written, by name.
+    let unroutable = fabric.unroutable(&netlist);
+    if !unroutable.is_empty() {
+        let mut shown: Vec<String> = unroutable.iter().take(8).cloned().collect();
+        if unroutable.len() > shown.len() {
+            shown.push(format!("and {} more", unroutable.len() - shown.len()));
+        }
+        return Err(format!(
+            "this design has {} signal(s) that would have to be routed, and the ECP5 backend \
+             declares no interconnect at all, so it cannot route one: {}. What it can build is \
+             a design whose ports are driven by constants. Nothing was written; see \
+             docs/fpga-trellis.md",
+            unroutable.len(),
+            shown.join(", ")
+        ));
+    }
+
+    let (placement, place_report) = place::place(
+        &netlist,
+        &fabric.arch,
+        &graph,
+        constraints,
+        &place::PlaceOptions::default(),
+    )
+    .map_err(|e| e.to_string())?;
+    // With nothing to route, routing is a formality — and it is still run,
+    // because a router that is handed nothing and reports something is a
+    // router with a bug.
+    let (routing, route_report) = route::route(
+        &netlist,
+        &graph,
+        &placement,
+        &route::RouteOptions::default(),
+    )
+    .map_err(|e| e.to_string())?;
+    if route_report.pips != 0 {
+        return Err(format!(
+            "the router used {} pip(s) on a fabric that declares none",
+            route_report.pips
+        ));
+    }
+    let _ = &routing as &Routing;
+
+    let mut tiles = bitstream::generate(
+        design,
+        top,
+        &fabric.arch,
+        &graph,
+        &netlist,
+        &placement,
+        &routing,
+    )
+    .map_err(|e| e.to_string())?;
+    // Everything a bel or a pip owns is in `tiles` now. A pad's bits are
+    // neither — they are in three tiles at two positions — so they go in
+    // here, exactly as the 7-series flow adds its clock enables.
+    let pads = fabric
+        .configure_io(&netlist, &placement, &graph, &mut tiles)
+        .map_err(|e| e.to_string())?;
+    if pads == 0 {
+        return Err(
+            "no pad was configured, so this bitstream would drive nothing. Every output the \
+             design has needs a pin constraint naming a ball this package has on the top edge"
+                .to_owned(),
+        );
+    }
+
+    let stream = fabric.stream(&tiles, speed).map_err(|e| e.to_string())?;
+    let bytes = stream.to_bytes(true);
+    std::fs::write(path, &bytes).map_err(|e| format!("cannot write `{path}`: {e}"))?;
+
+    let placed = place_report
+        .usage
+        .iter()
+        .map(|(kind, used, total)| format!("{used}/{total} {kind}"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    Ok(format!(
+        "note: wrote {path}, {} byte(s) compressed, {} configuration bit(s) set, {pads} pad(s) \
+         configured, {placed}\n\
+         note: for IDCODE {:#010x} ({part}-{speed}{package}); load it with \
+         `reticle program --device <serial> {path}`\n\
+         note: this backend declares no interconnect, so only a design driven by constants \
+         builds. See docs/fpga-trellis.md for what has been run on a part.\n",
+        bytes.len(),
+        stream.cram.count_ones(),
+        stream.idcode,
     ))
 }
 

@@ -201,6 +201,121 @@ device ecp5-25f-CABGA381
   pll EHXPLLL input 8 400 vco 400 800 outputs 4 count 2 pfd 4 400 feedback out divide ref CLKI_DIV 1 128 divide feedback CLKFB_DIV 1 80 divide out CLKOP_DIV 1 128 derive CLKOP_CPHASE out -1 port ref=CLKI out=CLKOP fb=CLKFB lock=LOCK tie RST=0 STDBY=0 PHASESEL0=0 PHASESEL1=0 PHASEDIR=0 PHASESTEP=0 PHASELOADREG=0 PLLWAKESYNC=0 ENCLKOP=0 param PLLRST_ENA="DISABLED" INTFB_WAKE="DISABLED" STDBY_ENABLE="DISABLED" DPHASE_SOURCE="DISABLED" OUTDIVIDER_MUXA="DIVA" OUTDIVIDER_MUXB="DIVB" OUTDIVIDER_MUXC="DIVC" OUTDIVIDER_MUXD="DIVD" CLKOP_ENABLE="ENABLED" CLKOP_FPHASE=0 FEEDBK_PATH="CLKOP"
 end
 
+# ---------------------------------------------------------------------
+# LFE5U-12F in a caBGA-256, as a Great Scott Gadgets Cynthion r1.4 has
+# ---------------------------------------------------------------------
+#
+# The two blocks above are a ULX3S's part and its pins. This one is a
+# different board and its provenance is different, so it is worth
+# separating:
+#
+#   * `idcode 0x21111043` was **read from the part**, over a Cynthion's
+#     Apollo debugger, by `tests/program_apollo.rs`. It is also what
+#     Project Trellis' `devices.json` gives the LFE5U-12F. HIGH.
+#   * The **pins** are the six FPGA LEDs and the 60 MHz oscillator of a
+#     Cynthion r1.4, from Great Scott Gadgets' own Amaranth platform
+#     file, `cynthion/python/src/gateware/platform/cynthion_r1_4.py`,
+#     cross-checked against the r1.4.0 KiCad schematics and against
+#     Project Trellis' `iodb.json` for the caBGA-256. HIGH for the ball
+#     names; `docs/fpga-trellis.md` has the citations and says what each
+#     source settled. **The LEDs are active low** — anode to +3V3,
+#     cathode to the FPGA — and nothing in a device file can say so, so
+#     a design that lights one drives it to zero.
+#   * `pins partial` is set, and it is true: nine of 256 balls.
+#   * The **cell counts** are the LFE5U-12F's 12 144 lookup tables, from
+#     Lattice's family data. MEDIUM, and nothing here depends on them.
+#   * Everything else is the block above's, unchanged, with the package
+#     and speed grade swapped. The bels, the block RAM and the PLL are
+#     the family's and the same die serves the 12F and the 25F.
+#
+# Two banks are declared rather than one synthetic `io`, because they are
+# real: the LEDs are on bank 1 and the oscillator on bank 0, and both are
+# 3.3 V on this board.
+
+device ecp5-12f-CABGA256
+  family ecp5
+  package CABGA256
+  speed 8
+  idcode 0x21111043
+  lut_size 4
+  ff enable sync_reset async_reset shared_reset
+  bel LUT4 lut count 12144 port i=A,B,C,D o=Z param INIT=16'h0000
+  bel CCU2C carry
+  bel TRELLIS_FF ff count 12144 mode posedge port clk=CLK d=DI q=Q en=CE rst=LSR param GSR="DISABLED" REGMODE="FF" CEMUX="1" CLKMUX="CLK" LSRMUX="LSR" SRMODE="LSR_OVER_CE" REGSET="RESET"
+  bel TRELLIS_FF ff mode posedge,sync_reset port clk=CLK d=DI q=Q en=CE rst=LSR param GSR="DISABLED" REGMODE="FF" CEMUX="1" CLKMUX="CLK" LSRMUX="LSR" SRMODE="LSR_OVER_CE" REGSET="RESET"
+  bel TRELLIS_FF ff mode posedge,sync_reset,active_low port clk=CLK d=DI q=Q en=CE rst=LSR param GSR="DISABLED" REGMODE="FF" CEMUX="1" CLKMUX="CLK" LSRMUX="INV" SRMODE="LSR_OVER_CE" REGSET="RESET"
+  bel TRELLIS_FF ff mode posedge,async_reset port clk=CLK d=DI q=Q en=CE rst=LSR param GSR="DISABLED" REGMODE="FF" CEMUX="1" CLKMUX="CLK" LSRMUX="LSR" SRMODE="ASYNC" REGSET="RESET"
+  bel TRELLIS_FF ff mode posedge,async_reset,active_low port clk=CLK d=DI q=Q en=CE rst=LSR param GSR="DISABLED" REGMODE="FF" CEMUX="1" CLKMUX="CLK" LSRMUX="INV" SRMODE="ASYNC" REGSET="RESET"
+  bel TRELLIS_FF ff mode posedge,sync_set port clk=CLK d=DI q=Q en=CE rst=LSR param GSR="DISABLED" REGMODE="FF" CEMUX="1" CLKMUX="CLK" LSRMUX="LSR" SRMODE="LSR_OVER_CE" REGSET="SET"
+  bel TRELLIS_FF ff mode posedge,sync_set,active_low port clk=CLK d=DI q=Q en=CE rst=LSR param GSR="DISABLED" REGMODE="FF" CEMUX="1" CLKMUX="CLK" LSRMUX="INV" SRMODE="LSR_OVER_CE" REGSET="SET"
+  bel TRELLIS_FF ff mode posedge,async_set port clk=CLK d=DI q=Q en=CE rst=LSR param GSR="DISABLED" REGMODE="FF" CEMUX="1" CLKMUX="CLK" LSRMUX="LSR" SRMODE="ASYNC" REGSET="SET"
+  bel TRELLIS_FF ff mode posedge,async_set,active_low port clk=CLK d=DI q=Q en=CE rst=LSR param GSR="DISABLED" REGMODE="FF" CEMUX="1" CLKMUX="CLK" LSRMUX="INV" SRMODE="ASYNC" REGSET="SET"
+  bel TRELLIS_FF ff mode posedge,enable port clk=CLK d=DI q=Q en=CE rst=LSR param GSR="DISABLED" REGMODE="FF" CEMUX="CE" CLKMUX="CLK" LSRMUX="LSR" SRMODE="LSR_OVER_CE" REGSET="RESET"
+  bel TRELLIS_FF ff mode posedge,enable,sync_reset port clk=CLK d=DI q=Q en=CE rst=LSR param GSR="DISABLED" REGMODE="FF" CEMUX="CE" CLKMUX="CLK" LSRMUX="LSR" SRMODE="LSR_OVER_CE" REGSET="RESET"
+  bel TRELLIS_FF ff mode posedge,enable,sync_reset,active_low port clk=CLK d=DI q=Q en=CE rst=LSR param GSR="DISABLED" REGMODE="FF" CEMUX="CE" CLKMUX="CLK" LSRMUX="INV" SRMODE="LSR_OVER_CE" REGSET="RESET"
+  bel TRELLIS_FF ff mode posedge,enable,async_reset port clk=CLK d=DI q=Q en=CE rst=LSR param GSR="DISABLED" REGMODE="FF" CEMUX="CE" CLKMUX="CLK" LSRMUX="LSR" SRMODE="ASYNC" REGSET="RESET"
+  bel TRELLIS_FF ff mode posedge,enable,async_reset,active_low port clk=CLK d=DI q=Q en=CE rst=LSR param GSR="DISABLED" REGMODE="FF" CEMUX="CE" CLKMUX="CLK" LSRMUX="INV" SRMODE="ASYNC" REGSET="RESET"
+  bel TRELLIS_FF ff mode posedge,enable,sync_set port clk=CLK d=DI q=Q en=CE rst=LSR param GSR="DISABLED" REGMODE="FF" CEMUX="CE" CLKMUX="CLK" LSRMUX="LSR" SRMODE="LSR_OVER_CE" REGSET="SET"
+  bel TRELLIS_FF ff mode posedge,enable,sync_set,active_low port clk=CLK d=DI q=Q en=CE rst=LSR param GSR="DISABLED" REGMODE="FF" CEMUX="CE" CLKMUX="CLK" LSRMUX="INV" SRMODE="LSR_OVER_CE" REGSET="SET"
+  bel TRELLIS_FF ff mode posedge,enable,async_set port clk=CLK d=DI q=Q en=CE rst=LSR param GSR="DISABLED" REGMODE="FF" CEMUX="CE" CLKMUX="CLK" LSRMUX="LSR" SRMODE="ASYNC" REGSET="SET"
+  bel TRELLIS_FF ff mode posedge,enable,async_set,active_low port clk=CLK d=DI q=Q en=CE rst=LSR param GSR="DISABLED" REGMODE="FF" CEMUX="CE" CLKMUX="CLK" LSRMUX="INV" SRMODE="ASYNC" REGSET="SET"
+  bel TRELLIS_FF ff mode negedge port clk=CLK d=DI q=Q en=CE rst=LSR param GSR="DISABLED" REGMODE="FF" CEMUX="1" CLKMUX="INV" LSRMUX="LSR" SRMODE="LSR_OVER_CE" REGSET="RESET"
+  bel TRELLIS_FF ff mode negedge,sync_reset port clk=CLK d=DI q=Q en=CE rst=LSR param GSR="DISABLED" REGMODE="FF" CEMUX="1" CLKMUX="INV" LSRMUX="LSR" SRMODE="LSR_OVER_CE" REGSET="RESET"
+  bel TRELLIS_FF ff mode negedge,sync_reset,active_low port clk=CLK d=DI q=Q en=CE rst=LSR param GSR="DISABLED" REGMODE="FF" CEMUX="1" CLKMUX="INV" LSRMUX="INV" SRMODE="LSR_OVER_CE" REGSET="RESET"
+  bel TRELLIS_FF ff mode negedge,async_reset port clk=CLK d=DI q=Q en=CE rst=LSR param GSR="DISABLED" REGMODE="FF" CEMUX="1" CLKMUX="INV" LSRMUX="LSR" SRMODE="ASYNC" REGSET="RESET"
+  bel TRELLIS_FF ff mode negedge,async_reset,active_low port clk=CLK d=DI q=Q en=CE rst=LSR param GSR="DISABLED" REGMODE="FF" CEMUX="1" CLKMUX="INV" LSRMUX="INV" SRMODE="ASYNC" REGSET="RESET"
+  bel TRELLIS_FF ff mode negedge,sync_set port clk=CLK d=DI q=Q en=CE rst=LSR param GSR="DISABLED" REGMODE="FF" CEMUX="1" CLKMUX="INV" LSRMUX="LSR" SRMODE="LSR_OVER_CE" REGSET="SET"
+  bel TRELLIS_FF ff mode negedge,sync_set,active_low port clk=CLK d=DI q=Q en=CE rst=LSR param GSR="DISABLED" REGMODE="FF" CEMUX="1" CLKMUX="INV" LSRMUX="INV" SRMODE="LSR_OVER_CE" REGSET="SET"
+  bel TRELLIS_FF ff mode negedge,async_set port clk=CLK d=DI q=Q en=CE rst=LSR param GSR="DISABLED" REGMODE="FF" CEMUX="1" CLKMUX="INV" LSRMUX="LSR" SRMODE="ASYNC" REGSET="SET"
+  bel TRELLIS_FF ff mode negedge,async_set,active_low port clk=CLK d=DI q=Q en=CE rst=LSR param GSR="DISABLED" REGMODE="FF" CEMUX="1" CLKMUX="INV" LSRMUX="INV" SRMODE="ASYNC" REGSET="SET"
+  bel TRELLIS_FF ff mode negedge,enable port clk=CLK d=DI q=Q en=CE rst=LSR param GSR="DISABLED" REGMODE="FF" CEMUX="CE" CLKMUX="INV" LSRMUX="LSR" SRMODE="LSR_OVER_CE" REGSET="RESET"
+  bel TRELLIS_FF ff mode negedge,enable,sync_reset port clk=CLK d=DI q=Q en=CE rst=LSR param GSR="DISABLED" REGMODE="FF" CEMUX="CE" CLKMUX="INV" LSRMUX="LSR" SRMODE="LSR_OVER_CE" REGSET="RESET"
+  bel TRELLIS_FF ff mode negedge,enable,sync_reset,active_low port clk=CLK d=DI q=Q en=CE rst=LSR param GSR="DISABLED" REGMODE="FF" CEMUX="CE" CLKMUX="INV" LSRMUX="INV" SRMODE="LSR_OVER_CE" REGSET="RESET"
+  bel TRELLIS_FF ff mode negedge,enable,async_reset port clk=CLK d=DI q=Q en=CE rst=LSR param GSR="DISABLED" REGMODE="FF" CEMUX="CE" CLKMUX="INV" LSRMUX="LSR" SRMODE="ASYNC" REGSET="RESET"
+  bel TRELLIS_FF ff mode negedge,enable,async_reset,active_low port clk=CLK d=DI q=Q en=CE rst=LSR param GSR="DISABLED" REGMODE="FF" CEMUX="CE" CLKMUX="INV" LSRMUX="INV" SRMODE="ASYNC" REGSET="RESET"
+  bel TRELLIS_FF ff mode negedge,enable,sync_set port clk=CLK d=DI q=Q en=CE rst=LSR param GSR="DISABLED" REGMODE="FF" CEMUX="CE" CLKMUX="INV" LSRMUX="LSR" SRMODE="LSR_OVER_CE" REGSET="SET"
+  bel TRELLIS_FF ff mode negedge,enable,sync_set,active_low port clk=CLK d=DI q=Q en=CE rst=LSR param GSR="DISABLED" REGMODE="FF" CEMUX="CE" CLKMUX="INV" LSRMUX="INV" SRMODE="LSR_OVER_CE" REGSET="SET"
+  bel TRELLIS_FF ff mode negedge,enable,async_set port clk=CLK d=DI q=Q en=CE rst=LSR param GSR="DISABLED" REGMODE="FF" CEMUX="CE" CLKMUX="INV" LSRMUX="LSR" SRMODE="ASYNC" REGSET="SET"
+  bel TRELLIS_FF ff mode negedge,enable,async_set,active_low port clk=CLK d=DI q=Q en=CE rst=LSR param GSR="DISABLED" REGMODE="FF" CEMUX="CE" CLKMUX="INV" LSRMUX="INV" SRMODE="ASYNC" REGSET="SET"
+  bel TRELLIS_IO io port pad=B din=O dout=I oe=T param_in DIR="INPUT" param_out DIR="OUTPUT" param_inout DIR="BIDIR" param_pullup PULLMODE="UP"
+  bel DCCA gb count 16 port i=CLKI o=CLKO en=CE
+  bel IDDRX1F ddr_in port d=D clk=SCLK rst=RST q0=Q0 q1=Q1
+  bel ODDRX1F ddr_out port d0=D0 d1=D1 clk=SCLK rst=RST q=Q
+  bel DELAYG iodelay port i=A o=Z param DEL_MODE="USER_DEFINED" param_value DEL_VALUE=127
+  bel TRELLIS_DPR16X4 lutram port wclk=WCK we=WRE waddr=WAD0,WAD1,WAD2,WAD3 din=DI0,DI1,DI2,DI3 raddr=RAD0,RAD1,RAD2,RAD3 dout=DO0,DO1,DO2,DO3 param WCKMUX="WCK" WREMUX="WRE"
+  bram DP16KD
+    ports 2
+    mode 18 1024 param DATA_WIDTH_A=18 DATA_WIDTH_B=18 addr 4 pad 4'b0011 init low 0-17
+    mode 9 2048 param DATA_WIDTH_A=9 DATA_WIDTH_B=9 addr 3 init low 0-8 9-17
+    mode 4 4096 param DATA_WIDTH_A=4 DATA_WIDTH_B=4 addr 2 init low 0-3 4-7 9-12 13-16
+    mode 2 8192 param DATA_WIDTH_A=2 DATA_WIDTH_B=2 addr 1 init low 0,1 2,3 4,5 6,7 9,10 11,12 13,14 15,16
+    mode 1 16384 param DATA_WIDTH_A=1 DATA_WIDTH_B=1 init low 0 1 2 3 4 5 6 7 9 10 11 12 13 14 15 16
+    flags dual_port init
+    init_params INITVAL_ count 64 digits 2 rows 16 slot 20
+    port rw clk=CLKA en=CEA addr=ADA din=DIA dout=DOA we=WEA rst=RSTA
+    port rw clk=CLKB en=CEB addr=ADB din=DIB dout=DOB we=WEB rst=RSTB
+  end
+  dsp MULT18X18D a 18 b 18 p 36 accumulator stages 3 port a=A b=B c=C p=P clk=CLK0
+  io_standard LVCMOS33 vccio 3.3 drive 4,8,12,16,20 slew slow,fast
+  io_standard LVCMOS25 vccio 2.5 drive 4,8,12,16 slew slow,fast
+  io_standard LVCMOS18 vccio 1.8 drive 4,8,12,16 slew slow,fast
+  io_standard LVCMOS15 vccio 1.5 drive 4,8 slew slow,fast
+  io_standard LVCMOS12 vccio 1.2 drive 2,4,8 slew slow,fast
+  io_standard LVDS vccio 2.5 differential
+  bank bank0 vccio 3.3
+  bank bank1 vccio 3.3
+  pin A8 clock bank bank0
+  pin E13 io bank bank1
+  pin C13 io bank bank1
+  pin B14 io bank bank1
+  pin A15 io bank bank1
+  pin D12 io bank bank1
+  pin C11 io bank bank1
+  pins partial
+  global_buffers 16
+  pll EHXPLLL input 8 400 vco 400 800 outputs 4 count 2 pfd 4 400 feedback out divide ref CLKI_DIV 1 128 divide feedback CLKFB_DIV 1 80 divide out CLKOP_DIV 1 128 derive CLKOP_CPHASE out -1 port ref=CLKI out=CLKOP fb=CLKFB lock=LOCK tie RST=0 STDBY=0 PHASESEL0=0 PHASESEL1=0 PHASEDIR=0 PHASESTEP=0 PHASELOADREG=0 PLLWAKESYNC=0 ENCLKOP=0 param PLLRST_ENA="DISABLED" INTFB_WAKE="DISABLED" STDBY_ENABLE="DISABLED" DPHASE_SOURCE="DISABLED" OUTDIVIDER_MUXA="DIVA" OUTDIVIDER_MUXB="DIVB" OUTDIVIDER_MUXC="DIVC" OUTDIVIDER_MUXD="DIVD" CLKOP_ENABLE="ENABLED" CLKOP_FPHASE=0 FEEDBK_PATH="CLKOP"
+end
+
 device ecp5-45f-CABGA381
   family ecp5
   package CABGA381

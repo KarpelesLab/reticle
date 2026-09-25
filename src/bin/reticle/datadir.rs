@@ -6,7 +6,7 @@
 //!
 //! 1. the path given on the command line (`--chipdb`);
 //! 2. the database's environment variable (`RETICLE_CHIPDB`,
-//!    `RETICLE_GOWINDB`);
+//!    `RETICLE_GOWINDB`, `RETICLE_TRELLISDB`);
 //! 3. the per-user cache, `$XDG_CACHE_HOME/reticle/<name>/<version>`, or
 //!    `~/.cache/reticle/...` without it (`%LOCALAPPDATA%\reticle\...` on
 //!    Windows);
@@ -116,8 +116,38 @@ pub(crate) const APICULA: Database = Database {
     },
 };
 
+/// Project Trellis' Lattice ECP5 database: the LFE5U-12F part of it, which
+/// is what the ECP5 flow loads and what `tests/fpga_trellis.rs` reads.
+///
+/// Two things about this one are worth knowing.
+///
+/// It is the **database repository**, `YosysHQ/prjtrellis-db`, not
+/// `prjtrellis` itself: `prjtrellis` carries it as a git submodule and the
+/// version below is the commit that submodule points at, so what is
+/// downloaded is what `ecppack` and nextpnr would read.
+///
+/// And it is a **subset**: 191 files of the repository's 705. The whole
+/// thing is 81 MB across five device families; what an LFE5U-12F needs is
+/// that part's three files, the 185 shared `bits.db` files of the ECP5
+/// family, and the licence — 5.8 MB. The 45F and 85F are not here, and
+/// neither is the timing data, because nothing reads them yet. The 12F's
+/// files are byte-identical to the 25F's (the same die; Lattice's
+/// TN-02039 Table B.4 says so too), so one copy serves both parts and only
+/// the IDCODE tells them apart.
+pub(crate) const TRELLIS: Database = Database {
+    name: "prjtrellis-db",
+    version: "015e0330630d7c238c0e4f2cdd9c8157eb78c54a",
+    what: "Project Trellis' Lattice ECP5 database (YosysHQ/prjtrellis-db, CC0), LFE5U-12F part",
+    env: "RETICLE_TRELLISDB",
+    probe: "ECP5/LFE5U-12F/tilegrid.json",
+    source: Source::Files {
+        base: "https://raw.githubusercontent.com/YosysHQ/prjtrellis-db/015e0330630d7c238c0e4f2cdd9c8157eb78c54a/",
+        manifest: include_str!("prjtrellis-db.manifest"),
+    },
+};
+
 /// Every database, in the order `reticle fetch` lists them.
-pub(crate) const ALL: [&Database; 2] = [&PRJXRAY, &APICULA];
+pub(crate) const ALL: [&Database; 3] = [&PRJXRAY, &APICULA, &TRELLIS];
 
 /// The database called `name`.
 pub(crate) fn by_name(name: &str) -> Option<&'static Database> {
@@ -525,7 +555,7 @@ pub(crate) fn fetch_cmd(args: &Args) -> Result<Outcome, ArgError> {
 
 #[cfg(test)]
 mod tests {
-    use super::{ALL, APICULA, Found, PRJXRAY, Source, parse_manifest};
+    use super::{ALL, APICULA, Found, PRJXRAY, Source, TRELLIS, parse_manifest};
     use std::fs;
     use std::path::PathBuf;
 
@@ -634,8 +664,13 @@ mod tests {
     fn the_integration_tests_look_for_the_versions_pinned_here() {
         let xray = include_str!("../../../tests/fpga_xray.rs");
         let gowin = include_str!("../../../tests/fpga_gowin.rs");
-        for (db, test) in [(&PRJXRAY, xray), (&APICULA, gowin)] {
-            for pinned in [db.name, db.version] {
+        let trellis_test = include_str!("../../../tests/fpga_trellis.rs");
+        for (db, test) in [
+            (&PRJXRAY, xray),
+            (&APICULA, gowin),
+            (&TRELLIS, trellis_test),
+        ] {
+            for pinned in [db.name, db.version, db.env] {
                 let quoted = format!("\"{pinned}\"");
                 assert!(
                     test.contains(&quoted),
@@ -643,7 +678,15 @@ mod tests {
                     db.name
                 );
             }
+            // And for the file it probes, which is what tells "the
+            // database is not there" from "it is there and incomplete".
+            assert!(
+                test.contains(db.probe),
+                "{} should probe for {}",
+                db.name,
+                db.probe
+            );
         }
-        assert_eq!(ALL.len(), 2);
+        assert_eq!(ALL.len(), 3);
     }
 }
