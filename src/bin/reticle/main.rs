@@ -216,11 +216,11 @@ GW2A and Lattice ECP5):
                      (examples/basys3: a lookup table, and a clocked
                      counter) and one on a Tang Primer 20K
                      (examples/primer20k: a lookup table). On a Cynthion
-                     a design that lights six LEDs has been watched and a
-                     routed one (testdata/fpga/cynthion/button_led.v) has
-                     been accepted but not yet looked at. On the 7 series
-                     a carry chain does not route; on Gowin and on the
-                     ECP5 nothing clocked does yet. See docs/fpga-xray.md,
+                     a design that lights six LEDs has been watched, and a
+                     routed one (button_led.v) and a clocked counter
+                     (clock_blink.v) have been accepted but not yet looked
+                     at. On the 7 series a carry chain does not route; on
+                     Gowin nothing clocked does yet. See docs/fpga-xray.md,
                      docs/fpga-gowin.md and docs/fpga-trellis.md. For
                      Gowin this is the only output: there is no nextpnr
                      export.
@@ -2145,14 +2145,20 @@ const ECP5_PARTS: &[(&str, &str, &str, &str)] =
 /// `reticle fpga --bitstream` for a Lattice ECP5: place, route and write a
 /// `.bit` from Project Trellis' database.
 ///
-/// **What this can build is a combinational design.** The whole die's
-/// interconnect is loaded — 1.1 million wires and 8.2 million pips, in
-/// under a second and about 340 MiB, so there is no region option here
+/// **What this can build is a clocked design.** The whole die's
+/// interconnect is loaded — 1.1 million wires and 8.3 million pips, in
+/// under a second and about 350 MiB, so there is no region option here
 /// where the 7 series needs one — along with every logic tile's lookup
-/// tables and the pads of the top and right edges. What is missing is the
-/// clock network, so a design with a flip-flop in it fails to place rather
-/// than being approximated. `docs/fpga-trellis.md` says what has been on a
-/// part and what was checked about it.
+/// tables and flip-flops, the pads of the top and right edges, and the
+/// sixteen global clock networks. `docs/fpga-trellis.md` says what has been
+/// on a part and what was checked about it.
+///
+/// Four things are refused rather than approximated, and each of them
+/// writes nothing: a clock that did not arrive on a global network, a bit an
+/// arc needs clear that something else has set, a set bit no feature of the
+/// database accounts for, and a bitstream whose bits select connections the
+/// router did not choose. All four are failures a part would accept with
+/// `DONE` high, which is why they are checked here and not left to a test.
 ///
 /// Unlike Gowin this is not the family's only route out: `reticle fpga`
 /// without `--bitstream` still exports a netlist and an `.lpf` for
@@ -2212,13 +2218,17 @@ fn write_ecp5_bitstream(
         &place::PlaceOptions::default(),
     )
     .map_err(|e| e.to_string())?;
-    let (routing, route_report) = route::route(
-        &netlist,
-        &graph,
-        &placement,
-        &route::RouteOptions::default(),
-    )
-    .map_err(|e| e.to_string())?;
+    // The one knob this family needs: a flip-flop's clock mux offers the
+    // global branch wires *and* seven ordinary interconnect wires, so the
+    // shortest path from a pad to a clock pin is through data wires. See
+    // `TrellisFabric::clock_node_costs` for why steering the router is
+    // sound and why nothing but a clock can follow the steer.
+    let route_options = route::RouteOptions {
+        node_base: fabric.clock_node_costs(&graph, trellis::CLOCK_PREFERENCE),
+        ..route::RouteOptions::default()
+    };
+    let (routing, route_report) =
+        route::route(&netlist, &graph, &placement, &route_options).map_err(|e| e.to_string())?;
     // The router says it connected every sink; this walks each sink back
     // through the pips it was given and checks that it really did. A route
     // that occupies the right wires without joining them would otherwise
@@ -2253,6 +2263,25 @@ fn write_ecp5_bitstream(
     let luts = fabric
         .configure_logic(design, top, &netlist, &placement, &graph, &mut tiles)
         .map_err(|e| e.to_string())?;
+    let ffs = fabric
+        .configure_registers(
+            design, top, &netlist, &placement, &graph, &routing, &mut tiles,
+        )
+        .map_err(|e| e.to_string())?;
+    // A clock that came through general routing routes, verifies and
+    // configures, and its skew is nobody's model. Refusing is the only
+    // thing that makes `clock_node_costs`' preference a guarantee.
+    let clocks = fabric.clock_network_use(&netlist, &placement, &graph, &routing);
+    if !clocks.off_network.is_empty() {
+        return Err(format!(
+            "{} of {} flip-flop(s) have a clock that did not arrive on a global clock network, so \
+             nothing was written: {}. The route exists and the bitstream would configure it; what \
+             it would not do is control skew. See docs/fpga-trellis.md",
+            clocks.off_network.len(),
+            ffs,
+            clocks.off_network.join(", ")
+        ));
+    }
     if pads == 0 {
         return Err(
             "no pad was configured, so this bitstream would drive nothing. Every port the \
@@ -2263,6 +2292,70 @@ fn write_ecp5_bitstream(
     }
 
     let stream = fabric.stream(&tiles, speed).map_err(|e| e.to_string())?;
+
+    // Two checks on the finished image, both of them exact, both of them
+    // there because a bitstream that configures the wrong thing loads and
+    // asserts `DONE` just as well as one that does not.
+    //
+    // The first is what makes dropping a `!F<n>B<n>` — a bit a feature
+    // wants *clear*, which cannot be written into a zeroed bitmap and can
+    // only be checked — sound rather than merely convenient. See
+    // `TrellisFabric::dropped_clear_bits`.
+    let stolen = fabric.dropped_clear_bits(&graph, &routing, &tiles);
+    if !stolen.is_empty() {
+        return Err(format!(
+            "{} bit(s) that an arc of this design needs clear have been set by something else, so \
+             nothing was written:\n  {}",
+            stolen.len(),
+            stolen.join("\n  ")
+        ));
+    }
+
+    // The second reads the image back through the same records that built
+    // it and asks whether it selects the connections the router chose —
+    // not "are the bits there" but "do the bits mean what they were meant
+    // to". That is the check that notices a feature written into one tile
+    // changing what another selects, in either direction.
+    let decoded = db.decode(&stream.cram);
+    if decoded.unexplained > 0 {
+        return Err(format!(
+            "{} of this bitstream's {} set bit(s) belong to no feature the database names, so \
+             nothing was written. A leftover bit is a bit this flow set for a reason Project \
+             Trellis does not know, which is what a wrong tile rule looks like from the inside. \
+             See docs/fpga-trellis.md",
+            decoded.unexplained, decoded.bits
+        ));
+    }
+    let (selected, unresolved) = db.resolved_arcs(&decoded);
+    let chosen = fabric.routed_arcs(&graph, &routing);
+    if !unresolved.is_empty() || selected != chosen {
+        let extra: Vec<String> = selected
+            .difference(&chosen)
+            .map(|((to, at), (from, _))| format!("X{}Y{} {to} <- {from} (not chosen)", at.0, at.1))
+            .collect();
+        let lost: Vec<String> = chosen
+            .difference(&selected)
+            .map(|((to, at), (from, _))| {
+                format!("X{}Y{} {to} <- {from} (not selected)", at.0, at.1)
+            })
+            .collect();
+        return Err(format!(
+            "the bits of this bitstream do not select the connections the router chose, so \
+             nothing was written; the router took {} arc(s) that cost bits and the bitstream says \
+             {}:\n  {}",
+            chosen.len(),
+            selected.len(),
+            unresolved
+                .iter()
+                .chain(extra.iter())
+                .chain(lost.iter())
+                .take(40)
+                .cloned()
+                .collect::<Vec<_>>()
+                .join("\n  ")
+        ));
+    }
+
     let bytes = stream.to_bytes(true);
     std::fs::write(path, &bytes).map_err(|e| format!("cannot write `{path}`: {e}"))?;
 
@@ -2272,21 +2365,42 @@ fn write_ecp5_bitstream(
         .map(|(kind, used, total)| format!("{used}/{total} {kind}"))
         .collect::<Vec<_>>()
         .join(", ");
+    let clocked = if ffs == 0 {
+        "note: nothing in this design is clocked, so no global clock network was used\n".to_owned()
+    } else {
+        format!(
+            "note: {ffs} flip-flop(s), every clock on a global network: {}\n",
+            clocks
+                .networks
+                .iter()
+                .map(|(n, count)| format!("G_HPBX{n:02}00 to {count} of them"))
+                .collect::<Vec<_>>()
+                .join(", ")
+        )
+    };
     Ok(format!(
-        "note: wrote {path}, {} byte(s) compressed, {} configuration bit(s) set, {pads} pad(s) \
-         and {luts} lookup table(s) configured, {placed}\n\
+        "note: wrote {path}, {} byte(s) compressed, {} configuration bit(s) set, {pads} pad(s), \
+         {luts} lookup table(s) and {ffs} flip-flop(s) configured, {placed}\n\
          note: routed {} of {} signal(s) with {} pip(s) over {} wire(s), and every sink was \
          walked back to its driver\n\
+         {clocked}\
+         note: all {} set bit(s) decode back through the database into {} arc(s), {} field(s) \
+         and {} word(s), with {} unexplained, and the arcs they select are exactly the {} the \
+         router chose\n\
          note: for IDCODE {:#010x} ({part}-{speed}{package}); load it with \
-         `reticle program --device <serial> {path}`\n\
-         note: nothing clocked can be built: this backend reads no `globals.json`, so there is \
-         no clock network. See docs/fpga-trellis.md.\n",
+         `reticle program --device <serial> {path}`\n",
         bytes.len(),
         stream.cram.count_ones(),
         route_report.signals,
         netlist.signals.len(),
         route_report.pips,
         route_report.nodes,
+        decoded.bits,
+        decoded.arcs.len(),
+        decoded.enums.len(),
+        decoded.words.len(),
+        decoded.unexplained,
+        chosen.len(),
         stream.idcode,
     ))
 }

@@ -1,0 +1,66 @@
+# The 60 MHz oscillator and the six FPGA LEDs of a Great Scott Gadgets
+# Cynthion r1.4.
+#
+# ---------------------------------------------------------------------
+# WHERE A8 COMES FROM, AND WHAT IT IS NOT
+# ---------------------------------------------------------------------
+#
+# 1. **Great Scott Gadgets' own Amaranth platform file**,
+#    `cynthion/python/src/gateware/platform/cynthion_r1_4.py` in
+#    `greatscottgadgets/cynthion`:
+#
+#        # Primary, discrete 60MHz oscillator.
+#        Resource("clk_60MHz", 0, Pins("A8", dir="i"),
+#            Clock(60e6), Attrs(IO_TYPE="LVCMOS33")),
+#
+#    Not `PinsN`, so the clock is not inverted, and `Clock(60e6)` is the
+#    rate this design's blink is derived from.
+#
+# 2. **The r1.4.0 KiCad schematic** in `greatscottgadgets/cynthion-hardware`,
+#    sheet `clock_misc.kicad_sch`: `Y1`, a SiTime
+#    `SIT1602BC-23-33E-60.000000E`, 3.3 V, 60.000000 MHz, to A8. A
+#    single-ended CMOS oscillator, which is why a single-ended input on
+#    this ball is the right thing.
+#
+# 3. **Project Trellis' `iodb.json`** for the caBGA-256, which puts A8 at
+#    row 0, column 29, PIO **B**, bank 0 — the top edge — and gives that
+#    PIO the pin function `PCLKC0_0`.
+#
+# That last line is the one worth reading twice. `PCLKT0_0` and `PCLKC0_0`
+# are the true and complement halves of bank 0's differential clock pair,
+# both at column 29: PIO A is the T half and PIO B is the C half. Only the
+# **T** half has the dedicated path into the clock centre — in `TMID_0`'s
+# `bits.db`, `G_JPCLKT00 <- W1_JINCK` and `G_JPCLKT01 <- JINCK`, whose
+# `JPADDI` fixed connections name `PIOA` two and four columns west.
+#
+# So the board's oscillator is on the half **without** the dedicated path,
+# and this clock reaches its buffer the way nextpnr routes a clock from any
+# other pin: through ordinary interconnect into one of the `PCLKCIB` wires
+# that a `DCC`'s input mux offers (`G_JTLQPCLKCIB0 <- S1W6_JD7` and its
+# three siblings, also in `TMID_0`). `docs/fpga-trellis.md` has the walk.
+#
+# Bank 0's VCCIO is 3.3 V, hence LVCMOS33: all three of Great Scott
+# Gadgets' own bitstreams set `BANK.VCCIO` to `3V3` on every bank of the
+# part, `BANKREF0` included, and the oscillator is a 3.3 V part.
+#
+# ---------------------------------------------------------------------
+# THE LEDS
+# ---------------------------------------------------------------------
+#
+# Ball names from the same platform file:
+#
+#     *LEDResources(pins="E13 C13 B14 A15 D12 C11",
+#                   attrs=Attrs(IO_TYPE="LVCMOS33"), invert=True),
+#
+# in that order, so `led_n[0]` is E13. All six are on the top edge in
+# bank 1. `invert=True` is the polarity: they are active low, and a
+# constraints file cannot say so. See `clock_blink.v`.
+
+set_io -io_standard LVCMOS33 clk A8
+
+set_io -io_standard LVCMOS33 led_n[0] E13
+set_io -io_standard LVCMOS33 led_n[1] C13
+set_io -io_standard LVCMOS33 led_n[2] B14
+set_io -io_standard LVCMOS33 led_n[3] A15
+set_io -io_standard LVCMOS33 led_n[4] D12
+set_io -io_standard LVCMOS33 led_n[5] C11

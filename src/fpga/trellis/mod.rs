@@ -7,27 +7,29 @@
 //! - the tile grid of an ECP5 and every position's rectangle of
 //!   configuration memory;
 //! - **the routing graph**: 467 global wires, 1 095 958 tile wires and
-//!   8 211 900 graph edges for the whole LFE5U-12F die, from `bits.db`'s
-//!   `.mux` and `.fixed_conn` records. It costs about 340 MiB and eight
-//!   tenths of a second to build, which is why there is no region option
+//!   8 270 828 graph edges for the whole LFE5U-12F die — 8 211 900 from
+//!   `bits.db`'s `.mux` and `.fixed_conn` records and 58 928 the clock
+//!   network needs and the database does not state. It costs about 350 MiB
+//!   and under a second to build, which is why there is no region option
 //!   here where [`super::xray`] needs one;
-//! - the eight lookup tables of every logic tile, with the truth table and
-//!   the input ties [`TrellisFabric::configure_logic`] writes;
+//! - the eight lookup tables and the eight flip-flops of every logic tile,
+//!   with the truth table and input ties
+//!   [`TrellisFabric::configure_logic`] writes and the settings
+//!   [`TrellisFabric::configure_registers`] does;
+//! - **the global clock network**: sixteen networks, four quadrants, four
+//!   tap columns and eight spines from `globals.json`, the 56 `DCC` buffers
+//!   as `gb` bels, and the three joins between them that `bits.db` states
+//!   nowhere — see [`ClockNetwork`], which is the part of this backend that
+//!   needed a file of its own;
 //! - and an `io` bel for every PIO of the **top** and **right** edges, with
 //!   the bits that make one an input or an output, the settings an input
 //!   needs, and the bits that tie an output's data to a constant.
 //!
-//! A design that routes, built by this, has been loaded into a real part;
-//! `docs/fpga-trellis.md` says what that settled and what it did not.
+//! A design that routes and a design with a clock in it, both built by
+//! this, have been loaded into a real part; `docs/fpga-trellis.md` says
+//! what that settled and what it did not.
 //!
-//! What is still absent is **the clock network**. `globals.json` is not
-//! read, no `DCCA` is declared, and the path from a pad to a clock spine is
-//! not described, so nothing sequential can be placed. That is the one
-//! remaining gap and it is named rather than approximated, for the reason
-//! `src/fpga/arch/synthetic.rs`'s opening gives: a graph that is half right
-//! does not fail, it routes a net through a connection that is not there.
-//!
-//! # The four structural surprises
+//! # The five structural surprises
 //!
 //! **A grid position owns several rectangles of configuration memory.**
 //! Project Trellis splits one position of the fabric into up to six tiles
@@ -88,6 +90,13 @@
 //! bits; a routed design notices at once, because a bel's pins resolve in
 //! the tile the bel sits in and `PADDOB_PIO` exists at every top-edge
 //! position.
+//!
+//! **A clock's wires carry the same name in every tile they cross.** That
+//! is the one place the arithmetic above stops working: `G_HPBX0000` is a
+//! logic tile's branch wire and so is its neighbour's, and the tap driver
+//! twenty columns away spells its output `R_HPBX0000` with nothing to say
+//! the three are one piece of metal. `globals.json` is the only statement
+//! of where they go, and [`ClockNetwork`] is what is built out of it.
 //!
 //! # Obtaining the database
 //!
@@ -160,6 +169,20 @@ pub enum TrellisError {
         /// What a `PIO<side>.BASE_TYPE` field does offer.
         known: Vec<String>,
     },
+    /// Something a placed cell asks for that this backend will not write,
+    /// with the reason it will not.
+    ///
+    /// The point of the variant is that it is never a silent
+    /// approximation: a setting whose bits cannot be placed with certainty
+    /// is refused, because writing it into the wrong one of a tile's shared
+    /// muxes would change every other cell of that tile.
+    Unsupported {
+        /// What was asked for and why it is refused.
+        what: String,
+    },
+    /// A bit did not fit the position it was located in, which means the
+    /// frame map and the [`Arch`] disagree about a tile's shape.
+    Bits(String),
 }
 
 impl fmt::Display for TrellisError {
@@ -193,11 +216,19 @@ impl fmt::Display for TrellisError {
                 "no IO standard called `{wanted}`; this part offers {}",
                 known.join(", ")
             ),
+            TrellisError::Unsupported { what } => f.write_str(what),
+            TrellisError::Bits(what) => f.write_str(what),
         }
     }
 }
 
 impl Error for TrellisError {}
+
+impl From<super::bitstream::BitstreamError> for TrellisError {
+    fn from(err: super::bitstream::BitstreamError) -> TrellisError {
+        TrellisError::Bits(err.to_string())
+    }
+}
 
 /// What to load, and how.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -246,6 +277,8 @@ pub struct TrellisDatabase {
     /// Which IO bank each PIO position belongs to, from `iodb.json`'s
     /// `pio_metadata`. A property of the die, not of a package.
     banks: BTreeMap<(u32, u32, String), u32>,
+    /// The clock network's geometry, from `globals.json`.
+    globals: parse::Globals,
     types: BTreeMap<String, TileDatabase>,
 }
 
@@ -259,8 +292,8 @@ pub const PROBE_FILE: &str = "devices.json";
 /// tile type the grid actually uses — 185 of them on this part, which is
 /// every type the family has.
 ///
-/// `globals.json` is **not** read. It describes the clock quadrants,
-/// spines and taps, and nothing here routes a clock.
+/// `globals.json` is read too: it is the clock network's geometry, and
+/// [`ClockNetwork`] says what could not be worked out without it.
 ///
 /// # Errors
 ///
@@ -308,6 +341,9 @@ pub fn open(
     let pinouts = parse::iodb(&io_text, &io_path)?;
     let banks = parse::pio_banks(&io_text, &io_path)?;
 
+    let globals_path = at(&format!("{}/{}/globals.json", info.family, info.name));
+    let globals = parse::globals(&read(globals_path.clone())?, &globals_path)?;
+
     // One `bits.db` per type the grid uses. They are shared by the whole
     // family — `<family>/tiledata/<type>/bits.db` — which is why they are
     // keyed by type and not by part.
@@ -326,6 +362,7 @@ pub fn open(
         tiles,
         pinouts,
         banks,
+        globals,
         types,
     })
 }
@@ -517,6 +554,11 @@ impl TrellisDatabase {
         // `Arch::build_graph` resolves it per position.
         let mut arcs = 0usize;
         let mut fixed = 0usize;
+        // The bits a `.mux` source wants **clear**, which the pip itself
+        // cannot carry; see [`TrellisFabric::dropped_clear_bits`], which is
+        // what makes dropping them sound rather than merely convenient.
+        let mut clears: BTreeMap<(usize, Vec<ConfigBit>), Vec<ConfigBit>> = BTreeMap::new();
+        let mut clear_collisions = 0usize;
         for (name, index) in &type_of {
             let ty = &mut arch.tile_types[*index];
             if let Some(names) = owned.get(name.as_str()) {
@@ -539,14 +581,44 @@ impl TrellisDatabase {
                     ) else {
                         continue;
                     };
+                    let set: Vec<ConfigBit> = bits
+                        .iter()
+                        .filter(|bit| !bit.inverted)
+                        .map(|bit| ConfigBit::new(offset + bit.frame, bit.bit))
+                        .collect();
+                    let clear: Vec<ConfigBit> = bits
+                        .iter()
+                        .filter(|bit| bit.inverted)
+                        .map(|bit| ConfigBit::new(offset + bit.frame, bit.bit))
+                        .collect();
+                    if !clear.is_empty() {
+                        let mut key = set.clone();
+                        key.sort_unstable();
+                        match clears.entry((*index, key)) {
+                            std::collections::btree_map::Entry::Vacant(slot) => {
+                                slot.insert(clear);
+                            }
+                            std::collections::btree_map::Entry::Occupied(mut slot) => {
+                                // Two sources of one tile type with the same
+                                // bits set and different bits clear are
+                                // indistinguishable in a finished bitstream
+                                // whatever is recorded here, so only what
+                                // they agree about can be checked. Six of
+                                // this die's sources are like that, and
+                                // `TrellisStats::clear_collisions` counts
+                                // them so the bound on the check is visible
+                                // rather than implied.
+                                if *slot.get() != clear {
+                                    clear_collisions += 1;
+                                    slot.get_mut().retain(|bit| clear.contains(bit));
+                                }
+                            }
+                        }
+                    }
                     ty.pips.push(super::arch::PipDecl {
                         from,
                         to,
-                        bits: bits
-                            .iter()
-                            .filter(|bit| !bit.inverted)
-                            .map(|bit| ConfigBit::new(offset + bit.frame, bit.bit))
-                            .collect(),
+                        bits: set,
                     });
                     arcs += 1;
                 }
@@ -566,6 +638,17 @@ impl TrellisDatabase {
                 }
             }
         }
+
+        // ---- the clock network's implicit joins ----
+        //
+        // See [`ClockNetwork`]: three hops of the network carry the same
+        // wire name in two different tiles and `bits.db` never says so, so
+        // they are declared here from `globals.json`'s geometry. They cost
+        // no bits, which is why declaring them is not a claim about the
+        // bitstream — every bit of a clock route is still a `.mux` record
+        // the router charges for.
+        let clocks = self.clock_network(&mut arch, &globals)?;
+        let joins = clocks.joins;
 
         // ---- the lookup tables ----
         let mut luts: BTreeMap<(usize, String), LutBits> = BTreeMap::new();
@@ -646,6 +729,100 @@ impl TrellisDatabase {
                         init_zero,
                         init_one,
                         tie_high,
+                    },
+                );
+            }
+        }
+
+        // ---- the flip-flops ----
+        //
+        // A slice's flip-flop is placeable on its own on this family, which
+        // is unusual: `M<z>_SLICE` is a mux output the interconnect drives
+        // and `SLICE<l>.REG<n>.SD = 0` selects it over the lookup table
+        // beside it, so nothing has to pack a LUT and a flop onto one site.
+        // A Gowin flop's `D` and a 7-series `AFF`'s have no tile wire at
+        // all, which is why neither family can place one alone.
+        //
+        // The settings are not a bel's `ConfigEntry`s for the same reason a
+        // truth table is not: the ECP5 has **one** flip-flop primitive and
+        // its behaviour is in its parameters, so a `ConfigEntry::Cell` keyed
+        // on the primitive name would write one variant's bits for all
+        // thirty-two. `configure_registers` reads the parameters instead.
+        let mut ffs: BTreeMap<(usize, String), FfBits> = BTreeMap::new();
+        for (name, index) in &type_of {
+            let Some(offset) = layout
+                .get(name)
+                .and_then(|w| w.iter().find(|(ty, _)| ty == LOGIC_TILE))
+                .map(|(_, offset)| *offset)
+            else {
+                continue;
+            };
+            let Some(db) = self.types.get(LOGIC_TILE) else {
+                continue;
+            };
+            let at = |field: &str, value: &str| -> Vec<ConfigBit> {
+                db.enum_bits(field, value)
+                    .into_iter()
+                    .flatten()
+                    .filter(|bit| !bit.inverted)
+                    .map(|bit| ConfigBit::new(offset + bit.frame, bit.bit))
+                    .collect()
+            };
+            for z in 0..LUTS_PER_TILE {
+                let letter = slice_letter(z / 2);
+                let half = z % 2;
+                let control = z / 2;
+                let bel = format!("SLICE{letter}.FF{half}");
+                let pins: Vec<(String, super::arch::WireRef)> = FF_PINS
+                    .iter()
+                    .map(|(role, wire)| {
+                        (
+                            (*role).to_owned(),
+                            super::arch::WireRef::local(
+                                wire.replace('#', &z.to_string())
+                                    .replace('@', &control.to_string()),
+                            ),
+                        )
+                    })
+                    .collect();
+                if pins
+                    .iter()
+                    .any(|(_, wire)| !arch.tile_types[*index].has_wire(&wire.name))
+                {
+                    continue;
+                }
+                // A tile whose database cannot say "take the data from the
+                // fabric" cannot hold a flip-flop this flow could use, and
+                // leaving the bel out is better than placing one that would
+                // latch the lookup table beside it.
+                let sd = format!("SLICE{letter}.REG{half}.SD");
+                if db.enum_bits(&sd, "0").is_none() {
+                    continue;
+                }
+                let mut decl = BelDecl::new(&bel, "ff");
+                decl.pins = pins;
+                arch.tile_types[*index].bels.push(decl);
+                ffs.insert(
+                    (*index, bel),
+                    FfBits {
+                        control: u32::try_from(control).unwrap_or(0),
+                        sd_fabric: at(&sd, "0"),
+                        regset: [
+                            at(&format!("SLICE{letter}.REG{half}.REGSET"), "RESET"),
+                            at(&format!("SLICE{letter}.REG{half}.REGSET"), "SET"),
+                        ],
+                        lsrmode_lsr: at(&format!("SLICE{letter}.REG{half}.LSRMODE"), "LSR"),
+                        gsr: [
+                            at(&format!("SLICE{letter}.GSR"), "ENABLED"),
+                            at(&format!("SLICE{letter}.GSR"), "DISABLED"),
+                        ],
+                        cemux: [
+                            at(&format!("SLICE{letter}.CEMUX"), "1"),
+                            at(&format!("SLICE{letter}.CEMUX"), "CE"),
+                        ],
+                        clkmux_inv: [at("CLK0.CLKMUX", "INV"), at("CLK1.CLKMUX", "INV")],
+                        lsrmux_inv: [at("LSR0.LSRMUX", "INV"), at("LSR1.LSRMUX", "INV")],
+                        srmode_async: [at("LSR0.SRMODE", "ASYNC"), at("LSR1.SRMODE", "ASYNC")],
                     },
                 );
             }
@@ -814,7 +991,13 @@ impl TrellisDatabase {
                 .sum(),
             arcs,
             fixed,
+            joins,
+            buffers: clocks.buffers,
+            clears: clears.len(),
+            clear_collisions,
             luts: luts.len(),
+            ffs: ffs.len(),
+            clock_networks: clocks.indices.len(),
             references_off_the_grid: off_grid,
         };
 
@@ -827,10 +1010,223 @@ impl TrellisDatabase {
             package: options.package.clone(),
             io,
             luts,
+            ffs,
+            clocks,
+            clears,
             bank_bits,
             voltage: voltage.to_owned(),
             standard: options.io_standard.clone(),
             stats,
+        })
+    }
+
+    /// Builds [`ClockNetwork`] and declares the joins it describes.
+    ///
+    /// `globals` is the set of names the loader decided reach the whole
+    /// die, which is what says whether `G_URPCLK0` is a node of its own.
+    ///
+    /// # Errors
+    ///
+    /// [`TrellisError::Malformed`] when `globals.json` names a spine at a
+    /// position the grid does not have, or a quadrant no spine belongs to.
+    /// Both would mean the two files disagree, and a clock routed from a
+    /// table that disagrees with the grid is a clock that arrives nowhere.
+    fn clock_network(
+        &self,
+        arch: &mut Arch,
+        globals: &BTreeSet<&str>,
+    ) -> Result<ClockNetwork, TrellisError> {
+        let path = format!("{}/{}/globals.json", self.device.family, self.device.name);
+        let bad = |what: String| TrellisError::Malformed {
+            path: path.clone(),
+            what,
+        };
+        let g = &self.globals;
+
+        // How many networks there are is read rather than assumed: it is
+        // the set of `n` for which *every* quadrant offers a
+        // `G_<quadrant>PCLK<n>` and a logic tile offers the branch wire the
+        // network ends in. On this family that is 0..16.
+        let mut indices: Vec<u32> = Vec::new();
+        for n in 0..64u32 {
+            if g.quadrants
+                .iter()
+                .all(|(q, _)| globals.contains(format!("G_{q}PCLK{n}").as_str()))
+            {
+                indices.push(n);
+            }
+        }
+        if indices.is_empty() {
+            // A die whose `bits.db` files declare no centre mux has no
+            // network to join, and that is not an error: it is what
+            // `super::xray`'s `ClockColumn::default()` is for a family with
+            // no rebuffers. Nothing clocked will place, because no flip-flop
+            // will find a clock, and the loader says so by reporting zero
+            // networks rather than by refusing to load.
+            return Ok(ClockNetwork::default());
+        }
+
+        // Which wire names each tile type owns, once. `TileType::has_wire`
+        // is a linear scan and this asks about a quarter of a million
+        // names.
+        let owned: Vec<BTreeSet<String>> = arch
+            .tile_types
+            .iter()
+            .map(|ty| ty.wires.iter().map(|w| w.name.clone()).collect())
+            .collect();
+
+        let mut joins = 0usize;
+        for (quadrant, tap, at) in &g.spines {
+            let Some((_, rect)) = g.quadrants.iter().find(|(name, _)| name == quadrant) else {
+                return Err(bad(format!(
+                    "spine `{quadrant}{tap}` names quadrant `{quadrant}`, which `quadrants` does \
+                     not describe"
+                )));
+            };
+            let Some((_, (lx0, lx1, _, rx1))) = g.taps.iter().find(|(col, _)| col == tap) else {
+                return Err(bad(format!(
+                    "spine `{quadrant}{tap}` names tap column {tap}, which `taps` does not describe"
+                )));
+            };
+            let Some(spine_type) = arch.tile_index_at(at.0, at.1) else {
+                return Err(bad(format!(
+                    "spine `{quadrant}{tap}` is at (col {}, row {}) and the grid has no tile \
+                     there",
+                    at.0, at.1
+                )));
+            };
+            let dx = |x: u32| i64::from(x) - i64::from(at.0);
+            let dy = |y: u32| i64::from(y) - i64::from(at.1);
+            let mut decls: Vec<super::arch::PipDecl> = Vec::new();
+            for n in &indices {
+                let hprx = format!("G_HPRX{n:02}00");
+                let vptx = format!("G_VPTX{n:02}00");
+                let hpbx = format!("G_HPBX{n:02}00");
+                // The quadrant's own primary clock onto the spine's feed
+                // wire. Everything else hangs off this.
+                if owned[spine_type].contains(hprx.as_str()) {
+                    decls.push(super::arch::PipDecl {
+                        from: super::arch::WireRef::global(format!("G_{quadrant}PCLK{n}")),
+                        to: super::arch::WireRef::local(&hprx),
+                        bits: Vec::new(),
+                    });
+                }
+                if !owned[spine_type].contains(vptx.as_str()) {
+                    continue;
+                }
+                for y in rect.1..=rect.3 {
+                    // The spine's vertical wire, as the tap column's tiles
+                    // spell it. A row with no tap tile — the two IO rows —
+                    // has nothing to join.
+                    let Some(tap_type) = arch.tile_index_at(*tap, y) else {
+                        continue;
+                    };
+                    if !owned[tap_type].contains(vptx.as_str()) {
+                        continue;
+                    }
+                    let (tdx, tdy) = (
+                        i32::try_from(dx(*tap)).unwrap_or(0),
+                        i32::try_from(dy(y)).unwrap_or(0),
+                    );
+                    decls.push(super::arch::PipDecl {
+                        from: super::arch::WireRef::local(&vptx),
+                        to: super::arch::WireRef::at(&vptx, tdx, tdy),
+                        bits: Vec::new(),
+                    });
+                    // And the two branch drivers onto the tiles they
+                    // reach. Which side a column is on is the whole of
+                    // what `taps` says.
+                    for x in *lx0..=*rx1 {
+                        let side = if x <= *lx1 { 'L' } else { 'R' };
+                        let branch = format!("{side}_HPBX{n:02}00");
+                        if !owned[tap_type].contains(branch.as_str()) {
+                            continue;
+                        }
+                        let Some(tile_type) = arch.tile_index_at(x, y) else {
+                            continue;
+                        };
+                        if !owned[tile_type].contains(hpbx.as_str()) {
+                            continue;
+                        }
+                        decls.push(super::arch::PipDecl {
+                            from: super::arch::WireRef::at(&branch, tdx, tdy),
+                            to: super::arch::WireRef::at(
+                                &hpbx,
+                                i32::try_from(dx(x)).unwrap_or(0),
+                                tdy,
+                            ),
+                            bits: Vec::new(),
+                        });
+                    }
+                }
+            }
+            joins += decls.len();
+            arch.tile_types[spine_type].pips.extend(decls);
+        }
+
+        // ---- the buffers ----
+        //
+        // Every global of this family comes out of a `DCC`, and a `DCC` is
+        // the one thing on the clock path that is a **bel** rather than a
+        // join: the device file has `bel DCCA gb port i=CLKI o=CLKO en=CE`,
+        // so the flow inserts a cell for it and the placer needs somewhere
+        // to put it.
+        //
+        // Which tile a buffer lives in is not guessed: it is the tile type
+        // whose `.fixed_conn` declares `G_CLKI_<name>`, and the bel takes
+        // that name. On this die those are `TMID_0`, `TMID_1`, `LMID_0`,
+        // `RMID_0` and the four `BMID`s, each of which occupies exactly one
+        // position, so one declaration is one site.
+        //
+        // An **ungated** buffer costs no bits at all, which is why nothing
+        // here has a `ConfigEntry`: nextpnr's `write_dcc` writes
+        // `DCC_<x><n>.MODE = DCCA` only when the cell has a clock enable,
+        // `NONE` is the field's default, and no `DCC_*.MODE` appears in any
+        // of the three bitstreams Great Scott Gadgets built for this board —
+        // one of which routes two globals out of `LDCC0` and `LDCC6`.
+        let mut buffers = 0usize;
+        for index in 0..arch.tile_types.len() {
+            let mut names: Vec<String> = arch.tile_types[index]
+                .pips
+                .iter()
+                .filter(|pip| pip.to.global && pip.to.name.starts_with("G_CLKI_"))
+                .map(|pip| pip.to.name["G_CLKI_".len()..].to_owned())
+                .collect();
+            names.sort();
+            names.dedup();
+            for name in names {
+                if !globals.contains(format!("G_CLKO_{name}").as_str()) {
+                    continue;
+                }
+                let mut bel = BelDecl::new(&name, "gb");
+                bel.pins = vec![
+                    (
+                        "i".to_owned(),
+                        super::arch::WireRef::global(format!("G_CLKI_{name}")),
+                    ),
+                    (
+                        "o".to_owned(),
+                        super::arch::WireRef::global(format!("G_CLKO_{name}")),
+                    ),
+                ];
+                if globals.contains(format!("G_JCE_{name}").as_str()) {
+                    bel.pins.push((
+                        "en".to_owned(),
+                        super::arch::WireRef::global(format!("G_JCE_{name}")),
+                    ));
+                }
+                arch.tile_types[index].bels.push(bel);
+                buffers += 1;
+            }
+        }
+
+        Ok(ClockNetwork {
+            indices,
+            quadrants: g.quadrants.clone(),
+            taps: g.taps.clone(),
+            spines: g.spines.clone(),
+            joins,
+            buffers,
         })
     }
 
@@ -889,8 +1285,24 @@ pub struct TrellisStats {
     pub arcs: usize,
     /// Unconditional connections declared, from its `.fixed_conn` records.
     pub fixed: usize,
+    /// Bitless joins the clock network needed, which `bits.db` states
+    /// nowhere; see [`ClockNetwork`].
+    pub joins: usize,
+    /// Clock buffers that became a `gb` bel.
+    pub buffers: usize,
+    /// `.mux` sources that want at least one bit **clear**, which is the
+    /// simplification [`TrellisFabric::dropped_clear_bits`] checks.
+    pub clears: usize,
+    /// How many of them share their set bits with another source of the
+    /// same tile type that wants different bits clear, and so can only be
+    /// checked on what the two agree about. Zero on this die.
+    pub clear_collisions: usize,
     /// Lookup tables that became a bel.
     pub luts: usize,
+    /// Flip-flops that became a bel.
+    pub ffs: usize,
+    /// Global clock networks the die has.
+    pub clock_networks: usize,
     /// Wire references that point off the grid, which is what happens at
     /// the four edges and is not an error.
     pub references_off_the_grid: usize,
@@ -923,7 +1335,13 @@ impl TrellisStats {
         line("wires", self.wires as u64);
         line("programmable connections", self.arcs as u64);
         line("fixed connections", self.fixed as u64);
+        line("clock network joins", self.joins as u64);
+        line("clock networks", self.clock_networks as u64);
+        line("clock buffers", self.buffers as u64);
+        line("mux sources wanting a bit clear", self.clears as u64);
+        line("of those, ambiguous", self.clear_collisions as u64);
         line("lookup tables", self.luts as u64);
+        line("flip-flops", self.ffs as u64);
         line(
             "references off the grid",
             self.references_off_the_grid as u64,
@@ -1137,6 +1555,150 @@ fn pad_pins(letter: char) -> Vec<(String, super::arch::WireRef)> {
     ]
 }
 
+/// The global clock network, as `globals.json` describes it.
+///
+/// # Why a file is needed for this and for nothing else
+///
+/// Every other hop of this fabric is derivable from `bits.db` alone,
+/// because a wire's name carries the position it belongs to: `S1E1_JA0` is
+/// the `JA0` of the tile one row south and one column east, and
+/// `parse::globalise_ref` resolves it. The clock network breaks that rule
+/// in one specific way: **its wires carry the same name in every tile they
+/// cross, with no prefix.** A logic tile's branch wire is `G_HPBX0000` and
+/// so is its neighbour's, and the tap driver twenty columns away spells its
+/// output `R_HPBX0000`. Nothing in the file says the three are the same
+/// metal.
+///
+/// So three hops of a clock's path are connections the database states
+/// nowhere, and `globals.json` is the only thing that says where they go:
+///
+/// 1. the quadrant's primary clock onto the **spine**'s feed wire —
+///    `G_HPRX<n>00` at the one position `spines` names for that quadrant
+///    and tap column;
+/// 2. the spine's vertical wire as the **tap column** spells it —
+///    `G_VPTX<n>00` at `(tap, y)` for every row of the quadrant;
+/// 3. each tap's two branch drivers onto the **tiles they reach** —
+///    `L_HPBX<n>00` for the columns `taps` puts left of the tap and
+///    `R_HPBX<n>00` for those right of it.
+///
+/// That is exactly the walk nextpnr's `Ecp5GlobalRouter` does out of band:
+/// `find_tap_pip` looks up `L_`/`R_HPBX<n>00` at the tap column of the
+/// sink's own row, and `find_spine_pip` looks up `G_VPTX<n>00` at the spine
+/// position, both from the same three tables. The difference is that here
+/// they become **pips of the graph**, so the ordinary router routes a clock
+/// and the ordinary `Routing::verify` walks it back, where nextpnr needs a
+/// dedicated pass. They carry **no bits**: every bit of a clock route is
+/// still a `.mux` record charged to the tile that owns it, so declaring a
+/// join is not a claim about the bitstream.
+///
+/// A fourth join is the **buffer**. Every global on this family goes
+/// through a `DCC`, whose input and output are two global wires with
+/// nothing between them in `bits.db`. An ungated one is a wire: nextpnr's
+/// `write_dcc` writes `DCC_<x><n>.MODE = DCCA` only when the cell has a
+/// clock enable, `NONE` is the field's default and costs no bits, and no
+/// `DCC_*.MODE` appears anywhere in the three bitstreams Great Scott
+/// Gadgets built for this board — one of which routes two globals through
+/// `LDCC0` and `LDCC6`. So the buffer is a bitless join too, and a clock
+/// needs no cell placed on it.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct ClockNetwork {
+    /// Which networks the die has, as the `n` of `G_HPBX<n>00`. Read from
+    /// the database rather than assumed: it is the set for which every
+    /// quadrant offers a `G_<quadrant>PCLK<n>`.
+    pub indices: Vec<u32>,
+    /// Quadrant name to the rectangle of positions it covers, inclusive.
+    pub quadrants: Vec<(String, (u32, u32, u32, u32))>,
+    /// Tap column to `(lx0, lx1, rx0, rx1)`, the columns its left and
+    /// right branch drivers reach, inclusive.
+    pub taps: Vec<(u32, (u32, u32, u32, u32))>,
+    /// Quadrant, tap column and the position of the tile driving that
+    /// spine.
+    pub spines: Vec<(String, u32, (u32, u32))>,
+    /// How many bitless joins were declared.
+    pub joins: usize,
+    /// How many clock buffers became a `gb` bel.
+    pub buffers: usize,
+}
+
+impl ClockNetwork {
+    /// The tap column that feeds column `x`, and which of its two branch
+    /// drivers does.
+    #[must_use]
+    pub fn tap_of(&self, x: u32) -> Option<(u32, char)> {
+        self.taps.iter().find_map(|(col, (lx0, lx1, rx0, rx1))| {
+            if x >= *lx0 && x <= *lx1 {
+                Some((*col, 'L'))
+            } else if x >= *rx0 && x <= *rx1 {
+                Some((*col, 'R'))
+            } else {
+                None
+            }
+        })
+    }
+
+    /// The quadrant a position is in.
+    #[must_use]
+    pub fn quadrant_of(&self, x: u32, y: u32) -> Option<&str> {
+        self.quadrants
+            .iter()
+            .find(|(_, (x0, y0, x1, y1))| x >= *x0 && x <= *x1 && y >= *y0 && y <= *y1)
+            .map(|(name, _)| name.as_str())
+    }
+
+    /// The network index a branch wire names, as in `G_HPBX0700` for 7.
+    #[must_use]
+    pub fn branch_index(name: &str) -> Option<u32> {
+        let rest = name
+            .strip_prefix("G_HPBX")
+            .or_else(|| name.strip_prefix("L_HPBX"))
+            .or_else(|| name.strip_prefix("R_HPBX"))?;
+        rest.strip_suffix("00")?.parse().ok()
+    }
+}
+
+/// One wire of the routing graph, as a name and the position it starts in.
+///
+/// This is the form a decoding and a routing can be compared in: the
+/// database spells a wire `S1E1_JA0` relative to the tile whose `bits.db`
+/// mentions it and the graph calls the same metal `JA0` at the position the
+/// prefix points at, so one of the two has to be resolved into the other.
+pub type ResolvedWire = (String, (u32, u32));
+
+/// Which global clock network every placed flip-flop's clock came off, and
+/// which of them did not come off one at all.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct ClockUse {
+    /// Network index to how many flip-flop clock pins it reached.
+    pub networks: BTreeMap<u32, usize>,
+    /// The flip-flops whose clock arrived through general interconnect
+    /// instead, as `<instance> on <site>`.
+    pub off_network: Vec<String>,
+}
+
+/// Whether a wire belongs to the global clock network.
+///
+/// The names are Project Trellis' own and they are systematic, which is why
+/// this is a set of stems rather than a list: `HPBX` is a horizontal
+/// primary branch, `VPTX` a vertical primary tap, `HPRX` the horizontal
+/// primary row that feeds one, `HPFE`/`HPFW`/`VPFN`/`VPFS` the four
+/// directions a buffer's output leaves in, and `<quadrant>PCLK<n>` the
+/// centre mux's output. `G_CLKI_`/`G_CLKO_` are a buffer's two sides.
+///
+/// It is used for one thing only — [`TrellisFabric::clock_node_costs`] — so
+/// a name wrongly included costs a preference and never a connection.
+fn is_clock_wire(name: &str) -> bool {
+    for stem in [
+        "G_HPBX", "G_VPTX", "G_HPRX", "L_HPBX", "R_HPBX", "G_HPFE", "G_HPFW", "G_VPFN", "G_VPFS",
+        "G_CLKI_", "G_CLKO_",
+    ] {
+        if name.starts_with(stem) {
+            return true;
+        }
+    }
+    name.starts_with("G_")
+        && (name.contains("PCLK") || name.contains("DCC") || name.contains("DCS"))
+}
+
 /// Where one lookup table's bits are, relative to the position it sits at.
 ///
 /// A LUT is the one cell on this family whose configuration is a *value*
@@ -1166,6 +1728,15 @@ pub struct LutBits {
     pub tie_high: Vec<Vec<ConfigBit>>,
 }
 
+/// What the flow multiplies a clock-network node's cost by, so a clock goes
+/// on the network rather than through the shortest run of data wires.
+///
+/// Measured rather than chosen: the general path from ball A8 to a
+/// `CLK0_SLICE` of this die is seven hops and the path through the network
+/// is about eighteen, so anything above about a tenth loses. See
+/// [`TrellisFabric::clock_node_costs`].
+pub const CLOCK_PREFERENCE: f32 = 0.05;
+
 /// The Lattice tile type that holds a position's logic.
 pub const LOGIC_TILE: &str = "PLC2";
 
@@ -1179,6 +1750,63 @@ pub const LUT_INPUTS: [char; 4] = ['A', 'B', 'C', 'D'];
 /// The parameter a `LUT4` carries its truth table in, as the device file
 /// spells it.
 pub const LUT_INIT: &str = "INIT";
+
+/// Where a flip-flop's five pins reach, as `(role, wire)` with `#` for the
+/// flop's index in the tile and `@` for its slice's control set.
+///
+/// `bits.db` names wires and the bits that join them; it does not say that
+/// `M3_SLICE` is a flip-flop's data input. That mapping is `libtrellis`'
+/// own `Bels.cpp`, and `sites::bels_for` is where it is written out with
+/// its provenance. What makes it checkable rather than believed is that the
+/// bel is not declared unless the tile type owns every one of these names.
+///
+/// **`d` is `M<z>_SLICE` and not the lookup table's output**, which is the
+/// whole reason a flop places on its own here; see the flip-flop section of
+/// `TrellisDatabase::load`.
+pub const FF_PINS: [(&str, &str); 5] = [
+    ("d", "M#_SLICE"),
+    ("clk", "CLK@_SLICE"),
+    ("rst", "LSR@_SLICE"),
+    ("en", "CE@_SLICE"),
+    ("q", "Q#_SLICE"),
+];
+
+/// Where one flip-flop's settings are, relative to the position it sits at.
+///
+/// Every field here is what nextpnr's `write_ff` writes for a
+/// `TRELLIS_FF`, and nothing else: that function is five `add_enum` calls
+/// plus two conditional pairs, and [`TrellisFabric::configure_registers`]
+/// is a line-for-line answer to it. A value that is the field's own default
+/// costs no bits and its entry is empty, which is why all of them are kept
+/// rather than only the ones a design turns out to need — an empty vector
+/// is the honest record of "this costs nothing", and a missing entry would
+/// be indistinguishable from a field the database does not have.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct FfBits {
+    /// Which of the tile's two control sets this flop's slice uses, which
+    /// is what `CLK<c>.CLKMUX` and `LSR<c>.LSRMUX` are indexed by once the
+    /// routing says which of `CLK0`/`CLK1` carries the net.
+    pub control: u32,
+    /// `SLICE<l>.REG<n>.SD = 0`: read the data from the fabric's `M` wire
+    /// rather than from the lookup table beside it. Always written, because
+    /// this flow never packs the two together.
+    pub sd_fabric: Vec<ConfigBit>,
+    /// `SLICE<l>.REG<n>.REGSET`, as `[RESET, SET]`.
+    pub regset: [Vec<ConfigBit>; 2],
+    /// `SLICE<l>.REG<n>.LSRMODE = LSR`.
+    pub lsrmode_lsr: Vec<ConfigBit>,
+    /// `SLICE<l>.GSR`, as `[ENABLED, DISABLED]`.
+    pub gsr: [Vec<ConfigBit>; 2],
+    /// `SLICE<l>.CEMUX`, as `[1, CE]`.
+    pub cemux: [Vec<ConfigBit>; 2],
+    /// `CLK<c>.CLKMUX = INV`, for `c` 0 and 1. The `CLK` value is the
+    /// default and costs nothing.
+    pub clkmux_inv: [Vec<ConfigBit>; 2],
+    /// `LSR<c>.LSRMUX = INV`, for `c` 0 and 1.
+    pub lsrmux_inv: [Vec<ConfigBit>; 2],
+    /// `LSR<c>.SRMODE = ASYNC`, for `c` 0 and 1.
+    pub srmode_async: [Vec<ConfigBit>; 2],
+}
 
 /// The letter Project Trellis names slice `index` with.
 fn slice_letter(index: usize) -> char {
@@ -1511,6 +2139,46 @@ impl Decoded {
 }
 
 impl TrellisDatabase {
+    /// The connections a decoding selects, in the same `(name, position)`
+    /// pairs [`TrellisFabric::routed_arcs`] gives, so the two can be
+    /// compared.
+    ///
+    /// A name the database spells for another die of the family resolves to
+    /// nothing and is reported as such rather than skipped: a bit of this
+    /// part that only makes sense on an 85F would mean the tile rules are
+    /// wrong, not that there is nothing to say.
+    #[must_use]
+    pub fn resolved_arcs(
+        &self,
+        decoded: &Decoded,
+    ) -> (BTreeSet<(ResolvedWire, ResolvedWire)>, Vec<String>) {
+        let prefix = self.device.chip_prefix();
+        let resolve = |at: (u32, u32), name: &str| -> Option<ResolvedWire> {
+            match parse::globalise(name, prefix)? {
+                parse::WireTarget::Global { name } => Some((name, (0, 0))),
+                parse::WireTarget::Tile { dx, dy, name } => {
+                    let x = u32::try_from(i64::from(at.0) + i64::from(dx)).ok()?;
+                    let y = u32::try_from(i64::from(at.1) + i64::from(dy)).ok()?;
+                    Some((name, (x, y)))
+                }
+            }
+        };
+        let mut out = BTreeSet::new();
+        let mut problems = Vec::new();
+        for (at, sink, source) in &decoded.arcs {
+            match (resolve(*at, sink), resolve(*at, source)) {
+                (Some(to), Some(from)) => {
+                    out.insert((to, from));
+                }
+                _ => problems.push(format!(
+                    "X{}Y{} `{sink}` <- `{source}` names a wire of another die",
+                    at.0, at.1
+                )),
+            }
+        }
+        (out, problems)
+    }
+
     /// Reads a configuration memory back into the database's own feature
     /// names; see [`Decoded`].
     ///
@@ -1571,8 +2239,17 @@ impl TrellisDatabase {
                         best = Some((source.as_str(), bits.as_slice()));
                     }
                 }
+                // A source with no bit it wants **set** is the state an
+                // untouched bitstream is in everywhere, so reporting it
+                // would say nothing — and that is true of a source with no
+                // bits at all *and* of one whose whole pattern is inverted.
+                // The centre muxes of this die have the second kind:
+                // `G_DCS0CLK1 <- G_VPFN0000` is six bits all wanted clear,
+                // so every centre mux of the part would otherwise appear to
+                // be carrying an arc as soon as anything else in its tile
+                // is written.
                 if let Some((source, bits)) = best
-                    && !bits.is_empty()
+                    && bits.iter().any(|bit| !bit.inverted)
                 {
                     cover(bits, &mut covered);
                     out.arcs.push((at, sink.clone(), source.to_owned()));
@@ -1655,6 +2332,15 @@ pub struct TrellisFabric {
     /// Where each lookup table's bits are, by `(Arch` tile type index, bel
     /// name)`, which is what a site gives.
     pub luts: BTreeMap<(usize, String), LutBits>,
+    /// Where each flip-flop's settings are, keyed the same way.
+    pub ffs: BTreeMap<(usize, String), FfBits>,
+    /// The global clock network, and the joins it needed; see
+    /// [`ClockNetwork`].
+    pub clocks: ClockNetwork,
+    /// The bits a `.mux` source wants **clear**, by `(Arch` tile type
+    /// index, the bits it wants set)`, for the sources that have any. See
+    /// [`TrellisFabric::dropped_clear_bits`].
+    pub clears: BTreeMap<(usize, Vec<ConfigBit>), Vec<ConfigBit>>,
     /// Per IO bank a pad is in: the `BANKREF` tile's position, and the
     /// bits that set [`BANK_VCCIO`] to the rail
     /// [`TrellisOptions::io_standard`] implies.
@@ -1952,6 +2638,397 @@ impl TrellisFabric {
         Ok(done)
     }
 
+    /// A [`super::route::RouteOptions::node_base`] vector that makes the
+    /// global clock network cheap, so a clock goes on it.
+    ///
+    /// # Why a preference is needed at all
+    ///
+    /// A flip-flop's clock mux (`.mux CLK0` of a `PLC2`) offers the sixteen
+    /// global branch wires **and** seven ordinary interconnect wires. So
+    /// the shortest path from a pad to a clock pin is through general
+    /// routing — measured on this die, seven hops from `JPADDIB_PIO` on
+    /// ball A8 to a `CLK0_SLICE`, against about eighteen through the
+    /// network — and a router with no preference builds a clock tree out of
+    /// data wires. That routes, verifies and configures; what it does not do
+    /// is control skew, and a counter clocked that way is a thing nobody has
+    /// a model for.
+    ///
+    /// # Why this is sound rather than merely convenient
+    ///
+    /// The clock network is a **one-way funnel**. A signal can enter it
+    /// only through a buffer's `CLKI` mux or a centre mux, and every way out
+    /// of it is a flip-flop's `CLK<n>`, `LSR<n>` mux — there is no pip from
+    /// a branch wire back into general routing. So making it cheap cannot
+    /// pull a data signal onto it: the only signal with a reason to traverse
+    /// it is one that clocks or resets something.
+    ///
+    /// And two clocks cannot collide on it, which is the thing the per-tile
+    /// naming makes worth checking. `G_HPBX0300` is a separate node in every
+    /// tile although it is one piece of metal per quadrant and side, so the
+    /// router's one-signal-per-node rule does not by itself stop two nets
+    /// sharing a branch. It does not have to: every path onto a branch of
+    /// network *n* goes through its quadrant's single `G_<quadrant>PCLK<n>`
+    /// global node, and that node has capacity one.
+    ///
+    /// `preference` multiplies the cost of a network node. Below about a
+    /// tenth the network wins for a clock with one sink; the default the
+    /// flow uses is 0.05.
+    #[must_use]
+    pub fn clock_node_costs(&self, graph: &super::arch::RoutingGraph, preference: f32) -> Vec<f32> {
+        let mut out = vec![1.0f32; graph.nodes.len()];
+        for (index, wire) in graph.nodes.iter().enumerate() {
+            if is_clock_wire(&wire.name) {
+                out[index] = preference;
+            }
+        }
+        out
+    }
+
+    /// Every bit a pip the router took wants **clear** and that something
+    /// else has set, one line each.
+    ///
+    /// # Why this is the fix, and why there is no other
+    ///
+    /// A `bits.db` bit written `!F25B10` is one its feature wants clear. A
+    /// bitstream here is assembled by setting bits in a zeroed bitmap, so
+    /// there is nothing to *write* for such a bit, and the loader does not
+    /// record it on the pip — a `PipDecl` says which bits switch a
+    /// connection on and has no room for the ones it needs off.
+    ///
+    /// That is not a shortcut with a better alternative. A clear cannot be
+    /// written into a map that is already clear; the only thing honouring it
+    /// can mean is **noticing when another feature of the same tile has set
+    /// it**. So the fix for the simplification is a check, and this is it:
+    /// the bits are recorded at load time in [`TrellisFabric::clears`], and
+    /// every pip a route takes is asked, against the finished image,
+    /// whether the bits its source wants clear are clear.
+    ///
+    /// It matters most for a clock. A centre mux of this die encodes its
+    /// source as a six-bit code — `G_URPCLK0 <- G_HPFE0000` is
+    /// `!F1B0 F2B0 !F3B0 !F4B0 F5B0 !F6B0` — so taking one arc leaves five
+    /// bits that another feature setting any of them would silently turn
+    /// the arc into a different one. Over the family, 4523 of 85 379 mux
+    /// source lines have an inverted bit and all of them are in the clock
+    /// network's tiles, which is what
+    /// `an_inverted_mux_bit_only_happens_in_the_clock_network` pins; a
+    /// combinational design could not reach one and a clocked design walks
+    /// through six.
+    ///
+    /// The pips are looked up by the bits they set rather than by name,
+    /// because a pip in the graph carries resolved wire names and the
+    /// database carries prefixed ones. Two sources of one tile type with
+    /// the same bits set are indistinguishable in a finished bitstream
+    /// anyway; [`TrellisStats::clear_collisions`] counts them and it is zero
+    /// on this die.
+    #[must_use]
+    pub fn dropped_clear_bits(
+        &self,
+        graph: &super::arch::RoutingGraph,
+        routing: &super::Routing,
+        bits: &super::bitstream::Bitstream,
+    ) -> Vec<String> {
+        let mut out = Vec::new();
+        for route in routing.routes() {
+            for id in &route.pips {
+                let pip = graph.pip(*id);
+                let set = graph.pip_bits(*id);
+                if set.is_empty() {
+                    continue;
+                }
+                let Some(ty) = self.arch.tile_index_at(pip.tile.0, pip.tile.1) else {
+                    continue;
+                };
+                let mut key = set.to_vec();
+                key.sort_unstable();
+                let Some(clear) = self.clears.get(&(ty, key)) else {
+                    continue;
+                };
+                for bit in clear {
+                    if bits.get(pip.tile, *bit) == Some(true) {
+                        out.push(format!(
+                            "X{}Y{} the arc `{}` <- `{}` needs bit {}.{} clear and something else \
+                             has set it, so the bits select a different connection",
+                            pip.tile.0,
+                            pip.tile.1,
+                            graph.wire(pip.to).name,
+                            graph.wire(pip.from).name,
+                            bit.row,
+                            bit.col
+                        ));
+                    }
+                }
+            }
+        }
+        out.sort();
+        out.dedup();
+        out
+    }
+
+    /// The arcs a routing takes that cost bits, as the `(name, tile)` pairs
+    /// a decoding resolves to.
+    ///
+    /// Only the arcs with bits: one without leaves no trace in a bitstream,
+    /// so nothing can be said about it this way. `Routing::verify` is what
+    /// covers those, by walking each sink back to its driver.
+    #[must_use]
+    pub fn routed_arcs(
+        &self,
+        graph: &super::arch::RoutingGraph,
+        routing: &super::Routing,
+    ) -> BTreeSet<(ResolvedWire, ResolvedWire)> {
+        routing
+            .routes()
+            .flat_map(|route| route.pips.iter())
+            .filter(|id| !graph.pip_bits(**id).is_empty())
+            .map(|id| {
+                let pip = graph.pip(*id);
+                let to = graph.wire(pip.to);
+                let from = graph.wire(pip.from);
+                ((to.name.clone(), to.tile), (from.name.clone(), from.tile))
+            })
+            .collect()
+    }
+
+    /// Which global network each placed flip-flop's clock arrived on.
+    ///
+    /// This exists because [`TrellisFabric::clock_node_costs`] is a
+    /// preference and a preference can be lost. A clock that came through
+    /// general routing routes, verifies and configures — the failure is a
+    /// skew nobody modelled, not a broken bitstream — so nothing else would
+    /// notice, and `reticle fpga --bitstream` refuses rather than writing
+    /// one quietly.
+    #[must_use]
+    pub fn clock_network_use(
+        &self,
+        netlist: &super::place::Netlist,
+        placement: &super::place::Placement,
+        graph: &super::arch::RoutingGraph,
+        routing: &super::Routing,
+    ) -> ClockUse {
+        let mut out = ClockUse::default();
+        for (index, instance) in netlist.instances.iter().enumerate() {
+            if instance.kind != "ff" {
+                continue;
+            }
+            let Some(site) = placement.site_of(index) else {
+                continue;
+            };
+            let site = &graph.sites[site];
+            let Some(signal) = netlist
+                .pins
+                .iter()
+                .find(|pin| pin.instance == index && pin.role == "clk")
+                .and_then(|pin| pin.signal)
+            else {
+                continue;
+            };
+            // Walk this pin's own path back through the route until a
+            // branch wire turns up. Asking "does the route touch a branch
+            // wire in this tile" would not do: a tile has two clock muxes
+            // and four slices, so one flop's clock can be on the network
+            // while its neighbour's came off a data wire, and the whole
+            // point of the check is to catch exactly that.
+            let mut found = None;
+            if let (Some(clk), Some(route)) = (site.pin("clk"), routing.route(signal)) {
+                let mut node = clk;
+                for _ in 0..8 {
+                    let Some(pip) = route
+                        .pips
+                        .iter()
+                        .find(|id| graph.pip(**id).to == node)
+                        .map(|id| graph.pip(*id))
+                    else {
+                        break;
+                    };
+                    let driver = graph.wire(pip.from);
+                    // `CLK0` and `CLK1` are the two clock muxes a tile
+                    // shares between its four slices, and what drives the
+                    // one this flop's `MUXCLK` selected is the whole
+                    // question. It has to be asked of this pin's own path:
+                    // one flop of a tile can be on the network while its
+                    // neighbour came off a data wire, which is what
+                    // happened before `RouteOptions::node_base` existed.
+                    if matches!(graph.wire(node).name.as_str(), "CLK0" | "CLK1") {
+                        found = ClockNetwork::branch_index(&driver.name);
+                        break;
+                    }
+                    node = pip.from;
+                }
+            }
+            match found {
+                Some(n) => *out.networks.entry(n).or_default() += 1,
+                None => out.off_network.push(format!(
+                    "{} on {}",
+                    netlist.instances[index].name, site.name
+                )),
+            }
+        }
+        out
+    }
+
+    /// Sets the bits that configure every placed flip-flop, and returns how
+    /// many there were.
+    ///
+    /// # What this writes, and whose list it is
+    ///
+    /// nextpnr's `write_ff` is the whole of what Lattice's own flow puts in
+    /// a tile for a `TRELLIS_FF`, and this is a line-for-line answer to it:
+    ///
+    /// | Setting | Where it comes from |
+    /// |---|---|
+    /// | `SLICE<l>.GSR` | the cell's `GSR` parameter, `ENABLED` by default |
+    /// | `SLICE<l>.REG<n>.SD` | always `0`: the data comes from the fabric's `M` wire, because this flow never packs a lookup table and a flop onto one site |
+    /// | `SLICE<l>.REG<n>.REGSET` | the cell's `REGSET`, `RESET` by default |
+    /// | `SLICE<l>.REG<n>.LSRMODE` | always `LSR`, which is the default and costs nothing |
+    /// | `SLICE<l>.CEMUX` | the cell's `CEMUX`; `1` when nothing drives the enable, and the default is `CE`, so **not writing it would leave a flop waiting on an undriven wire** |
+    /// | `CLK<c>.CLKMUX` | the cell's `CLKMUX`, and only for the control mux the clock's route actually took |
+    /// | `LSR<c>.LSRMUX`, `LSR<c>.SRMODE` | the cell's, and only for the mux the reset's route took |
+    ///
+    /// The last two rows are why the routing is a parameter. A tile has two
+    /// clock muxes and two reset muxes shared between its four slices, so
+    /// "which one is this flop's" is a fact about the route and not about
+    /// the bel; nextpnr asks the same question the same way, by looking at
+    /// which of `CLK0` and `CLK1` carries the net. A flop whose parameter
+    /// needs bits in a mux the routing does not identify is **refused**
+    /// rather than written into the wrong one.
+    ///
+    /// `CEMUX = 1` is the entry worth staring at. Its default is `CE` —
+    /// take the enable from the fabric — so a bitstream that leaves the
+    /// field alone has every flip-flop gated by a wire nothing drives. That
+    /// is the same shape as the bank rail and the pull mode: a database
+    /// default that is wrong for the design, in a field the design never
+    /// mentions.
+    ///
+    /// # Errors
+    ///
+    /// [`TrellisError::Bits`] when a bit falls outside the position, and
+    /// [`TrellisError::Unsupported`] when a flop asks for a non-default
+    /// clock or reset mux whose control index the routing does not settle.
+    // One argument more than [`TrellisFabric::configure_logic`], and it is
+    // the `routing`: two of the fields a flip-flop needs live in a mux the
+    // tile shares between its four slices, so which of them is this flop's
+    // is a fact about the route. Bundling the six into a context struct
+    // would hide that rather than fix it.
+    #[allow(clippy::too_many_arguments)]
+    pub fn configure_registers(
+        &self,
+        design: &crate::ir::Design,
+        module: crate::ir::ModuleId,
+        netlist: &super::place::Netlist,
+        placement: &super::place::Placement,
+        graph: &super::arch::RoutingGraph,
+        routing: &super::Routing,
+        bits: &mut super::bitstream::Bitstream,
+    ) -> Result<usize, TrellisError> {
+        let Some(m) = design.modules.get(module) else {
+            return Ok(0);
+        };
+        let mut done = 0usize;
+        for (index, instance) in netlist.instances.iter().enumerate() {
+            if instance.kind != "ff" {
+                continue;
+            }
+            let Some(site) = placement.site_of(index) else {
+                continue;
+            };
+            let site = &graph.sites[site];
+            let Some(ff) = self.ffs.get(&(site.tile_type, site.bel.clone())) else {
+                continue;
+            };
+            let params = m.cells.get(instance.cell).map(|cell| &cell.params);
+            let value = |name: &str, default: &str| -> String {
+                params
+                    .and_then(|p| p.get(name))
+                    .and_then(crate::ir::AttrValue::as_str)
+                    .unwrap_or(default)
+                    .to_owned()
+            };
+            let signal_of = |role: &str| {
+                netlist
+                    .pins
+                    .iter()
+                    .find(|pin| pin.instance == index && pin.role == role)
+                    .and_then(|pin| pin.signal)
+            };
+
+            for bit in &ff.sd_fabric {
+                bits.set(site.tile, *bit)?;
+            }
+            for bit in &ff.lsrmode_lsr {
+                bits.set(site.tile, *bit)?;
+            }
+            let regset = usize::from(value("REGSET", "RESET") == "SET");
+            for bit in &ff.regset[regset] {
+                bits.set(site.tile, *bit)?;
+            }
+            let gsr = usize::from(value("GSR", "ENABLED") == "DISABLED");
+            for bit in &ff.gsr[gsr] {
+                bits.set(site.tile, *bit)?;
+            }
+            // The enable mux: `1` unless a signal actually reaches the
+            // enable pin, whatever the parameter says. A cell asking for
+            // `CE` with nothing routed to `CE<c>_SLICE` would be a flop
+            // that never clocks.
+            let enabled = value("CEMUX", "1") == "CE" && signal_of("en").is_some();
+            for bit in &ff.cemux[usize::from(enabled)] {
+                bits.set(site.tile, *bit)?;
+            }
+
+            // The two shared control muxes. Which of the tile's two a flop
+            // uses is a fact about the route, so it is asked of the route.
+            let mux_of = |signal: Option<usize>, stem: &str| -> Option<usize> {
+                let signal = signal?;
+                let route = routing.route(signal)?;
+                route.pips.iter().find_map(|id| {
+                    let pip = graph.pip(*id);
+                    let wire = graph.wire(pip.to);
+                    if wire.tile != site.tile {
+                        return None;
+                    }
+                    wire.name
+                        .strip_prefix(stem)
+                        .and_then(|n| n.parse::<usize>().ok())
+                        .filter(|n| *n < 2)
+                })
+            };
+            let refuse = |what: &str| TrellisError::Unsupported {
+                what: format!(
+                    "flip-flop `{}` at X{}Y{} asks for {what}, and the routing does not say which \
+                     of the tile's two control muxes carries its signal, so writing it could \
+                     change every other flop of the tile",
+                    site.bel, site.tile.0, site.tile.1
+                ),
+            };
+            if value("CLKMUX", "CLK") == "INV" {
+                let c = mux_of(signal_of("clk"), "CLK").ok_or_else(|| refuse("CLKMUX=INV"))?;
+                for bit in &ff.clkmux_inv[c] {
+                    bits.set(site.tile, *bit)?;
+                }
+            }
+            let reset = signal_of("rst");
+            if reset.is_some() {
+                let inv = value("LSRMUX", "LSR") == "INV";
+                let async_reset = value("SRMODE", "LSR_OVER_CE") == "ASYNC";
+                if inv || async_reset {
+                    let what = if inv { "LSRMUX=INV" } else { "SRMODE=ASYNC" };
+                    let c = mux_of(reset, "LSR").ok_or_else(|| refuse(what))?;
+                    if inv {
+                        for bit in &ff.lsrmux_inv[c] {
+                            bits.set(site.tile, *bit)?;
+                        }
+                    }
+                    if async_reset {
+                        for bit in &ff.srmode_async[c] {
+                            bits.set(site.tile, *bit)?;
+                        }
+                    }
+                }
+            }
+            done += 1;
+        }
+        Ok(done)
+    }
+
     /// The `.bit` stream for a bitmap this fabric's [`Arch`] produced.
     ///
     /// The metadata string is the one `ecppack` writes, because it is what
@@ -2037,6 +3114,18 @@ mod tests {
                                         "Z99":{"row":1,"col":0,"pio":"A"}}},
                 "pio_metadata":[{"row":0,"col":0,"pio":"B","bank":1},
                                 {"row":1,"col":0,"pio":"A","bank":7}]}"#,
+        );
+        // The clock network's geometry. One quadrant, one tap column and one
+        // spine, which is the smallest shape `parse::globals` accepts and
+        // enough for `clock_network` to have something to resolve — and the
+        // fixture declares no `G_…PCLK…` wire, so the result is a network
+        // with no indices and no joins, which is the other case worth
+        // having: a die whose database says nothing about a clock must load.
+        files.insert(
+            "ECP5/LFE5U-12F/globals.json",
+            r#"{"quadrants":{"UL":{"x0":0,"y0":0,"x1":2,"y1":1}},
+                "taps":{"C1":{"lx0":0,"lx1":0,"rx0":1,"rx1":2}},
+                "spines":{"UL1":{"x":0,"y":1}}}"#,
         );
         files.insert(
             "ECP5/tiledata/BANKREF1/bits.db",
@@ -2380,6 +3469,12 @@ mod tests {
         let err = open(&files, "", "LFE5U-85F").unwrap_err();
         assert!(err.to_string().contains("LFE5U-85F/iodb.json"), "{err}");
         files.insert("ECP5/LFE5U-85F/iodb.json", r#"{"packages":{}}"#);
+        let err = open(&files, "", "LFE5U-85F").unwrap_err();
+        assert!(err.to_string().contains("LFE5U-85F/globals.json"), "{err}");
+        files.insert(
+            "ECP5/LFE5U-85F/globals.json",
+            r#"{"quadrants":{},"taps":{},"spines":{}}"#,
+        );
         let err = open(&files, "", "LFE5U-85F").unwrap_err();
         assert!(err.to_string().contains("tiledata/PLC2/bits.db"), "{err}");
     }

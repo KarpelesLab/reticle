@@ -357,6 +357,122 @@ pub fn pio_banks(
     Ok(out)
 }
 
+/// The clock network's geometry, from `globals.json`.
+///
+/// Three tables, and each one answers a different question a clock has to
+/// ask. They are small — four quadrants, four tap columns and eight spines
+/// on this die — and they are the *only* thing in the database that says
+/// how a global reaches a logic tile: `bits.db` gives the muxes at each
+/// hop and says nothing about which hop belongs to which tile, because the
+/// wires of the network carry the same name in every tile they cross.
+///
+/// See [`super::ClockNetwork`] for what is built out of this and why each
+/// table is needed.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Globals {
+    /// Quadrant name (`UL`, `UR`, `LL`, `LR`) to the rectangle of grid
+    /// positions it covers, as `(x0, y0, x1, y1)` inclusive.
+    pub quadrants: Vec<(String, (u32, u32, u32, u32))>,
+    /// Tap column to the columns its two branch drivers reach, as
+    /// `(lx0, lx1, rx0, rx1)` inclusive.
+    ///
+    /// The key is the column the `TAP_DRIVE` tiles sit in, which
+    /// `globals.json` spells `C<col>`.
+    pub taps: Vec<(u32, (u32, u32, u32, u32))>,
+    /// One spine per (quadrant, tap column): the quadrant's name, the tap
+    /// column it drives, and the position of the tile that drives it.
+    ///
+    /// The key in `globals.json` is the quadrant followed by the tap
+    /// column with no separator (`UR60`), which is why the tap columns are
+    /// read first: `UR6` and `UR60` would otherwise be ambiguous.
+    pub spines: Vec<(String, u32, (u32, u32))>,
+}
+
+/// The clock network's geometry, from `globals.json`.
+///
+/// # Errors
+///
+/// [`TrellisError::Malformed`] when the file is not JSON, when it has no
+/// `quadrants`, `taps` or `spines` object, or when a spine's name does not
+/// end in one of the tap columns `taps` lists — which would mean the two
+/// tables disagree and nothing could be resolved from them.
+pub fn globals(text: &str, path: &str) -> Result<Globals, TrellisError> {
+    let root = Json::parse(text).map_err(|e| TrellisError::Malformed {
+        path: path.to_owned(),
+        what: e.to_string(),
+    })?;
+    let bad = |what: &str| TrellisError::Malformed {
+        path: path.to_owned(),
+        what: what.to_owned(),
+    };
+    let object = |name: &str| {
+        root.get(name)
+            .and_then(Json::as_object)
+            .ok_or_else(|| bad(&format!("no `{name}` object")))
+    };
+
+    let mut quadrants = Vec::new();
+    for (name, body) in object("quadrants")? {
+        let field = |key: &str| body.get(key).and_then(Json::as_u32);
+        let (Some(x0), Some(y0), Some(x1), Some(y1)) =
+            (field("x0"), field("y0"), field("x1"), field("y1"))
+        else {
+            return Err(bad(&format!("quadrant `{name}` has no x0/y0/x1/y1")));
+        };
+        quadrants.push((name.clone(), (x0, y0, x1, y1)));
+    }
+    // Sorted, like the taps and the spines: a JSON object's order is the
+    // file's and nothing should depend on it.
+    quadrants.sort();
+
+    let mut taps = Vec::new();
+    for (name, body) in object("taps")? {
+        let Some(col) = name.strip_prefix('C').and_then(|n| n.parse::<u32>().ok()) else {
+            return Err(bad(&format!("tap `{name}` is not `C<column>`")));
+        };
+        let field = |key: &str| body.get(key).and_then(Json::as_u32);
+        let (Some(lx0), Some(lx1), Some(rx0), Some(rx1)) =
+            (field("lx0"), field("lx1"), field("rx0"), field("rx1"))
+        else {
+            return Err(bad(&format!("tap `{name}` has no lx0/lx1/rx0/rx1")));
+        };
+        taps.push((col, (lx0, lx1, rx0, rx1)));
+    }
+    taps.sort_unstable();
+
+    let mut spines = Vec::new();
+    for (name, body) in object("spines")? {
+        // `UR60` is quadrant `UR` and tap column 60. Splitting on the
+        // first digit would read `UR6` for a die that had a tap at column
+        // 0, so the tap table decides instead, longest column first so a
+        // tap at 6 cannot shadow one at 60.
+        let mut cols: Vec<u32> = taps.iter().map(|(col, _)| *col).collect();
+        cols.sort_unstable_by_key(|col| std::cmp::Reverse(col.to_string().len()));
+        let Some((quadrant, col)) = cols.iter().find_map(|col| {
+            name.strip_suffix(&col.to_string())
+                .map(|quadrant| (quadrant.to_owned(), *col))
+        }) else {
+            return Err(bad(&format!(
+                "spine `{name}` does not end in any of the tap columns `taps` lists"
+            )));
+        };
+        let (Some(x), Some(y)) = (
+            body.get("x").and_then(Json::as_u32),
+            body.get("y").and_then(Json::as_u32),
+        ) else {
+            return Err(bad(&format!("spine `{name}` has no x/y")));
+        };
+        spines.push((quadrant, col, (x, y)));
+    }
+    spines.sort();
+
+    Ok(Globals {
+        quadrants,
+        taps,
+        spines,
+    })
+}
+
 /// One configuration bit of a tile, as `bits.db` writes it: `F<frame>B<bit>`
 /// for a bit that must be **set** and `!F<frame>B<bit>` for one that must be
 /// **clear**.
@@ -1080,5 +1196,57 @@ NONE F7B0 !F8B0
         assert_eq!(packages[0].package, "CABGA256");
         assert_eq!(packages[0].balls.get("E13"), Some(&(0, 62, "B".to_owned())));
         assert!(iodb("{}", "iodb.json").is_err());
+    }
+
+    #[test]
+    fn a_globals_json_gives_the_clock_networks_geometry() {
+        // The three tables, and a spine whose key is a quadrant followed by
+        // a tap column with no separator between them.
+        let text = r#"{
+            "quadrants": {"UR": {"x0": 32, "y0": 0, "x1": 72, "y1": 25},
+                          "UL": {"x0": 0,  "y0": 0, "x1": 31, "y1": 25}},
+            "taps": {"C60": {"lx0": 51, "lx1": 59, "rx0": 60, "rx1": 72},
+                     "C6":  {"lx0": 0,  "lx1": 5,  "rx0": 6,  "rx1": 12}},
+            "spines": {"UR60": {"x": 59, "y": 13}, "UL6": {"x": 5, "y": 13}}
+        }"#;
+        let g = globals(text, "globals.json").expect("parses");
+        // Sorted, because a JSON object's order is the file's.
+        assert_eq!(
+            g.quadrants,
+            vec![
+                ("UL".to_owned(), (0, 0, 31, 25)),
+                ("UR".to_owned(), (32, 0, 72, 25)),
+            ]
+        );
+        assert_eq!(g.taps, vec![(6, (0, 5, 6, 12)), (60, (51, 59, 60, 72))]);
+        // **`UR60` is quadrant `UR` and tap 60, not quadrant `UR6` and tap
+        // 0.** Splitting on the first digit would get that wrong on a die
+        // with a tap at column 0, so the tap table decides, longest column
+        // first, and this fixture has both a 6 and a 60 to prove it.
+        assert_eq!(
+            g.spines,
+            vec![
+                ("UL".to_owned(), 6, (5, 13)),
+                ("UR".to_owned(), 60, (59, 13)),
+            ]
+        );
+
+        // A file missing any of the three tables is refused by name, and so
+        // is a spine that ends in a column no tap has: the two tables would
+        // then disagree and nothing could be resolved from them.
+        for missing in [
+            r#"{"taps":{},"spines":{}}"#,
+            r#"{"quadrants":{},"spines":{}}"#,
+            r#"{"quadrants":{},"taps":{}}"#,
+        ] {
+            assert!(globals(missing, "globals.json").is_err(), "{missing}");
+        }
+        let err = globals(
+            r#"{"quadrants":{},"taps":{"C4":{"lx0":0,"lx1":3,"rx0":4,"rx1":9}},
+                "spines":{"UL99":{"x":3,"y":13}}}"#,
+            "globals.json",
+        )
+        .expect_err("a spine at a column no tap has");
+        assert!(err.to_string().contains("UL99"), "{err}");
     }
 }

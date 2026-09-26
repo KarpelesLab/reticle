@@ -253,8 +253,15 @@ fn compile(
         netlist.instances.iter().filter(|i| i.pin.is_some()).count(),
         "every constrained pin is held at the site the ball map gives it"
     );
-    let (routing, route_report) =
-        route(&netlist, &graph, &placement, &RouteOptions::default()).unwrap();
+    // The same options `reticle fpga --bitstream` uses, because the one
+    // knob this family needs changes where a clock goes: without it the
+    // shortest path from a pad to a flip-flop's clock pin is through data
+    // wires. See `TrellisFabric::clock_node_costs`.
+    let options = RouteOptions {
+        node_base: fabric.clock_node_costs(&graph, trellis::CLOCK_PREFERENCE),
+        ..RouteOptions::default()
+    };
+    let (routing, route_report) = route(&netlist, &graph, &placement, &options).unwrap();
     // Every signal that has one, and every sink walked back to its driver
     // rather than taken on the router's word.
     assert_eq!(route_report.signals, netlist.routable().len());
@@ -277,6 +284,13 @@ fn compile(
     fabric
         .configure_logic(&design, top, &netlist, &placement, &graph, &mut bits)
         .unwrap();
+    let ffs = fabric
+        .configure_registers(
+            &design, top, &netlist, &placement, &graph, &routing, &mut bits,
+        )
+        .unwrap();
+    let clocks = fabric.clock_network_use(&netlist, &placement, &graph, &routing);
+    let dropped = fabric.dropped_clear_bits(&graph, &routing, &bits);
     // The same pass on its own, into an empty bitmap. A `CIB`'s constant
     // mux and its routing mux are the *same* mux, so the bits that tie a
     // wire and the bits that route into it share bit space and "is this pad
@@ -299,7 +313,21 @@ fn compile(
             ((to.name.clone(), to.tile), (from.name.clone(), from.tile))
         })
         .collect();
-    (bits, stream, pads, route_report, io_only, Routed { wires })
+    (
+        bits,
+        stream,
+        pads,
+        route_report,
+        io_only,
+        Routed {
+            wires,
+            ffs,
+            clocks,
+            dropped,
+            graph,
+            routing,
+        },
+    )
 }
 
 /// The arcs a routing used, as `(sink, source)` in the graph's own names and
@@ -311,6 +339,19 @@ fn compile(
 #[cfg(all(feature = "verilog", feature = "synth"))]
 struct Routed {
     wires: std::collections::BTreeSet<(Wire, Wire)>,
+    /// How many flip-flops `configure_registers` wrote settings for.
+    ffs: usize,
+    /// Which global clock network each of their clocks arrived on.
+    clocks: trellis::ClockUse,
+    /// Bits an arc of the design needs **clear** that something else set.
+    /// Empty is the only acceptable answer; see
+    /// `TrellisFabric::dropped_clear_bits`.
+    dropped: Vec<String>,
+    /// The graph the routing is over, so a test can ask the routing a
+    /// question of its own rather than only read what `compile` measured.
+    graph: reticle::fpga::arch::RoutingGraph,
+    /// The routing itself, for the same reason.
+    routing: reticle::fpga::Routing,
 }
 
 /// One wire of the routing graph: its name and the position it starts in.
@@ -373,7 +414,30 @@ fn the_database_describes_one_part_of_the_ecp5_family() {
     assert_eq!(stats.wires, 1_095_958);
     assert_eq!(stats.arcs, 171_632);
     assert_eq!(stats.fixed, 14_614);
+    // The clock network's own numbers. The joins are the connections
+    // `bits.db` states nowhere because the network's wires carry the same
+    // name in every tile they cross, so they come out of `globals.json`'s
+    // geometry instead; `trellis::ClockNetwork` says which three hops they
+    // are and why there is no fourth.
+    assert_eq!(stats.clock_networks, 16, "G_HPBX0000 to G_HPBX1500");
+    assert_eq!(stats.joins, 58_928);
+    assert_eq!(
+        stats.buffers, 56,
+        "twelve at the top, fourteen on each side, sixteen at the bottom"
+    );
+    assert_eq!(
+        stats.clears, 4425,
+        "`.mux` sources of this die's tile types that want a bit clear"
+    );
+    assert_eq!(
+        stats.clear_collisions, 6,
+        "six of them share their set bits with another source of the same tile type that wants \
+         different bits clear. Those are indistinguishable in a finished bitstream whatever is \
+         recorded, so only what the two agree about is kept and the number is pinned here rather \
+         than hidden: it is what the check in `dropped_clear_bits` cannot see"
+    );
     assert_eq!(stats.luts, 16, "eight per composition that has a PLC2");
+    assert_eq!(stats.ffs, 16, "and eight flip-flops beside them");
     assert_eq!(
         stats.references_off_the_grid, 3840,
         "a neighbour's wire beyond the edge of the die, which is not an error"
@@ -384,6 +448,7 @@ fn the_database_describes_one_part_of_the_ecp5_family() {
     assert!(text.contains("configuration bits: 4476704"), "{text}");
     assert!(text.contains("tiles: 4312"), "{text}");
     assert!(text.contains("programmable connections: 171632"), "{text}");
+    assert!(text.contains("clock networks: 16"), "{text}");
 
     // And what the graph costs, which is what decides whether a whole die
     // fits. It does, comfortably, which is the surprise: the 7-series
@@ -395,10 +460,15 @@ fn the_database_describes_one_part_of_the_ecp5_family() {
         1_096_425,
         "467 globals and the rest tile wires"
     );
-    assert_eq!(graph.pips.len(), 8_211_900);
+    assert_eq!(
+        graph.pips.len(),
+        8_211_900 + 58_928,
+        "the declared connections, plus the clock network's implicit joins"
+    );
     assert_eq!(
         graph.dangling, 53_632,
-        "edges that leave the grid, which happens at all four edges"
+        "edges that leave the grid, which happens at all four edges — and not one of the clock \
+         network's joins, every one of which was checked against the grid before it was declared"
     );
     assert_eq!(
         graph.bit_patterns(),
@@ -407,7 +477,12 @@ fn the_database_describes_one_part_of_the_ecp5_family() {
     );
     assert_eq!(
         graph.site_counts(),
-        vec![("io".to_owned(), 120), ("lut".to_owned(), 24_288)]
+        vec![
+            ("ff".to_owned(), 24_288),
+            ("gb".to_owned(), 56),
+            ("io".to_owned(), 120),
+            ("lut".to_owned(), 24_288)
+        ]
     );
     // A ratio between two sizes in one process, not a wall clock: the
     // whole-die graph is under a kilobyte per node, which is what makes it
@@ -1346,5 +1421,513 @@ fn the_bitstream_decodes_back_to_the_arcs_the_router_chose() {
             .collect::<Vec<_>>(),
         vec!["3V3", "3V3"],
         "bank 1 for the LEDs and bank 3 for the button"
+    );
+}
+
+/// The clock network's geometry, as `globals.json` states it, and what a
+/// position resolves to through it.
+///
+/// This is the one file of the database whose contents cannot be checked
+/// against anything else, because it says the thing `bits.db` leaves out:
+/// which tile a clock's wires belong to. So the numbers are written down
+/// here, and `what_lattices_own_packer_writes_for_a_clock` checks them
+/// against a bitstream Lattice's own packer wrote, which is the only
+/// independent evidence there is.
+#[test]
+fn the_clock_network_is_the_geometry_globals_json_states() {
+    let Some(fabric) = open() else { return };
+    let clocks = &fabric.clocks;
+
+    // Sixteen networks, read from the database rather than assumed: the set
+    // of `n` for which every quadrant offers a `G_<quadrant>PCLK<n>`.
+    assert_eq!(clocks.indices, (0..16).collect::<Vec<u32>>());
+
+    // Four quadrants, splitting the 73 x 51 grid at column 32 and row 26.
+    assert_eq!(
+        clocks.quadrants,
+        vec![
+            ("LL".to_owned(), (0, 26, 31, 50)),
+            ("LR".to_owned(), (32, 26, 72, 50)),
+            ("UL".to_owned(), (0, 0, 31, 25)),
+            ("UR".to_owned(), (32, 0, 72, 25)),
+        ]
+    );
+
+    // Four tap columns, each driving a run of columns to its left and a run
+    // to its right. The two runs of one tap are adjacent and no tap crosses
+    // a quadrant boundary, which is what lets a position resolve to exactly
+    // one tap and one quadrant.
+    assert_eq!(
+        clocks.taps,
+        vec![
+            (4, (0, 3, 4, 12)),
+            (22, (13, 21, 22, 31)),
+            (42, (32, 41, 42, 50)),
+            (60, (51, 59, 60, 72)),
+        ]
+    );
+
+    // Eight spines, one per (quadrant, tap column), each one column west of
+    // its tap and on the quadrant's middle row.
+    assert_eq!(
+        clocks.spines,
+        vec![
+            ("LL".to_owned(), 4, (3, 37)),
+            ("LL".to_owned(), 22, (21, 37)),
+            ("LR".to_owned(), 42, (41, 37)),
+            ("LR".to_owned(), 60, (59, 37)),
+            ("UL".to_owned(), 4, (3, 13)),
+            ("UL".to_owned(), 22, (21, 13)),
+            ("UR".to_owned(), 42, (41, 13)),
+            ("UR".to_owned(), 60, (59, 13)),
+        ]
+    );
+
+    // Every column of the die resolves to one tap and one side, and every
+    // position to one quadrant. That is not a property the file states —
+    // two runs could overlap, or a column could fall outside all four — so
+    // it is checked rather than read.
+    for x in 0..73 {
+        assert!(clocks.tap_of(x).is_some(), "column {x} has no tap");
+        for y in 0..51 {
+            assert!(
+                clocks.quadrant_of(x, y).is_some(),
+                "(col {x}, row {y}) is in no quadrant"
+            );
+        }
+    }
+    // And the answers for the columns the clocked design's flip-flops are
+    // in, which is where a wrong tap would put the branch bits.
+    assert_eq!(clocks.tap_of(50), Some((42, 'R')));
+    assert_eq!(clocks.tap_of(51), Some((60, 'L')));
+    assert_eq!(clocks.tap_of(4), Some((4, 'R')));
+    assert_eq!(clocks.tap_of(3), Some((4, 'L')));
+    assert_eq!(clocks.quadrant_of(50, 5), Some("UR"));
+    assert_eq!(clocks.quadrant_of(3, 40), Some("LL"));
+
+    // The network index a branch wire names, which is what says which of
+    // the sixteen a clock ended up on.
+    assert_eq!(trellis::ClockNetwork::branch_index("G_HPBX0000"), Some(0));
+    assert_eq!(trellis::ClockNetwork::branch_index("R_HPBX1500"), Some(15));
+    assert_eq!(trellis::ClockNetwork::branch_index("V02N0701"), None);
+    assert_eq!(trellis::ClockNetwork::branch_index("G_HPRX0000"), None);
+}
+
+/// **What Lattice's own packer writes for a clock, asked in full.**
+///
+/// This is the question that found `BANK.VCCIO` and `PULLMODE`, asked again
+/// for the clock network: not "what differs between our bitstream and the
+/// reference" but "what does `ecppack` write, in full, for a clock arriving
+/// on a pad, reaching a global network and clocking a flip-flop, and do we
+/// write all of it?" A diff only finds disagreements about things already
+/// emitted; it is silent about things never emitted at all, and both
+/// previous misses were of the second kind.
+///
+/// `analyzer.bit` is the one of Great Scott Gadgets' three bitstreams that
+/// is clocked, and it uses **two** globals. Per global it writes:
+///
+/// | | |
+/// |---|---|
+/// | the buffer's input mux | `G_LDCC<n>CLKI <- …`, one arc in `LMID_0` |
+/// | the centre mux | `G_<quadrant>PCLK<g> <- G_HPFE<n>00`, in **all four** quadrants |
+/// | the spine | `G_VPTX<g>00 <- G_HPRX<g>00`, per spine it reaches |
+/// | the tap | `L_`/`R_HPBX<g>00 <- G_VPTX<g>00`, per row with a sink |
+/// | the tile | `CLK<c> <- G_HPBX<g>00`, per logic tile |
+///
+/// and — the part a diff could never have produced — **nothing for the
+/// buffer itself.** There is no `DCC_*.MODE` anywhere in the file. nextpnr's
+/// `write_dcc` writes `DCC_<x><n>.MODE = DCCA` only when the cell has a
+/// clock enable; `NONE` is the field's default and costs no bits, so an
+/// ungated buffer is a wire. That is why `trellis` declares one as a bel
+/// with no configuration rather than hunting for a bit to set.
+#[test]
+fn what_lattices_own_packer_writes_for_a_clock() {
+    let Some(root) = chipdb() else { return };
+    let Some(bytes) = reference("analyzer") else {
+        return;
+    };
+    let db = trellis::open(&Disk(root), "", PART).unwrap();
+    let stream = Ecp5Stream::parse(&bytes, &formats).unwrap();
+    let decoded = db.decode(&stream.cram);
+    let fabric = db.load(&TrellisOptions::new()).unwrap();
+
+    // Two globals, and each one reaches all four quadrants' centre muxes.
+    // nextpnr's `route_onto_global` loops over the quadrants deliberately,
+    // whether the design needs them or not.
+    let centres: Vec<((u32, u32), &str, &str)> = decoded
+        .arcs
+        .iter()
+        .filter(|(_, to, _)| to.contains("PCLK") && !to.contains("CIB"))
+        .map(|(at, to, from)| (*at, to.as_str(), from.as_str()))
+        .collect();
+    assert_eq!(
+        centres,
+        vec![
+            ((31, 13), "G_ULPCLK0", "G_HPFE0600"),
+            ((31, 13), "G_ULPCLK1", "G_HPFE0000"),
+            ((31, 37), "G_LLPCLK0", "G_HPFE0600"),
+            ((31, 37), "G_LLPCLK1", "G_HPFE0000"),
+            ((32, 13), "G_URPCLK0", "G_HPFE0600"),
+            ((32, 13), "G_URPCLK1", "G_HPFE0000"),
+            ((32, 37), "G_LRPCLK0", "G_HPFE0600"),
+            ((32, 37), "G_LRPCLK1", "G_HPFE0000"),
+        ],
+        "one centre mux per quadrant, at the four positions the grid puts them"
+    );
+
+    // The spine arcs land on exactly the positions `globals.json` names, and
+    // nowhere else. This is what turns the spine table from something read
+    // into something measured.
+    let spines: std::collections::BTreeSet<(u32, u32)> = decoded
+        .arcs
+        .iter()
+        .filter(|(_, to, from)| to.starts_with("G_VPTX") && from.starts_with("G_HPRX"))
+        .map(|(at, _, _)| *at)
+        .collect();
+    let named: std::collections::BTreeSet<(u32, u32)> =
+        fabric.clocks.spines.iter().map(|(_, _, at)| *at).collect();
+    assert!(
+        spines.is_subset(&named),
+        "a spine arc at a position `globals.json` does not name: {:?}",
+        spines.difference(&named).collect::<Vec<_>>()
+    );
+    assert_eq!(spines.len(), 8, "both globals reach all four quadrants");
+
+    // Every branch driver is in a tap column. One in the wrong column would
+    // mean the tap table is wrong and every branch bit of every design this
+    // flow builds is in the wrong place.
+    let mut taps = 0usize;
+    for (at, to, from) in &decoded.arcs {
+        if !from.starts_with("G_VPTX") || !to.contains("HPBX") {
+            continue;
+        }
+        taps += 1;
+        assert!(
+            fabric.clocks.taps.iter().any(|(col, _)| *col == at.0),
+            "a branch driver at column {}, which is not a tap column",
+            at.0
+        );
+    }
+    assert!(taps > 100, "{taps} branch drivers");
+
+    // And the finding: the buffer costs nothing. Not one `DCC_*.MODE` in the
+    // whole file, although two of its buffers are carrying a global.
+    let modes: Vec<&str> = decoded
+        .enums
+        .iter()
+        .filter(|(_, field, _)| field.starts_with("DCC_"))
+        .map(|(_, field, _)| field.as_str())
+        .collect();
+    assert!(
+        modes.is_empty(),
+        "`ecppack` wrote a DCC mode after all: {modes:?}"
+    );
+    // The two buffers it does use, named by their input mux, so the claim
+    // above is about a file that really does have a clock in it.
+    let inputs: Vec<&str> = decoded
+        .arcs
+        .iter()
+        .filter(|(_, to, _)| to.contains("DCC") && to.ends_with("CLKI"))
+        .map(|(_, to, _)| to.as_str())
+        .collect();
+    assert_eq!(inputs, vec!["G_LDCC0CLKI", "G_LDCC6CLKI"]);
+}
+
+/// The clocked milestone: `clock_blink.v`, and every claim its header makes
+/// about what reaches the part.
+///
+/// The header says a person should see two LEDs trading places at 0.89 Hz.
+/// Nothing here can check that — that is what a person is for — so what is
+/// checked is everything between the Verilog and the bits:
+///
+/// 1. the design places and routes **completely**, and every sink walks back
+///    to its driver;
+/// 2. every flip-flop's clock arrives on a **global network** and not through
+///    interconnect that happens to reach a clock mux;
+/// 3. the whole path is the one `ClockNetwork` describes — buffer, centre
+///    mux, spine, tap, branch — at the positions `globals.json` gives;
+/// 4. no bit an arc needs **clear** has been set by anything else;
+/// 5. and every bit of the finished image decodes back, through the same
+///    records the router read, into exactly the arcs the router chose.
+#[test]
+#[cfg(all(feature = "verilog", feature = "synth"))]
+fn the_clocked_design_routes_and_configures_what_its_header_promises() {
+    let Some(root) = chipdb() else { return };
+    let db = trellis::open(&Disk(root), "", PART).unwrap();
+    let fabric = db.load(&TrellisOptions::new()).unwrap();
+    let (bits, stream, pads, report, _, routed) = compile(
+        &fabric,
+        "testdata/fpga/cynthion/clock_blink.v",
+        "testdata/fpga/cynthion/clock_blink.rcf",
+    );
+
+    // ---- 1. it fits and it routes ----
+    assert_eq!(pads, 7, "one clock in and six LEDs out");
+    assert_eq!(
+        routed.ffs, 26,
+        "a 26-bit counter, one flip-flop per bit, each configured by its own parameters"
+    );
+    assert_eq!(
+        report.signals, 100,
+        "every signal of the design, and `compile` has already walked each sink back to its driver"
+    );
+
+    // ---- 2. every clock on the network ----
+    assert!(
+        routed.clocks.off_network.is_empty(),
+        "these flip-flops' clocks came through general interconnect: {:?}",
+        routed.clocks.off_network
+    );
+    assert_eq!(
+        routed.clocks.networks.values().sum::<usize>(),
+        26,
+        "26 clock pins accounted for"
+    );
+    assert_eq!(
+        routed.clocks.networks.len(),
+        1,
+        "one clock, so one network: {:?}",
+        routed.clocks.networks
+    );
+
+    // ---- 3. the path is the one the network describes ----
+    //
+    // Read off the bits rather than off the routing, so this is a statement
+    // about the file and not about the router's bookkeeping.
+    let decoded = db.decode(&stream.cram);
+    let index = *routed.clocks.networks.keys().next().unwrap();
+    let branch = format!("G_HPBX{index:02}00");
+    let arcs: Vec<(&(u32, u32), &str, &str)> = decoded
+        .arcs
+        .iter()
+        .map(|(at, to, from)| (at, to.as_str(), from.as_str()))
+        .collect();
+    let has = |sink: &str, source: &str| -> bool {
+        arcs.iter()
+            .any(|(_, to, from)| to.contains(sink) && from.contains(source))
+    };
+    // The buffer's input, fed from a `PCLKCIB` wire — which is how a clock
+    // on a pad that is *not* a dedicated clock pad reaches the centre. A8 is
+    // `PCLKC0_0`, the complement half of bank 0's pair, and only the `PCLKT`
+    // half has the dedicated `JINCK` path.
+    assert!(
+        has("DCCCLKI", "PCLKCIB") || has("DCC", "PCLKCIB"),
+        "no buffer input fed from a PCLKCIB wire:\n{}",
+        decoded.to_text()
+    );
+    // The centre mux, the spine, the tap and the branch, each at a position
+    // the network's own tables name.
+    let centre: Vec<&(u32, u32)> = arcs
+        .iter()
+        .filter(|(_, to, _)| to.contains("PCLK") && !to.contains("CIB"))
+        .map(|(at, _, _)| *at)
+        .collect();
+    assert_eq!(
+        centre.len(),
+        1,
+        "one quadrant's centre mux, since every flip-flop is in one quadrant"
+    );
+    let spines: Vec<&(u32, u32)> = arcs
+        .iter()
+        .filter(|(_, to, from)| to.starts_with("G_VPTX") && from.starts_with("G_HPRX"))
+        .map(|(at, _, _)| *at)
+        .collect();
+    assert!(!spines.is_empty(), "no spine arc");
+    for at in &spines {
+        assert!(
+            fabric
+                .clocks
+                .spines
+                .iter()
+                .any(|(_, _, position)| position == *at),
+            "a spine arc at {at:?}, which `globals.json` does not name"
+        );
+    }
+    let mut branch_tiles = 0usize;
+    for (at, to, from) in &arcs {
+        if !from.starts_with("G_VPTX") || !to.contains("HPBX") {
+            continue;
+        }
+        branch_tiles += 1;
+        let side = to.chars().next().unwrap();
+        // The tap column and the side both come out of the table, and the
+        // arc has to agree with both.
+        assert!(
+            fabric.clocks.taps.iter().any(|(col, _)| *col == at.0),
+            "a branch driver at column {}, which is not a tap column",
+            at.0
+        );
+        assert!(side == 'L' || side == 'R', "{to}");
+    }
+    assert!(branch_tiles > 0, "no branch driver");
+    // And the last hop into each logic tile that holds a flip-flop.
+    let into_tiles: Vec<&(u32, u32)> = arcs
+        .iter()
+        .filter(|(_, to, from)| (*to == "CLK0" || *to == "CLK1") && *from == branch.as_str())
+        .map(|(at, _, _)| *at)
+        .collect();
+    assert!(
+        into_tiles.len() >= 4,
+        "the counter is spread over more tiles than that: {into_tiles:?}"
+    );
+
+    // ---- 4. nothing has stolen a bit an arc needs clear ----
+    assert!(
+        routed.dropped.is_empty(),
+        "a bit an arc of this design needs clear was set by something else: {:?}",
+        routed.dropped
+    );
+
+    // ---- 5. and the bits say what the router chose ----
+    assert_eq!(
+        decoded.bits,
+        stream.cram.count_ones(),
+        "the decoder and the writer disagree about how many bits are set"
+    );
+    assert_eq!(
+        decoded.unexplained, 0,
+        "{} of {} bit(s) belong to no feature the database names",
+        decoded.unexplained, decoded.bits
+    );
+    let (selected, unresolved) = db.resolved_arcs(&decoded);
+    assert!(unresolved.is_empty(), "{unresolved:?}");
+    assert_eq!(
+        selected,
+        routed.wires,
+        "the bits select connections the router did not choose, or fail to select ones it did. \
+         The router took {} arc(s) that cost bits and the bitstream says {}",
+        routed.wires.len(),
+        selected.len()
+    );
+    assert!(
+        selected.len() > 600,
+        "{} arcs cost bits, which is fewer than a routed counter takes",
+        selected.len()
+    );
+    let _ = bits;
+}
+
+/// The flip-flop settings a `TRELLIS_FF` costs, and the one of them that
+/// would leave a whole design frozen if it were missed.
+///
+/// `SLICE<l>.CEMUX` defaults to `CE` — take the clock enable from the
+/// fabric — so a bitstream that leaves the field alone has every flip-flop
+/// gated by a wire nothing drives. It is the same shape of omission as the
+/// bank rail and the pull mode: a database default that is wrong for the
+/// design, in a field the design never mentions, with no symptom any
+/// structural check could see.
+#[test]
+#[cfg(all(feature = "verilog", feature = "synth"))]
+fn a_flip_flops_settings_are_the_ones_lattices_own_packer_writes() {
+    let Some(root) = chipdb() else { return };
+    let db = trellis::open(&Disk(root), "", PART).unwrap();
+    let fabric = db.load(&TrellisOptions::new()).unwrap();
+    let (_, stream, _, _, _, routed) = compile(
+        &fabric,
+        "testdata/fpga/cynthion/clock_blink.v",
+        "testdata/fpga/cynthion/clock_blink.rcf",
+    );
+    assert_eq!(routed.ffs, 26);
+    let decoded = db.decode(&stream.cram);
+    let fields: std::collections::BTreeSet<(&str, &str)> = decoded
+        .enums
+        .iter()
+        .map(|(_, field, value)| (field.as_str(), value.as_str()))
+        .collect();
+    // The four that cost bits, for at least one slice. `LSRMODE`, `GSR`'s
+    // `ENABLED`, `CLK<n>.CLKMUX = CLK`, `LSR<n>.LSRMUX = LSR` and
+    // `LSR<n>.SRMODE = LSR_OVER_CE` are each a field's own default and cost
+    // nothing, which is why they are not here: the list is what a bitstream
+    // *pays* for, and a default that cost a bit would show up as a
+    // regression here.
+    for wanted in [
+        ("SLICEA.CEMUX", "1"),
+        ("SLICEA.REG0.SD", "0"),
+        ("SLICEA.REG0.REGSET", "RESET"),
+        ("SLICEA.GSR", "DISABLED"),
+    ] {
+        assert!(
+            fields.contains(&wanted),
+            "{wanted:?} is not in the decoding"
+        );
+    }
+    // And nothing asked for an inverted clock or an asynchronous reset,
+    // which are the two settings `configure_registers` refuses rather than
+    // writing into a mux the routing does not identify.
+    assert!(
+        !fields
+            .iter()
+            .any(|(field, value)| field.ends_with("CLKMUX") && *value == "INV"),
+        "{fields:?}"
+    );
+}
+
+/// The check that makes a dropped clear bit sound, shown failing.
+///
+/// A `.mux` source that wants a bit clear leaves nothing to write, so the
+/// loader does not record it on the pip — and the only thing "honouring" it
+/// can mean is noticing when another feature of the same tile has set it.
+/// This sets one such bit by hand and asserts that the check says so, which
+/// is the only way to know the check would fire: the designs this flow
+/// builds do not collide, so a green run of them proves nothing about
+/// whether anything is looking.
+#[test]
+#[cfg(all(feature = "verilog", feature = "synth"))]
+fn a_bit_an_arc_needs_clear_is_noticed_when_something_else_sets_it() {
+    let Some(root) = chipdb() else { return };
+    let db = trellis::open(&Disk(root), "", PART).unwrap();
+    let fabric = db.load(&TrellisOptions::new()).unwrap();
+    let (mut bits, _, _, _, _, routed) = compile(
+        &fabric,
+        "testdata/fpga/cynthion/clock_blink.v",
+        "testdata/fpga/cynthion/clock_blink.rcf",
+    );
+    assert!(
+        routed.dropped.is_empty(),
+        "the design as built already collides: {:?}",
+        routed.dropped
+    );
+
+    // The arcs of this design that have a bit they want clear at all. On a
+    // clocked design there are some — a centre mux encodes its source as a
+    // six-bit code, five bits of which it wants clear — and on a
+    // combinational one there are none, which is exactly what
+    // `docs/fpga-trellis.md` says and why this could not be tested before.
+    let mut coded: Vec<((u32, u32), ConfigBit)> = Vec::new();
+    for route in routed.routing.routes() {
+        for id in &route.pips {
+            let pip = routed.graph.pip(*id);
+            let mut key = routed.graph.pip_bits(*id).to_vec();
+            key.sort_unstable();
+            let Some(ty) = fabric.arch.tile_index_at(pip.tile.0, pip.tile.1) else {
+                continue;
+            };
+            if let Some(clear) = fabric.clears.get(&(ty, key))
+                && let Some(bit) = clear.first()
+            {
+                coded.push((pip.tile, *bit));
+            }
+        }
+    }
+    assert!(
+        !coded.is_empty(),
+        "this design takes no arc with a bit it wants clear, so there would be nothing to check"
+    );
+
+    // Set one of them, which is what a second feature written into the same
+    // tile would do, and the arc silently becomes a different one.
+    let (at, bit) = coded[0];
+    bits.set(at, bit).unwrap();
+    let problems = fabric.dropped_clear_bits(&routed.graph, &routed.routing, &bits);
+    assert_eq!(
+        problems.len(),
+        1,
+        "one stolen bit should be one complaint: {problems:?}"
+    );
+    assert!(
+        problems[0].contains(&format!("X{}Y{}", at.0, at.1))
+            && problems[0].contains(&format!("{}.{}", bit.row, bit.col)),
+        "{}",
+        problems[0]
     );
 }

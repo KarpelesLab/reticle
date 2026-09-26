@@ -15,8 +15,8 @@
 //! can be wrong about a wire and nothing notices, while a pin whose wire
 //! the type does not declare is a pad or a LUT that [`super`] leaves out.
 //!
-//! What is kept here is the part that is still not derivable and the two
-//! things the flip-flop will need:
+//! What is kept here is the part that is still not derivable, plus the
+//! flip-flop table this module used to be the only home of:
 //!
 //! - **which pin of a bel a wire is.** `bits.db` names wires and the bits
 //!   that join them; it does not say that `A0_SLICE` is a lookup table's
@@ -24,14 +24,21 @@
 //!   That mapping is `libtrellis`' own `Bels.cpp` and `Chip.cpp`, and
 //!   [`super`] carries the same two facts inline where it needs them. This
 //!   is where they are written out with their provenance.
-//! - **the flip-flop's settings**, which nothing uses yet because nothing
-//!   clocked can be placed: there is no clock network in [`super`].
+//! - **the flip-flop's settings**, which are no longer unexercised:
+//!   [`super::FF_PINS`] is the pin list [`super`] declares a flip-flop
+//!   from and [`super::TrellisFabric::configure_registers`] writes the
+//!   fields, taking each one's value from the cell's parameters rather than
+//!   from the table below. The two agree, and the difference that matters
+//!   is that [`super`]'s version is checked: a flip-flop is not declared
+//!   unless the tile type owns all five wires and its `bits.db` can express
+//!   "take the data from the fabric".
 //!
 //! Two consequences, and both matter:
 //!
 //! - **Nothing in this module has been checked against a part.** The tile
-//!   rules in [`super`]'s header have been, for both edges it describes;
-//!   the flip-flop table below has not.
+//!   rules in [`super`]'s header have been, for both edges it describes,
+//!   and so has the clock network; what the table below says about the
+//!   flip-flop has been *superseded* rather than verified.
 //! - [`top_pad_tile`] and [`top_pic_tile`] describe the same rule [`super`]
 //!   implements for the top edge, and [`bels_for`]'s sentence about a
 //!   `PIOT1` contributing no bel **is now the right one**: a `PIOT1` holds
@@ -47,9 +54,9 @@
 //! anything sequential without packing a lookup table and a flip-flop onto
 //! one site. Here `M<n>_SLICE` is a mux output the interconnect drives, and
 //! `SLICE<l>.REG<n>.SD = 0` selects it over the lookup table's output, so a
-//! flip-flop places and routes on its own. [`super`] declares the `M<n>`
-//! wires and their pips already; what is missing is a clock to reach the
-//! `CLK<n>` ones.
+//! flip-flop places and routes on its own — which is what it now does:
+//! [`super`] declares the `M<n>` wires and their pips, and the clock that
+//! reaches the `CLK<n>` ones comes off [`super::ClockNetwork`].
 
 /// One bel a tile type contributes, at the position that tile sits.
 #[derive(Clone, Debug, PartialEq, Eq)]
