@@ -24,8 +24,15 @@ field(s) and 72 word(s), with 0 unexplained, and the arcs they select are
 exactly the 693 the router chose
 ```
 
-**Whether the LEDs blink has not been watched.** It needs a person, for the
-reason the rest of this file exists, and the person has not been asked yet.
+**Somebody watched, and they blink.** On 2026-09-27 the board's owner
+reported the two LEDs blinking and swapping between each other, at a rate
+that looked right — which was the point of choosing 0.89 Hz, since a
+counter bit out by one would read 0.45 or 1.8 Hz and be obvious by hand.
+
+So a **clocked** design works on this part. That is the last of the four
+things this backend needed: pads, interconnect, lookup tables and now
+flip-flops driven from a global clock network, each confirmed by somebody
+looking at the board rather than by anything this machine can check.
 
 ### What a person should look for
 

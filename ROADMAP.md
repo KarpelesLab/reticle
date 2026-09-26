@@ -507,10 +507,14 @@ FPGA:
       tile they cross — and `clock_blink.v`, a 26-bit counter off the
       board's own 60 MHz oscillator blinking two LEDs in antiphase at
       0.89 Hz, was loaded into the same board and accepted, `DONE`, status
-      `0x00200100`; **nobody has looked at those LEDs yet**. All 2491 of
-      its bits decode back into exactly the 693 arcs the router chose, and
-      all 26 flip-flops' clocks came off a global network rather than off
-      data wires. See `docs/fpga-trellis.md`.
+      `0x00200100`, and on 2026-09-27 the owner **watched them blink and
+      swap at a rate that looked right** — 0.89 Hz was picked because a
+      counter bit out by one reads 0.45 or 1.8 Hz and is obvious by hand.
+      All 2491 of its bits decode back into exactly the 693 arcs the router
+      chose, and all 26 flip-flops' clocks came off a global network rather
+      than off data wires. With that the ECP5 backend has pads,
+      interconnect, lookup tables and clocked flip-flops, each confirmed on
+      a board. See `docs/fpga-trellis.md`.
 
 ASIC:
 - [x] Liberty (`.lib`) parser: cells, pins, functions, timing tables.

@@ -191,9 +191,11 @@ On the same day it gained the **global clock network**, and
 60 MHz oscillator, blinking two LEDs in antiphase at 0.89 Hz — was loaded
 into the same part and accepted, with every one of its 26 flip-flops clocked
 off a global network and all 2491 of its configuration bits decoding back
-into exactly the arcs the router chose. **Nobody has looked at those LEDs
-yet.** [`docs/fpga-trellis.md`](docs/fpga-trellis.md) says what was checked
-in place of looking, and what a person should watch for when they do.
+into exactly the arcs the router chose. The owner watched them **blink and
+swap, at a rate that looked right** — 0.89 Hz was chosen because a counter
+bit out by one reads 0.45 or 1.8 Hz and is obvious by hand.
+[`docs/fpga-trellis.md`](docs/fpga-trellis.md) says what was checked
+besides looking.
 
 Sources of one language are elaborated together, so a testbench and the
 modules it instantiates go on one command line. A design already in the
