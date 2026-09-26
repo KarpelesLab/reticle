@@ -1,5 +1,465 @@
 # A real Lattice ECP5, and a real `.bit`
 
+## A bidirectional pad has been built, and loaded into a part
+
+On 2026-09-27 `testdata/fpga/cynthion/bidir_loopback.v` — one pad that
+**drives** while the USER button is held, is **released to high impedance**
+when it is not, and is **read back through its own input buffer** onto other
+LEDs — was compiled by this flow and loaded into the LFE5U-12F of the Great
+Scott Gadgets Cynthion r1.4 attached to the machine this was written on.
+**The part accepted it and asserted `DONE`** with no fault bit set: status
+`0x00200100`, the same as every run before it, which is exactly why `DONE`
+is not the claim being made. The board went on enumerating at the same USB
+serial number afterwards, on the same bus and device number.
+
+It displaced `clock_blink.bit`, which the part had been holding since the
+previous milestone, and **only the volatile configuration SRAM was written** —
+a power cycle reloads the analyzer gateware from the board's flash, which
+nothing in this project touches. `docs/programming.md` and
+`src/program/lattice.rs`'s `NOT_SHIFTED` are where that is made checkable
+rather than promised.
+
+What the flow reports for it:
+
+```
+2557 configuration bit(s) set, 8 pad(s), 72 lookup table(s) and 26
+flip-flop(s) configured, 26/24288 ff, 1/56 gb, 8/120 io, 72/24288 lut
+routed 102 of 102 signal(s) with 1126 pip(s) over 1228 wire(s), and every
+sink was walked back to its driver
+26 flip-flop(s), every clock on a global network: G_HPBX0000 to 26 of them
+all 2557 set bit(s) decode back through the database into 722 arc(s), 190
+field(s) and 72 word(s), with 0 unexplained, and the arcs they select are
+exactly the 722 the router chose
+```
+
+So **100% of the bitstream decodes, with nothing left over**, which is the
+same standard `button_led` (114 bits) and `clock_blink` (2491 bits) were held
+to.
+
+That is the first bidirectional pad this project has built on any family.
+The 7-series backend declares `OBUFT` and `IOBUF` and has never routed a
+tristate; until now `configure_io` read the direction off the netlist and
+built an input or an output, and an `inout` port got an output with a warning.
+
+**Nobody has looked at the board yet.** Everything below "What a person
+should look for" is a prediction written down before the observation, which
+is the order the previous three milestones were done in and the only order in
+which the observation is worth anything. When somebody has pressed the
+button, this section gets the paragraph the two below it have.
+
+### Which pad, and why it is safe to drive
+
+The bidirectional pad is ball **E13**, which is `led_n[0]` — the LED at the
+end of the `FPGA LEDs` row farthest from the USER button, the diode `D7`.
+Driving a ball that something else on the board also drives can damage
+hardware, so the reason this one is free is written out:
+
+1. **Great Scott Gadgets' own platform file mentions E13 exactly once**, in
+   `cynthion/python/src/gateware/platform/cynthion_r1_4.py`, as `led[0]` of
+   `*LEDResources(pins="E13 C13 B14 A15 D12 C11", …)`. Nothing else in that
+   file claims it: not a ULPI bus, not the HyperRAM, not a Type-C
+   controller, not a pseudo-supply pin, not a PMOD or mezzanine pin.
+2. **The schematic says what is on the net and it is passive.** In
+   `indicators_buttons.kicad_sch` all six LED anodes are on one wire up to
+   the `+3V3` symbol and each cathode goes through a series resistor to the
+   FPGA. So the only things on E13 are a resistor and a diode to a supply
+   rail, and **the FPGA is the only driver**, which is the whole question.
+3. **This project has already driven it low** — `leds.v`, `button_led.v` and
+   `clock_blink.v`, each watched by a person on this board. Releasing a pin
+   is strictly less demanding than driving it.
+4. **A released E13 settles high on its own, and nothing is stressed.** The
+   only current path is +3V3 through the resistor and the LED *into* the
+   pad, so the board can only pull the pin up, never down; with the internal
+   pull-up pulling the same way the pad sits at VCCIO, no current flows
+   through the LED, and the readback is a firm one. That is also why the LED
+   is dark when the pad is released rather than dimly lit.
+
+The textbook answer would have been a **PMOD** pin — PMOD A is C9 B9 D11 C12
+C8 D8 D9 C10 and PMOD B is B4 B5 B6 B7 C5 A5 A6 A7, all of them `dir="io"`
+user IO on the top edge — and it was deliberately **not** taken: those go to
+a 2×6 header and nothing this machine can read says whether anything is
+plugged into it. A pin whose net is fully described by a schematic and has no
+other driver is a better bet than a pin that is probably unconnected.
+
+For the record, the only ball on the two edges this backend describes that
+the platform file never mentions at all is **B3** (top edge, column 4, side
+B, bank 0). It is a worse choice for the same reason turned around: the
+file's silence is not a statement that the ball is free.
+
+### What a person should look for
+
+**Press and hold the button silkscreened `USER`.** The other two tactile
+buttons end the experiment rather than perform it: `PROG` reloads the FPGA
+from flash and `RESET` resets the debug microcontroller.
+
+Watch **all six** FPGA LEDs, counted from the end of the row farthest from
+that button (`led_n[0]` is that end, the diode `D7`; the row has one
+silkscreen legend, `FPGA LEDs`, and no digits):
+
+| | LED 0 (far end) | LED 1 | LED 2 | LED 3 | LED 4, 5 |
+|---|---|---|---|---|---|
+| nothing touched | dark | dark | **lit, steady** | blinking | dark |
+| `USER` held | blinking | blinking, **with LED 0** | blinking, opposite | blinking, **with LED 0** | dark |
+
+So: **one LED blinks alone until the button is held, and then four of the six
+are moving.** LED 2 is the one to look at first, because it is lit and *still*
+with nothing pressed and starts moving the moment a finger arrives. LED 1 and
+LED 2 are complements, so exactly one of the two is lit at every instant,
+whether the button is held or not — which is the steady state nothing else on
+this board produces.
+
+While the button is held, what a person sees at any instant is either **LEDs
+0, 1 and 3 lit with LED 2 dark**, or **LED 2 lit with 0, 1 and 3 dark**,
+alternating; with nothing pressed it is **LED 2 and LED 3** or **LED 2**
+alone.
+
+**At what rate.** 0.89 Hz — 0.56 s on, 0.56 s off, a little slower than one
+blink a second; ten full blinks take 11.2 s. Bit 25 of a counter on the
+board's 60.000 MHz oscillator, so 2²⁵/60e6 = 0.5592 s, and a counter bit out
+by one would read 0.45 Hz or 1.8 Hz.
+
+**What LED 0 is.** LED 0 *is* the bidirectional pad. It is lit exactly while
+the pad is pulling its own pin low, which is while the button is held and the
+counter bit is zero. LED 1 is lit exactly while the **input buffer of that
+same pin** reads low. So LED 0 and LED 1 blinking in lockstep is the
+turnaround seen rather than inferred: what goes out comes back in.
+
+The observation is deliberately spelled with four LEDs rather than one,
+because each way of getting this wrong produces a different picture:
+
+| What would be wrong | What it would look like |
+|---|---|
+| the enable inverted | LED 0, 1, 2 move with nothing pressed and freeze when the button is held |
+| the tristate tied instead of routed | LED 0 and LED 1 blink whether or not anybody presses anything |
+| the pad never driven | LED 0 never lights and LED 2 never moves |
+| the input path dead | LED 1 and LED 2 never move, whatever LED 0 does |
+| `PULLMODE` left at the database's default | with nothing pressed LED 1 is lit and LED 2 dark — the other way round from the table — or the two flicker |
+| the clock stopped | LED 3 frozen |
+
+None of those is the table. And a design that merely *compiled* a
+bidirectional pad could not produce it: a pad that always drives cannot make
+LED 2 sit still, and a pad with no input path cannot make LED 1 move at all.
+
+### What was checked instead, since `DONE` is not evidence
+
+**1. Every bit of the bitstream was read back through Project Trellis' own
+database, and it says what the router said.** All 2557 bits, with **nothing
+left over**, and the set of connections the bits select — resolved back into
+the same wires and positions the router works in — is **exactly** the 722
+arcs the router chose. `reticle fpga --bitstream` runs that itself and
+refuses to write a bitstream that fails it.
+
+**2. The pad's own settings were read back out of the finished image** and
+they are `PIOB.BASE_TYPE = BIDIR_LVCMOS33` and `PIOB.PULLMODE = UP` at
+(col 63, row 0), which is where the top edge's rule puts side B of the ball
+at column 62.
+
+**3. The tristate is not tied, and that had to be asked of the pass rather
+than of the image.** `configure_io` writes `CIB.JB0MUX = 0` for every
+ordinary output, which holds the tristate wire low so the buffer always
+drives. For this pad a *signal* drives that wire, and the tie and the route
+are **one mux**, so the tie must not be written — writing it would be a
+second driver on the wire the router already drove. A finished bitstream
+cannot be asked whether a pad is tied, for exactly that reason, so
+`tests/fpga_trellis.rs::the_bidirectional_design_routes_and_configures_what_its_header_promises`
+runs `configure_io` into an empty bitmap of its own and asserts that E13's
+tie is absent **and that C13's, an ordinary output next door, is present**.
+
+**4. All three of the pad's wires carry a routed signal**, and the
+tristate's driver is the USER button's own pad: M14's buffer is at
+(col 72, row 32) on the right edge and E13's is at (col 62, row 0) on the
+top, so the tristate crosses the die.
+
+**5. The question was asked the other way round** — not "what differs" but
+"what does `ecppack` write, in full, for a bidirectional pad" — against
+`analyzer.bit`, which has **eight** of them. That is the section below, and
+it is where the one surprise is.
+
+### Everything Lattice's own packer writes for a bidirectional pad
+
+This is the third time this question has been asked this way round and it is
+the reason to keep asking. A diff against a reference only disagrees about
+settings already emitted; it is silent about settings never emitted at all,
+and `BANK.VCCIO` and an input's `PULLMODE` were both of the second kind with
+`DONE` high either way.
+
+There is a **direct oracle** for a bidirectional pad on this board. All three
+of Great Scott Gadgets' USB ports go through ULPI transceivers whose
+eight-bit data bus turns around, and their own `analyzer.bit` instantiates
+the auxiliary one. Amaranth's `ULPIResource` makes `data` a
+`Subsignal(dir="io")`, so `F16 G15 G16 H15 J15 J16 K15 K16` are eight
+bidirectional pads built by `ecppack` for this very part. All eight are on
+the **right** edge, which this backend describes.
+
+Per ball, `analyzer.bit` has:
+
+| Setting | Tile | Bits beyond the base type | Written here |
+|---|---|---|---|
+| `PIO<s>.BASE_TYPE = BIDIR_LVCMOS33` | the pad tile | — | yes |
+| `PIO<s>.BASE_TYPE = BIDIR_LVCMOS33` again | the second-copy tile | — | yes |
+| `PIO<s>.PULLMODE` | the pad tile | **one**, and it is the field's own | yes, always |
+| `PIO<s>.HYSTERESIS = ON` | the pad tile | **none**: the base type's own bits contain it | yes |
+| `PIO<s>.SLEWRATE = FAST` | the pad tile | one | **no**, and see "What remains" |
+| `BANK.VCCIO = 3V3` | `BANKREF<n>` | — | yes |
+| anything governing the **tristate** | — | **nothing at all** | nothing to write |
+
+`tests/fpga_trellis.rs::what_lattices_own_packer_writes_for_a_bidirectional_pad`
+asserts the first four rows bit by bit at absolute frame positions, for all
+eight balls, which is the same standard the LEDs and the button were held to.
+
+**The last row is the finding, and a diff could not have produced it.** The
+field that governs where a pad's tristate comes from is
+`PIO<s>.TRIMUX_TSREG`, in the second-copy tile, and its two values are
+`PADDT` — the wire the fabric drives — and `IOLTO`, the `IOLOGIC` tristate
+register. **`PADDT` is the default, so it costs no bits**, and it is exactly
+what a fabric-driven tristate means. nextpnr writes the field only when its
+packer moved a tristate flip-flop into `IOLOGIC`
+(`pio->params[id_TRIMUX_TSREG] = "IOLTO"` in `ecp5/pack.cc`), and the test
+asserts that **no `TRIMUX_TSREG` appears anywhere in the whole file**
+although eight of its pads are bidirectional. The same is true of
+`DATAMUX_ODDR`, `DATAMUX_OREG` and `DATAMUX_MDDR`, whose default `PADDO` is
+likewise free — `analyzer.bit` does write `DATAMUX_ODDR = IOLDO` on its
+HyperRAM pins, which are registered, and on no ULPI pin.
+
+So: **a bidirectional pad differs from an output by its base type and
+nothing else, and the tristate is a routed wire rather than a setting.** The
+question that found two bugs found nothing this time, and that is worth as
+much as the two finds: the next doubt about a bidirectional pad is not "a
+missing bit".
+
+The other half is what nextpnr does *not* write. `write_io` ties the tristate
+in the `CIB` under
+
+```cpp
+if (dir != "INPUT" && (ports.find(id_T) == ports.end() || ports.at(id_T).net == nullptr) &&
+    (ports.find(id_IOLTO) == ports.end() || ports.at(id_IOLTO).net == nullptr)) {
+    …
+    cc.tiles[cib_tile].add_enum("CIB." + cib_wirename + "MUX", "0");
+}
+```
+
+which is *exactly the complement* of a real bidirectional pad: the tie
+happens for an output and for a bidirectional pad whose `T` is unconnected,
+and never for one a signal drives. `configure_io` follows the same rule, from
+the pin rather than from the parameter. That half cannot be read off a
+finished bitstream, which is why point 3 above asks the pass instead.
+
+Two more rows of that table are worth their own sentence.
+
+**`PULLMODE` is the third `BANK.VCCIO`, and on a bidirectional pad the
+argument is stronger than on an input.** The field's default in `bits.db` is
+`DOWN`. On a pad that spends half its time released, the pull is the **only**
+thing deciding what it reads then — so a pad left at the default reads low
+whatever is on the pin, which looks exactly like a dead input path. This
+design asks for `UP` (`set_io -pullup yes`), which the `.dev` file turns into
+`PULLMODE="UP"` on the cell and `configure_io` reads back off there. The
+reference asks for `NONE` on its ULPI pins, which is right for a bus a
+transceiver drives and wrong for a pin with nothing on it.
+
+**`HYSTERESIS = ON` costs nothing here, and that is luck rather than
+design.** `BIDIR_LVCMOS33`'s own pattern on the top edge contains `F14B0`,
+which is the hysteresis bit, so writing the field adds no bits. It is written
+anyway, because nextpnr writes it for `dir == "INPUT" || dir == "BIDIR"` and
+because "we write what it writes" should stay literally true.
+
+### A third place where two features share one bit
+
+This file already had two: a `CIB`'s constant mux against the routing mux into
+the same wire, and a centre mux's six-bit source code. Here is the third, and
+it was found by trying to assert the obvious thing. ("What cannot be read
+back", below, is the fourth, and the only one of the four that is not handled;
+"The three things worth knowing if you change this" has all four in one
+table.)
+
+The one bit `OUTPUT_LVCMOS33` has that `BIDIR_LVCMOS33` does not is, on the
+top edge, `F7B0` — **which is also `PULLMODE`'s low bit.** `DOWN` is
+`!F7B0 !F8B0`, `NONE` is `F7B0`, `UP` is `F7B0 F8B0`; so on this family "an
+output" and "a pull that is not a pull-down" are the same bit, and an output
+pad gets `PULLMODE=NONE` for free whether it asked or not. The right edge
+spells that bit differently for each of its four sides — `F2B0` for side A of
+a `PICR1`, `F0B7` for side D — and the relation is the same on every one of
+them.
+
+Two consequences:
+
+- **A finished image cannot be asked whether a pad is an output.** A
+  bidirectional pad plus any pull is a strict superset of the output
+  pattern, and `TrellisDatabase::decode` resolves it by the longer match,
+  which is why it reads back `BIDIR_LVCMOS33` and not `OUTPUT_LVCMOS33`. The
+  test asserts the bits `BIDIR_LVCMOS33` has and the other two patterns lack,
+  which is the direction that *can* be asserted, and says so where it does it.
+- **The two settings have to be written into one tile without one clobbering
+  the other**, which is what they are: bits are OR-ed into a zeroed bitmap,
+  and `dropped_clear_bits` is what notices a feature whose bits another
+  feature wanted clear. It reports nothing for this design.
+
+### What cannot be read back: two bidirectional pads on one right-edge tile
+
+This was found by building the thing the milestone does not build — an
+**eight-bit** bus, in the ULPI shape, on the auxiliary transceiver's own
+balls — and it is the sharpest limitation this backend has.
+
+An eight-bit bidirectional bus on the **top** edge builds and decodes
+completely: 465 bits, 0 unexplained, every arc the router chose. On the
+**right** edge the same design is **refused**, with eight bits belonging to
+no feature — two per *pair* of bidirectional pads that share a pad tile:
+
+```
+error: 8 of this bitstream's 650 set bit(s) belong to no feature the
+database names, so nothing was written
+  F5B0 of PICR1 at (col 72, row 15)
+  F6B0 of PICR1 at (col 72, row 15)
+  …
+```
+
+The reason is the third shared-bit case again, one turn worse. On the right
+edge four PIOs share one pad tile, and there a **pseudo-differential** value
+of `PIO<s>.BASE_TYPE` reaches across the pair:
+
+| Value of `PIOA.BASE_TYPE` in `PICR1` | Bits |
+|---|---|
+| `BIDIR_LVCMOS33` | `F0B0 F3B1 F4B1 F5B0 F5B1 F6B0 F6B1 F7B0` — eight, all PIOA's |
+| `OUTPUT_LVCMOS33D` | `F0B0 F0B3 F1B3 F2B0 F3B1 F4B1 F5B1 F7B0 F8B3 F9B4` — **ten**, four of them **PIOB's** |
+
+With side B also bidirectional, PIOB's own base type and pull mode set
+`F0B3`, `F1B3`, `F8B3` and `F9B4`; PIOA's pull mode sets `F2B0`. So all ten
+bits of `OUTPUT_LVCMOS33D` are set, and `decode` — which resolves a field by
+the **longest** matching pattern, exactly as `libtrellis`' own
+`Tile::get_config` does — reports side A as a differential output it is not,
+and leaves `F5B0` and `F6B0`, the two bits only a bidirectional or an input
+pad wants.
+
+**Lattice's own packer produces a bitstream with the same property**, and
+that is measured rather than argued. `analyzer.bit` has F16 and G15 — sides A
+and B of (col 72, row 14) — as ULPI data pins, so both are bidirectional, and
+decoding it reports
+
+```
+(72, 15): PIOA.BASE_TYPE=OUTPUT_LVCMOS33D … PIOB.BASE_TYPE=BIDIR_LVCMOS33
+```
+
+with the same bits left over.
+`tests/fpga_trellis.rs::what_lattices_own_packer_writes_for_a_bidirectional_pad`
+asserts both halves of that, so the day it stops being true the test says so.
+
+So this is a limit of reading a `bits.db` back, not a wrong bitstream — the
+silicon decodes bits and `F5B0` set is not a state `OUTPUT_LVCMOS33D`
+produces; what `bits.db` cannot do is partition the tile's bits between two
+PIOs of one pair. **The check was left in place anyway**, and the flow refuses
+such a design, because "every bit decodes" is the strongest thing this backend
+has and weakening it to admit a case would weaken it for every case. Three
+things follow:
+
+- a bidirectional **bus** works today on the **top** edge and is refused on
+  the right one;
+- so a ULPI data bus, whose eight balls are all on the right edge, is blocked
+  on this and not on anything about the pad;
+- and the fix is in `decode` rather than in `configure_io`: resolving a
+  field by "the longest match" should become "the match that leaves fewest
+  bits unexplained", which on this tile picks `BIDIR_LVCMOS33` for side A
+  because `F0B3`, `F1B3`, `F8B3` and `F9B4` are covered by PIOB's own fields
+  either way. That is a change to the most load-bearing check in this
+  backend, so it wants its own milestone: the two reference bitstreams and
+  every design in `testdata/fpga/cynthion/` must decode to the same thing
+  afterwards, and `analyzer.bit`'s ULPI pads must read back as
+  `BIDIR_LVCMOS33` on **both** halves of a pair, which is the check that
+  would prove it right.
+
+That is also why the milestone at the top of this file is **one** pad, and
+why it is on the top edge.
+
+### The enable had a side, and two files had it the wrong way round
+
+A `.dev` file's `io` line names an IO buffer's pins by role, and the enable
+had one role, `oe`, meaning "a one drives the pad". Two of the four families
+wrote `oe=T`, and **a `T` is a tristate: a one *releases* the pad.** So
+`src/fpga/devices/xc7.dev` and `src/fpga/devices/ecp5.dev` had the enable
+inverted, and `src/fpga/devices/gowin.dev` said in prose that its own
+`OEN` could not be expressed and declared its `IOBUF` unusable for that
+reason.
+
+Nothing had ever noticed, because nothing had ever driven the pin: the
+mapper tied an `inout` port's enable to a constant **one** and printed
+"the output enable is tied active", which on a `TRELLIS_IO` or an `IOBUF`
+means permanently high impedance. On the ECP5 the two halves even disagreed
+with each other — the netlist said "released" and `configure_io` tied the
+hardware wire low, which is "driving" — and neither was checked against the
+other.
+
+There are now two role spellings and they are opposites:
+
+| Role | Meaning | Who uses it |
+|---|---|---|
+| `oe=<port>` | an **output enable**: a one drives the pad | iCE40 `SB_IO.OUTPUT_ENABLE`, the generic device's `IOBUF.OE` |
+| `oen=<port>` | a **tristate**: a one releases the pad | ECP5 `TRELLIS_IO.T`, Xilinx `IOBUF.T` and `OBUFT.T`, Gowin `IOBUF.OEN` |
+
+`BelKind::enable_port` answers `(port, active_low)` and is where the reason a
+marker would not have done is written down. `fpga::place`'s `describe`
+renames `oen` to `oe` on the way into the netlist, because the two are one
+*pin* and a routing graph knows nothing about logic; the inversion happens
+once, where the buffer is built. `src/fpga/mod.rs`'s built-ins test now
+asserts that every family's bidirectional buffer names exactly one of the
+two, and `src/fpga/primitives.rs`'s
+`an_inout_port_with_a_tristate_driver_becomes_a_bidirectional_buffer` asserts
+that the same source produces opposite pin polarities on an ECP5 and an
+iCE40.
+
+Gowin's `IOBUF` is still declared `other` and still never instantiated, but
+for a smaller reason than before: nothing has built a tristate on that family
+or put one on a Gowin part, and the backend has no configuration bits for a
+Gowin pad at all.
+
+### What an `inout` port has to say to become one
+
+Three spellings reach the IR's `tristate` cell, and the IO pass takes that
+cell over wherever it drives the whole of an `inout` port's net:
+
+```verilog
+assign bus = oe  ? data : 8'bz;    // drive while `oe`
+assign bus = dir ? 8'bz : data;    // release while `dir` — a ULPI bus
+bufif1 t (bus, data, oe);
+```
+
+and in VHDL, `bus <= data when oe else 'Z';`, which already became that cell.
+The conditional-assignment forms are new: Verilog's lowering used to leave
+them as an assignment of an unknown value, so `assign bus = oe ? d : 8'bz`
+produced a pad that drove at all times. `{8{1'bz}}` and `8'bz` are both taken,
+because the operand is read after folding.
+
+What the pass then does, per bit: the cell's data becomes what the buffer
+drives *out* to the pad (`dout`), its enable becomes the buffer's enable pin
+*in that pin's own sense*, the cell is dropped, and the port's own net is
+re-driven from what the buffer reads *in* off the pad (`din`) — so everything
+in the design that read the port now reads the **pin**. A net cannot have two
+drivers, which is why the cell has to go rather than sit alongside.
+
+Anything else is still buffered as an output, with the warning reworded to
+say what to write instead: a net two tri-states share, a net a tri-state
+drives only part of, a registered (DDR) port, or an ordinary driver. A
+partial `z` (`{7'bz, 1'b0}`) is deliberately not this, because a partial
+tri-state has no IR form and widening one would change what the design means.
+
+### What this settles, and what it does not
+
+It settles that the chain from Verilog to a configuration a real ECP5 accepts
+closes for a pad the design **drives, releases and reads back through one
+pin**, that the tristate is routed and not tied, that the bits which decide
+the released level are written and read back as `PULLMODE = UP`, and that
+every bit of the image is one the database explains and selects the
+connection it was meant to.
+
+And it settles all of that only as far as `DONE`, which the first milestone in
+this file proved is worth nothing on its own: the LEDs were dark and `DONE`
+was high. **Nobody has looked at this one yet.**
+
+It settles nothing about a bidirectional **bus on a part**: one bit has been
+loaded, not eight. An eight-bit bus *builds* on the top edge —
+465 bits, 0 unexplained — and is refused on the right one, for a reason that
+is about reading a bitstream back and not about writing one; "What cannot be
+read back" above has it, and it is the thing standing between this and a ULPI
+data bus. It settles nothing about `SLEWRATE`, which every ULPI pin of the
+reference asks for and this writes for none. Both are in "What remains".
+
 ## A clocked design has been built, and loaded into a part
 
 On 2026-09-26 `testdata/fpga/cynthion/clock_blink.v` — a 26-bit counter off
@@ -348,18 +808,18 @@ master SPI clock the part uses when it loads *itself* from flash
 buffer. `CTRL0_DEFAULT` is what `ecppack` writes with no options.
 
 Every run in this file is reproducible, and the current milestone is the
-last of the four:
+bidirectional pad at the top of this file:
 
 ```sh
 reticle fetch prjtrellis-db
-for design in leds leds_alternate button_led clock_blink; do
+for design in leds leds_alternate button_led clock_blink bidir_loopback; do
     reticle fpga testdata/fpga/cynthion/$design.v \
         --device ecp5-12f-CABGA256 \
         --constraints testdata/fpga/cynthion/$design.rcf \
         --bitstream /tmp/$design.bit
 done
 reticle program --list                         # find the board's serial
-reticle program --device <serial> /tmp/clock_blink.bit
+reticle program --device <serial> /tmp/bidir_loopback.bit
 ```
 
 (`leds_alternate.v` shares `leds.rcf`; the loop is shorthand.)
@@ -1293,7 +1753,10 @@ borrows now. Every backend gets it.
 | Block RAM | `Ecp5Stream` reads and writes the initialisation blocks — the reference files' 44 blocks round trip — and nothing generates one. The `MIB_EBR*` tiles' wires and pips are in the graph |
 | Distributed RAM | `SLICEA.MODE = DPRAM`, `WREMUX`, `CLK1.CLKMUX` and the `WAD`/`WDO` wires, none of which is declared |
 | An IO standard other than LVCMOS33 | the bits are in the database and the code takes the standard from the constraints; no other standard has been on a part |
-| A bidirectional pad | `configure_io` reads the direction off the netlist and builds an input or an output; `BIDIR_<standard>` is in the database and the tristate would have to be routed rather than tied |
+| A bidirectional **bus** on the **right** edge | a resolution rule in `TrellisDatabase::decode`, and nothing in `configure_io`: two bidirectional pads that share a right-edge pad tile cannot be read back, because a pseudo-differential value's pattern spans both halves of the pair and is longer than either. `ecppack`'s own output has the same property, and the flow refuses the design rather than weakening the check. See "What cannot be read back". **On the top edge an eight-bit bus builds and decodes today** — 465 bits, 0 unexplained — so this is the whole of what stands between here and a ULPI data bus |
+| A bidirectional bus **on a part** | nothing but somebody looking: one bit has been loaded and watched, not eight |
+| `SLEWRATE`, `DRIVE`, `OPENDRAIN`, `CLAMP` or `TERMINATION` on a pad | each is a `.config_enum` of the pad tile, and each is one `ecppack` writes **only when an attribute asks** — so not writing them matches nextpnr exactly for a design that does not ask. `set_io -slew` and `-drive` are parsed and reach the cell, and `configure_io` writes neither, which makes the option a silent no-op in the bitstream. `SLEWRATE=FAST` is the one that will be wanted first: every ULPI pin of `analyzer.bit` has it, and a 60 MHz bus on a 3.3 V bank is what it is for |
+| A bidirectional pad with a **registered** tristate | `PIO<s>.TRIMUX_TSREG = IOLTO` and the `IOLOGIC` tristate register, none of which is declared. `fpga::primitives` declines to absorb a tri-state driver on a DDR port rather than moving the enable ahead of the register |
 | An ECP5 over an FTDI cable | nothing, in principle: the configuration plans are transport-neutral and `jtag::Scan` encodes them for MPSSE. It is refused because that pairing has never been run |
 
 ## The three things worth knowing if you change this
@@ -1332,3 +1795,20 @@ in one bit space. Two consequences: `configure_io` must not tie a pin a
 signal drives, and no test can ask a finished bitstream whether a pad is
 tied. `tests/fpga_trellis.rs` runs `configure_io` into a bitmap of its own
 to ask what that pass wrote.
+
+That is the first of **four** places on this part where two features share bit
+space, and the shape repeats:
+
+| | Which two | Where it is written down |
+|---|---|---|
+| 1 | a `CIB`'s constant mux against the routing mux into the same wire | here |
+| 2 | a centre mux's six-bit source code, whose other five bits another feature may set | "A bit a feature wants clear" |
+| 3 | `PIO<s>.PULLMODE`'s low bit against `OUTPUT_<standard>`'s | "A third place where two features share one bit" |
+| 4 | a right-edge `PIO<s>.BASE_TYPE`'s *pseudo-differential* values, whose patterns reach into the neighbouring PIO's bits | "What cannot be read back" |
+
+The first three are handled the same way: the bits go into a zeroed bitmap
+with an OR, `dropped_clear_bits` notices a feature whose bits another feature
+wanted clear, and a question the finished image cannot answer gets asked of
+the pass instead. The fourth is the one that is not handled — it makes a
+bidirectional *bus* on the right edge unreadable, and the flow refuses such a
+design rather than weakening the check that notices.

@@ -2277,9 +2277,11 @@ fn the_bidirectional_design_routes_and_configures_what_its_header_promises() {
     // finished image therefore cannot be asked whether a pad is an output:
     // `BIDIR` plus a pull is a superset of `OUTPUT`'s pattern, and the
     // decoding at the end of this test resolves it by the longer match. This
-    // is the third place on this part where two features share bit space —
-    // the others are a `CIB` tie against a route, and a centre mux's six-bit
-    // code — and all three are in `docs/fpga-trellis.md`.
+    // is the third of four places on this part where two features share bit
+    // space — the others are a `CIB` tie against a route, a centre mux's
+    // six-bit code, and a right-edge pseudo-differential base type reaching
+    // into its neighbour's bits — and all four are in one table in
+    // `docs/fpga-trellis.md`.
     let output_only: Vec<_> = pad
         .output_pad_bits
         .iter()

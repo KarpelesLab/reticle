@@ -656,9 +656,21 @@ In rough order of how much stands behind each.
    work because `sites.rs` gathers their features under the names `IBUF`
    and `OBUF` explicitly; nothing else does.
 6. **IO standards other than LVCMOS33, and tristate.** `OBUFT` and
-   `IOBUF` need `OLOGIC` `T` features that have not been measured, so
-   the `io` bel declares no `oe` pin and a tristate design will not
-   route. Other standards are refused rather than approximated.
+   `IOBUF` need `OLOGIC` `T` features that have not been measured, so a
+   tristate design will not route here. Other standards are refused rather
+   than approximated.
+
+   Two things about that changed on 2026-09-27 and neither of them makes it
+   work. `xc7.dev` used to declare `IOBUF`'s tristate as `oe=T`, an **output
+   enable**, where a `T` is a tristate and a one *releases* the pad; it now
+   says `oen=T`, which is the sense the silicon has. And the mapper now does
+   build a bidirectional buffer for an `inout` port a tri-state driver
+   drives, rather than an output with a warning. So a 7-series tristate gets
+   further than it used to and then stops in the same place: at features
+   `sites.rs` has never gathered. The family where this was carried through
+   to a part is Lattice; `docs/fpga-trellis.md` has it, including the `ecppack`
+   comparison that says a bidirectional pad on an ECP5 costs nothing beyond
+   its base type.
 7. **Six million `String`s.** The routing graph holds the whole die in
    1386 MiB, most of it wire names. Interning those is what makes
    whole-die routing comfortable rather than merely possible.

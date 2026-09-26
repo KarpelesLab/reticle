@@ -629,9 +629,17 @@ accidentally undo.
   large.
 - **No bidirectional buffer.** A Gowin `IOBUF`'s output enable is `OEN`
   and it is **active low** — every Apicula example writes `.OEN(~key)`.
-  The `.dev` `io` line has no way to say so, and declaring `oe=OEN` would
-  give every tristate design an inverted enable: a bus that drives when it
-  should listen.
+  That used to be the whole reason, because the `.dev` `io` line had no way
+  to say so and declaring `oe=OEN` would have given every tristate design an
+  inverted enable: a bus that drives when it should listen. It is now
+  expressible — `oen=<port>` is a tristate and `oe=<port>` an output enable,
+  see `fpga::device`'s `BelKind::enable_port` — and `gowin.dev` says `OEN`
+  the right way round. What is left is smaller and is the ordinary kind of
+  gap: nothing has built a tristate on this family or put one on a Gowin
+  part, and there are no configuration bits for a Gowin pad either way (see
+  below), so `IOBUF` stays declared `other` and a tristate port is reported
+  as unbuildable rather than built untested. The bidirectional pad that *has*
+  been on a part is a Lattice one; `docs/fpga-trellis.md` has it.
 - **No global clock buffer.** Not an omission: on this family a clock
   enters the global network *by being routed onto it*, which is what the
   6306 of the `nodes` table's 14 748 networks that are typed `GLOBAL_CLK`
