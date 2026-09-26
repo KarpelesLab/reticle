@@ -2460,3 +2460,255 @@ fn the_bidirectional_design_routes_and_configures_what_its_header_promises() {
         "E13's pull mode reads back as {mine:?}"
     );
 }
+
+/// What `bidir_bus.v`'s header tells a person to look for, simulated.
+///
+/// Everything else in this file is about the bits. This is about the design,
+/// and it is here for the reason the headers in `testdata/fpga/cynthion/`
+/// are written before anybody presses anything: an observable nobody has
+/// checked is an observable that can be talked into agreeing with whatever
+/// happens. `bidir_bus_tb.v` drives the design with the bus left to it,
+/// which is what a loopback through the pads is, and prints one line per
+/// way the table could be wrong.
+///
+/// It needs `sim` and not `fpga`, so it runs in builds that have no device
+/// database at all and skips in builds without a simulator.
+#[test]
+#[cfg(all(feature = "verilog", feature = "sim"))]
+fn the_bus_designs_leds_say_what_its_header_says_they_will() {
+    use reticle::diag::Diagnostics;
+    use reticle::sim::{SimOptions, Simulator};
+    use reticle::source::SourceMap;
+    use reticle::verilog::{Dialect, ElabOptions, NoIncludes, elaborate, parse_source};
+
+    let mut map = SourceMap::new();
+    let mut diags = Diagnostics::new();
+    let mut files = Vec::new();
+    for name in [
+        "testdata/fpga/cynthion/bidir_bus_tb.v",
+        "testdata/fpga/cynthion/bidir_bus.v",
+    ] {
+        let text = std::fs::read_to_string(name).unwrap_or_else(|e| panic!("{name}: {e}"));
+        let id = map.add(name, &text).expect("fits");
+        files.push(parse_source(
+            &mut map,
+            id,
+            Dialect::Verilog2005,
+            &mut NoIncludes,
+            &mut diags,
+        ));
+    }
+    let refs: Vec<_> = files.iter().collect();
+    let design = elaborate(&refs, &ElabOptions::new(Dialect::Verilog2005), &mut diags)
+        .expect("the testbench elaborates");
+    assert!(!diags.has_errors(), "{}", diags.render(&map));
+
+    let mut sim = Simulator::new(&design, SimOptions::default()).expect("it simulates");
+    sim.run();
+    assert!(sim.finished(), "the testbench did not reach `$finish`");
+    // The testbench prints nothing but its verdict, so any other line is a
+    // way the header is wrong — and the message says which.
+    assert_eq!(
+        sim.output(),
+        "PASS: eight pads drove a one and a zero and read back all sixteen\n",
+        "`bidir_bus_tb.v` disagrees with `bidir_bus.v`'s header"
+    );
+}
+
+/// The eight-bit bus milestone: `bidir_bus.v`, on the die's **right** edge,
+/// and every claim its header makes about what reaches the part.
+///
+/// The difference from `bidir_loopback.v` is the edge, and on the right edge
+/// four PIOs share one pad tile. Three of the four tiles these eight balls
+/// land in hold **two** bidirectional pads at once, which is the case the
+/// bitstream could not be read back through until `decode` stopped resolving
+/// a field by the longest match; see `docs/fpga-trellis.md`. So what is
+/// checked here is:
+///
+/// 1. the design places and routes **completely**, and every sink walks back
+///    to its driver;
+/// 2. the eight balls are **three** pad tiles, every one of them holding
+///    more than one of the eight — two, two and all four sides at once — so
+///    the test is about the case that was refused and not about eight
+///    independent pads;
+/// 3. every one of the eight is `BIDIR_LVCMOS33` in the finished image, read
+///    back through the database, on **both** halves of every pair;
+/// 4. every one of the eight has a routed signal on all three of its wires,
+///    and none of the eight has its tristate tied;
+/// 5. the pull is `NONE` on all eight — the far end of these nets is a
+///    transceiver's pin and an internal pull would be fighting the board;
+/// 6. the 60 MHz reaches D16's pad as well as the global clock network,
+///    which is what `clk_dir='o'` in the board's platform file asks for;
+/// 7. and every bit of the image decodes back into exactly the arcs the
+///    router chose, with nothing left over.
+#[test]
+#[cfg(all(feature = "verilog", feature = "synth"))]
+fn the_bidirectional_bus_routes_and_configures_what_its_header_promises() {
+    let Some(root) = chipdb() else { return };
+    let db = trellis::open(&Disk(root), "", PART).unwrap();
+    let fabric = db.load(&TrellisOptions::new()).unwrap();
+    let (_, stream, pads, report, io_only, routed) = compile(
+        &fabric,
+        "testdata/fpga/cynthion/bidir_bus.v",
+        "testdata/fpga/cynthion/bidir_bus.rcf",
+    );
+    assert_eq!(
+        pads, 20,
+        "the clock in, the button, the eight-bit bus, `dir`, the clock out, `stp`, the \
+         transceiver's reset and six LEDs"
+    );
+    assert_eq!(report.signals, routed.netlist.routable().len());
+    assert!(
+        routed.clocks.off_network.is_empty(),
+        "a clock off the global network: {:?}",
+        routed.clocks.off_network
+    );
+    assert!(routed.dropped.is_empty(), "{:?}", routed.dropped);
+
+    // ---- the eight balls are four tiles, and three hold a pair ----------
+    let bus: Vec<&trellis::IoSite> = AUX_ULPI_DATA
+        .iter()
+        .map(|ball| {
+            fabric
+                .pad(ball)
+                .unwrap_or_else(|| panic!("{ball} is not in the ball map"))
+        })
+        .collect();
+    for (ball, pad) in AUX_ULPI_DATA.iter().zip(&bus) {
+        assert_eq!(pad.edge, trellis::Edge::Right, "{ball}");
+    }
+    let mut tiles: Vec<(u32, u32)> = bus.iter().map(|pad| pad.pad_at).collect();
+    tiles.sort_unstable();
+    tiles.dedup();
+    assert_eq!(
+        tiles.len(),
+        3,
+        "eight balls over three pad tiles: {tiles:?}"
+    );
+    let sides: Vec<usize> = tiles
+        .iter()
+        .map(|at| bus.iter().filter(|pad| pad.pad_at == *at).count())
+        .collect();
+    assert_eq!(
+        sides,
+        vec![2, 2, 4],
+        "every one of the three tiles has to hold more than one of the eight — that is what \
+         makes this the case that used to be refused, and one of them holds all four sides: \
+         {tiles:?}"
+    );
+
+    // ---- what `configure_io` wrote for them, on its own -----------------
+    let alone = fabric.stream(&io_only, "8").unwrap();
+    let set = |at: (u32, u32), bit: &ConfigBit| {
+        let (frame, index) = fabric
+            .frames
+            .locate(at, *bit)
+            .unwrap_or_else(|| panic!("{bit:?} is outside {at:?}"));
+        alone.cram.get(frame, index)
+    };
+    for (ball, pad) in AUX_ULPI_DATA.iter().zip(&bus) {
+        for bit in &pad.bidir_pad_bits {
+            assert!(set(pad.pad_at, bit), "{ball}: {bit:?} of BIDIR_LVCMOS33");
+        }
+        for bit in &pad.bidir_pic_bits {
+            assert!(set(pad.pic_at, bit), "{ball}: {bit:?} of the second copy");
+        }
+        // The pull is `NONE`, not `UP` and not the database's default of
+        // `DOWN`. `NONE`'s bits are a subset of `UP`'s, so the claim has to
+        // be about the bit only `UP` has: it must be **clear**.
+        for bit in pad.pull_bits(trellis::PULL_NONE) {
+            assert!(set(pad.pad_at, bit), "{ball}: {bit:?} of PULLMODE=NONE");
+        }
+        for bit in pad.pull_bits(trellis::PULL_UP) {
+            if !pad.pull_bits(trellis::PULL_NONE).contains(bit) {
+                assert!(
+                    !set(pad.pad_at, bit),
+                    "{ball}: {bit:?} is the bit only PULLMODE=UP has, and it is set — this pad \
+                     is pulling against a transceiver's output"
+                );
+            }
+        }
+        // And the tristate is not tied: the `CIB` mux that holds an ordinary
+        // output's tristate low is the same mux the router drives, so tying
+        // it would be a second driver on a wire a signal already drives.
+        assert!(
+            !pad.enable_bits.is_empty(),
+            "{ball}: there is a tie to skip"
+        );
+        assert!(
+            pad.enable_bits.iter().any(|bit| !set(pad.cib_at, bit)),
+            "{ball}: `configure_io` tied the tristate although the router drives it, so this pad \
+             would drive at all times and the transceiver would be fighting it"
+        );
+    }
+    // While a LED, an ordinary output, *is* tied — so the assertion above is
+    // about these eight pads and not about a pass that stopped tying.
+    let led = fabric.pad("C13").expect("C13 is in the ball map");
+    for bit in &led.enable_bits {
+        assert!(set(led.cib_at, bit), "{bit:?}: C13's tristate is not tied");
+    }
+
+    // ---- all three wires of all eight carry a routed signal -------------
+    let netlist = &routed.netlist;
+    let pin_of = |instance: usize, role: &str| {
+        netlist
+            .pins
+            .iter()
+            .find(|pin| pin.instance == instance && pin.role == role)
+    };
+    for ball in AUX_ULPI_DATA {
+        let index = netlist
+            .instances
+            .iter()
+            .position(|i| i.pin.as_deref() == Some(ball))
+            .unwrap_or_else(|| panic!("no pad is constrained to {ball}"));
+        for role in ["din", "dout", "oe"] {
+            let pin = pin_of(index, role)
+                .unwrap_or_else(|| panic!("{ball}'s `{role}` pin is not in the netlist"));
+            assert!(
+                pin.signal.is_some(),
+                "{ball}'s `{role}` carries no signal, so it is tied and not routed"
+            );
+        }
+    }
+    // The clock leaves the part as well as driving the fabric: D16's pad is
+    // an output whose data comes from the same net the flip-flops clock on.
+    let clock_out = netlist
+        .instances
+        .iter()
+        .position(|i| i.pin.as_deref() == Some("D16"))
+        .expect("no pad is constrained to D16");
+    assert!(
+        pin_of(clock_out, "dout").is_some_and(|pin| pin.signal.is_some()),
+        "D16 drives nothing, so the transceiver has no clock and will never let go of the bus"
+    );
+
+    // ---- and the whole image says what the router said -------------------
+    let decoded = db.decode(&stream.cram);
+    assert_eq!(
+        decoded.unexplained, 0,
+        "{} bit(s) left over: {:?}",
+        decoded.unexplained, decoded.leftovers
+    );
+    let (selected, unresolved) = db.resolved_arcs(&decoded);
+    assert!(unresolved.is_empty(), "{unresolved:?}");
+    assert_eq!(selected, fabric.routed_arcs(&routed.graph, &routed.routing));
+    // Every one of the eight, read back out of the finished image through
+    // the database rather than out of the pass that wrote it — which for
+    // every one of the three tiles means both halves of a pair at once, and is
+    // the assertion this milestone is about.
+    for (ball, pad) in AUX_ULPI_DATA.iter().zip(&bus) {
+        let field = format!("PIO{}.BASE_TYPE", pad.side);
+        let value = decoded
+            .enums
+            .iter()
+            .find(|(at, what, _)| *at == pad.pad_at && *what == field)
+            .map(|(_, _, value)| value.as_str());
+        assert_eq!(
+            value,
+            Some("BIDIR_LVCMOS33"),
+            "{ball} is {field} at {:?} and reads back wrong",
+            pad.pad_at
+        );
+    }
+}

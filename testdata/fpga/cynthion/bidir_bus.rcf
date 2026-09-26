@@ -1,0 +1,141 @@
+# The auxiliary ULPI transceiver of a Great Scott Gadgets Cynthion r1.4 —
+# its eight data balls used as a BIDIRECTIONAL BUS on the die's right edge —
+# plus the 60 MHz oscillator, the USER button and the six FPGA LEDs.
+#
+# Every line comes from Great Scott Gadgets' own platform file,
+# `cynthion/python/src/gateware/platform/cynthion_r1_4.py`, quoted where it
+# matters.
+#
+# ---------------------------------------------------------------------
+# THE EIGHT DATA BALLS, AND WHY DRIVING THEM IS SAFE
+# ---------------------------------------------------------------------
+#
+#     ULPIResource("aux_phy", 0,
+#         data="F16 G15 G16 H15 J15 J16 K15 K16", clk="D16", clk_dir='o',
+#         dir="E16", nxt="F15", stp="E15", rst="J13", rst_invert=True,
+#         attrs=Attrs(IO_TYPE="LVCMOS33", SLEWRATE="FAST")),
+#
+# These eight are the only pins in this project so far whose net has a
+# driver that is not the FPGA: a USB transceiver chip. `bidir_bus.v`'s
+# header has the five reasons this is safe at length; the short form is that
+# the design releases all eight pins whenever `ulpi_dir` (E16) is high,
+# which is the arbitration ULPI defines for this bus, holds `stp` (E15) high
+# so the transceiver ignores what is on `data` at all (ULPI 1.1 §3.12), and
+# drives nothing at all unless a finger is on the USER button.
+#
+# `iodb.json` puts all eight at column 72 — the **right** edge, the one
+# where four PIOs share a pad tile:
+#
+#     F16 (72, 14, A)   G15 (72, 14, B)   ->  pad tile (72, 15)
+#     G16 (72, 20, A)   H15 (72, 20, B)   ->  pad tile (72, 21)
+#     J16 (72, 23, A)   J15 (72, 23, B)   ->  pad tile (72, 24)
+#     K16 (72, 23, C)   K15 (72, 23, D)   ->  the same tile
+#
+# So the eight pads occupy **three** pad tiles, and every one of the three
+# holds more than one bidirectional pad: two, two, and — at (72, 24) — all
+# four sides of the tile at once. That is the case a bitstream could not be
+# read back through Project Trellis' database until the decoder stopped
+# resolving a field by the longest match, because a pseudo-differential
+# `PIOA.BASE_TYPE` spells four of its ten bits in PIOB's frames and a
+# `PIOC.BASE_TYPE` spells four of its own in PIOD's.
+# `docs/fpga-trellis.md` has it under "What cannot be read back".
+#
+# **No `-pullup`.** `bidir_loopback.rcf` asked for one because the released
+# level of an LED's ball is otherwise a diode drop below the rail. Here the
+# far end of every one of the eight nets is a transceiver's own pin, so the
+# released level is the board's business and an internal pull would be
+# fighting whatever the board does. `configure_io` writes
+# `PIO<s>.PULLMODE = NONE` for a pad that asks for nothing, which is what
+# the platform file's own attributes ask for too (it names `IO_TYPE` and
+# `SLEWRATE` and no `PULLMODE`).
+#
+# ---------------------------------------------------------------------
+# D16, THE CLOCK THIS DESIGN OWES THE TRANSCEIVER
+# ---------------------------------------------------------------------
+#
+# `clk_dir='o'` in the resource above means the FPGA drives the interface
+# clock to the transceiver, so the transceivers on this board are in ULPI's
+# optional input-clock mode (§3.7.1.2) and the board's own 60 MHz oscillator
+# is the interface clock. There is nothing to synthesise and no PLL: ULPI's
+# clock rate is the rate A8 already runs at. An unclocked ULPI transceiver
+# asserts `dir` and keeps it asserted, on purpose, to protect its data
+# inputs (§3.12) — which is why this line is not optional here. Without it
+# the transceiver would never let go of the bus and the eight pads would
+# never be asked to drive.
+#
+# ---------------------------------------------------------------------
+# J13 AND E15, THE TWO PINS THAT MAKE THE OTHER END BEHAVE
+# ---------------------------------------------------------------------
+#
+# `rst_invert=True` means the reset is active low at the ball, matching the
+# transceiver's own active-low reset input. `bidir_bus.v` drives it **high**:
+# the transceiver runs. `stp` is driven high throughout, which is the
+# specification's interface protection and is what stops the walking pattern
+# from being read as a transmit command or a register write.
+#
+# ---------------------------------------------------------------------
+# A8, THE OSCILLATOR, AND M14, THE USER BUTTON
+# ---------------------------------------------------------------------
+#
+#     # Primary, discrete 60MHz oscillator.
+#     Resource("clk_60MHz", 0, Pins("A8", dir="i"),
+#         Clock(60e6), Attrs(IO_TYPE="LVCMOS33")),
+#
+#     # USER button
+#     Resource("button_user", 0, PinsN("M14", dir="i"),
+#              Attrs(IO_TYPE="LVCMOS33", PULLMODE="NONE")),
+#
+# Not `PinsN` for the clock, so it is not inverted; `PinsN` for the button,
+# so the ball reads low while it is held. `clock_misc.kicad_sch` has the
+# oscillator: `Y1`, a SiTime `SIT1602BC-23-33E-60.000000E`, 3.3 V,
+# 60.000000 MHz. `indicators_buttons.kicad_sch` has the button: `SW3`,
+# normally open between ground and a node a 10 k resistor pulls up to +3V3,
+# with a 33 k series resistor and a 1 uF capacitor making a 33 ms debounce —
+# which is why nothing in the fabric debounces it. `configure_io` writes
+# `PULLMODE = NONE` for every input without being asked, which is what that
+# 43 k divider needs.
+#
+# A8 is at row 0, column 29, PIO B, bank 0 — the top edge. M14 is at row 32,
+# column 72, PIO D — the right edge, like the bus, in bank 3.
+#
+# ---------------------------------------------------------------------
+# THE LEDS
+# ---------------------------------------------------------------------
+#
+#     *LEDResources(pins="E13 C13 B14 A15 D12 C11",
+#                   attrs=Attrs(IO_TYPE="LVCMOS33"), invert=True),
+#
+# Ball order from the platform file, so LED 0 is E13 and LED 5 is C11. All
+# six are on the top edge in bank 1, and `invert=True` is the polarity: they
+# are active low, which a constraints file cannot say. `bidir_bus.v` says
+# what each one means.
+#
+# Bank 0's, bank 1's and bank 3's VCCIO are all 3.3 V: all three of Great
+# Scott Gadgets' own bitstreams set `BANK.VCCIO` to `3V3` on every bank.
+
+set_io -io_standard LVCMOS33 clk A8
+set_io -io_standard LVCMOS33 button_n M14
+
+# The bus. `ulpi_data[0]` is `data`'s first ball, as the platform file
+# orders them.
+set_io -io_standard LVCMOS33 ulpi_data[0] F16
+set_io -io_standard LVCMOS33 ulpi_data[1] G15
+set_io -io_standard LVCMOS33 ulpi_data[2] G16
+set_io -io_standard LVCMOS33 ulpi_data[3] H15
+set_io -io_standard LVCMOS33 ulpi_data[4] J15
+set_io -io_standard LVCMOS33 ulpi_data[5] J16
+set_io -io_standard LVCMOS33 ulpi_data[6] K15
+set_io -io_standard LVCMOS33 ulpi_data[7] K16
+
+# The three pins that decide whether the bus is the FPGA's to drive.
+set_io -io_standard LVCMOS33 ulpi_dir E16
+set_io -io_standard LVCMOS33 ulpi_clk D16
+set_io -io_standard LVCMOS33 ulpi_stp E15
+set_io -io_standard LVCMOS33 ulpi_rst_n J13
+
+set_io -io_standard LVCMOS33 led0_n E13
+set_io -io_standard LVCMOS33 led1_n C13
+set_io -io_standard LVCMOS33 led2_n B14
+set_io -io_standard LVCMOS33 led3_n A15
+set_io -io_standard LVCMOS33 led4_n D12
+set_io -io_standard LVCMOS33 led5_n C11
