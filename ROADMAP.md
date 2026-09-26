@@ -492,7 +492,11 @@ FPGA:
       well as the top. `testdata/fpga/cynthion/button_led.v` — the USER
       button through the fabric and a lookup table to two LEDs, two
       signals and 23 pips — was loaded into the same board and accepted,
-      `DONE`, status `0x00200100`; **nobody has looked at the LEDs yet**.
+      `DONE`, status `0x00200100`, and on 2026-09-26 **the board's owner
+      held the button and the two LEDs swapped**, which is what the design
+      says they should do. A routed design works on this part. It also
+      settles the LED order in favour of the schematic: the one that lights
+      when the button is held is at the end away from it.
       Every bit of it decodes back through the database with nothing
       unexplained, and the input pad was checked against `facedancer.bit`,
       the one reference bitstream whose gateware reads that button. What is

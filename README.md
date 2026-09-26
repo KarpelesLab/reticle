@@ -178,8 +178,14 @@ On 2026-09-26 the backend gained **interconnect**, and a design with
 something to route was built and loaded into the same part:
 `testdata/fpga/cynthion/button_led.v`, the board's USER button through
 about thirty rows of the die and a lookup table to two of its LEDs. The
-part accepted it and asserted `DONE`; whether the LEDs follow the button
-has not been watched yet, and saying so is the point.
+owner held the button and **the two LEDs swapped**, so a routed design
+works on this part: two signals, twenty-three programmable connections,
+Verilog to configured silicon with no vendor tool anywhere. Two further
+bugs of the same family as the dark LEDs were caught *before* asking the
+board, by reading what Lattice's own packer writes in full for a cell
+rather than diffing against it — the second being an input pad's pull
+mode, whose default fights this board's pull-up and would have held the
+pin low whatever anybody pressed.
 [`docs/fpga-trellis.md`](docs/fpga-trellis.md) says what was checked
 instead — every bit of the bitstream decoded back through Project Trellis'
 own database and named, and the pads compared against bitstreams Lattice's

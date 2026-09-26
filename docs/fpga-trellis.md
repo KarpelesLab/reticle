@@ -54,8 +54,31 @@ to `D7`, which is the end away from the button. So "the far end" is
 That also makes this design the first that can settle something the earlier
 ones could not. `leds.v` lights all six and `leds_alternate.v` lights
 alternate ones, and both look the same read from either end; here only two
-LEDs move, so **if the two that change are at the end nearest the button,
-the numbering is the other way round from what the schematic implies.**
+LEDs move, so which two they are decides the order.
+
+### Somebody looked, and it does what it says
+
+On 2026-09-26 the board's owner reported: one LED lit with nothing
+touched, and on holding `USER` **that one goes dark and its neighbour
+lights**. They swap, and nothing else moves.
+
+So **a routed design works on this part**. Two signals, twenty-three
+programmable connections, a pad in through a lookup table to a pad out,
+built by this flow from Verilog and configured over the board's own debug
+microcontroller with no vendor tool at any step.
+
+It also settles the numbering, in favour of the schematic: the LED that
+lights when the button is held is the one at the end **away** from the
+button, which the layout calls `led_n[0]`. Four agreeing files were right
+and the reversed reading is ruled out.
+
+Worth recording what this run did *not* need. The two bugs that made
+earlier runs look fine and behave wrongly — a bank's `BANK.VCCIO`, and an
+input pad's `PULLMODE`, whose database default fights this board's pull-up
+and holds a released pin below `VIH` — were both found before the board
+was asked, by reading what Lattice's own packer writes *in full* for a
+cell rather than diffing against it. Neither would have been caught by any
+check on this machine, and `DONE` was high either way.
 Either answer is a result.
 
 The observation is deliberately a strong one. One LED lit rather than six
