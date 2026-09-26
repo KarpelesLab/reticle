@@ -198,26 +198,32 @@ Options:
   --report           Print the mapping report to stderr
   --quiet            Suppress the summary line
 
-Writing a bitstream, from a real chip database (Xilinx 7 series and
-Gowin GW2A only):
+Writing a bitstream, from a real chip database (Xilinx 7 series, Gowin
+GW2A and Lattice ECP5):
   --chipdb <dir>     The database: Project X-Ray's (f4pga/prjxray-db) for
                      the 7 series, also read from RETICLE_CHIPDB; Project
-                     Apicula's for Gowin, also read from RETICLE_GOWINDB.
-                     Without either, the copy in ~/.cache/reticle is used,
-                     and downloaded there first if it is missing (see
-                     `reticle help fetch`).
+                     Apicula's for Gowin, also read from RETICLE_GOWINDB;
+                     Project Trellis' (YosysHQ/prjtrellis-db) for the
+                     ECP5. Without either, the copy in ~/.cache/reticle is
+                     used, and downloaded there first if it is missing
+                     (see `reticle help fetch`).
   --offline          Never download the database; fail if it is missing.
                      RETICLE_OFFLINE=1 does the same.
-  --bitstream <file> Place and route with Reticle's own tools and write
-                     a 7-series .bit or a Gowin .fs here. Two designs
-                     written this way have run on a Basys 3
+  --bitstream <file> Place and route with Reticle's own tools and write a
+                     7-series .bit, a Gowin .fs or an ECP5 .bit here.
+                     Three designs written this way have been watched
+                     working on a board: two on a Basys 3
                      (examples/basys3: a lookup table, and a clocked
                      counter) and one on a Tang Primer 20K
-                     (examples/primer20k: a lookup table), each watched
-                     working. On the 7 series a carry chain does not
-                     route; on Gowin nothing clocked does yet. See
-                     docs/fpga-xray.md and docs/fpga-gowin.md. For Gowin
-                     this is the only output: there is no nextpnr export.
+                     (examples/primer20k: a lookup table). On a Cynthion
+                     a design that lights six LEDs has been watched and a
+                     routed one (testdata/fpga/cynthion/button_led.v) has
+                     been accepted but not yet looked at. On the 7 series
+                     a carry chain does not route; on Gowin and on the
+                     ECP5 nothing clocked does yet. See docs/fpga-xray.md,
+                     docs/fpga-gowin.md and docs/fpga-trellis.md. For
+                     Gowin this is the only output: there is no nextpnr
+                     export.
   --region <box>     7 series: which tiles of the fabric to load, as
                      x0,y0,x1,y1 in the database's grid coordinates. The
                      default is a box around the constrained pins,
@@ -2139,13 +2145,14 @@ const ECP5_PARTS: &[(&str, &str, &str, &str)] =
 /// `reticle fpga --bitstream` for a Lattice ECP5: place, route and write a
 /// `.bit` from Project Trellis' database.
 ///
-/// **What this can build is narrow and the narrowness is deliberate.**
-/// `src/fpga/trellis/mod.rs` builds the part's geometry and its pads and
-/// **no interconnect at all**, so a design with anything to route is
-/// refused here rather than turned into a bitstream whose nets go
-/// nowhere. A design whose ports are driven by constants builds, and one
-/// has been loaded into a real part and watched; `docs/fpga-trellis.md`
-/// says what that did and did not settle.
+/// **What this can build is a combinational design.** The whole die's
+/// interconnect is loaded — 1.1 million wires and 8.2 million pips, in
+/// under a second and about 340 MiB, so there is no region option here
+/// where the 7 series needs one — along with every logic tile's lookup
+/// tables and the pads of the top and right edges. What is missing is the
+/// clock network, so a design with a flip-flop in it fails to place rather
+/// than being approximated. `docs/fpga-trellis.md` says what has been on a
+/// part and what was checked about it.
 ///
 /// Unlike Gowin this is not the family's only route out: `reticle fpga`
 /// without `--bitstream` still exports a netlist and an `.lpf` for
@@ -2197,24 +2204,6 @@ fn write_ecp5_bitstream(
     let graph = fabric.arch.build_graph();
     let netlist = Netlist::build(design, top, device, &graph).map_err(|e| e.to_string())?;
 
-    // The guard. Nothing here can carry a signal, so a design that needs
-    // one is refused *before* a file is written, by name.
-    let unroutable = fabric.unroutable(&netlist);
-    if !unroutable.is_empty() {
-        let mut shown: Vec<String> = unroutable.iter().take(8).cloned().collect();
-        if unroutable.len() > shown.len() {
-            shown.push(format!("and {} more", unroutable.len() - shown.len()));
-        }
-        return Err(format!(
-            "this design has {} signal(s) that would have to be routed, and the ECP5 backend \
-             declares no interconnect at all, so it cannot route one: {}. What it can build is \
-             a design whose ports are driven by constants. Nothing was written; see \
-             docs/fpga-trellis.md",
-            unroutable.len(),
-            shown.join(", ")
-        ));
-    }
-
     let (placement, place_report) = place::place(
         &netlist,
         &fabric.arch,
@@ -2223,9 +2212,6 @@ fn write_ecp5_bitstream(
         &place::PlaceOptions::default(),
     )
     .map_err(|e| e.to_string())?;
-    // With nothing to route, routing is a formality — and it is still run,
-    // because a router that is handed nothing and reports something is a
-    // router with a bug.
     let (routing, route_report) = route::route(
         &netlist,
         &graph,
@@ -2233,10 +2219,15 @@ fn write_ecp5_bitstream(
         &route::RouteOptions::default(),
     )
     .map_err(|e| e.to_string())?;
-    if route_report.pips != 0 {
+    // The router says it connected every sink; this walks each sink back
+    // through the pips it was given and checks that it really did. A route
+    // that occupies the right wires without joining them would otherwise
+    // reach a part and do nothing.
+    let problems = routing.verify(&netlist, &graph, &placement);
+    if !problems.is_empty() {
         return Err(format!(
-            "the router used {} pip(s) on a fabric that declares none",
-            route_report.pips
+            "the routing does not implement the netlist, so nothing was written: {}",
+            problems.join("; ")
         ));
     }
     let _ = &routing as &Routing;
@@ -2251,16 +2242,22 @@ fn write_ecp5_bitstream(
         &routing,
     )
     .map_err(|e| e.to_string())?;
-    // Everything a bel or a pip owns is in `tiles` now. A pad's bits are
-    // neither — they are in three tiles at two positions — so they go in
-    // here, exactly as the 7-series flow adds its clock enables.
+    // Everything a pip owns is in `tiles` now. A pad's bits are not — they
+    // are in tiles the bel does not own — and neither is a lookup table's
+    // truth table, which depends on which of its inputs the router
+    // reached. Both go in here, exactly as the 7-series flow adds its
+    // clock enables.
     let pads = fabric
         .configure_io(&netlist, &placement, &graph, &mut tiles)
         .map_err(|e| e.to_string())?;
+    let luts = fabric
+        .configure_logic(design, top, &netlist, &placement, &graph, &mut tiles)
+        .map_err(|e| e.to_string())?;
     if pads == 0 {
         return Err(
-            "no pad was configured, so this bitstream would drive nothing. Every output the \
-             design has needs a pin constraint naming a ball this package has on the top edge"
+            "no pad was configured, so this bitstream would drive nothing. Every port the \
+             design has needs a pin constraint naming a ball this package has on the top or \
+             right edge"
                 .to_owned(),
         );
     }
@@ -2277,13 +2274,19 @@ fn write_ecp5_bitstream(
         .join(", ");
     Ok(format!(
         "note: wrote {path}, {} byte(s) compressed, {} configuration bit(s) set, {pads} pad(s) \
-         configured, {placed}\n\
+         and {luts} lookup table(s) configured, {placed}\n\
+         note: routed {} of {} signal(s) with {} pip(s) over {} wire(s), and every sink was \
+         walked back to its driver\n\
          note: for IDCODE {:#010x} ({part}-{speed}{package}); load it with \
          `reticle program --device <serial> {path}`\n\
-         note: this backend declares no interconnect, so only a design driven by constants \
-         builds. See docs/fpga-trellis.md for what has been run on a part.\n",
+         note: nothing clocked can be built: this backend reads no `globals.json`, so there is \
+         no clock network. See docs/fpga-trellis.md.\n",
         bytes.len(),
         stream.cram.count_ones(),
+        route_report.signals,
+        netlist.signals.len(),
+        route_report.pips,
+        route_report.nodes,
         stream.idcode,
     ))
 }

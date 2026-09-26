@@ -221,16 +221,21 @@ end
 #     source settled. **The LEDs are active low** — anode to +3V3,
 #     cathode to the FPGA — and nothing in a device file can say so, so
 #     a design that lights one drives it to zero.
-#   * `pins partial` is set, and it is true: nine of 256 balls.
+#   * `pins partial` is set, and it is true: ten of 256 balls. M14 is the
+#     USER button, from the same platform file (`PinsN("M14", dir="i")`)
+#     and the same schematic sheet; unlike the other nine it is on the
+#     **right** edge of the die, in bank 3, and `iodb.json` is what says
+#     so. `docs/fpga-trellis.md` has its circuit and why `PULLMODE` has
+#     to be written for it.
 #   * The **cell counts** are the LFE5U-12F's 12 144 lookup tables, from
 #     Lattice's family data. MEDIUM, and nothing here depends on them.
 #   * Everything else is the block above's, unchanged, with the package
 #     and speed grade swapped. The bels, the block RAM and the PLL are
 #     the family's and the same die serves the 12F and the 25F.
 #
-# Two banks are declared rather than one synthetic `io`, because they are
-# real: the LEDs are on bank 1 and the oscillator on bank 0, and both are
-# 3.3 V on this board.
+# Three banks are declared rather than one synthetic `io`, because they
+# are real: the LEDs are on bank 1, the oscillator on bank 0 and the USER
+# button on bank 3, and all three are 3.3 V on this board.
 
 device ecp5-12f-CABGA256
   family ecp5
@@ -304,6 +309,7 @@ device ecp5-12f-CABGA256
   io_standard LVDS vccio 2.5 differential
   bank bank0 vccio 3.3
   bank bank1 vccio 3.3
+  bank bank3 vccio 3.3
   pin A8 clock bank bank0
   pin E13 io bank bank1
   pin C13 io bank bank1
@@ -311,6 +317,7 @@ device ecp5-12f-CABGA256
   pin A15 io bank bank1
   pin D12 io bank bank1
   pin C11 io bank bank1
+  pin M14 io bank bank3
   pins partial
   global_buffers 16
   pll EHXPLLL input 8 400 vco 400 800 outputs 4 count 2 pfd 4 400 feedback out divide ref CLKI_DIV 1 128 divide feedback CLKFB_DIV 1 80 divide out CLKOP_DIV 1 128 derive CLKOP_CPHASE out -1 port ref=CLKI out=CLKOP fb=CLKFB lock=LOCK tie RST=0 STDBY=0 PHASESEL0=0 PHASESEL1=0 PHASEDIR=0 PHASESTEP=0 PHASELOADREG=0 PLLWAKESYNC=0 ENCLKOP=0 param PLLRST_ENA="DISABLED" INTFB_WAKE="DISABLED" STDBY_ENABLE="DISABLED" DPHASE_SOURCE="DISABLED" OUTDIVIDER_MUXA="DIVA" OUTDIVIDER_MUXB="DIVB" OUTDIVIDER_MUXC="DIVC" OUTDIVIDER_MUXD="DIVD" CLKOP_ENABLE="ENABLED" CLKOP_FPHASE=0 FEEDBK_PATH="CLKOP"

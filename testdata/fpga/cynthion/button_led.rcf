@@ -1,0 +1,64 @@
+# The USER button and the six FPGA LEDs of a Great Scott Gadgets
+# Cynthion r1.4.
+#
+# ---------------------------------------------------------------------
+# WHERE M14 COMES FROM
+# ---------------------------------------------------------------------
+#
+# Three independent sources, and they agree.
+#
+# 1. **Great Scott Gadgets' own Amaranth platform file**,
+#    `cynthion/python/src/gateware/platform/cynthion_r1_4.py` in
+#    `greatscottgadgets/cynthion`:
+#
+#        # USER button
+#        Resource("button_user", 0, PinsN("M14", dir="i"),
+#                 Attrs(IO_TYPE="LVCMOS33", PULLMODE="NONE")),
+#
+#    `PinsN` is `Pins(..., invert=True)`, so the signal is active low:
+#    the ball reads low while the button is held.
+#
+# 2. **The r1.4.0 KiCad schematic** in `greatscottgadgets/cynthion-hardware`,
+#    sheet `indicators_buttons.kicad_sch`. `SW3`, valued `BTN_USER`, is a
+#    normally-open SPST between ground and a node that a 10 k resistor
+#    (R106) pulls up to +3V3; that node reaches the hierarchical label
+#    `~{BTN_USER}` through a 33 k series resistor (R107) with a 1 uF
+#    capacitor (C78) to ground, which is a debounce of about 33 ms.
+#
+#    Two things follow and both matter. **Released is high**, through
+#    43 k of resistance, so the FPGA must not pull the pin down: the
+#    `PULLMODE=NONE` the platform file asks for is why this works, and
+#    the database's default for the field is `DOWN`. And **the signal is
+#    slow and clean**, so no debouncing in the fabric is needed.
+#
+# 3. **Project Trellis' `iodb.json`** for the caBGA-256, which puts M14
+#    at row 32, column 72, PIO D — the **right** edge of the die, not the
+#    top — in IO bank 3. That is the edge this backend had never
+#    described, and the bits it needs were checked against
+#    `facedancer.bit`, which is Great Scott Gadgets' own build of the one
+#    gateware of theirs that reads this button.
+#
+# Bank 3's VCCIO is 3.3 V, hence LVCMOS33: all three of their bitstreams
+# set `BANK.VCCIO` to `3V3` on every bank of the part.
+#
+# ---------------------------------------------------------------------
+# THE LEDS
+# ---------------------------------------------------------------------
+#
+# Ball names from the same platform file:
+#
+#     *LEDResources(pins="E13 C13 B14 A15 D12 C11",
+#                   attrs=Attrs(IO_TYPE="LVCMOS33"), invert=True),
+#
+# in that order, so `led_n[0]` is E13. All six are on the top edge in
+# bank 1. `invert=True` is the polarity: they are active low, and this
+# file cannot say so. See `button_led.v`.
+
+set_io -io_standard LVCMOS33 button_n M14
+
+set_io -io_standard LVCMOS33 led_n[0] E13
+set_io -io_standard LVCMOS33 led_n[1] C13
+set_io -io_standard LVCMOS33 led_n[2] B14
+set_io -io_standard LVCMOS33 led_n[3] A15
+set_io -io_standard LVCMOS33 led_n[4] D12
+set_io -io_standard LVCMOS33 led_n[5] C11

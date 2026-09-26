@@ -485,12 +485,19 @@ FPGA:
       time the owner looked and **all six LEDs were on**. `DONE` was high
       for both the broken and the corrected bitstream, and every
       structural check passed on the broken one; a person looking at the
-      board is what told them apart. The backend builds the part's
-      geometry and its pads and
-      **no interconnect at all**, so nothing routed, nothing clocked and
-      no lookup table can be built yet, and a design with anything to
-      route is refused by name rather than emitted. See
-      `docs/fpga-trellis.md`.
+      board is what told them apart. On 2026-09-26 the backend gained
+      **interconnect**: 1 096 425 wires and 8 211 900 pips for the whole
+      die from `bits.db`'s `.mux` and `.fixed_conn` records, the eight
+      lookup tables of every logic tile, and pads on the right edge as
+      well as the top. `testdata/fpga/cynthion/button_led.v` — the USER
+      button through the fabric and a lookup table to two LEDs, two
+      signals and 23 pips — was loaded into the same board and accepted,
+      `DONE`, status `0x00200100`; **nobody has looked at the LEDs yet**.
+      Every bit of it decodes back through the database with nothing
+      unexplained, and the input pad was checked against `facedancer.bit`,
+      the one reference bitstream whose gateware reads that button. What is
+      still missing is the clock network: `globals.json` is not read, so
+      nothing clocked can be placed. See `docs/fpga-trellis.md`.
 
 ASIC:
 - [x] Liberty (`.lib`) parser: cells, pins, functions, timing tables.

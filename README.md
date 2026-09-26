@@ -174,11 +174,18 @@ with the corrected bitstream in the part the owner reported **all six LEDs
 on**. `DONE` had been high both times, which is the lesson: it says a
 bitstream was accepted, not that it configures what the design asked for.
 Only a person looking told the two runs apart.
-[`docs/fpga-trellis.md`](docs/fpga-trellis.md) says what that settles and
-what it does not: the ECP5 backend builds the part's geometry and its pads
-and **no interconnect at all**, so nothing routed and nothing clocked can
-be built yet, and a design with anything to route is refused by name
-rather than turned into a bitstream that could not work.
+On 2026-09-26 the backend gained **interconnect**, and a design with
+something to route was built and loaded into the same part:
+`testdata/fpga/cynthion/button_led.v`, the board's USER button through
+about thirty rows of the die and a lookup table to two of its LEDs. The
+part accepted it and asserted `DONE`; whether the LEDs follow the button
+has not been watched yet, and saying so is the point.
+[`docs/fpga-trellis.md`](docs/fpga-trellis.md) says what was checked
+instead — every bit of the bitstream decoded back through Project Trellis'
+own database and named, and the pads compared against bitstreams Lattice's
+own packer wrote for this very board — and what is still missing, which is
+the clock network: `globals.json` is not read, so nothing sequential can be
+placed.
 
 Sources of one language are elaborated together, so a testbench and the
 modules it instantiates go on one command line. A design already in the

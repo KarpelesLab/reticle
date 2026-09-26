@@ -385,10 +385,10 @@ pub type EnumBits = (String, Option<String>, Vec<(String, Vec<DbBit>)>);
 ///
 /// Four record kinds, in the order the file writes them:
 ///
-/// - `.mux <sink>` and then `<source> <bits…>`: a **programmable**
-///   connection. A source with no bits is not a connection at all — it is
-///   the state of the mux when nothing drives it, which is why the four
-///   `…BOUNCE` sources exist — so [`TileDatabase::arcs`] leaves those out.
+/// - `.mux <sink>` and then `<source> <bits…>`: a programmable connection.
+///   A source with **no** bits is the state the mux is in when none of its
+///   bits is set, and that is still a connection — see
+///   [`TileDatabase::arcs`], which is where this was got wrong once.
 /// - `.config <name> <default>` and then one bit group per bit of the
 ///   word, bit 0 first: a multi-bit field such as a lookup table's
 ///   `INIT`.
@@ -494,10 +494,43 @@ impl TileDatabase {
         Ok(out)
     }
 
-    /// The programmable connections that really are connections: every
-    /// `.mux` source with at least one bit.
+    /// Every `.mux` source, **including the ones with no bits**.
+    ///
+    /// # The mistake this used to make
+    ///
+    /// This returned only the sources with bits, on the grounds that a
+    /// bitless source is "the state of the mux when nothing drives it"
+    /// rather than a connection. That reading is wrong, and it is wrong in
+    /// a way that no structural check would have caught: it disconnects
+    /// every lookup table in the part from the interconnect.
+    ///
+    /// A `PLC2`'s output mux is
+    ///
+    /// ```text
+    /// .mux F0
+    /// F0_SLICE -
+    /// F5A_SLICE F8B10
+    /// ```
+    ///
+    /// `F0` is the routing wire and `F0_SLICE` is the lookup table's
+    /// output. With `F8B10` clear the mux carries `F0_SLICE`, which is the
+    /// *usual* case and the only way a LUT reaches the fabric; `F8B10` set
+    /// switches it to the carry chain's cascade output instead. So the
+    /// bitless source is the connection a design almost always wants, and
+    /// dropping it left every LUT output driving nothing. It was found by
+    /// walking the graph from a pad to a LUT and back before any of this
+    /// was written in Rust: the walk reached `F0` and never `F0_SLICE`.
+    ///
+    /// A bitless source becomes a pip with an empty bit list, which is
+    /// what [`Arch`](crate::fpga::arch::Arch) already means by a connection
+    /// that is always there, and it is what `ecppack` writes for one:
+    /// `ChipConfig::add_arc` of a bitless arc sets no bits.
+    ///
+    /// The four `…BOUNCE` sources are bitless too and stay harmless: no
+    /// `.mux` has a `…BOUNCE` as its *sink*, so nothing drives one and a
+    /// router can never route through one.
     pub fn arcs(&self) -> impl Iterator<Item = &MuxBits> {
-        self.muxes.iter().filter(|(_, _, bits)| !bits.is_empty())
+        self.muxes.iter()
     }
 
     /// The named field of that name.
@@ -618,6 +651,45 @@ pub enum WireTarget {
 /// so the wire is declared once in the tile that owns it and every
 /// reference resolves straight to it.
 pub fn globalise(name: &str, chip_prefix: &str) -> Option<WireTarget> {
+    Some(match globalise_ref(name, chip_prefix)? {
+        WireTargetRef::Tile { dx, dy, name } => WireTarget::Tile {
+            dx,
+            dy,
+            name: name.to_owned(),
+        },
+        WireTargetRef::Global { name } => WireTarget::Global {
+            name: name.to_owned(),
+        },
+    })
+}
+
+/// [`WireTarget`] that borrows the name it found rather than owning it.
+///
+/// The loader resolves about a million and a half wire names — every name
+/// of every tile of the grid — and does it twice, once to decide which
+/// position owns a name and once per pip. An owned `String` per resolution
+/// is a few million allocations for nothing, since every name is a slice of
+/// a `bits.db` already in memory.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum WireTargetRef<'a> {
+    /// A wire of the tile `(dx, dy)` positions away, under `name`.
+    Tile {
+        /// Columns east.
+        dx: i32,
+        /// Rows **south**.
+        dy: i32,
+        /// The name in that tile.
+        name: &'a str,
+    },
+    /// A wire that reaches the whole die.
+    Global {
+        /// Its name.
+        name: &'a str,
+    },
+}
+
+/// [`globalise`] without the allocation; see [`WireTargetRef`].
+pub fn globalise_ref<'a>(name: &'a str, chip_prefix: &str) -> Option<WireTargetRef<'a>> {
     let mut rest = name;
     for prefix in ["25K_", "45K_", "85K_"] {
         if let Some(stripped) = name.strip_prefix(prefix) {
@@ -634,23 +706,21 @@ pub fn globalise(name: &str, chip_prefix: &str) -> Option<WireTarget> {
             || rest.contains("HPBX")
             || rest.contains("HPRX");
         if per_tile {
-            return Some(WireTarget::Tile {
+            return Some(WireTargetRef::Tile {
                 dx: 0,
                 dy: 0,
-                name: rest.to_owned(),
+                name: rest,
             });
         }
-        return Some(WireTarget::Global {
-            name: rest.to_owned(),
-        });
+        return Some(WireTargetRef::Global { name: rest });
     }
     // `[NS]<n>` then `[EW]<n>`, then `_`, then the base name. Anything
     // that does not match that shape is a wire of this very tile.
     let Some(under) = rest.find('_') else {
-        return Some(WireTarget::Tile {
+        return Some(WireTargetRef::Tile {
             dx: 0,
             dy: 0,
-            name: rest.to_owned(),
+            name: rest,
         });
     };
     let (head, tail) = (&rest[..under], &rest[under + 1..]);
@@ -686,17 +756,13 @@ pub fn globalise(name: &str, chip_prefix: &str) -> Option<WireTarget> {
     }
     if matched == 0 || at != head.len() {
         // The underscore was part of the name, not a direction prefix.
-        return Some(WireTarget::Tile {
+        return Some(WireTargetRef::Tile {
             dx: 0,
             dy: 0,
-            name: rest.to_owned(),
+            name: rest,
         });
     }
-    Some(WireTarget::Tile {
-        dx,
-        dy,
-        name: tail.to_owned(),
-    })
+    Some(WireTargetRef::Tile { dx, dy, name: tail })
 }
 
 #[cfg(test)]
@@ -869,8 +935,17 @@ NONE F7B0 !F8B0
 ";
         let db = TileDatabase::parse(text, "bits.db").expect("parses");
         assert_eq!(db.muxes.len(), 3);
-        // The bit-less source is a mux state and not a connection.
-        assert_eq!(db.arcs().count(), 2);
+        // **Every** source is an arc, the bitless one included: see
+        // `TileDatabase::arcs`, where believing otherwise disconnected
+        // every lookup table on the die.
+        assert_eq!(db.arcs().count(), 3);
+        assert_eq!(
+            db.arcs()
+                .filter(|(_, _, bits)| bits.is_empty())
+                .map(|(sink, source, _)| (sink.as_str(), source.as_str()))
+                .collect::<Vec<_>>(),
+            vec![("A0", "WBOUNCE")]
+        );
         assert_eq!(
             db.muxes[0].2,
             vec![

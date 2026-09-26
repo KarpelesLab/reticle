@@ -662,7 +662,12 @@ pub fn generate(
 /// two's-complement 64-bit word, and a string parameter has no bits: a
 /// family that configures something with a keyword has to say so with a
 /// [`ConfigEntry::Cell`] entry instead.
-fn param_bit(value: Option<&AttrValue>, index: u32) -> bool {
+///
+/// Visible to the rest of `fpga` because a family whose cell bits depend on
+/// the *routing* cannot use [`ConfigEntry`] at all and has to read a
+/// parameter itself; `super::trellis`'s `configure_logic` is the one, and
+/// its documentation says why.
+pub(super) fn param_bit(value: Option<&AttrValue>, index: u32) -> bool {
     match value {
         Some(AttrValue::Const(c)) => c
             .get(index)

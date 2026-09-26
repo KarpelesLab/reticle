@@ -3,39 +3,41 @@
 //!
 //! ```text
 //! =====================================================================
-//! NOTHING IN THIS MODULE IS USED YET. It is notes, not a loaded fabric.
+//! THESE ARE NOTES. [`super`] BUILDS ITS BELS FROM THE DATABASE INSTEAD.
 //! =====================================================================
 //! ```
 //!
-//! [`super`] builds an [`Arch`](crate::fpga::arch::Arch) with pads and no
-//! interconnect, and it does **not** call anything here: its pad bels are
-//! built from [`super::parse`] and the measured tile rule in its own
-//! header. What is here is the *next* step's tables — the eight lookup
-//! tables and eight flip-flops of a `PLC2`, and the wires their pins reach
-//! — written down while the source they came from was open, and kept
-//! because they are the part that cannot be derived.
+//! [`super`] declares the same lookup tables and the same IO buffers that
+//! [`bels_for`] describes, and it does **not** call anything here: it reads
+//! the wire names out of `bits.db`'s own records and checks that the tile
+//! type really owns each one before it declares a pin. That is the
+//! difference that matters — a table written down from reading `libtrellis`
+//! can be wrong about a wire and nothing notices, while a pin whose wire
+//! the type does not declare is a pad or a LUT that [`super`] leaves out.
 //!
-//! Two consequences of that, and both matter:
+//! What is kept here is the part that is still not derivable and the two
+//! things the flip-flop will need:
 //!
-//! - **Nothing here has been checked against a part or against a real
-//!   bitstream.** The tile rule in [`super`]'s header was; these tables
-//!   were not.
-//! - [`top_pad_tile`] and [`top_pic_tile`] describe the same rule
-//!   [`super`] implements, and the rule as measured is the *column
-//!   offsets* they give — side A at the ball's column, side B one east —
-//!   and **not** the sentence [`bels_for`] carries about which side a
-//!   `PIOT1` belongs to. A `PIOT1` holds `PIOB.BASE_TYPE`; it is the
-//!   `PIOT0` one column *west* of it that names that `PIOB`'s data wire.
-//!   `docs/fpga-trellis.md` has the measurement. Anything built on this
-//!   module should start by reconciling it with that.
+//! - **which pin of a bel a wire is.** `bits.db` names wires and the bits
+//!   that join them; it does not say that `A0_SLICE` is a lookup table's
+//!   first input or that `PADDOA_PIO` is what an output pad drives from.
+//!   That mapping is `libtrellis`' own `Bels.cpp` and `Chip.cpp`, and
+//!   [`super`] carries the same two facts inline where it needs them. This
+//!   is where they are written out with their provenance.
+//! - **the flip-flop's settings**, which nothing uses yet because nothing
+//!   clocked can be placed: there is no clock network in [`super`].
 //!
-//! **None of this is in the database.** Project Trellis' `bits.db` names
-//! wires and the bits that join them; it does not say that `A0_SLICE` is a
-//! lookup table's first input or that `PADDOA_PIO` is what an output pad
-//! drives from. That mapping is `libtrellis`' own `Bels.cpp` and
-//! `Chip.cpp`, which is where every table below comes from, and it is
-//! written out here rather than derived because there is nothing to derive
-//! it from.
+//! Two consequences, and both matter:
+//!
+//! - **Nothing in this module has been checked against a part.** The tile
+//!   rules in [`super`]'s header have been, for both edges it describes;
+//!   the flip-flop table below has not.
+//! - [`top_pad_tile`] and [`top_pic_tile`] describe the same rule [`super`]
+//!   implements for the top edge, and [`bels_for`]'s sentence about a
+//!   `PIOT1` contributing no bel **is now the right one**: a `PIOT1` holds
+//!   the *bits* of a `PIOB` whose buffer is one column west, and [`super`]
+//!   puts the bel at the buffer. That contradiction is resolved; the note
+//!   is kept because reconciling it is what found the distinction.
 //!
 //! The ECP5's slice differs from both families this project has met
 //! before in one way that matters a great deal: **a flip-flop has a data
@@ -45,7 +47,9 @@
 //! anything sequential without packing a lookup table and a flip-flop onto
 //! one site. Here `M<n>_SLICE` is a mux output the interconnect drives, and
 //! `SLICE<l>.REG<n>.SD = 0` selects it over the lookup table's output, so a
-//! flip-flop places and routes on its own.
+//! flip-flop places and routes on its own. [`super`] declares the `M<n>`
+//! wires and their pips already; what is missing is a clock to reach the
+//! `CLK<n>` ones.
 
 /// One bel a tile type contributes, at the position that tile sits.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -76,13 +80,12 @@ fn slice_letter(index: usize) -> char {
 /// right edges put four, which is why the count is a property of the tile
 /// type.
 ///
-/// **This is the part of the module the measurement contradicts**, and it
-/// is left as written with the contradiction named rather than silently
-/// adjusted, because nothing uses it and a half-corrected table is worse
-/// than an uncorrected one. It says a `PIOT1` contributes no bel, on the
-/// grounds that it only holds the bits of a `PIOB` belonging one column
-/// west. A `PIOT1` does hold `PIOB.BASE_TYPE`, and [`super`] puts a `PIOB`
-/// bel there for exactly that reason. See this module's header.
+/// It says a `PIOT1` contributes no bel, on the grounds that it only holds
+/// the *bits* of a `PIOB` whose buffer is one column west, and that is
+/// right: [`super`] puts the bel at the buffer's position, which is a
+/// `PIOT0`, because that is the tile whose namespace owns `PADDOB_PIO`.
+/// While nothing routed [`super`] put it at the bits instead and this
+/// module's header recorded the contradiction; the contradiction is gone.
 pub fn bels_for(ty: &str) -> Vec<BelSpec> {
     let mut out = Vec::new();
     if ty == "PLC2" {
