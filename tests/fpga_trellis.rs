@@ -2461,6 +2461,68 @@ fn the_bidirectional_design_routes_and_configures_what_its_header_promises() {
     );
 }
 
+/// The ULPI USB device's top level, simulated against the smallest
+/// transceiver that gets it through its start-up.
+///
+/// The device itself is checked in `tests/ip_library.rs`, against a
+/// transceiver model and a host model written in Rust; what is checked here
+/// is the part of it that only a **top level** has — the eight-bit
+/// turnaround built out of pads, the input side of the same pads reaching
+/// the core so that its register readback can work, the power-on reset, and
+/// the interface clock leaving the part.
+///
+/// It skips when `ip/` is not in this copy of the crate, the way
+/// `tests/soc.rs` skips without `examples/soc`: the IP library is published
+/// as part of the repository and excluded from the `.crate`, so a consumer
+/// building from crates.io has the design and not the blocks it
+/// instantiates.
+#[test]
+#[cfg(all(feature = "verilog", feature = "sim"))]
+fn the_usb_devices_top_level_configures_a_transceiver_through_its_pads() {
+    use reticle::diag::Diagnostics;
+    use reticle::sim::{SimOptions, Simulator};
+    use reticle::source::SourceMap;
+    use reticle::verilog::{Dialect, ElabOptions, NoIncludes, elaborate, parse_source};
+
+    let sources = [
+        "testdata/fpga/cynthion/usb_ulpi_device_tb.v",
+        "testdata/fpga/cynthion/usb_ulpi_device.v",
+        "ip/usb_device_ulpi/rtl/usb_ulpi_link.v",
+        "ip/usb_device_ulpi/rtl/usb_device_ulpi.v",
+        "ip/usb_device_fs/rtl/usb_ctrl_ep.v",
+    ];
+    let mut map = SourceMap::new();
+    let mut diags = Diagnostics::new();
+    let mut files = Vec::new();
+    for name in sources {
+        let Ok(text) = std::fs::read_to_string(name) else {
+            eprintln!("skipped: `{name}` is not in this copy of the crate");
+            return;
+        };
+        let id = map.add(name, &text).expect("fits");
+        files.push(parse_source(
+            &mut map,
+            id,
+            Dialect::Verilog2005,
+            &mut NoIncludes,
+            &mut diags,
+        ));
+    }
+    let refs: Vec<_> = files.iter().collect();
+    let design = elaborate(&refs, &ElabOptions::new(Dialect::Verilog2005), &mut diags)
+        .expect("the testbench elaborates");
+    assert!(!diags.has_errors(), "{}", diags.render(&map));
+
+    let mut sim = Simulator::new(&design, SimOptions::default()).expect("it simulates");
+    sim.run();
+    assert!(sim.finished(), "the testbench did not reach `$finish`");
+    assert_eq!(
+        sim.output(),
+        "PASS: the transceiver was configured and read back through the pads\n",
+        "`usb_ulpi_device_tb.v` disagrees with `usb_ulpi_device.v`"
+    );
+}
+
 /// What `bidir_bus.v`'s header tells a person to look for, simulated.
 ///
 /// Everything else in this file is about the bits. This is about the design,

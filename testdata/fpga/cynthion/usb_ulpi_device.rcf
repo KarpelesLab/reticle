@@ -1,0 +1,101 @@
+# The auxiliary ULPI transceiver of a Great Scott Gadgets Cynthion r1.4,
+# wired as a USB device: the same eight bidirectional data balls
+# `bidir_bus.rcf` turns around, now used for what they are for.
+#
+# Every line is Great Scott Gadgets' own, from
+# `cynthion/python/src/gateware/platform/cynthion_r1_4.py`:
+#
+#     ULPIResource("aux_phy", 0,
+#         data="F16 G15 G16 H15 J15 J16 K15 K16", clk="D16", clk_dir='o',
+#         dir="E16", nxt="F15", stp="E15", rst="J13", rst_invert=True,
+#         attrs=Attrs(IO_TYPE="LVCMOS33", SLEWRATE="FAST")),
+#
+# and the platform file's own `default_usb_connection = "aux_phy"`, which is
+# the port their gateware puts a USB device on. `apollo_port_sharing` names
+# only `control_phy`, so the AUX port is nobody else's: loading this cannot
+# take away the Apollo debugger this board is programmed over.
+#
+# What each line is, and which of them a wrong direction would damage:
+#
+#   data   eight balls, bidirectional, driven by the FPGA only while the
+#          transceiver is not driving them. `usb_ulpi_device.v`'s header and
+#          `bidir_bus.v`'s have the argument; the interlock is `ulpi_dir`.
+#   dir    an input. The transceiver drives it and the FPGA must not.
+#   nxt    an input, the transceiver's throttle.
+#   stp    an output, one cycle at the end of a transfer.
+#   rst    an output, **active low at the ball** (`rst_invert=True`), which
+#          is what the transceiver's own reset pin is. The core's
+#          `ulpi_rst_n` is already in that sense, so nothing inverts here.
+#   clk    an output: `clk_dir='o'` means the FPGA drives the interface
+#          clock. 60 MHz both ways, so A8's own net reaches D16 and no PLL
+#          is involved.
+#
+# `iodb.json` puts all of data, dir, nxt, stp and rst at column 72 — the
+# right edge — and the eight data balls in **three** pad tiles, three of
+# which hold more than one bidirectional pad. `bidir_bus.rcf` has that
+# table and `docs/fpga-trellis.md` has why it mattered.
+#
+# **No `-pullup` on anything.** The far end of every one of these nets is a
+# transceiver pin; an internal pull would be fighting the board.
+# `configure_io` writes `PULLMODE = NONE`, which is what the platform file
+# asks for too — it names `IO_TYPE` and `SLEWRATE` and no `PULLMODE`.
+#
+# `SLEWRATE="FAST"` is the one attribute of that resource this backend does
+# not write. See "What remains" in `docs/fpga-trellis.md`; it is an edge
+# rate on a 60 MHz bus, so it is the first thing to suspect if the device
+# is intermittent rather than absent.
+#
+# ---------------------------------------------------------------------
+# A8, THE OSCILLATOR
+# ---------------------------------------------------------------------
+#
+#     # Primary, discrete 60MHz oscillator.
+#     Resource("clk_60MHz", 0, Pins("A8", dir="i"),
+#         Clock(60e6), Attrs(IO_TYPE="LVCMOS33")),
+#
+# ULPI's interface clock is 60 MHz and so is this, which is the whole reason
+# there is no `usb_device_ulpi_pll` beside the core the way there is a
+# `usb_device_fs_pll`. A8 is at row 0, column 29, PIO B, bank 0 — the top
+# edge, on the `PCLKC` half of bank 0's differential clock pair, so the
+# clock reaches its buffer through ordinary interconnect. `clock_blink.rcf`
+# has that walk.
+#
+# ---------------------------------------------------------------------
+# THE LEDS
+# ---------------------------------------------------------------------
+#
+#     *LEDResources(pins="E13 C13 B14 A15 D12 C11",
+#                   attrs=Attrs(IO_TYPE="LVCMOS33"), invert=True),
+#
+# Active low, LED 0 is E13, all six on the top edge in bank 1. They are the
+# diagnosis for a device that does not appear; the observable is `lsusb`.
+# `usb_ulpi_device.v` says what each one means and in what order to read
+# them.
+#
+# The USER button is deliberately **not** constrained. A manual reset would
+# need the core's `rst_n`, which is asynchronous, and
+# `configure_registers` refuses an asynchronous reset on this family.
+
+set_io -io_standard LVCMOS33 clk A8
+
+set_io -io_standard LVCMOS33 ulpi_data[0] F16
+set_io -io_standard LVCMOS33 ulpi_data[1] G15
+set_io -io_standard LVCMOS33 ulpi_data[2] G16
+set_io -io_standard LVCMOS33 ulpi_data[3] H15
+set_io -io_standard LVCMOS33 ulpi_data[4] J15
+set_io -io_standard LVCMOS33 ulpi_data[5] J16
+set_io -io_standard LVCMOS33 ulpi_data[6] K15
+set_io -io_standard LVCMOS33 ulpi_data[7] K16
+
+set_io -io_standard LVCMOS33 ulpi_dir E16
+set_io -io_standard LVCMOS33 ulpi_nxt F15
+set_io -io_standard LVCMOS33 ulpi_stp E15
+set_io -io_standard LVCMOS33 ulpi_rst_n J13
+set_io -io_standard LVCMOS33 ulpi_clk D16
+
+set_io -io_standard LVCMOS33 led0_n E13
+set_io -io_standard LVCMOS33 led1_n C13
+set_io -io_standard LVCMOS33 led2_n B14
+set_io -io_standard LVCMOS33 led3_n A15
+set_io -io_standard LVCMOS33 led4_n D12
+set_io -io_standard LVCMOS33 led5_n C11
