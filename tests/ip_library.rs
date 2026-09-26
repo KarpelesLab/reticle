@@ -8477,24 +8477,43 @@ enum UsbReply {
     Nothing,
 }
 
+/// The far end of the D+ / D- pair, as a host reaches it.
+///
+/// `usb_device_fs` drives the pair itself, so for it this is the device's
+/// own pins. `usb_device_ulpi` cannot: its lines belong to a transceiver,
+/// and what sits between the host and the device is a model of that
+/// transceiver. The host model above is the same either way, which is
+/// the point of the trait — the ULPI core is enumerated by the host that
+/// enumerates the full-speed one, packets, CRCs, drift and all.
+trait UsbPair {
+    /// Cycles of the device's clock in one full-speed bit time.
+    fn cycles_per_bit(&self) -> u64;
+    /// One device clock cycle. `host` is the state the host drives onto
+    /// the pair, or `None` while the host has let go and is listening.
+    fn cycle(&mut self, host: Option<UsbLine>);
+    /// What the far end drives onto the pair, if it drives at all.
+    fn driven(&mut self) -> Option<UsbLine>;
+    /// The address the device has taken.
+    fn address(&self) -> u64;
+    fn configured(&self) -> bool;
+    /// Whether the device is reporting a bus reset this cycle.
+    fn usb_reset(&self) -> bool;
+    /// Anything the far end did that its own protocol forbids.
+    fn problems(&self) -> &[String];
+    /// The cycles an answer may take, which is a property of what is
+    /// between the host and the device.
+    fn answer_window(&self) -> (u64, u64);
+}
+
 /// A USB host on the other end of the pair: it sends real packets —
-/// NRZI, stuffed, with their CRCs — a bit every four cycles of the
-/// device's 48 MHz, stretched or shortened now and then as a host
-/// clock a little off the device's would, and it decodes what the
-/// device sends back the way a host does, checking the SYNC field, the
-/// stuffing, the EOP, the PID check nibble and the CRC16, and measuring
-/// how long the device took to answer.
-struct UsbHost<'d> {
-    sim: Simulator<'d>,
-    clk: NetHandle,
-    dp_i: NetHandle,
-    dn_i: NetHandle,
-    dp_o: NetHandle,
-    dn_o: NetHandle,
-    oe: NetHandle,
-    address: NetHandle,
-    configured: NetHandle,
-    usb_reset: NetHandle,
+/// NRZI, stuffed, with their CRCs — a bit every few cycles of the
+/// device's clock, stretched or shortened now and then as a host
+/// clock a little off the device's would, and it decodes what comes
+/// back the way a host does, checking the SYNC field, the stuffing, the
+/// EOP, the PID check nibble and the CRC16, and measuring how long the
+/// device took to answer.
+struct UsbHost<P> {
+    pair: P,
     /// Every how many bits the host's bit is a cycle long or short: a
     /// positive number stretches, a negative one shortens, zero never.
     drift: i32,
@@ -8504,63 +8523,48 @@ struct UsbHost<'d> {
     problems: Vec<String>,
 }
 
-impl<'d> UsbHost<'d> {
-    fn new(design: &'d Design, drift: i32) -> UsbHost<'d> {
-        let sim = simulate(design, "usb_device_fs");
-        let pin = |n: &str| top_net(&sim, n);
-        let mut host = UsbHost {
-            clk: pin("clk48"),
-            dp_i: pin("usb_dp_i"),
-            dn_i: pin("usb_dn_i"),
-            dp_o: pin("usb_dp_o"),
-            dn_o: pin("usb_dn_o"),
-            oe: pin("usb_oe"),
-            address: pin("address"),
-            configured: pin("configured"),
-            usb_reset: pin("usb_reset"),
+impl<P: UsbPair> UsbHost<P> {
+    fn new(pair: P, drift: i32) -> UsbHost<P> {
+        UsbHost {
+            pair,
             drift,
             bits_sent: 0,
             gaps: Vec::new(),
             problems: Vec::new(),
-            sim,
-        };
-        let rst_n = top_net(&host.sim, "rst_n");
-        host.set_line(UsbLine::J);
-        let clk = host.clk;
-        reset(&mut host.sim, clk, rst_n);
-        assert!(
-            high(&host.sim, top_net(&host.sim, "usb_dp_pu")),
-            "the device asks for its D+ pull-up"
-        );
-        host
+        }
     }
 
-    fn set_line(&mut self, line: UsbLine) {
-        let (dp, dn) = line.pins();
-        self.sim.set(self.dp_i, bit(dp));
-        self.sim.set(self.dn_i, bit(dn));
+    fn address(&self) -> u64 {
+        self.pair.address()
+    }
+
+    fn configured(&self) -> bool {
+        self.pair.configured()
     }
 
     /// One cycle with the host driving `line`; the device must not
     /// drive at the same time.
     fn host_cycle(&mut self, line: UsbLine) {
-        self.set_line(line);
-        let clk = self.clk;
-        cycle(&mut self.sim, clk, HALF);
-        if high(&self.sim, self.oe) {
+        self.pair.cycle(Some(line));
+        if self.pair.driven().is_some() {
             self.problems
                 .push("the device drives the pair while the host does".into());
         }
     }
 
     /// The cycles the host's next bit lasts.
-    fn bit_cycles(&mut self) -> u32 {
+    fn bit_cycles(&mut self) -> u64 {
         self.bits_sent += 1;
+        let nominal = self.pair.cycles_per_bit();
         let every = u64::from(self.drift.unsigned_abs());
         if every != 0 && self.bits_sent.is_multiple_of(every) {
-            if self.drift > 0 { 5 } else { 3 }
+            if self.drift > 0 {
+                nominal + 1
+            } else {
+                nominal - 1
+            }
         } else {
-            4
+            nominal
         }
     }
 
@@ -8570,7 +8574,6 @@ impl<'d> UsbHost<'d> {
                 self.host_cycle(*state);
             }
         }
-        self.set_line(UsbLine::J);
     }
 
     fn send(&mut self, packet: &[u8]) {
@@ -8580,8 +8583,8 @@ impl<'d> UsbHost<'d> {
 
     /// Idles the bus for `bits` bit times, the gap a host leaves between
     /// its own packets.
-    fn idle(&mut self, bits: u32) {
-        for _ in 0..4 * bits {
+    fn idle(&mut self, bits: u64) {
+        for _ in 0..self.pair.cycles_per_bit() * bits {
             self.host_cycle(UsbLine::J);
         }
     }
@@ -8589,45 +8592,28 @@ impl<'d> UsbHost<'d> {
     /// Waits up to eighteen bit times — the host's turnaround timeout —
     /// for the device to answer, and decodes what it sends.
     fn receive(&mut self) -> UsbReply {
-        let clk = self.clk;
+        let cpb = self.pair.cycles_per_bit();
         let mut waited = 0u64;
-        self.set_line(UsbLine::J);
-        while !high(&self.sim, self.oe) {
-            if waited > 18 * 4 {
+        while self.pair.driven().is_none() {
+            if waited > 18 * cpb {
                 return UsbReply::Nothing;
             }
-            cycle(&mut self.sim, clk, HALF);
+            self.pair.cycle(None);
             waited += 1;
         }
         self.gaps.push(waited);
 
-        // Record the pair for as long as the device drives it; the bus
-        // is the device's while it does, so the device's own input sees
-        // it too.
+        // Record the pair for as long as the far end drives it.
         let mut states = Vec::new();
-        while high(&self.sim, self.oe) {
-            let dp = high(&self.sim, self.dp_o);
-            let dn = high(&self.sim, self.dn_o);
-            let state = match (dp, dn) {
-                (true, false) => UsbLine::J,
-                (false, true) => UsbLine::K,
-                (false, false) => UsbLine::Se0,
-                _ => {
-                    self.problems.push("the device drove SE1".into());
-                    UsbLine::Se0
-                }
-            };
+        while let Some(state) = self.pair.driven() {
             states.push(state);
-            self.sim.set(self.dp_i, bit(dp));
-            self.sim.set(self.dn_i, bit(dn));
-            cycle(&mut self.sim, clk, HALF);
-            if states.len() > 4 * 200 {
+            self.pair.cycle(None);
+            if states.len() as u64 > cpb * 200 {
                 self.problems
                     .push("the device never let go of the bus".into());
                 break;
             }
         }
-        self.set_line(UsbLine::J);
         match self.decode(&states) {
             Ok(reply) => reply,
             Err(why) => {
@@ -8637,16 +8623,17 @@ impl<'d> UsbHost<'d> {
         }
     }
 
-    /// A packet from the line states the device drove, one per cycle,
-    /// sampled in the middle of each four-cycle bit.
+    /// A packet from the line states the far end drove, one per cycle,
+    /// sampled in the middle of each bit.
     fn decode(&self, states: &[UsbLine]) -> Result<UsbReply, String> {
-        if !states.len().is_multiple_of(4) {
+        let cpb = usize::try_from(self.pair.cycles_per_bit()).expect("a small number");
+        if !states.len().is_multiple_of(cpb) {
             return Err(format!(
                 "the device drove {} cycles, not whole bits",
                 states.len()
             ));
         }
-        let symbols: Vec<UsbLine> = states.iter().skip(2).step_by(4).copied().collect();
+        let symbols: Vec<UsbLine> = states.iter().skip(cpb / 2).step_by(cpb).copied().collect();
         let n = symbols.len();
         if n < 8 + 8 + 3 {
             return Err(format!("{n} bit times is too short for a packet"));
@@ -8721,9 +8708,9 @@ impl<'d> UsbHost<'d> {
     /// SE0 for ten microseconds: a bus reset.
     fn bus_reset(&mut self) {
         let mut seen = false;
-        for _ in 0..480 {
+        for _ in 0..120 * self.pair.cycles_per_bit() {
             self.host_cycle(UsbLine::Se0);
-            seen |= high(&self.sim, self.usb_reset);
+            seen |= self.pair.usb_reset();
         }
         assert!(seen, "the device saw the bus reset");
         self.idle(50);
@@ -8807,19 +8794,135 @@ impl<'d> UsbHost<'d> {
     }
 
     fn assert_clean(&self) {
+        let mut problems = self.problems.clone();
+        problems.extend(self.pair.problems().iter().cloned());
         assert!(
-            self.problems.is_empty(),
-            "the host saw the device break the protocol:\n  {}",
-            self.problems.join("\n  ")
+            problems.is_empty(),
+            "the host saw the protocol broken:\n  {}",
+            problems.join("\n  ")
         );
-        // Every answer came between two and six and a half bit times
-        // after the host's EOP.
+        // Every answer came inside the window the layer between the host
+        // and the device allows.
+        let (low, high) = self.pair.answer_window();
         for gap in &self.gaps {
             assert!(
-                (8..=26).contains(gap),
-                "the device answered after {gap} cycles, outside 2 to 6.5 bit times"
+                (low..=high).contains(gap),
+                "the device answered after {gap} cycles, outside {low} to {high}"
             );
         }
+    }
+}
+
+/// `usb_device_fs` on the other end of the pair: the device's own pins,
+/// four cycles of its 48 MHz clock to a bit.
+struct FsPair<'d> {
+    sim: Simulator<'d>,
+    clk: NetHandle,
+    dp_i: NetHandle,
+    dn_i: NetHandle,
+    dp_o: NetHandle,
+    dn_o: NetHandle,
+    oe: NetHandle,
+    address: NetHandle,
+    configured: NetHandle,
+    usb_reset: NetHandle,
+    problems: Vec<String>,
+}
+
+impl<'d> FsPair<'d> {
+    fn new(design: &'d Design) -> FsPair<'d> {
+        let sim = simulate(design, "usb_device_fs");
+        let pin = |n: &str| top_net(&sim, n);
+        let mut pair = FsPair {
+            clk: pin("clk48"),
+            dp_i: pin("usb_dp_i"),
+            dn_i: pin("usb_dn_i"),
+            dp_o: pin("usb_dp_o"),
+            dn_o: pin("usb_dn_o"),
+            oe: pin("usb_oe"),
+            address: pin("address"),
+            configured: pin("configured"),
+            usb_reset: pin("usb_reset"),
+            problems: Vec::new(),
+            sim,
+        };
+        let rst_n = top_net(&pair.sim, "rst_n");
+        pair.set_line(UsbLine::J);
+        let clk = pair.clk;
+        reset(&mut pair.sim, clk, rst_n);
+        assert!(
+            high(&pair.sim, top_net(&pair.sim, "usb_dp_pu")),
+            "the device asks for its D+ pull-up"
+        );
+        pair
+    }
+
+    fn set_line(&mut self, line: UsbLine) {
+        let (dp, dn) = line.pins();
+        self.sim.set(self.dp_i, bit(dp));
+        self.sim.set(self.dn_i, bit(dn));
+    }
+}
+
+impl UsbPair for FsPair<'_> {
+    fn cycles_per_bit(&self) -> u64 {
+        4
+    }
+
+    fn cycle(&mut self, host: Option<UsbLine>) {
+        match host {
+            Some(line) => self.set_line(line),
+            None => {
+                // The bus is the device's while it drives it, so the
+                // device's own input sees what it puts there.
+                if high(&self.sim, self.oe) {
+                    let dp = high(&self.sim, self.dp_o);
+                    let dn = high(&self.sim, self.dn_o);
+                    self.sim.set(self.dp_i, bit(dp));
+                    self.sim.set(self.dn_i, bit(dn));
+                } else {
+                    self.set_line(UsbLine::J);
+                }
+            }
+        }
+        let clk = self.clk;
+        cycle(&mut self.sim, clk, HALF);
+    }
+
+    fn driven(&mut self) -> Option<UsbLine> {
+        if !high(&self.sim, self.oe) {
+            return None;
+        }
+        match (high(&self.sim, self.dp_o), high(&self.sim, self.dn_o)) {
+            (true, false) => Some(UsbLine::J),
+            (false, true) => Some(UsbLine::K),
+            (false, false) => Some(UsbLine::Se0),
+            (true, true) => {
+                self.problems.push("the device drove SE1".into());
+                Some(UsbLine::Se0)
+            }
+        }
+    }
+
+    fn address(&self) -> u64 {
+        get_u64(&self.sim, self.address)
+    }
+
+    fn configured(&self) -> bool {
+        high(&self.sim, self.configured)
+    }
+
+    fn usb_reset(&self) -> bool {
+        high(&self.sim, self.usb_reset)
+    }
+
+    fn problems(&self) -> &[String] {
+        &self.problems
+    }
+
+    fn answer_window(&self) -> (u64, u64) {
+        // Two to six and a half bit times after the host's EOP.
+        (8, 26)
     }
 }
 
@@ -8874,9 +8977,16 @@ fn usb_crcs_match_the_catalogue_and_the_wire() {
 
 fn usb_enumerate(drift: i32) {
     let design = usb_design();
-    let mut host = UsbHost::new(&design, drift);
+    let mut host = UsbHost::new(FsPair::new(&design), drift);
+    enumerate(&mut host);
+}
+
+/// A whole enumeration, and the only statement of one: both cores are
+/// held to it, since what a host does to a device does not depend on how
+/// the device's bytes reach the pair.
+fn enumerate<P: UsbPair>(host: &mut UsbHost<P>) {
     host.bus_reset();
-    assert_eq!(get_u64(&host.sim, host.address), 0);
+    assert_eq!(host.address(), 0);
 
     // What a host does first: the device descriptor at address 0, with a
     // wLength of 64 whatever the descriptor's size.
@@ -8888,7 +8998,7 @@ fn usb_enumerate(drift: i32) {
     // SET_ADDRESS takes effect after its status stage, not before.
     let status = host.control_write(0, set_address(9));
     assert_eq!(status, UsbReply::Data(USB_DATA1, Vec::new()));
-    assert_eq!(get_u64(&host.sim, host.address), 9, "the new address");
+    assert_eq!(host.address(), 9, "the new address");
 
     // Address 0 is not the device's any more.
     host.idle(10);
@@ -8920,16 +9030,16 @@ fn usb_enumerate(drift: i32) {
     assert_eq!(sixteen.len(), 16, "wLength ends the data stage");
 
     // SET_CONFIGURATION 1, then 0.
-    assert!(!high(&host.sim, host.configured));
+    assert!(!host.configured());
     let status = host.control_write(9, [0x00, 0x09, 0x01, 0, 0, 0, 0, 0]);
     assert_eq!(status, UsbReply::Data(USB_DATA1, Vec::new()));
-    assert!(high(&host.sim, host.configured), "configured");
+    assert!(host.configured(), "configured");
     host.control_write(9, [0x00, 0x09, 0x00, 0, 0, 0, 0, 0]);
-    assert!(!high(&host.sim, host.configured), "and back");
+    assert!(!host.configured(), "and back");
 
     // A bus reset forgets the address.
     host.bus_reset();
-    assert_eq!(get_u64(&host.sim, host.address), 0);
+    assert_eq!(host.address(), 0);
     let again = host
         .control_read(0, GET_DEVICE_DESCRIPTOR)
         .expect("enumerable again");
@@ -8955,7 +9065,16 @@ fn usb_device_fs_tracks_a_host_clock_that_is_slow_or_fast() {
 #[test]
 fn usb_device_fs_ignores_bad_packets_and_stalls_what_it_cannot_do() {
     let design = usb_design();
-    let mut host = UsbHost::new(&design, 0);
+    let mut host = UsbHost::new(FsPair::new(&design), 0);
+    ignore_what_it_cannot_do(&mut host);
+}
+
+/// The packets a device must not answer and the requests it must stall,
+/// which both cores are held to. A bad CRC or PID is the device's to
+/// notice in either arrangement; broken bit stuffing is the transceiver's
+/// on a ULPI bus and the receiver's own on a full-speed one, and either
+/// way the device must stay quiet.
+fn ignore_what_it_cannot_do<P: UsbPair>(host: &mut UsbHost<P>) {
     host.bus_reset();
 
     // A SETUP whose data has a wrong CRC16 is not acknowledged.
@@ -9038,7 +9157,7 @@ fn usb_device_fs_ignores_bad_packets_and_stalls_what_it_cannot_do() {
 #[test]
 fn usb_device_fs_sends_again_what_the_host_did_not_acknowledge() {
     let design = usb_design();
-    let mut host = UsbHost::new(&design, 0);
+    let mut host = UsbHost::new(FsPair::new(&design), 0);
     host.bus_reset();
     assert_eq!(
         host.setup(0, GET_DEVICE_DESCRIPTOR),
