@@ -708,9 +708,15 @@ and first-party IP should drop into a design as easily as a Rust crate.
       only**: a ULPI transceiver model sits between the core and the same
       USB host model that enumerates the full-speed core, the enumeration
       is written once and run against both, and the model checks the link
-      as well as answering it. **No host has seen it.** A person plugging
-      a cable in is what would settle the rest, and this is where that
-      would start.
+      as well as answering it. **A host has now seen it attach**, on a
+      Cynthion's AUX port, with the transceiver reset, configured over the
+      eight-bit bidirectional bus and read back through the same eight
+      pads before anything a host could see happened — so the bus turns
+      around on real silicon. It does **not** enumerate: the host detects
+      low speed where full speed was asked for. `docs/fpga-trellis.md` has
+      the seven experiments on the part that narrow that down and
+      `ip/usb_device_ulpi/README.md` §11 has what it does to this block's
+      confidence.
 - [x] Registry: a static index (git repository of manifests) that
       `reticle add` searches, in the style of a crates.io index: one file
       per package under a name-derived path, one line per release with

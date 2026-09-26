@@ -9,8 +9,10 @@
 # device descriptor; 1209:0001 is pid.codes' test pair. README.md states
 # the protocol, with the provenance and confidence of every fact.
 #
-# This block has never run on a board. It enumerates in simulation
-# against a transceiver model, and no host has seen it.
+# This block has run on a board, and a host has seen it attach: see §11
+# of README.md. It does not enumerate — the host detects low speed where
+# full speed was asked for — and `docs/fpga-trellis.md` has the seven
+# experiments that narrow it down.
 name usb_device_ulpi
 version 1.0.0
 license MIT

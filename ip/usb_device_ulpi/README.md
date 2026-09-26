@@ -448,6 +448,33 @@ Choices where the specification allowed either:
 
 ## 11. What has been established, and what has not
 
+> **Updated 2026-09-27: it has been near a board, and a host has seen it.**
+> `testdata/fpga/cynthion/usb_ulpi_device.v` puts this block behind the
+> auxiliary transceiver of a Great Scott Gadgets Cynthion r1.4 and was loaded
+> into its ECP5. The host on the other end of the AUX cable **sees a device
+> attach**, and sees it attach and detach on command. Since the 1.5 kOhm
+> pull-up that makes a host notice a device is a bit of the transceiver's
+> Function Control register and not a pin the FPGA can drive, that is a
+> register write crossing the eight-bit bus, witnessed from the far side of a
+> USB cable. A variant that leaves `TermSelect` clear until **after** the
+> readback of §8 has matched also attaches, so the read direction works too.
+>
+> **It does not enumerate.** The host detects it as **low speed** where §7's
+> `XcvrSelect = 01` asks for full speed, and then talks at 1.5 Mbit/s, which
+> this block cannot answer. Writing `XcvrSelect = 10` instead makes the host
+> report full speed — the opposite of ULPI 1.1 Table 21 — while a command
+> *byte* differing in the same two bits behaves correctly, which points at
+> the data cycle of a register write being sampled wrongly rather than at the
+> wiring. `docs/fpga-trellis.md`'s "Where it stops, and what was ruled out"
+> has all seven experiments. The leading suspect is `SLEWRATE=FAST`, which
+> every ULPI pin of the board's own bitstreams asks for and Reticle's ECP5
+> backend writes for none.
+>
+> So the sentence below — that where this document is wrong, the block and
+> the model are wrong together and the tests still pass — is no longer a
+> worry about the future. It is the live question, and the paragraph above is
+> the first evidence about it.
+
 **Nothing here has been near a board.** No Cynthion, no transceiver, no
 host. What exists is a simulation, and this is what it establishes:
 
@@ -492,7 +519,9 @@ cannot.
 
 ### What it would take to see it from a host
 
-Four things, none of them in this package:
+Four things were listed here and **all four have been done**; what they were,
+and what each turned out to cost, is kept because the estimate is worth
+comparing with the bill:
 
 1. **Bidirectional pads on the ECP5 backend.** The eight data lines need
    one pad each driven from `ulpi_data_o` and `ulpi_data_oe` and read into
@@ -510,7 +539,29 @@ Four things, none of them in this package:
 Then the question is decidable by software rather than by looking at an
 LED: the device either appears in the host's device list as `1209:0001`
 with an 18-byte device descriptor, or it does not. `lsusb -v` answers it.
-That is the next milestone and this is not it.
+
+**What the four actually cost**, which is the part worth keeping:
+
+1. **Bidirectional pads on the ECP5 backend** cost one pad
+   (`bidir_loopback.v`), then a bitstream **decoder** rule — two
+   bidirectional pads sharing a right-edge pad tile could not be read back
+   through Project Trellis' database at all, and the flow refuses a bitstream
+   with a bit no feature explains.
+2. **The clock out** cost nothing: a pad's output driven from the same net the
+   flip-flops clock on already routed.
+3. **A top level and the board's constraints** are
+   `testdata/fpga/cynthion/usb_ulpi_device.{v,rcf}`, and the pin map was
+   traced through the board's own PCB netlist rather than only read off the
+   platform description, because a pad reads its own pin and no loopback can
+   catch two balls exchanged.
+4. **Loading it** cost nothing; `reticle program` already did this board.
+
+And a fifth that was not on the list and was the larger one: **this block has
+several clock enables**, and the two flip-flops of an ECP5 slice share one
+`CE` wire. The placer did not know, so the design placed and then failed to
+route with 52 oversubscribed `CE` nodes. It places and routes in 31 seconds
+now. Nothing about ULPI, nothing about pads, and nothing this package could
+have predicted — which is the usual shape of the last obstacle.
 
 ## 12. What the board says
 

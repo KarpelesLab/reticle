@@ -1,5 +1,439 @@
 # A real Lattice ECP5, and a real `.bit`
 
+## An eight-bit bidirectional bus has been built, and a host has seen it
+
+On 2026-09-27 `testdata/fpga/cynthion/bidir_bus.v` — **eight** pads that
+drive, release and read themselves back on the die's **right** edge, the
+auxiliary ULPI transceiver's own data balls — was compiled by this flow and
+loaded into the LFE5U-12F of the Great Scott Gadgets Cynthion r1.4 attached
+to the machine this was written on. So was
+`testdata/fpga/cynthion/usb_ulpi_device.v`, which is `ip/usb_device_ulpi`
+behind those same eight pads: a USB full-speed device.
+
+What the flow reports for the bus:
+
+```
+3736 configuration bit(s) set, 20 pad(s), 103 lookup table(s) and 31
+flip-flop(s) configured, 31/24288 ff, 1/56 gb, 20/120 io, 103/24288 lut
+routed 146 of 146 signal(s) with 1668 pip(s) over 1814 wire(s), and every
+sink was walked back to its driver
+all 3736 set bit(s) decode back through the database into 1060 arc(s), 314
+field(s) and 103 word(s), with 0 unexplained, and the arcs they select are
+exactly the 1060 the router chose
+```
+
+and for the device:
+
+```
+24458 configuration bit(s) set, 20 pad(s), 658 lookup table(s) and 275
+flip-flop(s) configured, 275/24288 ff, 1/56 gb, 20/120 io, 658/24288 lut
+routed 945 of 945 signal(s) with 11784 pip(s) over 12729 wire(s)
+all 24458 set bit(s) decode back through the database into 7827 arc(s),
+1363 field(s) and 658 word(s), with 0 unexplained
+```
+
+**100% of both bitstreams decodes, with nothing left over**, which is the
+same standard `button_led` (114 bits), `clock_blink` (2491) and
+`bidir_loopback` (2557) were held to — and is the standard that used to
+refuse this design. The part accepted both and asserted `DONE` with no fault
+bit: status `0x00200100`, as every run before it, which is exactly why
+`DONE` is not the claim being made. The board went on enumerating at the
+same Apollo serial number on the same bus and device number afterwards.
+
+### The claim, and what is not being claimed
+
+This milestone has a result that needs no eye, and it is worth stating
+before anything else because it is the first of its kind here:
+
+> **A host on the other end of a USB cable saw a device appear on this
+> board's AUX port, and saw it appear and disappear on command.** The
+> transceiver was reset, configured over the eight-bit bidirectional bus,
+> **read back over the same eight pads**, and only then told to present the
+> 1.5 kOhm pull-up that makes a host notice a device. The host noticed.
+> `dmesg` says so, and "What the host saw" below has every line of it.
+
+And what is not being claimed: **it does not enumerate.** `lsusb` does not
+show `1209:0001`. The host detects the device as **low speed** where a
+full-speed peripheral was asked for, and then talks to it at 1.5 Mbit/s,
+which a full-speed device cannot answer. "Where it stops, and what was
+ruled out" is the whole of what is known about that, including four
+experiments on the part that each rule something out, and the one that
+narrows it to a single register field.
+
+### What a person should look for, on the bus design
+
+`bidir_bus.v` is the design with a human observable; the USB device's
+observable is `lsusb`. **Press and hold the button silkscreened `USER` for
+three seconds and watch LED 1 come on and stay on while LED 2 never does.**
+The other two tactile buttons end the experiment rather than perform it:
+`PROG` reloads the FPGA from flash and `RESET` resets the debug
+microcontroller.
+
+The six FPGA LEDs are the row beside the legend `FPGA LEDs`, counted from
+the end farthest from that button (`led_n[0]`, the diode `D7`):
+
+| | LED 0 | LED 1 | LED 2 | LED 3 | LED 4 | LED 5 |
+|---|---|---|---|---|---|---|
+| nothing touched | dark | dark | dark | blinking | **lit** | dark |
+| `USER` held three seconds | **lit** | **lit, and stays** | dark | blinking | lit | dark |
+
+**LED 1 is the milestone.** It latches high on the first clock edge on which
+all eight pins read back exactly the eight bits the pads are driving; LED 2
+latches high if any pin ever reads back something else. They are latches and
+not levels, so what a person sees a second later is what happened rather
+than what is happening — LED 1 on and LED 2 off cannot be produced by a
+glimpse. LED 4 says the transceiver has let go of the bus at all, which is
+the precondition for the pads ever being asked to drive.
+
+Each way of being wrong is a different picture, and `bidir_bus.v`'s header
+has the table: LED 4 dark means the transceiver never released the bus (the
+clock is not reaching its ball); LED 2 lit means a pin did not read back
+what it drove; LED 3 frozen means the clock stopped and nothing else means
+anything.
+
+### Why driving these eight balls is safe, on a bus with another driver
+
+These are the first pins this project drives whose net has a driver that is
+not the FPGA: a USB transceiver chip. `bidir_loopback.v`'s E13 had a
+resistor and an LED on it and nothing else. So the reason this is safe is
+written out, and it is the bus's own arbitration rather than a workaround:
+
+1. **`dir` is the interlock, and it is combinational.** A ULPI data bus
+   belongs to the transceiver while `dir` is asserted and to the Link
+   otherwise (ULPI 1.1 §3.3). Both designs release all eight pins the
+   instant `ulpi_dir` goes high, with no register in the way, and
+   `bidir_bus.v` additionally drives nothing at all unless a finger is on
+   the USER button. With nobody at the board the FPGA never drives these
+   pins.
+2. **`bidir_bus.v` tells the transceiver to ignore the bus.** It holds `stp`
+   high throughout, and a transceiver "must stop interpreting `data`" while
+   `stp` is unexpectedly high — the specification's own protection for a
+   Link that is not driving the bus properly yet (§3.12). So its walking
+   pattern is not read as a transmit command or a register write.
+3. **The transceiver is clocked and out of reset**, which is what the board
+   asks for: `clk_dir='o'` in Great Scott Gadgets' platform file means the
+   FPGA drives the 60 MHz to the transceiver's clock ball, and
+   `rst_invert=True` means its reset is active low there.
+4. **Great Scott Gadgets' own gateware drives these same eight balls.**
+   `analyzer.bit` has all eight as `BIDIR_LVCMOS33`, which
+   `tests/fpga_trellis.rs` reads back out of their file bit by bit, and
+   `default_usb_connection = "aux_phy"` in the platform file means the AUX
+   port is where their own designs put a USB device.
+5. **Nothing else is touched.** The Type-C controllers, the VBUS switches
+   and the pseudo-supply pins are left alone, which is what every gateware
+   in the Cynthion repository does with them — they are declared in the
+   platform file and used by none of it. The `CONTROL` port, where the
+   Apollo debugger this board is programmed over lives, is a different
+   transceiver on different balls and is not mentioned by either design.
+
+**And the pin map was checked against the board and not only against the
+platform file**, because a self-loopback cannot check it: a pad reads its own
+pin, so two balls exchanged in the constraints are invisible to any amount
+of driving and reading back. `cynthion.kicad_pcb`'s netlist gives, pad by
+pad, FPGA ball → series resistor → transceiver pin:
+
+| Signal | FPGA ball | transceiver pin |
+|---|---|---|
+| `DATA0` | F16 | 4 |
+| `DATA1` | G15 | 5 |
+| `DATA2` | G16 | 6 |
+| `DATA3` | H15 | 7 |
+| `DATA4` | J15 | 8 |
+| `DATA5` | J16 | 10 |
+| `DATA6` | K15 | 11 |
+| `DATA7` | K16 | 12 |
+| `DIR` | E16 | 1 |
+| `NXT` | F15 | 3 |
+| `STP` | E15 | 24 |
+| `RESET` | J13 | 22 |
+| `CLK` | D16 | 21 (`REFCLK/XI`) |
+
+The three resistor arrays are straight through — element *n* joins
+`AUX_PHY.DATAn` to `AUX PHY/DATAn` and nothing crosses — and the
+transceiver's footprint labels its own pins `DATA0`…`DATA7`, so the map is
+one-to-one from `ulpi_data[0]` to the transceiver's bit 0. That table also
+rules out one explanation of the low-speed detection below, which is what it
+was gathered for.
+
+### Three pad tiles, not eight, and why that was the whole obstacle
+
+The eight balls do not get a pad tile each. `iodb.json` puts them at:
+
+```
+F16 (72, 14, A)   G15 (72, 14, B)   ->  pad tile (72, 15)
+G16 (72, 20, A)   H15 (72, 20, B)   ->  pad tile (72, 21)
+J16 (72, 23, A)   J15 (72, 23, B)   ->  pad tile (72, 24)
+K16 (72, 23, C)   K15 (72, 23, D)   ->  the same tile
+```
+
+So **three** pad tiles, and every one of the three holds more than one
+bidirectional pad: two, two, and all four sides at once. That is exactly the
+case "What cannot be read back" described and the flow refused, because a
+pseudo-differential `PIOA.BASE_TYPE` spells four of its ten bits in PIOB's
+frames and a `PIOC.BASE_TYPE` spells four of its own in PIOD's. It is fixed,
+and how is the next section.
+
+### What fixed it: fewest bits unexplained, not the longest match
+
+`TrellisDatabase::decode` resolved a field by the **longest** matching
+pattern, which is what `libtrellis`' own `Tile::get_config` does. It now
+resolves by two rules in order:
+
+1. the reading that leaves **fewest of the tile's set bits unexplained**;
+2. among those, the longest match — which is still what picks
+   `OUTPUT_LVCMOS33` over the `NONE` whose single bit it contains.
+
+Rule 1 is applied as a **fixed point** and not as a ranking, because "how
+much does this reading leave unexplained" is a question about the whole tile
+and not about one field: every field and mux sink takes the longest match
+first, and then each in turn may change its reading for one that explains
+strictly more, until none will. Each change strictly raises the number of
+explained bits, which is bounded, so it terminates.
+
+Two properties are what make this safe to do to the most load-bearing check
+in this backend, and both are asserted rather than argued:
+
+- **a tile with nothing left over is never touched.** There is nothing to
+  improve, so the loop does not run and every reading is the longest match,
+  exactly as before. Every bitstream this flow writes is of that kind —
+  `unexplained == 0` is what `reticle fpga --bitstream` refuses to write
+  without — so this cannot change how any of them is read.
+- **it is not a licence to explain a bit twice, or to invent one.** A
+  reading is still only ever one of the values the image's bits allow.
+
+**Why this and not something else.** Two other rules were considered and
+are worse. Scoring a value by how many of its bits no *other field* of the
+tile could claim — a static property of the tile type, cheap and
+image-independent — gets this case right for the same reason, but it is a
+proxy: it answers "could another field explain this bit" where the question
+is "does one". And restricting the new rule to enumerated fields, leaving
+muxes on the longest match, was considered because a mux's reading is checked
+against the router's own arcs while a field's is not, so giving a mux more
+freedom trades a check away. The measurement settled it: across 701 167 set
+bits of three vendor bitstreams **no mux ever moves**, so the exception
+would buy nothing and cost a second rule to remember.
+
+### What it was proved against, which is `ecppack`'s own output
+
+The rule is judged on Great Scott Gadgets' own `ecppack` bitstreams for this
+board, and the numbers are the point:
+
+| | set bits | unexplained before | after |
+|---|---|---|---|
+| `analyzer.bit` | 250 001 | 34 | **5** |
+| `selftest.bit` | 27 006 | 33 | **5** |
+| `facedancer.bit` | 424 160 | 25 | **5** |
+
+and the five are **the same five bits of one `DSP_SPINE_UL1` tile at
+(col 3, row 13) in all three** — an unrelated gap this does not touch, and
+one worth naming: the same five bits in three unrelated designs is a
+property of the tile rather than of a design, most likely a feature the
+fuzzers never named.
+`tests/fpga_trellis.rs::the_only_bits_of_lattices_own_bitstreams_this_database_cannot_name`
+asserts that list exactly rather than as a bound, because a rule that
+explained *more* bits than it should would pass a bound and fail this.
+
+Every reading that changed is a `PIO<s>.BASE_TYPE`, fifteen of them in
+`analyzer.bit`, each going from a pseudo-differential output to `BIDIR_*` —
+on the **left** edge's HyperRAM bus as well as the right edge's ULPI pins.
+**Not one arc, word or other field changes anywhere**, in 250 001, 27 006 or
+424 160 set bits.
+
+And the check the fix was supposed to pass, which is the one
+`docs/fpga-trellis.md` named in advance: `analyzer.bit`'s eight aux ULPI data
+balls now read back `BIDIR_LVCMOS33` on **both** halves of every pair, and
+**no bit of any of their pad tiles is left over**. Both halves of that are in
+`what_lattices_own_packer_writes_for_a_bidirectional_pad`.
+
+The other direction was checked too, because it is the one that matters more:
+`button_led`, `clock_blink`, `bidir_loopback` and an eight-bit **top**-edge
+bus decode to a report that is **byte-identical** to the one the old rule
+produced — whole `Decoded::to_text()` compared, not just the counts.
+
+### The case it does not fix, and cannot
+
+Two ordinary **outputs** on one right-edge pair also set all ten bits of
+side A's `OUTPUT_LVCMOS33D`, and there the longer reading leaves nothing
+over either: the image is equally consistent with both readings, so no
+accounting of bits can tell them apart and the differential one wins on
+length. `analyzer.bit` has one at (col 72, row 18), whose side C is the aux
+transceiver's own reset pin.
+`src/fpga/trellis/mod.rs`'s
+`a_field_is_read_as_the_value_that_leaves_fewest_bits_unexplained` asserts
+that case as well as the three that work, on a fixture carrying the real
+`PICR1` patterns for sides A and B, so the day it becomes resolvable the
+test says so.
+
+### And the other obstacle, which was not in the bitstream at all
+
+Fixing `decode` made the bus build. It did not make the **USB device** build:
+`ip/usb_device_ulpi` failed after seven and a half minutes with
+
+```
+error: routing did not converge: 52 node(s) are still oversubscribed after
+40 iteration(s), worst at X65Y14/CE0 (2 signals), X65Y14/CE0_SLICE
+(2 signals), X66Y14/CE2 (2 signals), …
+```
+
+Every one of the 52 was a `CE`. The cause is that **a fabric does not always
+give every bel its own pins**: an ECP5 slice is two flip-flops, and its
+`CLK<c>_SLICE`, `CE<c>_SLICE` and `LSR<c>_SLICE` are one wire each for the
+pair, which `src/fpga/trellis/sites.rs` declares faithfully. `fpga::place`
+did not know, so it put two flip-flops with different clock enables in one
+slice and handed the router a node with two signals on it.
+
+`SharedPins` in `src/fpga/place.rs` is the whole fix, and it is read off the
+architecture rather than hard-coded: **any two pins of any two bels in one
+tile that resolve to one node are a constraint**, on every family. Two things
+about it are worth stating:
+
+- **agreeing means the same signal, including no signal at all.** A flip-flop
+  with no enable is not indifferent to the enable wire: the mux that ignores
+  it, `SLICE<l>.CEMUX`, is a setting of the *slice* and not of the
+  flip-flop, so `configure_registers` cannot write a pair that disagrees
+  either way round — one half would silently lose its enable. Equality is
+  what both halves can be configured to do.
+- **it is a legality constraint and not a cost**, so it belongs to
+  `nearest_free`, to `macro_sites` and to every move `propose` offers, and
+  the annealer never has to undo an illegal placement.
+
+Nothing that placed before places differently, and that is checked rather
+than argued: `clock_blink.bit` and `bidir_bus.bit` come out **byte for byte
+identical** to the bitstreams built before the change. A design whose cells
+share no pin — every family but the ECP5, today — takes the trivial path,
+and a design that already agreed everywhere never has a move rejected, so
+the search is the same search.
+
+With it, the device places and routes in **31 seconds**.
+
+Two things "What remains" said were not possible turned out to be possible
+once it was there, and both are in the device now: a **clock enable**, whose
+tie `configure_registers` already skips when a signal reaches the pin — so a
+routed `CE` and `CEMUX` at its `CE` default were always written correctly,
+and only the placement was wrong — and an **asynchronous reset**, which 40
+of this design's slices carry as a routed `LSR` with its `SRMODE`, because
+which of a tile's two reset muxes carries a signal is exactly what the
+routing can only say once the pair agrees.
+
+### What the host saw
+
+The observable for the device is `lsusb`, and this is the whole of what it
+and `dmesg` say. The board's AUX port is on this machine's root port 7-5,
+and **that is established rather than assumed**: a variant of the design that
+detaches and re-attaches every 2.24 s, by releasing the core's reset from a
+counter bit, produced attach events on 7-5 at exactly that period.
+
+```
+usb 7-5: new low-speed USB device number 96 using xhci_hcd
+usb 7-5: device descriptor read/64, error -71
+usb 7-5: device descriptor read/64, error -71
+usb usb7-port5: attempt power cycle
+usb 7-5: new low-speed USB device number 97 using xhci_hcd
+usb 7-5: Device not responding to setup address.
+usb 7-5: device not accepting address 97, error -71
+usb usb7-port5: unable to enumerate USB device
+```
+
+So: **the host sees a device attach.** That is not a small thing. A host
+notices a device when it sees the 1.5 kOhm pull-up on `D+` or `D-`, and on
+this board that pull-up is not a pin the FPGA can drive — it is a bit of the
+transceiver's Function Control register, reached only by writing that
+register over the eight-bit bidirectional bus. An attach is therefore
+**evidence that a register write crossed the bus**, from a witness on the
+other side of a USB cable.
+
+### That the bus turns around was measured, not inferred
+
+The attach shows the bus works outwards. One experiment shows it works
+**both** ways, and it is the sharpest thing this milestone has:
+
+`usb_ulpi_link`'s start-up writes Function Control, reads it back, and only
+continues if the readback is what it wrote. A variant was built in which
+**every write before the readback leaves `TermSelect` clear**, so nothing a
+host can see happens until the readback has matched, and the byte that turns
+the pull-up on is written only afterwards. The host saw the attach.
+
+So the transceiver drove the eight pads, the FPGA's input buffers read the
+value off them, it was compared with what had been driven out of the same
+eight pads, and the comparison passed — on real silicon, with a host as the
+witness. That is an eight-bit bidirectional bus turning around, and it is
+what this milestone is about.
+
+What it does **not** prove is that no *permutation* of the eight lines is
+involved: writing `X` and reading `π(X)` back through the inverse of the same
+permutation matches for any `π`. That is why the pin map was traced through
+the board's own netlist in the table above, and why the experiment below uses
+a command's **address** field rather than a register's contents.
+
+### Where it stops, and what was ruled out
+
+The device does not enumerate. The host detects **low speed**; a full-speed
+peripheral was asked for, so the host then talks at 1.5 Mbit/s and nothing
+the device says can be understood. Every experiment below was run on the
+part, each is one bitstream and one `dmesg` window, and the five designs
+that were not the speed experiment all reported low speed, so it is not
+build luck.
+
+| What was tried | What happened | What it rules out |
+|---|---|---|
+| the shipped design, five different builds | attach, **low speed**, no answer | — |
+| the interface clock **inverted** on D16 | **no attach at all** | that the clock phase is merely marginal: with the right polarity the register writes land, with the wrong one nothing does |
+| `TermSelect` left clear until after the PHY's own reset (`61h` instead of `65h`) | attach, low speed | that the pull-up appearing during the transceiver's internal reset is what the host mis-samples |
+| the pull-up asserted only **after** the register readback matched | attach, low speed | that the read direction of the bus fails — it does not, see above |
+| `line_idle` freed from `LineState`, so the device answers whenever the bus is quiet | attach, low speed, no answer | that a misread `LineState` is what stops it answering — it is not the first problem |
+| the command address `05h` (Function Control **set**) instead of `04h`, whose command byte `85h` differs from `86h` (**clear**) in bits 0 and 1 | attach | **that bits 0 and 1 of the bus are exchanged**: had they been, the command would have cleared `TermSelect` instead of setting it and no host would have seen anything |
+| `XcvrSelect` written as `10` instead of `01` — one byte, `46h` for `45h` | attach, **full speed** | nothing yet; this is the finding |
+
+The last row is where it rests. ULPI 1.1 Table 21 makes `XcvrSelect = 01` the
+full-speed transceiver and `10` low speed, and this board reports the
+opposite of that: asking for full speed gets a host that sees low speed, and
+asking for low speed gets a host that sees full speed. Four things are true
+at once and one of them must be wrong, which is why this is written down
+rather than fixed:
+
+- the pin map is one-to-one from `ulpi_data[0]` to the transceiver's `DATA0`,
+  traced through `cynthion.kicad_pcb` pad by pad;
+- bits 0 and 1 of the bus are not exchanged, by the address experiment;
+- the register **contents** behave as though those two bits were exchanged;
+- and a command **byte** in the same two bits does not.
+
+A command byte and the data byte after it are different cycles of the same
+write. So the reading this leaves is that **the data cycle of a register
+write is sampled wrongly where the command cycle is not**, which is a setup
+or hold problem at the transceiver rather than a wiring one — and the one
+thing this backend is known not to write is the attribute that governs it.
+Every ULPI pin of every bitstream Great Scott Gadgets ship for this board
+asks for `SLEWRATE=FAST`, and `configure_io` writes it for none. It is in
+"What remains", it was in "What remains" before any of this was measured, and
+it is now the first thing to try.
+
+The other reading, and it is not excluded, is that the transceiver's
+Function Control does not lay `XcvrSelect` out the way ULPI's Table 21 does.
+Nothing here has read that part's datasheet; the ULPI core was written from
+the specification alone and says so.
+
+### What this settles, and what it does not
+
+It settles that an eight-bit bidirectional bus builds, routes and decodes
+completely on the edge where a ULPI bus lives, that the bits of three pads
+sharing one tile can be read back through Project Trellis' database, that a
+clock leaves the part on a pin of its own, that a clock enable and an
+asynchronous reset can be placed and written, and that a design of 658
+lookup tables and 275 flip-flops — nine times anything this flow had built
+before — places and routes and decodes with nothing left over.
+
+It settles that a **host** saw this board present a device, and that the
+eight-bit bus turned around: a value the transceiver drove came back through
+the same eight pads and was checked against what had gone out, before
+anything a host could see happened.
+
+It does not settle enumeration. `lsusb` does not show `1209:0001`, and the
+table above is what is known about why. It settles nothing about
+`SLEWRATE`, which is now the leading suspect rather than a loose end, and
+nothing about the transceiver's own register layout, which nothing here has
+read.
+
+
 ## A bidirectional pad has been built, and loaded into a part
 
 On 2026-09-27 `testdata/fpga/cynthion/bidir_loopback.v` — one pad that
@@ -302,7 +736,15 @@ Two consequences:
   and `dropped_clear_bits` is what notices a feature whose bits another
   feature wanted clear. It reports nothing for this design.
 
-### What cannot be read back: two bidirectional pads on one right-edge tile
+### What could not be read back: two bidirectional pads on one right-edge tile
+
+> **Fixed on 2026-09-27, in the milestone at the top of this file.** This
+> section is left as it was written, because the diagnosis is still the
+> right one and the section it points forward to is the fix. Only the last
+> paragraph has been brought up to date. `decode` now resolves a field by
+> the reading that leaves fewest of the tile's bits unexplained, with the
+> longest match as the tie-break, and an eight-bit bidirectional bus builds
+> and decodes on the right edge.
 
 This was found by building the thing the milestone does not build — an
 **eight-bit** bus, in the ULPI shape, on the auxiliary transceiver's own
@@ -351,31 +793,34 @@ with the same bits left over.
 `tests/fpga_trellis.rs::what_lattices_own_packer_writes_for_a_bidirectional_pad`
 asserts both halves of that, so the day it stops being true the test says so.
 
-So this is a limit of reading a `bits.db` back, not a wrong bitstream — the
+So this was a limit of reading a `bits.db` back, not a wrong bitstream — the
 silicon decodes bits and `F5B0` set is not a state `OUTPUT_LVCMOS33D`
-produces; what `bits.db` cannot do is partition the tile's bits between two
-PIOs of one pair. **The check was left in place anyway**, and the flow refuses
-such a design, because "every bit decodes" is the strongest thing this backend
-has and weakening it to admit a case would weaken it for every case. Three
-things follow:
+produces; what the **longest match** cannot do is partition the tile's bits
+between two PIOs of one pair. The check was left in place rather than
+weakened, and the flow refused such a design, because "every bit decodes" is
+the strongest thing this backend has and weakening it to admit a case would
+weaken it for every case.
 
-- a bidirectional **bus** works today on the **top** edge and is refused on
-  the right one;
-- so a ULPI data bus, whose eight balls are all on the right edge, is blocked
-  on this and not on anything about the pad;
-- and the fix is in `decode` rather than in `configure_io`: resolving a
-  field by "the longest match" should become "the match that leaves fewest
-  bits unexplained", which on this tile picks `BIDIR_LVCMOS33` for side A
-  because `F0B3`, `F1B3`, `F8B3` and `F9B4` are covered by PIOB's own fields
-  either way. That is a change to the most load-bearing check in this
-  backend, so it wants its own milestone: the two reference bitstreams and
-  every design in `testdata/fpga/cynthion/` must decode to the same thing
-  afterwards, and `analyzer.bit`'s ULPI pads must read back as
-  `BIDIR_LVCMOS33` on **both** halves of a pair, which is the check that
-  would prove it right.
+**The fix was in `decode` and not in `configure_io`, and it was the rule this
+paragraph predicted**: "the longest match" became "the match that leaves
+fewest bits unexplained", which on this tile picks `BIDIR_LVCMOS33` for side A
+because `F0B3`, `F1B3`, `F8B3` and `F9B4` are covered by PIOB's own fields
+either way. It got its own milestone, at the top of this file, and it was
+held to the two conditions named here: every design in
+`testdata/fpga/cynthion/` decodes to a byte-identical report afterwards, and
+`analyzer.bit`'s eight ULPI pads read back `BIDIR_LVCMOS33` on **both** halves
+of every pair with no bit of their tiles left over. What was not predicted
+here is how much else it fixed: the same fifteen readings were wrong on the
+**left** edge's HyperRAM bus too, and the vendor's own bitstreams went from
+34, 33 and 25 unexplained bits to five each.
 
-That is also why the milestone at the top of this file is **one** pad, and
-why it is on the top edge.
+One prediction in this section was **wrong** and is worth leaving visible: it
+said a ULPI data bus "is blocked on this and not on anything about the pad".
+It was blocked on this *and* on something else entirely — two flip-flops of
+one slice sharing a `CE` wire, which is a placement constraint and not a pad
+or a bit. "And the other obstacle, which was not in the bitstream at all" at
+the top of this file has it. A named obstacle being cleared is not the same
+as the road being clear.
 
 ### The enable had a side, and two files had it the wrong way round
 
@@ -1708,6 +2153,16 @@ family, and `src/fpga/bitstream.rs` needed one line of visibility. That is
 the same thing `docs/fpga-xray.md` and `docs/fpga-gowin.md` each report for
 their vendor, and it held for a routed design as well as a constant one.
 
+> That stayed true until a design with more than one **clock enable** —
+> the ULPI USB device, on 2026-09-27. The placer needed one thing after all,
+> and it is a thing no family had needed because no other family's bels share
+> a pin: two cells in one tile whose pins are one wire must want the same
+> signal on it. `SharedPins` in `src/fpga/place.rs` is the edit, it is read
+> off the architecture rather than written for the ECP5, and every bitstream
+> built before it comes out byte for byte identical. "And the other
+> obstacle, which was not in the bitstream at all" at the top of this file
+> is the account.
+
 Two model changes have been needed in total, each for a reason specific to
 this family.
 
@@ -1754,7 +2209,7 @@ borrows now. Every backend gets it.
 
 | What | What it needs |
 |---|---|
-| A clock enable, an inverted clock or an asynchronous reset | `configure_registers` refuses these rather than writing them, and the reason is in "What a flip-flop costs": a tile's two clock muxes and two reset muxes are shared between its four slices, and the routing has to say which one a flop uses. A `CE` also has to be *routed* to `CE<c>_SLICE`, which nothing has done |
+| An **inverted** clock | `configure_registers` refuses `CLKMUX=INV` unless the routing says which of the tile's two clock muxes carries the signal, and nothing has built a design with one. A clock **enable** and an **asynchronous reset** are no longer here: both are in `usb_ulpi_device.v`, which has 40 slices carrying a routed `LSR` with its `SRMODE` and flip-flops whose `CEMUX` is left at its `CE` default with a signal routed to `CE<c>_SLICE`. Both became possible when `fpga::place` learnt that the two flip-flops of a slice share those wires and must agree about them; before that they placed and did not route |
 | A second clock domain | nothing in principle: sixteen networks are declared and a net reaches one by routing. Nothing has built a design with two, so nothing has seen what the router does when two clocks want the same quadrant's network |
 | A clock from a PLL | `EHXPLLL` has no port map in the device file. The path is there: a PLL's outputs are `G_J<quadrant>CPLL0CLKO*` and every buffer's input mux offers them, which is how `analyzer.bit`'s two globals are fed |
 | A clock on a **dedicated** clock pad | nothing, and it has never been exercised. A `PCLKT` pad reaches the centre through `G_JPCLKT<q><n> <- JINCK <- JPADDI`, all `.fixed_conn`s already in the graph; a Cynthion's oscillator is on the `PCLKC` half of the pair, so this flow has only ever taken the fabric route |
@@ -1763,9 +2218,8 @@ borrows now. Every backend gets it.
 | Block RAM | `Ecp5Stream` reads and writes the initialisation blocks — the reference files' 44 blocks round trip — and nothing generates one. The `MIB_EBR*` tiles' wires and pips are in the graph |
 | Distributed RAM | `SLICEA.MODE = DPRAM`, `WREMUX`, `CLK1.CLKMUX` and the `WAD`/`WDO` wires, none of which is declared |
 | An IO standard other than LVCMOS33 | the bits are in the database and the code takes the standard from the constraints; no other standard has been on a part |
-| A bidirectional **bus** on the **right** edge | a resolution rule in `TrellisDatabase::decode`, and nothing in `configure_io`: two bidirectional pads that share a right-edge pad tile cannot be read back, because a pseudo-differential value's pattern spans both halves of the pair and is longer than either. `ecppack`'s own output has the same property, and the flow refuses the design rather than weakening the check. See "What cannot be read back". **On the top edge an eight-bit bus builds and decodes today** — 465 bits, 0 unexplained — so this is the whole of what stands between here and a ULPI data bus |
-| A bidirectional bus **on a part** | nothing but somebody looking: one bit has been loaded and watched, not eight |
-| `SLEWRATE`, `DRIVE`, `OPENDRAIN`, `CLAMP` or `TERMINATION` on a pad | each is a `.config_enum` of the pad tile, and each is one `ecppack` writes **only when an attribute asks** — so not writing them matches nextpnr exactly for a design that does not ask. `set_io -slew` and `-drive` are parsed and reach the cell, and `configure_io` writes neither, which makes the option a silent no-op in the bitstream. `SLEWRATE=FAST` is the one that will be wanted first: every ULPI pin of `analyzer.bit` has it, and a 60 MHz bus on a 3.3 V bank is what it is for |
+| A USB device a host **enumerates** | `SLEWRATE=FAST`, most likely, and it is the row below this one. `testdata/fpga/cynthion/usb_ulpi_device.v` builds, decodes with nothing left over, loads, and is **seen to attach** by a host on the AUX port — the transceiver is reset, configured over the eight-bit bus and read back through the same eight pads before anything a host can see happens. It is then detected as **low speed** where a full-speed peripheral was asked for, and cannot answer. "Where it stops, and what was ruled out" at the top of this file has the seven experiments and the one field it comes down to |
+| `SLEWRATE`, `DRIVE`, `OPENDRAIN`, `CLAMP` or `TERMINATION` on a pad | each is a `.config_enum` of the pad tile, and each is one `ecppack` writes **only when an attribute asks** — so not writing them matches nextpnr exactly for a design that does not ask. `set_io -slew` and `-drive` are parsed and reach the cell, and `configure_io` writes neither, which makes the option a silent no-op in the bitstream. **`SLEWRATE=FAST` is now the first thing to write, not merely the first that will be wanted**: every ULPI pin of all three reference bitstreams asks for it, and the USB device on the AUX port behaves as though the data byte of a register write were sampled wrongly where the command byte before it is not, which is what an edge rate on a 60 MHz bus decides. The row above and "Where it stops, and what was ruled out" are the measurement |
 | A bidirectional pad with a **registered** tristate | `PIO<s>.TRIMUX_TSREG = IOLTO` and the `IOLOGIC` tristate register, none of which is declared. `fpga::primitives` declines to absorb a tri-state driver on a DDR port rather than moving the enable ahead of the register |
 | An ECP5 over an FTDI cable | nothing, in principle: the configuration plans are transport-neutral and `jtag::Scan` encodes them for MPSSE. It is refused because that pairing has never been run |
 
@@ -1807,18 +2261,32 @@ tied. `tests/fpga_trellis.rs` runs `configure_io` into a bitmap of its own
 to ask what that pass wrote.
 
 That is the first of **four** places on this part where two features share bit
-space, and the shape repeats:
+space — five, if the placement constraint at the end of this section is
+counted, and it deserves to be — and the shape repeats:
 
 | | Which two | Where it is written down |
 |---|---|---|
 | 1 | a `CIB`'s constant mux against the routing mux into the same wire | here |
 | 2 | a centre mux's six-bit source code, whose other five bits another feature may set | "A bit a feature wants clear" |
 | 3 | `PIO<s>.PULLMODE`'s low bit against `OUTPUT_<standard>`'s | "A third place where two features share one bit" |
-| 4 | a right-edge `PIO<s>.BASE_TYPE`'s *pseudo-differential* values, whose patterns reach into the neighbouring PIO's bits | "What cannot be read back" |
+| 4 | a right-edge `PIO<s>.BASE_TYPE`'s *pseudo-differential* values, whose patterns reach into the neighbouring PIO's bits | "What could not be read back", and the fix at the top of this file |
 
 The first three are handled the same way: the bits go into a zeroed bitmap
 with an OR, `dropped_clear_bits` notices a feature whose bits another feature
 wanted clear, and a question the finished image cannot answer gets asked of
-the pass instead. The fourth is the one that is not handled — it makes a
-bidirectional *bus* on the right edge unreadable, and the flow refuses such a
-design rather than weakening the check that notices.
+the pass instead. The fourth needed a fourth way, because it is the only one
+where two features' patterns make a *reading* ambiguous rather than a
+*writing* unsafe: `decode` resolves a field by the reading that leaves fewest
+of the tile's bits unexplained, with the longest match as the tie-break. It is
+the one of the four that leaves a residue — two ordinary outputs on one pair
+still read back as a differential output, because there both readings explain
+the image equally well and nothing in the bits can tell them apart.
+
+**And there is a fifth of these, which is not about bits at all.** The two
+flip-flops of a slice share one `CE`, one `CLK` and one `LSR` **wire**, so
+two cells the placer puts there must want the same signal on each of them.
+That is the same shape — two features, one resource, and nothing complains
+until something is silently wrong — and it is handled the same way, by making
+it a legality constraint the placer enforces rather than a thing to remember.
+`SharedPins` in `src/fpga/place.rs` reads it off the architecture, so it is
+true of any family whose bels share a pin.
