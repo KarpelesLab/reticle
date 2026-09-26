@@ -145,7 +145,37 @@ pub struct RouteOptions {
     /// node, a tile costs about a quarter of a node, so the default is
     /// a little below that. Raising it makes the search faster and the
     /// routes worse; zero turns it into Dijkstra.
+    ///
+    /// The charge is scaled per node by [`RouteOptions::node_base`], for
+    /// exactly the reason in the paragraph above: a node whose class costs a
+    /// twentieth of an ordinary wire cannot be charged a whole tile of
+    /// distance for standing on it.
     pub astar_weight: f64,
+    /// The base cost of entering each node, by node id, or empty for "one
+    /// for every node".
+    ///
+    /// This is the `base(n)` of the cost formula in this module's header,
+    /// which was 1 everywhere until a family turned up whose clock network
+    /// a signal has to be *steered* onto rather than merely allowed to
+    /// reach. On a Lattice ECP5 a flip-flop's clock mux takes sixteen
+    /// global branch wires **and** seven ordinary interconnect wires, so the
+    /// shortest path from a pad to a clock pin goes through general routing
+    /// — seven hops against about eighteen — and a router with no
+    /// preference builds a clock tree out of data wires. It works and it is
+    /// the wrong answer: the skew across a dozen sinks is nobody's model.
+    ///
+    /// Making the network cheap is **a preference and not a permission**.
+    /// Capacity is still one signal per node, so nothing here can put two
+    /// signals on one wire, and a cheap wire a signal has no reason to
+    /// enter is not entered: `super::trellis`' network is a one-way funnel
+    /// whose only exits are flip-flop control pins, so the only signal that
+    /// can traverse it is one that clocks or resets something.
+    ///
+    /// A base below one makes the distance heuristic inadmissible, so the
+    /// search may return a path that is not the cheapest. That costs
+    /// optimality and not correctness, and it errs towards the network,
+    /// which is the direction the caller asked for.
+    pub node_base: Vec<f32>,
 }
 
 impl Default for RouteOptions {
@@ -156,6 +186,7 @@ impl Default for RouteOptions {
             present_growth: 1.8,
             history_factor: 1.0,
             astar_weight: 0.3,
+            node_base: Vec::new(),
         }
     }
 }
@@ -376,13 +407,20 @@ struct State {
     occupancy: Vec<u32>,
     /// The accumulated congestion history of each node.
     history: Vec<f64>,
+    /// [`RouteOptions::node_base`], or empty for one everywhere.
+    base: Vec<f32>,
 }
 
 impl State {
-    fn new(nodes: usize) -> Self {
+    fn new(nodes: usize, base: &[f32]) -> Self {
         State {
             occupancy: vec![0; nodes],
             history: vec![0.0; nodes],
+            base: if base.len() == nodes {
+                base.to_vec()
+            } else {
+                Vec::new()
+            },
         }
     }
 
@@ -392,7 +430,14 @@ impl State {
         // Capacity is one signal per wire; the excess is what the present
         // factor multiplies.
         let overuse = f64::from(self.occupancy[index]);
-        (1.0 + present * overuse) * (1.0 + self.history[index])
+        let base = self.base.get(index).map_or(1.0, |b| f64::from(*b));
+        base * (1.0 + present * overuse) * (1.0 + self.history[index])
+    }
+
+    /// A node's base cost, which is also what the distance heuristic is
+    /// scaled by; see [`RouteOptions::node_base`].
+    fn base_of(&self, node: NodeId) -> f64 {
+        self.base.get(node as usize).map_or(1.0, |b| f64::from(*b))
     }
 
     /// The nodes carrying more than one signal.
@@ -448,7 +493,7 @@ pub fn route(
         });
     }
 
-    let mut state = State::new(graph.nodes.len());
+    let mut state = State::new(graph.nodes.len(), &options.node_base);
     let mut scratch = Scratch::new(graph.nodes.len());
     let mut routing = Routing::new(netlist.signals.len());
     let mut report = RoutingReport::default();
@@ -645,11 +690,20 @@ fn maze(
     options: &RouteOptions,
 ) -> Option<Vec<PipId>> {
     let target = graph.wire(sink).tile;
+    // The per-tile charge is scaled by the node's own base cost, because
+    // the estimate has to stay below what the rest of the journey really
+    // costs and on a fabric with a cheap wire class it would not. A clock
+    // network node costs a twentieth of an ordinary wire
+    // (`RouteOptions::node_base`), so charging a full tile of distance for
+    // standing on one is twenty times too much — enough to make the search
+    // walk past the network and build a clock tree out of data wires, which
+    // is exactly what it did before this line. With a uniform base this is
+    // what it always was.
     let heuristic = |node: NodeId| -> f64 {
         let wire = graph.wire(node);
         let (x, y) = wire.nearest_tile(target.0, target.1);
         let distance = u64::from(x.abs_diff(target.0)) + u64::from(y.abs_diff(target.1));
-        options.astar_weight * distance as f64
+        options.astar_weight * distance as f64 * state.base_of(node)
     };
 
     scratch.start();
@@ -1007,6 +1061,83 @@ mod tests {
             .routes()
             .any(|r| r.nodes.iter().any(|n| graph.wire(*n).tile.1 == 1));
         assert!(used_aux, "nobody took the detour");
+    }
+
+    /// [`RouteOptions::node_base`]: a class of wire made cheap is taken
+    /// although the path through it is longer.
+    ///
+    /// The detour fabric is the smallest thing that can show it. One signal,
+    /// nothing in its way, and two ways across: the main row, which is the
+    /// shortest, and the row above it, which costs two extra hops. With a
+    /// uniform base the router takes the short way; with the second row at a
+    /// twentieth of the cost it takes the long one.
+    ///
+    /// **This pins the cost half of the knob and not the heuristic half.**
+    /// It was checked: with the `state.base_of(node)` taken out of
+    /// [`maze`]'s heuristic this test still passes, because eight tiles is
+    /// too short a detour for the over-estimate to matter. The heuristic
+    /// half was needed on a real fabric and its evidence is a measurement
+    /// there rather than a synthetic case here — seven of a counter's
+    /// twenty-six flip-flops on a Lattice ECP5 took a data wire to their
+    /// clock pin with the base alone in place, because the search had
+    /// already reached the sink by another route before the cheap class was
+    /// expanded. See
+    /// `super::trellis::TrellisFabric::clock_node_costs`.
+    #[test]
+    fn a_cheap_class_of_wire_is_taken_although_the_path_is_longer() {
+        let (_, graph) = detour(8);
+        let netlist = pairs(1);
+        let mut placement = Placement::new(netlist.instances.len(), graph.sites.len());
+        for (index, (bel, tile)) in [("src0", 0), ("dst0", 7)].into_iter().enumerate() {
+            let site = graph
+                .site_index(&format!("X{tile}Y0/{bel}"))
+                .expect("the bel exists");
+            placement.place(index, site);
+        }
+        let on_second_row = |routing: &Routing| {
+            routing
+                .routes()
+                .any(|r| r.nodes.iter().any(|n| graph.wire(*n).tile.1 == 1))
+        };
+
+        let (plain, _) = route(&netlist, &graph, &placement, &RouteOptions::default()).unwrap();
+        assert!(
+            !on_second_row(&plain),
+            "with nothing in the way the short path is the one to take"
+        );
+
+        let mut base = vec![1.0f32; graph.nodes.len()];
+        for (index, wire) in graph.nodes.iter().enumerate() {
+            if wire.tile.1 == 1 {
+                base[index] = 0.05;
+            }
+        }
+        let options = RouteOptions {
+            node_base: base,
+            ..RouteOptions::default()
+        };
+        let (steered, report) = route(&netlist, &graph, &placement, &options).unwrap();
+        assert!(on_second_row(&steered), "the preference was not followed");
+        assert!(
+            steered.pips(0).len() > plain.pips(0).len(),
+            "the cheap path should be the longer one: {} against {}",
+            steered.pips(0).len(),
+            plain.pips(0).len()
+        );
+        // And it is still a route: a preference changes which wires are
+        // chosen and nothing about whether they join up.
+        assert!(steered.verify(&netlist, &graph, &placement).is_empty());
+        assert_eq!(report.iterations.last().unwrap().overused_nodes, 0);
+
+        // A vector of the wrong length is ignored rather than trusted, so a
+        // caller that builds one against a stale graph gets the old
+        // behaviour instead of a panic or a silent mis-scaling.
+        let options = RouteOptions {
+            node_base: vec![0.05; graph.nodes.len() - 1],
+            ..RouteOptions::default()
+        };
+        let (ignored, _) = route(&netlist, &graph, &placement, &options).unwrap();
+        assert!(!on_second_row(&ignored));
     }
 
     #[test]
