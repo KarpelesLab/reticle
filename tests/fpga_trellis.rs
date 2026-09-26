@@ -2135,7 +2135,7 @@ fn what_lattices_own_packer_writes_for_a_bidirectional_pad() {
     // not and left the two bits only a bidirectional or an input pad wants
     // belonging to nothing. `TrellisDatabase::decode` now resolves a field
     // by the reading that leaves fewest of the tile's bits unexplained,
-    // with the longest match as the tie-break; "What cannot be read back"
+    // with the longest match as the tie-break; "What could not be read back"
     // in `docs/fpga-trellis.md` is the account, and this is the assertion
     // it says would prove it right.
     let mut pairs: Vec<((u32, u32), char)> = Vec::new();

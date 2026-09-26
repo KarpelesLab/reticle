@@ -2333,7 +2333,7 @@ impl TrellisDatabase {
     /// input pad wants belonging to nothing. Those four extra bits are
     /// explained by side B's own base type and pull mode either way, so
     /// they are no evidence about side A; the two orphans are.
-    /// `docs/fpga-trellis.md`'s "What cannot be read back" is the long
+    /// `docs/fpga-trellis.md`'s "What could not be read back" is the long
     /// version, including the measurement on `ecppack`'s own output.
     ///
     /// The rule is applied as a **fixed point** rather than as a ranking,

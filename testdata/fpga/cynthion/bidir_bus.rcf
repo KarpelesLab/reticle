@@ -38,7 +38,7 @@
 # resolving a field by the longest match, because a pseudo-differential
 # `PIOA.BASE_TYPE` spells four of its ten bits in PIOB's frames and a
 # `PIOC.BASE_TYPE` spells four of its own in PIOD's.
-# `docs/fpga-trellis.md` has it under "What cannot be read back".
+# `docs/fpga-trellis.md` has it under "What could not be read back".
 #
 # **No `-pullup`.** `bidir_loopback.rcf` asked for one because the released
 # level of an LED's ball is otherwise a diode drop below the rail. Here the

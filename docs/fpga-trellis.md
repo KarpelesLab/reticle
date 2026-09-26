@@ -168,7 +168,7 @@ K16 (72, 23, C)   K15 (72, 23, D)   ->  the same tile
 
 So **three** pad tiles, and every one of the three holds more than one
 bidirectional pad: two, two, and all four sides at once. That is exactly the
-case "What cannot be read back" described and the flow refused, because a
+case "What could not be read back" described and the flow refused, because a
 pseudo-differential `PIOA.BASE_TYPE` spells four of its ten bits in PIOB's
 frames and a `PIOC.BASE_TYPE` spells four of its own in PIOD's. It is fixed,
 and how is the next section.
@@ -304,7 +304,9 @@ share no pin — every family but the ECP5, today — takes the trivial path,
 and a design that already agreed everywhere never has a move rejected, so
 the search is the same search.
 
-With it, the device places and routes in **31 seconds**.
+With it, the device places and routes in well under a minute where it had
+failed after seven and a half: 31 seconds for a first top level of 578 lookup
+tables, 40 for the one that shipped.
 
 Two things "What remains" said were not possible turned out to be possible
 once it was there, and both are in the device now: a **clock enable**, whose
@@ -370,13 +372,13 @@ a command's **address** field rather than a register's contents.
 The device does not enumerate. The host detects **low speed**; a full-speed
 peripheral was asked for, so the host then talks at 1.5 Mbit/s and nothing
 the device says can be understood. Every experiment below was run on the
-part, each is one bitstream and one `dmesg` window, and the five designs
-that were not the speed experiment all reported low speed, so it is not
-build luck.
+part, each is one bitstream and one `dmesg` window, and **six different
+bitstreams**, with six different placements and routings, all reported low
+speed, so it is a property of the design and not of a build.
 
 | What was tried | What happened | What it rules out |
 |---|---|---|
-| the shipped design, five different builds | attach, **low speed**, no answer | — |
+| the shipped design, and the same design re-attaching every 2.24 s | attach, **low speed**, no answer | — |
 | the interface clock **inverted** on D16 | **no attach at all** | that the clock phase is merely marginal: with the right polarity the register writes land, with the wrong one nothing does |
 | `TermSelect` left clear until after the PHY's own reset (`61h` instead of `65h`) | attach, low speed | that the pull-up appearing during the transceiver's internal reset is what the host mis-samples |
 | the pull-up asserted only **after** the register readback matched | attach, low speed | that the read direction of the bus fails — it does not, see above |
@@ -412,6 +414,17 @@ Function Control does not lay `XcvrSelect` out the way ULPI's Table 21 does.
 Nothing here has read that part's datasheet; the ULPI core was written from
 the specification alone and says so.
 
+**None of those variants is in the repository.** Each was one patched copy of
+`usb_ulpi_link.v` or of the top level, built, loaded into the volatile
+configuration memory, and thrown away; what is committed is the design and
+what was measured. The instrument is worth keeping in mind though, because it
+is what made any of this possible without root on the host: once a host has
+given up on a port (`unable to enumerate USB device`) it will not try again,
+and `usb7-port5/disable` needs privileges this had none of. A variant that
+releases the core's reset from a counter bit **detaches and re-attaches every
+2.24 s**, which forces the host to keep trying — and, incidentally, is what
+proved which of this machine's ports the AUX cable is in.
+
 ### What this settles, and what it does not
 
 It settles that an eight-bit bidirectional bus builds, routes and decodes
@@ -419,8 +432,9 @@ completely on the edge where a ULPI bus lives, that the bits of three pads
 sharing one tile can be read back through Project Trellis' database, that a
 clock leaves the part on a pin of its own, that a clock enable and an
 asynchronous reset can be placed and written, and that a design of 658
-lookup tables and 275 flip-flops — nine times anything this flow had built
-before — places and routes and decodes with nothing left over.
+lookup tables and 275 flip-flops — nine times the largest thing this flow had
+built before, which was `clock_blink`'s 72 — places and routes and decodes
+with nothing left over.
 
 It settles that a **host** saw this board present a device, and that the
 eight-bit bus turned around: a value the transceiver drove came back through
@@ -910,10 +924,15 @@ was the one written down in advance, including LEDs 0 and 1 lit together.
 It settles nothing about a bidirectional **bus on a part**: one bit has been
 loaded, not eight. An eight-bit bus *builds* on the top edge —
 465 bits, 0 unexplained — and is refused on the right one, for a reason that
-is about reading a bitstream back and not about writing one; "What cannot be
-read back" above has it, and it is the thing standing between this and a ULPI
-data bus. It settles nothing about `SLEWRATE`, which every ULPI pin of the
-reference asks for and this writes for none. Both are in "What remains".
+is about reading a bitstream back and not about writing one; "What could not
+be read back" above has it, and it is the thing standing between this and a
+ULPI data bus. It settles nothing about `SLEWRATE`, which every ULPI pin of
+the reference asks for and this writes for none. Both are in "What remains".
+
+> Both of those were settled the next day, and the milestone at the top of
+> this file is where: eight bidirectional pads on the **right** edge have
+> been loaded into the part, and `SLEWRATE` has gone from a loose end to the
+> leading suspect for why the USB device behind them does not enumerate.
 
 ## A clocked design has been built, and loaded into a part
 

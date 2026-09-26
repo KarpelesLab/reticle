@@ -5,7 +5,7 @@
 // `bidir_loopback.v` turned one pin around on the top edge. This turns
 // eight around on the right one, which is the edge a ULPI bus is on and the
 // edge where four PIOs share a pad tile. Nothing about the pad was in the
-// way; reading the bitstream back was. See "What cannot be read back" in
+// way; reading the bitstream back was. See "What could not be read back" in
 // `docs/fpga-trellis.md`.
 //
 // ===================================================================
