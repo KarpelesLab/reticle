@@ -716,6 +716,146 @@ impl Rect {
     }
 }
 
+/// Which sites hold a bel pin that is **the same wire** as another site's,
+/// and what agreeing about it means.
+///
+/// A fabric does not always give every bel its own pins. An ECP5 slice is
+/// two flip-flops, and its `CLK<c>_SLICE`, `CE<c>_SLICE` and `LSR<c>_SLICE`
+/// are one wire each for the pair — `src/fpga/trellis/sites.rs` declares
+/// both `SLICE<l>.FF0` and `SLICE<l>.FF1` pointing at them, because that is
+/// what the silicon is. A wire carries one signal, so two cells whose pins
+/// reach it **must want the same signal on it**, and a placement that puts
+/// two flip-flops with different clock enables in one slice is not a
+/// placement at all: the router is then asked to carry two signals on one
+/// node, which is where this was found — 52 oversubscribed nodes, every one
+/// of them a `CE`, on a design with several clock enables.
+///
+/// This is a legality constraint and not a cost, so it belongs to the
+/// legaliser and to every move the annealer proposes rather than to the
+/// wirelength. Two things are worth knowing about it:
+///
+/// - **it is read off the architecture, not hard-coded.** Any two pins of
+///   any two bels in one tile that resolve to one node are a constraint, on
+///   every family, which is how it can be true of an ECP5's control wires
+///   without anything here naming one.
+/// - **agreeing means the same signal, including no signal at all.** A
+///   flip-flop with no enable is not "indifferent" to the enable wire: on
+///   this family the mux that ignores it, `SLICE<l>.CEMUX`, is a setting of
+///   the *slice* and not of the flip-flop, so a pair that disagrees cannot
+///   be configured either way round. Requiring equality is what both halves
+///   of the pair can be written to do.
+#[derive(Debug, Default)]
+struct SharedPins {
+    /// Per site, one entry per pin it shares with another site, as
+    /// `(the other site, this site's role, the other site's role)`. Both
+    /// directions are recorded, so placing something on a site only needs
+    /// that site's own list. Roles are interned indices into
+    /// [`SharedPins::roles`].
+    per_site: Vec<Vec<(usize, u32, u32)>>,
+    /// Per instance, the signal on each of its pins, as `(role, signal)`,
+    /// for the pins that carry one. A role that is absent carries none.
+    per_instance: Vec<Vec<(u32, usize)>>,
+    /// Every role name that takes part, so the checks compare integers.
+    roles: BTreeMap<String, u32>,
+}
+
+impl SharedPins {
+    /// Finds every pair of bel pins in one tile that are one wire.
+    ///
+    /// Cost is one pass over the sites grouped by tile, and within a tile
+    /// the pins are compared pairwise — sixteen sites of five pins for an
+    /// ECP5 logic tile, so the square is small and the grouping keeps it
+    /// local.
+    fn find(netlist: &Netlist, graph: &RoutingGraph) -> SharedPins {
+        let mut out = SharedPins {
+            per_site: vec![Vec::new(); graph.sites.len()],
+            per_instance: vec![Vec::new(); netlist.instances.len()],
+            roles: BTreeMap::new(),
+        };
+        let mut by_tile: BTreeMap<(u32, u32), Vec<usize>> = BTreeMap::new();
+        for (index, site) in graph.sites.iter().enumerate() {
+            by_tile.entry(site.tile).or_default().push(index);
+        }
+        let role_id = |roles: &mut BTreeMap<String, u32>, name: &str| -> u32 {
+            if let Some(id) = roles.get(name) {
+                return *id;
+            }
+            let id = u32::try_from(roles.len()).unwrap_or(u32::MAX);
+            roles.insert(name.to_owned(), id);
+            id
+        };
+        for sites in by_tile.values() {
+            for (i, left) in sites.iter().enumerate() {
+                for right in &sites[i + 1..] {
+                    for (lrole, lnode) in &graph.sites[*left].pins {
+                        for (rrole, rnode) in &graph.sites[*right].pins {
+                            if lnode != rnode {
+                                continue;
+                            }
+                            let l = role_id(&mut out.roles, lrole);
+                            let r = role_id(&mut out.roles, rrole);
+                            out.per_site[*left].push((*right, l, r));
+                            out.per_site[*right].push((*left, r, l));
+                        }
+                    }
+                }
+            }
+        }
+        if out.roles.is_empty() {
+            return SharedPins::default();
+        }
+        for pin in &netlist.pins {
+            if let Some(signal) = pin.signal
+                && let Some(role) = out.roles.get(pin.role.as_str())
+            {
+                out.per_instance[pin.instance].push((*role, signal));
+            }
+        }
+        out
+    }
+
+    /// Nothing in this architecture shares a pin, so nothing has to be
+    /// checked. Every family but the ECP5 is in this case today, and the
+    /// checks below then cost one `is_empty`.
+    fn trivial(&self) -> bool {
+        self.per_site.is_empty()
+    }
+
+    /// The signal an instance wants on the wire its `role` pin reaches.
+    fn signal(&self, instance: usize, role: u32) -> Option<usize> {
+        self.per_instance[instance]
+            .iter()
+            .find(|(r, _)| *r == role)
+            .map(|(_, s)| *s)
+    }
+
+    /// Whether `moving` can be applied: every shared pin of every site it
+    /// touches is wanted by one signal only.
+    ///
+    /// `moving` is the whole move, so a swap is judged after both of its
+    /// halves have happened rather than against the placement it is leaving.
+    fn allows(&self, placement: &Placement, moving: &[(usize, usize)]) -> bool {
+        if self.trivial() {
+            return true;
+        }
+        let after = |site: usize| -> Option<usize> {
+            if let Some((instance, _)) = moving.iter().find(|(_, s)| *s == site) {
+                return Some(*instance);
+            }
+            placement
+                .instance_at(site)
+                .filter(|i| !moving.iter().any(|(j, _)| j == i))
+        };
+        moving.iter().all(|(instance, site)| {
+            self.per_site[*site].iter().all(|(other, mine, theirs)| {
+                after(*other).is_none_or(|neighbour| {
+                    self.signal(*instance, *mine) == self.signal(neighbour, *theirs)
+                })
+            })
+        })
+    }
+}
+
 /// A rigid group of instances: the anchor and the tile offsets.
 struct Macro {
     /// The instance every offset is measured from.
@@ -791,6 +931,7 @@ pub fn place(
     );
 
     let mut placement = Placement::new(netlist.instances.len(), graph.sites.len());
+    let shared = SharedPins::find(netlist, graph);
     let positions = solve_analytic(netlist, graph, &info, options);
     legalise(
         netlist,
@@ -799,6 +940,7 @@ pub fn place(
         &macros,
         &positions,
         &sites_by_kind,
+        &shared,
         &mut placement,
     )?;
     confine_hierarchy(netlist, graph, constraints, &placement, &mut info);
@@ -813,6 +955,7 @@ pub fn place(
             &info,
             &macros,
             &sites_by_kind,
+            &shared,
             options,
             &mut placement,
         );
@@ -1181,6 +1324,7 @@ fn to_grid(value: f64, size: u32) -> u32 {
 }
 
 /// Assigns every instance a site.
+#[allow(clippy::too_many_arguments, reason = "the legaliser's whole state")]
 fn legalise(
     netlist: &Netlist,
     graph: &RoutingGraph,
@@ -1188,6 +1332,7 @@ fn legalise(
     macros: &[Macro],
     positions: &[(f64, f64)],
     sites_by_kind: &BTreeMap<String, Vec<usize>>,
+    shared: &SharedPins,
     placement: &mut Placement,
 ) -> Result<(), PlaceError> {
     // Fixed instances first: their sites are not negotiable.
@@ -1211,14 +1356,32 @@ fn legalise(
     });
 
     for m in macros {
-        legalise_macro(netlist, graph, info, m, positions, sites_by_kind, placement)?;
+        legalise_macro(
+            netlist,
+            graph,
+            info,
+            m,
+            positions,
+            sites_by_kind,
+            shared,
+            placement,
+        )?;
     }
     for index in order {
         let (x, y) = positions[index];
         let kind = &netlist.instances[index].kind;
         let target = (to_grid(x, graph.width), to_grid(y, graph.height));
         let region = info[index].region.as_ref().map(|(rect, _)| rect);
-        let site = nearest_free(graph, sites_by_kind, kind, region, target, placement);
+        let site = nearest_free(
+            graph,
+            sites_by_kind,
+            kind,
+            region,
+            target,
+            shared,
+            index,
+            placement,
+        );
         match site {
             Some(site) => placement.place(index, site),
             None => return Err(no_room(netlist, graph, sites_by_kind, index, info)),
@@ -1281,13 +1444,17 @@ fn no_room(
     }
 }
 
-/// The free site of `kind` closest to `target`, inside `region`.
+/// The free site of `kind` closest to `target`, inside `region`, that
+/// `instance` may legally take.
+#[allow(clippy::too_many_arguments, reason = "the legaliser's whole state")]
 fn nearest_free(
     graph: &RoutingGraph,
     sites_by_kind: &BTreeMap<String, Vec<usize>>,
     kind: &str,
     region: Option<&Rect>,
     target: (u32, u32),
+    shared: &SharedPins,
+    instance: usize,
     placement: &Placement,
 ) -> Option<usize> {
     let sites = sites_by_kind.get(kind)?;
@@ -1303,7 +1470,8 @@ fn nearest_free(
             continue;
         }
         let distance = manhattan(target, (x, y));
-        if best.is_none_or(|(d, _)| distance < d) {
+        if best.is_none_or(|(d, _)| distance < d) && shared.allows(placement, &[(instance, *site)])
+        {
             best = Some((distance, *site));
         }
     }
@@ -1312,6 +1480,7 @@ fn nearest_free(
 
 /// Places a rigid macro: the anchor goes to the tile closest to its
 /// target from which every member finds a site.
+#[allow(clippy::too_many_arguments, reason = "the legaliser's whole state")]
 fn legalise_macro(
     netlist: &Netlist,
     graph: &RoutingGraph,
@@ -1319,6 +1488,7 @@ fn legalise_macro(
     m: &Macro,
     positions: &[(f64, f64)],
     sites_by_kind: &BTreeMap<String, Vec<usize>>,
+    shared: &SharedPins,
     placement: &mut Placement,
 ) -> Result<(), PlaceError> {
     let (tx, ty) = positions[m.anchor];
@@ -1331,8 +1501,17 @@ fn legalise_macro(
     }
     candidates.sort();
     for (_, ax, ay) in candidates {
-        if let Some(sites) = macro_sites(netlist, graph, info, m, sites_by_kind, placement, ax, ay)
-        {
+        if let Some(sites) = macro_sites(
+            netlist,
+            graph,
+            info,
+            m,
+            sites_by_kind,
+            shared,
+            placement,
+            ax,
+            ay,
+        ) {
             for (member, site) in sites {
                 placement.place(member, site);
             }
@@ -1351,6 +1530,7 @@ fn macro_sites(
     info: &[Placeable],
     m: &Macro,
     sites_by_kind: &BTreeMap<String, Vec<usize>>,
+    shared: &SharedPins,
     placement: &Placement,
     ax: u32,
     ay: u32,
@@ -1374,9 +1554,16 @@ fn macro_sites(
             graph.sites[**s].tile == (x, y)
                 && placement.instance_at(**s).is_none()
                 && !taken.contains(*s)
+                && shared.allows(placement, &[(*member, **s)])
         })?;
         taken.push(*site);
         out.push((*member, *site));
+    }
+    // A macro's members can share a pin with each other as well as with
+    // whatever is placed already, and `placement` does not hold them yet,
+    // so the group is judged once more as a whole.
+    if !shared.allows(placement, &out) {
+        return None;
     }
     Some(out)
 }
@@ -1441,12 +1628,14 @@ fn signals_of(netlist: &Netlist, instance: usize) -> Vec<usize> {
 type Move = Vec<(usize, usize)>;
 
 /// Runs the annealing pass, returning `(temperatures, moves, accepted)`.
+#[allow(clippy::too_many_arguments, reason = "the annealer's whole state")]
 fn anneal(
     netlist: &Netlist,
     graph: &RoutingGraph,
     info: &[Placeable],
     macros: &[Macro],
     sites_by_kind: &BTreeMap<String, Vec<usize>>,
+    shared: &SharedPins,
     options: &PlaceOptions,
     placement: &mut Placement,
 ) -> (u32, u64, u64) {
@@ -1473,6 +1662,7 @@ fn anneal(
             info,
             macros,
             sites_by_kind,
+            shared,
             &movable,
             &mut rng,
             &probe,
@@ -1504,6 +1694,7 @@ fn anneal(
                 info,
                 macros,
                 sites_by_kind,
+                shared,
                 &movable,
                 &mut rng,
                 placement,
@@ -1577,6 +1768,7 @@ fn propose(
     info: &[Placeable],
     macros: &[Macro],
     sites_by_kind: &BTreeMap<String, Vec<usize>>,
+    shared: &SharedPins,
     movable: &[usize],
     rng: &mut Rng,
     placement: &Placement,
@@ -1590,7 +1782,17 @@ fn propose(
         for (member, _, _) in &m.members {
             free.unplace(*member);
         }
-        return macro_sites(netlist, graph, info, m, sites_by_kind, &free, ax, ay);
+        return macro_sites(
+            netlist,
+            graph,
+            info,
+            m,
+            sites_by_kind,
+            shared,
+            &free,
+            ax,
+            ay,
+        );
     }
     let kind = &netlist.instances[instance].kind;
     let sites = sites_by_kind.get(kind)?;
@@ -1604,8 +1806,13 @@ fn propose(
     {
         return None;
     }
-    match placement.instance_at(target) {
-        None => Some(vec![(instance, target)]),
+    // A move is only proposed if it is legal, which for a swap means legal
+    // after both halves have happened: see `SharedPins`. The annealer
+    // therefore never has to undo an illegal placement, and a design whose
+    // cells share no pin — every family but the ECP5, today — takes exactly
+    // the moves it took before this check existed.
+    let candidate = match placement.instance_at(target) {
+        None => vec![(instance, target)],
         Some(other) => {
             if info[other].fixed.is_some() || info[other].macro_index.is_some() {
                 return None;
@@ -1617,9 +1824,10 @@ fn propose(
             {
                 return None;
             }
-            Some(vec![(instance, target), (other, back)])
+            vec![(instance, target), (other, back)]
         }
-    }
+    };
+    shared.allows(placement, &candidate).then_some(candidate)
 }
 
 /// The cost of the signals a move touches, before it is applied.
@@ -1937,6 +2145,173 @@ mod tests {
         // A different seed is allowed to differ; what matters is that it
         // is still a legal placement.
         assert_eq!(c.placed(), 8);
+    }
+
+    /// A grid of tiles holding **two** flip-flops each, whose enable pin is
+    /// one wire for the pair — an ECP5 slice in miniature, and the shape
+    /// `SharedPins` is for.
+    fn pairs(width: u32, height: u32) -> (Arch, RoutingGraph) {
+        let mut arch = Arch::new("t", "test", width, height);
+        let mut tile = TileType::new("logic", "logic_tile", 4, 4);
+        for name in ["d0", "d1", "q0", "q1", "ce"] {
+            tile.wires.push(WireDecl {
+                name: name.to_owned(),
+                dx: 0,
+                dy: 0,
+            });
+        }
+        for half in 0..2 {
+            let mut bel = BelDecl::new(format!("ff{half}"), "ff");
+            bel.pins
+                .push(("d".to_owned(), WireRef::local(format!("d{half}"))));
+            bel.pins
+                .push(("q".to_owned(), WireRef::local(format!("q{half}"))));
+            // The whole point: both halves name one wire for the enable.
+            bel.pins.push(("en".to_owned(), WireRef::local("ce")));
+            tile.bels.push(bel);
+        }
+        arch.tile_types.push(tile);
+        for y in 0..height {
+            for x in 0..width {
+                arch.set_tile(x, y, 0);
+            }
+        }
+        let graph = arch.build_graph();
+        (arch, graph)
+    }
+
+    /// `n` flip-flops whose enables come from `groups` distinct signals,
+    /// round-robin, and nothing else — the shape a state machine with
+    /// several clock enables has.
+    fn enabled(n: usize, groups: usize) -> Netlist {
+        let mut netlist = Netlist {
+            instances: Vec::new(),
+            pins: Vec::new(),
+            signals: Vec::new(),
+            off_fabric: Vec::new(),
+        };
+        for g in 0..groups {
+            netlist.signals.push(Signal {
+                name: format!("en{g}"),
+                driver: None,
+                sinks: Vec::new(),
+            });
+        }
+        for i in 0..n {
+            let instance = netlist.instances.len();
+            let pin = netlist.pins.len();
+            let signal = i % groups;
+            netlist.pins.push(NetPin {
+                instance,
+                port: "CE".to_owned(),
+                bit: 0,
+                role: "en".to_owned(),
+                output: false,
+                signal: Some(signal),
+                constant: None,
+            });
+            netlist.signals[signal].sinks.push(pin);
+            netlist.instances.push(Instance {
+                cell: CellId::from_index(i),
+                name: format!("ff{i}"),
+                primitive: "F".to_owned(),
+                kind: "ff".to_owned(),
+                pins: vec![pin],
+                pin: None,
+            });
+        }
+        netlist
+    }
+
+    /// Two cells in one tile whose pins are one wire must want the same
+    /// signal on it.
+    ///
+    /// This is the constraint an ECP5 slice's `CE`, `CLK` and `LSR` wires
+    /// impose, and without it a design with several clock enables places
+    /// happily and then asks the router to carry two signals on one node —
+    /// which is how it was found, as 52 oversubscribed `CE` nodes on the
+    /// eight-bit ULPI device core.
+    #[test]
+    fn two_cells_that_share_a_pin_must_agree_about_it() {
+        // Nothing to check when nothing is shared, which is every family
+        // but the ECP5 today and is why the check costs them nothing.
+        let (_, plain) = grid(4, 4);
+        assert!(
+            SharedPins::find(&chain(6), &plain).trivial(),
+            "a one-bel tile has no shared pin"
+        );
+
+        // Four tiles, eight flip-flops, one enable between them: every pair
+        // agrees, so both halves of every tile are used.
+        let (arch, graph) = pairs(2, 2);
+        let netlist = enabled(8, 1);
+        let (placement, _) = place(
+            &netlist,
+            &arch,
+            &graph,
+            &Constraints::new(),
+            &PlaceOptions::default(),
+        )
+        .expect("eight flip-flops with one enable fit in four pairs");
+        assert_eq!(placement.placed(), 8);
+        let mut tiles: Vec<(u32, u32)> = (0..8)
+            .map(|i| graph.sites[placement.site_of(i).unwrap()].tile)
+            .collect();
+        tiles.sort_unstable();
+        tiles.dedup();
+        assert_eq!(
+            tiles.len(),
+            4,
+            "agreeing flip-flops must still be allowed to pair up, or this check is just              spreading everything out"
+        );
+
+        // Eight flip-flops, eight enables, on a grid with room: no tile may
+        // hold two of them.
+        let (arch, graph) = pairs(4, 4);
+        let netlist = enabled(8, 8);
+        let (placement, _) = place(
+            &netlist,
+            &arch,
+            &graph,
+            &Constraints::new(),
+            &PlaceOptions::default(),
+        )
+        .expect("eight enables and sixteen tiles");
+        let mut tiles: Vec<(u32, u32)> = (0..8)
+            .map(|i| graph.sites[placement.site_of(i).unwrap()].tile)
+            .collect();
+        tiles.sort_unstable();
+        let before = tiles.len();
+        tiles.dedup();
+        assert_eq!(
+            tiles.len(),
+            before,
+            "two flip-flops with different enables share a tile, so the wire they share would              have to carry two signals"
+        );
+
+        // And the predicate itself, since the placements above could pass by
+        // luck: the two halves of one tile, with disagreeing enables, are
+        // refused, and with agreeing ones allowed.
+        let shared = SharedPins::find(&netlist, &graph);
+        assert!(!shared.trivial());
+        let pair: Vec<usize> = (0..graph.sites.len())
+            .filter(|s| graph.sites[*s].tile == (0, 0))
+            .collect();
+        assert_eq!(pair.len(), 2, "two flip-flops a tile");
+        let mut empty = Placement::new(netlist.instances.len(), graph.sites.len());
+        empty.place(0, pair[0]);
+        assert!(
+            !shared.allows(&empty, &[(1, pair[1])]),
+            "`ff1` wants `en1` where `ff0` wants `en0`"
+        );
+        let same = enabled(2, 1);
+        let shared_same = SharedPins::find(&same, &graph);
+        let mut both = Placement::new(same.instances.len(), graph.sites.len());
+        both.place(0, pair[0]);
+        assert!(
+            shared_same.allows(&both, &[(1, pair[1])]),
+            "two flip-flops with one enable belong in one tile"
+        );
     }
 
     #[test]
