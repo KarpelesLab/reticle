@@ -41,11 +41,20 @@ The 7-series backend declares `OBUFT` and `IOBUF` and has never routed a
 tristate; until now `configure_io` read the direction off the netlist and
 built an input or an output, and an `inout` port got an output with a warning.
 
-**Nobody has looked at the board yet.** Everything below "What a person
-should look for" is a prediction written down before the observation, which
-is the order the previous three milestones were done in and the only order in
-which the observation is worth anything. When somebody has pressed the
-button, this section gets the paragraph the two below it have.
+**Somebody pressed the button, and it does what the table says.** On
+2026-09-27 the board's owner reported: nothing touched, LED 2 lit and LED 3
+blinking; `USER` held, LED 2 blinking and — in the half of the cycle where
+LED 2 is off — **LEDs 0, 1 and 3 all on**.
+
+That last clause is the whole milestone. LED 0 is lit exactly while the pad
+drives its own pin low; LED 1 is lit exactly while the **input buffer of
+that same pin** reads low. Seeing them on together is the turnaround
+observed rather than inferred: the pad drove, and the pad read back what it
+drove, through the same ball.
+
+Everything under "What a person should look for" was written down before the
+observation, which is the order the previous three milestones were done in
+and the only order in which the observation is worth anything.
 
 ### Which pad, and why it is safe to drive
 
@@ -448,9 +457,10 @@ the released level are written and read back as `PULLMODE = UP`, and that
 every bit of the image is one the database explains and selects the
 connection it was meant to.
 
-And it settles all of that only as far as `DONE`, which the first milestone in
-this file proved is worth nothing on its own: the LEDs were dark and `DONE`
-was high. **Nobody has looked at this one yet.**
+And it would settle all of that only as far as `DONE`, which the first
+milestone in this file proved is worth nothing on its own: the LEDs were dark
+and `DONE` was high. This one was then **watched**, and the pattern it showed
+was the one written down in advance, including LEDs 0 and 1 lit together.
 
 It settles nothing about a bidirectional **bus on a part**: one bit has been
 loaded, not eight. An eight-bit bus *builds* on the top edge —
