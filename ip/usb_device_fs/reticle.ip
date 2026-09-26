@@ -4,6 +4,11 @@
 # into the device descriptor; 1209:0001 is pid.codes' test pair. The
 # package `usb_device_fs_pll` makes the 48 MHz from a 12 MHz board
 # clock with the device's PLL.
+#
+# `usb_ctrl_ep` is the device above the line and is a module of its own
+# because `usb_device_ulpi` depends on this package for it: a board
+# whose USB lines go through a ULPI transceiver needs the same endpoint
+# and none of `usb_fs_rx` or `usb_fs_tx`.
 name usb_device_fs
 version 1.0.0
 license MIT
@@ -15,6 +20,7 @@ target ecp5
 
 source rtl/usb_fs_rx.v
 source rtl/usb_fs_tx.v
+source rtl/usb_ctrl_ep.v
 source rtl/usb_device_fs.v
 
 param VID bits 16'h1209

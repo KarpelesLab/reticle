@@ -65,6 +65,18 @@
 //! a USB host model sending real packets, NRZI and bit stuffing and
 //! CRCs included, on a clock a little off the device's.
 //!
+//! `usb_device_ulpi` is enumerated by **that same host model**, with a
+//! **ULPI transceiver model** put between the two: a full-speed receiver
+//! that recovers the bit clock off the pair, a transmitter that adds the
+//! SYNC field, the stuffing, NRZI and the end of packet, and the ULPI bus
+//! above them — both turnaround cycles, transmit and receive commands,
+//! and a register file with its reset values. The enumeration is written
+//! once, in `enumerate`, and run against both cores, because what a host
+//! does to a device does not depend on how the device's bytes reach the
+//! pair. The transceiver model checks the Link as well as answering it,
+//! and a test drives it with a Link that breaks each of the turnaround's
+//! rules, because a model that accepts anything proves nothing.
+//!
 //! Seven tests here came from gaps in Reticle rather than in the blocks,
 //! found by writing real HDL, which is the argument for a first-party
 //! library in the first place:
@@ -278,6 +290,11 @@ const VARIANTS: &[Variant] = &[
     Variant {
         package: "usb_device_fs_pll",
         top: "usb_device_fs_pll",
+        params: &[("VID", "16'h1209"), ("PID", "16'h0001")],
+    },
+    Variant {
+        package: "usb_device_ulpi",
+        top: "usb_device_ulpi",
         params: &[("VID", "16'h1209"), ("PID", "16'h0001")],
     },
 ];
@@ -9244,6 +9261,1199 @@ fn usb_device_fs_pll_takes_48_mhz_from_the_pll() {
         assert_eq!(pll.input_hz, 12_000_000);
         assert_eq!(pll.achieved_hz, 48_000_000, "{device_name}: exactly 48 MHz");
     }
+}
+
+// ---------------------------------------------------------------------------
+// usb_device_ulpi: a ULPI transceiver model between the host and the device
+// ---------------------------------------------------------------------------
+
+/// Cycles of the 60 MHz ULPI clock in one full-speed bit time.
+const ULPI_CPB: u64 = 5;
+
+/// The registers of a ULPI transceiver this model has.
+const ULPI_FUNC_CTRL: u8 = 0x04;
+const ULPI_OTG_CTRL: u8 = 0x0A;
+const ULPI_DEBUG: u8 = 0x15;
+
+/// LineState(1:0) of a receive command: bit 0 is D+, bit 1 is D-.
+fn line_bits(line: UsbLine) -> u8 {
+    match line {
+        UsbLine::J => 0b01,
+        UsbLine::K => 0b10,
+        UsbLine::Se0 => 0b00,
+    }
+}
+
+/// What one cycle of the pair told the transceiver's receiver.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum LineEvent {
+    Nothing,
+    Byte(u8),
+    /// The packet ended on a byte boundary.
+    Eop,
+    /// It ended off one, or the bit stuffing was broken.
+    Error,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum RxPhase {
+    Idle,
+    Sync,
+    Data,
+    Eop,
+}
+
+/// The receive half of a full-speed transceiver: it recovers the bit
+/// clock from the transitions, decodes NRZI, drops the stuffed zeros and
+/// assembles bytes least significant bit first. Written from the USB 2.0
+/// line rules, and it samples in the middle of each bit, since a
+/// transceiver is not counting a 48 MHz clock the way `usb_fs_rx` is.
+struct LineRx {
+    div: u64,
+    phase: u64,
+    last: UsbLine,
+    state: RxPhase,
+    prev: UsbLine,
+    zeros: u32,
+    ones: u32,
+    bits: u32,
+    shift: u8,
+}
+
+impl LineRx {
+    fn new(div: u64) -> LineRx {
+        LineRx {
+            div,
+            phase: 0,
+            last: UsbLine::J,
+            state: RxPhase::Idle,
+            prev: UsbLine::J,
+            zeros: 0,
+            ones: 0,
+            bits: 0,
+            shift: 0,
+        }
+    }
+
+    /// Whether a packet is on the pair, which is UTMI's RxActive.
+    fn active(&self) -> bool {
+        matches!(self.state, RxPhase::Sync | RxPhase::Data)
+    }
+
+    fn step(&mut self, line: UsbLine) -> LineEvent {
+        if line == self.last {
+            // The counter wraps, so a run of bits with no transition in
+            // it is still sampled once a bit.
+            self.phase = (self.phase + 1) % self.div;
+        } else {
+            self.phase = 0;
+        }
+        self.last = line;
+        if self.phase != self.div / 2 {
+            return LineEvent::Nothing;
+        }
+        // NRZI: no change of state is a one.
+        let one = line == self.prev;
+        match self.state {
+            RxPhase::Idle => {
+                if line == UsbLine::K {
+                    // The first K of the SYNC field, which is a zero.
+                    self.state = RxPhase::Sync;
+                    self.prev = UsbLine::K;
+                    self.zeros = 1;
+                }
+                LineEvent::Nothing
+            }
+            RxPhase::Sync => {
+                self.prev = line;
+                if line == UsbLine::Se0 {
+                    self.state = RxPhase::Eop;
+                } else if !one {
+                    self.zeros += 1;
+                } else if self.zeros >= 3 {
+                    self.state = RxPhase::Data;
+                    self.ones = 1;
+                    self.bits = 0;
+                    self.shift = 0;
+                } else {
+                    self.state = RxPhase::Eop;
+                }
+                LineEvent::Nothing
+            }
+            RxPhase::Data => {
+                self.prev = line;
+                if line == UsbLine::Se0 {
+                    self.state = RxPhase::Eop;
+                    if self.bits == 0 {
+                        LineEvent::Eop
+                    } else {
+                        LineEvent::Error
+                    }
+                } else if self.ones == 6 {
+                    // The stuffed zero, which carries no data.
+                    self.ones = 0;
+                    if one {
+                        self.state = RxPhase::Eop;
+                        LineEvent::Error
+                    } else {
+                        LineEvent::Nothing
+                    }
+                } else {
+                    self.shift = (u8::from(one) << 7) | (self.shift >> 1);
+                    self.ones = if one { self.ones + 1 } else { 0 };
+                    self.bits += 1;
+                    if self.bits == 8 {
+                        self.bits = 0;
+                        LineEvent::Byte(self.shift)
+                    } else {
+                        LineEvent::Nothing
+                    }
+                }
+            }
+            RxPhase::Eop => {
+                if line == UsbLine::J {
+                    self.state = RxPhase::Idle;
+                }
+                LineEvent::Nothing
+            }
+        }
+    }
+}
+
+/// One register access the transceiver was asked for.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct UlpiAccess {
+    write: bool,
+    addr: u8,
+    value: u8,
+}
+
+fn wrote(addr: u8, value: u8) -> UlpiAccess {
+    UlpiAccess {
+        write: true,
+        addr,
+        value,
+    }
+}
+
+/// A register the transceiver was asked to read, and what it answered.
+fn got(addr: u8, value: u8) -> UlpiAccess {
+    UlpiAccess {
+        write: false,
+        addr,
+        value,
+    }
+}
+
+/// What the Link drove for one cycle.
+struct LinkOut {
+    oe: bool,
+    data: u8,
+    stp: bool,
+    rst_n: bool,
+}
+
+/// A transmit command the Link can send.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum PhyCmd {
+    /// A USB packet with this PID.
+    Tx(u8),
+    Write(u8),
+    Read(u8),
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum PhyState {
+    /// `dir` low, waiting for a transmit command.
+    Idle,
+    /// The command byte is being consumed; this is what it said.
+    Accept(PhyCmd),
+    /// A register write: the byte, then the stop that commits it.
+    WriteData(u8),
+    WriteStop(u8, u8),
+    /// A register read: the turnaround cycle, the byte, and letting go.
+    ReadTurn(u8),
+    ReadData(u8),
+    Release,
+    /// Taking a USB packet from the Link, then putting it on the pair.
+    Collect,
+    Line,
+    /// Handing a USB packet to the Link.
+    RxTurn,
+    Rx,
+    /// One unsolicited receive command.
+    CmdTurn,
+    Cmd,
+    /// `dir` held while the core resets, or while a receive overrides a
+    /// register read.
+    Resetting(u32),
+    Override(u32),
+}
+
+/// A ULPI transceiver: a full-speed line on one side and the ULPI bus on
+/// the other, written from the specification in
+/// `ip/usb_device_ulpi/README.md`.
+///
+/// Every cycle it presents `dir`, `nxt` and the data bus, reads what the
+/// Link drove, and complains if the Link drove a bus that was not its.
+/// It holds LineState still while a packet is on the pair, since a
+/// transceiver's LineState during a packet says nothing a Link can use,
+/// and reports the SE0-to-J transition of every end of packet, which is
+/// what ULPI 1.1 Table 10 has the Link time its answer from.
+struct UlpiPhy {
+    div: u64,
+    /// Registered outputs, held for the cycle about to run.
+    dir: bool,
+    nxt: bool,
+    data: u8,
+    was_dir: bool,
+    /// What the transceiver drives onto the pair, if anything.
+    line_out: Option<UsbLine>,
+    state: PhyState,
+    regs: BTreeMap<u8, u8>,
+    /// Every register access, in order.
+    accesses: Vec<UlpiAccess>,
+    /// Every transmit command byte the Link drove.
+    commands: Vec<u8>,
+    /// Every USB packet the Link handed over, PID byte and CRC included.
+    packets: Vec<Vec<u8>>,
+    /// Cycles the Link held the reset pin low.
+    reset_cycles: u64,
+    /// Turnaround cycles the transceiver has taken the bus for.
+    turnarounds: u64,
+    /// Unsolicited receive commands sent out of an idle bus.
+    unsolicited: u64,
+    /// Transmits abandoned because the transceiver took the bus.
+    aborts: u64,
+    rx: LineRx,
+    rx_bytes: Vec<u8>,
+    rx_active: bool,
+    rx_error: bool,
+    rx_done: bool,
+    line_state: u8,
+    /// The last receive command the Link was given.
+    sent: u8,
+    forced: bool,
+    tx: Vec<u8>,
+    tx_line: Vec<UsbLine>,
+    tx_pos: usize,
+    tx_hold: u64,
+    ticks: u64,
+    problems: Vec<String>,
+    // What this transceiver does to make the Link's life harder.
+    /// What a turnaround cycle carries. The Link must ignore it.
+    garbage: u8,
+    /// One cycle in this many has `nxt` low, throttling the Link.
+    throttle: u64,
+    /// Take the bus away after this many bytes of a USB transmit.
+    steal_after: Option<usize>,
+    /// End a receive by dropping `dir` with no closing receive command.
+    terse_eop: bool,
+    /// Answer the first Function Control read with the reset value.
+    lie_once: bool,
+    lied: bool,
+    /// Let a receive override the first register read.
+    override_read: bool,
+    overrode: bool,
+}
+
+impl UlpiPhy {
+    fn new(div: u64) -> UlpiPhy {
+        let mut phy = UlpiPhy {
+            div,
+            dir: false,
+            nxt: false,
+            data: 0,
+            was_dir: false,
+            line_out: None,
+            state: PhyState::Idle,
+            regs: BTreeMap::new(),
+            accesses: Vec::new(),
+            commands: Vec::new(),
+            packets: Vec::new(),
+            reset_cycles: 0,
+            turnarounds: 0,
+            unsolicited: 0,
+            aborts: 0,
+            rx: LineRx::new(div),
+            rx_bytes: Vec::new(),
+            rx_active: false,
+            rx_error: false,
+            rx_done: false,
+            line_state: 0b01,
+            sent: 0,
+            forced: true,
+            tx: Vec::new(),
+            tx_line: Vec::new(),
+            tx_pos: 0,
+            tx_hold: 0,
+            ticks: 0,
+            problems: Vec::new(),
+            garbage: 0xAA,
+            throttle: 0,
+            steal_after: None,
+            terse_eop: false,
+            lie_once: false,
+            lied: false,
+            override_read: false,
+            overrode: false,
+        };
+        phy.power_on();
+        phy
+    }
+
+    /// One cycle in `every` has `nxt` low.
+    fn throttling(mut self, every: u64) -> UlpiPhy {
+        self.throttle = every;
+        self
+    }
+
+    /// Take the bus away `after` bytes into a USB transmit.
+    fn stealing(mut self, after: usize) -> UlpiPhy {
+        self.steal_after = Some(after);
+        self
+    }
+
+    /// End a receive by dropping `dir`, with no closing receive command.
+    fn terse(mut self) -> UlpiPhy {
+        self.terse_eop = true;
+        self
+    }
+
+    /// Answer the first Function Control read with the reset value, as a
+    /// transceiver that did not take the settings would.
+    fn lying(mut self) -> UlpiPhy {
+        self.lie_once = true;
+        self
+    }
+
+    /// Let a receive override the first register read, which ULPI 1.1
+    /// §3.8.3.2 says may happen in any cycle of one.
+    fn overriding(mut self) -> UlpiPhy {
+        self.override_read = true;
+        self
+    }
+
+    /// The power-on state: the reset values of the registers, and no
+    /// memory of anything on either side.
+    fn power_on(&mut self) {
+        self.regs.insert(ULPI_FUNC_CTRL, 0x41);
+        self.regs.insert(ULPI_OTG_CTRL, 0x06);
+        self.state = PhyState::Idle;
+        self.dir = false;
+        self.nxt = false;
+        self.data = 0;
+        self.line_out = None;
+        self.rx = LineRx::new(self.div);
+        self.rx_bytes.clear();
+        self.rx_active = false;
+        self.rx_error = false;
+        self.rx_done = false;
+        self.tx.clear();
+        self.tx_line.clear();
+        self.forced = true;
+    }
+
+    fn problem(&mut self, why: String) {
+        self.problems.push(why);
+    }
+
+    /// The receive command byte: LineState, VBUS valid, and the receive
+    /// event.
+    fn status(&self) -> u8 {
+        let event = if !self.rx_active {
+            0b00
+        } else if self.rx_error {
+            0b11
+        } else {
+            0b01
+        };
+        self.line_state | 0b11 << 2 | event << 4
+    }
+
+    /// Whether the Link is owed a receive command.
+    fn owed(&self) -> bool {
+        self.forced || self.status() != self.sent
+    }
+
+    fn send_status(&mut self) {
+        self.data = self.status();
+        self.sent = self.data;
+        self.forced = false;
+        self.nxt = false;
+        self.dir = true;
+    }
+
+    fn idle_out(&mut self) {
+        self.dir = false;
+        self.nxt = false;
+        self.data = 0;
+    }
+
+    /// Whether `nxt` is asserted for the next cycle, which is where the
+    /// throttle lives.
+    fn accept(&mut self) -> bool {
+        self.ticks += 1;
+        self.throttle == 0 || !self.ticks.is_multiple_of(self.throttle)
+    }
+
+    /// A byte to the Link if there is one, a receive command if not,
+    /// which is what ULPI does with the cycles of a receive that carry no
+    /// data.
+    fn rx_out(&mut self) {
+        if self.rx_bytes.is_empty() {
+            self.send_status();
+        } else {
+            self.data = self.rx_bytes.remove(0);
+            self.nxt = true;
+            self.dir = true;
+        }
+    }
+
+    fn read_reg(&mut self, addr: u8) -> u8 {
+        match addr {
+            ULPI_DEBUG => self.line_state,
+            ULPI_FUNC_CTRL if self.lie_once && !self.lied => {
+                self.lied = true;
+                0x41
+            }
+            ULPI_FUNC_CTRL | ULPI_OTG_CTRL => self.regs[&addr],
+            other => {
+                self.problem(format!("a read of register {other:#04x}, which is not one"));
+                0
+            }
+        }
+    }
+
+    fn write_reg(&mut self, addr: u8, value: u8) {
+        match addr {
+            ULPI_FUNC_CTRL => {
+                // The reset bit is not stored: the transceiver performs
+                // the reset and clears it (ULPI 1.1 §4.2.2).
+                self.regs.insert(addr, value & !0x20);
+            }
+            ULPI_OTG_CTRL => {
+                self.regs.insert(addr, value);
+            }
+            other => self.problem(format!(
+                "a write of {value:#04x} to register {other:#04x}, which is not writable"
+            )),
+        }
+    }
+
+    /// One clock: what the Link drove this cycle, and what the host has
+    /// on the pair.
+    fn step(&mut self, link: &LinkOut, host: Option<UsbLine>) {
+        if link.oe && self.dir {
+            self.problem("the link drove the data bus while dir was high".into());
+        }
+        if link.oe && self.dir != self.was_dir {
+            self.problem("the link drove a turnaround cycle".into());
+        }
+        if link.stp && self.dir {
+            self.problem("the link asserted stp while the transceiver had the bus".into());
+        }
+        if self.dir != self.was_dir {
+            self.turnarounds += 1;
+        }
+        self.was_dir = self.dir;
+
+        if !link.rst_n {
+            self.reset_cycles += 1;
+            self.power_on();
+            return;
+        }
+
+        // The line, except while the transceiver owns it: during a
+        // transmit the receive path is blocked (ULPI 1.1 §3.8.2.2).
+        if !matches!(self.state, PhyState::Line | PhyState::Collect) {
+            let seen = host.unwrap_or(UsbLine::J);
+            match self.rx.step(seen) {
+                LineEvent::Byte(b) => self.rx_bytes.push(b),
+                LineEvent::Eop => self.rx_done = true,
+                LineEvent::Error => {
+                    self.rx_error = true;
+                    self.rx_done = true;
+                }
+                LineEvent::Nothing => {}
+            }
+            if self.rx.active() && !self.rx_active {
+                self.rx_active = true;
+                self.rx_error = false;
+                self.rx_done = false;
+            }
+            if !self.rx_active {
+                // With no packet on it, LineState is the pair.
+                self.line_state = line_bits(seen);
+            }
+        }
+
+        let want_rx = self.rx_active || !self.rx_bytes.is_empty();
+        match self.state {
+            PhyState::Idle => {
+                if want_rx {
+                    // A packet: `dir` and `nxt` together tell the Link
+                    // immediately what this is (§3.8.2.4).
+                    self.state = PhyState::RxTurn;
+                    self.dir = true;
+                    self.nxt = true;
+                    self.data = self.garbage;
+                } else if link.oe && link.data != 0 {
+                    self.take_command(link.data);
+                } else if self.owed() {
+                    self.state = PhyState::CmdTurn;
+                    self.unsolicited += 1;
+                    self.dir = true;
+                    self.nxt = false;
+                    self.data = self.garbage;
+                } else {
+                    self.idle_out();
+                }
+            }
+            PhyState::Accept(kind) => match kind {
+                PhyCmd::Tx(pid) => {
+                    if pid == 0 {
+                        self.problem("a transmit command with no PID".into());
+                    }
+                    self.tx = vec![usb_pid(pid)];
+                    self.ticks = 0;
+                    self.state = PhyState::Collect;
+                    self.nxt = self.accept();
+                }
+                PhyCmd::Write(addr) => {
+                    self.ticks = 0;
+                    self.state = PhyState::WriteData(addr);
+                    self.nxt = self.accept();
+                }
+                PhyCmd::Read(addr) => {
+                    if self.override_read && !self.overrode {
+                        self.overrode = true;
+                        self.state = PhyState::Override(4);
+                        self.dir = true;
+                        self.nxt = true;
+                        self.data = self.garbage;
+                    } else {
+                        self.state = PhyState::ReadTurn(addr);
+                        self.dir = true;
+                        self.nxt = false;
+                        self.data = self.garbage;
+                    }
+                }
+            },
+            PhyState::WriteData(addr) => {
+                if link.stp {
+                    self.problem("a register write ended before its byte".into());
+                    self.state = PhyState::Idle;
+                    self.idle_out();
+                } else if self.nxt {
+                    self.state = PhyState::WriteStop(addr, link.data);
+                    self.nxt = false;
+                } else {
+                    self.nxt = self.accept();
+                }
+            }
+            PhyState::WriteStop(addr, value) => {
+                if !link.stp {
+                    self.problem("a register write was not ended by stp".into());
+                    self.state = PhyState::Idle;
+                    self.idle_out();
+                } else {
+                    self.write_reg(addr, value);
+                    self.accesses.push(wrote(addr, value));
+                    self.idle_out();
+                    if addr == ULPI_FUNC_CTRL && value & 0x20 != 0 {
+                        // §3.5: the transceiver asserts `dir` and resets
+                        // its core, and sends a receive command after it.
+                        self.state = PhyState::Resetting(12);
+                        self.dir = true;
+                        self.data = self.garbage;
+                        self.forced = true;
+                    } else {
+                        self.state = PhyState::Idle;
+                    }
+                }
+            }
+            PhyState::ReadTurn(addr) => {
+                self.data = self.read_reg(addr);
+                self.dir = true;
+                self.nxt = false;
+                self.state = PhyState::ReadData(addr);
+            }
+            PhyState::ReadData(addr) => {
+                let value = self.data;
+                self.accesses.push(got(addr, value));
+                self.state = PhyState::Release;
+                self.dir = false;
+                self.nxt = false;
+                self.data = self.garbage;
+            }
+            PhyState::Release => {
+                self.state = PhyState::Idle;
+                self.idle_out();
+            }
+            PhyState::Collect => {
+                if link.stp {
+                    if link.data != 0 {
+                        let byte = link.data;
+                        self.problem(format!("stp with {byte:#04x} on the bus, not 00h"));
+                    }
+                    self.send_packet();
+                } else if self.nxt {
+                    self.tx.push(link.data);
+                    if self.tx.len() > 16 {
+                        self.problem("a USB transmit that never ended".into());
+                        self.state = PhyState::Idle;
+                        self.idle_out();
+                    } else if Some(self.tx.len()) == self.steal_after {
+                        // §3.8.4.1: the transceiver may take the bus at
+                        // any time, and the Link must give up the packet.
+                        // Once is enough to make the point.
+                        self.steal_after = None;
+                        self.aborts += 1;
+                        self.tx.clear();
+                        self.state = PhyState::CmdTurn;
+                        self.dir = true;
+                        self.nxt = false;
+                        self.data = self.garbage;
+                        self.forced = true;
+                    } else {
+                        self.nxt = self.accept();
+                    }
+                } else {
+                    self.nxt = self.accept();
+                }
+            }
+            PhyState::Line => {
+                if self.tx_hold > 1 {
+                    self.tx_hold -= 1;
+                } else {
+                    self.tx_pos += 1;
+                    if self.tx_pos >= self.tx_line.len() {
+                        self.line_out = None;
+                        self.state = PhyState::Idle;
+                    } else {
+                        self.tx_hold = self.div;
+                        self.line_out = Some(self.tx_line[self.tx_pos]);
+                        if self.tx_pos + 3 >= self.tx_line.len() {
+                            // The end of packet, which the Link is owed a
+                            // receive command for (§3.8.1.3).
+                            self.line_state = line_bits(self.tx_line[self.tx_pos]);
+                        }
+                    }
+                }
+            }
+            PhyState::RxTurn => {
+                self.state = PhyState::Rx;
+                self.rx_out();
+            }
+            PhyState::Rx => {
+                if self.rx_done && self.rx_bytes.is_empty() {
+                    self.rx_active = false;
+                }
+                if !self.rx_active && (self.terse_eop || self.sent == self.status()) {
+                    self.state = PhyState::Release;
+                    self.dir = false;
+                    self.nxt = false;
+                    self.data = self.garbage;
+                } else {
+                    self.rx_out();
+                }
+            }
+            PhyState::CmdTurn => {
+                self.state = PhyState::Cmd;
+                self.send_status();
+            }
+            PhyState::Cmd => {
+                if want_rx {
+                    self.state = PhyState::Rx;
+                    self.rx_out();
+                } else if self.owed() {
+                    // Back-to-back receive commands, which the Link must
+                    // accept any number of (§3.8.1.3).
+                    self.send_status();
+                } else {
+                    self.state = PhyState::Release;
+                    self.dir = false;
+                    self.nxt = false;
+                    self.data = self.garbage;
+                }
+            }
+            PhyState::Resetting(left) => {
+                if left == 0 {
+                    self.state = PhyState::Idle;
+                    self.idle_out();
+                } else {
+                    self.state = PhyState::Resetting(left - 1);
+                    self.dir = true;
+                    self.nxt = false;
+                    self.data = self.garbage;
+                }
+            }
+            PhyState::Override(left) => {
+                if left == 0 {
+                    self.state = PhyState::Idle;
+                    self.idle_out();
+                } else {
+                    self.state = PhyState::Override(left - 1);
+                    self.dir = true;
+                    self.nxt = false;
+                    self.data = self.status();
+                }
+            }
+        }
+    }
+
+    /// A transmit command byte from the Link.
+    fn take_command(&mut self, cmd: u8) {
+        let kind = match cmd >> 6 {
+            0b01 if cmd & 0b0011_0000 == 0 => Some(PhyCmd::Tx(cmd & 0x0F)),
+            0b10 => Some(PhyCmd::Write(cmd & 0x3F)),
+            0b11 => Some(PhyCmd::Read(cmd & 0x3F)),
+            _ => None,
+        };
+        match kind {
+            Some(kind) => {
+                if let PhyCmd::Tx(_) = kind {
+                    self.commands.push(cmd);
+                }
+                self.state = PhyState::Accept(kind);
+                // §3.2: never in the first cycle of the transmit command.
+                self.nxt = true;
+            }
+            None => self.problem(format!("a reserved transmit command {cmd:#04x}")),
+        }
+    }
+
+    /// The Link's packet, onto the pair: the SYNC field, NRZI with the
+    /// zeros stuffed, and the end of packet, all of which are the
+    /// transceiver's and none of which the Link ever sees.
+    fn send_packet(&mut self) {
+        let bytes = std::mem::take(&mut self.tx);
+        self.tx_line = usb_line(&bytes, true);
+        self.packets.push(bytes);
+        self.tx_pos = 0;
+        self.tx_hold = self.div;
+        self.line_out = Some(self.tx_line[0]);
+        self.state = PhyState::Line;
+        self.idle_out();
+    }
+}
+
+/// `usb_device_ulpi` behind that transceiver: the host's pair reaches the
+/// device through the model, and the device sees a ULPI bus.
+struct UlpiPair<'d> {
+    sim: Simulator<'d>,
+    clk: NetHandle,
+    dir: NetHandle,
+    nxt: NetHandle,
+    data_in: NetHandle,
+    data_out: NetHandle,
+    data_oe: NetHandle,
+    stp: NetHandle,
+    rst_out: NetHandle,
+    address: NetHandle,
+    configured: NetHandle,
+    reset_net: NetHandle,
+    ready_net: NetHandle,
+    phy: UlpiPhy,
+}
+
+impl<'d> UlpiPair<'d> {
+    fn new(design: &'d Design) -> UlpiPair<'d> {
+        UlpiPair::with_phy(design, UlpiPhy::new(ULPI_CPB))
+    }
+
+    /// The device out of reset and the transceiver configured, which is
+    /// the start-up sequence run to its end before a host looks.
+    fn with_phy(design: &'d Design, phy: UlpiPhy) -> UlpiPair<'d> {
+        let sim = simulate(design, "usb_device_ulpi");
+        let pin = |n: &str| top_net(&sim, n);
+        let mut pair = UlpiPair {
+            clk: pin("clk60"),
+            dir: pin("ulpi_dir"),
+            nxt: pin("ulpi_nxt"),
+            data_in: pin("ulpi_data_i"),
+            data_out: pin("ulpi_data_o"),
+            data_oe: pin("ulpi_data_oe"),
+            stp: pin("ulpi_stp"),
+            rst_out: pin("ulpi_rst_n"),
+            address: pin("address"),
+            configured: pin("configured"),
+            reset_net: pin("usb_reset"),
+            ready_net: pin("phy_ready"),
+            phy,
+            sim,
+        };
+        pair.sim.set(pair.dir, bit(false));
+        pair.sim.set(pair.nxt, bit(false));
+        pair.sim.set(pair.data_in, word(8, 0));
+        let clk = pair.clk;
+        let rst_n = top_net(&pair.sim, "rst_n");
+        reset(&mut pair.sim, clk, rst_n);
+        for _ in 0..4000 {
+            if pair.ready() {
+                return pair;
+            }
+            pair.cycle(Some(UsbLine::J));
+        }
+        panic!(
+            "the transceiver was never configured; it saw {:?}",
+            pair.phy.accesses
+        );
+    }
+
+    fn ready(&self) -> bool {
+        high(&self.sim, self.ready_net)
+    }
+}
+
+impl UsbPair for UlpiPair<'_> {
+    fn cycles_per_bit(&self) -> u64 {
+        ULPI_CPB
+    }
+
+    fn cycle(&mut self, host: Option<UsbLine>) {
+        // What the transceiver drives for this cycle, presented before
+        // the edge that samples it, as every two-domain testbench here
+        // does. `ulpi_data_oe` is combinational in `dir` — ULPI means it
+        // to be, since `dir` is what a Link's output buffers hang off —
+        // so the low phase has to settle before it is read.
+        self.sim.set(self.dir, bit(self.phy.dir));
+        self.sim.set(self.nxt, bit(self.phy.nxt));
+        self.sim
+            .set(self.data_in, word(8, u64::from(self.phy.data)));
+        self.sim.run_for(HALF);
+        let link = LinkOut {
+            oe: high(&self.sim, self.data_oe),
+            data: octet(get_u64(&self.sim, self.data_out)),
+            stp: high(&self.sim, self.stp),
+            rst_n: high(&self.sim, self.rst_out),
+        };
+        self.sim.set(self.clk, bit(true));
+        self.sim.run_for(HALF);
+        self.sim.set(self.clk, bit(false));
+        self.phy.step(&link, host);
+    }
+
+    fn driven(&mut self) -> Option<UsbLine> {
+        self.phy.line_out
+    }
+
+    fn address(&self) -> u64 {
+        get_u64(&self.sim, self.address)
+    }
+
+    fn configured(&self) -> bool {
+        high(&self.sim, self.configured)
+    }
+
+    fn usb_reset(&self) -> bool {
+        high(&self.sim, self.reset_net)
+    }
+
+    fn problems(&self) -> &[String] {
+        &self.phy.problems
+    }
+
+    fn answer_window(&self) -> (u64, u64) {
+        // The same two to six and a half bit times, in cycles of a
+        // 60 MHz clock instead of a 48 MHz one.
+        (2 * ULPI_CPB, 13 * ULPI_CPB / 2)
+    }
+}
+
+fn ulpi_design() -> Design {
+    design_of(
+        "usb_device_ulpi",
+        "usb_device_ulpi",
+        &[("VID", "16'h1209"), ("PID", "16'h0001")],
+    )
+}
+
+/// The start-up sequence, byte for byte: the reset pin held, the reset
+/// ULPI itself asks for, the two registers a full-speed peripheral needs,
+/// the readback that confirms them and the LineState the device starts
+/// from.
+#[test]
+fn usb_device_ulpi_configures_the_transceiver_before_it_answers() {
+    let design = ulpi_design();
+    let pair = UlpiPair::new(&design);
+    assert_eq!(
+        pair.phy.accesses,
+        vec![
+            // XcvrSelect = 01 (full speed), TermSelect = 1 (the pull-up
+            // on D+), SuspendM = 1, and the reset bit.
+            wrote(0x04, 0x65),
+            // No 15 kOhm pull-downs: they are a host's.
+            wrote(0x0A, 0x00),
+            // The same settings without the reset bit.
+            wrote(0x04, 0x45),
+            got(0x04, 0x45),
+            // The Debug register, whose low two bits are LineState: the
+            // host is idling the pair at J.
+            got(0x15, 0x01),
+        ]
+    );
+    assert_eq!(pair.phy.regs[&0x04], 0x45, "Function Control");
+    assert_eq!(pair.phy.regs[&0x0A], 0x00, "OTG Control");
+    assert!(
+        pair.phy.reset_cycles >= 300,
+        "the reset pin was held for {} cycles, not the 5 us the parameter asks for",
+        pair.phy.reset_cycles
+    );
+    assert_eq!(
+        pair.phy.packets,
+        Vec::<Vec<u8>>::new(),
+        "nothing on the USB"
+    );
+    assert!(
+        pair.phy.problems.is_empty(),
+        "the transceiver saw the bus misused:\n  {}",
+        pair.phy.problems.join("\n  ")
+    );
+}
+
+/// The whole enumeration, through the transceiver, by the host model that
+/// enumerates `usb_device_fs`.
+#[test]
+fn usb_device_ulpi_enumerates_through_a_transceiver_model() {
+    let design = ulpi_design();
+    let mut host = UsbHost::new(UlpiPair::new(&design), 0);
+    enumerate(&mut host);
+
+    // The bytes the device put on the ULPI bus, rather than only that
+    // something came back: the transmit command and then the packet, with
+    // the PID's check nibble the transceiver's own work and the CRC16 the
+    // device's.
+    let phy = &host.pair.phy;
+    assert_eq!(
+        phy.commands[..3],
+        // The command code 0100 and then the PID: the SETUP's ACK, the
+        // first packet of the data stage, and the second.
+        [0x42, 0x4B, 0x43],
+        "the transmit commands of an ACK, a DATA1 and a DATA0"
+    );
+    let descriptor = expected_device_descriptor(0x1209, 0x0001);
+    let mut first = vec![usb_pid(USB_DATA1)];
+    first.extend_from_slice(&descriptor[..8]);
+    first.extend_from_slice(&usb_crc16(&descriptor[..8]).to_le_bytes());
+    assert_eq!(phy.packets[0], vec![usb_pid(USB_ACK)], "the SETUP's ACK");
+    assert_eq!(phy.packets[1], first, "the first eight descriptor bytes");
+    // A zero-length data packet is a PID and the CRC16 of nothing.
+    assert!(
+        phy.packets
+            .iter()
+            .any(|p| p == &vec![usb_pid(USB_DATA1), 0x00, 0x00]),
+        "the status stage of a control write"
+    );
+    // Every packet cost the bus at least two turnarounds, and the ends of
+    // packets were reported out of an idle bus.
+    assert!(
+        phy.unsolicited > 10,
+        "only {} unsolicited receive commands",
+        phy.unsolicited
+    );
+    assert_eq!(phy.aborts, 0, "nothing aborted");
+}
+
+#[test]
+fn usb_device_ulpi_tracks_a_host_clock_that_is_slow_or_fast() {
+    // One bit in sixty-four a cycle long or a cycle short: a host clock
+    // 0.4 % off the device's, which is more than the 0.25 % the
+    // specification allows, and the transceiver model has to stay locked
+    // to it as a transceiver would.
+    for drift in [64, -64] {
+        let design = ulpi_design();
+        let mut host = UsbHost::new(UlpiPair::new(&design), drift);
+        enumerate(&mut host);
+    }
+}
+
+/// The bus turnaround is what ULPI adds, so it is exercised on purpose:
+/// every turnaround cycle of every test carries 0xAA, which the Link must
+/// ignore, and here the transceiver also throttles the Link with `nxt`.
+#[test]
+fn usb_device_ulpi_ignores_turnaround_cycles_and_a_throttled_bus() {
+    let design = ulpi_design();
+    let phy = UlpiPhy::new(ULPI_CPB).throttling(2);
+    let mut host = UsbHost::new(UlpiPair::with_phy(&design, phy), 0);
+    enumerate(&mut host);
+    assert!(
+        host.pair.phy.turnarounds > 40,
+        "only {} turnaround cycles",
+        host.pair.phy.turnarounds
+    );
+}
+
+/// `dir` falling ends a received packet as surely as a receive command
+/// saying RxActive is 0, and ULPI 1.1 §3.8.2.4 allows either.
+#[test]
+fn usb_device_ulpi_ends_a_packet_on_dir_alone() {
+    let design = ulpi_design();
+    let phy = UlpiPhy::new(ULPI_CPB).terse();
+    let mut host = UsbHost::new(UlpiPair::with_phy(&design, phy), 0);
+    enumerate(&mut host);
+}
+
+/// A register read the transceiver never answers, because it asserted
+/// `dir` and `nxt` for a USB receive instead. §3.8.3.2 says that may
+/// happen in any cycle of a read, and §3.8.3.1 says the Link must retry.
+#[test]
+fn usb_device_ulpi_retries_a_register_read_a_receive_overrode() {
+    let design = ulpi_design();
+    let phy = UlpiPhy::new(ULPI_CPB).overriding();
+    let mut host = UsbHost::new(UlpiPair::with_phy(&design, phy), 0);
+    let reads = host
+        .pair
+        .phy
+        .accesses
+        .iter()
+        .filter(|a| !a.write && a.addr == 0x04)
+        .count();
+    assert_eq!(reads, 1, "the read was tried again and then answered");
+    enumerate(&mut host);
+}
+
+/// A transceiver that does not take the settings is written to again
+/// rather than believed.
+#[test]
+fn usb_device_ulpi_writes_the_registers_again_when_the_readback_is_wrong() {
+    let design = ulpi_design();
+    let phy = UlpiPhy::new(ULPI_CPB).lying();
+    let mut host = UsbHost::new(UlpiPair::with_phy(&design, phy), 0);
+    assert_eq!(
+        host.pair.phy.accesses,
+        vec![
+            wrote(0x04, 0x65),
+            wrote(0x0A, 0x00),
+            wrote(0x04, 0x45),
+            // The lie, which is the register's reset value.
+            got(0x04, 0x41),
+            // So the settings go again, and this time they read back.
+            wrote(0x0A, 0x00),
+            wrote(0x04, 0x45),
+            got(0x04, 0x45),
+            got(0x15, 0x01),
+        ]
+    );
+    enumerate(&mut host);
+}
+
+/// The transceiver takes the bus in the middle of the device's data
+/// packet, which §3.8.4.1 allows it to do for reasons ULPI does not
+/// specify. The packet is lost, the host hears nothing, and asking again
+/// gets the same packet with the same toggle.
+#[test]
+fn usb_device_ulpi_gives_up_a_packet_the_transceiver_aborts() {
+    let design = ulpi_design();
+    // Two bytes in: the PID has gone and part of the payload.
+    let phy = UlpiPhy::new(ULPI_CPB).stealing(3);
+    let mut host = UsbHost::new(UlpiPair::with_phy(&design, phy), 0);
+    host.bus_reset();
+    assert_eq!(
+        host.setup(0, GET_DEVICE_DESCRIPTOR),
+        UsbReply::Handshake(USB_ACK)
+    );
+    host.idle(4);
+    // The data stage: the transceiver aborts this one.
+    assert_eq!(
+        host.in_token(0),
+        UsbReply::Nothing,
+        "the aborted packet reached nobody"
+    );
+    assert_eq!(host.pair.phy.aborts, 1, "one packet abandoned");
+    host.idle(20);
+    // Asked again, and this time the transceiver lets it through.
+    let again = host.in_token(0);
+    let descriptor = expected_device_descriptor(0x1209, 0x0001);
+    assert_eq!(
+        again,
+        UsbReply::Data(USB_DATA1, descriptor[..8].to_vec()),
+        "the same packet with the same toggle"
+    );
+    host.ack();
+    assert_eq!(
+        host.in_token(0),
+        UsbReply::Data(USB_DATA0, descriptor[8..16].to_vec()),
+        "and then the next eight bytes"
+    );
+    host.assert_clean();
+}
+
+#[test]
+fn usb_device_ulpi_ignores_bad_packets_and_stalls_what_it_cannot_do() {
+    let design = ulpi_design();
+    let mut host = UsbHost::new(UlpiPair::new(&design), 0);
+    ignore_what_it_cannot_do(&mut host);
+}
+
+/// Everything runs on the one 60 MHz clock the board's oscillator gives
+/// it and the design forwards to the transceiver. No PLL, and nothing
+/// crossing.
+#[test]
+fn usb_device_ulpi_is_one_clock_domain() {
+    let kinds = crossings(
+        "usb_device_ulpi",
+        "usb_device_ulpi",
+        &[("VID", "16'h1209"), ("PID", "16'h0001")],
+    );
+    assert!(kinds.is_empty(), "nothing should cross: {kinds:?}");
+}
+
+/// A transceiver model that accepts anything proves nothing, so this
+/// drives it with a Link that breaks the two rules the bus turnaround is
+/// made of.
+#[test]
+fn the_transceiver_model_catches_a_link_that_drives_a_bus_that_is_not_its() {
+    let driving = LinkOut {
+        oe: true,
+        data: 0x42,
+        stp: false,
+        rst_n: true,
+    };
+    // Driving while the transceiver has the bus.
+    let mut phy = UlpiPhy::new(ULPI_CPB);
+    phy.dir = true;
+    phy.was_dir = true;
+    phy.step(&driving, Some(UsbLine::J));
+    assert!(
+        phy.problems
+            .iter()
+            .any(|p| p.contains("while dir was high")),
+        "the model let the link drive the transceiver's bus: {:?}",
+        phy.problems
+    );
+
+    // Driving the turnaround cycle, where neither end may.
+    let mut phy = UlpiPhy::new(ULPI_CPB);
+    phy.dir = false;
+    phy.was_dir = true;
+    phy.step(&driving, Some(UsbLine::J));
+    assert!(
+        phy.problems.iter().any(|p| p.contains("turnaround")),
+        "the model let the link drive a turnaround cycle: {:?}",
+        phy.problems
+    );
+
+    // And a stop while the transceiver owns the bus, which means
+    // something else entirely.
+    let mut phy = UlpiPhy::new(ULPI_CPB);
+    phy.dir = true;
+    phy.was_dir = true;
+    phy.step(
+        &LinkOut {
+            oe: false,
+            data: 0,
+            stp: true,
+            rst_n: true,
+        },
+        Some(UsbLine::J),
+    );
+    assert!(
+        phy.problems.iter().any(|p| p.contains("stp")),
+        "the model let the link abort the transceiver: {:?}",
+        phy.problems
+    );
 }
 
 // ---------------------------------------------------------------------------

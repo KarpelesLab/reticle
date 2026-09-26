@@ -4,7 +4,7 @@ The first-party half of phase 8. [`docs/ip.md`](ip.md) describes the
 machinery — the manifest formats, the resolver, the bus model, the black
 boxes — and [`docs/writing-a-cpu.md`](writing-a-cpu.md) describes how to
 package a processor, using this library's two as the worked examples.
-This document describes the **blocks**: twenty-three pieces of HDL
+This document describes the **blocks**: twenty-four pieces of HDL
 that drop into a design the way a crate drops into a Rust program, each
 with a manifest, a Rust co-simulation test, and a resource footprint that
 was measured rather than guessed.
@@ -35,8 +35,9 @@ ip/
   spiflash_xip/  reticle.ip  rtl/spiflash_xip.v
   timer/         reticle.ip  rtl/timer.v
   uart/          reticle.ip  rtl/uart_tx.v  rtl/uart_rx.v  rtl/uart.v
-  usb_device_fs/ reticle.ip  rtl/usb_fs_rx.v  rtl/usb_fs_tx.v  rtl/usb_device_fs.v
+  usb_device_fs/ reticle.ip  rtl/usb_fs_rx.v  rtl/usb_fs_tx.v  rtl/usb_ctrl_ep.v  rtl/usb_device_fs.v
   usb_device_fs_pll/ reticle.ip  rtl/usb_device_fs_pll.v
+  usb_device_ulpi/ reticle.ip  README.md  rtl/usb_ulpi_link.v  rtl/usb_device_ulpi.v
   vga_out/       reticle.ip  README.md  rtl/vga_out.v
 ```
 
@@ -72,19 +73,31 @@ It is distributed as part of the repository instead.
 | `dvi_tx_pll` | `dvi_tx_pll` | `dvi_tx` with its five-times clock from the device's PLL | `dvi_tx` |
 | `vga_out` | `vga_out` | VGA output: the same three timings, colour truncated to the board's bits per channel, blanking forced to black, syncs at the mode's polarity | `dvi_tx` |
 | `eth_mac_rgmii` | `eth_mac_rgmii` | gigabit Ethernet MAC over RGMII: the RMII MAC's frame logic an octet a cycle behind DDR IO, optional IO delays | `eth_mac_rmii` |
-| `usb_device_fs` | `usb_device_fs`, `usb_fs_rx`, `usb_fs_tx` | USB full-speed device: NRZI, bit stuffing, SYNC and EOP, CRC5 and CRC16 checked, a control endpoint that enumerates | — |
+| `usb_device_fs` | `usb_device_fs`, `usb_fs_rx`, `usb_fs_tx`, `usb_ctrl_ep` | USB full-speed device: NRZI, bit stuffing, SYNC and EOP, CRC5 and CRC16 checked, a control endpoint that enumerates | — |
 | `usb_device_fs_pll` | `usb_device_fs_pll` | `usb_device_fs` with its 48 MHz from the device's PLL and a 12 MHz board clock | `usb_device_fs` |
+| `usb_device_ulpi` | `usb_device_ulpi`, `usb_ulpi_link` | the same control endpoint behind a ULPI transceiver, which does the line work in silicon: the bus turnaround, transmit and receive commands, register access, one 60 MHz clock and no PLL | `usb_device_fs` |
 | `ppu2c02` | `ppu2c02`, `ppu_palette` | NES-compatible picture unit: 256x240 raster, nametables and attributes, scrolling through `v`/`t`/`x`/`w`, 8x8 sprites with per-line evaluation, priority and sprite zero hit | — |
 
-`ppu2c02` is the one block with a page of its own,
-[`ip/ppu2c02/README.md`](../ip/ppu2c02/README.md), because it is the one
-whose *subject* needs a statement rather than only its behaviour: it is
-implemented from the published description of a machine, and no game
-data, character data or lockout logic is in this repository. It is used
-by [`examples/nes`](../examples/nes), which runs a demo written for that
+`ppu2c02` is the block whose *subject* needs a statement rather than only
+its behaviour, so it has a page of its own,
+[`ip/ppu2c02/README.md`](../ip/ppu2c02/README.md): it is implemented from
+the published description of a machine, and no game data, character data
+or lockout logic is in this repository. It is used by
+[`examples/nes`](../examples/nes), which runs a demo written for that
 example and nothing else. It is not in the footprint table below, which
 measures the blocks `tests/ip_library.rs` takes through the flow; its
 numbers are on its own page and in `tests/nes.rs`.
+
+Two other blocks carry a page. [`ip/vga_out/README.md`](../ip/vga_out/README.md)
+says what truncating colour to a board's bits per channel costs a picture.
+[`ip/usb_device_ulpi/README.md`](../ip/usb_device_ulpi/README.md) is a
+different kind of page again: it is **the protocol, written down before
+the block was**, the way [`docs/apollo-protocol.md`](apollo-protocol.md)
+was written before the Apollo transport — every fact of ULPI 1.1 the block
+relies on, with the section it came from and how sure of it this project
+is, then what the block leaves out and why, then what simulation
+established and what it cannot. A link layer written from a reading
+nobody wrote down is a link layer nobody can check.
 
 `rv32i`, `mos6502`, `eth_mac_rmii` and `spiflash_xip` are the **larger
 blocks**, and they are larger in a particular way: each is a whole
@@ -144,6 +157,37 @@ block nothing; its footprint did not move by a cell.
 four times a bit — but it needs 48 MHz, which is exactly what
 `usb_device_fs_pll` asks the PLL to make from the 12 MHz oscillator
 most small boards carry, with no error on either family.
+
+`usb_device_ulpi` needs **neither**, which is the interesting half of why
+it exists. It is for a board whose USB lines never reach the FPGA at all:
+on a Great Scott Gadgets Cynthion all three ports go through their own
+ULPI transceiver, and the only balls wired to a pair are declared input
+only, for watching the bus. An encoder and a serialiser have nothing to
+drive there, so `usb_fs_rx` and `usb_fs_tx` are replaced by
+`usb_ulpi_link`, a byte-parallel bus to the transceiver — and the
+transceiver does the line work in silicon. That bus runs at 60 MHz, which
+is what the board's oscillator already is, so there is no
+`usb_device_ulpi_pll` beside it: nothing needs generating.
+
+What the two cores **share** is the part worth sharing. `usb_device_fs`
+was split the way `eth_mac_rmii` was: `usb_ctrl_ep` is the device above
+the line — the packet decoding, the PID check nibble, the CRC5 and CRC16,
+the data toggle, endpoint 0 and the standard requests — and both cores
+instantiate it, `usb_device_ulpi` through a `depends` line on
+`usb_device_fs` exactly as `eth_mac_rgmii` depends on `eth_mac_rmii`. It
+was a split rather than a copy on purpose: a control endpoint is the part
+of a USB device that is hardest to get right and the part a test proves
+most about, and two copies of one drifting apart is a cost that arrives
+later and is paid by whoever is unlucky. The 370 lines of NRZI, bit
+stuffing and serialising in `usb_fs_rx` and `usb_fs_tx` are what ULPI
+replaces and are *not* shared, because there is nothing there a ULPI
+design can use. The one thing the split needed was a parameter:
+`TURNAROUND`, how long after a host's packet the answer starts, which is
+eight cycles of 48 MHz on the full-speed core and is stated by ULPI
+itself as 7 to 18 clocks of 60 MHz (ULPI 1.1 Table 10). The split made
+`usb_device_fs` one LUT4 and two LUT6 *cheaper* — 541 became 540 and 462
+became 460, one `SB_LUT4` fewer on the iCE40 — and moved nothing else in
+the table; its flip-flop count and its LUT depth are what they were.
 
 Everything is **Verilog-2005**, deliberately: it is the path this
 compiler exercises hardest, and it is the dialect every other tool reads.
@@ -409,6 +453,48 @@ is the part that matters:
   is sent again with the same toggle, and the next one follows once it
   is. The device is one clock domain, and `usb_device_fs_pll` must build
   a PLL giving exactly 48 MHz from 12 on both families.
+- **`usb_device_ulpi`** — the **same host model and the same
+  enumeration**, with a **ULPI transceiver model** between them. The
+  model is a transceiver, not a stub: a full-speed receiver that recovers
+  the bit clock off the pair as a transceiver does rather than by
+  counting the device's clock, a transmitter that adds the SYNC field, the
+  bit stuffing, NRZI and the end of packet, and the ULPI bus above the
+  two — both turnaround cycles, transmit commands, receive commands with
+  LineState, VbusState, RxActive and RxError, and a register file with
+  the reset values ULPI 1.1 gives. The enumeration is written once, in
+  `enumerate`, and both cores are put through it, so the ULPI core is
+  held to the bytes of every descriptor, the address taken only after its
+  status stage, the short reads, the 8 + 8 + 2 configuration read and the
+  bus reset that forgets the address. What the device puts on the *ULPI*
+  bus is asserted too: the transmit command byte of each packet (`42h`
+  for an ACK, `4Bh` for a DATA1), the packet the transceiver was handed
+  with the CRC16 the device computed, and the two `00h` bytes of a
+  zero-length data packet's CRC. The start-up sequence is asserted byte
+  for byte — Function Control `65h`, OTG Control `00h`, Function Control
+  `45h`, the readback, the Debug register for LineState — and the reset
+  pin is checked to have been held.
+
+  Then the parts ULPI adds, each with a test: `0xAA` driven into **every
+  turnaround cycle** of every one of these tests, which the Link must
+  ignore; `nxt` deasserted every other cycle, throttling it; a packet
+  ended by `dir` falling with no closing receive command, which
+  §3.8.2.4 allows instead; a register read a USB receive overrode, which
+  the Link must retry; a readback that lies, after which the Link writes
+  the registers again rather than believing them; and the transceiver
+  taking the bus three bytes into the device's data packet, after which
+  the host hears nothing, asks again, and is sent the same packet with
+  the same toggle. The model **checks the Link** as well as answering
+  it — it complains if the Link ever drives the bus while `dir` is high,
+  drives a turnaround cycle, or asserts `stp` while the transceiver owns
+  the bus — and
+  `the_transceiver_model_catches_a_link_that_drives_a_bus_that_is_not_its`
+  drives it with a Link that breaks each of those three, because a model
+  that accepts anything proves nothing. The device answers 13 to 23
+  clocks after the host's end of packet, inside the 2 to 6.5 bit times
+  USB allows and inside ULPI's own 7-to-18-clock window. It is one clock
+  domain and asks for no PLL. **No host has seen it**:
+  [`ip/usb_device_ulpi/README.md`](../ip/usb_device_ulpi/README.md) §11
+  says what that means.
 
 ### What the processor actually executes
 
@@ -672,14 +758,18 @@ exactly what this table is for.
 | `eth_mac_rgmii` | `eth_mac_rgmii` | IFG_CYCLES=12, TX_DELAY=80, RX_DELAY=80 | LUT6 | 28 x dff, 349 x lut | 4 |
 | `eth_mac_rgmii` | `eth_mac_rgmii` | IFG_CYCLES=12, TX_DELAY=80, RX_DELAY=80 | iCE40 HX1K | 10 x SB_CARRY, 119 x SB_DFFER, 64 x SB_DFFES, 7 x SB_DFFR, 2 x SB_GB, 39 x SB_IO, 393 x SB_LUT4 | 5 |
 | `eth_mac_rgmii` | `eth_mac_rgmii` | IFG_CYCLES=12, TX_DELAY=80, RX_DELAY=80 | ECP5 45F | 2 x DCCA, 6 x DELAYG, 5 x IDDRX1F, 394 x LUT4, 6 x ODDRX1F, 190 x TRELLIS_FF, 39 x TRELLIS_IO | 5 |
-| `usb_device_fs` | `usb_device_fs` | VID=16'h1209, PID=16'h0001 | LUT4 | 63 x dff, 541 x lut | 9 |
-| `usb_device_fs` | `usb_device_fs` | VID=16'h1209, PID=16'h0001 | LUT6 | 63 x dff, 462 x lut | 8 |
-| `usb_device_fs` | `usb_device_fs` | VID=16'h1209, PID=16'h0001 | iCE40 HX1K | 24 x SB_CARRY, 190 x SB_DFFER, 39 x SB_DFFES, 10 x SB_DFFR, 3 x SB_DFFS, 1 x SB_GB, 17 x SB_IO, 527 x SB_LUT4 | 8 |
-| `usb_device_fs` | `usb_device_fs` | VID=16'h1209, PID=16'h0001 | ECP5 45F | 1 x DCCA, 541 x LUT4, 242 x TRELLIS_FF, 17 x TRELLIS_IO | 9 |
-| `usb_device_fs_pll` | `usb_device_fs_pll` | VID=16'h1209, PID=16'h0001 | LUT4 | 63 x dff, 541 x lut | 9 |
-| `usb_device_fs_pll` | `usb_device_fs_pll` | VID=16'h1209, PID=16'h0001 | LUT6 | 63 x dff, 462 x lut | 8 |
-| `usb_device_fs_pll` | `usb_device_fs_pll` | VID=16'h1209, PID=16'h0001 | iCE40 HX1K | 24 x SB_CARRY, 190 x SB_DFFER, 39 x SB_DFFES, 10 x SB_DFFR, 3 x SB_DFFS, 1 x SB_GB, 17 x SB_IO, 527 x SB_LUT4, 1 x SB_PLL40_CORE | 8 |
-| `usb_device_fs_pll` | `usb_device_fs_pll` | VID=16'h1209, PID=16'h0001 | ECP5 45F | 1 x DCCA, 1 x EHXPLLL, 541 x LUT4, 242 x TRELLIS_FF, 17 x TRELLIS_IO | 9 |
+| `usb_device_fs` | `usb_device_fs` | VID=16'h1209, PID=16'h0001 | LUT4 | 63 x dff, 540 x lut | 9 |
+| `usb_device_fs` | `usb_device_fs` | VID=16'h1209, PID=16'h0001 | LUT6 | 63 x dff, 460 x lut | 8 |
+| `usb_device_fs` | `usb_device_fs` | VID=16'h1209, PID=16'h0001 | iCE40 HX1K | 24 x SB_CARRY, 190 x SB_DFFER, 39 x SB_DFFES, 10 x SB_DFFR, 3 x SB_DFFS, 1 x SB_GB, 17 x SB_IO, 526 x SB_LUT4 | 8 |
+| `usb_device_fs` | `usb_device_fs` | VID=16'h1209, PID=16'h0001 | ECP5 45F | 1 x DCCA, 540 x LUT4, 242 x TRELLIS_FF, 17 x TRELLIS_IO | 9 |
+| `usb_device_fs_pll` | `usb_device_fs_pll` | VID=16'h1209, PID=16'h0001 | LUT4 | 63 x dff, 540 x lut | 9 |
+| `usb_device_fs_pll` | `usb_device_fs_pll` | VID=16'h1209, PID=16'h0001 | LUT6 | 63 x dff, 460 x lut | 8 |
+| `usb_device_fs_pll` | `usb_device_fs_pll` | VID=16'h1209, PID=16'h0001 | iCE40 HX1K | 24 x SB_CARRY, 190 x SB_DFFER, 39 x SB_DFFES, 10 x SB_DFFR, 3 x SB_DFFS, 1 x SB_GB, 17 x SB_IO, 526 x SB_LUT4, 1 x SB_PLL40_CORE | 8 |
+| `usb_device_fs_pll` | `usb_device_fs_pll` | VID=16'h1209, PID=16'h0001 | ECP5 45F | 1 x DCCA, 1 x EHXPLLL, 540 x LUT4, 242 x TRELLIS_FF, 17 x TRELLIS_IO | 9 |
+| `usb_device_ulpi` | `usb_device_ulpi` | VID=16'h1209, PID=16'h0001 | LUT4 | 54 x dff, 574 x lut | 9 |
+| `usb_device_ulpi` | `usb_device_ulpi` | VID=16'h1209, PID=16'h0001 | LUT6 | 54 x dff, 506 x lut | 10 |
+| `usb_device_ulpi` | `usb_device_ulpi` | VID=16'h1209, PID=16'h0001 | iCE40 HX1K | 39 x SB_CARRY, 187 x SB_DFFER, 37 x SB_DFFES, 5 x SB_DFFR, 1 x SB_GB, 33 x SB_IO, 566 x SB_LUT4 | 9 |
+| `usb_device_ulpi` | `usb_device_ulpi` | VID=16'h1209, PID=16'h0001 | ECP5 45F | 1 x DCCA, 574 x LUT4, 229 x TRELLIS_FF, 33 x TRELLIS_IO | 9 |
 <!-- end footprints -->
 
 ### Seven things writing these blocks found

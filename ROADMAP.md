@@ -686,6 +686,31 @@ and first-party IP should drop into a design as easily as a Rust crate.
       what it does not do — no bursts on either memory controller,
       gigabit only for RGMII, endpoint 0 only for USB. See
       `docs/ip-library.md`.
+- [x] **A USB device for a board whose USB lines the FPGA cannot reach.**
+      All three ports of a Cynthion go through their own ULPI
+      transceiver, and the balls wired to a pair are input only, for
+      sniffing — so an encoder and a serialiser have nothing to drive
+      there and `usb_device_fs` cannot work on it whatever else is true.
+      `usb_device_ulpi` is the same device behind the **ULPI link
+      layer**: the bus turnaround in both directions, transmit and
+      receive commands, register access with the retries ULPI asks for,
+      and the start-up sequence that puts a transceiver into full-speed
+      peripheral mode and reads it back. One 60 MHz clock and **no PLL**,
+      because ULPI's clock rate is what the board's oscillator already
+      is. The protocol was written down first, as
+      `ip/usb_device_ulpi/README.md`, with the section of ULPI 1.1 and
+      the confidence of every fact, and the RTL was written from that
+      document; the control endpoint is not a copy of the full-speed
+      core's but the same module, `usb_ctrl_ep`, reached through a
+      `depends` line the way `eth_mac_rgmii` reaches `eth_mac_rmii`'s
+      frame logic, with the answer delay a parameter because ULPI states
+      it as a count of interface clocks. It is verified in **simulation
+      only**: a ULPI transceiver model sits between the core and the same
+      USB host model that enumerates the full-speed core, the enumeration
+      is written once and run against both, and the model checks the link
+      as well as answering it. **No host has seen it.** A person plugging
+      a cable in is what would settle the rest, and this is where that
+      would start.
 - [x] Registry: a static index (git repository of manifests) that
       `reticle add` searches, in the style of a crates.io index: one file
       per package under a name-derived path, one line per release with

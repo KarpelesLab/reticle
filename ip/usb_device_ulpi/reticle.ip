@@ -1,0 +1,45 @@
+# usb_device_ulpi: a USB 2.0 full-speed device behind a ULPI
+# transceiver, which does the line work — NRZI, bit stuffing, SYNC, the
+# EOP, the serialiser — in silicon. What is here is the ULPI link layer
+# (UTMI+ Low Pin Interface 1.1: the turnaround, the transmit and receive
+# commands, register access) and the same control endpoint
+# `usb_device_fs` uses, reached through the `depends` line below rather
+# than copied. One 60 MHz clock and no PLL: ULPI's clock rate is the
+# rate a Cynthion's oscillator already runs at. VID and PID go into the
+# device descriptor; 1209:0001 is pid.codes' test pair. README.md states
+# the protocol, with the provenance and confidence of every fact.
+#
+# This block has never run on a board. It enumerates in simulation
+# against a transceiver model, and no host has seen it.
+name usb_device_ulpi
+version 1.0.0
+license MIT
+description "USB full-speed device over a ULPI transceiver: the bus turnaround, transmit and receive commands, register access, and a control endpoint answering GET_DESCRIPTOR, SET_ADDRESS and SET_CONFIGURATION"
+
+top usb_device_ulpi
+target ice40
+target ecp5
+
+source rtl/usb_ulpi_link.v
+source rtl/usb_device_ulpi.v
+
+depends usb_device_fs ^1.0.0
+
+param VID bits 16'h1209
+param PID bits 16'h0001
+param RESET_CYCLES int 300 2..65535
+param SE0_CYCLES int 150 2..255
+
+port clk60 in
+port rst_n in
+port ulpi_data_i in 8
+port ulpi_data_o out 8
+port ulpi_data_oe out
+port ulpi_dir in
+port ulpi_nxt in
+port ulpi_stp out
+port ulpi_rst_n out
+port address out 7
+port configured out
+port usb_reset out
+port phy_ready out
