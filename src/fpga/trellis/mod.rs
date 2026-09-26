@@ -91,6 +91,18 @@
 //! the tile the bel sits in and `PADDOB_PIO` exists at every top-edge
 //! position.
 //!
+//! **A bidirectional pad is a base type and a routed wire, and nothing
+//! else.** `PIO<s>.BASE_TYPE = BIDIR_<standard>` is its own pattern — neither
+//! the input's nor the output's nor their union — and the `CIB` mux that ties
+//! the tristate wire low for every ordinary output is left *alone*, because
+//! the router drove that wire and the tie and the route are one mux. The
+//! field that could have governed the tristate, `PIO<s>.TRIMUX_TSREG`,
+//! defaults to `PADDT`, which is the fabric-driven wire, and so costs no
+//! bits; `docs/fpga-trellis.md` records that being checked against eight
+//! bidirectional pads in Great Scott Gadgets' own `analyzer.bit` rather than
+//! assumed. The pull mode is what decides what a *released* pad reads, and
+//! the database's default for it is a pull-down: see [`PULL_NONE`].
+//!
 //! **A clock's wires carry the same name in every tile they cross.** That
 //! is the one place the arithmetic above stops working: `G_HPBX0000` is a
 //! logic tile's branch wire and so is its neighbour's, and the tap driver
@@ -1427,22 +1439,64 @@ pub struct IoSite {
     pub input_pad_bits: Vec<ConfigBit>,
     /// The same field again, for an input.
     pub input_pic_bits: Vec<ConfigBit>,
+    /// The bits in the pad tile that make this **bidirectional**: a driver
+    /// the tristate wire can release and an input buffer at the same time.
+    ///
+    /// On the top edge this is eight bits where an output is six and an
+    /// input five, and it is not the union of the two: `BIDIR_LVCMOS33`
+    /// leaves the output's `F7B0` clear and sets the input's `F3B0` and
+    /// `F4B0` as well as the output's drive bits. So a bidirectional pad
+    /// is its own setting and not two settings written together, which is
+    /// also why [`TrellisFabric::configure_io`] writes this instead of
+    /// both.
+    ///
+    /// Requiring the value to exist refuses nothing that loaded before it
+    /// was required, and that was checked rather than hoped: across all 185
+    /// tile types, every `PIO<s>.BASE_TYPE` that declares `INPUT_<x>`
+    /// declares `BIDIR_<x>` too for every **single-ended** `x`. Where the
+    /// two sets differ they differ only in *differential* standards —
+    /// `BLVDS25` and `MLVDS25` are inputs where `BLVDS25E` and `MLVDS25E`
+    /// are the bidirectional spellings, and `LVDS`, `SLVS`, `SUBLVDS`,
+    /// `LVPECL33` and `LVCMOS18D` are inputs with no bidirectional form at
+    /// all — and none of those is a standard [`bank_voltage`] has a rail
+    /// for, so none of them loads.
+    pub bidir_pad_bits: Vec<ConfigBit>,
+    /// The same field again, for a bidirectional pad. Unlike an input —
+    /// whose pattern in this tile is *empty* — this costs the same two
+    /// bits an output costs.
+    pub bidir_pic_bits: Vec<ConfigBit>,
     /// `PIO<side>.HYSTERESIS = ON`, which Lattice's own packer writes for
-    /// every single-ended input and for no output.
+    /// every single-ended input **and every single-ended bidirectional
+    /// pad**, and for no output. See [`HYSTERESIS_ON`].
     pub hysteresis_bits: Vec<ConfigBit>,
-    /// `PIO<side>.PULLMODE = NONE`. **This one is not cosmetic.** The
-    /// database's default for the field is `DOWN`, so a bitstream that
-    /// leaves it alone leaves an internal pull-down on the pin; see
-    /// [`PULL_NONE`].
-    pub pull_none_bits: Vec<ConfigBit>,
+    /// Every value `PIO<side>.PULLMODE` takes, with the bits that select
+    /// it, in the order `bits.db` lists them. [`IoSite::pull_bits`] reads
+    /// it.
+    ///
+    /// **This field is not cosmetic.** The database's default is `DOWN`, so
+    /// a bitstream that leaves it alone leaves an internal pull-*down* on
+    /// the pin. That was wrong for this board's USER button, and it is
+    /// wrong again, for a second reason, on a pad that is sometimes
+    /// released to high impedance: then the pull is the only thing
+    /// deciding what the pin reads. See [`PULL_NONE`] and [`PULL_UP`].
+    pub pull_modes: Vec<(String, Vec<ConfigBit>)>,
     /// The bits, in the `CIB` tile, that tie the output data wire to a
     /// fixed **one**.
     pub high_bits: Vec<ConfigBit>,
     /// The bits that tie it to a fixed **zero**.
     pub low_bits: Vec<ConfigBit>,
-    /// The bits that tie the output-enable wire to a fixed zero, which is
-    /// the enabled state.
+    /// The bits that tie the tristate wire to a fixed zero, which is the
+    /// state in which the buffer **drives**.
     pub enable_bits: Vec<ConfigBit>,
+    /// The bits that tie it to a fixed one, which releases the pad to high
+    /// impedance for good.
+    ///
+    /// Written for a pad whose tristate the netlist gives a constant *one*
+    /// — `bufif1 (pad, data, 1'b0)`, or anything that folds to it. Nothing
+    /// useful asks for that, but a pad that asked to be released and was
+    /// wired to drive instead is a short circuit against whatever else is
+    /// on the net, so it is expressed rather than approximated.
+    pub tristate_bits: Vec<ConfigBit>,
     /// The IO bank the pad is wired to, from `iodb.json`'s `pio_metadata`.
     ///
     /// A bank has one setting of its own that none of the tiles above
@@ -1457,6 +1511,21 @@ impl IoSite {
     #[must_use]
     pub fn site_name(&self) -> String {
         format!("X{}Y{}/PIO{}", self.bel.0, self.bel.1, self.side)
+    }
+
+    /// The bits that select one value of `PIO<side>.PULLMODE`, or an empty
+    /// slice for a value the database does not name.
+    ///
+    /// An empty slice is also the honest answer for the field's **default**,
+    /// `DOWN`, whose pattern is two bits both of which it wants clear: there
+    /// is nothing to write for it, and asking for it means leaving the field
+    /// alone. See [`PULL_NONE`].
+    #[must_use]
+    pub fn pull_bits(&self, mode: &str) -> &[ConfigBit] {
+        self.pull_modes
+            .iter()
+            .find(|(name, _)| name == mode)
+            .map_or(&[][..], |(_, bits)| bits.as_slice())
     }
 
     /// Locates every bit of one pad of one of the edges [`Edge`] covers.
@@ -1488,6 +1557,7 @@ impl IoSite {
         let field = format!("PIO{side}.BASE_TYPE");
         let output = format!("OUTPUT_{standard}");
         let input = format!("INPUT_{standard}");
+        let bidir = format!("BIDIR_{standard}");
 
         // Which `CIB` ties this buffer's data and enable wires, and under
         // what name. Read off the buffer's own fixed connections — `JPADDOB
@@ -1518,15 +1588,24 @@ impl IoSite {
             output_pic_bits: db.locate_field(pic_at, &field, &output)?,
             input_pad_bits: db.locate_field(pad_at, &field, &input)?,
             input_pic_bits: db.locate_field(pic_at, &field, &input)?,
+            bidir_pad_bits: db.locate_field(pad_at, &field, &bidir)?,
+            bidir_pic_bits: db.locate_field(pic_at, &field, &bidir)?,
             hysteresis_bits: db.locate_field(
                 pad_at,
                 &format!("PIO{side}.HYSTERESIS"),
                 HYSTERESIS_ON,
             )?,
-            pull_none_bits: db.locate_field(pad_at, &format!("PIO{side}.PULLMODE"), PULL_NONE)?,
+            pull_modes: PULL_MODES
+                .iter()
+                .map(|mode| {
+                    let bits = db.locate_field(pad_at, &format!("PIO{side}.PULLMODE"), mode)?;
+                    Ok(((*mode).to_owned(), bits))
+                })
+                .collect::<Result<Vec<_>, TrellisError>>()?,
             high_bits: db.locate_field(cib_at, &data_field, TIE_HIGH)?,
             low_bits: db.locate_field(cib_at, &data_field, TIE_LOW)?,
             enable_bits: db.locate_field(cib_at, &enable_field, TIE_LOW)?,
+            tristate_bits: db.locate_field(cib_at, &enable_field, TIE_HIGH)?,
             bank,
         })
     }
@@ -1922,11 +2001,45 @@ pub const TIE_HIGH: &str = "1";
 /// anything. Great Scott Gadgets' own platform file asks for `PULLMODE=NONE`
 /// on that pin, `facedancer.bit` has it, and so does every input this
 /// writes.
+///
+/// It is the default here for a **bidirectional** pad too, and there the
+/// argument is stronger rather than weaker. A pad that is released to high
+/// impedance has nothing but the pull deciding what it reads back; an
+/// internal pull-down fights whatever the board does and does it only half
+/// the time, which is the kind of fault that looks like a broken input
+/// path. So the pull is always stated, and a design that wants the pin held
+/// somewhere says so: `set_io -pullup yes` gives [`PULL_UP`].
 pub const PULL_NONE: &str = "NONE";
 
+/// `PIO<side>.PULLMODE = UP`, the internal pull-up.
+///
+/// Two bits on this family where [`PULL_NONE`] is one, and it is what
+/// `set_io -pullup yes` asks for: the `.dev` file's `param_pullup
+/// PULLMODE="UP"` clause puts it on the cell and
+/// [`TrellisFabric::configure_io`] reads it back off there.
+///
+/// This is the setting that decides what a released bidirectional pad
+/// reads, so on a pin with nothing but a trace on it, it decides the whole
+/// observation. `testdata/fpga/cynthion/bidir_loopback.v` is that design.
+pub const PULL_UP: &str = "UP";
+
+/// Every value `PIO<side>.PULLMODE` takes, in `bits.db`'s order.
+///
+/// `DOWN` is the field's default and its pattern is two bits it wants
+/// *clear*, so it locates to nothing at all — which is exactly why leaving
+/// the field alone is not the same as not having a pull.
+pub const PULL_MODES: [&str; 3] = ["DOWN", PULL_NONE, PULL_UP];
+
+/// The cell parameter that names a pad's pull mode, which is where
+/// `set_io -pullup` ends up: `param_pullup PULLMODE="UP"` on the `io` line
+/// of `src/fpga/devices/ecp5.dev`.
+pub const PULL_PARAM: &str = "PULLMODE";
+
 /// `PIO<side>.HYSTERESIS = ON`, which Lattice's own packer writes for every
-/// single-ended input (`write_io` in nextpnr's `ecp5/bitstream.cc`, where
-/// the default of the attribute is `ON`) and for no output.
+/// single-ended input **and every single-ended bidirectional pad**
+/// (`write_io` in nextpnr's `ecp5/bitstream.cc`, whose test is `dir ==
+/// "INPUT" || dir == "BIDIR"` and whose default for the attribute is `ON`)
+/// and for no output.
 pub const HYSTERESIS_ON: &str = "ON";
 
 impl TrellisDatabase {
@@ -2107,6 +2220,17 @@ pub struct Decoded {
     pub bits: usize,
     /// How many of those no feature accounts for.
     pub unexplained: usize,
+    /// Which ones those are, as `(tile type, position, F<frame>B<bit>)` in
+    /// the tile's **own** numbering — the numbering `bits.db` uses, so an
+    /// entry can be grepped for directly. Sorted, and the same length as
+    /// [`Decoded::unexplained`].
+    ///
+    /// A count on its own is not actionable: "eight bits belong to no
+    /// feature" says a tile rule is wrong and not which. These say where to
+    /// look, and naming them is how the one that this field was added for
+    /// was found — `PIO<s>.TERMINATION_*`, a field whose `OFF` is the empty
+    /// pattern, which therefore matches every image and covers nothing.
+    pub leftovers: Vec<(String, (u32, u32), String)>,
     /// How many grid positions hold at least one set bit.
     pub tiles: usize,
 }
@@ -2133,6 +2257,12 @@ impl Decoded {
         }
         for (at, field, value) in &self.words {
             out.push_str(&format!("  X{}Y{} {field} = {value}\n", at.0, at.1));
+        }
+        for (ty, at, bit) in &self.leftovers {
+            out.push_str(&format!(
+                "  X{}Y{} {ty} {bit} belongs to no feature\n",
+                at.0, at.1
+            ));
         }
         out
     }
@@ -2298,6 +2428,8 @@ impl TrellisDatabase {
             for bit in &ones {
                 if !covered.contains(bit) {
                     out.unexplained += 1;
+                    out.leftovers
+                        .push((tile.ty.clone(), at, format!("F{}B{}", bit.0, bit.1)));
                 }
             }
         }
@@ -2305,6 +2437,7 @@ impl TrellisDatabase {
         out.arcs.sort();
         out.enums.sort();
         out.words.sort();
+        out.leftovers.sort();
         out
     }
 }
@@ -2407,10 +2540,19 @@ impl TrellisFabric {
     /// `super::xray`'s `enable_global_clocks` does for the 7 series.
     ///
     /// Which direction a pad is depends on the netlist and not on the
-    /// database: a `TRELLIS_IO` whose `O` port carries a signal is an
-    /// input, one whose `I` port does is an output. That is read off the
-    /// pins rather than off the cell's `DIR` parameter so this needs no
-    /// access to the design.
+    /// database, and it is read off the *pins* rather than off the cell's
+    /// `DIR` parameter, so a pad whose parameter and whose wiring disagree
+    /// is configured as it is wired:
+    ///
+    /// | `din` (`O`) carries a signal | `dout` (`I`) carries one, or a constant | |
+    /// |---|---|---|
+    /// | no | yes | an **output** |
+    /// | yes | no | an **input** |
+    /// | yes | yes | **bidirectional** |
+    ///
+    /// which is the same rule nextpnr's `nxio_to_tr` applies — "`BIDIR` if
+    /// the buffer's `I` has a driver" — for the one netlist shape either of
+    /// them builds.
     ///
     /// **What an output gets**, which is what nextpnr's `write_io` and
     /// `tie_cib_signal` write for one and no more:
@@ -2426,15 +2568,46 @@ impl TrellisFabric {
     ///
     /// 1. `PIO<side>.BASE_TYPE = INPUT_<standard>` in both tiles;
     /// 2. `PIO<side>.HYSTERESIS = ON`;
-    /// 3. `PIO<side>.PULLMODE = NONE` — see [`PULL_NONE`], which is the
+    /// 3. `PIO<side>.PULLMODE` — see [`PULL_NONE`], which is the
     ///    one of these that changes what a person sees;
     /// 4. no tristate tie and no data tie, neither of which nextpnr writes
     ///    for an input either.
     ///
+    /// **What a bidirectional pad gets**, which is the same list asked of
+    /// `write_io` again with `dir == "BIDIR"`:
+    ///
+    /// 1. `PIO<side>.BASE_TYPE = BIDIR_<standard>` in the pad tile — not
+    ///    the input's pattern, not the output's, and not their union: see
+    ///    [`IoSite::bidir_pad_bits`];
+    /// 2. the same field again in the tile the edge's rule gives, which
+    ///    costs the two bits an output costs and that an input does not;
+    /// 3. `PIO<side>.HYSTERESIS = ON`, as for an input;
+    /// 4. `PIO<side>.PULLMODE`, which on a pad that spends half its time
+    ///    released is the only thing deciding what it reads then;
+    /// 5. **no tristate tie**, which is the whole point: the tristate wire
+    ///    is one the router drove, and tying it would be a second driver on
+    ///    it. nextpnr ties it under exactly the complementary condition —
+    ///    `dir != "INPUT"` *and* `T` unconnected;
+    /// 6. the data wire tied only if the netlist gives that pin a constant,
+    ///    as for an output.
+    ///
+    /// Nothing governs the tristate beyond that. The field that could —
+    /// `PIO<side>.TRIMUX_TSREG`, in the second-copy tile — decides whether
+    /// the tristate comes from the `PADDT` wire or from an `IOLOGIC`
+    /// register, its default is `PADDT`, and `PADDT` is what a fabric-driven
+    /// tristate means. nextpnr writes the field only when a packer moved the
+    /// tristate into `IOLOGIC`, which nothing here does. So the default is
+    /// both right and free, and `docs/fpga-trellis.md` records that it was
+    /// checked rather than assumed — the same question that found
+    /// [`BANK_VCCIO`] and [`PULL_NONE`] missing, asked again and answered
+    /// "nothing".
+    ///
     /// And, once per bank any of them is in, [`BANK_VCCIO`] in that bank's
     /// reference tile — which is none of the pad's own positions and is the
     /// one thing this pass was missing when it first put a bitstream in a
-    /// part.
+    /// part. A bidirectional pad constrains its bank's rail exactly as an
+    /// output does; nextpnr's `init_io_banks` tests `dir != "INPUT"` for
+    /// that, so `BIDIR` is on the output's side of it.
     ///
     /// # Errors
     ///
@@ -2443,11 +2616,14 @@ impl TrellisFabric {
     /// `Arch` disagree.
     pub fn configure_io(
         &self,
+        design: &crate::ir::Design,
+        module: crate::ir::ModuleId,
         netlist: &super::place::Netlist,
         placement: &super::place::Placement,
         graph: &super::arch::RoutingGraph,
         bits: &mut super::bitstream::Bitstream,
     ) -> Result<usize, super::bitstream::BitstreamError> {
+        let m = design.modules.get(module);
         let mut done = 0usize;
         let mut banks: std::collections::BTreeSet<u32> = std::collections::BTreeSet::new();
         for (index, instance) in netlist.instances.iter().enumerate() {
@@ -2468,35 +2644,59 @@ impl TrellisFabric {
             };
             let din = pin_of("din");
             let dout = pin_of("dout");
+            let oe = pin_of("oe");
             // An input's data wire leaves the buffer, so its pin is an
             // output of the cell; an output's arrives, so its pin is an
-            // input. A cell with both would be bidirectional and this does
-            // not build one: it would need the tristate routed rather than
-            // tied, and nothing has been on a part that way.
-            let is_input = din.is_some_and(|pin| pin.signal.is_some());
-            if is_input {
-                for bit in &pad.input_pad_bits {
+            // input. A pad with both is bidirectional, whichever way its
+            // tristate is driven.
+            let reads = din.is_some_and(|pin| pin.signal.is_some());
+            let drives = dout.is_some_and(|pin| pin.signal.is_some() || pin.constant.is_some());
+            let (pad_type, pic_type) = match (reads, drives) {
+                (true, true) => (&pad.bidir_pad_bits, &pad.bidir_pic_bits),
+                (true, false) => (&pad.input_pad_bits, &pad.input_pic_bits),
+                _ => (&pad.output_pad_bits, &pad.output_pic_bits),
+            };
+            for bit in pad_type {
+                bits.set(pad.pad_at, *bit)?;
+            }
+            for bit in pic_type {
+                bits.set(pad.pic_at, *bit)?;
+            }
+            // Hysteresis and a pull mode, for every pad that reads the pin.
+            // `write_io`'s own test is `dir == "INPUT" || dir == "BIDIR"`,
+            // and the pull is the one of the two that changes what a person
+            // sees: see `PULL_NONE`.
+            if reads {
+                let mode = m
+                    .and_then(|m| m.cells.get(instance.cell))
+                    .and_then(|cell| cell.params.get(PULL_PARAM))
+                    .and_then(|value| match value {
+                        crate::ir::AttrValue::String(s) => Some(s.as_str()),
+                        _ => None,
+                    })
+                    .unwrap_or(PULL_NONE);
+                for bit in pad.hysteresis_bits.iter().chain(pad.pull_bits(mode)) {
                     bits.set(pad.pad_at, *bit)?;
                 }
-                for bit in &pad.input_pic_bits {
-                    bits.set(pad.pic_at, *bit)?;
-                }
-                for bit in pad.hysteresis_bits.iter().chain(&pad.pull_none_bits) {
-                    bits.set(pad.pad_at, *bit)?;
-                }
-            } else {
-                for bit in &pad.output_pad_bits {
-                    bits.set(pad.pad_at, *bit)?;
-                }
-                for bit in &pad.output_pic_bits {
-                    bits.set(pad.pic_at, *bit)?;
-                }
-                for bit in &pad.enable_bits {
+            }
+            if drives {
+                // The tristate. A pin a *signal* drives is left alone —
+                // that is a bidirectional pad, and the route into the wire
+                // is what drives it — and one with a constant is tied to
+                // the constant it was given, which for a plain output is
+                // the zero that makes the buffer drive.
+                let tie = match oe {
+                    Some(pin) if pin.signal.is_some() => None,
+                    Some(pin) if pin.constant == Some(crate::logic::Bit::One) => {
+                        Some(&pad.tristate_bits)
+                    }
+                    _ => Some(&pad.enable_bits),
+                };
+                for bit in tie.into_iter().flatten() {
                     bits.set(pad.cib_at, *bit)?;
                 }
-                // Which constant the pin carries, if it carries one. A pin
-                // a signal drives is left alone: the route into it is what
-                // drives the wire, and a tie would be a second driver.
+                // Which constant the data pin carries, if it carries one. A
+                // pin a signal drives is left alone for the same reason.
                 if let Some(pin) = dout.filter(|pin| pin.signal.is_none()) {
                     let tie = match pin.constant {
                         Some(crate::logic::Bit::One) => &pad.high_bits,
@@ -3154,6 +3354,7 @@ mod tests {
              NONE F2B0\n\
              INPUT_LVCMOS33 F2B0 F9B0\n\
              OUTPUT_LVCMOS33 F2B0 F7B0 !F8B0\n\
+             BIDIR_LVCMOS33 F2B0 F7B0 F9B0 F10B0\n\
              \n\
              .config_enum PIOB.HYSTERESIS OFF\n\
              OFF !F10B0\n\
@@ -3170,7 +3371,8 @@ mod tests {
              .config_enum PIOB.BASE_TYPE INPUT_LVCMOS12\n\
              INPUT_LVCMOS12 -\n\
              INPUT_LVCMOS33 -\n\
-             OUTPUT_LVCMOS33 F5B0 F6B0\n",
+             OUTPUT_LVCMOS33 F5B0 F6B0\n\
+             BIDIR_LVCMOS33 F5B0 F6B0\n",
         );
         files.insert(
             "ECP5/tiledata/CIB/bits.db",
@@ -3325,16 +3527,38 @@ mod tests {
             pad.input_pad_bits,
             vec![ConfigBit::new(2, 0), ConfigBit::new(9, 0)]
         );
+        // A bidirectional pad is its own pattern and not the union of the
+        // other two: it takes the output's drive bit and the input's, and
+        // the fixture spells it that way because the real database does.
+        assert_eq!(
+            pad.bidir_pad_bits,
+            vec![
+                ConfigBit::new(2, 0),
+                ConfigBit::new(7, 0),
+                ConfigBit::new(9, 0),
+                ConfigBit::new(10, 0)
+            ]
+        );
         // An input costs two settings an output does not, and `PULLMODE`'s
         // default is a pull-*down*, so `NONE` is a bit that has to be set.
         assert_eq!(pad.hysteresis_bits, vec![ConfigBit::new(10, 0)]);
-        assert_eq!(pad.pull_none_bits, vec![ConfigBit::new(12, 0)]);
+        assert_eq!(pad.pull_bits(PULL_NONE), [ConfigBit::new(12, 0)]);
+        assert_eq!(
+            pad.pull_bits(PULL_UP),
+            [ConfigBit::new(11, 0), ConfigBit::new(12, 0)]
+        );
+        // The field's *default* locates to nothing, which is the whole
+        // reason leaving it alone is not the same as having no pull.
+        assert!(pad.pull_bits("DOWN").is_empty());
+        assert!(pad.pull_bits("SIDEWAYS").is_empty());
         // The tile one row south holds two windows and the `PICT1` is the
-        // second, so its `F5B0` is row 20 + 5. An input costs nothing there.
+        // second, so its `F5B0` is row 20 + 5. An input costs nothing there;
+        // a bidirectional pad costs what an output costs.
         assert_eq!(
             pad.output_pic_bits,
             vec![ConfigBit::new(25, 0), ConfigBit::new(26, 0)]
         );
+        assert_eq!(pad.bidir_pic_bits, pad.output_pic_bits);
         assert!(pad.input_pic_bits.is_empty());
         // The `CIB` is the *first* window of that position, so its bits
         // keep their own frame numbers.

@@ -279,7 +279,7 @@ fn compile(
     )
     .unwrap();
     let pads = fabric
-        .configure_io(&netlist, &placement, &graph, &mut bits)
+        .configure_io(&design, top, &netlist, &placement, &graph, &mut bits)
         .unwrap();
     fabric
         .configure_logic(&design, top, &netlist, &placement, &graph, &mut bits)
@@ -299,7 +299,7 @@ fn compile(
     let mut io_only =
         bitstream::Bitstream::empty(bitstream::BitstreamFormat::from_arch(&fabric.arch));
     fabric
-        .configure_io(&netlist, &placement, &graph, &mut io_only)
+        .configure_io(&design, top, &netlist, &placement, &graph, &mut io_only)
         .unwrap();
     let stream = fabric.stream(&bits, "8").unwrap();
     let wires = routing
@@ -326,6 +326,7 @@ fn compile(
             dropped,
             graph,
             routing,
+            netlist,
         },
     )
 }
@@ -352,6 +353,12 @@ struct Routed {
     graph: reticle::fpga::arch::RoutingGraph,
     /// The routing itself, for the same reason.
     routing: reticle::fpga::Routing,
+    /// The netlist the placer and the router worked on, so a test can ask
+    /// which of a pad's three wires carry a signal rather than only which
+    /// bits came out. A bidirectional pad is exactly the case where that
+    /// is the question: its tristate has to be *routed*, and the bits that
+    /// would tie it are the same bits a route into it sets.
+    netlist: reticle::fpga::place::Netlist,
 }
 
 /// One wire of the routing graph: its name and the position it starts in.
@@ -1000,12 +1007,12 @@ fn the_user_buttons_pad_is_where_this_boards_own_gateware_has_it() {
     assert_eq!(pad.input_pad_bits.len(), 5);
     assert_eq!(pad.input_pic_bits.len(), 0);
     assert_eq!(pad.hysteresis_bits.len(), 1);
-    assert_eq!(pad.pull_none_bits.len(), 1);
+    assert_eq!(pad.pull_bits(trellis::PULL_NONE).len(), 1);
 
     for (what, bits) in [
-        ("the base type", &pad.input_pad_bits),
-        ("hysteresis", &pad.hysteresis_bits),
-        ("the pull mode", &pad.pull_none_bits),
+        ("the base type", &pad.input_pad_bits[..]),
+        ("hysteresis", &pad.hysteresis_bits[..]),
+        ("the pull mode", pad.pull_bits(trellis::PULL_NONE)),
     ] {
         for bit in bits {
             let (frame, index) = fabric
@@ -1075,7 +1082,7 @@ fn the_button_design_routes_and_configures_what_its_header_promises() {
         .input_pad_bits
         .iter()
         .chain(&button.hysteresis_bits)
-        .chain(&button.pull_none_bits)
+        .chain(button.pull_bits(trellis::PULL_NONE))
     {
         assert!(set(button.pad_at, bit), "the button is not an input");
     }
@@ -1929,5 +1936,457 @@ fn a_bit_an_arc_needs_clear_is_noticed_when_something_else_sets_it() {
             && problems[0].contains(&format!("{}.{}", bit.row, bit.col)),
         "{}",
         problems[0]
+    );
+}
+
+/// The eight data balls of the Cynthion's **auxiliary** ULPI transceiver,
+/// in `ulpi_data[0]` to `[7]` order.
+///
+/// From Great Scott Gadgets' own platform file, `cynthion_r1_4.py`:
+///
+/// ```python
+/// ULPIResource("aux_phy", 0,
+///     data="F16 G15 G16 H15 J15 J16 K15 K16", clk="D16", clk_dir='o',
+///     dir="E16", nxt="F15", stp="E15", rst="J13", rst_invert=True,
+///     attrs=Attrs(IO_TYPE="LVCMOS33", SLEWRATE="FAST")),
+/// ```
+///
+/// Amaranth's `ULPIResource` makes `data` a `Subsignal(..., dir="io")`, so
+/// these eight are the board's bidirectional pins: the transceiver drives
+/// them for received data and the FPGA for transmitted data, arbitrated by
+/// `dir`. All eight are on the **right** edge of the die, which is an edge
+/// this backend describes.
+#[cfg(feature = "verilog")]
+const AUX_ULPI_DATA: [&str; 8] = ["F16", "G15", "G16", "H15", "J15", "J16", "K15", "K16"];
+
+/// The "what does `ecppack` write, **in full**, for a bidirectional pad?"
+/// question, asked of a file that has eight of them.
+///
+/// This is the third time that question has been asked this way round and it
+/// is the reason to keep asking: a diff against a reference only disagrees
+/// about settings already emitted and is silent about settings never emitted
+/// at all. `BANK.VCCIO` and an input's `PULLMODE` were both of the second
+/// kind and `DONE` was high without either.
+///
+/// `analyzer.bit` is Great Scott Gadgets' own build for this very board and
+/// it instantiates the auxiliary ULPI transceiver, whose eight-bit data bus
+/// turns around. So it is a direct oracle, and what it has for each of those
+/// eight balls is:
+///
+/// | Setting | Tile | Bits beyond the base type | Written here |
+/// |---|---|---|---|
+/// | `PIO<s>.BASE_TYPE = BIDIR_LVCMOS33` | the pad tile | — | yes |
+/// | `PIO<s>.BASE_TYPE = BIDIR_LVCMOS33` | the second-copy tile | — | yes |
+/// | `PIO<s>.PULLMODE = NONE` | the pad tile | **one, `F7B0`** | yes |
+/// | `PIO<s>.HYSTERESIS = ON` | the pad tile | none: the base type's own bits already contain it | yes |
+/// | `PIO<s>.SLEWRATE = FAST` | the pad tile | one | only when a constraint asks |
+/// | `BANK.VCCIO = 3V3` | `BANKREF<n>` | — | yes |
+/// | anything governing the **tristate** | — | **nothing at all** | nothing to write |
+///
+/// The last row is the finding, and it is the one a diff could not have
+/// produced. The field that governs where a pad's tristate comes from is
+/// `PIO<s>.TRIMUX_TSREG`, in the second-copy tile, and its values are
+/// `PADDT` — the wire the fabric drives — and `IOLTO`, the `IOLOGIC`
+/// tristate register. `PADDT` is the **default**, so it costs no bits, and
+/// it is what a fabric-driven tristate means. nextpnr writes the field only
+/// when its packer moved a tristate flip-flop into `IOLOGIC`
+/// (`pack.cc`'s `pio->params[id_TRIMUX_TSREG] = "IOLTO"`), and this asserts
+/// that **no `TRIMUX_TSREG` appears anywhere in the whole file** although
+/// eight of its pads are bidirectional. So a bidirectional pad differs from
+/// an output by its base type and nothing else, and the tristate is a
+/// routed wire rather than a setting.
+///
+/// The other half is what is *not* there: nextpnr ties the tristate wire in
+/// the `CIB` only when `T` is unconnected (`dir != "INPUT" && T == nullptr`
+/// in `write_io`), which is exactly the complement of a real bidirectional
+/// pad. That half cannot be read off a finished bitstream — a `CIB`'s
+/// constant mux and its routing mux are one mux — so it is asserted against
+/// this crate's own pass instead, in
+/// `the_bidirectional_design_routes_and_configures_what_its_header_promises`.
+#[test]
+#[cfg(feature = "verilog")]
+fn what_lattices_own_packer_writes_for_a_bidirectional_pad() {
+    let Some(root) = chipdb() else { return };
+    let Some(bytes) = reference("analyzer") else {
+        return;
+    };
+    let db = trellis::open(&Disk(root), "", PART).unwrap();
+    let fabric = db.load(&TrellisOptions::new()).unwrap();
+    let stream = Ecp5Stream::parse(&bytes, &formats).unwrap();
+    let decoded = db.decode(&stream.cram);
+
+    // The finding first, because it is about the whole file and not about
+    // one ball: nothing anywhere governs a tristate.
+    let tri: Vec<String> = decoded
+        .enums
+        .iter()
+        .filter(|(_, field, _)| field.contains("TRIMUX"))
+        .map(|(at, field, value)| format!("{field}={value} at {at:?}"))
+        .collect();
+    assert!(
+        tri.is_empty(),
+        "`ecppack` wrote a tristate mux after all, so `PADDT` is not simply the default: {tri:?}"
+    );
+    // The `DATAMUX_*` fields are the same shape and the same story, with one
+    // difference that makes the story checkable: this file *does* write
+    // `DATAMUX_ODDR = IOLDO`, on the thirteen HyperRAM pins, which are
+    // registered and are all on the left edge at column 0. So the field is
+    // one the decoding reports when it is set, and its absence at a ULPI pin
+    // means what it looks like rather than meaning the decoder is blind to
+    // it. Asserted both ways round.
+    let data_muxes: Vec<(u32, u32)> = decoded
+        .enums
+        .iter()
+        .filter(|(_, field, _)| field.contains("DATAMUX"))
+        .map(|(at, _, _)| *at)
+        .collect();
+    assert!(
+        !data_muxes.is_empty(),
+        "no `DATAMUX_*` anywhere, so its absence at a ULPI pin says nothing"
+    );
+    assert!(
+        data_muxes.iter().all(|(col, _)| *col == 0),
+        "a `DATAMUX_*` off the left edge, where this board's registered pins are: {data_muxes:?}"
+    );
+
+    // And the eight balls, bit by bit at absolute frame positions, which is
+    // the same standard the LEDs and the button were held to.
+    let mut checked = 0usize;
+    for ball in AUX_ULPI_DATA {
+        let pad = fabric
+            .pad(ball)
+            .unwrap_or_else(|| panic!("{ball} is not in the ball map"));
+        assert_eq!(pad.edge, trellis::Edge::Right, "{ball}");
+        assert_eq!(pad.bidir_pad_bits.len(), 8, "{ball}: BIDIR_LVCMOS33");
+        assert_eq!(pad.bidir_pic_bits.len(), 2, "{ball}: the second copy");
+        assert_eq!(pad.pull_bits(trellis::PULL_NONE).len(), 1, "{ball}");
+        for (what, at, bits) in [
+            ("the base type", pad.pad_at, &pad.bidir_pad_bits[..]),
+            ("the second copy of it", pad.pic_at, &pad.bidir_pic_bits[..]),
+            ("hysteresis", pad.pad_at, &pad.hysteresis_bits[..]),
+            (
+                "the pull mode",
+                pad.pad_at,
+                pad.pull_bits(trellis::PULL_NONE),
+            ),
+        ] {
+            for bit in bits {
+                let (frame, index) = fabric
+                    .frames
+                    .locate(at, *bit)
+                    .unwrap_or_else(|| panic!("{bit:?} is outside {at:?}"));
+                assert!(
+                    stream.cram.get(frame, index),
+                    "F{frame}B{index}, which this crate sets for {what} of a bidirectional pad on \
+                     {ball}, is clear in analyzer.bit, whose own gateware has that very ball on a \
+                     ULPI data bus"
+                );
+                checked += 1;
+            }
+        }
+        // A bidirectional pad is not an input with an output bolted on: the
+        // input's pattern has a bit the bidirectional one does not want, so
+        // writing both would not have produced this.
+        assert!(
+            pad.input_pad_bits
+                .iter()
+                .all(|bit| pad.bidir_pad_bits.contains(bit)),
+            "{ball}: this assertion only documents the relation; correct it if it changes"
+        );
+        assert!(
+            pad.output_pad_bits
+                .iter()
+                .any(|bit| !pad.bidir_pad_bits.contains(bit)),
+            "{ball}: an output has a bit a bidirectional pad wants clear"
+        );
+        // Hysteresis costs nothing on top of the base type, which is why
+        // writing it is free and why its absence would not have shown up
+        // here. Said out loud so the row of the table above is honest.
+        assert!(
+            pad.hysteresis_bits
+                .iter()
+                .all(|bit| pad.bidir_pad_bits.contains(bit)),
+            "{ball}: hysteresis is no longer implied by the base type"
+        );
+        // The pull is the opposite: a bit of its own, outside the base
+        // type's, and the field's default is a pull-*down*.
+        assert!(
+            pad.pull_bits(trellis::PULL_NONE)
+                .iter()
+                .all(|bit| !pad.bidir_pad_bits.contains(bit)),
+            "{ball}: the pull mode is no longer a setting of its own"
+        );
+        assert!(pad.pull_bits("DOWN").is_empty(), "{ball}: the default");
+    }
+    assert_eq!(checked, 8 * (8 + 2 + 1 + 1), "every bit of every ball");
+
+    // AND THE ONE THING THAT CANNOT BE READ BACK, measured on the vendor's
+    // own file so that it is a property of the format and not of this crate.
+    //
+    // F16 and G15 are sides A and B of one right-edge position, so they
+    // share the pad tile at (col 72, row 15), and both are ULPI data pins,
+    // so `ecppack` made both bidirectional. On the right edge a
+    // *pseudo-differential* value of `PIO<s>.BASE_TYPE` reaches across the
+    // pair — `PIOA.BASE_TYPE = OUTPUT_LVCMOS33D` is ten bits, four of which
+    // are PIOB's — and with both halves bidirectional all ten of them
+    // happen to be set. `TrellisDatabase::decode` resolves a field by the
+    // longest matching pattern, which is also what `libtrellis`' own
+    // `Tile::get_config` does, so ten beats `BIDIR_LVCMOS33`'s eight and
+    // side A reads back as a differential output it is not — leaving the
+    // two bits only a bidirectional or an input pad wants.
+    //
+    // This is asserted rather than worked around because the alternative is
+    // to change the resolution rule, and a bitstream this crate writes for
+    // the same pins has exactly the same property: see "What cannot be read
+    // back" in `docs/fpga-trellis.md`, which is also where the candidate fix
+    // is. A single bidirectional pad, and a whole bus on the **top** edge
+    // where each PIO has a tile of its own, decode with nothing left over.
+    let a = fabric.pad("F16").unwrap();
+    let b = fabric.pad("G15").unwrap();
+    assert_eq!(a.pad_at, b.pad_at, "F16 and G15 share a pad tile");
+    assert!(
+        decoded.enums.iter().any(|(at, field, value)| {
+            *at == a.pad_at && field == "PIOA.BASE_TYPE" && value.ends_with('D')
+        }),
+        "side A of (col 72, row 15) no longer reads back as a differential output in \
+         analyzer.bit, so the ambiguity this documents is gone and the paragraph above is stale"
+    );
+    let orphans = decoded
+        .leftovers
+        .iter()
+        .filter(|(_, at, _)| *at == a.pad_at)
+        .count();
+    assert!(
+        orphans >= 2,
+        "`ecppack`'s own bitstream now decodes that tile completely, so the limitation this \
+         documents is not one"
+    );
+}
+
+/// The ball the bidirectional pad is on: `led_n[0]`, the LED at the end of
+/// the row away from the USER button. `bidir_loopback.rcf` says why it is
+/// safe to drive and to release.
+#[cfg(all(feature = "verilog", feature = "synth"))]
+const PROBE: &str = "E13";
+
+/// The bidirectional milestone: `bidir_loopback.v`, and every claim its
+/// header makes about what reaches the part.
+///
+/// The header says a person should see one LED blinking alone until the
+/// `USER` button is held and four blinking together while it is. Nothing
+/// here can check that — that is what a person is for — so what is checked
+/// is everything between the Verilog and the bits:
+///
+/// 1. the design places and routes **completely**, and every sink walks back
+///    to its driver;
+/// 2. the pad on E13 is configured `BIDIR_LVCMOS33` — not `INPUT`, not
+///    `OUTPUT`, and not the two written together — in both of its tiles;
+/// 3. its pull mode is `UP`, which is what the released level depends on,
+///    and it is `UP` rather than merely "not the default": `NONE`'s bits are
+///    a subset of `UP`'s, so the claim has to be about a bit only `UP` has;
+/// 4. **its tristate is not tied.** `configure_io` writes `CIB.JB0MUX = 0`
+///    for every ordinary output, which holds the tristate wire low so the
+///    buffer always drives. Here a signal drives that wire, and the tie and
+///    the route are *one mux*, so the tie must not be written. This is the
+///    half of the question no finished bitstream can be asked, so it is
+///    asked of the pass itself;
+/// 5. all three of the pad's wires — data in, data out and tristate — carry
+///    a **routed signal**, and the tristate's comes from the button's own
+///    pad on the other edge of the die;
+/// 6. no bit an arc needs **clear** has been set by anything else;
+/// 7. and every bit of the finished image decodes back, through the same
+///    records the router read, into exactly the arcs the router chose — with
+///    E13's base type and pull mode read back out of the image rather than
+///    out of the pass that wrote them.
+#[test]
+#[cfg(all(feature = "verilog", feature = "synth"))]
+fn the_bidirectional_design_routes_and_configures_what_its_header_promises() {
+    let Some(root) = chipdb() else { return };
+    let db = trellis::open(&Disk(root), "", PART).unwrap();
+    let fabric = db.load(&TrellisOptions::new()).unwrap();
+    let (_, stream, pads, report, io_only, routed) = compile(
+        &fabric,
+        "testdata/fpga/cynthion/bidir_loopback.v",
+        "testdata/fpga/cynthion/bidir_loopback.rcf",
+    );
+    assert_eq!(pads, 8, "the clock, the button and the six LED balls");
+    assert_eq!(routed.ffs, 26, "the counter");
+    assert_eq!(report.signals, routed.netlist.routable().len());
+    assert!(
+        routed.clocks.off_network.is_empty(),
+        "a clock off the global network: {:?}",
+        routed.clocks.off_network
+    );
+    assert!(routed.dropped.is_empty(), "{:?}", routed.dropped);
+
+    // ---- the pad itself, as `configure_io` alone wrote it ----------------
+    let pad = fabric.pad(PROBE).expect("E13 is in the ball map");
+    assert_eq!(pad.side, 'B');
+    assert_eq!(pad.bel, (62, 0));
+    assert_eq!(pad.pad_at, (63, 0));
+    // The second-copy tile and the `CIB` are the same *position*, holding
+    // two windows that the loader addresses end to end.
+    assert_eq!(pad.pic_at, (63, 1));
+    assert_eq!(pad.cib_at, (63, 1));
+
+    // What `configure_io` wrote on its own. A `CIB`'s constant mux and its
+    // routing mux are one mux, so "is this pad tied?" cannot be asked of the
+    // finished bitstream; it can be asked of this.
+    let alone = fabric.stream(&io_only, "8").unwrap();
+    let set = |at: (u32, u32), bit: &reticle::fpga::arch::ConfigBit| {
+        let (frame, index) = fabric
+            .frames
+            .locate(at, *bit)
+            .unwrap_or_else(|| panic!("{bit:?} is outside {at:?}"));
+        alone.cram.get(frame, index)
+    };
+
+    for bit in &pad.bidir_pad_bits {
+        assert!(
+            set(pad.pad_at, bit),
+            "{bit:?} of BIDIR_LVCMOS33 is clear in what `configure_io` wrote for E13"
+        );
+    }
+    for bit in &pad.bidir_pic_bits {
+        assert!(set(pad.pic_at, bit), "{bit:?} of the second copy");
+    }
+    // Neither an input nor an output. All three patterns share `F2B0` and
+    // `F9B0` and then diverge, so what is decisive is that the bits
+    // `BIDIR_LVCMOS33` has and the other two lack are the ones that are set.
+    for (other, name) in [
+        (&pad.input_pad_bits, "INPUT_LVCMOS33"),
+        (&pad.output_pad_bits, "OUTPUT_LVCMOS33"),
+    ] {
+        let only: Vec<_> = pad
+            .bidir_pad_bits
+            .iter()
+            .filter(|bit| !other.contains(bit))
+            .collect();
+        assert!(!only.is_empty(), "BIDIR_LVCMOS33 differs from {name}");
+        for bit in only {
+            assert!(
+                set(pad.pad_at, bit),
+                "{bit:?} is in BIDIR_LVCMOS33 and not in {name}, and it is clear"
+            );
+        }
+    }
+    // AND A THING WORTH KNOWING, because it is why this cannot be asserted
+    // the other way round. The one bit `OUTPUT_LVCMOS33` has that
+    // `BIDIR_LVCMOS33` does not is **also** `PULLMODE`'s low bit, so on this
+    // family "an output" and "a pull that is not a pull-down" are one bit. A
+    // finished image therefore cannot be asked whether a pad is an output:
+    // `BIDIR` plus a pull is a superset of `OUTPUT`'s pattern, and the
+    // decoding at the end of this test resolves it by the longer match. This
+    // is the third place on this part where two features share bit space —
+    // the others are a `CIB` tie against a route, and a centre mux's six-bit
+    // code — and all three are in `docs/fpga-trellis.md`.
+    let output_only: Vec<_> = pad
+        .output_pad_bits
+        .iter()
+        .filter(|bit| !pad.bidir_pad_bits.contains(bit))
+        .collect();
+    assert_eq!(output_only.len(), 1, "one bit apart: {output_only:?}");
+    assert!(
+        pad.pull_bits(trellis::PULL_NONE).contains(output_only[0]),
+        "{output_only:?} is no longer shared with PULLMODE, so the paragraph above is stale and \
+         the stronger assertion it explains away is now available"
+    );
+    // The pull, and `UP` rather than `NONE`.
+    let up_only: Vec<_> = pad
+        .pull_bits(trellis::PULL_UP)
+        .iter()
+        .filter(|bit| !pad.pull_bits(trellis::PULL_NONE).contains(bit))
+        .collect();
+    assert_eq!(up_only.len(), 1, "`UP` is `NONE` plus one bit");
+    for bit in pad.pull_bits(trellis::PULL_UP) {
+        assert!(
+            set(pad.pad_at, bit),
+            "{bit:?} of PULLMODE=UP is clear, so a released E13 has no pull-up and the design \
+             reads whatever the LED leaves on the pin"
+        );
+    }
+    // Hysteresis, which costs nothing here because the base type's own bits
+    // already contain it — asserted anyway so that "written" stays true.
+    for bit in &pad.hysteresis_bits {
+        assert!(set(pad.pad_at, bit), "{bit:?} of HYSTERESIS=ON");
+    }
+    // AND THE TRISTATE IS NOT TIED, which is the assertion the milestone is
+    // about.
+    assert!(!pad.enable_bits.is_empty(), "there is a tie to not write");
+    assert!(
+        pad.enable_bits.iter().any(|bit| !set(pad.cib_at, bit)),
+        "`configure_io` tied E13's tristate although the router drives it: the pad would drive \
+         at all times and the button would do nothing"
+    );
+    // While a LED next door, an ordinary output, *is* tied — so the
+    // assertion above is about this pad and not about a pass that stopped
+    // tying anything.
+    let led = fabric.pad("C13").expect("C13 is in the ball map");
+    for bit in &led.enable_bits {
+        assert!(
+            set(led.cib_at, bit),
+            "{bit:?}: C13 is a plain output and its tristate is not tied"
+        );
+    }
+
+    // ---- and all three of the pad's wires carry a routed signal ---------
+    let netlist = &routed.netlist;
+    let probe = netlist
+        .instances
+        .iter()
+        .position(|i| i.pin.as_deref() == Some(PROBE))
+        .expect("the pad is constrained to E13");
+    let button = netlist
+        .instances
+        .iter()
+        .position(|i| i.pin.as_deref() == Some(BUTTON))
+        .expect("the button is constrained to M14");
+    let pin_of = |instance: usize, role: &str| {
+        netlist
+            .pins
+            .iter()
+            .find(|pin| pin.instance == instance && pin.role == role)
+    };
+    for role in ["din", "dout", "oe"] {
+        let pin = pin_of(probe, role)
+            .unwrap_or_else(|| panic!("E13's `{role}` pin is not in the netlist"));
+        assert!(
+            pin.signal.is_some(),
+            "E13's `{role}` carries no signal, so it is tied and not routed"
+        );
+    }
+    // The tristate comes from the button's own pad, which is on the other
+    // edge of the die: M14's buffer is at (72, 32) and E13's at (62, 0).
+    let enable = pin_of(probe, "oe").unwrap().signal.unwrap();
+    let driver = netlist.signals[enable]
+        .driver
+        .expect("the tristate has a driver");
+    assert_eq!(
+        netlist.pins[driver].instance, button,
+        "E13's tristate is driven by something other than the USER button's pad"
+    );
+
+    // ---- and the whole image says what the router said -------------------
+    let decoded = db.decode(&stream.cram);
+    assert_eq!(decoded.unexplained, 0, "bit(s) left over");
+    assert!(decoded.bits > 2000, "{} set bit(s)", decoded.bits);
+    let (selected, unresolved) = db.resolved_arcs(&decoded);
+    assert!(unresolved.is_empty(), "{unresolved:?}");
+    assert_eq!(selected, fabric.routed_arcs(&routed.graph, &routed.routing));
+    // E13's own settings, read back out of the finished image through the
+    // database rather than out of the pass that wrote them.
+    let mine: Vec<(&str, &str)> = decoded
+        .enums
+        .iter()
+        .filter(|(at, _, _)| *at == pad.pad_at)
+        .map(|(_, field, value)| (field.as_str(), value.as_str()))
+        .collect();
+    assert!(
+        mine.contains(&("PIOB.BASE_TYPE", "BIDIR_LVCMOS33")),
+        "E13's base type reads back as {mine:?}"
+    );
+    assert!(
+        mine.contains(&("PIOB.PULLMODE", "UP")),
+        "E13's pull mode reads back as {mine:?}"
     );
 }

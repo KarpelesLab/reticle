@@ -2258,7 +2258,7 @@ fn write_ecp5_bitstream(
     // reached. Both go in here, exactly as the 7-series flow adds its
     // clock enables.
     let pads = fabric
-        .configure_io(&netlist, &placement, &graph, &mut tiles)
+        .configure_io(design, top, &netlist, &placement, &graph, &mut tiles)
         .map_err(|e| e.to_string())?;
     let luts = fabric
         .configure_logic(design, top, &netlist, &placement, &graph, &mut tiles)
@@ -2318,12 +2318,30 @@ fn write_ecp5_bitstream(
     // changing what another selects, in either direction.
     let decoded = db.decode(&stream.cram);
     if decoded.unexplained > 0 {
+        // Which ones, and not only how many: a count says a tile rule is
+        // wrong and not which, and the bits are named in the tile's own
+        // `F<frame>B<bit>` numbering so that one can be grepped for in
+        // `bits.db` directly.
+        let named: Vec<String> = decoded
+            .leftovers
+            .iter()
+            .take(12)
+            .map(|(ty, at, bit)| format!("{bit} of {ty} at (col {}, row {})", at.0, at.1))
+            .collect();
+        let rest = decoded.leftovers.len().saturating_sub(named.len());
         return Err(format!(
             "{} of this bitstream's {} set bit(s) belong to no feature the database names, so \
              nothing was written. A leftover bit is a bit this flow set for a reason Project \
              Trellis does not know, which is what a wrong tile rule looks like from the inside. \
-             See docs/fpga-trellis.md",
-            decoded.unexplained, decoded.bits
+             See docs/fpga-trellis.md\n  {}{}",
+            decoded.unexplained,
+            decoded.bits,
+            named.join("\n  "),
+            if rest > 0 {
+                format!("\n  and {rest} more")
+            } else {
+                String::new()
+            }
         ));
     }
     let (selected, unresolved) = db.resolved_arcs(&decoded);

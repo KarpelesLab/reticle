@@ -1,0 +1,103 @@
+# The 60 MHz oscillator, the USER button and the six FPGA LEDs of a Great
+# Scott Gadgets Cynthion r1.4 — with the first LED's ball used as a
+# BIDIRECTIONAL pad.
+#
+# ---------------------------------------------------------------------
+# E13, AND WHY IT IS SAFE TO DRIVE AND TO RELEASE
+# ---------------------------------------------------------------------
+#
+# This is the one line of this file that could damage hardware if it were
+# wrong, so it has its own account. `bidir_loopback.v`'s header has the
+# same four points at length.
+#
+# 1. **The platform file mentions E13 exactly once**, as `led[0]`:
+#
+#        *LEDResources(pins="E13 C13 B14 A15 D12 C11",
+#                      attrs=Attrs(IO_TYPE="LVCMOS33"), invert=True),
+#
+#    Nothing else in `cynthion_r1_4.py` claims it: not a ULPI bus, not the
+#    HyperRAM, not a Type-C controller, not a pseudo-supply pin, and not a
+#    PMOD or mezzanine connector pin.
+# 2. **The schematic says the net is passive.** In
+#    `indicators_buttons.kicad_sch` the six LED anodes are on one wire to
+#    `+3V3` and each cathode goes through a series resistor to the FPGA.
+#    The FPGA is the only driver on E13.
+# 3. **This project has already driven it low** — `leds.v`,
+#    `button_led.v` and `clock_blink.v`, each watched by a person on this
+#    board — and releasing a pin is less demanding than driving it.
+# 4. **Released, it settles high on its own.** The board can only source
+#    current *into* the pad, through the resistor and the LED from +3V3, so
+#    it cannot pull the pin down; with the internal pull-up pulling the
+#    same way the pad sits at VCCIO and no current flows through the LED.
+#
+# `-pullup yes` is therefore not decoration. It is what makes the released
+# level a definite one rather than a diode drop below the rail, and the
+# database's default for `PIO<s>.PULLMODE` is a pull-*down*, which would
+# fight the board and read low. Reticle's `.dev` file turns the option into
+# `PULLMODE="UP"` on the cell (`param_pullup` on the `io` line of
+# `src/fpga/devices/ecp5.dev`) and `configure_io` writes the two bits.
+#
+# ---------------------------------------------------------------------
+# A8, THE OSCILLATOR
+# ---------------------------------------------------------------------
+#
+# From the same platform file:
+#
+#     # Primary, discrete 60MHz oscillator.
+#     Resource("clk_60MHz", 0, Pins("A8", dir="i"),
+#         Clock(60e6), Attrs(IO_TYPE="LVCMOS33")),
+#
+# Not `PinsN`, so the clock is not inverted, and `Clock(60e6)` is the rate
+# the blink is derived from. `clock_misc.kicad_sch` has the part: `Y1`, a
+# SiTime `SIT1602BC-23-33E-60.000000E`, 3.3 V, 60.000000 MHz, to A8.
+# `iodb.json` puts A8 at row 0, column 29, PIO B, bank 0, whose pin
+# function is `PCLKC0_0` — the *complement* half of bank 0's differential
+# clock pair, which has no dedicated path to the clock centre, so this
+# clock reaches its buffer through ordinary interconnect. See
+# `clock_blink.rcf` and `docs/fpga-trellis.md` for the walk.
+#
+# ---------------------------------------------------------------------
+# M14, THE USER BUTTON
+# ---------------------------------------------------------------------
+#
+#     # USER button
+#     Resource("button_user", 0, PinsN("M14", dir="i"),
+#              Attrs(IO_TYPE="LVCMOS33", PULLMODE="NONE")),
+#
+# `PinsN`, so the signal is active low: the ball reads low while the button
+# is held. `indicators_buttons.kicad_sch` has `SW3`, a normally-open SPST
+# between ground and a node a 10 k resistor (R106) pulls up to +3V3, with a
+# 33 k series resistor (R107) and a 1 uF capacitor (C78) making a 33 ms
+# debounce — which is why nothing in the fabric has to debounce it, and why
+# `PULLMODE=NONE` on this pin matters: an internal pull-down would divide
+# the released level below `VIH` across that 43 k. `configure_io` writes
+# `NONE` for every input without being asked.
+#
+# `iodb.json` puts M14 at row 32, column 72, PIO D — the **right** edge, in
+# bank 3. So the tristate of the pad on the top edge is routed the width of
+# the die, which is the point.
+#
+# ---------------------------------------------------------------------
+# THE LEDS
+# ---------------------------------------------------------------------
+#
+# Ball order from the platform file above, so LED 0 is E13 and LED 5 is
+# C11. All six are on the top edge in bank 1. `invert=True` is the
+# polarity: they are active low, and a constraints file cannot say so. See
+# `bidir_loopback.v`.
+#
+# Bank 0's and bank 1's VCCIO are both 3.3 V, and bank 3's too: all three
+# of Great Scott Gadgets' own bitstreams set `BANK.VCCIO` to `3V3` on every
+# bank of the part.
+
+set_io -io_standard LVCMOS33 clk A8
+set_io -io_standard LVCMOS33 button_n M14
+
+# LED 0 — the bidirectional pad, with its own pull-up.
+set_io -io_standard LVCMOS33 -pullup yes probe_n E13
+
+set_io -io_standard LVCMOS33 read_low_n C13
+set_io -io_standard LVCMOS33 read_high_n B14
+set_io -io_standard LVCMOS33 heartbeat_n A15
+set_io -io_standard LVCMOS33 dark4_n D12
+set_io -io_standard LVCMOS33 dark5_n C11
