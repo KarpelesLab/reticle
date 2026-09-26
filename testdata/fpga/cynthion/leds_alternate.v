@@ -5,8 +5,16 @@
 // ===================================================================
 //
 // **LEDs 0, 2 and 4 lit and LEDs 1, 3 and 5 dark**, steadily, none of
-// them blinking. Reading the row nearest the USB connectors from the one
-// silkscreened `0`: on, off, on, off, on, off.
+// them blinking: on, off, on, off, on, off along the row of six beside the
+// silkscreen legend `FPGA LEDs`.
+//
+// Which end to read from is the question, because the board does not
+// number them: the r1.4.0 silkscreen has the one legend and no digits. Read
+// from the end **farthest from the USER button**, which is `led_n[0]` —
+// the diode `D7` of `cynthion.kicad_pcb` — and the pattern is on, off, on,
+// off, on, off. An alternating pattern looks the same read backwards, so
+// this design cannot tell a reader which end is which; `button_led.v` can,
+// because only two of its LEDs move.
 //
 // This design exists because `leds.v`, which lights all six, is a
 // slightly weaker observation on its own: a person seeing six lit LEDs
@@ -16,9 +24,8 @@
 // individually and the value driven into it is the design's**.
 //
 // The LEDs are active low — see `leds.v` for the citation — so a zero in
-// `led_n` is a lit LED. `6'b101010` therefore lights bits 0, 2 and 4,
-// which are the LEDs silkscreened 0, 2 and 4: `led_n[0]` is ball E13,
-// which is LED 0.
+// `led_n` is a lit LED. `6'b101010` therefore lights bits 0, 2 and 4:
+// `led_n[0]` is ball E13, which the schematic wires to `D7`.
 //
 // Pins: testdata/fpga/cynthion/leds.rcf, the same file `leds.v` uses.
 

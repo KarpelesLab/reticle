@@ -4,9 +4,14 @@
 // WHAT A PERSON LOOKING AT THE BOARD SHOULD SEE
 // ===================================================================
 //
-// **All six LEDs numbered 0 to 5 lit, steadily, at the same brightness,
-// and none of them blinking.** They are the row nearest the USB
-// connectors, silkscreened 0 1 2 3 4 5, and they are the FPGA's.
+// **All six FPGA LEDs lit, steadily, at the same brightness, and none of
+// them blinking.** They are the row of six beside the silkscreen legend
+// `FPGA LEDs`, near the USB connectors. They are **not** individually
+// numbered on the board: the r1.4.0 silkscreen has that one legend and no
+// digits (`cynthion.kicad_pcb`, where the row is `D2`..`D7` and the only
+// text near it is `FPGA LEDs`). That does not matter for this design,
+// which lights all six; `button_led.v` says how to tell one from another
+// when it does matter.
 //
 // The five LEDs lettered A to E are the debug microcontroller's and this
 // design does not touch them. Whatever they were doing, they carry on

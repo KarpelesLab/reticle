@@ -27,23 +27,42 @@ see is in `button_led.v`'s header and repeated at the end of this section.
 
 ### What a person should look for
 
-Nothing to touch:
+Press and hold the button silkscreened **`USER`**. There are three
+tactile buttons and the other two end the experiment instead of performing
+it: `PROG` reloads the FPGA from flash and `RESET` resets the debug
+microcontroller. On the r1.4.0 layout `USER` and `PROG` are on the same
+edge of the board and `RESET` is on the opposite one.
 
-    LED 0  dark      LED 1  LIT      LEDs 2 3 4 5  dark
+Watch the two LEDs at the end of the `FPGA LEDs` row **farthest from that
+button**:
 
-Holding the button silkscreened **`USER`** — the middle of the three
-tactile buttons, not `RESET` and not `PROGRAM`:
+| | far end | next to it | the other four |
+|---|---|---|---|
+| nothing touched | dark | **lit** | dark |
+| button held | **lit** | dark | dark |
 
-    LED 0  LIT       LED 1  dark     LEDs 2 3 4 5  dark
+They swap back when it is let go, they are never both lit and never both
+dark, and the other four never light.
 
-and they swap back when it is let go. Never both lit, never both dark.
-The two are the first of the row of six nearest the USB connectors.
+**The board does not number its LEDs**, which is worth saying because two
+designs in `testdata/fpga/cynthion/` used to claim it does. The r1.4.0
+silkscreen has one legend, `FPGA LEDs`, over the row and no digits; the row
+is `D2` to `D7` in `cynthion.kicad_pcb` and the schematic wires `led_n[0]`
+to `D7`, which is the end away from the button. So "the far end" is
+`led_n[0]`, derived from the layout rather than read off the board.
 
-That is a deliberately strong observation. One LED lit rather than six
+That also makes this design the first that can settle something the earlier
+ones could not. `leds.v` lights all six and `leds_alternate.v` lights
+alternate ones, and both look the same read from either end; here only two
+LEDs move, so **if the two that change are at the end nearest the button,
+the numbering is the other way round from what the schematic implies.**
+Either answer is a result.
+
+The observation is deliberately a strong one. One LED lit rather than six
 cannot be confused with the previous milestone; the lit one *moves* when a
-finger moves, which no configuration that does nothing can do; and it
-moves both ways, so a stuck input shows up as one of the two never
-changing rather than as nothing happening.
+finger moves, which no configuration that does nothing can do; and it moves
+both ways, so a stuck input shows up as one of the two never changing rather
+than as nothing happening.
 
 ### What was checked instead, since `DONE` is not evidence
 
@@ -808,13 +827,26 @@ two switches are `BTN_RESET` and `BTN_PROGRAM`, and those have their own
 labels on the board, so the risk is a mislabelled silkscreen rather than an
 ambiguity.
 
-What is **not** verified: that the net named `LED0` in the schematic is
-the one silkscreened `0` on the board. The platform file's order, the net
-names and Great Scott Gadgets' own blinky tutorial
-(`platform.request("led", n) for n in range(0, 6)`) all line up, and the
-PCB silkscreen layer was not opened to prove it. If a person looking at
-the board sees the alternating design light 1, 3 and 5 rather than 0, 2
-and 4, that is what was wrong.
+4. **The r1.4.0 PCB layout**, `cynthion.kicad_pcb` in the same
+   repository, which is where this file used to have an open question and
+   now has an answer. It was opened to settle which end of the LED row is
+   `led_n[0]`, and the answer came with a correction: **there are no
+   per-LED digits on the board at all.** The front silkscreen near the row
+   has one legend, `FPGA LEDs`, at (126.2, 109.4); the LEDs are `D2` to
+   `D7` at x = 114.5, 117.5, … 129.5, all at y = 112 on a board spanning
+   x 104–160; and the schematic's `LED0`..`LED5` are `D7` down to `D2`. So
+   `led_n[0]` is `D7`, the end of the row at the higher x — which is the end
+   **away from** the USER button (`SW3` at (106.7, 95)) and away from the
+   USB-C receptacle on that same edge (`J1` at (106.65, 109)).
+
+   Two designs in `testdata/fpga/cynthion/` said the LEDs were
+   "silkscreened 0 1 2 3 4 5". They are not, and they now say so.
+
+What is still **not** verified: that `D7` really is what Great Scott
+Gadgets' own software calls LED 0 — the chain platform file → schematic net
+→ refdes → layout position is four files agreeing, not an observation. It
+is the thing `button_led.v` asks a person to check, because it is the first
+design of the three whose appearance depends on it.
 
 The device file says all of this in `src/fpga/devices/ecp5.dev`, under
 `device ecp5-12f-CABGA256`, with `pins partial` set because ten of 256

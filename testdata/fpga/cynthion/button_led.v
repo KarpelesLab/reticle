@@ -5,25 +5,46 @@
 // WHAT A PERSON SHOULD PRESS, AND WHAT THEY SHOULD SEE
 // ===================================================================
 //
-// **Press and hold the button silkscreened `USER`.** It is the middle one
-// of the three tactile buttons along the edge of the board; the other two
-// are `RESET` and `PROGRAM`, and pressing either of *those* will end the
-// experiment rather than perform it. `PROGRAM` makes the FPGA reload
-// itself from flash and `RESET` resets the debug microcontroller.
+// **Press and hold the button silkscreened `USER`.** The board has three
+// tactile buttons and the other two will end the experiment rather than
+// perform it: `PROG` (or `PROGRAM`) makes the FPGA reload itself from
+// flash, and `RESET` resets the debug microcontroller. On the r1.4.0
+// layout `USER` and `PROG` are on the same edge of the board and `RESET`
+// is on the opposite one (`SW3`, `SW1` and `SW2` of `cynthion.kicad_pcb`).
+//
+// **Which LEDs to watch.** The six FPGA LEDs are the row of six beside the
+// silkscreen legend `FPGA LEDs`. They are **not** individually numbered on
+// the board — the r1.4.0 silkscreen has that one legend and no digits — so
+// the two to watch are identified by geometry instead:
+//
+//     the two at the end of the row FARTHEST from the USER button.
+//
+// That is `led_n[0]` (the very end) and `led_n[1]` (next to it). On the
+// r1.4.0 layout `led_n[0]` is the diode `D7` and `led_n[5]` is `D2`, and
+// `D7` is the end of the row away from the button; the five LEDs lettered
+// A to E elsewhere on the board are the debug microcontroller's and this
+// design does not touch them.
 //
 // With this design in the part and nobody touching the board:
 //
-//     LED 0  dark        LED 1  LIT        LEDs 2 3 4 5  dark
+//     end farthest from the button:  DARK, then LIT
+//     the other four:                dark
 //
 // While the `USER` button is held down:
 //
-//     LED 0  LIT         LED 1  dark       LEDs 2 3 4 5  dark
+//     end farthest from the button:  LIT, then dark
+//     the other four:                dark
 //
-// and when it is let go they swap back. The two LEDs are always in
-// opposition, never both lit and never both dark. They are the first two
-// of the row of six nearest the USB connectors, silkscreened 0 and 1.
+// and when it is let go they swap back. The two are always in opposition,
+// never both lit and never both dark, and the other four never light.
 //
-// That is deliberately not a state the board makes on its own:
+// **If the two that change are at the end NEAREST the button instead**,
+// everything here works and the LED numbering is the other way round from
+// what Great Scott Gadgets' schematic implies. That is worth reporting: it
+// is the one thing about this board `docs/fpga-trellis.md` has never been
+// able to settle from a file.
+//
+// The observation is deliberately a strong one:
 //
 //   * **one** LED lit rather than all six, so it cannot be confused with
 //     the previous milestone (`leds.v`, which lit all six);
@@ -31,9 +52,6 @@
 //     that does nothing can do;
 //   * and it moves **both ways**, so a stuck input shows up as one of the
 //     two LEDs never changing rather than as nothing at all.
-//
-// The five LEDs lettered A to E are the debug microcontroller's and this
-// design does not touch them.
 //
 // ===================================================================
 // WHY IT IS SPELLED THIS WAY ROUND
