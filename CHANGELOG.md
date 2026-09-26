@@ -7,6 +7,111 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.3](https://github.com/KarpelesLab/reticle/compare/v0.0.2...v0.0.3) - 2026-09-26
+
+### Added
+
+- *(fpga)* the bidirectional pads of a Lattice ECP5
+- *(verilog)* a conditional assignment to high impedance is a tri-state driver
+- *(fpga)* an inout port with a tri-state driver becomes a bidirectional pad
+- *(ip)* a USB device over ULPI, for a board whose lines the FPGA cannot drive
+- *(fpga)* the global clock network of the Lattice ECP5
+- *(fpga)* a base cost per node, so a wire class can be preferred
+- *(fpga)* interconnect for the Lattice ECP5, and a routed design on a board
+- *(program)* configure a Lattice ECP5's SRAM over a Cynthion's Apollo
+- *(fpga)* a Lattice ECP5 fabric from Project Trellis, and its pads
+- *(vhdl)* evaluate at elaboration what a width can be made of
+- *(program)* read an ECP5 through a Cynthion's Apollo debugger
+- *(fpga)* per-bank IO standards for Gowin, and a four-button test
+- *(fpga)* write and load a Gowin GW2A bitstream, and run one on a board
+- *(cli)* fetch the chip databases into ~/.cache/reticle
+- *(fpga)* describe the GW2A-18 of a Sipeed Tang Primer 20K
+- *(fpga)* read Project Apicula's Gowin chip database as an Arch
+- *(ir)* let a `FileProvider` hand over bytes as well as text
+- *(fpga)* the Gowin `.fs` bitstream container
+- *(msgpack)* a hand-written MessagePack reader
+- *(fpga)* route a clocked design across a real 7-series clock tree
+- *(fpga)* map a clocked design onto real 7-series sites
+- *(fpga)* give a real 7-series bel its pins, and route the milestone
+- *(cli)* `reticle program <file.bit>` loads a bitstream into a board
+- *(program)* configure a 7-series FPGA over JTAG, sans-I/O
+- *(fpga)* emit a 7-series bitstream from `reticle fpga`
+- *(fpga)* read a real 7-series fabric and write a real .bit
+- *(examples)* give the NES a Basys 3 target through vga_out
+- *(cli)* override a parameter or generic from the command line
+- *(fpga)* map 7-series adders onto CARRY4
+- *(examples)* give the Apple II a Basys 3 target through vga_out
+- *(examples)* add an NES-compatible console built from the IP library
+- *(examples)* add an Apple II-compatible computer with DVI video
+- *(test)* give the 6502 assembler the `<` and `>` byte operators
+- *(fpga)* take a 7-series design to the files Vivado reads
+- *(fpga)* describe the Xilinx 7-series and the XC7A35T
+
+### Fixed
+
+- *(ir)* report a reversed slice instead of panicking
+- *(vhdl)* lower a clocked conditional assignment, and name the latch
+- *(vhdl)* six defects semantic analysis showed on real VHDL
+- *(vhdl)* parse the attributes and ranges the grammar spells oddly
+- *(cli)* list every adapter, not only the FTDI ones
+- *(program)* report a missing Cynthion as one, not as a missing cable
+- *(fpga)* give each bit of a bus constrained bit by bit its own pin
+- *(program)* account for every bit of the status word, reserved included
+- *(program)* stop shifting Xilinx instructions at a part that is not one
+- *(fpga)* record the GW2A-18's speed grade as the string it is
+- *(program)* read the adapter's chip and the part's IDCODE without guessing
+- *(test)* link the C example against macOS's USB framework
+- *(fpga)* use a frame address the tiny test part really has
+- *(test)* brace the names the NES's Vivado script asserts
+- *(test)* name the one-bit waveform the video decoder takes
+- *(test)* keep the carry tests compiling without the formal feature
+- *(verilog)* accept a string literal where a vector is wanted
+- *(test)* compare the lowering tripwire against itself, not a clock
+- *(fpga)* stop unique_name rescanning the module per candidate
+- *(synth)* collect dead expressions before renumbering memories
+- *(fpga)* stop two false constraint reports on a hierarchical design
+
+### Other
+
+- the bidirectional pad reads back what it drives
+- a bidirectional pad has been loaded into the Cynthion's ECP5
+- *(test)* the USB host model drives a pair, not a device's pins
+- the Cynthion's clocked design blinks
+- a clocked design has been loaded into the Cynthion's ECP5
+- a routed design works on the Cynthion's ECP5
+- *(fpga)* the Cynthion does not number its LEDs, so say which end to read
+- *(fpga)* stop allocating a wire's name for every pip of a graph
+- the Cynthion's LEDs are lit
+- *(vhdl)* measure the front end against CERN's Colibri library
+- *(program)* drop a redundant explicit intra-doc link target
+- *(apollo)* say how many times the read was performed, and from where
+- *(roadmap)* record the Apollo transport and the ECP5 it identified
+- *(apollo)* record what the board confirmed and what it contradicted
+- *(apollo)* specify the Cynthion debugger's USB protocol
+- *(fpga)* say that the Basys 3 blink design was watched blinking
+- *(fpga)* drop a block left over from collapsing an if in the loader
+- *(fpga)* say that `--probe` is not safe to point at a Gowin part
+- what the Gowin flow reads, and what it has never done
+- what the clocked design established on a real part, and what it did not
+- say that one design from this flow has run on a part
+- *(fpga)* intern a pip's configuration bits so a real die fits
+- *(program)* what loading a bitstream into a real board established
+- *(fpga)* say what the real 7-series flow establishes and what it does not
+- *(json)* share the JSON parser between the LSP and the FPGA side
+- *(examples)* document the NES's Basys 3 target and its colour depth
+- *(fpga)* say what the carry report counts on a wide element
+- *(fpga)* record the 7-series carry chain and what it saves
+- *(examples)* count the fourth package and the fourth source
+- *(examples)* map the Apple II onto the Basys 3's Artix-7
+- *(ip)* hold vga_out to the raster, the blanking and the polarity
+- tidy the example list after merging two branches into it
+- *(nes)* check the $2007 data port and what $2000 does to `t`
+- record examples/apple2 in the README and the roadmap
+- tidy the two lines the 7-series note added
+- *(fpga)* map a small memory onto the 7-series distributed RAM
+- describe the Xilinx 7-series backend and what it does not prove
+- *(fpga)* take three designs onto the Artix-7 end to end
+
 ## [0.0.2](https://github.com/KarpelesLab/reticle/compare/v0.0.1...v0.0.2) - 2026-09-22
 
 ### Added
