@@ -11,7 +11,7 @@
 //! | Block RAM | a [`Memory`] with its `MemRdPort` / `MemWrPort` cells | one block per width x depth slice (per read port, when the block has too few), carrying its slice of the initial contents, plus address decoding and output muxing as cells; or, below the threshold, the memory built out of logic |
 //! | DSP | a `Mul`, and a `Mul` feeding an `Add` | one multiplier or multiply-accumulate block |
 //! | Carry | an `Add` at least `min_carry_width` bits wide | a chain of carry primitives: one per bit plus an `Xor` pair for each sum on a one-bit element, or one per `width` bits plus one `Xor` per bit for the propagate on a [`WideCarry`] element, which computes its own sums |
-//! | IO buffers | every top-level port | one IO primitive per bit, carrying the constraints' `io_standard`, `drive`, `slew` and `pullup`; for a port with a `ddr` clock, one per *two* bits with both edges registered (in the buffer where the family's buffer does it, in a `ddr_in` / `ddr_out` register beside it where it does not); and an `iodelay` element where a delay is asked for |
+//! | IO buffers | every top-level port | one IO primitive per bit, carrying the constraints' `io_standard`, `drive`, `slew` and `pullup`; for a port with a `ddr` clock, one per *two* bits with both edges registered (in the buffer where the family's buffer does it, in a `ddr_in` / `ddr_out` register beside it where it does not); an `iodelay` element where a delay is asked for; and, for an `inout` port a [`CellKind::Tristate`] drives, a **bidirectional** buffer that takes that cell's data and enable over and re-drives the port's net from the pad's input |
 //! | PLLs | a clock constraint on a net nothing drives | the device's PLL, its dividers solved by [`super::pll::solve`], fed from the clock constrained on an input port |
 //! | Clock buffers | a net driving many flip-flop clock pins | a global buffer, with the clock pins moved onto it |
 //!
@@ -89,7 +89,8 @@ use crate::diag::{Diagnostic, Diagnostics};
 use crate::ir::expr::operands;
 use crate::ir::{
     Assign, AttrValue, Attrs, Bit, Cell, CellId, CellKind, Const, Design, Expr, ExprId, ExprKind,
-    Lvalue, MemoryId, Module, ModuleId, Name, Net, NetId, NetKind, PortDir, Type, infer_type,
+    Lvalue, MemoryId, Module, ModuleId, Name, Net, NetId, NetKind, PortDir, Type, UnaryOp,
+    infer_type,
 };
 use crate::source::Span;
 
@@ -2695,12 +2696,22 @@ impl Mapper<'_> {
             ));
             return;
         }
+        // The tri-state cells an `inout` port absorbed. Collected across
+        // every port and dropped once at the end rather than inside the
+        // loop, so no pass sees a module whose ports are half rebuilt.
+        let mut absorbed: Vec<CellId> = Vec::new();
         for index in 0..module.ports.len() {
-            self.io_buffer(module, index);
+            self.io_buffer(module, index, &mut absorbed);
+        }
+        if !absorbed.is_empty() {
+            module.cells.retain(|id, _| !absorbed.contains(&id));
         }
     }
 
-    fn io_buffer(&mut self, module: &mut Module, index: usize) {
+    /// One port's IO buffers. `absorbed` collects the cells this took over
+    /// — a tri-state driver that became a bidirectional pad's enable — for
+    /// the caller to drop once every port is done.
+    fn io_buffer(&mut self, module: &mut Module, index: usize, absorbed: &mut Vec<CellId>) {
         let port = &module.ports[index];
         let name = port.name.as_str().to_owned();
         let dir = port.dir;
@@ -2779,6 +2790,58 @@ impl Mapper<'_> {
             self.delay_plan(&name, steps, span)
         });
         let pins = if ddr.is_some() { width / 2 } else { width };
+
+        // A bidirectional port's enable, if the design states one. The
+        // shape that says so is a `Tristate` cell — `bufif1`, a VHDL
+        // conditional assignment to `'Z'`, or any frontend's spelling of
+        // the same thing — driving the whole of the port's net. Its `a` is
+        // what the pad drives and its `en` says when; this takes both over
+        // and the cell goes away, because `din` becomes the net's driver
+        // instead and a net cannot have two.
+        //
+        // Nothing else can be taken over. A port driven by an ordinary
+        // expression has no enable to read, so it gets the old treatment:
+        // a constant enable and no input path. Both are reported.
+        let tristate = match (dir, &ddr) {
+            (PortDir::InOut, None) => self.absorbed_tristate(module, core),
+            // A registered pad's data comes from the IO register, so the
+            // tri-state driver is not what reaches the pin and absorbing
+            // it would move the enable ahead of the register.
+            _ => None,
+        };
+        // What the absorbed driver said, as two nets of this module rather
+        // than as the expressions the cell carried. A black box's pin has
+        // to be a net, a constant or a slice of one — `Netlist::build`
+        // refuses an operator on a cell pin, since a placer has nowhere to
+        // put it — and a tri-state's data and enable are arbitrary
+        // expressions (`bufif1 (bus, data, ~oe_n)`). Naming them here puts
+        // the logic in an assignment, which is what LUT mapping consumes.
+        let tristate = tristate.map(|(cell, data, enable)| {
+            let drive = add_net(module, &format!("{name}$drive"), Type::bits(width), span);
+            add_assign(module, drive, data, span);
+            let enable = if let Some((_, true)) = bel.enable_port() {
+                expr(
+                    module,
+                    ExprKind::Unary {
+                        op: UnaryOp::Not,
+                        expr: enable,
+                    },
+                    span,
+                )
+            } else {
+                enable
+            };
+            let oe = add_net(module, &format!("{name}$oe"), Type::bit(), span);
+            add_assign(module, oe, enable, span);
+            (
+                cell,
+                net_expr(module, drive, span),
+                net_expr(module, oe, span),
+            )
+        });
+        if let Some(cell) = tristate.map(|(cell, ..)| cell) {
+            absorbed.push(cell);
+        }
 
         let pad = add_net(module, &format!("{name}$pad"), Type::bits(pins), span);
         module.ports[index].net = pad;
@@ -2870,13 +2933,18 @@ impl Mapper<'_> {
                 (PortDir::Out | PortDir::InOut, beside) => {
                     let net = add_net(module, &format!("{name}$pin{bit}"), Type::bit(), span);
                     pad_bits.push(net_expr(module, net, span));
+                    // What the pad drives. For a bidirectional port whose
+                    // enable was absorbed that is the tri-state's data,
+                    // which is *not* the port's net any more: the net now
+                    // carries what the pad reads back.
+                    let from = tristate.map_or(core_value, |(_, data, _)| data);
                     let mut value = match beside {
                         Some(DdrPlan::Beside { bel: reg, clk }) => {
-                            let lo = slice_expr(module, core_value, bit, bit, span);
-                            let hi = slice_expr(module, core_value, bit + pins, bit + pins, span);
+                            let lo = slice_expr(module, from, bit, bit, span);
+                            let hi = slice_expr(module, from, bit + pins, bit + pins, span);
                             self.emit_ddr_out(module, reg, *clk, (lo, hi), &name, bit, span)
                         }
-                        _ => slice_expr(module, core_value, bit, bit, span),
+                        _ => slice_expr(module, from, bit, bit, span),
                     };
                     if let Some(plan) = &delay {
                         value = self.emit_delay(module, plan, value, &name, bit, span);
@@ -2886,12 +2954,39 @@ impl Mapper<'_> {
                         inputs.push((Name::new(port_name), value));
                     }
                     if dir == PortDir::InOut
-                        && let Some(port_name) = bel.port("oe")
+                        && let Some((port_name, active_low)) = bel.enable_port()
                     {
-                        let one = const_expr(module, Const::ones(1), span);
-                        inputs.push((Name::new(port_name), one));
+                        let port_name = Name::new(port_name);
+                        // One bit, whatever the port's width: an enable
+                        // turns the whole bus around at once, which is what
+                        // a ULPI bus and every other turnaround does.
+                        let enable = match tristate {
+                            // Already in the sense this pin wants: the
+                            // inversion, if the pin needed one, happened
+                            // where the enable was named.
+                            Some((_, _, enable)) => enable,
+                            // No enable stated, so the pad drives always,
+                            // which on a tri-state pin is a *zero* and on
+                            // an output enable a one. Writing the same
+                            // constant for both is the bug this role split
+                            // exists to make impossible.
+                            None if active_low => const_expr(module, Const::zero(1), span),
+                            None => const_expr(module, Const::ones(1), span),
+                        };
+                        inputs.push((port_name, enable));
                     }
-                    self.io_cell(module, bel, &site, bit, inputs, vec![(pad_port, net)]);
+                    // The way back in. A bidirectional pad reads the pin,
+                    // and that value is what the port's own net carries
+                    // now that the tri-state driver is gone.
+                    let mut outputs = vec![(pad_port, net)];
+                    if tristate.is_some()
+                        && let Some(port_name) = bel.port("din")
+                    {
+                        let read = add_net(module, &format!("{name}$in{bit}"), Type::bit(), span);
+                        outputs.push((Name::new(port_name), read));
+                        low_bits.push(net_expr(module, read, span));
+                    }
+                    self.io_cell(module, bel, &site, bit, inputs, outputs);
                 }
             }
         }
@@ -2915,7 +3010,7 @@ impl Mapper<'_> {
             };
             add_assign(module, pad, value, span);
         }
-        if dir == PortDir::InOut {
+        if dir == PortDir::InOut && tristate.is_none() {
             self.diags.push(
                 Diagnostic::warning(format!(
                     "inout port `{name}` gets an output-only buffer"
@@ -2923,7 +3018,7 @@ impl Mapper<'_> {
                 .with_code(PARTIAL_IO)
                 .with_span(span)
                 .with_note(
-                    "the output enable is tied active and the input path is left unconnected: Reticle does not infer a tri-state enable for a port yet",
+                    "the pad drives at all times and the input path is left unconnected: an `inout` port becomes a bidirectional pad when a tri-state driver says when it drives — `bufif1 (port, data, enable);` in Verilog, or a conditional assignment to `'Z'` in VHDL",
                 ),
             );
         }
@@ -2960,6 +3055,52 @@ impl Mapper<'_> {
             ddr: ddr_report,
             delay: delay.map(|plan| (plan.steps, plan.bel.name.clone())),
         });
+    }
+
+    /// The tri-state driver of `net`, as `(cell, data, enable)`, when
+    /// exactly one cell drives the whole net and it is a
+    /// [`CellKind::Tristate`].
+    ///
+    /// # Why the whole net and nothing less
+    ///
+    /// A bidirectional pad is one buffer per bit and one enable for the
+    /// bus, and the enable has to be the *same* signal on every bit: a
+    /// pad whose data comes from one place and whose enable comes from
+    /// another is two half-turnarounds and not a bus. The IR's `Tristate`
+    /// cell is exactly that shape — `y` and `a` the same width, `en` one
+    /// bit — so requiring that one such cell drives the whole net is the
+    /// same requirement, stated where it can be checked.
+    ///
+    /// Anything else answers `None` and the port is buffered as an output,
+    /// with a warning saying so: a net two tri-states share (a real bus,
+    /// resolved in the fabric, which no FPGA does), a net a tri-state
+    /// drives only part of, a tri-state whose output is not the port's own
+    /// net. None of those is refused, because refusing would make a design
+    /// that used to build stop building; each is reported.
+    fn absorbed_tristate(
+        &mut self,
+        module: &Module,
+        net: NetId,
+    ) -> Option<(CellId, ExprId, ExprId)> {
+        let mut found = None;
+        for (id, cell) in module.cells.iter() {
+            let drives = cell.outputs.iter().any(|(_, out)| *out == net);
+            if !drives {
+                continue;
+            }
+            if cell.kind != CellKind::Tristate {
+                return None;
+            }
+            if found.is_some() {
+                // Two tri-states on one net: a bus the fabric would have
+                // to resolve, which it cannot.
+                return None;
+            }
+            let data = cell.inputs.iter().find(|(p, _)| p.as_str() == "a")?;
+            let enable = cell.inputs.iter().find(|(p, _)| p.as_str() == "en")?;
+            found = Some((id, data.1, enable.1));
+        }
+        found
     }
 
     /// One IO buffer cell, with the parameters its direction and options
@@ -5028,6 +5169,200 @@ mod tests {
         );
         let text = diags.render(&sources);
         assert!(text.contains("delays at most 127 steps"), "{text}");
+    }
+
+    /// An `inout` port whose net a tri-state cell drives becomes a real
+    /// bidirectional buffer: the cell's data on `dout`, its enable on the
+    /// buffer's enable pin **in that pin's own sense**, and the port's net
+    /// re-driven from `din` so the design reads the pin back.
+    ///
+    /// The sense is the part worth a test. A `TRELLIS_IO`'s `T` and an
+    /// `IOBUF`'s `T` are *tristates* — a one releases the pad — where an
+    /// `SB_IO`'s `OUTPUT_ENABLE` is an *output enable* and a one drives it.
+    /// The `.dev` files say which with `oen=` or `oe=`, and this asserts
+    /// that the same source produces opposite pin polarities on the two
+    /// families. Getting it backwards is a bus that drives when it should
+    /// listen, and nothing structural notices: the pin is connected either
+    /// way.
+    #[test]
+    fn an_inout_port_with_a_tristate_driver_becomes_a_bidirectional_buffer() {
+        for (device, primitive, enable, inverted) in [
+            ("ecp5-12f-CABGA256", "TRELLIS_IO", "T", true),
+            ("ice40-hx1k-tq144", "SB_IO", "OUTPUT_ENABLE", false),
+        ] {
+            let (sources, span) = span();
+            let mut b = ModuleBuilder::new("top", span);
+            let data = b.input("data", Type::bits(2));
+            let oe = b.input("oe", Type::bit());
+            let bus = b.inout("bus", Type::bits(2));
+            let seen = b.output("seen", Type::bits(2));
+            let data_e = b.net(data);
+            let oe_e = b.net(oe);
+            b.cell(
+                "tri",
+                CellKind::Tristate,
+                vec![(Name::new("a"), data_e), (Name::new("en"), oe_e)],
+                vec![(Name::new("y"), bus)],
+            );
+            let bus_e = b.net(bus);
+            b.assign(seen, bus_e);
+            let mut design = Design::new();
+            let top = design.add_module(b.finish());
+            design.top = Some(top);
+
+            let mut diags = Diagnostics::new();
+            let constraints = Constraints::default();
+            let report = map_with(&mut design, top, device, &constraints, &mut diags);
+            let _ = &sources;
+            assert!(!diags.has_errors(), "{device}: {}", diags.render(&sources));
+            // No warning: this is a bidirectional pad and not a port that
+            // had to be approximated by an output.
+            assert!(
+                diags.render(&sources).is_empty(),
+                "{device}: {}",
+                diags.render(&sources)
+            );
+            assert!(
+                report.io_buffers.iter().any(|i| i.port == "bus"),
+                "{device}"
+            );
+
+            // The tri-state cell is gone: `din` drives the port's net now,
+            // and a net cannot have two drivers.
+            let module = design.module(top);
+            assert!(
+                module
+                    .cells
+                    .iter()
+                    .all(|(_, c)| c.kind != CellKind::Tristate),
+                "{device}: the tri-state cell is still there"
+            );
+            assert_eq!(
+                cells_named(&design, top, primitive),
+                2 + 1 + 2 + 2,
+                "{device}"
+            );
+            assert!(
+                validate(&design).is_empty(),
+                "{device}: {:?}",
+                validate(&design)
+            );
+
+            // Bit 0's buffer: every one of the four pins wired, and the
+            // enable driven by a net rather than by a constant.
+            let module = design.module(top);
+            let cell = module.cell_by_name("bus$io0").unwrap();
+            let cell = &module.cells[cell];
+            for port in ["I", "O", "B", "T"]
+                .iter()
+                .filter(|_| primitive == "TRELLIS_IO")
+            {
+                assert!(
+                    cell.inputs.iter().any(|(p, _)| p.as_str() == *port)
+                        || cell.outputs.iter().any(|(p, _)| p.as_str() == *port),
+                    "{device}: no `{port}`"
+                );
+            }
+            let (_, driven) = cell
+                .inputs
+                .iter()
+                .find(|(p, _)| p.as_str() == enable)
+                .unwrap_or_else(|| panic!("{device}: no `{enable}` pin"));
+            // `bus$oe` is the net the pass names the enable, and it carries
+            // `oe` or `!oe` depending on the pin's sense.
+            let net = module
+                .net_by_name("bus$oe")
+                .unwrap_or_else(|| panic!("{device}: no enable net"));
+            assert_eq!(
+                module.expr(*driven).as_net(),
+                Some(net),
+                "{device}: the enable pin is not the named enable net"
+            );
+            let assign = module
+                .assigns
+                .iter()
+                .find(|a| matches!(a.target, Lvalue::Net(n) if n == net))
+                .unwrap_or_else(|| panic!("{device}: the enable net is not assigned"));
+            let inverts = matches!(
+                module.expr(assign.value).kind,
+                ExprKind::Unary {
+                    op: UnaryOp::LogicNot | UnaryOp::Not,
+                    ..
+                }
+            );
+            assert_eq!(
+                inverts,
+                inverted,
+                "{device}: `{enable}` is {}inverted and should be {}inverted",
+                if inverts { "" } else { "not " },
+                if inverted { "" } else { "not " }
+            );
+
+            // And the port's net is driven from the buffers' `din`.
+            let core = module.net_by_name("bus").expect("the core net");
+            assert!(
+                module
+                    .assigns
+                    .iter()
+                    .any(|a| matches!(a.target, Lvalue::Net(n) if n == core)),
+                "{device}: nothing drives the port's net, so the pin is not read back"
+            );
+        }
+    }
+
+    /// An `inout` port with no tri-state driver is still buffered as an
+    /// output, with a warning — and its enable is the constant that makes
+    /// the pad **drive**, which is a zero on a tristate pin and a one on an
+    /// output-enable pin.
+    ///
+    /// Writing the same constant for both is the bug the two roles exist to
+    /// make impossible: before they were split, every family said `oe` and
+    /// two of the four meant `oen`, so this port got a permanently released
+    /// pad on Xilinx and Lattice while the warning said the enable was
+    /// "tied active".
+    #[test]
+    fn an_inout_port_with_no_tristate_driver_is_told_to_drive() {
+        for (device, enable, drives) in [
+            ("ecp5-12f-CABGA256", "T", false),
+            ("ice40-hx1k-tq144", "OUTPUT_ENABLE", true),
+        ] {
+            let (sources, span) = span();
+            let mut b = ModuleBuilder::new("top", span);
+            let data = b.input("data", Type::bit());
+            let bus = b.inout("bus", Type::bit());
+            let data_e = b.net(data);
+            b.assign(bus, data_e);
+            let mut design = Design::new();
+            let top = design.add_module(b.finish());
+            design.top = Some(top);
+
+            let mut diags = Diagnostics::new();
+            let constraints = Constraints::default();
+            let _ = map_with(&mut design, top, device, &constraints, &mut diags);
+            let text = diags.render(&sources);
+            assert!(
+                text.contains("gets an output-only buffer"),
+                "{device}: {text}"
+            );
+            let module = design.module(top);
+            let cell = module.cell_by_name("bus$io0").unwrap();
+            let cell = &module.cells[cell];
+            let (_, driven) = cell
+                .inputs
+                .iter()
+                .find(|(p, _)| p.as_str() == enable)
+                .unwrap_or_else(|| panic!("{device}: no `{enable}` pin"));
+            let value = module.expr(*driven).as_const().cloned();
+            assert_eq!(
+                value,
+                Some(if drives {
+                    crate::logic::Logic::ones(1)
+                } else {
+                    crate::logic::Logic::zero(1)
+                }),
+                "{device}: `{enable}` does not hold the pad driving"
+            );
+        }
     }
 
     #[test]

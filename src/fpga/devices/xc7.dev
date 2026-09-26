@@ -170,12 +170,21 @@
 #     fallback that uses this primitive declines a memory with initial
 #     contents rather than loading them.
 #   * IO: IBUF (pad `I`, fabric `O`), OBUF (fabric `I`, pad `O`) and
-#     IOBUF (pad `IO`, `O` in, `I` out, `T` the active-high tristate).
-#     HIGH confidence. Note that the three do not agree on what the pad
+#     IOBUF (pad `IO`, `O` in, `I` out, `T` the tristate). HIGH
+#     confidence. Note that the three do not agree on what the pad
 #     pin is called, which is why each is a separate `bel … io for …`
-#     line; see the `.dev` format notes on IO buffers. OBUFT is
-#     declared as `other` so a netlist check knows it: Reticle does not
-#     infer a tristate enable for a port, so it never instantiates one.
+#     line; see the `.dev` format notes on IO buffers. `T` is a
+#     TRISTATE and not an output enable — a one on it releases the pad —
+#     so it is declared `oen=T`. This file said `oe=T` until 2026-09-27,
+#     which was wrong by exactly one inversion and had no symptom because
+#     nothing ever drove the pin: the mapper tied it to a constant one,
+#     which on this primitive means permanently high impedance while the
+#     warning it printed said the enable was "tied active". OBUFT is
+#     declared as `other` so a netlist check knows it: Reticle infers a
+#     tristate enable for an `inout` port with a tri-state driver, but it
+#     builds it out of `IOBUF`, so it never instantiates an `OBUFT`.
+#     NOTHING HAS PUT A TRISTATE ON A 7-SERIES PART: the ECP5 backend is
+#     where that was first done, and `docs/fpga-trellis.md` has it.
 #     IOSTANDARD, DRIVE and SLEW are parameters of these primitives in
 #     the library, but Vivado takes them from the XDC, which is where
 #     Reticle puts them, so no `param_*` clause sets them here.
@@ -324,8 +333,8 @@ device xc7a35t-cpg236
   bel FDPE_1 ff mode negedge,enable,async_set port clk=C d=D q=Q en=CE rst=PRE param INIT=1'b1
   bel IBUF io for in port pad=I din=O
   bel OBUF io for out port pad=O dout=I
-  bel IOBUF io for inout port pad=IO din=O dout=I oe=T
-  bel OBUFT other port pad=O dout=I oe=T
+  bel IOBUF io for inout port pad=IO din=O dout=I oen=T
+  bel OBUFT other port pad=O dout=I oen=T
   bel BUFG gb count 32 port i=I o=O
   bel RAM64X1D lutram port wclk=WCLK we=WE waddr=A0,A1,A2,A3,A4,A5 din=D raddr=DPRA0,DPRA1,DPRA2,DPRA3,DPRA4,DPRA5 dout=DPO
   bram RAMB18E1

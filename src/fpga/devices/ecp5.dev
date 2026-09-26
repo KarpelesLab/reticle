@@ -5,7 +5,10 @@
 #   * Primitive names and ports are the ones the open flow uses, that is
 #     the cells Yosys' `synth_ecp5` emits and nextpnr-ecp5 consumes: LUT4
 #     (A, B, C, D -> Z with INIT), TRELLIS_FF (CLK, DI, CE, LSR -> Q),
-#     CCU2C for the carry chain, TRELLIS_IO (B, I, O, T with DIR) for IO,
+#     CCU2C for the carry chain, TRELLIS_IO (B, I, O, T with DIR) for IO
+#     — where `T` is a TRISTATE and not an output enable, `assign B = T ?
+#     1'bz : I` in Yosys' own `cells_sim.v`, hence `oen=T` below and not
+#     `oe=T`, which is what this file said until 2026-09-27 —
 #     DCCA for a clock buffer, DP16KD for block RAM, MULT18X18D for the
 #     multiplier and EHXPLLL for the PLL. High confidence for the names
 #     and for the LUT, FF, IO and clock-buffer ports.
@@ -162,7 +165,7 @@ device ecp5-25f-CABGA381
   bel TRELLIS_FF ff mode negedge,enable,sync_set,active_low port clk=CLK d=DI q=Q en=CE rst=LSR param GSR="DISABLED" REGMODE="FF" CEMUX="CE" CLKMUX="INV" LSRMUX="INV" SRMODE="LSR_OVER_CE" REGSET="SET"
   bel TRELLIS_FF ff mode negedge,enable,async_set port clk=CLK d=DI q=Q en=CE rst=LSR param GSR="DISABLED" REGMODE="FF" CEMUX="CE" CLKMUX="INV" LSRMUX="LSR" SRMODE="ASYNC" REGSET="SET"
   bel TRELLIS_FF ff mode negedge,enable,async_set,active_low port clk=CLK d=DI q=Q en=CE rst=LSR param GSR="DISABLED" REGMODE="FF" CEMUX="CE" CLKMUX="INV" LSRMUX="INV" SRMODE="ASYNC" REGSET="SET"
-  bel TRELLIS_IO io port pad=B din=O dout=I oe=T param_in DIR="INPUT" param_out DIR="OUTPUT" param_inout DIR="BIDIR" param_pullup PULLMODE="UP"
+  bel TRELLIS_IO io port pad=B din=O dout=I oen=T param_in DIR="INPUT" param_out DIR="OUTPUT" param_inout DIR="BIDIR" param_pullup PULLMODE="UP"
   bel DCCA gb count 16 port i=CLKI o=CLKO en=CE
   bel IDDRX1F ddr_in port d=D clk=SCLK rst=RST q0=Q0 q1=Q1
   bel ODDRX1F ddr_out port d0=D0 d1=D1 clk=SCLK rst=RST q=Q
@@ -282,7 +285,7 @@ device ecp5-12f-CABGA256
   bel TRELLIS_FF ff mode negedge,enable,sync_set,active_low port clk=CLK d=DI q=Q en=CE rst=LSR param GSR="DISABLED" REGMODE="FF" CEMUX="CE" CLKMUX="INV" LSRMUX="INV" SRMODE="LSR_OVER_CE" REGSET="SET"
   bel TRELLIS_FF ff mode negedge,enable,async_set port clk=CLK d=DI q=Q en=CE rst=LSR param GSR="DISABLED" REGMODE="FF" CEMUX="CE" CLKMUX="INV" LSRMUX="LSR" SRMODE="ASYNC" REGSET="SET"
   bel TRELLIS_FF ff mode negedge,enable,async_set,active_low port clk=CLK d=DI q=Q en=CE rst=LSR param GSR="DISABLED" REGMODE="FF" CEMUX="CE" CLKMUX="INV" LSRMUX="INV" SRMODE="ASYNC" REGSET="SET"
-  bel TRELLIS_IO io port pad=B din=O dout=I oe=T param_in DIR="INPUT" param_out DIR="OUTPUT" param_inout DIR="BIDIR" param_pullup PULLMODE="UP"
+  bel TRELLIS_IO io port pad=B din=O dout=I oen=T param_in DIR="INPUT" param_out DIR="OUTPUT" param_inout DIR="BIDIR" param_pullup PULLMODE="UP"
   bel DCCA gb count 16 port i=CLKI o=CLKO en=CE
   bel IDDRX1F ddr_in port d=D clk=SCLK rst=RST q0=Q0 q1=Q1
   bel ODDRX1F ddr_out port d0=D0 d1=D1 clk=SCLK rst=RST q=Q
@@ -367,7 +370,7 @@ device ecp5-45f-CABGA381
   bel TRELLIS_FF ff mode negedge,enable,sync_set,active_low port clk=CLK d=DI q=Q en=CE rst=LSR param GSR="DISABLED" REGMODE="FF" CEMUX="CE" CLKMUX="INV" LSRMUX="INV" SRMODE="LSR_OVER_CE" REGSET="SET"
   bel TRELLIS_FF ff mode negedge,enable,async_set port clk=CLK d=DI q=Q en=CE rst=LSR param GSR="DISABLED" REGMODE="FF" CEMUX="CE" CLKMUX="INV" LSRMUX="LSR" SRMODE="ASYNC" REGSET="SET"
   bel TRELLIS_FF ff mode negedge,enable,async_set,active_low port clk=CLK d=DI q=Q en=CE rst=LSR param GSR="DISABLED" REGMODE="FF" CEMUX="CE" CLKMUX="INV" LSRMUX="INV" SRMODE="ASYNC" REGSET="SET"
-  bel TRELLIS_IO io port pad=B din=O dout=I oe=T param_in DIR="INPUT" param_out DIR="OUTPUT" param_inout DIR="BIDIR" param_pullup PULLMODE="UP"
+  bel TRELLIS_IO io port pad=B din=O dout=I oen=T param_in DIR="INPUT" param_out DIR="OUTPUT" param_inout DIR="BIDIR" param_pullup PULLMODE="UP"
   bel DCCA gb count 16 port i=CLKI o=CLKO en=CE
   bel IDDRX1F ddr_in port d=D clk=SCLK rst=RST q0=Q0 q1=Q1
   bel ODDRX1F ddr_out port d0=D0 d1=D1 clk=SCLK rst=RST q=Q

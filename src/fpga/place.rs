@@ -487,16 +487,26 @@ fn pin_roles(graph: &RoutingGraph) -> std::collections::BTreeSet<(String, String
 /// of several under a role (a LUT's `i=I0,I1,I2,I3`) takes that role plus
 /// its position; a block RAM's ports take their physical port's index as
 /// a prefix, since both ports call their clock `clk`.
+///
+/// One role is renamed on the way through: an IO buffer's `oen` — the
+/// active-low spelling of its enable, see
+/// [`BelKind::enable_port`](super::device::BelKind::enable_port) — becomes
+/// `oe`. The two are the same *pin*, differing only in which way round
+/// its logic is, and the routing graph knows nothing about logic: every
+/// architecture declares the wire under `oe` and a fabric that had to
+/// declare it twice would be describing metal that does not differ.
+/// Whether the pin is inverted is decided once, where the buffer is built.
 fn describe(device: &Device, primitive: &str) -> Option<(String, Vec<(String, String)>)> {
     let mut bases: Vec<(String, String)> = Vec::new();
     let mut kind: Option<String> = None;
     for bel in device.bels.iter().filter(|b| b.name == primitive) {
         kind = Some(bel.role.keyword().to_owned());
         for (role, names) in &bel.ports {
+            let role = if role == "oen" { "oe" } else { role.as_str() };
             let names: Vec<&str> = names.split(',').collect();
             for (index, name) in names.iter().enumerate() {
                 let base = if names.len() == 1 {
-                    role.clone()
+                    role.to_owned()
                 } else {
                     format!("{role}{index}")
                 };

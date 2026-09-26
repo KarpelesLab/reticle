@@ -109,11 +109,18 @@
 //! ```text
 //! bel IBUF  io for in    port pad=I  din=O
 //! bel OBUF  io for out   port pad=O  dout=I
-//! bel IOBUF io for inout port pad=IO din=O dout=I oe=T
+//! bel IOBUF io for inout port pad=IO din=O dout=I oen=T
 //! ```
 //!
 //! and [`Device::io_bel`] picks between them. A line with no `for`
 //! serves every direction, which is what the one-buffer families say.
+//!
+//! The enable of a bidirectional buffer has **two role spellings** and
+//! they mean opposite things: `oe=<port>` is an output enable, where a
+//! one drives the pad, and `oen=<port>` is a tristate, where a one
+//! releases it. Every family has one or the other in silicon and none has
+//! both. See [`BelKind::enable_port`], which is also where the reason a
+//! marker would not have done is written down.
 //!
 //! # Carry elements, one bit or several
 //!
@@ -496,15 +503,20 @@ pub struct BelKind {
     /// How many the device has, when the number is known.
     pub count: Option<u32>,
     /// Abstract role to port name, in file order: `pad`, `din`, `dout`,
-    /// `oe` for an IO buffer, `i`/`o` for a buffer or LUT, `ci`/`i0`/`i1`/
-    /// `co` for a carry element. A role whose primitive has several ports
-    /// (a LUT's inputs) lists them comma-separated in one entry.
+    /// `oe` or `oen` for an IO buffer, `i`/`o` for a buffer or LUT,
+    /// `ci`/`i0`/`i1`/ `co` for a carry element. A role whose primitive
+    /// has several ports (a LUT's inputs) lists them comma-separated in
+    /// one entry.
     ///
     /// The two data roles of an IO buffer are named from the fabric's
     /// point of view: `din` is the port that delivers the pad's value *to*
     /// the design, `dout` the port that takes the design's value *to* the
     /// pad. On `SB_IO` they are `D_IN_0` and `D_OUT_0`, on `TRELLIS_IO`
     /// they are `O` and `I`.
+    ///
+    /// The enable is named from the *silicon's* point of view instead, and
+    /// there are two roles for it because families disagree about which
+    /// way round it is: see [`BelKind::enable_port`].
     pub ports: Vec<(String, String)>,
     /// Parameters every instance of the primitive carries, in file order.
     pub params: Vec<(String, AttrValue)>,
@@ -556,6 +568,47 @@ impl BelKind {
             .iter()
             .find(|(r, _)| r == role)
             .map(|(_, n)| n.as_str())
+    }
+
+    /// The port that turns the output driver on, and whether a **one** on
+    /// it turns the driver *off*.
+    ///
+    /// Two roles name this one pin and they are opposites, because the
+    /// silicon is:
+    ///
+    /// * `oe` — an **output enable**. A one drives the pad. iCE40's
+    ///   `SB_IO.OUTPUT_ENABLE` and the generic device's `IOBUF.OE`.
+    /// * `oen` — a **tristate**. A one releases the pad to high
+    ///   impedance. Xilinx's `IOBUF.T` and `OBUFT.T`, Lattice's
+    ///   `TRELLIS_IO.T`, Gowin's `IOBUF.OEN`.
+    ///
+    /// The answer is `(port, active_low)`, where `active_low` is true for
+    /// the second kind, and it is what
+    /// [`super::primitives`] drives when it builds a bidirectional pad.
+    /// A file that names both roles is answered with `oe`, since that is
+    /// the one whose sense needs no inversion.
+    ///
+    /// # Why a role rather than a marker
+    ///
+    /// Both spellings are *the same pin*, so a file that got the sense
+    /// wrong produced a bus that drove when it should have listened, and
+    /// nothing structural could notice: the pin is connected either way
+    /// and the netlist is well formed either way. Before this, every
+    /// family said `oe` and two of the four meant `oen`.
+    ///
+    /// ```
+    /// let ecp5 = reticle::fpga::target("ecp5-12f-CABGA256").unwrap();
+    /// let io = ecp5.io_bel("inout").unwrap();
+    /// assert_eq!(io.enable_port(), Some(("T", true)));
+    /// let ice40 = reticle::fpga::target("ice40-hx1k-tq144").unwrap();
+    /// let io = ice40.io_bel("inout").unwrap();
+    /// assert_eq!(io.enable_port(), Some(("OUTPUT_ENABLE", false)));
+    /// ```
+    pub fn enable_port(&self) -> Option<(&str, bool)> {
+        if let Some(port) = self.port("oe") {
+            return Some((port, false));
+        }
+        self.port("oen").map(|port| (port, true))
     }
 
     /// The port names playing `role`, splitting the comma-separated form a

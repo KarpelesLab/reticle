@@ -139,15 +139,22 @@
 #     instantiates `TBUF(.I, .O, .OEN)`, `examples/emcu-blinky.v`
 #     instantiates `IOBUF(.O, .IO, .I, .OEN)` and `examples/elvds.v`
 #     instantiates `ELVDS_TBUF(.I, .O, .OB, .OEN)`.
-#     TBUF AND IOBUF ARE DECLARED `other` AND NEVER INSTANTIATED, for a
-#     specific reason: their output enable is `OEN` and it is ACTIVE LOW
-#     — every one of those examples writes `.OEN(~key)` or
-#     `.OEN(~gpio_oen[0])`. Reticle's `oe` role is active high and the
-#     `.dev` model has no way to say otherwise, so declaring `oe=OEN`
-#     would give every tristate design an inverted enable: a bus that
-#     drives when it should listen. A tristate port is therefore
-#     reported as unbuildable rather than built backwards. Adding an
-#     `active_low` marker to the `io` line is the fix.
+#     THEIR ENABLE IS `OEN` AND IT IS ACTIVE LOW — every one of those
+#     examples writes `.OEN(~key)` or `.OEN(~gpio_oen[0])` — so both are
+#     declared `oen=OEN` and not `oe=OEN`. That distinction used not to
+#     be expressible and is the reason this file used to give: an `oe`
+#     role is active high, so declaring `oe=OEN` would have given every
+#     tristate design an inverted enable, a bus that drives when it
+#     should listen. `oen` says it now (see `fpga::device`'s
+#     `BelKind::enable_port`), and the same correction was applied to the
+#     Xilinx and Lattice files, where `oe=T` was wrong the same way.
+#     TBUF AND IOBUF ARE STILL DECLARED `other` AND NEVER INSTANTIATED,
+#     for a smaller reason than before: nothing has built a tristate on
+#     this family or put one on a Gowin part, and this file does not
+#     claim what has not been tried. A tristate port is therefore still
+#     reported as unbuildable rather than built untested. Promoting
+#     `IOBUF` to `io for inout` is all that is left to try, and the
+#     backend has no configuration bits for it either way (see below).
 #     There is no `pad` wire in the fabric either way: a package ball is
 #     not a wire a router can reach, which is what `fpga::xray` says
 #     about the 7-series IO too.
@@ -369,8 +376,8 @@ device gw2a-18-pg256
   bel DFFNPE ff mode negedge,enable,async_set port clk=CLK d=D q=Q en=CE rst=PRESET
   bel IBUF io for in port pad=I din=O
   bel OBUF io for out port pad=O dout=I
-  bel TBUF other port pad=O dout=I oe=OEN
-  bel IOBUF other port pad=IO din=O dout=I oe=OEN
+  bel TBUF other port pad=O dout=I oen=OEN
+  bel IOBUF other port pad=IO din=O dout=I oen=OEN
   bel ALU other port ci=CIN co=COUT i0=I0 i1=I1
   bel MUX2_LUT5 other
   bel MUX2_LUT6 other

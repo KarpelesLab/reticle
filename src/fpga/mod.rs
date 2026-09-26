@@ -347,7 +347,7 @@ mod tests {
             for (direction, roles) in [
                 ("in", &["pad", "din"][..]),
                 ("out", &["pad", "dout"][..]),
-                ("inout", &["pad", "din", "dout", "oe"][..]),
+                ("inout", &["pad", "din", "dout"][..]),
             ] {
                 let Some(io) = device.io_bel(direction) else {
                     assert!(
@@ -363,6 +363,26 @@ mod tests {
                     device.name,
                     io.name
                 );
+                // The enable is the one role with two spellings, because
+                // families disagree about which way round the pin is: `oe`
+                // drives on a one, `oen` releases on a one. A bidirectional
+                // buffer needs one of them and a file that named neither
+                // would get a pad that drives at all times with nothing
+                // saying so. See `BelKind::enable_port`.
+                if direction == "inout" {
+                    assert!(
+                        io.enable_port().is_some(),
+                        "{}: the inout buffer `{}` names neither `oe` nor `oen`",
+                        device.name,
+                        io.name
+                    );
+                    assert!(
+                        !(io.port("oe").is_some() && io.port("oen").is_some()),
+                        "{}: the inout buffer `{}` names both `oe` and `oen`, which are one pin",
+                        device.name,
+                        io.name
+                    );
+                }
             }
             match device.bel(BelRole::GlobalBuffer) {
                 Some(gb) => assert!(gb.has_ports(&["i", "o"]), "{}", device.name),
