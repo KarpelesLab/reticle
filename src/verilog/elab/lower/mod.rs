@@ -1126,6 +1126,32 @@ impl<'cx, 'ast> Lowerer<'cx, 'ast> {
                 width::check_assign(&mut self.env, &name, width, &info, pair.span);
             }
             self.b.span = pair.span;
+            // `assign bus = en ? data : 8'bz;` is a tri-state driver and
+            // not an assignment of an unknown value. The IR has a cell for
+            // it, so it becomes one here, which is what lets an `inout`
+            // port become a bidirectional pad: `fpga::primitives` looks for
+            // exactly this cell on the port's net. `bufif1` reaches the
+            // same cell through `inst.rs`, and VHDL's `x when en else 'Z'`
+            // through `vhdl::elab::conc`.
+            if delay.is_none()
+                && let ir::Lvalue::Net(net) = &target
+                && let Some((data, cond, invert)) = self.tristate_shape(value)
+            {
+                self.b.span = pair.span;
+                let enable = if invert { self.b.lnot(cond) } else { cond };
+                let name = self.fresh("tri");
+                let index = self.b.module().cells.len();
+                let cell = self.b.cell(
+                    name,
+                    ir::CellKind::Tristate,
+                    vec![(ir::Name::new("a"), data), (ir::Name::new("en"), enable)],
+                    vec![(ir::Name::new("y"), *net)],
+                );
+                let attrs = self.attrs_of(&item.attrs);
+                self.b.module_mut().cells[cell].attrs = attrs;
+                self.record_driver(*net, DriverKey::Instance(index), true, pair.span);
+                continue;
+            }
             self.b.assign_after(target.clone(), value, delay);
             let attrs = self.attrs_of(&item.attrs);
             if let Some(a) = self.b.module_mut().assigns.last_mut() {
@@ -1133,6 +1159,39 @@ impl<'cx, 'ast> Lowerer<'cx, 'ast> {
             }
             self.note_assign_drivers(&target, DriverKey::Continuous, pair.span, false);
         }
+    }
+
+    /// A bus driver written as a conditional, as `(data, condition, invert)`
+    /// where `invert` says the condition **releases** the net rather than
+    /// driving it.
+    ///
+    /// Both ways round occur, and a ULPI data bus is usually the second,
+    /// because the transceiver's `dir` says when the transceiver owns it:
+    ///
+    /// ```text
+    /// assign bus = oe  ? data : 8'bz;   // drive while `oe`
+    /// assign bus = dir ? 8'bz : data;   // release while `dir`
+    /// ```
+    ///
+    /// Only an **all-`z`** alternative counts, and only a whole net as the
+    /// target. `en ? a : 1'bx` is not this, and neither is a ternary whose
+    /// `z` half is one bit of a wider value: a partial tri-state has no IR
+    /// form, and turning one into a full one would change what the design
+    /// means. `8'bz` and `{8{1'bz}}` are both taken, because the operand is
+    /// read after folding, which is where they become the same constant.
+    fn tristate_shape(&self, value: ir::ExprId) -> Option<(ir::ExprId, ir::ExprId, bool)> {
+        let ir::ExprKind::Ternary { cond, then_, else_ } = &self.b.module().expr(value).kind else {
+            return None;
+        };
+        let all_z = |id: ir::ExprId, data: ir::ExprId| {
+            let value = self.b.module().expr(id).as_const()?;
+            let width = self.b.module().expr(data).ty.width()?;
+            (*value == crate::logic::Logic::z(width)).then_some(())
+        };
+        if all_z(*else_, *then_).is_some() {
+            return Some((*then_, *cond, false));
+        }
+        all_z(*then_, *else_).map(|()| (*else_, *cond, true))
     }
 
     /// A continuous assignment to one net, used by `wire x = e;`.

@@ -3,18 +3,35 @@ top tristate
 module tristate
   net %a u1 wire
   net %en u1 wire
+  net %d u8 wire
   net %y0 u1 wire
   net %y1 u1 wire
   net %y2 u1 wire
   net %y3 u1 wire
+  net %bus0 u8 wire
+  net %bus1 u8 wire
+  net %bus2 u8 wire
+  net %not_a_bus u8 wire
+  net %partly u8 wire
   port a in %a
   port en in %en
+  port d in %d
   port y0 out %y0
   port y1 out %y1
   port y2 out %y2
   port y3 out %y3
+  port bus0 inout %bus0
+  port bus1 inout %bus1
+  port bus2 inout %bus2
+  port not_a_bus out %not_a_bus
+  port partly out %partly
+  assign %not_a_bus = mux(%en, %d, 8'bxxxxxxxx)
+  assign %partly = mux(%en, %d, 8'bzzzzzzz0)
   cell t0 tristate (a=%a, en=%en) -> (y=%y0)
   cell t1 tristate (a=%a, en=lnot(%en)) -> (y=%y1)
   cell t2 tristate (a=not(%a), en=%en) -> (y=%y2)
   cell t3 tristate (a=not(%a), en=lnot(%en)) -> (y=%y3)
+  cell tri$1 tristate (a=%d, en=%en) -> (y=%bus0)
+  cell tri$2 tristate (a=%d, en=%en) -> (y=%bus1)
+  cell tri$3 tristate (a=%d, en=lnot(%en)) -> (y=%bus2)
 end
