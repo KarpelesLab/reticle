@@ -617,13 +617,18 @@ impl RoutingGraph {
     /// Expands `arch`; see [`Arch::build_graph`].
     fn build(arch: &Arch) -> RoutingGraph {
         let mut nodes: Vec<Wire> = Vec::new();
-        let mut index: HashMap<(u32, u32, String), NodeId> = HashMap::new();
+        // Keyed by a borrowed name, not an owned one. A real fabric has a
+        // million wires and ten million pips, and every pip resolves two
+        // names; with an owned key each of those resolutions allocates a
+        // `String` only to throw it away. The names live in `arch`, which
+        // outlives this function.
+        let mut index: HashMap<(u32, u32, &str), NodeId> = HashMap::new();
         let mut dangling = 0usize;
 
         // Globals first, so their ids are the lowest and stable.
         for name in &arch.globals {
             let id = node_id(nodes.len());
-            index.insert((0, 0, name.clone()), id);
+            index.insert((0, 0, name.as_str()), id);
             nodes.push(Wire {
                 name: name.clone(),
                 tile: (0, 0),
@@ -646,7 +651,7 @@ impl RoutingGraph {
                         continue;
                     }
                     let id = node_id(nodes.len());
-                    index.insert((x, y, wire.name.clone()), id);
+                    index.insert((x, y, wire.name.as_str()), id);
                     nodes.push(Wire {
                         name: wire.name.clone(),
                         tile: (x, y),
@@ -659,13 +664,13 @@ impl RoutingGraph {
 
         let resolve = |wref: &WireRef, x: u32, y: u32| -> Option<NodeId> {
             if wref.global {
-                return index.get(&(0, 0, wref.name.clone())).copied();
+                return index.get(&(0, 0, wref.name.as_str())).copied();
             }
             let ox = i64::from(x) + i64::from(wref.dx);
             let oy = i64::from(y) + i64::from(wref.dy);
             let ox = u32::try_from(ox).ok()?;
             let oy = u32::try_from(oy).ok()?;
-            index.get(&(ox, oy, wref.name.clone())).copied()
+            index.get(&(ox, oy, wref.name.as_str())).copied()
         };
 
         // Every distinct bit pattern once. A pattern belongs to a tile
