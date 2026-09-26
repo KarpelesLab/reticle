@@ -1,5 +1,121 @@
 # A real Lattice ECP5, and a real `.bit`
 
+## A clocked design has been built, and loaded into a part
+
+On 2026-09-26 `testdata/fpga/cynthion/clock_blink.v` — a 26-bit counter off
+the board's own 60 MHz oscillator, blinking two of its LEDs in antiphase —
+was compiled by this flow and loaded into the LFE5U-12F of the Great Scott
+Gadgets Cynthion r1.4 attached to the machine this was written on. **The
+part accepted it and asserted `DONE`** with no fault bit set: status
+`0x00200100`, the same as every run before it, which is exactly why `DONE`
+is not the claim being made. The board went on enumerating at the same USB
+serial number afterwards.
+
+What the flow reports for it:
+
+```
+2491 configuration bit(s) set, 7 pad(s), 72 lookup table(s) and 26
+flip-flop(s) configured, 26/24288 ff, 1/56 gb, 7/120 io, 72/24288 lut
+routed 100 of 100 signal(s) with 1089 pip(s) over 1189 wire(s), and every
+sink was walked back to its driver
+26 flip-flop(s), every clock on a global network: G_HPBX0000 to 26 of them
+all 2491 set bit(s) decode back through the database into 693 arc(s), 189
+field(s) and 72 word(s), with 0 unexplained, and the arcs they select are
+exactly the 693 the router chose
+```
+
+**Whether the LEDs blink has not been watched.** It needs a person, for the
+reason the rest of this file exists, and the person has not been asked yet.
+
+### What a person should look for
+
+**Nothing has to be pressed.** No button, no switch, no host software: the
+oscillator runs as soon as the board is powered, so this starts the moment
+the bitstream is loaded and never stops.
+
+Watch the two LEDs at the end of the `FPGA LEDs` row **farthest from the
+`USER` button** — the same two `button_led.v` uses, `led_n[0]` at the very
+end and `led_n[1]` next to it. They **trade places, over and over, and one
+of them is lit at every instant**:
+
+| | far end | next to it | the other four |
+|---|---|---|---|
+| half the time | **lit** | dark | dark |
+| the other half | dark | **lit** | dark |
+
+**At what rate.** Each LED is on for **0.56 s** and off for 0.56 s, so each
+blinks at **0.89 Hz** — a little slower than one blink a second. Ten full
+blinks take **11.2 seconds**, which is the easiest thing to time by hand.
+
+The arithmetic, so that a wrong counter bit is a wrong *rate* rather than a
+shrug: the oscillator is 60.000 MHz, bit 25 of the counter changes every
+2^25 cycles, and 2^25 / 60e6 = 0.5592 s. A bit out by one would read
+0.45 Hz or 1.8 Hz.
+
+The observation is deliberately a strong one. Exactly one of the two lit,
+always, is a steady state nothing else on this board produces: a dark
+board, a board still running the analyzer gateware from flash, a bitstream
+whose bank rail is missing and a configuration that does nothing all look
+alike, and two LEDs trading places at about one hertz looks like none of
+them. It also distinguishes a *running* clock from a present one — a stuck
+clock freezes the pair in one of its two states, which is visibly different
+from both being dark.
+
+### What was checked instead, since `DONE` is not evidence
+
+Four things, in order of how much they are worth.
+
+**1. Every bit of the bitstream was read back through Project Trellis' own
+database, and it says what the router said.** All 2491 bits, over 77
+tiles, with **nothing left over**, and the set of connections the bits
+select — resolved back into the same wires and positions the router works
+in — is **exactly** the 693 arcs the router chose. That second half is the
+check worth having, and it is now run by `reticle fpga --bitstream` itself
+rather than only by a test: a bitstream whose bits select something else is
+refused instead of written.
+
+**2. The clock's path was read off the bits**, hop by hop, and it is the one
+`ClockNetwork` describes at the positions `globals.json` gives:
+
+| Hop | Arc the bits select |
+|---|---|
+| pad to the fabric | general interconnect from `JPADDIB_PIO` on ball A8 to a `JD7` |
+| into a buffer | `G_TDCC0CLKI <- G_JTRQPCLKCIB1`, in `TMID_0` at (31, 0) |
+| the buffer | **no bits at all**; see "what `ecppack` writes for a clock" |
+| the centre mux | `G_URPCLK0 <- G_VPFS0000`, in `CMUX_UR_0` at (32, 13) |
+| the spines | `G_VPTX0000 <- G_HPRX0000` at (41, 13) and (59, 13) |
+| the taps | `R_HPBX0000 <- G_VPTX0000` at (42, 5), and `L_`/`R_` at column 60 for every row with a sink |
+| into each logic tile | `CLK0 <- G_HPBX0000` at (50, 5), (51, 4), (51, 5), (52, 5) and (56, 3) |
+| into each slice | `MUXCLK<c> <- CLK0` |
+
+`tests/fpga_trellis.rs::the_clocked_design_routes_and_configures_what_its_header_promises`
+asserts that walk from the bits, and that **every one of the 26 flip-flops'
+clocks came off a branch wire** rather than off an ordinary interconnect
+wire that happens to reach a clock mux. The flow refuses to write a
+bitstream where one did not, which matters because such a clock routes,
+verifies and configures — what it fails to do is control skew, and nothing
+structural would notice.
+
+**3. The question was asked the other way round for the clock as well** —
+not "what differs" but "what does `ecppack` write, in full" — against
+`analyzer.bit`, which is the one of Great Scott Gadgets' three bitstreams
+that is clocked. See "Everything Lattice's own packer writes for a clock",
+which is where the one surprise is.
+
+**4. The one unsound simplification in this backend is now checked rather
+than assumed**, for the arcs a route takes — which is where a clocked design
+meets it, since a centre mux encodes its source as a six-bit code. See "A
+bit a feature wants clear", which also says which half of the
+simplification is still covered only by inspection.
+
+### What this settles, and what it does not
+
+It settles that the chain from Verilog to a *clocked* configuration a real
+ECP5 accepts closes, that the clock goes on the global network rather than
+through data wires, and that every bit of it is one the database explains
+and selects the connection it was meant to. It settles nothing about
+whether the LEDs blink.
+
 ## A design that routes has been built, and loaded into a part
 
 On 2026-09-26 `testdata/fpga/cynthion/button_led.v` — the Cynthion's USER
@@ -20,10 +136,11 @@ routed 2 of 2 signal(s) with 23 pip(s) over 25 wire(s), and every sink was
 walked back to its driver
 ```
 
-**Whether the LEDs do what the design says has not been watched.** It
-needs a person, for the reason the rest of this file exists, and the
-person has not been asked yet. What they should press and what they should
-see is in `button_led.v`'s header and repeated at the end of this section.
+**Whether the LEDs do what the design says was then watched**, and
+"Somebody looked, and it does what it says" below is the answer. What they
+were asked to press and to see is in `button_led.v`'s header and repeated
+next, because the two halves are only worth anything together: the
+prediction was written down before the board was asked.
 
 ### What a person should look for
 
@@ -79,9 +196,8 @@ and holds a released pin below `VIH` — were both found before the board
 was asked, by reading what Lattice's own packer writes *in full* for a
 cell rather than diffing against it. Neither would have been caught by any
 check on this machine, and `DONE` was high either way.
-Either answer is a result.
 
-The observation is deliberately a strong one. One LED lit rather than six
+The observation was deliberately a strong one. One LED lit rather than six
 cannot be confused with the previous milestone; the lit one *moves* when a
 finger moves, which no configuration that does nothing can do; and it moves
 both ways, so a stuck input shows up as one of the two never changing rather
@@ -140,15 +256,16 @@ Lattice's own packer writes".
 ### What this settles, and what it does not
 
 It settles that the chain from Verilog to a *routed* configuration a real
-ECP5 accepts closes, and that every bit of it is one the database explains.
-It settles nothing about whether the board's LEDs follow the button, and
-the difference between those two sentences is the whole lesson of the
-section below.
+ECP5 accepts closes, that every bit of it is one the database explains, and
+— once somebody looked — that the design does what it says. The interesting
+part is that the first two of those were true of a bitstream whose LEDs were
+dark, which is the whole lesson of the section below.
 
-It also settles nothing about **anything clocked**, and that is still a
-gap in the backend rather than in the measurement: `globals.json` is not
-read, so there is no clock network, no `DCCA` and no path from a pad to a
-clock spine. The table at the end says what each remaining thing needs.
+It settled nothing about **anything clocked** either, and at the time that
+was a gap in the backend rather than in the measurement: `globals.json` was
+not read, so there was no clock network, no buffer and no path from a pad
+to a clock spine. That is what the section at the top of this file changes,
+and the network is described under "What the clock network is".
 
 ## The first design, and the lesson it cost
 
@@ -224,18 +341,18 @@ master SPI clock the part uses when it loads *itself* from flash
 buffer. `CTRL0_DEFAULT` is what `ecppack` writes with no options.
 
 Every run in this file is reproducible, and the current milestone is the
-last of the three:
+last of the four:
 
 ```sh
 reticle fetch prjtrellis-db
-for design in leds leds_alternate button_led; do
+for design in leds leds_alternate button_led clock_blink; do
     reticle fpga testdata/fpga/cynthion/$design.v \
         --device ecp5-12f-CABGA256 \
         --constraints testdata/fpga/cynthion/$design.rcf \
         --bitstream /tmp/$design.bit
 done
 reticle program --list                         # find the board's serial
-reticle program --device <serial> /tmp/button_led.bit
+reticle program --device <serial> /tmp/clock_blink.bit
 ```
 
 (`leds_alternate.v` shares `leds.rcf`; the loop is shorthand.)
@@ -301,7 +418,7 @@ files and 5.8 MB:
 | `devices.json` | JSON | every part: IDCODE, frames, bits per frame, pad bits, `max_row`/`max_col`, packages | yes |
 | `ECP5/<part>/tilegrid.json` | JSON | every tile: its type, its `R<row>C<col>`, and the rectangle of configuration memory it owns | yes |
 | `ECP5/<part>/iodb.json` | JSON | each package: ball → `(row, col, pio)`, and beside them a `pio_metadata` array giving each PIO's **IO bank** | yes, both |
-| `ECP5/<part>/globals.json` | JSON | the clock quadrants, spines and taps | **no** — nothing here routes a clock, and this is the one file a clocked design needs |
+| `ECP5/<part>/globals.json` | JSON | the clock quadrants, spines and taps | yes, and it is the only file that says which tile a clock's wires belong to |
 | `ECP5/tiledata/<type>/bits.db` | line-oriented text | one tile type's configuration bits: `.mux`, `.config`, `.config_enum`, `.fixed_conn` | yes, all 185 |
 | `ECP5/timing/speed_<n>/*.json` | JSON | cell and interconnect delays | **no** — nothing here does timing |
 
@@ -339,11 +456,11 @@ JA0 -                       `-` is the empty group: this value is
 ```
 
 A bit is `F<frame>B<bit>` **within its own tile**, and a leading `!` means
-the feature wants it **clear**. Reticle drops the inverted ones rather
-than recording them, because a bitstream is assembled by setting bits in a
-zeroed bitmap; `TrellisDatabase::locate_field` says why that is only safe
-while nothing else writes to the same tile, and "A bit a feature wants
-clear is dropped" below says where the exception lives.
+the feature wants it **clear**. There is nothing to *write* for such a bit,
+because a bitstream here is assembled by setting bits in a zeroed bitmap —
+so the pip does not carry it, and the only thing honouring it can mean is
+noticing when something else has set it. "A bit a feature wants clear"
+below is where that is done.
 
 Two names in `tilegrid.json` are the other way round from what they look
 like, and getting them backwards would move every bit of the part:
@@ -456,28 +573,81 @@ backward and intersecting: the backward walk reached `F0` and never
 has a `…BOUNCE` as its *sink*, so nothing drives one and a router can never
 route through one.
 
-### A bit a feature wants **clear** is dropped, and here is where that is safe
+### A bit a feature wants **clear**, and the only thing that can be done about it
+
+This was the one unsound simplification in this backend, and it is worth
+being exact about what was wrong with it, because the fix is not the obvious
+one.
 
 A bitstream is assembled by setting bits in a zeroed bitmap, so `!F25B10`
 is a bit already in the state the feature wants and there is nothing to
-write. That is only sound while no two features written into one tile
-disagree about a bit — and a `.mux` source with an inverted bit is exactly
-a feature that could disagree, because taking such an arc leaves a bit set
-that another source of the same mux wanted clear.
+write. The loader therefore does not put it on the pip — a `PipDecl` says
+which bits switch a connection *on* and has no room for the ones it needs
+off. That is sound only while no two features written into one tile
+disagree about a bit, and a `.mux` source with an inverted bit is exactly a
+feature that could disagree: taking such an arc leaves five bits that
+another source of the same mux wanted clear, and a second feature setting
+any of them silently turns the arc into a different one. Nothing structural
+would notice.
 
-So it matters where those are, and the answer is clean: **every `.mux`
-source with an inverted bit is in the clock network's own tiles.** Over the
-family's 185 `bits.db` files, 4523 of 85 379 mux source lines have one, and
-all 4523 are in `CMUX_LL_0`, `CMUX_LR_0`, `CMUX_UL_0`, `CMUX_UR_0`,
-`LMID_0`, `RMID_0`, `ECLK_L`, `ECLK_R`, `BMID_0H`, `BMID_0V`, `BMID_2`,
-`BMID_2V`, `TMID_0` or `TMID_1`, and every one of them drives a clock
-global (`G_…PCLK…`, `G_…DCC…CLKI`, `ECLKI…`). The general interconnect —
-the `CIB*` tiles, the `PLC2`s and the `PIC*`s that a pad or a lookup table
-routes through — has none, so a combinational design cannot reach one.
+**There is no way to "honour" such a bit by writing it.** A clear cannot be
+written into a map that is already clear. The only meaningful action is to
+*notice* when something else has set it — so the fix is a check, and it is
+`TrellisFabric::dropped_clear_bits`: the inverted bits are recorded at load
+time (4425 of this die's mux sources have some), and every pip a route takes
+is asked, against the finished image, whether the bits its source wants
+clear are clear. `reticle fpga --bitstream` refuses to write a bitstream
+where one is not.
+
+Two things about that check are worth stating because they bound it.
+
+**It is looked up by bits, not by name.** A pip in the graph carries
+resolved wire names and the database carries prefixed ones, so the key is
+(tile type, the bits the arc sets). Six of this die's mux sources share
+their set bits with another source of the same tile type that wants
+*different* bits clear; those are indistinguishable in a finished bitstream
+whatever is recorded, so only what the two agree about is checked. The
+number is asserted in
+`tests/fpga_trellis.rs::the_database_describes_one_part_of_the_ecp5_family`
+rather than hidden.
+
+**It is shown failing.**
+`a_bit_an_arc_needs_clear_is_noticed_when_something_else_sets_it` takes the
+clocked design's own bitstream, sets one bit that one of its arcs needs
+clear, and asserts the check says which bit in which tile. A green run of
+designs that do not collide would prove nothing about whether anything is
+looking.
+
+Where the inverted bits are is still worth knowing, and the answer is
+clean: **every `.mux` source with an inverted bit is in the clock network's
+own tiles.** Over the family's 185 `bits.db` files, 4523 of 85 379 mux
+source lines have one, and all 4523 are in `CMUX_LL_0`, `CMUX_LR_0`,
+`CMUX_UL_0`, `CMUX_UR_0`, `LMID_0`, `RMID_0`, `ECLK_L`, `ECLK_R`,
+`BMID_0H`, `BMID_0V`, `BMID_2`, `BMID_2V`, `TMID_0` or `TMID_1`, and every
+one of them drives a clock global (`G_…PCLK…`, `G_…DCC…CLKI`, `ECLKI…`).
+The general interconnect — the `CIB*` tiles, the `PLC2`s and the `PIC*`s
+that a pad or a lookup table routes through — has none, so a combinational
+design cannot reach one.
 `tests/fpga_trellis.rs::an_inverted_mux_bit_only_happens_in_the_clock_network`
-asserts that from the database rather than from this paragraph. A clocked
-design could reach one, and that is one of the things the clock network will
-have to deal with.
+asserts that from the database rather than from this paragraph. **A clocked
+design walks through six of them**, which is why this stopped being
+theoretical at the same moment the clock network arrived.
+
+**The same simplification applies to a `.config_enum`'s values, and that
+half is not covered by an automatic check.** The flip-flop is where it
+shows up: `CLK0.CLKMUX = CLK`, `LSR0.LSRMUX = LSR`, `SLICEA.GSR = ENABLED`
+and `SLICEA.REG0.LSRMODE = LSR` are each "one bit, wanted clear".
+`dropped_clear_bits` walks pips and does not see them, and neither does
+`Decoded::unexplained`, because a stolen bit there is a bit some *other*
+value of the same field wants — set `F54B10` and `CLK0.CLKMUX` reads `INV`
+rather than leaving a bit unaccounted for. What covers it instead is
+weaker and worth naming as weaker: those fields have exactly one writer
+(`configure_registers`), nothing else in this backend touches a `PLC2`'s
+control muxes, and `a_flip_flops_settings_are_the_ones_lattices_own_packer_writes`
+asserts that the decoding of the clocked design reads back the values it
+meant. A check as exact as the one for arcs would need the passes to report
+what they wrote so the decoding could be compared with it; that has not been
+built.
 
 ### What it comes to
 
@@ -488,12 +658,15 @@ have to deal with.
 | Graph nodes | 1 096 425 |
 | `.mux` sources declared, over 129 tile types | 171 632 |
 | `.fixed_conn`s declared | 14 614 |
-| Graph edges kept | 8 211 900 |
+| Clock network joins the database does not state | 58 928 |
+| Graph edges kept | 8 270 828 |
 | Graph edges dropped at the edges of the die | 53 632 |
 | Distinct bit patterns, interned | 3536 |
-| `RoutingGraph::heap_bytes` | 344 MiB |
+| `RoutingGraph::heap_bytes` | 354 MiB |
 | Time to build, release | under a second |
 | `lut` sites | 24 288 |
+| `ff` sites | 24 288 |
+| `gb` sites | 56 |
 | `io` sites | 120 |
 
 Those are `tests/fpga_trellis.rs::the_database_describes_one_part_of_the_ecp5_family`'s
@@ -505,6 +678,178 @@ and 1386 MiB; this is a quarter of the edges and a quarter of the memory,
 so there is no region option here and `reticle fpga --bitstream` loads
 everything. The reason is the rule above: no join pips, and a wire is one
 node however far it reaches.
+
+## What the clock network is, and why it needed a file of its own
+
+Everything else in this backend comes out of `bits.db`, because a wire's
+name carries the position it belongs to: `S1E1_JA0` is the `JA0` of the tile
+one row south and one column east, and `parse::globalise_ref` resolves it.
+**The clock network breaks that rule in one specific way: its wires carry
+the same name in every tile they cross, with no prefix.** A logic tile's
+branch wire is `G_HPBX0000` and so is its neighbour's, and the tap driver
+twenty columns away spells its output `R_HPBX0000`. Nothing in the file says
+the three are one piece of metal.
+
+So three hops of a clock's path are connections the database states
+nowhere, and `globals.json` is the only thing that says where they go. For
+this die it says:
+
+| | |
+|---|---|
+| Quadrants | `UL` (0,0)–(31,25), `UR` (32,0)–(72,25), `LL` (0,26)–(31,50), `LR` (32,26)–(72,50) |
+| Tap columns | 4 (left 0–3, right 4–12), 22 (13–21, 22–31), 42 (32–41, 42–50), 60 (51–59, 60–72) |
+| Spines | one per (quadrant, tap): `UL4` at (3,13), `UL22` at (21,13), `UR42` at (41,13), `UR60` at (59,13), and the same four columns at row 37 for `LL` and `LR` |
+
+and the three joins are:
+
+1. the quadrant's primary clock onto the **spine**'s feed wire —
+   `G_HPRX<n>00` at the one position `spines` names;
+2. the spine's vertical wire as the **tap column** spells it —
+   `G_VPTX<n>00` at `(tap, y)` for every row of the quadrant;
+3. each tap's two branch drivers onto the **tiles they reach** —
+   `L_HPBX<n>00` for the columns left of the tap and `R_HPBX<n>00` for
+   those right of it.
+
+58 928 bitless pips in all, which is 0.7% of the graph. They carry **no
+bits**: every bit of a clock route is still a `.mux` record charged to the
+tile that owns it, so declaring a join is not a claim about the bitstream.
+
+**That is the same walk nextpnr does**, and the difference is where it
+happens. `Ecp5GlobalRouter::find_tap_pip` looks up `L_`/`R_HPBX<n>00` at the
+tap column of the sink's own row and `find_spine_pip` looks up
+`G_VPTX<n>00` at the spine position, both out of band, in a dedicated pass,
+because its chipdb has no edge joining them either. Here they are pips of
+the graph, so **the ordinary router routes a clock and `Routing::verify`
+walks it back**. This is the interesting half of the result: the shape of
+`super::xray`'s `enable_global_clocks` — a pass that sets bits belonging to
+a whole column — turned out not to be needed, because on this family there
+are no such bits. What was needed was three missing edges.
+
+A fourth join would have been the **buffer**, and it is a bel instead. Every
+global on this family comes out of a `DCC`, the device file has
+`bel DCCA gb port i=CLKI o=CLKO en=CE`, so the flow inserts a cell and the
+placer puts it on one of the die's 56. An ungated one costs **no bits at
+all**; see the next section.
+
+### Two clocks cannot collide on it, and that had to be checked
+
+`G_HPBX0300` is a separate graph node in every tile although it is one piece
+of metal per quadrant and side, so the router's one-signal-per-node rule
+does not by itself stop two nets sharing a branch. It does not have to:
+every path onto a branch of network *n* goes through its quadrant's single
+`G_<quadrant>PCLK<n>` **global** node — one node for the die — and that node
+has capacity one. The per-tile naming is therefore conservative rather than
+unsound: two nets can use network 3 in two different quadrants, which is
+what the hardware allows, and cannot share one quadrant's, which is what it
+forbids.
+
+### The router had to be steered, and that is a new knob
+
+A flip-flop's clock mux (`.mux CLK0` of a `PLC2`) offers the sixteen global
+branch wires **and** seven ordinary interconnect wires. So the shortest path
+from a pad to a clock pin is through general routing — measured on this die,
+**seven hops** from `JPADDIB_PIO` on ball A8 to a `CLK0_SLICE`, against
+about eighteen through the network — and a router with no preference builds
+a clock tree out of data wires. It routes, it verifies, it configures; what
+it does not do is control skew.
+
+`RouteOptions::node_base` is the fix and it is the `base(n)` that `route.rs`'
+own cost formula always had and never used. `TrellisFabric::clock_node_costs`
+gives every network node a base of 0.05, and:
+
+- **it is a preference and not a permission.** Capacity is still one signal
+  per node. And a cheap wire a signal has no reason to enter is not entered:
+  the network is a one-way funnel whose only exits are flip-flop control
+  pins, so the only signal that can traverse it is one that clocks or resets
+  something.
+- **the distance heuristic had to be scaled by it too.** This is the part
+  that was got wrong first. With the base alone, 7 of the clocked design's
+  26 flip-flops still came off a data wire, and the reason was A\*: charging
+  a full 0.3 per tile of remaining distance for standing on a wire that
+  costs 0.05 is twenty times too much, so the search walked past the network
+  and found the sink through general routing first. `maze`'s heuristic now
+  multiplies the per-tile charge by the node's own base. With a uniform base
+  it is exactly what it always was.
+- **and it is checked rather than trusted.** `clock_network_use` walks each
+  flip-flop's clock pin back through its own path and asks what drives the
+  `CLK0` or `CLK1` the pin's `MUXCLK` selected. It has to be per pin: a tile
+  shares two clock muxes between four slices, so one flop can be on the
+  network while its neighbour is not, which is precisely what happened
+  before the heuristic was fixed. A design where one is not is **refused**.
+
+### Everything Lattice's own packer writes for a clock
+
+The question that found `BANK.VCCIO` and `PULLMODE` was not "what differs
+from the reference" but "what does `ecppack` write, in full, for one of
+these, and do we write all of it?" — because a diff is silent about things
+never emitted at all, and both of those misses were of that kind. Asked
+again for a clock, against `analyzer.bit`, which is the one of Great Scott
+Gadgets' three bitstreams that is clocked and uses two globals:
+
+| Setting | Written here |
+|---|---|
+| the buffer's input mux, `G_<x>DCC<n>CLKI <- …` | yes, it is a pip |
+| the centre mux, `G_<quadrant>PCLK<g> <- …` | yes, it is a pip — but see below |
+| the spine, `G_VPTX<g>00 <- G_HPRX<g>00` | yes, it is a pip |
+| the tap, `L_`/`R_HPBX<g>00 <- G_VPTX<g>00` | yes, one per row with a sink |
+| the tile, `CLK<c> <- G_HPBX<g>00` and `MUXCLK<c> <- CLK<c>` | yes |
+| `DCC_<x><n>.MODE` | **nothing, and neither does `ecppack`** |
+
+**The last row is the finding, and a diff could not have produced it.**
+There is no `DCC_*.MODE` anywhere in `analyzer.bit`, although two of its
+buffers are carrying a global — `G_LDCC0CLKI <- G_JLLCPLL0CLKOS2` and
+`G_LDCC6CLKI <- G_JLLCPLL0CLKOS` are in the file. nextpnr's `write_dcc`
+explains it: it writes `DCC_<x><n>.MODE = DCCA` **only when the cell has a
+clock enable**, `NONE` is the field's default and costs no bits, and an
+ungated buffer is therefore a wire. So a `gb` bel here has no
+`ConfigEntry` at all, which is not a gap but the whole answer. Had this
+been asked as a diff, "we set no bit and neither did they" would have
+looked like agreement about nothing.
+
+One row is **deliberately narrower** than nextpnr. `route_onto_global` loops
+over all four quadrants whether the design needs them or not, and
+`analyzer.bit` has all four centre muxes set for both its globals. This
+flow routes the quadrant its flip-flops are in and no others, because the
+router routes to sinks and there are none elsewhere. That is one arc instead
+of four; the missing three drive branch wires nothing is attached to.
+
+`tests/fpga_trellis.rs::what_lattices_own_packer_writes_for_a_clock`
+asserts all of it against the reference file, including that every one of
+its branch drivers is in a column `globals.json` calls a tap and every spine
+arc is at a position it names. That is the only independent evidence there
+is for the geometry tables, since `globals.json` is the one file of the
+database whose contents nothing else can be compared with.
+
+### What a flip-flop costs
+
+nextpnr's `write_ff` is the whole of it, and
+`TrellisFabric::configure_registers` is a line-for-line answer:
+
+| Setting | Bits on this die | Where the value comes from |
+|---|---|---|
+| `SLICE<l>.REG<n>.SD = 0` | one | always: the data comes from the fabric's `M` wire, because this flow never packs a lookup table and a flop together |
+| `SLICE<l>.REG<n>.REGSET` | one for `RESET` | the cell's `REGSET`; `SET` is the field's default |
+| `SLICE<l>.CEMUX` | two for `1` | the cell's `CEMUX` — **and this is the one that matters**, see below |
+| `SLICE<l>.GSR` | one for `DISABLED` | the cell's `GSR`; the device file asks for `DISABLED` so a design that did not ask for a global reset does not get one |
+| `SLICE<l>.REG<n>.LSRMODE = LSR` | none, it is the default | |
+| `CLK<c>.CLKMUX`, `LSR<c>.LSRMUX`, `LSR<c>.SRMODE` | none for the defaults | the cell's, and **only for the mux the route actually took** |
+
+**`CEMUX` is the third `BANK.VCCIO`.** The field's default is `CE` — take
+the clock enable from the fabric — so a bitstream that leaves it alone has
+every flip-flop gated by a wire nothing drives, and the design is frozen.
+Same shape as the bank rail and the pull mode: a database default that is
+wrong for the design, in a field the design never mentions, with no symptom
+a structural check could see. It is written for every flop, and
+`a_flip_flops_settings_are_the_ones_lattices_own_packer_writes` asserts it
+is in the decoding.
+
+The last row is why `configure_registers` takes the routing. A tile has two
+clock muxes and two reset muxes shared between its four slices, so "which
+one is this flop's" is a fact about the route and not about the bel —
+nextpnr asks it the same way, by looking at which of `CLK0` and `CLK1`
+carries the net. A flop whose parameter needs bits in a mux the routing does
+not identify is **refused** rather than written into the wrong one, which
+would change every other flop of the tile.
 
 ## The part, measured
 
@@ -523,8 +868,11 @@ node however far it reaches.
 | Pads this backend declares | 120: 56 on the top edge and 64 on the right |
 | Balls it leaves out | 77, on the left and bottom edges |
 | Graph nodes | 1 096 425 |
-| Graph edges | 8 211 900 |
+| Graph edges | 8 270 828 |
+| Global clock networks | 16 |
+| Clock buffers (`DCC`) | 56: twelve at the top, fourteen on each of the left and right, sixteen at the bottom |
 | `lut` sites | 24 288 |
+| `ff` sites | 24 288 |
 
 `tests/fpga_trellis.rs::the_database_describes_one_part_of_the_ecp5_family`
 asserts every one of those, so the table cannot drift from the database.
@@ -929,8 +1277,10 @@ borrows now. Every backend gets it.
 
 | What | What it needs |
 |---|---|
-| Anything clocked | the global clock network, which is the whole of what is left of the fabric: `globals.json`'s quadrants, spines and taps, the `DCCA` buffers, the path from a pad to a spine, and the `CLK<n>.CLKMUX` / `LSR<n>.LSRMUX` settings a flip-flop needs (`trellis/sites.rs` has that table, unexercised). It is also where the one unsound simplification in this backend bites: every `.mux` source that wants a bit **clear** is in a clock tile, and the loader drops those bits |
-| A counter, and so `examples`' blink on this board | the above. `globals.json` is the file to read and `super::xray`'s `enable_global_clocks` is the shape of the pass — a clock costs bits that belong to a whole column rather than to any one pip |
+| A clock enable, an inverted clock or an asynchronous reset | `configure_registers` refuses these rather than writing them, and the reason is in "What a flip-flop costs": a tile's two clock muxes and two reset muxes are shared between its four slices, and the routing has to say which one a flop uses. A `CE` also has to be *routed* to `CE<c>_SLICE`, which nothing has done |
+| A second clock domain | nothing in principle: sixteen networks are declared and a net reaches one by routing. Nothing has built a design with two, so nothing has seen what the router does when two clocks want the same quadrant's network |
+| A clock from a PLL | `EHXPLLL` has no port map in the device file. The path is there: a PLL's outputs are `G_J<quadrant>CPLL0CLKO*` and every buffer's input mux offers them, which is how `analyzer.bit`'s two globals are fed |
+| A clock on a **dedicated** clock pad | nothing, and it has never been exercised. A `PCLKT` pad reaches the centre through `G_JPCLKT<q><n> <- JINCK <- JPADDI`, all `.fixed_conn`s already in the graph; a Cynthion's oscillator is on the `PCLKC` half of the pair, so this flow has only ever taken the fabric route |
 | The left and bottom edges' pads | the left edge is the right edge mirrored (`PICL0`/`PICL1`/`PICL2` for `PICR*`, and the `CIB` one column *east* instead of west) and could be checked against the reference bitstreams the same way the right edge was, since they use pins on every edge. The bottom edge is different again: `PICB*` puts two PIOs at a position and shares tiles with the `EFB`. Neither has been checked, and `TrellisDatabase::load` leaves those balls out of the ball map rather than placing something it would configure nowhere |
 | A carry chain | `CCU2C` has no port map in the device file, on purpose: its two sum bits and internal carry do not match the `(ci, i0, i1) -> co` model Reticle maps carry onto. The `.mux` records for the cascade wires are read already |
 | Block RAM | `Ecp5Stream` reads and writes the initialisation blocks — the reference files' 44 blocks round trip — and nothing generates one. The `MIB_EBR*` tiles' wires and pips are in the graph |

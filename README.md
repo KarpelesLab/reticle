@@ -186,12 +186,14 @@ board, by reading what Lattice's own packer writes in full for a cell
 rather than diffing against it — the second being an input pad's pull
 mode, whose default fights this board's pull-up and would have held the
 pin low whatever anybody pressed.
-[`docs/fpga-trellis.md`](docs/fpga-trellis.md) says what was checked
-instead — every bit of the bitstream decoded back through Project Trellis'
-own database and named, and the pads compared against bitstreams Lattice's
-own packer wrote for this very board — and what is still missing, which is
-the clock network: `globals.json` is not read, so nothing sequential can be
-placed.
+On the same day it gained the **global clock network**, and
+`testdata/fpga/cynthion/clock_blink.v` — a counter off the board's own
+60 MHz oscillator, blinking two LEDs in antiphase at 0.89 Hz — was loaded
+into the same part and accepted, with every one of its 26 flip-flops clocked
+off a global network and all 2491 of its configuration bits decoding back
+into exactly the arcs the router chose. **Nobody has looked at those LEDs
+yet.** [`docs/fpga-trellis.md`](docs/fpga-trellis.md) says what was checked
+in place of looking, and what a person should watch for when they do.
 
 Sources of one language are elaborated together, so a testbench and the
 modules it instantiates go on one command line. A design already in the

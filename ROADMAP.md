@@ -499,9 +499,18 @@ FPGA:
       when the button is held is at the end away from it.
       Every bit of it decodes back through the database with nothing
       unexplained, and the input pad was checked against `facedancer.bit`,
-      the one reference bitstream whose gateware reads that button. What is
-      still missing is the clock network: `globals.json` is not read, so
-      nothing clocked can be placed. See `docs/fpga-trellis.md`.
+      the one reference bitstream whose gateware reads that button. On the
+      same day it gained the **global clock network** — `globals.json`'s
+      four quadrants, four tap columns and eight spines, the 56 `DCC`
+      buffers as bels, and the three joins between them that `bits.db`
+      states nowhere because a clock's wires carry the same name in every
+      tile they cross — and `clock_blink.v`, a 26-bit counter off the
+      board's own 60 MHz oscillator blinking two LEDs in antiphase at
+      0.89 Hz, was loaded into the same board and accepted, `DONE`, status
+      `0x00200100`; **nobody has looked at those LEDs yet**. All 2491 of
+      its bits decode back into exactly the 693 arcs the router chose, and
+      all 26 flip-flops' clocks came off a global network rather than off
+      data wires. See `docs/fpga-trellis.md`.
 
 ASIC:
 - [x] Liberty (`.lib`) parser: cells, pins, functions, timing tables.
