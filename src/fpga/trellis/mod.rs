@@ -2313,11 +2313,91 @@ impl TrellisDatabase {
     /// names; see [`Decoded`].
     ///
     /// A feature matches when every bit it wants set is set and every bit
-    /// it wants clear is clear, and where several values of one field match
-    /// the one with the most bits wins — which is what picks
-    /// `OUTPUT_LVCMOS33` over the `NONE` whose single bit it contains.
+    /// it wants clear is clear. Where several values of one field match,
+    /// two rules decide between them, in this order:
+    ///
+    /// 1. **the reading that leaves fewest of the tile's bits
+    ///    unexplained**, and
+    /// 2. among those, the one with the most bits — which is what picks
+    ///    `OUTPUT_LVCMOS33` over the `NONE` whose single bit it contains,
+    ///    and is what `libtrellis`' own `Tile::get_config` does on its own.
+    ///
+    /// Rule 1 exists because a value's pattern can reach outside the field
+    /// it belongs to. On the right edge four PIOs share one pad tile, and a
+    /// *pseudo-differential* `PIO<s>.BASE_TYPE` — `OUTPUT_LVCMOS33D` is ten
+    /// bits where `BIDIR_LVCMOS33` is eight — spells four of its bits in
+    /// the **neighbouring** PIO's frames, because a differential pair needs
+    /// both pads. With both halves of a pair bidirectional all ten are set,
+    /// so the longest match alone reads side A back as a differential
+    /// output it is not, and leaves the two bits only a bidirectional or an
+    /// input pad wants belonging to nothing. Those four extra bits are
+    /// explained by side B's own base type and pull mode either way, so
+    /// they are no evidence about side A; the two orphans are.
+    /// `docs/fpga-trellis.md`'s "What cannot be read back" is the long
+    /// version, including the measurement on `ecppack`'s own output.
+    ///
+    /// The rule is applied as a **fixed point** rather than as a ranking,
+    /// because "how much does this reading leave unexplained" is a question
+    /// about the whole tile and not about one field: every field and mux
+    /// sink takes the longest match first, and then each in turn is allowed
+    /// to change its reading for one that explains **strictly more** of the
+    /// tile's set bits, until none will. Each change strictly raises the
+    /// number of explained bits, which is bounded by the number of set
+    /// bits, so this terminates. Two consequences are worth stating,
+    /// because they are what makes the change a safe one to the most
+    /// load-bearing check in this backend:
+    ///
+    /// - **a tile with nothing left over is never touched.** There is
+    ///   nothing to improve, so the loop does not run and every reading is
+    ///   the longest match, exactly as before. Every bitstream this flow
+    ///   writes is of that kind — [`Decoded::unexplained`] being zero is
+    ///   what `reticle fpga --bitstream` refuses to write without — so this
+    ///   cannot change how any of them is read.
+    /// - **it is not a licence to explain a bit twice, or to invent one.**
+    ///   A reading is still only ever one of the values the image's bits
+    ///   actually allow; the choice is between matches, never outside them.
     #[must_use]
     pub fn decode(&self, cram: &Cram) -> Decoded {
+        /// One record whose reading the image's bits leave a choice about:
+        /// a mux sink or an enumerated field, the values that match, and
+        /// which of them is read back.
+        struct Choice<'db> {
+            /// A mux sink rather than an enumerated field. The two differ
+            /// only in how they are reported.
+            mux: bool,
+            /// The sink's or the field's name.
+            name: &'db str,
+            /// The field's default, for an enumerated field that has one.
+            default: Option<&'db str>,
+            /// Every value whose pattern this image matches, in database
+            /// order, as `(value, bits)`.
+            candidates: Vec<(&'db str, &'db [parse::DbBit])>,
+            /// Which of them is read back, as an index into `candidates`.
+            chosen: usize,
+        }
+
+        /// The bits a pattern **accounts for**: the ones it wants set. A
+        /// bit a feature wants clear is not evidence that the feature is
+        /// there, so it explains nothing; `dropped_clear_bits` is the other
+        /// half of that.
+        fn explained(bits: &[parse::DbBit]) -> impl Iterator<Item = (u32, u32)> + '_ {
+            bits.iter()
+                .filter(|b| !b.inverted)
+                .map(|b| (b.frame, b.bit))
+        }
+
+        /// The longest match, and the first of those in database order —
+        /// rule 2 on its own.
+        fn longest(candidates: &[(&str, &[parse::DbBit])]) -> usize {
+            let mut best = 0;
+            for (i, (_, bits)) in candidates.iter().enumerate() {
+                if bits.len() > candidates[best].1.len() {
+                    best = i;
+                }
+            }
+            best
+        }
+
         let mut out = Decoded {
             bits: cram.count_ones(),
             ..Decoded::default()
@@ -2329,8 +2409,7 @@ impl TrellisDatabase {
             };
             let at = (tile.col, tile.row);
             let w = tile.window;
-            // The tile's own set bits, in its own coordinates, and which of
-            // them a feature has accounted for.
+            // The tile's own set bits, in its own coordinates.
             let mut ones: BTreeSet<(u32, u32)> = BTreeSet::new();
             for frame in 0..w.frames {
                 for bit in 0..w.bits {
@@ -2343,69 +2422,67 @@ impl TrellisDatabase {
                 continue;
             }
             positions.insert(at);
-            let mut covered: BTreeSet<(u32, u32)> = BTreeSet::new();
             let matches = |bits: &[parse::DbBit]| -> bool {
                 bits.iter()
                     .all(|b| ones.contains(&(b.frame, b.bit)) != b.inverted)
             };
-            let cover = |bits: &[parse::DbBit], covered: &mut BTreeSet<(u32, u32)>| {
-                for b in bits.iter().filter(|b| !b.inverted) {
-                    covered.insert((b.frame, b.bit));
-                }
-            };
+            // How many readings account for each bit. Every bit a reading
+            // accounts for is one it wants **set**, and it matched, so
+            // every key here is a bit of `ones`.
+            let mut covered: BTreeMap<(u32, u32), u32> = BTreeMap::new();
 
-            // The muxes, one sink at a time.
+            // Rule 2, for every mux sink and every enumerated field.
+            let mut choices: Vec<Choice<'_>> = Vec::new();
             let mut sink_seen: BTreeSet<&str> = BTreeSet::new();
             for (sink, _, _) in &db.muxes {
                 if !sink_seen.insert(sink.as_str()) {
                     continue;
                 }
-                let mut best: Option<(&str, &[parse::DbBit])> = None;
-                for (other, source, bits) in &db.muxes {
-                    if other != sink || !matches(bits) {
-                        continue;
-                    }
-                    if best.is_none_or(|(_, chosen)| bits.len() > chosen.len()) {
-                        best = Some((source.as_str(), bits.as_slice()));
-                    }
+                let candidates: Vec<(&str, &[parse::DbBit])> = db
+                    .muxes
+                    .iter()
+                    .filter(|(other, _, bits)| other == sink && matches(bits))
+                    .map(|(_, source, bits)| (source.as_str(), bits.as_slice()))
+                    .collect();
+                if candidates.is_empty() {
+                    continue;
                 }
-                // A source with no bit it wants **set** is the state an
-                // untouched bitstream is in everywhere, so reporting it
-                // would say nothing — and that is true of a source with no
-                // bits at all *and* of one whose whole pattern is inverted.
-                // The centre muxes of this die have the second kind:
-                // `G_DCS0CLK1 <- G_VPFN0000` is six bits all wanted clear,
-                // so every centre mux of the part would otherwise appear to
-                // be carrying an arc as soon as anything else in its tile
-                // is written.
-                if let Some((source, bits)) = best
-                    && bits.iter().any(|bit| !bit.inverted)
-                {
-                    cover(bits, &mut covered);
-                    out.arcs.push((at, sink.clone(), source.to_owned()));
-                }
+                let chosen = longest(&candidates);
+                choices.push(Choice {
+                    mux: true,
+                    name: sink.as_str(),
+                    default: None,
+                    candidates,
+                    chosen,
+                });
             }
-
-            // The enumerated fields.
             for (field, default, values) in &db.enums {
-                let mut best: Option<(&str, &[parse::DbBit])> = None;
-                for (value, bits) in values {
-                    if !matches(bits) {
-                        continue;
-                    }
-                    if best.is_none_or(|(_, chosen)| bits.len() > chosen.len()) {
-                        best = Some((value.as_str(), bits.as_slice()));
-                    }
+                let candidates: Vec<(&str, &[parse::DbBit])> = values
+                    .iter()
+                    .filter(|(_, bits)| matches(bits))
+                    .map(|(value, bits)| (value.as_str(), bits.as_slice()))
+                    .collect();
+                if candidates.is_empty() {
+                    continue;
                 }
-                if let Some((value, bits)) = best {
-                    cover(bits, &mut covered);
-                    if default.as_deref() != Some(value) {
-                        out.enums.push((at, field.clone(), value.to_owned()));
-                    }
+                let chosen = longest(&candidates);
+                choices.push(Choice {
+                    mux: false,
+                    name: field.as_str(),
+                    default: default.as_deref(),
+                    candidates,
+                    chosen,
+                });
+            }
+            for choice in &choices {
+                for bit in explained(choice.candidates[choice.chosen].1) {
+                    *covered.entry(bit).or_default() += 1;
                 }
             }
 
-            // The multi-bit fields, bit 0 first.
+            // The multi-bit fields, bit 0 first. These are not a choice:
+            // each bit group is read on its own, so there is nothing for
+            // rule 1 to weigh.
             for (field, default, groups) in &db.words {
                 let mut value = String::with_capacity(groups.len());
                 for group in groups {
@@ -2413,7 +2490,7 @@ impl TrellisDatabase {
                     value.push(if one { '1' } else { '0' });
                     for b in group {
                         if b.inverted != one {
-                            covered.insert((b.frame, b.bit));
+                            *covered.entry((b.frame, b.bit)).or_default() += 1;
                         }
                     }
                 }
@@ -2425,12 +2502,97 @@ impl TrellisDatabase {
                 }
             }
 
-            for bit in &ones {
-                if !covered.contains(bit) {
-                    out.unexplained += 1;
-                    out.leftovers
-                        .push((tile.ty.clone(), at, format!("F{}B{}", bit.0, bit.1)));
+            // Rule 1, as a fixed point. Only a reading that accounts for a
+            // bit **nothing** currently accounts for can explain more of
+            // the tile than the present one does, so a tile with nothing
+            // left over skips this entirely — which is every tile of every
+            // bitstream this flow has ever written.
+            let mut left: BTreeSet<(u32, u32)> = ones
+                .iter()
+                .filter(|bit| !covered.contains_key(bit))
+                .copied()
+                .collect();
+            while !left.is_empty() {
+                let mut moved = false;
+                for choice in &mut choices {
+                    let cur = choice.candidates[choice.chosen].1;
+                    // What `cur` alone accounts for. Switching away gives
+                    // those bits up, so they are what a swap has to beat.
+                    let only_cur: BTreeSet<(u32, u32)> = explained(cur)
+                        .filter(|bit| covered.get(bit).copied() == Some(1))
+                        .collect();
+                    let mut best: Option<(usize, usize)> = None;
+                    for (j, (_, bits)) in choice.candidates.iter().enumerate() {
+                        // A candidate that accounts for nothing currently
+                        // unaccounted for cannot explain more of the tile
+                        // than the present reading: everything else it
+                        // could account for is either already accounted
+                        // for by something else or given up by the swap.
+                        if !explained(bits).any(|bit| left.contains(&bit)) {
+                            continue;
+                        }
+                        let gained = explained(bits)
+                            .filter(|bit| left.contains(bit) || only_cur.contains(bit))
+                            .count();
+                        if gained <= only_cur.len() {
+                            continue;
+                        }
+                        // Rule 2 breaks the tie, exactly as it does above.
+                        if best.is_none_or(|(k, seen)| {
+                            gained > seen
+                                || (gained == seen && bits.len() > choice.candidates[k].1.len())
+                        }) {
+                            best = Some((j, gained));
+                        }
+                    }
+                    let Some((j, _)) = best else { continue };
+                    for bit in explained(cur) {
+                        if let Some(n) = covered.get_mut(&bit) {
+                            *n -= 1;
+                            if *n == 0 {
+                                covered.remove(&bit);
+                                left.insert(bit);
+                            }
+                        }
+                    }
+                    choice.chosen = j;
+                    for bit in explained(choice.candidates[j].1) {
+                        *covered.entry(bit).or_default() += 1;
+                        left.remove(&bit);
+                    }
+                    moved = true;
                 }
+                if !moved {
+                    break;
+                }
+            }
+
+            for choice in &choices {
+                let (value, bits) = choice.candidates[choice.chosen];
+                if choice.mux {
+                    // A source with no bit it wants **set** is the state an
+                    // untouched bitstream is in everywhere, so reporting it
+                    // would say nothing — and that is true of a source with
+                    // no bits at all *and* of one whose whole pattern is
+                    // inverted. The centre muxes of this die have the
+                    // second kind: `G_DCS0CLK1 <- G_VPFN0000` is six bits
+                    // all wanted clear, so every centre mux of the part
+                    // would otherwise appear to be carrying an arc as soon
+                    // as anything else in its tile is written.
+                    if explained(bits).next().is_some() {
+                        out.arcs
+                            .push((at, choice.name.to_owned(), value.to_owned()));
+                    }
+                } else if choice.default != Some(value) {
+                    out.enums
+                        .push((at, choice.name.to_owned(), value.to_owned()));
+                }
+            }
+
+            for bit in &left {
+                out.unexplained += 1;
+                out.leftovers
+                    .push((tile.ty.clone(), at, format!("F{}B{}", bit.0, bit.1)));
             }
         }
         out.tiles = positions.len();
@@ -2441,7 +2603,6 @@ impl TrellisDatabase {
         out
     }
 }
-
 /// An ECP5 fabric: an [`Arch`], where its bits live, and where its pads
 /// are.
 #[derive(Clone, Debug)]
@@ -3774,5 +3935,268 @@ mod tests {
         assert!(text.contains("programmable connections: 3"), "{text}");
         assert_eq!(fabric.stats.frames, 40);
         assert_eq!(fabric.stats.bits_per_frame, 16);
+    }
+
+    /// Two PIOs of one pair, with **the real patterns** an `LFE5U-12F`'s
+    /// `PICR1` has for sides A and B, in a tile ten frames by five bits
+    /// because that is all those patterns need.
+    ///
+    /// Copied out of `ECP5/tiledata/PICR1/bits.db` rather than invented, so
+    /// that the test below is about the ECP5 and not about a fixture. The
+    /// three things it has to carry are:
+    ///
+    /// - `PIOA.BASE_TYPE = OUTPUT_LVCMOS33D`, whose ten bits include four
+    ///   — `F0B3`, `F1B3`, `F8B3`, `F9B4` — that belong to **side B**;
+    /// - `PIOA.BASE_TYPE = BIDIR_LVCMOS33`, whose eight are all side A's,
+    ///   two of them (`F5B0`, `F6B0`) wanted by no other feature at all;
+    /// - the neighbours that account for those four either way:
+    ///   `PIOB.BASE_TYPE`, `PIOB.PULLMODE`, `PIOB.DRIVE` and
+    ///   `PIOB.OPENDRAIN`. Side B has no pseudo-differential value of its
+    ///   own, and that is not an omission: a differential pair is A over B,
+    ///   so only the `A` of a pair (and the `C` of the other) has one.
+    fn one_pad_tile() -> MemoryFiles {
+        let mut files = MemoryFiles::new();
+        files.insert(
+            "devices.json",
+            r#"{"families":{"ECP5":{"devices":{"LFE5U-12F":{
+                "packages":["caBGA256"],"idcode":"0x21111043",
+                "frames":10,"bits_per_frame":5,
+                "pad_bits_after_frame":0,"pad_bits_before_frame":0,
+                "max_row":0,"max_col":0}}}}}"#,
+        );
+        files.insert(
+            "ECP5/LFE5U-12F/tilegrid.json",
+            r#"{"MIB_R0C0:PICR1": {"type":"PICR1","start_frame":0,"start_bit":0,
+                                   "cols":10,"rows":5,"sites":[]}}"#,
+        );
+        files.insert(
+            "ECP5/LFE5U-12F/iodb.json",
+            r#"{"packages":{"CABGA256":{"F16":{"row":0,"col":0,"pio":"A"}}},
+                "pio_metadata":[{"row":0,"col":0,"pio":"A","bank":3}]}"#,
+        );
+        files.insert(
+            "ECP5/LFE5U-12F/globals.json",
+            r#"{"quadrants":{"UL":{"x0":0,"y0":0,"x1":0,"y1":0}},
+                "taps":{},"spines":{}}"#,
+        );
+        files.insert(
+            "ECP5/tiledata/PICR1/bits.db",
+            "# Non-Routing Configuration\n\
+             .config_enum PIOA.BASE_TYPE NONE\n\
+             BIDIR_LVCMOS33 F0B0 F3B1 F4B1 F5B0 F5B1 F6B0 F6B1 F7B0\n\
+             INPUT_LVCMOS33 F0B0 F5B0 F6B0 F6B1 F7B0\n\
+             NONE F7B0\n\
+             OUTPUT_LVCMOS33 F0B0 F2B0 F3B1 F4B1 F5B1 F7B0\n\
+             OUTPUT_LVCMOS33D F0B0 F0B3 F1B3 F2B0 F3B1 F4B1 F5B1 F7B0 F8B3 F9B4\n\
+             \n\
+             .config_enum PIOA.DRIVE\n\
+             12 !F1B1 F2B1 !F3B1 !F4B1 !F5B1\n\
+             16 !F1B1 F2B1 F3B1 F4B1 F5B1\n\
+             4 F1B1 F2B1 F3B1 !F4B1 !F5B1\n\
+             8 !F1B1 !F2B1 F3B1 F4B1 F5B1\n\
+             \n\
+             .config_enum PIOA.HYSTERESIS OFF\n\
+             OFF !F6B1\n\
+             ON F6B1\n\
+             \n\
+             .config_enum PIOA.OPENDRAIN\n\
+             OFF F3B1 F4B1 !F4B2 F5B1\n\
+             ON !F3B1 !F4B1 F4B2 !F5B1\n\
+             \n\
+             .config_enum PIOA.PULLMODE DOWN\n\
+             DOWN !F1B0 !F2B0\n\
+             NONE !F1B0 F2B0\n\
+             UP F1B0 F2B0\n\
+             \n\
+             .config_enum PIOB.BASE_TYPE NONE\n\
+             BIDIR_LVCMOS33 F0B3 F1B2 F1B3 F2B2 F2B3 F3B2 F6B3 F9B4\n\
+             INPUT_LVCMOS33 F1B2 F2B2 F2B3 F3B2 F6B3\n\
+             NONE F3B2\n\
+             OUTPUT_LVCMOS33 F0B3 F1B3 F3B2 F6B3 F8B3 F9B4\n\
+             \n\
+             .config_enum PIOB.DRIVE\n\
+             12 !F0B3 !F1B3 !F7B4 F8B4 !F9B4\n\
+             16 F0B3 F1B3 !F7B4 F8B4 F9B4\n\
+             4 !F0B3 !F1B3 F7B4 F8B4 F9B4\n\
+             8 F0B3 F1B3 !F7B4 !F8B4 F9B4\n\
+             \n\
+             .config_enum PIOB.HYSTERESIS OFF\n\
+             OFF !F2B3\n\
+             ON F2B3\n\
+             \n\
+             .config_enum PIOB.OPENDRAIN\n\
+             OFF F0B3 !F0B4 F1B3 F9B4\n\
+             ON !F0B3 F0B4 !F1B3 !F9B4\n\
+             \n\
+             .config_enum PIOB.PULLMODE DOWN\n\
+             DOWN !F7B3 !F8B3\n\
+             NONE !F7B3 F8B3\n\
+             UP F7B3 F8B3\n",
+        );
+        files
+    }
+
+    /// A configuration memory with exactly the bits named, and nothing
+    /// else — the shape `configure_io` builds, which is bits OR-ed into a
+    /// zeroed bitmap.
+    fn image(bits: &[(u32, u32)]) -> Cram {
+        let mut cram = Cram::new(FrameFormat::new(10, 5));
+        for (frame, bit) in bits {
+            cram.set(*frame, *bit);
+        }
+        cram
+    }
+
+    /// The bits of one `PIO<s>.BASE_TYPE` value or one `PIO<s>.PULLMODE`
+    /// value, so a test reads as a list of settings rather than as a list
+    /// of coordinates.
+    fn pattern(name: &str) -> Vec<(u32, u32)> {
+        let spelled: &[(&str, &[(u32, u32)])] = &[
+            (
+                "A BIDIR",
+                &[
+                    (0, 0),
+                    (3, 1),
+                    (4, 1),
+                    (5, 0),
+                    (5, 1),
+                    (6, 0),
+                    (6, 1),
+                    (7, 0),
+                ],
+            ),
+            (
+                "A OUTPUT",
+                &[(0, 0), (2, 0), (3, 1), (4, 1), (5, 1), (7, 0)],
+            ),
+            ("A PULL NONE", &[(2, 0)]),
+            ("A PULL UP", &[(1, 0), (2, 0)]),
+            (
+                "B BIDIR",
+                &[
+                    (0, 3),
+                    (1, 2),
+                    (1, 3),
+                    (2, 2),
+                    (2, 3),
+                    (3, 2),
+                    (6, 3),
+                    (9, 4),
+                ],
+            ),
+            (
+                "B OUTPUT",
+                &[(0, 3), (1, 3), (3, 2), (6, 3), (8, 3), (9, 4)],
+            ),
+            ("B PULL NONE", &[(8, 3)]),
+            ("B PULL UP", &[(7, 3), (8, 3)]),
+        ];
+        spelled
+            .iter()
+            .find(|(what, _)| *what == name)
+            .unwrap_or_else(|| panic!("no pattern called `{name}`"))
+            .1
+            .to_vec()
+    }
+
+    /// The rule that decides between two values of one field, and the
+    /// reason it is not simply "the longest match".
+    ///
+    /// Four images of one pad tile, each the whole of what `configure_io`
+    /// would write for it. The first is the one that was refused before
+    /// this rule existed, and the other three are what had to keep
+    /// working: the same pad alone, an ordinary output, and the case the
+    /// rule deliberately does **not** touch.
+    #[test]
+    fn a_field_is_read_as_the_value_that_leaves_fewest_bits_unexplained() {
+        let db = open(&one_pad_tile(), "", "LFE5U-12F").unwrap();
+        let read = |bits: &[(u32, u32)]| -> (Vec<String>, usize) {
+            let decoded = db.decode(&image(bits));
+            (
+                decoded
+                    .enums
+                    .iter()
+                    .map(|(_, field, value)| format!("{field}={value}"))
+                    .collect(),
+                decoded.unexplained,
+            )
+        };
+        let all = |names: &[&str]| -> Vec<(u32, u32)> {
+            let mut out: Vec<(u32, u32)> = names.iter().flat_map(|n| pattern(n)).collect();
+            out.sort_unstable();
+            out.dedup();
+            out
+        };
+
+        // BOTH HALVES BIDIRECTIONAL, which is what an eight-bit bus on this
+        // edge comes to and what the longest match could not read: all ten
+        // bits of side A's `OUTPUT_LVCMOS33D` are set, because side B's own
+        // base type and pull mode set the four that are B's.
+        let both = all(&["A BIDIR", "A PULL UP", "B BIDIR", "B PULL UP"]);
+        for bit in [(0, 3), (1, 3), (8, 3), (9, 4)] {
+            assert!(
+                both.contains(&bit),
+                "F{}B{} is one of the four side-B bits `OUTPUT_LVCMOS33D` needs; without it \
+                 this test proves nothing",
+                bit.0,
+                bit.1
+            );
+        }
+        let (fields, left) = read(&both);
+        assert_eq!(left, 0, "{fields:?}");
+        assert!(
+            fields.contains(&"PIOA.BASE_TYPE=BIDIR_LVCMOS33".to_owned()),
+            "side A read back as something else: {fields:?}"
+        );
+        assert!(
+            fields.contains(&"PIOB.BASE_TYPE=BIDIR_LVCMOS33".to_owned()),
+            "side B read back as something else: {fields:?}"
+        );
+        assert!(
+            fields.contains(&"PIOA.PULLMODE=UP".to_owned())
+                && fields.contains(&"PIOB.PULLMODE=UP".to_owned()),
+            "the pull the released level depends on: {fields:?}"
+        );
+
+        // ONE HALF BIDIRECTIONAL, which is the milestone before this one and
+        // decoded before it too: `OUTPUT_LVCMOS33D` does not even match, so
+        // there is nothing for the rule to do and it must not invent any.
+        let (fields, left) = read(&all(&["A BIDIR", "A PULL UP"]));
+        assert_eq!(left, 0, "{fields:?}");
+        assert!(
+            fields.contains(&"PIOA.BASE_TYPE=BIDIR_LVCMOS33".to_owned()),
+            "{fields:?}"
+        );
+
+        // AN ORDINARY OUTPUT, where rule 2 is the whole answer: `NONE`'s
+        // one bit is a subset of `OUTPUT_LVCMOS33`'s six, both match, and
+        // the longer one is the reading.
+        let (fields, left) = read(&all(&["A OUTPUT", "A PULL NONE"]));
+        assert_eq!(left, 0, "{fields:?}");
+        assert!(
+            fields.contains(&"PIOA.BASE_TYPE=OUTPUT_LVCMOS33".to_owned()),
+            "{fields:?}"
+        );
+
+        // AND THE CASE THIS RULE DOES NOT FIX, said out loud because it is
+        // still there and is a different shape: two ordinary **outputs** on
+        // one pair also set all ten bits of side A's `OUTPUT_LVCMOS33D`,
+        // and there the longer reading leaves nothing over either — the
+        // image is equally consistent with both, so no accounting of bits
+        // can tell them apart and the differential one wins on length.
+        // `analyzer.bit` has one: (col 72, row 18), whose side C is the aux
+        // transceiver's reset pin.
+        let (fields, left) = read(&all(&[
+            "A OUTPUT",
+            "A PULL NONE",
+            "B OUTPUT",
+            "B PULL NONE",
+        ]));
+        assert_eq!(left, 0, "{fields:?}");
+        assert!(
+            fields.contains(&"PIOA.BASE_TYPE=OUTPUT_LVCMOS33D".to_owned()),
+            "correct this test if the ambiguity is ever resolved, and say in \
+             `docs/fpga-trellis.md` how: {fields:?}"
+        );
     }
 }

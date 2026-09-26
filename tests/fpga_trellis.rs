@@ -2120,47 +2120,115 @@ fn what_lattices_own_packer_writes_for_a_bidirectional_pad() {
     }
     assert_eq!(checked, 8 * (8 + 2 + 1 + 1), "every bit of every ball");
 
-    // AND THE ONE THING THAT CANNOT BE READ BACK, measured on the vendor's
+    // AND BOTH HALVES OF EVERY PAIR READ BACK BIDIRECTIONAL, which is the
+    // check that proves the resolution rule and is measured on the vendor's
     // own file so that it is a property of the format and not of this crate.
     //
     // F16 and G15 are sides A and B of one right-edge position, so they
     // share the pad tile at (col 72, row 15), and both are ULPI data pins,
-    // so `ecppack` made both bidirectional. On the right edge a
-    // *pseudo-differential* value of `PIO<s>.BASE_TYPE` reaches across the
-    // pair — `PIOA.BASE_TYPE = OUTPUT_LVCMOS33D` is ten bits, four of which
-    // are PIOB's — and with both halves bidirectional all ten of them
-    // happen to be set. `TrellisDatabase::decode` resolves a field by the
-    // longest matching pattern, which is also what `libtrellis`' own
-    // `Tile::get_config` does, so ten beats `BIDIR_LVCMOS33`'s eight and
-    // side A reads back as a differential output it is not — leaving the
-    // two bits only a bidirectional or an input pad wants.
-    //
-    // This is asserted rather than worked around because the alternative is
-    // to change the resolution rule, and a bitstream this crate writes for
-    // the same pins has exactly the same property: see "What cannot be read
-    // back" in `docs/fpga-trellis.md`, which is also where the candidate fix
-    // is. A single bidirectional pad, and a whole bus on the **top** edge
-    // where each PIO has a tile of its own, decode with nothing left over.
-    let a = fabric.pad("F16").unwrap();
-    let b = fabric.pad("G15").unwrap();
-    assert_eq!(a.pad_at, b.pad_at, "F16 and G15 share a pad tile");
-    assert!(
-        decoded.enums.iter().any(|(at, field, value)| {
-            *at == a.pad_at && field == "PIOA.BASE_TYPE" && value.ends_with('D')
-        }),
-        "side A of (col 72, row 15) no longer reads back as a differential output in \
-         analyzer.bit, so the ambiguity this documents is gone and the paragraph above is stale"
-    );
-    let orphans = decoded
+    // so `ecppack` made both bidirectional. The eight balls come in four
+    // such pairs. On the right edge a *pseudo-differential* value of
+    // `PIO<s>.BASE_TYPE` reaches across the pair — `PIOA.BASE_TYPE =
+    // OUTPUT_LVCMOS33D` is ten bits, four of which are PIOB's — and with
+    // both halves bidirectional all ten of them happen to be set, so the
+    // longest match alone read side A back as a differential output it is
+    // not and left the two bits only a bidirectional or an input pad wants
+    // belonging to nothing. `TrellisDatabase::decode` now resolves a field
+    // by the reading that leaves fewest of the tile's bits unexplained,
+    // with the longest match as the tie-break; "What cannot be read back"
+    // in `docs/fpga-trellis.md` is the account, and this is the assertion
+    // it says would prove it right.
+    let mut pairs: Vec<((u32, u32), char)> = Vec::new();
+    for ball in AUX_ULPI_DATA {
+        let pad = fabric.pad(ball).unwrap();
+        pairs.push((pad.pad_at, pad.side));
+    }
+    pairs.sort_unstable();
+    pairs.dedup();
+    assert_eq!(pairs.len(), 8, "eight balls, eight (tile, side) pairs");
+    for (at, side) in &pairs {
+        let field = format!("PIO{side}.BASE_TYPE");
+        let value = decoded
+            .enums
+            .iter()
+            .find(|(where_, what, _)| where_ == at && what == &field)
+            .map(|(_, _, value)| value.as_str());
+        assert_eq!(
+            value,
+            Some("BIDIR_LVCMOS33"),
+            "{field} at {at:?} — a ULPI data ball of `analyzer.bit`'s own aux transceiver"
+        );
+    }
+    // And not one bit of any of those four tiles is left over, which is the
+    // other half: a reading can always be made to look right by leaving the
+    // bits that disagree with it unaccounted for.
+    let orphans: Vec<&(String, (u32, u32), String)> = decoded
         .leftovers
         .iter()
-        .filter(|(_, at, _)| *at == a.pad_at)
-        .count();
+        .filter(|(_, at, _)| pairs.iter().any(|(pad_at, _)| pad_at == at))
+        .collect();
     assert!(
-        orphans >= 2,
-        "`ecppack`'s own bitstream now decodes that tile completely, so the limitation this \
-         documents is not one"
+        orphans.is_empty(),
+        "bits of a ULPI pad tile belong to no feature: {orphans:?}"
     );
+}
+
+/// What is left of Lattice's own bitstreams that this database cannot name,
+/// on all three of them, and where it is.
+///
+/// This is the counterpart of `what_lattices_own_packer_writes_for_a_...`:
+/// that one asks whether eight balls read back right, this one asks whether
+/// anything anywhere does not. Both matter, and this one is the honest
+/// direction — a decoder is only as good as the bits it cannot explain, and
+/// naming them is how the pseudo-differential case was found in the first
+/// place.
+///
+/// The answer, for `analyzer.bit`, `selftest.bit` and `facedancer.bit`
+/// alike, is **five bits of one `DSP_SPINE_UL1` tile** and nothing else:
+/// 250 001, 27 006 and 424 160 set bits and the same five left over in all
+/// three, at the same position. The same five in three unrelated designs is
+/// what says it is a property of the tile and not of a design — most likely
+/// a feature the fuzzers never named, since the position is fixed and every
+/// build of every design sets it.
+///
+/// Before the resolution rule changed these were 34, 33 and 25, and all the
+/// difference was pad tiles: two bits for each pair of bidirectional pads
+/// sharing one, on the left edge (the HyperRAM's bus) as well as the right
+/// (the ULPI ones). So this test is the measurement that rule is judged by,
+/// and it is asserted **exactly** rather than as "few", because a rule that
+/// explains more bits than it should would pass a bound and fail this.
+#[test]
+fn the_only_bits_of_lattices_own_bitstreams_this_database_cannot_name() {
+    let Some(root) = chipdb() else { return };
+    let db = trellis::open(&Disk(root), "", PART).unwrap();
+    for (name, bits) in [
+        ("analyzer", 250_001usize),
+        ("selftest", 27_006),
+        ("facedancer", 424_160),
+    ] {
+        let Some(bytes) = reference(name) else {
+            return;
+        };
+        let stream = Ecp5Stream::parse(&bytes, &formats).unwrap();
+        let decoded = db.decode(&stream.cram);
+        assert_eq!(decoded.bits, bits, "{name}: how big it is");
+        let spelled: Vec<String> = decoded
+            .leftovers
+            .iter()
+            .map(|(ty, at, bit)| format!("{ty} {bit} at {at:?}"))
+            .collect();
+        assert_eq!(
+            spelled,
+            [
+                "DSP_SPINE_UL1 F11B0 at (3, 13)",
+                "DSP_SPINE_UL1 F13B0 at (3, 13)",
+                "DSP_SPINE_UL1 F2B0 at (3, 13)",
+                "DSP_SPINE_UL1 F3B0 at (3, 13)",
+                "DSP_SPINE_UL1 F5B0 at (3, 13)",
+            ],
+            "{name}"
+        );
+    }
 }
 
 /// The ball the bidirectional pad is on: `led_n[0]`, the LED at the end of
