@@ -414,6 +414,17 @@ Function Control does not lay `XcvrSelect` out the way ULPI's Table 21 does.
 Nothing here has read that part's datasheet; the ULPI core was written from
 the specification alone and says so.
 
+**A transceiver's registers outlive the FPGA's configuration, and that has
+to be undone.** `ulpi_rst_n` is a pin the design drives, so loading a design
+that holds it **high** — `bidir_bus.v` does, because an unclocked transceiver
+never lets go of the bus — leaves whatever the last design wrote still
+written, `TermSelect` included. A host then goes on seeing a device that
+cannot answer, and retries the port every few seconds indefinitely. The cure
+is one bitstream: hold `J13` **low** for a moment, which resets the whole part
+and puts Function Control back to its `41h` default with no pull-up, and then
+load what was wanted. That is what was done before leaving `bidir_bus.bit` in
+the part, and the host has been silent since.
+
 **None of those variants is in the repository.** Each was one patched copy of
 `usb_ulpi_link.v` or of the top level, built, loaded into the volatile
 configuration memory, and thrown away; what is committed is the design and
