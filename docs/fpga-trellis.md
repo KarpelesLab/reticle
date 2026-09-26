@@ -48,14 +48,23 @@ The corrected bitstream was loaded into the same board on 2026-09-26 and
 the part accepted it, status `0x00200100` — `DONE`, no fault — the same as
 before, because `DONE` was never the thing in question.
 
-**Nobody has looked at the board since.** Until somebody has, what this
-file claims about the corrected run is "accepted and running, with the one
-known omission fixed", and **not** "lit". If they are still dark, the
-finding is that `BANK.VCCIO` was necessary and not sufficient, and
-*Everything Lattice's own packer writes for one of these pads* below says
-where to look next: not at another missing pad bit — that list is now
-complete — but at the two things it does not cover, nextpnr's base
-configuration and Project Trellis' own bit values.
+### And then they were lit
+
+On 2026-09-26, with the corrected bitstream in the part, the board's owner
+reported **all six LEDs on**. So `BANK.VCCIO` was the whole of what was
+missing, and the chain from Verilog to a lit LED on a Lattice part closes.
+
+That is the third vendor this project has configured and had watched:
+a Xilinx XC7A35T on a Digilent Basys 3, twice, and now an LFE5U-12F on a
+Cynthion, in each case with no vendor tool at any step.
+
+It is worth keeping what the sequence cost, because the lesson is cheap to
+read and was expensive to learn. `DONE` went high on the *first* run, with
+dark LEDs, and it went high on the corrected run too. `DONE` says the
+configuration engine accepted a bitstream; it says nothing whatever about
+whether the bitstream configures what the design asked for. Every
+structural check this file describes passed on the broken bitstream. The
+only thing that told the difference was a person looking at the board.
 
 One difference from Lattice's own header was **checked and ruled out**:
 `ecppack` wrote control register 0 as `0x40000038` for these three files

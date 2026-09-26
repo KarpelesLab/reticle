@@ -169,9 +169,11 @@ to a constant, constrained to the board's six FPGA LEDs, built from
 Project Trellis' own database. The first time, the board's owner looked and
 the **LEDs were dark**: a bank's `BANK.VCCIO` setting, which lives in a
 tile no pad owns, was not being written. That bit is written now and
-checked against what Lattice's own packer wrote for the same board, and the
-corrected bitstream was loaded; nobody has looked since, so the claim is
-"accepted and running, with the one known omission fixed", not "lit".
+checked against what Lattice's own packer wrote for the same board, and
+with the corrected bitstream in the part the owner reported **all six LEDs
+on**. `DONE` had been high both times, which is the lesson: it says a
+bitstream was accepted, not that it configures what the design asked for.
+Only a person looking told the two runs apart.
 [`docs/fpga-trellis.md`](docs/fpga-trellis.md) says what that settles and
 what it does not: the ECP5 backend builds the part's geometry and its pads
 and **no interconnect at all**, so nothing routed and nothing clocked can

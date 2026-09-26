@@ -481,9 +481,11 @@ FPGA:
       `get_vccio` says which value, and all three reference bitstreams say
       where the bit is. It is written now, for the banks a design uses and
       no others, and the corrected bitstream was loaded into the same
-      board the same day — accepted, `DONE`, status `0x00200100`. **Nobody
-      has looked since**, so the claim is "accepted and running, with the
-      one known omission fixed", not "lit". The backend builds the part's
+      board the same day — accepted, `DONE`, status `0x00200100`, and this
+      time the owner looked and **all six LEDs were on**. `DONE` was high
+      for both the broken and the corrected bitstream, and every
+      structural check passed on the broken one; a person looking at the
+      board is what told them apart. The backend builds the part's
       geometry and its pads and
       **no interconnect at all**, so nothing routed, nothing clocked and
       no lookup table can be built yet, and a design with anything to
