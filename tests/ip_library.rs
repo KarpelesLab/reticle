@@ -9586,6 +9586,20 @@ struct UlpiPhy {
     overrode: bool,
     /// The pull-up never reaches the pair, so it stays at SE0.
     no_pullup: bool,
+    /// The Link's own packet is still going out on the pair, so the bus
+    /// state machine goes back to `Line` when it has finished whatever it
+    /// interrupted with.
+    resume_line: bool,
+    /// The transceiver's full-speed receiver is **not squelched while it
+    /// transmits**, so every receive command it sends during the Link's own
+    /// packet reports RxActive. Measured on a Microchip USB3343: `rx_active`
+    /// in the Link stuck high for over 1024 clocks, twenty times the longest
+    /// packet a host sends, with nothing on the pair but the Link's own
+    /// answer. ULPI 1.1 does not forbid it — §3.8.1.3 only says the receive
+    /// command at the end of a transmit "contains the status that is current
+    /// at the time" — so a Link must not read RxActive in that window as
+    /// news about an incoming packet.
+    hears_itself: bool,
 }
 
 impl UlpiPhy {
@@ -9631,6 +9645,8 @@ impl UlpiPhy {
             override_read: false,
             overrode: false,
             no_pullup: false,
+            resume_line: false,
+            hears_itself: false,
         };
         phy.power_on();
         phy
@@ -9668,6 +9684,13 @@ impl UlpiPhy {
         self
     }
 
+    /// A transceiver whose full-speed receiver hears its own transmission.
+    /// See `hears_itself`.
+    fn hearing_itself(mut self) -> UlpiPhy {
+        self.hears_itself = true;
+        self
+    }
+
     /// A transceiver whose 1.5 kOhm pull-up never reaches the pair, however
     /// often `TermSelect` is written: a peripheral with no VBUS, which must
     /// not connect one. The pair then reads SE0 for ever, and that is not a
@@ -9695,6 +9718,7 @@ impl UlpiPhy {
         self.tx.clear();
         self.tx_line.clear();
         self.forced = true;
+        self.resume_line = false;
         // A reset disconnects the pull-up with the register that held it,
         // so the pair falls back to SE0 and has to charge again.
         self.pullup = 0;
@@ -9718,7 +9742,8 @@ impl UlpiPhy {
     /// The receive command byte: LineState, VBUS valid, and the receive
     /// event.
     fn status(&self) -> u8 {
-        let event = if !self.rx_active {
+        let hearing = self.hears_itself && !self.tx_line.is_empty();
+        let event = if !self.rx_active && !hearing {
             0b00
         } else if self.rx_error {
             0b11
@@ -9805,8 +9830,36 @@ impl UlpiPhy {
         if link.oe && self.dir {
             self.problem("the link drove the data bus while dir was high".into());
         }
-        if link.oe && self.dir != self.was_dir {
-            self.problem("the link drove a turnaround cycle".into());
+        // The **falling** turnaround is the Link's, and it is not optional.
+        // ULPI 1.1 §2.3.1 wants `dir` "wired straight to the output
+        // buffers" of both ends, and the Microchip transceiver this model
+        // stands for says what happens to a Link that waits a cycle
+        // instead: "When the USB334x sends a RXCMD the Link is required to
+        // drive the data bus back to idle at the end of the turn around
+        // cycle. If the Link does not drive the databus to idle the USB334x
+        // may take the information on the data bus as a TXCMD and transmit
+        // data on DP and DM until the Link asserts stop" — and its weak
+        // pull-downs "are not strong enough to pull the data bus low after
+        // a ULPI RXCMD" (DS00002646A §6.5.4.1). A receive command with its
+        // ID or `alt_int` bit set is a byte with bit 6 or bit 7 high, which
+        // is a transmit command or a register command; left on a floating
+        // bus for one cycle it is read back as one.
+        //
+        // So this model requires what that part requires: in the cycle
+        // `dir` falls, the Link drives, and it drives 00h.
+        if self.was_dir && !self.dir {
+            if !link.oe {
+                self.problem(
+                    "the link left the bus floating in the cycle dir fell, where a \
+                     transceiver reads its own last receive command back as a command"
+                        .into(),
+                );
+            } else if link.data != 0 {
+                self.problem(format!(
+                    "the link drove {:#04x} and not idle in the cycle dir fell",
+                    link.data
+                ));
+            }
         }
         if link.stp && self.dir {
             self.problem("the link asserted stp while the transceiver had the bus".into());
@@ -9855,6 +9908,26 @@ impl UlpiPhy {
             if !self.rx_active {
                 // With no packet on it, LineState is the pair.
                 self.line_state = line_bits(seen);
+            }
+        }
+
+        // The pair, if the transceiver is driving it. This runs whatever the
+        // bus is doing, because a USB packet on a wire does not pause while
+        // a receive command goes out on the ULPI bus.
+        if !self.tx_line.is_empty() {
+            if self.tx_hold > 1 {
+                self.tx_hold -= 1;
+            } else {
+                self.tx_pos += 1;
+                if self.tx_pos >= self.tx_line.len() {
+                    self.line_out = None;
+                    self.tx_line.clear();
+                    self.tx_pos = 0;
+                } else {
+                    self.tx_hold = self.div;
+                    self.line_out = Some(self.tx_line[self.tx_pos]);
+                    self.line_state = line_bits(self.tx_line[self.tx_pos]);
+                }
             }
         }
 
@@ -9973,7 +10046,12 @@ impl UlpiPhy {
                 self.data = self.garbage;
             }
             PhyState::Release => {
-                self.state = PhyState::Idle;
+                if self.resume_line && !self.tx_line.is_empty() {
+                    self.state = PhyState::Line;
+                } else {
+                    self.resume_line = false;
+                    self.state = PhyState::Idle;
+                }
                 self.idle_out();
             }
             PhyState::Collect => {
@@ -10009,22 +10087,33 @@ impl UlpiPhy {
                 }
             }
             PhyState::Line => {
-                if self.tx_hold > 1 {
-                    self.tx_hold -= 1;
+                // The Link's own packet is going out on the pair. The bus is
+                // idle for it, and every transition of the line is reported
+                // to the Link as a receive command, which is what the part
+                // does: "after STP is asserted each FS/LS bit transition will
+                // generate a RXCMD since the bit times are relatively slow"
+                // (USB334x DS00002646A §6.3.1). The last of them carries the
+                // SE0-to-J transition that ULPI 1.1 §3.8.1.3 makes the end of
+                // the packet, and that is the one a Link can time from.
+                //
+                // This used to keep the bus silent for the whole packet and
+                // then send **one** receive command, already at J, which is
+                // less than ULPI promises and nothing like what the part
+                // sends. A Link cannot find its own end of packet in it,
+                // which is why this model could not falsify a Link that read
+                // every receive command as news about a host.
+                if self.tx_line.is_empty() {
+                    self.state = PhyState::Idle;
+                    self.idle_out();
+                } else if self.owed() {
+                    self.resume_line = true;
+                    self.state = PhyState::CmdTurn;
+                    self.unsolicited += 1;
+                    self.dir = true;
+                    self.nxt = false;
+                    self.data = self.garbage;
                 } else {
-                    self.tx_pos += 1;
-                    if self.tx_pos >= self.tx_line.len() {
-                        self.line_out = None;
-                        self.state = PhyState::Idle;
-                    } else {
-                        self.tx_hold = self.div;
-                        self.line_out = Some(self.tx_line[self.tx_pos]);
-                        if self.tx_pos + 3 >= self.tx_line.len() {
-                            // The end of packet, which the Link is owed a
-                            // receive command for (§3.8.1.3).
-                            self.line_state = line_bits(self.tx_line[self.tx_pos]);
-                        }
-                    }
+                    self.idle_out();
                 }
             }
             PhyState::RxTurn => {
@@ -10119,6 +10208,8 @@ impl UlpiPhy {
         self.tx_pos = 0;
         self.tx_hold = self.div;
         self.line_out = Some(self.tx_line[0]);
+        self.line_state = line_bits(self.tx_line[0]);
+        self.resume_line = false;
         self.state = PhyState::Line;
         self.idle_out();
     }
@@ -10441,6 +10532,44 @@ fn usb_device_ulpi_retries_a_register_read_a_receive_overrode() {
         .count();
     assert_eq!(reads, 1, "the read was tried again and then answered");
     enumerate(&mut host);
+}
+
+/// A transceiver that **hears its own transmission**, which is the one that
+/// is soldered to the board.
+///
+/// A full-speed receiver has no squelch, so a transceiver that does not gate
+/// its own can report RxActive while it is putting the Link's own packet on
+/// the pair — and this one does. Measured on a Microchip USB3343 on a Great
+/// Scott Gadgets Cynthion: `rx_active` inside the Link high for more than
+/// 1024 clocks, twenty times the longest packet this host sends, with
+/// nothing on the pair but the device's own answer; `dir` held high across
+/// the join into the host's handshake; and `D2h` — an ACK's PID, check
+/// nibble and all — arriving on the data bus and being filed as the *k*th
+/// byte of a phantom packet instead of the first byte of a handshake.
+///
+/// What that cost: the data stage never advanced, because the ACK that
+/// advances it was never recognised; the same packet went out again with the
+/// same toggle for ever; and the host's transfer died of a five second
+/// timeout. ULPI 1.1 permits all of it — §3.8.1.3 says a receive command
+/// "contains the status that is current at the time the RX CMD is sent" and
+/// says nothing about what RxEvent must be during a transmit — so the Link
+/// is what has to be right: **a packet is bytes**, and `rx_active` reaches
+/// the endpoint only once one has arrived.
+///
+/// The enumeration asserted here is the same one the straight transceiver
+/// gets, byte for byte.
+#[test]
+fn usb_device_ulpi_enumerates_through_a_transceiver_that_hears_itself() {
+    let design = ulpi_design();
+    let phy = UlpiPhy::new(ULPI_CPB).hearing_itself();
+    let mut host = UsbHost::new(UlpiPair::with_phy(&design, phy), 0);
+    enumerate(&mut host);
+    assert!(
+        host.pair.phy.packets.len() > 4,
+        "the device answered {} packet(s)",
+        host.pair.phy.packets.len()
+    );
+    assert_eq!(host.pair.problems(), &[] as &[String]);
 }
 
 /// A pair nothing is driving is not a host holding a bus reset.

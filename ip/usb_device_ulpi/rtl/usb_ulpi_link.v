@@ -273,6 +273,10 @@ module usb_ulpi_link #(
     reg        rx_eop_q;
     reg        rx_active_q;
     reg        rx_error_q;
+    // A byte of this packet has been delivered. A packet is bytes: the PID
+    // is always the first of them, so a receive that produced none was never
+    // a packet and must not produce the end of one.
+    reg        rx_any;
     reg [1:0]  line_state;
     reg [7:0]  se0_cnt;
     reg        ready_q;
@@ -300,15 +304,68 @@ module usb_ulpi_link #(
                     | (state == S_RD_DATA);
 
     assign ulpi_data_o  = data_out;
-    assign ulpi_data_oe = bus_ours;
-    assign ulpi_stp     = stp_q;
+    // **The Link drives the bus whenever `dir` is low, including the cycle
+    // `dir` falls in.** ULPI 1.1 §2.3.1 wants `dir` "wired straight to the
+    // output buffers" of both ends, which is this and not a cycle later,
+    // and the transceiver's own datasheet says why the extra cycle is not
+    // conservatism but a fault:
+    //
+    //   "When the USB334x sends a RXCMD the Link is required to drive the
+    //    data bus back to idle at the end of the turn around cycle. If the
+    //    Link does not drive the databus to idle the USB334x may take the
+    //    information on the data bus as a TXCMD and transmit data on DP and
+    //    DM until the Link asserts stop." ... "The pull downs are not strong
+    //    enough to pull the data bus low after a ULPI RXCMD, the Link must
+    //    drive the data bus to idle after DIR is de-asserted."
+    //    — USB334x DS00002646A §6.5.4.1
+    //
+    // A receive command whose ID bit or `alt_int` bit is set is a byte with
+    // bit 7 or bit 6 high, which is exactly a REGW, a REGR or a transmit
+    // command; left floating on the bus for one cycle it is read back as
+    // one. The receive side is unchanged and still believes a byte only
+    // when `dir` was already high in the cycle before it, which is the half
+    // of §2.3.1 that is about data and not about drivers.
+    assign ulpi_data_oe = ~ulpi_dir;
+    // `stp` is gated on `dir` for the same reason `ulpi_data_oe` is: while
+    // the transceiver owns the bus, `stp` means "give it back" (ULPI 1.1
+    // §3.8.4.2) and this Link never asks. It matters now that the `stp`
+    // which ends a transmit is *held* rather than pulsed: a receive
+    // starting in the middle of that wait would otherwise see one cycle of
+    // it.
+    assign ulpi_stp     = stp_q & ~ulpi_dir;
     assign ulpi_rst_n   = rst_q;
 
     assign rx_data   = rx_data_q;
     assign rx_valid  = rx_valid_q;
     assign rx_eop    = rx_eop_q;
-    assign rx_active = rx_active_q;
-    assign line_idle = ready_q & ~rx_active_q & (line_state == LINE_J);
+    // **A packet is bytes.** `rx_active` is reported to the endpoint only
+    // once a byte of the packet has actually been delivered, and not when a
+    // receive command merely says RxActive.
+    //
+    // ULPI's RxActive is a statement about the *line*: "a packet is being
+    // received". What an endpoint needs is a statement about the *bus*:
+    // bytes are arriving, and this is the first of them. On a transceiver
+    // whose full-speed receiver is not squelched while it transmits the two
+    // come apart, because it reports RxActive for the Link's own packet —
+    // measured on a Microchip USB3343: `rx_active` high for more than 1024
+    // clocks, twenty times the longest packet a host sends here, and `dir`
+    // held high across the join, so the host's ACK arrived inside a receive
+    // that was already in progress. Its PID byte was then byte *k* of a
+    // phantom packet instead of byte 0 of a handshake, `usb_ctrl_ep` filed
+    // it as payload, and the data stage never advanced: the same packet went
+    // out again with the same toggle for ever and the host's transfer died
+    // of a five second timeout.
+    //
+    // ULPI 1.1 does not forbid any of that. §3.8.1.3 says only that a
+    // receive command "contains the status that is current at the time the
+    // RX CMD is sent", and §3.8.2.2 that the changes during a transmit are
+    // "replaced with a single RX CMD update that is sent at the end of the
+    // USB transmit" — nothing says what its RxEvent field must be. So a
+    // Link must not take RxActive alone for a packet, and this one no longer
+    // does.
+    assign rx_active = rx_active_q & rx_any;
+    assign line_idle = ready_q & ~(rx_active_q & rx_any)
+                     & (line_state == LINE_J);
     assign bus_reset = (se0_cnt == SE0_CYCLES[7:0]);
 
     assign tx_index  = idx;
@@ -368,6 +425,7 @@ module usb_ulpi_link #(
             rx_eop_q    <= 1'b0;
             rx_active_q <= 1'b0;
             rx_error_q  <= 1'b0;
+            rx_any      <= 1'b0;
             line_state  <= LINE_SE0;
             se0_cnt     <= 8'd0;
             seen_line   <= 1'b0;
@@ -395,15 +453,28 @@ module usb_ulpi_link #(
                     // and carries nothing.
                     rx_active_q <= 1'b1;
                     rx_error_q  <= 1'b0;
+                    rx_any      <= 1'b0;
                 end else if (phy_drives) begin
                     if (ulpi_nxt) begin
                         rx_data_q  <= ulpi_data_i;
                         rx_valid_q <= 1'b1;
+                        rx_any     <= 1'b1;
                     end else begin
                         // A receive command.
                         line_state <= ulpi_data_i[1:0];
                         case (ulpi_data_i[5:4])
                             RX_ON: begin
+                                // A packet announced by a receive command
+                                // rather than by `dir` and `nxt` together
+                                // starts just as clean: RxError belongs to
+                                // the packet it was reported in (ULPI 1.1
+                                // §3.8.2.5) and must not be carried into
+                                // the next one, which is what this used to
+                                // do.
+                                if (!rx_active_q) begin
+                                    rx_error_q <= 1'b0;
+                                    rx_any     <= 1'b0;
+                                end
                                 rx_active_q <= 1'b1;
                             end
                             RX_ERROR: begin
@@ -411,9 +482,11 @@ module usb_ulpi_link #(
                                 rx_error_q  <= 1'b1;
                             end
                             RX_IDLE: begin
-                                if (rx_active_q && !rx_error_q) rx_eop_q <= 1'b1;
+                                if (rx_active_q && rx_any && !rx_error_q)
+                                    rx_eop_q <= 1'b1;
                                 rx_active_q <= 1'b0;
                                 rx_error_q  <= 1'b0;
+                                rx_any      <= 1'b0;
                             end
                             default: begin
                                 // 2'b10 is host disconnect, which a
@@ -422,12 +495,42 @@ module usb_ulpi_link #(
                         endcase
                     end
                 end
-                if (dir_fell && rx_active_q) begin
-                    // The other way a packet can end: `dir` let go
-                    // without a closing receive command.
-                    if (!rx_error_q) rx_eop_q <= 1'b1;
+                if (dir_fell) begin
+                    // **The other way a packet ends, and it ends whatever
+                    // the Link thought was going on**: "The Link considers a
+                    // packet to be completed when the RX CMD byte shows
+                    // RxActive is set to 0b, or `dir` is de-asserted,
+                    // whichever occurs first" (ULPI 1.1 §3.8.2.4). The
+                    // transceiver has given the bus back, so whatever it was
+                    // delivering is over.
+                    //
+                    // This used to be `dir_fell && rx_active_q`, and the two
+                    // words cost a device that could be heard and could not
+                    // listen. A receive command that reports RxActive **out
+                    // of an idle bus** — and a transceiver whose full-speed
+                    // receiver is not squelched while it transmits reports
+                    // the Link's own packet that way — sets `rx_active_q` on
+                    // the very edge `dir` falls on. The old condition read
+                    // the register's *old* value, still zero, so it cleared
+                    // nothing; and nothing could afterwards, because `dir`
+                    // had already fallen and there was no packet left to
+                    // close. `rx_active` then sat high with no packet on the
+                    // pair: `line_idle` false, so `usb_ctrl_ep` could never
+                    // answer another token, and its byte counter never
+                    // restarted, so the host's ACK was filed as payload
+                    // instead of read as a handshake. Measured on a
+                    // Microchip USB3343 on a Cynthion: `rx_active` high for
+                    // over 1024 clocks — twenty times the longest packet a
+                    // host sends here — with `D2h`, an ACK's PID, arriving
+                    // on the bus and going nowhere. The data stage never
+                    // advanced, the same packet went out again with the same
+                    // toggle for ever, and the host's transfer died of a
+                    // five second timeout: `device descriptor read/64,
+                    // error -110`.
+                    if (rx_active_q && rx_any && !rx_error_q) rx_eop_q <= 1'b1;
                     rx_active_q <= 1'b0;
                     rx_error_q  <= 1'b0;
+                    rx_any      <= 1'b0;
                 end
             end
 
@@ -654,8 +757,8 @@ module usb_ulpi_link #(
                         end
                     end
                     default: begin
-                        // S_TX_CRC1, the last byte of the packet: `stp`
-                        // for one cycle with 8'h00 on the bus ends it.
+                        // S_TX_CRC1, the last byte of the packet: `stp` for
+                        // one cycle with 8'h00 on the bus ends it.
                         if (ulpi_nxt) begin
                             data_out <= 8'h00;
                             stp_q    <= 1'b1;
