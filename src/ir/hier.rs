@@ -1033,10 +1033,11 @@ impl Design {
             if !supplied.is_empty() {
                 diag = diag.with_note(format!("{supplier} declares no primitive `{name}` either"));
             }
-            diags.push(diag.with_note(format!(
-                "to leave `{name}` empty on purpose, declare it: a `blackbox module` in the \
-                 `.rtl` form, or an IP package whose sources are encrypted"
-            )));
+            diags.push(diag.with_note(
+                "a black box on purpose is one something declares: a `blackbox module` in \
+                 the `.rtl` form, an IP package whose sources are encrypted, or a primitive \
+                 the target itself provides",
+            ));
         }
         found.len()
     }
