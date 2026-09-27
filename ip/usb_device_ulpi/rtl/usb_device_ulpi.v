@@ -68,7 +68,11 @@ module usb_device_ulpi #(
     // for afterwards: 5 us at 60 MHz.
     parameter        RESET_CYCLES = 300,
     // Cycles of SE0 that make a bus reset: 2.5 us at 60 MHz.
-    parameter        SE0_CYCLES   = 150
+    parameter        SE0_CYCLES   = 150,
+    // Attempts at the start-up's LineState read while it still says SE0,
+    // which a pair whose pull-up has just been connected does for
+    // milliseconds. `usb_ulpi_link` says what was measured.
+    parameter        LINE_TRIES   = 40000
 ) (
     input  wire       clk60,
     input  wire       rst_n,
@@ -95,7 +99,8 @@ module usb_device_ulpi #(
 
     usb_ulpi_link #(
         .RESET_CYCLES (RESET_CYCLES),
-        .SE0_CYCLES   (SE0_CYCLES)
+        .SE0_CYCLES   (SE0_CYCLES),
+        .LINE_TRIES   (LINE_TRIES)
     ) u_link (
         .clk          (clk60),
         .rst_n        (rst_n),

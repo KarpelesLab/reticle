@@ -39,7 +39,12 @@
 //                               register with it
 //     Function Control read     which must read back 0x45
 //     Debug read                LineState, so the Link knows where the
-//                               bus is before anything changes on it
+//                               bus is before anything changes on it —
+//                               read again while it still says SE0,
+//                               because the pull-up the write above just
+//                               connected takes milliseconds to charge
+//                               the pair and the first answer is the line
+//                               on its way up
 //
 //   `phy_ready` waits for all of that; a readback that is not 0x45
 //   starts again from the OTG Control write. A transceiver that asserts
@@ -70,9 +75,13 @@
 //
 //   Bus reset. LineState comes from receive commands, and the
 //   transceiver sends one whenever it changes. SE0 held for SE0_CYCLES —
-//   2.5 us at 60 MHz — is a bus reset. `line_idle` is the bus at J with
-//   no packet in progress, which is what `usb_ctrl_ep` times its answer
-//   from.
+//   2.5 us at 60 MHz — is a bus reset, **once the pair has been seen
+//   somewhere other than SE0**: a device that has only ever read SE0 has
+//   not been reset by anybody, it has a pull-up that is still charging or
+//   an empty socket, and since a transceiver reports LineState only when
+//   it changes there would be nothing to end a reset called from that.
+//   `line_idle` is the bus at J with no packet in progress, which is what
+//   `usb_ctrl_ep` times its answer from.
 //
 // What it does not do
 //   Full speed only. High speed needs the chirp handshake (§3.8.5.1) and
@@ -115,7 +124,23 @@ module usb_ulpi_link #(
     // 60 MHz.
     parameter RESET_CYCLES = 300,
     // Cycles of SE0 that make a bus reset. 2.5 us at 60 MHz.
-    parameter SE0_CYCLES   = 150
+    parameter SE0_CYCLES   = 150,
+    // How many times the start-up re-reads the Debug register while it
+    // still says SE0 before giving up and going on anyway.
+    //
+    // This is not a guess. The 1.5 kOhm pull-up that `TermSelect` connects
+    // has to charge the pair against a host's two 15 kOhm pull-downs and
+    // the capacitance of a cable, and until it has, a transceiver's
+    // LineState is **SE0** and not J. Measured on a Great Scott Gadgets
+    // Cynthion r1.4 against a Microchip transceiver: five microseconds
+    // after the write that sets `TermSelect`, the Debug register reads
+    // `00h`; a few milliseconds later it reads `01h`. A single read is
+    // therefore not a reading of anything, which is what this block used
+    // to do and what `docs/fpga-trellis.md` records finding out.
+    //
+    // Each attempt is a whole register read, about a dozen clocks, so
+    // 40 000 of them is roughly eight milliseconds at 60 MHz.
+    parameter LINE_TRIES   = 40000
 ) (
     input  wire       clk,
     input  wire       rst_n,
@@ -218,6 +243,11 @@ module usb_ulpi_link #(
     reg [1:0]  line_state;
     reg [7:0]  se0_cnt;
     reg        ready_q;
+    // The pair has been seen somewhere other than SE0, so there is a bus
+    // for a host to reset. Before that, SE0 is a pair nobody is driving.
+    reg        seen_line;
+    // Attempts at the start-up's Debug register read, while it says SE0.
+    reg [15:0] line_tries;
 
     reg [3:0]  idx;
     reg [3:0]  len_q;
@@ -305,6 +335,8 @@ module usb_ulpi_link #(
             rx_error_q  <= 1'b0;
             line_state  <= LINE_SE0;
             se0_cnt     <= 8'd0;
+            seen_line   <= 1'b0;
+            line_tries  <= 16'd0;
             ready_q     <= 1'b0;
             idx         <= 4'd0;
             len_q       <= 4'd0;
@@ -364,8 +396,16 @@ module usb_ulpi_link #(
                 end
             end
 
-            // SE0 held long enough is the host resetting the bus.
-            if (line_state != LINE_SE0 || !ready_q) se0_cnt <= 8'd0;
+            // SE0 held long enough is the host resetting the bus — but
+            // only once there has been a bus. A device that has just
+            // connected its own pull-up reads SE0 because the pair has not
+            // charged yet, and one with nothing in the socket reads SE0 for
+            // ever; neither is a host holding a reset down, and calling them
+            // one leaves `bus_reset` asserted with nothing able to end it,
+            // since a transceiver sends a receive command only when
+            // LineState *changes*.
+            if (line_state != LINE_SE0) seen_line <= 1'b1;
+            if (line_state != LINE_SE0 || !ready_q || !seen_line) se0_cnt <= 8'd0;
             else if (se0_cnt != SE0_CYCLES[7:0]) se0_cnt <= se0_cnt + 8'd1;
 
             // -------------------------------------------------------------
@@ -481,8 +521,23 @@ module usb_ulpi_link #(
                             state <= S_NEXT;
                         end else if (phy_drives) begin
                             if (step == I_LINE) begin
+                                // LineState, and it is read again while it
+                                // says SE0: the pull-up this block has just
+                                // connected takes milliseconds to charge the
+                                // pair, so the first answer is the line on
+                                // its way up and not where it ends. The
+                                // retries are bounded, because a socket with
+                                // no cable in it stays at SE0 for ever and
+                                // `phy_ready` still has to come up — the
+                                // guard on `se0_cnt` is what keeps that from
+                                // being read as a bus reset.
                                 line_state <= ulpi_data_i[1:0];
-                                step       <= I_DONE;
+                                if (ulpi_data_i[1:0] != LINE_SE0
+                                        || line_tries == LINE_TRIES[15:0]) begin
+                                    step <= I_DONE;
+                                end else begin
+                                    line_tries <= line_tries + 16'd1;
+                                end
                                 state      <= S_NEXT;
                             end else if (ulpi_data_i == FUNC_CTRL_FS) begin
                                 step  <= I_LINE;

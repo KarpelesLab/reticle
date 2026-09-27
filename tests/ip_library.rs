@@ -9271,6 +9271,21 @@ fn usb_device_fs_pll_takes_48_mhz_from_the_pll() {
 const ULPI_CPB: u64 = 5;
 
 /// The registers of a ULPI transceiver this model has.
+/// Interface clocks the pair takes to reach J after `TermSelect` connects
+/// the 1.5 kOhm pull-up.
+///
+/// The model used to have an undriven pair sitting at **J**, which is
+/// backwards: a full-speed bus idles at J *because a device pulls D+ up*,
+/// and before that pull-up is connected and has charged the pair against a
+/// host's two 15 kOhm pull-downs there is nothing on it but SE0. Measured on
+/// a Great Scott Gadgets Cynthion r1.4 against a Microchip transceiver, five
+/// microseconds after the write that sets `TermSelect` the Debug register
+/// still reads `00h` and a few milliseconds later it reads `01h`. Ten
+/// microseconds here is that shape at simulation's scale: the start-up's
+/// first LineState read lands in the SE0 window, so a Link that believes one
+/// read of it is caught.
+const ULPI_PULLUP_SETTLE: u64 = 600;
+
 const ULPI_FUNC_CTRL: u8 = 0x04;
 const ULPI_OTG_CTRL: u8 = 0x0A;
 const ULPI_DEBUG: u8 = 0x15;
@@ -9531,8 +9546,22 @@ struct UlpiPhy {
     rx_error: bool,
     rx_done: bool,
     line_state: u8,
+    /// Interface clocks `TermSelect` has been set for, so the pair can be
+    /// charging rather than already at J. See `ULPI_PULLUP_SETTLE`.
+    pullup: u64,
     /// The last receive command the Link was given.
     sent: u8,
+    /// The status has changed since the Link was last told, and the Link
+    /// has still not been told.
+    ///
+    /// This used to be computed as `status() != sent`, which loses a change
+    /// that comes and goes while the transceiver is busy with a register
+    /// access: the Link is never told, `sent` never moves, and the way back
+    /// looks like no change at all. ULPI 1.1 §3.8.1.3 queues a receive
+    /// command instead and says the queued one "always carries the current
+    /// values, never an old snapshot" — so what is sticky is the *fact* that
+    /// the Link is owed one, and what is sent is whatever is true by then.
+    owed: bool,
     forced: bool,
     tx: Vec<u8>,
     tx_line: Vec<UsbLine>,
@@ -9555,6 +9584,8 @@ struct UlpiPhy {
     /// Let a receive override the first register read.
     override_read: bool,
     overrode: bool,
+    /// The pull-up never reaches the pair, so it stays at SE0.
+    no_pullup: bool,
 }
 
 impl UlpiPhy {
@@ -9580,8 +9611,10 @@ impl UlpiPhy {
             rx_active: false,
             rx_error: false,
             rx_done: false,
-            line_state: 0b01,
+            line_state: 0b00,
+            pullup: 0,
             sent: 0,
+            owed: false,
             forced: true,
             tx: Vec::new(),
             tx_line: Vec::new(),
@@ -9597,6 +9630,7 @@ impl UlpiPhy {
             lied: false,
             override_read: false,
             overrode: false,
+            no_pullup: false,
         };
         phy.power_on();
         phy
@@ -9634,6 +9668,15 @@ impl UlpiPhy {
         self
     }
 
+    /// A transceiver whose 1.5 kOhm pull-up never reaches the pair, however
+    /// often `TermSelect` is written: a peripheral with no VBUS, which must
+    /// not connect one. The pair then reads SE0 for ever, and that is not a
+    /// host holding a reset.
+    fn unpowered(mut self) -> UlpiPhy {
+        self.no_pullup = true;
+        self
+    }
+
     /// The power-on state: the reset values of the registers, and no
     /// memory of anything on either side.
     fn power_on(&mut self) {
@@ -9652,6 +9695,20 @@ impl UlpiPhy {
         self.tx.clear();
         self.tx_line.clear();
         self.forced = true;
+        // A reset disconnects the pull-up with the register that held it,
+        // so the pair falls back to SE0 and has to charge again.
+        self.pullup = 0;
+        self.line_state = 0b00;
+    }
+
+    /// What an undriven pair is at: SE0 until this transceiver's own
+    /// `TermSelect` pull-up has been connected long enough to charge it.
+    fn idle_line(&self) -> UsbLine {
+        if !self.no_pullup && self.pullup >= ULPI_PULLUP_SETTLE {
+            UsbLine::J
+        } else {
+            UsbLine::Se0
+        }
     }
 
     fn problem(&mut self, why: String) {
@@ -9673,12 +9730,13 @@ impl UlpiPhy {
 
     /// Whether the Link is owed a receive command.
     fn owed(&self) -> bool {
-        self.forced || self.status() != self.sent
+        self.forced || self.owed
     }
 
     fn send_status(&mut self) {
         self.data = self.status();
         self.sent = self.data;
+        self.owed = false;
         self.forced = false;
         self.nxt = false;
         self.dir = true;
@@ -9764,10 +9822,22 @@ impl UlpiPhy {
             return;
         }
 
+        // How long the 1.5 kOhm pull-up has been connected, which is what
+        // decides whether an undriven pair is at SE0 or has reached J.
+        if self
+            .regs
+            .get(&ULPI_FUNC_CTRL)
+            .is_some_and(|v| v & 0x04 != 0)
+        {
+            self.pullup += 1;
+        } else {
+            self.pullup = 0;
+        }
+
         // The line, except while the transceiver owns it: during a
         // transmit the receive path is blocked (ULPI 1.1 §3.8.2.2).
         if !matches!(self.state, PhyState::Line | PhyState::Collect) {
-            let seen = host.unwrap_or(UsbLine::J);
+            let seen = host.unwrap_or(self.idle_line());
             match self.rx.step(seen) {
                 LineEvent::Byte(b) => self.rx_bytes.push(b),
                 LineEvent::Eop => self.rx_done = true,
@@ -9788,6 +9858,12 @@ impl UlpiPhy {
             }
         }
 
+        // Anything the Link has not been told yet leaves it owed a receive
+        // command, and that outlives the change going away again.
+        if self.status() != self.sent {
+            self.owed = true;
+        }
+
         let want_rx = self.rx_active || !self.rx_bytes.is_empty();
         match self.state {
             PhyState::Idle => {
@@ -9798,14 +9874,23 @@ impl UlpiPhy {
                     self.dir = true;
                     self.nxt = true;
                     self.data = self.garbage;
-                } else if link.oe && link.data != 0 {
-                    self.take_command(link.data);
                 } else if self.owed() {
+                    // A receive command outranks register access (ULPI 1.1
+                    // §3.8.1.3), so it goes out even though the Link is
+                    // driving a command this cycle — which aborts that
+                    // command and has the Link retry it (§3.8.3.1). Taking
+                    // the Link's command first instead, as this used to,
+                    // means a status change that happens while the Link is
+                    // reading a register in a loop is never reported at all:
+                    // `sent` moves on without the Link ever having been
+                    // told, and the next change back looks like no change.
                     self.state = PhyState::CmdTurn;
                     self.unsolicited += 1;
                     self.dir = true;
                     self.nxt = false;
                     self.data = self.garbage;
+                } else if link.oe && link.data != 0 {
+                    self.take_command(link.data);
                 } else {
                     self.idle_out();
                 }
@@ -10090,11 +10175,19 @@ impl<'d> UlpiPair<'d> {
         let clk = pair.clk;
         let rst_n = top_net(&pair.sim, "rst_n");
         reset(&mut pair.sim, clk, rst_n);
-        for _ in 0..4000 {
+        // Nobody drives the pair while the device starts up, which is the
+        // point: a host's downstream port does not drive an idle bus, it
+        // holds both lines down through two 15 kOhm resistors, and the bus
+        // reaches J only because the device connects its own 1.5 kOhm
+        // pull-up and that charges the pair. This used to be
+        // `Some(UsbLine::J)` — a pair already at J before the device had
+        // asked for it — and that is what hid the Link believing one read of
+        // the Debug register. See `ULPI_PULLUP_SETTLE`.
+        for _ in 0..8000 {
             if pair.ready() {
                 return pair;
             }
-            pair.cycle(Some(UsbLine::J));
+            pair.cycle(None);
         }
         panic!(
             "the transceiver was never configured; it saw {:?}",
@@ -10170,6 +10263,28 @@ fn ulpi_design() -> Design {
     )
 }
 
+/// Runs of the same access collapsed to one, with how long the longest run
+/// of each was.
+///
+/// The start-up's LineState read repeats while the pull-up charges the pair,
+/// and how many times is a property of a capacitance rather than of the
+/// Link, so the sequence is asserted with each run standing for itself and
+/// the repetition asserted separately.
+fn collapsed(accesses: &[UlpiAccess]) -> Vec<UlpiAccess> {
+    let mut out: Vec<UlpiAccess> = Vec::new();
+    for access in accesses {
+        if out.last() != Some(access) {
+            out.push(*access);
+        }
+    }
+    out
+}
+
+/// How many times `accesses` holds exactly this one.
+fn times(accesses: &[UlpiAccess], which: &UlpiAccess) -> usize {
+    accesses.iter().filter(|a| *a == which).count()
+}
+
 /// The start-up sequence, byte for byte: the reset pin held, the reset
 /// ULPI itself asks for, the two registers a full-speed peripheral needs,
 /// the readback that confirms them and the LineState the device starts
@@ -10179,7 +10294,7 @@ fn usb_device_ulpi_configures_the_transceiver_before_it_answers() {
     let design = ulpi_design();
     let pair = UlpiPair::new(&design);
     assert_eq!(
-        pair.phy.accesses,
+        collapsed(&pair.phy.accesses),
         vec![
             // XcvrSelect = 01 (full speed), TermSelect = 1 (the pull-up
             // on D+), SuspendM = 1, and the reset bit.
@@ -10189,10 +10304,24 @@ fn usb_device_ulpi_configures_the_transceiver_before_it_answers() {
             // The same settings without the reset bit.
             wrote(0x04, 0x45),
             got(0x04, 0x45),
-            // The Debug register, whose low two bits are LineState: the
-            // host is idling the pair at J.
+            // The Debug register, whose low two bits are LineState. The
+            // pull-up the write above connected has not charged the pair
+            // yet, so the first answers are **SE0** — the line on its way
+            // up — and the Link reads again until they are not.
+            got(0x15, 0x00),
+            // And then J, which is where a full-speed bus idles.
             got(0x15, 0x01),
         ]
+    );
+    assert!(
+        times(&pair.phy.accesses, &got(0x15, 0x00)) > 1,
+        "the LineState read was not repeated while the pair charged: {:?}",
+        pair.phy.accesses
+    );
+    assert_eq!(
+        times(&pair.phy.accesses, &got(0x15, 0x01)),
+        1,
+        "the Link went on reading LineState after it had it"
     );
     assert_eq!(pair.phy.regs[&0x04], 0x45, "Function Control");
     assert_eq!(pair.phy.regs[&0x0A], 0x00, "OTG Control");
@@ -10314,6 +10443,51 @@ fn usb_device_ulpi_retries_a_register_read_a_receive_overrode() {
     enumerate(&mut host);
 }
 
+/// A pair nothing is driving is not a host holding a bus reset.
+///
+/// This is the other half of what a charging pull-up taught. The Link's
+/// start-up reads LineState and gets SE0, because the pull-up it has just
+/// connected has not brought the pair up yet — and with a transceiver that
+/// has no VBUS and so connects no pull-up at all, it never will. SE0 held
+/// for 2.5 us is a bus reset *on a bus*, and a device that has never seen
+/// the pair anywhere else has no bus: a transceiver reports LineState only
+/// when it **changes**, so nothing would ever arrive to end a reset called
+/// from that, and `usb_reset` would be stuck high for as long as the part
+/// was configured. `phy_ready` still has to come up, because the LEDs and
+/// the readback say something true about the transceiver either way.
+#[test]
+fn usb_device_ulpi_does_not_call_an_undriven_pair_a_bus_reset() {
+    // Twenty attempts rather than the board's forty thousand, so the
+    // simulation is short; the Link gives up and goes on, which is the case
+    // under test.
+    let design = design_of(
+        "usb_device_ulpi",
+        "usb_device_ulpi",
+        &[
+            ("VID", "16'h1209"),
+            ("PID", "16'h0001"),
+            ("LINE_TRIES", "20"),
+        ],
+    );
+    let mut pair = UlpiPair::with_phy(&design, UlpiPhy::new(ULPI_CPB).unpowered());
+    assert!(
+        pair.ready(),
+        "`phy_ready` never came up on a pair that stayed at SE0"
+    );
+    assert_eq!(
+        pair.phy.line_state, 0b00,
+        "the model let the pair leave SE0"
+    );
+    for _ in 0..4000 {
+        pair.cycle(None);
+        assert!(
+            !pair.usb_reset(),
+            "an SE0 pair the device had never seen anywhere else was called a bus reset"
+        );
+    }
+    assert!(pair.phy.problems.is_empty(), "{:?}", pair.phy.problems);
+}
+
 /// A transceiver that does not take the settings is written to again
 /// rather than believed.
 #[test]
@@ -10322,7 +10496,7 @@ fn usb_device_ulpi_writes_the_registers_again_when_the_readback_is_wrong() {
     let phy = UlpiPhy::new(ULPI_CPB).lying();
     let mut host = UsbHost::new(UlpiPair::with_phy(&design, phy), 0);
     assert_eq!(
-        host.pair.phy.accesses,
+        collapsed(&host.pair.phy.accesses),
         vec![
             wrote(0x04, 0x65),
             wrote(0x0A, 0x00),
@@ -10333,6 +10507,8 @@ fn usb_device_ulpi_writes_the_registers_again_when_the_readback_is_wrong() {
             wrote(0x0A, 0x00),
             wrote(0x04, 0x45),
             got(0x04, 0x45),
+            // SE0 while the pair charges, then J.
+            got(0x15, 0x00),
             got(0x15, 0x01),
         ]
     );
