@@ -1480,6 +1480,10 @@ pub struct IoSite {
     /// released to high impedance: then the pull is the only thing
     /// deciding what the pin reads. See [`PULL_NONE`] and [`PULL_UP`].
     pub pull_modes: Vec<(String, Vec<ConfigBit>)>,
+    /// Every value `PIO<side>.SLEWRATE` takes, with the bits that select
+    /// it. [`IoSite::slew_bits`] reads it, and only a pad whose constraint
+    /// asks for a slew rate is written at all: see [`SLEW_ATTR`].
+    pub slew_rates: Vec<(String, Vec<ConfigBit>)>,
     /// The bits, in the `CIB` tile, that tie the output data wire to a
     /// fixed **one**.
     pub high_bits: Vec<ConfigBit>,
@@ -1525,6 +1529,20 @@ impl IoSite {
         self.pull_modes
             .iter()
             .find(|(name, _)| name == mode)
+            .map_or(&[][..], |(_, bits)| bits.as_slice())
+    }
+
+    /// The bits that select one value of `PIO<side>.SLEWRATE`, or an empty
+    /// slice for a value the database does not name.
+    ///
+    /// Empty is also the honest answer for the field's default, `SLOW`,
+    /// whose pattern is the one bit `FAST` sets and which it wants clear:
+    /// asking for `SLOW` means leaving the field alone. See [`SLEW_ATTR`].
+    #[must_use]
+    pub fn slew_bits(&self, rate: &str) -> &[ConfigBit] {
+        self.slew_rates
+            .iter()
+            .find(|(name, _)| name == rate)
             .map_or(&[][..], |(_, bits)| bits.as_slice())
     }
 
@@ -1600,6 +1618,13 @@ impl IoSite {
                 .map(|mode| {
                     let bits = db.locate_field(pad_at, &format!("PIO{side}.PULLMODE"), mode)?;
                     Ok(((*mode).to_owned(), bits))
+                })
+                .collect::<Result<Vec<_>, TrellisError>>()?,
+            slew_rates: SLEW_RATES
+                .iter()
+                .map(|rate| {
+                    let bits = db.locate_field(pad_at, &format!("PIO{side}.SLEWRATE"), rate)?;
+                    Ok(((*rate).to_owned(), bits))
                 })
                 .collect::<Result<Vec<_>, TrellisError>>()?,
             high_bits: db.locate_field(cib_at, &data_field, TIE_HIGH)?,
@@ -2041,6 +2066,44 @@ pub const PULL_PARAM: &str = "PULLMODE";
 /// "INPUT" || dir == "BIDIR"` and whose default for the attribute is `ON`)
 /// and for no output.
 pub const HYSTERESIS_ON: &str = "ON";
+
+/// Every value `PIO<side>.SLEWRATE` takes, in `bits.db`'s order.
+///
+/// `SLOW` is the field's default and its pattern is the one bit it wants
+/// *clear*, so it locates to nothing; `FAST` is that bit set. One bit, in
+/// the pad tile, per PIO.
+pub const SLEW_RATES: [&str; 2] = ["FAST", "SLOW"];
+
+/// The attribute that names a pad's slew rate, which is where `set_io
+/// -slew` ends up, and **why it is written at all**.
+///
+/// `PIO<side>.SLEWRATE` is an output edge rate: the field's database
+/// default is `SLOW`, and `FAST` is one bit in the pad tile. Nothing here
+/// writes it unless a constraint asks, which is exactly nextpnr's rule —
+/// `ecp5/bitstream.cc`'s `write_io` has
+///
+/// ```text
+/// if (ci->attrs.count(id_SLEWRATE) && !is_referenced(ioType_from_str(iotype)))
+///     cc.tiles[pio_tile].add_enum(pio + ".SLEWRATE", str_or_default(ci->attrs, id_SLEWRATE, "SLOW"));
+/// ```
+///
+/// so an attribute is the whole condition, the tile is the pad tile (the
+/// same one `HYSTERESIS` and `PULLMODE` go in), and the direction does not
+/// come into it: an input, an output and a bidirectional pad are all
+/// written the same way. `LVCMOS33` is not a referenced standard, so the
+/// second half of that test is always true here.
+///
+/// **What asks for it.** Great Scott Gadgets' platform file gives every pin
+/// of all three of a Cynthion's ULPI transceivers
+/// `Attrs(IO_TYPE="LVCMOS33", SLEWRATE="FAST")`, and all three of their
+/// reference bitstreams have the bit set on every one of those balls —
+/// `tests/fpga_trellis.rs`'s
+/// `what_lattices_own_packer_writes_for_a_bidirectional_pad` reads it back
+/// out of `analyzer.bit` at absolute frame positions. Until this was
+/// written it was the one attribute of that resource this backend dropped
+/// on the floor: the constraint parsed, reached the cell, and then nothing
+/// put it in a bitstream.
+pub const SLEW_ATTR: &str = "slew";
 
 impl TrellisDatabase {
     /// The [`ConfigBit`]s of one enumerated field at one grid position, in
@@ -2752,6 +2815,12 @@ impl TrellisFabric {
     /// 6. the data wire tied only if the netlist gives that pin a constant,
     ///    as for an output.
     ///
+    /// **And, for every one of the three, `PIO<side>.SLEWRATE` when a
+    /// constraint asks for one** — `set_io -slew fast`. It is the one
+    /// setting here whose condition is an attribute rather than a direction,
+    /// which is nextpnr's own rule for it, and it is the only edge rate this
+    /// family has: see [`SLEW_ATTR`].
+    ///
     /// Nothing governs the tristate beyond that. The field that could —
     /// `PIO<side>.TRIMUX_TSREG`, in the second-copy tile — decides whether
     /// the tristate comes from the `PADDT` wire or from an `IOLOGIC`
@@ -2827,6 +2896,21 @@ impl TrellisFabric {
             // `write_io`'s own test is `dir == "INPUT" || dir == "BIDIR"`,
             // and the pull is the one of the two that changes what a person
             // sees: see `PULL_NONE`.
+            // The slew rate, for every direction and only when a constraint
+            // asked: nextpnr's condition is the attribute's presence and
+            // nothing else. See `SLEW_ATTR`.
+            if let Some(rate) = m
+                .and_then(|m| m.cells.get(instance.cell))
+                .and_then(|cell| cell.attrs.get(SLEW_ATTR))
+                .and_then(|value| match value {
+                    crate::ir::AttrValue::String(s) => Some(s.to_ascii_uppercase()),
+                    _ => None,
+                })
+            {
+                for bit in pad.slew_bits(&rate) {
+                    bits.set(pad.pad_at, *bit)?;
+                }
+            }
             if reads {
                 let mode = m
                     .and_then(|m| m.cells.get(instance.cell))

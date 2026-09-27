@@ -1,5 +1,57 @@
 # A real Lattice ECP5, and a real `.bit`
 
+## An edge rate on every ULPI pin, and it changed nothing
+
+On 2026-09-27 `PIO<side>.SLEWRATE` became the first pad attribute this backend
+writes that is not a direction or a pull, which closes the last gap between
+what Great Scott Gadgets' `ULPIResource` asks for and what this flow puts in a
+bitstream. It was the leading suspect for the USB device. **It is not the
+cause**: the device still reports `device descriptor read/64, error -110`, with
+`new full-speed USB device` in the same line as before.
+
+### What Lattice's own packer writes for it, asked in full
+
+The method is the one that has found five defects on this part — ask what
+`ecppack` writes, in full, rather than diffing against what this flow writes —
+and the answer is short:
+
+| | |
+|---|---|
+| Where | the **pad** tile, the one `HYSTERESIS` and `PULLMODE` are in |
+| How much | **one bit** for `FAST`; `SLOW` is the field's default and is that bit clear, so it costs nothing and cannot be written |
+| For which pads | every direction. nextpnr's condition is the *attribute*, not the direction: `if (ci->attrs.count(id_SLEWRATE) && !is_referenced(...)) cc.tiles[pio_tile].add_enum(pio + ".SLEWRATE", ...)` in `ecp5/bitstream.cc`'s `write_io` |
+| Of the base type's bits | **none**. It is a setting of its own, like the pull mode and unlike hysteresis, whose bits `BIDIR_LVCMOS33` already contains |
+| When this writes it | only when a constraint asks — `set_io -slew fast` — which is nextpnr's condition exactly, so a design that does not ask comes out bit for bit as it did before |
+
+`tests/fpga_trellis.rs::what_lattices_own_packer_writes_for_a_slew_rate` is
+that table as assertions, and it is asked of **all thirteen pins of the
+auxiliary ULPI resource in all three of Great Scott Gadgets' own bitstreams** —
+the eight bidirectional data balls, `dir` and `nxt` (inputs), `stp`, `rst` and
+`clk` (outputs). All thirty-nine bits are set in their files at the absolute
+frame position this crate computes, and all thirty-nine read back through the
+database as `PIO<s>.SLEWRATE = FAST`. That is the whole of it: one bit per pin,
+in the pad tile, for inputs as much as outputs.
+
+### What it cost in the bitstream, and what it bought on the part
+
+`usb_ulpi_device.rcf` now asks for `-slew fast` on all thirteen ULPI pins. The
+bitstream grew by **exactly thirteen bits** — 27 169 to 27 182 set bits, 1 455
+to 1 468 decoded fields — and **all 27 182 still decode with nothing
+unexplained**, which is the standard every other bitstream here was held to.
+
+On the part: loaded, the host saw the attach, called it a full-speed device,
+and failed the same way at the same place.
+
+```
+usb 7-5: new full-speed USB device number 87 using xhci_hcd
+usb 7-5: device descriptor read/64, error -110
+```
+
+So the edge rate is now written because the board's own platform file asks for
+it and because a silently dropped constraint is a defect on its own terms. It
+is **not** evidence about anything, and the thing it was the leading suspect
+for is still open.
+
 ## The board crosses D+ and D-, and one register says so
 
 On 2026-09-27 the question "why does a host call this full-speed device a
@@ -2638,7 +2690,7 @@ borrows now. Every backend gets it.
 | Distributed RAM | `SLICEA.MODE = DPRAM`, `WREMUX`, `CLK1.CLKMUX` and the `WAD`/`WDO` wires, none of which is declared |
 | An IO standard other than LVCMOS33 | the bits are in the database and the code takes the standard from the constraints; no other standard has been on a part |
 | A USB device a host **enumerates** | **nothing in software, as far as fourteen experiments on the part can tell.** `testdata/fpga/cynthion/usb_ulpi_device.v` builds, decodes with nothing left over, loads, and is **seen to attach** by a host on the AUX port; the eight-bit bus is byte-exact in both directions, proved by reading Function Control's `41h` and the transceiver's Vendor ID off the part before writing anything; and the transceiver's own LineState says the 1.5 kOhm pull-up lands on the wire ULPI names. The host names the **other** wire, in both full-speed and low-speed mode, so **D+ and D- are exchanged between the transceiver and the host** and nothing a bitstream can contain fixes a crossed differential pair. "Where it stops, and it is not the bus" at the top of this file has every measurement and the three physical things to try, the first of which is turning the AUX plug over |
-| `SLEWRATE`, `DRIVE`, `OPENDRAIN`, `CLAMP` or `TERMINATION` on a pad | each is a `.config_enum` of the pad tile, and each is one `ecppack` writes **only when an attribute asks** — so not writing them matches nextpnr exactly for a design that does not ask. `set_io -slew` and `-drive` are parsed and reach the cell, and `configure_io` writes neither, which makes the option a silent no-op in the bitstream, and that is what should be closed. `SLEWRATE=FAST` was the leading suspect for the USB device and is **demoted**: the eight-bit ULPI bus reads back byte-exact in both directions at 60 MHz, so its edges are good enough, and no edge rate decides which of two wires a 1.5 kOhm resistor is tied to. Every ULPI pin of all three reference bitstreams still asks for it, so it is still wanted; it is no longer evidence about anything. "Where it stops, and it is not the bus" is the measurement |
+| `DRIVE`, `OPENDRAIN`, `CLAMP` or `TERMINATION` on a pad | each is a `.config_enum` of the pad tile, and each is one `ecppack` writes **only when an attribute asks** — so not writing them matches nextpnr exactly for a design that does not ask. `set_io -drive` is parsed and reaches the cell, and `configure_io` writes nothing for it, which makes the option a silent no-op in the bitstream. **`SLEWRATE` has left this row**: it is written now, see "An edge rate on every ULPI pin" |
 | A bidirectional pad with a **registered** tristate | `PIO<s>.TRIMUX_TSREG = IOLTO` and the `IOLOGIC` tristate register, none of which is declared. `fpga::primitives` declines to absorb a tri-state driver on a DDR port rather than moving the enable ahead of the register |
 | An ECP5 over an FTDI cable | nothing, in principle: the configuration plans are transport-neutral and `jtag::Scan` encodes them for MPSSE. It is refused because that pairing has never been run |
 

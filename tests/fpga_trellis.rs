@@ -2231,6 +2231,105 @@ fn the_only_bits_of_lattices_own_bitstreams_this_database_cannot_name() {
     }
 }
 
+/// Every pin of the auxiliary ULPI transceiver, in the platform file's own
+/// order: the eight data balls, then `dir`, `nxt`, `stp`, `rst` and `clk`.
+///
+/// All thirteen are one `ULPIResource` and so all thirteen carry the same
+/// `attrs=Attrs(IO_TYPE="LVCMOS33", SLEWRATE="FAST")`, whatever direction
+/// Amaranth gives each of them — which is the point of asking about them
+/// together, since nextpnr's condition for writing a slew rate is the
+/// attribute and not the direction.
+#[cfg(feature = "verilog")]
+const AUX_ULPI_ALL: [&str; 13] = [
+    "F16", "G15", "G16", "H15", "J15", "J16", "K15", "K16", "E16", "F15", "E15", "J13", "D16",
+];
+
+/// The "what does `ecppack` write, **in full**, for a slew rate?" question,
+/// asked of the three files whose every ULPI pin asks for one.
+///
+/// This is the same question that found [`trellis::BANK_VCCIO`] and an
+/// input's `PULLMODE` missing, asked about the last attribute of Great Scott
+/// Gadgets' `ULPIResource` this backend did not write. The answer, read out
+/// of their own bitstreams at absolute frame positions:
+///
+/// | | |
+/// |---|---|
+/// | Where | the **pad** tile, the one `HYSTERESIS` and `PULLMODE` are in |
+/// | How much | **one bit** for `FAST`; `SLOW` is the field's default and is that bit clear |
+/// | For which pads | all thirteen pins of the resource — inputs (`dir`, `nxt`), outputs (`stp`, `rst`, `clk`) and the eight bidirectional data balls alike |
+/// | Of the base type's bits | **none**: it is a setting of its own, like the pull mode and unlike hysteresis |
+/// | When this writes it | only when a constraint asks, which is nextpnr's own condition |
+///
+/// The last row is why this is a test about *their* files and not about this
+/// crate's output: a design that does not ask for a slew rate must come out
+/// of this flow bit for bit as it did before the field existed here, and
+/// `the_bidirectional_design_routes_and_configures_what_its_header_promises`
+/// and the rest are the assertions that say so.
+#[test]
+#[cfg(feature = "verilog")]
+fn what_lattices_own_packer_writes_for_a_slew_rate() {
+    let Some(root) = chipdb() else { return };
+    let db = trellis::open(&Disk(root), "", PART).unwrap();
+    let fabric = db.load(&TrellisOptions::new()).unwrap();
+    let mut checked = 0usize;
+    for name in ["analyzer", "selftest", "facedancer"] {
+        let Some(bytes) = reference(name) else {
+            return;
+        };
+        let stream = Ecp5Stream::parse(&bytes, &formats).unwrap();
+        let decoded = db.decode(&stream.cram);
+        for ball in AUX_ULPI_ALL {
+            let pad = fabric
+                .pad(ball)
+                .unwrap_or_else(|| panic!("{ball} is not in the ball map"));
+            // One bit, and the default is that bit clear.
+            assert_eq!(
+                pad.slew_bits("FAST").len(),
+                1,
+                "{ball}: PIO{}.SLEWRATE = FAST",
+                pad.side
+            );
+            assert!(
+                pad.slew_bits("SLOW").is_empty(),
+                "{ball}: SLOW is the field's default and costs nothing"
+            );
+            // A setting of its own: the base type does not contain it, so a
+            // pad written without it is written without it.
+            for bits in [&pad.bidir_pad_bits, &pad.input_pad_bits, &pad.output_pad_bits] {
+                assert!(
+                    !bits.iter().any(|bit| pad.slew_bits("FAST").contains(bit)),
+                    "{ball}: the slew rate is no longer a setting of its own"
+                );
+            }
+            // And it is set, in their file, at the absolute frame position
+            // this crate would write.
+            for bit in pad.slew_bits("FAST") {
+                let (frame, index) = fabric
+                    .frames
+                    .locate(pad.pad_at, *bit)
+                    .unwrap_or_else(|| panic!("{bit:?} is outside {:?}", pad.pad_at));
+                assert!(
+                    stream.cram.get(frame, index),
+                    "F{frame}B{index}, which is PIO{}.SLEWRATE = FAST on {ball}, is clear in \
+                     {name}.bit — whose platform file asks for SLEWRATE=FAST on that very pin",
+                    pad.side
+                );
+                checked += 1;
+            }
+            // Read back through the database by name, too, so this is not
+            // only an assertion about a bit position.
+            let field = format!("PIO{}.SLEWRATE", pad.side);
+            let value = decoded
+                .enums
+                .iter()
+                .find(|(at, what, _)| *at == pad.pad_at && what == &field)
+                .map(|(_, _, value)| value.as_str());
+            assert_eq!(value, Some("FAST"), "{name}.bit: {field} on {ball}");
+        }
+    }
+    assert_eq!(checked, 3 * 13, "one bit per ULPI pin per file");
+}
+
 /// The ball the bidirectional pad is on: `led_n[0]`, the LED at the end of
 /// the row away from the USER button. `bidir_loopback.rcf` says why it is
 /// safe to drive and to release.

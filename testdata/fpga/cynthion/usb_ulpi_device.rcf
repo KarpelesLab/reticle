@@ -40,10 +40,13 @@
 # `configure_io` writes `PULLMODE = NONE`, which is what the platform file
 # asks for too — it names `IO_TYPE` and `SLEWRATE` and no `PULLMODE`.
 #
-# `SLEWRATE="FAST"` is the one attribute of that resource this backend does
-# not write. See "What remains" in `docs/fpga-trellis.md`; it is an edge
-# rate on a 60 MHz bus, so it is the first thing to suspect if the device
-# is intermittent rather than absent.
+# `SLEWRATE="FAST"` is asked for on every one of the thirteen ULPI pins below,
+# with `-slew fast`, because the platform file asks for it on all of them —
+# `attrs=` on a `ULPIResource` reaches every subsignal, inputs included, and
+# nextpnr writes `PIO<s>.SLEWRATE` from the attribute and not from the
+# direction. It costs exactly thirteen bits. **It changed nothing on the
+# part**: "An edge rate on every ULPI pin" in `docs/fpga-trellis.md` has the
+# measurement, and the device still fails the same way.
 #
 # ---------------------------------------------------------------------
 # A8, THE OSCILLATOR
@@ -78,20 +81,20 @@
 
 set_io -io_standard LVCMOS33 clk A8
 
-set_io -io_standard LVCMOS33 ulpi_data[0] F16
-set_io -io_standard LVCMOS33 ulpi_data[1] G15
-set_io -io_standard LVCMOS33 ulpi_data[2] G16
-set_io -io_standard LVCMOS33 ulpi_data[3] H15
-set_io -io_standard LVCMOS33 ulpi_data[4] J15
-set_io -io_standard LVCMOS33 ulpi_data[5] J16
-set_io -io_standard LVCMOS33 ulpi_data[6] K15
-set_io -io_standard LVCMOS33 ulpi_data[7] K16
+set_io -io_standard LVCMOS33 -slew fast ulpi_data[0] F16
+set_io -io_standard LVCMOS33 -slew fast ulpi_data[1] G15
+set_io -io_standard LVCMOS33 -slew fast ulpi_data[2] G16
+set_io -io_standard LVCMOS33 -slew fast ulpi_data[3] H15
+set_io -io_standard LVCMOS33 -slew fast ulpi_data[4] J15
+set_io -io_standard LVCMOS33 -slew fast ulpi_data[5] J16
+set_io -io_standard LVCMOS33 -slew fast ulpi_data[6] K15
+set_io -io_standard LVCMOS33 -slew fast ulpi_data[7] K16
 
-set_io -io_standard LVCMOS33 ulpi_dir E16
-set_io -io_standard LVCMOS33 ulpi_nxt F15
-set_io -io_standard LVCMOS33 ulpi_stp E15
-set_io -io_standard LVCMOS33 ulpi_rst_n J13
-set_io -io_standard LVCMOS33 ulpi_clk D16
+set_io -io_standard LVCMOS33 -slew fast ulpi_dir E16
+set_io -io_standard LVCMOS33 -slew fast ulpi_nxt F15
+set_io -io_standard LVCMOS33 -slew fast ulpi_stp E15
+set_io -io_standard LVCMOS33 -slew fast ulpi_rst_n J13
+set_io -io_standard LVCMOS33 -slew fast ulpi_clk D16
 
 set_io -io_standard LVCMOS33 led0_n E13
 set_io -io_standard LVCMOS33 led1_n C13
