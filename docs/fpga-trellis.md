@@ -1,5 +1,234 @@
 # A real Lattice ECP5, and a real `.bit`
 
+## The board crosses D+ and D-, and one register says so
+
+On 2026-09-27 the question "why does a host call this full-speed device a
+low-speed one" was answered, and the answer was not a cable, not a plug and
+not the Type-C controller. **Great Scott Gadgets' Cynthion r1.4 exchanges
+D+ and D- between each ULPI transceiver and its connector on purpose, and
+the transceiver has a bit whose documented purpose is to undo it.** Writing
+that bit changed the one line of `dmesg` this whole exercise is measured by:
+
+```
+-usb 7-5: new low-speed  USB device number 91 using xhci_hcd
++usb 7-5: new full-speed USB device number 92 using xhci_hcd
+```
+
+It does not enumerate yet. What is settled, what is newly measured and where
+it now stops are below, and the three defects the search found in this
+project's own ULPI core are in "Three things the datasheet says that ULPI
+does not".
+
+### What the part is, and how the board wires it
+
+The transceiver had already been made to name itself over its own bus: Vendor
+ID Low reads `24h`, the low byte of `0424h`, Microchip. The rest came out of
+Great Scott Gadgets' published design and the part's datasheet, and the two
+of them together are what nobody here had put beside each other:
+
+| Fact | Source | Confidence |
+|---|---|---|
+| The AUX transceiver is `U11`, a **USB3343-CP** in a 24-pin VQFN | the r1.4 PCB's own component list | HIGH |
+| **Pin 13 is DP and pin 14 is DM** | *USB334x Data Sheet* DS00002646A, Figure 2-2 and Table 2-2, confirmed by the SMSC Rev. 1.2 edition and by the EVB-USB3343 schematic | HIGH |
+| Pin 13 goes to the receptacle's **D-** (`A7`/`B7`) and pin 14 to its **D+** (`A6`/`B6`), through the common-mode choke `FL1`, whose pads 1-2 and 3-4 are the two windings | the r1.4 PCB's nets | HIGH |
+| The receptacle's **two data pairs are tied together** — `A6` to `B6` and `A7` to `B7` — so plug orientation cannot cross anything | the same | HIGH |
+| Register **`39h`** "USB IO & Power Management", bit 1 **`SwapDP/DM`**: *"When asserted, the DP and DM pins of the USB transceiver are swapped. This bit can be used to prevent crossing the DP/DM traces on the board."* Reset value `04h` | DS00002646A §7.1.3.5 | HIGH |
+| Great Scott Gadgets' own gateware writes exactly that byte to exactly that address, for every port | `cynthion/python/src/gateware/platform/core.py`: `ulpi_extra_registers = {0x39: 0b000110}  # USB3343: swap D+ and D- to match the hardware design` | HIGH |
+
+So the crossing is deliberate — a layout that would otherwise have had the
+pair cross over — and the bit is the compensation the part provides for it.
+`0b000110` is `06h`, which is the register's reset value `04h` with bit 1
+set; bits 3:2 are the UART-mode regulator setting and are left at their
+default.
+
+**This also disposes of the previous conclusion.** "The board's Type-C data
+pair must be wired crossed" was right about the symptom and wrong about the
+cause: the board is crossed, deliberately, between the transceiver and the
+connector, and not between the connector and the world. Every earlier
+measurement stands — the transceiver really did report its own D+ high while
+the host reported low speed — and now has a mechanism.
+
+### What was ruled out on the way, and how
+
+- **The Type-C controller cannot be it.** The AUX port's controller is `U12`,
+  a **FUSB302B** in a WQFN-14. Its fourteen pins are CC1 ×2, CC2 ×2, VCONN
+  ×2, VDD ×2, GND ×2, VBUS, SCL, SDA and `INT_N` (onsemi FUSB302B/D Rev. 5,
+  Figure 5 and Table 3): **it has no pin that touches D+ or D-**, no data
+  mux and no orientation switch for the data pair. Its reference schematic
+  draws the receptacle's `A6`/`A7` and `B6`/`B7` going past it to the
+  transceiver. HIGH, and it is why `ip/i2c_master` was not needed after all:
+  there was nothing on that bus worth writing.
+- **It needs no configuration to be attached to, either.** `SWITCHES0`
+  (`02h`) resets to `03h`, which is `PDWN1` and `PDWN2` set: a 5.1 kOhm Rd
+  on both CC pins, i.e. a Type-C sink, with no I²C traffic at all. The part
+  even presents Rd with no supply — "Dead Battery Support" — so a host
+  applies VBUS and calls the port attached whatever the FPGA does. HIGH.
+- **The plug's orientation cannot matter**, because both of the
+  receptacle's data pairs land on the same two nets. HIGH, from the PCB.
+- **The VBUS switches were left alone** and are not implicated. Nothing here
+  enabled `aux_vbus_in_en` or `aux_vbus_en`, and nothing needed to.
+
+### What the host says now, and what it does not
+
+With `39h` = `06h` written before `TermSelect`, on the part:
+
+| What the gateware did | What the host reported |
+|---|---|
+| nothing written to `39h` (every earlier run) | `new **low-speed** USB device` |
+| `39h` = `06h` written after the transceiver's own reset and before `TermSelect` | `new **full-speed** USB device` |
+
+The speed is now right, which is most of the test, and the pull-up is
+therefore on the wire the host calls D+. The device still does not answer:
+`device descriptor read/64, error -110`.
+
+### Where it stops now, and the measurement that says so
+
+The instrument for this round was not a bitstream per question but a
+**staircase probe**: `ip/usb_device_ulpi`'s two blocks wired up by hand in a
+top level that also latches what it saw, and then reports one number by
+**detaching for a measured length of time** — the link's own reset held, so
+the transceiver's registers go with it and the start-up runs again on the way
+back. The number is read out of
+`/sys/bus/usb/devices/usb7/7-0:1.0/usb7-port5/state` polled at 50 Hz, which
+says `powered` whenever the pull-up is there. `dmesg` cannot be used for it:
+a host that is failing to enumerate keeps the port's device object alive for
+its whole eighty-second retry cycle and prints nothing about a device that
+comes and goes inside it. Two experiments were lost to that before it was
+understood.
+
+What the probe reported, in order, each figure one bitstream and one
+detachment timed to a fifth of a second:
+
+| Question | Answer |
+|---|---|
+| How far does the conversation get? | `phy_ready`, LineState J, a bus reset, whole received packets, SETUP tokens, a transmit started, a transmit finished with `stp`, **an IN token arrived** — and never an ACK from the host |
+| How many bytes of a data-carrying transmit does the transceiver take? | **three**, and then `stp`: a whole zero-length data packet, so the packet leaves the link entire |
+| Was `nxt` high in the first cycle of the transmit command? | **yes** — which ULPI 1.1 Table 2 forbids twice, and which a link that believes it advances a byte early on |
+| Was the transfer paced at the wire's rate? | yes, over 32 clocks for three bytes, so the transceiver was serialising it |
+| Did the packet reach the wire? | **yes**: twelve or more receive commands follow it inside 8.5 us, which is what §6.3.1 says a transmitted full-speed packet leaves behind |
+| How many of the host's SETUP data packets went unacknowledged? | **none**. Every one passed its CRC16 and was answered |
+| Does the host's ACK reach the link? | **`D2h` arrives on the data bus**, and `rx_active` inside the link was once high for more than 1024 clocks — twenty times the longest packet this host sends |
+| Are **any** of this link's packets understood by the host? | **no.** A build whose every answer is a STALL handshake produces `error -71` in a third of a second, exactly like a build that answers nothing at all, and never the `error -32` (EPIPE) a host reports when it hears a STALL |
+
+That last row is the one that matters, and it was worth the four rounds it
+took to think of. A STALL is the one answer whose arrival a host names in
+`dmesg` with an errno of its own, so it turns "did anything get through" into
+one line of kernel log. Nothing did. **The host understands none of this
+link's transmissions**, which means the IN tokens the earlier rows saw are
+the host's own blind sequence and not evidence that it heard the ACK before
+them, and that every conclusion drawn from them — including two of the
+fixes below — was reasoning from a premise that had not been tested.
+
+So the state of it is:
+
+- **Out** is wrong: nothing this device sends is understood, in any slot, at
+  either end of ULPI's timing window (`TURNAROUND` was swept to 5 and to 15,
+  the extremes of Table 10's 7-to-18 clocks, with no change).
+- **In** is right: tokens arrive with their CRC5 correct — an IN token is
+  only answered at all when `token_ok` passes — and the SETUP's eight-byte
+  data packet arrives with its **CRC16 correct**, every time, which is a
+  byte-exact eleven-byte receive.
+- **The terminations** are right: the host calls it full speed.
+
+Three things are consistent with that shape and are not yet distinguished.
+The first is that `SwapDP/DM` swaps the terminations and the receiver but
+**not the transmitter**, which would leave every transmitted symbol inverted
+while leaving everything measured above intact; the datasheet's wording ("the
+DP and DM pins of the USB transceiver are swapped") is against it and no
+measurement here is. The second is the transmit command's PID field, which
+is `01_00_pppp` with `P3` the most significant bit (DS00002646A §6.2.1) and
+is what this core sends. The third is `SLEWRATE=FAST`, which this backend
+still does not write for any pin and which Great Scott Gadgets ask for on
+every ULPI pin of this board — an edge rate on the transmit path is the one
+attribute that could plausibly matter to a receiver at the far end of a
+cable and not to a register readback on a 60 MHz bus at all, and it has been
+demoted twice for the wrong reason. It is now first on the list.
+
+### Three things the datasheet says that ULPI does not
+
+Reading the transceiver's own datasheet beside ULPI 1.1 found three places
+where this project's core was wrong. None of them is why it fails to
+enumerate — the STALL measurement above rules them out as the cause — and all
+three are real, so they are fixed and modelled.
+
+1. **The link must drive the bus in the cycle `dir` falls.** This core left
+   the falling turnaround undriven, on the strength of ULPI §2.3.1's "data
+   during the turnaround cycle is undefined". The part says what that costs:
+
+   > "When the USB334x sends a RXCMD the Link is required to drive the data
+   > bus back to idle at the end of the turn around cycle. If the Link does
+   > not drive the databus to idle the USB334x may take the information on
+   > the data bus as a TXCMD and transmit data on DP and DM until the Link
+   > asserts stop." ... "The pull downs are not strong enough to pull the
+   > data bus low after a ULPI RXCMD, the Link must drive the data bus to
+   > idle after DIR is de-asserted." — DS00002646A §6.5.4.1
+
+   A receive command whose ID or `alt_int` bit is set is a byte with bit 6 or
+   bit 7 high, which is exactly a transmit command or a register command;
+   left floating for one cycle it is read back as one. `ulpi_data_oe` is now
+   `~dir`, which is also what §2.3.1's "dir is wired straight to the output
+   buffers" says in the first place, and the transceiver model now **requires**
+   it and complains if the cycle is left floating or driven with anything but
+   `00h`.
+
+2. **`dir` de-asserting ends a packet, whatever the link thought.** §3.8.2.4
+   says so — "or `dir` is de-asserted, whichever occurs first" — and this
+   core wrote `dir_fell && rx_active_q`, which reads the register's *old*
+   value. A receive command that reports RxActive out of an idle bus sets
+   `rx_active` on the very edge `dir` falls on, so the old condition cleared
+   nothing, and nothing could afterwards: there was no packet left to close.
+
+3. **A packet is bytes.** `rx_active` now reaches the endpoint only once a
+   byte of the packet has been delivered. ULPI's RxActive is a statement
+   about the line; what an endpoint needs is a statement about the bus. The
+   two come apart on a transceiver whose full-speed receiver is not squelched
+   while it transmits, and this one reports RxActive with nothing on the pair
+   but the link's own answer: measured, `rx_active` high for over 1024
+   clocks. A phantom packet like that swallows the next real one — its PID
+   byte is filed as the *k*th byte of the phantom instead of the first byte
+   of a handshake — and ULPI permits the transceiver's half of it, since
+   §3.8.1.3 says only that a receive command "contains the status that is
+   current at the time the RX CMD is sent".
+
+A fourth was tried and **reverted**, and the reasoning is kept because both
+readings are quoted from the same page. DS00002646A §6.4.2 says "The USB
+Transmit ends when the Link asserts STP while NXT is asserted" and, as a
+note, "The Link cannot assert STP with NXT de-asserted since the USB334x is
+expecting to fetch another byte from the Link". At full speed `nxt` is one
+pulse in forty clocks, so a `stp` in the cycle after it lands with `nxt` low,
+and holding `stp` until the next `nxt` looked like the fix. It changed
+nothing on the part, and the same datasheet says a held `stp` has a cost of
+its own — "If the Link has held STP high the USB334x will hold DIR high until
+STP is de-asserted" — so the one-cycle `stp` of ULPI Table 2 is what the core
+does. The other reading of that note is ULPI's own "the Link must not assert
+`stp` before the first byte has been consumed", which this core already
+obeyed.
+
+### What the model had wrong, and still has
+
+Two defects in `tests/ip_library.rs`'s transceiver model, both of the shape
+§11 of `ip/usb_device_ulpi/README.md` warns about — the document, the core
+and the model agreeing about something no device had been asked:
+
+- **It kept the ULPI bus silent for the whole of the link's own packet and
+  then sent one receive command, already at J.** The part sends a stream:
+  "after STP is asserted each FS/LS bit transition will generate a RXCMD
+  since the bit times are relatively slow" (§6.3.1). A link cannot find its
+  own end of packet in one report that has already moved past it, which is
+  why the model could not falsify a link that read every receive command as
+  news about a host. The model's line transmitter now runs alongside its bus
+  state machine, because a packet on a wire does not pause while a receive
+  command goes out.
+- **It had no way to be a transceiver that hears itself.** It has one now
+  (`hearing_itself`), and a test enumerates through it.
+
+**And it still cannot reproduce the board's failure.** The new test passes
+with the fixed core and passes with the old one, so it is a new case covered
+and not a regression test for defects 2 and 3 above, which rest on the
+specification's words and on one measurement instead. That is stated here
+rather than papered over, because a test that cannot fail is worth exactly
+what it says and no more.
+
 ## An eight-bit bidirectional bus has been built, and a host has seen it
 
 On 2026-09-27 `testdata/fpga/cynthion/bidir_bus.v` — **eight** pads that

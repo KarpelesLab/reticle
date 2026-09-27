@@ -19,8 +19,17 @@ real eight-bit bus, that Function Control's reset value is `41h`, that its
 Vendor ID is `0424h` at the address Table 19 gives, that `XcvrSelect = 01`
 with `TermSelect = 1` puts the 1.5 kOhm pull-up on **D+**, and that
 LineState's bit 0 is D+. §11 says what that took, what it left unsettled,
-and the one place where this document, the block and the model were wrong
+and the places where this document, the block and the model were wrong
 together.
+
+**And a fifth kind of fact has arrived since**, which this document did not
+have a category for: what is true of *one transceiver* and is written down
+only in its datasheet. A board may exchange DP and DM between the
+transceiver and its connector, and then a register ULPI reserves and
+describes not at all is the difference between a device a host can see and
+one it calls something else (§7, §11). A transceiver may hear its own
+transmission, and then RxActive is not a packet (§5). Neither is in ULPI, and
+neither can be guessed from it.
 
 Nothing was transcribed from anybody's implementation. The specification
 is a published document and the encodings below are read out of it; the
@@ -170,6 +179,22 @@ that table says so, and says it must not mask RxActive or RxError
 either. A device that treated `10` as "not receiving" would be wrong.
 HIGH.
 
+**Two rules about receive commands that only a part teaches.** Both are
+this block's, both came from a Microchip USB3343, and §11 has the
+measurements:
+
+- **RxActive is not a packet.** It is a statement about the line, and a
+  transceiver whose full-speed receiver is not squelched while it transmits
+  asserts it for the Link's *own* packet. So `rx_active` here reaches the
+  endpoint only once a byte has been delivered, and a receive that produced
+  no byte never produces the end of one. ULPI permits the transceiver's
+  half: §3.8.1.3 says only that a receive command "contains the status that
+  is current at the time the RX CMD is sent".
+- **`dir` de-asserting ends the packet, whatever the Link thought.**
+  §3.8.2.4 says "or `dir` is de-asserted, whichever occurs first", with no
+  condition on it, and a Link that adds one leaves `rx_active` set with no
+  packet to clear it.
+
 A receive command is sent whenever any of those change, and the Link
 "must be able to accept any number of continuous, back-to-back" ones
 (§3.8.1.3). It has lower priority than USB data and higher than register
@@ -290,6 +315,7 @@ If either is aborted, the Link retries when the bus is idle. HIGH,
 | `0Ah` | OTG Control (write; `0Bh` / `0Ch`) | `06h` | IdPullup `0`, DpPulldown `1`, DmPulldown `2`, and the VBUS controls above them. |
 | `15h` | Debug (read-only) | — | Bits `1:0` are the current LineState. **Not settled the instant `TermSelect` is written**: the pull-up has to charge the pair, and on a real part this reads SE0 for milliseconds first. §8 and `usb_ulpi_link`'s `LINE_TRIES`. |
 | `2Fh` | not a register: the escape to the 8-bit extended address space. | — | Unused here. |
+| `30h`-`3Fh` | the transceiver's **own** registers, which ULPI reserves and says nothing about (§4.1). | the part's | `VENDOR_ADDR` and `VENDOR_DATA` write **one** of them, before anything a host can see, and read it back. What can be in one: a Microchip USB3343 has `SwapDP/DM` at `39h` bit 1, and a board that exchanges DP and DM between the transceiver and its connector — a Cynthion does — needs it set or its pull-up lands on the wire the host calls D-. §11. |
 
 > *Provenance*: Table 19, Table 22, Table 24 and Table 30, §4.1 to §4.2.9.
 > HIGH, reset values included.
@@ -460,6 +486,15 @@ Deliberately not implemented, with reasons:
   the last answer — but an endpoint that streams would have to add the
   wait, and this is the first thing to add with one.
 
+  What that omission does **not** cost, and what was thought to: a receive
+  command sent while the Link's own packet is still going out is not
+  news about a host, and a transceiver that hears its own transmission
+  sends plenty of them. The Link does not need to know where its own
+  packet ends to stay right about that, because of what §5 now says: a
+  packet is **bytes**, and `rx_active` reaches the endpoint only once one
+  has arrived. That is a smaller rule than the wait and it does not need
+  a receive command the specification only promises one of.
+
 Choices where the specification allowed either:
 
 - `ulpi_data_oe` is combinational in `dir`, as §2.3.1 suggests, rather
@@ -500,19 +535,36 @@ Choices where the specification allowed either:
 >   the pull-up on D-. Table 7's "bit 0 is D+" and Table 21's `01` = full
 >   speed are both confirmed by the part.
 >
-> **It still does not enumerate, and the reason is outside this block.** At
-> the same moment the transceiver reports its D+ high, the host at the other
-> end of the cable reports a **low-speed** device — which is its D- high — and
-> when the transceiver is put in low-speed mode and reports its D- high, the
-> host reports **full speed**. The two ends name opposite wires, in both
-> directions: **D+ and D- are exchanged between the transceiver's data pins
-> and the host.** USB is differential, so that inverts every symbol including
-> the SYNC field, and no value of Function Control can undo it — the two
-> polarities the transceiver offers each come with their own bit rate, and in
-> both of them the polarity agrees and the rate does not.
-> `docs/fpga-trellis.md`'s "Where it stops, and it is not the bus" has every
-> measurement and what is left to try, which is a cable and a plug rather than
-> a bitstream.
+> **The pair really is exchanged, and the board does it on purpose.** At the
+> same moment the transceiver reported its D+ high, the host at the other end
+> of the cable reported a **low-speed** device — which is its D- high — and
+> with the transceiver in low-speed mode reporting its D- high, the host
+> reported **full speed**. The two ends named opposite wires in both
+> directions, and the reason is in the board's own design files: the
+> Cynthion's **USB3343 has DP on pin 13 and DM on pin 14**, and the board
+> wires pin 13 to the receptacle's D- and pin 14 to its D+, to keep the pair
+> from crossing over in the layout. The transceiver has a bit for exactly
+> that, vendor register **`39h` bit 1, `SwapDP/DM`**, and Great Scott
+> Gadgets' own gateware writes it for every port. `VENDOR_ADDR` and
+> `VENDOR_DATA` (§7) are how this block writes it, and with it the host calls
+> the device **full speed**:
+>
+> ```
+> -usb 7-5: new low-speed  USB device number 91 using xhci_hcd
+> +usb 7-5: new full-speed USB device number 92 using xhci_hcd
+> ```
+>
+> **It still does not enumerate**, and where it now stops is the *transmit*
+> direction: a build whose every answer is a STALL handshake — the one answer
+> a host names in `dmesg` with an errno of its own — produces `error -71` in
+> a third of a second, exactly like a build that answers nothing at all, and
+> never the `error -32` a host reports when it hears a STALL. **So the host
+> understands none of this block's transmissions**, while the receive
+> direction is byte-exact: the host's SETUP data packet arrives with its
+> CRC16 correct every time. `docs/fpga-trellis.md`'s "The board crosses D+
+> and D-, and one register says so" has the eight measurements that narrow
+> it, the three defects the search found in this block, and the one it tried
+> and reverted.
 >
 > **What this block had wrong, and what the model had wrong.** One defect, and
 > it is exactly the shape §11 warned about — the document, the block and the
@@ -550,8 +602,8 @@ Choices where the specification allowed either:
 > and this is it. The rest of the document's reading of ULPI now has a device
 > behind it.
 
-**Nothing here has been near a board.** No Cynthion, no transceiver, no
-host. What exists is a simulation, and this is what it establishes:
+What the simulation establishes, and it is what the paragraphs above are
+measured against:
 
 - `tests/ip_library.rs` contains a **transceiver model** written from this
   document: a full-speed receiver that recovers the bit clock from the
