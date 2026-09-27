@@ -3322,7 +3322,7 @@ impl TrellisFabric {
     /// | Setting | Where it comes from |
     /// |---|---|
     /// | `SLICE<l>.GSR` | the cell's `GSR` parameter, `ENABLED` by default |
-    /// | `SLICE<l>.REG<n>.SD` | always `0`: the data comes from the fabric's `M` wire, because this flow never packs a lookup table and a flop onto one site |
+    /// | `SLICE<l>.REG<n>.SD` | always `0`: the data comes from the fabric's `M` wire, because this flow never packs a lookup table and a flop onto one site. **A flop with nothing routed to that wire is refused**, because an unrouted slice input reads as a one: see the check |
     /// | `SLICE<l>.REG<n>.REGSET` | the cell's `REGSET`, `RESET` by default |
     /// | `SLICE<l>.REG<n>.LSRMODE` | always `LSR`, which is the default and costs nothing |
     /// | `SLICE<l>.CEMUX` | the cell's `CEMUX`; `1` when nothing drives the enable, and the default is `CE`, so **not writing it would leave a flop waiting on an undriven wire** |
@@ -3348,7 +3348,8 @@ impl TrellisFabric {
     ///
     /// [`TrellisError::Bits`] when a bit falls outside the position, and
     /// [`TrellisError::Unsupported`] when a flop asks for a non-default
-    /// clock or reset mux whose control index the routing does not settle.
+    /// clock or reset mux whose control index the routing does not settle, or
+    /// when nothing drives its data input at all.
     // One argument more than [`TrellisFabric::configure_logic`], and it is
     // the `routing`: two of the fields a flip-flop needs live in a mux the
     // tile shares between its four slices, so which of them is this flop's
@@ -3396,6 +3397,62 @@ impl TrellisFabric {
                     .and_then(|pin| pin.signal)
             };
 
+            // **A flip-flop whose data input no signal drives is refused, not
+            // written.**
+            //
+            // `SD = 0` takes the data from the fabric's `M` wire, and if nothing
+            // is routed to that wire, nothing drives it. An unrouted slice input
+            // on this family is not a zero: Lattice's own packer ties every
+            // unused lookup-table input **high** and this flow does the same, so
+            // the flop loads a **one** every clock. A register bit no expression
+            // in a design ever assigns anything but zero therefore comes up set.
+            //
+            // That is not a hypothetical. `ip/usb_device_fs`'s control endpoint
+            // had `reg [2:0] stage` for four states, so `stage[2]` was a bit
+            // nothing ever set; read back off a real ECP5 through a debug port,
+            // `stage` was **5**, `case (stage)` matched none of its four labels,
+            // and every IN token a host sent was answered from the `default` arm
+            // with a NAK. The device acknowledged the host's SETUP, received
+            // every byte of it correctly, transmitted a well-formed handshake —
+            // and never enumerated, for eight rounds of looking somewhere else.
+            // `docs/fpga-trellis.md` has the whole of it.
+            //
+            // So this is a diagnostic rather than a device that does something
+            // else. Two ways out of it, and both belong to the design: give the
+            // register only the bits its values need, or drive the bit with
+            // something. A backend fix would have to *make* a constant, which is
+            // what nextpnr's `pack_constants` does — a spare lookup table with
+            // `INIT` all zeros or all ones, routed to the wire — and neither a
+            // constant driver nor a `CIB` tie for `M` is declared here.
+            //
+            // **A data pin the netlist ties high is allowed through**, and the
+            // reason is exactly the one above read the other way: the untied
+            // wire *is* a one, so the flop loads the one the design asked for.
+            // That is how `usb_ulpi_link`'s `rst_q` has always worked — a
+            // set-once register that releases a transceiver's reset pin, whose
+            // data input is the constant `1'b1` and whose enable is the
+            // condition — and it is right by accident rather than by
+            // construction, which is worth knowing and is why it is written
+            // down here rather than left to be rediscovered.
+            let data = netlist
+                .pins
+                .iter()
+                .find(|pin| pin.instance == index && pin.role == "d");
+            let tied_high = data.is_some_and(|pin| {
+                pin.signal.is_none() && pin.constant == Some(crate::logic::Bit::One)
+            });
+            if data.is_none_or(|pin| pin.signal.is_none()) && !tied_high {
+                return Err(TrellisError::Unsupported {
+                    what: format!(
+                        "flip-flop `{}` (`{}` at X{}Y{}) has nothing driving its data input and is \
+                         not tied high, and an unrouted slice input on this family reads as a \
+                         **one** — so it would come up set rather than at the constant the design \
+                         gives it. Give the register only as many bits as its values need, or \
+                         drive that bit",
+                        netlist.instances[index].name, site.bel, site.tile.0, site.tile.1
+                    ),
+                });
+            }
             for bit in &ff.sd_fabric {
                 bits.set(site.tile, *bit)?;
             }

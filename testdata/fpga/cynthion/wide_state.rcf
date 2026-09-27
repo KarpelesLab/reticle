@@ -1,0 +1,3 @@
+# The design that must not build: see `wide_state.v`.
+set_io -io_standard LVCMOS33 clk A8
+set_io -io_standard LVCMOS33 led0_n E13

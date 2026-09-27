@@ -2295,7 +2295,11 @@ fn what_lattices_own_packer_writes_for_a_slew_rate() {
             );
             // A setting of its own: the base type does not contain it, so a
             // pad written without it is written without it.
-            for bits in [&pad.bidir_pad_bits, &pad.input_pad_bits, &pad.output_pad_bits] {
+            for bits in [
+                &pad.bidir_pad_bits,
+                &pad.input_pad_bits,
+                &pad.output_pad_bits,
+            ] {
                 assert!(
                     !bits.iter().any(|bit| pad.slew_bits("FAST").contains(bit)),
                     "{ball}: the slew rate is no longer a setting of its own"
@@ -2328,6 +2332,47 @@ fn what_lattices_own_packer_writes_for_a_slew_rate() {
         }
     }
     assert_eq!(checked, 3 * 13, "one bit per ULPI pin per file");
+}
+
+/// A register bit nothing ever sets is **refused**, because this family would
+/// bring it up as a one.
+///
+/// This is the defect that cost eight rounds of looking somewhere else.
+/// `testdata/fpga/cynthion/wide_state.v` has a three-bit register with four
+/// values, so its top bit is a flip-flop whose data input is the constant zero;
+/// `SD = 0` takes that data from the fabric's `M` wire; and an unrouted slice
+/// input on an ECP5 reads as a **one**, because Lattice's own packer ties unused
+/// lookup-table inputs high and `configure_logic` does the same.
+///
+/// `ip/usb_device_fs/rtl/usb_ctrl_ep.v` had that register: `reg [2:0] stage`
+/// for four states. Read back off a real ECP5 through a debug port, `stage` was
+/// **5**, every `case (stage)` label missed, every IN token a host sent was
+/// answered from the `default` arm with a NAK, and the host's transfer died of
+/// the five second timeout the kernel prints as `device descriptor read/64,
+/// error -110` — with the device's receive path byte-exact, its transmit path
+/// putting a well-formed handshake on the pair, and the host's SETUP
+/// acknowledged. Nothing about the bitstream was unexplained, nothing about the
+/// routing was incomplete, and 26 916 of 26 916 bits decoded. The only thing
+/// wrong was a flip-flop loading a one where the design said zero.
+///
+/// So the flow refuses it by name. `configure_registers` says which cell, which
+/// bel and which tile, and says what to do about it.
+#[test]
+#[cfg(all(feature = "verilog", feature = "synth"))]
+#[should_panic(expected = "nothing driving its data input")]
+fn a_register_bit_nothing_drives_is_refused() {
+    let Some(root) = chipdb() else {
+        // There is no database, so there is nothing to refuse — and a test that
+        // must panic has to panic anyway, so it says why.
+        panic!("no chip database: nothing driving its data input cannot be checked");
+    };
+    let db = trellis::open(&Disk(root), "", PART).unwrap();
+    let fabric = db.load(&TrellisOptions::new()).unwrap();
+    let _ = compile(
+        &fabric,
+        "testdata/fpga/cynthion/wide_state.v",
+        "testdata/fpga/cynthion/wide_state.rcf",
+    );
 }
 
 /// The ball the bidirectional pad is on: `led_n[0]`, the LED at the end of
