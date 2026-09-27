@@ -596,6 +596,51 @@ fn fpga_checks_constraints_against_the_device() {
     assert!(!dir.join("blinky.json").exists(), "wrote a netlist anyway");
 }
 
+/// The case that found the defect: the Cynthion ULPI device built without
+/// the IP sources it instantiates. It used to print a wall of errors about
+/// the *top level*, one per reader of an output of the missing instance,
+/// and never say that `usb_device_ulpi` was nowhere to be found. Now the
+/// missing module is the only error, and it points at the instantiation.
+#[test]
+fn fpga_names_the_module_it_cannot_find() {
+    let dir = scratch("fpga_missing_module");
+    let (code, _, stderr) = run(&[
+        "fpga",
+        "--device",
+        "ecp5-12f-CABGA256",
+        "--constraints",
+        "testdata/fpga/cynthion/usb_ulpi_device.rcf",
+        "--output-dir",
+        dir.to_str().unwrap(),
+        "testdata/fpga/cynthion/usb_ulpi_device.v",
+    ]);
+    assert_eq!(code, 1, "{stderr}");
+    assert!(
+        stderr.contains("error[I0034]: no module named `usb_device_ulpi` is defined"),
+        "{stderr}"
+    );
+    assert!(stderr.contains("`u_dev` instantiates it"), "{stderr}");
+    assert!(
+        stderr.contains("add the file that defines it to this build"),
+        "{stderr}"
+    );
+
+    // And the misdirection is gone: nothing about the top level's own
+    // signals, which are driven right there in that file.
+    assert!(!stderr.contains("which nothing drives"), "{stderr}");
+    assert!(!stderr.contains("an instance is left"), "{stderr}");
+    // One error, not a hundred.
+    assert_eq!(
+        stderr.matches("error[I0034]").count(),
+        1,
+        "the cause should be reported once: {stderr}"
+    );
+    assert!(
+        !dir.join("usb_ulpi_device.json").exists(),
+        "wrote a netlist"
+    );
+}
+
 #[test]
 fn sim_writes_an_fst_waveform() {
     let dir = scratch("sim_fst");
