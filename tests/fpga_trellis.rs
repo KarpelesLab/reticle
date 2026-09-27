@@ -2541,6 +2541,254 @@ fn what_lattices_own_packer_writes_for_a_constant() {
     }
 }
 
+/// The bits one setting of a mux needs, as `(frame, bit, wants it clear)`
+/// inside the tile, sorted so two spellings of the same pattern compare equal.
+type Pattern = Vec<(u32, u32, bool)>;
+
+/// One source of a mux: where it comes from, and the pattern that selects it.
+type Source = (String, Pattern);
+
+/// **What an unused reset wire is, in the database and in Lattice's own
+/// files** — the question left open beside the constant, and it is settled
+/// here without a board.
+///
+/// `configure_registers` writes nothing for a flip-flop that does not use its
+/// reset, and the note beside the constant said why that was uncomfortable:
+/// "an unrouted `LSR` evidently does not hold a flop in reset the way an
+/// unrouted `M` held its data at one — but *why* is unmeasured, and a register
+/// that resets itself every clock would look exactly like the `stage` fault
+/// did". Three things, and the third is the answer.
+///
+/// **1. The reset wire has a constant zero and the data wire has no constant
+/// at all.** `CIB.JLSR0MUX = 0` is not a field of its own: it is a twentieth
+/// code point of the *same nineteen-source mux* that `PLC2`'s `.mux LSR0`
+/// describes — the same two bits per source, at the same position, because a
+/// logic position's `CIB` and `PLC2` tiles overlap. So "tie the reset low" and
+/// "route something to the reset" are one mux with one bit pattern, and one of
+/// its settings is a zero. A flip-flop's data wire has **no** such setting:
+/// there is no `CIB.JM<n>MUX` in the database, and the only constant the slice
+/// offers on `M` at all is `SLICE<l>.M<n>MUX = 1`, a **one**. The hardware can
+/// hold a reset low and cannot hold a data pin low, which is the whole reason
+/// one of them needed `techcells::drive_constant_data` and the other did not.
+///
+/// | Pin | Constants the database offers |
+/// |---|---|
+/// | `JCE<n>` (enable) | `1` only — an unused enable must be high or the flop never clocks |
+/// | `JCLK<n>` (clock) | `0` only |
+/// | `JLSR<n>` (reset) | `0` only |
+/// | `JD<n>` (a lookup table's inputs) | `0` **and** `1` |
+/// | `JM<n>` (a flip-flop's data) | **none**, and the slice's own tie is a `1` |
+///
+/// **2. No flip-flop of the three reference files is in `PRLD` mode**, so
+/// `LSRMODE` is not what takes their resets out of the question and the wire
+/// is.
+///
+/// **3. And their own working bitstreams leave hundreds of flip-flops on a
+/// reset wire that nothing drives and nothing ties.** Of the logic tiles that
+/// hold flip-flops, the ones with no arc *and* no tie on either of the tile's
+/// two `LSR` wires: **84 of 438** in `analyzer.bit`, 3 of 91 in
+/// `selftest.bit`, **551 of 1159** in `facedancer.bit`. If an unrouted `LSR`
+/// held a flop in reset, `analyzer.bit` would be a logic analyser with 84
+/// tiles of dead registers, and it is Great Scott Gadgets' shipped gateware.
+///
+/// And the ties they *do* write — 30 in `analyzer.bit`, none in
+/// `selftest.bit`, 153 in `facedancer.bit` — are **never at a position that
+/// holds a flip-flop**, not one of the 183. So the vendor does not tie a reset
+/// wire for a flip-flop's sake either; those ties belong to something else in
+/// the `CIB`, and the note's guess that they were the flops' is wrong.
+///
+/// That retires the question. What it does **not** settle is a voltage:
+/// nothing here measures what an unselected mux output reads as, on `LSR` or
+/// on `M`. The `M` case was measured the expensive way, by a register coming
+/// up set on a part; the `LSR` case is settled the cheap way instead, by three
+/// of the vendor's own files not doing it in a thousand places.
+#[test]
+fn what_lattices_own_packer_writes_for_an_unused_reset() {
+    let Some(root) = chipdb() else { return };
+    let db = trellis::open(&Disk(root), "", PART).unwrap();
+
+    // ---- 1. which control pins the CIB can tie, and to what ----
+    let cib = db
+        .tile_database("CIB")
+        .expect("every logic position has a CIB tile");
+    let ties = |stem: &str| -> Vec<String> {
+        let mut values: Vec<String> = cib
+            .enums
+            .iter()
+            .filter(|(field, _, _)| field.starts_with(&format!("CIB.{stem}")))
+            .flat_map(|(_, _, values)| values.iter())
+            .map(|(value, _)| value.clone())
+            .filter(|value| value == "0" || value == "1")
+            .collect();
+        values.sort();
+        values.dedup();
+        values
+    };
+    assert_eq!(ties("JCE"), ["1"], "an unused enable is tied high, only");
+    assert_eq!(ties("JCLK"), ["0"], "an unused clock is tied low, only");
+    assert_eq!(ties("JLSR"), ["0"], "an unused reset is tied low, only");
+    assert_eq!(
+        ties("JD"),
+        ["0", "1"],
+        "a lookup table's input can be tied either way"
+    );
+    assert_eq!(
+        ties("JM"),
+        [] as [String; 0],
+        "a flip-flop's data pin has no tie at all, which is the whole reason \
+         `techcells::drive_constant_data` exists"
+    );
+
+    // The one constant the *slice* offers on a data pin, and it is a one:
+    // exactly what an unrouted wire already reads as, which is why it buys
+    // nothing and why a zero has to be built.
+    let plc2 = db
+        .tile_database("PLC2")
+        .expect("the logic tile of this family");
+    let slice_m: Vec<&str> = plc2
+        .enums
+        .iter()
+        .filter(|(field, _, _)| field.starts_with("SLICEA.M") && field.ends_with("MUX"))
+        .flat_map(|(_, _, values)| values.iter())
+        .map(|(value, _)| value.as_str())
+        .filter(|value| *value == "0" || *value == "1")
+        .collect();
+    assert!(
+        !slice_m.is_empty() && slice_m.iter().all(|value| *value == "1"),
+        "the slice's tie for a data pin is a one and only a one: {slice_m:?}"
+    );
+
+    // And the shape that makes the reset's zero a zero: `CIB.JLSR0MUX` and
+    // `PLC2`'s `.mux LSR0` are the **same mux**, so the tie is one more source
+    // of it — a setting no route can collide with, and one the data wire's mux
+    // has no equivalent of.
+    let pattern = |bits: &[reticle::fpga::trellis::parse::DbBit]| -> Pattern {
+        let mut out: Pattern = bits.iter().map(|b| (b.frame, b.bit, b.inverted)).collect();
+        out.sort_unstable();
+        out
+    };
+    let sources = |db: &reticle::fpga::trellis::parse::TileDatabase, sink: &str| -> Vec<Source> {
+        let mut out: Vec<Source> = db
+            .muxes
+            .iter()
+            .filter(|(to, _, _)| to == sink)
+            .map(|(_, from, bits)| (from.clone(), pattern(bits)))
+            .collect();
+        out.sort();
+        out
+    };
+    let in_the_cib = sources(cib, "JLSR0");
+    let in_the_plc = sources(plc2, "LSR0");
+    assert!(!in_the_plc.is_empty(), "the logic tile routes a reset wire");
+    assert_eq!(
+        in_the_cib, in_the_plc,
+        "`CIB.JLSR0`'s mux and `PLC2.LSR0`'s mux are the same bits, so the tie is a source of \
+         the routing mux and not a field beside it"
+    );
+    let tie = cib
+        .enums
+        .iter()
+        .find(|(field, _, _)| field == "CIB.JLSR0MUX")
+        .and_then(|(_, _, values)| values.iter().find(|(value, _)| value == "0"))
+        .map(|(_, bits)| pattern(bits))
+        .expect("the reset wire can be tied low");
+    assert!(
+        in_the_plc.iter().all(|(_, bits)| *bits != tie),
+        "the tie's pattern is one of the mux's routing sources, so it is not a distinct setting"
+    );
+    assert_eq!(tie.len(), 2, "one code point of a two-bits-per-source mux");
+
+    // ---- 2. and what their own files do with it ----
+    //
+    // Per file: logic tiles holding at least one flip-flop; of those, the ones
+    // with **nothing at all** on either of the tile's two reset wires — not
+    // routed and not tied; and the ties the packer did write, with how many of
+    // them sit in a tile whose *other* reset wire carries a signal.
+    let expected: [(&str, usize, usize, usize, usize); 3] = [
+        ("analyzer", 438, 84, 30, 0),
+        ("selftest", 91, 3, 0, 0),
+        ("facedancer", 1159, 551, 153, 0),
+    ];
+    for (name, with_flops, bare, written, at_a_flop_tile) in expected {
+        let Some(bytes) = reference(name) else { return };
+        let stream = Ecp5Stream::parse(&bytes, &formats).unwrap();
+        let decoded = db.decode(&stream.cram);
+        let (arcs, unresolved) = db.resolved_arcs(&decoded);
+        assert!(unresolved.is_empty(), "{name}: {unresolved:?}");
+        // Where a reset actually arrives, as a fact about the file's own arcs,
+        // kept per mux: a tile has two and they are independent.
+        let mut routed: std::collections::BTreeSet<((u32, u32), u32)> =
+            std::collections::BTreeSet::new();
+        for (to, _) in &arcs {
+            let (wire, at) = to;
+            if let Some(c) = wire.strip_prefix("LSR").and_then(|n| n.parse::<u32>().ok()) {
+                routed.insert((*at, c));
+            }
+        }
+        // Where the flip-flops are, where a tie was written, and whether any
+        // flop is in `PRLD` mode — which would take the reset out of the
+        // question a different way and has to be ruled out, not assumed.
+        let mut flops: std::collections::BTreeSet<(u32, u32)> = std::collections::BTreeSet::new();
+        let mut ties: std::collections::BTreeSet<((u32, u32), u32)> =
+            std::collections::BTreeSet::new();
+        let mut preload = 0usize;
+        for (at, field, value) in &decoded.enums {
+            if fabric_data_index(field, value).is_some() {
+                flops.insert(*at);
+            }
+            if field.ends_with(".LSRMODE") && value == "PRLD" {
+                preload += 1;
+            }
+            if let Some(c) = field
+                .strip_prefix("CIB.JLSR")
+                .and_then(|rest| rest.strip_suffix("MUX"))
+                .and_then(|n| n.parse::<u32>().ok())
+                && value == "0"
+            {
+                ties.insert((*at, c));
+            }
+        }
+        assert_eq!(
+            preload, 0,
+            "{name}.bit puts a flip-flop in PRLD mode, so `LSRMODE` and not the wire is what \
+             takes its reset out of the question and this measurement means something else"
+        );
+        // The tiles that hold flip-flops and have **nothing** on either reset
+        // wire: no arc, no tie. If an unrouted `LSR` reset a flop every clock,
+        // a working bitstream could not contain one of these.
+        let bare_tiles: Vec<(u32, u32)> = flops
+            .iter()
+            .copied()
+            .filter(|at| (0..2).all(|c| !routed.contains(&(*at, c)) && !ties.contains(&(*at, c))))
+            .collect();
+        // And where the ties they *did* write are, which is the other half of
+        // the answer: not in the tiles that hold the flip-flops.
+        let beside: usize = ties.iter().filter(|(at, _)| flops.contains(at)).count();
+        assert_eq!(flops.len(), with_flops, "{name}: tiles holding flip-flops");
+        assert_eq!(
+            bare_tiles.len(),
+            bare,
+            "{name}: tiles with flip-flops and nothing at all on either reset wire"
+        );
+        assert_eq!(ties.len(), written, "{name}: `CIB.JLSR<n>MUX = 0` written");
+        assert_eq!(
+            beside, at_a_flop_tile,
+            "{name}: of those, the ones at a position that holds a flip-flop"
+        );
+        // The headline, and the reason this flow's silence about an unused
+        // `LSR` is a tidiness gap and not a correctness one: their own working
+        // bitstream leaves hundreds of flip-flops sitting on a reset wire that
+        // nothing drives and nothing ties.
+        assert!(
+            bare_tiles.len() > 2 * ties.len(),
+            "{name}.bit ties a serious fraction of its unused reset wires ({} tied against {} \
+             left bare), which would make this flow's silence a real gap",
+            ties.len(),
+            bare_tiles.len()
+        );
+    }
+}
+
 /// One constant driver of a reference bitstream: where it is, which slice
 /// and which half of it, and how many flip-flops take their data from it.
 type Constant = ((u32, u32), char, u32, usize);

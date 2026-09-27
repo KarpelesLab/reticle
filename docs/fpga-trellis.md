@@ -133,11 +133,10 @@ one and the flop loads what the design asked for; after this pass nothing
 should reach that path, and it stays so that a netlist built without the pass
 is not refused for a case that does work.
 
-**Half of this is now confirmed on a part, and the half that is not is named
-here rather than left to be assumed.** The round that built the driver went
-nowhere near the board — it was in use — so what follows was measured
-afterwards, by building `usb_ulpi_device.v` from this document's own commands
-and loading it.
+**Both halves of this are now confirmed on a part.** The round that built the
+driver went nowhere near the board — it was in use — so what follows was
+measured afterwards, in two goes, by building `usb_ulpi_device.v` from this
+document's own commands and loading it.
 
 A **constant one** holds in silicon, and the observation is stronger than a
 lamp. `usb_ulpi_link`'s `rst_q` is the constant-one flip-flop of that design,
@@ -148,38 +147,167 @@ bytes through endpoint 1, so the flop loads the one the design asked for —
 through a driver this time rather than by the accident above. 43 299 bits, 0
 unexplained.
 
-A **constant zero** has still not been seen on a part, and there is a reason
-worth writing down: nothing in the design that ran has one. The registers that
-used to supply them were the defect, and narrowing them to the width of their
-values is what removed them. So the evidence for the zero remains entirely off
-the part — the vendor's four constant drivers read at absolute frame positions,
-this flow's own image decoded bit for bit with nothing unexplained, and the arcs
-walked backwards from the flip-flop's data wire to the lookup table's output.
+A **constant zero** is now confirmed too, in the next section, which is the
+experiment this paragraph used to ask for.
 
-`wide_state.v` with its LED moved from `state[0]` to `state[2]` is the cheapest
-experiment and it needs an eye, which is its weakness: it must stay **dark for
-ever**, and before this change it would have been lit from the first clock. The
-experiment worth doing instead needs no observer — put a register bit whose data
-is the constant zero into a byte the endpoint-1 loopback returns, and let
-`tests/usb_loopback.rs` assert it reads zero. That turns the last unmeasured
-half of this into something CI could run if a board were attached, which is what
-every other claim in this file already is.
+### A constant zero is on a part, in a byte a host reads back
 
-Two things found on the way and deliberately not acted on, both for the same
-reason — they are about *other* pins of the same slice, nothing has measured
-them failing, and this round is about the data pin:
+`usb_ulpi_device.v` holds one flip-flop, `zero_probe`, whose data input is the
+literal `1'b0`, and the byte endpoint 1 hands back is XORed with it. Right, the
+XOR is with zero and the loopback is **byte-identical**, so the
+already-written `tests/usb_loopback.rs` passes unchanged; wrong, and **every
+returned byte is its own complement**, which nothing else in that design can
+do. It has been run both ways.
 
-- the vendor writes `CIB.JLSR0MUX = 0` and `CIB.JLSR1MUX = 0` (19 and 11 times
-  in `analyzer.bit`) and `CIB.JCE<n>MUX = 1`, which is a **CIB tie for the
-  reset and enable wires** of a slice whose flip-flops do not use them. This
-  flow ties the enable in the slice instead (`SLICE<l>.CEMUX = 1`, which is
-  what makes a flop clock at all) and writes nothing for an unused `LSR`. Every
-  clocked design this backend has built works on the part, so an unrouted `LSR`
-  evidently does not hold a flop in reset the way an unrouted `M` holds its
-  data at one — but *why* is unmeasured, and a register that resets itself
-  every clock would look exactly like the `stage` fault did;
-- `SLICE<l>.M<n>MUX = 1`, the two-bit tie above, which would make a constant
-  one without a lookup table and which no reference bitstream exercises.
+```
+$ cargo test --features program -- --ignored usb_endpoint_one_loops
+[00, 01, 02, 03, 04, 05, 06, 07] -> [00, 01, 02, 03, 04, 05, 06, 07]
+[de, ad, be, ef, ff] -> [de, ad, be, ef, ff]
+[5a] -> [5a]
+[00, 25, 4a, 6f, 94, b9, de, 03] -> [00, 25, 4a, 6f, 94, b9, de, 03]
+256 bytes through endpoint 1 and back, in 32 packets of at most 8
+`zero_probe` read ZERO on every one of them: a flip-flop whose data input is
+the constant zero holds zero in silicon on this family
+```
+
+**And the same design with the probe fed a constant one instead**, loaded onto
+the same board, which is the control that says the check is not vacuous:
+
+```
+[00, 01, 02, 03, 04, 05, 06, 07] -> [ff, fe, fd, fc, fb, fa, f9, f8]
+every one of 8 returned byte(s) is the complement of the byte sent, which is
+`zero_probe` holding a ONE: a flip-flop whose data input is the constant zero
+came up set.
+```
+
+**The register has to survive synthesis, and that is the hard part of the
+experiment, not the board.** A compiler may delete a flip-flop whose value is a
+known constant and `synth::opt::FfOpt` does — so an experiment built out of one
+can quietly stop being an experiment and pass whatever the backend writes.
+`(* keep *)` does not help: `FfOpt`'s constant rule reads the *cell's*
+attributes, an attribute on a `reg` lands on the net, and the register folds to
+`assign %z = 1'd0` with the XOR gone with it. What works is the semantics.
+`zero_probe` is initialised to **one** and clocked to **zero**, so its value
+before the first edge differs from its data and folding it away would change
+what the design means; `FfOpt`'s rule is exactly that — a constant `d`
+collapses only when the initial value agrees with it. On the part the
+initialiser is a fiction and does not matter: an ECP5 releases every flip-flop
+into its `REGSET` state, which is `RESET` here, so the register starts at zero
+and the **first clock has to keep it there**, which is the thing being
+measured.
+
+Nothing was believed off the board until the bitstream had been read, and both
+halves are tests rather than a note:
+
+| | |
+|---|---|
+| `the_usb_devices_constant_zero_probe_survives_synthesis` | no database, no board, seconds. `zero_probe$ff` is a `TRELLIS_FF` with `DI=%const0` in the mapped netlist, `const0$lut` is an all-zeros `LUT4`, and there is exactly one of it. This is what stops a future optimisation from turning the hardware test green for ever |
+| `the_usb_devices_constant_zero_probe_reaches_the_bitstream` | `#[ignore]`d: it places and routes the whole device. One all-zeros `INIT` word in the image, its four inputs tied high at absolute frame positions, all **491** flip-flops taking data from the fabric with **none floating**, and exactly one of them walking back through the file's own arcs to that lookup table's output |
+
+What the probe costs, and what moved:
+
+| | Before | After |
+|---|---|---|
+| Set bits | 43 299 | **43 487** |
+| `.config` words | 1083 | **1084** |
+| Lookup tables | 1084 | 1085 |
+| Flip-flops | 490 | 491 |
+| Signals | 1586 | 1588 |
+| Arcs that cost bits | 14 323 | 14 396 |
+| Bits **unexplained** | 0 | **0** |
+
+The one new `.config` word is the constant's `INIT` and nothing else. The rest
+is a net figure rather than an itemised one, because one more cell moves the
+placer's assignment and thousands of arcs change — which is what this design's
+accounting has always been; `wide_state.v` above is where the same 28 bits are
+itemised one by one. `zero_probe` costs **one** extra lookup table and not
+nine, because the eight XORs fold into inputs the endpoint's own cover was not
+using.
+
+**Why this went into the reference design rather than beside it.** The cost is
+real: `usb_ulpi_device.v` is what everything else is compared against and its
+footprint moves. A variant would have cost the same flip-flop with none of
+that — and it would have been built once, measured once, and then stopped being
+measured, because the design that gets loaded onto this board in the ordinary
+course is this one, and a property nobody re-checks is a property that rots.
+The deciding argument is that the register is **not dead**: `zero_probe` fans
+out into sixty-four lookup tables of the IN data path and its value leaves the
+part in every byte the host reads, so it is a signal this design carries and
+not a stub bolted to the side of it.
+
+**What the check catches and what it does not.** It catches a flip-flop whose
+data input is the constant zero coming up, or being clocked to, a one — on
+every one of the 293 bytes the test moves, so it cannot pass by accident. It
+does **not** catch a broken constant *one*: that holds `rst_q` low, the
+transceiver stays in reset, no device appears on the bus, and the test *skips*
+with "no 1209:0001 is attached" rather than failing. It says nothing about a
+flow run with `device_cells` off, and nothing about a partial inversion, which
+the probe cannot cause — it is one wire into all eight bits.
+
+### The unused reset wire, which turned out to be a different shape entirely
+
+The round that built the constant left a note beside it: the vendor writes
+`CIB.JLSR<n>MUX = 0` for slices whose flip-flops do not use their reset, this
+flow writes nothing, every clocked design built here works, "so an unrouted
+`LSR` evidently does not hold a flop in reset the way an unrouted `M` holds its
+data at one — but *why* is unmeasured, and a register that resets itself every
+clock would look exactly like the `stage` fault did".
+
+It is measured now, from the database and the three reference bitstreams, in
+`what_lattices_own_packer_writes_for_an_unused_reset`. **The two pins are not
+the same shape at all.**
+
+**A reset wire has a constant zero and a data wire has no constant.**
+`CIB.JLSR0MUX = 0` is not a field beside the routing: it is a twentieth code
+point of the *same nineteen-source mux* that `PLC2`'s `.mux LSR0` describes —
+identical bits, source for source, at the same position, because a logic
+position's `CIB` and `PLC2` tiles overlap. "Tie the reset low" and "route
+something to the reset" are one mux, and one of its settings is a zero. There
+is no `CIB.JM<n>MUX` at all, and the only constant the slice offers on a data
+pin is `SLICE<l>.M<n>MUX = 1`, a **one** — which is what an unrouted wire
+already reads as, so it buys nothing.
+
+| Pin | Constants the database offers |
+|---|---|
+| `JCE<n>`, the enable | `1` only — an unused enable must be high or the flop never clocks |
+| `JCLK<n>`, the clock | `0` only |
+| `JLSR<n>`, the reset | `0` only |
+| `JD<n>`, a lookup table's inputs | `0` **and** `1` |
+| `JM<n>`, a flip-flop's data | **none**, and the slice's own tie is a `1` |
+
+Every control pin is offered exactly the level that is safe for it. A
+flip-flop's *data* has no safe level — either one is a value some design does
+not want — so the hardware offers none, and a lookup table is the only way to
+put a zero there. That is the whole asymmetry, and it is the correct one.
+
+**And Lattice's own bitstreams leave hundreds of flip-flops on a reset wire
+that nothing drives and nothing ties.** Of the logic tiles holding flip-flops,
+the ones with no arc *and* no tie on either of the tile's two `LSR` wires:
+
+| | `analyzer.bit` | `selftest.bit` | `facedancer.bit` |
+|---|---|---|---|
+| Tiles holding flip-flops | 438 | 91 | 1159 |
+| **Of those, nothing at all on either `LSR`** | **84** | 3 | **551** |
+| Flip-flops in `PRLD` mode, which would explain it another way | 0 | 0 | 0 |
+| `CIB.JLSR<n>MUX = 0` written | 30 | 0 | 153 |
+| **Of those, at a position holding a flip-flop** | **0** | 0 | **0** |
+
+So an unrouted `LSR` cannot hold a flop in reset: `analyzer.bit` would be a
+logic analyser with 84 tiles of dead registers, and it is Great Scott Gadgets'
+shipped gateware. And the ties the vendor *does* write are **never at a
+position that holds a flip-flop** — not one of the 183 — so they are not about
+flip-flops either, and the note's guess that they were is wrong. This flow's
+silence about an unused `LSR` is what the vendor's flow does too.
+
+What that does **not** settle is a voltage. Nothing in it measures what an
+unselected mux output reads as, on `LSR` or on `M`. The `M` case was measured
+the expensive way, by a register coming up set on a part and eight rounds of
+looking somewhere else; the `LSR` case is settled the cheap way instead, by
+three of the vendor's own working files not doing it in a thousand places.
+
+One thing is still recorded and deliberately not acted on: `SLICE<l>.M<n>MUX =
+1`, the two-bit tie above, which would make a constant one without a lookup
+table and which no reference bitstream exercises anywhere.
 
 ## It enumerates, and the fault was one bit of a register this backend brings up wrong
 
@@ -3170,11 +3298,20 @@ borrows now. Every backend gets it.
 | Block RAM | `Ecp5Stream` reads and writes the initialisation blocks — the reference files' 44 blocks round trip — and nothing generates one. The `MIB_EBR*` tiles' wires and pips are in the graph |
 | Distributed RAM | `SLICEA.MODE = DPRAM`, `WREMUX`, `CLK1.CLKMUX` and the `WAD`/`WDO` wires, none of which is declared |
 | An IO standard other than LVCMOS33 | the bits are in the database and the code takes the standard from the constraints; no other standard has been on a part |
-| A constant **zero** driving a flip-flop **on a part** | the driver is built — one lookup table per constant, `INIT` all zeros or all ones, every input tied high, which is what Lattice's own bitstreams hold. A constant **one** is confirmed in silicon: `usb_ulpi_link`'s `rst_q` releases the transceiver's reset through one, and the part enumerates and loops bytes. A constant zero is not, because no design that has run holds one — the registers that did were the defect. See "What is still refused, and what a board would have added" for the experiment that needs no eye |
-| A **CIB tie for an unused `LSR`** | the vendor writes `CIB.JLSR<n>MUX = 0` and this flow writes nothing. No clocked design of this backend has misbehaved, so an unrouted `LSR` seems not to reset, and *why* is unmeasured — the same shape of question the data pin turned out to be |
 | `DRIVE`, `OPENDRAIN`, `CLAMP` or `TERMINATION` on a pad | each is a `.config_enum` of the pad tile, and each is one `ecppack` writes **only when an attribute asks** — so not writing them matches nextpnr exactly for a design that does not ask. `set_io -drive` is parsed and reaches the cell, and `configure_io` writes nothing for it, which makes the option a silent no-op in the bitstream. **`SLEWRATE` has left this row**: it is written now, see "An edge rate on every ULPI pin" |
 | A bidirectional pad with a **registered** tristate | `PIO<s>.TRIMUX_TSREG = IOLTO` and the `IOLOGIC` tristate register, none of which is declared. `fpga::primitives` declines to absorb a tri-state driver on a DDR port rather than moving the enable ahead of the register |
 | An ECP5 over an FTDI cable | nothing, in principle: the configuration plans are transport-neutral and `jtag::Scan` encodes them for MPSSE. It is refused because that pairing has never been run |
+
+**Two rows have left this table**, and both were about a flip-flop's control
+pins. A constant **zero** driving a flip-flop **on a part** is measured now —
+`usb_ulpi_device.v`'s `zero_probe` is XORed into the byte endpoint 1 hands
+back, and it reads zero over 293 bytes; see "A constant zero is on a part, in a
+byte a host reads back". So is the **CIB tie for an unused `LSR`**, from the
+database and the vendor's own files rather than from a board: a reset wire's
+mux has a constant-zero source and a data wire's has none at all, and Lattice's
+bitstreams leave 84 of `analyzer.bit`'s 438 flop-bearing tiles with nothing on
+either reset wire. See "The unused reset wire, which turned out to be a
+different shape entirely".
 
 ## The three things worth knowing if you change this
 

@@ -517,7 +517,12 @@ Choices where the specification allowed either:
 > The device now has a bulk endpoint pair beside endpoint 0 —
 > `ip/usb_device_fs`'s `usb_bulk_ep`, reached through the same `depends`
 > line — and `testdata/fpga/cynthion/usb_ulpi_device.v` wires its OUT stream
-> straight into its IN stream. On the part, at full speed, with **no OS
+> straight into its IN stream. (Straight, with one XOR: that design also
+> carries a flip-flop whose data input is the constant zero and XORs it into
+> the returned byte, so the loopback is byte-identical exactly when the
+> backend's constant driver is right. It is a measurement of the ECP5
+> backend and not of this block; `docs/fpga-trellis.md` has it.) On the
+> part, at full speed, with **no OS
 > driver involved** (the interface is vendor specific, `bInterfaceClass`
 > `FFh`, so no class driver claims it and `tests/usb_loopback.rs` claims it
 > instead):
