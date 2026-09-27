@@ -36,8 +36,10 @@
 //   the two belong to one function is the **union functional descriptor**.
 //   Linux's `cdc_acm` reads it to find which interface is which; a device
 //   that omits it reaches `cdc_acm`'s quirk path and needs to be in a
-//   table of known-broken devices to bind at all. So it is here, and so is
-//   the rest of what the specifications list as required:
+//   table of known-broken devices to bind at all. **That last sentence is a
+//   reading of a driver and not a measurement** — nothing here built the
+//   device that would test it — and README.md §2 marks it as one. So it is
+//   here, and so is the rest of what the specifications list as required:
 //
 //   | Descriptor | Bytes | Where the fields are |
 //   |------------|-------|----------------------|
