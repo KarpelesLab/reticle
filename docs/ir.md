@@ -246,6 +246,45 @@ diagnostics are returned:
 | `I0032` | An output port is connected to something that cannot be driven     |
 | `I0033` | An inout port is not connected to a plain net of the same type     |
 
+### Black boxes and missing modules
+
+An instance whose `ModuleRef` is `Unresolved` is a hole, and there are two
+very different reasons for one.
+
+A **declared** black box is deliberate. Something states the interface and
+says the contents come from elsewhere: a `blackbox module` in the text form,
+an IP package whose sources are encrypted (`docs/ip.md`), or a primitive
+the target technology declares. Either the design holds a module of that
+name — `Design::resolve_instances` binds the reference to it — or the flow
+knows the primitive. The widths are checked, the emitters write the
+instantiation, and the simulator says the box is empty rather than
+pretending otherwise.
+
+An **undeclared** one is a mistake, and almost always the same mistake: the
+file that defines the module was not given to the build. Reticle has no
+library search path, so nothing will find it later; its outputs drive
+nothing, and left alone the build reports every *reader* of those outputs
+instead — by the hundred, all of them in whichever file was correct.
+
+`Design::check_instance_targets(top, supplied, supplier, diags)` is the
+diagnostic for it. It looks only at what `top` reaches, skips a name the
+design declares and a name in `supplied`, and reports the rest as `I0034`
+at the instantiation, naming the module and the instance.
+`Design::undefined_instances` is the same query without the diagnostic.
+
+| Caller | What it passes as `supplied` |
+|--------|------------------------------|
+| `fpga::synthesize_for` | `Device::primitive_names` — `EHXPLLL`, `TRELLIS_IO`, `SB_RAM40_4K` |
+| `asic::synthesize_asic` | the liberty library's cell names |
+| `sim::Simulator` | nothing: a simulator has no place-and-route tool to fill a box in |
+
+Each calls it before it maps or runs anything, and refuses the design when
+it reports, so the consequences are never reported in place of the cause.
+The Verilog front end cannot make this decision on its own — a module it
+did not see may still be a VHDL entity, an `.rtl` module or an IP stub
+merged into the design afterwards — so there it stays a warning (`V0023`)
+and the flow that knows the whole design and its target settles it.
+
 ### Unique-ification
 
 `Design::uniquify() -> UniquifyReport` gives every instantiation of a

@@ -24,6 +24,19 @@ per-language choice is whether the front end lowered an assignment as
 blocking or non-blocking. Processes are run by an interpreter with an
 explicit frame stack, so a `wait` saves a continuation without OS threads.
 
+## What the simulator refuses to run
+
+A black box the design **declares** simulates: its outputs stay undriven and
+one warning per instance says so, which is what an encrypted IP package or
+an `.rtl` `blackbox module` is for. A module **nothing** declares does not.
+Elaboration refuses it and names the instantiation, because running it
+anyway would fill the box with `x` and let a testbench report a failure of a
+design that is in fact fine — which is exactly what happened once, as
+`FAIL: LED 1 is lit and no host has configured anything` from a healthy
+design whose IP sources had been left off the command line. Reticle has no
+library search path, so the fix is always to name the file that defines the
+module. `docs/ir.md` has the rest of the line.
+
 ## Driving a simulation from Rust
 
 ```rust

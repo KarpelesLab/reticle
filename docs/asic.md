@@ -156,7 +156,15 @@ it, so every way of writing that function works.
 
 ## The flow, step by step
 
-`flow::synthesize_asic` runs:
+`flow::synthesize_asic` first asks whether the design is whole: an instance
+of a module neither the design nor the library declares is
+`AsicError::UndefinedModule`, reported as `I0034` at the instantiation. A
+liberty cell instantiated by name in the source passes, since the library
+declares it; a module nothing declares is a file left off the build, and
+reporting it here is what keeps the hundred undriven readers of its outputs
+from being reported in its place. See `docs/ir.md`.
+
+Then it runs:
 
 1. **Generic synthesis** (`synth::run`): processes to cells, inference,
    optimisation.

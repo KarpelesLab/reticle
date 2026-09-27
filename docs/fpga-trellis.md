@@ -2333,10 +2333,39 @@ reticle program --device <serial> /tmp/bidir_loopback.bit
 (`leds_alternate.v` shares `leds.rcf`; the loop is shorthand.)
 
 **A design that instantiates library IP needs its sources named too**, because
-there is no search path: `reticle fpga` takes a list of files and a module it
-cannot find becomes a black box whose outputs are undefined, which is reported
-as a wall of `reads … which nothing drives` against the *top level* rather than
-as a missing module. The USB device is the one here that has dependencies:
+there is no search path: `reticle fpga` takes a list of files and nothing will
+go looking for the rest. Forgetting one now says so, at the instantiation,
+before anything is mapped:
+
+```text
+error[I0034]: no module named `usb_device_ulpi` is defined
+   --> testdata/fpga/cynthion/usb_ulpi_device.v:235:7
+    |
+235 |     ) u_dev (
+    |       ^^^^^^^ `u_dev` instantiates it
+    |
+    = note: Reticle has no library search path, so nothing will find
+      `usb_device_ulpi` later: add the file that defines it to this build
+```
+
+It used to be a *warning* that the instance had become a black box, followed by
+a hundred errors of the form `reads … which nothing drives` naming signals of
+the **top level** — every one of them an output of the missing instance, and
+every one of them in the file that was correct. That cost real time twice: once
+as a bogus `FAIL: LED 1 is lit and no host has configured anything` from a
+healthy design, and once at the command line an hour later. The check is
+`ir::Design::check_instance_targets`, called by `fpga::synthesize_for` and
+`asic::synthesize_asic` before they map anything, and by `sim::Simulator` before
+it runs; `src/ir/hier.rs` documents where the line falls.
+
+**A black box on purpose still works**, because something declares it: a
+`blackbox module` in the `.rtl` text form, an IP package whose sources are
+`encrypted` (`docs/ip.md`), or a primitive the *device* declares — the check is
+handed `Device::primitive_names`, so `EHXPLLL` and `TRELLIS_IO` are never
+mistaken for a file left off the build. What is refused is a name that nothing
+at all declares, which is always the same mistake.
+
+The USB device is the one here that has dependencies:
 
 ```sh
 reticle fpga testdata/fpga/cynthion/usb_ulpi_device.v \

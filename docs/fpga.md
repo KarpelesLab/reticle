@@ -142,8 +142,19 @@ out to nextpnr rather than through Reticle's own placer.
 
 ## Hierarchy
 
-`fpga::synthesize_for` flattens the module it is given before anything
-else (`Design::flatten`, default options), so a design with instances
+Before it flattens anything, `fpga::synthesize_for` asks whether the design
+is whole: an instance of a module neither the design nor the device declares
+is `FlowError::UndefinedModule`, reported as `I0034` at the instantiation and
+naming both the module and the instance. It is checked first because the
+alternative is a hole whose outputs drive nothing, which every later step
+reports the *readers* of — a hundred errors against whichever file was
+correct, and not one of them the cause. A primitive the device declares
+passes, since it is a black box `nextpnr` fills in: the check is handed
+`Device::primitive_names`. `docs/ir.md` has where that line falls and how to
+declare a black box on purpose.
+
+It then flattens the module it is given (`Design::flatten`, default
+options), so a design with instances
 maps from the library, from `reticle fpga` and from anything else that
 calls it: an instance marked `keep_hierarchy` and an instance of a black
 box stay instances, and everything else is inlined. The module keeps
