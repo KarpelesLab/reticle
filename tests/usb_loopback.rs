@@ -219,7 +219,9 @@ fn usb_endpoint_one_loops_bytes_back_on_a_real_host() {
     // from its neighbours' and from its own position modulo the packet size,
     // so a byte swapped with another or held over from the last packet is
     // visible.
-    let stream: Vec<u8> = (0..=255u8).map(|i| i.wrapping_mul(97).wrapping_add(13)).collect();
+    let stream: Vec<u8> = (0..=255u8)
+        .map(|i| i.wrapping_mul(97).wrapping_add(13))
+        .collect();
     let mut back: Vec<u8> = Vec::with_capacity(stream.len());
     for chunk in stream.chunks(MAX_PACKET) {
         handle

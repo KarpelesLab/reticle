@@ -482,10 +482,11 @@ Deliberately not implemented, with reasons:
   the transceiver announces with a receive command carrying the SE0-to-J
   transition. `tx_busy` here falls with the `stp` that ends a packet
   instead, so a device with something to say in the next clock could start
-  a second packet over the first. `usb_ctrl_ep` cannot — it answers one
-  host packet at a time and has nothing to send until the host has heard
-  the last answer — but an endpoint that streams would have to add the
-  wait, and this is the first thing to add with one.
+  a second packet over the first. Neither endpoint can — `usb_ctrl_ep` and
+  `usb_bulk_ep` each answer one host packet at a time and have nothing to
+  send until the host has heard the last answer, and only the endpoint the
+  last token named may answer at all — but an endpoint that streams would
+  have to add the wait, and this is the first thing to add with one.
 
   What that omission does **not** cost, and what was thought to: a receive
   command sent while the Link's own packet is still going out is not
@@ -512,6 +513,50 @@ Choices where the specification allowed either:
 
 ## 11. What has been established, and what has not
 
+> **Updated 2026-09-28: it moves bytes, and our own host code moved them.**
+> The device now has a bulk endpoint pair beside endpoint 0 —
+> `ip/usb_device_fs`'s `usb_bulk_ep`, reached through the same `depends`
+> line — and `testdata/fpga/cynthion/usb_ulpi_device.v` wires its OUT stream
+> straight into its IN stream. On the part, at full speed, with **no OS
+> driver involved** (the interface is vendor specific, `bInterfaceClass`
+> `FFh`, so no class driver claims it and `tests/usb_loopback.rs` claims it
+> instead):
+>
+> ```text
+> configuration descriptor (32 bytes): [09, 02, 20, 00, 01, 01, 00, 80, 32,
+>   09, 04, 00, 00, 02, ff, 00, 00, 00, 07, 05, 01, 02, 08, 00, 00,
+>   07, 05, 81, 02, 08, 00, 00]
+> [00, 01, 02, 03, 04, 05, 06, 07] -> [00, 01, 02, 03, 04, 05, 06, 07]
+> [de, ad, be, ef, ff] -> [de, ad, be, ef, ff]
+> [5a] -> [5a]
+> [00, 25, 4a, 6f, 94, b9, de, 03] -> [00, 25, 4a, 6f, 94, b9, de, 03]
+> 256 bytes through endpoint 1 and back, in 32 packets of at most 8
+> ```
+>
+> and `lsusb -v` reads the interface descriptor, both endpoint descriptors,
+> `wTotalLength 0x0020`, `bNumInterfaces 1` and `bNumEndpoints 2` — the last
+> two of which no line of Verilog states, since both are counted from the
+> descriptors by a constant function at elaboration.
+>
+> What that adds to this document's confidence, and what it does not. It
+> **establishes** that the ULPI transmit path carries an arbitrary payload
+> and not only a descriptor: the bytes above are not the device's own
+> constants, they came from the host, went through the bit stuffing in both
+> directions — `FF` and `07` put six ones in a row on the wire — and came
+> back. It establishes that a second endpoint answering from a second
+> turnaround counter still lands inside the window §9 quotes, on a
+> transceiver that reports LineState late. It establishes nothing new about
+> the register conversation, the turnaround or the receive command, which
+> were already checked byte for byte below and are unchanged.
+>
+> One fault was found doing it and it was the **host's**: payloads of one to
+> seven bytes came back and eight did not. A bulk IN transfer ends when a
+> packet shorter than `wMaxPacketSize` arrives or the host's buffer fills, so
+> a read of 64 bytes answered with eight is not finished — the host asks
+> again, the device NAKs because it has nothing more, and the transfer times
+> out. Reading one packet at a time is the fix. Worth knowing before
+> suspecting a device.
+>
 > **Updated 2026-09-27, again: a host has enumerated it.** `lsusb -d 1209:0001
 > -v` reads the eighteen-byte device descriptor, at full speed, off a Cynthion's
 > AUX port. So the whole of this document's reading of ULPI now has a device

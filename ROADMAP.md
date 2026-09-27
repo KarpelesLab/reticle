@@ -681,11 +681,12 @@ and first-party IP should drop into a design as easily as a Rust crate.
       gigabit MAC on `eth_mac_rmii`'s frame logic behind DDR IO with
       optional IO delays, tested by loopback; and `usb_device_fs` (and
       `usb_device_fs_pll`), a full-speed device with NRZI, bit
-      stuffing and CRC5 / CRC16 checked and a control endpoint that
-      enumerates, tested by a USB host model. Each block's header says
-      what it does not do — no bursts on either memory controller,
-      gigabit only for RGMII, endpoint 0 only for USB. See
-      `docs/ip-library.md`.
+      stuffing and CRC5 / CRC16 checked, a control endpoint that
+      enumerates and a bulk endpoint pair with a byte interface, tested
+      by a USB host model. Each block's header says what it does not
+      do — no bursts on either memory controller, gigabit only for
+      RGMII, one bulk endpoint pair of eight-byte packets and no class
+      layer for USB. See `docs/ip-library.md`.
 - [x] **A USB device for a board whose USB lines the FPGA cannot reach.**
       All three ports of a Cynthion go through their own ULPI
       transceiver, and the balls wired to a pair are input only, for

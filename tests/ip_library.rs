@@ -75,7 +75,9 @@
 //! does to a device does not depend on how the device's bytes reach the
 //! pair. The transceiver model checks the Link as well as answering it,
 //! and a test drives it with a Link that breaks each of the turnaround's
-//! rules, because a model that accepts anything proves nothing.
+//! rules, because a model that accepts anything proves nothing. The
+//! loopback runs through it too, and through the version of it that
+//! reports LineState a clock late, which is the part on the board.
 //!
 //! Seven tests here came from gaps in Reticle rather than in the blocks,
 //! found by writing real HDL, which is the argument for a first-party
@@ -9436,7 +9438,11 @@ fn usb_device_fs_sends_again_what_the_host_did_not_acknowledge() {
 
 /// The other data toggle.
 fn other_toggle(pid: u8) -> u8 {
-    if pid == USB_DATA0 { USB_DATA1 } else { USB_DATA0 }
+    if pid == USB_DATA0 {
+        USB_DATA1
+    } else {
+        USB_DATA0
+    }
 }
 
 /// A bulk pipe as a host controller keeps one: an endpoint number and the
@@ -9640,7 +9646,11 @@ fn usb_bytes_reach_the_byte_interface_and_come_back_from_it() {
     }
     // A zero-length OUT packet delivers no bytes, so the interface saw the
     // two that had any.
-    assert_eq!(host.data().got, sent[..2].to_vec(), "the packets with bytes");
+    assert_eq!(
+        host.data().got,
+        sent[..2].to_vec(),
+        "the packets with bytes"
+    );
 
     // Three packets the other way, one of them empty.
     let give: Vec<Vec<u8>> = vec![
@@ -9650,7 +9660,11 @@ fn usb_bytes_reach_the_byte_interface_and_come_back_from_it() {
     ];
     host.data().give = give.clone();
     for payload in &give {
-        assert_eq!(&pipe.read(&mut host, 3), payload, "the packet the interface gave");
+        assert_eq!(
+            &pipe.read(&mut host, 3),
+            payload,
+            "the packet the interface gave"
+        );
     }
     host.idle(10);
     host.assert_clean();
@@ -9743,7 +9757,11 @@ fn usb_bulk_endpoint_sends_again_what_the_host_did_not_acknowledge() {
     let first = host.bulk_in(5, 1);
     assert_eq!(first, UsbReply::Data(USB_DATA0, vec![0x31, 0x41, 0x59]));
     host.idle(20);
-    assert_eq!(host.bulk_in(5, 1), first, "the same packet with the same toggle");
+    assert_eq!(
+        host.bulk_in(5, 1),
+        first,
+        "the same packet with the same toggle"
+    );
     host.ack();
     host.idle(20);
     assert_eq!(

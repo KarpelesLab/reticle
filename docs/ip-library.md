@@ -36,6 +36,7 @@ ip/
   timer/         reticle.ip  rtl/timer.v
   uart/          reticle.ip  rtl/uart_tx.v  rtl/uart_rx.v  rtl/uart.v
   usb_device_fs/ reticle.ip  rtl/usb_fs_rx.v  rtl/usb_fs_tx.v  rtl/usb_ctrl_ep.v  rtl/usb_device_fs.v
+                 (usb_ctrl_ep.v holds four modules; see below)
   usb_device_fs_pll/ reticle.ip  rtl/usb_device_fs_pll.v
   usb_device_ulpi/ reticle.ip  README.md  rtl/usb_ulpi_link.v  rtl/usb_device_ulpi.v
   vga_out/       reticle.ip  README.md  rtl/vga_out.v
@@ -73,9 +74,9 @@ It is distributed as part of the repository instead.
 | `dvi_tx_pll` | `dvi_tx_pll` | `dvi_tx` with its five-times clock from the device's PLL | `dvi_tx` |
 | `vga_out` | `vga_out` | VGA output: the same three timings, colour truncated to the board's bits per channel, blanking forced to black, syncs at the mode's polarity | `dvi_tx` |
 | `eth_mac_rgmii` | `eth_mac_rgmii` | gigabit Ethernet MAC over RGMII: the RMII MAC's frame logic an octet a cycle behind DDR IO, optional IO delays | `eth_mac_rmii` |
-| `usb_device_fs` | `usb_device_fs`, `usb_fs_rx`, `usb_fs_tx`, `usb_ctrl_ep` | USB full-speed device: NRZI, bit stuffing, SYNC and EOP, CRC5 and CRC16 checked, a control endpoint that enumerates | — |
+| `usb_device_fs` | `usb_device_fs`, `usb_fs_rx`, `usb_fs_tx`, `usb_dev_core`, `usb_pkt_rx`, `usb_ctrl_ep`, `usb_bulk_ep` | USB full-speed device: NRZI, bit stuffing, SYNC and EOP, CRC5 and CRC16 checked, a control endpoint that enumerates, and a bulk endpoint pair with a byte interface | — |
 | `usb_device_fs_pll` | `usb_device_fs_pll` | `usb_device_fs` with its 48 MHz from the device's PLL and a 12 MHz board clock | `usb_device_fs` |
-| `usb_device_ulpi` | `usb_device_ulpi`, `usb_ulpi_link` | the same control endpoint behind a ULPI transceiver, which does the line work in silicon: the bus turnaround, transmit and receive commands, register access, one 60 MHz clock and no PLL | `usb_device_fs` |
+| `usb_device_ulpi` | `usb_device_ulpi`, `usb_ulpi_link` | the same device behind a ULPI transceiver, which does the line work in silicon: the bus turnaround, transmit and receive commands, register access, one 60 MHz clock and no PLL | `usb_device_fs` |
 | `ppu2c02` | `ppu2c02`, `ppu_palette` | NES-compatible picture unit: 256x240 raster, nametables and attributes, scrolling through `v`/`t`/`x`/`w`, 8x8 sprites with per-line evaluation, priority and sprite zero hit | — |
 
 `ppu2c02` is the block whose *subject* needs a statement rather than only
@@ -169,25 +170,134 @@ transceiver does the line work in silicon. That bus runs at 60 MHz, which
 is what the board's oscillator already is, so there is no
 `usb_device_ulpi_pll` beside it: nothing needs generating.
 
-What the two cores **share** is the part worth sharing. `usb_device_fs`
-was split the way `eth_mac_rmii` was: `usb_ctrl_ep` is the device above
-the line — the packet decoding, the PID check nibble, the CRC5 and CRC16,
-the data toggle, endpoint 0 and the standard requests — and both cores
-instantiate it, `usb_device_ulpi` through a `depends` line on
-`usb_device_fs` exactly as `eth_mac_rgmii` depends on `eth_mac_rmii`. It
-was a split rather than a copy on purpose: a control endpoint is the part
-of a USB device that is hardest to get right and the part a test proves
-most about, and two copies of one drifting apart is a cost that arrives
-later and is paid by whoever is unlucky. The 370 lines of NRZI, bit
+What the two cores **share** is the part worth sharing, and it is now a
+whole device rather than one endpoint. `usb_device_fs` was split the way
+`eth_mac_rmii` was, and `usb_dev_core` is the shared half: `usb_pkt_rx`
+for the packet decoding — the PID check nibble, the CRC5 of tokens, the
+CRC16 of data packets and the payload — `usb_ctrl_ep` for endpoint 0 and
+the standard requests, `usb_bulk_ep` for the endpoint that moves bytes,
+and the one transmitter those two endpoints share. Both cores instantiate
+it, `usb_device_ulpi` through a `depends` line on `usb_device_fs` exactly
+as `eth_mac_rgmii` depends on `eth_mac_rmii`. It was a split rather than a
+copy on purpose: a control endpoint is the part of a USB device that is
+hardest to get right and the part a test proves most about, and two copies
+of one drifting apart is a cost that arrives later and is paid by whoever
+is unlucky.
+
+The decoder came out of `usb_ctrl_ep` when the second endpoint arrived,
+for the same reason: an endpoint that decoded packets for itself would
+carry its own CRC16 generator, its own byte counter and its own PID check,
+which is about a hundred LUT4 of duplication and three chances for two
+statements of one thing to disagree. Both endpoints read one pulse, `pkt`,
+with everything about the packet valid in that cycle.
+
+**The arbitration between them is one register.** A USB device only speaks
+when a token asks it to, so the endpoint that may answer is the one the
+last token named — `owner <= (tok_endp != 0)` — and everything after that
+token belongs to the same endpoint, because a host does not interleave
+transactions on one device. `sel` into each endpoint is that bit, it gates
+the endpoint's turnaround counter, and the rest of the arbitration is a
+multiplexer. There is no request and grant and no round robin, because
+there is never a second answer waiting: the endpoint that has not been
+asked has nothing to say.
+
+The **byte interface** both cores bring out is `usb_bulk_ep`'s, and it is
+deliberately a stream and not a FIFO. `out_data` / `out_valid` /
+`out_last` / `out_ready` is what the host sent, a byte at a time with
+`out_last` on the last byte of each packet; `in_data` / `in_valid` /
+`in_ready` / `in_commit` is what it will be sent, and `in_commit` is what
+sends a short packet as a short packet — or, given no bytes at all, a
+zero-length one, which is how a host is told a transfer has ended.
+Flow control is the host's problem, which is what bulk means: an OUT
+packet that arrives before the last was taken is answered with NAK and the
+host repeats it, an IN token with nothing ready is answered with NAK and
+the host asks again, and neither loses a byte. `fifo_sync` is already a
+block here, so a design that wants depth puts one on either side rather
+than paying for it inside every USB device.
+
+Every output of that interface is a function of the endpoint's own
+registers, and no input reaches any of them combinationally. That is not
+a convenience, it is what lets a top level wire `out_ready` to `in_ready`
+and `in_valid` to `out_valid` and have a loopback rather than a
+combinational loop, which is exactly what
+`testdata/fpga/cynthion/usb_ulpi_device.v` does.
+
+The **descriptors** are the class's. The configuration descriptor used to
+be eighteen bytes of `case` inside `usb_ctrl_ep`, with `wTotalLength`
+typed out as `18` four lines above the `9` and the `9` it is the sum of,
+and a device that moves bytes has endpoint descriptors that no control
+endpoint should know about. So a design states its interface and endpoint
+descriptors in one wide parameter, `IFACE_DESC`, written in descriptor
+order — a Verilog concatenation lists its most significant part first,
+which is the order `lsusb -v` prints — and `usb_ctrl_ep` states the nine
+bytes that wrap them, because those nine bytes are **arithmetic over the
+rest**:
+
+| Field | Where it comes from |
+|-------|---------------------|
+| `wTotalLength` | `9 + IFACE_BYTES`, computed |
+| `bNumInterfaces` | the INTERFACE descriptors in the parameter, counted by a constant function at elaboration |
+| `bNumEndpoints` | the ENDPOINT descriptors after each INTERFACE descriptor, counted the same way and **written over** whatever byte 4 of that interface descriptor held |
+
+None of the three can disagree with the descriptors, because none of them
+is read from the descriptors. A wide parameter was chosen over a
+descriptor module with a byte port because a descriptor is not logic: as a
+parameter it is a constant those functions can walk at elaboration, so the
+counting costs nothing at run time, and a design that wants another class
+changes one instantiation instead of adding a module and four wires to its
+top level. A descriptor module would have put the length back in two
+places — its own bytes and the core's idea of how many there are — which
+is the thing being fixed. The one number a design still states twice is
+`IFACE_BYTES`, the concatenation's own width; get it wrong and the value
+is truncated at its top, byte 0 stops being a `bLength`, and
+`bNumInterfaces` comes out wrong, which the test compares against a
+descriptor written forwards in Rust.
+
+Those constant functions are written with shifts and masks and **no
+part-selects**, which looks perverse and is not: an indexed part-select
+whose base a width checker cannot bound warns — `part-select [-1:-8] is
+outside [39:0]` was the first attempt at reading the blob backwards — and
+`blocks_synthesise_cleanly` allows no warnings.
+
+**What the endpoints cost.** `usb_device_fs` went from 549 LUT4 and 244
+flip-flops on the ECP5 to 913 and 438, and `usb_device_ulpi` from 638 and
+250 to 1000 and 444. Two eight-byte packet buffers are 128 of those
+flip-flops and are the price of an endpoint that needs no FIFO;
+`usb_bulk_ep` on its own is 281 LUT4 and 167 flip-flops, and the control
+endpoint grew by about a hundred LUT4 for indexing a descriptor blob
+instead of an eighteen-entry `case`. Shrinking `DESC_MAX` from 64 bytes to
+32 saves seven of those, which is not worth the headroom a CDC ACM
+descriptor needs.
+
+The first measurement of it was **three `MULT18X18D` and 1560 LUT4**, which
+is a hard multiplier in a USB device and is worth recording as a gap in
+this compiler rather than in these blocks: `obuf[ordx * 8 +: 8]` is a byte
+index scaled to a bit index, and `src/synth` does not strength-reduce a
+multiply by a constant power of two, so the `mul` cell survives to
+technology mapping. Written `{ordx, 3'b000}` the same expression is wires.
+Any design that indexes an array by a scaled index would meet it, and the
+blocks are where it showed.
+
+Four modules share `rtl/usb_ctrl_ep.v`, which is the one thing in this
+library that is not one module to a file. `tests/fpga_trellis.rs`
+elaborates the two Cynthion top levels from a list of paths written out in
+Rust, and a module those paths do not reach **does not fail to
+elaborate** — it becomes a black box whose outputs are undefined, and the
+first of those two tests then reported `FAIL: LED 1 is lit and no host has
+configured anything` about a design that was perfectly well. That silent
+black box is a sharp edge in the elaborator and worth a diagnostic;
+splitting the file back into four is a `git mv` and three lines in each of
+those two lists. The 370 lines of NRZI, bit
 stuffing and serialising in `usb_fs_rx` and `usb_fs_tx` are what ULPI
 replaces and are *not* shared, because there is nothing there a ULPI
 design can use. The one thing the split needed was a parameter:
 `TURNAROUND`, how long after a host's packet the answer starts, which is
 eight cycles of 48 MHz on the full-speed core and is stated by ULPI
-itself as 7 to 18 clocks of 60 MHz (ULPI 1.1 Table 10). The split made
-`usb_device_fs` one LUT4 and two LUT6 *cheaper* — 541 became 540 and 462
-became 460, one `SB_LUT4` fewer on the iCE40 — and moved nothing else in
-the table; its flip-flop count and its LUT depth are what they were.
+itself as 7 to 18 clocks of 60 MHz (ULPI 1.1 Table 10). That counter is
+in **each** endpoint rather than shared, which is two statements of one
+rule and was chosen: a shared counter has to tell an endpoint that its
+packet went out, a cycle after it did, and ten lines of counter in each
+endpoint is cheaper to be sure of than a handshake between three modules.
 
 Everything is **Verilog-2005**, deliberately: it is the path this
 compiler exercises hardest, and it is the dialect every other tool reads.
@@ -453,6 +563,55 @@ is the part that matters:
   is sent again with the same toggle, and the next one follows once it
   is. The device is one clock domain, and `usb_device_fs_pll` must build
   a PLL giving exactly 48 MHz from 12 on both families.
+
+  Then **the bytes**. `bulk_loopback` is the one statement of moving them,
+  the way `enumerate` is the one statement of enumerating, and it runs
+  against the full-speed core, the full-speed core with the host's clock
+  0.4 % slow and 0.4 % fast, the ULPI core, and the ULPI core behind the
+  transceiver that reports LineState a clock late. A full eight-byte
+  packet, a five-byte one and a one-byte one go out and come back, each
+  read before the next is sent, with `FF` and `07` in the payload so the
+  bit stuffing is exercised inside a data packet and not only inside a
+  descriptor. The bytes are checked at the byte interface as well as at
+  the host, packet by packet, with `out_last` where the host put the end
+  of each one, and the pair is in **loopback** — `out_*` wired into
+  `in_*` — which is the wiring the board has rather than a testbench's
+  private arrangement.
+
+  Beside that, the endpoint's own rules, each with a test. The interface
+  driven as a consumer would drive it rather than looped back, which is
+  where the **zero-length packet** is in both directions: a loopback
+  cannot carry one, since an OUT of no bytes hands nothing over, and
+  `in_commit` alone is the only way to send one. The OUT endpoint NAKing
+  while the last packet has not been taken, with the NAK **counted and
+  never timed** — one attempt, one NAK — and both packets arriving in
+  order once the consumer starts again. A packet the host sends twice with
+  the same toggle, acknowledged twice and delivered once, which an endpoint
+  that looked at its buffer before its toggle would NAK for ever. An IN
+  packet the host does not acknowledge, sent again with the same toggle and
+  released only by the ACK. And CLEAR_FEATURE(ENDPOINT_HALT) putting one
+  direction's toggle back to DATA0, which is how a host and a device agree
+  on a toggle again without a bus reset and is what the host-side loopback
+  uses `clear_halt` for.
+
+  The derived fields get two tests of their own, both by overriding
+  `IFACE_DESC`: an interface that claims **five** endpoints and carries
+  two, which the device must report as two, and two interfaces of one
+  endpoint each both claiming **nine**, which must come back as two
+  interfaces with one endpoint apiece and a `wTotalLength` of 41 — the
+  second of which also proves the walk along the chain of `bLength` fields
+  does not stop at the first descriptor.
+
+  **None of these would have caught the fault that cost the last round.**
+  Every one of them passes against a three-bit state register for four
+  states, because a simulator has no opinion about a flip-flop whose data
+  input is a constant and will not bring one up holding a one. What catches
+  that is the ECP5 backend refusing such a flip-flop, and it earned its
+  keep immediately: it refused this round's first two bitstreams, for
+  `in_total` at seven bits when the longest descriptor is 32 bytes and for
+  a four-bit `pend_pid` in an endpoint whose four answers all have a zero
+  in bit 2. Both are now as wide as their values, the second by registering
+  two bits of *answer* and decoding the PID nibble in wires.
 - **`usb_device_ulpi`** — the **same host model and the same
   enumeration**, with a **ULPI transceiver model** between them. The
   model is a transceiver, not a stub: a full-speed receiver that recovers
@@ -499,9 +658,10 @@ is the part that matters:
   that accepts anything proves nothing. The device answers 13 to 23
   clocks after the host's end of packet, inside the 2 to 6.5 bit times
   USB allows and inside ULPI's own 7-to-18-clock window. It is one clock
-  domain and asks for no PLL. **No host has seen it**:
+  domain and asks for no PLL. And it has **run on a board**:
   [`ip/usb_device_ulpi/README.md`](../ip/usb_device_ulpi/README.md) §11
-  says what that means.
+  says what a Linux host read out of it and what our own host code moved
+  through endpoint 1.
 
 ### What the processor actually executes
 
@@ -765,18 +925,18 @@ exactly what this table is for.
 | `eth_mac_rgmii` | `eth_mac_rgmii` | IFG_CYCLES=12, TX_DELAY=80, RX_DELAY=80 | LUT6 | 28 x dff, 349 x lut | 4 |
 | `eth_mac_rgmii` | `eth_mac_rgmii` | IFG_CYCLES=12, TX_DELAY=80, RX_DELAY=80 | iCE40 HX1K | 10 x SB_CARRY, 119 x SB_DFFER, 64 x SB_DFFES, 7 x SB_DFFR, 2 x SB_GB, 39 x SB_IO, 393 x SB_LUT4 | 5 |
 | `eth_mac_rgmii` | `eth_mac_rgmii` | IFG_CYCLES=12, TX_DELAY=80, RX_DELAY=80 | ECP5 45F | 2 x DCCA, 6 x DELAYG, 5 x IDDRX1F, 394 x LUT4, 6 x ODDRX1F, 190 x TRELLIS_FF, 39 x TRELLIS_IO | 5 |
-| `usb_device_fs` | `usb_device_fs` | VID=16'h1209, PID=16'h0001 | LUT4 | 95 x dff, 921 x lut | 10 |
-| `usb_device_fs` | `usb_device_fs` | VID=16'h1209, PID=16'h0001 | LUT6 | 95 x dff, 751 x lut | 8 |
-| `usb_device_fs` | `usb_device_fs` | VID=16'h1209, PID=16'h0001 | iCE40 HX1K | 51 x SB_CARRY, 391 x SB_DFFER, 39 x SB_DFFES, 13 x SB_DFFR, 3 x SB_DFFS, 1 x SB_GB, 39 x SB_IO, 905 x SB_LUT4 | 9 |
-| `usb_device_fs` | `usb_device_fs` | VID=16'h1209, PID=16'h0001 | ECP5 45F | 1 x DCCA, 921 x LUT4, 446 x TRELLIS_FF, 39 x TRELLIS_IO | 10 |
-| `usb_device_fs_pll` | `usb_device_fs_pll` | VID=16'h1209, PID=16'h0001 | LUT4 | 94 x dff, 869 x lut | 10 |
-| `usb_device_fs_pll` | `usb_device_fs_pll` | VID=16'h1209, PID=16'h0001 | LUT6 | 94 x dff, 713 x lut | 8 |
-| `usb_device_fs_pll` | `usb_device_fs_pll` | VID=16'h1209, PID=16'h0001 | iCE40 HX1K | 51 x SB_CARRY, 319 x SB_DFFER, 39 x SB_DFFES, 13 x SB_DFFR, 3 x SB_DFFS, 1 x SB_GB, 17 x SB_IO, 843 x SB_LUT4, 1 x SB_PLL40_CORE | 9 |
-| `usb_device_fs_pll` | `usb_device_fs_pll` | VID=16'h1209, PID=16'h0001 | ECP5 45F | 1 x DCCA, 1 x EHXPLLL, 860 x LUT4, 374 x TRELLIS_FF, 17 x TRELLIS_IO | 10 |
-| `usb_device_ulpi` | `usb_device_ulpi` | VID=16'h1209, PID=16'h0001 | LUT4 | 89 x dff, 1013 x lut | 9 |
-| `usb_device_ulpi` | `usb_device_ulpi` | VID=16'h1209, PID=16'h0001 | LUT6 | 89 x dff, 845 x lut | 10 |
-| `usb_device_ulpi` | `usb_device_ulpi` | VID=16'h1209, PID=16'h0001 | iCE40 HX1K | 84 x SB_CARRY, 407 x SB_DFFER, 37 x SB_DFFES, 8 x SB_DFFR, 1 x SB_GB, 55 x SB_IO, 990 x SB_LUT4 | 9 |
-| `usb_device_ulpi` | `usb_device_ulpi` | VID=16'h1209, PID=16'h0001 | ECP5 45F | 1 x DCCA, 1013 x LUT4, 452 x TRELLIS_FF, 55 x TRELLIS_IO | 9 |
+| `usb_device_fs` | `usb_device_fs` | VID=16'h1209, PID=16'h0001 | LUT4 | 93 x dff, 913 x lut | 10 |
+| `usb_device_fs` | `usb_device_fs` | VID=16'h1209, PID=16'h0001 | LUT6 | 93 x dff, 741 x lut | 8 |
+| `usb_device_fs` | `usb_device_fs` | VID=16'h1209, PID=16'h0001 | iCE40 HX1K | 44 x SB_CARRY, 383 x SB_DFFER, 39 x SB_DFFES, 13 x SB_DFFR, 3 x SB_DFFS, 1 x SB_GB, 39 x SB_IO, 889 x SB_LUT4 | 9 |
+| `usb_device_fs` | `usb_device_fs` | VID=16'h1209, PID=16'h0001 | ECP5 45F | 1 x DCCA, 913 x LUT4, 438 x TRELLIS_FF, 39 x TRELLIS_IO | 10 |
+| `usb_device_fs_pll` | `usb_device_fs_pll` | VID=16'h1209, PID=16'h0001 | LUT4 | 92 x dff, 862 x lut | 10 |
+| `usb_device_fs_pll` | `usb_device_fs_pll` | VID=16'h1209, PID=16'h0001 | LUT6 | 92 x dff, 704 x lut | 8 |
+| `usb_device_fs_pll` | `usb_device_fs_pll` | VID=16'h1209, PID=16'h0001 | iCE40 HX1K | 44 x SB_CARRY, 311 x SB_DFFER, 39 x SB_DFFES, 13 x SB_DFFR, 3 x SB_DFFS, 1 x SB_GB, 17 x SB_IO, 826 x SB_LUT4, 1 x SB_PLL40_CORE | 9 |
+| `usb_device_fs_pll` | `usb_device_fs_pll` | VID=16'h1209, PID=16'h0001 | ECP5 45F | 1 x DCCA, 1 x EHXPLLL, 852 x LUT4, 366 x TRELLIS_FF, 17 x TRELLIS_IO | 10 |
+| `usb_device_ulpi` | `usb_device_ulpi` | VID=16'h1209, PID=16'h0001 | LUT4 | 87 x dff, 1000 x lut | 9 |
+| `usb_device_ulpi` | `usb_device_ulpi` | VID=16'h1209, PID=16'h0001 | LUT6 | 87 x dff, 843 x lut | 10 |
+| `usb_device_ulpi` | `usb_device_ulpi` | VID=16'h1209, PID=16'h0001 | iCE40 HX1K | 77 x SB_CARRY, 399 x SB_DFFER, 37 x SB_DFFES, 8 x SB_DFFR, 1 x SB_GB, 55 x SB_IO, 974 x SB_LUT4 | 9 |
+| `usb_device_ulpi` | `usb_device_ulpi` | VID=16'h1209, PID=16'h0001 | ECP5 45F | 1 x DCCA, 1000 x LUT4, 444 x TRELLIS_FF, 55 x TRELLIS_IO | 9 |
 <!-- end footprints -->
 
 ### Seven things writing these blocks found
@@ -1019,8 +1179,18 @@ ones a user would meet first: `sdram_ctrl` has no bursts and serves one
 word at a time; `hyperram_ctrl` has no bursts either and does not use
 RWDS as a capture clock; `dvi_tx` runs everything at five times the
 pixel rate, which leaves 1280 x 720 beyond both families' fabric;
-`eth_mac_rgmii` is gigabit only; and `usb_device_fs` has endpoint 0 and
-nothing else, so it enumerates and then has no way to move data.
+`eth_mac_rgmii` is gigabit only; and `usb_device_fs` has one bulk endpoint
+pair of eight-byte packets, so a design that wants two pipes or 64-byte
+packets needs a second `usb_bulk_ep` and a wider length field than the four
+bits both transmitters take.
+
+There is also **no class layer yet**. A HID or a CDC serial device is an
+`IFACE_DESC` and the logic above the byte interface, and neither is here:
+what is here is the endpoint infrastructure and a vendor-specific bulk
+loopback that proves it, deliberately, because a class layer on unproven
+endpoints hides the next fault instead of finding it. HID needs one more
+thing from `usb_ctrl_ep` besides descriptors — GET_DESCRIPTOR for the
+report descriptor, which is a class request it currently stalls.
 
 The `rv32i` core is big: about 2400 LUT4s, which does not fit an iCE40
 HX1K's 1280 and does fit an ECP5 45F many times over. That is a
