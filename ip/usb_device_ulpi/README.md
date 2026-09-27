@@ -320,7 +320,10 @@ If either is aborted, the Link retries when the bus is idle. HIGH,
 > *Provenance*: Table 19, Table 22, Table 24 and Table 30, §4.1 to §4.2.9.
 > HIGH, reset values included.
 
-**A full-speed peripheral wants `04h` = `45h` and `0Ah` = `00h`.** Both of
+**A full-speed peripheral wants `04h` = `45h` and `0Ah` = `00h`.** Both are
+now the settings a host has enumerated a device through.
+
+ Both of
 the next two bullets have now been checked against a part rather than only
 quoted, by reading the transceiver's own LineState back after the write: with
 `45h` it reports its D+ high, and with `XcvrSelect = 10` instead it reports
@@ -511,6 +514,30 @@ Choices where the specification allowed either:
 
 ## 11. What has been established, and what has not
 
+> **Updated 2026-09-27, again: a host has enumerated it.** `lsusb -d 1209:0001
+> -v` reads the eighteen-byte device descriptor, at full speed, off a Cynthion's
+> AUX port. So the whole of this document's reading of ULPI now has a device
+> behind it, and the thing that had been wrong all along was neither ULPI nor
+> this block: `ip/usb_device_fs/rtl/usb_ctrl_ep.v` declared `reg [2:0] stage`
+> for four states, and a flip-flop whose data input is the constant zero comes
+> up holding a **one** on the ECP5 backend that built it, because an unrouted
+> slice input on that family is high. `stage` read 5, every `case (stage)` label
+> missed, and every IN token the host sent was answered from the `default` arm
+> with a NAK. Two lines of width, and it works. `docs/fpga-trellis.md`'s "It
+> enumerates, and the fault was one bit of a register this backend brings up
+> wrong" is the account, the instruments it took, and the backend refusal that
+> now names such a flip-flop instead of writing it.
+>
+> **Two things the part does that ULPI forbids** came out of the same traces and
+> are recorded there rather than here, because neither is why it failed and
+> neither is fixed: receive commands report LineState **late** — seven of them,
+> three to five clocks apart, reporting the bit transitions of a packet that had
+> already finished, against §3.8.1.3's "must always convey the current RX CMD
+> values" — and the closing receive command that clears RxActive is the one that
+> carries the *right* LineState, which is what keeps this block's turnaround and
+> its bus-reset count honest. `tests/ip_library.rs`'s model can be told to do it
+> (`reporting_stale_line`) and this block enumerates through it.
+>
 > **Updated 2026-09-27: it has run on a board, a host has seen it, and this
 > document's reading of the specification has been checked against silicon.**
 > `testdata/fpga/cynthion/usb_ulpi_device.v` puts this block behind the
@@ -554,8 +581,13 @@ Choices where the specification allowed either:
 > +usb 7-5: new full-speed USB device number 92 using xhci_hcd
 > ```
 >
-> **It still does not enumerate**, and where it now stops is the *transmit*
-> direction: a build whose every answer is a STALL handshake — the one answer
+> **It did not enumerate then**, and the reading below — that the transmit
+> direction was at fault — is **wrong**; see the top of this section. What
+> follows is kept because the measurements are real and because the way the
+> conclusion failed is the lesson: every one of them was taken against an
+> endpoint whose `stage` register was going to answer NAK whatever the wire did.
+>
+> The reading at the time was: a build whose every answer is a STALL handshake — the one answer
 > a host names in `dmesg` with an errno of its own — produces `error -71` in
 > a third of a second, exactly like a build that answers nothing at all, and
 > never the `error -32` a host reports when it hears a STALL. **So the host
@@ -666,6 +698,9 @@ comparing with the bill:
 Then the question is decidable by software rather than by looking at an
 LED: the device either appears in the host's device list as `1209:0001`
 with an 18-byte device descriptor, or it does not. `lsusb -v` answers it.
+
+**It appears.** `Bus 007 Device 073: ID 1209:0001 Generic pid.codes Test PID`,
+`Negotiated speed: Full Speed (12Mbps)`, `bLength 18`.
 
 **What the four actually cost**, which is the part worth keeping:
 

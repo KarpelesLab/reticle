@@ -1,5 +1,257 @@
 # A real Lattice ECP5, and a real `.bit`
 
+## It enumerates, and the fault was one bit of a register this backend brings up wrong
+
+On 2026-09-27 a host on the other end of a USB cable read an eighteen-byte
+device descriptor out of a Great Scott Gadgets Cynthion whose ECP5 was running
+a bitstream this compiler wrote.
+
+```
+$ lsusb -d 1209:0001 -v
+Bus 007 Device 073: ID 1209:0001 Generic pid.codes Test PID
+Negotiated speed: Full Speed (12Mbps)
+Device Descriptor:
+  bLength                18
+  bDescriptorType         1
+  bcdUSB               2.00
+  bDeviceClass          255 Vendor Specific Class
+  bDeviceSubClass         0 [unknown]
+  bDeviceProtocol         0
+  bMaxPacketSize0         8
+  idVendor           0x1209 Generic
+  idProduct          0x0001 pid.codes Test PID
+  bcdDevice            1.00
+  iManufacturer           0
+  iProduct                0
+  iSerial                 0
+  bNumConfigurations      1
+  Configuration Descriptor:
+    bLength                 9
+    bDescriptorType         2
+    wTotalLength       0x0012
+    bNumInterfaces          1
+    bConfigurationValue     1
+    iConfiguration          0
+    bmAttributes         0x80
+      (Bus Powered)
+    MaxPower              100mA
+    Interface Descriptor:
+      bLength                 9
+      bDescriptorType         4
+      bInterfaceNumber        0
+      bAlternateSetting       0
+      bNumEndpoints           0
+      bInterfaceClass       255 Vendor Specific Class
+      bInterfaceSubClass      0 [unknown]
+      bInterfaceProtocol      0
+      iInterface              0
+```
+
+```
+usb 7-5: new full-speed USB device number 71 using xhci_hcd
+usb 7-5: New USB device found, idVendor=1209, idProduct=0001, bcdDevice= 1.00
+usb 7-5: New USB device strings: Mfr=0, Product=0, SerialNumber=0
+```
+
+### The fault, in one sentence
+
+**`ip/usb_device_fs/rtl/usb_ctrl_ep.v` declared `reg [2:0] stage` for four
+states, so `stage[2]` was a flip-flop whose data input is the constant zero, and
+on this backend such a flip-flop comes up holding a *one*.** `stage` read **5**,
+every label of `case (stage)` missed, every IN token the host sent was answered
+from the `default` arm with a **NAK**, and the host retried for five seconds and
+gave up: `device descriptor read/64, error -110`.
+
+Why a one. `SLICE<l>.REG<n>.SD = 0` takes a flip-flop's data from the fabric's
+`M` wire; nothing is routed to that wire when the netlist gives the pin a
+constant; and an unrouted slice input on this family is **high**, because
+Lattice's own packer ties every unused lookup-table input high and
+`TrellisFabric::configure_logic` does the same for the same reason. A LUT can
+absorb a constant input into its truth table. A flip-flop's data input cannot
+absorb anything: it needs a driver, and nextpnr makes one — `pack_constants`
+builds a lookup table with `INIT` all zeros or all ones and routes it — where
+this backend made nothing at all.
+
+**The fix in the backend is a refusal, not a driver.**
+`TrellisFabric::configure_registers` now names the cell and stops:
+
+```
+error: flip-flop `state$ff$ff2` (`SLICEA.FF1` at X40Y2) has nothing driving its
+data input and is not tied high, and an unrouted slice input on this family
+reads as a **one** — so it would come up set rather than at the constant the
+design gives it. Give the register only as many bits as its values need, or
+drive that bit
+```
+
+`testdata/fpga/cynthion/wide_state.v` is a three-line design that does it on
+purpose and `tests/fpga_trellis.rs::a_register_bit_nothing_drives_is_refused` is
+that error asserted. Making a constant driver instead would be better and is
+what "What remains" now asks for; refusing is what this can do honestly today.
+
+**A data pin the netlist ties *high* is allowed through, and that is not
+laziness.** The untied wire is a one, so the flop loads the one the design asked
+for. `usb_ulpi_link`'s `rst_q` — the set-once register that releases the
+transceiver's reset pin — is exactly that, and it has worked on this board since
+the first ULPI bitstream. It worked **by accident**, and the accident is now
+written down in the code rather than left to be rediscovered.
+
+### The fix in the design, and it is one character
+
+```diff
+-    localparam [2:0] C_IDLE       = 3'd0;
++    localparam [1:0] C_IDLE       = 2'd0;
+...
+-    reg [2:0]  stage;
++    reg [1:0]  stage;
+```
+
+Nothing else. The rest of `usb_ctrl_ep`, the whole of `usb_ulpi_link`,
+`TURNAROUND` at its original `9`, `SLEWRATE`, the register sequence and the
+board's `SwapDP/DM` are all as they were, and with those two lines the device
+enumerates. That was checked the only way it can be: by building the **original**
+`usb_ulpi_link.v` and the **original** `usb_ctrl_ep.v` out of git with nothing
+but the width changed. It enumerated.
+
+Three other changes were made while the fault was still hidden — `line_idle` not
+testing LineState, the turnaround counting consecutive quiet cycles, and a bus
+reset confirmed by a Debug-register read — and **all three are reverted**,
+because the measurement says they were not needed and a shipped block should not
+carry changes argued from reasoning when the reasoning turned out to be about
+something else. What was learnt from them is in "Two things this part does that
+ULPI forbids", which is measurement and not change.
+
+### How it was found, which is the part worth keeping
+
+Eight rounds of experiments had reached one bit of information per bitstream —
+an attach or a silence in `dmesg` — and the answer needed hundreds. Three
+instruments, each built on the last:
+
+**1. A console, on the pin the debug microcontroller shares with JTAG.** Great
+Scott Gadgets' platform file gives the FPGA a `uart` resource on `R14`/`T14`,
+and Apollo bridges it to `/dev/ttyACM0` on the machine the CONTROL port is
+plugged into — so the FPGA can talk to the *same host* over a channel that has
+nothing to do with the port under test. The catch is in their own file: "UART
+pins R14 and T14 are connected to JTAG pins R11 (TDI) and T11 (TMS)
+respectively". The PCB has no series resistor; `/Debugger/FPGA_JTAG.TMS` carries
+FPGA balls T11 **and** T14 and the microcontroller's pin. So a gateware driving
+T14 while Apollo shifts JTAG is two drivers on one wire. What makes it safe:
+
+- the pad drives only inside a **window**, a counter and two latches, from about
+  0.28 s after configuration to about 17.9 s, and is high impedance before and
+  after — once the window shuts nothing can reopen it but a reconfiguration;
+- `PULLMODE=UP`, which is what the platform file asks for on that pin;
+- Apollo's own firmware is the other half of the interlock: `jtag_init` calls
+  `uart_release_pinmux` and `jtag_deinit` calls `uart_configure_pinmux`.
+
+Two host-side details cost an hour each and are worth writing down. Apollo only
+initialises its SERCOM when the host **changes** the CDC line coding
+(`tud_cdc_line_coding_cb`); `tud_cdc_line_state_cb` skips it when the firmware
+already thinks the UART is active, which it does after every JTAG transaction.
+So the reader asks for 9600 first and makes 115200 a change. And the console was
+silent at first for a reason that belongs in this file: **`if (e) q <= 1'b1`
+infers a clock enable and the pad never drove; `q <= q | e` worked.**
+`usb_ulpi_device.v`'s header had already said so about its LED latches, and this
+is the second time it has been paid for.
+
+**2. A ULPI trace.** Ninety-six entries of `{gap, usb_reset, dir, nxt, stp,
+data}` in one shift register, triggered on the first packet whose PID and whose
+*second byte* match — the second byte matters because a root hub repeats every
+downstream packet to every enabled port, so this device sees the host's whole
+conversation with all twenty devices on that bus and a token's PID alone does not
+say whose it is. `00h` there is address zero, endpoint zero, which is this device
+and nothing else. Two filters make a whole control transfer fit in ninety-six
+entries: a receive command whose only news is LineState is dropped, and so is an
+empty turnaround cycle.
+
+Its own bugs are the lesson. The trace printed its entries rotated by four
+because a dump that began before the buffer was full rotated partway through it;
+and the address match fired on the cycle *after* the PID instead of on the next
+byte, which a stub transceiver handing bytes over back to back could not
+catch — the testbench's stub now spaces them forty clocks apart, as a
+full-speed line does.
+
+**3. A debug port on the endpoint.** When the trace had shown the NAK and the
+bus was exonerated, `{stage, expect, toggle, await_ack, pending}` was brought out
+of `usb_ctrl_ep` in a scratch copy of the IP and latched at the trigger. It read
+`A4`: `toggle = 1`, so the SETUP had been processed; `expect = none`, as it
+should be; `pending = 0`, as it should be; and `stage = 5`, which the RTL cannot
+produce. That is the whole answer, and nothing short of reading the register was
+going to give it.
+
+### What the trace settled on the way, and what it corrected
+
+Every one of these is one line of a decoded trace taken on the part.
+
+| Question | Answer |
+|---|---|
+| Does the host's SETUP arrive? | **Yes, byte-exact**: `2D 00 10`, then a DATA0 of `C3 80 06 00 01 00 00 40 00 DD 94` — `GET_DESCRIPTOR(DEVICE, wLength=64)` with its CRC16 |
+| At what rate? | five clocks a bit, exactly 12 Mbit/s against the board's 60 MHz |
+| Does the device answer it? | **Yes**: `TX CMD pid=2 (ACK)` six clocks after the packet ended, `nxt` three clocks later, `stp` with `nxt` still high — which is the USB334x datasheet's own condition for ending a transmit |
+| Is that ACK well formed on the pair? | **Yes, symbol by symbol.** The transceiver hears its own transmission and reports it: K J K J K J K J K J K, then SE0, then J — which is SYNC, then `D2h` LSB-first in NRZI, then the EOP, exactly |
+| Does the host understand it? | **Yes.** It goes on to send an IN token to address zero, which is what a host does only when the setup stage succeeded |
+| What does the device answer the IN with? | **`TX CMD pid=A (NAK)`**, six clocks after the token, for ever |
+| Why? | `stage` is 5 |
+
+**That corrects the previous account of this file in its central claim.** "The
+host understands none of this link's transmissions" was wrong, and so was the
+measurement it rested on: a build whose every answer is a STALL produced the same
+`dmesg` as a build that answers nothing because **a STALL in answer to a SETUP's
+data packet is not the STALL a host reports `-32` for** — that one belongs to the
+data stage — and because, as it turned out, `stage` being 5 meant neither build
+ever had the endpoint state its own experiment assumed. Every transmit-side
+experiment of the previous rounds, `SLEWRATE` and the `TURNAROUND` sweep and the
+`stp` timing included, was run against an endpoint that was going to answer NAK
+whatever the wire did. That is the shape of the mistake: a sound instrument
+pointed at a device whose state nobody had read.
+
+### Two things this part does that ULPI forbids, measured and not fixed
+
+Both are real, both are in the traces, and **neither is why it failed** — which
+is exactly why they are recorded here as facts about the part rather than as
+changes to the block.
+
+1. **Receive commands report LineState late.** Between a host's SETUP token and
+   its DATA0 packet, with the pair idle at J the whole way, the transceiver sent
+   seven single receive commands three to five clocks apart reporting J, K, J, K,
+   J, K and finally **K**. Those are the bit transitions of the packet that had
+   already finished, arriving after it: one receive command per transition, a bus
+   that carries one at a time, and a backlog that outlives the packet. ULPI 1.1
+   §3.8.1.3 says a queued receive command "must always convey the current RX CMD
+   values, not a previous or old value". This part does not.
+
+   It is worth knowing because two things in this block read LineState: the
+   turnaround `line_idle` waits for, and the SE0 count that makes a bus reset.
+   Neither has been seen to break — the closing receive command of a packet, the
+   one that clears RxActive, carries the **right** LineState, and DS00002646A
+   §6.3.2 says the part does not send it until the pair is idle — so nothing is
+   changed. `tests/ip_library.rs`'s transceiver model can be told to do it
+   (`reporting_stale_line`) and the block enumerates through it.
+
+2. **A device answers an IN token six clocks after it ends**, and ULPI 1.1
+   Table 10 asks for seven to eighteen. That is `TURNAROUND` at 2, which was one
+   of the things tried while the fault was hidden; at its shipped value of 9 the
+   answer lands at thirteen, inside the window, and that is the build that
+   enumerated.
+
+### What this settles
+
+It settles the thing this backend was built for: **a design of 728 lookup
+tables and 296 flip-flops, compiled from Verilog by this crate alone — no Yosys,
+no nextpnr, no `ecppack` — placed, routed, written into a `.bit` whose every one
+of 26 916 set bits decodes back through Project Trellis' database with nothing
+unexplained, loaded into a real ECP5 over a real JTAG transport this crate also
+wrote, is a USB 2.0 full-speed device that a Linux host enumerates.**
+
+It settles that the flow's structural checks are not enough on their own, and
+says exactly where the gap was: every one of them passed on the broken
+bitstream. 100% of the bits decoded, every sink walked back to its driver, every
+clock was on a global network, and the device did not work, because none of those
+checks has an opinion about a flip-flop whose data input nothing drives. That
+check exists now.
+
+It settles nothing about the rest of `usb_ctrl_ep`'s reach: one control endpoint,
+eight-byte packets, two descriptors, no interfaces with endpoints on them.
+
 ## An edge rate on every ULPI pin, and it changed nothing
 
 On 2026-09-27 `PIO<side>.SLEWRATE` became the first pad attribute this backend
@@ -134,6 +386,17 @@ therefore on the wire the host calls D+. The device still does not answer:
 `device descriptor read/64, error -110`.
 
 ### Where it stops now, and the measurement that says so
+
+> **Superseded, and in its central claim wrong.** It does not stop here and the
+> host understands this link's transmissions perfectly well: it acknowledges the
+> host's SETUP with a packet whose every symbol on the pair has since been read
+> back, and the host goes on to send an IN token. What was wrong was one bit of
+> a register in `usb_ctrl_ep`, which this backend brought up as a one — "It
+> enumerates, and the fault was one bit of a register this backend brings up
+> wrong" at the top of this file has the whole of it, including why the STALL
+> experiment below could not have said what it was read as saying. The
+> measurements in this section stand; the conclusion drawn from them does not.
+
 
 The instrument for this round was not a bitstream per question but a
 **staircase probe**: `ip/usb_device_ulpi`'s two blocks wired up by hand in a
@@ -2689,7 +2952,7 @@ borrows now. Every backend gets it.
 | Block RAM | `Ecp5Stream` reads and writes the initialisation blocks — the reference files' 44 blocks round trip — and nothing generates one. The `MIB_EBR*` tiles' wires and pips are in the graph |
 | Distributed RAM | `SLICEA.MODE = DPRAM`, `WREMUX`, `CLK1.CLKMUX` and the `WAD`/`WDO` wires, none of which is declared |
 | An IO standard other than LVCMOS33 | the bits are in the database and the code takes the standard from the constraints; no other standard has been on a part |
-| A USB device a host **enumerates** | **nothing in software, as far as fourteen experiments on the part can tell.** `testdata/fpga/cynthion/usb_ulpi_device.v` builds, decodes with nothing left over, loads, and is **seen to attach** by a host on the AUX port; the eight-bit bus is byte-exact in both directions, proved by reading Function Control's `41h` and the transceiver's Vendor ID off the part before writing anything; and the transceiver's own LineState says the 1.5 kOhm pull-up lands on the wire ULPI names. The host names the **other** wire, in both full-speed and low-speed mode, so **D+ and D- are exchanged between the transceiver and the host** and nothing a bitstream can contain fixes a crossed differential pair. "Where it stops, and it is not the bus" at the top of this file has every measurement and the three physical things to try, the first of which is turning the AUX plug over |
+| A **constant driver** for a flip-flop's data input | nextpnr's `pack_constants` makes one: a lookup table with `INIT` all zeros or all ones, routed to the wire. This backend declares neither that nor a `CIB` tie for the slice's `M` input, so `configure_registers` **refuses** a flip-flop with nothing driving its data pin instead — see "It enumerates, and the fault was one bit of a register this backend brings up wrong", which is what that cost. A pin tied *high* is allowed through, because an unrouted slice input is a one |
 | `DRIVE`, `OPENDRAIN`, `CLAMP` or `TERMINATION` on a pad | each is a `.config_enum` of the pad tile, and each is one `ecppack` writes **only when an attribute asks** — so not writing them matches nextpnr exactly for a design that does not ask. `set_io -drive` is parsed and reaches the cell, and `configure_io` writes nothing for it, which makes the option a silent no-op in the bitstream. **`SLEWRATE` has left this row**: it is written now, see "An edge rate on every ULPI pin" |
 | A bidirectional pad with a **registered** tristate | `PIO<s>.TRIMUX_TSREG = IOLTO` and the `IOLOGIC` tristate register, none of which is declared. `fpga::primitives` declines to absorb a tri-state driver on a DDR port rather than moving the enable ahead of the register |
 | An ECP5 over an FTDI cable | nothing, in principle: the configuration plans are transport-neutral and `jtag::Scan` encodes them for MPSSE. It is refused because that pairing has never been run |

@@ -118,10 +118,26 @@ module usb_ctrl_ep #(
     localparam [15:0] CRC16_RESIDUE = 16'hB001;
 
     // Control transfer stages.
-    localparam [2:0] C_IDLE       = 3'd0;
-    localparam [2:0] C_DATA_IN    = 3'd1;
-    localparam [2:0] C_STATUS_IN  = 3'd2;
-    localparam [2:0] C_STALL      = 3'd3;
+    // **Two bits, because there are four of them.**
+    //
+    // This was `[2:0]`, and the third bit was a bit no expression in this file
+    // ever assigns anything but zero. Read back off a real ECP5 through a debug
+    // port, `stage` was **5**: the third bit had come up set, `case (stage)`
+    // matched none of its four labels, and every IN token the host sent was
+    // answered from the `default` arm with a NAK. The host retried for five
+    // seconds and gave up — `device descriptor read/64, error -110` — with the
+    // device's SETUP acknowledgement, its receive path and its transmit path
+    // all working.
+    //
+    // A state register wide enough for states that do not exist is a hostage to
+    // whatever a backend does with a flip-flop whose data input is a constant,
+    // and on this one an untied slice input reads as a one. So the width is the
+    // number of states from now on, and `docs/fpga-trellis.md` carries the
+    // backend half of it.
+    localparam [1:0] C_IDLE       = 2'd0;
+    localparam [1:0] C_DATA_IN    = 2'd1;
+    localparam [1:0] C_STATUS_IN  = 2'd2;
+    localparam [1:0] C_STALL      = 2'd3;
 
     // What the last token asked for.
     localparam [1:0] X_NONE  = 2'd0;
@@ -187,7 +203,7 @@ module usb_ctrl_ep #(
     reg        config_q;
     reg        pending_config;
     reg        set_config;
-    reg [2:0]  stage;
+    reg [1:0]  stage;
     reg [1:0]  expect;
     reg        toggle;
     reg        desc_sel;    // 0 device, 1 configuration
