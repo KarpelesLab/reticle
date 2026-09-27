@@ -235,7 +235,7 @@ module usb_ulpi_device #(
     // holds one until the first edge and zero for ever after, so keeping it
     // is not a favour, it is the semantics. That is the whole of what makes
     // the probe survive, and `tests/fpga_trellis.rs`'s
-    // `the_usb_device_carries_a_constant_zero_register_into_the_loopback`
+    // `the_usb_devices_constant_zero_probe_survives_synthesis`
     // asserts the flip-flop and its constant driver are in the netlist so
     // that a future optimisation cannot quietly turn this test green for
     // ever.
@@ -243,22 +243,24 @@ module usb_ulpi_device #(
     // On the part the initialiser is a fiction and does not matter: an ECP5
     // releases every flip-flop into its `REGSET` state, which
     // `src/fpga/devices/ecp5.dev` makes `RESET`, so `zero_probe` starts at
-    // zero and the first clock has to *keep* it there. The POR above gives
-    // it sixteen clocks before the core leaves reset, and nothing reads the
-    // byte for milliseconds after that.
+    // zero and the first clock has to *keep* it there. The power-on reset
+    // below gives it sixteen clocks before the core leaves reset, and nothing
+    // reads the byte for milliseconds after that.
     //
-    // It costs one flip-flop, one shared `const0` lookup table and eight
-    // two-input XORs. **It is not a dead register**: its value leaves the
-    // part in every byte the host reads.
+    // It costs one flip-flop and **one** extra lookup table, not nine: the
+    // eight XORs fold into inputs the endpoint's own lookup-table cover was
+    // not using, and the `const0` driver is shared. **It is not a dead
+    // register**: `zero_probe` reaches sixty-four lookup tables of the IN
+    // data path and its value leaves the part in every byte the host reads.
     reg zero_probe = 1'b1;
     always @(posedge clk) begin
         zero_probe <= 1'b0;
     end
 
     // The byte on its way back to the host, and the only thing between the
-    // OUT buffer and the IN buffer. Still combinational: eight lookup tables
-    // between two flip-flops, not a register, so the flow control below is
-    // unchanged.
+    // OUT buffer and the IN buffer. Still combinational — eight XORs, which
+    // the lookup-table cover absorbs — so this is logic between two
+    // flip-flops and not a register, and the flow control below is unchanged.
     wire [7:0] loop_data = out_data ^ {8{zero_probe}};
 
     // ===================================================================
