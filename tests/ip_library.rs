@@ -8520,6 +8520,136 @@ trait UsbPair {
     /// The cycles an answer may take, which is a property of what is
     /// between the host and the device.
     fn answer_window(&self) -> (u64, u64);
+    /// The data endpoint's byte interface, and the logic above it.
+    fn data(&mut self) -> &mut DataEp;
+}
+
+/// The data endpoint's byte interface, and whatever stands in for the logic
+/// above it.
+///
+/// `usb_bulk_ep` hands bytes over with `out_valid` / `out_ready` / `out_last`
+/// and takes them with `in_valid` / `in_ready` / `in_commit`, and every one
+/// of its outputs is a function of registers alone — no input of this
+/// interface reaches any of them combinationally — so a testbench may read
+/// the outputs and drive the inputs in the same cycle without a loop. That
+/// is a property of the endpoint and not a convenience: a top level wires
+/// `out_ready` to `in_ready` on the board, and if either side were
+/// combinational in the other that would be one.
+///
+/// Two modes, because they prove different things. With `loopback` the OUT
+/// stream is wired into the IN stream, which is the design that goes on the
+/// part. Without it, this struct **is** the logic above the endpoint: it
+/// takes every byte the host sends and hands back packets from a queue, so
+/// the interface is exercised as a user of the block would, and a byte
+/// arriving at the wrong index or a packet boundary in the wrong place is
+/// visible here and not only in what the host reads back.
+struct DataEp {
+    out_data: NetHandle,
+    out_valid: NetHandle,
+    out_last: NetHandle,
+    out_ready: NetHandle,
+    in_data: NetHandle,
+    in_valid: NetHandle,
+    in_ready: NetHandle,
+    in_commit: NetHandle,
+    loopback: bool,
+    /// Whether the logic above the endpoint is taking the bytes at all.
+    /// False is a consumer that has stopped, which is what makes the
+    /// endpoint NAK: `loopback` has no use for it, since there the IN
+    /// side's room is the flow control.
+    take: bool,
+    /// Packets the OUT endpoint delivered, cut where `out_last` fell.
+    got: Vec<Vec<u8>>,
+    /// The packet being collected.
+    partial: Vec<u8>,
+    /// Packets to give the IN endpoint, front first.
+    give: Vec<Vec<u8>>,
+    /// Bytes of `give[0]` handed over so far.
+    at: usize,
+}
+
+impl DataEp {
+    fn new(sim: &Simulator<'_>, loopback: bool) -> DataEp {
+        let pin = |n: &str| top_net(sim, n);
+        DataEp {
+            out_data: pin("out_data"),
+            out_valid: pin("out_valid"),
+            out_last: pin("out_last"),
+            out_ready: pin("out_ready"),
+            in_data: pin("in_data"),
+            in_valid: pin("in_valid"),
+            in_ready: pin("in_ready"),
+            in_commit: pin("in_commit"),
+            loopback,
+            take: true,
+            got: Vec::new(),
+            partial: Vec::new(),
+            give: Vec::new(),
+            at: 0,
+        }
+    }
+
+    /// Every input of the interface low, which is what a design that only
+    /// enumerates leaves them at.
+    fn quiet(&self, sim: &mut Simulator<'_>) {
+        sim.set(self.out_ready, bit(false));
+        sim.set(self.in_valid, bit(false));
+        sim.set(self.in_data, word(8, 0));
+        sim.set(self.in_commit, bit(false));
+    }
+}
+
+/// One cycle of whatever is above the data endpoint, driven before the clock
+/// edge the handshakes complete on.
+fn step_data(sim: &mut Simulator<'_>, ep: &mut DataEp) {
+    let out_valid = high(sim, ep.out_valid);
+    let out_last = high(sim, ep.out_last);
+    let out_byte = octet(get_u64(sim, ep.out_data));
+    let in_ready = high(sim, ep.in_ready);
+
+    // In loopback the byte only moves when the IN side has room for it,
+    // which is the whole of the flow control a top level does.
+    let out_ready = if ep.loopback { in_ready } else { ep.take };
+    sim.set(ep.out_ready, bit(out_ready));
+
+    let moved = out_valid && out_ready;
+    if moved {
+        ep.partial.push(out_byte);
+        if out_last {
+            let packet = std::mem::take(&mut ep.partial);
+            ep.got.push(packet);
+        }
+    }
+
+    if ep.loopback {
+        sim.set(ep.in_valid, bit(out_valid));
+        sim.set(ep.in_data, word(8, u64::from(out_byte)));
+        sim.set(ep.in_commit, bit(moved && out_last));
+        return;
+    }
+
+    let mut valid = false;
+    let mut commit = false;
+    let mut byte = 0u8;
+    if in_ready && !ep.give.is_empty() {
+        let packet = &ep.give[0];
+        if ep.at < packet.len() {
+            byte = packet[ep.at];
+            valid = true;
+            commit = ep.at + 1 == packet.len();
+        } else {
+            // Nothing to give: a zero-length packet is the commit alone.
+            commit = true;
+        }
+        ep.at += 1;
+        if commit {
+            ep.give.remove(0);
+            ep.at = 0;
+        }
+    }
+    sim.set(ep.in_valid, bit(valid));
+    sim.set(ep.in_data, word(8, u64::from(byte)));
+    sim.set(ep.in_commit, bit(commit));
 }
 
 /// A USB host on the other end of the pair: it sends real packets —
@@ -8795,6 +8925,30 @@ impl<P: UsbPair> UsbHost<P> {
         Ok(got)
     }
 
+    /// One bulk OUT transaction: the token, the data packet with the PID
+    /// given, and the handshake the device answers with.
+    fn bulk_out(&mut self, addr: u8, endp: u8, pid: u8, payload: &[u8]) -> UsbReply {
+        self.send(&usb_token(USB_OUT, addr, endp));
+        self.idle(3);
+        self.send(&usb_data(pid, payload));
+        let reply = self.receive();
+        self.idle(4);
+        reply
+    }
+
+    /// One bulk IN transaction, **not** acknowledged: a caller that means to
+    /// keep the byte calls `ack`, and a caller proving the device sends it
+    /// again does not.
+    fn bulk_in(&mut self, addr: u8, endp: u8) -> UsbReply {
+        self.send(&usb_token(USB_IN, addr, endp));
+        self.receive()
+    }
+
+    /// The data endpoint's byte interface, and the logic above it.
+    fn data(&mut self) -> &mut DataEp {
+        self.pair.data()
+    }
+
     /// A control transfer with no data stage: SETUP, then a zero-length
     /// IN for the status, acknowledged.
     fn control_write(&mut self, addr: u8, request: [u8; 8]) -> UsbReply {
@@ -8844,10 +8998,15 @@ struct FsPair<'d> {
     configured: NetHandle,
     usb_reset: NetHandle,
     problems: Vec<String>,
+    data: DataEp,
 }
 
 impl<'d> FsPair<'d> {
     fn new(design: &'d Design) -> FsPair<'d> {
+        FsPair::with_loopback(design, true)
+    }
+
+    fn with_loopback(design: &'d Design, loopback: bool) -> FsPair<'d> {
         let sim = simulate(design, "usb_device_fs");
         let pin = |n: &str| top_net(&sim, n);
         let mut pair = FsPair {
@@ -8861,9 +9020,11 @@ impl<'d> FsPair<'d> {
             configured: pin("configured"),
             usb_reset: pin("usb_reset"),
             problems: Vec::new(),
+            data: DataEp::new(&sim, loopback),
             sim,
         };
         let rst_n = top_net(&pair.sim, "rst_n");
+        pair.data.quiet(&mut pair.sim);
         pair.set_line(UsbLine::J);
         let clk = pair.clk;
         reset(&mut pair.sim, clk, rst_n);
@@ -8887,6 +9048,7 @@ impl UsbPair for FsPair<'_> {
     }
 
     fn cycle(&mut self, host: Option<UsbLine>) {
+        step_data(&mut self.sim, &mut self.data);
         match host {
             Some(line) => self.set_line(line),
             None => {
@@ -8940,6 +9102,10 @@ impl UsbPair for FsPair<'_> {
     fn answer_window(&self) -> (u64, u64) {
         // Two to six and a half bit times after the host's EOP.
         (8, 26)
+    }
+
+    fn data(&mut self) -> &mut DataEp {
+        &mut self.data
     }
 }
 
@@ -9261,6 +9427,447 @@ fn usb_device_fs_sends_again_what_the_host_did_not_acknowledge() {
             expected_device_descriptor(0x1209, 0x0001)[8..16].to_vec()
         )
     );
+    host.assert_clean();
+}
+
+// ---------------------------------------------------------------------------
+// The data endpoint: bytes, once the device is enumerated
+// ---------------------------------------------------------------------------
+
+/// The other data toggle.
+fn other_toggle(pid: u8) -> u8 {
+    if pid == USB_DATA0 { USB_DATA1 } else { USB_DATA0 }
+}
+
+/// A bulk pipe as a host controller keeps one: an endpoint number and the
+/// two data toggles, one per direction.
+///
+/// The NAK retries are **counted, never timed**. A host controller repeats a
+/// NAKed transaction until it succeeds or the transfer times out, and what a
+/// test can assert about that is how many repeats it took, which is the same
+/// number on a fast machine and a slow one.
+struct BulkPipe {
+    endp: u8,
+    out_pid: u8,
+    in_pid: u8,
+    naks: usize,
+}
+
+impl BulkPipe {
+    fn new(endp: u8) -> BulkPipe {
+        BulkPipe {
+            endp,
+            out_pid: USB_DATA0,
+            in_pid: USB_DATA0,
+            naks: 0,
+        }
+    }
+
+    /// One packet to the device, repeated while it NAKs.
+    fn write<P: UsbPair>(&mut self, host: &mut UsbHost<P>, addr: u8, payload: &[u8]) {
+        for _ in 0..64 {
+            match host.bulk_out(addr, self.endp, self.out_pid, payload) {
+                UsbReply::Handshake(USB_ACK) => {
+                    self.out_pid = other_toggle(self.out_pid);
+                    return;
+                }
+                UsbReply::Handshake(USB_NAK) => self.naks += 1,
+                other => panic!("an OUT of {} bytes was answered {other:?}", payload.len()),
+            }
+        }
+        panic!("the device NAKed all sixty-four attempts at an OUT");
+    }
+
+    /// One packet from the device, repeated while it NAKs, acknowledged.
+    fn read<P: UsbPair>(&mut self, host: &mut UsbHost<P>, addr: u8) -> Vec<u8> {
+        for _ in 0..64 {
+            match host.bulk_in(addr, self.endp) {
+                UsbReply::Data(pid, payload) => {
+                    assert_eq!(pid, self.in_pid, "the IN endpoint's data toggle");
+                    host.ack();
+                    self.in_pid = other_toggle(self.in_pid);
+                    return payload;
+                }
+                UsbReply::Handshake(USB_NAK) => {
+                    self.naks += 1;
+                    host.idle(4);
+                }
+                other => panic!("an IN was answered {other:?}"),
+            }
+        }
+        panic!("the device NAKed all sixty-four attempts at an IN");
+    }
+}
+
+/// Enough of an enumeration to reach a data endpoint: an address, the
+/// configuration descriptor checked, and SET_CONFIGURATION.
+fn configure<P: UsbPair>(host: &mut UsbHost<P>, addr: u8) {
+    host.bus_reset();
+    let device = host
+        .control_read(0, GET_DEVICE_DESCRIPTOR)
+        .expect("the device descriptor");
+    assert_eq!(device, expected_device_descriptor(0x1209, 0x0001));
+    assert_eq!(
+        host.control_write(0, set_address(addr)),
+        UsbReply::Data(USB_DATA1, Vec::new())
+    );
+    let config = host
+        .control_read(addr, [0x80, 0x06, 0x00, 0x02, 0xFF, 0xFF, 0xFF, 0xFF])
+        .expect("the configuration");
+    assert_eq!(
+        config,
+        expected_configuration_descriptor(),
+        "the endpoints are in the descriptor the host reads"
+    );
+    host.control_write(addr, [0x00, 0x09, 0x01, 0, 0, 0, 0, 0]);
+    assert!(host.configured(), "configured");
+    host.idle(10);
+}
+
+/// Bytes out to endpoint 1 and the same bytes back from it, and the **only
+/// statement of it**: both cores are put through this, as both are put
+/// through `enumerate`, because what a host does to a data endpoint does not
+/// depend on how the device's bytes reach the pair.
+///
+/// The pair is in loopback — `out_*` wired into `in_*` — which is the design
+/// that goes on the part, so what this proves is the same wiring the board
+/// has and not a testbench's private arrangement.
+fn bulk_loopback<P: UsbPair>(host: &mut UsbHost<P>) {
+    configure(host, 7);
+
+    // A full packet, a short one, and one byte. `FF` and `07` between them
+    // put six ones in a row on the wire in both directions, so the device
+    // has to stuff what it sends and unstuff what it receives inside a data
+    // endpoint's payload and not only inside a descriptor's.
+    let packets: Vec<Vec<u8>> = vec![
+        vec![0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07],
+        vec![0xDE, 0xAD, 0xBE, 0xEF, 0xFF],
+        vec![0x5A],
+    ];
+
+    let mut pipe = BulkPipe::new(1);
+    for payload in &packets {
+        pipe.write(host, 7, payload);
+        let back = pipe.read(host, 7);
+        assert_eq!(&back, payload, "what went out came back");
+    }
+
+    // And it went through the byte interface on its way, packet by packet,
+    // with `out_last` where the host put the end of each one.
+    assert_eq!(
+        host.data().got,
+        packets,
+        "the bytes reached the interface above the endpoint"
+    );
+
+    // Nothing is left: the next IN is NAKed rather than answered with a
+    // packet the device has already sent.
+    assert_eq!(
+        host.bulk_in(7, 1),
+        UsbReply::Handshake(USB_NAK),
+        "an empty IN endpoint NAKs"
+    );
+    host.idle(10);
+    host.assert_clean();
+}
+
+#[test]
+fn usb_device_fs_loops_bytes_through_endpoint_one() {
+    let design = usb_design();
+    let mut host = UsbHost::new(FsPair::new(&design), 0);
+    bulk_loopback(&mut host);
+}
+
+#[test]
+fn usb_device_fs_loops_bytes_through_endpoint_one_off_clock() {
+    // The same bytes with the host's clock 0.4 % slow and 0.4 % fast, which
+    // is what found the receiver sampling a bit in its last cycle instead of
+    // its middle. A data endpoint's payload is arbitrary bytes rather than a
+    // descriptor's, so it is where a sampling fault shows first.
+    let design = usb_design();
+    bulk_loopback(&mut UsbHost::new(FsPair::new(&design), 64));
+    bulk_loopback(&mut UsbHost::new(FsPair::new(&design), -64));
+}
+
+#[test]
+fn usb_device_ulpi_loops_bytes_through_endpoint_one() {
+    let design = ulpi_design();
+    let mut host = UsbHost::new(UlpiPair::new(&design), 0);
+    bulk_loopback(&mut host);
+}
+
+/// The same bytes through the transceiver that is **on the board**: the one
+/// that reports LineState a clock late, against ULPI §3.8.1.3.
+///
+/// `usb_device_ulpi_enumerates_through_a_transceiver_that_reports_linestate_late`
+/// says what that part does and what believing it cost. A data endpoint
+/// answers from a second turnaround counter, in a second module, so it is
+/// worth putting through the same transceiver rather than assuming that
+/// endpoint 0 having survived it covers both.
+#[test]
+fn usb_device_ulpi_loops_bytes_through_the_transceiver_that_is_on_the_board() {
+    let design = ulpi_design();
+    let phy = UlpiPhy::new(ULPI_CPB).reporting_stale_line();
+    let mut host = UsbHost::new(UlpiPair::with_phy(&design, phy), 0);
+    bulk_loopback(&mut host);
+}
+
+/// The byte interface driven as a user of the block would drive it, rather
+/// than looped back: every byte the host sends is taken, and the packets the
+/// host reads are handed over from a queue.
+///
+/// This is where the **zero-length packet** is, in both directions, because a
+/// loopback cannot carry one: an OUT of no bytes hands nothing to the
+/// interface, so there is nothing for the interface to give back, and
+/// `in_commit` on its own is the only way to send one. A host uses a
+/// zero-length IN packet to end a transfer whose length is a multiple of the
+/// packet size, so an endpoint that cannot send one is an endpoint a class
+/// layer would have to work around.
+#[test]
+fn usb_bytes_reach_the_byte_interface_and_come_back_from_it() {
+    let design = usb_design();
+    let mut host = UsbHost::new(FsPair::with_loopback(&design, false), 0);
+    configure(&mut host, 3);
+
+    let sent: Vec<Vec<u8>> = vec![
+        vec![0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88],
+        vec![0x99],
+        Vec::new(),
+    ];
+    let mut pipe = BulkPipe::new(1);
+    for payload in &sent {
+        pipe.write(&mut host, 3, payload);
+    }
+    // A zero-length OUT packet delivers no bytes, so the interface saw the
+    // two that had any.
+    assert_eq!(host.data().got, sent[..2].to_vec(), "the packets with bytes");
+
+    // Three packets the other way, one of them empty.
+    let give: Vec<Vec<u8>> = vec![
+        vec![0xA0, 0xA1, 0xA2, 0xA3, 0xA4, 0xA5, 0xA6, 0xA7],
+        Vec::new(),
+        vec![0xB0, 0xB1],
+    ];
+    host.data().give = give.clone();
+    for payload in &give {
+        assert_eq!(&pipe.read(&mut host, 3), payload, "the packet the interface gave");
+    }
+    host.idle(10);
+    host.assert_clean();
+}
+
+/// The OUT endpoint NAKs while the last packet has not been taken, and
+/// nothing is lost when it is.
+///
+/// This is the flow control a bulk endpoint has instead of a FIFO, and it is
+/// the reason the block can be one packet deep. The count is the assertion:
+/// exactly one NAK for the one attempt made while the buffer was full.
+#[test]
+fn usb_bulk_endpoint_naks_an_out_until_the_bytes_are_taken() {
+    let design = usb_design();
+    let mut host = UsbHost::new(FsPair::with_loopback(&design, false), 0);
+    configure(&mut host, 5);
+
+    // Nothing above the endpoint is taking bytes.
+    host.data().take = false;
+    let mut pipe = BulkPipe::new(1);
+    let first = [0x01, 0x02, 0x03, 0x04];
+    pipe.write(&mut host, 5, &first);
+    assert_eq!(pipe.naks, 0, "the first packet fits");
+    assert!(host.data().got.is_empty(), "and nothing has taken it");
+
+    // The second is NAKed: one attempt, one NAK.
+    let second = [0x05, 0x06];
+    assert_eq!(
+        host.bulk_out(5, 1, pipe.out_pid, &second),
+        UsbReply::Handshake(USB_NAK),
+        "a full OUT buffer NAKs"
+    );
+
+    // Taken, and then the same packet goes in.
+    host.data().take = true;
+    host.idle(20);
+    pipe.write(&mut host, 5, &second);
+    host.idle(20);
+    assert_eq!(
+        host.data().got,
+        vec![first.to_vec(), second.to_vec()],
+        "both packets, in order, once each"
+    );
+    host.assert_clean();
+}
+
+/// A packet the host sends twice with the same toggle is acknowledged twice
+/// and delivered once.
+///
+/// That is what a data toggle is *for*: the host repeats a packet when it
+/// does not hear the ACK, and a device that cannot tell a repeat from a new
+/// packet duplicates data. The repeat is sent while the first packet is
+/// still in the buffer, which is the case a device that checked its buffer
+/// before its toggle would answer with a NAK — and then the host would
+/// repeat for ever.
+#[test]
+fn usb_bulk_endpoint_delivers_a_repeated_packet_once() {
+    let design = usb_design();
+    let mut host = UsbHost::new(FsPair::with_loopback(&design, false), 0);
+    configure(&mut host, 5);
+
+    host.data().take = false;
+    let payload = [0xAA, 0xBB, 0xCC];
+    assert_eq!(
+        host.bulk_out(5, 1, USB_DATA0, &payload),
+        UsbReply::Handshake(USB_ACK),
+        "the packet"
+    );
+    assert_eq!(
+        host.bulk_out(5, 1, USB_DATA0, &payload),
+        UsbReply::Handshake(USB_ACK),
+        "the same packet again, acknowledged again"
+    );
+    host.data().take = true;
+    host.idle(40);
+    assert_eq!(host.data().got, vec![payload.to_vec()], "delivered once");
+    host.assert_clean();
+}
+
+/// An IN packet the host does not acknowledge is sent again with the same
+/// toggle, and released only when the ACK arrives.
+#[test]
+fn usb_bulk_endpoint_sends_again_what_the_host_did_not_acknowledge() {
+    let design = usb_design();
+    let mut host = UsbHost::new(FsPair::with_loopback(&design, false), 0);
+    configure(&mut host, 5);
+
+    host.data().give = vec![vec![0x31, 0x41, 0x59]];
+    host.idle(20);
+    let first = host.bulk_in(5, 1);
+    assert_eq!(first, UsbReply::Data(USB_DATA0, vec![0x31, 0x41, 0x59]));
+    host.idle(20);
+    assert_eq!(host.bulk_in(5, 1), first, "the same packet with the same toggle");
+    host.ack();
+    host.idle(20);
+    assert_eq!(
+        host.bulk_in(5, 1),
+        UsbReply::Handshake(USB_NAK),
+        "and once acknowledged it is gone"
+    );
+    host.idle(10);
+    host.assert_clean();
+}
+
+/// CLEAR_FEATURE(ENDPOINT_HALT) puts one direction's data toggle back to
+/// DATA0, which is how a host and a device agree on a toggle again without a
+/// bus reset.
+///
+/// Without it, a host program that starts with the device's toggles anywhere
+/// but where its own are sends a packet the device calls a repeat and
+/// discards — and the host sees an ACK and believes the bytes arrived. The
+/// host-side loopback calls `clear_halt` on both endpoints for exactly this
+/// reason, so this is the device half of that.
+#[test]
+fn usb_clear_feature_puts_a_bulk_endpoints_toggle_back() {
+    let design = usb_design();
+    let mut host = UsbHost::new(FsPair::with_loopback(&design, false), 0);
+    configure(&mut host, 5);
+
+    // One packet moves the OUT toggle on to DATA1.
+    let mut pipe = BulkPipe::new(1);
+    pipe.write(&mut host, 5, &[0x01]);
+    host.idle(20);
+    assert_eq!(pipe.out_pid, USB_DATA1, "the host's toggle moved too");
+
+    // CLEAR_FEATURE(ENDPOINT_HALT) on endpoint 1 OUT: bmRequestType 02h,
+    // bRequest 01h, wValue 0000h, wIndex 0001h.
+    assert_eq!(
+        host.control_write(5, [0x02, 0x01, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00]),
+        UsbReply::Data(USB_DATA1, Vec::new()),
+        "the request is accepted, not stalled"
+    );
+    host.idle(20);
+
+    // So a DATA0 packet is new again rather than a repeat of the last one.
+    assert_eq!(
+        host.bulk_out(5, 1, USB_DATA0, &[0x02]),
+        UsbReply::Handshake(USB_ACK)
+    );
+    host.idle(40);
+    assert_eq!(
+        host.data().got,
+        vec![vec![0x01], vec![0x02]],
+        "both packets arrived, so the toggle really was reset"
+    );
+    host.assert_clean();
+}
+
+/// `bNumEndpoints` is counted from the descriptors, so a class that states it
+/// wrongly is corrected rather than believed.
+///
+/// The parameter here is the default interface with `bNumEndpoints` set to
+/// **5** and two endpoint descriptors after it. A block that copied the byte
+/// out of the parameter would report 5, and a host would look for three
+/// endpoints that are not there.
+#[test]
+fn usb_configuration_descriptor_counts_the_endpoints_the_class_miscounted() {
+    let design = design_of(
+        "usb_device_fs",
+        "usb_device_fs",
+        &[
+            ("VID", "16'h1209"),
+            ("PID", "16'h0001"),
+            ("IFACE_BYTES", "23"),
+            (
+                "IFACE_DESC",
+                "184'h0904000005FF0000000705010208000007058102080000",
+            ),
+        ],
+    );
+    let mut host = UsbHost::new(FsPair::new(&design), 0);
+    host.bus_reset();
+    let config = host
+        .control_read(0, get_descriptor(2, 64))
+        .expect("the configuration");
+    assert_eq!(
+        config,
+        expected_configuration_descriptor(),
+        "the block's own count, not the parameter's"
+    );
+    host.assert_clean();
+}
+
+/// Two interfaces with one endpoint each: `bNumInterfaces` is 2,
+/// `wTotalLength` is 41, and each interface's `bNumEndpoints` is 1.
+///
+/// The parameter states **9** endpoints in both interface descriptors, so
+/// every number in the nine bytes this block writes is being computed here
+/// and none is being copied. Two interfaces also proves the walk along the
+/// chain of `bLength` fields does not stop at the first one, which counting
+/// a single interface cannot.
+#[test]
+fn usb_configuration_descriptor_counts_two_interfaces_separately() {
+    let design = design_of(
+        "usb_device_fs",
+        "usb_device_fs",
+        &[
+            ("VID", "16'h1209"),
+            ("PID", "16'h0001"),
+            ("IFACE_BYTES", "32"),
+            (
+                "IFACE_DESC",
+                "256'h0904000009FF000000070501020800000904010009FF00000007058102080000",
+            ),
+        ],
+    );
+    let mut host = UsbHost::new(FsPair::new(&design), 0);
+    host.bus_reset();
+    let config = host
+        .control_read(0, get_descriptor(2, 64))
+        .expect("the configuration");
+    let mut want: Vec<u8> = vec![9, 2, 41, 0, 2, 1, 0, 0x80, 50];
+    want.extend_from_slice(&[9, 4, 0, 0, 1, 0xFF, 0x00, 0x00, 0]);
+    want.extend_from_slice(&[7, 5, 0x01, 2, 8, 0, 0]);
+    want.extend_from_slice(&[9, 4, 1, 0, 1, 0xFF, 0x00, 0x00, 0]);
+    want.extend_from_slice(&[7, 5, 0x81, 2, 8, 0, 0]);
+    assert_eq!(config, want, "two interfaces, one endpoint each");
     host.assert_clean();
 }
 
@@ -10349,6 +10956,7 @@ struct UlpiPair<'d> {
     reset_net: NetHandle,
     ready_net: NetHandle,
     phy: UlpiPhy,
+    data: DataEp,
 }
 
 impl<'d> UlpiPair<'d> {
@@ -10359,6 +10967,10 @@ impl<'d> UlpiPair<'d> {
     /// The device out of reset and the transceiver configured, which is
     /// the start-up sequence run to its end before a host looks.
     fn with_phy(design: &'d Design, phy: UlpiPhy) -> UlpiPair<'d> {
+        UlpiPair::with_phy_data(design, phy, true)
+    }
+
+    fn with_phy_data(design: &'d Design, phy: UlpiPhy, loopback: bool) -> UlpiPair<'d> {
         let sim = simulate(design, "usb_device_ulpi");
         let pin = |n: &str| top_net(&sim, n);
         let mut pair = UlpiPair {
@@ -10375,8 +10987,10 @@ impl<'d> UlpiPair<'d> {
             reset_net: pin("usb_reset"),
             ready_net: pin("phy_ready"),
             phy,
+            data: DataEp::new(&sim, loopback),
             sim,
         };
+        pair.data.quiet(&mut pair.sim);
         pair.sim.set(pair.dir, bit(false));
         pair.sim.set(pair.nxt, bit(false));
         pair.sim.set(pair.data_in, word(8, 0));
@@ -10414,6 +11028,7 @@ impl UsbPair for UlpiPair<'_> {
     }
 
     fn cycle(&mut self, host: Option<UsbLine>) {
+        step_data(&mut self.sim, &mut self.data);
         // What the transceiver drives for this cycle, presented before
         // the edge that samples it, as every two-domain testbench here
         // does. `ulpi_data_oe` is combinational in `dir` — ULPI means it
@@ -10460,6 +11075,10 @@ impl UsbPair for UlpiPair<'_> {
         // The same two to six and a half bit times, in cycles of a
         // 60 MHz clock instead of a 48 MHz one.
         (2 * ULPI_CPB, 13 * ULPI_CPB / 2)
+    }
+
+    fn data(&mut self) -> &mut DataEp {
+        &mut self.data
     }
 }
 
