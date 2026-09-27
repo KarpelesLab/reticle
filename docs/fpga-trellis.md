@@ -170,8 +170,10 @@ $ cargo test --features program -- --ignored usb_endpoint_one_loops
 the constant zero holds zero in silicon on this family
 ```
 
-**And the same design with the probe fed a constant one instead**, loaded onto
-the same board, which is the control that says the check is not vacuous:
+**And the same design with the probe fed a constant one instead**, built and
+loaded onto the same board, which is the control that says the check is not
+vacuous — one line changed in a scratch copy that is deliberately not committed,
+and the working bitstream was put back afterwards:
 
 ```
 [00, 01, 02, 03, 04, 05, 06, 07] -> [ff, fe, fd, fc, fb, fa, f9, f8]
