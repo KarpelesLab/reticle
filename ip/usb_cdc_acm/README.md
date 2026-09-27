@@ -522,6 +522,28 @@ again — and then checks the terminal came back, which the second line above
 is. The line coding survives the detach because it is a register in the
 device and not anything the host was keeping.
 
+### And every bit of the bitstream belongs to something
+
+The design is 1387 lookup tables, 649 flip-flops and 20 pads on an LFE5U-12F,
+and its bitstream was decoded back through the same Project Trellis records the
+router read:
+
+```text
+usb_cdc_uart: 57403 configuration bit(s) set, 0 unexplained, 19009 arc(s)
+```
+
+**Nothing is unexplained**: every one of those 57403 bits belongs to a feature
+the database names, so no bit was set for a reason the database does not know —
+which is how a wrong tile rule looks from the inside. The count is also what
+`reticle fpga` reports for the same bitstream, so the writer and the decoder
+were asked separately and agree.
+
+That check is `tests/fpga_trellis.rs`'s
+`the_bitstream_decodes_back_to_the_arcs_the_router_chose`, which makes it of a
+small design on every run and was **not weakened**. It was run by hand over
+this one, which is two minutes of place and route in a release build and too
+slow to keep in the gate.
+
 ### The notification endpoint never sent anything
 
 The port enumerated, was opened, carried bytes and was closed, with
