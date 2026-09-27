@@ -28,9 +28,19 @@
 //! # The order of the flow, and why it is that order
 //!
 //! [`synthesize_for`] runs five steps, and the order is the whole point.
-//! Before them it flattens the module ([`Design::flatten`]), since a
-//! place-and-route tool wants one netlist and every step below works on
-//! one module; `keep_hierarchy` instances and black boxes stay.
+//! Before them it checks that the design is whole
+//! ([`Design::check_instance_targets`]) and flattens the module
+//! ([`Design::flatten`]), since a place-and-route tool wants one netlist
+//! and every step below works on one module; `keep_hierarchy` instances
+//! and black boxes stay.
+//!
+//! The check comes first because it is about the *source*, not about the
+//! mapping: an instance of a module neither the design nor the device
+//! declares leaves a hole whose outputs drive nothing, and every later
+//! step would report the readers of those outputs instead of the one line
+//! that is wrong. A primitive the device declares is a black box on
+//! purpose and passes; a name nothing declares is a file left off the
+//! build.
 //!
 //! 1. **Generic synthesis** ([`synth::run`]): processes become cells,
 //!    flip-flops, latches, memories and state machines are inferred, and
@@ -124,6 +134,11 @@ pub enum FlowError {
     /// Generic synthesis reported errors, so nothing was mapped. The
     /// errors themselves are in the diagnostics the caller passed in.
     Synthesis,
+    /// An instance names a module nothing declares — neither the design
+    /// nor the device — so the design has a hole in it and nothing below
+    /// this point would be about the real problem. The instances are named,
+    /// with their spans, in the diagnostics the caller passed in.
+    UndefinedModule,
     /// The hierarchy under the module could not be flattened (a
     /// recursive hierarchy, a connection that cannot be inlined), so
     /// nothing was mapped. The reasons are in the diagnostics the caller
@@ -169,6 +184,9 @@ impl fmt::Display for FlowError {
             FlowError::Hierarchy => {
                 f.write_str("the design could not be flattened; see the reported errors")
             }
+            FlowError::UndefinedModule => f.write_str(
+                "the design instantiates a module nothing defines; see the reported errors",
+            ),
             FlowError::NoArchitecture { device } => write!(
                 f,
                 "no routing architecture is known for `{device}`, so Reticle cannot place \
@@ -417,7 +435,9 @@ impl FlowReport {
 /// # Errors
 ///
 /// [`FlowError::NoSuchModule`] when the id does not belong to the design,
-/// [`FlowError::Hierarchy`] when the hierarchy cannot be flattened, in
+/// [`FlowError::UndefinedModule`] when an instance names a module neither
+/// the design nor `device` declares, in which case the design is
+/// untouched, [`FlowError::Hierarchy`] when the hierarchy cannot be flattened, in
 /// which case the design is untouched, and [`FlowError::Synthesis`] when
 /// generic synthesis rejected the design (an invalid IR, for instance),
 /// in which case the design is left as synthesis left it. The errors are
@@ -442,6 +462,17 @@ pub fn synthesize_for(
         device: device.name.clone(),
         ..FlowReport::default()
     };
+
+    // Is the design whole? An instance of a module neither the design nor
+    // the device declares is a hole: its outputs drive nothing, so every
+    // reader of them would be reported further down, by the hundred, and
+    // not one of those reports would name the cause. Refuse here, at the
+    // instantiation, before anything is mapped.
+    let primitives = device.primitive_names();
+    let supplier = format!("the device `{}`", device.name);
+    if design.check_instance_targets(module, &primitives, &supplier, diags) > 0 {
+        return Err(FlowError::UndefinedModule);
+    }
 
     // 0. One flat netlist. Flattening replaces the module in place, so
     // its id, and every other id the caller holds, stays valid.
@@ -1470,6 +1501,71 @@ mod tests {
             "the design could not be flattened; see the reported errors"
         );
         assert!(diags.has_errors());
+    }
+
+    /// The flow refuses a design with a hole in it, and says where the
+    /// hole is rather than reporting the readers of its undriven outputs.
+    #[test]
+    fn a_module_nothing_declares_is_named_at_its_instantiation() {
+        let text = "top t\nmodule t\n  net %a u1 wire\n  port a out %a\n  \
+                    instance u_dev of usb_device_ulpi (o=%a)\nend\n";
+        let mut map = SourceMap::new();
+        let file = map.add("t.rtl", text).unwrap();
+        let mut design = Design::parse_text(text, file).unwrap();
+        let top = design.top.unwrap();
+        let mut diags = Diagnostics::new();
+        let err = synthesize_for(
+            &mut design,
+            top,
+            target("ecp5-45f-CABGA381").unwrap(),
+            &Constraints::new(),
+            &FpgaOptions::default(),
+            &mut diags,
+        )
+        .unwrap_err();
+        assert_eq!(err, FlowError::UndefinedModule);
+        assert_eq!(
+            err.to_string(),
+            "the design instantiates a module nothing defines; see the reported errors"
+        );
+        assert_eq!(diags.error_count(), 1);
+        let rendered = diags.render(&map);
+        assert!(
+            rendered.contains("error[I0034]: no module named `usb_device_ulpi` is defined"),
+            "{rendered}"
+        );
+        assert!(rendered.contains("`u_dev` instantiates it"), "{rendered}");
+        assert!(
+            rendered.contains("add the file that defines it"),
+            "{rendered}"
+        );
+        // Nothing was mapped, so the misdirection the user used to read —
+        // an error per reader of the hole's outputs — never happens.
+        assert!(design.modules[top].cells.is_empty());
+    }
+
+    /// The other side of the line: a primitive the *device* declares is a
+    /// black box the place-and-route tool fills in, so it is not a missing
+    /// module and the check says nothing about it.
+    #[test]
+    fn a_primitive_the_device_declares_is_not_a_missing_module() {
+        let device = target("ecp5-45f-CABGA381").unwrap();
+        assert!(device.primitive_names().contains(&"EHXPLLL"));
+        let text = "top t\nmodule t\n  net %a u1 wire\n  port a out %a\n  \
+                    instance u_pll of EHXPLLL (CLKOP=%a)\nend\n";
+        let mut map = SourceMap::new();
+        let file = map.add("t.rtl", text).unwrap();
+        let design = Design::parse_text(text, file).unwrap();
+        let top = design.top.unwrap();
+        let mut diags = Diagnostics::new();
+        let supplier = format!("the device `{}`", device.name);
+        assert_eq!(
+            design.check_instance_targets(top, &device.primitive_names(), &supplier, &mut diags),
+            0,
+            "{}",
+            diags.render(&map)
+        );
+        assert!(diags.is_empty());
     }
 
     /// A one-flop design with a clock and an output.

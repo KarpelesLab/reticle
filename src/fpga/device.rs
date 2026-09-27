@@ -1663,6 +1663,28 @@ impl Device {
         found.then_some(ports)
     }
 
+    /// Every primitive name the device declares, sorted and without
+    /// duplicates.
+    ///
+    /// This is the set [`Device::primitive_ports`] answers for, listed the
+    /// other way round: a name in here is a black box the place-and-route
+    /// tool knows, so an instance of it in the source is not a module the
+    /// build forgot. It is what a flow hands to
+    /// [`crate::ir::Design::check_instance_targets`].
+    pub fn primitive_names(&self) -> Vec<&str> {
+        let mut names: Vec<&str> = self
+            .bels
+            .iter()
+            .map(|b| b.name.as_str())
+            .chain(self.block_rams.iter().map(|b| b.name.as_str()))
+            .chain(self.dsps.iter().map(|d| d.name.as_str()))
+            .chain(self.clock_resources.plls.iter().map(|p| p.name.as_str()))
+            .collect();
+        names.sort_unstable();
+        names.dedup();
+        names
+    }
+
     /// The package pin with the given name.
     pub fn pin(&self, name: &str) -> Option<&Pin> {
         self.pins.iter().find(|p| p.name == name)
