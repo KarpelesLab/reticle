@@ -34,6 +34,37 @@
 //! `testdata/fpga/cynthion/usb_ulpi_device.v`, whose header says how to build
 //! and load the bitstream. Any design with `ip/usb_device_fs`'s default
 //! descriptors and `out_*` wired into `in_*` will do.
+//!
+//! # The byte is also a constant-zero probe
+//!
+//! `usb_ulpi_device.v` XORs the byte it hands back with `zero_probe`, a
+//! flip-flop whose data input is the **constant zero**. That costs one
+//! flip-flop and it turns this test into the measurement the backend was
+//! missing: on this family a fabric flip-flop takes its data from the slice's
+//! `M` wire, an unrouted slice input reads as a **one**, and until
+//! `techcells::drive_constant_data` built a lookup table to drive it such a
+//! register came up **set** — which is why `reg [2:0] stage` for four states
+//! read 5 and this very device would not enumerate for eight rounds.
+//!
+//! So: the constant is right, the XOR is with zero, and everything below is
+//! byte-identical and passes exactly as it did before. The constant is
+//! wrong and **every returned byte is the complement of the byte sent**,
+//! which nothing else in this design can do; [`flipped_by_the_probe`] names
+//! it rather than leaving a reader to work out why 256 bytes came back
+//! inside out.
+//!
+//! **What that would and would not catch.** It catches a flip-flop whose
+//! data input is the constant zero coming up, or being clocked to, a one —
+//! the defect itself — and it catches it on every one of the 293 bytes this
+//! test moves, so it cannot pass by accident. It does not catch a broken
+//! constant *one*: the same design's `rst_q` is fed by one and releases the
+//! transceiver's reset pin, so a one that came up zero means no device on
+//! the bus, and this test **skips** with "no 1209:0001 is attached" rather
+//! than failing. Nor does it say anything about a design that does not use
+//! `drive_constant_data` at all; `tests/fpga_trellis.rs` is where the
+//! netlist and the bits are checked, and
+//! `the_usb_devices_constant_zero_probe_survives_synthesis` is what stops an
+//! optimiser from deleting the probe and leaving this test green for ever.
 
 #![cfg(feature = "program")]
 
@@ -96,6 +127,34 @@ fn expected_configuration() -> Vec<u8> {
     let mut want = vec![9, 2, lo, hi, count(&iface, 4), 1, 0, 0x80, 50];
     want.extend(iface);
     want
+}
+
+/// The one failure `usb_ulpi_device.v`'s constant-zero probe has, said in
+/// words: every byte came back as its own complement.
+///
+/// `in_data` is `out_data ^ {8{zero_probe}}`, so this is not a byte lost, a
+/// byte swapped or a toggle out of step — it is one flip-flop, whose data
+/// input is the literal `1'b0`, holding a **one**. Nothing else in the design
+/// inverts a whole packet. A partial inversion is *not* this and is left to
+/// the general assertions, because the probe is one wire into all eight bits
+/// and cannot flip some of them.
+fn flipped_by_the_probe(sent: &[u8], back: &[u8]) -> Option<String> {
+    if sent.is_empty() || sent.len() != back.len() {
+        return None;
+    }
+    if !sent.iter().zip(back).all(|(a, b)| *a == !*b) {
+        return None;
+    }
+    Some(format!(
+        "every one of {} returned byte(s) is the complement of the byte sent, which is \
+         `zero_probe` holding a ONE: a flip-flop whose data input is the constant zero came up \
+         set. That is the defect `techcells::drive_constant_data` exists to prevent — an \
+         unrouted `M` wire on this family reads as a one — so the constant driver is missing, \
+         unrouted or holding the wrong truth table in this bitstream. See \
+         docs/fpga-trellis.md, \"The constant is built now\", and \
+         tests/fpga_trellis.rs::the_usb_devices_constant_zero_probe_reaches_the_bitstream",
+        sent.len()
+    ))
 }
 
 /// Descriptors of one `bDescriptorType` in a run of them.
@@ -211,6 +270,9 @@ fn usb_endpoint_one_loops_bytes_back_on_a_real_host() {
             .expect("reading from endpoint 1 IN");
         buf.truncate(got);
         println!("{:02x?} -> {:02x?}", payload, buf);
+        if let Some(why) = flipped_by_the_probe(payload, &buf) {
+            panic!("{why}");
+        }
         assert_eq!(&buf, payload, "what went out came back");
     }
 
@@ -234,6 +296,9 @@ fn usb_endpoint_one_loops_bytes_back_on_a_real_host() {
         back.extend_from_slice(&buf[..got]);
     }
     assert_eq!(back.len(), stream.len(), "every byte came back");
+    if let Some(why) = flipped_by_the_probe(&stream, &back) {
+        panic!("{why}");
+    }
     if back != stream {
         let first = back
             .iter()
@@ -249,6 +314,12 @@ fn usb_endpoint_one_loops_bytes_back_on_a_real_host() {
         "{} bytes through endpoint 1 and back, in {} packets of at most 8",
         stream.len(),
         stream.len().div_ceil(MAX_PACKET)
+    );
+    // Byte-identical, and the byte was XORed with `zero_probe` on its way
+    // out, so this is the constant-zero measurement and not only a loopback.
+    println!(
+        "`zero_probe` read ZERO on every one of them: a flip-flop whose data input is the \
+         constant zero holds zero in silicon on this family"
     );
 
     handle

@@ -33,6 +33,14 @@
 // bytes hands nothing to the interface, so there is nothing to hand back —
 // and `ip/usb_device_fs`'s tests cover that direction instead.
 //
+// The **third** observable is in the same bytes and costs one flip-flop: the
+// byte on its way back is XORed with `zero_probe`, a register whose data
+// input is the constant zero. See "THE CONSTANT-ZERO PROBE" below. If the
+// constant a bitstream writes for that pin is right the byte is unchanged and
+// the loopback is byte-identical; if that flip-flop ever comes up holding a
+// one, every returned byte is its own complement and the test above fails
+// naming this.
+//
 // The six LEDs are the **diagnosis** for when it does not appear, and they
 // are latched rather than level, so what a person sees is what happened:
 //
@@ -187,6 +195,73 @@ module usb_ulpi_device #(
     assign ulpi_clk = clk;
 
     // ===================================================================
+    // THE CONSTANT-ZERO PROBE, AND WHY IT IS ONE FLIP-FLOP IN THE DATA PATH
+    // ===================================================================
+    //
+    // **A flip-flop whose data input is the constant zero must hold zero.**
+    // On this family that is not free and it is not obvious: a fabric
+    // flip-flop takes its data from the slice's `M` wire, an unrouted slice
+    // input on an ECP5 reads as a **one**, and until
+    // `techcells::drive_constant_data` nothing was routed there — so such a
+    // register came up **set**. `reg [2:0] stage` for four states read 5,
+    // every `case` label missed, and a USB device did not enumerate for eight
+    // rounds of looking somewhere else. The fix builds the constant out of a
+    // lookup table with an `INIT` of all zeros and every input tied high,
+    // which is what Lattice's own packer writes; `docs/fpga-trellis.md` has
+    // it read out of their bitstreams at absolute frame positions.
+    //
+    // What was missing was a **part**. A constant *one* is confirmed in
+    // silicon by this very design — `usb_ulpi_link`'s `rst_q` releases the
+    // transceiver's reset pin, and a zero there means no host sees anything
+    // — but no design that has run held a constant *zero*, because the
+    // registers that used to supply one **were** the defect and narrowing
+    // them removed them.
+    //
+    // So one goes here, in the one place on this board where a register bit
+    // is readable by a program rather than by an eye: the byte endpoint 1
+    // hands back. `zero_probe` is a flip-flop whose data input is `1'b0` and
+    // nothing else, and the returned byte is XORed with it. Right, the XOR
+    // is with zero and the loopback is **byte-identical**, so
+    // `tests/usb_loopback.rs` passes exactly as it did before. Wrong, and
+    // **every byte comes back as its own complement** — 256 bytes of it, in
+    // 32 packets — which that test reports by name.
+    //
+    // **Why the initialiser is `1'b1` and not `1'b0`.** A compiler may
+    // delete a flip-flop whose value is a known constant, and a test that
+    // cannot fail is worse than no test. `synth::opt::FfOpt` does exactly
+    // that — and only when the register's value *before* its first clock
+    // agrees with its data. Initialised to one and clocked to zero, this
+    // register is not constant in any language a compiler may reason in: it
+    // holds one until the first edge and zero for ever after, so keeping it
+    // is not a favour, it is the semantics. That is the whole of what makes
+    // the probe survive, and `tests/fpga_trellis.rs`'s
+    // `the_usb_device_carries_a_constant_zero_register_into_the_loopback`
+    // asserts the flip-flop and its constant driver are in the netlist so
+    // that a future optimisation cannot quietly turn this test green for
+    // ever.
+    //
+    // On the part the initialiser is a fiction and does not matter: an ECP5
+    // releases every flip-flop into its `REGSET` state, which
+    // `src/fpga/devices/ecp5.dev` makes `RESET`, so `zero_probe` starts at
+    // zero and the first clock has to *keep* it there. The POR above gives
+    // it sixteen clocks before the core leaves reset, and nothing reads the
+    // byte for milliseconds after that.
+    //
+    // It costs one flip-flop, one shared `const0` lookup table and eight
+    // two-input XORs. **It is not a dead register**: its value leaves the
+    // part in every byte the host reads.
+    reg zero_probe = 1'b1;
+    always @(posedge clk) begin
+        zero_probe <= 1'b0;
+    end
+
+    // The byte on its way back to the host, and the only thing between the
+    // OUT buffer and the IN buffer. Still combinational: eight lookup tables
+    // between two flip-flops, not a register, so the flow control below is
+    // unchanged.
+    wire [7:0] loop_data = out_data ^ {8{zero_probe}};
+
+    // ===================================================================
     // THE ONE REGISTER THAT IS THIS BOARD'S AND NOT ULPI'S
     // ===================================================================
     //
@@ -264,11 +339,16 @@ module usb_ulpi_device #(
         // logic between two flip-flops and not a loop. `ip/usb_device_fs`'s
         // `usb_bulk_ep` header states that as a property of the block, and
         // `tests/ip_library.rs` drives this same wiring in simulation.
+        //
+        // `in_data` is `loop_data`, which is `out_data` XORed with the
+        // constant-zero probe above — the same byte when the constant a
+        // bitstream writes for a flip-flop's data pin is right, and its
+        // complement when it is not.
         .out_data     (out_data),
         .out_valid    (out_valid),
         .out_last     (out_last),
         .out_ready    (in_ready),
-        .in_data      (out_data),
+        .in_data      (loop_data),
         .in_valid     (out_valid),
         .in_ready     (in_ready),
         .in_commit    (out_valid & in_ready & out_last)

@@ -194,31 +194,51 @@ fn compile(
     reticle::fpga::bitstream::Bitstream,
     Routed,
 ) {
+    compile_all(fabric, &[verilog_path], rcf_path)
+}
+
+/// The same, for a design whose sources are several files: a top level and
+/// the library blocks it instantiates. There is no search path, so they are
+/// named, exactly as `reticle fpga` wants them on its command line.
+#[cfg(all(feature = "verilog", feature = "synth"))]
+fn compile_all(
+    fabric: &trellis::TrellisFabric,
+    verilog_paths: &[&str],
+    rcf_path: &str,
+) -> (
+    reticle::fpga::bitstream::Bitstream,
+    Ecp5Stream,
+    usize,
+    reticle::fpga::route::RoutingReport,
+    reticle::fpga::bitstream::Bitstream,
+    Routed,
+) {
     use reticle::diag::Diagnostics;
     use reticle::fpga::place::{Netlist, PlaceOptions, place};
     use reticle::fpga::route::{RouteOptions, route};
     use reticle::fpga::{Constraints, FpgaOptions, bitstream, synthesize_for, target};
     use reticle::source::SourceMap;
 
-    let verilog = std::fs::read_to_string(verilog_path).expect("the design");
     let rcf = std::fs::read_to_string(rcf_path).expect("the constraints");
     let mut map = SourceMap::new();
-    let source = map.add(verilog_path, &verilog).unwrap();
-    let rcf_file = map.add(rcf_path, &rcf).unwrap();
     let mut diags = Diagnostics::new();
-    let ast = reticle::verilog::parse_source(
-        &mut map,
-        source,
-        reticle::verilog::Dialect::Verilog2005,
-        &mut reticle::verilog::NoIncludes,
-        &mut diags,
-    );
-    let mut design = reticle::verilog::elaborate_file(
-        &ast,
-        &reticle::verilog::ElabOptions::default(),
-        &mut diags,
-    )
-    .unwrap();
+    let mut asts = Vec::new();
+    for path in verilog_paths {
+        let text = std::fs::read_to_string(path).expect("the design");
+        let source = map.add(*path, &text).unwrap();
+        asts.push(reticle::verilog::parse_source(
+            &mut map,
+            source,
+            reticle::verilog::Dialect::Verilog2005,
+            &mut reticle::verilog::NoIncludes,
+            &mut diags,
+        ));
+    }
+    let rcf_file = map.add(rcf_path, &rcf).unwrap();
+    let refs: Vec<_> = asts.iter().collect();
+    let mut design =
+        reticle::verilog::elaborate(&refs, &reticle::verilog::ElabOptions::default(), &mut diags)
+            .unwrap();
     assert!(!diags.has_errors(), "{}", diags.render(&map));
     let top = design.top.unwrap();
 
@@ -2713,6 +2733,279 @@ fn a_register_bit_nothing_drives_is_built_from_a_constant() {
         "the size of the finished image, of which 28 bits are the constant"
     );
     assert_eq!(decoded.words.len(), 5, "four mapped LUTs and the constant");
+}
+
+/// The sources of the ULPI USB device, top level first, the way
+/// `reticle fpga` wants them: there is no search path.
+#[cfg(all(feature = "verilog", feature = "synth"))]
+const USB_SOURCES: [&str; 4] = [
+    "testdata/fpga/cynthion/usb_ulpi_device.v",
+    "ip/usb_device_ulpi/rtl/usb_ulpi_link.v",
+    "ip/usb_device_ulpi/rtl/usb_device_ulpi.v",
+    "ip/usb_device_fs/rtl/usb_ctrl_ep.v",
+];
+
+/// The constraints that go with them.
+#[cfg(all(feature = "verilog", feature = "synth"))]
+const USB_RCF: &str = "testdata/fpga/cynthion/usb_ulpi_device.rcf";
+
+/// **The flip-flop that carries the constant zero out of the part survives
+/// synthesis**, and so does the lookup table that drives it.
+///
+/// This is the guard on an experiment, and the experiment is the last
+/// unmeasured half of the constant driver: a flip-flop whose data input is
+/// the constant *one* is confirmed in silicon by `usb_ulpi_link`'s `rst_q`,
+/// and a constant *zero* never had a design to be confirmed in, because the
+/// registers that used to supply one **were** the defect that cost eight
+/// rounds and narrowing them removed them.
+///
+/// `usb_ulpi_device.v` puts one back, in the one place on this board a
+/// program can read a register bit rather than a person looking at a lamp:
+/// `zero_probe` is XORed into the byte endpoint 1 hands back, so
+/// `tests/usb_loopback.rs` passes untouched when the bit is zero and fails
+/// with every byte complemented when it is not.
+///
+/// **Why this test has to exist.** A compiler may delete a flip-flop whose
+/// value is a known constant, and `synth::opt::FfOpt` does — so an
+/// experiment built out of one can quietly stop being an experiment and pass
+/// whatever the backend writes, which is worse than no test at all. What
+/// keeps this one alive is not an attribute and not luck: `zero_probe` is
+/// initialised to **one** and clocked to **zero**, so its value before the
+/// first edge differs from its data and no optimiser may fold it away
+/// without changing what the design means. `FfOpt`'s rule says exactly that
+/// — a constant `d` collapses only when the initial value agrees with it.
+/// This test is what says that argument still holds, and it needs no
+/// database and no board: it is synthesis and the netlist, nothing more.
+#[test]
+#[cfg(all(feature = "verilog", feature = "synth"))]
+fn the_usb_devices_constant_zero_probe_survives_synthesis() {
+    use reticle::diag::Diagnostics;
+    use reticle::fpga::{Constraints, FpgaOptions, synthesize_for, target};
+    use reticle::source::SourceMap;
+
+    let mut map = SourceMap::new();
+    let mut diags = Diagnostics::new();
+    let mut asts = Vec::new();
+    for name in USB_SOURCES {
+        let Ok(text) = std::fs::read_to_string(name) else {
+            eprintln!("skipped: `{name}` is not in this copy of the crate");
+            return;
+        };
+        let id = map.add(name, &text).expect("fits");
+        asts.push(reticle::verilog::parse_source(
+            &mut map,
+            id,
+            reticle::verilog::Dialect::Verilog2005,
+            &mut reticle::verilog::NoIncludes,
+            &mut diags,
+        ));
+    }
+    let rcf = std::fs::read_to_string(USB_RCF).expect("the constraints");
+    let rcf_file = map.add(USB_RCF, &rcf).expect("fits");
+    let refs: Vec<_> = asts.iter().collect();
+    let mut design =
+        reticle::verilog::elaborate(&refs, &reticle::verilog::ElabOptions::default(), &mut diags)
+            .expect("the design elaborates");
+    assert!(!diags.has_errors(), "{}", diags.render(&map));
+    let top = design.top.expect("a top level");
+    let device = target(DEVICE).expect("the device file describes this part");
+    let mut constraints = Constraints::parse(&rcf, rcf_file, &mut diags);
+    constraints.merge_attrs(&design, top, &mut diags);
+    synthesize_for(
+        &mut design,
+        top,
+        device,
+        &constraints,
+        &FpgaOptions::default(),
+        &mut diags,
+    )
+    .expect("it maps onto the device");
+    assert!(!diags.has_errors(), "{}", diags.render(&map));
+
+    // The mapped netlist, in the `.rtl` text form `reticle fpga --netlist`
+    // writes, which is what a person would look at by hand.
+    let text = design.to_text();
+    let flop = text
+        .lines()
+        .find(|line| line.trim_start().starts_with("cell zero_probe$ff "))
+        .unwrap_or_else(|| {
+            panic!(
+                "`zero_probe` has been optimised out of the netlist, so the loopback's \
+                 constant-zero check on the part cannot fail and proves nothing. See this \
+                 test's docs: the register is initialised to one and clocked to zero for \
+                 exactly this reason"
+            )
+        });
+    assert!(
+        flop.contains("TRELLIS_FF"),
+        "`zero_probe` is not a device flip-flop: {flop}"
+    );
+    assert!(
+        flop.contains("DI=%const0"),
+        "`zero_probe`'s data does not come from the constant-zero driver: {flop}"
+    );
+    // And the driver, which is the thing being measured on the part: a
+    // lookup table whose truth table is all zeros, so its output does not
+    // depend on what an unrouted input reads as.
+    let driver = text
+        .lines()
+        .find(|line| line.trim_start().starts_with("cell const0$lut "))
+        .expect("`techcells::drive_constant_data` builds a driver for the constant");
+    assert!(
+        driver.contains("LUT4") && driver.contains("INIT=16'd0"),
+        "the constant-zero driver is not an all-zeros lookup table: {driver}"
+    );
+    // One driver, shared, the way nextpnr's `pack_constants` does it.
+    assert_eq!(
+        text.lines()
+            .filter(|line| line.trim_start().starts_with("cell const0$lut"))
+            .count(),
+        1,
+        "one constant-zero driver for the whole module"
+    );
+}
+
+/// The same flip-flop, followed into the `.bit`: the `INIT` word, the input
+/// ties and the arcs that carry the constant to its data wire.
+///
+/// `a_register_bit_nothing_drives_is_built_from_a_constant` does this on a
+/// three-line design, which is where the mechanism is pinned. What this adds
+/// is that it holds in **the design that is loaded into the part** — 1085
+/// lookup tables and 491 flip-flops — because a result read off a board is
+/// worth nothing until the bitstream that produced it has been read.
+///
+/// It is `#[ignore]`d because it places and routes the whole USB device,
+/// which is minutes rather than seconds; the rest of this file is seconds.
+/// Run it with:
+///
+/// ```console
+/// cargo test --release --all-features --test fpga_trellis -- --ignored \
+///     the_usb_devices_constant_zero_probe_reaches_the_bitstream --nocapture
+/// ```
+#[test]
+#[ignore = "places and routes the whole USB device: minutes, not seconds"]
+#[cfg(all(feature = "verilog", feature = "synth"))]
+fn the_usb_devices_constant_zero_probe_reaches_the_bitstream() {
+    let Some(root) = chipdb() else { return };
+    for name in USB_SOURCES {
+        if !Path::new(name).exists() {
+            eprintln!("skipped: `{name}` is not in this copy of the crate");
+            return;
+        }
+    }
+    let db = trellis::open(&Disk(root), "", PART).unwrap();
+    let fabric = db.load(&TrellisOptions::new()).unwrap();
+    let (_, stream, pads, _, _, routed) = compile_all(&fabric, &USB_SOURCES, USB_RCF);
+    assert_eq!(pads, 20, "the ULPI bus, the clock, the reset and six LEDs");
+
+    // ---- the netlist ----
+    let flops: Vec<&str> = routed
+        .netlist
+        .instances
+        .iter()
+        .filter(|i| i.kind == "ff")
+        .map(|i| i.name.as_str())
+        .collect();
+    assert!(
+        flops.iter().any(|n| n.starts_with("zero_probe")),
+        "the constant-zero probe is not in the netlist"
+    );
+    let zeros = routed
+        .netlist
+        .instances
+        .iter()
+        .filter(|i| i.kind == "lut" && i.name.starts_with("const0"))
+        .count();
+    assert_eq!(zeros, 1, "one constant-zero driver, shared");
+
+    // ---- the `INIT` word, and the ties that make it a constant ----
+    let decoded = db.decode(&stream.cram);
+    let zero_luts: Vec<((u32, u32), String)> = decoded
+        .words
+        .iter()
+        .filter(|(_, field, value)| field.ends_with(".INIT") && value.chars().all(|c| c == '0'))
+        .map(|(at, field, _)| (*at, field.clone()))
+        .collect();
+    assert_eq!(
+        zero_luts.len(),
+        1,
+        "one lookup table of this design holds the constant zero: {zero_luts:?}"
+    );
+    let (at, field) = &zero_luts[0];
+    let bel = field.trim_end_matches(".INIT");
+    let letter = bel.as_bytes()[5];
+    let half: u32 = bel[bel.len() - 1..].parse().unwrap();
+    let ty = fabric.arch.tile_index_at(at.0, at.1).unwrap();
+    let lut = fabric.luts.get(&(ty, bel.to_owned())).unwrap();
+    for (input, groups) in lut.tie_high.iter().enumerate() {
+        for bit_at in groups {
+            let (frame, index) = fabric.frames.locate(*at, *bit_at).unwrap();
+            assert!(
+                stream.cram.get(frame, index),
+                "F{frame}B{index} ties input {input} of {bel} at X{}Y{} high, and it is clear",
+                at.0,
+                at.1
+            );
+        }
+    }
+
+    // ---- and the arcs, walked backwards out of the file itself ----
+    let (arcs, unresolved) = db.resolved_arcs(&decoded);
+    assert!(unresolved.is_empty(), "{unresolved:?}");
+    let mut driver = std::collections::BTreeMap::new();
+    for (to, from) in &arcs {
+        driver.insert(to.clone(), from.clone());
+    }
+    let output = (format!("F{}", 2 * u32::from(letter - b'A') + half), *at);
+    let mut fed = 0usize;
+    let mut floating: Vec<String> = Vec::new();
+    let mut flops_from_fabric = 0usize;
+    for (pos, sd, value) in &decoded.enums {
+        let Some(z) = fabric_data_index(sd, value) else {
+            continue;
+        };
+        flops_from_fabric += 1;
+        let start = (format!("M{z}"), *pos);
+        let mut wire = start.clone();
+        let mut seen = std::collections::BTreeSet::new();
+        while let Some(next) = driver.get(&wire) {
+            if !seen.insert(next.clone()) {
+                break;
+            }
+            wire = next.clone();
+        }
+        if wire == start {
+            floating.push(format!("M{z} at X{}Y{}", pos.0, pos.1));
+        } else if wire == output {
+            fed += 1;
+        }
+    }
+    assert_eq!(
+        flops_from_fabric, 491,
+        "every flip-flop of this design takes its data from the fabric"
+    );
+    assert!(
+        floating.is_empty(),
+        "a flip-flop's data wire has nothing routed to it, which is the defect itself: \
+         {floating:?}"
+    );
+    assert_eq!(
+        fed, 1,
+        "exactly one flip-flop takes its data from the constant-zero lookup table, and it is \
+         the probe"
+    );
+
+    // ---- every bit still decodes ----
+    assert_eq!(
+        decoded.bits,
+        stream.cram.count_ones(),
+        "the decoder and the writer disagree about how many bits are set"
+    );
+    assert_eq!(
+        decoded.unexplained, 0,
+        "{} of {} bit(s) belong to no feature the database names: {:?}",
+        decoded.unexplained, decoded.bits, decoded.leftovers
+    );
 }
 
 /// The ball the bidirectional pad is on: `led_n[0]`, the LED at the end of
