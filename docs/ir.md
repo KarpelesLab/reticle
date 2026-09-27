@@ -159,6 +159,60 @@ params, attrs, span }` where `ModuleRef` is `Resolved(ModuleId)` or
 slices of nets or concatenations of nets. `Design::resolve_instances`
 binds unresolved references whose name matches a module.
 
+### Attributes
+
+Every object carries an ordered `Attrs` map of `Name -> AttrValue`
+(`Const`, `String` or `Int`). Both front ends put a source annotation on
+the IR object the annotated declaration became, and invent nothing: a
+Verilog attribute on a `reg`, `wire` or port declaration and a VHDL
+`attribute ... of s : signal is ...` both land on the **net**; one on an
+unpacked array lands on the **memory**; one on an `always` block or a VHDL
+process lands on the **process**; one on a continuous `assign`, an
+instance or a module lands on the assign, the instance or the module.
+Nothing lands on a **cell** from source, because cells are inferred.
+
+`Attrs::is_set(key)` is the test for a flag. A string value counts as set
+unless it spells a falsehood — `"false"`, `"no"`, `"off"`, `"0"` or blank —
+since vendors write these flags as strings and `keep = "false"` has to mean
+what it says.
+
+#### `keep`
+
+`keep` asks for an object to be in the netlist that synthesis hands on,
+for the benefit of an observer the compiler cannot see: a testbench, a
+logic analyser, a probe point, a downstream tool, or the silicon itself.
+`ir::KEEP_ATTRS` lists the spellings honoured — `keep`, `dont_touch`,
+`mark_debug`, `preserve`, `noprune`, `syn_keep`, `syn_noprune`,
+`syn_preserve` — compared without case or separators, so `KEEP` and
+`dont-touch` count too. What it promises:
+
+- A kept **net** survives dead-code elimination even when nothing reads
+  it, its value is never substituted into its readers, and it is never
+  aliased into another net.
+- A kept net driven by a **state** element keeps that state element: a
+  flip-flop or latch whose `q` is kept is not folded to a constant, not
+  removed for want of a reader and not merged into another register.
+- A kept **cell**, **assign** or **memory** is not removed, not folded
+  away and not merged with an identical one.
+
+What still applies to a kept object: the expression cone that feeds it is
+still folded, narrowed and shared; a kept flip-flop still has a constant
+enable dropped and an enable or synchronous reset lifted out of its `d`
+mux, since that is the same flip-flop on the same net; and a
+**combinational** cell driving a kept net may still fold to a constant
+assignment, since the net keeps both its name and its value. Only state
+inherits its output's keep, because only state decides *when* its net takes
+a value — a flip-flop's value before its first clock edge is a property of
+the fabric rather than of the IR, which is the difference a constant-fed
+probe exists to measure.
+
+`keep` is not `keep_hierarchy`: it keeps an object, not a module boundary.
+Synthesis warns with `S0034` when a keep sits somewhere it cannot be
+honoured (a module, an `initial` block, an instance that wanted
+`keep_hierarchy`) and when an attribute reads like a keep and is not one,
+such as `keep_signal`. `synth::keep` is the module that decides all of
+this; no pass tests the attribute by hand.
+
 ## Invariants and validation
 
 `ir::validate::validate(&Design) -> Diagnostics` reports every violation

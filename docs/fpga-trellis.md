@@ -186,9 +186,12 @@ came up set.
 experiment, not the board.** A compiler may delete a flip-flop whose value is a
 known constant and `synth::opt::FfOpt` does — so an experiment built out of one
 can quietly stop being an experiment and pass whatever the backend writes.
-`(* keep *)` does not help: `FfOpt`'s constant rule reads the *cell's*
-attributes, an attribute on a `reg` lands on the net, and the register folds to
-`assign %z = 1'd0` with the XOR gone with it. What works is the semantics.
+`(* keep *)` did not help when this was built: `FfOpt`'s constant rule read the
+*cell's* attributes, an attribute on a `reg` lands on the net, and the register
+folded to `assign %z = 1'd0` with the XOR gone with it. That is fixed —
+`synth::keep` now answers the question from both places, and a `(* keep *)` on a
+register keeps the flip-flop — but the design here still does not rely on it,
+and what it relies on instead is the semantics.
 `zero_probe` is initialised to **one** and clocked to **zero**, so its value
 before the first edge differs from its data and folding it away would change
 what the design means; `FfOpt`'s rule is exactly that — a constant `d`

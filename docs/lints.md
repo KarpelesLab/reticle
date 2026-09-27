@@ -82,7 +82,10 @@ two shortest forms.
 
 A signal whose name starts with `_`, or which carries `keep`, `dont_touch`,
 `unused`, `maybe_unused`, `keep_hierarchy` or `mark_debug`, is exempt from
-the unused and undriven rules without any lint directive.
+the unused and undriven rules without any lint directive. Of those,
+`keep`, `dont_touch` and `mark_debug` are also honoured by synthesis, which
+keeps the signal and the register that drives it; `ir::KEEP_ATTRS` has the
+full list of spellings and `docs/ir.md` says what the promise covers.
 
 ## The rules
 
