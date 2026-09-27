@@ -1,0 +1,66 @@
+# `usb_ulpi_device.rcf` plus one pin: the console.
+#
+# Every ULPI line is the same as that file's and for the same reasons — the
+# eight bidirectional data balls, `dir` and `nxt` in, `stp`, the transceiver's
+# active-low reset and the 60 MHz this board asks the FPGA to provide — with
+# `-slew fast` on all thirteen because the platform file's `ULPIResource` asks
+# for `SLEWRATE="FAST"` on all thirteen.
+#
+# ---------------------------------------------------------------------
+# T14, AND WHY IT IS NOT LIKE THE OTHERS
+# ---------------------------------------------------------------------
+#
+#     # Note: UART pins R14 and T14 are connected to JTAG pins R11 (TDI)
+#     # and T11 (TMS) respectively, so the microcontroller can use either
+#     # function but not both simultaneously.
+#
+#     # UART connected to the debug controller; can be routed to a host via
+#     # CDC-ACM.
+#     Resource("uart", 0,
+#         Subsignal("rx",  Pins("R14",  dir="i")),
+#         Subsignal("tx",  Pins("T14",  dir="oe"), Attrs(PULLMODE="UP")),
+#         Attrs(IO_TYPE="LVCMOS33")
+#     ),
+#
+# T14 is the FPGA's UART transmit pin and it is on the **same net** as the debug
+# microcontroller's JTAG `TMS` output. The PCB has no series resistor: the net
+# is `/Debugger/FPGA_JTAG.TMS` and FPGA balls T11 and T14 are both on it,
+# alongside the microcontroller's pin. So a gateware that drives T14 while
+# Apollo is shifting JTAG is two drivers on one wire.
+#
+# `usb_ulpi_trace.v`'s header has the three things that keep that from
+# happening — a drive window that no other part of the design can hold open,
+# `PULLMODE=UP` so the released line idles, and Apollo's own pinmux interlock —
+# and the one rule for whoever loads this: **do not start a JTAG transaction
+# until the window has shut**, which is about eighteen seconds after
+# configuration. `-pullup yes` below is the platform file's `PULLMODE="UP"`.
+#
+# `-slew fast` is deliberately **not** asked for on T14: it is a 115200 baud
+# line to a chip on the same board and the platform file asks for no slew rate
+# on it either.
+
+set_io -io_standard LVCMOS33 clk A8
+
+set_io -io_standard LVCMOS33 -slew fast ulpi_data[0] F16
+set_io -io_standard LVCMOS33 -slew fast ulpi_data[1] G15
+set_io -io_standard LVCMOS33 -slew fast ulpi_data[2] G16
+set_io -io_standard LVCMOS33 -slew fast ulpi_data[3] H15
+set_io -io_standard LVCMOS33 -slew fast ulpi_data[4] J15
+set_io -io_standard LVCMOS33 -slew fast ulpi_data[5] J16
+set_io -io_standard LVCMOS33 -slew fast ulpi_data[6] K15
+set_io -io_standard LVCMOS33 -slew fast ulpi_data[7] K16
+
+set_io -io_standard LVCMOS33 -slew fast ulpi_dir E16
+set_io -io_standard LVCMOS33 -slew fast ulpi_nxt F15
+set_io -io_standard LVCMOS33 -slew fast ulpi_stp E15
+set_io -io_standard LVCMOS33 -slew fast ulpi_rst_n J13
+set_io -io_standard LVCMOS33 -slew fast ulpi_clk D16
+
+set_io -io_standard LVCMOS33 -pullup yes uart_tx T14
+
+set_io -io_standard LVCMOS33 led0_n E13
+set_io -io_standard LVCMOS33 led1_n C13
+set_io -io_standard LVCMOS33 led2_n B14
+set_io -io_standard LVCMOS33 led3_n A15
+set_io -io_standard LVCMOS33 led4_n D12
+set_io -io_standard LVCMOS33 led5_n C11

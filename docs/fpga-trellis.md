@@ -124,7 +124,11 @@ ULPI forbids", which is measurement and not change.
 
 Eight rounds of experiments had reached one bit of information per bitstream —
 an attach or a silence in `dmesg` — and the answer needed hundreds. Three
-instruments, each built on the last:
+instruments, each built on the last, and the first two are committed:
+`testdata/fpga/cynthion/usb_ulpi_trace.{v,rcf}` is the console and the trace
+together, with the safety argument for the pin in its header and the host-side
+recipe beside it, and `usb_ulpi_trace_tb.v` asserts its output character for
+character.
 
 **1. A console, on the pin the debug microcontroller shares with JTAG.** Great
 Scott Gadgets' platform file gives the FPGA a `uart` resource on `R14`/`T14`,

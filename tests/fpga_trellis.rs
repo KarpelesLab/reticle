@@ -2667,6 +2667,68 @@ fn the_usb_devices_top_level_configures_a_transceiver_through_its_pads() {
     );
 }
 
+/// The ULPI trace's console, simulated: the instrument that found the fault.
+///
+/// `usb_ulpi_trace.v` is `usb_ulpi_device.v` with a logic analyser on the pin
+/// Apollo bridges to `/dev/ttyACM0`, and it is how a device that had given one
+/// bit of information per bitstream for eight rounds gave three hundred in one.
+/// Two of its own bugs are the reason this test exists, and the testbench's
+/// header names both: a trigger that matched the cycle after a PID instead of
+/// the next byte of the packet, which a stub handing bytes over back to back
+/// could not catch, and a dump that rotated the trace's shift register partway
+/// through filling it and left every later dump four entries out of step.
+///
+/// So the assertion is the whole line, character for character, of the last
+/// complete dump. It needs `sim` and not `fpga`, so it runs in builds with no
+/// device database at all, and it skips without `ip/` the way the top level's
+/// own test does.
+#[test]
+#[cfg(all(feature = "verilog", feature = "sim"))]
+fn the_ulpi_traces_console_prints_the_bus_in_order() {
+    use reticle::diag::Diagnostics;
+    use reticle::sim::{SimOptions, Simulator};
+    use reticle::source::SourceMap;
+    use reticle::verilog::{Dialect, ElabOptions, NoIncludes, elaborate, parse_source};
+
+    let sources = [
+        "testdata/fpga/cynthion/usb_ulpi_trace_tb.v",
+        "testdata/fpga/cynthion/usb_ulpi_trace.v",
+        "ip/usb_device_ulpi/rtl/usb_ulpi_link.v",
+        "ip/usb_device_ulpi/rtl/usb_device_ulpi.v",
+        "ip/usb_device_fs/rtl/usb_ctrl_ep.v",
+    ];
+    let mut map = SourceMap::new();
+    let mut diags = Diagnostics::new();
+    let mut files = Vec::new();
+    for name in sources {
+        let Ok(text) = std::fs::read_to_string(name) else {
+            eprintln!("skipped: `{name}` is not in this copy of the crate");
+            return;
+        };
+        let id = map.add(name, &text).expect("fits");
+        files.push(parse_source(
+            &mut map,
+            id,
+            Dialect::Verilog2005,
+            &mut NoIncludes,
+            &mut diags,
+        ));
+    }
+    let refs: Vec<_> = files.iter().collect();
+    let design = elaborate(&refs, &ElabOptions::new(Dialect::Verilog2005), &mut diags)
+        .expect("the testbench elaborates");
+    assert!(!diags.has_errors(), "{}", diags.render(&map));
+
+    let mut sim = Simulator::new(&design, SimOptions::default()).expect("it simulates");
+    sim.run();
+    assert!(sim.finished(), "the testbench did not reach `$finish`");
+    assert_eq!(
+        sim.output(),
+        "PASS: the trace is the bus, in order, from its oldest entry\n",
+        "`usb_ulpi_trace_tb.v` disagrees with `usb_ulpi_trace.v`"
+    );
+}
+
 /// What `bidir_bus.v`'s header tells a person to look for, simulated.
 ///
 /// Everything else in this file is about the bits. This is about the design,
