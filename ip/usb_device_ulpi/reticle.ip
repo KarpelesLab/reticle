@@ -9,10 +9,11 @@
 # device descriptor; 1209:0001 is pid.codes' test pair. README.md states
 # the protocol, with the provenance and confidence of every fact.
 #
-# This block has run on a board, and a host has seen it attach: see §11
-# of README.md. It does not enumerate — the host detects low speed where
-# full speed was asked for — and `docs/fpga-trellis.md` has the seven
-# experiments that narrow it down.
+# This block has run on a board and enumerated: see §11 of README.md.
+# `VENDOR_ADDR` and `VENDOR_DATA` are why it took three attempts — a board
+# may exchange DP and DM between the transceiver and its connector, and
+# then one register ULPI does not describe is the only thing that can undo
+# it. `docs/fpga-trellis.md` has the measurements.
 name usb_device_ulpi
 version 1.0.0
 license MIT
@@ -31,6 +32,9 @@ param VID bits 16'h1209
 param PID bits 16'h0001
 param RESET_CYCLES int 300 2..65535
 param SE0_CYCLES int 150 2..255
+param TURNAROUND bits 4'd9
+param VENDOR_ADDR bits 6'h00
+param VENDOR_DATA bits 8'h00
 
 port clk60 in
 port rst_n in

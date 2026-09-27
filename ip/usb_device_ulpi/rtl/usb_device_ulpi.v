@@ -72,7 +72,24 @@ module usb_device_ulpi #(
     // Attempts at the start-up's LineState read while it still says SE0,
     // which a pair whose pull-up has just been connected does for
     // milliseconds. `usb_ulpi_link` says what was measured.
-    parameter        LINE_TRIES   = 40000
+    parameter        LINE_TRIES   = 40000,
+    // One register of the transceiver's own, written before anything a
+    // host can see and read back afterwards; `6'h00` is none, which is
+    // the default. `usb_ulpi_link`'s own parameter says what a board can
+    // need one for — the short version is that a board may exchange DP
+    // and DM between the transceiver and its connector, and then a bit in
+    // a register ULPI does not describe is the only thing that can undo
+    // it.
+    // Cycles of an idle bus at J, after the end of a received packet, before
+    // the answer's transmit command goes out. ULPI 1.1 Table 10 allows a
+    // full-speed Link **7 to 18** interface clocks, counted from the receive
+    // command that reports LineState's SE0-to-J transition, and says the
+    // window "ensure[s] inter-packet delays of 2-6.5 bit times", which is
+    // USB 2.0's own requirement. Nine puts the transmit command eleven or
+    // twelve clocks after that receive command, in the middle of it.
+    parameter [3:0]  TURNAROUND   = 4'd9,
+    parameter [5:0]  VENDOR_ADDR  = 6'h00,
+    parameter [7:0]  VENDOR_DATA  = 8'h00
 ) (
     input  wire       clk60,
     input  wire       rst_n,
@@ -100,7 +117,9 @@ module usb_device_ulpi #(
     usb_ulpi_link #(
         .RESET_CYCLES (RESET_CYCLES),
         .SE0_CYCLES   (SE0_CYCLES),
-        .LINE_TRIES   (LINE_TRIES)
+        .LINE_TRIES   (LINE_TRIES),
+        .VENDOR_ADDR  (VENDOR_ADDR),
+        .VENDOR_DATA  (VENDOR_DATA)
     ) u_link (
         .clk          (clk60),
         .rst_n        (rst_n),
@@ -136,7 +155,7 @@ module usb_device_ulpi #(
     usb_ctrl_ep #(
         .VID        (VID),
         .PID        (PID),
-        .TURNAROUND (4'd9)
+        .TURNAROUND (TURNAROUND)
     ) u_ep (
         .clk          (clk60),
         .rst_n        (rst_n),

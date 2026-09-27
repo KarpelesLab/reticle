@@ -32,6 +32,9 @@
 //                               pull-up on D+ that tells the host a
 //                               full-speed device is attached) and
 //                               SuspendM = 1 (powered)
+//     VENDOR_ADDR      ← ...    one register of the transceiver's own, if
+//                               the board needs one, and read back. Off by
+//                               default; the parameter says what it is for
 //     OTG Control      ← 0x00   the 15 kOhm pull-downs off: they are a
 //                               host's, and this is a peripheral
 //     Function Control ← 0x45   the same settings with the reset bit
@@ -140,7 +143,30 @@ module usb_ulpi_link #(
     //
     // Each attempt is a whole register read, about a dozen clocks, so
     // 40 000 of them is roughly eight milliseconds at 60 MHz.
-    parameter LINE_TRIES   = 40000
+    parameter LINE_TRIES   = 40000,
+    // One transceiver register outside ULPI, written before anything a
+    // host can see and read back before the sequence goes on. `6'h00`
+    // disables it, which is the default: address 00h is Vendor ID Low,
+    // read-only in every ULPI transceiver, so it can never be a write
+    // this was asked for.
+    //
+    // ULPI 1.1 §4.1 reserves the immediate addresses 30h to 3Fh for the
+    // transceiver's own registers and says nothing whatever about what is
+    // in them. What is in them can nevertheless decide whether a device
+    // works at all: a board may **exchange DP and DM between the
+    // transceiver and its connector** to keep the pair from crossing over
+    // in the layout, and then a bit in one of those registers is what
+    // tells the transceiver about it. A Link with that bit unwritten
+    // presents its pull-up on the wire the host calls D- and is detected
+    // as a low-speed device it is not; every packet after that is
+    // inverted. No value of Function Control can undo it, which is why
+    // this is here and not a mode.
+    //
+    // It goes **after** the transceiver's own reset and **before** the
+    // writes a host can see, so the 1.5 kOhm pull-up is never connected to
+    // the wrong pin even for a moment.
+    parameter [5:0] VENDOR_ADDR = 6'h00,
+    parameter [7:0] VENDOR_DATA = 8'h00
 ) (
     input  wire       clk,
     input  wire       rst_n,
@@ -214,17 +240,24 @@ module usb_ulpi_link #(
     localparam [3:0] S_TX_CRC0  = 4'd13;  // the CRC16, low byte
     localparam [3:0] S_TX_CRC1  = 4'd14;  // the CRC16, high byte
 
-    // The steps of the start-up sequence.
-    localparam [2:0] I_RESET = 3'd0;      // Function Control <- 0x65
-    localparam [2:0] I_WAIT  = 3'd1;      // wait out the reset
-    localparam [2:0] I_OTG   = 3'd2;      // OTG Control <- 0x00
-    localparam [2:0] I_FUNC  = 3'd3;      // Function Control <- 0x45
-    localparam [2:0] I_CHECK = 3'd4;      // read it back
-    localparam [2:0] I_LINE  = 3'd5;      // read Debug for LineState
-    localparam [2:0] I_DONE  = 3'd6;
+    // The steps of the start-up sequence. The two vendor steps are skipped
+    // outright when `VENDOR_ADDR` is zero, which is the default: a Link
+    // that has no board-specific register to write has none of this.
+    localparam [3:0] I_RESET = 4'd0;      // Function Control <- 0x65
+    localparam [3:0] I_WAIT  = 4'd1;      // wait out the reset
+    localparam [3:0] I_VEND  = 4'd2;      // VENDOR_ADDR <- VENDOR_DATA
+    localparam [3:0] I_VCHK  = 4'd3;      // read that back
+    localparam [3:0] I_OTG   = 4'd4;      // OTG Control <- 0x00
+    localparam [3:0] I_FUNC  = 4'd5;      // Function Control <- 0x45
+    localparam [3:0] I_CHECK = 4'd6;      // read it back
+    localparam [3:0] I_LINE  = 4'd7;      // read Debug for LineState
+    localparam [3:0] I_DONE  = 4'd8;
+
+    // Whether there is a vendor register to write at all.
+    localparam VENDOR_EN = (VENDOR_ADDR != 6'h00);
 
     reg [3:0]  state;
-    reg [2:0]  step;
+    reg [3:0]  step;
     reg [7:0]  data_out;
     reg        stp_q;
     reg        rst_q;
@@ -290,6 +323,8 @@ module usb_ulpi_link #(
     always @(*) begin
         case (step)
             I_RESET: begin st_write = 1'b1; st_addr = REG_FUNC_CTRL; st_data = FUNC_CTRL_RESET; end
+            I_VEND:  begin st_write = 1'b1; st_addr = VENDOR_ADDR;   st_data = VENDOR_DATA;    end
+            I_VCHK:  begin st_write = 1'b0; st_addr = VENDOR_ADDR;   st_data = 8'h00;          end
             I_OTG:   begin st_write = 1'b1; st_addr = REG_OTG_CTRL;  st_data = OTG_CTRL_DEV;   end
             I_FUNC:  begin st_write = 1'b1; st_addr = REG_FUNC_CTRL; st_data = FUNC_CTRL_FS;   end
             I_CHECK: begin st_write = 1'b0; st_addr = REG_FUNC_CTRL; st_data = 8'h00;          end
@@ -458,6 +493,11 @@ module usb_ulpi_link #(
                         end else if (step == I_DONE) begin
                             ready_q <= 1'b1;
                             state   <= S_READY;
+                        end else if (!VENDOR_EN && (step == I_VEND
+                                                 || step == I_VCHK)) begin
+                            // No board-specific register: the two steps
+                            // for one are not there at all.
+                            step <= step + 4'd1;
                         end else begin
                             data_out <= st_cmd;
                             state    <= st_write ? S_WR_CMD : S_RD_CMD;
@@ -477,7 +517,7 @@ module usb_ulpi_link #(
                         end
                     end
                     S_WR_STP: begin
-                        step  <= step + 3'd1;
+                        step  <= step + 4'd1;
                         state <= S_NEXT;
                     end
                     S_WAIT_RST: begin
@@ -485,12 +525,12 @@ module usb_ulpi_link #(
                         // resets its core and lets go when it is done.
                         if (ulpi_dir) seen_dir <= 1'b1;
                         if (seen_dir && !ulpi_dir) begin
-                            step  <= step + 3'd1;
+                            step  <= step + 4'd1;
                             state <= S_NEXT;
                         end else if (wait_cnt == RESET_CYCLES[15:0]) begin
                             // It never took the bus. Carry on anyway: the
                             // readback at the end is what decides.
-                            step  <= step + 3'd1;
+                            step  <= step + 4'd1;
                             state <= S_NEXT;
                         end else begin
                             wait_cnt <= wait_cnt + 16'd1;
@@ -539,6 +579,19 @@ module usb_ulpi_link #(
                                     line_tries <= line_tries + 16'd1;
                                 end
                                 state      <= S_NEXT;
+                            end else if (step == I_VCHK) begin
+                                // The vendor register, read back. This is
+                                // the one step of the sequence ULPI does
+                                // not describe — the address and the byte
+                                // come from a particular transceiver's
+                                // datasheet — so it is believed only when
+                                // it answers with what was written, and a
+                                // part that has no such register goes round
+                                // this loop for ever rather than attaching
+                                // as something the board is not wired for.
+                                if (ulpi_data_i == VENDOR_DATA) step <= I_OTG;
+                                else                            step <= I_VEND;
+                                state <= S_NEXT;
                             end else if (ulpi_data_i == FUNC_CTRL_FS) begin
                                 step  <= I_LINE;
                                 state <= S_NEXT;
