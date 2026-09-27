@@ -8964,6 +8964,61 @@ fn expected_device_descriptor(vid: u16, pid: u16) -> Vec<u8> {
     d
 }
 
+/// The configuration descriptor the block should send, written **forwards**
+/// from the specification's layout — the way `lsusb -v` prints one — rather
+/// than from the block's `IFACE_DESC` parameter.
+///
+/// This is the one assertion that would catch the parameter's byte order
+/// coming out reversed, which is the failure mode a concatenation invites:
+/// Verilog puts a concatenation's first element in its most significant
+/// bits and every index in `usb_ctrl_ep` counts from byte 0 up, so there is
+/// a reversal at elaboration and either it happens or this test says so.
+/// The three derived fields are written here as **the arithmetic and not the
+/// answer**: `wTotalLength` is a sum, `bNumInterfaces` and `bNumEndpoints`
+/// are counts of what follows, so a descriptor changed in one place changes
+/// this expectation with it.
+fn expected_configuration_descriptor() -> Vec<u8> {
+    // The interface and its two endpoints, which is what `IFACE_DESC`
+    // holds: vendor specific, and a bulk OUT and a bulk IN on endpoint 1
+    // with eight-byte packets.
+    let mut iface: Vec<u8> = Vec::new();
+    iface.extend_from_slice(&[9, 4, 0, 0, 0, 0xFF, 0x00, 0x00, 0]);
+    iface.extend_from_slice(&[7, 5, 0x01, 2, 8, 0, 0]);
+    iface.extend_from_slice(&[7, 5, 0x81, 2, 8, 0, 0]);
+    // bNumEndpoints is byte 4 of the interface descriptor and is the
+    // ENDPOINT descriptors that follow it, counted here rather than typed.
+    iface[4] = u8::try_from(count_descriptors(&iface, 5)).expect("a small number");
+    let total = u16::try_from(9 + iface.len()).expect("a short descriptor");
+    let [lo, hi] = total.to_le_bytes();
+    let mut d = vec![
+        9,
+        2,
+        lo,
+        hi,
+        u8::try_from(count_descriptors(&iface, 4)).expect("a small number"),
+        1,
+        0,
+        0x80,
+        50,
+    ];
+    d.extend(iface);
+    d
+}
+
+/// Descriptors of one `bDescriptorType` in a run of descriptors, walked
+/// along the chain of `bLength` fields the way a host does.
+fn count_descriptors(blob: &[u8], kind: u8) -> usize {
+    let mut at = 0;
+    let mut n = 0;
+    while at + 1 < blob.len() && blob[at] != 0 {
+        if blob[at + 1] == kind {
+            n += 1;
+        }
+        at += usize::from(blob[at]);
+    }
+    n
+}
+
 fn usb_design() -> Design {
     design_of(
         "usb_device_fs",
@@ -9032,14 +9087,14 @@ fn enumerate<P: UsbPair>(host: &mut UsbHost<P>) {
     let config9 = host
         .control_read(9, get_descriptor(2, 9))
         .expect("the configuration header");
-    assert_eq!(config9, [9, 2, 18, 0, 1, 1, 0, 0x80, 50]);
+    assert_eq!(config9, expected_configuration_descriptor()[..9]);
     let config = host
         .control_read(9, [0x80, 0x06, 0x00, 0x02, 0xFF, 0xFF, 0xFF, 0xFF])
         .expect("the whole configuration");
     assert_eq!(
         config,
-        [9, 2, 18, 0, 1, 1, 0, 0x80, 50, 9, 4, 0, 0, 0, 0xFF, 0, 0, 0],
-        "configuration and interface, 18 bytes in 8 + 8 + 2"
+        expected_configuration_descriptor(),
+        "configuration, interface and both endpoints, 32 bytes in 8 + 8 + 8 + 8"
     );
     let sixteen = host
         .control_read(9, get_descriptor(1, 16))
@@ -9139,14 +9194,18 @@ fn ignore_what_it_cannot_do<P: UsbPair>(host: &mut UsbHost<P>) {
     );
     host.idle(20);
 
-    // A token for another endpoint is not for the control endpoint.
+    // A token for another endpoint is not for the control endpoint. That
+    // endpoint exists now — it is the bulk pair — and it has no control
+    // pipe, so a SETUP to it goes unanswered by both of them: the control
+    // endpoint because the token is not its, the bulk endpoint because a
+    // bulk endpoint has nothing to say to a SETUP.
     host.send(&usb_token(USB_SETUP, 0, 1));
     host.idle(3);
     host.send(&usb_data(USB_DATA0, &GET_DEVICE_DESCRIPTOR));
     assert_eq!(
         host.receive(),
         UsbReply::Nothing,
-        "endpoint 1 does not exist"
+        "a SETUP to the data endpoint is nobody's"
     );
     host.idle(20);
 

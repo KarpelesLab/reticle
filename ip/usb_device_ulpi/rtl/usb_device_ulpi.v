@@ -2,16 +2,17 @@
 // transceiver.
 //
 // What it does
-//   `usb_ulpi_link` for the ULPI bus and `usb_ctrl_ep` for the device:
+//   `usb_ulpi_link` for the ULPI bus and `usb_dev_core` for the device:
 //   the transceiver does NRZI, bit stuffing, SYNC, the EOP and the line
 //   itself, and this block does the bytes — packet decoding with the PID
 //   check nibble, the CRC5 of tokens and the CRC16 of data packets
-//   checked and generated, and endpoint 0 answering the standard
-//   requests a host needs to enumerate it.
+//   checked and generated, endpoint 0 answering the standard requests a
+//   host needs to enumerate it, and a bulk endpoint pair whose byte
+//   interface comes out of this block.
 //
-//   `usb_ctrl_ep` is the same module `usb_device_fs` uses, reached
+//   `usb_dev_core` is the same module `usb_device_fs` uses, reached
 //   through a `depends` line rather than copied, so there is one
-//   statement of the control endpoint for both cores. What differs is
+//   statement of the device for both cores. What differs is
 //   everything below it, and the reason for a second core is a board:
 //   all three USB ports of a Great Scott Gadgets Cynthion go through
 //   ULPI transceivers, and its FPGA cannot reach the data lines at all —
@@ -45,16 +46,16 @@
 //   accepted, and whether the host is holding the bus in reset.
 //
 // What it does not do
-//   Full speed only, endpoint 0 only, no suspend, no VBUS or ID
-//   handling, and no high speed. `usb_ulpi_link` and `usb_ctrl_ep` each
-//   say what they leave out, and `README.md` in this package says what
-//   of ULPI is implemented, what is not, and how sure of each fact this
-//   is.
+//   Full speed only, one bulk endpoint pair, no suspend, no VBUS or ID
+//   handling, and no high speed. `usb_ulpi_link`, `usb_dev_core` and
+//   `usb_bulk_ep` each say what they leave out, and `README.md` in this
+//   package says what of ULPI is implemented, what is not, and how sure of
+//   each fact this is.
 //
-//   Nothing here has run on a board. It enumerates in simulation,
-//   against a transceiver model written from the specification, with a
-//   USB host model on the other side of that model sending real packets.
-//   No host has seen it.
+//   THE BYTES. `out_*` is what the host sent to the data endpoint's OUT,
+//   a byte at a time with `out_last` on the last byte of each packet;
+//   `in_*` is what its IN will send, and `in_commit` sends what has been
+//   given however short it is. `usb_bulk_ep` states the whole contract.
 //
 //   The eight data lines are split into `ulpi_data_i`, `ulpi_data_o` and
 //   `ulpi_data_oe`, as every bidirectional pin in this library is, and
@@ -89,7 +90,23 @@ module usb_device_ulpi #(
     // twelve clocks after that receive command, in the middle of it.
     parameter [6:0]  TURNAROUND   = 7'd9,
     parameter [5:0]  VENDOR_ADDR  = 6'h00,
-    parameter [7:0]  VENDOR_DATA  = 8'h00
+    parameter [7:0]  VENDOR_DATA  = 8'h00,
+    parameter [7:0]  DEV_CLASS    = 8'hFF,
+    parameter [7:0]  DEV_SUBCLASS = 8'h00,
+    parameter [7:0]  DEV_PROTOCOL = 8'h00,
+    parameter [7:0]  CFG_ATTR     = 8'h80,
+    parameter [7:0]  CFG_POWER    = 8'd50,
+    // The class's interface and endpoint descriptors, in descriptor order,
+    // and their length in bytes; `usb_ctrl_ep` says what is derived from
+    // them and what is not.
+    parameter integer IFACE_BYTES = 23,
+    parameter [IFACE_BYTES*8-1:0] IFACE_DESC = {
+        8'd9, 8'd4, 8'd0, 8'd0, 8'd2, 8'hFF, 8'h00, 8'h00, 8'd0,
+        8'd7, 8'd5, 8'h01, 8'd2, 8'd8, 8'd0, 8'd0,
+        8'd7, 8'd5, 8'h81, 8'd2, 8'd8, 8'd0, 8'd0
+    },
+    parameter [3:0]  DATA_ENDP    = 4'd1,
+    parameter [3:0]  MAXPKT       = 4'd8
 ) (
     input  wire       clk60,
     input  wire       rst_n,
@@ -106,7 +123,17 @@ module usb_device_ulpi #(
     output wire [6:0] address,
     output wire       configured,
     output wire       usb_reset,
-    output wire       phy_ready
+    output wire       phy_ready,
+
+    // The data endpoint's bytes.
+    output wire [7:0] out_data,
+    output wire       out_valid,
+    output wire       out_last,
+    input  wire       out_ready,
+    input  wire [7:0] in_data,
+    input  wire       in_valid,
+    output wire       in_ready,
+    input  wire       in_commit
 );
     wire [7:0] rx_data;
     wire       rx_valid, rx_eop, rx_active, line_idle, bus_reset;
@@ -152,11 +179,20 @@ module usb_device_ulpi #(
     // (ULPI 1.1 Table 10). Nine cycles of `line_idle` here puts the
     // transmit command on the bus eleven clocks after it, in the middle
     // of that window, which is the 2 to 6.5 bit times USB asks for.
-    usb_ctrl_ep #(
-        .VID        (VID),
-        .PID        (PID),
-        .TURNAROUND (TURNAROUND)
-    ) u_ep (
+    usb_dev_core #(
+        .VID          (VID),
+        .PID          (PID),
+        .DEV_CLASS    (DEV_CLASS),
+        .DEV_SUBCLASS (DEV_SUBCLASS),
+        .DEV_PROTOCOL (DEV_PROTOCOL),
+        .CFG_ATTR     (CFG_ATTR),
+        .CFG_POWER    (CFG_POWER),
+        .IFACE_BYTES  (IFACE_BYTES),
+        .IFACE_DESC   (IFACE_DESC),
+        .DATA_ENDP    (DATA_ENDP),
+        .MAXPKT       (MAXPKT),
+        .TURNAROUND   (TURNAROUND)
+    ) u_dev (
         .clk          (clk60),
         .rst_n        (rst_n),
         .rx_data      (rx_data),
@@ -173,7 +209,15 @@ module usb_device_ulpi #(
         .tx_byte      (tx_byte),
         .tx_busy      (tx_busy),
         .address      (address),
-        .configured   (configured)
+        .configured   (configured),
+        .out_data     (out_data),
+        .out_valid    (out_valid),
+        .out_last     (out_last),
+        .out_ready    (out_ready),
+        .in_data      (in_data),
+        .in_valid     (in_valid),
+        .in_ready     (in_ready),
+        .in_commit    (in_commit)
     );
 
     assign usb_reset = bus_reset;

@@ -1,17 +1,18 @@
-// usb_device_fs — a USB 2.0 full-speed device with a minimal control
-// endpoint.
+// usb_device_fs — a USB 2.0 full-speed device: a control endpoint that
+// enumerates and a bulk endpoint pair that moves bytes.
 //
 // What it does
-//   Everything between the D+ / D- pins and a device a host can
-//   enumerate: `usb_fs_rx` and `usb_fs_tx` for the line (NRZI, bit
-//   stuffing, SYNC and EOP) and `usb_ctrl_ep` above them for the device
-//   itself — packet decoding with the PID check nibble, the CRC5 of
-//   tokens and the CRC16 of data packets checked, and endpoint 0
-//   answering the standard requests a host needs to enumerate it. Runs
-//   on a 48 MHz clock, four samples a bit; `usb_device_fs_pll` gets that
-//   from the device's PLL and a 12 MHz board clock.
+//   Everything between the D+ / D- pins and a device a host can use:
+//   `usb_fs_rx` and `usb_fs_tx` for the line (NRZI, bit stuffing, SYNC
+//   and EOP) and `usb_dev_core` above them for the device itself — packet
+//   decoding with the PID check nibble, the CRC5 of tokens and the CRC16
+//   of data packets checked, endpoint 0 answering the standard requests a
+//   host needs to enumerate it, and a bulk endpoint pair with a byte
+//   interface brought out of this block. Runs on a 48 MHz clock, four
+//   samples a bit; `usb_device_fs_pll` gets that from the device's PLL and
+//   a 12 MHz board clock.
 //
-//   `usb_ctrl_ep` is a module of its own because `usb_device_ulpi` uses
+//   `usb_dev_core` is a module of its own because `usb_device_ulpi` uses
 //   it too: on a board whose USB lines go through a ULPI transceiver the
 //   line-level half of this block has nothing to drive, and the device
 //   above it is unchanged.
@@ -25,12 +26,17 @@
 //
 //     GET_DESCRIPTOR, device        the 18-byte device descriptor, VID
 //                                   and PID from the parameters
-//     GET_DESCRIPTOR, configuration one configuration of one interface
-//                                   with no endpoints, vendor class,
-//                                   bus powered at 100 mA: 18 bytes
+//     GET_DESCRIPTOR, configuration the nine bytes of the configuration
+//                                   descriptor, computed from the
+//                                   interface and endpoint descriptors
+//                                   `IFACE_DESC` holds, then those: 32
+//                                   bytes for the default, which is one
+//                                   vendor-specific interface with a bulk
+//                                   OUT and a bulk IN on endpoint 1
 //     SET_ADDRESS                   taken after the status stage, as the
 //                                   specification says
 //     SET_CONFIGURATION 0 or 1      accepted; `configured` follows it
+//     CLEAR_FEATURE ENDPOINT_HALT   accepted, for the data toggle
 //
 //   A descriptor goes out in as many DATA1 / DATA0 packets as it takes,
 //   never more than the host's wLength, and a packet the host does not
@@ -49,11 +55,19 @@
 //   host's EOP has ended, inside the 6.5 bit times the specification
 //   allows.
 //
+//   THE BYTES. `out_*` is what the host sent to endpoint 1 OUT, a byte at
+//   a time with `out_last` on the last byte of each packet; `in_*` is what
+//   endpoint 1 IN will send, and `in_commit` sends what has been given
+//   however short it is. `usb_bulk_ep` states the whole contract, including
+//   what a NAK means for each direction. Tie `out_ready` high and leave
+//   `in_valid` low for a device that only enumerates — but then give
+//   `IFACE_DESC` an interface with no endpoints, so that the descriptors
+//   say what the device does.
+//
 // What it does not do
-//   Endpoint 0 only: no bulk, interrupt or isochronous endpoints, so
-//   there is nothing to move data with once enumerated. It is the part
-//   every USB function needs first and the part that is easiest to get
-//   wrong, and it is what the other endpoints would be added beside.
+//   One bulk endpoint pair, eight bytes a packet, and no interrupt or
+//   isochronous endpoint — an interrupt endpoint is `usb_bulk_ep` with a
+//   different bmAttributes in the descriptor and nothing else.
 //
 //   No strings, no remote wake-up, no suspend (a device must draw under
 //   2.5 mA after 3 ms of idle, which is a board's business), no
@@ -64,8 +78,24 @@
 //   `usb_dp_o`, `usb_dn_o` and `usb_oe` out, `usb_dp_i` and `usb_dn_i`
 //   in, and the three-state buffers at the top of the design.
 module usb_device_fs #(
-    parameter [15:0] VID = 16'h1209,
-    parameter [15:0] PID = 16'h0001
+    parameter [15:0]  VID          = 16'h1209,
+    parameter [15:0]  PID          = 16'h0001,
+    parameter [7:0]   DEV_CLASS    = 8'hFF,
+    parameter [7:0]   DEV_SUBCLASS = 8'h00,
+    parameter [7:0]   DEV_PROTOCOL = 8'h00,
+    parameter [7:0]   CFG_ATTR     = 8'h80,
+    parameter [7:0]   CFG_POWER    = 8'd50,
+    // The class's interface and endpoint descriptors, in descriptor order,
+    // and their length in bytes; `usb_ctrl_ep` says what is derived from
+    // them and what is not.
+    parameter integer IFACE_BYTES  = 23,
+    parameter [IFACE_BYTES*8-1:0] IFACE_DESC = {
+        8'd9, 8'd4, 8'd0, 8'd0, 8'd2, 8'hFF, 8'h00, 8'h00, 8'd0,
+        8'd7, 8'd5, 8'h01, 8'd2, 8'd8, 8'd0, 8'd0,
+        8'd7, 8'd5, 8'h81, 8'd2, 8'd8, 8'd0, 8'd0
+    },
+    parameter [3:0]   DATA_ENDP    = 4'd1,
+    parameter [3:0]   MAXPKT       = 4'd8
 ) (
     input  wire       clk48,
     input  wire       rst_n,
@@ -79,7 +109,17 @@ module usb_device_fs #(
 
     output wire [6:0] address,
     output wire       configured,
-    output wire       usb_reset
+    output wire       usb_reset,
+
+    // The data endpoint's bytes.
+    output wire [7:0] out_data,
+    output wire       out_valid,
+    output wire       out_last,
+    input  wire       out_ready,
+    input  wire [7:0] in_data,
+    input  wire       in_valid,
+    output wire       in_ready,
+    input  wire       in_commit
 );
     // The line: NRZI, bit stuffing, SYNC and EOP, four samples a bit.
     wire       tx_busy;
@@ -125,11 +165,20 @@ module usb_device_fs #(
 
     // The device. Two bit times of idle J after the host's EOP before an
     // answer starts, which is eight cycles of this clock.
-    usb_ctrl_ep #(
-        .VID        (VID),
-        .PID        (PID),
-        .TURNAROUND (7'd8)
-    ) u_ep (
+    usb_dev_core #(
+        .VID          (VID),
+        .PID          (PID),
+        .DEV_CLASS    (DEV_CLASS),
+        .DEV_SUBCLASS (DEV_SUBCLASS),
+        .DEV_PROTOCOL (DEV_PROTOCOL),
+        .CFG_ATTR     (CFG_ATTR),
+        .CFG_POWER    (CFG_POWER),
+        .IFACE_BYTES  (IFACE_BYTES),
+        .IFACE_DESC   (IFACE_DESC),
+        .DATA_ENDP    (DATA_ENDP),
+        .MAXPKT       (MAXPKT),
+        .TURNAROUND   (7'd8)
+    ) u_dev (
         .clk          (clk48),
         .rst_n        (rst_n),
         .rx_data      (rx_data),
@@ -146,7 +195,15 @@ module usb_device_fs #(
         .tx_byte      (tx_byte),
         .tx_busy      (tx_busy),
         .address      (address),
-        .configured   (configured)
+        .configured   (configured),
+        .out_data     (out_data),
+        .out_valid    (out_valid),
+        .out_last     (out_last),
+        .out_ready    (out_ready),
+        .in_data      (in_data),
+        .in_valid     (in_valid),
+        .in_ready     (in_ready),
+        .in_commit    (in_commit)
     );
 
     // The 1.5 kOhm pull-up on D+ says a full-speed device is attached.

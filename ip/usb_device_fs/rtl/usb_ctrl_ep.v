@@ -1,27 +1,40 @@
-// usb_ctrl_ep — USB endpoint 0: the device half of a USB device, with no
-// knowledge of how its bytes reach the bus.
+// usb_ctrl_ep — USB endpoint 0: the control endpoint of a USB device, with
+// no knowledge of how its bytes reach the bus and none of what the device is
+// for.
 //
 // What it does
-//   Everything a host needs to enumerate a device, above the line:
-//   packet decoding with the PID check nibble, the CRC5 of tokens and
-//   the CRC16 of data packets checked, the data toggle, and the standard
-//   requests. It is shared. `usb_device_fs` puts it behind its own
-//   full-speed encoder and serialiser; `usb_device_ulpi` puts it behind
-//   a ULPI transceiver, which does that work in silicon. There is one
-//   statement of the control endpoint for both, the way `eth_mac_tx` and
+//   Everything a host needs to enumerate a device, above the line: the
+//   data toggle, the control transfer's three stages, and the standard
+//   requests. `usb_pkt_rx` beside it does the packet decoding — the PID
+//   check nibble, the CRC5 of tokens and the CRC16 of data packets — and
+//   this reads its one pulse per whole packet, so a second endpoint gets
+//   the same decoding without a second copy of it.
+//
+//   It is shared. `usb_device_fs` puts it behind its own full-speed
+//   encoder and serialiser; `usb_device_ulpi` puts it behind a ULPI
+//   transceiver, which does that work in silicon. There is one statement
+//   of the control endpoint for both, the way `eth_mac_tx` and
 //   `eth_mac_rx` are one statement of Ethernet framing for RMII and
 //   RGMII.
 //
 //   Endpoint 0, maximum packet size 8:
 //
-//     GET_DESCRIPTOR, device        the 18-byte device descriptor, VID
-//                                   and PID from the parameters
-//     GET_DESCRIPTOR, configuration one configuration of one interface
-//                                   with no endpoints, vendor class,
-//                                   bus powered at 100 mA: 18 bytes
+//     GET_DESCRIPTOR, device        the 18-byte device descriptor, VID,
+//                                   PID and the class triple from the
+//                                   parameters
+//     GET_DESCRIPTOR, configuration the 9-byte configuration descriptor
+//                                   this module writes, followed by the
+//                                   interface and endpoint descriptors
+//                                   `IFACE_DESC` holds
 //     SET_ADDRESS                   taken after the status stage, as the
 //                                   specification says
-//     SET_CONFIGURATION 0 or 1      accepted; `configured` follows it
+//     SET_CONFIGURATION 0 or 1      accepted; `configured` follows it,
+//                                   and every data toggle goes back to
+//                                   DATA0 as USB 2.0 §9.4.5 asks
+//     CLEAR_FEATURE ENDPOINT_HALT   accepted; that one endpoint's data
+//                                   toggle goes back to DATA0, which is
+//                                   how a host and a device agree on a
+//                                   toggle again without a bus reset
 //
 //   A descriptor goes out in as many DATA1 / DATA0 packets as it takes,
 //   never more than the host's wLength, and a packet the host does not
@@ -31,18 +44,56 @@
 //   requests to an interface or an endpoint, class and vendor requests —
 //   is answered with STALL until the next SETUP.
 //
-//   A packet whose PID check fails, whose CRC is wrong or which ends off
-//   a byte boundary never reaches `rx_eop`, so it is ignored and the
-//   host retries. A token addressed elsewhere, or to another endpoint,
-//   is ignored too. `bus_reset` sets the address back to 0 and the
-//   configuration to none.
+//   A token addressed elsewhere, or to another endpoint, is ignored.
+//   `bus_reset` sets the address back to 0 and the configuration to none.
 //
-//   The receive side is a byte at a time: `rx_active` brackets a packet,
-//   `rx_valid` strobes each byte into it, and `rx_eop` says the packet
-//   ended whole. The transmit side is a packet at a time: `tx_start`
-//   with `tx_pid`, `tx_with_data` and `tx_len`, the payload fetched
-//   through `tx_index` and `tx_byte` in the same cycle, and `tx_busy`
-//   until the packet is gone.
+// THE CONFIGURATION DESCRIPTOR IS THE CLASS'S, NOT THIS MODULE'S
+//   This used to be eighteen bytes of `case` in here: a configuration, one
+//   interface, no endpoints, and `wTotalLength` typed out as `18` four
+//   lines above the `9` and the `9` it is the sum of. A device that moves
+//   bytes has endpoint descriptors, a device that is a HID has an
+//   interface that says so, and none of that belongs to endpoint 0.
+//
+//   So a design states its interface and endpoint descriptors, and this
+//   module states the nine bytes of the configuration descriptor that
+//   wrap them — because those nine bytes are **arithmetic over the rest**
+//   and arithmetic is what gets restated wrongly:
+//
+//     wTotalLength    9 + IFACE_BYTES, computed here
+//     bNumInterfaces  the INTERFACE descriptors in `IFACE_DESC`, counted
+//                     here at elaboration
+//     bNumEndpoints   the ENDPOINT descriptors after each INTERFACE
+//                     descriptor, counted here at elaboration and
+//                     **written over** whatever byte 4 of that interface
+//                     descriptor held
+//
+//   None of the three can disagree with the descriptors, because none of
+//   the three is read from them. `IFACE_DESC` is a concatenation, so it is
+//   written in descriptor order — most significant part first is what
+//   Verilog concatenates, and that is the order `lsusb -v` prints — and
+//   `in_index_order` below turns it round once, at elaboration, into the
+//   byte-indexed form the rest of this file uses. `IFACE_BYTES` is that
+//   concatenation's length in bytes and is the one number a design states
+//   twice: get it wrong and the value is truncated at its top, so byte 0
+//   is no longer a bLength and `bNumInterfaces` comes out wrong, which
+//   `tests/ip_library.rs` compares against a descriptor written forwards
+//   in Rust.
+//
+//   A wide parameter was chosen over a descriptor module with a byte port
+//   for one reason: a descriptor is not logic. As a parameter it is a
+//   constant this module indexes, `bNumEndpoints` can be counted by a
+//   constant function at elaboration, and a design that wants a different
+//   class changes one instantiation rather than adding a module and four
+//   wires to its top level. A descriptor module would have put the
+//   arithmetic back in two places — the module's bytes and the core's
+//   length — which is the thing being fixed.
+//
+//   The receive side is `usb_pkt_rx`'s one pulse per packet. The transmit
+//   side is a packet at a time: `tx_start` with `tx_pid`, `tx_with_data`
+//   and `tx_len`, the payload fetched through `tx_index` and `tx_byte` in
+//   the same cycle, and `tx_busy` until the packet is gone. `sel` is what
+//   says this endpoint owns the transmitter, since a device with more than
+//   one endpoint has more than one thing that could answer.
 //
 //   `TURNAROUND` is how many cycles of `line_idle` must pass after a
 //   host packet before the answer starts, and what it has to be depends
@@ -52,23 +103,47 @@
 //   Table 10 — from the receive command that reports the bus back at J.
 //
 // What it does not do
-//   Endpoint 0 only: no bulk, interrupt or isochronous endpoints, so
-//   there is nothing to move data with once enumerated. It is the part
-//   every USB function needs first and the part that is easiest to get
-//   wrong, and it is what the other endpoints would be added beside.
+//   Endpoint 0 only. `usb_bulk_ep` is the endpoint that moves bytes and
+//   it sits beside this one, reading the same `usb_pkt_rx`; `usb_dev_core`
+//   is the two of them and the transmitter they share.
 //
 //   No strings, no remote wake-up, no suspend, no SOF tracking and no
 //   low speed. Eight bytes of payload at most in either direction, which
-//   is what a maximum packet size of eight needs.
+//   is what a maximum packet size of eight needs. A configuration
+//   descriptor of at most 9 + 64 bytes, which is `DESC_MAX` below and is
+//   room for a HID interface or a CDC ACM pair.
 //
 //   Nothing here knows about NRZI, bit stuffing, SYNC, EOP or line
-//   states. It does check the CRC16 of what it receives and it expects
-//   whatever transmits for it to append one, because that is the
-//   device's job in both arrangements: a ULPI transceiver prepends SYNC
-//   and appends the EOP but never touches a CRC (ULPI 1.1 §3.8.2.2).
+//   states, and nothing here checks a CRC — `usb_pkt_rx` does that, and
+//   whatever transmits for this is expected to append one, because that
+//   is the device's job in both arrangements: a ULPI transceiver prepends
+//   SYNC and appends the EOP but never touches a CRC (ULPI 1.1 §3.8.2.2).
 module usb_ctrl_ep #(
-    parameter [15:0] VID        = 16'h1209,
-    parameter [15:0] PID        = 16'h0001,
+    parameter [15:0] VID          = 16'h1209,
+    parameter [15:0] PID          = 16'h0001,
+    // bDeviceClass, bDeviceSubClass and bDeviceProtocol. `FFh` is vendor
+    // specific, which is what a device whose class lives in its interface
+    // descriptor says; a CDC device says `02h` here instead.
+    parameter [7:0]  DEV_CLASS    = 8'hFF,
+    parameter [7:0]  DEV_SUBCLASS = 8'h00,
+    parameter [7:0]  DEV_PROTOCOL = 8'h00,
+    // bmAttributes and bMaxPower of the configuration: bus powered, 100 mA.
+    parameter [7:0]  CFG_ATTR     = 8'h80,
+    parameter [7:0]  CFG_POWER    = 8'd50,
+    // The interface and endpoint descriptors, in descriptor order, and
+    // their length in bytes. The default is one vendor-specific interface
+    // with a bulk OUT and a bulk IN on endpoint 1, which is what
+    // `usb_bulk_ep` implements.
+    parameter integer IFACE_BYTES = 23,
+    parameter [IFACE_BYTES*8-1:0] IFACE_DESC = {
+        // INTERFACE: one interface, vendor specific. Byte 4 is
+        // bNumEndpoints and is counted below rather than believed.
+        8'd9, 8'd4, 8'd0, 8'd0, 8'd2, 8'hFF, 8'h00, 8'h00, 8'd0,
+        // ENDPOINT 1 OUT: bulk, 8 bytes, no interval.
+        8'd7, 8'd5, 8'h01, 8'd2, 8'd8, 8'd0, 8'd0,
+        // ENDPOINT 1 IN: bulk, 8 bytes, no interval.
+        8'd7, 8'd5, 8'h81, 8'd2, 8'd8, 8'd0, 8'd0
+    },
     // Cycles of `line_idle` before an answer starts. Seven bits wide, and
     // not four, because what a **host** tolerates is wider than what ULPI
     // asks a Link for: USB 2.0 §7.1.19.1 has a host wait 16 bit times for a
@@ -81,15 +156,24 @@ module usb_ctrl_ep #(
     input  wire       clk,
     input  wire       rst_n,
 
-    // The bytes of a received packet.
-    input  wire [7:0] rx_data,
-    input  wire       rx_valid,
-    input  wire       rx_eop,
-    input  wire       rx_active,
+    // One whole packet, from `usb_pkt_rx`.
+    input  wire        pkt,
+    input  wire [3:0]  pkt_pid,
+    input  wire        pkt_is_token,
+    input  wire        pkt_is_data,
+    input  wire        tok_ok,
+    input  wire [6:0]  tok_addr,
+    input  wire [3:0]  tok_endp,
+    input  wire        dat_ok,
+    input  wire [3:0]  dat_len,
+    input  wire [63:0] dat,
+
     // The bus is idle, so an answer may be timed from now.
     input  wire       line_idle,
     // The host has reset the bus.
     input  wire       bus_reset,
+    // This endpoint owns the transmitter.
+    input  wire       sel,
 
     // One packet out.
     output reg        tx_start,
@@ -101,7 +185,16 @@ module usb_ctrl_ep #(
     input  wire       tx_busy,
 
     output wire [6:0] address,
-    output wire       configured
+    output wire       configured,
+
+    // Data toggles, for the endpoints beside this one. `ep_reset` is one
+    // cycle when SET_CONFIGURATION has been accepted and every endpoint's
+    // toggle goes back to DATA0; `ep_clear` is one cycle when
+    // CLEAR_FEATURE(ENDPOINT_HALT) has been accepted for the endpoint
+    // address `ep_clear_ep` names, direction bit and all.
+    output reg        ep_reset,
+    output reg        ep_clear,
+    output reg  [7:0] ep_clear_ep
 );
     // PIDs, the low nibble as it appears on the wire.
     localparam [3:0] PID_OUT   = 4'b0001;
@@ -112,10 +205,6 @@ module usb_ctrl_ep #(
     localparam [3:0] PID_ACK   = 4'b0010;
     localparam [3:0] PID_NAK   = 4'b1010;
     localparam [3:0] PID_STALL = 4'b1110;
-
-    // The residues a correct CRC leaves in these reflected registers.
-    localparam [4:0]  CRC5_RESIDUE  = 5'h06;
-    localparam [15:0] CRC16_RESIDUE = 16'hB001;
 
     // Control transfer stages.
     // **Two bits, because there are four of them.**
@@ -145,54 +234,117 @@ module usb_ctrl_ep #(
     localparam [1:0] X_OUT   = 2'd2;
 
     // -----------------------------------------------------------------
-    // CRCs, a byte at a time, reflected, as the bytes arrive.
+    // The descriptors, worked out once at elaboration.
     // -----------------------------------------------------------------
-    function [4:0] crc5_byte;
-        input [4:0] c;
-        input [7:0] d;
-        integer     i;
-        reg   [4:0] r;
+    // Bytes of interface and endpoint descriptors this module can index.
+    // A power of two, because the index is masked to its width rather than
+    // trusted to be in range.
+    localparam integer DESC_MAX = 64;
+
+    // `IFACE_DESC` with byte 0 in the low eight bits.
+    //
+    // A concatenation's first element is its most significant, so taking
+    // the low byte of the value repeatedly walks the descriptors
+    // **backwards**, and shifting each one into the top of an accumulator
+    // puts them back in order. Written with shifts and no part-selects on
+    // purpose: an index that a width checker cannot bound is a warning at
+    // best and a wrong byte at worst.
+    function [DESC_MAX*8-1:0] in_index_order;
+        input [IFACE_BYTES*8-1:0] blob;
+        integer                   k;
+        reg [IFACE_BYTES*8-1:0]   rest;
+        reg [DESC_MAX*8-1:0]      out;
         begin
-            r = c;
-            for (i = 0; i < 8; i = i + 1)
-                r = (r[0] ^ d[i]) ? ((r >> 1) ^ 5'h14) : (r >> 1);
-            crc5_byte = r;
+            rest = blob;
+            out  = {(DESC_MAX*8){1'b0}};
+            for (k = 0; k < IFACE_BYTES; k = k + 1) begin
+                out  = (out << 8) | (rest & {{(IFACE_BYTES*8-8){1'b0}}, 8'hFF});
+                rest = rest >> 8;
+            end
+            in_index_order = out;
         end
     endfunction
 
-    function [15:0] crc16_byte;
-        input [15:0] c;
-        input [7:0]  d;
-        integer      i;
-        reg   [15:0] r;
+    // One byte of a byte-indexed blob.
+    function [7:0] byte_at;
+        input [DESC_MAX*8-1:0] blob;
+        input integer          off;
         begin
-            r = c;
-            for (i = 0; i < 8; i = i + 1)
-                r = (r[0] ^ d[i]) ? ((r >> 1) ^ 16'hA001) : (r >> 1);
-            crc16_byte = r;
+            byte_at = (blob >> (off * 8)) & {{(DESC_MAX*8-8){1'b0}}, 8'hFF};
         end
     endfunction
 
-    // -----------------------------------------------------------------
-    // Receiving a packet.
-    // -----------------------------------------------------------------
-    reg [3:0]  n;          // bytes received, PID included
-    reg [7:0]  pid_byte;
-    reg [7:0]  tok0, tok1;
-    reg [7:0]  d0, d1, d2, d3, d4, d5, d6, d7;
-    reg [4:0]  crc5;
-    reg [15:0] crc16;
-    reg        too_long;
+    // A byte written over whatever was there, by XOR so that no mask of
+    // the blob's width has to be spelled out.
+    function [DESC_MAX*8-1:0] byte_over;
+        input [DESC_MAX*8-1:0] blob;
+        input integer          off;
+        input integer          val;
+        reg [7:0]              was, now;
+        begin
+            was       = byte_at(blob, off);
+            now       = val[7:0];
+            byte_over = blob ^ ({{(DESC_MAX*8-8){1'b0}}, was ^ now} << (off * 8));
+        end
+    endfunction
 
-    wire [3:0] pid       = pid_byte[3:0];
-    wire       pid_ok    = (pid_byte[7:4] == ~pid_byte[3:0]);
-    wire       is_token  = (pid == PID_OUT) | (pid == PID_IN) | (pid == PID_SETUP);
-    wire       is_data   = (pid == PID_DATA0) | (pid == PID_DATA1);
-    wire [6:0] tok_addr  = tok0[6:0];
-    wire [3:0] tok_endp  = {tok1[2:0], tok0[7]};
-    wire       token_ok  = (n == 4'd3) & (crc5 == CRC5_RESIDUE);
-    wire       data_ok   = (n >= 4'd3) & ~too_long & (crc16 == CRC16_RESIDUE);
-    wire [3:0] data_len  = n - 4'd3;
+    // The INTERFACE descriptors in the blob, counted along the chain of
+    // bLength fields.
+    function [7:0] iface_count;
+        input [DESC_MAX*8-1:0] blob;
+        integer                k, len, n;
+        begin
+            n = 0;
+            k = 0;
+            while (k + 1 < IFACE_BYTES) begin
+                len = byte_at(blob, k);
+                if (len == 0) begin
+                    k = IFACE_BYTES;
+                end else begin
+                    if (byte_at(blob, k + 1) == 8'd4) n = n + 1;
+                    k = k + len;
+                end
+            end
+            iface_count = n[7:0];
+        end
+    endfunction
+
+    // bNumEndpoints of every interface descriptor, replaced by the number
+    // of ENDPOINT descriptors that follow it before the next interface.
+    function [DESC_MAX*8-1:0] with_endpoint_counts;
+        input [DESC_MAX*8-1:0] blob;
+        integer                k, len, kind, at, n;
+        reg [DESC_MAX*8-1:0]   out;
+        begin
+            out = blob;
+            at  = -1;
+            n   = 0;
+            k   = 0;
+            while (k + 1 < IFACE_BYTES) begin
+                len  = byte_at(blob, k);
+                kind = byte_at(blob, k + 1);
+                if (len == 0) begin
+                    k = IFACE_BYTES;
+                end else begin
+                    if (kind == 4) begin
+                        if (at >= 0) out = byte_over(out, at + 4, n);
+                        at = k;
+                        n  = 0;
+                    end else if (kind == 5) begin
+                        n = n + 1;
+                    end
+                    k = k + len;
+                end
+            end
+            if (at >= 0) out = byte_over(out, at + 4, n);
+            with_endpoint_counts = out;
+        end
+    endfunction
+
+    localparam [DESC_MAX*8-1:0] IFACE = with_endpoint_counts(in_index_order(IFACE_DESC));
+    localparam [7:0]            NUM_IFACE = iface_count(IFACE);
+    // wTotalLength: the nine bytes below plus the class's own.
+    localparam [15:0]           CFG_TOTAL = 16'd9 + IFACE_BYTES;
 
     // -----------------------------------------------------------------
     // Endpoint 0.
@@ -207,8 +359,8 @@ module usb_ctrl_ep #(
     reg [1:0]  expect;
     reg        toggle;
     reg        desc_sel;    // 0 device, 1 configuration
-    reg [4:0]  in_total;    // bytes the data stage sends
-    reg [4:0]  in_offset;   // bytes the host has acknowledged
+    reg [6:0]  in_total;    // bytes the data stage sends
+    reg [6:0]  in_offset;   // bytes the host has acknowledged
     reg [3:0]  in_len;      // bytes in the packet awaiting its ACK
     reg        await_ack;
 
@@ -224,83 +376,82 @@ module usb_ctrl_ep #(
 
     // The descriptors, one byte at a time.
     function [7:0] desc;
-        input       sel;
-        input [4:0] i;
+        input       sel_in;
+        input [6:0] i;
+        reg   [6:0] j;
         begin
-            if (!sel) begin
+            if (!sel_in) begin
                 case (i)
-                    5'd0:    desc = 8'd18;        // bLength
-                    5'd1:    desc = 8'd1;         // DEVICE
-                    5'd2:    desc = 8'h00;        // bcdUSB 2.00
-                    5'd3:    desc = 8'h02;
-                    5'd4:    desc = 8'hFF;        // vendor specific
-                    5'd5:    desc = 8'h00;
-                    5'd6:    desc = 8'h00;
-                    5'd7:    desc = 8'd8;         // bMaxPacketSize0
-                    5'd8:    desc = VID[7:0];
-                    5'd9:    desc = VID[15:8];
-                    5'd10:   desc = PID[7:0];
-                    5'd11:   desc = PID[15:8];
-                    5'd12:   desc = 8'h00;        // bcdDevice 1.00
-                    5'd13:   desc = 8'h01;
-                    5'd14:   desc = 8'd0;         // no strings
-                    5'd15:   desc = 8'd0;
-                    5'd16:   desc = 8'd0;
-                    5'd17:   desc = 8'd1;         // one configuration
+                    7'd0:    desc = 8'd18;        // bLength
+                    7'd1:    desc = 8'd1;         // DEVICE
+                    7'd2:    desc = 8'h00;        // bcdUSB 2.00
+                    7'd3:    desc = 8'h02;
+                    7'd4:    desc = DEV_CLASS;
+                    7'd5:    desc = DEV_SUBCLASS;
+                    7'd6:    desc = DEV_PROTOCOL;
+                    7'd7:    desc = 8'd8;         // bMaxPacketSize0
+                    7'd8:    desc = VID[7:0];
+                    7'd9:    desc = VID[15:8];
+                    7'd10:   desc = PID[7:0];
+                    7'd11:   desc = PID[15:8];
+                    7'd12:   desc = 8'h00;        // bcdDevice 1.00
+                    7'd13:   desc = 8'h01;
+                    7'd14:   desc = 8'd0;         // no strings
+                    7'd15:   desc = 8'd0;
+                    7'd16:   desc = 8'd0;
+                    7'd17:   desc = 8'd1;         // one configuration
                     default: desc = 8'd0;
+                endcase
+            end else if (i < 7'd9) begin
+                case (i[3:0])
+                    4'd0:    desc = 8'd9;         // bLength
+                    4'd1:    desc = 8'd2;         // CONFIGURATION
+                    4'd2:    desc = CFG_TOTAL[7:0];
+                    4'd3:    desc = CFG_TOTAL[15:8];
+                    4'd4:    desc = NUM_IFACE;
+                    4'd5:    desc = 8'd1;         // bConfigurationValue
+                    4'd6:    desc = 8'd0;         // iConfiguration
+                    4'd7:    desc = CFG_ATTR;
+                    default: desc = CFG_POWER;
                 endcase
             end else begin
-                case (i)
-                    5'd0:    desc = 8'd9;         // bLength
-                    5'd1:    desc = 8'd2;         // CONFIGURATION
-                    5'd2:    desc = 8'd18;        // wTotalLength
-                    5'd3:    desc = 8'd0;
-                    5'd4:    desc = 8'd1;         // one interface
-                    5'd5:    desc = 8'd1;         // bConfigurationValue
-                    5'd6:    desc = 8'd0;
-                    5'd7:    desc = 8'h80;        // bus powered
-                    5'd8:    desc = 8'd50;        // 100 mA
-                    5'd9:    desc = 8'd9;         // bLength
-                    5'd10:   desc = 8'd4;         // INTERFACE
-                    5'd11:   desc = 8'd0;         // bInterfaceNumber
-                    5'd12:   desc = 8'd0;         // bAlternateSetting
-                    5'd13:   desc = 8'd0;         // no endpoints
-                    5'd14:   desc = 8'hFF;        // vendor specific
-                    5'd15:   desc = 8'h00;
-                    5'd16:   desc = 8'h00;
-                    5'd17:   desc = 8'd0;
-                    default: desc = 8'd0;
-                endcase
+                // The class's own descriptors, the index masked to the
+                // blob's width so that no expression here can reach
+                // outside it.
+                j    = i - 7'd9;
+                desc = IFACE[j[5:0] * 8 +: 8];
             end
         end
     endfunction
 
-    assign tx_byte = desc(desc_sel, in_offset + {1'b0, tx_index});
+    assign tx_byte = desc(desc_sel, in_offset + {3'b000, tx_index});
 
     // The next packet of the data stage.
-    wire [4:0] in_left  = in_total - in_offset;
-    wire [3:0] in_chunk = (in_left > 5'd8) ? 4'd8 : in_left[3:0];
+    wire [6:0] in_left  = in_total - in_offset;
+    wire [3:0] in_chunk = (in_left > 7'd8) ? 4'd8 : in_left[3:0];
 
-    // The request, decoded from the SETUP data.
-    wire [15:0] w_length = {d7, d6};
-    wire        get_desc = (d0 == 8'h80) & (d1 == 8'h06) & (d2 == 8'h00)
-                         & ((d3 == 8'h01) | (d3 == 8'h02));
-    wire        set_adr  = (d0 == 8'h00) & (d1 == 8'h05) & ~d2[7] & (d3 == 8'h00);
-    wire        set_cfg  = (d0 == 8'h00) & (d1 == 8'h09) & (d2[7:1] == 7'd0) & (d3 == 8'h00);
-    wire [4:0]  desc_len = 5'd18;
-    wire [4:0]  send_len = (w_length < {11'd0, desc_len}) ? w_length[4:0] : desc_len;
+    // The SETUP request, from the data packet in the cycle it arrives.
+    wire [7:0]  s0 = dat[7:0];
+    wire [7:0]  s1 = dat[15:8];
+    wire [7:0]  s2 = dat[23:16];
+    wire [7:0]  s3 = dat[31:24];
+    wire [7:0]  s4 = dat[39:32];
+    wire [15:0] w_length = dat[63:48];
+    wire        get_desc = (s0 == 8'h80) & (s1 == 8'h06) & (s2 == 8'h00)
+                         & ((s3 == 8'h01) | (s3 == 8'h02));
+    wire        set_adr  = (s0 == 8'h00) & (s1 == 8'h05) & ~s2[7] & (s3 == 8'h00);
+    wire        set_cfg  = (s0 == 8'h00) & (s1 == 8'h09) & (s2[7:1] == 7'd0) & (s3 == 8'h00);
+    // CLEAR_FEATURE(ENDPOINT_HALT) on an endpoint: bmRequestType 02h is
+    // host to device, standard, to an endpoint; bRequest 01h is
+    // CLEAR_FEATURE; wValue 0000h is ENDPOINT_HALT; wIndex is the
+    // endpoint's address. Nothing here ever halts an endpoint, so this is
+    // accepted for its other documented effect, which is the toggle.
+    wire        clr_halt = (s0 == 8'h02) & (s1 == 8'h01) & (s2 == 8'h00) & (s3 == 8'h00);
+    wire [6:0]  desc_len = (s3 == 8'h02) ? CFG_TOTAL[6:0] : 7'd18;
+    wire [6:0]  send_len = (w_length < {9'd0, desc_len}) ? w_length[6:0] : desc_len;
 
     always @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
-            n              <= 4'd0;
-            pid_byte       <= 8'd0;
-            tok0           <= 8'd0;
-            tok1           <= 8'd0;
-            d0 <= 8'd0; d1 <= 8'd0; d2 <= 8'd0; d3 <= 8'd0;
-            d4 <= 8'd0; d5 <= 8'd0; d6 <= 8'd0; d7 <= 8'd0;
-            crc5           <= 5'h1F;
-            crc16          <= 16'hFFFF;
-            too_long       <= 1'b0;
             addr           <= 7'd0;
             pending_addr   <= 7'd0;
             set_addr       <= 1'b0;
@@ -311,8 +462,8 @@ module usb_ctrl_ep #(
             expect         <= X_NONE;
             toggle         <= 1'b0;
             desc_sel       <= 1'b0;
-            in_total       <= 5'd0;
-            in_offset      <= 5'd0;
+            in_total       <= 7'd0;
+            in_offset      <= 7'd0;
             in_len         <= 4'd0;
             await_ack      <= 1'b0;
             pending        <= 1'b0;
@@ -324,49 +475,24 @@ module usb_ctrl_ep #(
             tx_pid         <= 4'd0;
             tx_with_data   <= 1'b0;
             tx_len         <= 4'd0;
+            ep_reset       <= 1'b0;
+            ep_clear       <= 1'b0;
+            ep_clear_ep    <= 8'd0;
         end else begin
             tx_start <= 1'b0;
-
-            // Bytes as they arrive.
-            if (!rx_active) begin
-                n        <= 4'd0;
-                crc5     <= 5'h1F;
-                crc16    <= 16'hFFFF;
-                too_long <= 1'b0;
-            end
-            if (rx_valid) begin
-                if (n != 4'd15) n <= n + 4'd1;
-                if (n == 4'd0) begin
-                    pid_byte <= rx_data;
-                end else begin
-                    crc5  <= crc5_byte(crc5, rx_data);
-                    crc16 <= crc16_byte(crc16, rx_data);
-                    case (n)
-                        4'd1:  begin tok0 <= rx_data; d0 <= rx_data; end
-                        4'd2:  begin tok1 <= rx_data; d1 <= rx_data; end
-                        4'd3:  d2 <= rx_data;
-                        4'd4:  d3 <= rx_data;
-                        4'd5:  d4 <= rx_data;
-                        4'd6:  d5 <= rx_data;
-                        4'd7:  d6 <= rx_data;
-                        4'd8:  d7 <= rx_data;
-                        4'd9:  begin end
-                        4'd10: begin end
-                        default: too_long <= 1'b1;
-                    endcase
-                end
-            end
+            ep_reset <= 1'b0;
+            ep_clear <= 1'b0;
 
             // A whole packet.
-            if (rx_eop && pid_ok) begin
-                if (is_token) begin
+            if (pkt) begin
+                if (pkt_is_token) begin
                     // A token ends any wait for a handshake.
                     await_ack <= 1'b0;
                     expect    <= X_NONE;
-                    if (token_ok && tok_addr == addr && tok_endp == 4'd0) begin
-                        if (pid == PID_SETUP) begin
+                    if (tok_ok && tok_addr == addr && tok_endp == 4'd0) begin
+                        if (pkt_pid == PID_SETUP) begin
                             expect <= X_SETUP;
-                        end else if (pid == PID_OUT) begin
+                        end else if (pkt_pid == PID_OUT) begin
                             expect <= X_OUT;
                         end else begin
                             // IN: answer from the stage we are in.
@@ -397,9 +523,9 @@ module usb_ctrl_ep #(
                             endcase
                         end
                     end
-                end else if (is_data) begin
+                end else if (pkt_is_data) begin
                     expect <= X_NONE;
-                    if (data_ok && expect == X_SETUP) begin
+                    if (dat_ok && expect == X_SETUP) begin
                         // A SETUP is always acknowledged, and starts a
                         // new control transfer whatever the last one was
                         // doing.
@@ -408,31 +534,35 @@ module usb_ctrl_ep #(
                         pend_pid  <= PID_ACK;
                         pend_data <= 1'b0;
                         toggle    <= 1'b1;
-                        in_offset <= 5'd0;
+                        in_offset <= 7'd0;
                         set_addr  <= 1'b0;
                         set_config <= 1'b0;
-                        if (pid != PID_DATA0 || data_len != 4'd8) begin
+                        if (pkt_pid != PID_DATA0 || dat_len != 4'd8) begin
                             stage <= C_STALL;
                         end else if (get_desc) begin
                             stage    <= C_DATA_IN;
-                            desc_sel <= (d3 == 8'h02);
+                            desc_sel <= (s3 == 8'h02);
                             in_total <= send_len;
                         end else if (set_adr) begin
                             stage        <= C_STATUS_IN;
-                            pending_addr <= d2[6:0];
+                            pending_addr <= s2[6:0];
                             set_addr     <= 1'b1;
                         end else if (set_cfg) begin
                             stage          <= C_STATUS_IN;
-                            pending_config <= d2[0];
+                            pending_config <= s2[0];
                             set_config     <= 1'b1;
+                        end else if (clr_halt) begin
+                            stage       <= C_STATUS_IN;
+                            ep_clear    <= 1'b1;
+                            ep_clear_ep <= s4;
                         end else begin
                             stage <= C_STALL;
                         end
-                    end else if (data_ok && expect == X_OUT) begin
+                    end else if (dat_ok && expect == X_OUT) begin
                         pending   <= 1'b1;
                         turn      <= 7'd0;
                         pend_data <= 1'b0;
-                        if (stage == C_DATA_IN && data_len == 4'd0) begin
+                        if (stage == C_DATA_IN && dat_len == 4'd0) begin
                             // The status stage of a read.
                             pend_pid <= PID_ACK;
                             stage    <= C_IDLE;
@@ -440,15 +570,18 @@ module usb_ctrl_ep #(
                             pend_pid <= PID_STALL;
                         end
                     end
-                end else if (pid == PID_ACK && await_ack) begin
+                end else if (pkt_pid == PID_ACK && await_ack) begin
                     await_ack <= 1'b0;
                     if (stage == C_DATA_IN) begin
-                        in_offset <= in_offset + {1'b0, in_len};
+                        in_offset <= in_offset + {3'b000, in_len};
                         toggle    <= ~toggle;
                     end else if (stage == C_STATUS_IN) begin
                         stage <= C_IDLE;
                         if (set_addr)   addr     <= pending_addr;
-                        if (set_config) config_q <= pending_config;
+                        if (set_config) begin
+                            config_q <= pending_config;
+                            ep_reset <= 1'b1;
+                        end
                         set_addr   <= 1'b0;
                         set_config <= 1'b0;
                     end
@@ -458,8 +591,11 @@ module usb_ctrl_ep #(
             end
 
             // The answer, once the host's EOP is over and the bus has
-            // been J for the turnaround.
-            if (pending && !tx_busy) begin
+            // been J for the turnaround. `sel` gates it because the
+            // transmitter is shared: a token for another endpoint is
+            // that endpoint's to answer, and this one keeps its state
+            // until the host comes back to it.
+            if (pending && !tx_busy && sel) begin
                 if (!line_idle) begin
                     turn <= 7'd0;
                 end else if (turn == TURNAROUND) begin
