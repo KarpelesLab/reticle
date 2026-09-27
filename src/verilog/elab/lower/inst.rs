@@ -315,7 +315,11 @@ impl<'cx, 'ast> Lowerer<'cx, 'ast> {
                 Diagnostic::warning(format!("no module named `{module}` was found"))
                     .with_code(codes::BLACKBOX)
                     .with_label(name.span, "instantiated here")
-                    .with_note("the instance is kept as a black box; its ports are not checked"),
+                    .with_note("the instance is kept as a black box; its ports are not checked")
+                    .with_note(format!(
+                        "Reticle has no library search path, so nothing will find `{module}` \
+                         later unless the target supplies it: add the file that defines it"
+                    )),
             );
             None
         };

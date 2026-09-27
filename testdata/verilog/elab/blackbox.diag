@@ -5,4 +5,5 @@ warning[V0023]: no module named `vendor_ram` was found
   |                             ^^^^^ instantiated here
   |
   = note: the instance is kept as a black box; its ports are not checked
+  = note: Reticle has no library search path, so nothing will find `vendor_ram` later unless the target supplies it: add the file that defines it
 
