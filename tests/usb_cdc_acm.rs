@@ -379,6 +379,46 @@ fn a_serial_port_this_compiler_built_is_bound_by_the_kernels_own_driver() {
                  byte for byte",
                 payload.len()
             );
+
+            // What the host put in the device's line-coding registers. 115200
+            // is `stty`'s and 9600 is the block's reset value, so which of the
+            // two comes back says whether SET_LINE_CODING was ever sent.
+            if let Ok(handle) = device.open() {
+                match line_coding(&handle) {
+                    Ok(coding) => {
+                        let rate = u32::from_le_bytes([coding[0], coding[1], coding[2], coding[3]]);
+                        println!(
+                            "GET_LINE_CODING: {rate} baud, bCharFormat {}, bParityType {}, \
+                             bDataBits {}",
+                            coding[4], coding[5], coding[6]
+                        );
+                        assert_eq!(
+                            rate, 115_200,
+                            "the host set the line coding and the device kept it; 9600 would \
+                             mean SET_LINE_CODING never arrived, since that is the reset value"
+                        );
+                    }
+                    Err(why) => {
+                        println!("GET_LINE_CODING was not asked ({why})");
+                        println!(
+                            "  a udev rule or membership of the right group is usually why; \
+                             the class hook's host-to-device data stage is then unproven on \
+                             this host and proven only in simulation"
+                        );
+                    }
+                }
+            }
+
+            // And the driver is back, with a terminal of its own again. The
+            // number may have moved, which is why this looks it up rather than
+            // remembering it.
+            match tty_ports(VID, PID).first() {
+                Some(again) => println!("`cdc_acm` is back on {}", again.display()),
+                None => panic!(
+                    "the line coding was read and the device has no /dev/ttyACM* any more: \
+                     `cdc_acm` did not re-attach. Unplug and replug the board."
+                ),
+            }
         }
         Ok(Err(why)) => panic!("the round trip through {path} failed: {why}"),
         Err(_) => panic!(
@@ -387,6 +427,69 @@ fn a_serial_port_this_compiler_built_is_bound_by_the_kernels_own_driver() {
              dark means it never left the endpoint. \
              testdata/fpga/cynthion/usb_cdc_uart.v says how to read them."
         ),
+    }
+}
+
+/// GET_LINE_CODING, asked of the part directly, so that what the **host** put
+/// in the device's registers can be read back out of them.
+///
+/// This is the only thing in this file that proves the class hook's
+/// **host-to-device data stage** on real hardware. The round trip proves the
+/// bulk endpoints; the port opening at all proves SET_CONTROL_LINE_STATE,
+/// since `cdc_acm` fails `open` if that stalls; but SET_LINE_CODING is the one
+/// request with a data packet behind it, and nothing above would notice if its
+/// seven bytes had never arrived. `dwDTERate` comes up at **9600** and `stty`
+/// asked for **115200**, so which of the two comes back is the whole
+/// assertion.
+///
+/// **It has to take the interface away from `cdc_acm` to ask**, and that is
+/// not a choice: usbfs refuses a control transfer addressed to an interface
+/// another driver holds — `resource busy (os error 16)`, which is what this
+/// returned before it did the detaching. So it detaches, claims, asks,
+/// releases and **attaches the driver again**, and the caller checks the
+/// terminal came back. The line coding is read *after* `stty` has set it and
+/// survives the detach, because it is a register in the device and not
+/// anything the host is keeping.
+fn line_coding(handle: &rawusb::DeviceHandle) -> Result<Vec<u8>, String> {
+    let held = handle.kernel_driver_active(COMM_IFACE).unwrap_or(false);
+    if held {
+        handle
+            .detach_kernel_driver(COMM_IFACE)
+            .map_err(|e| format!("detaching the driver from interface {COMM_IFACE}: {e}"))?;
+    }
+    let claimed = handle.claim_interface(COMM_IFACE);
+    let mut coding = [0u8; 7];
+    let asked = if claimed.is_ok() {
+        handle
+            .control_read(
+                0xA1,
+                0x21,
+                0x0000,
+                u16::from(COMM_IFACE),
+                &mut coding,
+                TIMEOUT,
+            )
+            .map_err(|e| format!("{e}"))
+    } else {
+        Err(format!("claiming interface {COMM_IFACE}: {claimed:?}"))
+    };
+    // Give it back whatever happened, and say so if that fails, because a
+    // device left without its driver is a device the next person finds broken.
+    if claimed.is_ok() {
+        let _ = handle.release_interface(COMM_IFACE);
+    }
+    if held {
+        if let Err(err) = handle.attach_kernel_driver(COMM_IFACE) {
+            return Err(format!(
+                "the line coding was read but `cdc_acm` could not be put back on interface \
+                 {COMM_IFACE} ({err}); unplug and replug the board"
+            ));
+        }
+    }
+    match asked {
+        Ok(7) => Ok(coding.to_vec()),
+        Ok(n) => Err(format!("GET_LINE_CODING answered {n} bytes and not seven")),
+        Err(err) => Err(err),
     }
 }
 

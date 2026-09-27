@@ -68,13 +68,18 @@ descriptors themselves says the two belong together. What says it is the
 *subordinate* interfaces. A device with two interfaces and no union
 descriptor is two unrelated interfaces as far as a host can tell.
 
-**CHECKED**. Linux's `cdc_acm` reads the union descriptor to decide which
-interface is the control one and which carries the data. Its normal probe
-path takes `union_desc->bMasterInterface0` and
-`bSlaveInterface0`; without a union descriptor it falls into a path that is
-only taken for devices in its own quirk table. §5's `lsusb -v` shows the
-descriptor being read back off the part, and §5's kernel log shows the
-driver binding.
+**CHECKED**, and precisely this much: a device whose descriptors are the set
+in §3 — union descriptor included — is bound by `cdc_acm` on the kernel §5
+names, and the port opens and carries bytes.
+
+**MEDIUM**, and no more, for *why*: that `cdc_acm` reads the union descriptor
+to decide which interface is the control one and which carries the data, and
+that a device without one reaches a path meant for devices in its own quirk
+table. Nothing here read that driver's source and nothing here watched the
+bus. What would settle it is a device built **without** the union descriptor,
+which this project has not put on a board — so the union descriptor is here
+because the specification asks for it and because leaving it out is a risk
+nobody has measured, not because its absence was seen to fail.
 
 **MEDIUM**. That is why the union descriptor is not optional *in practice*
 even though CDC 1.1 Table 33 describes it as one of several functional
@@ -181,12 +186,22 @@ answers all three requests and never sends a Serial_State notification; §4
 says why it cannot. Setting D1 is therefore not perfectly true, and it is
 set anyway, for a reason worth writing down:
 
-**CHECKED**. Linux's `cdc_acm` keeps D1 as `USB_CDC_CAP_LINE` and **gates
-SET_LINE_CODING on it**. A device that cleared D1 to be pedantic about the
-notification would stop being asked the questions it *can* answer, and
-would report a line coding the host had never set. So the descriptor claims
-the request group, which is what the host reads the bit for, and this
-paragraph is where the notification half of it is retracted.
+**CHECKED**. With D1 set, **Linux sends SET_LINE_CODING and its seven bytes
+arrive**: `stty -F /dev/ttyACM1 115200` and then GET_LINE_CODING asked of the
+part reads `115200` back out of the device's own registers, whose reset value
+is 9600. §5 has it. That is the only measurement anywhere of this hook's
+host-to-device data stage on real hardware, and it is the reason the request
+group is claimed rather than left out.
+
+**MEDIUM**. That `cdc_acm` keeps D1 as `USB_CDC_CAP_LINE` and *gates*
+SET_LINE_CODING on it — so a device that cleared D1 to be pedantic about the
+notification would stop being asked the questions it *can* answer. That is
+documented driver behaviour and this project has not built the device that
+would test it.
+
+So the descriptor claims the request group, which is what a host reads the bit
+for, and this paragraph is where the notification quarter of that claim is
+retracted in words.
 
 D2 clear is the honest half of the same coin: `usb_cdc_req` does not claim
 SEND_BREAK, so endpoint 0 stalls it, and a host that read D2 never sends
@@ -475,6 +490,37 @@ bDeviceClass is 02h, bDeviceSubClass and bDeviceProtocol 00h
 host -> USB -> UART transmit -> UART receive -> USB -> host, 48 bytes, byte for byte
 test a_serial_port_this_compiler_built_is_bound_by_the_kernels_own_driver ... ok
 ```
+
+### The host set the line coding, and the device kept it
+
+```console
+$ cargo test --features program --test usb_cdc_acm -- --ignored --nocapture
+...
+GET_LINE_CODING: 115200 baud, bCharFormat 0, bParityType 0, bDataBits 8
+`cdc_acm` is back on /dev/ttyACM1
+```
+
+`stty` asked for 115200 and `usb_cdc_req` comes up at **9600**, so 115200 in
+those registers can only have got there through SET_LINE_CODING. That makes
+this the one measurement of the class hook's **host-to-device data stage** on
+real silicon: the round trip above proves the bulk endpoints, and the port
+opening at all proves SET_CONTROL_LINE_STATE, because `cdc_acm` fails `open`
+if that stalls — but SET_LINE_CODING is the only request here with a data
+packet behind it, and nothing else would notice if its seven bytes had never
+arrived.
+
+Getting it took the interface away from `cdc_acm` for the length of one
+control transfer, because usbfs refuses a request addressed to an interface
+another driver holds:
+
+```text
+GET_LINE_CODING was not asked (submit urb: resource busy (os error 16))
+```
+
+so the test detaches the driver, claims, asks, releases and attaches it
+again — and then checks the terminal came back, which the second line above
+is. The line coding survives the detach because it is a register in the
+device and not anything the host was keeping.
 
 ### The notification endpoint never sent anything
 
