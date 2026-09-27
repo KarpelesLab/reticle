@@ -405,8 +405,9 @@ error: the design needs 2 `lutram` site(s) and the part has 0
 
 `fpga::synthesize_for` is content, which is why
 `small_memories_become_logic_after_the_fpga_flow` passes: it stops before
-placement. Measured on `ecp5-12f-CABGA256` at depths 16, 32 and 64 and with
-`FWFT` both ways; the other two ECP5s in that file are **inferred** to behave
+placement. Measured on `ecp5-12f-CABGA256` at depth 16 and 32 with `FWFT` and at depth 64
+without it — 2, 4 and 8 sites asked for and refused; the other two ECP5s in
+that file are **inferred** to behave
 the same, since all three declare the bel the same way and the 12F is the only
 one this flow has a Trellis part for. The effect is that no design in this
 repository can instantiate that block on this part, which matters well beyond

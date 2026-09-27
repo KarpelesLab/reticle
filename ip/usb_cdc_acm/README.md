@@ -695,8 +695,10 @@ distributed RAM, and `src/fpga/devices/ecp5.dev` declares
 `bel TRELLIS_DPR16X4 lutram` with **no `count`**. So `fpga::place` sees zero
 sites of it and refuses.
 
-Measured on `ecp5-12f-CABGA256`, the Cynthion's part, at depths 16, 32 and
-64 and with `FWFT` both ways — all five refused with the same message.
+Measured on `ecp5-12f-CABGA256`, the Cynthion's part: depth 16 with `FWFT`,
+depth 32 with `FWFT`, and depth 64 without it — **2**, **4** and **8**
+`lutram` sites asked for and refused, so neither the depth nor the read
+port's shape is what it turns on.
 `fpga::synthesize_for` is happy with every one of them, which is why
 `tests/ip_library.rs`'s `small_memories_become_logic_after_the_fpga_flow`
 passes: it stops before placement.
