@@ -685,8 +685,7 @@ and first-party IP should drop into a design as easily as a Rust crate.
       enumerates and a bulk endpoint pair with a byte interface, tested
       by a USB host model. Each block's header says what it does not
       do — no bursts on either memory controller, gigabit only for
-      RGMII, one bulk endpoint pair of eight-byte packets and no class
-      layer for USB. See `docs/ip-library.md`.
+      RGMII, and eight-byte packets for USB. See `docs/ip-library.md`.
 - [x] **A USB device for a board whose USB lines the FPGA cannot reach.**
       All three ports of a Cynthion go through their own ULPI
       transceiver, and the balls wired to a pair are input only, for
@@ -718,6 +717,36 @@ and first-party IP should drop into a design as easily as a Rust crate.
       the seven experiments on the part that narrow that down and
       `ip/usb_device_ulpi/README.md` §11 has what it does to this block's
       confidence.
+- [x] **A class layer on top of the USB device, and the first class is the
+      one an operating system already has a driver for.** `usb_ctrl_ep`
+      stalled every request it did not implement itself, which is a control
+      endpoint no class can be built on, so it has a **hook**: the eight
+      bytes of a SETUP it did not claim, a combinational claim back from
+      whatever is above it, and a data stage in either direction.
+      Combinational because endpoint 0 chooses a transfer's stage in the
+      cycle the SETUP's data packet ends, and a request decoder is a
+      comparison of eight bytes against constants. It is deliberately not
+      offered the requests endpoint 0 implements, so a class cannot shadow
+      SET_ADDRESS. `usb_dev_core` grew a second, IN-only endpoint beside the
+      bulk pair, and the transmitter's owner became two `sel` bits rather
+      than an encoded index, so a design with no second endpoint pays
+      nothing for it — not one flip-flop.
+      `usb_cdc_acm` is what sits on the hook: a **serial port**, two
+      interfaces with the union functional descriptor Linux will not bind
+      without, four functional descriptors, an interrupt notification
+      endpoint and a bulk pair, with the line-coding and control-line
+      requests answered. Behind either link layer — `usb_cdc_acm_fs` and
+      `usb_cdc_acm_ulpi` — and enumerated in simulation by the same host
+      model both cores use, through the transceiver that reports LineState
+      late. **On a Cynthion's AUX port the kernel binds `cdc_acm` and a
+      `/dev/ttyACM*` appears**, and `printf` and `cat` move characters
+      through it: out of endpoint 1 OUT, through `ip/uart` at 115200 baud,
+      back in and up to the host. `ip/usb_cdc_acm/README.md` is the
+      protocol document, with a confidence level the ULPI one did not
+      need — CHECKED, meaning measured on a host with the output quoted —
+      and §5 is the kernel log and the whole `lsusb -v`. What is left is a
+      **human interface device**, which the hook and the second endpoint
+      have made a smaller job than it was.
 - [x] Registry: a static index (git repository of manifests) that
       `reticle add` searches, in the style of a crates.io index: one file
       per package under a name-derived path, one line per release with

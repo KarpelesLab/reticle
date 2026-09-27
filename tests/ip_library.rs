@@ -12888,36 +12888,50 @@ fn usb_descriptors_survive_lookup_table_mapping() {
         "07058102080000",     // ENDPOINT 81h: bulk IN
     );
 
-    // Three configurations and two LUT widths. The first is the descriptor set
-    // that has always worked on a board, the second is the one that did not,
-    // and the third is the block that states it for itself.
-    let cases: [(&str, &str, &[(&str, &str)], fn() -> Vec<u8>); 3] = [
-        (
-            "usb_device_fs",
-            "usb_device_fs",
-            &[("VID", "16'h1209"), ("PID", "16'h0001")],
-            expected_configuration_descriptor,
-        ),
-        (
-            "usb_device_fs",
-            "usb_device_fs",
-            &[
-                ("VID", "16'h1209"),
-                ("PID", "16'h0001"),
-                ("IFACE_BYTES", "58"),
-                ("IFACE_DESC", CDC_BLOB),
-            ],
-            expected_cdc_configuration,
-        ),
-        (
-            "usb_cdc_acm",
-            "usb_cdc_acm_fs",
-            &[("VID", "16'h1209"), ("PID", "16'h0001")],
-            expected_cdc_configuration,
-        ),
+    /// One configuration to map and read the descriptors off: a variant to
+    /// build and the descriptor set it should answer with.
+    struct Case {
+        variant: Variant,
+        want: fn() -> Vec<u8>,
+    }
+
+    // Three of them and two LUT widths. The first is the descriptor set that
+    // has always worked on a board, the second is the one that did not, and
+    // the third is the block that states it for itself.
+    let cases = [
+        Case {
+            variant: Variant {
+                package: "usb_device_fs",
+                top: "usb_device_fs",
+                params: &[("VID", "16'h1209"), ("PID", "16'h0001")],
+            },
+            want: expected_configuration_descriptor,
+        },
+        Case {
+            variant: Variant {
+                package: "usb_device_fs",
+                top: "usb_device_fs",
+                params: &[
+                    ("VID", "16'h1209"),
+                    ("PID", "16'h0001"),
+                    ("IFACE_BYTES", "58"),
+                    ("IFACE_DESC", CDC_BLOB),
+                ],
+            },
+            want: expected_cdc_configuration,
+        },
+        Case {
+            variant: Variant {
+                package: "usb_cdc_acm",
+                top: "usb_cdc_acm_fs",
+                params: &[("VID", "16'h1209"), ("PID", "16'h0001")],
+            },
+            want: expected_cdc_configuration,
+        },
     ];
 
-    for (package, top, params, want) in cases {
+    for Case { variant, want } in cases {
+        let (package, top, params) = (variant.package, variant.top, variant.params);
         for k in [4u32, 6] {
             let (mut design, id) = flattened(package, top, params);
             let mut diags = Diagnostics::new();
