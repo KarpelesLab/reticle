@@ -9600,6 +9600,29 @@ struct UlpiPhy {
     /// at the time" — so a Link must not read RxActive in that window as
     /// news about an incoming packet.
     hears_itself: bool,
+    /// **Receive commands report LineState late**: what the pair did, in
+    /// order, rather than what it is doing now.
+    ///
+    /// Measured on a Microchip USB3343 on a Cynthion, with a ULPI trace taken
+    /// through the board's own console: between a host's SETUP token and its
+    /// DATA0 packet — with the pair idle at J the whole time — the transceiver
+    /// sent seven receive commands three clocks apart reporting J, K, J, K, J,
+    /// K and finally **K**. Those are the bit transitions of the packet that
+    /// had just finished, arriving after it: the part reports one per
+    /// transition and the ULPI bus can carry one at a time, so the reports
+    /// queue and the queue outlives the packet.
+    ///
+    /// ULPI 1.1 §3.8.1.3 forbids it in so many words — a queued receive
+    /// command "must always convey the current RX CMD values, not a previous
+    /// or old value" — and this part does it anyway, which is the whole reason
+    /// this flag exists. A Link that waits for `LineState == J` before
+    /// answering waits on the parity of a backlog, and when the backlog ends
+    /// on K nothing changes it back, because a transceiver sends a receive
+    /// command only when something *changes*.
+    stale_line: bool,
+    /// The LineState values still to be reported, oldest first; the last of
+    /// them is what the pair is doing now. Only used when `stale_line` is set.
+    line_queue: std::collections::VecDeque<u8>,
 }
 
 impl UlpiPhy {
@@ -9647,6 +9670,8 @@ impl UlpiPhy {
             no_pullup: false,
             resume_line: false,
             hears_itself: false,
+            stale_line: false,
+            line_queue: std::collections::VecDeque::new(),
         };
         phy.power_on();
         phy
@@ -9688,6 +9713,14 @@ impl UlpiPhy {
     /// See `hears_itself`.
     fn hearing_itself(mut self) -> UlpiPhy {
         self.hears_itself = true;
+        self
+    }
+
+    /// A transceiver that reports LineState **late**, one transition at a
+    /// time, so what a receive command carries is the pair's history and not
+    /// its present. See `stale_line`.
+    fn reporting_stale_line(mut self) -> UlpiPhy {
+        self.stale_line = true;
         self
     }
 
@@ -9750,12 +9783,17 @@ impl UlpiPhy {
         } else {
             0b01
         };
-        self.line_state | 0b11 << 2 | event << 4
+        let line = if self.stale_line {
+            self.line_queue.front().copied().unwrap_or(self.line_state)
+        } else {
+            self.line_state
+        };
+        line | 0b11 << 2 | event << 4
     }
 
     /// Whether the Link is owed a receive command.
     fn owed(&self) -> bool {
-        self.forced || self.owed
+        self.forced || self.owed || (self.stale_line && self.line_queue.len() > 1)
     }
 
     fn send_status(&mut self) {
@@ -9765,6 +9803,21 @@ impl UlpiPhy {
         self.forced = false;
         self.nxt = false;
         self.dir = true;
+        // One transition of the backlog has now been reported. The last entry
+        // stays, because it is what the pair is doing.
+        if self.stale_line && self.line_queue.len() > 1 {
+            self.line_queue.pop_front();
+        }
+    }
+
+    /// What the pair is doing this cycle, which in `stale_line` mode joins the
+    /// queue of transitions still to be reported rather than being reported at
+    /// once.
+    fn observe_line(&mut self, bits: u8) {
+        self.line_state = bits;
+        if self.stale_line && self.line_queue.back().copied() != Some(bits) {
+            self.line_queue.push_back(bits);
+        }
     }
 
     fn idle_out(&mut self) {
@@ -9905,7 +9958,11 @@ impl UlpiPhy {
                 self.rx_error = false;
                 self.rx_done = false;
             }
-            if !self.rx_active {
+            if self.stale_line {
+                // Every transition, packet or no packet: that is what makes
+                // the backlog.
+                self.observe_line(line_bits(seen));
+            } else if !self.rx_active {
                 // With no packet on it, LineState is the pair.
                 self.line_state = line_bits(seen);
             }
@@ -9926,7 +9983,8 @@ impl UlpiPhy {
                 } else {
                     self.tx_hold = self.div;
                     self.line_out = Some(self.tx_line[self.tx_pos]);
-                    self.line_state = line_bits(self.tx_line[self.tx_pos]);
+                    let bits = line_bits(self.tx_line[self.tx_pos]);
+                    self.observe_line(bits);
                 }
             }
         }
@@ -10569,6 +10627,63 @@ fn usb_device_ulpi_enumerates_through_a_transceiver_that_hears_itself() {
         "the device answered {} packet(s)",
         host.pair.phy.packets.len()
     );
+    assert_eq!(host.pair.problems(), &[] as &[String]);
+}
+
+/// A transceiver that reports LineState **late**, which is the one that is
+/// soldered to the board — and the case that kept this device from being
+/// enumerated.
+///
+/// Measured on a Microchip USB3343 on a Great Scott Gadgets Cynthion, with a
+/// ULPI trace taken over the board's own console: between a host's SETUP token
+/// and its DATA0 packet, with the pair idle at J the whole way, the
+/// transceiver sent seven single receive commands three to five clocks apart
+/// reporting J, K, J, K, J, K and finally **K**. Those are the bit transitions
+/// of the packet that had already finished, arriving after it: one receive
+/// command per transition, a bus that carries one at a time, and a backlog
+/// that outlives the packet. ULPI 1.1 §3.8.1.3 says a queued receive command
+/// "must always convey the current RX CMD values, not a previous or old
+/// value"; this part does not.
+///
+/// What it cost. `usb_ulpi_link` used to report `line_idle` only while
+/// `LineState == J`, and after a three-byte token the backlog ends on K — so
+/// `line_idle` was false, and *nothing was going to change it*, because a
+/// transceiver sends a receive command only when something changes. The answer
+/// `usb_ctrl_ep` had ready for the host's IN token was never sent and the
+/// transfer died of a five second timeout: `device descriptor read/64,
+/// error -110`.
+///
+/// The Link is what has to be right, twice over: `line_idle` no longer looks
+/// at LineState at all — the receive command that clears RxActive already
+/// **is** the SE0-to-J transition ULPI 1.1 Table 10 times an answer from, and
+/// DS00002646A §6.3.2 says this part does not send it until the pair is idle —
+/// and the turnaround counts cycles the bus was quiet for **in a row**, so a
+/// backlog draining three clocks at a time cannot let the count creep up to
+/// the point where a transmit starts one clock before `dir` rises again.
+#[test]
+fn usb_device_ulpi_enumerates_through_a_transceiver_that_reports_linestate_late() {
+    let design = ulpi_design();
+    let phy = UlpiPhy::new(ULPI_CPB).reporting_stale_line();
+    let mut host = UsbHost::new(UlpiPair::with_phy(&design, phy), 0);
+    enumerate(&mut host);
+    assert!(
+        host.pair.phy.packets.len() > 4,
+        "the device answered {} packet(s)",
+        host.pair.phy.packets.len()
+    );
+    assert_eq!(host.pair.problems(), &[] as &[String]);
+}
+
+/// Both of the part's two surprises at once: it hears its own transmission
+/// **and** it reports LineState late. That is what is on the board.
+#[test]
+fn usb_device_ulpi_enumerates_through_the_transceiver_that_is_on_the_board() {
+    let design = ulpi_design();
+    let phy = UlpiPhy::new(ULPI_CPB)
+        .hearing_itself()
+        .reporting_stale_line();
+    let mut host = UsbHost::new(UlpiPair::with_phy(&design, phy), 0);
+    enumerate(&mut host);
     assert_eq!(host.pair.problems(), &[] as &[String]);
 }
 
