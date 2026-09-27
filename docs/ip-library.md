@@ -687,12 +687,12 @@ exactly what this table is for.
 | `fifo_async` | `fifo_async` | WIDTH=8, DEPTH=16 | ECP5 45F | 2 x DCCA, 41 x LUT4, 2 x TRELLIS_DPR16X4, 42 x TRELLIS_FF, 24 x TRELLIS_IO | 4 |
 | `uart` | `uart` | CLK_DIV=104 | LUT4 | 13 x dff, 119 x lut | 6 |
 | `uart` | `uart` | CLK_DIV=104 | LUT6 | 13 x dff, 109 x lut | 5 |
-| `uart` | `uart` | CLK_DIV=104 | iCE40 HX1K | 33 x SB_CARRY, 26 x SB_DFFER, 10 x SB_DFFES, 34 x SB_DFFR, 2 x SB_DFFS, 1 x SB_GB, 24 x SB_IO, 124 x SB_LUT4 | 4 |
-| `uart` | `uart` | CLK_DIV=104 | ECP5 45F | 1 x DCCA, 119 x LUT4, 72 x TRELLIS_FF, 24 x TRELLIS_IO | 6 |
+| `uart` | `uart` | CLK_DIV=104 | iCE40 HX1K | 33 x SB_CARRY, 26 x SB_DFFER, 10 x SB_DFFES, 34 x SB_DFFR, 2 x SB_DFFS, 1 x SB_GB, 24 x SB_IO, 125 x SB_LUT4 | 4 |
+| `uart` | `uart` | CLK_DIV=104 | ECP5 45F | 1 x DCCA, 120 x LUT4, 72 x TRELLIS_FF, 24 x TRELLIS_IO | 6 |
 | `spi_master` | `spi_master` | CPOL=0, CPHA=0, CLK_DIV=4, WIDTH=8 | LUT4 | 10 x dff, 87 x lut | 6 |
 | `spi_master` | `spi_master` | CPOL=0, CPHA=0, CLK_DIV=4, WIDTH=8 | LUT6 | 10 x dff, 80 x lut | 4 |
-| `spi_master` | `spi_master` | CPOL=0, CPHA=0, CLK_DIV=4, WIDTH=8 | iCE40 HX1K | 22 x SB_CARRY, 35 x SB_DFFER, 1 x SB_DFFES, 17 x SB_DFFR, 1 x SB_GB, 25 x SB_IO, 72 x SB_LUT4 | 3 |
-| `spi_master` | `spi_master` | CPOL=0, CPHA=0, CLK_DIV=4, WIDTH=8 | ECP5 45F | 1 x DCCA, 87 x LUT4, 53 x TRELLIS_FF, 25 x TRELLIS_IO | 6 |
+| `spi_master` | `spi_master` | CPOL=0, CPHA=0, CLK_DIV=4, WIDTH=8 | iCE40 HX1K | 22 x SB_CARRY, 35 x SB_DFFER, 1 x SB_DFFES, 17 x SB_DFFR, 1 x SB_GB, 25 x SB_IO, 73 x SB_LUT4 | 3 |
+| `spi_master` | `spi_master` | CPOL=0, CPHA=0, CLK_DIV=4, WIDTH=8 | ECP5 45F | 1 x DCCA, 88 x LUT4, 53 x TRELLIS_FF, 25 x TRELLIS_IO | 6 |
 | `i2c_master` | `i2c_master` | CLK_DIV=30 | LUT4 | 14 x dff, 116 x lut | 7 |
 | `i2c_master` | `i2c_master` | CLK_DIV=30 | LUT6 | 14 x dff, 90 x lut | 4 |
 | `i2c_master` | `i2c_master` | CLK_DIV=30 | iCE40 HX1K | 18 x SB_CARRY, 20 x SB_DFFER, 4 x SB_DFFES, 17 x SB_DFFR, 1 x SB_GB, 30 x SB_IO, 117 x SB_LUT4 | 3 |
@@ -707,8 +707,8 @@ exactly what this table is for.
 | `timer` | `timer` | WIDTH=16, PRESCALE_WIDTH=8 | ECP5 45F | 1 x DCCA, 61 x LUT4, 26 x TRELLIS_FF, 47 x TRELLIS_IO | 5 |
 | `axil_gpio` | `axil_gpio` | WIDTH=8 | LUT4 | 11 x dff, 47 x lut | 2 |
 | `axil_gpio` | `axil_gpio` | WIDTH=8 | LUT6 | 11 x dff, 38 x lut | 1 |
-| `axil_gpio` | `axil_gpio` | WIDTH=8 | iCE40 HX1K | 116 x SB_DFFER, 16 x SB_DFFR, 1 x SB_GB, 178 x SB_IO, 48 x SB_LUT4 | 2 |
-| `axil_gpio` | `axil_gpio` | WIDTH=8 | ECP5 45F | 1 x DCCA, 47 x LUT4, 132 x TRELLIS_FF, 178 x TRELLIS_IO | 2 |
+| `axil_gpio` | `axil_gpio` | WIDTH=8 | iCE40 HX1K | 116 x SB_DFFER, 16 x SB_DFFR, 1 x SB_GB, 178 x SB_IO, 49 x SB_LUT4 | 2 |
+| `axil_gpio` | `axil_gpio` | WIDTH=8 | ECP5 45F | 1 x DCCA, 48 x LUT4, 132 x TRELLIS_FF, 178 x TRELLIS_IO | 2 |
 | `ram_wrapper` | `ram_sp` | WIDTH=8, DEPTH=256, OUT_REG=0 | LUT4 | 1 x lut, 1 x memory 256x8, 1 x memrd, 1 x memwr | 1 |
 | `ram_wrapper` | `ram_sp` | WIDTH=8, DEPTH=256, OUT_REG=0 | LUT6 | 1 x lut, 1 x memory 256x8, 1 x memrd, 1 x memwr | 1 |
 | `ram_wrapper` | `ram_sp` | WIDTH=8, DEPTH=256, OUT_REG=0 | iCE40 HX1K | 27 x SB_IO, 1 x SB_LUT4, 1 x SB_RAM40_4K | 1 |
@@ -719,12 +719,12 @@ exactly what this table is for.
 | `ram_wrapper` | `ram_sdp` | WIDTH=8, DEPTH=256, OUT_REG=0 | ECP5 45F | 1 x DP16KD, 36 x TRELLIS_IO | 0 |
 | `rv32i` | `rv32i` | REGFILE_BRAM=0 | LUT4 | 14 x dff, 2436 x lut, 1 x memory 32x32, 2 x memrd, 1 x memwr | 34 |
 | `rv32i` | `rv32i` | REGFILE_BRAM=0 | LUT6 | 14 x dff, 2044 x lut, 1 x memory 32x32, 2 x memrd, 1 x memwr | 28 |
-| `rv32i` | `rv32i` | REGFILE_BRAM=0 | iCE40 HX1K | 220 x SB_CARRY, 1024 x SB_DFFE, 292 x SB_DFFER, 66 x SB_DFFR, 1 x SB_GB, 208 x SB_IO, 5047 x SB_LUT4 | 36 |
-| `rv32i` | `rv32i` | REGFILE_BRAM=0 | ECP5 45F | 1 x DCCA, 2486 x LUT4, 32 x TRELLIS_DPR16X4, 358 x TRELLIS_FF, 208 x TRELLIS_IO | 34 |
+| `rv32i` | `rv32i` | REGFILE_BRAM=0 | iCE40 HX1K | 220 x SB_CARRY, 1024 x SB_DFFE, 292 x SB_DFFER, 66 x SB_DFFR, 1 x SB_GB, 208 x SB_IO, 5048 x SB_LUT4 | 36 |
+| `rv32i` | `rv32i` | REGFILE_BRAM=0 | ECP5 45F | 1 x DCCA, 2487 x LUT4, 32 x TRELLIS_DPR16X4, 358 x TRELLIS_FF, 208 x TRELLIS_IO | 34 |
 | `rv32i` | `rv32i` | REGFILE_BRAM=1 | LUT4 | 16 x dff, 2445 x lut, 1 x memory 32x32, 2 x memrd, 1 x memwr | 34 |
 | `rv32i` | `rv32i` | REGFILE_BRAM=1 | LUT6 | 16 x dff, 2075 x lut, 1 x memory 32x32, 2 x memrd, 1 x memwr | 28 |
-| `rv32i` | `rv32i` | REGFILE_BRAM=1 | iCE40 HX1K | 220 x SB_CARRY, 2 x SB_DFFE, 292 x SB_DFFER, 66 x SB_DFFR, 1 x SB_GB, 208 x SB_IO, 2355 x SB_LUT4, 4 x SB_RAM40_4K | 34 |
-| `rv32i` | `rv32i` | REGFILE_BRAM=1 | ECP5 45F | 1 x DCCA, 4 x DP16KD, 2445 x LUT4, 360 x TRELLIS_FF, 208 x TRELLIS_IO | 34 |
+| `rv32i` | `rv32i` | REGFILE_BRAM=1 | iCE40 HX1K | 220 x SB_CARRY, 2 x SB_DFFE, 292 x SB_DFFER, 66 x SB_DFFR, 1 x SB_GB, 208 x SB_IO, 2356 x SB_LUT4, 4 x SB_RAM40_4K | 34 |
+| `rv32i` | `rv32i` | REGFILE_BRAM=1 | ECP5 45F | 1 x DCCA, 4 x DP16KD, 2446 x LUT4, 360 x TRELLIS_FF, 208 x TRELLIS_IO | 34 |
 | `mos6502` | `mos6502` | DECIMAL_MODE=1 | LUT4 | 25 x dff, 1710 x lut | 18 |
 | `mos6502` | `mos6502` | DECIMAL_MODE=1 | LUT6 | 25 x dff, 1336 x lut | 18 |
 | `mos6502` | `mos6502` | DECIMAL_MODE=1 | iCE40 HX1K | 179 x SB_CARRY, 132 x SB_DFFER, 4 x SB_DFFES, 3 x SB_DFFR, 1 x SB_GB, 57 x SB_IO, 1733 x SB_LUT4 | 16 |
@@ -739,44 +739,44 @@ exactly what this table is for.
 | `eth_mac_rmii` | `eth_mac_rmii` | IFG_CYCLES=48 | ECP5 45F | 1 x DCCA, 305 x LUT4, 194 x TRELLIS_FF, 34 x TRELLIS_IO | 4 |
 | `spiflash_xip` | `spiflash_xip` | CLK_DIV=2, READ_CMD=8'h03, DUMMY_CYCLES=0 | LUT4 | 9 x dff, 177 x lut | 4 |
 | `spiflash_xip` | `spiflash_xip` | CLK_DIV=2, READ_CMD=8'h03, DUMMY_CYCLES=0 | LUT6 | 9 x dff, 166 x lut | 4 |
-| `spiflash_xip` | `spiflash_xip` | CLK_DIV=2, READ_CMD=8'h03, DUMMY_CYCLES=0 | iCE40 HX1K | 7 x SB_CARRY, 97 x SB_DFFER, 3 x SB_DFFES, 8 x SB_DFFR, 1 x SB_GB, 140 x SB_IO, 172 x SB_LUT4 | 4 |
-| `spiflash_xip` | `spiflash_xip` | CLK_DIV=2, READ_CMD=8'h03, DUMMY_CYCLES=0 | ECP5 45F | 1 x DCCA, 177 x LUT4, 108 x TRELLIS_FF, 140 x TRELLIS_IO | 4 |
+| `spiflash_xip` | `spiflash_xip` | CLK_DIV=2, READ_CMD=8'h03, DUMMY_CYCLES=0 | iCE40 HX1K | 7 x SB_CARRY, 97 x SB_DFFER, 3 x SB_DFFES, 8 x SB_DFFR, 1 x SB_GB, 140 x SB_IO, 173 x SB_LUT4 | 4 |
+| `spiflash_xip` | `spiflash_xip` | CLK_DIV=2, READ_CMD=8'h03, DUMMY_CYCLES=0 | ECP5 45F | 1 x DCCA, 178 x LUT4, 108 x TRELLIS_FF, 140 x TRELLIS_IO | 4 |
 | `sdram_ctrl` | `sdram_ctrl` | CLK_MHZ=50, CAS_LATENCY=2 | LUT4 | 36 x dff, 429 x lut | 10 |
 | `sdram_ctrl` | `sdram_ctrl` | CLK_MHZ=50, CAS_LATENCY=2 | LUT6 | 36 x dff, 348 x lut | 9 |
-| `sdram_ctrl` | `sdram_ctrl` | CLK_MHZ=50, CAS_LATENCY=2 | iCE40 HX1K | 24 x SB_CARRY, 180 x SB_DFFER, 3 x SB_DFFR, 36 x SB_DFFS, 1 x SB_GB, 121 x SB_IO, 418 x SB_LUT4 | 10 |
-| `sdram_ctrl` | `sdram_ctrl` | CLK_MHZ=50, CAS_LATENCY=2 | ECP5 45F | 1 x DCCA, 427 x LUT4, 1 x ODDRX1F, 219 x TRELLIS_FF, 121 x TRELLIS_IO | 10 |
+| `sdram_ctrl` | `sdram_ctrl` | CLK_MHZ=50, CAS_LATENCY=2 | iCE40 HX1K | 24 x SB_CARRY, 180 x SB_DFFER, 3 x SB_DFFR, 36 x SB_DFFS, 1 x SB_GB, 121 x SB_IO, 419 x SB_LUT4 | 10 |
+| `sdram_ctrl` | `sdram_ctrl` | CLK_MHZ=50, CAS_LATENCY=2 | ECP5 45F | 1 x DCCA, 428 x LUT4, 1 x ODDRX1F, 219 x TRELLIS_FF, 121 x TRELLIS_IO | 10 |
 | `hyperram_ctrl` | `hyperram_ctrl` | ADDR_WIDTH=22, CK_DELAY=100 | LUT4 | 26 x dff, 214 x lut | 7 |
 | `hyperram_ctrl` | `hyperram_ctrl` | ADDR_WIDTH=22, CK_DELAY=100 | LUT6 | 26 x dff, 187 x lut | 7 |
-| `hyperram_ctrl` | `hyperram_ctrl` | ADDR_WIDTH=22, CK_DELAY=100 | iCE40 HX1K | 13 x SB_CARRY, 102 x SB_DFFER, 4 x SB_DFFES, 11 x SB_DFFR, 1 x SB_DFFS, 1 x SB_GB, 91 x SB_IO, 213 x SB_LUT4 | 8 |
-| `hyperram_ctrl` | `hyperram_ctrl` | ADDR_WIDTH=22, CK_DELAY=100 | ECP5 45F | 1 x DCCA, 1 x DELAYG, 9 x IDDRX1F, 214 x LUT4, 10 x ODDRX1F, 118 x TRELLIS_FF, 91 x TRELLIS_IO | 7 |
+| `hyperram_ctrl` | `hyperram_ctrl` | ADDR_WIDTH=22, CK_DELAY=100 | iCE40 HX1K | 13 x SB_CARRY, 102 x SB_DFFER, 4 x SB_DFFES, 11 x SB_DFFR, 1 x SB_DFFS, 1 x SB_GB, 91 x SB_IO, 215 x SB_LUT4 | 8 |
+| `hyperram_ctrl` | `hyperram_ctrl` | ADDR_WIDTH=22, CK_DELAY=100 | ECP5 45F | 1 x DCCA, 1 x DELAYG, 9 x IDDRX1F, 216 x LUT4, 10 x ODDRX1F, 118 x TRELLIS_FF, 91 x TRELLIS_IO | 7 |
 | `dvi_tx` | `dvi_tx` | MODE=0 | LUT4 | 18 x dff, 480 x lut | 9 |
 | `dvi_tx` | `dvi_tx` | MODE=0 | LUT6 | 18 x dff, 363 x lut | 7 |
-| `dvi_tx` | `dvi_tx` | MODE=0 | iCE40 HX1K | 187 x SB_CARRY, 72 x SB_DFFER, 52 x SB_DFFR, 1 x SB_GB, 57 x SB_IO, 569 x SB_LUT4 | 8 |
-| `dvi_tx` | `dvi_tx` | MODE=0 | ECP5 45F | 1 x DCCA, 480 x LUT4, 4 x ODDRX1F, 124 x TRELLIS_FF, 57 x TRELLIS_IO | 9 |
+| `dvi_tx` | `dvi_tx` | MODE=0 | iCE40 HX1K | 187 x SB_CARRY, 72 x SB_DFFER, 52 x SB_DFFR, 1 x SB_GB, 57 x SB_IO, 570 x SB_LUT4 | 8 |
+| `dvi_tx` | `dvi_tx` | MODE=0 | ECP5 45F | 1 x DCCA, 481 x LUT4, 4 x ODDRX1F, 124 x TRELLIS_FF, 57 x TRELLIS_IO | 9 |
 | `dvi_tx_pll` | `dvi_tx_pll` | MODE=0 | LUT4 | 18 x dff, 480 x lut | 9 |
 | `dvi_tx_pll` | `dvi_tx_pll` | MODE=0 | LUT6 | 18 x dff, 363 x lut | 7 |
-| `dvi_tx_pll` | `dvi_tx_pll` | MODE=0 | iCE40 HX1K | 187 x SB_CARRY, 72 x SB_DFFER, 52 x SB_DFFR, 1 x SB_GB, 57 x SB_IO, 569 x SB_LUT4, 1 x SB_PLL40_CORE | 8 |
-| `dvi_tx_pll` | `dvi_tx_pll` | MODE=0 | ECP5 45F | 1 x DCCA, 1 x EHXPLLL, 480 x LUT4, 4 x ODDRX1F, 124 x TRELLIS_FF, 57 x TRELLIS_IO | 9 |
+| `dvi_tx_pll` | `dvi_tx_pll` | MODE=0 | iCE40 HX1K | 187 x SB_CARRY, 72 x SB_DFFER, 52 x SB_DFFR, 1 x SB_GB, 57 x SB_IO, 570 x SB_LUT4, 1 x SB_PLL40_CORE | 8 |
+| `dvi_tx_pll` | `dvi_tx_pll` | MODE=0 | ECP5 45F | 1 x DCCA, 1 x EHXPLLL, 481 x LUT4, 4 x ODDRX1F, 124 x TRELLIS_FF, 57 x TRELLIS_IO | 9 |
 | `vga_out` | `vga_out` | MODE=0, BPC=4 | LUT4 | 7 x dff, 80 x lut | 4 |
 | `vga_out` | `vga_out` | MODE=0, BPC=4 | LUT6 | 7 x dff, 68 x lut | 3 |
 | `vga_out` | `vga_out` | MODE=0, BPC=4 | iCE40 HX1K | 22 x SB_CARRY, 36 x SB_DFFER, 2 x SB_DFFES, 1 x SB_GB, 67 x SB_IO, 76 x SB_LUT4 | 3 |
 | `vga_out` | `vga_out` | MODE=0, BPC=4 | ECP5 45F | 1 x DCCA, 80 x LUT4, 38 x TRELLIS_FF, 67 x TRELLIS_IO | 4 |
 | `eth_mac_rgmii` | `eth_mac_rgmii` | IFG_CYCLES=12, TX_DELAY=80, RX_DELAY=80 | LUT4 | 28 x dff, 396 x lut | 5 |
 | `eth_mac_rgmii` | `eth_mac_rgmii` | IFG_CYCLES=12, TX_DELAY=80, RX_DELAY=80 | LUT6 | 28 x dff, 349 x lut | 4 |
-| `eth_mac_rgmii` | `eth_mac_rgmii` | IFG_CYCLES=12, TX_DELAY=80, RX_DELAY=80 | iCE40 HX1K | 10 x SB_CARRY, 119 x SB_DFFER, 64 x SB_DFFES, 7 x SB_DFFR, 2 x SB_GB, 39 x SB_IO, 393 x SB_LUT4 | 5 |
-| `eth_mac_rgmii` | `eth_mac_rgmii` | IFG_CYCLES=12, TX_DELAY=80, RX_DELAY=80 | ECP5 45F | 2 x DCCA, 6 x DELAYG, 5 x IDDRX1F, 394 x LUT4, 6 x ODDRX1F, 190 x TRELLIS_FF, 39 x TRELLIS_IO | 5 |
+| `eth_mac_rgmii` | `eth_mac_rgmii` | IFG_CYCLES=12, TX_DELAY=80, RX_DELAY=80 | iCE40 HX1K | 10 x SB_CARRY, 119 x SB_DFFER, 64 x SB_DFFES, 7 x SB_DFFR, 2 x SB_GB, 39 x SB_IO, 394 x SB_LUT4 | 5 |
+| `eth_mac_rgmii` | `eth_mac_rgmii` | IFG_CYCLES=12, TX_DELAY=80, RX_DELAY=80 | ECP5 45F | 2 x DCCA, 6 x DELAYG, 5 x IDDRX1F, 395 x LUT4, 6 x ODDRX1F, 190 x TRELLIS_FF, 39 x TRELLIS_IO | 5 |
 | `usb_device_fs` | `usb_device_fs` | VID=16'h1209, PID=16'h0001 | LUT4 | 63 x dff, 549 x lut | 9 |
 | `usb_device_fs` | `usb_device_fs` | VID=16'h1209, PID=16'h0001 | LUT6 | 63 x dff, 463 x lut | 8 |
-| `usb_device_fs` | `usb_device_fs` | VID=16'h1209, PID=16'h0001 | iCE40 HX1K | 27 x SB_CARRY, 192 x SB_DFFER, 39 x SB_DFFES, 10 x SB_DFFR, 3 x SB_DFFS, 1 x SB_GB, 17 x SB_IO, 536 x SB_LUT4 | 8 |
-| `usb_device_fs` | `usb_device_fs` | VID=16'h1209, PID=16'h0001 | ECP5 45F | 1 x DCCA, 549 x LUT4, 244 x TRELLIS_FF, 17 x TRELLIS_IO | 9 |
+| `usb_device_fs` | `usb_device_fs` | VID=16'h1209, PID=16'h0001 | iCE40 HX1K | 27 x SB_CARRY, 192 x SB_DFFER, 39 x SB_DFFES, 10 x SB_DFFR, 3 x SB_DFFS, 1 x SB_GB, 17 x SB_IO, 537 x SB_LUT4 | 8 |
+| `usb_device_fs` | `usb_device_fs` | VID=16'h1209, PID=16'h0001 | ECP5 45F | 1 x DCCA, 550 x LUT4, 244 x TRELLIS_FF, 17 x TRELLIS_IO | 9 |
 | `usb_device_fs_pll` | `usb_device_fs_pll` | VID=16'h1209, PID=16'h0001 | LUT4 | 63 x dff, 549 x lut | 9 |
 | `usb_device_fs_pll` | `usb_device_fs_pll` | VID=16'h1209, PID=16'h0001 | LUT6 | 63 x dff, 463 x lut | 8 |
-| `usb_device_fs_pll` | `usb_device_fs_pll` | VID=16'h1209, PID=16'h0001 | iCE40 HX1K | 27 x SB_CARRY, 192 x SB_DFFER, 39 x SB_DFFES, 10 x SB_DFFR, 3 x SB_DFFS, 1 x SB_GB, 17 x SB_IO, 536 x SB_LUT4, 1 x SB_PLL40_CORE | 8 |
-| `usb_device_fs_pll` | `usb_device_fs_pll` | VID=16'h1209, PID=16'h0001 | ECP5 45F | 1 x DCCA, 1 x EHXPLLL, 549 x LUT4, 244 x TRELLIS_FF, 17 x TRELLIS_IO | 9 |
+| `usb_device_fs_pll` | `usb_device_fs_pll` | VID=16'h1209, PID=16'h0001 | iCE40 HX1K | 27 x SB_CARRY, 192 x SB_DFFER, 39 x SB_DFFES, 10 x SB_DFFR, 3 x SB_DFFS, 1 x SB_GB, 17 x SB_IO, 537 x SB_LUT4, 1 x SB_PLL40_CORE | 8 |
+| `usb_device_fs_pll` | `usb_device_fs_pll` | VID=16'h1209, PID=16'h0001 | ECP5 45F | 1 x DCCA, 1 x EHXPLLL, 550 x LUT4, 244 x TRELLIS_FF, 17 x TRELLIS_IO | 9 |
 | `usb_device_ulpi` | `usb_device_ulpi` | VID=16'h1209, PID=16'h0001 | LUT4 | 57 x dff, 638 x lut | 9 |
 | `usb_device_ulpi` | `usb_device_ulpi` | VID=16'h1209, PID=16'h0001 | LUT6 | 57 x dff, 571 x lut | 10 |
-| `usb_device_ulpi` | `usb_device_ulpi` | VID=16'h1209, PID=16'h0001 | iCE40 HX1K | 60 x SB_CARRY, 208 x SB_DFFER, 37 x SB_DFFES, 5 x SB_DFFR, 1 x SB_GB, 33 x SB_IO, 620 x SB_LUT4 | 9 |
-| `usb_device_ulpi` | `usb_device_ulpi` | VID=16'h1209, PID=16'h0001 | ECP5 45F | 1 x DCCA, 638 x LUT4, 250 x TRELLIS_FF, 33 x TRELLIS_IO | 9 |
+| `usb_device_ulpi` | `usb_device_ulpi` | VID=16'h1209, PID=16'h0001 | iCE40 HX1K | 60 x SB_CARRY, 208 x SB_DFFER, 37 x SB_DFFES, 5 x SB_DFFR, 1 x SB_GB, 33 x SB_IO, 621 x SB_LUT4 | 9 |
+| `usb_device_ulpi` | `usb_device_ulpi` | VID=16'h1209, PID=16'h0001 | ECP5 45F | 1 x DCCA, 639 x LUT4, 250 x TRELLIS_FF, 33 x TRELLIS_IO | 9 |
 <!-- end footprints -->
 
 ### Seven things writing these blocks found

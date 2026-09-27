@@ -71,6 +71,50 @@
 //! [`crate::asic::library`], which inserts an inverter rather than
 //! refusing a polarity no standard cell has.
 //!
+//! # A constant on a flip-flop's data input
+//!
+//! A lookup table can absorb a constant input into its truth table; a
+//! flip-flop's data input cannot absorb anything, so a register bit that is
+//! genuinely constant — `reg [2:0] stage` for four states, where `stage[2]`
+//! is always zero — needs something to **drive** that constant. On a real
+//! fabric there is nothing to leave it connected to: on an ECP5 the data
+//! comes off the fabric's `M` wire, and an unrouted slice input on that
+//! family reads as a **one**, so the bit comes up set and the design reads a
+//! value it cannot produce. That cost eight rounds of investigation on a USB
+//! device that would not enumerate; `docs/fpga-trellis.md` has it in full.
+//!
+//! So [`map_cells`] finishes by giving every such flip-flop a driver:
+//! **one lookup table per constant**, shared by every flip-flop of the
+//! module that wants that value, with a truth table that is all zeros or all
+//! ones and therefore ignores every input. That is what a vendor flow does —
+//! nextpnr's `pack_constants` builds a `$PACKER_GND` and a `$PACKER_VCC`
+//! LUT4 with `INIT` 0 and 0xFFFF — and it is what Lattice's own bitstreams
+//! for a Cynthion contain, measured rather than assumed: one `SLICEA.K0`
+//! with `INIT` all zeros and one with all ones per design, every input tied
+//! high, feeding eight to thirty-two flip-flops each across the whole die,
+//! and not one flip-flop anywhere with nothing routed to its data wire.
+//! `tests/fpga_trellis.rs`'s
+//! `what_lattices_own_packer_writes_for_a_constant` is that measurement.
+//!
+//! Three things about it are deliberate:
+//!
+//! - **the constant is decided on the bit-level view**
+//!   ([`crate::ir::emit::BitView`]), so a constant that reaches the pin
+//!   through a continuous assignment, a slice or a concatenation counts as
+//!   one. The netlist builder resolves the pin the same way, which is what
+//!   makes this the same question the backend would have asked;
+//! - **the driver is placed like any other LUT.** Nothing here chooses a
+//!   site: the cell goes into the netlist and the placer allocates it, so it
+//!   cannot collide with a LUT the placer has already used, and a design with
+//!   no spare LUT is a placement error with the message placement errors
+//!   have;
+//! - **an `x` or a `z` is not built.** There is no wire value for either, so
+//!   such a pin is left as it is, and the backend refuses the flip-flop by
+//!   name and position rather than inventing a level for it.
+//!
+//! [`CellMapReport::constants`] lists the flip-flops; the LUTs themselves
+//! are counted in [`CellMapReport::primitives`] like any other.
+//!
 //! What is *not* fixed this way is the **clock edge**. Inverting a clock
 //! makes a second clock network with its own skew and duty-cycle
 //! distortion, which is a physical-design decision and not a mapper's to
@@ -92,6 +136,7 @@ use std::fmt::Write as _;
 use super::device::{BelKind, BelRole, Device, FfReset, FfVariant};
 use super::primitives::{add_assign, add_cell, add_net, const_expr, expr, net_expr, slice_expr};
 use crate::diag::{Diagnostic, Diagnostics};
+use crate::ir::emit::{BitView, SigBit};
 use crate::ir::{
     AttrValue, Bit, Cell, CellId, CellKind, Const, Design, ExprId, ExprKind, Module, ModuleId,
     Name, NetId, Type,
@@ -116,12 +161,30 @@ pub struct CellMapReport {
     /// One entry per net, however many flip-flops share it; the inverter
     /// itself is counted in `primitives` like any other LUT.
     pub inverted: Vec<(String, String)>,
+    /// Flip-flops whose data input was a constant and now has a lookup
+    /// table driving it, as `(cell, the constant)`, in cell order.
+    ///
+    /// One entry per flip-flop and **one LUT per constant**, shared by
+    /// every flip-flop of the module that wants that value, which is what
+    /// nextpnr's `pack_constants` does and what Lattice's own bitstreams
+    /// for this board contain. The LUTs themselves are counted in
+    /// `primitives` like any other.
+    pub constants: Vec<(String, Bit)>,
 }
 
 impl CellMapReport {
     /// True when nothing was rewritten and nothing was declined.
     pub fn is_empty(&self) -> bool {
-        self.primitives.is_empty() && self.declined.is_empty() && self.inverted.is_empty()
+        self.primitives.is_empty()
+            && self.declined.is_empty()
+            && self.inverted.is_empty()
+            && self.constants.is_empty()
+    }
+
+    /// How many flip-flops were given a constant driver, which is not the
+    /// number of drivers: there is one LUT per constant, not per flop.
+    pub fn constant_data_pins(&self) -> usize {
+        self.constants.len()
     }
 
     /// How many polarity inverters were inserted, which is how many nets
@@ -151,6 +214,12 @@ impl CellMapReport {
         }
         for (net, pin) in &self.inverted {
             let _ = writeln!(out, "  {net} inverted for the {pin} the device has");
+        }
+        for (cell, value) in &self.constants {
+            let _ = writeln!(
+                out,
+                "  {cell}'s data input is the constant {value}, now driven"
+            );
         }
         for (cell, why) in &self.declined {
             let _ = writeln!(out, "  {cell} stays generic ({why})");
@@ -191,6 +260,7 @@ pub fn map_cells(
     };
     map_luts(module, device, &mut report, diags);
     map_flip_flops(module, device, &mut report, diags);
+    drive_constant_data(module, device, &mut report, diags);
     report
 }
 
@@ -696,6 +766,131 @@ fn set_params(cell: &mut Cell, bel: &BelKind) {
     }
 }
 
+// --- a constant on a flip-flop's data input ---------------------------------
+
+/// Gives every flip-flop whose data input is a constant something that
+/// drives it: one lookup table per constant, shared by every flip-flop of
+/// the module that asks for that value.
+///
+/// See the module docs for why a fabric flip-flop cannot absorb a constant
+/// the way a lookup table can, and
+/// `tests/fpga_trellis.rs`'s `what_lattices_own_packer_writes_for_a_constant`
+/// for the vendor bitstreams this shape was read out of.
+fn drive_constant_data(
+    module: &mut Module,
+    device: &Device,
+    report: &mut CellMapReport,
+    diags: &mut Diagnostics,
+) {
+    let Some(lut) = device.bel(BelRole::Lut).cloned() else {
+        // No LUT to build a constant out of. The backend refuses such a
+        // flip-flop rather than writing one that comes up wrong; see
+        // `TrellisFabric::configure_registers`.
+        return;
+    };
+    let data_ports: Vec<(String, String)> = device
+        .bels
+        .iter()
+        .filter(|bel| bel.role == BelRole::Ff)
+        .map(|bel| (bel.name.clone(), bel.port("d").unwrap_or("D").to_owned()))
+        .collect();
+    if data_ports.is_empty() {
+        return;
+    }
+    // Which flip-flop asks for which constant, decided on the bit-level
+    // view so that a constant reaching the pin through a continuous
+    // assignment, a slice or a concatenation counts as one.
+    let mut wanted: Vec<(CellId, String, Bit)> = Vec::new();
+    match BitView::new(module) {
+        Ok(view) => {
+            for (id, cell) in module.cells.iter() {
+                let CellKind::Blackbox(primitive) = &cell.kind else {
+                    continue;
+                };
+                let Some((_, port)) = data_ports
+                    .iter()
+                    .find(|(name, _)| name == primitive.as_str())
+                else {
+                    continue;
+                };
+                let Some(d) = cell.input(port) else { continue };
+                let Ok(bits) = view.expr_bits(d) else {
+                    continue;
+                };
+                let [bit] = bits[..] else { continue };
+                if let SigBit::Const(value @ (Bit::Zero | Bit::One)) = view.canonical(bit) {
+                    wanted.push((id, port.clone(), value));
+                }
+            }
+        }
+        // A module whose assignments do not resolve is not this pass's
+        // problem to report: the netlist builder says so with a span.
+        Err(_) => return,
+    }
+
+    let mut zero: Option<NetId> = None;
+    let mut one: Option<NetId> = None;
+    for (id, port, value) in wanted {
+        let span = module.cells[id].span;
+        let held = if value == Bit::One {
+            &mut one
+        } else {
+            &mut zero
+        };
+        let net = match *held {
+            Some(net) => net,
+            None => {
+                let net = constant_lut(module, device, &lut, value, span, report, diags);
+                *held = Some(net);
+                net
+            }
+        };
+        let driven = net_expr(module, net, span);
+        let cell = &mut module.cells[id];
+        let name = cell.name.as_str().to_owned();
+        if let Some((_, slot)) = cell.inputs.iter_mut().find(|(p, _)| p.as_str() == port) {
+            *slot = driven;
+        }
+        report.constants.push((name, value));
+    }
+}
+
+/// One lookup table of the device's own kind whose output is `value`
+/// whatever its inputs do, and the net it drives.
+///
+/// A one-input LUT with both halves of its truth table equal to `value`:
+/// after [`map_lut`] widens it to the family's size the whole table is
+/// `value`, so the function ignores every input. That is what makes it
+/// safe on a fabric that ties an unrouted LUT input high — the value does
+/// not depend on what the inputs read — and it is the shape Lattice's own
+/// packer writes, an `INIT` of all zeros or all ones with every input
+/// tied.
+fn constant_lut(
+    module: &mut Module,
+    device: &Device,
+    bel: &BelKind,
+    value: Bit,
+    span: crate::source::Span,
+    report: &mut CellMapReport,
+    diags: &mut Diagnostics,
+) -> NetId {
+    let one = value == Bit::One;
+    let base = if one { "const1" } else { "const0" };
+    let out = add_net(module, base, Type::bit(), span);
+    let init = if one { Const::ones(2) } else { Const::zero(2) };
+    let a = const_expr(module, Const::zero(1), span);
+    let cell = add_cell(
+        module,
+        &format!("{base}$lut"),
+        CellKind::Lut { k: 1, init },
+        vec![(Name::new("a"), a)],
+        vec![(Name::new("y"), out)],
+        span,
+    );
+    map_lut(module, device, bel, cell, report, diags);
+    out
+}
+
 /// The flip-flop primitives a device declares, as a sentence.
 fn declared_variants(device: &Device) -> String {
     let mut names: Vec<&str> = Vec::new();
@@ -772,6 +967,62 @@ mod tests {
         (design, top, map)
     }
 
+    /// A module whose register's top bits are a constant: one LUT feeds bit
+    /// 0 and `value` is concatenated above it, so bits 1.. are a flip-flop
+    /// whose data input is a constant and nothing else.
+    fn design_with_constant_bits(width: u32, value: Bit) -> (Design, ModuleId, SourceMap) {
+        let (map, span) = span();
+        let mut b = ModuleBuilder::new("top", span);
+        let clk = b.input("clk", Type::bit());
+        let a = b.input("a", Type::bits(2));
+        let q = b.output("q", Type::bits(width));
+        let lut_out = b.add_net("lut_out", Type::bit());
+        let a_e = b.net(a);
+        b.cell(
+            "l",
+            CellKind::Lut {
+                k: 2,
+                init: Const::from_u64(0b0010, 4),
+            },
+            vec![(Name::new("a"), a_e)],
+            vec![(Name::new("y"), lut_out)],
+        );
+        let lut_e = b.net(lut_out);
+        // A concatenation is most significant part first, so the constants
+        // are the top bits and the LUT is bit 0.
+        let top_bits = if value == Bit::One {
+            b.constant(Const::ones(width - 1))
+        } else {
+            b.constant(Const::zero(width - 1))
+        };
+        let d = b.concat(vec![top_bits, lut_e]);
+        let clk_e = b.net(clk);
+        b.cell(
+            "r",
+            CellKind::Dff {
+                clk_pos: true,
+                has_enable: false,
+                reset: None,
+            },
+            vec![(Name::new("clk"), clk_e), (Name::new("d"), d)],
+            vec![(Name::new("q"), q)],
+        );
+        let mut design = Design::new();
+        let top = design.add_module(b.finish());
+        design.top = Some(top);
+        (design, top, map)
+    }
+
+    /// The net a cell's port is connected to, or `None` when it is not a
+    /// plain net.
+    fn port_net(design: &Design, top: ModuleId, cell: &str, port: &str) -> Option<String> {
+        let module = design.module(top);
+        let (_, cell) = module.cells.iter().find(|(_, c)| c.name.as_str() == cell)?;
+        let e = cell.input(port)?;
+        let net = module.expr(e).as_net()?;
+        Some(module.nets[net].name.as_str().to_owned())
+    }
+
     fn cells_named(design: &Design, top: ModuleId, primitive: &str) -> usize {
         design
             .module(top)
@@ -779,6 +1030,143 @@ mod tests {
             .iter()
             .filter(|(_, c)| matches!(&c.kind, CellKind::Blackbox(n) if n.as_str() == primitive))
             .count()
+    }
+
+    /// A flip-flop whose data input is the constant zero gets a lookup table
+    /// that makes the zero, because an unrouted slice input on an ECP5 reads
+    /// as a **one** and the flop would otherwise come up set. This is the
+    /// defect that kept a USB device from enumerating for eight rounds; see
+    /// `docs/fpga-trellis.md`.
+    #[test]
+    fn a_constant_on_a_flip_flops_data_input_gets_a_driver() {
+        let (mut design, top, _map) = design_with_constant_bits(2, Bit::Zero);
+        let mut diags = Diagnostics::new();
+        let device = target("ecp5-45f-CABGA381").unwrap();
+        let report = map_cells(&mut design, top, device, &mut diags);
+        assert_eq!(diags.len(), 0, "{:?}", diags.iter().next());
+        assert!(!validate(&design).has_errors());
+
+        // Two flip-flops, and the mapped LUT plus one for the constant.
+        assert_eq!(cells_named(&design, top, "TRELLIS_FF"), 2);
+        assert_eq!(report.count("LUT4"), 2);
+        assert_eq!(
+            report.constants,
+            vec![("r$ff1".to_owned(), Bit::Zero)],
+            "one flip-flop asked for a constant, and it is the top bit"
+        );
+        assert_eq!(report.constant_data_pins(), 1);
+        assert!(
+            report
+                .to_text()
+                .contains("r$ff1's data input is the constant 0, now driven"),
+            "{}",
+            report.to_text()
+        );
+
+        // The flop's data comes off the driver's net, and that driver is a
+        // LUT4 whose truth table is all zeros however its inputs read.
+        assert_eq!(
+            port_net(&design, top, "r$ff1", "DI").as_deref(),
+            Some("const0")
+        );
+        let driver = design
+            .module(top)
+            .cells
+            .iter()
+            .find(|(_, c)| c.name.as_str() == "const0$lut")
+            .map(|(_, c)| c.clone())
+            .expect("the constant driver is in the netlist");
+        let Some(AttrValue::Const(init)) = driver.params.get("INIT") else {
+            panic!("no INIT on the constant driver");
+        };
+        assert_eq!(init.width(), 16);
+        assert_eq!(init.to_u64(), Some(0x0000));
+        assert_eq!(
+            driver
+                .inputs
+                .iter()
+                .map(|(n, _)| n.as_str())
+                .collect::<Vec<_>>(),
+            ["A", "B", "C", "D"],
+            "every input is connected, so nothing is left for the fabric to decide"
+        );
+    }
+
+    /// The constant one is the same shape with the other truth table — and
+    /// on an ECP5 it costs no `INIT` bits at all, since all ones is what the
+    /// field defaults to. It is built anyway, because *why* an undriven wire
+    /// reads as a one is a property of the silicon and not something a
+    /// netlist should depend on.
+    #[test]
+    fn a_constant_one_gets_a_driver_of_its_own() {
+        let (mut design, top, _map) = design_with_constant_bits(2, Bit::One);
+        let mut diags = Diagnostics::new();
+        let device = target("ecp5-45f-CABGA381").unwrap();
+        let report = map_cells(&mut design, top, device, &mut diags);
+        assert_eq!(diags.len(), 0, "{:?}", diags.iter().next());
+        assert!(!validate(&design).has_errors());
+        assert_eq!(report.constants, vec![("r$ff1".to_owned(), Bit::One)]);
+        assert_eq!(
+            port_net(&design, top, "r$ff1", "DI").as_deref(),
+            Some("const1")
+        );
+        let driver = design
+            .module(top)
+            .cells
+            .iter()
+            .find(|(_, c)| c.name.as_str() == "const1$lut")
+            .map(|(_, c)| c.clone())
+            .expect("the constant driver is in the netlist");
+        let Some(AttrValue::Const(init)) = driver.params.get("INIT") else {
+            panic!("no INIT on the constant driver");
+        };
+        assert_eq!(init.to_u64(), Some(0xFFFF));
+    }
+
+    /// One driver per constant, not one per flip-flop, which is what
+    /// nextpnr's `pack_constants` does and what Lattice's own bitstreams for
+    /// a Cynthion contain: one `SLICEA.K0` feeding eight, twelve, eighteen
+    /// or thirty-two flip-flops across the whole die.
+    #[test]
+    fn every_flip_flop_wanting_the_same_constant_shares_one_driver() {
+        let (mut design, top, _map) = design_with_constant_bits(5, Bit::Zero);
+        let mut diags = Diagnostics::new();
+        let device = target("ecp5-45f-CABGA381").unwrap();
+        let report = map_cells(&mut design, top, device, &mut diags);
+        assert_eq!(diags.len(), 0, "{:?}", diags.iter().next());
+        assert!(!validate(&design).has_errors());
+        assert_eq!(report.constant_data_pins(), 4, "bits 1 to 4 are the zero");
+        assert_eq!(report.count("LUT4"), 2, "the mapped one and one constant");
+        assert_eq!(
+            cells_named(&design, top, "LUT4"),
+            2,
+            "and no second copy of the constant in the module either"
+        );
+        for bit in 1..5 {
+            assert_eq!(
+                port_net(&design, top, &format!("r$ff{bit}"), "DI").as_deref(),
+                Some("const0"),
+                "bit {bit}"
+            );
+        }
+    }
+
+    /// A device whose file declares no LUT cannot have a constant built for
+    /// it, and the pass says nothing rather than half-doing it. The backend
+    /// is what refuses such a flip-flop, by name and position.
+    #[test]
+    fn a_device_with_no_lut_gets_no_constant_driver() {
+        let (mut design, top, _map) = design_with_constant_bits(2, Bit::Zero);
+        let mut diags = Diagnostics::new();
+        let mut device = target("ecp5-45f-CABGA381").unwrap().clone();
+        device.bels.retain(|bel| bel.role != BelRole::Lut);
+        let report = map_cells(&mut design, top, &device, &mut diags);
+        assert!(report.constants.is_empty());
+        assert_eq!(
+            port_net(&design, top, "r$ff1", "DI"),
+            None,
+            "the data input is still the constant it was"
+        );
     }
 
     #[test]

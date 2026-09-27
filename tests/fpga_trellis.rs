@@ -2334,45 +2334,194 @@ fn what_lattices_own_packer_writes_for_a_slew_rate() {
     assert_eq!(checked, 3 * 13, "one bit per ULPI pin per file");
 }
 
-/// A register bit nothing ever sets is **refused**, because this family would
-/// bring it up as a one.
+/// The flip-flop index a `SLICE<l>.REG<n>.SD` field names, for the value
+/// `0` — the one that says the data comes from the fabric's `M` wire — and
+/// `None` for any other field or value.
+fn fabric_data_index(field: &str, value: &str) -> Option<u32> {
+    if value != "0" {
+        return None;
+    }
+    let rest = field.strip_prefix("SLICE")?;
+    let letter = *rest.as_bytes().first()?;
+    let half = rest.strip_prefix(&format!("{}.REG", char::from(letter)))?;
+    let half = half.strip_suffix(".SD")?.parse::<u32>().ok()?;
+    let letter = u32::from(letter.checked_sub(b'A')?);
+    (letter < 4 && half < 2).then_some(2 * letter + half)
+}
+
+/// A register bit nothing in the design ever sets is **built**, out of a
+/// constant this flow makes, and the bit comes up **clear**.
 ///
-/// This is the defect that cost eight rounds of looking somewhere else.
-/// `testdata/fpga/cynthion/wide_state.v` has a three-bit register with four
-/// values, so its top bit is a flip-flop whose data input is the constant zero;
-/// `SD = 0` takes that data from the fabric's `M` wire; and an unrouted slice
-/// input on an ECP5 reads as a **one**, because Lattice's own packer ties unused
-/// lookup-table inputs high and `configure_logic` does the same.
+/// This test used to pin a refusal. The refusal was honest — a flip-flop
+/// whose data input nothing drives comes up as a *one* on this family, so
+/// writing one would have been writing a device that does something else —
+/// but refusing is a capability regression: a register bit that is genuinely
+/// constant is legal Verilog and legal silicon, and this backend now builds
+/// it the way Lattice's own packer does. See
+/// `what_lattices_own_packer_writes_for_a_constant` for what that is, read
+/// out of their own bitstreams.
 ///
-/// `ip/usb_device_fs/rtl/usb_ctrl_ep.v` had that register: `reg [2:0] stage`
-/// for four states. Read back off a real ECP5 through a debug port, `stage` was
-/// **5**, every `case (stage)` label missed, every IN token a host sent was
-/// answered from the `default` arm with a NAK, and the host's transfer died of
-/// the five second timeout the kernel prints as `device descriptor read/64,
-/// error -110` — with the device's receive path byte-exact, its transmit path
-/// putting a well-formed handshake on the pair, and the host's SETUP
-/// acknowledged. Nothing about the bitstream was unexplained, nothing about the
-/// routing was incomplete, and 26 916 of 26 916 bits decoded. The only thing
-/// wrong was a flip-flop loading a one where the design said zero.
+/// `testdata/fpga/cynthion/wide_state.v` is the reproducer: three bits, four
+/// values, so `state[2]` is a flip-flop whose data input is the constant
+/// zero. `ip/usb_device_fs/rtl/usb_ctrl_ep.v` had exactly that in its
+/// `stage` register, and read back off a real ECP5 through a debug port
+/// `stage` was **5**: every `case (stage)` label missed, every IN token the
+/// host sent was answered from the `default` arm with a NAK, and the
+/// transfer died of the five-second timeout the kernel prints as `device
+/// descriptor read/64, error -110`. Nothing about that bitstream was
+/// unexplained and 26 916 of 26 916 bits decoded; the only thing wrong was a
+/// flip-flop loading a one where the design said zero.
 ///
-/// So the flow refuses it by name. `configure_registers` says which cell, which
-/// bel and which tile, and says what to do about it.
+/// What is pinned here is the whole of the fix:
+///
+/// 1. the design **compiles**, places, routes and configures;
+/// 2. the netlist holds the constant driver, by name, and only the one the
+///    design needs;
+/// 3. the finished bitstream holds exactly one lookup table whose `INIT` is
+///    all zeros — the constant — and its four inputs are tied high, so its
+///    output does not depend on what an unrouted input reads as;
+/// 4. the flip-flop that wanted the zero takes its data, through the
+///    bitstream's **own** arcs walked backwards, from that lookup table:
+///    nothing is floating any more;
+/// 5. and every one of the image's set bits still decodes.
 #[test]
 #[cfg(all(feature = "verilog", feature = "synth"))]
-#[should_panic(expected = "nothing driving its data input")]
-fn a_register_bit_nothing_drives_is_refused() {
-    let Some(root) = chipdb() else {
-        // There is no database, so there is nothing to refuse — and a test that
-        // must panic has to panic anyway, so it says why.
-        panic!("no chip database: nothing driving its data input cannot be checked");
-    };
+fn a_register_bit_nothing_drives_is_built_from_a_constant() {
+    let Some(root) = chipdb() else { return };
     let db = trellis::open(&Disk(root), "", PART).unwrap();
     let fabric = db.load(&TrellisOptions::new()).unwrap();
-    let _ = compile(
+    let (_, stream, pads, _, _, routed) = compile(
         &fabric,
         "testdata/fpga/cynthion/wide_state.v",
         "testdata/fpga/cynthion/wide_state.rcf",
     );
+
+    // ---- 1. it builds ----
+    assert_eq!(pads, 2, "a clock in and one LED out");
+    assert_eq!(routed.ffs, 3, "three bits, and the third is the constant");
+    assert!(routed.dropped.is_empty(), "{:?}", routed.dropped);
+
+    // ---- 2. the constant driver is in the netlist, and only the one ----
+    let luts: Vec<&str> = routed
+        .netlist
+        .instances
+        .iter()
+        .filter(|i| i.kind == "lut")
+        .map(|i| i.name.as_str())
+        .collect();
+    assert_eq!(
+        luts.iter().filter(|n| n.starts_with("const0")).count(),
+        1,
+        "one driver for the one constant the design needs: {luts:?}"
+    );
+    assert!(
+        !luts.iter().any(|n| n.starts_with("const1")),
+        "nothing in this design wants a one: {luts:?}"
+    );
+
+    // ---- 3. and one in the bitstream, with its inputs tied ----
+    let decoded = db.decode(&stream.cram);
+    let zero_luts: Vec<((u32, u32), String)> = decoded
+        .words
+        .iter()
+        .filter(|(_, field, value)| field.ends_with(".INIT") && value.chars().all(|c| c == '0'))
+        .map(|(at, field, _)| (*at, field.clone()))
+        .collect();
+    assert_eq!(
+        zero_luts.len(),
+        1,
+        "one lookup table holding the constant zero: {zero_luts:?}"
+    );
+    let (at, field) = &zero_luts[0];
+    let bel = field.trim_end_matches(".INIT");
+    let letter = bel.as_bytes()[5];
+    let half: u32 = bel[bel.len() - 1..].parse().unwrap();
+    let ty = fabric.arch.tile_index_at(at.0, at.1).unwrap();
+    let lut = fabric.luts.get(&(ty, bel.to_owned())).unwrap();
+    for (input, groups) in lut.tie_high.iter().enumerate() {
+        for bit_at in groups {
+            let (frame, index) = fabric.frames.locate(*at, *bit_at).unwrap();
+            assert!(
+                stream.cram.get(frame, index),
+                "F{frame}B{index} ties input {input} of {bel} at X{}Y{} high, and it is clear: a \
+                 constant whose inputs are not tied depends on what an unrouted input reads as",
+                at.0,
+                at.1
+            );
+        }
+    }
+
+    // ---- 4. the flip-flop's data comes from it ----
+    //
+    // Walked backwards through the bitstream's own arcs, so this is a
+    // statement about the file and not about the router's bookkeeping.
+    let (arcs, unresolved) = db.resolved_arcs(&decoded);
+    assert!(unresolved.is_empty(), "{unresolved:?}");
+    let mut driver = std::collections::BTreeMap::new();
+    for (to, from) in &arcs {
+        driver.insert(to.clone(), from.clone());
+    }
+    let index = 2 * u32::from(letter - b'A') + half;
+    let output = (format!("F{index}"), *at);
+    let mut fed = 0usize;
+    let mut floating: Vec<String> = Vec::new();
+    for (pos, sd, value) in &decoded.enums {
+        let Some(z) = fabric_data_index(sd, value) else {
+            continue;
+        };
+        let start = (format!("M{z}"), *pos);
+        let mut wire = start.clone();
+        let mut seen = std::collections::BTreeSet::new();
+        while let Some(next) = driver.get(&wire) {
+            if !seen.insert(next.clone()) {
+                break;
+            }
+            wire = next.clone();
+        }
+        if wire == start {
+            floating.push(format!("M{z} at X{}Y{}", pos.0, pos.1));
+        } else if wire == output {
+            fed += 1;
+        }
+    }
+    assert!(
+        floating.is_empty(),
+        "a flip-flop's data wire has nothing routed to it: {floating:?}"
+    );
+    assert_eq!(
+        fed, 1,
+        "exactly one flip-flop of this design takes its data from the constant"
+    );
+
+    // ---- 5. and every bit still decodes ----
+    assert_eq!(
+        decoded.bits,
+        stream.cram.count_ones(),
+        "the decoder and the writer disagree about how many bits are set"
+    );
+    assert_eq!(
+        decoded.unexplained, 0,
+        "{} of {} bit(s) belong to no feature the database names: {:?}",
+        decoded.unexplained, decoded.bits, decoded.leftovers
+    );
+    let (selected, _) = db.resolved_arcs(&decoded);
+    assert_eq!(
+        selected, routed.wires,
+        "the bits select connections the router did not choose, or fail to select ones it did"
+    );
+    // The size of the finished image, and what the constant cost in it.
+    // Without a constant driver the same design is 171 bits, 45 arcs that
+    // cost bits, 4 `.config` words and 34 enumerated fields; with one it is
+    // 199, 47, 5 and 38. The 28 new bits are all accounted for: **16** for
+    // the `INIT` of the lookup table, one bit per entry of a truth table
+    // that is all zeros, **8** for the four two-bit ties that hold its
+    // inputs high, and **4** for the two arcs that carry its output to the
+    // flip-flop's `M` wire, two bits each. Nothing else in the image moved.
+    assert_eq!(
+        decoded.bits, 199,
+        "the size of the finished image, of which 28 bits are the constant"
+    );
+    assert_eq!(decoded.words.len(), 5, "four mapped LUTs and the constant");
 }
 
 /// The ball the bidirectional pad is on: `led_n[0]`, the LED at the end of
