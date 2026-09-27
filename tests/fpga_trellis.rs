@@ -2334,6 +2334,197 @@ fn what_lattices_own_packer_writes_for_a_slew_rate() {
     assert_eq!(checked, 3 * 13, "one bit per ULPI pin per file");
 }
 
+/// Where every flip-flop's data comes from, in Lattice's own bitstreams for
+/// this very board, and what they do about one whose data is a constant.
+///
+/// This is the "what does the vendor write, **in full**?" question asked
+/// about the defect that cost eight rounds of looking somewhere else: a
+/// flip-flop whose data input is the constant zero. The answer, read out of
+/// `analyzer.bit`, `selftest.bit` and `facedancer.bit` by walking their own
+/// arcs backwards from every `M` wire:
+///
+/// | | |
+/// |---|---|
+/// | Undriven data wires | **none.** Every one of 1135 (analyzer), 215 (selftest) and 3132 (facedancer) flip-flops with `REG<n>.SD = 0` has something routed to its `M` wire. The vendor never leaves that wire floating |
+/// | What a constant is made of | a **lookup table**, `SLICEA.K0` in all four cases, with `INIT` all zeros for a zero and all ones for a one, every one of its four inputs tied high (`A0MUX`..`D0MUX = 1`), `MODE` left at `LOGIC` |
+/// | How many | **one per constant per design**, shared: analyzer has one of each feeding 12 and 18 flip-flops, facedancer one of each feeding 8 and 32, and its output fans out to nine hundred-odd sinks across the whole die |
+/// | What it costs | sixteen `INIT` bits for a zero, **none** for a one — all ones is the field's default — plus the four tie bits either way |
+/// | What they never write | `SLICE<l>.M<n>MUX`. The database declares a `1` value for it, which would tie the `M` wire high for two bits and no LUT at all, and not one of the three files sets it anywhere |
+///
+/// That is nextpnr's `pack_constants` verbatim — a `$PACKER_GND` and a
+/// `$PACKER_VCC` LUT4 with `INIT` 0 and 0xFFFF — and it is what
+/// `techcells::drive_constant_data` now builds, which is why this test is
+/// about *their* files: it is the statement of intent the flow is measured
+/// against.
+///
+/// `selftest.bit` has no constant on a flip-flop's data pin at all, and that
+/// is asserted rather than skipped: a design that needs no constant is the
+/// case the flow must not change.
+#[test]
+fn what_lattices_own_packer_writes_for_a_constant() {
+    let Some(root) = chipdb() else { return };
+    let db = trellis::open(&Disk(root), "", PART).unwrap();
+    let fabric = db.load(&TrellisOptions::new()).unwrap();
+    // Per file: how many flip-flops take their data from the fabric at all,
+    // then the lookup tables that make a zero and the ones that make a one.
+    let expected: [(&str, usize, Vec<Constant>, Vec<Constant>); 3] = [
+        (
+            "analyzer",
+            1135,
+            vec![((38, 27), 'A', 0, 12)],
+            vec![((5, 27), 'A', 0, 18)],
+        ),
+        ("selftest", 215, vec![], vec![]),
+        (
+            "facedancer",
+            3132,
+            vec![((11, 6), 'A', 0, 8)],
+            vec![((64, 8), 'A', 0, 32)],
+        ),
+    ];
+    for (name, fabric_fed, zeros, ones) in expected {
+        let Some(bytes) = reference(name) else { return };
+        let stream = Ecp5Stream::parse(&bytes, &formats).unwrap();
+        let decoded = db.decode(&stream.cram);
+        let (arcs, unresolved) = db.resolved_arcs(&decoded);
+        assert!(unresolved.is_empty(), "{name}: {unresolved:?}");
+        let mut driver = std::collections::BTreeMap::new();
+        for (to, from) in &arcs {
+            driver.insert(to.clone(), from.clone());
+        }
+        // Every flip-flop whose data comes from the fabric, and where that
+        // data ultimately comes from.
+        let mut undriven: Vec<String> = Vec::new();
+        let mut fed_by: std::collections::BTreeMap<(String, (u32, u32)), usize> =
+            std::collections::BTreeMap::new();
+        let mut flops = 0usize;
+        for (at, field, value) in &decoded.enums {
+            let Some(z) = fabric_data_index(field, value) else {
+                continue;
+            };
+            flops += 1;
+            let mut wire = (format!("M{z}"), *at);
+            if !driver.contains_key(&wire) {
+                undriven.push(format!("M{z} at X{}Y{}", at.0, at.1));
+                continue;
+            }
+            let mut seen = std::collections::BTreeSet::new();
+            while let Some(next) = driver.get(&wire) {
+                if !seen.insert(next.clone()) {
+                    break;
+                }
+                wire = next.clone();
+            }
+            *fed_by.entry(wire).or_default() += 1;
+        }
+        assert_eq!(flops, fabric_fed, "{name}: flip-flops with REG<n>.SD = 0");
+        // The headline: the vendor never leaves a flip-flop's data wire
+        // floating. That is the check this flow did not have for eight
+        // rounds of looking somewhere else.
+        assert!(
+            undriven.is_empty(),
+            "{name}.bit has {} flip-flop(s) with nothing routed to their data wire: {undriven:?}",
+            undriven.len()
+        );
+        // Of those sources, the ones that are a constant lookup table.
+        let mut found_zero: Vec<Constant> = Vec::new();
+        let mut found_one: Vec<Constant> = Vec::new();
+        for ((wire, at), fed) in &fed_by {
+            let Some(index) = wire.strip_prefix('F').and_then(|n| n.parse::<u32>().ok()) else {
+                continue;
+            };
+            let letter = ['A', 'B', 'C', 'D'][(index / 2) as usize];
+            let half = index % 2;
+            let field = format!("SLICE{letter}.K{half}.INIT");
+            let init = decoded
+                .words
+                .iter()
+                .find(|(pos, what, _)| pos == at && *what == field)
+                .map(|(_, _, value)| value.as_str())
+                // A word at its default is not reported, and this field's
+                // default is all ones.
+                .unwrap_or("1111111111111111");
+            let here = (*at, letter, half, *fed);
+            if init.chars().all(|c| c == '0') {
+                found_zero.push(here);
+            } else if init.chars().all(|c| c == '1') {
+                found_one.push(here);
+            }
+        }
+        assert_eq!(found_zero, zeros, "{name}: the LUTs that make a zero");
+        assert_eq!(found_one, ones, "{name}: the LUTs that make a one");
+
+        // And what those cost, at absolute frame positions, read as the bits
+        // this crate's own `LutBits` would write.
+        for (at, letter, half, _) in zeros.iter().chain(ones.iter()) {
+            let ty = fabric
+                .arch
+                .tile_index_at(at.0, at.1)
+                .expect("a position of the grid");
+            let lut = fabric
+                .luts
+                .get(&(ty, format!("SLICE{letter}.K{half}")))
+                .expect("a logic tile declares eight lookup tables");
+            let zero = zeros.iter().any(|(pos, _, _, _)| pos == at);
+            for (bit, groups) in lut.init_zero.iter().enumerate() {
+                for bit_at in groups {
+                    let (frame, index) = fabric
+                        .frames
+                        .locate(*at, *bit_at)
+                        .expect("a bit of the position it belongs to");
+                    assert_eq!(
+                        stream.cram.get(frame, index),
+                        zero,
+                        "{name}.bit: F{frame}B{index} is bit {bit} of SLICE{letter}.K{half}.INIT \
+                         at X{}Y{}, the LUT that makes the constant {}",
+                        at.0,
+                        at.1,
+                        u32::from(!zero)
+                    );
+                }
+            }
+            // Every input tied high, whichever constant it makes, which is
+            // what makes the value independent of what an unrouted input
+            // reads as.
+            for (input, groups) in lut.tie_high.iter().enumerate() {
+                assert!(!groups.is_empty(), "input {input} has no tie");
+                for bit_at in groups {
+                    let (frame, index) = fabric
+                        .frames
+                        .locate(*at, *bit_at)
+                        .expect("a bit of the position it belongs to");
+                    assert!(
+                        stream.cram.get(frame, index),
+                        "{name}.bit: F{frame}B{index}, which ties input {input} of \
+                         SLICE{letter}.K{half} at X{}Y{} high, is clear",
+                        at.0,
+                        at.1
+                    );
+                }
+            }
+        }
+
+        // The slice's own tie for an `M` wire, which the database declares
+        // and the vendor does not use anywhere.
+        let ties: Vec<&String> = decoded
+            .enums
+            .iter()
+            .filter(|(_, field, _)| {
+                field.contains(".M") && field.ends_with("MUX") && !field.contains("MODE")
+            })
+            .map(|(_, field, _)| field)
+            .collect();
+        assert!(
+            ties.is_empty(),
+            "{name}.bit ties an M wire in the slice: {ties:?}"
+        );
+    }
+}
+
+/// One constant driver of a reference bitstream: where it is, which slice
+/// and which half of it, and how many flip-flops take their data from it.
+type Constant = ((u32, u32), char, u32, usize);
+
 /// The flip-flop index a `SLICE<l>.REG<n>.SD` field names, for the value
 /// `0` — the one that says the data comes from the fabric's `M` wire — and
 /// `None` for any other field or value.
