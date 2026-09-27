@@ -1,0 +1,80 @@
+# usb_cdc_acm: a USB serial port the operating system's own driver binds
+# to — `/dev/ttyACM*` on Linux, a COM port on Windows — built on the
+# device core in `usb_device_fs`. Three modules: `usb_cdc_req` answers the
+# class requests a serial driver sends (SET_LINE_CODING, GET_LINE_CODING,
+# SET_CONTROL_LINE_STATE) on `usb_ctrl_ep`'s class hook, `usb_cdc_acm` is
+# that plus the two interfaces, five functional descriptors and three
+# endpoints CDC ACM needs, and the two `_fs` / `_ulpi` wrappers put it
+# behind each of this library's link layers.
+#
+# `top` names the ULPI wrapper because that is the one that has run on a
+# board; `usb_cdc_acm_fs` is the same class layer on a board whose D+ / D-
+# reach the FPGA, and `usb_cdc_acm` on its own is for a design that has a
+# link layer of its own.
+#
+# Two `depends` lines and they are not alternatives: `usb_device_fs` is
+# where `usb_dev_core`, `usb_ctrl_ep`, `usb_bulk_ep`, `usb_pkt_rx` and the
+# full-speed line layer live, and `usb_device_ulpi` is where
+# `usb_ulpi_link` does. A design that uses only one of the wrappers
+# carries the other's link layer in its source list and instantiates
+# nothing from it.
+#
+# README.md states the descriptor set field by field with the table each
+# field comes from, and separates what was **checked** against a host from
+# what is only **quoted** from a specification. §5 of it is the kernel log
+# and the `lsusb -v` off the part.
+name usb_cdc_acm
+version 1.0.0
+license MIT
+description "USB CDC ACM serial port: two interfaces with the union functional descriptor, the line-coding and control-line requests, an interrupt notification endpoint and a bulk pair, behind either of this library's USB link layers"
+
+top usb_cdc_acm_ulpi
+target ice40
+target ecp5
+
+source rtl/usb_cdc_req.v
+source rtl/usb_cdc_acm.v
+source rtl/usb_cdc_acm_fs.v
+source rtl/usb_cdc_acm_ulpi.v
+
+depends usb_device_fs ^1.0.0
+depends usb_device_ulpi ^1.0.0
+
+param VID bits 16'h1209
+param PID bits 16'h0001
+param RESET_CYCLES int 300 2..65535
+param SE0_CYCLES int 150 2..255
+param LINE_TRIES int 40000 1..1000000
+param TURNAROUND bits 7'd9
+param VENDOR_ADDR bits 6'h00
+param VENDOR_DATA bits 8'h00
+param CFG_ATTR bits 8'h80
+param CFG_POWER bits 8'd50
+
+port clk60 in
+port rst_n in
+port ulpi_data_i in 8
+port ulpi_data_o out 8
+port ulpi_data_oe out
+port ulpi_dir in
+port ulpi_nxt in
+port ulpi_stp out
+port ulpi_rst_n out
+port address out 7
+port configured out
+port usb_reset out
+port phy_ready out
+port out_data out 8
+port out_valid out
+port out_last out
+port out_ready in
+port in_data in 8
+port in_valid in
+port in_ready out
+port in_commit in
+port baud out 32
+port char_format out 8
+port parity out 8
+port data_bits out 8
+port dtr out
+port rts out
