@@ -38,8 +38,8 @@
 //! **A kept object is in the netlist that synthesis hands on.** In detail:
 //!
 //! - A kept **net** survives dead-code elimination even when nothing reads
-//!   it, its value is never substituted into its readers, and it is never
-//!   aliased into another net.
+//!   it, and its readers are never rewritten to read its value or another
+//!   net in its place. It keeps its own name and its own driver.
 //! - **A kept net driven by a state element keeps that state element.** A
 //!   flip-flop or latch whose `q` is kept is not folded to a constant, not
 //!   removed for want of a reader, and not merged into another register.
@@ -62,9 +62,15 @@
 //!   same flip-flop with the same behaviour on the same net; they are how
 //!   it reaches a fabric's `CE` and `SR` pins at all.
 //! - A **combinational** cell driving a kept net may still fold to a
-//!   constant assignment, and technology mapping still covers it with
-//!   lookup tables or library cells. The net keeps its name and its value,
-//!   which is everything an observer of a wire can ask for.
+//!   constant assignment, and the AIG cover still absorbs it into lookup
+//!   tables — the kept net is forced to be an output of the cover, so it
+//!   keeps its name and its value, which is everything an observer of a
+//!   wire can ask for.
+//! - Technology mapping still rewrites kept state into the device's own
+//!   primitives: a kept `dff` becomes a `TRELLIS_FF` like any other, which
+//!   is what makes it something a bitstream can hold. A kept
+//!   **combinational** cell is the one thing the AIG cover refuses to
+//!   absorb, so it reaches the backend as itself.
 //!
 //! The asymmetry between the last two points is the whole of the rule.
 //! Folding a combinational cell leaves the kept net with the value it

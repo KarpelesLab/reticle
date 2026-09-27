@@ -187,8 +187,8 @@ logic analyser, a probe point, a downstream tool, or the silicon itself.
 `dont-touch` count too. What it promises:
 
 - A kept **net** survives dead-code elimination even when nothing reads
-  it, its value is never substituted into its readers, and it is never
-  aliased into another net.
+  it, and its readers are never rewritten to read its value or another net
+  in its place. It keeps its own name and its own driver.
 - A kept net driven by a **state** element keeps that state element: a
   flip-flop or latch whose `q` is kept is not folded to a constant, not
   removed for want of a reader and not merged into another register.
@@ -198,9 +198,11 @@ logic analyser, a probe point, a downstream tool, or the silicon itself.
 What still applies to a kept object: the expression cone that feeds it is
 still folded, narrowed and shared; a kept flip-flop still has a constant
 enable dropped and an enable or synchronous reset lifted out of its `d`
-mux, since that is the same flip-flop on the same net; and a
-**combinational** cell driving a kept net may still fold to a constant
-assignment, since the net keeps both its name and its value. Only state
+mux, since that is the same flip-flop on the same net; a **combinational**
+cell driving a kept net may still fold to a constant assignment or be
+absorbed into a lookup-table cover, since the net keeps both its name and
+its value; and technology mapping still rewrites a kept `dff` into the
+device's own flip-flop, which is what lets a bitstream hold it. Only state
 inherits its output's keep, because only state decides *when* its net takes
 a value — a flip-flop's value before its first clock edge is a property of
 the fabric rather than of the IR, which is the difference a constant-fed
