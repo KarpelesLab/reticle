@@ -299,6 +299,16 @@ const VARIANTS: &[Variant] = &[
         top: "usb_device_ulpi",
         params: &[("VID", "16'h1209"), ("PID", "16'h0001")],
     },
+    Variant {
+        package: "usb_cdc_acm",
+        top: "usb_cdc_acm_fs",
+        params: &[("VID", "16'h1209"), ("PID", "16'h0001")],
+    },
+    Variant {
+        package: "usb_cdc_acm",
+        top: "usb_cdc_acm_ulpi",
+        params: &[("VID", "16'h1209"), ("PID", "16'h0001")],
+    },
 ];
 
 /// Board constraints a variant needs to go through the FPGA flow, as
@@ -8524,6 +8534,14 @@ trait UsbPair {
     fn answer_window(&self) -> (u64, u64);
     /// The data endpoint's byte interface, and the logic above it.
     fn data(&mut self) -> &mut DataEp;
+    /// One of the block's own top-level nets, by name.
+    ///
+    /// The bus is what most of these tests read, but a class layer reports
+    /// things that never reach the bus — what line coding the host asked
+    /// for, whether it raised DTR — and those are ports. A named lookup
+    /// keeps the trait from growing a method per signal of every future
+    /// class.
+    fn port(&self, name: &str) -> u64;
 }
 
 /// The data endpoint's byte interface, and whatever stands in for the logic
@@ -8951,6 +8969,41 @@ impl<P: UsbPair> UsbHost<P> {
         self.pair.data()
     }
 
+    /// One of the block's own top-level nets, by name.
+    fn port(&self, name: &str) -> u64 {
+        self.pair.port(name)
+    }
+
+    /// A control transfer whose data stage goes **host to device**: SETUP,
+    /// one DATA1 packet of `payload`, then the zero-length IN of the status
+    /// stage.
+    ///
+    /// The toggle is DATA1 because a control transfer's data stage starts
+    /// at DATA1 whichever way it points (USB 2.0 §8.5.3), and `payload` is
+    /// one packet because that is all `usb_ctrl_ep`'s class hook takes.
+    /// The reply is the status stage's, so a request the device stalled
+    /// somewhere is visible as a STALL here.
+    fn control_write_data(&mut self, addr: u8, request: [u8; 8], payload: &[u8]) -> UsbReply {
+        let reply = self.setup(addr, request);
+        if reply != UsbReply::Handshake(USB_ACK) {
+            return reply;
+        }
+        self.idle(4);
+        self.send(&usb_token(USB_OUT, addr, 0));
+        self.idle(3);
+        self.send(&usb_data(USB_DATA1, payload));
+        let data_stage = self.receive();
+        if data_stage != UsbReply::Handshake(USB_ACK) {
+            return data_stage;
+        }
+        self.idle(4);
+        let status = self.in_token(addr);
+        if status == UsbReply::Data(USB_DATA1, Vec::new()) {
+            self.ack();
+        }
+        status
+    }
+
     /// A control transfer with no data stage: SETUP, then a zero-length
     /// IN for the status, acknowledged.
     fn control_write(&mut self, addr: u8, request: [u8; 8]) -> UsbReply {
@@ -9109,6 +9162,10 @@ impl UsbPair for FsPair<'_> {
     fn data(&mut self) -> &mut DataEp {
         &mut self.data
     }
+
+    fn port(&self, name: &str) -> u64 {
+        get_u64(&self.sim, top_net(&self.sim, name))
+    }
 }
 
 const GET_DEVICE_DESCRIPTOR: [u8; 8] = [0x80, 0x06, 0x00, 0x01, 0x00, 0x00, 0x40, 0x00];
@@ -9125,7 +9182,15 @@ fn set_address(addr: u8) -> [u8; 8] {
 /// The device descriptor the block should send, written from the
 /// specification's layout rather than from the block's table.
 fn expected_device_descriptor(vid: u16, pid: u16) -> Vec<u8> {
-    let mut d = vec![18, 1, 0x00, 0x02, 0xFF, 0x00, 0x00, 8];
+    expected_device_descriptor_of(vid, pid, [0xFF, 0x00, 0x00])
+}
+
+/// The same, for a device whose class triple is not the vendor-specific
+/// default: `ip/usb_cdc_acm` says `02h` in the device descriptor as well as
+/// in its communications interface, which is what CDC 1.1 Table 14 asks
+/// for.
+fn expected_device_descriptor_of(vid: u16, pid: u16, class: [u8; 3]) -> Vec<u8> {
+    let mut d = vec![18, 1, 0x00, 0x02, class[0], class[1], class[2], 8];
     d.extend_from_slice(&vid.to_le_bytes());
     d.extend_from_slice(&pid.to_le_bytes());
     d.extend_from_slice(&[0x00, 0x01, 0, 0, 0, 1]);
@@ -9225,6 +9290,23 @@ fn usb_enumerate(drift: i32) {
 /// held to it, since what a host does to a device does not depend on how
 /// the device's bytes reach the pair.
 fn enumerate<P: UsbPair>(host: &mut UsbHost<P>) {
+    enumerate_descriptors(
+        host,
+        &expected_device_descriptor(0x1209, 0x0001),
+        &expected_configuration_descriptor(),
+    );
+}
+
+/// The same enumeration against a stated pair of descriptors, so that a
+/// class layer's own descriptor set goes through **the whole of it** —
+/// every short read, the read that ends on wLength, both directions of
+/// SET_CONFIGURATION and a second enumeration after a bus reset — rather
+/// than through a test of its own that would check less.
+fn enumerate_descriptors<P: UsbPair>(
+    host: &mut UsbHost<P>,
+    device_want: &[u8],
+    config_want: &[u8],
+) {
     host.bus_reset();
     assert_eq!(host.address(), 0);
 
@@ -9233,7 +9315,7 @@ fn enumerate<P: UsbPair>(host: &mut UsbHost<P>) {
     let device = host
         .control_read(0, GET_DEVICE_DESCRIPTOR)
         .expect("the device descriptor");
-    assert_eq!(device, expected_device_descriptor(0x1209, 0x0001));
+    assert_eq!(device, device_want);
 
     // SET_ADDRESS takes effect after its status stage, not before.
     let status = host.control_write(0, set_address(9));
@@ -9251,18 +9333,17 @@ fn enumerate<P: UsbPair>(host: &mut UsbHost<P>) {
     let first8 = host
         .control_read(9, get_descriptor(1, 8))
         .expect("eight bytes");
-    assert_eq!(first8, expected_device_descriptor(0x1209, 0x0001)[..8]);
+    assert_eq!(first8, device_want[..8]);
     let config9 = host
         .control_read(9, get_descriptor(2, 9))
         .expect("the configuration header");
-    assert_eq!(config9, expected_configuration_descriptor()[..9]);
+    assert_eq!(config9, config_want[..9]);
     let config = host
         .control_read(9, [0x80, 0x06, 0x00, 0x02, 0xFF, 0xFF, 0xFF, 0xFF])
         .expect("the whole configuration");
     assert_eq!(
-        config,
-        expected_configuration_descriptor(),
-        "configuration, interface and both endpoints, 32 bytes in 8 + 8 + 8 + 8"
+        config, config_want,
+        "the configuration descriptor and everything under it, in packets of eight"
     );
     let sixteen = host
         .control_read(9, get_descriptor(1, 16))
@@ -9283,7 +9364,7 @@ fn enumerate<P: UsbPair>(host: &mut UsbHost<P>) {
     let again = host
         .control_read(0, GET_DEVICE_DESCRIPTOR)
         .expect("enumerable again");
-    assert_eq!(again.len(), 18);
+    assert_eq!(again, device_want);
 
     host.assert_clean();
 }
@@ -9508,11 +9589,26 @@ impl BulkPipe {
 /// Enough of an enumeration to reach a data endpoint: an address, the
 /// configuration descriptor checked, and SET_CONFIGURATION.
 fn configure<P: UsbPair>(host: &mut UsbHost<P>, addr: u8) {
+    configure_for(
+        host,
+        addr,
+        &expected_device_descriptor(0x1209, 0x0001),
+        &expected_configuration_descriptor(),
+    );
+}
+
+/// The same, against a stated pair of descriptors.
+fn configure_for<P: UsbPair>(
+    host: &mut UsbHost<P>,
+    addr: u8,
+    device_want: &[u8],
+    config_want: &[u8],
+) {
     host.bus_reset();
     let device = host
         .control_read(0, GET_DEVICE_DESCRIPTOR)
         .expect("the device descriptor");
-    assert_eq!(device, expected_device_descriptor(0x1209, 0x0001));
+    assert_eq!(device, device_want);
     assert_eq!(
         host.control_write(0, set_address(addr)),
         UsbReply::Data(USB_DATA1, Vec::new())
@@ -9521,8 +9617,7 @@ fn configure<P: UsbPair>(host: &mut UsbHost<P>, addr: u8) {
         .control_read(addr, [0x80, 0x06, 0x00, 0x02, 0xFF, 0xFF, 0xFF, 0xFF])
         .expect("the configuration");
     assert_eq!(
-        config,
-        expected_configuration_descriptor(),
+        config, config_want,
         "the endpoints are in the descriptor the host reads"
     );
     host.control_write(addr, [0x00, 0x09, 0x01, 0, 0, 0, 0, 0]);
@@ -11098,6 +11193,10 @@ impl UsbPair for UlpiPair<'_> {
     fn data(&mut self) -> &mut DataEp {
         &mut self.data
     }
+
+    fn port(&self, name: &str) -> u64 {
+        get_u64(&self.sim, top_net(&self.sim, name))
+    }
 }
 
 fn ulpi_design() -> Design {
@@ -11514,6 +11613,649 @@ fn usb_device_ulpi_is_one_clock_domain() {
         &[("VID", "16'h1209"), ("PID", "16'h0001")],
     );
     assert!(kinds.is_empty(), "nothing should cross: {kinds:?}");
+}
+
+// ---------------------------------------------------------------------------
+// usb_cdc_acm: the class layer a host's own serial driver binds to
+// ---------------------------------------------------------------------------
+
+/// The interface numbers, the endpoint addresses and the class codes
+/// `usb_cdc_acm` states, written here rather than read from it.
+const CDC_COMM_IFACE: u8 = 0;
+const CDC_DATA_IFACE: u8 = 1;
+const CDC_NOTIF_ENDP: u8 = 2;
+const CDC_DATA_ENDP: u8 = 1;
+
+/// The configuration descriptor `usb_cdc_acm` should send, written
+/// **forwards** from the specifications' tables — the way `lsusb -v` prints
+/// one — and not from the block's `IFACE_DESC` parameter.
+///
+/// Every byte here comes from a table named in the comment beside it, which
+/// is the whole point of writing it twice: the block states the descriptors
+/// as a Verilog concatenation, reversed at elaboration, with three fields
+/// counted out of the blob, and this is the same descriptor set arrived at
+/// from the other direction. The three derived fields are written as **the
+/// arithmetic and not the answer**, so a descriptor added to the block and
+/// added here changes both sides consistently and a descriptor added to only
+/// one of them fails.
+fn expected_cdc_configuration() -> Vec<u8> {
+    let mut iface: Vec<u8> = Vec::new();
+    // INTERFACE 0: the communications interface. bInterfaceClass 02h is
+    // CDC 1.1 Table 15, bInterfaceSubClass 02h (Abstract Control Model) is
+    // Table 16, and bInterfaceProtocol 00h — "no class specific protocol
+    // required" — is Table 17. bNumEndpoints is byte 4 and is counted below.
+    iface.extend_from_slice(&[9, 4, CDC_COMM_IFACE, 0, 0, 0x02, 0x02, 0x00, 0]);
+    // Header functional descriptor, CDC 1.1 Table 26: bDescriptorType 24h
+    // (CS_INTERFACE), bDescriptorSubtype 00h, bcdCDC 0110h.
+    iface.extend_from_slice(&[5, 0x24, 0x00, 0x10, 0x01]);
+    // Call Management functional descriptor, PSTN 1.2 Table 3:
+    // bmCapabilities 00h — no call management — and bDataInterface 1.
+    iface.extend_from_slice(&[5, 0x24, 0x01, 0x00, CDC_DATA_IFACE]);
+    // Abstract Control Management functional descriptor, PSTN 1.2 Table 4:
+    // bmCapabilities 02h, which is D1 — Set_Line_Coding,
+    // Set_Control_Line_State, Get_Line_Coding — and nothing else.
+    iface.extend_from_slice(&[4, 0x24, 0x02, 0x02]);
+    // Union functional descriptor, CDC 1.1 Table 33: interface 1 is
+    // subordinate to interface 0. This is the one Linux will not bind
+    // without.
+    iface.extend_from_slice(&[5, 0x24, 0x06, CDC_COMM_IFACE, CDC_DATA_IFACE]);
+    // ENDPOINT 82h: interrupt IN, eight bytes, bInterval 16 frames.
+    iface.extend_from_slice(&[7, 5, 0x80 | CDC_NOTIF_ENDP, 0x03, 8, 0, 16]);
+    // INTERFACE 1: the data interface, bInterfaceClass 0Ah (CDC 1.1
+    // Table 18).
+    iface.extend_from_slice(&[9, 4, CDC_DATA_IFACE, 0, 0, 0x0A, 0x00, 0x00, 0]);
+    // ENDPOINT 01h and ENDPOINT 81h: bulk, eight bytes.
+    iface.extend_from_slice(&[7, 5, CDC_DATA_ENDP, 0x02, 8, 0, 0]);
+    iface.extend_from_slice(&[7, 5, 0x80 | CDC_DATA_ENDP, 0x02, 8, 0, 0]);
+
+    // bNumEndpoints of each interface descriptor: the ENDPOINT descriptors
+    // that follow it before the next INTERFACE, counted along the chain of
+    // bLength fields. The functional descriptors are walked over rather
+    // than counted, because their bDescriptorType is 24h and not 5.
+    let mut at = 0;
+    while at + 1 < iface.len() {
+        let len = usize::from(iface[at]);
+        if iface[at + 1] == 4 {
+            let mut n = 0;
+            let mut k = at + len;
+            while k + 1 < iface.len() && iface[k + 1] != 4 {
+                if iface[k + 1] == 5 {
+                    n += 1;
+                }
+                k += usize::from(iface[k]);
+            }
+            iface[at + 4] = u8::try_from(n).expect("a small number");
+        }
+        at += len;
+    }
+
+    let total = u16::try_from(9 + iface.len()).expect("a short descriptor");
+    let [lo, hi] = total.to_le_bytes();
+    let mut d = vec![
+        9,
+        2,
+        lo,
+        hi,
+        u8::try_from(count_descriptors(&iface, 4)).expect("a small number"),
+        1,
+        0,
+        0x80,
+        50,
+    ];
+    d.extend(iface);
+    d
+}
+
+/// The device descriptor a CDC device sends: the class triple in it is
+/// `02h 00h 00h`, which CDC 1.1 Table 14 asks for and which is what tells a
+/// host the two interfaces are one function before it has read the union
+/// descriptor.
+fn expected_cdc_device_descriptor() -> Vec<u8> {
+    expected_device_descriptor_of(0x1209, 0x0001, [0x02, 0x00, 0x00])
+}
+
+fn cdc_fs_design() -> Design {
+    design_of(
+        "usb_cdc_acm",
+        "usb_cdc_acm_fs",
+        &[("VID", "16'h1209"), ("PID", "16'h0001")],
+    )
+}
+
+fn cdc_ulpi_design() -> Design {
+    design_of(
+        "usb_cdc_acm",
+        "usb_cdc_acm_ulpi",
+        &[("VID", "16'h1209"), ("PID", "16'h0001")],
+    )
+}
+
+/// SET_LINE_CODING: bmRequestType 21h, bRequest 20h, wIndex the
+/// communications interface, seven bytes of data (PSTN 1.2 §6.3.10).
+const CDC_SET_LINE_CODING: [u8; 8] = [0x21, 0x20, 0x00, 0x00, CDC_COMM_IFACE, 0x00, 0x07, 0x00];
+/// GET_LINE_CODING: the same the other way (PSTN 1.2 §6.3.11).
+const CDC_GET_LINE_CODING: [u8; 8] = [0xA1, 0x21, 0x00, 0x00, CDC_COMM_IFACE, 0x00, 0x07, 0x00];
+
+/// SET_CONTROL_LINE_STATE with DTR and RTS as given: wValue D0 is DTR and
+/// D1 is RTS, and there is no data stage (PSTN 1.2 §6.3.12).
+fn cdc_set_control_line_state(dtr: bool, rts: bool) -> [u8; 8] {
+    let value = u8::from(dtr) | (u8::from(rts) << 1);
+    [0x21, 0x22, value, 0x00, CDC_COMM_IFACE, 0x00, 0x00, 0x00]
+}
+
+/// A line coding structure, in the order PSTN 1.2 Table 17 gives:
+/// dwDTERate little endian, bCharFormat, bParityType, bDataBits.
+fn cdc_line_coding(rate: u32, format: u8, parity: u8, bits: u8) -> Vec<u8> {
+    let mut d = rate.to_le_bytes().to_vec();
+    d.extend_from_slice(&[format, parity, bits]);
+    d
+}
+
+/// The whole enumeration a host does, against the descriptor set a serial
+/// port declares, through both link layers.
+///
+/// Sixty-seven bytes of configuration descriptor go out in nine packets, so
+/// this also exercises a data stage four times longer than any the plain
+/// device has — which is where a seven-bit offset that should have been
+/// eight, or a `DESC_MAX` too small for the blob, would show.
+fn cdc_enumerate<P: UsbPair>(host: &mut UsbHost<P>) {
+    enumerate_descriptors(
+        host,
+        &expected_cdc_device_descriptor(),
+        &expected_cdc_configuration(),
+    );
+}
+
+#[test]
+fn usb_cdc_acm_enumerates_as_a_serial_port() {
+    let design = cdc_fs_design();
+    let mut host = UsbHost::new(FsPair::new(&design), 0);
+    cdc_enumerate(&mut host);
+}
+
+#[test]
+fn usb_cdc_acm_ulpi_enumerates_as_a_serial_port() {
+    let design = cdc_ulpi_design();
+    let mut host = UsbHost::new(UlpiPair::new(&design), 0);
+    cdc_enumerate(&mut host);
+}
+
+/// The same through the transceiver that is **on the board**: the one that
+/// reports LineState a clock late, against ULPI §3.8.1.3.
+#[test]
+fn usb_cdc_acm_ulpi_enumerates_through_the_transceiver_that_is_on_the_board() {
+    let design = cdc_ulpi_design();
+    let phy = UlpiPhy::new(ULPI_CPB).reporting_stale_line();
+    let mut host = UsbHost::new(UlpiPair::with_phy(&design, phy), 0);
+    cdc_enumerate(&mut host);
+}
+
+/// The descriptor set has the parts a host's driver looks for, said in the
+/// terms the driver looks for them in.
+///
+/// `usb_cdc_acm_enumerates_as_a_serial_port` already compares all
+/// sixty-seven bytes, so this adds nothing about the bytes. What it adds is
+/// **why those bytes**: a reader changing the descriptors sees which
+/// properties are the ones a host binds on, rather than a byte string that
+/// must not move. The union descriptor is the one Linux will not do
+/// without; the interrupt IN endpoint on the communications interface is
+/// the one `cdc_acm` takes as `endpoint[0]` and refuses the device without.
+#[test]
+fn usb_cdc_acm_descriptors_carry_what_a_host_driver_binds_on() {
+    let config = expected_cdc_configuration();
+    assert_eq!(
+        config.len(),
+        67,
+        "nine bytes of configuration plus fifty-eight"
+    );
+    assert_eq!(
+        u16::from_le_bytes([config[2], config[3]]),
+        67,
+        "wTotalLength is the sum and not a number typed twice"
+    );
+    assert_eq!(config[4], 2, "two interfaces");
+
+    // Walk it the way a host does and collect what is there.
+    let mut at = 9;
+    let mut interfaces: Vec<(u8, u8, u8, u8)> = Vec::new();
+    let mut endpoints: Vec<(u8, u8, u16, u8)> = Vec::new();
+    let mut functional: Vec<u8> = Vec::new();
+    let mut union_fd: Option<Vec<u8>> = None;
+    let mut bits = 9 * 8;
+    while at + 1 < config.len() {
+        let len = usize::from(config[at]);
+        assert!(len >= 2 && at + len <= config.len(), "a descriptor at {at}");
+        match config[at + 1] {
+            4 => interfaces.push((
+                config[at + 2],
+                config[at + 4],
+                config[at + 5],
+                config[at + 6],
+            )),
+            5 => endpoints.push((
+                config[at + 2],
+                config[at + 3] & 0x03,
+                u16::from_le_bytes([config[at + 4], config[at + 5]]),
+                config[at + 6],
+            )),
+            0x24 => {
+                functional.push(config[at + 2]);
+                if config[at + 2] == 0x06 {
+                    union_fd = Some(config[at..at + len].to_vec());
+                }
+            }
+            other => panic!("an unexpected bDescriptorType {other:#04x} at {at}"),
+        }
+        bits += len * 8;
+        at += len;
+    }
+    assert_eq!(at, config.len(), "the chain of bLength fields ends exactly");
+    assert_eq!(
+        bits,
+        config.len() * 8,
+        "every bit of the blob is accounted for"
+    );
+
+    // Interface 0 is the communications interface, class 02h subclass 02h,
+    // and interface 1 is the data interface, class 0Ah.
+    assert_eq!(
+        interfaces,
+        vec![
+            (CDC_COMM_IFACE, 1, 0x02, 0x02),
+            (CDC_DATA_IFACE, 2, 0x0A, 0x00),
+        ],
+        "(bInterfaceNumber, bNumEndpoints, bInterfaceClass, bInterfaceSubClass)"
+    );
+
+    // The functional descriptors, in the order CDC 1.1 §5.2.3 gives: the
+    // header first, then the rest.
+    assert_eq!(
+        functional,
+        vec![0x00, 0x01, 0x02, 0x06],
+        "header, call management, abstract control management, union"
+    );
+    assert_eq!(
+        union_fd,
+        Some(vec![5, 0x24, 0x06, CDC_COMM_IFACE, CDC_DATA_IFACE]),
+        "the union functional descriptor, without which Linux does not bind"
+    );
+
+    // Three endpoints: an interrupt IN on the communications interface and a
+    // bulk pair on the data interface. bmAttributes 03h is interrupt and
+    // 02h is bulk (USB 2.0 Table 9-13).
+    assert_eq!(
+        endpoints,
+        vec![
+            (0x80 | CDC_NOTIF_ENDP, 0x03, 8, 16),
+            (CDC_DATA_ENDP, 0x02, 8, 0),
+            (0x80 | CDC_DATA_ENDP, 0x02, 8, 0),
+        ],
+        "(bEndpointAddress, transfer type, wMaxPacketSize, bInterval)"
+    );
+    // A SERIAL_STATE notification is ten bytes and this endpoint holds
+    // eight, which is why it never sends one. The descriptor says eight
+    // because that is what the endpoint does.
+    assert_eq!(endpoints[0].2, 8, "the notification endpoint's own size");
+
+    // bmCapabilities of the Abstract Control Management descriptor is 02h:
+    // D1 alone, so no Send_Break and no Comm_Feature, which is exactly the
+    // set `usb_cdc_req` claims.
+    let acm = config
+        .windows(4)
+        .find(|w| w[0] == 4 && w[1] == 0x24 && w[2] == 0x02)
+        .expect("the abstract control management descriptor");
+    assert_eq!(acm[3], 0x02, "D1 set, D0 and D2 clear");
+}
+
+/// The three class requests, answered.
+///
+/// This is the hook working end to end: a SETUP endpoint 0 does not
+/// understand, offered to a class, claimed, with its data stage in either
+/// direction and its status stage. Without the hook every one of these is a
+/// STALL and `cdc_acm` fails to open the port.
+fn cdc_class_requests<P: UsbPair>(host: &mut UsbHost<P>) {
+    configure_for(
+        host,
+        3,
+        &expected_cdc_device_descriptor(),
+        &expected_cdc_configuration(),
+    );
+
+    // What it says before a host has asked: 9600 8N1, which is the
+    // parameter's reset value.
+    let coding = host
+        .control_read(3, CDC_GET_LINE_CODING)
+        .expect("GET_LINE_CODING is answered and not stalled");
+    assert_eq!(
+        coding,
+        cdc_line_coding(9600, 0, 0, 8),
+        "the line coding before a host has set one"
+    );
+    assert_eq!(host.port("baud"), 9600, "and the same on the block's port");
+
+    // SET_LINE_CODING: 115200, two stop bits, odd parity, seven data bits —
+    // deliberately not 8N1, so that a block reporting a constant rather
+    // than what it stored is caught, and deliberately a rate whose four
+    // bytes are all different from each other.
+    let want = cdc_line_coding(115_200, 2, 1, 7);
+    assert_eq!(
+        host.control_write_data(3, CDC_SET_LINE_CODING, &want),
+        UsbReply::Data(USB_DATA1, Vec::new()),
+        "SET_LINE_CODING is acknowledged through its status stage"
+    );
+    host.idle(10);
+    assert_eq!(host.port("baud"), 115_200, "dwDTERate reached the port");
+    assert_eq!(host.port("char_format"), 2, "bCharFormat");
+    assert_eq!(host.port("parity"), 1, "bParityType");
+    assert_eq!(host.port("data_bits"), 7, "bDataBits");
+
+    // GET_LINE_CODING gives back what was set, which is the data stage of a
+    // class request going the other way.
+    let back = host
+        .control_read(3, CDC_GET_LINE_CODING)
+        .expect("GET_LINE_CODING");
+    assert_eq!(back, want, "what was set comes back, byte for byte");
+
+    // A short GET_LINE_CODING: endpoint 0 caps a class data stage at the
+    // host's wLength the same way it caps a descriptor's.
+    let mut short = CDC_GET_LINE_CODING;
+    short[6] = 4;
+    let four = host.control_read(3, short).expect("four bytes");
+    assert_eq!(four, want[..4], "wLength ends a class data stage too");
+
+    // SET_CONTROL_LINE_STATE: no data stage at all, and the two bits reach
+    // the ports. DTR is what a host raises when a program opens the port.
+    assert!(
+        host.port("dtr") == 0 && host.port("rts") == 0,
+        "both low to start"
+    );
+    assert_eq!(
+        host.control_write(3, cdc_set_control_line_state(true, false)),
+        UsbReply::Data(USB_DATA1, Vec::new()),
+        "SET_CONTROL_LINE_STATE is acknowledged"
+    );
+    host.idle(10);
+    assert_eq!(host.port("dtr"), 1, "DTR raised");
+    assert_eq!(host.port("rts"), 0, "and RTS not");
+    host.control_write(3, cdc_set_control_line_state(true, true));
+    host.idle(10);
+    assert_eq!(host.port("rts"), 1, "RTS raised");
+    host.control_write(3, cdc_set_control_line_state(false, false));
+    host.idle(10);
+    assert_eq!(host.port("dtr"), 0, "and both dropped again");
+    assert_eq!(host.port("rts"), 0);
+
+    host.assert_clean();
+}
+
+#[test]
+fn usb_cdc_acm_answers_the_line_coding_and_control_line_requests() {
+    let design = cdc_fs_design();
+    let mut host = UsbHost::new(FsPair::with_loopback(&design, false), 0);
+    cdc_class_requests(&mut host);
+}
+
+#[test]
+fn usb_cdc_acm_ulpi_answers_the_line_coding_and_control_line_requests() {
+    let design = cdc_ulpi_design();
+    let phy = UlpiPhy::new(ULPI_CPB).reporting_stale_line();
+    let mut host = UsbHost::new(UlpiPair::with_phy_data(&design, phy, false), 0);
+    cdc_class_requests(&mut host);
+}
+
+/// A class request the block does not claim is stalled, and a standard
+/// request is **never** offered to the class.
+///
+/// Both halves matter. The first is what keeps a device honest about what it
+/// implements: bmCapabilities says no SEND_BREAK, so SEND_BREAK is stalled
+/// rather than silently accepted, and a class request aimed at the wrong
+/// interface is stalled rather than acted on. The second is the hook's
+/// safety property — `class_req` is not raised for the requests endpoint 0
+/// implements — and it is checked by asking the device to do something a
+/// class request could have shadowed and seeing that endpoint 0 still did
+/// it.
+#[test]
+fn usb_cdc_acm_stalls_the_class_requests_it_does_not_claim() {
+    let design = cdc_fs_design();
+    let mut host = UsbHost::new(FsPair::with_loopback(&design, false), 0);
+    configure_for(
+        &mut host,
+        4,
+        &expected_cdc_device_descriptor(),
+        &expected_cdc_configuration(),
+    );
+
+    // Set a line coding that a stalled request must not disturb.
+    let kept = cdc_line_coding(19_200, 0, 0, 8);
+    assert_eq!(
+        host.control_write_data(4, CDC_SET_LINE_CODING, &kept),
+        UsbReply::Data(USB_DATA1, Vec::new())
+    );
+    host.idle(10);
+
+    for (what, request) in [
+        // SEND_BREAK, PSTN 1.2 §6.3.13. bmCapabilities D2 is clear, so the
+        // device never offered it.
+        (
+            "SEND_BREAK",
+            [0x21, 0x23, 0x10, 0x00, CDC_COMM_IFACE, 0x00, 0x00, 0x00],
+        ),
+        // GET_COMM_FEATURE, D0 of the same byte and also clear.
+        (
+            "GET_COMM_FEATURE",
+            [0xA1, 0x03, 0x01, 0x00, CDC_COMM_IFACE, 0x00, 0x02, 0x00],
+        ),
+        // SET_LINE_CODING to the **data** interface, which is not where the
+        // requests live.
+        (
+            "SET_LINE_CODING to the wrong interface",
+            [0x21, 0x20, 0x00, 0x00, CDC_DATA_IFACE, 0x00, 0x07, 0x00],
+        ),
+        // A vendor request, which no class in this device claims.
+        (
+            "a vendor request",
+            [0xC0, 0x01, 0x00, 0x00, 0x00, 0x00, 0x04, 0x00],
+        ),
+    ] {
+        assert_eq!(
+            host.setup(4, request),
+            UsbReply::Handshake(USB_ACK),
+            "{what}: a SETUP is always acknowledged"
+        );
+        host.idle(4);
+        assert_eq!(
+            host.in_token(4),
+            UsbReply::Handshake(USB_STALL),
+            "{what} is stalled"
+        );
+        host.idle(10);
+    }
+
+    // The line coding is untouched by all of that, which is what says a
+    // stalled request reached no register.
+    let back = host
+        .control_read(4, CDC_GET_LINE_CODING)
+        .expect("GET_LINE_CODING still works");
+    assert_eq!(back, kept, "a stalled request changed nothing");
+
+    // And the standard requests still belong to endpoint 0: SET_ADDRESS
+    // moves the address, and CLEAR_FEATURE(ENDPOINT_HALT) is accepted, both
+    // with a class sitting on the hook. A hook that offered the standard
+    // requests to the class would have had them stalled, since
+    // `usb_cdc_req` claims neither.
+    assert_eq!(
+        host.control_write(4, set_address(11)),
+        UsbReply::Data(USB_DATA1, Vec::new()),
+        "SET_ADDRESS is endpoint 0's and not the class's"
+    );
+    assert_eq!(host.address(), 11);
+    host.idle(10);
+    assert_eq!(
+        host.control_write(
+            11,
+            [0x02, 0x01, 0x00, 0x00, CDC_DATA_ENDP, 0x00, 0x00, 0x00]
+        ),
+        UsbReply::Data(USB_DATA1, Vec::new()),
+        "CLEAR_FEATURE(ENDPOINT_HALT) too"
+    );
+    host.idle(10);
+    host.assert_clean();
+}
+
+/// The notification endpoint exists, is addressable, and NAKs every poll.
+///
+/// A host polls it every sixteen frames for ever and a device with no state
+/// change answers NAK every time, which is what this asserts — twenty polls,
+/// twenty NAKs, and nothing else on the bus. It also asserts the thing that
+/// would be a real fault: the endpoint has **no OUT direction**, so an OUT
+/// token for it is answered with nothing at all rather than with an ACK
+/// that would tell a host an endpoint is there which the descriptors do not
+/// declare.
+#[test]
+fn usb_cdc_acm_notification_endpoint_naks_every_poll() {
+    let design = cdc_fs_design();
+    let mut host = UsbHost::new(FsPair::with_loopback(&design, false), 0);
+    configure_for(
+        &mut host,
+        6,
+        &expected_cdc_device_descriptor(),
+        &expected_cdc_configuration(),
+    );
+
+    for poll in 0..20 {
+        assert_eq!(
+            host.bulk_in(6, CDC_NOTIF_ENDP),
+            UsbReply::Handshake(USB_NAK),
+            "poll {poll} of the notification endpoint"
+        );
+        host.idle(6);
+    }
+
+    // The endpoint has one direction. An OUT to it is nobody's: the
+    // notification endpoint because it has no OUT side, the data endpoint
+    // because the number is not its, endpoint 0 because the token is not
+    // its either.
+    assert_eq!(
+        host.bulk_out(6, CDC_NOTIF_ENDP, USB_DATA0, &[0x55]),
+        UsbReply::Nothing,
+        "an OUT to an IN-only endpoint is not answered"
+    );
+    host.idle(20);
+
+    // And the data endpoint still works after all of that, which is what
+    // says the arbitration between three endpoints did not get stuck on the
+    // one that answers nothing.
+    let mut pipe = BulkPipe::new(CDC_DATA_ENDP);
+    host.data().give = vec![vec![0x2A]];
+    host.idle(20);
+    assert_eq!(
+        pipe.read(&mut host, 6),
+        vec![0x2A],
+        "the serial port still moves"
+    );
+    host.idle(10);
+    host.assert_clean();
+}
+
+/// Bytes through the serial port's bulk pair, in both directions, with the
+/// class layer above it.
+fn cdc_bytes<P: UsbPair>(host: &mut UsbHost<P>) {
+    configure_for(
+        host,
+        7,
+        &expected_cdc_device_descriptor(),
+        &expected_cdc_configuration(),
+    );
+
+    // What a terminal does: a line of text out, a line of text back. `FF`
+    // and `07` put six ones in a row on the wire in both directions.
+    let out: Vec<Vec<u8>> = vec![
+        b"hello, w".to_vec(),
+        b"orld\n".to_vec(),
+        vec![0xFF, 0x07, 0x5A],
+    ];
+    let back: Vec<Vec<u8>> = vec![b"> ".to_vec(), Vec::new(), b"ok\r\n".to_vec()];
+
+    let mut pipe = BulkPipe::new(CDC_DATA_ENDP);
+    for payload in &out {
+        pipe.write(host, 7, payload);
+    }
+    host.idle(20);
+    assert_eq!(
+        host.data().got,
+        out,
+        "every packet reached the interface above the endpoint"
+    );
+
+    host.data().give = back.clone();
+    for payload in &back {
+        assert_eq!(&pipe.read(host, 7), payload, "the packet the port gave");
+    }
+    host.idle(10);
+    host.assert_clean();
+}
+
+#[test]
+fn usb_cdc_acm_moves_bytes_through_the_serial_port() {
+    let design = cdc_fs_design();
+    let mut host = UsbHost::new(FsPair::with_loopback(&design, false), 0);
+    cdc_bytes(&mut host);
+}
+
+#[test]
+fn usb_cdc_acm_ulpi_moves_bytes_through_the_serial_port() {
+    let design = cdc_ulpi_design();
+    let phy = UlpiPhy::new(ULPI_CPB).reporting_stale_line();
+    let mut host = UsbHost::new(UlpiPair::with_phy_data(&design, phy, false), 0);
+    cdc_bytes(&mut host);
+}
+
+/// The loopback the board's design has, through the class layer: `out_*`
+/// wired into `in_*`, so what the host writes to the port it reads back.
+///
+/// `bulk_loopback` is the plain device's version of this and asserts the
+/// vendor descriptors, so this is the same wiring with the serial port's.
+#[test]
+fn usb_cdc_acm_ulpi_loops_the_serial_port_back_on_itself() {
+    let design = cdc_ulpi_design();
+    let phy = UlpiPhy::new(ULPI_CPB).reporting_stale_line();
+    let mut host = UsbHost::new(UlpiPair::with_phy(&design, phy), 0);
+    configure_for(
+        &mut host,
+        8,
+        &expected_cdc_device_descriptor(),
+        &expected_cdc_configuration(),
+    );
+    let packets: Vec<Vec<u8>> = vec![
+        b"12345678".to_vec(),
+        vec![0xDE, 0xAD, 0xBE, 0xEF, 0xFF],
+        vec![0x5A],
+    ];
+    let mut pipe = BulkPipe::new(CDC_DATA_ENDP);
+    for payload in &packets {
+        pipe.write(&mut host, 8, payload);
+        assert_eq!(&pipe.read(&mut host, 8), payload, "what went out came back");
+    }
+    assert_eq!(
+        host.data().got,
+        packets,
+        "and it went through the interface"
+    );
+    host.idle(10);
+    host.assert_clean();
+}
+
+/// Everything runs on the one clock, in both wrappers.
+#[test]
+fn usb_cdc_acm_is_one_clock_domain() {
+    for top in ["usb_cdc_acm_fs", "usb_cdc_acm_ulpi"] {
+        let kinds = crossings(
+            "usb_cdc_acm",
+            top,
+            &[("VID", "16'h1209"), ("PID", "16'h0001")],
+        );
+        assert!(kinds.is_empty(), "{top}: nothing should cross: {kinds:?}");
+    }
 }
 
 /// A transceiver model that accepts anything proves nothing, so this
