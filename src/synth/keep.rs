@@ -26,6 +26,13 @@
 //! | a module instance | the **instance** |
 //! | a `module` or `entity` | the **module** |
 //!
+//! Two places a keep is still dropped without a word, because it is dropped
+//! before there is an IR object for [`audit`] to find it on: a Verilog
+//! attribute on a *statement* (`(* keep *) q <= 1'b0;`, which the
+//! elaborator does not read) and a VHDL attribute specification whose
+//! target is not an object (a label, a variable, a subprogram). Both are
+//! known gaps rather than decisions.
+//!
 //! Nothing lands on a **cell** from source: cells are inferred, so a
 //! register annotated in Verilog carries its `keep` on the net that is the
 //! flip-flop's `q`, never on the `dff`. A pass that reads only
