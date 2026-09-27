@@ -93,6 +93,10 @@ pub enum AsicError {
     /// Generic synthesis reported errors, so nothing was mapped; the
     /// errors are in the diagnostics the caller passed in.
     Synthesis,
+    /// An instance names a module neither the design nor the library
+    /// declares, so the design has a hole in it. The instances are named,
+    /// with their spans, in the diagnostics the caller passed in.
+    UndefinedModule,
     /// The library has nothing to map onto; the text says what is
     /// missing.
     UnusableLibrary(String),
@@ -107,6 +111,9 @@ impl fmt::Display for AsicError {
             AsicError::Synthesis => {
                 f.write_str("the design could not be synthesised; see the reported errors")
             }
+            AsicError::UndefinedModule => f.write_str(
+                "the design instantiates a module nothing defines; see the reported errors",
+            ),
             AsicError::UnusableLibrary(why) => {
                 write!(f, "the library cannot be mapped onto: {why}")
             }
@@ -350,7 +357,9 @@ impl AsicReport {
 /// # Errors
 ///
 /// [`AsicError::NoSuchModule`] when the id does not belong to the
-/// design, [`AsicError::Synthesis`] when generic synthesis rejected it,
+/// design, [`AsicError::UndefinedModule`] when an instance names a module
+/// neither the design nor `library` declares, in which case the design is
+/// untouched, [`AsicError::Synthesis`] when generic synthesis rejected it,
 /// and [`AsicError::UnusableLibrary`] when the library offers no gate
 /// the mapper can use or has no inverter (the mapper needs one to
 /// complement a cut).
@@ -368,6 +377,18 @@ pub fn synthesize_asic(
     if design.modules.get(module).is_none() {
         return Err(AsicError::NoSuchModule);
     }
+
+    // Is the design whole? An instance of a module neither the design nor
+    // the library declares leaves a hole whose outputs drive nothing, and
+    // every later step would report the readers of those outputs rather
+    // than the instantiation that is wrong. See
+    // [`Design::check_instance_targets`].
+    let supplied: Vec<&str> = library.cells.iter().map(|c| c.name.as_str()).collect();
+    let supplier = format!("the library `{}`", library.name);
+    if design.check_instance_targets(module, &supplied, &supplier, diags) > 0 {
+        return Err(AsicError::UndefinedModule);
+    }
+
     let cells = StdCells::from_library(library, &options.library);
     if cells.gates().is_empty() {
         return Err(AsicError::UnusableLibrary(format!(
