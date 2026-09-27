@@ -133,17 +133,37 @@ one and the flop loads what the design asked for; after this pass nothing
 should reach that path, and it stays so that a netlist built without the pass
 is not refused for a case that does work.
 
-**Nothing in this round went near the part, and that is a stated gap and not an
-omission.** The board was in use for other work, so no bitstream written here
-has been loaded: what a Cynthion would have added is the one thing none of this
-can settle — that a flip-flop fed by a constant lookup table comes up holding
-that constant *in silicon*. Everything else is off the part: the vendor's four
-constant drivers read at absolute frame positions, this flow's own image
-decoded back bit for bit with nothing unexplained, and the arcs walked
-backwards from the flip-flop's data wire to the lookup table's output. The
-cheapest confirmation for a later round is `wide_state.v` with the LED wired to
-`state[2]` instead of `state[0]`: it must stay **dark for ever**, and before
-this change it would have been lit from the first clock.
+**Half of this is now confirmed on a part, and the half that is not is named
+here rather than left to be assumed.** The round that built the driver went
+nowhere near the board — it was in use — so what follows was measured
+afterwards, by building `usb_ulpi_device.v` from this document's own commands
+and loading it.
+
+A **constant one** holds in silicon, and the observation is stronger than a
+lamp. `usb_ulpi_link`'s `rst_q` is the constant-one flip-flop of that design,
+and what it drives is `ulpi_rst_n`, the transceiver's reset pin. Had the new
+lookup table handed it a zero, the transceiver would stay in reset and no host
+would see anything at all. The part enumerates as `1209:0001` and loops 256
+bytes through endpoint 1, so the flop loads the one the design asked for —
+through a driver this time rather than by the accident above. 43 299 bits, 0
+unexplained.
+
+A **constant zero** has still not been seen on a part, and there is a reason
+worth writing down: nothing in the design that ran has one. The registers that
+used to supply them were the defect, and narrowing them to the width of their
+values is what removed them. So the evidence for the zero remains entirely off
+the part — the vendor's four constant drivers read at absolute frame positions,
+this flow's own image decoded bit for bit with nothing unexplained, and the arcs
+walked backwards from the flip-flop's data wire to the lookup table's output.
+
+`wide_state.v` with its LED moved from `state[0]` to `state[2]` is the cheapest
+experiment and it needs an eye, which is its weakness: it must stay **dark for
+ever**, and before this change it would have been lit from the first clock. The
+experiment worth doing instead needs no observer — put a register bit whose data
+is the constant zero into a byte the endpoint-1 loopback returns, and let
+`tests/usb_loopback.rs` assert it reads zero. That turns the last unmeasured
+half of this into something CI could run if a board were attached, which is what
+every other claim in this file already is.
 
 Two things found on the way and deliberately not acted on, both for the same
 reason — they are about *other* pins of the same slice, nothing has measured
@@ -2182,6 +2202,35 @@ reticle program --device <serial> /tmp/bidir_loopback.bit
 
 (`leds_alternate.v` shares `leds.rcf`; the loop is shorthand.)
 
+**A design that instantiates library IP needs its sources named too**, because
+there is no search path: `reticle fpga` takes a list of files and a module it
+cannot find becomes a black box whose outputs are undefined, which is reported
+as a wall of `reads … which nothing drives` against the *top level* rather than
+as a missing module. The USB device is the one here that has dependencies:
+
+```sh
+reticle fpga testdata/fpga/cynthion/usb_ulpi_device.v \
+    ip/usb_device_ulpi/rtl/usb_ulpi_link.v \
+    ip/usb_device_ulpi/rtl/usb_device_ulpi.v \
+    ip/usb_device_fs/rtl/usb_ctrl_ep.v \
+    --device ecp5-12f-CABGA256 \
+    --constraints testdata/fpga/cynthion/usb_ulpi_device.rcf \
+    --bitstream /tmp/usb_ulpi_device.bit
+reticle program --device <serial> /tmp/usb_ulpi_device.bit
+cargo test --features program -- --ignored usb_endpoint_one_loops
+```
+
+That last line is the observable: `tests/usb_loopback.rs` claims endpoint 1 and
+sends bytes back and forth, and it skips with a printed reason when no such
+device is attached. `rtl/usb_ctrl_ep.v` carries four modules at the moment, not
+one, which is why three names are enough for a device that has seven.
+
+**`RETICLE_TRELLISDB`, if set, names the database itself** — the directory
+holding `ECP5/LFE5U-12F/tilegrid.json`. `reticle fetch` stores it under a commit
+hash inside `~/.cache/reticle/prjtrellis-db/`, so the variable wants that inner
+directory and not the one the fetch created; leaving it unset finds the cached
+copy on its own, which is the easier way to be right.
+
 What that writes is **only the volatile configuration SRAM**. A power
 cycle reloads the part from the board's flash, which nothing in this
 project touches; `docs/programming.md` and `src/program/lattice.rs`'s
@@ -3121,7 +3170,7 @@ borrows now. Every backend gets it.
 | Block RAM | `Ecp5Stream` reads and writes the initialisation blocks — the reference files' 44 blocks round trip — and nothing generates one. The `MIB_EBR*` tiles' wires and pips are in the graph |
 | Distributed RAM | `SLICEA.MODE = DPRAM`, `WREMUX`, `CLK1.CLKMUX` and the `WAD`/`WDO` wires, none of which is declared |
 | An IO standard other than LVCMOS33 | the bits are in the database and the code takes the standard from the constraints; no other standard has been on a part |
-| A constant-driven flip-flop **on a part** | the driver is built — one lookup table per constant, `INIT` all zeros or all ones, every input tied high, which is what Lattice's own bitstreams hold — and nothing built this way has been loaded into a part, because the board was in use. `wide_state.v` with its LED on `state[2]` is the experiment: it must stay dark. See "The constant is built now" |
+| A constant **zero** driving a flip-flop **on a part** | the driver is built — one lookup table per constant, `INIT` all zeros or all ones, every input tied high, which is what Lattice's own bitstreams hold. A constant **one** is confirmed in silicon: `usb_ulpi_link`'s `rst_q` releases the transceiver's reset through one, and the part enumerates and loops bytes. A constant zero is not, because no design that has run holds one — the registers that did were the defect. See "What is still refused, and what a board would have added" for the experiment that needs no eye |
 | A **CIB tie for an unused `LSR`** | the vendor writes `CIB.JLSR<n>MUX = 0` and this flow writes nothing. No clocked design of this backend has misbehaved, so an unrouted `LSR` seems not to reset, and *why* is unmeasured — the same shape of question the data pin turned out to be |
 | `DRIVE`, `OPENDRAIN`, `CLAMP` or `TERMINATION` on a pad | each is a `.config_enum` of the pad tile, and each is one `ecppack` writes **only when an attribute asks** — so not writing them matches nextpnr exactly for a design that does not ask. `set_io -drive` is parsed and reaches the cell, and `configure_io` writes nothing for it, which makes the option a silent no-op in the bitstream. **`SLEWRATE` has left this row**: it is written now, see "An edge rate on every ULPI pin" |
 | A bidirectional pad with a **registered** tristate | `PIO<s>.TRIMUX_TSREG = IOLTO` and the `IOLOGIC` tristate register, none of which is declared. `fpga::primitives` declines to absorb a tri-state driver on a DDR port rather than moving the enable ahead of the register |
