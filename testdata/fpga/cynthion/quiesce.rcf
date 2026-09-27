@@ -1,0 +1,47 @@
+# The auxiliary transceiver's reset and the six LEDs of a Great Scott
+# Gadgets Cynthion r1.4 — the two things `quiesce.v` drives, and nothing
+# else.
+#
+# `J13` is Great Scott Gadgets' own, from
+# `cynthion/python/src/gateware/platform/cynthion_r1_4.py`:
+#
+#     ULPIResource("aux_phy", 0,
+#         data="F16 G15 G16 H15 J15 J16 K15 K16", clk="D16", clk_dir='o',
+#         dir="E16", nxt="F15", stp="E15", rst="J13", rst_invert=True,
+#         attrs=Attrs(IO_TYPE="LVCMOS33", SLEWRATE="FAST")),
+#
+# `rst_invert=True` says the ball is active low, which is the transceiver's
+# own reset input, so `quiesce.v` drives a literal zero and nothing
+# inverts. Project Trellis' `iodb.json` puts `J13` at row 17, column 72,
+# PIO C — the die's right edge, where the rest of that resource lives.
+#
+# The LEDs are the same six, in the same order, as `leds.rcf`:
+#
+#     *LEDResources(pins="E13 C13 B14 A15 D12 C11",
+#                   attrs=Attrs(IO_TYPE="LVCMOS33"), invert=True),
+#
+# so `led5_n` is `C11`, the end of the row nearest the `USER` button, and it
+# is the only one this design lights. All six are constrained and driven,
+# because a dark LED that is being held dark says more than a dark LED that
+# nothing is connected to.
+#
+# **No `-pullup` on `J13`.** The far end of that net is a transceiver's
+# reset input; an internal pull would be fighting the board. `configure_io`
+# writes `PULLMODE = NONE`, which is what the platform file's attributes ask
+# for too.
+#
+# `SLEWRATE="FAST"` is an attribute of that resource this backend does not
+# write; see "What remains" in `docs/fpga-trellis.md`. It is an edge rate,
+# and this design has no edges.
+#
+# The eight data balls, `dir`, `nxt`, `stp` and the interface clock are
+# deliberately absent. `quiesce.v`'s header says why for each.
+
+set_io -io_standard LVCMOS33 ulpi_rst_n J13
+
+set_io -io_standard LVCMOS33 led0_n E13
+set_io -io_standard LVCMOS33 led1_n C13
+set_io -io_standard LVCMOS33 led2_n B14
+set_io -io_standard LVCMOS33 led3_n A15
+set_io -io_standard LVCMOS33 led4_n D12
+set_io -io_standard LVCMOS33 led5_n C11
