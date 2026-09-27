@@ -367,6 +367,27 @@ module usb_ctrl_ep #(
     // wTotalLength: the nine bytes below plus the class's own.
     localparam [15:0]           CFG_TOTAL = 16'd9 + IFACE_BYTES;
 
+    // Bits in a descriptor offset, **from the descriptors and not by hand**.
+    //
+    // The longest descriptor this endpoint sends is the configuration one, so
+    // an offset runs from 0 to `CFG_TOTAL`, and `tx_byte` is fetched up to
+    // seven bytes past the offset the host has acknowledged, so the widest
+    // number here is `CFG_TOTAL + 7`.
+    //
+    // This was `[6:0]` for both, and seven bits it is not: with the default
+    // descriptors `CFG_TOTAL` is 32, so bit 6 of `in_total` is a bit no
+    // expression can set, and **the ECP5 backend refused the bitstream**:
+    //
+    //   flip-flop `u_dev.u_dev.u_ep0.in_total$ff$ff6` has nothing driving its
+    //   data input and is not tied high, and an unrouted slice input on this
+    //   family reads as a one
+    //
+    // which is the same fault as the three-bit `stage` for four states, found
+    // this time by a tool instead of by a person with an oscilloscope. A
+    // register is as wide as the values it holds, and when the values come
+    // from a parameter so does the width.
+    localparam integer LEN_BITS = $clog2(CFG_TOTAL + 8);
+
     // -----------------------------------------------------------------
     // Endpoint 0.
     // -----------------------------------------------------------------
@@ -380,8 +401,8 @@ module usb_ctrl_ep #(
     reg [1:0]  expect;
     reg        toggle;
     reg        desc_sel;    // 0 device, 1 configuration
-    reg [6:0]  in_total;    // bytes the data stage sends
-    reg [6:0]  in_offset;   // bytes the host has acknowledged
+    reg [LEN_BITS-1:0] in_total;   // bytes the data stage sends
+    reg [LEN_BITS-1:0] in_offset;  // bytes the host has acknowledged
     reg [3:0]  in_len;      // bytes in the packet awaiting its ACK
     reg        await_ack;
 
@@ -397,33 +418,37 @@ module usb_ctrl_ep #(
 
     // The descriptors, one byte at a time.
     function [7:0] desc;
-        input       sel_in;
-        input [6:0] i;
-        reg   [6:0] j;
+        input                  sel_in;
+        input [LEN_BITS-1:0]   i;
+        // Six bits, because `DESC_MAX` is 64 bytes: an offset into the
+        // class's descriptors cannot be wider than that whatever `LEN_BITS`
+        // is, and giving it exactly those bits is what keeps the part-select
+        // below inside `IFACE` without a mask a width checker has to trust.
+        reg   [5:0]            j;
         begin
             if (!sel_in) begin
                 case (i)
-                    7'd0:    desc = 8'd18;        // bLength
-                    7'd1:    desc = 8'd1;         // DEVICE
-                    7'd2:    desc = 8'h00;        // bcdUSB 2.00
-                    7'd3:    desc = 8'h02;
-                    7'd4:    desc = DEV_CLASS;
-                    7'd5:    desc = DEV_SUBCLASS;
-                    7'd6:    desc = DEV_PROTOCOL;
-                    7'd7:    desc = 8'd8;         // bMaxPacketSize0
-                    7'd8:    desc = VID[7:0];
-                    7'd9:    desc = VID[15:8];
-                    7'd10:   desc = PID[7:0];
-                    7'd11:   desc = PID[15:8];
-                    7'd12:   desc = 8'h00;        // bcdDevice 1.00
-                    7'd13:   desc = 8'h01;
-                    7'd14:   desc = 8'd0;         // no strings
-                    7'd15:   desc = 8'd0;
-                    7'd16:   desc = 8'd0;
-                    7'd17:   desc = 8'd1;         // one configuration
+                    0:       desc = 8'd18;        // bLength
+                    1:       desc = 8'd1;         // DEVICE
+                    2:       desc = 8'h00;        // bcdUSB 2.00
+                    3:       desc = 8'h02;
+                    4:       desc = DEV_CLASS;
+                    5:       desc = DEV_SUBCLASS;
+                    6:       desc = DEV_PROTOCOL;
+                    7:       desc = 8'd8;         // bMaxPacketSize0
+                    8:       desc = VID[7:0];
+                    9:       desc = VID[15:8];
+                    10:      desc = PID[7:0];
+                    11:      desc = PID[15:8];
+                    12:      desc = 8'h00;        // bcdDevice 1.00
+                    13:      desc = 8'h01;
+                    14:      desc = 8'd0;         // no strings
+                    15:      desc = 8'd0;
+                    16:      desc = 8'd0;
+                    17:      desc = 8'd1;         // one configuration
                     default: desc = 8'd0;
                 endcase
-            end else if (i < 7'd9) begin
+            end else if (i < 9) begin
                 case (i[3:0])
                     4'd0:    desc = 8'd9;         // bLength
                     4'd1:    desc = 8'd2;         // CONFIGURATION
@@ -443,17 +468,17 @@ module usb_ctrl_ep #(
                 // not by `* 8`: this compiler's synthesis leaves a multiply
                 // by a constant as a `mul` cell, which on the ECP5 is a
                 // hard multiplier.
-                j    = i - 7'd9;
-                desc = IFACE[{j[5:0], 3'b000} +: 8];
+                j    = i - 9;
+                desc = IFACE[{j, 3'b000} +: 8];
             end
         end
     endfunction
 
-    assign tx_byte = desc(desc_sel, in_offset + {3'b000, tx_index});
+    assign tx_byte = desc(desc_sel, in_offset + tx_index);
 
     // The next packet of the data stage.
-    wire [6:0] in_left  = in_total - in_offset;
-    wire [3:0] in_chunk = (in_left > 7'd8) ? 4'd8 : in_left[3:0];
+    wire [LEN_BITS-1:0] in_left  = in_total - in_offset;
+    wire [3:0]          in_chunk = (in_left > 8) ? 4'd8 : in_left[3:0];
 
     // The SETUP request, from the data packet in the cycle it arrives.
     wire [7:0]  s0 = dat[7:0];
@@ -472,8 +497,8 @@ module usb_ctrl_ep #(
     // endpoint's address. Nothing here ever halts an endpoint, so this is
     // accepted for its other documented effect, which is the toggle.
     wire        clr_halt = (s0 == 8'h02) & (s1 == 8'h01) & (s2 == 8'h00) & (s3 == 8'h00);
-    wire [6:0]  desc_len = (s3 == 8'h02) ? CFG_TOTAL[6:0] : 7'd18;
-    wire [6:0]  send_len = (w_length < {9'd0, desc_len}) ? w_length[6:0] : desc_len;
+    wire [LEN_BITS-1:0] desc_len = (s3 == 8'h02) ? CFG_TOTAL[LEN_BITS-1:0] : 18;
+    wire [LEN_BITS-1:0] send_len = (w_length < desc_len) ? w_length[LEN_BITS-1:0] : desc_len;
 
     always @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
@@ -487,8 +512,8 @@ module usb_ctrl_ep #(
             expect         <= X_NONE;
             toggle         <= 1'b0;
             desc_sel       <= 1'b0;
-            in_total       <= 7'd0;
-            in_offset      <= 7'd0;
+            in_total       <= 0;
+            in_offset      <= 0;
             in_len         <= 4'd0;
             await_ack      <= 1'b0;
             pending        <= 1'b0;
@@ -559,7 +584,7 @@ module usb_ctrl_ep #(
                         pend_pid  <= PID_ACK;
                         pend_data <= 1'b0;
                         toggle    <= 1'b1;
-                        in_offset <= 7'd0;
+                        in_offset <= 0;
                         set_addr  <= 1'b0;
                         set_config <= 1'b0;
                         if (pkt_pid != PID_DATA0 || dat_len != 4'd8) begin
@@ -598,7 +623,7 @@ module usb_ctrl_ep #(
                 end else if (pkt_pid == PID_ACK && await_ack) begin
                     await_ack <= 1'b0;
                     if (stage == C_DATA_IN) begin
-                        in_offset <= in_offset + {3'b000, in_len};
+                        in_offset <= in_offset + in_len;
                         toggle    <= ~toggle;
                     end else if (stage == C_STATUS_IN) begin
                         stage <= C_IDLE;
@@ -931,8 +956,8 @@ module usb_bulk_ep #(
 
     // One packet out.
     output reg        tx_start,
-    output reg  [3:0] tx_pid,
-    output reg        tx_with_data,
+    output wire [3:0] tx_pid,
+    output wire       tx_with_data,
     output reg  [3:0] tx_len,
     input  wire [3:0] tx_index,
     output wire [7:0] tx_byte,
@@ -957,6 +982,28 @@ module usb_bulk_ep #(
     localparam [3:0] PID_DATA1 = 4'b1011;
     localparam [3:0] PID_ACK   = 4'b0010;
     localparam [3:0] PID_NAK   = 4'b1010;
+
+    // WHAT THIS ENDPOINT CAN ANSWER, AND WHY IT IS NOT A PID
+    //
+    // Four answers: a NAK, an ACK, a DATA0 packet and a DATA1 packet. Held as
+    // the PID itself — four bits — bit 2 of those four values is a zero no
+    // expression here can set, and **the ECP5 backend refused the
+    // bitstream**:
+    //
+    //   flip-flop `u_dev.u_dev.u_ep1.pend_pid$ff$ff2` has nothing driving its
+    //   data input and is not tied high, and an unrouted slice input on this
+    //   family reads as a one
+    //
+    // `usb_ctrl_ep` can also answer a STALL, which is `1110`, so there bit 2
+    // is real and four bits are four bits. Here they are not, and the answer
+    // to that is not to pad the register: a PID nibble is a **decoding of the
+    // answer**, so two bits of answer are registered and the nibble is wires.
+    // `PID_DATA0`, `PID_ACK` and the rest stay spelled out above because the
+    // decoding has to be readable as the specification's table.
+    localparam [1:0] A_NAK   = 2'd0;
+    localparam [1:0] A_ACK   = 2'd1;
+    localparam [1:0] A_DATA0 = 2'd2;
+    localparam [1:0] A_DATA1 = 2'd3;
 
     // The endpoint addresses this endpoint answers CLEAR_FEATURE for: the
     // direction bit and the number.
@@ -1005,10 +1052,16 @@ module usb_bulk_ep #(
     // The answer, and when it may go out.
     // -----------------------------------------------------------------
     reg       pending;
-    reg [3:0] pend_pid;
-    reg       pend_data;
+    reg [1:0] pend_ans;
     reg [3:0] pend_len;
     reg [6:0] turn;
+    reg [1:0] tx_ans;
+
+    // The PID nibble, and whether the packet carries a payload: both are the
+    // answer decoded, and neither is state.
+    assign tx_pid = tx_ans[1] ? (tx_ans[0] ? PID_DATA1 : PID_DATA0)
+                              : (tx_ans[0] ? PID_ACK   : PID_NAK);
+    assign tx_with_data = tx_ans[1];
 
     always @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
@@ -1024,13 +1077,11 @@ module usb_bulk_ep #(
             in_toggle  <= 1'b0;
             in_await   <= 1'b0;
             pending    <= 1'b0;
-            pend_pid   <= 4'd0;
-            pend_data  <= 1'b0;
+            pend_ans   <= A_NAK;
             pend_len   <= 4'd0;
             turn       <= 7'd0;
+            tx_ans     <= A_NAK;
             tx_start   <= 1'b0;
-            tx_pid     <= 4'd0;
-            tx_with_data <= 1'b0;
             tx_len     <= 4'd0;
         end else begin
             tx_start <= 1'b0;
@@ -1051,13 +1102,11 @@ module usb_bulk_ep #(
                             pending <= 1'b1;
                             turn    <= 7'd0;
                             if (armed) begin
-                                pend_pid  <= in_toggle ? PID_DATA1 : PID_DATA0;
-                                pend_data <= 1'b1;
-                                pend_len  <= ilen;
-                                in_await  <= 1'b1;
+                                pend_ans <= in_toggle ? A_DATA1 : A_DATA0;
+                                pend_len <= ilen;
+                                in_await <= 1'b1;
                             end else begin
-                                pend_pid  <= PID_NAK;
-                                pend_data <= 1'b0;
+                                pend_ans <= A_NAK;
                             end
                         end
                         // A SETUP is not answered at all. A bulk endpoint
@@ -1073,22 +1122,21 @@ module usb_bulk_ep #(
                 end else if (pkt_is_data) begin
                     expect_out <= 1'b0;
                     if (dat_ok && expect_out) begin
-                        pending   <= 1'b1;
-                        turn      <= 7'd0;
-                        pend_data <= 1'b0;
+                        pending <= 1'b1;
+                        turn    <= 7'd0;
                         if (pkt_pid != (out_toggle ? PID_DATA1 : PID_DATA0)) begin
                             // The host did not hear the last ACK. Say it
                             // again and drop the copy.
-                            pend_pid <= PID_ACK;
+                            pend_ans <= A_ACK;
                         end else if (olen == 4'd0) begin
                             obuf       <= dat;
                             olen       <= dat_len;
                             ordx       <= 3'd0;
                             out_toggle <= ~out_toggle;
-                            pend_pid   <= PID_ACK;
+                            pend_ans   <= A_ACK;
                         end else begin
                             // Nothing has taken the last packet yet.
-                            pend_pid <= PID_NAK;
+                            pend_ans <= A_NAK;
                         end
                     end
                 end else if (pkt_pid == PID_ACK && in_await) begin
@@ -1140,11 +1188,10 @@ module usb_bulk_ep #(
                 if (!line_idle) begin
                     turn <= 7'd0;
                 end else if (turn == TURNAROUND) begin
-                    pending      <= 1'b0;
-                    tx_start     <= 1'b1;
-                    tx_pid       <= pend_pid;
-                    tx_with_data <= pend_data;
-                    tx_len       <= pend_len;
+                    pending  <= 1'b0;
+                    tx_start <= 1'b1;
+                    tx_ans   <= pend_ans;
+                    tx_len   <= pend_len;
                 end else begin
                     turn <= turn + 7'd1;
                 end
