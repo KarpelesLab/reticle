@@ -1620,13 +1620,24 @@ impl IoSite {
                     Ok(((*mode).to_owned(), bits))
                 })
                 .collect::<Result<Vec<_>, TrellisError>>()?,
+            // **Optional, unlike everything else here.** A tile type that does
+            // not declare `PIO<side>.SLEWRATE` gets no bits for it rather than
+            // failing the pad: `TrellisFabric::load` reads a `NoSuchField` as
+            // "this pad's tiles are not where the edge's rule says" and skips
+            // the pad, which is the right answer for a base type and the wrong
+            // one for an attribute a design only sometimes asks for. That the
+            // real ECP5 database does declare it for every PIO of every pad
+            // tile a Cynthion uses is asserted against Great Scott Gadgets' own
+            // bitstreams instead, in
+            // `what_lattices_own_packer_writes_for_a_slew_rate`.
             slew_rates: SLEW_RATES
                 .iter()
                 .map(|rate| {
-                    let bits = db.locate_field(pad_at, &format!("PIO{side}.SLEWRATE"), rate)?;
-                    Ok(((*rate).to_owned(), bits))
+                    let field = format!("PIO{side}.SLEWRATE");
+                    let bits = db.locate_field(pad_at, &field, rate).unwrap_or_default();
+                    ((*rate).to_owned(), bits)
                 })
-                .collect::<Result<Vec<_>, TrellisError>>()?,
+                .collect(),
             high_bits: db.locate_field(cib_at, &data_field, TIE_HIGH)?,
             low_bits: db.locate_field(cib_at, &data_field, TIE_LOW)?,
             enable_bits: db.locate_field(cib_at, &enable_field, TIE_LOW)?,
