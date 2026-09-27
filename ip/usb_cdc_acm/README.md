@@ -692,16 +692,24 @@ error: the design needs 2 `lutram` site(s) and the part has 0
 
 `fifo_sync`'s storage is an array indexed by a variable, which becomes a
 distributed RAM, and `src/fpga/devices/ecp5.dev` declares
-`bel TRELLIS_DPR16X4 lutram` with **no `count`** — on every ECP5 in the
-file. So `fpga::place` sees zero sites of it and refuses, at any depth and
-with `FWFT` either way. `fpga::synthesize_for` is happy, which is why
+`bel TRELLIS_DPR16X4 lutram` with **no `count`**. So `fpga::place` sees zero
+sites of it and refuses.
+
+Measured on `ecp5-12f-CABGA256`, the Cynthion's part, at depths 16, 32 and
+64 and with `FWFT` both ways — all five refused with the same message.
+`fpga::synthesize_for` is happy with every one of them, which is why
 `tests/ip_library.rs`'s `small_memories_become_logic_after_the_fpga_flow`
 passes: it stops before placement.
 
+**Inferred**, not measured: that the other two ECP5 devices in that file
+behave the same way, since all three declare the bel without a `count` and
+that is the cause. Only the 12F was tried, because it is the only ECP5 this
+flow has a Project Trellis part for.
+
 The effect is that **no design in this repository can instantiate
-`fifo_sync` on this family**, which is worth knowing independently of
-serial ports. `testdata/fpga/cynthion/usb_cdc_uart.v` works around it by
-carrying one byte at a time, and says so.
+`fifo_sync` on this part**, which is worth knowing independently of serial
+ports. `testdata/fpga/cynthion/usb_cdc_uart.v` works around it by carrying
+one byte at a time, and says so.
 
 ---
 

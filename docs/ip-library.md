@@ -405,8 +405,12 @@ error: the design needs 2 `lutram` site(s) and the part has 0
 
 `fpga::synthesize_for` is content, which is why
 `small_memories_become_logic_after_the_fpga_flow` passes: it stops before
-placement. The effect is that no design in this repository can instantiate
-that block on this family, which matters well beyond serial ports.
+placement. Measured on `ecp5-12f-CABGA256` at depths 16, 32 and 64 and with
+`FWFT` both ways; the other two ECP5s in that file are **inferred** to behave
+the same, since all three declare the bel the same way and the 12F is the only
+one this flow has a Trellis part for. The effect is that no design in this
+repository can instantiate that block on this part, which matters well beyond
+serial ports.
 `testdata/fpga/cynthion/usb_cdc_uart.v` works around it by carrying one byte
 at a time through the UART, which needs one holding register instead of a
 queue, and says so in its header.
