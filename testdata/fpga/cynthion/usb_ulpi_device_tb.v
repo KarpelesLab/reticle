@@ -17,10 +17,20 @@
 //   4. the interface clock leaving the part on its own pin.
 //
 // So this is the smallest transceiver that gets the core through its
-// start-up: it acknowledges what it is sent with `nxt`, and for the one
-// register read the core does it takes the bus and hands back what was
-// written. If the start-up conversation is right, `led0_n` — `phy_ready` —
-// goes low, and that is the verdict.
+// start-up: it acknowledges what it is sent with `nxt`, and for the register
+// reads the core does it takes the bus and hands back what was written. If
+// the start-up conversation is right, `led0_n` — `phy_ready` — goes low, and
+// that is the verdict.
+//
+// One thing it is deliberately not the smallest possible version of: **its
+// pair starts at SE0.** The Debug register's LineState answers `00h` twice
+// before it answers `01h`, because that is what a real transceiver does — the
+// 1.5 kOhm pull-up the core has just connected has to charge the pair, and on
+// a Microchip part on a Cynthion it reads SE0 for milliseconds first
+// (`docs/fpga-trellis.md`). A model that answers J straight away cannot tell
+// a Link that reads LineState once from one that reads it until it settles,
+// and the difference is a device that works from one that holds `usb_reset`
+// for ever. `tests/ip_library.rs` has the same correction in its own model.
 //
 // `POR` is 4 rather than the board's 16; nothing else is changed.
 //
@@ -88,6 +98,8 @@ module usb_ulpi_device_tb;
     reg [2:0] phase = 3'd0;
     integer   writes = 0;
     integer   reads = 0;
+    // Debug register reads so far, so the first two can answer SE0.
+    integer   line_reads = 0;
 
     // The phases, and the cycle each one is. `nxt` and `dir` are registered
     // here, as a transceiver's are, so every acknowledgement arrives the
@@ -130,9 +142,16 @@ module usb_ulpi_device_tb;
             P_TURN: begin
                 dir    <= 1'b1;
                 phy_oe <= 1'b1;
-                // The Debug register's LineState says the host idles at J;
-                // everything else reads back what was written.
-                phy_out <= (address == 6'h15) ? 8'h01 : regs[address];
+                // The Debug register's LineState: SE0 while the pull-up the
+                // core has just connected charges the pair, and then J, which
+                // is where a full-speed bus idles. Everything else reads back
+                // what was written.
+                if (address == 6'h15) begin
+                    phy_out    <= (line_reads < 2) ? 8'h00 : 8'h01;
+                    line_reads <= line_reads + 1;
+                end else begin
+                    phy_out <= regs[address];
+                end
                 phase  <= P_READ;
             end
             P_READ: begin
@@ -188,6 +207,10 @@ module usb_ulpi_device_tb;
         for (settle = 0; settle < 4000; settle = settle + 1) @(posedge clk);
         check(writes < 3, "fewer than three register writes reached the transceiver");
         check(reads < 2, "the core never read a register back through the pads");
+        check(
+            line_reads < 3,
+            "the core took the first LineState answer instead of reading again"
+        );
         check(
             regs[6'h04] !== 8'h45,
             "Function Control is not the full-speed peripheral value 45h"
