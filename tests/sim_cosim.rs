@@ -697,6 +697,9 @@ end
 
 #[test]
 fn elaboration_warnings_and_errors() {
+    // `bb` is declared as a black box, so the run happens: its outputs
+    // stay undriven and everything wrong with the instantiations is a
+    // warning the caller can read afterwards.
     let text = "\
 top t
 module bb blackbox
@@ -706,18 +709,42 @@ end
 module t
   net %a u1 wire
   net %b u2 wire
-  instance u0 of ghost (x=%a)
   instance u1 of bb (o=%a, zz=%a)
   instance u2 of bb (o=%b)
 end
 ";
     let sim = load(text);
     let warnings: Vec<String> = sim.messages().iter().map(|d| d.message.clone()).collect();
-    assert_eq!(warnings.len(), 5, "{warnings:?}");
-    assert!(warnings[0].contains("unknown module `ghost`"));
-    assert!(warnings[1].contains("black box"));
-    assert!(warnings[2].contains("does not have"));
-    assert!(warnings[4].contains("2 bits"));
+    assert_eq!(warnings.len(), 4, "{warnings:?}");
+    assert!(warnings[0].contains("black box"), "{warnings:?}");
+    assert!(warnings[1].contains("does not have"), "{warnings:?}");
+    assert!(warnings[3].contains("2 bits"), "{warnings:?}");
     let empty = Design::new();
     assert!(Simulator::new(&empty, SimOptions::default()).is_err());
+}
+
+/// The other side of that line: `ghost` is declared nowhere, so there is
+/// nothing to simulate. Running anyway would give its outputs `x` and let
+/// a testbench report a failure of a design that is in fact fine, so the
+/// simulator refuses and names the instantiation.
+#[test]
+fn an_instance_of_a_module_nothing_declares_is_refused() {
+    let text = "\
+top t
+module t
+  net %a u1 wire
+  instance u0 of ghost (x=%a)
+end
+";
+    let design = parse(text);
+    let diags = Simulator::new(&design, SimOptions::default())
+        .expect_err("a module nothing declares cannot be simulated");
+    assert_eq!(diags.error_count(), 1);
+    let first = diags.iter().next().expect("one error");
+    assert_eq!(
+        first.message,
+        "no module named `ghost` is defined, so instance `u0` cannot be simulated"
+    );
+    let notes = first.notes.join("\n");
+    assert!(notes.contains("no library search path"), "{notes}");
 }

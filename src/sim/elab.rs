@@ -425,12 +425,42 @@ impl<'d> Simulator<'d> {
             let child_module = match &inst.module {
                 ModuleRef::Resolved(cm) => *cm,
                 ModuleRef::Unresolved(n) => {
+                    // A black box the design *declares* is a resolved
+                    // reference to a `Module` with `blackbox` set, and is
+                    // warned about below. Landing here means nothing
+                    // declares the module at all, which would simulate as
+                    // a box whose outputs stay `x`: a run whose result is
+                    // a fiction, and the sort of fiction a testbench
+                    // reports as a failure of the design. Refuse instead.
+                    if design.module_by_name(n.as_str()).is_none() {
+                        diags.push(
+                            Diagnostic::error(format!(
+                                "no module named `{n}` is defined, so instance `{}` cannot be \
+                                 simulated",
+                                inst.name
+                            ))
+                            .with_span(inst.span)
+                            .with_note(format!(
+                                "Reticle has no library search path: add the file that defines \
+                                 `{n}` to this run"
+                            ))
+                            .with_note(
+                                "a black box the design declares does simulate, as a box whose \
+                                 outputs stay undriven; a module nothing declares does not",
+                            ),
+                        );
+                        continue;
+                    }
                     diags.push(
                         Diagnostic::warning(format!(
-                            "instance `{}` refers to unknown module `{n}`; its outputs stay undriven",
+                            "instance `{}` refers to unbound module `{n}`; its outputs stay undriven",
                             inst.name
                         ))
-                        .with_span(inst.span),
+                        .with_span(inst.span)
+                        .with_note(
+                            "the design holds a module of that name; `Design::resolve_instances` \
+                             binds the reference to it",
+                        ),
                     );
                     continue;
                 }
@@ -1058,8 +1088,12 @@ mod tests {
         assert!(sim.messages.is_empty());
     }
 
+    /// A module nothing declares cannot be simulated: the box would hold
+    /// `x`, and a testbench reading that reports a failure of a design
+    /// that is in fact fine. So it is an error, named at the
+    /// instantiation, and so is a recursive hierarchy.
     #[test]
-    fn unresolved_and_recursive_instances() {
+    fn an_undeclared_module_and_a_recursive_one_are_errors() {
         let span = span();
         let mut design = Design::new();
         let mut top = ModuleBuilder::new("top", span);
@@ -1078,7 +1112,52 @@ mod tests {
             });
         design.top = Some(top_id);
         let err = Simulator::elaborate(&design, SimOptions::default()).unwrap_err();
-        assert!(err.has_errors());
-        assert_eq!(err.warning_count(), 1);
+        assert_eq!(err.error_count(), 2);
+        assert_eq!(err.warning_count(), 0);
+        let text = err
+            .iter()
+            .map(|d| d.message.clone())
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(
+            text.contains("no module named `ghost` is defined, so instance `u0` cannot be"),
+            "{text}"
+        );
+    }
+
+    /// A black box the design *declares* does simulate: the outputs stay
+    /// undriven and one warning says so. That is the line between a
+    /// deliberate hole and a file left off the build.
+    #[test]
+    fn a_declared_black_box_simulates_with_a_warning() {
+        let span = span();
+        let mut design = Design::new();
+        let mut stub = ModuleBuilder::new("vendor_core", span);
+        stub.input("a", Type::bit());
+        stub.output("y", Type::bit());
+        let mut stub = stub.finish();
+        stub.blackbox = true;
+        let stub_id = design.add_module(stub);
+
+        let mut top = ModuleBuilder::new("top", span);
+        let a = top.input("a", Type::bit());
+        let y = top.output("y", Type::bit());
+        let (av, yv) = (top.net(a), top.net(y));
+        top.instance(
+            "u0",
+            ModuleRef::Resolved(stub_id),
+            vec![("a".into(), av), ("y".into(), yv)],
+        );
+        design.top = Some(design.add_module(top.finish()));
+        let sim = Simulator::elaborate(&design, SimOptions::default())
+            .expect("a declared black box is not an error");
+        assert_eq!(sim.messages.warning_count(), 1);
+        assert!(
+            sim.messages.iter().any(|d| d
+                .message
+                .contains("of black box `vendor_core` has no behaviour")),
+            "{}",
+            sim.messages.len()
+        );
     }
 }
