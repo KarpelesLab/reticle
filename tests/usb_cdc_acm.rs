@@ -478,13 +478,16 @@ fn line_coding(handle: &rawusb::DeviceHandle) -> Result<Vec<u8>, String> {
     if claimed.is_ok() {
         let _ = handle.release_interface(COMM_IFACE);
     }
-    if held {
-        if let Err(err) = handle.attach_kernel_driver(COMM_IFACE) {
-            return Err(format!(
-                "the line coding was read but `cdc_acm` could not be put back on interface \
-                 {COMM_IFACE} ({err}); unplug and replug the board"
-            ));
-        }
+    let reattached = if held {
+        handle.attach_kernel_driver(COMM_IFACE)
+    } else {
+        Ok(())
+    };
+    if let Err(err) = reattached {
+        return Err(format!(
+            "the line coding was read but `cdc_acm` could not be put back on interface \
+             {COMM_IFACE} ({err}); unplug and replug the board"
+        ));
     }
     match asked {
         Ok(7) => Ok(coding.to_vec()),
