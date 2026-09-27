@@ -109,7 +109,13 @@ module usb_ulpi_device #(
     // How many clocks the core is held in reset after configuration. A
     // testbench has no use for more than a few; the board gets sixteen,
     // which is 0.27 us at 60 MHz.
-    parameter integer POR = 16
+    parameter integer POR = 16,
+    // Cycles of an idle bus at J before the device's answer goes out, which
+    // ULPI 1.1 Table 10 allows a full-speed Link to spend between 7 and 18
+    // of. It is a parameter here because it is the one number in this design
+    // that a board can argue with, and sweeping it is one bitstream per
+    // value.
+    parameter [3:0] TURNAROUND = 4'd9
 ) (
     input  wire clk,             // A8, the 60.000 MHz oscillator
 
@@ -146,7 +152,53 @@ module usb_ulpi_device #(
     // and 60 MHz both ways, so there is nothing to make: no PLL.
     assign ulpi_clk = clk;
 
-    usb_device_ulpi u_dev (
+    // ===================================================================
+    // THE ONE REGISTER THAT IS THIS BOARD'S AND NOT ULPI'S
+    // ===================================================================
+    //
+    // **This board exchanges DP and DM between the transceiver and the
+    // connector, and the transceiver has a bit that undoes it.** Without
+    // that bit the 1.5 kOhm pull-up `TermSelect` connects to the
+    // transceiver's DP reaches the receptacle's D-, a host detects a
+    // low-speed device where a full-speed one was asked for, and every
+    // symbol after that is inverted. `docs/fpga-trellis.md` has the
+    // measurements that said so before the cause was known: the
+    // transceiver reporting its own D+ high in the same instant the host
+    // reported low speed.
+    //
+    // Three sources, and they agree:
+    //
+    //   * the part is a **Microchip USB3343**, read off the board's Vendor
+    //     ID register (`0424h`) and confirmed by the reference designator
+    //     `U11 USB3343-CP` in Great Scott Gadgets' own PCB;
+    //   * *USB334x Data Sheet* DS00002646A, Table 2-2 and Figure 2-2:
+    //     **pin 13 is DP and pin 14 is DM**. The PCB wires pin 13 to the
+    //     receptacle's D- (`A7`/`B7`) and pin 14 to its D+ (`A6`/`B6`),
+    //     through the common-mode choke `FL1`, so the pair is crossed on
+    //     purpose — both of the receptacle's pairs are tied together, so
+    //     no plug orientation and no Type-C controller comes into it;
+    //   * the same datasheet §7.1.3.5, register **39h** "USB IO & Power
+    //     Management", bit 1 `SwapDP/DM`: *"When asserted, the DP and DM
+    //     pins of the USB transceiver are swapped. This bit can be used to
+    //     prevent crossing the DP/DM traces on the board."* Its reset value
+    //     is `04h`, so `06h` is that default with bit 1 set.
+    //
+    // And Great Scott Gadgets' own gateware writes exactly that byte to
+    // exactly that address, in `cynthion/python/src/gateware/platform/
+    // core.py`:
+    //
+    //     ulpi_extra_registers = {
+    //         0x39: 0b000110 # USB3343: swap D+ and D- to match the
+    //                        # hardware design
+    //     }
+    //
+    // The core writes it after the transceiver's own reset and before
+    // `TermSelect`, and reads it back; see `usb_ulpi_link`'s parameter.
+    usb_device_ulpi #(
+        .TURNAROUND  (TURNAROUND),
+        .VENDOR_ADDR (6'h39),
+        .VENDOR_DATA (8'h06)
+    ) u_dev (
         .clk60        (clk),
         .rst_n        (reset_done),
         .ulpi_data_i  (ulpi_data),

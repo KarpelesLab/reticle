@@ -18,7 +18,10 @@
 //
 // So this is the smallest transceiver that gets the core through its
 // start-up: it acknowledges what it is sent with `nxt`, and for the register
-// reads the core does it takes the bus and hands back what was written. If
+// reads the core does it takes the bus and hands back what was written. Its
+// register file is 64 bytes and holds any address, which is why the board's
+// own vendor register at `39h` needed nothing added here beyond the
+// assertion that it was written. If
 // the start-up conversation is right, `led0_n` — `phy_ready` — goes low, and
 // that is the verdict.
 //
@@ -205,8 +208,8 @@ module usb_ulpi_device_tb;
         // registers and which bytes against a fuller model; what matters
         // here is that the bytes got through the pads in both directions.
         for (settle = 0; settle < 4000; settle = settle + 1) @(posedge clk);
-        check(writes < 3, "fewer than three register writes reached the transceiver");
-        check(reads < 2, "the core never read a register back through the pads");
+        check(writes < 4, "fewer than four register writes reached the transceiver");
+        check(reads < 3, "the core never read a register back through the pads");
         check(
             line_reads < 3,
             "the core took the first LineState answer instead of reading again"
@@ -216,6 +219,15 @@ module usb_ulpi_device_tb;
             "Function Control is not the full-speed peripheral value 45h"
         );
         check(regs[6'h0A] !== 8'h00, "OTG Control still has a host's pull-downs");
+        // The board's own register, and the reason this design works at all:
+        // 39h bit 1 is the USB3343's `SwapDP/DM`, and this board crosses DP
+        // and DM between the transceiver and the connector. The top level's
+        // header has the three sources. A write that did not reach the part
+        // is a device a host detects as low speed.
+        check(
+            regs[6'h39] !== 8'h06,
+            "the transceiver was never told that this board crosses DP and DM"
+        );
         check(led0_n !== 1'b0, "LED 0 is dark, so `phy_ready` never came up");
         check(!saw_fpga_drive, "the FPGA never drove the bus at all");
 
