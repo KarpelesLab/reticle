@@ -1375,9 +1375,11 @@ RWDS as a capture clock; `dvi_tx` runs everything at five times the
 pixel rate, which leaves 1280 x 720 beyond both families' fabric;
 `eth_mac_rgmii` is gigabit only; and every USB endpoint here carries
 **eight-byte packets**, which is the four-bit length both transmitters take.
-That last one is now the limit that shows most: it is a serial port of about
-8 kB/s rather than 64, it is why a host must read one packet at a time, and
-it is the reason `usb_cdc_acm` cannot send a SERIAL_STATE notification.
+That last one is now the limit that shows most: it is an eighth of the largest
+packet a full-speed bulk endpoint may have, and since a host is limited in
+transactions a frame rather than in bytes it costs close to a factor of eight
+of throughput; it is why a host must read one packet at a time; and it is the
+reason `usb_cdc_acm` cannot send a SERIAL_STATE notification.
 Widening it is a length field in `usb_fs_tx`, in `usb_ulpi_link` and in
 `usb_bulk_ep`, and it is the next thing worth doing to these blocks.
 

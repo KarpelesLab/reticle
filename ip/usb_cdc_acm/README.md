@@ -604,11 +604,14 @@ lines that fix it.
   `data_bits` are what the host asked for and are brought out for a design
   to use. Following `dwDTERate` means dividing a clock by a run-time value,
   which is a design's business.
-- **Eight bytes a packet**, so a serial port of about 8 kB/s rather than 64.
-  It also means a host must read **one packet at a time**: a bulk IN
-  transfer ends on a short packet or a full buffer, so a read of 64 bytes
-  answered with 8 is not finished, and a host that asks again gets a NAK
-  and a timeout from a device that is behaving perfectly.
+- **Eight bytes a packet**, an eighth of the largest a full-speed bulk
+  endpoint may have. A host is limited in *transactions* a frame rather than
+  in bytes, so that is close to a factor of eight off what a 64-byte endpoint
+  reaches; no figure is quoted because nothing here measured one. It also
+  means a host must read **one packet at a time**: a bulk IN transfer ends on
+  a short packet or a full buffer, so a read of 64 bytes answered with 8 is
+  not finished, and a host that asks again gets a NAK and a timeout from a
+  device that is behaving perfectly.
 - **No FIFO.** The endpoint holds one packet each way and NAKs while it is
   full, which is what bulk means. A bridge to something as slow as a UART
   wants depth on its receive side, and `ip/fifo_sync` is the block for it —

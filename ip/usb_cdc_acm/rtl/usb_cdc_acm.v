@@ -100,12 +100,17 @@
 //   everything below and an interface association descriptor above it.
 //
 //   Eight bytes a packet on the bulk endpoints, which is `usb_bulk_ep`'s
-//   limit and is a serial port's throughput ceiling of about 8 kB/s at
-//   full speed rather than 64. It is legal — USB 2.0 §5.8.3 lists 8 beside
-//   16, 32 and 64 — and it is why a host reading this port must read one
-//   packet at a time: a bulk IN transfer ends on a short packet or a full
-//   buffer, so a read of 64 bytes answered with 8 is not finished and the
-//   host asks again.
+//   limit and is an eighth of the largest a full-speed bulk endpoint may
+//   have. It is legal — USB 2.0 §5.8.3 lists 8 beside 16, 32 and 64 — and
+//   what it costs is throughput, by close to that factor: a host is limited
+//   in **transactions** a frame rather than in bytes, so eight bytes a
+//   transaction is eight times less of them. No number is quoted here
+//   because nothing here measured one.
+//
+//   It is also why a host reading this port must read **one packet at a
+//   time**: a bulk IN transfer ends on a short packet or a full buffer, so a
+//   read of 64 bytes answered with 8 is not finished and the host asks
+//   again.
 //
 //   No flow control on either side but USB's own NAK. There is no FIFO
 //   here: the endpoint holds one packet each way and NAKs the host while

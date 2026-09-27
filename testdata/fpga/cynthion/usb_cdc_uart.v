@@ -289,10 +289,12 @@ module usb_cdc_uart #(
     //
     // What it costs is throughput: one character is a whole round trip — 87
     // microseconds of 8N1 plus however long the host takes to collect a
-    // one-byte packet — so this bridge is a few hundred bytes a second and
-    // not the eight thousand the endpoints could carry. For a serial port a
-    // person types at, and for a test that moves a few dozen bytes, that is
-    // the right trade; for a bridge to a **real** device it is not, because
+    // one-byte packet — where a bridge with a queue would have the UART
+    // running back to back and the USB side overlapped with it. No figure is
+    // quoted for either, because nothing here measured one. For a serial port
+    // a person types at, and for a test that moves a few dozen bytes, the
+    // round trip is the right trade; for a bridge to a **real** device it is
+    // not, because
     // a real device's bytes arrive when they arrive and cannot be throttled
     // by anything at this end. Such a design needs the FIFO, and needs the
     // backend to be able to place one.
