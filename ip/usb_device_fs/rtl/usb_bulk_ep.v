@@ -137,6 +137,11 @@ module usb_bulk_ep #(
     // -----------------------------------------------------------------
     // Host to device.
     // -----------------------------------------------------------------
+    // The byte index is scaled to a bit index by concatenation and not by
+    // `* 8`. A multiply by a power of two is a shift, but this compiler's
+    // synthesis does not strength-reduce one: `ordx * 8` became a `mul`
+    // cell, and on the ECP5 a `MULT18X18D`. Three of them, across the two
+    // buffers and the descriptor, cost 640 LUT4 and two hard multipliers.
     reg [63:0] obuf;        // the packet, byte 0 in the low eight bits
     reg [3:0]  olen;        // bytes in it, 0 when it has been drained
     reg [2:0]  ordx;        // the byte being handed over
@@ -144,7 +149,7 @@ module usb_bulk_ep #(
     reg        expect_out;  // an OUT token has been seen and its data is next
 
     assign out_valid = (olen != 4'd0);
-    assign out_data  = obuf[ordx * 8 +: 8];
+    assign out_data  = obuf[{ordx, 3'b000} +: 8];
     assign out_last  = (({1'b0, ordx} + 4'd1) == olen);
 
     // -----------------------------------------------------------------
@@ -165,7 +170,7 @@ module usb_bulk_ep #(
     // Room while no packet is waiting to be sent. `armed` covers the full
     // buffer too, since the eighth byte arms it.
     assign in_ready = ~armed;
-    assign tx_byte  = ibuf[tx_index[2:0] * 8 +: 8];
+    assign tx_byte  = ibuf[{tx_index[2:0], 3'b000} +: 8];
 
     // -----------------------------------------------------------------
     // The answer, and when it may go out.

@@ -418,8 +418,12 @@ module usb_ctrl_ep #(
                 // The class's own descriptors, the index masked to the
                 // blob's width so that no expression here can reach
                 // outside it.
+                // A byte index scaled to a bit index by concatenation and
+                // not by `* 8`: this compiler's synthesis leaves a multiply
+                // by a constant as a `mul` cell, which on the ECP5 is a
+                // hard multiplier.
                 j    = i - 7'd9;
-                desc = IFACE[j[5:0] * 8 +: 8];
+                desc = IFACE[{j[5:0], 3'b000} +: 8];
             end
         end
     endfunction
