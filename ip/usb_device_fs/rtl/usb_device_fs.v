@@ -128,7 +128,7 @@ module usb_device_fs #(
     usb_ctrl_ep #(
         .VID        (VID),
         .PID        (PID),
-        .TURNAROUND (4'd8)
+        .TURNAROUND (7'd8)
     ) u_ep (
         .clk          (clk48),
         .rst_n        (rst_n),

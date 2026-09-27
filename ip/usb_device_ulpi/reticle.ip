@@ -32,7 +32,7 @@ param VID bits 16'h1209
 param PID bits 16'h0001
 param RESET_CYCLES int 300 2..65535
 param SE0_CYCLES int 150 2..255
-param TURNAROUND bits 4'd9
+param TURNAROUND bits 7'd9
 param VENDOR_ADDR bits 6'h00
 param VENDOR_DATA bits 8'h00
 

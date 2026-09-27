@@ -69,8 +69,14 @@
 module usb_ctrl_ep #(
     parameter [15:0] VID        = 16'h1209,
     parameter [15:0] PID        = 16'h0001,
-    // Cycles of `line_idle` before an answer starts.
-    parameter [3:0]  TURNAROUND = 4'd8
+    // Cycles of `line_idle` before an answer starts. Seven bits wide, and
+    // not four, because what a **host** tolerates is wider than what ULPI
+    // asks a Link for: USB 2.0 §7.1.19.1 has a host wait 16 bit times for a
+    // device's response before calling it a timeout, which is 80 clocks of a
+    // 60 MHz ULPI bus, and a four-bit field cannot reach a third of that. A
+    // device that is not being heard is worth sweeping across the whole of
+    // it rather than across ULPI's 7 to 18.
+    parameter [6:0]  TURNAROUND = 7'd8
 ) (
     input  wire       clk,
     input  wire       rst_n,
@@ -195,7 +201,7 @@ module usb_ctrl_ep #(
     reg [3:0]  pend_pid;
     reg        pend_data;
     reg [3:0]  pend_len;
-    reg [3:0]  turn;
+    reg [6:0]  turn;
 
     assign address    = addr;
     assign configured = config_q;
@@ -297,7 +303,7 @@ module usb_ctrl_ep #(
             pend_pid       <= 4'd0;
             pend_data      <= 1'b0;
             pend_len       <= 4'd0;
-            turn           <= 4'd0;
+            turn           <= 7'd0;
             tx_start       <= 1'b0;
             tx_pid         <= 4'd0;
             tx_with_data   <= 1'b0;
@@ -349,7 +355,7 @@ module usb_ctrl_ep #(
                         end else begin
                             // IN: answer from the stage we are in.
                             pending <= 1'b1;
-                            turn    <= 4'd0;
+                            turn    <= 7'd0;
                             case (stage)
                                 C_DATA_IN: begin
                                     pend_pid  <= toggle ? PID_DATA1 : PID_DATA0;
@@ -382,7 +388,7 @@ module usb_ctrl_ep #(
                         // new control transfer whatever the last one was
                         // doing.
                         pending   <= 1'b1;
-                        turn      <= 4'd0;
+                        turn      <= 7'd0;
                         pend_pid  <= PID_ACK;
                         pend_data <= 1'b0;
                         toggle    <= 1'b1;
@@ -408,7 +414,7 @@ module usb_ctrl_ep #(
                         end
                     end else if (data_ok && expect == X_OUT) begin
                         pending   <= 1'b1;
-                        turn      <= 4'd0;
+                        turn      <= 7'd0;
                         pend_data <= 1'b0;
                         if (stage == C_DATA_IN && data_len == 4'd0) begin
                             // The status stage of a read.
@@ -439,7 +445,7 @@ module usb_ctrl_ep #(
             // been J for the turnaround.
             if (pending && !tx_busy) begin
                 if (!line_idle) begin
-                    turn <= 4'd0;
+                    turn <= 7'd0;
                 end else if (turn == TURNAROUND) begin
                     pending      <= 1'b0;
                     tx_start     <= 1'b1;
@@ -447,7 +453,7 @@ module usb_ctrl_ep #(
                     tx_with_data <= pend_data;
                     tx_len       <= pend_len;
                 end else begin
-                    turn <= turn + 4'd1;
+                    turn <= turn + 7'd1;
                 end
             end
 

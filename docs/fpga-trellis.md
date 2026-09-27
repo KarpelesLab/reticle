@@ -122,13 +122,28 @@ fixes below — was reasoning from a premise that had not been tested.
 So the state of it is:
 
 - **Out** is wrong: nothing this device sends is understood, in any slot, at
-  either end of ULPI's timing window (`TURNAROUND` was swept to 5 and to 15,
-  the extremes of Table 10's 7-to-18 clocks, with no change).
+  any answer delay between **1 and 11.7 bit times**. `TURNAROUND` was swept
+  to 5 and 15 — the extremes of ULPI Table 10's 7-to-18 clocks — and then, by
+  widening the counter from four bits to seven, to **40 and 70 clocks**,
+  which is past the window ULPI allows and well inside the **16 bit times** a
+  host waits before calling a device's response a timeout (USB 2.0
+  §7.1.19.1). Four bitstreams, four identical `error -110`s. The timing axis
+  is excluded.
 - **In** is right: tokens arrive with their CRC5 correct — an IN token is
   only answered at all when `token_ok` passes — and the SETUP's eight-byte
   data packet arrives with its **CRC16 correct**, every time, which is a
   byte-exact eleven-byte receive.
 - **The terminations** are right: the host calls it full speed.
+
+What that leaves is the shape of the transmitted packet on the wire, and the
+`SLEWRATE=FAST` gap is now the only difference between what this flow writes
+for these pins and what Great Scott Gadgets ask for on all of them. It is an
+edge rate on the transmit path: invisible to a register readback that lands
+byte-exact on a 60 MHz bus, invisible to a receiver at this end, and the one
+thing that a receiver at the far end of a cable could care about. It has been
+demoted twice, both times for the wrong reason — the first for an argument
+about which wire a resistor is on, the second because the bus reads back
+cleanly — and neither argument touches it.
 
 Three things are consistent with that shape and are not yet distinguished.
 The first is that `SwapDP/DM` swaps the terminations and the receiver but

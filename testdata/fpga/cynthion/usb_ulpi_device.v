@@ -115,7 +115,7 @@ module usb_ulpi_device #(
     // of. It is a parameter here because it is the one number in this design
     // that a board can argue with, and sweeping it is one bitstream per
     // value.
-    parameter [3:0] TURNAROUND = 4'd9
+    parameter [6:0] TURNAROUND = 7'd9
 ) (
     input  wire clk,             // A8, the 60.000 MHz oscillator
 

@@ -87,7 +87,7 @@ module usb_device_ulpi #(
     // window "ensure[s] inter-packet delays of 2-6.5 bit times", which is
     // USB 2.0's own requirement. Nine puts the transmit command eleven or
     // twelve clocks after that receive command, in the middle of it.
-    parameter [3:0]  TURNAROUND   = 4'd9,
+    parameter [6:0]  TURNAROUND   = 7'd9,
     parameter [5:0]  VENDOR_ADDR  = 6'h00,
     parameter [7:0]  VENDOR_DATA  = 8'h00
 ) (
