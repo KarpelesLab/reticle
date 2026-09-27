@@ -318,13 +318,29 @@ pub fn read_bit_header(bytes: &[u8]) -> Result<BitHeader, BitError> {
             0x02 => at += 11,
             // Everything else in a header is one opcode and three
             // operand bytes, optionally followed by a four-byte word.
-            // The ones that take a word: control registers, addresses,
-            // the USERCODE, the SED check word, `JUMP`.
-            0x22 | 0x23 | 0x46 | 0xa2 | 0xb4 | 0xc2 | 0xf6 | 0x7e => at += 7,
+            // The ones that take a word: the two control registers, the
+            // write address, the USERCODE, the SED check word, the block
+            // RAM address and `JUMP`.
+            //
+            // `LSC_INIT_ADDRESS` (0x46) is **not** one of them, and it used
+            // to be listed here. It takes its three reserved bytes and
+            // nothing else — `Ecp5Stream::to_bytes` writes exactly four
+            // bytes for it and the reader in `fpga::ecp5` skips exactly
+            // three — so counting a word made this walk overshoot into
+            // `LSC_WRITE_COMP_DIC`'s operand, which in a compressed file is
+            // the eight-byte compression dictionary. Whether the walk then
+            // recovered depended on the first dictionary byte: `0x22` or any
+            // other eight-byte opcode landed back on the payload command by
+            // luck, and anything else sent it into the frames, where the
+            // first stray `0xe2` became a nonsense IDCODE and the part was
+            // refused with "this is not the device this bitstream is for".
+            // Two designs differing only in a Verilog parameter loaded or
+            // did not according to which byte their dictionary began with.
+            0x22 | 0x23 | 0xa2 | 0xb4 | 0xc2 | 0xf6 | 0x7e => at += 7,
             // `SPI_MODE` carries its byte in the first operand slot.
             0x79 => at += 3,
-            // `LSC_RESET_CRC`, `ISC_PROGRAM_DONE` and the rest: three
-            // reserved bytes.
+            // `LSC_RESET_CRC`, `LSC_INIT_ADDRESS`, `ISC_PROGRAM_DONE`,
+            // `ISC_PROGRAM_SECURITY` and the rest: three reserved bytes.
             _ => at += 3,
         }
         if at > bytes.len() {
@@ -1000,6 +1016,60 @@ mod tests {
         out.push(if compressed { 0xb8 } else { 0x82 });
         out.extend_from_slice(&[0x91, 0x1d, 0x8a]);
         out
+    }
+
+    /// A `.bit` with the header `Ecp5Stream::to_bytes` really writes for a
+    /// compressed stream: `LSC_RESET_CRC`, `VERIFY_ID`, `LSC_PROG_CNTRL0`,
+    /// `LSC_INIT_ADDRESS`, `LSC_WRITE_COMP_DIC` and the payload command.
+    /// `dict0` is the first dictionary byte on the wire, which is the one
+    /// that used to decide whether the file loaded.
+    fn compressed_bit(idcode: u32, dict0: u8) -> Vec<u8> {
+        let mut out = vec![0xff, 0x00];
+        out.extend_from_slice(b"Part: LFE5U-12F-8CABGA256");
+        out.push(0x00);
+        out.push(0xff);
+        out.extend_from_slice(&BIT_PREAMBLE);
+        out.extend_from_slice(&[0xff; 4]);
+        out.extend_from_slice(&[0x3b, 0, 0, 0]);
+        out.push(0xe2);
+        out.extend_from_slice(&[0, 0, 0]);
+        out.extend_from_slice(&idcode.to_be_bytes());
+        out.extend_from_slice(&[0x22, 0, 0, 0, 0x40, 0, 0, 0]);
+        out.extend_from_slice(&[0x46, 0, 0, 0]);
+        out.extend_from_slice(&[0x02, 0, 0, 0]);
+        out.push(dict0);
+        out.extend_from_slice(&[0xde, 0xad, 0xbe, 0xef, 0x01, 0x02, 0x03]);
+        out.extend_from_slice(&[0xb8, 0x91, 0x1d, 0x8a]);
+        out
+    }
+
+    /// A compressed file is read the same whatever its compression
+    /// dictionary happens to contain.
+    ///
+    /// This is the regression for a walk that skipped `LSC_INIT_ADDRESS`
+    /// (`0x46`) as though it carried a four-byte word. It does not, so the
+    /// walk landed four bytes into `LSC_WRITE_COMP_DIC`'s operand — the
+    /// dictionary — and read the first dictionary byte as an opcode. When
+    /// that byte was `0x22` the walk came back out on the payload command by
+    /// luck and the file loaded; otherwise it wandered into the frames,
+    /// mistook a byte of configuration for `VERIFY_ID`, and the part was
+    /// refused as the wrong device. Two designs differing only in a Verilog
+    /// parameter behaved differently, which is how it was found. All 256
+    /// first bytes are tried, because one of them is what made it look like
+    /// a working flow.
+    #[test]
+    fn the_compression_dictionary_cannot_be_read_as_a_command() {
+        for dict0 in 0u8..=255 {
+            let bytes = compressed_bit(0x2111_1043, dict0);
+            let header = read_bit_header(&bytes)
+                .unwrap_or_else(|err| panic!("dictionary byte {dict0:#04x}: {err}"));
+            assert_eq!(
+                header.idcode,
+                Some(0x2111_1043),
+                "dictionary byte {dict0:#04x} was read as a command"
+            );
+            assert!(header.compressed, "dictionary byte {dict0:#04x}");
+        }
     }
 
     /// A file says which part it is for and whether it is compressed,
