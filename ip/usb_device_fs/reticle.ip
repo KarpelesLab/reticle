@@ -10,7 +10,8 @@
 # endpoint that moves bytes — and is a module of its own because
 # `usb_device_ulpi` depends on this package for it: a board whose USB
 # lines go through a ULPI transceiver needs the same device and none of
-# `usb_fs_rx` or `usb_fs_tx`.
+# `usb_fs_rx` or `usb_fs_tx`. All four share `rtl/usb_ctrl_ep.v`, and the
+# head of that file says which test's source list is the reason.
 name usb_device_fs
 version 1.0.0
 license MIT
@@ -22,10 +23,7 @@ target ecp5
 
 source rtl/usb_fs_rx.v
 source rtl/usb_fs_tx.v
-source rtl/usb_pkt_rx.v
 source rtl/usb_ctrl_ep.v
-source rtl/usb_bulk_ep.v
-source rtl/usb_dev_core.v
 source rtl/usb_device_fs.v
 
 param VID bits 16'h1209
