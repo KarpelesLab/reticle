@@ -16,7 +16,7 @@ checksum = "a233a3cdbd5f1d2f75be1879e5e09ef6abf4c246290fb167e084c5f0e47d0852"
 
 [[package]]
 name = "reticle"
-version = "0.0.2"
+version = "0.0.3"
 dependencies = [
  "compcol",
  "rawusb",
