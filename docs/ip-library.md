@@ -4,7 +4,7 @@ The first-party half of phase 8. [`docs/ip.md`](ip.md) describes the
 machinery — the manifest formats, the resolver, the bus model, the black
 boxes — and [`docs/writing-a-cpu.md`](writing-a-cpu.md) describes how to
 package a processor, using this library's two as the worked examples.
-This document describes the **blocks**: twenty-four pieces of HDL
+This document describes the **blocks**: twenty-five pieces of HDL
 that drop into a design the way a crate drops into a Rust program, each
 with a manifest, a Rust co-simulation test, and a resource footprint that
 was measured rather than guessed.
@@ -39,6 +39,8 @@ ip/
                  (usb_ctrl_ep.v holds four modules; see below)
   usb_device_fs_pll/ reticle.ip  rtl/usb_device_fs_pll.v
   usb_device_ulpi/ reticle.ip  README.md  rtl/usb_ulpi_link.v  rtl/usb_device_ulpi.v
+  usb_cdc_acm/   reticle.ip  README.md  rtl/usb_cdc_req.v  rtl/usb_cdc_acm.v
+                 rtl/usb_cdc_acm_fs.v  rtl/usb_cdc_acm_ulpi.v
   vga_out/       reticle.ip  README.md  rtl/vga_out.v
 ```
 
@@ -77,6 +79,7 @@ It is distributed as part of the repository instead.
 | `usb_device_fs` | `usb_device_fs`, `usb_fs_rx`, `usb_fs_tx`, `usb_dev_core`, `usb_pkt_rx`, `usb_ctrl_ep`, `usb_bulk_ep` | USB full-speed device: NRZI, bit stuffing, SYNC and EOP, CRC5 and CRC16 checked, a control endpoint that enumerates, and a bulk endpoint pair with a byte interface | — |
 | `usb_device_fs_pll` | `usb_device_fs_pll` | `usb_device_fs` with its 48 MHz from the device's PLL and a 12 MHz board clock | `usb_device_fs` |
 | `usb_device_ulpi` | `usb_device_ulpi`, `usb_ulpi_link` | the same device behind a ULPI transceiver, which does the line work in silicon: the bus turnaround, transmit and receive commands, register access, one 60 MHz clock and no PLL | `usb_device_fs` |
+| `usb_cdc_acm` | `usb_cdc_acm`, `usb_cdc_req`, `usb_cdc_acm_fs`, `usb_cdc_acm_ulpi` | a USB serial port the operating system's own driver binds to: two interfaces with the union functional descriptor, the line-coding and control-line requests, an interrupt notification endpoint and a bulk pair, behind either link layer | `usb_device_fs`, `usb_device_ulpi` |
 | `ppu2c02` | `ppu2c02`, `ppu_palette` | NES-compatible picture unit: 256x240 raster, nametables and attributes, scrolling through `v`/`t`/`x`/`w`, 8x8 sprites with per-line evaluation, priority and sprite zero hit | — |
 
 `ppu2c02` is the block whose *subject* needs a statement rather than only
@@ -99,6 +102,21 @@ relies on, with the section it came from and how sure of it this project
 is, then what the block leaves out and why, then what simulation
 established and what it cannot. A link layer written from a reading
 nobody wrote down is a link layer nobody can check.
+
+[`ip/usb_cdc_acm/README.md`](../ip/usb_cdc_acm/README.md) is the third of
+that kind and is about a different sort of fact again. ULPI's document is a
+bus read out of a specification; a class layer's question is not "is this
+descriptor legal" but **"does the driver bind"**, which no specification
+answers and only a host can. So that page has a fourth confidence level
+beside HIGH, MEDIUM and LOW — **CHECKED**, meaning measured on a host with
+the output quoted — and it uses it for the things that matter: that Linux
+reads the union functional descriptor to tell the two interfaces apart, that
+it wants an interrupt IN endpoint on the communications interface, and that
+it never needs a SERIAL_STATE notification to arrive. It also records where
+the specification and the driver pull in opposite directions, and which way
+the block went: `bmCapabilities` D1 is one bit over four things, the block
+does three of them, and it is set anyway because Linux gates
+SET_LINE_CODING on it.
 
 `rv32i`, `mos6502`, `eth_mac_rmii` and `spiflash_xip` are the **larger
 blocks**, and they are larger in a particular way: each is a whole
@@ -258,6 +276,140 @@ part-selects**, which looks perverse and is not: an indexed part-select
 whose base a width checker cannot bound warns — `part-select [-1:-8] is
 outside [39:0]` was the first attempt at reading the blob backwards — and
 `blocks_synthesise_cleanly` allows no warnings.
+
+## A class on top
+
+Everything above is a device that moves bytes and says nothing about what
+they mean. `usb_cdc_acm` is the first block that says what they mean, and it
+picks the meaning an operating system already has a driver for: a **serial
+port**. A device built on it appears as `/dev/ttyACM*`, `/dev/cu.usbmodem*`
+or a COM port with nothing installed, so the host half of a demonstration is
+`cat`.
+
+Three things were genuinely new, and only one of them is the serial port.
+
+**The class hook, which outlives this block.** `usb_ctrl_ep` stalled every
+request it did not implement, which is a control endpoint no class can be
+built on: CDC ACM needs three requests answered, a human interface device
+needs two others, and the next class needs something else again. What they
+share is a shape, and the shape is nine ports — the eight bytes of a SETUP
+with a one-cycle `class_req`, a `class_claim` and `class_len` read back, a
+device-to-host data stage fetched a byte at a time through `class_index`, and
+a host-to-device data stage handed over as one packet.
+
+Two decisions in it are worth more than the rest.
+
+`class_claim` and `class_len` are read **combinationally**, in the same cycle
+`class_req` is high. That is not a shortcut: endpoint 0 chooses the
+transfer's stage in the very cycle the SETUP's data packet ends, so a class
+that answered a cycle later would need a fifth stage there, a handshake back,
+and a rule about what happens if the host's next token arrives first. A
+request decoder is a comparison of eight bytes against constants — there is
+nothing in it to sequence — so asking for it combinationally asks for nothing
+a class cannot give. `ip/usb_cdc_acm/rtl/usb_cdc_req.v` is that decoder and it
+is fifteen lines of `assign`.
+
+And `class_req` is **not** raised for the five requests endpoint 0 implements,
+so a class cannot shadow SET_ADDRESS or GET_DESCRIPTOR by claiming them.
+Everything else is offered, string descriptors and GET_STATUS included, so a
+class that wants those can have them without that file changing again.
+
+There is one thing the hook deliberately does not have: a way for a class to
+STALL a request it recognises. `class_claim` promises an answer. A class that
+must refuse leaves the claim low and takes the STALL endpoint 0 was going to
+send — which is how `usb_cdc_req` refuses SEND_BREAK, a request its own
+descriptor never offered.
+
+**A fifth control stage was not added, on purpose.** The obvious way to
+serve a host-to-device class data stage is a fifth value of `stage`, which
+takes that register from two bits to three — and then, for every design with
+no class layer, the third bit is a bit no expression can set. That is the
+shape that cost this project eight rounds of investigation once and is
+written out at length in `usb_ctrl_ep`'s own header. So there is no fifth
+stage: a class request that writes is a status-stage transfer with one data
+packet expected first, and what recognises that packet is a register **bit**,
+which is a bit either way.
+
+**More than one endpoint pair.** CDC needs a bulk pair *and* an interrupt IN,
+so `usb_dev_core`'s one bulk endpoint and one-bit `owner` had to generalise.
+It gained a second, IN-only endpoint at `NOTIF_ENDP`, and `owner` became two
+bits — `own_data` and `own_notif` — which are **the `sel` signals themselves
+rather than an encoded index**. Three owners need two bits either way, so
+the choice was about what the two bits are: an index costs a decoder at every
+`sel` and at the transmitter multiplexer, and an index leaves the high bit of
+a register unset when there is no second endpoint, which is the shape above.
+Two bits that are each a `sel` let the whole second endpoint disappear when
+`NOTIF_ENDP` is `4'd0`: `own_notif` is then a flip-flop whose data input is
+the constant zero, `synth::opt::FfOpt` replaces it with that constant, and
+the endpoint, its half of the multiplexer and its buffers go with it.
+
+`usb_bulk_ep` took `WITH_OUT` and `WITH_IN`, and a direction that is zero is
+**not answered at all** rather than NAKed — silence, which is what a host must
+hear from an endpoint the descriptors do not declare. Nothing is generated
+away by hand: the registers of a direction that cannot be asked for have no
+reader, so synthesis removes them, and the two directions stay one piece of
+readable logic instead of two halves behind a `generate`.
+
+**Two interfaces, and the descriptor that ties them together.** A serial port
+is a communications interface carrying the control requests and a data
+interface carrying the bytes, and nothing in either interface descriptor says
+they belong to one another. The **union functional descriptor** is what says
+it (CDC 1.1 Table 33), and Linux's `cdc_acm` reads it to tell the two apart;
+a device without one reaches a path meant for devices in the driver's own
+quirk table. Fifty-eight bytes of `IFACE_DESC` hold two interface
+descriptors, four functional descriptors and three endpoint descriptors,
+which with the nine `usb_ctrl_ep` writes is a `wTotalLength` of 67 — six
+bytes under the `DESC_MAX` of 64 that "a CDC ACM descriptor needs headroom
+for" was about.
+
+**The notification endpoint never sends anything, and could not.** What it
+would send is a SERIAL_STATE notification, which is **ten** bytes — eight of
+header and two of `wSerialState` — and `usb_bulk_ep` holds eight, because the
+length field both transmitters take is four bits. So `wMaxPacketSize` in its
+descriptor is eight and not sixteen, because a descriptor says what a device
+does, and the endpoint answers every poll with a NAK for ever. Whether a host
+*needs* one is a question about a host and not about a specification;
+`ip/usb_cdc_acm/README.md` §4 and §5 answer it with a kernel log rather than
+with a reading.
+
+**What the class layer cost.** On the ECP5, `usb_device_fs` is 912 LUT4 and
+438 flip-flops and `usb_cdc_acm_fs` is 1107 and 519, so a serial port is
+**+195 LUT4 and +81 flip-flops** over the vendor device it is built on;
+`usb_device_ulpi` to `usb_cdc_acm_ulpi` is +197 and +81, which is the same
+thing twice and is the point of sharing the core. Fifty-six of those
+flip-flops are the line coding — `dwDTERate` alone is thirty-two — two are
+DTR and RTS, two are `class_active` and `class_out_wait` in endpoint 0, and
+the rest is the notification endpoint's own turnaround counter and answer
+register.
+
+**And the hook cost the designs that do not use it nothing.**
+`usb_device_fs` was 914 LUT4 and 438 flip-flops on the ECP5 before any of
+this and is **912 and 438** after, with the descriptor ROM restructured as
+well; `usb_device_ulpi` went from 1001 to 1004 LUT4 and 444 flip-flops to
+444. Not one flip-flop, which is the number that matters: `own_notif`, the
+second endpoint, its buffers and `class_active` are all constant with
+`NOTIF_ENDP` and `class_claim` tied off, and they are all gone. The LUT4
+depth went from 10 to 11, which is the page split's one extra level of
+multiplexer.
+
+**What it found in this compiler.** `ip/fifo_sync` cannot be placed on an
+ECP5. Its storage is an array indexed by a variable, which becomes a
+distributed RAM, and `src/fpga/devices/ecp5.dev` declares
+`bel TRELLIS_DPR16X4 lutram` with **no `count`** on every ECP5 in the file —
+so `fpga::place` sees zero sites and refuses at any depth and with `FWFT`
+either way:
+
+```text
+error: the design needs 2 `lutram` site(s) and the part has 0
+```
+
+`fpga::synthesize_for` is content, which is why
+`small_memories_become_logic_after_the_fpga_flow` passes: it stops before
+placement. The effect is that no design in this repository can instantiate
+that block on this family, which matters well beyond serial ports.
+`testdata/fpga/cynthion/usb_cdc_uart.v` works around it by carrying one byte
+at a time through the UART, which needs one holding register instead of a
+queue, and says so in its header.
 
 **What the endpoints cost.** `usb_device_fs` went from 549 LUT4 and 244
 flip-flops on the ECP5 to 913 and 438, and `usb_device_ulpi` from 638 and
@@ -668,6 +820,35 @@ is the part that matters:
   says what a Linux host read out of it and what our own host code moved
   through endpoint 1.
 
+- **`usb_cdc_acm`** — the **same host model again**, through both link
+  layers and through the transceiver that reports LineState late, because a
+  class layer that only works with the clean model is not finished. Twelve
+  tests: a whole enumeration against the serial port's own descriptor set,
+  which is nine packets of data stage and four times longer than anything the
+  plain device sends; the descriptor set compared with sixty-seven bytes
+  written **forwards in Rust from CDC 1.1 and PSTN 1.2**, the derived fields
+  as the arithmetic and not the answer; the three class requests answered,
+  with the line coding set to 115200 two-stop odd seven-bit — deliberately
+  not 8N1, so a block reporting a constant is caught — and read back byte for
+  byte; the requests it does **not** claim stalled, with the line coding
+  proved untouched by them; SET_ADDRESS and CLEAR_FEATURE still working with a
+  class on the hook, which is the hook's safety property; twenty polls of the
+  notification endpoint answered with twenty NAKs and an OUT to it answered
+  with nothing at all; and the bytes, both directions and looped back.
+
+  Four mutations of the implementation were each checked to fail those tests:
+  GET_LINE_CODING left unclaimed, `class_req` raised for standard requests
+  too, the notification endpoint given an OUT direction, and the union
+  functional descriptor removed.
+
+  What none of it could reach is whether a **real driver binds**, and that is
+  the interesting half of a class layer. `tests/usb_cdc_acm.rs` is that half:
+  it asks the kernel, through sysfs, whether `cdc_acm` claimed the device and
+  made a terminal, and then writes bytes to that terminal and reads them back.
+  [`ip/usb_cdc_acm/README.md`](../ip/usb_cdc_acm/README.md) §5 is what a host
+  said, quoted — including the two faults that were invisible in simulation
+  and what each of them was.
+
 ### What the processor actually executes
 
 `rv32i` is the one block where "it simulates" would mean nothing on its
@@ -930,18 +1111,26 @@ exactly what this table is for.
 | `eth_mac_rgmii` | `eth_mac_rgmii` | IFG_CYCLES=12, TX_DELAY=80, RX_DELAY=80 | LUT6 | 28 x dff, 349 x lut | 4 |
 | `eth_mac_rgmii` | `eth_mac_rgmii` | IFG_CYCLES=12, TX_DELAY=80, RX_DELAY=80 | iCE40 HX1K | 10 x SB_CARRY, 119 x SB_DFFER, 64 x SB_DFFES, 7 x SB_DFFR, 2 x SB_GB, 39 x SB_IO, 394 x SB_LUT4 | 5 |
 | `eth_mac_rgmii` | `eth_mac_rgmii` | IFG_CYCLES=12, TX_DELAY=80, RX_DELAY=80 | ECP5 45F | 2 x DCCA, 6 x DELAYG, 5 x IDDRX1F, 395 x LUT4, 6 x ODDRX1F, 190 x TRELLIS_FF, 39 x TRELLIS_IO | 5 |
-| `usb_device_fs` | `usb_device_fs` | VID=16'h1209, PID=16'h0001 | LUT4 | 93 x dff, 913 x lut | 10 |
-| `usb_device_fs` | `usb_device_fs` | VID=16'h1209, PID=16'h0001 | LUT6 | 93 x dff, 741 x lut | 8 |
-| `usb_device_fs` | `usb_device_fs` | VID=16'h1209, PID=16'h0001 | iCE40 HX1K | 44 x SB_CARRY, 383 x SB_DFFER, 39 x SB_DFFES, 13 x SB_DFFR, 3 x SB_DFFS, 1 x SB_GB, 39 x SB_IO, 890 x SB_LUT4 | 9 |
-| `usb_device_fs` | `usb_device_fs` | VID=16'h1209, PID=16'h0001 | ECP5 45F | 1 x DCCA, 914 x LUT4, 438 x TRELLIS_FF, 39 x TRELLIS_IO | 10 |
-| `usb_device_fs_pll` | `usb_device_fs_pll` | VID=16'h1209, PID=16'h0001 | LUT4 | 93 x dff, 913 x lut | 10 |
-| `usb_device_fs_pll` | `usb_device_fs_pll` | VID=16'h1209, PID=16'h0001 | LUT6 | 93 x dff, 741 x lut | 8 |
-| `usb_device_fs_pll` | `usb_device_fs_pll` | VID=16'h1209, PID=16'h0001 | iCE40 HX1K | 44 x SB_CARRY, 383 x SB_DFFER, 39 x SB_DFFES, 13 x SB_DFFR, 3 x SB_DFFS, 1 x SB_GB, 39 x SB_IO, 890 x SB_LUT4, 1 x SB_PLL40_CORE | 9 |
-| `usb_device_fs_pll` | `usb_device_fs_pll` | VID=16'h1209, PID=16'h0001 | ECP5 45F | 1 x DCCA, 1 x EHXPLLL, 914 x LUT4, 438 x TRELLIS_FF, 39 x TRELLIS_IO | 10 |
-| `usb_device_ulpi` | `usb_device_ulpi` | VID=16'h1209, PID=16'h0001 | LUT4 | 87 x dff, 1000 x lut | 9 |
-| `usb_device_ulpi` | `usb_device_ulpi` | VID=16'h1209, PID=16'h0001 | LUT6 | 87 x dff, 843 x lut | 10 |
-| `usb_device_ulpi` | `usb_device_ulpi` | VID=16'h1209, PID=16'h0001 | iCE40 HX1K | 77 x SB_CARRY, 399 x SB_DFFER, 37 x SB_DFFES, 8 x SB_DFFR, 1 x SB_GB, 55 x SB_IO, 975 x SB_LUT4 | 9 |
-| `usb_device_ulpi` | `usb_device_ulpi` | VID=16'h1209, PID=16'h0001 | ECP5 45F | 1 x DCCA, 1001 x LUT4, 444 x TRELLIS_FF, 55 x TRELLIS_IO | 9 |
+| `usb_device_fs` | `usb_device_fs` | VID=16'h1209, PID=16'h0001 | LUT4 | 93 x dff, 913 x lut | 11 |
+| `usb_device_fs` | `usb_device_fs` | VID=16'h1209, PID=16'h0001 | LUT6 | 93 x dff, 765 x lut | 9 |
+| `usb_device_fs` | `usb_device_fs` | VID=16'h1209, PID=16'h0001 | iCE40 HX1K | 44 x SB_CARRY, 383 x SB_DFFER, 39 x SB_DFFES, 13 x SB_DFFR, 3 x SB_DFFS, 1 x SB_GB, 39 x SB_IO, 889 x SB_LUT4 | 12 |
+| `usb_device_fs` | `usb_device_fs` | VID=16'h1209, PID=16'h0001 | ECP5 45F | 1 x DCCA, 912 x LUT4, 438 x TRELLIS_FF, 39 x TRELLIS_IO | 11 |
+| `usb_device_fs_pll` | `usb_device_fs_pll` | VID=16'h1209, PID=16'h0001 | LUT4 | 93 x dff, 913 x lut | 11 |
+| `usb_device_fs_pll` | `usb_device_fs_pll` | VID=16'h1209, PID=16'h0001 | LUT6 | 93 x dff, 765 x lut | 9 |
+| `usb_device_fs_pll` | `usb_device_fs_pll` | VID=16'h1209, PID=16'h0001 | iCE40 HX1K | 44 x SB_CARRY, 383 x SB_DFFER, 39 x SB_DFFES, 13 x SB_DFFR, 3 x SB_DFFS, 1 x SB_GB, 39 x SB_IO, 889 x SB_LUT4, 1 x SB_PLL40_CORE | 12 |
+| `usb_device_fs_pll` | `usb_device_fs_pll` | VID=16'h1209, PID=16'h0001 | ECP5 45F | 1 x DCCA, 1 x EHXPLLL, 912 x LUT4, 438 x TRELLIS_FF, 39 x TRELLIS_IO | 11 |
+| `usb_device_ulpi` | `usb_device_ulpi` | VID=16'h1209, PID=16'h0001 | LUT4 | 87 x dff, 1003 x lut | 10 |
+| `usb_device_ulpi` | `usb_device_ulpi` | VID=16'h1209, PID=16'h0001 | LUT6 | 87 x dff, 869 x lut | 10 |
+| `usb_device_ulpi` | `usb_device_ulpi` | VID=16'h1209, PID=16'h0001 | iCE40 HX1K | 77 x SB_CARRY, 399 x SB_DFFER, 37 x SB_DFFES, 8 x SB_DFFR, 1 x SB_GB, 55 x SB_IO, 976 x SB_LUT4 | 11 |
+| `usb_device_ulpi` | `usb_device_ulpi` | VID=16'h1209, PID=16'h0001 | ECP5 45F | 1 x DCCA, 1004 x LUT4, 444 x TRELLIS_FF, 55 x TRELLIS_IO | 10 |
+| `usb_cdc_acm` | `usb_cdc_acm_fs` | VID=16'h1209, PID=16'h0001 | LUT4 | 109 x dff, 1108 x lut | 14 |
+| `usb_cdc_acm` | `usb_cdc_acm_fs` | VID=16'h1209, PID=16'h0001 | LUT6 | 109 x dff, 910 x lut | 10 |
+| `usb_cdc_acm` | `usb_cdc_acm_fs` | VID=16'h1209, PID=16'h0001 | iCE40 HX1K | 57 x SB_CARRY, 458 x SB_DFFER, 44 x SB_DFFES, 14 x SB_DFFR, 3 x SB_DFFS, 1 x SB_GB, 97 x SB_IO, 1095 x SB_LUT4 | 14 |
+| `usb_cdc_acm` | `usb_cdc_acm_fs` | VID=16'h1209, PID=16'h0001 | ECP5 45F | 1 x DCCA, 1107 x LUT4, 519 x TRELLIS_FF, 97 x TRELLIS_IO | 14 |
+| `usb_cdc_acm` | `usb_cdc_acm_ulpi` | VID=16'h1209, PID=16'h0001 | LUT4 | 103 x dff, 1199 x lut | 13 |
+| `usb_cdc_acm` | `usb_cdc_acm_ulpi` | VID=16'h1209, PID=16'h0001 | LUT6 | 103 x dff, 1018 x lut | 11 |
+| `usb_cdc_acm` | `usb_cdc_acm_ulpi` | VID=16'h1209, PID=16'h0001 | iCE40 HX1K | 90 x SB_CARRY, 474 x SB_DFFER, 42 x SB_DFFES, 9 x SB_DFFR, 1 x SB_GB, 113 x SB_IO, 1171 x SB_LUT4 | 13 |
+| `usb_cdc_acm` | `usb_cdc_acm_ulpi` | VID=16'h1209, PID=16'h0001 | ECP5 45F | 1 x DCCA, 1201 x LUT4, 525 x TRELLIS_FF, 113 x TRELLIS_IO | 13 |
 <!-- end footprints -->
 
 ### Seven things writing these blocks found
@@ -1184,18 +1373,30 @@ ones a user would meet first: `sdram_ctrl` has no bursts and serves one
 word at a time; `hyperram_ctrl` has no bursts either and does not use
 RWDS as a capture clock; `dvi_tx` runs everything at five times the
 pixel rate, which leaves 1280 x 720 beyond both families' fabric;
-`eth_mac_rgmii` is gigabit only; and `usb_device_fs` has one bulk endpoint
-pair of eight-byte packets, so a design that wants two pipes or 64-byte
-packets needs a second `usb_bulk_ep` and a wider length field than the four
-bits both transmitters take.
+`eth_mac_rgmii` is gigabit only; and every USB endpoint here carries
+**eight-byte packets**, which is the four-bit length both transmitters take.
+That last one is now the limit that shows most: it is a serial port of about
+8 kB/s rather than 64, it is why a host must read one packet at a time, and
+it is the reason `usb_cdc_acm` cannot send a SERIAL_STATE notification.
+Widening it is a length field in `usb_fs_tx`, in `usb_ulpi_link` and in
+`usb_bulk_ep`, and it is the next thing worth doing to these blocks.
 
-There is also **no class layer yet**. A HID or a CDC serial device is an
-`IFACE_DESC` and the logic above the byte interface, and neither is here:
-what is here is the endpoint infrastructure and a vendor-specific bulk
-loopback that proves it, deliberately, because a class layer on unproven
-endpoints hides the next fault instead of finding it. HID needs one more
-thing from `usb_ctrl_ep` besides descriptors — GET_DESCRIPTOR for the
-report descriptor, which is a class request it currently stalls.
+**The class layer has started.** `usb_cdc_acm` is a serial port and
+`usb_ctrl_ep`'s class hook is what the next one will use. **A human interface
+device is what is not here**, and it is now a smaller job than it was: a HID
+needs the report descriptor, which is `GET_DESCRIPTOR` with a class
+descriptor type — a request the hook already offers and a class may already
+claim — plus an interrupt IN endpoint, which `usb_dev_core` already has as
+`NOTIF_ENDP`, plus the report itself. What is genuinely missing for it is
+nothing in the infrastructure; it is the block.
+
+Two smaller gaps the serial port left. **No strings**, so a port has no
+product name in `lsusb` and no `/dev/serial/by-id/` entry naming it; string
+descriptors are the one thing `usb_ctrl_ep` stalls that the hook could now
+answer, and answering them wants a second wide parameter and a language
+identifier. And **nothing acts on the line coding**: `baud` comes out of
+`usb_cdc_acm` because a host sets it, and following it means dividing a clock
+by a run-time value, which every design would rather decide for itself.
 
 The `rv32i` core is big: about 2400 LUT4s, which does not fit an iCE40
 HX1K's 1280 and does fit an ECP5 45F many times over. That is a
