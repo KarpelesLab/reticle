@@ -1,6 +1,8 @@
 // A USB full-speed device on a Cynthion's AUX port: `ip/usb_device_ulpi`
 // wired to the auxiliary ULPI transceiver, with the bus turnaround in the
-// top level where the three-state buffers belong.
+// top level where the three-state buffers belong, and **endpoint 1 looped
+// back on itself** so that the device has something to do once a host has
+// finished enumerating it.
 //
 // ===================================================================
 // WHAT THERE IS TO LOOK AT, AND WHY IT IS NOT AN LED
@@ -16,15 +18,34 @@
 // `PID` parameters. That is the whole point of this design and the reason it
 // is the first thing in this project a test could assert on its own.
 //
+// The **second** observable is bytes, and it needs no kernel driver either.
+// The configuration descriptor declares one vendor-specific interface with a
+// bulk OUT and a bulk IN on endpoint 1, so no class driver claims it and a
+// program may claim the interface for itself and move bytes:
+//
+//     cargo test --features program -- --ignored usb_endpoint_one_loops
+//
+// which is `tests/usb_loopback.rs`. What the design does with those bytes is
+// send them straight back: `out_*` wired into `in_*`, one packet at a time,
+// which is the whole of it below. Anything the host writes to endpoint 1 OUT
+// it reads back from endpoint 1 IN, in order, with packet boundaries where it
+// put them. A loopback cannot carry a **zero-length** packet — an OUT of no
+// bytes hands nothing to the interface, so there is nothing to hand back —
+// and `ip/usb_device_fs`'s tests cover that direction instead.
+//
 // The six LEDs are the **diagnosis** for when it does not appear, and they
 // are latched rather than level, so what a person sees is what happened:
 //
 //     LED 0   the transceiver is ready       `phy_ready`
 //     LED 1   THE HOST CONFIGURED IT         `configured`, latched
-//     LED 2   the host assigned an address   latched
+//     LED 2   A BYTE WENT THROUGH ENDPOINT 1 latched
 //     LED 3   heartbeat, 0.89 Hz             the clock runs
 //     LED 4   a USB bus reset was seen       latched
 //     LED 5   the transceiver drove the bus   latched
+//
+// LED 2 used to be "the host assigned an address", which LED 1 already
+// implies: a device is not configured until it has been addressed. It is the
+// data endpoint now, which nothing else can report.
 //
 // Read from the bottom up, each LED is the precondition for the one above:
 //
@@ -46,11 +67,15 @@
 //     host never saw a device attach, which is the `TermSelect` bit of
 //     Function Control: the 1.5 kOhm pull-up on D+ is a register bit here
 //     and not a pin.
-//   * **LED 2 dark with LED 4 lit** — the host reset the bus and then gave
-//     up, which is `GET_DESCRIPTOR` going unanswered or answered wrong.
+//   * **LED 1 dark with LED 4 lit** — the host reset the bus and then gave
+//     up, which is `GET_DESCRIPTOR` going unanswered or answered wrong, or
+//     `SET_ADDRESS` or `SET_CONFIGURATION` not taking.
 //   * **LED 1 lit** — the host got through `SET_ADDRESS` and
-//     `SET_CONFIGURATION`. At that point it is in `lsusb` and the LEDs have
-//     nothing left to add.
+//     `SET_CONFIGURATION`. At that point it is in `lsusb`.
+//   * **LED 2 lit** — a byte the host wrote to endpoint 1 OUT was handed to
+//     this file and given back to endpoint 1 IN. It says nothing about
+//     whether the host read it back, which only the host can say; it says
+//     the data endpoint's OUT side works and its byte interface moved.
 //
 // ===================================================================
 // WHY DRIVING THESE PINS IS SAFE
@@ -129,7 +154,7 @@ module usb_ulpi_device #(
 
     output wire led0_n,          // the transceiver is ready
     output wire led1_n,          // THE HOST CONFIGURED IT
-    output wire led2_n,          // the host assigned an address
+    output wire led2_n,          // A BYTE WENT THROUGH ENDPOINT 1
     output wire led3_n,          // heartbeat
     output wire led4_n,          // a USB bus reset was seen
     output wire led5_n           // the transceiver drove the bus
@@ -137,10 +162,19 @@ module usb_ulpi_device #(
 
     wire [7:0] data_o;
     wire       data_oe;
+    // The address the host assigned. Nothing at this level needs it — LED 1
+    // covers it, since a device is not configured until it is addressed —
+    // and it stays here because a design built on this one will want it.
     wire [6:0] address;
     wire       configured;
     wire       usb_reset;
     wire       phy_ready;
+
+    // Endpoint 1's byte interface.
+    wire [7:0] out_data;
+    wire       out_valid;
+    wire       out_last;
+    wire       in_ready;
 
     // THE TURNAROUND, which is the top level's whole job on this bus: the
     // link says when it owns the bus and this makes that eight pads. There
@@ -211,7 +245,33 @@ module usb_ulpi_device #(
         .address      (address),
         .configured   (configured),
         .usb_reset    (usb_reset),
-        .phy_ready    (phy_ready)
+        .phy_ready    (phy_ready),
+        // ===============================================================
+        // THE LOOPBACK, which is the whole of what this design is for once
+        // it is enumerated.
+        // ===============================================================
+        //
+        // `out_ready` is `in_ready` and nothing else: a byte leaves the OUT
+        // buffer exactly when the IN buffer has room for it, so the endpoint
+        // NAKs the host rather than dropping anything, and the flow control
+        // is one wire. `in_commit` on the last byte of the packet is what
+        // sends a short packet as a short packet instead of waiting for
+        // eight bytes that are not coming.
+        //
+        // **There is no register in this path**, and there must not be: both
+        // sides of the interface are functions of the endpoint's registers
+        // alone, so wiring one straight into the other is combinational
+        // logic between two flip-flops and not a loop. `ip/usb_device_fs`'s
+        // `usb_bulk_ep` header states that as a property of the block, and
+        // `tests/ip_library.rs` drives this same wiring in simulation.
+        .out_data     (out_data),
+        .out_valid    (out_valid),
+        .out_last     (out_last),
+        .out_ready    (in_ready),
+        .in_data      (out_data),
+        .in_valid     (out_valid),
+        .in_ready     (in_ready),
+        .in_commit    (out_valid & in_ready & out_last)
     );
 
     // The power-on reset: a one walked along a shift register, so the core
@@ -246,12 +306,12 @@ module usb_ulpi_device #(
     // share one `CE` wire; `fpga::place` now knows, but a latch has no use
     // for one either way.
     reg saw_configured = 1'b0;
-    reg saw_address    = 1'b0;
+    reg saw_bytes      = 1'b0;
     reg saw_reset      = 1'b0;
     reg saw_dir        = 1'b0;
     always @(posedge clk) begin
         saw_configured <= saw_configured | configured;
-        saw_address    <= saw_address | (address != 7'd0);
+        saw_bytes      <= saw_bytes | (out_valid & in_ready);
         saw_reset      <= saw_reset | usb_reset;
         saw_dir        <= saw_dir | ulpi_dir;
     end
@@ -259,7 +319,7 @@ module usb_ulpi_device #(
     // Active low: a pin driven low lights one.
     assign led0_n = ~phy_ready;
     assign led1_n = ~saw_configured;
-    assign led2_n = ~saw_address;
+    assign led2_n = ~saw_bytes;
     assign led3_n = ~count[25];
     assign led4_n = ~saw_reset;
     assign led5_n = ~saw_dir;

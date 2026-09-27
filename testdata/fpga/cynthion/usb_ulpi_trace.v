@@ -162,7 +162,21 @@ module usb_ulpi_trace #(
         .address      (address),
         .configured   (configured),
         .usb_reset    (usb_reset),
-        .phy_ready    (phy_ready)
+        .phy_ready    (phy_ready),
+        // Endpoint 1 is tied off here. This design is an instrument for the
+        // conversation on the ULPI bus, and what it traces is the bus and
+        // not the bytes above it; `usb_ulpi_device.v` is the one that loops
+        // the data endpoint back. An OUT packet is still received and
+        // acknowledged, and then not taken, so a second one is NAKed —
+        // which is correct and is also what the trace would show.
+        .out_data     (),
+        .out_valid    (),
+        .out_last     (),
+        .out_ready    (1'b0),
+        .in_data      (8'd0),
+        .in_valid     (1'b0),
+        .in_ready     (),
+        .in_commit    (1'b0)
     );
 
     reg [POR-1:0] por = {POR{1'b0}};
