@@ -10706,8 +10706,12 @@ fn usb_device_ulpi_is_one_clock_domain() {
 }
 
 /// A transceiver model that accepts anything proves nothing, so this
-/// drives it with a Link that breaks the two rules the bus turnaround is
-/// made of.
+/// drives it with a Link that breaks each of the rules the bus turnaround is
+/// made of — including the one that used to be stated backwards. The
+/// **rising** turnaround is the transceiver's and the Link must stay off it;
+/// the **falling** one is the Link's and it must drive `00h` into it, or the
+/// part reads its own last receive command back as a command (USB334x
+/// DS00002646A §6.5.4.1).
 #[test]
 fn the_transceiver_model_catches_a_link_that_drives_a_bus_that_is_not_its() {
     let driving = LinkOut {
@@ -10729,14 +10733,38 @@ fn the_transceiver_model_catches_a_link_that_drives_a_bus_that_is_not_its() {
         phy.problems
     );
 
-    // Driving the turnaround cycle, where neither end may.
+    // Driving something other than idle into the falling turnaround, which
+    // the part reads as a command.
     let mut phy = UlpiPhy::new(ULPI_CPB);
     phy.dir = false;
     phy.was_dir = true;
     phy.step(&driving, Some(UsbLine::J));
     assert!(
-        phy.problems.iter().any(|p| p.contains("turnaround")),
-        "the model let the link drive a turnaround cycle: {:?}",
+        phy.problems.iter().any(|p| p.contains("not idle")),
+        "the model let the link drive {:#04x} into the falling turnaround: {:?}",
+        driving.data,
+        phy.problems
+    );
+
+    // And leaving that same cycle floating, which is what this Link used to
+    // do and what the part warns about: its weak pull-downs cannot pull the
+    // bus low after a receive command, so the byte stays there to be read
+    // back as a transmit command.
+    let mut phy = UlpiPhy::new(ULPI_CPB);
+    phy.dir = false;
+    phy.was_dir = true;
+    phy.step(
+        &LinkOut {
+            oe: false,
+            data: 0,
+            stp: false,
+            rst_n: true,
+        },
+        Some(UsbLine::J),
+    );
+    assert!(
+        phy.problems.iter().any(|p| p.contains("floating")),
+        "the model let the link leave the falling turnaround floating: {:?}",
         phy.problems
     );
 

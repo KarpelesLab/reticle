@@ -773,10 +773,10 @@ exactly what this table is for.
 | `usb_device_fs_pll` | `usb_device_fs_pll` | VID=16'h1209, PID=16'h0001 | LUT6 | 63 x dff, 460 x lut | 8 |
 | `usb_device_fs_pll` | `usb_device_fs_pll` | VID=16'h1209, PID=16'h0001 | iCE40 HX1K | 24 x SB_CARRY, 190 x SB_DFFER, 39 x SB_DFFES, 10 x SB_DFFR, 3 x SB_DFFS, 1 x SB_GB, 17 x SB_IO, 526 x SB_LUT4, 1 x SB_PLL40_CORE | 8 |
 | `usb_device_fs_pll` | `usb_device_fs_pll` | VID=16'h1209, PID=16'h0001 | ECP5 45F | 1 x DCCA, 1 x EHXPLLL, 540 x LUT4, 242 x TRELLIS_FF, 17 x TRELLIS_IO | 9 |
-| `usb_device_ulpi` | `usb_device_ulpi` | VID=16'h1209, PID=16'h0001 | LUT4 | 56 x dff, 611 x lut | 9 |
-| `usb_device_ulpi` | `usb_device_ulpi` | VID=16'h1209, PID=16'h0001 | LUT6 | 56 x dff, 550 x lut | 10 |
-| `usb_device_ulpi` | `usb_device_ulpi` | VID=16'h1209, PID=16'h0001 | iCE40 HX1K | 54 x SB_CARRY, 204 x SB_DFFER, 37 x SB_DFFES, 5 x SB_DFFR, 1 x SB_GB, 33 x SB_IO, 594 x SB_LUT4 | 9 |
-| `usb_device_ulpi` | `usb_device_ulpi` | VID=16'h1209, PID=16'h0001 | ECP5 45F | 1 x DCCA, 611 x LUT4, 246 x TRELLIS_FF, 33 x TRELLIS_IO | 9 |
+| `usb_device_ulpi` | `usb_device_ulpi` | VID=16'h1209, PID=16'h0001 | LUT4 | 57 x dff, 630 x lut | 9 |
+| `usb_device_ulpi` | `usb_device_ulpi` | VID=16'h1209, PID=16'h0001 | LUT6 | 57 x dff, 571 x lut | 10 |
+| `usb_device_ulpi` | `usb_device_ulpi` | VID=16'h1209, PID=16'h0001 | iCE40 HX1K | 57 x SB_CARRY, 206 x SB_DFFER, 37 x SB_DFFES, 5 x SB_DFFR, 1 x SB_GB, 33 x SB_IO, 609 x SB_LUT4 | 9 |
+| `usb_device_ulpi` | `usb_device_ulpi` | VID=16'h1209, PID=16'h0001 | ECP5 45F | 1 x DCCA, 630 x LUT4, 248 x TRELLIS_FF, 33 x TRELLIS_IO | 9 |
 <!-- end footprints -->
 
 ### Seven things writing these blocks found
