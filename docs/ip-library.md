@@ -281,12 +281,17 @@ blocks are where it showed.
 Four modules share `rtl/usb_ctrl_ep.v`, which is the one thing in this
 library that is not one module to a file. `tests/fpga_trellis.rs`
 elaborates the two Cynthion top levels from a list of paths written out in
-Rust, and a module those paths do not reach **does not fail to
-elaborate** — it becomes a black box whose outputs are undefined, and the
+Rust, and a module those paths do not reach used to **not fail to
+elaborate** — it became a black box whose outputs were undefined, and the
 first of those two tests then reported `FAIL: LED 1 is lit and no host has
 configured anything` about a design that was perfectly well. That silent
-black box is a sharp edge in the elaborator and worth a diagnostic;
-splitting the file back into four is a `git mv` and three lines in each of
+black box is now a diagnostic: `ir::Design::check_instance_targets` names
+the module and the instance, and `fpga::synthesize_for`,
+`asic::synthesize_asic` and `sim::Simulator` all refuse rather than run on a
+design with a hole in it (`docs/ir.md`). A black box something *declares* —
+an encrypted package, a `blackbox module`, a device primitive — still works,
+which is the distinction that makes the check safe. Splitting the file back
+into four is still a rename and three lines in each of
 those two lists. The 370 lines of NRZI, bit
 stuffing and serialising in `usb_fs_rx` and `usb_fs_tx` are what ULPI
 replaces and are *not* shared, because there is nothing there a ULPI
