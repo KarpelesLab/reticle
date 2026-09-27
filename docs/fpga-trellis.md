@@ -1,5 +1,166 @@
 # A real Lattice ECP5, and a real `.bit`
 
+## The constant is built now, and the vendor's own bitstreams said how
+
+The round before this one found a flip-flop whose data input is the constant
+zero, coming up as a **one**, and **refused** to write it. Refusing was honest
+and it was a capability regression: `reg [2:0] stage` for four values is legal
+Verilog and legal silicon, and a compiler should build it. It builds now, and
+what it builds was read out of Lattice's own bitstreams rather than reasoned
+about.
+
+### What `ecppack` writes for a constant on a flip-flop's data pin, in full
+
+The question is the one this file is built on — "what does the vendor write,
+**in full**?" — and the three Great Scott Gadgets bitstreams this tree already
+verifies against can answer it, because a flip-flop's data wire is one of the
+few things a bitstream states outright: `SLICE<l>.REG<n>.SD = 0` says the data
+comes off the fabric's `M<z>` wire, and whether anything is routed to that wire
+is a question about the file. So every one of their flip-flops was asked, and
+where the answer was yes the arcs were walked **backwards** to whatever drives
+them.
+
+| | `analyzer.bit` | `selftest.bit` | `facedancer.bit` |
+|---|---|---|---|
+| Flip-flops taking data from the fabric (`REG<n>.SD = 0`) | 1135 | 215 | 3132 |
+| **Of those, with nothing routed to their `M` wire** | **0** | **0** | **0** |
+| Fed by a lookup table with `INIT` all **zeros** | 12, from `SLICEA.K0` at X38Y27 | — | 8, from `SLICEA.K0` at X11Y6 |
+| Fed by a lookup table with `INIT` all **ones** | 18, from `SLICEA.K0` at X5Y27 | — | 32, from `SLICEA.K0` at X64Y8 |
+| `SLICE<l>.M<n>MUX` written anywhere | never | never | never |
+
+Four constant drivers over three files, and they are the same cell four times:
+a lookup table in `SLICEA.K0`, `MODE` left at `LOGIC`, **all four inputs tied
+high** (`A0MUX`/`B0MUX`/`C0MUX`/`D0MUX = 1`), one `INIT` of all zeros or all
+ones, and an output routed across the whole die — X38Y27's reaches 891 sinks
+and X11Y6's 965, from X2 to X70 and Y5 to Y29. That is **one driver per
+constant per design, shared**, which is nextpnr's `pack_constants` exactly: a
+`$PACKER_GND` and a `$PACKER_VCC` `LUT4` with `INIT` 0 and 0xFFFF, made once
+and routed everywhere. `selftest.bit` needs no constant on a flip-flop and has
+none, which is the case worth stating too: the vendor does not write a driver
+nothing asks for.
+
+Two things in that table are more interesting than the headline.
+
+**A constant one is free and a constant zero costs sixteen bits.**
+`SLICE<l>.K<n>.INIT` defaults to all ones in `bits.db` — every group is a
+single `!F<x>B<y>` — so the `$PACKER_VCC` LUT leaves *no* `INIT` bits in the
+image at all and is visible only by its four input ties and its routed output.
+Which is why the all-ones case had to be found by walking arcs rather than by
+looking for a pattern: there is no pattern to look for.
+
+**There is no `CIB` tie for an `M` wire, and there is a slice one nobody
+uses.** The previous round's note — "neither a constant driver nor a `CIB` tie
+for `M` is declared here" — is now checked against the database rather than
+asserted: the `CIB` tile declares `CIB.J<x><n>MUX` tie-offs for the lookup
+table's `A`–`D` inputs, for `JCE0`–`JCE3`, `JCLK0`/`JCLK1` and
+`JLSR0`/`JLSR1`, and **nothing for `JM<n>`**. The `PLC2` tile itself, though,
+declares `SLICE<l>.M<n>MUX` with a `1` value worth two bits, which would tie a
+flip-flop's data wire high for two bits and no lookup table at all. Not one of
+the three reference bitstreams sets it anywhere. So it is left alone here too:
+it would only ever serve a constant *one*, it is two bits against a LUT's four
+tie bits plus a route, and nothing has ever exercised it. The test asserts the
+vendor's silence about it, so if that ever changes the assertion says so.
+
+### What this flow emits, and what it costs
+
+`techcells::drive_constant_data` runs at the end of the device-cell mapping —
+the same pass that turns a generic `dff` into a `TRELLIS_FF` and inserts one
+inverter per net whose polarity the family lacks — and gives every flip-flop
+whose data input is a constant a lookup table to take it from: **one per
+constant, shared**, with a truth table that is all zeros or all ones and
+therefore ignores every input, so the value does not depend on what an
+unrouted input reads as. It is not ECP5 code: the pass asks the device file
+which primitive is the LUT and which port is the flip-flop's data pin, so an
+iCE40 gets the same thing (nextpnr-ice40's `pack_constants` builds the same
+`SB_LUT4`), and the fourteen library blocks that have such a flip-flop each
+grew by exactly one LUT on both families in `docs/ip-library.md`'s footprint
+table.
+
+**The spare lookup table cannot collide with one the placer used, because this
+does not choose one.** The driver goes into the netlist as an ordinary `lut`
+cell and `fpga::place` allocates a site for it like any other; a design with
+no site left is the placer's `NotEnoughSites` error with the message it always
+had. Nothing here reads or reserves a site.
+
+What it costs, measured on `testdata/fpga/cynthion/wide_state.v` — three bits,
+four values, so `state[2]` is the constant — by building the same design with
+the pass off and diffing the two images bit by bit:
+
+| | Without a driver | With one |
+|---|---|---|
+| Set bits | 171 | **199** |
+| Arcs that cost bits | 45 | 47 |
+| `.config` words | 4 | 5 |
+| Enumerated fields | 34 | 38 |
+| Bits **unexplained** | 0 | 0 |
+
+**Twenty-eight bits, every one of them accounted for, and not one bit of the
+old image moved** — the raw bit difference is 28 added and **0 removed**:
+
+- **16** for `SLICEA.K0.INIT = 0000000000000000` at X40Y2, one bit per entry of
+  a truth table that is all zeros;
+- **8** for the four two-bit ties `SLICEA.{A,B,C,D}0MUX = 1` that hold its
+  inputs high;
+- **4** for the two arcs that carry its output to the flip-flop's data wire,
+  `H00L0000 <- F0` and `M1 <- H00L0000`, two bits each.
+
+The constant landed in the same *tile* as the flop it feeds and went out into
+the interconnect and back, which is what this flow does with every lookup
+table: it never packs one with a flip-flop, so `SD` is always `0` and the data
+always arrives over the fabric.
+
+On the design this all came from, `usb_ulpi_device.v`, the accounting is a net
+figure rather than an itemised one, because one more cell moves the placer's
+assignment and 7240 of its arcs change: 26 916 set bits and 728 lookup tables
+before, **27 015 and 729** after, 1036 signals to 1037, and **0 unexplained
+either way**. The constant it now builds is a *one* — `usb_ulpi_link`'s
+`rst_q`, the set-once register that releases the transceiver's reset pin, whose
+data input is the literal `1'b1` — so it costs no `INIT` bits, which is why the
+word count is 728 in both. **That register has worked on this board since the
+first ULPI bitstream by accident**: the untied wire read as a one and the one
+was what it wanted. It is built now instead of being right by luck.
+
+### What is still refused, and what a board would have added
+
+`configure_registers` still refuses a flip-flop whose data input nothing
+drives, and the case is narrower than "nothing drives the data input": a
+constant is built, so what is left is a data pin with **nothing at all** on it,
+a pin whose constant is an `x` or a `z` — there is no wire value for either —
+or a flow run with `FpgaOptions::device_cells` off, or on a device whose file
+declares no LUT to make a constant out of. The message says which of those it
+is. A pin tied *high* is still allowed through, because the untied wire is a
+one and the flop loads what the design asked for; after this pass nothing
+should reach that path, and it stays so that a netlist built without the pass
+is not refused for a case that does work.
+
+**Nothing in this round went near the part, and that is a stated gap and not an
+omission.** The board was in use for other work, so no bitstream written here
+has been loaded: what a Cynthion would have added is the one thing none of this
+can settle — that a flip-flop fed by a constant lookup table comes up holding
+that constant *in silicon*. Everything else is off the part: the vendor's four
+constant drivers read at absolute frame positions, this flow's own image
+decoded back bit for bit with nothing unexplained, and the arcs walked
+backwards from the flip-flop's data wire to the lookup table's output. The
+cheapest confirmation for a later round is `wide_state.v` with the LED wired to
+`state[2]` instead of `state[0]`: it must stay **dark for ever**, and before
+this change it would have been lit from the first clock.
+
+Two things found on the way and deliberately not acted on, both for the same
+reason — they are about *other* pins of the same slice, nothing has measured
+them failing, and this round is about the data pin:
+
+- the vendor writes `CIB.JLSR0MUX = 0` and `CIB.JLSR1MUX = 0` (19 and 11 times
+  in `analyzer.bit`) and `CIB.JCE<n>MUX = 1`, which is a **CIB tie for the
+  reset and enable wires** of a slice whose flip-flops do not use them. This
+  flow ties the enable in the slice instead (`SLICE<l>.CEMUX = 1`, which is
+  what makes a flop clock at all) and writes nothing for an unused `LSR`. Every
+  clocked design this backend has built works on the part, so an unrouted `LSR`
+  evidently does not hold a flop in reset the way an unrouted `M` holds its
+  data at one — but *why* is unmeasured, and a register that resets itself
+  every clock would look exactly like the `stage` fault did;
+- `SLICE<l>.M<n>MUX = 1`, the two-bit tie above, which would make a constant
+  one without a lookup table and which no reference bitstream exercises.
+
 ## It enumerates, and the fault was one bit of a register this backend brings up wrong
 
 On 2026-09-27 a host on the other end of a USB cable read an eighteen-byte
@@ -84,9 +245,13 @@ drive that bit
 ```
 
 `testdata/fpga/cynthion/wide_state.v` is a three-line design that does it on
-purpose and `tests/fpga_trellis.rs::a_register_bit_nothing_drives_is_refused` is
-that error asserted. Making a constant driver instead would be better and is
-what "What remains" now asks for; refusing is what this can do honestly today.
+purpose. **That refusal lasted one round.** The round after it built the
+constant instead — a lookup table with `INIT` all zeros and every input tied
+high, which is what Lattice's own bitstreams for this board turned out to
+contain — and `tests/fpga_trellis.rs::a_register_bit_nothing_drives_is_built_from_a_constant`
+is what pins that. See "The constant is built now, and the vendor's own
+bitstreams said how"; what is still refused is a data pin with nothing at all
+on it.
 
 **A data pin the netlist ties *high* is allowed through, and that is not
 laziness.** The untied wire is a one, so the flop loads the one the design asked
@@ -2956,7 +3121,8 @@ borrows now. Every backend gets it.
 | Block RAM | `Ecp5Stream` reads and writes the initialisation blocks — the reference files' 44 blocks round trip — and nothing generates one. The `MIB_EBR*` tiles' wires and pips are in the graph |
 | Distributed RAM | `SLICEA.MODE = DPRAM`, `WREMUX`, `CLK1.CLKMUX` and the `WAD`/`WDO` wires, none of which is declared |
 | An IO standard other than LVCMOS33 | the bits are in the database and the code takes the standard from the constraints; no other standard has been on a part |
-| A **constant driver** for a flip-flop's data input | nextpnr's `pack_constants` makes one: a lookup table with `INIT` all zeros or all ones, routed to the wire. This backend declares neither that nor a `CIB` tie for the slice's `M` input, so `configure_registers` **refuses** a flip-flop with nothing driving its data pin instead — see "It enumerates, and the fault was one bit of a register this backend brings up wrong", which is what that cost. A pin tied *high* is allowed through, because an unrouted slice input is a one |
+| A constant-driven flip-flop **on a part** | the driver is built — one lookup table per constant, `INIT` all zeros or all ones, every input tied high, which is what Lattice's own bitstreams hold — and nothing built this way has been loaded into a part, because the board was in use. `wide_state.v` with its LED on `state[2]` is the experiment: it must stay dark. See "The constant is built now" |
+| A **CIB tie for an unused `LSR`** | the vendor writes `CIB.JLSR<n>MUX = 0` and this flow writes nothing. No clocked design of this backend has misbehaved, so an unrouted `LSR` seems not to reset, and *why* is unmeasured — the same shape of question the data pin turned out to be |
 | `DRIVE`, `OPENDRAIN`, `CLAMP` or `TERMINATION` on a pad | each is a `.config_enum` of the pad tile, and each is one `ecppack` writes **only when an attribute asks** — so not writing them matches nextpnr exactly for a design that does not ask. `set_io -drive` is parsed and reaches the cell, and `configure_io` writes nothing for it, which makes the option a silent no-op in the bitstream. **`SLEWRATE` has left this row**: it is written now, see "An edge rate on every ULPI pin" |
 | A bidirectional pad with a **registered** tristate | `PIO<s>.TRIMUX_TSREG = IOLTO` and the `IOLOGIC` tristate register, none of which is declared. `fpga::primitives` declines to absorb a tri-state driver on a DDR port rather than moving the enable ahead of the register |
 | An ECP5 over an FTDI cable | nothing, in principle: the configuration plans are transport-neutral and `jtag::Scan` encodes them for MPSSE. It is refused because that pairing has never been run |
