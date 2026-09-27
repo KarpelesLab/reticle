@@ -62,6 +62,29 @@
 //! | `I0031` | The hierarchy is recursive and cannot be flattened                 |
 //! | `I0032` | An output port is connected to something that cannot be driven     |
 //! | `I0033` | An inout port is not connected to a plain net of the same type     |
+//! | `I0034` | An instance names a module nothing declares                         |
+//!
+//! # Black boxes and missing modules
+//!
+//! An instance whose target is [`ModuleRef::Unresolved`] is a hole in the
+//! design, and there are two very different reasons for one.
+//!
+//! A *declared* black box is deliberate: something states the interface
+//! and says the contents come from elsewhere — a `blackbox module` in the
+//! [text form](super::text), an IP package whose sources are encrypted
+//! ([`crate::ip::blackbox`]), or a primitive the target technology
+//! declares. The design holds a module under that name, or the flow knows
+//! the primitive, so the widths are checked, the emitters write the
+//! instantiation, and the simulator says the box is empty rather than
+//! pretending otherwise.
+//!
+//! An *undeclared* one is a mistake, and almost always the same mistake:
+//! the file that defines the module was not given to the build. Reticle
+//! has no library search path, so nothing will find it later. Its outputs
+//! drive nothing, and every reader of them is reported instead — which is
+//! why [`Design::check_instance_targets`] exists: it names the module and
+//! the instance, at the instantiation, before the consequences are
+//! reported anywhere else.
 //!
 //! Flattening assumes the design passes [`validate`](super::validate);
 //! it reports the problems it cannot work around rather than checking the
@@ -101,6 +124,8 @@ const RECURSIVE: &str = "I0031";
 const NOT_LVALUE: &str = "I0032";
 /// An inout port connection cannot be merged.
 const BAD_INOUT: &str = "I0033";
+/// An instance names a module nothing declares.
+const UNDEFINED: &str = "I0034";
 
 /// Knobs for [`Design::flatten`].
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -918,6 +943,104 @@ impl Design {
         })
     }
 
+    /// Every instance under `top` whose target module nothing declares, as
+    /// `(the module holding the instance, the instance)`.
+    ///
+    /// Only what `top` reaches is looked at, so a stray module the build
+    /// does not use says nothing about it. A [`ModuleRef::Unresolved`]
+    /// instance is *not* reported when the design holds a module of that
+    /// name — the reference is merely unbound, and
+    /// [`Design::resolve_instances`] binds it — nor when `supplied` names
+    /// it. `supplied` is how a flow that knows its target technology
+    /// states the primitives that target declares
+    /// (`Device::primitive_names` for an FPGA part, a cell library's names
+    /// for an ASIC): those are real black boxes, filled in by the
+    /// place-and-route tool.
+    ///
+    /// The order is module id then instance id, so two runs of the same
+    /// design report the same list.
+    pub fn undefined_instances(
+        &self,
+        top: ModuleId,
+        supplied: &[&str],
+    ) -> Vec<(ModuleId, InstanceId)> {
+        let mut reached = vec![false; self.modules.len()];
+        let mut stack = vec![top];
+        let mut order: Vec<ModuleId> = Vec::new();
+        while let Some(id) = stack.pop() {
+            match reached.get_mut(id.index()) {
+                Some(mark) if !*mark => *mark = true,
+                _ => continue,
+            }
+            order.push(id);
+            stack.extend(self.children(id));
+        }
+        order.sort_unstable_by_key(|id| id.index());
+        let mut out = Vec::new();
+        for id in order {
+            let Some(module) = self.modules.get(id) else {
+                continue;
+            };
+            for (iid, inst) in module.instances.iter() {
+                let ModuleRef::Unresolved(name) = &inst.module else {
+                    continue;
+                };
+                if self.module_by_name(name.as_str()).is_some() || supplied.contains(&name.as_str())
+                {
+                    continue;
+                }
+                out.push((id, iid));
+            }
+        }
+        out
+    }
+
+    /// Reports every instance under `top` that names a module nothing
+    /// declares (`I0034`), and returns how many there were.
+    ///
+    /// This is the diagnostic for the commonest mistake a build can make:
+    /// leaving a source file off the command line. Each error names the
+    /// module and the instance and points at the instantiation, so the
+    /// reader is sent to the line that is wrong rather than to the outputs
+    /// that are consequently undriven. A flow calls it *before* it maps
+    /// anything, because those undriven outputs are reported in their
+    /// hundreds and none of them is the cause.
+    ///
+    /// `supplied` and the reach of `top` are as for
+    /// [`Design::undefined_instances`]; `supplier` says in words where
+    /// `supplied` came from (`` "the device `ecp5-25f-CABGA256`" ``), for
+    /// the note that rules the technology's own primitives out.
+    pub fn check_instance_targets(
+        &self,
+        top: ModuleId,
+        supplied: &[&str],
+        supplier: &str,
+        diags: &mut Diagnostics,
+    ) -> usize {
+        let found = self.undefined_instances(top, supplied);
+        for (module, instance) in &found {
+            let inst = &self.modules[*module].instances[*instance];
+            let ModuleRef::Unresolved(name) = &inst.module else {
+                continue;
+            };
+            let mut diag = Diagnostic::error(format!("no module named `{name}` is defined"))
+                .with_code(UNDEFINED)
+                .with_label(inst.span, format!("`{}` instantiates it", inst.name))
+                .with_note(format!(
+                    "Reticle has no library search path, so nothing will find `{name}` later: \
+                     add the file that defines it to this build"
+                ));
+            if !supplied.is_empty() {
+                diag = diag.with_note(format!("{supplier} declares no primitive `{name}` either"));
+            }
+            diags.push(diag.with_note(format!(
+                "to leave `{name}` empty on purpose, declare it: a `blackbox module` in the \
+                 `.rtl` form, or an IP package whose sources are encrypted"
+            )));
+        }
+        found.len()
+    }
+
     /// Every instance path under `top`, depth first in declaration order,
     /// with the module each path names.
     ///
@@ -1528,6 +1651,84 @@ mod tests {
             diags.iter().filter_map(|d| d.code).collect::<Vec<_>>(),
             [MISSING]
         );
+    }
+
+    /// The line between a black box on purpose and a file left off the
+    /// build: a name the design declares, or the target supplies, passes;
+    /// a name nothing declares is an error at the instantiation.
+    #[test]
+    fn an_undeclared_instance_target_is_reported_and_a_declared_one_is_not() {
+        let span = span();
+        let mut design = Design::new();
+        let mut stub = ModuleBuilder::new("vendor_core", span);
+        stub.input("a", Type::bit());
+        let mut stub = stub.finish();
+        stub.blackbox = true;
+        design.add_module(stub);
+
+        let mut b = ModuleBuilder::new("top", span);
+        b.instance(
+            "u_declared",
+            ModuleRef::Unresolved(Name::new("vendor_core")),
+            Vec::new(),
+        );
+        b.instance(
+            "u_primitive",
+            ModuleRef::Unresolved(Name::new("EHXPLLL")),
+            Vec::new(),
+        );
+        b.instance(
+            "u_missing",
+            ModuleRef::Unresolved(Name::new("usb_device_ulpi")),
+            Vec::new(),
+        );
+        let top = design.add_module(b.finish());
+
+        let found = design.undefined_instances(top, &["EHXPLLL"]);
+        assert_eq!(found.len(), 1);
+        let (module, instance) = found[0];
+        assert_eq!(module, top);
+        assert_eq!(
+            design.modules[module].instances[instance].name.as_str(),
+            "u_missing"
+        );
+
+        let mut diags = Diagnostics::new();
+        let count =
+            design.check_instance_targets(top, &["EHXPLLL"], "the device `ecp5-12f`", &mut diags);
+        assert_eq!(count, 1);
+        assert_eq!(
+            diags.iter().filter_map(|d| d.code).collect::<Vec<_>>(),
+            [UNDEFINED]
+        );
+        let text = diags.iter().next().expect("one error").message.clone();
+        assert_eq!(text, "no module named `usb_device_ulpi` is defined");
+
+        // Nothing is reported once the target does supply the name.
+        let mut diags = Diagnostics::new();
+        assert_eq!(
+            design.check_instance_targets(
+                top,
+                &["EHXPLLL", "usb_device_ulpi"],
+                "the device `ecp5-12f`",
+                &mut diags,
+            ),
+            0
+        );
+        assert!(diags.is_empty());
+    }
+
+    /// Only what the build uses is checked: a hole in a module the top does
+    /// not reach is not this build's problem.
+    #[test]
+    fn an_unreachable_module_s_hole_is_not_reported() {
+        let span = span();
+        let mut design = Design::new();
+        let mut stray = ModuleBuilder::new("stray", span);
+        stray.instance("u0", ModuleRef::Unresolved(Name::new("ghost")), Vec::new());
+        design.add_module(stray.finish());
+        let top = design.add_module(ModuleBuilder::new("top", span).finish());
+        assert!(design.undefined_instances(top, &[]).is_empty());
     }
 
     #[test]
