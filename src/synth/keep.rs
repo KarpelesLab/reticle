@@ -71,6 +71,13 @@
 //!   is what makes it something a bitstream can hold. A kept
 //!   **combinational** cell is the one thing the AIG cover refuses to
 //!   absorb, so it reaches the backend as itself.
+//! - The backend packers are technology mapping too, and they are not as
+//!   careful: a kept `add` or `mul` may still be fused into a DSP or a
+//!   carry chain that computes the same value, leaving the net it drove but
+//!   not the generic cell. State is the case they never touch, since a
+//!   flip-flop only ever becomes the device's own flip-flop — which is
+//!   where the promise is load-bearing, because a register is the one
+//!   object whose value the netlist does not fully determine.
 //!
 //! The asymmetry between the last two points is the whole of the rule.
 //! Folding a combinational cell leaves the kept net with the value it

@@ -202,8 +202,10 @@ mux, since that is the same flip-flop on the same net; a **combinational**
 cell driving a kept net may still fold to a constant assignment or be
 absorbed into a lookup-table cover, since the net keeps both its name and
 its value; and technology mapping still rewrites a kept `dff` into the
-device's own flip-flop, which is what lets a bitstream hold it. Only state
-inherits its output's keep, because only state decides *when* its net takes
+device's own flip-flop, which is what lets a bitstream hold it. A backend's
+DSP and carry packers may also fuse a kept `add` or `mul` into a primitive
+that computes the same value, leaving the net but not the generic cell.
+Only state inherits its output's keep, because only state decides *when* its net takes
 a value — a flip-flop's value before its first clock edge is a property of
 the fabric rather than of the IR, which is the difference a constant-fed
 probe exists to measure.
