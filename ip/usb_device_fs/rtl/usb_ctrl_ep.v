@@ -62,11 +62,59 @@
 //   acknowledge is sent again with the same toggle. The status stage is
 //   an OUT of zero length after a read and an IN of zero length after
 //   the others. Anything else — string descriptors, GET_STATUS,
-//   requests to an interface or an endpoint, class and vendor requests —
-//   is answered with STALL until the next SETUP.
+//   requests to an interface or an endpoint — is offered to the class
+//   hook below, and answered with STALL until the next SETUP if the class
+//   does not claim it.
 //
 //   A token addressed elsewhere, or to another endpoint, is ignored.
 //   `bus_reset` sets the address back to 0 and the configuration to none.
+//
+// THE CLASS HOOK, AND WHY IT IS COMBINATIONAL
+//   A control endpoint that stalls everything it does not itself
+//   understand is a control endpoint no class can be built on. CDC ACM
+//   needs SET_LINE_CODING, GET_LINE_CODING and SET_CONTROL_LINE_STATE; a
+//   human interface device needs GET_REPORT and SET_IDLE; the next class
+//   needs something else again. What they share is the *shape* of the
+//   thing, and that shape is what is on these ports:
+//
+//     class_setup      the eight bytes of a SETUP, byte 0 in the low bits
+//     class_req        one cycle: that SETUP is well formed and **no
+//                      standard request this module implements matched
+//                      it**
+//     class_claim      the class's answer, read in that same cycle
+//     class_len        bytes it will send, if the request reads
+//     class_index      which of those bytes is wanted
+//     class_byte       that byte
+//     class_out        a host-to-device data stage's payload, up to 8
+//     class_out_len    its length
+//     class_out_valid  one cycle: it arrived, its CRC checked, and it is
+//                      about to be acknowledged
+//
+//   **`class_claim`, `class_len` and `class_byte` have to be
+//   combinational**, and that is a decision rather than an oversight.
+//   This module chooses the transfer's stage in the very cycle the SETUP's
+//   data packet ends — `stage <= C_DATA_IN` or `C_STATUS_IN` or `C_STALL`
+//   is one arm of one `if`, and the ACK it schedules goes out
+//   `TURNAROUND` cycles later whatever it decided. A class that answered a
+//   cycle later would need a fifth stage here, a handshake back, and a
+//   rule about what happens if the host's next token arrives first. A
+//   request decoder is pure combinational logic over eight bytes —
+//   `bmRequestType`, `bRequest`, `wIndex` compared against constants — so
+//   asking for it combinationally asks for nothing a class cannot give.
+//
+//   `class_req` is deliberately **not** raised for the requests this
+//   module implements, so a class cannot shadow SET_ADDRESS or
+//   GET_DESCRIPTOR by claiming them. Everything else is offered,
+//   string descriptors and GET_STATUS included, so a class that wants
+//   those can have them without this file changing again.
+//
+//   The direction is `bmRequestType` bit 7 and is read here rather than
+//   asked for: a read becomes a data stage of `min(wLength, class_len)`
+//   bytes fetched through `class_index`, and a write becomes the status
+//   stage with one data packet expected first when `wLength` is not zero.
+//   That is **one** OUT packet, so a host-to-device class data stage is at
+//   most 8 bytes — which is every CDC ACM request and is stated in "What
+//   it does not do" below.
 //
 // THE CONFIGURATION DESCRIPTOR IS THE CLASS'S, NOT THIS MODULE'S
 //   This used to be eighteen bytes of `case` in here: a configuration, one
@@ -128,11 +176,25 @@
 //   it sits beside this one, reading the same `usb_pkt_rx`; `usb_dev_core`
 //   is the two of them and the transmitter they share.
 //
-//   No strings, no remote wake-up, no suspend, no SOF tracking and no
-//   low speed. Eight bytes of payload at most in either direction, which
-//   is what a maximum packet size of eight needs. A configuration
+//   No strings of its own, no remote wake-up, no suspend, no SOF tracking
+//   and no low speed. Eight bytes of payload at most in either direction,
+//   which is what a maximum packet size of eight needs. A configuration
 //   descriptor of at most 9 + 64 bytes, which is `DESC_MAX` below and is
 //   room for a HID interface or a CDC ACM pair.
+//
+//   A class request that **writes** carries at most one data packet, so
+//   eight bytes: `class_out` is `usb_pkt_rx`'s payload and there is no
+//   accumulator behind it. Every CDC ACM request fits — SET_LINE_CODING
+//   is seven bytes — and a class needing more would need a counter here
+//   and a byte stream instead of a word. A class request that **reads**
+//   may be as long as `CLASS_MAX`, since those bytes are fetched one at a
+//   time and the packets are this module's to cut.
+//
+//   Nothing here gives a class a say in the standard requests, and
+//   nothing here lets a class stall one it has claimed: `class_claim`
+//   promises an answer. A class that must refuse a request it recognises
+//   leaves `class_claim` low and takes the STALL this module was going to
+//   send anyway.
 //
 //   Nothing here knows about NRZI, bit stuffing, SYNC, EOP or line
 //   states, and nothing here checks a CRC — `usb_pkt_rx` does that, and
@@ -165,6 +227,13 @@ module usb_ctrl_ep #(
         // ENDPOINT 1 IN: bulk, 8 bytes, no interval.
         8'd7, 8'd5, 8'h81, 8'd2, 8'd8, 8'd0, 8'd0
     },
+    // The longest device-to-host data stage a class request may ask for,
+    // in bytes. Zero is a device with no class layer, and then the whole
+    // hook below is constant and synthesis removes it. Seven bytes is what
+    // CDC ACM's GET_LINE_CODING needs. It is a parameter and not a
+    // constant because it sets the width of `in_total` and `in_offset`,
+    // and a register is as wide as the values it holds.
+    parameter integer CLASS_MAX = 0,
     // Cycles of `line_idle` before an answer starts. Seven bits wide, and
     // not four, because what a **host** tolerates is wider than what ULPI
     // asks a Link for: USB 2.0 §7.1.19.1 has a host wait 16 bit times for a
@@ -207,6 +276,19 @@ module usb_ctrl_ep #(
 
     output wire [6:0] address,
     output wire       configured,
+
+    // The class hook. "THE CLASS HOOK, AND WHY IT IS COMBINATIONAL" above
+    // states the contract; the three inputs are read in the same cycle
+    // `class_req` is high and must be combinational in `class_setup`.
+    output wire [63:0] class_setup,
+    output wire        class_req,
+    input  wire        class_claim,
+    input  wire [6:0]  class_len,
+    output wire [6:0]  class_index,
+    input  wire [7:0]  class_byte,
+    output wire [63:0] class_out,
+    output wire [3:0]  class_out_len,
+    output wire        class_out_valid,
 
     // Data toggles, for the endpoints beside this one. `ep_reset` is one
     // cycle when SET_CONFIGURATION has been accepted and every endpoint's
@@ -386,7 +468,11 @@ module usb_ctrl_ep #(
     // this time by a tool instead of by a person with an oscilloscope. A
     // register is as wide as the values it holds, and when the values come
     // from a parameter so does the width.
-    localparam integer LEN_BITS = $clog2(CFG_TOTAL + 8);
+    //
+    // A class request's data stage is counted by the same two registers, so
+    // the widest offset is over whichever of the two is longer.
+    localparam integer LONGEST  = (CLASS_MAX > CFG_TOTAL) ? CLASS_MAX : CFG_TOTAL;
+    localparam integer LEN_BITS = $clog2(LONGEST + 8);
 
     // -----------------------------------------------------------------
     // Endpoint 0.
@@ -405,6 +491,11 @@ module usb_ctrl_ep #(
     reg [LEN_BITS-1:0] in_offset;  // bytes the host has acknowledged
     reg [3:0]  in_len;      // bytes in the packet awaiting its ACK
     reg        await_ack;
+    // The transfer in progress belongs to the class, so its data stage
+    // comes from `class_byte` and not from `desc`.
+    reg        class_active;
+    // ... and, when it writes, one data packet is still expected.
+    reg        class_out_wait;
 
     // A response waits for the turnaround after the host's EOP.
     reg        pending;
@@ -474,7 +565,13 @@ module usb_ctrl_ep #(
         end
     endfunction
 
-    assign tx_byte = desc(desc_sel, in_offset + tx_index);
+    // The byte of the data stage the transmitter is asking for: the
+    // class's when the class owns this transfer, a descriptor's otherwise.
+    // `class_index` is the same offset, brought out so that the class
+    // indexes its own bytes without restating the arithmetic.
+    assign class_index = in_offset + tx_index;
+    assign tx_byte     = class_active ? class_byte
+                                      : desc(desc_sel, in_offset + tx_index);
 
     // The next packet of the data stage.
     wire [LEN_BITS-1:0] in_left  = in_total - in_offset;
@@ -497,7 +594,34 @@ module usb_ctrl_ep #(
     // endpoint's address. Nothing here ever halts an endpoint, so this is
     // accepted for its other documented effect, which is the toggle.
     wire        clr_halt = (s0 == 8'h02) & (s1 == 8'h01) & (s2 == 8'h00) & (s3 == 8'h00);
-    wire [LEN_BITS-1:0] desc_len = (s3 == 8'h02) ? CFG_TOTAL[LEN_BITS-1:0] : 18;
+
+    // A SETUP this module will act on at all: the right stage, eight bytes,
+    // DATA0, and a CRC that checked. The arms of the `if` below repeat
+    // these conditions; this wire is what the class hook is gated by, so
+    // that a class is never offered a packet endpoint 0 is going to ignore.
+    wire        setup_now = pkt & pkt_is_data & dat_ok & (expect == X_SETUP)
+                          & (pkt_pid == PID_DATA0) & (dat_len == 4'd8);
+    // A request this module implements itself. A class is offered
+    // everything else and nothing of this.
+    wire        std_req   = get_desc | set_adr | set_cfg | clr_halt;
+
+    assign class_setup     = dat;
+    assign class_req       = setup_now & ~std_req;
+    assign class_out       = dat;
+    assign class_out_len   = dat_len;
+    // The data stage of a class request that writes: one packet, handed
+    // over in the cycle it is decoded and about to be acknowledged. A
+    // second copy of it — the host not having heard the first ACK — is
+    // acknowledged again and **not** handed over twice, which is what
+    // `class_out_wait` is for and is what a data toggle means.
+    assign class_out_valid = pkt & pkt_is_data & dat_ok & (expect == X_OUT)
+                           & (stage == C_STATUS_IN) & class_active
+                           & class_out_wait;
+
+    // How long the data stage is: the class's offer for a class request,
+    // the descriptor's length otherwise, and never more than wLength.
+    wire [LEN_BITS-1:0] desc_len = class_req ? class_len[LEN_BITS-1:0]
+                                 : ((s3 == 8'h02) ? CFG_TOTAL[LEN_BITS-1:0] : 18);
     wire [LEN_BITS-1:0] send_len = (w_length < desc_len) ? w_length[LEN_BITS-1:0] : desc_len;
 
     always @(posedge clk or negedge rst_n) begin
@@ -516,6 +640,8 @@ module usb_ctrl_ep #(
             in_offset      <= 0;
             in_len         <= 4'd0;
             await_ack      <= 1'b0;
+            class_active   <= 1'b0;
+            class_out_wait <= 1'b0;
             pending        <= 1'b0;
             pend_pid       <= 4'd0;
             pend_data      <= 1'b0;
@@ -587,6 +713,11 @@ module usb_ctrl_ep #(
                         in_offset <= 0;
                         set_addr  <= 1'b0;
                         set_config <= 1'b0;
+                        // A new transfer is nobody's until an arm claims
+                        // it, so whatever the last one left is cleared
+                        // here and set again below.
+                        class_active   <= 1'b0;
+                        class_out_wait <= 1'b0;
                         if (pkt_pid != PID_DATA0 || dat_len != 4'd8) begin
                             stage <= C_STALL;
                         end else if (get_desc) begin
@@ -605,6 +736,29 @@ module usb_ctrl_ep #(
                             stage       <= C_STATUS_IN;
                             ep_clear    <= 1'b1;
                             ep_clear_ep <= s4;
+                        end else if (class_claim) begin
+                            // The class above this endpoint answers it.
+                            // `class_req` is high in this very cycle and
+                            // `class_claim` is the reply to it.
+                            class_active <= 1'b1;
+                            if (s0[7]) begin
+                                // Device to host: a data stage of the bytes
+                                // the class offers, capped by wLength the
+                                // way a descriptor's is, fetched through
+                                // `class_index`.
+                                stage    <= C_DATA_IN;
+                                in_total <= send_len;
+                            end else begin
+                                // Host to device: the status stage, with one
+                                // data packet expected first if wLength says
+                                // there is one. There is no separate stage
+                                // for that packet, because the answer to an
+                                // IN token is the same either way — a
+                                // zero-length DATA1 — and the packet is
+                                // recognised by `class_out_wait` instead.
+                                stage          <= C_STATUS_IN;
+                                class_out_wait <= (w_length != 16'd0);
+                            end
                         end else begin
                             stage <= C_STALL;
                         end
@@ -616,6 +770,14 @@ module usb_ctrl_ep #(
                             // The status stage of a read.
                             pend_pid <= PID_ACK;
                             stage    <= C_IDLE;
+                        end else if (stage == C_STATUS_IN && class_active) begin
+                            // The data stage of a class request that
+                            // writes. Acknowledged whether or not it is the
+                            // first copy — a host repeats a packet whose ACK
+                            // it did not hear — and `class_out_valid` above
+                            // hands over the first copy only.
+                            pend_pid       <= PID_ACK;
+                            class_out_wait <= 1'b0;
                         end else begin
                             pend_pid <= PID_STALL;
                         end
@@ -668,6 +830,8 @@ module usb_ctrl_ep #(
                 pending    <= 1'b0;
                 set_addr   <= 1'b0;
                 set_config <= 1'b0;
+                class_active   <= 1'b0;
+                class_out_wait <= 1'b0;
             end
         end
     end
@@ -903,10 +1067,15 @@ endmodule
 //   One endpoint number, one packet deep, `MAXPKT` of at most 8 bytes —
 //   which is what the four-bit length the transmitters take allows, and
 //   which USB 2.0 §5.8.3 lists as a legal full-speed bulk size beside 16,
-//   32 and 64. No isochronous and no interrupt endpoint, though an
-//   interrupt endpoint is this module with a different bmAttributes in the
-//   descriptor and nothing else: the packets are identical and only the
-//   host's scheduling differs.
+//   32 and 64. No isochronous endpoint.
+//
+//   An **interrupt** endpoint is this module with a different bmAttributes
+//   in the descriptor and nothing else: the packets are identical and only
+//   the host's scheduling differs. `WITH_OUT = 0` makes it IN only, which
+//   is the shape an interrupt endpoint usually has. What eight bytes a
+//   packet does rule out is a CDC ACM **SERIAL_STATE** notification, which
+//   is ten — a class that has to send one needs a wider length field here
+//   and in both transmitters, not a parameter.
 //
 //   No STALL of its own: nothing here halts, so there is nothing to clear
 //   except the toggle. A SETUP addressed to a bulk endpoint is ignored,
@@ -922,6 +1091,24 @@ module usb_bulk_ep #(
     parameter [3:0]  ENDP       = 4'd1,
     // Bytes in a packet, 1 to 8.
     parameter [3:0]  MAXPKT     = 4'd8,
+    // WHICH DIRECTIONS THIS ENDPOINT NUMBER HAS
+    //
+    // Both, by default, which is a bulk pair. `WITH_OUT = 0` is an **IN-only**
+    // endpoint — a CDC ACM notification endpoint, a human interface device's
+    // report pipe — and `WITH_IN = 0` is the other way round. A direction
+    // that is zero is not answered **at all**: a token for it is ignored
+    // rather than NAKed, which is what a host must see from an endpoint that
+    // is not in the descriptors, and is the same silence a token for an
+    // endpoint number nobody has gets.
+    //
+    // Nothing is generated away by hand. The registers of a direction that
+    // cannot be asked for have no reader — `expect_out` can never be set, so
+    // `obuf` is never written and `out_valid` is constantly low — so
+    // synthesis removes them, which is why both directions of this module
+    // read as one piece of logic below rather than as two halves behind a
+    // `generate`.
+    parameter        WITH_OUT   = 1,
+    parameter        WITH_IN    = 1,
     // Cycles of `line_idle` before an answer starts; `usb_ctrl_ep`'s
     // parameter of the same name says what it has to be and why.
     parameter [6:0]  TURNAROUND = 7'd8
@@ -1096,9 +1283,9 @@ module usb_bulk_ep #(
                     in_await   <= 1'b0;
                     expect_out <= 1'b0;
                     if (tok_ok && tok_addr == address && tok_endp == ENDP) begin
-                        if (pkt_pid == PID_OUT) begin
+                        if (WITH_OUT && pkt_pid == PID_OUT) begin
                             expect_out <= 1'b1;
-                        end else if (pkt_pid == PID_IN) begin
+                        end else if (WITH_IN && pkt_pid == PID_IN) begin
                             pending <= 1'b1;
                             turn    <= 7'd0;
                             if (armed) begin
@@ -1247,34 +1434,56 @@ endmodule
 //     usb_bulk_ep    endpoint `DATA_ENDP`, IN and OUT, with a byte
 //                    interface for whatever is above it
 //
+//     usb_bulk_ep    a second endpoint, IN only, for a class that needs
+//                    one: `NOTIF_ENDP`, which is `4'd0` for a device that
+//                    does not and then nothing of it is built
+//
 //   and a transmitter that only one of them may have at a time.
 //
 // THE TRANSMITTER, AND WHO OWNS IT
 //   A USB device only ever speaks when it has been asked to, and the
 //   asking is a token. So the endpoint that may answer is the endpoint the
-//   **last token named**, which is one register:
+//   **last token named**, which is two registers — one per endpoint that
+//   is not endpoint 0:
 //
-//     owner <= (tok_endp != 0)   on any token addressed to this device
+//     own_notif <= the token named NOTIF_ENDP and there is one
+//     own_data  <= the token named some other non-zero endpoint
 //
-//   Everything after that token belongs to the same endpoint — the data
-//   packet of an OUT, the handshake of an IN — because a host does not
-//   interleave transactions on one device. `sel` into each endpoint is
-//   that register, it gates the endpoint's turnaround counter, and the
-//   whole arbitration is a multiplexer. There is no request-and-grant and
-//   no round robin, because there is never a second answer waiting: the
-//   endpoint that has not been asked has nothing to say.
+//   and endpoint 0 owns the transmitter when neither does. Everything
+//   after that token belongs to the same endpoint — the data packet of an
+//   OUT, the handshake of an IN — because a host does not interleave
+//   transactions on one device. `sel` into each endpoint is its own bit, it
+//   gates that endpoint's turnaround counter, and the whole arbitration is
+//   a multiplexer. There is no request-and-grant and no round robin,
+//   because there is never a second answer waiting: the endpoint that has
+//   not been asked has nothing to say.
 //
-//   A token for an endpoint number neither of them has hands ownership to
-//   the data endpoint, which then ignores it because the number is not
-//   its own. Nothing answers, and the host retries and gives up, which is
-//   what a device with no such endpoint is supposed to do.
+//   **Two bits and not an encoded number**, which was the first shape this
+//   took. Three owners need two bits either way, and an index costs a
+//   decoder at each `sel` and at the multiplexer; two bits that are
+//   already the `sel` signals cost neither. It is also what makes the
+//   notification endpoint free when there is not one: with
+//   `NOTIF_ENDP = 0`, `own_notif` is a flip-flop whose data input is the
+//   constant zero, `synth::opt::FfOpt` replaces it with that constant, and
+//   the whole second endpoint and its half of the multiplexer go with it.
+//   An encoded owner would have left the high bit of a register in the same
+//   place, which is a shape this family has cost this project eight rounds
+//   of investigation over.
+//
+//   A token for an endpoint number nobody has hands ownership to the data
+//   endpoint, which then ignores it because the number is not its own.
+//   Nothing answers, and the host retries and gives up, which is what a
+//   device with no such endpoint is supposed to do.
 //
 // What it does not do
-//   One bulk endpoint pair. A second pair is a second `usb_bulk_ep` with
-//   another `ENDP`, another pair of byte interfaces on this module's port
-//   list, and `owner` widened from a bit to a number — at which point the
-//   width of that register is the number of endpoints and not one more,
-//   for the reason `usb_ctrl_ep`'s `stage` gives at length.
+//   Two data endpoints: one pair and one IN. A third is a third
+//   `usb_bulk_ep`, a third `own_*` bit and a third arm of the
+//   multiplexer, all of it the same shape as the second.
+//
+//   Nothing here is a class. `usb_ctrl_ep`'s class hook comes straight out
+//   of this module, and what answers it is a block above — `ip/usb_cdc_acm`
+//   is the first one — because what a class request means is not something
+//   a device core can know.
 //
 //   Nothing here knows about NRZI, bit stuffing, SYNC, EOP, line states
 //   or ULPI. The link layer below delivers bytes and takes packets.
@@ -1300,6 +1509,16 @@ module usb_dev_core #(
     // host will do and these say what the device will do.
     parameter [3:0]   DATA_ENDP    = 4'd1,
     parameter [3:0]   MAXPKT       = 4'd8,
+    // A second data endpoint, **IN only**: a CDC ACM notification
+    // endpoint, a human interface device's report pipe. `4'd0` is none, and
+    // then nothing of it is built. It must not be `DATA_ENDP`, which no
+    // arithmetic can check — a descriptor says what the host will do and
+    // these say what the device will do.
+    parameter [3:0]   NOTIF_ENDP   = 4'd0,
+    parameter [3:0]   NOTIF_MAXPKT = 4'd8,
+    // The longest device-to-host class data stage; `usb_ctrl_ep`'s
+    // parameter of the same name says what it sets.
+    parameter integer CLASS_MAX    = 0,
     parameter [6:0]   TURNAROUND   = 7'd8
 ) (
     input  wire       clk,
@@ -1327,6 +1546,18 @@ module usb_dev_core #(
     output wire [6:0] address,
     output wire       configured,
 
+    // The class hook, straight out of `usb_ctrl_ep`, which states the
+    // contract.
+    output wire [63:0] class_setup,
+    output wire        class_req,
+    input  wire        class_claim,
+    input  wire [6:0]  class_len,
+    output wire [6:0]  class_index,
+    input  wire [7:0]  class_byte,
+    output wire [63:0] class_out,
+    output wire [3:0]  class_out_len,
+    output wire        class_out_valid,
+
     // The data endpoint's bytes.
     output wire [7:0] out_data,
     output wire       out_valid,
@@ -1335,7 +1566,15 @@ module usb_dev_core #(
     input  wire [7:0] in_data,
     input  wire       in_valid,
     output wire       in_ready,
-    input  wire       in_commit
+    input  wire       in_commit,
+
+    // The second endpoint's, device to host only. Leave `notif_valid` low
+    // for a device that has no second endpoint, which is also what
+    // `NOTIF_ENDP = 0` means.
+    input  wire [7:0] notif_data,
+    input  wire       notif_valid,
+    output wire       notif_ready,
+    input  wire       notif_commit
 );
     // -----------------------------------------------------------------
     // One packet, decoded once.
@@ -1372,12 +1611,22 @@ module usb_dev_core #(
     // -----------------------------------------------------------------
     // Who the last token asked.
     // -----------------------------------------------------------------
-    reg owner;
+    // The second endpoint exists only when it has a number of its own, and
+    // `NOTIF_ENDP = 0` is endpoint 0's number, so the test is both.
+    wire tok_notif = (NOTIF_ENDP != 4'd0) && (tok_endp == NOTIF_ENDP);
+    wire tok_data  = (tok_endp != 4'd0) && !tok_notif;
+
+    reg own_data;
+    reg own_notif;
 
     always @(posedge clk or negedge rst_n) begin
-        if (!rst_n) owner <= 1'b0;
-        else if (pkt && pkt_is_token && tok_ok && tok_addr == address)
-            owner <= (tok_endp != 4'd0);
+        if (!rst_n) begin
+            own_data  <= 1'b0;
+            own_notif <= 1'b0;
+        end else if (pkt && pkt_is_token && tok_ok && tok_addr == address) begin
+            own_data  <= tok_data;
+            own_notif <= tok_notif;
+        end
     end
 
     // -----------------------------------------------------------------
@@ -1399,6 +1648,7 @@ module usb_dev_core #(
         .CFG_POWER    (CFG_POWER),
         .IFACE_BYTES  (IFACE_BYTES),
         .IFACE_DESC   (IFACE_DESC),
+        .CLASS_MAX    (CLASS_MAX),
         .TURNAROUND   (TURNAROUND)
     ) u_ep0 (
         .clk          (clk),
@@ -1415,7 +1665,7 @@ module usb_dev_core #(
         .dat          (dat),
         .line_idle    (line_idle),
         .bus_reset    (bus_reset),
-        .sel          (~owner),
+        .sel          (~(own_data | own_notif)),
         .tx_start     (c_tx_start),
         .tx_pid       (c_tx_pid),
         .tx_with_data (c_tx_with_data),
@@ -1425,6 +1675,15 @@ module usb_dev_core #(
         .tx_busy      (tx_busy),
         .address      (address),
         .configured   (configured),
+        .class_setup     (class_setup),
+        .class_req       (class_req),
+        .class_claim     (class_claim),
+        .class_len       (class_len),
+        .class_index     (class_index),
+        .class_byte      (class_byte),
+        .class_out       (class_out),
+        .class_out_len   (class_out_len),
+        .class_out_valid (class_out_valid),
         .ep_reset     (ep_reset),
         .ep_clear     (ep_clear),
         .ep_clear_ep  (ep_clear_ep)
@@ -1440,6 +1699,8 @@ module usb_dev_core #(
     usb_bulk_ep #(
         .ENDP       (DATA_ENDP),
         .MAXPKT     (MAXPKT),
+        .WITH_OUT   (1),
+        .WITH_IN    (1),
         .TURNAROUND (TURNAROUND)
     ) u_ep1 (
         .clk          (clk),
@@ -1460,7 +1721,7 @@ module usb_dev_core #(
         .ep_reset     (ep_reset),
         .ep_clear     (ep_clear),
         .ep_clear_ep  (ep_clear_ep),
-        .sel          (owner),
+        .sel          (own_data),
         .tx_start     (b_tx_start),
         .tx_pid       (b_tx_pid),
         .tx_with_data (b_tx_with_data),
@@ -1479,11 +1740,74 @@ module usb_dev_core #(
     );
 
     // -----------------------------------------------------------------
+    // The second endpoint: IN only, for a class that needs one.
+    // -----------------------------------------------------------------
+    // With `NOTIF_ENDP = 0` both directions are off, so this instance
+    // answers nothing, `pending` inside it can never be set, and synthesis
+    // removes all of it along with `own_notif` and this arm of the
+    // multiplexer below.
+    wire       n_tx_start, n_tx_with_data;
+    wire [3:0] n_tx_pid, n_tx_len;
+    wire [7:0] n_tx_byte;
+    wire [7:0] n_out_data;
+    wire       n_out_valid, n_out_last;
+
+    usb_bulk_ep #(
+        .ENDP       (NOTIF_ENDP),
+        .MAXPKT     (NOTIF_MAXPKT),
+        .WITH_OUT   (0),
+        .WITH_IN    (NOTIF_ENDP != 4'd0),
+        .TURNAROUND (TURNAROUND)
+    ) u_ep2 (
+        .clk          (clk),
+        .rst_n        (rst_n),
+        .pkt          (pkt),
+        .pkt_pid      (pkt_pid),
+        .pkt_is_token (pkt_is_token),
+        .pkt_is_data  (pkt_is_data),
+        .tok_ok       (tok_ok),
+        .tok_addr     (tok_addr),
+        .tok_endp     (tok_endp),
+        .dat_ok       (dat_ok),
+        .dat_len      (dat_len),
+        .dat          (dat),
+        .address      (address),
+        .line_idle    (line_idle),
+        .bus_reset    (bus_reset),
+        .ep_reset     (ep_reset),
+        .ep_clear     (ep_clear),
+        .ep_clear_ep  (ep_clear_ep),
+        .sel          (own_notif),
+        .tx_start     (n_tx_start),
+        .tx_pid       (n_tx_pid),
+        .tx_with_data (n_tx_with_data),
+        .tx_len       (n_tx_len),
+        .tx_index     (tx_index),
+        .tx_byte      (n_tx_byte),
+        .tx_busy      (tx_busy),
+        // There is no OUT direction, so these go nowhere and the buffer
+        // behind them has no reader.
+        .out_data     (n_out_data),
+        .out_valid    (n_out_valid),
+        .out_last     (n_out_last),
+        .out_ready    (1'b0),
+        .in_data      (notif_data),
+        .in_valid     (notif_valid),
+        .in_ready     (notif_ready),
+        .in_commit    (notif_commit)
+    );
+
+    // -----------------------------------------------------------------
     // The transmitter, to whichever endpoint the token named.
     // -----------------------------------------------------------------
-    assign tx_start     = owner ? b_tx_start     : c_tx_start;
-    assign tx_pid       = owner ? b_tx_pid       : c_tx_pid;
-    assign tx_with_data = owner ? b_tx_with_data : c_tx_with_data;
-    assign tx_len       = owner ? b_tx_len       : c_tx_len;
-    assign tx_byte      = owner ? b_tx_byte      : c_tx_byte;
+    assign tx_start     = own_notif ? n_tx_start
+                        : own_data  ? b_tx_start     : c_tx_start;
+    assign tx_pid       = own_notif ? n_tx_pid
+                        : own_data  ? b_tx_pid       : c_tx_pid;
+    assign tx_with_data = own_notif ? n_tx_with_data
+                        : own_data  ? b_tx_with_data : c_tx_with_data;
+    assign tx_len       = own_notif ? n_tx_len
+                        : own_data  ? b_tx_len       : c_tx_len;
+    assign tx_byte      = own_notif ? n_tx_byte
+                        : own_data  ? b_tx_byte      : c_tx_byte;
 endmodule

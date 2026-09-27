@@ -196,6 +196,19 @@ module usb_device_fs #(
         .tx_busy      (tx_busy),
         .address      (address),
         .configured   (configured),
+        // No class layer: endpoint 0 stalls what it does not itself
+        // implement, which is what `class_claim` low means, and
+        // `usb_ctrl_ep`'s hook costs nothing when it is tied off. A device
+        // with a class is a block above this one; `ip/usb_cdc_acm` is the
+        // first.
+        .class_claim  (1'b0),
+        .class_len    (7'd0),
+        .class_byte   (8'd0),
+        // ... and no second endpoint, which `NOTIF_ENDP`'s default of zero
+        // already says.
+        .notif_data   (8'd0),
+        .notif_valid  (1'b0),
+        .notif_commit (1'b0),
         .out_data     (out_data),
         .out_valid    (out_valid),
         .out_last     (out_last),
