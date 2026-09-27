@@ -172,6 +172,15 @@ testdata/synth/fsm.rtl
 testdata/synth/fsm.synth.rtl
   fsm: eligible (3 comb ops, 9 edge ops, 1 registers, 3 bits)
 
+testdata/synth/keep_reg.cells.rtl
+  keep_reg: eligible (3 comb ops, 6 edge ops, 4 registers, 4 bits)
+
+testdata/synth/keep_reg.rtl
+  keep_reg: eligible (5 comb ops, 9 edge ops, 6 registers, 6 bits)
+
+testdata/synth/keep_reg.synth.rtl
+  keep_reg: eligible (3 comb ops, 6 edge ops, 4 registers, 4 bits)
+
 testdata/synth/mux_tree.cells.rtl
   mux_tree: eligible (6 comb ops, 0 edge ops, 0 registers, 0 bits)
 

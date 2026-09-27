@@ -114,7 +114,7 @@ pub(crate) fn is_kept(attrs: &Attrs) -> bool {
 /// because only a state element decides *when* its output takes a value;
 /// see the module docs for why folding one is not the same as folding a
 /// gate.
-pub(crate) fn cell_is_kept(m: &Module, cell: &Cell) -> bool {
+pub fn cell_is_kept(m: &Module, cell: &Cell) -> bool {
     is_kept(&cell.attrs)
         || (!cell.kind.is_combinational()
             && cell.outputs.iter().any(|(_, n)| is_kept(&m.nets[*n].attrs)))
