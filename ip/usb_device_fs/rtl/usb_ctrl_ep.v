@@ -511,11 +511,30 @@ module usb_ctrl_ep #(
     function [7:0] desc;
         input                  sel_in;
         input [LEN_BITS-1:0]   i;
-        // Six bits, because `DESC_MAX` is 64 bytes: an offset into the
+        // The offset past the nine bytes this module writes, and that offset
+        // **narrowed to the blob's width**.
+        //
+        // `j` is six bits because `DESC_MAX` is 64 bytes: an offset into the
         // class's descriptors cannot be wider than that whatever `LEN_BITS`
         // is, and giving it exactly those bits is what keeps the part-select
         // below inside `IFACE` without a mask a width checker has to trust.
+        //
+        // The narrowing is written as a **part-select** and not as an
+        // assignment that happens to truncate. With the default descriptors
+        // `LEN_BITS` is 6 and there is nothing to narrow; with a CDC ACM
+        // descriptor set it is 7, and then `j = i - 9` is
+        // `value is truncated from 7 bits to 6 in this assignment` — a
+        // warning about the one thing here that is deliberate. `i` can reach
+        // `CFG_TOTAL + 7` because `tx_byte` is fetched up to seven bytes past
+        // the offset the host acknowledged, and the bytes past `tx_len` are
+        // fetched and never sent, so the top of the range is not a byte
+        // anybody reads. Dropping the bit above the blob is the intent, and a
+        // part-select says so.
+        reg   [LEN_BITS-1:0]   off;
         reg   [5:0]            j;
+        // One quarter of the blob, which is the granularity the part-select
+        // below reads it at; the comment there says why it is not read whole.
+        reg   [127:0]          page;
         begin
             if (!sel_in) begin
                 case (i)
@@ -559,8 +578,49 @@ module usb_ctrl_ep #(
                 // not by `* 8`: this compiler's synthesis leaves a multiply
                 // by a constant as a `mul` cell, which on the ECP5 is a
                 // hard multiplier.
-                j    = i - 9;
-                desc = IFACE[{j, 3'b000} +: 8];
+                off  = i - 9;
+                j    = off[5:0];
+                // A PAGE AT A TIME, AND WHY
+                //
+                // This was one part-select of the whole blob —
+                // `IFACE[{j, 3'b000} +: 8]` — which is a 64-entry ROM: eight
+                // independent six-input Boolean functions. **Mapped onto
+                // LUT4, three of the sixty-seven bytes of a CDC ACM
+                // descriptor set came out wrong**, and a host refused the
+                // device over one of them:
+                //
+                //   config 1 has 1 interface, different from the
+                //   descriptor's value: 2
+                //
+                // because `bInterfaceNumber` of the data interface read 0
+                // where these sources say 1. In simulation the same design
+                // was byte-perfect, and at every other lookup-table width —
+                // 2, 3, 5, 6, 7, 8 — so is the mapped netlist. The
+                // twenty-three byte vendor blob is correct at LUT4 too, so
+                // what the fault depends on is the ROM's contents.
+                //
+                // Reading it a page at a time is the same function with a
+                // different cover: four 128-bit pages chosen by the top two
+                // bits of the index, a byte out of one of them chosen by the
+                // bottom four. It maps correctly at every width.
+                //
+                // **It is a workaround and the gap is in `src/synth/techmap`,
+                // not here.** Nothing says another descriptor set will not
+                // find another cone the mapper covers wrongly.
+                // `tests/ip_library.rs`'s
+                // `usb_descriptors_survive_lookup_table_mapping` reads the
+                // descriptors off the **mapped** netlist for three
+                // configurations at two widths, which is the test that was
+                // missing when this was written; its comment has everything
+                // known about the fault, including that
+                // `reticle synth --lut 4 --verify` does not catch it.
+                case (j[5:4])
+                    2'd0:    page = IFACE[127:0];
+                    2'd1:    page = IFACE[255:128];
+                    2'd2:    page = IFACE[383:256];
+                    default: page = IFACE[511:384];
+                endcase
+                desc = page[{j[3:0], 3'b000} +: 8];
             end
         end
     endfunction

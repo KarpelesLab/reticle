@@ -11,6 +11,7 @@
 //! | `manifests_parse` | every `reticle.ip` parses, names its own directory and lists files that exist |
 //! | `packages_resolve_and_elaborate` | every block builds through `ip::resolve` and `ip::elaborate`, dependencies and all |
 //! | `blocks_synthesise_cleanly` | generic synthesis reports nothing — no errors, and no inferred latch |
+//! | `usb_descriptors_survive_lookup_table_mapping` | a **mapped** netlist still answers GET_DESCRIPTOR with the right bytes |
 //! | `footprints_match_the_documentation` | the table in `docs/ip-library.md` is the one this run measures |
 //! | `axil_gpio_matches_the_axi4lite_definition` | `bus::match_ports` recognises the GPIO's bus port |
 //! | `cdc_*`, `fifo_async_*` | `timing::analyze_cdc` calls every crossing a synchroniser, never an unsynchronised one |
@@ -12808,5 +12809,154 @@ endmodule
             !warning,
             "{device_name}: warned about a delay nobody asked for"
         );
+    }
+}
+
+/// The descriptors a host reads are still the right bytes **after the logic
+/// has been mapped onto lookup tables**.
+///
+/// This is the test that was missing, and it was missing in a way worth
+/// spelling out. `blocks_synthesise_cleanly` synthesises every block and
+/// `footprints_match_the_documentation` maps every block onto LUT4 and LUT6 —
+/// and neither of them ever asks the mapped netlist to *do* anything. Every
+/// behavioural test in this file runs on the design as elaborated. So there
+/// was no test anywhere between "the block behaves" and "the bitstream is
+/// loaded on a board", and a technology mapper that covered one cone wrongly
+/// would be found by a person with an oscilloscope.
+///
+/// It was found by one. `ip/usb_cdc_acm`'s fifty-eight byte descriptor set,
+/// read off a Cynthion, had `bInterfaceNumber` of its data interface as **0**
+/// where the sources say 1 — one byte in sixty-seven — and `cdc_acm` refused
+/// the device with `config 1 has 1 interface, different from the descriptor's
+/// value: 2`. In simulation the same design was byte-perfect.
+///
+/// **What was wrong was the LUT4 cover of the descriptor ROM**, and it is a
+/// gap in `src/synth/techmap` rather than in these blocks:
+///
+///   * `usb_ctrl_ep`'s class descriptors are a 512-bit constant read by a
+///     variable-indexed part-select, which is a 64-entry ROM — eight
+///     independent six-input Boolean functions;
+///   * mapped onto LUT4, three of the sixty-seven bytes came out wrong. Onto
+///     LUT2, LUT3, LUT5, LUT6, LUT7 or LUT8, none did;
+///   * the plain vendor descriptor set, twenty-three bytes in the same
+///     512-bit constant, was and is correct at LUT4, so what the fault
+///     depends on is the ROM's **contents**;
+///   * and it has nothing to do with the class hook: the failing
+///     configuration below is `usb_device_fs` with no class layer at all and
+///     the longer blob in its parameter.
+///
+/// `reticle synth --lut 4 --verify` does **not** catch it. That option proves
+/// the optimised netlist equivalent to the unoptimised lowering, and the
+/// lookup-table mapping happens outside what it compares — which is a second
+/// gap, and the reason this test exists in this file rather than as one more
+/// `--verify`.
+///
+/// The blocks work around it by reading the blob **a page at a time**:
+/// `desc()` selects one of four 128-bit pages with the top two bits of the
+/// index and takes a byte out of that with the bottom four. That is logically
+/// the same function and it maps correctly. It is **a workaround and not a
+/// fix**: nothing says another descriptor set will not find another cone the
+/// mapper covers wrongly, and this test is what would notice. A reader
+/// removing the page split should expect this test to fail.
+///
+/// **What this would and would not catch.** It catches a mapped netlist that
+/// answers GET_DESCRIPTOR with the wrong bytes, at two LUT widths, for both
+/// descriptor sets in the library — which is the whole of what took the CDC
+/// device from working in simulation to refused by a kernel. It does not
+/// catch anything the ECP5 or iCE40 flows do *after* mapping: placement,
+/// routing and bitstream generation are not here, and the Cynthion's own
+/// count of wrong bytes was one rather than three, so the FPGA flow's mapping
+/// is not bit-for-bit `MapOptions::lut(4)`. A board is still the last word.
+/// It also says nothing about the rest of either block after mapping; the
+/// descriptors are what it reads because the descriptors are what a ROM is.
+#[test]
+fn usb_descriptors_survive_lookup_table_mapping() {
+    // The CDC ACM descriptor set, as `ip/usb_cdc_acm` states it, for the
+    // configuration that has no class layer: the same fifty-eight bytes in
+    // `usb_device_fs`'s parameter. Written here in descriptor order, which is
+    // the order the parameter's concatenation is in.
+    const CDC_BLOB: &str = concat!(
+        "464'h",
+        "090400000002020000", // INTERFACE 0: communications
+        "0524001001",         // header functional
+        "0524010001",         // call management functional
+        "04240202",           // abstract control management functional
+        "0524060001",         // union functional
+        "07058203080010",     // ENDPOINT 82h: interrupt IN
+        "09040100000A000000", // INTERFACE 1: data
+        "07050102080000",     // ENDPOINT 01h: bulk OUT
+        "07058102080000",     // ENDPOINT 81h: bulk IN
+    );
+
+    // Three configurations and two LUT widths. The first is the descriptor set
+    // that has always worked on a board, the second is the one that did not,
+    // and the third is the block that states it for itself.
+    let cases: [(&str, &str, &[(&str, &str)], fn() -> Vec<u8>); 3] = [
+        (
+            "usb_device_fs",
+            "usb_device_fs",
+            &[("VID", "16'h1209"), ("PID", "16'h0001")],
+            expected_configuration_descriptor,
+        ),
+        (
+            "usb_device_fs",
+            "usb_device_fs",
+            &[
+                ("VID", "16'h1209"),
+                ("PID", "16'h0001"),
+                ("IFACE_BYTES", "58"),
+                ("IFACE_DESC", CDC_BLOB),
+            ],
+            expected_cdc_configuration,
+        ),
+        (
+            "usb_cdc_acm",
+            "usb_cdc_acm_fs",
+            &[("VID", "16'h1209"), ("PID", "16'h0001")],
+            expected_cdc_configuration,
+        ),
+    ];
+
+    for (package, top, params, want) in cases {
+        for k in [4u32, 6] {
+            let (mut design, id) = flattened(package, top, params);
+            let mut diags = Diagnostics::new();
+            synth_run(&mut design, &SynthOptions::default(), &mut diags);
+            assert!(
+                !diags.has_errors(),
+                "{package}.{top} does not synthesise:\n{}",
+                diags.len()
+            );
+            map_module(&mut design.modules[id], &MapOptions::lut(k));
+
+            // The simulator borrows the design for its lifetime and the design
+            // is built inside this loop, so it is leaked for the test's sake,
+            // the way `tests/sim_cosim.rs` does.
+            let mapped: &'static Design = Box::leak(Box::new(design));
+            let mut host = UsbHost::new(FsPair::with_loopback(mapped, false), 0);
+            host.bus_reset();
+            let config = host
+                .control_read(0, [0x80, 0x06, 0x00, 0x02, 0xFF, 0xFF, 0xFF, 0xFF])
+                .expect("the configuration descriptor");
+            let expected = want();
+            if config != expected {
+                let mut wrong: Vec<String> = Vec::new();
+                for (at, (got, wanted)) in config.iter().zip(&expected).enumerate() {
+                    if got != wanted {
+                        wrong.push(format!("offset {at}: {got:#04x} not {wanted:#04x}"));
+                    }
+                }
+                panic!(
+                    "{package}.{top} mapped onto LUT{k} answers GET_DESCRIPTOR with \
+                     {} wrong byte(s) out of {}:\n  {}\n\
+                     That is the technology mapper covering the descriptor ROM wrongly; this \
+                     test's own comment has the whole of what is known about it.",
+                    wrong.len(),
+                    expected.len(),
+                    wrong.join("\n  ")
+                );
+            }
+            host.assert_clean();
+        }
     }
 }
