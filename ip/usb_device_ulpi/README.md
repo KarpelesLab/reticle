@@ -320,11 +320,9 @@ If either is aborted, the Link retries when the bus is idle. HIGH,
 > *Provenance*: Table 19, Table 22, Table 24 and Table 30, §4.1 to §4.2.9.
 > HIGH, reset values included.
 
-**A full-speed peripheral wants `04h` = `45h` and `0Ah` = `00h`.** Both are
-now the settings a host has enumerated a device through.
-
- Both of
-the next two bullets have now been checked against a part rather than only
+**A full-speed peripheral wants `04h` = `45h` and `0Ah` = `00h`.** These are
+the settings a host has now enumerated a device through, and both of the next
+two bullets have been checked against a part rather than only
 quoted, by reading the transceiver's own LineState back after the write: with
 `45h` it reports its D+ high, and with `XcvrSelect = 10` instead it reports
 its D- high.
