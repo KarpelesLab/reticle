@@ -55,10 +55,20 @@ before anything else because it is the first of its kind here:
 And what is not being claimed: **it does not enumerate.** `lsusb` does not
 show `1209:0001`. The host detects the device as **low speed** where a
 full-speed peripheral was asked for, and then talks to it at 1.5 Mbit/s,
-which a full-speed device cannot answer. "Where it stops, and what was
-ruled out" is the whole of what is known about that, including four
-experiments on the part that each rule something out, and the one that
-narrows it to a single register field.
+which a full-speed device cannot answer.
+
+**Why is now known, and it is not in this compiler.** The transceiver's own
+Debug register reports its **D+ high** at the moment the host reports a
+low-speed device, which is the host's **D-**; and in low-speed mode the
+transceiver reports its D- high while the host reports full speed. The two
+ends of the cable name opposite wires, so D+ and D- are exchanged between
+them, and no register value and no attribute of a pad can undo a crossed
+differential pair. Getting there needed the eight-bit bus to be proved exact
+rather than merely turning around, and it is: a register nobody had written
+was read off the part and came back as the `41h` the specification gives it.
+"Where it stops, and it is not the bus" is the whole of it — fourteen
+experiments on the part, each one bitstream and one `dmesg` window — and it
+ends with the three physical things left to try.
 
 ### What a person should look for, on the bus design
 
@@ -364,77 +374,195 @@ what this milestone is about.
 What it does **not** prove is that no *permutation* of the eight lines is
 involved: writing `X` and reading `π(X)` back through the inverse of the same
 permutation matches for any `π`. That is why the pin map was traced through
-the board's own netlist in the table above, and why the experiment below uses
-a command's **address** field rather than a register's contents.
+the board's own netlist in the table above — and it is why the section below
+reads a register **before writing anything to it**, which is the one reading
+a permutation cannot survive. Function Control came back as the `41h` the
+specification gives it, so there is no permutation: `π` is the identity.
 
-### Where it stops, and what was ruled out
+### Where it stops, and it is not the bus
 
 The device does not enumerate. The host detects **low speed**; a full-speed
 peripheral was asked for, so the host then talks at 1.5 Mbit/s and nothing
 the device says can be understood. Every experiment below was run on the
-part, each is one bitstream and one `dmesg` window, and **six different
-bitstreams**, with six different placements and routings, all reported low
-speed, so it is a property of the design and not of a build.
+part, each is one bitstream and one `dmesg` window, and the reading it all
+comes to is that **the transceiver and the host disagree about which of the
+two data wires the pull-up is on**. Nothing in this compiler, in the ULPI
+core or in its register conversation is between them.
 
-| What was tried | What happened | What it rules out |
-|---|---|---|
-| the shipped design, and the same design re-attaching every 2.24 s | attach, **low speed**, no answer | — |
-| the interface clock **inverted** on D16 | **no attach at all** | that the clock phase is merely marginal: with the right polarity the register writes land, with the wrong one nothing does |
-| `TermSelect` left clear until after the PHY's own reset (`61h` instead of `65h`) | attach, low speed | that the pull-up appearing during the transceiver's internal reset is what the host mis-samples |
-| the pull-up asserted only **after** the register readback matched | attach, low speed | that the read direction of the bus fails — it does not, see above |
-| `line_idle` freed from `LineState`, so the device answers whenever the bus is quiet | attach, low speed, no answer | that a misread `LineState` is what stops it answering — it is not the first problem |
-| the command address `05h` (Function Control **set**) instead of `04h`, whose command byte `85h` differs from `86h` (**clear**) in bits 0 and 1 | attach | **that bits 0 and 1 of the bus are exchanged**: had they been, the command would have cleared `TermSelect` instead of setting it and no host would have seen anything |
-| `XcvrSelect` written as `10` instead of `01` — one byte, `46h` for `45h` | attach, **full speed** | nothing yet; this is the finding |
+#### What the transceiver was asked, over the real bus
 
-The last row is where it rests. ULPI 1.1 Table 21 makes `XcvrSelect = 01` the
-full-speed transceiver and `10` low speed, and this board reports the
-opposite of that: asking for full speed gets a host that sees low speed, and
-asking for low speed gets a host that sees full speed. Four things are true
-at once and one of them must be wrong, which is why this is written down
-rather than fixed:
+The instrument for all of this is one idea: the gateware **decides whether to
+attach** from a value it has read out of the transceiver, so a register's
+contents reach a host as one bit of `dmesg`. A design that attaches read what
+it was looking for; one that stays silent did not, and silence is not an
+accident — it is `TermSelect` never written, so the transceiver never presents
+a pull-up and the host's log stays empty. Both halves were simulated first
+(`tests/ip_library.rs`'s transceiver model, which reports `writes 0` and
+Function Control untouched on the silent path), and both halves were then
+confirmed against the part.
 
-- the pin map is one-to-one from `ulpi_data[0]` to the transceiver's `DATA0`,
-  traced through `cynthion.kicad_pcb` pad by pad;
-- bits 0 and 1 of the bus are not exchanged, by the address experiment;
-- the register **contents** behave as though those two bits were exchanged;
-- and a command **byte** in the same two bits does not.
+| What was read, and when | What the gate was set to | What happened | What that says |
+|---|---|---|---|
+| Function Control (`04h`) **before any write** | `== 41h` | **attach** | the read path is exact, and the transceiver holds ULPI 1.1 Table 22's reset value |
+| the same | `== 42h` | **silence for 45 s** | the negative control: the gate discriminates, so the reading above is `41h` and not "anything at all" |
+| Vendor ID Low (`00h`) before any write | `== 24h` | **attach** | a second address, a read-only value **nobody wrote**, and the low byte of `0424h` — **Microchip (formerly SMSC)**. The register map is ULPI's, and this is the first time anything here has learnt what the part is from the part |
+| USB Interrupt Status (`13h`) before any write | `VbusValid` set | silence | — |
+| the same | `SessEnd` set | silence | — |
+| the same | `== 00h` | silence | so `13h` is none of those, five microseconds after the reset pin is released; the VBUS comparators are analogue and this is too early to conclude anything, which is why nothing is concluded from it |
+| Debug (`15h`), **once**, ~5 us after `TermSelect` | `LineState == 01` (J) | silence | — |
+| the same | `LineState == 10` (K) | silence | — |
+| the same | `LineState == 00` (SE0) | **attach** | five microseconds after the pull-up is connected the pair is still at **SE0**. A single read of LineState is a reading of a line on its way up |
+| Debug (`15h`), **re-read for ~5 ms** | `LineState == 01` (J) | **attach** | given time, the transceiver reports its **D+ high and D- low** — the pull-up is where ULPI says `XcvrSelect = 01, TermSelect = 1` puts it |
+| the same, with `XcvrSelect = 10` | `LineState == 10` (K) | **attach**, and the host says **full speed** | in low-speed mode the transceiver reports its **D- high** — again where ULPI says |
 
-A command byte and the data byte after it are different cycles of the same
-write. So the reading this leaves is that **the data cycle of a register
-write is sampled wrongly where the command cycle is not**, which is a setup
-or hold problem at the transceiver rather than a wiring one — and the one
-thing this backend is known not to write is the attribute that governs it.
-Every ULPI pin of every bitstream Great Scott Gadgets ship for this board
-asks for `SLEWRATE=FAST`, and `configure_io` writes it for none. It is in
-"What remains", it was in "What remains" before any of this was measured, and
-it is now the first thing to try.
+**So the first hypothesis is dead, and so is the reading that motivated it.**
+Bits 0 and 1 of the data byte are not exchanged, the byte is not bit-reversed
+and it is not off by a bit position: a read of Function Control *before
+anything was written* came back as `41h`, whose bits 0 and 1 differ, and the
+control set to `42h` — that same byte with those two bits swapped — produced
+nothing for forty-five seconds. The command cycle and the data cycle are both
+exact, in both directions, and so is the address field. Whatever is wrong,
+**the eight-bit bus is not it**.
 
-The other reading, and it is not excluded, is that the transceiver's
-Function Control does not lay `XcvrSelect` out the way ULPI's Table 21 does.
-Nothing here has read that part's datasheet; the ULPI core was written from
-the specification alone and says so.
+#### The two ends name opposite wires
 
-**A transceiver's registers outlive the FPGA's configuration, and that has
-to be undone.** `ulpi_rst_n` is a pin the design drives, so loading a design
-that holds it **high** — `bidir_bus.v` does, because an unclocked transceiver
-never lets go of the bus — leaves whatever the last design wrote still
-written, `TermSelect` included. A host then goes on seeing a device that
-cannot answer, and retries the port every few seconds indefinitely. The cure
-is one bitstream: hold `J13` **low** for a moment, which resets the whole part
-and puts Function Control back to its `41h` default with no pull-up, and then
-load what was wanted. That is what was done before leaving `bidir_bus.bit` in
-the part, and the host has been silent since.
+Put the last two rows of that table beside what the host says, and there is
+nothing left to interpret:
 
-**None of those variants is in the repository.** Each was one patched copy of
-`usb_ulpi_link.v` or of the top level, built, loaded into the volatile
-configuration memory, and thrown away; what is committed is the design and
-what was measured. The instrument is worth keeping in mind though, because it
-is what made any of this possible without root on the host: once a host has
-given up on a port (`unable to enumerate USB device`) it will not try again,
-and `usb7-port5/disable` needs privileges this had none of. A variant that
-releases the core's reset from a counter bit **detaches and re-attaches every
-2.24 s**, which forces the host to keep trying — and, incidentally, is what
-proved which of this machine's ports the AUX cable is in.
+| Function Control | `XcvrSelect` | where ULPI puts the 1.5 kOhm pull-up | what the **transceiver** reports | what the **host** reports | so the host's high line is |
+|---|---|---|---|---|---|
+| `45h` | `01` full speed | D+ | LineState `01` — its D+ | **low speed** | its D- |
+| `46h` | `10` low speed | D- | LineState `10` — its D- | **full speed** | its D+ |
+| `44h` | `00` HS transceiver, FS termination | D+ | — | **low speed** | its D- |
+| `47h` | `11` FS transceiver for LS packets | (nothing, on this part) | — | **no attach at all** | — |
+
+Every row: the wire the transceiver pulls up and sees go high is the wire the
+host calls the *other* one. `44h` is worth its own sentence, because bits 0
+and 1 of it are both zero — no confusion in those two bits can touch it — and
+"HS transceiver with FS termination" is the one state a high-speed-capable
+device is required to sit in with the pull-up on **D+**. The host called it
+low speed.
+
+**D+ and D- are exchanged somewhere between the transceiver's data pins and
+the host.** That is the finding. It is not a register value, because all four
+were tried; it is not the bus, because the bus reads back exactly; and it is
+not an edge rate, because no edge rate decides which wire a resistor is tied
+to.
+
+#### Why no register value can rescue it, and what would
+
+USB is differential. With the pair exchanged, every J on the wire is a K at
+the other end, so the SYNC field, the NRZI and every bit after them invert.
+The two polarities the transceiver can be put in do not help either, and the
+reason is worth writing out because it looks at first as though one of them
+should:
+
+- `XcvrSelect = 01`: the transceiver signals at 12 Mbit/s and its idle J is
+  its D+ high, which is the host's D- high, which is a **low-speed** J. The
+  polarities actually agree — and the host therefore talks at **1.5** Mbit/s
+  to a transceiver running at 12.
+- `XcvrSelect = 10`: the transceiver signals at 1.5 Mbit/s and its idle J is
+  its D- high, which is the host's D+ high, a **full-speed** J. The
+  polarities agree again — and the host talks at **12** Mbit/s to a
+  transceiver running at 1.5.
+
+In both directions the polarity is fine and the **rate** is wrong, and
+nothing in Function Control sets one without the other. `XcvrSelect = 11`
+would be the combination that does, and this part connects no pull-up for it
+at all: `47h` produced no attach.
+
+So what is left is physical, and it is a minute with the board rather than a
+day with the compiler:
+
+1. **Turn the AUX plug over**, which costs one second and is the cheapest
+   thing that could possibly explain this. A Type-C receptacle has **two**
+   D+/D- pairs, `Dp1`/`Dn1` and `Dp2`/`Dn2`, and a plug uses whichever of them
+   its orientation puts it against; a board therefore has to wire both to the
+   transceiver's one pair, and a board that wires the second one the wrong way
+   round is crossed in exactly one of the two orientations and fine in the
+   other. That is the shape of what was measured. **This is a guess about a
+   board nothing here has read the schematic of** — LOW, in this file's own
+   scale — and it is first on the list only because it is free.
+2. **Try another cable**, and another port on the host.
+3. If neither changes it, the exchange is on the board or in whatever the AUX
+   pair passes through, and the next step is a different transceiver — the
+   `TARGET` port's — rather than a different bitstream.
+
+Any of those is decidable by exactly the software this used: load
+`testdata/fpga/cynthion/usb_ulpi_device.v` and read `dmesg`. **`full-speed`
+in that line instead of `low-speed` is the whole test**, and `lsusb -d
+1209:0001 -v` is the answer.
+
+#### What the earlier account had wrong
+
+Two claims in the version of this section written before these measurements
+should be read with what replaced them:
+
+- "**the data cycle of a register write is sampled wrongly where the command
+  cycle is not**" — no. Both cycles are exact. The evidence for it was that
+  `XcvrSelect` behaved as though its two bits were exchanged; the register was
+  never read back on hardware from a state nobody had written, which is what
+  would have settled it, and when it was, it read `41h`.
+- "**`SLEWRATE=FAST` is now the first thing to try**" — it is **demoted**, and
+  this is the reason: the eight-bit bus reads back byte-exact in both
+  directions at 60 MHz, so its edges are good enough, and no edge rate can
+  change which of two wires a 1.5 kOhm resistor is connected to. It remains
+  the one attribute of the platform file's ULPI resource this backend does not
+  write, and that is still a gap — see "What remains" — but it is a gap and no
+  longer a suspect.
+
+One earlier experiment is also contradicted and should not be relied on: the
+row that reported "command address `05h` instead of `04h` → attach" was used
+to rule out an exchange of bits 0 and 1 of the bus. The pre-write readback
+rules that out far better, and the `05h` variant is gone, so what it actually
+did cannot be checked. **The pre-write readback is the one to cite.**
+
+#### Two defects this found on the way
+
+Neither is why it fails to enumerate; both are real and both are fixed.
+
+- **The programmer refused bitstreams according to the first byte of their
+  compression dictionary.** `src/program/lattice.rs`'s header walk skipped
+  `LSC_INIT_ADDRESS` (`0x46`) as though it carried a four-byte word. It
+  carries three reserved bytes and nothing else, so the walk landed four bytes
+  into `LSC_WRITE_COMP_DIC`'s operand — the eight-byte dictionary — and read a
+  dictionary byte as an opcode. `0x22` there happened to put it back on the
+  payload command, which is why every bitstream this project had ever loaded
+  worked; anything else sent it into the frames, where the first stray `0xe2`
+  became a nonsense IDCODE and the part was refused as the wrong device. Two
+  designs differing only in a Verilog parameter behaved differently, which is
+  how it was found. All 256 first bytes are now a test.
+- **The ULPI core believed one read of LineState, and the model could not
+  produce the answer that makes that wrong.** Measured above: five
+  microseconds after `TermSelect`, Debug reads `00h`; milliseconds later it
+  reads `01h`. The core took the first answer, so `line_state` was SE0 with
+  `phy_ready` high — `line_idle` false, and `se0_cnt` counting towards a
+  **bus reset that nothing would end**, since a transceiver reports LineState
+  only when it *changes*. The core now re-reads while it says SE0, and a bus
+  reset now requires the pair to have been seen somewhere other than SE0.
+  What the model had wrong is in `ip/usb_device_ulpi/README.md` §11.
+
+#### Putting a board back to a quiet state
+
+`testdata/fpga/cynthion/quiesce.{v,rcf}` is now committed, because this is
+the third time it has been needed. **A transceiver's registers outlive the
+FPGA's configuration**: reconfiguring away from a design that set
+`TermSelect` leaves the pull-up connected, and the host goes on seeing a
+device that cannot answer and retrying the port every few seconds
+indefinitely. `quiesce` holds `J13` — the transceiver's own reset, active low
+at the ball — at zero, which puts Function Control back to `41h`, and lights
+**LED 5 alone**, the end of the row nearest the `USER` button and deliberately
+the opposite end from every other design here. It leaves the eight data balls
+and `stp` out of the design entirely; `stp` because ULPI 1.1 §3.12 gives a
+transceiver a weak pull-up on it and requires it to stop interpreting `data`
+while it is unexpectedly high, so a pad that drives nothing leaves `stp` in
+its protective state. Seventy-seven configuration bits, seven pads, nothing
+clocked, and all seventy-seven decode.
+
+The loop every experiment above used is: load `quiesce`, which makes the host
+see a disconnect and re-arm the port, then load the experiment. Without the
+disconnect a host that has printed `unable to enumerate USB device` will not
+look again.
 
 ### What this settles, and what it does not
 
@@ -452,11 +580,26 @@ eight-bit bus turned around: a value the transceiver drove came back through
 the same eight pads and was checked against what had gone out, before
 anything a host could see happened.
 
-It does not settle enumeration. `lsusb` does not show `1209:0001`, and the
-table above is what is known about why. It settles nothing about
-`SLEWRATE`, which is now the leading suspect rather than a loose end, and
-nothing about the transceiver's own register layout, which nothing here has
-read.
+It settles that the eight-bit bus is **byte-exact in both directions**, which
+the turnaround alone did not: a register nobody had written was read off the
+part and came back as the value the specification gives it, `41h`, and the
+same gate set to that byte with two bits exchanged produced nothing at all. It
+settles that the transceiver is a **Microchip** part, read out of its own
+Vendor ID register rather than off a platform file, and that its register map
+and its `XcvrSelect` and `TermSelect` are ULPI 1.1's as
+`ip/usb_device_ulpi/README.md` reads them — the transceiver's own LineState
+says the pull-up lands on the wire ULPI names, in both full-speed and
+low-speed mode.
+
+It does not settle enumeration, and it now says why: **the transceiver and the
+host name opposite wires**, so D+ and D- are exchanged between them, and no
+register value and no attribute of a pad can undo that. "Where it stops, and
+it is not the bus" has the measurements and the three physical things to try.
+
+It settles nothing about `SLEWRATE`, which is no longer a suspect but is still
+unwritten, and nothing about VBUS: the one reading taken of the transceiver's
+VBUS status was five microseconds after its reset pin was released, which is
+too early for an analogue comparator to be believed.
 
 
 ## A bidirectional pad has been built, and loaded into a part
@@ -942,8 +1085,10 @@ the reference asks for and this writes for none. Both are in "What remains".
 
 > Both of those were settled the next day, and the milestone at the top of
 > this file is where: eight bidirectional pads on the **right** edge have
-> been loaded into the part, and `SLEWRATE` has gone from a loose end to the
-> leading suspect for why the USB device behind them does not enumerate.
+> been loaded into the part. `SLEWRATE` was the leading suspect for why the
+> USB device behind them does not enumerate for about a day, and is a loose
+> end again — the bus reads back byte-exact at 60 MHz and the fault is a
+> crossed pair on the far side of the transceiver.
 
 ## A clocked design has been built, and loaded into a part
 
@@ -2248,8 +2393,8 @@ borrows now. Every backend gets it.
 | Block RAM | `Ecp5Stream` reads and writes the initialisation blocks — the reference files' 44 blocks round trip — and nothing generates one. The `MIB_EBR*` tiles' wires and pips are in the graph |
 | Distributed RAM | `SLICEA.MODE = DPRAM`, `WREMUX`, `CLK1.CLKMUX` and the `WAD`/`WDO` wires, none of which is declared |
 | An IO standard other than LVCMOS33 | the bits are in the database and the code takes the standard from the constraints; no other standard has been on a part |
-| A USB device a host **enumerates** | `SLEWRATE=FAST`, most likely, and it is the row below this one. `testdata/fpga/cynthion/usb_ulpi_device.v` builds, decodes with nothing left over, loads, and is **seen to attach** by a host on the AUX port — the transceiver is reset, configured over the eight-bit bus and read back through the same eight pads before anything a host can see happens. It is then detected as **low speed** where a full-speed peripheral was asked for, and cannot answer. "Where it stops, and what was ruled out" at the top of this file has the seven experiments and the one field it comes down to |
-| `SLEWRATE`, `DRIVE`, `OPENDRAIN`, `CLAMP` or `TERMINATION` on a pad | each is a `.config_enum` of the pad tile, and each is one `ecppack` writes **only when an attribute asks** — so not writing them matches nextpnr exactly for a design that does not ask. `set_io -slew` and `-drive` are parsed and reach the cell, and `configure_io` writes neither, which makes the option a silent no-op in the bitstream. **`SLEWRATE=FAST` is now the first thing to write, not merely the first that will be wanted**: every ULPI pin of all three reference bitstreams asks for it, and the USB device on the AUX port behaves as though the data byte of a register write were sampled wrongly where the command byte before it is not, which is what an edge rate on a 60 MHz bus decides. The row above and "Where it stops, and what was ruled out" are the measurement |
+| A USB device a host **enumerates** | **nothing in software, as far as fourteen experiments on the part can tell.** `testdata/fpga/cynthion/usb_ulpi_device.v` builds, decodes with nothing left over, loads, and is **seen to attach** by a host on the AUX port; the eight-bit bus is byte-exact in both directions, proved by reading Function Control's `41h` and the transceiver's Vendor ID off the part before writing anything; and the transceiver's own LineState says the 1.5 kOhm pull-up lands on the wire ULPI names. The host names the **other** wire, in both full-speed and low-speed mode, so **D+ and D- are exchanged between the transceiver and the host** and nothing a bitstream can contain fixes a crossed differential pair. "Where it stops, and it is not the bus" at the top of this file has every measurement and the three physical things to try, the first of which is turning the AUX plug over |
+| `SLEWRATE`, `DRIVE`, `OPENDRAIN`, `CLAMP` or `TERMINATION` on a pad | each is a `.config_enum` of the pad tile, and each is one `ecppack` writes **only when an attribute asks** — so not writing them matches nextpnr exactly for a design that does not ask. `set_io -slew` and `-drive` are parsed and reach the cell, and `configure_io` writes neither, which makes the option a silent no-op in the bitstream, and that is what should be closed. `SLEWRATE=FAST` was the leading suspect for the USB device and is **demoted**: the eight-bit ULPI bus reads back byte-exact in both directions at 60 MHz, so its edges are good enough, and no edge rate decides which of two wires a 1.5 kOhm resistor is tied to. Every ULPI pin of all three reference bitstreams still asks for it, so it is still wanted; it is no longer evidence about anything. "Where it stops, and it is not the bus" is the measurement |
 | A bidirectional pad with a **registered** tristate | `PIO<s>.TRIMUX_TSREG = IOLTO` and the `IOLOGIC` tristate register, none of which is declared. `fpga::primitives` declines to absorb a tri-state driver on a DDR port rather than moving the enable ahead of the register |
 | An ECP5 over an FTDI cable | nothing, in principle: the configuration plans are transport-neutral and `jtag::Scan` encodes them for MPSSE. It is refused because that pairing has never been run |
 

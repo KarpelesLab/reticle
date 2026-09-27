@@ -13,9 +13,14 @@ against it, and it is what `rtl/usb_ulpi_link.v` was written from. It is
 laid out the way [`docs/apollo-protocol.md`](../../docs/apollo-protocol.md)
 is, because the two kinds of fact in it are very different: some are read
 out of a published specification, and some are a reading of it that no
-device has confirmed — **and nothing here has been confirmed by a
-device**, because nothing here has run on a board. §11 says exactly what
-simulation established and what it did not.
+device has confirmed. **Four of them now have been**: a Microchip
+transceiver on a Great Scott Gadgets Cynthion has been made to say, over a
+real eight-bit bus, that Function Control's reset value is `41h`, that its
+Vendor ID is `0424h` at the address Table 19 gives, that `XcvrSelect = 01`
+with `TermSelect = 1` puts the 1.5 kOhm pull-up on **D+**, and that
+LineState's bit 0 is D+. §11 says what that took, what it left unsettled,
+and the one place where this document, the block and the model were wrong
+together.
 
 Nothing was transcribed from anybody's implementation. The specification
 is a published document and the encodings below are read out of it; the
@@ -280,15 +285,20 @@ If either is aborted, the Link retries when the bus is idle. HIGH,
 
 | Address | Register | Reset | What matters here |
 |---------|----------|-------|-------------------|
-| `04h` | Function Control (write; `05h` sets bits, `06h` clears them) | `41h` | XcvrSelect `1:0`, TermSelect `2`, OpMode `4:3`, Reset `5`, SuspendM `6`. |
+| `00h`, `01h` | Vendor ID Low, High (read-only) | the part's | Not used by this block. **Read on a board to find out what the part is**, which is the one use for them: `24h` and `0424h`, Microchip. |
+| `04h` | Function Control (write; `05h` sets bits, `06h` clears them) | `41h` | XcvrSelect `1:0`, TermSelect `2`, OpMode `4:3`, Reset `5`, SuspendM `6`. The reset value is **measured**, not only quoted: read off a part before anything was written to it. |
 | `0Ah` | OTG Control (write; `0Bh` / `0Ch`) | `06h` | IdPullup `0`, DpPulldown `1`, DmPulldown `2`, and the VBUS controls above them. |
-| `15h` | Debug (read-only) | — | Bits `1:0` are the current LineState. |
+| `15h` | Debug (read-only) | — | Bits `1:0` are the current LineState. **Not settled the instant `TermSelect` is written**: the pull-up has to charge the pair, and on a real part this reads SE0 for milliseconds first. §8 and `usb_ulpi_link`'s `LINE_TRIES`. |
 | `2Fh` | not a register: the escape to the 8-bit extended address space. | — | Unused here. |
 
 > *Provenance*: Table 19, Table 22, Table 24 and Table 30, §4.1 to §4.2.9.
 > HIGH, reset values included.
 
-**A full-speed peripheral wants `04h` = `45h` and `0Ah` = `00h`.**
+**A full-speed peripheral wants `04h` = `45h` and `0Ah` = `00h`.** Both of
+the next two bullets have now been checked against a part rather than only
+quoted, by reading the transceiver's own LineState back after the write: with
+`45h` it reports its D+ high, and with `XcvrSelect = 10` instead it reports
+its D- high.
 
 - XcvrSelect `01` selects the full-speed transceiver, which is already
   the reset value (§4.2.2).
@@ -332,6 +342,24 @@ it writes Function Control again afterwards and then **reads it back**,
 and only reports `phy_ready` when the readback is what it wrote. A
 transceiver that behaves otherwise is written to again rather than
 believed.
+
+**And then it reads the Debug register until LineState is not SE0.** That
+sentence used to have no "until" in it, and the missing word cost a device
+that could never answer. The pull-up this block has just connected has to
+charge the pair against a host's two 15 kOhm pull-downs and the capacitance
+of a cable: measured on a Microchip transceiver, five microseconds after the
+write that sets `TermSelect` the Debug register reads `00h`, and a few
+milliseconds later it reads `01h`. A Link that takes the first answer starts
+with `line_state` at SE0 and `phy_ready` high — so `line_idle` never comes
+true, and the SE0 counter of §10 runs up to a **bus reset nothing can end**,
+since a transceiver reports LineState only when it *changes* and the change
+has already been missed. The retries are bounded by `LINE_TRIES`, because a
+socket with nothing in it stays at SE0 for ever and `phy_ready` still has to
+come up; what keeps *that* from being read as a reset is the other half of
+the fix, which is that SE0 counts as a reset only once the pair has been seen
+somewhere else. MEDIUM for the charging time, which is a property of a board
+and a cable rather than of ULPI; HIGH that a single sample of it settles
+nothing.
 
 There is also a hardware reset pin on the transceivers this was written
 for, outside ULPI, and this block holds it for `RESET_CYCLES` first. Both
@@ -448,32 +476,79 @@ Choices where the specification allowed either:
 
 ## 11. What has been established, and what has not
 
-> **Updated 2026-09-27: it has been near a board, and a host has seen it.**
+> **Updated 2026-09-27: it has run on a board, a host has seen it, and this
+> document's reading of the specification has been checked against silicon.**
 > `testdata/fpga/cynthion/usb_ulpi_device.v` puts this block behind the
 > auxiliary transceiver of a Great Scott Gadgets Cynthion r1.4 and was loaded
-> into its ECP5. The host on the other end of the AUX cable **sees a device
-> attach**, and sees it attach and detach on command. Since the 1.5 kOhm
-> pull-up that makes a host notice a device is a bit of the transceiver's
-> Function Control register and not a pin the FPGA can drive, that is a
-> register write crossing the eight-bit bus, witnessed from the far side of a
-> USB cable. A variant that leaves `TermSelect` clear until **after** the
-> readback of §8 has matched also attaches, so the read direction works too.
+> into its ECP5. What the part said, through twelve bitstreams each of which
+> turned one register value into one line of a host's kernel log:
 >
-> **It does not enumerate.** The host detects it as **low speed** where §7's
-> `XcvrSelect = 01` asks for full speed, and then talks at 1.5 Mbit/s, which
-> this block cannot answer. Writing `XcvrSelect = 10` instead makes the host
-> report full speed — the opposite of ULPI 1.1 Table 21 — while a command
-> *byte* differing in the same two bits behaves correctly, which points at
-> the data cycle of a register write being sampled wrongly rather than at the
-> wiring. `docs/fpga-trellis.md`'s "Where it stops, and what was ruled out"
-> has all seven experiments. The leading suspect is `SLEWRATE=FAST`, which
-> every ULPI pin of the board's own bitstreams asks for and Reticle's ECP5
-> backend writes for none.
+> - **The bus is byte-exact in both directions, command cycle and data
+>   cycle.** Function Control was read **before anything was written** and
+>   came back `41h` — §7's table's reset value, from Table 22, a byte nobody
+>   here had put there. A control build looking for `42h`, the same byte with
+>   bits 0 and 1 exchanged, produced nothing at all for forty-five seconds.
+>   So no permutation of the eight lines, no bit reversal and no off-by-one
+>   bit position.
+> - **The transceiver is a Microchip part**, read out of Vendor ID Low
+>   (`00h` = `24h`, the low byte of `0424h`) rather than off a platform file.
+>   §7's register map is that part's register map.
+> - **`XcvrSelect` and `TermSelect` do what §7 says.** With `04h` = `45h` the
+>   transceiver's own Debug register reports LineState `01` — its D+ high, its
+>   D- low — which is the 1.5 kOhm pull-up on **D+**, exactly where §3.8.5.3.2
+>   is quoted as putting it. With `XcvrSelect = 10` it reports LineState `10`,
+>   the pull-up on D-. Table 7's "bit 0 is D+" and Table 21's `01` = full
+>   speed are both confirmed by the part.
 >
-> So the sentence below — that where this document is wrong, the block and
-> the model are wrong together and the tests still pass — is no longer a
-> worry about the future. It is the live question, and the paragraph above is
-> the first evidence about it.
+> **It still does not enumerate, and the reason is outside this block.** At
+> the same moment the transceiver reports its D+ high, the host at the other
+> end of the cable reports a **low-speed** device — which is its D- high — and
+> when the transceiver is put in low-speed mode and reports its D- high, the
+> host reports **full speed**. The two ends name opposite wires, in both
+> directions: **D+ and D- are exchanged between the transceiver's data pins
+> and the host.** USB is differential, so that inverts every symbol including
+> the SYNC field, and no value of Function Control can undo it — the two
+> polarities the transceiver offers each come with their own bit rate, and in
+> both of them the polarity agrees and the rate does not.
+> `docs/fpga-trellis.md`'s "Where it stops, and it is not the bus" has every
+> measurement and what is left to try, which is a cable and a plug rather than
+> a bitstream.
+>
+> **What this block had wrong, and what the model had wrong.** One defect, and
+> it is exactly the shape §11 warned about — the document, the block and the
+> model agreeing on something no device had been asked:
+>
+> - The start-up read the Debug register **once** and believed it. On the part,
+>   five microseconds after the write that sets `TermSelect` the pair is still
+>   at **SE0**, because a 1.5 kOhm pull-up has to charge it against a host's
+>   two 15 kOhm pull-downs and a cable; milliseconds later it reads `01`. So
+>   `line_state` was SE0 with `phy_ready` high, `line_idle` was false, and
+>   `se0_cnt` counted up to a **bus reset with nothing able to end it** —
+>   a transceiver sends a receive command only when LineState *changes*, and
+>   the change had already happened while the Link was not listening. The
+>   block now re-reads while it says SE0, `LINE_TRIES` times, and a bus reset
+>   now requires the pair to have been seen somewhere other than SE0 first.
+> - **The model had an undriven pair sitting at J**, which is backwards: a
+>   full-speed bus is at J *because a device pulls D+ up*, and before that
+>   pull-up is connected and has charged there is nothing on the pair but SE0.
+>   Its register file already started at ULPI's reset values; its *line* did
+>   not. So the model could not produce the one answer that made the single
+>   read wrong, and the harness made it worse by driving the pair to J while
+>   the device was still starting up. Both are fixed
+>   (`ULPI_PULLUP_SETTLE` in `tests/ip_library.rs`), and with them the old
+>   block fails nine of these ten tests.
+> - Fixing that exposed a second model defect worth having: it reported a
+>   receive command only from an idle bus and only by comparing the status
+>   with the last one sent, so a status that changed and changed back while it
+>   was busy with a register access was **never reported at all**. ULPI 1.1
+>   §3.8.1.3 makes a receive command outrank register access and says a queued
+>   one carries the current values, so what is sticky is the *fact* that the
+>   Link is owed one. It is sticky now.
+>
+> So the sentence below — that where this document is wrong, the block and the
+> model are wrong together and the tests still pass — happened exactly once,
+> and this is it. The rest of the document's reading of ULPI now has a device
+> behind it.
 
 **Nothing here has been near a board.** No Cynthion, no transceiver, no
 host. What exists is a simulation, and this is what it establishes:

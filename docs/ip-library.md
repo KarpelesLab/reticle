@@ -472,7 +472,14 @@ is the part that matters:
   zero-length data packet's CRC. The start-up sequence is asserted byte
   for byte — Function Control `65h`, OTG Control `00h`, Function Control
   `45h`, the readback, the Debug register for LineState — and the reset
-  pin is checked to have been held.
+  pin is checked to have been held. **The pair the model presents starts at
+  SE0, not J**, because a full-speed bus is at J only because a device pulls
+  D+ up and that pull-up has to charge the pair: so the start-up's LineState
+  read is asserted to have been *repeated* while it said SE0 and answered
+  once, which is what a Microchip transceiver on a real board does and what a
+  model with the pair already at J could not show. A second test gives that
+  model no pull-up at all, so its pair never leaves SE0, and asserts that the
+  device still reports `phy_ready` and never calls it a bus reset.
 
   Then the parts ULPI adds, each with a test: `0xAA` driven into **every
   turnaround cycle** of every one of these tests, which the Link must
@@ -766,10 +773,10 @@ exactly what this table is for.
 | `usb_device_fs_pll` | `usb_device_fs_pll` | VID=16'h1209, PID=16'h0001 | LUT6 | 63 x dff, 460 x lut | 8 |
 | `usb_device_fs_pll` | `usb_device_fs_pll` | VID=16'h1209, PID=16'h0001 | iCE40 HX1K | 24 x SB_CARRY, 190 x SB_DFFER, 39 x SB_DFFES, 10 x SB_DFFR, 3 x SB_DFFS, 1 x SB_GB, 17 x SB_IO, 526 x SB_LUT4, 1 x SB_PLL40_CORE | 8 |
 | `usb_device_fs_pll` | `usb_device_fs_pll` | VID=16'h1209, PID=16'h0001 | ECP5 45F | 1 x DCCA, 1 x EHXPLLL, 540 x LUT4, 242 x TRELLIS_FF, 17 x TRELLIS_IO | 9 |
-| `usb_device_ulpi` | `usb_device_ulpi` | VID=16'h1209, PID=16'h0001 | LUT4 | 54 x dff, 574 x lut | 9 |
-| `usb_device_ulpi` | `usb_device_ulpi` | VID=16'h1209, PID=16'h0001 | LUT6 | 54 x dff, 506 x lut | 10 |
-| `usb_device_ulpi` | `usb_device_ulpi` | VID=16'h1209, PID=16'h0001 | iCE40 HX1K | 39 x SB_CARRY, 187 x SB_DFFER, 37 x SB_DFFES, 5 x SB_DFFR, 1 x SB_GB, 33 x SB_IO, 566 x SB_LUT4 | 9 |
-| `usb_device_ulpi` | `usb_device_ulpi` | VID=16'h1209, PID=16'h0001 | ECP5 45F | 1 x DCCA, 574 x LUT4, 229 x TRELLIS_FF, 33 x TRELLIS_IO | 9 |
+| `usb_device_ulpi` | `usb_device_ulpi` | VID=16'h1209, PID=16'h0001 | LUT4 | 56 x dff, 611 x lut | 9 |
+| `usb_device_ulpi` | `usb_device_ulpi` | VID=16'h1209, PID=16'h0001 | LUT6 | 56 x dff, 550 x lut | 10 |
+| `usb_device_ulpi` | `usb_device_ulpi` | VID=16'h1209, PID=16'h0001 | iCE40 HX1K | 54 x SB_CARRY, 204 x SB_DFFER, 37 x SB_DFFES, 5 x SB_DFFR, 1 x SB_GB, 33 x SB_IO, 594 x SB_LUT4 | 9 |
+| `usb_device_ulpi` | `usb_device_ulpi` | VID=16'h1209, PID=16'h0001 | ECP5 45F | 1 x DCCA, 611 x LUT4, 246 x TRELLIS_FF, 33 x TRELLIS_IO | 9 |
 <!-- end footprints -->
 
 ### Seven things writing these blocks found
