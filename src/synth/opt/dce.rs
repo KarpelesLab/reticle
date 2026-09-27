@@ -20,7 +20,7 @@ use crate::ir::walk::{lvalue_exprs, stmt_exprs, walk_block};
 use crate::ir::{
     CellKind, ExprId, ExprKind, Lvalue, MemoryId, Module, NetId, PortDir, expr::operands,
 };
-use crate::synth::util::is_kept;
+use crate::synth::keep::is_kept;
 use crate::synth::{Pass, PassStats};
 
 /// The dead-code-elimination pass; see the module docs.

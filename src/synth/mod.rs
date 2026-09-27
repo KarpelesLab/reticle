@@ -76,6 +76,7 @@
 //! | `S0031` | The post-synthesis equivalence check found a difference      |
 //! | `S0032` | The post-synthesis equivalence check is inconclusive         |
 //! | `S0033` | `verify_equivalence` without the `formal` feature            |
+//! | `S0034` | A `keep` attribute that cannot be honoured where it was written, or a spelling that reads like one and is not honoured (see [`keep`]) |
 
 use std::fmt;
 use std::rc::Rc;
@@ -88,6 +89,7 @@ pub mod arith;
 pub mod cellify;
 pub mod eval;
 pub mod fsm;
+pub mod keep;
 pub mod opt;
 pub mod proc;
 pub mod report;
@@ -349,6 +351,12 @@ pub fn run(design: &mut Design, options: &SynthOptions, diags: &mut Diagnostics)
         diags.append(&mut problems);
         return stats;
     }
+
+    // Before lowering, while a `keep` on a process is still on a process:
+    // an attribute that cannot be honoured where it was written is worth a
+    // word, since the alternative is deleting what it asked to be kept in
+    // silence.
+    keep::audit(design, diags);
 
     let before = if options.verify_equivalence && cfg!(feature = "formal") {
         Some(design.clone())

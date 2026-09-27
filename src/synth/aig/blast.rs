@@ -340,7 +340,7 @@ impl<'m> Blaster<'m> {
             needed[port.net.index()] = true;
         }
         for (id, net) in m.nets.iter() {
-            if net.attrs.is_set("keep") {
+            if net.attrs.is_kept() {
                 needed[id.index()] = true;
             }
         }
@@ -413,7 +413,7 @@ impl<'m> Blaster<'m> {
                 | CellKind::Lut { .. }
                 | CellKind::Buf
         );
-        if !simple || cell.attrs.is_set("keep") {
+        if !simple || cell.attrs.is_kept() {
             return false;
         }
         let Some(y) = cell.output("y") else {

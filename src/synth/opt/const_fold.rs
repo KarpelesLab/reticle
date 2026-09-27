@@ -38,9 +38,10 @@ use crate::ir::{
 use crate::logic::Bit;
 use crate::source::Span;
 use crate::synth::eval::eval_closed;
+use crate::synth::keep::{cell_is_kept, is_kept};
 use crate::synth::opt::{expr_net_refs, rewrite_exprs, root_net_refs};
 use crate::synth::util::{
-    coerce, is_kept, is_port, mk, mk_binary, mk_const, mk_mux, mk_not, mk_slice, mk_unary,
+    coerce, is_port, mk, mk_binary, mk_const, mk_mux, mk_not, mk_slice, mk_unary,
 };
 use crate::synth::{Pass, PassStats};
 
@@ -685,7 +686,7 @@ enum CellFold {
 fn fold_cells(m: &mut Module) -> u64 {
     let mut decisions: Vec<(crate::ir::CellId, CellFold)> = Vec::new();
     for (id, cell) in m.cells.iter() {
-        if is_kept(&cell.attrs) || !cell.kind.is_combinational() {
+        if cell_is_kept(m, cell) || !cell.kind.is_combinational() {
             continue;
         }
         if let Some(fold) = cell_value(m, cell) {

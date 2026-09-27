@@ -1,0 +1,40 @@
+top keep_reg
+
+module keep_reg
+  net %clk u1 wire
+  net %en u1 wire
+  net %d u1 wire
+  net %y u1 wire
+  net %twin u1 wire
+  attr keep = 1
+  net %probe u1 reg
+  net %control u1 reg
+  attr dont_touch = 1
+  net %unread u1 reg
+  attr keep = 0
+  net %off u1 reg
+  attr keep = 1
+  net %twin_a u1 reg
+  attr keep = 1
+  net %twin_b u1 reg
+  attr keep = 1
+  net %folded u1 wire
+  port clk in %clk
+  port en in %en
+  port d in %d
+  port y out %y
+  port twin out %twin
+  assign %folded = and(1'd0, %d)
+  assign %y = xor(xor(%d, %probe), xor(%control, %folded))
+  assign %twin = xor(%twin_a, %twin_b)
+  process seq posedge %clk
+    %probe <= 1'd0
+    %control <= 1'd0
+    %unread <= %d
+    %off <= 1'd0
+    if %en
+      %twin_a <= %d
+      %twin_b <= %d
+    end
+  end
+end

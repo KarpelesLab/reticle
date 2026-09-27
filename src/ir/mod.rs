@@ -101,9 +101,7 @@ pub mod validate;
 pub mod walk;
 
 pub use arena::{Arena, Id};
-pub use attr::{
-    AttrValue, Attrs, KEEP_ATTRS, KEEP_LOOKALIKES, is_keep_attr, looks_like_keep,
-};
+pub use attr::{AttrValue, Attrs, KEEP_ATTRS, KEEP_LOOKALIKES, is_keep_attr, looks_like_keep};
 pub use cell::{Cell, CellId, CellKind, Reset};
 pub use design::{
     Assign, Design, Instance, InstanceId, Memory, MemoryId, Module, ModuleId, ModuleRef, Net,

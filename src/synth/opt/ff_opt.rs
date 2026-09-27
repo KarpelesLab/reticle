@@ -23,6 +23,12 @@
 //! - A register whose `q` nothing reads is removed.
 //! - Two registers with the same kind, inputs, attributes and initial
 //!   value are merged; the second's `q` becomes an alias assign.
+//!
+//! The last three are the destructive ones, and a register that
+//! [`crate::synth::keep`] calls kept — by its own attribute or by one on
+//! the net its `q` drives, which is where a `(* keep *)` on a Verilog `reg`
+//! lands — is exempt from all three. It is still canonicalised by the rules
+//! above it, since those leave the same flip-flop on the same net.
 
 use std::collections::HashMap;
 
@@ -31,8 +37,9 @@ use crate::ir::{
     Assign, AttrValue, Attrs, CellId, CellKind, Const, ExprId, ExprKind, Lvalue, Module, Name,
     NetId, Reset, UnaryOp,
 };
+use crate::synth::keep::cell_is_kept;
 use crate::synth::opt::{expr_net_refs, root_net_refs};
-use crate::synth::util::{is_kept, is_port, mk_and, mk_const, mk_net, mk_not};
+use crate::synth::util::{is_port, mk_and, mk_const, mk_net, mk_not};
 use crate::synth::{Pass, PassStats};
 
 /// The flip-flop optimisation pass; see the module docs.
@@ -49,17 +56,25 @@ impl Pass for FfOpt {
         let ids: Vec<CellId> = m
             .cells
             .iter()
-            .filter(|(_, c)| matches!(c.kind, CellKind::Dff { .. }) && !is_kept(&c.attrs))
+            .filter(|(_, c)| matches!(c.kind, CellKind::Dff { .. }))
             .map(|(id, _)| id)
             .collect();
         let mut constants: Vec<(CellId, Const)> = Vec::new();
         for id in ids {
+            // A kept register is still canonicalised: a constant enable is
+            // dropped and an enable or synchronous reset is lifted out of
+            // its `d` mux, which leaves the same flip-flop driving the same
+            // net. What it never does is stop being a flip-flop, so the one
+            // outcome it refuses is becoming a constant.
+            let kept = cell_is_kept(m, &m.cells[id]);
             loop {
                 match step(m, id, &mut stats) {
                     Step::Again => {}
                     Step::Done => break,
                     Step::Constant(v) => {
-                        constants.push((id, v));
+                        if !kept {
+                            constants.push((id, v));
+                        }
                         break;
                     }
                 }
@@ -300,13 +315,13 @@ fn remove_unused(m: &mut Module) -> u64 {
     let root_refs = root_net_refs(m);
     let mut doomed = Vec::new();
     for (id, cell) in m.cells.iter() {
-        if !matches!(cell.kind, CellKind::Dff { .. }) || is_kept(&cell.attrs) {
+        if !matches!(cell.kind, CellKind::Dff { .. }) || cell_is_kept(m, cell) {
             continue;
         }
         let Some(q) = cell.output("q") else {
             continue;
         };
-        if is_port(m, q) || is_kept(&m.nets[q].attrs) {
+        if is_port(m, q) {
             continue;
         }
         // The only root reference is this cell's own output.
@@ -330,7 +345,7 @@ fn merge_duplicates(m: &mut Module) -> u64 {
     let mut doomed = Vec::new();
     let mut aliases = Vec::new();
     for (id, cell) in m.cells.iter() {
-        if !matches!(cell.kind, CellKind::Dff { .. }) || is_kept(&cell.attrs) {
+        if !matches!(cell.kind, CellKind::Dff { .. }) || cell_is_kept(m, cell) {
             continue;
         }
         let Some(q) = cell.output("q") else {
@@ -533,5 +548,95 @@ mod tests {
         let stats = run(&FfOpt, &mut m);
         assert_eq!(stats.get("unused registers removed"), 1);
         assert!(m.cells.is_empty());
+    }
+
+    /// The defect this pass was caught by: a `keep` written on a Verilog
+    /// `reg` lands on the **net**, and reading only the cell's attributes
+    /// deleted the flip-flop anyway. None of the three destructive rules may
+    /// touch a register kept either way round, whichever vendor spelling
+    /// asked for it.
+    #[test]
+    fn a_kept_register_is_never_folded_removed_or_merged() {
+        for spelling in ["keep", "DONT_TOUCH", "mark_debug", "preserve"] {
+            for on_the_cell in [false, true] {
+                let mut b = ModuleBuilder::new("m", span());
+                let clk = b.input("clk", Type::bit());
+                let probe = b.output("probe", Type::bit());
+                let twin_a = b.output("twin_a", Type::bit());
+                let twin_b = b.output("twin_b", Type::bit());
+                let dead = b.add_net("dead", Type::bit());
+                let clkn = b.net(clk);
+                let zero = b.const_bit(false);
+                let cells = [
+                    dff(&mut b, "probe", clkn, zero, probe, None, None),
+                    dff(&mut b, "twin_a", clkn, zero, twin_a, None, None),
+                    dff(&mut b, "twin_b", clkn, zero, twin_b, None, None),
+                    dff(&mut b, "dead", clkn, zero, dead, None, None),
+                ];
+                for (i, net) in [probe, twin_a, twin_b, dead].into_iter().enumerate() {
+                    if on_the_cell {
+                        b.module_mut().cells[cells[i]].attrs.set(spelling, 1);
+                    } else {
+                        b.net_attr(net, spelling, 1);
+                    }
+                }
+                let mut m = b.finish();
+                let stats = run(&FfOpt, &mut m);
+                let what = format!("{spelling}, on the cell: {on_the_cell}");
+                assert_eq!(stats.get("constant registers"), 0, "{what}");
+                assert_eq!(stats.get("unused registers removed"), 0, "{what}");
+                assert_eq!(stats.get("registers merged"), 0, "{what}");
+                assert_eq!(m.cells.len(), 4, "{what}\n{}", m.to_text());
+            }
+        }
+    }
+
+    /// A `keep` that is switched off keeps nothing, and neither does one
+    /// spelled as a textual falsehood.
+    #[test]
+    fn a_keep_that_is_off_folds_as_usual() {
+        for value in [AttrValue::Int(0), AttrValue::String("false".into())] {
+            let mut b = ModuleBuilder::new("m", span());
+            let clk = b.input("clk", Type::bit());
+            let q = b.output("q", Type::bit());
+            let clkn = b.net(clk);
+            let zero = b.const_bit(false);
+            dff(&mut b, "f", clkn, zero, q, None, None);
+            b.net_attr(q, "keep", value.clone());
+            let mut m = b.finish();
+            let stats = run(&FfOpt, &mut m);
+            assert_eq!(stats.get("constant registers"), 1, "{value}");
+            assert!(m.cells.is_empty(), "{value}");
+        }
+    }
+
+    /// Keeping a register does not stop it reaching a fabric's enable pin:
+    /// lifting the mux out leaves the same flip-flop on the same net.
+    #[test]
+    fn a_kept_register_still_gives_up_its_enable_and_reset() {
+        let mut b = ModuleBuilder::new("m", span());
+        let clk = b.input("clk", Type::bit());
+        let rst = b.input("rst", Type::bit());
+        let en = b.input("en", Type::bit());
+        let d = b.input("d", Type::bits(4));
+        let q = b.output("q", Type::bits(4));
+        let (clkn, rstn, enn, dn, qn) = (b.net(clk), b.net(rst), b.net(en), b.net(d), b.net(q));
+        b.net_attr(q, "keep", 1);
+        let zero = b.const_u64(4, 0);
+        let inner = b.mux(enn, dn, qn);
+        let nrst = b.lnot(rstn);
+        let outer = b.mux(nrst, inner, zero);
+        dff(&mut b, "ff", clkn, outer, q, None, None);
+        let mut m = b.finish();
+        let stats = run(&FfOpt, &mut m);
+        assert_eq!(stats.get("sync resets extracted"), 1);
+        assert_eq!(stats.get("enables extracted"), 1);
+        assert!(
+            m.to_text().contains(
+                "cell ff dff pos en srst pos 4'd0 (clk=%clk, d=%d, en=%en, rst=%rst) -> (q=%q)"
+            ),
+            "{}",
+            m.to_text()
+        );
     }
 }

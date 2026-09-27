@@ -32,6 +32,12 @@
 //!   warning when no provider was given, an error when the provider lacks
 //!   the file or it does not parse), and the memory gets nothing from it.
 //!
+//! A `keep` on the process itself — `(* keep *) always @(posedge clk)`, a
+//! VHDL process with a `keep` attribute specification — travels onto every
+//! cell and assign the process produces, since the process it was written
+//! on does not survive its own lowering. See [`crate::synth::keep`] for
+//! what that then promises.
+//!
 //! Limits: one clock per process; `Type::Array` nets, waits, `forever`,
 //! non-constant loop bounds, and `break` / `continue` under a non-constant
 //! condition are reported with `S0010` and the process is left in place.
@@ -49,12 +55,13 @@ use crate::diag::{Diagnostic, Diagnostics};
 use crate::ir::memfile::FileProvider;
 use crate::ir::walk::{stmt_exprs, stmt_nets, walk_block};
 use crate::ir::{
-    AttrValue, BinaryOp, CellKind, Const, Edge, ExprId, ExprKind, Lvalue, Memory, Module, NetId,
-    NetKind, Polarity, Process, ProcessKind, Reset, UnaryOp, expr::operands,
+    AttrValue, Attrs, BinaryOp, CellId, CellKind, Const, Edge, ExprId, ExprKind, Lvalue, Memory,
+    Module, NetId, NetKind, Polarity, Process, ProcessKind, Reset, UnaryOp, expr::operands,
 };
 use crate::source::Span;
 use crate::synth::eval::eval_closed;
-use crate::synth::util::{add_cell, add_wire, is_kept, is_port, mk_bit, mk_net};
+use crate::synth::keep::is_kept;
+use crate::synth::util::{add_cell, add_wire, is_port, mk_bit, mk_net};
 use crate::synth::{Pass, PassStats, SynthOptions};
 
 use exec::{En, Exec, Failed, Flow, HOLD, MemWrite, Mode, SId};
@@ -131,6 +138,7 @@ impl Pass for ProcLower {
                 max_unroll: self.max_unroll,
                 files: self.files.as_deref(),
                 external: &external,
+                kept: is_kept(&process.attrs),
             };
             let ok = match &process.kind {
                 ProcessKind::Initial => ctx.lower_initial(process),
@@ -181,6 +189,9 @@ struct Ctx<'a> {
     files: Option<&'a dyn FileProvider>,
     /// True for nets read outside the process being lowered.
     external: &'a dyn Fn(NetId) -> bool,
+    /// True when the process carries a `keep`, which then has to move onto
+    /// the cells and assigns lowering leaves in its place.
+    kept: bool,
 }
 
 /// The plan for one register.
@@ -387,11 +398,12 @@ impl Ctx<'_> {
         let mut stats = std::mem::take(&mut exec.stats);
         drop(exec);
         for (net, d, at) in assigns {
+            let attrs = self.assign_attrs();
             self.m.assigns.push(crate::ir::Assign {
                 target: Lvalue::Net(net),
                 value: d,
                 delay: None,
-                attrs: crate::ir::Attrs::new(),
+                attrs,
                 span: at,
             });
             stats.bump("assigns", 1);
@@ -405,7 +417,7 @@ impl Ctx<'_> {
                     .with_note("add an `else` or a default assignment to make it combinational"),
             );
             let base = format!("{name}$latch");
-            add_cell(
+            let cell = add_cell(
                 self.m,
                 &base,
                 CellKind::Dlatch,
@@ -413,6 +425,7 @@ impl Ctx<'_> {
                 vec![("q", net)],
                 at,
             );
+            self.keep_cell(cell);
             stats.bump("latches", 1);
         }
         for w in mem_writes {
@@ -423,13 +436,31 @@ impl Ctx<'_> {
         Ok(())
     }
 
+    /// Moves the process's `keep` onto a cell it produced. The process
+    /// does not survive its own lowering, so the promise has to travel with
+    /// the logic that replaces it.
+    fn keep_cell(&mut self, cell: CellId) {
+        if self.kept {
+            self.m.cells[cell].attrs.set("keep", 1);
+        }
+    }
+
+    /// The attributes for an assign the process produced.
+    fn assign_attrs(&self) -> Attrs {
+        let mut attrs = Attrs::new();
+        if self.kept {
+            attrs.set("keep", 1);
+        }
+        attrs
+    }
+
     fn write_port(&mut self, w: &MemWrite, clk: Option<ExprId>) {
         let base = format!("{}$wr", self.m.memories[w.mem].name);
         let mut inputs = vec![("addr", w.addr), ("data", w.data), ("en", w.en)];
         if let Some(clk) = clk {
             inputs.push(("clk", clk));
         }
-        add_cell(
+        let cell = add_cell(
             self.m,
             &base,
             CellKind::MemWrPort {
@@ -440,6 +471,7 @@ impl Ctx<'_> {
             Vec::new(),
             w.span,
         );
+        self.keep_cell(cell);
     }
 
     fn lower_seq(
@@ -546,6 +578,8 @@ impl Ctx<'_> {
                 c.inputs.push((crate::ir::Name::new("en"), en));
                 c.outputs = vec![(crate::ir::Name::new("data"), plan.net)];
                 c.span = plan.span;
+                let cell = *cell;
+                self.keep_cell(cell);
                 stats.bump("registered memory reads", 1);
                 continue;
             }
@@ -575,7 +609,7 @@ impl Ctx<'_> {
                 );
             }
             let name = format!("{}$ff", self.m.nets[plan.net].name);
-            add_cell(
+            let cell = add_cell(
                 self.m,
                 &name,
                 CellKind::Dff {
@@ -587,6 +621,7 @@ impl Ctx<'_> {
                 vec![("q", plan.net)],
                 plan.span,
             );
+            self.keep_cell(cell);
             stats.bump("flip-flops", 1);
         }
         for w in mem_writes {

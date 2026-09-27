@@ -22,7 +22,8 @@ use crate::ir::{
     Assign, BinaryOp, CellKind, ExprId, ExprKind, Lvalue, MemoryId, Module, Name, NetId, Type,
     UnaryOp,
 };
-use crate::synth::util::{is_kept, mk_net};
+use crate::synth::keep::{cell_is_kept, is_kept};
+use crate::synth::util::mk_net;
 use crate::synth::{Pass, PassStats};
 
 /// The structural-hashing pass; see the module docs.
@@ -199,7 +200,7 @@ fn merge_cells(m: &mut Module) -> u64 {
     let mut doomed = Vec::new();
     let mut aliases: Vec<(crate::ir::NetId, crate::ir::NetId, crate::source::Span)> = Vec::new();
     for (id, cell) in m.cells.iter() {
-        if is_kept(&cell.attrs)
+        if cell_is_kept(m, cell)
             || matches!(
                 cell.kind,
                 CellKind::MemWrPort { .. } | CellKind::Blackbox(_) | CellKind::Dff { .. }

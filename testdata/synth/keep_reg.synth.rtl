@@ -1,0 +1,31 @@
+top keep_reg
+
+module keep_reg
+  net %clk u1 wire
+  net %en u1 wire
+  net %d u1 wire
+  net %y u1 wire
+  net %twin u1 wire
+  attr keep = 1
+  net %probe u1 wire
+  attr dont_touch = 1
+  net %unread u1 wire
+  attr keep = 1
+  net %twin_a u1 wire
+  attr keep = 1
+  net %twin_b u1 wire
+  attr keep = 1
+  net %folded u1 wire
+  port clk in %clk
+  port en in %en
+  port d in %d
+  port y out %y
+  port twin out %twin
+  assign %folded = 1'd0
+  assign %y = xor(xor(%d, %probe), %folded)
+  assign %twin = xor(%twin_a, %twin_b)
+  cell probe$ff dff pos (clk=%clk, d=1'd0) -> (q=%probe)
+  cell unread$ff dff pos (clk=%clk, d=%d) -> (q=%unread)
+  cell twin_a$ff dff pos en (clk=%clk, d=%d, en=%en) -> (q=%twin_a)
+  cell twin_b$ff dff pos en (clk=%clk, d=%d, en=%en) -> (q=%twin_b)
+end

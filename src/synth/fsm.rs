@@ -30,10 +30,10 @@ use crate::ir::{
     AttrValue, BinaryOp, CellId, CellKind, Const, ExprId, ExprKind, Module, Name, NetId, Type,
     UnaryOp, expr::operands,
 };
+use crate::synth::keep::{cell_is_kept, is_kept};
 use crate::synth::opt::root_net_refs;
 use crate::synth::util::{
-    add_cell, add_wire, is_kept, is_port, mk, mk_binary, mk_const, mk_mux, mk_net, mk_slice,
-    mk_unary,
+    add_cell, add_wire, is_port, mk, mk_binary, mk_const, mk_mux, mk_net, mk_slice, mk_unary,
 };
 use crate::synth::{FsmEncoding, Pass, PassStats};
 
@@ -190,7 +190,7 @@ fn analyse(m: &Module, cell: CellId, default: FsmEncoding) -> Option<Plan> {
                 leaves.remove(&id);
                 let pm = *drivers.get(n)?;
                 let pc = &m.cells[pm];
-                if !matches!(pc.kind, CellKind::Pmux) || is_kept(&pc.attrs) {
+                if !matches!(pc.kind, CellKind::Pmux) || cell_is_kept(m, pc) {
                     return None;
                 }
                 if root_net_refs(m)[n.index()] != 1 || is_port(m, *n) {

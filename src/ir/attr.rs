@@ -292,7 +292,10 @@ mod tests {
             assert!(!looks_like_keep(name), "{name}");
             let attrs: Attrs = [(name, 1)].into_iter().collect();
             assert!(attrs.is_kept(), "{name}");
-            assert_eq!(attrs.keep_attr().map(|(k, on)| (k.as_str(), on)), Some((name, true)));
+            assert_eq!(
+                attrs.keep_attr().map(|(k, on)| (k.as_str(), on)),
+                Some((name, true))
+            );
         }
     }
 

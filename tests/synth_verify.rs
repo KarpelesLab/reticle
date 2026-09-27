@@ -98,6 +98,7 @@ const EXPECTED: &[(&str, Verdict)] = &[
     // Registers without a reset value: sequential equivalence from reset
     // has no initial state to start from (`F0018`).
     ("dead_logic", Verdict::Inconclusive),
+    ("keep_reg", Verdict::Inconclusive),
     ("dup_logic", Verdict::Inconclusive),
     ("ram_regread", Verdict::Inconclusive),
     // A latch, which the bit-blaster does not model (`F0004`).

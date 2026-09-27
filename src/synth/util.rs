@@ -249,11 +249,6 @@ pub(crate) fn is_port(m: &Module, net: NetId) -> bool {
     m.ports.iter().any(|p| p.net == net)
 }
 
-/// True when the object must survive optimisation (`keep` attribute).
-pub(crate) fn is_kept(attrs: &Attrs) -> bool {
-    attrs.is_set("keep")
-}
-
 /// Renders a constant the way the `.rtl` text format does: decimal for
 /// two-state values up to 64 bits, hexadecimal above, binary when any bit
 /// is `x` or `z`.
@@ -320,7 +315,6 @@ mod tests {
         );
         assert_eq!(m.cells[c].name, "c");
         assert_eq!(fresh_cell_name(&m, "c"), Name::new("c_2"));
-        assert!(!is_kept(&m.cells[c].attrs));
         assert_eq!(const_text(&Const::from_u64(255, 8)), "8'd255");
         assert_eq!(const_text(&Const::from_i64(-1, 8)), "8'sd255");
         assert_eq!(const_text(&Const::x(2)), "2'bxx");
