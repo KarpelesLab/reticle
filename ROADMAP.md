@@ -724,7 +724,7 @@ and first-party IP should drop into a design as easily as a Rust crate.
       enumerates and a bulk endpoint pair with a byte interface, tested
       by a USB host model. Each block's header says what it does not
       do — no bursts on either memory controller, gigabit only for
-      RGMII, and eight-byte packets for USB. See `docs/ip-library.md`.
+      RGMII, and no isochronous endpoint for USB. See `docs/ip-library.md`.
 - [x] **A USB device for a board whose USB lines the FPGA cannot reach.**
       All three ports of a Cynthion go through their own ULPI
       transceiver, and the balls wired to a pair are input only, for
@@ -786,6 +786,27 @@ and first-party IP should drop into a design as easily as a Rust crate.
       and §5 is the kernel log and the whole `lsusb -v`. What is left is a
       **human interface device**, which the hook and the second endpoint
       have made a smaller job than it was.
+- [x] **Sixty-four bytes a packet, and the notification endpoint sends.**
+      The length both transmitters took was four bits, so every endpoint of
+      every USB block was eight bytes — an eighth of what a full-speed bulk
+      endpoint may have, and two bytes short of a CDC ACM SERIAL_STATE. The
+      field is **seven** bits now, which is what 0 to 64 needs and is read off
+      USB 2.0 §5.5.3, §5.7.3 and §5.8.3 rather than rounded up; the bulk
+      endpoints and endpoint 0 declare **64** and the notification endpoint
+      **16**. Both endpoint buffers became shift registers with a base
+      counter, because an array indexed by a register is a distributed RAM
+      this backend cannot place and a wide register written at a computed
+      offset is a construct this compiler refuses, and `usb_pkt_rx` grew a
+      payload byte stream so there is no second copy of a 64-byte packet.
+      `usb_cdc_acm` sends **SERIAL_STATE** (PSTN 1.2 §6.5.4) when the host
+      configures it and whenever the new `serial_state` port changes; on a
+      Cynthion, `cdc_acm` gets a carrier from it and a port opens with
+      `clocal` cleared, which it could not before. Measured on that board:
+      **67 700 bytes/s each way at eight bytes and 255 500 at 64**, for
+      **+948 LUT4 and +923 flip-flops** on an ECP5 — both in
+      `docs/ip-library.md`, with the byte multiplexer named as the whole of
+      the lookup-table cost and the cheaper structure that was not taken
+      written down.
 - [x] Registry: a static index (git repository of manifests) that
       `reticle add` searches, in the style of a crates.io index: one file
       per package under a name-derived path, one line per release with

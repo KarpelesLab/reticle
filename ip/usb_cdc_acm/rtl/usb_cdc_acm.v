@@ -516,7 +516,18 @@ module usb_cdc_acm #(
             // A host that has configured the device again, or reset the bus,
             // has forgotten what it was told: `usb_bulk_ep`'s buffer went with
             // it and so must the memory of having filled it.
-            if (!configured) ever <= 1'b0;
+            //
+            // `sending` goes with them, and that is not belt and braces: a bus
+            // reset in the ten cycles a notification takes to hand over would
+            // otherwise leave this counting through the rest of a packet whose
+            // buffer the endpoint had already cleared, and the host would get
+            // the tail of a notification with no head. Clearing it here means
+            // the next `notif_owed` starts one from byte zero.
+            if (!configured) begin
+                ever    <= 1'b0;
+                sending <= 1'b0;
+                nidx    <= 4'd0;
+            end
         end
     end
 

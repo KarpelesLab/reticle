@@ -181,10 +181,11 @@ when no call management happens over it, so it names interface 1.
 | D2 | Send_Break | **clear** — not implemented |
 | D3 | the Network_Connection notification | **clear** |
 
-**D1 is one bit over four things and this block does three of them.** It
-answers all three requests and never sends a Serial_State notification; §4
-says why it cannot. Setting D1 is therefore not perfectly true, and it is
-set anyway, for a reason worth writing down:
+**D1 is one bit over four things and this block does all four.** It answers
+the three requests and sends the Serial_State notification; §4 says what is in
+it and when it goes. It did **not** send one until the packet length was
+widened, so D1 was one bit over four things and three of them, and it was set
+anyway for a reason worth keeping written down:
 
 **CHECKED**. With D1 set, **Linux sends SET_LINE_CODING and its seven bytes
 arrive**: `stty -F /dev/ttyACM1 115200` and then GET_LINE_CODING asked of the
@@ -704,19 +705,24 @@ lines that fix it.
   `usb_ctrl_ep` stalls that the class hook could now answer, and this block
   does not answer them, because a product name is a device's property and
   not a serial port's.
-- **No SERIAL_STATE, no SEND_BREAK, no Comm_Feature.** §3 and §4.
+- **No SEND_BREAK and no Comm_Feature.** §3. SERIAL_STATE **is** sent now;
+  §4 says what is in it and when.
 - **Nothing acts on the line coding.** `baud`, `char_format`, `parity` and
   `data_bits` are what the host asked for and are brought out for a design
   to use. Following `dwDTERate` means dividing a clock by a run-time value,
   which is a design's business.
-- **Eight bytes a packet**, an eighth of the largest a full-speed bulk
-  endpoint may have. A host is limited in *transactions* a frame rather than
-  in bytes, so that is close to a factor of eight off what a 64-byte endpoint
-  reaches; no figure is quoted because nothing here measured one. It also
-  means a host must read **one packet at a time**: a bulk IN transfer ends on
-  a short packet or a full buffer, so a read of 64 bytes answered with 8 is
-  not finished, and a host that asks again gets a NAK and a timeout from a
-  device that is behaving perfectly.
+- **Sixty-four bytes a packet**, which is the largest a full-speed bulk
+  endpoint may have (USB 2.0 §5.8.3) and not a limit so much as the top of the
+  range; §6 below has what it is worth and what it cost. `MAXPKT` is a
+  parameter, so a design short of flip-flops may declare 8, 16 or 32 instead
+  and the descriptors follow — nothing checks that the value is one of those
+  four. A host still has to read **one packet at a time**: a bulk IN transfer
+  ends on a short packet or a full buffer, so a read of 128 bytes answered with
+  64 is not finished, and a host that asks again gets a NAK and a timeout from
+  a device that is behaving perfectly. What has changed is that a read of
+  exactly 64 now ends on a full buffer, which is the common case.
+- **No isochronous endpoint**, which is the one full-speed size these blocks
+  cannot express: §5.6.3 allows 1023 bytes and the length field is seven bits.
 - **No FIFO.** The endpoint holds one packet each way and NAKs while it is
   full, which is what bulk means. A bridge to something as slow as a UART
   wants depth on its receive side, and `ip/fifo_sync` is the block for it —
