@@ -6,3 +6,9 @@
 
 # Claude Code session/worktree state
 .claude/
+
+# `reticle fpga` writes <top>.json and <top>.lpf beside itself when no
+# --output-dir is given, so a run in the repository root leaves them there.
+# Anchored to the root: testdata/ has tracked .json and .lpf that are inputs.
+/*.json
+/*.lpf
