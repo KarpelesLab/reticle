@@ -275,6 +275,14 @@ technology cells.
       (the engine cannot read the process form, so process lowering is the
       one pass taken on trust; the module docs say so). Simulation of the
       mapped netlist through phase 4 is still open.
+- [x] Mapped-netlist verification: `synth::techmap::verify` proves a LUT or
+      standard-cell network equivalent to the AIG it was mapped from, which
+      is the boundary the check above does not reach — mapping runs after
+      generic synthesis in every flow, and a mapper that covered one cone
+      wrongly reached a board through that gap. `reticle synth --verify` and
+      `reticle fpga --verify` run it, and
+      `every_block_maps_to_the_logic_it_was_mapped_from` proves every block
+      of the IP library at LUT4 and LUT6 in the gate.
 - [x] Reports: cell counts, estimated combinational depth, inferred
       memories, flip-flops, latches and FSMs, with source spans.
 
