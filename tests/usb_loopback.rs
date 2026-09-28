@@ -68,7 +68,7 @@
 
 #![cfg(feature = "program")]
 
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use rawusb::Context;
 
@@ -311,7 +311,7 @@ fn usb_endpoint_one_loops_bytes_back_on_a_real_host() {
         );
     }
     println!(
-        "{} bytes through endpoint 1 and back, in {} packets of at most 8",
+        "{} bytes through endpoint 1 and back, in {} packets of at most {MAX_PACKET}",
         stream.len(),
         stream.len().div_ceil(MAX_PACKET)
     );
@@ -320,6 +320,47 @@ fn usb_endpoint_one_loops_bytes_back_on_a_real_host() {
     println!(
         "`zero_probe` read ZERO on every one of them: a flip-flop whose data input is the \
          constant zero holds zero in silicon on this family"
+    );
+
+    // ------------------------------------------------------------------
+    // How fast it goes, which is a **measurement and not an assertion**.
+    // ------------------------------------------------------------------
+    // Nothing below is compared against a clock. `tools/check.sh` never runs
+    // this test, a slow machine must not fail it, and there is no timing
+    // number in any `assert`. What the figure is for is
+    // `ip/usb_cdc_acm/README.md` and `docs/ip-library.md`, where a claim
+    // about throughput has to come off a part rather than out of arithmetic.
+    //
+    // The shape of the loop is the shape the device forces: it holds **one**
+    // packet each way, so the host writes a packet, reads it back, and only
+    // then writes the next. Every packet therefore costs one OUT
+    // transaction, one IN transaction and two trips through the host's own
+    // stack, and what `wMaxPacketSize` changes is only how many bytes ride
+    // along with them. That is the quantity worth knowing: a full-speed host
+    // is limited in transactions a frame and not in bytes.
+    let bulk: Vec<u8> = (0..MAX_PACKET)
+        .map(|i| u8::try_from(i % 256).expect("a byte").wrapping_mul(73))
+        .collect();
+    let rounds = 256u32;
+    let started = Instant::now();
+    let mut moved = 0usize;
+    for _ in 0..rounds {
+        handle
+            .bulk_write(EP_OUT, &bulk, TIMEOUT)
+            .expect("writing a packet");
+        let mut buf = vec![0u8; MAX_PACKET];
+        let got = handle
+            .bulk_read(EP_IN, &mut buf, TIMEOUT)
+            .expect("reading it back");
+        assert_eq!(&buf[..got], &bulk[..], "the timed packets came back too");
+        moved += got;
+    }
+    let took = started.elapsed();
+    println!(
+        "{moved} bytes in {rounds} round trips of {MAX_PACKET}: {took:?}, \
+         {:.0} bytes/s each way, {:.0} round trips/s",
+        moved as f64 / took.as_secs_f64(),
+        f64::from(rounds) / took.as_secs_f64()
     );
 
     handle
