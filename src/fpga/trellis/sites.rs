@@ -33,6 +33,19 @@
 //!   unless the tile type owns all five wires and its `bits.db` can express
 //!   "take the data from the fabric".
 //!
+//! A third fact has since joined those two, and it is in [`super`] rather
+//! than here for the same reason: **a slice's distributed-RAM mode.**
+//! [`super::DPRAM_PINS`] is the wire table of a `TRELLIS_DPR16X4` and
+//! [`super::DPRAM_BLOCKS`] the six lookup tables it consumes, and neither
+//! is derivable from `bits.db` — that `WAD[0]` arrives on slice C's `D0`
+//! input and that `RAD[0]` is the `D` of four lookup tables is nextpnr's
+//! `ecp5/cells.cc`. What *is* in the database, and is read rather than
+//! written down, is that `SLICEA.MODE = DPRAM`, `SLICEB.MODE = DPRAM` and
+//! `SLICEC.MODE = RAMW` are one bit, which is what makes a distributed RAM
+//! three slices and not one. [`bels_for`] does not describe it: adding it
+//! here would be a second copy of a table [`super`] checks against the
+//! tile type's own wires, which is the difference this header is about.
+//!
 //! Two consequences, and both matter:
 //!
 //! - **Nothing in this module has been checked against a part.** The tile

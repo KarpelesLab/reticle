@@ -646,9 +646,80 @@ In rough order of how much stands behind each.
    therefore spells its increment out as a toggle chain, which
    `the_blink_designs_toggle_chain_is_an_increment` proves equal to
    `count + 1`, and says so in its header.
-4. **A memory, and a `SLICEM`.** Nothing has looked at `RAMB18E1` or at
-   the distributed RAM features of a `SLICEM`, so a design with either
-   will not route.
+4. **A memory, and a `SLICEM`.** Nothing has looked at `RAMB18E1`, so a
+   design with one will not route. A `SLICEM`'s **distributed RAM** has now
+   been looked at, because the ECP5 gained one on 2026-09-28 and the
+   question "does the 7 series need the same shape of work?" had to be
+   answered rather than assumed. It does, and the answer is written out
+   below because it is more specific than "not done".
+
+   `src/fpga/devices/xc7.dev` declares
+   `bel RAM64X1D lutram port wclk=WCLK we=WE waddr=A0..A5 din=D
+   raddr=DPRA0..DPRA5 dout=DPO`, `fpga::primitives` maps a small memory onto
+   it, and `tests/fpga_flow.rs`'s `logicram_xc7` case proves it fires. What
+   is missing is the fabric half: `parse::site_kind` makes nine kinds of bel
+   — `lut`, `ff`, `carry`, `site`, `io`, `gb`, `bram`, `dsp`, `other` — and
+   no `lutram`, so `fpga::place` counts zero of them and refuses with
+   `the design needs N lutram site(s) and the part has 0`. That is the same
+   message the ECP5 gave, and the same cause: a `.dev` `count` is a budget
+   and the placer counts `RoutingGraph::sites`.
+
+   **It is not the same *relationship*, and that is the news.** The ECP5's
+   defining oddity is that `SLICEA.MODE = DPRAM`, `SLICEB.MODE = DPRAM` and
+   `SLICEC.MODE = RAMW` are **one bit**, so a distributed RAM is three
+   slices and a placer that ignored it would write a lookup table's truth
+   table into a RAM's contents. The 7 series has nothing like it.
+   `prjxray-db`'s `artix7/segbits_clblm_l.db` gives four *independent* bits,
+   one per lookup table of the one slice:
+
+   ```
+   CLBLM_L.SLICEM_X0.ALUT.RAM 31_16
+   CLBLM_L.SLICEM_X0.BLUT.RAM 31_17
+   CLBLM_L.SLICEM_X0.CLUT.RAM 31_46
+   CLBLM_L.SLICEM_X0.DLUT.RAM 31_47
+   ```
+
+   plus `WEMUX.CE`, `WA7USED`, `WA8USED` and `CLKINV` **per slice**, and per
+   lookup table a `SMALL` (32 words rather than 64), an `SRL` and a `DI1MUX`
+   whose second arm is the cascade into the next lookup table. So a
+   `RAM64X1D` is contained in **one `SLICEM`** and the `SLICEL` beside it in
+   the same `CLBLM` stays fully usable. The exclusion a 7-series `lutram`
+   bel would need is intra-slice and smaller than the ECP5's six-of-eight.
+
+   **Only a `SLICEM` can be one**, and that is the database's own statement
+   rather than an inference from the datasheet: `segbits_clbll_l.db`, whose
+   two sites are both `SLICEL`, has **zero** `RAM`, `SRL`, `SMALL`, `WA*`,
+   `WEMUX` or `DI1MUX` features, and `ppips_clbll_l.db` has no `WE` wire at
+   all. The 23-line difference between the two files is exactly that set.
+   `sites.rs` already knows a `CLBLM` holds `SLICEM_X0` and `SLICEL_X1`;
+   what it does not do is *act* on it, because `site_kind` collapses
+   `SLICEL | SLICEM` into one `"slice"` and nothing downstream can ask for
+   the `M`.
+
+   The write port's wires are already there, which is the part that was
+   missing for the carry chain and is not missing here.
+   `ppips_clblm_l.db` has `CLBLM_M_WE` and `CLBLM_M_{A,B,C,D}I` fed
+   unconditionally off the shared `FAN` bus — the same `always` shape
+   `sites.rs` already reads for a flip-flop's clock — and only on the `M`
+   half. `sites.rs` knows none of the five.
+
+   And the contents may need no new code at all: `ALUT.INIT[00..63]` are
+   ordinary one-bit features and `parse::parameter_bit` already turns an
+   `INIT[n]` into a `ConfigEntry::Param`, which is the generic path a lookup
+   table's truth table takes. Unlike the ECP5's, these bits are **not**
+   `!`-marked, so an empty 7-series distributed RAM is free where an empty
+   ECP5 one costs 97 bits.
+
+   **The one piece with no ground truth here is the address permutation** —
+   which of the slice's lookup tables is the read port and which the write
+   port, and in what order `A0..A5` reach their inputs. On the ECP5 that came
+   from nextpnr (`RAD[0]` is the `D` input, and getting it wrong is silent:
+   the design places, routes, decodes and reads every word from the wrong
+   address). The Vivado harness bitstream this file is checked against is
+   switches-to-LEDs and contains no RAM, so it cannot settle it. That needs
+   either a Vivado design with one or a board.
+
+   Nothing of this has been attempted. One family at a time.
 5. **Feature-name to primitive-name mapping.** The loader still emits
    `ConfigEntry::Cell { primitive: "ZINI", .. }` for a flip-flop feature
    because `ZINI` is what the database calls it; Reticle's primitive is

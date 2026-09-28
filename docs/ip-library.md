@@ -399,41 +399,51 @@ gone. The LUT4 depth is 10, where it was: the page split that once read the
 descriptor blob a quarter at a time added a level of multiplexer, and that
 split was a workaround for a technology-mapper defect and is gone with it.
 
-**What it found in this compiler.** `ip/fifo_sync` cannot be placed on an
-ECP5. Its storage is an array indexed by a variable, which becomes a
-distributed RAM, and nothing in the ECP5 fabric model has a site for one to go
-in, so `fpga::place` counts zero of them and refuses at any depth and with
-`FWFT` either way:
+**What it found in this compiler, and it is fixed now.** `ip/fifo_sync` could
+not be placed on an ECP5 at all. Its storage is an array indexed by a
+variable, which becomes a distributed RAM, and nothing in the ECP5 fabric
+model had a site for one to go in, so `fpga::place` counted zero of them and
+refused at any depth and with `FWFT` either way:
 
 ```text
 error: the design needs 2 `lutram` site(s) and the part has 0
 ```
 
 The first reading of this blamed `src/fpga/devices/ecp5.dev`, which does
-declare `bel TRELLIS_DPR16X4 lutram` with no `count`. **That is not the
+declare `bel TRELLIS_DPR16X4 lutram` with no `count`. **That was not the
 cause.** A `.dev` bel `count` is a resource budget; `fpga::place` counts
 `RoutingGraph::sites`, which come from the architecture, and an ECP5's
-architecture is loaded from Project Trellis by `src/fpga/trellis`, whose
-`sites.rs` creates three kinds of bel and no more: `lut`, `ff` and `io`. There
-is no `lutram` site for the placer to find, so adding a `count` would change
-nothing. Fixing it means modelling a SLICE's distributed-RAM mode — its bel,
-its wires and its configuration bits — in the Trellis loader, which is real
-work and is not done. `src/fpga/devices/xc7.dev` declares `RAM64X1D` without a
-`count` as well, and the 7-series loader has the same three site kinds, so
-that family is in the same position.
+architecture is loaded from Project Trellis by `src/fpga/trellis`, which
+created three kinds of bel and no more: `lut`, `ff` and `io`. There was no
+`lutram` site for the placer to find, so adding a `count` would have changed
+nothing.
 
-`fpga::synthesize_for` is content, which is why
-`small_memories_become_logic_after_the_fpga_flow` passes: it stops before
-placement. Measured on `ecp5-12f-CABGA256` at depth 16 and 32 with `FWFT` and at depth 64
-without it — 2, 4 and 8 sites asked for and refused; the other two ECP5s in
-that file are **inferred** to behave the same, since the missing site is in the
-family's fabric model and not in any one part's, and the 12F is the only one
-this flow has a Trellis part for. The effect is that no design in this
-repository can instantiate that block on this part, which matters well beyond
-serial ports.
-`testdata/fpga/cynthion/usb_cdc_uart.v` works around it by carrying one byte
-at a time through the UART, which needs one holding register instead of a
-queue, and says so in its header.
+What it took was modelling a slice's distributed-RAM mode in the Trellis
+loader — the bel, its wires and its configuration bits — and
+`docs/fpga-trellis.md`'s first section is the whole account. In short: a
+`TRELLIS_DPR16X4` is **slices A, B and C of one logic tile**, held together by
+one bit of that tile (`F50B11`), so a tile holds exactly one and it costs six
+of the tile's eight lookup tables. `ip/fifo_sync` now places, routes and comes
+out as a bitstream at depths 16, 32 and 64, with every bit of the image
+decoding back through the database into a feature it names — 97 bits per RAM,
+which is `ecppack`'s own number for the 111 distributed RAMs in this board's
+reference bitstreams.
+
+**The 7 series is still in the old position**, and it was looked at far
+enough to say so precisely rather than by analogy.
+`src/fpga/devices/xc7.dev` declares `RAM64X1D lutram` without a `count`, and
+`src/fpga/xray/parse.rs` makes nine kinds of bel — `lut`, `ff`, `carry`,
+`site`, `io`, `gb`, `bram`, `dsp`, `other` — and **no `lutram`**. That flow
+does reach a real bitstream, checked feature for feature against Vivado's own
+output, so a 7-series design with a distributed RAM does not stop early: it
+maps to `RAM64X1D` (which `logicram_xc7` proves) and then dies at
+`place.rs`'s `the design needs N lutram site(s) and the part has 0`, exactly
+as the ECP5 did. `docs/fpga-xray.md` has the verdict on what the work would
+take; one family at a time.
+
+`testdata/fpga/cynthion/usb_cdc_uart.v` still carries one byte at a time
+through the UART, which needs one holding register instead of a queue, and
+says so in its header. That workaround is no longer forced.
 
 **What the endpoints cost.** `usb_device_fs` went from 549 LUT4 and 244
 flip-flops on the ECP5 to 916 and 438, and `usb_device_ulpi` from 638 and

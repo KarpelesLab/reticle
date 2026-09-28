@@ -1,5 +1,236 @@
 # A real Lattice ECP5, and a real `.bit`
 
+## A distributed RAM is on the fabric, and it is three slices held together by one bit
+
+`ip/fifo_sync` could not be placed on an ECP5 at any depth. The message was
+exact and it was not about a budget:
+
+```
+error: the design needs 2 `lutram` site(s) and the part has 0
+```
+
+`synthesize_for` succeeded, which is why the library test passed and nobody
+noticed for several rounds. The round before this one established where the
+fault was not: not a missing `count` on `ecp5.dev`'s `TRELLIS_DPR16X4` line,
+because a `.dev` `count` is a resource budget and `fpga::place` counts
+`RoutingGraph::sites`, which come from the `Arch` — and an ECP5's `Arch` is
+built by `src/fpga/trellis`, whose bels were `lut`, `ff` and `io` and nothing
+else. There was no distributed-RAM site on the die for the placer to find.
+
+There is one now, one per logic tile, and `ip/fifo_sync` places, routes and
+comes out as a bitstream every bit of which decodes, at depths 16, 32 and 64.
+
+### It was expected to be the weak case, and it is the strong one
+
+This file distinguishes two kinds of claim: what a **vendor artefact** proves,
+and what the database plus nextpnr's stated intent merely suggest. A slew rate
+and a constant driver are the first kind — read out of Great Scott Gadgets'
+own `ecppack` output at absolute frame positions. A distributed RAM looked
+like the second, because nothing had ever looked for one in those files.
+
+Somebody looked. **`analyzer.bit` has 22 distributed RAMs and
+`facedancer.bit` has 89**; `selftest.bit` has none. 111 of them, in files
+this tree already verifies byte for byte, and
+`what_lattices_own_packer_writes_for_a_distributed_ram` reads every one back.
+
+Two of the rows below are that test's findings and not nextpnr's, and both
+of them decided code rather than prose.
+
+### Everything `ecppack` writes for a distributed RAM, in full
+
+| | |
+|---|---|
+| How many | 22 in `analyzer.bit`, **none** in `selftest.bit`, 89 in `facedancer.bit` |
+| `SLICEA.MODE`, `SLICEB.MODE`, `SLICEC.MODE` | `DPRAM`, `DPRAM`, `RAMW` — and in all 111 tiles **all three or none** |
+| Which bit | **`F50B11` of the `PLC2`, one bit**, because Project Trellis' database gives all three settings that same bit. Set in their files at the frame this flow computes for it |
+| `SLICEA.K0/K1.INIT`, `SLICEB.K0/K1.INIT` | the contents, one 16-bit word per bit of the four-bit word — and sixteen **zeros** in all 111: every distributed RAM on this board starts empty |
+| `SLICEC.K0.INIT`, `SLICEC.K1.INIT` | sixteen zeros each, in all 111. The `RAMW` slice's two lookup tables hold nothing and are written anyway: 32 bits that nothing reads |
+| `SLICEA.WREMUX` | **never written**, in any of the three files. `WRE` is the default and costs nothing |
+| `CLK1.CLKMUX` | never written either. `CLK` is the default, and the write clock's polarity is the only thing it could say |
+| `SLICE<l>.CCU2.INJECT1_<n>` | nextpnr writes `_NONE_`, which means "no bits"; a bitstream assembled from a zeroed bitmap already has them clear |
+| An unused lookup-table input | `SLICE<l>.<X><n>MUX = 1`. It cannot arise: a `DPRAM` slice uses all four inputs as its read address |
+| The write clock | tile net **`CLK1`**, and in all 111 it arrives on a **global clock network** (`G_HPBX<n>00`). This flow did not, until that row was turned into a check — see below |
+| The write enable | tile net **`LSR1`**, and in all 111 it arrives on **general routing** |
+| Slice D | **nothing, and it is still in use**: ordinary logic in 18 of analyzer's 22 tiles and 82 of facedancer's 89 |
+| The flip-flops of slices A, B and C | **nothing, and they are still in use**: 8 of analyzer's tiles and 60 of facedancer's have one. `DPRAM` mode takes a slice's lookup tables, not its registers |
+
+So a distributed RAM with no initial contents costs **97 bits**: one for the
+mode, 64 for the four zeroed content words, 32 for the `RAMW` slice's two.
+That is what this flow writes, and it is `ecppack`'s number too.
+
+The `INIT` bits are `!`-marked in `bits.db`, so a content bit of *zero* is a
+bit **set** in the bitstream and all-ones is free. An empty RAM is the
+expensive case, which is the opposite of the intuition and is why 97 rather
+than 1.
+
+### The slice relationship, and why ignoring it is worse than not placing
+
+`SLICEA.MODE = DPRAM`, `SLICEB.MODE = DPRAM` and `SLICEC.MODE = RAMW` are one
+bit. There is no way to ask for two of the three, and `SLICED.MODE` has
+neither value at all. So:
+
+- a `TRELLIS_DPR16X4` is **slices A, B and C of one logic tile**, and a tile
+  holds exactly one;
+- slices A and B *are* the RAM. `WD0A_SLICE` takes `WD0` and `WD0B_SLICE`
+  takes `WD2`, so slice A holds bits 0 and 1 of the word and slice B bits 2
+  and 3, and their four `K<n>.INIT` words are the contents;
+- slice C *is* the write-port register. Its two lookup tables are given up:
+  `WAD[0..3]` arrive on the first one's `D`, `B`, `C`, `A` inputs and
+  `DI[0..3]` on the second's `C`, `A`, `D`, `B`, and its `WADO<n>C_SLICE` and
+  `WDO<n>C_SLICE` outputs reach slices A and B over `.fixed_conn`s **inside
+  the tile**. There is no routable wire between a distributed RAM's halves;
+- slice D is untouched.
+
+That is six of a logic tile's eight lookup tables. Not eight, and not the
+whole tile — and that is the part the reference bitstreams decided. A model
+that blocked the tile would have been wrong in a way no test of this flow's
+own output could have caught, because this flow would simply have used fewer
+tiles and everything would still have decoded. `ecppack` puts ordinary logic
+in slice D of 100 of the 111 and a flip-flop in the RAM's own slices in 68 of
+them, so the exclusion is exactly six bels wide.
+
+A placer that ignored it would produce a bitstream that loads, asserts `DONE`
+and computes nothing: a lookup table's truth table and a distributed RAM's
+contents are the **same `INIT` words**, so the second cell to be written
+silently replaces the first.
+
+This is the **sixth** place on this part where two features share one
+resource, and it is handled the way the fifth was — as a legality constraint
+the placer reads off the architecture, not as a thing to remember.
+`BelDecl::blocks` names the bels of one tile a cell makes unusable,
+`SiteRules` in `src/fpga/place.rs` makes it symmetric, and the legaliser and
+every annealing move honour it. Nothing in `place.rs` names a slice.
+
+### Two things the routing graph could not express, and now can
+
+**A pin can be several wires.** A distributed RAM's read address is one
+address read by **four** lookup tables, so `raddr0` is the `D` input of all
+four of them — four separate pieces of metal. `BelDecl::pins` may now repeat
+a role, and the router treats every wire of a *sink* role as a sink of the
+same net, which is what the fabric says they are. A driver role still names
+one wire: a cell output that drove two would be two nets. `wclk` and `we` are
+two wires each for the same reason, slice A's and slice B's, both fixed to
+`CLK1` and `LSR1`.
+
+**A constant on a RAM's input needs a driver.** An unrouted lookup-table
+input on this family is **tied high** (`SLICE<l>.<X><n>MUX = 1`), so an
+address bit left as a constant zero reads as a one and the memory is
+addressed one word off — which nothing structural would notice.
+`techcells::drive_constant_data` was written for a flip-flop's data pin and
+now covers every input of a `lutram` too, giving them the shared constant
+lookup table that "The constant is built now" describes. That is nextpnr's
+`pack_constants` applied to one more pin, and it changed the 7 series as
+well: `logicram_xc7` now has one `LUT6` making a zero instead of 32 literal
+constants on the unused address bits of its eight `RAM64X1D`s.
+
+### A defect the vendor's own files found: the write clock was on data wires
+
+Two rows of that table are not description, they are what a check was built
+out of — and one of them failed the first time it ran.
+
+`ecppack` puts a distributed RAM's write clock on a **global clock network**
+in all 111 cases: `CLK1 <- G_HPBX<n>00`, every time. This flow refuses a
+*flip-flop* whose clock arrived through general routing, because a clock off
+data wires routes, verifies, configures and has skew nobody has a model for.
+Extending that check to a `lutram`'s `wclk` took four lines, and it
+immediately said no:
+
+```
+depth 16: ["fifo.mem$dpr0_0_0 on X13Y2/DPR16X4", "fifo.mem$dpr0_0_1 on X16Y2/DPR16X4"]
+```
+
+Dumping the net showed it exactly: every one of the design's eighteen
+flip-flops had `CLK0 <- G_HPBX0000`, and the two RAMs had
+`CLK1 <- V00B0100` and `CLK1 <- V00B0000` — vertical **data** wires, coming
+straight off the clock pad without going through the `DCCA` buffer at all.
+
+The cause is an ordering one and it was there before the RAM existed.
+`primitives::Mapper::clock_buffers` finds a clock's sinks by looking for
+`CellKind::Dff` and for a clocked `MemRdPort`/`MemWrPort` — but `block_rams`
+runs **first**, so by the time the buffer is inserted the memory is no longer
+a `MemWrPort`: it is a `TRELLIS_DPR16X4` blackbox with a `WCK` port, which
+that pass did not recognise, did not count towards the buffer's fanout and
+did not rewire. It does now, by primitive name out of the device file, and
+`CLK1 <- G_HPBX0000` at every RAM tile afterwards.
+
+Worth saying plainly: **nothing structural was wrong before the fix.** The
+design placed, every signal routed, every sink walked back to its driver,
+every bit of the image decoded, and the arcs matched the router's exactly.
+What told the two apart was asking what the vendor writes and then checking
+it, which is the same thing that found the five defects before this one.
+
+### The read address is scrambled, and getting it wrong is silent
+
+`RAD[0]` is the `D` input, `RAD[1]` the `B`, `RAD[2]` the `C` and `RAD[3]`
+the `A`. Nothing in `bits.db` says so — it is nextpnr's `dram_to_comb`, and
+the same permutation has to be applied to the contents, which is what
+`trellis::dpram_init_word` is. A flow that ignored it would place, route,
+decode and read every word from the wrong address.
+
+That is the one part of this that rests on nextpnr alone rather than on the
+vendor's bitstreams: all 111 of their RAMs are empty, so the permutation
+leaves no trace in them. A bitstream with non-zero contents would pin it, and
+`what_lattices_own_packer_writes_for_a_distributed_ram` would notice one
+arriving — it asserts the words are zero rather than skipping them.
+
+### What places now, and what it costs
+
+`ip/fifo_sync` with `WIDTH = 8`, through `synthesize_for`, `place`, `route`
+and `stream` on an LFE5U-12F in caBGA-256, with all of its ports on top-edge
+balls:
+
+| Depth | `TRELLIS_DPR16X4` | Logic tiles they take | Bits they cost |
+|---|---|---|---|
+| 16 | 2 | 2 | 194 |
+| 32 | 4 | 4 | 388 |
+| 64 | 8 | 8 | 776 |
+
+At each depth: every signal routed, every sink walked back to its driver,
+every flip-flop's clock on a global network, no bit an arc needs clear set by
+something else, **every set bit of the image decoding back through the
+database into a feature it names with nothing unexplained**, and the arcs
+those bits select exactly the arcs the router chose. The "every bit decodes"
+check has found five real defects in this backend and it is not weakened
+anywhere here; the distributed RAM adds no unexplained bit.
+
+`a_distributed_ram_places_routes_and_every_bit_of_it_decodes` is that test,
+and it also asserts the exclusion from both sides: no lookup table shares a
+tile with a RAM except on slice D, and every one of the six bels a RAM
+consumes is empty in every tile that holds one.
+
+### What a board would have added, and it is the obvious thing
+
+**That a word written comes back.** Nothing here has run on a part. The
+Cynthion was in use for USB work for the whole of this round, so every
+measurement above is off the part: the database, the reference bitstreams,
+the router, the "every bit decodes" check and the simulator. What none of
+them can tell you is whether the silicon stores and returns a byte — whether
+the write address really arrives on `WADO<n>C_SLICE`, whether `WCK` is the
+edge this flow thinks it is, and whether `dpram_init_word`'s permutation is
+the right way round rather than merely self-consistent.
+
+That last one is the real gap. A read-address permutation that is wrong in a
+way `dpram_init_word` mirrors would be invisible to every check in this
+tree, because the contents this flow writes are all zeros: every word reads
+the same. A vendor bitstream with non-zero contents would settle it and none
+of the three has any.
+
+**The cheapest experiment**, and it is small: a design with one
+`fifo_sync`, `WIDTH = 8`, `DEPTH = 16`, wired to the Cynthion's six LEDs and
+its `USER` button, on the balls `button_led.rcf` already names. Push a
+counter in on the button, read it out, and show the eight bits on the LEDs a
+nibble at a time. If the FIFO works, the LEDs count; if the read address is
+permuted wrongly, they count in a scrambled order, which is *visible* — the
+same shape of experiment as the first blinky, and readable with no
+instrument. A second one, once that passes: write the sixteen values 0..15 at
+addresses 0..15 and read them back over the existing `usb_ulpi_device.v`
+endpoint, which already carries a byte a host reads, so a wrong permutation
+shows up as a specific wrong byte rather than as darkness.
+
+That is how the constant-driver round handled the same situation: it named
+the gap and the experiment, and two rounds later the experiment had been run
+and the gap was closed.
+
 ## The constant is built now, and the vendor's own bitstreams said how
 
 The round before this one found a flip-flop whose data input is the constant
@@ -1173,7 +1404,7 @@ pair, which `src/fpga/trellis/sites.rs` declares faithfully. `fpga::place`
 did not know, so it put two flip-flops with different clock enables in one
 slice and handed the router a node with two signals on it.
 
-`SharedPins` in `src/fpga/place.rs` is the whole fix, and it is read off the
+`SiteRules` in `src/fpga/place.rs` is the whole fix, and it is read off the
 architecture rather than hard-coded: **any two pins of any two bels in one
 tile that resolve to one node are a constraint**, on every family. Two things
 about it are worth stating:
@@ -3128,7 +3359,7 @@ mux and writing both would be writing two drivers.
 | `SLICE<l>.<X><n>MUX = 1` for every input no pip reaches | yes |
 | `SLICE<l>.MODE = LOGIC` | nothing to write: it is the default and costs no bits |
 | `SLICE<l>.CCU2.INJECT1_<n> = _NONE_` | nothing to write: `_NONE_` means "no bits", which is what nextpnr uses it for — the bit is shared with the cascade mux and it deliberately leaves it alone |
-| `WREMUX`, `CLK1.CLKMUX` | only for `DPRAM` mode, which this does not build |
+| `WREMUX`, `CLK1.CLKMUX` | only for `DPRAM` mode, and their defaults cost nothing; `ecppack` writes neither in any of its 111 distributed RAMs on this board |
 
 **An arc** — `set_pip` is two lines: it looks up the tile and calls
 `add_arc(sink, source)`. Nothing per wire, nothing per net, no enables.
@@ -3271,7 +3502,7 @@ their vendor, and it held for a routed design as well as a constant one.
 > the ULPI USB device, on 2026-09-27. The placer needed one thing after all,
 > and it is a thing no family had needed because no other family's bels share
 > a pin: two cells in one tile whose pins are one wire must want the same
-> signal on it. `SharedPins` in `src/fpga/place.rs` is the edit, it is read
+> signal on it. `SiteRules` in `src/fpga/place.rs` is the edit, it is read
 > off the architecture rather than written for the ECP5, and every bitstream
 > built before it comes out byte for byte identical. "And the other
 > obstacle, which was not in the bitstream at all" at the top of this file
@@ -3330,7 +3561,9 @@ borrows now. Every backend gets it.
 | The left and bottom edges' pads | the left edge is the right edge mirrored (`PICL0`/`PICL1`/`PICL2` for `PICR*`, and the `CIB` one column *east* instead of west) and could be checked against the reference bitstreams the same way the right edge was, since they use pins on every edge. The bottom edge is different again: `PICB*` puts two PIOs at a position and shares tiles with the `EFB`. Neither has been checked, and `TrellisDatabase::load` leaves those balls out of the ball map rather than placing something it would configure nowhere |
 | A carry chain | `CCU2C` has no port map in the device file, on purpose: its two sum bits and internal carry do not match the `(ci, i0, i1) -> co` model Reticle maps carry onto. The `.mux` records for the cascade wires are read already |
 | Block RAM | `Ecp5Stream` reads and writes the initialisation blocks — the reference files' 44 blocks round trip — and nothing generates one. The `MIB_EBR*` tiles' wires and pips are in the graph |
-| Distributed RAM | `SLICEA.MODE = DPRAM`, `WREMUX`, `CLK1.CLKMUX` and the `WAD`/`WDO` wires, none of which is declared |
+| A distributed RAM's **contents** | `configure_lutram` writes them from an `INITVAL` parameter and nothing produces one: `fpga::primitives` declines to lower a memory with initial contents, so every RAM this flow builds starts empty. All 111 of the vendor's do too, which is why the read-address permutation has no vendor evidence — see the first section |
+| A distributed RAM **on a part** | see "What a board would have added" in the first section. Everything else about it is measured; that a written word reads back is not |
+| An **inverting** write clock or write enable | `WCKMUX = INV` is `CLK1.CLKMUX = INV` and `WREMUX = INV` is a field of its own, both in the database. `configure_lutram` writes neither, and neither appears in any of the three reference bitstreams |
 | An IO standard other than LVCMOS33 | the bits are in the database and the code takes the standard from the constraints; no other standard has been on a part |
 | `DRIVE`, `OPENDRAIN`, `CLAMP` or `TERMINATION` on a pad | each is a `.config_enum` of the pad tile, and each is one `ecppack` writes **only when an attribute asks** — so not writing them matches nextpnr exactly for a design that does not ask. `set_io -drive` is parsed and reaches the cell, and `configure_io` writes nothing for it, which makes the option a silent no-op in the bitstream. **`SLEWRATE` has left this row**: it is written now, see "An edge rate on every ULPI pin" |
 | A bidirectional pad with a **registered** tristate | `PIO<s>.TRIMUX_TSREG = IOLTO` and the `IOLOGIC` tristate register, none of which is declared. `fpga::primitives` declines to absorb a tri-state driver on a DDR port rather than moving the enable ahead of the register |
@@ -3385,8 +3618,8 @@ tied. `tests/fpga_trellis.rs` runs `configure_io` into a bitmap of its own
 to ask what that pass wrote.
 
 That is the first of **four** places on this part where two features share bit
-space — five, if the placement constraint at the end of this section is
-counted, and it deserves to be — and the shape repeats:
+space — six, if the two placement constraints at the end of this section are
+counted, and they deserve to be — and the shape repeats:
 
 | | Which two | Where it is written down |
 |---|---|---|
@@ -3412,5 +3645,14 @@ two cells the placer puts there must want the same signal on each of them.
 That is the same shape — two features, one resource, and nothing complains
 until something is silently wrong — and it is handled the same way, by making
 it a legality constraint the placer enforces rather than a thing to remember.
-`SharedPins` in `src/fpga/place.rs` reads it off the architecture, so it is
+`SiteRules` in `src/fpga/place.rs` reads it off the architecture, so it is
 true of any family whose bels share a pin.
+
+**And a sixth, which is the sharper version of the fifth.** Sometimes two
+bels are not two pieces of silicon at all. A slice in `DPRAM` mode *is* its
+two lookup tables and the slice beside it in `RAMW` mode has given up both of
+its own, so a distributed RAM is six of a logic tile's eight lookup tables
+and they are not "shared" but gone. `BelDecl::blocks` says which, `SiteRules`
+makes it symmetric, and the legaliser and every annealing move refuse a
+placement that breaks it. The first section has the measurement that fixed
+the number at six rather than eight or sixteen.

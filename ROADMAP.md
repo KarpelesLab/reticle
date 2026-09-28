@@ -523,6 +523,37 @@ FPGA:
       than off data wires. With that the ECP5 backend has pads,
       interconnect, lookup tables and clocked flip-flops, each confirmed on
       a board. See `docs/fpga-trellis.md`.
+- [x] **A distributed RAM is on the ECP5's fabric, and `ip/fifo_sync`
+      places.** Until 2026-09-28 that library block could not be placed on
+      an ECP5 at any depth — `the design needs 2 lutram site(s) and the
+      part has 0` — while `synthesize_for` succeeded, which is why the
+      library test passed and nobody noticed. The `Arch` an ECP5 loads had
+      three kinds of bel and no distributed-RAM site on the die. It has one
+      per logic tile now, and `ip/fifo_sync` places, routes and comes out
+      as a bitstream at depths 16, 32 and 64, every bit of which decodes
+      back through the database with nothing unexplained. A
+      `TRELLIS_DPR16X4` is **slices A, B and C of one logic tile**:
+      `SLICEA.MODE = DPRAM`, `SLICEB.MODE = DPRAM` and
+      `SLICEC.MODE = RAMW` are the same single bit of a `PLC2`, `F50B11`,
+      so a tile holds exactly one and it costs six of the tile's eight
+      lookup tables. That relationship is a legality constraint the placer
+      reads off the architecture (`BelDecl::blocks`), because the
+      alternative is a bitstream that loads, asserts `DONE` and computes
+      nothing — a lookup table's truth table and a RAM's contents are the
+      same `INIT` words. It was expected to be the weakest claim in this
+      backend, measured against the database and nextpnr's intent rather
+      than a vendor artefact; it is the opposite. `analyzer.bit` holds 22
+      distributed RAMs and `facedancer.bit` 89, and all 111 were read back
+      at absolute frame positions: 97 bits each, and two details of the
+      model come from them rather than from nextpnr — that slice D stays in
+      use and that a flip-flop still shares a slice with the RAM, which is
+      what fixed the exclusion at six bels rather than eight or sixteen.
+      **Nothing has run on a part**: the Cynthion was in use for USB work,
+      so that a written word reads back is a stated gap with the cheapest
+      experiment named beside it in `docs/fpga-trellis.md`. The 7 series is
+      still in the old position — `xc7.dev` declares `RAM64X1D lutram` and
+      the X-Ray loader has the same three site kinds — and that is
+      reported rather than attempted.
 
 ASIC:
 - [x] Liberty (`.lib`) parser: cells, pins, functions, timing tables.
