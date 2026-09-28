@@ -255,7 +255,7 @@ host may be behind this device's idea of its own line state.
 `wMaxPacketSize` is **64** both ways.
 
 **HIGH** (USB 2.0 §5.8.3). A full-speed bulk endpoint's maximum packet size
-must be 8, 16, 32 or 64 and nothing else. Sixty-four is the largest, and §6 of
+must be 8, 16, 32 or 64 and nothing else. Sixty-four is the largest, and §5 of
 this file has what it is worth in bytes per second off a part and what it costs
 in lookup tables. It was 8 — the smallest legal one — because the length field
 both of this library's transmitters took was four bits wide.
@@ -410,14 +410,20 @@ than the specification-level ones above and is marked differently on purpose.
 A Great Scott Gadgets Cynthion r1.4 on its AUX port, holding
 `testdata/fpga/cynthion/usb_cdc_uart.v` — this block behind
 `ip/usb_device_ulpi`'s link layer, with its bytes bridged to `ip/uart` and
-that UART's transmit line looped into its own receiver. Linux 6.18,
-`xhci_hcd`, the device on a full-speed downstream port of a hub. Everything
-below is quoted, not paraphrased.
+that UART's transmit line looped into its own receiver. Linux
+6.18.41-gentoo, `xhci_hcd`, the device on a full-speed downstream port of a
+hub. Everything below is quoted, not paraphrased.
+
+**Everything in this section was taken again** after the packet size went from
+eight bytes to 64 and the notification endpoint started sending: the kernel log,
+the whole `lsusb -v`, the cached descriptors, the round trip, the line coding
+and the bitstream's bit count. The one thing that is new rather than re-quoted
+is the notification.
 
 ### The kernel bound its own driver
 
 ```text
-usb 7-5: new full-speed USB device number 81 using xhci_hcd
+usb 7-5: new full-speed USB device number 89 using xhci_hcd
 usb 7-5: New USB device found, idVendor=1209, idProduct=0001, bcdDevice= 1.00
 usb 7-5: New USB device strings: Mfr=0, Product=0, SerialNumber=0
 cdc_acm 7-5:1.0: ttyACM1: USB ACM device
@@ -443,6 +449,8 @@ sysfs for `1209:0001` instead.
 
 ```console
 $ lsusb -d 1209:0001 -v
+Bus 007 Device 086: ID 1209:0001 Generic pid.codes Test PID
+Negotiated speed: Full Speed (12Mbps)
 Device Descriptor:
   bLength                18
   bDescriptorType         1
@@ -450,7 +458,7 @@ Device Descriptor:
   bDeviceClass            2 Communications
   bDeviceSubClass         0 [unknown]
   bDeviceProtocol         0
-  bMaxPacketSize0         8
+  bMaxPacketSize0        64
   idVendor           0x1209 Generic
   idProduct          0x0001 pid.codes Test PID
   bcdDevice            1.00
@@ -497,7 +505,7 @@ Device Descriptor:
           Transfer Type            Interrupt
           Synch Type               None
           Usage Type               Data
-        wMaxPacketSize     0x0008  1x 8 bytes
+        wMaxPacketSize     0x0010  1x 16 bytes
         bInterval              16
     Interface Descriptor:
       bLength                 9
@@ -517,7 +525,7 @@ Device Descriptor:
           Transfer Type            Bulk
           Synch Type               None
           Usage Type               Data
-        wMaxPacketSize     0x0008  1x 8 bytes
+        wMaxPacketSize     0x0040  1x 64 bytes
         bInterval               0
       Endpoint Descriptor:
         bLength                 7
@@ -527,7 +535,7 @@ Device Descriptor:
           Transfer Type            Bulk
           Synch Type               None
           Usage Type               Data
-        wMaxPacketSize     0x0008  1x 8 bytes
+        wMaxPacketSize     0x0040  1x 64 bytes
         bInterval               0
 ```
 
@@ -540,12 +548,12 @@ All sixty-seven bytes, as the kernel cached them:
 
 ```console
 $ xxd /sys/bus/usb/devices/7-5/descriptors
-00000000: 1201 0002 0200 0008 0912 0100 0001 0000  ................
+00000000: 1201 0002 0200 0040 0912 0100 0001 0000  .......@........
 00000010: 0001 0902 4300 0201 0080 3209 0400 0001  ....C.....2.....
 00000020: 0202 0000 0524 0010 0105 2401 0001 0424  .....$....$....$
-00000030: 0202 0524 0600 0107 0582 0308 0010 0904  ...$............
-00000040: 0100 020a 0000 0007 0501 0208 0000 0705  ................
-00000050: 8102 0800 00                             .....
+00000030: 0202 0524 0600 0107 0582 0310 0010 0904  ...$............
+00000040: 0100 020a 0000 0007 0501 0240 0000 0705  ...........@....
+00000050: 8102 4000 00                             ..@..
 ```
 
 **Every bit of that is accounted for.** The device descriptor is the first
@@ -557,7 +565,10 @@ bytes `usb_ctrl_ep` writes and the fifty-eight in `IFACE_DESC`;
 elaboration and none of them in the parameter; the four functional
 descriptors are `05 24 00`, `05 24 01`, `04 24 02` and `05 24 06` in the
 order CDC 1.1 §5.2.3 gives; and the three endpoint descriptors are `82h`
-interrupt, `01h` bulk and `81h` bulk. Nothing is unexplained.
+interrupt, `01h` bulk and `81h` bulk. **The three packet sizes are in there
+too**: `40` at offset 7 is `bMaxPacketSize0`, `10 00` after `07 05 82 03` is
+the notification endpoint's sixteen, and `40 00` after each of `07 05 01 02`
+and `07 05 81 02` is a bulk endpoint's 64. Nothing is unexplained.
 
 ### Bytes, with no program of this project's involved
 
@@ -575,12 +586,16 @@ endpoint 1 IN, and up through `cdc_acm` and the terminal layer into `cat`.
 And as a test, with the descriptors checked against the sources on the way:
 
 ```console
-$ cargo test --features program --test usb_cdc_acm -- --ignored --nocapture
+$ cargo test --release --features program --test usb_cdc_acm -- --ignored --nocapture
 the kernel gave 1209:0001 the terminal /dev/ttyACM1
 configuration descriptor (67 bytes): [09, 02, 43, 00, 02, 01, 00, 80, 32, ...]
 bDeviceClass is 02h, bDeviceSubClass and bDeviceProtocol 00h
+SERIAL_STATE off endpoint 0x82: [a1, 20, 00, 00, 00, 00, 02, 00, 03, 00]
+  bRxCarrier and bTxCarrier set, wLength 2, wIndex 0: PSTN 1.2 §6.5.4, field for field
 48 bytes out, 48 bytes back
 host -> USB -> UART transmit -> UART receive -> USB -> host, 48 bytes, byte for byte
+GET_LINE_CODING: 115200 baud, bCharFormat 0, bParityType 0, bDataBits 8
+`cdc_acm` is back on /dev/ttyACM1
 test a_serial_port_this_compiler_built_is_bound_by_the_kernels_own_driver ... ok
 ```
 
@@ -617,17 +632,29 @@ device and not anything the host was keeping.
 
 ### And every bit of the bitstream belongs to something
 
-The design is 1386 lookup tables, 649 flip-flops and 20 pads on an LFE5U-12F,
-and its bitstream was decoded back through the same Project Trellis records the
-router read:
+The design is **2503 lookup tables, 1769 flip-flops** and 20 pads on an
+LFE5U-12F, and its bitstream was decoded back through the same Project Trellis
+records the router read:
 
 ```text
-usb_cdc_uart: 57636 configuration bit(s) set, 0 unexplained, 19145 arc(s)
+110367 configuration bit(s) set, 20 pad(s), 2503 lookup table(s) and 1769
+flip-flop(s) configured, 1769/24288 ff, 1/56 gb, 20/120 io, 2503/24288 lut
+routed 4284 of 4284 signal(s) with 60369 pip(s) over 64653 wire(s), and every
+sink was walked back to its driver
+all 110367 set bit(s) decode back through the database into 39502 arc(s), 8754
+field(s) and 2502 word(s), with 0 unexplained, and the arcs they select are
+exactly the 39502 the router chose
 ```
 
-**Nothing is unexplained**: every one of those 57636 bits belongs to a feature
+It was **1386 lookup tables and 649 flip-flops** with eight-byte packets, so
+the serial port on this board costs +1117 and +1120 for the wider ones;
+`docs/ip-library.md` has that accounting broken down and what it bought.
+
+**Nothing is unexplained**: every one of those 110367 bits belongs to a feature
 the database names, so no bit was set for a reason the database does not know —
-which is how a wrong tile rule looks from the inside. The count is also what
+which is how a wrong tile rule looks from the inside. It was 0 unexplained out
+of 57636 bits before and it is 0 out of 110367 now, which is the property that
+had to survive the design nearly doubling. The count is also what
 `reticle fpga` reports for the same bitstream, so the writer and the decoder
 were asked separately and agree.
 
@@ -637,24 +664,98 @@ small design on every run and was **not weakened**. It was run by hand over
 this one, which is two minutes of place and route in a release build and too
 slow to keep in the gate.
 
-### The notification endpoint never sent anything
+### The notification endpoint sent SERIAL_STATE, and the driver acted on it
 
-The port enumerated, was opened, carried bytes and was closed, with
-**nothing ever sent on endpoint 2 IN**. That is not an observation about
-timing — it is the design: `usb_cdc_acm` ties `notif_valid` low, so
-`usb_bulk_ep` has nothing armed and answers every poll with a NAK, and there
-is no path by which a notification could be sent. §4 says why there could not
-be one even if a design wanted it.
+Ten bytes off endpoint `82h`, read through usbfs with the communications
+interface borrowed from `cdc_acm` for the length of one transfer:
 
-So: **CHECKED** — Linux's `cdc_acm` binds, opens, transfers and closes with no
-SERIAL_STATE notification ever arriving. That is one driver on one kernel and
-is not a statement about PSTN 1.2, which does not require one either.
+```text
+SERIAL_STATE off endpoint 0x82: [a1, 20, 00, 00, 00, 00, 02, 00, 03, 00]
+```
 
-`clocal` in the `stty` line above is the other half of the same fact, and it
-is the one place the omission is visible: a CDC ACM device reports carrier
-*through* SERIAL_STATE, so this device never asserts DCD, and an `open`
-without `clocal` would wait for a carrier that never comes. A design that
-needs a host to see carrier needs the ten-byte packet §4 describes.
+Read against §4's tables: `A1h` is device-to-host, class, to an interface; `20h`
+is SERIAL_STATE; `wValue` is 0; `wIndex` is 0, the communications interface;
+`wLength` is 2; and `wSerialState` is `0003h` — `bRxCarrier` and `bTxCarrier`
+set, every error bit clear, which is what
+`testdata/fpga/cynthion/usb_cdc_uart.v` ties `serial_state` to. That is
+**CHECKED**: the ten bytes exist on a wire and are the ten bytes §4 says they
+are. `tests/usb_cdc_acm.rs` asserts every field of them.
+
+And the driver decoded them:
+
+```console
+$ python3 -c '...TIOCMGET on /dev/ttyACM1...'
+TIOCMGET on /dev/ttyACM1: 0x166 = TIOCM_DTR | TIOCM_RTS | TIOCM_CTS | TIOCM_CAR (DCD) | TIOCM_DSR
+```
+
+`TIOCM_DTR` and `TIOCM_RTS` are the **host's** own outputs, read back out of
+`acm->ctrlout`, and `TIOCM_CTS` is a constant in `acm_tty_tiocmget`. The two
+that mean something here are **`TIOCM_CAR`** — DCD — and **`TIOCM_DSR`**, and
+`cdc_acm` takes both out of `acm->ctrlin`, which is assigned in exactly one
+place in the driver: the `USB_CDC_NOTIFY_SERIAL_STATE` arm of
+`acm_process_notification`. So a host reporting DCD and DSR for this device is
+the notification having arrived and been decoded, and there is nothing else in
+the device that could make it report them.
+
+So: **CHECKED** — Linux's `cdc_acm` receives the notification and answers
+`TIOCMGET` out of it. That is one driver on one kernel version.
+
+**Why that reading is not in the test.** `TIOCMGET` is an ioctl, which means
+`libc` and `unsafe`, and this crate has neither — the same reason `stty` does
+the terminal configuration. Three lines of Python took it instead, by hand.
+And it could not have been taken in the same run as the ten bytes above even
+if it could be taken at all: the device arms **one** notification per
+configuration and holds it until somebody polls, `cdc_acm` submits its own
+interrupt URB from `acm_port_activate` — that is, on `open` — and whichever of
+the two asks first gets it. The run above read it with usbfs, so that run's
+`cdc_acm` never saw one; the reading here is from a fresh configuration where
+nothing else asked.
+
+**What `clocal` actually does here, since this file used to say otherwise.**
+The previous version of this section said `clocal` was needed because a CDC ACM
+device reports carrier through SERIAL_STATE, this one sent none, and an `open`
+without `clocal` would wait for a carrier that never came. **That was wrong
+about this driver.** `cdc_acm`'s `tty_port_operations` has no `carrier_raised`
+member, and `tty_port_carrier_raised` returns **true** when that is missing
+(`drivers/tty/tty_port.c`), so an `open` of a `/dev/ttyACM*` never waits for a
+carrier whatever `clocal` says. `acm->clocal` is read in exactly one place in
+the driver, and it is the `tty_port_tty_hangup` in
+`acm_process_notification`: what `-clocal` gets you is a terminal that **hangs
+up** when a device reports the carrier **dropping**. This board's
+`serial_state` is a constant, so it never drops, and `clocal` stays in the
+`stty` line because a bridge that did report a real carrier should not be able
+to hang up a transfer half way through.
+
+### What it moves, in bytes per second
+
+Measured, not calculated, and **not measured on this block** — which is the
+first thing to say about it.
+`testdata/fpga/cynthion/usb_cdc_uart.v` carries one byte at a time through its
+UART, for the reason §7 gives about `ip/fifo_sync`, so it sends one-byte packets
+whatever `wMaxPacketSize` says and a wider packet does nothing for it. The
+design that measures the *endpoint* rather than the bridge above it is
+`testdata/fpga/cynthion/usb_ulpi_device.v`, the bulk loopback, and
+`tests/usb_loopback.rs` times 256 write-then-read round trips through it:
+
+| `wMaxPacketSize` | round trips/s | bytes/s each way |
+|------------------|---------------|------------------|
+| 8 | 8460 | 67 700 |
+| 64 | 3990 | 255 500 |
+
+**CHECKED**, six runs at each size on the same host and the same part, one byte
+of the source apart, repeatable to within a few percent. **3.8 times and not
+eight**: the transactions do fall by eight, but a 64-byte packet takes 43
+microseconds of 12 Mbit/s wire where an eight-byte one takes 5, so the round
+trip rate falls with them, and what is left over each one is about 110
+microseconds of host and scheduler that the packet size does not touch.
+
+What these numbers are not: a host that pipelined its transfers instead of
+waiting for each would see more of the eight, so this is a floor and not a
+ceiling. And they are **printed by a test and never asserted** — nothing in this
+repository compares a throughput against a clock, and `tools/check.sh` does not
+run that test at all.
+
+`docs/ip-library.md` has the footprint side of the same trade.
 
 ### What two of these lines cost to get right
 
@@ -713,7 +814,7 @@ lines that fix it.
   which is a design's business.
 - **Sixty-four bytes a packet**, which is the largest a full-speed bulk
   endpoint may have (USB 2.0 §5.8.3) and not a limit so much as the top of the
-  range; §6 below has what it is worth and what it cost. `MAXPKT` is a
+  range; §5 has what it is worth and what it cost. `MAXPKT` is a
   parameter, so a design short of flip-flops may declare 8, 16 or 32 instead
   and the descriptors follow — nothing checks that the value is one of those
   four. A host still has to read **one packet at a time**: a bulk IN transfer

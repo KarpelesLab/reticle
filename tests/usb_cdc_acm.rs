@@ -33,29 +33,32 @@
 //!    transmitter, recovered by its receiver, and handed back to the IN
 //!    endpoint — so a byte that comes back proves the whole bridge and not
 //!    only the USB half.
-//! 3. **The host received a SERIAL_STATE notification.** `clocal` used to be
-//!    in the `stty` list below because a CDC ACM device reports carrier
-//!    through SERIAL_STATE (PSTN 1.2 §6.5.4), this device sent none, and an
-//!    `open` without `clocal` would have waited for a carrier that never
-//!    arrived. It sends one now, so this part does the opposite: it
-//!    **clears** `clocal` and opens the port, which blocks in the kernel
-//!    until `cdc_acm` believes there is a carrier. That the open returns is
-//!    the driver having received the notification, taken `bRxCarrier` out of
-//!    `wSerialState` and acted on it — and nothing else in this device can
-//!    make it return.
+//! 3. **The device sent a SERIAL_STATE notification**, read off endpoint
+//!    `82h` — the ten bytes of PSTN 1.2 §6.5.4, checked field by field. This
+//!    is the half of the notification that a host can be asked about without
+//!    an ioctl: `TIOCMGET` reads the same `wSerialState` out of `cdc_acm`'s
+//!    own `ctrlin`, and it needs `libc` and `unsafe`, which this crate does
+//!    not have. `ip/usb_cdc_acm/README.md` §5 has that reading, taken by
+//!    hand, and says why the two cannot be taken in the same run.
 //!
-//!    `TIOCMGET` reads the same bit out of `cdc_acm`'s `ctrlin` directly and
-//!    is the more obvious way to look at it; it needs `libc` and `unsafe`,
-//!    which this crate does not have. A blocking `open` is the same fact seen
-//!    through an interface the standard library already offers, and it is the
-//!    stronger of the two observations: it is the kernel **acting** on the
-//!    notification rather than reporting it.
+//!    **A blocking `open` is not the observation it looks like.**
+//!    `cdc_acm`'s `tty_port_operations` has no `carrier_raised`, and
+//!    `tty_port_carrier_raised` returns **true** when that is missing
+//!    (`drivers/tty/tty_port.c`), so an `open` of a `/dev/ttyACM*` never waits
+//!    for a carrier whatever `clocal` says. What `clocal` does reach on this
+//!    driver is the *hangup* on a carrier that **drops**: `acm->clocal` is
+//!    read in exactly one place, and it is the `tty_port_tty_hangup` in
+//!    `acm_process_notification`. This file used to say that `clocal` was in
+//!    the `stty` list because an open would otherwise wait for a carrier that
+//!    never came, and that was wrong about this driver.
 //!
 //! **Why `stty` and not an ioctl.** Configuring a terminal means `tcsetattr`,
 //! which means `libc` and `unsafe`, and this crate has neither. `stty` is the
 //! operating system's own tool for it and shelling out to it is the honest
 //! way to reach a terminal from a crate that refuses both — and it is what a
-//! person does at a prompt anyway, which is the point of this class.
+//! person does at a prompt anyway, which is the point of this class. It is
+//! also why part three reads the notification off the wire rather than out of
+//! the driver: there is no `stty` for `TIOCMGET`.
 //!
 //! **What this test would and would not catch.** It catches a descriptor set
 //! the kernel refuses — a missing union functional descriptor, a
@@ -102,14 +105,15 @@ const TIMEOUT: Duration = Duration::from_millis(500);
 /// above: a slow machine must not fail this, only a broken device must.
 const ROUND_TRIP: Duration = Duration::from_secs(30);
 
-/// How long an `open` that waits for a carrier is given before the test calls
-/// it a carrier that is not there.
+/// The ten bytes of a SERIAL_STATE notification, and the bitmap this board's
+/// design reports in them.
 ///
-/// A notification the host already has makes the open return at once, and the
-/// host polls the endpoint every sixteen frames, so this is three orders of
-/// magnitude more than it needs. It is a timeout and not an assertion, for the
-/// same reason as the two above.
-const CARRIER: Duration = Duration::from_secs(5);
+/// `testdata/fpga/cynthion/usb_cdc_uart.v` ties `serial_state` to
+/// `7'b000_0011`: `bRxCarrier` and `bTxCarrier` set, every error bit clear.
+/// PSTN 1.2 §6.5.4 makes bit 0 DCD and bit 1 DSR, and a port whose far end is
+/// inside the same die has both.
+const SERIAL_STATE_BYTES: usize = 10;
+const SERIAL_STATE: u16 = 0x0003;
 
 /// The interface numbers and endpoint addresses `ip/usb_cdc_acm` declares.
 const COMM_IFACE: u8 = 0;
@@ -353,20 +357,95 @@ fn a_serial_port_this_compiler_built_is_bound_by_the_kernels_own_driver() {
     }
 
     // ------------------------------------------------------------------
-    // Part three: the host received the SERIAL_STATE notification.
+    // Part three: the device sent a SERIAL_STATE notification.
     // ------------------------------------------------------------------
-    let path = port.to_string_lossy().into_owned();
-    carrier_reaches_the_driver(&path);
+    // **Before anything opens the terminal**, which is not a detail: the device
+    // arms one notification per configuration and holds it until somebody polls
+    // endpoint 82h, and `cdc_acm` submits its own interrupt URB from
+    // `acm_port_activate` — that is, on `open`. So whichever of the two asks
+    // first gets it, and reading it here means the driver will not. That is
+    // why `ip/usb_cdc_acm/README.md` §5 has the `TIOCMGET` reading from a
+    // separate run rather than from this one.
+    match device.open() {
+        Ok(handle) => match serial_state_notification(&handle) {
+            Ok(bytes) => {
+                println!("SERIAL_STATE off endpoint {NOTIF_EP:#04x}: {bytes:02x?}");
+                assert_eq!(
+                    bytes.len(),
+                    SERIAL_STATE_BYTES,
+                    "a SERIAL_STATE is eight bytes of header and two of wSerialState"
+                );
+                // PSTN 1.2 §6.5 for the header — it has a SETUP packet's shape
+                // (USB 2.0 Table 9-2) — and §6.5.4 for what follows it.
+                assert_eq!(
+                    bytes[0], 0xA1,
+                    "bmRequestType: device to host, class, interface"
+                );
+                assert_eq!(bytes[1], 0x20, "bNotification: SERIAL_STATE");
+                assert_eq!(u16::from_le_bytes([bytes[2], bytes[3]]), 0, "wValue");
+                assert_eq!(
+                    u16::from_le_bytes([bytes[4], bytes[5]]),
+                    u16::from(COMM_IFACE),
+                    "wIndex names the communications interface"
+                );
+                assert_eq!(u16::from_le_bytes([bytes[6], bytes[7]]), 2, "wLength");
+                assert_eq!(
+                    u16::from_le_bytes([bytes[8], bytes[9]]),
+                    SERIAL_STATE,
+                    "wSerialState: bRxCarrier and bTxCarrier, no errors"
+                );
+                println!(
+                    "  bRxCarrier and bTxCarrier set, wLength 2, wIndex {COMM_IFACE}: \
+                     PSTN 1.2 §6.5.4, field for field"
+                );
+            }
+            Err(why) => {
+                println!("the SERIAL_STATE notification was not read ({why})");
+                println!(
+                    "  a udev rule or membership of the right group is usually why; the \
+                     notification is then proven only in simulation"
+                );
+            }
+        },
+        Err(err) => {
+            println!("cannot open {VID:04x}:{PID:04x} over usbfs ({err}) for the notification")
+        }
+    }
 
     // ------------------------------------------------------------------
     // Part two: bytes through the port, through the UART, and back.
     // ------------------------------------------------------------------
+    // The path is looked up **again**, because part three took the
+    // communications interface away from `cdc_acm` and gave it back: the driver
+    // re-attaching destroys the terminal and makes a new one, udev sets its
+    // owner and group a moment after the node appears, and an `stty` that lands
+    // in between gets `Permission denied` from a device that is perfectly well.
+    // That is what happened the first time this ran in this order.
+    let path = match terminal_again() {
+        Some(again) => {
+            if again != *port {
+                println!(
+                    "`cdc_acm` came back on {} (it was {})",
+                    again.display(),
+                    port.display()
+                );
+            }
+            again.to_string_lossy().into_owned()
+        }
+        None => panic!(
+            "no /dev/ttyACM* for {VID:04x}:{PID:04x} came back after the notification was \
+             read: `cdc_acm` did not re-attach to interface {COMM_IFACE}. Unplug and replug \
+             the board."
+        ),
+    };
     // 115200 to match `usb_cdc_uart.v`'s divisor, raw so nothing translates a
     // newline, no echo so the terminal layer does not send our bytes back at
-    // us and make a broken device look like a working one, `clocal` so that the
-    // round trip below does not depend on the notification part three has
-    // already settled, and a two-second read timeout with no minimum so a read
-    // returns rather than blocking for ever.
+    // us and make a broken device look like a working one, `clocal` so that a
+    // carrier this device reported and then dropped could not hang the terminal
+    // up mid-transfer — which is the one thing `acm->clocal` reaches in
+    // `cdc_acm`, and this board's `serial_state` is a constant so it cannot
+    // happen — and a two-second read timeout with no minimum so a read returns
+    // rather than blocking for ever.
     let stty = Command::new("stty")
         .args([
             "-F", &path, "115200", "raw", "-echo", "clocal", "min", "0", "time", "20",
@@ -467,67 +546,95 @@ fn a_serial_port_this_compiler_built_is_bound_by_the_kernels_own_driver() {
     }
 }
 
-/// The driver believes there is a carrier, which is the SERIAL_STATE
-/// notification observed from the host.
+/// The terminal for this device, waited for until a program can open it.
 ///
-/// `stty -clocal` tells the terminal layer to **use** the modem control
-/// signals, and then an `open` of the port with no `O_NONBLOCK` blocks in
-/// `tty_port_block_til_ready` until `cdc_acm` reports carrier — which it does
-/// out of `ctrlin`, the last `wSerialState` bitmap the notification endpoint
-/// sent it. So an open that returns is the notification having arrived and
-/// having been decoded, and there is nothing else in this device that could
-/// make it return: the bulk endpoints cannot, the class requests cannot, and
-/// `cdc_acm` clears `ctrlin` when it opens the port.
-///
-/// It runs in a thread because the whole point is that the call can block, and
-/// a test that hangs is worse than a test that fails. `clocal` goes back on
-/// afterwards whatever happened, because the byte round trip that follows must
-/// not depend on this.
-///
-/// **What it would not catch.** Which bit of `wSerialState` arrived: DCD is
-/// what a terminal blocks on, so `bTxCarrier` and the five error bits are
-/// unobserved here and are proven only in simulation. It also cannot
-/// distinguish "the notification arrived" from "the driver assumed carrier",
-/// which is why the old behaviour is worth remembering: with this device
-/// sending nothing, this same call blocked until the timeout.
-fn carrier_reaches_the_driver(path: &str) {
-    let set = |args: &[&str]| {
-        Command::new("stty")
-            .arg("-F")
-            .arg(path)
-            .args(args)
-            .status()
-            .map(|status| status.success())
-            .unwrap_or(false)
-    };
-    if !set(&["-clocal"]) {
-        println!("`stty -F {path} -clocal` did not run; the carrier was not checked");
-        println!("  the notification is then proven only in simulation");
-        return;
+/// Detaching `cdc_acm` from an interface and attaching it again destroys the
+/// terminal and creates a new one, and the two things a caller needs — that the
+/// node is there, and that it is openable — do not become true at the same
+/// instant: udev sets the owner and group from a rule that runs after the
+/// kernel has created the device. So this waits for both, and the wait is a
+/// **timeout and not an assertion**: it is a second of budget for work that
+/// takes milliseconds, and nothing here is compared against a clock.
+fn terminal_again() -> Option<PathBuf> {
+    for _ in 0..50 {
+        if let Some(path) = tty_ports(VID, PID).into_iter().next() {
+            // Openable, which is the thing the `stty` after this needs and the
+            // thing that is not true the instant the node appears.
+            if fs::OpenOptions::new()
+                .read(true)
+                .write(true)
+                .open(&path)
+                .is_ok()
+            {
+                return Some(path);
+            }
+        }
+        thread::sleep(Duration::from_millis(100));
     }
+    None
+}
 
-    let (tx, rx) = mpsc::channel();
-    let opening = path.to_owned();
-    thread::spawn(move || {
-        // Read only and **without** `O_NONBLOCK`, which is what makes the
-        // kernel wait for a carrier. `std::fs` opens blocking by default.
-        let _ = tx.send(fs::OpenOptions::new().read(true).open(&opening).map(|_| ()));
-    });
-    let waited = rx.recv_timeout(CARRIER);
-    // `clocal` back on before anything else, so a failure below does not leave
-    // the port in a state the next part cannot use.
-    let _ = set(&["clocal"]);
-
-    match waited {
-        Ok(Ok(())) => println!(
-            "`open` of {path} with `-clocal` returned: `cdc_acm` has a carrier, which it can              only have from the SERIAL_STATE notification's bRxCarrier"
-        ),
-        Ok(Err(err)) => panic!(
-            "opening {path} with `-clocal` failed ({err}); that is not the carrier answering              either way"
-        ),
-        Err(_) => panic!(
-            "`open` of {path} with `-clocal` blocked for {CARRIER:?}: `cdc_acm` has no              carrier, so no SERIAL_STATE notification reached it. PSTN 1.2 §6.5.4 is the              ten bytes and ip/usb_cdc_acm's `serial_state` port is what should have set              bRxCarrier in them; the notification endpoint NAKing every poll is what this              looks like from the device's side."
-        ),
+/// The SERIAL_STATE notification, read off the notification endpoint itself.
+///
+/// The device holds one armed from the moment the host configured it — an
+/// interrupt endpoint with nothing to say NAKs, and this one has something —
+/// so a single `interrupt_read` gets the ten bytes without waiting for
+/// anything to change.
+///
+/// **It has to take the communications interface away from `cdc_acm` to ask**,
+/// for the same reason `line_coding` below does: usbfs refuses a transfer on an
+/// endpoint whose interface another driver holds. So it detaches, claims, asks,
+/// releases and attaches the driver again, and the caller's later parts check
+/// that the terminal came back.
+///
+/// **What this would and would not catch.** It catches the ten bytes being
+/// wrong in any field, or not being sent at all — which is what this endpoint
+/// did before the packet length was widened, and would show here as a timeout.
+/// It does **not** show that a host driver decodes them: that is `TIOCMGET`,
+/// which needs an ioctl this crate cannot make, and
+/// `ip/usb_cdc_acm/README.md` §5 has it taken by hand. It also does not show a
+/// notification sent on a *change* of the line state, because this board's
+/// `serial_state` is a constant; that half is `tests/ip_library.rs`'s
+/// `usb_cdc_acm_notification_endpoint_sends_the_serial_state`.
+fn serial_state_notification(handle: &rawusb::DeviceHandle) -> Result<Vec<u8>, String> {
+    let held = handle.kernel_driver_active(COMM_IFACE).unwrap_or(false);
+    if held {
+        handle
+            .detach_kernel_driver(COMM_IFACE)
+            .map_err(|e| format!("detaching the driver from interface {COMM_IFACE}: {e}"))?;
+    }
+    let claimed = handle.claim_interface(COMM_IFACE);
+    // `wMaxPacketSize` of the endpoint, so a packet longer than the ten bytes
+    // expected comes back whole and fails the length assertion rather than
+    // being silently cut to fit.
+    let mut buf = vec![0u8; usize::from(NOTIF_MAXPKT)];
+    let asked = if claimed.is_ok() {
+        handle
+            .interrupt_read(NOTIF_EP, &mut buf, TIMEOUT)
+            .map_err(|e| format!("{e}"))
+    } else {
+        Err(format!("claiming interface {COMM_IFACE}: {claimed:?}"))
+    };
+    if claimed.is_ok() {
+        let _ = handle.release_interface(COMM_IFACE);
+    }
+    let reattached = if held {
+        handle.attach_kernel_driver(COMM_IFACE)
+    } else {
+        Ok(())
+    };
+    if let Err(err) = reattached {
+        return Err(format!(
+            "the notification was read but `cdc_acm` could not be put back on interface \
+             {COMM_IFACE} ({err}); unplug and replug the board"
+        ));
+    }
+    match asked {
+        Ok(n) => {
+            buf.truncate(n);
+            Ok(buf)
+        }
+        Err(err) => Err(err),
     }
 }
 
