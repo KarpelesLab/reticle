@@ -389,9 +389,9 @@ exists. `ip/usb_cdc_acm/README.md` §4 and §5 say what a host was observed to
 do with it and what is only quoted.
 
 **What the class layer cost.** On the ECP5, `usb_device_fs` is 1850 LUT4 and
-1387 flip-flops and `usb_cdc_acm_fs` is 2269 and 1639, so a serial port is
-**+419 LUT4 and +252 flip-flops** over the vendor device it is built on;
-`usb_device_ulpi` to `usb_cdc_acm_ulpi` is +393 and +252, which is nearly the
+1387 flip-flops and `usb_cdc_acm_fs` is 2270 and 1639, so a serial port is
+**+420 LUT4 and +252 flip-flops** over the vendor device it is built on;
+`usb_device_ulpi` to `usb_cdc_acm_ulpi` is +394 and +252, which is nearly the
 same thing twice and is the point of sharing the core. The flip-flops are the
 line coding — `dwDTERate` alone is thirty-two — DTR and RTS, `class_active`
 and `class_out_wait` in endpoint 0, the notification endpoint's own
@@ -1299,14 +1299,14 @@ exactly what this table is for.
 | `usb_device_ulpi` | `usb_device_ulpi` | VID=16'h1209, PID=16'h0001 | LUT6 | 85 x dff, 1702 x lut | 11 |
 | `usb_device_ulpi` | `usb_device_ulpi` | VID=16'h1209, PID=16'h0001 | iCE40 HX1K | 104 x SB_CARRY, 1346 x SB_DFFER, 39 x SB_DFFES, 8 x SB_DFFR, 1 x SB_GB, 55 x SB_IO, 1888 x SB_LUT4 | 10 |
 | `usb_device_ulpi` | `usb_device_ulpi` | VID=16'h1209, PID=16'h0001 | ECP5 45F | 1 x DCCA, 1940 x LUT4, 1393 x TRELLIS_FF, 55 x TRELLIS_IO | 10 |
-| `usb_cdc_acm` | `usb_cdc_acm_fs` | VID=16'h1209, PID=16'h0001 | LUT4 | 118 x dff, 2266 x lut | 12 |
+| `usb_cdc_acm` | `usb_cdc_acm_fs` | VID=16'h1209, PID=16'h0001 | LUT4 | 118 x dff, 2267 x lut | 12 |
 | `usb_cdc_acm` | `usb_cdc_acm_fs` | VID=16'h1209, PID=16'h0001 | LUT6 | 118 x dff, 1926 x lut | 11 |
 | `usb_cdc_acm` | `usb_cdc_acm_fs` | VID=16'h1209, PID=16'h0001 | iCE40 HX1K | 95 x SB_CARRY, 1575 x SB_DFFER, 47 x SB_DFFES, 14 x SB_DFFR, 3 x SB_DFFS, 1 x SB_GB, 104 x SB_IO, 2201 x SB_LUT4 | 12 |
-| `usb_cdc_acm` | `usb_cdc_acm_fs` | VID=16'h1209, PID=16'h0001 | ECP5 45F | 1 x DCCA, 2269 x LUT4, 1639 x TRELLIS_FF, 104 x TRELLIS_IO | 12 |
-| `usb_cdc_acm` | `usb_cdc_acm_ulpi` | VID=16'h1209, PID=16'h0001 | LUT4 | 112 x dff, 2332 x lut | 11 |
+| `usb_cdc_acm` | `usb_cdc_acm_fs` | VID=16'h1209, PID=16'h0001 | ECP5 45F | 1 x DCCA, 2270 x LUT4, 1639 x TRELLIS_FF, 104 x TRELLIS_IO | 12 |
+| `usb_cdc_acm` | `usb_cdc_acm_ulpi` | VID=16'h1209, PID=16'h0001 | LUT4 | 112 x dff, 2333 x lut | 11 |
 | `usb_cdc_acm` | `usb_cdc_acm_ulpi` | VID=16'h1209, PID=16'h0001 | LUT6 | 112 x dff, 2048 x lut | 11 |
 | `usb_cdc_acm` | `usb_cdc_acm_ulpi` | VID=16'h1209, PID=16'h0001 | iCE40 HX1K | 128 x SB_CARRY, 1591 x SB_DFFER, 45 x SB_DFFES, 9 x SB_DFFR, 1 x SB_GB, 120 x SB_IO, 2280 x SB_LUT4 | 11 |
-| `usb_cdc_acm` | `usb_cdc_acm_ulpi` | VID=16'h1209, PID=16'h0001 | ECP5 45F | 1 x DCCA, 2333 x LUT4, 1645 x TRELLIS_FF, 120 x TRELLIS_IO | 11 |
+| `usb_cdc_acm` | `usb_cdc_acm_ulpi` | VID=16'h1209, PID=16'h0001 | ECP5 45F | 1 x DCCA, 2334 x LUT4, 1645 x TRELLIS_FF, 120 x TRELLIS_IO | 11 |
 <!-- end footprints -->
 
 ### Seven things writing these blocks found
