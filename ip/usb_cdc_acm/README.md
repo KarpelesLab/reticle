@@ -666,8 +666,12 @@ were asked separately and agree.
 That check is `tests/fpga_trellis.rs`'s
 `the_bitstream_decodes_back_to_the_arcs_the_router_chose`, which makes it of a
 small design on every run and was **not weakened**. It was run by hand over
-this one, which is two minutes of place and route in a release build and too
-slow to keep in the gate.
+this one, which is a quarter of an hour of place and route in a release build —
+it was two minutes at eight bytes a packet — and far too slow to keep in the
+gate. The nearest thing that *is* a test is
+`the_usb_devices_constant_zero_probe_reaches_the_bitstream`, `#[ignore]`d, over
+`usb_ulpi_device.v`: nine minutes, and it follows all 1440 of that design's
+flip-flops back to a driver in the fabric with none floating.
 
 ### The notification endpoint sent SERIAL_STATE, and the driver acted on it
 
