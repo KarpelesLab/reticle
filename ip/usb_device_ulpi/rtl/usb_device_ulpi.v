@@ -96,17 +96,24 @@ module usb_device_ulpi #(
     parameter [7:0]  DEV_PROTOCOL = 8'h00,
     parameter [7:0]  CFG_ATTR     = 8'h80,
     parameter [7:0]  CFG_POWER    = 8'd50,
+    // Bytes in a packet of the data endpoint, and of endpoint 0. USB 2.0
+    // §5.8.3 allows a full-speed bulk endpoint 8, 16, 32 or 64 and §5.5.3 the
+    // same four for endpoint 0; 64 is the largest and the fastest, and is
+    // what `wMaxPacketSize` in the default descriptors below and
+    // `bMaxPacketSize0` in the device descriptor are **taken from** rather
+    // than told again.
+    parameter [6:0]  MAXPKT       = 7'd64,
+    parameter [6:0]  MAXPKT0      = 7'd64,
     // The class's interface and endpoint descriptors, in descriptor order,
     // and their length in bytes; `usb_ctrl_ep` says what is derived from
     // them and what is not.
     parameter integer IFACE_BYTES = 23,
     parameter [IFACE_BYTES*8-1:0] IFACE_DESC = {
         8'd9, 8'd4, 8'd0, 8'd0, 8'd2, 8'hFF, 8'h00, 8'h00, 8'd0,
-        8'd7, 8'd5, 8'h01, 8'd2, 8'd8, 8'd0, 8'd0,
-        8'd7, 8'd5, 8'h81, 8'd2, 8'd8, 8'd0, 8'd0
+        8'd7, 8'd5, 8'h01, 8'd2, {1'b0, MAXPKT}, 8'd0, 8'd0,
+        8'd7, 8'd5, 8'h81, 8'd2, {1'b0, MAXPKT}, 8'd0, 8'd0
     },
-    parameter [3:0]  DATA_ENDP    = 4'd1,
-    parameter [3:0]  MAXPKT       = 4'd8
+    parameter [3:0]  DATA_ENDP    = 4'd1
 ) (
     input  wire       clk60,
     input  wire       rst_n,
@@ -138,7 +145,8 @@ module usb_device_ulpi #(
     wire [7:0] rx_data;
     wire       rx_valid, rx_eop, rx_active, line_idle, bus_reset;
     wire       tx_start, tx_with_data, tx_busy;
-    wire [3:0] tx_pid, tx_len, tx_index;
+    wire [3:0] tx_pid;
+    wire [6:0] tx_len, tx_index;
     wire [7:0] tx_byte;
 
     usb_ulpi_link #(
@@ -191,6 +199,7 @@ module usb_device_ulpi #(
         .IFACE_DESC   (IFACE_DESC),
         .DATA_ENDP    (DATA_ENDP),
         .MAXPKT       (MAXPKT),
+        .MAXPKT0      (MAXPKT0),
         .TURNAROUND   (TURNAROUND)
     ) u_dev (
         .clk          (clk60),

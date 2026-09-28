@@ -98,15 +98,16 @@
 //   the transceiver drives its internal PLL from the Link's clock, and
 //   nothing here ever stops it.
 //
-//   Eight bytes of payload at most, which is `usb_ctrl_ep`'s maximum
-//   packet size. No VBUS or ID handling: a receive command's VbusState
-//   and ID bits are read and dropped, so a bus-powered device is assumed
-//   and a session is never negotiated. No extended register set, no
-//   interrupt enable registers, and no transmit error injection
-//   (§3.8.2.3), which a device with a payload this small cannot need.
-//   Nothing asserts `stp` to abort the transceiver (§3.8.4.2); there is
-//   no babbling port to shut down when the only endpoint answers in
-//   eight bytes.
+//   Sixty-four bytes of payload at most, which is the largest a
+//   full-speed endpoint of any type may declare and is what the seven-bit
+//   `tx_len` holds; `usb_fs_tx`'s header states why seven and not six or
+//   ten. No VBUS or ID handling: a receive command's VbusState and ID bits
+//   are read and dropped, so a bus-powered device is assumed and a session
+//   is never negotiated. No extended register set, no interrupt enable
+//   registers, and no transmit error injection (§3.8.2.3). Nothing asserts
+//   `stp` to abort the transceiver (§3.8.4.2); there is no babbling port to
+//   shut down when every packet this device sends is a length the endpoint
+//   above it decided before the first byte went out.
 //
 //   Nothing waits for the receive command that reports the end of the
 //   Link's *own* packet on the wire before accepting another `tx_start`,
@@ -192,8 +193,8 @@ module usb_ulpi_link #(
     input  wire       tx_start,
     input  wire [3:0] tx_pid,
     input  wire       tx_with_data,
-    input  wire [3:0] tx_len,
-    output wire [3:0] tx_index,
+    input  wire [6:0] tx_len,
+    output wire [6:0] tx_index,
     input  wire [7:0] tx_byte,
     output wire       tx_busy,
 
@@ -286,8 +287,8 @@ module usb_ulpi_link #(
     // Attempts at the start-up's Debug register read, while it says SE0.
     reg [15:0] line_tries;
 
-    reg [3:0]  idx;
-    reg [3:0]  len_q;
+    reg [6:0]  idx;
+    reg [6:0]  len_q;
     reg        with_data_q;
     reg [15:0] crc;
 
@@ -431,8 +432,8 @@ module usb_ulpi_link #(
             seen_line   <= 1'b0;
             line_tries  <= 16'd0;
             ready_q     <= 1'b0;
-            idx         <= 4'd0;
-            len_q       <= 4'd0;
+            idx         <= 7'd0;
+            len_q       <= 7'd0;
             with_data_q <= 1'b0;
             crc         <= 16'hFFFF;
         end else begin
@@ -713,7 +714,7 @@ module usb_ulpi_link #(
                             data_out    <= {CMD_TX, 2'b00, tx_pid};
                             len_q       <= tx_len;
                             with_data_q <= tx_with_data;
-                            idx         <= 4'd0;
+                            idx         <= 7'd0;
                             crc         <= 16'hFFFF;
                             state       <= S_TX_CMD;
                         end
@@ -726,14 +727,14 @@ module usb_ulpi_link #(
                                 data_out <= 8'h00;
                                 stp_q    <= 1'b1;
                                 state    <= S_READY;
-                            end else if (len_q == 4'd0) begin
+                            end else if (len_q == 7'd0) begin
                                 // A zero-length data packet still carries
                                 // the CRC16 of nothing, which is 0x0000.
                                 data_out <= ~crc[7:0];
                                 state    <= S_TX_CRC0;
                             end else begin
                                 data_out <= tx_byte;
-                                idx      <= 4'd1;
+                                idx      <= 7'd1;
                                 state    <= S_TX_DATA;
                             end
                         end
@@ -746,7 +747,7 @@ module usb_ulpi_link #(
                                 state    <= S_TX_CRC0;
                             end else begin
                                 data_out <= tx_byte;
-                                idx      <= idx + 4'd1;
+                                idx      <= idx + 7'd1;
                             end
                         end
                     end

@@ -22,7 +22,7 @@
 //   handshake, so the host retries. A token addressed elsewhere, or to
 //   another endpoint, is ignored too.
 //
-//   Endpoint 0, maximum packet size 8:
+//   Endpoint 0, maximum packet size `MAXPKT0` — 64 by default:
 //
 //     GET_DESCRIPTOR, device        the 18-byte device descriptor, VID
 //                                   and PID from the parameters
@@ -65,9 +65,11 @@
 //   say what the device does.
 //
 // What it does not do
-//   One bulk endpoint pair, eight bytes a packet, and no interrupt or
-//   isochronous endpoint — an interrupt endpoint is `usb_bulk_ep` with a
-//   different bmAttributes in the descriptor and nothing else.
+//   One bulk endpoint pair, `MAXPKT` bytes a packet — 64 by default, which
+//   is the largest USB 2.0 §5.8.3 allows a full-speed bulk endpoint — and no
+//   isochronous endpoint. An interrupt endpoint is `usb_bulk_ep` with a
+//   different bmAttributes in the descriptor and nothing else; `usb_dev_core`
+//   has a second one for a class that needs it and this block leaves it out.
 //
 //   No strings, no remote wake-up, no suspend (a device must draw under
 //   2.5 mA after 3 ms of idle, which is a board's business), no
@@ -85,17 +87,24 @@ module usb_device_fs #(
     parameter [7:0]   DEV_PROTOCOL = 8'h00,
     parameter [7:0]   CFG_ATTR     = 8'h80,
     parameter [7:0]   CFG_POWER    = 8'd50,
+    // Bytes in a packet of the data endpoint, and of endpoint 0. USB 2.0
+    // §5.8.3 allows a full-speed bulk endpoint 8, 16, 32 or 64 and §5.5.3 the
+    // same four for endpoint 0; 64 is the largest and the fastest, and is
+    // what `wMaxPacketSize` in the default descriptors below and
+    // `bMaxPacketSize0` in the device descriptor are **taken from** rather
+    // than told again.
+    parameter [6:0]   MAXPKT       = 7'd64,
+    parameter [6:0]   MAXPKT0      = 7'd64,
     // The class's interface and endpoint descriptors, in descriptor order,
     // and their length in bytes; `usb_ctrl_ep` says what is derived from
     // them and what is not.
     parameter integer IFACE_BYTES  = 23,
     parameter [IFACE_BYTES*8-1:0] IFACE_DESC = {
         8'd9, 8'd4, 8'd0, 8'd0, 8'd2, 8'hFF, 8'h00, 8'h00, 8'd0,
-        8'd7, 8'd5, 8'h01, 8'd2, 8'd8, 8'd0, 8'd0,
-        8'd7, 8'd5, 8'h81, 8'd2, 8'd8, 8'd0, 8'd0
+        8'd7, 8'd5, 8'h01, 8'd2, {1'b0, MAXPKT}, 8'd0, 8'd0,
+        8'd7, 8'd5, 8'h81, 8'd2, {1'b0, MAXPKT}, 8'd0, 8'd0
     },
-    parameter [3:0]   DATA_ENDP    = 4'd1,
-    parameter [3:0]   MAXPKT       = 4'd8
+    parameter [3:0]   DATA_ENDP    = 4'd1
 ) (
     input  wire       clk48,
     input  wire       rst_n,
@@ -144,8 +153,8 @@ module usb_device_fs #(
     wire       tx_start;
     wire [3:0] tx_pid;
     wire       tx_with_data;
-    wire [3:0] tx_len;
-    wire [3:0] tx_index;
+    wire [6:0] tx_len;
+    wire [6:0] tx_index;
     wire [7:0] tx_byte;
 
     usb_fs_tx u_tx (
@@ -177,6 +186,7 @@ module usb_device_fs #(
         .IFACE_DESC   (IFACE_DESC),
         .DATA_ENDP    (DATA_ENDP),
         .MAXPKT       (MAXPKT),
+        .MAXPKT0      (MAXPKT0),
         .TURNAROUND   (7'd8)
     ) u_dev (
         .clk          (clk48),

@@ -54,10 +54,14 @@
 //   No SET_COMM_FEATURE, GET_COMM_FEATURE or CLEAR_COMM_FEATURE (D0 of the
 //   same byte, also clear), and no network-connection notification (D3).
 //
-//   No **SERIAL_STATE** notification, which is the one omission worth
-//   reading twice. It is not a request at all — it is a ten-byte interrupt
-//   IN packet — and `usb_bulk_ep` holds eight. `usb_cdc_acm`'s header says
-//   what that costs and what established that Linux does not need one.
+//   No **SERIAL_STATE** notification, and that is a division of labour
+//   rather than an omission: it is not a request at all — it is a ten-byte
+//   interrupt IN packet the device sends of its own accord — so it belongs
+//   to the block that owns the notification endpoint, which is
+//   `usb_cdc_acm`. Its header says what the ten bytes are and when they go.
+//   D1 of the Abstract Control Management descriptor claims the
+//   notification **and** these three requests as one feature, which is why
+//   that bit was already set before the notification existed.
 //
 //   Nothing here touches the bulk endpoints. The serial port's bytes go
 //   through `usb_bulk_ep`'s byte interface and never come near endpoint 0.
@@ -86,7 +90,7 @@ module usb_cdc_req #(
     input  wire [6:0]  index,
     output wire [7:0]  resp,
     input  wire [63:0] out_data,
-    input  wire [3:0]  out_len,
+    input  wire [6:0]  out_len,
     input  wire        out_valid,
 
     // What the host asked the line to be.
@@ -194,7 +198,7 @@ module usb_cdc_req #(
             // requests that write and only one of them carries data: a
             // SET_CONTROL_LINE_STATE that somehow brought a payload must
             // not land in the line coding.
-            if (out_valid && out_len == 4'd7) begin
+            if (out_valid && out_len == 7'd7) begin
                 rate     <= out_data[31:0];
                 format_q <= out_data[39:32];
                 parity_q <= out_data[47:40];

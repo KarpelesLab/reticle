@@ -8622,6 +8622,28 @@ trait UsbPair {
     /// The cycles an answer may take, which is a property of what is
     /// between the host and the device.
     fn answer_window(&self) -> (u64, u64);
+
+    /// Cycles the layer between the host and the device added to each answer,
+    /// oldest first, which the **device** must not be blamed for.
+    ///
+    /// Nothing sits between the host and `usb_device_fs`, so the default is
+    /// nothing. A ULPI transceiver does, and the model of one in this file is
+    /// **store and forward**: it takes the Link's bytes at the interface's
+    /// rate and only puts the packet on the pair once `stp` has ended it, so
+    /// the delay the host measures is the device's turnaround **plus one
+    /// interface clock per byte of the answer**. A real transceiver serialises
+    /// as the bytes arrive and adds a fixed latency instead.
+    ///
+    /// Subtracting it is what keeps the inter-packet delay USB 2.0 §7.1.18
+    /// allows — 2 to 6.5 bit times — a tight bound on the **device** through
+    /// both link layers. It used to need no subtracting because a packet was
+    /// eight bytes and eleven cycles of overhead still fitted inside 6.5 bit
+    /// times of a 60 MHz clock; at 64 bytes it does not, and widening the
+    /// window to 67 cycles instead would have made it vacuous, since the host
+    /// gives up after 18 bit times anyway.
+    fn added_delay(&self) -> Vec<u64> {
+        Vec::new()
+    }
     /// The data endpoint's byte interface, and the logic above it.
     fn data(&mut self) -> &mut DataEp;
     /// One of the block's own top-level nets, by name.
@@ -8632,6 +8654,16 @@ trait UsbPair {
     /// keeps the trait from growing a method per signal of every future
     /// class.
     fn port(&self, name: &str) -> u64;
+
+    /// Drive one of the block's own top-level inputs, by name.
+    ///
+    /// The mirror of `port`, and it exists for `serial_state`: what a CDC ACM
+    /// device reports as its line state is an **input** of the class layer, so
+    /// a test that wants a notification to say something has to say it. A
+    /// named lookup for the same reason `port` is one, and it panics on a name
+    /// the block does not have, which is what a test driving the wrong port
+    /// deserves.
+    fn set_port(&mut self, name: &str, value: u64, bits: u32);
 }
 
 /// The data endpoint's byte interface, and whatever stands in for the logic
@@ -8865,7 +8897,10 @@ impl<P: UsbPair> UsbHost<P> {
         while let Some(state) = self.pair.driven() {
             states.push(state);
             self.pair.cycle(None);
-            if states.len() as u64 > cpb * 200 {
+            // A 64-byte data packet is 67 bytes on the wire — SYNC, PID,
+            // payload, CRC16 and the EOP — so 550 bit times, and more with
+            // stuffing. This is a runaway guard and not a limit on a packet.
+            if states.len() as u64 > cpb * 700 {
                 self.problems
                     .push("the device never let go of the bus".into());
                 break;
@@ -9007,7 +9042,7 @@ impl<P: UsbPair> UsbHost<P> {
             match self.in_token(addr) {
                 UsbReply::Data(pid, payload) => {
                     assert_eq!(pid, toggle, "the data stage alternates DATA1, DATA0, ...");
-                    let short = payload.len() < 8;
+                    let short = payload.len() < EP0_MAXPKT;
                     got.extend(payload);
                     self.ack();
                     toggle = if toggle == USB_DATA1 {
@@ -9064,6 +9099,11 @@ impl<P: UsbPair> UsbHost<P> {
         self.pair.port(name)
     }
 
+    /// Drive one of the block's own top-level inputs, by name.
+    fn set_port(&mut self, name: &str, value: u64, bits: u32) {
+        self.pair.set_port(name, value, bits);
+    }
+
     /// A control transfer whose data stage goes **host to device**: SETUP,
     /// one DATA1 packet of `payload`, then the zero-length IN of the status
     /// stage.
@@ -9118,12 +9158,26 @@ impl<P: UsbPair> UsbHost<P> {
             problems.join("\n  ")
         );
         // Every answer came inside the window the layer between the host
-        // and the device allows.
+        // and the device allows, once what that layer added to it is taken
+        // off; `added_delay` says what that is and why there is any.
         let (low, high) = self.pair.answer_window();
-        for gap in &self.gaps {
+        let added = self.pair.added_delay();
+        assert!(
+            added.is_empty() || added.len() >= self.gaps.len(),
+            "{} answers and {} of them accounted for: the correction has drifted \
+             out of step with the answers",
+            self.gaps.len(),
+            added.len()
+        );
+        for (i, gap) in self.gaps.iter().enumerate() {
+            let extra = added.get(i).copied().unwrap_or(0);
+            let took = gap.saturating_sub(extra);
             assert!(
-                (low..=high).contains(gap),
-                "the device answered after {gap} cycles, outside {low} to {high}"
+                (low..=high).contains(&took),
+                "the device answered after {took} cycles, outside {low} to {high} \
+                 (the layer between added {extra} of the {gap} measured); every gap of \
+                 this run was {:?} and every correction {added:?}",
+                self.gaps
             );
         }
     }
@@ -9256,7 +9310,29 @@ impl UsbPair for FsPair<'_> {
     fn port(&self, name: &str) -> u64 {
         get_u64(&self.sim, top_net(&self.sim, name))
     }
+
+    fn set_port(&mut self, name: &str, value: u64, bits: u32) {
+        let net = top_net(&self.sim, name);
+        self.sim.set(net, word(bits, value));
+    }
 }
+
+/// `bMaxPacketSize0` and `wMaxPacketSize`, which every block in this
+/// library now declares as 64.
+///
+/// Both are written here rather than read out of the blocks, because what
+/// these tests are for is holding the blocks to the specification's own
+/// numbers: USB 2.0 §5.5.3 allows endpoint 0 exactly 8, 16, 32 or 64 and
+/// §5.8.3 the same four for a bulk endpoint, so 64 is the largest legal value
+/// of each and the one that costs a host the fewest transactions.
+///
+/// `EP0_MAXPKT` is also **what ends a control read**: a data stage stops on a
+/// packet shorter than the endpoint's maximum or on `wLength`, so a host model
+/// with the wrong number here would either stop early or ask for ever. That
+/// is the same mistake `tests/usb_loopback.rs` records making against a real
+/// host, and this is the simulated half of it.
+const EP0_MAXPKT: usize = 64;
+const BULK_MAXPKT: usize = 64;
 
 const GET_DEVICE_DESCRIPTOR: [u8; 8] = [0x80, 0x06, 0x00, 0x01, 0x00, 0x00, 0x40, 0x00];
 
@@ -9280,7 +9356,16 @@ fn expected_device_descriptor(vid: u16, pid: u16) -> Vec<u8> {
 /// in its communications interface, which is what CDC 1.1 Table 14 asks
 /// for.
 fn expected_device_descriptor_of(vid: u16, pid: u16, class: [u8; 3]) -> Vec<u8> {
-    let mut d = vec![18, 1, 0x00, 0x02, class[0], class[1], class[2], 8];
+    let mut d = vec![
+        18,
+        1,
+        0x00,
+        0x02,
+        class[0],
+        class[1],
+        class[2],
+        u8::try_from(EP0_MAXPKT).expect("a legal bMaxPacketSize0"),
+    ];
     d.extend_from_slice(&vid.to_le_bytes());
     d.extend_from_slice(&pid.to_le_bytes());
     d.extend_from_slice(&[0x00, 0x01, 0, 0, 0, 1]);
@@ -9303,11 +9388,12 @@ fn expected_device_descriptor_of(vid: u16, pid: u16, class: [u8; 3]) -> Vec<u8> 
 fn expected_configuration_descriptor() -> Vec<u8> {
     // The interface and its two endpoints, which is what `IFACE_DESC`
     // holds: vendor specific, and a bulk OUT and a bulk IN on endpoint 1
-    // with eight-byte packets.
+    // with 64-byte packets.
     let mut iface: Vec<u8> = Vec::new();
+    let pkt = u8::try_from(BULK_MAXPKT).expect("a legal wMaxPacketSize");
     iface.extend_from_slice(&[9, 4, 0, 0, 0, 0xFF, 0x00, 0x00, 0]);
-    iface.extend_from_slice(&[7, 5, 0x01, 2, 8, 0, 0]);
-    iface.extend_from_slice(&[7, 5, 0x81, 2, 8, 0, 0]);
+    iface.extend_from_slice(&[7, 5, 0x01, 2, pkt, 0, 0]);
+    iface.extend_from_slice(&[7, 5, 0x81, 2, pkt, 0, 0]);
     // bNumEndpoints is byte 4 of the interface descriptor and is the
     // ENDPOINT descriptors that follow it, counted here rather than typed.
     iface[4] = u8::try_from(count_descriptors(&iface, 5)).expect("a small number");
@@ -9435,9 +9521,15 @@ fn enumerate_descriptors<P: UsbPair>(
         config, config_want,
         "the configuration descriptor and everything under it, in packets of eight"
     );
+    // A read of exactly sixteen bytes of an eighteen-byte descriptor: the
+    // data stage stops because `wLength` is reached and **not** because a
+    // packet was short, since sixteen is less than `EP0_MAXPKT`. That is the
+    // other of the two ways a control read ends, and with 64-byte packets it
+    // is the only one this particular read exercises — it was two whole
+    // packets when a packet was eight bytes.
     let sixteen = host
         .control_read(9, get_descriptor(1, 16))
-        .expect("two whole packets");
+        .expect("sixteen bytes of the device descriptor");
     assert_eq!(sixteen.len(), 16, "wLength ends the data stage");
 
     // SET_CONFIGURATION 1, then 0.
@@ -9589,17 +9681,70 @@ fn usb_device_fs_sends_again_what_the_host_did_not_acknowledge() {
         panic!("data expected, got {again:?}");
     };
     assert_eq!(*pid, USB_DATA1);
-    assert_eq!(payload[..], expected_device_descriptor(0x1209, 0x0001)[..8]);
+    // The whole eighteen-byte descriptor, because a packet is 64 bytes: this
+    // was the first eight of it when it was not.
+    assert_eq!(payload[..], expected_device_descriptor(0x1209, 0x0001)[..]);
     host.ack();
-    // Acknowledged, it moves on to the next eight bytes and DATA0.
-    let next = host.in_token(0);
+    // Acknowledged, and there is nothing left of the data stage, so an IN the
+    // host sends anyway is answered with a zero-length DATA0 — the packet that
+    // ends a transfer whose length is a multiple of the packet size, sent here
+    // from the same arm.
     assert_eq!(
-        next,
-        UsbReply::Data(
-            USB_DATA0,
-            expected_device_descriptor(0x1209, 0x0001)[8..16].to_vec()
-        )
+        host.in_token(0),
+        UsbReply::Data(USB_DATA0, Vec::new()),
+        "a data stage that is over answers an IN with nothing"
     );
+    host.assert_clean();
+}
+
+/// A data stage cut into packets of the size the descriptor declared, with the
+/// toggle alternating, proved at a packet size that is **not** the default.
+///
+/// `MAXPKT0` is eight here and 64 everywhere else, which is what makes this
+/// test worth having twice over: it is the only place a data stage longer than
+/// one packet of endpoint 0 goes through the plain device — no descriptor of it
+/// reaches 64 bytes — and it is the only place the parameter is exercised at a
+/// second one of the four values USB 2.0 §5.5.3 allows. A packet size that had
+/// been hard-wired at 64 somewhere, or a `bMaxPacketSize0` that did not follow
+/// the parameter, fails here and nowhere else.
+#[test]
+fn usb_device_fs_cuts_a_data_stage_into_packets_of_the_size_it_declared() {
+    let design = design_of(
+        "usb_device_fs",
+        "usb_device_fs",
+        &[
+            ("VID", "16'h1209"),
+            ("PID", "16'h0001"),
+            ("MAXPKT0", "7'd8"),
+        ],
+    );
+    let mut host = UsbHost::new(FsPair::new(&design), 0);
+    host.bus_reset();
+    assert_eq!(
+        host.setup(0, GET_DEVICE_DESCRIPTOR),
+        UsbReply::Handshake(USB_ACK)
+    );
+    host.idle(4);
+
+    // Byte 7 of the device descriptor is `bMaxPacketSize0` and says eight,
+    // because the parameter does.
+    let mut want = expected_device_descriptor(0x1209, 0x0001);
+    want[7] = 8;
+
+    // Eighteen bytes in packets of eight: 8, 8, 2, DATA1 then DATA0 then
+    // DATA1, and the short last one is what ends the transfer.
+    let mut got: Vec<u8> = Vec::new();
+    for (chunk, pid) in [(8usize, USB_DATA1), (8, USB_DATA0), (2, USB_DATA1)] {
+        let reply = host.in_token(0);
+        let UsbReply::Data(saw, payload) = &reply else {
+            panic!("data expected, got {reply:?}");
+        };
+        assert_eq!(*saw, pid, "the data stage alternates DATA1, DATA0, ...");
+        assert_eq!(payload.len(), chunk, "a packet of eight until the last");
+        got.extend(payload);
+        host.ack();
+    }
+    assert_eq!(got, want, "eighteen bytes, three packets, byte for byte");
     host.assert_clean();
 }
 
@@ -9726,11 +9871,31 @@ fn configure_for<P: UsbPair>(
 fn bulk_loopback<P: UsbPair>(host: &mut UsbHost<P>) {
     configure(host, 7);
 
-    // A full packet, a short one, and one byte. `FF` and `07` between them
-    // put six ones in a row on the wire in both directions, so the device
-    // has to stuff what it sends and unstuff what it receives inside a data
-    // endpoint's payload and not only inside a descriptor's.
+    // A full packet, one a byte short of full, a middling one, and one byte.
+    // `FF` and `07` between them put six ones in a row on the wire in both
+    // directions, so the device has to stuff what it sends and unstuff what it
+    // receives inside a data endpoint's payload and not only inside a
+    // descriptor's.
+    //
+    // **The full one is 64 bytes and that is the point of it.** Every byte of
+    // it is different from its neighbours and from its own position modulo
+    // eight, so a packet that came back with the first eight bytes repeated,
+    // or shifted by the two bytes of a CRC, or drawn from a buffer whose base
+    // was computed for a different length, is visible here and not only as a
+    // length. Sixty-three bytes beside it is the case a base counter off by
+    // one gets wrong, since that is the only length at which the packet fills
+    // the buffer but does not start at its bottom.
+    let full: Vec<u8> = (0..BULK_MAXPKT)
+        .map(|i| {
+            u8::try_from(i)
+                .expect("a byte")
+                .wrapping_mul(73)
+                .wrapping_add(5)
+        })
+        .collect();
     let packets: Vec<Vec<u8>> = vec![
+        full.clone(),
+        full[..BULK_MAXPKT - 1].to_vec(),
         vec![0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07],
         vec![0xDE, 0xAD, 0xBE, 0xEF, 0xFF],
         vec![0x5A],
@@ -10018,9 +10183,13 @@ fn usb_configuration_descriptor_counts_the_endpoints_the_class_miscounted() {
             ("VID", "16'h1209"),
             ("PID", "16'h0001"),
             ("IFACE_BYTES", "23"),
+            // The default descriptors with `bNumEndpoints` set to 5, and
+            // `wMaxPacketSize` 40h on both endpoints, which is what `MAXPKT`
+            // puts there by default: a parameter given by hand has to state
+            // every byte, including the ones the default derives.
             (
                 "IFACE_DESC",
-                "184'h0904000005FF0000000705010208000007058102080000",
+                "184'h0904000005FF0000000705010240000007058102400000",
             ),
         ],
     );
@@ -10401,6 +10570,12 @@ struct UlpiPhy {
     commands: Vec<u8>,
     /// Every USB packet the Link handed over, PID byte and CRC included.
     packets: Vec<Vec<u8>>,
+    /// Interface clocks between each packet's transmit command and the `stp`
+    /// that ended it, which is what this model's store-and-forward adds to the
+    /// delay a host measures. `UsbPair::added_delay` says why it matters.
+    held: Vec<u64>,
+    /// Interface clocks since the transmit command being collected.
+    tx_ticks: u64,
     /// Cycles the Link held the reset pin low.
     reset_cycles: u64,
     /// Turnaround cycles the transceiver has taken the bus for.
@@ -10508,6 +10683,8 @@ impl UlpiPhy {
             accesses: Vec::new(),
             commands: Vec::new(),
             packets: Vec::new(),
+            held: Vec::new(),
+            tx_ticks: 0,
             reset_cycles: 0,
             turnarounds: 0,
             unsolicited: 0,
@@ -10902,6 +11079,7 @@ impl UlpiPhy {
                     }
                     self.tx = vec![usb_pid(pid)];
                     self.ticks = 0;
+                    self.tx_ticks = 0;
                     self.state = PhyState::Collect;
                     self.nxt = self.accept();
                 }
@@ -10982,6 +11160,7 @@ impl UlpiPhy {
                 self.idle_out();
             }
             PhyState::Collect => {
+                self.tx_ticks += 1;
                 if link.stp {
                     if link.data != 0 {
                         let byte = link.data;
@@ -10990,7 +11169,10 @@ impl UlpiPhy {
                     self.send_packet();
                 } else if self.nxt {
                     self.tx.push(link.data);
-                    if self.tx.len() > 16 {
+                    // A 64-byte data packet is the PID, 64 bytes and the
+                    // CRC16: 67. Anything past that is a Link that never
+                    // asserted `stp`, which is a fault and not a long packet.
+                    if self.tx.len() > 67 {
                         self.problem("a USB transmit that never ended".into());
                         self.state = PhyState::Idle;
                         self.idle_out();
@@ -11132,6 +11314,7 @@ impl UlpiPhy {
         let bytes = std::mem::take(&mut self.tx);
         self.tx_line = usb_line(&bytes, true);
         self.packets.push(bytes);
+        self.held.push(self.tx_ticks);
         self.tx_pos = 0;
         self.tx_hold = self.div;
         self.line_out = Some(self.tx_line[0]);
@@ -11280,12 +11463,23 @@ impl UsbPair for UlpiPair<'_> {
         (2 * ULPI_CPB, 13 * ULPI_CPB / 2)
     }
 
+    fn added_delay(&self) -> Vec<u64> {
+        // One interface clock per byte the Link handed over, because this
+        // model is store and forward; `UsbPair::added_delay` says the rest.
+        self.phy.held.clone()
+    }
+
     fn data(&mut self) -> &mut DataEp {
         &mut self.data
     }
 
     fn port(&self, name: &str) -> u64 {
         get_u64(&self.sim, top_net(&self.sim, name))
+    }
+
+    fn set_port(&mut self, name: &str, value: u64, bits: u32) {
+        let net = top_net(&self.sim, name);
+        self.sim.set(net, word(bits, value));
     }
 }
 
@@ -11391,17 +11585,22 @@ fn usb_device_ulpi_enumerates_through_a_transceiver_model() {
     let phy = &host.pair.phy;
     assert_eq!(
         phy.commands[..3],
-        // The command code 0100 and then the PID: the SETUP's ACK, the
-        // first packet of the data stage, and the second.
-        [0x42, 0x4B, 0x43],
-        "the transmit commands of an ACK, a DATA1 and a DATA0"
+        // The command code 0100 and then the PID: the SETUP's ACK, the whole
+        // data stage in one DATA1, and the ACK of the status stage. It was an
+        // ACK, a DATA1 and a **DATA0** when a packet held eight bytes and an
+        // eighteen-byte descriptor took three of them.
+        [0x42, 0x4B, 0x42],
+        "the transmit commands of an ACK, a DATA1 and the status stage's ACK"
     );
     let descriptor = expected_device_descriptor(0x1209, 0x0001);
     let mut first = vec![usb_pid(USB_DATA1)];
-    first.extend_from_slice(&descriptor[..8]);
-    first.extend_from_slice(&usb_crc16(&descriptor[..8]).to_le_bytes());
+    first.extend_from_slice(&descriptor);
+    first.extend_from_slice(&usb_crc16(&descriptor).to_le_bytes());
     assert_eq!(phy.packets[0], vec![usb_pid(USB_ACK)], "the SETUP's ACK");
-    assert_eq!(phy.packets[1], first, "the first eight descriptor bytes");
+    assert_eq!(
+        phy.packets[1], first,
+        "the whole eighteen-byte descriptor, in one packet"
+    );
     // A zero-length data packet is a PID and the CRC16 of nothing.
     assert!(
         phy.packets
@@ -11673,14 +11872,17 @@ fn usb_device_ulpi_gives_up_a_packet_the_transceiver_aborts() {
     let descriptor = expected_device_descriptor(0x1209, 0x0001);
     assert_eq!(
         again,
-        UsbReply::Data(USB_DATA1, descriptor[..8].to_vec()),
+        UsbReply::Data(USB_DATA1, descriptor.clone()),
         "the same packet with the same toggle"
     );
     host.ack();
+    // And there is nothing left of the data stage, since a 64-byte packet
+    // holds the whole descriptor: the toggle has moved and the packet is
+    // empty. It was the next eight bytes when a packet held eight.
     assert_eq!(
         host.in_token(0),
-        UsbReply::Data(USB_DATA0, descriptor[8..16].to_vec()),
-        "and then the next eight bytes"
+        UsbReply::Data(USB_DATA0, Vec::new()),
+        "and then nothing, with the toggle moved on"
     );
     host.assert_clean();
 }
@@ -11716,6 +11918,25 @@ const CDC_DATA_IFACE: u8 = 1;
 const CDC_NOTIF_ENDP: u8 = 2;
 const CDC_DATA_ENDP: u8 = 1;
 
+/// `wMaxPacketSize` of the notification endpoint, and the ten bytes of a
+/// SERIAL_STATE notification it has to hold.
+///
+/// Sixteen and not ten: USB 2.0 §5.7.3 allows a full-speed **interrupt**
+/// endpoint any size up to 64 — unlike a bulk one, which §5.8.3 restricts to
+/// 8, 16, 32 and 64 — and `usb_bulk_ep` masks its buffer's byte index to the
+/// index's own width, so the size has to be a power of two. Sixteen is the
+/// smallest power of two that holds ten bytes.
+const CDC_NOTIF_MAXPKT: u8 = 16;
+const CDC_SERIAL_STATE_BYTES: usize = 10;
+
+/// What `ip/usb_cdc_acm`'s own designs drive `serial_state` to: `bRxCarrier`
+/// and `bTxCarrier` set, every error bit clear.
+///
+/// PSTN 1.2 §6.5.4 makes bit 0 DCD and bit 1 DSR, and a serial port whose
+/// far end is inside the same die has both from the moment it exists. The
+/// block's own port comment has the argument at length.
+const CDC_LINES_UP: u64 = 0b000_0011;
+
 /// The configuration descriptor `usb_cdc_acm` should send, written
 /// **forwards** from the specifications' tables — the way `lsusb -v` prints
 /// one — and not from the block's `IFACE_DESC` parameter.
@@ -11749,14 +11970,17 @@ fn expected_cdc_configuration() -> Vec<u8> {
     // subordinate to interface 0. `ip/usb_cdc_acm/README.md` §2 says what is
     // known and what is only understood about a host needing it.
     iface.extend_from_slice(&[5, 0x24, 0x06, CDC_COMM_IFACE, CDC_DATA_IFACE]);
-    // ENDPOINT 82h: interrupt IN, eight bytes, bInterval 16 frames.
-    iface.extend_from_slice(&[7, 5, 0x80 | CDC_NOTIF_ENDP, 0x03, 8, 0, 16]);
+    // ENDPOINT 82h: interrupt IN, sixteen bytes — room for the ten of a
+    // SERIAL_STATE — bInterval 16 frames.
+    iface.extend_from_slice(&[7, 5, 0x80 | CDC_NOTIF_ENDP, 0x03, CDC_NOTIF_MAXPKT, 0, 16]);
     // INTERFACE 1: the data interface, bInterfaceClass 0Ah (CDC 1.1
     // Table 18).
     iface.extend_from_slice(&[9, 4, CDC_DATA_IFACE, 0, 0, 0x0A, 0x00, 0x00, 0]);
-    // ENDPOINT 01h and ENDPOINT 81h: bulk, eight bytes.
-    iface.extend_from_slice(&[7, 5, CDC_DATA_ENDP, 0x02, 8, 0, 0]);
-    iface.extend_from_slice(&[7, 5, 0x80 | CDC_DATA_ENDP, 0x02, 8, 0, 0]);
+    // ENDPOINT 01h and ENDPOINT 81h: bulk, 64 bytes, which USB 2.0 §5.8.3
+    // makes the largest of the four sizes a full-speed bulk endpoint may have.
+    let pkt = u8::try_from(BULK_MAXPKT).expect("a legal wMaxPacketSize");
+    iface.extend_from_slice(&[7, 5, CDC_DATA_ENDP, 0x02, pkt, 0, 0]);
+    iface.extend_from_slice(&[7, 5, 0x80 | CDC_DATA_ENDP, 0x02, pkt, 0, 0]);
 
     // bNumEndpoints of each interface descriptor: the ENDPOINT descriptors
     // that follow it before the next INTERFACE, counted along the chain of
@@ -11849,6 +12073,11 @@ fn cdc_line_coding(rate: u32, format: u8, parity: u8, bits: u8) -> Vec<u8> {
 /// device has — which is where a seven-bit offset that should have been
 /// eight, or a `DESC_MAX` too small for the blob, would show.
 fn cdc_enumerate<P: UsbPair>(host: &mut UsbHost<P>) {
+    // The line state this port reports, driven before anything is configured
+    // so that the notification the device owes says something definite. Every
+    // test of this block sets it: it is an input, and an input nobody drives
+    // is unknown.
+    host.set_port("serial_state", CDC_LINES_UP, 7);
     enumerate_descriptors(
         host,
         &expected_cdc_device_descriptor(),
@@ -11975,19 +12204,41 @@ fn usb_cdc_acm_descriptors_carry_what_a_host_driver_binds_on() {
     // Three endpoints: an interrupt IN on the communications interface and a
     // bulk pair on the data interface. bmAttributes 03h is interrupt and
     // 02h is bulk (USB 2.0 Table 9-13).
+    let pkt = u16::try_from(BULK_MAXPKT).expect("a legal wMaxPacketSize");
+    let notif = u16::from(CDC_NOTIF_MAXPKT);
     assert_eq!(
         endpoints,
         vec![
-            (0x80 | CDC_NOTIF_ENDP, 0x03, 8, 16),
-            (CDC_DATA_ENDP, 0x02, 8, 0),
-            (0x80 | CDC_DATA_ENDP, 0x02, 8, 0),
+            (0x80 | CDC_NOTIF_ENDP, 0x03, notif, 16),
+            (CDC_DATA_ENDP, 0x02, pkt, 0),
+            (0x80 | CDC_DATA_ENDP, 0x02, pkt, 0),
         ],
         "(bEndpointAddress, transfer type, wMaxPacketSize, bInterval)"
     );
-    // A SERIAL_STATE notification is ten bytes and this endpoint holds
-    // eight, which is why it never sends one. The descriptor says eight
-    // because that is what the endpoint does.
-    assert_eq!(endpoints[0].2, 8, "the notification endpoint's own size");
+    // A SERIAL_STATE notification is ten bytes and this endpoint has to hold
+    // them, which is the whole reason the size is not eight any more. The
+    // descriptor says what the endpoint does, so the assertion is that it is
+    // big enough and legal — not that it is any particular number.
+    assert!(
+        usize::from(endpoints[0].2) >= CDC_SERIAL_STATE_BYTES,
+        "the notification endpoint holds {} bytes and a SERIAL_STATE is {}",
+        endpoints[0].2,
+        CDC_SERIAL_STATE_BYTES
+    );
+    assert!(
+        endpoints[0].2 <= 64,
+        "USB 2.0 §5.7.3 allows a full-speed interrupt endpoint 64 bytes at most"
+    );
+    // A bulk endpoint may be 8, 16, 32 or 64 and **nothing else** (§5.8.3),
+    // which is the one rule about these two that arithmetic can check.
+    for (addr, kind, size, _) in &endpoints {
+        if *kind == 0x02 {
+            assert!(
+                matches!(size, 8 | 16 | 32 | 64),
+                "endpoint {addr:#04x} declares {size} bytes, which §5.8.3 does not list"
+            );
+        }
+    }
 
     // bmCapabilities of the Abstract Control Management descriptor is 02h:
     // D1 alone, so no Send_Break and no Comm_Feature, which is exactly the
@@ -12006,6 +12257,7 @@ fn usb_cdc_acm_descriptors_carry_what_a_host_driver_binds_on() {
 /// direction and its status stage. Without the hook every one of these is a
 /// STALL and `cdc_acm` fails to open the port.
 fn cdc_class_requests<P: UsbPair>(host: &mut UsbHost<P>) {
+    host.set_port("serial_state", CDC_LINES_UP, 7);
     configure_for(
         host,
         3,
@@ -12110,6 +12362,7 @@ fn usb_cdc_acm_ulpi_answers_the_line_coding_and_control_line_requests() {
 fn usb_cdc_acm_stalls_the_class_requests_it_does_not_claim() {
     let design = cdc_fs_design();
     let mut host = UsbHost::new(FsPair::with_loopback(&design, false), 0);
+    host.set_port("serial_state", CDC_LINES_UP, 7);
     configure_for(
         &mut host,
         4,
@@ -12194,19 +12447,65 @@ fn usb_cdc_acm_stalls_the_class_requests_it_does_not_claim() {
     host.assert_clean();
 }
 
-/// The notification endpoint exists, is addressable, and NAKs every poll.
+/// The ten bytes of a SERIAL_STATE notification, as PSTN 1.2 §6.5.4 gives
+/// them, for a device reporting the line state `state`.
 ///
-/// A host polls it every sixteen frames for ever and a device with no state
-/// change answers NAK every time, which is what this asserts — twenty polls,
-/// twenty NAKs, and nothing else on the bus. It also asserts the thing that
-/// would be a real fault: the endpoint has **no OUT direction**, so an OUT
-/// token for it is answered with nothing at all rather than with an ACK
-/// that would tell a host an endpoint is there which the descriptors do not
-/// declare.
+/// Written forwards from the specification's two tables — Table 30 for the
+/// eight-byte header, which has a SETUP packet's shape (USB 2.0 Table 9-2),
+/// and Table 31 for `wSerialState` — rather than from the block's `case`, so
+/// that a field in the wrong place fails here.
+fn cdc_serial_state(state: u8) -> Vec<u8> {
+    vec![
+        // bmRequestType: device to host, class, to an interface.
+        0xA1,
+        // bNotification: SERIAL_STATE.
+        0x20,
+        // wValue, which this notification does not use.
+        0x00,
+        0x00,
+        // wIndex: the communications interface.
+        CDC_COMM_IFACE,
+        0x00,
+        // wLength: the two bytes that follow.
+        0x02,
+        0x00,
+        // wSerialState, low byte, then the nine bits reserved.
+        state,
+        0x00,
+    ]
+}
+
+/// The notification endpoint sends **SERIAL_STATE**, once per configuration
+/// and again whenever the line state changes, and NAKs every poll in between.
+///
+/// This is the endpoint that used to send nothing at all because ten bytes did
+/// not fit in eight, so what it asserts is the whole of the change:
+///
+///   * the first poll after SET_CONFIGURATION returns the ten bytes, because a
+///     host's idea of the line state starts empty and nothing else would fill
+///     it — Linux's `cdc_acm` answers `TIOCMGET` out of the last bitmap it was
+///     sent;
+///   * every poll after that is NAKed, twenty of them, because a state that
+///     has not changed is not news;
+///   * a **change** of `serial_state` produces one more, with the new bitmap
+///     and the other data toggle;
+///   * and a bus reset makes the device owe one again, because the host has
+///     forgotten what it was told.
+///
+/// It also asserts the thing that would be a real fault: the endpoint has
+/// **no OUT direction**, so an OUT token for it is answered with nothing at
+/// all rather than with an ACK that would tell a host an endpoint is there
+/// which the descriptors do not declare.
+///
+/// **What it would not catch.** Whether a host's driver acts on the bytes.
+/// Nothing in simulation can: this host model is written from the same
+/// specification as the device. `tests/usb_cdc_acm.rs` reads `TIOCMGET` off a
+/// real kernel, and that is the other half.
 #[test]
-fn usb_cdc_acm_notification_endpoint_naks_every_poll() {
+fn usb_cdc_acm_notification_endpoint_sends_the_serial_state() {
     let design = cdc_fs_design();
     let mut host = UsbHost::new(FsPair::with_loopback(&design, false), 0);
+    host.set_port("serial_state", CDC_LINES_UP, 7);
     configure_for(
         &mut host,
         6,
@@ -12214,14 +12513,55 @@ fn usb_cdc_acm_notification_endpoint_naks_every_poll() {
         &expected_cdc_configuration(),
     );
 
+    // The notification the host has been owed since SET_CONFIGURATION. DATA0
+    // because SET_CONFIGURATION put every endpoint's toggle back (USB 2.0
+    // §9.4.5) and this is the first packet of this one since.
+    let up = u8::try_from(CDC_LINES_UP).expect("seven bits");
+    let first = host.bulk_in(6, CDC_NOTIF_ENDP);
+    assert_eq!(
+        first,
+        UsbReply::Data(USB_DATA0, cdc_serial_state(up)),
+        "the first poll after the host configured the device"
+    );
+    assert_eq!(
+        cdc_serial_state(up).len(),
+        CDC_SERIAL_STATE_BYTES,
+        "ten bytes, which is what did not fit in an eight-byte endpoint"
+    );
+    host.ack();
+    host.idle(6);
+
+    // And then nothing, for ever, because nothing has changed.
     for poll in 0..20 {
         assert_eq!(
             host.bulk_in(6, CDC_NOTIF_ENDP),
             UsbReply::Handshake(USB_NAK),
-            "poll {poll} of the notification endpoint"
+            "poll {poll} of an endpoint with nothing new to say"
         );
         host.idle(6);
     }
+
+    // A change: the carrier drops and a framing error is reported instead. One
+    // more notification, with the new bitmap and the other toggle.
+    let dropped = 0b001_0000u64;
+    host.set_port("serial_state", dropped, 7);
+    host.idle(20);
+    assert_eq!(
+        host.bulk_in(6, CDC_NOTIF_ENDP),
+        UsbReply::Data(
+            USB_DATA1,
+            cdc_serial_state(u8::try_from(dropped).expect("seven bits"))
+        ),
+        "a change of the line state is a notification of its own"
+    );
+    host.ack();
+    host.idle(6);
+    assert_eq!(
+        host.bulk_in(6, CDC_NOTIF_ENDP),
+        UsbReply::Handshake(USB_NAK),
+        "and then nothing again"
+    );
+    host.idle(6);
 
     // The endpoint has one direction. An OUT to it is nobody's: the
     // notification endpoint because it has no OUT side, the data endpoint
@@ -12246,12 +12586,31 @@ fn usb_cdc_acm_notification_endpoint_naks_every_poll() {
         "the serial port still moves"
     );
     host.idle(10);
+
+    // A bus reset, and the host is owed one again: it has forgotten the state
+    // along with the address, so a device that only ever sent one would leave
+    // a re-enumerated host with no carrier for ever.
+    host.set_port("serial_state", CDC_LINES_UP, 7);
+    configure_for(
+        &mut host,
+        6,
+        &expected_cdc_device_descriptor(),
+        &expected_cdc_configuration(),
+    );
+    assert_eq!(
+        host.bulk_in(6, CDC_NOTIF_ENDP),
+        UsbReply::Data(USB_DATA0, cdc_serial_state(up)),
+        "a host that has enumerated the device again is told again"
+    );
+    host.ack();
+    host.idle(10);
     host.assert_clean();
 }
 
 /// Bytes through the serial port's bulk pair, in both directions, with the
 /// class layer above it.
 fn cdc_bytes<P: UsbPair>(host: &mut UsbHost<P>) {
+    host.set_port("serial_state", CDC_LINES_UP, 7);
     configure_for(
         host,
         7,
@@ -12260,13 +12619,28 @@ fn cdc_bytes<P: UsbPair>(host: &mut UsbHost<P>) {
     );
 
     // What a terminal does: a line of text out, a line of text back. `FF`
-    // and `07` put six ones in a row on the wire in both directions.
+    // and `07` put six ones in a row on the wire in both directions, and the
+    // first one is a **full 64-byte packet** — what a paste into a terminal
+    // looks like, and the length the endpoint now declares.
     let out: Vec<Vec<u8>> = vec![
+        b"the quick brown fox jumps over the lazy dog, 0123456789 abcdefg!".to_vec(),
         b"hello, w".to_vec(),
         b"orld\n".to_vec(),
         vec![0xFF, 0x07, 0x5A],
     ];
-    let back: Vec<Vec<u8>> = vec![b"> ".to_vec(), Vec::new(), b"ok\r\n".to_vec()];
+    let back: Vec<Vec<u8>> = vec![
+        b"> ".to_vec(),
+        Vec::new(),
+        b"ok\r\n".to_vec(),
+        (0..BULK_MAXPKT)
+            .map(|i| {
+                u8::try_from(i)
+                    .expect("a byte")
+                    .wrapping_mul(29)
+                    .wrapping_add(3)
+            })
+            .collect(),
+    ];
 
     let mut pipe = BulkPipe::new(CDC_DATA_ENDP);
     for payload in &out {
@@ -12312,6 +12686,7 @@ fn usb_cdc_acm_ulpi_loops_the_serial_port_back_on_itself() {
     let design = cdc_ulpi_design();
     let phy = UlpiPhy::new(ULPI_CPB).reporting_stale_line();
     let mut host = UsbHost::new(UlpiPair::with_phy(&design, phy), 0);
+    host.set_port("serial_state", CDC_LINES_UP, 7);
     configure_for(
         &mut host,
         8,
@@ -12993,10 +13368,10 @@ fn usb_descriptors_survive_lookup_table_mapping() {
         "0524010001",         // call management functional
         "04240202",           // abstract control management functional
         "0524060001",         // union functional
-        "07058203080010",     // ENDPOINT 82h: interrupt IN
+        "07058203100010",     // ENDPOINT 82h: interrupt IN, sixteen bytes
         "09040100000A000000", // INTERFACE 1: data
-        "07050102080000",     // ENDPOINT 01h: bulk OUT
-        "07058102080000",     // ENDPOINT 81h: bulk IN
+        "07050102400000",     // ENDPOINT 01h: bulk OUT, 64 bytes
+        "07058102400000",     // ENDPOINT 81h: bulk IN, 64 bytes
     );
 
     /// One configuration to map and read the descriptors off: a variant to

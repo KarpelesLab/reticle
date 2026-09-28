@@ -38,7 +38,9 @@
 //   `eth_mac_rx` are one statement of Ethernet framing for RMII and
 //   RGMII.
 //
-//   Endpoint 0, maximum packet size 8:
+//   Endpoint 0, maximum packet size `MAXPKT0` — 64 by default, and that
+//   parameter's own comment says what the specification allows and what
+//   raising it buys:
 //
 //     GET_DESCRIPTOR, device        the 18-byte device descriptor, VID,
 //                                   PID and the class triple from the
@@ -177,18 +179,22 @@
 //   is the two of them and the transmitter they share.
 //
 //   No strings of its own, no remote wake-up, no suspend, no SOF tracking
-//   and no low speed. Eight bytes of payload at most in either direction,
-//   which is what a maximum packet size of eight needs. A configuration
-//   descriptor of at most 9 + 64 bytes, which is `DESC_MAX` below and is
-//   room for a HID interface or a CDC ACM pair.
+//   and no low speed. `MAXPKT0` bytes of payload **out** and eight bytes
+//   **in**, which is the one asymmetry of this module and is what
+//   `MAXPKT0`'s comment is about: the data stage this endpoint sends is cut
+//   into packets of whatever the parameter says, and the one it receives is
+//   `usb_pkt_rx`'s eight-byte word. A configuration descriptor of at most
+//   9 + 64 bytes, which is `DESC_MAX` below and is room for a HID interface
+//   or a CDC ACM pair.
 //
 //   A class request that **writes** carries at most one data packet, so
-//   eight bytes: `class_out` is `usb_pkt_rx`'s payload and there is no
+//   eight bytes: `class_out` is `usb_pkt_rx`'s word and there is no
 //   accumulator behind it. Every CDC ACM request fits — SET_LINE_CODING
 //   is seven bytes — and a class needing more would need a counter here
-//   and a byte stream instead of a word. A class request that **reads**
-//   may be as long as `CLASS_MAX`, since those bytes are fetched one at a
-//   time and the packets are this module's to cut.
+//   and the byte stream `usb_pkt_rx` brings out for the bulk endpoints. A
+//   longer one is **stalled** rather than half-taken. A class request that
+//   **reads** may be as long as `CLASS_MAX`, since those bytes are fetched
+//   one at a time and the packets are this module's to cut.
 //
 //   Nothing here gives a class a say in the standard requests, and
 //   nothing here lets a class stall one it has claimed: `class_claim`
@@ -234,6 +240,39 @@ module usb_ctrl_ep #(
     // constant because it sets the width of `in_total` and `in_offset`,
     // and a register is as wide as the values it holds.
     parameter integer CLASS_MAX = 0,
+    // ENDPOINT 0'S MAXIMUM PACKET SIZE, WHICH IS ALSO `bMaxPacketSize0`
+    //
+    // USB 2.0 §5.5.3 allows a full-speed control endpoint 8, 16, 32 or 64
+    // bytes and nothing else, and byte 7 of the device descriptor has to
+    // say which — so this parameter is written into that byte below rather
+    // than typed there, because two statements of one number is how they
+    // come to disagree.
+    //
+    // **64, and the subtlety is on the receive side.** What this buys is
+    // transactions: a CDC ACM configuration descriptor is 67 bytes, which
+    // is nine IN transactions at eight bytes a packet and **two** at 64.
+    // What a host does first is read the device descriptor before it knows
+    // this field — Linux asks for 64 bytes of it, which is what
+    // `device descriptor read/64` in a kernel log is — and that is safe
+    // whichever size this is: the data stage is capped at the host's own
+    // `wLength`, so the first packet is `min(wLength, 18)` bytes, and a
+    // packet shorter than the maximum ends the transfer whatever the
+    // maximum was. A host that asks for only the first eight bytes gets a
+    // short packet too. Neither case needs the host to know this number
+    // first, which is the thing that would otherwise make raising it
+    // dangerous.
+    //
+    // **What this endpoint will not receive is 64 bytes.** A control OUT
+    // data stage arrives as `dat`, which is eight bytes, so a host-to-device
+    // data stage longer than one eight-byte packet is **stalled** below
+    // rather than half-taken. Nothing this module or any class on it
+    // implements has one — SET_ADDRESS, SET_CONFIGURATION,
+    // CLEAR_FEATURE and GET_DESCRIPTOR have no OUT data stage at all, and
+    // CDC ACM's longest is SET_LINE_CODING's seven bytes — so the limit is
+    // on requests that do not exist. It is enforced instead of assumed
+    // because a field in a descriptor should not be the only thing standing
+    // between a device and a packet it cannot hold.
+    parameter [6:0]   MAXPKT0   = 7'd64,
     // Cycles of `line_idle` before an answer starts. Seven bits wide, and
     // not four, because what a **host** tolerates is wider than what ULPI
     // asks a Link for: USB 2.0 §7.1.19.1 has a host wait 16 bit times for a
@@ -255,7 +294,7 @@ module usb_ctrl_ep #(
     input  wire [6:0]  tok_addr,
     input  wire [3:0]  tok_endp,
     input  wire        dat_ok,
-    input  wire [3:0]  dat_len,
+    input  wire [6:0]  dat_len,
     input  wire [63:0] dat,
 
     // The bus is idle, so an answer may be timed from now.
@@ -265,12 +304,14 @@ module usb_ctrl_ep #(
     // This endpoint owns the transmitter.
     input  wire       sel,
 
-    // One packet out.
+    // One packet out. `tx_len` and `tx_index` are seven bits because a
+    // full-speed payload is at most 64 bytes; `usb_fs_tx`'s header says why
+    // that is seven and not six.
     output reg        tx_start,
     output reg  [3:0] tx_pid,
     output reg        tx_with_data,
-    output reg  [3:0] tx_len,
-    input  wire [3:0] tx_index,
+    output wire [6:0] tx_len,
+    input  wire [6:0] tx_index,
     output wire [7:0] tx_byte,
     input  wire       tx_busy,
 
@@ -287,7 +328,7 @@ module usb_ctrl_ep #(
     output wire [6:0]  class_index,
     input  wire [7:0]  class_byte,
     output wire [63:0] class_out,
-    output wire [3:0]  class_out_len,
+    output wire [6:0]  class_out_len,
     output wire        class_out_valid,
 
     // Data toggles, for the endpoints beside this one. `ep_reset` is one
@@ -471,8 +512,33 @@ module usb_ctrl_ep #(
     //
     // A class request's data stage is counted by the same two registers, so
     // the widest offset is over whichever of the two is longer.
+    //
+    // There are **two** widths and not one, and they are different numbers:
+    //
+    //   OFF_BITS   `in_total` and `in_offset`, which are bytes of the data
+    //              stage and never exceed `LONGEST`
+    //   IDX_BITS   `in_offset + tx_index`, the byte being fetched, which
+    //              runs up to `MAXPKT0` past the offset the host
+    //              acknowledged because the transmitter fetches the whole
+    //              packet before the ACK for it arrives
+    //
+    // This used to be one width for both, `$clog2(LONGEST + 8)`, and with a
+    // packet size of eight the two happened to coincide. At 64 they do not:
+    // a 67-byte configuration descriptor needs seven bits of offset and
+    // **eight** of fetch index, and the two registers are the ones that must
+    // stay at seven — a register is as wide as the values it holds, and the
+    // ECP5 backend refused a bitstream over exactly that once, which the
+    // note above records.
     localparam integer LONGEST  = (CLASS_MAX > CFG_TOTAL) ? CLASS_MAX : CFG_TOTAL;
-    localparam integer LEN_BITS = $clog2(LONGEST + 8);
+    localparam integer OFF_BITS = $clog2(LONGEST + 1);
+    localparam integer IDX_BITS = $clog2(LONGEST + MAXPKT0 + 1);
+    // Bits in a packet this endpoint sends. A packet is at most `MAXPKT0`
+    // bytes and also at most the whole data stage, so it is the **smaller**
+    // of the two that sets the width: a device whose longest descriptor is 32
+    // bytes never sends a 64-byte packet however large `MAXPKT0` is, and a
+    // register that could hold one would have a bit nothing sets.
+    localparam integer PKT_BITS   = $clog2(MAXPKT0 + 1);
+    localparam integer CHUNK_BITS = (OFF_BITS < PKT_BITS) ? OFF_BITS : PKT_BITS;
 
     // -----------------------------------------------------------------
     // Endpoint 0.
@@ -487,9 +553,9 @@ module usb_ctrl_ep #(
     reg [1:0]  expect;
     reg        toggle;
     reg        desc_sel;    // 0 device, 1 configuration
-    reg [LEN_BITS-1:0] in_total;   // bytes the data stage sends
-    reg [LEN_BITS-1:0] in_offset;  // bytes the host has acknowledged
-    reg [3:0]  in_len;      // bytes in the packet awaiting its ACK
+    reg [OFF_BITS-1:0] in_total;   // bytes the data stage sends
+    reg [OFF_BITS-1:0] in_offset;  // bytes the host has acknowledged
+    reg [CHUNK_BITS-1:0] in_len;   // bytes in the packet awaiting its ACK
     reg        await_ack;
     // The transfer in progress belongs to the class, so its data stage
     // comes from `class_byte` and not from `desc`.
@@ -501,36 +567,39 @@ module usb_ctrl_ep #(
     reg        pending;
     reg [3:0]  pend_pid;
     reg        pend_data;
-    reg [3:0]  pend_len;
+    reg [CHUNK_BITS-1:0] pend_len;
     reg [6:0]  turn;
 
+    // The length the transmitter is given. `tx_len_q` is as wide as a packet
+    // of this endpoint and the port is seven bits, which is the width the
+    // transmitter takes for every endpoint; the continuous assignment is
+    // what zero-extends it.
+    reg [CHUNK_BITS-1:0] tx_len_q;
+
+    assign tx_len     = tx_len_q;
     assign address    = addr;
     assign configured = config_q;
 
     // The descriptors, one byte at a time.
     function [7:0] desc;
         input                  sel_in;
-        input [LEN_BITS-1:0]   i;
+        input [IDX_BITS-1:0]   i;
         // The offset past the nine bytes this module writes, and that offset
         // **narrowed to the blob's width**.
         //
         // `j` is six bits because `DESC_MAX` is 64 bytes: an offset into the
-        // class's descriptors cannot be wider than that whatever `LEN_BITS`
+        // class's descriptors cannot be wider than that whatever `IDX_BITS`
         // is, and giving it exactly those bits is what keeps the part-select
         // below inside `IFACE` without a mask a width checker has to trust.
         //
         // The narrowing is written as a **part-select** and not as an
-        // assignment that happens to truncate. With the default descriptors
-        // `LEN_BITS` is 6 and there is nothing to narrow; with a CDC ACM
-        // descriptor set it is 7, and then `j = i - 9` is
-        // `value is truncated from 7 bits to 6 in this assignment` — a
-        // warning about the one thing here that is deliberate. `i` can reach
-        // `CFG_TOTAL + 7` because `tx_byte` is fetched up to seven bytes past
-        // the offset the host acknowledged, and the bytes past `tx_len` are
-        // fetched and never sent, so the top of the range is not a byte
-        // anybody reads. Dropping the bit above the blob is the intent, and a
-        // part-select says so.
-        reg   [LEN_BITS-1:0]   off;
+        // assignment that happens to truncate, because dropping the bits
+        // above the blob is the intent: `i` can reach `CFG_TOTAL + MAXPKT0`,
+        // since `tx_byte` is fetched for the whole packet before the ACK for
+        // it arrives, and the bytes past `tx_len` are fetched and never sent.
+        // The top of that range is not a byte anybody reads, and a
+        // part-select says so where an assignment would only warn.
+        reg   [IDX_BITS-1:0]   off;
         reg   [5:0]            j;
         begin
             if (!sel_in) begin
@@ -542,7 +611,9 @@ module usb_ctrl_ep #(
                     4:       desc = DEV_CLASS;
                     5:       desc = DEV_SUBCLASS;
                     6:       desc = DEV_PROTOCOL;
-                    7:       desc = 8'd8;         // bMaxPacketSize0
+                    // bMaxPacketSize0, from the parameter that sets what this
+                    // endpoint actually does rather than typed again here.
+                    7:       desc = {1'b0, MAXPKT0};
                     8:       desc = VID[7:0];
                     9:       desc = VID[15:8];
                     10:      desc = PID[7:0];
@@ -617,13 +688,27 @@ module usb_ctrl_ep #(
     // class's when the class owns this transfer, a descriptor's otherwise.
     // `class_index` is the same offset, brought out so that the class
     // indexes its own bytes without restating the arithmetic.
-    assign class_index = in_offset + tx_index;
-    assign tx_byte     = class_active ? class_byte
-                                      : desc(desc_sel, in_offset + tx_index);
+    wire [IDX_BITS-1:0] fetch = in_offset + tx_index;
+    assign class_index = fetch[6:0];
+    assign tx_byte     = class_active ? class_byte : desc(desc_sel, fetch);
 
-    // The next packet of the data stage.
-    wire [LEN_BITS-1:0] in_left  = in_total - in_offset;
-    wire [3:0]          in_chunk = (in_left > 8) ? 4'd8 : in_left[3:0];
+    // The next packet of the data stage: a whole one until the last, which
+    // is whatever is left and is short — and a short packet is what ends a
+    // control read, which is why nothing has to send a zero-length one
+    // unless the data stage is an exact multiple of `MAXPKT0`. Then
+    // `in_left` reaches zero with the host still asking, `in_chunk` is zero,
+    // and the zero-length DATA packet that ends the transfer goes out of the
+    // same arm as any other.
+    //
+    // The comparison is done at `IDX_BITS`, which is wider than either
+    // operand, because the two are not the same width: a data stage may be
+    // shorter than a packet — the plain device's configuration descriptor is
+    // 32 bytes and a packet is 64 — and then `in_left` has fewer bits than
+    // `MAXPKT0` does, and the other way round for a long descriptor set.
+    wire [IDX_BITS-1:0]   in_left  = in_total - in_offset;
+    wire [IDX_BITS-1:0]   in_max   = MAXPKT0;
+    wire [CHUNK_BITS-1:0] in_chunk = (in_left > in_max) ? in_max[CHUNK_BITS-1:0]
+                                                       : in_left[CHUNK_BITS-1:0];
 
     // The SETUP request, from the data packet in the cycle it arrives.
     wire [7:0]  s0 = dat[7:0];
@@ -648,10 +733,16 @@ module usb_ctrl_ep #(
     // these conditions; this wire is what the class hook is gated by, so
     // that a class is never offered a packet endpoint 0 is going to ignore.
     wire        setup_now = pkt & pkt_is_data & dat_ok & (expect == X_SETUP)
-                          & (pkt_pid == PID_DATA0) & (dat_len == 4'd8);
+                          & (pkt_pid == PID_DATA0) & (dat_len == 7'd8);
     // A request this module implements itself. A class is offered
     // everything else and nothing of this.
     wire        std_req   = get_desc | set_adr | set_cfg | clr_halt;
+
+    // A host-to-device data packet this endpoint can hold: `dat` is the
+    // first eight payload bytes, so a longer one is refused rather than
+    // taken in part. `MAXPKT0`'s own comment says why the field in the
+    // descriptor is 64 and this is eight.
+    wire        out_fits  = (dat_len <= 7'd8);
 
     assign class_setup     = dat;
     assign class_req       = setup_now & ~std_req;
@@ -664,13 +755,13 @@ module usb_ctrl_ep #(
     // `class_out_wait` is for and is what a data toggle means.
     assign class_out_valid = pkt & pkt_is_data & dat_ok & (expect == X_OUT)
                            & (stage == C_STATUS_IN) & class_active
-                           & class_out_wait;
+                           & class_out_wait & out_fits;
 
     // How long the data stage is: the class's offer for a class request,
     // the descriptor's length otherwise, and never more than wLength.
-    wire [LEN_BITS-1:0] desc_len = class_req ? class_len[LEN_BITS-1:0]
-                                 : ((s3 == 8'h02) ? CFG_TOTAL[LEN_BITS-1:0] : 18);
-    wire [LEN_BITS-1:0] send_len = (w_length < desc_len) ? w_length[LEN_BITS-1:0] : desc_len;
+    wire [OFF_BITS-1:0] desc_len = class_req ? class_len[OFF_BITS-1:0]
+                                 : ((s3 == 8'h02) ? CFG_TOTAL[OFF_BITS-1:0] : 18);
+    wire [OFF_BITS-1:0] send_len = (w_length < desc_len) ? w_length[OFF_BITS-1:0] : desc_len;
 
     always @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
@@ -686,19 +777,19 @@ module usb_ctrl_ep #(
             desc_sel       <= 1'b0;
             in_total       <= 0;
             in_offset      <= 0;
-            in_len         <= 4'd0;
+            in_len         <= 0;
             await_ack      <= 1'b0;
             class_active   <= 1'b0;
             class_out_wait <= 1'b0;
             pending        <= 1'b0;
             pend_pid       <= 4'd0;
             pend_data      <= 1'b0;
-            pend_len       <= 4'd0;
+            pend_len       <= 0;
             turn           <= 7'd0;
             tx_start       <= 1'b0;
             tx_pid         <= 4'd0;
             tx_with_data   <= 1'b0;
-            tx_len         <= 4'd0;
+            tx_len_q       <= 0;
             ep_reset       <= 1'b0;
             ep_clear       <= 1'b0;
             ep_clear_ep    <= 8'd0;
@@ -733,7 +824,7 @@ module usb_ctrl_ep #(
                                 C_STATUS_IN: begin
                                     pend_pid  <= PID_DATA1;
                                     pend_data <= 1'b1;
-                                    pend_len  <= 4'd0;
+                                    pend_len  <= 0;
                                     await_ack <= 1'b1;
                                 end
                                 C_STALL: begin
@@ -766,7 +857,7 @@ module usb_ctrl_ep #(
                         // here and set again below.
                         class_active   <= 1'b0;
                         class_out_wait <= 1'b0;
-                        if (pkt_pid != PID_DATA0 || dat_len != 4'd8) begin
+                        if (pkt_pid != PID_DATA0 || dat_len != 7'd8) begin
                             stage <= C_STALL;
                         end else if (get_desc) begin
                             stage    <= C_DATA_IN;
@@ -814,10 +905,19 @@ module usb_ctrl_ep #(
                         pending   <= 1'b1;
                         turn      <= 7'd0;
                         pend_data <= 1'b0;
-                        if (stage == C_DATA_IN && dat_len == 4'd0) begin
+                        if (stage == C_DATA_IN && dat_len == 7'd0) begin
                             // The status stage of a read.
                             pend_pid <= PID_ACK;
                             stage    <= C_IDLE;
+                        end else if (stage == C_STATUS_IN && class_active
+                                     && !out_fits) begin
+                            // A host-to-device data stage longer than one
+                            // eight-byte packet, which no request this device
+                            // implements has. Stalled, because the alternative
+                            // is acknowledging a packet of which only the
+                            // first eight bytes were kept.
+                            pend_pid <= PID_STALL;
+                            stage    <= C_STALL;
                         end else if (stage == C_STATUS_IN && class_active) begin
                             // The data stage of a class request that
                             // writes. Acknowledged whether or not it is the
@@ -863,7 +963,7 @@ module usb_ctrl_ep #(
                     tx_start     <= 1'b1;
                     tx_pid       <= pend_pid;
                     tx_with_data <= pend_data;
-                    tx_len       <= pend_len;
+                    tx_len_q     <= pend_len;
                 end else begin
                     turn <= turn + 7'd1;
                 end
@@ -912,8 +1012,9 @@ endmodule
 //     tok_endp       the endpoint number it names
 //     pkt_is_data    the PID is DATA0 or DATA1
 //     dat_ok         its CRC16 checks and it was not too long
-//     dat_len        the payload's length in bytes, 0 to 8
-//     dat            the payload, byte 0 in the low eight bits
+//     dat_len        the payload's length in bytes, 0 to 64
+//     dat            the **first eight** payload bytes, byte 0 in the low
+//                    eight bits
 //
 //   A handshake is neither, so an endpoint reads `pkt` and `pkt_pid` for
 //   those. `pkt` fires for a packet with a bad CRC too — `tok_ok` and
@@ -921,12 +1022,44 @@ endmodule
 //   arrived at all, right or wrong, is a reason to stop waiting for a
 //   handshake, and an endpoint needs to know that.
 //
+// WHY THERE IS A WORD AND ALSO A STREAM
+//   `dat` is eight bytes and a data endpoint's packets are up to 64, so
+//   the payload leaves here **twice**, in two shapes, and the two are for
+//   two different readers:
+//
+//     dat / dat_len          the first eight bytes as one word, held until
+//                            the next packet. `usb_ctrl_ep` reads this and
+//                            nothing else: a SETUP is exactly eight bytes
+//                            (USB 2.0 §9.3) and so is the longest data
+//                            stage a class request on this device has.
+//     pay_byte / pay_push    one payload byte a cycle as it arrives, with
+//                            the PID and the two CRC bytes **already taken
+//                            out**. `usb_bulk_ep` fills its own buffer from
+//                            this.
+//
+//   The alternative was one 64-byte word here, and it costs a second
+//   64-byte register: the endpoint cannot read this one while it is being
+//   overwritten by the next packet, so it would copy all of it. A byte a
+//   cycle costs an 8-bit bus and the endpoint's own buffer, which it needs
+//   anyway. It is also the only shape in which the endpoint never has to
+//   know where the CRC stopped: a `pay_push` byte is a payload byte.
+//
+//   Taking the CRC out needs two bytes of delay, because **nothing knows a
+//   byte is not the CRC until two more arrive**: the packet's length is
+//   where it ends and not anything in it. So `hold0` and `hold1` below hold
+//   the two most recent bytes and `pay_push` hands over the one before
+//   them, which is how the last two bytes of a packet are the two that are
+//   never handed over.
+//
 // What it does not do
-//   Eight bytes of payload at most, which is what a maximum packet size
-//   of eight needs, and `too_long` withdraws `dat_ok` from anything
-//   longer rather than truncating it silently. Nothing here knows about
-//   addresses, endpoints, toggles or requests: the decoder does not care
-//   who a packet is for.
+//   Sixty-four bytes of payload at most — the largest a full-speed
+//   endpoint may declare, USB 2.0 §5.5.3 and §5.8.3 — and `too_long`
+//   withdraws `dat_ok` from anything longer rather than truncating it
+//   silently. Nothing here knows about addresses, endpoints, toggles or
+//   requests: the decoder does not care who a packet is for, and it does
+//   not know any endpoint's own `wMaxPacketSize` either — an endpoint
+//   narrower than 64 refuses an over-long packet itself, since the size it
+//   promised is in its own descriptor.
 //
 //   Nothing here knows about NRZI, bit stuffing, SYNC, EOP or line
 //   states either. A packet whose PID check fails, whose bit stuffing is
@@ -951,8 +1084,12 @@ module usb_pkt_rx (
     output wire [6:0]  tok_addr,
     output wire [3:0]  tok_endp,
     output wire        dat_ok,
-    output wire [3:0]  dat_len,
-    output wire [63:0] dat
+    output wire [6:0]  dat_len,
+    output wire [63:0] dat,
+
+    // The payload, a byte a cycle, with the PID and the CRC16 removed.
+    output wire [7:0]  pay_byte,
+    output wire        pay_push
 );
     // PIDs, the low nibble as it appears on the wire.
     localparam [3:0] PID_OUT   = 4'b0001;
@@ -960,6 +1097,14 @@ module usb_pkt_rx (
     localparam [3:0] PID_SETUP = 4'b1101;
     localparam [3:0] PID_DATA0 = 4'b0011;
     localparam [3:0] PID_DATA1 = 4'b1011;
+
+    // The longest payload this decoder will accept, in bytes. USB 2.0
+    // §5.5.3 and §5.8.3 allow a full-speed control or bulk endpoint 8, 16,
+    // 32 or 64 and §5.7.3 allows an interrupt endpoint up to 64, so 64 is
+    // the most any endpoint of this device can promise and the most that is
+    // worth decoding. An isochronous endpoint may carry 1023 (§5.6.3) and
+    // this device has none.
+    localparam integer PAYMAX = 64;
 
     // The residues a correct CRC leaves in these reflected registers.
     localparam [4:0]  CRC5_RESIDUE  = 5'h06;
@@ -997,10 +1142,22 @@ module usb_pkt_rx (
     // -----------------------------------------------------------------
     // Receiving a packet.
     // -----------------------------------------------------------------
-    reg [3:0]  n;          // bytes received, PID included
+    // Bytes received, the PID included, and it **saturates**: a packet of
+    // `PAYMAX` bytes ends with `n` at `PAYMAX + 3`, so that is where the
+    // count stops rather than wrapping round and making an over-long packet
+    // look like a short one. Seven bits, and bit 6 is set for every value
+    // from 64 up, so none of them is a bit no expression can reach.
+    localparam [6:0] NMAX = PAYMAX + 3;
+
+    reg [6:0]  n;
     reg [7:0]  pid_byte;
     reg [7:0]  tok0, tok1;
     reg [7:0]  d0, d1, d2, d3, d4, d5, d6, d7;
+    // The two most recent bytes, neither of which is known to be payload
+    // yet: at the end of a packet they are the CRC16 and are the two that
+    // are never handed over. "WHY THERE IS A WORD AND ALSO A STREAM" above
+    // says why the delay is two and not zero.
+    reg [7:0]  hold0, hold1;
     reg [4:0]  crc5;
     reg [15:0] crc16;
     reg        too_long;
@@ -1014,49 +1171,68 @@ module usb_pkt_rx (
     assign pkt_is_data  = (pid == PID_DATA0) | (pid == PID_DATA1);
     assign tok_addr     = tok0[6:0];
     assign tok_endp     = {tok1[2:0], tok0[7]};
-    assign tok_ok       = (n == 4'd3) & (crc5 == CRC5_RESIDUE);
-    assign dat_ok       = (n >= 4'd3) & ~too_long & (crc16 == CRC16_RESIDUE);
-    assign dat_len      = n - 4'd3;
+    assign tok_ok       = (n == 7'd3) & (crc5 == CRC5_RESIDUE);
+    assign dat_ok       = (n >= 7'd3) & ~too_long & (crc16 == CRC16_RESIDUE);
+    assign dat_len      = n - 7'd3;
     assign dat          = {d7, d6, d5, d4, d3, d2, d1, d0};
+
+    // The payload byte two behind the one arriving, which is a payload byte
+    // exactly when a fourth byte of the packet is arriving: the PID, one
+    // byte and two more mean the first of them cannot be part of the CRC.
+    assign pay_byte     = hold1;
+    assign pay_push     = rx_valid & (n >= 7'd3);
 
     always @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
-            n        <= 4'd0;
+            n        <= 7'd0;
             pid_byte <= 8'd0;
             tok0     <= 8'd0;
             tok1     <= 8'd0;
             d0 <= 8'd0; d1 <= 8'd0; d2 <= 8'd0; d3 <= 8'd0;
             d4 <= 8'd0; d5 <= 8'd0; d6 <= 8'd0; d7 <= 8'd0;
+            hold0    <= 8'd0;
+            hold1    <= 8'd0;
             crc5     <= 5'h1F;
             crc16    <= 16'hFFFF;
             too_long <= 1'b0;
         end else begin
             // Bytes as they arrive.
             if (!rx_active) begin
-                n        <= 4'd0;
+                n        <= 7'd0;
                 crc5     <= 5'h1F;
                 crc16    <= 16'hFFFF;
                 too_long <= 1'b0;
             end
             if (rx_valid) begin
-                if (n != 4'd15) n <= n + 4'd1;
-                if (n == 4'd0) begin
+                if (n != NMAX) n <= n + 7'd1;
+                if (n == 7'd0) begin
                     pid_byte <= rx_data;
                 end else begin
                     crc5  <= crc5_byte(crc5, rx_data);
                     crc16 <= crc16_byte(crc16, rx_data);
+                    // The two-byte delay the stream is taken from. Every
+                    // byte after the PID goes through it, CRC included.
+                    hold1 <= hold0;
+                    hold0 <= rx_data;
+                    // A byte arriving at `NMAX` would be payload byte
+                    // `PAYMAX`, one more than any endpoint of this device
+                    // promised, so the packet is refused whole rather than
+                    // cut short.
+                    if (n >= NMAX) too_long <= 1'b1;
+                    // The first eight payload bytes, as one word, for
+                    // `usb_ctrl_ep`. A token's two bytes share the first
+                    // two, which is what they were before there was a
+                    // stream and costs nothing.
                     case (n)
-                        4'd1:  begin tok0 <= rx_data; d0 <= rx_data; end
-                        4'd2:  begin tok1 <= rx_data; d1 <= rx_data; end
-                        4'd3:  d2 <= rx_data;
-                        4'd4:  d3 <= rx_data;
-                        4'd5:  d4 <= rx_data;
-                        4'd6:  d5 <= rx_data;
-                        4'd7:  d6 <= rx_data;
-                        4'd8:  d7 <= rx_data;
-                        4'd9:  begin end
-                        4'd10: begin end
-                        default: too_long <= 1'b1;
+                        7'd1:    begin tok0 <= rx_data; d0 <= rx_data; end
+                        7'd2:    begin tok1 <= rx_data; d1 <= rx_data; end
+                        7'd3:    d2 <= rx_data;
+                        7'd4:    d3 <= rx_data;
+                        7'd5:    d4 <= rx_data;
+                        7'd6:    d5 <= rx_data;
+                        7'd7:    d6 <= rx_data;
+                        7'd8:    d7 <= rx_data;
+                        default: begin end
                     endcase
                 end
             end
@@ -1111,19 +1287,63 @@ endmodule
 //   cheaper to read and to be sure of than a handshake between three
 //   modules.
 //
+// WHERE THE TWO PACKETS ARE KEPT, AND WHY NEITHER IS AN ARRAY
+//   A packet is up to 64 bytes each way, so the two buffers are 1024
+//   flip-flops and the shape they are written in decides what they cost in
+//   lookup tables as well. Three shapes were available and two of them are
+//   not:
+//
+//     an array indexed by a register — `reg [7:0] buf [0:63]` — is a
+//     distributed RAM, and `src/fpga/devices/ecp5.dev` declares
+//     `TRELLIS_DPR16X4` with no site count, so `fpga::place` refuses any
+//     design that needs one. `testdata/fpga/cynthion/usb_cdc_uart.v` says
+//     the same thing about `ip/fifo_sync`.
+//
+//     one wide register written at a computed offset —
+//     `buf[{idx, 3'b000} +: 8] <= byte` — is
+//     `an assignment to a part-select with a non-constant bound`, which
+//     this compiler refuses, and a `case` with sixty-four arms writing
+//     sixty-four named byte registers is the same thing spelled out at
+//     length: it also costs a six-to-sixty-four decoder to make the write
+//     enables.
+//
+//   So both buffers are **shift registers**, which is what the traffic
+//   already is: bytes arrive in order and are given in order, so a byte
+//   always goes in at the same end. The write costs no decoder and no
+//   lookup table at all, and what is left is the read — one 64-way byte
+//   multiplexer per direction, which any of the three shapes needs.
+//
+//   A shift register puts the packet at the **top** of the buffer and the
+//   first byte of a short one therefore sits lower than the first byte of a
+//   long one. That is what `obase` and `ibase` are: each counts down from
+//   the buffer's size as bytes go in, so it ends up being the position of
+//   byte zero, and a read is `base + index`. They are counters and not
+//   subtractions, so there is no arithmetic on a length anywhere.
+//
+//   Both buffers are exactly `MAXPKT` bytes, because what `usb_pkt_rx` hands
+//   over are **payload** bytes with the PID and the CRC16 already taken out —
+//   its "WHY THERE IS A WORD AND ALSO A STREAM" says how — so a legal packet
+//   shifts in exactly its own length. An over-long one would walk the start
+//   of itself out of the bottom, so the shift stops at `obase == 0`; such a
+//   packet is refused anyway and nothing reads what it left behind.
+//
 // What it does not do
-//   One endpoint number, one packet deep, `MAXPKT` of at most 8 bytes —
-//   which is what the four-bit length the transmitters take allows, and
-//   which USB 2.0 §5.8.3 lists as a legal full-speed bulk size beside 16,
-//   32 and 64. No isochronous endpoint.
+//   One endpoint number, one packet deep, `MAXPKT` of at most 64 bytes —
+//   which USB 2.0 §5.8.3 gives as the largest of the four legal full-speed
+//   bulk sizes, the others being 8, 16 and 32, and §5.7.3 as the largest an
+//   interrupt endpoint may have. **`MAXPKT` must be a power of two**, which
+//   all four of those are: the buffers' byte index is masked to its own
+//   width rather than compared against a bound, which is only the same thing
+//   when the bound is a power of two. No isochronous endpoint, which may be
+//   1023 bytes and would need a ten-bit length.
 //
 //   An **interrupt** endpoint is this module with a different bmAttributes
 //   in the descriptor and nothing else: the packets are identical and only
 //   the host's scheduling differs. `WITH_OUT = 0` makes it IN only, which
-//   is the shape an interrupt endpoint usually has. What eight bytes a
-//   packet does rule out is a CDC ACM **SERIAL_STATE** notification, which
-//   is ten — a class that has to send one needs a wider length field here
-//   and in both transmitters, not a parameter.
+//   is the shape an interrupt endpoint usually has. A CDC ACM
+//   **SERIAL_STATE** notification is ten bytes and this is where it goes;
+//   `ip/usb_cdc_acm` gives that endpoint `MAXPKT = 16`, which is the next
+//   power of two above ten.
 //
 //   No STALL of its own: nothing here halts, so there is nothing to clear
 //   except the toggle. A SETUP addressed to a bulk endpoint is ignored,
@@ -1137,8 +1357,10 @@ module usb_bulk_ep #(
     // The endpoint number both directions use. Endpoint 0 is the control
     // endpoint's and must not be given here.
     parameter [3:0]  ENDP       = 4'd1,
-    // Bytes in a packet, 1 to 8.
-    parameter [3:0]  MAXPKT     = 4'd8,
+    // Bytes in a packet: a power of two, 1 to 64. "WHERE THE TWO PACKETS
+    // ARE KEPT" above says why a power of two and USB 2.0 §5.8.3 which four
+    // of them a bulk endpoint may declare.
+    parameter [6:0]  MAXPKT     = 7'd64,
     // WHICH DIRECTIONS THIS ENDPOINT NUMBER HAS
     //
     // Both, by default, which is a bulk pair. `WITH_OUT = 0` is an **IN-only**
@@ -1154,7 +1376,9 @@ module usb_bulk_ep #(
     // `obuf` is never written and `out_valid` is constantly low — so
     // synthesis removes them, which is why both directions of this module
     // read as one piece of logic below rather than as two halves behind a
-    // `generate`.
+    // `generate`. With 64-byte packets that is 528 flip-flops a direction,
+    // so it matters more than it did: the notification endpoint of
+    // `ip/usb_cdc_acm` is `WITH_OUT = 0` and pays for none of them.
     parameter        WITH_OUT   = 1,
     parameter        WITH_IN    = 1,
     // Cycles of `line_idle` before an answer starts; `usb_ctrl_ep`'s
@@ -1173,8 +1397,12 @@ module usb_bulk_ep #(
     input  wire [6:0]  tok_addr,
     input  wire [3:0]  tok_endp,
     input  wire        dat_ok,
-    input  wire [3:0]  dat_len,
-    input  wire [63:0] dat,
+    input  wire [6:0]  dat_len,
+    // The payload a byte a cycle, the PID and the CRC16 already out of it.
+    // This is where the OUT buffer is filled from; `dat` is the eight-byte
+    // word endpoint 0 reads and is not used here.
+    input  wire [7:0]  pay_byte,
+    input  wire        pay_push,
 
     // The device's address, from the control endpoint.
     input  wire [6:0] address,
@@ -1193,8 +1421,8 @@ module usb_bulk_ep #(
     output reg        tx_start,
     output wire [3:0] tx_pid,
     output wire       tx_with_data,
-    output reg  [3:0] tx_len,
-    input  wire [3:0] tx_index,
+    output wire [6:0] tx_len,
+    input  wire [6:0] tx_index,
     output wire [7:0] tx_byte,
     input  wire       tx_busy,
 
@@ -1245,6 +1473,19 @@ module usb_bulk_ep #(
     localparam [7:0] ADDR_OUT = {4'h0, ENDP};
     localparam [7:0] ADDR_IN  = {4'h8, ENDP};
 
+    // The widths, from `MAXPKT` and not by hand. A register is as wide as the
+    // values it holds, and this module is instantiated three times in
+    // `usb_dev_core` with two different packet sizes, so "wide enough for 64"
+    // would give the notification endpoint two bits nothing can set.
+    //
+    //   LEN_BITS   a length, a count of bytes, or a base: 0 to MAXPKT
+    //   IDX_BITS   a byte's position in a buffer: 0 to MAXPKT - 1
+    localparam integer LEN_BITS = $clog2(MAXPKT + 1);
+    localparam integer IDX_BITS = $clog2(MAXPKT);
+    // Where each buffer's base counter starts, sized so that nothing has to
+    // take a part-select of an `integer` to get it.
+    localparam [LEN_BITS-1:0] BASE_TOP = MAXPKT;
+
     // -----------------------------------------------------------------
     // Host to device.
     // -----------------------------------------------------------------
@@ -1253,71 +1494,95 @@ module usb_bulk_ep #(
     // synthesis does not strength-reduce one: `ordx * 8` became a `mul`
     // cell, and on the ECP5 a `MULT18X18D`. Three of them, across the two
     // buffers and the descriptor, cost 640 LUT4 and two hard multipliers.
-    reg [63:0] obuf;        // the packet, byte 0 in the low eight bits
-    reg [3:0]  olen;        // bytes in it, 0 when it has been drained
-    reg [2:0]  ordx;        // the byte being handed over
+    reg [MAXPKT*8-1:0] obuf;   // the packet, shifted in from the top
+    reg [LEN_BITS-1:0] obase;  // where byte 0 of it ended up
+    reg [LEN_BITS-1:0] olen;   // bytes in it, 0 when it has been drained
+    reg [IDX_BITS-1:0] ordx;   // the byte being handed over
     reg        out_toggle;  // the PID the next packet should carry
     reg        expect_out;  // an OUT token has been seen and its data is next
+    reg        out_take;    // ... and there was room, so it is being stored
 
-    assign out_valid = (olen != 4'd0);
-    assign out_data  = obuf[{ordx, 3'b000} +: 8];
-    assign out_last  = (({1'b0, ordx} + 4'd1) == olen);
+    // The position of the byte being handed over. `obase` has counted down to
+    // byte 0's position, so this is in range for every byte of an accepted
+    // packet — `MAXPKT - olen` to `MAXPKT - 1` — and the mask to `IDX_BITS`
+    // therefore drops nothing. It is a mask and not a bound because the two
+    // are the same thing when `MAXPKT` is a power of two, which the header
+    // above requires it to be.
+    wire [LEN_BITS-1:0] ordx_at = obase + ordx;
+    // One past the byte being handed over, at a length's width.
+    wire [LEN_BITS-1:0]   ordx_next = ordx + 1'b1;
+
+    assign out_valid = (olen != 0);
+    assign out_data  = obuf[{ordx_at[IDX_BITS-1:0], 3'b000} +: 8];
+    assign out_last  = (ordx_next == olen);
 
     // -----------------------------------------------------------------
     // Device to host.
     // -----------------------------------------------------------------
-    // Eight byte registers and a `case`, rather than one wide register and
-    // a part-select: an assignment to a part-select whose bound is not
-    // constant is not something every tool takes, and a decoder is what
-    // this becomes either way.
-    reg [7:0] i0, i1, i2, i3, i4, i5, i6, i7;
-    reg [3:0] ilen;         // bytes given so far
+    // The same shift register the other way round: bytes are given in order,
+    // so each one goes in at the top and `ibase` counts down to where byte 0
+    // ended up. The packet is **not** consumed by being sent, because a
+    // packet the host does not acknowledge goes out again with the same
+    // toggle, so nothing shifts on the way out and the read is a multiplexer.
+    reg [MAXPKT*8-1:0] ibuf;
+    reg [LEN_BITS-1:0] ibase;   // where byte 0 of it is
+    reg [LEN_BITS-1:0] ilen;    // bytes given so far
     reg       armed;        // the packet is ready to go out
     reg       in_toggle;    // the PID it will carry
     reg       in_await;     // it has gone out and its ACK has not come back
 
-    wire [63:0] ibuf = {i7, i6, i5, i4, i3, i2, i1, i0};
-
     // Room while no packet is waiting to be sent. `armed` covers the full
-    // buffer too, since the eighth byte arms it.
+    // buffer too, since the last byte arms it.
     assign in_ready = ~armed;
-    assign tx_byte  = ibuf[{tx_index[2:0], 3'b000} +: 8];
+    // The byte the transmitter is asking for. `tx_index` reaches `ilen` for
+    // one fetch the transmitter throws away — `usb_fs_tx` reads `byte_in` in
+    // the cycle it decides the payload is over — so the sum reaches `MAXPKT`,
+    // which the mask to `IDX_BITS` turns into position 0. That byte is never
+    // sent.
+    wire [LEN_BITS-1:0] tx_at = ibase + tx_index;
+    assign tx_byte  = ibuf[{tx_at[IDX_BITS-1:0], 3'b000} +: 8];
 
     // -----------------------------------------------------------------
     // The answer, and when it may go out.
     // -----------------------------------------------------------------
     reg       pending;
     reg [1:0] pend_ans;
-    reg [3:0] pend_len;
+    reg [LEN_BITS-1:0] pend_len;
     reg [6:0] turn;
     reg [1:0] tx_ans;
+    reg [LEN_BITS-1:0] tx_len_q;
 
     // The PID nibble, and whether the packet carries a payload: both are the
     // answer decoded, and neither is state.
     assign tx_pid = tx_ans[1] ? (tx_ans[0] ? PID_DATA1 : PID_DATA0)
                               : (tx_ans[0] ? PID_ACK   : PID_NAK);
     assign tx_with_data = tx_ans[1];
+    // As wide as a packet of this endpoint, zero-extended to the width the
+    // transmitter takes for all of them.
+    assign tx_len       = tx_len_q;
 
     always @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
-            obuf       <= 64'd0;
-            olen       <= 4'd0;
-            ordx       <= 3'd0;
+            obuf       <= {(MAXPKT*8){1'b0}};
+            obase      <= BASE_TOP;
+            olen       <= 0;
+            ordx       <= 0;
             out_toggle <= 1'b0;
             expect_out <= 1'b0;
-            i0 <= 8'd0; i1 <= 8'd0; i2 <= 8'd0; i3 <= 8'd0;
-            i4 <= 8'd0; i5 <= 8'd0; i6 <= 8'd0; i7 <= 8'd0;
-            ilen       <= 4'd0;
+            out_take   <= 1'b0;
+            ibuf       <= {(MAXPKT*8){1'b0}};
+            ibase      <= BASE_TOP;
+            ilen       <= 0;
             armed      <= 1'b0;
             in_toggle  <= 1'b0;
             in_await   <= 1'b0;
             pending    <= 1'b0;
             pend_ans   <= A_NAK;
-            pend_len   <= 4'd0;
+            pend_len   <= 0;
             turn       <= 7'd0;
             tx_ans     <= A_NAK;
             tx_start   <= 1'b0;
-            tx_len     <= 4'd0;
+            tx_len_q   <= 0;
         end else begin
             tx_start <= 1'b0;
 
@@ -1330,9 +1595,33 @@ module usb_bulk_ep #(
                     // was for.
                     in_await   <= 1'b0;
                     expect_out <= 1'b0;
+                    out_take   <= 1'b0;
                     if (tok_ok && tok_addr == address && tok_endp == ENDP) begin
                         if (WITH_OUT && pkt_pid == PID_OUT) begin
                             expect_out <= 1'b1;
+                            // WHETHER THE PACKET BEHIND THIS TOKEN IS STORED
+                            //
+                            // Decided **here** and not at the end of it,
+                            // because the buffer is filled as the bytes
+                            // arrive: a packet whose bytes were shifted in
+                            // over a packet that had not been drained would
+                            // destroy it, and whether it has been drained can
+                            // change halfway through a packet. So the answer
+                            // is latched from the one moment at which the
+                            // question can still be asked, and a packet that
+                            // arrives with no room is NAKed and sent again by
+                            // the host, which is what bulk means.
+                            //
+                            // `obase` goes back to the top **only** when the
+                            // packet is going to be stored. It used to be
+                            // reset here unconditionally, and that destroyed
+                            // a packet which had not been drained yet: the
+                            // host's next OUT is NAKed, nothing is shifted in,
+                            // but the base of the packet still sitting in
+                            // `obuf` had already been thrown away, so every
+                            // byte of it read back as zero.
+                            out_take <= (olen == 0);
+                            if (olen == 0) obase <= BASE_TOP;
                         end else if (WITH_IN && pkt_pid == PID_IN) begin
                             pending <= 1'b1;
                             turn    <= 7'd0;
@@ -1356,6 +1645,7 @@ module usb_bulk_ep #(
                     end
                 end else if (pkt_is_data) begin
                     expect_out <= 1'b0;
+                    out_take   <= 1'b0;
                     if (dat_ok && expect_out) begin
                         pending <= 1'b1;
                         turn    <= 7'd0;
@@ -1363,10 +1653,22 @@ module usb_bulk_ep #(
                             // The host did not hear the last ACK. Say it
                             // again and drop the copy.
                             pend_ans <= A_ACK;
-                        end else if (olen == 4'd0) begin
-                            obuf       <= dat;
-                            olen       <= dat_len;
-                            ordx       <= 3'd0;
+                        end else if (dat_len > MAXPKT) begin
+                            // Longer than the `wMaxPacketSize` this
+                            // endpoint's descriptor promised, which a host
+                            // must not send: NAKed, because storing it would
+                            // need a buffer the descriptor did not ask for.
+                            // `usb_pkt_rx` already refuses anything over 64,
+                            // so this is the gap between 64 and an endpoint
+                            // narrower than that.
+                            pend_ans <= A_NAK;
+                        end else if (out_take) begin
+                            // The bytes are already in `obuf`: they were
+                            // shifted in as they arrived, and `obase` counted
+                            // down to where byte 0 of them ended up. All that
+                            // is left is to say how many there are.
+                            olen       <= dat_len[LEN_BITS-1:0];
+                            ordx       <= 0;
                             out_toggle <= ~out_toggle;
                             pend_ans   <= A_ACK;
                         end else begin
@@ -1378,7 +1680,8 @@ module usb_bulk_ep #(
                     // The packet arrived. The buffer is free and the
                     // toggle moves on.
                     in_await  <= 1'b0;
-                    ilen      <= 4'd0;
+                    ilen      <= 0;
+                    ibase     <= BASE_TOP;
                     armed     <= 1'b0;
                     in_toggle <= ~in_toggle;
                 end else begin
@@ -1387,30 +1690,35 @@ module usb_bulk_ep #(
             end
 
             // ---------------------------------------------------------
+            // The OUT packet's bytes, as they arrive.
+            // ---------------------------------------------------------
+            // One byte a cycle into the top of `obuf`, which is why there is
+            // no decoder and no second copy of the packet. `obase` stops at
+            // zero so that a packet longer than the buffer cannot shift the
+            // start of itself out of the bottom; such a packet is refused
+            // above and nothing reads what it left.
+            if (WITH_OUT && expect_out && out_take && pay_push && obase != 0) begin
+                obuf  <= {pay_byte, obuf[MAXPKT*8-1:8]};
+                obase <= obase - 1'b1;
+            end
+
+            // ---------------------------------------------------------
             // The bytes handed over, and the bytes given.
             // ---------------------------------------------------------
             if (out_valid && out_ready) begin
                 if (out_last) begin
-                    olen <= 4'd0;
-                    ordx <= 3'd0;
+                    olen <= 0;
+                    ordx <= 0;
                 end else begin
-                    ordx <= ordx + 3'd1;
+                    ordx <= ordx + 1'b1;
                 end
             end
 
             if (in_valid && in_ready) begin
-                case (ilen)
-                    4'd0:    i0 <= in_data;
-                    4'd1:    i1 <= in_data;
-                    4'd2:    i2 <= in_data;
-                    4'd3:    i3 <= in_data;
-                    4'd4:    i4 <= in_data;
-                    4'd5:    i5 <= in_data;
-                    4'd6:    i6 <= in_data;
-                    default: i7 <= in_data;
-                endcase
-                ilen <= ilen + 4'd1;
-                if ((ilen + 4'd1) == MAXPKT || in_commit) armed <= 1'b1;
+                ibuf  <= {in_data, ibuf[MAXPKT*8-1:8]};
+                ibase <= ibase - 1'b1;
+                ilen  <= ilen + 1'b1;
+                if ((ilen + 1'b1) == MAXPKT || in_commit) armed <= 1'b1;
             end else if (in_commit && !armed) begin
                 // A short packet, or a zero-length one, on request.
                 armed <= 1'b1;
@@ -1426,7 +1734,7 @@ module usb_bulk_ep #(
                     pending  <= 1'b0;
                     tx_start <= 1'b1;
                     tx_ans   <= pend_ans;
-                    tx_len   <= pend_len;
+                    tx_len_q <= pend_len;
                 end else begin
                     turn <= turn + 7'd1;
                 end
@@ -1443,11 +1751,14 @@ module usb_bulk_ep #(
             if (ep_clear && ep_clear_ep == ADDR_IN)  in_toggle  <= 1'b0;
 
             if (bus_reset) begin
-                olen       <= 4'd0;
-                ordx       <= 3'd0;
+                olen       <= 0;
+                ordx       <= 0;
+                obase      <= BASE_TOP;
                 out_toggle <= 1'b0;
                 expect_out <= 1'b0;
-                ilen       <= 4'd0;
+                out_take   <= 1'b0;
+                ilen       <= 0;
+                ibase      <= BASE_TOP;
                 armed      <= 1'b0;
                 in_toggle  <= 1'b0;
                 in_await   <= 1'b0;
@@ -1556,14 +1867,17 @@ module usb_dev_core #(
     // above, which no arithmetic can check: a descriptor says what the
     // host will do and these say what the device will do.
     parameter [3:0]   DATA_ENDP    = 4'd1,
-    parameter [3:0]   MAXPKT       = 4'd8,
+    parameter [6:0]   MAXPKT       = 7'd64,
     // A second data endpoint, **IN only**: a CDC ACM notification
     // endpoint, a human interface device's report pipe. `4'd0` is none, and
     // then nothing of it is built. It must not be `DATA_ENDP`, which no
     // arithmetic can check — a descriptor says what the host will do and
     // these say what the device will do.
     parameter [3:0]   NOTIF_ENDP   = 4'd0,
-    parameter [3:0]   NOTIF_MAXPKT = 4'd8,
+    parameter [6:0]   NOTIF_MAXPKT = 7'd16,
+    // Endpoint 0's own packet size, which is also `bMaxPacketSize0`;
+    // `usb_ctrl_ep`'s parameter of the same name says what it costs and buys.
+    parameter [6:0]   MAXPKT0      = 7'd64,
     // The longest device-to-host class data stage; `usb_ctrl_ep`'s
     // parameter of the same name says what it sets.
     parameter integer CLASS_MAX    = 0,
@@ -1586,8 +1900,8 @@ module usb_dev_core #(
     output wire       tx_start,
     output wire [3:0] tx_pid,
     output wire       tx_with_data,
-    output wire [3:0] tx_len,
-    input  wire [3:0] tx_index,
+    output wire [6:0] tx_len,
+    input  wire [6:0] tx_index,
     output wire [7:0] tx_byte,
     input  wire       tx_busy,
 
@@ -1603,7 +1917,7 @@ module usb_dev_core #(
     output wire [6:0]  class_index,
     input  wire [7:0]  class_byte,
     output wire [63:0] class_out,
-    output wire [3:0]  class_out_len,
+    output wire [6:0]  class_out_len,
     output wire        class_out_valid,
 
     // The data endpoint's bytes.
@@ -1634,8 +1948,10 @@ module usb_dev_core #(
     wire [6:0]  tok_addr;
     wire [3:0]  tok_endp;
     wire        dat_ok;
-    wire [3:0]  dat_len;
+    wire [6:0]  dat_len;
     wire [63:0] dat;
+    wire [7:0]  pay_byte;
+    wire        pay_push;
 
     usb_pkt_rx u_pkt (
         .clk          (clk),
@@ -1653,7 +1969,9 @@ module usb_dev_core #(
         .tok_endp     (tok_endp),
         .dat_ok       (dat_ok),
         .dat_len      (dat_len),
-        .dat          (dat)
+        .dat          (dat),
+        .pay_byte     (pay_byte),
+        .pay_push     (pay_push)
     );
 
     // -----------------------------------------------------------------
@@ -1681,7 +1999,8 @@ module usb_dev_core #(
     // Endpoint 0.
     // -----------------------------------------------------------------
     wire       c_tx_start, c_tx_with_data;
-    wire [3:0] c_tx_pid, c_tx_len;
+    wire [3:0] c_tx_pid;
+    wire [6:0] c_tx_len;
     wire [7:0] c_tx_byte;
     wire       ep_reset, ep_clear;
     wire [7:0] ep_clear_ep;
@@ -1697,6 +2016,7 @@ module usb_dev_core #(
         .IFACE_BYTES  (IFACE_BYTES),
         .IFACE_DESC   (IFACE_DESC),
         .CLASS_MAX    (CLASS_MAX),
+        .MAXPKT0      (MAXPKT0),
         .TURNAROUND   (TURNAROUND)
     ) u_ep0 (
         .clk          (clk),
@@ -1741,7 +2061,8 @@ module usb_dev_core #(
     // The data endpoint.
     // -----------------------------------------------------------------
     wire       b_tx_start, b_tx_with_data;
-    wire [3:0] b_tx_pid, b_tx_len;
+    wire [3:0] b_tx_pid;
+    wire [6:0] b_tx_len;
     wire [7:0] b_tx_byte;
 
     usb_bulk_ep #(
@@ -1762,7 +2083,8 @@ module usb_dev_core #(
         .tok_endp     (tok_endp),
         .dat_ok       (dat_ok),
         .dat_len      (dat_len),
-        .dat          (dat),
+        .pay_byte     (pay_byte),
+        .pay_push     (pay_push),
         .address      (address),
         .line_idle    (line_idle),
         .bus_reset    (bus_reset),
@@ -1795,7 +2117,8 @@ module usb_dev_core #(
     // removes all of it along with `own_notif` and this arm of the
     // multiplexer below.
     wire       n_tx_start, n_tx_with_data;
-    wire [3:0] n_tx_pid, n_tx_len;
+    wire [3:0] n_tx_pid;
+    wire [6:0] n_tx_len;
     wire [7:0] n_tx_byte;
     wire [7:0] n_out_data;
     wire       n_out_valid, n_out_last;
@@ -1818,7 +2141,8 @@ module usb_dev_core #(
         .tok_endp     (tok_endp),
         .dat_ok       (dat_ok),
         .dat_len      (dat_len),
-        .dat          (dat),
+        .pay_byte     (pay_byte),
+        .pay_push     (pay_push),
         .address      (address),
         .line_idle    (line_idle),
         .bus_reset    (bus_reset),

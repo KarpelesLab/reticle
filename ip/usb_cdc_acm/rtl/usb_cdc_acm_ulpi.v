@@ -44,7 +44,11 @@ module usb_cdc_acm_ulpi #(
     parameter [5:0]  VENDOR_ADDR  = 6'h00,
     parameter [7:0]  VENDOR_DATA  = 8'h00,
     parameter [7:0]  CFG_ATTR     = 8'h80,
-    parameter [7:0]  CFG_POWER    = 8'd50
+    parameter [7:0]  CFG_POWER    = 8'd50,
+    // Bytes in a bulk packet, and in an endpoint 0 packet; `usb_cdc_acm`'s
+    // parameters of the same names say which values USB 2.0 allows.
+    parameter [6:0]  MAXPKT       = 7'd64,
+    parameter [6:0]  MAXPKT0      = 7'd64
 ) (
     input  wire       clk60,
     input  wire       rst_n,
@@ -79,12 +83,18 @@ module usb_cdc_acm_ulpi #(
     output wire [7:0]  parity,
     output wire [7:0]  data_bits,
     output wire        dtr,
-    output wire        rts
+    output wire        rts,
+
+    // What this port reports to the host as its line state, straight into
+    // `usb_cdc_acm`, whose own port comment names every bit and says what a
+    // design with no modem lines ties it to.
+    input  wire [6:0]  serial_state
 );
     wire [7:0] rx_data;
     wire       rx_valid, rx_eop, rx_active, line_idle, bus_reset;
     wire       tx_start, tx_with_data, tx_busy;
-    wire [3:0] tx_pid, tx_len, tx_index;
+    wire [3:0] tx_pid;
+    wire [6:0] tx_len, tx_index;
     wire [7:0] tx_byte;
 
     usb_ulpi_link #(
@@ -124,6 +134,8 @@ module usb_cdc_acm_ulpi #(
         .PID        (PID),
         .CFG_ATTR   (CFG_ATTR),
         .CFG_POWER  (CFG_POWER),
+        .MAXPKT     (MAXPKT),
+        .MAXPKT0    (MAXPKT0),
         .TURNAROUND (TURNAROUND)
     ) u_acm (
         .clk          (clk60),
@@ -156,7 +168,8 @@ module usb_cdc_acm_ulpi #(
         .parity       (parity),
         .data_bits    (data_bits),
         .dtr          (dtr),
-        .rts          (rts)
+        .rts          (rts),
+        .serial_state (serial_state)
     );
 
     assign usb_reset = bus_reset;

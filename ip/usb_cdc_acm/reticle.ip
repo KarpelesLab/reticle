@@ -50,6 +50,8 @@ param VENDOR_ADDR bits 6'h00
 param VENDOR_DATA bits 8'h00
 param CFG_ATTR bits 8'h80
 param CFG_POWER bits 8'd50
+param MAXPKT bits 7'd64
+param MAXPKT0 bits 7'd64
 
 port clk60 in
 port rst_n in
@@ -78,3 +80,4 @@ port parity out 8
 port data_bits out 8
 port dtr out
 port rts out
+port serial_state in 7

@@ -69,52 +69,80 @@
 //   against a host and which are **quoted** from a table, which is the
 //   distinction this project's protocol documents keep.
 //
-// THE NOTIFICATION ENDPOINT, AND WHY IT NEVER SENDS ANYTHING
+// THE NOTIFICATION ENDPOINT, AND WHAT IT SENDS
 //   The communications interface has an interrupt IN endpoint because CDC 1.1
 //   §3.2 gives one to the notification element and because `cdc_acm` is
 //   understood to take `endpoint[0]` of that interface and refuse the device
 //   if it is not an interrupt IN — a reading of a driver, marked as one in
 //   README.md §4, not something measured here. So the descriptor declares
-//   one: endpoint 2 IN, eight bytes, polled every 16 frames.
+//   one: endpoint 2 IN, sixteen bytes, polled every 16 frames.
 //
-//   **It NAKs every poll, for ever.** What it would otherwise send is a
-//   SERIAL_STATE notification (PSTN 1.2 §6.5.4), which reports the states
-//   of the incoming lines and any break, parity or overrun error — and a
-//   device with no modem lines and no UART errors to report has nothing to
-//   say. A host polling an interrupt endpoint that NAKs is the ordinary
-//   state of a CDC ACM device that is not changing.
+//   What it sends is **SERIAL_STATE**, PSTN 1.2 §6.5.4: ten bytes, an
+//   eight-byte notification header and a two-byte `wSerialState` bitmap.
+//   Every field of it is written out at `notif_byte` below with the table it
+//   comes from. It used to send nothing at all, and the reason was arithmetic
+//   rather than choice: ten bytes did not fit an endpoint that held eight,
+//   because the length both transmitters took was four bits. That field is
+//   seven bits now — `usb_fs_tx`'s header says why seven — so the endpoint
+//   holds sixteen and the notification fits.
 //
-//   It also **could not** send one if it wanted to, and that is the
-//   honest reason this is not a choice: a SERIAL_STATE notification is
-//   **ten** bytes — an eight-byte notification header and a two-byte
-//   `wSerialState` — and `usb_bulk_ep` holds eight, because the length
-//   both transmitters take is four bits. Sending one needs a wider length
-//   field in `usb_fs_tx`, `usb_ulpi_link` and the endpoint, not a
-//   parameter here. `wMaxPacketSize` in the descriptor is eight and not
-//   sixteen for the same reason: a descriptor says what the device does.
+//   **WHEN it is sent, which the specification states and this block obeys.**
+//   §6.5.4 calls SERIAL_STATE "a notification ... to indicate ... the current
+//   state of the [UART] lines" and PSTN 1.2 Table 30's `bmCapabilities` D1
+//   groups it with the line-coding requests as one feature. It is a
+//   **state-change** notification: the device sends one when what it would
+//   report changes. So this block sends one
 //
-//   What established that a host does not need one is a host: §5 of
-//   README.md has the kernel log and the `lsusb -v` from the part, and the
-//   port opens, carries bytes and closes with no notification ever sent.
-//   That is a measurement of one driver on one kernel, not a reading of the
-//   specification, and it is written down as such.
+//     * when the host configures the device, because the host's own idea of
+//       the state starts empty and nothing else would ever fill it — Linux's
+//       `cdc_acm` keeps the last bitmap it was sent in `ctrlin` and answers
+//       `TIOCMGET` out of it, so a device that never sends one reports no
+//       carrier for ever; and
+//     * whenever `serial_state` changes afterwards.
+//
+//   and **not** on a timer, because a state that has not changed is not news
+//   and an interrupt endpoint that NAKs a poll is the ordinary state of a
+//   device that is not changing.
+//
+//   **What a device with no modem lines should report.** `serial_state` is a
+//   port and not a constant, because the answer is a property of what is
+//   wired to the block and not of the block. What this library's own designs
+//   tie it to is `7'b000_0011` — `bRxCarrier` and `bTxCarrier` set, every
+//   error bit clear — and the argument is §6.5.4's own words for those two
+//   bits: `bRxCarrier` is "State of receiver carrier detection mechanism of
+//   device. This signal corresponds to V.24 signal 109 and RS-232 signal DCD"
+//   and `bTxCarrier` is the same for "signal 106 and RS-232 signal DSR". A
+//   device whose serial port is inside the same die as the USB endpoint has
+//   its carrier present and its data set ready from the moment it exists, so
+//   both are one; there is nothing that could ever make them zero. The error
+//   bits — break, ring, framing, parity, overrun — are **events a UART
+//   reports**, so a design with a UART drives them and one without leaves
+//   them clear.
+//
+//   **What this establishes and what it assumes.** That the ten bytes are
+//   these ten bytes is read off PSTN 1.2 §6.5.4 and is a **quotation**. That
+//   a host acts on them is a **measurement**: §5 of README.md has `TIOCMGET`
+//   on the part reporting DCD and DSR, which is `cdc_acm` having received and
+//   decoded this notification, and §4 says what was believed about the driver
+//   before that measurement existed.
 //
 // What it does not do
 //   One serial port. A composite device with two of them needs two of
 //   everything below and an interface association descriptor above it.
 //
-//   Eight bytes a packet on the bulk endpoints, which is `usb_bulk_ep`'s
-//   limit and is an eighth of the largest a full-speed bulk endpoint may
-//   have. It is legal — USB 2.0 §5.8.3 lists 8 beside 16, 32 and 64 — and
-//   what it costs is throughput, by close to that factor: a host is limited
-//   in **transactions** a frame rather than in bytes, so eight bytes a
-//   transaction is eight times less of them. No number is quoted here
-//   because nothing here measured one.
+//   Sixty-four bytes a packet on the bulk endpoints, which is the largest
+//   USB 2.0 §5.8.3 allows a full-speed bulk endpoint — the other three legal
+//   sizes are 8, 16 and 32 — and `MAXPKT` is a parameter so a design may
+//   choose one of the others. It was eight, and what that cost was
+//   throughput: a host is limited in **transactions** a frame rather than in
+//   bytes, so eight bytes a transaction was eight times as many of them.
+//   README.md §6 has the two figures measured on a part.
 //
-//   It is also why a host reading this port must read **one packet at a
-//   time**: a bulk IN transfer ends on a short packet or a full buffer, so a
-//   read of 64 bytes answered with 8 is not finished and the host asks
-//   again.
+//   A host reading this port still reads **one packet at a time**, and the
+//   reason has not changed with the size: a bulk IN transfer ends on a short
+//   packet or a full buffer, so a read of 128 bytes answered with 64 is not
+//   finished and the host asks again. What has changed is that a read of
+//   exactly 64 now ends on a full buffer, which is the common case.
 //
 //   No flow control on either side but USB's own NAK. There is no FIFO
 //   here: the endpoint holds one packet each way and NAKs the host while
@@ -142,6 +170,18 @@ module usb_cdc_acm #(
     // bmAttributes and bMaxPower of the configuration: bus powered, 100 mA.
     parameter [7:0]  CFG_ATTR   = 8'h80,
     parameter [7:0]  CFG_POWER  = 8'd50,
+    // Bytes in a bulk packet, which goes into `wMaxPacketSize` of both bulk
+    // endpoint descriptors below rather than being typed there as well. USB
+    // 2.0 §5.8.3 allows a full-speed bulk endpoint 8, 16, 32 or 64 and
+    // **nothing else**, which no arithmetic here can check; 64 is the largest
+    // and is what a serial port wants, and it is a parameter so that a design
+    // short of flip-flops can take one of the smaller ones and have the
+    // descriptor follow.
+    parameter [6:0]  MAXPKT     = 7'd64,
+    // Endpoint 0's, which is `bMaxPacketSize0`. §5.5.3 allows it the same
+    // four values; `usb_ctrl_ep`'s parameter of the same name says what
+    // raising it buys and what the one asymmetry of it is.
+    parameter [6:0]  MAXPKT0    = 7'd64,
     // Cycles of `line_idle` before an answer starts; `usb_ctrl_ep`'s
     // parameter of the same name says what it has to be and why.
     parameter [6:0]  TURNAROUND = 7'd8
@@ -163,8 +203,8 @@ module usb_cdc_acm #(
     output wire       tx_start,
     output wire [3:0] tx_pid,
     output wire       tx_with_data,
-    output wire [3:0] tx_len,
-    input  wire [3:0] tx_index,
+    output wire [6:0] tx_len,
+    input  wire [6:0] tx_index,
     output wire [7:0] tx_byte,
     input  wire       tx_busy,
 
@@ -191,7 +231,31 @@ module usb_cdc_acm #(
     output wire [7:0]  parity,
     output wire [7:0]  data_bits,
     output wire        dtr,
-    output wire        rts
+    output wire        rts,
+
+    // THE STATE THIS PORT REPORTS TO THE HOST
+    //
+    // `wSerialState` of a SERIAL_STATE notification, PSTN 1.2 §6.5.4 Table 31,
+    // one bit a line:
+    //
+    //   [0] bRxCarrier    DCD, V.24 signal 109
+    //   [1] bTxCarrier    DSR, V.24 signal 106
+    //   [2] bBreak        a break is being received
+    //   [3] bRingSignal   a ring signal is being received
+    //   [4] bFraming      a framing error has been detected
+    //   [5] bParity       a parity error has been detected
+    //   [6] bOverRun      a character was overwritten before it was read
+    //
+    // Bits 7 to 15 of the field are reserved and this block sends them zero,
+    // which is why the port is seven bits and not sixteen: a port as wide as
+    // the field would invite a design to set a bit the specification reserves.
+    //
+    // **A notification goes out whenever this changes**, and once when the
+    // host configures the device, so a design that ties it to a constant gets
+    // exactly one notification per configuration. `7'b000_0011` is what a port
+    // with no modem lines reports and "THE NOTIFICATION ENDPOINT" above has
+    // the argument for it.
+    input  wire [6:0]  serial_state
 );
     // -----------------------------------------------------------------
     // The interfaces, and the endpoints on them.
@@ -207,12 +271,24 @@ module usb_cdc_acm #(
     // interface.
     localparam [3:0] NOTIF_ENDP = 4'd2;
     localparam [3:0] DATA_ENDP  = 4'd1;
-    // Bytes in a packet, which is `usb_bulk_ep`'s most.
-    localparam [3:0] MAXPKT     = 4'd8;
+    // Bytes in a notification packet. Ten are needed and this is sixteen: a
+    // SERIAL_STATE is ten bytes, `usb_bulk_ep` masks its buffer's byte index
+    // to the index's own width so the size has to be a power of two, and USB
+    // 2.0 §5.7.3 allows a full-speed interrupt endpoint **anything up to 64**
+    // — unlike a bulk one, which §5.8.3 restricts to four values — so sixteen
+    // is legal and is the smallest legal size that holds the notification.
+    localparam [6:0] NOTIF_MAXPKT = 7'd16;
+    // Bytes in a SERIAL_STATE notification: the eight-byte header of
+    // PSTN 1.2 Table 30 and the two bytes of `wSerialState`.
+    localparam integer NOTIF_BYTES = 10;
+    // The index of the last of them, sized so that nothing takes a
+    // part-select of an `integer`.
+    localparam [3:0]   NOTIF_LAST  = NOTIF_BYTES - 1;
     // How often a host polls the notification endpoint, in milliseconds:
     // `bInterval` of a full-speed interrupt endpoint is a count of frames
-    // (USB 2.0 Table 9-13). Sixteen is a slow poll for something that
-    // never answers.
+    // (USB 2.0 Table 9-13). Sixteen milliseconds is how long the host may be
+    // behind this device's idea of its own line state, which for a port whose
+    // carrier never drops is sixteen milliseconds once, at configuration.
     localparam [7:0] NOTIF_INTERVAL = 8'd16;
 
     // Class codes. CDC 1.1 Table 14 for the device, Table 15 and Table 16
@@ -299,20 +375,21 @@ module usb_cdc_acm #(
         // two are one function, and the one a host is understood to read to
         // tell them apart; README.md §2 says how sure of that this is.
         8'd5, CS_INTERFACE, FD_UNION, COMM_IFACE, DATA_IFACE,
-        // ENDPOINT 82h — the notification endpoint. Interrupt IN, eight
-        // bytes, every 16 frames. wMaxPacketSize is two bytes, low first.
+        // ENDPOINT 82h — the notification endpoint. Interrupt IN, sixteen
+        // bytes, every 16 frames. wMaxPacketSize is two bytes, low first, and
+        // is the localparam above rather than a number typed twice.
         8'd7, DESC_ENDPOINT, {4'h8, NOTIF_ENDP}, EP_INTERRUPT,
-              8'd8, 8'd0, NOTIF_INTERVAL,
+              {1'b0, NOTIF_MAXPKT}, 8'd0, NOTIF_INTERVAL,
         // INTERFACE 1 — the data interface.
         8'd9, DESC_INTERFACE, DATA_IFACE, 8'd0, 8'd0,
               CLASS_DATA, 8'h00, PROTOCOL_NONE, 8'd0,
         // ENDPOINT 01h — bulk OUT, the bytes the host writes.
         8'd7, DESC_ENDPOINT, {4'h0, DATA_ENDP}, EP_BULK,
-              8'd8, 8'd0, 8'd0,
+              {1'b0, MAXPKT}, 8'd0, 8'd0,
         // ENDPOINT 81h — bulk IN, the bytes the host reads. bInterval is
         // ignored for a full-speed bulk endpoint (USB 2.0 Table 9-13).
         8'd7, DESC_ENDPOINT, {4'h8, DATA_ENDP}, EP_BULK,
-              8'd8, 8'd0, 8'd0
+              {1'b0, MAXPKT}, 8'd0, 8'd0
     };
 
     // -----------------------------------------------------------------
@@ -325,7 +402,7 @@ module usb_cdc_acm #(
     wire [6:0]  class_index;
     wire [7:0]  class_byte;
     wire [63:0] class_out;
-    wire [3:0]  class_out_len;
+    wire [6:0]  class_out_len;
     wire        class_out_valid;
 
     usb_cdc_req #(
@@ -351,6 +428,99 @@ module usb_cdc_acm #(
     );
 
     // -----------------------------------------------------------------
+    // SERIAL_STATE, into the notification endpoint.
+    // -----------------------------------------------------------------
+    // Ten bytes handed to `usb_bulk_ep`'s IN side one a cycle, with
+    // `notif_commit` on the last of them so that a ten-byte packet goes out of
+    // a sixteen-byte endpoint instead of waiting for six bytes that are not
+    // coming. "THE NOTIFICATION ENDPOINT" above says what the ten bytes are
+    // for and when they go.
+    //
+    // `nidx` counts to nine, so four bits, and **every one of those four bits
+    // is reachable**: bit 3 is set for 8 and 9. That is the test this library
+    // applies to a register's width — not whether the top value is a power of
+    // two, but whether an expression can set each bit — and it is why a
+    // ten-state counter in four bits is not the hazard a three-bit `stage` for
+    // four states was.
+    reg [3:0] nidx;      // the byte being handed over
+    reg       sending;   // a notification is on its way into the endpoint
+    reg [6:0] reported;  // the state the last one carried
+    reg       ever;      // one has been sent since the host configured this
+
+    // The byte at `nidx`. PSTN 1.2 Table 30 for the eight-byte header and
+    // Table 31 for the two bytes of `wSerialState`; USB 2.0 Table 9-2 for the
+    // shape of the header itself, which is a SETUP packet's.
+    function [7:0] notif_byte;
+        input [3:0] i;
+        begin
+            case (i)
+                // bmRequestType: device to host, class, to an interface.
+                4'd0:    notif_byte = 8'hA1;
+                // bNotification: SERIAL_STATE, PSTN 1.2 Table 29.
+                4'd1:    notif_byte = 8'h20;
+                // wValue: zero for this notification.
+                4'd2:    notif_byte = 8'h00;
+                4'd3:    notif_byte = 8'h00;
+                // wIndex: the interface the notification is about, which is
+                // the communications one — the same interface the class
+                // requests are addressed to.
+                4'd4:    notif_byte = COMM_IFACE;
+                4'd5:    notif_byte = 8'h00;
+                // wLength: the two bytes of data that follow.
+                4'd6:    notif_byte = 8'd2;
+                4'd7:    notif_byte = 8'h00;
+                // wSerialState, low byte first. The seven bits the port
+                // carries, then the nine the specification reserves.
+                4'd8:    notif_byte = {1'b0, serial_state};
+                default: notif_byte = 8'h00;
+            endcase
+        end
+    endfunction
+
+    wire [7:0] notif_data   = notif_byte(nidx);
+    wire       notif_valid  = sending;
+    wire       notif_commit = sending & (nidx == NOTIF_LAST);
+    wire       notif_ready;
+
+    // A notification is owed when the host has configured the device and
+    // either none has gone yet or what one would say has changed. The device
+    // is not configured until SET_CONFIGURATION, and sending before that would
+    // be a packet on an endpoint the host has not enabled.
+    wire       notif_owed = configured & (~ever | (serial_state != reported));
+
+    always @(posedge clk or negedge rst_n) begin
+        if (!rst_n) begin
+            nidx     <= 4'd0;
+            sending  <= 1'b0;
+            reported <= 7'd0;
+            ever     <= 1'b0;
+        end else begin
+            if (sending) begin
+                if (notif_ready) begin
+                    if (notif_commit) begin
+                        // The last byte has been taken and the packet is
+                        // armed. What it said is what the host will be told.
+                        sending  <= 1'b0;
+                        nidx     <= 4'd0;
+                        ever     <= 1'b1;
+                        reported <= serial_state;
+                    end else begin
+                        nidx <= nidx + 4'd1;
+                    end
+                end
+            end else if (notif_owed) begin
+                sending <= 1'b1;
+                nidx    <= 4'd0;
+            end
+
+            // A host that has configured the device again, or reset the bus,
+            // has forgotten what it was told: `usb_bulk_ep`'s buffer went with
+            // it and so must the memory of having filled it.
+            if (!configured) ever <= 1'b0;
+        end
+    end
+
+    // -----------------------------------------------------------------
     // The device.
     // -----------------------------------------------------------------
     // `DEV_CLASS` is `02h` because a CDC device says its class in the
@@ -360,11 +530,6 @@ module usb_cdc_acm #(
     //
     // `CLASS_MAX` is seven, the length of the line coding structure, and it
     // is what sets the width of endpoint 0's data-stage counters.
-    //
-    // The notification endpoint's byte interface is **tied off**: nothing
-    // is ever given to it, so it NAKs every poll and everything it would
-    // have buffered has no writer and is removed. "THE NOTIFICATION
-    // ENDPOINT" above says why that is not a gap to be filled here.
     usb_dev_core #(
         .VID          (VID),
         .PID          (PID),
@@ -377,8 +542,9 @@ module usb_cdc_acm #(
         .IFACE_DESC   (IFACE_DESC),
         .DATA_ENDP    (DATA_ENDP),
         .MAXPKT       (MAXPKT),
+        .MAXPKT0      (MAXPKT0),
         .NOTIF_ENDP   (NOTIF_ENDP),
-        .NOTIF_MAXPKT (MAXPKT),
+        .NOTIF_MAXPKT (NOTIF_MAXPKT),
         .CLASS_MAX    (7),
         .TURNAROUND   (TURNAROUND)
     ) u_dev (
@@ -416,8 +582,9 @@ module usb_cdc_acm #(
         .in_valid     (in_valid),
         .in_ready     (in_ready),
         .in_commit    (in_commit),
-        .notif_data   (8'd0),
-        .notif_valid  (1'b0),
-        .notif_commit (1'b0)
+        .notif_data   (notif_data),
+        .notif_valid  (notif_valid),
+        .notif_ready  (notif_ready),
+        .notif_commit (notif_commit)
     );
 endmodule

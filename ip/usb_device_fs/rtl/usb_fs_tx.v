@@ -15,9 +15,27 @@
 //   the payload goes out — polynomial 0x8005, reflected, seeded with all
 //   ones and sent complemented, low byte first.
 //
+// WHY THE LENGTH IS SEVEN BITS
+//   `len` and `index` are seven bits because a full-speed packet that is
+//   not isochronous carries **at most 64 bytes** of payload: USB 2.0
+//   §5.5.3 lists 8, 16, 32 and 64 for a control endpoint, §5.8.3 the same
+//   four for a bulk one, and §5.7.3 allows an interrupt endpoint anything
+//   up to 64. So a length runs from 0 to 64 — sixty-five values — and six
+//   bits stop at 63.
+//
+//   Seven bits reach 127 and the top sixty-three of those cannot happen,
+//   which is worth saying out loud because this library sizes registers to
+//   the values they hold: what the two faults recorded in `usb_ctrl_ep`
+//   were about is a **bit no expression can set**, and bit 6 here is set
+//   whenever a packet is 64 bytes long. A count of 0 to 64 needs seven
+//   bits in any encoding, so there is nothing narrower to choose.
+//
+//   Isochronous endpoints may carry 1023 bytes (§5.6.3) and would need ten.
+//   This device has none, which is why the field is not ten.
+//
 // What it does not do
-//   Full speed only, and eight bytes of payload at most, which is what a
-//   control endpoint with a maximum packet size of eight needs. No
+//   Full speed only, and 64 bytes of payload at most, which is the largest
+//   a full-speed endpoint of any type this device has may declare. No
 //   pre-amble for low-speed devices behind a hub.
 module usb_fs_tx (
     input  wire       clk,
@@ -25,8 +43,8 @@ module usb_fs_tx (
     input  wire       start,
     input  wire [3:0] pid,
     input  wire       with_data,
-    input  wire [3:0] len,
-    output wire [3:0] index,
+    input  wire [6:0] len,
+    output wire [6:0] index,
     input  wire [7:0] byte_in,
     output wire       busy,
     output wire       dp,
@@ -49,8 +67,8 @@ module usb_fs_tx (
     reg        level;     // 1 = J
     reg        se0;
     reg        oe_q;
-    reg [3:0]  idx;
-    reg [3:0]  len_q;
+    reg [6:0]  idx;
+    reg [6:0]  len_q;
     reg        data_q;
     reg [15:0] crc;
     reg [1:0]  eop_cnt;
@@ -58,7 +76,7 @@ module usb_fs_tx (
     wire tick = (div == 2'd3);
 
     // The state after the byte in `shift` has gone out.
-    wire [2:0] after_pid  = !data_q ? S_EOP : (len_q == 4'd0) ? S_CRC0 : S_DATA;
+    wire [2:0] after_pid  = !data_q ? S_EOP : (len_q == 7'd0) ? S_CRC0 : S_DATA;
     wire [2:0] after_data = (idx == len_q) ? S_CRC0 : S_DATA;
 
     assign index = idx;
@@ -85,8 +103,8 @@ module usb_fs_tx (
             level   <= 1'b1;
             se0     <= 1'b0;
             oe_q    <= 1'b0;
-            idx     <= 4'd0;
-            len_q   <= 4'd0;
+            idx     <= 7'd0;
+            len_q   <= 7'd0;
             data_q  <= 1'b0;
             crc     <= 16'hFFFF;
             eop_cnt <= 2'd0;
@@ -100,7 +118,7 @@ module usb_fs_tx (
                     bitcnt <= 3'd0;
                     ones   <= 3'd0;
                     level  <= 1'b1;
-                    idx    <= 4'd0;
+                    idx    <= 7'd0;
                     len_q  <= len;
                     data_q <= with_data;
                     crc    <= 16'hFFFF;
@@ -148,14 +166,14 @@ module usb_fs_tx (
                             S_PID: begin
                                 state <= after_pid;
                                 shift <= byte_in;
-                                if (after_pid == S_DATA) idx <= 4'd1;
+                                if (after_pid == S_DATA) idx <= 7'd1;
                                 if (after_pid == S_CRC0) shift <= ~crc[7:0];
                             end
                             S_DATA: begin
                                 state <= after_data;
                                 if (after_data == S_DATA) begin
                                     shift <= byte_in;
-                                    idx   <= idx + 4'd1;
+                                    idx   <= idx + 7'd1;
                                 end else begin
                                     shift <= ~crc16_bit(crc, shift[0]);
                                 end
