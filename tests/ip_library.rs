@@ -12566,7 +12566,7 @@ fn cdc_serial_state(state: u8) -> Vec<u8> {
 /// The notification endpoint sends **SERIAL_STATE** whenever the host's idea of
 /// the line state could be stale, and NAKs every poll in between.
 ///
-/// Four triggers, and the **third is the one this test exists for**:
+/// Five things, and the **third is the one this test exists for**:
 ///
 ///   * the first poll after SET_CONFIGURATION returns the ten bytes, because a
 ///     host's idea of the line state starts empty and nothing else would fill
@@ -12583,7 +12583,7 @@ fn cdc_serial_state(state: u8) -> Vec<u8> {
 ///     forgotten what it was told.
 ///
 /// **Why the third one is the assertion that matters.** The first version of
-/// this test had the other three and passed against a device that sent
+/// this test had the other four and passed against a device that sent
 /// **one notification per configuration and never another**, which is a
 /// functional defect: `cdc_acm` submits its interrupt URB at `open` and
 /// consumes that one, and a `cdc_acm` bound a second time without a bus reset
