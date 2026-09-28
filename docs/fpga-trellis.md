@@ -472,7 +472,21 @@ byte multiplexer over each buffer, which on LUT4 is 63 of them per bit.
 `docs/ip-library.md` has that accounting and what the size bought, measured on
 this same board. **Nothing is unexplained in either column**, which is the
 statement this table is for: a design more than twice the size still decodes
-back through the database with no bit left over.
+back through the database with no bit left over. The `#[ignore]`d test above
+was re-run over the wider design and follows every one of the 1440 flip-flops
+back to a driver in the fabric with none floating, in 562 seconds of place,
+route and decode.
+
+**`zero_probe` reaches eight lookup tables now and not sixty-four**, which is a
+sentence in `usb_ulpi_device.v` that this round could not update: that file is
+frozen as the hardware-verified reference design. `in_data` used to be written
+into one of eight byte registers by a `case`, so the XOR's output reached
+sixty-four flip-flops' worth of write logic; the IN buffer is a shift register
+now, so `in_data` feeds one byte — the top of it — and eight. The probe is
+**not** weakened by that: it is still on the byte the host reads, every byte
+still passes through the XOR, and `tests/usb_loopback.rs` still reads a few
+hundred bytes back byte-identical with a constant-zero flip-flop in the middle
+of each one.
 
 The one new `.config` word is the constant's `INIT` and nothing else. The rest
 is a net figure rather than an itemised one, because one more cell moves the
