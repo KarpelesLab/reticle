@@ -432,9 +432,10 @@ port as wide as the field would invite a design to set a bit the specification
 reserves.
 
 **MEDIUM**. What a device with no modem lines should put in them is
-`7'b000_0011` — both carriers, no errors — and the argument is §6.5.4's own
-words: `bRxCarrier` is "the state of the receiver carrier detection mechanism of
-the device" and `bTxCarrier` the state of the transmission carrier. A port
+`7'b000_0011` — both carriers, no errors — and the argument is what §6.5.4
+makes those two bits: `bRxCarrier` is the state of the device's receiver carrier
+detection, which the table equates with V.24 signal 109 and RS-232's DCD, and
+`bTxCarrier` is the transmission carrier, signal 106 and DSR. A port
 whose far end is inside the same die as the USB endpoint has its carrier present
 and its data set ready from the moment the part is configured, and there is
 nothing that could ever make either zero. This is marked MEDIUM and not HIGH
