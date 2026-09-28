@@ -227,11 +227,17 @@ one.
 | 1 | bDescriptorType | 5 (ENDPOINT) | **HIGH** USB 2.0 Table 9-5 |
 | 2 | bEndpointAddress | `82h` — IN, endpoint 2 | **HIGH** USB 2.0 Table 9-13 |
 | 3 | bmAttributes | `03h` — interrupt | **HIGH** USB 2.0 Table 9-13 bits 1:0 |
-| 4–5 | wMaxPacketSize | 8, little endian | §4 |
+| 4–5 | wMaxPacketSize | 16, little endian | §4 |
 | 6 | bInterval | 16 frames | **HIGH** USB 2.0 Table 9-13 |
 
+**HIGH** (USB 2.0 §5.7.3). A full-speed interrupt endpoint's maximum packet
+size may be **anything up to 64** — the four-value restriction of §5.8.3 is a
+bulk endpoint's and not an interrupt endpoint's — so 16 is legal. §4 says why
+it is 16 and not 10 or 64.
+
 **HIGH** (USB 2.0 Table 9-13). For a full-speed interrupt endpoint
-`bInterval` is a period in frames, 1 to 255, so 16 is 16 ms.
+`bInterval` is a period in frames, 1 to 255, so 16 is 16 ms. It is how long a
+host may be behind this device's idea of its own line state.
 
 ### INTERFACE 1 — the data interface (9 bytes)
 
@@ -245,16 +251,41 @@ one.
 ### ENDPOINT `01h` and ENDPOINT `81h` — the bytes (7 bytes each)
 
 `bmAttributes` `02h` is bulk (**HIGH**, USB 2.0 Table 9-13 bits 1:0) and
-`wMaxPacketSize` is 8 both ways.
+`wMaxPacketSize` is **64** both ways.
 
 **HIGH** (USB 2.0 §5.8.3). A full-speed bulk endpoint's maximum packet size
-must be 8, 16, 32 or 64. Eight is the smallest legal one and is what
-`usb_bulk_ep` holds.
+must be 8, 16, 32 or 64 and nothing else. Sixty-four is the largest, and §6 of
+this file has what it is worth in bytes per second off a part and what it costs
+in lookup tables. It was 8 — the smallest legal one — because the length field
+both of this library's transmitters took was four bits wide.
+
+**MEDIUM**. `MAXPKT` is a parameter of `usb_cdc_acm`, so a design short of
+flip-flops may declare one of the other three and the descriptor follows it.
+Nothing checks that the value given is one of the four; a descriptor saying 20
+would be illegal and this block would not notice.
 
 **MEDIUM**. `bInterval` is meaningless for a full-speed bulk endpoint and is
 written as 0.
 
 ### The device descriptor
+
+**HIGH** (USB 2.0 §5.5.3). `bMaxPacketSize0` is **64**: endpoint 0 of a
+full-speed device may be 8, 16, 32 or 64 and the byte must say which. What
+raising it buys is transactions — the 67 bytes of this configuration
+descriptor go out in **two** IN transactions instead of nine — and the reason
+it is safe to raise is that a host reads the device descriptor before it has
+read this field: Linux asks for 64 bytes of an 18-byte descriptor, and the data
+stage is capped at the host's own `wLength`, so the first packet is short
+whatever the maximum is and a short packet ends a transfer whatever the maximum
+was. A host that asks for only the first eight bytes gets a short packet too.
+
+**MEDIUM**. Endpoint 0 **sends** 64-byte packets and **receives** eight-byte
+ones, and that asymmetry is enforced rather than assumed: `usb_ctrl_ep` reads a
+control OUT data stage out of `usb_pkt_rx`'s eight-byte word, and a longer one
+is STALLed. Nothing this device implements has one — the longest is
+SET_LINE_CODING's seven bytes, and the standard requests have none at all — so
+it is a limit on requests that do not exist. A class that needed a longer one
+would need an accumulator in endpoint 0, which that module's header says.
 
 **HIGH** (CDC 1.1 Table 14). A communications device says `02h` in the
 **device** descriptor's `bDeviceClass`, with `bDeviceSubClass` and
@@ -265,50 +296,111 @@ function.
 
 ---
 
-## 4. The notification endpoint, and the notification it never sends
+## 4. The notification endpoint, and the SERIAL_STATE it sends
 
-The communications interface has an interrupt IN endpoint. What a CDC ACM
-device would send on it is a **SERIAL_STATE** notification, which reports
-the state of the incoming control lines and any break, parity or overrun
-error the device has seen.
+The communications interface has an interrupt IN endpoint, and what this block
+sends on it is a **SERIAL_STATE** notification: the state of the incoming
+control lines and any break, parity or overrun error the device has seen.
 
-**HIGH** (PSTN 1.2 §6.5.4, Table 31). SERIAL_STATE is
+**HIGH** (PSTN 1.2 §6.5.4, Table 30 and Table 31). SERIAL_STATE is
 `bmRequestType` `A1h`, `bNotification` `20h`, `wValue` 0, `wIndex` the
 interface, `wLength` 2, and then **two bytes** of `UART State Bitmap`. With
 the eight-byte notification header (PSTN 1.2 §6.5) that is a **ten-byte**
-packet.
+packet. Every one of those ten bytes is written out in `usb_cdc_acm.v`'s
+`notif_byte` with the table it comes from, and again in
+`tests/ip_library.rs`'s `cdc_serial_state` from the other direction.
 
-**This block never sends one, and could not.** `usb_bulk_ep` holds eight
-bytes a packet, because the length field both of this library's
-transmitters take is four bits wide. Ten does not fit. Sending one needs a
-wider length field in `usb_fs_tx`, in `usb_ulpi_link` and in the endpoint —
-not a parameter. `wMaxPacketSize` in the descriptor is therefore **8** and
-not 16, because a descriptor says what a device does.
+**It used to send nothing at all, and the reason was arithmetic.**
+`usb_bulk_ep` held eight bytes a packet, because the length field both of this
+library's transmitters took was four bits wide, and ten does not fit in eight.
+That field is seven bits now — `usb_fs_tx`'s header says why seven is the right
+width and not six or ten — so the endpoint holds **16** and the notification
+fits.
 
-So the endpoint answers every poll with a NAK, for ever.
+### Why sixteen and not ten, and not 64
 
-**MEDIUM**. That is the ordinary resting state of a CDC ACM device: an
-interrupt endpoint is polled on a schedule whether or not the device has
-anything to say, and NAK is how a device says "not now". There is no
-requirement anywhere in PSTN 1.2 that a device ever send a SERIAL_STATE; §6.5
-describes what a notification means, not that one must arrive.
+**HIGH** (USB 2.0 §5.7.3). A full-speed interrupt endpoint may be any size up
+to 64; the "8, 16, 32 or 64" of §5.8.3 is a *bulk* endpoint's restriction.
+So ten would have been legal.
+
+**MEDIUM**. `usb_bulk_ep` masks its buffer's byte index to the index's own
+width rather than comparing it against a bound, which is only the same thing
+when the size is a power of two, so the size has to be one. Sixteen is the
+smallest power of two that holds ten bytes; 64 would have cost six more bytes
+of flip-flop and a wider multiplexer for nothing.
+
+### When one is sent
+
+**HIGH** (PSTN 1.2 §6.5.4). SERIAL_STATE is a **state-change** notification: it
+carries "the current state of the carrier detect, ... and the error state", and
+PSTN 1.2 Table 30's `bmCapabilities` D1 groups it with the line-coding requests
+as one feature. Nothing in PSTN 1.2 asks for one on a schedule.
+
+So this block sends one
+
+* **when the host configures the device**, because the host's own idea of the
+  state starts empty and nothing else would ever fill it; and
+* **whenever `serial_state` changes** afterwards.
+
+and NAKs every poll in between, which is the ordinary resting state of an
+interrupt endpoint with nothing new to say.
+
+**MEDIUM**. The first of those two is a *reading of a driver* as much as of the
+specification. Linux's `cdc_acm` keeps the last bitmap it was sent in `ctrlin`
+and answers `TIOCMGET` out of it; a device that only ever sent one on a change
+would leave a freshly enumerated host believing there is no carrier for ever,
+and PSTN 1.2 does not say what the state is before the first notification. The
+device is not configured until SET_CONFIGURATION, so sending before that would
+be a packet on an endpoint the host has not enabled.
+
+### What a device with no modem lines should report
+
+`serial_state` is a **port** of this block and not a constant, seven bits wide
+because §6.5.4 defines seven and reserves the other nine:
+
+| Bit | Field | What it is |
+|-----|-------|-----------|
+| 0 | bRxCarrier | DCD, V.24 signal 109 |
+| 1 | bTxCarrier | DSR, V.24 signal 106 |
+| 2 | bBreak | a break is being received |
+| 3 | bRingSignal | a ring signal is being received |
+| 4 | bFraming | a framing error has been detected |
+| 5 | bParity | a parity error has been detected |
+| 6 | bOverRun | a character was overwritten before it was read |
+
+**HIGH** (PSTN 1.2 §6.5.4). Those seven bits and their meanings, and that bits
+7 to 15 are reserved, which is why the port is seven bits and not sixteen: a
+port as wide as the field would invite a design to set a bit the specification
+reserves.
+
+**MEDIUM**. What a device with no modem lines should put in them is
+`7'b000_0011` — both carriers, no errors — and the argument is §6.5.4's own
+words: `bRxCarrier` is "the state of the receiver carrier detection mechanism of
+the device" and `bTxCarrier` the state of the transmission carrier. A port
+whose far end is inside the same die as the USB endpoint has its carrier present
+and its data set ready from the moment the part is configured, and there is
+nothing that could ever make either zero. This is marked MEDIUM and not HIGH
+because the specification describes what the bits *mean* and not what a device
+with no such lines must say; a device that reported no carrier would be saying
+something false about itself, which is the argument, rather than breaking a
+stated rule.
+
+**MEDIUM**. The five error bits are levels a device sets and clears, not
+events. `testdata/fpga/cynthion/usb_cdc_uart.v` leaves them clear and
+deliberately does **not** wire `ip/uart`'s `rx_error` to `bFraming`: that output
+is one cycle wide, and turning a pulse into a level needs a rule about when the
+level goes away that this design has no reason to have.
 
 **MEDIUM**. What is *not* optional is the endpoint's existence. Linux's
 `cdc_acm` takes `endpoint[0]` of the communications interface and requires
 it to be an interrupt IN endpoint; a communications interface with no
 endpoints does not reach the driver's normal path.
 
-**CHECKED**. §5 is a port that was opened, written to, read from and closed
-with no notification ever sent. That establishes the behaviour of **one
-driver on one kernel version**, which is a weaker statement than the
-specification-level ones above and is marked differently on purpose. A
-host that polled an endpoint that never answers and gave up would show
-here as the port failing to open, and it does not.
-
-**What a design that needs SERIAL_STATE should do** is not "set a parameter
-in this block". It should widen the packet length through both link layers
-first; the eight-bytes-a-packet limit is in `usb_bulk_ep`'s own "What it
-does not do" for that reason.
+**CHECKED**. §5 is a host that received one: the port opens with `clocal`
+**cleared**, which is an `open` that waits in the kernel for a carrier and gets
+one, and `TIOCMGET` on the same port reports DCD and DSR. That establishes the
+behaviour of **one driver on one kernel version**, which is a weaker statement
+than the specification-level ones above and is marked differently on purpose.
 
 ---
 

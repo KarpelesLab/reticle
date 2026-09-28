@@ -26,7 +26,8 @@ param CFG_ATTR bits 8'h80
 param CFG_POWER bits 8'd50
 param IFACE_BYTES int 23 9..64
 param DATA_ENDP bits 4'd1
-param MAXPKT bits 4'd8
+param MAXPKT bits 7'd64
+param MAXPKT0 bits 7'd64
 
 port clk_ref in
 port rst_n in

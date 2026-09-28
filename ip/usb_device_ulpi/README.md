@@ -251,8 +251,11 @@ Two more transmit rules:
 - A Link that under-runs mid-packet must **drive `FFh` in the same cycle
   as `stp`**, and the transceiver turns that into a full-speed bit-stuff
   error. At most one byte of `FFh`. HIGH, §3.8.2.3. This block cannot
-  under-run — its longest packet is eight bytes read out of a table — so
-  it never does this.
+  under-run: its longest packet is 64 bytes, every one of them is already in
+  a register or a table before the transmit command goes out, and `nxt` is
+  the only thing that decides when the next one moves. So it never does
+  this. (The packet was eight bytes when this was written; the argument is
+  about where the bytes come from and not how many there are.)
 - After `stp` the Link cannot transmit again until the packet has
   finished on the wire, which the transceiver announces with a receive
   command carrying the SE0-to-J transition. **The transceiver must always
@@ -471,8 +474,9 @@ Deliberately not implemented, with reasons:
   Carkit mode.** Nothing here has a use for them.
 - **Aborting the transceiver with `stp`** (§3.8.4.2). Every transceiver
   must support it, and it is "provided primarily for the Link to shut
-  down a babbling port". An endpoint whose longest packet is eight bytes
-  cannot babble.
+  down a babbling port". An endpoint whose longest packet is 64 bytes, and
+  whose length is fixed by the endpoint above it before the first byte goes
+  out, cannot babble.
 - **VBUS and ID.** The receive command's VbusState and ID bits are read
   and dropped: a bus-powered device is assumed, and no session is
   negotiated.
@@ -561,6 +565,12 @@ Choices where the specification allowed either:
 > again, the device NAKs because it has nothing more, and the transfer times
 > out. Reading one packet at a time is the fix. Worth knowing before
 > suspecting a device.
+>
+> `wMaxPacketSize` is **64** now, so that particular arithmetic works out by
+> accident for a read of 64; the rule has not changed, and a read of 128 given
+> 64 hangs in exactly the same way. `tests/usb_loopback.rs` asserts that the
+> size it reads with is the size the part's descriptor declares, which is the
+> mismatch itself rather than its symptom.
 >
 > **Updated 2026-09-27, again: a host has enumerated it.** `lsusb -d 1209:0001
 > -v` reads the eighteen-byte device descriptor, at full speed, off a Cynthion's

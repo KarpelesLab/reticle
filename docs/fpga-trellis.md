@@ -438,7 +438,7 @@ halves are tests rather than a note:
 | | |
 |---|---|
 | `the_usb_devices_constant_zero_probe_survives_synthesis` | no database, no board, seconds. `zero_probe$ff` is a `TRELLIS_FF` with `DI=%const0` in the mapped netlist, `const0$lut` is an all-zeros `LUT4`, and there is exactly one of it. This is what stops a future optimisation from turning the hardware test green for ever |
-| `the_usb_devices_constant_zero_probe_reaches_the_bitstream` | `#[ignore]`d: it places and routes the whole device. One all-zeros `INIT` word in the image, its four inputs tied high at absolute frame positions, all **491** flip-flops taking data from the fabric with **none floating**, and exactly one of them walking back through the file's own arcs to that lookup table's output |
+| `the_usb_devices_constant_zero_probe_reaches_the_bitstream` | `#[ignore]`d: it places and routes the whole device. One all-zeros `INIT` word in the image, its four inputs tied high at absolute frame positions, all **1440** flip-flops taking data from the fabric with **none floating**, and exactly one of them walking back through the file's own arcs to that lookup table's output |
 
 What the probe costs, and what moved:
 
@@ -451,6 +451,28 @@ What the probe costs, and what moved:
 | Signals | 1586 | 1588 |
 | Arcs that cost bits | 14 323 | 14 396 |
 | Bits **unexplained** | 0 | **0** |
+
+**Those two columns are of the eight-byte device**, which is what
+`usb_ulpi_device.v` was when the probe was added; its endpoints carry 64 bytes
+now and the design is bigger, which changes every number above except the one
+that matters. Measured again on the same design with 64-byte packets:
+
+| | 8 bytes a packet | 64 bytes a packet |
+|---|---|---|
+| Set bits | 43 577 | **87 325** |
+| Lookup tables | 1086 | **2019** |
+| Flip-flops | 491 | **1440** |
+| Signals | 1589 | **3471** |
+| Arcs that cost bits | 14 449 | **31 177** |
+| Bits **unexplained** | 0 | **0** |
+
+The extra 949 flip-flops are the two 64-byte endpoint buffers — 1024 of them
+where eight bytes needed 128 — and the extra 933 lookup tables are the 64-to-1
+byte multiplexer over each buffer, which on LUT4 is 63 of them per bit.
+`docs/ip-library.md` has that accounting and what the size bought, measured on
+this same board. **Nothing is unexplained in either column**, which is the
+statement this table is for: a design more than twice the size still decodes
+back through the database with no bit left over.
 
 The one new `.config` word is the constant's `INIT` and nothing else. The rest
 is a net figure rather than an itemised one, because one more cell moves the

@@ -30,16 +30,20 @@ module usb_device_fs_pll #(
     parameter [7:0]   DEV_PROTOCOL = 8'h00,
     parameter [7:0]   CFG_ATTR     = 8'h80,
     parameter [7:0]   CFG_POWER    = 8'd50,
+    // Bytes in a packet of the data endpoint, and of endpoint 0;
+    // `usb_device_fs`'s parameters of the same names say which values USB 2.0
+    // allows and where they end up in the descriptors.
+    parameter [6:0]   MAXPKT       = 7'd64,
+    parameter [6:0]   MAXPKT0      = 7'd64,
     // The class's interface and endpoint descriptors; `usb_ctrl_ep` says
     // how they are written and what is derived from them.
     parameter integer IFACE_BYTES  = 23,
     parameter [IFACE_BYTES*8-1:0] IFACE_DESC = {
         8'd9, 8'd4, 8'd0, 8'd0, 8'd2, 8'hFF, 8'h00, 8'h00, 8'd0,
-        8'd7, 8'd5, 8'h01, 8'd2, 8'd8, 8'd0, 8'd0,
-        8'd7, 8'd5, 8'h81, 8'd2, 8'd8, 8'd0, 8'd0
+        8'd7, 8'd5, 8'h01, 8'd2, {1'b0, MAXPKT}, 8'd0, 8'd0,
+        8'd7, 8'd5, 8'h81, 8'd2, {1'b0, MAXPKT}, 8'd0, 8'd0
     },
-    parameter [3:0]   DATA_ENDP    = 4'd1,
-    parameter [3:0]   MAXPKT       = 4'd8
+    parameter [3:0]   DATA_ENDP    = 4'd1
 ) (
     input  wire       clk_ref,
     input  wire       rst_n,
@@ -77,7 +81,8 @@ module usb_device_fs_pll #(
         .IFACE_BYTES  (IFACE_BYTES),
         .IFACE_DESC   (IFACE_DESC),
         .DATA_ENDP    (DATA_ENDP),
-        .MAXPKT       (MAXPKT)
+        .MAXPKT       (MAXPKT),
+        .MAXPKT0      (MAXPKT0)
     ) u_usb (
         .clk48      (clk48),
         .rst_n      (rst_n),

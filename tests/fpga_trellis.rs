@@ -3604,8 +3604,8 @@ fn the_usb_devices_constant_zero_probe_survives_synthesis() {
 ///
 /// `a_register_bit_nothing_drives_is_built_from_a_constant` does this on a
 /// three-line design, which is where the mechanism is pinned. What this adds
-/// is that it holds in **the design that is loaded into the part** — 1085
-/// lookup tables and 491 flip-flops — because a result read off a board is
+/// is that it holds in **the design that is loaded into the part** — 2018
+/// lookup tables and 1440 flip-flops — because a result read off a board is
 /// worth nothing until the bitstream that produced it has been read.
 ///
 /// It is `#[ignore]`d because it places and routes the whole USB device,
@@ -3714,8 +3714,12 @@ fn the_usb_devices_constant_zero_probe_reaches_the_bitstream() {
             fed += 1;
         }
     }
+    // 1440, of which 1024 are the two 64-byte endpoint buffers. It was 491
+    // when a packet was eight bytes; what matters here is not the number but
+    // that **every one** of them takes its data from the fabric and none is
+    // floating, which is the defect this test exists for.
     assert_eq!(
-        flops_from_fabric, 491,
+        flops_from_fabric, 1440,
         "every flip-flop of this design takes its data from the fabric"
     );
     assert!(

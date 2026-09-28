@@ -369,35 +369,113 @@ which with the nine `usb_ctrl_ep` writes is a `wTotalLength` of 67 — six
 bytes under the `DESC_MAX` of 64 that "a CDC ACM descriptor needs headroom
 for" was about.
 
-**The notification endpoint never sends anything, and could not.** What it
-would send is a SERIAL_STATE notification, which is **ten** bytes — eight of
-header and two of `wSerialState` — and `usb_bulk_ep` holds eight, because the
-length field both transmitters take is four bits. So `wMaxPacketSize` in its
-descriptor is eight and not sixteen, because a descriptor says what a device
-does, and the endpoint answers every poll with a NAK for ever. Whether a host
-*needs* one is a question about a host and not about a specification;
-`ip/usb_cdc_acm/README.md` §4 and §5 answer it with a kernel log rather than
-with a reading.
+**The notification endpoint sends SERIAL_STATE.** Ten bytes — eight of
+header and two of `wSerialState` — which is PSTN 1.2 §6.5.4 and is what did
+not fit when the length field both transmitters took was four bits. It fits
+now: `wMaxPacketSize` on that endpoint is **16**, the smallest power of two
+that holds ten, and USB 2.0 §5.7.3 lets a full-speed interrupt endpoint be
+any size up to 64 rather than one of the four a bulk endpoint may be. One goes
+out when the host configures the device and one whenever `serial_state`
+changes, and the endpoint NAKs every poll in between, because a state that has
+not changed is not news.
 
-**What the class layer cost.** On the ECP5, `usb_device_fs` is 916 LUT4 and
-438 flip-flops and `usb_cdc_acm_fs` is 1097 and 519, so a serial port is
-**+181 LUT4 and +81 flip-flops** over the vendor device it is built on;
-`usb_device_ulpi` to `usb_cdc_acm_ulpi` is +182 and +81, which is the same
-thing twice and is the point of sharing the core. Fifty-six of those
-flip-flops are the line coding — `dwDTERate` alone is thirty-two — two are
-DTR and RTS, two are `class_active` and `class_out_wait` in endpoint 0, and
-the rest is the notification endpoint's own turnaround counter and answer
-register.
+`serial_state` is a **port** of `usb_cdc_acm` and not a constant, seven bits
+wide because §6.5.4 defines seven and reserves the other nine: DCD, DSR,
+break, ring, framing, parity and overrun. A device with no modem lines ties it
+to `7'b000_0011` — both carriers, no errors — and the argument is the
+specification's own words for those two bits, since a port whose far end is in
+the same die has its carrier present and its data set ready from the moment it
+exists. `ip/usb_cdc_acm/README.md` §4 and §5 say what a host was observed to
+do with it and what is only quoted.
 
-**And the hook cost the designs that do not use it nothing.**
-`usb_device_fs` was 914 LUT4 and 438 flip-flops on the ECP5 before any of
-this and is **916 and 438** after; `usb_device_ulpi` went from 1001 to 1001
-LUT4 and 444 flip-flops to 444. Not one flip-flop, which is the number that
-matters: `own_notif`, the second endpoint, its buffers and `class_active` are
-all constant with `NOTIF_ENDP` and `class_claim` tied off, and they are all
-gone. The LUT4 depth is 10, where it was: the page split that once read the
-descriptor blob a quarter at a time added a level of multiplexer, and that
-split was a workaround for a technology-mapper defect and is gone with it.
+**What the class layer cost.** On the ECP5, `usb_device_fs` is 1850 LUT4 and
+1387 flip-flops and `usb_cdc_acm_fs` is 2269 and 1639, so a serial port is
+**+419 LUT4 and +252 flip-flops** over the vendor device it is built on;
+`usb_device_ulpi` to `usb_cdc_acm_ulpi` is +393 and +252, which is nearly the
+same thing twice and is the point of sharing the core. The flip-flops are the
+line coding — `dwDTERate` alone is thirty-two — DTR and RTS, `class_active`
+and `class_out_wait` in endpoint 0, the notification endpoint's own
+sixteen-byte buffer and turnaround counter, and the SERIAL_STATE sender's
+`nidx`, `reported` and `ever`.
+
+**And the hook cost the designs that do not use it nothing.** With
+`NOTIF_ENDP` and `class_claim` tied off, `own_notif`, the second endpoint, its
+buffers and `class_active` are all constant and all removed; that was measured
+when the hook arrived and is why `usb_device_ulpi`'s numbers did not move for
+it.
+
+## What the packet size is worth, measured and not calculated
+
+Every endpoint of these blocks used to be **eight bytes**, and that was the
+four-bit length both transmitters took rather than a decision. It is 64 now on
+the bulk endpoints and on endpoint 0, and 16 on the CDC notification endpoint.
+Both halves of the trade were measured rather than reasoned about.
+
+**What it costs.** The footprint table carries `usb_device_fs` twice, at
+`MAXPKT = 8` and at the default 64, so the difference is one subtraction and
+is checked by the same test that generates the rest:
+
+| ECP5 45F | 8 bytes | 64 bytes | difference |
+|----------|---------|----------|------------|
+| LUT4 | 902 | 1850 | **+948** |
+| flip-flops | 464 | 1387 | **+923** |
+
+The flip-flops are the two buffers: 64 bytes each way is 1024 of them where
+eight bytes was 128, and the rest is a handful of wider counters. **The lookup
+tables are the byte multiplexer and nothing else.** A LUT4 is a 2-to-1
+multiplexer with a select, so a 64-to-1 byte multiplexer is 63 of them per bit
+and 504 per direction; two directions is 1008, against 112 for the 8-to-1
+multiplexers they replace. That cost belongs to the *interface* and not to the
+way the packet is stored — a buffer written as sixty-four named byte registers
+and a `case` needs exactly the same multiplexer, plus a six-to-sixty-four
+decoder for the write enables that the shift register does not need.
+
+A cheaper structure exists and was not taken: a buffer that shifts a byte out
+as the consumer takes it needs no multiplexer at all, because the byte is
+always at the bottom. What it needs is for the packet to be *aligned* to the
+bottom before the first byte is read, and its length is not known until it has
+all arrived — so the alignment is up to 63 more shifts after the packet ends,
+which is a padding state in both directions and a new rule about when a second
+packet may start. That is the trade to revisit if a design ever wants a 64-byte
+endpoint and does not have a thousand lookup tables to spend; it is written
+down here rather than done because the measurement below is what says whether
+the thousand were worth spending.
+
+**What it buys.** Measured on a Cynthion's AUX port, through
+`testdata/fpga/cynthion/usb_ulpi_device.v` — the bulk loopback, with no UART in
+the way — by `tests/usb_loopback.rs`, which times 256 write-then-read round
+trips and prints the rate. The device holds one packet each way, so each round
+trip is one OUT transaction, one IN transaction and two trips through the
+host's own stack:
+
+| `wMaxPacketSize` | round trips/s | bytes/s each way |
+|------------------|---------------|------------------|
+| 8 | 8470 | 67 700 |
+| 64 | 3990 | 255 500 |
+
+**3.8 times, and not eight.** The transactions do fall by eight, but the round
+trip rate falls with them — 8460 a second to 3990 — because a 64-byte packet
+takes 43 microseconds on a 12 Mbit/s wire where an eight-byte one takes 5, so
+the wire stops being free. What is left over each round trip is about 110
+microseconds of host and scheduler, unchanged by the packet size, and that is
+now the larger half of the cost. A host that pipelined its transfers would see
+more of the eight; this one waits for each.
+
+**Why the serial port's own figure is not this one.**
+`testdata/fpga/cynthion/usb_cdc_uart.v` carries **one byte at a time** through
+its UART — that file's header says why, and the short version is that
+`ip/fifo_sync` cannot be placed on this part — so it sends one-byte packets
+whatever `wMaxPacketSize` says, and a wider packet does nothing for it at all.
+The bulk loopback is the design that measures the endpoint rather than the
+bridge above it.
+
+**What these numbers are and are not.** They are two runs of one host on one
+machine against one part, repeatable to a tenth of a percent over four runs
+each, and they are **printed by a test and never asserted**: no number here is
+compared against a clock, and `tools/check.sh` does not run that test. What
+they do not measure is a host that pipelines transfers instead of waiting for
+each one — a queue of URBs would overlap the round trips and go faster at both
+sizes — so they are the floor of what the endpoint can do and not the ceiling.
 
 **What it found in this compiler, and it is fixed now.** `ip/fifo_sync` could
 not be placed on an ECP5 at all. Its storage is an array indexed by a
@@ -1205,26 +1283,30 @@ exactly what this table is for.
 | `eth_mac_rgmii` | `eth_mac_rgmii` | IFG_CYCLES=12, TX_DELAY=80, RX_DELAY=80 | LUT6 | 28 x dff, 349 x lut | 4 |
 | `eth_mac_rgmii` | `eth_mac_rgmii` | IFG_CYCLES=12, TX_DELAY=80, RX_DELAY=80 | iCE40 HX1K | 10 x SB_CARRY, 119 x SB_DFFER, 64 x SB_DFFES, 7 x SB_DFFR, 2 x SB_GB, 39 x SB_IO, 394 x SB_LUT4 | 5 |
 | `eth_mac_rgmii` | `eth_mac_rgmii` | IFG_CYCLES=12, TX_DELAY=80, RX_DELAY=80 | ECP5 45F | 2 x DCCA, 6 x DELAYG, 5 x IDDRX1F, 395 x LUT4, 6 x ODDRX1F, 190 x TRELLIS_FF, 39 x TRELLIS_IO | 5 |
-| `usb_device_fs` | `usb_device_fs` | VID=16'h1209, PID=16'h0001 | LUT4 | 93 x dff, 917 x lut | 10 |
-| `usb_device_fs` | `usb_device_fs` | VID=16'h1209, PID=16'h0001 | LUT6 | 93 x dff, 758 x lut | 8 |
-| `usb_device_fs` | `usb_device_fs` | VID=16'h1209, PID=16'h0001 | iCE40 HX1K | 44 x SB_CARRY, 383 x SB_DFFER, 39 x SB_DFFES, 13 x SB_DFFR, 3 x SB_DFFS, 1 x SB_GB, 39 x SB_IO, 891 x SB_LUT4 | 9 |
-| `usb_device_fs` | `usb_device_fs` | VID=16'h1209, PID=16'h0001 | ECP5 45F | 1 x DCCA, 916 x LUT4, 438 x TRELLIS_FF, 39 x TRELLIS_IO | 10 |
-| `usb_device_fs_pll` | `usb_device_fs_pll` | VID=16'h1209, PID=16'h0001 | LUT4 | 93 x dff, 917 x lut | 10 |
-| `usb_device_fs_pll` | `usb_device_fs_pll` | VID=16'h1209, PID=16'h0001 | LUT6 | 93 x dff, 758 x lut | 8 |
-| `usb_device_fs_pll` | `usb_device_fs_pll` | VID=16'h1209, PID=16'h0001 | iCE40 HX1K | 44 x SB_CARRY, 383 x SB_DFFER, 39 x SB_DFFES, 13 x SB_DFFR, 3 x SB_DFFS, 1 x SB_GB, 39 x SB_IO, 891 x SB_LUT4, 1 x SB_PLL40_CORE | 9 |
-| `usb_device_fs_pll` | `usb_device_fs_pll` | VID=16'h1209, PID=16'h0001 | ECP5 45F | 1 x DCCA, 1 x EHXPLLL, 916 x LUT4, 438 x TRELLIS_FF, 39 x TRELLIS_IO | 10 |
-| `usb_device_ulpi` | `usb_device_ulpi` | VID=16'h1209, PID=16'h0001 | LUT4 | 87 x dff, 1000 x lut | 9 |
-| `usb_device_ulpi` | `usb_device_ulpi` | VID=16'h1209, PID=16'h0001 | LUT6 | 87 x dff, 861 x lut | 10 |
-| `usb_device_ulpi` | `usb_device_ulpi` | VID=16'h1209, PID=16'h0001 | iCE40 HX1K | 77 x SB_CARRY, 399 x SB_DFFER, 37 x SB_DFFES, 8 x SB_DFFR, 1 x SB_GB, 55 x SB_IO, 976 x SB_LUT4 | 9 |
-| `usb_device_ulpi` | `usb_device_ulpi` | VID=16'h1209, PID=16'h0001 | ECP5 45F | 1 x DCCA, 1001 x LUT4, 444 x TRELLIS_FF, 55 x TRELLIS_IO | 9 |
-| `usb_cdc_acm` | `usb_cdc_acm_fs` | VID=16'h1209, PID=16'h0001 | LUT4 | 109 x dff, 1098 x lut | 12 |
-| `usb_cdc_acm` | `usb_cdc_acm_fs` | VID=16'h1209, PID=16'h0001 | LUT6 | 109 x dff, 884 x lut | 9 |
-| `usb_cdc_acm` | `usb_cdc_acm_fs` | VID=16'h1209, PID=16'h0001 | iCE40 HX1K | 57 x SB_CARRY, 458 x SB_DFFER, 44 x SB_DFFES, 14 x SB_DFFR, 3 x SB_DFFS, 1 x SB_GB, 97 x SB_IO, 1101 x SB_LUT4 | 12 |
-| `usb_cdc_acm` | `usb_cdc_acm_fs` | VID=16'h1209, PID=16'h0001 | ECP5 45F | 1 x DCCA, 1097 x LUT4, 519 x TRELLIS_FF, 97 x TRELLIS_IO | 12 |
-| `usb_cdc_acm` | `usb_cdc_acm_ulpi` | VID=16'h1209, PID=16'h0001 | LUT4 | 103 x dff, 1181 x lut | 11 |
-| `usb_cdc_acm` | `usb_cdc_acm_ulpi` | VID=16'h1209, PID=16'h0001 | LUT6 | 103 x dff, 1010 x lut | 10 |
-| `usb_cdc_acm` | `usb_cdc_acm_ulpi` | VID=16'h1209, PID=16'h0001 | iCE40 HX1K | 90 x SB_CARRY, 474 x SB_DFFER, 42 x SB_DFFES, 9 x SB_DFFR, 1 x SB_GB, 113 x SB_IO, 1167 x SB_LUT4 | 11 |
-| `usb_cdc_acm` | `usb_cdc_acm_ulpi` | VID=16'h1209, PID=16'h0001 | ECP5 45F | 1 x DCCA, 1183 x LUT4, 525 x TRELLIS_FF, 113 x TRELLIS_IO | 11 |
+| `usb_device_fs` | `usb_device_fs` | VID=16'h1209, PID=16'h0001 | LUT4 | 91 x dff, 1858 x lut | 10 |
+| `usb_device_fs` | `usb_device_fs` | VID=16'h1209, PID=16'h0001 | LUT6 | 91 x dff, 1600 x lut | 9 |
+| `usb_device_fs` | `usb_device_fs` | VID=16'h1209, PID=16'h0001 | iCE40 HX1K | 71 x SB_CARRY, 1330 x SB_DFFER, 41 x SB_DFFES, 13 x SB_DFFR, 3 x SB_DFFS, 1 x SB_GB, 39 x SB_IO, 1804 x SB_LUT4 | 10 |
+| `usb_device_fs` | `usb_device_fs` | VID=16'h1209, PID=16'h0001 | ECP5 45F | 1 x DCCA, 1850 x LUT4, 1387 x TRELLIS_FF, 39 x TRELLIS_IO | 10 |
+| `usb_device_fs` | `usb_device_fs` | VID=16'h1209, PID=16'h0001, MAXPKT=7'd8, MAXPKT0=7'd8 | LUT4 | 91 x dff, 913 x lut | 11 |
+| `usb_device_fs` | `usb_device_fs` | VID=16'h1209, PID=16'h0001, MAXPKT=7'd8, MAXPKT0=7'd8 | LUT6 | 91 x dff, 773 x lut | 8 |
+| `usb_device_fs` | `usb_device_fs` | VID=16'h1209, PID=16'h0001, MAXPKT=7'd8, MAXPKT0=7'd8 | iCE40 HX1K | 57 x SB_CARRY, 407 x SB_DFFER, 41 x SB_DFFES, 13 x SB_DFFR, 3 x SB_DFFS, 1 x SB_GB, 39 x SB_IO, 855 x SB_LUT4 | 10 |
+| `usb_device_fs` | `usb_device_fs` | VID=16'h1209, PID=16'h0001, MAXPKT=7'd8, MAXPKT0=7'd8 | ECP5 45F | 1 x DCCA, 902 x LUT4, 464 x TRELLIS_FF, 39 x TRELLIS_IO | 11 |
+| `usb_device_fs_pll` | `usb_device_fs_pll` | VID=16'h1209, PID=16'h0001 | LUT4 | 91 x dff, 1858 x lut | 10 |
+| `usb_device_fs_pll` | `usb_device_fs_pll` | VID=16'h1209, PID=16'h0001 | LUT6 | 91 x dff, 1600 x lut | 9 |
+| `usb_device_fs_pll` | `usb_device_fs_pll` | VID=16'h1209, PID=16'h0001 | iCE40 HX1K | 71 x SB_CARRY, 1330 x SB_DFFER, 41 x SB_DFFES, 13 x SB_DFFR, 3 x SB_DFFS, 1 x SB_GB, 39 x SB_IO, 1804 x SB_LUT4, 1 x SB_PLL40_CORE | 10 |
+| `usb_device_fs_pll` | `usb_device_fs_pll` | VID=16'h1209, PID=16'h0001 | ECP5 45F | 1 x DCCA, 1 x EHXPLLL, 1850 x LUT4, 1387 x TRELLIS_FF, 39 x TRELLIS_IO | 10 |
+| `usb_device_ulpi` | `usb_device_ulpi` | VID=16'h1209, PID=16'h0001 | LUT4 | 85 x dff, 1950 x lut | 10 |
+| `usb_device_ulpi` | `usb_device_ulpi` | VID=16'h1209, PID=16'h0001 | LUT6 | 85 x dff, 1702 x lut | 11 |
+| `usb_device_ulpi` | `usb_device_ulpi` | VID=16'h1209, PID=16'h0001 | iCE40 HX1K | 104 x SB_CARRY, 1346 x SB_DFFER, 39 x SB_DFFES, 8 x SB_DFFR, 1 x SB_GB, 55 x SB_IO, 1888 x SB_LUT4 | 10 |
+| `usb_device_ulpi` | `usb_device_ulpi` | VID=16'h1209, PID=16'h0001 | ECP5 45F | 1 x DCCA, 1940 x LUT4, 1393 x TRELLIS_FF, 55 x TRELLIS_IO | 10 |
+| `usb_cdc_acm` | `usb_cdc_acm_fs` | VID=16'h1209, PID=16'h0001 | LUT4 | 118 x dff, 2266 x lut | 12 |
+| `usb_cdc_acm` | `usb_cdc_acm_fs` | VID=16'h1209, PID=16'h0001 | LUT6 | 118 x dff, 1926 x lut | 11 |
+| `usb_cdc_acm` | `usb_cdc_acm_fs` | VID=16'h1209, PID=16'h0001 | iCE40 HX1K | 95 x SB_CARRY, 1575 x SB_DFFER, 47 x SB_DFFES, 14 x SB_DFFR, 3 x SB_DFFS, 1 x SB_GB, 104 x SB_IO, 2201 x SB_LUT4 | 12 |
+| `usb_cdc_acm` | `usb_cdc_acm_fs` | VID=16'h1209, PID=16'h0001 | ECP5 45F | 1 x DCCA, 2269 x LUT4, 1639 x TRELLIS_FF, 104 x TRELLIS_IO | 12 |
+| `usb_cdc_acm` | `usb_cdc_acm_ulpi` | VID=16'h1209, PID=16'h0001 | LUT4 | 112 x dff, 2332 x lut | 11 |
+| `usb_cdc_acm` | `usb_cdc_acm_ulpi` | VID=16'h1209, PID=16'h0001 | LUT6 | 112 x dff, 2048 x lut | 11 |
+| `usb_cdc_acm` | `usb_cdc_acm_ulpi` | VID=16'h1209, PID=16'h0001 | iCE40 HX1K | 128 x SB_CARRY, 1591 x SB_DFFER, 45 x SB_DFFES, 9 x SB_DFFR, 1 x SB_GB, 120 x SB_IO, 2280 x SB_LUT4 | 11 |
+| `usb_cdc_acm` | `usb_cdc_acm_ulpi` | VID=16'h1209, PID=16'h0001 | ECP5 45F | 1 x DCCA, 2333 x LUT4, 1645 x TRELLIS_FF, 120 x TRELLIS_IO | 11 |
 <!-- end footprints -->
 
 ### Seven things writing these blocks found
@@ -1467,15 +1549,13 @@ ones a user would meet first: `sdram_ctrl` has no bursts and serves one
 word at a time; `hyperram_ctrl` has no bursts either and does not use
 RWDS as a capture clock; `dvi_tx` runs everything at five times the
 pixel rate, which leaves 1280 x 720 beyond both families' fabric;
-`eth_mac_rgmii` is gigabit only; and every USB endpoint here carries
-**eight-byte packets**, which is the four-bit length both transmitters take.
-That last one is now the limit that shows most: it is an eighth of the largest
-packet a full-speed bulk endpoint may have, and since a host is limited in
-transactions a frame rather than in bytes it costs close to a factor of eight
-of throughput; it is why a host must read one packet at a time; and it is the
-reason `usb_cdc_acm` cannot send a SERIAL_STATE notification.
-Widening it is a length field in `usb_fs_tx`, in `usb_ulpi_link` and in
-`usb_bulk_ep`, and it is the next thing worth doing to these blocks.
+`eth_mac_rgmii` is gigabit only; and every USB endpoint here now carries
+**64-byte packets**, which is the largest a full-speed endpoint of any type
+may have and leaves isochronous transfers — up to 1023 bytes — as the one
+size these blocks cannot express. That was eight bytes and the four-bit
+length both transmitters took, and what it cost is
+[measured on a part](#what-the-packet-size-is-worth-measured-not-calculated)
+below rather than reasoned about.
 
 **The class layer has started.** `usb_cdc_acm` is a serial port and
 `usb_ctrl_ep`'s class hook is what the next one will use. **A human interface

@@ -290,6 +290,21 @@ const VARIANTS: &[Variant] = &[
         top: "usb_device_fs",
         params: &[("VID", "16'h1209"), ("PID", "16'h0001")],
     },
+    // The same block with the **smallest** packet size USB 2.0 §5.8.3 and
+    // §5.5.3 allow, so that the table says what 64 bytes cost rather than
+    // leaving a reader to find out by building it. The whole difference
+    // between this row and the one above is the two 64-byte buffers and the
+    // byte multiplexer over each of them.
+    Variant {
+        package: "usb_device_fs",
+        top: "usb_device_fs",
+        params: &[
+            ("VID", "16'h1209"),
+            ("PID", "16'h0001"),
+            ("MAXPKT", "7'd8"),
+            ("MAXPKT0", "7'd8"),
+        ],
+    },
     Variant {
         package: "usb_device_fs_pll",
         top: "usb_device_fs_pll",
