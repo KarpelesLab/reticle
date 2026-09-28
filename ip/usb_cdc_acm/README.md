@@ -400,11 +400,13 @@ level goes away that this design has no reason to have.
 it to be an interrupt IN endpoint; a communications interface with no
 endpoints does not reach the driver's normal path.
 
-**CHECKED**. §5 is a host that received one: the port opens with `clocal`
-**cleared**, which is an `open` that waits in the kernel for a carrier and gets
-one, and `TIOCMGET` on the same port reports DCD and DSR. That establishes the
-behaviour of **one driver on one kernel version**, which is a weaker statement
-than the specification-level ones above and is marked differently on purpose.
+**CHECKED**. §5 is a host that received one: the ten bytes read off endpoint
+`82h`, and `TIOCMGET` on the terminal reporting DCD and DSR, which `cdc_acm`
+takes from `acm->ctrlin` and assigns in one place — the SERIAL_STATE arm of
+`acm_process_notification`. That establishes the behaviour of **one driver on
+one kernel version**, which is a weaker statement than the specification-level
+ones above and is marked differently on purpose. §5 also corrects what an
+earlier round said about `clocal`, which is not the observation it looks like.
 
 ---
 

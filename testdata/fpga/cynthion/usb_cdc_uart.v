@@ -230,10 +230,14 @@ module usb_cdc_uart #(
     // into a level needs a rule about when it goes away, and this design has
     // no reason to have one.
     //
-    // What a host does with it: `cdc_acm` keeps the last bitmap it was sent
-    // and answers `TIOCMGET` out of it, so `stty` shows `cd` and `dsr` and an
-    // `open` without `clocal` no longer waits for a carrier that never
-    // arrives. `tests/usb_cdc_acm.rs` reads it back.
+    // What a host does with it: `cdc_acm` keeps the last bitmap it was sent in
+    // `ctrlin` and answers `TIOCMGET` out of it, so a program asking this
+    // terminal for its modem lines is told there is a carrier and a data set.
+    // **It does not change whether the port opens**: `cdc_acm` has no
+    // `carrier_raised` operation, so the terminal layer never waits for a
+    // carrier on one of these whatever `clocal` says, and
+    // `ip/usb_cdc_acm/README.md` §5 says where an earlier round got that
+    // wrong. `tests/usb_cdc_acm.rs` reads the ten bytes off endpoint 82h.
     wire [6:0] serial_state = 7'b000_0011;
 
     // THE TURNAROUND, which is the top level's whole job on this bus: the
