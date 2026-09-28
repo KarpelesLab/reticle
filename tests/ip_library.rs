@@ -12527,13 +12527,10 @@ fn cdc_serial_state(state: u8) -> Vec<u8> {
 /// Nothing in simulation can: this host model is written from the same
 /// specification as the device. `tests/usb_cdc_acm.rs` reads `TIOCMGET` off a
 /// real kernel, and that is the other half.
-#[test]
-fn usb_cdc_acm_notification_endpoint_sends_the_serial_state() {
-    let design = cdc_fs_design();
-    let mut host = UsbHost::new(FsPair::with_loopback(&design, false), 0);
+fn cdc_notification<P: UsbPair>(host: &mut UsbHost<P>) {
     host.set_port("serial_state", CDC_LINES_UP, 7);
     configure_for(
-        &mut host,
+        host,
         6,
         &expected_cdc_device_descriptor(),
         &expected_cdc_configuration(),
@@ -12607,7 +12604,7 @@ fn usb_cdc_acm_notification_endpoint_sends_the_serial_state() {
     host.data().give = vec![vec![0x2A]];
     host.idle(20);
     assert_eq!(
-        pipe.read(&mut host, 6),
+        pipe.read(host, 6),
         vec![0x2A],
         "the serial port still moves"
     );
@@ -12618,7 +12615,7 @@ fn usb_cdc_acm_notification_endpoint_sends_the_serial_state() {
     // a re-enumerated host with no carrier for ever.
     host.set_port("serial_state", CDC_LINES_UP, 7);
     configure_for(
-        &mut host,
+        host,
         6,
         &expected_cdc_device_descriptor(),
         &expected_cdc_configuration(),
@@ -12631,6 +12628,29 @@ fn usb_cdc_acm_notification_endpoint_sends_the_serial_state() {
     host.ack();
     host.idle(10);
     host.assert_clean();
+}
+
+/// The same, through the **ULPI** link layer and the transceiver that reports
+/// LineState a clock late, which is the part on the board.
+///
+/// The notification is a ten-byte packet out of a *third* endpoint, so it goes
+/// through the ULPI transmitter's length field, that endpoint's own turnaround
+/// counter and `usb_dev_core`'s arbitration, none of which the full-speed run
+/// above exercises. Ten bytes is also the only packet in this file that is
+/// neither a handshake, a control transfer nor a bulk payload.
+#[test]
+fn usb_cdc_acm_ulpi_notification_endpoint_sends_the_serial_state() {
+    let design = cdc_ulpi_design();
+    let phy = UlpiPhy::new(ULPI_CPB).reporting_stale_line();
+    let mut host = UsbHost::new(UlpiPair::with_phy_data(&design, phy, false), 0);
+    cdc_notification(&mut host);
+}
+
+#[test]
+fn usb_cdc_acm_notification_endpoint_sends_the_serial_state() {
+    let design = cdc_fs_design();
+    let mut host = UsbHost::new(FsPair::with_loopback(&design, false), 0);
+    cdc_notification(&mut host);
 }
 
 /// Bytes through the serial port's bulk pair, in both directions, with the
