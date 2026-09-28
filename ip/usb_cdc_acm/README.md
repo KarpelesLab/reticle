@@ -692,28 +692,31 @@ device and not anything the host was keeping.
 
 ### And every bit of the bitstream belongs to something
 
-The design is **2503 lookup tables, 1769 flip-flops** and 20 pads on an
+The design is **2510 lookup tables, 1769 flip-flops** and 20 pads on an
 LFE5U-12F, and its bitstream was decoded back through the same Project Trellis
 records the router read:
 
 ```text
-110367 configuration bit(s) set, 20 pad(s), 2503 lookup table(s) and 1769
-flip-flop(s) configured, 1769/24288 ff, 1/56 gb, 20/120 io, 2503/24288 lut
-routed 4284 of 4284 signal(s) with 60369 pip(s) over 64653 wire(s), and every
+110843 configuration bit(s) set, 20 pad(s), 2510 lookup table(s), 1769
+flip-flop(s) and 0 distributed RAM(s) configured, 1769/24288 ff, 1/56 gb,
+20/120 io, 2510/24288 lut
+routed 4291 of 4291 signal(s) with 60550 pip(s) over 64841 wire(s), and every
 sink was walked back to its driver
-all 110367 set bit(s) decode back through the database into 39502 arc(s), 8754
-field(s) and 2502 word(s), with 0 unexplained, and the arcs they select are
-exactly the 39502 the router chose
+all 110843 set bit(s) decode back through the database into 39697 arc(s), 8727
+field(s) and 2509 word(s), with 0 unexplained, and the arcs they select are
+exactly the 39697 the router chose
 ```
 
 It was **1386 lookup tables and 649 flip-flops** with eight-byte packets, so
-the serial port on this board costs +1117 and +1120 for the wider ones;
-`docs/ip-library.md` has that accounting broken down and what it bought.
+the serial port on this board costs +1124 and +1120 for the wider ones;
+`docs/ip-library.md` has that accounting broken down and what it bought. Seven
+of those lookup tables are the notification's re-arm — `reopened` and what it
+reaches — and none of the flip-flops are.
 
-**Nothing is unexplained**: every one of those 110367 bits belongs to a feature
+**Nothing is unexplained**: every one of those 110843 bits belongs to a feature
 the database names, so no bit was set for a reason the database does not know —
 which is how a wrong tile rule looks from the inside. It was 0 unexplained out
-of 57636 bits before and it is 0 out of 110367 now, which is the property that
+of 57636 bits before and it is 0 out of 110843 now, which is the property that
 had to survive the design nearly doubling. The count is also what
 `reticle fpga` reports for the same bitstream, so the writer and the decoder
 were asked separately and agree.
@@ -751,7 +754,9 @@ which is the measurement §4 says condemned the first version of this endpoint:
 
 ```console
 $ python3 three-opens.py /dev/ttyACM1
-BEFORE-BLOCK
+open 1 -> TIOCMGET 0x166  set: DTR | RTS | CTS | CAR/DCD | DSR   DCD=True DSR=True
+open 2 -> TIOCMGET 0x166  set: DTR | RTS | CTS | CAR/DCD | DSR   DCD=True DSR=True
+open 3 -> TIOCMGET 0x166  set: DTR | RTS | CTS | CAR/DCD | DSR   DCD=True DSR=True
 ```
 
 `DTR` and `RTS` are the **host's** own outputs, read back out of
@@ -767,12 +772,32 @@ The same three opens against the **one-shot** version of this endpoint, on the
 same board and the same host, for comparison — this is the defect, measured:
 
 ```console
-AFTER-BLOCK
+$ python3 three-opens.py /dev/ttyACM1        # one notification per configuration
+open 1 -> TIOCMGET 0x026  set: DTR | RTS | CTS   DCD=False DSR=False
+open 2 -> TIOCMGET 0x026  set: DTR | RTS | CTS   DCD=False DSR=False
+open 3 -> TIOCMGET 0x026  set: DTR | RTS | CTS   DCD=False DSR=False
+```
+
+Ten opens in a row read `0x166` as well, and so do three taken **immediately
+after `tests/usb_cdc_acm.rs` has run** — which is the harder case, because that
+test both consumes a pending notification over usbfs *and* detaches and
+re-attaches `cdc_acm`, giving it a fresh `acm` with `ctrlin` at zero. That is
+the exact state in which the one-shot version read `0x026` for ever:
+
+```console
+$ cargo test --release --features program --test usb_cdc_acm -- --ignored
+...
+test a_serial_port_this_compiler_built_is_bound_by_the_kernels_own_driver ... ok
+$ python3 three-opens.py /dev/ttyACM1
+open 1 -> TIOCMGET 0x166  set: DTR | RTS | CTS | CAR/DCD | DSR   DCD=True DSR=True
+open 2 -> TIOCMGET 0x166  set: DTR | RTS | CTS | CAR/DCD | DSR   DCD=True DSR=True
+open 3 -> TIOCMGET 0x166  set: DTR | RTS | CTS | CAR/DCD | DSR   DCD=True DSR=True
 ```
 
 So: **CHECKED** — Linux's `cdc_acm` receives the notification and answers
-`TIOCMGET` out of it, every time the port is opened. That is one driver on one
-kernel version.
+`TIOCMGET` out of it, every time the port is opened, including after a driver
+rebind and after something else has taken a notification. That is one driver on
+one kernel version.
 
 **Why that reading is not in the test.** `TIOCMGET` is an ioctl, which means
 `libc` and `unsafe`, and this crate has neither — the same reason `stty` does
