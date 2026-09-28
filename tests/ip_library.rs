@@ -10087,6 +10087,68 @@ fn usb_bulk_endpoint_naks_an_out_until_the_bytes_are_taken() {
     host.assert_clean();
 }
 
+/// A data packet longer than 64 bytes is refused whole, and the 64-byte one
+/// beside it is taken.
+///
+/// This is the boundary of `usb_pkt_rx`'s `too_long`, which withdraws `dat_ok`
+/// from an over-long packet instead of cutting it to fit, and it is arithmetic
+/// this round rewrote: the count of bytes in a packet used to be four bits and
+/// saturate at fifteen, and it is seven bits saturating at `64 + 3` now. Off by
+/// one in either direction and this test fails — one way a legal 64-byte packet
+/// is refused, the other way a 65-byte one is taken and the endpoint stores a
+/// length its buffer does not have.
+///
+/// A refused packet is answered with **nothing at all**, which is right: USB
+/// 2.0 §8.7.1 has a device return no handshake for a packet whose CRC failed,
+/// and a device that cannot tell a corrupt packet from an over-long one should
+/// treat both the same. The host then retries, which is what the second half
+/// here is.
+///
+/// **What it would not catch**: anything about a host that obeys
+/// `wMaxPacketSize`, since no host sends this. It is a test of the device's
+/// arithmetic, not of an interaction.
+#[test]
+fn usb_bulk_endpoint_refuses_a_packet_longer_than_it_promised() {
+    let design = usb_design();
+    let mut host = UsbHost::new(FsPair::with_loopback(&design, false), 0);
+    configure(&mut host, 9);
+
+    // Sixty-five bytes, one more than the descriptor promised.
+    let over: Vec<u8> = (0..=BULK_MAXPKT)
+        .map(|i| u8::try_from(i).expect("a byte").wrapping_mul(11))
+        .collect();
+    assert_eq!(over.len(), BULK_MAXPKT + 1);
+    assert_eq!(
+        host.bulk_out(9, 1, USB_DATA0, &over),
+        UsbReply::Nothing,
+        "a packet longer than wMaxPacketSize is not answered"
+    );
+    host.idle(20);
+    assert!(
+        host.data().got.is_empty(),
+        "and nothing of it reached the interface: {:?}",
+        host.data().got
+    );
+
+    // The toggle never moved, so the host's retry is still DATA0 — and 64
+    // bytes, which is what it should have sent, is taken.
+    let legal: Vec<u8> = (0..BULK_MAXPKT)
+        .map(|i| u8::try_from(i).expect("a byte").wrapping_mul(11))
+        .collect();
+    assert_eq!(
+        host.bulk_out(9, 1, USB_DATA0, &legal),
+        UsbReply::Handshake(USB_ACK),
+        "a full packet is taken"
+    );
+    host.idle(20);
+    assert_eq!(
+        host.data().got,
+        vec![legal],
+        "all 64 bytes of it, and only those"
+    );
+    host.assert_clean();
+}
+
 /// A packet the host sends twice with the same toggle is acknowledged twice
 /// and delivered once.
 ///
