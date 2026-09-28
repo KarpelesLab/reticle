@@ -7,7 +7,7 @@ io:
   sw (4 bits) -> IBUF at pin V17,V16,W16,W17
   led (4 bits) -> OBUF at pin U16,E19,U19,V19
 clocks:
-  clk (12 flip-flops) -> BUFG
+  clk (12 clock pins) -> BUFG
 logic:
   5 LUTs, depth 1
 netlist:

@@ -6,7 +6,7 @@ io:
 pll:
   sys -> PLLE2_BASE from clk at 100.000 MHz: 50.000 MHz for 50.000 MHz asked (+0.0 ppm), vco 800.000 MHz, DIVCLK_DIVIDE=1 CLKFBOUT_MULT=8 CLKOUT0_DIVIDE=16
 clocks:
-  sys (8 flip-flops) -> BUFG
+  sys (8 clock pins) -> BUFG
 logic:
   0 LUTs, depth 0
 netlist:

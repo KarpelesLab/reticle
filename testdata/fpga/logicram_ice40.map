@@ -9,7 +9,7 @@ io:
   wdata (8 bits) -> SB_IO
   rdata (8 bits) -> SB_IO
 clocks:
-  clk (128 flip-flops) -> SB_GB
+  clk (128 clock pins) -> SB_GB
 logic:
   260 LUTs, depth 4
 netlist:

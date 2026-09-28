@@ -8,7 +8,7 @@ io:
   sum (8 bits) -> SB_IO
   carry (1 bits) -> SB_IO at pin 99 as LVCMOS33
 clocks:
-  clk (8 flip-flops) -> SB_GB
+  clk (8 clock pins) -> SB_GB
 logic:
   8 LUTs, depth 1
 netlist:

@@ -96,6 +96,9 @@ impl Arch {
                 for (role, wire) in &bel.pins {
                     line.push_str(&format!(" pin {}={}", quote(role), quote(&wire.to_text())));
                 }
+                for other in &bel.blocks {
+                    line.push_str(&format!(" blocks {}", quote(other)));
+                }
                 out.push_str(&line);
                 out.push('\n');
                 for entry in &bel.config {
@@ -485,6 +488,14 @@ impl<'a> Parser<'a> {
                         }
                     }
                 }
+                "blocks" => {
+                    let Some(other) = self.word(line, index, "a bel name").map(str::to_owned)
+                    else {
+                        break;
+                    };
+                    index += 1;
+                    bel.blocks.push(other);
+                }
                 other => {
                     let (span, other) = (token.span, other.to_owned());
                     self.unknown(span, format!("unknown `bel` option `{other}`"));
@@ -706,6 +717,76 @@ arch tiny
   pinmap 1 X0Y0/lut
 end
 ";
+
+    /// A bel pin may name several wires and a bel may block another, and
+    /// both survive a round trip through the text format.
+    ///
+    /// Neither is a convenience. An ECP5's distributed RAM is four lookup
+    /// tables reading one address, so its `raddr0` *is* four wires; and a
+    /// slice in `DPRAM` mode **is** its two lookup tables, so placing one
+    /// takes six bels of the tile away. An architecture that could not say
+    /// either could not describe that family, and one whose text form
+    /// dropped them would round-trip into a lie.
+    #[test]
+    fn a_pin_can_be_several_wires_and_a_bel_can_block_another() {
+        const TEXT: &str = "\
+arch shared
+  family test
+  part test-part
+  grid 1 1
+  tiletype logic asc logic_tile bits 1 4
+  wire logic a span 0 0
+  wire logic b span 0 0
+  wire logic c span 0 0
+  bel logic ram lutram pin raddr0=a pin raddr0=b pin o=c blocks lut0 blocks lut1
+  bel logic lut0 lut pin i0=a
+  bel logic lut1 lut pin i0=b
+  tiles logic rect 0 0 0 0
+end
+";
+        let (archs, diags) = parse(TEXT);
+        assert_eq!(diags, "");
+        let arch = &archs[0];
+        let tile = &arch.tile_types[0];
+        let ram = tile.bel("ram").expect("the RAM bel");
+        assert_eq!(
+            ram.pins.len(),
+            3,
+            "one role twice and one once, in declaration order"
+        );
+        assert_eq!(ram.pins[0].0, "raddr0");
+        assert_eq!(ram.pins[1].0, "raddr0");
+        // `pin` gives the first, which is what a driver needs.
+        assert_eq!(ram.pin("raddr0"), Some(&WireRef::local("a")));
+        assert_eq!(ram.blocks, vec!["lut0".to_owned(), "lut1".to_owned()]);
+
+        let text = arch.to_text();
+        let (again, diags) = parse(&text);
+        assert_eq!(diags, "");
+        assert_eq!(&again[0], arch, "the text form keeps both");
+
+        // And the graph resolves the block names to the sites of the same
+        // tile, in both directions once the placer reads them.
+        let graph = arch.build_graph();
+        let ram = graph
+            .sites
+            .iter()
+            .position(|s| s.bel == "ram")
+            .expect("the RAM site");
+        let lut0 = graph.sites.iter().position(|s| s.bel == "lut0").unwrap();
+        let lut1 = graph.sites.iter().position(|s| s.bel == "lut1").unwrap();
+        assert_eq!(graph.sites[ram].blocks, vec![lut0, lut1]);
+        assert!(
+            graph.sites[lut0].blocks.is_empty(),
+            "declared one way round"
+        );
+        // Two nodes for one role, and the first of them is what `pin` gives.
+        let nodes: Vec<_> = graph.sites[ram].pin_nodes("raddr0").collect();
+        assert_eq!(nodes.len(), 2);
+        assert_eq!(graph.sites[ram].pin("raddr0"), Some(nodes[0]));
+        assert_eq!(graph.sites[lut0].pin("i0"), Some(nodes[0]));
+        assert_eq!(graph.sites[lut1].pin("i0"), Some(nodes[1]));
+    }
 
     #[test]
     fn parses_and_round_trips() {

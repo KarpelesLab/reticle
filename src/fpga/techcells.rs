@@ -768,14 +768,23 @@ fn set_params(cell: &mut Cell, bel: &BelKind) {
 
 // --- a constant on a flip-flop's data input ---------------------------------
 
-/// Gives every flip-flop whose data input is a constant something that
-/// drives it: one lookup table per constant, shared by every flip-flop of
-/// the module that asks for that value.
+/// Gives every pin that is a constant and cannot absorb one something that
+/// drives it: one lookup table per constant, shared by every cell of the
+/// module that asks for that value.
 ///
 /// See the module docs for why a fabric flip-flop cannot absorb a constant
 /// the way a lookup table can, and
 /// `tests/fpga_trellis.rs`'s `what_lattices_own_packer_writes_for_a_constant`
 /// for the vendor bitstreams this shape was read out of.
+///
+/// A flip-flop's data input is the pin this was written for. A distributed
+/// RAM's inputs are in exactly the same position and for a sharper reason:
+/// an unrouted lookup-table input is *tied high* on this family
+/// (`SLICE<l>.<X><n>MUX = 1`), so a write-data or address bit left as a
+/// constant zero would read as a one, and a memory addressed one word off
+/// is not something a structural check would notice. Every input of a
+/// `lutram` primitive is therefore given a real driver, which is what
+/// nextpnr's `pack_constants` does for all of them.
 fn drive_constant_data(
     module: &mut Module,
     device: &Device,
@@ -788,12 +797,28 @@ fn drive_constant_data(
         // `TrellisFabric::configure_registers`.
         return;
     };
-    let data_ports: Vec<(String, String)> = device
+    let mut data_ports: Vec<(String, String)> = device
         .bels
         .iter()
         .filter(|bel| bel.role == BelRole::Ff)
         .map(|bel| (bel.name.clone(), bel.port("d").unwrap_or("D").to_owned()))
         .collect();
+    for bel in device.bels.iter().filter(|b| b.role == BelRole::LutRam) {
+        for (role, names) in &bel.ports {
+            if role == "dout" {
+                continue;
+            }
+            for name in names.split(',') {
+                data_ports.push((bel.name.clone(), name.to_owned()));
+            }
+        }
+    }
+    // A family declares its one flip-flop once per parameter set — an ECP5
+    // has thirty-six `TRELLIS_FF` lines — so the same `(primitive, port)`
+    // pair arrives many times, and a cell would be given a driver once per
+    // line.
+    data_ports.sort();
+    data_ports.dedup();
     if data_ports.is_empty() {
         return;
     }
@@ -807,19 +832,18 @@ fn drive_constant_data(
                 let CellKind::Blackbox(primitive) = &cell.kind else {
                     continue;
                 };
-                let Some((_, port)) = data_ports
+                for (_, port) in data_ports
                     .iter()
-                    .find(|(name, _)| name == primitive.as_str())
-                else {
-                    continue;
-                };
-                let Some(d) = cell.input(port) else { continue };
-                let Ok(bits) = view.expr_bits(d) else {
-                    continue;
-                };
-                let [bit] = bits[..] else { continue };
-                if let SigBit::Const(value @ (Bit::Zero | Bit::One)) = view.canonical(bit) {
-                    wanted.push((id, port.clone(), value));
+                    .filter(|(name, _)| name == primitive.as_str())
+                {
+                    let Some(d) = cell.input(port) else { continue };
+                    let Ok(bits) = view.expr_bits(d) else {
+                        continue;
+                    };
+                    let [bit] = bits[..] else { continue };
+                    if let SigBit::Const(value @ (Bit::Zero | Bit::One)) = view.canonical(bit) {
+                        wanted.push((id, port.clone(), value));
+                    }
                 }
             }
         }

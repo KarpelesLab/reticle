@@ -716,8 +716,10 @@ impl Rect {
     }
 }
 
-/// Which sites hold a bel pin that is **the same wire** as another site's,
-/// and what agreeing about it means.
+/// The two ways two sites of one tile are not independent, and what each
+/// of them means for a placement.
+///
+/// # A pin that is the same wire
 ///
 /// A fabric does not always give every bel its own pins. An ECP5 slice is
 /// two flip-flops, and its `CLK<c>_SLICE`, `CE<c>_SLICE` and `LSR<c>_SLICE`
@@ -744,14 +746,30 @@ impl Rect {
 ///   the *slice* and not of the flip-flop, so a pair that disagrees cannot
 ///   be configured either way round. Requiring equality is what both halves
 ///   of the pair can be written to do.
+///
+/// # A bel that is the other bel
+///
+/// Sharing a wire is the weaker case. Sometimes two bels are not two
+/// pieces of silicon at all: an ECP5 slice in `DPRAM` mode **is** its two
+/// lookup tables, and a distributed RAM therefore takes six of a logic
+/// tile's eight. Those six are not "shared" — they are gone, and a lookup
+/// table placed on one of them would write its truth table into the RAM's
+/// contents. [`ArchSite::blocks`](super::arch::ArchSite::blocks) says so,
+/// read off the architecture like everything else here, and the rule is
+/// the simple one: a site with something on it excludes every site it
+/// blocks and every site that blocks it.
 #[derive(Debug, Default)]
-struct SharedPins {
+struct SiteRules {
     /// Per site, one entry per pin it shares with another site, as
     /// `(the other site, this site's role, the other site's role)`. Both
     /// directions are recorded, so placing something on a site only needs
     /// that site's own list. Roles are interned indices into
-    /// [`SharedPins::roles`].
+    /// [`SiteRules::roles`].
     per_site: Vec<Vec<(usize, u32, u32)>>,
+    /// Per site, the sites it cannot be occupied at the same time as, in
+    /// both directions. Empty for every site of every family whose
+    /// architecture declares no exclusion.
+    excludes: Vec<Vec<usize>>,
     /// Per instance, the signal on each of its pins, as `(role, signal)`,
     /// for the pins that carry one. A role that is absent carries none.
     per_instance: Vec<Vec<(u32, usize)>>,
@@ -759,19 +777,36 @@ struct SharedPins {
     roles: BTreeMap<String, u32>,
 }
 
-impl SharedPins {
-    /// Finds every pair of bel pins in one tile that are one wire.
+impl SiteRules {
+    /// Finds every pair of bel pins in one tile that are one wire, and
+    /// every pair of sites that exclude each other.
     ///
     /// Cost is one pass over the sites grouped by tile, and within a tile
     /// the pins are compared pairwise — sixteen sites of five pins for an
     /// ECP5 logic tile, so the square is small and the grouping keeps it
     /// local.
-    fn find(netlist: &Netlist, graph: &RoutingGraph) -> SharedPins {
-        let mut out = SharedPins {
+    fn find(netlist: &Netlist, graph: &RoutingGraph) -> SiteRules {
+        let mut out = SiteRules {
             per_site: vec![Vec::new(); graph.sites.len()],
+            excludes: vec![Vec::new(); graph.sites.len()],
             per_instance: vec![Vec::new(); netlist.instances.len()],
             roles: BTreeMap::new(),
         };
+        let mut exclusions = 0usize;
+        for (index, site) in graph.sites.iter().enumerate() {
+            for other in &site.blocks {
+                if *other == index || *other >= graph.sites.len() {
+                    continue;
+                }
+                if !out.excludes[index].contains(other) {
+                    out.excludes[index].push(*other);
+                    exclusions += 1;
+                }
+                if !out.excludes[*other].contains(&index) {
+                    out.excludes[*other].push(index);
+                }
+            }
+        }
         let mut by_tile: BTreeMap<(u32, u32), Vec<usize>> = BTreeMap::new();
         for (index, site) in graph.sites.iter().enumerate() {
             by_tile.entry(site.tile).or_default().push(index);
@@ -801,8 +836,8 @@ impl SharedPins {
                 }
             }
         }
-        if out.roles.is_empty() {
-            return SharedPins::default();
+        if out.roles.is_empty() && exclusions == 0 {
+            return SiteRules::default();
         }
         for pin in &netlist.pins {
             if let Some(signal) = pin.signal
@@ -814,9 +849,9 @@ impl SharedPins {
         out
     }
 
-    /// Nothing in this architecture shares a pin, so nothing has to be
-    /// checked. Every family but the ECP5 is in this case today, and the
-    /// checks below then cost one `is_empty`.
+    /// Nothing in this architecture shares a pin or excludes a site, so
+    /// nothing has to be checked. Every family but the ECP5 is in this
+    /// case today, and the checks below then cost one `is_empty`.
     fn trivial(&self) -> bool {
         self.per_site.is_empty()
     }
@@ -847,11 +882,14 @@ impl SharedPins {
                 .filter(|i| !moving.iter().any(|(j, _)| j == i))
         };
         moving.iter().all(|(instance, site)| {
-            self.per_site[*site].iter().all(|(other, mine, theirs)| {
-                after(*other).is_none_or(|neighbour| {
-                    self.signal(*instance, *mine) == self.signal(neighbour, *theirs)
+            self.excludes[*site]
+                .iter()
+                .all(|other| after(*other).is_none())
+                && self.per_site[*site].iter().all(|(other, mine, theirs)| {
+                    after(*other).is_none_or(|neighbour| {
+                        self.signal(*instance, *mine) == self.signal(neighbour, *theirs)
+                    })
                 })
-            })
         })
     }
 }
@@ -931,7 +969,7 @@ pub fn place(
     );
 
     let mut placement = Placement::new(netlist.instances.len(), graph.sites.len());
-    let shared = SharedPins::find(netlist, graph);
+    let shared = SiteRules::find(netlist, graph);
     let positions = solve_analytic(netlist, graph, &info, options);
     legalise(
         netlist,
@@ -1332,7 +1370,7 @@ fn legalise(
     macros: &[Macro],
     positions: &[(f64, f64)],
     sites_by_kind: &BTreeMap<String, Vec<usize>>,
-    shared: &SharedPins,
+    shared: &SiteRules,
     placement: &mut Placement,
 ) -> Result<(), PlaceError> {
     // Fixed instances first: their sites are not negotiable.
@@ -1453,7 +1491,7 @@ fn nearest_free(
     kind: &str,
     region: Option<&Rect>,
     target: (u32, u32),
-    shared: &SharedPins,
+    shared: &SiteRules,
     instance: usize,
     placement: &Placement,
 ) -> Option<usize> {
@@ -1488,7 +1526,7 @@ fn legalise_macro(
     m: &Macro,
     positions: &[(f64, f64)],
     sites_by_kind: &BTreeMap<String, Vec<usize>>,
-    shared: &SharedPins,
+    shared: &SiteRules,
     placement: &mut Placement,
 ) -> Result<(), PlaceError> {
     let (tx, ty) = positions[m.anchor];
@@ -1530,7 +1568,7 @@ fn macro_sites(
     info: &[Placeable],
     m: &Macro,
     sites_by_kind: &BTreeMap<String, Vec<usize>>,
-    shared: &SharedPins,
+    shared: &SiteRules,
     placement: &Placement,
     ax: u32,
     ay: u32,
@@ -1635,7 +1673,7 @@ fn anneal(
     info: &[Placeable],
     macros: &[Macro],
     sites_by_kind: &BTreeMap<String, Vec<usize>>,
-    shared: &SharedPins,
+    shared: &SiteRules,
     options: &PlaceOptions,
     placement: &mut Placement,
 ) -> (u32, u64, u64) {
@@ -1768,7 +1806,7 @@ fn propose(
     info: &[Placeable],
     macros: &[Macro],
     sites_by_kind: &BTreeMap<String, Vec<usize>>,
-    shared: &SharedPins,
+    shared: &SiteRules,
     movable: &[usize],
     rng: &mut Rng,
     placement: &Placement,
@@ -1807,7 +1845,7 @@ fn propose(
         return None;
     }
     // A move is only proposed if it is legal, which for a swap means legal
-    // after both halves have happened: see `SharedPins`. The annealer
+    // after both halves have happened: see `SiteRules`. The annealer
     // therefore never has to undo an illegal placement, and a design whose
     // cells share no pin — every family but the ECP5, today — takes exactly
     // the moves it took before this check existed.
@@ -2149,7 +2187,7 @@ mod tests {
 
     /// A grid of tiles holding **two** flip-flops each, whose enable pin is
     /// one wire for the pair — an ECP5 slice in miniature, and the shape
-    /// `SharedPins` is for.
+    /// `SiteRules` is for.
     fn pairs(width: u32, height: u32) -> (Arch, RoutingGraph) {
         let mut arch = Arch::new("t", "test", width, height);
         let mut tile = TileType::new("logic", "logic_tile", 4, 4);
@@ -2237,7 +2275,7 @@ mod tests {
         // but the ECP5 today and is why the check costs them nothing.
         let (_, plain) = grid(4, 4);
         assert!(
-            SharedPins::find(&chain(6), &plain).trivial(),
+            SiteRules::find(&chain(6), &plain).trivial(),
             "a one-bel tile has no shared pin"
         );
 
@@ -2292,7 +2330,7 @@ mod tests {
         // And the predicate itself, since the placements above could pass by
         // luck: the two halves of one tile, with disagreeing enables, are
         // refused, and with agreeing ones allowed.
-        let shared = SharedPins::find(&netlist, &graph);
+        let shared = SiteRules::find(&netlist, &graph);
         assert!(!shared.trivial());
         let pair: Vec<usize> = (0..graph.sites.len())
             .filter(|s| graph.sites[*s].tile == (0, 0))
@@ -2305,7 +2343,7 @@ mod tests {
             "`ff1` wants `en1` where `ff0` wants `en0`"
         );
         let same = enabled(2, 1);
-        let shared_same = SharedPins::find(&same, &graph);
+        let shared_same = SiteRules::find(&same, &graph);
         let mut both = Placement::new(same.instances.len(), graph.sites.len());
         both.place(0, pair[0]);
         assert!(

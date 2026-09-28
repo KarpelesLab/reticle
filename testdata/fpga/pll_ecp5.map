@@ -6,7 +6,7 @@ io:
 pll:
   sys -> EHXPLLL from clk at 25.000 MHz: 125.000 MHz for 125.000 MHz asked (+0.0 ppm), vco 500.000 MHz, CLKI_DIV=1 CLKFB_DIV=5 CLKOP_DIV=4 CLKOP_CPHASE=3
 clocks:
-  sys (8 flip-flops) -> DCCA
+  sys (8 clock pins) -> DCCA
 logic:
   0 LUTs, depth 0
 netlist:

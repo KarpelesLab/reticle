@@ -1,0 +1,44 @@
+# Every port of `testdata/fpga/ecp5/fifo_sync_64.v` on a top-edge ball
+# of an LFE5U-12F in caBGA-256, in the order Project Trellis' own
+# `iodb.json` lists them across the die: column ascending, PIO A before
+# PIO B. Nothing here is about a board — no board has this design on it —
+# and the only thing that matters about the assignment is that it is
+# fixed, so that the placement the test measures is the same on every run.
+#
+# The top edge is the one this backend describes with two PIOs a position
+# (56 balls of the package are on it), and bank 1's rail is 3.3 V, hence
+# LVCMOS33 throughout. See `docs/fpga-trellis.md`.
+#
+# `clk` is first on purpose: it is the one signal that has to leave its pad
+# through a clock buffer and travel the global network, and the test asserts
+# that it did.
+
+set_io -io_standard LVCMOS33 clk A2
+set_io -io_standard LVCMOS33 rst_n B3
+set_io -io_standard LVCMOS33 wr_en A3
+set_io -io_standard LVCMOS33 wr_data[0] A4
+set_io -io_standard LVCMOS33 wr_data[1] E4
+set_io -io_standard LVCMOS33 wr_data[2] D4
+set_io -io_standard LVCMOS33 wr_data[3] C4
+set_io -io_standard LVCMOS33 wr_data[4] B4
+set_io -io_standard LVCMOS33 wr_data[5] E5
+set_io -io_standard LVCMOS33 wr_data[6] D5
+set_io -io_standard LVCMOS33 wr_data[7] C5
+set_io -io_standard LVCMOS33 full B5
+set_io -io_standard LVCMOS33 rd_en A5
+set_io -io_standard LVCMOS33 rd_data[0] A6
+set_io -io_standard LVCMOS33 rd_data[1] E6
+set_io -io_standard LVCMOS33 rd_data[2] D6
+set_io -io_standard LVCMOS33 rd_data[3] C6
+set_io -io_standard LVCMOS33 rd_data[4] B6
+set_io -io_standard LVCMOS33 rd_data[5] E7
+set_io -io_standard LVCMOS33 rd_data[6] D7
+set_io -io_standard LVCMOS33 rd_data[7] C7
+set_io -io_standard LVCMOS33 empty B7
+set_io -io_standard LVCMOS33 count[0] A7
+set_io -io_standard LVCMOS33 count[1] A8
+set_io -io_standard LVCMOS33 count[2] E8
+set_io -io_standard LVCMOS33 count[3] D8
+set_io -io_standard LVCMOS33 count[4] C8
+set_io -io_standard LVCMOS33 count[5] B8
+set_io -io_standard LVCMOS33 count[6] B9

@@ -6,7 +6,7 @@ io:
   d (1 bits) -> TRELLIS_IO at pin C2 as LVCMOS33
   q (1 bits) -> TRELLIS_IO at pin D1 as LVCMOS33
 clocks:
-  clk (8 flip-flops) -> DCCA
+  clk (8 clock pins) -> DCCA
 logic:
   0 LUTs, depth 0
 netlist:

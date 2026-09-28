@@ -309,6 +309,14 @@ fn compile_all(
             &design, top, &netlist, &placement, &graph, &routing, &mut bits,
         )
         .unwrap();
+    let rams = fabric
+        .configure_lutram(&design, top, &netlist, &placement, &graph, &mut bits)
+        .unwrap();
+    let mut ram_only =
+        bitstream::Bitstream::empty(bitstream::BitstreamFormat::from_arch(&fabric.arch));
+    fabric
+        .configure_lutram(&design, top, &netlist, &placement, &graph, &mut ram_only)
+        .unwrap();
     let clocks = fabric.clock_network_use(&netlist, &placement, &graph, &routing);
     let dropped = fabric.dropped_clear_bits(&graph, &routing, &bits);
     // The same pass on its own, into an empty bitmap. A `CIB`'s constant
@@ -342,6 +350,9 @@ fn compile_all(
         Routed {
             wires,
             ffs,
+            rams,
+            ram_only,
+            placement,
             clocks,
             dropped,
             graph,
@@ -362,6 +373,17 @@ struct Routed {
     wires: std::collections::BTreeSet<(Wire, Wire)>,
     /// How many flip-flops `configure_registers` wrote settings for.
     ffs: usize,
+    /// How many distributed RAMs `configure_lutram` wrote settings for.
+    rams: usize,
+    /// That pass on its own, into an empty bitmap, for the same reason
+    /// `io_only` exists: what a feature costs is a question about the pass,
+    /// not about the finished image, where several features share bit space.
+    ram_only: reticle::fpga::bitstream::Bitstream,
+    /// Where every instance ended up, so a test can ask which tile holds
+    /// what. A distributed RAM is exactly the case where that is the
+    /// question: it takes six of its tile's eight lookup tables, so nothing
+    /// else may be in there.
+    placement: reticle::fpga::place::Placement,
     /// Which global clock network each of their clocks arrived on.
     clocks: trellis::ClockUse,
     /// Bits an arc of the design needs **clear** that something else set.
@@ -384,6 +406,466 @@ struct Routed {
 /// One wire of the routing graph: its name and the position it starts in.
 #[cfg(all(feature = "verilog", feature = "synth"))]
 type Wire = (String, (u32, u32));
+
+/// Whether Lattice's own bitstreams for this board contain a distributed
+/// RAM at all, asked because the answer decides how strong the claim in
+/// `TrellisFabric::configure_lutram` is allowed to be.
+///
+/// **They do not.** Not one slice of `analyzer.bit`, `selftest.bit` or
+/// `facedancer.bit` is in `DPRAM` or `RAMW` mode. All three use block RAM
+/// for their memories — nine, none and forty-four `DP16KD` blocks — and
+/// their `MODE` fields are `LOGIC` and `CCU2` and nothing else.
+///
+/// So the distributed RAM this backend writes is measured against the
+/// database and against nextpnr's stated intent, and **not** against a
+/// vendor artefact, which is a weaker kind of evidence than
+/// `what_lattices_own_packer_writes_for_a_slew_rate` or
+/// `what_lattices_own_packer_writes_for_a_constant` rest on. This test is
+/// the thing that keeps that distinction honest: it is an assertion that
+/// the stronger evidence is *absent*, so a future reference bitstream that
+/// did contain one would fail here and say so, which is exactly when the
+/// claim could be upgraded. `docs/fpga-trellis.md` states the gap in the
+/// same words.
+/// Everything Lattice's own packer writes for a distributed RAM, asked in
+/// full and answered out of their own bitstreams for this very board.
+///
+/// This was expected to be the weak case. `docs/fpga-trellis.md`
+/// distinguishes what a vendor artefact proves from what the database plus
+/// nextpnr's intent merely suggest, and a distributed RAM looked like the
+/// second kind. It is not: **`analyzer.bit` has 22 of them and
+/// `facedancer.bit` 89**, and every detail of what this backend writes is
+/// in their files at the absolute frame positions it would write them.
+///
+/// | | |
+/// |---|---|
+/// | How many | 22 in `analyzer.bit`, **none** in `selftest.bit`, 89 in `facedancer.bit` |
+/// | `SLICEA.MODE`, `SLICEB.MODE`, `SLICEC.MODE` | `DPRAM`, `DPRAM`, `RAMW` — and in all 111 tiles **all three or none**, because they are the same bit |
+/// | Which bit | `F50B11` of the `PLC2`, one bit for the whole RAM, set in their files at the frame this flow computes |
+/// | `SLICEC.K0.INIT`, `SLICEC.K1.INIT` | sixteen zeros each, in all 111. The `RAMW` slice's two lookup tables hold nothing and are written anyway |
+/// | `SLICEA.K0/K1.INIT`, `SLICEB.K0/K1.INIT` | sixteen zeros each, in all 111: **every distributed RAM on this board starts empty**, which is the only case this flow can produce |
+/// | `SLICEA.WREMUX` | never written, in any of the three files. `WRE` is the default |
+/// | `CLK1.CLKMUX` | never written either. `CLK` is the default, and the write clock's polarity is the only thing it could say |
+/// | The write clock | `CLK1` of the tile, and it arrives on a **global clock network** (`G_HPBX<n>00`) in all 111 |
+/// | The write enable | `LSR1` of the tile, and it arrives on **general routing** in all 111 |
+/// | Slice D | still used, for ordinary logic, in 18 of analyzer's 22 and 82 of facedancer's 89. A RAM costs six lookup tables of eight, not eight |
+/// | A flip-flop in a RAM's own slice | used in 8 of analyzer's tiles and 60 of facedancer's. `DPRAM` mode takes a slice's lookup tables, **not** its registers |
+///
+/// So a distributed RAM costs 97 bits in their bitstreams too: one for the
+/// mode, 64 for the four zeroed content words and 32 for the `RAMW`
+/// slice's two. That is the number
+/// `a_distributed_ram_places_routes_and_every_bit_of_it_decodes` measures
+/// on this flow's own output.
+///
+/// The last two rows are the ones that decided code rather than
+/// documentation. Slice D being in use is why
+/// [`trellis::DPRAM_BLOCKS`] names six bels and not eight, and a
+/// flip-flop sharing a slice with the RAM is why it names no flip-flop at
+/// all — a model that blocked the whole tile would have been wrong in a way
+/// no test of this flow's own output could have caught.
+#[test]
+fn what_lattices_own_packer_writes_for_a_distributed_ram() {
+    let Some(root) = chipdb() else { return };
+    let db = trellis::open(&Disk(root), "", PART).unwrap();
+    let fabric = db.load(&TrellisOptions::new()).unwrap();
+    let expected: [(&str, usize, usize, usize); 3] = [
+        // file, distributed RAMs, of those with slice D in use, of those
+        // with a flip-flop in slice A, B or C.
+        ("analyzer", 22, 18, 8),
+        ("selftest", 0, 0, 0),
+        ("facedancer", 89, 82, 60),
+    ];
+    let mut total = 0usize;
+    for (name, rams, with_slice_d, with_a_flop) in expected {
+        let Some(bytes) = reference(name) else {
+            return;
+        };
+        let stream = Ecp5Stream::parse(&bytes, &formats).unwrap();
+        let decoded = db.decode(&stream.cram);
+        let mut modes: std::collections::BTreeMap<(u32, u32), Vec<String>> = Default::default();
+        for (at, field, value) in &decoded.enums {
+            if field.ends_with(".MODE") && (value == "DPRAM" || value == "RAMW") {
+                modes
+                    .entry(*at)
+                    .or_default()
+                    .push(format!("{field}={value}"));
+            }
+        }
+        assert_eq!(
+            modes.len(),
+            rams,
+            "{name}.bit: distributed RAMs. `selftest.bit` having none is asserted rather than \
+             skipped, for the same reason it is in \
+             `what_lattices_own_packer_writes_for_a_constant`: a design that needs none is the \
+             case this flow must not change"
+        );
+        let mut slice_d = 0usize;
+        let mut flops = 0usize;
+        for (at, fields) in &modes {
+            // The fixed relationship between the three slices, in a file
+            // `ecppack` wrote: all three or none, never one of them.
+            let mut sorted = fields.clone();
+            sorted.sort();
+            assert_eq!(
+                sorted,
+                ["SLICEA.MODE=DPRAM", "SLICEB.MODE=DPRAM", "SLICEC.MODE=RAMW"],
+                "{name}.bit at X{}Y{}: a slice in one of the two modes without the other two",
+                at.0,
+                at.1
+            );
+            // And it is one bit, at the absolute frame position this flow
+            // would write it.
+            let ty = fabric
+                .arch
+                .tile_index_at(at.0, at.1)
+                .expect("a tile the decoder named");
+            let dpram = fabric
+                .dprams
+                .get(&ty)
+                .unwrap_or_else(|| panic!("{name}.bit: X{}Y{} holds no `lutram` bel", at.0, at.1));
+            assert_eq!(dpram.mode.len(), 1, "one bit for three slices");
+            for bit in &dpram.mode {
+                let (frame, index) = fabric
+                    .frames
+                    .locate(*at, *bit)
+                    .unwrap_or_else(|| panic!("{bit:?} is outside X{}Y{}", at.0, at.1));
+                assert!(
+                    stream.cram.get(frame, index),
+                    "F{frame}B{index}, which is the DPRAM/RAMW mode bit of X{}Y{}, is clear in \
+                     {name}.bit — whose decoding says that tile holds a distributed RAM",
+                    at.0,
+                    at.1
+                );
+            }
+            let word = |what: &str| -> Option<&str> {
+                decoded
+                    .words
+                    .iter()
+                    .find(|(p, w, _)| p == at && w == what)
+                    .map(|(_, _, v)| v.as_str())
+            };
+            // The contents, and the `RAMW` slice's two words that hold
+            // nothing. All six are sixteen zeros, in every one of them.
+            for bel in trellis::DPRAM_DATA_LUTS
+                .iter()
+                .chain(trellis::DPRAM_RAMW_LUTS.iter())
+            {
+                let field = format!("{bel}.INIT");
+                assert_eq!(
+                    word(&field),
+                    Some("0000000000000000"),
+                    "{name}.bit at X{}Y{}: {field}",
+                    at.0,
+                    at.1
+                );
+            }
+            // Two settings the database has and their packer never writes.
+            for field in ["SLICEA.WREMUX", "CLK1.CLKMUX"] {
+                assert!(
+                    !decoded.enums.iter().any(|(p, f, _)| p == at && f == field),
+                    "{name}.bit at X{}Y{}: {field} is written after all",
+                    at.0,
+                    at.1
+                );
+            }
+            // Where the write clock and the write enable come from, which
+            // is what `trellis::DPRAM_PINS` bets its `wclk` and `we` on.
+            let source = |sink: &str| -> Option<&str> {
+                decoded
+                    .arcs
+                    .iter()
+                    .find(|(p, to, _)| p == at && to == sink)
+                    .map(|(_, _, from)| from.as_str())
+            };
+            let wck = source("CLK1").unwrap_or_else(|| {
+                panic!(
+                    "{name}.bit at X{}Y{}: nothing drives CLK1, which is every DPRAM slice's \
+                     write clock",
+                    at.0, at.1
+                )
+            });
+            assert!(
+                wck.starts_with("G_HPBX"),
+                "{name}.bit at X{}Y{}: the write clock came from {wck} rather than a global \
+                 clock network",
+                at.0,
+                at.1
+            );
+            assert!(
+                source("LSR1").is_some(),
+                "{name}.bit at X{}Y{}: nothing drives LSR1, which is every DPRAM slice's write \
+                 enable",
+                at.0,
+                at.1
+            );
+            // And what the tile still does besides holding a RAM.
+            if decoded
+                .words
+                .iter()
+                .any(|(p, w, _)| p == at && w.starts_with("SLICED."))
+                || decoded
+                    .enums
+                    .iter()
+                    .any(|(p, f, _)| p == at && f.starts_with("SLICED."))
+            {
+                slice_d += 1;
+            }
+            if decoded.enums.iter().any(|(p, f, _)| {
+                p == at
+                    && f.contains(".REG")
+                    && (f.starts_with("SLICEA")
+                        || f.starts_with("SLICEB")
+                        || f.starts_with("SLICEC"))
+            }) {
+                flops += 1;
+            }
+        }
+        assert_eq!(
+            slice_d, with_slice_d,
+            "{name}.bit: RAM tiles whose slice D is still doing ordinary logic, which is why \
+             `DPRAM_BLOCKS` names six bels and not eight"
+        );
+        assert_eq!(
+            flops, with_a_flop,
+            "{name}.bit: RAM tiles with a flip-flop in slice A, B or C, which is why \
+             `DPRAM_BLOCKS` names no flip-flop"
+        );
+        total += modes.len();
+    }
+    assert_eq!(total, 111, "distributed RAMs across the three files");
+}
+
+/// `ip/fifo_sync` on a part, at three depths, which is the thing a
+/// distributed RAM was needed for.
+///
+/// Until the `lutram` bel existed this design could not be placed at all —
+/// `the design needs 2 lutram site(s) and the part has 0`, at every depth,
+/// while `synthesize_for` succeeded, which is why the library test passed
+/// and nobody noticed. What it takes now, measured:
+///
+/// | Depth | `TRELLIS_DPR16X4` | Logic tiles they take | Bits they cost |
+/// |---|---|---|---|
+/// | 16 | 2 | 2 | 194 |
+/// | 32 | 4 | 4 | 388 |
+/// | 64 | 8 | 8 | 776 |
+///
+/// 97 bits each, and that number is not this flow's invention: it is what
+/// `ecppack` writes for all 111 distributed RAMs in this board's own
+/// bitstreams, measured by
+/// `what_lattices_own_packer_writes_for_a_distributed_ram`. One `MODE` bit
+/// for three slices, four zeroed 16-bit content words, and the `RAMW`
+/// slice's two zeroed words that nothing ever reads.
+///
+/// Two assertions carry the weight. The **slice relationship**: a RAM is
+/// slices A, B and C of one logic tile, so no lookup table may share a tile
+/// with one, and a placement that broke that would produce a bitstream
+/// which loads, asserts `DONE` and computes nothing — the lookup table's
+/// truth table and the RAM's contents are the same `INIT` words. And
+/// **every bit decodes**: every set bit of the finished image resolves
+/// through the database into a feature it names, with nothing left over,
+/// and the arcs those bits select are exactly the arcs the router chose.
+#[test]
+#[cfg(all(feature = "verilog", feature = "synth"))]
+fn a_distributed_ram_places_routes_and_every_bit_of_it_decodes() {
+    let Some(root) = chipdb() else { return };
+    let db = trellis::open(&Disk(root), "", PART).unwrap();
+    let fabric = db.load(&TrellisOptions::new()).unwrap();
+    // Two compositions of this die hold a `PLC2` — the plain one, 2860
+    // positions of it, and `PLC2+TAP_DRIVE`, 176 — and each declares one
+    // distributed RAM, which is the 3036 `lutram` sites
+    // `the_database_describes_one_part_of_the_ecp5_family` counts.
+    assert_eq!(
+        fabric.stats.dprams,
+        2,
+        "every composition that holds a `PLC2` holds one `{}`",
+        trellis::DPRAM_BEL
+    );
+
+    // The fixed relationship between the three slices, read out of the
+    // database rather than believed: `SLICEA.MODE = DPRAM`,
+    // `SLICEB.MODE = DPRAM` and `SLICEC.MODE = RAMW` are the **same single
+    // bit** of a `PLC2`, and slice D has no such mode at all. That is why a
+    // logic tile holds exactly one distributed RAM and why it costs six of
+    // the tile's eight lookup tables.
+    let plc2 = db.tile_database("PLC2").expect("the logic tile");
+    let a = plc2
+        .enum_bits("SLICEA.MODE", "DPRAM")
+        .expect("SLICEA DPRAM");
+    let b = plc2
+        .enum_bits("SLICEB.MODE", "DPRAM")
+        .expect("SLICEB DPRAM");
+    let c = plc2.enum_bits("SLICEC.MODE", "RAMW").expect("SLICEC RAMW");
+    assert_eq!(a, b, "slices A and B enter DPRAM mode together");
+    assert_eq!(a, c, "and slice C enters RAMW mode with them");
+    assert_eq!(a.len(), 1, "and it is one bit: {a:?}");
+    assert_eq!(
+        (a[0].frame, a[0].bit, a[0].inverted),
+        (50, 11, false),
+        "F50B11"
+    );
+    assert!(
+        plc2.enum_bits("SLICED.MODE", "DPRAM").is_none()
+            && plc2.enum_bits("SLICED.MODE", "RAMW").is_none(),
+        "slice D has neither mode, so it stays available"
+    );
+
+    for (depth, rams) in [(16u32, 2usize), (32, 4), (64, 8)] {
+        let top = format!("testdata/fpga/ecp5/fifo_sync_{depth}.v");
+        let rcf = format!("testdata/fpga/ecp5/fifo_sync_{depth}.rcf");
+        let (bits, stream, pads, routing, _, routed) =
+            compile_all(&fabric, &[&top, "ip/fifo_sync/rtl/fifo_sync.v"], &rcf);
+
+        // ---- what was placed ----
+        let lutrams: Vec<usize> = routed
+            .netlist
+            .instances
+            .iter()
+            .enumerate()
+            .filter(|(_, i)| i.kind == "lutram")
+            .map(|(index, _)| index)
+            .collect();
+        assert_eq!(
+            lutrams.len(),
+            rams,
+            "depth {depth}: {rams} distributed RAM(s) of 16 words by 4 bits"
+        );
+        for index in &lutrams {
+            assert_eq!(
+                routed.netlist.instances[*index].primitive,
+                "TRELLIS_DPR16X4"
+            );
+        }
+        assert_eq!(
+            routed.rams, rams,
+            "depth {depth}: every one of them got its mode and its contents written"
+        );
+
+        // ---- the slice relationship, honoured ----
+        let mut ram_tiles = std::collections::BTreeSet::new();
+        for index in &lutrams {
+            let site = routed.placement.site_of(*index).expect("placed");
+            ram_tiles.insert(routed.graph.sites[site].tile);
+        }
+        assert_eq!(
+            ram_tiles.len(),
+            rams,
+            "depth {depth}: one distributed RAM per logic tile, never two"
+        );
+        // Six of the eight, and exactly those six: slice D stays available,
+        // which is what nextpnr's `pack_dram` leaves free too. A lookup
+        // table in a RAM's tile is legal on `SLICED.K0` or `SLICED.K1` and
+        // on nothing else.
+        for (index, instance) in routed.netlist.instances.iter().enumerate() {
+            if instance.kind != "lut" {
+                continue;
+            }
+            let site = routed.placement.site_of(index).expect("placed");
+            let site = &routed.graph.sites[site];
+            if !ram_tiles.contains(&site.tile) {
+                continue;
+            }
+            assert!(
+                !trellis::DPRAM_BLOCKS.contains(&site.bel.as_str()),
+                "depth {depth}: `{}` is a lookup table at {}, which a distributed RAM in that \
+                 tile *is*",
+                instance.name,
+                site.name
+            );
+            assert!(
+                site.bel.starts_with("SLICED."),
+                "depth {depth}: `{}` at {} — only slice D is left of a tile with a RAM in it",
+                instance.name,
+                site.name
+            );
+        }
+        // Said the other way round, which is the assertion that would catch
+        // a legaliser that simply never looked: every one of the six bels a
+        // RAM consumes is empty in every tile that holds one.
+        for (index, site) in routed.graph.sites.iter().enumerate() {
+            if !ram_tiles.contains(&site.tile)
+                || !trellis::DPRAM_BLOCKS.contains(&site.bel.as_str())
+            {
+                continue;
+            }
+            assert!(
+                routed.placement.instance_at(index).is_none(),
+                "depth {depth}: {} holds `{}` and its tile holds a distributed RAM",
+                site.name,
+                routed.netlist.instances[routed.placement.instance_at(index).unwrap()].name
+            );
+        }
+
+        // ---- it routed, and the clock went where a clock goes ----
+        let io = routed
+            .netlist
+            .instances
+            .iter()
+            .filter(|i| i.kind == "io")
+            .count();
+        assert_eq!(pads, io, "depth {depth}: every pad configured");
+        assert!(
+            routed.clocks.off_network.is_empty(),
+            "depth {depth}: {:?}",
+            routed.clocks.off_network
+        );
+        assert!(
+            routed.dropped.is_empty(),
+            "depth {depth}: {:?}",
+            routed.dropped
+        );
+        assert_eq!(routing.signals, routed.netlist.routable().len());
+
+        // ---- what the RAMs cost, to the bit ----
+        assert_eq!(
+            routed.ram_only.ones(),
+            97 * rams,
+            "depth {depth}: 97 bit(s) per distributed RAM — one MODE bit, four zeroed content \
+             words and the RAMW slice's two"
+        );
+        assert!(
+            bits.ones() > routed.ram_only.ones(),
+            "depth {depth}: and they are a part of the design's image, not all of it"
+        );
+
+        // ---- every bit decodes, and nothing is unexplained ----
+        let decoded = db.decode(&stream.cram);
+        assert_eq!(
+            decoded.bits,
+            stream.cram.count_ones(),
+            "depth {depth}: the decoder and the writer disagree about how many bits are set"
+        );
+        assert_eq!(
+            decoded.unexplained,
+            0,
+            "depth {depth}: {} of {} bit(s) belong to no feature the database names:\n{}",
+            decoded.unexplained,
+            decoded.bits,
+            decoded.to_text()
+        );
+        let (selected, unresolved) = db.resolved_arcs(&decoded);
+        assert!(unresolved.is_empty(), "depth {depth}: {unresolved:?}");
+        assert_eq!(
+            selected,
+            fabric.routed_arcs(&routed.graph, &routed.routing),
+            "depth {depth}: the bits select connections the router did not choose, or miss ones \
+             it did"
+        );
+        // And the decoding names the RAM itself: three `MODE` fields per
+        // tile that holds one, which the database reports as the one bit
+        // they share.
+        let modes = decoded
+            .enums
+            .iter()
+            .filter(|(at, field, value)| {
+                ram_tiles.contains(at) && field.ends_with(".MODE") && value != "LOGIC"
+            })
+            .count();
+        assert_eq!(
+            modes,
+            3 * rams,
+            "depth {depth}: SLICEA.MODE, SLICEB.MODE and SLICEC.MODE in each RAM's tile"
+        );
+    }
+}
 
 /// What the database describes, measured rather than believed. These are
 /// the numbers `docs/fpga-trellis.md` quotes.
@@ -508,7 +990,11 @@ fn the_database_describes_one_part_of_the_ecp5_family() {
             ("ff".to_owned(), 24_288),
             ("gb".to_owned(), 56),
             ("io".to_owned(), 120),
-            ("lut".to_owned(), 24_288)
+            ("lut".to_owned(), 24_288),
+            // One distributed RAM per logic tile, and 24288 / 8 is 3036 of
+            // them: a `TRELLIS_DPR16X4` is three slices of one tile, so a
+            // tile can hold exactly one. See `trellis::DPRAM_PINS`.
+            ("lutram".to_owned(), 3036)
         ]
     );
     // A ratio between two sizes in one process, not a wall clock: the

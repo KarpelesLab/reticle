@@ -307,26 +307,29 @@ impl Routing {
                 let Some(site) = placement.site_of(pin.instance) else {
                     continue;
                 };
-                let Some(mut node) = graph.sites[site].pin(&pin.role) else {
-                    continue;
-                };
-                let mut steps = 0usize;
-                while node != route.source {
-                    let Some((_, from)) = driven.iter().find(|(to, _)| *to == node) else {
-                        problems.push(format!(
-                            "`{name}` does not reach {}.{}[{}]: {} is driven by nothing",
-                            netlist.instances[pin.instance].name,
-                            pin.port,
-                            pin.bit,
-                            graph.wire(node).full_name()
-                        ));
-                        break;
-                    };
-                    node = *from;
-                    steps += 1;
-                    if steps > route.pips.len() {
-                        problems.push(format!("`{name}` has a loop in its route"));
-                        break;
+                // A sink role may name several wires — a distributed RAM's
+                // read address is one address read by four lookup tables —
+                // and every one of them has to be reached.
+                let wires: Vec<NodeId> = graph.sites[site].pin_nodes(&pin.role).collect();
+                for mut node in wires {
+                    let mut steps = 0usize;
+                    while node != route.source {
+                        let Some((_, from)) = driven.iter().find(|(to, _)| *to == node) else {
+                            problems.push(format!(
+                                "`{name}` does not reach {}.{}[{}]: {} is driven by nothing",
+                                netlist.instances[pin.instance].name,
+                                pin.port,
+                                pin.bit,
+                                graph.wire(node).full_name()
+                            ));
+                            break;
+                        };
+                        node = *from;
+                        steps += 1;
+                        if steps > route.pips.len() {
+                            problems.push(format!("`{name}` has a loop in its route"));
+                            break;
+                        }
                     }
                 }
             }
@@ -476,14 +479,21 @@ pub fn route(
         let source = node_of(netlist, graph, placement, driver)?;
         let mut sinks = Vec::new();
         for pin in &s.sinks {
-            let node = node_of(netlist, graph, placement, *pin)?;
+            // One pin, and possibly several wires: see
+            // [`ArchSite::pin_nodes`](super::arch::ArchSite::pin_nodes).
+            // They are sinks of the same net, which is what the fabric
+            // says they are, so the router sees them as it sees any other
+            // fan-out.
+            let nodes = nodes_of(netlist, graph, placement, *pin)?;
             let pin = &netlist.pins[*pin];
             let name = format!(
                 "{}.{}[{}]",
                 netlist.instances[pin.instance].name, pin.port, pin.bit
             );
-            if node != source && !sinks.iter().any(|(n, _)| *n == node) {
-                sinks.push((node, name));
+            for node in nodes {
+                if node != source && !sinks.iter().any(|(n, _)| *n == node) {
+                    sinks.push((node, name.clone()));
+                }
             }
         }
         terminals.push(Terminals {
@@ -561,6 +571,10 @@ pub fn route(
 }
 
 /// The graph node one pin reaches, given where its instance was placed.
+///
+/// A role naming several wires gives the first of them, which is what a
+/// *driver* is: a cell output drives one wire, and a bel that offered two
+/// would be two nets. Sinks go through [`nodes_of`].
 fn node_of(
     netlist: &Netlist,
     graph: &RoutingGraph,
@@ -578,6 +592,30 @@ fn node_of(
         instance: instance.name.clone(),
         role: pin.role.clone(),
     })
+}
+
+/// Every graph node one pin reaches, given where its instance was placed.
+fn nodes_of(
+    netlist: &Netlist,
+    graph: &RoutingGraph,
+    placement: &Placement,
+    pin: usize,
+) -> Result<Vec<NodeId>, RouteError> {
+    let pin = &netlist.pins[pin];
+    let instance = &netlist.instances[pin.instance];
+    let Some(site) = placement.site_of(pin.instance) else {
+        return Err(RouteError::Unplaced {
+            instance: instance.name.clone(),
+        });
+    };
+    let nodes: Vec<NodeId> = graph.sites[site].pin_nodes(&pin.role).collect();
+    if nodes.is_empty() {
+        return Err(RouteError::NoNode {
+            instance: instance.name.clone(),
+            role: pin.role.clone(),
+        });
+    }
+    Ok(nodes)
 }
 
 /// Takes a signal's route out of the occupancy counts.

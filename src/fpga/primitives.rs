@@ -268,7 +268,9 @@ pub struct IoMapping {
 pub struct ClockMapping {
     /// The net carrying the clock.
     pub net: String,
-    /// How many flip-flop clock pins it drives.
+    /// How many clock pins it drives. A flip-flop counts once per bit it
+    /// will become; a clocked memory port and a distributed RAM's write
+    /// clock count once each.
     pub fanout: usize,
     /// The buffer inserted, or `None` when the net stayed on local
     /// routing.
@@ -505,21 +507,21 @@ impl MapReport {
                     (Some(primitive), _) => {
                         let _ = writeln!(
                             out,
-                            "  {} ({} flip-flops) -> {}",
+                            "  {} ({} clock pins) -> {}",
                             item.net, item.fanout, primitive
                         );
                     }
                     (None, Some(reason)) => {
                         let _ = writeln!(
                             out,
-                            "  {} ({} flip-flops) -> local routing ({reason})",
+                            "  {} ({} clock pins) -> local routing ({reason})",
                             item.net, item.fanout
                         );
                     }
                     (None, None) => {
                         let _ = writeln!(
                             out,
-                            "  {} ({} flip-flops) -> local routing",
+                            "  {} ({} clock pins) -> local routing",
                             item.net, item.fanout
                         );
                     }
@@ -3635,45 +3637,79 @@ impl Mapper<'_> {
             ));
             return;
         }
+        // A distributed RAM is clocked, and by this point in the flow it is
+        // no longer a `MemWrPort`: `block_rams` runs first and has already
+        // turned it into the family's own primitive. So its write clock has
+        // to be recognised by primitive name and rewired on its own port —
+        // which is what was missing, and the symptom was a write clock that
+        // reached its slice through **data wires** while every flip-flop of
+        // the same design was on a global network. That is skew nobody has a
+        // model for, and Lattice's own packer puts a write clock on the
+        // network in all 111 distributed RAMs of this board's reference
+        // bitstreams; see `docs/fpga-trellis.md`.
+        let lutram_clock: Option<(String, String)> = self
+            .device
+            .bel(BelRole::LutRam)
+            .and_then(|ram| ram.port("wclk").map(|p| (ram.name.clone(), p.to_owned())));
         // Which net each clock pin reads, how many pins that is, and which
-        // cells would move onto the buffer. A flip-flop cell is as many
+        // cell port would move onto the buffer. A flip-flop cell is as many
         // clock pins as it is bits wide, since that is what it becomes
         // once it is mapped; a memory port is one.
-        let mut fanout: BTreeMap<String, (NetId, Vec<CellId>, usize)> = BTreeMap::new();
+        let mut fanout: BTreeMap<String, ClockFanout> = BTreeMap::new();
         for (id, cell) in module.cells.iter() {
-            let pins = match &cell.kind {
-                CellKind::Dff { .. } => cell.output("q").map_or(1, |q| {
-                    usize::try_from(net_width(module, q)).unwrap_or(1).max(1)
-                }),
+            let (pins, port) = match &cell.kind {
+                CellKind::Dff { .. } => (
+                    cell.output("q").map_or(1, |q| {
+                        usize::try_from(net_width(module, q)).unwrap_or(1).max(1)
+                    }),
+                    "clk".to_owned(),
+                ),
                 CellKind::MemRdPort { clocked, .. } | CellKind::MemWrPort { clocked, .. }
                     if *clocked =>
                 {
-                    1
+                    (1, "clk".to_owned())
+                }
+                CellKind::Blackbox(primitive)
+                    if lutram_clock
+                        .as_ref()
+                        .is_some_and(|(name, _)| name == primitive.as_str()) =>
+                {
+                    let (_, port) = lutram_clock.as_ref().expect("matched above");
+                    (1, port.clone())
                 }
                 _ => continue,
             };
-            let Some(clk) = cell.input("clk") else {
+            let Some(clk) = cell.input(&port) else {
                 continue;
             };
             let Some(net) = module.exprs.get(clk).and_then(Expr::as_net) else {
                 continue;
             };
             let name = module.nets[net].name.as_str().to_owned();
-            let entry = fanout.entry(name).or_insert((net, Vec::new(), 0));
-            entry.1.push(id);
-            entry.2 += pins;
+            let entry = fanout.entry(name).or_insert_with(|| ClockFanout {
+                net,
+                sinks: Vec::new(),
+                pins: 0,
+            });
+            entry.sinks.push((id, port));
+            entry.pins += pins;
         }
         // Highest fanout first, ties broken by name so the choice is
         // reproducible.
-        let mut candidates: Vec<(String, NetId, Vec<CellId>, usize)> = fanout
-            .into_iter()
-            .map(|(name, (net, cells, pins))| (name, net, cells, pins))
-            .collect();
-        candidates.sort_by(|a, b| b.3.cmp(&a.3).then_with(|| a.0.cmp(&b.0)));
+        let mut candidates: Vec<(String, ClockFanout)> = fanout.into_iter().collect();
+        candidates.sort_by(|a, b| b.1.pins.cmp(&a.1.pins).then_with(|| a.0.cmp(&b.0)));
 
         let available = self.device.clock_resources.global_buffers;
         let mut used = 0u32;
-        for (name, net, cells, count) in candidates {
+        for (
+            name,
+            ClockFanout {
+                net,
+                sinks: cells,
+                pins: count,
+            },
+        ) in candidates
+        {
             if count < self.options.global_buffer_threshold {
                 self.report.clocks.push(ClockMapping {
                     net: name,
@@ -3730,11 +3766,11 @@ impl Mapper<'_> {
                 span,
             );
             let replacement = net_expr(module, buffered, span);
-            for id in cells {
+            for (id, port) in cells {
                 if let Some(slot) = module.cells[id]
                     .inputs
                     .iter_mut()
-                    .find(|(port, _)| port.as_str() == "clk")
+                    .find(|(name, _)| name.as_str() == port)
                 {
                     slot.1 = replacement;
                 }
@@ -3747,6 +3783,23 @@ impl Mapper<'_> {
             });
         }
     }
+}
+
+/// What one clock net would put on a global buffer.
+///
+/// A sink is a `(cell, port)` pair rather than a cell, because the port a
+/// clock arrives on is not always called `clk`: a distributed RAM is already
+/// the family's own primitive by the time
+/// [`Mapper::clock_buffers`] runs, and its clock is `WCK` or whatever the
+/// device file calls the `wclk` role.
+struct ClockFanout {
+    /// The net every sink reads.
+    net: NetId,
+    /// The `(cell, port)` pairs that move onto the buffer's output.
+    sinks: Vec<(CellId, String)>,
+    /// How many clock *pins* that is once the cells are mapped, which is
+    /// what the threshold is measured against.
+    pins: usize,
 }
 
 /// Where one read port's muxing output goes, and what to call the cells
@@ -5701,7 +5754,7 @@ mod tests {
                 assert_eq!(module.exprs[clk].as_net(), Some(buffered));
             }
         }
-        assert!(report.to_text().contains("clk (6 flip-flops) -> SB_GB"));
+        assert!(report.to_text().contains("clk (6 clock pins) -> SB_GB"));
 
         // Below the threshold the clock stays put.
         let (mut design, top, _map) = flops(2);

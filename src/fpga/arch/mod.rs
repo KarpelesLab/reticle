@@ -279,7 +279,33 @@ pub struct BelDecl {
     /// device database's [`BelRole`](super::BelRole).
     pub kind: String,
     /// Pin role to the wire it reaches, in declaration order.
+    ///
+    /// A role may appear **more than once**, and then the pin is one
+    /// logical connection delivered to several wires. That is not a
+    /// convenience: an ECP5's distributed RAM is four lookup tables
+    /// reading one address, so its `raddr0` is the `D` input of all four
+    /// of them, four separate pieces of metal the router has to reach.
+    /// A driver role must name one wire — two wires driven by one cell
+    /// output would be two nets — and the router treats every wire of a
+    /// sink role as a sink of the same net; see
+    /// [`ArchSite::pin_nodes`].
     pub pins: Vec<(String, WireRef)>,
+    /// The bels of the **same tile** a cell here makes unusable, by name.
+    ///
+    /// A fabric does not always give a bel its own silicon. An ECP5 slice
+    /// in `DPRAM` mode *is* its two lookup tables, and the slice beside it
+    /// in `RAMW` mode has given up both of its own, so a distributed RAM
+    /// occupies six of a logic tile's eight lookup tables and leaves the
+    /// fourth slice free. `MODE = DPRAM`, `MODE = DPRAM` and `MODE = RAMW`
+    /// on the three slices are **one bit** of the tile in Project
+    /// Trellis' own database, so this is not a preference: a placer that
+    /// put a lookup table on one of those six would write its truth table
+    /// into the RAM's contents and the design would compute nothing.
+    ///
+    /// Exclusion is symmetric whichever way it is declared, and
+    /// [`super::place`] enforces it in legalisation and in every annealing
+    /// move.
+    pub blocks: Vec<String>,
     /// How a cell on this bel is configured, in declaration order.
     pub config: Vec<ConfigEntry>,
 }
@@ -291,11 +317,13 @@ impl BelDecl {
             name: name.into(),
             kind: kind.into(),
             pins: Vec::new(),
+            blocks: Vec::new(),
             config: Vec::new(),
         }
     }
 
-    /// The wire the pin playing `role` reaches.
+    /// The wire the pin playing `role` reaches, or the first of them when
+    /// the role names several.
     pub fn pin(&self, role: &str) -> Option<&WireRef> {
         self.pins.iter().find(|(r, _)| r == role).map(|(_, w)| w)
     }
@@ -567,14 +595,32 @@ pub struct ArchSite {
     /// The bel's name inside that tile type.
     pub bel: String,
     /// Pin role to the node it reaches, in declaration order. A pin whose
-    /// wire could not be resolved is absent.
+    /// wire could not be resolved is absent, and a role that names
+    /// several wires appears once per wire; see [`BelDecl::pins`].
     pub pins: Vec<(String, NodeId)>,
+    /// The sites of this tile a cell here makes unusable, as indices into
+    /// [`RoutingGraph::sites`]; see [`BelDecl::blocks`].
+    pub blocks: Vec<usize>,
 }
 
 impl ArchSite {
-    /// The node the pin playing `role` reaches.
+    /// The node the pin playing `role` reaches, or the first of them when
+    /// the role names several.
     pub fn pin(&self, role: &str) -> Option<NodeId> {
         self.pins.iter().find(|(r, _)| r == role).map(|(_, n)| *n)
+    }
+
+    /// Every node the pin playing `role` reaches, in declaration order.
+    ///
+    /// One for almost every pin of almost every family; four for the read
+    /// address of an ECP5's distributed RAM, which is one address read by
+    /// four lookup tables.
+    pub fn pin_nodes(&self, role: &str) -> impl Iterator<Item = NodeId> + '_ {
+        let role = role.to_owned();
+        self.pins
+            .iter()
+            .filter(move |(r, _)| *r == role)
+            .map(|(_, n)| *n)
     }
 }
 
@@ -704,6 +750,10 @@ impl RoutingGraph {
                     continue;
                 };
                 let tile = &arch.tile_types[ti];
+                // Every bel of one tile is one contiguous run of sites, so
+                // a `blocks` name resolves to `base` plus the bel's own
+                // position in the type's declaration order.
+                let base = sites.len();
                 for bel in &tile.bels {
                     let mut pins = Vec::new();
                     for (role, wref) in &bel.pins {
@@ -712,6 +762,16 @@ impl RoutingGraph {
                             None => dangling += 1,
                         }
                     }
+                    let blocks = bel
+                        .blocks
+                        .iter()
+                        .filter_map(|name| {
+                            tile.bels
+                                .iter()
+                                .position(|other| other.name == *name)
+                                .map(|z| base + z)
+                        })
+                        .collect();
                     sites.push(ArchSite {
                         name: format!("X{x}Y{y}/{}", bel.name),
                         kind: bel.kind.clone(),
@@ -719,6 +779,7 @@ impl RoutingGraph {
                         tile_type: ti,
                         bel: bel.name.clone(),
                         pins,
+                        blocks,
                     });
                 }
                 for pip in &tile.pips {

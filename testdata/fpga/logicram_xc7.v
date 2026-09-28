@@ -51,6 +51,8 @@ module ram16 (.clk(clk$pad), .we(we$pad), .waddr(waddr$pad), .raddr(raddr$pad), 
   wire rdata$pin5;
   wire rdata$pin6;
   wire rdata$pin7;
+  wire clk$gb;
+  wire const0;
   assign clk = clk$in0;
   assign we = we$in0;
   assign waddr = {waddr$in3, waddr$in2, waddr$in1, waddr$in0};
@@ -60,153 +62,153 @@ module ram16 (.clk(clk$pad), .we(we$pad), .waddr(waddr$pad), .raddr(raddr$pad), 
   assign rdata$pad = {rdata$pin7, rdata$pin6, rdata$pin5, rdata$pin4, rdata$pin3, rdata$pin2, rdata$pin1, rdata$pin0};
   (* memory = "mem" *)
   RAM64X1D mem$dpr0_0_0 (
-    .WCLK(clk),
+    .WCLK(clk$gb),
     .WE(we),
     .A0(waddr[0]),
     .A1(waddr[1]),
     .A2(waddr[2]),
     .A3(waddr[3]),
-    .A4(1'b0),
-    .A5(1'b0),
+    .A4(const0),
+    .A5(const0),
     .DPRA0(raddr[0]),
     .DPRA1(raddr[1]),
     .DPRA2(raddr[2]),
     .DPRA3(raddr[3]),
-    .DPRA4(1'b0),
-    .DPRA5(1'b0),
+    .DPRA4(const0),
+    .DPRA5(const0),
     .D(wdata[0]),
     .DPO(mem$rd0_r0_b0_0)
   );
   (* memory = "mem" *)
   RAM64X1D mem$dpr0_0_1 (
-    .WCLK(clk),
+    .WCLK(clk$gb),
     .WE(we),
     .A0(waddr[0]),
     .A1(waddr[1]),
     .A2(waddr[2]),
     .A3(waddr[3]),
-    .A4(1'b0),
-    .A5(1'b0),
+    .A4(const0),
+    .A5(const0),
     .DPRA0(raddr[0]),
     .DPRA1(raddr[1]),
     .DPRA2(raddr[2]),
     .DPRA3(raddr[3]),
-    .DPRA4(1'b0),
-    .DPRA5(1'b0),
+    .DPRA4(const0),
+    .DPRA5(const0),
     .D(wdata[1]),
     .DPO(mem$rd0_r0_b1_0)
   );
   (* memory = "mem" *)
   RAM64X1D mem$dpr0_0_2 (
-    .WCLK(clk),
+    .WCLK(clk$gb),
     .WE(we),
     .A0(waddr[0]),
     .A1(waddr[1]),
     .A2(waddr[2]),
     .A3(waddr[3]),
-    .A4(1'b0),
-    .A5(1'b0),
+    .A4(const0),
+    .A5(const0),
     .DPRA0(raddr[0]),
     .DPRA1(raddr[1]),
     .DPRA2(raddr[2]),
     .DPRA3(raddr[3]),
-    .DPRA4(1'b0),
-    .DPRA5(1'b0),
+    .DPRA4(const0),
+    .DPRA5(const0),
     .D(wdata[2]),
     .DPO(mem$rd0_r0_b2_0)
   );
   (* memory = "mem" *)
   RAM64X1D mem$dpr0_0_3 (
-    .WCLK(clk),
+    .WCLK(clk$gb),
     .WE(we),
     .A0(waddr[0]),
     .A1(waddr[1]),
     .A2(waddr[2]),
     .A3(waddr[3]),
-    .A4(1'b0),
-    .A5(1'b0),
+    .A4(const0),
+    .A5(const0),
     .DPRA0(raddr[0]),
     .DPRA1(raddr[1]),
     .DPRA2(raddr[2]),
     .DPRA3(raddr[3]),
-    .DPRA4(1'b0),
-    .DPRA5(1'b0),
+    .DPRA4(const0),
+    .DPRA5(const0),
     .D(wdata[3]),
     .DPO(mem$rd0_r0_b3_0)
   );
   (* memory = "mem" *)
   RAM64X1D mem$dpr0_0_4 (
-    .WCLK(clk),
+    .WCLK(clk$gb),
     .WE(we),
     .A0(waddr[0]),
     .A1(waddr[1]),
     .A2(waddr[2]),
     .A3(waddr[3]),
-    .A4(1'b0),
-    .A5(1'b0),
+    .A4(const0),
+    .A5(const0),
     .DPRA0(raddr[0]),
     .DPRA1(raddr[1]),
     .DPRA2(raddr[2]),
     .DPRA3(raddr[3]),
-    .DPRA4(1'b0),
-    .DPRA5(1'b0),
+    .DPRA4(const0),
+    .DPRA5(const0),
     .D(wdata[4]),
     .DPO(mem$rd0_r0_b4_0)
   );
   (* memory = "mem" *)
   RAM64X1D mem$dpr0_0_5 (
-    .WCLK(clk),
+    .WCLK(clk$gb),
     .WE(we),
     .A0(waddr[0]),
     .A1(waddr[1]),
     .A2(waddr[2]),
     .A3(waddr[3]),
-    .A4(1'b0),
-    .A5(1'b0),
+    .A4(const0),
+    .A5(const0),
     .DPRA0(raddr[0]),
     .DPRA1(raddr[1]),
     .DPRA2(raddr[2]),
     .DPRA3(raddr[3]),
-    .DPRA4(1'b0),
-    .DPRA5(1'b0),
+    .DPRA4(const0),
+    .DPRA5(const0),
     .D(wdata[5]),
     .DPO(mem$rd0_r0_b5_0)
   );
   (* memory = "mem" *)
   RAM64X1D mem$dpr0_0_6 (
-    .WCLK(clk),
+    .WCLK(clk$gb),
     .WE(we),
     .A0(waddr[0]),
     .A1(waddr[1]),
     .A2(waddr[2]),
     .A3(waddr[3]),
-    .A4(1'b0),
-    .A5(1'b0),
+    .A4(const0),
+    .A5(const0),
     .DPRA0(raddr[0]),
     .DPRA1(raddr[1]),
     .DPRA2(raddr[2]),
     .DPRA3(raddr[3]),
-    .DPRA4(1'b0),
-    .DPRA5(1'b0),
+    .DPRA4(const0),
+    .DPRA5(const0),
     .D(wdata[6]),
     .DPO(mem$rd0_r0_b6_0)
   );
   (* memory = "mem" *)
   RAM64X1D mem$dpr0_0_7 (
-    .WCLK(clk),
+    .WCLK(clk$gb),
     .WE(we),
     .A0(waddr[0]),
     .A1(waddr[1]),
     .A2(waddr[2]),
     .A3(waddr[3]),
-    .A4(1'b0),
-    .A5(1'b0),
+    .A4(const0),
+    .A5(const0),
     .DPRA0(raddr[0]),
     .DPRA1(raddr[1]),
     .DPRA2(raddr[2]),
     .DPRA3(raddr[3]),
-    .DPRA4(1'b0),
-    .DPRA5(1'b0),
+    .DPRA4(const0),
+    .DPRA5(const0),
     .D(wdata[7]),
     .DPO(mem$rd0_r0_b7_0)
   );
@@ -339,5 +341,18 @@ module ram16 (.clk(clk$pad), .we(we$pad), .waddr(waddr$pad), .raddr(raddr$pad), 
   OBUF rdata$io7 (
     .I(rdata[7]),
     .O(rdata$pin7)
+  );
+  BUFG clk$gbuf (
+    .I(clk),
+    .O(clk$gb)
+  );
+  LUT6 #(.INIT(64'h0000000000000000)) const0$lut (
+    .I0(1'b0),
+    .I1(1'b0),
+    .I2(1'b0),
+    .I3(1'b0),
+    .I4(1'b0),
+    .I5(1'b0),
+    .O(const0)
   );
 endmodule

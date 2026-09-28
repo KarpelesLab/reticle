@@ -2312,6 +2312,12 @@ fn write_ecp5_bitstream(
             design, top, &netlist, &placement, &graph, &routing, &mut tiles,
         )
         .map_err(|e| e.to_string())?;
+    // A distributed RAM is three slices of one logic tile, and its mode and
+    // its contents are the same `INIT` words a lookup table would use; see
+    // `TrellisFabric::configure_lutram`.
+    let rams = fabric
+        .configure_lutram(design, top, &netlist, &placement, &graph, &mut tiles)
+        .map_err(|e| e.to_string())?;
     // A clock that came through general routing routes, verifies and
     // configures, and its skew is nobody's model. Refusing is the only
     // thing that makes `clock_node_costs`' preference a guarantee.
@@ -2442,7 +2448,8 @@ fn write_ecp5_bitstream(
     };
     Ok(format!(
         "note: wrote {path}, {} byte(s) compressed, {} configuration bit(s) set, {pads} pad(s), \
-         {luts} lookup table(s) and {ffs} flip-flop(s) configured, {placed}\n\
+         {luts} lookup table(s), {ffs} flip-flop(s) and {rams} distributed RAM(s) configured, \
+         {placed}\n\
          note: routed {} of {} signal(s) with {} pip(s) over {} wire(s), and every sink was \
          walked back to its driver\n\
          {clocked}\

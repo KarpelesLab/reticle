@@ -840,6 +840,75 @@ impl TrellisDatabase {
             }
         }
 
+        // ---- the distributed RAM ----
+        //
+        // A `TRELLIS_DPR16X4` is not a bel of the silicon: it is three
+        // slices of one logic tile used together, and one bit of the tile
+        // says so for all three. `DPRAM_PINS` has the wiring and its
+        // provenance; what is decided here is only whether this tile type
+        // can hold one, and the answer is no unless it owns every one of
+        // those thirty-two wires, the three `MODE` settings exist, and all
+        // six lookup tables the RAM consumes were declared above — a RAM
+        // whose contents this flow could not write would place, route and
+        // read nothing back.
+        let mut dprams: BTreeMap<usize, DpRamBits> = BTreeMap::new();
+        for (name, index) in &type_of {
+            let Some(offset) = layout
+                .get(name)
+                .and_then(|w| w.iter().find(|(ty, _)| ty == LOGIC_TILE))
+                .map(|(_, offset)| *offset)
+            else {
+                continue;
+            };
+            let Some(db) = self.types.get(LOGIC_TILE) else {
+                continue;
+            };
+            if DPRAM_PINS
+                .iter()
+                .any(|(_, wire)| !arch.tile_types[*index].has_wire(wire))
+            {
+                continue;
+            }
+            if DPRAM_DATA_LUTS
+                .iter()
+                .chain(DPRAM_RAMW_LUTS.iter())
+                .any(|bel| !luts.contains_key(&(*index, (*bel).to_owned())))
+            {
+                continue;
+            }
+            let mut mode: Vec<ConfigBit> = Vec::new();
+            let mut complete = true;
+            for (field, value) in DPRAM_MODES {
+                match db.enum_bits(field, value) {
+                    Some(bits) => {
+                        for bit in bits.iter().filter(|bit| !bit.inverted) {
+                            let at = ConfigBit::new(offset + bit.frame, bit.bit);
+                            if !mode.contains(&at) {
+                                mode.push(at);
+                            }
+                        }
+                    }
+                    None => complete = false,
+                }
+            }
+            if !complete || mode.is_empty() {
+                continue;
+            }
+            let mut decl = BelDecl::new(DPRAM_BEL, "lutram");
+            decl.pins = DPRAM_PINS
+                .iter()
+                .map(|(role, wire)| {
+                    (
+                        (*role).to_owned(),
+                        super::arch::WireRef::local((*wire).to_owned()),
+                    )
+                })
+                .collect();
+            decl.blocks = DPRAM_BLOCKS.iter().map(|b| (*b).to_owned()).collect();
+            arch.tile_types[*index].bels.push(decl);
+            dprams.insert(*index, DpRamBits { mode });
+        }
+
         // ---- the pads ----
         let Some(pinout) = self.pinouts.iter().find(|p| p.package == options.package) else {
             return Err(TrellisError::NoSuchPackage {
@@ -1009,6 +1078,7 @@ impl TrellisDatabase {
             clear_collisions,
             luts: luts.len(),
             ffs: ffs.len(),
+            dprams: dprams.len(),
             clock_networks: clocks.indices.len(),
             references_off_the_grid: off_grid,
         };
@@ -1023,6 +1093,7 @@ impl TrellisDatabase {
             io,
             luts,
             ffs,
+            dprams,
             clocks,
             clears,
             bank_bits,
@@ -1313,6 +1384,10 @@ pub struct TrellisStats {
     pub luts: usize,
     /// Flip-flops that became a bel.
     pub ffs: usize,
+    /// Tile *types* that can hold a distributed RAM, which on this family
+    /// is every composition that contains a `PLC2`. One `lutram` bel each,
+    /// and so one site per logic tile of the die.
+    pub dprams: usize,
     /// Global clock networks the die has.
     pub clock_networks: usize,
     /// Wire references that point off the grid, which is what happens at
@@ -1354,6 +1429,7 @@ impl TrellisStats {
         line("of those, ambiguous", self.clear_collisions as u64);
         line("lookup tables", self.luts as u64);
         line("flip-flops", self.ffs as u64);
+        line("distributed RAM tile types", self.dprams as u64);
         line(
             "references off the grid",
             self.references_off_the_grid as u64,
@@ -1921,6 +1997,165 @@ pub struct FfBits {
     pub lsrmux_inv: [Vec<ConfigBit>; 2],
     /// `LSR<c>.SRMODE = ASYNC`, for `c` 0 and 1.
     pub srmode_async: [Vec<ConfigBit>; 2],
+}
+
+/// The bel name a logic tile's distributed RAM is placed on.
+///
+/// One per `PLC2`, and it is not a slice: it is three of them. See
+/// [`DPRAM_PINS`] for why, and [`DPRAM_BLOCKS`] for what it costs.
+pub const DPRAM_BEL: &str = "DPR16X4";
+
+/// The four lookup tables whose `INIT` words **are** a distributed RAM's
+/// contents, one per bit of the four-bit word, in bit order.
+///
+/// `WD0A_SLICE` takes `WD0` and `WD0B_SLICE` takes `WD2`, so slice A holds
+/// bits 0 and 1 and slice B holds bits 2 and 3. That is a `.fixed_conn` of
+/// `PLC2`'s own `bits.db` and not a guess.
+pub const DPRAM_DATA_LUTS: [&str; 4] = ["SLICEA.K0", "SLICEA.K1", "SLICEB.K0", "SLICEB.K1"];
+
+/// The two lookup tables the `RAMW` slice gives up, whose `INIT` words
+/// Lattice's own packer writes as sixteen zeros each.
+///
+/// nextpnr calls the cells that hold these down `RAMW_BLOCK` and writes
+/// nothing for them; `ecp5/bitstream.cc` writes the two words when it
+/// writes the `TRELLIS_RAMW` cell itself.
+pub const DPRAM_RAMW_LUTS: [&str; 2] = ["SLICEC.K0", "SLICEC.K1"];
+
+/// The lookup-table bels a distributed RAM makes unusable: six of the
+/// eight a logic tile has.
+///
+/// Slices A and B *are* the RAM and slice C *is* its write-port register,
+/// which is one bit of the tile for all three ([`DpRamBits::mode`]).
+/// Slice D is untouched and still holds two lookup tables and two
+/// flip-flops, which is what nextpnr's `pack_dram` leaves free too.
+pub const DPRAM_BLOCKS: [&str; 6] = [
+    "SLICEA.K0",
+    "SLICEA.K1",
+    "SLICEB.K0",
+    "SLICEB.K1",
+    "SLICEC.K0",
+    "SLICEC.K1",
+];
+
+/// The `(pin role, wire)` table of a `TRELLIS_DPR16X4`, in the tile's own
+/// spelling, with a role repeated once per wire it reaches.
+///
+/// Every line of this is nextpnr's `ecp5/cells.cc` — `dram_to_comb` and
+/// `dram_to_ramw_split` — cross-checked against the `.fixed_conn` records
+/// of `PLC2`'s `bits.db`, which is the only place the intra-tile joins
+/// exist at all. The two halves:
+///
+/// - **the read port** is four lookup tables reading one address, so each
+///   of `raddr0`..`raddr3` names **four** wires. The order is the
+///   scrambled one the silicon has: `RAD[0]` is the `D` input, `RAD[1]`
+///   the `B`, `RAD[2]` the `C` and `RAD[3]` the `A`. Getting that wrong
+///   costs nothing a structural check would notice and every word would
+///   be read from the wrong address; [`dpram_init_word`] is the same
+///   permutation applied to the contents.
+/// - **the write port** is the `RAMW` slice's two lookup tables used as
+///   registers: `WAD[0..3]` are its first table's `D`, `B`, `C`, `A`
+///   inputs and `DI[0..3]` its second table's `C`, `A`, `D`, `B`. Its
+///   outputs are not pins — `WADO<n>C_SLICE` and `WDO<n>C_SLICE` reach
+///   slices A and B over `.fixed_conn`s inside the tile, which is why a
+///   distributed RAM has no routable wire between its halves.
+///
+/// `wclk` and `we` are two wires each because slices A and B have one
+/// apiece, and both are fixed to the tile's `CLK1` and `LSR1` nets. That
+/// is the other half of the relationship: a distributed RAM **commandeers
+/// `CLK1` and `LSR1`**, and any flip-flop of the tile that wants a
+/// different clock or reset has to take `CLK0`/`LSR0` instead.
+pub const DPRAM_PINS: [(&str, &str); 32] = [
+    // The read address, on all four of the RAM's lookup tables.
+    ("raddr0", "D0_SLICE"),
+    ("raddr0", "D1_SLICE"),
+    ("raddr0", "D2_SLICE"),
+    ("raddr0", "D3_SLICE"),
+    ("raddr1", "B0_SLICE"),
+    ("raddr1", "B1_SLICE"),
+    ("raddr1", "B2_SLICE"),
+    ("raddr1", "B3_SLICE"),
+    ("raddr2", "C0_SLICE"),
+    ("raddr2", "C1_SLICE"),
+    ("raddr2", "C2_SLICE"),
+    ("raddr2", "C3_SLICE"),
+    ("raddr3", "A0_SLICE"),
+    ("raddr3", "A1_SLICE"),
+    ("raddr3", "A2_SLICE"),
+    ("raddr3", "A3_SLICE"),
+    // The read data, one lookup table output per bit.
+    ("dout0", "F0_SLICE"),
+    ("dout1", "F1_SLICE"),
+    ("dout2", "F2_SLICE"),
+    ("dout3", "F3_SLICE"),
+    // The write address, on the `RAMW` slice's first lookup table.
+    ("waddr0", "D4_SLICE"),
+    ("waddr1", "B4_SLICE"),
+    ("waddr2", "C4_SLICE"),
+    ("waddr3", "A4_SLICE"),
+    // The write data, on its second.
+    ("din0", "C5_SLICE"),
+    ("din1", "A5_SLICE"),
+    ("din2", "D5_SLICE"),
+    ("din3", "B5_SLICE"),
+    // The write clock and the write enable, one wire per RAM slice.
+    ("wclk", "WCK0_SLICE"),
+    ("wclk", "WCK1_SLICE"),
+    ("we", "WRE0_SLICE"),
+    ("we", "WRE1_SLICE"),
+];
+
+/// How many words a `TRELLIS_DPR16X4` holds, as a number of address bits.
+pub const DPRAM_ADDR_BITS: u32 = 4;
+
+/// The cell parameter a distributed RAM's initial contents would arrive
+/// in, word 0 in the lowest four bits.
+///
+/// `src/fpga/devices/ecp5.dev` declares no such parameter and
+/// `primitives::Mapper::lower_memory` refuses a memory with initial
+/// contents, so nothing in this flow sets it; a hand-written netlist can.
+pub const DPRAM_INIT: &str = "INITVAL";
+
+/// The three `MODE` settings a distributed RAM needs, which are **one bit**
+/// of a `PLC2`.
+pub const DPRAM_MODES: [(&str, &str); 3] = [
+    ("SLICEA.MODE", "DPRAM"),
+    ("SLICEB.MODE", "DPRAM"),
+    ("SLICEC.MODE", "RAMW"),
+];
+
+/// A memory address as the lookup table holding it indexes its own truth
+/// table.
+///
+/// The read address does not arrive on the inputs in order — `RAD[0]` is
+/// the `D` input and `RAD[3]` the `A`, see [`DPRAM_PINS`] — so word
+/// `address` of the RAM is bit `dpram_init_word(address)` of the `INIT`
+/// word. This is nextpnr's `dram_to_comb` permutation written the other
+/// way round, and it is its own inverse.
+#[must_use]
+pub fn dpram_init_word(address: usize) -> usize {
+    // bit 0 of the address is `D`, which is input 3; bit 3 is `A`, which is
+    // input 0; bits 1 and 2 are `B` and `C` and stay where they are.
+    (address & 1) << 3 | (address & 2) | (address & 4) | (address & 8) >> 3
+}
+
+/// Where one logic tile's distributed RAM keeps its bits.
+///
+/// The contents and the `RAMW` slice's two zeroed words are looked up in
+/// [`TrellisFabric::luts`] by the bel names in [`DPRAM_DATA_LUTS`] and
+/// [`DPRAM_RAMW_LUTS`], because they are the very same `INIT` words a
+/// lookup table would use — that a slice in `DPRAM` mode *is* its lookup
+/// tables is the whole fact being modelled. What is left over is the mode.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct DpRamBits {
+    /// The bits that put slices A and B into `DPRAM` and slice C into
+    /// `RAMW`, de-duplicated.
+    ///
+    /// On this die it is **one bit**, `F50B11`, because Project Trellis'
+    /// `PLC2` database gives all three settings that same bit. A test
+    /// asserts that rather than assuming it, since a die whose three
+    /// settings were three bits would still be configured correctly by
+    /// setting all of them.
+    pub mode: Vec<ConfigBit>,
 }
 
 /// The letter Project Trellis names slice `index` with.
@@ -2702,6 +2937,12 @@ pub struct TrellisFabric {
     pub luts: BTreeMap<(usize, String), LutBits>,
     /// Where each flip-flop's settings are, keyed the same way.
     pub ffs: BTreeMap<(usize, String), FfBits>,
+    /// Where a distributed RAM's mode bit is, by `Arch` tile type index.
+    ///
+    /// One entry per tile type that can hold a [`DPRAM_BEL`]; its contents
+    /// live in [`TrellisFabric::luts`], because a slice in `DPRAM` mode
+    /// *is* its lookup tables.
+    pub dprams: BTreeMap<usize, DpRamBits>,
     /// The global clock network, and the joins it needed; see
     /// [`ClockNetwork`].
     pub clocks: ClockNetwork,
@@ -3094,6 +3335,118 @@ impl TrellisFabric {
         Ok(done)
     }
 
+    /// Writes every distributed RAM's mode and contents, and returns how
+    /// many were written.
+    ///
+    /// # Everything Lattice's own packer writes for a distributed RAM
+    ///
+    /// Asked in full rather than as a diff, which is how every real defect
+    /// in this backend has been found. Three sources, and they agree:
+    /// Project Trellis' `PLC2` database, nextpnr's `ecp5/` — `pack_dram`,
+    /// `dram_to_comb`, `dram_to_ramw_split`, `write_comb` and the
+    /// `TRELLIS_RAMW` arm of `write_bitstream` — and, unexpectedly, **the
+    /// vendor's own bitstreams for this board**: `analyzer.bit` holds 22
+    /// distributed RAMs and `facedancer.bit` 89.
+    /// `tests/fpga_trellis.rs`'s
+    /// `what_lattices_own_packer_writes_for_a_distributed_ram` reads all
+    /// 111 of them back at absolute frame positions, and two things in the
+    /// table below are its findings rather than nextpnr's: that the
+    /// contents are always zero on this board, and which bels a RAM does
+    /// **not** take.
+    ///
+    /// | | |
+    /// |---|---|
+    /// | `SLICEA.MODE`, `SLICEB.MODE` | `DPRAM` |
+    /// | `SLICEC.MODE` | `RAMW` — and all three are **one bit**, `F50B11` |
+    /// | `SLICEA.K0/K1.INIT`, `SLICEB.K0/K1.INIT` | the contents, one word per bit of the four-bit word |
+    /// | `SLICEC.K0.INIT`, `SLICEC.K1.INIT` | **sixteen zeros each**, which is 32 bits nothing reads |
+    /// | `SLICEA.WREMUX` | `WRE`, the default, which costs nothing |
+    /// | `CLK1.CLKMUX` | `CLK`, the default, which costs nothing |
+    /// | `SLICE<l>.CCU2.INJECT1_<n>` | nextpnr's `_NONE_`: leave the bits clear, and a bitstream assembled from zero already has |
+    /// | An unused lookup-table input | `SLICE<l>.<X><n>MUX = 1`, which cannot happen here: a `DPRAM` slice uses all four |
+    /// | Slice D | nothing. It still holds two lookup tables and two flip-flops, and the vendor uses them |
+    /// | The flip-flops of slices A, B and C | nothing. `DPRAM` mode takes a slice's lookup tables, not its registers, and the vendor puts flops in 68 of the 111 |
+    ///
+    /// So a distributed RAM with no initial contents costs **97 bits**: one
+    /// for the mode, 64 for four zeroed content words and 32 for the
+    /// `RAMW` slice's two. The `INIT` bits are `!`-marked in the database,
+    /// so a content bit of *zero* is a bit set in the bitstream and all
+    /// ones is free — which is why an empty RAM is the expensive case.
+    ///
+    /// # Errors
+    ///
+    /// [`super::bitstream::BitstreamError`] when a bit falls outside the
+    /// tile it belongs to, which would mean the grid and the database
+    /// disagree.
+    pub fn configure_lutram(
+        &self,
+        design: &crate::ir::Design,
+        module: crate::ir::ModuleId,
+        netlist: &super::place::Netlist,
+        placement: &super::place::Placement,
+        graph: &super::arch::RoutingGraph,
+        bits: &mut super::bitstream::Bitstream,
+    ) -> Result<usize, super::bitstream::BitstreamError> {
+        let Some(m) = design.modules.get(module) else {
+            return Ok(0);
+        };
+        let mut done = 0usize;
+        for (index, instance) in netlist.instances.iter().enumerate() {
+            if instance.kind != "lutram" {
+                continue;
+            }
+            let Some(site) = placement.site_of(index) else {
+                continue;
+            };
+            let site = &graph.sites[site];
+            let Some(dpram) = self.dprams.get(&site.tile_type) else {
+                continue;
+            };
+            for at in &dpram.mode {
+                bits.set(site.tile, *at)?;
+            }
+            // The write-port register's two lookup tables hold nothing and
+            // Lattice's own packer still writes both words as zeros. This
+            // flow writes what it writes.
+            for bel in DPRAM_RAMW_LUTS {
+                let Some(lut) = self.luts.get(&(site.tile_type, bel.to_owned())) else {
+                    continue;
+                };
+                for groups in &lut.init_zero {
+                    for at in groups {
+                        bits.set(site.tile, *at)?;
+                    }
+                }
+            }
+            // The contents, one `INIT` word per bit of the word, each
+            // addressed through the permutation the read-address wiring
+            // forces. `INITVAL` is the cell parameter that would carry
+            // them; nothing in this flow produces one, because
+            // `primitives::Mapper::lower_memory` refuses a memory with
+            // initial contents, so in practice every word is zero — which
+            // is also what nextpnr writes when a `TRELLIS_DPR16X4` has no
+            // `INITVAL`.
+            let params = m.cells.get(instance.cell).map(|cell| &cell.params);
+            let initval = params.and_then(|p| p.get(DPRAM_INIT));
+            for (bit, bel) in DPRAM_DATA_LUTS.iter().enumerate() {
+                let Some(lut) = self.luts.get(&(site.tile_type, (*bel).to_owned())) else {
+                    continue;
+                };
+                for address in 0..1usize << DPRAM_ADDR_BITS {
+                    let where_in_word =
+                        u32::try_from(address * DPRAM_DATA_LUTS.len() + bit).unwrap_or(u32::MAX);
+                    let value = super::bitstream::param_bit(initval, where_in_word);
+                    let groups = if value { &lut.init_one } else { &lut.init_zero };
+                    for at in groups.get(dpram_init_word(address)).into_iter().flatten() {
+                        bits.set(site.tile, *at)?;
+                    }
+                }
+            }
+            done += 1;
+        }
+        Ok(done)
+    }
+
     /// A [`super::route::RouteOptions::node_base`] vector that makes the
     /// global clock network cheap, so a clock goes on it.
     ///
@@ -3263,9 +3616,17 @@ impl TrellisFabric {
     ) -> ClockUse {
         let mut out = ClockUse::default();
         for (index, instance) in netlist.instances.iter().enumerate() {
-            if instance.kind != "ff" {
-                continue;
-            }
+            // A distributed RAM is clocked too, and its write clock is the
+            // same kind of claim: `ecppack` puts it on a global network in
+            // all 111 of the RAMs in this board's own bitstreams, so a
+            // write clock off a data wire is the same unmodelled skew a
+            // flip-flop's would be. The pin is `wclk` and the wire it
+            // reaches is `WCK<n>_SLICE`, fixed to the tile's `CLK1`.
+            let role = match instance.kind.as_str() {
+                "ff" => "clk",
+                "lutram" => "wclk",
+                _ => continue,
+            };
             let Some(site) = placement.site_of(index) else {
                 continue;
             };
@@ -3273,7 +3634,7 @@ impl TrellisFabric {
             let Some(signal) = netlist
                 .pins
                 .iter()
-                .find(|pin| pin.instance == index && pin.role == "clk")
+                .find(|pin| pin.instance == index && pin.role == role)
                 .and_then(|pin| pin.signal)
             else {
                 continue;
@@ -3285,7 +3646,7 @@ impl TrellisFabric {
             // while its neighbour's came off a data wire, and the whole
             // point of the check is to catch exactly that.
             let mut found = None;
-            if let (Some(clk), Some(route)) = (site.pin("clk"), routing.route(signal)) {
+            if let (Some(clk), Some(route)) = (site.pin(role), routing.route(signal)) {
                 let mut node = clk;
                 for _ in 0..8 {
                     let Some(pip) = route
