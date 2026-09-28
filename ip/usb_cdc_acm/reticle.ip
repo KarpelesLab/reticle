@@ -4,8 +4,9 @@
 # class requests a serial driver sends (SET_LINE_CODING, GET_LINE_CODING,
 # SET_CONTROL_LINE_STATE) on `usb_ctrl_ep`'s class hook, `usb_cdc_acm` is
 # that plus the two interfaces, four functional descriptors and three
-# endpoints CDC ACM needs, and the two `_fs` / `_ulpi` wrappers put it
-# behind each of this library's link layers.
+# endpoints CDC ACM needs — including the SERIAL_STATE notification endpoint
+# 2 sends — and the two `_fs` / `_ulpi` wrappers put it behind each of this
+# library's link layers.
 #
 # `top` names the ULPI wrapper because that is the one that has run on a
 # board; `usb_cdc_acm_fs` is the same class layer on a board whose D+ / D-
@@ -26,7 +27,7 @@
 name usb_cdc_acm
 version 1.0.0
 license MIT
-description "USB CDC ACM serial port: two interfaces with the union functional descriptor, the line-coding and control-line requests, an interrupt notification endpoint and a bulk pair, behind either of this library's USB link layers"
+description "USB CDC ACM serial port: two interfaces with the union functional descriptor, the line-coding and control-line requests, a notification endpoint that sends SERIAL_STATE and a 64-byte bulk pair, behind either of this library's USB link layers"
 
 top usb_cdc_acm_ulpi
 target ice40
