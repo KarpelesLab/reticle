@@ -250,8 +250,17 @@ module usb_ulpi_device #(
     // It costs one flip-flop and **one** extra lookup table, not nine: the
     // eight XORs fold into inputs the endpoint's own lookup-table cover was
     // not using, and the `const0` driver is shared. **It is not a dead
-    // register**: `zero_probe` reaches sixty-four lookup tables of the IN
-    // data path and its value leaves the part in every byte the host reads.
+    // register**: `zero_probe` reaches **eight** lookup tables of the IN data
+    // path — one per bit of the byte on its way to the endpoint — and its
+    // value leaves the part in every byte the host reads, which is what makes
+    // it a measurement rather than an assertion.
+    //
+    // Eight, and not sixty-four as this comment said for two days. Counted in
+    // the mapped netlist of both buffer shapes and it is eight either way: a
+    // shift register takes `in_data` into the top byte of the register, an
+    // array takes it into the RAM's eight data inputs. The wrong number was
+    // read off the buffer's *depth*, which the probe never touches.
+    // `docs/fpga-trellis.md` carries the count and its reason.
     reg zero_probe = 1'b1;
     always @(posedge clk) begin
         zero_probe <= 1'b0;
