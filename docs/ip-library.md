@@ -399,15 +399,20 @@ the same die has its carrier present and its data set ready from the moment it
 exists. `ip/usb_cdc_acm/README.md` §4 and §5 say what a host was observed to
 do with it and what is only quoted.
 
-**What the class layer cost.** On the ECP5, `usb_device_fs` is 1850 LUT4 and
-1387 flip-flops and `usb_cdc_acm_fs` is 2273 and 1639, so a serial port is
-**+423 LUT4 and +252 flip-flops** over the vendor device it is built on;
-`usb_device_ulpi` to `usb_cdc_acm_ulpi` is +397 and +252, which is nearly the
-same thing twice and is the point of sharing the core. The flip-flops are the
-line coding — `dwDTERate` alone is thirty-two — DTR and RTS, `class_active`
-and `class_out_wait` in endpoint 0, the notification endpoint's own
-sixteen-byte buffer and turnaround counter, and the SERIAL_STATE sender's
-`nidx`, `reported` and `ever`.
+**What the class layer cost.** On the ECP5, `usb_device_fs` is 853 LUT4, 355
+flip-flops and 16 `TRELLIS_DPR16X4`, and `usb_cdc_acm_fs` is 1118, 474 and 18,
+so a serial port is **+265 LUT4, +119 flip-flops and +2 distributed RAMs** over
+the vendor device it is built on; `usb_device_ulpi` to `usb_cdc_acm_ulpi` is
++265, +119 and +2, which is the same thing twice and is the point of sharing the
+core. The flip-flops are the line coding — `dwDTERate` alone is thirty-two —
+DTR and RTS, `class_active` and `class_out_wait` in endpoint 0, the
+notification endpoint's turnaround counter, and the SERIAL_STATE sender's
+`nidx`, `reported` and `ever`. The two extra RAMs are that endpoint's own
+sixteen-byte buffer, which is 16 x 8 bits and so exactly two of them.
+
+(Those figures were +423 LUT4 and +252 flip-flops until the endpoint buffers
+became arrays; "The endpoint buffers are arrays now" below has both sets and
+what moved between them.)
 
 **And the hook cost the designs that do not use it nothing.** With
 `NOTIF_ENDP` and `class_claim` tied off, `own_notif`, the second endpoint, its
@@ -422,14 +427,16 @@ four-bit length both transmitters took rather than a decision. It is 64 now on
 the bulk endpoints and on endpoint 0, and 16 on the CDC notification endpoint.
 Both halves of the trade were measured rather than reasoned about.
 
-**What it costs.** The footprint table carries `usb_device_fs` twice, at
-`MAXPKT = 8` and at the default 64, so the difference is one subtraction and
-is checked by the same test that generates the rest:
+**What it costs.** The footprint table carries `usb_device_fs` four times —
+`MAXPKT = 8` and the default 64, each with the buffers as arrays and as shift
+registers — so every difference below is one subtraction and is checked by the
+same test that generates the rest. The shift-register column is what 64 bytes
+cost when the buffers were first widened:
 
-| ECP5 45F | 8 bytes | 64 bytes | difference |
-|----------|---------|----------|------------|
-| LUT4 | 902 | 1850 | **+948** |
-| flip-flops | 464 | 1387 | **+923** |
+| ECP5 45F, `BUF_RAM = 0` | 8 bytes | 64 bytes | difference |
+|-------------------------|---------|----------|------------|
+| LUT4 | 893 | 1830 | **+937** |
+| flip-flops | 459 | 1379 | **+920** |
 
 The flip-flops are the two buffers: 64 bytes each way is 1024 of them where
 eight bytes was 128, and the rest is a handful of wider counters. **The lookup
@@ -441,27 +448,26 @@ way the packet is stored — a buffer written as sixty-four named byte registers
 and a `case` needs exactly the same multiplexer, plus a six-to-sixty-four
 decoder for the write enables that the shift register does not need.
 
-Two cheaper structures exist and neither was taken.
+Two cheaper structures existed and **one of them is now what the block does**;
+"The endpoint buffers are arrays now" below is the whole of it, and this is the
+shape of the argument that got there.
 
 A buffer that **shifts a byte out** as the consumer takes it needs no
 multiplexer at all, because the byte is always at the bottom. What it needs is
 for the packet to be *aligned* to the bottom before the first byte is read, and
 its length is not known until it has all arrived — so the alignment is up to 63
 more shifts after the packet ends, which is a padding state in both directions
-and a new rule about when a second packet may start.
+and a new rule about when a second packet may start. This one is still only
+written down.
 
-A **distributed RAM** — `reg [7:0] buf [0:63]`, four `TRELLIS_DPR16X4` deep by
-two wide on an ECP5 — needs neither a write decoder nor a read multiplexer, and
-is the obvious answer. It was not available: when this was written
-`src/fpga/devices/ecp5.dev` declared that bel with no site count, so
-`fpga::place` counted zero of them and refused any design that needed one,
-which is the same gap `testdata/fpga/cynthion/usb_cdc_uart.v` records about
-`ip/fifo_sync`. **If that has been fixed since, this is the first thing to
-try**: it would give back most of the 948 lookup tables and cost eight slices
-of RAM instead.
-
-Both are written down rather than done because the measurement below is what
-says whether the thousand lookup tables were worth spending at all.
+A **distributed RAM** — `reg [7:0] buf [0:63]` — needs neither a write decoder
+nor a read multiplexer, and was the obvious answer. It was not available: when
+this was written `src/fpga/devices/ecp5.dev` declared that bel with no site
+count, so `fpga::place` counted zero of them and refused any design that needed
+one, which is the same gap `testdata/fpga/cynthion/usb_cdc_uart.v` records about
+`ip/fifo_sync`. It is available now — 3036 sites on the Cynthion's part — and
+taking it gave back 977 of those 937 lookup tables and 1024 of the flip-flops
+as well.
 
 **What it buys.** Measured on a Cynthion's AUX port, through
 `testdata/fpga/cynthion/usb_ulpi_device.v` — the bulk loopback, with no UART in
@@ -572,6 +578,9 @@ this compiler rather than in these blocks: `obuf[ordx * 8 +: 8]` is a byte
 index scaled to a bit index, and `src/synth` does not strength-reduce a
 multiply by a constant power of two, so the `mul` cell survives to
 technology mapping. Written `{ordx, 3'b000}` the same expression is wires.
+That gap is still open and still worth knowing about, but only
+`BUF_RAM = 0` meets it now: an array is indexed by the byte index itself and
+there is no scaling to strength-reduce.
 Any design that indexes an array by a scaled index would meet it, and the
 blocks are where it showed.
 
@@ -606,6 +615,169 @@ compiler exercises hardest, and it is the dialect every other tool reads.
 Each source starts with a README-style header saying what the block does
 **and what it does not** — the second half is the useful one, because an
 IP block's limits are what a user needs before they commit to it.
+
+## The endpoint buffers are arrays now
+
+`usb_bulk_ep` kept its two packets in **shift registers** because the shape
+that wants to be an array could not be placed: an array indexed by a register
+is a distributed RAM and the ECP5 backend had no site to put one on. That is
+closed — `TRELLIS_DPR16X4` has 3036 sites on the Cynthion's part — so the
+buffers are `reg [7:0] buf [0:MAXPKT-1]`, the write pointer and the read index
+are the memory's own addresses, and **neither the write decoder nor the 64-way
+byte multiplexer is built at all**. `BUF_RAM` selects the shape, it is 1 by
+default, and `usb_device_fs`, `usb_device_ulpi` and `usb_cdc_acm` all carry it
+so a design can choose.
+
+**What it saved, and where it cost.** Every row is from the footprint table
+below, which the gate regenerates:
+
+| Target | 64 bytes, shift | 64 bytes, array | 8 bytes, shift | 8 bytes, array |
+|--------|-----------------|-----------------|----------------|----------------|
+| ECP5 45F, LUT4 | 1830 | **853** | 893 | **770** |
+| ECP5 45F, flip-flops | 1379 | **355** | 459 | **331** |
+| ECP5 45F, `TRELLIS_DPR16X4` | 0 | **16** | 0 | **4** |
+| ECP5 45F, LUT depth | 10 | 10 | 11 | 11 |
+| iCE40 HX1K, SB_LUT4 | **1804** | 2869 | **849** | 983 |
+| iCE40 HX1K, flip-flops | 1379 | 1379 | 459 | 459 |
+| iCE40 HX1K, LUT depth | 10 | 10 | 10 | 10 |
+
+On the ECP5 that is **−977 LUT4 and −1024 flip-flops** at 64 bytes, for 16
+distributed RAMs. Sixteen is what to expect and it is worth saying why: a
+`TRELLIS_DPR16X4` is 16 words of 4 bits, a 64-byte buffer is 64 words of 8, so
+it is two wide by four deep — eight per buffer, two buffers, sixteen. At
+`MAXPKT = 8` a buffer is 8 x 8, which is two RAMs with their upper half
+unused, so four; the saving is smaller there (**−123 LUT4**) because an 8-to-1
+multiplexer was never the expensive part.
+
+**On the iCE40 it is worse, and the shift register stays available for that
+reason.** That family has `SB_RAM40_4K` block RAM and no distributed RAM at
+all, so `fpga::primitives` takes the flip-flop fallback: the same 1024 bits,
+*plus* a write-enable per word per bit, which the shift register did not need
+because a shift register writes at a fixed end. The flip-flop count is
+identical in both shapes and the lookup tables go **up by 1065**, which is
+most of an HX1K's 1280 on its own. The penalty does not vanish at
+`MAXPKT = 8` either — 983 against 849, **+134** — so a design on a family with
+no LUT RAM should say `BUF_RAM = 0` whatever its packet size. The **+1065** is
+also larger than a decoder ought to be: 64 words of write enable is a
+6-to-64 decoder and ought to be shared across the eight bits, and the count is
+consistent with one enable gate per word *per bit*. That is a note about
+`fpga::primitives`' fallback rather than about these blocks, and it is written
+here rather than acted on.
+
+**The generic LUT4 and LUT6 rows in the table are not a saving and must not be
+read as one.** `MapOptions::lut(k)` covers logic and leaves a memory alone, so
+those rows go from `1840 x lut` to `804 x lut, 2 x memory 64x8, 2 x memrd,
+2 x memwr`: the thousand lookup tables did not disappear, they moved into a
+cell the generic mapping does not lower. What a *device* does with that cell is
+the ECP5 and iCE40 rows, and those are the honest ones. It also means
+`every_block_maps_to_the_logic_it_was_mapped_from` now proves a **smaller**
+network for every USB block — `usb_device_fs` at LUT4 is 1701 AIG nodes and
+831 cells where it was near twice that — because the buffers are no longer part
+of the logic it maps. No block entered or left that check and every one of them
+is still proved equivalent.
+
+**Depth did not move on the ECP5 or the iCE40**, which is the answer to "a RAM
+read has a different shape from a 64-to-1 mux": both are on the path from a
+buffer to the transmitter, and neither is the deepest path in the block —
+`usb_pkt_rx`'s CRC16 is. The one depth that did move is `usb_cdc_acm_fs` at
+LUT6, from 11 to **10**.
+
+**Neither buffer is cleared on reset any more**, because a distributed RAM has
+no reset pin and an array cleared on `rst_n` cannot be one. Nothing needs the
+clear: a byte of the OUT buffer is read only while `olen != 0` and one of the
+IN buffer only while `armed`, and both of those are flip-flops that reset to
+zero. The one read outside a packet is the transmitter's fetch one past the
+end, which `usb_fs_tx` throws away, and a zero-length packet is that fetch and
+nothing else.
+
+That last byte is **X in a four-state simulation**, and it costs one test a
+parameter. In the design as elaborated the X stops at the byte multiplexer
+`usb_dev_core` shares between its endpoints, because `CellKind::Mux` answers
+from the input its select chose; every behavioural test in `tests/ip_library.rs`
+runs on the default shape and passes. After **covering**, that multiplexer is
+`lut` cells, and `CellKind::Lut` in `src/sim/sched.rs` answers X as soon as any
+input bit is X whether its function depends on that input or not — so one
+unwritten byte silences the whole device and GET_DESCRIPTOR returns nothing.
+`usb_descriptors_survive_lookup_table_mapping` is the one test that drives a
+host at a mapped netlist, so its three cases take `BUF_RAM = 0`; the descriptor
+ROM it is about is a constant in `usb_ctrl_ep` that `BUF_RAM` does not reach, so
+it covers exactly what it covered before. **What nothing covers is the array
+shape through a mapped netlist in simulation**, and an X-optimal `lut`
+evaluation in `src/sim` would close that.
+
+**`usb_ctrl_ep` and `usb_pkt_rx` were looked at and neither changes.**
+`usb_ctrl_ep` has no packet buffer: what it sends is `IFACE`, a `localparam`
+blob, indexed by an offset — a ROM, with no write port, so there is no memory
+to infer, and a distributed RAM would need its contents written in through
+`dpram_init_word` where the cover of a constant is both cheaper and already
+proved (`the_descriptor_rom_cone_maps_to_its_own_function`). What it receives is
+`usb_pkt_rx`'s eight-byte word, wired in parallel. `usb_pkt_rx` keeps that word
+in `d0`..`d7`, eight named byte registers shifted along, and brings all
+sixty-four bits out at once as `dat`: there is no index and no multiplexer to
+remove, and an array would need eight read ports, which is eight copies of a
+distributed RAM. Both are shapes the array does not help.
+
+**On the part.** `testdata/fpga/cynthion/usb_ulpi_device.v` through the whole
+flow to a `.bit`, on an `ecp5-12f-CABGA256`:
+
+| | shift register | array |
+|---|---|---|
+| LUT4 | 2004 | **1028** |
+| `TRELLIS_FF` | 1432 | **408** |
+| `TRELLIS_DPR16X4` | 0 | **16** |
+| LUT depth | 10 | 10 |
+| signals routed | 3448 of 3448 | 1512 of 1512 |
+| configuration bits set | 86 845 | 44 355 |
+| bits that do not decode | 0 | **0** |
+
+Both were loaded and both enumerate, loop bytes back and report `zero_probe`
+zero. The array image is half the bits of the shift-register one and every one
+of its 44 355 still decodes back through the database into a feature it names —
+14 361 arcs, 2537 fields and 1123 words, with **nothing unexplained** — and the
+arcs are exactly the ones the router chose.
+
+**The address permutation is right in silicon, and this is the first thing that
+could say so.** `docs/fpga-trellis.md` records the gap: a distributed RAM's
+addresses are permuted (`dpram_init_word`, nextpnr's `dram_to_comb`), every RAM
+in every reference bitstream starts empty, so every word reads alike and no
+check in this repository could tell a right permutation from a wrong one. These
+buffers are the first non-trivial contents this project has put in one on a
+part and read back. 256 bytes went through endpoint 1 in packets of 64, 63, 8,
+5 and 1 byte, and came back **byte-identical** — through one distributed RAM on
+the way in and another on the way out, at all 64 addresses of each, across all
+four 16-word banks of the depth expansion, with the write pointer and the read
+index counting independently. A permutation that disagreed between the write
+port and the read port, or a bank select that did not, would have returned those
+bytes shuffled inside each group of sixteen. It did not.
+
+**What that does and does not settle.** It settles that the write-address and
+read-address decodings of a `TRELLIS_DPR16X4` agree with each other, and that
+the depth expansion picks the same bank on both ports, for every address of a
+64-deep RAM. It does **not** settle `dpram_init_word`: this design writes no
+initial contents, so nothing here says that an `initial` block's word *n* lands
+at address *n*. That half of the gap is still open and still needs the
+experiment `docs/fpga-trellis.md` names.
+
+**Throughput did not change, which is the answer worth having.** Both
+bitstreams above were loaded on the same board, the same host and the same
+afternoon, and `tests/usb_loopback.rs` timed six runs of each:
+
+| buffers | round trips/s | bytes/s each way | spread of six |
+|---------|---------------|------------------|---------------|
+| shift register | 4000 | 256 008 | 256 002 – 256 028 |
+| array | 4000 | 256 006 | 256 003 – 256 031 |
+
+The two are inside 0.01 % of each other and inside each other's spread, so the
+endpoint's shape is not what the rate is made of: round one's own account of
+the figure says the wire is 43 microseconds of a round trip and the host's
+stack is about 110, and none of that moved. Round one measured 3990 and
+255 500 as the median of six on another day, which is 0.2 % below both columns
+here — the difference between two afternoons, not between two designs. The
+8-byte figure in "What it buys" above was not re-measured and is left as round
+one recorded it.
+
+As before, those numbers are **printed and never asserted**: nothing here is
+compared against a clock and `tools/check.sh` does not run that test.
 
 ## Using one
 

@@ -3604,9 +3604,10 @@ fn the_usb_devices_constant_zero_probe_survives_synthesis() {
 ///
 /// `a_register_bit_nothing_drives_is_built_from_a_constant` does this on a
 /// three-line design, which is where the mechanism is pinned. What this adds
-/// is that it holds in **the design that is loaded into the part** — 2018
-/// lookup tables and 1440 flip-flops — because a result read off a board is
-/// worth nothing until the bitstream that produced it has been read.
+/// is that it holds in **the design that is loaded into the part** — 1028
+/// lookup tables, 408 flip-flops and sixteen distributed RAMs — because a
+/// result read off a board is worth nothing until the bitstream that produced
+/// it has been read.
 ///
 /// It is `#[ignore]`d because it places and routes the whole USB device,
 /// which is minutes rather than seconds; the rest of this file is seconds.
@@ -3654,11 +3655,52 @@ fn the_usb_devices_constant_zero_probe_reaches_the_bitstream() {
 
     // ---- the `INIT` word, and the ties that make it a constant ----
     let decoded = db.decode(&stream.cram);
-    let zero_luts: Vec<((u32, u32), String)> = decoded
+
+    // A **distributed RAM's storage is an `INIT` word too**, and this design
+    // has sixteen of them: `usb_bulk_ep`'s two 64-byte buffers are eight
+    // `TRELLIS_DPR16X4` each. Their contents at configuration are empty —
+    // neither buffer is initialised, because a distributed RAM has no reset
+    // pin and nothing needs the clear — so every one of them puts six all-zero
+    // `INIT` words in the image, the four of `DPRAM_DATA_LUTS` and the two of
+    // `DPRAM_RAMW_LUTS`. Ninety-six of those against one real constant is not
+    // a probe this test can find by looking for zeros alone.
+    //
+    // A slice in that mode says so, so the RAMs are separated by the mode
+    // rather than by their position or their count: `SLICEA.MODE = DPRAM`
+    // marks the tile, and the six words of a marked tile are the RAM's bits.
+    // Asserting the total is what keeps this honest — a seventeenth RAM, or a
+    // RAM whose contents were *not* empty, changes that number and is worth
+    // being told about.
+    let ram_tiles: std::collections::BTreeSet<(u32, u32)> = decoded
+        .enums
+        .iter()
+        .filter(|(_, field, value)| field == "SLICEA.MODE" && value == "DPRAM")
+        .map(|(at, _, _)| *at)
+        .collect();
+    assert_eq!(
+        ram_tiles.len(),
+        16,
+        "the two 64-byte endpoint buffers are eight distributed RAMs each"
+    );
+    let all_zero_inits: Vec<((u32, u32), String)> = decoded
         .words
         .iter()
         .filter(|(_, field, value)| field.ends_with(".INIT") && value.chars().all(|c| c == '0'))
         .map(|(at, field, _)| (*at, field.clone()))
+        .collect();
+    let in_a_ram = all_zero_inits
+        .iter()
+        .filter(|(at, _)| ram_tiles.contains(at))
+        .count();
+    assert_eq!(
+        in_a_ram,
+        6 * 16,
+        "six all-zero `INIT` words per distributed RAM: four of data and the \
+         `RAMW` slice's two, all sixteen RAMs empty"
+    );
+    let zero_luts: Vec<((u32, u32), String)> = all_zero_inits
+        .into_iter()
+        .filter(|(at, _)| !ram_tiles.contains(at))
         .collect();
     assert_eq!(
         zero_luts.len(),
@@ -3714,12 +3756,14 @@ fn the_usb_devices_constant_zero_probe_reaches_the_bitstream() {
             fed += 1;
         }
     }
-    // 1440, of which 1024 are the two 64-byte endpoint buffers. It was 491
-    // when a packet was eight bytes; what matters here is not the number but
-    // that **every one** of them takes its data from the fabric and none is
+    // 408. It was 1440 while `usb_bulk_ep`'s two 64-byte buffers were shift
+    // registers and 1024 of them were the buffers; those bits are in the
+    // sixteen distributed RAMs above now. It was 491 before that, when a
+    // packet was eight bytes. What matters here is not the number but that
+    // **every one** of them takes its data from the fabric and none is
     // floating, which is the defect this test exists for.
     assert_eq!(
-        flops_from_fabric, 1440,
+        flops_from_fabric, 408,
         "every flip-flop of this design takes its data from the fabric"
     );
     assert!(

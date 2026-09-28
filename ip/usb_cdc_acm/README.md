@@ -327,8 +327,10 @@ So ten would have been legal.
 **MEDIUM**. `usb_bulk_ep` masks its buffer's byte index to the index's own
 width rather than comparing it against a bound, which is only the same thing
 when the size is a power of two, so the size has to be one. Sixteen is the
-smallest power of two that holds ten bytes; 64 would have cost forty-eight more
-bytes of flip-flop and a wider multiplexer for nothing.
+smallest power of two that holds ten bytes; 64 would have cost six more
+`TRELLIS_DPR16X4` for nothing — two rather than eight, since sixteen bytes is
+exactly one distributed RAM's depth by two of its width — or, with
+`BUF_RAM = 0`, forty-eight more bytes of flip-flop and a wider multiplexer.
 
 ### When one is sent
 

@@ -834,13 +834,24 @@ fn footprint_table() -> String {
 /// **What it costs.** The work is bounded by the graphs and by
 /// `MapVerifyOptions`, never by a clock: sixteen words of random patterns
 /// over each miter and one `fraig` pass under its own conflict limit. Measured
-/// in a debug build on one core, the sixty-two mappings and their sixty-two
-/// proofs take **160 s** together against **84 s** for the mappings alone, so
-/// a proof costs about as much as the mapping it checks; the whole test is
-/// half of the 305 s `footprints_match_the_documentation` already spends, and
-/// it maps the same designs that test does. The largest is `rv32i` at 5501
-/// AIG nodes and 2436 cells. Set `RETICLE_MAP_VERIFY_REPORT=1` to print the
-/// per-block verdicts and node counts.
+/// in a debug build on one core, the sixty-eight mappings and their
+/// sixty-eight proofs take **189 s** together; when there were sixty-two of
+/// them it was 160 s against 84 s for the mappings alone, so a proof costs
+/// about as much as the mapping it checks. The whole test is half of what
+/// `footprints_match_the_documentation` already spends, and it maps the same
+/// designs that test does. The largest is `rv32i` at 5552 AIG nodes and 2445
+/// cells. Set `RETICLE_MAP_VERIFY_REPORT=1` to print the per-block verdicts
+/// and node counts.
+///
+/// **What it covers less of than it did**, and it is worth knowing which way:
+/// `usb_bulk_ep`'s packet buffers are arrays now, so they are memory cells that
+/// `MapOptions::lut(k)` does not lower, and the network this proves for every
+/// USB block is correspondingly smaller — `usb_device_fs` at LUT4 is 1668 AIG
+/// nodes and 804 cells where the shift-register shape is 1964 and 902. Both
+/// shapes are in `VARIANTS`, so both are proved; what is outside this check is
+/// the memory itself, which is the backend's to build and
+/// `tests/fpga_flow.rs`'s `the_logic_fallback_answers_like_the_memory_it_replaced`
+/// to answer for.
 #[test]
 fn every_block_maps_to_the_logic_it_was_mapped_from() {
     use reticle::synth::techmap::{MapVerifyOptions, map_module_checked};

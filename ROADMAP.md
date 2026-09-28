@@ -797,8 +797,7 @@ and first-party IP should drop into a design as easily as a Rust crate.
       counter, because a wide register written at a computed offset is a
       construct this compiler refuses and an array indexed by a register is a
       distributed RAM the ECP5 backend had no site count for when this was
-      written — that being the shape to reconsider if it has one now, since it
-      needs neither a write decoder nor a read multiplexer. `usb_pkt_rx` grew a
+      written. That shape is what the entry below took. `usb_pkt_rx` grew a
       payload byte stream so there is no second copy of a 64-byte packet.
       `usb_cdc_acm` sends **SERIAL_STATE** (PSTN 1.2 §6.5.4) when the host
       configures the device, when it **opens or reconfigures the port**, and
@@ -813,10 +812,40 @@ and first-party IP should drop into a design as easily as a Rust crate.
       opens, which `cdc_acm` can only take from that notification.
       Measured on that board:
       **67 700 bytes/s each way at eight bytes and 255 500 at 64**, for
-      **+948 LUT4 and +923 flip-flops** on an ECP5 — both in
+      **+937 LUT4 and +920 flip-flops** on an ECP5 — both in
       `docs/ip-library.md`, with the byte multiplexer named as the whole of
       the lookup-table cost and the cheaper structure that was not taken
       written down.
+- [x] **The endpoint buffers are arrays, and the byte multiplexer is gone.**
+      `usb_bulk_ep` kept its two packets in shift registers because an array
+      indexed by a register is a distributed RAM and the ECP5 backend had no
+      site to put one on. It has 3036 now, so the buffers are
+      `reg [7:0] buf [0:MAXPKT-1]`: the write pointer and the read index are
+      the memory's own addresses and **neither the write decoder nor the
+      64-way byte multiplexer is built at all**. On the ECP5 `usb_device_fs`
+      goes from 1830 LUT4 and 1379 flip-flops to **853, 355 and 16
+      `TRELLIS_DPR16X4`** — eight per buffer, which is what 64 x 8 bits asks
+      of a RAM 16 deep and 4 wide — at the same LUT depth. It is a
+      **parameter** and not a rewrite, because an iCE40 has no distributed RAM
+      and the same array there is the same flip-flops *plus* a write-enable
+      decoder the shift register did without: 1804 SB_LUT4 becomes 2869, so
+      `BUF_RAM = 0` keeps the shift register for a family that has no LUT RAM.
+      `usb_ctrl_ep` and `usb_pkt_rx` were looked at and neither changes: one
+      indexes a constant and the other reads all eight bytes at once.
+      **On the part**, `usb_ulpi_device.v` is 1028 lookup tables, 408
+      flip-flops and 16 distributed RAMs where it was 2004 and 1432, its
+      bitstream is half the bits, and all 44 355 of them still decode with
+      nothing unexplained. The bulk loopback and the serial port both work and
+      the throughput is unchanged — 4000 round trips a second and 256 000
+      bytes/s each way in both shapes, measured the same afternoon — because
+      the rate is the host's stack and not the endpoint's shape.
+      **And it is the first thing to put non-trivial contents in a distributed
+      RAM on real silicon**: 256 bytes through two 64-deep RAMs came back
+      byte-identical, so the write-address and read-address decodings agree at
+      every address and across every bank of the depth expansion.
+      `dpram_init_word`'s own permutation is still untested, because this
+      design writes no initial contents; `docs/fpga-trellis.md` says which half
+      of that gap is closed and which is not.
 - [x] Registry: a static index (git repository of manifests) that
       `reticle add` searches, in the style of a crates.io index: one file
       per package under a name-derived path, one line per release with

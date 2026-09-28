@@ -1710,10 +1710,10 @@ module usb_bulk_ep #(
                             //
                             // Decided **here** and not at the end of it,
                             // because the buffer is filled as the bytes
-                            // arrive: a packet whose bytes were shifted in
-                            // over a packet that had not been drained would
-                            // destroy it, and whether it has been drained can
-                            // change halfway through a packet. So the answer
+                            // arrive: a packet written over one that had not
+                            // been drained would destroy it, and whether it has
+                            // been drained can change halfway through a
+                            // packet. So the answer
                             // is latched from the one moment at which the
                             // question can still be asked, and a packet that
                             // arrives with no room is NAKed and sent again by

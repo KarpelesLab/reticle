@@ -173,6 +173,14 @@ leaves no trace in them. A bitstream with non-zero contents would pin it, and
 `what_lattices_own_packer_writes_for_a_distributed_ram` would notice one
 arriving — it asserts the words are zero rather than skipping them.
 
+The half of it that reaches a **run-time** address is settled in silicon now:
+`usb_bulk_ep`'s packet buffers are two 64-deep distributed RAMs that a real host
+writes and reads through endpoint 1, and every byte comes back from the address
+it was written to. "A word written does come back" below has the measurement.
+What is still on nextpnr's word alone is the `INITVAL` side — a word the
+*bitstream* places rather than the fabric — because this flow builds no RAM with
+initial contents.
+
 ### What places now, and what it costs
 
 `ip/fifo_sync` with `WIDTH = 8`, through `synthesize_for`, `place`, `route`
@@ -198,38 +206,48 @@ and it also asserts the exclusion from both sides: no lookup table shares a
 tile with a RAM except on slice D, and every one of the six bels a RAM
 consumes is empty in every tile that holds one.
 
-### What a board would have added, and it is the obvious thing
+### A word written does come back, and half of the gap is closed
 
-**That a word written comes back.** Nothing here has run on a part. The
-Cynthion was in use for USB work for the whole of this round, so every
-measurement above is off the part: the database, the reference bitstreams,
-the router, the "every bit decodes" check and the simulator. What none of
-them can tell you is whether the silicon stores and returns a byte — whether
-the write address really arrives on `WADO<n>C_SLICE`, whether `WCK` is the
-edge this flow thinks it is, and whether `dpram_init_word`'s permutation is
-the right way round rather than merely self-consistent.
+**This was written as an open gap and it is worth keeping the question it
+asked.** Nothing in the round that modelled a slice's distributed-RAM mode had
+run on a part: the database, the reference bitstreams, the router, the "every
+bit decodes" check and the simulator were all off the part. What none of them
+could tell you was whether the silicon stores and returns a byte — whether the
+write address really arrives on `WADO<n>C_SLICE`, whether `WCK` is the edge
+this flow thinks it is, and whether `dpram_init_word`'s permutation is the
+right way round rather than merely self-consistent. The contents this flow
+writes are all zeros, so every word reads the same, and a permutation that was
+wrong in a self-consistent way would have been invisible to every check in this
+tree.
 
-That last one is the real gap. A read-address permutation that is wrong in a
-way `dpram_init_word` mirrors would be invisible to every check in this
-tree, because the contents this flow writes are all zeros: every word reads
-the same. A vendor bitstream with non-zero contents would settle it and none
-of the three has any.
+**The experiment has been run, by the second of the two routes named below.**
+`usb_bulk_ep`'s two packet buffers are arrays now — eight `TRELLIS_DPR16X4`
+each, 64 words of 8 bits — and `testdata/fpga/cynthion/usb_ulpi_device.v` puts
+both of them on the AUX port's endpoint 1, where `tests/usb_loopback.rs` reads
+every byte back. That is the first non-trivial contents this project has put in
+a distributed RAM on silicon. Loaded on a Cynthion, 256 bytes went out in
+packets of 64, 63, 8, 5 and 1 byte and came back **byte-identical**, through one
+RAM on the way in and another on the way out, at all 64 addresses of each, with
+the write pointer and the read index counting independently.
 
-**The cheapest experiment**, and it is small: a design with one
-`fifo_sync`, `WIDTH = 8`, `DEPTH = 16`, wired to the Cynthion's six LEDs and
-its `USER` button, on the balls `button_led.rcf` already names. Push a
-counter in on the button, read it out, and show the eight bits on the LEDs a
-nibble at a time. If the FIFO works, the LEDs count; if the read address is
-permuted wrongly, they count in a scrambled order, which is *visible* — the
-same shape of experiment as the first blinky, and readable with no
-instrument. A second one, once that passes: write the sixteen values 0..15 at
-addresses 0..15 and read them back over the existing `usb_ulpi_device.v`
-endpoint, which already carries a byte a host reads, so a wrong permutation
-shows up as a specific wrong byte rather than as darkness.
+So: the silicon stores and returns a byte, the write address arrives where this
+flow puts it, `WCK` is the right edge, and the write-port and read-port address
+decodings agree with each other at every address — including across the four
+16-word banks the depth expansion builds, which a wrong bank select on one port
+would have scrambled. `docs/ip-library.md`'s "The endpoint buffers are arrays
+now" has the numbers and both bitstreams.
 
-That is how the constant-driver round handled the same situation: it named
-the gap and the experiment, and two rounds later the experiment had been run
-and the gap was closed.
+**What is still open is `dpram_init_word` itself.** That function is about
+*initial* contents, and this design has none: `fpga::primitives` still declines
+to lower a memory with initial contents, so every RAM this flow builds still
+starts empty. Nothing above says that an `initial` block's word *n* ends up at
+address *n*, only that a word this design **writes** at address *n* is read back
+from address *n* — and those are two different claims, because a write goes
+through the fabric's own address wires and an initialiser goes through
+`dpram_init_word`. The remaining experiment is the one this section named first:
+a design whose RAM has contents the bitstream puts there, read back where it can
+be seen. It needs `fpga::primitives` to lower an initialised memory before it
+can be built at all.
 
 ## The constant is built now, and the vendor's own bitstreams said how
 
@@ -438,7 +456,7 @@ halves are tests rather than a note:
 | | |
 |---|---|
 | `the_usb_devices_constant_zero_probe_survives_synthesis` | no database, no board, seconds. `zero_probe$ff` is a `TRELLIS_FF` with `DI=%const0` in the mapped netlist, `const0$lut` is an all-zeros `LUT4`, and there is exactly one of it. This is what stops a future optimisation from turning the hardware test green for ever |
-| `the_usb_devices_constant_zero_probe_reaches_the_bitstream` | `#[ignore]`d: it places and routes the whole device. One all-zeros `INIT` word in the image, its four inputs tied high at absolute frame positions, all **1440** flip-flops taking data from the fabric with **none floating**, and exactly one of them walking back through the file's own arcs to that lookup table's output |
+| `the_usb_devices_constant_zero_probe_reaches_the_bitstream` | `#[ignore]`d: it places and routes the whole device. One all-zeros `INIT` word in the image **that is not a distributed RAM's storage**, its four inputs tied high at absolute frame positions, all **408** flip-flops taking data from the fabric with **none floating**, and exactly one of them walking back through the file's own arcs to that lookup table's output. The sixteen distributed RAMs of the endpoint buffers put 96 more all-zero `INIT` words in the image — six each, empty at configuration — and the test separates them by `SLICEA.MODE = DPRAM` and asserts that total too |
 
 What the probe costs, and what moved:
 
@@ -457,36 +475,47 @@ What the probe costs, and what moved:
 now and the design is bigger, which changes every number above except the one
 that matters. Measured again on the same design with 64-byte packets:
 
-| | 8 bytes a packet | 64 bytes a packet |
-|---|---|---|
-| Set bits | 43 577 | **87 325** |
-| Lookup tables | 1086 | **2019** |
-| Flip-flops | 491 | **1440** |
-| Signals | 1589 | **3471** |
-| Arcs that cost bits | 14 449 | **31 177** |
-| Bits **unexplained** | 0 | **0** |
+| | 8 bytes, shift | 64 bytes, shift | 64 bytes, **array** |
+|---|---|---|---|
+| Set bits | 43 577 | 86 845 | **44 355** |
+| Lookup tables | 1086 | 2004 | **1028** |
+| Flip-flops | 491 | 1432 | **408** |
+| `TRELLIS_DPR16X4` | 0 | 0 | **16** |
+| Signals | 1589 | 3448 | **1512** |
+| Arcs that cost bits | 14 449 | 31 028 | **14 361** |
+| Bits **unexplained** | 0 | 0 | **0** |
 
-The extra 949 flip-flops are the two 64-byte endpoint buffers — 1024 of them
-where eight bytes needed 128 — and the extra 933 lookup tables are the 64-to-1
-byte multiplexer over each buffer, which on LUT4 is 63 of them per bit.
+The middle column is what 64 bytes cost while both buffers were shift
+registers: 949 more flip-flops than eight bytes — 1024 of them where eight
+bytes needed 128 — and 918 more lookup tables, which are the 64-to-1 byte
+multiplexer over each buffer, 63 of them per bit on LUT4. The right-hand column
+is the same design with the buffers as **arrays**, which is `usb_bulk_ep`'s
+`BUF_RAM = 1` and what it does by default now: the multiplexer is not built, the
+1024 bits are in sixteen distributed RAMs, and the image is **half the bits**.
 `docs/ip-library.md` has that accounting and what the size bought, measured on
-this same board. **Nothing is unexplained in either column**, which is the
-statement this table is for: a design more than twice the size still decodes
-back through the database with no bit left over. The `#[ignore]`d test above
-was re-run over the wider design and follows every one of the 1440 flip-flops
-back to a driver in the fabric with none floating, in 562 seconds of place,
-route and decode.
+this same board.
 
-**`zero_probe` reaches eight lookup tables now and not sixty-four**, which is a
-sentence in `usb_ulpi_device.v` that this round could not update: that file is
-frozen as the hardware-verified reference design. `in_data` used to be written
-into one of eight byte registers by a `case`, so the XOR's output reached
-sixty-four flip-flops' worth of write logic; the IN buffer is a shift register
-now, so `in_data` feeds one byte — the top of it — and eight. The probe is
-**not** weakened by that: it is still on the byte the host reads, every byte
-still passes through the XOR, and `tests/usb_loopback.rs` still reads a few
-hundred bytes back byte-identical with a constant-zero flip-flop in the middle
-of each one.
+**Nothing is unexplained in any of the three columns**, which is the statement
+this table is for. It is a stronger statement in the right-hand one than in the
+other two, because those sixteen RAMs are bits of a kind no earlier image here
+had: 97 of them each, the six `INIT` words and the mode. The `#[ignore]`d test
+above was re-run over all three and follows every flip-flop back to a driver in
+the fabric with none floating — 562 seconds of place, route and decode for the
+middle column, 124 for the right-hand one.
+
+**`zero_probe` reaches eight lookup tables and not sixty-four**, which is a
+sentence in `usb_ulpi_device.v` that no round has been able to update: that file
+is frozen as the hardware-verified reference design. `in_data` used to be
+written into one of eight byte registers by a `case`, so the XOR's output
+reached sixty-four flip-flops' worth of write logic. It has been eight ever
+since, and it was counted in the mapped netlist of **both** shapes to be sure
+the array did not change it again: as a shift register `in_data` feeds one byte,
+the top of the register, and as an array it feeds the eight `DI` pins of a
+distributed RAM. Eight `LUT4` carry the probe in each, and in each the XOR folds
+into a cover the endpoint already needed. The probe is **not** weakened either
+way: it is still on the byte the host reads, every byte still passes through the
+XOR, and `tests/usb_loopback.rs` still reads a few hundred bytes back
+byte-identical with a constant-zero flip-flop in the middle of each one.
 
 The one new `.config` word is the constant's `INIT` and nothing else. The rest
 is a net figure rather than an itemised one, because one more cell moves the
@@ -3597,7 +3626,7 @@ borrows now. Every backend gets it.
 | The left and bottom edges' pads | the left edge is the right edge mirrored (`PICL0`/`PICL1`/`PICL2` for `PICR*`, and the `CIB` one column *east* instead of west) and could be checked against the reference bitstreams the same way the right edge was, since they use pins on every edge. The bottom edge is different again: `PICB*` puts two PIOs at a position and shares tiles with the `EFB`. Neither has been checked, and `TrellisDatabase::load` leaves those balls out of the ball map rather than placing something it would configure nowhere |
 | A carry chain | `CCU2C` has no port map in the device file, on purpose: its two sum bits and internal carry do not match the `(ci, i0, i1) -> co` model Reticle maps carry onto. The `.mux` records for the cascade wires are read already |
 | Block RAM | `Ecp5Stream` reads and writes the initialisation blocks — the reference files' 44 blocks round trip — and nothing generates one. The `MIB_EBR*` tiles' wires and pips are in the graph |
-| A distributed RAM's **contents** | `configure_lutram` writes them from an `INITVAL` parameter and nothing produces one: `fpga::primitives` declines to lower a memory with initial contents, so every RAM this flow builds starts empty. All 111 of the vendor's do too, which is why the read-address permutation has no vendor evidence — see the first section |
+| A distributed RAM's **contents** | `configure_lutram` writes them from an `INITVAL` parameter and nothing produces one: `fpga::primitives` declines to lower a memory with initial contents, so every RAM this flow builds starts empty. All 111 of the vendor's do too, so `dpram_init_word`'s permutation still has no evidence either way. What *is* settled now is the pair of **run-time** address decodings, which agree at every address of a 64-deep RAM on a real part — see the first section |
 | A distributed RAM **on a part** | see "What a board would have added" in the first section. Everything else about it is measured; that a written word reads back is not |
 | An **inverting** write clock or write enable | `WCKMUX = INV` is `CLK1.CLKMUX = INV` and `WREMUX = INV` is a field of its own, both in the database. `configure_lutram` writes neither, and neither appears in any of the three reference bitstreams |
 | An IO standard other than LVCMOS33 | the bits are in the database and the code takes the standard from the constraints; no other standard has been on a part |

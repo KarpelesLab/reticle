@@ -185,13 +185,13 @@ Where to ask for it:
 | a library | `techmap::map_module_checked`, or `check_lut_mapping` / `check_gate_mapping` on a network directly |
 
 **What it costs.** `every_block_maps_to_the_logic_it_was_mapped_from` in
-`tests/ip_library.rs` maps all 31 library variants at LUT4 and LUT6 and proves
-all 62, the largest being `rv32i` at 5501 AIG nodes and 2436 cells. In a
-debug build that is **160 s** for mapping and proving together, against 84 s
-for the same mappings with the proofs off — so a proof costs about as much as
-the mapping it checks, and the whole test is half of the 305 s
-`footprints_match_the_documentation` already spends. Every one of the 62 is
-proved, not merely unrefuted. The work is bounded by the graphs and by
+`tests/ip_library.rs` maps all 34 library variants at LUT4 and LUT6 and proves
+all 68, the largest being `rv32i` at 5552 AIG nodes and 2445 cells. In a
+debug build that is **189 s** for mapping and proving together; when there were
+62 of them it was 160 s against 84 s for the same mappings with the proofs off,
+so a proof costs about as much as the mapping it checks, and the whole test is
+half of what `footprints_match_the_documentation` already spends. Every one of
+the 68 is proved, not merely unrefuted. The work is bounded by the graphs and by
 `MapVerifyOptions`, never by a clock, which is what CI on a slower machine
 needs.
 
