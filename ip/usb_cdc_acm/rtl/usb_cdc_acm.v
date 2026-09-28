@@ -19,7 +19,8 @@
 //     2. `usb_cdc_req` on endpoint 0's class hook, answering the three
 //        requests a serial driver sends;
 //     3. an interrupt IN endpoint, which the descriptors promise and which
-//        the core builds because `NOTIF_ENDP` is not zero.
+//        the core builds because `NOTIF_ENDP` is not zero, with the sender
+//        that puts a SERIAL_STATE notification into it.
 //
 //   Everything else — the packet decoding, the standard requests, the data
 //   toggles, the transmitter and the arbitration between endpoints — is the
@@ -91,20 +92,55 @@
 //   error conditions, and Table 4's `bmCapabilities` D1 groups it with the
 //   line-coding requests as one feature; what §6.5.4 does not say is when a
 //   device must produce one, and nothing in PSTN 1.2 asks for one on a
-//   schedule. Reading it as a **state-change** notification — sent when what
-//   it would say changes — is what this block does, and README.md §4 marks
-//   that as a reading. So it sends one
+//   schedule. Reading it as a **state-change** notification is what this block
+//   does, and README.md §4 marks that as a reading. So one goes out
 //
-//     * when the host configures the device, because the host's own idea of
-//       the state starts empty and nothing else would ever fill it — Linux's
-//       `cdc_acm` keeps the last bitmap it was sent in `ctrlin` and answers
-//       `TIOCMGET` out of it, so a device that never sends one reports no
-//       carrier for ever; and
-//     * whenever `serial_state` changes afterwards.
+//     * when the host **configures** the device, because the host's idea of
+//       the state starts empty and nothing else would fill it;
+//     * when the host **opens or reconfigures the port**, which is `reopened`
+//       from `usb_cdc_req` — SET_CONTROL_LINE_STATE or SET_LINE_CODING; and
+//     * whenever `serial_state` **changes**.
 //
 //   and **not** on a timer, because a state that has not changed is not news
 //   and an interrupt endpoint that NAKs a poll is the ordinary state of a
 //   device that is not changing.
+//
+// WHY THE MIDDLE ONE IS NOT OPTIONAL, WHICH COST A ROUND TO FIND OUT
+//   The first version of this sent one per configuration and then only on a
+//   change, and **that is a functional defect**, not a conservative reading.
+//   A state-change notification only works if the host was listening when the
+//   state changed, and a host is not listening until it opens the port: Linux's
+//   `cdc_acm` submits its interrupt URB from `acm_port_activate`, keeps the
+//   last bitmap it was sent in `acm->ctrlin`, and answers `TIOCMGET` out of
+//   that. So the one notification a configuration produced was consumed by
+//   whoever polled first, and after that the device had nothing more to say
+//   for ever. Two ways that reads false on a port that is working:
+//
+//     * anything that polls endpoint 2 before the driver does — this
+//       repository's own `tests/usb_cdc_acm.rs` reads it over usbfs — leaves
+//       `cdc_acm` with `ctrlin` at zero permanently; and
+//     * `cdc_acm` **bound a second time without a bus reset** — a detach and
+//       attach, a module reload — starts with a fresh `acm` whose `ctrlin` is
+//       zero and no notification left to fill it.
+//
+//   Measured: `TIOCMGET` read `0x026` — DTR, RTS and the CTS `cdc_acm` hard
+//   codes, and **no DCD and no DSR** — on three consecutive opens with no
+//   reconfiguration between them. A serial port whose carrier is right only on
+//   the first open after enumeration is wrong.
+//
+//   `reopened` is what closes it, and SET_CONTROL_LINE_STATE is the right
+//   signal rather than a convenient one: `acm_port_dtr_rts` issues it with no
+//   comparison against what it last sent, so it goes on **every** open — and
+//   on every close too, which means a notification is usually already armed
+//   before the next open's URB is submitted. `usb_cdc_req`'s own port comment
+//   has why SET_LINE_CODING is in there as well and why it is the defensive
+//   half rather than the dependable one.
+//
+//   **The alternative was to answer every poll** with the current state
+//   instead of NAKing, which would make the host's idea of it always right and
+//   costs a ten-byte packet every `bInterval` for ever. That is not what an
+//   interrupt endpoint is for, and PSTN 1.2 describes a notification and not a
+//   register a host may read, so it was not taken.
 //
 //   **What a device with no modem lines should report.** `serial_state` is a
 //   port and not a constant, because the answer is a property of what is
@@ -407,6 +443,10 @@ module usb_cdc_acm #(
     wire [63:0] class_out;
     wire [6:0]  class_out_len;
     wire        class_out_valid;
+    // A host has opened or reconfigured the port, so whatever it was told
+    // before does not count. `usb_cdc_req`'s port comment says which requests
+    // and why.
+    wire        class_reopened;
 
     usb_cdc_req #(
         .COMM_IFACE (COMM_IFACE)
@@ -427,7 +467,8 @@ module usb_cdc_acm #(
         .parity      (parity),
         .data_bits   (data_bits),
         .dtr         (dtr),
-        .rts         (rts)
+        .rts         (rts),
+        .reopened    (class_reopened)
     );
 
     // -----------------------------------------------------------------
@@ -487,9 +528,15 @@ module usb_cdc_acm #(
     wire       notif_ready;
 
     // A notification is owed when the host has configured the device and
-    // either none has gone yet or what one would say has changed. The device
-    // is not configured until SET_CONFIGURATION, and sending before that would
-    // be a packet on an endpoint the host has not enabled.
+    // either none has gone **since the host last spoke** or what one would say
+    // has changed. The device is not configured until SET_CONFIGURATION, and
+    // sending before that would be a packet on an endpoint the host has not
+    // enabled.
+    //
+    // `ever` is therefore not "one has ever been sent" but "the host has been
+    // told since it last said anything", which is the whole of the fix "WHY
+    // THE MIDDLE ONE IS NOT OPTIONAL" above describes: `class_reopened` puts
+    // it back to zero.
     wire       notif_owed = configured & (~ever | (serial_state != reported));
 
     always @(posedge clk or negedge rst_n) begin
@@ -516,6 +563,15 @@ module usb_cdc_acm #(
                 sending <= 1'b1;
                 nidx    <= 4'd0;
             end
+
+            // A host opening or reconfiguring the port has an idea of its
+            // state that this device did not put there — a driver bound a
+            // second time starts with nothing at all — so it is owed one
+            // whether anything changed or not. **After** the arm above, so
+            // that a request arriving in the ten cycles a notification takes
+            // to hand over is answered with one of its own rather than
+            // swallowed by the one already going.
+            if (class_reopened) ever <= 1'b0;
 
             // A host that has configured the device again, or reset the bus,
             // has forgotten what it was told: `usb_bulk_ep`'s buffer went with

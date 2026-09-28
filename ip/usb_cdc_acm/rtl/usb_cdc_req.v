@@ -59,6 +59,8 @@
 //   interrupt IN packet the device sends of its own accord — so it belongs
 //   to the block that owns the notification endpoint, which is
 //   `usb_cdc_acm`. Its header says what the ten bytes are and when they go.
+//   What this block contributes to it is `reopened`, because two of the three
+//   requests here are the class's only sight of a host opening the port.
 //   D1 of the Abstract Control Management descriptor claims the
 //   notification **and** these three requests as one feature, which is why
 //   that bit was already set before the notification existed.
@@ -101,7 +103,32 @@ module usb_cdc_req #(
     // The control lines it asserted. `dtr` is a program having opened the
     // port.
     output wire        dtr,
-    output wire        rts
+    output wire        rts,
+
+    // A HOST HAS JUST TOLD THIS PORT SOMETHING, SO ITS IDEA OF IT IS STALE
+    //
+    // One cycle when a request arrives that a host sends **because it is
+    // opening or reconfiguring the port**: SET_CONTROL_LINE_STATE or
+    // SET_LINE_CODING. Not GET_LINE_CODING, which is a host reading and says
+    // nothing about what the host believes.
+    //
+    // It exists because a state-change notification has a gap in it that only
+    // the host can close. `usb_cdc_acm` sends SERIAL_STATE when what it would
+    // say changes, and a host that was not listening when it changed never
+    // hears it — and a host is **not listening until it opens the port**,
+    // because Linux's `cdc_acm` submits its interrupt URB from
+    // `acm_port_activate`. Worse, a driver bound a second time without a bus
+    // reset starts with `acm->ctrlin` at zero and no way to fill it. So the
+    // class needs to know when a host has arrived, and this is the only sight
+    // of that it gets.
+    //
+    // **SET_CONTROL_LINE_STATE is the one that can be relied on.**
+    // `acm_port_dtr_rts` issues it with no comparison against what it sent
+    // last time, so it goes on every open and again on every close;
+    // `acm_tty_set_termios` sends SET_LINE_CODING only when the line coding
+    // actually differs, so that one is defensive rather than dependable —
+    // which is why both are here and why the comment says which is which.
+    output wire        reopened
 );
     // The SETUP packet's fields, byte 0 in the low eight bits (USB 2.0
     // Table 9-2).
@@ -137,6 +164,10 @@ module usb_cdc_req #(
                   & (w_length == 16'd0);
 
     assign claim = set_line | get_line | set_ctrl;
+    // The two of those three that mean a host is opening or reconfiguring this
+    // port. `req` is already "a well-formed SETUP endpoint 0 did not claim",
+    // so this is one cycle and needs no qualifying.
+    assign reopened = req & (set_line | set_ctrl);
     // The line coding structure's length. Endpoint 0 caps it at the host's
     // own `wLength`, so a host asking for fewer than seven bytes gets what
     // it asked for.

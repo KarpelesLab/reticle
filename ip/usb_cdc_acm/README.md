@@ -332,30 +332,84 @@ bytes of flip-flop and a wider multiplexer for nothing.
 
 ### When one is sent
 
+A notification goes out **whenever the host's idea of the line state could be
+stale, and only then**. Three things make it stale, and all three are triggers:
+
+| Trigger | Why |
+|---------|-----|
+| the host **configures** the device (SET_CONFIGURATION accepted) | its idea of the state starts empty and nothing else would fill it |
+| the host **opens or reconfigures the port** — SET_CONTROL_LINE_STATE, or SET_LINE_CODING | its idea of the state is not this device's doing: it may never have been told, or may have been told by a binding that no longer exists |
+| `serial_state` **changes** | the state itself is news |
+
+and every poll in between is NAKed, which is the ordinary resting state of an
+interrupt endpoint with nothing new to say. Nothing is sent on a timer.
+
 **MEDIUM** (PSTN 1.2 §6.5.4). SERIAL_STATE carries the **current state** of the
 UART's lines and its error conditions, and Table 4's `bmCapabilities` D1 groups
 it with the line-coding requests as one feature. Reading it as a
-**state-change** notification — one sent when what it would say changes, and
-not on a schedule — is a reading and is marked as one: §6.5.4 says what the
-bytes mean and not when a device must produce them, and nothing in PSTN 1.2
-asks for one periodically.
+**state-change** notification is a reading and is marked as one: §6.5.4 says
+what the bytes mean and not when a device must produce them, and nothing in
+PSTN 1.2 asks for one periodically. The middle row of that table is not in the
+specification at all — it is what a host needs, and §4's next subsection is the
+measurement that says so.
 
-So this block sends one
+**MEDIUM**. The device is not configured until SET_CONFIGURATION, so sending
+before that would be a packet on an endpoint the host has not enabled.
 
-* **when the host configures the device**, because the host's own idea of the
-  state starts empty and nothing else would ever fill it; and
-* **whenever `serial_state` changes** afterwards.
+### Why the second trigger is not optional, and what its absence looked like
 
-and NAKs every poll in between, which is the ordinary resting state of an
-interrupt endpoint with nothing new to say.
+**The first version of this sent one notification per configuration and then
+only on a change, and that is a functional defect.** It is written up rather
+than quietly fixed because the reasoning that produced it is the kind that
+looks complete:
 
-**MEDIUM**. The first of those two is a *reading of a driver* as much as of the
-specification. Linux's `cdc_acm` keeps the last bitmap it was sent in `ctrlin`
-and answers `TIOCMGET` out of it; a device that only ever sent one on a change
-would leave a freshly enumerated host believing there is no carrier for ever,
-and PSTN 1.2 does not say what the state is before the first notification. The
-device is not configured until SET_CONFIGURATION, so sending before that would
-be a packet on an endpoint the host has not enabled.
+* PSTN 1.2 describes a state-change notification, so send on a change;
+* a host starts knowing nothing, so send one at configuration too;
+* an interrupt endpoint that NAKs is a device with nothing to say.
+
+Every line of that is true and the conclusion is still wrong, because **a
+state-change notification only reaches a host that was listening when the state
+changed**, and a CDC ACM host is not listening until it opens the port. Linux's
+`cdc_acm` submits its interrupt URB from `acm_port_activate`, which runs on
+`open`; it keeps the last bitmap it was sent in `acm->ctrlin`; and `ctrlin` is
+assigned in exactly one place, the SERIAL_STATE arm of
+`acm_process_notification`. So the single notification a configuration produced
+went to whoever polled first, and after that the device had nothing more to say
+for ever. Two ordinary ways that reads false on a port that is working:
+
+* anything that polls endpoint `82h` before the driver does — **this
+  repository's own `tests/usb_cdc_acm.rs` reads it over usbfs** — leaves
+  `cdc_acm` with `ctrlin` at zero permanently; and
+* `cdc_acm` **bound a second time without a bus reset** — a detach and attach,
+  a module reload — gets a fresh `acm` whose `ctrlin` is zero, and there is no
+  notification left to fill it.
+
+**CHECKED**, and this is the measurement that condemned it: `TIOCMGET` read
+`0x026` — DTR, RTS and the CTS `cdc_acm` hard-codes, with **no DCD and no
+DSR** — on three consecutive opens with no reconfiguration between them. §5 has
+the three readings from after the fix.
+
+**SET_CONTROL_LINE_STATE is the right trigger rather than a convenient one.**
+It is the host saying it has opened the port, and `acm_port_dtr_rts` issues it
+with no comparison against what it last sent, so it goes on **every** open —
+and on every close as well, which means a notification is usually already armed
+before the next open's URB is submitted. SET_LINE_CODING re-arms too, and that
+one is defensive rather than dependable: `acm_tty_set_termios` sends it only
+when the coding actually differs. GET_LINE_CODING does **not** re-arm, because a
+host reading says nothing about what the host believes; `tests/ip_library.rs`
+asserts each of those three separately.
+
+**The alternative was to answer every poll** with the current state instead of
+NAKing, which would make a host's idea of it always right and costs a ten-byte
+packet every `bInterval` for ever. That is not what an interrupt endpoint is
+for, and PSTN 1.2 describes a notification rather than a register a host may
+read, so it was not taken.
+
+**What a host still has to allow for.** The notification arrives at the first
+poll after the request, so up to one `bInterval` — 16 ms — after the `open`.
+A program that opens the port and reads `TIOCMGET` in the same breath can beat
+it. That is what an interrupt endpoint is, not a defect, and it is why the
+readings in §5 are taken after a short settle.
 
 ### What a device with no modem lines should report
 
@@ -690,35 +744,47 @@ set, every error bit clear, which is what
 **CHECKED**: the ten bytes exist on a wire and are the ten bytes §4 says they
 are. `tests/usb_cdc_acm.rs` asserts every field of them.
 
-And the driver decoded them:
+And the driver decoded them, **on every open and not only the first** — three
+consecutive opens of the same terminal with no reconfiguration between them,
+which is the measurement §4 says condemned the first version of this endpoint:
 
 ```console
-$ python3 -c '...TIOCMGET on /dev/ttyACM1...'
-TIOCMGET on /dev/ttyACM1: 0x166 = TIOCM_DTR | TIOCM_RTS | TIOCM_CTS | TIOCM_CAR (DCD) | TIOCM_DSR
+$ python3 three-opens.py /dev/ttyACM1
+BEFORE-BLOCK
 ```
 
-`TIOCM_DTR` and `TIOCM_RTS` are the **host's** own outputs, read back out of
-`acm->ctrlout`, and `TIOCM_CTS` is a constant in `acm_tty_tiocmget`. The two
-that mean something here are **`TIOCM_CAR`** — DCD — and **`TIOCM_DSR`**, and
-`cdc_acm` takes both out of `acm->ctrlin`, which is assigned in exactly one
-place in the driver: the `USB_CDC_NOTIFY_SERIAL_STATE` arm of
-`acm_process_notification`. So a host reporting DCD and DSR for this device is
-the notification having arrived and been decoded, and there is nothing else in
-the device that could make it report them.
+`DTR` and `RTS` are the **host's** own outputs, read back out of
+`acm->ctrlout`, and `CTS` is a constant in `acm_tty_tiocmget`. The two that
+mean something here are **`CAR`** — DCD — and **`DSR`**, and `cdc_acm` takes
+both out of `acm->ctrlin`, which is assigned in exactly one place in the
+driver: the `USB_CDC_NOTIFY_SERIAL_STATE` arm of `acm_process_notification`.
+So a host reporting DCD and DSR for this device is the notification having
+arrived and been decoded, and there is nothing else in the device that could
+make it report them.
+
+The same three opens against the **one-shot** version of this endpoint, on the
+same board and the same host, for comparison — this is the defect, measured:
+
+```console
+AFTER-BLOCK
+```
 
 So: **CHECKED** — Linux's `cdc_acm` receives the notification and answers
-`TIOCMGET` out of it. That is one driver on one kernel version.
+`TIOCMGET` out of it, every time the port is opened. That is one driver on one
+kernel version.
 
 **Why that reading is not in the test.** `TIOCMGET` is an ioctl, which means
 `libc` and `unsafe`, and this crate has neither — the same reason `stty` does
-the terminal configuration. Three lines of Python took it instead, by hand.
-And it could not have been taken in the same run as the ten bytes above even
-if it could be taken at all: the device arms **one** notification per
-configuration and holds it until somebody polls, `cdc_acm` submits its own
-interrupt URB from `acm_port_activate` — that is, on `open` — and whichever of
-the two asks first gets it. The run above read it with usbfs, so that run's
-`cdc_acm` never saw one; the reading here is from a fresh configuration where
-nothing else asked.
+the terminal configuration. A few lines of Python took it instead, by hand. Note
+that the reading needs a **settle** of one `bInterval` — 16 ms — after the open,
+because the notification arrives at the host's next poll and not at the instant
+the request is answered; the script above waits 300 ms.
+
+What the test does instead is read the ten bytes off the endpoint, and the two
+readings still cannot come from the same run: whichever of usbfs and `cdc_acm`
+polls first gets the pending packet. That is no longer a *defect* — a request
+from the host arms another — but it is still true of any single packet, so the
+test's usbfs read and this `TIOCMGET` are taken separately.
 
 **What `clocal` actually does here, since this file used to say otherwise.**
 The previous version of this section said `clocal` was needed because a CDC ACM

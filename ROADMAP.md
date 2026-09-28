@@ -801,10 +801,15 @@ and first-party IP should drop into a design as easily as a Rust crate.
       needs neither a write decoder nor a read multiplexer. `usb_pkt_rx` grew a
       payload byte stream so there is no second copy of a 64-byte packet.
       `usb_cdc_acm` sends **SERIAL_STATE** (PSTN 1.2 §6.5.4) when the host
-      configures it and whenever the new `serial_state` port changes; on a
-      Cynthion the ten bytes were read off endpoint `82h` and `TIOCMGET`
-      reports DCD and DSR, which `cdc_acm` can only take from that
-      notification. Measured on that board:
+      configures the device, when it **opens or reconfigures the port**, and
+      whenever the new `serial_state` port changes. That middle trigger is not
+      in the specification and is not optional: a state-change notification only
+      reaches a host that was listening when the state changed, and `cdc_acm`
+      starts listening at `open`, so one per configuration read as no carrier on
+      every open after the first. On a Cynthion the ten bytes were read off
+      endpoint `82h` and `TIOCMGET` reports DCD and DSR on three consecutive
+      opens, which `cdc_acm` can only take from that notification.
+      Measured on that board:
       **67 700 bytes/s each way at eight bytes and 255 500 at 64**, for
       **+948 LUT4 and +923 flip-flops** on an ECP5 — both in
       `docs/ip-library.md`, with the byte multiplexer named as the whole of

@@ -12563,11 +12563,10 @@ fn cdc_serial_state(state: u8) -> Vec<u8> {
     ]
 }
 
-/// The notification endpoint sends **SERIAL_STATE**, once per configuration
-/// and again whenever the line state changes, and NAKs every poll in between.
+/// The notification endpoint sends **SERIAL_STATE** whenever the host's idea of
+/// the line state could be stale, and NAKs every poll in between.
 ///
-/// This is the endpoint that used to send nothing at all because ten bytes did
-/// not fit in eight, so what it asserts is the whole of the change:
+/// Four triggers, and the **third is the one this test exists for**:
 ///
 ///   * the first poll after SET_CONFIGURATION returns the ten bytes, because a
 ///     host's idea of the line state starts empty and nothing else would fill
@@ -12575,10 +12574,25 @@ fn cdc_serial_state(state: u8) -> Vec<u8> {
 ///     sent;
 ///   * every poll after that is NAKed, twenty of them, because a state that
 ///     has not changed is not news;
-///   * a **change** of `serial_state` produces one more, with the new bitmap
-///     and the other data toggle;
+///   * **SET_CONTROL_LINE_STATE, and then SET_LINE_CODING, each produce one
+///     more even though `serial_state` has not moved**, because those requests
+///     are a host opening or reconfiguring the port and its idea of the state
+///     is then not this device's doing;
+///   * a **change** of `serial_state` produces one more, with the new bitmap;
 ///   * and a bus reset makes the device owe one again, because the host has
 ///     forgotten what it was told.
+///
+/// **Why the third one is the assertion that matters.** The first version of
+/// this test had the other three and passed against a device that sent
+/// **one notification per configuration and never another**, which is a
+/// functional defect: `cdc_acm` submits its interrupt URB at `open` and
+/// consumes that one, and a `cdc_acm` bound a second time without a bus reset
+/// starts with `acm->ctrlin` at zero and nothing left to fill it. On the part
+/// that read as `TIOCMGET = 0x026` — no DCD, no DSR — on three consecutive
+/// opens. A test that only asks "is a notification ever sent" is satisfied by a
+/// one-shot; this one asks for a **second** one after a simulated open, with
+/// the state deliberately **unchanged** so that nothing but the request can
+/// have caused it.
 ///
 /// It also asserts the thing that would be a real fault: the endpoint has
 /// **no OUT direction**, so an OUT token for it is answered with nothing at
@@ -12587,8 +12601,9 @@ fn cdc_serial_state(state: u8) -> Vec<u8> {
 ///
 /// **What it would not catch.** Whether a host's driver acts on the bytes.
 /// Nothing in simulation can: this host model is written from the same
-/// specification as the device. `tests/usb_cdc_acm.rs` reads `TIOCMGET` off a
-/// real kernel, and that is the other half.
+/// specification as the device. `tests/usb_cdc_acm.rs` reads the ten bytes off
+/// the wire and `ip/usb_cdc_acm/README.md` §5 has `TIOCMGET` off a real kernel
+/// across three opens, which is the other half.
 fn cdc_notification<P: UsbPair>(host: &mut UsbHost<P>) {
     host.set_port("serial_state", CDC_LINES_UP, 7);
     configure_for(
@@ -12626,8 +12641,68 @@ fn cdc_notification<P: UsbPair>(host: &mut UsbHost<P>) {
         host.idle(6);
     }
 
+    // ------------------------------------------------------------------
+    // A host opening the port: SET_CONTROL_LINE_STATE, and one more
+    // notification although the line state has not moved.
+    // ------------------------------------------------------------------
+    // This is what `cdc_acm` does at every `open` — `acm_port_dtr_rts` issues
+    // it with no comparison against what it last sent — and it is the only
+    // sight this class gets of a host arriving. `serial_state` is deliberately
+    // left alone, so a notification here can only be the request's doing.
+    assert_eq!(
+        host.control_write(6, cdc_set_control_line_state(true, true)),
+        UsbReply::Data(USB_DATA1, Vec::new()),
+        "SET_CONTROL_LINE_STATE is acknowledged"
+    );
+    host.idle(20);
+    assert_eq!(
+        host.bulk_in(6, CDC_NOTIF_ENDP),
+        UsbReply::Data(USB_DATA1, cdc_serial_state(up)),
+        "a host that has just opened the port is told the state again"
+    );
+    host.ack();
+    host.idle(6);
+    assert_eq!(
+        host.bulk_in(6, CDC_NOTIF_ENDP),
+        UsbReply::Handshake(USB_NAK),
+        "and then nothing again, because it has now been told"
+    );
+    host.idle(6);
+
+    // And SET_LINE_CODING does it too, which is the defensive half:
+    // `acm_tty_set_termios` only sends it when the coding actually differs, so
+    // it is not the one to rely on, but a host that reconfigures the line has
+    // as much claim to a fresh state as one that opens the port.
+    assert_eq!(
+        host.control_write_data(6, CDC_SET_LINE_CODING, &cdc_line_coding(19_200, 0, 0, 8)),
+        UsbReply::Data(USB_DATA1, Vec::new()),
+        "SET_LINE_CODING is acknowledged through its status stage"
+    );
+    host.idle(20);
+    assert_eq!(
+        host.bulk_in(6, CDC_NOTIF_ENDP),
+        UsbReply::Data(USB_DATA0, cdc_serial_state(up)),
+        "and a host that has reconfigured the line is told as well"
+    );
+    host.ack();
+    host.idle(6);
+
+    // GET_LINE_CODING is a host **reading**, and says nothing about what the
+    // host believes, so it must not produce one.
+    let coding = host
+        .control_read(6, CDC_GET_LINE_CODING)
+        .expect("GET_LINE_CODING");
+    assert_eq!(coding, cdc_line_coding(19_200, 0, 0, 8));
+    host.idle(20);
+    assert_eq!(
+        host.bulk_in(6, CDC_NOTIF_ENDP),
+        UsbReply::Handshake(USB_NAK),
+        "a request that only reads is not a host telling this port anything"
+    );
+    host.idle(6);
+
     // A change: the carrier drops and a framing error is reported instead. One
-    // more notification, with the new bitmap and the other toggle.
+    // more notification, with the new bitmap.
     let dropped = 0b001_0000u64;
     host.set_port("serial_state", dropped, 7);
     host.idle(20);
@@ -12646,6 +12721,17 @@ fn cdc_notification<P: UsbPair>(host: &mut UsbHost<P>) {
         UsbReply::Handshake(USB_NAK),
         "and then nothing again"
     );
+    host.idle(6);
+
+    // Back up again, so the rest of this test is about a port with a carrier.
+    host.set_port("serial_state", CDC_LINES_UP, 7);
+    host.idle(20);
+    assert_eq!(
+        host.bulk_in(6, CDC_NOTIF_ENDP),
+        UsbReply::Data(USB_DATA0, cdc_serial_state(up)),
+        "and back, which is the other direction of the same change"
+    );
+    host.ack();
     host.idle(6);
 
     // The endpoint has one direction. An OUT to it is nobody's: the

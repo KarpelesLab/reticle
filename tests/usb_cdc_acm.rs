@@ -33,13 +33,17 @@
 //!    transmitter, recovered by its receiver, and handed back to the IN
 //!    endpoint — so a byte that comes back proves the whole bridge and not
 //!    only the USB half.
-//! 3. **The device sent a SERIAL_STATE notification**, read off endpoint
-//!    `82h` — the ten bytes of PSTN 1.2 §6.5.4, checked field by field. This
-//!    is the half of the notification that a host can be asked about without
-//!    an ioctl: `TIOCMGET` reads the same `wSerialState` out of `cdc_acm`'s
-//!    own `ctrlin`, and it needs `libc` and `unsafe`, which this crate does
-//!    not have. `ip/usb_cdc_acm/README.md` §5 has that reading, taken by
-//!    hand, and says why the two cannot be taken in the same run.
+//! 3. **The device sent a SERIAL_STATE notification** in answer to a host
+//!    opening the port. SET_CONTROL_LINE_STATE goes out over usbfs — which is
+//!    what `cdc_acm` issues at every `open` — and the ten bytes of PSTN 1.2
+//!    §6.5.4 are read off endpoint `82h` and checked field by field. Asking
+//!    first is what makes it deterministic, and it is also the assertion whose
+//!    absence let a one-notification-per-configuration device through: see
+//!    `serial_state_notification`. This is the half a host can be asked about
+//!    without an ioctl; `TIOCMGET` reads the same `wSerialState` out of
+//!    `cdc_acm`'s own `ctrlin` and needs `libc` and `unsafe`, which this crate
+//!    does not have, so `ip/usb_cdc_acm/README.md` §5 has that reading across
+//!    three opens, taken by hand.
 //!
 //!    **A blocking `open` is not the observation it looks like.**
 //!    `cdc_acm`'s `tty_port_operations` has no `carrier_raised`, and
@@ -359,13 +363,13 @@ fn a_serial_port_this_compiler_built_is_bound_by_the_kernels_own_driver() {
     // ------------------------------------------------------------------
     // Part three: the device sent a SERIAL_STATE notification.
     // ------------------------------------------------------------------
-    // **Before anything opens the terminal**, which is not a detail: the device
-    // arms one notification per configuration and holds it until somebody polls
-    // endpoint 82h, and `cdc_acm` submits its own interrupt URB from
-    // `acm_port_activate` — that is, on `open`. So whichever of the two asks
-    // first gets it, and reading it here means the driver will not. That is
-    // why `ip/usb_cdc_acm/README.md` §5 has the `TIOCMGET` reading from a
-    // separate run rather than from this one.
+    // This asks for a notification and then reads it, rather than hoping one is
+    // still pending, so it does not matter what has opened the terminal before
+    // now — `serial_state_notification` says why that used to matter and what
+    // it hid. What it does still take is the one packet that is pending when it
+    // runs, so `ip/usb_cdc_acm/README.md` §5's `TIOCMGET` readings come from a
+    // separate run: whichever of usbfs and `cdc_acm` polls first gets a given
+    // packet, and that much is just how one packet works.
     match device.open() {
         Ok(handle) => match serial_state_notification(&handle) {
             Ok(bytes) => {
@@ -574,12 +578,21 @@ fn terminal_again() -> Option<PathBuf> {
     None
 }
 
-/// The SERIAL_STATE notification, read off the notification endpoint itself.
+/// The SERIAL_STATE notification, read off the notification endpoint itself
+/// after **asking for one the way a host's driver does**.
 ///
-/// The device holds one armed from the moment the host configured it — an
-/// interrupt endpoint with nothing to say NAKs, and this one has something —
-/// so a single `interrupt_read` gets the ten bytes without waiting for
-/// anything to change.
+/// It sends SET_CONTROL_LINE_STATE first, which is what `cdc_acm` issues from
+/// `acm_port_dtr_rts` on every `open`, and `ip/usb_cdc_acm` answers a request
+/// like that with a notification whether or not the line state has moved. So
+/// the `interrupt_read` that follows is **deterministic**: it does not depend on
+/// a packet left over from configuration time, and therefore not on whether
+/// anything else has opened the terminal since the device enumerated.
+///
+/// That matters because the first version of this test *did* depend on it, and
+/// hid a defect behind the dependency: with one notification per configuration
+/// there was exactly one packet in the device's whole life, this test consumed
+/// it, and `cdc_acm` then reported no carrier for ever — `TIOCMGET = 0x026` on
+/// every open. `ip/usb_cdc_acm/README.md` §4 has that written up.
 ///
 /// **It has to take the communications interface away from `cdc_acm` to ask**,
 /// for the same reason `line_coding` below does: usbfs refuses a transfer on an
@@ -588,13 +601,14 @@ fn terminal_again() -> Option<PathBuf> {
 /// that the terminal came back.
 ///
 /// **What this would and would not catch.** It catches the ten bytes being
-/// wrong in any field, or not being sent at all — which is what this endpoint
-/// did before the packet length was widened, and would show here as a timeout.
-/// It does **not** show that a host driver decodes them: that is `TIOCMGET`,
-/// which needs an ioctl this crate cannot make, and
-/// `ip/usb_cdc_acm/README.md` §5 has it taken by hand. It also does not show a
-/// notification sent on a *change* of the line state, because this board's
-/// `serial_state` is a constant; that half is `tests/ip_library.rs`'s
+/// wrong in any field, and it catches the notification not being sent in answer
+/// to a host opening the port — which is the defect above and would show here
+/// as a timeout. It does **not** show that a host driver decodes them: that is
+/// `TIOCMGET`, which needs an ioctl this crate cannot make, and
+/// `ip/usb_cdc_acm/README.md` §5 has it taken by hand across three opens. It
+/// also does not show a notification sent on a *change* of the line state,
+/// because this board's `serial_state` is a constant; that half is
+/// `tests/ip_library.rs`'s
 /// `usb_cdc_acm_notification_endpoint_sends_the_serial_state`.
 fn serial_state_notification(handle: &rawusb::DeviceHandle) -> Result<Vec<u8>, String> {
     let held = handle.kernel_driver_active(COMM_IFACE).unwrap_or(false);
@@ -609,9 +623,19 @@ fn serial_state_notification(handle: &rawusb::DeviceHandle) -> Result<Vec<u8>, S
     // being silently cut to fit.
     let mut buf = vec![0u8; usize::from(NOTIF_MAXPKT)];
     let asked = if claimed.is_ok() {
+        // SET_CONTROL_LINE_STATE with DTR and RTS raised: bmRequestType 21h is
+        // host to device, class, to an interface; bRequest 22h; wValue D0 is
+        // DTR and D1 is RTS; no data stage (PSTN 1.2 §6.3.12). This is a host
+        // saying it has opened the port, and it is what makes the read below
+        // independent of anything that happened before this test ran.
         handle
-            .interrupt_read(NOTIF_EP, &mut buf, TIMEOUT)
-            .map_err(|e| format!("{e}"))
+            .control_write(0x21, 0x22, 0x0003, u16::from(COMM_IFACE), &[], TIMEOUT)
+            .map_err(|e| format!("SET_CONTROL_LINE_STATE: {e}"))
+            .and_then(|_| {
+                handle
+                    .interrupt_read(NOTIF_EP, &mut buf, TIMEOUT)
+                    .map_err(|e| format!("{e}"))
+            })
     } else {
         Err(format!("claiming interface {COMM_IFACE}: {claimed:?}"))
     };
