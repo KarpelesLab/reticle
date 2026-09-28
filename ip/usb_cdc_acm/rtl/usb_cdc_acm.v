@@ -221,6 +221,10 @@ module usb_cdc_acm #(
     // four values; `usb_ctrl_ep`'s parameter of the same name says what
     // raising it buys and what the one asymmetry of it is.
     parameter [6:0]  MAXPKT0    = 7'd64,
+    // What shape the bulk endpoints' packet buffers take: 1 an array, which is
+    // a distributed RAM on a family that has one, 0 a shift register.
+    // `usb_bulk_ep`'s parameter of the same name has the measurements.
+    parameter        BUF_RAM    = 1,
     // Cycles of `line_idle` before an answer starts; `usb_ctrl_ep`'s
     // parameter of the same name says what it has to be and why.
     parameter [6:0]  TURNAROUND = 7'd8
@@ -617,6 +621,7 @@ module usb_cdc_acm #(
         .NOTIF_ENDP   (NOTIF_ENDP),
         .NOTIF_MAXPKT (NOTIF_MAXPKT),
         .CLASS_MAX    (7),
+        .BUF_RAM      (BUF_RAM),
         .TURNAROUND   (TURNAROUND)
     ) u_dev (
         .clk          (clk),

@@ -304,8 +304,7 @@ const VARIANTS: &[Variant] = &[
     // The same block with the **smallest** packet size USB 2.0 §5.8.3 and
     // §5.5.3 allow, so that the table says what 64 bytes cost rather than
     // leaving a reader to find out by building it. The whole difference
-    // between this row and the one above is the two 64-byte buffers and the
-    // byte multiplexer over each of them.
+    // between this row and the one above is the two 64-byte buffers.
     Variant {
         package: "usb_device_fs",
         top: "usb_device_fs",
@@ -314,6 +313,30 @@ const VARIANTS: &[Variant] = &[
             ("PID", "16'h0001"),
             ("MAXPKT", "7'd8"),
             ("MAXPKT0", "7'd8"),
+        ],
+    },
+    // And both sizes again with the buffers as **shift registers** rather than
+    // arrays, which is `usb_bulk_ep`'s `BUF_RAM = 0`. Four rows a size, and
+    // they earn the minutes: the array is the default because it is far
+    // smaller on a family with a distributed RAM, it is larger on one without,
+    // and "which one is my part" is a question the table should answer rather
+    // than the prose. The pair of sizes is here because the penalty on the
+    // iCE40 does not scale with the buffer the way the saving on the ECP5
+    // does.
+    Variant {
+        package: "usb_device_fs",
+        top: "usb_device_fs",
+        params: &[("VID", "16'h1209"), ("PID", "16'h0001"), ("BUF_RAM", "0")],
+    },
+    Variant {
+        package: "usb_device_fs",
+        top: "usb_device_fs",
+        params: &[
+            ("VID", "16'h1209"),
+            ("PID", "16'h0001"),
+            ("MAXPKT", "7'd8"),
+            ("MAXPKT0", "7'd8"),
+            ("BUF_RAM", "0"),
         ],
     },
     Variant {
@@ -8772,7 +8795,17 @@ impl DataEp {
 fn step_data(sim: &mut Simulator<'_>, ep: &mut DataEp) {
     let out_valid = high(sim, ep.out_valid);
     let out_last = high(sim, ep.out_last);
-    let out_byte = octet(get_u64(sim, ep.out_data));
+    // Only while `out_valid`. A ready/valid data bus says nothing about its
+    // bytes when its valid is low, and this one now comes out of a memory
+    // whose contents before the first write are whatever the fabric came up
+    // holding — X in simulation, and on an ECP5 whatever `dpram_init_word`
+    // put there. A consumer that latched it anyway would be reading a byte
+    // the endpoint never claimed to have.
+    let out_byte = if out_valid {
+        octet(get_u64(sim, ep.out_data))
+    } else {
+        0
+    };
     let in_ready = high(sim, ep.in_ready);
 
     // In loopback the byte only moves when the IN side has room for it,
@@ -13549,6 +13582,8 @@ endmodule
 /// spoils a different number of bytes. A board is still the last word. This
 /// also says nothing about the rest of either block after mapping; the
 /// descriptors are what it reads because the descriptors are what a ROM is.
+/// And it says nothing about `usb_bulk_ep`'s packet buffers as **arrays**: the
+/// cases below take `BUF_RAM = 0` and the comment on them says why.
 #[test]
 fn usb_descriptors_survive_lookup_table_mapping() {
     // The CDC ACM descriptor set, as `ip/usb_cdc_acm` states it, for the
@@ -13578,12 +13613,33 @@ fn usb_descriptors_survive_lookup_table_mapping() {
     // Three of them and two LUT widths. The first is the descriptor set that
     // has always worked on a board, the second is the one that did not, and
     // the third is the block that states it for itself.
+    //
+    // **All three take `BUF_RAM = 0`, and that is a limit of this simulator
+    // rather than a preference.** `usb_bulk_ep`'s buffers are arrays by
+    // default, so they are memories, and a memory nothing has written yet
+    // reads as X. An X out of them is harmless in the design as elaborated —
+    // `CellKind::Mux` answers from the input its select chose, so the byte
+    // multiplexer `usb_dev_core` shares between the endpoints hands endpoint
+    // 0's byte on untouched, which is why every other test in this file
+    // passes with the default. After **covering**, that multiplexer is `lut`
+    // cells, and `CellKind::Lut` in `src/sim/sched.rs` answers X as soon as
+    // any input bit is X, whether its function depends on that input or not.
+    // One byte of an unwritten buffer therefore silences the whole device
+    // here and GET_DESCRIPTOR returns nothing at all.
+    //
+    // The shape has nothing to do with what this test is for — the descriptor
+    // ROM is a constant in `usb_ctrl_ep` and `BUF_RAM` does not reach it — so
+    // the cases take the shape whose netlist a four-state simulator can
+    // decide, and the coverage this test had before the buffers became arrays
+    // is exactly the coverage it has now. What is **not** covered anywhere is
+    // the array shape through a mapped netlist; an X-optimal `lut` evaluation
+    // would close that, and it belongs in `src/sim`.
     let cases = [
         Case {
             variant: Variant {
                 package: "usb_device_fs",
                 top: "usb_device_fs",
-                params: &[("VID", "16'h1209"), ("PID", "16'h0001")],
+                params: &[("VID", "16'h1209"), ("PID", "16'h0001"), ("BUF_RAM", "0")],
             },
             want: expected_configuration_descriptor,
         },
@@ -13596,6 +13652,7 @@ fn usb_descriptors_survive_lookup_table_mapping() {
                     ("PID", "16'h0001"),
                     ("IFACE_BYTES", "58"),
                     ("IFACE_DESC", CDC_BLOB),
+                    ("BUF_RAM", "0"),
                 ],
             },
             want: expected_cdc_configuration,
@@ -13604,7 +13661,7 @@ fn usb_descriptors_survive_lookup_table_mapping() {
             variant: Variant {
                 package: "usb_cdc_acm",
                 top: "usb_cdc_acm_fs",
-                params: &[("VID", "16'h1209"), ("PID", "16'h0001")],
+                params: &[("VID", "16'h1209"), ("PID", "16'h0001"), ("BUF_RAM", "0")],
             },
             want: expected_cdc_configuration,
         },

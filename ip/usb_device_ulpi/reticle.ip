@@ -45,6 +45,7 @@ param IFACE_BYTES int 23 9..64
 param DATA_ENDP bits 4'd1
 param MAXPKT bits 7'd64
 param MAXPKT0 bits 7'd64
+param BUF_RAM int 1 0..1
 
 port clk60 in
 port rst_n in

@@ -95,6 +95,10 @@ module usb_device_fs #(
     // than told again.
     parameter [6:0]   MAXPKT       = 7'd64,
     parameter [6:0]   MAXPKT0      = 7'd64,
+    // What shape the bulk endpoints' packet buffers take: 1 an array, which is
+    // a distributed RAM on a family that has one, 0 a shift register.
+    // `usb_bulk_ep`'s parameter of the same name has the measurements.
+    parameter         BUF_RAM      = 1,
     // The class's interface and endpoint descriptors, in descriptor order,
     // and their length in bytes; `usb_ctrl_ep` says what is derived from
     // them and what is not.
@@ -187,6 +191,7 @@ module usb_device_fs #(
         .DATA_ENDP    (DATA_ENDP),
         .MAXPKT       (MAXPKT),
         .MAXPKT0      (MAXPKT0),
+        .BUF_RAM      (BUF_RAM),
         .TURNAROUND   (7'd8)
     ) u_dev (
         .clk          (clk48),

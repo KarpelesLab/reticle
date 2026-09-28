@@ -53,6 +53,7 @@ param CFG_ATTR bits 8'h80
 param CFG_POWER bits 8'd50
 param MAXPKT bits 7'd64
 param MAXPKT0 bits 7'd64
+param BUF_RAM int 1 0..1
 
 port clk60 in
 port rst_n in

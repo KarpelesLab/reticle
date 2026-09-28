@@ -34,7 +34,11 @@ module usb_cdc_acm_fs #(
     // Bytes in a bulk packet, and in an endpoint 0 packet; `usb_cdc_acm`'s
     // parameters of the same names say which values USB 2.0 allows.
     parameter [6:0]  MAXPKT    = 7'd64,
-    parameter [6:0]  MAXPKT0   = 7'd64
+    parameter [6:0]  MAXPKT0   = 7'd64,
+    // What shape the bulk endpoints' packet buffers take: 1 an array, which is
+    // a distributed RAM on a family that has one, 0 a shift register.
+    // `usb_bulk_ep`'s parameter of the same name has the measurements.
+    parameter        BUF_RAM   = 1
 ) (
     input  wire       clk48,
     input  wire       rst_n,
@@ -124,6 +128,7 @@ module usb_cdc_acm_fs #(
         .CFG_POWER  (CFG_POWER),
         .MAXPKT     (MAXPKT),
         .MAXPKT0    (MAXPKT0),
+        .BUF_RAM    (BUF_RAM),
         .TURNAROUND (7'd8)
     ) u_acm (
         .clk          (clk48),

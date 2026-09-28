@@ -1287,21 +1287,11 @@ endmodule
 //   cheaper to read and to be sure of than a handshake between three
 //   modules.
 //
-// WHERE THE TWO PACKETS ARE KEPT, AND WHY NEITHER IS AN ARRAY
-//   A packet is up to 64 bytes each way, so the two buffers are 1024
-//   flip-flops and the shape they are written in decides what they cost in
-//   lookup tables as well. Three shapes were available and two of them are
-//   not:
-//
-//     an array indexed by a register — `reg [7:0] buf [0:63]` — is a
-//     **distributed RAM**, which the ECP5 backend could not place when this
-//     was written: `src/fpga/devices/ecp5.dev` declared `TRELLIS_DPR16X4`
-//     with no site count, so `fpga::place` counted zero of them and refused.
-//     `testdata/fpga/cynthion/usb_cdc_uart.v` says the same thing about
-//     `ip/fifo_sync`, and that is why neither block uses an array. **If that
-//     has since been fixed, this is the shape worth reconsidering**, because
-//     a 64-by-8 distributed RAM is the only one of the three that needs
-//     neither a write decoder nor a read multiplexer.
+// WHERE THE TWO PACKETS ARE KEPT: AN ARRAY, AND WHY IT IS A PARAMETER
+//   A packet is up to 64 bytes each way, so the two buffers are 1024 bits and
+//   the shape they are written in decides what they cost in lookup tables as
+//   well as where those bits live. Three shapes are available and one of them
+//   is not:
 //
 //     one wide register written at a computed offset —
 //     `buf[{idx, 3'b000} +: 8] <= byte` — is
@@ -1311,25 +1301,57 @@ endmodule
 //     length: it also costs a six-to-sixty-four decoder to make the write
 //     enables.
 //
-//   So both buffers are **shift registers**, which is what the traffic
-//   already is: bytes arrive in order and are given in order, so a byte
-//   always goes in at the same end. The write costs no decoder and no
-//   lookup table at all, and what is left is the read — one 64-way byte
-//   multiplexer per direction, which any of the three shapes needs.
+//   The other two are `BUF_RAM`, and both are below.
 //
-//   A shift register puts the packet at the **top** of the buffer and the
-//   first byte of a short one therefore sits lower than the first byte of a
-//   long one. That is what `obase` and `ibase` are: each counts down from
-//   the buffer's size as bytes go in, so it ends up being the position of
-//   byte zero, and a read is `base + index`. They are counters and not
-//   subtractions, so there is no arithmetic on a length anywhere.
+//   `BUF_RAM = 1` is an **array** indexed by a register — `reg [7:0] buf
+//   [0:MAXPKT-1]` — which is a **distributed RAM** on a family that has one
+//   and needs neither a write decoder nor a read multiplexer: the write
+//   pointer and the read index *are* the memory's addresses. This is the
+//   default, and it was not available when these buffers were first written:
+//   `src/fpga/devices/ecp5.dev` declared `TRELLIS_DPR16X4` with no site count,
+//   so `fpga::place` counted zero of them and refused the design. It has 3036
+//   sites now and `docs/fpga-trellis.md` says what it took.
+//
+//   `BUF_RAM = 0` is a **shift register**, which is what the traffic already
+//   is: bytes arrive in order and are given in order, so a byte always goes in
+//   at the same end. The write costs no decoder and no lookup table at all,
+//   and what is left is the read — one 64-way byte multiplexer per direction,
+//   which is 63 LUT4 a bit, 504 a direction, 1008 for the pair.
+//
+//   **Neither shape wins everywhere, which is why this is a parameter.** On
+//   the ECP5, at 64 bytes and measured through the whole flow, the array takes
+//   `usb_device_fs` from 1830 LUT4 and 1379 flip-flops to **853 LUT4, 355
+//   flip-flops and 16 TRELLIS_DPR16X4** — eight per buffer, which is what
+//   64 x 8 bits asks for from a RAM that is 16 deep and 4 wide. On an iCE40
+//   there is no distributed RAM at all: the same array becomes the same
+//   flip-flops *plus* a write-enable decoder the shift register did without,
+//   and `usb_device_fs` goes from 1804 SB_LUT4 to **2869**. So a design on a
+//   family with no LUT RAM wants `BUF_RAM = 0`, and `docs/ip-library.md` has
+//   every row of both.
+//
+//   The array puts byte 0 at position 0 and there is no base to keep: `owp`
+//   counts the bytes of an OUT packet as they arrive and `ilen` counts the
+//   bytes of an IN packet, and those two are the write addresses. A shift
+//   register puts the packet at the **top** instead, so byte 0 of it sits at
+//   `MAXPKT - written` and a read is `index - written` at `IDX_BITS` bits —
+//   the same value modulo `MAXPKT`, which is why the two shapes share every
+//   register and differ only in the storage and the two read expressions.
 //
 //   Both buffers are exactly `MAXPKT` bytes, because what `usb_pkt_rx` hands
 //   over are **payload** bytes with the PID and the CRC16 already taken out —
 //   its "WHY THERE IS A WORD AND ALSO A STREAM" says how — so a legal packet
-//   shifts in exactly its own length. An over-long one would walk the start
-//   of itself out of the bottom, so the shift stops at `obase == 0`; such a
-//   packet is refused anyway and nothing reads what it left behind.
+//   fills exactly its own length. An over-long one wraps `owp` round, or walks
+//   the start of itself out of the bottom of the shift register; such a packet
+//   is refused anyway, the buffer it landed in was empty, and nothing reads
+//   what it left behind.
+//
+//   Neither buffer is **cleared on reset**, because a distributed RAM has no
+//   reset pin and an array cleared on `rst_n` cannot be one. Nothing needs the
+//   clear: a byte of the OUT buffer is read only while `olen != 0` and one of
+//   the IN buffer only while `armed`, and both of those reset to zero, so no
+//   byte of either is read before it has been written. The one exception is
+//   the fetch past the end of a packet, and "THE ONE FETCH THAT IS OUTSIDE THE
+//   PACKET" below is that.
 //
 // What it does not do
 //   One endpoint number, one packet deep, `MAXPKT` of at most 64 bytes —
@@ -1377,14 +1399,36 @@ module usb_bulk_ep #(
     //
     // Nothing is generated away by hand. The registers of a direction that
     // cannot be asked for have no reader — `expect_out` can never be set, so
-    // `obuf` is never written and `out_valid` is constantly low — so
-    // synthesis removes them, which is why both directions of this module
-    // read as one piece of logic below rather than as two halves behind a
-    // `generate`. With 64-byte packets that is 528 flip-flops a direction,
-    // so it matters more than it did: the notification endpoint of
-    // `ip/usb_cdc_acm` is `WITH_OUT = 0` and pays for none of them.
+    // `obuf` is never written and `out_valid` is constantly low — so synthesis
+    // removes them, and that holds for the buffer whichever shape `BUF_RAM`
+    // gave it: a memory with no write port goes the same way a shift register
+    // with no reader does. With 64-byte packets that is 528 flip-flops a
+    // direction, or eight `TRELLIS_DPR16X4`, so it matters more than it did:
+    // the notification endpoint of `ip/usb_cdc_acm` is `WITH_OUT = 0` and pays
+    // for neither. It is why `usb_cdc_acm_fs` needs 18 of them and not 26 —
+    // sixteen for the bulk pair and two for that endpoint's IN buffer alone.
     parameter        WITH_OUT   = 1,
     parameter        WITH_IN    = 1,
+    // WHICH SHAPE THE TWO PACKET BUFFERS TAKE
+    //
+    // 1 is an **array** — `reg [7:0] buf [0:MAXPKT-1]` — which is a
+    // distributed RAM on a family that has one, and needs neither a write
+    // decoder nor a read multiplexer. 0 is a **shift register**, which needs
+    // no write decoder either but does need the multiplexer. "WHERE THE TWO
+    // PACKETS ARE KEPT" above has the measurements; the short of it is that
+    // the array is far smaller wherever the fabric has a distributed RAM and
+    // larger wherever it does not, because a family with no LUT RAM builds the
+    // array out of the same flip-flops *and* the write decoder the shift
+    // register did without.
+    //
+    // The default is the array. The penalty is on the family that has no room
+    // for this endpoint in either shape — `usb_device_fs` at 64 bytes is 1804
+    // SB_LUT4 as a shift register against an iCE40 HX1K's 1280 — and it does
+    // not go away at `MAXPKT = 8`, where the array is 983 SB_LUT4 against 849:
+    // still worse, by 134. A design on such a family should say
+    // `BUF_RAM = 0`, and `docs/ip-library.md`'s footprint table carries both
+    // shapes at both sizes so that is a number to read rather than to measure.
+    parameter        BUF_RAM    = 1,
     // Cycles of `line_idle` before an answer starts; `usb_ctrl_ep`'s
     // parameter of the same name says what it has to be and why.
     parameter [6:0]  TURNAROUND = 7'd8
@@ -1486,50 +1530,32 @@ module usb_bulk_ep #(
     //   IDX_BITS   a byte's position in a buffer: 0 to MAXPKT - 1
     localparam integer LEN_BITS = $clog2(MAXPKT + 1);
     localparam integer IDX_BITS = $clog2(MAXPKT);
-    // Where each buffer's base counter starts, sized so that nothing has to
-    // take a part-select of an `integer` to get it.
-    localparam [LEN_BITS-1:0] BASE_TOP = MAXPKT;
 
     // -----------------------------------------------------------------
     // Host to device.
     // -----------------------------------------------------------------
-    // The byte index is scaled to a bit index by concatenation and not by
-    // `* 8`. A multiply by a power of two is a shift, but this compiler's
-    // synthesis does not strength-reduce one: `ordx * 8` became a `mul`
-    // cell, and on the ECP5 a `MULT18X18D`. Three of them, across the two
-    // buffers and the descriptor, cost 640 LUT4 and two hard multipliers.
-    reg [MAXPKT*8-1:0] obuf;   // the packet, shifted in from the top
-    reg [LEN_BITS-1:0] obase;  // where byte 0 of it ended up
     reg [LEN_BITS-1:0] olen;   // bytes in it, 0 when it has been drained
+    reg [IDX_BITS-1:0] owp;    // bytes of it written so far
     reg [IDX_BITS-1:0] ordx;   // the byte being handed over
     reg        out_toggle;  // the PID the next packet should carry
     reg        expect_out;  // an OUT token has been seen and its data is next
     reg        out_take;    // ... and there was room, so it is being stored
 
-    // The position of the byte being handed over. `obase` has counted down to
-    // byte 0's position, so this is in range for every byte of an accepted
-    // packet — `MAXPKT - olen` to `MAXPKT - 1` — and the mask to `IDX_BITS`
-    // therefore drops nothing. It is a mask and not a bound because the two
-    // are the same thing when `MAXPKT` is a power of two, which the header
-    // above requires it to be.
-    wire [LEN_BITS-1:0] ordx_at = obase + ordx;
     // One past the byte being handed over, at a length's width.
     wire [LEN_BITS-1:0]   ordx_next = ordx + 1'b1;
 
+    // A byte of the OUT packet is arriving and is being kept.
+    wire out_wr = WITH_OUT && expect_out && out_take && pay_push;
+
     assign out_valid = (olen != 0);
-    assign out_data  = obuf[{ordx_at[IDX_BITS-1:0], 3'b000} +: 8];
     assign out_last  = (ordx_next == olen);
 
     // -----------------------------------------------------------------
     // Device to host.
     // -----------------------------------------------------------------
-    // The same shift register the other way round: bytes are given in order,
-    // so each one goes in at the top and `ibase` counts down to where byte 0
-    // ended up. The packet is **not** consumed by being sent, because a
-    // packet the host does not acknowledge goes out again with the same
-    // toggle, so nothing shifts on the way out and the read is a multiplexer.
-    reg [MAXPKT*8-1:0] ibuf;
-    reg [LEN_BITS-1:0] ibase;   // where byte 0 of it is
+    // The packet is **not** consumed by being sent, because a packet the host
+    // does not acknowledge goes out again with the same toggle, so nothing
+    // moves on the way out: the transmitter reads it as many times as it takes.
     reg [LEN_BITS-1:0] ilen;    // bytes given so far
     reg       armed;        // the packet is ready to go out
     reg       in_toggle;    // the PID it will carry
@@ -1538,13 +1564,93 @@ module usb_bulk_ep #(
     // Room while no packet is waiting to be sent. `armed` covers the full
     // buffer too, since the last byte arms it.
     assign in_ready = ~armed;
-    // The byte the transmitter is asking for. `tx_index` reaches `ilen` for
-    // one fetch the transmitter throws away — `usb_fs_tx` reads `byte_in` in
-    // the cycle it decides the payload is over — so the sum reaches `MAXPKT`,
-    // which the mask to `IDX_BITS` turns into position 0. That byte is never
-    // sent.
-    wire [LEN_BITS-1:0] tx_at = ibase + tx_index;
-    assign tx_byte  = ibuf[{tx_at[IDX_BITS-1:0], 3'b000} +: 8];
+    // A byte for the host is being given. `ilen` is where it goes, because the
+    // bytes are given in order and `in_ready` is low from the last one, so
+    // this only ever addresses a byte of the packet being built.
+    wire in_wr = WITH_IN && in_valid && in_ready;
+
+    // THE ONE FETCH THAT IS OUTSIDE THE PACKET
+    //
+    // `tx_index` reaches `tx_len` for one fetch the transmitter throws away —
+    // `usb_fs_tx` reads `byte_in` in the cycle it decides the payload is over —
+    // and a zero-length packet is that fetch and nothing else. Neither shape
+    // below answers it with anything in particular: a shift register hands
+    // over whatever is still at that position and an array whatever the fabric
+    // came up holding, which is **X in a four-state simulation**. Nothing
+    // reads it either way, and the multiplexer `usb_dev_core` shares between
+    // the endpoints hands on the byte its select chose, so an X there goes no
+    // further. A netlist **covered** onto lookup tables is the exception and
+    // `usb_descriptors_survive_lookup_table_mapping`'s own comment is where
+    // that is written down.
+
+    // WHERE THE TWO PACKETS ARE KEPT: the two shapes
+    //
+    // Both shapes see the same three numbers and neither of them keeps a
+    // number of its own, which is the point of writing it this way: `owp` and
+    // `ilen` above count the bytes written and `ordx` and `tx_index` say which
+    // byte is wanted. An **array** wants those two as they are. A **shift
+    // register** puts byte 0 at `MAXPKT - written`, so it wants the
+    // difference, and `MAXPKT` is a power of two, so the difference at
+    // `IDX_BITS` bits is the whole of the arithmetic — `MAXPKT - written + i`
+    // and `i - written` are the same value modulo `MAXPKT`. The header above
+    // says which shape costs what on which family.
+    generate
+        if (BUF_RAM != 0) begin : g_ram
+            // Byte 0 at position 0 and a write where `owp` points. No write
+            // decoder, no read multiplexer: the two addresses are the
+            // memory's own. **No reset**, because a distributed RAM has no
+            // reset pin and an array cleared on `rst_n` cannot be one; nothing
+            // needs the clear, since a byte of `obuf` is read only while
+            // `olen != 0` and one of `ibuf` only while `armed`, and both of
+            // those reset to zero.
+            reg [7:0] obuf [0:MAXPKT-1];
+            reg [7:0] ibuf [0:MAXPKT-1];
+
+            always @(posedge clk) begin
+                if (out_wr) obuf[owp] <= pay_byte;
+            end
+            always @(posedge clk) begin
+                if (in_wr) ibuf[ilen[IDX_BITS-1:0]] <= in_data;
+            end
+
+            assign out_data = obuf[ordx];
+            assign tx_byte  = ibuf[tx_index[IDX_BITS-1:0]];
+        end else begin : g_shift
+            // The traffic is already a shift: bytes arrive in order and are
+            // given in order, so a byte always goes in at the same end and the
+            // write costs no decoder and no lookup table at all. What is left
+            // is one 64-way byte multiplexer per direction.
+            //
+            // A byte walks out of the bottom once more than `MAXPKT` of them
+            // have gone in, which only an over-long packet reaches: that
+            // packet is refused above, the buffer it landed in was empty —
+            // `out_take` is only set when `olen == 0` — and nothing reads what
+            // it left behind.
+            reg [MAXPKT*8-1:0] obuf;
+            reg [MAXPKT*8-1:0] ibuf;
+
+            always @(posedge clk or negedge rst_n) begin
+                if (!rst_n)      obuf <= {(MAXPKT*8){1'b0}};
+                else if (out_wr) obuf <= {pay_byte, obuf[MAXPKT*8-1:8]};
+            end
+            always @(posedge clk or negedge rst_n) begin
+                if (!rst_n)     ibuf <= {(MAXPKT*8){1'b0}};
+                else if (in_wr) ibuf <= {in_data, ibuf[MAXPKT*8-1:8]};
+            end
+
+            // The byte index is scaled to a bit index by concatenation and not
+            // by `* 8`. A multiply by a power of two is a shift, but this
+            // compiler's synthesis does not strength-reduce one: `ordx * 8`
+            // became a `mul` cell, and on the ECP5 a `MULT18X18D`. Three of
+            // them, across the two buffers and the descriptor, cost 640 LUT4
+            // and two hard multipliers.
+            wire [IDX_BITS-1:0] ordx_at = ordx - owp;
+            wire [IDX_BITS-1:0] tx_at   = tx_index[IDX_BITS-1:0] - ilen[IDX_BITS-1:0];
+
+            assign out_data = obuf[{ordx_at, 3'b000} +: 8];
+            assign tx_byte  = ibuf[{tx_at, 3'b000} +: 8];
+        end
+    endgenerate
 
     // -----------------------------------------------------------------
     // The answer, and when it may go out.
@@ -1567,15 +1673,12 @@ module usb_bulk_ep #(
 
     always @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
-            obuf       <= {(MAXPKT*8){1'b0}};
-            obase      <= BASE_TOP;
+            owp        <= 0;
             olen       <= 0;
             ordx       <= 0;
             out_toggle <= 1'b0;
             expect_out <= 1'b0;
             out_take   <= 1'b0;
-            ibuf       <= {(MAXPKT*8){1'b0}};
-            ibase      <= BASE_TOP;
             ilen       <= 0;
             armed      <= 1'b0;
             in_toggle  <= 1'b0;
@@ -1616,16 +1719,13 @@ module usb_bulk_ep #(
                             // arrives with no room is NAKed and sent again by
                             // the host, which is what bulk means.
                             //
-                            // `obase` goes back to the top **only** when the
-                            // packet is going to be stored. It used to be
-                            // reset here unconditionally, and that destroyed
-                            // a packet which had not been drained yet: the
-                            // host's next OUT is NAKed, nothing is shifted in,
-                            // but the base of the packet still sitting in
-                            // `obuf` had already been thrown away, so every
-                            // byte of it read back as zero.
+                            // `owp` goes back to zero **only** when the packet
+                            // is going to be stored, for the same reason: a
+                            // write pointer moved for a packet that is not
+                            // being stored would overwrite one that has not
+                            // been drained.
                             out_take <= (olen == 0);
-                            if (olen == 0) obase <= BASE_TOP;
+                            if (olen == 0) owp <= 0;
                         end else if (WITH_IN && pkt_pid == PID_IN) begin
                             pending <= 1'b1;
                             turn    <= 7'd0;
@@ -1668,9 +1768,9 @@ module usb_bulk_ep #(
                             pend_ans <= A_NAK;
                         end else if (out_take) begin
                             // The bytes are already in `obuf`: they were
-                            // shifted in as they arrived, and `obase` counted
-                            // down to where byte 0 of them ended up. All that
-                            // is left is to say how many there are.
+                            // written at `owp` as they arrived, byte 0 at
+                            // position 0. All that is left is to say how many
+                            // there are.
                             olen       <= dat_len[LEN_BITS-1:0];
                             ordx       <= 0;
                             out_toggle <= ~out_toggle;
@@ -1685,7 +1785,6 @@ module usb_bulk_ep #(
                     // toggle moves on.
                     in_await  <= 1'b0;
                     ilen      <= 0;
-                    ibase     <= BASE_TOP;
                     armed     <= 1'b0;
                     in_toggle <= ~in_toggle;
                 end else begin
@@ -1696,15 +1795,11 @@ module usb_bulk_ep #(
             // ---------------------------------------------------------
             // The OUT packet's bytes, as they arrive.
             // ---------------------------------------------------------
-            // One byte a cycle into the top of `obuf`, which is why there is
-            // no decoder and no second copy of the packet. `obase` stops at
-            // zero so that a packet longer than the buffer cannot shift the
-            // start of itself out of the bottom; such a packet is refused
-            // above and nothing reads what it left.
-            if (WITH_OUT && expect_out && out_take && pay_push && obase != 0) begin
-                obuf  <= {pay_byte, obuf[MAXPKT*8-1:8]};
-                obase <= obase - 1'b1;
-            end
+            // One byte a cycle; the buffer above takes it and this counts them.
+            // `owp` is masked to `IDX_BITS` and so wraps, which only an
+            // over-long packet can reach; the buffer's own comment says what
+            // happens then.
+            if (out_wr) owp <= owp + 1'b1;
 
             // ---------------------------------------------------------
             // The bytes handed over, and the bytes given.
@@ -1718,9 +1813,7 @@ module usb_bulk_ep #(
                 end
             end
 
-            if (in_valid && in_ready) begin
-                ibuf  <= {in_data, ibuf[MAXPKT*8-1:8]};
-                ibase <= ibase - 1'b1;
+            if (in_wr) begin
                 ilen  <= ilen + 1'b1;
                 if ((ilen + 1'b1) == MAXPKT || in_commit) armed <= 1'b1;
             end else if (in_commit && !armed) begin
@@ -1757,12 +1850,11 @@ module usb_bulk_ep #(
             if (bus_reset) begin
                 olen       <= 0;
                 ordx       <= 0;
-                obase      <= BASE_TOP;
+                owp        <= 0;
                 out_toggle <= 1'b0;
                 expect_out <= 1'b0;
                 out_take   <= 1'b0;
                 ilen       <= 0;
-                ibase      <= BASE_TOP;
                 armed      <= 1'b0;
                 in_toggle  <= 1'b0;
                 in_await   <= 1'b0;
@@ -1770,6 +1862,7 @@ module usb_bulk_ep #(
             end
         end
     end
+
 endmodule
 
 // usb_dev_core — a USB device above the line: the packet decoder, the
@@ -1885,6 +1978,10 @@ module usb_dev_core #(
     // The longest device-to-host class data stage; `usb_ctrl_ep`'s
     // parameter of the same name says what it sets.
     parameter integer CLASS_MAX    = 0,
+    // What shape both bulk endpoints' packet buffers take: 1 an array, which
+    // is a distributed RAM on a family that has one, 0 a shift register.
+    // `usb_bulk_ep`'s parameter of the same name has the measurements.
+    parameter         BUF_RAM      = 1,
     parameter [6:0]   TURNAROUND   = 7'd8
 ) (
     input  wire       clk,
@@ -2074,6 +2171,7 @@ module usb_dev_core #(
         .MAXPKT     (MAXPKT),
         .WITH_OUT   (1),
         .WITH_IN    (1),
+        .BUF_RAM    (BUF_RAM),
         .TURNAROUND (TURNAROUND)
     ) u_ep1 (
         .clk          (clk),
@@ -2132,6 +2230,7 @@ module usb_dev_core #(
         .MAXPKT     (NOTIF_MAXPKT),
         .WITH_OUT   (0),
         .WITH_IN    (NOTIF_ENDP != 4'd0),
+        .BUF_RAM    (BUF_RAM),
         .TURNAROUND (TURNAROUND)
     ) u_ep2 (
         .clk          (clk),
