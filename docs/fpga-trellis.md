@@ -186,8 +186,8 @@ balls:
 | 64 | 8 | 8 | 776 |
 
 At each depth: every signal routed, every sink walked back to its driver,
-every flip-flop's clock on a global network, no bit an arc needs clear set by
-something else, **every set bit of the image decoding back through the
+every flip-flop's clock **and every write clock** on a global network, no bit
+an arc needs clear set by something else, **every set bit of the image decoding back through the
 database into a feature it names with nothing unexplained**, and the arcs
 those bits select exactly the arcs the router chose. The "every bit decodes"
 check has found five real defects in this backend and it is not weakened

@@ -4153,6 +4153,123 @@ mod tests {
         files
     }
 
+    /// The read-address permutation, against nextpnr's own table.
+    ///
+    /// `dram_to_comb` builds the lookup table's contents by walking the
+    /// sixteen truth-table indices and asking which RAM address each one
+    /// is: `i & 1` (the `A` input) becomes address bit 3, `i & 2` (`B`)
+    /// stays bit 1, `i & 4` (`C`) stays bit 2 and `i & 8` (`D`) becomes bit
+    /// 0. [`dpram_init_word`] is that map read the other way — address to
+    /// truth-table index — and the point of this test is that the two
+    /// agree, because the function is used in the direction nextpnr does
+    /// not.
+    ///
+    /// It is its own inverse, which is worth pinning: a permutation that
+    /// was wrong but self-inverse would still pass a round-trip test, and a
+    /// flow that applied it once too often or once too few would read every
+    /// word from the wrong place with nothing to show for it.
+    #[test]
+    fn a_distributed_rams_contents_are_addressed_the_way_nextpnr_permutes_them() {
+        for index in 0..16usize {
+            // nextpnr's `dram_to_comb`, transcribed.
+            let mut address = 0usize;
+            if index & 1 != 0 {
+                address |= 8;
+            }
+            if index & 2 != 0 {
+                address |= 2;
+            }
+            if index & 4 != 0 {
+                address |= 4;
+            }
+            if index & 8 != 0 {
+                address |= 1;
+            }
+            assert_eq!(
+                dpram_init_word(address),
+                index,
+                "address {address} is truth-table bit {index}"
+            );
+        }
+        // Its own inverse, and a permutation: every index once.
+        let mut seen = [false; 16];
+        for address in 0..16usize {
+            let bit = dpram_init_word(address);
+            assert_eq!(dpram_init_word(bit), address);
+            assert!(!seen[bit], "{bit} twice");
+            seen[bit] = true;
+        }
+        assert!(seen.iter().all(|s| *s));
+        // The two ends that are not their own fixed point, spelled out so a
+        // change to the function has to change this line too.
+        assert_eq!(dpram_init_word(1), 8, "address bit 0 is the `D` input");
+        assert_eq!(dpram_init_word(8), 1, "address bit 3 is the `A` input");
+        assert_eq!(dpram_init_word(0), 0);
+        assert_eq!(dpram_init_word(6), 6, "`B` and `C` stay where they are");
+    }
+
+    /// The wire table of a distributed RAM: one role per pin of the
+    /// primitive the device file declares, and the read address on all four
+    /// of the lookup tables that hold the contents.
+    #[test]
+    fn a_distributed_rams_pins_cover_the_primitive_and_its_four_lookup_tables() {
+        let roles: BTreeSet<&str> = DPRAM_PINS.iter().map(|(role, _)| *role).collect();
+        let mut wanted: BTreeSet<&str> = ["wclk", "we"].into_iter().collect();
+        for k in 0..4 {
+            for base in ["raddr", "waddr", "din", "dout"] {
+                wanted.insert(match (base, k) {
+                    ("raddr", 0) => "raddr0",
+                    ("raddr", 1) => "raddr1",
+                    ("raddr", 2) => "raddr2",
+                    ("raddr", 3) => "raddr3",
+                    ("waddr", 0) => "waddr0",
+                    ("waddr", 1) => "waddr1",
+                    ("waddr", 2) => "waddr2",
+                    ("waddr", 3) => "waddr3",
+                    ("din", 0) => "din0",
+                    ("din", 1) => "din1",
+                    ("din", 2) => "din2",
+                    ("din", 3) => "din3",
+                    ("dout", 0) => "dout0",
+                    ("dout", 1) => "dout1",
+                    ("dout", 2) => "dout2",
+                    _ => "dout3",
+                });
+            }
+        }
+        assert_eq!(
+            roles, wanted,
+            "every port of `TRELLIS_DPR16X4` and no other"
+        );
+        // Four wires per read-address bit, one per lookup table holding the
+        // contents; two per clock and enable, one per RAM slice; one each
+        // for the rest.
+        let count = |role: &str| DPRAM_PINS.iter().filter(|(r, _)| *r == role).count();
+        for k in 0..4 {
+            assert_eq!(count(&format!("raddr{k}")), 4, "raddr{k}");
+            assert_eq!(count(&format!("waddr{k}")), 1, "waddr{k}");
+            assert_eq!(count(&format!("din{k}")), 1, "din{k}");
+            assert_eq!(count(&format!("dout{k}")), 1, "dout{k}");
+        }
+        assert_eq!(count("wclk"), 2, "slice A's and slice B's write clock");
+        assert_eq!(count("we"), 2, "and their write enables");
+        // The write port is on the `RAMW` slice, which is slice C: `z` 4
+        // and 5 of the tile's eight lookup tables.
+        for (role, wire) in DPRAM_PINS {
+            if role.starts_with("waddr") {
+                assert!(wire.ends_with("4_SLICE"), "{role} -> {wire}");
+            }
+            if role.starts_with("din") {
+                assert!(wire.ends_with("5_SLICE"), "{role} -> {wire}");
+            }
+        }
+        // And the six bels it consumes are the lookup tables of those three
+        // slices, never slice D's.
+        assert_eq!(DPRAM_BLOCKS.len(), 6);
+        assert!(!DPRAM_BLOCKS.iter().any(|b| b.starts_with("SLICED")));
+        assert!(!DPRAM_BLOCKS.iter().any(|b| b.contains(".FF")));
+    }
+
     #[test]
     fn a_position_with_several_tiles_addresses_them_end_to_end() {
         let db = open(&tiny(), "", "LFE5U-12F").unwrap();

@@ -303,7 +303,7 @@ pub struct BelDecl {
     /// into the RAM's contents and the design would compute nothing.
     ///
     /// Exclusion is symmetric whichever way it is declared, and
-    /// [`super::place`] enforces it in legalisation and in every annealing
+    /// [`mod@super::place`] enforces it in legalisation and in every annealing
     /// move.
     pub blocks: Vec<String>,
     /// How a cell on this bel is configured, in declaration order.
