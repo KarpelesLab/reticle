@@ -650,8 +650,11 @@ unused, so four; the saving is smaller there (**−123 LUT4**) because an 8-to-1
 multiplexer was never the expensive part.
 
 **On the iCE40 it is worse, and the shift register stays available for that
-reason.** That family has `SB_RAM40_4K` block RAM and no distributed RAM at
-all, so `fpga::primitives` takes the flip-flop fallback: the same 1024 bits,
+reason.** These buffers are read combinationally, and the flow says so in as
+many words — `u_dev.u_ep1.g_ram.obuf -> flip-flops, 512 flip-flop(s) (a block
+RAM reads on a clock edge and this memory has an asynchronous read port)`. On
+the ECP5 that refusal lands on `TRELLIS_DPR16X4`; the iCE40 database declares no
+distributed RAM at all, so it lands on flip-flops instead: the same 1024 bits,
 *plus* a write-enable per word per bit, which the shift register did not need
 because a shift register writes at a fixed end. The flip-flop count is
 identical in both shapes and the lookup tables go **up by 1065**, which is
