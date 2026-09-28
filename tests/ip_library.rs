@@ -80,6 +80,17 @@
 //! loopback runs through it too, and through the version of it that
 //! reports LineState a clock late, which is the part on the board.
 //!
+//! That transceiver model is **store and forward**: it takes the Link's bytes
+//! at the interface's rate and puts the packet on the pair once `stp` has
+//! ended it, where a real one serialises as the bytes arrive. So it adds one
+//! interface clock per byte of the answer to the delay a host measures, and
+//! `UsbPair::added_delay` takes that off before the inter-packet delay is
+//! compared with the two to six and a half bit times USB 2.0 §7.1.18 allows.
+//! It needed no such correction when a packet was eight bytes and the
+//! overhead was eleven clocks; at 64 it does, and widening the window to 67
+//! clocks instead would have made it vacuous, since the host gives up after
+//! 18 bit times anyway.
+//!
 //! Seven tests here came from gaps in Reticle rather than in the blocks,
 //! found by writing real HDL, which is the argument for a first-party
 //! library in the first place:
