@@ -111,8 +111,10 @@ answers and only a host can. So that page has a fourth confidence level
 beside HIGH, MEDIUM and LOW — **CHECKED**, meaning measured on a host with
 the output quoted — and it is careful about the difference. **CHECKED** is
 that `cdc_acm` binds to this descriptor set, that the port opens and carries
-bytes, that it never needs a SERIAL_STATE notification to arrive, and that
-SET_LINE_CODING's seven bytes reach the device — 115200 read back out of its
+bytes, that the **SERIAL_STATE notification arrives and the driver acts on it**
+— the ten bytes read off endpoint `82h` and `TIOCMGET` reporting DCD and DSR,
+which `cdc_acm` can only get from that notification — and that
+SET_LINE_CODING's seven bytes reach the device: 115200 read back out of its
 own registers, which is the only measurement anywhere of the class hook's
 host-to-device data stage on silicon. **MEDIUM** is the *why* of any of it:
 that the driver reads the union functional descriptor to tell the interfaces
@@ -536,11 +538,13 @@ says so in its header. That workaround is no longer forced.
 
 **What the endpoints cost.** `usb_device_fs` went from 549 LUT4 and 244
 flip-flops on the ECP5 to 916 and 438, and `usb_device_ulpi` from 638 and
-250 to 1001 and 444. Two eight-byte packet buffers are 128 of those
-flip-flops and are the price of an endpoint that needs no FIFO;
-`usb_bulk_ep` on its own is 281 LUT4 and 167 flip-flops, and the control
-endpoint grew by about a hundred LUT4 for indexing a descriptor blob
-instead of an eighteen-entry `case`. Shrinking `DESC_MAX` from 64 bytes to
+250 to 1001 and 444, when the endpoints arrived and a packet was eight bytes.
+Two eight-byte packet buffers are 128 of those flip-flops and are the price of
+an endpoint that needs no FIFO; `usb_bulk_ep` on its own is 281 LUT4 and 167
+flip-flops, and the control endpoint grew by about a hundred LUT4 for indexing
+a descriptor blob instead of an eighteen-entry `case`. ("What the packet size
+is worth" above is what the same two blocks cost now that a packet is 64
+bytes.) Shrinking `DESC_MAX` from 64 bytes to
 32 saves seven of those, which is not worth the headroom a CDC ACM
 descriptor needs.
 
@@ -848,11 +852,13 @@ is the part that matters:
   the way `enumerate` is the one statement of enumerating, and it runs
   against the full-speed core, the full-speed core with the host's clock
   0.4 % slow and 0.4 % fast, the ULPI core, and the ULPI core behind the
-  transceiver that reports LineState a clock late. A full eight-byte
-  packet, a five-byte one and a one-byte one go out and come back, each
-  read before the next is sent, with `FF` and `07` in the payload so the
-  bit stuffing is exercised inside a data packet and not only inside a
-  descriptor. The bytes are checked at the byte interface as well as at
+  transceiver that reports LineState a clock late. A full **64-byte**
+  packet, one a byte short of full, an eight-byte one, a five-byte one and a
+  one-byte one go out and come back, each read before the next is sent, with
+  `FF` and `07` in the payload so the bit stuffing is exercised inside a data
+  packet and not only inside a descriptor. The 63-byte one is there because it
+  is the only length at which a packet fills the buffer and does not start at
+  the bottom of it, which is what a base counter off by one gets wrong. The bytes are checked at the byte interface as well as at
   the host, packet by packet, with `out_last` where the host put the end
   of each one, and the pair is in **loopback** — `out_*` wired into
   `in_*` — which is the wiring the board has rather than a testbench's
@@ -955,9 +961,14 @@ is the part that matters:
   not 8N1, so a block reporting a constant is caught — and read back byte for
   byte; the requests it does **not** claim stalled, with the line coding
   proved untouched by them; SET_ADDRESS and CLEAR_FEATURE still working with a
-  class on the hook, which is the hook's safety property; twenty polls of the
-  notification endpoint answered with twenty NAKs and an OUT to it answered
-  with nothing at all; and the bytes, both directions and looped back.
+  class on the hook, which is the hook's safety property; the **SERIAL_STATE
+  notification** — the ten bytes of PSTN 1.2 §6.5.4 on the first poll after
+  SET_CONFIGURATION, twenty NAKs after it because a state that has not changed
+  is not news, one more with the other toggle when the line state does change,
+  another after a bus reset because the host has forgotten, and an OUT to the
+  endpoint answered with nothing at all since it has no OUT direction; and the
+  bytes, both directions and looped back, with a full 64-byte packet among
+  them.
 
   Four mutations of the implementation were each checked to fail those tests:
   GET_LINE_CODING left unclaimed, `class_req` raised for standard requests
@@ -1565,7 +1576,7 @@ pixel rate, which leaves 1280 x 720 beyond both families' fabric;
 may have and leaves isochronous transfers — up to 1023 bytes — as the one
 size these blocks cannot express. That was eight bytes and the four-bit
 length both transmitters took, and what it cost is
-[measured on a part](#what-the-packet-size-is-worth-measured-not-calculated)
+[measured on a part](#what-the-packet-size-is-worth-measured-and-not-calculated)
 below rather than reasoned about.
 
 **The class layer has started.** `usb_cdc_acm` is a serial port and
