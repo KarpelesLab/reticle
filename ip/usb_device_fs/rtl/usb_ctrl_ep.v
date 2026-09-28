@@ -1585,10 +1585,10 @@ module usb_bulk_ep #(
 
     // WHERE THE TWO PACKETS ARE KEPT: the two shapes
     //
-    // Both shapes see the same three numbers and neither of them keeps a
-    // number of its own, which is the point of writing it this way: `owp` and
-    // `ilen` above count the bytes written and `ordx` and `tx_index` say which
-    // byte is wanted. An **array** wants those two as they are. A **shift
+    // Both shapes see the same four numbers and neither of them keeps a number
+    // of its own, which is the point of writing it this way: `owp` and `ilen`
+    // above count the bytes written and `ordx` and `tx_index` say which byte is
+    // wanted. An **array** wants those two as they are. A **shift
     // register** puts byte 0 at `MAXPKT - written`, so it wants the
     // difference, and `MAXPKT` is a power of two, so the difference at
     // `IDX_BITS` bits is the whole of the arithmetic — `MAXPKT - written + i`
