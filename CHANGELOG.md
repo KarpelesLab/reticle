@@ -7,6 +7,96 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.4](https://github.com/KarpelesLab/reticle/compare/v0.0.3...v0.0.4) - 2026-09-28
+
+### Added
+
+- *(usb)* carry 64 bytes a packet and send SERIAL_STATE
+- *(fpga)* model an ECP5 slice's distributed-RAM mode, so a design with one places
+- *(synth)* prove a mapped netlist equivalent to what it was mapped from
+- *(fpga)* a serial port on the Cynthion, bridged to a UART and looped back
+- *(ir)* every vendor spelling of keep, and a keep that is off
+- *(verilog)* the black-box warning says there is no search path
+- *(asic)* the same check, with the liberty library as what is supplied
+- *(fpga)* refuse a design with a hole in it before mapping any of it
+- *(ir)* name the module an instance cannot find, and the instance
+- *(fpga)* a constant zero is on a part now, in a byte a host reads back
+- *(fpga)* the Cynthion's AUX port loops endpoint 1 back, and a host drives it
+- *(ip)* endpoints beside endpoint 0, and descriptors the class writes
+- *(fpga)* a flip-flop whose data is a constant gets a lookup table to take it from
+
+### Fixed
+
+- *(usb)* send SERIAL_STATE when the host opens the port, not once per configuration
+- *(ip)* read the descriptor blob with one part-select again
+- *(synth)* compose a merged cut's function instead of re-simulating its cone
+- *(fpga)* the echo register is taken before it is refilled, not after
+- *(test)* the reattach is not a collapsible if
+- *(test)* factor the mapping test's cases into a struct, and the roadmap
+- *(ip)* the descriptor ROM is read a page at a time, because LUT4 got it wrong
+- *(synth)* the keep predicate is public, and the sim census knows keep_reg
+- *(synth)* a keep on a register keeps the register
+- *(ir)* the note describes a declared black box, it does not promise one
+- *(sim)* a module nothing declares cannot be simulated
+- *(ip)* the PLL wrapper passes on the whole block, not most of it
+
+### Other
+
+- *(usb)* say what was measured, not a model of it
+- *(usb)* the notification test's list has five items, not four
+- the placement gap these two documents call permanent is closed
+- *(usb)* the throughput figures are in section 5, not section 6
+- *(usb)* the last two places that said an open waits for a carrier
+- *(roadmap)* correct the carrier claim and the distributed-RAM one
+- *(usb)* give the throughput's spread, not only its median
+- *(usb)* pin the boundary of the over-long packet check
+- *(usb)* send SERIAL_STATE through the ULPI transceiver too
+- *(ip)* one round-trip figure disagreed with the prose beside it
+- *(fpga)* the constant-zero probe reaches eight lookup tables, not sixty-four
+- *(usb)* the terminal wait is five seconds, not one
+- *(usb)* the manifest and the block table say the notification endpoint sends
+- *(usb)* the test file's header explains the transceiver model's correction
+- *(ip)* the library page's CHECKED list and test summary name the notification
+- *(usb)* re-quote section 5 off the part, with the notification in it
+- *(usb)* name the distributed RAM as the shape to try next
+- *(ip)* refresh the footprint table after the bus-reset guard
+- *(usb)* cite sections of PSTN 1.2 rather than table numbers not checked
+- *(usb)* the roadmap and the READMEs say 64 bytes and a notification
+- *(usb)* what the packet size costs and what it bought
+- *(usb)* hold the board's designs and tests to 64-byte packets
+- *(usb)* measure the loopback's throughput on the part
+- *(fpga)* pin the distributed RAM's wire table and its address permutation
+- *(fpga)* write down everything ecppack writes for a distributed RAM
+- *(roadmap)* record mapped-netlist verification under phase 5
+- the flow's own output is not a file to commit
+- *(ip)* mark the driver's reasons as readings, and re-measure the bitstream
+- *(ip)* three measurements of the FIFO refusal, not five
+- *(ip)* say which ECP5 the FIFO was refused on, and which is inferred
+- *(ip)* eight-byte packets cost transactions, not the number that was quoted
+- *(cli)* read the line coding back off the part, and mark the claims honestly
+- *(ip)* the serial port, its provenance, and what a host said
+- *(cli)* the kernel's own driver binds it, and bytes go round through a UART
+- *(ip)* the serial port enumerated, its requests answered, its bytes moved
+- *(viewer)* the site for the new synthesis golden
+- *(synth)* name the two places a keep is still dropped in silence
+- *(synth)* the backend packers are not as careful as the optimiser
+- *(synth)* say exactly which rewrites a kept object still gets
+- what keep promises, and what still applies to a kept object
+- *(synth)* keep from both front ends, through the whole pipeline
+- *(ip)* the silent black box that cost a bogus FAIL is a diagnostic now
+- where the line between a black box and a missing module falls
+- *(cli)* the Cynthion build without its IP sources names the module
+- *(fpga)* say that the control bitstream was a scratch copy and was put back
+- *(fpga)* the probe's header names the test that exists, and the right cost
+- *(fpga)* the unused reset wire is a different shape, and it is measured
+- *(fpga)* a constant one is on a part now, and a constant zero is not
+- the footprints both of this week's changes add up to
+- what the endpoints are, what is derived, and what has run on a part
+- *(ip)* a byte index is a shift, and this compiler does not know that yet
+- *(ip)* bytes through endpoint 1, through both link layers and both ways
+- the constant is built now, and the vendor's own bitstreams said how
+- *(fpga)* every flip-flop of Lattice's own bitstreams has a driver, and four are constants
+
 ## [0.0.3](https://github.com/KarpelesLab/reticle/compare/v0.0.2...v0.0.3) - 2026-09-27
 
 ### Added
