@@ -553,8 +553,8 @@ fn a_serial_port_this_compiler_built_is_bound_by_the_kernels_own_driver() {
 /// node is there, and that it is openable — do not become true at the same
 /// instant: udev sets the owner and group from a rule that runs after the
 /// kernel has created the device. So this waits for both, and the wait is a
-/// **timeout and not an assertion**: it is a second of budget for work that
-/// takes milliseconds, and nothing here is compared against a clock.
+/// **timeout and not an assertion**: five seconds of budget for work that takes
+/// milliseconds, and nothing here is compared against a clock.
 fn terminal_again() -> Option<PathBuf> {
     for _ in 0..50 {
         if let Some(path) = tty_ports(VID, PID).into_iter().next() {
