@@ -926,6 +926,71 @@ mod tests {
         Span::new(id, 0, 0)
     }
 
+    /// The AIG this defect was reduced to, and what it is.
+    ///
+    /// `usb_ctrl_ep`'s class descriptor set is a 512-bit constant read by a
+    /// variable-indexed part-select: a 64-entry ROM of eight six-input
+    /// functions. Mapped onto LUT4, three of a CDC ACM descriptor set's
+    /// sixty-seven bytes came out wrong on a real device, and only for that
+    /// descriptor set — the shorter vendor one in the same constant was
+    /// correct. This is the cone of one wrong bit, shrunk from 37 inputs and
+    /// 171 AND nodes to three and twenty-four by fixing inputs to constants
+    /// for as long as the fault survived. Three inputs is few enough to
+    /// check every pattern of.
+    ///
+    /// It is not pretty and it is not meant to be: it is the smallest thing
+    /// that still reproduces, and what makes it reproduce is the
+    /// reconvergence. Nodes 5, 6 and 14 all read input 3; node 6 becomes a
+    /// cut leaf and node 5 does not, so a leaf set that covers node 6 still
+    /// leaves node 5 a path down to input 3.
+    pub(super) fn descriptor_rom_cone() -> Aig {
+        let mut g = Aig::new();
+        let mut e: Vec<Edge> = vec![Edge::constant(false)];
+        for _ in 0..3 {
+            e.push(g.add_input());
+        }
+        // Each row is `(a, complement a, b, complement b)` for the next AND,
+        // numbered from 4 in the order they are built.
+        let spec: &[(usize, bool, usize, bool)] = &[
+            (1, false, 3, true),   // 4
+            (1, true, 3, false),   // 5
+            (1, true, 3, true),    // 6
+            (2, true, 6, false),   // 7
+            (2, false, 6, true),   // 8
+            (7, true, 8, true),    // 9
+            (4, true, 5, true),    // 10
+            (1, false, 6, false),  // 11
+            (2, true, 10, false),  // 12
+            (1, false, 3, false),  // 13
+            (1, true, 6, false),   // 14
+            (5, true, 14, true),   // 15
+            (9, false, 15, true),  // 16
+            (7, true, 16, true),   // 17
+            (8, false, 17, true),  // 18
+            (8, false, 18, false), // 19
+            (9, true, 11, false),  // 20
+            (4, true, 6, false),   // 21
+            (4, true, 21, true),   // 22
+            (9, false, 22, true),  // 23
+            (8, true, 23, false),  // 24
+            (20, true, 24, true),  // 25
+            (8, true, 25, true),   // 26
+            (19, true, 26, true),  // 27
+        ];
+        for &(a, ca, b, cb) in spec {
+            let node = g.and(e[a].xor(ca), e[b].xor(cb));
+            assert_eq!(
+                node.node() as usize,
+                e.len(),
+                "structural hashing renumbered node {}",
+                e.len()
+            );
+            e.push(node);
+        }
+        g.add_output(!e[27]);
+        g
+    }
+
     /// An AIG computing a few functions of four inputs.
     fn sample() -> Aig {
         let mut g = Aig::new();
@@ -983,7 +1048,7 @@ mod tests {
     }
 
     /// Evaluates a LUT network for one input assignment.
-    fn simulate_luts(net: &LutNetwork, inputs: &[bool]) -> Vec<bool> {
+    pub(super) fn simulate_luts(net: &LutNetwork, inputs: &[bool]) -> Vec<bool> {
         let mut values: Vec<bool> = Vec::with_capacity(net.luts.len());
         let value = |s: Signal, values: &[bool]| match s {
             Signal::Const(c) => c,
@@ -1000,6 +1065,35 @@ mod tests {
             values.push(lut.init.bit(u32::try_from(pattern).expect("pattern")) == Bit::One);
         }
         net.outputs.iter().map(|&s| value(s, &values)).collect()
+    }
+
+    /// The cone that miscompiled: mapped onto lookup tables of every width,
+    /// the network must compute what the AIG computes, for all eight input
+    /// patterns.
+    ///
+    /// [`super::cuts::tests::every_cut_computes_its_node`] holds the cause —
+    /// a cut whose function was not its node's — and this holds the effect,
+    /// which is what a user sees: before the fix, at every width from 3 up,
+    /// the LUT network read `true` where the logic says `false`. That one bit
+    /// was `bInterfaceNumber` of a CDC ACM data interface, and a Linux host
+    /// refused the device over it.
+    #[test]
+    fn the_descriptor_rom_cone_maps_to_its_own_function() {
+        let aig = descriptor_rom_cone();
+        for k in 2..=8u32 {
+            let net = lut_map(&aig, k);
+            for pat in 0..8u32 {
+                let ins: Vec<bool> = (0..3).map(|i| (pat >> i) & 1 == 1).collect();
+                assert_eq!(
+                    simulate_luts(&net, &ins),
+                    aig.eval(&ins),
+                    "LUT{k} cover of the descriptor ROM cone, inputs {ins:?}, \
+                     {} luts: {:?}",
+                    net.len(),
+                    net.luts
+                );
+            }
+        }
     }
 
     /// Evaluates a gate network for one input assignment.

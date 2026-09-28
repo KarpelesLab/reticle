@@ -223,7 +223,12 @@ pub fn refactor(aig: &mut Aig, k: usize) -> usize {
             view.ref_cone(id, &leaves);
             continue;
         }
-        let tt = cone_truth(&mut |x| view.fanins(x), id, &leaves, leaves.len());
+        // A reconvergence-driven cut is a cut by construction, so the
+        // function is always there; skipping is belt and braces.
+        let Some(tt) = cone_truth(&mut |x| view.fanins(x), id, &leaves, leaves.len()) else {
+            view.ref_cone(id, &leaves);
+            continue;
+        };
         let (tt, negate) = if tt.count_ones() * 2 > tt.len().try_into().unwrap_or(u32::MAX) {
             (tt.not(), true)
         } else {

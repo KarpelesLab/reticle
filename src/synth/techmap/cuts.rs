@@ -27,10 +27,37 @@
 //! also reduced to the leaves its function actually depends on, because a
 //! leaf that cancels out (which reconvergent paths routinely produce)
 //! would otherwise inflate the cut and hide a cheaper match.
+//!
+//! # Why the function is composed and not re-simulated
+//!
+//! A merged cut's function is built by **composing the two fanin cuts'
+//! functions** over the merged leaves, not by simulating the cone between
+//! the leaves and the node. That is not a performance choice; it is what
+//! makes the reduction above sound, and getting it wrong miscompiled a
+//! descriptor ROM.
+//!
+//! Reducing a cut to its support leaves a set that implements *that node*
+//! correctly but is no longer a cut: the leaf that was dropped was the only
+//! thing separating the node from the inputs under it. That is harmless for
+//! the node itself — a LUT over the reduced leaves computes exactly its
+//! function — but the reduced leaf set is also the **merge base its parents
+//! use**, and a union of leaf sets that are not cuts need not be a cut
+//! either. Simulating the cone over such a set reaches an input the set
+//! does not separate, and [`cone_truth`] used to read that input as
+//! constant *false* and hand back a table anyway: a function of the wrong
+//! ROM, written into a LUT `init`, wrong for exactly the inputs where the
+//! dropped path mattered. Composition has no such hole, because each fanin
+//! cut's function is exact over its own leaves however those leaves were
+//! arrived at.
+//!
+//! [`cone_truth`] now returns `None` for a leaf set it cannot separate, so
+//! the hole cannot be reopened by accident; the only place here that still
+//! simulates a cone is [`fanin_cut`], whose leaves are the node's own two
+//! fanins and therefore always a cut.
 
-use super::super::aig::Aig;
 use super::super::aig::cut::cone_truth;
 use super::super::aig::truth::TruthTable;
+use super::super::aig::{Aig, Edge};
 
 /// Limits on cut enumeration.
 #[derive(Clone, Copy, Debug)]
@@ -113,7 +140,7 @@ impl PriorityCuts {
                     if leaves.len() == 1 && leaves[0] == id {
                         continue;
                     }
-                    let Some(cut) = build(aig, id, leaves) else {
+                    let Some(cut) = compose(a, ca, b, cb, leaves) else {
                         continue;
                     };
                     if merged.iter().any(|c| c.dominates(&cut)) {
@@ -188,8 +215,58 @@ fn select(cuts: Vec<Cut>, k: usize, limit: usize) -> Vec<Cut> {
         .collect()
 }
 
-/// Builds the cut of `node` with the given leaves, reduced to the support
-/// of its function. `None` when the function is constant, which leaves
+/// The cut of a node whose two fanin edges are `a` and `b`, implemented by
+/// the merged `leaves`, with its function composed from the fanin cuts `ca`
+/// and `cb`. See the module docs for why this is composition and not a
+/// simulation of the cone.
+fn compose(a: Edge, ca: &Cut, b: Edge, cb: &Cut, leaves: Vec<u32>) -> Option<Cut> {
+    let vars = leaves.len().max(1);
+    let ta = lift(ca, a, &leaves, vars);
+    let tb = lift(cb, b, &leaves, vars);
+    reduce(leaves, ta.and(&tb))
+}
+
+/// A fanin cut's function as a table over the merged `leaves`, with the
+/// polarity of the edge that reads it applied.
+///
+/// The cut's own leaves are a subset of `leaves` — the merge is their union
+/// — so the table is extended to `vars` variables and permuted into the
+/// merged leaf order. The one exception is the constant node's trivial cut,
+/// whose "leaf" is node 0 and which the merge drops: it contributes the
+/// constant *false*.
+fn lift(cut: &Cut, edge: Edge, leaves: &[u32], vars: usize) -> TruthTable {
+    let table = if cut.leaves == [0] {
+        TruthTable::constant(vars, false)
+    } else {
+        let mut perm: Vec<usize> = Vec::with_capacity(vars);
+        let mut taken = vec![false; vars];
+        for &leaf in &cut.leaves {
+            let at = leaves
+                .iter()
+                .position(|&l| l == leaf)
+                .expect("a fanin cut's leaf is a leaf of the merge");
+            perm.push(at);
+            taken[at] = true;
+        }
+        // `permute` wants a permutation of every variable, so the positions
+        // this cut does not use take the ones left over; the extended table
+        // does not depend on them.
+        let mut spare = (0..vars).filter(|&i| !taken[i]);
+        while perm.len() < vars {
+            perm.push(spare.next().expect("as many spare positions as vars"));
+        }
+        cut.function.extend(vars).permute(&perm)
+    };
+    if edge.is_complement() {
+        table.not()
+    } else {
+        table
+    }
+}
+
+/// Builds the cut of `node` with the given leaves by simulating the cone
+/// between them, which is only sound when `leaves` is a cut of `node`.
+/// `None` when it is not, or when the function is constant, which leaves
 /// nothing for a cell to compute.
 fn build(aig: &Aig, node: u32, leaves: Vec<u32>) -> Option<Cut> {
     let function = cone_truth(
@@ -197,7 +274,13 @@ fn build(aig: &Aig, node: u32, leaves: Vec<u32>) -> Option<Cut> {
         node,
         &leaves,
         leaves.len().max(1),
-    );
+    )?;
+    reduce(leaves, function)
+}
+
+/// A cut reduced to the leaves its function actually depends on. `None`
+/// when the function is constant.
+fn reduce(leaves: Vec<u32>, function: TruthTable) -> Option<Cut> {
     let support = function.support();
     if support == 0 {
         return None;
@@ -349,6 +432,139 @@ mod tests {
         // A list already within the limit is returned unchanged.
         let small = vec![cut(vec![1]), cut(vec![2])];
         assert_eq!(select(small.clone(), 4, 8).len(), small.len());
+    }
+
+    /// The value of every node of `aig` for one assignment of its inputs,
+    /// indexed by node.
+    fn node_values(aig: &Aig, inputs: &[bool]) -> Vec<bool> {
+        let mut values = vec![false; aig.len()];
+        for (pos, &pi) in aig.inputs().iter().enumerate() {
+            values[pi as usize] = inputs[pos];
+        }
+        for id in 1..u32::try_from(aig.len()).expect("node count") {
+            if !aig.is_and(id) {
+                continue;
+            }
+            let (a, b) = aig.fanins(id);
+            let va = values[a.index()] ^ a.is_complement();
+            let vb = values[b.index()] ^ b.is_complement();
+            values[id as usize] = va & vb;
+        }
+        values
+    }
+
+    /// Checks that every cut of every node computes that node, for every
+    /// assignment of the primary inputs: the cut's function read at the
+    /// pattern its leaves take is the node's value. Returns how many
+    /// (cut, pattern) pairs were checked, or what disagreed.
+    ///
+    /// This is the invariant the whole mapper rests on. A cut whose function
+    /// is wrong becomes a LUT `init` that is wrong, and nothing downstream
+    /// can notice.
+    fn cut_functions_compute_their_nodes(aig: &Aig, k: usize) -> Result<usize, String> {
+        let cuts = PriorityCuts::compute(aig, k, &CutOptions::default());
+        let n = aig.inputs().len();
+        assert!(n <= 16, "the exhaustive check wants a small input count");
+        let mut checked = 0usize;
+        for pattern in 0..(1u32 << n) {
+            let inputs: Vec<bool> = (0..n).map(|i| (pattern >> i) & 1 == 1).collect();
+            let values = node_values(aig, &inputs);
+            for id in 1..u32::try_from(aig.len()).expect("node count") {
+                if !aig.is_and(id) {
+                    continue;
+                }
+                for cut in cuts.cuts(id) {
+                    let mut index = 0usize;
+                    for (i, &leaf) in cut.leaves.iter().enumerate() {
+                        if values[leaf as usize] {
+                            index |= 1 << i;
+                        }
+                    }
+                    checked += 1;
+                    if cut.function.bit(index) != values[id as usize] {
+                        return Err(format!(
+                            "k {k}, inputs {inputs:?}: node {id} is {} but its cut over \
+                             leaves {:?} says {} (function {:#x} over {} variables, \
+                             pattern {index})",
+                            values[id as usize],
+                            cut.leaves,
+                            cut.function.bit(index),
+                            cut.function.words()[0],
+                            cut.function.vars(),
+                        ));
+                    }
+                }
+            }
+        }
+        Ok(checked)
+    }
+
+    /// A cut's function is the function of its node — which is what the
+    /// mapper writes into a LUT `init`, so when it is wrong the compiler
+    /// emits wrong logic.
+    ///
+    /// It was wrong, and here is how. A cut is reduced to the leaves its
+    /// function depends on, which is sound for the node itself but leaves a
+    /// set that is no longer a *cut*: the dropped leaf was part of what
+    /// separated the node from the inputs beneath it. That reduced set is
+    /// also the merge base the node's parents use, and a parent's function
+    /// used to be computed by simulating the cone between the merged leaves
+    /// and the parent. Reaching an input the merged set did not separate,
+    /// that simulation read the input as constant zero and returned a table
+    /// anyway — the function of a different ROM, wrong for exactly the
+    /// inputs where the unseparated path mattered.
+    ///
+    /// Composing each parent's function from its two fanin cuts' functions
+    /// instead never needs the merged set to be a cut, and is what this
+    /// asserts holds. Before that change the cone below fails at `k` 3 and
+    /// up, and `usb_cdc_acm` answered a host with three wrong descriptor
+    /// bytes.
+    #[test]
+    fn every_cut_computes_its_node() {
+        let cone = super::super::tests::descriptor_rom_cone();
+        for k in 2..=8usize {
+            let checked = cut_functions_compute_their_nodes(&cone, k)
+                .unwrap_or_else(|why| panic!("the descriptor ROM cone: {why}"));
+            assert!(checked > 0, "k {k} checked nothing");
+        }
+        // And on graphs shaped like the ones a real design produces:
+        // reconvergence and constants, which is what makes a cut function
+        // independent of a leaf in the first place. Bounded by a fixed
+        // number of graphs, not by time.
+        let mut seed = 0x243f_6a88_85a3_08d3u64;
+        let mut next = move || {
+            seed ^= seed << 13;
+            seed ^= seed >> 7;
+            seed ^= seed << 17;
+            seed
+        };
+        for trial in 0..40 {
+            let mut g = Aig::new();
+            let mut pool: Vec<Edge> = (0..6).map(|_| g.add_input()).collect();
+            pool.push(Edge::constant(false));
+            for _ in 0..24 {
+                let mut pick = || {
+                    let r = next();
+                    let at = usize::try_from(r % pool.len() as u64).expect("index");
+                    let e = pool[at];
+                    if r & 0x1_0000 != 0 { !e } else { e }
+                };
+                let (a, b) = (pick(), pick());
+                let node = g.and(a, b);
+                if !pool.contains(&node) {
+                    pool.push(node);
+                }
+            }
+            for _ in 0..3 {
+                let at = usize::try_from(next() % pool.len() as u64).expect("index");
+                let edge = pool[at];
+                g.add_output(edge);
+            }
+            for k in [3usize, 4, 6] {
+                cut_functions_compute_their_nodes(&g, k)
+                    .unwrap_or_else(|why| panic!("random graph {trial}: {why}"));
+            }
+        }
     }
 
     #[test]

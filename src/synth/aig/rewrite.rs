@@ -365,7 +365,13 @@ pub fn rewrite(aig: &mut Aig, zero_cost: bool) -> usize {
         let cuts = enumerate_cuts(&mut |x| view.fanins(x), id, 4, CUT_LIMIT);
         let mut best: Option<(i64, Vec<u32>, u16)> = None;
         for cut in cuts {
-            let tt = cone_truth(&mut |x| view.fanins(x), id, &cut, 4).as_u64();
+            // Cuts come from `enumerate_cuts`, which expands from the
+            // root, so every one of them separates it; skipping is belt
+            // and braces.
+            let Some(tt) = cone_truth(&mut |x| view.fanins(x), id, &cut, 4) else {
+                continue;
+            };
+            let tt = tt.as_u64();
             let tt = u16::try_from(tt & 0xFFFF).expect("16 bits");
             if lib.cost(tt).is_none() {
                 continue;

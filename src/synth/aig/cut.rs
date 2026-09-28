@@ -13,7 +13,8 @@
 //! that keep a [`super::Forward`] map see the substituted graph.
 //!
 //! [`cone_truth`] computes the function of the root over the leaves as a
-//! [`TruthTable`], by simulation of the cone.
+//! [`TruthTable`], by simulation of the cone — and refuses, rather than
+//! inventing an answer, when the leaves are not a cut of the root.
 
 use std::collections::{HashMap, HashSet};
 
@@ -142,7 +143,19 @@ pub fn cone_nodes(fanins: &mut Fanins<'_>, root: u32, leaves: &[u32]) -> Vec<u32
 
 /// The function of `root` over the cut `leaves` (leaf `i` is variable
 /// `i`), as a table over `vars >= leaves.len()` variables.
-pub fn cone_truth(fanins: &mut Fanins<'_>, root: u32, leaves: &[u32], vars: usize) -> TruthTable {
+///
+/// `None` when `leaves` is **not a cut of `root`**: when some path from an
+/// input to `root` misses every leaf, there is no such function, and the
+/// only honest answer is to say so. This used to substitute the constant
+/// *false* for the input the cut failed to separate and return a table
+/// anyway, which is a wrong function presented as a right one — see
+/// `src/synth/techmap/cuts.rs` for the miscompilation that caused.
+pub fn cone_truth(
+    fanins: &mut Fanins<'_>,
+    root: u32,
+    leaves: &[u32],
+    vars: usize,
+) -> Option<TruthTable> {
     let mut tables: HashMap<u32, TruthTable> = HashMap::new();
     tables.insert(0, TruthTable::constant(vars, false));
     for (i, &leaf) in leaves.iter().enumerate() {
@@ -150,21 +163,15 @@ pub fn cone_truth(fanins: &mut Fanins<'_>, root: u32, leaves: &[u32], vars: usiz
     }
     for id in cone_nodes(fanins, root, leaves) {
         let (a, b) = fanins(id).expect("cone node is an AND");
-        let ta = tables
-            .get(&a.node())
-            .cloned()
-            .unwrap_or_else(|| TruthTable::constant(vars, false));
-        let tb = tables
-            .get(&b.node())
-            .cloned()
-            .unwrap_or_else(|| TruthTable::constant(vars, false));
+        // A fanin with no table is neither the constant, nor a leaf, nor a
+        // node of the cone: it is an input this leaf set does not separate.
+        let ta = tables.get(&a.node())?.clone();
+        let tb = tables.get(&b.node())?.clone();
         let ta = if a.is_complement() { ta.not() } else { ta };
         let tb = if b.is_complement() { tb.not() } else { tb };
         tables.insert(id, ta.and(&tb));
     }
-    tables
-        .remove(&root)
-        .unwrap_or_else(|| TruthTable::constant(vars, false))
+    tables.remove(&root)
 }
 
 #[cfg(test)]
@@ -196,9 +203,14 @@ mod tests {
         let cone = cone_nodes(&mut fan, root.node(), &[a.node(), b.node(), c.node()]);
         assert_eq!(cone.len(), 3);
         assert_eq!(*cone.last().unwrap(), root.node());
-        let tt = cone_truth(&mut fan, root.node(), &[a.node(), b.node(), c.node()], 3);
+        let tt = cone_truth(&mut fan, root.node(), &[a.node(), b.node(), c.node()], 3)
+            .expect("a cut of the root");
         assert_eq!(tt.as_u64(), 0x80); // a & b & c
-        let tt4 = cone_truth(&mut fan, root.node(), &[ab.node(), bc.node()], 4);
+        let tt4 = cone_truth(&mut fan, root.node(), &[ab.node(), bc.node()], 4)
+            .expect("a cut of the root");
         assert_eq!(tt4.as_u64(), 0x8888);
+        // A leaf set that does not separate the root has no function over
+        // it: `{a, b}` leaves `c` reachable through `bc`.
+        assert!(cone_truth(&mut fan, root.node(), &[a.node(), b.node()], 2).is_none());
     }
 }
