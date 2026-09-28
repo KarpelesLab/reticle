@@ -461,10 +461,17 @@ trips and prints the rate. The device holds one packet each way, so each round
 trip is one OUT transaction, one IN transaction and two trips through the
 host's own stack:
 
-| `wMaxPacketSize` | round trips/s | bytes/s each way |
-|------------------|---------------|------------------|
-| 8 | 8460 | 67 700 |
-| 64 | 3990 | 255 500 |
+| `wMaxPacketSize` | round trips/s | bytes/s each way | slowest of six |
+|------------------|---------------|------------------|----------------|
+| 8 | 8460 | 67 700 | 57 600 |
+| 64 | 3990 | 255 500 | 243 700 |
+
+Those are medians of six runs each. The slowest run of a set is always one of
+the first two, and after that they cluster inside 2 %, so the spread is the
+host's scheduler settling rather than the device varying — which is worth
+saying because the two low readings at eight bytes are 15 % off the median and
+a reader comparing single runs could get 57 600 against 258 600 and call it
+four and a half times.
 
 **3.8 times, and not eight.** The transactions do fall by eight, but the round
 trip rate falls with them — 8460 a second to 3990 — because a 64-byte packet

@@ -740,13 +740,16 @@ design that measures the *endpoint* rather than the bridge above it is
 `testdata/fpga/cynthion/usb_ulpi_device.v`, the bulk loopback, and
 `tests/usb_loopback.rs` times 256 write-then-read round trips through it:
 
-| `wMaxPacketSize` | round trips/s | bytes/s each way |
-|------------------|---------------|------------------|
-| 8 | 8460 | 67 700 |
-| 64 | 3990 | 255 500 |
+| `wMaxPacketSize` | round trips/s | bytes/s each way | slowest of six |
+|------------------|---------------|------------------|----------------|
+| 8 | 8460 | 67 700 | 57 600 |
+| 64 | 3990 | 255 500 | 243 700 |
 
-**CHECKED**, six runs at each size on the same host and the same part, one byte
-of the source apart, repeatable to within a few percent. **3.8 times and not
+**CHECKED**, medians of six runs at each size on the same host and the same
+part, one byte of the source apart. The slowest run of a set is always one of
+the first two and the rest cluster inside 2 %, so the spread is the host's
+scheduler settling; `docs/ip-library.md` says the same and why it is worth
+saying. **3.8 times and not
 eight**: the transactions do fall by eight, but a 64-byte packet takes 43
 microseconds of 12 Mbit/s wire where an eight-byte one takes 5, so the round
 trip rate falls with them, and what is left over each one is about 110
