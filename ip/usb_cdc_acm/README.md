@@ -755,11 +755,12 @@ design that measures the *endpoint* rather than the bridge above it is
 part, one byte of the source apart. The slowest run of a set is always one of
 the first two and the rest cluster inside 2 %, so the spread is the host's
 scheduler settling; `docs/ip-library.md` says the same and why it is worth
-saying. **3.8 times and not
-eight**: the transactions do fall by eight, but a 64-byte packet takes 43
-microseconds of 12 Mbit/s wire where an eight-byte one takes 5, so the round
-trip rate falls with them, and what is left over each one is about 110
-microseconds of host and scheduler that the packet size does not touch.
+saying.
+
+**3.8 times and not eight.** The transactions do fall by eight, but a 64-byte
+packet takes 43 microseconds of 12 Mbit/s wire where an eight-byte one takes 5,
+so the round trip rate falls with them, and what is left over each one is about
+110 microseconds of host and scheduler that the packet size does not touch.
 
 What these numbers are not: a host that pipelined its transfers instead of
 waiting for each would see more of the eight, so this is a floor and not a
