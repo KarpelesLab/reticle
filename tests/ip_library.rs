@@ -12910,10 +12910,17 @@ endmodule
 /// spelling out. `blocks_synthesise_cleanly` synthesises every block and
 /// `footprints_match_the_documentation` maps every block onto LUT4 and LUT6 —
 /// and neither of them ever asks the mapped netlist to *do* anything. Every
-/// behavioural test in this file runs on the design as elaborated. So there
-/// was no test anywhere between "the block behaves" and "the bitstream is
-/// loaded on a board", and a technology mapper that covered one cone wrongly
-/// would be found by a person with an oscilloscope.
+/// other behavioural test in this file runs on the design as elaborated. So
+/// there was no test anywhere between "the block behaves" and "the bitstream
+/// is loaded on a board", and a technology mapper that covered one cone
+/// wrongly would be found by a person with an oscilloscope.
+///
+/// `every_block_maps_to_the_logic_it_was_mapped_from` is the general answer
+/// now: it proves every block's mapping equivalent to what it was mapped from,
+/// at both widths, which is stronger than reading one ROM. This test stays for
+/// what it uniquely does — drive a **host** at a **mapped** netlist and check
+/// the bytes that came off a board wrong — and because a byte-level regression
+/// in the block itself would show here and nowhere else.
 ///
 /// It was found by one. `ip/usb_cdc_acm`'s fifty-eight byte descriptor set,
 /// read off a Cynthion, had `bInterfaceNumber` of its data interface as **0**
@@ -12921,7 +12928,7 @@ endmodule
 /// the device with `config 1 has 1 interface, different from the descriptor's
 /// value: 2`. In simulation the same design was byte-perfect.
 ///
-/// **What was wrong was the LUT4 cover of the descriptor ROM**, and it is a
+/// **What was wrong was the LUT4 cover of the descriptor ROM**, and it was a
 /// gap in `src/synth/techmap` rather than in these blocks:
 ///
 ///   * `usb_ctrl_ep`'s class descriptors are a 512-bit constant read by a
@@ -12931,34 +12938,47 @@ endmodule
 ///     LUT2, LUT3, LUT5, LUT6, LUT7 or LUT8, none did;
 ///   * the plain vendor descriptor set, twenty-three bytes in the same
 ///     512-bit constant, was and is correct at LUT4, so what the fault
-///     depends on is the ROM's **contents**;
-///   * and it has nothing to do with the class hook: the failing
+///     depended on was the ROM's **contents**;
+///   * and it had nothing to do with the class hook: the failing
 ///     configuration below is `usb_device_fs` with no class layer at all and
 ///     the longer blob in its parameter.
 ///
-/// `reticle synth --lut 4 --verify` does **not** catch it. That option proves
-/// the optimised netlist equivalent to the unoptimised lowering, and the
-/// lookup-table mapping happens outside what it compares — which is a second
-/// gap, and the reason this test exists in this file rather than as one more
-/// `--verify`.
+/// **It is fixed.** A cut is reduced to the leaves its function depends on,
+/// which leaves a set that is no longer a *cut*, and a parent that merged one
+/// had its function computed by simulating a cone over leaves that did not
+/// separate it — reading the input they missed as constant zero, and writing
+/// the function of a different ROM into a LUT `init`. Contents mattered
+/// because which cuts a blob produces decides whether such a merge happens at
+/// all. `src/synth/techmap/cuts.rs` has it, `every_cut_computes_its_node` holds
+/// the cause and `the_descriptor_rom_cone_maps_to_its_own_function` the effect
+/// on the cone this was shrunk to. `usb_ctrl_ep`'s `desc()` reads the blob
+/// with one part-select again; the page split that worked around it is gone,
+/// and taking it out came out smaller in eleven of the sixteen footprint rows
+/// for these blocks and shallower in fourteen, because selecting a page and
+/// then a byte out of it is a level of muxing the direct part-select does not
+/// need. `docs/ip-library.md` has the table.
 ///
-/// The blocks work around it by reading the blob **a page at a time**:
-/// `desc()` selects one of four 128-bit pages with the top two bits of the
-/// index and takes a byte out of that with the bottom four. That is logically
-/// the same function and it maps correctly. It is **a workaround and not a
-/// fix**: nothing says another descriptor set will not find another cone the
-/// mapper covers wrongly, and this test is what would notice. A reader
-/// removing the page split should expect this test to fail.
+/// `reticle synth --lut 4 --verify` did **not** catch it, because that option
+/// proves the optimised netlist against the unoptimised lowering and the
+/// lookup-table mapping happens outside what it compares. That was a second
+/// gap and it is closed too: `synth::techmap::verify` proves a mapped network
+/// against the AIG it was mapped from, `--verify` runs it for `reticle synth`
+/// and `reticle fpga`, and
+/// `every_block_maps_to_the_logic_it_was_mapped_from` runs it over the whole
+/// library in the gate.
 ///
 /// **What this would and would not catch.** It catches a mapped netlist that
 /// answers GET_DESCRIPTOR with the wrong bytes, at two LUT widths, for both
 /// descriptor sets in the library — which is the whole of what took the CDC
 /// device from working in simulation to refused by a kernel. It does not
 /// catch anything the ECP5 or iCE40 flows do *after* mapping: placement,
-/// routing and bitstream generation are not here, and the Cynthion's own
-/// count of wrong bytes was one rather than three, so the FPGA flow's mapping
-/// is not bit-for-bit `MapOptions::lut(4)`. A board is still the last word.
-/// It also says nothing about the rest of either block after mapping; the
+/// routing and bitstream generation are not here. The Cynthion's own count of
+/// wrong bytes was one rather than three because the FPGA flow's mapping is
+/// not bit-for-bit `MapOptions::lut(4)`: `fpga::synthesize_for` infers block
+/// RAM, carry, IO and clock primitives *between* synthesis and covering, so
+/// the mapper sees a different AIG, and one defect covering different cones
+/// spoils a different number of bytes. A board is still the last word. This
+/// also says nothing about the rest of either block after mapping; the
 /// descriptors are what it reads because the descriptors are what a ROM is.
 #[test]
 fn usb_descriptors_survive_lookup_table_mapping() {

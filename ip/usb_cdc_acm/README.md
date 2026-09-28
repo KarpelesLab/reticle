@@ -574,11 +574,24 @@ byte of sixty-seven — `bInterfaceNumber` of the data interface, 0 where it
 should be 1 — and `cdc_acm` refused the device. The cause was the **LUT4
 cover of the descriptor ROM** in `usb_ctrl_ep`, not anything in this block:
 the same design was byte-perfect in simulation, and the same descriptor set
-in `usb_device_fs` with no class layer at all fails identically. §7 has it,
-and `tests/ip_library.rs`'s
-`usb_descriptors_survive_lookup_table_mapping` is the test that was
-missing — nothing in this repository had ever asked a *mapped* netlist to do
-anything.
+in `usb_device_fs` with no class layer at all failed identically.
+
+**It is a fixed compiler defect now.** `src/synth/techmap/cuts.rs` has it: a
+cut reduced to the leaves its function depends on is no longer a *cut*, and a
+parent that merged one had its function computed by simulating a cone over
+leaves that did not separate it, reading the input they missed as constant
+zero and writing the function of a different ROM into a LUT `init`. The
+descriptor blob's contents mattered because which cuts it produces decides
+whether such a merge happens at all. `usb_ctrl_ep` read the blob a page at a
+time to dodge it; that workaround is gone, and taking it out made these blocks
+smaller and shallower (see `docs/ip-library.md`).
+
+Two tests came out of it, and they are the lasting part.
+`tests/ip_library.rs`'s `usb_descriptors_survive_lookup_table_mapping` asks a
+*mapped* netlist for these bytes, which nothing in this repository had ever
+done; `every_block_maps_to_the_logic_it_was_mapped_from` proves every block's
+mapping equivalent to what it was mapped from, at LUT4 and LUT6, so the next
+one of these is a failed gate rather than a kernel log.
 
 **Forty-eight bytes back as fourteen, some seven times over.** A UART
 transmitter takes its byte on its own `tx_valid && !busy`, so a bridge that
@@ -691,9 +704,20 @@ error: the design needs 2 `lutram` site(s) and the part has 0
 ```
 
 `fifo_sync`'s storage is an array indexed by a variable, which becomes a
-distributed RAM, and `src/fpga/devices/ecp5.dev` declares
-`bel TRELLIS_DPR16X4 lutram` with **no `count`**. So `fpga::place` sees zero
-sites of it and refuses.
+distributed RAM, and nothing in the ECP5 fabric model has a site for one to go
+in, so `fpga::place` counts zero of them and refuses.
+
+**The first reading of this was wrong and is worth correcting**, because it
+made the gap look one line deep. `src/fpga/devices/ecp5.dev` does declare
+`bel TRELLIS_DPR16X4 lutram` with no `count` — but a `.dev` bel `count` is a
+resource budget, not the placer's site list. `fpga::place` counts
+`RoutingGraph::sites`, which come from the architecture, and for an ECP5 the
+architecture is loaded from Project Trellis by `src/fpga/trellis`, whose
+`sites.rs` creates exactly three kinds of bel: `lut`, `ff` and `io`. There is
+no `lutram` site to find. Fixing it means modelling a SLICE's DPRAM mode —
+its bel, its wires and its configuration bits — and is real work in the
+Trellis loader, not a number in a device file. The same is true of the Xilinx
+7 series, whose `RAM64X1D` is declared without a `count` too.
 
 Measured on `ecp5-12f-CABGA256`, the Cynthion's part: depth 16 with `FWFT`,
 depth 32 with `FWFT`, and depth 64 without it — **2**, **4** and **8**
@@ -704,9 +728,9 @@ port's shape is what it turns on.
 passes: it stops before placement.
 
 **Inferred**, not measured: that the other two ECP5 devices in that file
-behave the same way, since all three declare the bel without a `count` and
-that is the cause. Only the 12F was tried, because it is the only ECP5 this
-flow has a Project Trellis part for.
+behave the same way, since the missing site is in the family's fabric model
+and not in any one part's. Only the 12F was tried, because it is the only
+ECP5 this flow has a Project Trellis part for.
 
 The effect is that **no design in this repository can instantiate
 `fifo_sync` on this part**, which is worth knowing independently of serial

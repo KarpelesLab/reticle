@@ -379,10 +379,10 @@ does, and the endpoint answers every poll with a NAK for ever. Whether a host
 `ip/usb_cdc_acm/README.md` §4 and §5 answer it with a kernel log rather than
 with a reading.
 
-**What the class layer cost.** On the ECP5, `usb_device_fs` is 912 LUT4 and
-438 flip-flops and `usb_cdc_acm_fs` is 1107 and 519, so a serial port is
-**+195 LUT4 and +81 flip-flops** over the vendor device it is built on;
-`usb_device_ulpi` to `usb_cdc_acm_ulpi` is +197 and +81, which is the same
+**What the class layer cost.** On the ECP5, `usb_device_fs` is 916 LUT4 and
+438 flip-flops and `usb_cdc_acm_fs` is 1097 and 519, so a serial port is
+**+181 LUT4 and +81 flip-flops** over the vendor device it is built on;
+`usb_device_ulpi` to `usb_cdc_acm_ulpi` is +182 and +81, which is the same
 thing twice and is the point of sharing the core. Fifty-six of those
 flip-flops are the line coding — `dwDTERate` alone is thirty-two — two are
 DTR and RTS, two are `class_active` and `class_out_wait` in endpoint 0, and
@@ -391,32 +391,44 @@ register.
 
 **And the hook cost the designs that do not use it nothing.**
 `usb_device_fs` was 914 LUT4 and 438 flip-flops on the ECP5 before any of
-this and is **912 and 438** after, with the descriptor ROM restructured as
-well; `usb_device_ulpi` went from 1001 to 1004 LUT4 and 444 flip-flops to
-444. Not one flip-flop, which is the number that matters: `own_notif`, the
-second endpoint, its buffers and `class_active` are all constant with
-`NOTIF_ENDP` and `class_claim` tied off, and they are all gone. The LUT4
-depth went from 10 to 11, which is the page split's one extra level of
-multiplexer.
+this and is **916 and 438** after; `usb_device_ulpi` went from 1001 to 1001
+LUT4 and 444 flip-flops to 444. Not one flip-flop, which is the number that
+matters: `own_notif`, the second endpoint, its buffers and `class_active` are
+all constant with `NOTIF_ENDP` and `class_claim` tied off, and they are all
+gone. The LUT4 depth is 10, where it was: the page split that once read the
+descriptor blob a quarter at a time added a level of multiplexer, and that
+split was a workaround for a technology-mapper defect and is gone with it.
 
 **What it found in this compiler.** `ip/fifo_sync` cannot be placed on an
 ECP5. Its storage is an array indexed by a variable, which becomes a
-distributed RAM, and `src/fpga/devices/ecp5.dev` declares
-`bel TRELLIS_DPR16X4 lutram` with **no `count`** on every ECP5 in the file —
-so `fpga::place` sees zero sites and refuses at any depth and with `FWFT`
-either way:
+distributed RAM, and nothing in the ECP5 fabric model has a site for one to go
+in, so `fpga::place` counts zero of them and refuses at any depth and with
+`FWFT` either way:
 
 ```text
 error: the design needs 2 `lutram` site(s) and the part has 0
 ```
 
+The first reading of this blamed `src/fpga/devices/ecp5.dev`, which does
+declare `bel TRELLIS_DPR16X4 lutram` with no `count`. **That is not the
+cause.** A `.dev` bel `count` is a resource budget; `fpga::place` counts
+`RoutingGraph::sites`, which come from the architecture, and an ECP5's
+architecture is loaded from Project Trellis by `src/fpga/trellis`, whose
+`sites.rs` creates three kinds of bel and no more: `lut`, `ff` and `io`. There
+is no `lutram` site for the placer to find, so adding a `count` would change
+nothing. Fixing it means modelling a SLICE's distributed-RAM mode — its bel,
+its wires and its configuration bits — in the Trellis loader, which is real
+work and is not done. `src/fpga/devices/xc7.dev` declares `RAM64X1D` without a
+`count` as well, and the 7-series loader has the same three site kinds, so
+that family is in the same position.
+
 `fpga::synthesize_for` is content, which is why
 `small_memories_become_logic_after_the_fpga_flow` passes: it stops before
 placement. Measured on `ecp5-12f-CABGA256` at depth 16 and 32 with `FWFT` and at depth 64
 without it — 2, 4 and 8 sites asked for and refused; the other two ECP5s in
-that file are **inferred** to behave
-the same, since all three declare the bel the same way and the 12F is the only
-one this flow has a Trellis part for. The effect is that no design in this
+that file are **inferred** to behave the same, since the missing site is in the
+family's fabric model and not in any one part's, and the 12F is the only one
+this flow has a Trellis part for. The effect is that no design in this
 repository can instantiate that block on this part, which matters well beyond
 serial ports.
 `testdata/fpga/cynthion/usb_cdc_uart.v` works around it by carrying one byte
@@ -424,8 +436,8 @@ at a time through the UART, which needs one holding register instead of a
 queue, and says so in its header.
 
 **What the endpoints cost.** `usb_device_fs` went from 549 LUT4 and 244
-flip-flops on the ECP5 to 913 and 438, and `usb_device_ulpi` from 638 and
-250 to 1000 and 444. Two eight-byte packet buffers are 128 of those
+flip-flops on the ECP5 to 916 and 438, and `usb_device_ulpi` from 638 and
+250 to 1001 and 444. Two eight-byte packet buffers are 128 of those
 flip-flops and are the price of an endpoint that needs no FIFO;
 `usb_bulk_ep` on its own is 281 LUT4 and 167 flip-flops, and the control
 endpoint grew by about a hundred LUT4 for indexing a descriptor blob
@@ -1033,11 +1045,42 @@ mapper was buying it with wrong logic:
   cancel out is now found where a corrupted table hid it. With eight cuts
   kept per node, a different eight survive and some nodes get a better one.
 
-No LUT4 row moved, and no iCE40 or ECP5 row moved with them — those flows map
-onto LUT4 too. That is not because LUT4 was unaffected (it is what broke
-`usb_ctrl_ep`, whose blob is read a page at a time here) but because a
-four-leaf merge has fewer ways to lose a path than a six-leaf one, so on these
-blocks the LUT4 covers happen to come out the same.
+No LUT4 row moved with them, and no iCE40 or ECP5 row — those flows map onto
+LUT4 too. That is not because LUT4 was unaffected (LUT4 is what broke
+`usb_ctrl_ep`) but because a four-leaf merge has fewer ways to lose a path than
+a six-leaf one, so on these blocks the LUT4 covers came out the same.
+
+**Then sixteen more rows moved, because a block changed.** With the mapper
+fixed, `usb_ctrl_ep`'s `desc()` reads its descriptor blob with one part-select
+again instead of a page at a time, and the four USB blocks were re-measured.
+The page split is **not** worth keeping on its own merits: taking it out is
+smaller in eleven of the sixteen rows and **shallower in fourteen of them**,
+because selecting one of four 128-bit pages and then a byte out of that is a
+level of muxing the direct part-select does not need.
+
+| Block | Target | Page split | One part-select |
+|---|---|---|---|
+| `usb_device_fs` | LUT4 | 913, depth 11 | 917, depth **10** |
+| `usb_device_fs` | LUT6 | 767, depth 9 | **758**, depth **8** |
+| `usb_device_fs` | iCE40 HX1K | 889, depth 12 | 891, depth **9** |
+| `usb_device_fs` | ECP5 45F | 912, depth 11 | 916, depth **10** |
+| `usb_device_ulpi` | LUT4 | 1003, depth 10 | **1000**, depth **9** |
+| `usb_device_ulpi` | LUT6 | 866, depth 10 | **861**, depth 10 |
+| `usb_device_ulpi` | iCE40 HX1K | 976, depth 11 | 976, depth **9** |
+| `usb_device_ulpi` | ECP5 45F | 1004, depth 10 | **1001**, depth **9** |
+| `usb_cdc_acm_fs` | LUT4 | 1108, depth 14 | **1098**, depth **12** |
+| `usb_cdc_acm_fs` | LUT6 | 910, depth 10 | **884**, depth **9** |
+| `usb_cdc_acm_fs` | iCE40 HX1K | 1095, depth 14 | 1101, depth **12** |
+| `usb_cdc_acm_fs` | ECP5 45F | 1107, depth 14 | **1097**, depth **12** |
+| `usb_cdc_acm_ulpi` | LUT4 | 1199, depth 13 | **1181**, depth **11** |
+| `usb_cdc_acm_ulpi` | LUT6 | 1028, depth 10 | **1010**, depth 10 |
+| `usb_cdc_acm_ulpi` | iCE40 HX1K | 1171, depth 13 | 1167, depth **11** |
+| `usb_cdc_acm_ulpi` | ECP5 45F | 1201, depth 13 | **1183**, depth **11** |
+
+The five rows that grew do so by 2 to 6 cells, and every one of them gets a
+shorter critical path in exchange. So the workaround was costing area *and*
+timing, which is the usual way round: it was written to dodge a compiler bug,
+not because it was better logic.
 
 The table is generated by `footprints_match_the_documentation` in
 `tests/ip_library.rs` and compared byte for byte, so it cannot drift.
@@ -1152,26 +1195,26 @@ exactly what this table is for.
 | `eth_mac_rgmii` | `eth_mac_rgmii` | IFG_CYCLES=12, TX_DELAY=80, RX_DELAY=80 | LUT6 | 28 x dff, 349 x lut | 4 |
 | `eth_mac_rgmii` | `eth_mac_rgmii` | IFG_CYCLES=12, TX_DELAY=80, RX_DELAY=80 | iCE40 HX1K | 10 x SB_CARRY, 119 x SB_DFFER, 64 x SB_DFFES, 7 x SB_DFFR, 2 x SB_GB, 39 x SB_IO, 394 x SB_LUT4 | 5 |
 | `eth_mac_rgmii` | `eth_mac_rgmii` | IFG_CYCLES=12, TX_DELAY=80, RX_DELAY=80 | ECP5 45F | 2 x DCCA, 6 x DELAYG, 5 x IDDRX1F, 395 x LUT4, 6 x ODDRX1F, 190 x TRELLIS_FF, 39 x TRELLIS_IO | 5 |
-| `usb_device_fs` | `usb_device_fs` | VID=16'h1209, PID=16'h0001 | LUT4 | 93 x dff, 913 x lut | 11 |
-| `usb_device_fs` | `usb_device_fs` | VID=16'h1209, PID=16'h0001 | LUT6 | 93 x dff, 767 x lut | 9 |
-| `usb_device_fs` | `usb_device_fs` | VID=16'h1209, PID=16'h0001 | iCE40 HX1K | 44 x SB_CARRY, 383 x SB_DFFER, 39 x SB_DFFES, 13 x SB_DFFR, 3 x SB_DFFS, 1 x SB_GB, 39 x SB_IO, 889 x SB_LUT4 | 12 |
-| `usb_device_fs` | `usb_device_fs` | VID=16'h1209, PID=16'h0001 | ECP5 45F | 1 x DCCA, 912 x LUT4, 438 x TRELLIS_FF, 39 x TRELLIS_IO | 11 |
-| `usb_device_fs_pll` | `usb_device_fs_pll` | VID=16'h1209, PID=16'h0001 | LUT4 | 93 x dff, 913 x lut | 11 |
-| `usb_device_fs_pll` | `usb_device_fs_pll` | VID=16'h1209, PID=16'h0001 | LUT6 | 93 x dff, 767 x lut | 9 |
-| `usb_device_fs_pll` | `usb_device_fs_pll` | VID=16'h1209, PID=16'h0001 | iCE40 HX1K | 44 x SB_CARRY, 383 x SB_DFFER, 39 x SB_DFFES, 13 x SB_DFFR, 3 x SB_DFFS, 1 x SB_GB, 39 x SB_IO, 889 x SB_LUT4, 1 x SB_PLL40_CORE | 12 |
-| `usb_device_fs_pll` | `usb_device_fs_pll` | VID=16'h1209, PID=16'h0001 | ECP5 45F | 1 x DCCA, 1 x EHXPLLL, 912 x LUT4, 438 x TRELLIS_FF, 39 x TRELLIS_IO | 11 |
-| `usb_device_ulpi` | `usb_device_ulpi` | VID=16'h1209, PID=16'h0001 | LUT4 | 87 x dff, 1003 x lut | 10 |
-| `usb_device_ulpi` | `usb_device_ulpi` | VID=16'h1209, PID=16'h0001 | LUT6 | 87 x dff, 866 x lut | 10 |
-| `usb_device_ulpi` | `usb_device_ulpi` | VID=16'h1209, PID=16'h0001 | iCE40 HX1K | 77 x SB_CARRY, 399 x SB_DFFER, 37 x SB_DFFES, 8 x SB_DFFR, 1 x SB_GB, 55 x SB_IO, 976 x SB_LUT4 | 11 |
-| `usb_device_ulpi` | `usb_device_ulpi` | VID=16'h1209, PID=16'h0001 | ECP5 45F | 1 x DCCA, 1004 x LUT4, 444 x TRELLIS_FF, 55 x TRELLIS_IO | 10 |
-| `usb_cdc_acm` | `usb_cdc_acm_fs` | VID=16'h1209, PID=16'h0001 | LUT4 | 109 x dff, 1108 x lut | 14 |
-| `usb_cdc_acm` | `usb_cdc_acm_fs` | VID=16'h1209, PID=16'h0001 | LUT6 | 109 x dff, 910 x lut | 10 |
-| `usb_cdc_acm` | `usb_cdc_acm_fs` | VID=16'h1209, PID=16'h0001 | iCE40 HX1K | 57 x SB_CARRY, 458 x SB_DFFER, 44 x SB_DFFES, 14 x SB_DFFR, 3 x SB_DFFS, 1 x SB_GB, 97 x SB_IO, 1095 x SB_LUT4 | 14 |
-| `usb_cdc_acm` | `usb_cdc_acm_fs` | VID=16'h1209, PID=16'h0001 | ECP5 45F | 1 x DCCA, 1107 x LUT4, 519 x TRELLIS_FF, 97 x TRELLIS_IO | 14 |
-| `usb_cdc_acm` | `usb_cdc_acm_ulpi` | VID=16'h1209, PID=16'h0001 | LUT4 | 103 x dff, 1199 x lut | 13 |
-| `usb_cdc_acm` | `usb_cdc_acm_ulpi` | VID=16'h1209, PID=16'h0001 | LUT6 | 103 x dff, 1028 x lut | 10 |
-| `usb_cdc_acm` | `usb_cdc_acm_ulpi` | VID=16'h1209, PID=16'h0001 | iCE40 HX1K | 90 x SB_CARRY, 474 x SB_DFFER, 42 x SB_DFFES, 9 x SB_DFFR, 1 x SB_GB, 113 x SB_IO, 1171 x SB_LUT4 | 13 |
-| `usb_cdc_acm` | `usb_cdc_acm_ulpi` | VID=16'h1209, PID=16'h0001 | ECP5 45F | 1 x DCCA, 1201 x LUT4, 525 x TRELLIS_FF, 113 x TRELLIS_IO | 13 |
+| `usb_device_fs` | `usb_device_fs` | VID=16'h1209, PID=16'h0001 | LUT4 | 93 x dff, 917 x lut | 10 |
+| `usb_device_fs` | `usb_device_fs` | VID=16'h1209, PID=16'h0001 | LUT6 | 93 x dff, 758 x lut | 8 |
+| `usb_device_fs` | `usb_device_fs` | VID=16'h1209, PID=16'h0001 | iCE40 HX1K | 44 x SB_CARRY, 383 x SB_DFFER, 39 x SB_DFFES, 13 x SB_DFFR, 3 x SB_DFFS, 1 x SB_GB, 39 x SB_IO, 891 x SB_LUT4 | 9 |
+| `usb_device_fs` | `usb_device_fs` | VID=16'h1209, PID=16'h0001 | ECP5 45F | 1 x DCCA, 916 x LUT4, 438 x TRELLIS_FF, 39 x TRELLIS_IO | 10 |
+| `usb_device_fs_pll` | `usb_device_fs_pll` | VID=16'h1209, PID=16'h0001 | LUT4 | 93 x dff, 917 x lut | 10 |
+| `usb_device_fs_pll` | `usb_device_fs_pll` | VID=16'h1209, PID=16'h0001 | LUT6 | 93 x dff, 758 x lut | 8 |
+| `usb_device_fs_pll` | `usb_device_fs_pll` | VID=16'h1209, PID=16'h0001 | iCE40 HX1K | 44 x SB_CARRY, 383 x SB_DFFER, 39 x SB_DFFES, 13 x SB_DFFR, 3 x SB_DFFS, 1 x SB_GB, 39 x SB_IO, 891 x SB_LUT4, 1 x SB_PLL40_CORE | 9 |
+| `usb_device_fs_pll` | `usb_device_fs_pll` | VID=16'h1209, PID=16'h0001 | ECP5 45F | 1 x DCCA, 1 x EHXPLLL, 916 x LUT4, 438 x TRELLIS_FF, 39 x TRELLIS_IO | 10 |
+| `usb_device_ulpi` | `usb_device_ulpi` | VID=16'h1209, PID=16'h0001 | LUT4 | 87 x dff, 1000 x lut | 9 |
+| `usb_device_ulpi` | `usb_device_ulpi` | VID=16'h1209, PID=16'h0001 | LUT6 | 87 x dff, 861 x lut | 10 |
+| `usb_device_ulpi` | `usb_device_ulpi` | VID=16'h1209, PID=16'h0001 | iCE40 HX1K | 77 x SB_CARRY, 399 x SB_DFFER, 37 x SB_DFFES, 8 x SB_DFFR, 1 x SB_GB, 55 x SB_IO, 976 x SB_LUT4 | 9 |
+| `usb_device_ulpi` | `usb_device_ulpi` | VID=16'h1209, PID=16'h0001 | ECP5 45F | 1 x DCCA, 1001 x LUT4, 444 x TRELLIS_FF, 55 x TRELLIS_IO | 9 |
+| `usb_cdc_acm` | `usb_cdc_acm_fs` | VID=16'h1209, PID=16'h0001 | LUT4 | 109 x dff, 1098 x lut | 12 |
+| `usb_cdc_acm` | `usb_cdc_acm_fs` | VID=16'h1209, PID=16'h0001 | LUT6 | 109 x dff, 884 x lut | 9 |
+| `usb_cdc_acm` | `usb_cdc_acm_fs` | VID=16'h1209, PID=16'h0001 | iCE40 HX1K | 57 x SB_CARRY, 458 x SB_DFFER, 44 x SB_DFFES, 14 x SB_DFFR, 3 x SB_DFFS, 1 x SB_GB, 97 x SB_IO, 1101 x SB_LUT4 | 12 |
+| `usb_cdc_acm` | `usb_cdc_acm_fs` | VID=16'h1209, PID=16'h0001 | ECP5 45F | 1 x DCCA, 1097 x LUT4, 519 x TRELLIS_FF, 97 x TRELLIS_IO | 12 |
+| `usb_cdc_acm` | `usb_cdc_acm_ulpi` | VID=16'h1209, PID=16'h0001 | LUT4 | 103 x dff, 1181 x lut | 11 |
+| `usb_cdc_acm` | `usb_cdc_acm_ulpi` | VID=16'h1209, PID=16'h0001 | LUT6 | 103 x dff, 1010 x lut | 10 |
+| `usb_cdc_acm` | `usb_cdc_acm_ulpi` | VID=16'h1209, PID=16'h0001 | iCE40 HX1K | 90 x SB_CARRY, 474 x SB_DFFER, 42 x SB_DFFES, 9 x SB_DFFR, 1 x SB_GB, 113 x SB_IO, 1167 x SB_LUT4 | 11 |
+| `usb_cdc_acm` | `usb_cdc_acm_ulpi` | VID=16'h1209, PID=16'h0001 | ECP5 45F | 1 x DCCA, 1183 x LUT4, 525 x TRELLIS_FF, 113 x TRELLIS_IO | 11 |
 <!-- end footprints -->
 
 ### Seven things writing these blocks found
