@@ -303,7 +303,7 @@ The communications interface has an interrupt IN endpoint, and what this block
 sends on it is a **SERIAL_STATE** notification: the state of the incoming
 control lines and any break, parity or overrun error the device has seen.
 
-**HIGH** (PSTN 1.2 §6.5.4, Table 30 and Table 31). SERIAL_STATE is
+**HIGH** (PSTN 1.2 §6.5 and §6.5.4, Table 31). SERIAL_STATE is
 `bmRequestType` `A1h`, `bNotification` `20h`, `wValue` 0, `wIndex` the
 interface, `wLength` 2, and then **two bytes** of `UART State Bitmap`. With
 the eight-byte notification header (PSTN 1.2 §6.5) that is a **ten-byte**
@@ -334,8 +334,8 @@ of flip-flop and a wider multiplexer for nothing.
 
 **HIGH** (PSTN 1.2 §6.5.4). SERIAL_STATE is a **state-change** notification: it
 carries "the current state of the carrier detect, ... and the error state", and
-PSTN 1.2 Table 30's `bmCapabilities` D1 groups it with the line-coding requests
-as one feature. Nothing in PSTN 1.2 asks for one on a schedule.
+PSTN 1.2 Table 4's `bmCapabilities` D1 groups it with the line-coding
+requests as one feature. Nothing in PSTN 1.2 asks for one on a schedule.
 
 So this block sends one
 

@@ -12465,10 +12465,10 @@ fn usb_cdc_acm_stalls_the_class_requests_it_does_not_claim() {
 /// The ten bytes of a SERIAL_STATE notification, as PSTN 1.2 §6.5.4 gives
 /// them, for a device reporting the line state `state`.
 ///
-/// Written forwards from the specification's two tables — Table 30 for the
-/// eight-byte header, which has a SETUP packet's shape (USB 2.0 Table 9-2),
-/// and Table 31 for `wSerialState` — rather than from the block's `case`, so
-/// that a field in the wrong place fails here.
+/// Written forwards from the specification — §6.5 for the eight-byte
+/// notification header, which has a SETUP packet's shape (USB 2.0 Table 9-2),
+/// and §6.5.4 Table 31 for `wSerialState` — rather than from the block's
+/// `case`, so that a field in the wrong place fails here.
 fn cdc_serial_state(state: u8) -> Vec<u8> {
     vec![
         // bmRequestType: device to host, class, to an interface.

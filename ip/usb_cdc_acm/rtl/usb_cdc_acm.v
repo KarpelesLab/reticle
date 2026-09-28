@@ -88,7 +88,7 @@
 //
 //   **WHEN it is sent, which the specification states and this block obeys.**
 //   §6.5.4 calls SERIAL_STATE "a notification ... to indicate ... the current
-//   state of the [UART] lines" and PSTN 1.2 Table 30's `bmCapabilities` D1
+//   state of the [UART] lines" and PSTN 1.2 Table 4's `bmCapabilities` D1
 //   groups it with the line-coding requests as one feature. It is a
 //   **state-change** notification: the device sends one when what it would
 //   report changes. So this block sends one
@@ -279,7 +279,7 @@ module usb_cdc_acm #(
     // is legal and is the smallest legal size that holds the notification.
     localparam [6:0] NOTIF_MAXPKT = 7'd16;
     // Bytes in a SERIAL_STATE notification: the eight-byte header of
-    // PSTN 1.2 Table 30 and the two bytes of `wSerialState`.
+    // PSTN 1.2 §6.5 and the two bytes of `wSerialState`.
     localparam integer NOTIF_BYTES = 10;
     // The index of the last of them, sized so that nothing takes a
     // part-select of an `integer`.
@@ -447,16 +447,17 @@ module usb_cdc_acm #(
     reg [6:0] reported;  // the state the last one carried
     reg       ever;      // one has been sent since the host configured this
 
-    // The byte at `nidx`. PSTN 1.2 Table 30 for the eight-byte header and
-    // Table 31 for the two bytes of `wSerialState`; USB 2.0 Table 9-2 for the
-    // shape of the header itself, which is a SETUP packet's.
+    // The byte at `nidx`. PSTN 1.2 §6.5 for the eight-byte
+    // notification header and §6.5.4 Table 31 for the two bytes of
+    // `wSerialState`; USB 2.0 Table 9-2 for the shape of the header itself,
+    // which is a SETUP packet's.
     function [7:0] notif_byte;
         input [3:0] i;
         begin
             case (i)
                 // bmRequestType: device to host, class, to an interface.
                 4'd0:    notif_byte = 8'hA1;
-                // bNotification: SERIAL_STATE, PSTN 1.2 Table 29.
+                // bNotification: SERIAL_STATE, PSTN 1.2 §6.5.4.
                 4'd1:    notif_byte = 8'h20;
                 // wValue: zero for this notification.
                 4'd2:    notif_byte = 8'h00;
