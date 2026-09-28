@@ -11657,8 +11657,8 @@ fn expected_cdc_configuration() -> Vec<u8> {
     // Set_Control_Line_State, Get_Line_Coding — and nothing else.
     iface.extend_from_slice(&[4, 0x24, 0x02, 0x02]);
     // Union functional descriptor, CDC 1.1 Table 33: interface 1 is
-    // subordinate to interface 0. This is the one Linux will not bind
-    // without.
+    // subordinate to interface 0. `ip/usb_cdc_acm/README.md` §2 says what is
+    // known and what is only understood about a host needing it.
     iface.extend_from_slice(&[5, 0x24, 0x06, CDC_COMM_IFACE, CDC_DATA_IFACE]);
     // ENDPOINT 82h: interrupt IN, eight bytes, bInterval 16 frames.
     iface.extend_from_slice(&[7, 5, 0x80 | CDC_NOTIF_ENDP, 0x03, 8, 0, 16]);
@@ -11798,9 +11798,11 @@ fn usb_cdc_acm_ulpi_enumerates_through_the_transceiver_that_is_on_the_board() {
 /// sixty-seven bytes, so this adds nothing about the bytes. What it adds is
 /// **why those bytes**: a reader changing the descriptors sees which
 /// properties are the ones a host binds on, rather than a byte string that
-/// must not move. The union descriptor is the one Linux will not do
-/// without; the interrupt IN endpoint on the communications interface is
-/// the one `cdc_acm` takes as `endpoint[0]` and refuses the device without.
+/// must not move: the union descriptor because it is what says the two
+/// interfaces are one function, and the interrupt IN endpoint because CDC 1.1
+/// §3.2 puts the notification element on one. Both are also understood to be
+/// what `cdc_acm` looks for, and `ip/usb_cdc_acm/README.md` §2 and §4 say how
+/// sure of that this project is — which is less sure than of the bytes.
 #[test]
 fn usb_cdc_acm_descriptors_carry_what_a_host_driver_binds_on() {
     let config = expected_cdc_configuration();
@@ -11878,7 +11880,7 @@ fn usb_cdc_acm_descriptors_carry_what_a_host_driver_binds_on() {
     assert_eq!(
         union_fd,
         Some(vec![5, 0x24, 0x06, CDC_COMM_IFACE, CDC_DATA_IFACE]),
-        "the union functional descriptor, without which Linux does not bind"
+        "the union functional descriptor, which says the two interfaces are one function"
     );
 
     // Three endpoints: an interrupt IN on the communications interface and a

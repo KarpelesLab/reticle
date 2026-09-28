@@ -732,8 +732,8 @@ and first-party IP should drop into a design as easily as a Rust crate.
       than an encoded index, so a design with no second endpoint pays
       nothing for it — not one flip-flop.
       `usb_cdc_acm` is what sits on the hook: a **serial port**, two
-      interfaces with the union functional descriptor Linux will not bind
-      without, four functional descriptors, an interrupt notification
+      interfaces with the union functional descriptor that says the two are
+      one function, four functional descriptors, an interrupt notification
       endpoint and a bulk pair, with the line-coding and control-line
       requests answered. Behind either link layer — `usb_cdc_acm_fs` and
       `usb_cdc_acm_ulpi` — and enumerated in simulation by the same host

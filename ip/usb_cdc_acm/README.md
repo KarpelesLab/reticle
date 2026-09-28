@@ -524,15 +524,15 @@ device and not anything the host was keeping.
 
 ### And every bit of the bitstream belongs to something
 
-The design is 1387 lookup tables, 649 flip-flops and 20 pads on an LFE5U-12F,
+The design is 1386 lookup tables, 649 flip-flops and 20 pads on an LFE5U-12F,
 and its bitstream was decoded back through the same Project Trellis records the
 router read:
 
 ```text
-usb_cdc_uart: 57403 configuration bit(s) set, 0 unexplained, 19009 arc(s)
+usb_cdc_uart: 57636 configuration bit(s) set, 0 unexplained, 19145 arc(s)
 ```
 
-**Nothing is unexplained**: every one of those 57403 bits belongs to a feature
+**Nothing is unexplained**: every one of those 57636 bits belongs to a feature
 the database names, so no bit was set for a reason the database does not know —
 which is how a wrong tile rule looks from the inside. The count is also what
 `reticle fpga` reports for the same bitstream, so the writer and the decoder

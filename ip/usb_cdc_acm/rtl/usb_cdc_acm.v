@@ -70,10 +70,12 @@
 //   distinction this project's protocol documents keep.
 //
 // THE NOTIFICATION ENDPOINT, AND WHY IT NEVER SENDS ANYTHING
-//   The communications interface has an interrupt IN endpoint because
-//   `cdc_acm` will not bind without one — it takes `endpoint[0]` of that
-//   interface and refuses the device if it is not an interrupt IN. So the
-//   descriptor declares one, endpoint 2 IN, eight bytes, polled every 16 ms.
+//   The communications interface has an interrupt IN endpoint because CDC 1.1
+//   §3.2 gives one to the notification element and because `cdc_acm` is
+//   understood to take `endpoint[0]` of that interface and refuse the device
+//   if it is not an interrupt IN — a reading of a driver, marked as one in
+//   README.md §4, not something measured here. So the descriptor declares
+//   one: endpoint 2 IN, eight bytes, polled every 16 frames.
 //
 //   **It NAKs every poll, for ever.** What it would otherwise send is a
 //   SERIAL_STATE notification (PSTN 1.2 §6.5.4), which reports the states
@@ -293,8 +295,9 @@ module usb_cdc_acm #(
         // Table 4.
         8'd4, CS_INTERFACE, FD_ACM, ACM_CAPS,
         // Union functional descriptor: CDC 1.1 Table 33. This is the one
-        // Linux will not do without — it is what says interface 1 is
-        // subordinate to interface 0 and that the two are one function.
+        // that says interface 1 is subordinate to interface 0 and that the
+        // two are one function, and the one a host is understood to read to
+        // tell them apart; README.md §2 says how sure of that this is.
         8'd5, CS_INTERFACE, FD_UNION, COMM_IFACE, DATA_IFACE,
         // ENDPOINT 82h — the notification endpoint. Interrupt IN, eight
         // bytes, every 16 frames. wMaxPacketSize is two bytes, low first.

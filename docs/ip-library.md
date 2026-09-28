@@ -109,14 +109,20 @@ bus read out of a specification; a class layer's question is not "is this
 descriptor legal" but **"does the driver bind"**, which no specification
 answers and only a host can. So that page has a fourth confidence level
 beside HIGH, MEDIUM and LOW — **CHECKED**, meaning measured on a host with
-the output quoted — and it uses it for the things that matter: that Linux
-reads the union functional descriptor to tell the two interfaces apart, that
-it wants an interrupt IN endpoint on the communications interface, and that
-it never needs a SERIAL_STATE notification to arrive. It also records where
-the specification and the driver pull in opposite directions, and which way
-the block went: `bmCapabilities` D1 is one bit over four things, the block
-does three of them, and it is set anyway because Linux gates
-SET_LINE_CODING on it.
+the output quoted — and it is careful about the difference. **CHECKED** is
+that `cdc_acm` binds to this descriptor set, that the port opens and carries
+bytes, that it never needs a SERIAL_STATE notification to arrive, and that
+SET_LINE_CODING's seven bytes reach the device — 115200 read back out of its
+own registers, which is the only measurement anywhere of the class hook's
+host-to-device data stage on silicon. **MEDIUM** is the *why* of any of it:
+that the driver reads the union functional descriptor to tell the interfaces
+apart, that it wants an interrupt IN endpoint on the communications interface,
+that it gates SET_LINE_CODING on `bmCapabilities` D1. Nothing here read that
+driver's source or watched the bus, and the devices that would settle those —
+one without a union descriptor, one without the endpoint — have not been on a
+board. The page also records where the specification and the driver pull in
+opposite directions and which way the block went: D1 is one bit over four
+things, the block does three of them, and it is set anyway.
 
 `rv32i`, `mos6502`, `eth_mac_rmii` and `spiflash_xip` are the **larger
 blocks**, and they are larger in a particular way: each is a whole
@@ -354,9 +360,10 @@ readable logic instead of two halves behind a `generate`.
 is a communications interface carrying the control requests and a data
 interface carrying the bytes, and nothing in either interface descriptor says
 they belong to one another. The **union functional descriptor** is what says
-it (CDC 1.1 Table 33), and Linux's `cdc_acm` reads it to tell the two apart;
-a device without one reaches a path meant for devices in the driver's own
-quirk table. Fifty-eight bytes of `IFACE_DESC` hold two interface
+it (CDC 1.1 Table 33), and Linux's `cdc_acm` is understood to read it to tell
+the two apart, with a device that omits one reaching a path meant for devices
+in the driver's own quirk table — understood rather than measured, which that
+block's README marks. Fifty-eight bytes of `IFACE_DESC` hold two interface
 descriptors, four functional descriptors and three endpoint descriptors,
 which with the nine `usb_ctrl_ep` writes is a `wTotalLength` of 67 — six
 bytes under the `DESC_MAX` of 64 that "a CDC ACM descriptor needs headroom
