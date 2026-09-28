@@ -327,15 +327,18 @@ So ten would have been legal.
 **MEDIUM**. `usb_bulk_ep` masks its buffer's byte index to the index's own
 width rather than comparing it against a bound, which is only the same thing
 when the size is a power of two, so the size has to be one. Sixteen is the
-smallest power of two that holds ten bytes; 64 would have cost six more bytes
-of flip-flop and a wider multiplexer for nothing.
+smallest power of two that holds ten bytes; 64 would have cost forty-eight more
+bytes of flip-flop and a wider multiplexer for nothing.
 
 ### When one is sent
 
-**HIGH** (PSTN 1.2 §6.5.4). SERIAL_STATE is a **state-change** notification: it
-carries "the current state of the carrier detect, ... and the error state", and
-PSTN 1.2 Table 4's `bmCapabilities` D1 groups it with the line-coding
-requests as one feature. Nothing in PSTN 1.2 asks for one on a schedule.
+**MEDIUM** (PSTN 1.2 §6.5.4). SERIAL_STATE carries the **current state** of the
+UART's lines and its error conditions, and Table 4's `bmCapabilities` D1 groups
+it with the line-coding requests as one feature. Reading it as a
+**state-change** notification — one sent when what it would say changes, and
+not on a schedule — is a reading and is marked as one: §6.5.4 says what the
+bytes mean and not when a device must produce them, and nothing in PSTN 1.2
+asks for one periodically.
 
 So this block sends one
 

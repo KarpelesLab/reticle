@@ -86,12 +86,14 @@
 //   seven bits now — `usb_fs_tx`'s header says why seven — so the endpoint
 //   holds sixteen and the notification fits.
 //
-//   **WHEN it is sent, which the specification states and this block obeys.**
-//   §6.5.4 calls SERIAL_STATE "a notification ... to indicate ... the current
-//   state of the [UART] lines" and PSTN 1.2 Table 4's `bmCapabilities` D1
-//   groups it with the line-coding requests as one feature. It is a
-//   **state-change** notification: the device sends one when what it would
-//   report changes. So this block sends one
+//   **WHEN it is sent, which is a reading of §6.5.4 rather than a quotation of
+//   it.** SERIAL_STATE carries the *current state* of the UART's lines and its
+//   error conditions, and Table 4's `bmCapabilities` D1 groups it with the
+//   line-coding requests as one feature; what §6.5.4 does not say is when a
+//   device must produce one, and nothing in PSTN 1.2 asks for one on a
+//   schedule. Reading it as a **state-change** notification — sent when what
+//   it would say changes — is what this block does, and README.md §4 marks
+//   that as a reading. So it sends one
 //
 //     * when the host configures the device, because the host's own idea of
 //       the state starts empty and nothing else would ever fill it — Linux's
@@ -108,16 +110,17 @@
 //   port and not a constant, because the answer is a property of what is
 //   wired to the block and not of the block. What this library's own designs
 //   tie it to is `7'b000_0011` — `bRxCarrier` and `bTxCarrier` set, every
-//   error bit clear — and the argument is §6.5.4's own words for those two
-//   bits: `bRxCarrier` is "State of receiver carrier detection mechanism of
-//   device. This signal corresponds to V.24 signal 109 and RS-232 signal DCD"
-//   and `bTxCarrier` is the same for "signal 106 and RS-232 signal DSR". A
-//   device whose serial port is inside the same die as the USB endpoint has
-//   its carrier present and its data set ready from the moment it exists, so
-//   both are one; there is nothing that could ever make them zero. The error
-//   bits — break, ring, framing, parity, overrun — are **events a UART
-//   reports**, so a design with a UART drives them and one without leaves
-//   them clear.
+//   error bit clear — and the argument is what §6.5.4 makes those two bits:
+//   `bRxCarrier` is the state of the device's receiver carrier detection, which
+//   the table equates with V.24 signal 109 and RS-232's DCD, and `bTxCarrier`
+//   is the transmission carrier, V.24 signal 106 and RS-232's DSR. A device
+//   whose serial port is inside the same die as the USB endpoint has its
+//   carrier present and its data set ready from the moment it exists, so both
+//   are one; there is nothing that could ever make them zero. That is an
+//   argument and not a rule: the specification says what the bits mean, not
+//   what a device with no such lines must put in them. The error bits —
+//   break, ring, framing, parity, overrun — are **events a UART reports**, so
+//   a design with a UART drives them and one without leaves them clear.
 //
 //   **What this establishes and what it assumes.** That the ten bytes are
 //   these ten bytes is read off PSTN 1.2 §6.5.4 and is a **quotation**. That
