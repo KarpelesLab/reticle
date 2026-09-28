@@ -385,8 +385,9 @@ reconfiguring the port** — SET_CONTROL_LINE_STATE or SET_LINE_CODING — and
 `serial_state` changing. The middle one is the part that is not in PSTN 1.2 and
 is not optional either: a state-change notification only reaches a host that was
 listening when the state changed, and `cdc_acm` does not start listening until
-`open`. Sending one per configuration and no more read as
-`TIOCMGET = 0x026` — no DCD, no DSR — on every open after the first, which
+`open`. Sending one per configuration and no more meant that the single packet
+went to whoever polled first and the carrier was then wrong for ever: measured
+as `TIOCMGET = 0x026` — no DCD, no DSR — on three consecutive opens, which
 `ip/usb_cdc_acm/README.md` §4 writes up as the defect it was.
 
 `serial_state` is a **port** of `usb_cdc_acm` and not a constant, seven bits

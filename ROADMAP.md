@@ -805,8 +805,10 @@ and first-party IP should drop into a design as easily as a Rust crate.
       whenever the new `serial_state` port changes. That middle trigger is not
       in the specification and is not optional: a state-change notification only
       reaches a host that was listening when the state changed, and `cdc_acm`
-      starts listening at `open`, so one per configuration read as no carrier on
-      every open after the first. On a Cynthion the ten bytes were read off
+      starts listening at `open`, so one per configuration meant the single
+      packet went to whoever polled first and the carrier was wrong for ever
+      after — `TIOCMGET` read no DCD and no DSR on three consecutive opens.
+      On a Cynthion the ten bytes were read off
       endpoint `82h` and `TIOCMGET` reports DCD and DSR on three consecutive
       opens, which `cdc_acm` can only take from that notification.
       Measured on that board:

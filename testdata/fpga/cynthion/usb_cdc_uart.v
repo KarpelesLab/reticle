@@ -236,8 +236,9 @@ module usb_cdc_uart #(
     // **on every open**, because `ip/usb_cdc_acm` sends a notification when the
     // host opens the port and not only when the state changes. A constant here
     // would otherwise be told to the host exactly once and never again, which
-    // is the defect `ip/usb_cdc_acm/README.md` §4 writes up: `TIOCMGET` read
-    // `0x026` with no DCD and no DSR on every open after the first.
+    // is the defect `ip/usb_cdc_acm/README.md` §4 writes up: whoever polled
+    // first got the one packet and `TIOCMGET` then read `0x026`, with no DCD
+    // and no DSR, on three consecutive opens.
     //
     // **It does not change whether the port opens**: `cdc_acm` has no
     // `carrier_raised` operation, so the terminal layer never waits for a
