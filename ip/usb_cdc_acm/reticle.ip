@@ -1,9 +1,9 @@
 # usb_cdc_acm: a USB serial port the operating system's own driver binds
 # to — `/dev/ttyACM*` on Linux, a COM port on Windows — built on the
-# device core in `usb_device_fs`. Three modules: `usb_cdc_req` answers the
+# device core in `usb_device_fs`. Four modules: `usb_cdc_req` answers the
 # class requests a serial driver sends (SET_LINE_CODING, GET_LINE_CODING,
 # SET_CONTROL_LINE_STATE) on `usb_ctrl_ep`'s class hook, `usb_cdc_acm` is
-# that plus the two interfaces, five functional descriptors and three
+# that plus the two interfaces, four functional descriptors and three
 # endpoints CDC ACM needs, and the two `_fs` / `_ulpi` wrappers put it
 # behind each of this library's link layers.
 #
