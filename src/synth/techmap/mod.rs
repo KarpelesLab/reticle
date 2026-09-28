@@ -61,8 +61,10 @@ use crate::ir::{CellKind, Name};
 use crate::logic::Bit;
 
 mod cuts;
+pub mod verify;
 
 pub use cuts::{Cut, CutOptions, PriorityCuts};
+pub use verify::{MapEquivalence, MapVerifyOptions, check_gate_mapping, check_lut_mapping};
 
 /// What to map onto.
 pub enum Target<'a> {
@@ -883,6 +885,21 @@ fn depth_of(aig: &Aig, m: &Mapping) -> u32 {
 /// and the nets they read its outputs. Internal nets that the mapping made
 /// redundant are removed; module ports keep their nets.
 pub fn map_module(module: &mut Module, options: &MapOptions<'_>) -> MapStats {
+    map_module_checked(module, options, None).0
+}
+
+/// [`map_module`] with a proof that the mapping preserved the logic.
+///
+/// The check is [`verify::check_lut_mapping`] or
+/// [`verify::check_gate_mapping`] on the network against the AIG it was
+/// mapped from, which is the one boundary `reticle synth --verify` does not
+/// cover — see [`verify`] for why that mattered. `None` skips it and returns
+/// `None`.
+pub fn map_module_checked(
+    module: &mut Module,
+    options: &MapOptions<'_>,
+    verify: Option<&MapVerifyOptions>,
+) -> (MapStats, Option<MapEquivalence>) {
     let (mut aig, mapping) = super::aig::from_module(module);
     let before = aig.stats();
     super::aig::optimize(&mut aig, &options.aig_opt);
@@ -892,12 +909,14 @@ pub fn map_module(module: &mut Module, options: &MapOptions<'_>) -> MapStats {
         after,
         ..MapStats::default()
     };
+    let equivalence;
     match options.target {
         Target::Lut(k) => {
             let network = lut_map_with(&aig, k, &options.cuts, options.area_passes);
             stats.cells = network.len();
             stats.depth = network.depth;
             stats.area = network.len() as f64;
+            equivalence = verify.map(|v| check_lut_mapping(&aig, &network, v));
             network.to_module(&mapping, module);
         }
         Target::Gates(library) => {
@@ -905,10 +924,11 @@ pub fn map_module(module: &mut Module, options: &MapOptions<'_>) -> MapStats {
             stats.cells = network.len();
             stats.depth = network.depth;
             stats.area = network.area;
+            equivalence = verify.map(|v| check_gate_mapping(&aig, &network, library, v));
             network.to_module(&mapping, module);
         }
     }
-    stats
+    (stats, equivalence)
 }
 
 #[cfg(test)]

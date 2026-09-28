@@ -326,6 +326,17 @@ pub struct FpgaOptions {
     /// A place-and-route tool wants one flat netlist, so this is on by
     /// default; a caller that has flattened already loses nothing.
     pub flatten: bool,
+    /// Prove the LUT mapping equivalent to the logic it was mapped from,
+    /// with [`crate::synth::techmap::verify`], and report the verdict in
+    /// [`FlowReport::mapping`].
+    ///
+    /// Off by default because it is a second pass over the whole design and
+    /// most runs do not ask for it. It is worth asking for: this is the step
+    /// `SynthOptions::verify_equivalence` does not reach, because primitive
+    /// inference and LUT covering both happen after generic synthesis is
+    /// over. A mapper that covered one cone wrongly reached a board through
+    /// that gap.
+    pub verify_mapping: Option<crate::synth::techmap::MapVerifyOptions>,
 }
 
 #[cfg(feature = "synth")]
@@ -338,6 +349,7 @@ impl Default for FpgaOptions {
             area_passes: 2,
             device_cells: true,
             flatten: true,
+            verify_mapping: None,
         }
     }
 }
@@ -363,6 +375,9 @@ pub struct FlowReport {
     /// sorted by type. A type starting with `$` is a generic cell the
     /// flow could not map, which is what [`check_nextpnr_json`] reports.
     pub netlist: Vec<(String, usize)>,
+    /// The verdict of the mapping equivalence check, when
+    /// [`FpgaOptions::verify_mapping`] asked for one.
+    pub mapping: Option<crate::synth::techmap::MapEquivalence>,
 }
 
 impl FlowReport {
@@ -452,7 +467,7 @@ pub fn synthesize_for(
     diags: &mut Diagnostics,
 ) -> Result<FlowReport, FlowError> {
     use crate::synth::opt::Dce;
-    use crate::synth::techmap::{MapOptions as TechMapOptions, map_module};
+    use crate::synth::techmap::MapOptions as TechMapOptions;
     use crate::synth::{Pass, run as synth_run};
 
     if design.modules.get(module).is_none() {
@@ -518,9 +533,14 @@ pub fn synthesize_for(
     let k = options.lut_size.unwrap_or(device.lut_size).clamp(2, 8);
     let mut techmap = TechMapOptions::lut(k);
     techmap.area_passes = options.area_passes;
-    let stats = map_module(&mut design.modules[module], &techmap);
+    let (stats, equivalence) = crate::synth::techmap::map_module_checked(
+        &mut design.modules[module],
+        &techmap,
+        options.verify_mapping.as_ref(),
+    );
     report.luts = stats.cells;
     report.lut_depth = stats.depth;
+    report.mapping = equivalence;
 
     // 4. Clean-up: the logic the mapper absorbed leaves dead cells and
     // nets behind.
@@ -1414,6 +1434,59 @@ mod tests {
         net %s u4 wire\n  port x in %x\n  port y in %y\n  port z in %z\n  port s out %s\n\
         instance u0 of adder (a=%x, b=%y, y=%t)\n  instance u1 of adder (a=%t, b=%z, y=%s)\n\
         end\n";
+
+    /// `FpgaOptions::verify_mapping` proves the LUT mapping the flow
+    /// produced, which is the step `SynthOptions::verify_equivalence` does
+    /// not reach: primitive inference and LUT covering both run after
+    /// generic synthesis is over, and the mapper once emitted wrong logic
+    /// through that gap. iCE40 is the family it matters most for, being a
+    /// LUT4 architecture.
+    #[test]
+    fn the_flow_proves_its_own_lut_mapping() {
+        use crate::synth::techmap::{MapEquivalence, MapVerifyOptions};
+
+        let mut map = SourceMap::new();
+        let file = map.add("h.rtl", HIERARCHY).unwrap();
+        for device_name in ["ice40-hx1k-tq144", "ecp5-45f-CABGA381"] {
+            let mut design = Design::parse_text(HIERARCHY, file).unwrap();
+            let top = design.top.unwrap();
+            let device = target(device_name).unwrap();
+            let options = FpgaOptions {
+                verify_mapping: Some(MapVerifyOptions::default()),
+                ..FpgaOptions::default()
+            };
+            let mut diags = Diagnostics::new();
+            let report = synthesize_for(
+                &mut design,
+                top,
+                device,
+                &Constraints::new(),
+                &options,
+                &mut diags,
+            )
+            .unwrap();
+            assert!(!diags.has_errors(), "{}", diags.render(&map));
+            assert_eq!(
+                report.mapping,
+                Some(MapEquivalence::Equivalent),
+                "{device_name}: {:?}",
+                report.mapping
+            );
+            // And nothing is reported when nothing was asked for.
+            let mut design = Design::parse_text(HIERARCHY, file).unwrap();
+            let mut diags = Diagnostics::new();
+            let report = synthesize_for(
+                &mut design,
+                top,
+                device,
+                &Constraints::new(),
+                &FpgaOptions::default(),
+                &mut diags,
+            )
+            .unwrap();
+            assert_eq!(report.mapping, None);
+        }
+    }
 
     #[test]
     fn the_flow_flattens_the_hierarchy_first() {

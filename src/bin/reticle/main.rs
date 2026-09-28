@@ -195,6 +195,10 @@ Options:
   --param <N=V>      Override a top-level parameter or generic; repeatable
   --output-dir <d>   Write <top>.json and the constraints here (default: .)
   --netlist <file>   Also write the mapped design in the .rtl text format
+  --verify           Prove the LUT mapping equivalent to the logic it was
+                     mapped from (slow). This is the step `synth --verify`
+                     does not reach: primitive inference and LUT covering
+                     both happen after generic synthesis is over.
   --report           Print the mapping report to stderr
   --quiet            Suppress the summary line
 
@@ -604,7 +608,7 @@ fn spec_for(usage: &str) -> Spec {
                 "bitstream",
                 "region",
             ],
-            flags: &["list-devices", "report", "quiet", "offline"],
+            flags: &["list-devices", "report", "quiet", "offline", "verify"],
             repeated: &["param"],
         }
     } else if std::ptr::eq(usage, LSP_USAGE) {
@@ -1631,7 +1635,7 @@ fn synth(args: &Args) -> Result<Outcome, ArgError> {
     // left over is covered by LUTs or gates.
     if lut.is_some() || args.flag("gates") {
         use reticle::synth::cells::GateLibrary;
-        use reticle::synth::techmap::{MapOptions, Target, map_module};
+        use reticle::synth::techmap::{MapOptions, MapVerifyOptions, Target, map_module_checked};
 
         let library = GateLibrary::generic();
         let target = match lut {
@@ -1642,9 +1646,17 @@ fn synth(args: &Args) -> Result<Outcome, ArgError> {
             target,
             ..MapOptions::default()
         };
+        // `--verify` covers mapping too. It has to be asked for again here
+        // because `synth::run` is over by this point: the option inside it
+        // proves the optimised netlist against the lowering, and the mapping
+        // happens after that. A mapper that covered one cone wrongly reached
+        // a board through exactly that gap.
+        let verify = args.flag("verify").then(MapVerifyOptions::default);
+        let mut wrong = false;
         let ids: Vec<_> = design.modules.iter().map(|(id, _)| id).collect();
         for id in ids {
-            let stats = map_module(&mut design.modules[id], &map_options);
+            let (stats, equivalence) =
+                map_module_checked(&mut design.modules[id], &map_options, verify.as_ref());
             if args.flag("report") {
                 eprintln!(
                     "map {}: {} cells, depth {}, area {:.0} (aig {} -> {} nodes)",
@@ -1656,6 +1668,21 @@ fn synth(args: &Args) -> Result<Outcome, ArgError> {
                     stats.after.nodes
                 );
             }
+            let Some(equivalence) = equivalence else {
+                continue;
+            };
+            let name = design.modules[id].name.clone();
+            if equivalence.wrong() {
+                eprintln!("error: mapping {name}: {}", equivalence.render());
+                wrong = true;
+            } else if !equivalence.proved() {
+                eprintln!("warning: mapping {name}: {}", equivalence.render());
+            } else if !args.flag("quiet") {
+                eprintln!("note: mapping {name}: {}", equivalence.render());
+            }
+        }
+        if wrong {
+            return Ok(Outcome::Failed);
         }
     }
     if let Err(message) = write_out(args.option("output"), &design.to_text()) {
@@ -1732,6 +1759,9 @@ fn fpga(args: &Args) -> Result<Outcome, ArgError> {
 
     let options = FpgaOptions {
         synth: synth_options(args.positionals()),
+        verify_mapping: args
+            .flag("verify")
+            .then(reticle::synth::techmap::MapVerifyOptions::default),
         ..FpgaOptions::default()
     };
     let mut diags = Diagnostics::new();
@@ -1746,6 +1776,20 @@ fn fpga(args: &Args) -> Result<Outcome, ArgError> {
     let failed = report(&mut diags, &map);
     if args.flag("report") {
         eprint!("{}", flow.to_text());
+    }
+    // A mapping the flow could not prove equivalent is a warning; one it
+    // disproved stops the run, because the netlist does not compute the
+    // design and writing it out would be the worst of all outcomes.
+    if let Some(equivalence) = &flow.mapping {
+        if equivalence.wrong() {
+            eprintln!("error: mapping: {}", equivalence.render());
+            return Ok(Outcome::Failed);
+        }
+        if !equivalence.proved() {
+            eprintln!("warning: mapping: {}", equivalence.render());
+        } else if !args.flag("quiet") {
+            eprintln!("note: mapping: {}", equivalence.render());
+        }
     }
     if failed {
         return Ok(Outcome::Failed);

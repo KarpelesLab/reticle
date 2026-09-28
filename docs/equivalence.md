@@ -135,6 +135,66 @@ which Reticle does not have. Below about 26 inputs exhaustive simulation
 settles them; see `docs/arithmetic.md` for how the multiplier proofs
 are arranged.
 
+## Across the technology-mapping boundary
+
+`reticle synth --verify` proves the optimised netlist against a minimal
+lowering of the same source. It does **not** cover technology mapping, and
+that is not an oversight of the option so much as of the pipeline:
+`map_module` is a separate step after generic synthesis in every flow, so
+nothing used to compare a mapped netlist with what it was mapped from.
+
+A mapper that covered one cone wrongly therefore emitted wrong logic and
+every test still passed. That happened: `ip/usb_cdc_acm`'s CDC descriptor
+set, mapped onto LUT4 and loaded on a Cynthion, answered a host with
+`bInterfaceNumber` of its data interface as 0 where the sources say 1, and
+the kernel refused the device. In simulation of the elaborated design the
+same bytes were perfect. `src/synth/techmap/cuts.rs` has the defect.
+
+`src/synth/techmap/verify.rs` closes it. The reason it can be a proof rather
+than a sample is where it cuts: mapping's input is an AIG and its output is a
+network of LUTs or library cells **over the same inputs**, so the two sides
+are combinational circuits with one interface. That is decidable. The same
+question asked one level out — the mapped module against the unmapped module —
+is a *sequential* miter on any registered design, and on `usb_device_fs` it
+is useless in both directions: bounded search to twenty frames finds nothing,
+because reaching the descriptor ROM takes a USB enumeration and thousands of
+cycles, and the induction does not close, so the answer is `Unknown`.
+
+The check builds one AIG holding the original graph, the mapped network
+expanded back into AND nodes (each LUT by Shannon decomposition of its
+`init`, which is where a wrong `init` becomes a wrong cone), one output per
+AIG output carrying the XOR of the two sides, and a last output that is their
+OR. Then two tiers:
+
+1. **Simulation** of `64 * sim_words` random patterns at once. A word in
+   which the difference output is set is a counter-example, reported with the
+   input assignment and the outputs it breaks. This is the tier that would
+   have caught the descriptor ROM: the wrong cover disagreed on about one
+   random vector in two thousand.
+2. **Proof** by `synth::aig::fraig`, which merges only nodes it has proved
+   equal — exhaustively for small cones, by SAT for the rest. Two sides that
+   compute the same function collapse into each other and every difference
+   output folds to the constant false.
+
+Where to ask for it:
+
+| Caller | How |
+|---|---|
+| `reticle synth --lut 4 --verify` | on by the same flag, after mapping |
+| `reticle fpga --verify` | `FpgaOptions::verify_mapping`, reported in `FlowReport::mapping` |
+| a library | `techmap::map_module_checked`, or `check_lut_mapping` / `check_gate_mapping` on a network directly |
+
+**What it costs.** `every_block_maps_to_the_logic_it_was_mapped_from` in
+`tests/ip_library.rs` maps all 31 library variants at LUT4 and LUT6 and proves
+all 62, the largest being `rv32i` at 5501 AIG nodes and 2436 cells. In a
+debug build that is **160 s** for mapping and proving together, against 84 s
+for the same mappings with the proofs off — so a proof costs about as much as
+the mapping it checks, and the whole test is half of the 305 s
+`footprints_match_the_documentation` already spends. Every one of the 62 is
+proved, not merely unrefuted. The work is bounded by the graphs and by
+`MapVerifyOptions`, never by a clock, which is what CI on a slower machine
+needs.
+
 ## Not yet
 
 The sequential case (bounded search and k-induction over a miter with
