@@ -1294,10 +1294,14 @@ endmodule
 //   not:
 //
 //     an array indexed by a register — `reg [7:0] buf [0:63]` — is a
-//     distributed RAM, and `src/fpga/devices/ecp5.dev` declares
-//     `TRELLIS_DPR16X4` with no site count, so `fpga::place` refuses any
-//     design that needs one. `testdata/fpga/cynthion/usb_cdc_uart.v` says
-//     the same thing about `ip/fifo_sync`.
+//     **distributed RAM**, which the ECP5 backend could not place when this
+//     was written: `src/fpga/devices/ecp5.dev` declared `TRELLIS_DPR16X4`
+//     with no site count, so `fpga::place` counted zero of them and refused.
+//     `testdata/fpga/cynthion/usb_cdc_uart.v` says the same thing about
+//     `ip/fifo_sync`, and that is why neither block uses an array. **If that
+//     has since been fixed, this is the shape worth reconsidering**, because
+//     a 64-by-8 distributed RAM is the only one of the three that needs
+//     neither a write decoder nor a read multiplexer.
 //
 //     one wide register written at a computed offset —
 //     `buf[{idx, 3'b000} +: 8] <= byte` — is

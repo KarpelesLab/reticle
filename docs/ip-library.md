@@ -430,16 +430,27 @@ way the packet is stored — a buffer written as sixty-four named byte registers
 and a `case` needs exactly the same multiplexer, plus a six-to-sixty-four
 decoder for the write enables that the shift register does not need.
 
-A cheaper structure exists and was not taken: a buffer that shifts a byte out
-as the consumer takes it needs no multiplexer at all, because the byte is
-always at the bottom. What it needs is for the packet to be *aligned* to the
-bottom before the first byte is read, and its length is not known until it has
-all arrived — so the alignment is up to 63 more shifts after the packet ends,
-which is a padding state in both directions and a new rule about when a second
-packet may start. That is the trade to revisit if a design ever wants a 64-byte
-endpoint and does not have a thousand lookup tables to spend; it is written
-down here rather than done because the measurement below is what says whether
-the thousand were worth spending.
+Two cheaper structures exist and neither was taken.
+
+A buffer that **shifts a byte out** as the consumer takes it needs no
+multiplexer at all, because the byte is always at the bottom. What it needs is
+for the packet to be *aligned* to the bottom before the first byte is read, and
+its length is not known until it has all arrived — so the alignment is up to 63
+more shifts after the packet ends, which is a padding state in both directions
+and a new rule about when a second packet may start.
+
+A **distributed RAM** — `reg [7:0] buf [0:63]`, four `TRELLIS_DPR16X4` deep by
+two wide on an ECP5 — needs neither a write decoder nor a read multiplexer, and
+is the obvious answer. It was not available: when this was written
+`src/fpga/devices/ecp5.dev` declared that bel with no site count, so
+`fpga::place` counted zero of them and refused any design that needed one,
+which is the same gap `testdata/fpga/cynthion/usb_cdc_uart.v` records about
+`ip/fifo_sync`. **If that has been fixed since, this is the first thing to
+try**: it would give back most of the 948 lookup tables and cost eight slices
+of RAM instead.
+
+Both are written down rather than done because the measurement below is what
+says whether the thousand lookup tables were worth spending at all.
 
 **What it buys.** Measured on a Cynthion's AUX port, through
 `testdata/fpga/cynthion/usb_ulpi_device.v` — the bulk loopback, with no UART in
