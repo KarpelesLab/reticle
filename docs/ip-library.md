@@ -463,7 +463,7 @@ host's own stack:
 
 | `wMaxPacketSize` | round trips/s | bytes/s each way |
 |------------------|---------------|------------------|
-| 8 | 8470 | 67 700 |
+| 8 | 8460 | 67 700 |
 | 64 | 3990 | 255 500 |
 
 **3.8 times, and not eight.** The transactions do fall by eight, but the round
