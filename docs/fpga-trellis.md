@@ -496,12 +496,14 @@ is the same design with the buffers as **arrays**, which is `usb_bulk_ep`'s
 this same board.
 
 **Nothing is unexplained in any of the three columns**, which is the statement
-this table is for. It is a stronger statement in the right-hand one than in the
-other two, because those sixteen RAMs are bits of a kind no earlier image here
-had: 97 of them each, the six `INIT` words and the mode. The `#[ignore]`d test
-above was re-run over all three and follows every flip-flop back to a driver in
-the fabric with none floating — 562 seconds of place, route and decode for the
-middle column, 124 for the right-hand one.
+this table is for; each was placed, routed, written and decoded to get its
+numbers. It is a stronger statement in the right-hand one than in the other two,
+because those sixteen RAMs are bits of a kind no earlier image here had: 97 of
+them each, the six `INIT` words and the mode. The `#[ignore]`d test above adds
+to that by following every flip-flop back to a driver in the fabric with none
+floating; it was run over the middle column in 562 seconds and over the
+right-hand one in 124, and it asserts the flip-flop count, so it tracks whatever
+`usb_bulk_ep` does by default rather than both shapes at once.
 
 **`zero_probe` reaches eight lookup tables and not sixty-four**, which is a
 sentence in `usb_ulpi_device.v` that no round has been able to update: that file

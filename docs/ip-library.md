@@ -736,6 +736,16 @@ of its 44 355 still decodes back through the database into a feature it names �
 14 361 arcs, 2537 fields and 1123 words, with **nothing unexplained** — and the
 arcs are exactly the ones the router chose.
 
+The **serial port** was built and loaded too, because a bulk loopback and a
+class device are not the same traffic: `testdata/fpga/cynthion/usb_cdc_uart.v`
+comes out as 1383 lookup tables, 604 flip-flops and **18** distributed RAMs —
+the bulk pair's sixteen and the notification endpoint's two — with all 59 995 of
+its bits decoding and nothing unexplained. On the part the kernel's own
+`cdc_acm` binds it on `/dev/ttyACM1`, the ten bytes of SERIAL_STATE arrive off
+endpoint `82h` with both carriers set, 48 bytes go out and come back byte for
+byte through the UART, and GET_LINE_CODING answers 115200 8N1. That is
+`tests/usb_cdc_acm.rs`, and it is `#[ignore]`d like the other two.
+
 **The address permutation is right in silicon, and this is the first thing that
 could say so.** `docs/fpga-trellis.md` records the gap: a distributed RAM's
 addresses are permuted (`dpram_init_word`, nextpnr's `dram_to_comb`), every RAM
@@ -1077,6 +1087,22 @@ is the part that matters:
   interfaces with one endpoint apiece and a `wTotalLength` of 41 — the
   second of which also proves the walk along the chain of `bLength` fields
   does not stop at the first descriptor.
+
+  **All of the above runs on the buffers as arrays**, which is the default,
+  and every one of them would catch a buffer that answered from the wrong
+  address: `bulk_loopback`'s 63-byte packet in particular, which is the one
+  length that fills a buffer and, in the shift-register shape, does not start
+  at the bottom of it. What **none** of them reaches is the shape as it is
+  built for a device: the array becomes a memory cell, and a memory cell is
+  the backend's to lower — `the_logic_fallback_answers_like_the_memory_it_replaced`
+  in `tests/fpga_flow.rs` is what answers for that, and a board is what
+  answers for the silicon. `BUF_RAM = 0` gets `bulk_loopback` too, in
+  `usb_device_fs_loops_bytes_with_the_buffers_as_shift_registers`, because the
+  two shapes share all four of their counters and differ in a subtraction — the
+  shift register reads at `index - written` where the array reads at `index`,
+  and an off-by-one there is what the 63-byte packet is for. Its other rules,
+  the toggle and the NAKs and the zero-length packet, are not re-run on that
+  shape: none of them touches a buffer's addressing.
 
   **None of these would have caught the fault that cost the last round.**
   Every one of them passes against a three-bit state register for four

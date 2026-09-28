@@ -12,6 +12,7 @@
 //! | `packages_resolve_and_elaborate` | every block builds through `ip::resolve` and `ip::elaborate`, dependencies and all |
 //! | `blocks_synthesise_cleanly` | generic synthesis reports nothing — no errors, and no inferred latch |
 //! | `usb_descriptors_survive_lookup_table_mapping` | a **mapped** netlist still answers GET_DESCRIPTOR with the right bytes |
+//! | `every_block_maps_to_the_logic_it_was_mapped_from` | every block's LUT4 and LUT6 mapping is **proved** equivalent to the logic it came from |
 //! | `footprints_match_the_documentation` | the table in `docs/ip-library.md` is the one this run measures |
 //! | `axil_gpio_matches_the_axi4lite_definition` | `bus::match_ports` recognises the GPIO's bus port |
 //! | `cdc_*`, `fifo_async_*` | `timing::analyze_cdc` calls every crossing a synchroniser, never an unsynchronised one |
@@ -10013,6 +10014,37 @@ fn usb_device_fs_loops_bytes_through_endpoint_one_off_clock() {
     let design = usb_design();
     bulk_loopback(&mut UsbHost::new(FsPair::new(&design), 64));
     bulk_loopback(&mut UsbHost::new(FsPair::new(&design), -64));
+}
+
+/// The same bytes with the two packet buffers as **shift registers**, which is
+/// `usb_bulk_ep`'s `BUF_RAM = 0`.
+///
+/// The shape that ships is the array, and every other behavioural test above
+/// runs on it. This one exists because the two shapes are not two independent
+/// pieces of logic that happen to agree: they share `owp`, `ilen`, `ordx` and
+/// `tx_index` and differ only in the storage and in the two read expressions,
+/// and the shift register's read is `index - written` at the index's own width
+/// where the array's is `index`. That subtraction is arithmetic, it is the
+/// place a base counter used to be, and an off-by-one in it is exactly the
+/// defect `bulk_loopback`'s 63-byte packet was put there for: 63 bytes is the
+/// only length that fills the buffer and does not start at the bottom of it.
+///
+/// **What it would and would not catch.** It catches a shift-register buffer
+/// that reads from the wrong position, at five packet lengths in both
+/// directions, with the bytes checked at the byte interface and at the host. It
+/// does not re-run the endpoint's other rules — the toggle, the NAKs, the
+/// zero-length packet — because none of those touches a buffer's addressing,
+/// and it says nothing about either shape as a *device* builds it; the
+/// footprint table carries both shapes for that, and a board for the array.
+#[test]
+fn usb_device_fs_loops_bytes_with_the_buffers_as_shift_registers() {
+    let design = design_of(
+        "usb_device_fs",
+        "usb_device_fs",
+        &[("VID", "16'h1209"), ("PID", "16'h0001"), ("BUF_RAM", "0")],
+    );
+    let mut host = UsbHost::new(FsPair::new(&design), 0);
+    bulk_loopback(&mut host);
 }
 
 #[test]
