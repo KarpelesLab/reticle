@@ -377,6 +377,23 @@ module usb_cdc_uart #(
         end else begin
             // Handed to the transmitter.
             if (out_valid & out_ready) in_flight <= 1'b1;
+
+            // Taken by the endpoint. **This comes before the receive below on
+            // purpose**, so that the two happening at once leaves
+            // `echo_full` set and the new byte in `echo`, which is right:
+            // `in_data` is the register, so the endpoint took the old byte,
+            // and the new one has not been handed to anybody yet. Written the
+            // other way round, the last assignment would win and the new byte
+            // would be marked empty — a byte lost.
+            //
+            // They cannot happen at once as this design stands, and that is
+            // exactly why the order is worth stating: `give` needs
+            // `echo_full`, and `echo_full` is zero whenever a byte is in the
+            // loop, because `hand` above will not start one otherwise. The
+            // invariant is real and it is also two lines away from whoever
+            // changes the throttle.
+            if (give) echo_full <= 1'b0;
+
             // Back out of the receiver. A framing error is not special-cased:
             // the byte such a frame produced is handed back anyway, and
             // `uart_rx_error` is deliberately left unread so that a broken
@@ -388,8 +405,6 @@ module usb_cdc_uart #(
                 echo_full <= 1'b1;
                 in_flight <= 1'b0;
             end
-            // Taken by the endpoint.
-            if (give) echo_full <= 1'b0;
         end
     end
 
