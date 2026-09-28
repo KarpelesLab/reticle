@@ -794,14 +794,17 @@ and first-party IP should drop into a design as easily as a Rust crate.
       USB 2.0 §5.5.3, §5.7.3 and §5.8.3 rather than rounded up; the bulk
       endpoints and endpoint 0 declare **64** and the notification endpoint
       **16**. Both endpoint buffers became shift registers with a base
-      counter, because an array indexed by a register is a distributed RAM
-      this backend cannot place and a wide register written at a computed
-      offset is a construct this compiler refuses, and `usb_pkt_rx` grew a
+      counter, because a wide register written at a computed offset is a
+      construct this compiler refuses and an array indexed by a register is a
+      distributed RAM the ECP5 backend had no site count for when this was
+      written — that being the shape to reconsider if it has one now, since it
+      needs neither a write decoder nor a read multiplexer. `usb_pkt_rx` grew a
       payload byte stream so there is no second copy of a 64-byte packet.
       `usb_cdc_acm` sends **SERIAL_STATE** (PSTN 1.2 §6.5.4) when the host
       configures it and whenever the new `serial_state` port changes; on a
-      Cynthion, `cdc_acm` gets a carrier from it and a port opens with
-      `clocal` cleared, which it could not before. Measured on that board:
+      Cynthion the ten bytes were read off endpoint `82h` and `TIOCMGET`
+      reports DCD and DSR, which `cdc_acm` can only take from that
+      notification. Measured on that board:
       **67 700 bytes/s each way at eight bytes and 255 500 at 64**, for
       **+948 LUT4 and +923 flip-flops** on an ECP5 — both in
       `docs/ip-library.md`, with the byte multiplexer named as the whole of
