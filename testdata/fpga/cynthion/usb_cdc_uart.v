@@ -331,7 +331,7 @@ module usb_cdc_uart #(
     // where somebody will look for it: the endpoints hold 64 bytes now, and
     // this bridge still hands one byte to `uart_tx` per round trip, so the
     // packets it sends are one byte long whatever `wMaxPacketSize` says. The
-    // throughput figures in `ip/usb_cdc_acm/README.md` §6 are measured on the
+    // throughput figures in `ip/usb_cdc_acm/README.md` §5 are measured on the
     // bulk loopback of `usb_ulpi_device.v`, which has no UART in the way, for
     // exactly that reason. For a serial port
     // a person types at, and for a test that moves a few dozen bytes, the

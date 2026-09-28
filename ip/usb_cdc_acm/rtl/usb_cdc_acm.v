@@ -139,7 +139,7 @@
 //   choose one of the others. It was eight, and what that cost was
 //   throughput: a host is limited in **transactions** a frame rather than in
 //   bytes, so eight bytes a transaction was eight times as many of them.
-//   README.md §6 has the two figures measured on a part.
+//   README.md §5 has the two figures measured on a part.
 //
 //   A host reading this port still reads **one packet at a time**, and the
 //   reason has not changed with the size: a bulk IN transfer ends on a short
