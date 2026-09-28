@@ -906,48 +906,61 @@ a shortcut: a host must hear nothing from an endpoint the descriptors do
 not declare. Nothing is `generate`d away — the registers of a direction
 that cannot be asked for have no reader, so synthesis removes them.
 
-### `ip/fifo_sync` cannot be placed on an ECP5
+### `ip/fifo_sync` could not be placed on an ECP5, and now can
 
-Found while bridging this block to `ip/uart` on the Cynthion, and it is a
-gap in the FPGA backend rather than in either block:
+Found while bridging this block to `ip/uart` on the Cynthion, and it was a gap
+in the FPGA backend rather than in either block:
 
 ```
 error: the design needs 2 `lutram` site(s) and the part has 0
 ```
 
 `fifo_sync`'s storage is an array indexed by a variable, which becomes a
-distributed RAM, and nothing in the ECP5 fabric model has a site for one to go
-in, so `fpga::place` counts zero of them and refuses.
+distributed RAM, and nothing in the ECP5 fabric model had a site for one to go
+in, so `fpga::place` counted zero of them and refused.
 
-**The first reading of this was wrong and is worth correcting**, because it
-made the gap look one line deep. `src/fpga/devices/ecp5.dev` does declare
-`bel TRELLIS_DPR16X4 lutram` with no `count` — but a `.dev` bel `count` is a
-resource budget, not the placer's site list. `fpga::place` counts
+**Two readings of this were wrong before the right one, and both are worth
+recording**, because each made the gap look shallower than it was.
+
+The first blamed `src/fpga/devices/ecp5.dev`, which declares
+`bel TRELLIS_DPR16X4 lutram` with no `count`. But a `.dev` bel `count` is a
+resource budget, not the placer's site list: `fpga::place` counts
 `RoutingGraph::sites`, which come from the architecture, and for an ECP5 the
 architecture is loaded from Project Trellis by `src/fpga/trellis`, whose
-`sites.rs` creates exactly three kinds of bel: `lut`, `ff` and `io`. There is
-no `lutram` site to find. Fixing it means modelling a SLICE's DPRAM mode —
-its bel, its wires and its configuration bits — and is real work in the
-Trellis loader, not a number in a device file. The same is true of the Xilinx
-7 series, whose `RAM64X1D` is declared without a `count` too.
+`sites.rs` created exactly three kinds of bel — `lut`, `ff` and `io`. There was
+no `lutram` site to find, so a number in a device file would have changed
+nothing.
+
+The second was this section's own conclusion that no design here could ever
+instantiate `fifo_sync` on this part. That held only until the Trellis loader
+learned the mode: **it is modelled now**, and `docs/fpga-trellis.md` has what
+`ecppack` writes for one, read out of 111 distributed RAMs in Great Scott
+Gadgets' own bitstreams. `fifo_sync` places, routes and produces a bitstream
+whose every bit decodes at depths 16, 32 and 64 — 2, 4 and 8
+`TRELLIS_DPR16X4`, 194, 388 and 776 configuration bits, nothing unexplained.
+
+What the numbers below therefore describe is a refusal that no longer happens.
+They are kept because the shape of the measurement is still the evidence for
+what the primitive costs, and because a gap this document called permanent
+turning out not to be is worth leaving legible.
 
 Measured on `ecp5-12f-CABGA256`, the Cynthion's part: depth 16 with `FWFT`,
 depth 32 with `FWFT`, and depth 64 without it — **2**, **4** and **8**
-`lutram` sites asked for and refused, so neither the depth nor the read
-port's shape is what it turns on.
-`fpga::synthesize_for` is happy with every one of them, which is why
+`lutram` sites, which were once asked for and refused, so neither the depth nor
+the read port's shape was what it turned on.
+`fpga::synthesize_for` was happy with every one of them, which is why
 `tests/ip_library.rs`'s `small_memories_become_logic_after_the_fpga_flow`
-passes: it stops before placement.
+passed throughout: it stops before placement.
 
-**Inferred**, not measured: that the other two ECP5 devices in that file
-behave the same way, since the missing site is in the family's fabric model
-and not in any one part's. Only the 12F was tried, because it is the only
-ECP5 this flow has a Project Trellis part for.
+**Still inferred**, not measured: that the other two ECP5 devices in that file
+behave the same way, since the site model is the family's and not any one
+part's. Only the 12F has been tried, because it is the only ECP5 this flow has
+a Project Trellis part for.
 
-The effect is that **no design in this repository can instantiate
-`fifo_sync` on this part**, which is worth knowing independently of serial
-ports. `testdata/fpga/cynthion/usb_cdc_uart.v` works around it by carrying
-one byte at a time, and says so.
+`testdata/fpga/cynthion/usb_cdc_uart.v` still carries one byte at a time, and
+says so. That is now a choice rather than a workaround — and with the mode
+modelled, a real FIFO between the endpoint and the UART is available, which
+`usb_bulk_ep`'s own buffers want more (see its header).
 
 ---
 

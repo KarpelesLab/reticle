@@ -483,9 +483,11 @@ more of the eight; this one waits for each.
 
 **Why the serial port's own figure is not this one.**
 `testdata/fpga/cynthion/usb_cdc_uart.v` carries **one byte at a time** through
-its UART — that file's header says why, and the short version is that
-`ip/fifo_sync` cannot be placed on this part — so it sends one-byte packets
-whatever `wMaxPacketSize` says, and a wider packet does nothing for it at all.
+its UART — that file's header says why, and the short version is that it was
+written while `ip/fifo_sync` could not be placed on this part — so it sends
+one-byte packets whatever `wMaxPacketSize` says, and a wider packet does
+nothing for it at all. The placement gap is closed now, so that is a design
+this round did not revisit rather than a constraint it was under.
 The bulk loopback is the design that measures the endpoint rather than the
 bridge above it.
 
