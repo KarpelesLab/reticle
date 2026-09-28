@@ -50,13 +50,14 @@
 //! byte-identical and passes exactly as it did before. The constant is
 //! wrong and **every returned byte is the complement of the byte sent**,
 //! which nothing else in this design can do; [`flipped_by_the_probe`] names
-//! it rather than leaving a reader to work out why 256 bytes came back
+//! it rather than leaving a reader to work out why a whole stream came back
 //! inside out.
 //!
 //! **What that would and would not catch.** It catches a flip-flop whose
 //! data input is the constant zero coming up, or being clocked to, a one —
-//! the defect itself — and it catches it on every one of the 293 bytes this
-//! test moves, so it cannot pass by accident. It does not catch a broken
+//! the defect itself — and it catches it on **every byte** this test moves,
+//! which is a few hundred through the assertions and two thousand more through
+//! the throughput measurement, so it cannot pass by accident. It does not catch a broken
 //! constant *one*: the same design's `rst_q` is fed by one and releases the
 //! transceiver's reset pin, so a one that came up zero means no device on
 //! the bus, and this test **skips** with "no 1209:0001 is attached" rather
@@ -93,11 +94,10 @@ const TIMEOUT: Duration = Duration::from_millis(500);
 /// This is the one thing about bulk transfers that has to be got right on the
 /// host side, and getting it wrong looked exactly like a broken device. A
 /// bulk IN transfer ends when the device sends a packet **shorter than
-/// `wMaxPacketSize`** or when the host's buffer is full, so a read of 64
-/// bytes answered with eight is not finished: the host asks again, the device
-/// NAKs because it has nothing more, and the transfer times out. Payloads of
-/// one to seven bytes came back and eight did not — from a device that was
-/// behaving perfectly.
+/// `wMaxPacketSize`** or when the host's buffer is full, so a read of 128
+/// bytes answered with 64 is not finished: the host asks again, the device
+/// NAKs because it has nothing more, and the transfer times out. That bit this
+/// test when the number here was 8 and the read asked for 64.
 ///
 /// The device could end such a transfer itself by sending a zero-length
 /// packet after a full one, which `usb_bulk_ep` can do — `in_commit` with no
@@ -105,7 +105,14 @@ const TIMEOUT: Duration = Duration::from_millis(500);
 /// of no bytes hands the interface nothing. So the host asks for one packet
 /// at a time, which is what a host that knows the protocol it is speaking
 /// does anyway.
-const MAX_PACKET: usize = 8;
+///
+/// **64 is what the descriptors now say**, the largest of the four sizes USB
+/// 2.0 §5.8.3 allows a full-speed bulk endpoint; it was 8, which is the
+/// smallest. The assertion that this number and the part agree is below, read
+/// off the descriptor the part reports rather than trusted: a host that
+/// disagreed with a device about `wMaxPacketSize` is the failure this comment
+/// is about, and it is worth catching as a mismatch rather than as a timeout.
+const MAX_PACKET: usize = 64;
 
 /// The configuration descriptor `usb_ctrl_ep`'s default parameters describe,
 /// written forwards from the specification's layout — the arithmetic and not
@@ -114,9 +121,10 @@ fn expected_configuration() -> Vec<u8> {
     let mut iface: Vec<u8> = Vec::new();
     // INTERFACE: number 0, alternate 0, vendor specific.
     iface.extend_from_slice(&[9, 4, 0, 0, 0, 0xFF, 0x00, 0x00, 0]);
-    // ENDPOINT 1 OUT and ENDPOINT 1 IN: bulk, eight bytes, no interval.
-    iface.extend_from_slice(&[7, 5, EP_OUT, 2, 8, 0, 0]);
-    iface.extend_from_slice(&[7, 5, EP_IN, 2, 8, 0, 0]);
+    // ENDPOINT 1 OUT and ENDPOINT 1 IN: bulk, `MAX_PACKET` bytes, no interval.
+    let pkt = u8::try_from(MAX_PACKET).expect("a legal wMaxPacketSize");
+    iface.extend_from_slice(&[7, 5, EP_OUT, 2, pkt, 0, 0]);
+    iface.extend_from_slice(&[7, 5, EP_IN, 2, pkt, 0, 0]);
     // bNumEndpoints and bNumInterfaces are counted along the chain of
     // bLength fields, the way a host reads them and the way the block
     // computes them, so a descriptor changed in one place changes this
@@ -220,6 +228,19 @@ fn usb_endpoint_one_loops_bytes_back_on_a_real_host() {
         expected_configuration(),
         "the part reports the descriptor the sources describe"
     );
+    // And `MAX_PACKET` above is what the part says, not what this file hopes:
+    // every read below asks for exactly that many bytes, and a host asking for
+    // more than the device promised turns a working device into a timeout.
+    // Byte 4 of an endpoint descriptor is the low byte of `wMaxPacketSize`
+    // (USB 2.0 Table 9-13) and the two endpoints are at 18 and 25.
+    for at in [18usize, 25] {
+        assert_eq!(
+            u16::from_le_bytes([config[at + 4], config[at + 5]]),
+            u16::try_from(MAX_PACKET).expect("small"),
+            "endpoint {:#04x} declares a packet size this test does not use",
+            config[at + 2]
+        );
+    }
 
     // Nothing should be holding this interface — a vendor class has no
     // driver — but say so rather than fail obscurely if something is.
@@ -253,10 +274,18 @@ fn usb_endpoint_one_loops_bytes_back_on_a_real_host() {
     // until_the_bytes_are_taken` proves in simulation. A loopback is read
     // after each write.
     let payloads: Vec<Vec<u8>> = vec![
+        // A full packet, one a byte short of full, then short ones. The full
+        // one is the case this round exists for and the 63-byte one is the
+        // case a buffer base counter off by one gets wrong.
+        (0..MAX_PACKET)
+            .map(|i| u8::try_from(i % 256).expect("a byte").wrapping_mul(73))
+            .collect(),
+        (0..MAX_PACKET - 1)
+            .map(|i| u8::try_from(i % 256).expect("a byte").wrapping_mul(29))
+            .collect(),
         vec![0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07],
         vec![0xDE, 0xAD, 0xBE, 0xEF, 0xFF],
         vec![0x5A],
-        (0..8u8).map(|i| i.wrapping_mul(37)).collect(),
     ];
     for payload in &payloads {
         assert!(payload.len() <= MAX_PACKET, "one packet at a time");
@@ -277,7 +306,7 @@ fn usb_endpoint_one_loops_bytes_back_on_a_real_host() {
     }
 
     // And then enough of it that a fault which happens once in a while has
-    // to show: 256 bytes through in 8-byte packets, every byte different
+    // to show: 256 bytes through in `MAX_PACKET` packets, every byte different
     // from its neighbours' and from its own position modulo the packet size,
     // so a byte swapped with another or held over from the last packet is
     // visible.
@@ -289,7 +318,7 @@ fn usb_endpoint_one_loops_bytes_back_on_a_real_host() {
         handle
             .bulk_write(EP_OUT, chunk, TIMEOUT)
             .expect("writing a chunk");
-        let mut buf = [0u8; MAX_PACKET];
+        let mut buf = vec![0u8; MAX_PACKET];
         let got = handle
             .bulk_read(EP_IN, &mut buf, TIMEOUT)
             .expect("reading a chunk");

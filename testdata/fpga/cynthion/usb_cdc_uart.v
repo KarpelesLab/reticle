@@ -206,6 +206,36 @@ module usb_cdc_uart #(
     wire        dtr;
     wire        rts;
 
+    // ===================================================================
+    // WHAT THIS PORT REPORTS AS ITS LINE STATE
+    // ===================================================================
+    //
+    // `serial_state` is `wSerialState` of the SERIAL_STATE notification
+    // `ip/usb_cdc_acm` sends: bit 0 is `bRxCarrier` (DCD), bit 1 is
+    // `bTxCarrier` (DSR), and bits 2 to 6 are break, ring, framing, parity and
+    // overrun (PSTN 1.2 §6.5.4 Table 31).
+    //
+    // **Both carriers, no errors.** The far end of this port's serial line is
+    // `uart_rx`, eleven nets away inside the same die, so the carrier is
+    // present and the data set is ready from the moment the part is
+    // configured; there is no cable that could be unplugged and no modem that
+    // could hang up. A design bridging to a **real** device would drive bit 0
+    // from whatever tells it the far end is there.
+    //
+    // The error bits are clear and `uart_rx_error` is deliberately **not**
+    // wired to `bFraming`, for the reason the receive path below gives: a
+    // framing error here would be a wrong `CLK_DIV`, which nothing on this
+    // board can cause, and PSTN's error bits are levels a device sets and
+    // clears rather than the one-cycle pulse `uart_rx` gives. Turning a pulse
+    // into a level needs a rule about when it goes away, and this design has
+    // no reason to have one.
+    //
+    // What a host does with it: `cdc_acm` keeps the last bitmap it was sent
+    // and answers `TIOCMGET` out of it, so `stty` shows `cd` and `dsr` and an
+    // `open` without `clocal` no longer waits for a carrier that never
+    // arrives. `tests/usb_cdc_acm.rs` reads it back.
+    wire [6:0] serial_state = 7'b000_0011;
+
     // THE TURNAROUND, which is the top level's whole job on this bus: the
     // link says when it owns the bus and this makes that eight pads. There
     // is no register in the way, so the pads let go in the same cycle the
@@ -251,7 +281,8 @@ module usb_cdc_uart #(
         .parity       (parity),
         .data_bits    (data_bits),
         .dtr          (dtr),
-        .rts          (rts)
+        .rts          (rts),
+        .serial_state (serial_state)
     );
 
     // -----------------------------------------------------------------
@@ -290,8 +321,15 @@ module usb_cdc_uart #(
     // What it costs is throughput: one character is a whole round trip — 87
     // microseconds of 8N1 plus however long the host takes to collect a
     // one-byte packet — where a bridge with a queue would have the UART
-    // running back to back and the USB side overlapped with it. No figure is
-    // quoted for either, because nothing here measured one. For a serial port
+    // running back to back and the USB side overlapped with it.
+    //
+    // **A wider USB packet does nothing for this**, and that is worth saying
+    // where somebody will look for it: the endpoints hold 64 bytes now, and
+    // this bridge still hands one byte to `uart_tx` per round trip, so the
+    // packets it sends are one byte long whatever `wMaxPacketSize` says. The
+    // throughput figures in `ip/usb_cdc_acm/README.md` §6 are measured on the
+    // bulk loopback of `usb_ulpi_device.v`, which has no UART in the way, for
+    // exactly that reason. For a serial port
     // a person types at, and for a test that moves a few dozen bytes, the
     // round trip is the right trade; for a bridge to a **real** device it is
     // not, because
