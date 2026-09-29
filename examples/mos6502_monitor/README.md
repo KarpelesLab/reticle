@@ -570,12 +570,13 @@ Where the extra bytes went, honestly:
 * **The parser is written to be read.** The mode is a variable and the
   actions are separate routines rather than one interleaved block.
 
-Five things in `sw/monitor.s` *are* written for size, and each is marked
+Six things in `sw/monitor.s` *are* written for size, and each is marked
 where it happens: X is pinned at zero for a whole line so that `(zp,x)`
 reaches a pointer in two bytes and nothing clobbers Y; the four shifts
 that move a digit in are a loop; `show`, `prbyte`, `prnib` and `echo` are
-one chain of fall-throughs; MODE holds the character that set it; and the
-digit test is the ordinary `eor #$30` idiom.
+one chain of fall-throughs; MODE holds the character that set it;
+`setmode` falls into `item` instead of branching back to it; and the digit
+test is the ordinary `eor #$30` idiom.
 
 **A 2 KiB ROM was never considered**, and the task's arithmetic says why:
 about eight lookup tables a byte puts 2 KiB at roughly sixteen thousand

@@ -117,7 +117,7 @@
 ; transmitter where the original stores a byte and spins a delay loop.
 ; The rest is the price of writing a parser that can be read.
 ;
-; Five things below are shorter than they would otherwise be, and each is
+; Six things below are shorter than they would otherwise be, and each is
 ; marked where it happens:
 ;
 ;   * **X is zero from the start of a line to the end of it.** That
@@ -132,6 +132,8 @@
 ;     next, so four routines cost three `jmp`s less than four routines.
 ;   * MODE holds **the character that set it**, so setting it is one
 ;     `sta` rather than a constant and a store.
+;   * `setmode` sits immediately above `item` and **falls into it**,
+;     which is two bytes the branch back would have cost.
 ;   * The digit test is the ordinary `eor #$30` idiom rather than four
 ;     range comparisons. Its working is written out where it is.
 ;
