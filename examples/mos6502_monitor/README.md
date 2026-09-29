@@ -548,9 +548,18 @@ LUT depth 28. The distributed RAMs are 512 for the 4 KiB of main memory
 `docs/ip-library.md` already records for that block.
 
 Against the budget the task set: `mos6502` is about 1320 `LUT4`,
-`usb_cdc_acm_ulpi` about 1209, and the rest is the ROM, the RAM's address
-decoding and read multiplexer, and the glue. **It fits, with half the
-part left.**
+`usb_cdc_acm_ulpi` about 1209, the ROM is 505, and the rest is the RAM's
+address decoding and read multiplexer, the ACIA, and the glue. **It fits,
+with half the part left.**
+
+The baud machinery is part of that and is not broken out here;
+`docs/ip-library.md`'s footprint table has both blocks on their own, and
+the two numbers worth knowing from it are that `uart_baud_div` is 282
+`LUT4` and 184 flip-flops, and that giving `uart` a run-time divisor took
+it from 120 `LUT4` at logic depth 6 to 215 at depth 8. The depth is the
+interesting half: reading the divisor every bit instead of once per
+character would have made it 229 at depth **19**, and that measurement is
+why it is latched.
 
 ### The ROM is two pages and not one, and that is measured
 
@@ -752,7 +761,7 @@ bit of which decodes back to the arcs the router chose.
 
 * **The bit period on ball C11 was not measured with an instrument.**
   There is no oscilloscope or logic analyser here. What was done instead
-  is [below](#on-the-part).
+  is [above](#the-one-measurement-that-was-not-taken).
 * **The USB stack is not in the `tests/mos6502_monitor.rs` runs.**
   `monitor_bench` is the machine with its byte interface bare, on purpose:
   a parser is tested as a parser. The stack *is* in
