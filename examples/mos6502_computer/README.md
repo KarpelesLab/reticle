@@ -91,7 +91,7 @@ resolves the two packages, writes `reticle.lock`, elaborates the design
 and synthesises it:
 
 ```text
-note: built `mos6502_computer`: 5 module(s) from 5 source(s)
+note: built `mos6502_computer`: 6 module(s) from 6 source(s)
 ```
 
 Synthesis turns the ROM's `$readmemh` into the memory's initial

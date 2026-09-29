@@ -57,7 +57,7 @@ and synthesises it:
 ```text
 warning[S0018]: the contents of `sw/hello.hex` could not be loaded into `rom`: synthesis was given no files
   ...
-note: built `soc`: 5 module(s) from 5 source(s)
+note: built `soc`: 6 module(s) from 6 source(s)
 ```
 
 Synthesis turns the ROM's `$readmemh` into the memory's initial

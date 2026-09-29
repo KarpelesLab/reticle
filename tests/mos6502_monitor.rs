@@ -892,7 +892,32 @@ fn the_whole_session_matches_the_one_a_real_monitor_gives() {
 
     // Written out rather than computed, so that what is asserted is the
     // recorded transcript and not the same idea expressed twice.
-    let script: [(&str, &str); 8] = [
+    //
+    // **Every command form the monitor has is in here**, and the list is
+    // the point rather than the length: an examine, a range, a range that
+    // runs backwards, a range crossing a row boundary, two examines on one
+    // line, an over-long number, a one-byte deposit, a multi-byte deposit,
+    // a deposit over a byte that was deposited, a bare `:` continuing one
+    // and a bare `.` continuing a range. What is *not* here is `R`, and
+    // that is not laziness: the two machines have different memory maps, so
+    // the program a `R` would run would have to be a different program, and
+    // comparing two different programs' output proves nothing about either
+    // monitor. `the_monitor_runs_what_was_deposited` covers `R` against
+    // this machine instead.
+    let script: [(&str, &str); 15] = [
+        // A one-byte deposit, and the thing about it that looks like a
+        // bug and is not: it prints `<addr>: <what was there>` first.
+        // That is the address item being *examined* -- the mode is still
+        // EXAMINE when the item ends, and the `:` changes it only
+        // afterwards -- and the original does exactly the same, which is
+        // what these three lines are here to hold.
+        ("0310: 11", "0310: 11||0310: 00|"),
+        ("0310: 22", "0310: 22||0310: 11|"),
+        ("0310", "0310||0310: 22|"),
+        ("0310: 33", "0310: 33||0310: 22|"),
+        ("0310", "0310||0310: 33|"),
+        // A multi-byte deposit prints one such line and not one a byte,
+        // because there is one address item in the line.
         ("0300: AA BB", "0300: AA BB||0300: 00|"),
         (": CC DD", ": CC DD||"),
         ("0300.0303", "0300.0303||0300: AA BB CC DD|"),
@@ -901,10 +926,21 @@ fn the_whole_session_matches_the_one_a_real_monitor_gives() {
         (
             "02FE.0310",
             "02FE.0310||02FE: 00 00|0300: AA BB CC DD 00 00 00 00|\
-                       0308: 00 00 00 00 00 00 00 00|0310: 00|",
+                       0308: 00 00 00 00 00 00 00 00|0310: 33|",
         ),
         ("0300 0400", "0300 0400||0300: AA|0400: 00|"),
         ("12345", "12345||2345: 00|"),
+        // And a deposit of more bytes than the row it starts in, so the
+        // single label is checked against a case where a *range* would
+        // have printed two.
+        (
+            "0400: 01 02 03 04 05 06 07 08 09",
+            "0400: 01 02 03 04 05 06 07 08 09||0400: 00|",
+        ),
+        (
+            "0400.0408",
+            "0400.0408||0400: 01 02 03 04 05 06 07 08|0408: 09|",
+        ),
     ];
     for (line, want) in script {
         assert_eq!(machine.command(line), want, "`{line}`");
@@ -943,13 +979,17 @@ fn the_acia_reports_the_rate_the_host_set() {
     // the 65C51's four baud bits cannot name either — and the pair is
     // here to show that two rates the table flattens together are still
     // two changes.
-    for (rate, code, reported) in [
-        (115_200u64, 0x00u64, 115_200u64),
-        (9600, 0x0E, 9600),
-        (19_200, 0x0F, 19_200),
-        (1200, 0x08, 1200),
-        (230_400, 0x00, 230_400),
-        (115_200, 0x00, 115_200),
+    // `named` is bit 4, the receiver's clock source: the generator for a
+    // rate the table names and the 16x external clock for one it cannot,
+    // because the generator selected with a rate field of `0000` is a
+    // state a W65C51N data sheet has no meaning for.
+    for (rate, code, named, reported) in [
+        (115_200u64, 0x00u64, false, 115_200u64),
+        (9600, 0x0E, true, 9600),
+        (19_200, 0x0F, true, 19_200),
+        (1200, 0x08, true, 1200),
+        (230_400, 0x00, false, 230_400),
+        (115_200, 0x00, false, 115_200),
     ] {
         machine.set_rate(rate);
         machine.run(64);
@@ -964,9 +1004,14 @@ fn the_acia_reports_the_rate_the_host_set() {
             "rate {rate}: CONTROL's baud bits, {control:#04x} in all"
         );
         assert_eq!(
-            control & 0xF0,
-            0x10,
-            "rate {rate}: the four bits the monitor wrote are untouched"
+            control & 0x10 != 0,
+            named,
+            "rate {rate}: the receiver's clock source, {control:#04x} in all"
+        );
+        assert_eq!(
+            control & 0xE0,
+            0x00,
+            "rate {rate}: the word length and stop bits the monitor wrote are untouched"
         );
         assert_eq!(
             machine.sim.get(machine.acia_rate).to_u64(),
@@ -985,9 +1030,9 @@ fn the_acia_reports_the_rate_the_host_set() {
     }
 
     // A rate the host never sends, and the answer to it. Zero is not a
-    // rate; the block leaves CONTROL alone rather than writing a code
-    // for it, because code 0 already means "from outside" and zero means
-    // "nothing was said".
+    // rate, so it gets the same answer as a rate the table cannot name:
+    // the whole external configuration, which is the one thing that is
+    // true about a bit clock nobody has described.
     machine.set_rate(0);
     machine.run(64);
     let control = machine
@@ -996,8 +1041,8 @@ fn the_acia_reports_the_rate_the_host_set() {
         .to_u64()
         .expect("CONTROL is driven");
     assert_eq!(
-        control, 0x10,
-        "a rate of zero is code 0, which is `external`"
+        control, 0x00,
+        "a rate of zero is no generator and no rate, not a generator with no rate"
     );
 }
 
@@ -1308,10 +1353,11 @@ fn the_testbench_session_comes_out_of_the_simulator() {
     );
 
     // 115200 is not a rate the 65C51's four baud bits can name, so the
-    // ACIA reports code 0 — "clocked from outside this part" — with the
-    // four bits the monitor wrote left alone, and the host's own number.
+    // ACIA reports the whole external configuration — no generator
+    // selected and no rate — with the word length and stop bits the
+    // monitor wrote left alone, and the host's own number on `acia_rate`.
     assert!(
-        out.contains("acia_control=10 acia_rate=115200"),
+        out.contains("acia_control=00 acia_rate=115200"),
         "the ACIA did not report the host's rate in {out:?}"
     );
 

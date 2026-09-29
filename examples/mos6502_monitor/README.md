@@ -125,9 +125,29 @@ confirmed against a running original rather than invented here:
 * `XXXXR` prints the byte at `XXXX` before jumping there.
 
 Both fall out of the same structure: the address item ends while the mode
-is still EXAMINE, so it is examined, and the `:` or the `R` only then
-does its own work. Reproducing them was a choice; discovering that they
-happen was a measurement.
+is still EXAMINE, so it is examined, and the `:` or the `R` only then does
+its own work. Reproducing them was a choice; discovering that they happen
+was a measurement.
+
+The first of those two **looks exactly like a bug**, and it was reported
+as one against this machine: a deposit that prints the old contents, when
+the store path of the original has no `JSR` in it at all and cannot print
+anything. Both halves of that are true, and they do not conflict — the
+printing is not in the store path. It is in the *examine* of the address
+item, which happens before the `:` is read, so by the time the store path
+runs the line has already been written. Driven with the same input, the
+original does the same thing:
+
+```text
+0310: 11   ->  0310: 11||0310: 00|
+0310: 22   ->  0310: 22||0310: 11|
+0310       ->  0310||0310: 22|
+0310: 33   ->  0310: 33||0310: 22|
+0310       ->  0310||0310: 33|
+```
+
+Those five lines are now five of the fifteen in the transcript test, so
+the claim is pinned rather than argued.
 
 ### Where each behaviour came from
 
@@ -259,12 +279,23 @@ rate.
 **That table cannot express 115200.** It is four bits wide and it stops at
 19200. So the block does two separate things with a host's `dwDTERate`:
 
-1. **It writes a code into CONTROL when the host changes rate** — the
-   matching one if the table names the rate, and **code 0 if it does
-   not**. Code 0 is not a fudge: the data sheet's own meaning for it is
-   "clocked externally", and a USB serial bridge is exactly a part whose
-   rate arrives from outside. A 6502 reading CONTROL learns something
-   true either way.
+1. **It writes the clock source into CONTROL when the host changes
+   rate**, which is bits 3–0 *and* bit 4. Those two fields are one fact
+   between them — bit 4 is where the receiver's clock comes from and bits
+   3–0 are the generator's rate — so a rate the table names becomes
+   {generator, code} and a rate it cannot name becomes {external, `0000`}.
+   Code 0 is not a fudge: the data sheet's own meaning for it is the 16×
+   external clock, and a USB serial bridge is exactly a part whose bit
+   clock arrives from outside.
+
+   **`$10` was written here at first, and it means nothing** — the
+   generator selected with a rate field of `0000`, which says "use the
+   rate the generator makes" and "the generator makes no rate" at the same
+   time. It was reported as looking like "no rate set" rather than a rate,
+   and that reading was right. A register a program can read must not hold
+   a state a data sheet cannot name, so bit 4 now moves with the rate
+   field: a rate the table cannot name reads `$00`, which is a
+   configuration the part really has.
 2. **It reports the rate the part is programmed to** to whatever wants to
    put a real waveform on a pin, with code 0 resolving to the host's own
    `dwDTERate`.
@@ -444,8 +475,8 @@ cargo test --all-features --test mos6502_monitor
 | `the_monitor_runs_what_was_deposited` | `0300R` transfers control, and a deposited program prints through the ACIA |
 | `the_monitor_rejects_a_line_it_cannot_parse` | four bad lines, each answered with a fresh `\` and nothing else |
 | `the_monitor_edits_a_line_with_backspace_and_cancels_it_with_escape` | the two editing keys, including a backspace at the left margin |
-| **`the_whole_session_matches_the_one_a_real_monitor_gives`** | **the oracle** — see below |
-| `the_acia_reports_the_rate_the_host_set` | six rate changes reach CONTROL's baud bits, the processor reads them back over its own bus, and a rate of zero is code 0 |
+| **`the_whole_session_matches_the_one_a_real_monitor_gives`** | **the oracle**: fifteen command-and-answer pairs recorded from a running original, covering every command form but `R` — see below for which |
+| `the_acia_reports_the_rate_the_host_set` | six rate changes reach CONTROL's rate field **and** its receiver-clock bit, the processor reads them back over its own bus, and a rate of zero is the whole external configuration rather than half of one |
 | `the_processor_runs_at_one_cycle_in_fifty_nine` | the prompt's cost in clocks at both divisors |
 | `a_partly_filled_packet_goes_when_the_machine_falls_silent` | `in_commit` after a silence, so one keystroke does not wait for sixty-three more |
 | `the_project_resolves_and_elaborates` | the manifest builds from five library packages and five sources, with no black box |
@@ -487,7 +518,7 @@ Two things make those runs cheap and one makes them honest:
 
 ### The oracle: what was checked against a running original
 
-`the_whole_session_matches_the_one_a_real_monitor_gives` asserts eight
+`the_whole_session_matches_the_one_a_real_monitor_gives` asserts fifteen
 command-and-answer pairs. Each right-hand side was **printed by a
 published 65C02 build of the same interface, running in a third-party
 emulator** on this machine, driven with the same input; the left-hand
@@ -495,19 +526,46 @@ sides are what `monitor_bench` prints. Nothing of that build is in this
 repository, none of it was read, and what was compared is what came out
 of a terminal.
 
+**Which command forms it covers**, because a transcript that covers three
+of four commands is worth less than its length suggests and this one
+started out covering fewer:
+
+| Form | Covered by |
+|---|---|
+| `XXXX` — examine one | `0310`, `0300 0400` (two on one line), `12345` (over-long) |
+| `XXXX.YYYY` — examine a range | `0300.0303`, `02FE.0310` (crossing two row boundaries), `0305.0300` (backwards), `0400.0408` |
+| `.YYYY` — continue a range | `.0307` |
+| `XXXX: dd …` — deposit | `0310: 11` and `0310: 33` (one byte, over a byte already there), `0300: AA BB` (two), `0400: 01 … 09` (nine, crossing a row boundary) |
+| `: dd …` — continue a deposit | `: CC DD` |
+| `XXXXR` — run | **not covered, deliberately.** The two machines have different memory maps, so the program an `R` would run would have to be a different program, and comparing two different programs' output proves nothing about either monitor. `the_monitor_runs_what_was_deposited` covers `R` against this machine instead |
+
+The deposit rows are the ones that were missing. They were added after a
+deposit's output was reported as wrong and turned out to be the
+original's, and the gap was real even though the bug was not: the
+transcript went in with an examine and a range because that is what the
+emulator's own test asserted, and it was never widened to the four
+commands the monitor has.
+
 The addresses in the session are all RAM, so the bytes are the session's
 own rather than the other machine's ROM — which is the trick that lets
 two machines with different memory maps be compared at all.
 
 ```text
-0300: AA BB     0300: AA BB||0300: 00|
-: CC DD         : CC DD||
-0300.0303       0300.0303||0300: AA BB CC DD|
-.0307           .0307| 00 00 00 00|
-0305.0300       0305.0300||0305: 00|
-02FE.0310       02FE.0310||02FE: 00 00|0300: AA BB CC DD 00 00 00 00|0308: 00 00 00 00 00 00 00 00|0310: 00|
-0300 0400       0300 0400||0300: AA|0400: 00|
-12345           12345||2345: 00|
+0310: 11                       0310: 11||0310: 00|
+0310: 22                       0310: 22||0310: 11|
+0310                           0310||0310: 22|
+0310: 33                       0310: 33||0310: 22|
+0310                           0310||0310: 33|
+0300: AA BB                    0300: AA BB||0300: 00|
+: CC DD                        : CC DD||
+0300.0303                      0300.0303||0300: AA BB CC DD|
+.0307                          .0307| 00 00 00 00|
+0305.0300                      0305.0300||0305: 00|
+02FE.0310                      02FE.0310||02FE: 00 00|0300: AA BB CC DD 00 00 00 00|0308: 00 00 00 00 00 00 00 00|0310: 33|
+0300 0400                      0300 0400||0300: AA|0400: 00|
+12345                          12345||2345: 00|
+0400: 01 02 03 04 05 06 07 08 09   0400: …||0400: 00|
+0400.0408                      0400.0408||0400: 01 02 03 04 05 06 07 08|0408: 09|
 ```
 
 (`|` is a carriage return. A test whose expected value contains returns
@@ -705,19 +763,28 @@ Line by line, because every one of them is a claim:
 right-hand column is the W65C51N data sheet's baud table, which nothing
 in this repository could have got right by accident.
 
-| `stty -F /dev/ttyACM1` | `5003` answers | code | the data sheet's rate |
-|---|---|---|---|
-| 9600 | `1E` | 14 | 9600 |
-| 19200 | `1F` | 15 | 19200 |
-| 1200 | `18` | 8 | 1200 |
-| 115200 | `10` | 0 | *clocked externally* |
-| 4800 | `1C` | 12 | 4800 |
-| 230400 | `10` | 0 | *clocked externally* |
-| 115200 | `10` | 0 | *clocked externally* |
+| `stty -F /dev/ttyACM1` | `5003` answered | bit 4 | code | the data sheet's rate |
+|---|---|---|---|---|
+| 9600 | `1E` | generator | 14 | 9600 |
+| 19200 | `1F` | generator | 15 | 19200 |
+| 1200 | `18` | generator | 8 | 1200 |
+| 115200 | `10` | generator | 0 | *16× external clock* |
+| 4800 | `1C` | generator | 12 | 4800 |
+| 230400 | `10` | generator | 0 | *16× external clock* |
+| 115200 | `10` | generator | 0 | *16× external clock* |
 
-The top nibble stays `1` throughout: eight data bits, one stop bit, the
-receiver clocked from the baud generator — what the monitor programmed,
-which the class layer does not touch.
+Bits 7–5 are `000` throughout — eight data bits, one stop bit — which is
+what the monitor programmed and the class layer does not touch.
+
+**The four `10`s in that table are the reason bit 4 moved.** They were
+measured on the build that wrote only bits 3–0, and `$10` is the baud
+generator selected with a rate field that says the clock comes from
+outside instead: two halves of one field disagreeing. The rows above are
+left as they were measured rather than quietly reprinted, because the
+measurement is what found it; on the build this example now describes the
+same four rows read `00`, and
+`the_acia_reports_the_rate_the_host_set` asserts both halves at six
+rates.
 
 ### The one measurement that was not taken
 

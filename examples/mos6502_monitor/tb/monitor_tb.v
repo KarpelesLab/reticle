@@ -142,8 +142,9 @@ module monitor_tb;
         settle(52);
 
         // A host opens the port at 115200, which the 65C51's four baud
-        // bits cannot name — so the ACIA should report code 0, meaning
-        // "clocked from outside this part", and the host's own number.
+        // bits cannot name — so the ACIA should report the whole external
+        // configuration, `$00`: no generator selected and no rate, which
+        // is what a bit clock arriving from outside the part is.
         host_rate = 32'd115200;
         repeat (200) @(posedge clk);
 

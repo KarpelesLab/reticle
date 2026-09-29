@@ -653,7 +653,7 @@ fn reticle_build_builds_the_project() {
     );
     assert_eq!(code, 0, "reticle build failed:\n{err}");
     assert!(
-        err.contains("note: built `soc`: 5 module(s) from 5 source(s)"),
+        err.contains("note: built `soc`: 6 module(s) from 6 source(s)"),
         "{err}"
     );
     // The binary hands synthesis a file provider rooted at the manifest's

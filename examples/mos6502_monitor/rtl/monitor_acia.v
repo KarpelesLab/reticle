@@ -56,14 +56,21 @@
 //   at 19200, and no amount of wanting changes it. So this block does
 //   two things with a host's `dwDTERate`, and they are different things:
 //
-//   1. **It writes the code into CONTROL when the host changes rate.**
-//      If the rate is one the table names, the matching code goes in; if
-//      it is not, **code 0 goes in**, and code 0 is not a fudge — the
-//      data sheet's own meaning for it is "clocked externally", and a
-//      USB serial bridge is exactly a part whose rate arrives from
-//      outside. A 6502 that reads CONTROL therefore learns something
-//      true either way: the rate, or that the rate is not one it can
-//      name.
+//   1. **It writes the clock source into CONTROL when the host changes
+//      rate**, which is bits 3..0 *and* bit 4. Those two fields are one
+//      fact between them — bit 4 is where the receiver's clock comes
+//      from and bits 3..0 are the generator's rate — so a rate the table
+//      names becomes {generator, code} and a rate it cannot name becomes
+//      {external, 0000}. Code 0 is not a fudge: the data sheet's own
+//      meaning for it is the 16x external clock, and a USB serial bridge
+//      is exactly a part whose bit clock arrives from outside.
+//
+//      **`$10` was written here once and it means nothing**: the
+//      generator selected with a rate field of `0000`, which is to say
+//      "use the rate the generator makes" and "the generator makes no
+//      rate" at the same time. A register a program can read must not
+//      hold a state a data sheet cannot name, which is why bit 4 moves
+//      with the rate field and not only the four bits below it.
 //
 //      A write by the processor wins until the host moves again, which
 //      is the only arbitration rule that needs no arbiter. The load is
@@ -227,6 +234,9 @@ module monitor_acia (
     wire        in_table = (host_rate[31:16] == 16'd0);
     wire [15:0] low   = host_rate[15:0];
     reg  [3:0]  host_code;
+    // Whether the table named the rate at all, which is what decides the
+    // receiver clock source as well as the rate field.
+    wire        host_named = (host_code != 4'h0);
     always @(*) begin
         if (!in_table)                    host_code = 4'h0;
         else case (low)
@@ -307,6 +317,17 @@ module monitor_acia (
             if (sel & access & we & (rs == R_CONTROL)) begin
                 control_q <= din;
             end else if (host_moved) begin
+                // Bit 4 as well as bits 3..0, because the two fields are
+                // one fact between them: bit 4 is the receiver's clock
+                // source and bits 3..0 are the generator's rate, and
+                // `$10` — the generator selected with a rate field of
+                // `0000`, which the table gives as *16x external clock* —
+                // is a state that means nothing. So a rate the table names
+                // is {generator, code} and one it cannot name is
+                // {external, 0000}: everything from outside, which is the
+                // literal truth for a USB pipe and a configuration the
+                // data sheet actually has.
+                control_q[4]   <= host_named;
                 control_q[3:0] <= host_code;
             end
             host_rate_q <= host_rate;

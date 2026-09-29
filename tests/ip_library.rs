@@ -13635,9 +13635,11 @@ fn a_6502_monitor_answers_through_the_transceiver_that_is_on_the_board() {
 
     // Now a host opens the port at 115200 — which is what a terminal
     // program does, and which the 65C51's four baud bits **cannot
-    // name**. The class layer writes code 0 into them, which is the data
-    // sheet's own "clocked from outside this part" and the literal truth
-    // for a USB pipe, and leaves the four bits the monitor wrote alone.
+    // name**. The class layer writes the whole external configuration:
+    // code 0 in the rate field *and* bit 4 clear, because the generator
+    // selected with a rate field of `0000` is a state the data sheet has
+    // no meaning for. The word length and stop bits the monitor wrote are
+    // left alone.
     assert_eq!(
         host.control_write_data(9, CDC_SET_LINE_CODING, &cdc_line_coding(115_200, 0, 0, 8)),
         UsbReply::Data(USB_DATA1, Vec::new()),
@@ -13646,8 +13648,8 @@ fn a_6502_monitor_answers_through_the_transceiver_that_is_on_the_board() {
     host.idle(100);
     assert_eq!(
         host.port("acia_control"),
-        0x10,
-        "code 0, and $1's top nibble"
+        0x00,
+        "the whole external configuration: no generator selected and no rate"
     );
     assert_eq!(
         host.port("acia_rate"),
@@ -13661,7 +13663,7 @@ fn a_6502_monitor_answers_through_the_transceiver_that_is_on_the_board() {
     pipe.write(&mut host, 9, b"5003\r");
     assert_eq!(
         String::from_utf8_lossy(&monitor_answer(&mut host, &mut pipe, 9)),
-        "5003\r\r5003: 10\r",
+        "5003\r\r5003: 00\r",
         "the processor read the host's rate out of its own ACIA"
     );
 
