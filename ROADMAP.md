@@ -901,6 +901,23 @@ the bus contract, testing a core so the test cannot agree with a wrong
 core, cycle accuracy, interrupts and reset, documented quirks, and the
 resource cost.
 
+The second processor also has the one example here that **ends on a real
+part rather than at the files a place-and-route tool reads**:
+`examples/mos6502_monitor` is `mos6502`, `uart` and `usb_cdc_acm` on the
+Cynthion's ECP5 LFE5U-12F, with 272 bytes of ROM holding a
+machine-language monitor, a 65C51-style ACIA, and its console on
+`/dev/ttyACM1` through the board's ULPI transceiver. It was built, loaded
+and typed at; its README quotes the session. Two things about that part
+shaped the whole design and both were measured rather than assumed: there
+is no block RAM site in this flow, so the ROM is 505 lookup tables and the
+RAM is 530 distributed RAMs, and the monitor did not fit the one page the
+interface it reproduces manages, so it takes two and the README says what
+the second cost. It is also where the other half of `ip/uart` landed: a
+host's `SET_LINE_CODING` rate now reaches `uart`'s divisor through
+`uart_baud_div`, and on the part it reaches a register the 6502 reads —
+`5003` answers `10` at 115200, which is the 65C51's "clocked from outside
+this part", because four bits cannot name that rate.
+
 A third system takes the same path to a *screen* rather than to a serial
 line: `examples/apple2` is `mos6502`, `uart` and `dvi_tx` on an
 ECP5 45F — or the same machine behind `vga_out` on a Digilent Basys 3,
