@@ -258,7 +258,8 @@ fn render_rom(bytes: &[u8; 512], labels: &BTreeMap<String, u16>) -> String {
         }
     }
     for (offset, byte) in bytes.iter().enumerate() {
-        let address = ROM_BASE as u16 + offset as u16;
+        let address = u16::try_from(ROM_BASE).expect("the ROM is inside sixteen bits")
+            + u16::try_from(offset).expect("an offset inside the ROM");
         if let Some(names) = at.get(&address) {
             let mut names = names.clone();
             names.sort_unstable();
@@ -311,8 +312,7 @@ fn monitor_rom_is_the_assembled_source() {
     let last_code = *image
         .bytes
         .keys()
-        .filter(|a| u32::from(**a) < u32::from(VEC_NMI))
-        .next_back()
+        .rfind(|a| u32::from(**a) < u32::from(VEC_NMI))
         .expect("code below the vectors");
     let used = u32::from(last_code) - ROM_BASE + 1;
     println!(
@@ -390,7 +390,8 @@ fn the_monitor_uses_no_instruction_the_core_has_not_got() {
             for step in 1..len {
                 seen[offset + step] = true;
             }
-            pc = pc.wrapping_add(len as u16);
+            pc =
+                pc.wrapping_add(u16::try_from(len).expect("an instruction is at most three bytes"));
         }
     }
     assert!(
@@ -402,8 +403,7 @@ fn the_monitor_uses_no_instruction_the_core_has_not_got() {
         *image
             .bytes
             .keys()
-            .filter(|a| u32::from(**a) < u32::from(VEC_NMI))
-            .next_back()
+            .rfind(|a| u32::from(**a) < u32::from(VEC_NMI))
             .expect("code"),
     );
     let unreached: Vec<String> = (0..=(last_code - ROM_BASE) as usize)
@@ -550,7 +550,10 @@ impl<'d> Machine<'d> {
         let byte = self.sim.get(self.print_data).to_u64();
         self.sim.set(self.clk, Logic::from_bool(true));
         if moved {
-            self.out.push(byte.unwrap_or(0) as u8);
+            // An `x` byte becomes zero and a wide one is masked: what is
+            // on an eight-bit net is a byte however the simulator holds it.
+            self.out
+                .push(u8::try_from(byte.unwrap_or(0) & 0xFF).expect("a byte"));
         }
         self.sim.run_for(HALF);
         self.sim.set(self.clk, Logic::from_bool(false));

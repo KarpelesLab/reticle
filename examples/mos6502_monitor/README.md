@@ -6,8 +6,9 @@ port. Plug a Great Scott Gadgets Cynthion into a host, open
 what is there, type `XXXX: dd dd` and it puts bytes there, type `XXXXR`
 and it runs them. The processor is [`mos6502`](../../ip/mos6502), the
 serial port is [`usb_cdc_acm`](../../ip/usb_cdc_acm) on the board's ULPI
-transceiver, and the baud divider is [`uart`](../../ip/uart)'s. Four
-files in `rtl/` and one 6502 program in `sw/` are the only design here.
+transceiver, and the baud divider is [`uart`](../../ip/uart)'s. Five
+files in `rtl/` and one 6502 program in `sw/` are the only design here,
+and one of the five is the program assembled.
 
 This is [`examples/mos6502_computer`](../mos6502_computer) grown a
 keyboard. That machine prints one line down a wire and stops; this one
@@ -36,10 +37,11 @@ that could not be taken.
 
 ```text
 examples/mos6502_monitor/
-  rtl/monitor_cynthion.v  the board: the transceiver, the USB serial port, six LEDs
+  rtl/monitor_cynthion.v  the board: the three-state buffers, the reset, six LEDs, ball C11
+  rtl/monitor_ulpi.v      the machine behind the USB serial port, with the ULPI bus outside
   rtl/monitor_machine.v   the machine: the 6502, the RAM, the ROM, the decoder
   rtl/monitor_acia.v      a 65C51-style ACIA whose wire is a USB pipe
-  rtl/monitor_rom.v       the monitor, assembled, as 512 lookup tables' worth of constant
+  rtl/monitor_rom.v       the monitor, assembled, as 505 lookup tables' worth of constant
   sw/monitor.s            the monitor, in 6502 assembly
   tb/monitor_bench.v      the machine with its byte interface bare, for tests/mos6502_monitor.rs
   tb/monitor_tb.v         a session written in Verilog, for `reticle sim`
@@ -399,7 +401,7 @@ cargo test --all-features --test mos6502_monitor
 | `the_acia_reports_the_rate_the_host_set` | six rate changes reach CONTROL's baud bits, the processor reads them back over its own bus, and a rate of zero is code 0 |
 | `the_processor_runs_at_one_cycle_in_fifty_nine` | the prompt's cost in clocks at both divisors |
 | `a_partly_filled_packet_goes_when_the_machine_falls_silent` | `in_commit` after a silence, so one keystroke does not wait for sixty-three more |
-| `the_project_resolves_and_elaborates` | the manifest builds from five library packages and four sources, with no black box |
+| `the_project_resolves_and_elaborates` | the manifest builds from five library packages and five sources, with no black box |
 | `the_machine_synthesises_without_errors_or_latches` | generic synthesis: no error, no warning, no latch |
 | `the_machine_maps_onto_the_ecp5_and_fits_the_part` | the ECP5 flow fits it on an LFE5U-12F, every memory lowered, no `DP16KD` anywhere |
 | `the_rom_is_lookup_tables_and_this_is_what_they_cost` | `monitor_rom` on its own is 505 `LUT4` and no storage at all |

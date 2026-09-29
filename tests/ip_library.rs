@@ -1730,7 +1730,7 @@ fn uart_takes_its_divisor_from_a_port() {
         );
     }
     assert!(
-        gaps.iter().any(|g| *g == 20),
+        gaps.contains(&20),
         "no gap is one bit long at the divisor asked for: {gaps:?}"
     );
 }
@@ -1756,7 +1756,7 @@ fn uart_falls_back_to_its_parameter_for_a_divisor_it_cannot_use() {
     }
     let gaps = uart_bit_clocks(4, "8");
     assert!(
-        gaps.iter().any(|g| *g == 4),
+        gaps.contains(&4),
         "a divisor of four is the smallest usable one and was not used: {gaps:?}"
     );
 }
@@ -1865,7 +1865,7 @@ fn a_hosts_rate_becomes_a_bit_period() {
             );
         }
         assert!(
-            gaps.iter().any(|g| *g == div),
+            gaps.contains(&div),
             "rate {rate}: no gap is one bit long at {div} clocks: {gaps:?}"
         );
 
