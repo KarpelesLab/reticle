@@ -1444,10 +1444,14 @@ exactly what this table is for.
 | `fifo_async` | `fifo_async` | WIDTH=8, DEPTH=16 | LUT6 | 10 x dff, 37 x lut, 1 x memory 16x8, 1 x memrd, 1 x memwr | 3 |
 | `fifo_async` | `fifo_async` | WIDTH=8, DEPTH=16 | iCE40 HX1K | 8 x SB_CARRY, 128 x SB_DFFE, 41 x SB_DFFR, 1 x SB_DFFS, 2 x SB_GB, 24 x SB_IO, 298 x SB_LUT4 | 4 |
 | `fifo_async` | `fifo_async` | WIDTH=8, DEPTH=16 | ECP5 45F | 2 x DCCA, 41 x LUT4, 2 x TRELLIS_DPR16X4, 42 x TRELLIS_FF, 24 x TRELLIS_IO | 4 |
-| `uart` | `uart` | CLK_DIV=104 | LUT4 | 13 x dff, 119 x lut | 6 |
-| `uart` | `uart` | CLK_DIV=104 | LUT6 | 13 x dff, 109 x lut | 5 |
-| `uart` | `uart` | CLK_DIV=104 | iCE40 HX1K | 33 x SB_CARRY, 26 x SB_DFFER, 10 x SB_DFFES, 34 x SB_DFFR, 2 x SB_DFFS, 1 x SB_GB, 24 x SB_IO, 125 x SB_LUT4 | 4 |
-| `uart` | `uart` | CLK_DIV=104 | ECP5 45F | 1 x DCCA, 120 x LUT4, 72 x TRELLIS_FF, 24 x TRELLIS_IO | 6 |
+| `uart` | `uart` | CLK_DIV=104 | LUT4 | 13 x dff, 228 x lut | 19 |
+| `uart` | `uart` | CLK_DIV=104 | LUT6 | 13 x dff, 194 x lut | 15 |
+| `uart` | `uart` | CLK_DIV=104 | iCE40 HX1K | 33 x SB_CARRY, 26 x SB_DFFER, 10 x SB_DFFES, 34 x SB_DFFR, 2 x SB_DFFS, 1 x SB_GB, 40 x SB_IO, 213 x SB_LUT4 | 19 |
+| `uart` | `uart` | CLK_DIV=104 | ECP5 45F | 1 x DCCA, 229 x LUT4, 72 x TRELLIS_FF, 40 x TRELLIS_IO | 19 |
+| `uart` | `uart_baud_div` | (defaults) | LUT4 | 9 x dff, 282 x lut | 23 |
+| `uart` | `uart_baud_div` | (defaults) | LUT6 | 9 x dff, 235 x lut | 17 |
+| `uart` | `uart_baud_div` | (defaults) | iCE40 HX1K | 35 x SB_CARRY, 181 x SB_DFFER, 3 x SB_DFFES, 1 x SB_GB, 52 x SB_IO, 263 x SB_LUT4 | 23 |
+| `uart` | `uart_baud_div` | (defaults) | ECP5 45F | 1 x DCCA, 282 x LUT4, 184 x TRELLIS_FF, 52 x TRELLIS_IO | 23 |
 | `spi_master` | `spi_master` | CPOL=0, CPHA=0, CLK_DIV=4, WIDTH=8 | LUT4 | 10 x dff, 87 x lut | 6 |
 | `spi_master` | `spi_master` | CPOL=0, CPHA=0, CLK_DIV=4, WIDTH=8 | LUT6 | 10 x dff, 80 x lut | 4 |
 | `spi_master` | `spi_master` | CPOL=0, CPHA=0, CLK_DIV=4, WIDTH=8 | iCE40 HX1K | 22 x SB_CARRY, 35 x SB_DFFER, 1 x SB_DFFES, 17 x SB_DFFR, 1 x SB_GB, 25 x SB_IO, 73 x SB_LUT4 | 3 |

@@ -21,12 +21,26 @@
 //   the consumer cannot keep up. It does not resynchronise mid-character,
 //   so the clock error budget is the usual half a bit over ten bits,
 //   about 5% in theory and under 2% in practice.
+//
+//   `div` is read **once per character**, in the cycle the start edge is
+//   found, and latched with the half-bit period derived from it. A
+//   character being received therefore keeps the rate it started at
+//   however `div` moves, and a change takes effect from the next start
+//   edge. `uart_tx` does the same and its header says what that costs and
+//   saves.
 module uart_rx #(
-    // Clock cycles per bit. At least four, so half a bit is countable.
+    // Clock cycles per bit when `div` does not give one. At least four,
+    // so half a bit is countable.
     parameter CLK_DIV = 16
 ) (
     input  wire       clk,
     input  wire       rst_n,
+
+    // Clock cycles per bit, read when a start edge is found. Zero, or
+    // anything below DIV_MIN, means "use CLK_DIV": a rate that cannot be
+    // expressed has to leave the port working rather than stop it. Tie
+    // it to zero for a fixed rate.
+    input  wire [15:0] div,
 
     input  wire       rx,
 
@@ -34,8 +48,18 @@ module uart_rx #(
     output reg        rx_valid,
     output reg        rx_error
 );
-    localparam [15:0] DIV_LAST = CLK_DIV - 1;
-    localparam [15:0] DIV_HALF = (CLK_DIV / 2) - 1;
+    // Four clocks, so half a bit is a countable number of them. The
+    // comparison is against a constant, so it is the low bits of `div`
+    // being zero and not a subtraction.
+    localparam [15:0] DIV_MIN = 16'd4;
+
+    wire [15:0] div_used = (div < DIV_MIN) ? CLK_DIV[15:0] : div;
+    // The bit period of the character being received, and half of it,
+    // each one short. Latched at the start edge; `div_half` is a shift
+    // rather than a divide, because a divide by a run-time value is what
+    // this whole arrangement exists not to need twice.
+    reg [15:0] div_last;
+    reg [15:0] div_half;
 
     localparam [1:0] S_IDLE  = 2'd0;
     localparam [1:0] S_START = 2'd1;
@@ -67,6 +91,8 @@ module uart_rx #(
         if (!rst_n) begin
             state    <= S_IDLE;
             div_cnt  <= 16'd0;
+            div_last <= CLK_DIV[15:0] - 16'd1;
+            div_half <= {1'b0, CLK_DIV[15:1]} - 16'd1;
             bit_idx  <= 3'd0;
             shift_q  <= 8'd0;
             rx_data  <= 8'd0;
@@ -79,10 +105,17 @@ module uart_rx #(
                 S_IDLE: begin
                     div_cnt <= 16'd0;
                     bit_idx <= 3'd0;
-                    if (!rx_sync_q) state <= S_START;
+                    if (!rx_sync_q) begin
+                        state <= S_START;
+                        // The rate this character will be timed at. Taken
+                        // here and nowhere else, so the eight samples of
+                        // one frame are all the same distance apart.
+                        div_last <= div_used - 16'd1;
+                        div_half <= {1'b0, div_used[15:1]} - 16'd1;
+                    end
                 end
                 S_START: begin
-                    if (div_cnt == DIV_HALF) begin
+                    if (div_cnt == div_half) begin
                         div_cnt <= 16'd0;
                         // Still low at the middle of the start bit: a
                         // real character. Otherwise it was a glitch.
@@ -92,7 +125,7 @@ module uart_rx #(
                     end
                 end
                 S_DATA: begin
-                    if (div_cnt == DIV_LAST) begin
+                    if (div_cnt == div_last) begin
                         div_cnt <= 16'd0;
                         shift_q <= {rx_sync_q, shift_q[7:1]};
                         if (bit_idx == 3'd7) state <= S_STOP;
@@ -102,7 +135,7 @@ module uart_rx #(
                     end
                 end
                 default: begin
-                    if (div_cnt == DIV_LAST) begin
+                    if (div_cnt == div_last) begin
                         div_cnt  <= 16'd0;
                         state    <= S_IDLE;
                         rx_data  <= shift_q;

@@ -38,7 +38,7 @@
 // first four are `usb_ulpi_device.v`'s so that the two designs are read the
 // same way:
 //
-//     LED 0   the transceiver is ready        `phy_ready`
+//     LED 0   THE RATE CAME FROM THE HOST     `baud_ok`, live
 //     LED 1   THE HOST CONFIGURED IT          `configured`, latched
 //     LED 2   A BYTE WENT OUT TO THE UART     latched
 //     LED 3   heartbeat, 0.89 Hz              the clock runs
@@ -48,6 +48,13 @@
 // Read from the bottom up, and `usb_ulpi_device.v`'s header has the whole
 // ladder for LEDs 0, 1, 3 and the bus below them. What is new here:
 //
+//   * **LED 0 dark with LED 1 dark** — nothing has enumerated it and no
+//     rate has been set, which is also what a transceiver that never came
+//     up looks like; `phy_ready` used to have this LED and `usb_ulpi_device.v`
+//     still reports it on LED 0, so load that one to tell the two apart.
+//   * **LED 0 dark with LED 1 lit** — the device is enumerated and the
+//     divisor is still `CLK_DIV`, because the rate the host asked for was
+//     one `uart_baud_div` refused. `stty -F /dev/ttyACM1 115200` lights it.
 //   * **LED 1 lit, LED 2 dark** — the host enumerated the device and no
 //     program has written to the port. That is the resting state: opening
 //     the port is not writing to it.
@@ -107,24 +114,39 @@
 // away.
 //
 // ===================================================================
-// THE BAUD DIVISOR, AND WHY IT IS A CONSTANT
+// THE BAUD DIVISOR, WHICH IS NOW THE RATE THE HOST ASKED FOR
 // ===================================================================
 //
-// `CLK_DIV` is 521: 60 MHz over 115200 is 520.83, so the bit period is
-// 521 cycles and the rate is 115163 baud — 0.032 % slow, against the 2 %
-// `uart_tx`'s header says 8N1 survives.
+// `SET_LINE_CODING` carries `dwDTERate` and `ip/usb_cdc_acm` brings it out
+// on `baud`. This design **follows it**: `uart_baud_div` divides 60 000 000
+// by that number and hands the quotient to `uart`'s `div` port, so the 8N1
+// waveform on ball C11 changes rate when a host changes rate.
 //
-// The host tells the device what rate it wants — `SET_LINE_CODING` carries
-// `dwDTERate` and `ip/usb_cdc_acm` brings it out on `baud` — and this design
-// **ignores it**, which is a choice and not an omission. Following it means
-// dividing 60 000 000 by a run-time value, and a divider is a bigger thing
-// than everything else in this file put together. What the design does
-// instead is what the `baud` port is for: a design that needs two or three
-// rates selects between constants, and one that needs any rate puts a
-// divider there. Since the transmit and the receive halves share one
-// divisor here, and they are wired to each other, the round trip works at
-// whatever the constant is and a host asking for 9600 gets 115163 without
-// noticing.
+// It did not, and the paragraph that used to be here said why not — that a
+// run-time divider was a bigger thing than everything else in this file put
+// together. It is not: `uart_baud_div` is a 33-bit subtract, four registers
+// and a five-bit step counter, one quotient bit per clock for 32 clocks. The
+// reason it was worth doing is the sentence that paragraph ended with: *"the
+// round trip works at whatever the constant is and a host asking for 9600
+// gets 115163 without noticing"*. That is a loopback agreeing with itself,
+// and a loopback agreeing with itself is exactly what a wrong divisor looks
+// like. Both ends of this design still move together, so the *echo* still
+// cannot tell the rate — but **C11 can**, and a bit period on C11 is a
+// number an instrument reads off the pin.
+//
+// `CLK_DIV` is still 521, and it is still 115200 baud at 60 MHz to 0.032 %.
+// It is now the answer for a rate that cannot be divided to: `div` of zero
+// means "use CLK_DIV" (`uart_tx.v`), and `uart_baud_div` drives DIV_RESET
+// with `ok` low for a rate of zero, a rate too slow to express in sixteen
+// bits, or one so fast that rounding would break framing. Its header has
+// the error budget and the worked table; the short form is that a divisor
+// under 30 is refused because half a clock in 30 is 1.67 % and 8N1's
+// practical budget is about 2 %.
+//
+// **LED 0 says whether the rate came from the host.** It was the
+// transceiver being ready, which LED 1 already implies once the host has
+// configured the device, and "is this design using the rate I set?" is the
+// question this file now exists to answer.
 //
 // Pins: testdata/fpga/cynthion/usb_cdc_uart.rcf.
 // Sources: ip/usb_cdc_acm/rtl/*.v, ip/usb_device_ulpi/rtl/usb_ulpi_link.v,
@@ -151,7 +173,7 @@ module usb_cdc_uart #(
     output wire ulpi_rst_n,      // J13, active low at the ball
     output wire ulpi_clk,        // D16, the clock the board says we owe it
 
-    output wire led0_n,          // the transceiver is ready
+    output wire led0_n,          // the divisor came from the host's rate
     output wire led1_n,          // THE HOST CONFIGURED IT
     output wire led2_n,          // A BYTE WENT OUT TO THE UART
     output wire led3_n,          // heartbeat
@@ -182,7 +204,6 @@ module usb_cdc_uart #(
     wire [6:0] address;
     wire       configured;
     wire       usb_reset;
-    wire       phy_ready;
 
     // The port's bytes.
     wire [7:0] out_data;
@@ -278,7 +299,10 @@ module usb_cdc_uart #(
         .address      (address),
         .configured   (configured),
         .usb_reset    (usb_reset),
-        .phy_ready    (phy_ready),
+        // Left open. It used to be LED 0; `configured` on LED 1 cannot be
+        // true without it, and LED 0 now answers a question nothing else
+        // in this design does.
+        .phy_ready    (),
         .out_data     (out_data),
         .out_valid    (out_valid),
         .out_last     (out_last),
@@ -390,11 +414,29 @@ module usb_cdc_uart #(
     wire hand = out_valid & ~in_flight & ~echo_full;
     assign out_ready = hand & uart_tx_ready;
 
+    // 60 000 000 / `baud`, rounded to nearest, or CLK_DIV when that is not
+    // a number a UART can keep time with. `baud_ok` is the LED.
+    wire [15:0] baud_div;
+    wire        baud_ok;
+
+    uart_baud_div #(
+        .CLK_HZ    (32'd60_000_000),
+        .DIV_RESET (CLK_DIV[15:0])
+    ) u_baud (
+        .clk   (clk),
+        .rst_n (reset_done),
+        .rate  (baud),
+        .div   (baud_div),
+        .ok    (baud_ok),
+        .busy  ()
+    );
+
     uart #(
         .CLK_DIV (CLK_DIV)
     ) u_uart (
         .clk      (clk),
         .rst_n    (reset_done),
+        .div      (baud_div),
         .tx_data  (out_data),
         .tx_valid (hand),
         .tx_ready (uart_tx_ready),
@@ -489,7 +531,9 @@ module usb_cdc_uart #(
     end
 
     // Active low: a pin driven low lights one.
-    assign led0_n = ~phy_ready;
+    // Live rather than latched: it is the answer to "is this design using
+    // the rate I just set?", and a latch would answer "did it ever".
+    assign led0_n = ~baud_ok;
     assign led1_n = ~saw_configured;
     assign led2_n = ~saw_tx;
     assign led3_n = ~count[25];

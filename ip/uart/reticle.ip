@@ -1,6 +1,8 @@
 # uart: an 8N1 transmitter and receiver behind one baud divisor. The
-# package ships three modules; `top` names the pair, and a design that
+# package ships four modules; `top` names the pair, and a design that
 # wants only one half instantiates `uart_tx` or `uart_rx` directly.
+# `uart_baud_div` turns a bit rate into the `div` those two take, which
+# is what lets a USB serial port's SET_LINE_CODING reach the wire.
 name uart
 version 1.0.0
 license MIT
@@ -13,11 +15,13 @@ target ecp5
 source rtl/uart_tx.v
 source rtl/uart_rx.v
 source rtl/uart.v
+source rtl/uart_baud_div.v
 
 param CLK_DIV int 16 4..65535
 
 port clk in
 port rst_n in
+port div in 16
 port tx_data in 8
 port tx_valid in
 port tx_ready out

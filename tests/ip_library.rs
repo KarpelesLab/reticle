@@ -193,6 +193,14 @@ const VARIANTS: &[Variant] = &[
         top: "uart",
         params: &[("CLK_DIV", "104")],
     },
+    // The divider that turns a bit rate into that divisor. Measured on
+    // its own as well as inside `uart`, because it is the only block in
+    // the library that does arithmetic on a number a host chose.
+    Variant {
+        package: "uart",
+        top: "uart_baud_div",
+        params: &[],
+    },
     Variant {
         package: "spi_master",
         top: "spi_master",
@@ -1560,6 +1568,11 @@ fn uart_receives_the_byte_its_own_transmitter_sends() {
 
     sim.set(rx, bit(true)); // an idle line is high
     sim.set(tx_valid, bit(false));
+    // The divisor port, tied to zero: "use CLK_DIV", which is what these
+    // two tests are about. `uart_baud_div` drives it in the designs that
+    // follow a host's rate, and `uart_takes_its_divisor_from_a_port`
+    // below is where a non-zero one is checked.
+    sim.set(top_net(&sim, "div"), word(16, 0));
     reset(&mut sim, clk, rst_n);
     assert!(high(&sim, tx), "the transmitter idles high");
     assert!(high(&sim, tx_ready), "and is ready straight out of reset");
@@ -1611,6 +1624,7 @@ fn uart_reports_a_framing_error_when_the_stop_bit_is_missing() {
     let rx_error = top_net(&sim, "rx_error");
 
     sim.set(rx, bit(true));
+    sim.set(top_net(&sim, "div"), word(16, 0)); // "use CLK_DIV"
     reset(&mut sim, clk, rst_n);
 
     // A start bit, eight data bits and a stop bit held *low*, driven by
@@ -1644,6 +1658,250 @@ fn uart_reports_a_framing_error_when_the_stop_bit_is_missing() {
         got,
         Some((byte, true)),
         "the byte arrives, and the framing error with it"
+    );
+}
+
+/// The gaps between the edges of one frame on `tx`, in clocks.
+///
+/// Sends `0x55` — which alternates, so start-plus-bit-0 is one gap of two
+/// bit periods and the rest are one each — and returns the gaps. What a
+/// caller checks is that every gap is a whole number of the period it
+/// asked for, which is the only thing readable off a line without knowing
+/// where the line began.
+fn uart_bit_clocks(div: u64, clk_div: &str) -> Vec<u64> {
+    let design = design_of("uart", "uart", &[("CLK_DIV", clk_div)]);
+    let mut sim = simulate(&design, "uart");
+    let clk = top_net(&sim, "clk");
+    let rst_n = top_net(&sim, "rst_n");
+    let tx_data = top_net(&sim, "tx_data");
+    let tx_valid = top_net(&sim, "tx_valid");
+    let tx_ready = top_net(&sim, "tx_ready");
+    let tx = top_net(&sim, "tx");
+
+    sim.set(top_net(&sim, "rx"), bit(true));
+    sim.set(tx_valid, bit(false));
+    sim.set(top_net(&sim, "div"), word(16, div));
+    reset(&mut sim, clk, rst_n);
+
+    sim.set(tx_data, word(8, 0x55));
+    sim.set(tx_valid, bit(true));
+    let mut edges: Vec<u64> = Vec::new();
+    let mut last = high(&sim, tx);
+    let mut accepted = false;
+    for tick in 0..4000u64 {
+        if !accepted && high(&sim, tx_valid) && high(&sim, tx_ready) {
+            accepted = true;
+        }
+        cycle(&mut sim, clk, HALF);
+        if accepted {
+            sim.set(tx_valid, bit(false));
+        }
+        let now = high(&sim, tx);
+        if now != last {
+            edges.push(tick);
+            last = now;
+        }
+    }
+    edges.windows(2).map(|w| w[1] - w[0]).collect()
+}
+
+/// The divisor is a port, and driving it changes the bit period.
+///
+/// Built with CLK_DIV 8 and driven with 20, so a period that came from the
+/// parameter and one that came from the port cannot be confused: neither
+/// number divides the other.
+///
+/// What it would not catch: whether the *receiver* uses the same number.
+/// `uart_receives_a_byte_at_a_divisor_from_its_port` is that, and the two
+/// are separate because a transmitter and a receiver reading different
+/// divisors is precisely the failure a loopback cannot see — which is the
+/// subject of `testdata/fpga/cynthion/usb_cdc_uart.v`'s header.
+#[test]
+fn uart_takes_its_divisor_from_a_port() {
+    let gaps = uart_bit_clocks(20, "8");
+    assert!(!gaps.is_empty(), "the transmitter never moved the line");
+    for gap in &gaps {
+        assert_eq!(
+            gap % 20,
+            0,
+            "a gap of {gap} clocks is not a multiple of 20: {gaps:?}"
+        );
+    }
+    assert!(
+        gaps.iter().any(|g| *g == 20),
+        "no gap is one bit long at the divisor asked for: {gaps:?}"
+    );
+}
+
+/// Zero, and anything under four, means "use CLK_DIV".
+///
+/// A divisor a UART cannot keep time with has to have a defined answer,
+/// and this is it: the number the design was built with, so the port goes
+/// on working rather than stopping. Four is checked as well, because it is
+/// the first divisor the receiver can halve and therefore the boundary.
+#[test]
+fn uart_falls_back_to_its_parameter_for_a_divisor_it_cannot_use() {
+    for div in [0u64, 1, 3] {
+        let gaps = uart_bit_clocks(div, "8");
+        assert!(!gaps.is_empty(), "div {div}: the line never moved");
+        for gap in &gaps {
+            assert_eq!(
+                gap % 8,
+                0,
+                "div {div}: a gap of {gap} clocks is not a multiple of CLK_DIV: {gaps:?}"
+            );
+        }
+    }
+    let gaps = uart_bit_clocks(4, "8");
+    assert!(
+        gaps.iter().any(|g| *g == 4),
+        "a divisor of four is the smallest usable one and was not used: {gaps:?}"
+    );
+}
+
+/// The receiver reads the same port, so a byte sent at a divisor from the
+/// port comes back at it.
+///
+/// The loop is the transmitter's own output, one clock at a time, exactly
+/// as `uart_receives_the_byte_its_own_transmitter_sends` does it. The only
+/// difference is that the period is 20 and CLK_DIV is 8, so a receiver
+/// still sampling at 8 would look for a stop bit in the middle of bit two
+/// and return nothing or the wrong byte.
+#[test]
+fn uart_receives_a_byte_at_a_divisor_from_its_port() {
+    let design = design_of("uart", "uart", &[("CLK_DIV", "8")]);
+    let mut sim = simulate(&design, "uart");
+    let clk = top_net(&sim, "clk");
+    let rst_n = top_net(&sim, "rst_n");
+    let tx_data = top_net(&sim, "tx_data");
+    let tx_valid = top_net(&sim, "tx_valid");
+    let tx_ready = top_net(&sim, "tx_ready");
+    let tx = top_net(&sim, "tx");
+    let rx = top_net(&sim, "rx");
+    let rx_data = top_net(&sim, "rx_data");
+    let rx_valid = top_net(&sim, "rx_valid");
+    let rx_error = top_net(&sim, "rx_error");
+
+    sim.set(rx, bit(true));
+    sim.set(tx_valid, bit(false));
+    sim.set(top_net(&sim, "div"), word(16, 20));
+    reset(&mut sim, clk, rst_n);
+
+    sim.set(tx_data, word(8, 0xC3));
+    sim.set(tx_valid, bit(true));
+    let mut got: Vec<(u64, bool)> = Vec::new();
+    let mut accepted = false;
+    for _ in 0..1000 {
+        let level = high(&sim, tx);
+        sim.set(rx, bit(level));
+        if !accepted && high(&sim, tx_valid) && high(&sim, tx_ready) {
+            accepted = true;
+        }
+        cycle(&mut sim, clk, HALF);
+        if accepted {
+            sim.set(tx_valid, bit(false));
+        }
+        if high(&sim, rx_valid) {
+            got.push((get_u64(&sim, rx_data), high(&sim, rx_error)));
+        }
+    }
+    assert_eq!(got, vec![(0xC3, false)], "one byte, no framing error");
+}
+
+/// `uart_baud_div` divides, rounds to nearest, and says when it could not.
+///
+/// The expected divisor is computed here as `round(60e6 / rate)` rather
+/// than listed, so this assertion and the worked table in the block's
+/// header cannot drift apart without one of them being wrong about
+/// arithmetic. The refusals *are* listed, because each is a different
+/// reason and the reason is the point.
+///
+/// It also checks the thing the block is for: that every rate it accepts
+/// lands inside the 2% an 8N1 frame survives.
+///
+/// What it would not catch: whether `uart` then uses the number — that is
+/// `uart_takes_its_divisor_from_a_port` — or whether a real host's
+/// `dwDTERate` reaches `rate`, which is
+/// `usb_cdc_acm_ulpi_answers_the_line_coding_and_control_line_requests`.
+#[test]
+fn uart_baud_div_computes_the_divisor_for_the_rates_a_host_asks_for() {
+    const CLK_HZ: u64 = 60_000_000;
+    let design = design_of("uart", "uart_baud_div", &[]);
+    let mut sim = simulate(&design, "uart_baud_div");
+    let clk = top_net(&sim, "clk");
+    let rst_n = top_net(&sim, "rst_n");
+    let rate = top_net(&sim, "rate");
+    let div = top_net(&sim, "div");
+    let ok = top_net(&sim, "ok");
+    let busy = top_net(&sim, "busy");
+
+    sim.set(rate, word(32, 0));
+    reset(&mut sim, clk, rst_n);
+    for _ in 0..80 {
+        cycle(&mut sim, clk, HALF);
+    }
+    assert_eq!(get_u64(&sim, div), 521, "a rate of zero falls back");
+    assert!(!high(&sim, ok), "and does not claim to be the host's rate");
+
+    for want in [
+        1200u64, 2400, 4800, 9600, 19_200, 38_400, 57_600, 115_200, 230_400, 460_800, 921_600,
+        1_000_000, 1_500_000, 2_000_000,
+    ] {
+        sim.set(rate, word(32, want));
+        for _ in 0..80 {
+            cycle(&mut sim, clk, HALF);
+        }
+        assert!(
+            !high(&sim, busy),
+            "rate {want}: still dividing after 80 clocks"
+        );
+        let expect = (CLK_HZ + want / 2) / want;
+        assert_eq!(
+            get_u64(&sim, div),
+            expect,
+            "rate {want}: round(60e6 / {want}) is {expect}"
+        );
+        assert!(high(&sim, ok), "rate {want}: refused a rate it computed");
+        // The divisor it chose is inside the 8N1 error budget. Integer
+        // arithmetic, because a test that compares floating point is a
+        // test about floating point.
+        let slip = (CLK_HZ * 1000).abs_diff(want * expect * 1000) / (want * expect);
+        assert!(
+            slip * 50 < 1000,
+            "rate {want}: divisor {expect} is {slip} parts per thousand off, over the 2% budget"
+        );
+    }
+
+    // The refusals, each for its own reason.
+    for (want, why) in [
+        (1u64, "a divisor of 60 000 000 does not fit sixteen bits"),
+        (915u64, "a divisor of 65 574 does not fit sixteen bits, by 39"),
+        (
+            3_000_000u64,
+            "a divisor of 20 is under DIV_MIN: half a clock in 20 is 2.5%",
+        ),
+        (
+            40_000_000u64,
+            "a divisor of 2 is under DIV_MIN and under what a shifter can do",
+        ),
+    ] {
+        sim.set(rate, word(32, want));
+        for _ in 0..80 {
+            cycle(&mut sim, clk, HALF);
+        }
+        assert_eq!(get_u64(&sim, div), 521, "rate {want}: {why}");
+        assert!(!high(&sim, ok), "rate {want}: {why}");
+    }
+
+    // And 916 is the other side of that boundary: 65 501 fits, just.
+    sim.set(rate, word(32, 916));
+    for _ in 0..80 {
+        cycle(&mut sim, clk, HALF);
+    }
+    assert_eq!(get_u64(&sim, div), (CLK_HZ + 458) / 916);
+    assert!(
+        high(&sim, ok),
+        "916 baud is the slowest rate sixteen bits can express at 60 MHz"
     );
 }
 

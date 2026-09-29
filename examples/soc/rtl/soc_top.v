@@ -210,6 +210,9 @@ module soc_top #(
     ) u_uart (
         .clk      (clk),
         .rst_n    (rst_n),
+        // Nothing here changes the rate, so the divisor is the parameter:
+        // `uart`'s `div` port reads zero as "use CLK_DIV".
+        .div      (16'd0),
         .tx_data  (tx_byte),
         .tx_valid (tx_pending),
         .tx_ready (tx_ready),
