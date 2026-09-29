@@ -34,9 +34,26 @@
 //! **What none of it proves is the board.** The USB stack is not in any
 //! of these runs: `monitor_bench` is the machine with its byte interface
 //! bare, so what is tested is the computer and not the path to it.
-//! `tests/ip_library.rs` is where `usb_cdc_acm_ulpi` is driven through a
-//! transceiver model, and README.md says which of the two halves each
-//! run covers and what was done on the part instead.
+//! `a_6502_monitor_answers_through_the_transceiver_that_is_on_the_board`
+//! in `tests/ip_library.rs` is the same machine through the whole stack
+//! and through a model of the transceiver that is on this board,
+//! including its late LineState; README.md says which of the two halves
+//! each run covers and what was done on the part instead.
+//!
+//! **What the behaviour tests as a family would not catch.** Every one of
+//! them types at the monitor and compares what comes back, so between
+//! them they would catch a wrong answer, a missing answer, a byte in the
+//! wrong order and an answer that never ends. What none of them can see
+//! is anything that is not a *byte at the interface*: how long the
+//! monitor took, how many bus cycles it spent, which instructions it
+//! executed, or whether it wrote somewhere it should not have on the way.
+//! A monitor that answered every one of these correctly and also
+//! scribbled over page three would pass all of them —
+//! `the_monitor_deposits_bytes_and_reads_them_back` would only notice if
+//! it scribbled over *that* byte. What covers the instructions rather
+//! than the bytes is `the_monitor_uses_no_instruction_the_core_has_not_got`,
+//! which decodes the ROM rather than running it, and `ip/mos6502`'s own
+//! thirty-odd tests, which is why nothing here re-tests the processor.
 //!
 //! `examples/` is not in the published crate, so every test that needs
 //! the example skips with a message when it is absent.

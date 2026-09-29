@@ -287,6 +287,33 @@ takes 33 ms and the monitor prints faster than that, so most of what it
 prints is dropped. That is the right trade — the alternative is a console
 whose speed is set by an LED.
 
+### Where the ACIA's facts came from
+
+Every register layout above is **quoted** from a W65C51N data sheet and
+not measured: there is no 65C51 here to compare against, and there could
+not be, because this one's other side is a USB pipe. What *is* measured is
+that the layout is self-consistent and that software written for it works
+— the monitor polls bit 4 before every character and bit 3 before every
+key, and it runs.
+
+Three things in this block are **inferred rather than read**, and are
+marked so that a reader with the data sheet open knows which sentences to
+check:
+
+* **That code 0 is the right answer for a rate the table cannot name.**
+  The data sheet says code 0 selects an external receiver clock at
+  sixteen times the bit rate. Calling a USB host "external" is this
+  design's reading of that, not the data sheet's sentence.
+* **That codes 3 and 4 answer to 110 and 134.** The data sheet's numbers
+  are 109.92 and 134.58 — the teleprinter rates a 1.8432 MHz crystal
+  divides to — and hosts ask for the rounded ones. No host was observed
+  asking for either.
+* **That a programmed reset leaves CONTROL alone.** The data sheet lists
+  what a write to the status register clears; whether the control register
+  is among them is read here as "no", because a rate a host set surviving
+  a program resetting the part is the behaviour that matters on this
+  board. If that is wrong about the part, it is deliberately wrong.
+
 ### The rate a rate cannot be
 
 `uart_baud_div` divides 60 000 000 by the rate and rounds to nearest, so
