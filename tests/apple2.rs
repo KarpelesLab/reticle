@@ -606,6 +606,11 @@ fn the_project_resolves_and_elaborates() {
             ("uart", "rtl/uart_tx.v"),
             ("uart", "rtl/uart_rx.v"),
             ("uart", "rtl/uart.v"),
+            // `uart_baud_div` joined the package when a host's
+            // SET_LINE_CODING rate had to reach a divisor; it is not
+            // instantiated here, and a package hands over all of its
+            // sources whether the design reaches them or not.
+            ("uart", "rtl/uart_baud_div.v"),
             ("dvi_tx", "rtl/tmds_encoder.v"),
             ("dvi_tx", "rtl/video_timing.v"),
             ("dvi_tx", "rtl/dvi_tx.v"),

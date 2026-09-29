@@ -42,9 +42,11 @@
 //     reports `phy_ready` on its LED 0, so load that one to tell them
 //     apart.
 //   * **LED 1 lit, LED 2 dark** — enumerated, and the processor has not
-//     printed. It prints a `\` within a millisecond of reset, so this
-//     means the 6502 is not running: the ROM, the reset vector or the
-//     bus, in that order.
+//     printed. `configured` is what lets the processor go, and it prints
+//     a `\` about four milliseconds later — 240 000 clocks, measured by
+//     `the_processor_runs_at_one_cycle_in_fifty_nine` — so this means the
+//     6502 is not running: the ROM, the reset vector or the bus, in that
+//     order.
 //   * **LED 2 lit, LED 4 dark** — the monitor is running and nothing you
 //     typed reached it. That is the host's end of the pipe.
 //   * **LED 0 dark with LED 1 lit** — the port is open and the ACIA is

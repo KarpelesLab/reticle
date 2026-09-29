@@ -399,6 +399,11 @@ fn the_project_resolves_and_elaborates() {
             ("uart", "rtl/uart_tx.v"),
             ("uart", "rtl/uart_rx.v"),
             ("uart", "rtl/uart.v"),
+            // `uart_baud_div` joined the package when a host's
+            // SET_LINE_CODING rate had to reach a divisor; it is not
+            // instantiated here, and a package hands over all of its
+            // sources whether the design reaches them or not.
+            ("uart", "rtl/uart_baud_div.v"),
             ("mos6502_computer", "rtl/computer_top.v"),
         ],
         "the user's only HDL is rtl/computer_top.v; everything else is the library"

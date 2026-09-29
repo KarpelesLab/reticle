@@ -338,6 +338,26 @@ falls back to the parameter and `ok` goes low.
 The **worst case it accepts is 1.67%**, at any rate whose divisor lands on
 30 exactly.
 
+## When the machine is switched on
+
+The 6502 is held in reset until the host has **configured** the port, and
+put back into it by a bus reset, because `configured` goes low on one.
+
+That is not a nicety, and it was measured on the part before it was
+fixed. The monitor prints its prompt about four milliseconds after it
+starts — 240 000 clocks, which
+`the_processor_runs_at_one_cycle_in_fifty_nine` prints — and enumeration
+takes longer than that. So a machine released at power-on printed `\`
+into an endpoint that a bus reset then cleared, and **the first thing a
+person saw when they opened the port was nothing at all**: no prompt, no
+sign of life, until they typed something that happened to produce output.
+Holding it until the port exists means the prompt is produced into a live
+endpoint, buffered there, and delivered the moment a terminal reads.
+
+It also matches what the machine is: a computer whose power comes from
+the port. Unplugging it and plugging it in again is a cold start, which is
+what it looks like from the other end too.
+
 ## The processor's speed, and a multi-cycle path
 
 One bus cycle every 59 clocks: `ready` is high for one clock in 59 and
