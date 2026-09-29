@@ -89,6 +89,17 @@ pub enum RouteError {
         /// The worst of them by name, most contended first, at most
         /// eight, so a report says *where* the design did not fit.
         worst: Vec<String>,
+        /// For those of them that are a wire the cells of one tile have
+        /// to agree about — a clock, an enable, a set/reset — what
+        /// contends for it and what can be done about it. Empty when the
+        /// contention is ordinary interconnect, which is a design that is
+        /// simply too dense and not a legality problem.
+        ///
+        /// This exists because `oversubscribed node X24Y3/LSR1` names a
+        /// tile and not a cause, and nobody meeting it for the first time
+        /// can tell that a distributed RAM's write enable and a
+        /// flip-flop's reset are the same piece of metal.
+        contention: Vec<String>,
     },
 }
 
@@ -111,12 +122,19 @@ impl fmt::Display for RouteError {
                 iterations,
                 overused,
                 worst,
-            } => write!(
-                f,
-                "routing did not converge: {overused} node(s) are still oversubscribed \
-                 after {iterations} iteration(s), worst at {}",
-                worst.join(", ")
-            ),
+                contention,
+            } => {
+                write!(
+                    f,
+                    "routing did not converge: {overused} node(s) are still oversubscribed \
+                     after {iterations} iteration(s), worst at {}",
+                    worst.join(", ")
+                )?;
+                for line in contention {
+                    write!(f, "\n{line}")?;
+                }
+                Ok(())
+            }
         }
     }
 }
@@ -562,12 +580,128 @@ pub fn route(
                 .take(8)
                 .map(|(count, node)| format!("{} ({count} signals)", graph.wire(*node).full_name()))
                 .collect(),
+            contention: worst
+                .iter()
+                .take(8)
+                .filter_map(|(_, node)| contention(netlist, graph, placement, &routing, *node))
+                .collect(),
         });
     }
     report.signals = routing.routed();
     report.pips = routing.pip_count();
     report.nodes = state.occupancy.iter().filter(|c| **c > 0).count();
     Ok((routing, report))
+}
+
+/// How many pips forward [`contention`] looks for the cell pins a wire
+/// serves. A control wire reaches its slice's pin in one or two.
+const CONTROL_DEPTH: usize = 3;
+
+/// Why an oversubscribed node could not be shared, when it is a wire the
+/// cells of one tile have to agree about.
+///
+/// `oversubscribed node X24Y3/LSR1` is where this backend's distributed
+/// RAM defect surfaced, and the message named a tile and not a cause.
+/// `LSR1` is one of a logic tile's two set/reset wires; a
+/// `TRELLIS_DPR16X4` joins its write enable to it with a `.fixed_conn`,
+/// and a flip-flop of the same tile whose reset is a different net then
+/// has nowhere to go. Nobody could have read that off the name.
+///
+/// Nothing here knows what an `LSR` is. What it asks is the question that
+/// makes a wire a control wire on any family: **do several of this tile's
+/// bels have a pin only reachable through it?** If two or more do, the
+/// node is shared silicon rather than interconnect, and the answer says
+/// which cells wanted it and which signals they wanted on it. Returns
+/// `None` for an ordinary congested wire, where the honest answer is that
+/// the design is too dense there and the placer is not at fault.
+fn contention(
+    netlist: &Netlist,
+    graph: &RoutingGraph,
+    placement: &Placement,
+    routing: &Routing,
+    node: NodeId,
+) -> Option<String> {
+    let tile = graph.wire(node).tile;
+    // Everything this wire reaches without leaving the tile.
+    let mut reached = vec![node];
+    let mut from = 0usize;
+    for _ in 0..CONTROL_DEPTH {
+        let until = reached.len();
+        for at in from..until {
+            for pip in graph.outgoing(reached[at]) {
+                let to = graph.pip(*pip).to;
+                if graph.wire(to).tile == tile && !reached.contains(&to) {
+                    reached.push(to);
+                }
+            }
+        }
+        from = until;
+    }
+    // The bel pins among them, and the cells sitting on those bels.
+    let mut pins: Vec<(usize, &str)> = Vec::new();
+    for (index, site) in graph.sites.iter().enumerate() {
+        if site.tile != tile {
+            continue;
+        }
+        for (role, wire) in &site.pins {
+            if reached.contains(wire) && !pins.iter().any(|(s, r)| *s == index && *r == role) {
+                pins.push((index, role.as_str()));
+            }
+        }
+    }
+    let bels = pins
+        .iter()
+        .map(|(site, _)| *site)
+        .collect::<std::collections::BTreeSet<_>>()
+        .len();
+    if bels < 2 {
+        return None;
+    }
+    // And which signal each of the cells on them asked for.
+    let mut wanted: Vec<String> = Vec::new();
+    for (signal, route) in routing.routes.iter().enumerate() {
+        if route.as_ref().is_none_or(|r| !r.nodes.contains(&node)) {
+            continue;
+        }
+        let name = &netlist.signals[signal].name;
+        let by = pins.iter().find_map(|(site, role)| {
+            let instance = placement.instance_at(*site)?;
+            netlist
+                .pins
+                .iter()
+                .find(|pin| {
+                    pin.instance == instance && pin.role == *role && pin.signal == Some(signal)
+                })
+                .map(|pin| {
+                    format!(
+                        "`{}`'s `{}` pin",
+                        netlist.instances[instance].name, pin.role
+                    )
+                })
+        });
+        wanted.push(match by {
+            Some(by) => format!("`{name}` for {by}"),
+            None => format!("`{name}`"),
+        });
+    }
+    if wanted.len() < 2 {
+        return None;
+    }
+    Some(format!(
+        "  {} is a control wire of X{}Y{}: {bels} of that tile's bels have a pin that can only be \
+         reached through it, and {} signals were routed onto it — {}. A wire carries one signal, \
+         so there are two ways out and a placement has to take one of them: give the cells that \
+         share the tile the **same** signal on that pin, or put the ones that disagree in \
+         **different tiles**. The placer rejects this arrangement before it is made \
+         (`SiteRules` in `src/fpga/place.rs`), so a design that gets here has found a control \
+         wire the architecture does not describe yet — say which one, it is a fabric fact and \
+         not a budget.",
+        graph.wire(node).full_name(),
+        tile.0,
+        tile.1,
+        wanted.len(),
+        wanted.join(" and "),
+    ))
 }
 
 /// The graph node one pin reaches, given where its instance was placed.

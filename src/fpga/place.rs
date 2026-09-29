@@ -64,7 +64,7 @@ use std::collections::BTreeMap;
 use std::error::Error;
 use std::fmt;
 
-use super::arch::{Arch, RoutingGraph};
+use super::arch::{Arch, NodeId, RoutingGraph};
 use super::constraints::{Constraints, matches_glob};
 use super::device::{BelRole, Device};
 use crate::ir::emit::{BitView, SigBit};
@@ -758,6 +758,48 @@ impl Rect {
 /// read off the architecture like everything else here, and the rule is
 /// the simple one: a site with something on it excludes every site it
 /// blocks and every site that blocks it.
+///
+/// # A wire that is one of a tile's few
+///
+/// Both of the cases above are about *one* wire or *one* bel. The third
+/// is about a **budget**, and it is what a control wire really is.
+///
+/// An ECP5 logic tile has four slices and exactly two set/reset wires,
+/// `LSR0` and `LSR1`: each slice's `MUXLSR<s>` picks one of the two, and
+/// nothing else can reach a flip-flop's reset pin. Two wires for four
+/// slices is a budget of two distinct reset signals per tile — and a
+/// distributed RAM **spends one of them**, because `WRE0_SLICE` and
+/// `WRE1_SLICE`, its write enable, are joined to `LSR1` by a
+/// `.fixed_conn` and have no mux to choose with. The same shape holds for
+/// the clock (`CLK0`/`CLK1`, with a RAM's `WCK<n>_SLICE` fixed to
+/// `CLK1`); it does **not** hold for the clock enable, where `CE0`..`CE3`
+/// are four wires for four slices and a distributed RAM uses none.
+///
+/// A placer that does not know this produces placements the router must
+/// reject: `oversubscribed node X24Y3/LSR1`, which is where this was
+/// found. The rule it needs is the weak one and not the strong one — a
+/// flip-flop with **no** reset shares a RAM's tile freely, and so does one
+/// whose reset is a signal the tile already carries. `ecppack`'s own
+/// output says exactly that: of the 111 distributed RAMs in Great Scott
+/// Gadgets' three Cynthion bitstreams, 79 share their tile with a
+/// flip-flop; 51 of those tiles' slices drive a reset, and **all 51 take
+/// `LSR0`** — not one takes the `LSR1` the RAM spent. On the clock the
+/// vendor does the *other* thing: 158 of those slices clock off `CLK1`,
+/// the RAM's own write-clock wire, against 8 off `CLK0`, because a write
+/// clock and a flip-flop's clock are usually the same net and a wire that
+/// already carries a signal is free to the signal it carries.
+///
+/// So the constraint is not "a RAM sterilises a tile's flip-flops". It is
+/// a **system of distinct representatives**: every distinct signal wanting
+/// a wire out of one pool needs a wire of its own, and a placement is
+/// legal exactly when such an assignment exists. [`SiteRules::pools`]
+/// derives the pools from the routing graph rather than naming a wire:
+/// a pin's pool is the set of the tile's **own** wires its signal must
+/// pass through, found by walking back from the pin while every way in
+/// comes from inside the tile. For a flip-flop's `rst` that walk ends at
+/// `{LSR0, LSR1}`, for a RAM's `we` at `{LSR1}`, for a lookup table's
+/// input at a wire of its own — and on a family whose bels do not share
+/// control wires it ends nowhere and costs nothing.
 #[derive(Debug, Default)]
 struct SiteRules {
     /// Per site, one entry per pin it shares with another site, as
@@ -775,22 +817,108 @@ struct SiteRules {
     per_instance: Vec<Vec<(u32, usize)>>,
     /// Every role name that takes part, so the checks compare integers.
     roles: BTreeMap<String, u32>,
+    /// Per site, one entry per pin that draws on a contended pool of the
+    /// tile's own wires, as `(role, pool, which wires of it)`. `pool`
+    /// indexes [`ControlGroup::pools`] of the site's group; the mask's bit
+    /// *n* is that pool's *n*th wire. Empty for every site of every family
+    /// whose bels do not share a control wire.
+    captive: Vec<Vec<(u32, u32, u32)>>,
+    /// Per site, the group it belongs to, or `u32::MAX` for none.
+    site_group: Vec<u32>,
+    /// One per tile that has a contended pool at all.
+    groups: Vec<ControlGroup>,
+}
+
+/// The contended control wires of one tile, and the sites that draw on
+/// them. See [`SiteRules`]' third section.
+#[derive(Debug, Default)]
+struct ControlGroup {
+    /// Every site of the tile with at least one entry in
+    /// [`SiteRules::captive`].
+    sites: Vec<usize>,
+    /// The pools, each the wires of one *independent* budget: two pins
+    /// whose wires overlap are in one pool and two whose wires do not are
+    /// in two. An ECP5 logic tile has one pool for `{LSR0, LSR1}`, one for
+    /// `{CLK0, CLK1}` and one per slice for its `CE`.
+    pools: Vec<Vec<NodeId>>,
+}
+
+/// How many wires a pool may hold, and how far the walk that finds one may
+/// go, before a pin is treated as unconstrained.
+///
+/// A control wire is one of two or four. A lookup table's input is one of
+/// two dozen interconnect wires, and stopping there costs nothing but the
+/// look: a pool nobody else in the tile draws on is dropped anyway.
+const MAX_POOL: usize = 8;
+
+/// The wires of `tile` that a signal arriving at `pin` must pass through,
+/// or `None` when it can also arrive from outside the tile.
+///
+/// The walk is backwards, and the rule is "expand a wire every way into
+/// which is inside this tile". An ECP5 flip-flop's `rst` pin is
+/// `LSR<s>_SLICE`, whose one source is `MUXLSR<s>`, whose two sources are
+/// `LSR0` and `LSR1` — and those two are fed from the global network and
+/// from neighbouring tiles, so the walk stops and the answer is the pair.
+/// A distributed RAM's `we` is `WRE<n>_SLICE`, whose one source is `LSR1`,
+/// so the answer is that one wire and the RAM has no choice at all.
+///
+/// The set is always a **cut**: every path from any driver to the pin
+/// crosses exactly one of its wires, which is what lets the caller treat
+/// it as a budget. Returning `None` is always safe — it says only that
+/// this pin adds no constraint.
+fn captive_pool(graph: &RoutingGraph, tile: (u32, u32), pin: NodeId) -> Option<Vec<NodeId>> {
+    let local = |node: NodeId| {
+        let wire = graph.wire(node);
+        !wire.global && wire.tile == tile
+    };
+    if !local(pin) {
+        return None;
+    }
+    let mut set: Vec<NodeId> = vec![pin];
+    let mut expanded: Vec<NodeId> = Vec::new();
+    for _ in 0..MAX_POOL {
+        let next = set.iter().position(|node| {
+            let ways = graph.incoming(*node);
+            !ways.is_empty() && ways.iter().all(|pip| local(graph.pip(*pip).from))
+        });
+        let Some(at) = next else { return Some(set) };
+        let node = set.remove(at);
+        expanded.push(node);
+        for pip in graph.incoming(node) {
+            let from = graph.pip(*pip).from;
+            // A cycle among a tile's own wires would make the walk
+            // meaningless; so would a pool wider than a control wire's.
+            if expanded.contains(&from) || set.len() >= MAX_POOL {
+                return None;
+            }
+            if !set.contains(&from) {
+                set.push(from);
+            }
+        }
+    }
+    None
 }
 
 impl SiteRules {
-    /// Finds every pair of bel pins in one tile that are one wire, and
-    /// every pair of sites that exclude each other.
+    /// Finds every pair of bel pins in one tile that are one wire, every
+    /// pair of sites that exclude each other, and every pool of a tile's
+    /// own control wires that more than one of its bels draws on.
     ///
     /// Cost is one pass over the sites grouped by tile, and within a tile
     /// the pins are compared pairwise — sixteen sites of five pins for an
     /// ECP5 logic tile, so the square is small and the grouping keeps it
-    /// local.
+    /// local. The pool walk is bounded by [`MAX_POOL`] and gives up on the
+    /// first wire that can be reached from outside the tile, which is
+    /// every interconnect wire, so it costs one look at most pins.
     fn find(netlist: &Netlist, graph: &RoutingGraph) -> SiteRules {
         let mut out = SiteRules {
             per_site: vec![Vec::new(); graph.sites.len()],
             excludes: vec![Vec::new(); graph.sites.len()],
             per_instance: vec![Vec::new(); netlist.instances.len()],
             roles: BTreeMap::new(),
+            captive: vec![Vec::new(); graph.sites.len()],
+            site_group: vec![u32::MAX; graph.sites.len()],
+            groups: Vec::new(),
         };
         let mut exclusions = 0usize;
         for (index, site) in graph.sites.iter().enumerate() {
@@ -819,7 +947,7 @@ impl SiteRules {
             roles.insert(name.to_owned(), id);
             id
         };
-        for sites in by_tile.values() {
+        for (tile, sites) in &by_tile {
             for (i, left) in sites.iter().enumerate() {
                 for right in &sites[i + 1..] {
                     for (lrole, lnode) in &graph.sites[*left].pins {
@@ -835,6 +963,85 @@ impl SiteRules {
                     }
                 }
             }
+            // Every pin of the tile whose signal has to come through the
+            // tile's own wires, and then the pools those wires form.
+            let mut drawn: Vec<(usize, &str, Vec<NodeId>)> = Vec::new();
+            for site in sites {
+                for (role, node) in &graph.sites[*site].pins {
+                    let Some(pool) = captive_pool(graph, *tile, *node) else {
+                        continue;
+                    };
+                    // A role naming several wires is one connection, and
+                    // on an ECP5 both of a RAM's `we` wires come off the
+                    // same `LSR1`; recording it once is what it is.
+                    if !drawn
+                        .iter()
+                        .any(|(s, r, p)| *s == *site && *r == role && *p == pool)
+                    {
+                        drawn.push((*site, role.as_str(), pool));
+                    }
+                }
+            }
+            // A wire only one bel can reach is that bel's own business.
+            let shared: Vec<bool> = drawn
+                .iter()
+                .map(|(site, _, pool)| {
+                    drawn.iter().any(|(other, _, theirs)| {
+                        *other != *site && theirs.iter().any(|n| pool.contains(n))
+                    })
+                })
+                .collect();
+            let mut keep = shared.iter();
+            drawn.retain(|_| *keep.next().unwrap_or(&false));
+            if drawn.is_empty() {
+                continue;
+            }
+            let mut group = ControlGroup::default();
+            let mut too_wide = false;
+            for (_, _, pool) in &drawn {
+                let mut merged = pool.clone();
+                group.pools.retain(|other| {
+                    if other.iter().any(|n| pool.contains(n)) {
+                        for node in other {
+                            if !merged.contains(node) {
+                                merged.push(*node);
+                            }
+                        }
+                        false
+                    } else {
+                        true
+                    }
+                });
+                // The mask below is one bit per wire of a pool, so a pool
+                // this wide is not a control budget and is left alone.
+                too_wide |= merged.len() > 32;
+                merged.sort_unstable();
+                group.pools.push(merged);
+            }
+            if too_wide {
+                continue;
+            }
+            let index = u32::try_from(out.groups.len()).unwrap_or(u32::MAX);
+            for (site, role, pool) in &drawn {
+                let which = group
+                    .pools
+                    .iter()
+                    .position(|p| p.iter().any(|n| pool.contains(n)))
+                    .expect("every pool was merged into one of them");
+                let mut mask = 0u32;
+                for (bit, node) in group.pools[which].iter().enumerate() {
+                    if pool.contains(node) {
+                        mask |= 1 << bit;
+                    }
+                }
+                let role = role_id(&mut out.roles, role);
+                out.captive[*site].push((role, u32::try_from(which).unwrap_or(0), mask));
+                if !group.sites.contains(site) {
+                    group.sites.push(*site);
+                }
+                out.site_group[*site] = index;
+            }
+            out.groups.push(group);
         }
         if out.roles.is_empty() && exclusions == 0 {
             return SiteRules::default();
@@ -865,7 +1072,9 @@ impl SiteRules {
     }
 
     /// Whether `moving` can be applied: every shared pin of every site it
-    /// touches is wanted by one signal only.
+    /// touches is wanted by one signal only, nothing occupies a site it
+    /// excludes, and every control pool of every tile it touches can still
+    /// give each of its signals a wire of its own.
     ///
     /// `moving` is the whole move, so a swap is judged after both of its
     /// halves have happened rather than against the placement it is leaving.
@@ -881,7 +1090,7 @@ impl SiteRules {
                 .instance_at(site)
                 .filter(|i| !moving.iter().any(|(j, _)| j == i))
         };
-        moving.iter().all(|(instance, site)| {
+        let pinned = moving.iter().all(|(instance, site)| {
             self.excludes[*site]
                 .iter()
                 .all(|other| after(*other).is_none())
@@ -890,8 +1099,93 @@ impl SiteRules {
                         self.signal(*instance, *mine) == self.signal(neighbour, *theirs)
                     })
                 })
-        })
+        });
+        if !pinned {
+            return false;
+        }
+        let mut seen: Vec<u32> = Vec::new();
+        for (_, site) in moving {
+            let group = self.site_group[*site];
+            if group == u32::MAX || seen.contains(&group) {
+                continue;
+            }
+            seen.push(group);
+            if !self.control_fits(&self.groups[group as usize], &after) {
+                return false;
+            }
+        }
+        true
     }
+
+    /// Whether every pool of one tile can give each of the signals that
+    /// want it a wire of its own.
+    ///
+    /// The question is a bipartite matching and it is answered as one:
+    /// signals on one side, the pool's wires on the other, an edge where a
+    /// pin allows that wire. Two pins wanting the *same* signal share a
+    /// wire and cost nothing, which is the whole reason a flip-flop may sit
+    /// beside a distributed RAM whose write clock it shares; a pin with no
+    /// signal on that role — a flip-flop with no reset — asks for nothing.
+    fn control_fits(&self, group: &ControlGroup, after: &impl Fn(usize) -> Option<usize>) -> bool {
+        for (pool, wires) in group.pools.iter().enumerate() {
+            let pool = u32::try_from(pool).unwrap_or(u32::MAX);
+            // Per signal, the wires every pin wanting it would accept.
+            let mut wanted: Vec<(usize, u32)> = Vec::new();
+            for site in &group.sites {
+                let Some(instance) = after(*site) else {
+                    continue;
+                };
+                for (role, which, mask) in &self.captive[*site] {
+                    if *which != pool {
+                        continue;
+                    }
+                    let Some(signal) = self.signal(instance, *role) else {
+                        continue;
+                    };
+                    match wanted.iter_mut().find(|(s, _)| *s == signal) {
+                        Some((_, allowed)) => *allowed &= *mask,
+                        None => wanted.push((signal, *mask)),
+                    }
+                }
+            }
+            if wanted.len() > wires.len() || !matchable(&wanted) {
+                return false;
+            }
+        }
+        true
+    }
+}
+
+/// Whether each signal can be given a wire of its own, as `(signal, the
+/// wires it would accept)` with one bit per wire.
+///
+/// Kuhn's algorithm, which is the textbook one and is exact. The sizes are
+/// a tile's: two wires and two signals on an ECP5 logic tile, so the
+/// augmenting search never goes more than a step or two deep.
+fn matchable(wanted: &[(usize, u32)]) -> bool {
+    fn assign(at: usize, wanted: &[(usize, u32)], taken: &mut [usize], seen: &mut u32) -> bool {
+        for wire in 0..32u32 {
+            let bit = 1 << wire;
+            if wanted[at].1 & bit == 0 || *seen & bit != 0 {
+                continue;
+            }
+            *seen |= bit;
+            let wire = wire as usize;
+            if taken[wire] == usize::MAX || assign(taken[wire], wanted, taken, seen) {
+                taken[wire] = at;
+                return true;
+            }
+        }
+        false
+    }
+    let mut taken = [usize::MAX; 32];
+    for at in 0..wanted.len() {
+        let mut seen = 0u32;
+        if !assign(at, wanted, &mut taken, &mut seen) {
+            return false;
+        }
+    }
+    true
 }
 
 /// A rigid group of instances: the anchor and the tile offsets.
@@ -1921,7 +2215,7 @@ fn undo(placement: &mut Placement, previous: &[(usize, Option<usize>)]) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::fpga::arch::{Arch, BelDecl, TileType, WireDecl, WireRef};
+    use crate::fpga::arch::{Arch, BelDecl, PipDecl, TileType, WireDecl, WireRef};
     use crate::ir::Id;
 
     /// A grid of one-LUT tiles, small enough to reason about.
@@ -2349,6 +2643,219 @@ mod tests {
         assert!(
             shared_same.allows(&both, &[(1, pair[1])]),
             "two flip-flops with one enable belong in one tile"
+        );
+    }
+
+    /// A tile with **two** control wires for four flip-flops, and a
+    /// memory whose own control pin is joined to one of them: the shape of
+    /// an ECP5 logic tile's `LSR0`/`LSR1` with a `TRELLIS_DPR16X4` in it.
+    ///
+    /// `feed` is where the two wires come from. A wire the interconnect
+    /// can drive is a **cut** the pool walk stops at; one that nothing
+    /// outside the tile drives is not a control wire at all, which is the
+    /// case the second half of the test below covers.
+    fn budget(width: u32, height: u32, feed: bool) -> (Arch, RoutingGraph) {
+        let mut arch = Arch::new("t", "test", width, height);
+        let mut tile = TileType::new("logic", "logic_tile", 8, 8);
+        for name in ["lsr0", "lsr1", "wre", "track"] {
+            tile.wires.push(WireDecl {
+                name: name.to_owned(),
+                dx: 0,
+                dy: 0,
+            });
+        }
+        // The memory's control pin, wired to `lsr1` and to nothing else.
+        tile.pips.push(PipDecl {
+            from: WireRef::local("lsr1"),
+            to: WireRef::local("wre"),
+            bits: Vec::new(),
+        });
+        let mut ram = BelDecl::new("ram", "lutram");
+        ram.pins.push(("we".to_owned(), WireRef::local("wre")));
+        tile.bels.push(ram);
+        // Four flip-flops, each with a mux of its own over the two wires.
+        for slice in 0..4 {
+            let mux = format!("mux{slice}");
+            tile.wires.push(WireDecl {
+                name: mux.clone(),
+                dx: 0,
+                dy: 0,
+            });
+            for wire in ["lsr0", "lsr1"] {
+                tile.pips.push(PipDecl {
+                    from: WireRef::local(wire),
+                    to: WireRef::local(&mux),
+                    bits: Vec::new(),
+                });
+            }
+            let mut ff = BelDecl::new(format!("ff{slice}"), "ff");
+            ff.pins.push(("rst".to_owned(), WireRef::local(&mux)));
+            tile.bels.push(ff);
+        }
+        if feed {
+            // What makes `lsr0` and `lsr1` the frontier: the interconnect
+            // reaches them, so the walk stops there instead of going on.
+            for wire in ["lsr0", "lsr1"] {
+                tile.pips.push(PipDecl {
+                    from: WireRef::at("track", 1, 0),
+                    to: WireRef::local(wire),
+                    bits: Vec::new(),
+                });
+            }
+        }
+        arch.tile_types.push(tile);
+        for y in 0..height {
+            for x in 0..width {
+                arch.set_tile(x, y, 0);
+            }
+        }
+        let graph = arch.build_graph();
+        (arch, graph)
+    }
+
+    /// `n` flip-flops whose resets come from `groups` distinct signals,
+    /// round-robin, with a `lutram` in front of them whose write enable is
+    /// a signal of its own.
+    fn reset_by(n: usize, groups: usize) -> Netlist {
+        let mut netlist = Netlist {
+            instances: Vec::new(),
+            pins: Vec::new(),
+            signals: Vec::new(),
+            off_fabric: Vec::new(),
+        };
+        for g in 0..groups {
+            netlist.signals.push(Signal {
+                name: format!("rst{g}"),
+                driver: None,
+                sinks: Vec::new(),
+            });
+        }
+        netlist.signals.push(Signal {
+            name: "we".to_owned(),
+            driver: None,
+            sinks: Vec::new(),
+        });
+        let cell = |netlist: &mut Netlist, kind: &str, role: &str, signal: usize| {
+            let instance = netlist.instances.len();
+            let pin = netlist.pins.len();
+            netlist.pins.push(NetPin {
+                instance,
+                port: role.to_uppercase(),
+                bit: 0,
+                role: role.to_owned(),
+                output: false,
+                signal: Some(signal),
+                constant: None,
+            });
+            netlist.signals[signal].sinks.push(pin);
+            netlist.instances.push(Instance {
+                cell: CellId::from_index(instance),
+                name: format!("{kind}{instance}"),
+                primitive: "P".to_owned(),
+                kind: kind.to_owned(),
+                pins: vec![pin],
+                pin: None,
+            });
+        };
+        cell(&mut netlist, "lutram", "we", groups);
+        for i in 0..n {
+            cell(&mut netlist, "ff", "rst", i % groups);
+        }
+        netlist
+    }
+
+    /// A tile's control wires are a **budget**, and a cell that is joined
+    /// to one of them has spent it.
+    ///
+    /// This is the ECP5's `LSR0`/`LSR1` with a distributed RAM in the tile,
+    /// which is where it was found: `oversubscribed node X24Y3/LSR1`, on a
+    /// design with 32 `TRELLIS_DPR16X4` and two reset nets. The rule is the
+    /// weak one — a flip-flop with no reset, or with the *same* reset as
+    /// the tile already carries, is welcome — and the wires it applies to
+    /// are read off the graph rather than named.
+    #[test]
+    fn a_control_wire_is_a_budget_and_a_memory_spends_one() {
+        // One reset and one write enable: two signals, two wires, and the
+        // memory may share its tile with all four flip-flops.
+        let (arch, graph) = budget(2, 2, true);
+        let netlist = reset_by(4, 1);
+        let (placement, _) = place(
+            &netlist,
+            &arch,
+            &graph,
+            &Constraints::new(),
+            &PlaceOptions::default(),
+        )
+        .expect("one reset beside a memory fits");
+        let ram = graph.sites[placement.site_of(0).unwrap()].tile;
+        assert_eq!(
+            (1..5)
+                .filter(|i| graph.sites[placement.site_of(*i).unwrap()].tile == ram)
+                .count(),
+            4,
+            "a memory must not sterilise its tile's flip-flops: that is the strong rule, and it \
+             is not what `ecppack` does"
+        );
+
+        // Two resets and a write enable is three signals for two wires, so
+        // the tile that holds the memory can hold only one of the two
+        // reset domains.
+        let netlist = reset_by(4, 2);
+        let (placement, _) = place(
+            &netlist,
+            &arch,
+            &graph,
+            &Constraints::new(),
+            &PlaceOptions::default(),
+        )
+        .expect("four tiles is room enough to separate them");
+        let ram = graph.sites[placement.site_of(0).unwrap()].tile;
+        let mut wanted: Vec<usize> = (1..5)
+            .filter(|i| graph.sites[placement.site_of(*i).unwrap()].tile == ram)
+            .map(|i| (i - 1) % 2)
+            .collect();
+        wanted.sort_unstable();
+        wanted.dedup();
+        assert!(
+            wanted.len() <= 1,
+            "the memory's tile holds flip-flops of {} reset domains, and it has one wire left",
+            wanted.len()
+        );
+
+        // And the predicate, since a placement could pass by luck.
+        let shared = SiteRules::find(&netlist, &graph);
+        assert!(!shared.trivial());
+        let sites: Vec<usize> = (0..graph.sites.len())
+            .filter(|s| graph.sites[*s].tile == (0, 0))
+            .collect();
+        let mut held = Placement::new(netlist.instances.len(), graph.sites.len());
+        held.place(0, sites[0]);
+        held.place(1, sites[1]);
+        assert!(
+            shared.allows(&held, &[(3, sites[2])]),
+            "`ff3` resets from `rst0`, which this tile already carries"
+        );
+        assert!(
+            !shared.allows(&held, &[(2, sites[2])]),
+            "`ff2` resets from `rst1`, and the memory has spent the other wire"
+        );
+
+        // The pool is the same whether or not the interconnect reaches the
+        // two wires: a wire nothing drives stops the walk too, because it
+        // is a source and not a choice. What it is *not* is a wire only one
+        // bel can reach — that is the bel's own business, and a tile of one
+        // bel has no pool at all, which is every family but the ECP5 today
+        // and is why the check costs them nothing.
+        let (_, loose) = budget(2, 2, false);
+        assert_eq!(
+            SiteRules::find(&reset_by(4, 2), &loose).groups.len(),
+            4,
+            "one pool per tile either way"
+        );
+        let (_, plain) = grid(2, 2);
+        assert!(
+            SiteRules::find(&chain(2), &plain).groups.is_empty(),
+            "a one-bel tile shares nothing, so there is no budget to keep"
         );
     }
 

@@ -462,6 +462,34 @@ type Wire = (String, (u32, u32));
 /// flip-flop sharing a slice with the RAM is why it names no flip-flop at
 /// all — a model that blocked the whole tile would have been wrong in a way
 /// no test of this flow's own output could have caught.
+///
+/// # What those flip-flops' control wires are, which decided code too
+///
+/// A RAM's write enable is on `LSR1` and its write clock on `CLK1`, and a
+/// tile has only `LSR0`/`LSR1` and `CLK0`/`CLK1` for its four slices. So
+/// the question the placer needed answering was not "does a RAM share a
+/// tile with a flip-flop" — it plainly does — but **what those flip-flops
+/// do with the two wires the RAM did not leave them**. Their own
+/// `MUXLSR<s>` and `MUXCLK<s>` settings say, and the two answers are
+/// opposite:
+///
+/// | | |
+/// |---|---|
+/// | Slices of a RAM tile driving a reset | 51: one in `analyzer.bit`, fifty in `facedancer.bit` |
+/// | …of those taking `LSR0` | **all 51** |
+/// | …of those taking `LSR1`, the wire the RAM spent | **none** |
+/// | Slices of a RAM tile taking a clock | 166 |
+/// | …of those taking `CLK1`, the RAM's own write-clock wire | **158** |
+/// | …of those taking `CLK0` | 8 |
+/// | Slices of a RAM tile with a clock enable | 114, and `CE0`..`CE3` are four wires for four slices, so a RAM contends for none of them |
+///
+/// A reset is a signal of its own and so it takes the free wire; a clock
+/// is usually the *same* net as the write clock, and a wire that already
+/// carries a signal is free to the signal it carries. That is why
+/// `SiteRules` in `src/fpga/place.rs` models a control wire as a budget
+/// with a matching over signals rather than as an exclusion: the weak rule
+/// is what the vendor's own output does, and a rule stricter than that
+/// would be a wrong rule.
 #[test]
 fn what_lattices_own_packer_writes_for_a_distributed_ram() {
     let Some(root) = chipdb() else { return };
@@ -474,6 +502,12 @@ fn what_lattices_own_packer_writes_for_a_distributed_ram() {
         ("selftest", 0, 0, 0),
         ("facedancer", 89, 82, 60),
     ];
+    // Across all three: slices of a RAM's tile taking their reset from
+    // `LSR0` and from `LSR1`, their clock from `CLK0` and from `CLK1`, and
+    // slices with a clock enable at all.
+    let mut lsr = [0usize; 2];
+    let mut clk = [0usize; 2];
+    let mut enables = 0usize;
     let mut total = 0usize;
     for (name, rams, with_slice_d, with_a_flop) in expected {
         let Some(bytes) = reference(name) else {
@@ -597,6 +631,28 @@ fn what_lattices_own_packer_writes_for_a_distributed_ram() {
                 at.0,
                 at.1
             );
+            // And what the tile's four slices do with the two reset wires
+            // and the two clock wires the RAM left them one of. This is
+            // the ground truth `SiteRules`' control-wire budget is built
+            // on: a reset takes the wire the RAM did not spend, a clock
+            // takes the RAM's own because it is the same net.
+            for slice in 0..4u32 {
+                match source(&format!("MUXLSR{slice}")) {
+                    Some("LSR0") => lsr[0] += 1,
+                    Some("LSR1") => lsr[1] += 1,
+                    Some(other) => panic!("{name}.bit: MUXLSR{slice} <- {other}"),
+                    None => {}
+                }
+                match source(&format!("MUXCLK{slice}")) {
+                    Some("CLK0") => clk[0] += 1,
+                    Some("CLK1") => clk[1] += 1,
+                    Some(other) => panic!("{name}.bit: MUXCLK{slice} <- {other}"),
+                    None => {}
+                }
+                if source(&format!("CE{slice}")).is_some() {
+                    enables += 1;
+                }
+            }
             // And what the tile still does besides holding a RAM.
             if decoded
                 .words
@@ -632,6 +688,27 @@ fn what_lattices_own_packer_writes_for_a_distributed_ram() {
         total += modes.len();
     }
     assert_eq!(total, 111, "distributed RAMs across the three files");
+    assert_eq!(
+        lsr,
+        [51, 0],
+        "slices of a RAM's tile taking their reset from LSR0 and from LSR1. **Not one takes \
+         LSR1**, which is the wire the RAM's write enable is joined to, and that is why a \
+         distributed RAM must be modelled as spending one of the tile's two reset wires"
+    );
+    assert_eq!(
+        clk,
+        [8, 158],
+        "slices of a RAM's tile taking their clock from CLK0 and from CLK1. Most take CLK1, the \
+         RAM's **own** write-clock wire, because a write clock and a flip-flop's clock are \
+         usually the same net — which is why the rule the placer needs is the weak one, `a \
+         different signal may not share`, and not `a flip-flop may not share`"
+    );
+    assert_eq!(
+        enables, 114,
+        "slices of a RAM's tile with a clock enable. `CE0`..`CE3` are four wires for four slices \
+         and a `TRELLIS_DPR16X4` has no enable pin at all, so a RAM contends for none of them and \
+         the clock enable needs no rule"
+    );
 }
 
 /// `ip/fifo_sync` on a part, at three depths, which is the thing a
@@ -865,6 +942,197 @@ fn a_distributed_ram_places_routes_and_every_bit_of_it_decodes() {
             "depth {depth}: SLICEA.MODE, SLICEB.MODE and SLICEC.MODE in each RAM's tile"
         );
     }
+}
+
+/// A design whose distributed RAMs and whose flip-flops want the same
+/// tile's set/reset wires, which the router used to refuse.
+///
+/// `testdata/fpga/ecp5/lutram_reset_64.v` is four 64-word FIFOs — 32
+/// `TRELLIS_DPR16X4` and about ninety flip-flops — with **two** reset
+/// nets. Before the placer knew what a distributed RAM does to a tile's
+/// control wires this design did not build at all:
+///
+/// ```text
+/// routing did not converge: 1 node(s) are still oversubscribed after
+/// 40 iteration(s), worst at X24Y3/LSR1 (2 signals)
+/// ```
+///
+/// `LSR1` is one of a logic tile's two set/reset wires and a distributed
+/// RAM's write enable is *joined* to it — `WRE0_SLICE` and `WRE1_SLICE`
+/// are `.fixed_conn`s off `LSR1`, with no mux to choose with — so a tile
+/// holding a RAM has one reset wire left and can carry one reset net. The
+/// placer put flip-flops of both domains in one such tile and the router
+/// was then asked to do something the fabric cannot.
+///
+/// What this test pins is the **weak** rule and not the strong one. It
+/// asserts that a RAM's tile still holds flip-flops, that they may share
+/// the RAM's own write clock, and that what is bounded is the number of
+/// *distinct* signals wanting one pool of wires — which is what
+/// `what_lattices_own_packer_writes_for_a_distributed_ram` measured in
+/// `ecppack`'s own output.
+///
+/// # What it would not catch
+///
+/// It would not catch a placer that solved this by simply refusing to put
+/// anything in a RAM's tile: that also routes, and it is the wrong answer.
+/// The `flops_in_ram_tiles` assertion below is there for exactly that, and
+/// it is why the number is asserted to be large rather than merely
+/// non-zero — 41 of the design's 88 flip-flops are in a RAM's tile here,
+/// and all 41 of them have a reset.
+///
+/// The strong rule was measured on this very design rather than argued
+/// about: with a RAM blocking its tile's eight flip-flops as well as its
+/// six lookup tables, the design still builds, on **the same 57 tiles**
+/// and with 6698 pips against 6790. So on this design the weak rule buys
+/// nothing, and that is worth saying plainly: what it buys is flip-flop
+/// *capacity*, eight sites per RAM tile, which a design bound by its
+/// lookup tables — as this one is, with 226 of them — never spends.
+#[test]
+#[cfg(all(feature = "verilog", feature = "synth"))]
+fn a_distributed_ram_and_two_reset_domains_share_a_die() {
+    let Some(root) = chipdb() else { return };
+    let db = trellis::open(&Disk(root), "", PART).unwrap();
+    let fabric = db.load(&TrellisOptions::new()).unwrap();
+    let (_, stream, _, routing, _, routed) = compile_all(
+        &fabric,
+        &[
+            "testdata/fpga/ecp5/lutram_reset_64.v",
+            "ip/fifo_sync/rtl/fifo_sync.v",
+        ],
+        "testdata/fpga/ecp5/lutram_reset_64.rcf",
+    );
+    // That `compile_all` returned at all is the headline: it unwraps
+    // `route`, and this is the design that did not converge.
+    assert_eq!(routing.signals, routed.netlist.routable().len());
+
+    let site_of =
+        |index: usize| &routed.graph.sites[routed.placement.site_of(index).expect("placed")];
+    let signal_of = |index: usize, role: &str| -> Option<usize> {
+        routed
+            .netlist
+            .pins
+            .iter()
+            .find(|pin| pin.instance == index && pin.role == role)
+            .and_then(|pin| pin.signal)
+    };
+
+    // The RAMs, and the write-enable signal each one puts on its tile's
+    // `LSR1`.
+    let mut rams: std::collections::BTreeMap<(u32, u32), usize> = Default::default();
+    for (index, instance) in routed.netlist.instances.iter().enumerate() {
+        if instance.kind != "lutram" {
+            continue;
+        }
+        let we = signal_of(index, "we").expect("a distributed RAM's write enable is a signal");
+        assert!(
+            rams.insert(site_of(index).tile, we).is_none(),
+            "one distributed RAM per logic tile"
+        );
+    }
+    assert_eq!(rams.len(), 32, "four 64-word FIFOs of eight RAMs each");
+
+    // Every flip-flop of a RAM's tile, and what it wants on the two wires
+    // the RAM left it one of.
+    let mut flops_in_ram_tiles = 0usize;
+    let mut with_a_reset = 0usize;
+    let mut sharing_the_write_clock = 0usize;
+    let mut resets: std::collections::BTreeMap<(u32, u32), std::collections::BTreeSet<usize>> =
+        Default::default();
+    for (index, instance) in routed.netlist.instances.iter().enumerate() {
+        if instance.kind != "ff" {
+            continue;
+        }
+        let tile = site_of(index).tile;
+        let Some(we) = rams.get(&tile) else { continue };
+        flops_in_ram_tiles += 1;
+        if let Some(reset) = signal_of(index, "rst") {
+            with_a_reset += 1;
+            resets.entry(tile).or_default().insert(reset);
+        }
+        if signal_of(index, "clk") == Some(*we) {
+            // Not expected here — a write enable is not a clock — but the
+            // question is asked of the clock the same way below.
+            sharing_the_write_clock += 1;
+        }
+    }
+    assert_eq!(sharing_the_write_clock, 0);
+    // The point of the weak rule: a RAM's tile keeps its flip-flops.
+    assert!(
+        flops_in_ram_tiles >= 16,
+        "only {flops_in_ram_tiles} flip-flop(s) landed in a RAM's tile. A rule that emptied a \
+         RAM's tile would route too, and it would be the wrong rule: `ecppack` puts a flip-flop \
+         in 79 of the 111 RAM tiles of this board's own bitstreams"
+    );
+    assert!(
+        with_a_reset > 0,
+        "no flip-flop with a reset shares a RAM's tile, so this design no longer exercises the \
+         thing it was written for"
+    );
+    // And the constraint itself, said as the fabric says it: a tile's two
+    // set/reset wires carry at most two signals, and a distributed RAM has
+    // already spent one of them.
+    for (tile, mut wanted) in resets {
+        let we = rams[&tile];
+        wanted.insert(we);
+        assert!(
+            wanted.len() <= 2,
+            "X{}Y{} wants {} distinct signal(s) on LSR0 and LSR1, which are two wires: {:?}",
+            tile.0,
+            tile.1,
+            wanted.len(),
+            wanted
+                .iter()
+                .map(|s| routed.netlist.signals[*s].name.as_str())
+                .collect::<Vec<_>>()
+        );
+        assert_eq!(
+            wanted.len(),
+            2,
+            "X{}Y{} holds a RAM and a resettable flip-flop, so both wires are spoken for",
+            tile.0,
+            tile.1
+        );
+    }
+
+    // ---- placement quality ----
+    let tiles: std::collections::BTreeSet<(u32, u32)> = (0..routed.netlist.instances.len())
+        .filter(|index| routed.netlist.instances[*index].kind != "io")
+        .map(|index| site_of(index).tile)
+        .collect();
+    assert_eq!(
+        tiles.len(),
+        57,
+        "logic tiles the design occupies. The strong rule — a distributed RAM blocks its tile's \
+         eight flip-flops as well as its six lookup tables — was measured on this same design and \
+         needs **57 tiles too**, and 6698 pips against 6790. So the weak rule buys nothing here, \
+         and saying so is the honest answer: this design is bound by its 226 lookup tables and \
+         not by its flip-flops, and a RAM's tile keeps two lookup tables either way. What the \
+         weak rule buys is **capacity** — the eight flip-flop sites of every tile that holds a \
+         RAM, 24288 of them on this part — which is what a design with 530 RAMs and a thousand \
+         flip-flops spends and this one does not"
+    );
+
+    // ---- every bit decodes, and nothing is unexplained ----
+    let decoded = db.decode(&stream.cram);
+    assert_eq!(decoded.bits, stream.cram.count_ones());
+    assert_eq!(
+        decoded.unexplained, 0,
+        "{} of {} bit(s) belong to no feature the database names",
+        decoded.unexplained, decoded.bits
+    );
+    let (selected, unresolved) = db.resolved_arcs(&decoded);
+    assert!(unresolved.is_empty(), "{unresolved:?}");
+    assert_eq!(
+        selected,
+        fabric.routed_arcs(&routed.graph, &routed.routing),
+        "the bits select connections the router did not choose, or miss ones it did"
+    );
+    assert!(routed.dropped.is_empty(), "{:?}", routed.dropped);
+    assert!(
+        routed.clocks.off_network.is_empty(),
+        "{:?}",
+        routed.clocks.off_network
+    );
 }
 
 /// What the database describes, measured rather than believed. These are

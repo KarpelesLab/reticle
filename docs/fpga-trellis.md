@@ -1,5 +1,242 @@
 # A real Lattice ECP5, and a real `.bit`
 
+## A control wire is a budget, and a distributed RAM spends one of the tile's two
+
+The round below this one modelled a distributed RAM's **lookup tables** and
+got them exactly right, down to the six bels it takes of the tile's eight. It
+did not model the RAM's **control wire**, and a design that used many of them
+therefore placed and then would not route:
+
+```
+routing did not converge: 1 node(s) are still oversubscribed after 40 iteration(s), worst at X24Y3/LSR1 (2 signals)
+```
+
+That message names a tile and not a cause, which was the other half of the
+problem. Both halves are fixed: the placer refuses the arrangement now, and
+when a control wire is oversubscribed anyway the router says what contended
+for it and what the two ways out are.
+
+### Which wire, and it is per tile
+
+Read out of `PLC2`'s own `bits.db` rather than reasoned about:
+
+| Record | What it says |
+|---|---|
+| `.mux MUXLSR0` … `.mux MUXLSR3` | four muxes, one per slice, each choosing between exactly two sources: `LSR0` and `LSR1` |
+| `.fixed_conn LSR<s>_SLICE MUXLSR<s>` | a flip-flop's reset pin is its slice's mux output and nothing else |
+| `.fixed_conn WRE0_SLICE LSR1`, `.fixed_conn WRE1_SLICE LSR1` | a distributed RAM's write enable is joined **straight to `LSR1`**, with no mux to choose with |
+
+So it is `LSR1`, it is **per tile and not per half-tile or per slice pair**,
+and it does not depend on which slices the RAM occupies — it always occupies
+A, B and C, and both of its write-enable wires land on the same `LSR1`. Two
+wires for four slices is a budget of two distinct reset signals per tile, and
+a RAM has already spent one of them.
+
+The **clock** is the same shape: `.mux MUXCLK0`…`MUXCLK3` over `CLK0` and
+`CLK1`, and `.fixed_conn WCK0_SLICE CLK1`, `.fixed_conn WCK1_SLICE CLK1`.
+
+The **clock enable is not**, and that is worth stating because it looks like
+it should be. `CE0`, `CE1`, `CE2` and `CE3` are **four** wires with
+`.fixed_conn CE<s>_SLICE CE<s>`, one per slice, each driven by a mux of its
+own — and a `TRELLIS_DPR16X4` has no enable pin at all. A distributed RAM
+contends for no clock enable and the clock enable needs no rule. What it does
+need is the rule it already had: the *two flip-flops of one slice* share
+`CE<s>_SLICE`, which is the fifth shared-resource case at the end of this
+file.
+
+### What `ecppack` does with the wires a RAM leaves, in full
+
+The question is not "does a RAM share a tile with a flip-flop" — the round
+below measured that it does, in 79 of the 111 distributed RAMs of
+`analyzer.bit`, `selftest.bit` and `facedancer.bit`. The question is **what
+those flip-flops do with the two wires the RAM did not leave them**, and
+their own `MUXLSR<s>` and `MUXCLK<s>` settings answer it. All of this is
+decoded by `what_lattices_own_packer_writes_for_a_distributed_ram`, which
+asserts every number below:
+
+| | analyzer | facedancer | all three |
+|---|---|---|---|
+| Distributed RAMs | 22 | 89 | **111** (`selftest.bit` has none) |
+| …whose tile also holds a flip-flop | 9 | 70 | **79** |
+| Slices of a RAM's tile driving a reset | 1 | 50 | **51** |
+| …of those on `LSR0` | 1 | 50 | **51** |
+| …of those on `LSR1`, the wire the RAM spent | 0 | 0 | **0** |
+| Slices of a RAM's tile taking a clock | 17 | 149 | **166** |
+| …of those on `CLK1`, the RAM's own write-clock wire | 13 | 145 | **158** |
+| …of those on `CLK0` | 4 | 4 | **8** |
+| Slices of a RAM's tile with a clock enable | 1 | 113 | **114** |
+
+The two rows in bold say opposite things and both are right. A **reset** is a
+signal of its own, so it takes the free wire: not one of 51 goes on `LSR1`. A
+**clock** is usually the *same net* as the write clock, so it takes the RAM's
+own wire: 158 of 166 go on `CLK1`. A wire that already carries a signal is
+free to the signal it carries, and expensive to every other one.
+
+### The weak rule is the right rule, and the strong one would have been wrong
+
+Two rules were available:
+
+- **strong** — a flip-flop may not share a tile with a distributed RAM (or,
+  weaker but still strong, not one with a reset);
+- **weak** — a flip-flop needing a *different* signal on the wire may not
+  share it.
+
+The strong rule is stricter than what `ecppack` itself writes, which by this
+project's standard makes it a wrong rule: 79 RAM tiles with flip-flops in
+them, 51 slices driving a reset and 158 sharing the write clock are the
+counter-examples, and they are in files this tree already verifies byte for
+byte. So the weak one it is, and a flip-flop with **no** reset — which is
+most of them — is unconstrained either way.
+
+### How the placer knows, without anything naming a wire
+
+`SiteRules` in `src/fpga/place.rs` already had two kinds of rule: pins of two
+bels that are *one wire* must want the same signal, and bels a cell makes
+*unusable* are excluded. A control wire is a third kind and it is a **budget**
+rather than either.
+
+For every pin of every bel, the placer walks backwards from the pin's wire
+while every way into the wire it is standing on comes from inside the tile,
+and stops at the frontier. The set it stops at is a **cut**: every path from
+any driver to that pin crosses exactly one of its wires. For an ECP5:
+
+| Pin | The walk | The pool |
+|---|---|---|
+| a flip-flop's `rst` | `LSR<s>_SLICE` → `MUXLSR<s>` → stop, because `LSR0` and `LSR1` are fed from the global network and from neighbouring tiles | `{LSR0, LSR1}` |
+| a distributed RAM's `we` | `WRE<n>_SLICE` → stop at `LSR1` | `{LSR1}` |
+| a flip-flop's `clk` | `CLK<s>_SLICE` → `MUXCLK<s>` → stop | `{CLK0, CLK1}` |
+| a RAM's `wclk` | `WCK<n>_SLICE` → stop | `{CLK1}` |
+| a flip-flop's `en` | `CE<s>_SLICE` → stop at `CE<s>` | `{CE<s>}`, one per slice |
+| a lookup table's input | `A0_SLICE` → `A0`, whose own mux has sources in four neighbouring tiles, so the walk stops there | `{A0}`, which nothing else in the tile draws on, so it is dropped |
+
+A pool no other bel of the tile draws on is dropped, which is every ordinary
+interconnect wire on every family — so on the 7 series, on Gowin and on a
+tile with one bel there are no pools at all and the check costs one
+`is_empty`. Nothing in `place.rs` names `LSR`, or a slice, or an ECP5.
+
+Legality is then a **system of distinct representatives**: each distinct
+signal wanting a pool needs a wire of its own, and the answer is a bipartite
+matching between signals and wires, run over the sites of one tile whenever a
+move touches it. Two pins wanting the *same* signal cost one wire between
+them, which is exactly how a flip-flop comes to share `CLK1` with the RAM
+beside it; a pin with no signal on that role — a flip-flop with no reset —
+asks for nothing.
+
+Two things fall out of this that were not the point and are worth having.
+The rule is not about distributed RAM: **three distinct reset nets in one
+logic tile** were always illegal and were always placed, and now they are
+not. And it is not about the ECP5: any family whose architecture has the
+shape gets it.
+
+### What it cost, measured
+
+`testdata/fpga/ecp5/lutram_reset_64.v` is the reproducer — four 64-word
+FIFOs, 32 `TRELLIS_DPR16X4`, 226 lookup tables, 88 flip-flops and **two**
+reset nets — and `a_distributed_ram_and_two_reset_domains_share_a_die` is the
+test. Without the rule it is the failure at the top of this section; with it
+the design places, routes, and **all 15057 set bits of its image decode**
+back through the database into a feature they name, with **nothing
+unexplained**, and the 4393 arcs those bits select are exactly the arcs the
+router chose.
+
+Three FIFOs is not enough and sixteen RAMs at depth 32 is not enough: both of
+those build without the rule, because the placer has room to keep the two
+domains apart by accident. That is worth knowing about the file — it is at
+the size where accident stops working.
+
+Placement quality, with the strong rule measured on the same design rather
+than argued about:
+
+| | weak rule | strong rule |
+|---|---|---|
+| Logic tiles occupied | **57** | **57** |
+| Pips | 6790 | 6698 |
+| Flip-flops in a RAM's tile | 41 of 88 | 0 |
+
+**So on this design the weak rule buys nothing in tiles, and saying so is the
+honest answer.** This design is bound by its 226 lookup tables, and a RAM's
+tile keeps two of those either way, so the flip-flops the strong rule evicts
+land in tiles the lookup tables had already claimed. What the weak rule buys
+is **capacity** — the eight flip-flop sites of every tile that holds a RAM,
+24288 of them on this part — which a design bound by its *registers* spends
+and this one does not. The design this defect was found on has about 530
+distributed RAMs and a thousand flip-flops; the strong rule would have
+sterilised 4240 flip-flop sites, a sixth of the part's registers, to no
+purpose.
+
+### The error says what it means now
+
+When a node that will not converge turns out to be a wire several of a tile's
+bels have to agree about, `RouteError::Congested` says so. The test for
+"is this a control wire" names nothing: it asks whether two or more bels of
+the node's own tile have a pin reachable only through it.
+
+This is the real thing, from the reproducer with the placer's rule switched
+off — nine bels because a logic tile has eight flip-flops and one
+distributed RAM:
+
+```
+error: routing did not converge: 1 node(s) are still oversubscribed after 40 iteration(s), worst at X24Y3/LSR1 (2 signals)
+  X24Y3/LSR1 is a control wire of X24Y3: 9 of that tile's bels have a pin that can only be
+  reached through it, and 2 signals were routed onto it — `mem$we$13` for `b1.mem$dpr0_1_0`'s
+  `we` pin and `rst_a_n` for `a0.g_registered.rd_data_q$ff$ff7`'s `rst` pin. A wire carries one
+  signal, so there are two ways out and a placement has to take one of them: give the cells that
+  share the tile the **same** signal on that pin, or put the ones that disagree in **different
+  tiles**. The placer rejects this arrangement before it is made (`SiteRules` in
+  `src/fpga/place.rs`), so a design that gets here has found a control wire the architecture does
+  not describe yet — say which one, it is a fabric fact and not a budget.
+```
+
+The last sentence is the actionable one, and it is what the message that
+started this section could not say: the placer refuses this arrangement
+before it is made, so a design that reaches the message has found a control
+wire the architecture does not describe yet.
+
+### One hazard the weak rule creates, and it is refused
+
+Letting a flip-flop share a RAM's wire has a consequence the strong rule
+would not have had. `CLK1.CLKMUX = INV` and `LSR1.LSRMUX = INV` invert the
+**wire**, not the flip-flop, and a RAM's write clock and write enable hang
+off those wires with no mux of their own. A flip-flop on `CLK1` asking for a
+falling edge would therefore invert the write clock of the RAM beside it, and
+the memory would write on the wrong edge with every structural check
+passing — the exact shape of defect this file exists to catch.
+
+`configure_registers` refuses it, naming the cause and the two ways out
+(move the polarity into logic, or keep the flip-flop out of a RAM's tile).
+`SRMODE = ASYNC` is **not** refused and should not be: it decides whether a
+*register* takes its reset on the clock edge, so a RAM in the tile is not
+affected by it.
+
+### What a board would have added, and the cheapest experiment
+
+Nothing in this section needed one, and that is the honest summary: the
+constraint is a fabric fact in `bits.db`, the evidence for the weak rule is
+in vendor bitstreams this tree already verifies, and the reproducer's
+bitstream decodes completely off the part. But two things rest on reading
+rather than on measurement, and both are the same experiment:
+
+- **that a flip-flop may take its reset from `LSR1` when that wire already
+  carries a RAM's write enable.** The model allows it because the wire
+  carries one signal either way; `ecppack` never does it, in 0 of 51 cases,
+  so there is no vendor artefact to agree with. It cannot arise in an
+  ordinary design — a write enable is not a reset — which is why it has not
+  been chased.
+- **that a flip-flop clocking off `CLK1` beside a RAM really clocks
+  together with it.** This one `ecppack` does 158 times, so it is as well
+  evidenced as anything in this file; what no file can show is the timing.
+
+The cheapest experiment is one design and it settles both. Take the packet
+buffers of `usb_bulk_ep`, which are already eight `TRELLIS_DPR16X4` on a
+Cynthion with a host reading every byte back, and add an `rloc` macro that
+puts a resettable flip-flop in one RAM's own tile with its reset tied to the
+RAM's write-enable net and its output XORed into a byte endpoint 1 returns.
+If the bytes still come back identical and the flip-flop reads the reset when
+the RAM is written, both readings become measurements. It needs no new
+gateware and no new instrument: the trace path `tests/usb_loopback.rs` uses
+is already there. That is how "A word written does come back" closed the gap
+the round below it named, and it is the same shape of experiment.
+
 ## A distributed RAM is on the fabric, and it is three slices held together by one bit
 
 `ip/fifo_sync` could not be placed on an ECP5 at any depth. The message was
@@ -3621,7 +3858,7 @@ borrows now. Every backend gets it.
 
 | What | What it needs |
 |---|---|
-| An **inverted** clock | `configure_registers` refuses `CLKMUX=INV` unless the routing says which of the tile's two clock muxes carries the signal, and nothing has built a design with one. A clock **enable** and an **asynchronous reset** are no longer here: both are in `usb_ulpi_device.v`, which has 40 slices carrying a routed `LSR` with its `SRMODE` and flip-flops whose `CEMUX` is left at its `CE` default with a signal routed to `CE<c>_SLICE`. Both became possible when `fpga::place` learnt that the two flip-flops of a slice share those wires and must agree about them; before that they placed and did not route |
+| An **inverted** clock | `configure_registers` refuses `CLKMUX=INV` unless the routing says which of the tile's two clock muxes carries the signal, and nothing has built a design with one. A clock **enable** and an **asynchronous reset** are no longer here: both are in `usb_ulpi_device.v`, which has 40 slices carrying a routed `LSR` with its `SRMODE` and flip-flops whose `CEMUX` is left at its `CE` default with a signal routed to `CE<c>_SLICE`. Both became possible when `fpga::place` learnt that the two flip-flops of a slice share those wires and must agree about them; before that they placed and did not route. `CLKMUX=INV` is refused a second way now: on `CLK1` in a tile that holds a distributed RAM it would invert the RAM's write clock, since that wire is the RAM's too |
 | A second clock domain | nothing in principle: sixteen networks are declared and a net reaches one by routing. Nothing has built a design with two, so nothing has seen what the router does when two clocks want the same quadrant's network |
 | A clock from a PLL | `EHXPLLL` has no port map in the device file. The path is there: a PLL's outputs are `G_J<quadrant>CPLL0CLKO*` and every buffer's input mux offers them, which is how `analyzer.bit`'s two globals are fed |
 | A clock on a **dedicated** clock pad | nothing, and it has never been exercised. A `PCLKT` pad reaches the centre through `G_JPCLKT<q><n> <- JINCK <- JPADDI`, all `.fixed_conn`s already in the graph; a Cynthion's oscillator is on the `PCLKC` half of the pair, so this flow has only ever taken the fabric route |
@@ -3629,7 +3866,8 @@ borrows now. Every backend gets it.
 | A carry chain | `CCU2C` has no port map in the device file, on purpose: its two sum bits and internal carry do not match the `(ci, i0, i1) -> co` model Reticle maps carry onto. The `.mux` records for the cascade wires are read already |
 | Block RAM | `Ecp5Stream` reads and writes the initialisation blocks — the reference files' 44 blocks round trip — and nothing generates one. The `MIB_EBR*` tiles' wires and pips are in the graph |
 | A distributed RAM's **contents** | `configure_lutram` writes them from an `INITVAL` parameter and nothing produces one: `fpga::primitives` declines to lower a memory with initial contents, so every RAM this flow builds starts empty. All 111 of the vendor's do too, so `dpram_init_word`'s permutation still has no evidence either way. What *is* settled now is the pair of **run-time** address decodings, which agree at every address of a 64-deep RAM on a real part — see the first section |
-| A distributed RAM **on a part** | see "What a board would have added" in the first section. Everything else about it is measured; that a written word reads back is not |
+| A distributed RAM **on a part** | see "What a board would have added" in the distributed-RAM section. Everything else about it is measured; that a written word reads back is not |
+| A flip-flop **sharing a RAM's `LSR1`** | the placer allows it when the reset *is* the RAM's write-enable net, because a wire carries one signal either way. `ecppack` never does it — 0 of 51 — so it rests on the database alone. "What a board would have added" at the end of the first section names the one experiment that settles it and the `CLK1` reading with it |
 | An **inverting** write clock or write enable | `WCKMUX = INV` is `CLK1.CLKMUX = INV` and `WREMUX = INV` is a field of its own, both in the database. `configure_lutram` writes neither, and neither appears in any of the three reference bitstreams |
 | An IO standard other than LVCMOS33 | the bits are in the database and the code takes the standard from the constraints; no other standard has been on a part |
 | `DRIVE`, `OPENDRAIN`, `CLAMP` or `TERMINATION` on a pad | each is a `.config_enum` of the pad tile, and each is one `ecppack` writes **only when an attribute asks** — so not writing them matches nextpnr exactly for a design that does not ask. `set_io -drive` is parsed and reaches the cell, and `configure_io` writes nothing for it, which makes the option a silent no-op in the bitstream. **`SLEWRATE` has left this row**: it is written now, see "An edge rate on every ULPI pin" |
@@ -3685,8 +3923,8 @@ tied. `tests/fpga_trellis.rs` runs `configure_io` into a bitmap of its own
 to ask what that pass wrote.
 
 That is the first of **four** places on this part where two features share bit
-space — six, if the two placement constraints at the end of this section are
-counted, and they deserve to be — and the shape repeats:
+space — seven, if the three placement constraints at the end of this section
+are counted, and they deserve to be — and the shape repeats:
 
 | | Which two | Where it is written down |
 |---|---|---|
@@ -3721,5 +3959,16 @@ two lookup tables and the slice beside it in `RAMW` mode has given up both of
 its own, so a distributed RAM is six of a logic tile's eight lookup tables
 and they are not "shared" but gone. `BelDecl::blocks` says which, `SiteRules`
 makes it symmetric, and the legaliser and every annealing move refuse a
-placement that breaks it. The first section has the measurement that fixed
-the number at six rather than eight or sixteen.
+placement that breaks it. "A distributed RAM is on the fabric" has the
+measurement that fixed the number at six rather than eight or sixteen.
+
+**And a seventh, which is neither of those: a budget.** A logic tile has
+`LSR0` and `LSR1` for its four slices and `CLK0` and `CLK1` for the same
+four, and a distributed RAM's write enable and write clock are joined to
+`LSR1` and `CLK1` with no mux of their own. So a RAM does not exclude a
+flip-flop and does not share a *pin* with one — it **spends one of two**, and
+what is legal is decided by counting distinct signals rather than by either
+of the two rules above. `SiteRules` reads the pools off the routing graph and
+answers the question as a bipartite matching, which is also why three
+distinct reset nets no longer place in one tile. The first section of this
+file has the measurement, the reproducer and what a board would still add.

@@ -3904,8 +3904,40 @@ impl TrellisFabric {
                     site.bel, site.tile.0, site.tile.1
                 ),
             };
+            // The other thing a control mux is shared with, which is not
+            // another flip-flop. `CLK1.CLKMUX = INV` and `LSR1.LSRMUX =
+            // INV` invert the **wire**, and a distributed RAM's write
+            // clock and write enable are joined to `CLK1` and `LSR1` with
+            // no mux of their own. A flop sharing those wires with a RAM —
+            // which `fpga::place` allows, and which `ecppack` does 158
+            // times in this board's own bitstreams for the clock — would
+            // therefore invert the RAM's write port as a side effect, and
+            // the memory would write on the wrong edge or the wrong level
+            // while every structural check passed.
+            let ram_here = || {
+                netlist.instances.iter().enumerate().any(|(other, cell)| {
+                    cell.kind == "lutram"
+                        && placement
+                            .site_of(other)
+                            .is_some_and(|s| graph.sites[s].tile == site.tile)
+                })
+            };
+            let shared_with_a_ram = |what: &str, wire: &str| TrellisError::Unsupported {
+                what: format!(
+                    "flip-flop `{}` at X{}Y{} asks for {what}, and its tile holds a distributed \
+                     RAM whose write port is joined to `{wire}` with no mux of its own — so \
+                     inverting that wire would invert the RAM's write port too, and the memory \
+                     would write on the wrong edge or the wrong level with nothing to show for \
+                     it. Either give the flip-flop the polarity it wants in logic instead, or \
+                     keep it out of a RAM's tile with a placement constraint",
+                    site.bel, site.tile.0, site.tile.1
+                ),
+            };
             if value("CLKMUX", "CLK") == "INV" {
                 let c = mux_of(signal_of("clk"), "CLK").ok_or_else(|| refuse("CLKMUX=INV"))?;
+                if c == 1 && ram_here() {
+                    return Err(shared_with_a_ram("CLKMUX=INV", "CLK1"));
+                }
                 for bit in &ff.clkmux_inv[c] {
                     bits.set(site.tile, *bit)?;
                 }
@@ -3918,11 +3950,18 @@ impl TrellisFabric {
                     let what = if inv { "LSRMUX=INV" } else { "SRMODE=ASYNC" };
                     let c = mux_of(reset, "LSR").ok_or_else(|| refuse(what))?;
                     if inv {
+                        if c == 1 && ram_here() {
+                            return Err(shared_with_a_ram("LSRMUX=INV", "LSR1"));
+                        }
                         for bit in &ff.lsrmux_inv[c] {
                             bits.set(site.tile, *bit)?;
                         }
                     }
                     if async_reset {
+                        // `SRMODE` is a property of the *register*, not of
+                        // the wire — it decides whether the reset is taken
+                        // on the clock edge — so a RAM in the tile is not
+                        // affected by it and it is written as before.
                         for bit in &ff.srmode_async[c] {
                             bits.set(site.tile, *bit)?;
                         }

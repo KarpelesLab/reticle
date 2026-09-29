@@ -1,0 +1,36 @@
+# Every port of `testdata/fpga/ecp5/lutram_reset_64.v` on a top-edge ball
+# of an LFE5U-12F in caBGA-256, taken from the same list
+# `fifo_sync_16.rcf` uses and in the same order. Nothing here is about a
+# board — no board has this design on it — and the only thing that matters
+# about the assignment is that it is fixed, so that the placement the test
+# measures is the same on every run.
+#
+# `clk` is first for the same reason it is there: it is the one signal that
+# has to leave its pad through a clock buffer and travel the global
+# network. The two resets are next, and they are the point of the design:
+# two reset nets is one more than a tile holding a distributed RAM has
+# wires left for.
+
+set_io -io_standard LVCMOS33 clk A2
+set_io -io_standard LVCMOS33 rst_a_n B3
+set_io -io_standard LVCMOS33 rst_b_n A3
+set_io -io_standard LVCMOS33 wr_en A4
+set_io -io_standard LVCMOS33 wr_data[0] E4
+set_io -io_standard LVCMOS33 wr_data[1] D4
+set_io -io_standard LVCMOS33 wr_data[2] C4
+set_io -io_standard LVCMOS33 wr_data[3] B4
+set_io -io_standard LVCMOS33 wr_data[4] E5
+set_io -io_standard LVCMOS33 wr_data[5] D5
+set_io -io_standard LVCMOS33 wr_data[6] C5
+set_io -io_standard LVCMOS33 wr_data[7] B5
+set_io -io_standard LVCMOS33 rd_en A5
+set_io -io_standard LVCMOS33 rd_data[0] A6
+set_io -io_standard LVCMOS33 rd_data[1] E6
+set_io -io_standard LVCMOS33 rd_data[2] D6
+set_io -io_standard LVCMOS33 rd_data[3] C6
+set_io -io_standard LVCMOS33 rd_data[4] B6
+set_io -io_standard LVCMOS33 rd_data[5] E7
+set_io -io_standard LVCMOS33 rd_data[6] D7
+set_io -io_standard LVCMOS33 rd_data[7] C7
+set_io -io_standard LVCMOS33 full B7
+set_io -io_standard LVCMOS33 empty A7
