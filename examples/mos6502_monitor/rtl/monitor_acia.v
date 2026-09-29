@@ -72,11 +72,17 @@
 //      hold a state a data sheet cannot name, which is why bit 4 moves
 //      with the rate field and not only the four bits below it.
 //
-//      A write by the processor wins until the host moves again, which
-//      is the only arbitration rule that needs no arbiter. The load is
-//      an edge on the *rate* and not a level on the code, so a program
-//      that writes CONTROL is not fought with, and two different rates
-//      the table both flattens to code 0 still count as two changes.
+//      **Those five bits are the host's and not the processor's.** A
+//      program writes CONTROL and reads back its own bits 7..5 -- the
+//      stop bit and the word length -- and the host's bits 4..0. That is
+//      a departure from the part, where a program owns the whole
+//      register, and the alternative was tried and measured: with a
+//      last-writer-wins rule the last writer was always the processor,
+//      because the machine is held in reset until the host has configured
+//      the port and so the monitor's `sta ACIAX` always came second.
+//      `5003` answered 19200 on a port opened at 115200. A register whose
+//      answer depends on which of two things spoke last is worth less
+//      than one that always answers the question it exists to answer.
 //
 //   2. **It reports the rate the part is programmed to on `rate`**, for
 //      whatever wants to put a real waveform on a pin. Code 0 reports
@@ -259,17 +265,6 @@ module monitor_acia (
         endcase
     end
 
-    // The rate the host last asked for. The load into CONTROL is an edge
-    // on **this** and not on `host_code`, so that a host moving from one
-    // rate the table cannot name to another still counts as the host
-    // moving — 115200 and 230400 are both code 0, and a processor that
-    // had written 19200 into CONTROL in between has to be overridden by
-    // the second of them as much as by the first. It is also why the
-    // comparison is 32 bits of register rather than four: a rate change
-    // the table flattens away is still a rate change.
-    reg [31:0] host_rate_q;
-    wire       host_moved = (host_rate != host_rate_q);
-
     // -----------------------------------------------------------------
     // The registers
     // -----------------------------------------------------------------
@@ -281,7 +276,6 @@ module monitor_acia (
             tx_pending  <= 1'b0;
             command_q   <= COMMAND_RESET;
             control_q   <= CONTROL_RESET;
-            host_rate_q <= 32'd0;
             rate        <= 32'd0;
         end else begin
             // A byte from the host always wins over a read that empties
@@ -314,23 +308,30 @@ module monitor_acia (
                 command_q <= din;
             end
 
+            // CONTROL is owned by two things and the split is by field.
+            // Bits 7..5 are framing -- stop bits and word length -- and
+            // they are the processor's: it writes them and reads back
+            // what it wrote. Bits 4..0 are where the bit clock comes
+            // from, and on this board that is not the processor's to
+            // decide, so they are **a level and not an edge**: whatever
+            // the host last asked for, continuously.
+            //
+            // That is a departure from the part, where a program owns the
+            // whole register, and it is deliberate. The edge was tried
+            // first and the ordering is what killed it: the machine is
+            // held in reset until the host has configured the port, so
+            // the host's rate arrives *before* the monitor's `sta ACIAX`,
+            // and a rule where the last writer wins made the last writer
+            // always the processor. `5003` then answered 19200 on a port
+            // the host had opened at 115200 -- measured on the board, in
+            // the build before this one. A register whose answer depends
+            // on which of two things spoke last is worth less than one
+            // that always answers the question it exists to answer.
             if (sel & access & we & (rs == R_CONTROL)) begin
-                control_q <= din;
-            end else if (host_moved) begin
-                // Bit 4 as well as bits 3..0, because the two fields are
-                // one fact between them: bit 4 is the receiver's clock
-                // source and bits 3..0 are the generator's rate, and
-                // `$10` — the generator selected with a rate field of
-                // `0000`, which the table gives as *16x external clock* —
-                // is a state that means nothing. So a rate the table names
-                // is {generator, code} and one it cannot name is
-                // {external, 0000}: everything from outside, which is the
-                // literal truth for a USB pipe and a configuration the
-                // data sheet actually has.
-                control_q[4]   <= host_named;
-                control_q[3:0] <= host_code;
+                control_q[7:5] <= din[7:5];
             end
-            host_rate_q <= host_rate;
+            control_q[4]   <= host_named;
+            control_q[3:0] <= host_code;
 
             rate <= code_rate;
         end

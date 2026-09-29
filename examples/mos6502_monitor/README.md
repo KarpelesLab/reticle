@@ -300,10 +300,17 @@ rate.
    put a real waveform on a pin, with code 0 resolving to the host's own
    `dwDTERate`.
 
-A write by the processor wins until the host moves again, which is the
-only arbitration rule that needs no arbiter, and the load is an edge on
-the *rate* rather than a level on the code — so two rates the table
-flattens to the same code still count as two changes.
+**Those five bits are the host's and not the processor's.** A program
+writes CONTROL and reads back its own bits 7–5 — the stop bit and the
+word length — and the host's bits 4–0. That is a departure from the part,
+where a program owns the whole register, and the alternative was tried
+and measured: with a last-writer-wins rule the last writer was always the
+processor, because the machine is held in reset until the host has
+configured the port and so the monitor's `sta ACIAX` always came second.
+`5003` then answered `1F` — 19200 — on a port the host had opened at
+115200, **on the board**. A register whose answer depends on which of two
+things spoke last is worth less than one that always answers the question
+it exists to answer.
 
 `monitor_cynthion` then puts that rate on **ball C11** as real 8N1,
 through [`uart_baud_div`](../../ip/uart). Everything the processor prints

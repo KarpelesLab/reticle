@@ -900,7 +900,8 @@ fn the_whole_session_matches_the_one_a_real_monitor_gives() {
     // continuing one, a one-byte deposit, a deposit over a byte already
     // deposited, a two-byte deposit, a nine-byte deposit crossing a row
     // boundary, a bare `:` continuing one, two lines that are not lines,
-    // a backspace and an escape.
+    // a backspace, an escape, and a bare `:` after a *range*, which does
+    // not continue it.
     //
     // What is *not* here is `R`, and that is not laziness: the two
     // machines have different memory maps, so the program an `R` would run
@@ -908,7 +909,7 @@ fn the_whole_session_matches_the_one_a_real_monitor_gives() {
     // programs' output proves nothing about either monitor.
     // `the_monitor_runs_what_was_deposited` covers `R` against this
     // machine instead.
-    let script: [(&str, &str); 20] = [
+    let script: [(&str, &str); 23] = [
         // A one-byte deposit, and the thing about it that looks like a
         // bug and is not: it prints `<addr>: <what was there>` first.
         // That is the address item being *examined* -- the mode is still
@@ -963,6 +964,18 @@ fn the_whole_session_matches_the_one_a_real_monitor_gives() {
         // Escape, echoed before it is acted on, then a fresh prompt and
         // a line that works.
         ("0400\u{1b}0401", "0400\u{1b}\\|0401||0401: 02|"),
+        // **An examine moves the deposit pointer.** A bare `:` after a
+        // range does not carry on from the end of the range -- it writes
+        // where the range *started*, because the address item that began
+        // it set both pointers. It is the least obvious thing in here and
+        // it was found by walking off it: a session that deposited a
+        // program, dumped it and then typed a bare `:` overwrote the
+        // program's first byte and `R` ran a `BRK`. The original does the
+        // same, which is the only reason this is a line in a transcript
+        // and not a bug report.
+        ("0300.0303", "0300.0303||0300: AA BB CC DD|"),
+        (": EE", ": EE||"),
+        ("0300.0303", "0300.0303||0300: EE BB CC DD|"),
     ];
     for (line, want) in script {
         assert_eq!(machine.command(line), want, "`{line}`");
@@ -992,8 +1005,8 @@ fn the_acia_reports_the_rate_the_host_set() {
         .to_u64()
         .expect("CONTROL is driven");
     assert_eq!(
-        before, 0x1F,
-        "the monitor programmes CONTROL before any host has spoken, and wins"
+        before, 0x1E,
+        "the monitor wrote $1F; bits 7..5 are its own and bits 4..0 are the host's 9600"
     );
 
     // Each of these is a change from the one before it, because that is
@@ -1033,7 +1046,7 @@ fn the_acia_reports_the_rate_the_host_set() {
         assert_eq!(
             control & 0xE0,
             0x00,
-            "rate {rate}: the word length and stop bits the monitor wrote are untouched"
+            "rate {rate}: the word length and stop bits are the monitor's, and it wrote zero"
         );
         assert_eq!(
             machine.sim.get(machine.acia_rate).to_u64(),
@@ -1041,9 +1054,10 @@ fn the_acia_reports_the_rate_the_host_set() {
             "rate {rate}: what the ACIA says it is programmed to"
         );
 
-        // And the processor reads it back over its own bus, which is the
-        // whole point of putting the host's rate in a register rather
-        // than in a wire nothing inside the machine can see.
+        // And the processor reads it back over its own bus -- the whole
+        // point of putting the host's rate in a register rather than in a
+        // wire nothing inside the machine can see. It reads the host's
+        // answer and not its own, because bits 4..0 are the host's.
         assert_eq!(
             machine.command("5003"),
             format!("5003||5003: {control:02X}|"),

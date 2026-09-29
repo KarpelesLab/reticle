@@ -13625,12 +13625,14 @@ fn a_6502_monitor_answers_through_the_transceiver_that_is_on_the_board() {
     );
 
     // The monitor wrote $1F into the ACIA's CONTROL register on its way
-    // up, and nothing has contradicted it: the host has not changed the
-    // rate since the machine started.
+    // up. Bits 7..5 of what comes back are its own -- eight data bits and
+    // one stop bit -- and bits 4..0 are the host's, which is 9600 and its
+    // code 14, because those five bits are where the bit clock comes from
+    // and on this board that is not the processor's to decide.
     assert_eq!(
         host.port("acia_control"),
-        0x1F,
-        "what the monitor programmed, untouched"
+        0x1E,
+        "the monitor's framing bits and the host's rate"
     );
 
     // Now a host opens the port at 115200 — which is what a terminal
