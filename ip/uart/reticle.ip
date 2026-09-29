@@ -6,7 +6,7 @@
 name uart
 version 1.0.0
 license MIT
-description "8N1 UART transmitter and receiver with a ready/valid interface and a parameterised baud divisor"
+description "8N1 UART transmitter and receiver with a ready/valid interface and a run-time or parameterised baud divisor"
 
 top uart
 target ice40
