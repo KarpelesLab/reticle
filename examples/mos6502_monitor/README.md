@@ -739,9 +739,11 @@ byte order is visible rather than overwritten.
 ```text
 FE00^M^MFE00: A2^M
 FFFA.FFFF^M^MFFFA: 00 FE 00 FE 00 FE^M
+HELLO^M\^M
+FE09^H0^M^MFE00: A2^M
+5003^M^M5003: 00^M
 0300: AD 01 50 29 10 F0 F9 A9 2A 8D 00 50 4C 00 FE^M^M0300: 00^M
 0300.030E^M^M0300: AD 01 50 29 10 F0 F9 A9^M0308: 2A 8D 00 50 4C 00 FE^M
-5003^M^M5003: 10^M
 0300R^M^M0300: AD*\^M
 ```
 
@@ -752,16 +754,22 @@ Line by line, because every one of them is a claim:
   made of.
 * **`FFFA.FFFF`** answers six bytes on one row: `00 FE` three times, the
   three vectors all pointing at `$FE00`.
-* **`0300: AD 01 50 ...`** deposits fifteen bytes, and prints `0300: 00`
+* **`0300: AD 01 50 …`** deposits fifteen bytes, and prints `0300: 00`
   first — the byte that *was* there, which is the quirk this interface
   has, on the part.
 * **`0300.030E`** reads them back, broken into rows of eight at `$0308`
   and nowhere else.
-* **`5003`** answers `10`. That is the ACIA's CONTROL register: the
-  monitor wrote `$1F` on its way up, and the host's 115200 — a rate the
-  65C51's four baud bits cannot name — replaced them with code 0,
-  "clocked from outside this part". **The rate a host set is a number the
-  6502 read.**
+* **`HELLO`** answers `\`, and nothing else: a line that is not a line is
+  refused rather than guessed at.
+* **`FE09<BS>0`** answers `FE00: A2`. The backspace took the `9` off and
+  the `0` replaced it, so what was examined is `$FE00` — the echo shows
+  the whole exchange including the backspace the terminal sent.
+* **`5003`** answers `00`. That is the ACIA's CONTROL register read over
+  the 6502's own bus: bits 7–5 are the eight-data-bits, one-stop-bit the
+  monitor wrote, and bits 4–0 are the host's — 115200 is a rate the
+  65C51's four baud bits cannot name, so they read as the 16× external
+  clock, which is the literal truth for a USB pipe. **The rate a host set
+  is a number the 6502 read.**
 * **`0300R`** prints `0300: AD`, the byte at the run address, then jumps
   there. The fifteen bytes are `LDA $5001 / AND #$10 / BEQ / LDA #$2A /
   STA $5000 / JMP $FE00` — poll the transmitter, print `*`, restart the
@@ -779,23 +787,33 @@ in this repository could have got right by accident.
 | 9600 | `1E` | generator | 14 | 9600 |
 | 19200 | `1F` | generator | 15 | 19200 |
 | 1200 | `18` | generator | 8 | 1200 |
-| 115200 | `10` | generator | 0 | *16× external clock* |
+| 115200 | `00` | external | 0 | *16× external clock* |
 | 4800 | `1C` | generator | 12 | 4800 |
-| 230400 | `10` | generator | 0 | *16× external clock* |
-| 115200 | `10` | generator | 0 | *16× external clock* |
+| 230400 | `00` | external | 0 | *16× external clock* |
+| 115200 | `00` | external | 0 | *16× external clock* |
 
 Bits 7–5 are `000` throughout — eight data bits, one stop bit — which is
 what the monitor programmed and the class layer does not touch.
 
-**The four `10`s in that table are the reason bit 4 moved.** They were
-measured on the build that wrote only bits 3–0, and `$10` is the baud
-generator selected with a rate field that says the clock comes from
-outside instead: two halves of one field disagreeing. The rows above are
-left as they were measured rather than quietly reprinted, because the
-measurement is what found it; on the build this example now describes the
-same four rows read `00`, and
-`the_acia_reports_the_rate_the_host_set` asserts both halves at six
+**Those three `00`s were `10` on an earlier build, and that is how this
+was found.** `$10` is the baud generator selected with a rate field that
+says the clock comes from outside instead: two halves of one field
+disagreeing, and a state a W65C51N data sheet has no meaning for. It was
+reported as reading like "no rate set" rather than a rate, and that
+reading was right. The wrong value is left written here rather than
+quietly reprinted away, because the path to the answer is the useful part:
+the fix is that bit 4 moves with the rate field, and
+`the_acia_reports_the_rate_the_host_set` now asserts both halves at six
 rates.
+
+Fixing it exposed a second thing the part had to show, because the two
+fixes in this example interacted. With the load on an *edge* of the host's
+rate and a last-writer-wins rule, holding the 6502 in reset until
+`configured` means the host's rate always arrives while the machine is
+still in reset — so the monitor's `sta ACIAX` is always second and the
+processor always wins. `5003` answered `1F` (19200) on a port opened at
+115200. Neither simulation nor either fix on its own would have shown
+that; the board did.
 
 ### The router's one sore point, which is worth knowing before you change this
 
