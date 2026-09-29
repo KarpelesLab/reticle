@@ -893,12 +893,16 @@ is the part that matters:
   **The divisor is latched once per character, not read every bit**, and
   that is a measurement rather than a preference. Comparing the bit
   counter against a run-time value needs a sixteen-bit magnitude
-  comparison inside the loop: it cost 109 more lookup tables and took
-  `uart`'s logic depth from 6 to 19 in the footprint table below, and it
-  bought nothing, because a rate that changes mid-character costs that
-  character either way. Latching it makes the loop a sixteen-bit equality
-  against a register, and gives the better semantics too — a character in
-  flight keeps the rate it started at.
+  comparison inside the loop, and `uart` came out at 229 `LUT4` and a
+  logic depth of **19** that way — against 120 and **6** before the port
+  existed. Latching the limit makes the loop a sixteen-bit *equality*
+  against a register: 215 `LUT4` at depth **8**, in the table below. So
+  the run-time divisor costs about 95 lookup tables and two levels of
+  depth, and the magnitude comparison would have bought eleven more
+  levels and nothing else — a rate that changes mid-character costs that
+  character either way. Latching also gives the better semantics: a
+  character in flight keeps the rate it started at, so a rate change can
+  never corrupt a byte.
 - **`spi_master`** — modes 0 and 3, with a slave model that samples
   `mosi` on the rising edge and presents `miso` on the falling one, so
   the bits are checked where a real slave would look at them; `cs_n` is
@@ -1467,10 +1471,10 @@ exactly what this table is for.
 | `fifo_async` | `fifo_async` | WIDTH=8, DEPTH=16 | LUT6 | 10 x dff, 37 x lut, 1 x memory 16x8, 1 x memrd, 1 x memwr | 3 |
 | `fifo_async` | `fifo_async` | WIDTH=8, DEPTH=16 | iCE40 HX1K | 8 x SB_CARRY, 128 x SB_DFFE, 41 x SB_DFFR, 1 x SB_DFFS, 2 x SB_GB, 24 x SB_IO, 298 x SB_LUT4 | 4 |
 | `fifo_async` | `fifo_async` | WIDTH=8, DEPTH=16 | ECP5 45F | 2 x DCCA, 41 x LUT4, 2 x TRELLIS_DPR16X4, 42 x TRELLIS_FF, 24 x TRELLIS_IO | 4 |
-| `uart` | `uart` | CLK_DIV=104 | LUT4 | 13 x dff, 228 x lut | 19 |
-| `uart` | `uart` | CLK_DIV=104 | LUT6 | 13 x dff, 194 x lut | 15 |
-| `uart` | `uart` | CLK_DIV=104 | iCE40 HX1K | 33 x SB_CARRY, 26 x SB_DFFER, 10 x SB_DFFES, 34 x SB_DFFR, 2 x SB_DFFS, 1 x SB_GB, 40 x SB_IO, 213 x SB_LUT4 | 19 |
-| `uart` | `uart` | CLK_DIV=104 | ECP5 45F | 1 x DCCA, 229 x LUT4, 72 x TRELLIS_FF, 40 x TRELLIS_IO | 19 |
+| `uart` | `uart` | CLK_DIV=104 | LUT4 | 16 x dff, 213 x lut | 8 |
+| `uart` | `uart` | CLK_DIV=104 | LUT6 | 16 x dff, 187 x lut | 6 |
+| `uart` | `uart` | CLK_DIV=104 | iCE40 HX1K | 33 x SB_CARRY, 60 x SB_DFFER, 24 x SB_DFFES, 34 x SB_DFFR, 2 x SB_DFFS, 1 x SB_GB, 40 x SB_IO, 247 x SB_LUT4 | 8 |
+| `uart` | `uart` | CLK_DIV=104 | ECP5 45F | 1 x DCCA, 215 x LUT4, 120 x TRELLIS_FF, 40 x TRELLIS_IO | 8 |
 | `uart` | `uart_baud_div` | (defaults) | LUT4 | 9 x dff, 282 x lut | 23 |
 | `uart` | `uart_baud_div` | (defaults) | LUT6 | 9 x dff, 235 x lut | 17 |
 | `uart` | `uart_baud_div` | (defaults) | iCE40 HX1K | 35 x SB_CARRY, 181 x SB_DFFER, 3 x SB_DFFES, 1 x SB_GB, 52 x SB_IO, 263 x SB_LUT4 | 23 |

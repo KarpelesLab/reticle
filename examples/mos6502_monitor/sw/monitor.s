@@ -107,13 +107,15 @@
 ; WHAT IS WHERE, AND WHY IT IS WRITTEN THIS WAY
 ; ===================================================================
 ;
-; **This is 274 bytes and the interface it reproduces was 256.** The
-; target was one page, because the ROM on this part is lookup tables and
-; the original fits one for a version of the same reason; it did not fit,
-; it was measured, and the two pages it takes are what README.md reports
-; the cost of. Three of those extra bytes are a deliberate difference —
-; `echo` polls the transmitter where the original spins a delay loop —
-; and the rest is the price of writing a parser that can be read.
+; **This is 266 bytes of code and six of vectors, and the interface it
+; reproduces fits 256 in all.** The target was one page, because the ROM
+; on this part is lookup tables and the original fits one for a version
+; of the same reason; it did not fit, it was measured, and README.md
+; reports what the second page costs — 505 lookup tables for 512 bytes,
+; one a byte, so about 250 of the part's 12 144 for the page that was not
+; needed. Some of the difference is deliberate: `echo` polls the
+; transmitter where the original stores a byte and spins a delay loop.
+; The rest is the price of writing a parser that can be read.
 ;
 ; Five things below are shorter than they would otherwise be, and each is
 ; marked where it happens:

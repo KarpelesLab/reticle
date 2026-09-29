@@ -29,9 +29,10 @@
 //   * **The ROM window is 32 KiB and only its top two pages are built.**
 //     $FE00-$FFFF answers and $8000-$FDFF reads zero. A ROM on this part
 //     is lookup tables — there is no block RAM in this flow — so a 32 KiB
-//     one is not affordable and 512 bytes is. The monitor is 274 bytes
-//     where the interface it reproduces was 256; README.md reports what
-//     the second page cost and why the first one was not enough.
+//     one is not affordable and 512 bytes is — 505 `LUT4`, measured, one
+//     a byte. The monitor is 266 bytes of code and six of vectors where
+//     the interface it reproduces fits 256 in all; README.md reports
+//     what the second page cost and why the first was not enough.
 //   * **There is no timer at $6000.** The board has a 65C22 there and
 //     nothing in this machine touches it, so the window reads zero.
 //

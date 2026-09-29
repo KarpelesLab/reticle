@@ -25,6 +25,7 @@ device ecp5-12f-CABGA256
 source rtl/monitor_rom.v
 source rtl/monitor_acia.v
 source rtl/monitor_machine.v
+source rtl/monitor_ulpi.v
 source rtl/monitor_cynthion.v
 constraints board/cynthion.rcf
 testbench tb/monitor_tb.v

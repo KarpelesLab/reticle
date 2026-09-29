@@ -30,13 +30,17 @@
 //   next character — which is the only definition under which a rate
 //   change never corrupts a byte.
 //
-//   Reading it once per character is also what keeps it cheap. Comparing
-//   a counter against a run-time value every bit needs a sixteen-bit
-//   magnitude comparison in the loop, and it cost 109 more lookup tables
-//   and took the block's logic depth from 6 to 19 — measured, in
-//   `docs/ip-library.md`'s footprint table, before this comment was
-//   written. Latching the limit makes the loop a sixteen-bit *equality*
-//   against a register, which is a four-deep AND tree.
+//   Reading it once per character is also what keeps it cheap, and the
+//   numbers are measured rather than argued. Comparing the bit counter
+//   against a run-time value *every bit* needs a sixteen-bit magnitude
+//   comparison inside the loop: `uart` came out at 229 `LUT4` and a logic
+//   depth of **19** that way, against 120 and **6** before the port
+//   existed at all. Latching the limit makes the loop a sixteen-bit
+//   *equality* against a register, and `uart` is 215 `LUT4` at depth
+//   **8** — so the whole run-time divisor costs about 95 lookup tables
+//   and two levels, and a magnitude comparison would have cost eleven
+//   more levels for nothing. `docs/ip-library.md`'s footprint table is
+//   where those four numbers are.
 module uart_tx #(
     // Clock cycles per bit when `div` does not give one. At least four.
     parameter CLK_DIV = 16

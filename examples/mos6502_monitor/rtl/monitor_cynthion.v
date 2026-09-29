@@ -121,26 +121,29 @@ module monitor_cynthion #(
     assign ulpi_data = data_oe ? data_o : 8'bz;
 
     // -----------------------------------------------------------------
-    // The USB serial port
+    // The USB serial port, and the computer behind it
+    //
+    // One module, because that is the piece `tests/ip_library.rs` drives
+    // through its transceiver model — the whole machine, through
+    // `usb_device_ulpi`'s link layer, through a model of the part that
+    // is on this board including its late LineState. What is left here
+    // is the three-state buffers, the reset, the LEDs and the waveform.
     // -----------------------------------------------------------------
-    wire       configured;
-    wire [7:0] out_data;
-    wire       out_valid, out_ready;
-    wire [7:0] in_data;
-    wire       in_valid, in_ready, in_commit;
-    wire [31:0] host_rate;
+    wire        configured;
+    wire [31:0] acia_rate;
+    wire [7:0]  print_data;
+    wire        print_valid;
+    wire        out_taken;
 
     // DCD and DSR asserted, everything else clear: this port is always
     // connected and never breaks a frame (PSTN 1.2 6.5.4 Table 31).
     wire [6:0] serial_state = 7'b000_0011;
 
-    usb_cdc_acm_ulpi #(
-        .TURNAROUND  (TURNAROUND),
-        // The Microchip USB3343 register that undoes this board's
-        // crossed DP/DM pair. The board's register, not ULPI's.
-        .VENDOR_ADDR (6'h39),
-        .VENDOR_DATA (8'h06)
-    ) u_acm (
+    monitor_ulpi #(
+        .TURNAROUND (TURNAROUND),
+        .CPU_DIV    (CPU_DIV),
+        .RAM_BYTES  (RAM_BYTES)
+    ) u_top (
         .clk60        (clk),
         .rst_n        (reset_done),
         .ulpi_data_i  (ulpi_data),
@@ -155,48 +158,12 @@ module monitor_cynthion #(
         .usb_reset    (),
         // Left open: `configured` on LED 1 cannot be true without it.
         .phy_ready    (),
-        .out_data     (out_data),
-        .out_valid    (out_valid),
-        .out_last     (),
-        .out_ready    (out_ready),
-        .in_data      (in_data),
-        .in_valid     (in_valid),
-        .in_ready     (in_ready),
-        .in_commit    (in_commit),
-        .baud         (host_rate),
-        .char_format  (),
-        .parity       (),
-        .data_bits    (),
-        .dtr          (),
-        .rts          (),
-        .serial_state (serial_state)
-    );
-
-    // -----------------------------------------------------------------
-    // The computer
-    // -----------------------------------------------------------------
-    wire [31:0] acia_rate;
-    wire [7:0]  print_data;
-    wire        print_valid;
-
-    monitor_machine #(
-        .CPU_DIV   (CPU_DIV),
-        .RAM_BYTES (RAM_BYTES)
-    ) u_machine (
-        .clk          (clk),
-        .rst_n        (reset_done),
-        .out_data     (out_data),
-        .out_valid    (out_valid),
-        .out_ready    (out_ready),
-        .in_data      (in_data),
-        .in_valid     (in_valid),
-        .in_ready     (in_ready),
-        .in_commit    (in_commit),
-        .host_rate    (host_rate),
+        .serial_state (serial_state),
         .acia_rate    (acia_rate),
         .acia_control (),
         .print_data   (print_data),
-        .print_valid  (print_valid)
+        .print_valid  (print_valid),
+        .key_taken    (out_taken)
     );
 
     // -----------------------------------------------------------------
@@ -277,7 +244,7 @@ module monitor_cynthion #(
     always @(posedge clk) begin
         saw_configured <= saw_configured | configured;
         saw_print      <= saw_print | print_valid;
-        saw_key        <= saw_key | (out_valid & out_ready);
+        saw_key        <= saw_key | out_taken;
     end
 
     // Active low: a pin driven low lights one.

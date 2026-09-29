@@ -1875,7 +1875,10 @@ fn uart_baud_div_computes_the_divisor_for_the_rates_a_host_asks_for() {
     // The refusals, each for its own reason.
     for (want, why) in [
         (1u64, "a divisor of 60 000 000 does not fit sixteen bits"),
-        (915u64, "a divisor of 65 574 does not fit sixteen bits, by 39"),
+        (
+            915u64,
+            "a divisor of 65 574 does not fit sixteen bits, by 39",
+        ),
         (
             3_000_000u64,
             "a divisor of 20 is under DIV_MIN: half a clock in 20 is 2.5%",
@@ -8983,6 +8986,19 @@ trait UsbPair {
     /// the block does not have, which is what a test driving the wrong port
     /// deserves.
     fn set_port(&mut self, name: &str, value: u64, bits: u32);
+
+    /// Fills one of the design's memories with zeros, by hierarchical
+    /// name, and says whether it found one.
+    ///
+    /// A distributed RAM cannot be given initial contents —
+    /// `fpga::primitives` declines to lower a memory that has any — so in
+    /// simulation every word of one is `x` until something writes it,
+    /// while a real part comes up holding whatever its cells held, which
+    /// is not `x`. A test whose device *reads* its own RAM has to say
+    /// which of those two it is modelling, and this is how it says zero.
+    fn clear_memory(&mut self, _path: &str) -> bool {
+        false
+    }
 }
 
 /// The data endpoint's byte interface, and whatever stands in for the logic
@@ -9013,6 +9029,12 @@ struct DataEp {
     in_valid: NetHandle,
     in_ready: NetHandle,
     in_commit: NetHandle,
+    /// Whether the design brings this interface out to its top at all.
+    ///
+    /// False for a design whose logic above the endpoint is inside the
+    /// module — a whole computer, say — and then nothing here drives or
+    /// reads anything. The bus is still the bus.
+    present: bool,
     loopback: bool,
     /// Whether the logic above the endpoint is taking the bytes at all.
     /// False is a consumer that has stopped, which is what makes the
@@ -9030,10 +9052,39 @@ struct DataEp {
 }
 
 impl DataEp {
+    /// The byte interface of a design that brings it out to its top.
+    ///
+    /// `present` is false when the design does not — when the thing above
+    /// the endpoint is **inside** the module rather than in the test, as
+    /// it is for a design that contains a whole computer. Then nothing
+    /// here drives or reads anything, every handle is a stand-in, and the
+    /// bus is still the bus: `UsbHost` reaches the device through the
+    /// pair and not through this.
     fn new(sim: &Simulator<'_>, loopback: bool) -> DataEp {
+        let path = format!("{}.out_data", sim.top_name());
+        let Some(out_data) = sim.net(&path) else {
+            let stand_in = top_net(sim, "rst_n");
+            return DataEp {
+                out_data: stand_in,
+                out_valid: stand_in,
+                out_last: stand_in,
+                out_ready: stand_in,
+                in_data: stand_in,
+                in_valid: stand_in,
+                in_ready: stand_in,
+                in_commit: stand_in,
+                present: false,
+                loopback,
+                take: true,
+                got: Vec::new(),
+                partial: Vec::new(),
+                give: Vec::new(),
+                at: 0,
+            };
+        };
         let pin = |n: &str| top_net(sim, n);
         DataEp {
-            out_data: pin("out_data"),
+            out_data,
             out_valid: pin("out_valid"),
             out_last: pin("out_last"),
             out_ready: pin("out_ready"),
@@ -9041,6 +9092,7 @@ impl DataEp {
             in_valid: pin("in_valid"),
             in_ready: pin("in_ready"),
             in_commit: pin("in_commit"),
+            present: true,
             loopback,
             take: true,
             got: Vec::new(),
@@ -9053,6 +9105,9 @@ impl DataEp {
     /// Every input of the interface low, which is what a design that only
     /// enumerates leaves them at.
     fn quiet(&self, sim: &mut Simulator<'_>) {
+        if !self.present {
+            return;
+        }
         sim.set(self.out_ready, bit(false));
         sim.set(self.in_valid, bit(false));
         sim.set(self.in_data, word(8, 0));
@@ -9063,6 +9118,9 @@ impl DataEp {
 /// One cycle of whatever is above the data endpoint, driven before the clock
 /// edge the handshakes complete on.
 fn step_data(sim: &mut Simulator<'_>, ep: &mut DataEp) {
+    if !ep.present {
+        return;
+    }
     let out_valid = high(sim, ep.out_valid);
     let out_last = high(sim, ep.out_last);
     // Only while `out_valid`. A ready/valid data bus says nothing about its
@@ -9431,6 +9489,10 @@ impl<P: UsbPair> UsbHost<P> {
     /// Drive one of the block's own top-level inputs, by name.
     fn set_port(&mut self, name: &str, value: u64, bits: u32) {
         self.pair.set_port(name, value, bits);
+    }
+
+    fn clear_memory(&mut self, path: &str) -> bool {
+        self.pair.clear_memory(path)
     }
 
     /// A control transfer whose data stage goes **host to device**: SETUP,
@@ -10127,6 +10189,27 @@ impl BulkPipe {
             }
         }
         panic!("the device NAKed all sixty-four attempts at an OUT");
+    }
+
+    /// One packet from the device, or nothing if it has nothing to say.
+    ///
+    /// [`BulkPipe::read`] is for an endpoint that owes an answer and
+    /// whose answer is late; this is for one that may have nothing, which
+    /// is what a serial port waiting for a keystroke is.
+    fn read_or_nothing<P: UsbPair>(&mut self, host: &mut UsbHost<P>, addr: u8) -> Vec<u8> {
+        match host.bulk_in(addr, self.endp) {
+            UsbReply::Data(pid, payload) => {
+                assert_eq!(pid, self.in_pid, "the IN endpoint's data toggle");
+                host.ack();
+                self.in_pid = other_toggle(self.in_pid);
+                payload
+            }
+            UsbReply::Handshake(USB_NAK) => {
+                self.naks += 1;
+                Vec::new()
+            }
+            other => panic!("an IN was answered {other:?}"),
+        }
     }
 
     /// One packet from the device, repeated while it NAKs, acknowledged.
@@ -11847,9 +11930,25 @@ impl UsbPair for UlpiPair<'_> {
         self.sim
             .set(self.data_in, word(8, u64::from(self.phy.data)));
         self.sim.run_for(HALF);
+        let oe = high(&self.sim, self.data_oe);
         let link = LinkOut {
-            oe: high(&self.sim, self.data_oe),
-            data: octet(get_u64(&self.sim, self.data_out)),
+            oe,
+            // Only while the Link drives. ULPI's data lines are the
+            // Link's for exactly as long as `ulpi_data_oe` is high, and
+            // what they carry otherwise is not a value it claims — the
+            // same argument `step_data` makes about `out_data` one
+            // interface up. On a design whose transmit buffer is a
+            // distributed RAM they are `x` until something has filled
+            // one, because a distributed RAM cannot be given initial
+            // contents; reading them anyway stopped a run that the part
+            // itself completes, since a real RAM comes up holding
+            // something rather than `x`. Every use of `data` below is
+            // inside a state the Link only reaches while driving.
+            data: if oe {
+                octet(get_u64(&self.sim, self.data_out))
+            } else {
+                0
+            },
             stp: high(&self.sim, self.stp),
             rst_n: high(&self.sim, self.rst_out),
         };
@@ -11902,6 +12001,17 @@ impl UsbPair for UlpiPair<'_> {
     fn set_port(&mut self, name: &str, value: u64, bits: u32) {
         let net = top_net(&self.sim, name);
         self.sim.set(net, word(bits, value));
+    }
+
+    fn clear_memory(&mut self, path: &str) -> bool {
+        let full = format!("{}.{path}", self.sim.top_name());
+        let Some(mem) = self.sim.memory(&full) else {
+            return false;
+        };
+        for index in 0..self.sim.mem_len(mem) as u64 {
+            self.sim.set_mem(mem, index, word(8, 0));
+        }
+        true
     }
 }
 
@@ -13238,6 +13348,262 @@ fn usb_cdc_acm_ulpi_loops_the_serial_port_back_on_itself() {
     );
     host.idle(10);
     host.assert_clean();
+}
+
+/// `examples/mos6502_monitor`'s USB-facing top, when this copy of the
+/// crate has the example.
+///
+/// Built here rather than in `tests/mos6502_monitor.rs` because the
+/// transceiver model and its harness live in this file, and a model of a
+/// part that misbehaves the way the one on the board misbehaves is worth
+/// more than a second copy of it.
+///
+/// The parameters make the run tractable: one clock per bus cycle
+/// instead of fifty-nine, and a flush timeout of 512 clocks instead of
+/// 16384. Neither changes what the machine *does* — the bus is the same
+/// bus at either divisor, and the timeout only decides when a partly
+/// filled packet goes.
+fn monitor_ulpi_design() -> Option<Design> {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("examples/mos6502_monitor/rtl");
+    if !root.join("monitor_ulpi.v").is_file() {
+        println!("skipping: examples/mos6502_monitor is not in this copy of the crate");
+        return None;
+    }
+
+    let mut sources: Vec<(String, String)> = Vec::new();
+    let mut seen = BTreeSet::new();
+    gather("usb_cdc_acm", &mut seen, &mut sources);
+    gather("mos6502", &mut seen, &mut sources);
+    for name in [
+        "monitor_rom.v",
+        "monitor_acia.v",
+        "monitor_machine.v",
+        "monitor_ulpi.v",
+    ] {
+        let path = format!("examples/mos6502_monitor/rtl/{name}");
+        let text =
+            std::fs::read_to_string(root.join(name)).unwrap_or_else(|e| panic!("{path}: {e}"));
+        sources.push((path, text));
+    }
+
+    let mut map = SourceMap::new();
+    let mut diags = Diagnostics::new();
+    let mut files = Vec::with_capacity(sources.len());
+    for (path, text) in &sources {
+        let id = map.add(path.clone(), text).expect("source fits");
+        files.push(parse_source(
+            &mut map,
+            id,
+            Dialect::Verilog2005,
+            &mut NoIncludes,
+            &mut diags,
+        ));
+    }
+    assert!(
+        !diags.has_errors(),
+        "the monitor does not parse:\n{}",
+        diags.render(&map)
+    );
+
+    let options = ElabOptions::new(Dialect::Verilog2005)
+        .with_top("monitor_ulpi")
+        .with_param("CPU_DIV", "1")
+        .with_param("FLUSH_CLKS", "512")
+        // The board writes a Microchip USB3343 vendor register to undo a
+        // crossed DP/DM pair, and `UlpiPhy` models ULPI's own registers
+        // and not that part's extras — so it answers zero to a read of
+        // one and the Link retries for ever. The board's register is the
+        // board's; every other `usb_cdc_acm_ulpi` test leaves these at
+        // their defaults for the same reason.
+        .with_param("VENDOR_ADDR", "6'h00")
+        .with_param("VENDOR_DATA", "8'h00");
+    let refs: Vec<_> = files.iter().collect();
+    let design = elaborate(&refs, &options, &mut diags);
+    assert!(
+        !diags.has_errors(),
+        "monitor_ulpi does not elaborate:\n{}",
+        diags.render(&map)
+    );
+    Some(design.expect("monitor_ulpi produced a design"))
+}
+
+/// Reads whatever the device has, giving it time to produce it.
+///
+/// A serial port that has nothing to say NAKs, and a 6502 that has been
+/// asked a question takes thousands of clocks to answer, so this idles
+/// first and then reads until two consecutive polls come back empty.
+/// The budget is in bit times and never in seconds.
+fn monitor_answer<P: UsbPair>(host: &mut UsbHost<P>, pipe: &mut BulkPipe, addr: u8) -> Vec<u8> {
+    let mut out = Vec::new();
+    let mut quiet = 0;
+    // The first wait is the long one: the monitor takes about four
+    // thousand clocks to answer anything, and `FLUSH_CLKS` is five
+    // hundred more before a partly filled packet goes.
+    host.idle(1400);
+    for _ in 0..40 {
+        host.idle(400);
+        let packet = pipe.read_or_nothing(host, addr);
+        if packet.is_empty() {
+            quiet += 1;
+            if quiet == 2 && !out.is_empty() {
+                break;
+            }
+        } else {
+            quiet = 0;
+            out.extend_from_slice(&packet);
+        }
+    }
+    out
+}
+
+/// The whole machine, through the transceiver that is on the board.
+///
+/// This is `examples/mos6502_monitor` with nothing left out: a 6502, an
+/// ACIA, `usb_cdc_acm`'s class layer, `usb_device_ulpi`'s link layer, and
+/// the model of a Microchip USB3343 that **reports LineState late** — the
+/// behaviour ULPI 1.1 §3.8.1.3 forbids in so many words and the part on
+/// this board has anyway. A host enumerates it, reads the prompt the
+/// processor printed, types at it, and reads the answer.
+///
+/// `tests/mos6502_monitor.rs` proves the monitor, a character at a time,
+/// with the USB stack taken out of the way. This proves there is a way
+/// through: that a byte a host writes to endpoint 1 reaches `$5000`, and
+/// that a byte the 6502 stores at `$5000` comes back on endpoint `81h`.
+///
+/// **Reading the IN endpoint is not optional here, and that is a fact
+/// about the machine.** `usb_bulk_ep` holds `in_ready` low while a
+/// packet is armed; the ACIA's TDRE is that signal; and the monitor
+/// polls TDRE before every character. So a host that never polls IN
+/// stops the 6502 inside `echo` after one byte, and the OUT endpoint
+/// then NAKs for ever because nothing is draining it. That is correct
+/// behaviour in both blocks and it is what a serial port is — but it
+/// means this test cannot check one direction at a time.
+///
+/// What it would not catch: anything about the board that is not in the
+/// model — an unrouted wire, a pad that does not drive, a timing path
+/// that does not close. `CLAUDE.md` says why that is not optional, and
+/// `examples/mos6502_monitor/README.md` says what was done on the part
+/// instead, with the session it was done from.
+#[test]
+fn a_6502_monitor_answers_through_the_transceiver_that_is_on_the_board() {
+    let Some(design) = monitor_ulpi_design() else {
+        return;
+    };
+    let phy = UlpiPhy::new(ULPI_CPB).reporting_stale_line();
+    let mut host = UsbHost::new(UlpiPair::with_phy_data(&design, phy, false), 0);
+    host.set_port("serial_state", CDC_LINES_UP, 7);
+    // The machine's RAM, which it reads as well as writes: a deposit
+    // prints the byte that *was* at the address, and this says what was
+    // there. `clear_memory`'s own comment has the argument; the short
+    // form is that `x` is not what a part comes up holding.
+    assert!(
+        host.clear_memory("u_machine.ram"),
+        "the machine has a RAM and this is where it is"
+    );
+
+    // A whole enumeration. The descriptors are `usb_cdc_acm`'s own, built
+    // forwards from CDC 1.1 and PSTN 1.2 by `expected_cdc_configuration`,
+    // so a machine wrapped around that block still looks to a host
+    // exactly like a serial port.
+    configure_for(
+        &mut host,
+        9,
+        &expected_cdc_device_descriptor(),
+        &expected_cdc_configuration(),
+    );
+
+    let mut pipe = BulkPipe::new(CDC_DATA_ENDP);
+
+    // The prompt. The 6502 is held in reset until `configured`, so it
+    // starts when the enumeration finishes and prints this into a live
+    // endpoint rather than into one a bus reset is about to clear.
+    assert_eq!(
+        String::from_utf8_lossy(&monitor_answer(&mut host, &mut pipe, 9)),
+        "\\\r",
+        "the backslash and the carriage return, out of a USB endpoint"
+    );
+
+    // Type at it. `FE00` is the ROM's own first byte, the `LDX #$FF` the
+    // reset entry begins with.
+    pipe.write(&mut host, 9, b"FE00\r");
+    assert_eq!(
+        String::from_utf8_lossy(&monitor_answer(&mut host, &mut pipe, 9)),
+        "FE00\r\rFE00: A2\r",
+        "the echo, the monitor's own return, the byte, and the next line"
+    );
+
+    // A deposit and a read-back: the byte going into the machine's memory
+    // through the same pipe it came out of.
+    pipe.write(&mut host, 9, b"0300: 5A A5\r");
+    let deposit = monitor_answer(&mut host, &mut pipe, 9);
+    assert!(
+        deposit.starts_with(b"0300: 5A A5\r"),
+        "the deposit was not echoed: {:?}",
+        String::from_utf8_lossy(&deposit)
+    );
+    pipe.write(&mut host, 9, b"0300.0301\r");
+    assert_eq!(
+        String::from_utf8_lossy(&monitor_answer(&mut host, &mut pipe, 9)),
+        "0300.0301\r\r0300: 5A A5\r",
+        "what was deposited came back"
+    );
+
+    // The monitor wrote $1F into the ACIA's CONTROL register on its way
+    // up, and nothing has contradicted it: the host has not changed the
+    // rate since the machine started.
+    assert_eq!(
+        host.port("acia_control"),
+        0x1F,
+        "what the monitor programmed, untouched"
+    );
+
+    // Now a host opens the port at 115200 — which is what a terminal
+    // program does, and which the 65C51's four baud bits **cannot
+    // name**. The class layer writes code 0 into them, which is the data
+    // sheet's own "clocked from outside this part" and the literal truth
+    // for a USB pipe, and leaves the four bits the monitor wrote alone.
+    assert_eq!(
+        host.control_write_data(9, CDC_SET_LINE_CODING, &cdc_line_coding(115_200, 0, 0, 8)),
+        UsbReply::Data(USB_DATA1, Vec::new()),
+        "SET_LINE_CODING"
+    );
+    host.idle(100);
+    assert_eq!(
+        host.port("acia_control"),
+        0x10,
+        "code 0, and $1's top nibble"
+    );
+    assert_eq!(
+        host.port("acia_rate"),
+        115_200,
+        "and the rate the part is programmed to is the host's own"
+    );
+
+    // And the 6502 reads it back over its own bus, which is the whole
+    // point of putting a host's rate in a register rather than in a wire
+    // nothing inside the machine can see.
+    pipe.write(&mut host, 9, b"5003\r");
+    assert_eq!(
+        String::from_utf8_lossy(&monitor_answer(&mut host, &mut pipe, 9)),
+        "5003\r\r5003: 10\r",
+        "the processor read the host's rate out of its own ACIA"
+    );
+
+    // A rate the table does name puts its code back.
+    assert_eq!(
+        host.control_write_data(9, CDC_SET_LINE_CODING, &cdc_line_coding(1200, 0, 0, 8)),
+        UsbReply::Data(USB_DATA1, Vec::new()),
+        "SET_LINE_CODING again"
+    );
+    host.idle(100);
+    pipe.write(&mut host, 9, b"5003\r");
+    assert_eq!(
+        String::from_utf8_lossy(&monitor_answer(&mut host, &mut pipe, 9)),
+        "5003\r\r5003: 18\r",
+        "1200 baud is code 8 on a 65C51"
+    );
+
+    host.idle(10);
 }
 
 /// Everything runs on the one clock, in both wrappers.

@@ -185,6 +185,32 @@ because 22 bytes would not fit.
 
 ## The ACIA, and which bits are real
 
+### Why an ACIA and not a PIA
+
+The 1976 machine this interface comes from has no serial port at all: its
+console is a **6821 PIA** at `$D010`–`$D013`, one port for a keyboard and
+one for a character display, with a key-ready bit and a display-busy bit
+and no notion of speed. That is what a monitor of this shape was written
+against, and it is the obvious thing to build.
+
+It is not what was built, for two reasons and one of them is measured.
+
+* **The machine this memory map comes from uses a 65C51 ACIA**, at
+  `$5000`, and matching the map exactly costs nothing. A 65C02 core here
+  later could then run somebody's own copy of a published ROM without any
+  of it ever entering this repository.
+* **A PIA has nowhere for a baud rate to land.** The other half of this
+  work is making a host's `SET_LINE_CODING` rate real, and a PIA's four
+  registers have no field that could hold one. An ACIA's CONTROL register
+  does, so the rate the host sets is a number the 6502 can read — which
+  is a more honest machine than one where the rate exists only in a wire
+  nothing inside can see.
+
+The cost is stated rather than hidden: **the 65C51's baud field cannot
+express 115200**, and what this design does about that is the next
+section. A PIA would not have had the problem, because it would not have
+had the register.
+
 `rtl/monitor_acia.v` is the W65C51N's four registers from its data sheet,
 with a byte stream on the other side instead of a serial line.
 
@@ -376,6 +402,8 @@ cargo test --all-features --test mos6502_monitor
 | `the_project_resolves_and_elaborates` | the manifest builds from five library packages and four sources, with no black box |
 | `the_machine_synthesises_without_errors_or_latches` | generic synthesis: no error, no warning, no latch |
 | `the_machine_maps_onto_the_ecp5_and_fits_the_part` | the ECP5 flow fits it on an LFE5U-12F, every memory lowered, no `DP16KD` anywhere |
+| `the_rom_is_lookup_tables_and_this_is_what_they_cost` | `monitor_rom` on its own is 505 `LUT4` and no storage at all |
+| `the_testbench_session_comes_out_of_the_simulator` | the same machine driven by `tb/monitor_tb.v`, which is what `reticle sim` runs |
 
 The tests drive `tb/monitor_bench.v` — the machine with its byte
 interface bare — a character at a time from Rust, and compare what comes
@@ -471,8 +499,28 @@ part left.**
 
 The monitor is **266 bytes of code and six of vectors**. The target was
 256, which is what the interface it reproduces manages, and it did not
-fit. What the second page costs is the difference between a 256-entry
-multiplexer tree and a 512-entry one over eight output bits.
+fit.
+
+What the second page costs was measured rather than estimated.
+`the_rom_is_lookup_tables_and_this_is_what_they_cost` maps `monitor_rom`
+on its own:
+
+```text
+monitor_rom: 505 LUT4, depth 6, for 512 bytes
+  which is 1.0 lookup tables a byte
+```
+
+So the page that was not needed is about **250 `LUT4` of the part's
+12 144 — two per cent**, and that is what overrunning by sixteen bytes
+cost. It is also eight times cheaper than the task's arithmetic
+budgeted: eight lookup tables a byte would have made 512 bytes four
+thousand, and the reason it does not is that a ROM is a mux tree over
+*constants*, and the mapper folds sixteen of them into one `LUT4` before
+it starts multiplexing.
+
+The same measurement says what a bigger ROM would cost: 2 KiB would be
+about two thousand `LUT4`, which this design could afford and the task's
+budget said it could not.
 
 Where the extra bytes went, honestly:
 

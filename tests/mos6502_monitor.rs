@@ -174,10 +174,7 @@ fn bench_design(dir: &Path, which: &str) -> Design {
         });
         project.top = Some(which.to_owned());
     });
-    built
-        .elaboration
-        .design
-        .expect("the testbench elaborates")
+    built.elaboration.design.expect("the testbench elaborates")
 }
 
 // ---------------------------------------------------------------------------
@@ -881,8 +878,11 @@ fn the_whole_session_matches_the_one_a_real_monitor_gives() {
         ("0300.0303", "0300.0303||0300: AA BB CC DD|"),
         (".0307", ".0307| 00 00 00 00|"),
         ("0305.0300", "0305.0300||0305: 00|"),
-        ("02FE.0310", "02FE.0310||02FE: 00 00|0300: AA BB CC DD 00 00 00 00|\
-                       0308: 00 00 00 00 00 00 00 00|0310: 00|"),
+        (
+            "02FE.0310",
+            "02FE.0310||02FE: 00 00|0300: AA BB CC DD 00 00 00 00|\
+                       0308: 00 00 00 00 00 00 00 00|0310: 00|",
+        ),
         ("0300 0400", "0300 0400||0300: AA|0400: 00|"),
         ("12345", "12345||2345: 00|"),
     ];
@@ -975,7 +975,10 @@ fn the_acia_reports_the_rate_the_host_set() {
         .get(machine.acia_control)
         .to_u64()
         .expect("CONTROL is driven");
-    assert_eq!(control, 0x10, "a rate of zero is code 0, which is `external`");
+    assert_eq!(
+        control, 0x10,
+        "a rate of zero is code 0, which is `external`"
+    );
 }
 
 #[test]
@@ -1039,7 +1042,7 @@ fn the_project_resolves_and_elaborates() {
     assert_eq!(built.project.name, "mos6502_monitor");
     assert_eq!(built.project.top.as_deref(), Some("monitor_cynthion"));
     assert_eq!(built.project.device.as_deref(), Some(DEVICE));
-    assert_eq!(built.project.sources.len(), 4, "four files in rtl/");
+    assert_eq!(built.project.sources.len(), 5, "five files in rtl/");
     assert_eq!(
         built.project.depends.len(),
         5,
@@ -1206,11 +1209,10 @@ fn the_rom_is_lookup_tables_and_this_is_what_they_cost() {
         &mut diags,
     );
     assert!(!diags.has_errors(), "{}", diags.render(&map));
-    let options =
-        reticle::verilog::ElabOptions::new(reticle::verilog::Dialect::Verilog2005)
-            .with_top("monitor_rom");
-    let mut design = reticle::verilog::elaborate(&[&file], &options, &mut diags)
-        .expect("the ROM elaborates");
+    let options = reticle::verilog::ElabOptions::new(reticle::verilog::Dialect::Verilog2005)
+        .with_top("monitor_rom");
+    let mut design =
+        reticle::verilog::elaborate(&[&file], &options, &mut diags).expect("the ROM elaborates");
     assert!(!diags.has_errors(), "{}", diags.render(&map));
     let top = design.top.expect("a top");
 
@@ -1245,11 +1247,7 @@ fn the_rom_is_lookup_tables_and_this_is_what_they_cost() {
         0,
         "the ROM became a block RAM, and this fabric has no site for one"
     );
-    assert_eq!(
-        flow.count("TRELLIS_FF"),
-        0,
-        "a ROM has nothing to remember"
-    );
+    assert_eq!(flow.count("TRELLIS_FF"), 0, "a ROM has nothing to remember");
     assert!(flow.count("LUT4") > 0, "a ROM of constants is still logic");
 }
 
