@@ -80,6 +80,26 @@
 //   teleprinter rates — and a host asks for those as 110 and 134, which
 //   are the numbers compared against here and reported back.
 //
+// What was read, and what was inferred
+//   Every register layout above is **quoted** from a W65C51N data sheet
+//   and not measured; there is no 65C51 here to compare against and there
+//   could not be, since this one's other side is a USB pipe. Three things
+//   are **inferred**, and are marked here so that a reader with the data
+//   sheet open knows which sentences to check:
+//
+//   * That code 0 is the right answer for a rate the table cannot name.
+//     The data sheet says code 0 selects an external receiver clock at
+//     sixteen times the bit rate; calling a USB host "external" is this
+//     design's reading of that and not the data sheet's sentence.
+//   * That codes 3 and 4 answer to 110 and 134. The data sheet's numbers
+//     are 109.92 and 134.58 — what a 1.8432 MHz crystal divides to — and
+//     hosts ask for the rounded ones. No host was observed asking.
+//   * That a programmed reset leaves CONTROL alone. Whether the control
+//     register is among what a write to the status register clears is
+//     read here as "no", because a rate a host set surviving a program
+//     resetting the part is the behaviour that matters on this board. If
+//     that is wrong about the part, it is deliberately wrong.
+//
 // What it does not do
 //   No interrupts, and therefore no IRQ pin: COMMAND's receiver and
 //   transmitter interrupt enables are stored so a program can read back
