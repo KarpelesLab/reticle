@@ -1,0 +1,310 @@
+// monitor_acia — a 65C51-style ACIA whose wire is a USB pipe.
+//
+// What it does
+//   Four registers at `$5000`, the layout a W65C51N data sheet gives
+//   them, with a byte stream on the other side instead of a serial line.
+//   A 6502 that knows how to talk to a 65C51 talks to this, and what it
+//   is talking to is `ip/usb_cdc_acm`'s `out_*` and `in_*`.
+//
+//     RS  name     read                        write
+//     00  DATA     the byte received, taken    a byte to send
+//                  by the read
+//     01  STATUS   see below                   a programmed reset
+//     10  COMMAND  the last byte written       DTR, interrupts, parity
+//     11  CONTROL  the last byte written       stop bits, word length,
+//                                              receiver clock, baud
+//
+//   STATUS, bit by bit, and which of them are real here:
+//
+//     7  IRQ                 **always 0**. Nothing in this machine
+//                            raises an interrupt and the COMMAND
+//                            register's two enables are stored and not
+//                            acted on, so there is never a request to
+//                            report.
+//     6  DSR (active low)    **always 0**, meaning data set ready. The
+//                            other end of this pipe is a host that has
+//                            enumerated the device; there is no modem.
+//     5  DCD (active low)    **always 0**, meaning carrier present, for
+//                            the same reason.
+//     4  TDRE                **real**: high when the transmit holding
+//                            register is free.
+//     3  RDRF                **real**: high when a byte has arrived and
+//                            has not been read yet.
+//     2  Overrun             **always 0**. It cannot happen: `rx_ready`
+//                            is low while RDRF is high, so the block
+//                            upstream holds the byte rather than
+//                            overwriting one.
+//     1  Framing error       **always 0**. There are no frames; a USB
+//                            bulk endpoint delivers bytes or does not.
+//     0  Parity error        **always 0**, and the COMMAND register's
+//                            parity bits are stored and not acted on.
+//
+//   **TDRE is the correct behaviour and not the erratum.** Real W65C51N
+//   silicon leaves TDRE permanently set, so a polling loop never waits
+//   and characters are lost; that is a defect of a part, not a feature
+//   of the interface, and a model of it here would only teach software
+//   to spin on a timer instead. TDRE here means what the data sheet says
+//   it means.
+//
+// The baud rate, which is the interesting part
+//   CONTROL's low four bits select a bit rate from a fixed table — the
+//   one in the data sheet, sixteen codes from 50 baud to 19200, with
+//   code 0 meaning *"the receiver and transmitter are clocked from
+//   outside this part"* rather than naming a rate at all.
+//
+//   That table cannot express 115200. It is four bits wide and it stops
+//   at 19200, and no amount of wanting changes it. So this block does
+//   two things with a host's `dwDTERate`, and they are different things:
+//
+//   1. **It writes the code into CONTROL when the host changes rate.**
+//      If the rate is one the table names, the matching code goes in; if
+//      it is not, **code 0 goes in**, and code 0 is not a fudge — the
+//      data sheet's own meaning for it is "clocked externally", and a
+//      USB serial bridge is exactly a part whose rate arrives from
+//      outside. A 6502 that reads CONTROL therefore learns something
+//      true either way: the rate, or that the rate is not one it can
+//      name.
+//
+//      A write by the processor wins until the host moves again, which
+//      is the only arbitration rule that needs no arbiter. The load is
+//      an edge on the *rate* and not a level on the code, so a program
+//      that writes CONTROL is not fought with, and two different rates
+//      the table both flattens to code 0 still count as two changes.
+//
+//   2. **It reports the rate the part is programmed to on `rate`**, for
+//      whatever wants to put a real waveform on a pin. Code 0 reports
+//      the host's own `dwDTERate`, because that is what "clocked from
+//      outside" resolves to on this board.
+//
+//   Codes 3 and 4 are 109.92 and 134.58 baud on the data sheet — the
+//   teleprinter rates — and a host asks for those as 110 and 134, which
+//   are the numbers compared against here and reported back.
+//
+// What it does not do
+//   No interrupts, and therefore no IRQ pin: COMMAND's receiver and
+//   transmitter interrupt enables are stored so a program can read back
+//   what it wrote, and nothing reads them. No RTS or DTR pin, for the
+//   same reason and because there is nothing on this board to wire them
+//   to. No parity generation or checking, no word lengths other than
+//   eight, no second stop bit, no receiver clock input: every one of
+//   those is a bit of COMMAND or CONTROL that is stored and not acted
+//   on, which is the honest shape for a register a program may read back
+//   but whose effect has nowhere to land.
+//
+//   No transmit or receive shift register either. A byte written to DATA
+//   is handed to the block upstream whole; there is no moment at which
+//   half of it has gone.
+module monitor_acia (
+    input  wire        clk,
+    input  wire        rst_n,
+
+    // The processor's side. `sel` is "this cycle addresses the ACIA" and
+    // `access` is the one clock in which the cycle completes, so a read
+    // of DATA takes the byte exactly once however many clocks the
+    // processor is held for.
+    input  wire        sel,
+    input  wire [1:0]  rs,
+    input  wire        we,
+    input  wire        access,
+    input  wire [7:0]  din,
+    output reg  [7:0]  dout,
+
+    // The byte stream. `rx_*` is what arrived from the host, `tx_*` what
+    // goes back; both are one byte with a strobe, because that is what
+    // a register interface produces.
+    input  wire [7:0]  rx_data,
+    input  wire        rx_valid,
+    output wire        rx_ready,
+    output wire [7:0]  tx_data,
+    output wire        tx_valid,
+    input  wire        tx_ready,
+
+    // What the host asked the line to be, straight off
+    // `usb_cdc_acm`'s `baud`.
+    input  wire [31:0] host_rate,
+
+    // What this ACIA is programmed to, for something that drives a pin.
+    output reg  [31:0] rate,
+    // And the two registers, for a design that wants to light an LED
+    // with one of their bits.
+    output wire [7:0]  command,
+    output wire [7:0]  control
+);
+    localparam [1:0] R_DATA    = 2'd0;
+    localparam [1:0] R_STATUS  = 2'd1;
+    localparam [1:0] R_COMMAND = 2'd2;
+    localparam [1:0] R_CONTROL = 2'd3;
+
+    // The data sheet's reset values: COMMAND 02h is "DTR not ready, both
+    // interrupts disabled, no parity", CONTROL 00h is "eight data bits,
+    // one stop bit, externally clocked".
+    localparam [7:0] COMMAND_RESET = 8'h02;
+    localparam [7:0] CONTROL_RESET = 8'h00;
+
+    reg [7:0] command_q;
+    reg [7:0] control_q;
+    assign command = command_q;
+    assign control = control_q;
+
+    // -----------------------------------------------------------------
+    // Receive: one byte, and RDRF.
+    // -----------------------------------------------------------------
+    reg [7:0] rx_q;
+    reg       rdrf;
+
+    // Room only while nothing is waiting. That is what makes the overrun
+    // bit permanently zero rather than permanently wrong.
+    assign rx_ready = ~rdrf;
+
+    wire read_data  = sel & access & ~we & (rs == R_DATA);
+    wire write_data = sel & access &  we & (rs == R_DATA);
+    wire reset_cmd  = sel & access &  we & (rs == R_STATUS);
+
+    // -----------------------------------------------------------------
+    // Transmit: one byte, and TDRE.
+    // -----------------------------------------------------------------
+    reg [7:0] tx_q;
+    reg       tx_pending;
+
+    assign tx_data  = tx_q;
+    assign tx_valid = tx_pending;
+    // Free only while nothing is waiting, so a poll immediately after a
+    // write cannot see a stale 1 and overwrite the byte it just sent.
+    wire tdre = ~tx_pending;
+
+    // -----------------------------------------------------------------
+    // The baud table, both ways round.
+    // -----------------------------------------------------------------
+    // Code to rate. Codes 3 and 4 are the data sheet's 109.92 and 134.58
+    // baud, which a host names 110 and 134.
+    reg [31:0] code_rate;
+    always @(*) begin
+        case (control_q[3:0])
+            4'h1:    code_rate = 32'd50;
+            4'h2:    code_rate = 32'd75;
+            4'h3:    code_rate = 32'd110;
+            4'h4:    code_rate = 32'd134;
+            4'h5:    code_rate = 32'd150;
+            4'h6:    code_rate = 32'd300;
+            4'h7:    code_rate = 32'd600;
+            4'h8:    code_rate = 32'd1200;
+            4'h9:    code_rate = 32'd1800;
+            4'hA:    code_rate = 32'd2400;
+            4'hB:    code_rate = 32'd3600;
+            4'hC:    code_rate = 32'd4800;
+            4'hD:    code_rate = 32'd7200;
+            4'hE:    code_rate = 32'd9600;
+            4'hF:    code_rate = 32'd19200;
+            // Code 0: clocked from outside the part, which on this board
+            // is the host. A `case` with no `default` is a latch.
+            default: code_rate = host_rate;
+        endcase
+    end
+
+    // Rate to code. Every value in the table is under 65536, so the top
+    // half of `host_rate` only has to be zero; that halves the width of
+    // sixteen comparators.
+    wire        in_table = (host_rate[31:16] == 16'd0);
+    wire [15:0] low   = host_rate[15:0];
+    reg  [3:0]  host_code;
+    always @(*) begin
+        if (!in_table)                    host_code = 4'h0;
+        else case (low)
+            16'd50:    host_code = 4'h1;
+            16'd75:    host_code = 4'h2;
+            16'd110:   host_code = 4'h3;
+            16'd134:   host_code = 4'h4;
+            16'd150:   host_code = 4'h5;
+            16'd300:   host_code = 4'h6;
+            16'd600:   host_code = 4'h7;
+            16'd1200:  host_code = 4'h8;
+            16'd1800:  host_code = 4'h9;
+            16'd2400:  host_code = 4'hA;
+            16'd3600:  host_code = 4'hB;
+            16'd4800:  host_code = 4'hC;
+            16'd7200:  host_code = 4'hD;
+            16'd9600:  host_code = 4'hE;
+            16'd19200: host_code = 4'hF;
+            default:   host_code = 4'h0;
+        endcase
+    end
+
+    // The rate the host last asked for. The load into CONTROL is an edge
+    // on **this** and not on `host_code`, so that a host moving from one
+    // rate the table cannot name to another still counts as the host
+    // moving — 115200 and 230400 are both code 0, and a processor that
+    // had written 19200 into CONTROL in between has to be overridden by
+    // the second of them as much as by the first. It is also why the
+    // comparison is 32 bits of register rather than four: a rate change
+    // the table flattens away is still a rate change.
+    reg [31:0] host_rate_q;
+    wire       host_moved = (host_rate != host_rate_q);
+
+    // -----------------------------------------------------------------
+    // The registers
+    // -----------------------------------------------------------------
+    always @(posedge clk or negedge rst_n) begin
+        if (!rst_n) begin
+            rx_q        <= 8'd0;
+            rdrf        <= 1'b0;
+            tx_q        <= 8'd0;
+            tx_pending  <= 1'b0;
+            command_q   <= COMMAND_RESET;
+            control_q   <= CONTROL_RESET;
+            host_rate_q <= 32'd0;
+            rate        <= 32'd0;
+        end else begin
+            // A byte from the host always wins over a read that empties
+            // the register in the same clock, because `rx_ready` was low
+            // while `rdrf` was high and the block upstream cannot have
+            // offered one.
+            if (rx_valid && rx_ready) begin
+                rx_q <= rx_data;
+                rdrf <= 1'b1;
+            end else if (read_data) begin
+                rdrf <= 1'b0;
+            end
+
+            if (write_data) begin
+                tx_q       <= din;
+                tx_pending <= 1'b1;
+            end else if (tx_pending && tx_ready) begin
+                tx_pending <= 1'b0;
+            end
+
+            if (reset_cmd) begin
+                // A programmed reset. The data sheet says it clears the
+                // command register's low bits and the receiver, and
+                // leaves the control register alone — so the rate a host
+                // set survives a program resetting the part, which is
+                // the behaviour that matters here.
+                command_q <= COMMAND_RESET;
+                rdrf      <= 1'b0;
+            end else if (sel & access & we & (rs == R_COMMAND)) begin
+                command_q <= din;
+            end
+
+            if (sel & access & we & (rs == R_CONTROL)) begin
+                control_q <= din;
+            end else if (host_moved) begin
+                control_q[3:0] <= host_code;
+            end
+            host_rate_q <= host_rate;
+
+            rate <= code_rate;
+        end
+    end
+
+    // -----------------------------------------------------------------
+    // Reading one
+    // -----------------------------------------------------------------
+    always @(*) begin
+        case (rs)
+            R_DATA:    dout = rx_q;
+            // {IRQ, DSR#, DCD#, TDRE, RDRF, overrun, framing, parity}
+            R_STATUS:  dout = {3'b000, tdre, rdrf, 3'b000};
+            R_COMMAND: dout = command_q;
+            default:   dout = control_q;
+        endcase
+    end
+endmodule

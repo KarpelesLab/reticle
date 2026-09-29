@@ -1,0 +1,71 @@
+# The auxiliary ULPI transceiver of a Great Scott Gadgets Cynthion r1.4,
+# wired as a USB **serial port** for a 6502: the same thirteen ULPI balls,
+# the same oscillator and the same six LEDs
+# `testdata/fpga/cynthion/usb_cdc_uart.rcf` constrains, for the same
+# reasons and with the same pins.
+#
+# That file has the long form of every line's provenance — the platform
+# file's own `ULPIResource`, why `-slew fast` is on all thirteen pins and
+# not only the outputs, why no pin gets a `-pullup`, why the USER button is
+# deliberately not constrained, and where A8 and the six LEDs sit in the
+# fabric. Nothing here differs from it, and it is repeated rather than
+# shared because a constraints file is a statement about one design's ports
+# and this design has its own.
+#
+#     ULPIResource("aux_phy", 0,
+#         data="F16 G15 G16 H15 J15 J16 K15 K16", clk="D16", clk_dir='o',
+#         dir="E16", nxt="F15", stp="E15", rst="J13", rst_invert=True,
+#         attrs=Attrs(IO_TYPE="LVCMOS33", SLEWRATE="FAST")),
+#
+#     # Primary, discrete 60MHz oscillator.
+#     Resource("clk_60MHz", 0, Pins("A8", dir="i"),
+#         Clock(60e6), Attrs(IO_TYPE="LVCMOS33")),
+#
+#     *LEDResources(pins="E13 C13 B14 A15 D12 C11",
+#                   attrs=Attrs(IO_TYPE="LVCMOS33"), invert=True),
+#
+# `default_usb_connection = "aux_phy"` is the platform file's own, and
+# `apollo_port_sharing` names only `control_phy`, so the AUX port is nobody
+# else's: loading this cannot take away the Apollo debugger this board is
+# programmed over.
+#
+# ---------------------------------------------------------------------
+# BALL C11 CARRIES A WAVEFORM, NOT A DIAGNOSIS
+# ---------------------------------------------------------------------
+#
+# `led5_n` is the mirror's transmit line, so C11 has live 8N1 on it at
+# whatever rate the host set — which is the only place in this design that
+# a wrong baud divisor cannot hide. That is a change of what the pin says
+# and not of what it is: C11 is `led[5]`, its net is one series resistor and
+# one LED anode to `+3V3` with the FPGA as the only driver, and driving it
+# low is exactly what `leds.v` and `usb_ulpi_device.v` already do. An LED
+# switching at 115 kHz is the same electrical event as one switching at
+# 0.89 Hz.
+#
+# No `-slew fast` on C11 and no pull: at 115200 baud the edges are 8.7 us
+# apart and at 300 baud they are 3.3 ms apart, and the only thing on the net
+# is a diode.
+
+set_io -io_standard LVCMOS33 clk A8
+
+set_io -io_standard LVCMOS33 -slew fast ulpi_data[0] F16
+set_io -io_standard LVCMOS33 -slew fast ulpi_data[1] G15
+set_io -io_standard LVCMOS33 -slew fast ulpi_data[2] G16
+set_io -io_standard LVCMOS33 -slew fast ulpi_data[3] H15
+set_io -io_standard LVCMOS33 -slew fast ulpi_data[4] J15
+set_io -io_standard LVCMOS33 -slew fast ulpi_data[5] J16
+set_io -io_standard LVCMOS33 -slew fast ulpi_data[6] K15
+set_io -io_standard LVCMOS33 -slew fast ulpi_data[7] K16
+
+set_io -io_standard LVCMOS33 -slew fast ulpi_dir E16
+set_io -io_standard LVCMOS33 -slew fast ulpi_nxt F15
+set_io -io_standard LVCMOS33 -slew fast ulpi_stp E15
+set_io -io_standard LVCMOS33 -slew fast ulpi_rst_n J13
+set_io -io_standard LVCMOS33 -slew fast ulpi_clk D16
+
+set_io -io_standard LVCMOS33 led0_n E13
+set_io -io_standard LVCMOS33 led1_n C13
+set_io -io_standard LVCMOS33 led2_n B14
+set_io -io_standard LVCMOS33 led3_n A15
+set_io -io_standard LVCMOS33 led4_n D12
+set_io -io_standard LVCMOS33 led5_n C11

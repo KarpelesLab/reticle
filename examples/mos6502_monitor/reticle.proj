@@ -1,0 +1,42 @@
+# A 6502 running a machine-language monitor, with its console on a USB
+# serial port.
+#
+# The processor comes from the Reticle IP library in this repository's
+# ip/ directory, the USB serial port from ip/usb_cdc_acm, and the baud
+# divider from ip/uart. Four files in rtl/ and one 6502 program in sw/
+# are all the design is. See README.md for how to build, simulate and
+# load it, and for which parts of the interface it reproduces came from
+# a description and which were checked against a running original.
+#
+# examples/mos6502_computer is the same processor printing one line down
+# a wire; this is that machine grown a keyboard, a memory map and 256
+# bytes of software you can type at.
+name mos6502_monitor
+top monitor_cynthion
+
+# A Great Scott Gadgets Cynthion: an ECP5 LFE5U-12F in a CABGA256, whose
+# every USB port goes through its own ULPI transceiver. It is the part
+# this design has to fit, and fitting it is most of what README.md is
+# about: there is no block RAM site in this flow, so the ROM is lookup
+# tables and the RAM is distributed RAM, and the sizes of both are
+# measured rather than chosen.
+device ecp5-12f-CABGA256
+
+source rtl/monitor_rom.v
+source rtl/monitor_acia.v
+source rtl/monitor_machine.v
+source rtl/monitor_cynthion.v
+constraints board/cynthion.rcf
+testbench tb/monitor_tb.v
+testbench tb/monitor_bench.v
+
+depends mos6502 ^1.0.0 path ../../ip/mos6502
+depends uart ^1.0.0 path ../../ip/uart
+depends usb_cdc_acm ^1.0.0 path ../../ip/usb_cdc_acm
+
+# `usb_cdc_acm` depends on these two and names them without a path,
+# because a package says what it needs and a *project* says where things
+# are. There is no registry here, so the project says where: these two
+# lines are that, and not a second opinion about what the design needs.
+depends usb_device_fs ^1.0.0 path ../../ip/usb_device_fs
+depends usb_device_ulpi ^1.0.0 path ../../ip/usb_device_ulpi
