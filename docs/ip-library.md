@@ -35,6 +35,7 @@ ip/
   spiflash_xip/  reticle.ip  rtl/spiflash_xip.v
   timer/         reticle.ip  rtl/timer.v
   uart/          reticle.ip  rtl/uart_tx.v  rtl/uart_rx.v  rtl/uart.v
+                 rtl/uart_baud_div.v
   usb_device_fs/ reticle.ip  rtl/usb_fs_rx.v  rtl/usb_fs_tx.v  rtl/usb_ctrl_ep.v  rtl/usb_device_fs.v
                  (usb_ctrl_ep.v holds four modules; see below)
   usb_device_fs_pll/ reticle.ip  rtl/usb_device_fs_pll.v
@@ -59,7 +60,8 @@ It is distributed as part of the repository instead.
 | `cdc_sync` | `cdc_sync` | N-flop clock domain crossing synchroniser, parameterised width and depth | — |
 | `cdc_pulse` | `cdc_pulse` | one pulse across two domains through a toggle and a full handshake | `cdc_sync` |
 | `fifo_async` | `fifo_async` | asynchronous FIFO, gray-coded pointers, pointer synchronisers | `cdc_sync` |
-| `uart` | `uart`, `uart_tx`, `uart_rx` | 8N1 UART, parameterised baud divisor, ready / valid | — |
+| `uart` | `uart`, `uart_tx`, `uart_rx` | 8N1 UART, run-time or parameterised baud divisor, ready / valid | — |
+| `uart` | `uart_baud_div` | clocks per bit from a bit rate, by restoring long division, with the rates it refuses | — |
 | `spi_master` | `spi_master` | byte-level SPI master, any CPOL / CPHA | — |
 | `i2c_master` | `i2c_master` | byte-level I²C master, 7-bit addressing, clock stretching tolerated | — |
 | `pwm` | `pwm` | counter-comparator PWM, duty latched once per period | — |
@@ -875,7 +877,28 @@ is the part that matters:
   50-tick and a 71-tick clock, arriving in order and unmangled.
 - **`uart`** — the transmitter's own output wired into the receiver, two
   bytes back to back, both recovered with no framing error; and a
-  hand-driven line with a broken stop bit, which `rx_error` catches.
+  hand-driven line with a broken stop bit, which `rx_error` catches. Then
+  the same loop with the divisor driven from the `div` port instead of
+  the parameter, at a value neither divides the other, so a bit period
+  that came from the port and one that came from the parameter cannot be
+  confused; and the three divisors it refuses, each falling back to
+  CLK_DIV rather than stopping the port.
+- **`uart_baud_div`** — fourteen rates a host asks for, each divided and
+  rounded here as `round(60e6 / rate)` rather than listed, so the block's
+  own worked table and the assertion cannot drift apart without one of
+  them being wrong about arithmetic; every accepted rate is checked to
+  land inside the 2% an 8N1 frame survives; and the four refusals are
+  listed one by one, because each is a different reason.
+
+  **The divisor is latched once per character, not read every bit**, and
+  that is a measurement rather than a preference. Comparing the bit
+  counter against a run-time value needs a sixteen-bit magnitude
+  comparison inside the loop: it cost 109 more lookup tables and took
+  `uart`'s logic depth from 6 to 19 in the footprint table below, and it
+  bought nothing, because a rate that changes mid-character costs that
+  character either way. Latching it makes the loop a sixteen-bit equality
+  against a register, and gives the better semantics too — a character in
+  flight keeps the rate it started at.
 - **`spi_master`** — modes 0 and 3, with a slave model that samples
   `mosi` on the rising edge and presents `miso` on the falling one, so
   the bits are checked where a real slave would look at them; `cs_n` is

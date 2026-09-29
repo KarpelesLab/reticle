@@ -1177,3 +1177,126 @@ fn the_machine_maps_onto_the_ecp5_and_fits_the_part() {
         flow.netlist
     );
 }
+
+/// What the ROM costs, in the only currency this part has.
+///
+/// The monitor is 266 bytes of code and six of vectors, which did not fit
+/// the one page the interface it reproduces manages, so the ROM is two.
+/// This is the measurement that makes that a decision rather than a
+/// drift: it maps `monitor_rom` on its own and prints the lookup tables
+/// it takes, and asserts only that it is built from logic and not from
+/// storage — because a ROM that became a memory on this fabric could not
+/// be placed at all.
+///
+/// What it would not catch: whether the *rest* of the design still fits
+/// once the ROM has grown. `the_machine_maps_onto_the_ecp5_and_fits_the_part`
+/// is that, and it asserts the total.
+#[test]
+fn the_rom_is_lookup_tables_and_this_is_what_they_cost() {
+    let Some(dir) = example() else { return };
+    let mut map = SourceMap::new();
+    let mut diags = Diagnostics::new();
+    let text = read(&dir, "rtl/monitor_rom.v");
+    let id = map.add("rtl/monitor_rom.v", text).expect("the ROM fits");
+    let file = reticle::verilog::parse_source(
+        &mut map,
+        id,
+        reticle::verilog::Dialect::Verilog2005,
+        &mut reticle::verilog::NoIncludes,
+        &mut diags,
+    );
+    assert!(!diags.has_errors(), "{}", diags.render(&map));
+    let options =
+        reticle::verilog::ElabOptions::new(reticle::verilog::Dialect::Verilog2005)
+            .with_top("monitor_rom");
+    let mut design = reticle::verilog::elaborate(&[&file], &options, &mut diags)
+        .expect("the ROM elaborates");
+    assert!(!diags.has_errors(), "{}", diags.render(&map));
+    let top = design.top.expect("a top");
+
+    let device = fpga::target(DEVICE).expect("the Cynthion's ECP5 is a built-in device");
+    let constraints = Constraints::default();
+    let flow = fpga::synthesize_for(
+        &mut design,
+        top,
+        device,
+        &constraints,
+        &FpgaOptions::default(),
+        &mut diags,
+    )
+    .unwrap_or_else(|e| panic!("the ECP5 flow failed: {e:?}"));
+
+    println!(
+        "monitor_rom: {} LUT4, depth {}, for {ROM_BYTES} bytes",
+        flow.count("LUT4"),
+        flow.lut_depth
+    );
+    println!(
+        "  which is {:.1} lookup tables a byte",
+        flow.count("LUT4") as f64 / f64::from(ROM_BYTES)
+    );
+    assert_eq!(
+        flow.count("TRELLIS_DPR16X4"),
+        0,
+        "the ROM became storage, which cannot hold a constant on this flow"
+    );
+    assert_eq!(
+        flow.count("DP16KD"),
+        0,
+        "the ROM became a block RAM, and this fabric has no site for one"
+    );
+    assert_eq!(
+        flow.count("TRELLIS_FF"),
+        0,
+        "a ROM has nothing to remember"
+    );
+    assert!(flow.count("LUT4") > 0, "a ROM of constants is still logic");
+}
+
+/// The session in `tb/monitor_tb.v`, through the simulator.
+///
+/// The Verilog testbench types the same commands the Rust ones do and
+/// prints the whole transcript with `$display`, so this is the same
+/// machine driven by a second thing — and the second thing is the one
+/// `reticle sim` runs, which is what a person reaching for this example
+/// will type first.
+///
+/// What it would not catch: anything about the USB stack, which is not
+/// in this run either.
+#[test]
+fn the_testbench_session_comes_out_of_the_simulator() {
+    let Some(dir) = example() else { return };
+    let design = bench_design(&dir, "monitor_tb");
+    let mut sim = Simulator::new(&design, SimOptions::default())
+        .unwrap_or_else(|d| panic!("the testbench does not simulate: {}", d.len()));
+    sim.run();
+    assert!(sim.finished(), "the testbench did not reach $finish");
+    let out = sim.output();
+    println!("{out}");
+
+    // The prompt, the echo, and the ROM's own first instruction.
+    let image = monitor(&dir);
+    let bytes = rom_bytes(&image);
+    let want = format!(
+        "\\|FE00||FE00: {:02X}|FFFA.FFFF||FFFA:{}|HELLO|\\|",
+        bytes[0],
+        (0x1FA..=0x1FFusize)
+            .map(|offset| format!(" {:02X}", bytes[offset]))
+            .collect::<String>()
+    );
+    assert!(
+        out.contains(&want),
+        "the session is not what the monitor should have said\n  want {want:?}\n  got  {out:?}"
+    );
+
+    // 115200 is not a rate the 65C51's four baud bits can name, so the
+    // ACIA reports code 0 — "clocked from outside this part" — with the
+    // four bits the monitor wrote left alone, and the host's own number.
+    assert!(
+        out.contains("acia_control=10 acia_rate=115200"),
+        "the ACIA did not report the host's rate in {out:?}"
+    );
+
+    let messages: Vec<String> = sim.messages().iter().map(|d| d.message.clone()).collect();
+    assert!(messages.is_empty(), "simulator messages: {messages:?}");
+}

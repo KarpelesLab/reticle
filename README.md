@@ -203,9 +203,11 @@ modules it instantiates go on one command line. A design already in the
 
 ## Worked examples and guides
 
-Three complete systems are built out of the IP library in `examples/`,
-each with a project manifest, a little user HDL and a test that drives it
-from the manifest to the files `nextpnr` reads:
+Complete systems are built out of the IP library in `examples/`, each
+with a project manifest, a little user HDL and a test that drives it from
+the manifest to the files `nextpnr` reads — or, for the one that ends on
+a board, to a bitstream this compiler wrote and a terminal a person
+typed at:
 
 - [`examples/soc`](examples/soc) — a RISC-V system on chip around
   [`ip/rv32i`](ip/rv32i) and [`ip/uart`](ip/uart) that prints a line over
@@ -213,6 +215,15 @@ from the manifest to the files `nextpnr` reads:
 - [`examples/mos6502_computer`](examples/mos6502_computer) — the same
   system around [`ip/mos6502`](ip/mos6502): one bus, RAM at the bottom
   for zero page and the stack, ROM at the top for the vectors.
+- [`examples/mos6502_monitor`](examples/mos6502_monitor) — that machine
+  with a keyboard: a machine-language monitor in 272 bytes of ROM, a
+  65C51-style ACIA, and its console on a USB serial port through
+  [`ip/usb_cdc_acm`](ip/usb_cdc_acm) on a Cynthion's ULPI transceiver.
+  It examines memory, deposits bytes and runs code, and it is checked
+  against a transcript recorded from a second implementation of the same
+  interface. **This one runs on a real part**, and the host's baud rate
+  reaches both a register the 6502 reads and a real 8N1 waveform on a
+  pin.
 - [`examples/apple2`](examples/apple2) — an Apple II-compatible machine
   with 48 KiB, the interleaved text page at `$0400` and video through
   [`ip/dvi_tx`](ip/dvi_tx) on an ECP5 or [`ip/vga_out`](ip/vga_out) on a
