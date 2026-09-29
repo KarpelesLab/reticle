@@ -250,21 +250,33 @@ module monitor_machine #(
 
     wire gave = acia_tx_valid & in_ready;
 
+    // `quiet` has no reset and `pending` does: the counter is read only
+    // while `pending` is set, and `gave` zeroes it on the way in. That is
+    // the same division `monitor_acia` uses for its byte registers, and
+    // on this part it is worth asking for — a flip-flop with a reset
+    // needs its tile's set/reset wire and a distributed RAM needs the
+    // same wire for its write enable, so a design with 530 of the latter
+    // wants as few of the former as it can manage.
+    localparam [$clog2(FLUSH_CLKS):0] LAST_QUIET = FLUSH_CLKS[$clog2(FLUSH_CLKS):0];
+
     reg [$clog2(FLUSH_CLKS):0] quiet;
     reg                        pending;
+
     always @(posedge clk or negedge rst_n) begin
-        if (!rst_n) begin
-            quiet   <= 0;
-            pending <= 1'b0;
-        end else if (gave) begin
-            quiet   <= 0;
-            pending <= 1'b1;
-        end else if (pending) begin
-            if (quiet == FLUSH_CLKS[$clog2(FLUSH_CLKS):0]) pending <= 1'b0;
-            else                                           quiet <= quiet + 1'b1;
-        end
+        if (!rst_n)                              pending <= 1'b0;
+        else if (gave)                           pending <= 1'b1;
+        else if (pending && quiet == LAST_QUIET) pending <= 1'b0;
     end
-    assign in_commit = pending & (quiet == FLUSH_CLKS[$clog2(FLUSH_CLKS):0]);
+
+    // A process of its own, with no reset in it at all, which is what
+    // makes the counter cost no set/reset wire. It is read only while
+    // `pending` is set and `gave` zeroes it on the way in, so there is
+    // nothing for a reset to do.
+    always @(posedge clk) begin
+        if (gave)                                quiet <= 0;
+        else if (pending && quiet != LAST_QUIET) quiet <= quiet + 1'b1;
+    end
+    assign in_commit = pending & (quiet == LAST_QUIET);
 
     // Everything the processor printed, for a pin that wants it.
     assign print_data  = acia_tx_data;

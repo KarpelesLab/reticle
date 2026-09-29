@@ -182,6 +182,16 @@ module monitor_acia (
     // -----------------------------------------------------------------
     // Receive: one byte, and RDRF.
     // -----------------------------------------------------------------
+    // The byte, and whether there is one. **The byte has no reset and the
+    // flag does**, which is the same division `usb_bulk_ep`'s buffers are
+    // written with and for the same reason: `rx_q` is read only while
+    // `rdrf` says there is something in it, and `rdrf` resets to zero, so
+    // a reset on the byte would be eight flip-flops' worth of clearing
+    // something nothing can look at. On this part that is not only waste:
+    // a flip-flop with a reset needs its tile's set/reset wire, and a
+    // distributed RAM needs the same wire for its write enable, so every
+    // reset this design does not ask for is one less thing for the router
+    // to fit into a tile that already has a RAM in it.
     reg [7:0] rx_q;
     reg       rdrf;
 
@@ -196,6 +206,8 @@ module monitor_acia (
     // -----------------------------------------------------------------
     // Transmit: one byte, and TDRE.
     // -----------------------------------------------------------------
+    // The same division on the way out: `tx_q` is handed over only while
+    // `tx_pending` says there is a byte, and that resets to zero.
     reg [7:0] tx_q;
     reg       tx_pending;
 
@@ -268,11 +280,16 @@ module monitor_acia (
     // -----------------------------------------------------------------
     // The registers
     // -----------------------------------------------------------------
+    // The two bytes themselves, in a process of their own with no reset
+    // in it at all, which is what makes them cost no set/reset wire.
+    always @(posedge clk) begin
+        if (rx_valid && rx_ready) rx_q <= rx_data;
+        if (write_data)           tx_q <= din;
+    end
+
     always @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
-            rx_q        <= 8'd0;
             rdrf        <= 1'b0;
-            tx_q        <= 8'd0;
             tx_pending  <= 1'b0;
             command_q   <= COMMAND_RESET;
             control_q   <= CONTROL_RESET;
@@ -283,14 +300,12 @@ module monitor_acia (
             // while `rdrf` was high and the block upstream cannot have
             // offered one.
             if (rx_valid && rx_ready) begin
-                rx_q <= rx_data;
                 rdrf <= 1'b1;
             end else if (read_data) begin
                 rdrf <= 1'b0;
             end
 
             if (write_data) begin
-                tx_q       <= din;
                 tx_pending <= 1'b1;
             end else if (tx_pending && tx_ready) begin
                 tx_pending <= 1'b0;
