@@ -405,6 +405,14 @@ cargo test --all-features --test mos6502_monitor
 | `the_rom_is_lookup_tables_and_this_is_what_they_cost` | `monitor_rom` on its own is 505 `LUT4` and no storage at all |
 | `the_testbench_session_comes_out_of_the_simulator` | the same machine driven by `tb/monitor_tb.v`, which is what `reticle sim` runs |
 
+And two in [`tests/ip_library.rs`](../../tests/ip_library.rs), because
+what they need lives there:
+
+| Test | What it shows |
+|------|---------------|
+| **`a_6502_monitor_answers_through_the_transceiver_that_is_on_the_board`** | the whole machine — 6502, ACIA, class layer, link layer — enumerating and answering through a model of the part on this board, **including its late LineState**; then a live `SET_LINE_CODING` at 115200 and at 1200, read back by the 6502 out of `$5003` |
+| `a_hosts_rate_becomes_a_bit_period` | `uart_baud_div` and `uart` joined: seven rates, each becoming a bit period measured in clocks off a transmit line |
+
 The tests drive `tb/monitor_bench.v` — the machine with its byte
 interface bare — a character at a time from Rust, and compare what comes
 back against a string the test computed. That is how one tests a parser,
@@ -561,11 +569,125 @@ no unrouted wires, no ULPI transceiver and no host; `CLAUDE.md` records a
 defect on this very board that cost eight rounds of investigation and
 that simulation could not have seen at all.
 
-<!-- HARDWARE SESSION -->
+So this was built, loaded and used.
+
+```text
+$ reticle fpga examples/mos6502_monitor/rtl/monitor_rom.v ... --bitstream monitor_cynthion.bit
+note: wrote monitor_cynthion.bit, 253335 byte(s) compressed, 317539 configuration bit(s) set,
+      20 pad(s), 6183 lookup table(s), 988 flip-flop(s) and 530 distributed RAM(s) configured,
+      988/24288 ff, 1/56 gb, 20/120 io, 6183/24288 lut, 530/3036 lutram
+note: routed 9294 of 9303 signal(s) with 147584 pip(s) over 156878 wire(s), and every sink
+      was walked back to its driver
+note: 988 flip-flop(s), every clock on a global network: G_HPBX0000 to 1518 of them
+note: all 317539 set bit(s) decode back through the database into 96110 arc(s), 8504 field(s)
+      and 9362 word(s), with 0 unexplained, and the arcs they select are exactly the 96110 the
+      router chose
+note: for IDCODE 0x21111043 (LFE5U-12F-8CABGA256)
+
+$ reticle program --device 35L6H2CMGJJVCIBAEA3GCLAN74 monitor_cynthion.bit
+253335 bytes of bitstream shifted in 1.2 s
+status after ISC_DISABLE: 0x00200100 (DONE)
+DONE is high: the part accepted the bitstream and is running it.
+
+$ for d in /sys/class/tty/ttyACM*; do ...; done
+ttyACM0 1d50:615c cdc_acm
+ttyACM1 1209:0001 cdc_acm
+
+$ stty -F /dev/ttyACM1 115200 raw -echo clocal min 0 time 20
+```
+
+**Every one of the 317,539 set bits decodes back through the fabric
+database, and the arcs they select are exactly the 96,110 the router
+chose, with none unexplained.** The nine of 9,303 signals that were not
+routed are the ones with nothing to route — every sink in the design was
+walked back to its driver, which is the sentence above that matters.
+
+### The session
+
+Typed at `/dev/ttyACM1` with a script that writes a line and reads what
+comes back; `^M` is a carriage return, printed by `cat -v` so that the
+byte order is visible rather than overwritten.
+
+```text
+FE00^M^MFE00: A2^M
+FFFA.FFFF^M^MFFFA: 00 FE 00 FE 00 FE^M
+0300: AD 01 50 29 10 F0 F9 A9 2A 8D 00 50 4C 00 FE^M^M0300: 00^M
+0300.030E^M^M0300: AD 01 50 29 10 F0 F9 A9^M0308: 2A 8D 00 50 4C 00 FE^M
+5003^M^M5003: 10^M
+0300R^M^M0300: AD*\^M
+```
+
+Line by line, because every one of them is a claim:
+
+* **`FE00`** answers `FE00: A2`. `$A2` is `LDX #`, the first byte of the
+  reset entry — the ROM reading itself out of the lookup tables it is
+  made of.
+* **`FFFA.FFFF`** answers six bytes on one row: `00 FE` three times, the
+  three vectors all pointing at `$FE00`.
+* **`0300: AD 01 50 ...`** deposits fifteen bytes, and prints `0300: 00`
+  first — the byte that *was* there, which is the quirk this interface
+  has, on the part.
+* **`0300.030E`** reads them back, broken into rows of eight at `$0308`
+  and nowhere else.
+* **`5003`** answers `10`. That is the ACIA's CONTROL register: the
+  monitor wrote `$1F` on its way up, and the host's 115200 — a rate the
+  65C51's four baud bits cannot name — replaced them with code 0,
+  "clocked from outside this part". **The rate a host set is a number the
+  6502 read.**
+* **`0300R`** prints `0300: AD`, the byte at the run address, then jumps
+  there. The fifteen bytes are `LDA $5001 / AND #$10 / BEQ / LDA #$2A /
+  STA $5000 / JMP $FE00` — poll the transmitter, print `*`, restart the
+  monitor. The answer is `*` and then a fresh `\` prompt, which is all
+  three of those things happening.
+
+### And the baud rate, rate by rate
+
+`stty` sets a rate, then the monitor is asked what `$5003` says. The
+right-hand column is the W65C51N data sheet's baud table, which nothing
+in this repository could have got right by accident.
+
+| `stty -F /dev/ttyACM1` | `5003` answers | code | the data sheet's rate |
+|---|---|---|---|
+| 9600 | `1E` | 14 | 9600 |
+| 19200 | `1F` | 15 | 19200 |
+| 1200 | `18` | 8 | 1200 |
+| 115200 | `10` | 0 | *clocked externally* |
+| 4800 | `1C` | 12 | 4800 |
+| 230400 | `10` | 0 | *clocked externally* |
+| 115200 | `10` | 0 | *clocked externally* |
+
+The top nibble stays `1` throughout: eight data bits, one stop bit, the
+receiver clocked from the baud generator — what the monitor programmed,
+which the class layer does not touch.
+
+### The one measurement that was not taken
+
+**The bit period on ball C11 was not measured.** There is no oscilloscope
+and no logic analyser here, the board's only free user IO are two PMOD
+headers, and `testdata/fpga/cynthion/bidir_loopback.v` already argues that
+nothing in the fabric can tell whether anything is plugged into one. So
+the waveform is asserted by a chain of measurements rather than by an
+instrument, and here is the whole chain:
+
+| Link | How it was measured |
+|---|---|
+| a host's `SET_LINE_CODING` reaches `usb_cdc_acm`'s `baud` | `usb_cdc_acm_ulpi_answers_the_line_coding_and_control_line_requests`, and GET_LINE_CODING reads it back on the part |
+| `baud` reaches the ACIA's CONTROL register | **on the part**, in the table above |
+| CONTROL's code becomes a rate in bits per second | `the_acia_reports_the_rate_the_host_set`, and `a_6502_monitor_answers_through_the_transceiver_that_is_on_the_board` through the whole USB stack |
+| a rate becomes a divisor | `uart_baud_div_computes_the_divisor_for_the_rates_a_host_asks_for`, against `round(60e6/rate)` computed in the test |
+| a divisor becomes a bit period on a transmit line | `a_hosts_rate_becomes_a_bit_period` — the two blocks joined, seven rates, the gaps between the edges of a frame measured in clocks |
+| that transmit line is ball C11 | **not measured.** It is one line of `rtl/monitor_cynthion.v` and one line of `board/cynthion.rcf` |
+
+The last row is the gap, and it is one `assign` wide. Everything above it
+is a number somebody can check.
 
 ## What this proves, and what it does not
 
-**Proved here, by `cargo test`:**
+**Proved on the part:** the session above, the ACIA's rate register
+following a host through seven changes of `stty`, and a bitstream every
+bit of which decodes back to the arcs the router chose.
+
+**Proved by `cargo test`:**
 
 * the ROM is `sw/monitor.s` assembled, and every byte of it decodes as a
   documented NMOS 6502 instruction from every entry point;
@@ -581,12 +703,13 @@ that simulation could not have seen at all.
 * **The bit period on ball C11 was not measured with an instrument.**
   There is no oscilloscope or logic analyser here. What was done instead
   is [below](#on-the-part).
-* **The USB stack is not in any of the simulation runs above.**
-  `monitor_bench` is the machine with its byte interface bare.
-  `tests/ip_library.rs` is where `usb_cdc_acm_ulpi` is driven through a
-  transceiver model — including the one that reports LineState late, the
-  way the part on this board does — and this example relies on that
-  rather than repeating it.
+* **The USB stack is not in the `tests/mos6502_monitor.rs` runs.**
+  `monitor_bench` is the machine with its byte interface bare, on purpose:
+  a parser is tested as a parser. The stack *is* in
+  `a_6502_monitor_answers_through_the_transceiver_that_is_on_the_board`,
+  which is the same machine through `usb_device_ulpi` and through a model
+  of the transceiver that reports LineState late — but that run is one
+  session and not the thirteen the bench tests are.
 * **Timing is not closed.** The read path is a deliberate multi-cycle
   path and static analysis reports it against one clock period. What
   settles it is the part.

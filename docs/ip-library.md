@@ -883,6 +883,14 @@ is the part that matters:
   that came from the port and one that came from the parameter cannot be
   confused; and the three divisors it refuses, each falling back to
   CLK_DIV rather than stopping the port.
+- **`uart_baud_div` and `uart` together** — the last link in the claim
+  that a host setting a rate changes a waveform. The divider is run until
+  it has an answer, the number is handed to `uart`'s `div` port, and the
+  gaps between the edges of a frame on `tx` are measured: seven rates a
+  terminal program offers, each coming out a whole number of its own bit
+  periods, with the transmitter's CLK_DIV set to a value that is *wrong*
+  for every one of them so a period from the parameter could not be
+  mistaken for one from the port. The worst slip is one part in a thousand.
 - **`uart_baud_div`** — fourteen rates a host asks for, each divided and
   rounded here as `round(60e6 / rate)` rather than listed, so the block's
   own worked table and the assertion cannot drift apart without one of

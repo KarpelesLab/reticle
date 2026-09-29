@@ -1669,6 +1669,8 @@ fn uart_reports_a_framing_error_when_the_stop_bit_is_missing() {
 /// asked for, which is the only thing readable off a line without knowing
 /// where the line began.
 fn uart_bit_clocks(div: u64, clk_div: &str) -> Vec<u64> {
+    // Twelve bit periods is a frame and a margin, whatever the period is.
+    let budget = 12 * div.max(4) + 200;
     let design = design_of("uart", "uart", &[("CLK_DIV", clk_div)]);
     let mut sim = simulate(&design, "uart");
     let clk = top_net(&sim, "clk");
@@ -1688,7 +1690,7 @@ fn uart_bit_clocks(div: u64, clk_div: &str) -> Vec<u64> {
     let mut edges: Vec<u64> = Vec::new();
     let mut last = high(&sim, tx);
     let mut accepted = false;
-    for tick in 0..4000u64 {
+    for tick in 0..budget {
         if !accepted && high(&sim, tx_valid) && high(&sim, tx_ready) {
             accepted = true;
         }
@@ -1806,6 +1808,80 @@ fn uart_receives_a_byte_at_a_divisor_from_its_port() {
         }
     }
     assert_eq!(got, vec![(0xC3, false)], "one byte, no framing error");
+}
+
+/// The bit period a host's rate actually produces, in clocks.
+///
+/// `uart_baud_div` and `uart` are joined by a wire in every design that
+/// follows a host's rate — `testdata/fpga/cynthion/usb_cdc_uart.v` and
+/// `examples/mos6502_monitor`'s mirror on ball C11 are the two. This
+/// joins them by a variable: it runs the divider until it has an answer,
+/// takes the number, hands it to `uart`'s `div` port, and measures the
+/// gaps between the edges of a frame on `tx`.
+///
+/// **It is the last link in the claim that a host setting a rate changes
+/// a waveform.** `uart_baud_div_computes_the_divisor_for_the_rates_a_host
+/// _asks_for` proves the arithmetic and
+/// `uart_takes_its_divisor_from_a_port` proves the port is read; this
+/// proves that the number one produces is the number the other keeps time
+/// with, for the rates a terminal program offers.
+///
+/// What it would not catch: the wire. Nothing here proves the two blocks
+/// are connected *in a design* — that is structural, and
+/// `examples/mos6502_monitor/README.md` says which measurement stands in
+/// for the oscilloscope nobody here has.
+#[test]
+fn a_hosts_rate_becomes_a_bit_period() {
+    const CLK_HZ: u64 = 60_000_000;
+    let div_design = design_of("uart", "uart_baud_div", &[]);
+
+    for rate in [1200u64, 9600, 19_200, 38_400, 115_200, 230_400, 921_600] {
+        // The divider, run until it has settled on an answer.
+        let mut sim = simulate(&div_design, "uart_baud_div");
+        let clk = top_net(&sim, "clk");
+        let rst_n = top_net(&sim, "rst_n");
+        sim.set(top_net(&sim, "rate"), word(32, rate));
+        reset(&mut sim, clk, rst_n);
+        for _ in 0..80 {
+            cycle(&mut sim, clk, HALF);
+        }
+        assert!(
+            high(&sim, top_net(&sim, "ok")),
+            "rate {rate}: the divider refused a rate a terminal offers"
+        );
+        let div = get_u64(&sim, top_net(&sim, "div"));
+
+        // The transmitter, driven with that number and nothing else. Its
+        // CLK_DIV is deliberately *wrong* for this rate — 104 is 115200
+        // at 12 MHz — so a period that came from the parameter could not
+        // be mistaken for one that came from the port.
+        let gaps = uart_bit_clocks(div, "104");
+        assert!(!gaps.is_empty(), "rate {rate}: the line never moved");
+        for gap in &gaps {
+            assert_eq!(
+                gap % div,
+                0,
+                "rate {rate}: a gap of {gap} clocks is not a multiple of {div}: {gaps:?}"
+            );
+        }
+        assert!(
+            gaps.iter().any(|g| *g == div),
+            "rate {rate}: no gap is one bit long at {div} clocks: {gaps:?}"
+        );
+
+        // And the rate that period really is, against the one asked for.
+        // Integer arithmetic, in parts per thousand, because a test that
+        // compares floating point is a test about floating point.
+        let slip = (CLK_HZ * 1000).abs_diff(rate * div * 1000) / (rate * div);
+        println!(
+            "{rate} baud -> {div} clocks a bit -> {} baud, {slip} part(s) per thousand off",
+            CLK_HZ / div
+        );
+        assert!(
+            slip * 50 < 1000,
+            "rate {rate}: {slip} parts per thousand is over the 2% an 8N1 frame survives"
+        );
+    }
 }
 
 /// `uart_baud_div` divides, rounds to nearest, and says when it could not.
