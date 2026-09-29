@@ -146,8 +146,8 @@ original does the same thing:
 0310       ->  0310||0310: 33|
 ```
 
-Those five lines are now five of the fifteen in the transcript test, so
-the claim is pinned rather than argued.
+Those five lines are now five of the twenty-three in the transcript test,
+so the claim is pinned rather than argued.
 
 ### Where each behaviour came from
 
@@ -796,6 +796,35 @@ measurement is what found it; on the build this example now describes the
 same four rows read `00`, and
 `the_acia_reports_the_rate_the_host_set` asserts both halves at six
 rates.
+
+### The router's one sore point, which is worth knowing before you change this
+
+Twice while this example was being built the router stopped with
+
+```text
+error: routing did not converge: 1 node(s) are still oversubscribed after
+40 iteration(s), worst at X54Y35/LSR1 (2 signals)
+```
+
+`LSR1` is a logic tile's set/reset wire, and on this part **a distributed
+RAM's write enable needs it too**: `docs/fpga-trellis.md` records that the
+write enable arrived on `LSR1` on every one of the 111 RAMs it read back
+out of Lattice's own bitstreams. A design with 530 distributed RAMs and
+about a thousand flip-flops is therefore asking the placer not to put a
+reset-using flip-flop into a tile that already has a RAM in it — and
+nothing tells the placer that, so whether it happens is luck, and the
+luck changes whenever the netlist does.
+
+**That is the placer's limitation and not this design's**, and it is left
+here rather than in a commit message because the next person to add a
+register to this machine will meet it. What a *design* can do is ask less
+often, and this one now does: `monitor_acia`'s two byte registers and
+`monitor_machine`'s flush counter have no reset at all, because each is
+read only while a flag says there is something in it and every one of
+those flags does reset. That is the division
+[`usb_bulk_ep`](../../ip/usb_device_fs) already writes its buffers with,
+for the same stated reason; here it is worth twenty-five fewer flip-flops
+competing for a wire that 530 RAMs are using.
 
 ### The one measurement that was not taken
 
