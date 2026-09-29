@@ -894,17 +894,21 @@ fn the_whole_session_matches_the_one_a_real_monitor_gives() {
     // recorded transcript and not the same idea expressed twice.
     //
     // **Every command form the monitor has is in here**, and the list is
-    // the point rather than the length: an examine, a range, a range that
-    // runs backwards, a range crossing a row boundary, two examines on one
-    // line, an over-long number, a one-byte deposit, a multi-byte deposit,
-    // a deposit over a byte that was deposited, a bare `:` continuing one
-    // and a bare `.` continuing a range. What is *not* here is `R`, and
-    // that is not laziness: the two machines have different memory maps, so
-    // the program a `R` would run would have to be a different program, and
-    // comparing two different programs' output proves nothing about either
-    // monitor. `the_monitor_runs_what_was_deposited` covers `R` against
-    // this machine instead.
-    let script: [(&str, &str); 15] = [
+    // the point rather than the length: an examine, two examines on one
+    // line, a three-digit address, an over-long number, a range, a range
+    // crossing two row boundaries, a range that runs backwards, a bare `.`
+    // continuing one, a one-byte deposit, a deposit over a byte already
+    // deposited, a two-byte deposit, a nine-byte deposit crossing a row
+    // boundary, a bare `:` continuing one, two lines that are not lines,
+    // a backspace and an escape.
+    //
+    // What is *not* here is `R`, and that is not laziness: the two
+    // machines have different memory maps, so the program an `R` would run
+    // would have to be a different program, and comparing two different
+    // programs' output proves nothing about either monitor.
+    // `the_monitor_runs_what_was_deposited` covers `R` against this
+    // machine instead.
+    let script: [(&str, &str); 20] = [
         // A one-byte deposit, and the thing about it that looks like a
         // bug and is not: it prints `<addr>: <what was there>` first.
         // That is the address item being *examined* -- the mode is still
@@ -941,6 +945,24 @@ fn the_whole_session_matches_the_one_a_real_monitor_gives() {
             "0400.0408",
             "0400.0408||0400: 01 02 03 04 05 06 07 08|0408: 09|",
         ),
+        // Lines that are not lines, and the two editing keys. These are
+        // here for the same reason the deposits are: they were checked
+        // against this machine and not against the original, which is
+        // exactly the shape of gap that let a deposit go unchecked.
+        ("HELLO", "HELLO|\\|"),
+        // Lower case is refused rather than folded up.
+        ("ff00", "ff00|\\|"),
+        // A good number and then a bad character: `030` is examined --
+        // three digits are an address, and it is $0030 and not $0300 --
+        // and only then is the line refused.
+        ("030Z", "030Z||0030: 00\\|"),
+        // Backspace, which is `$08` here and `_` in the older of the two
+        // originals: `0409` becomes `040` and then `0400`, which holds
+        // the `01` deposited above.
+        ("0409\u{8}0", "0409\u{8}0||0400: 01|"),
+        // Escape, echoed before it is acted on, then a fresh prompt and
+        // a line that works.
+        ("0400\u{1b}0401", "0400\u{1b}\\|0401||0401: 02|"),
     ];
     for (line, want) in script {
         assert_eq!(machine.command(line), want, "`{line}`");

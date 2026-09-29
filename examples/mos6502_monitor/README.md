@@ -475,7 +475,7 @@ cargo test --all-features --test mos6502_monitor
 | `the_monitor_runs_what_was_deposited` | `0300R` transfers control, and a deposited program prints through the ACIA |
 | `the_monitor_rejects_a_line_it_cannot_parse` | four bad lines, each answered with a fresh `\` and nothing else |
 | `the_monitor_edits_a_line_with_backspace_and_cancels_it_with_escape` | the two editing keys, including a backspace at the left margin |
-| **`the_whole_session_matches_the_one_a_real_monitor_gives`** | **the oracle**: fifteen command-and-answer pairs recorded from a running original, covering every command form but `R` — see below for which |
+| **`the_whole_session_matches_the_one_a_real_monitor_gives`** | **the oracle**: twenty command-and-answer pairs recorded from a running original, covering every command form but `R` — see below for which |
 | `the_acia_reports_the_rate_the_host_set` | six rate changes reach CONTROL's rate field **and** its receiver-clock bit, the processor reads them back over its own bus, and a rate of zero is the whole external configuration rather than half of one |
 | `the_processor_runs_at_one_cycle_in_fifty_nine` | the prompt's cost in clocks at both divisors |
 | `a_partly_filled_packet_goes_when_the_machine_falls_silent` | `in_commit` after a silence, so one keystroke does not wait for sixty-three more |
@@ -518,7 +518,7 @@ Two things make those runs cheap and one makes them honest:
 
 ### The oracle: what was checked against a running original
 
-`the_whole_session_matches_the_one_a_real_monitor_gives` asserts fifteen
+`the_whole_session_matches_the_one_a_real_monitor_gives` asserts twenty
 command-and-answer pairs. Each right-hand side was **printed by a
 published 65C02 build of the same interface, running in a third-party
 emulator** on this machine, driven with the same input; the left-hand
@@ -538,8 +538,12 @@ started out covering fewer:
 | `XXXX: dd …` — deposit | `0310: 11` and `0310: 33` (one byte, over a byte already there), `0300: AA BB` (two), `0400: 01 … 09` (nine, crossing a row boundary) |
 | `: dd …` — continue a deposit | `: CC DD` |
 | `XXXXR` — run | **not covered, deliberately.** The two machines have different memory maps, so the program an `R` would run would have to be a different program, and comparing two different programs' output proves nothing about either monitor. `the_monitor_runs_what_was_deposited` covers `R` against this machine instead |
+| a line that is not a line | `HELLO`, `ff00` (lower case refused rather than folded), `030Z` (a good number, examined, *then* refused) |
+| backspace | `0409<BS>0` |
+| escape | `0400<ESC>0401` |
 
-The deposit rows are the ones that were missing. They were added after a
+The deposit rows, and the three below them, are the ones that were
+missing. They were added after a
 deposit's output was reported as wrong and turned out to be the
 original's, and the gap was real even though the bug was not: the
 transcript went in with an examine and a range because that is what the
