@@ -40,6 +40,8 @@ ip/
                  (usb_ctrl_ep.v holds four modules; see below)
   usb_device_fs_pll/ reticle.ip  rtl/usb_device_fs_pll.v
   usb_device_ulpi/ reticle.ip  README.md  rtl/usb_ulpi_link.v  rtl/usb_device_ulpi.v
+  usb_host_ulpi/ reticle.ip  README.md  rtl/usb_ulpi_host_link.v  rtl/usb_host_sie.v
+                 rtl/usb_host_enum.v  rtl/usb_host_ulpi.v
   usb_cdc_acm/   reticle.ip  README.md  rtl/usb_cdc_req.v  rtl/usb_cdc_acm.v
                  rtl/usb_cdc_acm_fs.v  rtl/usb_cdc_acm_ulpi.v
   vga_out/       reticle.ip  README.md  rtl/vga_out.v
@@ -81,6 +83,7 @@ It is distributed as part of the repository instead.
 | `usb_device_fs` | `usb_device_fs`, `usb_fs_rx`, `usb_fs_tx`, `usb_dev_core`, `usb_pkt_rx`, `usb_ctrl_ep`, `usb_bulk_ep` | USB full-speed device: NRZI, bit stuffing, SYNC and EOP, CRC5 and CRC16 checked, a control endpoint that enumerates, and a bulk endpoint pair with a byte interface | — |
 | `usb_device_fs_pll` | `usb_device_fs_pll` | `usb_device_fs` with its 48 MHz from the device's PLL and a 12 MHz board clock | `usb_device_fs` |
 | `usb_device_ulpi` | `usb_device_ulpi`, `usb_ulpi_link` | the same device behind a ULPI transceiver, which does the line work in silicon: the bus turnaround, transmit and receive commands, register access, one 60 MHz clock and no PLL | `usb_device_fs` |
+| `usb_host_ulpi` | `usb_host_ulpi`, `usb_ulpi_host_link`, `usb_host_sie`, `usb_host_enum` | the **other end of the wire**: a USB full-speed host behind a ULPI transceiver — a frame every millisecond, tokens with CRC5, data packets with CRC16, handshakes, a timeout with retries, a bus reset driven from the transceiver's own terminations, and an enumeration that reads the device and configuration descriptors and sets an address and a configuration | `usb_device_fs` |
 | `usb_cdc_acm` | `usb_cdc_acm`, `usb_cdc_req`, `usb_cdc_acm_fs`, `usb_cdc_acm_ulpi` | a USB serial port the operating system's own driver binds to: two interfaces with the union functional descriptor, the line-coding and control-line requests, a notification endpoint that sends SERIAL_STATE and a 64-byte bulk pair, behind either link layer | `usb_device_fs`, `usb_device_ulpi` |
 | `ppu2c02` | `ppu2c02`, `ppu_palette` | NES-compatible picture unit: 256x240 raster, nametables and attributes, scrolling through `v`/`t`/`x`/`w`, 8x8 sprites with per-line evaluation, priority and sprite zero hit | — |
 
@@ -127,6 +130,46 @@ one without a union descriptor, one without the endpoint — have not been on a
 board. The page also records where the specification and the driver pull in
 opposite directions and which way the block went: D1 is one bit over four
 things, the block does three of them, and it is set anyway.
+
+[`ip/usb_host_ulpi/README.md`](../ip/usb_host_ulpi/README.md) is the
+fourth, and it is the first page here about a block that is **not a
+peripheral**. Everything else USB in this library answers somebody else's
+tokens; this one sends them. Its page is deliberately short where ULPI's
+is long — the bus is the same bus and that document is not repeated — and
+long in three places a device's never had to be:
+
+- **where the host's registers differ from a device's**, which is less
+  than it looks. ULPI 1.1 §3.8.5.3.2 names the full-speed host
+  "XcvrSelect=01b, DpPulldown=1b, DmPulldown=1b, TermSelect=1b", so
+  Function Control is the **same byte** at both ends and the whole
+  difference is two pull-downs in `0Ah`;
+- **how a host drives a bus reset**, which is the fact easiest to get
+  wrong because it is not a transmission at all: §3.8.5.1 step 2 has the
+  host write Function Control with "XcvrSelect = 00b (HS) and TermSelect
+  = 0b which drives SE0 on the bus (D+ and D- connected to ground via
+  45 Ohm)", and the USB334x datasheet's Table 5-1 is the only place the
+  resistors behind that combination are written down;
+- **where it stops**, which is one edge of a die and is in §9 of that
+  page. The Cynthion's TARGET transceiver is on column 0 of the
+  caBGA-256 — the **left** edge — and `src/fpga/trellis` describes the
+  top and right edges only, for a reason its own doc comment gives. So
+  the design places, routes and produces a bitstream whose every bit
+  decodes, and the one thing it cannot do is name the right balls. That
+  page says what the measurement to take is and which reference
+  bitstreams would settle it.
+
+Its fourth confidence level is **CHECKED** in a different sense from
+`usb_cdc_acm`'s: not "a host did this" but "**our host did this to our
+own device**", which is a real test and a smaller claim.
+`tests/ip_library.rs` puts `usb_host_ulpi` and `usb_device_ulpi` on one
+D+ / D- pair, each behind its own transceiver model, and asserts the
+eighteen bytes of the device descriptor and the thirty-two of the
+configuration descriptor against the same `expected_*` functions the
+device's own tests compare a host *model's* reading against. It found
+four defects in the host and two in the model, and three of the four are
+inherited from `usb_ulpi_link` where they are unreachable rather than
+absent — which is the clearest argument this library has for writing a
+second thing against the same bus.
 
 `rv32i`, `mos6502`, `eth_mac_rmii` and `spiflash_xip` are the **larger
 blocks**, and they are larger in a particular way: each is a whole
@@ -1203,6 +1246,65 @@ is the part that matters:
   says what a Linux host read out of it and what our own host code moved
   through endpoint 1.
 
+- **`usb_host_ulpi`** — not the host model at all, because this block
+  **is** the host. Two of the eleven tests put it and `usb_device_ulpi`
+  on **one D+ / D- pair**, each behind its own transceiver model, with
+  the pair resolved between them by the only three things that drive it:
+  the host's 45 Ohm terminations, whichever end is transmitting, and the
+  device's own 1.5 kOhm pull-up. One runs through well-behaved models and
+  the other through two told to behave the way the part on the board does
+  — each hearing its own transmission, each reporting LineState late out
+  of a backlog that outlives the packet. Both assert **bytes**: the
+  eighteen of the device descriptor and the thirty-two of the
+  configuration descriptor, compared with the same `expected_*` functions
+  the device's own tests compare a host *model's* reading against;
+  `wTotalLength` out of bytes 2 and 3 of a nine-byte read and
+  `bMaxPacketSize0` out of byte 7 of an eight-byte one;
+  `bConfigurationValue` out of byte 5 and `SET_CONFIGURATION` using
+  **that** and not a constant 1; and the address said by the host *and by
+  the device's own `address` output*, which is the only thing that
+  distinguishes an address accepted from one sent.
+
+  The other nine cover what an enumeration that works does not reach. The
+  start-up sequence byte for byte, with `0Ah` = `06h` — the two 15 kOhm
+  pull-downs that are the whole register difference between a host and a
+  peripheral — and with the Debug register read **once**, because SE0 on a
+  host's port is the answer and not something to retry. The board's
+  vendor register written and read back before anything else. The probe:
+  seven registers read through the block's own port with `enum_en` low,
+  the part's Vendor and Product IDs among them, and **nothing put on the
+  USB** while it happens. An empty port is not an attachment and gets no
+  frame. A device that pulls D- up is reported as low speed and is sent
+  nothing. A device that never answers is given up on after four tries
+  and reported as a timeout rather than an error, with the four SETUP
+  tokens counted. A device that leaves during the reset is reported as
+  that. And `FS_LINE` is live: set to `10` with the pair at J, the host
+  calls a full-speed device low speed — which is the failure a board that
+  crosses DP and DM causes, from the other end of the same wire.
+
+  **What it found is the argument for writing it.** Four defects in the
+  host, three of them inherited from `usb_ulpi_link` where they are
+  unreachable rather than absent: a register read's answer latched as a
+  receive command, a start-up that sat out the transceiver's own reset and
+  then read the receive command §3.5 promises *afterwards* as the reset
+  itself, and one register written at two widths from two places. And two
+  in the **model** every USB test here runs against: its receiver
+  assembled its own transmission into bytes, because the guard was the
+  ULPI bus state and a packet leaves that state over and over while
+  receive commands go out; and it cleared RxActive at the first SE0 of an
+  end of packet rather than at the SE0-to-J transition, which is what the
+  part's own datasheet says it does **not** do and what keeps two bit
+  times of turnaround from being violated. Neither had ever been asked,
+  because the device's harness hands the model `None` while the device
+  transmits.
+
+  It has **not run on a board**, and that is not for want of trying:
+  [`ip/usb_host_ulpi/README.md`](../ip/usb_host_ulpi/README.md) §9 has
+  the whole of why, which is that the Cynthion's TARGET transceiver is on
+  the left edge of the die and this backend describes the top and right
+  edges only. The design places, routes and writes a bitstream whose
+  every bit decodes; what it cannot do is put a pad on the right ball.
+
 - **`usb_cdc_acm`** — the **same host model again**, through both link
   layers and through the transceiver that reports LineState late, because a
   class layer that only works with the clean model is not finished. Twelve
@@ -1587,6 +1689,10 @@ exactly what this table is for.
 | `usb_device_ulpi` | `usb_device_ulpi` | VID=16'h1209, PID=16'h0001 | LUT6 | 82 x dff, 804 x lut, 2 x memory 64x8, 2 x memrd, 2 x memwr | 11 |
 | `usb_device_ulpi` | `usb_device_ulpi` | VID=16'h1209, PID=16'h0001 | iCE40 HX1K | 97 x SB_CARRY, 1024 x SB_DFFE, 316 x SB_DFFER, 37 x SB_DFFES, 8 x SB_DFFR, 1 x SB_GB, 55 x SB_IO, 2954 x SB_LUT4 | 10 |
 | `usb_device_ulpi` | `usb_device_ulpi` | VID=16'h1209, PID=16'h0001 | ECP5 45F | 1 x DCCA, 944 x LUT4, 16 x TRELLIS_DPR16X4, 361 x TRELLIS_FF, 55 x TRELLIS_IO | 10 |
+| `usb_host_ulpi` | `usb_host_ulpi` | (defaults) | LUT4 | 97 x dff, 1302 x lut | 10 |
+| `usb_host_ulpi` | `usb_host_ulpi` | (defaults) | LUT6 | 97 x dff, 1160 x lut | 11 |
+| `usb_host_ulpi` | `usb_host_ulpi` | (defaults) | iCE40 HX1K | 132 x SB_CARRY, 487 x SB_DFFER, 35 x SB_DFFES, 25 x SB_DFFR, 1 x SB_GB, 159 x SB_IO, 1235 x SB_LUT4 | 10 |
+| `usb_host_ulpi` | `usb_host_ulpi` | (defaults) | ECP5 45F | 1 x DCCA, 1318 x LUT4, 547 x TRELLIS_FF, 159 x TRELLIS_IO | 10 |
 | `usb_cdc_acm` | `usb_cdc_acm_fs` | VID=16'h1209, PID=16'h0001 | LUT4 | 113 x dff, 1088 x lut, 1 x memory 16x8, 2 x memory 64x8, 3 x memrd, 3 x memwr | 12 |
 | `usb_cdc_acm` | `usb_cdc_acm_fs` | VID=16'h1209, PID=16'h0001 | LUT6 | 113 x dff, 910 x lut, 1 x memory 16x8, 2 x memory 64x8, 3 x memrd, 3 x memwr | 10 |
 | `usb_cdc_acm` | `usb_cdc_acm_fs` | VID=16'h1209, PID=16'h0001 | iCE40 HX1K | 84 x SB_CARRY, 1152 x SB_DFFE, 413 x SB_DFFER, 44 x SB_DFFES, 14 x SB_DFFR, 3 x SB_DFFS, 1 x SB_GB, 104 x SB_IO, 3417 x SB_LUT4 | 12 |
