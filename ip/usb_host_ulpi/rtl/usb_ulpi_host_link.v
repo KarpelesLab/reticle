@@ -309,6 +309,13 @@ module usb_ulpi_host_link #(
     reg        rx_any;
     reg [7:0]  rx_cmd_q;
     reg        rx_cmd_seen_q;
+    // LineState, kept **separately** from the receive command it usually
+    // comes in, because the start-up also learns it from the Debug register
+    // and a register is not a receive command. Writing `rx_cmd_q[1:0]` from
+    // one place and `rx_cmd_q` from another would be two assignments to one
+    // register of two different widths, which is a shape worth not having
+    // whatever a compiler makes of it.
+    reg [1:0]  line_q;
     reg        ready_q;
 
     reg [6:0]  idx;
@@ -372,7 +379,7 @@ module usb_ulpi_host_link #(
     assign rx_error    = rx_error_q;
     assign rx_cmd      = rx_cmd_q;
     assign rx_cmd_seen = rx_cmd_seen_q;
-    assign line_state  = rx_cmd_q[1:0];
+    assign line_state  = line_q;
     assign vbus_state  = rx_cmd_q[3:2];
     assign id_pin      = rx_cmd_q[6];
 
@@ -445,6 +452,7 @@ module usb_ulpi_host_link #(
             rx_any        <= 1'b0;
             rx_cmd_q      <= 8'h00;
             rx_cmd_seen_q <= 1'b0;
+            line_q        <= LINE_SE0;
             ready_q       <= 1'b0;
             idx           <= 7'd0;
             len_q         <= 7'd0;
@@ -470,11 +478,40 @@ module usb_ulpi_host_link #(
             reg_done_q <= 1'b0;
 
             // -------------------------------------------------------------
-            // What the transceiver said. Nothing on the bus is believed
-            // until the start-up sequence is over, since a transceiver
-            // being reset drives it with whatever it likes (§3.5).
+            // What the transceiver said.
+            //
+            // **The bus is believed from the end of the transceiver's own
+            // reset and not from the end of the start-up**, and the
+            // difference is the one receive command a probe cannot do
+            // without. ULPI 1.1 §3.5:
+            //
+            //   "When the reset completes, the PHY de-asserts `dir` and
+            //    automatically clears the Reset bit. After de-asserting
+            //    `dir`, the PHY must **immediately re-assert `dir` and send
+            //    an RX CMD update to the Link**."
+            //
+            // That one is promised. Every other receive command is sent
+            // **because something changed** (§3.8.1.3), so a port whose VBUS
+            // and whose pair have been the same since before the Link
+            // started listening sends no more of them — and a Link that
+            // waits for its whole start-up to finish has already thrown away
+            // the only one it was ever going to get. `VbusState` would then
+            // read its reset value for ever on a board where VBUS is
+            // present and static, which is every board that is working.
+            //
+            // The peripheral's Link waits for `ready_q` and loses nothing by
+            // it: it has no use for VbusState and it learns LineState from
+            // the Debug register instead. A host is the end that has to
+            // decide whether the port has power before it does anything, so
+            // it cannot.
+            //
+            // `step > I_WAIT` is exactly "the reset §3.5 asks for is over":
+            // during it `step` is `I_WAIT` and §3.5's "during that reset the
+            // data bus is driven by the transceiver and the data is
+            // undefined" means nothing on the bus may be read, which is what
+            // this excludes.
             // -------------------------------------------------------------
-            if (ready_q) begin
+            if (step > I_WAIT) begin
                 if (dir_rose && ulpi_nxt) begin
                     // `dir` and `nxt` together out of an idle bus: a
                     // packet is starting. This cycle is the turnaround
@@ -487,10 +524,36 @@ module usb_ulpi_host_link #(
                         rx_data_q  <= ulpi_data_i;
                         rx_valid_q <= 1'b1;
                         rx_any     <= 1'b1;
+                    end else if (state == S_RD_DATA) begin
+                        // **The answer to a register read, and not a receive
+                        // command.** `dir` high with `nxt` low is a receive
+                        // command everywhere else on this bus, and in this one
+                        // cycle it is the byte the transceiver was asked for:
+                        // "It does **not** assert `nxt` for that byte, which
+                        // is the one place in ULPI where data is not
+                        // throttled" (ULPI 1.1 §3.8.3.1 and Figure 22), and
+                        // the reason it does not is so that `nxt` is left free
+                        // to mean "a USB receive is starting" and override the
+                        // read — which is the `ulpi_nxt` arm above.
+                        //
+                        // So the two are told apart by the Link's own state
+                        // and not by anything on the wire, because there is
+                        // nothing on the wire to tell them apart by. The
+                        // register path below reads the same byte.
+                        //
+                        // The peripheral's Link has no such guard and does not
+                        // need one: its only register reads are its start-up's
+                        // and it believes nothing on the bus until that is
+                        // over, so the cycle never reaches a `ready_q` of one.
+                        // A host's register port is open for as long as the
+                        // design wants it, so for a host this is the
+                        // difference between reading `VbusState` and reading
+                        // Function Control's bits 3:2 and calling them VBUS.
                     end else begin
                         // A receive command.
                         rx_cmd_q      <= ulpi_data_i;
                         rx_cmd_seen_q <= 1'b1;
+                        line_q        <= ulpi_data_i[1:0];
                         case (ulpi_data_i[5:4])
                             RX_ON: begin
                                 if (!rx_active_q) begin
@@ -566,8 +629,40 @@ module usb_ulpi_host_link #(
                 // bus (§3.8.4.2).
                 data_out <= 8'h00;
                 case (state)
-                    S_SETTLE, S_NEXT, S_READY: begin
+                    S_SETTLE, S_READY: begin
                         // Nothing was in flight.
+                    end
+                    S_NEXT: begin
+                        // **One state has somewhere to go while `dir` is
+                        // high, and it is the wait for the transceiver's own
+                        // reset.**
+                        //
+                        // §3.5: "When this bit is set, the transceiver will
+                        // assert `dir` and reset the UTMI+ core." It asserts
+                        // it at once — in the model of it beside this block,
+                        // in the same cycle the `stp` that commits the write
+                        // is seen — and that is the cycle `S_WR_STP` hands to
+                        // `S_NEXT`. A `S_NEXT` that does nothing while `dir`
+                        // is high therefore sits out the whole reset, and
+                        // only starts waiting for it once `dir` has gone
+                        // **low**, which is the reset being over.
+                        //
+                        // What that costs is not the wait, which still ends:
+                        // it is the receive command. §3.5 promises exactly
+                        // one after the reset — "the PHY must immediately
+                        // re-assert `dir` and send an RX CMD update to the
+                        // Link" — and a Link that is still in `S_WAIT_RST`
+                        // when it arrives reads that re-assertion as the
+                        // reset it was waiting for and the byte as nothing at
+                        // all. Measured in simulation: thirteen cycles of
+                        // `dir` with the Link in `S_NEXT`, then the receive
+                        // command's own byte arriving in `S_WAIT_RST` and
+                        // being dropped. For a peripheral that is invisible,
+                        // because it has no use for a receive command it
+                        // cannot get another of; for a host it is the
+                        // difference between knowing whether the port has
+                        // VBUS and never finding out.
+                        if (step == I_WAIT) state <= S_WAIT_RST;
                     end
                     S_TX_CMD, S_TX_DATA, S_TX_CRC0, S_TX_CRC1: begin
                         // A transmit is dropped. Whatever is above this
@@ -750,7 +845,7 @@ module usb_ulpi_host_link #(
                                 // gets without waiting for a receive
                                 // command, and a transceiver sends one of
                                 // those only when something changes.
-                                rx_cmd_q[1:0] <= ulpi_data_i[1:0];
+                                line_q        <= ulpi_data_i[1:0];
                                 step          <= I_DONE;
                                 state         <= S_NEXT;
                             end

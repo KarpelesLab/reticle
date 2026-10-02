@@ -358,6 +358,16 @@ const VARIANTS: &[Variant] = &[
         top: "usb_device_ulpi",
         params: &[("VID", "16'h1209"), ("PID", "16'h0001")],
     },
+    // The one block in this library that is a **host** and not a peripheral,
+    // at its own defaults: the waits of an enumeration are milliseconds on a
+    // board and the counters that hold them are what most of its registers
+    // are, so the row is measured with the numbers a board gets rather than
+    // the small ones the simulation uses.
+    Variant {
+        package: "usb_host_ulpi",
+        top: "usb_host_ulpi",
+        params: &[],
+    },
     Variant {
         package: "usb_cdc_acm",
         top: "usb_cdc_acm_fs",
@@ -10908,6 +10918,14 @@ const ULPI_PULLUP_SETTLE: u64 = 600;
 const ULPI_FUNC_CTRL: u8 = 0x04;
 const ULPI_OTG_CTRL: u8 = 0x0A;
 const ULPI_DEBUG: u8 = 0x15;
+/// The read-only registers that say what the part is, and the one that
+/// reports its interrupt sources. ULPI 1.1 Table 19 for the addresses;
+/// `read_reg` says where the values come from.
+const ULPI_VENDOR_ID_LOW: u8 = 0x00;
+const ULPI_VENDOR_ID_HIGH: u8 = 0x01;
+const ULPI_PRODUCT_ID_LOW: u8 = 0x02;
+const ULPI_PRODUCT_ID_HIGH: u8 = 0x03;
+const ULPI_INT_STATUS: u8 = 0x13;
 
 /// LineState(1:0) of a receive command: bit 0 is D+, bit 1 is D-.
 fn line_bits(line: UsbLine) -> u8 {
@@ -11171,6 +11189,12 @@ struct UlpiPhy {
     rx_error: bool,
     rx_done: bool,
     line_state: u8,
+    /// What the pair is doing **this cycle**, whatever the status being
+    /// reported says. `line_state` is the field a receive command carries and
+    /// is deliberately held still during a packet (and queued, with
+    /// `stale_line`); this is the pair itself, and the end of a packet is
+    /// timed from it.
+    line_now: u8,
     /// Interface clocks `TermSelect` has been set for, so the pair can be
     /// charging rather than already at J. See `ULPI_PULLUP_SETTLE`.
     pullup: u64,
@@ -11248,6 +11272,32 @@ struct UlpiPhy {
     /// The LineState values still to be reported, oldest first; the last of
     /// them is what the pair is doing now. Only used when `stale_line` is set.
     line_queue: std::collections::VecDeque<u8>,
+    /// Whether this transceiver is a **host's** rather than a peripheral's.
+    ///
+    /// It changes two things and neither is on the ULPI bus, which is why one
+    /// model serves both: what an undriven pair is at, and whether the
+    /// transceiver can drive SE0 onto it.
+    ///
+    /// A peripheral's `TermSelect` connects a 1.5 kOhm pull-up to D+, so a
+    /// pair nothing is driving goes to **J** once it has charged. A host's
+    /// connects nothing: a host has two 15 kOhm pull-downs and an idle
+    /// downstream port is **SE0** until a device pulls a line up. And a host
+    /// drives SE0 for a bus reset by switching the 45 Ohm high-speed
+    /// terminations on with no transmitter running, which is
+    /// `XcvrSelect = 00b` with `TermSelect = 0b` — ULPI 1.1 §3.8.5.1 step 2
+    /// and the `HSTERM_EN` column of USB334x DS00002646A Table 5-1's "Host
+    /// Chirp" row. `drives_se0` is that condition and nothing else.
+    host: bool,
+    /// The transceiver's own registers above `30h`, which ULPI reserves and
+    /// describes not at all (§4.1).
+    ///
+    /// `39h` is a USB3343's "USB IO & Power Management", whose bit 1 is
+    /// `SwapDP/DM` and whose reset value is `04h` (DS00002646A §7.1.3.5). It
+    /// is here so that a Link told to write one can be watched writing it and
+    /// reading it back; nothing in this model acts on the bit, because what
+    /// it does is exchange two pins on the other side of the pair and this
+    /// model has no pins.
+    vendor: BTreeMap<u8, u8>,
 }
 
 impl UlpiPhy {
@@ -11276,6 +11326,7 @@ impl UlpiPhy {
             rx_error: false,
             rx_done: false,
             line_state: 0b00,
+            line_now: 0b00,
             pullup: 0,
             sent: 0,
             owed: false,
@@ -11299,9 +11350,17 @@ impl UlpiPhy {
             hears_itself: false,
             stale_line: false,
             line_queue: std::collections::VecDeque::new(),
+            host: false,
+            vendor: BTreeMap::new(),
         };
         phy.power_on();
         phy
+    }
+
+    /// The same transceiver on a **host's** port. See `host`.
+    fn as_host(mut self) -> UlpiPhy {
+        self.host = true;
+        self
     }
 
     /// One cycle in `every` has `nxt` low.
@@ -11365,6 +11424,13 @@ impl UlpiPhy {
     fn power_on(&mut self) {
         self.regs.insert(ULPI_FUNC_CTRL, 0x41);
         self.regs.insert(ULPI_OTG_CTRL, 0x06);
+        // The reset value DS00002646A §7.1.3.5 gives `39h`: `SwapDP/DM`
+        // clear, the UART-mode regulator at its default of `01b`. A
+        // transceiver's own registers survive the core reset of §3.5 — "The
+        // RESET bit in the Function Control Register does not reset the bits
+        // of the ULPI register array" (§7.1) — but the pin reset this model
+        // calls `power_on` for does not, so it is set here and not in `new`.
+        self.vendor.insert(0x39, 0x04);
         self.state = PhyState::Idle;
         self.dir = false;
         self.nxt = false;
@@ -11387,12 +11453,49 @@ impl UlpiPhy {
 
     /// What an undriven pair is at: SE0 until this transceiver's own
     /// `TermSelect` pull-up has been connected long enough to charge it.
+    ///
+    /// **A host's port has no pull-up at all** and so is at SE0 for ever
+    /// until something else pulls a line up, which is what makes an empty
+    /// socket and a device that is still charging the pair look the same from
+    /// this end and is why `usb_ulpi_host_link` reads LineState **once**
+    /// where the peripheral's Link reads it until it is not SE0.
     fn idle_line(&self) -> UsbLine {
-        if !self.no_pullup && self.pullup >= ULPI_PULLUP_SETTLE {
+        if !self.host && !self.no_pullup && self.pullup >= ULPI_PULLUP_SETTLE {
             UsbLine::J
         } else {
             UsbLine::Se0
         }
+    }
+
+    /// Whether this transceiver's 1.5 kOhm pull-up has had time to bring the
+    /// pair up, which is what a harness joining two of these needs to know to
+    /// decide what an undriven pair is at.
+    fn pullup_ready(&self) -> bool {
+        !self.host && !self.no_pullup && self.pullup >= ULPI_PULLUP_SETTLE
+    }
+
+    /// Whether this transceiver is **driving SE0** onto the pair through its
+    /// 45 Ohm high-speed terminations, which is how a ULPI host performs a
+    /// bus reset:
+    ///
+    ///   "If a host detects a full speed peripheral, it resets the peripheral
+    ///    by writing to the Function Control register and setting
+    ///    XcvrSelect = 00b (HS) and TermSelect = 0b which drives SE0 on the
+    ///    bus (D+ and D- connected to ground via 45 Ohm)."
+    ///    — ULPI 1.1 §3.8.5.1 step 2
+    ///
+    /// The same two fields with both pull-downs set are the "Host Chirp" and
+    /// "Host High Speed" rows of USB334x DS00002646A Table 5-1, and they are
+    /// the only two rows of it with `HSTERM_EN` asserted on a host — so this
+    /// is the datasheet's condition and not a reading of it. `OpMode` does not
+    /// come into it: §3.8.5.1 asks a host to set `10b` as well, but that is
+    /// "for correct chirp transmit and receive" and changes the encoder, not
+    /// the resistors.
+    fn drives_se0(&self) -> bool {
+        let func = self.regs.get(&ULPI_FUNC_CTRL).copied().unwrap_or(0);
+        let otg = self.regs.get(&ULPI_OTG_CTRL).copied().unwrap_or(0);
+        // XcvrSelect = 00, TermSelect = 0, and a host's two pull-downs.
+        func & 0x07 == 0x00 && otg & 0x06 == 0x06
     }
 
     fn problem(&mut self, why: String) {
@@ -11481,6 +11584,31 @@ impl UlpiPhy {
                 0x41
             }
             ULPI_FUNC_CTRL | ULPI_OTG_CTRL => self.regs[&addr],
+            // The four read-only bytes that say what the part is, at the
+            // addresses ULPI 1.1 Table 19 gives and with the values a
+            // Microchip USB3343 has: Vendor ID `0424h` and Product ID
+            // `0009h` (DS00002646A Table 7-1, §7.1.1.1 to §7.1.1.4). The
+            // first of those has been **read off a part** on this board;
+            // `ip/usb_device_ulpi/README.md` §11 has that measurement and
+            // the other three are quoted from the same table.
+            ULPI_VENDOR_ID_LOW => 0x24,
+            ULPI_VENDOR_ID_HIGH => 0x04,
+            ULPI_PRODUCT_ID_LOW => 0x09,
+            ULPI_PRODUCT_ID_HIGH => 0x00,
+            // USB Interrupt Status, which "dynamically updates to reflect
+            // current status of interrupt sources" (DS00002646A §7.1.1.10).
+            // Nothing in this model has an interrupt source, so it is zero —
+            // and on a part it reads zero for `VbusValid` too whenever that
+            // comparator's two interrupt-enable bits are set, which they are
+            // by default. The receive command's `VbusState` is the field
+            // worth reading and this is here so a probe can be watched
+            // reading the other one.
+            ULPI_INT_STATUS => 0x00,
+            // The transceiver's own registers (§4.1). A read of one this
+            // model has never been given is zero rather than a complaint: the
+            // addresses are reserved to the part and what they answer is not
+            // ULPI's business.
+            0x30..=0x3F => self.vendor.get(&addr).copied().unwrap_or(0),
             other => {
                 self.problem(format!("a read of register {other:#04x}, which is not one"));
                 0
@@ -11497,6 +11625,9 @@ impl UlpiPhy {
             }
             ULPI_OTG_CTRL => {
                 self.regs.insert(addr, value);
+            }
+            0x30..=0x3F => {
+                self.vendor.insert(addr, value);
             }
             other => self.problem(format!(
                 "a write of {value:#04x} to register {other:#04x}, which is not writable"
@@ -11569,8 +11700,35 @@ impl UlpiPhy {
 
         // The line, except while the transceiver owns it: during a
         // transmit the receive path is blocked (ULPI 1.1 §3.8.2.2).
-        if !matches!(self.state, PhyState::Line | PhyState::Collect) {
+        //
+        // **`tx_line` and not only the bus state**, and the difference is
+        // what a harness that joins two of these finds out. The ULPI bus
+        // leaves `Line` over and over during a packet — every transition of
+        // the line is a receive command and each costs a turnaround, a byte
+        // and a release — so the state alone says the transceiver is idle for
+        // a third of its own transmission. A harness that hands the *pair*
+        // to both ends then has this receiver assemble its own packet into
+        // bytes and deliver them to its own Link, which is nothing any
+        // transceiver does: a full-speed receiver is squelched while its
+        // transmitter drives. Measured in exactly that harness: a host read
+        // back its own SETUP token and its own DATA0 packet, byte for byte,
+        // and then waited for a handshake it had already filed as a packet.
+        //
+        // `hears_itself` is **not** this and is still a real thing a part
+        // does: it is RxActive being reported in the receive command's status
+        // during a transmit, which says nothing about bytes. That flag stays
+        // exactly as it was.
+        //
+        // The device tests were never affected, because the harness they run
+        // in hands this model `None` while the device transmits and `None`
+        // means "the other end has let go" — so the receiver was sampling an
+        // idle line rather than the packet. Which is the same lesson: a model
+        // is only as good as the question its harness asks it.
+        if !matches!(self.state, PhyState::Line | PhyState::Collect)
+            && self.tx_line.is_empty()
+        {
             let seen = host.unwrap_or(self.idle_line());
+            self.line_now = line_bits(seen);
             match self.rx.step(seen) {
                 LineEvent::Byte(b) => self.rx_bytes.push(b),
                 LineEvent::Eop => self.rx_done = true,
@@ -11811,7 +11969,31 @@ impl UlpiPhy {
                 self.rx_out();
             }
             PhyState::Rx => {
-                if self.rx_done && self.rx_bytes.is_empty() {
+                // **RxActive is not cleared until the pair is back at idle**,
+                // and that is the part's own rule and not a reading of it:
+                //
+                //   "In Full Speed, the USB334x will not issue a Rxactive
+                //    de-assertion in the RXCMD until the DP/DM linestate
+                //    transitions to idle. This prevents the Link from
+                //    violating the two Full Speed bit times minimum turn
+                //    around time."
+                //    — USB334x DS00002646A §6.3.1
+                //
+                // The receiver knows a packet is over at the **first** SE0 of
+                // its end-of-packet, two and a half bit times before the pair
+                // is anybody's again. A transceiver that reported it there
+                // would hand its Link a starting gun for a window that USB
+                // measures from the SE0-to-J transition, and a Link answering
+                // promptly from the wrong end of it drives the pair while the
+                // other end still is. This model used to do exactly that, and
+                // nothing noticed until two of them were joined pair to pair:
+                // the device's answer and the host's next token each
+                // overlapped the other end's end-of-packet by a few cycles.
+                //
+                // `line_now` and not `line_state`, because `line_state` is the
+                // field a receive command carries and is held still during a
+                // packet.
+                if self.rx_done && self.rx_bytes.is_empty() && self.line_now != 0b00 {
                     self.rx_active = false;
                 }
                 if !self.rx_active && (self.terse_eop || self.sent == self.status()) {
@@ -12512,6 +12694,843 @@ fn usb_device_ulpi_is_one_clock_domain() {
         "usb_device_ulpi",
         &[("VID", "16'h1209"), ("PID", "16'h0001")],
     );
+    assert!(kinds.is_empty(), "nothing should cross: {kinds:?}");
+}
+
+// ---------------------------------------------------------------------------
+// usb_host_ulpi: the other end of the wire, against our own device
+// ---------------------------------------------------------------------------
+
+/// The stages `usb_host_enum` reports on `stage`, which is what a test that
+/// waits for one has to name.
+const E_OFF: u64 = 0;
+const E_IDLE: u64 = 1;
+const E_LOWSPEED: u64 = 3;
+const E_DEV8: u64 = 9;
+const E_UP: u64 = 17;
+const E_FAIL: u64 = 18;
+
+/// `usb_host_sie`'s `trn_status`, as `fail_status` reports it, plus the two
+/// codes `usb_host_enum` adds for a failure that was not a transaction.
+const ST_TIMEOUT: u64 = 4;
+const FAIL_NOT_J: u64 = 6;
+
+/// `usb_host_ulpi` behind a transceiver model of its own, with the pair
+/// brought out so that something can be put on the other end of it.
+///
+/// This is `UlpiPair` turned round. It is **not** a `UsbPair`: that trait is
+/// the far end of a pair as a *host* reaches it, and this is the host.
+struct UlpiHost<'d> {
+    sim: Simulator<'d>,
+    clk: NetHandle,
+    dir: NetHandle,
+    nxt: NetHandle,
+    data_in: NetHandle,
+    data_out: NetHandle,
+    data_oe: NetHandle,
+    stp: NetHandle,
+    rst_out: NetHandle,
+    enum_en: NetHandle,
+    reg_start: NetHandle,
+    reg_write: NetHandle,
+    reg_addr: NetHandle,
+    sof_sent: NetHandle,
+    desc_valid: NetHandle,
+    desc_data: NetHandle,
+    desc_index: NetHandle,
+    desc_tag: NetHandle,
+    desc_done: NetHandle,
+    desc_len: NetHandle,
+    phy: UlpiPhy,
+    /// The descriptor bytes the block streamed out, by `desc_tag`, written at
+    /// the offset it gave each one — which is the whole of what a design has
+    /// to do with the stream, and the reason it has an offset.
+    desc: [Vec<u8>; 2],
+    /// How long each descriptor was when `desc_done` said it was whole.
+    desc_whole: [Option<usize>; 2],
+    /// Frames sent.
+    sofs: u64,
+}
+
+impl<'d> UlpiHost<'d> {
+    /// The block out of reset and the transceiver configured, which is the
+    /// start-up sequence run to its end with nothing on the pair — an empty
+    /// socket, which is what a host's own two pull-downs make of one.
+    fn new(design: &'d Design, phy: UlpiPhy) -> UlpiHost<'d> {
+        let mut host = UlpiHost::fresh(design, phy);
+        for _ in 0..8000 {
+            if host.ready() {
+                return host;
+            }
+            host.cycle(Some(UsbLine::Se0));
+        }
+        panic!(
+            "the transceiver was never configured; it saw {:?}",
+            host.phy.accesses
+        );
+    }
+
+    /// Out of reset and **not** stepped at all, for a caller that has
+    /// something on the other end of the pair and has to resolve it itself.
+    ///
+    /// The start-up reads the Debug register, so what the pair is doing while
+    /// it runs is what the host's `line_state` starts at: a host brought up
+    /// against a device that is already there must not be told the port is
+    /// empty.
+    fn fresh(design: &'d Design, phy: UlpiPhy) -> UlpiHost<'d> {
+        let sim = simulate(design, "usb_host_ulpi");
+        let pin = |n: &str| top_net(&sim, n);
+        let mut host = UlpiHost {
+            clk: pin("clk60"),
+            dir: pin("ulpi_dir"),
+            nxt: pin("ulpi_nxt"),
+            data_in: pin("ulpi_data_i"),
+            data_out: pin("ulpi_data_o"),
+            data_oe: pin("ulpi_data_oe"),
+            stp: pin("ulpi_stp"),
+            rst_out: pin("ulpi_rst_n"),
+            enum_en: pin("enum_en"),
+            reg_start: pin("reg_start"),
+            reg_write: pin("reg_write"),
+            reg_addr: pin("reg_addr"),
+            sof_sent: pin("sof_sent"),
+            desc_valid: pin("desc_valid"),
+            desc_data: pin("desc_data"),
+            desc_index: pin("desc_index"),
+            desc_tag: pin("desc_tag"),
+            desc_done: pin("desc_done"),
+            desc_len: pin("desc_len"),
+            phy,
+            desc: [Vec::new(), Vec::new()],
+            desc_whole: [None, None],
+            sofs: 0,
+            sim,
+        };
+        host.sim.set(host.dir, bit(false));
+        host.sim.set(host.nxt, bit(false));
+        host.sim.set(host.data_in, word(8, 0));
+        host.sim.set(host.enum_en, bit(false));
+        host.sim.set(host.reg_start, bit(false));
+        host.sim.set(host.reg_write, bit(false));
+        host.sim.set(host.reg_addr, word(6, 0));
+        host.sim.set(top_net(&host.sim, "reg_wdata"), word(8, 0));
+        let clk = host.clk;
+        let rst_n = top_net(&host.sim, "rst_n");
+        reset(&mut host.sim, clk, rst_n);
+        host
+    }
+
+    fn ready(&self) -> bool {
+        high(&self.sim, top_net(&self.sim, "phy_ready"))
+    }
+
+    fn port(&self, name: &str) -> u64 {
+        get_u64(&self.sim, top_net(&self.sim, name))
+    }
+
+    fn flag(&self, name: &str) -> bool {
+        high(&self.sim, top_net(&self.sim, name))
+    }
+
+    fn driven(&self) -> Option<UsbLine> {
+        self.phy.line_out
+    }
+
+    /// One clock, with `pair` the state of the D+ / D- pair this cycle.
+    fn cycle(&mut self, pair: Option<UsbLine>) {
+        // What the transceiver drives for this cycle, presented before the
+        // edge that samples it, as every two-domain testbench here does.
+        self.sim.set(self.dir, bit(self.phy.dir));
+        self.sim.set(self.nxt, bit(self.phy.nxt));
+        self.sim
+            .set(self.data_in, word(8, u64::from(self.phy.data)));
+        self.sim.run_for(HALF);
+        let oe = high(&self.sim, self.data_oe);
+        let link = LinkOut {
+            oe,
+            // Only while the Link drives, for the reason `UlpiPair::cycle`
+            // gives: what the lines carry otherwise is not a value it claims.
+            data: if oe {
+                octet(get_u64(&self.sim, self.data_out))
+            } else {
+                0
+            },
+            stp: high(&self.sim, self.stp),
+            rst_n: high(&self.sim, self.rst_out),
+        };
+        if high(&self.sim, self.sof_sent) {
+            self.sofs += 1;
+        }
+        if high(&self.sim, self.desc_valid) {
+            let tag = usize::try_from(get_u64(&self.sim, self.desc_tag)).expect("a tag");
+            let at = usize::try_from(get_u64(&self.sim, self.desc_index)).expect("an index");
+            let byte = octet(get_u64(&self.sim, self.desc_data));
+            if tag < 2 {
+                if self.desc[tag].len() <= at {
+                    self.desc[tag].resize(at + 1, 0);
+                }
+                self.desc[tag][at] = byte;
+            }
+        }
+        if high(&self.sim, self.desc_done) {
+            let tag = usize::try_from(get_u64(&self.sim, self.desc_tag)).expect("a tag");
+            let len = usize::try_from(get_u64(&self.sim, self.desc_len)).expect("a length");
+            if tag < 2 {
+                self.desc_whole[tag] = Some(len);
+            }
+        }
+        self.sim.set(self.clk, bit(true));
+        self.sim.run_for(HALF);
+        self.sim.set(self.clk, bit(false));
+        self.phy.step(&link, pair);
+    }
+
+    /// Lets the enumeration start, which is also what hands the register port
+    /// over to it.
+    fn enable(&mut self) {
+        self.sim.set(self.enum_en, bit(true));
+    }
+
+    /// One register read through the block's own port, the way a design that
+    /// probes the transceiver does it: hold the request until the port has
+    /// taken it, then wait for `reg_done`. `None` is `reg_ok` low.
+    fn read_register(&mut self, addr: u8, line: UsbLine) -> Option<u8> {
+        self.sim.set(self.reg_write, bit(false));
+        self.sim.set(self.reg_addr, word(6, u64::from(addr)));
+        self.sim.set(self.reg_start, bit(true));
+        let mut taken = false;
+        for _ in 0..4000 {
+            self.cycle(Some(line));
+            if !taken && self.flag("reg_busy") {
+                taken = true;
+                self.sim.set(self.reg_start, bit(false));
+            }
+            if self.flag("reg_done") {
+                self.sim.set(self.reg_start, bit(false));
+                return if self.flag("reg_ok") {
+                    Some(octet(self.port("reg_rdata")))
+                } else {
+                    None
+                };
+            }
+        }
+        self.sim.set(self.reg_start, bit(false));
+        panic!("a register read of {addr:#04x} never finished");
+    }
+
+    /// Cycles with the pair held where the caller says, which is how a port
+    /// with nothing in it and a port with a device that will not answer are
+    /// both modelled without a second simulation.
+    fn run_alone(&mut self, line: UsbLine, cycles: u64) {
+        for _ in 0..cycles {
+            self.cycle(Some(line));
+        }
+    }
+
+    /// Cycles until `want` is the stage, or `limit` cycles, with the pair
+    /// held. Says whether it got there.
+    fn until_stage_alone(&mut self, line: UsbLine, want: u64, limit: u64) -> bool {
+        for _ in 0..limit {
+            if self.port("stage") == want {
+                return true;
+            }
+            self.cycle(Some(line));
+        }
+        self.port("stage") == want
+    }
+}
+
+/// Our host and our own device, each behind a transceiver model, with the
+/// pair between them resolved by the only three things that drive it.
+///
+/// Both halves are this repository's, and that is the point of the test and
+/// also its limit: it establishes that the two agree, not that either agrees
+/// with anybody else's. `ip/usb_device_ulpi` has already been enumerated by a
+/// real host on a real board, which is what makes the device side of this a
+/// fixed point rather than a second guess — so a disagreement here is the
+/// host's.
+struct HostDevice<'d> {
+    host: UlpiHost<'d>,
+    dev: UlpiPair<'d>,
+    problems: Vec<String>,
+}
+
+impl<'d> HostDevice<'d> {
+    fn new(host_design: &'d Design, dev_design: &'d Design, stale: bool) -> HostDevice<'d> {
+        let dev_phy = if stale {
+            UlpiPhy::new(ULPI_CPB)
+                .hearing_itself()
+                .reporting_stale_line()
+        } else {
+            UlpiPhy::new(ULPI_CPB)
+        };
+        // The device first, and on its own: its start-up has to connect its
+        // own pull-up and wait for the pair to charge, and until it has there
+        // is nothing on the pair for a host to see. That is the order the two
+        // ends really come up in on a board, where the device is plugged into
+        // a port that has been idle.
+        let dev = UlpiPair::with_phy(dev_design, dev_phy);
+        let host_phy = if stale {
+            UlpiPhy::new(ULPI_CPB)
+                .as_host()
+                .hearing_itself()
+                .reporting_stale_line()
+        } else {
+            UlpiPhy::new(ULPI_CPB).as_host()
+        };
+        // The host's own start-up has to run with the device already on the
+        // pair, because it reads the Debug register and what that says is
+        // where this host thinks the port is. Brought up against SE0 and then
+        // joined, it would start out believing the socket is empty.
+        let host = UlpiHost::fresh(host_design, host_phy);
+        let mut both = HostDevice {
+            host,
+            dev,
+            problems: Vec::new(),
+        };
+        for _ in 0..8000 {
+            if both.host.ready() {
+                return both;
+            }
+            both.cycle();
+        }
+        panic!(
+            "the host's transceiver was never configured; it saw {:?}",
+            both.host.phy.accesses
+        );
+    }
+
+    /// One cycle of both, with the pair worked out between them.
+    fn cycle(&mut self) {
+        let h = self.host.driven();
+        let d = self.dev.driven();
+        if h.is_some() && d.is_some() {
+            self.problems
+                .push("both ends drove the pair in the same cycle".into());
+        }
+        // Three things decide what the pair is at, in this order:
+        //
+        //   * the host's 45 Ohm terminations to ground, which are what a bus
+        //     reset is and which beat a 1.5 kOhm pull-up by a factor of
+        //     thirty (ULPI 1.1 §3.8.5.1);
+        //   * whichever end is transmitting;
+        //   * the device's own pull-up, once it has charged the pair — and
+        //     SE0 before that, because a host's two 15 kOhm pull-downs are
+        //     the only other thing on the wire.
+        let line = if self.host.phy.drives_se0() {
+            UsbLine::Se0
+        } else if let Some(state) = h.or(d) {
+            state
+        } else if self.dev.phy.pullup_ready() {
+            UsbLine::J
+        } else {
+            UsbLine::Se0
+        };
+        self.host.cycle(Some(line));
+        self.dev.cycle(Some(line));
+    }
+
+    /// Cycles until the host's stage is `want` or `E_FAIL`, or `limit` cycles
+    /// go by. Returns the stage it stopped at, so a test can say what it saw
+    /// rather than only that it did not see what it wanted.
+    fn until_stage(&mut self, want: u64, limit: u64) -> u64 {
+        for _ in 0..limit {
+            let at = self.host.port("stage");
+            if at == want || at == E_FAIL {
+                return at;
+            }
+            self.cycle();
+        }
+        self.host.port("stage")
+    }
+
+    /// Everything either model complained about, and the pair's own rule.
+    fn complaints(&self) -> Vec<String> {
+        let mut out = self.problems.clone();
+        out.extend(self.host.phy.problems.iter().cloned());
+        out.extend(self.dev.phy.problems.iter().cloned());
+        out
+    }
+}
+
+/// The host at the scale a simulation can run: the waits USB measures in
+/// milliseconds, in hundreds of clocks.
+///
+/// Every one of these is a **time** on a board and a count here, and the
+/// ratio is about fifteen thousand to one. What that does and does not
+/// weaken is worth being exact about, because it is the one thing in this
+/// test that is not the design that goes on a part:
+///
+///   * it **keeps** every ordering — the debounce before the reset, the reset
+///     before the first transaction, the status stage of `SET_ADDRESS` before
+///     the new address is used — because each is a state and not a duration;
+///   * it **keeps** the bus reset long enough to be one: 400 clocks is more
+///     than `usb_device_ulpi`'s own `SE0_CYCLES` of 150, so the device really
+///     does see a reset and really does forget its address;
+///   * it **does not** check that 100 ms of debounce is 100 ms, that 10 ms of
+///     SE0 is 10 ms, or that a device given 2 ms after `SET_ADDRESS` has
+///     enough. Those are numbers a host must get right against a **device's**
+///     patience and no simulation of two of our own blocks can falsify them.
+///     They are in `usb_host_enum`'s parameters with the section of USB 2.0
+///     that sets each, and the defaults are what a board gets.
+///
+/// `FRAME_CYCLES` is small for the opposite reason: at the real 60 000 a
+/// whole enumeration fits inside two frames and the SOF would hardly appear.
+/// At 4 000 it lands between transactions over and over, which is where a
+/// frame that interrupted one would be caught.
+const HOST_TEST_PARAMS: &[(&str, &str)] = &[
+    ("DEBOUNCE_CYCLES", "200"),
+    ("RESET_HOLD", "400"),
+    ("RESET_RECOVERY", "400"),
+    ("ADDR_SETTLE", "200"),
+    ("NAK_CYCLES", "40000"),
+    ("FRAME_CYCLES", "4000"),
+];
+
+fn host_design() -> Design {
+    design_of("usb_host_ulpi", "usb_host_ulpi", HOST_TEST_PARAMS)
+}
+
+/// The same block with a board's vendor register to write, which is the one
+/// thing on a Cynthion that stands between a host and calling every
+/// full-speed device low speed.
+fn host_design_with_vendor() -> Design {
+    let mut params = HOST_TEST_PARAMS.to_vec();
+    params.push(("VENDOR_ADDR", "6'h39"));
+    params.push(("VENDOR_DATA", "8'h06"));
+    design_of("usb_host_ulpi", "usb_host_ulpi", &params)
+}
+
+/// The start-up sequence, byte for byte: the reset pin held, the reset ULPI
+/// itself asks for, the two registers a full-speed **host** needs, the
+/// readback that confirms them, and LineState read **once**.
+///
+/// The two differences from `usb_device_ulpi_configures_the_transceiver_before_it_answers`
+/// are the whole of what makes this a host, and they are worth having a test
+/// say rather than a comment:
+///
+///   * `0Ah` is `06h` and not `00h` — `DpPulldown` and `DmPulldown`, a host's
+///     two 15 kOhm pull-downs, where a peripheral clears both
+///     (ULPI 1.1 §3.8.5.3.2);
+///   * the Debug register is read once and the answer is **SE0**, and that is
+///     not a failure. A peripheral reads it again and again while it says SE0
+///     because the pull-up it has just connected is still charging the pair;
+///     a host has no pull-up, and SE0 is what an empty socket is.
+#[test]
+fn usb_host_ulpi_configures_the_transceiver_as_a_host() {
+    let design = host_design();
+    let host = UlpiHost::new(&design, UlpiPhy::new(ULPI_CPB).as_host());
+    assert_eq!(
+        collapsed(&host.phy.accesses),
+        vec![
+            // XcvrSelect = 01 (full speed), TermSelect = 1, OpMode = 00,
+            // SuspendM = 1, and the reset bit §3.5 asks for.
+            wrote(0x04, 0x65),
+            // The two 15 kOhm pull-downs, which are a host's.
+            wrote(0x0A, 0x06),
+            // The same settings without the reset bit.
+            wrote(0x04, 0x45),
+            got(0x04, 0x45),
+            // LineState, once: an idle downstream port is SE0.
+            got(0x15, 0x00),
+        ]
+    );
+    assert_eq!(
+        times(&host.phy.accesses, &got(0x15, 0x00)),
+        1,
+        "a host read LineState more than once; it has no pull-up to wait for"
+    );
+    assert_eq!(host.phy.regs[&0x04], 0x45, "Function Control");
+    assert_eq!(host.phy.regs[&0x0A], 0x06, "OTG Control");
+    assert!(
+        host.phy.reset_cycles >= 300,
+        "the reset pin was held for {} cycles, not the 5 us the parameter asks for",
+        host.phy.reset_cycles
+    );
+    assert_eq!(
+        host.phy.packets,
+        Vec::<Vec<u8>>::new(),
+        "nothing on the USB: the port is empty and nothing has been enabled"
+    );
+    assert!(
+        host.phy.problems.is_empty(),
+        "the transceiver saw the bus misused:\n  {}",
+        host.phy.problems.join("\n  ")
+    );
+}
+
+/// The board's own register, written before anything else and read back.
+#[test]
+fn usb_host_ulpi_writes_the_boards_vendor_register_before_it_drives_anything() {
+    let design = host_design_with_vendor();
+    let host = UlpiHost::new(&design, UlpiPhy::new(ULPI_CPB).as_host());
+    assert_eq!(
+        collapsed(&host.phy.accesses),
+        vec![
+            wrote(0x04, 0x65),
+            // 39h bit 1 is a USB3343's `SwapDP/DM`, and `06h` is the
+            // register's reset value with that bit set. It goes **before**
+            // Function Control's second write, so the pair is never read
+            // through the wrong pins even for a moment.
+            wrote(0x39, 0x06),
+            got(0x39, 0x06),
+            wrote(0x0A, 0x06),
+            wrote(0x04, 0x45),
+            got(0x04, 0x45),
+            got(0x15, 0x00),
+        ]
+    );
+    assert_eq!(host.phy.vendor[&0x39], 0x06);
+    assert!(host.phy.problems.is_empty());
+}
+
+/// The probe: what the block is for before it is a host at all.
+///
+/// With `enum_en` low the register port is the design's, and the three
+/// questions a port nobody has measured raises are the three a register read
+/// and a receive command answer. Nothing is driven while this happens, and
+/// that is asserted rather than assumed.
+#[test]
+fn usb_host_ulpi_reads_the_transceiver_before_it_drives_anything() {
+    let design = host_design();
+    let mut host = UlpiHost::new(&design, UlpiPhy::new(ULPI_CPB).as_host());
+
+    // What the part is. A Microchip USB3343 answers `0424h` and `0009h`;
+    // `ip/usb_device_ulpi/README.md` §11 has the first of those read off a
+    // transceiver on this board.
+    assert_eq!(host.read_register(0x00, UsbLine::Se0), Some(0x24));
+    assert_eq!(host.read_register(0x01, UsbLine::Se0), Some(0x04));
+    assert_eq!(host.read_register(0x02, UsbLine::Se0), Some(0x09));
+    assert_eq!(host.read_register(0x03, UsbLine::Se0), Some(0x00));
+    // How this host left Function Control and OTG Control.
+    assert_eq!(host.read_register(0x04, UsbLine::Se0), Some(0x45));
+    assert_eq!(host.read_register(0x0A, UsbLine::Se0), Some(0x06));
+    // The vendor register, whose reset value is `04h` on a USB3343 and which
+    // this build was not told to write.
+    assert_eq!(host.read_register(0x39, UsbLine::Se0), Some(0x04));
+
+    // The receive command: VBUS valid, SE0 on the pair, no packet. The model
+    // reports VBUS valid always, so what this checks is that the field
+    // reaches the port at all and in the right bits, not what a board's
+    // supply is doing.
+    //
+    // **That there is one at all** is the whole reason
+    // `usb_ulpi_host_link` believes the bus from the end of the transceiver's
+    // own reset rather than from the end of its start-up. ULPI 1.1 §3.5
+    // promises exactly one receive command after that reset, and on a port
+    // whose VBUS and whose pair have not changed since, it is the only one
+    // that will ever arrive. A Link that waits for `phy_ready` throws it away
+    // and then has nothing to report VBUS from, for ever.
+    assert!(
+        host.flag("rx_cmd_seen"),
+        "no receive command was kept, so VbusState can never be read"
+    );
+    assert_eq!(host.port("line_state"), 0b00, "an empty port is SE0");
+    assert_eq!(host.port("vbus_state"), 0b11, "the model's VBUS is valid");
+
+    assert_eq!(
+        host.phy.packets,
+        Vec::<Vec<u8>>::new(),
+        "the probe put something on the USB"
+    );
+    assert!(host.phy.problems.is_empty());
+}
+
+/// An empty socket is not an attachment, and a host that has not been told
+/// anything is attached does not send a frame to it.
+///
+/// This is the mirror of `usb_device_ulpi_does_not_call_an_undriven_pair_a_bus_reset`
+/// and it is the same fact from the other end: SE0 on a host's port is the
+/// resting state and means nothing has happened.
+#[test]
+fn usb_host_ulpi_does_not_call_an_empty_port_an_attachment() {
+    let design = host_design();
+    let mut host = UlpiHost::new(&design, UlpiPhy::new(ULPI_CPB).as_host());
+    host.enable();
+    // Far longer than `DEBOUNCE_CYCLES`, so a host that counted SE0 as an
+    // attachment would have got there.
+    host.run_alone(UsbLine::Se0, 5000);
+    assert_eq!(
+        host.port("stage"),
+        E_IDLE,
+        "a host left an empty port for stage {}",
+        host.port("stage")
+    );
+    assert!(!host.flag("attached"));
+    assert_eq!(
+        host.phy.packets,
+        Vec::<Vec<u8>>::new(),
+        "a host sent {} packet(s) to an empty port",
+        host.phy.packets.len()
+    );
+    assert_eq!(host.sofs, 0, "a host framed an empty port");
+    assert!(host.phy.problems.is_empty());
+}
+
+/// A device that pulls **D-** up is a low-speed device, and this host says so
+/// and sends it nothing.
+#[test]
+fn usb_host_ulpi_reports_a_low_speed_device_and_does_not_talk_to_it() {
+    let design = host_design();
+    let mut host = UlpiHost::new(&design, UlpiPhy::new(ULPI_CPB).as_host());
+    host.enable();
+    assert!(
+        host.until_stage_alone(UsbLine::K, E_LOWSPEED, 5000),
+        "a host at stage {} never called a D- pull-up low speed",
+        host.port("stage")
+    );
+    assert!(host.flag("attached"));
+    assert!(host.flag("low_speed"));
+    // Nothing is sent, and nothing can be: a low-speed packet needs the
+    // transceiver told to prepend a preamble, which this Link does not do.
+    host.run_alone(UsbLine::K, 3000);
+    assert_eq!(host.phy.packets, Vec::<Vec<u8>>::new());
+    assert!(host.phy.problems.is_empty());
+}
+
+/// A device that is there and answers nothing: the host resets it, asks for
+/// its device descriptor, retries, and **reports** rather than hanging.
+///
+/// The pair is held at J by the harness and no device is simulated at all, so
+/// every token this host sends goes nowhere. What it checks is the one thing
+/// a host must do that nothing else in this file does: give up.
+#[test]
+fn usb_host_ulpi_gives_up_on_a_device_that_never_answers() {
+    let design = host_design();
+    let mut host = UlpiHost::new(&design, UlpiPhy::new(ULPI_CPB).as_host());
+    host.enable();
+    // J is a full-speed device's pull-up, so the host debounces it, resets
+    // it, re-reads LineState and starts asking. Every reply times out.
+    assert!(
+        host.until_stage_alone(UsbLine::J, E_FAIL, 200_000),
+        "a host at stage {} neither enumerated a device that is not there nor gave up",
+        host.port("stage")
+    );
+    assert!(host.flag("attached"), "it did see the pull-up");
+    assert!(host.flag("failed"));
+    assert_eq!(
+        host.port("fail_stage"),
+        E_DEV8,
+        "it should stop at the first thing it asks for"
+    );
+    assert_eq!(
+        host.port("fail_status"),
+        ST_TIMEOUT,
+        "nothing came back, so it is a timeout and not an error"
+    );
+    // It really did send the tokens, and really did send them again: a SETUP
+    // and its data packet, four times over, which is `RETRIES` of 3 plus the
+    // first try.
+    let setups = host
+        .phy
+        .packets
+        .iter()
+        .filter(|p| p.first() == Some(&usb_pid(USB_SETUP)))
+        .count();
+    assert_eq!(setups, 4, "the SETUP token went out {setups} time(s)");
+    // **No frame went out**, and that is this design and not a defect: the
+    // whole of this run is one control transfer being retried, `H_IDLE` is
+    // never reached between the tries, and `usb_host_sie` only sends a SOF
+    // from `H_IDLE`. On a board the four tries are 273 us and a frame is
+    // 1 ms, so a frame is late and not missing; here the transfer is the
+    // entire life of the bus. `usb_host_sie`'s header says what it would take
+    // to make a SOF interrupt a transaction and why it has not been done.
+    assert_eq!(
+        host.sofs, 0,
+        "a retried transaction leaves no room for a frame at these timings"
+    );
+    assert!(
+        host.phy.problems.is_empty(),
+        "the transceiver saw the bus misused:\n  {}",
+        host.phy.problems.join("\n  ")
+    );
+}
+
+/// **Our host enumerates our own device**, through a pair of transceiver
+/// models with the D+ / D- pair between them.
+///
+/// Both halves are in this tree and neither is a model of the other: the
+/// device is `ip/usb_device_ulpi`, which a real host has enumerated on a real
+/// board, and the host is this package. What the test asserts is bytes — the
+/// eighteen of the device descriptor and the thirty-two of the configuration
+/// descriptor, each compared with the same `expected_*` function the device's
+/// own tests compare a *host model's* reading against — and not that
+/// something came back.
+fn enumerate_our_device(stale: bool) {
+    let host_design = host_design();
+    let dev_design = ulpi_design();
+    let mut both = HostDevice::new(&host_design, &dev_design, stale);
+
+    // Nothing has been enabled yet, so the host is at `E_OFF` and has
+    // touched nothing: the device is up with its pull-up on and the host can
+    // see it, and that is all that has happened.
+    assert_eq!(both.host.port("stage"), E_OFF);
+    assert_eq!(both.host.port("line_state"), 0b01, "the device's pull-up");
+    both.host.enable();
+
+    let at = both.until_stage(E_UP, 400_000);
+    assert_eq!(
+        at,
+        E_UP,
+        "the host stopped at stage {at} with fail_stage {} and fail_status {};\n\
+         the host put {:02x?} on the bus\n\
+         and the device answered {:02x?}",
+        both.host.port("fail_stage"),
+        both.host.port("fail_status"),
+        both.host.phy.packets,
+        both.dev.phy.packets
+    );
+
+    // What the host learnt, and what the device agrees it was told.
+    assert!(both.host.flag("attached"));
+    assert!(!both.host.flag("low_speed"), "it is a full-speed device");
+    assert!(!both.host.flag("failed"));
+    assert_eq!(both.host.port("dev_addr"), 1, "the address it gave");
+    assert_eq!(
+        both.host.port("maxpkt0"),
+        64,
+        "bMaxPacketSize0, out of byte 7 of the descriptor"
+    );
+    assert_eq!(
+        both.dev.address(),
+        1,
+        "the device took the address the host gave it"
+    );
+    assert!(
+        both.dev.configured(),
+        "the device accepted SET_CONFIGURATION"
+    );
+
+    // The bytes. These are the same two functions the device's own tests use,
+    // so a disagreement is between this host and a reading already checked
+    // against a real one.
+    let device_descriptor = expected_device_descriptor(0x1209, 0x0001);
+    assert_eq!(
+        both.host.desc_whole[0],
+        Some(device_descriptor.len()),
+        "the device descriptor was never whole"
+    );
+    assert_eq!(
+        both.host.desc[0], device_descriptor,
+        "the device descriptor the host read"
+    );
+
+    let configuration = expected_configuration_descriptor();
+    assert_eq!(
+        both.host.port("cfg_total"),
+        configuration.len() as u64,
+        "wTotalLength, out of bytes 2 and 3 of the first nine"
+    );
+    assert_eq!(
+        both.host.desc_whole[1],
+        Some(configuration.len()),
+        "the configuration descriptor was never whole"
+    );
+    assert_eq!(
+        both.host.desc[1], configuration,
+        "the configuration descriptor the host read"
+    );
+    // `bConfigurationValue` is byte 5 of it and is what `SET_CONFIGURATION`
+    // was given — not a constant 1, which is what a host that assumed would
+    // have sent.
+    assert_eq!(both.host.port("cfg_value"), u64::from(configuration[5]));
+
+    // The bus reset really was one: the device's own link layer saw SE0 held
+    // long enough to call it a reset, which is what makes an address of 1
+    // mean anything.
+    assert!(
+        both.dev.phy.reset_cycles > 0 || both.host.phy.packets.len() > 4,
+        "something should have happened on this bus"
+    );
+    // A frame every millisecond, scaled: the host framed the bus while it
+    // enumerated.
+    assert!(
+        both.host.sofs > 0,
+        "the host sent no SOF, so a real device would have suspended"
+    );
+
+    let complaints = both.complaints();
+    assert!(
+        complaints.is_empty(),
+        "the bus was misused:\n  {}",
+        complaints.join("\n  ")
+    );
+}
+
+#[test]
+fn usb_host_ulpi_enumerates_usb_device_ulpi() {
+    enumerate_our_device(false);
+}
+
+/// The same, through two transceivers that behave the way the one on the
+/// board does: each hears its own transmission, and each reports LineState
+/// **late**, one transition at a time out of a backlog that outlives the
+/// packet.
+///
+/// Both of those were measured on a Microchip USB3343 on a Cynthion r1.4 and
+/// both are things ULPI 1.1 either permits or forbids and the part does
+/// anyway; `UlpiPhy`'s `hears_itself` and `stale_line` have the measurements.
+/// The device has enumerated through them; this is the host doing it.
+#[test]
+fn usb_host_ulpi_enumerates_through_the_transceiver_that_is_on_the_board() {
+    enumerate_our_device(true);
+}
+
+/// A host whose idea of which line is which is wrong calls a full-speed
+/// device low speed, and `FS_LINE` is the parameter that says which.
+///
+/// This is the failure that cost `ip/usb_device_ulpi` three attempts from the
+/// other end, and the reason the parameter exists rather than a constant: a
+/// board that exchanges DP and DM between the transceiver and its connector
+/// makes `10` the full-speed idle, and a host built for `01` refuses to talk
+/// to everything.
+#[test]
+fn usb_host_ulpi_takes_which_line_is_full_speed_from_its_parameter() {
+    let mut params = HOST_TEST_PARAMS.to_vec();
+    params.push(("FS_LINE", "2'b10"));
+    let design = design_of("usb_host_ulpi", "usb_host_ulpi", &params);
+    let mut host = UlpiHost::new(&design, UlpiPhy::new(ULPI_CPB).as_host());
+    host.enable();
+    // J, which this build has been told is **not** full speed.
+    assert!(
+        host.until_stage_alone(UsbLine::J, E_LOWSPEED, 5000),
+        "stage {} with FS_LINE = 10 and the pair at J",
+        host.port("stage")
+    );
+    assert!(host.flag("low_speed"));
+    assert_eq!(host.phy.packets, Vec::<Vec<u8>>::new());
+}
+
+/// A device that goes away between the reset and the first transaction is
+/// reported as that and not as a device that will not answer.
+///
+/// `FAIL_NOT_J` is the one failure `usb_host_enum` has that is not a
+/// transaction's: after the bus reset it reads the Debug register and the pair
+/// is supposed to be back at J. Here it is not, because the harness drops the
+/// pair to SE0 while the reset is being driven and leaves it there.
+#[test]
+fn usb_host_ulpi_reports_a_device_that_leaves_during_the_reset() {
+    let design = host_design();
+    let mut host = UlpiHost::new(&design, UlpiPhy::new(ULPI_CPB).as_host());
+    host.enable();
+    // Long enough to debounce the attachment and start the reset.
+    host.run_alone(UsbLine::J, 400);
+    assert!(host.flag("attached"));
+    // And now there is nothing there at all.
+    assert!(
+        host.until_stage_alone(UsbLine::Se0, E_FAIL, 20_000),
+        "stage {} after the device went away",
+        host.port("stage")
+    );
+    assert_eq!(host.port("fail_status"), FAIL_NOT_J);
+    assert!(host.phy.problems.is_empty());
+}
+
+/// Nothing in the host crosses a clock boundary: one 60 MHz clock, as ULPI's
+/// own rate makes possible, and no PLL anywhere.
+#[test]
+fn usb_host_ulpi_is_one_clock_domain() {
+    let kinds = crossings("usb_host_ulpi", "usb_host_ulpi", &[]);
     assert!(kinds.is_empty(), "nothing should cross: {kinds:?}");
 }
 

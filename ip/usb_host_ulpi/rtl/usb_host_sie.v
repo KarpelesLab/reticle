@@ -281,7 +281,15 @@ module usb_host_sie #(
     localparam integer TRY_W   = $clog2(RETRIES + 1);
 
     reg [3:0]         state;
-    reg [3:0]         after;      // where `H_WIRE` and `H_GAP` go next
+    // Where `H_WIRE` goes when the packet has had its time on the wire, and
+    // where `H_GAP` goes when the gap is over. **Two registers and not one**:
+    // the one sequence that uses both is a token followed by a data packet,
+    // where the wire's own wait is followed by the gap and the gap is
+    // followed by the data. One register for both means `H_GAP` sends itself
+    // back to `H_GAP`, which is a token that goes out once and a transaction
+    // that never ends.
+    reg [3:0]         after;
+    reg [3:0]         after_gap;
     reg [FRAME_W-1:0] frame_cnt;
     reg [10:0]        frame_q;
     reg               sof_due;
@@ -401,6 +409,7 @@ module usb_host_sie #(
         if (!rst_n) begin
             state      <= H_IDLE;
             after      <= H_IDLE;
+            after_gap  <= H_IDLE;
             frame_cnt  <= 0;
             frame_q    <= 11'd0;
             sof_due    <= 1'b0;
@@ -511,6 +520,7 @@ module usb_host_sie #(
                             wire_left <= WIRE_TOKEN[WIRE_W-1:0];
                             gap_left  <= GAP_CYCLES[GAP_W-1:0];
                             after     <= H_GAP;
+                            after_gap <= H_DATA;
                             state     <= H_WIRE;
                         end
                     end
@@ -555,7 +565,7 @@ module usb_host_sie #(
                 end
                 H_GAP: begin
                     if (gap_left == 0) begin
-                        state <= after;
+                        state <= after_gap;
                     end else begin
                         gap_left <= gap_left - 1'b1;
                     end
@@ -580,7 +590,7 @@ module usb_host_sie #(
                         rx_len_q  <= dat_len;
                         status_q  <= ST_DATA;
                         gap_left  <= TURNAROUND[GAP_W-1:0];
-                        after     <= H_ACK;
+                        after_gap <= H_ACK;
                         state     <= H_GAP;
                     end else if (pkt) begin
                         // Something arrived and it cannot be used: a data
@@ -605,10 +615,10 @@ module usb_host_sie #(
                         status_q <= saw_reply ? ST_ERROR : ST_TIMEOUT;
                         state    <= H_END;
                     end else begin
-                        tries    <= tries + 1'b1;
-                        gap_left <= GAP_CYCLES[GAP_W-1:0];
-                        after    <= H_TOKEN;
-                        state    <= H_GAP;
+                        tries     <= tries + 1'b1;
+                        gap_left  <= GAP_CYCLES[GAP_W-1:0];
+                        after_gap <= H_TOKEN;
+                        state     <= H_GAP;
                     end
                 end
                 default: begin
