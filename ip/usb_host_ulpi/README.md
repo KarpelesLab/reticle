@@ -655,74 +655,58 @@ are the three VBUS switch balls, `K5`, `L1` and `L2`. The AUX port, which
 this project's designs have been using all along, is at column 72: the
 right edge. The LEDs and the oscillator are at row 0: the top edge.
 
-`src/fpga/trellis`'s `Edge::of` describes **two** of the four edges, and
-says why in its own doc comment:
-
-> "Only two of the four are here, and the reason is the same one that kept
-> the other three out before: the rule is nextpnr's `get_pio_tile` /
-> `get_pic_tile`, and a rule that has not been checked against a part
-> produces a bitstream that loads, asserts `DONE` and drives the wrong
-> ball. Both of these have been checked against bitstreams Lattice's own
-> packer wrote for this very board — the top edge against all six of its
-> LEDs, the right edge against its USER button — and the left and bottom
-> edges have not."
-
-So a ball on the left edge is left out of the pin map, and the flow
-refuses the design rather than guessing:
+`src/fpga/trellis`'s `Edge::of` described **two** of the four edges when
+this block was written, and the left was not one of them, so a design on
+those balls was refused:
 
 ```
 error: `tgt_data$io0` is constrained to package pin `R2`, which the
        architecture maps to no usable site
 ```
 
-That is the honest refusal working as intended. What it means for this
-block is that **the probe of §2 has not been run and the enumeration has
-not been attempted on silicon**, so every "quoted" in this document that
-a measurement would have turned into "checked" is still quoted —
-including the one that matters most, which is whether the TARGET port
-crosses DP and DM the way AUX does.
+That refusal was the honest thing and it is now gone: **all four edges are
+described.** `docs/fpga-trellis.md` has the account. The part worth
+carrying here is why a mirror of the right edge would have been wrong: the
+**column** mirrors, the **rows do not**, so a mirrored rule would have put
+every left-edge pad's bits in the tile belonging to a *different ball of
+the same edge* — and it would have decoded perfectly against itself while
+driving the wrong pin. It was settled the way the other two edges were,
+against bitstreams Lattice's own packer wrote for this board: 477 bits at
+absolute frame positions across all three reference files, and no
+`PIO<s>.BASE_TYPE` set anywhere in column 0 that is not a mapped ball's
+tile.
 
-What has been established about the design on the part, short of that:
-with the TARGET balls left unconstrained — which makes a bitstream nobody
-may load, and the one built to measure this is named so — the whole
-design *including* the AUX console **places, routes and produces a
-bitstream every bit of which decodes**:
+So `testdata/fpga/cynthion/usb_host_target.v` now builds **with its TARGET
+balls constrained**, unchanged from the version written against the
+refusal: 36 pads, 128 408 configuration bits, 41 882 arcs, **0
+unexplained**, and the arcs the bits select are exactly the router's.
 
-```text
-167221 byte(s) compressed, 128632 configuration bit(s) set, 36 pad(s),
-3183 lookup table(s), 1108 flip-flop(s) and 28 distributed RAM(s)
-configured, 1108/24288 ff, 1/56 gb, 36/120 io, 3183/24288 lut,
-28/3036 lutram
-routed 4423 of 4425 signal(s) with 63322 pip(s) over 67745 wire(s), and
-every sink was walked back to its driver
-1108 flip-flop(s), every clock on a global network: G_HPBX0000 to 1136
-all 128632 set bit(s) decode back through the database into 42012 arc(s),
-6919 field(s) and 3350 word(s), with 0 unexplained, and the arcs they
-select are exactly the 42012 the router chose
-```
+**What that does not settle, and this is the part that still matters.**
+Nothing has been loaded. So the probe of §2 has not been run and the
+enumeration has not been attempted on silicon, which means every "quoted"
+in this document that a measurement would have turned into "checked" is
+still quoted — including the one that matters most, whether the TARGET
+port crosses DP and DM the way AUX does. `FS_LINE` is a parameter for
+exactly that reason and one probe run settles it.
 
-So the obstacle is the ball assignment and nothing else about the design.
+A board would also add the thing no bitstream can: that `X0Y38/PIOC` is
+the ball wired to the transceiver and not the ball a row away. **This
+board cannot give that directly** — its LEDs are on the top edge, its
+USER button on the right, and there is nothing observable on the left at
+all. The transceiver itself is the instrument available: it will not raise
+`nxt` without the clock the FPGA drives out of `T4`, so a register read
+that answers at all is evidence the left-edge rule put the clock on the
+right ball.
 
-**The two signals in "4423 of 4425" are not unrouted nets**, and the
-difference is worth saying because it looks alarming. The denominator is
-every signal the netlist holds and the numerator is the ones that were
-routed; `Netlist::is_routable` requires a signal to have both a driver and
-at least one sink, and a pad driven by a constant has neither a driving
-*pin* nor anything to route to. This design drives three output pads from
-constants — the three VBUS switches — so two or three such signals is what
-is expected. MEDIUM: the arithmetic is right and which signals they are
-has **not** been pinned down, and the line that carries the weight is the
-last one, where every set bit decodes and the arcs are exactly the
-router's.
-
-**What it would take**, and it is a backend change and therefore not
-this package's to make: the left edge's `get_pio_tile` / `get_pic_tile`
-rule in `src/fpga/trellis`, checked the way the other two were — against
-a bitstream Lattice's own packer wrote for this board that drives a ball
-on that edge. The `cynthion` Python package ships three such bitstreams
-(`analyzer.bit`, `selftest.bit`, `facedancer.bit`), `RETICLE_ECP5_REF`
-already points tests at them, and all three of them use the TARGET port.
-That is the measurement that exists and has not been taken.
+**The two signals in "4423 of 4425"** in the earlier measurement are not
+unrouted nets, and the difference is worth saying because it looks
+alarming. `Netlist::is_routable` requires a signal to have both a driver
+and a sink, and a pad driven by a constant has neither a driving *pin* nor
+anything to route to. That design drives three output pads from constants
+— the three VBUS switches — so two or three such signals is what is
+expected. The arithmetic is right; which signals they are has not been
+pinned down, and the line that carries the weight is the last one, where
+every set bit decodes and the arcs are exactly the router's.
 
 ---
 
