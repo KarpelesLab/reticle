@@ -1247,14 +1247,20 @@ is the part that matters:
   through endpoint 1.
 
 - **`usb_host_ulpi`** — not the host model at all, because this block
-  **is** the host. Two of the eleven tests put it and `usb_device_ulpi`
+  **is** the host. Three of the twelve tests put it and `usb_device_ulpi`
   on **one D+ / D- pair**, each behind its own transceiver model, with
   the pair resolved between them by the only three things that drive it:
   the host's 45 Ohm terminations, whichever end is transmitting, and the
-  device's own 1.5 kOhm pull-up. One runs through well-behaved models and
-  the other through two told to behave the way the part on the board does
-  — each hearing its own transmission, each reporting LineState late out
-  of a backlog that outlives the packet. Both assert **bytes**: the
+  device's own 1.5 kOhm pull-up. The first runs through well-behaved
+  models; the second through two told to behave the way the part on the
+  board does — each hearing its own transmission, each reporting LineState
+  late out of a backlog that outlives the packet; and the third against a
+  device built with `MAXPKT0 = 7'd8`, the smallest USB 2.0 §5.5.3 allows,
+  which is the only one of the three that enters a **multi-packet data
+  stage** and so the only one that puts the toggle under the host — and
+  which also reaches the other way a data stage ends, since four full
+  packets of eight is exactly `wLength` and there is no short packet to
+  stop on. All three assert **bytes**: the
   eighteen of the device descriptor and the thirty-two of the
   configuration descriptor, compared with the same `expected_*` functions
   the device's own tests compare a host *model's* reading against;

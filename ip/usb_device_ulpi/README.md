@@ -445,8 +445,26 @@ is the one piece of timing a device's control endpoint has to get right:
 `usb_ctrl_ep`'s `TURNAROUND` parameter is exactly that count, which is
 why it is a parameter: eight cycles is two bit times of
 `usb_device_fs`'s 48 MHz clock, and nine cycles here is in the middle of
-ULPI's window. In simulation the device answers 13 to 23 clocks after the
-host's end of packet, which is 2.6 to 4.6 bit times.
+ULPI's window. In simulation the device answers **12 clocks** after the
+host's end of packet, every time, which is 2.4 bit times.
+
+> **This used to read "13 to 23 clocks … 2.6 to 4.6 bit times", and the
+> number moved because the transceiver model got more accurate rather than
+> because this block changed.** The model used to clear RxActive at the
+> **first SE0** of a received packet's end of packet, two and a half bit
+> times before the pair is anybody's again; the part does not — "In Full
+> Speed, the USB334x will not issue a Rxactive de-assertion in the RXCMD
+> until the DP/DM linestate transitions to idle. This prevents the Link
+> from violating the two Full Speed bit times minimum turn around time"
+> (USB334x DS00002646A §6.3.1) — and with that fixed, every answer is
+> measured from the same place the host measures from and the spread
+> collapses to one number. The spread was the model's and not the device's.
+>
+> What found it was joining **two** of these models pair to pair, with
+> `ip/usb_host_ulpi` on the other end: measured from the wrong edge, the
+> device's answer and the host's next token each overlapped the other end's
+> end of packet by a few cycles, which a harness that drives one end by
+> hand cannot see. `ip/usb_host_ulpi/README.md` §9 has that account.
 
 ---
 
@@ -720,8 +738,9 @@ measured against:
   readback that lies, and the transceiver taking the bus three bytes into
   the device's data packet — after which the host hears nothing, asks
   again, and is sent the same packet with the same toggle.
-- The device answers between 13 and 23 clocks after the host's end of
-  packet, inside the 2 to 6.5 bit times USB allows.
+- The device answers **12 clocks** after the host's end of packet, every
+  time, inside the 2 to 6.5 bit times USB allows. §9 says why that used to
+  read "between 13 and 23" and what moved: the model, not the block.
 
 What that does **not** establish is almost as long. Simulation cannot
 tell whether the 60 MHz clock leaves the FPGA cleanly enough for the

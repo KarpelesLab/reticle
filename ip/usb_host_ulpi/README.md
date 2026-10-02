@@ -562,14 +562,41 @@ measured on a Microchip USB3343 on a Cynthion r1.4 and both are things
 ULPI either permits or forbids and the part does anyway. The device has
 enumerated through them on a board; the host now does it in simulation.
 
-Nine more tests cover what the enumeration does not reach: the start-up
-sequence byte for byte with `0Ah` = `06h` and one Debug read, the vendor
-register written and read back before anything else, the probe reading
-seven registers with nothing put on the USB, an empty port not being an
-attachment, a low-speed device being reported and not spoken to, a device
-that never answers being given up on after four tries, a device that
-leaves during the reset being reported as that and not as a timeout, and
-`FS_LINE` being live.
+`usb_host_ulpi_reads_a_descriptor_in_packets_of_eight` does it a third
+time against a device built with `MAXPKT0 = 7'd8`, which is the smallest
+§5.5.3 allows, and it is there because of what the first two **cannot**
+reach: our device declares 64, so every descriptor it sends fits in one
+packet and a data stage of one packet proves nothing about a toggle. With
+eight, the eighteen bytes arrive in three packets and the thirty-two in
+four — and the second of those also reaches the *other* way a data stage
+ends, because four full packets is exactly `wLength` and there is no short
+packet to stop on, which is the branch a host that only handled short
+packets would hang in. The toggle is checked without counting packets: a
+DATA0 packet **with a payload** can only come out of endpoint 0 in a stage
+of more than one packet, since a stage starts at DATA1 and a status stage
+carries nothing, and with 64-byte packets there is not one of them.
+
+**And the packets are compared with a second implementation of the
+arithmetic.** `usb_token`, `usb_data` and `usb_sof` in that file are what
+the *host model* builds its packets with, and `usb_crcs_match_the_catalogue_and_the_wire`
+holds their CRC5 and CRC16 to the published catalogue's check values over
+`"123456789"` before anything is held to them. So the SETUP token, its
+eight-byte `GET_DESCRIPTOR` data packet and the first two SOFs are
+asserted byte for byte against a second implementation, and that one is
+pinned to a third. The SOF is worth having in that list on its own: it is
+the one token whose CRC5 covers an eleven-bit frame number rather than an
+address and an endpoint.
+
+Nine more tests — twelve in all — cover what an enumeration that works
+does not reach: the start-up sequence byte for byte with `0Ah` = `06h` and
+**one** Debug read, the vendor register written and read back before
+anything else, the probe reading seven registers with nothing put on the
+USB, an empty port not being an attachment and getting no frame, a
+low-speed device being reported and not spoken to, a device that never
+answers being given up on after four tries with the four SETUP tokens
+asserted byte for byte, a device that leaves during the reset being
+reported as that and not as a timeout, `FS_LINE` being live, and the block
+being one clock domain.
 
 **What that establishes about the host is the host's logic and the
 bytes.** Four real defects in this block came out of it and are in the
