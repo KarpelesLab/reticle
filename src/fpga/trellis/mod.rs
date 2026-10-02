@@ -1361,8 +1361,13 @@ pub struct TrellisStats {
     pub balls: usize,
     /// Pads that became a bel.
     pub pads: usize,
-    /// Balls left out, because they are on an edge this does not describe
-    /// or their tiles are not where the rule says.
+    /// Balls left out, because their tiles are not where their edge's rule
+    /// says, or because `pio_metadata` does not say which bank they are in.
+    ///
+    /// **Zero on the caBGA-256**, now that all four edges are described: all
+    /// 197 balls that package's map names become pads. It was 77 while the
+    /// left and bottom edges were left out, and a non-zero count on a
+    /// package nobody has built for is the thing to look at first.
     pub pads_skipped: usize,
     /// Wires that reach the whole die, one node each.
     pub globals: usize,
@@ -1533,7 +1538,8 @@ impl Edge {
 /// gives the ball, whose tile owns the three wires the buffer presents to
 /// the fabric. [`IoSite::pad_at`] and the rest are where its **bits** are,
 /// which the edge's tile rule decides and which is a different position on
-/// both edges this describes. Before there was interconnect only the bits
+/// three of the four edges — and the *same* position on the bottom edge,
+/// where the buffer's tile is the pad's tile for side A. Before there was interconnect only the bits
 /// mattered and the bel was put where they were; a routed design notices,
 /// because a bel's pins resolve in the tile the bel sits in.
 #[derive(Clone, Debug, PartialEq, Eq)]
