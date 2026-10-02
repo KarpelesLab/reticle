@@ -7,6 +7,54 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.5](https://github.com/KarpelesLab/reticle/compare/v0.0.4...v0.0.5) - 2026-10-02
+
+### Added
+
+- *(fpga)* a design on the TARGET port's balls places, routes and decodes
+- *(fpga)* the left and bottom edges of an ECP5 are described
+- *(ip)* a USB full-speed host behind a ULPI transceiver
+- *(fpga)* a distributed RAM spends its tile's LSR1, and the placer knows
+- *(monitor)* the whole machine answers through the board's transceiver
+- *(examples)* a 6502 monitor with its console on a USB serial port
+- *(uart)* the host's baud rate reaches the divisor
+- *(usb)* the endpoint buffers are arrays, and the byte multiplexer is gone
+
+### Fixed
+
+- *(fpga)* the TARGET host's report printed every label beside another item's value
+- two lints a newer clippy reports and this machine's does not
+- *(ip)* four defects the host found, and the model defect that hid two
+- *(monitor)* the ACIA's clock-source bits belong to the host, not the 6502
+- *(monitor)* the ACIA's clock source is one field, not half of one
+- *(tests)* the lints the gate insists on, and a correct file count
+
+### Other
+
+- *(tests)* two lints on the report test's byte capture
+- the left edge of this die is on a part, and a transceiver's vendor ID is the witness
+- *(trellis)* the section that quoted the error now quotes the bitstream
+- *(fpga)* two doc comments that still counted two edges
+- *(trellis)* all four edges of the pad model, and what a board cannot show here
+- *(fpga)* what Lattice's own packer writes for a left- and a bottom-edge pad
+- a green gate here is not a green CI, and the toolchain is why
+- *(ip)* the device's answer delay is one number now, and the model is why
+- *(ip)* a descriptor in packets of eight, and the bytes against a third implementation
+- *(fpga)* two edges of the die, and the day the other two stopped being theoretical
+- *(tests)* rustfmt the transceiver model's new guard
+- *(ip)* the host's page, and what writing a second thing against one bus found
+- *(monitor)* the rejection path and the editing keys, against the original
+- the three examples pin uart's fourth source
+- the example that ends on a part, in the roadmap
+- *(monitor)* which of the ACIA's facts were read and which were inferred
+- *(monitor)* the terminal session, and the one measurement nobody took
+- *(monitor)* the ROM costs one lookup table a byte, measured
+- the file every agent in this project has been told to read
+- *(fpga)* the probe reaches eight lookup tables, not sixty-four
+- *(usb)* quote the flow's own reason for the iCE40 fallback
+- *(usb)* the shift-register shape moves bytes too
+- *(usb)* the array's footprint, and the permutation that was never tested
+
 ## [0.0.4](https://github.com/KarpelesLab/reticle/compare/v0.0.3...v0.0.4) - 2026-09-28
 
 ### Added
