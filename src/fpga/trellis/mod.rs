@@ -71,10 +71,14 @@
 //!
 //! and on the right edge the answers are all different: the pad tile is one
 //! row *south*, the second copy is at the ball's row for sides A and B and
-//! two rows south for C and D, and the `CIB` is one column west. That is
-//! nextpnr's own rule (`get_pio_tile`, `get_pic_tile`), and both edges were
-//! checked against bitstreams Lattice's own packer wrote for this board
-//! rather than taken on trust — see `docs/fpga-trellis.md`.
+//! two rows south for C and D, and the `CIB` is one column west. The
+//! **left** edge takes the right edge's row arithmetic unchanged with the
+//! column and the `CIB`'s direction flipped, which is a measurement and not
+//! a symmetry; the **bottom** edge takes the top edge's column rule with
+//! the two tiles collapsed into one, so there is no second copy to write.
+//! That is nextpnr's own rule (`get_pio_tile`, `get_pic_tile`), and all
+//! four edges were checked against bitstreams Lattice's own packer wrote
+//! for this board rather than taken on trust — see `docs/fpga-trellis.md`.
 //!
 //! Almost none of those tiles is the tile a bel could carry
 //! [`ConfigEntry`](super::arch::ConfigEntry)s in. So an IO's bits are not a
@@ -923,7 +927,7 @@ impl TrellisDatabase {
             let Some(side) = side.chars().next() else {
                 continue;
             };
-            let Some(edge) = Edge::of(*col, *row, width, side) else {
+            let Some(edge) = Edge::of(*col, *row, width, height, side) else {
                 skipped += 1;
                 continue;
             };
@@ -1441,14 +1445,31 @@ impl TrellisStats {
 /// Which edge of the die a pad is on, and therefore which rule says where
 /// its configuration lives.
 ///
-/// Only two of the four are here, and the reason is the same one that kept
-/// the other three out before: the rule is nextpnr's `get_pio_tile` /
-/// `get_pic_tile`, and a rule that has not been checked against a part
-/// produces a bitstream that loads, asserts `DONE` and drives the wrong
-/// ball. Both of these have been checked against bitstreams Lattice's own
-/// packer wrote for this very board — the top edge against all six of its
-/// LEDs, the right edge against its USER button — and the left and bottom
-/// edges have not.
+/// All four are here now, and each one's rule was established the same way:
+/// the tile rule is nextpnr's `get_pio_tile` / `get_pic_tile`, and a rule
+/// that has not been checked against a part produces a bitstream that
+/// loads, asserts `DONE` and drives the wrong ball. So each has been
+/// checked against bitstreams Lattice's own packer wrote for this very
+/// board — the top edge against all six of its LEDs, the right edge against
+/// its USER button, the left edge against the HyperRAM, the TARGET USB
+/// transceiver and the three VBUS switches, the bottom edge against the SPI
+/// flash and the interrupt line.
+///
+/// # The left edge is not the right edge mirrored
+///
+/// It looks like it and it is not, and the difference is the thing worth
+/// stating because a mirror is exactly the guess that decodes consistently
+/// against itself and still drives the wrong ball. What mirrors is the
+/// *column*: the tiles are at column 0 instead of the last, and the `CIB`
+/// that ties the pad's data is one column **east** instead of one west,
+/// which is `E1_JA0` against `W1_JA0` and is read off the buffer's own
+/// `.fixed_conn` rather than written down here. What does **not** mirror is
+/// the row arithmetic: the pad tile is one row **south** on both edges, and
+/// the second `BASE_TYPE` is two rows south for sides C and D on both. A
+/// mirror that had flipped the rows too — pad tile one row *north* — would
+/// have put every left-edge pad's bits in the wrong tile, and nothing but
+/// a measurement says otherwise. The measurement is
+/// `what_lattices_own_packer_writes_for_a_left_edge_pad`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Edge {
     /// Row 0. Two PIOs per position, `PIOT0` / `PIOT1`, and side B's tiles
@@ -1458,15 +1479,44 @@ pub enum Edge {
     /// south and the second `BASE_TYPE` is at the ball's own row for sides
     /// A and B and two rows south for C and D.
     Right,
+    /// Column 0. Four PIOs per position, and the same row arithmetic as
+    /// [`Edge::Right`]: the pad tile is one row south, in a `PICL1*` or
+    /// `MIB_CIB_LR`, and the second `BASE_TYPE` is at the ball's own row
+    /// (`PICL0*`) for sides A and B and two rows south (`PICL2*`) for C
+    /// and D.
+    Left,
+    /// The last row. Two PIOs per position, `PICB0` / `PICB1`, side B's
+    /// tile one column east of its ball's — and **one tile, not two**:
+    /// `PICB<n>` holds the pad's own fields and the only copy of
+    /// `BASE_TYPE` there is, so [`IoSite::pic_at`] is [`IoSite::pad_at`].
+    /// See the note on [`IoSite::pic_at`] and the hazard in
+    /// `docs/fpga-trellis.md`: on a caBGA-256 every ball of this edge is a
+    /// configuration pin.
+    Bottom,
 }
 
 impl Edge {
-    /// The edge a `(col, row, side)` belongs to, or `None` for one this
-    /// backend does not describe.
+    /// The edge a `(col, row, side)` belongs to, or `None` for a position
+    /// that is on no edge at all.
+    ///
+    /// The order matters only at a corner, and this die has no ball at
+    /// one: every left- and right-edge ball of the caBGA-256 is on a row
+    /// congruent to 2 modulo 3, so none is on row 0 or on the last row,
+    /// and the four corner positions hold `DUMMY_TILE_*`, `BANKREF*` or
+    /// `MIB_CIB_LX` rather than a `PIO`. Rows are tried first anyway,
+    /// because the top and bottom edges are the ones with two sides and a
+    /// side `C` or `D` there would be a position this does not describe
+    /// rather than a left- or right-edge pad.
     #[must_use]
-    pub fn of(col: u32, row: u32, width: u32, side: char) -> Option<Edge> {
-        if row == 0 && matches!(side, 'A' | 'B') {
-            return Some(Edge::Top);
+    pub fn of(col: u32, row: u32, width: u32, height: u32, side: char) -> Option<Edge> {
+        if row == 0 {
+            return matches!(side, 'A' | 'B').then_some(Edge::Top);
+        }
+        if row + 1 == height {
+            return matches!(side, 'A' | 'B').then_some(Edge::Bottom);
+        }
+        if col == 0 && matches!(side, 'A' | 'B' | 'C' | 'D') {
+            return Some(Edge::Left);
         }
         if col + 1 == width && matches!(side, 'A' | 'B' | 'C' | 'D') {
             return Some(Edge::Right);
@@ -1501,6 +1551,14 @@ pub struct IoSite {
     /// `PULLMODE`.
     pub pad_at: (u32, u32),
     /// The position of the tile holding the second copy of `BASE_TYPE`.
+    ///
+    /// **Equal to [`IoSite::pad_at`] on the bottom edge**, which is not a
+    /// bug and not a fallback: `PICB0` and `PICB1` are the only tiles of
+    /// that edge, they hold the pad's own fields and the `DATAMUX_*` the
+    /// other edges keep in a tile of their own, and no position of the
+    /// bottom row or the row above it declares a second
+    /// `PIO<side>.BASE_TYPE`. So the second copy is the same bits, and
+    /// writing it twice writes them once.
     pub pic_at: (u32, u32),
     /// The position of the `CIB` tile holding the two constant muxes,
     /// worked out from the buffer's own fixed connections rather than
@@ -1639,13 +1697,29 @@ impl IoSite {
                 let x = if side == 'B' { col + 1 } else { col };
                 ((x, 0), (x, 1))
             }
-            Edge::Right => {
+            // The two long edges take the same arithmetic, and that is a
+            // measurement rather than a symmetry: see [`Edge`]. Only the
+            // column differs, and the `CIB` below works the column out
+            // from the buffer's own fixed connection.
+            Edge::Right | Edge::Left => {
                 let pic_row = if matches!(side, 'A' | 'B') {
                     row
                 } else {
                     row + 2
                 };
                 ((col, row + 1), (col, pic_row))
+            }
+            // **One tile, so one copy.** The bottom edge is the top edge's
+            // column rule — side B one column east — with the two tiles
+            // collapsed into one: `PICB<n>` declares the pad's own
+            // `BASE_TYPE`, `HYSTERESIS`, `PULLMODE` and `SLEWRATE` *and*
+            // the `DATAMUX_*` and `TRIMUX_TSREG` that the top edge keeps in
+            // a `PICT<n>` a row away, and there is no second tile at the
+            // position or at the row above it. So `pic_at == pad_at`, and
+            // writing the second copy writes the same bits again.
+            Edge::Bottom => {
+                let x = if side == 'B' { col + 1 } else { col };
+                ((x, row), (x, row))
             }
         };
         let field = format!("PIO{side}.BASE_TYPE");

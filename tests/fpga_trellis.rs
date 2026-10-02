@@ -1176,10 +1176,18 @@ fn the_database_describes_one_part_of_the_ecp5_family() {
     );
     assert_eq!(stats.balls, 197, "balls the caBGA-256 map names");
     assert_eq!(
-        stats.pads, 120,
-        "56 PIOs on the top edge and 64 on the right"
+        stats.pads, 197,
+        "56 on the top edge, 64 each on the left and the right, 13 on the bottom"
     );
-    assert_eq!(stats.pads_skipped, 77, "the balls of the other two edges");
+    // **Nothing is left out any more**, and that is worth an assertion of
+    // its own rather than a zero nobody reads: every ball `iodb.json` names
+    // for this package is on one of the four edges, every one of them has
+    // its tiles where its edge's rule says, and every one has a bank in
+    // `pio_metadata`. Before the left and bottom edges were described, 77
+    // balls — every pin of the TARGET USB transceiver, the HyperRAM, the
+    // three VBUS switches and the SPI flash among them — were in the
+    // package's map and in no fabric.
+    assert_eq!(stats.pads_skipped, 0, "no ball of this package is left out");
 
     // ---- the interconnect, measured ----
     //
@@ -1257,7 +1265,9 @@ fn the_database_describes_one_part_of_the_ecp5_family() {
         vec![
             ("ff".to_owned(), 24_288),
             ("gb".to_owned(), 56),
-            ("io".to_owned(), 120),
+            // One `io` site per ball the package names, now that all four
+            // edges are described.
+            ("io".to_owned(), 197),
             ("lut".to_owned(), 24_288),
             // One distributed RAM per logic tile, and 24288 / 8 is 3036 of
             // them: a `TRELLIS_DPR16X4` is three slices of one tile, so a
@@ -1437,6 +1447,8 @@ fn a_pads_bel_is_at_its_ball_and_its_bits_are_where_the_edge_rule_says() {
     let mut seen: Vec<(u32, u32, char)> = Vec::new();
     let mut top = 0usize;
     let mut right = 0usize;
+    let mut left = 0usize;
+    let mut bottom = 0usize;
     for pad in &fabric.io {
         assert!(
             !seen.contains(&(pad.bel.0, pad.bel.1, pad.side)),
@@ -1476,22 +1488,58 @@ fn a_pads_bel_is_at_its_ball_and_its_bits_are_where_the_edge_rule_says() {
                 let south = if matches!(pad.side, 'A' | 'B') { 0 } else { 2 };
                 assert_eq!(pad.pic_at, (pad.bel.0, pad.bel.1 + south));
             }
+            // The left edge takes the right edge's rows unchanged — not
+            // mirrored, which is the thing a reader will expect and which
+            // would have been wrong. Only the column differs.
+            trellis::Edge::Left => {
+                left += 1;
+                assert_eq!(pad.bel.0, 0);
+                assert_eq!(pad.pad_at, (0, pad.bel.1 + 1));
+                let south = if matches!(pad.side, 'A' | 'B') { 0 } else { 2 };
+                assert_eq!(pad.pic_at, (0, pad.bel.1 + south));
+                // And its `CIB` is one column *east*, from the buffer's own
+                // `JPADDO<s> <- E1_JA0`, where the right edge's is west.
+                assert_eq!(pad.cib_at.0, 1, "{}: the CIB is at column 1", pad.ball);
+            }
+            // The bottom edge is the top edge's column rule with the two
+            // tiles collapsed into one, so there is no second copy.
+            trellis::Edge::Bottom => {
+                bottom += 1;
+                assert_eq!(pad.bel.1, fabric.arch.height - 1);
+                assert_eq!(
+                    pad.pad_at,
+                    (pad.bel.0 + u32::from(pad.side == 'B'), pad.bel.1)
+                );
+                assert_eq!(
+                    pad.pic_at, pad.pad_at,
+                    "{}: `PICB<n>` is the only tile of this edge",
+                    pad.ball
+                );
+                assert_eq!(pad.output_pic_bits, pad.output_pad_bits);
+                // The `CIB` is one row *north*, from `JPADDO<s> <- N1_JA0`.
+                assert_eq!(pad.cib_at, (pad.pad_at.0, pad.bel.1 - 1), "{}", pad.ball);
+            }
         }
     }
-    // 56 balls on the top edge and 64 on the right, which is every ball of
-    // the package on either.
+    // Every ball of the package that is a PIO, on all four edges: 56 on the
+    // top, 64 each on the left and the right, and 13 on the bottom, which
+    // on a caBGA-256 is bank 8's configuration pins and nothing else.
     assert_eq!(top, 56);
     assert_eq!(right, 64);
-    assert_eq!(seen.len(), 120);
+    assert_eq!(left, 64);
+    assert_eq!(bottom, 13);
+    assert_eq!(seen.len(), 197);
 
-    // A ball on another edge is not in the map at all, rather than being
-    // in it and configured nowhere. `T17` is a corner ball of this
-    // package and is not a PIO.
+    // A ball that is not a PIO is not in the map at all, rather than being
+    // in it and configured nowhere. `T17` is a corner ball of this package.
     assert!(fabric.pad("T17").is_none());
     assert!(fabric.arch.site_of_pin("no-such-ball").is_none());
-    // A left-edge ball is a PIO and is still left out, because that edge's
-    // rule has not been checked against a part.
-    assert!(fabric.pad("R2").is_none(), "the left edge is not described");
+    // And the left-edge ball this whole edge was described for is in it:
+    // `R2` is `target_phy.data[0]` in Great Scott Gadgets' own platform
+    // file, PIO C of (col 0, row 38), bank 6.
+    let r2 = fabric.pad("R2").expect("the left edge is described now");
+    assert_eq!((r2.bel, r2.side, r2.edge), ((0, 38), 'C', trellis::Edge::Left));
+    assert_eq!((r2.pad_at, r2.pic_at, r2.bank), ((0, 39), (0, 40), 6));
 }
 
 /// The whole flow, from Verilog to a `.bit`: the design that lights all
@@ -1614,13 +1662,16 @@ fn the_bank_rail_is_the_bit_lattices_own_packer_sets_for_this_board() {
     // The top edge is two banks, and the value is the one the RCF's
     // `LVCMOS33` implies.
     assert_eq!(fabric.voltage, "3V3");
-    // The two banks of the top edge and the two of the right, because the
-    // fabric declares pads on both edges now. Note that 2 and 7 are spelled
-    // `BANKREF2A` and `BANKREF7A` by Lattice, which is why the lookup tries
-    // both spellings.
+    // **Seven banks, which is every bank this die has a `BANKREF` for**,
+    // because the fabric declares pads on all four edges now: 0 and 1 are
+    // the top edge, 2 and 3 the right, 6 and 7 the left, and 8 the bottom —
+    // which on a caBGA-256 is bank 8's thirteen configuration pins and is
+    // also where the part's sysconfig settings live. Note that 2 and 7 are
+    // spelled `BANKREF2A` and `BANKREF7A` by Lattice, which is why the
+    // lookup tries both spellings. There is no bank 4 or 5 on this die.
     assert_eq!(
         fabric.bank_bits.keys().copied().collect::<Vec<_>>(),
-        vec![0, 1, 2, 3]
+        vec![0, 1, 2, 3, 6, 7, 8]
     );
     let (at, bank1) = fabric.bank_bits.get(&1).unwrap();
     assert_eq!(bank1.len(), 1, "one bit says the rail");
