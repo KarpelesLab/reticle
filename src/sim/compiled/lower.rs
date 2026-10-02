@@ -952,10 +952,9 @@ impl<'d> Lowerer<'d> {
 
     fn allocate_memories(&mut self) {
         let mut signed = vec![false; self.sim.memories.len()];
-        for inst in 0..self.sim.instances.len() {
-            let m = self.sim.instances[inst].m;
-            for (mid, mem) in m.memories.iter() {
-                let global = self.sim.instances[inst].mems[mid.index()];
+        for inst in &self.sim.instances {
+            for (mid, mem) in inst.m.memories.iter() {
+                let global = inst.mems[mid.index()];
                 signed[global.idx()] = mem.elem.is_signed();
             }
         }

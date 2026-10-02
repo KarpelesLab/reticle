@@ -236,8 +236,7 @@ impl Checker<'_> {
         match name {
             "\"and\"" | "\"or\"" | "\"nand\"" | "\"nor\"" | "\"xor\"" | "\"xnor\"" => {
                 let op = name.trim_matches('"');
-                if let (Some(a), Some(b)) =
-                    (v.first().and_then(&scalar), v.get(1).and_then(&scalar))
+                if let (Some(a), Some(b)) = (v.first().and_then(scalar), v.get(1).and_then(scalar))
                 {
                     return Some(std9_value(logic_op(op, a, b)));
                 }
@@ -253,7 +252,7 @@ impl Checker<'_> {
                 Some(self.std9_array(&out, ret))
             }
             "\"not\"" => {
-                if let Some(a) = v.first().and_then(&scalar) {
+                if let Some(a) = v.first().and_then(scalar) {
                     return Some(std9_value(not9(a)));
                 }
                 let a = v.first()?.to_std9()?;
@@ -304,7 +303,7 @@ impl Checker<'_> {
                         _ => Std9::X,
                     }
                 };
-                if let Some(a) = v.first().and_then(&scalar) {
+                if let Some(a) = v.first().and_then(scalar) {
                     return Some(std9_value(map(a)));
                 }
                 let a = v.first()?.to_std9()?;
@@ -313,7 +312,7 @@ impl Checker<'_> {
             }
             "is_x" => {
                 let known = |s: Std9| matches!(s, Std9::Zero | Std9::One | Std9::L | Std9::H);
-                if let Some(a) = v.first().and_then(&scalar) {
+                if let Some(a) = v.first().and_then(scalar) {
                     return Some(Value::from_bool(!known(a)));
                 }
                 let a = v.first()?.to_std9()?;
