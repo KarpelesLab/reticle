@@ -1,0 +1,103 @@
+# usb_host_ulpi: a USB 2.0 full-speed **host** behind a ULPI transceiver.
+# Everything else USB in this library is a peripheral — `usb_device_fs`,
+# `usb_device_ulpi` and `usb_cdc_acm` are all devices that answer a host —
+# and this is the other end: it generates the frame every millisecond,
+# sends the tokens, drives the bus reset, and enumerates whatever is
+# plugged into the port as far as reading the device and configuration
+# descriptors and setting an address and a configuration.
+#
+# Three modules. `usb_ulpi_host_link` is the ULPI bus with a host's
+# register values and its register port brought out, `usb_host_sie` is the
+# frames, the tokens, the CRC5 and one transaction at a time with a timeout
+# and retries, and `usb_host_enum` is USB 2.0 §9.1.2's sequence. The reply
+# decoder is **not** here: `usb_pkt_rx` from `usb_device_fs` already checks
+# a PID's check nibble and a packet's CRC16, which is the same work in both
+# directions, so it is reached through the `depends` line below.
+#
+# `enum_en` low makes the block a read-only instrument: the transceiver is
+# configured as a host — two 15 kOhm pull-downs and nothing else on the
+# pair — and the register port is the design's, so it can ask what the part
+# is, whether the port has VBUS, and which line an attached device pulled
+# up. Nothing is driven until `enum_en` goes high. README.md says what of
+# ULPI, USB 2.0 and the transceiver's own datasheet each fact comes from,
+# and separates what has been checked from what is only quoted.
+name usb_host_ulpi
+version 1.0.0
+license MIT
+description "USB full-speed host over a ULPI transceiver: SOF every millisecond, SETUP, IN and OUT tokens with CRC5, data packets with CRC16, handshakes, timeouts and retries, a bus reset driven from the transceiver's own terminations, and an enumeration that reads the device and configuration descriptors and sets an address and a configuration"
+
+top usb_host_ulpi
+target ice40
+target ecp5
+
+source rtl/usb_ulpi_host_link.v
+source rtl/usb_host_sie.v
+source rtl/usb_host_enum.v
+source rtl/usb_host_ulpi.v
+
+depends usb_device_fs ^1.0.0
+
+param RESET_CYCLES int 300 2..65535
+param VENDOR_ADDR bits 6'h00
+param VENDOR_DATA bits 8'h00
+param REG_TRIES int 16 1..255
+param FRAME_CYCLES int 60000 16..16777215
+param TIMEOUT_CYCLES int 4096 16..16777215
+param RETRIES int 3 0..255
+param TX_PER_BYTE int 48 1..255
+param TX_OVERHEAD int 128 0..65535
+param GAP_CYCLES int 12 1..255
+param TURNAROUND int 9 1..255
+param DEBOUNCE_CYCLES int 6000000 1..268435455
+param RESET_HOLD int 900000 1..268435455
+param RESET_RECOVERY int 1200000 1..268435455
+param ADDR_SETTLE int 300000 1..268435455
+param NAK_CYCLES int 3000000 1..268435455
+param DEV_ADDR bits 7'd1
+param MAXPKT0_MIN bits 7'd8
+param DESC_MAX bits 7'd64
+param FS_LINE bits 2'b01
+
+port clk60 in
+port rst_n in
+port ulpi_data_i in 8
+port ulpi_data_o out 8
+port ulpi_data_oe out
+port ulpi_dir in
+port ulpi_nxt in
+port ulpi_stp out
+port ulpi_rst_n out
+port phy_ready out
+port rx_cmd out 8
+port rx_cmd_seen out
+port line_state out 2
+port vbus_state out 2
+port id_pin out
+port enum_en in
+port reg_start in
+port reg_write in
+port reg_addr in 6
+port reg_wdata in 8
+port reg_rdata out 8
+port reg_done out
+port reg_ok out
+port reg_busy out
+port frame out 11
+port sof_sent out
+port stage out 5
+port attached out
+port low_speed out
+port up out
+port failed out
+port fail_stage out 5
+port fail_status out 3
+port dev_addr out 7
+port maxpkt0 out 7
+port cfg_total out 16
+port cfg_value out 8
+port desc_data out 8
+port desc_valid out
+port desc_index out 7
+port desc_tag out 2
+port desc_done out
+port desc_len out 7

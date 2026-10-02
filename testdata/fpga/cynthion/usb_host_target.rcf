@@ -1,0 +1,125 @@
+# A USB host on the TARGET port of a Great Scott Gadgets Cynthion r1.4,
+# with the serial console of `usb_cdc_uart.rcf` kept on AUX. Two ULPI
+# transceivers, the one oscillator, the six LEDs, and three pins nothing in
+# this directory has driven before.
+#
+# Every ball below is quoted from the board's own platform description,
+# `cynthion/python/src/gateware/platform/cynthion_r1_4.py`:
+#
+#     ULPIResource("aux_phy", 0,
+#         data="F16 G15 G16 H15 J15 J16 K15 K16", clk="D16", clk_dir='o',
+#         dir="E16", nxt="F15", stp="E15", rst="J13", rst_invert=True,
+#         attrs=Attrs(IO_TYPE="LVCMOS33", SLEWRATE="FAST")),
+#     ULPIResource("target_phy", 0,
+#         data="R2 R1 P2 P1 N3 N1 M2 M1", clk="T4", clk_dir='o',
+#         dir="R3", nxt="T2", stp="T3", rst="R4", rst_invert=True,
+#         attrs=Attrs(IO_TYPE="LVCMOS33", SLEWRATE="FAST")),
+#
+#     # Primary, discrete 60MHz oscillator.
+#     Resource("clk_60MHz", 0, Pins("A8", dir="i"),
+#         Clock(60e6), Attrs(IO_TYPE="LVCMOS33")),
+#
+#     *LEDResources(pins="E13 C13 B14 A15 D12 C11",
+#                   attrs=Attrs(IO_TYPE="LVCMOS33"), invert=True),
+#
+#     Resource("target_c_vbus_en",   0, Pins("K5", dir="o"), ...),
+#     Resource("control_vbus_en",    0, Pins("L1", dir="o"), ...),
+#     Resource("aux_vbus_en",        0, Pins("L2", dir="o"), ...),
+#
+# `usb_ulpi_device.rcf` has the long form of the provenance of every AUX
+# line, why `-slew fast` is asked for on all thirteen pins of a port and not
+# only its outputs, and why no pin gets a `-pullup`. The TARGET port is the
+# same statement about a second transceiver of the same part on the same
+# board, and `rst_invert=True` on both is why both reset pins are driven
+# active low.
+#
+# ---------------------------------------------------------------------
+# THE THREE PINS THAT ARE NEW HERE, AND WHY THEY ARE NAMED AT ALL
+# ---------------------------------------------------------------------
+#
+# `K5`, `L1` and `L2` are the three bidirectional VBUS switches onto the
+# TARGET A node. The platform file's own comment says they are bidirectional
+# and share that node, so closing two of them ties two host ports' supplies
+# together — which is why they are **constrained and driven** here rather
+# than left out. A pin this design does not mention comes up however the
+# bitstream's defaults leave it; a pin it drives is a statement.
+#
+# `usb_host_target.v`'s header says which of the three has a parameter
+# (`aux_vbus_en`, L2, and only that one), why it is the AUX port's and not
+# the CONTROL port's, and what state a loaded bitstream leaves the switch
+# in. The other two are driven low with no parameter to raise them.
+#
+# No `SLEWRATE` is asked for on them: a switch enable is a level, the
+# platform file names none, and the fastest thing that happens on one of
+# these nets is a bitstream being loaded.
+#
+# ---------------------------------------------------------------------
+# WHAT IS DELIBERATELY NOT HERE
+# ---------------------------------------------------------------------
+#
+# The `CONTROL` port's transceiver (N16 N14 P16 P15 R16 R15 T15 P14, L14,
+# M16, M15, L15, L16) is the one the Apollo debugger shares, and
+# `apollo_port_sharing` in the platform file names only `control_phy`.
+# Nothing here mentions a ball of it, so loading this design cannot take
+# away the debugger it was loaded over.
+#
+# `target_usb_dp` / `target_usb_dm` (N4, P3) are the input-only sniffer pair
+# on the TARGET bus. This design is the port's **host** and reaches the pair
+# through the transceiver, so it has no use for them; a design that wanted
+# to watch its own bus from inside the FPGA would take them.
+#
+# The two power-input switches `control_vbus_in_en` (K13) and
+# `aux_vbus_in_en` (L13) are left alone, as every design in this directory
+# leaves them: they gate each Type-C port's VBUS into the board's own
+# supply, which is how this board is powered at all, and the designs that
+# work on this board do not touch them.
+#
+# The USER button is deliberately not constrained, for the reason next door:
+# a manual reset would need an asynchronous `rst_n`, and
+# `configure_registers` refuses an asynchronous reset on this family.
+
+set_io -io_standard LVCMOS33 clk A8
+
+# The auxiliary transceiver: the console.
+set_io -io_standard LVCMOS33 -slew fast aux_data[0] F16
+set_io -io_standard LVCMOS33 -slew fast aux_data[1] G15
+set_io -io_standard LVCMOS33 -slew fast aux_data[2] G16
+set_io -io_standard LVCMOS33 -slew fast aux_data[3] H15
+set_io -io_standard LVCMOS33 -slew fast aux_data[4] J15
+set_io -io_standard LVCMOS33 -slew fast aux_data[5] J16
+set_io -io_standard LVCMOS33 -slew fast aux_data[6] K15
+set_io -io_standard LVCMOS33 -slew fast aux_data[7] K16
+
+set_io -io_standard LVCMOS33 -slew fast aux_dir E16
+set_io -io_standard LVCMOS33 -slew fast aux_nxt F15
+set_io -io_standard LVCMOS33 -slew fast aux_stp E15
+set_io -io_standard LVCMOS33 -slew fast aux_rst_n J13
+set_io -io_standard LVCMOS33 -slew fast aux_clk D16
+
+# The target transceiver: the host.
+set_io -io_standard LVCMOS33 -slew fast tgt_data[0] R2
+set_io -io_standard LVCMOS33 -slew fast tgt_data[1] R1
+set_io -io_standard LVCMOS33 -slew fast tgt_data[2] P2
+set_io -io_standard LVCMOS33 -slew fast tgt_data[3] P1
+set_io -io_standard LVCMOS33 -slew fast tgt_data[4] N3
+set_io -io_standard LVCMOS33 -slew fast tgt_data[5] N1
+set_io -io_standard LVCMOS33 -slew fast tgt_data[6] M2
+set_io -io_standard LVCMOS33 -slew fast tgt_data[7] M1
+
+set_io -io_standard LVCMOS33 -slew fast tgt_dir R3
+set_io -io_standard LVCMOS33 -slew fast tgt_nxt T2
+set_io -io_standard LVCMOS33 -slew fast tgt_stp T3
+set_io -io_standard LVCMOS33 -slew fast tgt_rst_n R4
+set_io -io_standard LVCMOS33 -slew fast tgt_clk T4
+
+# The three bidirectional VBUS switches onto TARGET A. Driven, not omitted.
+set_io -io_standard LVCMOS33 aux_vbus_en L2
+set_io -io_standard LVCMOS33 control_vbus_en L1
+set_io -io_standard LVCMOS33 target_c_vbus_en K5
+
+set_io -io_standard LVCMOS33 led0_n E13
+set_io -io_standard LVCMOS33 led1_n C13
+set_io -io_standard LVCMOS33 led2_n B14
+set_io -io_standard LVCMOS33 led3_n A15
+set_io -io_standard LVCMOS33 led4_n D12
+set_io -io_standard LVCMOS33 led5_n C11
