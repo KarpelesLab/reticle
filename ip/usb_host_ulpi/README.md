@@ -49,9 +49,13 @@ which was taken.
   it named. §9 is the whole of that list, and it is shorter than the
   quotations.
 
-**No fact in this document has been measured on a board.** That is the
-difference between this file and the one next door, it is not for want of
-trying, and §9 says exactly why.
+- **MEASURED** — something a Cynthion r1.4 did, read off a console. This
+  file used to end this list with "**no fact in this document has been
+  measured on a board**", and that is no longer true: the start-up of §2
+  and the register port of §2's third part have run against a real
+  USB3343, which §9 reports register by register. Nothing above the bus —
+  no token, no frame, no bus reset, no enumeration — has, because nothing
+  can attach to a socket with no power on it.
 
 ---
 
@@ -632,14 +636,19 @@ to write a Link will be.
   real board — but where this document is wrong about ULPI, the host, the
   device and the model can still be wrong together. That is the sentence
   `ip/usb_device_ulpi/README.md` §11 wrote before it had a board, and the
-  one time it came true there is written up in the same section.
+  one time it came true there is written up in the same section. **It is
+  half answered now**: the next section but one has this host reading nine
+  registers out of a real USB3343, so the start-up and the register
+  transactions are no longer only ours agreeing with ours. The *packets* —
+  the tokens, the CRC5, the inter-packet gap, the enumeration — still are.
 
-### Where it stops, which is one edge of a die
+### Where it stops, which is no longer an edge of a die
 
-**It has not run on the part, and it cannot, with this backend as it
-stands.** This is not a matter of trying harder and it is worth being
-exact about, because it is the one thing in this document that a reader
-will want to act on.
+**It has run on the part, and the transceiver answers.** This section used
+to begin "it has not run on the part, and it cannot, with this backend as
+it stands"; both halves of that are gone, and the measurement is below.
+The ball list and the edge it is on are kept because the account of how
+the left edge was described is what makes the measurement mean anything.
 
 The Cynthion r1.4's TARGET transceiver is on these balls, from the
 board's own platform description:
@@ -676,27 +685,77 @@ absolute frame positions across all three reference files, and no
 `PIO<s>.BASE_TYPE` set anywhere in column 0 that is not a mapped ball's
 tile.
 
-So `testdata/fpga/cynthion/usb_host_target.v` now builds **with its TARGET
-balls constrained**, unchanged from the version written against the
-refusal: 36 pads, 128 408 configuration bits, 41 882 arcs, **0
-unexplained**, and the arcs the bits select are exactly the router's.
+So `testdata/fpga/cynthion/usb_host_target.v` builds **with its TARGET
+balls constrained**: 36 pads, 128 583 configuration bits, 42 037 arcs,
+**0 unexplained**, and the arcs the bits select are exactly the router's.
+That is the build that was loaded. It is 175 bits and 15 lookup tables
+away from the 128 408 and 3183 this section quoted before, because the
+label index in the report was fixed between the two and a different
+expression places differently; nothing about the ULPI side changed.
 
-**What that does not settle, and this is the part that still matters.**
-Nothing has been loaded. So the probe of §2 has not been run and the
-enumeration has not been attempted on silicon, which means every "quoted"
-in this document that a measurement would have turned into "checked" is
-still quoted — including the one that matters most, whether the TARGET
-port crosses DP and DM the way AUX does. `FS_LINE` is a parameter for
-exactly that reason and one probe run settles it.
+### And then it was loaded, and the probe of §2 answered
 
-A board would also add the thing no bitstream can: that `X0Y38/PIOC` is
-the ball wired to the transceiver and not the ball a row away. **This
-board cannot give that directly** — its LEDs are on the top edge, its
-USER button on the right, and there is nothing observable on the left at
-all. The transceiver itself is the instrument available: it will not raise
-`nxt` without the clock the FPGA drives out of `T4`, so a register read
-that answers at all is evidence the left-edge rule put the clock on the
-right ball.
+The paragraph that used to be here said nothing had been loaded, that the
+probe had not been run, and that the transceiver itself was the only
+instrument this board could offer for the left edge, because "it will not
+raise `nxt` without the clock the FPGA drives out of `T4`, so a register
+read that answers at all is evidence the left-edge rule put the clock on
+the right ball". That is exactly what happened. `usb_host_target.v`'s own
+console, on a Cynthion r1.4:
+
+```
+VIDL=24  VIDH=04     00h, 01h — the vendor ID pair, 0424
+PIDL=09  PIDH=00     02h, 03h
+FUNC=45              04h, Function Control: XcvrSelect=01, TermSelect=1,
+                     SuspendM=1 — ULPI §3.8.5.3.2's full-speed host
+OTGC=06              0Ah, OTG Control: DpPulldown and DmPulldown, §2
+INTS=18              13h
+DBUG=00              15h — LineState SE0
+IOPM=06              39h, read back as this design wrote it
+RXCM=40  SEEN=01     a receive command arrived, and its ID bit is set
+LINE=00  VBUS=00     out of that command: SE0, and below SessEnd
+PHYR=01  RFAL=00     `phy_ready`, and not one failed register read
+STGE=01  FLAG=00     waiting for an attach; nothing is attached
+```
+
+**What that settles.** Nine registers of a real USB3343 were read over a
+real ULPI bus, and the part is the part its datasheet says: `0424` is
+Microchip's vendor ID. Reaching those answers needs the 60 MHz interface
+clock out of **T4**, the reset released on **R4**, `dir` read on **R3**,
+`nxt` on **T2**, `stp` driven on **T3** and all eight data balls turning
+around in both directions — sixteen left-edge balls, every one of them a
+ball no design of this project's had ever driven. A wrong tile rule on
+that edge is the failure that decodes perfectly and drives the wrong pin,
+and it would have read `00` everywhere. So `docs/fpga-trellis.md`'s left
+edge is **checked against a part** and not only against Lattice's packer,
+and `ip/usb_device_ulpi`'s §2 reading of ULPI register access is now
+confirmed from the **host** end of the bus as well as the peripheral's.
+
+**And the first reading of that console said the opposite**, which is the
+part of this worth keeping. It printed `PHYR=00 RFAL=01 VIDL=00 VIDH=00
+RXCM=00` and was read, reasonably, as a transceiver that had never
+answered — either a left-edge ball driving the wrong pin or a hardware-only
+defect in this block. It was neither: `usb_host_target.v`'s report indexed
+its four-byte label table the way it indexes its one-byte banner table, so
+every label was printed beside the value of the item at the other end of
+the list. `0424` was on the console the whole time, under the name `FRML`.
+The fix is one expression and
+`every_label_of_the_target_hosts_report_names_the_value_beside_it` pins
+it. Nothing in this block changed.
+
+**What it still does not settle.** Two things, and neither is this block's:
+
+- **Whether the TARGET port crosses DP and DM the way AUX does.** `LINE`
+  reads SE0 because nothing is attached, and SE0 is the same on both
+  wires. It takes a full-speed device pulling one of them up to tell D+
+  from D-, and that needs power on the socket. `FS_LINE` stays a
+  parameter and §5 stays quoted.
+- **The enumeration, and every time in it.** `STGE=01` is stage 1 waiting
+  for an attach and it will stay there: no VBUS switch is closed, so the
+  TARGET-A socket has no power and nothing can attach. The debounce, the
+  15 ms of SE0 and the 2 ms after `SET_ADDRESS` are still simulated
+  numbers, and the only thing that makes them real is a device in that
+  socket.
 
 **The two signals in "4423 of 4425"** in the earlier measurement are not
 unrouted nets, and the difference is worth saying because it looks
@@ -760,7 +819,11 @@ and not the CONTROL port's, and what state a loaded bitstream leaves it
 in.
 
 > *Provenance*: quoted from the platform file as installed. HIGH for what
-> the file says; **nothing below it has been driven**, and §9 says why.
+> the file says. **The thirteen transceiver pins have now been driven** and
+> the part answers through them, which §9 reports; `clk_dir='o'` and
+> `rst_invert=True` are therefore measured and not only quoted, because a
+> transceiver with no clock or a reset never released answers nothing. The
+> three VBUS switch balls are driven low and **no switch has been closed**.
 
 ---
 
@@ -780,4 +843,4 @@ in.
   fact by fact, and the account of getting a device through this same bus
   on this same board.
 - [`docs/fpga-trellis.md`](../../docs/fpga-trellis.md) — the ECP5 backend,
-  including the two edges of the die it describes and the two it does not.
+  including all four edges of the die and how each was established.

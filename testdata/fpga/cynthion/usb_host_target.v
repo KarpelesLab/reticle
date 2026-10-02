@@ -12,47 +12,51 @@
 // reason.
 //
 // ===================================================================
-// THIS DESIGN CANNOT BE BUILT FOR THIS BOARD YET, AND WHY
+// WHAT THIS HAS DONE ON A PART, AND THE LIE THE REPORT TOLD FIRST
 // ===================================================================
 //
-// **Read this before spending an afternoon on it.** The flow refuses it,
-// and the refusal is right:
+// **It builds, it has been loaded, and the transceiver answers.** The
+// thirteen TARGET ULPI balls and the three VBUS switch balls are all at
+// column 0 of the caBGA-256 — the **left** edge of the die — which
+// `src/fpga/trellis`'s `Edge::of` did not describe when this file was
+// written, so the flow refused the design with
 //
 //     error: `tgt_data$io0` is constrained to package pin `R2`, which the
 //            architecture maps to no usable site
 //
-// Every one of the thirteen TARGET ULPI balls — and all three VBUS switch
-// balls — is at **column 0** of the caBGA-256 in Project Trellis'
-// `iodb.json`: the **left** edge of the die. `src/fpga/trellis`'s
-// `Edge::of` describes the **top** and **right** edges and says in its own
-// doc comment why the other two are absent: the rule is nextpnr's
-// `get_pio_tile` / `get_pic_tile`, and "a rule that has not been checked
-// against a part produces a bitstream that loads, asserts `DONE` and
-// drives the wrong ball". The top edge was checked against this board's
-// six LEDs and the right edge against its USER button. The AUX port, which
-// every working design in this directory uses, is at column 72.
+// All four edges are described now, and on a Cynthion r1.4 this design's
+// own console says:
 //
-// So this file is a design that is **finished and not buildable**, which
-// is an odd thing to commit and is committed on purpose: with the TARGET
-// balls left unconstrained it places, routes and writes a bitstream whose
-// every bit decodes — 3183 LUT4, 1108 flip-flops, 28 `TRELLIS_DPR16X4` and
-// 36 pads on the LFE5U-12F — so nothing but the ball assignment is in the
-// way. **Such a bitstream must never be loaded**: its TARGET pads land
-// wherever the placer put them.
+//     VIDL=24  VIDH=04     the vendor ID pair: 0424, Microchip
+//     PIDL=09  PIDH=00
+//     FUNC=45  OTGC=06     Function Control, OTG Control, as set here
+//     IOPM=06              39h read back as written
+//     DBUG=00              LineState SE0, which is an idle host port
+//     RXCM=40  SEEN=01     a receive command arrived; its ID bit is set
+//     PHYR=01  RFAL=00     ready, and not one register read failed
 //
-// What it would take is the left edge's tile rule in the backend, checked
-// the way the other two were, against a bitstream Lattice's own packer
-// wrote for this board that drives a ball on that edge. The `cynthion`
-// package ships three (`analyzer.bit`, `selftest.bit`, `facedancer.bit`),
-// `RETICLE_ECP5_REF` already points tests at them, and all three use the
-// TARGET port. `ip/usb_host_ulpi/README.md` §9 is the whole account.
+// That is the measurement the left edge was missing: a USB3343 cannot
+// raise `nxt` without the 60 MHz clock this design drives out of **T4**,
+// cannot leave reset without **R4**, and cannot hand back a register byte
+// without `dir` on **R3** and the eight data balls. A wrong ball for any
+// of them reads `00` everywhere, which is what a wrong left-edge tile rule
+// would have produced. `ip/usb_host_ulpi/README.md` §9 and
+// `docs/fpga-trellis.md` have the account from each side.
 //
-// **One consequence worth being explicit about**: because `aux_vbus_en`,
-// `control_vbus_en` and `target_c_vbus_en` are on that same edge, **no
-// design this flow can build is able to switch VBUS to TARGET A at all**.
-// A device in the TARGET-A socket has power only from whatever gateware
-// the board's flash holds. The VBUS section below is therefore written
-// and unexercised, and that is the honest state of it.
+// **And the first reading of that console was the whole report end for
+// end**, which is worth leaving here because it cost a round of work: the
+// label index below reversed `LABELS`' four-byte elements *and* the
+// characters inside them, so the console printed `PHYR=00 RFAL=01
+// VIDL=00 VIDH=00` — a transceiver that had never answered — while the
+// bytes beside those names belonged to items at the other end of the
+// list. The comment on `lidx` has the arithmetic. Nothing about the bus,
+// the balls or the host link was wrong; the printer was.
+//
+// **The enumeration still stops at `STGE=01`, and that is correct here.**
+// Stage 1 is waiting for an attach, and nothing can attach: no VBUS switch
+// is closed, so the TARGET-A socket has no power and `DBUG` reads SE0.
+// `VBUS_AUX` is what closes one and the section below is what to read
+// before changing it.
 //
 // ===================================================================
 // THE ORDER THIS DOES THINGS IN, AND WHY IT IS NOT NEGOTIABLE

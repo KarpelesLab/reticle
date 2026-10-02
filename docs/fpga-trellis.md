@@ -1,5 +1,153 @@
 # A real Lattice ECP5, and a real `.bit`
 
+## The left edge is on a part now, and the witness is a transceiver's own vendor ID
+
+The section below this one describes all four edges of this die and ends by
+saying what it cannot say: **that the ball is the ball**. A wrong tile rule
+is the failure that decodes perfectly and drives the wrong pin, and this
+board has no LED, no button and nothing else observable on the left edge at
+all. It names the cheapest experiment that would close the gap — *the
+transceiver itself is the instrument; it will not raise `nxt` without the
+clock the FPGA drives out of `T4`* — and says it has not been run.
+
+It has been run. `testdata/fpga/cynthion/usb_host_target.v`, loaded onto a
+Cynthion r1.4, prints this on the USB serial console on its **AUX** port:
+
+```
+== CYNTHION TARGET HOST
+VIDL=24   VIDH=04      00h, 01h — the vendor ID pair: 0424, Microchip
+PIDL=09   PIDH=00      02h, 03h
+FUNC=45                04h — XcvrSelect=01, TermSelect=1, SuspendM=1
+OTGC=06                0Ah — DpPulldown and DmPulldown, which is a host
+INTS=18                13h
+DBUG=00                15h — LineState SE0
+IOPM=06                39h, read back as this design wrote it
+RXCM=40   SEEN=01      a receive command arrived; its ID bit is set
+LINE=00   VBUS=00      out of that command: SE0, below SessEnd
+PHYR=01   RFAL=00      ready, and not one register read failed
+STGE=01   FLAG=00      waiting for an attach; no VBUS, so nothing attaches
+VBEN=00                no VBUS switch is closed
+```
+
+**Why that settles the edge.** Those nine answers came out of a Microchip
+USB3343 over a real ULPI bus, and every one of the sixteen left-edge balls
+this design drives has to be the right ball for them to arrive:
+
+| Ball | What it carries | What a wrong ball would do |
+|---|---|---|
+| `T4` | the 60 MHz interface clock, FPGA → transceiver | the part has no clock, never drives `dir`, answers nothing |
+| `R4` | `rst`, active low | the part never leaves reset |
+| `R3` | `dir`, transceiver → FPGA | the Link never believes a byte; every read times out |
+| `T2` | `nxt`, transceiver → FPGA | no command is ever accepted |
+| `T3` | `stp`, FPGA → transceiver | writes never end; `IOPM` could not read back `06h` |
+| `R2 R1 P2 P1 N3 N1 M2 M1` | the eight-bit bidirectional bus | a register byte comes back wrong or not at all |
+| `K5 L1 L2` | the three VBUS switches, driven low | `VBEN=00` is what a decode says, and a part says the same |
+
+So the two rules the section below measured against Lattice's own packer —
+the pad tile one row *south* and the C/D second copy two rows south, with
+the column mirrored and the rows not — are **checked against a part**, for
+four PIO sides, two directions and a bidirectional bus, on the edge that had
+none. 197 of 197 balls of this package are pads and the two long edges no
+longer differ in confidence.
+
+### The console said the opposite first, and the report was the thing that was wrong
+
+This is the part worth keeping. The first reading of that console was:
+
+```
+PHYR=00  RFAL=01  STGE=01
+VIDL=00  VIDH=00  PIDL=00  PIDH=00
+FUNC=00  OTGC=00  RXCM=00  VBUS=00  LINE=00
+```
+
+A transceiver that answers zero to its own vendor ID and has never latched
+a receive command, with the AUX transceiver in the same bitstream working —
+which is as clean a signature of "the left-edge mapping drives the wrong
+pin" as a board can produce, and it set up a round of work to decide between
+that and a hardware-only defect in `ip/usb_host_ulpi`.
+
+Both were wrong. `usb_host_target.v`'s report has a four-character label per
+item in a `LABELS` concatenation written back to front, and it indexed that
+table **the way it indexes its banner**. The banner is a table of single
+bytes, where an element index and a byte index are the same number, so one
+subtraction reverses it. `LABELS` is a table of four-byte elements, and the
+same subtraction reverses the elements *and the characters inside each
+element* — so item 0's value was printed under item 29's name and the whole
+report came out end for end. `0424` was on the console the whole time, under
+the name `FRML`:
+
+```
+FRML=24     ← VIDL, Vendor ID Low
+LIN2=04     ← VIDH, Vendor ID High
+VBEN=01     ← PHYR, phy_ready
+SEEN=00     ← RFAL, probe_fail
+```
+
+and `VBEN=01` is the tell that no amount of reasoning about ULPI would have
+produced: `VBEN` is three constant zeros in the design, so a `01` under that
+name cannot be the value that belongs to it. Two more were arithmetically
+impossible — `FSTA=40` from a three-bit field zero-extended to eight, and
+`LIN2=04` from a two-bit one.
+
+The fix is one expression: the element counted from the low end, because the
+concatenation is back to front, and the character counted from the high end,
+because a string literal's first character is its most significant byte.
+`every_label_of_the_target_hosts_report_names_the_value_beside_it` in
+`tests/fpga_trellis.rs` drives the printer on its own — the nine probe slots
+written through the simulator's array handle, the host's outputs forced to
+distinct values, `con_in_ready` forced high because nothing in a simulation
+enumerates the console — and compares the byte stream character for
+character. Against the old index it prints `FRML=24 … VIDL=a5`, which is the
+shape the board printed. What it does **not** cover is anything about the
+bus, the probe or the enumeration: all of those are forced, so a host that
+never read a register would print the same report. Only the part can say
+otherwise, and now it has.
+
+**What this cost, and the lesson that is not about Verilog.** The experiment
+lined up to decide between a backend bug and an IP bug — put
+`ip/usb_device_ulpi`'s known-good link on the TARGET balls and see whether
+*it* reads `0424` — was a good experiment and was never needed, because the
+answer was already in the bytes on the console. Three of the printed values
+were impossible for the names they carried, and that is checkable without a
+board, without a build and without a hypothesis. **A report is a piece of
+gateware and it can be wrong in a way that looks like the thing it is
+reporting on.** The two checks this file will not weaken are about the
+bitstream; this one is about the instrument, and the new test is the
+instrument's.
+
+### What is still not measured
+
+- **Whether the TARGET port crosses DP and DM** the way AUX does. `LINE`
+  reads SE0 because nothing is attached, and SE0 is the same on both wires.
+  It takes a full-speed device pulling one of them up, which takes power on
+  the socket. `usb_host_ulpi`'s `FS_LINE` stays a parameter.
+- **Everything above the ULPI bus**: no token, no frame, no bus reset and no
+  enumeration has run on silicon. `STGE=01` is stage 1 waiting for an
+  attach and it will stay there while no VBUS switch is closed, which is
+  `CLAUDE.md`'s rule and is what `VBEN=00` reports.
+- **The bottom edge.** It is described from the same evidence and every ball
+  of it on a caBGA-256 is one of bank 8's configuration pins, so nothing
+  here drives them and nothing should.
+
+The build that was loaded:
+
+```
+128583 configuration bit(s) set, 36 pad(s), 3168 lookup table(s), 1108
+flip-flop(s) and 28 distributed RAM(s) configured, 36/197 io
+routed 4408 of 4410 signal(s) with 63301 pip(s) over 67709 wire(s), and
+every sink was walked back to its driver
+all 128583 set bit(s) decode back through the database into 42037 arc(s),
+6948 field(s) and 3335 word(s), with 0 unexplained, and the arcs they
+select are exactly the 42037 the router chose
+```
+
+The "4408 of 4410" is the accounting the section below explains:
+`Netlist::is_routable` wants a driver and a sink, and a pad driven by a
+constant has neither, of which this design has three. The numbers differ
+from the 128 408 bits and 3183 lookup tables quoted below because the label
+index was fixed between the two builds and a different expression places
+differently; nothing on the ULPI side changed.
+
 ## All four edges of the die, and the port that was blocked on two of them
 
 `Edge::of` in `src/fpga/trellis` described the **top** and **right** edges
@@ -70,7 +218,7 @@ spends 6 and 8. **Every ball of that edge on a caBGA-256 is one of bank 8's
 thirteen configuration pins**, so nothing here drives them and nothing
 should; the pad section has the warning in full.
 
-**What it cannot say is that the ball is the ball.** A wrong tile rule is
+**What it could not say is that the ball is the ball.** A wrong tile rule is
 exactly the failure that decodes perfectly and drives the wrong pin, so a
 part is the only thing that could settle `X0Y38/PIOC` being the ball wired
 to the transceiver's `DATA0` rather than the ball one row away — and **this
@@ -78,6 +226,13 @@ board has no LED, no button and nothing else observable on the left edge at
 all**, which is why there is no "what a person should look for" section for
 this round. "A design on left-edge balls, and what a board would have
 added" names the two cheapest experiments that would close it.
+
+**One of them has since been run, and it closes it.** The section above this
+one has the console: a USB3343 on the TARGET port answering `0424` to its
+vendor-ID pair, which needs the clock out of `T4`, the reset off `R4`, `dir`
+on `R3`, `nxt` on `T2`, `stp` on `T3` and all eight data balls. Read that
+section before trusting the paragraph above, which is kept as the state of
+the evidence at the time the edges were described.
 
 ### What now builds, and what is still not on a part
 
@@ -134,11 +289,12 @@ would raise `aux_vbus_en`, defaulted to **0**, and its own header says to
 read its account of that node before changing it.
 
 `ip/usb_host_ulpi/README.md` §9 is the same account from the block's side.
-Two things about it have not changed: `pins partial` is still set for
+One thing about it has not changed: `pins partial` is still set for
 `ecp5-12f-CABGA256` in `src/fpga/devices/ecp5.dev` with only ten balls
 listed, so every TARGET ball still draws a cosmetic `F0202` warning about
 Reticle's own partial list — the pin map the placer uses comes from
-`iodb.json` — and nothing about any of this has been on a part.
+`iodb.json`. The other thing — that nothing about any of this had been on a
+part — has changed, and the section above this one is what changed it.
 
 ## A control wire is a budget, and a distributed RAM spends one of the tile's two
 
@@ -3935,14 +4091,16 @@ have added something real here: it would be the only evidence that
 `X0Y38/PIOC` is the ball silkscreened nothing and wired to the TARGET
 transceiver's `DATA0`, rather than the ball one row away.
 
-**And this board cannot give it.** Its six FPGA LEDs are on the **top**
-edge and its USER button is on the **right**; the left edge of the die
-carries the TARGET transceiver, the HyperRAM, the Type-C controllers, the
-power monitor and the pseudo-supply pins, and **not one thing a person can
-see or press**. A design confined to this edge therefore has no on-board
-observable at all, which is worth saying plainly rather than leaving a
-reader to wonder why there is no "what a person should look for" section
-above.
+**And this board cannot give it *directly*.** Its six FPGA LEDs are on the
+**top** edge and its USER button is on the **right**; the left edge of the
+die carries the TARGET transceiver, the HyperRAM, the Type-C controllers,
+the power monitor and the pseudo-supply pins, and **not one thing a person
+can see or press**. A design confined to this edge therefore has no
+on-board observable at all, which is worth saying plainly rather than
+leaving a reader to wonder why there is no "what a person should look for"
+section above. What it *can* give is the second experiment below — a
+transceiver as the instrument and a console on another edge — and that is
+the one that was run.
 
 So the cheapest experiment, named exactly:
 
@@ -3964,9 +4122,21 @@ So the cheapest experiment, named exactly:
    `usb_ulpi_trace.v` plays with a serial console on a spare pin, and it
    would need the TARGET port's VBUS left alone, which is the rule anyway.
 
-Neither has been run. What the two of them would settle is the one thing
-this section cannot: that the ball named in `iodb.json` is the ball on the
-package.
+**The second one has been run, and it answered with more than one bit.**
+What was loaded was not a new design but `usb_host_target.v`, which already
+drives `T4` with the 60 MHz, already releases `R4`, and already reads nine
+of the transceiver's registers and prints them on the AUX console — so the
+"one-bit answer" above came back as nine bytes, and the first two of them
+are `24h` and `04h`: the vendor ID **0424**, which is Microchip's. The
+section at the top of this file has the whole console and what each line
+needs in order to be non-zero. So the thing this section said it could not
+settle is settled, and the first experiment — a wire, an LED and a
+multimeter — is not needed.
+
+It took one more thing to get there, and it is the reason this paragraph
+is not three weeks older: the console said `VIDL=00 VIDH=00 PHYR=00` at
+first, because that design's report printed every label beside another
+item's value. The bytes were right and the names were not.
 
 **One thing to expect when reading the older transcripts above.** Every
 `reticle fpga` run quoted earlier in this file ends with a line like
