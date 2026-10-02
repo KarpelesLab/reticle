@@ -11358,7 +11358,7 @@ impl UlpiPhy {
     }
 
     /// The same transceiver on a **host's** port. See `host`.
-    fn as_host(mut self) -> UlpiPhy {
+    fn hosting(mut self) -> UlpiPhy {
         self.host = true;
         self
     }
@@ -12970,11 +12970,11 @@ impl<'d> HostDevice<'d> {
         let dev = UlpiPair::with_phy(dev_design, dev_phy);
         let host_phy = if stale {
             UlpiPhy::new(ULPI_CPB)
-                .as_host()
+                .hosting()
                 .hearing_itself()
                 .reporting_stale_line()
         } else {
-            UlpiPhy::new(ULPI_CPB).as_host()
+            UlpiPhy::new(ULPI_CPB).hosting()
         };
         // The host's own start-up has to run with the device already on the
         // pair, because it reads the Debug register and what that says is
@@ -13117,7 +13117,7 @@ fn host_design_with_vendor() -> Design {
 #[test]
 fn usb_host_ulpi_configures_the_transceiver_as_a_host() {
     let design = host_design();
-    let host = UlpiHost::new(&design, UlpiPhy::new(ULPI_CPB).as_host());
+    let host = UlpiHost::new(&design, UlpiPhy::new(ULPI_CPB).hosting());
     assert_eq!(
         collapsed(&host.phy.accesses),
         vec![
@@ -13161,7 +13161,7 @@ fn usb_host_ulpi_configures_the_transceiver_as_a_host() {
 #[test]
 fn usb_host_ulpi_writes_the_boards_vendor_register_before_it_drives_anything() {
     let design = host_design_with_vendor();
-    let host = UlpiHost::new(&design, UlpiPhy::new(ULPI_CPB).as_host());
+    let host = UlpiHost::new(&design, UlpiPhy::new(ULPI_CPB).hosting());
     assert_eq!(
         collapsed(&host.phy.accesses),
         vec![
@@ -13191,7 +13191,7 @@ fn usb_host_ulpi_writes_the_boards_vendor_register_before_it_drives_anything() {
 #[test]
 fn usb_host_ulpi_reads_the_transceiver_before_it_drives_anything() {
     let design = host_design();
-    let mut host = UlpiHost::new(&design, UlpiPhy::new(ULPI_CPB).as_host());
+    let mut host = UlpiHost::new(&design, UlpiPhy::new(ULPI_CPB).hosting());
 
     // What the part is. A Microchip USB3343 answers `0424h` and `0009h`;
     // `ip/usb_device_ulpi/README.md` §11 has the first of those read off a
@@ -13243,7 +13243,7 @@ fn usb_host_ulpi_reads_the_transceiver_before_it_drives_anything() {
 #[test]
 fn usb_host_ulpi_does_not_call_an_empty_port_an_attachment() {
     let design = host_design();
-    let mut host = UlpiHost::new(&design, UlpiPhy::new(ULPI_CPB).as_host());
+    let mut host = UlpiHost::new(&design, UlpiPhy::new(ULPI_CPB).hosting());
     host.enable();
     // Far longer than `DEBOUNCE_CYCLES`, so a host that counted SE0 as an
     // attachment would have got there.
@@ -13270,7 +13270,7 @@ fn usb_host_ulpi_does_not_call_an_empty_port_an_attachment() {
 #[test]
 fn usb_host_ulpi_reports_a_low_speed_device_and_does_not_talk_to_it() {
     let design = host_design();
-    let mut host = UlpiHost::new(&design, UlpiPhy::new(ULPI_CPB).as_host());
+    let mut host = UlpiHost::new(&design, UlpiPhy::new(ULPI_CPB).hosting());
     host.enable();
     assert!(
         host.until_stage_alone(UsbLine::K, E_LOWSPEED, 5000),
@@ -13295,7 +13295,7 @@ fn usb_host_ulpi_reports_a_low_speed_device_and_does_not_talk_to_it() {
 #[test]
 fn usb_host_ulpi_gives_up_on_a_device_that_never_answers() {
     let design = host_design();
-    let mut host = UlpiHost::new(&design, UlpiPhy::new(ULPI_CPB).as_host());
+    let mut host = UlpiHost::new(&design, UlpiPhy::new(ULPI_CPB).hosting());
     host.enable();
     // J is a full-speed device's pull-up, so the host debounces it, resets
     // it, re-reads LineState and starts asking. Every reply times out.
@@ -13487,7 +13487,7 @@ fn usb_host_ulpi_takes_which_line_is_full_speed_from_its_parameter() {
     let mut params = HOST_TEST_PARAMS.to_vec();
     params.push(("FS_LINE", "2'b10"));
     let design = design_of("usb_host_ulpi", "usb_host_ulpi", &params);
-    let mut host = UlpiHost::new(&design, UlpiPhy::new(ULPI_CPB).as_host());
+    let mut host = UlpiHost::new(&design, UlpiPhy::new(ULPI_CPB).hosting());
     host.enable();
     // J, which this build has been told is **not** full speed.
     assert!(
@@ -13509,7 +13509,7 @@ fn usb_host_ulpi_takes_which_line_is_full_speed_from_its_parameter() {
 #[test]
 fn usb_host_ulpi_reports_a_device_that_leaves_during_the_reset() {
     let design = host_design();
-    let mut host = UlpiHost::new(&design, UlpiPhy::new(ULPI_CPB).as_host());
+    let mut host = UlpiHost::new(&design, UlpiPhy::new(ULPI_CPB).hosting());
     host.enable();
     // Long enough to debounce the attachment and start the reset.
     host.run_alone(UsbLine::J, 400);

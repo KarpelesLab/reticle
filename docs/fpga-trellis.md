@@ -1,5 +1,94 @@
 # A real Lattice ECP5, and a real `.bit`
 
+## Two edges of the die, and the day the other two stopped being theoretical
+
+`Edge::of` in `src/fpga/trellis` describes the **top** and **right** edges
+of this die and not the left or the bottom, and its own doc comment says
+why: the rule is nextpnr's `get_pio_tile` / `get_pic_tile`, and "a rule
+that has not been checked against a part produces a bitstream that loads,
+asserts `DONE` and drives the wrong ball". The top edge was checked against
+all six of this board's LEDs and the right edge against its USER button.
+That was a cost nothing had been willing to pay for, because everything
+this flow had been asked to build lived on those two edges: the
+oscillator and the LEDs on the top, the AUX ULPI transceiver and the
+button on the right.
+
+**It is not theoretical any more.** `ip/usb_host_ulpi` is a USB host for
+this board's **TARGET** port, and every ball of that port is at column 0
+of the caBGA-256 in `iodb.json` — the left edge:
+
+| What | Balls | Where |
+|---|---|---|
+| `target_phy` data | R2 R1 P2 P1 N3 N1 M2 M1 | column 0, rows 26-38 |
+| `target_phy` clock, dir, nxt, stp, rst | T4 R3 T2 T3 R4 | column 0, rows 38-44 |
+| the three VBUS switches onto TARGET A | K5 L1 L2 | column 0, rows 26-29 |
+| `target_a_discharge` | K4 | column 0, row 29 |
+| the TARGET D+/D- sniffer pair | N4 P3 | column 0, row 38 |
+| *for comparison*, `aux_phy` | F16 … J13 | column **72** — the right edge |
+| *for comparison*, the LEDs and the oscillator | E13 … C11, A8 | row **0** — the top edge |
+
+So the flow refuses the design, with the error that says exactly what is
+wrong:
+
+```
+error: `tgt_data$io0` is constrained to package pin `R2`, which the
+       architecture maps to no usable site
+```
+
+and that refusal is the right behaviour: a ball that is left out of the
+pin map is left out because its tile rule has not been checked, and
+guessing it is how a bitstream comes to drive the wrong pin.
+
+**Nothing else about the design is in the way.** With the TARGET balls
+left unconstrained — which makes a bitstream nobody may load — the whole
+of `testdata/fpga/cynthion/usb_host_target.v`, the AUX console included,
+places and routes on the LFE5U-12F in seven minutes: 3184 LUT4, 1107
+flip-flops, 28 `TRELLIS_DPR16X4` and 36 pads, 4423 of 4425 signals
+routed, and
+
+```
+all 129268 set bit(s) decode back through the database into 42269 arc(s),
+6959 field(s) and 3351 word(s), with 0 unexplained, and the arcs they
+select are exactly the 42269 the router chose
+```
+
+**One consequence is worth stating on its own**, because it is about
+power rather than about pins: the three bidirectional VBUS switches onto
+the TARGET A node are on the same edge. So **no design this flow can
+build is able to put power on the TARGET A socket**, whatever
+authorisation it has. A device in that socket has power only from
+whatever gateware the board's flash holds.
+
+### What it would take, and the measurement that exists
+
+The same thing the other two edges took, and the reference bitstreams for
+it are already on the shelf. The `cynthion` Python package ships
+`analyzer.bit`, `selftest.bit` and `facedancer.bit`, `RETICLE_ECP5_REF`
+already points several tests at them, and **all three use the TARGET
+port** — so all three drive balls on the left edge and each is a
+bitstream Lattice's own packer wrote for this board. Asking one of them
+"what, in full, does a vendor's packer write for a pad at column 0, row
+38, side C?" is the same question that settled the top edge and the right
+edge, and it is the project's own method rather than a new one.
+
+Two things to be careful of when it is done, both learned on the other
+edges and both in the sections below:
+
+- the **bel** goes at the position `iodb.json` gives the ball, which is
+  not always where its bits are: on the right edge the pad tile is a row
+  south and the second `BASE_TYPE` two rows south for sides C and D. The
+  left edge will have its own offsets and they are what the reference
+  bitstream is being read for.
+- `pins partial` is set for `ecp5-12f-CABGA256` in
+  `src/fpga/devices/ecp5.dev` and only ten balls are listed there, so a
+  TARGET ball draws an `F0202` warning about Reticle's own partial list
+  even once the architecture can place it. That warning is cosmetic; the
+  pin map the placer uses comes from `iodb.json`.
+
+`ip/usb_host_ulpi/README.md` §9 is the same account from the block's side,
+with what it means for every fact in that document that a measurement
+would have settled.
+
 ## A control wire is a budget, and a distributed RAM spends one of the tile's two
 
 The round below this one modelled a distributed RAM's **lookup tables** and

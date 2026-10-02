@@ -12,6 +12,49 @@
 // reason.
 //
 // ===================================================================
+// THIS DESIGN CANNOT BE BUILT FOR THIS BOARD YET, AND WHY
+// ===================================================================
+//
+// **Read this before spending an afternoon on it.** The flow refuses it,
+// and the refusal is right:
+//
+//     error: `tgt_data$io0` is constrained to package pin `R2`, which the
+//            architecture maps to no usable site
+//
+// Every one of the thirteen TARGET ULPI balls — and all three VBUS switch
+// balls — is at **column 0** of the caBGA-256 in Project Trellis'
+// `iodb.json`: the **left** edge of the die. `src/fpga/trellis`'s
+// `Edge::of` describes the **top** and **right** edges and says in its own
+// doc comment why the other two are absent: the rule is nextpnr's
+// `get_pio_tile` / `get_pic_tile`, and "a rule that has not been checked
+// against a part produces a bitstream that loads, asserts `DONE` and
+// drives the wrong ball". The top edge was checked against this board's
+// six LEDs and the right edge against its USER button. The AUX port, which
+// every working design in this directory uses, is at column 72.
+//
+// So this file is a design that is **finished and not buildable**, which
+// is an odd thing to commit and is committed on purpose: with the TARGET
+// balls left unconstrained it places, routes and writes a bitstream whose
+// every bit decodes — 3184 LUT4, 1107 flip-flops, 28 `TRELLIS_DPR16X4` and
+// 36 pads on the LFE5U-12F — so nothing but the ball assignment is in the
+// way. **Such a bitstream must never be loaded**: its TARGET pads land
+// wherever the placer put them.
+//
+// What it would take is the left edge's tile rule in the backend, checked
+// the way the other two were, against a bitstream Lattice's own packer
+// wrote for this board that drives a ball on that edge. The `cynthion`
+// package ships three (`analyzer.bit`, `selftest.bit`, `facedancer.bit`),
+// `RETICLE_ECP5_REF` already points tests at them, and all three use the
+// TARGET port. `ip/usb_host_ulpi/README.md` §9 is the whole account.
+//
+// **One consequence worth being explicit about**: because `aux_vbus_en`,
+// `control_vbus_en` and `target_c_vbus_en` are on that same edge, **no
+// design this flow can build is able to switch VBUS to TARGET A at all**.
+// A device in the TARGET-A socket has power only from whatever gateware
+// the board's flash holds. The VBUS section below is therefore written
+// and unexercised, and that is the honest state of it.
+//
+// ===================================================================
 // THE ORDER THIS DOES THINGS IN, AND WHY IT IS NOT NEGOTIABLE
 // ===================================================================
 //

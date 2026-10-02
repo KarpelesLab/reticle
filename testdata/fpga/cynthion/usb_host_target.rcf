@@ -1,3 +1,17 @@
+# **This file cannot be used yet, and it is committed anyway.** Every one of
+# the thirteen TARGET ULPI balls below, and all three VBUS switch balls, is at
+# column 0 of the caBGA-256 — the **left** edge of the die — and
+# `src/fpga/trellis`'s `Edge::of` describes the top and right edges only, for
+# the reason its own doc comment gives. So the flow refuses this design:
+#
+#     error: `tgt_data$io0` is constrained to package pin `R2`, which the
+#            architecture maps to no usable site
+#
+# which is correct and is not a bug to be worked around. `usb_host_target.v`'s
+# header, `docs/fpga-trellis.md`'s first section and `ip/usb_host_ulpi/README.md`
+# §9 each say what it would take. The ball names below are the board's own and
+# are right; what is missing is a tile rule in the backend.
+#
 # A USB host on the TARGET port of a Great Scott Gadgets Cynthion r1.4,
 # with the serial console of `usb_cdc_uart.rcf` kept on AUX. Two ULPI
 # transceivers, the one oscillator, the six LEDs, and three pins nothing in
