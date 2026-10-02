@@ -2200,10 +2200,12 @@ a 2×6 header and nothing this machine can read says whether anything is
 plugged into it. A pin whose net is fully described by a schematic and has no
 other driver is a better bet than a pin that is probably unconnected.
 
-For the record, the only ball on the two edges this backend describes that
-the platform file never mentions at all is **B3** (top edge, column 4, side
-B, bank 0). It is a worse choice for the same reason turned around: the
-file's silence is not a statement that the ball is free.
+For the record, the only ball of the whole package that the platform file
+never mentions at all is **B3** (top edge, column 4, side B, bank 0) — when
+this was written only two edges were described and the sentence said "of the
+two edges this backend describes"; all four are described now and the answer
+is the same ball. It is a worse choice for the same reason turned around:
+the file's silence is not a statement that the ball is free.
 
 ### What a person should look for
 
@@ -3528,8 +3530,9 @@ would change every other flop of the tile.
 | Configuration memory | 7562 frames × 592 bits = **4 476 704 bits** |
 | Bytes per frame | 74 |
 | Balls in the caBGA-256 map | 197 |
-| Pads this backend declares | 120: 56 on the top edge and 64 on the right |
-| Balls it leaves out | 77, on the left and bottom edges |
+| Pads this backend declares | **197**: 56 on the top edge, 64 each on the left and the right, 13 on the bottom |
+| Balls it leaves out | **none.** Every ball `iodb.json` names for this package is on an edge this describes, has its tiles where that edge's rule says, and has a bank in `pio_metadata` |
+| Banks with a rail | 7: 0 and 1 (top), 2 and 3 (right), 6 and 7 (left), 8 (bottom). This die has no bank 4 or 5 |
 | Graph nodes | 1 096 425 |
 | Graph edges | 8 270 828 |
 | Global clock networks | 16 |
@@ -3554,7 +3557,7 @@ This is the part of an ECP5 that no amount of reading a database settles,
 and it is where a wrong answer is least visible: a bitstream with a pad
 configured one column over still loads and still asserts `DONE`.
 
-### The buffer is not where the bits are, and both edges say so differently
+### The buffer is not where the bits are, and all four edges say so differently
 
 Before anything routed, "a pad" meant a set of bits, and the bel was put
 wherever they were. A routed design makes the distinction unavoidable,
@@ -3564,36 +3567,55 @@ top-edge position has a `PADDOB_PIO` of its own. So:
 - **the buffer** — the three wires a PIO presents to the fabric,
   `PADDO<L>_PIO`, `PADDT<L>_PIO` and `JPADDI<L>_PIO` — is at the position
   `iodb.json` gives the ball, and that is where the `io` bel goes;
-- **the bits** are wherever the edge's rule puts them, which on the top
-  edge is a column east for side B and on the right edge is a row south for
-  every side.
+- **the bits** are wherever the edge's rule puts them, which on the top and
+  bottom edges is a column east for side B and on the two long edges is a
+  row south for every side.
 
-| | Top edge | Right edge |
-|---|---|---|
-| Sides per position | A, B | A, B, C, D |
-| Buffer | the ball's `(col, row)`, `PIOT0` | the ball's `(col, row)`, `PICR0*` |
-| Pad tile: standard, hysteresis, pull | `(col + [B], 0)`, `PIOT0` / `PIOT1` | `(col, row + 1)`, `PICR1*` |
-| Second copy of the standard | `(col + [B], 1)`, `PICT0` / `PICT1` | A, B: `(col, row)`, `PICR0*`; C, D: `(col, row + 2)`, `PICR2*` |
-| `CIB` that ties the data and enable | `(col + 1, 1)`, wire `JA0` / `JB0` | `(col - 1, row)` for A, B and `(col - 1, row + 2)` for C, D, wire `JA0`/`JA3` |
-| Bank rail | `BANKREF<bank>`, anywhere | same |
+| | Top edge | Right edge | Left edge | Bottom edge |
+|---|---|---|---|---|
+| Sides per position | A, B | A, B, C, D | A, B, C, D | A, B |
+| Buffer | the ball's `(col, row)`, `PIOT0` | the ball's `(col, row)`, `PICR0*` | the ball's `(col, row)`, `PICL0*` | the ball's `(col, row)`, `PICB0` — **for both sides** |
+| Pad tile: standard, hysteresis, pull, slew | `(col + [B], 0)`, `PIOT0` / `PIOT1` | `(col, row + 1)`, `PICR1*` | `(col, row + 1)`, `PICL1*` or `MIB_CIB_LR` | `(col + [B], 50)`, `PICB0` / `PICB1` |
+| Second copy of the standard | `(col + [B], 1)`, `PICT0` / `PICT1` | A, B: `(col, row)`, `PICR0*`; C, D: `(col, row + 2)`, `PICR2*` | A, B: `(col, row)`, `PICL0*`; C, D: `(col, row + 2)`, `PICL2*` or `MIB_CIB_LR` | **none: the pad tile is the only tile** |
+| `CIB` that ties the data and enable | `(col + 1, 1)`, wire `JA0` / `JB0` | `(col - 1, row)` for A, B and `(col - 1, row + 2)` for C, D, wire `JA0`/`JA3` | `(col + 1, row)` for A, B and `(col + 1, row + 2)` for C, D, same wires | `(col + [B], row - 1)`, wire `JA0` / `JB0` |
+| What `OUTPUT_LVCMOS33` costs in the pad tile | 6 bits | 6 | 6 | **7** |
+| What `BIDIR_LVCMOS33` costs | 8 | 8 | 8 | **10** |
+| What `INPUT_LVCMOS33` costs | 5 | 5 | 5 | 5 |
+| Second copy: output / bidir / input | 2 / 2 / 0 | 2 / 2 / 0 | 2 / 2 / 0 | the same tile again |
+| Hysteresis, pull mode, slew rate | one bit each | one bit each | one bit each | one bit each |
+| Bank rail | `BANKREF<bank>`, anywhere | same | same | same |
 
 The `CIB` row of that table is **not hardcoded**. Nothing in the loader
 knows that `JA0` is the top edge's answer: it reads the buffer's own
 `.fixed_conn` — `JPADDOB <- S1E1_JA0` on the top edge, `JPADDOD <-
-S2W1_JA3` on the right — resolves the direction prefix, and builds the
+S2W1_JA3` on the right, `JPADDOD <- S2E1_JA3` on the left, `JPADDOB <-
+N1E1_JA0` on the bottom — resolves the direction prefix, and builds the
 field name `CIB.<wire>MUX`. That is what nextpnr does too, by walking the
-pips uphill of the wire, and it is what lets one piece of code serve both
-edges. Nor are the tile *types* hardcoded: the loader asks which tile of a
-position declares `PIO<L>.BASE_TYPE`, which gets the right answer through
-all twelve spellings of the right edge (`PICR1`, `PICR1_DQS0`,
-`PICR1_DQS3`, `PICR2`, `PICR2_DQS1`, `MIB_CIB_LR_A`, …) where nextpnr
-carries a set of names per edge, and **refuses** rather than guessing if
-two tiles of one position both declare it.
+pips uphill of the wire, and it is what lets one piece of code serve all
+four edges. Nor are the tile *types* hardcoded: the loader asks which tile
+of a position declares `PIO<L>.BASE_TYPE`, which gets the right answer
+through all twelve spellings of the right edge (`PICR1`, `PICR1_DQS0`,
+`PICR1_DQS3`, `PICR2`, `PICR2_DQS1`, `MIB_CIB_LR_A`, …), the eight of the
+left (`PICL0`, `PICL0_DQS2`, `PICL1`, `PICL1_DQS0`, `PICL1_DQS3`, `PICL2`,
+`PICL2_DQS1`, `MIB_CIB_LR`) and the seven of the bottom (`PICB0`, `PICB1`,
+`EFB0_PICB0`, `EFB1_PICB1`, `EFB2_PICB0`, `EFB3_PICB1`, `SPICB0`) where
+nextpnr carries a set of names per edge, and **refuses** rather than
+guessing if two tiles of one position both declare it. At three positions
+of the left edge the ambiguity is real and the refusal is what keeps it
+honest: `(0, 13)`, `(0, 25)` and `(0, 37)` each hold a `MIB_CIB_LR` *and*
+a `MIB_CIB_LRC`, and only the first declares the field.
 
-The left and bottom edges are still left out, and their balls are left out
-of the ball map rather than placed and configured wrongly. The left edge is
-the right edge mirrored and would probably work; "probably" is why it is
-not there.
+**This table used to say that the left edge was "the right edge mirrored
+and would probably work", and the reading was half wrong**, which is why
+the correction is worth keeping visible. What mirrors is the column: the
+tiles are at column 0 and the `CIB` is one column *east* where the right
+edge's is west. What does **not** mirror is the row arithmetic — the pad
+tile is one row *south* and the C/D second copy two rows south on **both**
+long edges, because the die's rows do not reverse. A mirror written in good
+faith would have put every left-edge pad's bits one row the wrong way, in
+the tile of a different ball of the same edge, and it would have decoded
+perfectly against itself. The next two sections are the measurement that
+settles it.
 
 ### The top edge, checked against this board's own gateware
 
@@ -3677,6 +3699,237 @@ and `configure_io` writes it for every input.
 That is the same shape of omission as the bank rail: a default that is
 wrong for the board, in a field the design never mentions, with no symptom
 a structural check could see.
+
+### The left edge, checked against the port it unblocks
+
+This backend described two edges of four for a long time, and the cost was
+concrete: **every ball of a Cynthion's TARGET USB port is on the left edge,
+and so are all three of the board's VBUS switches.** A design naming one of
+them was refused with `constrained to package pin R2, which the architecture
+maps to no usable site`, so a USB host for that port could not be built at
+all and the board's power switches could not be driven.
+
+The evidence for the left edge is unusually good and it is why the rule is
+now a measurement rather than a symmetry. **All three of Great Scott
+Gadgets' bitstreams use that port**, and two of the three also drive the
+HyperRAM, the pseudo-supply pins and the direct `D+`/`D-` taps, which are
+on the same edge. So between them they configure 58, 52 and 40 left-edge
+pads whose ball names are known from the platform file. The right edge's
+oracle was one ball — the USER button, in one of the three files — so this
+is a different order of evidence.
+
+What the database says, and what those files confirm at absolute frame
+positions:
+
+| | |
+|---|---|
+| Where the pad tile is | one row **south** of the ball: the `PICL1*` whose four sides it declares, or the `MIB_CIB_LR` at rows 13, 25, 37 and 49 |
+| Where the second `BASE_TYPE` is | the ball's own row for sides A and B, two rows south for C and D |
+| Which `CIB` ties the data and enable | column 1, at the ball's row for A and B and two rows south for C and D |
+| How many PIO sides | **four.** `PICL1*` declares `PIOA` to `PIOD`, the `PICL0*`/`PICL2*` pair splits A B from C D, and the sixteen balls of the TARGET port and the switches use all four |
+| What differs from the right edge | the column, and the `CIB`'s direction prefix. **Nothing else.** |
+| What differs from the top edge | two more sides, and the pad tile a row south instead of the same row |
+
+The row arithmetic is the part that had to be measured, and the measurement
+is `tests/fpga_trellis.rs::what_lattices_own_packer_writes_for_a_left_edge_pad`.
+It takes the thirteen pins of `target_phy` in all three files and the three
+switches in `analyzer.bit`, and checks 477 bits:
+
+| Ball | PIO | Buffer | Pad tile | Second copy | What it is |
+|---|---|---|---|---|---|
+| R2 | C | (0, 38) | (0, 39) | (0, 40) | `ulpi_data[0]`, bidirectional |
+| R1 | B | (0, 35) | (0, 36) | (0, 35) | `ulpi_data[1]`, bidirectional |
+| P2 | B | (0, 32) | (0, 33) | (0, 32) | `ulpi_data[2]`, bidirectional |
+| P1 | A | (0, 35) | (0, 36) | (0, 35) | `ulpi_data[3]`, bidirectional |
+| N3 | D | (0, 35) | (0, 36) | (0, 37) | `ulpi_data[4]`, bidirectional |
+| N1 | A | (0, 32) | (0, 33) | (0, 32) | `ulpi_data[5]`, bidirectional |
+| M2 | D | (0, 26) | (0, 27) | (0, 28) | `ulpi_data[6]`, bidirectional |
+| M1 | C | (0, 26) | (0, 27) | (0, 28) | `ulpi_data[7]`, bidirectional |
+| T4 | B | (0, 44) | (0, 45) | (0, 44) | `clk`, an output |
+| R3 | B | (0, 41) | (0, 42) | — | `dir`, an input |
+| T2 | D | (0, 38) | (0, 39) | — | `nxt`, an input |
+| T3 | D | (0, 41) | (0, 42) | (0, 43) | `stp`, an output |
+| R4 | C | (0, 41) | (0, 42) | (0, 43) | `rst`, an output |
+| K5 | B | (0, 29) | (0, 30) | (0, 29) | `target_c_vbus_en`, an output |
+| L1 | A | (0, 26) | (0, 27) | (0, 26) | `control_vbus_en`, an output |
+| L2 | B | (0, 26) | (0, 27) | (0, 26) | `aux_vbus_en`, an output |
+
+An input has **no** second copy — its pattern in that tile is empty, which
+is the same oddity the right edge's USER button has — and that is why two
+rows of the table have a dash rather than a position.
+
+**Everything in the pad's own fields is the same as the right edge**, and
+that is a finding and not an absence of one, because the widths are what a
+wrong tile rule would most plausibly have changed: `BIDIR_LVCMOS33` is
+eight bits here too, `OUTPUT_LVCMOS33` six, `INPUT_LVCMOS33` five, the
+second copy two for either of the first two and nothing for an input, and
+hysteresis, the pull mode and the slew rate one bit each. What the two long
+edges have that the top and bottom do not is `TERMINATION_1V35/1V5/1V8` and
+`DIFFRESISTOR`; what the top and bottom have that they do not is `CLAMP`.
+This backend writes none of the four.
+
+**Three negative controls**, because a test that only looks for bits that
+are set cannot tell a rule from a coincidence:
+
+- **hysteresis is clear on an output.** `ecppack` writes `HYSTERESIS = ON`
+  for `dir`, `nxt` and the eight data balls and leaves it clear on `clk`,
+  `stp`, `rst` and the three switches — which is exactly what
+  `configure_io` does;
+- **the slew rate is clear on the three switches.** All thirteen ULPI pins
+  carry `SLEWRATE="FAST"` in the `ULPIResource`'s attributes and have the
+  bit; the three `Resource` lines for the switches ask for nothing and have
+  it clear. So the field is written on request, not by direction;
+- **no `CIB` tie on any of the sixteen.** Every one has a signal routed
+  into its data wire, and the tie and the route are one mux.
+
+And the honest direction, which is the one that would catch a rule that is
+right for sixteen balls and wrong for the rest: **every**
+`PIO<s>.BASE_TYPE` these three files set anywhere in column 0 is either a
+pad tile or a second-copy tile of a ball the map now names. No orphans, in
+any of the three.
+
+Two things measured on the way that are pinned rather than smoothed over.
+`R4` reads back as the pseudo-differential `OUTPUT_LVCMOS33D` rather than
+`OUTPUT_LVCMOS33`, because its C/D partner `T3` is an output too and that
+spelling's pattern spans the pair — the same ambiguity "What could not be
+read back" describes on the right edge, and all six of the plain value's
+bits are inside it. And a switch that a design does **not** drive still has
+one of its six output bits set, for the same cross-pair reason: `K5` is
+side B of a pair whose side A (`K4`, `target_a_discharge`) both other files
+do drive. So the assertion there is "the pattern is not complete", not "no
+bit of it is set", and the pull mode — a field of its own that nothing
+shares — is the clean negative control.
+
+### The bottom edge, which is one tile and is nothing but configuration pins
+
+The bottom edge came with the same evidence, so it is described too, and it
+is the one edge that is genuinely a different shape.
+
+**There is no second tile.** The top edge keeps the pad's own fields in a
+`PIOT<n>` on row 0 and a second `BASE_TYPE` plus the `DATAMUX_*` in a
+`PICT<n>` on row 1. The bottom edge has only `PICB0` and `PICB1`, on row 50,
+and they hold both: `BASE_TYPE`, `CLAMP`, `DRIVE`, `HYSTERESIS`,
+`OPENDRAIN`, `PULLMODE`, `SLEWRATE`, `DATAMUX_ODDR`, `DATAMUX_OREG` and
+`TRIMUX_TSREG` in one tile. Row 49 is ordinary `CIB`. So `IoSite::pic_at`
+is `IoSite::pad_at` there, the second copy is the same bits, and writing it
+twice writes it once. Nothing in the loader special-cases that beyond the
+tile rule itself.
+
+**And the patterns are wider.** `OUTPUT_LVCMOS33` is **seven** bits in a
+`PICB<n>` where it is six everywhere else, and `BIDIR_LVCMOS33` is **ten**
+where it is eight. `INPUT_LVCMOS33` is five, the same as everywhere.
+Hysteresis, the pull mode and the slew rate are one bit each. Those numbers
+are the database's and they are confirmed set, bit for bit, in the
+reference files — which is the reason to report them: a model that assumed
+one edge's widths for all four would have written six of seven bits and
+produced a pad in a standard nobody asked for.
+
+The column rule *is* the top edge's: side A in the ball's own column, side
+B one column east, with the buffer for both sides in side A's `PICB0`. The
+`CIB` is one row north, from `JPADDOA <- N1_JA0` and `JPADDOB <-
+N1E1_JA0`.
+
+The oracle is smaller than the left edge's but it covers both sides and
+several columns: `analyzer.bit` configures five bottom-edge pads,
+`facedancer.bit` seven and `selftest.bit` one, and
+`what_lattices_own_packer_writes_for_a_bottom_edge_pad` checks every bit of
+all thirteen of those. `T6` is the interrupt line to the debug
+microcontroller and `R6` a pseudo-supply pin; `T8`, `T7`, `M7` and `N7` are
+the SPI flash, an output and an input in `analyzer.bit` and four
+bidirectional pads in `facedancer.bit`'s quad-mode spelling; `N8` is the
+flash's chip select. Side A's tiles are at columns 4, 11 and 15 and side
+B's at 5, 10 and 12, so the `+1` for side B is measured and not assumed.
+
+**A hazard that has to be said plainly.** On a caBGA-256 the bottom edge is
+**thirteen balls and all thirteen are bank 8's configuration pins** —
+`D0`..`D7`, `CSN`, `CS1N`, `HOLDN`, `DOUT` and `WRITEN` — and `BANKREF8` is
+also where the part's sysconfig settings live. A design that drives them is
+driving the pins the part loads itself through and, on a Cynthion, the pins
+its configuration flash is on. Nothing in this repository places a design
+there, nothing should be loaded onto a board that does, and the backend does
+not police it: a constraints file naming `T8` will place and route exactly
+as one naming `R2` does. The edge is described because the alternative —
+leaving thirteen balls of the package out of the fabric — hides a tile rule
+the evidence settles, not because anything here wants to drive them.
+
+### A design on left-edge balls, and what a board would have added
+
+`testdata/fpga/cynthion/target_ulpi_loopback.v` is the design the left edge
+was described for: the thirteen balls of the TARGET transceiver plus the
+three VBUS switches, and nothing else except the oscillator on A8. Eight
+bidirectional pads whose tristate a *route* drives, two inputs, two routed
+outputs, four outputs whose data is a `CIB` tie, one bank rail, over seven
+pad tiles — one of which holds all four PIO sides at once, because `L1`,
+`L2`, `M1` and `M2` are sides A, B, C and D of `(col 0, row 26)`.
+
+It places, routes and decodes:
+
+```
+17 pad(s), 74 lookup table(s), 26 flip-flop(s)
+routed 112 of 112 signal(s) with 1217 pip(s) over 1329 wire(s)
+all 2729 set bit(s) decode back through the database into 751 arc(s),
+265 field(s) and 74 word(s), with 0 unexplained, and the arcs they select
+are exactly the 751 the router chose
+```
+
+`the_target_ulpi_design_routes_and_configures_what_its_header_promises`
+asserts that, and the things a board could not have shown either: that a
+routed tristate is **not** tied and a constant output's **is**, that
+`-slew fast` reaches thirteen pads and not the three switches, that
+`-pullup yes` reaches two of them and that nothing is left at the
+database's default pull-*down*, and that banks 0 and 6 have their rail
+written while banks 1, 2, 3, 7 and 8 do not.
+
+**Nothing was loaded onto a part, and this is the one milestone of this
+file where that is not merely caution.** A wrong tile rule is precisely the
+failure that decodes perfectly and drives the wrong pin, so a board would
+have added something real here: it would be the only evidence that
+`X0Y38/PIOC` is the ball silkscreened nothing and wired to the TARGET
+transceiver's `DATA0`, rather than the ball one row away.
+
+**And this board cannot give it.** Its six FPGA LEDs are on the **top**
+edge and its USER button is on the **right**; the left edge of the die
+carries the TARGET transceiver, the HyperRAM, the Type-C controllers, the
+power monitor and the pseudo-supply pins, and **not one thing a person can
+see or press**. A design confined to this edge therefore has no on-board
+observable at all, which is worth saying plainly rather than leaving a
+reader to wonder why there is no "what a person should look for" section
+above.
+
+So the cheapest experiment, named exactly:
+
+1. **One wire and one LED.** Drive a left-edge output — a pseudo-supply
+   ball is the safe choice, because the platform file says what is on it
+   and it is a supply rail rather than a driver — with a counter bit, and
+   route the *same* counter bit to a top-edge LED. If the left-edge pad is
+   configured in the wrong tile, the LED blinks and the left-edge ball does
+   not, and a scope probe or a multimeter on the ball settles it in one
+   look. This needs no instrumentation in the fabric and no host software.
+2. **Cheaper still, with no probe at all: the TARGET transceiver's own
+   clock.** `clk_dir='o'` means the FPGA drives `T4` and a USB3343 will not
+   produce `dir` or `nxt` transitions without it. So a design that drives
+   `T4` with the 60 MHz, brings `rst` out of reset, and lights a top-edge
+   LED when it has seen `nxt` toggle, is a one-bit answer to "did the
+   left-edge output pad really reach `T4` and did the left-edge input pad
+   really read `R3`" — a transceiver as the instrument, with the LED on
+   the edge that is already proved. It is the same trick
+   `usb_ulpi_trace.v` plays with a serial console on a spare pin, and it
+   would need the TARGET port's VBUS left alone, which is the rule anyway.
+
+Neither has been run. What the two of them would settle is the one thing
+this section cannot: that the ball named in `iodb.json` is the ball on the
+package.
+
+**One thing to expect when reading the older transcripts above.** Every
+`reticle fpga` run quoted earlier in this file ends with a line like
+`20/120 io`, and the denominator is now **197**: it is the number of `io`
+sites the fabric declares, which was 120 while two edges of four were
+described. The transcripts are dated records of runs on a part and are left
+as they were. The same figure appears in `ip/usb_cdc_acm/README.md` and
+`examples/mos6502_monitor/README.md`, which are dated records too; the
+numerators — how many pads each design uses — are unchanged, and so is
+everything in `docs/ip-library.md`'s footprint table, because a footprint
+counts the cells a design instantiates and not the sites a part has.
 
 ### The bank's rail, which is nowhere near the pad
 
@@ -3785,8 +4038,8 @@ The two things it does not cover:
 - **The `.config_enum` and `.mux` bit values themselves**, which come from
   Project Trellis' fuzzing rather than from Lattice. Those are as
   trustworthy as `ecppack` is. The settings that could be checked against a
-  real `ecppack` output were: the base type on both edges, hysteresis, the
-  pull mode, and the bank rail on four banks. **No arc has been checked
+  real `ecppack` output were: the base type on all four edges, hysteresis,
+  the pull mode, the slew rate, and the bank rail on seven banks. **No arc has been checked
   against an `ecppack` output**, because the reference bitstreams route
   different designs and there is nothing to compare an arc against. What
   was checked instead is that every bit of this flow's own bitstream decodes
@@ -3954,7 +4207,7 @@ borrows now. Every backend gets it.
 | A second clock domain | nothing in principle: sixteen networks are declared and a net reaches one by routing. Nothing has built a design with two, so nothing has seen what the router does when two clocks want the same quadrant's network |
 | A clock from a PLL | `EHXPLLL` has no port map in the device file. The path is there: a PLL's outputs are `G_J<quadrant>CPLL0CLKO*` and every buffer's input mux offers them, which is how `analyzer.bit`'s two globals are fed |
 | A clock on a **dedicated** clock pad | nothing, and it has never been exercised. A `PCLKT` pad reaches the centre through `G_JPCLKT<q><n> <- JINCK <- JPADDI`, all `.fixed_conn`s already in the graph; a Cynthion's oscillator is on the `PCLKC` half of the pair, so this flow has only ever taken the fabric route |
-| The left and bottom edges' pads | the left edge is the right edge mirrored (`PICL0`/`PICL1`/`PICL2` for `PICR*`, and the `CIB` one column *east* instead of west) and could be checked against the reference bitstreams the same way the right edge was, since they use pins on every edge. The bottom edge is different again: `PICB*` puts two PIOs at a position and shares tiles with the `EFB`. Neither has been checked, and `TrellisDatabase::load` leaves those balls out of the ball map rather than placing something it would configure nowhere |
+| A ball of a package whose edge is not described | **nothing on a caBGA-256**: all four edges are described and all 197 balls the package names are pads. The row used to say the left edge was "the right edge mirrored" and half of that was wrong; see "The buffer is not where the bits are". What is still untried is a *package* whose edges this die does not have — the caBGA-381 and the TQFP144 are in `iodb.json` and no design has been built for either |
 | A carry chain | `CCU2C` has no port map in the device file, on purpose: its two sum bits and internal carry do not match the `(ci, i0, i1) -> co` model Reticle maps carry onto. The `.mux` records for the cascade wires are read already |
 | Block RAM | `Ecp5Stream` reads and writes the initialisation blocks — the reference files' 44 blocks round trip — and nothing generates one. The `MIB_EBR*` tiles' wires and pips are in the graph |
 | A distributed RAM's **contents** | `configure_lutram` writes them from an `INITVAL` parameter and nothing produces one: `fpga::primitives` declines to lower a memory with initial contents, so every RAM this flow builds starts empty. All 111 of the vendor's do too, so `dpram_init_word`'s permutation still has no evidence either way. What *is* settled now is the pair of **run-time** address decodings, which agree at every address of a 64-deep RAM on a real part — see the first section |

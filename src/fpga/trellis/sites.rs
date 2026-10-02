@@ -49,8 +49,8 @@
 //! Two consequences, and both matter:
 //!
 //! - **Nothing in this module has been checked against a part.** The tile
-//!   rules in [`super`]'s header have been, for both edges it describes,
-//!   and so has the clock network; what the table below says about the
+//!   rules in [`super`]'s header have been, for all four edges, and so has
+//!   the clock network; what the table below says about the
 //!   flip-flop has been *superseded* rather than verified.
 //! - [`top_pad_tile`] and [`top_pic_tile`] describe the same rule [`super`]
 //!   implements for the top edge, and [`bels_for`]'s sentence about a
