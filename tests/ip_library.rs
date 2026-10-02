@@ -11724,9 +11724,7 @@ impl UlpiPhy {
         // means "the other end has let go" — so the receiver was sampling an
         // idle line rather than the packet. Which is the same lesson: a model
         // is only as good as the question its harness asks it.
-        if !matches!(self.state, PhyState::Line | PhyState::Collect)
-            && self.tx_line.is_empty()
-        {
+        if !matches!(self.state, PhyState::Line | PhyState::Collect) && self.tx_line.is_empty() {
             let seen = host.unwrap_or(self.idle_line());
             self.line_now = line_bits(seen);
             match self.rx.step(seen) {
