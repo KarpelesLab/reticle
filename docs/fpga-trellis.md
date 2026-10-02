@@ -42,14 +42,17 @@ guessing it is how a bitstream comes to drive the wrong pin.
 **Nothing else about the design is in the way.** With the TARGET balls
 left unconstrained — which makes a bitstream nobody may load — the whole
 of `testdata/fpga/cynthion/usb_host_target.v`, the AUX console included,
-places and routes on the LFE5U-12F in seven minutes: 3184 LUT4, 1107
-flip-flops, 28 `TRELLIS_DPR16X4` and 36 pads, 4423 of 4425 signals
-routed, and
+places and routes on the LFE5U-12F in seven minutes: 3183 LUT4, 1108
+flip-flops, 28 `TRELLIS_DPR16X4` and 36 pads, with every routable signal
+routed — "4423 of 4425" counts the netlist's signals in the denominator
+and `Netlist::is_routable` wants a driver and a sink, which a pad driven by
+a constant has neither of, and this design drives three from constants —
+and
 
 ```
-all 129268 set bit(s) decode back through the database into 42269 arc(s),
-6959 field(s) and 3351 word(s), with 0 unexplained, and the arcs they
-select are exactly the 42269 the router chose
+all 128632 set bit(s) decode back through the database into 42012 arc(s),
+6919 field(s) and 3350 word(s), with 0 unexplained, and the arcs they
+select are exactly the 42012 the router chose
 ```
 
 **One consequence is worth stating on its own**, because it is about

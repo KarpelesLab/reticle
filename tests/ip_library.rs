@@ -8917,6 +8917,9 @@ fn lsb_bits(value: u64, n: usize) -> Vec<u8> {
 const USB_OUT: u8 = 0b0001;
 const USB_IN: u8 = 0b1001;
 const USB_SETUP: u8 = 0b1101;
+/// Start of frame, which only a **host** sends and which is therefore only
+/// used by `usb_host_ulpi`'s tests.
+const USB_SOF: u8 = 0b0101;
 const USB_DATA0: u8 = 0b0011;
 const USB_DATA1: u8 = 0b1011;
 const USB_ACK: u8 = 0b0010;
@@ -8934,6 +8937,17 @@ fn usb_token(pid: u8, addr: u8, endp: u8) -> Vec<u8> {
     let word = field | u64::from(crc) << 11;
     let [lo, hi, ..] = word.to_le_bytes();
     vec![usb_pid(pid), lo, hi]
+}
+
+/// A SOF token: the same three bytes any token is, with an 11-bit frame
+/// number where a token's address and endpoint number go (USB 2.0 §8.4.3),
+/// and the same CRC5 over the same eleven bits.
+fn usb_sof(frame: u16) -> Vec<u8> {
+    usb_token(
+        USB_SOF,
+        u8::try_from(frame & 0x7F).expect("seven bits"),
+        u8::try_from(frame >> 7 & 0xF).expect("four bits"),
+    )
 }
 
 fn usb_data(pid: u8, payload: &[u8]) -> Vec<u8> {
@@ -13318,14 +13332,29 @@ fn usb_host_ulpi_gives_up_on_a_device_that_never_answers() {
     );
     // It really did send the tokens, and really did send them again: a SETUP
     // and its data packet, four times over, which is `RETRIES` of 3 plus the
-    // first try.
-    let setups = host
-        .phy
-        .packets
-        .iter()
-        .filter(|p| p.first() == Some(&usb_pid(USB_SETUP)))
-        .count();
-    assert_eq!(setups, 4, "the SETUP token went out {setups} time(s)");
+    // first try. **And the bytes are asserted**, against this file's own
+    // packet arithmetic rather than against themselves — the same `usb_token`
+    // and `usb_data` the host *model* builds with, whose CRC5 and CRC16 are
+    // held to the published catalogue's check values by
+    // `usb_crcs_match_the_catalogue_and_the_wire` before anything is held to
+    // them. So this is the hardware's CRC5 and CRC16 against a second
+    // implementation, and the second one is pinned to a third.
+    let want_token = usb_token(USB_SETUP, 0, 0);
+    let want_data = usb_data(USB_DATA0, &get_descriptor(0x01, 8));
+    assert_eq!(
+        host.phy.packets,
+        vec![
+            want_token.clone(),
+            want_data.clone(),
+            want_token.clone(),
+            want_data.clone(),
+            want_token.clone(),
+            want_data.clone(),
+            want_token,
+            want_data
+        ],
+        "four tries of a SETUP token and its GET_DESCRIPTOR data packet"
+    );
     // **No frame went out**, and that is this design and not a defect: the
     // whole of this run is one control transfer being retried, `H_IDLE` is
     // never reached between the tries, and `usb_host_sie` only sends a SOF
@@ -13441,10 +13470,44 @@ fn enumerate_our_device(stale: bool) {
         "something should have happened on this bus"
     );
     // A frame every millisecond, scaled: the host framed the bus while it
-    // enumerated.
+    // enumerated, and **the frame's own three bytes are asserted** against
+    // this file's packet arithmetic. The frame number increments before the
+    // packet goes out, so the first one carries 1, and its CRC5 is over the
+    // eleven bits of the number rather than over an address and an endpoint —
+    // which is the one place a token's CRC5 covers something else and is
+    // worth having a byte comparison of.
     assert!(
         both.host.sofs > 0,
         "the host sent no SOF, so a real device would have suspended"
+    );
+    let sofs: Vec<&Vec<u8>> = both
+        .host
+        .phy
+        .packets
+        .iter()
+        .filter(|p| p.first() == Some(&usb_pid(USB_SOF)))
+        .collect();
+    assert_eq!(
+        sofs.len() as u64,
+        both.host.sofs,
+        "every SOF the block reported should be a packet the transceiver got"
+    );
+    assert_eq!(*sofs[0], usb_sof(1), "the first frame");
+    assert_eq!(*sofs[1], usb_sof(2), "and the next one");
+
+    // The first two packets of the enumeration proper, byte for byte: the
+    // SETUP token to address 0 and the eight-byte GET_DESCRIPTOR that USB
+    // 2.0 §9.4.3 and Table 9-5 make `80 06 00 01 00 00 08 00`, with the CRC5
+    // and the CRC16 this host computed.
+    assert_eq!(
+        both.host.phy.packets[0],
+        usb_token(USB_SETUP, 0, 0),
+        "the first thing a host says to a device it has just reset"
+    );
+    assert_eq!(
+        both.host.phy.packets[1],
+        usb_data(USB_DATA0, &get_descriptor(0x01, 8)),
+        "and the eight bytes of the request"
     );
 
     let complaints = both.complaints();
@@ -13458,6 +13521,92 @@ fn enumerate_our_device(stale: bool) {
 #[test]
 fn usb_host_ulpi_enumerates_usb_device_ulpi() {
     enumerate_our_device(false);
+}
+
+/// The same enumeration against a device whose **endpoint 0 takes eight
+/// bytes a packet**, which is the smallest USB 2.0 §5.5.3 allows.
+///
+/// This is the one thing the test above cannot do, and it is worth a design
+/// of its own: our device declares `bMaxPacketSize0` of 64, so every
+/// descriptor it sends fits in one packet and the host's **multi-packet data
+/// stage** — three packets for an eighteen-byte descriptor, four for a
+/// thirty-two-byte one — is never entered. A data stage of one packet proves
+/// nothing about the toggle, which alternates DATA1, DATA0, DATA1 across a
+/// stage (§8.5.3) and is the part of a control transfer most likely to be
+/// wrong.
+///
+/// It also reaches the **other** way a data stage ends. With 64-byte packets
+/// every read of this device ends on a short packet; with eight, the
+/// thirty-two bytes of the configuration descriptor are exactly four full
+/// packets and the stage ends because `wLength` has been read, which is the
+/// branch a host that only handled short packets would hang in.
+#[test]
+fn usb_host_ulpi_reads_a_descriptor_in_packets_of_eight() {
+    let host_design = host_design();
+    let dev_design = design_of(
+        "usb_device_ulpi",
+        "usb_device_ulpi",
+        &[
+            ("VID", "16'h1209"),
+            ("PID", "16'h0001"),
+            ("MAXPKT0", "7'd8"),
+        ],
+    );
+    let mut both = HostDevice::new(&host_design, &dev_design, false);
+    both.host.enable();
+
+    let at = both.until_stage(E_UP, 400_000);
+    assert_eq!(
+        at,
+        E_UP,
+        "the host stopped at stage {at} with fail_stage {} and fail_status {}",
+        both.host.port("fail_stage"),
+        both.host.port("fail_status")
+    );
+
+    assert_eq!(
+        both.host.port("maxpkt0"),
+        8,
+        "bMaxPacketSize0, which the host read out of byte 7 and then used"
+    );
+    let mut device_descriptor = expected_device_descriptor(0x1209, 0x0001);
+    device_descriptor[7] = 8;
+    assert_eq!(
+        both.host.desc[0], device_descriptor,
+        "eighteen bytes in three packets"
+    );
+    assert_eq!(
+        both.host.desc[1],
+        expected_configuration_descriptor(),
+        "thirty-two bytes in four, ending because wLength was reached"
+    );
+    assert_eq!(both.dev.address(), 1);
+    assert!(both.dev.configured());
+
+    // **The toggle really did alternate**, and this is how to see it without
+    // counting packets: a data stage of more than one packet is the only way
+    // a DATA0 packet with a payload comes back from endpoint 0, since a
+    // stage starts at DATA1 and a status stage carries nothing. With 64-byte
+    // packets there is not one of these.
+    let data0_with_payload = both
+        .dev
+        .phy
+        .packets
+        .iter()
+        .filter(|p| p.first() == Some(&usb_pid(USB_DATA0)) && p.len() > 3)
+        .count();
+    assert!(
+        data0_with_payload >= 3,
+        "a multi-packet data stage should have sent several DATA0 packets \
+         with payload; {data0_with_payload} did"
+    );
+
+    let complaints = both.complaints();
+    assert!(
+        complaints.is_empty(),
+        "the bus was misused:\n  {}",
+        complaints.join("\n  ")
+    );
 }
 
 /// The same, through two transceivers that behave the way the one on the

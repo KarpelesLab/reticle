@@ -268,8 +268,8 @@ module usb_host_enum #(
     localparam [2:0] C_BAD    = 3'd5;
 
     // Which descriptor the bytes belong to.
-    localparam [1:0] TAG_DEVICE = 2'd0;
-    localparam [1:0] TAG_CONFIG = 2'd1;
+    localparam TAG_DEVICE = 1'b0;
+    localparam TAG_CONFIG = 1'b1;
 
     // One counter does every wait, so it is as wide as the longest of them
     // and no wider.
@@ -294,7 +294,15 @@ module usb_host_enum #(
     reg        ctl_read;
     reg [6:0]  ctl_len;
     reg [6:0]  ctl_addr;
-    reg [1:0]  ctl_tag;
+    // Which descriptor the bytes belong to. **One bit and not two**, even
+    // though `desc_tag` is a two-bit port: this sequence reads two
+    // descriptors and a register no wider than the values it holds is this
+    // repository's standing habit, because an unrouted slice input on an
+    // ECP5 reads as a **one** and a state register with a bit nothing can
+    // set is a bit the part may come up with set. `reg [2:0] stage` for four
+    // states cost `ip/usb_device_fs` eight rounds of investigation, and the
+    // port is widened where it leaves rather than here.
+    reg        ctl_tag;
     reg        ctl_capture;   // the bytes are a descriptor worth reporting
 
     reg [6:0]  got;
@@ -319,7 +327,6 @@ module usb_host_enum #(
 
     reg        trn_start_q;
     reg [1:0]  trn_kind_q;
-    reg [3:0]  trn_endp_q;
     reg        trn_toggle_q;
     reg [6:0]  trn_len_q;
 
@@ -344,7 +351,15 @@ module usb_host_enum #(
     assign trn_start  = trn_start_q;
     assign trn_kind   = trn_kind_q;
     assign trn_addr   = ctl_addr;
-    assign trn_endp   = trn_endp_q;
+    // **Endpoint 0, always.** Every transfer this sequence performs is a
+    // control transfer and a control transfer is endpoint 0's by definition
+    // (USB 2.0 §5.5). It is a constant rather than a register for the reason
+    // `ctl_tag` is one bit: four flip-flops that can only ever hold zero are
+    // four chances for a part to come up holding something else, and an
+    // endpoint number is in the CRC5 of every token. `usb_host_sie`'s
+    // `trn_endp` input is the general one, for a sequencer that has other
+    // endpoints to reach.
+    assign trn_endp   = 4'd0;
     assign trn_toggle = trn_toggle_q;
     assign trn_len    = trn_len_q;
     // The SETUP packet's bytes. Nothing else this host sends has a
@@ -355,7 +370,7 @@ module usb_host_enum #(
     assign desc_data  = in_byte;
     assign desc_valid = in_push & ctl_capture & (ctl == C_DATA);
     assign desc_index = got + in_index;
-    assign desc_tag   = ctl_tag;
+    assign desc_tag   = {1'b0, ctl_tag};
     assign desc_done  = desc_done_q;
     assign desc_len   = desc_len_q;
 
@@ -422,7 +437,6 @@ module usb_host_enum #(
             reg_wdata_q   <= 8'd0;
             trn_start_q   <= 1'b0;
             trn_kind_q    <= K_SETUP;
-            trn_endp_q    <= 4'd0;
             trn_toggle_q  <= 1'b0;
             trn_len_q     <= 7'd0;
         end else begin
@@ -669,7 +683,6 @@ module usb_host_enum #(
                                 nak_cnt     <= 0;
                                 got         <= 7'd0;
                                 trn_kind_q  <= K_SETUP;
-                                trn_endp_q  <= 4'd0;
                                 trn_toggle_q<= 1'b0;
                                 trn_len_q   <= 7'd8;
                                 trn_start_q <= 1'b1;

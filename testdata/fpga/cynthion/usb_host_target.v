@@ -35,7 +35,7 @@
 // So this file is a design that is **finished and not buildable**, which
 // is an odd thing to commit and is committed on purpose: with the TARGET
 // balls left unconstrained it places, routes and writes a bitstream whose
-// every bit decodes — 3184 LUT4, 1107 flip-flops, 28 `TRELLIS_DPR16X4` and
+// every bit decodes — 3183 LUT4, 1108 flip-flops, 28 `TRELLIS_DPR16X4` and
 // 36 pads on the LFE5U-12F — so nothing but the ball assignment is in the
 // way. **Such a bitstream must never be loaded**: its TARGET pads land
 // wherever the placer put them.

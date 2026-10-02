@@ -1302,8 +1302,12 @@ is the part that matters:
   [`ip/usb_host_ulpi/README.md`](../ip/usb_host_ulpi/README.md) §9 has
   the whole of why, which is that the Cynthion's TARGET transceiver is on
   the left edge of the die and this backend describes the top and right
-  edges only. The design places, routes and writes a bitstream whose
-  every bit decodes; what it cannot do is put a pad on the right ball.
+  edges only. The design places, routes and writes a bitstream all 128632
+  of whose set bits decode with nothing unexplained; what it cannot do is
+  put a pad on the right ball. One consequence is not about pins at all:
+  the three bidirectional VBUS switches onto the TARGET A node are on that
+  same edge, so **no design this flow can build can put power on that
+  socket**.
 
 - **`usb_cdc_acm`** — the **same host model again**, through both link
   layers and through the transceiver that reports LineState late, because a
@@ -1689,10 +1693,10 @@ exactly what this table is for.
 | `usb_device_ulpi` | `usb_device_ulpi` | VID=16'h1209, PID=16'h0001 | LUT6 | 82 x dff, 804 x lut, 2 x memory 64x8, 2 x memrd, 2 x memwr | 11 |
 | `usb_device_ulpi` | `usb_device_ulpi` | VID=16'h1209, PID=16'h0001 | iCE40 HX1K | 97 x SB_CARRY, 1024 x SB_DFFE, 316 x SB_DFFER, 37 x SB_DFFES, 8 x SB_DFFR, 1 x SB_GB, 55 x SB_IO, 2954 x SB_LUT4 | 10 |
 | `usb_device_ulpi` | `usb_device_ulpi` | VID=16'h1209, PID=16'h0001 | ECP5 45F | 1 x DCCA, 944 x LUT4, 16 x TRELLIS_DPR16X4, 361 x TRELLIS_FF, 55 x TRELLIS_IO | 10 |
-| `usb_host_ulpi` | `usb_host_ulpi` | (defaults) | LUT4 | 97 x dff, 1302 x lut | 10 |
-| `usb_host_ulpi` | `usb_host_ulpi` | (defaults) | LUT6 | 97 x dff, 1160 x lut | 11 |
-| `usb_host_ulpi` | `usb_host_ulpi` | (defaults) | iCE40 HX1K | 132 x SB_CARRY, 487 x SB_DFFER, 35 x SB_DFFES, 25 x SB_DFFR, 1 x SB_GB, 159 x SB_IO, 1235 x SB_LUT4 | 10 |
-| `usb_host_ulpi` | `usb_host_ulpi` | (defaults) | ECP5 45F | 1 x DCCA, 1318 x LUT4, 547 x TRELLIS_FF, 159 x TRELLIS_IO | 10 |
+| `usb_host_ulpi` | `usb_host_ulpi` | (defaults) | LUT4 | 96 x dff, 1295 x lut | 10 |
+| `usb_host_ulpi` | `usb_host_ulpi` | (defaults) | LUT6 | 96 x dff, 1158 x lut | 11 |
+| `usb_host_ulpi` | `usb_host_ulpi` | (defaults) | iCE40 HX1K | 132 x SB_CARRY, 482 x SB_DFFER, 35 x SB_DFFES, 25 x SB_DFFR, 1 x SB_GB, 159 x SB_IO, 1229 x SB_LUT4 | 10 |
+| `usb_host_ulpi` | `usb_host_ulpi` | (defaults) | ECP5 45F | 1 x DCCA, 1299 x LUT4, 542 x TRELLIS_FF, 159 x TRELLIS_IO | 10 |
 | `usb_cdc_acm` | `usb_cdc_acm_fs` | VID=16'h1209, PID=16'h0001 | LUT4 | 113 x dff, 1088 x lut, 1 x memory 16x8, 2 x memory 64x8, 3 x memrd, 3 x memwr | 12 |
 | `usb_cdc_acm` | `usb_cdc_acm_fs` | VID=16'h1209, PID=16'h0001 | LUT6 | 113 x dff, 910 x lut, 1 x memory 16x8, 2 x memory 64x8, 3 x memrd, 3 x memwr | 10 |
 | `usb_cdc_acm` | `usb_cdc_acm_fs` | VID=16'h1209, PID=16'h0001 | iCE40 HX1K | 84 x SB_CARRY, 1152 x SB_DFFE, 413 x SB_DFFER, 44 x SB_DFFES, 14 x SB_DFFR, 3 x SB_DFFS, 1 x SB_GB, 104 x SB_IO, 3417 x SB_LUT4 | 12 |

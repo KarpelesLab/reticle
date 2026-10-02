@@ -102,12 +102,13 @@
 //   **A SOF may be late.** The frame counter never drifts — it is free
 //   running and `sof_due` is sticky — but a SOF that falls due while a
 //   transaction is in flight goes out when that transaction is over rather
-//   than interrupting it. That is tens of microseconds, not the
-//   sub-microsecond jitter USB 2.0 §7.1.12 allows a host. A device
-//   measuring its own frame interval would see it; one that only needs to
-//   be told not to suspend would not. Interrupting a transaction to keep
-//   the SOF on time is the change to make, and it needs the retry to be
-//   able to resume rather than restart.
+//   than interrupting it. A transaction that succeeds is a few microseconds
+//   and one retried to exhaustion is `RETRIES + 1` timeouts — 273 us at the
+//   defaults, a quarter of a frame — against the sub-microsecond jitter USB
+//   2.0 §7.1.12 allows a host. A device measuring its own frame interval
+//   would see that; one that only needs to be told not to suspend would not.
+//   Interrupting a transaction to keep the SOF on time is the change to
+//   make, and it needs the retry to be able to resume rather than restart.
 //
 //   **No isochronous or interrupt transfers, no split transactions, no low
 //   speed, no high speed and no hub.** There is no PRE token, so nothing

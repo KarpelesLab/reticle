@@ -659,12 +659,34 @@ What has been established about the design on the part, short of that:
 with the TARGET balls left unconstrained — which makes a bitstream nobody
 may load, and the one built to measure this is named so — the whole
 design *including* the AUX console **places, routes and produces a
-bitstream every bit of which decodes**: 3184 LUT4, 1107 flip-flops, 28
-`TRELLIS_DPR16X4` and 36 pads on an LFE5U-12F, with 4423 of 4425 signals
-routed and "all 129268 set bit(s) decode back through the database into
-42269 arc(s) ... with 0 unexplained, and the arcs they select are exactly
-the 42269 the router chose". So the obstacle is the ball assignment and
-nothing else about the design.
+bitstream every bit of which decodes**:
+
+```text
+167221 byte(s) compressed, 128632 configuration bit(s) set, 36 pad(s),
+3183 lookup table(s), 1108 flip-flop(s) and 28 distributed RAM(s)
+configured, 1108/24288 ff, 1/56 gb, 36/120 io, 3183/24288 lut,
+28/3036 lutram
+routed 4423 of 4425 signal(s) with 63322 pip(s) over 67745 wire(s), and
+every sink was walked back to its driver
+1108 flip-flop(s), every clock on a global network: G_HPBX0000 to 1136
+all 128632 set bit(s) decode back through the database into 42012 arc(s),
+6919 field(s) and 3350 word(s), with 0 unexplained, and the arcs they
+select are exactly the 42012 the router chose
+```
+
+So the obstacle is the ball assignment and nothing else about the design.
+
+**The two signals in "4423 of 4425" are not unrouted nets**, and the
+difference is worth saying because it looks alarming. The denominator is
+every signal the netlist holds and the numerator is the ones that were
+routed; `Netlist::is_routable` requires a signal to have both a driver and
+at least one sink, and a pad driven by a constant has neither a driving
+*pin* nor anything to route to. This design drives three output pads from
+constants — the three VBUS switches — so two or three such signals is what
+is expected. MEDIUM: the arithmetic is right and which signals they are
+has **not** been pinned down, and the line that carries the weight is the
+last one, where every set bit decodes and the arcs are exactly the
+router's.
 
 **What it would take**, and it is a backend change and therefore not
 this package's to make: the left edge's `get_pio_tile` / `get_pic_tile`
