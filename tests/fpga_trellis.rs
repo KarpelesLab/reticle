@@ -5711,10 +5711,13 @@ fn every_label_of_the_target_hosts_report_names_the_value_beside_it() {
     sim.set(clk, low.clone());
     for _ in 0..1200u32 {
         sim.run_for(half);
-        if sim.get(valid).to_u64() == Some(1) {
-            if let Some(byte) = sim.get(data).to_u64() {
-                text.push(byte as u8 as char);
-            }
+        let offered = if sim.get(valid).to_u64() == Some(1) {
+            sim.get(data).to_u64()
+        } else {
+            None
+        };
+        if let Some(byte) = offered.and_then(|value| u8::try_from(value).ok()) {
+            text.push(char::from(byte));
         }
         sim.set(clk, high.clone());
         sim.run_for(half);
