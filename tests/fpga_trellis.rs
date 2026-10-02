@@ -1538,7 +1538,10 @@ fn a_pads_bel_is_at_its_ball_and_its_bits_are_where_the_edge_rule_says() {
     // `R2` is `target_phy.data[0]` in Great Scott Gadgets' own platform
     // file, PIO C of (col 0, row 38), bank 6.
     let r2 = fabric.pad("R2").expect("the left edge is described now");
-    assert_eq!((r2.bel, r2.side, r2.edge), ((0, 38), 'C', trellis::Edge::Left));
+    assert_eq!(
+        (r2.bel, r2.side, r2.edge),
+        ((0, 38), 'C', trellis::Edge::Left)
+    );
     assert_eq!((r2.pad_at, r2.pic_at, r2.bank), ((0, 39), (0, 40), 6));
 }
 
@@ -2995,6 +2998,576 @@ fn what_lattices_own_packer_writes_for_a_bidirectional_pad() {
     assert!(
         orphans.is_empty(),
         "bits of a ULPI pad tile belong to no feature: {orphans:?}"
+    );
+}
+
+/// Every pin of the Cynthion's **TARGET** USB transceiver, in the platform
+/// file's own order, with the direction Amaranth's `ULPIResource` gives it.
+///
+/// From Great Scott Gadgets' own `cynthion_r1_4.py`:
+///
+/// ```python
+/// ULPIResource("target_phy", 0,
+///     data="R2 R1 P2 P1 N3 N1 M2 M1", clk="T4", clk_dir='o',
+///     dir="R3", nxt="T2", stp="T3", rst="R4", rst_invert=True,
+///     attrs=Attrs(IO_TYPE="LVCMOS33", SLEWRATE="FAST")),
+/// ```
+///
+/// `data` is `dir="io"`, `clk_dir='o'` makes the FPGA drive the 60 MHz
+/// clock, `stp` and `rst` are outputs, and `dir` and `nxt` are what the
+/// transceiver drives. **All thirteen are on the left edge, at column 0**,
+/// in bank 6 — which is why this port could not be built at all until that
+/// edge was described, and why these thirteen are the oracle for it.
+#[cfg(feature = "verilog")]
+const TARGET_ULPI: [(&str, &str); 13] = [
+    ("R2", "BIDIR"),
+    ("R1", "BIDIR"),
+    ("P2", "BIDIR"),
+    ("P1", "BIDIR"),
+    ("N3", "BIDIR"),
+    ("N1", "BIDIR"),
+    ("M2", "BIDIR"),
+    ("M1", "BIDIR"),
+    ("T4", "OUTPUT"),
+    ("R3", "INPUT"),
+    ("T2", "INPUT"),
+    ("T3", "OUTPUT"),
+    ("R4", "OUTPUT"),
+];
+
+/// The three VBUS switches, which are also on the left edge and which no
+/// design could drive before it was described.
+///
+/// ```python
+/// Resource("target_c_vbus_en", 0, Pins("K5", dir="o"), Attrs(IO_TYPE="LVCMOS33")),
+/// Resource("control_vbus_en",  0, Pins("L1", dir="o"), Attrs(IO_TYPE="LVCMOS33")),
+/// Resource("aux_vbus_en",      0, Pins("L2", dir="o"), Attrs(IO_TYPE="LVCMOS33")),
+/// ```
+///
+/// Plain `Pins`, so active **high**: a zero keeps the switch off. And **no
+/// `SLEWRATE`**, unlike the ULPI resource, which makes them the negative
+/// control in the test below — `ecppack` leaves the slew field alone on
+/// exactly the pads whose attributes do not ask for it.
+///
+/// Only `analyzer.bit` configures them; `selftest.bit` and `facedancer.bit`
+/// leave all three alone, which the test asserts rather than skipping over.
+#[cfg(feature = "verilog")]
+const VBUS_SWITCHES: [&str; 3] = ["K5", "L1", "L2"];
+
+/// The "what does `ecppack` write, **in full**, for a pad on the **left**
+/// edge?" question, asked of the thirteen balls of the TARGET transceiver
+/// and the three VBUS switches.
+///
+/// This is the measurement the left edge's tile rule rests on, and it is
+/// asked this way round for the reason the other three
+/// `what_lattices_own_packer_writes_for_a_...` tests are: the left edge
+/// *looks* like the right edge mirrored, and a mirror is exactly the kind of
+/// guess that decodes perfectly against itself and drives the wrong ball.
+/// What the database says, and what all three of Great Scott Gadgets'
+/// bitstreams confirm at absolute frame positions:
+///
+/// | | |
+/// |---|---|
+/// | The pad tile | one row **south** of the ball, a `PICL1*` or (at rows 13, 25, 37 and 49 of this die) a `MIB_CIB_LR` |
+/// | The second `BASE_TYPE` | the ball's own row (`PICL0*`) for sides A and B, two rows south (`PICL2*`) for C and D |
+/// | The `CIB` that ties data and enable | one column **east**, at column 1, from the buffer's own `JPADDO<s> <- E1_JA0` — where the right edge's says `W1_JA0` |
+/// | Sides | **four**, A B C and D, and all four are used by these sixteen balls |
+/// | What it costs | **exactly what the right edge costs**: 8 bits for `BIDIR_LVCMOS33`, 6 for `OUTPUT_LVCMOS33`, 5 for `INPUT_LVCMOS33`, plus 2 in the second copy for a bidirectional pad or an output and **none at all** for an input |
+/// | Hysteresis, pull mode, slew rate | one bit each, in the pad tile, exactly as on the right edge |
+///
+/// **The rows do not mirror, and that is the finding.** Had the left edge
+/// been written as the right edge reflected — pad tile one row *north* —
+/// every one of these sixteen balls would have been configured in the tile
+/// of a different ball, and the only thing that says otherwise is this
+/// comparison.
+///
+/// Three negative controls are asserted as well, because a test that only
+/// looks for bits that are set cannot tell a rule from a coincidence:
+///
+/// * **no hysteresis on an output.** `ecppack` writes `HYSTERESIS = ON` for
+///   the inputs and the bidirectional pads and leaves it clear on `T4`,
+///   `T3`, `R4` and the three switches, which is what `configure_io` does;
+/// * **no slew rate on the switches.** All thirteen ULPI pins ask for
+///   `SLEWRATE="FAST"` and have the bit; the three VBUS pins ask for nothing
+///   and have it clear. So the field is written on request and not by
+///   direction;
+/// * **no `CIB` tie on any of them.** Every one of these pads has its data
+///   wire *routed*, and the tie and the route are one mux, so a tie would
+///   have been a second driver.
+///
+/// One known reading ambiguity shows up here and is pinned rather than
+/// hidden: `R4` is side C of a C/D pair whose other half (`T3`) is also an
+/// output, so the fewest-leftovers reading of its `BASE_TYPE` is the
+/// *pseudo-differential* spelling `OUTPUT_LVCMOS33D`, whose pattern spans
+/// the pair. All six bits of the plain `OUTPUT_LVCMOS33` are set inside it,
+/// which is what matters for what this backend writes; see "What could not
+/// be read back" in `docs/fpga-trellis.md`.
+#[test]
+#[cfg(feature = "verilog")]
+fn what_lattices_own_packer_writes_for_a_left_edge_pad() {
+    let Some(root) = chipdb() else { return };
+    let db = trellis::open(&Disk(root), "", PART).unwrap();
+    let fabric = db.load(&TrellisOptions::new()).unwrap();
+    let mut checked = 0usize;
+    for name in ["analyzer", "selftest", "facedancer"] {
+        let Some(bytes) = reference(name) else {
+            return;
+        };
+        let stream = Ecp5Stream::parse(&bytes, &formats).unwrap();
+        let decoded = db.decode(&stream.cram);
+        // `analyzer.bit` is the only one of the three whose design drives the
+        // VBUS switches, so the other two are asked the opposite question
+        // about them.
+        let switches = name == "analyzer";
+
+        let set = |at: (u32, u32), bit: &ConfigBit| {
+            let (frame, index) = fabric
+                .frames
+                .locate(at, *bit)
+                .unwrap_or_else(|| panic!("{bit:?} is outside {at:?}"));
+            (stream.cram.get(frame, index), frame, index)
+        };
+
+        for (ball, dir) in TARGET_ULPI
+            .iter()
+            .copied()
+            .chain(VBUS_SWITCHES.iter().map(|b| (*b, "OUTPUT")))
+        {
+            let switch = VBUS_SWITCHES.contains(&ball);
+            let pad = fabric
+                .pad(ball)
+                .unwrap_or_else(|| panic!("{ball} is not in the ball map"));
+            // Where it is, which is the whole question.
+            assert_eq!(pad.edge, trellis::Edge::Left, "{ball}");
+            assert_eq!(pad.bel.0, 0, "{ball}: the buffer is at column 0");
+            assert_eq!(pad.pad_at, (0, pad.bel.1 + 1), "{ball}: one row south");
+            let south = if matches!(pad.side, 'A' | 'B') { 0 } else { 2 };
+            assert_eq!(pad.pic_at, (0, pad.bel.1 + south), "{ball}");
+            assert_eq!(pad.cib_at.0, 1, "{ball}: the CIB is one column east");
+            assert_eq!(pad.bank, 6, "{ball}: bank 6, from `pio_metadata`");
+
+            // What it costs, which is bit for bit what the right edge costs.
+            assert_eq!(pad.bidir_pad_bits.len(), 8, "{ball}: BIDIR_LVCMOS33");
+            assert_eq!(pad.bidir_pic_bits.len(), 2, "{ball}");
+            assert_eq!(pad.output_pad_bits.len(), 6, "{ball}: OUTPUT_LVCMOS33");
+            assert_eq!(pad.output_pic_bits.len(), 2, "{ball}");
+            assert_eq!(pad.input_pad_bits.len(), 5, "{ball}: INPUT_LVCMOS33");
+            assert!(
+                pad.input_pic_bits.is_empty(),
+                "{ball}: an input's second copy is empty on this edge too"
+            );
+            assert_eq!(pad.hysteresis_bits.len(), 1, "{ball}");
+            assert_eq!(pad.pull_bits(trellis::PULL_NONE).len(), 1, "{ball}");
+            assert!(pad.pull_bits("DOWN").is_empty(), "{ball}: the default");
+            assert_eq!(pad.slew_bits("FAST").len(), 1, "{ball}");
+            assert!(pad.slew_bits("SLOW").is_empty(), "{ball}: the default");
+
+            // What the file reads back for this pad, by name, through the
+            // same database. Looked up before the branch because the two
+            // files that do *not* drive the switches have to be asked about
+            // it too.
+            let field = format!("PIO{}.BASE_TYPE", pad.side);
+            let value = decoded
+                .enums
+                .iter()
+                .find(|(at, what, _)| *at == pad.pad_at && *what == field)
+                .map(|(_, _, v)| v.as_str());
+
+            if switch && !switches {
+                // `selftest.bit` and `facedancer.bit` do not drive the
+                // switches, and what that looks like is worth being exact
+                // about rather than asserting the obvious thing and finding
+                // it false. **The pull mode is clear** — a field of its own,
+                // one bit, that nothing else wants — and **the base type
+                // does not read back at all**. What is *not* true is that
+                // every bit of the base type's pattern is clear: `K5` is
+                // side B of a pair whose side A (`K4`,
+                // `target_a_discharge`) both files do drive, and a
+                // pseudo-differential value of side A's `BASE_TYPE` reaches
+                // across the pair, so one of side B's six bits is set by
+                // side A's setting. Hence "the pattern is not complete"
+                // rather than "no bit of it is set".
+                for bit in pad.pull_bits(trellis::PULL_NONE) {
+                    let (on, frame, index) = set(pad.pad_at, bit);
+                    assert!(
+                        !on,
+                        "F{frame}B{index} is `PULLMODE = NONE` for {ball} in {name}.bit, whose \
+                         design does not drive that switch"
+                    );
+                }
+                assert!(
+                    !pad.output_pad_bits.iter().all(|bit| set(pad.pad_at, bit).0),
+                    "{ball} has every bit of an output's base type set in {name}.bit, whose \
+                     design does not drive that switch"
+                );
+                assert_eq!(
+                    value, None,
+                    "{name}.bit reads back a base type for {ball} and does not drive it"
+                );
+                continue;
+            }
+
+            // And every bit of it, at an absolute frame position, in their
+            // file.
+            let (pad_bits, pic_bits) = match dir {
+                "BIDIR" => (&pad.bidir_pad_bits, &pad.bidir_pic_bits),
+                "INPUT" => (&pad.input_pad_bits, &pad.input_pic_bits),
+                _ => (&pad.output_pad_bits, &pad.output_pic_bits),
+            };
+            let mut wanted: Vec<(&str, (u32, u32), &[ConfigBit])> = vec![
+                ("the base type", pad.pad_at, &pad_bits[..]),
+                ("the second copy of it", pad.pic_at, &pic_bits[..]),
+                (
+                    "the pull mode",
+                    pad.pad_at,
+                    pad.pull_bits(trellis::PULL_NONE),
+                ),
+            ];
+            if dir != "OUTPUT" {
+                wanted.push(("hysteresis", pad.pad_at, &pad.hysteresis_bits[..]));
+            }
+            if !switch {
+                wanted.push(("the slew rate", pad.pad_at, pad.slew_bits("FAST")));
+            }
+            for (what, at, bits) in wanted {
+                for bit in bits {
+                    let (on, frame, index) = set(at, bit);
+                    assert!(
+                        on,
+                        "F{frame}B{index}, which this crate sets for {what} of a {dir} pad on \
+                         {ball}, is clear in {name}.bit — whose own gateware has that ball on the \
+                         TARGET port"
+                    );
+                    checked += 1;
+                }
+            }
+
+            // THE NEGATIVE CONTROLS.
+            if dir == "OUTPUT" {
+                for bit in &pad.hysteresis_bits {
+                    let (on, frame, index) = set(pad.pad_at, bit);
+                    assert!(
+                        !on,
+                        "F{frame}B{index} is `HYSTERESIS = ON` for {ball}, an output, and \
+                         {name}.bit has it set — so hysteresis is not input-only after all"
+                    );
+                }
+            }
+            if switch {
+                for bit in pad.slew_bits("FAST") {
+                    let (on, frame, index) = set(pad.pad_at, bit);
+                    assert!(
+                        !on,
+                        "F{frame}B{index} is `SLEWRATE = FAST` for {ball}, whose resource asks \
+                         for no slew rate, and {name}.bit has it set"
+                    );
+                }
+            }
+            // Nothing ties either of this pad's `CIB` wires: all sixteen have
+            // a signal routed into the data wire, and the tie and the route
+            // are one mux.
+            let wire = if matches!(pad.side, 'A' | 'C') { 0 } else { 3 };
+            for field in [format!("CIB.JA{wire}MUX"), format!("CIB.JB{wire}MUX")] {
+                let tie = decoded
+                    .enums
+                    .iter()
+                    .find(|(at, what, _)| *at == pad.cib_at && *what == field)
+                    .map(|(_, _, v)| v.as_str());
+                assert!(
+                    tie.is_none(),
+                    "{name}.bit ties {field} at {:?} to {tie:?} for {ball}, which is a second \
+                     driver on a wire its own router drives",
+                    pad.cib_at
+                );
+            }
+
+            // And the reading taken above, so this is not only an assertion
+            // about bit positions.
+            let expected: &[&str] = match dir {
+                "BIDIR" => &["BIDIR_LVCMOS33"],
+                "INPUT" => &["INPUT_LVCMOS33"],
+                // A pseudo-differential spelling reaches across the pair, so
+                // an output whose partner is also an output reads back as the
+                // `D` form. `R4` is the one here, and its six plain bits are
+                // asserted set above either way.
+                _ => &["OUTPUT_LVCMOS33", "OUTPUT_LVCMOS33D"],
+            };
+            assert!(
+                value.is_some_and(|v| expected.contains(&v)),
+                "{name}.bit: {field} at {:?} ({ball}) reads {value:?}, not one of {expected:?}",
+                pad.pad_at
+            );
+            if ball == "R4" {
+                assert_eq!(
+                    value,
+                    Some("OUTPUT_LVCMOS33D"),
+                    "R4 is side C of a pair whose side D is also an output, so the \
+                     fewest-leftovers reading is the pseudo-differential one. Correct this \
+                     assertion if the resolution rule changes; it documents a reading, not a \
+                     requirement."
+                );
+            }
+        }
+
+        // AND NOTHING ON THE WHOLE EDGE BELONGS TO NO PAD, which is the
+        // honest direction and the one that would catch a tile rule that is
+        // right for sixteen balls and wrong for the rest. Every
+        // `PIO<s>.BASE_TYPE` these files set anywhere in column 0 is either a
+        // pad tile or a second-copy tile of a ball this backend maps.
+        let mut pads = 0usize;
+        let mut copies = 0usize;
+        let mut orphans: Vec<String> = Vec::new();
+        for (at, field, value) in &decoded.enums {
+            let Some(side) = field
+                .strip_prefix("PIO")
+                .and_then(|rest| rest.strip_suffix(".BASE_TYPE"))
+                .and_then(|s| s.chars().next())
+            else {
+                continue;
+            };
+            if at.0 != 0 {
+                continue;
+            }
+            let on = |pick: fn(&trellis::IoSite) -> (u32, u32)| {
+                fabric
+                    .io
+                    .iter()
+                    .any(|p| p.edge == trellis::Edge::Left && pick(p) == *at && p.side == side)
+            };
+            if on(|p| p.pad_at) {
+                pads += 1;
+            } else if on(|p| p.pic_at) {
+                copies += 1;
+            } else {
+                orphans.push(format!("{field} = {value} at {at:?}"));
+            }
+        }
+        assert!(
+            orphans.is_empty(),
+            "{name}.bit configures a left-edge PIO that belongs to no ball of the map: {orphans:?}"
+        );
+        // How many left-edge pads each file configures, which is the size of
+        // the oracle and is asserted exactly so that a file that stopped
+        // being one would be noticed.
+        let expected = match name {
+            "analyzer" => (58, 57),
+            "selftest" => (52, 53),
+            _ => (40, 40),
+        };
+        assert_eq!((pads, copies), expected, "{name}.bit: left-edge pads");
+    }
+    // 13 ULPI pins in three files and 3 switches in one. A bidirectional
+    // ball is 8 bits of base type, 2 of second copy, and one each of pull
+    // mode, hysteresis and slew rate; an input is 5 and **no** second copy
+    // with the same three; an output is 6 and 2 with no hysteresis; a switch
+    // is an output with no slew rate either.
+    let per_file = 8 * (8 + 2 + 1 + 1 + 1) + 2 * (5 + 1 + 1 + 1) + 3 * (6 + 2 + 1 + 1);
+    assert_eq!(
+        checked,
+        3 * per_file + 3 * (6 + 2 + 1),
+        "every bit of every ball"
+    );
+}
+
+/// The same question for the **bottom** edge, which on a caBGA-256 is
+/// thirteen balls of bank 8 and nothing else.
+///
+/// Every one of those thirteen is a configuration pin — `D0`..`D7`, `CSN`,
+/// `CS1N`, `HOLDN`, `DOUT` and `WRITEN` — and Great Scott Gadgets' own
+/// designs use four of them: `int` on `T6` and the SPI flash on `T8`, `T7`
+/// and `N8`, with `facedancer.bit` taking `T8` and `T7` as a quad-mode
+/// bidirectional pair. So the edge has an oracle, and it says something the
+/// other three edges do not:
+///
+/// | | |
+/// |---|---|
+/// | The pad tile | the ball's own position for side A, **one column east** for side B — the top edge's column rule |
+/// | The second `BASE_TYPE` | **there is no second tile.** `PICB0` and `PICB1` hold the pad's own fields *and* the `DATAMUX_*` and `TRIMUX_TSREG` the top edge keeps in a `PICT<n>` a row away, and no position of row 50 or row 49 declares another `PIO<side>.BASE_TYPE`. So `pic_at == pad_at` |
+/// | The `CIB` | one row **north**, at row 49, from `JPADDO<s> <- N1_JA0` (side A) and `N1E1_JA0` (side B) |
+/// | Sides | **two**, A and B, which is what `PICB0` and `PICB1` declare and what the ball map uses |
+/// | What it costs | **not what the other edges cost**: 10 bits for `BIDIR_LVCMOS33` and 7 for `OUTPUT_LVCMOS33` where the top and the two long edges spend 8 and 6. An input is 5, the same as everywhere |
+///
+/// The extra bits are this edge's own and not a second copy counted twice:
+/// the pattern is one tile's. Hysteresis, the pull mode and the slew rate are
+/// one bit each here as well, so the only things that differ are the base
+/// type's width and the absence of a second tile to repeat it in.
+///
+/// **Nothing is loaded onto a board from this edge and nothing should be**:
+/// `docs/fpga-trellis.md` says why — a design driving `D0`..`D7` is driving
+/// the pins the part configures itself through.
+#[test]
+#[cfg(feature = "verilog")]
+fn what_lattices_own_packer_writes_for_a_bottom_edge_pad() {
+    let Some(root) = chipdb() else { return };
+    let db = trellis::open(&Disk(root), "", PART).unwrap();
+    let fabric = db.load(&TrellisOptions::new()).unwrap();
+    // Which ball each file configures, and as what. `T6` is `int` and `R6` a
+    // pseudo-supply pin; `T8` and `T7` are the SPI flash's `sdi` and `sdo` in
+    // `analyzer.bit` and four of them — `T8 T7 M7 N7` — are the quad-mode
+    // `dq` bus, bidirectional, in `facedancer.bit`; `N8` is the flash's chip
+    // select. **`selftest.bit` configures exactly one**, `R6`, and that is
+    // asserted rather than skipped: a file that is not an oracle must be
+    // known not to be one.
+    const BOTTOM: [(&str, &[(&str, &str)]); 3] = [
+        (
+            "analyzer",
+            &[
+                ("T6", "OUTPUT_LVCMOS33"),
+                ("R6", "OUTPUT_LVCMOS33"),
+                ("T8", "OUTPUT_LVCMOS33"),
+                ("T7", "INPUT_LVCMOS33"),
+                ("N8", "OUTPUT_LVCMOS33"),
+            ],
+        ),
+        ("selftest", &[("R6", "OUTPUT_LVCMOS33")]),
+        (
+            "facedancer",
+            &[
+                ("T6", "OUTPUT_LVCMOS33"),
+                ("R6", "OUTPUT_LVCMOS33"),
+                ("T8", "BIDIR_LVCMOS33"),
+                ("T7", "BIDIR_LVCMOS33"),
+                ("M7", "BIDIR_LVCMOS33"),
+                ("N7", "BIDIR_LVCMOS33"),
+                ("N8", "OUTPUT_LVCMOS33"),
+            ],
+        ),
+    ];
+    let mut checked = 0usize;
+    for (name, wanted) in BOTTOM {
+        let Some(bytes) = reference(name) else {
+            return;
+        };
+        let stream = Ecp5Stream::parse(&bytes, &formats).unwrap();
+        let decoded = db.decode(&stream.cram);
+        for (ball, standard) in wanted {
+            let pad = fabric
+                .pad(ball)
+                .unwrap_or_else(|| panic!("{ball} is not in the ball map"));
+            assert_eq!(pad.edge, trellis::Edge::Bottom, "{ball}");
+            assert_eq!(pad.bel.1, 50, "{ball}: the buffer is on row 50");
+            assert_eq!(
+                pad.pad_at,
+                (pad.bel.0 + u32::from(pad.side == 'B'), 50),
+                "{ball}: side B is one column east"
+            );
+            assert_eq!(pad.pic_at, pad.pad_at, "{ball}: one tile, not two");
+            assert_eq!(pad.cib_at, (pad.pad_at.0, 49), "{ball}: the CIB is north");
+            assert_eq!(pad.bank, 8, "{ball}: bank 8, the configuration bank");
+            // This edge's own widths, which are not the other edges'.
+            assert_eq!(pad.bidir_pad_bits.len(), 10, "{ball}: BIDIR_LVCMOS33");
+            assert_eq!(pad.output_pad_bits.len(), 7, "{ball}: OUTPUT_LVCMOS33");
+            assert_eq!(pad.input_pad_bits.len(), 5, "{ball}: INPUT_LVCMOS33");
+            assert_eq!(pad.output_pic_bits, pad.output_pad_bits, "{ball}");
+            assert_eq!(pad.input_pic_bits, pad.input_pad_bits, "{ball}");
+            assert_eq!(pad.hysteresis_bits.len(), 1, "{ball}");
+            assert_eq!(pad.pull_bits(trellis::PULL_NONE).len(), 1, "{ball}");
+            assert_eq!(pad.slew_bits("FAST").len(), 1, "{ball}");
+
+            let field = format!("PIO{}.BASE_TYPE", pad.side);
+            let value = decoded
+                .enums
+                .iter()
+                .find(|(at, what, _)| *at == pad.pad_at && *what == field)
+                .map(|(_, _, v)| v.as_str());
+            assert_eq!(
+                value,
+                Some(*standard),
+                "{name}.bit: {field} at {:?} ({ball})",
+                pad.pad_at
+            );
+            let value = *standard;
+            let bits = match value {
+                "BIDIR_LVCMOS33" => &pad.bidir_pad_bits,
+                "INPUT_LVCMOS33" => &pad.input_pad_bits,
+                "OUTPUT_LVCMOS33" => &pad.output_pad_bits,
+                other => panic!("{name}.bit has {field} = {other} on {ball}"),
+            };
+            for (what, bits) in [
+                ("the base type", &bits[..]),
+                ("the pull mode", pad.pull_bits(trellis::PULL_NONE)),
+            ] {
+                for bit in bits {
+                    let (frame, index) = fabric.frames.locate(pad.pad_at, *bit).unwrap();
+                    assert!(
+                        stream.cram.get(frame, index),
+                        "F{frame}B{index}, which this crate sets for {what} of a {value} pad on \
+                         {ball}, is clear in {name}.bit"
+                    );
+                    checked += 1;
+                }
+            }
+            // Hysteresis follows the direction here exactly as it does on the
+            // other edges: on for an input or a bidirectional pad, clear for
+            // an output.
+            let hyst = pad.hysteresis_bits.iter().all(|bit| {
+                let (frame, index) = fabric.frames.locate(pad.pad_at, *bit).unwrap();
+                stream.cram.get(frame, index)
+            });
+            assert_eq!(
+                hyst,
+                value != "OUTPUT_LVCMOS33",
+                "{name}.bit: hysteresis on {ball}, a {value} pad"
+            );
+            // And no slew rate on any of them: none of these resources asks
+            // for one, unlike the ULPI pins of either transceiver.
+            for bit in pad.slew_bits("FAST") {
+                let (frame, index) = fabric.frames.locate(pad.pad_at, *bit).unwrap();
+                assert!(
+                    !stream.cram.get(frame, index),
+                    "F{frame}B{index} is `SLEWRATE = FAST` on {ball}, which asks for none"
+                );
+            }
+        }
+        // Nothing on the whole edge belongs to no pad, the same honest
+        // direction the left edge gets. There is no second-copy count here,
+        // since the only tile is the pad tile.
+        let mut pads = 0usize;
+        let mut orphans: Vec<String> = Vec::new();
+        for (at, field, value) in &decoded.enums {
+            let Some(side) = field
+                .strip_prefix("PIO")
+                .and_then(|rest| rest.strip_suffix(".BASE_TYPE"))
+                .and_then(|s| s.chars().next())
+            else {
+                continue;
+            };
+            if at.1 != 50 {
+                continue;
+            }
+            if fabric
+                .io
+                .iter()
+                .any(|p| p.edge == trellis::Edge::Bottom && p.pad_at == *at && p.side == side)
+            {
+                pads += 1;
+            } else {
+                orphans.push(format!("{field} = {value} at {at:?}"));
+            }
+        }
+        assert!(
+            orphans.is_empty(),
+            "{name}.bit configures a bottom-edge PIO that belongs to no ball: {orphans:?}"
+        );
+        let expected = match name {
+            "analyzer" => 5,
+            "selftest" => 1,
+            _ => 7,
+        };
+        assert_eq!(pads, expected, "{name}.bit: bottom-edge pads");
+    }
+    // An output is seven bits of base type and one of pull mode, an input
+    // five and one, a bidirectional pad ten and one.
+    assert_eq!(
+        checked,
+        // analyzer: T6, R6, T8 and N8 outputs, T7 an input.
+        (7 + 1) * 4 + (5 + 1)
+            // selftest: R6 alone.
+            + (7 + 1)
+            // facedancer: T6, R6 and N8 outputs, four bidirectional dq balls.
+            + (7 + 1) * 3
+            + (10 + 1) * 4,
+        "every bit of every bottom-edge ball these files configure"
     );
 }
 
