@@ -624,8 +624,27 @@ module usb_host_target #(
     wire [5:0] bidx = NB[5:0] - 6'd1 - pi;
     wire [7:0] banner_ch = BANNER[{bidx, 3'b000} +: 8];
 
-    // The label character `pc` of item `pi`, the same way round.
-    wire [7:0] lidx = (NI_ALL * LBL - 1) - ({pi, 2'b00} + {3'd0, pc});
+    // The label character `pc` of item `pi`.
+    //
+    // **Not the banner's way round, and getting that wrong printed every
+    // label beside another item's value for a whole round of work.** The
+    // banner is a table of *single bytes* whose element index and byte index
+    // are the same number, so one subtraction reverses it. `LABELS` is a
+    // table of **four-byte elements**: the element has to be counted from
+    // the low end, because the concatenation above is written back to front
+    // like `PROBE_ADDRS`, while the four characters inside it have to be
+    // counted from the high end, because a string literal's first character
+    // is its most significant byte. Two directions at once, and
+    //
+    //     lidx = (NI_ALL * LBL - 1) - (LBL * pi + pc)
+    //
+    // which is the banner's formula with a wider stride, reverses both — so
+    // item 0 got element 29's characters. On a part that read as
+    // `VIDL=00 ... FRML=24` where the transceiver had actually answered
+    // `24h` to Vendor ID Low: the whole report shifted end for end, which
+    // looked exactly like a transceiver that never answered at all.
+    // `docs/fpga-trellis.md` has the console before and after.
+    wire [7:0] lidx = {pi, 2'b00} + (LBL[7:0] - 8'd1) - {3'd0, pc};
     wire [7:0] label_ch = LABELS[{lidx, 3'b000} +: 8];
 
     // The byte item `pi` is reporting.

@@ -5558,3 +5558,179 @@ fn the_target_ulpi_design_routes_and_configures_what_its_header_promises() {
         );
     }
 }
+
+/// Every label of the TARGET host's report, beside the value it names.
+///
+/// This exists because that pairing was **wrong on a part for a whole round
+/// of work**, and the way it was wrong is the way a report can lie without
+/// looking like one: `LABELS` is a table of four-byte elements written back
+/// to front, the index into it reversed the elements *and* the characters
+/// inside them, and so item 0's value was printed under item 29's name. The
+/// console read `VIDL=00 VIDH=00 PHYR=00 RFAL=01` and a reader concluded
+/// that the transceiver on the left edge of the die had never answered.
+/// What it had actually answered was `0424` — the console was the whole
+/// report end for end. `docs/fpga-trellis.md` has both readings.
+///
+/// How it is checked: the printer is driven on its own. The nine probe
+/// slots are written through the simulator's memory handle and the host's
+/// outputs are **forced** to distinct values, `probe_done` and `n_items` are
+/// forced so that all thirty items print, and `con_in_ready` is forced high
+/// because nothing here enumerates the console the bytes would otherwise go
+/// to. Then the byte stream the design hands the console is collected and
+/// compared character for character against the report those values must
+/// produce.
+///
+/// What it would catch: any shift, reversal or swap between a label and its
+/// value, the two multiplexers disagreeing about how many items there are,
+/// and a change to `LABELS` or to `item_val` that is not made in both.
+///
+/// What it would **not** catch: anything about the ULPI bus, the register
+/// probe or the enumeration — every one of those is forced here, so a host
+/// that never read a register would print this same report. It does not
+/// cover the descriptor dump either: `dev_len` and `cfg_len` stay at their
+/// reset zero, so the report ends with the items. And it says nothing about
+/// which ball a signal reaches; only a part can say that.
+#[test]
+#[cfg(all(feature = "verilog", feature = "sim"))]
+fn every_label_of_the_target_hosts_report_names_the_value_beside_it() {
+    use reticle::diag::Diagnostics;
+    use reticle::logic::Logic;
+    use reticle::sim::{SimOptions, Simulator};
+    use reticle::source::SourceMap;
+    use reticle::verilog::{Dialect, ElabOptions, NoIncludes, elaborate, parse_source};
+
+    let sources = [
+        "testdata/fpga/cynthion/usb_host_target.v",
+        "ip/usb_host_ulpi/rtl/usb_host_ulpi.v",
+        "ip/usb_host_ulpi/rtl/usb_ulpi_host_link.v",
+        "ip/usb_host_ulpi/rtl/usb_host_sie.v",
+        "ip/usb_host_ulpi/rtl/usb_host_enum.v",
+        "ip/usb_cdc_acm/rtl/usb_cdc_acm_ulpi.v",
+        "ip/usb_cdc_acm/rtl/usb_cdc_acm.v",
+        "ip/usb_cdc_acm/rtl/usb_cdc_req.v",
+        "ip/usb_device_ulpi/rtl/usb_ulpi_link.v",
+        "ip/usb_device_fs/rtl/usb_ctrl_ep.v",
+    ];
+    let mut map = SourceMap::new();
+    let mut diags = Diagnostics::new();
+    let mut files = Vec::new();
+    for name in sources {
+        let Ok(text) = std::fs::read_to_string(name) else {
+            eprintln!("skipped: `{name}` is not in this copy of the crate");
+            return;
+        };
+        let id = map.add(name, &text).expect("fits");
+        files.push(parse_source(
+            &mut map,
+            id,
+            Dialect::Verilog2005,
+            &mut NoIncludes,
+            &mut diags,
+        ));
+    }
+    let refs: Vec<_> = files.iter().collect();
+    let design = elaborate(&refs, &ElabOptions::new(Dialect::Verilog2005), &mut diags)
+        .expect("the design elaborates");
+    assert!(!diags.has_errors(), "{}", diags.render(&map));
+
+    let options = SimOptions {
+        top: Some("usb_host_target".into()),
+        ..SimOptions::default()
+    };
+    let mut sim = Simulator::new(&design, options).expect("it simulates");
+
+    // The nine register answers, written straight into the probe's own
+    // array: distinct bytes, and the first four are what a USB3343 really
+    // answers to `00h`-`03h`.
+    let probe = [0x24u64, 0x04, 0x09, 0x13, 0x45, 0x06, 0x18, 0x1F, 0x39];
+    let slots = sim
+        .memory("usb_host_target.probe_val")
+        .expect("`probe_val` is an array of this design");
+    for (index, value) in probe.iter().enumerate() {
+        assert!(
+            sim.set_mem(slots, index as u64, Logic::from_u64(*value, 8)),
+            "probe_val[{index}] is writable"
+        );
+    }
+
+    // Everything the report reads that this test is not exercising. `forced`
+    // is `(net, width, value)`; a one-bit signal is still spelled out, so
+    // that the expected text below can be read against this list.
+    let forced: &[(&str, u32, u64)] = &[
+        // The console takes a byte every clock: nothing here enumerates it.
+        ("con_in_ready", 1, 1),
+        // The probe is over and the enumeration is running, so all thirty
+        // items print rather than the seventeen the probe alone fills in.
+        ("probe_done", 1, 1),
+        ("n_items", 6, 30),
+        // The last receive command, and the two fields the report slices
+        // out of it: LineState is its bits 1:0 and VbusState its bits 3:2,
+        // so those three items cannot be chosen independently.
+        ("h_rx_cmd", 8, 0x5B),
+        ("h_rx_cmd_seen", 1, 1),
+        ("h_id_pin", 1, 1),
+        ("h_phy_ready", 1, 1),
+        ("h_stage", 5, 0x0C),
+        ("h_attached", 1, 1),
+        ("h_low_speed", 1, 0),
+        ("h_up", 1, 1),
+        ("h_failed", 1, 1),
+        ("h_fail_stage", 5, 0x11),
+        ("h_fail_status", 3, 0x5),
+        ("h_dev_addr", 7, 0x23),
+        ("h_maxpkt0", 7, 0x40),
+        ("h_cfg_total", 16, 0x0132),
+        ("h_cfg_value", 8, 0x77),
+        ("h_line_state", 2, 0x1),
+        ("h_frame", 11, 0x1A5),
+    ];
+    for (name, width, value) in forced {
+        let path = format!("usb_host_target.{name}");
+        let handle = sim
+            .net(&path)
+            .unwrap_or_else(|| panic!("`{path}` is a net of this design"));
+        sim.force(handle, Logic::from_u64(*value, *width));
+    }
+
+    let look = |sim: &Simulator, name: &str| {
+        let path = format!("usb_host_target.{name}");
+        sim.net(&path)
+            .unwrap_or_else(|| panic!("`{path}` is a net of this design"))
+    };
+    let clk = look(&sim, "clk");
+    let valid = look(&sim, "con_in_valid");
+    let data = look(&sim, "con_in_data");
+
+    // Drive it the way a testbench would: settle with the clock low, read
+    // the byte the design is offering, then clock it in. 1200 cycles is the
+    // sixteen of the power-on reset, the 27-character banner and thirty
+    // nine-character items with room to spare.
+    let half = 5;
+    let (low, high) = (Logic::from_u64(0, 1), Logic::from_u64(1, 1));
+    let mut text = String::new();
+    sim.set(clk, low.clone());
+    for _ in 0..1200u32 {
+        sim.run_for(half);
+        if sim.get(valid).to_u64() == Some(1) {
+            if let Some(byte) = sim.get(data).to_u64() {
+                text.push(byte as u8 as char);
+            }
+        }
+        sim.set(clk, high.clone());
+        sim.run_for(half);
+        sim.set(clk, low.clone());
+    }
+
+    let want = "\r\n== CYNTHION TARGET HOST\r\n\
+                VIDL=24\r\nVIDH=04\r\nPIDL=09\r\nPIDH=13\r\n\
+                FUNC=45\r\nOTGC=06\r\nINTS=18\r\nDBUG=1f\r\nIOPM=39\r\n\
+                RXCM=5b\r\nLINE=03\r\nVBUS=02\r\nIDPN=01\r\nSEEN=01\r\n\
+                VBEN=00\r\nPHYR=01\r\nRFAL=00\r\nSTGE=0c\r\nFLAG=0d\r\n\
+                FSTG=11\r\nFSTA=05\r\nADDR=23\r\nMPS0=40\r\nCTLO=32\r\n\
+                CTHI=01\r\nCFGV=77\r\nDLEN=00\r\nCLEN=00\r\nLIN2=01\r\n\
+                FRML=a5\r\n";
+    assert_eq!(
+        text, want,
+        "the report pairs a label with another item's value"
+    );
+}
