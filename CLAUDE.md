@@ -27,6 +27,26 @@ gains commits under your branch, rebase and gate again — especially after a
 release, because a version bump is exactly the kind of change that breaks a
 golden.
 
+**A green gate here does not mean a green CI, and lints are why.** There is no
+`rust-toolchain` pin, so CI tracks latest stable while this machine's toolchain
+is whatever was installed — which has been months behind. A clippy lint added
+upstream turns CI red on code that has not changed and that the local gate
+passes: it happened on 2 October 2026, five `needless_borrow` errors in
+`vhdl::sema::builtin`, on a commit that had passed CI two days earlier, because
+stable went 1.98.0 → 1.99.0 on 28 September. Before pushing anything that
+touches Rust, check with the newest clippy available —
+`cargo +nightly clippy --all-features --all-targets -- -D warnings` is *ahead*
+of CI rather than behind it, so a clean result there is worth something that a
+clean result from an old stable is not. Doing that found a second lint
+(`needless_range_loop`) that 1.99 does not yet report, which would have been the
+next bump's red build.
+
+**And clippy is not the gate.** `cargo fmt --check` runs before it. Removing two
+characters to satisfy a lint changed how rustfmt wanted an expression wrapped
+and failed the gate at its first step, with `CHECKEXIT=1` and zero tests run.
+Verifying one step is not verifying the gate; run the whole thing and read the
+number.
+
 ## Verifying claims
 
 This project's method is to ask **"what does the vendor's own tool write, in
