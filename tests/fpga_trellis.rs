@@ -43,7 +43,9 @@
 
 use std::path::Path;
 
-#[cfg(all(feature = "verilog", feature = "synth"))]
+// Named by the reference-bitstream comparisons as well as by the designs,
+// so the gate is `verilog` and not `verilog` plus `synth`.
+#[cfg(feature = "verilog")]
 use reticle::fpga::arch::ConfigBit;
 use reticle::fpga::ecp5::{Ecp5Stream, FrameFormat};
 use reticle::fpga::trellis::{self, TrellisOptions};
@@ -5283,6 +5285,275 @@ fn the_bidirectional_bus_routes_and_configures_what_its_header_promises() {
             value,
             Some("BIDIR_LVCMOS33"),
             "{ball} is {field} at {:?} and reads back wrong",
+            pad.pad_at
+        );
+    }
+}
+
+/// The left-edge milestone: `target_ulpi_loopback.v`, sixteen balls of
+/// column 0, and every claim its header makes about what would reach a part.
+///
+/// This is the design the whole exercise is for. Before the left edge was
+/// described, every one of these sixteen balls was refused —
+/// "`target_clk$io0` is constrained to package pin `T4`, which the
+/// architecture maps to no usable site" — so no USB host on the TARGET port
+/// and no control of the board's power switches could be built at all.
+///
+/// **Nothing is loaded onto a board**, and that is not caution for its own
+/// sake: a Cynthion r1.4 has no on-board observable on this edge. Its six
+/// LEDs are on the top edge and its USER button on the right, which is
+/// exactly why this design touches neither — a left-edge rule that was wrong
+/// would otherwise be hidden behind a top-edge one that works. So what is
+/// checked is everything that can be checked off the part:
+///
+/// 1. the design places and routes **completely**, every sink walked back to
+///    its driver, with the one clock on a global network;
+/// 2. all sixteen balls are on `Edge::Left` and in bank 6, over **seven**
+///    pad tiles, one of which holds all four PIO sides at once — so this is
+///    the shared-tile case and not sixteen independent pads;
+/// 3. each of them is the base type its direction calls for, read back out
+///    of the finished image through the database;
+/// 4. the eight data pads have a **routed** tristate and the four constant
+///    outputs have a **tied** one, which is the distinction that would be
+///    invisible if the `CIB` were a column out;
+/// 5. the slew rate is `FAST` on the thirteen ULPI pins and **clear** on the
+///    three switches, which is the constraints file reaching the bitstream
+///    per pin;
+/// 6. the pull is `UP` on the two inputs this design asks for a pull-up on
+///    and `NONE` everywhere else — never the database's default of `DOWN`;
+/// 7. bank 6's rail is written and bank 1's, 2's, 3's, 7's and 8's are not,
+///    because a design writes the banks it uses;
+/// 8. and every bit of the image decodes back into exactly the arcs the
+///    router chose, with nothing left over. That was 2729 bits over 751 arcs
+///    when this was written, which is reported rather than asserted: the
+///    router is free to find a different route of the same design.
+#[test]
+#[cfg(all(feature = "verilog", feature = "synth"))]
+fn the_target_ulpi_design_routes_and_configures_what_its_header_promises() {
+    let Some(root) = chipdb() else { return };
+    let db = trellis::open(&Disk(root), "", PART).unwrap();
+    let fabric = db.load(&TrellisOptions::new()).unwrap();
+    let (_, stream, pads, report, io_only, routed) = compile(
+        &fabric,
+        "testdata/fpga/cynthion/target_ulpi_loopback.v",
+        "testdata/fpga/cynthion/target_ulpi_loopback.rcf",
+    );
+    assert_eq!(
+        pads, 17,
+        "the clock in, eight data balls, `clk` `dir` `nxt` `stp` `rst` and three switches"
+    );
+    assert_eq!(report.signals, routed.netlist.routable().len());
+    assert!(
+        routed.clocks.off_network.is_empty(),
+        "a clock off the global network: {:?}",
+        routed.clocks.off_network
+    );
+    assert!(routed.dropped.is_empty(), "{:?}", routed.dropped);
+
+    // ---- what each ball is, and what it costs ---------------------------
+    //
+    // The four constant outputs are the ones whose data is a tie rather than
+    // a route: `target_rst_n` holds the transceiver in reset and the three
+    // switches are off.
+    const TIED: [&str; 4] = ["R4", "K5", "L1", "L2"];
+    let want = |ball: &str| -> &'static str {
+        if TARGET_ULPI.iter().any(|(b, d)| *b == ball && *d == "BIDIR") {
+            "BIDIR"
+        } else if matches!(ball, "R3" | "T2") {
+            "INPUT"
+        } else {
+            "OUTPUT"
+        }
+    };
+    let all: Vec<&str> = TARGET_ULPI
+        .iter()
+        .map(|(b, _)| *b)
+        .chain(VBUS_SWITCHES.iter().copied())
+        .collect();
+
+    // Seven pad tiles for sixteen balls, and one of them holds all four
+    // sides: `L1` `L2` `M1` `M2` are sides A B C D of (col 0, row 26), so
+    // their bits are four sides of the one `PICL1` at (col 0, row 27).
+    let mut tiles: Vec<(u32, u32)> = Vec::new();
+    for ball in &all {
+        let pad = fabric
+            .pad(ball)
+            .unwrap_or_else(|| panic!("{ball} is not in the ball map"));
+        assert_eq!(pad.edge, trellis::Edge::Left, "{ball}");
+        assert_eq!(pad.bank, 6, "{ball}");
+        tiles.push(pad.pad_at);
+    }
+    tiles.sort_unstable();
+    tiles.dedup();
+    assert_eq!(
+        tiles.len(),
+        7,
+        "sixteen balls over seven pad tiles: {tiles:?}"
+    );
+    let busiest = tiles
+        .iter()
+        .map(|at| {
+            all.iter()
+                .filter(|ball| fabric.pad(ball).unwrap().pad_at == *at)
+                .count()
+        })
+        .max();
+    assert_eq!(
+        busiest,
+        Some(4),
+        "one tile has to hold all four PIO sides, or this is not the shared-tile case"
+    );
+
+    // ---- what `configure_io` wrote, on its own --------------------------
+    let alone = fabric.stream(&io_only, "8").unwrap();
+    let set = |at: (u32, u32), bit: &ConfigBit| {
+        let (frame, index) = fabric
+            .frames
+            .locate(at, *bit)
+            .unwrap_or_else(|| panic!("{bit:?} is outside {at:?}"));
+        alone.cram.get(frame, index)
+    };
+    for ball in &all {
+        let pad = fabric.pad(ball).unwrap();
+        let (pad_bits, pic_bits) = match want(ball) {
+            "BIDIR" => (&pad.bidir_pad_bits, &pad.bidir_pic_bits),
+            "INPUT" => (&pad.input_pad_bits, &pad.input_pic_bits),
+            _ => (&pad.output_pad_bits, &pad.output_pic_bits),
+        };
+        for bit in pad_bits {
+            assert!(set(pad.pad_at, bit), "{ball}: {bit:?} of its base type");
+        }
+        for bit in pic_bits {
+            assert!(set(pad.pic_at, bit), "{ball}: {bit:?} of the second copy");
+        }
+        // The slew rate, per pin: the thirteen ULPI pins ask for `FAST` and
+        // the three switches ask for nothing, exactly as the platform file
+        // does. This is the assertion that says the constraint reaches the
+        // bitstream one pin at a time rather than per design.
+        let fast = VBUS_SWITCHES.iter().all(|b| b != ball);
+        for bit in pad.slew_bits("FAST") {
+            assert_eq!(
+                set(pad.pad_at, bit),
+                fast,
+                "{ball}: SLEWRATE=FAST at {bit:?} should be {fast}"
+            );
+        }
+        // The pull. `-pullup yes` on the two inputs, because this design
+        // holds the transceiver in reset and an undriven `dir` must read as
+        // "the bus is not mine". `NONE`'s bits are a subset of `UP`'s, so
+        // each claim is made about the bit the other does not have.
+        let pulled_up = matches!(*ball, "R3" | "T2");
+        let up_only: Vec<&ConfigBit> = pad
+            .pull_bits(trellis::PULL_UP)
+            .iter()
+            .filter(|bit| !pad.pull_bits(trellis::PULL_NONE).contains(bit))
+            .collect();
+        assert!(!up_only.is_empty(), "{ball}: UP and NONE differ somewhere");
+        for bit in up_only {
+            assert_eq!(
+                set(pad.pad_at, bit),
+                pulled_up,
+                "{ball}: the bit only PULLMODE=UP has"
+            );
+        }
+        for bit in pad.pull_bits(trellis::PULL_NONE) {
+            assert!(
+                set(pad.pad_at, bit),
+                "{ball}: {bit:?} is in both NONE and UP and is clear, so this pad has the \
+                 database's default of PULLMODE=DOWN"
+            );
+        }
+        // The tie, which is the `CIB` one column east of the buffer. A
+        // constant output has its data tied low and its tristate tied low; a
+        // routed one and a bidirectional pad have neither.
+        let tied = TIED.contains(ball);
+        assert!(
+            !pad.low_bits.is_empty() && !pad.enable_bits.is_empty(),
+            "{ball}"
+        );
+        assert_eq!(
+            pad.low_bits.iter().all(|bit| set(pad.cib_at, bit)),
+            tied,
+            "{ball}: the data wire tied to zero should be {tied}"
+        );
+        assert_eq!(
+            pad.enable_bits.iter().all(|bit| set(pad.cib_at, bit)),
+            tied || want(ball) == "OUTPUT",
+            "{ball}: an output drives and so has its tristate tied; a bidirectional pad and an \
+             input do not"
+        );
+        // And never the other tie: nothing here asks for a constant one or
+        // for a pad released for good.
+        assert!(
+            !pad.high_bits.iter().all(|bit| set(pad.cib_at, bit)),
+            "{ball}: the data wire is tied to a one and nothing asked for that"
+        );
+        assert!(
+            !pad.tristate_bits.iter().all(|bit| set(pad.cib_at, bit)),
+            "{ball}: the pad is released for good and nothing asked for that"
+        );
+    }
+
+    // ---- the banks, which are the setting no pad's tiles hold ------------
+    //
+    // Bank 6 is the left edge's southern half and bank 0 is the top edge's,
+    // where the oscillator is. Nothing else is used, so nothing else is
+    // written.
+    for (bank, used) in [
+        (0u32, true),
+        (1, false),
+        (2, false),
+        (3, false),
+        (6, true),
+        (7, false),
+        (8, false),
+    ] {
+        let (at, bits) = fabric
+            .bank_bits
+            .get(&bank)
+            .unwrap_or_else(|| panic!("bank {bank} has no rail"));
+        assert!(!bits.is_empty(), "bank {bank}");
+        assert_eq!(
+            bits.iter().all(|bit| set(*at, bit)),
+            used,
+            "bank {bank}'s rail at {at:?} should be written: {used}"
+        );
+    }
+
+    // ---- and the whole image says what the router said -------------------
+    let decoded = db.decode(&stream.cram);
+    assert_eq!(
+        decoded.unexplained, 0,
+        "{} bit(s) left over: {:?}",
+        decoded.unexplained, decoded.leftovers
+    );
+    let (selected, unresolved) = db.resolved_arcs(&decoded);
+    assert!(unresolved.is_empty(), "{unresolved:?}");
+    assert_eq!(selected, fabric.routed_arcs(&routed.graph, &routed.routing));
+
+    // Every ball read back out of the finished image rather than out of the
+    // pass that wrote it. An **output** is allowed either spelling, because a
+    // pseudo-differential value of one side's `BASE_TYPE` reaches across the
+    // pair: `L1` and `L2` are sides A and B of one tile and both are
+    // outputs, as are `R4` and `T3`, so the fewest-leftovers reading of the
+    // odd side is the `D` form. The bits this backend wrote are asserted
+    // above, where there is no ambiguity.
+    for ball in &all {
+        let pad = fabric.pad(ball).unwrap();
+        let field = format!("PIO{}.BASE_TYPE", pad.side);
+        let value = decoded
+            .enums
+            .iter()
+            .find(|(at, what, _)| *at == pad.pad_at && *what == field)
+            .map(|(_, _, value)| value.as_str());
+        let expected: &[&str] = match want(ball) {
+            "BIDIR" => &["BIDIR_LVCMOS33"],
+            "INPUT" => &["INPUT_LVCMOS33"],
+            _ => &["OUTPUT_LVCMOS33", "OUTPUT_LVCMOS33D"],
+        };
+        assert!(
+            value.is_some_and(|v| expected.contains(&v)),
+            "{ball} is {field} at {:?} and reads back {value:?}, not one of {expected:?}",
             pad.pad_at
         );
     }

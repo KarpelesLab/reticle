@@ -1,0 +1,105 @@
+# The TARGET USB transceiver and the three VBUS switches of a Great Scott
+# Gadgets Cynthion r1.4 — sixteen balls, every one of them on the **left**
+# edge of the die, which is the edge this design exists to exercise.
+#
+# **Nothing here is loaded onto a board**, and `target_ulpi_loopback.v`'s
+# header says why and what would have to be checked first.
+#
+# ---------------------------------------------------------------------
+# WHERE THE BALLS COME FROM
+# ---------------------------------------------------------------------
+#
+# Great Scott Gadgets' own platform file,
+# `cynthion/gateware/platform/cynthion_r1_4.py`:
+#
+#     ULPIResource("target_phy", 0,
+#         data="R2 R1 P2 P1 N3 N1 M2 M1", clk="T4", clk_dir='o',
+#         dir="R3", nxt="T2", stp="T3", rst="R4", rst_invert=True,
+#         attrs=Attrs(IO_TYPE="LVCMOS33", SLEWRATE="FAST")),
+#
+#     Resource("target_c_vbus_en", 0, Pins("K5", dir="o"), Attrs(IO_TYPE="LVCMOS33")),
+#     Resource("control_vbus_en",  0, Pins("L1", dir="o"), Attrs(IO_TYPE="LVCMOS33")),
+#     Resource("aux_vbus_en",      0, Pins("L2", dir="o"), Attrs(IO_TYPE="LVCMOS33")),
+#
+# `iodb.json` puts all sixteen at **column 0**, in bank 6:
+#
+#     R2 (row 38, PIO C)   R1 (35, B)   P2 (32, B)   P1 (35, A)
+#     N3 (35, D)           N1 (32, A)   M2 (26, D)   M1 (26, C)
+#     T4 (44, B)           R3 (41, B)   T2 (38, D)   T3 (41, D)   R4 (41, C)
+#     K5 (29, B)           L1 (26, A)   L2 (26, B)
+#
+# All four PIO sides are used, which is the point: the left edge has four and
+# the top edge has two, and a rule written for two would have refused half of
+# these. Rows 26, 32, 35, 38, 41 and 44 are all congruent to 2 modulo 3,
+# which is where this die's left-edge balls are: their pad tiles are the
+# `PICL1*` one row south.
+#
+# ---------------------------------------------------------------------
+# THE SLEW RATE, AND WHY ONLY THIRTEEN OF THE SIXTEEN ASK FOR IT
+# ---------------------------------------------------------------------
+#
+# The `ULPIResource` carries `SLEWRATE="FAST"` on all thirteen of its pins —
+# inputs and outputs alike, because nextpnr's condition for writing the field
+# is the attribute and not the direction — and the three `Resource` lines for
+# the switches carry no slew rate at all. This file copies that exactly, and
+# `what_lattices_own_packer_writes_for_a_left_edge_pad` is the measurement
+# that says Lattice's own packer does the same: the bit is set on the
+# thirteen and clear on the three, in `analyzer.bit`.
+#
+# ---------------------------------------------------------------------
+# THE PULL-UPS ON `dir` AND `nxt`, WHICH ARE THIS DESIGN'S AND NOT THE
+# PLATFORM FILE'S
+# ---------------------------------------------------------------------
+#
+# Great Scott Gadgets ask for no pull mode on these two, and they are right
+# to: their designs bring the transceiver out of reset, and a transceiver out
+# of reset drives both pins. **This design holds it in reset**, so both pins
+# float, and the database's default for `PIO<s>.PULLMODE` is a pull-*down* —
+# which would make `target_dir` read low, which this design reads as "the bus
+# is mine, drive it". A pull-**up** makes an undriven `dir` read as "the
+# transceiver owns the bus" and the eight data pads stay released. That is
+# the safe reading of a floating pin and it is the only deliberate difference
+# from the platform file in this file.
+#
+# ---------------------------------------------------------------------
+# A8, THE OSCILLATOR — THE ONE BALL THAT IS NOT ON THIS EDGE
+# ---------------------------------------------------------------------
+#
+#     Resource("clk_60MHz", 0, Pins("A8", dir="i"),
+#         Clock(60e6), Attrs(IO_TYPE="LVCMOS33")),
+#
+# Row 0, column 29, PIO B, bank 0 — the **top** edge, whose pin function is
+# `PCLKC0_0`, the complement half of bank 0's differential clock pair, with
+# no dedicated path to the clock centre. `clock_blink.rcf` has the walk. It
+# is here because a counter needs a clock and there is no oscillator on the
+# left edge; everything else this design touches is on column 0.
+#
+# Bank 6's VCCIO is 3.3 V, and the evidence is the bitstreams rather than a
+# schematic: all three of Great Scott Gadgets' set `BANK.VCCIO` to `3V3` on
+# every bank of the part, `BANKREF6` included.
+
+set_io -io_standard LVCMOS33 clk A8
+
+# The eight bidirectional data balls, `[0]` first, in the platform file's
+# order. `SLEWRATE="FAST"` on every one.
+set_io -io_standard LVCMOS33 -slew fast target_data[0] R2
+set_io -io_standard LVCMOS33 -slew fast target_data[1] R1
+set_io -io_standard LVCMOS33 -slew fast target_data[2] P2
+set_io -io_standard LVCMOS33 -slew fast target_data[3] P1
+set_io -io_standard LVCMOS33 -slew fast target_data[4] N3
+set_io -io_standard LVCMOS33 -slew fast target_data[5] N1
+set_io -io_standard LVCMOS33 -slew fast target_data[6] M2
+set_io -io_standard LVCMOS33 -slew fast target_data[7] M1
+
+# The clock out, the two inputs, the stop line and the reset.
+set_io -io_standard LVCMOS33 -slew fast target_clk T4
+set_io -io_standard LVCMOS33 -slew fast -pullup yes target_dir R3
+set_io -io_standard LVCMOS33 -slew fast -pullup yes target_nxt T2
+set_io -io_standard LVCMOS33 -slew fast target_stp T3
+set_io -io_standard LVCMOS33 -slew fast target_rst_n R4
+
+# The three power switches. No slew rate, because their resources ask for
+# none, and driven to zero, which is off.
+set_io -io_standard LVCMOS33 target_c_vbus_en K5
+set_io -io_standard LVCMOS33 control_vbus_en L1
+set_io -io_standard LVCMOS33 aux_vbus_en L2
