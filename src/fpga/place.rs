@@ -690,9 +690,9 @@ pub struct PlaceOptions {
     /// that: see `docs/fpga-trellis.md` for what the wirelength does when it
     /// is lowered, measured rather than guessed.
     ///
-    /// Zero is treated as one, and the result is clamped the way
-    /// [`moves_for`] clamps it, so a tiny design still gets 20 moves per
-    /// temperature.
+    /// Zero is treated as one, and the result is clamped to at least 20
+    /// moves and at most a million, so a tiny design still gets a walk and
+    /// a huge one does not get an unbounded one.
     pub move_effort: usize,
 }
 
