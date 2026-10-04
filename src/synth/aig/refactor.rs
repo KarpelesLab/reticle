@@ -12,7 +12,7 @@
 //! like rewriting. This is a simpler cousin of ABC's `refactor`, which
 //! uses the same cut and ISOP but a stronger factoring.
 
-use super::cut::{cone_truth, reconvergent_cut};
+use super::cut::{ConeScratch, cone_truth_with, reconvergent_cut};
 use super::mffc::{Builder, Counter, Synth, View};
 use super::truth::TruthTable;
 use super::{Aig, Edge};
@@ -210,6 +210,7 @@ pub fn refactor(aig: &mut Aig, k: usize) -> usize {
     let mut view = View::new(aig);
     let count = u32::try_from(view.old_len).expect("node count");
     let mut applied = 0;
+    let mut scratch = ConeScratch::new();
     for id in 1..count {
         if !view.aig.is_and(id) || view.fwd.is_replaced(id) || view.aig.refs(id) == 0 {
             continue;
@@ -225,7 +226,13 @@ pub fn refactor(aig: &mut Aig, k: usize) -> usize {
         }
         // A reconvergence-driven cut is a cut by construction, so the
         // function is always there; skipping is belt and braces.
-        let Some(tt) = cone_truth(&mut |x| view.fanins(x), id, &leaves, leaves.len()) else {
+        let Some(tt) = cone_truth_with(
+            &mut scratch,
+            &mut |x| view.fanins(x),
+            id,
+            &leaves,
+            leaves.len(),
+        ) else {
             view.ref_cone(id, &leaves);
             continue;
         };

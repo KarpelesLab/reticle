@@ -41,7 +41,7 @@
 
 use std::sync::OnceLock;
 
-use super::cut::{cone_truth, enumerate_cuts};
+use super::cut::{ConeScratch, cone_truth_with, enumerate_cuts};
 use super::mffc::{Builder, Counter, Synth, View};
 use super::{Aig, Edge};
 
@@ -356,6 +356,9 @@ pub fn rewrite(aig: &mut Aig, zero_cost: bool) -> usize {
     let mut view = View::new(aig);
     let count = u32::try_from(view.old_len).expect("node count");
     let mut applied = 0;
+    // One cone walk per cut of every node, so the working space is allocated
+    // here and not inside each of them.
+    let mut scratch = ConeScratch::new();
     for id in 1..count {
         if !view.aig.is_and(id) || view.fwd.is_replaced(id) || view.aig.refs(id) == 0 {
             continue;
@@ -366,7 +369,8 @@ pub fn rewrite(aig: &mut Aig, zero_cost: bool) -> usize {
             // Cuts come from `enumerate_cuts`, which expands from the
             // root, so every one of them separates it; skipping is belt
             // and braces.
-            let Some(tt) = cone_truth(&mut |x| view.fanins(x), id, &cut, 4) else {
+            let Some(tt) = cone_truth_with(&mut scratch, &mut |x| view.fanins(x), id, &cut, 4)
+            else {
                 continue;
             };
             let tt = tt.as_u64();

@@ -436,107 +436,187 @@ pub fn sweep(
 // The optimisation pass
 // ---------------------------------------------------------------------------
 
-/// The nodes of the cones of `roots` in topological order and the inputs
-/// they depend on, or `None` when the traversal exceeds `max_nodes`.
+/// Working space the cone prover keeps between candidate pairs.
+///
+/// The prover walks a cone for every pair it is asked about, and the cone of
+/// a node near the top of a miter is most of the graph. Marking the visited
+/// nodes in a set hashed one node at a time, and keying the tables and the
+/// SAT literals by node id, put half the mapping check's time inside
+/// `hashbrown`. Here the marks are an epoch-stamped array — starting a walk
+/// costs one counter increment — and every node the walk reaches is given a
+/// small consecutive slot, so the per-walk tables are plain vectors.
+#[derive(Clone, Debug, Default)]
+struct ConeSpace {
+    /// The walk a node was last seen in; equal to `epoch` means "seen".
+    stamp: Vec<u32>,
+    /// This walk's number. Zero is never a walk, so a stamp that has just
+    /// been grown reads as unseen.
+    epoch: u32,
+    /// A seen node's slot in this walk's tables.
+    slot: Vec<u32>,
+    /// How many slots this walk has handed out.
+    slots: usize,
+    /// The traversal stack: `(node, its fanins have been pushed)`.
+    stack: Vec<(u32, bool)>,
+    /// The AND nodes of the last walk's cones, fanins before fanouts.
+    order: Vec<u32>,
+    /// The inputs those cones depend on, ascending.
+    inputs: Vec<u32>,
+}
+
+impl ConeSpace {
+    /// Starts a walk: every node reads as unseen again.
+    fn begin(&mut self) {
+        self.epoch = self.epoch.wrapping_add(1);
+        if self.epoch == 0 {
+            // Wrapped around: a stale stamp would alias the new epoch.
+            self.stamp.iter_mut().for_each(|s| *s = 0);
+            self.epoch = 1;
+        }
+        self.slots = 0;
+        self.stack.clear();
+        self.order.clear();
+        self.inputs.clear();
+    }
+
+    /// Marks `node` seen and gives it a slot; `false` when it already was.
+    fn mark(&mut self, node: u32) -> bool {
+        let need = node as usize + 1;
+        if self.stamp.len() < need {
+            self.stamp.resize(need, 0);
+            self.slot.resize(need, 0);
+        }
+        if self.stamp[node as usize] == self.epoch {
+            return false;
+        }
+        self.stamp[node as usize] = self.epoch;
+        self.slot[node as usize] = u32::try_from(self.slots).expect("slot count");
+        self.slots += 1;
+        true
+    }
+
+    /// True when `node` has been seen in this walk.
+    fn seen(&self, node: u32) -> bool {
+        self.stamp.get(node as usize) == Some(&self.epoch)
+    }
+
+    /// The slot of a node this walk has seen.
+    fn slot_of(&self, node: u32) -> usize {
+        debug_assert!(self.seen(node), "slot of an unvisited node n{node}");
+        self.slot[node as usize] as usize
+    }
+}
+
+/// Walks the cones of `roots` into `space`: the AND nodes in topological
+/// order, the inputs they depend on, and a slot for each of those plus the
+/// constant node, which the deciders index their tables by.
+///
+/// False when the traversal exceeds `max_nodes`, which leaves `space`
+/// holding a partial walk.
 fn cones(
+    space: &mut ConeSpace,
     aig: &Aig,
     fwd: &mut Forward,
     roots: &[u32],
     max_nodes: usize,
-) -> Option<(Vec<u32>, Vec<u32>)> {
-    let mut order = Vec::new();
-    let mut inputs = Vec::new();
-    let mut visited: IntSet<u32> = IntSet::default();
-    visited.insert(0);
+) -> bool {
+    space.begin();
+    space.mark(0);
     for &root in roots {
-        let mut stack: Vec<(u32, bool)> = vec![(root, false)];
-        while let Some((id, expanded)) = stack.pop() {
+        space.stack.clear();
+        space.stack.push((root, false));
+        while let Some((id, expanded)) = space.stack.pop() {
             if expanded {
-                order.push(id);
+                space.order.push(id);
                 continue;
             }
-            if !visited.insert(id) {
+            if !space.mark(id) {
                 continue;
             }
             if !aig.is_and(id) {
-                inputs.push(id);
+                space.inputs.push(id);
                 continue;
             }
-            if order.len() + stack.len() > max_nodes {
-                return None;
+            if space.order.len() + space.stack.len() > max_nodes {
+                return false;
             }
             let (a, b) = aig.fanins(id);
             let a = fwd.resolve(a);
             let b = fwd.resolve(b);
-            stack.push((id, true));
+            space.stack.push((id, true));
             for f in [b.node(), a.node()] {
-                if !visited.contains(&f) {
-                    stack.push((f, false));
+                if !space.seen(f) {
+                    space.stack.push((f, false));
                 }
             }
         }
     }
-    inputs.sort_unstable();
-    Some((order, inputs))
+    space.inputs.sort_unstable();
+    true
 }
 
-/// Simulates `order` (a topological cone) over the given input tables and
-/// returns the table of every node in the cone, keyed by node.
-fn simulate_cone(
-    aig: &Aig,
-    fwd: &mut Forward,
-    order: &[u32],
-    inputs: &IntMap<u32, TruthTable>,
-    vars: usize,
-) -> IntMap<u32, TruthTable> {
-    let mut values: IntMap<u32, TruthTable> = inputs.clone();
-    values.insert(0, TruthTable::constant(vars, false));
-    for &id in order {
+/// Simulates the cone in `space` over the inputs' projections and returns
+/// the table of every node in it, indexed by the node's slot.
+fn simulate_cone(space: &ConeSpace, aig: &Aig, fwd: &mut Forward, vars: usize) -> Vec<TruthTable> {
+    // A table per slot; the slots a cone node reads are always written
+    // before it, so what the untouched ones hold is never looked at.
+    let mut values = vec![TruthTable::constant(0, false); space.slots];
+    values[space.slot_of(0)] = TruthTable::constant(vars, false);
+    for (i, &pi) in space.inputs.iter().enumerate() {
+        values[space.slot_of(pi)] = TruthTable::var(vars, i);
+    }
+    for &id in &space.order {
         let (a, b) = aig.fanins(id);
         let a = fwd.resolve(a);
         let b = fwd.resolve(b);
-        let ta = values[&a.node()].clone();
-        let tb = values[&b.node()].clone();
-        let ta = if a.is_complement() { ta.not() } else { ta };
-        let tb = if b.is_complement() { tb.not() } else { tb };
-        values.insert(id, ta.and(&tb));
+        let ia = space.slot_of(a.node());
+        let ib = space.slot_of(b.node());
+        let ta = if a.is_complement() {
+            values[ia].not()
+        } else {
+            values[ia].clone()
+        };
+        let tb = if b.is_complement() {
+            values[ib].not()
+        } else {
+            values[ib].clone()
+        };
+        values[space.slot_of(id)] = ta.and(&tb);
     }
     values
 }
 
-/// Checks `node` against `target` exhaustively when the cones are small
-/// enough.
-fn prove_exhaustive(
+/// Checks `node` against `target` by simulating the whole cone, which is
+/// only affordable when it has few inputs.
+///
+/// `space` must hold the walk of `[node, target.node()]`.
+fn decide_exhaustive(
+    space: &ConeSpace,
     aig: &Aig,
     fwd: &mut Forward,
     node: u32,
     target: Edge,
-    opts: &FraigOptions,
-) -> Option<Verdict> {
-    let (order, inputs) = cones(aig, fwd, &[node, target.node()], opts.max_cone)?;
-    let vars = inputs.len();
-    if vars > opts.max_exhaustive.min(16) {
-        return None;
-    }
-    let tables: IntMap<u32, TruthTable> = inputs
-        .iter()
-        .enumerate()
-        .map(|(i, &pi)| (pi, TruthTable::var(vars, i)))
-        .collect();
-    let values = simulate_cone(aig, fwd, &order, &tables, vars);
-    let tn = values[&node].clone();
-    let tt = values[&target.node()].clone();
-    let tt = if target.is_complement() { tt.not() } else { tt };
-    Some(if tn == tt {
+) -> Verdict {
+    let values = simulate_cone(space, aig, fwd, space.inputs.len());
+    let tn = &values[space.slot_of(node)];
+    let tt = &values[space.slot_of(target.node())];
+    let equal = if target.is_complement() {
+        *tn == tt.not()
+    } else {
+        tn == tt
+    };
+    if equal {
         Verdict::Equal
     } else {
         Verdict::Differ(None)
-    })
+    }
 }
 
-/// Checks `node` against `target` with the SAT solver.
+/// Checks `node` against `target` with the SAT solver, over a cone the
+/// caller has already walked.
 #[cfg(feature = "formal")]
-fn prove_sat(
+fn decide_sat(
+    space: &ConeSpace,
     aig: &Aig,
     fwd: &mut Forward,
     node: u32,
@@ -545,23 +625,23 @@ fn prove_sat(
 ) -> Verdict {
     use crate::formal::sat::{Lit, SolveResult, Solver};
 
-    let Some((order, inputs)) = cones(aig, fwd, &[node, target.node()], usize::MAX) else {
-        return Verdict::Unknown;
-    };
     let mut solver = Solver::new();
     solver.set_conflict_limit(Some(opts.sat_conflicts));
-    let mut vars: IntMap<u32, Lit> = IntMap::default();
     let zero = Lit::pos(solver.new_var());
     solver.add_clause(&[!zero]);
-    vars.insert(0, zero);
-    for &pi in &inputs {
-        vars.insert(pi, Lit::pos(solver.new_var()));
+    // A literal per slot, filled in the order the map used to hand variables
+    // out, so the solver sees exactly the clauses it saw before. The slots
+    // this call does not reach are never read.
+    let mut vars = vec![zero; space.slots];
+    vars[space.slot_of(0)] = zero;
+    for &pi in &space.inputs {
+        vars[space.slot_of(pi)] = Lit::pos(solver.new_var());
     }
-    let lit_of = |vars: &IntMap<u32, Lit>, e: Edge| -> Lit {
-        let l = vars[&e.node()];
+    let lit_of = |vars: &[Lit], e: Edge| -> Lit {
+        let l = vars[space.slot_of(e.node())];
         if e.is_complement() { !l } else { l }
     };
-    for &id in &order {
+    for &id in &space.order {
         let (a, b) = aig.fanins(id);
         let a = lit_of(&vars, fwd.resolve(a));
         let b = lit_of(&vars, fwd.resolve(b));
@@ -569,7 +649,7 @@ fn prove_sat(
         solver.add_clause(&[!y, a]);
         solver.add_clause(&[!y, b]);
         solver.add_clause(&[y, !a, !b]);
-        vars.insert(id, y);
+        vars[space.slot_of(id)] = y;
     }
     let n = lit_of(&vars, Edge::plain(node));
     let t = lit_of(&vars, target);
@@ -586,7 +666,8 @@ fn prove_sat(
 }
 
 #[cfg(not(feature = "formal"))]
-fn prove_sat(
+fn decide_sat(
+    _space: &ConeSpace,
     _aig: &Aig,
     _fwd: &mut Forward,
     _node: u32,
@@ -600,14 +681,35 @@ fn prove_sat(
 /// fresh SAT solver per pair for the rest (with the `formal` feature).
 struct ConeProver<'o> {
     opts: &'o FraigOptions,
+    /// Reused between pairs; see [`ConeSpace`].
+    space: ConeSpace,
 }
 
 impl Prover for ConeProver<'_> {
+    /// One cone walk serves both tiers.
+    ///
+    /// The exhaustive tier used to walk the cone under
+    /// [`FraigOptions::max_cone`] and then hand the pair to the SAT tier,
+    /// which walked the same cone again with no bound. When the bounded walk
+    /// finishes, the unbounded one would visit exactly the same nodes in
+    /// exactly the same order — the bound can only ever cut a walk short —
+    /// so the result is passed on instead of being recomputed. That is half
+    /// the traversals on a miter, whose candidate pairs are mostly too wide
+    /// for the exhaustive tier to take.
     fn prove(&mut self, aig: &Aig, fwd: &mut Forward, node: u32, target: Edge) -> Verdict {
-        match prove_exhaustive(aig, fwd, node, target, self.opts) {
-            Some(v) => v,
-            None => prove_sat(aig, fwd, node, target, self.opts),
+        let roots = [node, target.node()];
+        if cones(&mut self.space, aig, fwd, &roots, self.opts.max_cone) {
+            if self.space.inputs.len() <= self.opts.max_exhaustive.min(16) {
+                return decide_exhaustive(&self.space, aig, fwd, node, target);
+            }
+            return decide_sat(&self.space, aig, fwd, node, target, self.opts);
         }
+        // The cone is past `max_cone`: the exhaustive tier declines it and
+        // the SAT tier takes it whole, which needs its own walk.
+        if !cones(&mut self.space, aig, fwd, &roots, usize::MAX) {
+            return Verdict::Unknown;
+        }
+        decide_sat(&self.space, aig, fwd, node, target, self.opts)
     }
 }
 
@@ -615,13 +717,11 @@ impl Prover for ConeProver<'_> {
 pub fn fraig(aig: &mut Aig, opts: &FraigOptions) -> usize {
     let mut classes = SimClasses::new(aig, opts.seed, opts.words);
     let mut fwd = Forward::identity(aig.len());
-    let counts = sweep(
-        aig,
-        &mut classes,
-        &mut fwd,
-        &mut ConeProver { opts },
-        opts.max_attempts,
-    );
+    let mut prover = ConeProver {
+        opts,
+        space: ConeSpace::default(),
+    };
+    let counts = sweep(aig, &mut classes, &mut fwd, &mut prover, opts.max_attempts);
     let merged = counts.merged();
     if merged > 0 {
         *aig = aig.rebuild_with(&mut fwd);

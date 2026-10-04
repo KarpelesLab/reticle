@@ -17,7 +17,6 @@
 //! inventing an answer, when the leaves are not a cut of the root.
 
 use super::Edge;
-use super::ihash::{IntMap, IntSet};
 use super::truth::TruthTable;
 
 /// The fanins of an AND node, or `None` for an input or the constant.
@@ -28,10 +27,12 @@ pub type Fanins<'a> = dyn FnMut(u32) -> Option<(Edge, Edge)> + 'a;
 /// leaves each. Deterministic: expansions are explored breadth first in
 /// leaf order.
 pub fn enumerate_cuts(fanins: &mut Fanins<'_>, root: u32, k: usize, limit: usize) -> Vec<Vec<u32>> {
-    let mut seen: IntSet<Vec<u32>> = IntSet::default();
+    // `seen` never holds more than `limit + 1` entries — a cut joins it
+    // exactly when it joins `result`, which stops at `limit` — so a linear
+    // scan over short leaf lists is cheaper than hashing every one of them.
+    let mut seen: Vec<Vec<u32>> = vec![vec![root]];
     let mut result = Vec::new();
     let mut queue: Vec<Vec<u32>> = vec![vec![root]];
-    seen.insert(vec![root]);
     let mut head = 0;
     while head < queue.len() && result.len() < limit {
         let cut = queue[head].clone();
@@ -55,7 +56,8 @@ pub fn enumerate_cuts(fanins: &mut Fanins<'_>, root: u32, k: usize, limit: usize
                 continue;
             }
             next.sort_unstable();
-            if seen.insert(next.clone()) {
+            if !seen.contains(&next) {
+                seen.push(next.clone());
                 result.push(next.clone());
                 if result.len() >= limit {
                     break;
@@ -109,35 +111,138 @@ pub fn reconvergent_cut(fanins: &mut Fanins<'_>, root: u32, k: usize) -> Vec<u32
     leaves
 }
 
+/// Reusable working space for the cone walks.
+///
+/// A pass that walks a cone per cut of every node — rewriting takes 32 cuts
+/// a node, refactoring one — used to allocate a visited set, a table map, a
+/// stack and an order vector on each of those walks, and to hash a node
+/// index on every step of them. One of these instead is allocated once per
+/// pass and grown to the graph; starting a walk costs one counter increment.
+///
+/// Nothing about the walk changes: the same traversal order, the same cone,
+/// the same refusals. That is why the allocating [`cone_nodes`] and
+/// [`cone_truth`] are still here, as wrappers over this code with a scratch
+/// of their own.
+#[derive(Clone, Debug, Default)]
+pub struct ConeScratch {
+    /// The walk a node was last seen in; equal to `epoch` means "seen".
+    stamp: Vec<u32>,
+    /// This walk's number. Zero is never a walk, so a stamp that has just
+    /// been grown reads as unseen.
+    epoch: u32,
+    /// For a node seen in this walk, where its table is in `tables`, or
+    /// [`NO_SLOT`] when it has none.
+    slot: Vec<u32>,
+    /// The tables of this walk, in the order they were computed.
+    tables: Vec<TruthTable>,
+    /// The traversal stack: `(node, its fanins have been pushed)`.
+    stack: Vec<(u32, bool)>,
+    /// The cone of the last walk, fanins before fanouts.
+    order: Vec<u32>,
+}
+
+/// The `slot` of a node that has been seen but has no table.
+const NO_SLOT: u32 = u32::MAX;
+
+impl ConeScratch {
+    /// Empty working space.
+    pub fn new() -> ConeScratch {
+        ConeScratch::default()
+    }
+
+    /// Starts a walk: every node reads as unseen again, in constant time.
+    fn begin(&mut self) {
+        self.epoch = self.epoch.wrapping_add(1);
+        if self.epoch == 0 {
+            // Wrapped around: a stale stamp would alias the new epoch.
+            self.stamp.iter_mut().for_each(|s| *s = 0);
+            self.epoch = 1;
+        }
+        self.tables.clear();
+        self.stack.clear();
+        self.order.clear();
+    }
+
+    /// Makes room for `node`.
+    fn room(&mut self, node: u32) {
+        let need = node as usize + 1;
+        if self.stamp.len() < need {
+            self.stamp.resize(need, 0);
+            self.slot.resize(need, NO_SLOT);
+        }
+    }
+
+    /// True when `node` has been seen in this walk.
+    fn seen(&self, node: u32) -> bool {
+        self.stamp.get(node as usize) == Some(&self.epoch)
+    }
+
+    /// Marks `node` seen; false when it already was.
+    fn mark(&mut self, node: u32) -> bool {
+        self.room(node);
+        if self.stamp[node as usize] == self.epoch {
+            return false;
+        }
+        self.stamp[node as usize] = self.epoch;
+        self.slot[node as usize] = NO_SLOT;
+        true
+    }
+
+    /// Records `table` as the function of `node`.
+    fn set_table(&mut self, node: u32, table: TruthTable) {
+        self.room(node);
+        self.stamp[node as usize] = self.epoch;
+        self.slot[node as usize] = u32::try_from(self.tables.len()).expect("table count");
+        self.tables.push(table);
+    }
+
+    /// Where `node`'s table is, when it has one in this walk.
+    fn table_at(&self, node: u32) -> Option<usize> {
+        if !self.seen(node) {
+            return None;
+        }
+        let at = *self.slot.get(node as usize)?;
+        (at != NO_SLOT).then_some(at as usize)
+    }
+
+    /// Walks the cone between `leaves` and `root` into `self.order`.
+    fn walk(&mut self, fanins: &mut Fanins<'_>, root: u32, leaves: &[u32]) {
+        self.begin();
+        for &leaf in leaves {
+            self.mark(leaf);
+        }
+        self.mark(0);
+        self.stack.push((root, false));
+        while let Some((id, expanded)) = self.stack.pop() {
+            if expanded {
+                self.order.push(id);
+                continue;
+            }
+            if !self.mark(id) {
+                continue;
+            }
+            let Some((a, b)) = fanins(id) else {
+                // An input reached without passing a leaf: the cut does not
+                // separate it, treat it as an implicit leaf.
+                continue;
+            };
+            self.stack.push((id, true));
+            if !self.seen(b.node()) {
+                self.stack.push((b.node(), false));
+            }
+            if !self.seen(a.node()) {
+                self.stack.push((a.node(), false));
+            }
+        }
+    }
+}
+
 /// The nodes of the cone between `leaves` and `root`, in topological
 /// order (fanins first), `root` last; the leaves are not included.
 pub fn cone_nodes(fanins: &mut Fanins<'_>, root: u32, leaves: &[u32]) -> Vec<u32> {
-    let mut order = Vec::new();
-    let mut visited: IntSet<u32> = leaves.iter().copied().collect();
-    visited.insert(0);
-    let mut stack: Vec<(u32, bool)> = vec![(root, false)];
-    while let Some((id, expanded)) = stack.pop() {
-        if expanded {
-            order.push(id);
-            continue;
-        }
-        if !visited.insert(id) {
-            continue;
-        }
-        let Some((a, b)) = fanins(id) else {
-            // An input reached without passing a leaf: the cut does not
-            // separate it, treat it as an implicit leaf.
-            continue;
-        };
-        stack.push((id, true));
-        if !visited.contains(&b.node()) {
-            stack.push((b.node(), false));
-        }
-        if !visited.contains(&a.node()) {
-            stack.push((a.node(), false));
-        }
-    }
-    order
+    let mut scratch = ConeScratch::new();
+    scratch.walk(fanins, root, leaves);
+    std::mem::take(&mut scratch.order)
 }
 
 /// The function of `root` over the cut `leaves` (leaf `i` is variable
@@ -155,22 +260,50 @@ pub fn cone_truth(
     leaves: &[u32],
     vars: usize,
 ) -> Option<TruthTable> {
-    let mut tables: IntMap<u32, TruthTable> = IntMap::default();
-    tables.insert(0, TruthTable::constant(vars, false));
+    cone_truth_with(&mut ConeScratch::new(), fanins, root, leaves, vars)
+}
+
+/// [`cone_truth`] over working space the caller keeps, for a pass that wants
+/// one cone per cut of every node.
+pub fn cone_truth_with(
+    scratch: &mut ConeScratch,
+    fanins: &mut Fanins<'_>,
+    root: u32,
+    leaves: &[u32],
+    vars: usize,
+) -> Option<TruthTable> {
+    scratch.walk(fanins, root, leaves);
+    scratch.set_table(0, TruthTable::constant(vars, false));
     for (i, &leaf) in leaves.iter().enumerate() {
-        tables.insert(leaf, TruthTable::var(vars, i));
+        scratch.set_table(leaf, TruthTable::var(vars, i));
     }
-    for id in cone_nodes(fanins, root, leaves) {
+    // `order` is finished and only `tables` grows below, so indexing it is
+    // sound and saves copying the cone out of the scratch.
+    for at in 0..scratch.order.len() {
+        let id = scratch.order[at];
         let (a, b) = fanins(id).expect("cone node is an AND");
         // A fanin with no table is neither the constant, nor a leaf, nor a
         // node of the cone: it is an input this leaf set does not separate.
-        let ta = tables.get(&a.node())?.clone();
-        let tb = tables.get(&b.node())?.clone();
-        let ta = if a.is_complement() { ta.not() } else { ta };
-        let tb = if b.is_complement() { tb.not() } else { tb };
-        tables.insert(id, ta.and(&tb));
+        let ia = scratch.table_at(a.node())?;
+        let ib = scratch.table_at(b.node())?;
+        let ta = if a.is_complement() {
+            scratch.tables[ia].not()
+        } else {
+            scratch.tables[ia].clone()
+        };
+        let tb = if b.is_complement() {
+            scratch.tables[ib].not()
+        } else {
+            scratch.tables[ib].clone()
+        };
+        scratch.set_table(id, ta.and(&tb));
     }
-    tables.remove(&root)
+    let at = scratch.table_at(root)?;
+    // The caller owns the answer; the slot it came from is not read again.
+    Some(std::mem::replace(
+        &mut scratch.tables[at],
+        TruthTable::constant(0, false),
+    ))
 }
 
 #[cfg(test)]
