@@ -104,9 +104,10 @@ So the mapping equivalence check costs **under two seconds** on this design,
 not the fourteen a subtraction of `synth --lut 4 --verify` from
 `synth --lut 4` suggests. `reticle fpga --verify` is the figure to read for
 it, because that flow runs the mapping check and nothing else: 10.28 s
-against 8.52 s without, so 1.76 s.
+against 8.52 s without, so 1.76 s — and 10.60 against 8.06, so 2.5 s, on a
+second run of the same comparison.
 
-Within that 1.76 s (55 samples):
+Within those two seconds (55 samples):
 
 | frame | share of the check |
 |---|---|
@@ -140,21 +141,40 @@ All of it output-preserving; see the next section.
 | `cofactor` and `depends_on` stop building tables to read a mask | `aig::truth` |
 | `and_with`, `and_not_with`, `or_with`: in-place forms for `isop` | `aig::truth` |
 
-Interleaved best-of-two child CPU time, `dev` profile:
+Interleaved best-of-three child CPU time, `dev` profile:
 
 | command | before | after | change |
 |---|---|---|---|
-| `check` (parse and elaborate) | — | — | untouched |
-| `synth` (generic synthesis, no mapping) | 0.40 s | 0.38 s | −5% |
-| `synth --lut 4` | 6.94 s | 3.46 s | **−50%** |
-| `synth --lut 6` | 6.93 s | 3.70 s | **−47%** |
-| `synth --lut 4 --verify` | 18.49 s | 14.15 s | −23% |
-| `fpga ecp5` | 8.52 s | 4.44 s | **−48%** |
-| `fpga ecp5 --verify` | 10.28 s | 5.44 s | **−47%** |
-| the mapping check alone (the difference of the last two) | 1.76 s | 1.00 s | **−43%** |
+| `check` (parse and elaborate) | 0.03 s | 0.03 s | untouched |
+| `sim` (`usb_ulpi_device_tb`, to 80 µs) | 0.58 s | 0.64 s | untouched |
+| `synth` (generic synthesis, no mapping) | 0.37 s | 0.39 s | noise |
+| `synth --lut 4` | 7.22 s | 3.31 s | **−54%** |
+| `synth --lut 6` | 7.62 s | 3.68 s | **−52%** |
+| `synth --lut 4 --verify` | 18.19 s | 13.57 s | −25% |
+| `fpga ecp5` | 8.06 s | 4.09 s | **−49%** |
+| `fpga ecp5 --verify` | 10.60 s | 5.27 s | **−50%** |
+| the mapping check alone (the difference of the last two) | 2.5 s | 1.2 s | about half |
 
-`synth --lut 4 --verify` improves least because half of it is the generic
-equivalence check, which none of this touches.
+The last row is a difference of two timings and carries the noise of both: a
+second run of the same comparison put it at 1.76 s against 1.00 s. Either way
+it is roughly halved, and either way it is a long way from the fourteen
+seconds that subtracting `synth --lut 4` from `synth --lut 4 --verify`
+suggests. `synth --lut 4 --verify` improves least of the mapping commands
+because half of it is the generic equivalence check, which none of this
+touches.
+
+And the gate, which is what this was for. `cargo test --all-features`, both
+trees, same machine, same afternoon:
+
+| | before | after | change |
+|---|---|---|---|
+| `tests/ip_library.rs`, the slowest suite | 464.67 s | 227.63 s | **−51%** |
+| the whole test step, 65 binaries | 1007 s | 801 s | −20% |
+
+The suites that are not mapping-bound drift by tens of seconds between those
+two runs in *both* directions — `apple2` and `nes` place and route, which this
+work does not touch — so the total's −20% is a floor with load noise on top of
+it, and the line to believe is the first one.
 
 ## Why the output is the same
 
