@@ -43,7 +43,6 @@
 //! an AIG back as `And` / `Not` cells; the technology mappers in
 //! [`super::techmap`] write LUT or gate networks through the same path.
 
-use std::collections::HashMap;
 use std::fmt;
 use std::ops::Not;
 
@@ -53,6 +52,7 @@ pub mod blast;
 pub mod cut;
 pub mod emit;
 pub mod fraig;
+pub mod ihash;
 pub mod mffc;
 pub mod refactor;
 pub mod rewrite;
@@ -219,7 +219,7 @@ pub struct Aig {
     nodes: Vec<Node>,
     inputs: Vec<u32>,
     outputs: Vec<Edge>,
-    table: HashMap<(Edge, Edge), u32>,
+    table: ihash::IntMap<(Edge, Edge), u32>,
     refs: Vec<u32>,
     levels: Vec<u32>,
 }
@@ -256,7 +256,7 @@ impl Aig {
             nodes: Vec::new(),
             inputs: Vec::new(),
             outputs: Vec::new(),
-            table: HashMap::new(),
+            table: ihash::IntMap::default(),
             refs: Vec::new(),
             levels: Vec::new(),
         };

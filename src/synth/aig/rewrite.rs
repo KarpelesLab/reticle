@@ -298,18 +298,16 @@ impl Library {
     ///
     /// If `tt` was not reached; check [`Library::cost`] first.
     pub fn synthesize<S: Synth>(&self, tt: u16, s: &mut S) -> S::Sig {
-        let mut memo: std::collections::HashMap<u16, S::Sig> = std::collections::HashMap::new();
+        // An association list: a stored implementation is a handful of
+        // operations, so a linear scan is cheaper than hashing — and this
+        // runs once per cut of every node.
+        let mut memo: Vec<(u16, S::Sig)> = Vec::new();
         self.build(tt, s, &mut memo)
     }
 
-    fn build<S: Synth>(
-        &self,
-        tt: u16,
-        s: &mut S,
-        memo: &mut std::collections::HashMap<u16, S::Sig>,
-    ) -> S::Sig {
+    fn build<S: Synth>(&self, tt: u16, s: &mut S, memo: &mut Vec<(u16, S::Sig)>) -> S::Sig {
         let r = rep(tt);
-        if let Some(&sig) = memo.get(&r) {
+        if let Some(&(_, sig)) = memo.iter().find(|&&(k, _)| k == r) {
             return if tt == r { sig } else { s.not(sig) };
         }
         let entry = self.entries[r as usize];
@@ -341,7 +339,7 @@ impl Library {
                 s.or(hi, lo)
             }
         };
-        memo.insert(r, sig);
+        memo.push((r, sig));
         if tt == r { sig } else { s.not(sig) }
     }
 }

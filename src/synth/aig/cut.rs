@@ -16,9 +16,8 @@
 //! [`TruthTable`], by simulation of the cone — and refuses, rather than
 //! inventing an answer, when the leaves are not a cut of the root.
 
-use std::collections::{HashMap, HashSet};
-
 use super::Edge;
+use super::ihash::{IntMap, IntSet};
 use super::truth::TruthTable;
 
 /// The fanins of an AND node, or `None` for an input or the constant.
@@ -29,7 +28,7 @@ pub type Fanins<'a> = dyn FnMut(u32) -> Option<(Edge, Edge)> + 'a;
 /// leaves each. Deterministic: expansions are explored breadth first in
 /// leaf order.
 pub fn enumerate_cuts(fanins: &mut Fanins<'_>, root: u32, k: usize, limit: usize) -> Vec<Vec<u32>> {
-    let mut seen: HashSet<Vec<u32>> = HashSet::new();
+    let mut seen: IntSet<Vec<u32>> = IntSet::default();
     let mut result = Vec::new();
     let mut queue: Vec<Vec<u32>> = vec![vec![root]];
     seen.insert(vec![root]);
@@ -114,7 +113,7 @@ pub fn reconvergent_cut(fanins: &mut Fanins<'_>, root: u32, k: usize) -> Vec<u32
 /// order (fanins first), `root` last; the leaves are not included.
 pub fn cone_nodes(fanins: &mut Fanins<'_>, root: u32, leaves: &[u32]) -> Vec<u32> {
     let mut order = Vec::new();
-    let mut visited: HashSet<u32> = leaves.iter().copied().collect();
+    let mut visited: IntSet<u32> = leaves.iter().copied().collect();
     visited.insert(0);
     let mut stack: Vec<(u32, bool)> = vec![(root, false)];
     while let Some((id, expanded)) = stack.pop() {
@@ -156,7 +155,7 @@ pub fn cone_truth(
     leaves: &[u32],
     vars: usize,
 ) -> Option<TruthTable> {
-    let mut tables: HashMap<u32, TruthTable> = HashMap::new();
+    let mut tables: IntMap<u32, TruthTable> = IntMap::default();
     tables.insert(0, TruthTable::constant(vars, false));
     for (i, &leaf) in leaves.iter().enumerate() {
         tables.insert(leaf, TruthTable::var(vars, i));

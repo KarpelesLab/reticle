@@ -228,7 +228,13 @@ pub struct Counter<'v, 'a> {
     /// True when the structure hashed onto the root being replaced, which
     /// would make the replacement circular; such a candidate is rejected.
     pub hit_root: bool,
-    memo: std::collections::HashMap<(Trial, Trial), Trial>,
+    /// Memo of the AND pairs already priced, as an association list.
+    ///
+    /// One library structure has at most a handful of AND nodes, so a
+    /// linear scan over a `Vec` beats a hash map: it costs no allocation
+    /// on the many structures that have one or two ANDs, and this is the
+    /// innermost loop of rewriting.
+    memo: Vec<((Trial, Trial), Trial)>,
 }
 
 impl<'v, 'a> Counter<'v, 'a> {
@@ -241,7 +247,7 @@ impl<'v, 'a> Counter<'v, 'a> {
             root,
             added: 0,
             hit_root: false,
-            memo: std::collections::HashMap::new(),
+            memo: Vec::new(),
         }
     }
 }
@@ -266,7 +272,7 @@ impl Synth for Counter<'_, '_> {
 
     fn and(&mut self, a: Trial, b: Trial) -> Trial {
         let key = if a <= b { (a, b) } else { (b, a) };
-        if let Some(&r) = self.memo.get(&key) {
+        if let Some(&(_, r)) = self.memo.iter().find(|&&(k, _)| k == key) {
             return r;
         }
         let result = match (a, b) {
@@ -294,7 +300,7 @@ impl Synth for Counter<'_, '_> {
                 Trial::New(self.added, false)
             }
         };
-        self.memo.insert(key, result);
+        self.memo.push((key, result));
         result
     }
 }
@@ -320,7 +326,9 @@ pub struct Builder<'v, 'a> {
     view: &'v mut View<'a>,
     leaves: Vec<Edge>,
     root: u32,
-    revived: std::collections::HashSet<u32>,
+    /// Dead nodes this structure has already revived. A structure revives
+    /// a handful of nodes at most, so a `Vec` scan is cheaper than a set.
+    revived: Vec<u32>,
 }
 
 impl<'v, 'a> Builder<'v, 'a> {
@@ -331,7 +339,7 @@ impl<'v, 'a> Builder<'v, 'a> {
             view,
             leaves,
             root,
-            revived: std::collections::HashSet::new(),
+            revived: Vec::new(),
         }
     }
 }
@@ -362,8 +370,9 @@ impl Synth for Builder<'_, '_> {
                 && self.view.aig.refs(n) == 0
                 && (n as usize) < self.view.old_len
                 && !self.leaves.iter().any(|l| l.node() == n)
-                && self.revived.insert(n)
+                && !self.revived.contains(&n)
             {
+                self.revived.push(n);
                 self.view.revive(n, &self.leaves);
             }
             return e;

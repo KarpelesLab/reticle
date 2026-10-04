@@ -26,11 +26,92 @@ fn word_mask(vars: usize) -> u64 {
     }
 }
 
+/// Where a table keeps its words.
+///
+/// A table of at most six variables is one word, and the overwhelming
+/// majority of them are: every cut of the rewriting library has four
+/// leaves, and a technology mapper's cuts have at most eight. Keeping
+/// that word in a `Vec` meant one heap allocation per `and`, per `not`
+/// and per `clone` — and `cone_truth` performs five of those per node of
+/// every cone it walks, once per cut of every node of the graph. Storing
+/// it inline removes the allocation without changing anything a caller
+/// can observe: [`TruthTable::words`] hands back a slice either way.
+#[derive(Clone, Debug)]
+enum Words {
+    /// One word, held in place: `words_for(vars) == 1`, so `vars <= 6`.
+    Inline([u64; 1]),
+    /// `2^(vars - 6)` words on the heap, for a table over seven variables
+    /// or more.
+    Heap(Vec<u64>),
+}
+
+impl Words {
+    /// The words as a slice.
+    #[inline]
+    fn as_slice(&self) -> &[u64] {
+        match self {
+            Words::Inline(one) => one,
+            Words::Heap(many) => many,
+        }
+    }
+
+    /// The words as a mutable slice.
+    #[inline]
+    fn as_mut_slice(&mut self) -> &mut [u64] {
+        match self {
+            Words::Inline(one) => one,
+            Words::Heap(many) => many,
+        }
+    }
+
+    /// The words of a table over `vars` variables, all `fill`.
+    #[inline]
+    fn filled(vars: usize, fill: u64) -> Words {
+        let n = words_for(vars);
+        if n == 1 {
+            Words::Inline([fill])
+        } else {
+            Words::Heap(vec![fill; n])
+        }
+    }
+
+    /// The representation a `Vec` of words belongs in. One word always
+    /// becomes [`Words::Inline`], so a table has exactly one
+    /// representation for its size and equality cannot disagree with it.
+    #[inline]
+    fn from_vec(words: Vec<u64>) -> Words {
+        match words.as_slice() {
+            [one] => Words::Inline([*one]),
+            _ => Words::Heap(words),
+        }
+    }
+}
+
 /// A truth table over `vars` variables.
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Debug)]
 pub struct TruthTable {
     vars: usize,
-    words: Vec<u64>,
+    words: Words,
+}
+
+// Equality and hashing are over the variable count and the words, never
+// over which of the two representations holds them. `Words::from_vec`
+// already makes the representation a function of the size, so a derive
+// would agree; spelling it out means a future constructor cannot make two
+// equal tables compare unequal.
+impl PartialEq for TruthTable {
+    fn eq(&self, other: &TruthTable) -> bool {
+        self.vars == other.vars && self.words.as_slice() == other.words.as_slice()
+    }
+}
+
+impl Eq for TruthTable {}
+
+impl std::hash::Hash for TruthTable {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.vars.hash(state);
+        self.words.as_slice().hash(state);
+    }
 }
 
 impl TruthTable {
@@ -39,15 +120,18 @@ impl TruthTable {
         let fill = if value { word_mask(vars) } else { 0 };
         TruthTable {
             vars,
-            words: vec![fill; words_for(vars)],
+            words: Words::filled(vars, fill),
         }
     }
 
     /// The projection onto variable `v`.
     pub fn var(vars: usize, v: usize) -> TruthTable {
         assert!(v < vars, "variable {v} out of range for {vars} variables");
-        let words = words_for(vars);
-        let mut out = vec![0u64; words];
+        let mut table = TruthTable {
+            vars,
+            words: Words::filled(vars, 0),
+        };
+        let out = table.words.as_mut_slice();
         if v < 6 {
             let pattern = match v {
                 0 => 0xAAAA_AAAA_AAAA_AAAA,
@@ -57,7 +141,7 @@ impl TruthTable {
                 4 => 0xFFFF_0000_FFFF_0000,
                 _ => 0xFFFF_FFFF_0000_0000,
             };
-            for w in &mut out {
+            for w in out.iter_mut() {
                 *w = pattern & word_mask(vars);
             }
         } else {
@@ -67,15 +151,18 @@ impl TruthTable {
                 }
             }
         }
-        TruthTable { vars, words: out }
+        table
     }
 
     /// A table from its words (bit `i` of word `i / 64` is pattern `i`).
     pub fn from_words(vars: usize, words: Vec<u64>) -> TruthTable {
         assert_eq!(words.len(), words_for(vars), "word count");
-        let mut t = TruthTable { vars, words };
+        let mut t = TruthTable {
+            vars,
+            words: Words::from_vec(words),
+        };
         if vars < 6 {
-            t.words[0] &= word_mask(vars);
+            t.words.as_mut_slice()[0] &= word_mask(vars);
         }
         t
     }
@@ -93,18 +180,18 @@ impl TruthTable {
 
     /// The words, least significant pattern first.
     pub fn words(&self) -> &[u64] {
-        &self.words
+        self.words.as_slice()
     }
 
     /// The single word of a table over at most six variables.
     pub fn as_u64(&self) -> u64 {
         assert!(self.vars <= 6);
-        self.words[0]
+        self.words.as_slice()[0]
     }
 
     /// The value for input pattern `index`.
     pub fn bit(&self, index: usize) -> bool {
-        (self.words[index / 64] >> (index % 64)) & 1 == 1
+        (self.words.as_slice()[index / 64] >> (index % 64)) & 1 == 1
     }
 
     /// Number of input patterns (`2^vars`).
@@ -119,12 +206,13 @@ impl TruthTable {
 
     /// True for the constant-false table.
     pub fn is_zero(&self) -> bool {
-        self.words.iter().all(|&w| w == 0)
+        self.words.as_slice().iter().all(|&w| w == 0)
     }
 
     /// True for the constant-true table.
     pub fn is_ones(&self) -> bool {
         self.words
+            .as_slice()
             .iter()
             .enumerate()
             .all(|(i, &w)| w == if i == 0 { word_mask(self.vars) } else { !0 })
@@ -132,21 +220,17 @@ impl TruthTable {
 
     /// Number of patterns mapping to true.
     pub fn count_ones(&self) -> u32 {
-        self.words.iter().map(|w| w.count_ones()).sum()
+        self.words.as_slice().iter().map(|w| w.count_ones()).sum()
     }
 
     /// The complement.
     pub fn not(&self) -> TruthTable {
         let mask = word_mask(self.vars);
-        TruthTable {
-            vars: self.vars,
-            words: self
-                .words
-                .iter()
-                .enumerate()
-                .map(|(i, &w)| if i == 0 { !w & mask } else { !w })
-                .collect(),
+        let mut out = self.clone();
+        for (i, w) in out.words.as_mut_slice().iter_mut().enumerate() {
+            *w = if i == 0 { !*w & mask } else { !*w };
         }
+        out
     }
 
     fn zip(&self, other: &TruthTable, f: impl Fn(u64, u64) -> u64) -> TruthTable {
@@ -154,15 +238,16 @@ impl TruthTable {
             self.vars, other.vars,
             "truth tables over different variables"
         );
-        TruthTable {
-            vars: self.vars,
-            words: self
-                .words
-                .iter()
-                .zip(&other.words)
-                .map(|(&a, &b)| f(a, b))
-                .collect(),
+        let mut out = self.clone();
+        for (w, &b) in out
+            .words
+            .as_mut_slice()
+            .iter_mut()
+            .zip(other.words.as_slice())
+        {
+            *w = f(*w, b);
         }
+        out
     }
 
     /// Conjunction.
@@ -195,12 +280,13 @@ impl TruthTable {
     /// The cofactor with variable `v` fixed to `value`, still over the same
     /// variables (the result no longer depends on `v`).
     pub fn cofactor(&self, v: usize, value: bool) -> TruthTable {
-        let mut out = self.words.clone();
+        let mut table = self.clone();
+        let out = table.words.as_mut_slice();
         if v < 6 {
             let shift = 1u32 << v;
-            let keep = TruthTable::var(6.min(self.vars).max(v + 1), v).words[0];
+            let keep = TruthTable::var(6.min(self.vars).max(v + 1), v).as_u64();
             let keep = if value { keep } else { !keep };
-            for w in &mut out {
+            for w in out.iter_mut() {
                 let kept = *w & keep;
                 *w = if value {
                     kept | (kept >> shift)
@@ -213,18 +299,16 @@ impl TruthTable {
             }
         } else {
             let stride = 1usize << (v - 6);
+            let src_words = self.words.as_slice();
             for (i, word) in out.iter_mut().enumerate() {
                 let hi = (i >> (v - 6)) & 1 == 1;
                 if hi != value {
                     let src = if value { i + stride } else { i - stride };
-                    *word = self.words[src];
+                    *word = src_words[src];
                 }
             }
         }
-        TruthTable {
-            vars: self.vars,
-            words: out,
-        }
+        table
     }
 
     /// The same function over `vars` variables (`vars >= self.vars`), the
@@ -234,7 +318,7 @@ impl TruthTable {
         if vars == self.vars {
             return self.clone();
         }
-        let mut word = self.words[0];
+        let mut word = self.words.as_slice()[0];
         let mut cur = self.vars;
         while cur < 6 && cur < vars {
             let width = 1u32 << cur;
@@ -247,7 +331,7 @@ impl TruthTable {
         }
         let mut out = Vec::with_capacity(words);
         while out.len() < words {
-            out.extend_from_slice(&self.words);
+            out.extend_from_slice(self.words.as_slice());
         }
         TruthTable::from_words(vars, out)
     }
@@ -266,7 +350,7 @@ impl TruthTable {
                         target |= 1 << p;
                     }
                 }
-                out.words[target / 64] |= 1u64 << (target % 64);
+                out.words.as_mut_slice()[target / 64] |= 1u64 << (target % 64);
             }
         }
         out
@@ -279,7 +363,7 @@ impl TruthTable {
         for index in 0..self.len() {
             if self.bit(index) {
                 let target = index ^ mask;
-                out.words[target / 64] |= 1u64 << (target % 64);
+                out.words.as_mut_slice()[target / 64] |= 1u64 << (target % 64);
             }
         }
         out
@@ -299,7 +383,7 @@ impl TruthTable {
                 }
             }
             if self.bit(full) {
-                out.words[index / 64] |= 1u64 << (index % 64);
+                out.words.as_mut_slice()[index / 64] |= 1u64 << (index % 64);
             }
         }
         out

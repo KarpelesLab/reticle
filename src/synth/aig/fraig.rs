@@ -46,8 +46,7 @@
 //! both, debug builds assert that every merged pair agrees on every
 //! simulation vector seen so far, which a wrong merge usually does not.
 
-use std::collections::{HashMap, HashSet};
-
+use super::ihash::{IntMap, IntSet};
 use super::truth::TruthTable;
 use super::{Aig, Edge, Forward, Rng};
 
@@ -142,7 +141,7 @@ impl SimClasses {
             .map(|i| vals[i * words..(i + 1) * words].to_vec())
             .collect();
         let phase: Vec<bool> = sigs.iter().map(|s| s[0] & 1 == 1).collect();
-        let mut index: HashMap<Vec<u64>, u32> = HashMap::new();
+        let mut index: IntMap<Vec<u64>, u32> = IntMap::default();
         let mut class = Vec::with_capacity(aig.len());
         let mut members: Vec<Vec<u32>> = Vec::new();
         for (i, sig) in sigs.iter().enumerate() {
@@ -281,7 +280,7 @@ impl SimClasses {
                 continue;
             }
             let old = std::mem::take(&mut self.members[c]);
-            let mut groups: HashMap<u64, u32> = HashMap::new();
+            let mut groups: IntMap<u64, u32> = IntMap::default();
             groups.insert(first, u32::try_from(c).expect("class index"));
             for m in old {
                 let v = self.last_word(m);
@@ -389,7 +388,7 @@ pub fn sweep(
             counts.structural += 1;
             continue;
         }
-        let mut tried: HashSet<Edge> = HashSet::new();
+        let mut tried: IntSet<Edge> = IntSet::default();
         'node: loop {
             let fresh: Vec<Edge> = classes
                 .candidates(id)
@@ -447,7 +446,7 @@ fn cones(
 ) -> Option<(Vec<u32>, Vec<u32>)> {
     let mut order = Vec::new();
     let mut inputs = Vec::new();
-    let mut visited: HashSet<u32> = HashSet::new();
+    let mut visited: IntSet<u32> = IntSet::default();
     visited.insert(0);
     for &root in roots {
         let mut stack: Vec<(u32, bool)> = vec![(root, false)];
@@ -487,10 +486,10 @@ fn simulate_cone(
     aig: &Aig,
     fwd: &mut Forward,
     order: &[u32],
-    inputs: &HashMap<u32, TruthTable>,
+    inputs: &IntMap<u32, TruthTable>,
     vars: usize,
-) -> HashMap<u32, TruthTable> {
-    let mut values: HashMap<u32, TruthTable> = inputs.clone();
+) -> IntMap<u32, TruthTable> {
+    let mut values: IntMap<u32, TruthTable> = inputs.clone();
     values.insert(0, TruthTable::constant(vars, false));
     for &id in order {
         let (a, b) = aig.fanins(id);
@@ -519,7 +518,7 @@ fn prove_exhaustive(
     if vars > opts.max_exhaustive.min(16) {
         return None;
     }
-    let tables: HashMap<u32, TruthTable> = inputs
+    let tables: IntMap<u32, TruthTable> = inputs
         .iter()
         .enumerate()
         .map(|(i, &pi)| (pi, TruthTable::var(vars, i)))
@@ -551,14 +550,14 @@ fn prove_sat(
     };
     let mut solver = Solver::new();
     solver.set_conflict_limit(Some(opts.sat_conflicts));
-    let mut vars: HashMap<u32, Lit> = HashMap::new();
+    let mut vars: IntMap<u32, Lit> = IntMap::default();
     let zero = Lit::pos(solver.new_var());
     solver.add_clause(&[!zero]);
     vars.insert(0, zero);
     for &pi in &inputs {
         vars.insert(pi, Lit::pos(solver.new_var()));
     }
-    let lit_of = |vars: &HashMap<u32, Lit>, e: Edge| -> Lit {
+    let lit_of = |vars: &IntMap<u32, Lit>, e: Edge| -> Lit {
         let l = vars[&e.node()];
         if e.is_complement() { !l } else { l }
     };
