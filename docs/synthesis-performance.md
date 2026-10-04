@@ -197,18 +197,29 @@ The reasoning behind each change, rather than the test result:
 
 ## What is left, and what would parallelise
 
-Sampled again after the work, `synth --lut 4` at 3.46 s:
+`synth --lut 4` sampled twice more. The middle column is 219 samples taken
+after the hashing and cone-scratch work, with the run at 3.6 s, which is what
+chose the last two changes; the right-hand column is 66 samples of the final
+state. **Sixty-six samples is coarse** — it separates a fifth of the run from
+a twentieth and nothing finer — and it is low because `eu-stack` collects
+slowly while the machine is busy. Both are inclusive shares, so the entries
+nest.
 
-| frame | share |
-|---|---|
-| `aig::optimize` | 89.5% |
-| — `rewrite::rewrite` | 47.5% |
-| — `refactor::refactor` | 35.6% |
-| — — `refactor::isop` | 22.8% |
-| `rewrite::Library::get`, building the 65536-entry table once | 11.0% |
-| `PriorityCuts::compute` and the covering | 2.7% |
-| inside a hash map or set | 6.8% |
-| inside the allocator or `Vec` | 35.2% |
+| frame | mid | final |
+|---|---|---|
+| `aig::optimize` | 89.5% | 87.9% |
+| — `rewrite::rewrite` | 47.5% | 40.9% |
+| — `refactor::refactor` | 35.6% | 34.8% |
+| — — `refactor::isop` | 22.8% | 16.7% |
+| `rewrite::Library::get`, building the 65536-entry table once | 11.0% | 18.2% |
+| `PriorityCuts::compute` and the covering | 2.7% | 4.5% |
+| inside a hash map or set | 6.8% | 4.5% |
+| inside the allocator or `Vec` | 35.2% | 34.8% |
+
+`isop` fell by about a quarter, which is what the in-place tables were for.
+Hashing is down from half the run to a twentieth of it. The library build and
+the covering have not changed at all — their share grew because the run around
+them shrank.
 
 Three things are still on the table and were not taken:
 
