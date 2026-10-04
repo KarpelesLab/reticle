@@ -2081,6 +2081,194 @@ fn manhattan(a: (u32, u32), b: (u32, u32)) -> u64 {
 // Simulated annealing
 // ---------------------------------------------------------------------------
 
+/// The annealer's wirelength bookkeeping: every signal's bounding box,
+/// kept up to date as cells move rather than recomputed from its pins.
+///
+/// This is the structure the placer did not have, and not having it is
+/// what made a big design cost more than its move count. The cost of a
+/// move is the change in half-perimeter wirelength of the signals it
+/// touches, and that was worked out by reading **every pin of every one of
+/// those signals, twice, for every move**. A design with a thousand
+/// flip-flops has a clock net with a thousand sinks, a quarter of the
+/// moves touch it, and a move of one cell cannot change where the other
+/// nine hundred and ninety-nine pins are. `usb_host_target.v` read
+/// 24 billion pin positions to place 4304 cells.
+///
+/// What is kept instead, per signal, is **how many of its pins are in each
+/// tile column and in each tile row**, with the lowest and highest
+/// occupied index of each. Moving one pin is two decrements, two
+/// increments, and a walk of as many columns and rows as the box really
+/// shrank by — nothing in the net's fan-out at all.
+///
+/// The numbers are **exactly** the ones [`signal_hpwl`] produces, because a
+/// bounding box is decided by which columns and rows hold a pin and by
+/// nothing else. So the same moves are accepted in the same order and the
+/// placement does not change.
+///
+/// The counts cost `signals * (width + height)` `u32`s: 2 MiB for that
+/// design on this die.
+struct Spans {
+    /// Tile columns of the die.
+    width: usize,
+    /// Tile rows of the die.
+    height: usize,
+    /// Per signal, how many of its placed pins are in each column, at
+    /// `signal * width + x`.
+    columns: Vec<u32>,
+    /// Per signal, the same by row, at `signal * height + y`.
+    rows: Vec<u32>,
+    /// Per signal, `(x0, x1, y0, y1)`: the lowest and highest occupied
+    /// column and row. Meaningless while `placed` is zero.
+    extent: Vec<(u32, u32, u32, u32)>,
+    /// Per signal, how many of its pins are on a placed instance.
+    placed: Vec<u32>,
+}
+
+impl Spans {
+    /// The bounding boxes of `placement`, counted from scratch.
+    fn new(netlist: &Netlist, graph: &RoutingGraph, placement: &Placement) -> Spans {
+        let signals = netlist.signals.len();
+        let width = (graph.width as usize).max(1);
+        let height = (graph.height as usize).max(1);
+        let mut out = Spans {
+            width,
+            height,
+            columns: vec![0; signals * width],
+            rows: vec![0; signals * height],
+            extent: vec![(0, 0, 0, 0); signals],
+            placed: vec![0; signals],
+        };
+        for (signal, s) in netlist.signals.iter().enumerate() {
+            for pin in s.driver.iter().chain(s.sinks.iter()) {
+                let Some(site) = placement.site_of(netlist.pins[*pin].instance) else {
+                    continue;
+                };
+                let (x, y) = graph.sites[site].tile;
+                out.add(signal, x, y);
+            }
+        }
+        out
+    }
+
+    /// Where in `columns` and `rows` a position of `signal` lives.
+    fn slots(&self, signal: usize, x: u32, y: u32) -> (usize, usize) {
+        let x = (x as usize).min(self.width - 1);
+        let y = (y as usize).min(self.height - 1);
+        (signal * self.width + x, signal * self.height + y)
+    }
+
+    /// Records one more pin of `signal` at `(x, y)`, growing its box.
+    fn add(&mut self, signal: usize, x: u32, y: u32) {
+        let (column, row) = self.slots(signal, x, y);
+        self.columns[column] += 1;
+        self.rows[row] += 1;
+        if self.placed[signal] == 0 {
+            self.extent[signal] = (x, x, y, y);
+        } else {
+            let (x0, x1, y0, y1) = self.extent[signal];
+            self.extent[signal] = (x0.min(x), x1.max(x), y0.min(y), y1.max(y));
+        }
+        self.placed[signal] += 1;
+    }
+
+    /// Takes one pin of `signal` at `(x, y)` away again.
+    ///
+    /// The box is left alone: it may now be wider than the pins that are
+    /// left, and [`Spans::settle`] is what narrows it once a whole batch of
+    /// removals and additions is in.
+    fn remove(&mut self, signal: usize, x: u32, y: u32) {
+        let (column, row) = self.slots(signal, x, y);
+        self.columns[column] = self.columns[column].saturating_sub(1);
+        self.rows[row] = self.rows[row].saturating_sub(1);
+        self.placed[signal] = self.placed[signal].saturating_sub(1);
+    }
+
+    /// Narrows `signal`'s box onto the columns and rows that still hold a
+    /// pin.
+    ///
+    /// The invariant [`Spans::add`] keeps is that no column below `x0` and
+    /// none above `x1` holds a pin, so this walk only crosses what the box
+    /// actually lost and never the width of the die.
+    fn settle(&mut self, signal: usize) {
+        if self.placed[signal] == 0 {
+            self.extent[signal] = (0, 0, 0, 0);
+            return;
+        }
+        let (mut x0, mut x1, mut y0, mut y1) = self.extent[signal];
+        let base = signal * self.width;
+        while x0 < x1 && self.columns[base + x0 as usize] == 0 {
+            x0 += 1;
+        }
+        while x1 > x0 && self.columns[base + x1 as usize] == 0 {
+            x1 -= 1;
+        }
+        let base = signal * self.height;
+        while y0 < y1 && self.rows[base + y0 as usize] == 0 {
+            y0 += 1;
+        }
+        while y1 > y0 && self.rows[base + y1 as usize] == 0 {
+            y1 -= 1;
+        }
+        self.extent[signal] = (x0, x1, y0, y1);
+    }
+
+    /// `signal`'s half-perimeter wirelength, in tiles.
+    fn hpwl_of(&self, signal: usize) -> u64 {
+        if self.placed[signal] == 0 {
+            return 0;
+        }
+        let (x0, x1, y0, y1) = self.extent[signal];
+        u64::from(x1 - x0) + u64::from(y1 - y0)
+    }
+
+    /// Every signal's, summed. This is [`hpwl`] by another route and has to
+    /// agree with it.
+    fn total(&self) -> u64 {
+        (0..self.placed.len()).map(|s| self.hpwl_of(s)).sum()
+    }
+}
+
+/// The buffers one annealing move reuses, so that a move allocates
+/// nothing.
+///
+/// `carried` is the part that is not scratch: every instance's pins that
+/// carry a signal, worked out once. The annealer used to ask
+/// [`signals_of`] for that on every move, which allocated a `Vec` and
+/// deduplicated it by scanning, for an answer that is a property of the
+/// netlist and never changes.
+struct Churn {
+    /// The bounding boxes; see [`Spans`].
+    spans: Spans,
+    /// Per instance, `(signal, pin)` for each of its pins that carries
+    /// one.
+    carried: Vec<Vec<(usize, usize)>>,
+    /// The signals the move in hand touches, without repeats.
+    touched: Vec<usize>,
+    /// Where each instance of the move in hand came from, for [`undo`].
+    previous: Vec<(usize, Option<usize>)>,
+}
+
+impl Churn {
+    /// The buffers for annealing `placement`.
+    fn new(netlist: &Netlist, graph: &RoutingGraph, placement: &Placement) -> Churn {
+        Churn {
+            spans: Spans::new(netlist, graph, placement),
+            carried: netlist
+                .instances
+                .iter()
+                .map(|inst| {
+                    inst.pins
+                        .iter()
+                        .filter_map(|pin| netlist.pins[*pin].signal.map(|signal| (signal, *pin)))
+                        .collect()
+                })
+                .collect(),
+            touched: Vec::new(),
+            previous: Vec::new(),
+        }
+    }
+}
+
 /// The half-perimeter wirelength of one signal, in tiles.
 fn signal_hpwl(
     netlist: &Netlist,
@@ -2117,19 +2305,6 @@ pub fn hpwl(netlist: &Netlist, graph: &RoutingGraph, placement: &Placement) -> u
         .sum()
 }
 
-/// The signals one instance touches, without repeats.
-fn signals_of(netlist: &Netlist, instance: usize) -> Vec<usize> {
-    let mut out = Vec::new();
-    for pin in &netlist.instances[instance].pins {
-        if let Some(signal) = netlist.pins[*pin].signal
-            && !out.contains(&signal)
-        {
-            out.push(signal);
-        }
-    }
-    out
-}
-
 /// One candidate move: which instances go where.
 type Move = Vec<(usize, usize)>;
 
@@ -2161,6 +2336,7 @@ fn anneal(
     // fit every design size.
     let mut samples = Vec::new();
     let mut probe = placement.clone();
+    let mut probe_churn = Churn::new(netlist, graph, &probe);
     for _ in 0..inner.min(100) {
         if let Some(candidate) = propose(
             netlist,
@@ -2173,13 +2349,13 @@ fn anneal(
             &mut rng,
             &probe,
         ) {
-            let (delta, _) = apply(netlist, graph, &mut probe, &candidate);
-            samples.push(delta);
+            samples.push(apply(graph, &mut probe_churn, &mut probe, &candidate));
         }
     }
     let mut temperature = 20.0 * stddev(&samples).max(1.0);
 
-    let mut current = hpwl(netlist, graph, placement) as f64;
+    let mut churn = Churn::new(netlist, graph, placement);
+    let mut current = churn.spans.total() as f64;
     // Annealing accepts uphill moves on purpose, so where it stops is not
     // where it was best. Keeping the best placement seen makes the pass
     // monotone: it can only improve on what legalisation produced.
@@ -2208,7 +2384,7 @@ fn anneal(
                 continue;
             };
             tried += 1;
-            let (delta, previous) = apply(netlist, graph, placement, &candidate);
+            let delta = apply(graph, &mut churn, placement, &candidate);
             if delta <= 0.0 || rng.unit() * (temperature + delta) < temperature {
                 accepted += 1;
                 current += delta;
@@ -2218,7 +2394,7 @@ fn anneal(
                     count(|work| &mut work.snapshots, 1);
                 }
             } else {
-                undo(placement, &previous);
+                undo(graph, &mut churn, placement);
             }
         }
         temperature *= options.cooling;
@@ -2337,54 +2513,89 @@ fn propose(
     shared.allows(placement, &candidate).then_some(candidate)
 }
 
-/// The cost of the signals a move touches, before it is applied.
-fn cost_of(netlist: &Netlist, graph: &RoutingGraph, placement: &Placement, m: &Move) -> f64 {
-    let mut signals: Vec<usize> = Vec::new();
+/// Applies a move, returning the change in wirelength.
+///
+/// Where each instance came from is recorded in [`Churn::previous`], which
+/// is what [`undo`] puts back; the wirelength comes out of [`Spans`] and
+/// not out of a rescan of the nets.
+fn apply(graph: &RoutingGraph, churn: &mut Churn, placement: &mut Placement, m: &Move) -> f64 {
+    churn.previous.clear();
     for (instance, _) in m {
-        for signal in signals_of(netlist, *instance) {
-            if !signals.contains(&signal) {
-                signals.push(signal);
-            }
-        }
+        let was = placement.site_of(*instance);
+        churn.previous.push((*instance, was));
     }
-    signals
-        .iter()
-        .map(|s| signal_hpwl(netlist, graph, placement, *s) as f64)
-        .sum()
-}
-
-/// Applies a move, returning the change in wirelength and where each
-/// instance it touched came from.
-fn apply(
-    netlist: &Netlist,
-    graph: &RoutingGraph,
-    placement: &mut Placement,
-    m: &Move,
-) -> (f64, Vec<(usize, Option<usize>)>) {
-    let before = cost_of(netlist, graph, placement, m);
-    let previous: Vec<(usize, Option<usize>)> = m
-        .iter()
-        .map(|(instance, _)| (*instance, placement.site_of(*instance)))
-        .collect();
-    for (instance, _) in m {
-        placement.unplace(*instance);
-    }
-    for (instance, site) in m {
-        placement.place(*instance, *site);
-    }
-    (cost_of(netlist, graph, placement, m) - before, previous)
+    retile(graph, churn, placement, m.iter().map(|(i, s)| (*i, Some(*s))))
 }
 
 /// Puts back what [`apply`] moved.
-fn undo(placement: &mut Placement, previous: &[(usize, Option<usize>)]) {
-    for (instance, _) in previous {
-        placement.unplace(*instance);
-    }
-    for (instance, site) in previous {
-        if let Some(site) = site {
-            placement.place(*instance, *site);
+fn undo(graph: &RoutingGraph, churn: &mut Churn, placement: &mut Placement) {
+    // `previous` is borrowed from the same value `retile` writes into, so
+    // the plan is taken out and put back rather than aliased.
+    let back = std::mem::take(&mut churn.previous);
+    let _ = retile(graph, churn, placement, back.iter().copied());
+    churn.previous = back;
+}
+
+/// Moves every instance of `plan` onto the site it names, keeping
+/// [`Churn::spans`] exact, and returns the change in half-perimeter
+/// wirelength.
+///
+/// The order matters: every affected pin leaves its old column and row
+/// before any of them arrives at a new one, because two cells of one move
+/// may be swapping places and a box told of the arrival first would
+/// believe a column still holds a pin it has lost.
+fn retile(
+    graph: &RoutingGraph,
+    churn: &mut Churn,
+    placement: &mut Placement,
+    plan: impl Iterator<Item = (usize, Option<usize>)> + Clone,
+) -> f64 {
+    churn.touched.clear();
+    for (instance, _) in plan.clone() {
+        for (signal, _) in &churn.carried[instance] {
+            if !churn.touched.contains(signal) {
+                churn.touched.push(*signal);
+            }
         }
     }
+    let before: u64 = churn
+        .touched
+        .iter()
+        .map(|s| churn.spans.hpwl_of(*s))
+        .sum();
+    let mut pins = 0u64;
+    for (instance, _) in plan.clone() {
+        if let Some(site) = placement.site_of(instance) {
+            let (x, y) = graph.sites[site].tile;
+            for index in 0..churn.carried[instance].len() {
+                let signal = churn.carried[instance][index].0;
+                churn.spans.remove(signal, x, y);
+                pins += 1;
+            }
+        }
+        placement.unplace(instance);
+    }
+    for (instance, site) in plan {
+        let Some(site) = site else { continue };
+        placement.place(instance, site);
+        let (x, y) = graph.sites[site].tile;
+        for index in 0..churn.carried[instance].len() {
+            let signal = churn.carried[instance][index].0;
+            churn.spans.add(signal, x, y);
+            pins += 1;
+        }
+    }
+    for index in 0..churn.touched.len() {
+        let signal = churn.touched[index];
+        churn.spans.settle(signal);
+    }
+    let after: u64 = churn
+        .touched
+        .iter()
+        .map(|s| churn.spans.hpwl_of(*s))
+        .sum();
+    count(|work| &mut work.cost_pins, pins);
+    after as f64 - before as f64
 }
 
 #[cfg(test)]

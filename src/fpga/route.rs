@@ -434,43 +434,81 @@ impl PartialOrd for Score {
     }
 }
 
+/// What the maze expansion needs to know about one node, in one cache
+/// line's worth of plain numbers.
+///
+/// A [`Wire`](super::arch::Wire) owns its name, so it is fifty-odd bytes
+/// with a pointer in it, and the expansion reads one per node *and* one
+/// per edge it relaxes: five hundred million reads for one design, every
+/// one of them a cache miss into a vector of strings. This holds the four
+/// numbers the distance estimate uses and the node's base cost beside
+/// them, which is one sequential-ish read instead of two scattered ones.
+#[derive(Clone, Copy, Debug)]
+struct Geometry {
+    /// The tile the wire starts in.
+    tile: (u32, u32),
+    /// How far it reaches from there, east and north.
+    span: (i32, i32),
+    /// Its base cost; see [`RouteOptions::node_base`].
+    base: f32,
+    /// True when it reaches every tile.
+    global: bool,
+}
+
+impl Geometry {
+    /// The table for a whole graph.
+    fn of(graph: &RoutingGraph, base: &[f32]) -> Vec<Geometry> {
+        graph
+            .nodes
+            .iter()
+            .enumerate()
+            .map(|(index, wire)| Geometry {
+                tile: wire.tile,
+                span: wire.span,
+                base: base.get(index).copied().unwrap_or(1.0),
+                global: wire.global,
+            })
+            .collect()
+    }
+
+    /// The tile of this wire closest to `(x, y)`; see
+    /// [`Wire::nearest_tile`](super::arch::Wire::nearest_tile), which this
+    /// has to agree with.
+    fn nearest_tile(&self, x: u32, y: u32) -> (u32, u32) {
+        if self.global {
+            return (x, y);
+        }
+        (
+            super::arch::clamp_span(self.tile.0, self.span.0, x),
+            super::arch::clamp_span(self.tile.1, self.span.1, y),
+        )
+    }
+}
+
 /// The router's per-node state.
 struct State {
     /// How many signals are on each node.
     occupancy: Vec<u32>,
     /// The accumulated congestion history of each node.
     history: Vec<f64>,
-    /// [`RouteOptions::node_base`], or empty for one everywhere.
-    base: Vec<f32>,
 }
 
 impl State {
-    fn new(nodes: usize, base: &[f32]) -> Self {
+    fn new(nodes: usize) -> Self {
         State {
             occupancy: vec![0; nodes],
             history: vec![0.0; nodes],
-            base: if base.len() == nodes {
-                base.to_vec()
-            } else {
-                Vec::new()
-            },
         }
     }
 
-    /// The cost of putting one more signal on a node.
-    fn node_cost(&self, node: NodeId, present: f64) -> f64 {
+    /// The cost of putting one more signal on a node whose base cost is
+    /// `base`.
+    fn node_cost(&self, node: NodeId, base: f32, present: f64) -> f64 {
         let index = node as usize;
         // Capacity is one signal per wire; the excess is what the present
         // factor multiplies.
         let overuse = f64::from(self.occupancy[index]);
-        let base = self.base.get(index).map_or(1.0, |b| f64::from(*b));
-        base * (1.0 + present * overuse) * (1.0 + self.history[index])
-    }
-
-    /// A node's base cost, which is also what the distance heuristic is
-    /// scaled by; see [`RouteOptions::node_base`].
-    fn base_of(&self, node: NodeId) -> f64 {
-        self.base.get(node as usize).map_or(1.0, |b| f64::from(*b))
+        f64::from(base) * (1.0 + present * overuse) * (1.0 + self.history[index])
     }
 
     /// The nodes carrying more than one signal.
@@ -533,7 +571,22 @@ pub fn route(
         });
     }
 
-    let mut state = State::new(graph.nodes.len(), &options.node_base);
+    let mut state = State::new(graph.nodes.len());
+    let geometry = Geometry::of(graph, &options.node_base);
+    // The node every outgoing pip reaches, in the order
+    // [`RoutingGraph::outgoing`] hands the pips over, so the inner loop of
+    // the expansion walks two sequential arrays instead of chasing a
+    // twenty-byte `Pip` per edge. Four bytes an edge, against a cache miss
+    // per edge relaxed — 1.3 billion of them for one design on this die.
+    let mut reach_start: Vec<u32> = vec![0; graph.nodes.len() + 1];
+    let mut reach: Vec<NodeId> = Vec::with_capacity(graph.pips.len());
+    for node in 0..graph.nodes.len() {
+        reach_start[node] = u32::try_from(reach.len()).unwrap_or(u32::MAX);
+        for pip in graph.outgoing(NodeId::try_from(node).unwrap_or(0)) {
+            reach.push(graph.pip(*pip).to);
+        }
+    }
+    reach_start[graph.nodes.len()] = u32::try_from(reach.len()).unwrap_or(u32::MAX);
     let mut scratch = Scratch::new(graph.nodes.len());
     let mut routing = Routing::new(netlist.signals.len());
     let mut report = RoutingReport::default();
@@ -544,6 +597,8 @@ pub fn route(
             rip_up(&mut state, &mut routing, terminals.signal);
             let route = route_one(
                 graph,
+                &geometry,
+                (&reach_start, &reach),
                 &state,
                 &mut scratch,
                 terminals,
@@ -788,8 +843,11 @@ struct Terminals {
 }
 
 /// Routes one signal onto a tree that starts at its source.
+#[allow(clippy::too_many_arguments, reason = "the expansion's whole state")]
 fn route_one(
     graph: &RoutingGraph,
+    geometry: &[Geometry],
+    edges: (&[u32], &[NodeId]),
     state: &State,
     scratch: &mut Scratch,
     terminals: &Terminals,
@@ -803,7 +861,9 @@ fn route_one(
     tree.insert(source);
     let mut pips: Vec<PipId> = Vec::new();
     for (sink, name) in &terminals.sinks {
-        let Some(path) = maze(graph, state, scratch, &tree, *sink, present, options) else {
+        let Some(path) = maze(
+            graph, geometry, edges, state, scratch, &tree, *sink, present, options,
+        ) else {
             return Err(RouteError::Unroutable {
                 signal: netlist.signals[signal].name.clone(),
                 sink: name.clone(),
@@ -825,6 +885,10 @@ fn route_one(
 /// The per-expansion arrays, reused across the sinks of one signal.
 struct Scratch {
     cost: Vec<f64>,
+    /// The cost plus the distance estimate, so that a stale queue entry is
+    /// recognised by one comparison rather than by estimating the distance
+    /// again. The expansion pops half a billion nodes for one design here.
+    estimate: Vec<f64>,
     from: Vec<PipId>,
     stamp: Vec<u32>,
     generation: u32,
@@ -838,6 +902,7 @@ impl Scratch {
     fn new(nodes: usize) -> Self {
         Scratch {
             cost: vec![0.0; nodes],
+            estimate: vec![0.0; nodes],
             from: vec![0; nodes],
             stamp: vec![0; nodes],
             generation: 0,
@@ -862,9 +927,19 @@ impl Scratch {
         }
     }
 
-    fn set(&mut self, node: NodeId, cost: f64, from: PipId) {
+    /// The estimate this node was last queued under, or infinity.
+    fn estimate_of(&self, node: NodeId) -> f64 {
+        if self.seen(node) {
+            self.estimate[node as usize]
+        } else {
+            f64::INFINITY
+        }
+    }
+
+    fn set(&mut self, node: NodeId, cost: f64, estimate: f64, from: PipId) {
         let index = node as usize;
         self.cost[index] = cost;
+        self.estimate[index] = estimate;
         self.from[index] = from;
         self.stamp[index] = self.generation;
     }
@@ -872,8 +947,11 @@ impl Scratch {
 
 /// A\* from every node of `tree` to `sink`, returning the pips of the
 /// path from the tree to the sink, nearest the tree first.
+#[allow(clippy::too_many_arguments, reason = "the expansion's whole state")]
 fn maze(
     graph: &RoutingGraph,
+    geometry: &[Geometry],
+    edges: (&[u32], &[NodeId]),
     state: &State,
     scratch: &mut Scratch,
     tree: &BTreeSet<NodeId>,
@@ -881,7 +959,7 @@ fn maze(
     present: f64,
     options: &RouteOptions,
 ) -> Option<Vec<PipId>> {
-    let target = graph.wire(sink).tile;
+    let target = geometry[sink as usize].tile;
     // The per-tile charge is scaled by the node's own base cost, because
     // the estimate has to stay below what the rest of the journey really
     // costs and on a fabric with a cheap wire class it would not. A clock
@@ -892,40 +970,40 @@ fn maze(
     // is exactly what it did before this line. With a uniform base this is
     // what it always was.
     let heuristic = |node: NodeId| -> f64 {
-        let wire = graph.wire(node);
-        let (x, y) = wire.nearest_tile(target.0, target.1);
+        let geometry = &geometry[node as usize];
+        let (x, y) = geometry.nearest_tile(target.0, target.1);
         let distance = u64::from(x.abs_diff(target.0)) + u64::from(y.abs_diff(target.1));
-        options.astar_weight * distance as f64 * state.base_of(node)
+        options.astar_weight * distance as f64 * f64::from(geometry.base)
     };
 
     scratch.start();
     let mut heap: BinaryHeap<std::cmp::Reverse<(Score, NodeId)>> = BinaryHeap::new();
     for node in tree {
-        scratch.set(*node, 0.0, PipId::MAX);
-        heap.push(std::cmp::Reverse((Score(heuristic(*node)), *node)));
+        let estimate = heuristic(*node);
+        scratch.set(*node, 0.0, estimate, PipId::MAX);
+        heap.push(std::cmp::Reverse((Score(estimate), *node)));
     }
+    let (reach_start, reach) = edges;
     let mut reached = false;
     while let Some(std::cmp::Reverse((Score(estimate), node))) = heap.pop() {
         scratch.visited += 1;
-        let here = scratch.cost_of(node);
-        if estimate > here + heuristic(node) {
+        if estimate > scratch.estimate_of(node) {
             continue;
         }
         if node == sink {
             reached = true;
             break;
         }
-        for pip in graph.outgoing(node) {
-            let next = graph.pip(*pip).to;
-            let step = state.node_cost(next, present);
+        let here = scratch.cost_of(node);
+        let run = reach_start[node as usize] as usize..reach_start[node as usize + 1] as usize;
+        for (pip, next) in graph.outgoing(node).iter().zip(&reach[run]) {
+            let step = state.node_cost(*next, geometry[*next as usize].base, present);
             let candidate = here + step;
-            if candidate < scratch.cost_of(next) {
-                scratch.set(next, candidate, *pip);
+            if candidate < scratch.cost_of(*next) {
+                let estimate = candidate + heuristic(*next);
+                scratch.set(*next, candidate, estimate, *pip);
                 scratch.queued += 1;
-                heap.push(std::cmp::Reverse((
-                    Score(candidate + heuristic(next)),
-                    next,
-                )));
+                heap.push(std::cmp::Reverse((Score(estimate), *next)));
             }
         }
     }

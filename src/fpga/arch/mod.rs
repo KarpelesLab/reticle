@@ -534,7 +534,7 @@ impl Wire {
 }
 
 /// The coordinate of a span `origin .. origin + span` closest to `target`.
-fn clamp_span(origin: u32, span: i32, target: u32) -> u32 {
+pub(super) fn clamp_span(origin: u32, span: i32, target: u32) -> u32 {
     let far = i64::from(origin) + i64::from(span);
     let (lo, hi) = if far < i64::from(origin) {
         (far, i64::from(origin))
