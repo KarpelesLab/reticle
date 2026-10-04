@@ -200,6 +200,9 @@ Options:
                      does not reach: primitive inference and LUT covering
                      both happen after generic synthesis is over.
   --report           Print the mapping report to stderr
+  --timing           Print how long each stage of the flow took, to
+                     stderr. Wall-clock numbers, so they belong in a
+                     report and never in a test.
   --quiet            Suppress the summary line
 
 Writing a bitstream, from a real chip database (Xilinx 7 series, Gowin
@@ -608,7 +611,14 @@ fn spec_for(usage: &str) -> Spec {
                 "bitstream",
                 "region",
             ],
-            flags: &["list-devices", "report", "quiet", "offline", "verify"],
+            flags: &[
+                "list-devices",
+                "report",
+                "timing",
+                "quiet",
+                "offline",
+                "verify",
+            ],
             repeated: &["param"],
         }
     } else if std::ptr::eq(usage, LSP_USAGE) {
@@ -2207,6 +2217,44 @@ const ECP5_PARTS: &[(&str, &str, &str, &str)] =
 /// Unlike Gowin this is not the family's only route out: `reticle fpga`
 /// without `--bitstream` still exports a netlist and an `.lpf` for
 /// nextpnr, which is a complete flow. This is the from-scratch one.
+/// A wall-clock stopwatch for `--timing`, which prints one line per stage
+/// of a bitstream flow to stderr.
+///
+/// It exists because "the flow is slow" is not a finding and "the routing
+/// graph is 43% of a build that places nothing" is. Nothing in the library
+/// reads it and no test may assert on what it prints: a slower machine
+/// prints larger numbers and that is all it means.
+struct Laps {
+    on: bool,
+    started: std::time::Instant,
+    last: std::time::Instant,
+}
+
+impl Laps {
+    /// A stopwatch that prints only when `on`.
+    fn new(on: bool) -> Laps {
+        let now = std::time::Instant::now();
+        Laps {
+            on,
+            started: now,
+            last: now,
+        }
+    }
+
+    /// Prints the time since the previous lap, under `name`.
+    fn lap(&mut self, name: &str) {
+        let now = std::time::Instant::now();
+        if self.on {
+            eprintln!(
+                "timing: {name:<24} {:>9.3} s   (total {:>9.3} s)",
+                now.duration_since(self.last).as_secs_f64(),
+                now.duration_since(self.started).as_secs_f64()
+            );
+        }
+        self.last = now;
+    }
+}
+
 fn write_ecp5_bitstream(
     args: &Args,
     design: &reticle::ir::Design,
@@ -2217,6 +2265,8 @@ fn write_ecp5_bitstream(
 ) -> Result<String, String> {
     use reticle::fpga::trellis::{self, TrellisOptions};
     use reticle::fpga::{Netlist, Routing, bitstream, place, route};
+
+    let mut laps = Laps::new(args.flag("timing"));
 
     let Some(&(_, part, package, speed)) =
         ECP5_PARTS.iter().find(|(name, ..)| *name == device.name)
@@ -2236,6 +2286,7 @@ fn write_ecp5_bitstream(
         .map_err(|err| format!("`--bitstream` needs a chip database: {err}"))?;
     let root = root.to_string_lossy().into_owned();
     let db = trellis::open(&DiskFiles::for_sources(&[]), &root, part).map_err(|e| e.to_string())?;
+    laps.lap("read the database");
 
     let mut options = TrellisOptions::new();
     options.package = package.to_owned();
@@ -2243,6 +2294,7 @@ fn write_ecp5_bitstream(
         options.io_standard = standard;
     }
     let fabric = db.load(&options).map_err(|e| e.to_string())?;
+    laps.lap("expand the fabric");
     // The identifier before anything else: an LFE5U-12F and an LFE5U-25F
     // are the same die and differ only in it, so a bitstream built from
     // the wrong half of the database would configure the part and assert
@@ -2252,7 +2304,9 @@ fn write_ecp5_bitstream(
     }
 
     let graph = fabric.arch.build_graph();
+    laps.lap("build the graph");
     let netlist = Netlist::build(design, top, device, &graph).map_err(|e| e.to_string())?;
+    laps.lap("build the netlist");
 
     let (placement, place_report) = place::place(
         &netlist,
@@ -2262,6 +2316,10 @@ fn write_ecp5_bitstream(
         &place::PlaceOptions::default(),
     )
     .map_err(|e| e.to_string())?;
+    laps.lap("place");
+    if args.flag("report") {
+        eprint!("{}", place_report.to_text());
+    }
     // The one knob this family needs: a flip-flop's clock mux offers the
     // global branch wires *and* seven ordinary interconnect wires, so the
     // shortest path from a pad to a clock pin is through data wires. See
@@ -2273,11 +2331,16 @@ fn write_ecp5_bitstream(
     };
     let (routing, route_report) =
         route::route(&netlist, &graph, &placement, &route_options).map_err(|e| e.to_string())?;
+    laps.lap("route");
+    if args.flag("report") {
+        eprint!("{}", route_report.to_text());
+    }
     // The router says it connected every sink; this walks each sink back
     // through the pips it was given and checks that it really did. A route
     // that occupies the right wires without joining them would otherwise
     // reach a part and do nothing.
     let problems = routing.verify(&netlist, &graph, &placement);
+    laps.lap("verify the routing");
     if !problems.is_empty() {
         return Err(format!(
             "the routing does not implement the netlist, so nothing was written: {}",
@@ -2296,6 +2359,7 @@ fn write_ecp5_bitstream(
         &routing,
     )
     .map_err(|e| e.to_string())?;
+    laps.lap("generate the tiles");
     // Everything a pip owns is in `tiles` now. A pad's bits are not — they
     // are in tiles the bel does not own — and neither is a lookup table's
     // truth table, which depends on which of its inputs the router
@@ -2322,6 +2386,7 @@ fn write_ecp5_bitstream(
     // configures, and its skew is nobody's model. Refusing is the only
     // thing that makes `clock_node_costs`' preference a guarantee.
     let clocks = fabric.clock_network_use(&netlist, &placement, &graph, &routing);
+    laps.lap("configure the cells");
     if !clocks.off_network.is_empty() {
         return Err(format!(
             "{} of {} flip-flop(s) have a clock that did not arrive on a global clock network, so \
@@ -2342,6 +2407,7 @@ fn write_ecp5_bitstream(
     }
 
     let stream = fabric.stream(&tiles, speed).map_err(|e| e.to_string())?;
+    laps.lap("assemble the bitstream");
 
     // Two checks on the finished image, both of them exact, both of them
     // there because a bitstream that configures the wrong thing loads and
@@ -2367,6 +2433,7 @@ fn write_ecp5_bitstream(
     // to". That is the check that notices a feature written into one tile
     // changing what another selects, in either direction.
     let decoded = db.decode(&stream.cram);
+    laps.lap("decode it back");
     if decoded.unexplained > 0 {
         // Which ones, and not only how many: a count says a tile rule is
         // wrong and not which, and the bits are named in the tile's own
@@ -2426,6 +2493,7 @@ fn write_ecp5_bitstream(
 
     let bytes = stream.to_bytes(true);
     std::fs::write(path, &bytes).map_err(|e| format!("cannot write `{path}`: {e}"))?;
+    laps.lap("check the arcs and write");
 
     let placed = place_report
         .usage

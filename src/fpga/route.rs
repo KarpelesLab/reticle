@@ -380,6 +380,13 @@ pub struct RoutingReport {
     pub pips: usize,
     /// How many distinct nodes it occupies.
     pub nodes: usize,
+    /// How many nodes the maze expansions took off the queue, over every
+    /// iteration. This is the router's work, and unlike a number of
+    /// seconds it means the same thing on every machine: a sharper
+    /// distance estimate shows up here and nowhere else.
+    pub visited: u64,
+    /// How many nodes those expansions put on the queue.
+    pub queued: u64,
 }
 
 impl RoutingReport {
@@ -399,6 +406,11 @@ impl RoutingReport {
             out,
             "  routed {} signal(s) with {} pips over {} node(s)",
             self.signals, self.pips, self.nodes
+        );
+        let _ = writeln!(
+            out,
+            "  work: {} node(s) visited, {} queued",
+            self.visited, self.queued
         );
         out
     }
@@ -589,6 +601,8 @@ pub fn route(
     }
     report.signals = routing.routed();
     report.pips = routing.pip_count();
+    report.visited = scratch.visited;
+    report.queued = scratch.queued;
     report.nodes = state.occupancy.iter().filter(|c| **c > 0).count();
     Ok((routing, report))
 }
@@ -814,6 +828,10 @@ struct Scratch {
     from: Vec<PipId>,
     stamp: Vec<u32>,
     generation: u32,
+    /// Nodes taken off the queue, for [`RoutingReport::visited`].
+    visited: u64,
+    /// Nodes put on it, for [`RoutingReport::queued`].
+    queued: u64,
 }
 
 impl Scratch {
@@ -823,6 +841,8 @@ impl Scratch {
             from: vec![0; nodes],
             stamp: vec![0; nodes],
             generation: 0,
+            visited: 0,
+            queued: 0,
         }
     }
 
@@ -886,6 +906,7 @@ fn maze(
     }
     let mut reached = false;
     while let Some(std::cmp::Reverse((Score(estimate), node))) = heap.pop() {
+        scratch.visited += 1;
         let here = scratch.cost_of(node);
         if estimate > here + heuristic(node) {
             continue;
@@ -900,6 +921,7 @@ fn maze(
             let candidate = here + step;
             if candidate < scratch.cost_of(next) {
                 scratch.set(next, candidate, *pip);
+                scratch.queued += 1;
                 heap.push(std::cmp::Reverse((
                     Score(candidate + heuristic(next)),
                     next,

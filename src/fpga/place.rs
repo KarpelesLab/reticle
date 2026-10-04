@@ -60,6 +60,7 @@
 //!
 //! [`Constraints::keeps_hierarchy`]: super::Constraints::keeps_hierarchy
 
+use std::cell::Cell;
 use std::collections::BTreeMap;
 use std::error::Error;
 use std::fmt;
@@ -612,6 +613,55 @@ impl Placement {
     }
 }
 
+/// How much work a placement cost, counted rather than timed.
+///
+/// A wall-clock number means nothing on another machine and cannot be
+/// asserted on; these can be. They are what the annealer actually does,
+/// so a change that makes a move cheaper shows up here as a smaller
+/// number per move and a change that makes the *schedule* shorter shows
+/// up as fewer moves.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct PlaceWork {
+    /// Candidate moves offered to the legality check.
+    pub legality_tests: u64,
+    /// Shared-pin entries and control-pool slots those checks looked at.
+    /// This is the one that was three figures per move before the pools
+    /// were visited once each instead of once per pool.
+    pub legality_steps: u64,
+    /// Pin positions the wirelength cost read. One net of a thousand
+    /// sinks read from scratch on every move is what made a big design
+    /// grow faster than its move count.
+    pub cost_pins: u64,
+    /// Times the best placement so far was recorded.
+    pub snapshots: u64,
+}
+
+thread_local! {
+    /// [`PlaceWork`] for the placement running on this thread, read into
+    /// [`PlacementReport::work`] when [`place`] returns.
+    ///
+    /// A thread-local rather than an argument: the cost function and the
+    /// legality check are called from closures several layers inside the
+    /// legaliser, and threading a counter through all of them would bury
+    /// the code it is there to measure. Nothing reads it but [`place`],
+    /// which zeroes it on the way in.
+    static WORK: Cell<PlaceWork> = const { Cell::new(PlaceWork {
+        legality_tests: 0,
+        legality_steps: 0,
+        cost_pins: 0,
+        snapshots: 0,
+    }) };
+}
+
+/// Adds to one counter of [`WORK`].
+fn count(what: fn(&mut PlaceWork) -> &mut u64, by: u64) {
+    WORK.with(|cell| {
+        let mut work = cell.get();
+        *what(&mut work) += by;
+        cell.set(work);
+    });
+}
+
 /// Knobs for [`place`].
 #[derive(Clone, Debug)]
 pub struct PlaceOptions {
@@ -667,6 +717,8 @@ pub struct PlacementReport {
     pub moves: (u64, u64),
     /// Pins the architecture gives no wire, which are not routed.
     pub off_fabric: usize,
+    /// What the pass cost, in work rather than in seconds.
+    pub work: PlaceWork,
 }
 
 impl PlacementReport {
@@ -693,6 +745,14 @@ impl PlacementReport {
             out,
             "  annealing: {} temperature(s), {} move(s), {} accepted",
             self.temperatures, self.moves.0, self.moves.1
+        );
+        let _ = writeln!(
+            out,
+            "  work: {} legality test(s) over {} step(s), {} cost pin read(s), {} snapshot(s)",
+            self.work.legality_tests,
+            self.work.legality_steps,
+            self.work.cost_pins,
+            self.work.snapshots
         );
         if self.off_fabric > 0 {
             let _ = writeln!(out, "  off-fabric pins: {}", self.off_fabric);
@@ -802,12 +862,22 @@ impl Rect {
 /// control wires it ends nowhere and costs nothing.
 #[derive(Debug, Default)]
 struct SiteRules {
-    /// Per site, one entry per pin it shares with another site, as
-    /// `(the other site, this site's role, the other site's role)`. Both
-    /// directions are recorded, so placing something on a site only needs
-    /// that site's own list. Roles are interned indices into
-    /// [`SiteRules::roles`].
+    /// Per site, one entry per *other site* it shares a pin with, as
+    /// `(the other site, where its role pairs start in
+    /// [`SiteRules::pairs`], how many)`. Both directions are recorded, so
+    /// placing something on a site only needs that site's own list.
+    ///
+    /// It is grouped by the other site and not one entry per pin because
+    /// the question asked of each group is "is that site occupied at
+    /// all", and the answer is usually no: an ECP5 logic tile's
+    /// distributed-RAM bel shares pins with all eight of its lookup
+    /// tables, so a flat list made a legality check read a hundred and
+    /// fifty entries to decide something sixteen looks settle.
     per_site: Vec<Vec<(usize, u32, u32)>>,
+    /// The `(this site's role, the other site's role)` pairs that
+    /// [`SiteRules::per_site`]'s runs index. Roles are interned indices
+    /// into [`SiteRules::roles`].
+    pairs: Vec<(u32, u32)>,
     /// Per site, the sites it cannot be occupied at the same time as, in
     /// both directions. Empty for every site of every family whose
     /// architecture declares no exclusion.
@@ -850,6 +920,15 @@ struct ControlGroup {
 /// two dozen interconnect wires, and stopping there costs nothing but the
 /// look: a pool nobody else in the tile draws on is dropped anyway.
 const MAX_POOL: usize = 8;
+
+/// How many occupied sites of one tile [`SiteRules::control_fits`] keeps on
+/// the stack before it falls back to
+/// [`SiteRules::control_fits_unbounded`].
+///
+/// An ECP5 logic tile has seventeen sites in all — eight lookup tables,
+/// eight flip-flops and the distributed RAM — so this is never reached
+/// today and is a bound on the scratch rather than on what is legal.
+const OCCUPANTS: usize = 32;
 
 /// The wires of `tile` that a signal arriving at `pin` must pass through,
 /// or `None` when it can also arrive from outside the tile.
@@ -913,6 +992,7 @@ impl SiteRules {
     fn find(netlist: &Netlist, graph: &RoutingGraph) -> SiteRules {
         let mut out = SiteRules {
             per_site: vec![Vec::new(); graph.sites.len()],
+            pairs: Vec::new(),
             excludes: vec![Vec::new(); graph.sites.len()],
             per_instance: vec![Vec::new(); netlist.instances.len()],
             roles: BTreeMap::new(),
@@ -950,6 +1030,7 @@ impl SiteRules {
         for (tile, sites) in &by_tile {
             for (i, left) in sites.iter().enumerate() {
                 for right in &sites[i + 1..] {
+                    let start = out.pairs.len();
                     for (lrole, lnode) in &graph.sites[*left].pins {
                         for (rrole, rnode) in &graph.sites[*right].pins {
                             if lnode != rnode {
@@ -957,10 +1038,27 @@ impl SiteRules {
                             }
                             let l = role_id(&mut out.roles, lrole);
                             let r = role_id(&mut out.roles, rrole);
-                            out.per_site[*left].push((*right, l, r));
-                            out.per_site[*right].push((*left, r, l));
+                            out.pairs.push((l, r));
                         }
                     }
+                    let shared = out.pairs.len() - start;
+                    if shared == 0 {
+                        continue;
+                    }
+                    // The other direction wants the pairs the other way
+                    // round, which is a second run over the same answers.
+                    let flipped = out.pairs.len();
+                    for index in start..start + shared {
+                        let (l, r) = out.pairs[index];
+                        out.pairs.push((r, l));
+                    }
+                    let (start, shared, flipped) = (
+                        u32::try_from(start).unwrap_or(0),
+                        u32::try_from(shared).unwrap_or(0),
+                        u32::try_from(flipped).unwrap_or(0),
+                    );
+                    out.per_site[*left].push((*right, start, shared));
+                    out.per_site[*right].push((*left, flipped, shared));
                 }
             }
             // Every pin of the tile whose signal has to come through the
@@ -1082,6 +1180,17 @@ impl SiteRules {
         if self.trivial() {
             return true;
         }
+        count(|work| &mut work.legality_tests, 1);
+        count(
+            |work| &mut work.legality_steps,
+            moving
+                .iter()
+                .map(|(_, site)| {
+                    u64::try_from(self.excludes[*site].len() + self.per_site[*site].len())
+                        .unwrap_or(0)
+                })
+                .sum(),
+        );
         let after = |site: usize| -> Option<usize> {
             if let Some((instance, _)) = moving.iter().find(|(_, s)| *s == site) {
                 return Some(*instance);
@@ -1094,9 +1203,12 @@ impl SiteRules {
             self.excludes[*site]
                 .iter()
                 .all(|other| after(*other).is_none())
-                && self.per_site[*site].iter().all(|(other, mine, theirs)| {
+                && self.per_site[*site].iter().all(|(other, start, len)| {
                     after(*other).is_none_or(|neighbour| {
-                        self.signal(*instance, *mine) == self.signal(neighbour, *theirs)
+                        let run = *start as usize..(*start + *len) as usize;
+                        self.pairs[run].iter().all(|(mine, theirs)| {
+                            self.signal(*instance, *mine) == self.signal(neighbour, *theirs)
+                        })
                     })
                 })
         });
@@ -1127,9 +1239,65 @@ impl SiteRules {
     /// beside a distributed RAM whose write clock it shares; a pin with no
     /// signal on that role — a flip-flop with no reset — asks for nothing.
     fn control_fits(&self, group: &ControlGroup, after: &impl Fn(usize) -> Option<usize>) -> bool {
+        // Who is on each site of the group, worked out **once**. `after`
+        // is a scan of the move and a look in the placement, and asking
+        // it again for every pool — six of them on an ECP5 logic tile —
+        // was most of what a legality check cost. The sites of one tile
+        // are few and mostly empty, so what the pools below walk is the
+        // occupied handful rather than all of them.
+        let mut occupied: [(usize, usize); OCCUPANTS] = [(0, 0); OCCUPANTS];
+        let mut taken = 0usize;
+        count(
+            |work| &mut work.legality_steps,
+            u64::try_from(group.sites.len()).unwrap_or(0),
+        );
+        for site in &group.sites {
+            let Some(instance) = after(*site) else {
+                continue;
+            };
+            if taken == OCCUPANTS {
+                return self.control_fits_unbounded(group, after);
+            }
+            occupied[taken] = (*site, instance);
+            taken += 1;
+        }
         for (pool, wires) in group.pools.iter().enumerate() {
             let pool = u32::try_from(pool).unwrap_or(u32::MAX);
             // Per signal, the wires every pin wanting it would accept.
+            let mut wanted: Vec<(usize, u32)> = Vec::new();
+            for (site, instance) in &occupied[..taken] {
+                for (role, which, mask) in &self.captive[*site] {
+                    if *which != pool {
+                        continue;
+                    }
+                    let Some(signal) = self.signal(*instance, *role) else {
+                        continue;
+                    };
+                    match wanted.iter_mut().find(|(s, _)| *s == signal) {
+                        Some((_, allowed)) => *allowed &= *mask,
+                        None => wanted.push((signal, *mask)),
+                    }
+                }
+            }
+            if wanted.len() > wires.len() || !matchable(&wanted) {
+                return false;
+            }
+        }
+        true
+    }
+
+    /// [`SiteRules::control_fits`] for a tile with more occupied sites
+    /// than [`OCCUPANTS`], which no family here has. It asks `after` once
+    /// per pool per site, which is what the fast path above exists to
+    /// avoid; it is here so that the bound is a performance choice and
+    /// never a correctness one.
+    fn control_fits_unbounded(
+        &self,
+        group: &ControlGroup,
+        after: &impl Fn(usize) -> Option<usize>,
+    ) -> bool {
+        for (pool, wires) in group.pools.iter().enumerate() {
+            let pool = u32::try_from(pool).unwrap_or(u32::MAX);
             let mut wanted: Vec<(usize, u32)> = Vec::new();
             for site in &group.sites {
                 let Some(instance) = after(*site) else {
@@ -1228,6 +1396,7 @@ pub fn place(
         off_fabric: netlist.off_fabric.len(),
         ..PlacementReport::default()
     };
+    WORK.with(|cell| cell.set(PlaceWork::default()));
     let mut sites_by_kind: BTreeMap<String, Vec<usize>> = BTreeMap::new();
     for (index, site) in graph.sites.iter().enumerate() {
         sites_by_kind
@@ -1295,6 +1464,7 @@ pub fn place(
         report.moves = (stats.1, stats.2);
         report.hpwl_after = hpwl(netlist, graph, &placement);
     }
+    report.work = WORK.with(Cell::get);
     Ok((placement, report))
 }
 
@@ -1919,6 +2089,10 @@ fn signal_hpwl(
     signal: usize,
 ) -> u64 {
     let s = &netlist.signals[signal];
+    count(
+        |work| &mut work.cost_pins,
+        (1 + s.sinks.len()).try_into().unwrap_or(u64::MAX),
+    );
     let mut bounds: Option<(u32, u32, u32, u32)> = None;
     for pin in s.driver.iter().chain(s.sinks.iter()) {
         let Some(site) = placement.site_of(netlist.pins[*pin].instance) else {
@@ -2041,6 +2215,7 @@ fn anneal(
                 if current < best_cost {
                     best_cost = current;
                     best = placement.clone();
+                    count(|work| &mut work.snapshots, 1);
                 }
             } else {
                 undo(placement, &previous);

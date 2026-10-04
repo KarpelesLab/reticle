@@ -430,10 +430,19 @@ impl TrellisDatabase {
         // `ConfigBit`'s row means the same thing twice.
         let mut frames = Ecp5FrameMap::new();
         let mut members: BTreeMap<(u32, u32), Vec<String>> = BTreeMap::new();
+        // Where each of a position's Lattice tiles starts in that
+        // position's combined frame numbering, gathered in the same pass.
+        // It used to be re-derived per position by filtering the whole
+        // tile list, which is the grid squared for an answer this loop
+        // already has in order.
+        let mut windows_at: BTreeMap<(u32, u32), (Vec<(String, u32)>, u32)> = BTreeMap::new();
         for tile in &self.tiles {
             let at = (tile.col, tile.row);
             frames.push(at, tile.window);
             members.entry(at).or_default().push(tile.ty.clone());
+            let (here, before) = windows_at.entry(at).or_default();
+            here.push((tile.ty.clone(), *before));
+            *before += tile.window.frames;
         }
 
         // ---- one Arch tile type per composition of a position ----
@@ -461,12 +470,9 @@ impl TrellisDatabase {
             let name = list.join("+");
             let rows = frames.bit_rows(*at);
             let cols = frames.bit_cols(*at);
-            let mut windows: Vec<(String, u32)> = Vec::with_capacity(list.len());
-            let mut before = 0u32;
-            for tile in self.tiles.iter().filter(|t| t.col == at.0 && t.row == at.1) {
-                windows.push((tile.ty.clone(), before));
-                before += tile.window.frames;
-            }
+            let windows = windows_at
+                .get(at)
+                .map_or_else(Vec::new, |(windows, _)| windows.clone());
             let index = match type_of.get(&name) {
                 Some(index) => {
                     let existing = &arch.tile_types[*index];
@@ -517,47 +523,91 @@ impl TrellisDatabase {
         // the references, then declare — is what makes every reference on
         // the die resolve, rather than only the ones whose owner happens to
         // mention the name itself.
+        //
+        // **It is done per tile *type*, not per position**, and that is
+        // worth saying because doing it per position was most of the
+        // loader's cost. `bits.db` belongs to the family, so one type
+        // spells the same million-and-a-half references at every position
+        // it sits at; what varies with the position is only *which
+        // composition* an offset lands on. So the names are classified
+        // once per type, grouped by the offset they point at, and a group
+        // is handed to a neighbouring composition the first time that
+        // (type, offset, composition) triple turns up — about a hundred
+        // thousand set insertions over this die instead of three million.
+        // The result is the same set of names for the same composition,
+        // because a set does not count how often something was inserted.
+        struct TypeRefs<'a> {
+            /// Names that reach the whole die.
+            globals: Vec<&'a str>,
+            /// The rest, grouped by the offset `(dx, dy)` they point at.
+            groups: Vec<((i32, i32), Vec<&'a str>)>,
+        }
+        let mut refs_of: BTreeMap<&str, TypeRefs<'_>> = BTreeMap::new();
+        for (ty, db) in &self.types {
+            let mut reaching = Vec::new();
+            let mut groups: BTreeMap<(i32, i32), Vec<&str>> = BTreeMap::new();
+            for name in db.wire_names() {
+                match parse::globalise_ref(name, prefix) {
+                    None => {}
+                    Some(parse::WireTargetRef::Global { name }) => reaching.push(name),
+                    Some(parse::WireTargetRef::Tile { dx, dy, name }) => {
+                        groups.entry((dx, dy)).or_default().push(name);
+                    }
+                }
+            }
+            refs_of.insert(
+                ty.as_str(),
+                TypeRefs {
+                    globals: reaching,
+                    groups: groups.into_iter().collect(),
+                },
+            );
+        }
+
+        // Each position's composition, once, so the walk below never joins
+        // a type list into a string again.
+        let mut comp_at: BTreeMap<(u32, u32), &str> = BTreeMap::new();
+        for (at, list) in &members {
+            if let Some(comp) = composition_key(&type_of, list) {
+                comp_at.insert(*at, comp);
+            }
+        }
+
         let mut owned: BTreeMap<&str, BTreeSet<&str>> = BTreeMap::new();
         let mut globals: BTreeSet<&str> = BTreeSet::new();
         let mut off_grid = 0usize;
+        for refs in refs_of.values() {
+            for name in &refs.globals {
+                globals.insert(name);
+            }
+        }
+        // The triples already handed over; see the paragraph above.
+        let mut handed: BTreeSet<(&str, i32, i32, &str)> = BTreeSet::new();
         for (at, list) in &members {
-            let Some(comp) = composition_key(&type_of, list) else {
+            if !comp_at.contains_key(at) {
                 continue;
-            };
+            }
             for ty in list {
-                let Some(db) = self.types.get(ty) else {
+                let Some(refs) = refs_of.get(ty.as_str()) else {
                     continue;
                 };
-                for name in db.wire_names() {
-                    match parse::globalise_ref(name, prefix) {
-                        None => {}
-                        Some(parse::WireTargetRef::Global { name }) => {
-                            globals.insert(name);
-                        }
-                        Some(parse::WireTargetRef::Tile { dx: 0, dy: 0, name }) => {
-                            owned.entry(comp).or_default().insert(name);
-                        }
-                        Some(parse::WireTargetRef::Tile { dx, dy, name }) => {
-                            let x = i64::from(at.0) + i64::from(dx);
-                            let y = i64::from(at.1) + i64::from(dy);
-                            let Ok(x) = u32::try_from(x) else {
-                                off_grid += 1;
-                                continue;
-                            };
-                            let Ok(y) = u32::try_from(y) else {
-                                off_grid += 1;
-                                continue;
-                            };
-                            match members
-                                .get(&(x, y))
-                                .and_then(|list| composition_key(&type_of, list))
-                            {
-                                Some(comp) => {
-                                    owned.entry(comp).or_default().insert(name);
-                                }
-                                None => off_grid += 1,
-                            }
-                        }
+                for ((dx, dy), names) in &refs.groups {
+                    let x = i64::from(at.0) + i64::from(*dx);
+                    let y = i64::from(at.1) + i64::from(*dy);
+                    let target = match (u32::try_from(x), u32::try_from(y)) {
+                        (Ok(x), Ok(y)) => comp_at.get(&(x, y)).copied(),
+                        _ => None,
+                    };
+                    let Some(target) = target else {
+                        off_grid += names.len();
+                        continue;
+                    };
+                    if !handed.insert((ty.as_str(), *dx, *dy, target)) {
+                        continue;
+                    }
+                    let into = owned.entry(target).or_default();
+                    for name in names {
+                        into.insert(name);
                     }
                 }
             }

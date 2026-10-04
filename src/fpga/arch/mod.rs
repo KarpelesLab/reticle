@@ -121,7 +121,8 @@ pub mod synthetic;
 
 pub use parse::{ARCH_SYNTAX, ARCH_UNKNOWN};
 
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
+use std::hash::{BuildHasherDefault, Hasher};
 use std::sync::{Arc, OnceLock};
 
 use crate::diag::Diagnostics;
@@ -659,6 +660,68 @@ pub struct RoutingGraph {
     in_pips: Vec<PipId>,
 }
 
+/// A fast, non-cryptographic hasher for the graph builder's own tables.
+///
+/// `std`'s default is SipHash-1-3, which is a sound default because a
+/// `HashMap` is often fed attacker-chosen keys. Nothing here is: the keys
+/// are wire names out of a chip database and small tuples of integers, and
+/// expanding one die resolves sixteen million of them. SipHash over those
+/// was a sixth of the whole build. This is the usual multiply-rotate word
+/// mixer, which is not a hash to defend a server with and is the right one
+/// for a table whose keys the program itself wrote.
+#[derive(Clone, Copy, Default)]
+struct FastHasher(u64);
+
+/// The odd multiplier of [`FastHasher`], from the usual mixing constants.
+const FAST_MIX: u64 = 0x517c_c1b7_2722_0a95;
+
+impl FastHasher {
+    /// Folds one word in.
+    fn add(&mut self, word: u64) {
+        self.0 = (self.0.rotate_left(5) ^ word).wrapping_mul(FAST_MIX);
+    }
+}
+
+impl Hasher for FastHasher {
+    fn write(&mut self, bytes: &[u8]) {
+        let mut chunks = bytes.chunks_exact(8);
+        for chunk in &mut chunks {
+            let word = u64::from_le_bytes(chunk.try_into().unwrap_or([0; 8]));
+            self.add(word);
+        }
+        let rest = chunks.remainder();
+        if !rest.is_empty() {
+            let mut last = [0u8; 8];
+            last[..rest.len()].copy_from_slice(rest);
+            self.add(u64::from_le_bytes(last));
+        }
+        self.add(u64::try_from(bytes.len()).unwrap_or(0));
+    }
+
+    fn write_u8(&mut self, value: u8) {
+        self.add(u64::from(value));
+    }
+
+    fn write_u32(&mut self, value: u32) {
+        self.add(u64::from(value));
+    }
+
+    fn write_u64(&mut self, value: u64) {
+        self.add(value);
+    }
+
+    fn write_usize(&mut self, value: usize) {
+        self.add(u64::try_from(value).unwrap_or(0));
+    }
+
+    fn finish(&self) -> u64 {
+        self.0
+    }
+}
+
+/// A [`HashMap`] over [`FastHasher`]; see it for why.
+type FastMap<K, V> = HashMap<K, V, BuildHasherDefault<FastHasher>>;
+
 impl RoutingGraph {
     /// Expands `arch`; see [`Arch::build_graph`].
     fn build(arch: &Arch) -> RoutingGraph {
@@ -668,7 +731,7 @@ impl RoutingGraph {
         // names; with an owned key each of those resolutions allocates a
         // `String` only to throw it away. The names live in `arch`, which
         // outlives this function.
-        let mut index: HashMap<(u32, u32, &str), NodeId> = HashMap::new();
+        let mut index: FastMap<(u32, u32, &str), NodeId> = FastMap::default();
         let mut dangling = 0usize;
 
         // Globals first, so their ids are the lowest and stable.
@@ -682,7 +745,11 @@ impl RoutingGraph {
                 global: true,
             });
         }
-        let is_global = |name: &str| arch.globals.iter().any(|g| g == name);
+        // A set and not a scan: this is asked once per wire of the die, so
+        // a linear walk of the four hundred odd globals was half a billion
+        // string comparisons for an answer that is almost always no.
+        let reaching: BTreeSet<&str> = arch.globals.iter().map(String::as_str).collect();
+        let is_global = |name: &str| reaching.contains(name);
 
         for y in 0..arch.height {
             for x in 0..arch.width {
@@ -725,7 +792,7 @@ impl RoutingGraph {
         // copies of each.
         let mut bit_pool: Vec<ConfigBit> = Vec::new();
         let mut bit_spans: Vec<(u32, u32)> = vec![(0, 0)];
-        let mut interned: HashMap<Vec<ConfigBit>, BitsId> = HashMap::new();
+        let mut interned: FastMap<Vec<ConfigBit>, BitsId> = FastMap::default();
         interned.insert(Vec::new(), 0);
         let mut intern = |bits: &[ConfigBit]| -> BitsId {
             if bits.is_empty() {
