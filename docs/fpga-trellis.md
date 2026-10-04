@@ -3720,7 +3720,7 @@ carries the net. A flop whose parameter needs bits in a mux the routing does
 not identify is **refused** rather than written into the wrong one, which
 would change every other flop of the tile.
 
-## What a build costs, and the four places it was being spent
+## What a build costs, and where it was being spent
 
 Every hardware iteration pays for this, so it is worth the same treatment
 as a tile rule: measure, then explain. The numbers below are one idle-ish
@@ -3871,6 +3871,48 @@ a stale queue entry costs one comparison; and the queue's key is
 does and compares in one instruction. Same routes, same counts, and
 `route` on this design went from 202 s to 114 s.
 
+### Doing less annealing is a loss, not a trade
+
+What is left of a big build is the **number of moves**, and the obvious lever
+is the multiplier in front of them. The schedule is VPR's — `effort · n^(4/3)`
+moves per temperature — and this flow's effort is 10, VPR's high-quality
+setting; VPR's own default is 1. At 4304 movable cells, 10 is 70.7 million
+moves and 135 s. `--place-effort <n>` exposes it, and the answer it gives is
+worth having in writing, because it is the opposite of what a speed knob is
+supposed to do.
+
+| `usb_host_target.v` | effort 1 | effort 3 | **effort 10** |
+|---|---|---|---|
+| moves | 6 864 042 | 20 797 269 | 70 693 890 |
+| `place` | 36.8 s | 92.5 s | 135.7 s |
+| wirelength, before → after | 28699 → **28699** | 28699 → **28699** | 28699 → **23770** |
+| nodes the router then visited | — | 1 110 252 586 | **532 127 182** |
+| `route` | — | 409.7 s | **113.5 s** |
+| pips | — | 62 166 | 63 301 |
+| whole flow | — | 505.9 s | **251.1 s** |
+
+**At 1 and at 3 the annealer improves nothing at all.** Not a little less —
+nothing: it ends at exactly the wirelength legalisation handed it, having
+tried seven and twenty-one million moves to get there. The reason is the
+start temperature, `20 ×` the spread of a random walk's cost changes, which
+is hot enough to scatter the placement; recovering from that takes a certain
+number of moves per temperature and below it the walk never gets back under
+where it began. 103 temperatures at effort 10 do get back, and 21% further.
+
+And the saving is not a saving, because the router pays for the placement it
+is given. Effort 3 saves 43 s of placement and spends **296 s** more of
+routing, on twice the nodes visited, for 1135 fewer pips over a worse
+spread. The whole build doubles.
+
+So the move count is not where the next win is; the **schedule** is. VPR
+does not use a fixed `cooling` and a fixed cap either — it adapts the
+temperature step to the acceptance rate and stops when the acceptance rate
+says the walk is done, which is what makes a smaller `inner_num` usable
+there. This placer cools by 0.9 a hundred and twenty times whatever happens.
+That is a real piece of work and nothing here has done it; what this section
+records is that the cheap version of it does not work, and the measurement
+that says so.
+
 ### A sharper distance estimate was tried and rejected
 
 This is worth leaving here, because the reasoning looked airtight and the
@@ -3932,8 +3974,12 @@ six produces the **same bitstream it produced before**: 61, 77, 114, 2491,
 2557 and 128 583 set bits, 0 unexplained in each, and the arcs the bits
 select are the arcs the router chose.
 
+`usb_host_target.v` is 1.0 s of fixed cost, 135.7 s of placement and
+113.5 s of routing, so the two sections above are now the whole of a large
+build and the database is 0.4% of it.
+
 Nothing here is parallel and nothing here was made parallel: a constant
-factor of five is not what sixty-four threads are for, and the three
+factor of three is not what sixty-four threads are for, and the three
 structures above are smaller to parallelise than what they replaced. What
 *would* parallelise, for whoever does it: `Arch::build_graph`'s per-tile
 expansion is independent once node ids are handed out, `SiteRules::find` is

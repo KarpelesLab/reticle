@@ -676,9 +676,24 @@ pub struct PlaceOptions {
     pub cooling: f64,
     /// Upper bound on temperature steps, so a pathological design stops.
     pub max_temperatures: u32,
-    /// Moves tried per temperature, or `None` for the usual
-    /// `10 * n^(4/3)`.
+    /// Moves tried per temperature, or `None` for
+    /// [`PlaceOptions::move_effort`] `* n^(4/3)`.
     pub moves_per_temperature: Option<usize>,
+    /// What multiplies `n^(4/3)` to get the moves tried per temperature,
+    /// when [`PlaceOptions::moves_per_temperature`] does not say.
+    ///
+    /// **This is the knob that decides how long a placement takes.** The
+    /// schedule is VPR's, and its `inner_num` is exactly this number; 10 is
+    /// the high-quality setting and 1 is VPR's own default. On a design of
+    /// 4300 cells, 10 is 70.7 million moves and 135 seconds, which is most
+    /// of what a bitstream costs. A caller iterating on hardware can trade
+    /// that: see `docs/fpga-trellis.md` for what the wirelength does when it
+    /// is lowered, measured rather than guessed.
+    ///
+    /// Zero is treated as one, and the result is clamped the way
+    /// [`moves_for`] clamps it, so a tiny design still gets 20 moves per
+    /// temperature.
+    pub move_effort: usize,
 }
 
 impl Default for PlaceOptions {
@@ -690,6 +705,7 @@ impl Default for PlaceOptions {
             cooling: 0.9,
             max_temperatures: 120,
             moves_per_temperature: None,
+            move_effort: 10,
         }
     }
 }
@@ -2342,7 +2358,7 @@ fn anneal(
     let mut rng = Rng::new(options.seed);
     let inner = options
         .moves_per_temperature
-        .unwrap_or_else(|| moves_for(movable.len()));
+        .unwrap_or_else(|| moves_for(movable.len(), options.move_effort));
 
     // The starting temperature is the spread of the cost changes a
     // random walk sees, which is the standard way of making one schedule
@@ -2417,16 +2433,15 @@ fn anneal(
     (steps, tried, accepted)
 }
 
-/// Moves to try per temperature: the usual `10 * n^(4/3)`, computed in
-/// integers.
+/// Moves to try per temperature: `effort * n^(4/3)`, computed in integers.
 ///
 /// `powf` is not guaranteed to give the same last bit on every platform,
 /// and a golden placement has to, so the exponent is taken as an integer
 /// fourth power and an integer cube root instead.
-fn moves_for(instances: usize) -> usize {
+fn moves_for(instances: usize, effort: usize) -> usize {
     let fourth = (instances as u128).pow(4);
     let root = cube_root(fourth);
-    usize::try_from(root.saturating_mul(10))
+    usize::try_from(root.saturating_mul(effort.max(1) as u128))
         .unwrap_or(usize::MAX)
         .clamp(20, 1_000_000)
 }

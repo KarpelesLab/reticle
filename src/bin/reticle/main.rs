@@ -200,6 +200,14 @@ Options:
                      does not reach: primitive inference and LUT covering
                      both happen after generic synthesis is over.
   --report           Print the mapping report to stderr
+  --place-effort <n> How hard the annealer works: it tries n * cells^(4/3)
+                     moves per temperature. The default is 10, which is
+                     the high-quality setting of the schedule this uses
+                     (VPR's), and most of what a large design's build time
+                     is. 1 is VPR's own default and about ten times
+                     quicker; docs/fpga-trellis.md has what the
+                     wirelength does at each. For iterating on hardware,
+                     not for the bitstream you keep.
   --timing           Print how long each stage of the flow took, to
                      stderr. Wall-clock numbers, so they belong in a
                      report and never in a test.
@@ -610,6 +618,7 @@ fn spec_for(usage: &str) -> Spec {
                 "chipdb",
                 "bitstream",
                 "region",
+                "place-effort",
             ],
             flags: &[
                 "list-devices",
@@ -2308,14 +2317,15 @@ fn write_ecp5_bitstream(
     let netlist = Netlist::build(design, top, device, &graph).map_err(|e| e.to_string())?;
     laps.lap("build the netlist");
 
-    let (placement, place_report) = place::place(
-        &netlist,
-        &fabric.arch,
-        &graph,
-        constraints,
-        &place::PlaceOptions::default(),
-    )
-    .map_err(|e| e.to_string())?;
+    let mut place_options = place::PlaceOptions::default();
+    if let Some(text) = args.option("place-effort") {
+        place_options.move_effort = text
+            .parse::<usize>()
+            .map_err(|_| format!("`--place-effort` wants a whole number, not `{text}`"))?;
+    }
+    let (placement, place_report) =
+        place::place(&netlist, &fabric.arch, &graph, constraints, &place_options)
+            .map_err(|e| e.to_string())?;
     laps.lap("place");
     if args.flag("report") {
         eprint!("{}", place_report.to_text());
