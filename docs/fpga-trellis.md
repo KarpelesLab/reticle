@@ -3720,6 +3720,228 @@ carries the net. A flop whose parameter needs bits in a mux the routing does
 not identify is **refused** rather than written into the wrong one, which
 would change every other flop of the tile.
 
+## What a build costs, and the four places it was being spent
+
+Every hardware iteration pays for this, so it is worth the same treatment
+as a tile rule: measure, then explain. The numbers below are one idle-ish
+64-core Linux box, release build, `ecp5-12f-CABGA256`, and they are
+**wall-clock**, so they belong here and never in an assertion. What *can*
+be asserted is beside them: `PlacementReport::work` and
+`RoutingReport::visited`/`queued` count work, not seconds, and mean the
+same thing on a slower machine.
+
+`reticle fpga --timing` prints one line per stage, which is where the
+tables come from.
+
+### First: it was a debug build
+
+The complaint that started this was a **thirteen second floor** on a design
+with no lookup tables in it. That number is `cargo build` without
+`--release`:
+
+| `leds.v` (0 lookup tables) | debug | release |
+|---|---|---|
+| whole flow | 15.3 s | 2.06 s |
+
+So the floor was 2 s, not 13. It is **1.17 s** now, and the rest of this
+section is what the 2 s was. The debug figure is kept because it is the
+first thing to check when a build feels an order of magnitude too slow:
+this flow is five hundred million array accesses with bounds checks on.
+
+### The fixed cost: 1.84 s of 2.06 s, before the design was looked at
+
+| stage | before | after |
+|---|---|---|
+| read the database | 0.03 s | 0.03 s |
+| **expand the fabric** (`TrellisDatabase::load`) | 0.67 s | **0.06 s** |
+| **build the graph** (`Arch::build_graph`) | 1.17 s | **0.80 s** |
+| place (`SiteRules::find`, mostly) | 0.16 s | 0.14 s |
+| whole flow | 2.06 s | 1.17 s |
+
+Callgrind on that run: 31.4 G instructions, 98% of them inside
+`write_ecp5_bitstream`, and `BTreeMap<&str, _>::insert` alone was **32%**
+of the program.
+
+**The expansion walked the die once per position.** "What the routing graph
+is" explains why the loader has to collect every reference of every tile
+before it declares anything — a `CIB+PICT1` owns `JA0` because a `PIOT0`
+elsewhere says `S1E1_JA0` — and there are about a million and a half of
+those references. It was walking them per *position*, calling
+`TileDatabase::wire_names` (which builds a `BTreeSet`) once per position
+per tile and `composition_key` (which joins a type list into a fresh
+`String`) once per reference. But `bits.db` belongs to the **family**: one
+tile type spells the same names wherever it sits, and the only thing that
+varies with the position is which composition an offset lands on. So the
+names are classified once per type, grouped by the offset they point at,
+and a group is handed to a neighbouring composition the first time that
+(type, offset, composition) triple appears — about a hundred thousand set
+insertions over this die instead of three million. The sets are the same,
+because a set does not count how often something was inserted, and
+`references_off_the_grid` is still 3840.
+
+**The graph build asked a linear question a million times.** `is_global`
+was a scan of this die's 467 global wires, asked once per wire of the die:
+half a billion string comparisons for an answer that is almost always no.
+And the wire index hashed sixteen million keys with SipHash-1-3, which is
+the right default for a map that may be fed hostile keys and the wrong one
+for a map whose keys came out of a chip database. A set and a
+multiply-rotate mixer (`arch::FastHasher`) between them took hashing from
+28% of the build to noise.
+
+**What is left, and the obvious next step.** 0.80 s of the remaining 1.17 s
+is still `build_graph`, and most of it is now the irreducible-looking part:
+1.1 million `Wire`s each owning a `String`, 8.3 million `Pip`s, and a
+`HashMap` lookup per resolution. nextpnr does not pay this at all because
+it loads a **prebuilt binary chipdb**. The same move is available here and
+has an obvious home and an obvious invalidation key: `reticle fetch` already
+stores the database under `~/.cache/reticle/<name>/<commit hash>/`, so a
+derived `graph-<part>-<package>.bin` beside it is keyed on exactly the thing
+that can make it stale. It has not been built, because at 1.17 s the fixed
+cost is no longer what a build waits for.
+
+### The per-cell cost: a thousand-sink net, rescanned on every move
+
+`usb_host_target.v` is 3168 lookup tables and 1108 flip-flops, and it took
+**694 s**. `--timing` put 489 s of that in placement and 202 s in routing,
+and `PlacementReport::work` said what the 489 s was in one number:
+
+```
+annealing: 103 temperature(s), 70693890 move(s), 32026441 accepted
+work: 72428913 legality test(s) over 1070412963 step(s),
+      84532947396 cost pin read(s), 681 snapshot(s)
+```
+
+**84 532 947 396 pin reads for 70 693 890 moves: 1196 per move.** The cost
+of a move is the change in half-perimeter wirelength of the signals it
+touches, and `cost_of` worked that out by reading every pin of every one of
+those signals, twice — once before the move and once after. This design's
+clock net has 1136 sinks. A move of one cell cannot change where the other
+1135 pins are, and every one of those reads was a
+`graph.sites[site].tile`: a random probe into a five-megabyte array of site
+records. 84.5 billion of those at about seventeen cycles each is 489
+seconds, near enough.
+
+So the growth was never mysterious. The move count is the textbook
+`10 · n^(4/3)` per temperature, which is 155× more moves for 44× the cells;
+the extra factor is that the cost of *one* move grows with the design's
+largest net. `n^(4/3)` × fan-out is the superlinearity.
+
+`place::Spans` is the structure that was missing: per signal, **how many of
+its pins are in each tile column and in each tile row**, with the lowest and
+highest occupied index of each. Moving a pin is two decrements, two
+increments and a walk of as many columns as the box really shrank by —
+nothing in the net's fan-out at all. It is **exactly** equal to what
+`signal_hpwl` computes, because a bounding box is decided by which columns
+and rows hold a pin and by nothing else, so the annealer accepts the same
+moves in the same order and the placement does not change.
+
+Two smaller things in the same loop, found the same way:
+
+- `SiteRules::allows` read **418** entries per candidate move on
+  `clock_blink.v`. `control_fits` asked `after(site)` — a scan of the move
+  and a look in the placement — once per *pool per site*, six times over
+  for an ECP5 logic tile, and `per_site` was one entry per shared *pin*, so
+  a check read a hundred and fifty of them because the distributed-RAM bel
+  shares pins with all eight of its tile's lookup tables. Occupants worked
+  out once, and the entries grouped by the other site, make it 13.5.
+- `matchable`, Kuhn's algorithm over a control pool, walked all thirty-two
+  bits of its mask. A pool has **two** wires.
+
+| | before | after |
+|---|---|---|
+| legality steps, `clock_blink.v` | 199 067 369 | 6 448 799 |
+| cost pin reads, `usb_host_target.v` | 84 532 947 396 | 1 111 051 172 |
+| `place`, `usb_host_target.v` | 489.4 s | 135.7 s |
+
+### The router's inner loop, which was the same mistake one size down
+
+```
+routed 4408 signal(s) with 63301 pips over 67709 node(s)
+work: 532127182 node(s) visited, 1287538849 queued
+```
+
+Half a billion nodes popped and 1.3 billion edges relaxed, and each one
+loaded a `Wire` — fifty-odd bytes with a `String` in it — to ask for two
+coordinates, then chased a twenty-byte `Pip` to find out where the edge
+went. `route::Geometry` is the four numbers the distance estimate uses plus
+the node's base cost; a per-node table of pip *targets* means the inner loop
+walks two sequential arrays; a node's estimate is cached beside its cost so
+a stale queue entry costs one comparison; and the queue's key is
+`f64::to_bits`, which for a non-negative cost orders exactly as `total_cmp`
+does and compares in one instruction. Same routes, same counts, and
+`route` on this design went from 202 s to 114 s.
+
+### A sharper distance estimate was tried and rejected
+
+This is worth leaving here, because the reasoning looked airtight and the
+part of it that was wrong is the interesting part.
+
+`RouteOptions::astar_weight` charges 0.3 per tile of Manhattan distance
+still to cover, and its own documentation explains that an estimate above
+what a tile really costs makes the search stop at the first path it finds
+rather than the cheapest: "on a fabric whose span-4 lines cross four tiles
+for one node, a tile costs about a quarter of a node". **Every wire of this
+die has span `0 0`** — see "What the routing graph is" — so on this family
+every pip that crosses a tile boundary costs a whole node, one tile of
+distance costs at least one node, and the admissible estimate is 1.0 rather
+than 0.3. The search was being asked to look three times further than the
+fabric requires.
+
+It measures exactly as predicted, and on `clock_blink.v` the routes come out
+**better**: 2 442 457 nodes visited instead of 5 953 689, 1084 pips instead
+of 1089, 2481 set bits instead of 2491, every one decoding. On
+`usb_host_target.v` the router drops from 114 s to 57 s.
+
+And it is still wrong, for a reason that is not about admissibility at all.
+The estimate is scaled per node by the node's own base cost, because
+`CLOCK_PREFERENCE` makes a clock-network node cost a twentieth of a data
+wire; a clock's cheapest route is eighteen hops of cheap wire against seven
+hops of expensive wire, and whether the expansion finds it depends on how
+far past the greedy answer it looks. Sharpen the estimate and it stops
+looking. `wide_state.v` then routes its clock through general routing, and
+`clock_network_use` refuses the design — correctly — with *3 of 3
+flip-flop(s) have a clock that did not arrive on a global clock network*. On
+`usb_host_target.v`, which keeps its network, the routes get 795 pips
+**longer**.
+
+So the weight and the clock preference are one knob with two ends, and
+moving either without the other costs a clock network. What the measurement
+leaves behind is the shape of the real fix: the estimate has to be
+admissible against the *cheapest* class of wire a path might use, not
+against the class of the node it is standing on — which is a change to how
+`node_base` and `astar_weight` compose, not a number. Nothing here has
+built that.
+
+### Where a build's time goes now
+
+| design | lookup tables | before | after |
+|---|---|---|---|
+| `leds.v` | 0 | 2.18 s | 1.17 s |
+| `quiesce.v` | 0 | 2.13 s | 1.38 s |
+| `button_led.v` | 1 | 2.11 s | 1.42 s |
+| `clock_blink.v` | 72 | 4.46 s | 2.31 s |
+| `bidir_loopback.v` | 72 | 4.41 s | 2.89 s |
+| `usb_host_target.v` | 3168 | 694 s | 252 s |
+
+Those are best-of-three, and the "after" column for the small designs was
+taken while something else on the machine was using most of it, so the
+smallest designs are flattered least — `leds.v` measures 1.17 s on a quiet
+box and 1.44 s on a busy one, which is the size of the noise on a
+one-second number and the reason the work counters exist. Every one of the
+six produces the **same bitstream it produced before**: 61, 77, 114, 2491,
+2557 and 128 583 set bits, 0 unexplained in each, and the arcs the bits
+select are the arcs the router chose.
+
+Nothing here is parallel and nothing here was made parallel: a constant
+factor of five is not what sixty-four threads are for, and the three
+structures above are smaller to parallelise than what they replaced. What
+*would* parallelise, for whoever does it: `Arch::build_graph`'s per-tile
+expansion is independent once node ids are handed out, `SiteRules::find` is
+per tile, and the router's rip-up-and-reroute iteration is the classical
+PathFinder parallel target — one signal per thread with the congestion
+arrays shared, which is what nextpnr does. The annealer is the hard one and
+the usual answer is spatial partitioning rather than locks.
+
 ## The part, measured
 
 | | |

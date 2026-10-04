@@ -2537,7 +2537,12 @@ fn apply(graph: &RoutingGraph, churn: &mut Churn, placement: &mut Placement, m: 
         let was = placement.site_of(*instance);
         churn.previous.push((*instance, was));
     }
-    retile(graph, churn, placement, m.iter().map(|(i, s)| (*i, Some(*s))))
+    retile(
+        graph,
+        churn,
+        placement,
+        m.iter().map(|(i, s)| (*i, Some(*s))),
+    )
 }
 
 /// Puts back what [`apply`] moved.
@@ -2571,11 +2576,7 @@ fn retile(
             }
         }
     }
-    let before: u64 = churn
-        .touched
-        .iter()
-        .map(|s| churn.spans.hpwl_of(*s))
-        .sum();
+    let before: u64 = churn.touched.iter().map(|s| churn.spans.hpwl_of(*s)).sum();
     let mut pins = 0u64;
     for (instance, _) in plan.clone() {
         if let Some(site) = placement.site_of(instance) {
@@ -2602,11 +2603,7 @@ fn retile(
         let signal = churn.touched[index];
         churn.spans.settle(signal);
     }
-    let after: u64 = churn
-        .touched
-        .iter()
-        .map(|s| churn.spans.hpwl_of(*s))
-        .sum();
+    let after: u64 = churn.touched.iter().map(|s| churn.spans.hpwl_of(*s)).sum();
     count(|work| &mut work.cost_pins, pins);
     after as f64 - before as f64
 }
@@ -2711,6 +2708,134 @@ mod tests {
         assert!((x[1] - 20.0 / 3.0).abs() < 1e-9, "{x:?}");
         assert_eq!(solve(&Sparse::new(0), &[], 10), Vec::<f64>::new());
         assert!(Sparse::new(0).is_empty());
+    }
+
+    /// One driver and `n` sinks: a clock net's shape, with nothing else in
+    /// the design to confuse the measurement.
+    fn fan_out(n: usize) -> Netlist {
+        let mut netlist = Netlist {
+            instances: Vec::new(),
+            pins: Vec::new(),
+            signals: vec![Signal {
+                name: "net".to_owned(),
+                driver: None,
+                sinks: Vec::new(),
+            }],
+            off_fabric: Vec::new(),
+        };
+        for i in 0..=n {
+            let instance = netlist.instances.len();
+            let pin = netlist.pins.len();
+            let output = i == 0;
+            netlist.pins.push(NetPin {
+                instance,
+                port: if output { "O" } else { "I0" }.to_owned(),
+                bit: 0,
+                role: if output { "o" } else { "i0" }.to_owned(),
+                output,
+                signal: Some(0),
+                constant: None,
+            });
+            if output {
+                netlist.signals[0].driver = Some(pin);
+            } else {
+                netlist.signals[0].sinks.push(pin);
+            }
+            netlist.instances.push(Instance {
+                cell: CellId::from_index(i),
+                name: format!("lut{i}"),
+                primitive: "L".to_owned(),
+                kind: "lut".to_owned(),
+                pins: vec![pin],
+                pin: None,
+            });
+        }
+        netlist
+    }
+
+    /// **A move costs what the cells it moves have on them, not what the
+    /// nets they are on have on them.** The guard on [`Spans`], counted
+    /// rather than timed.
+    ///
+    /// This is the regression that cost the most: the annealer worked out a
+    /// move's cost by reading every pin of every signal it touched, twice,
+    /// so a design with a thousand-sink clock net paid a thousand pin reads
+    /// per move. `usb_host_target.v` read 84.5 **billion** pin positions to
+    /// place 4304 cells, which was 489 of its 694 seconds.
+    ///
+    /// A number of seconds cannot be asserted — CI runs on slower machines —
+    /// so this compares two placements in one process. Both have the same
+    /// number of cells and the same number of moves to make; one net has
+    /// eight sinks and the other two hundred. If the cost of a move scales
+    /// with fan-out, the second does twenty-five times the reading. What it
+    /// must do is **the same**: a bounding box kept per column and per row
+    /// is updated by the pins that moved and by nothing else.
+    ///
+    /// What it would catch: any return to recomputing a signal's bounding
+    /// box from its pins inside the move loop, which is the shape of the
+    /// bug and not a particular number. What it would **not** catch: a
+    /// bounding box that is updated cheaply and *wrongly* — that is
+    /// `the_annealers_boxes_agree_with_a_full_recount`'s job.
+    #[test]
+    fn a_move_costs_the_cells_it_moves_and_not_the_fan_out_of_their_nets() {
+        let (arch, graph) = grid(16, 16);
+        let options = PlaceOptions {
+            // The same number of moves either way, so the only thing that
+            // can differ is what one move costs.
+            moves_per_temperature: Some(2_000),
+            max_temperatures: 4,
+            ..PlaceOptions::default()
+        };
+        let cost_per_move = |sinks: usize| -> f64 {
+            let netlist = fan_out(sinks);
+            let (_, report) =
+                place(&netlist, &arch, &graph, &Constraints::default(), &options).expect("it fits");
+            assert!(
+                report.moves.0 > 1_000,
+                "the annealer ran: {:?}",
+                report.moves
+            );
+            report.work.cost_pins as f64 / report.moves.0 as f64
+        };
+        let narrow = cost_per_move(8);
+        let wide = cost_per_move(200);
+        assert!(
+            wide < 4.0 * narrow,
+            "a move on a 200-sink net costs {wide:.1} pin read(s) against {narrow:.1} on an \
+             8-sink one, which is the fan-out being read again per move"
+        );
+    }
+
+    /// The bounding boxes the annealer keeps are the ones a full recount
+    /// gives, which is what makes [`Spans`] a speed-up and not a different
+    /// cost function.
+    ///
+    /// It is the other half of the test above: that one says the update is
+    /// cheap, this one says it is right. Without it a box that was updated
+    /// wrongly would still be fast, and the placer would quietly be
+    /// optimising something else.
+    #[test]
+    fn the_annealers_boxes_agree_with_a_full_recount() {
+        let (arch, graph) = grid(8, 8);
+        let netlist = chain(12);
+        let (placement, report) = place(
+            &netlist,
+            &arch,
+            &graph,
+            &Constraints::default(),
+            &PlaceOptions::default(),
+        )
+        .expect("it fits");
+        let spans = Spans::new(&netlist, &graph, &placement);
+        for signal in 0..netlist.signals.len() {
+            assert_eq!(
+                spans.hpwl_of(signal),
+                signal_hpwl(&netlist, &graph, &placement, signal),
+                "signal {signal}"
+            );
+        }
+        assert_eq!(spans.total(), hpwl(&netlist, &graph, &placement));
+        assert_eq!(report.hpwl_after, spans.total());
     }
 
     #[test]

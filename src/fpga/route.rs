@@ -573,15 +573,15 @@ pub fn route(
     // the expansion walks two sequential arrays instead of chasing a
     // twenty-byte `Pip` per edge. Four bytes an edge, against a cache miss
     // per edge relaxed — 1.3 billion of them for one design on this die.
-    let mut reach_start: Vec<u32> = vec![0; graph.nodes.len() + 1];
+    let mut reach_start: Vec<u32> = Vec::with_capacity(graph.nodes.len() + 1);
     let mut reach: Vec<NodeId> = Vec::with_capacity(graph.pips.len());
     for node in 0..graph.nodes.len() {
-        reach_start[node] = u32::try_from(reach.len()).unwrap_or(u32::MAX);
+        reach_start.push(u32::try_from(reach.len()).unwrap_or(u32::MAX));
         for pip in graph.outgoing(NodeId::try_from(node).unwrap_or(0)) {
             reach.push(graph.pip(*pip).to);
         }
     }
-    reach_start[graph.nodes.len()] = u32::try_from(reach.len()).unwrap_or(u32::MAX);
+    reach_start.push(u32::try_from(reach.len()).unwrap_or(u32::MAX));
     let mut scratch = Scratch::new(graph.nodes.len());
     let mut routing = Routing::new(netlist.signals.len());
     let mut report = RoutingReport::default();

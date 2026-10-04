@@ -435,7 +435,7 @@ impl TrellisDatabase {
         // It used to be re-derived per position by filtering the whole
         // tile list, which is the grid squared for an answer this loop
         // already has in order.
-        let mut windows_at: BTreeMap<(u32, u32), (Vec<(String, u32)>, u32)> = BTreeMap::new();
+        let mut windows_at: BTreeMap<(u32, u32), FrameWindows> = BTreeMap::new();
         for tile in &self.tiles {
             let at = (tile.col, tile.row);
             frames.push(at, tile.window);
@@ -2292,6 +2292,10 @@ pub struct DpRamBits {
 fn slice_letter(index: usize) -> char {
     ['A', 'B', 'C', 'D'][index & 3]
 }
+
+/// One position's Lattice tiles with where each starts in that position's
+/// combined frame numbering, and how many frames they come to in all.
+type FrameWindows = (Vec<(String, u32)>, u32);
 
 /// The composition key of a position, borrowed from the map that owns it.
 fn composition_key<'a>(type_of: &'a BTreeMap<String, usize>, list: &[String]) -> Option<&'a str> {
