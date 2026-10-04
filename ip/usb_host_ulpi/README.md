@@ -487,10 +487,32 @@ Deliberately not implemented, with reasons:
   detach is SE0 on `line_state`, and **nothing acts on it once the device
   is up** — see below.
 - **VBUS switching.** The receive command's `VbusState` is reported and
-  nothing is done with it. Whether a port has power is a board's
-  question, settled by a switch outside the transceiver, and on the board
-  this was written for it is a *bidirectional* switch between connectors
-  where the wrong combination ties two hosts' supplies together. This
+  nothing is done with it — which, on this board, is the only thing that
+  could have been right. **A Cynthion's TARGET transceiver does not sense
+  the connector its power flows through.** Traced from the published
+  Cynthion PCB design: the transceiver's VBUS pin (U9 pin 17) reaches
+  `TARGET_C_VBUS_IN` through 20 kOhm, a 24 V clamp and 5.1 kOhm, and that
+  net is the **TARGET-C** connector's VBUS alone. The rail a device in
+  **TARGET-A** draws from is `TARGET_A_VBUS_IN`, which each source reaches
+  through its own back-to-back PMOS pair — AUX through Q4/Q5, TARGET-C
+  through Q6/Q7, CONTROL through a third pair including Q2. So a build
+  that closes only the AUX switch powers a device in TARGET-A while the
+  transceiver's sense pin, watching an unpowered TARGET-C, correctly reads
+  **`00`, below SessEnd**. Measured exactly that: a GreatFET enumerated
+  through TARGET-A with `VBEN=04` and `VBUS=00` in the same report.
+  AUX and CONTROL are not like this; each senses its own connector. TARGET
+  is the one port whose power path and sense pin are different connectors.
+  **So on TARGET, `VbusState` does not answer "is my device powered".** A
+  design that needs that must look at the TARGET-A power path instead —
+  the shared rail reaches that connector through a 0.02 Ohm current-sense
+  resistor (R2), and *how that sense signal is read has not been traced*.
+  The decode itself is not in doubt: `VbusState` is bits 3:2 of the
+  receive command, which is where LUNA's own ULPI interface reads it, and
+  the transceiver sends a receive command only when something changes, so
+  what is reported is always the latest one it sent.
+- **A switch is a board's question, not this block's.** On this board it is
+  a *bidirectional* switch between connectors, where the wrong combination
+  ties two hosts' supplies together. This
   block neither reads a switch nor drives one; a design that drives one
   does it in its own top level where the board's own comment about it can
   be read.
@@ -714,6 +736,8 @@ DBUG=00              15h — LineState SE0
 IOPM=06              39h, read back as this design wrote it
 RXCM=40  SEEN=01     a receive command arrived, and its ID bit is set
 LINE=00  VBUS=00     out of that command: SE0, and below SessEnd
+                    (and `VBUS=00` stays correct even once a device is
+                     powered and enumerating: see "VBUS switching" above)
 PHYR=01  RFAL=00     `phy_ready`, and not one failed register read
 STGE=01  FLAG=00     waiting for an attach; nothing is attached
 ```
