@@ -2,6 +2,7 @@ routing:
   iteration 1: 289 pips, 2 overused node(s), 2 total overuse
   iteration 2: 292 pips, 0 overused node(s), 0 total overuse
   routed 42 signal(s) with 292 pips over 334 node(s)
+  work: 87341 node(s) visited, 191848 queued
 signals:
   a[0] 14 pip(s)
   a[1] 9 pip(s)

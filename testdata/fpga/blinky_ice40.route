@@ -5,6 +5,7 @@ routing:
   iteration 4: 195 pips, 1 overused node(s), 1 total overuse
   iteration 5: 198 pips, 0 overused node(s), 0 total overuse
   routed 26 signal(s) with 198 pips over 224 node(s)
+  work: 171700 node(s) visited, 369514 queued
 signals:
   clk 6 pip(s)
   clk$gb 8 pip(s)

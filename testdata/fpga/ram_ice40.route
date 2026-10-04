@@ -17,6 +17,7 @@ routing:
   iteration 16: 374 pips, 1 overused node(s), 1 total overuse
   iteration 17: 382 pips, 0 overused node(s), 0 total overuse
   routed 36 signal(s) with 382 pips over 418 node(s)
+  work: 4539743 node(s) visited, 5987264 queued
 signals:
   clk 10 pip(s)
   raddr[0] 10 pip(s)
