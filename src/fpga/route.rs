@@ -47,7 +47,6 @@
 //! pin order, and the priority queue breaks ties by node id, so the same
 //! placement always produces the same routing.
 
-use std::cmp::Ordering;
 use std::collections::{BTreeSet, BinaryHeap};
 use std::error::Error;
 use std::fmt;
@@ -416,22 +415,18 @@ impl RoutingReport {
     }
 }
 
-/// A total order over costs, so they can go in a heap.
-#[derive(Clone, Copy, PartialEq)]
-struct Score(f64);
-
-impl Eq for Score {}
-
-impl Ord for Score {
-    fn cmp(&self, other: &Self) -> Ordering {
-        self.0.total_cmp(&other.0)
-    }
-}
-
-impl PartialOrd for Score {
-    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        Some(self.cmp(other))
-    }
+/// A cost as a sort key the queue can compare with one integer
+/// instruction.
+///
+/// For a non-negative `f64` — and every cost here is a sum and a product of
+/// non-negative numbers — `to_bits` is monotonically non-decreasing, so
+/// this orders exactly as `total_cmp` does, ties and all, and the router
+/// takes the same decisions. What it saves is the comparison itself:
+/// the expansion pushes 1.3 billion entries for one design on this die and
+/// each push sifts up through about twenty of them.
+fn score(cost: f64) -> u64 {
+    debug_assert!(cost >= 0.0, "a routing cost is never negative: {cost}");
+    cost.to_bits()
 }
 
 /// What the maze expansion needs to know about one node, in one cache
@@ -977,17 +972,17 @@ fn maze(
     };
 
     scratch.start();
-    let mut heap: BinaryHeap<std::cmp::Reverse<(Score, NodeId)>> = BinaryHeap::new();
+    let mut heap: BinaryHeap<std::cmp::Reverse<(u64, NodeId)>> = BinaryHeap::new();
     for node in tree {
         let estimate = heuristic(*node);
         scratch.set(*node, 0.0, estimate, PipId::MAX);
-        heap.push(std::cmp::Reverse((Score(estimate), *node)));
+        heap.push(std::cmp::Reverse((score(estimate), *node)));
     }
     let (reach_start, reach) = edges;
     let mut reached = false;
-    while let Some(std::cmp::Reverse((Score(estimate), node))) = heap.pop() {
+    while let Some(std::cmp::Reverse((estimate, node))) = heap.pop() {
         scratch.visited += 1;
-        if estimate > scratch.estimate_of(node) {
+        if estimate > score(scratch.estimate_of(node)) {
             continue;
         }
         if node == sink {
@@ -1003,7 +998,7 @@ fn maze(
                 let estimate = candidate + heuristic(*next);
                 scratch.set(*next, candidate, estimate, *pip);
                 scratch.queued += 1;
-                heap.push(std::cmp::Reverse((Score(estimate), *next)));
+                heap.push(std::cmp::Reverse((score(estimate), *next)));
             }
         }
     }

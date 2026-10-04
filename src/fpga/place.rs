@@ -1332,19 +1332,32 @@ impl SiteRules {
 /// augmenting search never goes more than a step or two deep.
 fn matchable(wanted: &[(usize, u32)]) -> bool {
     fn assign(at: usize, wanted: &[(usize, u32)], taken: &mut [usize], seen: &mut u32) -> bool {
-        for wire in 0..32u32 {
-            let bit = 1 << wire;
-            if wanted[at].1 & bit == 0 || *seen & bit != 0 {
-                continue;
-            }
+        // Only the wires this pin will actually take, not all thirty-two
+        // of the mask. A control pool has two wires; walking the whole
+        // word was most of what a legality check spent here, and it is
+        // asked once per pool per move.
+        let mut left = wanted[at].1 & !*seen;
+        while left != 0 {
+            let wire = left.trailing_zeros();
+            let bit = 1u32 << wire;
+            left &= !bit;
             *seen |= bit;
             let wire = wire as usize;
             if taken[wire] == usize::MAX || assign(taken[wire], wanted, taken, seen) {
                 taken[wire] = at;
                 return true;
             }
+            // A deeper call may have claimed more wires; honour that.
+            left &= !*seen;
         }
         false
+    }
+    // One signal needs one wire it allows, which is a bit test, and no
+    // signals need nothing. Nearly every tile is one of these two.
+    match wanted {
+        [] => return true,
+        [(_, mask)] => return *mask != 0,
+        _ => {}
     }
     let mut taken = [usize::MAX; 32];
     for at in 0..wanted.len() {
