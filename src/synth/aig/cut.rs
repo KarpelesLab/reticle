@@ -27,15 +27,19 @@ pub type Fanins<'a> = dyn FnMut(u32) -> Option<(Edge, Edge)> + 'a;
 /// leaves each. Deterministic: expansions are explored breadth first in
 /// leaf order.
 pub fn enumerate_cuts(fanins: &mut Fanins<'_>, root: u32, k: usize, limit: usize) -> Vec<Vec<u32>> {
-    // `seen` never holds more than `limit + 1` entries — a cut joins it
-    // exactly when it joins `result`, which stops at `limit` — so a linear
-    // scan over short leaf lists is cheaper than hashing every one of them.
-    let mut seen: Vec<Vec<u32>> = vec![vec![root]];
-    let mut result = Vec::new();
+    // The cuts already seen are the trivial cut plus `result`, because a cut
+    // joins the one exactly when it joins the other — so `result` *is* the
+    // membership test, there is no second copy of every cut to keep, and the
+    // scan is over at most `limit` lists of at most `k` leaves, which is
+    // cheaper than hashing each of them.
+    let trivial = [root];
+    let mut result: Vec<Vec<u32>> = Vec::new();
     let mut queue: Vec<Vec<u32>> = vec![vec![root]];
     let mut head = 0;
     while head < queue.len() && result.len() < limit {
-        let cut = queue[head].clone();
+        // Taken, not cloned: `head` only moves forward, so this entry is
+        // never read again.
+        let cut = std::mem::take(&mut queue[head]);
         head += 1;
         for (pos, &leaf) in cut.iter().enumerate() {
             let Some((a, b)) = fanins(leaf) else {
@@ -56,8 +60,7 @@ pub fn enumerate_cuts(fanins: &mut Fanins<'_>, root: u32, k: usize, limit: usize
                 continue;
             }
             next.sort_unstable();
-            if !seen.contains(&next) {
-                seen.push(next.clone());
+            if next != trivial && !result.contains(&next) {
                 result.push(next.clone());
                 if result.len() >= limit {
                     break;
@@ -347,5 +350,75 @@ mod tests {
         // A leaf set that does not separate the root has no function over
         // it: `{a, b}` leaves `c` reachable through `bc`.
         assert!(cone_truth(&mut fan, root.node(), &[a.node(), b.node()], 2).is_none());
+    }
+
+    /// Working space carried from one walk to the next answers exactly as a
+    /// fresh one does, including when the epoch counter wraps.
+    ///
+    /// This is the risk the scratch introduced. Its visited marks are an
+    /// epoch stamp rather than a cleared set, so a stale stamp that aliased
+    /// the current epoch would make a node read as already visited and
+    /// silently shrink a cone — the function would be of a smaller cut than
+    /// the one asked for, which is the shape of defect
+    /// `every_cut_computes_its_node` exists to catch, found here instead at
+    /// the level it is introduced.
+    #[test]
+    fn a_reused_scratch_answers_like_a_fresh_one() {
+        // A graph with reconvergence and a constant, so the walks differ in
+        // size and some leaf sets fail to separate their root.
+        let mut g = Aig::new();
+        let ins: Vec<Edge> = (0..5).map(|_| g.add_input()).collect();
+        let mut pool = ins.clone();
+        let mut seed = 0x9e37_79b9_7f4a_7c15u64;
+        let mut next = move || {
+            seed ^= seed << 13;
+            seed ^= seed >> 7;
+            seed ^= seed << 17;
+            seed
+        };
+        for _ in 0..30 {
+            let pick = |r: u64| {
+                let at = usize::try_from(r % pool.len() as u64).expect("index");
+                if r & 0x1_0000 != 0 {
+                    !pool[at]
+                } else {
+                    pool[at]
+                }
+            };
+            let (a, b) = (pick(next()), pick(next()));
+            let node = g.and(a, b);
+            if !pool.contains(&node) {
+                pool.push(node);
+            }
+        }
+        // Every (node, leaf set) pair either walk could be asked about.
+        let mut questions: Vec<(u32, Vec<u32>)> = Vec::new();
+        for id in 1..u32::try_from(g.len()).expect("node count") {
+            if !g.is_and(id) {
+                continue;
+            }
+            let mut fan = |x: u32| g.is_and(x).then(|| g.fanins(x));
+            for cut in enumerate_cuts(&mut fan, id, 4, 16) {
+                questions.push((id, cut));
+            }
+            // And a leaf set that is deliberately not a cut.
+            questions.push((id, vec![ins[0].node()]));
+        }
+        assert!(questions.len() > 50, "only {} questions", questions.len());
+
+        // One scratch for all of them, with the epoch set to wrap in the
+        // middle so the reset path is exercised too.
+        let mut shared = ConeScratch::new();
+        shared.epoch = u32::MAX - u32::try_from(questions.len() / 2).expect("count");
+        for (id, leaves) in &questions {
+            let vars = leaves.len().max(1);
+            let mut fan = |x: u32| g.is_and(x).then(|| g.fanins(x));
+            let fresh = cone_truth(&mut fan, *id, leaves, vars);
+            let mut fan = |x: u32| g.is_and(x).then(|| g.fanins(x));
+            let reused = cone_truth_with(&mut shared, &mut fan, *id, leaves, vars);
+            assert_eq!(fresh, reused, "node {id} over leaves {leaves:?}");
+        }
+        // The counter really did wrap, so the branch above ran.
+        assert!(shared.epoch < u32::MAX / 2, "the epoch did not wrap");
     }
 }

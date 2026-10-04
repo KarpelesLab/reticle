@@ -266,6 +266,13 @@ quirks, and what the two cores cost on real parts. The machinery itself
 is in [`docs/ip.md`](docs/ip.md) and the blocks in
 [`docs/ip-library.md`](docs/ip-library.md).
 
+[`docs/synthesis-performance.md`](docs/synthesis-performance.md) is where
+synthesis spends its time, sampled rather than guessed: how to profile this
+compiler on a machine with no `perf`, which stage actually dominates a
+lookup-table mapping (it was not the one that looked guilty), what the
+mapping equivalence check costs once it is told apart from the generic one,
+and what is left.
+
 ## Building
 
 ```sh

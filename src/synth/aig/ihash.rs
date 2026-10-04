@@ -15,10 +15,16 @@
 //! [`cone_truth`](super::cut::cone_truth) (10.7%), the rewriting library's
 //! memo (8.4%), the structural hash table (4.9%), the MFFC counter's memo
 //! (6.2%) and cut enumeration (4.4%). None of those keys is adversarial and
-//! none of those maps is ever iterated, so the collision resistance buys
-//! nothing.
+//! none of those maps is ever iterated, so the collision resistance bought
+//! nothing. `docs/synthesis-performance.md` has the whole profile.
 //!
-//! [`IntHasher`] replaces it with one multiply-rotate step per written word
+//! Most of those sites have since stopped hashing altogether — a cone walk
+//! marks its nodes in an epoch-stamped array and reaches its tables by slot,
+//! and the two smallest memos are association lists. What is left here is the
+//! structural hash table, whose keys are pairs of edges and whose size is the
+//! graph, and the signature index the candidate classes are built from.
+//!
+//! [`IntHasher`] replaces SipHash with one multiply-rotate step per word
 //! and a final avalanche, in the manner of Firefox's `FxHash`. The final mix
 //! matters: `hashbrown` takes the bucket index from the *low* bits of the
 //! hash and its control byte from the *high* seven, and a bare multiplicative

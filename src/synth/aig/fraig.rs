@@ -462,6 +462,11 @@ struct ConeSpace {
     order: Vec<u32>,
     /// The inputs those cones depend on, ascending.
     inputs: Vec<u32>,
+    /// How many walks this space has been used for. Only
+    /// `a_candidate_pair_costs_one_cone_walk` reads it; a walk is the unit of
+    /// work the prover is priced in, and counting it is how a regression
+    /// back to two walks a pair gets noticed.
+    walks: usize,
 }
 
 impl ConeSpace {
@@ -474,6 +479,7 @@ impl ConeSpace {
             self.epoch = 1;
         }
         self.slots = 0;
+        self.walks += 1;
         self.stack.clear();
         self.order.clear();
         self.inputs.clear();
@@ -783,6 +789,56 @@ mod tests {
             assert_eq!(g.eval(&bits), reference.eval(&bits));
         }
         assert_ne!(g.outputs()[0], g.outputs()[1]);
+    }
+
+    /// Deciding one candidate pair walks its cone once.
+    ///
+    /// This counts work, not seconds. The prover used to walk each pair's
+    /// cone twice — once bounded by `max_cone` for the exhaustive tier, then
+    /// again unbounded for the SAT tier — and on a miter, where most pairs
+    /// have far too many inputs for the exhaustive tier, that was half the
+    /// traversals. Nothing else here would notice it coming back: the
+    /// verdicts are identical either way, which is the point.
+    #[test]
+    fn a_candidate_pair_costs_one_cone_walk() {
+        // Sixteen inputs, so the pair is past `max_exhaustive` and the SAT
+        // tier is the one that takes it: the second walk used to be here.
+        let mut g = Aig::new();
+        let a: Vec<Edge> = (0..8).map(|_| g.add_input()).collect();
+        let b: Vec<Edge> = (0..8).map(|_| g.add_input()).collect();
+        let e1 = g.eq_bits(&a, &b);
+        let lt = g.lt_bits(&a, &b, false);
+        let gt = g.lt_bits(&b, &a, false);
+        let e2 = g.and(!lt, !gt);
+        g.add_output(e1);
+        g.add_output(e2);
+        let (early, late) = if e1.node() < e2.node() {
+            (e1, e2)
+        } else {
+            (e2, e1)
+        };
+        let opts = FraigOptions::default();
+        let mut fwd = Forward::identity(g.len());
+        let mut prover = ConeProver {
+            opts: &opts,
+            space: ConeSpace::default(),
+        };
+        let verdict = prover.prove(&g, &mut fwd, late.node(), Edge::new(early.node(), false));
+        assert_eq!(prover.space.walks, 1, "{verdict:?} took more than one walk");
+        // And the shape of the walk is the whole pair of cones, not a
+        // fragment of one: sixteen inputs and both comparators.
+        assert_eq!(prover.space.inputs.len(), 16);
+        assert!(
+            prover.space.order.len() > 40,
+            "{}",
+            prover.space.order.len()
+        );
+        // With a solver the pair is decided either way — which phase of the
+        // earlier node this one equals is not what is being measured here.
+        // Without one it comes back unknown, and that too is one walk.
+        if cfg!(feature = "formal") {
+            assert_ne!(verdict, Verdict::Unknown, "the SAT tier did not decide");
+        }
     }
 
     #[test]
