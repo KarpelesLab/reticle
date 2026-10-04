@@ -16,6 +16,23 @@ pub fn words_for(vars: usize) -> usize {
     if vars <= 6 { 1 } else { 1 << (vars - 6) }
 }
 
+/// The word-level pattern of the projection onto variable `v < 6`: the bits
+/// of a `u64` at the patterns where `v` reads one.
+///
+/// It is a plain constant so that the places needing only the mask — the
+/// cofactor and the dependency test, which run deep inside `isop` — do not
+/// build a whole [`TruthTable`] to read one word out of it.
+fn var_word(v: usize) -> u64 {
+    match v {
+        0 => 0xAAAA_AAAA_AAAA_AAAA,
+        1 => 0xCCCC_CCCC_CCCC_CCCC,
+        2 => 0xF0F0_F0F0_F0F0_F0F0,
+        3 => 0xFF00_FF00_FF00_FF00,
+        4 => 0xFFFF_0000_FFFF_0000,
+        _ => 0xFFFF_FFFF_0000_0000,
+    }
+}
+
 /// The mask of meaningful bits in the (single) word of a table over at
 /// most six variables.
 fn word_mask(vars: usize) -> u64 {
@@ -133,16 +150,9 @@ impl TruthTable {
         };
         let out = table.words.as_mut_slice();
         if v < 6 {
-            let pattern = match v {
-                0 => 0xAAAA_AAAA_AAAA_AAAA,
-                1 => 0xCCCC_CCCC_CCCC_CCCC,
-                2 => 0xF0F0_F0F0_F0F0_F0F0,
-                3 => 0xFF00_FF00_FF00_FF00,
-                4 => 0xFFFF_0000_FFFF_0000,
-                _ => 0xFFFF_FFFF_0000_0000,
-            };
+            let pattern = var_word(v) & word_mask(vars);
             for w in out.iter_mut() {
-                *w = pattern & word_mask(vars);
+                *w = pattern;
             }
         } else {
             for (i, w) in out.iter_mut().enumerate() {
@@ -265,9 +275,62 @@ impl TruthTable {
         self.zip(other, |a, b| a ^ b)
     }
 
+    /// Conjoins `other` in place.
+    ///
+    /// The in-place forms exist for `isop`, which builds a dozen temporary
+    /// tables per recursive call and used one allocation and one pass for
+    /// each. They need no masking: the unused high bits of a table are zero,
+    /// and an AND or an OR with another canonical table leaves them so.
+    pub fn and_with(&mut self, other: &TruthTable) {
+        self.zip_with(other, |a, b| a & b);
+    }
+
+    /// Conjoins the complement of `other` in place (`self & !other`).
+    pub fn and_not_with(&mut self, other: &TruthTable) {
+        self.zip_with(other, |a, b| a & !b);
+    }
+
+    /// Disjoins `other` in place.
+    pub fn or_with(&mut self, other: &TruthTable) {
+        self.zip_with(other, |a, b| a | b);
+    }
+
+    fn zip_with(&mut self, other: &TruthTable, f: impl Fn(u64, u64) -> u64) {
+        assert_eq!(
+            self.vars, other.vars,
+            "truth tables over different variables"
+        );
+        for (w, &b) in self
+            .words
+            .as_mut_slice()
+            .iter_mut()
+            .zip(other.words.as_slice())
+        {
+            *w = f(*w, b);
+        }
+    }
+
     /// True when the function depends on variable `v`.
+    ///
+    /// This compares the two cofactors without building them: for a variable
+    /// inside one word, the bits at the patterns where `v` reads one against
+    /// the bits where it reads zero; for a wider variable, the word pairs
+    /// that differ only in `v`. [`support`](TruthTable::support) asks this of
+    /// every variable of every cut the technology mapper merges, and two
+    /// cofactors would have been two tables each time.
     pub fn depends_on(&self, v: usize) -> bool {
-        self.cofactor(v, false) != self.cofactor(v, true)
+        assert!(v < self.vars, "variable {v} out of range");
+        let words = self.words.as_slice();
+        if v < 6 {
+            let shift = 1u32 << v;
+            let ones = var_word(v);
+            // A table's unused high bits are zero on both sides of the
+            // comparison, so they never claim a dependency of their own.
+            words.iter().any(|&w| (w & !ones) != ((w & ones) >> shift))
+        } else {
+            let stride = 1usize << (v - 6);
+            (0..words.len()).any(|i| (i >> (v - 6)) & 1 == 0 && words[i] != words[i + stride])
+        }
     }
 
     /// The set of variables the function depends on, as a bit mask.
@@ -284,7 +347,7 @@ impl TruthTable {
         let out = table.words.as_mut_slice();
         if v < 6 {
             let shift = 1u32 << v;
-            let keep = TruthTable::var(6.min(self.vars).max(v + 1), v).as_u64();
+            let keep = var_word(v) & word_mask(self.vars);
             let keep = if value { keep } else { !keep };
             for w in out.iter_mut() {
                 let kept = *w & keep;

@@ -83,10 +83,23 @@ fn isop_rec(on: &TruthTable, upper: &TruthTable, vars_left: usize) -> (Vec<Cube>
     let on1 = on.cofactor(x, true);
     let up0 = upper.cofactor(x, false);
     let up1 = upper.cofactor(x, true);
-    let (c0, t0) = isop_rec(&on0.and(&up1.not()), &up0, x);
-    let (c1, t1) = isop_rec(&on1.and(&up0.not()), &up1, x);
-    let rest_on = on0.and(&t0.not()).or(&on1.and(&t1.not()));
-    let (c2, t2) = isop_rec(&rest_on, &up0.and(&up1), x);
+    // Built in place: the same functions, half the temporaries. This is the
+    // body of a recursion that branches three ways on every variable, so a
+    // table it does not build is a table it does not build 3^k times.
+    let mut arg0 = on0.clone();
+    arg0.and_not_with(&up1); // on0 & !up1
+    let (c0, t0) = isop_rec(&arg0, &up0, x);
+    let mut arg1 = on1.clone();
+    arg1.and_not_with(&up0); // on1 & !up0
+    let (c1, t1) = isop_rec(&arg1, &up1, x);
+    let mut rest_on = on0.clone();
+    rest_on.and_not_with(&t0); // on0 & !t0
+    let mut covered1 = on1.clone();
+    covered1.and_not_with(&t1); // on1 & !t1
+    rest_on.or_with(&covered1); // (on0 & !t0) | (on1 & !t1)
+    let mut up_both = up0.clone();
+    up_both.and_with(&up1);
+    let (c2, t2) = isop_rec(&rest_on, &up_both, x);
     let mut cubes = Vec::with_capacity(c0.len() + c1.len() + c2.len());
     for c in c0 {
         cubes.push(Cube {
@@ -102,7 +115,13 @@ fn isop_rec(on: &TruthTable, upper: &TruthTable, vars_left: usize) -> (Vec<Cube>
     }
     cubes.extend(c2);
     let xv = TruthTable::var(on.vars(), x);
-    let tt = t0.and(&xv.not()).or(&t1.and(&xv)).or(&t2);
+    // `(t0 & !x) | (t1 & x) | t2`, in place.
+    let mut tt = t0;
+    tt.and_not_with(&xv);
+    let mut hi = t1;
+    hi.and_with(&xv);
+    tt.or_with(&hi);
+    tt.or_with(&t2);
     (cubes, tt)
 }
 

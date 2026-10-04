@@ -286,17 +286,20 @@ pub fn cone_truth_with(
         // node of the cone: it is an input this leaf set does not separate.
         let ia = scratch.table_at(a.node())?;
         let ib = scratch.table_at(b.node())?;
-        let ta = if a.is_complement() {
+        // One table built, then conjoined in place: the second fanin's
+        // complement folds into the AND rather than becoming a table of its
+        // own, which is two fewer per node of every cone walked.
+        let mut t = if a.is_complement() {
             scratch.tables[ia].not()
         } else {
             scratch.tables[ia].clone()
         };
-        let tb = if b.is_complement() {
-            scratch.tables[ib].not()
+        if b.is_complement() {
+            t.and_not_with(&scratch.tables[ib]);
         } else {
-            scratch.tables[ib].clone()
-        };
-        scratch.set_table(id, ta.and(&tb));
+            t.and_with(&scratch.tables[ib]);
+        }
+        scratch.set_table(id, t);
     }
     let at = scratch.table_at(root)?;
     // The caller owns the answer; the slot it came from is not read again.

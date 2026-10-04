@@ -571,17 +571,18 @@ fn simulate_cone(space: &ConeSpace, aig: &Aig, fwd: &mut Forward, vars: usize) -
         let b = fwd.resolve(b);
         let ia = space.slot_of(a.node());
         let ib = space.slot_of(b.node());
-        let ta = if a.is_complement() {
+        let mut t = if a.is_complement() {
             values[ia].not()
         } else {
             values[ia].clone()
         };
-        let tb = if b.is_complement() {
-            values[ib].not()
+        // The second fanin's complement folds into the conjunction.
+        if b.is_complement() {
+            t.and_not_with(&values[ib]);
         } else {
-            values[ib].clone()
-        };
-        values[space.slot_of(id)] = ta.and(&tb);
+            t.and_with(&values[ib]);
+        }
+        values[space.slot_of(id)] = t;
     }
     values
 }
