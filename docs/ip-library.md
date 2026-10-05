@@ -85,6 +85,7 @@ It is distributed as part of the repository instead.
 | `usb_device_ulpi` | `usb_device_ulpi`, `usb_ulpi_link` | the same device behind a ULPI transceiver, which does the line work in silicon: the bus turnaround, transmit and receive commands, register access, one 60 MHz clock and no PLL | `usb_device_fs` |
 | `usb_host_ulpi` | `usb_host_ulpi`, `usb_ulpi_host_link`, `usb_host_sie`, `usb_host_enum` | the **other end of the wire**: a USB full-speed host behind a ULPI transceiver — a frame every millisecond, tokens with CRC5, data packets with CRC16, handshakes, a timeout with retries, a bus reset driven from the transceiver's own terminations, and an enumeration that reads the device and configuration descriptors and sets an address and a configuration | `usb_device_fs` |
 | `usb_cdc_acm` | `usb_cdc_acm`, `usb_cdc_req`, `usb_cdc_acm_fs`, `usb_cdc_acm_ulpi` | a USB serial port the operating system's own driver binds to: two interfaces with the union functional descriptor, the line-coding and control-line requests, a notification endpoint that sends SERIAL_STATE and a 64-byte bulk pair, behind either link layer | `usb_device_fs`, `usb_device_ulpi` |
+| `usb_hub` | `usb_hub`, `usb_hub_req`, `usb_hub_fs`, `usb_hub_ulpi` | a USB 2.0 full-speed **hub**, which is the other class every operating system already has a driver for: the hub and port class requests of USB 2.0 §11.24.2, the hub descriptor of §11.23.2.1, one interrupt IN status-change endpoint and **no bulk endpoint at all**, with a port whose state is read from a second USB controller on the other side of the die | `usb_device_fs`, `usb_device_ulpi` |
 | `ppu2c02` | `ppu2c02`, `ppu_palette` | NES-compatible picture unit: 256x240 raster, nametables and attributes, scrolling through `v`/`t`/`x`/`w`, 8x8 sprites with per-line evaluation, priority and sprite zero hit | — |
 
 `ppu2c02` is the block whose *subject* needs a statement rather than only
@@ -158,9 +159,26 @@ long in three places a device's never had to be:
   page says what the measurement to take is and which reference
   bitstreams would settle it.
 
-Its fourth confidence level is **CHECKED** in a different sense from
-`usb_cdc_acm`'s: not "a host did this" but "**our host did this to our
-own device**", which is a real test and a smaller claim.
+[`ip/usb_hub/README.md`](../ip/usb_hub/README.md) is the fifth, and it is
+the page whose **first** section is an argument about why the block is not
+the thing its name suggests. A hub is a repeater — USB 2.0 §11.1.1 — and
+through a ULPI transceiver the floor for a byte in and a byte out is about
+24 bit times against the 4 a hub is allowed, because the transceiver does
+not report a byte until the byte is complete and then prepends a fresh SYNC
+on the way out. So `usb_hub` is a hub's **control endpoint**: the
+descriptors, the class requests, the port state and the status-change
+endpoint, with a second USB controller behind the port and nothing joining
+the two conversations. That page's §2 is the timing, §8 is the kernel log of
+a host finding the hub, finding something on its port and failing to
+enumerate it, and both are written as the correct outcome of this round
+rather than as a defect. It also carries one deliberate departure from the
+other four: it cites chapter 11 by **section** and never by table number,
+because a section number misquoted is findable and a table number misquoted
+sends a reader somewhere else and looks authoritative doing it.
+
+`usb_host_ulpi`'s fourth confidence level is **CHECKED** in a different
+sense from `usb_cdc_acm`'s: not "a host did this" but "**our host did this
+to our own device**", which is a real test and a smaller claim.
 `tests/ip_library.rs` puts `usb_host_ulpi` and `usb_device_ulpi` on one
 D+ / D- pair, each behind its own transceiver model, and asserts the
 eighteen bytes of the device descriptor and the thirty-two of the
@@ -836,6 +854,84 @@ one recorded it.
 
 As before, those numbers are **printed and never asserted**: nothing here is
 compared against a clock and `tools/check.sh` does not run that test.
+
+## The second class, and the endpoint it does not have
+
+`usb_hub` is the second class layer, and what is interesting about it is almost
+all subtraction. A serial port needed two interfaces, five functional
+descriptors, three endpoints and sixty-seven bytes of configuration descriptor.
+A hub needs **one interface, one endpoint and twenty-five bytes** — USB 2.0
+§11.23.1 is one page and that is all of it — because a hub's one class-specific
+descriptor is fetched by a request of its own, §11.23.2.1, and is nine bytes it
+hands over through the class hook rather than nine bytes in a parameter.
+
+**It is the first block in this library with no data endpoint**, and that is a
+parameter `usb_dev_core` gained for it: `DATA_ENDP = 4'd0`, the same convention
+`NOTIF_ENDP = 4'd0` already had, with both directions of `usb_bulk_ep` turned
+off, `own_data` a flip-flop whose data input is the constant zero and the
+buffers, the multiplexer arm and the byte interface all removed with it. The
+alternative was to leave a bulk pair in the fabric that no descriptor declares
+and no host would ever address, which at 64 bytes a direction is over a thousand
+flip-flops or sixteen `TRELLIS_DPR16X4` for nothing.
+
+**So a hub costs less than the vendor-specific device it is built on.** On the
+ECP5, `usb_device_fs` is 853 LUT4, 355 flip-flops and 16 `TRELLIS_DPR16X4`, and
+`usb_hub_fs` is **843, 317 and 2** — ten fewer lookup tables, thirty-eight fewer
+flip-flops and fourteen fewer distributed RAMs than the block it is a class layer
+on top of. `usb_device_ulpi` to `usb_hub_ulpi` is the same subtraction twice: 944
+and 361 and 16 against 932 and 323 and 2. Against the other class,
+`usb_cdc_acm_ulpi`'s 1209 and 480 and 18, the hub is 277 lookup tables and 157
+flip-flops smaller. A class layer is not necessarily an addition.
+
+(The two distributed RAMs hold **sixteen bits** — the status-change endpoint's
+two-byte packet buffer — because one `TRELLIS_DPR16X4` is four bits of width and
+the width is eight. `BUF_RAM = 0` would put those sixteen bits in flip-flops and
+is very likely the better choice at that size on this family; the footprint table
+does not measure it and the parameter is there so a design can.)
+
+**And two things the hub found that the serial port had not.**
+
+The first is that **the class hook is reached for a standard request**.
+`usb_ctrl_ep` implements five and offers the rest, and its header says so in as
+many words — "string descriptors and GET_STATUS included, so a class that wants
+those can have them without this file changing again". A hub is the first class
+to need one: Linux's `hub_configure` sends the standard GET_STATUS of USB 2.0
+§9.4.5 during hub probe, with the comment "power budgeting mostly matters with
+bus-powered hubs", and takes its failure path if the transfer does not complete.
+So `usb_hub_req` claims it and answers two zero bytes. That is a layering smudge
+and it is written up as one in that block's §7: the right home for a standard
+request is endpoint 0, the change is small and well understood, and it is
+reported rather than made because it widens `std_req` on the two cores that
+already run on silicon and this round has no measurement that would catch a
+regression in them.
+
+The second is **how not to report a change**. `ip/usb_cdc_acm`'s notification
+endpoint had a register meaning "the host has been told", it was set once per
+configuration, and a host that was not listening at that moment never heard
+again — measured on a part as no DCD and no DSR on three consecutive opens. The
+hub has no such register at all: what it reports is **sticky state the host must
+clear**, the host's own ClearPortFeature(C_PORT_*) is the acknowledgement, and
+the sender is one wire —
+
+```verilog
+wire owed = configured & (change_map != 8'h00);
+```
+
+— so the defect is not avoided, it is unrepresentable. What that costs is one
+extra one-byte packet per poll while a change is outstanding, plus exactly one
+stale bitmap after a host clears a change that a packet had already been armed
+with, and `StatusPipe::settles` in `tests/ip_library.rs` **asserts** the stale
+one rather than tolerating it. The alternative is a latch saying "this bitmap has
+already gone", which is the same defect with a different name, because nothing in
+a device can know whether the host that received a bitmap is the host that will
+act on it.
+
+The same shape handles re-enumeration for free, which the serial port needed an
+extra trigger for: a hub that is not configured has powered-off ports, a
+powered-off port's connection is meaningless (§11.5.1.1), so the port's
+connection rises when the **host** powers it — which is the moment the host is
+listening — and a device already plugged in before the host ever looked is
+reported with no edge detector and no one-shot anywhere.
 
 ## Using one
 
@@ -1969,9 +2065,19 @@ length both transmitters took, and what it cost is
 [measured on a part](#what-the-packet-size-is-worth-measured-and-not-calculated)
 below rather than reasoned about.
 
-**The class layer has started.** `usb_cdc_acm` is a serial port and
-`usb_ctrl_ep`'s class hook is what the next one will use. **A human interface
-device is what is not here**, and it is now a smaller job than it was: a HID
+**The class layer has two blocks in it.** `usb_cdc_acm` is a serial port and
+`usb_hub` is a hub, and both bind to a driver the operating system already
+ships. **What `usb_hub` is half of is the thing that is not here**: it is a
+hub's control endpoint, and a hub that forwards packets is a **transaction
+proxy** rather than a repeater, for the reason its own README's §2 gives — a
+ULPI transceiver's floor is about 24 bit times one way and a hub is allowed
+about 4, so the two buses have to be decoupled and the host's side has to NAK
+until the answer is there. That is the largest single piece of USB work left in
+this library and it is what `ip/usb_host_ulpi` and `ip/usb_hub` were both built
+towards.
+
+**A human interface
+device is what is not here either**, and it is now a smaller job than it was: a HID
 needs the report descriptor, which is `GET_DESCRIPTOR` with a class
 descriptor type — a request the hook already offers and a class may already
 claim — plus an interrupt IN endpoint, which `usb_dev_core` already has as
