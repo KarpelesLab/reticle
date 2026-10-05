@@ -992,6 +992,17 @@ read endpoint `81h`, because that would mean taking the interface off the
 kernel's own hub driver; §8's last-but-one subsection is what established the
 endpoint instead.
 
+**One thing nothing here covers at all, and it is one cycle wide.**
+`usb_hub_req` is written so that a connection change arriving in the **same
+cycle** as the ClearPortFeature meant for the previous one leaves the change bit
+**set** — the clear is written first and the set second, and Verilog's last
+assignment wins. Neither the simulation nor the board reaches that cycle: a host
+model and a kernel both take microseconds between a request and a port state
+changing, and nothing here can line the two up. So the ordering is an argument in
+that file's comment and not a measurement, and the reason it is written down
+rather than left to chance is what losing it would cost — a change nothing will
+ever mention again, which is the failure mode §6 is about.
+
 **And what the simulation establishes that a board cannot.** The stale-line
 transceiver — `UlpiPhy::reporting_stale_line`, which reproduces a real
 misbehaviour of the Microchip part on this board against ULPI §3.8.1.3 — runs
