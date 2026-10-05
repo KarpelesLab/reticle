@@ -14950,6 +14950,1170 @@ fn the_transceiver_model_catches_a_link_that_drives_a_bus_that_is_not_its() {
 }
 
 // ---------------------------------------------------------------------------
+// usb_hub: the class layer a host's own hub driver binds to
+// ---------------------------------------------------------------------------
+
+/// The interface number, the endpoint address and the one port `usb_hub`
+/// states, written here rather than read from it.
+const HUB_IFACE: u8 = 0;
+const HUB_STATUS_ENDP: u8 = 1;
+const HUB_NBR_PORTS: u8 = 1;
+/// `wMaxPacketSize` of the status-change endpoint.
+///
+/// Two, for a bitmap that is one byte: USB 2.0 §11.12.4 makes the bitmap one
+/// bit a port plus bit 0 for the hub, rounded up to a byte, and §5.7.3 allows
+/// a full-speed interrupt endpoint anything up to 64 — so one would be legal.
+/// `usb_bulk_ep` needs a power of two and one of them is **zero bits** of
+/// index, which is not a register; the block's own localparam says so at
+/// length.
+const HUB_STATUS_MAXPKT: u8 = 2;
+/// `bInterval` of that endpoint, in frames, which is this block's choice and
+/// not a specification's.
+const HUB_STATUS_INTERVAL: u8 = 12;
+
+/// Feature selectors, USB 2.0 §11.24.2. The numbering is the
+/// specification's and so are the gaps in it.
+const FEAT_C_HUB_LOCAL_POWER: u16 = 0;
+const FEAT_C_HUB_OVER_CURRENT: u16 = 1;
+const FEAT_PORT_CONNECTION: u16 = 0;
+const FEAT_PORT_ENABLE: u16 = 1;
+const FEAT_PORT_SUSPEND: u16 = 2;
+const FEAT_PORT_RESET: u16 = 4;
+const FEAT_PORT_POWER: u16 = 8;
+const FEAT_C_PORT_CONNECTION: u16 = 16;
+const FEAT_C_PORT_ENABLE: u16 = 17;
+const FEAT_C_PORT_SUSPEND: u16 = 18;
+const FEAT_C_PORT_OVER_CURRENT: u16 = 19;
+const FEAT_C_PORT_RESET: u16 = 20;
+const FEAT_PORT_TEST: u16 = 21;
+const FEAT_PORT_INDICATOR: u16 = 22;
+
+/// `wPortStatus`, USB 2.0 §11.24.2.7.1, and `wPortChange`, §11.24.2.7.2.
+const PORT_STAT_CONNECTION: u16 = 1 << 0;
+const PORT_STAT_ENABLE: u16 = 1 << 1;
+const PORT_STAT_SUSPEND: u16 = 1 << 2;
+const PORT_STAT_RESET: u16 = 1 << 4;
+const PORT_STAT_POWER: u16 = 1 << 8;
+const PORT_STAT_LOW_SPEED: u16 = 1 << 9;
+const PORT_CHG_CONNECTION: u16 = 1 << 0;
+const PORT_CHG_SUSPEND: u16 = 1 << 2;
+const PORT_CHG_RESET: u16 = 1 << 4;
+
+/// The status-change bitmap of a one-port hub with a change on that port:
+/// bit 0 is the hub itself and bit 1 is port 1 (USB 2.0 §11.12.4).
+///
+/// Bit 0 is never set by this block and the reason is in `usb_hub_req`'s port
+/// comment: the only two things §11.24.2.6 puts in `wHubChange` are a local
+/// power supply a bus-powered hub does not have and an over-current detector
+/// this one does not have either.
+const HUB_BITMAP_PORT1: u8 = 1 << 1;
+
+/// GetHubDescriptor, USB 2.0 §11.24.2.5: class, device to host, to the
+/// device, with the descriptor type in the **high** byte of `wValue` exactly
+/// as a standard GET_DESCRIPTOR has it. `29h` is §11.23.2.1's type.
+fn hub_get_hub_descriptor(length: u16) -> [u8; 8] {
+    let [lo, hi] = length.to_le_bytes();
+    [0xA0, 0x06, 0x00, 0x29, 0x00, 0x00, lo, hi]
+}
+
+/// GetHubStatus, §11.24.2.6: four bytes, `wHubStatus` then `wHubChange`.
+const HUB_GET_HUB_STATUS: [u8; 8] = [0xA0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x04, 0x00];
+
+/// The **standard** GET_STATUS of USB 2.0 §9.4.5, device recipient, which
+/// Linux's hub driver sends during hub probe and treats a failure of as fatal.
+/// `usb_ctrl_ep` does not implement it, so `usb_hub_req` claims it on the
+/// class hook; that block's header says why and what the right fix is.
+const HUB_GET_DEVICE_STATUS: [u8; 8] = [0x80, 0x00, 0x00, 0x00, 0x00, 0x00, 0x02, 0x00];
+
+/// GetPortStatus, §11.24.2.7: class, device to host, recipient "other" —
+/// which for a hub is a port — with the port number in `wIndex`, from one.
+fn hub_get_port_status(port: u8) -> [u8; 8] {
+    [0xA3, 0x00, 0x00, 0x00, port, 0x00, 0x04, 0x00]
+}
+
+/// SetPortFeature, §11.24.2.12, and ClearPortFeature, §11.24.2.2: the
+/// feature selector in `wValue`, the port in `wIndex`, no data stage.
+fn hub_set_port_feature(port: u8, feature: u16) -> [u8; 8] {
+    let [lo, hi] = feature.to_le_bytes();
+    [0x23, 0x03, lo, hi, port, 0x00, 0x00, 0x00]
+}
+
+fn hub_clear_port_feature(port: u8, feature: u16) -> [u8; 8] {
+    let [lo, hi] = feature.to_le_bytes();
+    [0x23, 0x01, lo, hi, port, 0x00, 0x00, 0x00]
+}
+
+/// ClearHubFeature, §11.24.2.1: the same with the device as the recipient.
+fn hub_clear_hub_feature(feature: u16) -> [u8; 8] {
+    let [lo, hi] = feature.to_le_bytes();
+    [0x20, 0x01, lo, hi, 0x00, 0x00, 0x00, 0x00]
+}
+
+/// The nine bytes of the hub descriptor, written **forwards** from USB 2.0
+/// §11.23.2.1 rather than from the block's `case`.
+///
+/// `bDescLength` is written as **the arithmetic and not the answer**, because
+/// that is the field this descriptor gets wrong if anything does: the two
+/// variable-length fields at the end are one bit a port plus one for the
+/// reserved bit 0, rounded up to a byte, and a hub whose length disagrees
+/// with a host's reading of it is not a hub. Linux requires at least
+/// `7 + 2` bytes back and asks for the whole of its own fifteen-byte
+/// structure, so the short data stage is what makes nine the answer.
+fn expected_hub_descriptor() -> Vec<u8> {
+    // DeviceRemovable and PortPwrCtrlMask, one bit a port plus the reserved
+    // bit 0, rounded up to a byte.
+    let mask_bytes = (usize::from(HUB_NBR_PORTS) + 1 + 7) / 8;
+    let mut d = vec![
+        // bDescLength: seven fixed bytes and the two masks.
+        u8::try_from(7 + 2 * mask_bytes).expect("a short descriptor"),
+        // bDescriptorType: 29h, the hub descriptor's own.
+        0x29,
+        // bNbrPorts.
+        HUB_NBR_PORTS,
+    ];
+    // wHubCharacteristics, little endian:
+    //
+    //   D1:D0  Logical Power Switching Mode   01 — individual port power
+    //   D2     part of a compound device       0
+    //   D4:D3  Over-current Protection Mode   10 — none at all
+    //   D6:D5  TT Think Time                  00 — no transaction translator
+    //   D7     Port Indicators Supported       0
+    //
+    // Individual power switching rather than none because Linux's
+    // `hub_power_on` sends SetPortFeature(PORT_POWER) only to a hub whose
+    // mode is 00 or 01; "no over-current protection" because that is the
+    // truth and §11.23.2.1 allows it for a bus-powered hub that implements
+    // none.
+    let characteristics: u16 = 0b0001_0001;
+    d.extend_from_slice(&characteristics.to_le_bytes());
+    // bPwrOn2PwrGood, in 2 ms units: 100 ms.
+    d.push(50);
+    // bHubContrCurrent, in mA: the same 100 the configuration's bMaxPower
+    // declares.
+    d.push(100);
+    // DeviceRemovable: bit 0 reserved, bit n port n, 0 removable. Whatever is
+    // in the downstream socket can be unplugged.
+    d.extend(std::iter::repeat_n(0x00u8, mask_bytes));
+    // PortPwrCtrlMask: "All bits in this field should be set to 1B", for
+    // compatibility with software written for 1.0 hubs.
+    d.extend(std::iter::repeat_n(0xFFu8, mask_bytes));
+    d
+}
+
+/// The configuration descriptor `usb_hub` should send, written **forwards**
+/// from USB 2.0 §11.23.1 and not from the block's `IFACE_DESC` parameter.
+///
+/// Twenty-five bytes, which is the smallest configuration descriptor anything
+/// in this library has: a hub's class-specific descriptor is fetched by a
+/// request of its own, so there is nothing between the interface and its one
+/// endpoint. The derived fields are the arithmetic and not the answer, as
+/// `expected_cdc_configuration` next door makes them.
+fn expected_hub_configuration() -> Vec<u8> {
+    let mut iface: Vec<u8> = Vec::new();
+    // INTERFACE 0: bInterfaceClass 09h, bInterfaceSubClass 00h,
+    // bInterfaceProtocol 00h — the full-speed hub of §11.23.1, which has one
+    // alternate setting where a high-speed one has two. bNumEndpoints is
+    // byte 4 and is counted below.
+    iface.extend_from_slice(&[9, 4, HUB_IFACE, 0, 0, 0x09, 0x00, 0x00, 0]);
+    // ENDPOINT 81h: the status change endpoint. bmAttributes 03h is interrupt
+    // (USB 2.0 Table 9-13 bits 1:0).
+    iface.extend_from_slice(&[
+        7,
+        5,
+        0x80 | HUB_STATUS_ENDP,
+        0x03,
+        HUB_STATUS_MAXPKT,
+        0,
+        HUB_STATUS_INTERVAL,
+    ]);
+    iface[4] = u8::try_from(count_descriptors(&iface, 5)).expect("a small number");
+
+    let total = u16::try_from(9 + iface.len()).expect("a short descriptor");
+    let [lo, hi] = total.to_le_bytes();
+    let mut d = vec![
+        9,
+        2,
+        lo,
+        hi,
+        u8::try_from(count_descriptors(&iface, 4)).expect("a small number"),
+        1,
+        0,
+        0x80,
+        50,
+    ];
+    d.extend(iface);
+    d
+}
+
+/// The device descriptor a hub sends: `09h 00h 00h`, which §11.23.1 asks for
+/// and whose last byte is the whole statement that this is a **full-speed**
+/// hub — 1 and 2 are a high-speed hub with one transaction translator and
+/// with one per port.
+fn expected_hub_device_descriptor() -> Vec<u8> {
+    expected_device_descriptor_of(0x1209, 0x0001, [0x09, 0x00, 0x00])
+}
+
+fn hub_fs_design() -> Design {
+    design_of(
+        "usb_hub",
+        "usb_hub_fs",
+        &[("VID", "16'h1209"), ("PID", "16'h0001")],
+    )
+}
+
+fn hub_ulpi_design() -> Design {
+    design_of(
+        "usb_hub",
+        "usb_hub_ulpi",
+        &[("VID", "16'h1209"), ("PID", "16'h0001")],
+    )
+}
+
+/// `wPortStatus` and `wPortChange` out of the four bytes GetPortStatus sends.
+fn port_words(data: &[u8]) -> (u16, u16) {
+    assert_eq!(data.len(), 4, "GetPortStatus is two 16-bit fields");
+    (
+        u16::from_le_bytes([data[0], data[1]]),
+        u16::from_le_bytes([data[2], data[3]]),
+    )
+}
+
+/// The status-change endpoint as a host polls it: a data toggle and nothing
+/// else.
+///
+/// `BulkPipe` next door repeats a NAKed transaction until it succeeds, which
+/// is what a host controller does with a transfer it has been handed. A hub's
+/// status-change endpoint is the opposite case — a NAK is the **answer** most
+/// of the time, and which polls get one is what the assertions below are
+/// about — so this returns the NAK instead of retrying through it.
+struct StatusPipe {
+    toggle: u8,
+}
+
+impl StatusPipe {
+    fn new() -> StatusPipe {
+        StatusPipe {
+            toggle: USB_DATA0,
+        }
+    }
+
+    /// Back to DATA0, which is what SET_CONFIGURATION does to every
+    /// endpoint's toggle (USB 2.0 §9.4.5).
+    fn reconfigured(&mut self) {
+        self.toggle = USB_DATA0;
+    }
+
+    /// One poll: the bitmap, or `None` for the NAK of a hub with nothing to
+    /// say.
+    fn poll<P: UsbPair>(&mut self, host: &mut UsbHost<P>, addr: u8) -> Option<u8> {
+        match host.bulk_in(addr, HUB_STATUS_ENDP) {
+            UsbReply::Data(pid, payload) => {
+                assert_eq!(pid, self.toggle, "the status endpoint's data toggle");
+                assert_eq!(
+                    payload.len(),
+                    1,
+                    "a one-port hub's bitmap is one byte (§11.12.4)"
+                );
+                host.ack();
+                self.toggle = other_toggle(self.toggle);
+                host.idle(6);
+                Some(payload[0])
+            }
+            UsbReply::Handshake(USB_NAK) => {
+                host.idle(6);
+                None
+            }
+            other => panic!("a poll of the status-change endpoint was answered {other:?}"),
+        }
+    }
+
+    /// The one report that follows a host clearing a change, and then quiet.
+    ///
+    /// `usb_bulk_ep` is a **store-and-forward packet buffer** and a hub's
+    /// status-change endpoint is a register a host reads, so the two do not
+    /// quite fit: the bitmap armed while the change bit was still set goes out
+    /// even though the host has since cleared it. Exactly one, and
+    /// deterministically one — the host acknowledged the previous packet, the
+    /// bit was still set, so a packet armed; then the ClearPortFeature landed;
+    /// then that packet went. A host does one GetPortStatus over it, finds
+    /// nothing changed, and carries on.
+    ///
+    /// **Asserting it rather than tolerating it** is the point. It is a
+    /// property of the endpoint below the hub, not of the hub, and anything
+    /// that changed it — an endpoint that can be disarmed, an arming rule with
+    /// a latch in it — should fail here and be read. `ip/usb_hub/README.md` §5
+    /// is the same thing in prose with what the alternative would cost.
+    fn settles<P: UsbPair>(
+        &mut self,
+        host: &mut UsbHost<P>,
+        addr: u8,
+        want: u8,
+        count: usize,
+        why: &str,
+    ) {
+        assert_eq!(
+            self.poll(host, addr),
+            Some(want),
+            "the bitmap already armed when the host cleared the change: {why}"
+        );
+        self.quiet(host, addr, count, why);
+    }
+
+    /// `count` polls that must every one be NAKed.
+    fn quiet<P: UsbPair>(&mut self, host: &mut UsbHost<P>, addr: u8, count: usize, why: &str) {
+        for poll in 0..count {
+            assert_eq!(
+                self.poll(host, addr),
+                None,
+                "poll {poll} of {count}: {why}"
+            );
+        }
+    }
+
+    /// One poll that must return the bitmap given.
+    fn expect<P: UsbPair>(&mut self, host: &mut UsbHost<P>, addr: u8, want: u8, why: &str) {
+        assert_eq!(self.poll(host, addr), Some(want), "{why}");
+    }
+}
+
+/// Nothing on the downstream port, which is what every hub test starts from.
+///
+/// Both are **inputs**, and an input nobody drives is unknown — the same
+/// reason every test of `ip/usb_cdc_acm` sets `serial_state`.
+fn hub_port_empty<P: UsbPair>(host: &mut UsbHost<P>) {
+    host.set_port("port_attached", 0, 1);
+    host.set_port("port_low_speed", 0, 1);
+}
+
+/// The whole enumeration a host does, against the descriptor set a hub
+/// declares.
+fn hub_enumerate<P: UsbPair>(host: &mut UsbHost<P>) {
+    hub_port_empty(host);
+    enumerate_descriptors(
+        host,
+        &expected_hub_device_descriptor(),
+        &expected_hub_configuration(),
+    );
+}
+
+#[test]
+fn usb_hub_enumerates_as_a_hub() {
+    let design = hub_fs_design();
+    let mut host = UsbHost::new(FsPair::new(&design), 0);
+    hub_enumerate(&mut host);
+}
+
+#[test]
+fn usb_hub_ulpi_enumerates_as_a_hub() {
+    let design = hub_ulpi_design();
+    let mut host = UsbHost::new(UlpiPair::new(&design), 0);
+    hub_enumerate(&mut host);
+}
+
+/// The same through the transceiver that is **on the board**: the one that
+/// reports LineState a clock late, against ULPI §3.8.1.3.
+#[test]
+fn usb_hub_ulpi_enumerates_through_the_transceiver_that_is_on_the_board() {
+    let design = hub_ulpi_design();
+    let phy = UlpiPhy::new(ULPI_CPB).reporting_stale_line();
+    let mut host = UsbHost::new(UlpiPair::with_phy(&design, phy), 0);
+    hub_enumerate(&mut host);
+}
+
+/// The descriptor set has the parts a host's hub driver looks for, said in
+/// the terms the driver looks for them in.
+///
+/// `usb_hub_enumerates_as_a_hub` already compares all twenty-five bytes, so
+/// this adds nothing about the bytes. What it adds is **why those bytes**:
+/// Linux's `hub_probe` refuses an interface whose `bInterfaceSubClass` is
+/// neither 0 nor 1, refuses one with any number of endpoints but exactly one,
+/// and refuses one whose single endpoint is not an interrupt IN. Those three
+/// are asserted here one at a time, so that a reader changing the descriptors
+/// sees which properties are load-bearing rather than a byte string that must
+/// not move.
+///
+/// **What it would not catch.** Whether the driver binds. Nothing in
+/// simulation can, because this expectation and the block are both written
+/// from the same specification; §6 of `ip/usb_hub/README.md` has the kernel
+/// log.
+#[test]
+fn usb_hub_descriptors_carry_what_a_host_hub_driver_binds_on() {
+    let device = expected_hub_device_descriptor();
+    assert_eq!(device[4], 0x09, "bDeviceClass 09h is what the driver matches");
+    assert_eq!(device[5], 0x00, "bDeviceSubClass");
+    assert_eq!(
+        device[6], 0x00,
+        "bDeviceProtocol 00h: a full-speed hub, with no transaction translator"
+    );
+
+    let config = expected_hub_configuration();
+    assert_eq!(config.len(), 25, "nine bytes of configuration plus sixteen");
+    assert_eq!(
+        u16::from_le_bytes([config[2], config[3]]),
+        25,
+        "wTotalLength is the sum and not a number typed twice"
+    );
+    assert_eq!(config[4], 1, "one interface");
+
+    // Walk it the way a host does.
+    let mut at = 9;
+    let mut interfaces: Vec<(u8, u8, u8, u8, u8)> = Vec::new();
+    let mut endpoints: Vec<(u8, u8, u16, u8)> = Vec::new();
+    let mut bits = 9 * 8;
+    while at + 1 < config.len() {
+        let len = usize::from(config[at]);
+        assert!(len >= 2 && at + len <= config.len(), "a descriptor at {at}");
+        match config[at + 1] {
+            4 => interfaces.push((
+                config[at + 2],
+                config[at + 4],
+                config[at + 5],
+                config[at + 6],
+                config[at + 7],
+            )),
+            5 => endpoints.push((
+                config[at + 2],
+                config[at + 3] & 0x03,
+                u16::from_le_bytes([config[at + 4], config[at + 5]]),
+                config[at + 6],
+            )),
+            other => panic!("an unexpected bDescriptorType {other:#04x} at {at}"),
+        }
+        bits += len * 8;
+        at += len;
+    }
+    assert_eq!(at, config.len(), "the chain of bLength fields ends exactly");
+    assert_eq!(
+        bits,
+        config.len() * 8,
+        "every bit of the blob is accounted for"
+    );
+
+    // There is **no** class-specific descriptor in here. A hub's one
+    // class-specific descriptor is fetched by GetHubDescriptor, §11.23.2.1,
+    // and a hub that put it in the configuration would be describing itself
+    // twice.
+    assert_eq!(
+        interfaces,
+        vec![(HUB_IFACE, 1, 0x09, 0x00, 0x00)],
+        "(bInterfaceNumber, bNumEndpoints, bInterfaceClass, bInterfaceSubClass, \
+         bInterfaceProtocol)"
+    );
+    assert!(
+        matches!(interfaces[0].3, 0 | 1),
+        "bInterfaceSubClass must be 0 or 1 or Linux's hub_probe refuses the interface"
+    );
+    assert_eq!(
+        interfaces[0].1, 1,
+        "exactly one endpoint, which hub_probe also insists on"
+    );
+
+    assert_eq!(
+        endpoints,
+        vec![(
+            0x80 | HUB_STATUS_ENDP,
+            0x03,
+            u16::from(HUB_STATUS_MAXPKT),
+            HUB_STATUS_INTERVAL
+        )],
+        "(bEndpointAddress, transfer type, wMaxPacketSize, bInterval)"
+    );
+    assert_eq!(
+        endpoints[0].0 & 0x80,
+        0x80,
+        "an interrupt **IN** endpoint, which is the third thing hub_probe checks"
+    );
+    assert!(
+        endpoints[0].2 >= 1,
+        "the bitmap of a {HUB_NBR_PORTS}-port hub is one byte and the endpoint holds it"
+    );
+    assert!(
+        endpoints[0].2 <= 64,
+        "USB 2.0 §5.7.3 allows a full-speed interrupt endpoint 64 bytes at most"
+    );
+
+    // And the hub descriptor's own length, which is the field a host and a
+    // hub can disagree about.
+    let hub = expected_hub_descriptor();
+    assert_eq!(hub.len(), 9, "a one-port hub descriptor is nine bytes");
+    assert_eq!(
+        usize::from(hub[0]),
+        hub.len(),
+        "bDescLength is the length of what is sent"
+    );
+    assert_eq!(hub[1], 0x29, "bDescriptorType, §11.23.2.1");
+    assert_eq!(hub[2], HUB_NBR_PORTS, "bNbrPorts");
+    assert!(
+        hub[3] & 0x03 < 2,
+        "wHubCharacteristics D1:D0 below 2, or a host never powers the port"
+    );
+}
+
+/// The hub and port class requests, answered, and the port state they move.
+///
+/// This is the hook working end to end against a class that needs more of it
+/// than the first one did: six class requests, one **standard** request
+/// endpoint 0 does not implement, a nine-byte data stage and a port whose
+/// reported state is a function of five registers and two inputs.
+fn hub_class_requests<P: UsbPair>(host: &mut UsbHost<P>) {
+    hub_port_empty(host);
+    configure_for(
+        host,
+        3,
+        &expected_hub_device_descriptor(),
+        &expected_hub_configuration(),
+    );
+
+    // ------------------------------------------------------------------
+    // The descriptors a request of their own fetches.
+    // ------------------------------------------------------------------
+    // Fifteen bytes asked for, which is what Linux asks for — the whole of
+    // its own `struct usb_hub_descriptor` — and nine returned, which is a
+    // short data stage and is what ends the transfer.
+    let desc = host
+        .control_read(3, hub_get_hub_descriptor(15))
+        .expect("GetHubDescriptor is answered and not stalled");
+    assert_eq!(
+        desc,
+        expected_hub_descriptor(),
+        "the hub descriptor, byte for byte"
+    );
+    // ... and a host that asks for fewer bytes than there are gets what it
+    // asked for, which is `wLength` ending a class data stage.
+    let seven = host
+        .control_read(3, hub_get_hub_descriptor(7))
+        .expect("a short GetHubDescriptor");
+    assert_eq!(
+        seven,
+        expected_hub_descriptor()[..7],
+        "wLength ends a class data stage too"
+    );
+
+    // GetHubStatus: four zeros. This hub has no local power supply and no
+    // over-current detector, so neither the status nor the change can ever be
+    // anything else (§11.24.2.6), and `usb_hub_req` has no register for them.
+    assert_eq!(
+        host.control_read(3, HUB_GET_HUB_STATUS)
+            .expect("GetHubStatus"),
+        vec![0, 0, 0, 0],
+        "wHubStatus and wHubChange"
+    );
+
+    // The standard device status, which is the request Linux's hub driver
+    // sends during probe and which endpoint 0 does not implement: bit 0 is
+    // Self Powered and bit 1 is Remote Wakeup Enabled, both clear.
+    assert_eq!(
+        host.control_read(3, HUB_GET_DEVICE_STATUS)
+            .expect("the standard GET_STATUS a hub driver sends"),
+        vec![0, 0],
+        "wStatus: bus powered, remote wake-up not enabled"
+    );
+
+    // ------------------------------------------------------------------
+    // The port, before and after a host powers it.
+    // ------------------------------------------------------------------
+    let status = |host: &mut UsbHost<P>| {
+        port_words(
+            &host
+                .control_read(3, hub_get_port_status(HUB_NBR_PORTS))
+                .expect("GetPortStatus"),
+        )
+    };
+
+    assert_eq!(
+        status(host),
+        (0, 0),
+        "a hub the host has only just configured has a powered-off, empty port"
+    );
+
+    // A device plugged in while the port is powered off is **not** a
+    // connection: §11.5.1.1 makes a port's connection status meaningless
+    // then, and `usb_hub_req` gates it so that the first connection is
+    // reportable at all.
+    host.set_port("port_attached", 1, 1);
+    host.idle(20);
+    assert_eq!(
+        status(host),
+        (0, 0),
+        "a powered-off port reports nothing on it and no change"
+    );
+
+    // Powering it is what makes the connection appear — and a connection
+    // change with it, which is the whole reason a host hears about a device
+    // that was already plugged in before it ever looked.
+    assert_eq!(
+        host.control_write(3, hub_set_port_feature(HUB_NBR_PORTS, FEAT_PORT_POWER)),
+        UsbReply::Data(USB_DATA1, Vec::new()),
+        "SetPortFeature(PORT_POWER) is acknowledged"
+    );
+    host.idle(20);
+    assert_eq!(host.port("port_power"), 1, "and the same on the block's port");
+    assert_eq!(
+        status(host),
+        (PORT_STAT_POWER | PORT_STAT_CONNECTION, PORT_CHG_CONNECTION),
+        "powered, something on it, and a connection change to say so"
+    );
+
+    // The host clears the change. Nothing else moves.
+    assert_eq!(
+        host.control_write(
+            3,
+            hub_clear_port_feature(HUB_NBR_PORTS, FEAT_C_PORT_CONNECTION)
+        ),
+        UsbReply::Data(USB_DATA1, Vec::new()),
+        "ClearPortFeature(C_PORT_CONNECTION) is acknowledged"
+    );
+    host.idle(20);
+    assert_eq!(
+        status(host),
+        (PORT_STAT_POWER | PORT_STAT_CONNECTION, 0),
+        "the change is cleared and the connection is not"
+    );
+
+    // Which line the device pulled up. Only meaningful while something is
+    // connected, which is what the specification calls the speed of the
+    // **attached** device.
+    host.set_port("port_low_speed", 1, 1);
+    host.idle(20);
+    assert_eq!(
+        status(host),
+        (
+            PORT_STAT_POWER | PORT_STAT_CONNECTION | PORT_STAT_LOW_SPEED,
+            0
+        ),
+        "a low-speed device pulled D- up"
+    );
+    host.set_port("port_low_speed", 0, 1);
+    host.idle(20);
+
+    // ------------------------------------------------------------------
+    // The reset, which takes no time because nothing is driven downstream.
+    // ------------------------------------------------------------------
+    assert_eq!(
+        host.control_write(3, hub_set_port_feature(HUB_NBR_PORTS, FEAT_PORT_RESET)),
+        UsbReply::Data(USB_DATA1, Vec::new()),
+        "SetPortFeature(PORT_RESET) is acknowledged"
+    );
+    host.idle(20);
+    let (stat, chg) = status(host);
+    assert_eq!(
+        stat,
+        PORT_STAT_POWER | PORT_STAT_CONNECTION | PORT_STAT_ENABLE,
+        "the port is enabled by the reset completing"
+    );
+    assert_eq!(stat & PORT_STAT_RESET, 0, "and the reset is already over");
+    assert_eq!(chg, PORT_CHG_RESET, "C_PORT_RESET says it completed");
+    host.control_write(
+        3,
+        hub_clear_port_feature(HUB_NBR_PORTS, FEAT_C_PORT_RESET),
+    );
+    host.idle(20);
+    assert_eq!(status(host).1, 0, "and the change clears");
+
+    // ------------------------------------------------------------------
+    // Suspend, and the resume that follows it.
+    // ------------------------------------------------------------------
+    host.control_write(3, hub_set_port_feature(HUB_NBR_PORTS, FEAT_PORT_SUSPEND));
+    host.idle(20);
+    assert_eq!(
+        status(host).0 & PORT_STAT_SUSPEND,
+        PORT_STAT_SUSPEND,
+        "the port is suspended"
+    );
+    assert_eq!(host.port("port_suspended"), 1);
+    host.control_write(
+        3,
+        hub_clear_port_feature(HUB_NBR_PORTS, FEAT_PORT_SUSPEND),
+    );
+    host.idle(20);
+    let (stat, chg) = status(host);
+    assert_eq!(stat & PORT_STAT_SUSPEND, 0, "and resumed");
+    assert_eq!(
+        chg, PORT_CHG_SUSPEND,
+        "C_PORT_SUSPEND is the resume having completed (§11.5.1.8)"
+    );
+    host.control_write(
+        3,
+        hub_clear_port_feature(HUB_NBR_PORTS, FEAT_C_PORT_SUSPEND),
+    );
+    host.idle(20);
+
+    // ------------------------------------------------------------------
+    // The features claimed and ignored, and the port disabled by hand.
+    // ------------------------------------------------------------------
+    // Two change bits nothing in this hub can set: claimed so that a host
+    // clearing them is answered rather than stalled, and a no-op because the
+    // bit was already zero.
+    for (what, feature) in [
+        ("C_PORT_ENABLE", FEAT_C_PORT_ENABLE),
+        ("C_PORT_OVER_CURRENT", FEAT_C_PORT_OVER_CURRENT),
+    ] {
+        assert_eq!(
+            host.control_write(3, hub_clear_port_feature(HUB_NBR_PORTS, feature)),
+            UsbReply::Data(USB_DATA1, Vec::new()),
+            "ClearPortFeature({what}) is accepted even though the bit is a constant zero"
+        );
+        host.idle(10);
+    }
+    for (what, feature) in [
+        ("C_HUB_LOCAL_POWER", FEAT_C_HUB_LOCAL_POWER),
+        ("C_HUB_OVER_CURRENT", FEAT_C_HUB_OVER_CURRENT),
+    ] {
+        assert_eq!(
+            host.control_write(3, hub_clear_hub_feature(feature)),
+            UsbReply::Data(USB_DATA1, Vec::new()),
+            "ClearHubFeature({what}) is accepted"
+        );
+        host.idle(10);
+    }
+    assert_eq!(
+        status(host),
+        (
+            PORT_STAT_POWER | PORT_STAT_CONNECTION | PORT_STAT_ENABLE,
+            0
+        ),
+        "and none of those four changed anything"
+    );
+
+    // ClearPortFeature(PORT_ENABLE), which is a host taking the port out of
+    // service without powering it off.
+    host.control_write(3, hub_clear_port_feature(HUB_NBR_PORTS, FEAT_PORT_ENABLE));
+    host.idle(20);
+    assert_eq!(
+        status(host),
+        (PORT_STAT_POWER | PORT_STAT_CONNECTION, 0),
+        "disabled, still powered, still connected"
+    );
+    assert_eq!(host.port("port_enabled"), 0);
+
+    // ------------------------------------------------------------------
+    // Unplugging, and powering the port off.
+    // ------------------------------------------------------------------
+    host.control_write(3, hub_set_port_feature(HUB_NBR_PORTS, FEAT_PORT_RESET));
+    host.idle(20);
+    host.control_write(
+        3,
+        hub_clear_port_feature(HUB_NBR_PORTS, FEAT_C_PORT_RESET),
+    );
+    host.idle(20);
+    assert_eq!(
+        status(host).0 & PORT_STAT_ENABLE,
+        PORT_STAT_ENABLE,
+        "enabled again"
+    );
+    host.set_port("port_attached", 0, 1);
+    host.idle(20);
+    assert_eq!(
+        status(host),
+        (PORT_STAT_POWER, PORT_CHG_CONNECTION),
+        "the device left: no connection, no enable — §11.5.1.4 — and a change"
+    );
+    host.control_write(
+        3,
+        hub_clear_port_feature(HUB_NBR_PORTS, FEAT_C_PORT_CONNECTION),
+    );
+    host.idle(20);
+
+    // And the port powered off reports nothing at all.
+    host.control_write(3, hub_clear_port_feature(HUB_NBR_PORTS, FEAT_PORT_POWER));
+    host.idle(20);
+    assert_eq!(status(host), (0, 0), "a powered-off port");
+    assert_eq!(host.port("port_power"), 0);
+
+    host.assert_clean();
+}
+
+#[test]
+fn usb_hub_answers_the_hub_and_port_class_requests() {
+    let design = hub_fs_design();
+    let mut host = UsbHost::new(FsPair::new(&design), 0);
+    hub_class_requests(&mut host);
+}
+
+#[test]
+fn usb_hub_ulpi_answers_the_hub_and_port_class_requests() {
+    let design = hub_ulpi_design();
+    let phy = UlpiPhy::new(ULPI_CPB).reporting_stale_line();
+    let mut host = UsbHost::new(UlpiPair::with_phy(&design, phy), 0);
+    hub_class_requests(&mut host);
+}
+
+/// A class request the hub does not claim is stalled, and a standard request
+/// is still endpoint 0's.
+///
+/// Both halves matter, and the first is what keeps a hub honest about what it
+/// is: `wHubCharacteristics` says no port indicators, so
+/// SetPortFeature(PORT_INDICATOR) is stalled rather than silently accepted;
+/// there is one port, so a request about port 2 is stalled rather than
+/// answered about port 1; and the optional requests of a high-speed hub are
+/// stalled because there is no transaction translator to ask about.
+#[test]
+fn usb_hub_stalls_the_class_requests_it_does_not_claim() {
+    let design = hub_fs_design();
+    let mut host = UsbHost::new(FsPair::new(&design), 0);
+    hub_port_empty(&mut host);
+    configure_for(
+        &mut host,
+        4,
+        &expected_hub_device_descriptor(),
+        &expected_hub_configuration(),
+    );
+
+    // Power the port and connect something, so that a stalled request has
+    // state it could have disturbed.
+    host.set_port("port_attached", 1, 1);
+    host.control_write(4, hub_set_port_feature(HUB_NBR_PORTS, FEAT_PORT_POWER));
+    host.idle(20);
+    host.control_write(
+        4,
+        hub_clear_port_feature(HUB_NBR_PORTS, FEAT_C_PORT_CONNECTION),
+    );
+    host.idle(20);
+    let before = port_words(
+        &host
+            .control_read(4, hub_get_port_status(HUB_NBR_PORTS))
+            .expect("GetPortStatus"),
+    );
+    assert_eq!(before, (PORT_STAT_POWER | PORT_STAT_CONNECTION, 0));
+
+    for (what, request) in [
+        // SetPortFeature(PORT_TEST), §11.24.2.12. There are no test modes.
+        (
+            "SetPortFeature(PORT_TEST)",
+            hub_set_port_feature(HUB_NBR_PORTS, FEAT_PORT_TEST),
+        ),
+        // SetPortFeature(PORT_INDICATOR). D7 of wHubCharacteristics is clear,
+        // so this hub never offered indicators.
+        (
+            "SetPortFeature(PORT_INDICATOR)",
+            hub_set_port_feature(HUB_NBR_PORTS, FEAT_PORT_INDICATOR),
+        ),
+        // PORT_CONNECTION is a status bit and not a feature a host may set.
+        (
+            "SetPortFeature(PORT_CONNECTION)",
+            hub_set_port_feature(HUB_NBR_PORTS, FEAT_PORT_CONNECTION),
+        ),
+        // SetPortFeature(PORT_ENABLE): §11.24.2.12 gives a host no way to
+        // enable a port but by resetting it.
+        (
+            "SetPortFeature(PORT_ENABLE)",
+            hub_set_port_feature(HUB_NBR_PORTS, FEAT_PORT_ENABLE),
+        ),
+        // A port this hub does not have.
+        (
+            "SetPortFeature on port 2",
+            hub_set_port_feature(2, FEAT_PORT_POWER),
+        ),
+        (
+            "GetPortStatus of port 2",
+            hub_get_port_status(2),
+        ),
+        ("GetPortStatus of port 0", hub_get_port_status(0)),
+        // SetHubFeature, §11.24.2.11 — a hub need not implement it.
+        (
+            "SetHubFeature",
+            [0x20, 0x03, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00],
+        ),
+        // SetHubDescriptor, §11.24.2.10 — likewise.
+        (
+            "SetHubDescriptor",
+            [0x20, 0x07, 0x00, 0x29, 0x00, 0x00, 0x09, 0x00],
+        ),
+        // ClearTTBuffer, §11.24.2.3, and the rest of the transaction
+        // translator's requests, which a full-speed hub has none of.
+        (
+            "ClearTTBuffer",
+            [0x23, 0x08, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00],
+        ),
+        (
+            "ResetTT",
+            [0x23, 0x09, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00],
+        ),
+        (
+            "GetTTState",
+            [0xA3, 0x0A, 0x00, 0x00, 0x01, 0x00, 0x02, 0x00],
+        ),
+        (
+            "StopTT",
+            [0x23, 0x0B, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00],
+        ),
+        // GetBusState, §11.24.2.4, which is optional and for debugging.
+        (
+            "GetBusState",
+            [0xA3, 0x02, 0x00, 0x00, 0x01, 0x00, 0x01, 0x00],
+        ),
+        // A descriptor type that is not the hub's.
+        (
+            "GetHubDescriptor of type 2Ah",
+            [0xA0, 0x06, 0x00, 0x2A, 0x00, 0x00, 0x0C, 0x00],
+        ),
+        // A feature request that arrived with a data stage, which no feature
+        // request has.
+        (
+            "SetPortFeature with a payload",
+            [0x23, 0x03, 0x08, 0x00, 0x01, 0x00, 0x02, 0x00],
+        ),
+        // A vendor request, which no class in this device claims.
+        (
+            "a vendor request",
+            [0xC0, 0x01, 0x00, 0x00, 0x00, 0x00, 0x04, 0x00],
+        ),
+    ] {
+        assert_eq!(
+            host.setup(4, request),
+            UsbReply::Handshake(USB_ACK),
+            "{what}: a SETUP is always acknowledged"
+        );
+        host.idle(4);
+        assert_eq!(
+            host.in_token(4),
+            UsbReply::Handshake(USB_STALL),
+            "{what} is stalled"
+        );
+        host.idle(10);
+    }
+
+    // None of that reached a register.
+    let after = port_words(
+        &host
+            .control_read(4, hub_get_port_status(HUB_NBR_PORTS))
+            .expect("GetPortStatus still works"),
+    );
+    assert_eq!(after, before, "a stalled request changed nothing");
+
+    // And the standard requests still belong to endpoint 0 with a class on
+    // the hook — including the one the class **does** claim, since
+    // GET_STATUS and SET_ADDRESS share the first byte of their
+    // `bmRequestType` and nothing but `bRequest` tells them apart.
+    assert_eq!(
+        host.control_write(4, set_address(11)),
+        UsbReply::Data(USB_DATA1, Vec::new()),
+        "SET_ADDRESS is endpoint 0's and not the class's"
+    );
+    assert_eq!(host.address(), 11);
+    host.idle(10);
+    assert_eq!(
+        host.control_read(11, get_descriptor(1, 18))
+            .expect("GET_DESCRIPTOR is endpoint 0's too"),
+        expected_hub_device_descriptor()
+    );
+    host.idle(10);
+    host.assert_clean();
+}
+
+/// The status-change endpoint reports **every** change and NAKs in between,
+/// and the second report is what this test exists for.
+///
+/// Six things:
+///
+///   * a configured hub with a powered-off, empty port says nothing, twenty
+///     polls in a row;
+///   * a device appearing while the port is **off** is still nothing, because
+///     §11.5.1.1 makes a powered-off port's connection meaningless;
+///   * the host powering the port produces the first report, which is how a
+///     device plugged in before the host ever looked is noticed;
+///   * **the same bitmap again, because the host has not cleared it** — the
+///     endpoint reports sticky state and holds no record of having reported;
+///   * the host clearing the change quiets it; and then
+///   * **a second change — the device leaving — is reported too**, and then a
+///     third of a different kind, a reset completing.
+///
+/// One more thing is asserted along the way and it is not the hub's: a bitmap
+/// armed before the host's ClearPortFeature arrived goes out anyway, because
+/// `usb_bulk_ep` cannot unsay a packet it has been given. `StatusPipe::settles`
+/// is where that is written down.
+///
+/// **Why the fourth and sixth are the assertions that matter.** The first
+/// version of `ip/usb_cdc_acm`'s notification endpoint sent one notification
+/// per configuration and never another, which is a functional defect: the
+/// host that consumed it need not be the host that acts on it, and a driver
+/// bound a second time started with nothing. §4 of that block's README.md has
+/// the measurement that condemned it. The defect survives any test that only
+/// asks "is anything ever reported", so this one asks for a report **after**
+/// the state has gone back and come again, and for the same report twice with
+/// the state deliberately unchanged, so that nothing but the absence of a
+/// one-shot can produce them.
+///
+/// **What it would not catch.** Whether a host's hub driver acts on the
+/// bitmap, or whether twelve frames is often enough for one. Nothing in
+/// simulation can: this host model is written from the same specification as
+/// the device.
+fn hub_status_changes<P: UsbPair>(host: &mut UsbHost<P>) {
+    let port = HUB_NBR_PORTS;
+    hub_port_empty(host);
+    configure_for(
+        host,
+        6,
+        &expected_hub_device_descriptor(),
+        &expected_hub_configuration(),
+    );
+    let mut pipe = StatusPipe::new();
+
+    // A hub whose port is powered off and empty has nothing to say, and says
+    // it for as long as it is asked.
+    pipe.quiet(host, 6, 20, "a configured hub with a powered-off, empty port");
+
+    // A device appears while the port is off. Still nothing.
+    host.set_port("port_attached", 1, 1);
+    host.idle(20);
+    pipe.quiet(
+        host,
+        6,
+        4,
+        "a powered-off port has no connection, so nothing changed",
+    );
+
+    // The host powers the port, and **that** is when the connection appears.
+    host.control_write(6, hub_set_port_feature(port, FEAT_PORT_POWER));
+    host.idle(20);
+    pipe.expect(
+        host,
+        6,
+        HUB_BITMAP_PORT1,
+        "the port the host has just powered has something on it",
+    );
+
+    // THE SAME BITMAP AGAIN, because the host has not cleared the change.
+    //
+    // This is the property that makes a one-shot impossible: there is no
+    // latch anywhere saying the host has been told. `usb_hub`'s header says
+    // what the extra packet costs and why the alternative is refused.
+    pipe.expect(
+        host,
+        6,
+        HUB_BITMAP_PORT1,
+        "a change the host has not cleared is still a change",
+    );
+
+    // The host clears it, and the endpoint goes quiet.
+    host.control_write(6, hub_clear_port_feature(port, FEAT_C_PORT_CONNECTION));
+    host.idle(20);
+    pipe.settles(
+        host,
+        6,
+        HUB_BITMAP_PORT1,
+        20,
+        "the host has cleared the only change there was",
+    );
+
+    // ------------------------------------------------------------------
+    // THE SECOND CHANGE
+    // ------------------------------------------------------------------
+    // The device leaves. A hub that reported once and then held a latch would
+    // be silent here for ever, and the host would go on believing a device is
+    // on the port.
+    host.set_port("port_attached", 0, 1);
+    host.idle(20);
+    pipe.expect(host, 6, HUB_BITMAP_PORT1, "the device left, and it is news");
+    host.control_write(6, hub_clear_port_feature(port, FEAT_C_PORT_CONNECTION));
+    host.idle(20);
+    pipe.settles(host, 6, HUB_BITMAP_PORT1, 4, "and quiet again");
+
+    // ------------------------------------------------------------------
+    // A THIRD, of a different kind: a reset completing.
+    // ------------------------------------------------------------------
+    host.set_port("port_attached", 1, 1);
+    host.idle(20);
+    pipe.expect(host, 6, HUB_BITMAP_PORT1, "plugged in again");
+    host.control_write(6, hub_clear_port_feature(port, FEAT_C_PORT_CONNECTION));
+    host.idle(20);
+    pipe.settles(host, 6, HUB_BITMAP_PORT1, 4, "and cleared");
+
+    host.control_write(6, hub_set_port_feature(port, FEAT_PORT_RESET));
+    host.idle(20);
+    pipe.expect(
+        host,
+        6,
+        HUB_BITMAP_PORT1,
+        "a reset completing is a change of the same port",
+    );
+    host.control_write(6, hub_clear_port_feature(port, FEAT_C_PORT_RESET));
+    host.idle(20);
+    pipe.settles(host, 6, HUB_BITMAP_PORT1, 4, "and cleared");
+
+    // The endpoint has one direction. An OUT to it is nobody's: the status
+    // endpoint because it has no OUT side, endpoint 0 because the token is
+    // not its, and there is no data endpoint at all in this device.
+    assert_eq!(
+        host.bulk_out(6, HUB_STATUS_ENDP, USB_DATA0, &[0x55]),
+        UsbReply::Nothing,
+        "an OUT to an IN-only endpoint is not answered"
+    );
+    host.idle(20);
+    // A token for the endpoint number a device with a bulk pair would have
+    // had is nobody's either, which is what `DATA_ENDP = 4'd0` means.
+    assert_eq!(
+        host.bulk_in(6, 4),
+        UsbReply::Nothing,
+        "an endpoint this device does not have answers nothing"
+    );
+    host.idle(20);
+
+    // ------------------------------------------------------------------
+    // A bus reset, and a host that enumerates the hub again.
+    // ------------------------------------------------------------------
+    // The port goes back to powered off, so there is nothing to report until
+    // the host powers it — and then there is, which is the same path the
+    // first connection took. `ip/usb_cdc_acm` needed a trigger of its own for
+    // exactly the case this covers for nothing.
+    configure_for(
+        host,
+        6,
+        &expected_hub_device_descriptor(),
+        &expected_hub_configuration(),
+    );
+    pipe.reconfigured();
+    pipe.quiet(
+        host,
+        6,
+        4,
+        "a re-enumerated hub has powered-off ports and nothing outstanding",
+    );
+    host.control_write(6, hub_set_port_feature(port, FEAT_PORT_POWER));
+    host.idle(20);
+    pipe.expect(
+        host,
+        6,
+        HUB_BITMAP_PORT1,
+        "and the device on the port is reported to the host all over again",
+    );
+    host.idle(10);
+    host.assert_clean();
+}
+
+#[test]
+fn usb_hub_status_change_endpoint_reports_every_change() {
+    let design = hub_fs_design();
+    let mut host = UsbHost::new(FsPair::new(&design), 0);
+    hub_status_changes(&mut host);
+}
+
+/// The same, through the **ULPI** link layer and the transceiver that reports
+/// LineState a clock late, which is the part on the board.
+///
+/// The bitmap is a **one-byte** packet out of a second endpoint, so it goes
+/// through the ULPI transmitter's length field, that endpoint's own
+/// turnaround counter and `usb_dev_core`'s arbitration — with the data
+/// endpoint that arbitration was written for absent, which no other test in
+/// this file arranges.
+#[test]
+fn usb_hub_ulpi_status_change_endpoint_reports_every_change() {
+    let design = hub_ulpi_design();
+    let phy = UlpiPhy::new(ULPI_CPB).reporting_stale_line();
+    let mut host = UsbHost::new(UlpiPair::with_phy(&design, phy), 0);
+    hub_status_changes(&mut host);
+}
+
+/// Everything runs on the one clock, in both wrappers.
+#[test]
+fn usb_hub_is_one_clock_domain() {
+    for top in ["usb_hub_fs", "usb_hub_ulpi"] {
+        let kinds = crossings("usb_hub", top, &[("VID", "16'h1209"), ("PID", "16'h0001")]);
+        assert!(kinds.is_empty(), "{top}: nothing should cross: {kinds:?}");
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Two more compiler gaps the larger blocks ran into
 // ---------------------------------------------------------------------------
 
