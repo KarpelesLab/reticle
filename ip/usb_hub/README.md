@@ -972,9 +972,9 @@ block's.
 
 ## 10. What each test would and would not catch
 
-Ten tests of this block in `tests/ip_library.rs`, three that cover every block
-in the library and reach it with the rest, and one that needs a board. What each
-is for:
+Ten tests of this block in `tests/ip_library.rs`, one of the board design it
+runs on in `tests/fpga_trellis.rs`, three that cover every block in the library
+and reach it with the rest, and one that needs a board. What each is for:
 
 | Test | What it would catch | What it would not |
 |------|--------------------|-------------------|
@@ -984,6 +984,7 @@ is for:
 | `usb_hub_stalls_the_class_requests_it_does_not_claim` | a claim that is too wide — a port number this hub does not have, a feature it never offered, a TT request, a feature request with a payload — and a standard request shadowed by the class | a claim that is too narrow: a request a host sends and this block stalls fails on a host and not here |
 | `usb_hub_status_change_endpoint_reports_every_change`, and the ULPI variant | **a one-shot**: a second change not reported, a bitmap sent once where the state has not moved, a change reported while the port is powered off, a report after the host cleared the change bit, or no report at all after a bus reset and a second configuration | whether 12 frames is often enough. That a host's driver acts on the bitmap is §8's last-but-one subsection |
 | `usb_hub_is_one_clock_domain` | a crossing added to either wrapper | — |
+| `the_hub_boards_console_names_the_fields_its_header_claims`, in `tests/fpga_trellis.rs` | `testdata/fpga/cynthion/usb_hub_target.v` failing to elaborate against the blocks it instantiates, a field in the wrong place or the wrong width in any of its four console bytes, and a drive window whose latches cannot shut it again | anything about either USB bus, since every input of those four bytes is forced; whether the window ever opens on its own, which is 2^24 clocks away; and whether a pad that is high impedance in this simulator is high impedance on a part |
 | `every_block_maps_to_the_logic_it_was_mapped_from` | the hub's LUT4 and LUT6 mapping differing from the logic it came from, **proved** rather than sampled | anything after mapping: placement, routing, the bitstream |
 | `usb_descriptors_survive_lookup_table_mapping` | a **mapped** netlist answering GET_DESCRIPTOR with the wrong bytes, which is how a one-byte defect in `ip/usb_cdc_acm` was found after a kernel refused the device | the hub descriptor, which is a `case` in `usb_hub_req` and not a ROM, and the ULPI wrapper, and the array shape of the status endpoint's buffer |
 | `footprints_match_the_documentation` | the block suddenly costing twice as much | — |
