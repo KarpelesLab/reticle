@@ -923,14 +923,26 @@ SET_CONFIGURATION accepted. **So the device behind the port is fully enumerated
 by our own host at the same moment the PC cannot reach it at all**, which is the
 clearest statement there is of what the missing half is.
 
-**One reading in that is not explained and is left visible.** Byte 1 bits 2:1
-are the TARGET transceiver's `VbusState` and they read `00`, which USB334x
-Table 6-3 makes "below SessEnd" — no power on the port at all — while
-`LineState` reads `01` and a device is attached, enumerated and answering. The
-two disagree, and what settles it is not in this round: whether that
-transceiver's VBUS sense pin is connected to the TARGET-A node on this board is
-a question for its schematic. `attached`, `up` and `LineState` are the readings
-this section relies on and none of them depends on it.
+**One reading in that looks wrong and is not.** Byte 1 bits 2:1 are the TARGET
+transceiver's `VbusState` and they read `00`, which USB334x Table 6-3 makes
+"below SessEnd" — no power on the port at all — while `LineState` reads `01` and
+a device is attached, enumerated and answering.
+
+They do not disagree, and the answer is already in this repository:
+`ip/usb_host_ulpi/README.md`'s "VBUS switching" has it, traced from the
+published Cynthion PCB design. **The TARGET transceiver does not sense the
+connector its power flows through.** Its VBUS pin reaches
+`TARGET_C_VBUS_IN` — the TARGET-**C** connector alone — while a device in
+TARGET-**A** draws from `TARGET_A_VBUS_IN`, which each source reaches through
+its own back-to-back PMOS pair. A build that closes only `aux_vbus_en` therefore
+powers TARGET-A while the sense pin, watching an unpowered TARGET-C, correctly
+reads below SessEnd. AUX and CONTROL each sense their own connector; TARGET is
+the one port where the two are different connectors.
+
+So `00` is the right answer to the question the pin is actually being asked, and
+**on TARGET `VbusState` does not mean "is my device powered"**. `attached`, `up`
+and `LineState` are the readings this section relies on, and that they do not
+depend on it is a property of the board rather than a convenience.
 
 ---
 
