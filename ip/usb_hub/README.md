@@ -53,6 +53,13 @@ misquoted is findable and a table number misquoted sends a reader to the wrong
 table and looks authoritative doing it. Where a table is named in prose it is
 named as "the `wPortStatus` field of §11.24.2.7.1" and not as "Table 11-21".
 
+§11.24.2's thirteen class requests are numbered in **alphabetical order of their
+names** — ClearHubFeature, ClearPortFeature, ClearTTBuffer, GetBusState,
+GetHubDescriptor, GetHubStatus, GetPortStatus, GetTTState, ResetTT,
+SetHubDescriptor, SetHubFeature, SetPortFeature, StopTT — which is how the
+subsection numbers in §4 were arrived at and is how a reader can check one at a
+glance.
+
 A thing can be HIGH and wrong about the world: a descriptor can be exactly what
 a section says and still not be what a driver looks for. Where this document has
 both, it says both.
@@ -903,7 +910,12 @@ which is the kernel's own sequence seen from the other side: the PC reset the
 AUX bus and configured the hub, powered the port, reset the port — which is
 what enabled it — and then, having failed to enumerate anything through it, left
 the port powered and disabled. `ip/usb_host_ulpi`'s half of the board is
-unchanged throughout: `attached`, full speed, `up`, stage 17, LineState `01`.
+unchanged throughout: `attached`, full speed, `up`, LineState `01`, and stage
+**17**, which is `E_UP` in that block's own list — the GreatFET's device
+descriptor read, SET_ADDRESS taken, the configuration descriptor read and
+SET_CONFIGURATION accepted. **So the device behind the port is fully enumerated
+by our own host at the same moment the PC cannot reach it at all**, which is the
+clearest statement there is of what the missing half is.
 
 **One reading in that is not explained and is left visible.** Byte 1 bits 2:1
 are the TARGET transceiver's `VbusState` and they read `00`, which USB334x
