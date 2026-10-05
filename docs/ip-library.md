@@ -928,7 +928,8 @@ act on it.
 
 The same shape handles re-enumeration for free, which the serial port needed an
 extra trigger for: a hub that is not configured has powered-off ports, a
-powered-off port's connection is meaningless (§11.5.1.1), so the port's
+powered-off port's connection is meaningless (§11.5.1's Powered-off state), so
+the port's
 connection rises when the **host** powers it — which is the moment the host is
 listening — and a device already plugged in before the host ever looked is
 reported with no edge detector and no one-shot anywhere.
