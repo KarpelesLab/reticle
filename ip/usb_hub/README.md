@@ -61,11 +61,17 @@ both, it says both.
 
 ## 2. Why this is not a repeater, and must never be built as one
 
-**HIGH** (USB 2.0 §11.1.1, §11.3). A hub is a *repeater*: it is transparent to
-the packets passing through it, and §11.1.1's figure is a repeater between an
-upstream port and some number of downstream ones. §7.1.14 gives the hub's
-contribution to the bus's delay budget as a small number of bit times, and
-§11.4 has the hub's own propagation limits.
+**HIGH** (USB 2.0 §11.1). A hub is a *repeater*: it is transparent to the
+packets passing through it, and chapter 11's own overview of one is a repeater
+between an upstream port and some number of downstream ones, with the hub's
+contribution to the bus's delay budget a small number of bit times out of
+chapter 7's end-to-end budget.
+
+*Those two are cited by chapter rather than by subsection on purpose, and §1
+says why: the subsections of chapter 11 that hold the repeater and of chapter 7
+that hold the delay budget are not ones this document has checked the numbering
+of, and a wrong one looks authoritative. Every number below is quoted from a
+subsection that has been.*
 
 **MEDIUM**, and it is the engineering fact this whole block's shape follows
 from: **a ULPI transceiver cannot do that**. ULPI is a byte-wide interface at
@@ -87,8 +93,9 @@ gateware changes that**: the delay is in the transceivers.
 
 **MEDIUM**. The architecture that does work decouples the two sides and uses
 **NAK** as the escape hatch. The PC's side may NAK a transaction until the
-data is there — that is what NAK is for and §8.4.5 is the flow control it
-describes — so a thing in the middle can take as long as it likes: accept the
+data is there — that is what NAK is for, and chapter 8's handshake packets are
+the flow control it describes — so a thing in the middle can take as long as it
+likes: accept the
 host's token, answer NAK, run the transaction on the other bus at its own pace,
 and have the answer waiting for the host's retry. That is a **transaction
 proxy** and not a repeater, and it is the next round's work. This block is the
@@ -322,10 +329,10 @@ STALL is a second line of defence and not the statement.
 | Feature | Section | What happens |
 |---------|---------|--------------|
 | SetPortFeature(PORT_POWER) | §11.24.2.12 | the port's own power bit goes on, and a connection may then appear |
-| ClearPortFeature(PORT_POWER) | §11.24.2.2 | off again, and §11.5.1.1's powered-off port reports no connection and no enable |
+| ClearPortFeature(PORT_POWER) | §11.24.2.2 | off again, and §11.5.1's **Powered-off** port reports no connection and no enable |
 | SetPortFeature(PORT_RESET) | §11.24.2.12 | completes **at once**; see below |
 | SetPortFeature(PORT_SUSPEND) | §11.24.2.12 | the suspend bit |
-| ClearPortFeature(PORT_SUSPEND) | §11.24.2.2 | the resume, and C_PORT_SUSPEND when it is complete — §11.5.1.8 |
+| ClearPortFeature(PORT_SUSPEND) | §11.24.2.2 | the resume, and C_PORT_SUSPEND when it is complete — §11.5.1's **Resuming** state |
 | ClearPortFeature(PORT_ENABLE) | §11.24.2.2 | the enable bit off |
 | ClearPortFeature(C_PORT_CONNECTION) | §11.24.2.2 | the change bit |
 | ClearPortFeature(C_PORT_SUSPEND) | §11.24.2.2 | the change bit |
@@ -366,7 +373,8 @@ clearing one is a request that is claimed and does nothing at all.
 
 ### The reset that takes no time, and why that is honest here
 
-**HIGH** (USB 2.0 §11.5.1.5). A hub drives SE0 downstream for 10 to 20 ms when
+**HIGH** (USB 2.0 §11.5.1, the **Resetting** state). A hub drives SE0
+downstream for 10 to 20 ms when
 a host sets PORT_RESET, reports PORT_RESET set in `wPortStatus` while it does,
 and sets C_PORT_RESET and enables the port when it finishes.
 
@@ -454,7 +462,7 @@ design this block was written for they are `ip/usb_host_ulpi`'s `attached` and
   SE0 — its `DEBOUNCE_CYCLES` is 100 ms at 60 MHz — which is a device present
   on the socket and is exactly what §11.24.2.7.1 makes PORT_CONNECTION.
 - **`low_speed`** is which line that device pulled up: **HIGH** (USB 2.0
-  §7.1.5.1) a full-speed device pulls D+ up through 1.5 kOhm and a low-speed one
+  §7.1.5) a full-speed device pulls D+ up through 1.5 kOhm and a low-speed one
   pulls D- up, so the host's `LineState` says which. It is only meaningful while
   something is pulling, which is why the block gates PORT_LOW_SPEED on
   `connection` — the specification calls it the speed of the *attached* device
@@ -467,8 +475,9 @@ our host failed on from a host that might have done better.
 
 ### Why a connection is gated on power, and what it buys
 
-**HIGH** (USB 2.0 §11.5.1.1). A port in the Powered-off state has no meaningful
-connection status, and a hub's ports are powered off until the host powers them.
+**HIGH** (USB 2.0 §11.5.1, the **Powered-off** state). A port there has no
+meaningful connection status, and a hub's ports are powered off until the host
+powers them.
 
 **MEDIUM**, and this is the design's neatest consequence: gating `connection`
 on `port_power` is what makes **the first connection reportable at all**.
@@ -811,7 +820,7 @@ left as found: wPortStatus 0x0101, wPortChange 0x0000
 ```
 
 ClearPortFeature(PORT_POWER) took the port's power away, and with it the
-connection — §11.5.1.1's powered-off port, which reports nothing at all — and
+connection — §11.5.1's Powered-off port, which reports nothing at all — and
 C_PORT_CONNECTION said so. ClearPortFeature(C_PORT_CONNECTION) cleared it.
 SetPortFeature(PORT_POWER) brought both back, and **C_PORT_CONNECTION was set a
 second time**. A hub with a one-shot anywhere in it fails that last step, and
@@ -928,7 +937,9 @@ block's.
 
 ## 10. What each test would and would not catch
 
-Ten tests in `tests/ip_library.rs`, and what they are each for.
+Ten tests of this block in `tests/ip_library.rs`, three that cover every block
+in the library and reach it with the rest, and one that needs a board. What each
+is for:
 
 | Test | What it would catch | What it would not |
 |------|--------------------|-------------------|
@@ -975,12 +986,13 @@ others.
 ## 11. Reading list
 
 - *Universal Serial Bus Specification, Revision 2.0*, chapter 11 — the hub.
-  §11.1.1 and §11.3 for what a hub is, §11.5.1 for the port's state machine,
+  §11.1 for what a hub is, §11.5.1 for the downstream port's state machine and
+  the states this document names out of it,
   §11.12.4 for the status change bitmap, §11.23.1 for the standard descriptors,
   §11.23.2.1 for the hub descriptor, §11.24.2 for the class requests.
 - The same, §5.7.3 and §5.8.3 for what sizes an interrupt and a bulk endpoint
-  may declare; §7.1.19.1 for how long a host waits; §8.4.5 for NAK as flow
-  control; §9.4.5 for the standard device status.
+  may declare; §7.1.5 for the pull-up that says a device is attached;
+  §7.1.19.1 for how long a host waits; §9.4.5 for the standard device status.
 - [`ip/usb_device_ulpi/README.md`](../usb_device_ulpi/README.md) — ULPI, fact by
   fact, with the provenance of each. Not repeated here.
 - [`ip/usb_host_ulpi/README.md`](../usb_host_ulpi/README.md) — the other end of

@@ -156,7 +156,8 @@ fn expected_configuration() -> Vec<u8> {
 /// is one byte each and seven plus two is nine.
 fn expected_hub_descriptor() -> Vec<u8> {
     let ports: u8 = 1;
-    let mask_bytes = (usize::from(ports) + 1 + 7) / 8;
+    // One bit a port plus the reserved bit 0, **rounded up to a byte**.
+    let mask_bytes = (usize::from(ports) + 1).div_ceil(8);
     let mut d = vec![
         u8::try_from(7 + 2 * mask_bytes).expect("a short descriptor"),
         // bDescriptorType: 29h.
@@ -469,9 +470,9 @@ fn a_usb_hub_this_compiler_built_is_bound_by_the_kernels_own_hub_driver() {
         "powered, with something on it"
     );
 
-    // Take the port's power away. USB 2.0 §11.5.1.1 makes a powered-off port's
-    // connection meaningless, so the connection goes and **the change says
-    // so** — the first of the two reports this half is about.
+    // Take the port's power away. USB 2.0 §11.5.1's Powered-off state makes a
+    // port's connection meaningless, so the connection goes and **the change
+    // says so** — the first of the two reports this half is about.
     clear_feature(FEAT_PORT_POWER);
     let (status, change) = port_status();
     println!("powered off: wPortStatus {status:#06x}, wPortChange {change:#06x}");

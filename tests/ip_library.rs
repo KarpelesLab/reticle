@@ -15076,8 +15076,9 @@ fn hub_clear_hub_feature(feature: u16) -> [u8; 8] {
 /// structure, so the short data stage is what makes nine the answer.
 fn expected_hub_descriptor() -> Vec<u8> {
     // DeviceRemovable and PortPwrCtrlMask, one bit a port plus the reserved
-    // bit 0, rounded up to a byte.
-    let mask_bytes = (usize::from(HUB_NBR_PORTS) + 1 + 7) / 8;
+    // bit 0, **rounded up to a byte** — which is what `div_ceil` is and is the
+    // arithmetic `bDescLength` has to agree with.
+    let mask_bytes = (usize::from(HUB_NBR_PORTS) + 1).div_ceil(8);
     let mut d = vec![
         // bDescLength: seven fixed bytes and the two masks.
         u8::try_from(7 + 2 * mask_bytes).expect("a short descriptor"),

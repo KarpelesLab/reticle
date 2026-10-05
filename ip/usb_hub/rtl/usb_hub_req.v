@@ -108,12 +108,13 @@
 //   STALL that says the device never offered it.
 //
 // THE RESET THAT TAKES NO TIME, AND WHY THAT IS HONEST HERE
-//   §11.5.1.5 has a hub drive SE0 downstream for 10 to 20 ms when a host
-//   sets PORT_RESET, and report PORT_RESET set while it does. **This block
-//   drives nothing downstream at all**, because what is downstream of it is
-//   not a port of this hub yet: it is a second USB controller — `ip/usb_host_ulpi`
-//   — with its own bus, its own reset and its own enumeration, and joining
-//   the two is the transaction proxy this round deliberately does not build.
+//   §11.5.1's **Resetting** state has a hub drive SE0 downstream for 10 to
+//   20 ms when a host sets PORT_RESET, and report PORT_RESET set while it
+//   does. **This block drives nothing downstream at all**, because what is
+//   downstream of it is not a port of this hub yet: it is a second USB
+//   controller — `ip/usb_host_ulpi` — with its own bus, its own reset and its
+//   own enumeration, and joining the two is the transaction proxy this round
+//   deliberately does not build.
 //
 //   So the reset completes in the cycle it is asked for: `port_reset` is one
 //   cycle for whatever wants to know, C_PORT_RESET sets, the port becomes
@@ -122,7 +123,7 @@
 //   there is no register for it. A host therefore sees the reset already
 //   finished at its first GetPortStatus, enumerates the port, and gets
 //   nothing back from the device it believes is there. That is the correct
-//   outcome for a hub with no proxy behind it and README.md §6 is the kernel
+//   outcome for a hub with no proxy behind it and README.md §8 is the kernel
 //   log of it happening.
 //
 // WHY THE CHANGE BITS ARE STICKY STATE AND NOT A ONE-SHOT
@@ -149,7 +150,8 @@
 // WHAT A CHANGE IS A CHANGE OF
 //   `C_PORT_CONNECTION` is set when **`connection` changes**, and
 //   `connection` is `port_power & port_attached` — not `port_attached` alone.
-//   §11.5.1.1 makes a port's connection status meaningless while the port is
+//   §11.5.1's **Powered-off** state makes a connection status meaningless
+//   while the port is
 //   powered off, and gating it this way is also what makes the first
 //   connection reportable: a host configures the hub, the hub's ports come up
 //   powered off, the host sends SetPortFeature(PORT_POWER), and
@@ -452,9 +454,10 @@ module usb_hub_req (
     reg c_reset;    // C_PORT_RESET
     reg conn_q;     // what `connection` was a cycle ago
 
-    // PORT_CONNECTION. §11.5.1.1 makes a port's connection status meaningless
-    // while it is powered off, and "WHAT A CHANGE IS A CHANGE OF" above is
-    // why gating it here is what makes the first connection reportable.
+    // PORT_CONNECTION. §11.5.1's Powered-off state makes a connection
+    // meaningless while the port is powered off, and "WHAT A CHANGE IS A
+    // CHANGE OF" above is why gating it here is what makes the first
+    // connection reportable.
     wire connection = powered & port_attached;
 
     assign port_power     = powered;
@@ -523,17 +526,17 @@ module usb_hub_req (
                                suspended,               // 2
                                enabled,                 // 1
                                connection};             // 0
-    wire [7:0] port_stat_hi = {4'b0000,                 // 15:12, 12 PORT_INDICATOR
-                               1'b0,                    // 11  PORT_TEST
-                               1'b0,                    // 10  PORT_HIGH_SPEED
-                               connection & port_low_speed, // 9
-                               powered};                // 8
-    wire [7:0] port_chg_lo  = {3'b000,                  // 7:5 reserved
-                               c_reset,                 // 4
-                               1'b0,                    // 3   C_PORT_OVER_CURRENT
-                               c_susp,                  // 2
-                               1'b0,                    // 1   C_PORT_ENABLE
-                               c_conn};                 // 0
+    wire [7:0] port_stat_hi = {4'b0000,               // 15:12, 12 INDICATOR
+                               1'b0,                  // 11  PORT_TEST
+                               1'b0,                  // 10  PORT_HIGH_SPEED
+                               connection & port_low_speed,  // 9
+                               powered};              // 8
+    wire [7:0] port_chg_lo  = {3'b000,                // 7:5 reserved
+                               c_reset,               // 4
+                               1'b0,                  // 3   C_PORT_OVER_CURRENT
+                               c_susp,                // 2
+                               1'b0,                  // 1   C_PORT_ENABLE
+                               c_conn};               // 0
 
     // The four bytes of the port's status, and the four zeros that are both
     // the hub's status (§11.24.2.6 — no local supply, no over-current, and
@@ -578,7 +581,7 @@ module usb_hub_req (
             port_reset <= 1'b0;
 
             // A port with nothing on it is not enabled, whatever it was told:
-            // §11.5.1.4 takes a port out of Enabled on a disconnect, and a
+            // §11.5.1 takes a port out of **Enabled** on a disconnect, and a
             // host that read PORT_ENABLE set on an empty port would address a
             // device that is not there.
             if (!connection) enabled <= 1'b0;
@@ -607,7 +610,7 @@ module usb_hub_req (
 
                 // ClearPortFeature.
                 if (clr_power) begin
-                    // §11.5.1.1: a powered-off port reports no connection and
+                    // §11.5.1's Powered-off: no connection and
                     // no enable, and `connection` follows `powered` on its
                     // own. The enable does not, so it is cleared here.
                     powered <= 1'b0;
@@ -615,8 +618,8 @@ module usb_hub_req (
                 end
                 if (clr_enable) enabled <= 1'b0;
                 if (clr_suspend) begin
-                    // §11.5.1.8: clearing PORT_SUSPEND is a resume, and
-                    // C_PORT_SUSPEND is set when the resume is complete —
+                    // §11.5.1's Resuming: clearing PORT_SUSPEND is a resume,
+                    // and C_PORT_SUSPEND is set when the resume is complete —
                     // which, with nothing downstream to resume, is now.
                     suspended <= 1'b0;
                     c_susp    <= 1'b1;
