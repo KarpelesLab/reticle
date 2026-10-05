@@ -5737,3 +5737,216 @@ fn every_label_of_the_target_hosts_report_names_the_value_beside_it() {
         "the report pairs a label with another item's value"
     );
 }
+
+/// The hub board's console says what its header's table says, and its pad is
+/// released when the design starts.
+///
+/// `testdata/fpga/cynthion/usb_hub_target.v` puts `ip/usb_hub` on a Cynthion's
+/// AUX port and `ip/usb_host_ulpi` on its TARGET port, and because AUX is then
+/// the hub rather than a serial port its console is the UART on ball **T14** —
+/// the one on the same net as the debug microcontroller's `TMS` output, with no
+/// series resistor on the PCB. Two things about that design are worth a test
+/// and neither is the gateware's logic.
+///
+/// **The four status bytes name the fields the header says they do.** That
+/// pairing was wrong on a part for a whole round of work on the design next
+/// door — `every_label_of_the_target_hosts_report_names_the_value_beside_it`
+/// above is the account — and the way it was wrong is the way a report lies
+/// without looking like one: every byte was plausible and belonged to something
+/// else. So the four bytes are read off the design with every field forced to a
+/// distinct value and compared against the same concatenation computed here.
+///
+/// **The pad is high impedance when the design starts.** `uart_tx` is driven
+/// only inside a window about 0.28 s to 17.9 s after configuration, which is
+/// the whole of what keeps this design from fighting the debugger for that net.
+/// The window is two latches and this checks all three of their states: shut
+/// before `win_open`, open between, and shut again once `win_shut` has latched
+/// — which is the property the header claims, that **nothing else can hold it
+/// open**.
+///
+/// What this would catch: a field in the wrong place or the wrong width in any
+/// of the four bytes, a latch that cannot close the window, and the design
+/// failing to elaborate against the blocks it instantiates — which, before
+/// `I0034`, used to be a silent black box.
+///
+/// What it would **not** catch: anything about either USB bus, since every
+/// input to the four bytes is forced here; whether the window ever opens on its
+/// own, because `OPEN_BIT` is 2^24 clocks away and this runs for forty; and
+/// whether a pad that is high impedance in this simulator is high impedance on
+/// a part — the simulator does not distinguish `x` from `z`, so what is
+/// asserted below is that the pin is **not a level**, which is weaker than
+/// "released" and is the strongest thing available here. The constraints file's
+/// `-pullup yes` and the debugger's own pinmux interlock are the other two
+/// thirds of the safety argument and neither is simulable.
+#[test]
+#[cfg(all(feature = "verilog", feature = "sim"))]
+fn the_hub_boards_console_names_the_fields_its_header_claims() {
+    use reticle::diag::Diagnostics;
+    use reticle::logic::Logic;
+    use reticle::sim::{SimOptions, Simulator};
+    use reticle::source::SourceMap;
+    use reticle::verilog::{Dialect, ElabOptions, NoIncludes, elaborate, parse_source};
+
+    let sources = [
+        "testdata/fpga/cynthion/usb_hub_target.v",
+        "ip/usb_hub/rtl/usb_hub_ulpi.v",
+        "ip/usb_hub/rtl/usb_hub.v",
+        "ip/usb_hub/rtl/usb_hub_req.v",
+        "ip/usb_host_ulpi/rtl/usb_host_ulpi.v",
+        "ip/usb_host_ulpi/rtl/usb_ulpi_host_link.v",
+        "ip/usb_host_ulpi/rtl/usb_host_sie.v",
+        "ip/usb_host_ulpi/rtl/usb_host_enum.v",
+        "ip/usb_device_ulpi/rtl/usb_ulpi_link.v",
+        "ip/usb_device_fs/rtl/usb_ctrl_ep.v",
+    ];
+    let mut map = SourceMap::new();
+    let mut diags = Diagnostics::new();
+    let mut files = Vec::new();
+    for name in sources {
+        let Ok(text) = std::fs::read_to_string(name) else {
+            eprintln!("skipped: `{name}` is not in this copy of the crate");
+            return;
+        };
+        let id = map.add(name, &text).expect("fits");
+        files.push(parse_source(
+            &mut map,
+            id,
+            Dialect::Verilog2005,
+            &mut NoIncludes,
+            &mut diags,
+        ));
+    }
+    let refs: Vec<_> = files.iter().collect();
+    let design = elaborate(&refs, &ElabOptions::new(Dialect::Verilog2005), &mut diags)
+        .expect("the design elaborates");
+    assert!(!diags.has_errors(), "{}", diags.render(&map));
+
+    let options = SimOptions {
+        top: Some("usb_hub_target".into()),
+        ..SimOptions::default()
+    };
+    let mut sim = Simulator::new(&design, options).expect("it simulates");
+
+    // Every input of the four bytes, forced to a value of its own. The widths
+    // are spelled out so that a port that changed width fails here rather than
+    // silently losing a bit, and the values are chosen so that no two of the
+    // four bytes come out the same: a swap between them would otherwise pass.
+    let hub_address = 0x23u64;
+    let vbus_state = 0b10u64;
+    let stage = 0x15u64;
+    let line_state = 0b01u64;
+    let fail_stage = 0x0Eu64;
+    let forced: &[(&str, u32, u64)] = &[
+        // byte 0, the hub on AUX
+        ("hub_phy_ready", 1, 1),
+        ("hub_configured", 1, 0),
+        ("hub_address", 7, hub_address),
+        ("saw_bus_reset", 1, 1),
+        ("port_power", 1, 0),
+        ("port_enabled", 1, 1),
+        ("port_suspended", 1, 1),
+        ("saw_port_reset", 1, 0),
+        // byte 1, the host on TARGET
+        ("h_phy_ready", 1, 0),
+        ("h_attached", 1, 1),
+        ("h_low_speed", 1, 1),
+        ("h_up", 1, 0),
+        ("h_failed", 1, 1),
+        ("h_vbus_state", 2, vbus_state),
+        // bytes 2 and 3
+        ("h_stage", 5, stage),
+        ("h_line_state", 2, line_state),
+        ("h_fail_stage", 5, fail_stage),
+    ];
+    for (name, width, value) in forced {
+        let path = format!("usb_hub_target.{name}");
+        let handle = sim
+            .net(&path)
+            .unwrap_or_else(|| panic!("`{path}` is a net of this design"));
+        sim.force(handle, Logic::from_u64(*value, *width));
+    }
+
+    let look = |sim: &Simulator, name: &str| {
+        let path = format!("usb_hub_target.{name}");
+        sim.net(&path)
+            .unwrap_or_else(|| panic!("`{path}` is a net of this design"))
+    };
+    let clk = look(&sim, "clk");
+    let (low, high) = (Logic::from_u64(0, 1), Logic::from_u64(1, 1));
+
+    // Let the forced values settle through the combinational logic.
+    sim.set(clk, low.clone());
+    for _ in 0..40u32 {
+        sim.run_for(5);
+        sim.set(clk, high.clone());
+        sim.run_for(5);
+        sim.set(clk, low.clone());
+    }
+
+    // The same four concatenations the design's header tabulates, built here
+    // from the forced values rather than written out as four numbers.
+    let want = [
+        // [7] phy_ready [6] configured [5] addressed [4] saw_bus_reset
+        // [3] port_power [2] port_enabled [1] port_suspended [0] saw_port_reset
+        (1 << 7) | (u64::from(hub_address != 0) << 5) | (1 << 4) | (1 << 2) | (1 << 1),
+        // [7] phy_ready [6] attached [5] low_speed [4] up [3] failed
+        // [2:1] vbus_state [0] zero
+        (1 << 6) | (1 << 5) | (1 << 3) | (vbus_state << 1),
+        // [7:5] zero, [4:0] stage
+        stage,
+        // [7] zero [6:5] line_state [4:0] fail_stage
+        (line_state << 5) | fail_stage,
+    ];
+    for (index, wanted) in want.iter().enumerate() {
+        let name = format!("b{index}");
+        let got = sim.get(look(&sim, &name)).to_u64();
+        assert_eq!(
+            got,
+            Some(*wanted),
+            "console byte {index} is {got:02x?} and the header's table says {wanted:#04x}; \
+             a field is in the wrong place, the wrong width, or names the wrong signal"
+        );
+    }
+
+    // The pad, in all three states of the window. `to_u64` is `None` for a bit
+    // this simulator cannot give a level to, which is `z` here and is as close
+    // to "released" as it can get.
+    let uart_tx = look(&sim, "uart_tx");
+    let window = look(&sim, "window");
+    assert_eq!(
+        sim.get(window).to_u64(),
+        Some(0),
+        "the drive window is shut when the design starts"
+    );
+    assert_eq!(
+        sim.get(uart_tx).to_u64(),
+        None,
+        "so the pad is not driving the net it shares"
+    );
+
+    sim.force(look(&sim, "win_open"), high.clone());
+    sim.run_for(1);
+    assert_eq!(
+        sim.get(window).to_u64(),
+        Some(1),
+        "the window opens when `win_open` latches"
+    );
+    assert!(
+        sim.get(uart_tx).to_u64().is_some(),
+        "and then the pad drives a level"
+    );
+
+    sim.force(look(&sim, "win_shut"), high);
+    sim.run_for(1);
+    assert_eq!(
+        sim.get(window).to_u64(),
+        Some(0),
+        "and `win_shut` shuts it again with `win_open` still set, which is what \
+         makes the window something nothing else can hold open"
+    );
+    assert_eq!(
+        sim.get(uart_tx).to_u64(),
+        None,
+        "and the pad is released for as long as the bitstream is loaded"
+    );
+}
