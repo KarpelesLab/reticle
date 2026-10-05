@@ -15207,9 +15207,7 @@ struct StatusPipe {
 
 impl StatusPipe {
     fn new() -> StatusPipe {
-        StatusPipe {
-            toggle: USB_DATA0,
-        }
+        StatusPipe { toggle: USB_DATA0 }
     }
 
     /// Back to DATA0, which is what SET_CONFIGURATION does to every
@@ -15277,11 +15275,7 @@ impl StatusPipe {
     /// `count` polls that must every one be NAKed.
     fn quiet<P: UsbPair>(&mut self, host: &mut UsbHost<P>, addr: u8, count: usize, why: &str) {
         for poll in 0..count {
-            assert_eq!(
-                self.poll(host, addr),
-                None,
-                "poll {poll} of {count}: {why}"
-            );
+            assert_eq!(self.poll(host, addr), None, "poll {poll} of {count}: {why}");
         }
     }
 
@@ -15354,7 +15348,10 @@ fn usb_hub_ulpi_enumerates_through_the_transceiver_that_is_on_the_board() {
 #[test]
 fn usb_hub_descriptors_carry_what_a_host_hub_driver_binds_on() {
     let device = expected_hub_device_descriptor();
-    assert_eq!(device[4], 0x09, "bDeviceClass 09h is what the driver matches");
+    assert_eq!(
+        device[4], 0x09,
+        "bDeviceClass 09h is what the driver matches"
+    );
     assert_eq!(device[5], 0x00, "bDeviceSubClass");
     assert_eq!(
         device[6], 0x00,
@@ -15562,7 +15559,11 @@ fn hub_class_requests<P: UsbPair>(host: &mut UsbHost<P>) {
         "SetPortFeature(PORT_POWER) is acknowledged"
     );
     host.idle(20);
-    assert_eq!(host.port("port_power"), 1, "and the same on the block's port");
+    assert_eq!(
+        host.port("port_power"),
+        1,
+        "and the same on the block's port"
+    );
     assert_eq!(
         status(host),
         (PORT_STAT_POWER | PORT_STAT_CONNECTION, PORT_CHG_CONNECTION),
@@ -15618,10 +15619,7 @@ fn hub_class_requests<P: UsbPair>(host: &mut UsbHost<P>) {
     );
     assert_eq!(stat & PORT_STAT_RESET, 0, "and the reset is already over");
     assert_eq!(chg, PORT_CHG_RESET, "C_PORT_RESET says it completed");
-    host.control_write(
-        3,
-        hub_clear_port_feature(HUB_NBR_PORTS, FEAT_C_PORT_RESET),
-    );
+    host.control_write(3, hub_clear_port_feature(HUB_NBR_PORTS, FEAT_C_PORT_RESET));
     host.idle(20);
     assert_eq!(status(host).1, 0, "and the change clears");
 
@@ -15636,10 +15634,7 @@ fn hub_class_requests<P: UsbPair>(host: &mut UsbHost<P>) {
         "the port is suspended"
     );
     assert_eq!(host.port("port_suspended"), 1);
-    host.control_write(
-        3,
-        hub_clear_port_feature(HUB_NBR_PORTS, FEAT_PORT_SUSPEND),
-    );
+    host.control_write(3, hub_clear_port_feature(HUB_NBR_PORTS, FEAT_PORT_SUSPEND));
     host.idle(20);
     let (stat, chg) = status(host);
     assert_eq!(stat & PORT_STAT_SUSPEND, 0, "and resumed");
@@ -15683,10 +15678,7 @@ fn hub_class_requests<P: UsbPair>(host: &mut UsbHost<P>) {
     }
     assert_eq!(
         status(host),
-        (
-            PORT_STAT_POWER | PORT_STAT_CONNECTION | PORT_STAT_ENABLE,
-            0
-        ),
+        (PORT_STAT_POWER | PORT_STAT_CONNECTION | PORT_STAT_ENABLE, 0),
         "and none of those four changed anything"
     );
 
@@ -15706,10 +15698,7 @@ fn hub_class_requests<P: UsbPair>(host: &mut UsbHost<P>) {
     // ------------------------------------------------------------------
     host.control_write(3, hub_set_port_feature(HUB_NBR_PORTS, FEAT_PORT_RESET));
     host.idle(20);
-    host.control_write(
-        3,
-        hub_clear_port_feature(HUB_NBR_PORTS, FEAT_C_PORT_RESET),
-    );
+    host.control_write(3, hub_clear_port_feature(HUB_NBR_PORTS, FEAT_C_PORT_RESET));
     host.idle(20);
     assert_eq!(
         status(host).0 & PORT_STAT_ENABLE,
@@ -15819,10 +15808,7 @@ fn usb_hub_stalls_the_class_requests_it_does_not_claim() {
             "SetPortFeature on port 2",
             hub_set_port_feature(2, FEAT_PORT_POWER),
         ),
-        (
-            "GetPortStatus of port 2",
-            hub_get_port_status(2),
-        ),
+        ("GetPortStatus of port 2", hub_get_port_status(2)),
         ("GetPortStatus of port 0", hub_get_port_status(0)),
         // SetHubFeature, §11.24.2.11 — a hub need not implement it.
         (
@@ -15840,18 +15826,12 @@ fn usb_hub_stalls_the_class_requests_it_does_not_claim() {
             "ClearTTBuffer",
             [0x23, 0x08, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00],
         ),
-        (
-            "ResetTT",
-            [0x23, 0x09, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00],
-        ),
+        ("ResetTT", [0x23, 0x09, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00]),
         (
             "GetTTState",
             [0xA3, 0x0A, 0x00, 0x00, 0x01, 0x00, 0x02, 0x00],
         ),
-        (
-            "StopTT",
-            [0x23, 0x0B, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00],
-        ),
+        ("StopTT", [0x23, 0x0B, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00]),
         // GetBusState, §11.24.2.4, which is optional and for debugging.
         (
             "GetBusState",
@@ -15966,7 +15946,12 @@ fn hub_status_changes<P: UsbPair>(host: &mut UsbHost<P>) {
 
     // A hub whose port is powered off and empty has nothing to say, and says
     // it for as long as it is asked.
-    pipe.quiet(host, 6, 20, "a configured hub with a powered-off, empty port");
+    pipe.quiet(
+        host,
+        6,
+        20,
+        "a configured hub with a powered-off, empty port",
+    );
 
     // A device appears while the port is off. Still nothing.
     host.set_port("port_attached", 1, 1);

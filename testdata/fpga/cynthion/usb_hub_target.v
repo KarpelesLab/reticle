@@ -23,7 +23,7 @@
 //     **fails**, because there is nothing on the other side of a hub that does
 //     not forward anything.
 //
-// That is correct for this design and `ip/usb_hub/README.md` §6 quotes the
+// That is correct for this design and `ip/usb_hub/README.md` §8 quotes the
 // kernel log of it. A transaction proxy is what closes it, and §2 of that file
 // is why it cannot be done by repeating bits: through a ULPI transceiver the
 // floor for a byte in and a byte out is roughly twenty-four bit times and USB
@@ -97,7 +97,7 @@
 //           [2:1] vbus_state       the transceiver's own comparators
 //           [0] 0
 //
-//   byte 2  `5'b0` then `stage[4:0]`, our host's enumeration stage
+//   byte 2  `3'b0` then `stage[4:0]`, our host's enumeration stage
 //   byte 3  `1'b0`, `line_state[1:0]`, `fail_stage[4:0]`
 //
 // **Byte 0 bit 3 is the one to look at.** `port_power` is the PC's hub driver
@@ -421,13 +421,21 @@ module usb_hub_target #(
     wire [7:0] b2 = {3'b000, h_stage};
     wire [7:0] b3 = {1'b0, h_line_state, h_fail_stage};
 
-    // `H`, eight nibbles, CR, LF: eleven characters, so `pos` runs 0 to 11
-    // and four bits are not enough for the one past the end. Five are, and
-    // every one of the five is reachable.
-    localparam [4:0] P_LAST = 5'd9;   // the CR
-    localparam [4:0] P_END  = 5'd11;  // one past the LF: the gap
+    // `H`, eight nibbles, CR, LF: eleven characters, and `pos` runs 0 to 11 —
+    // one past the last one, which is the state the gap between lines is
+    // counted in.
+    //
+    // **Four bits, because eleven fits in four.** This was five, and five it is
+    // not: bit 4 is a bit no expression in this file can set, which is a
+    // flip-flop whose data input is the constant zero, which on an ECP5 is the
+    // shape that cost this project eight rounds of investigation over a
+    // `reg [2:0]` for four states. `usb_ctrl_ep`'s own header carries that
+    // account and `CLAUDE.md` the rule: a register is as wide as the values it
+    // holds.
+    localparam [3:0] P_LAST = 4'd9;   // the CR
+    localparam [3:0] P_END  = 4'd11;  // one past the LF: the gap
 
-    reg [4:0]  pos   = 5'd0;
+    reg [3:0]  pos   = 4'd0;
     reg [9:0]  baud  = 10'd0;
     reg [3:0]  bitno = 4'd0;
     reg [7:0]  shreg = 8'h00;
@@ -435,8 +443,9 @@ module usb_hub_target #(
     reg [GAP_BITS-1:0] idle = {GAP_BITS{1'b0}};
 
     // Which nibble. `pos` 1 and 2 are byte 0, 3 and 4 byte 1, and so on, so
-    // `pos - 1` splits into a byte index and which half of it.
-    wire [4:0] q = pos - 5'd1;
+    // `pos - 1` splits into a byte index and which half of it. At `pos` 0, 9
+    // and 10 it is not a nibble at all and `chr` below does not read one.
+    wire [3:0] q = pos - 4'd1;
     reg  [7:0] sel;
     always @(*) begin
         case (q[2:1])
@@ -451,9 +460,9 @@ module usb_hub_target #(
                                    : (8'h37 + {4'd0, nib});
     reg [7:0] chr;
     always @(*) begin
-        if (pos == 5'd0)                  chr = 8'h48;  // 'H'
+        if (pos == 4'd0)                  chr = 8'h48;  // 'H'
         else if (pos == P_LAST)           chr = 8'h0D;
-        else if (pos == P_LAST + 5'd1)    chr = 8'h0A;
+        else if (pos == P_LAST + 4'd1)    chr = 8'h0A;
         else                              chr = hex;
     end
 
@@ -463,7 +472,7 @@ module usb_hub_target #(
         if (!window) begin
             bitno  <= 4'd0;
             baud   <= 10'd0;
-            pos    <= 5'd0;
+            pos    <= 4'd0;
             idle   <= {GAP_BITS{1'b0}};
             line_q <= 1'b1;
         end else if (sending) begin
@@ -483,7 +492,7 @@ module usb_hub_target #(
         end else if (pos == P_END) begin
             if (idle == {GAP_BITS{1'b1}}) begin
                 idle <= {GAP_BITS{1'b0}};
-                pos  <= 5'd0;
+                pos  <= 4'd0;
             end else begin
                 idle <= idle + {{(GAP_BITS-1){1'b0}}, 1'b1};
             end
@@ -492,7 +501,7 @@ module usb_hub_target #(
             bitno  <= 4'd1;
             baud   <= 10'd0;
             line_q <= 1'b0;
-            pos    <= pos + 5'd1;
+            pos    <= pos + 4'd1;
         end
     end
 

@@ -68,13 +68,15 @@
 //! sets only once.
 //!
 //! It does **not** catch a hub that works on Linux and not on Windows or
-//! macOS, since it asks one host. It does **not** establish that the
-//! **interrupt endpoint** carried anything: reading endpoint `81h` would mean
-//! taking the interface off the kernel's own hub driver, which this test
-//! refuses to do, so the change bits are read through GetPortStatus and the
-//! endpoint is proved in simulation only. `ip/usb_hub/README.md` §8 says what
-//! one unplugging of the downstream cable would add to that and why nothing
-//! here can do it.
+//! macOS, since it asks one host. It does **not** read the **interrupt
+//! endpoint**, because that would mean taking the interface off the kernel's
+//! own hub driver, so the change bits below are read through GetPortStatus
+//! instead. What establishes the endpoint on the part is a side effect of part
+//! three rather than an assertion in it: the kernel starts enumerating the port
+//! again about a second after the power cycle, of its own accord, and nothing
+//! but that endpoint could have told it. `ip/usb_hub/README.md` §8 is the
+//! kernel log of that and says how far it goes — the endpoint fired, and the
+//! bitmap's own byte and the NAKs in between are still only simulated.
 //!
 //! And it says nothing at all about a board that is not plugged in: it
 //! **skips**, with a reason, because an unplugged board is not a broken
@@ -310,7 +312,8 @@ fn a_usb_hub_this_compiler_built_is_bound_by_the_kernels_own_hub_driver() {
     // interface is claimed, and everything below is a control transfer to
     // endpoint 0 with a device or "other" recipient, which is what `lsusb -v`
     // sends to print a hub's port status.
-    let context = Context::new().expect("the USB subsystem is reachable, since sysfs named a device");
+    let context =
+        Context::new().expect("the USB subsystem is reachable, since sysfs named a device");
     let device = context
         .find_device(VID, PID)
         .expect("enumerating USB devices")
