@@ -378,6 +378,21 @@ const VARIANTS: &[Variant] = &[
         top: "usb_cdc_acm_ulpi",
         params: &[("VID", "16'h1209"), ("PID", "16'h0001")],
     },
+    // The hub, which is the one class in this library with **no bulk
+    // endpoint**: `DATA_ENDP = 4'd0` into `usb_dev_core`, a two-byte interrupt
+    // IN and a twenty-five byte configuration descriptor. The two rows beside
+    // the two CDC ACM rows are what a class costs when none of it is buffers,
+    // which is the comparison the table is for.
+    Variant {
+        package: "usb_hub",
+        top: "usb_hub_fs",
+        params: &[("VID", "16'h1209"), ("PID", "16'h0001")],
+    },
+    Variant {
+        package: "usb_hub",
+        top: "usb_hub_ulpi",
+        params: &[("VID", "16'h1209"), ("PID", "16'h0001")],
+    },
 ];
 
 /// Board constraints a variant needs to go through the FPGA flow, as
@@ -16687,9 +16702,15 @@ fn usb_descriptors_survive_lookup_table_mapping() {
         want: fn() -> Vec<u8>,
     }
 
-    // Three of them and two LUT widths. The first is the descriptor set that
-    // has always worked on a board, the second is the one that did not, and
-    // the third is the block that states it for itself.
+    // Four of them and two LUT widths. The first is the descriptor set that
+    // has always worked on a board, the second is the one that did not, the
+    // third is the block that states it for itself, and the fourth is a
+    // **fourth blob** — `ip/usb_hub`'s twenty-five bytes — because what the
+    // defect below depended on was the ROM's contents and not its length.
+    //
+    // What the fourth case does **not** cover is the hub descriptor of USB 2.0
+    // §11.23.2.1, which is a `case` in `usb_hub_req` and not a part-select of
+    // a constant, so it is not a ROM and is not what this test is about.
     //
     // **All three take `BUF_RAM = 0`, and that is a limit of this simulator
     // rather than a preference.** `usb_bulk_ep`'s buffers are arrays by
@@ -16742,6 +16763,14 @@ fn usb_descriptors_survive_lookup_table_mapping() {
             },
             want: expected_cdc_configuration,
         },
+        Case {
+            variant: Variant {
+                package: "usb_hub",
+                top: "usb_hub_fs",
+                params: &[("VID", "16'h1209"), ("PID", "16'h0001"), ("BUF_RAM", "0")],
+            },
+            want: expected_hub_configuration,
+        },
     ];
 
     for Case { variant, want } in cases {
@@ -16762,6 +16791,9 @@ fn usb_descriptors_survive_lookup_table_mapping() {
             // the way `tests/sim_cosim.rs` does.
             let mapped: &'static Design = Box::leak(Box::new(design));
             let mut host = UsbHost::new(FsPair::with_loopback(mapped, false), 0);
+            if package == "usb_hub" {
+                hub_port_empty(&mut host);
+            }
             host.bus_reset();
             let config = host
                 .control_read(0, [0x80, 0x06, 0x00, 0x02, 0xFF, 0xFF, 0xFF, 0xFF])

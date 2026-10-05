@@ -1711,6 +1711,14 @@ exactly what this table is for.
 | `usb_cdc_acm` | `usb_cdc_acm_ulpi` | VID=16'h1209, PID=16'h0001 | LUT6 | 107 x dff, 1022 x lut, 1 x memory 16x8, 2 x memory 64x8, 3 x memrd, 3 x memwr | 11 |
 | `usb_cdc_acm` | `usb_cdc_acm_ulpi` | VID=16'h1209, PID=16'h0001 | iCE40 HX1K | 117 x SB_CARRY, 1152 x SB_DFFE, 429 x SB_DFFER, 42 x SB_DFFES, 9 x SB_DFFR, 1 x SB_GB, 120 x SB_IO, 3481 x SB_LUT4 | 11 |
 | `usb_cdc_acm` | `usb_cdc_acm_ulpi` | VID=16'h1209, PID=16'h0001 | ECP5 45F | 1 x DCCA, 1209 x LUT4, 18 x TRELLIS_DPR16X4, 480 x TRELLIS_FF, 120 x TRELLIS_IO | 11 |
+| `usb_hub` | `usb_hub_fs` | VID=16'h1209, PID=16'h0001 | LUT4 | 92 x dff, 841 x lut, 1 x memory 2x8, 1 x memrd, 1 x memwr | 11 |
+| `usb_hub` | `usb_hub_fs` | VID=16'h1209, PID=16'h0001 | LUT6 | 92 x dff, 716 x lut, 1 x memory 2x8, 1 x memrd, 1 x memwr | 8 |
+| `usb_hub` | `usb_hub_fs` | VID=16'h1209, PID=16'h0001 | iCE40 HX1K | 41 x SB_CARRY, 16 x SB_DFFE, 260 x SB_DFFER, 39 x SB_DFFES, 15 x SB_DFFR, 3 x SB_DFFS, 1 x SB_GB, 23 x SB_IO, 839 x SB_LUT4 | 10 |
+| `usb_hub` | `usb_hub_fs` | VID=16'h1209, PID=16'h0001 | ECP5 45F | 1 x DCCA, 843 x LUT4, 2 x TRELLIS_DPR16X4, 317 x TRELLIS_FF, 23 x TRELLIS_IO | 11 |
+| `usb_hub` | `usb_hub_ulpi` | VID=16'h1209, PID=16'h0001 | LUT4 | 86 x dff, 930 x lut, 1 x memory 2x8, 1 x memrd, 1 x memwr | 10 |
+| `usb_hub` | `usb_hub_ulpi` | VID=16'h1209, PID=16'h0001 | LUT6 | 86 x dff, 818 x lut, 1 x memory 2x8, 1 x memrd, 1 x memwr | 11 |
+| `usb_hub` | `usb_hub_ulpi` | VID=16'h1209, PID=16'h0001 | iCE40 HX1K | 74 x SB_CARRY, 16 x SB_DFFE, 276 x SB_DFFER, 37 x SB_DFFES, 10 x SB_DFFR, 1 x SB_GB, 39 x SB_IO, 927 x SB_LUT4 | 10 |
+| `usb_hub` | `usb_hub_ulpi` | VID=16'h1209, PID=16'h0001 | ECP5 45F | 1 x DCCA, 932 x LUT4, 2 x TRELLIS_DPR16X4, 323 x TRELLIS_FF, 39 x TRELLIS_IO | 10 |
 <!-- end footprints -->
 
 ### Seven things writing these blocks found
