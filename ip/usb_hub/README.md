@@ -102,9 +102,8 @@ gateware changes that**: the delay is in the transceivers.
 **NAK** as the escape hatch. The PC's side may NAK a transaction until the
 data is there — that is what NAK is for, and chapter 8's handshake packets are
 the flow control it describes — so a thing in the middle can take as long as it
-likes: accept the
-host's token, answer NAK, run the transaction on the other bus at its own pace,
-and have the answer waiting for the host's retry. That is a **transaction
+likes: accept the host's token, answer NAK, run the transaction on the other bus
+at its own pace, and have the answer waiting for the host's retry. That is a **transaction
 proxy** and not a repeater, and it is the next round's work. This block is the
 part of it a host has to bind to first.
 
