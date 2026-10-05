@@ -153,11 +153,10 @@
 // WHAT A CHANGE IS A CHANGE OF
 //   `C_PORT_CONNECTION` is set when **`connection` changes**, and
 //   `connection` is `port_power & port_attached` — not `port_attached` alone.
-//   §11.5.1's **Powered-off** state makes a connection status meaningless
-//   while the port is
-//   powered off, and gating it this way is also what makes the first
-//   connection reportable: a host configures the hub, the hub's ports come up
-//   powered off, the host sends SetPortFeature(PORT_POWER), and
+//   §11.5.1's **Powered-off** state makes a connection status meaningless while
+//   the port is powered off, and gating it this way is also what makes the
+//   first connection reportable: a host configures the hub, the hub's ports
+//   come up powered off, the host sends SetPortFeature(PORT_POWER), and
 //   **that** is when `connection` rises and the change is recorded — with the
 //   host listening, because it has just finished configuring the hub.
 //
