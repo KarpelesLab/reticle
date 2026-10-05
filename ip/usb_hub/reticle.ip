@@ -1,0 +1,84 @@
+# usb_hub: a full-speed USB 2.0 **hub** — the class every operating system
+# already has a driver for, because a hub is how it finds anything else.
+# Three modules: `usb_hub_req` answers the hub and port class requests of
+# USB 2.0 §11.24.2 on `usb_ctrl_ep`'s class hook and holds the port state
+# they act on, `usb_hub` is that plus the one interface and the one
+# interrupt IN endpoint §11.23.1 allows a hub — and no bulk endpoint at all,
+# which is what `DATA_ENDP = 4'd0` into `usb_dev_core` means — and the two
+# `_fs` / `_ulpi` wrappers put it behind each of this library's link layers.
+#
+# **It is a hub's control endpoint and not a hub.** A hub also repeats every
+# downstream packet to its enabled ports within about four bit times, and
+# through a ULPI transceiver the floor is roughly twenty-four one way, so a
+# transparent repeater cannot meet USB's turnaround at all. What is behind
+# this block's port instead is a second USB controller — `ip/usb_host_ulpi`
+# — and joining the two conversations is a transaction proxy that does not
+# exist yet. So a host finds a hub, finds something on its port, resets it,
+# and gets no answer from the device it believes is there. README.md §2 is
+# the timing argument and §6 is the kernel log of that outcome.
+#
+# `top` names the ULPI wrapper because that is the one that has run on a
+# board; `usb_hub_fs` is the same class layer on a board whose D+ / D- reach
+# the FPGA, and `usb_hub` on its own is for a design that has a link layer
+# of its own.
+#
+# Two `depends` lines and they are not alternatives: `usb_device_fs` is
+# where `usb_dev_core`, `usb_ctrl_ep`, `usb_bulk_ep`, `usb_pkt_rx` and the
+# full-speed line layer live, and `usb_device_ulpi` is where
+# `usb_ulpi_link` does. A design that uses only one of the wrappers carries
+# the other's link layer in its source list and instantiates nothing from it.
+#
+# README.md states the descriptor set and the hub descriptor field by field
+# with the section each field comes from, says which port features are
+# honoured and which are accepted and ignored, and separates what was
+# **checked** against a host from what is only **quoted** from the
+# specification.
+name usb_hub
+version 1.0.0
+license MIT
+description "USB 2.0 full-speed hub: the hub and port class requests of USB 2.0 section 11.24.2, the hub descriptor, one interrupt IN status-change endpoint reporting a bitmap of sticky change bits a host must clear, and a port whose state is read from a second USB controller on the other side of the die"
+
+top usb_hub_ulpi
+target ice40
+target ecp5
+
+source rtl/usb_hub_req.v
+source rtl/usb_hub.v
+source rtl/usb_hub_fs.v
+source rtl/usb_hub_ulpi.v
+
+depends usb_device_fs ^1.0.0
+depends usb_device_ulpi ^1.0.0
+
+param VID bits 16'h1209
+param PID bits 16'h0001
+param RESET_CYCLES int 300 2..65535
+param SE0_CYCLES int 150 2..255
+param LINE_TRIES int 40000 1..1000000
+param TURNAROUND bits 7'd9
+param VENDOR_ADDR bits 6'h00
+param VENDOR_DATA bits 8'h00
+param CFG_ATTR bits 8'h80
+param CFG_POWER bits 8'd50
+param MAXPKT0 bits 7'd64
+param BUF_RAM int 1 0..1
+
+port clk60 in
+port rst_n in
+port ulpi_data_i in 8
+port ulpi_data_o out 8
+port ulpi_data_oe out
+port ulpi_dir in
+port ulpi_nxt in
+port ulpi_stp out
+port ulpi_rst_n out
+port address out 7
+port configured out
+port usb_reset out
+port phy_ready out
+port port_attached in
+port port_low_speed in
+port port_power out
+port port_enabled out
+port port_suspended out
+port port_reset out

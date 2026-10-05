@@ -1888,7 +1888,9 @@ endmodule
 //                    every endpoint rather than once per endpoint
 //     usb_ctrl_ep    endpoint 0: the standard requests, the descriptors
 //     usb_bulk_ep    endpoint `DATA_ENDP`, IN and OUT, with a byte
-//                    interface for whatever is above it
+//                    interface for whatever is above it, and `4'd0` for a
+//                    class that moves no bytes at all — a USB hub is one,
+//                    and then nothing of it is built
 //
 //     usb_bulk_ep    a second endpoint, IN only, for a class that needs
 //                    one: `NOTIF_ENDP`, which is `4'd0` for a device that
@@ -1963,6 +1965,17 @@ module usb_dev_core #(
     // one of its packets. They have to agree with the endpoint descriptors
     // above, which no arithmetic can check: a descriptor says what the
     // host will do and these say what the device will do.
+    //
+    // **`4'd0` is a device with no data endpoint**, the same way `NOTIF_ENDP`
+    // of `4'd0` is a device with no second one, and then nothing of it is
+    // built: both directions of the endpoint below are off, `own_data` is a
+    // flip-flop whose data input is the constant zero, and the buffers, the
+    // multiplexer arm and the byte interface all go with it. `ip/usb_hub` is
+    // the class that wants this — a hub's only endpoints are the control one
+    // and a status-change interrupt IN — and the alternative was to leave a
+    // bulk pair in the fabric that no descriptor declares and no host would
+    // ever address, which at 64 bytes a direction is over a thousand
+    // flip-flops or sixteen `TRELLIS_DPR16X4` for nothing.
     parameter [3:0]   DATA_ENDP    = 4'd1,
     parameter [6:0]   MAXPKT       = 7'd64,
     // A second data endpoint, **IN only**: a CDC ACM notification
@@ -2081,7 +2094,12 @@ module usb_dev_core #(
     // The second endpoint exists only when it has a number of its own, and
     // `NOTIF_ENDP = 0` is endpoint 0's number, so the test is both.
     wire tok_notif = (NOTIF_ENDP != 4'd0) && (tok_endp == NOTIF_ENDP);
-    wire tok_data  = (tok_endp != 4'd0) && !tok_notif;
+    // ... and the data endpoint the same way, so that a device with
+    // `DATA_ENDP = 4'd0` has no `own_data` flip-flop at all. A token for an
+    // endpoint number nobody has then leaves ownership with endpoint 0, which
+    // ignores it because the number is not zero — the same silence the
+    // header's last paragraph describes, reached by one fewer register.
+    wire tok_data  = (DATA_ENDP != 4'd0) && (tok_endp != 4'd0) && !tok_notif;
 
     reg own_data;
     reg own_notif;
@@ -2169,8 +2187,8 @@ module usb_dev_core #(
     usb_bulk_ep #(
         .ENDP       (DATA_ENDP),
         .MAXPKT     (MAXPKT),
-        .WITH_OUT   (1),
-        .WITH_IN    (1),
+        .WITH_OUT   (DATA_ENDP != 4'd0),
+        .WITH_IN    (DATA_ENDP != 4'd0),
         .BUF_RAM    (BUF_RAM),
         .TURNAROUND (TURNAROUND)
     ) u_ep1 (
