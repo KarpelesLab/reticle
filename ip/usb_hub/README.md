@@ -226,14 +226,16 @@ byte, and `PortPwrCtrlMask` is the same size. One port is one byte each, so the
 length is 7 + 1 + 1 = **9**. Nine ports would be 7 + 2 + 2 = 11.
 
 **MEDIUM**, and this is where a hub is most easily rejected. Linux asks for the
-whole of its own `struct usb_hub_descriptor` — fifteen bytes, sized for its
-maximum port count — and requires at least `7 + 2` bytes back before it will
-believe it has a hub descriptor at all. Nine is exactly the floor. What makes
-asking for fifteen and getting nine work is `usb_ctrl_ep` capping a class data
-stage at `min(wLength, class_len)` and a short packet ending a control read,
-which §7 of this file calls out as the one place the class hook's arithmetic is
-load-bearing. `usb_hub_answers_the_hub_and_port_class_requests` asks for
-fifteen on purpose.
+whole of its own `struct usb_hub_descriptor`, which is sized for its maximum
+port count and so is well over nine bytes long, and requires at least `7 + 2`
+bytes back before it will believe it has a hub descriptor at all. **Nine is
+exactly that floor.** What makes asking for more and getting nine work is
+`usb_ctrl_ep` capping a class data stage at `min(wLength, class_len)` and a
+short packet ending a control read, which §7 of this file calls out as the one
+place the class hook's arithmetic is load-bearing for this block. The two tests
+that read this descriptor ask for **fifteen** on purpose — a length chosen
+because it is longer than nine rather than because it is the kernel's, which
+this round has not counted.
 
 #### wHubCharacteristics
 
@@ -579,10 +581,11 @@ and that is the defect above with a different name. The extra packet is paid.
 more of it than the first class did, and this section is what it found.
 
 **Everything the hub needs fits.** Six class requests decode from eight bytes
-against constants, which is what the hook is for; three of them read and their
-longest data stage is the nine-byte hub descriptor, which `CLASS_MAX = 9` sets
-the width of endpoint 0's counters from; and three of them carry nothing at all,
-so the hook's host-to-device half is not taken. The one asymmetry of the hook —
+against constants, which is what the hook is for; three of them read — four with
+the standard one below — and their longest data stage is the nine-byte hub
+descriptor, which `CLASS_MAX = 9` sets the width of endpoint 0's counters from;
+and the other three carry nothing at all, so the hook's host-to-device half is
+not taken. The one asymmetry of the hook —
 a class request that writes may carry at most one eight-byte packet — does not
 bind, because **no hub request has an OUT data stage** except SetHubDescriptor,
 which §11.24.2.10 makes optional and this block stalls.
@@ -831,6 +834,20 @@ The device never went anywhere: the socket's real VBUS is the board's own
 `aux_vbus_en`, which no class request reaches, which is §4's last subsection and
 is why the connection comes straight back.
 
+**And one thing that came out of taking this reading twice.** The first run of
+`tests/usb_hub.rs` against a **freshly loaded** bitstream failed on `a
+powered-off port reports nothing at all` with `0x0101` — powered and connected —
+and the hub was not wrong. The kernel's own hub driver is operating the same
+port, a connection change is exactly what it is watching for, and its answer to
+one it cannot enumerate through is to power-cycle the port. It had put the power
+back between the ClearPortFeature and the GetPortStatus.
+
+So the three steps are attempted as a whole and retried, and that half of the
+test **skips** with a reason rather than failing if the driver never leaves a
+clean window. That is a property of asking a port two agents are operating, not
+of the hub, and the failure is left written down here because the first reading
+of it looked like a defect in the gateware.
+
 ### And the interrupt endpoint carried it
 
 **CHECKED**. The power cycle above was sent from userspace, and about a second
@@ -967,7 +984,8 @@ host decides which one makes the port work.
 reason when no `1209:0001` is attached. It asserts the three things §8 quotes:
 that the driver named `hub` holds the interface and the kernel recorded one
 port, that the descriptors the part reports are the ones the sources describe
-— including the nine-byte hub descriptor asked for as fifteen — and that the
+— including the nine-byte hub descriptor, asked for at a length longer than it
+is — and that the
 port reports a connection, loses it to ClearPortFeature(PORT_POWER), and
 **reports it a second time** when the power comes back. What it cannot do is
 read endpoint `81h`, because that would mean taking the interface off the

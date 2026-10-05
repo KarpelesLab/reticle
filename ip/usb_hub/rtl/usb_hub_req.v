@@ -8,7 +8,7 @@
 //   request endpoint 0 does not implement and a hub cannot do without, and
 //   the state those requests read and write.
 //
-//   Nine claims, and every one of them is a subsection of USB 2.0 §11.24.2:
+//   Six of them, and every one is a subsection of USB 2.0 §11.24.2:
 //
 //     GetHubDescriptor      A0h 06h  wValue 2900h     §11.24.2.5
 //     GetHubStatus          A0h 00h  wIndex 0         §11.24.2.6
@@ -26,6 +26,9 @@
 //   A request to a port this hub does not have is **not claimed**, so
 //   endpoint 0 stalls it, which is what §11.24.2 asks of a hub asked about a
 //   port number greater than `bNbrPorts`.
+//
+//   A seventh claim is a **standard** request and the next section is all of
+//   why it is here.
 //
 // THE STANDARD REQUEST A HUB CANNOT DO WITHOUT, AND WHY IT IS HERE
 //   `usb_ctrl_ep` implements five standard requests and offers the rest to

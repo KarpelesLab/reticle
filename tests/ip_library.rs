@@ -15072,8 +15072,9 @@ fn hub_clear_hub_feature(feature: u16) -> [u8; 8] {
 /// variable-length fields at the end are one bit a port plus one for the
 /// reserved bit 0, rounded up to a byte, and a hub whose length disagrees
 /// with a host's reading of it is not a hub. Linux requires at least
-/// `7 + 2` bytes back and asks for the whole of its own fifteen-byte
-/// structure, so the short data stage is what makes nine the answer.
+/// `7 + 2` bytes back and asks for the whole of its own `struct
+/// usb_hub_descriptor`, which is sized for its maximum port count, so the short
+/// data stage is what makes nine the answer.
 fn expected_hub_descriptor() -> Vec<u8> {
     // DeviceRemovable and PortPwrCtrlMask, one bit a port plus the reserved
     // bit 0, **rounded up to a byte** — which is what `div_ceil` is and is the
