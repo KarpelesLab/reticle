@@ -639,10 +639,17 @@ on a condition — the second of which is what `usb_cdc_req` already does for
 A Great Scott Gadgets Cynthion r1.4 holding
 `testdata/fpga/cynthion/usb_hub_target.v`, built with `VBUS_AUX = 1`: this
 block behind `ip/usb_device_ulpi`'s link layer on the **AUX** transceiver,
-`ip/usb_host_ulpi` on the **TARGET** one, and a Great Scott Gadgets GreatFET
-(`1d50:60e6`) in the TARGET-A socket. Linux 6.18.41-gentoo, `xhci_hcd`, the
-Cynthion on a full-speed downstream port of a hub. Everything below is
-**quoted**, not paraphrased.
+`ip/usb_host_ulpi` on the **TARGET** one, and a device in the TARGET-A socket.
+Linux 6.18.41-gentoo, `xhci_hcd`, the Cynthion on a full-speed downstream port of
+a hub. Everything below is **quoted**, not paraphrased.
+
+**What that device is, this round did not read.** It is a Great Scott Gadgets
+GreatFET (`1d50:60e6`) according to the round before, whose design printed its
+descriptors; this design does not, so what is established here about the socket
+is narrower and is what the hub's port actually depends on: something full speed
+is attached, and `ip/usb_host_ulpi` enumerated it to its own `E_UP`. The hub
+reports an attachment and a speed and nothing else about it, which is all
+§11.24.2.7.1 gives it to report.
 
 ### The kernel bound its own hub driver
 
@@ -807,8 +814,8 @@ masks whose size `bDescLength` has to agree with.
 `wPortStatus`: `0101h` is PORT_POWER and PORT_CONNECTION, with no change
 outstanding. **CHECKED**: the kernel's hub driver sent
 SetPortFeature(PORT_POWER) — which is §3's warning about `wHubCharacteristics`
-D1:D0 coming out right — and the port is reporting the GreatFET on the other
-side of the die.
+D1:D0 coming out right — and the port is reporting the device on the other side
+of the die.
 
 **`Device Status: 0x0000 (Bus Powered)`** is the **standard** GET_STATUS of §7,
 the one request `usb_ctrl_ep` does not implement and this class claims on the
@@ -910,7 +917,7 @@ AUX bus and configured the hub, powered the port, reset the port — which is
 what enabled it — and then, having failed to enumerate anything through it, left
 the port powered and disabled. `ip/usb_host_ulpi`'s half of the board is
 unchanged throughout: `attached`, full speed, `up`, LineState `01`, and stage
-**17**, which is `E_UP` in that block's own list — the GreatFET's device
+**17**, which is `E_UP` in that block's own list — the downstream device's
 descriptor read, SET_ADDRESS taken, the configuration descriptor read and
 SET_CONFIGURATION accepted. **So the device behind the port is fully enumerated
 by our own host at the same moment the PC cannot reach it at all**, which is the
@@ -1027,9 +1034,9 @@ others.
 
 - *Universal Serial Bus Specification, Revision 2.0*, chapter 11 — the hub.
   §11.1 for what a hub is, §11.5.1 for the downstream port's state machine and
-  the states this document names out of it,
-  §11.12.4 for the status change bitmap, §11.23.1 for the standard descriptors,
-  §11.23.2.1 for the hub descriptor, §11.24.2 for the class requests.
+  the states this document names out of it, §11.12.4 for the status change
+  bitmap, §11.23.1 for the standard descriptors, §11.23.2.1 for the hub
+  descriptor, §11.24.2 for the class requests.
 - The same, §5.7.3 and §5.8.3 for what sizes an interrupt and a bulk endpoint
   may declare; §7.1.5 for the pull-up that says a device is attached;
   §7.1.19.1 for how long a host waits; §9.4.5 for the standard device status.
