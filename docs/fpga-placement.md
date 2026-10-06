@@ -98,12 +98,14 @@ halves**, and the half this placer had was the passive one. `α` reacts to
 the acceptance rate; only `D_limit` *acts* on it.
 
 Without `D_limit`, a move on an ECP5 `LFE5U-12F` sends a cell to a random
-one of 24 288 lookup-table sites on a 73-by-56 grid of tiles. The
-wirelength change is tens of tiles. There is therefore **no temperature
+one of 24 288 lookup-table sites on a die whose longest side is 73 tiles
+— which is where the 73 in the window column below comes from, the
+limiter's upper clamp being the largest die dimension. The wirelength
+change such a move makes is tens of tiles. There is therefore **no temperature
 at which such a move is useful**:
 
 - warm enough to accept one, and the acceptance rate sits near 1, the
-  walk is a random placement generator, and the analytic solve's answer
+  walk is a random-placement generator, and the analytic solve's answer
   is gone;
 - cool enough to be selective, and *every* move is a large uphill one and
   *every* move is refused. The budget is spent being told no.
