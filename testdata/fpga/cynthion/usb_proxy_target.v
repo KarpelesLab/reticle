@@ -92,28 +92,41 @@
 //           [4] saw_proxied        **the PC has addressed it through the hub**
 //           [3] dn_reg_failed      a Function Control write the part refused
 //           [2:1] dn_vbus_state    the transceiver's own comparators
-//           [0] ctrl_active        a control transfer is being forwarded
+//           [0] saw_data_fwd       **a bulk or interrupt transaction has been
+//                                  forwarded**, which is the one thing that
+//                                  tells an endpoint the proxy never reached
+//                                  from one the device NAKed
 //
-//   byte 2  `2'b00`, `job[1:0]`, `dn_stage[3:0]` — the relay's one job and the
+//   byte 2  `1'b0`, `ctrl_active`, `job[1:0]`, `dn_stage[3:0]` — a control
+//           transfer the relay holds a SETUP for, the relay's one job, and the
 //           downstream port's state machine. `job` is 0 idle, 1 wanted, 2
 //           running, 3 an answer the PC has not taken; `dn_stage` is 1 an empty
 //           port, 4 a device the PC has not reset, 5 to 8 the reset, 10 a
-//           device that has been reset and may be relayed to.
+//           device that has been reset and may be relayed to. `ctrl_active` is
+//           high from the first SETUP until the port is reset and is **not** a
+//           transfer in progress — nothing in the relay needs to know when a
+//           transfer is over, so nothing tracks it.
 //
 //   byte 3  `1'b0`, `dn_line_state[1:0]`, `setups[4:0]` — the TARGET pair as
 //           the transceiver last reported it, and a count of SETUP packets the
 //           PC has sent to something behind the port, saturating at 31.
 //
-// **Byte 1 bit 4 and byte 3's low five bits are the ones to look at.**
+// **Byte 1 bits 4 and 0, and byte 3's low five bits, are the ones to look at.**
 // `saw_proxied` says the PC addressed the device at all, which no previous
 // design on this board could produce; `setups` climbing says it is enumerating
-// it. `saw_proxied` is `led5_n` as well, so it can be read with no console.
+// it; `saw_data_fwd` says a transaction outside a control transfer went across.
+// `saw_proxied` is `led5_n` as well, so it can be read with no console.
+//
+// **Why `saw_data_fwd` is a bit of its own.** A host turns a NAK for ever into a
+// timeout, so a bulk endpoint the proxy never reached and one the device NAKed
+// look identical from the host's side — `operation timed out` either way. This
+// bit is the difference, and it is the only place that difference is visible.
 //
 // What the console **cannot** say is whether the enumeration succeeded. That is
 // the PC's own kernel log and `lsusb`, and `ip/usb_proxy/README.md` §8 is where
-// it is quoted. A count of SETUPs that climbs to 31 and stops is a PC that
-// enumerated the device and went quiet, and one that sits at 2 is a PC retrying
-// the same request.
+// it is quoted. A count of SETUPs that climbs and stops is a PC that enumerated
+// the device and went quiet, and one that sits at 2 is a PC retrying the same
+// request.
 //
 // ===================================================================
 // THE VBUS SWITCHES: EXACTLY ONE, AND IT HAS A PARAMETER
@@ -313,7 +326,7 @@ module usb_proxy_target #(
     wire       dn_phy_ready, dn_attached, dn_low_speed, dn_reg_failed;
     wire [1:0] dn_line_state, dn_vbus_state;
     wire [3:0] dn_stage;
-    wire       proxied, ctrl_active;
+    wire       proxied, ctrl_active, setup_seen, data_fwd;
     wire [1:0] job;
 
     // `*_VENDOR_ADDR` / `*_VENDOR_DATA` are this board's one register and not
@@ -374,7 +387,9 @@ module usb_proxy_target #(
         .dn_frame       (),
         .proxied        (proxied),
         .ctrl_active    (ctrl_active),
-        .job            (job)
+        .job            (job),
+        .setup_seen     (setup_seen),
+        .data_fwd       (data_fwd)
     );
 
     // =================================================================
@@ -387,27 +402,32 @@ module usb_proxy_target #(
     reg saw_attached   = 1'b0;
     reg saw_configured = 1'b0;
     reg saw_proxied    = 1'b0;
+    reg saw_data_fwd   = 1'b0;
     always @(posedge clk) begin
         saw_bus_reset  <= saw_bus_reset  | hub_bus_reset;
         saw_attached   <= saw_attached   | dn_attached;
         saw_configured <= saw_configured | hub_configured;
         saw_proxied    <= saw_proxied    | proxied;
+        saw_data_fwd   <= saw_data_fwd   | data_fwd;
     end
 
     // A count of SETUP packets the PC has sent to something behind the port,
     // which is the one number that says whether the forwarding is **working**
-    // rather than merely reached: a PC enumerating a device sends eight or so
-    // and stops.
+    // rather than merely reached: a PC enumerating a device sends eight or so and
+    // stops.
     //
-    // `ctrl_active` rises once per SETUP the relay took, and it stays high for
-    // the rest of that transfer, so the edge is the count. Five bits and it
-    // **saturates** rather than wrapping, because a counter that wraps reads
-    // the same as one that never ran.
-    reg       ctrl_q = 1'b0;
+    // `setup_seen` is one cycle per SETUP the relay took and forwarded, so this
+    // counts it directly. **It used to count edges of `ctrl_active` and that was
+    // wrong**: `ctrl_active` is a control transfer the relay holds a SETUP for and
+    // it stays high from the first SETUP until the port is reset, so the count
+    // read 2 on a board where the PC had sent dozens. The pulse exists because of
+    // that reading.
+    //
+    // Five bits and it **saturates** rather than wrapping, because a counter that
+    // wraps reads the same as one that never ran.
     reg [4:0] setups = 5'd0;
     always @(posedge clk) begin
-        ctrl_q <= ctrl_active;
-        if (ctrl_active && !ctrl_q && setups != 5'd31) setups <= setups + 5'd1;
+        if (setup_seen && setups != 5'd31) setups <= setups + 5'd1;
     end
 
     // =================================================================
@@ -440,8 +460,8 @@ module usb_proxy_target #(
                      saw_bus_reset, port_power, port_enabled, port_suspended,
                      port_reset};
     wire [7:0] b1 = {dn_phy_ready, dn_attached, dn_low_speed, saw_proxied,
-                     dn_reg_failed, dn_vbus_state, ctrl_active};
-    wire [7:0] b2 = {2'b00, job, dn_stage};
+                     dn_reg_failed, dn_vbus_state, saw_data_fwd};
+    wire [7:0] b2 = {1'b0, ctrl_active, job, dn_stage};
     wire [7:0] b3 = {1'b0, dn_line_state, setups};
 
     // `P`, eight nibbles, CR, LF: eleven characters, and `pos` runs 0 to 11 —

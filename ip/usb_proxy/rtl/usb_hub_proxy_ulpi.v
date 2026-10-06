@@ -163,7 +163,13 @@ module usb_hub_proxy_ulpi #(
     // path was reached at all: the PC has addressed something behind the port.
     output wire       proxied,
     output wire       ctrl_active,
-    output wire [1:0] job
+    output wire [1:0] job,
+    // One cycle each: a SETUP taken and forwarded, and a transaction forwarded
+    // that is **not** part of a control transfer. `usb_proxy_relay`'s own port
+    // comment says what question each answers that a console cannot otherwise
+    // ask.
+    output wire       setup_seen,
+    output wire       data_fwd
 );
     // =================================================================
     // The upstream bus: the hub and the relay share one Link.
@@ -471,6 +477,8 @@ module usb_hub_proxy_ulpi #(
         .in_index     (in_index),
         .proxied      (proxied),
         .ctrl_active  (ctrl_active),
-        .job          (job)
+        .job          (job),
+        .setup_seen   (setup_seen),
+        .data_fwd     (data_fwd)
     );
 endmodule

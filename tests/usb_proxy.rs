@@ -485,6 +485,34 @@ fn a_device_behind_a_hub_this_compiler_built_is_enumerated_by_the_kernel() {
         println!("cannot claim interface 0 of the device behind the port ({err}); not trying");
         return;
     }
+    // A bulk **OUT** first, if the device has one, because that direction *is*
+    // assertable: an OUT that comes back `Ok` was acknowledged by the device, and
+    // nothing but the device can acknowledge it. The proxy holds the packet,
+    // NAKs the host, forwards it, and gives the host the device's own answer on
+    // the retry, which is §7 of `ip/usb_proxy/README.md`.
+    //
+    // The eight bytes are a libgreat command header — class 0, verb 0, which on a
+    // GreatFET is `read_board_id` — and are **not** asserted to produce anything:
+    // what is being measured is the handshake, and a device that does not know
+    // the bytes still acknowledges a bulk OUT it had room for.
+    let bulk_out = eps
+        .iter()
+        .find(|(addr, attrs, _)| addr & 0x80 == 0 && attrs & 0x03 == 0x02);
+    if let Some(&(out_ep, _, _)) = bulk_out {
+        let command = [0u8; 8];
+        match kid_handle.bulk_write(out_ep, &command, BULK_TIMEOUT) {
+            Ok(sent) => println!(
+                "a bulk OUT of {sent} byte(s) on endpoint {out_ep:#04x} was **acknowledged by \
+                 the device**, through the proxy: bytes moved downstream"
+            ),
+            Err(err) => println!(
+                "a bulk OUT on endpoint {out_ep:#04x} did not complete: {err}. A timeout is the \
+                 device NAKing for want of room, a broken pipe is it stalling the endpoint, and \
+                 either is the device's own answer carried back."
+            ),
+        }
+    }
+
     let mut data = vec![0u8; usize::from(maxpkt)];
     match kid_handle.bulk_read(endpoint, &mut data, BULK_TIMEOUT) {
         Ok(got) => println!(

@@ -445,8 +445,122 @@ stream; nothing here has measured what it costs on a part, and §9 says so.
 
 ## 8. What a host said
 
-*(This section is the measurement. Until it is filled in, nothing above it is
-MEASURED.)*
+A Great Scott Gadgets Cynthion r1.4 holding
+`testdata/fpga/cynthion/usb_proxy_target.v`, built with `VBUS_AUX = 1`:
+`ip/usb_proxy` with the hub on the **AUX** transceiver and the downstream port on
+the **TARGET** one, and a Great Scott Gadgets **GreatFET** in the TARGET-A
+socket. Linux 6.18.41-gentoo, `xhci_hcd`, the Cynthion on a full-speed downstream
+port of a hub. Everything below is **quoted**, not paraphrased.
+
+### The one before, and the one after
+
+This is the whole round in nine lines, and they are from the same `dmesg` buffer
+on the same machine with the same device in the same socket — the first from
+`usb_hub_target.v`, which forwards nothing, and the second from
+`usb_proxy_target.v`, which does.
+
+**Before.** `ip/usb_hub/README.md` §8 quotes this at length and it is the
+correct outcome of a hub with no proxy behind it:
+
+```text
+usb 7-5.1: new full-speed USB device number 25 using xhci_hcd
+usb 7-5.1: device descriptor read/64, error -71
+usb 7-5.1: device descriptor read/64, error -71
+usb 7-5-port1: attempt power cycle
+usb 7-5.1: new full-speed USB device number 26 using xhci_hcd
+usb 7-5.1: Device not responding to setup address.
+...
+usb 7-5-port1: unable to enumerate USB device
+```
+
+**After:**
+
+```text
+usb 7-5: new full-speed USB device number 28 using xhci_hcd
+usb 7-5: New USB device found, idVendor=1209, idProduct=0001, bcdDevice= 1.00
+usb 7-5: New USB device strings: Mfr=0, Product=0, SerialNumber=0
+hub 7-5:1.0: USB hub found
+hub 7-5:1.0: 1 port detected
+usb 7-5.1: new full-speed USB device number 29 using xhci_hcd
+usb 7-5.1: not running at top speed; connect to a high speed hub
+usb 7-5.1: New USB device found, idVendor=1d50, idProduct=60e6, bcdDevice= 1.00
+usb 7-5.1: New USB device strings: Mfr=1, Product=2, SerialNumber=3
+usb 7-5.1: Product: GreatFET
+usb 7-5.1: Manufacturer: Great Scott Gadgets
+usb 7-5.1: SerialNumber: 000000000000000057cc67e6341d3457
+```
+
+**MEASURED**, and there are five things in it worth pointing at.
+
+**`idVendor=1d50, idProduct=60e6`** is the GreatFET's own pair and not
+`1209:0001`. The descriptors the kernel read are the **device's**, byte for byte,
+because with pass-through addressing there is nothing of this project in them.
+§2 is why that was the architecture chosen and this line is what it buys.
+
+**The three strings.** `Mfr=1, Product=2, SerialNumber=3` are string descriptor
+*indices*, and the three lines after them are the strings themselves — so the
+kernel sent GET_DESCRIPTOR(STRING) four times (a language table and three
+strings) and got each one back through the proxy. **Nothing in this library
+implements a string descriptor**: `usb_ctrl_ep` stalls one and `ip/usb_hub` has
+none, which is why the hub's own three lines above read `Mfr=0, Product=0,
+SerialNumber=0`. A proxy that answered for the device rather than forwarding to
+it could not have produced those thirty-two hexadecimal digits of serial number.
+
+**No retries at all.** The `before` log has four `error -71` and two
+`Device not responding to setup address` across three device numbers. The
+`after` log has one device number and no errors: the device descriptor read, the
+SET_ADDRESS, the configuration descriptor read and the strings all completed
+first time.
+
+**`not running at top speed; connect to a high speed hub`** is the kernel
+observing that a full-speed device on a full-speed hub could have been faster.
+Both halves of that are true and neither is this block's to fix: `usb_host_sie`
+is a full-speed engine with no chirp and `bDeviceProtocol` of `00h` says so.
+
+**And the device number is `29` where the hub's is `28`** — one address apart,
+both assigned by the kernel, with nothing in between. That is the pass-through
+of §2 seen from the host's side: the kernel allocated an address for the device
+and the device took it.
+
+### The power budget, which is the one thing that looked like success and was not
+
+The first load of this design produced every line above **and two more**:
+
+```text
+usb 7-5.1: rejected 1 configuration due to insufficient available bus power
+usb 7-5.1: no configuration chosen from 1 choice
+```
+
+**MEASURED**, and it is worth writing up because it is a failure mode that looks
+exactly like a working proxy right up to the last line. The device enumerated
+perfectly — descriptors, address, strings, all of it — and was then left
+unconfigured, so nothing could use it.
+
+The reason is nothing to do with forwarding. A GreatFET's one configuration
+declares `MaxPower 500mA`; **HIGH** (USB 2.0 §11.13) a bus-powered hub may offer
+each of its ports 100 mA, because every milliamp it hands downstream comes out of
+the allowance its own upstream cable granted it; and
+[`ip/usb_hub`](../usb_hub/README.md)'s configuration descriptor said bus powered,
+100 mA, which was true of every other design in this library.
+
+**It is not true of this board.** A Cynthion's own supply and its Apollo debug
+microcontroller come in on the **CONTROL** port, so the hub controller in the
+FPGA draws nothing at all from the AUX cable. `usb_proxy_target.v` therefore has
+a `SELF_POWERED` parameter, default 1, which sets bit 6 of `bmAttributes` — and
+that parameter's own comment carries the inaccuracy it leaves behind, because the
+current the *port* draws does come out of the AUX cable, through the
+bidirectional switch `VBUS_AUX` closes. A strictly compliant self-powered hub
+would supply its ports from its own rail. What makes it safe in practice is that
+the switch is closed by the bitstream and not by the host: whatever the socket
+draws, it drew before the PC ever asked, and no class request can change it.
+
+**MEDIUM**, and it is a pleasing consequence of §7 of
+[`ip/usb_hub/README.md`](../usb_hub/README.md) rather than a coincidence: the
+same byte is what the **standard** GET_STATUS of §9.4.5 reports. `usb_ctrl_ep`
+derives bit 0 of its two bytes from bit 6 of `CFG_ATTR`, so a host that reads the
+configuration descriptor and a host that asks GET_STATUS cannot be told different
+things about whether this device is self powered. That is the whole argument for
+putting a standard request in endpoint 0 instead of in a class.
 
 ---
 

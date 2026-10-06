@@ -111,3 +111,5 @@ port dn_frame out 11
 port proxied out
 port ctrl_active out
 port job out 2
+port setup_seen out
+port data_fwd out

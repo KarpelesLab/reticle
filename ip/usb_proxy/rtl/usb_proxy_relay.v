@@ -272,12 +272,31 @@ module usb_proxy_relay #(
     // WHAT IT IS DOING, for a design's console and for a test
     //
     // `proxied` latches that the PC has addressed something behind the port at
-    // all, which is the one thing a board can show that says the forwarding
-    // path was reached. `ctrl_active` is a control transfer in progress and
-    // `job` is the state below.
+    // all, which is the one thing a board can show that says the forwarding path
+    // was reached. `job` is the state below.
     output wire        proxied,
+    output wire [1:0]  job,
+
+    // TWO PULSES, EACH ANSWERING A QUESTION A CONSOLE CANNOT OTHERWISE ASK
+    //
+    // `setup_seen` is one cycle when an upstream SETUP has been taken and a
+    // downstream one started with its eight bytes. Counted on a board, it says
+    // whether the PC is **enumerating** the device behind the port rather than
+    // merely reaching it: a kernel enumerating a device sends eight or so and
+    // stops.
+    //
+    // `data_fwd` is one cycle when a transaction that is **not** part of a
+    // control transfer is handed to the engine — a bulk or an interrupt one.
+    // Latched on a board, it is the only thing that tells a bulk endpoint the
+    // proxy never reached from one the device NAKed: a host turns a NAK for ever
+    // into a timeout and the two are indistinguishable from the host's side.
+    //
+    // `ctrl_active` is a control transfer the relay holds a SETUP for, which is
+    // from the SETUP until the port is reset and **not** until the transfer ends:
+    // nothing here needs to know when a transfer is over, so nothing tracks it.
     output wire        ctrl_active,
-    output wire [1:0]  job
+    output wire        setup_seen,
+    output wire        data_fwd
 );
     // PIDs, the low nibble as it appears on the wire (USB 2.0 Table 8-1).
     localparam [3:0] PID_OUT   = 4'b0001;
@@ -378,6 +397,8 @@ module usb_proxy_relay #(
     reg [1:0]  expect;
     reg        owns_q;
     reg        proxied_q;
+    reg        setup_seen_q;
+    reg        data_fwd_q;
 
     // The control transfer in progress, and the eight bytes that started it.
     reg [63:0] setup_q;
@@ -440,6 +461,8 @@ module usb_proxy_relay #(
     assign proxied     = proxied_q;
     assign ctrl_active = ct_active;
     assign job         = j_state;
+    assign setup_seen  = setup_seen_q;
+    assign data_fwd    = data_fwd_q;
 
     // -----------------------------------------------------------------
     // The answer, upstream.
@@ -552,6 +575,8 @@ module usb_proxy_relay #(
             expect      <= X_NONE;
             owns_q      <= 1'b0;
             proxied_q   <= 1'b0;
+            setup_seen_q <= 1'b0;
+            data_fwd_q  <= 1'b0;
             setup_q     <= 64'd0;
             ct_active   <= 1'b0;
             ct_ep       <= 4'd0;
@@ -583,7 +608,9 @@ module usb_proxy_relay #(
             take        <= 1'b0;
             tx_start    <= 1'b0;
         end else begin
-            tx_start <= 1'b0;
+            tx_start     <= 1'b0;
+            setup_seen_q <= 1'b0;
+            data_fwd_q   <= 1'b0;
 
             // ----------------------------------------------------------
             // The buffer's one write port, and the two things that fill it.
@@ -667,6 +694,7 @@ module usb_proxy_relay #(
                                 end else if (job_free && dn_ready
                                              && (tok_endp != 4'd0
                                                  || ct_tok_in)) begin
+                                    data_fwd_q <= ~ct_tok_in;
                                     j_state  <= J_WANT;
                                     j_kind   <= K_IN;
                                     j_addr   <= tok_addr;
@@ -706,6 +734,7 @@ module usb_proxy_relay #(
                             dn_tog_in[endp_q]  <= 1'b1;
                             dn_tog_out[endp_q] <= 1'b1;
                             // And the same eight bytes go to the device.
+                            setup_seen_q <= 1'b1;
                             j_state  <= J_WANT;
                             j_kind   <= K_SETUP;
                             j_addr   <= addr_q;
@@ -761,6 +790,7 @@ module usb_proxy_relay #(
                             // one is the device's. "STALL PROPAGATES" above is
                             // why it is not acknowledged here.
                             ans      <= A_NAK;
+                            data_fwd_q <= ~ct_tok_out;
                             j_state  <= J_WANT;
                             j_kind   <= K_OUT;
                             j_addr   <= addr_q;

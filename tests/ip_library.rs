@@ -16297,11 +16297,23 @@ struct ProxyRig<'d> {
     reset_net: NetHandle,
     ready_net: NetHandle,
     dn_ready_net: NetHandle,
+    setup_seen_net: NetHandle,
+    data_fwd_net: NetHandle,
     up_phy: UlpiPhy,
     dn_phy: UlpiPhy,
     dev: UlpiPair<'d>,
     data: DataEp,
     problems: Vec<String>,
+    /// SETUPs the relay took and forwarded, and transactions it forwarded that
+    /// were **not** part of a control transfer.
+    ///
+    /// Sampled every cycle, the way `UlpiHost` samples `sof_sent`, because a
+    /// one-cycle pulse is not something a caller that steps whole packets can
+    /// catch. Counting them is what turns "the PC got an answer" into "the
+    /// answer came from the other bus": a transfer that the relay satisfied out
+    /// of something of its own would move neither counter.
+    setups: u64,
+    data_fwds: u64,
 }
 
 impl<'d> ProxyRig<'d> {
@@ -16340,11 +16352,15 @@ impl<'d> ProxyRig<'d> {
             reset_net: pin("usb_reset"),
             ready_net: pin("phy_ready"),
             dn_ready_net: pin("dn_phy_ready"),
+            setup_seen_net: pin("setup_seen"),
+            data_fwd_net: pin("data_fwd"),
             up_phy: flaws(UlpiPhy::new(ULPI_CPB)),
             dn_phy: flaws(UlpiPhy::new(ULPI_CPB).hosting()),
             dev,
             data: DataEp::new(&sim, true),
             problems: Vec::new(),
+            setups: 0,
+            data_fwds: 0,
             sim,
         };
         rig.data.quiet(&mut rig.sim);
@@ -16454,6 +16470,12 @@ impl UsbPair for ProxyRig<'_> {
         self.sim.set(self.clk, bit(true));
         self.sim.run_for(HALF);
         self.sim.set(self.clk, bit(false));
+        if high(&self.sim, self.setup_seen_net) {
+            self.setups += 1;
+        }
+        if high(&self.sim, self.data_fwd_net) {
+            self.data_fwds += 1;
+        }
         self.up_phy.step(&up_link, host);
         self.dn_phy.step(&dn_link, Some(dn_line));
         self.dev.cycle(Some(dn_line));
@@ -16883,6 +16905,10 @@ fn proxy_enumerate_our_device(stale: bool) {
         0,
         "nothing has been forwarded yet: the PC has only talked to the hub"
     );
+    assert_eq!(
+        host.pair.setups, 0,
+        "and no SETUP has gone downstream: every control transfer so far was the hub's own"
+    );
 
     proxy_enumerate_the_device(
         &mut host,
@@ -16911,6 +16937,24 @@ fn proxy_enumerate_our_device(stale: bool) {
         host.port("dn_reg_failed"),
         0,
         "and the transceiver took every register write the port reset needed"
+    );
+    // SIX CONTROL TRANSFERS, AND EVERY ONE OF THEM REACHED THE DEVICE
+    //
+    // `proxy_enumerate_the_device` does exactly six: the device descriptor, the
+    // address, the device descriptor again, the configuration header, the whole
+    // configuration, and the configuration value. One SETUP each, forwarded once
+    // each — and that last part is what this number is for. A relay that
+    // answered a repeated SETUP out of something of its own, or that forwarded
+    // one twice because the PC retried a later stage, would not read six.
+    assert_eq!(
+        host.pair.setups, 6,
+        "one SETUP forwarded for each of the six control transfers the PC did, and not \
+         one more"
+    );
+    assert_eq!(
+        host.pair.data_fwds, 0,
+        "and nothing outside a control transfer: the PC has not touched an endpoint of its \
+         own yet"
     );
     host.assert_clean();
     assert!(
@@ -17049,6 +17093,20 @@ fn usb_proxy_moves_bytes_through_the_port() {
         "four OUT packets put the toggle back where it started"
     );
     assert_eq!(pipe.in_pid, USB_DATA0, "and four IN packets likewise");
+    // EIGHT TRANSACTIONS WENT DOWN THE OTHER BUS, AND NOT ONE MORE
+    //
+    // Four OUT packets and four IN packets, each forwarded exactly once. This is
+    // the number that distinguishes bytes the device really sent from bytes a
+    // relay held on to and handed over twice, and it is the assertion a board
+    // cannot make: a host turns a NAK for ever into a timeout, so from the PC's
+    // side a bulk endpoint the proxy never reached and one the device NAKed are
+    // the same thing. `data_fwd` is that difference, and
+    // `testdata/fpga/cynthion/usb_proxy_target.v` puts it on its console for
+    // exactly that reason.
+    assert_eq!(
+        host.pair.data_fwds, 8,
+        "four OUTs and four INs forwarded, one downstream transaction each"
+    );
     host.assert_clean();
 }
 
