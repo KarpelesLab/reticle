@@ -179,7 +179,12 @@ impl LibraryIndex {
         }
         out.entries
             .sort_by(|a, b| (&a.name, &a.manifest).cmp(&(&b.name, &b.manifest)));
+        // One file is one package however many times a walk reached it:
+        // two `library` roots can overlap, and a path seen twice is the
+        // same manifest, never two packages with one name.
+        out.entries.dedup_by(|a, b| a.manifest == b.manifest);
         out.unnamed.sort();
+        out.unnamed.dedup();
         out
     }
 
@@ -559,6 +564,29 @@ mod tests {
             manifest_identity("name first\nname second\n").0,
             Some("first".to_owned())
         );
+    }
+
+    /// Two overlapping roots reach one manifest twice. That must not
+    /// read as two packages of one name, or a library inside a library
+    /// would be unusable.
+    #[test]
+    fn one_manifest_reached_twice_is_one_package() {
+        let index = LibraryIndex::from_manifests(
+            ["ip".to_owned(), "ip/serial".to_owned()],
+            [
+                (
+                    "ip/serial/uart/reticle.ip".to_owned(),
+                    "name uart\nversion 1.0.0\n".to_owned(),
+                ),
+                (
+                    "ip/serial/uart/reticle.ip".to_owned(),
+                    "name uart\nversion 1.0.0\n".to_owned(),
+                ),
+            ],
+        );
+        assert_eq!(index.entries().len(), 1);
+        assert_eq!(index.lookup("uart").unwrap().dir, "ip/serial/uart");
+        assert!(index.duplicates().is_empty());
     }
 
     #[test]

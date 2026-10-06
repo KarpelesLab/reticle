@@ -1,0 +1,18 @@
+# A fixture package for name-based resolution, and nothing else: it is
+# two directories deep under the library root, its directory is not
+# called what the package is called, and it depends on another package
+# without saying where that is.
+name clock_div
+version 1.0.0
+license MIT
+description "A fixture divider, found by name under library/timing/"
+
+top clock_div
+
+source rtl/clock_div.v
+
+port clk in
+port rst_n in
+port tick out
+
+depends pulse_edge ^1.0.0

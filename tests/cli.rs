@@ -108,6 +108,123 @@ fn build_resolves_and_elaborates_a_project() {
     assert!(project.join("reticle.lock").exists(), "no lock file");
 }
 
+/// `reticle build` places a dependency that names no `path` by walking
+/// the project's `library` roots, and records where it found each.
+///
+/// What this would catch: a walk that did not recurse into category
+/// folders, a walk whose paths were not relative to the manifest, an
+/// index that never reached the provider, and a lock file that did not
+/// say the library answered. What it would not catch: anything about the
+/// order two roots are searched in, which only an ambiguous name could
+/// show, and that is an error rather than an order.
+#[test]
+fn build_places_dependencies_from_the_library() {
+    let dir = scratch("build_library");
+    copy_dir(Path::new("testdata/ip"), &dir);
+    let project = dir.join("projects/library");
+
+    let out = project.join("design.rtl");
+    let (code, _, stderr) = run(&[
+        "build",
+        "--report",
+        "--output",
+        out.to_str().unwrap(),
+        project.join("reticle.proj").to_str().unwrap(),
+    ]);
+    assert_eq!(code, 0, "{stderr}");
+    assert!(stderr.contains("3 module(s)"), "{stderr}");
+    assert!(
+        stderr.contains("the IP library holds 2 package(s) under `../../library`"),
+        "{stderr}"
+    );
+
+    let rtl = std::fs::read_to_string(&out).unwrap();
+    for module in ["top", "clock_div", "pulse_edge"] {
+        assert!(
+            rtl.contains(&format!("module {module}")),
+            "{module} missing"
+        );
+    }
+
+    let lock = std::fs::read_to_string(project.join("reticle.lock")).expect("no lock file");
+    assert!(
+        lock.contains("package clock_div 1.0.0 library ../../library/timing/divider"),
+        "{lock}"
+    );
+    assert!(
+        lock.contains("package pulse_edge 1.0.0 library ../../library/glue/edge"),
+        "{lock}"
+    );
+
+    // --locked against the lock file that was just written is silence.
+    let (code, _, stderr) = run(&[
+        "build",
+        "--locked",
+        "--quiet",
+        project.join("reticle.proj").to_str().unwrap(),
+    ]);
+    assert_eq!(code, 0, "{stderr}");
+}
+
+/// A lock file that no longer describes the resolution is an error under
+/// `--locked`, naming what moved, and the file is not rewritten.
+///
+/// This is the answer to "what makes a stale lock file an error rather
+/// than a wrong build": nothing resolves *from* the lock file, so the
+/// only way it can be wrong is to disagree, and `--locked` is the build
+/// that refuses to disagree quietly.
+#[test]
+fn build_refuses_a_stale_lock_file() {
+    let dir = scratch("build_locked");
+    copy_dir(Path::new("testdata/ip"), &dir);
+    let project = dir.join("projects/library");
+    let manifest = project.join("reticle.proj");
+    let lock_path = project.join("reticle.lock");
+
+    let (code, _, stderr) = run(&["build", "--quiet", manifest.to_str().unwrap()]);
+    assert_eq!(code, 0, "{stderr}");
+
+    // The library moved under the lock file's feet.
+    let lock = std::fs::read_to_string(&lock_path).unwrap();
+    let stale = lock.replace(
+        "library ../../library/timing/divider",
+        "library ../../library/divider",
+    );
+    assert_ne!(stale, lock, "the lock file did not record a directory");
+    std::fs::write(&lock_path, &stale).unwrap();
+
+    let (code, _, stderr) = run(&["build", "--locked", manifest.to_str().unwrap()]);
+    assert_eq!(code, 1, "{stderr}");
+    assert!(stderr.contains("error[P0302]"), "{stderr}");
+    assert!(
+        stderr.contains("the lock file does not describe this resolution"),
+        "{stderr}"
+    );
+    assert!(stderr.contains("`clock_div` moves from"), "{stderr}");
+    // And it was left as it was, rather than quietly corrected.
+    assert_eq!(std::fs::read_to_string(&lock_path).unwrap(), stale);
+}
+
+/// A `library` root that is not a directory is reported, rather than
+/// becoming an empty index and a pile of missing packages.
+#[test]
+fn build_reports_a_library_root_that_is_not_there() {
+    let dir = scratch("build_bad_library");
+    copy_dir(Path::new("testdata/ip"), &dir);
+    let manifest = dir.join("projects/two_deps/reticle.proj");
+    let (code, _, stderr) = run(&[
+        "build",
+        "--library",
+        "../../nowhere",
+        manifest.to_str().unwrap(),
+    ]);
+    assert_eq!(code, 1, "{stderr}");
+    assert!(
+        stderr.contains("the IP library root `../../nowhere` is not a directory"),
+        "{stderr}"
+    );
+}
+
 #[test]
 fn build_reports_a_version_conflict() {
     let dir = scratch("build_conflict");

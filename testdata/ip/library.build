@@ -1,0 +1,9 @@
+sources
+  pulse_edge: rtl/pulse_edge.v (verilog)
+  clock_div: rtl/clock_div.v (verilog)
+  library_search: rtl/top.v (verilog)
+design
+  top: top
+  modules: clock_div, pulse_edge, top
+rtl
+  3 modules

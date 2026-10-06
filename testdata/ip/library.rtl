@@ -1,0 +1,43 @@
+top top
+
+module pulse_edge
+  net %clk u1 wire
+  net %level u1 wire
+  net %pulse u1 wire
+  net %last u1 reg
+  port clk in %clk
+  port level in %level
+  port pulse out %pulse
+  assign %pulse = and(%level, not(%last))
+  process seq posedge %clk
+    %last <= %level
+  end
+end
+
+module clock_div
+  net %clk u1 wire
+  net %rst_n u1 wire
+  net %tick u1 wire
+  net %count u4 reg
+  port clk in %clk
+  port rst_n in %rst_n
+  port tick out %tick
+  instance u_edge of pulse_edge (clk=%clk, level=%count[3:3], pulse=%tick)
+  process seq posedge %clk
+    if lnot(%rst_n)
+      %count <= 4'd0
+    else
+      %count <= add(%count, 4'd1)
+    end
+  end
+end
+
+module top
+  net %clk u1 wire
+  net %rst_n u1 wire
+  net %tick u1 wire
+  port clk in %clk
+  port rst_n in %rst_n
+  port tick out %tick
+  instance u_div of clock_div (clk=%clk, rst_n=%rst_n, tick=%tick)
+end

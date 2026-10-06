@@ -1,0 +1,17 @@
+# A project that places its dependencies by name. There is no `path`
+# anywhere here: `library` says where the library is, and the package is
+# found by the name it declares, two directories down in a category
+# folder that is not called what the package is called.
+#
+# `pulse_edge` is not named below at all. `clock_div` asks for it, and
+# the same search places it, which is the half of this that a project
+# listing every package by path never had to do.
+name library_search
+top top
+device ice40-hx1k-tq144
+
+source rtl/top.v
+
+library ../../library
+
+depends clock_div ^1.0.0

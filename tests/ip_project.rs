@@ -12,7 +12,7 @@
 //! | `<case>.build` | the build report: sources used, black boxes made |
 //! | `<case>.rtl` | the elaborated design in the IR text format |
 //!
-//! The four cases are the four things that have to work:
+//! The six cases are the six things that have to work:
 //!
 //! - `two_deps` — a project with two dependencies, one of which needs
 //!   the other, and a third package neither names directly.
@@ -22,10 +22,15 @@
 //! - `crossbar` — an AXI4-Lite crossbar generated into the design, wired
 //!   to two instances of a resolved IP package with `ip::bus::connect`,
 //!   and (with the `sim` feature) driven with real transactions.
+//! - `library` — a project with **no `path` anywhere**: a `library` root
+//!   and two packages found by the names they declare, two directories
+//!   down under `testdata/ip/library/`, one of them named only by the
+//!   other package and not by the project at all.
 //!
 //! The library performs no I/O, so the filesystem appears here exactly
-//! once: a closure handed to [`PathProvider`]. That closure is the whole
-//! of what the CLI would own.
+//! twice: the closure handed to [`PathProvider`], and the walk in
+//! [`library_index`] that finds the packages under a `library` root.
+//! Those two are the whole of what the CLI owns.
 //!
 //! Set `UPDATE_EXPECT=1` to rewrite the expectations after an intended
 //! change, and read the diff before committing it.
@@ -44,7 +49,14 @@ use reticle::ir::{Design, ModuleRef, Name, PortDir, Type};
 use reticle::source::{SourceMap, Span};
 
 /// Every project under `testdata/ip/projects/`.
-const CASES: [&str; 5] = ["two_deps", "conflict", "encrypted", "crossbar", "mixed"];
+const CASES: [&str; 6] = [
+    "two_deps",
+    "conflict",
+    "encrypted",
+    "crossbar",
+    "mixed",
+    "library",
+];
 
 fn dir() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("testdata/ip")
@@ -53,6 +65,56 @@ fn dir() -> PathBuf {
 /// The one place this test suite touches the filesystem.
 fn read(path: &str) -> Option<String> {
     fs::read_to_string(dir().join(path)).ok()
+}
+
+/// The index `reticle build` would hand the resolver: every `reticle.ip`
+/// under each of the project's `library` roots, with paths relative to
+/// the project manifest.
+///
+/// The walk is here rather than in the library because walking a
+/// directory is I/O; this is the CLI's `library_manifests` in miniature,
+/// and the second and last place this file touches the filesystem.
+fn library_index(project: &Project, root: &str) -> reticle::ip::LibraryIndex {
+    fn descend(at: &Path, prefix: &str, out: &mut Vec<(String, String)>) {
+        let manifest = at.join(reticle::ip::library::MANIFEST_NAME);
+        if manifest.is_file() {
+            if let Ok(text) = fs::read_to_string(&manifest) {
+                out.push((
+                    reticle::ip::library::entry_path(prefix, reticle::ip::library::MANIFEST_NAME),
+                    text,
+                ));
+            }
+            return;
+        }
+        let Ok(entries) = fs::read_dir(at) else {
+            return;
+        };
+        let mut names: Vec<String> = entries
+            .filter_map(|entry| {
+                let entry = entry.ok()?;
+                entry
+                    .file_type()
+                    .ok()?
+                    .is_dir()
+                    .then(|| entry.file_name().to_string_lossy().into_owned())
+            })
+            .collect();
+        names.sort();
+        for name in names {
+            descend(
+                &at.join(&name),
+                &reticle::ip::library::entry_path(prefix, &name),
+                out,
+            );
+        }
+    }
+
+    let mut manifests = Vec::new();
+    for named in &project.libraries {
+        descend(&dir().join(root).join(named), named, &mut manifests);
+    }
+    manifests.sort();
+    reticle::ip::LibraryIndex::from_manifests(project.libraries.clone(), manifests)
 }
 
 /// Compares `actual` with the file `name`, rewriting it under
@@ -116,7 +178,8 @@ fn build(case: &str) -> Built {
     let project = ip::load_project(&mut map, manifest_path.clone(), &text, &mut diags)
         .unwrap_or_else(|| panic!("{manifest_path} does not parse"));
 
-    let mut provider = PathProvider::new(root, read);
+    let mut provider =
+        PathProvider::new(root.clone(), read).with_library(library_index(&project, &root));
     let mut resolved = ip::resolve(map, &project, &mut provider, &mut diags);
     let elaboration = ip::elaborate(&project, &mut resolved, &mut diags);
 
@@ -243,6 +306,102 @@ fn a_mixed_language_project_builds() {
         .iter()
         .all(|(_, inst)| matches!(inst.module, ModuleRef::Resolved(_)));
     assert!(bound, "the VHDL instance was left unresolved");
+}
+
+/// The library case: every dependency placed by name, including the one
+/// the project never mentions, and a lock file that records where the
+/// search found each.
+///
+/// What this would catch: a lookup that used a directory name instead of
+/// the declared `name` (the directories are `timing/divider` and
+/// `glue/edge`); a transitive dependency that stopped going through the
+/// library; a lock file that recorded a `path` origin, or no origin, for
+/// a name-resolved package; and a design that did not actually elaborate
+/// from the sources the search found.
+///
+/// What it would not catch: anything about the real `ip/` tree, which
+/// this fixture deliberately does not touch, and any ordering problem
+/// that two packages cannot show.
+#[test]
+fn a_project_resolves_every_dependency_by_name() {
+    let built = build("library");
+    assert!(built.resolved.is_complete(), "{}", built.diagnostics);
+    assert!(
+        built.project.depends.iter().all(|dep| dep.source.is_none()),
+        "the fixture is supposed to name no path at all"
+    );
+    assert_eq!(built.project.libraries, ["../../library"]);
+
+    // Both packages are here, the deeper one first, although the project
+    // names only `clock_div`.
+    let order: Vec<&str> = built
+        .resolved
+        .packages
+        .iter()
+        .map(reticle::ip::Package::name)
+        .collect();
+    assert_eq!(order, ["pulse_edge", "clock_div"]);
+
+    // The lock file says which directory each name was found in, and
+    // says it was the library that answered.
+    let lock = &built.resolved.lock;
+    assert_eq!(
+        lock.package("clock_div").unwrap().origin,
+        reticle::ip::DepSource::Library("../../library/timing/divider".to_owned())
+    );
+    assert_eq!(
+        lock.package("pulse_edge").unwrap().origin,
+        reticle::ip::DepSource::Library("../../library/glue/edge".to_owned())
+    );
+    assert!(lock.differences(lock).is_empty());
+
+    // And the design is the one those sources describe.
+    let design = built.design.as_ref().expect("no design was elaborated");
+    assert_eq!(design.top_module().expect("a top").name, "top");
+    for name in ["top", "clock_div", "pulse_edge"] {
+        assert!(design.module_by_name(name).is_some(), "no `{name}`");
+    }
+}
+
+/// A lock file from before the library moved is an error, naming the two
+/// directories, rather than a build against something else.
+///
+/// What this would catch: a lock file that recorded nothing a move could
+/// be seen in, and a `--locked` comparison that did not report one. What
+/// it would not catch: the CLI's own handling of `--locked`, which
+/// tests/cli.rs covers.
+#[test]
+fn a_lock_file_that_predates_a_move_is_stale() {
+    let built = build("library");
+    let text = built.resolved.lock.to_text().replace(
+        "library ../../library/timing/divider",
+        "library ../../library/divider",
+    );
+    let mut map = SourceMap::new();
+    let file = map.add("reticle.lock", &text).unwrap();
+    let mut diags = Diagnostics::new();
+    let old = reticle::ip::LockFile::parse(&text, file, &mut diags);
+    assert!(!diags.has_errors(), "{}", diags.render(&map));
+
+    let diagnostic = old
+        .mismatch(&built.resolved.lock, Span::new(file, 0, 0))
+        .expect("the lock file no longer describes the resolution");
+    assert_eq!(diagnostic.code, Some(reticle::ip::resolve::LOCK_STALE));
+    assert!(
+        diagnostic.notes.iter().any(|note| note.contains(
+            "`clock_div` moves from the library directory `../../library/divider` to the library directory `../../library/timing/divider`"
+        )),
+        "{:?}",
+        diagnostic.notes
+    );
+    // The same lock file against its own resolution is silence.
+    assert!(
+        built
+            .resolved
+            .lock
+            .mismatch(&built.resolved.lock, Span::new(file, 0, 0))
+            .is_none()
+    );
 }
 
 #[test]

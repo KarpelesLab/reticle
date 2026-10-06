@@ -1,0 +1,14 @@
+# The package `clock_div` names and the project never mentions: it is
+# placed by the same library search, from a different category folder.
+name pulse_edge
+version 1.0.0
+license MIT
+description "A fixture rising-edge pulse, found by name under library/glue/"
+
+top pulse_edge
+
+source rtl/pulse_edge.v
+
+port clk in
+port level in
+port pulse out

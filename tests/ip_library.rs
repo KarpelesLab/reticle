@@ -18059,3 +18059,152 @@ fn usb_descriptors_survive_lookup_table_mapping() {
         }
     }
 }
+
+// ---------------------------------------------------------------------------
+// The library as an index
+// ---------------------------------------------------------------------------
+
+/// Every `reticle.ip` under `ip/`, as `ip::library` wants them: paths
+/// relative to a project that declares `library <root>`, text as read.
+///
+/// The same walk `reticle build` performs (`library_manifests` in
+/// `src/bin/reticle/main.rs`): a directory holding a manifest is a
+/// package and is not descended into, every level is sorted, and nothing
+/// hidden is entered. It is here rather than in the library because
+/// walking a directory is I/O.
+fn walk_library(root: &str) -> Vec<(String, String)> {
+    fn descend(at: &Path, prefix: &str, out: &mut Vec<(String, String)>) {
+        let manifest = at.join(reticle::ip::library::MANIFEST_NAME);
+        if manifest.is_file() {
+            let text = fs::read_to_string(&manifest)
+                .unwrap_or_else(|e| panic!("{}: {e}", manifest.display()));
+            out.push((
+                reticle::ip::library::entry_path(prefix, reticle::ip::library::MANIFEST_NAME),
+                text,
+            ));
+            return;
+        }
+        let mut names: Vec<String> = fs::read_dir(at)
+            .unwrap_or_else(|e| panic!("{}: {e}", at.display()))
+            .filter_map(|entry| {
+                let entry = entry.ok()?;
+                let name = entry.file_name().to_string_lossy().into_owned();
+                (entry.file_type().ok()?.is_dir() && !name.starts_with('.')).then_some(name)
+            })
+            .collect();
+        names.sort();
+        for name in names {
+            descend(
+                &at.join(&name),
+                &reticle::ip::library::entry_path(prefix, &name),
+                out,
+            );
+        }
+    }
+
+    let mut out = Vec::new();
+    descend(&ip_dir(), root, &mut out);
+    out.sort();
+    out
+}
+
+/// The real library, indexed by name.
+///
+/// This is the test that will fail if the planned reorganisation of
+/// `ip/` ever copies a package instead of moving it, or renames a
+/// directory without its manifest: the index is built from the declared
+/// names, so two `uart`s or a package nobody can name shows up here and
+/// nowhere else.
+///
+/// What it would catch: a duplicate name anywhere under `ip/`, a manifest
+/// with no `name`, a `depends` naming a package the library does not
+/// have, and a package whose name does not resolve back to its own
+/// directory. What it would not catch: a package whose *contents* are
+/// wrong, which is what the rest of this file is for, and anything about
+/// `path` dependencies, which no block uses.
+#[test]
+fn every_block_is_findable_by_the_name_it_declares() {
+    let manifests = walk_library("ip");
+    let index = reticle::ip::LibraryIndex::from_manifests(["ip".to_owned()], manifests.clone());
+
+    assert!(
+        index.duplicates().is_empty(),
+        "two packages in ip/ claim one name: {:?}",
+        index.duplicates()
+    );
+    assert!(
+        index.unnamed().is_empty(),
+        "a manifest under ip/ declares no name: {:?}",
+        index.unnamed()
+    );
+    assert_eq!(
+        index.entries().len(),
+        manifests.len(),
+        "a manifest was walked but not indexed"
+    );
+
+    // Every name resolves, and resolves to the directory its own
+    // manifest sits in.
+    for entry in index.entries() {
+        let found = index
+            .lookup(&entry.name)
+            .unwrap_or_else(|e| panic!("`{}` does not resolve: {e:?}", entry.name));
+        assert_eq!(found.manifest, entry.manifest);
+        assert!(
+            found.manifest.starts_with(&format!("{}/", found.dir)),
+            "{} is not under {}",
+            found.manifest,
+            found.dir
+        );
+    }
+
+    // And every dependency any block states is a name the library has,
+    // which is what makes a project able to drop every `path`.
+    for variant in VARIANTS {
+        for dep in &manifest(variant.package).depends {
+            index
+                .lookup(&dep.name)
+                .unwrap_or_else(|e| panic!("`{}` needs `{}`: {e:?}", variant.package, dep.name));
+        }
+    }
+}
+
+/// What building that index costs, printed and never asserted.
+///
+/// Run with `cargo test --all-features --test ip_library -- --ignored
+/// --nocapture the_library_index_cost`. It exists because the ECP5
+/// database load was thirteen seconds of a fourteen-second build before
+/// anyone measured it, and the honest way to know whether an index needs
+/// caching is to time the thing rather than to reason about it.
+///
+/// No assertion: a number of seconds is a property of the machine, and
+/// `CLAUDE.md` says so.
+#[test]
+#[ignore = "prints a measurement rather than asserting one"]
+fn the_library_index_cost() {
+    use std::time::Instant;
+
+    const ROUNDS: u32 = 20;
+
+    let started = Instant::now();
+    let mut walked = 0;
+    for _ in 0..ROUNDS {
+        walked = walk_library("ip").len();
+    }
+    let walk = started.elapsed() / ROUNDS;
+
+    let manifests = walk_library("ip");
+    let bytes: usize = manifests.iter().map(|(_, text)| text.len()).sum();
+    let started = Instant::now();
+    for _ in 0..ROUNDS {
+        let index = reticle::ip::LibraryIndex::from_manifests(["ip".to_owned()], manifests.clone());
+        assert!(!index.is_empty());
+    }
+    let build = started.elapsed() / ROUNDS;
+
+    println!(
+        "ip/: {walked} packages, {bytes} bytes of manifest\n  \
+         walk and read: {walk:?} per run\n  \
+         index (clone, scan, sort): {build:?} per run"
+    );
+}

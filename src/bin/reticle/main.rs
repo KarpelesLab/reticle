@@ -93,10 +93,16 @@ Reads a project manifest, resolves its IP dependencies, and elaborates
 the project and everything it depends on into one design. Defaults to
 `reticle.proj` in the current directory.
 
+A dependency that names no `path` is looked up by name in the IP
+libraries the manifest's `library` lines name, plus any --library given
+here; a package may sit anywhere under a root.
+
 Options:
+  --library <dir>  Also search this IP library root; repeatable
   --output <file>  Write the elaborated design as .rtl
   --lock <file>    Write the resolved versions here (default reticle.lock)
   --no-lock        Do not write a lock file
+  --locked         Fail if the lock file does not match, and do not write it
   --synth          Synthesise the elaborated design
   --report         Print what was resolved and elaborated
   --quiet          Suppress the summary line
@@ -607,8 +613,8 @@ fn spec_for(usage: &str) -> Spec {
     } else if std::ptr::eq(usage, BUILD_USAGE) {
         Spec {
             options: &["output", "lock"],
-            flags: &["no-lock", "synth", "report", "quiet"],
-            repeated: &[],
+            flags: &["no-lock", "locked", "synth", "report", "quiet"],
+            repeated: &["library"],
         }
     } else if std::ptr::eq(usage, CACHE_USAGE) {
         Spec {
@@ -1308,9 +1314,93 @@ fn asic(args: &Args) -> Result<Outcome, ArgError> {
     Ok(Outcome::Ok)
 }
 
+/// How deep under a `library` root a package may sit.
+///
+/// Deep enough for any category scheme anyone will defend, shallow
+/// enough that a root pointed at a home directory by mistake stops
+/// rather than reading a disk.
+const LIBRARY_DEPTH: usize = 8;
+
+/// Every `reticle.ip` under the library root `root`, as the index wants
+/// them: `(path, text)` with the path relative to the project manifest.
+///
+/// This recursion is the whole of the filesystem's part in resolving a
+/// dependency by name, and it lives here because `src/` does no I/O (see
+/// `CONTRIBUTING.md`). Three rules worth knowing:
+///
+/// - **A directory holding a `reticle.ip` is not descended into.** A
+///   package inside a package is not a thing, and this keeps the walk off
+///   every `rtl/`, `sw/` and `tb/` in the library.
+/// - **A symbolic link to a directory is not followed**, so a loop cannot
+///   hang the walk and a link into the library cannot index a package
+///   twice under two names.
+/// - **Entries are sorted** at every level, because `read_dir` returns
+///   filesystem order and an index that reaches a lock file may not
+///   depend on it. (The index sorts as well; this makes the two agree
+///   about which of two equal paths came first.)
+fn library_manifests(base: &std::path::Path, root: &str) -> Result<Vec<(String, String)>, String> {
+    fn descend(
+        dir: &std::path::Path,
+        prefix: &str,
+        depth: usize,
+        out: &mut Vec<(String, String)>,
+    ) -> Result<(), String> {
+        let manifest = dir.join(reticle::ip::library::MANIFEST_NAME);
+        if manifest.is_file() {
+            let text = std::fs::read_to_string(&manifest)
+                .map_err(|err| format!("cannot read `{}`: {err}", manifest.display()))?;
+            out.push((
+                reticle::ip::library::entry_path(prefix, reticle::ip::library::MANIFEST_NAME),
+                text,
+            ));
+            return Ok(());
+        }
+        if depth >= LIBRARY_DEPTH {
+            return Ok(());
+        }
+        let entries = std::fs::read_dir(dir)
+            .map_err(|err| format!("cannot read `{}`: {err}", dir.display()))?;
+        let mut names: Vec<String> = Vec::new();
+        for entry in entries {
+            let entry = entry.map_err(|err| format!("cannot read `{}`: {err}", dir.display()))?;
+            // `file_type` does not follow a link, so a linked directory
+            // is skipped rather than walked.
+            let is_dir = entry.file_type().map(|t| t.is_dir()).unwrap_or(false);
+            let Some(name) = entry.file_name().to_str().map(str::to_owned) else {
+                continue;
+            };
+            if is_dir && !name.starts_with('.') {
+                names.push(name);
+            }
+        }
+        names.sort();
+        for name in names {
+            descend(
+                &dir.join(&name),
+                &reticle::ip::library::entry_path(prefix, &name),
+                depth + 1,
+                out,
+            )?;
+        }
+        Ok(())
+    }
+
+    let start = base.join(root);
+    if !start.is_dir() {
+        return Err(format!(
+            "the IP library root `{root}` is not a directory (`{}`)",
+            start.display()
+        ));
+    }
+    let mut out = Vec::new();
+    descend(&start, root, 0, &mut out)?;
+    out.sort();
+    Ok(out)
+}
+
 /// `reticle build`: resolve a project's IP and elaborate it.
 fn build(args: &Args) -> Result<Outcome, ArgError> {
-    use reticle::ip::{PathProvider, elaborate, load_project, resolve};
+    use reticle::ip::{LibraryIndex, PathProvider, elaborate, load_project, resolve};
 
     let manifest = match args.positionals() {
         [] => "reticle.proj".to_string(),
@@ -1345,15 +1435,87 @@ fn build(args: &Args) -> Result<Outcome, ArgError> {
         return Ok(Outcome::Failed);
     };
 
+    // Where to look a dependency's name up: the manifest's `library`
+    // lines first, then any --library, each one once however many times
+    // it is named.
+    let mut roots: Vec<String> = Vec::new();
+    for named in project
+        .libraries
+        .iter()
+        .chain(args.repeated("library").iter())
+    {
+        if !roots.iter().any(|r| r == named) {
+            roots.push(named.clone());
+        }
+    }
+    let mut manifests = Vec::new();
+    for named in &roots {
+        match library_manifests(&root, named) {
+            Ok(found) => manifests.extend(found),
+            Err(message) => {
+                eprintln!("error: {message}");
+                return Ok(Outcome::Failed);
+            }
+        }
+    }
+    let library = LibraryIndex::from_manifests(roots, manifests);
+    if args.flag("report") && !library.is_empty() {
+        eprintln!(
+            "note: the IP library holds {} package(s) under {}",
+            library.entries().len(),
+            library
+                .roots()
+                .iter()
+                .map(|r| format!("`{r}`"))
+                .collect::<Vec<_>>()
+                .join(", ")
+        );
+    }
+
     // The library never touches the filesystem: it asks through this
     // closure, and the CLI owns every read.
     let read_root = root.clone();
     let mut provider = PathProvider::new(".", move |path: &str| {
         std::fs::read_to_string(read_root.join(path)).ok()
-    });
+    })
+    .with_library(library);
 
     let mut resolved = resolve(map, &project, &mut provider, &mut diags);
     let elaboration = elaborate(&project, &mut resolved, &mut diags);
+
+    let lock_path = args
+        .option("lock")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| root.join("reticle.lock"));
+
+    // --locked: the lock file must already describe this resolution. It
+    // is read into the build's source map, so the diagnostic points into
+    // the file like every other one.
+    if args.flag("locked") && resolved.is_complete() {
+        let text = match std::fs::read_to_string(&lock_path) {
+            Ok(text) => text,
+            Err(err) => {
+                eprintln!("error: cannot read `{}`: {err}", lock_path.display());
+                return Ok(Outcome::Failed);
+            }
+        };
+        let name = lock_path.display().to_string();
+        match resolved.source_map_mut().add(name, &text) {
+            Ok(file) => {
+                let old = reticle::ip::LockFile::parse(&text, file, &mut diags);
+                if let Some(diagnostic) =
+                    old.mismatch(&resolved.lock, reticle::source::Span::new(file, 0, 0))
+                {
+                    diags.push(diagnostic);
+                }
+            }
+            Err(err) => {
+                eprintln!("error: cannot read `{}`: {err}", lock_path.display());
+                return Ok(Outcome::Failed);
+            }
+        }
+    }
+
     let map = resolved.source_map();
     let failed = report(&mut diags, map);
 
@@ -1361,15 +1523,13 @@ fn build(args: &Args) -> Result<Outcome, ArgError> {
         eprint!("{}", elaboration.report());
     }
 
-    if !args.flag("no-lock") && resolved.is_complete() {
-        let lock = args
-            .option("lock")
-            .map(std::path::PathBuf::from)
-            .unwrap_or_else(|| root.join("reticle.lock"));
-        if let Err(err) = std::fs::write(&lock, resolved.lock.to_text()) {
-            eprintln!("error: cannot write `{}`: {err}", lock.display());
-            return Ok(Outcome::Failed);
-        }
+    if !args.flag("no-lock")
+        && !args.flag("locked")
+        && resolved.is_complete()
+        && let Err(err) = std::fs::write(&lock_path, resolved.lock.to_text())
+    {
+        eprintln!("error: cannot write `{}`: {err}", lock_path.display());
+        return Ok(Outcome::Failed);
     }
 
     let Some(mut design) = elaboration.design else {

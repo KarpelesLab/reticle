@@ -183,6 +183,54 @@ fn rom_image(dir: &Path) -> BTreeMap<u32, u8> {
     out
 }
 
+/// The IP library index the project's `library` lines ask for: every
+/// `reticle.ip` under each root, with paths relative to the manifest.
+///
+/// `reticle build` does exactly this walk (`library_manifests` in
+/// `src/bin/reticle/main.rs`). It is here, and not in the library,
+/// because walking a directory is I/O and nothing under `src/` outside
+/// `src/bin/` does any.
+fn library_index(dir: &Path, project: &Project) -> reticle::ip::LibraryIndex {
+    fn descend(at: &Path, prefix: &str, out: &mut Vec<(String, String)>) {
+        let manifest = at.join(reticle::ip::library::MANIFEST_NAME);
+        if manifest.is_file() {
+            let text = fs::read_to_string(&manifest)
+                .unwrap_or_else(|e| panic!("{}: {e}", manifest.display()));
+            out.push((
+                reticle::ip::library::entry_path(prefix, reticle::ip::library::MANIFEST_NAME),
+                text,
+            ));
+            return;
+        }
+        let mut names: Vec<String> = fs::read_dir(at)
+            .unwrap_or_else(|e| panic!("{}: {e}", at.display()))
+            .filter_map(|entry| {
+                let entry = entry.ok()?;
+                entry
+                    .file_type()
+                    .ok()?
+                    .is_dir()
+                    .then(|| entry.file_name().to_string_lossy().into_owned())
+            })
+            .collect();
+        names.sort();
+        for name in names {
+            descend(
+                &at.join(&name),
+                &reticle::ip::library::entry_path(prefix, &name),
+                out,
+            );
+        }
+    }
+
+    let mut manifests = Vec::new();
+    for root in &project.libraries {
+        descend(&dir.join(root), root, &mut manifests);
+    }
+    manifests.sort();
+    reticle::ip::LibraryIndex::from_manifests(project.libraries.clone(), manifests)
+}
+
 /// A resolved and elaborated project.
 struct Built {
     project: Project,
@@ -200,10 +248,12 @@ fn build(dir: &Path, adjust: impl FnOnce(&mut Project)) -> Built {
     assert!(!diags.has_errors(), "{}", diags.render(&map));
     adjust(&mut project);
 
+    let index = library_index(dir, &project);
     let root = dir.to_path_buf();
     let mut provider = PathProvider::new(".", move |path: &str| {
         fs::read_to_string(root.join(path)).ok()
-    });
+    })
+    .with_library(index);
     let mut resolved = ip::resolve(map, &project, &mut provider, &mut diags);
     assert!(
         resolved.is_complete(),

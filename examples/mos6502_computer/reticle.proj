@@ -19,5 +19,11 @@ source rtl/computer_top.v
 constraints board/hx8k_breakout.rcf
 testbench tb/computer_tb.v
 
-depends mos6502 ^1.0.0 path ../../ip/mos6502
-depends uart ^1.0.0 path ../../ip/uart
+# The IP library this project's dependencies come from. Naming it once
+# here is what lets the two lines below say only what they need, so that
+# moving a block inside ip/ is a change to ip/ and not to this file. A
+# package outside the library is still named with `path <dir>`.
+library ../../ip
+
+depends mos6502 ^1.0.0
+depends uart ^1.0.0
