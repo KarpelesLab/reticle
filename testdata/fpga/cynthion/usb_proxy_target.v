@@ -146,6 +146,14 @@
 // socket has no power, nothing attaches, and the hub correctly reports an
 // empty port.
 //
+// **And a device that draws more than 100 mA needs `SELF_POWERED = 1`**, which
+// is the default and whose parameter comment is the whole argument: a
+// bus-powered hub may offer each port only 100 mA, a GreatFET's configuration
+// declares 500, and Linux's answer is to enumerate the device perfectly and then
+// leave it unconfigured — `rejected 1 configuration due to insufficient
+// available bus power`. That is one of the two ways this design can look like it
+// works and not work, and it was measured here rather than reasoned about.
+//
 // ===================================================================
 // WHAT TO LOOK AT
 // ===================================================================
@@ -168,6 +176,44 @@ module usb_proxy_target #(
     // VBUS through to TARGET A. **Read the section above before changing
     // this.** 0 is the default and closes no switch at all.
     parameter integer VBUS_AUX = 0,
+    // WHETHER THE HUB TELLS THE PC IT IS SELF POWERED, AND WHY IT SAYS YES
+    //
+    // Bit 6 of the configuration descriptor's `bmAttributes` (USB 2.0 §9.6.3).
+    // It is **not** decoration and it is not the IP block's business: it decides
+    // how much current Linux will let a device behind the port draw, and with
+    // the wrong value the device enumerates perfectly and is then left
+    // unconfigured.
+    //
+    // Measured on this board, with the GreatFET in the TARGET-A socket and this
+    // bit **clear**:
+    //
+    //   usb 7-5.1: New USB device found, idVendor=1d50, idProduct=60e6
+    //   usb 7-5.1: Product: GreatFET
+    //   usb 7-5.1: rejected 1 configuration due to insufficient available bus power
+    //   usb 7-5.1: no configuration chosen from 1 choice
+    //
+    // The GreatFET's one configuration declares `MaxPower 500mA`, and Linux
+    // gives each port of a **bus-powered** hub 100 mA — which is all a
+    // bus-powered hub has to give, since every milliamp it hands downstream
+    // comes out of the allowance its own upstream cable granted it.
+    //
+    // **A Cynthion is not powered through AUX.** The board's own supply and its
+    // Apollo debug microcontroller come in on the CONTROL port, so the hub
+    // controller in this FPGA draws **nothing at all** from the AUX cable, and
+    // "self powered" is the true statement about it. `CFG_POWER` is left at
+    // 100 mA anyway, which is a self-powered device declaring that it may still
+    // draw some from the cable: the conservative of the two readings.
+    //
+    // **And here is the inaccuracy, recorded rather than papered over.** The
+    // current the *port* draws does come out of the AUX cable, through the
+    // bidirectional switch `VBUS_AUX` closes — so a host told 500 mA a port is
+    // being told something this board does not guarantee, and a strictly
+    // compliant self-powered hub would supply its ports from its own rail
+    // instead. What makes it safe in practice is that the switch is closed by
+    // the bitstream and not by the host: whatever the socket draws, it drew
+    // before the PC ever asked, and no class request can change it.
+    // `ip/usb_hub/README.md` §4 is the long form of that refusal.
+    parameter integer SELF_POWERED = 1,
     // Which `LineState` is a full-speed device's idle J, from the target
     // transceiver's point of view; `ip/usb_host_ulpi`'s `FS_LINE` says why this
     // is a parameter at all.
@@ -279,7 +325,14 @@ module usb_proxy_target #(
     // that agree on it for AUX. For TARGET it is still only quoted:
     // `ip/usb_host_ulpi/README.md` §5 says so, and `FS_LINE` is the parameter
     // that settles it if the quotation is wrong.
+    // `CFG_ATTR` is `bmAttributes` of the configuration descriptor: bit 7 is
+    // reserved and set, and bit 6 is Self Powered — `SELF_POWERED` above is the
+    // whole argument for it and the measurement that made it a parameter. It is
+    // also what the **standard** GET_STATUS of USB 2.0 §9.4.5 reports in bit 0
+    // of its two bytes, which `usb_ctrl_ep` derives from this same byte so the
+    // two can never disagree.
     usb_hub_proxy_ulpi #(
+        .CFG_ATTR       (SELF_POWERED != 0 ? 8'hC0 : 8'h80),
         .UP_VENDOR_ADDR (6'h39),
         .UP_VENDOR_DATA (8'h06),
         .DN_VENDOR_ADDR (6'h39),

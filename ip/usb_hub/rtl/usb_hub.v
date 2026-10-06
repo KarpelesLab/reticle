@@ -114,9 +114,12 @@
 // What it does not do
 //   **One port**, and `usb_hub_req`'s header says what a second would cost.
 //
-//   No packet repeating, no frame forwarding, no downstream SE0, no suspend
-//   or resume signalling on the port, no transaction translator and no high
-//   speed. The first of those is the next round's and the rest follow it.
+//   **No packet repeating and no frame forwarding**, which is `ip/usb_proxy`'s
+//   and is a transaction proxy rather than a repeater — README.md §2 is why it
+//   cannot be one. No downstream SE0 of this block's own either: the port reset
+//   is the `port_reset` / `port_reset_done` handshake and whatever answers it
+//   does the driving. No suspend or resume signalling on the port, no
+//   transaction translator and no high speed.
 //
 //   No strings, so the hub has no product name in `lsusb`, for the same
 //   reason `ip/usb_cdc_acm` has none: a string descriptor is a device's

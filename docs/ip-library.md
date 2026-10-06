@@ -170,11 +170,21 @@ descriptors, the class requests, the port state and the status-change
 endpoint, with a second USB controller behind the port and nothing joining
 the two conversations. That page's §2 is the timing, §8 is the kernel log of
 a host finding the hub, finding something on its port and failing to
-enumerate it, and both are written as the correct outcome of this round
+enumerate it, and both are written as the correct outcome of that round
 rather than as a defect. It also carries one deliberate departure from the
 other four: it cites chapter 11 by **section** and never by table number,
 because a section number misquoted is findable and a table number misquoted
 sends a reader somewhere else and looks authoritative doing it.
+
+[`ip/usb_proxy/README.md`](../ip/usb_proxy/README.md) is the sixth, and it is
+the sequel to that kernel log: the half that forwards. Its **§2** is the one
+section to read if only one gets read, because it is an architectural decision
+written down as one — **pass-through addressing**, which makes the PC the only
+authority for the downstream device's address and so needs no translation table,
+no descriptor cache and no way for the two buses to disagree about a packet
+size. The price of it is a port reset that really reaches the device, which is
+what `ip/usb_hub` gained a handshake for, and the consequence of it is that
+`ip/usb_host_ulpi`'s own enumerator is not instantiated in a proxy at all.
 
 `usb_host_ulpi`'s fourth confidence level is **CHECKED** in a different
 sense from `usb_cdc_acm`'s: not "a host did this" but "**our host did this
@@ -875,12 +885,12 @@ and no host would ever address, which at 64 bytes a direction is over a thousand
 flip-flops or sixteen `TRELLIS_DPR16X4` for nothing.
 
 **So a hub costs less than the vendor-specific device it is built on.** On the
-ECP5, `usb_device_fs` is 853 LUT4, 355 flip-flops and 16 `TRELLIS_DPR16X4`, and
-`usb_hub_fs` is **843, 317 and 2** — ten fewer lookup tables, thirty-eight fewer
-flip-flops and fourteen fewer distributed RAMs than the block it is a class layer
-on top of. `usb_device_ulpi` to `usb_hub_ulpi` is the same subtraction twice: 944
-and 361 and 16 against 932 and 323 and 2. Against the other class,
-`usb_cdc_acm_ulpi`'s 1209 and 480 and 18, the hub is 277 lookup tables and 157
+ECP5, `usb_device_fs` is 886 LUT4, 364 flip-flops and 16 `TRELLIS_DPR16X4`, and
+`usb_hub_fs` is **847, 318 and 2** — thirty-nine fewer lookup tables, forty-six
+fewer flip-flops and fourteen fewer distributed RAMs than the block it is a class
+layer on top of. `usb_device_ulpi` to `usb_hub_ulpi` is the same subtraction
+twice: 979 and 370 and 16 against 942 and 324 and 2. Against the other class,
+`usb_cdc_acm_ulpi`'s 1229 and 481 and 18, the hub is 287 lookup tables and 157
 flip-flops smaller. A class layer is not necessarily an addition.
 
 (The two distributed RAMs hold **sixteen bits** — the status-change endpoint's
@@ -891,19 +901,35 @@ does not measure it and the parameter is there so a design can.)
 
 **And two things the hub found that the serial port had not.**
 
-The first is that **the class hook is reached for a standard request**.
-`usb_ctrl_ep` implements five and offers the rest, and its header says so in as
-many words — "string descriptors and GET_STATUS included, so a class that wants
-those can have them without this file changing again". A hub is the first class
-to need one: Linux's `hub_configure` sends the standard GET_STATUS of USB 2.0
-§9.4.5 during hub probe, with the comment "power budgeting mostly matters with
-bus-powered hubs", and takes its failure path if the transfer does not complete.
-So `usb_hub_req` claims it and answers two zero bytes. That is a layering smudge
-and it is written up as one in that block's §7: the right home for a standard
-request is endpoint 0, the change is small and well understood, and it is
-reported rather than made because it widens `std_req` on the two cores that
-already run on silicon and this round has no measurement that would catch a
-regression in them.
+The first is that **the class hook was reached for a standard request, and
+should not have been**. `usb_ctrl_ep` implemented five and offered the rest, and
+its header said so in as many words — "string descriptors and GET_STATUS
+included, so a class that wants those can have them without this file changing
+again". A hub was the first class to need one: Linux's `hub_configure` sends the
+standard GET_STATUS of USB 2.0 §9.4.5 during hub probe, with the comment "power
+budgeting mostly matters with bus-powered hubs", and takes its failure path if
+the transfer does not complete. So `usb_hub_req` claimed it and answered two zero
+bytes.
+
+That was a layering smudge, it was written up as one in that block's §7, and
+**the round that built the proxy made the change** — because it had the board and
+the CDC tests in front of it, which is exactly what the report asked for.
+GET_STATUS to the **device** is endpoint 0's now: two bytes whose bit 0 is bit 6
+of `CFG_ATTR`, the same byte the configuration descriptor's `bmAttributes` is
+written from, and whose bit 1 is a Remote Wakeup nothing in this library can
+enable. It costs **one flip-flop and about thirty lookup tables** on every device
+in the library — `usb_device_fs` on the ECP5 went from 853 LUT4 and 355
+flip-flops to 886 and 364 — and no class has to think about it again.
+
+GET_STATUS to an **interface** or an **endpoint** is still on the hook, and that
+is deliberate rather than unfinished: §9.4.5 makes an interface's two bytes
+reserved and zero and an endpoint's bit 0 the Halt feature, and both are
+answerable only by something that knows which interfaces and endpoints exist,
+which endpoint 0 does not — `IFACE_DESC` is a blob it indexes and `usb_bulk_ep`
+is a module beside it. A device that answered zero for *any* endpoint number
+would be claiming endpoints it has not got, where §9.4.5 asks for a STALL.
+`usb_device_fs_ignores_bad_packets_and_stalls_what_it_cannot_do` asserts both
+halves of that division.
 
 The second is **how not to report a change**. `ip/usb_cdc_acm`'s notification
 endpoint had a register meaning "the host has been told", it was set once per
@@ -933,6 +959,48 @@ the port's
 connection rises when the **host** powers it — which is the moment the host is
 listening — and a device already plugged in before the host ever looked is
 reported with no edge detector and no one-shot anywhere.
+
+## The third USB block on one die, and the one it forwards for
+
+`usb_proxy` is the biggest block in this library by some way, and the reason is
+that it is **two USB controllers and the thing between them**: a peripheral Link
+and a device core on one ULPI transceiver, a host Link and a transaction engine
+on another, a second packet decoder, and a 64-byte relay buffer. On the ECP5 that
+is 3084 LUT4, 996 flip-flops and 10 `TRELLIS_DPR16X4` against `usb_hub_ulpi`'s
+942, 324 and 2 — so **forwarding costs about 2100 lookup tables more than
+reporting a port**, and a design that only wants to be a hub should be one.
+
+Two of those numbers are worth reading as a comparison rather than a cost.
+
+**It does not instantiate `usb_host_enum`.** `usb_host_ulpi` whole is 1299 LUT4
+and 542 flip-flops; the proxy takes `usb_ulpi_host_link` and `usb_host_sie` out
+of it and leaves the enumerator behind, because in a proxy the **PC** must be the
+thing that enumerates the device or there are two authorities assigning
+addresses. `ip/usb_proxy/README.md` §2 is that decision and what was weighed
+against it; the short of it is that pass-through addressing has no translation
+table, no descriptor cache and no way for the two sides to disagree about
+`bMaxPacketSize0`, and the enumerator would have been the thing it had to
+disagree with.
+
+**The ten distributed RAMs** are the two of the hub's status-change endpoint plus
+eight for the relay's one 64-byte packet buffer. One buffer and not two, because
+a transaction moves bytes one way at a time: an IN fills it from the device and
+drains it to the PC, an OUT the other way round, and the two can never be active
+in the same cycle. It is written with **one write port** fed by a decode rather
+than two write statements, for the same reason `usb_bulk_ep` keeps its two
+buffers separate — a memory written from two places is one a backend has to take
+apart again.
+
+It is also the first block here to need something *back* from a block below it.
+`ip/usb_hub`'s port reset used to complete in the cycle it was asked for, with
+PORT_RESET in `wPortStatus` a constant zero, because there was nothing downstream
+to reset. A proxy has to reset the real device — pass-through addressing depends
+on the device forgetting its address exactly when the PC thinks it has — so that
+reset became a handshake: `port_reset` is a level the hub holds while resetting
+and `port_reset_done` is one cycle from whatever drove it. **Tying
+`port_reset_done` high is the old behaviour exactly**, which is what a design
+with nothing downstream wants and what `testdata/fpga/cynthion/usb_hub_target.v`
+does.
 
 ## Using one
 
@@ -1772,50 +1840,54 @@ exactly what this table is for.
 | `eth_mac_rgmii` | `eth_mac_rgmii` | IFG_CYCLES=12, TX_DELAY=80, RX_DELAY=80 | LUT6 | 28 x dff, 349 x lut | 4 |
 | `eth_mac_rgmii` | `eth_mac_rgmii` | IFG_CYCLES=12, TX_DELAY=80, RX_DELAY=80 | iCE40 HX1K | 10 x SB_CARRY, 119 x SB_DFFER, 64 x SB_DFFES, 7 x SB_DFFR, 2 x SB_GB, 39 x SB_IO, 394 x SB_LUT4 | 5 |
 | `eth_mac_rgmii` | `eth_mac_rgmii` | IFG_CYCLES=12, TX_DELAY=80, RX_DELAY=80 | ECP5 45F | 2 x DCCA, 6 x DELAYG, 5 x IDDRX1F, 395 x LUT4, 6 x ODDRX1F, 190 x TRELLIS_FF, 39 x TRELLIS_IO | 5 |
-| `usb_device_fs` | `usb_device_fs` | VID=16'h1209, PID=16'h0001 | LUT4 | 88 x dff, 804 x lut, 2 x memory 64x8, 2 x memrd, 2 x memwr | 10 |
-| `usb_device_fs` | `usb_device_fs` | VID=16'h1209, PID=16'h0001 | LUT6 | 88 x dff, 697 x lut, 2 x memory 64x8, 2 x memrd, 2 x memwr | 9 |
-| `usb_device_fs` | `usb_device_fs` | VID=16'h1209, PID=16'h0001 | iCE40 HX1K | 64 x SB_CARRY, 1024 x SB_DFFE, 300 x SB_DFFER, 39 x SB_DFFES, 13 x SB_DFFR, 3 x SB_DFFS, 1 x SB_GB, 39 x SB_IO, 2869 x SB_LUT4 | 10 |
-| `usb_device_fs` | `usb_device_fs` | VID=16'h1209, PID=16'h0001 | ECP5 45F | 1 x DCCA, 853 x LUT4, 16 x TRELLIS_DPR16X4, 355 x TRELLIS_FF, 39 x TRELLIS_IO | 10 |
-| `usb_device_fs` | `usb_device_fs` | VID=16'h1209, PID=16'h0001, MAXPKT=7'd8, MAXPKT0=7'd8 | LUT4 | 88 x dff, 779 x lut, 2 x memory 8x8, 2 x memrd, 2 x memwr | 11 |
-| `usb_device_fs` | `usb_device_fs` | VID=16'h1209, PID=16'h0001, MAXPKT=7'd8, MAXPKT0=7'd8 | LUT6 | 88 x dff, 667 x lut, 2 x memory 8x8, 2 x memrd, 2 x memwr | 8 |
-| `usb_device_fs` | `usb_device_fs` | VID=16'h1209, PID=16'h0001, MAXPKT=7'd8, MAXPKT0=7'd8 | iCE40 HX1K | 51 x SB_CARRY, 128 x SB_DFFE, 276 x SB_DFFER, 39 x SB_DFFES, 13 x SB_DFFR, 3 x SB_DFFS, 1 x SB_GB, 39 x SB_IO, 983 x SB_LUT4 | 10 |
-| `usb_device_fs` | `usb_device_fs` | VID=16'h1209, PID=16'h0001, MAXPKT=7'd8, MAXPKT0=7'd8 | ECP5 45F | 1 x DCCA, 770 x LUT4, 4 x TRELLIS_DPR16X4, 331 x TRELLIS_FF, 39 x TRELLIS_IO | 11 |
-| `usb_device_fs` | `usb_device_fs` | VID=16'h1209, PID=16'h0001, BUF_RAM=0 | LUT4 | 90 x dff, 1840 x lut | 10 |
-| `usb_device_fs` | `usb_device_fs` | VID=16'h1209, PID=16'h0001, BUF_RAM=0 | LUT6 | 90 x dff, 1581 x lut | 9 |
-| `usb_device_fs` | `usb_device_fs` | VID=16'h1209, PID=16'h0001, BUF_RAM=0 | iCE40 HX1K | 64 x SB_CARRY, 1324 x SB_DFFER, 39 x SB_DFFES, 13 x SB_DFFR, 3 x SB_DFFS, 1 x SB_GB, 39 x SB_IO, 1804 x SB_LUT4 | 10 |
-| `usb_device_fs` | `usb_device_fs` | VID=16'h1209, PID=16'h0001, BUF_RAM=0 | ECP5 45F | 1 x DCCA, 1830 x LUT4, 1379 x TRELLIS_FF, 39 x TRELLIS_IO | 10 |
-| `usb_device_fs` | `usb_device_fs` | VID=16'h1209, PID=16'h0001, MAXPKT=7'd8, MAXPKT0=7'd8, BUF_RAM=0 | LUT4 | 90 x dff, 902 x lut | 11 |
-| `usb_device_fs` | `usb_device_fs` | VID=16'h1209, PID=16'h0001, MAXPKT=7'd8, MAXPKT0=7'd8, BUF_RAM=0 | LUT6 | 90 x dff, 762 x lut | 8 |
-| `usb_device_fs` | `usb_device_fs` | VID=16'h1209, PID=16'h0001, MAXPKT=7'd8, MAXPKT0=7'd8, BUF_RAM=0 | iCE40 HX1K | 51 x SB_CARRY, 404 x SB_DFFER, 39 x SB_DFFES, 13 x SB_DFFR, 3 x SB_DFFS, 1 x SB_GB, 39 x SB_IO, 849 x SB_LUT4 | 10 |
-| `usb_device_fs` | `usb_device_fs` | VID=16'h1209, PID=16'h0001, MAXPKT=7'd8, MAXPKT0=7'd8, BUF_RAM=0 | ECP5 45F | 1 x DCCA, 893 x LUT4, 459 x TRELLIS_FF, 39 x TRELLIS_IO | 11 |
-| `usb_device_fs_pll` | `usb_device_fs_pll` | VID=16'h1209, PID=16'h0001 | LUT4 | 88 x dff, 804 x lut, 2 x memory 64x8, 2 x memrd, 2 x memwr | 10 |
-| `usb_device_fs_pll` | `usb_device_fs_pll` | VID=16'h1209, PID=16'h0001 | LUT6 | 88 x dff, 697 x lut, 2 x memory 64x8, 2 x memrd, 2 x memwr | 9 |
-| `usb_device_fs_pll` | `usb_device_fs_pll` | VID=16'h1209, PID=16'h0001 | iCE40 HX1K | 64 x SB_CARRY, 1024 x SB_DFFE, 300 x SB_DFFER, 39 x SB_DFFES, 13 x SB_DFFR, 3 x SB_DFFS, 1 x SB_GB, 39 x SB_IO, 2869 x SB_LUT4, 1 x SB_PLL40_CORE | 10 |
-| `usb_device_fs_pll` | `usb_device_fs_pll` | VID=16'h1209, PID=16'h0001 | ECP5 45F | 1 x DCCA, 1 x EHXPLLL, 853 x LUT4, 16 x TRELLIS_DPR16X4, 355 x TRELLIS_FF, 39 x TRELLIS_IO | 10 |
-| `usb_device_ulpi` | `usb_device_ulpi` | VID=16'h1209, PID=16'h0001 | LUT4 | 82 x dff, 904 x lut, 2 x memory 64x8, 2 x memrd, 2 x memwr | 10 |
-| `usb_device_ulpi` | `usb_device_ulpi` | VID=16'h1209, PID=16'h0001 | LUT6 | 82 x dff, 804 x lut, 2 x memory 64x8, 2 x memrd, 2 x memwr | 11 |
-| `usb_device_ulpi` | `usb_device_ulpi` | VID=16'h1209, PID=16'h0001 | iCE40 HX1K | 97 x SB_CARRY, 1024 x SB_DFFE, 316 x SB_DFFER, 37 x SB_DFFES, 8 x SB_DFFR, 1 x SB_GB, 55 x SB_IO, 2954 x SB_LUT4 | 10 |
-| `usb_device_ulpi` | `usb_device_ulpi` | VID=16'h1209, PID=16'h0001 | ECP5 45F | 1 x DCCA, 944 x LUT4, 16 x TRELLIS_DPR16X4, 361 x TRELLIS_FF, 55 x TRELLIS_IO | 10 |
+| `usb_device_fs` | `usb_device_fs` | VID=16'h1209, PID=16'h0001 | LUT4 | 89 x dff, 835 x lut, 2 x memory 64x8, 2 x memrd, 2 x memwr | 10 |
+| `usb_device_fs` | `usb_device_fs` | VID=16'h1209, PID=16'h0001 | LUT6 | 89 x dff, 719 x lut, 2 x memory 64x8, 2 x memrd, 2 x memwr | 9 |
+| `usb_device_fs` | `usb_device_fs` | VID=16'h1209, PID=16'h0001 | iCE40 HX1K | 64 x SB_CARRY, 1024 x SB_DFFE, 309 x SB_DFFER, 39 x SB_DFFES, 13 x SB_DFFR, 3 x SB_DFFS, 1 x SB_GB, 39 x SB_IO, 2900 x SB_LUT4 | 10 |
+| `usb_device_fs` | `usb_device_fs` | VID=16'h1209, PID=16'h0001 | ECP5 45F | 1 x DCCA, 886 x LUT4, 16 x TRELLIS_DPR16X4, 364 x TRELLIS_FF, 39 x TRELLIS_IO | 10 |
+| `usb_device_fs` | `usb_device_fs` | VID=16'h1209, PID=16'h0001, MAXPKT=7'd8, MAXPKT0=7'd8 | LUT4 | 89 x dff, 810 x lut, 2 x memory 8x8, 2 x memrd, 2 x memwr | 11 |
+| `usb_device_fs` | `usb_device_fs` | VID=16'h1209, PID=16'h0001, MAXPKT=7'd8, MAXPKT0=7'd8 | LUT6 | 89 x dff, 684 x lut, 2 x memory 8x8, 2 x memrd, 2 x memwr | 8 |
+| `usb_device_fs` | `usb_device_fs` | VID=16'h1209, PID=16'h0001, MAXPKT=7'd8, MAXPKT0=7'd8 | iCE40 HX1K | 51 x SB_CARRY, 128 x SB_DFFE, 285 x SB_DFFER, 39 x SB_DFFES, 13 x SB_DFFR, 3 x SB_DFFS, 1 x SB_GB, 39 x SB_IO, 1018 x SB_LUT4 | 10 |
+| `usb_device_fs` | `usb_device_fs` | VID=16'h1209, PID=16'h0001, MAXPKT=7'd8, MAXPKT0=7'd8 | ECP5 45F | 1 x DCCA, 812 x LUT4, 4 x TRELLIS_DPR16X4, 340 x TRELLIS_FF, 39 x TRELLIS_IO | 11 |
+| `usb_device_fs` | `usb_device_fs` | VID=16'h1209, PID=16'h0001, BUF_RAM=0 | LUT4 | 91 x dff, 1860 x lut | 10 |
+| `usb_device_fs` | `usb_device_fs` | VID=16'h1209, PID=16'h0001, BUF_RAM=0 | LUT6 | 91 x dff, 1602 x lut | 9 |
+| `usb_device_fs` | `usb_device_fs` | VID=16'h1209, PID=16'h0001, BUF_RAM=0 | iCE40 HX1K | 64 x SB_CARRY, 1333 x SB_DFFER, 39 x SB_DFFES, 13 x SB_DFFR, 3 x SB_DFFS, 1 x SB_GB, 39 x SB_IO, 1833 x SB_LUT4 | 10 |
+| `usb_device_fs` | `usb_device_fs` | VID=16'h1209, PID=16'h0001, BUF_RAM=0 | ECP5 45F | 1 x DCCA, 1861 x LUT4, 1388 x TRELLIS_FF, 39 x TRELLIS_IO | 10 |
+| `usb_device_fs` | `usb_device_fs` | VID=16'h1209, PID=16'h0001, MAXPKT=7'd8, MAXPKT0=7'd8, BUF_RAM=0 | LUT4 | 91 x dff, 919 x lut | 11 |
+| `usb_device_fs` | `usb_device_fs` | VID=16'h1209, PID=16'h0001, MAXPKT=7'd8, MAXPKT0=7'd8, BUF_RAM=0 | LUT6 | 91 x dff, 779 x lut | 8 |
+| `usb_device_fs` | `usb_device_fs` | VID=16'h1209, PID=16'h0001, MAXPKT=7'd8, MAXPKT0=7'd8, BUF_RAM=0 | iCE40 HX1K | 51 x SB_CARRY, 413 x SB_DFFER, 39 x SB_DFFES, 13 x SB_DFFR, 3 x SB_DFFS, 1 x SB_GB, 39 x SB_IO, 881 x SB_LUT4 | 10 |
+| `usb_device_fs` | `usb_device_fs` | VID=16'h1209, PID=16'h0001, MAXPKT=7'd8, MAXPKT0=7'd8, BUF_RAM=0 | ECP5 45F | 1 x DCCA, 921 x LUT4, 468 x TRELLIS_FF, 39 x TRELLIS_IO | 11 |
+| `usb_device_fs_pll` | `usb_device_fs_pll` | VID=16'h1209, PID=16'h0001 | LUT4 | 89 x dff, 835 x lut, 2 x memory 64x8, 2 x memrd, 2 x memwr | 10 |
+| `usb_device_fs_pll` | `usb_device_fs_pll` | VID=16'h1209, PID=16'h0001 | LUT6 | 89 x dff, 719 x lut, 2 x memory 64x8, 2 x memrd, 2 x memwr | 9 |
+| `usb_device_fs_pll` | `usb_device_fs_pll` | VID=16'h1209, PID=16'h0001 | iCE40 HX1K | 64 x SB_CARRY, 1024 x SB_DFFE, 309 x SB_DFFER, 39 x SB_DFFES, 13 x SB_DFFR, 3 x SB_DFFS, 1 x SB_GB, 39 x SB_IO, 2900 x SB_LUT4, 1 x SB_PLL40_CORE | 10 |
+| `usb_device_fs_pll` | `usb_device_fs_pll` | VID=16'h1209, PID=16'h0001 | ECP5 45F | 1 x DCCA, 1 x EHXPLLL, 886 x LUT4, 16 x TRELLIS_DPR16X4, 364 x TRELLIS_FF, 39 x TRELLIS_IO | 10 |
+| `usb_device_ulpi` | `usb_device_ulpi` | VID=16'h1209, PID=16'h0001 | LUT4 | 83 x dff, 932 x lut, 2 x memory 64x8, 2 x memrd, 2 x memwr | 10 |
+| `usb_device_ulpi` | `usb_device_ulpi` | VID=16'h1209, PID=16'h0001 | LUT6 | 83 x dff, 817 x lut, 2 x memory 64x8, 2 x memrd, 2 x memwr | 11 |
+| `usb_device_ulpi` | `usb_device_ulpi` | VID=16'h1209, PID=16'h0001 | iCE40 HX1K | 97 x SB_CARRY, 1024 x SB_DFFE, 325 x SB_DFFER, 37 x SB_DFFES, 8 x SB_DFFR, 1 x SB_GB, 55 x SB_IO, 2983 x SB_LUT4 | 10 |
+| `usb_device_ulpi` | `usb_device_ulpi` | VID=16'h1209, PID=16'h0001 | ECP5 45F | 1 x DCCA, 979 x LUT4, 16 x TRELLIS_DPR16X4, 370 x TRELLIS_FF, 55 x TRELLIS_IO | 10 |
 | `usb_host_ulpi` | `usb_host_ulpi` | (defaults) | LUT4 | 96 x dff, 1295 x lut | 10 |
 | `usb_host_ulpi` | `usb_host_ulpi` | (defaults) | LUT6 | 96 x dff, 1158 x lut | 11 |
 | `usb_host_ulpi` | `usb_host_ulpi` | (defaults) | iCE40 HX1K | 132 x SB_CARRY, 482 x SB_DFFER, 35 x SB_DFFES, 25 x SB_DFFR, 1 x SB_GB, 159 x SB_IO, 1229 x SB_LUT4 | 10 |
 | `usb_host_ulpi` | `usb_host_ulpi` | (defaults) | ECP5 45F | 1 x DCCA, 1299 x LUT4, 542 x TRELLIS_FF, 159 x TRELLIS_IO | 10 |
-| `usb_cdc_acm` | `usb_cdc_acm_fs` | VID=16'h1209, PID=16'h0001 | LUT4 | 113 x dff, 1088 x lut, 1 x memory 16x8, 2 x memory 64x8, 3 x memrd, 3 x memwr | 12 |
-| `usb_cdc_acm` | `usb_cdc_acm_fs` | VID=16'h1209, PID=16'h0001 | LUT6 | 113 x dff, 910 x lut, 1 x memory 16x8, 2 x memory 64x8, 3 x memrd, 3 x memwr | 10 |
-| `usb_cdc_acm` | `usb_cdc_acm_fs` | VID=16'h1209, PID=16'h0001 | iCE40 HX1K | 84 x SB_CARRY, 1152 x SB_DFFE, 413 x SB_DFFER, 44 x SB_DFFES, 14 x SB_DFFR, 3 x SB_DFFS, 1 x SB_GB, 104 x SB_IO, 3417 x SB_LUT4 | 12 |
-| `usb_cdc_acm` | `usb_cdc_acm_fs` | VID=16'h1209, PID=16'h0001 | ECP5 45F | 1 x DCCA, 1118 x LUT4, 18 x TRELLIS_DPR16X4, 474 x TRELLIS_FF, 104 x TRELLIS_IO | 12 |
-| `usb_cdc_acm` | `usb_cdc_acm_ulpi` | VID=16'h1209, PID=16'h0001 | LUT4 | 107 x dff, 1163 x lut, 1 x memory 16x8, 2 x memory 64x8, 3 x memrd, 3 x memwr | 11 |
-| `usb_cdc_acm` | `usb_cdc_acm_ulpi` | VID=16'h1209, PID=16'h0001 | LUT6 | 107 x dff, 1022 x lut, 1 x memory 16x8, 2 x memory 64x8, 3 x memrd, 3 x memwr | 11 |
-| `usb_cdc_acm` | `usb_cdc_acm_ulpi` | VID=16'h1209, PID=16'h0001 | iCE40 HX1K | 117 x SB_CARRY, 1152 x SB_DFFE, 429 x SB_DFFER, 42 x SB_DFFES, 9 x SB_DFFR, 1 x SB_GB, 120 x SB_IO, 3481 x SB_LUT4 | 11 |
-| `usb_cdc_acm` | `usb_cdc_acm_ulpi` | VID=16'h1209, PID=16'h0001 | ECP5 45F | 1 x DCCA, 1209 x LUT4, 18 x TRELLIS_DPR16X4, 480 x TRELLIS_FF, 120 x TRELLIS_IO | 11 |
-| `usb_hub` | `usb_hub_fs` | VID=16'h1209, PID=16'h0001 | LUT4 | 92 x dff, 841 x lut, 1 x memory 2x8, 1 x memrd, 1 x memwr | 11 |
-| `usb_hub` | `usb_hub_fs` | VID=16'h1209, PID=16'h0001 | LUT6 | 92 x dff, 716 x lut, 1 x memory 2x8, 1 x memrd, 1 x memwr | 8 |
-| `usb_hub` | `usb_hub_fs` | VID=16'h1209, PID=16'h0001 | iCE40 HX1K | 41 x SB_CARRY, 16 x SB_DFFE, 260 x SB_DFFER, 39 x SB_DFFES, 15 x SB_DFFR, 3 x SB_DFFS, 1 x SB_GB, 23 x SB_IO, 839 x SB_LUT4 | 10 |
-| `usb_hub` | `usb_hub_fs` | VID=16'h1209, PID=16'h0001 | ECP5 45F | 1 x DCCA, 843 x LUT4, 2 x TRELLIS_DPR16X4, 317 x TRELLIS_FF, 23 x TRELLIS_IO | 11 |
-| `usb_hub` | `usb_hub_ulpi` | VID=16'h1209, PID=16'h0001 | LUT4 | 86 x dff, 930 x lut, 1 x memory 2x8, 1 x memrd, 1 x memwr | 10 |
-| `usb_hub` | `usb_hub_ulpi` | VID=16'h1209, PID=16'h0001 | LUT6 | 86 x dff, 818 x lut, 1 x memory 2x8, 1 x memrd, 1 x memwr | 11 |
-| `usb_hub` | `usb_hub_ulpi` | VID=16'h1209, PID=16'h0001 | iCE40 HX1K | 74 x SB_CARRY, 16 x SB_DFFE, 276 x SB_DFFER, 37 x SB_DFFES, 10 x SB_DFFR, 1 x SB_GB, 39 x SB_IO, 927 x SB_LUT4 | 10 |
-| `usb_hub` | `usb_hub_ulpi` | VID=16'h1209, PID=16'h0001 | ECP5 45F | 1 x DCCA, 932 x LUT4, 2 x TRELLIS_DPR16X4, 323 x TRELLIS_FF, 39 x TRELLIS_IO | 10 |
+| `usb_cdc_acm` | `usb_cdc_acm_fs` | VID=16'h1209, PID=16'h0001 | LUT4 | 114 x dff, 1112 x lut, 1 x memory 16x8, 2 x memory 64x8, 3 x memrd, 3 x memwr | 12 |
+| `usb_cdc_acm` | `usb_cdc_acm_fs` | VID=16'h1209, PID=16'h0001 | LUT6 | 114 x dff, 918 x lut, 1 x memory 16x8, 2 x memory 64x8, 3 x memrd, 3 x memwr | 11 |
+| `usb_cdc_acm` | `usb_cdc_acm_fs` | VID=16'h1209, PID=16'h0001 | iCE40 HX1K | 84 x SB_CARRY, 1152 x SB_DFFE, 414 x SB_DFFER, 44 x SB_DFFES, 14 x SB_DFFR, 3 x SB_DFFS, 1 x SB_GB, 104 x SB_IO, 3437 x SB_LUT4 | 12 |
+| `usb_cdc_acm` | `usb_cdc_acm_fs` | VID=16'h1209, PID=16'h0001 | ECP5 45F | 1 x DCCA, 1138 x LUT4, 18 x TRELLIS_DPR16X4, 475 x TRELLIS_FF, 104 x TRELLIS_IO | 12 |
+| `usb_cdc_acm` | `usb_cdc_acm_ulpi` | VID=16'h1209, PID=16'h0001 | LUT4 | 108 x dff, 1183 x lut, 1 x memory 16x8, 2 x memory 64x8, 3 x memrd, 3 x memwr | 11 |
+| `usb_cdc_acm` | `usb_cdc_acm_ulpi` | VID=16'h1209, PID=16'h0001 | LUT6 | 108 x dff, 1029 x lut, 1 x memory 16x8, 2 x memory 64x8, 3 x memrd, 3 x memwr | 11 |
+| `usb_cdc_acm` | `usb_cdc_acm_ulpi` | VID=16'h1209, PID=16'h0001 | iCE40 HX1K | 117 x SB_CARRY, 1152 x SB_DFFE, 430 x SB_DFFER, 42 x SB_DFFES, 9 x SB_DFFR, 1 x SB_GB, 120 x SB_IO, 3489 x SB_LUT4 | 11 |
+| `usb_cdc_acm` | `usb_cdc_acm_ulpi` | VID=16'h1209, PID=16'h0001 | ECP5 45F | 1 x DCCA, 1229 x LUT4, 18 x TRELLIS_DPR16X4, 481 x TRELLIS_FF, 120 x TRELLIS_IO | 11 |
+| `usb_hub` | `usb_hub_fs` | VID=16'h1209, PID=16'h0001 | LUT4 | 93 x dff, 844 x lut, 1 x memory 2x8, 1 x memrd, 1 x memwr | 11 |
+| `usb_hub` | `usb_hub_fs` | VID=16'h1209, PID=16'h0001 | LUT6 | 93 x dff, 728 x lut, 1 x memory 2x8, 1 x memrd, 1 x memwr | 9 |
+| `usb_hub` | `usb_hub_fs` | VID=16'h1209, PID=16'h0001 | iCE40 HX1K | 41 x SB_CARRY, 16 x SB_DFFE, 262 x SB_DFFER, 39 x SB_DFFES, 14 x SB_DFFR, 3 x SB_DFFS, 1 x SB_GB, 24 x SB_IO, 848 x SB_LUT4 | 10 |
+| `usb_hub` | `usb_hub_fs` | VID=16'h1209, PID=16'h0001 | ECP5 45F | 1 x DCCA, 847 x LUT4, 2 x TRELLIS_DPR16X4, 318 x TRELLIS_FF, 24 x TRELLIS_IO | 11 |
+| `usb_hub` | `usb_hub_ulpi` | VID=16'h1209, PID=16'h0001 | LUT4 | 87 x dff, 939 x lut, 1 x memory 2x8, 1 x memrd, 1 x memwr | 10 |
+| `usb_hub` | `usb_hub_ulpi` | VID=16'h1209, PID=16'h0001 | LUT6 | 87 x dff, 829 x lut, 1 x memory 2x8, 1 x memrd, 1 x memwr | 11 |
+| `usb_hub` | `usb_hub_ulpi` | VID=16'h1209, PID=16'h0001 | iCE40 HX1K | 74 x SB_CARRY, 16 x SB_DFFE, 278 x SB_DFFER, 37 x SB_DFFES, 9 x SB_DFFR, 1 x SB_GB, 40 x SB_IO, 939 x SB_LUT4 | 10 |
+| `usb_hub` | `usb_hub_ulpi` | VID=16'h1209, PID=16'h0001 | ECP5 45F | 1 x DCCA, 942 x LUT4, 2 x TRELLIS_DPR16X4, 324 x TRELLIS_FF, 40 x TRELLIS_IO | 10 |
+| `usb_proxy` | `usb_hub_proxy_ulpi` | VID=16'h1209, PID=16'h0001 | LUT4 | 209 x dff, 3051 x lut, 1 x memory 2x8, 1 x memory 64x8, 2 x memrd, 2 x memwr | 11 |
+| `usb_proxy` | `usb_hub_proxy_ulpi` | VID=16'h1209, PID=16'h0001 | LUT6 | 209 x dff, 2602 x lut, 1 x memory 2x8, 1 x memory 64x8, 2 x memrd, 2 x memwr | 11 |
+| `usb_proxy` | `usb_hub_proxy_ulpi` | VID=16'h1209, PID=16'h0001 | iCE40 HX1K | 190 x SB_CARRY, 528 x SB_DFFE, 870 x SB_DFFER, 91 x SB_DFFES, 35 x SB_DFFR, 1 x SB_GB, 85 x SB_IO, 4051 x SB_LUT4 | 10 |
+| `usb_proxy` | `usb_hub_proxy_ulpi` | VID=16'h1209, PID=16'h0001 | ECP5 45F | 1 x DCCA, 3084 x LUT4, 10 x TRELLIS_DPR16X4, 996 x TRELLIS_FF, 85 x TRELLIS_IO | 11 |
 <!-- end footprints -->
 
 ### Seven things writing these blocks found
@@ -2066,16 +2138,21 @@ length both transmitters took, and what it cost is
 [measured on a part](#what-the-packet-size-is-worth-measured-and-not-calculated)
 below rather than reasoned about.
 
-**The class layer has two blocks in it.** `usb_cdc_acm` is a serial port and
-`usb_hub` is a hub, and both bind to a driver the operating system already
-ships. **What `usb_hub` is half of is the thing that is not here**: it is a
-hub's control endpoint, and a hub that forwards packets is a **transaction
-proxy** rather than a repeater, for the reason its own README's §2 gives — a
-ULPI transceiver's floor is about 24 bit times one way and a hub is allowed
-about 4, so the two buses have to be decoupled and the host's side has to NAK
-until the answer is there. That is the largest single piece of USB work left in
-this library and it is what `ip/usb_host_ulpi` and `ip/usb_hub` were both built
-towards.
+**The class layer has two blocks in it and the proxy is above them.**
+`usb_cdc_acm` is a serial port and `usb_hub` is a hub, and both bind to a driver
+the operating system already ships. `usb_hub` is a hub's **control endpoint**,
+and the half that forwards packets is `usb_proxy` — a **transaction proxy**
+rather than a repeater, for the reason that block's README §3 gives: a ULPI
+transceiver's floor is about 24 bit times one way and a hub is allowed about 4,
+so the two buses are decoupled and the upstream side NAKs until the answer is
+there. That was the largest single piece of USB work left in this library and it
+is what `ip/usb_host_ulpi` and `ip/usb_hub` were both built towards.
+
+What is **still** not here, above the proxy, is isochronous transport through it:
+the downstream SOF comes from `usb_host_sie`'s own free-running counter and the
+PC's frame number is not carried across, so a device that times anything from the
+frame sees a different one on each side. Control, bulk and interrupt transfers do
+not depend on it, which is what USB 2.0 §5.6 to §5.8 make the difference.
 
 **A human interface
 device is what is not here either**, and it is now a smaller job than it was: a HID

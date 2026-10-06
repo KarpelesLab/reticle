@@ -12,10 +12,16 @@
 # through a ULPI transceiver the floor is roughly twenty-four one way, so a
 # transparent repeater cannot meet USB's turnaround at all. What is behind
 # this block's port instead is a second USB controller — `ip/usb_host_ulpi`
-# — and joining the two conversations is a transaction proxy that does not
-# exist yet. So a host finds a hub, finds something on its port, resets it,
-# and gets no answer from the device it believes is there. README.md §2 is
-# the timing argument and §6 is the kernel log of that outcome.
+# — and joining the two conversations is **`ip/usb_proxy`**, a transaction
+# proxy with NAK as the escape hatch. On its own, this block finds itself a
+# host that resets its port and gets no answer from the device it believes is
+# there; README.md §2 is the timing argument and §8 is the kernel log of that
+# outcome.
+#
+# `port_reset` and `port_reset_done` are the one thing the proxy needs from
+# this half: a reset that reaches the real device. Tie `port_reset_done` high
+# for a design with nothing downstream and the reset is over in the cycle it
+# is asked for, which is what this block did before the proxy existed.
 #
 # `top` names the ULPI wrapper because that is the one that has run on a
 # board; `usb_hub_fs` is the same class layer on a board whose D+ / D- reach
@@ -82,3 +88,4 @@ port port_power out
 port port_enabled out
 port port_suspended out
 port port_reset out
+port port_reset_done in

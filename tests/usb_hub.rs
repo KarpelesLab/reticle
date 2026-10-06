@@ -32,9 +32,9 @@
 //!    0 over usbfs: the device descriptor's class triple, the whole
 //!    twenty-five byte configuration descriptor, the nine bytes of the hub
 //!    descriptor of USB 2.0 §11.23.2.1, and the two bytes of the **standard**
-//!    GET_STATUS that `ip/usb_hub/README.md` §7 is about — the one request
-//!    endpoint 0 does not implement and Linux's `hub_configure` treats a
-//!    failure of as fatal.
+//!    GET_STATUS that `ip/usb_hub/README.md` §7 is about — the request Linux's
+//!    `hub_configure` treats a failure of as fatal, which this class claimed on
+//!    the hook for one round and which endpoint 0 implements now.
 //! 3. **The port reports a device, loses it and reports it again.** This is
 //!    the on-the-part half of the status-change assertion, done with the three
 //!    class requests a host uses: GetPortStatus reads a connection,
@@ -402,12 +402,16 @@ fn a_usb_hub_this_compiler_built_is_bound_by_the_kernels_own_hub_driver() {
     assert_eq!(n, 4, "wHubStatus and wHubChange");
     assert_eq!(hub_status, [0, 0, 0, 0], "no local supply, no over-current");
 
-    // The **standard** GET_STATUS of USB 2.0 §9.4.5, device recipient, which
-    // `usb_ctrl_ep` does not implement and `usb_hub_req` claims on the class
-    // hook. `ip/usb_hub/README.md` §7 is why a class block answers a standard
-    // request and what the right fix is; Linux's `hub_configure` sends it
-    // during hub probe and takes its failure path if it does not complete, so
-    // a stall here is a hub that does not bind.
+    // The **standard** GET_STATUS of USB 2.0 §9.4.5, device recipient. Linux's
+    // `hub_configure` sends it during hub probe and takes its failure path if it
+    // does not complete, so a stall here is a hub that does not bind.
+    //
+    // `usb_hub_req` claimed it on the class hook for one round because
+    // `usb_ctrl_ep` did not implement it; `ip/usb_hub/README.md` §7 has that
+    // account and the fix, which has been made. **This assertion does not change
+    // either way**, and that is the point of it: the two bytes are the same
+    // whichever layer produces them, so what it checks is that moving the
+    // request did not lose it.
     let mut dev_status = [0xFFu8; 2];
     let n = handle
         .control_read(0x80, 0x00, 0, 0, &mut dev_status, TIMEOUT)
