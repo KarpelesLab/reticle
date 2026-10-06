@@ -46,6 +46,20 @@
 //! here would be a second copy of a table [`super`] checks against the
 //! tile type's own wires, which is the difference this header is about.
 //!
+//! A **fourth** fact has joined them and it is the first one that goes the
+//! other way: a **block RAM**'s pins are not written down at all.
+//! [`super::bram_pins`] knows only that `ADA0` is `p0_addr0`, and *which
+//! wire each pin reaches is read out of the EBR tile's own `.fixed_conn`
+//! records*: `JADA0_EBR <- JC4` says the first address pin of port A is the
+//! interconnect's `JC4`, and `JF0 <- JDOA0_EBR` says the first read-data
+//! pin drives `JF0`. So a `DP16KD`'s 108 pins cost one table of names and
+//! no table of wires, which is what the paragraph above wishes the slice's
+//! were. What is *not* derivable there is the other half: that the `p0_`
+//! and `p1_` prefixes of those roles come from the order
+//! `src/fpga/devices/ecp5.dev` lists a `bram` line's `port rw` entries, and
+//! that the B side is listed first on purpose. [`super::BRAM_PORTS`] says
+//! why.
+//!
 //! Two consequences, and both matter:
 //!
 //! - **Nothing in this module has been checked against a part.** The tile

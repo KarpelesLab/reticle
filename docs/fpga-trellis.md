@@ -63,8 +63,8 @@ bitstreams, at the absolute frame positions it computes, by
 `what_lattices_own_packer_writes_for_a_distributed_ram`'s header had
 already recorded from a completely different route, the per-tile field
 decoder. A wrong tile rule would not produce the same numbers, because
-four of each block's five mode bits are in a tile that is not the block's
-own.
+**at least** four of each block's five mode bits are in a tile that is not
+the block's own, and for half of them it is all five.
 
 **One correction to this file's record.** That header calls all 53 of them
 `DP16KD`. They are not: **two are `PDPW16KD`**, the pseudo dual-port mode
@@ -215,6 +215,14 @@ So either the overlap is not what this reading says, or those designs rely
 on something this model does not express. This flow builds no `PDPW16KD`,
 refusing is the conservative direction, and the experiment that would
 settle it is named below.
+
+**That refusal has not been shown failing**, which by this file's own
+standard makes it weaker than the checks around it: no test builds an
+18-bit block beside another, because nothing this flow maps chooses the
+18-bit mode at a depth where two blocks land two columns apart. A green run
+of designs that do not collide proves nothing about whether anything is
+looking, and the experiment below is also what would let the check be
+exercised.
 
 The clock is the other control wire, and it needed a fix at each end.
 `configure_bram`'s companion check is `clock_network_use`, which now asks

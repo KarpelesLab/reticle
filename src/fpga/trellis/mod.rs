@@ -2529,7 +2529,7 @@ pub const BRAM_DATA_PINS: u32 = 18;
 /// The letter Lattice gives each of a `DP16KD`'s two ports, in the order
 /// `src/fpga/devices/ecp5.dev` lists its `port rw` lines.
 ///
-/// That order is what [`super::place`]'s `describe` turns into the `p0_`
+/// That order is what [`mod@super::place`]'s `describe` turns into the `p0_`
 /// and `p1_` prefixes of a block RAM's pin roles, so it has to agree with
 /// the device file and a test asserts that it does.
 ///
@@ -2657,7 +2657,7 @@ pub const BRAM_SPAN: u32 = 3;
 /// `ADA0` is `p0_addr0`.
 ///
 /// The roles are `p<port>_<role>` because that is what
-/// [`super::place`]'s `describe` builds from a `bram` line's `port rw`
+/// [`mod@super::place`]'s `describe` builds from a `bram` line's `port rw`
 /// entries — both ports call their clock `clk`, so the port index has to
 /// be in the role.
 ///
