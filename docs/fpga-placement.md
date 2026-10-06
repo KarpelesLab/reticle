@@ -153,6 +153,14 @@ this that is not in the literature:
   it, immediately and on its own, if the acceptance rate asks: that is
   what `D_limit_new = D_limit_old (1 − 0.44 + R_accept)` does when
   `R_accept > 0.44`.
+- **The probe that produces the sample undoes every move it makes**, and
+  draws from the window the walk will start in. The paper's probe accepts
+  everything, which is right when the placement it is walking away from
+  is random and so is everything it walks to; here it would measure the
+  neighbourhood of a placement that will never be visited. The sample
+  size is the paper's `N_blocks` rather than the hundred this placer
+  used, which on a four-thousand-cell design was a hundred draws from the
+  distribution whose own spread was the thing being estimated.
 
 Both of the paper's rules are still reachable — `--place-hot-start`,
 `--place-start-window 0`, `--place-wide-moves`, `--place-fixed-cooling
