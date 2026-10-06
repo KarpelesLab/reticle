@@ -99,6 +99,12 @@ use reticle::synth::{SynthOptions, run as synth_run};
 #[path = "mos6502_asm/mod.rs"]
 mod asm;
 
+/// The walk that finds the IP library's manifests, shared with the other
+/// example tests. The project's `library` line is a path and the index
+/// over it is what places a `depends` line that names no `path`.
+#[path = "library_walk/mod.rs"]
+mod library_walk;
+
 /// The raster decoder that turns a video signal's waveform into pixels,
 /// shared with `tests/apple2.rs`. Only the raster half of it is used
 /// here — `examples/nes` draws a frame buffer and not a page of text —
@@ -387,10 +393,12 @@ fn build(dir: &Path, adjust: impl FnOnce(&mut Project)) -> Built {
     assert!(!diags.has_errors(), "{}", diags.render(&map));
     adjust(&mut project);
 
+    let index = library_walk::index(dir, &project);
     let root = dir.to_path_buf();
     let mut provider = PathProvider::new(".", move |path: &str| {
         fs::read_to_string(root.join(path)).ok()
-    });
+    })
+    .with_library(index);
     let mut resolved = ip::resolve(map, &project, &mut provider, &mut diags);
     assert!(
         resolved.is_complete(),

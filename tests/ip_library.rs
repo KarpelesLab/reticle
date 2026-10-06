@@ -143,6 +143,11 @@ use reticle::timing::sta::TimingSpec;
 use reticle::verilog::format::{FormatOptions, format_source};
 use reticle::verilog::{Dialect, ElabOptions, NoIncludes, elaborate, parse_source};
 
+/// The walk that finds this library's manifests, shared with the example
+/// tests that resolve a project against it.
+#[path = "library_walk/mod.rs"]
+mod library_walk;
+
 // ---------------------------------------------------------------------------
 // The catalogue
 // ---------------------------------------------------------------------------
@@ -18146,47 +18151,15 @@ fn usb_descriptors_survive_lookup_table_mapping() {
 /// Every `reticle.ip` under `ip/`, as `ip::library` wants them: paths
 /// relative to a project that declares `library <root>`, text as read.
 ///
-/// The same walk `reticle build` performs (`library_manifests` in
-/// `src/bin/reticle/main.rs`): a directory holding a manifest is a
-/// package and is not descended into, every level is sorted, and nothing
-/// hidden is entered. It is here rather than in the library because
-/// walking a directory is I/O.
+/// The walk itself is `tests/library_walk`, shared with the example
+/// tests, and it is the walk `reticle build` performs
+/// (`library_manifests` in `src/bin/reticle/main.rs`): a directory
+/// holding a manifest is a package and is not descended into, every
+/// level is sorted, and nothing hidden is entered. It is in a test and
+/// not in the library because walking a directory is I/O.
 fn walk_library(root: &str) -> Vec<(String, String)> {
-    fn descend(at: &Path, prefix: &str, out: &mut Vec<(String, String)>) {
-        let manifest = at.join(reticle::ip::library::MANIFEST_NAME);
-        if manifest.is_file() {
-            let text = fs::read_to_string(&manifest)
-                .unwrap_or_else(|e| panic!("{}: {e}", manifest.display()));
-            out.push((
-                reticle::ip::library::entry_path(prefix, reticle::ip::library::MANIFEST_NAME),
-                text,
-            ));
-            return;
-        }
-        let mut names: Vec<String> = fs::read_dir(at)
-            .unwrap_or_else(|e| panic!("{}: {e}", at.display()))
-            .filter_map(|entry| {
-                let entry = entry.ok()?;
-                let name = entry.file_name().to_string_lossy().into_owned();
-                (entry.file_type().ok()?.is_dir() && !name.starts_with('.')).then_some(name)
-            })
-            .collect();
-        names.sort();
-        for name in names {
-            descend(
-                &at.join(&name),
-                &reticle::ip::library::entry_path(prefix, &name),
-                out,
-            );
-        }
-    }
-
-    let mut out = Vec::new();
-    descend(&ip_dir(), root, &mut out);
-    out.sort();
-    out
+    library_walk::manifests(&ip_dir(), root)
 }
-
 /// The real library, indexed by name.
 ///
 /// This is the test that fails if a reorganisation of `ip/` ever copies
