@@ -279,11 +279,17 @@ module usb_proxy_relay #(
 
     // TWO PULSES, EACH ANSWERING A QUESTION A CONSOLE CANNOT OTHERWISE ASK
     //
-    // `setup_seen` is one cycle when an upstream SETUP has been taken and a
+    // `setup_seen` is one cycle when an **upstream** SETUP has been taken and a
     // downstream one started with its eight bytes. Counted on a board, it says
     // whether the PC is **enumerating** the device behind the port rather than
     // merely reaching it: a kernel enumerating a device sends eight or so and
     // stops.
+    //
+    // A downstream SETUP offered **again** — the arm below that re-offers one
+    // whose first attempt did not land — does **not** pulse it, because what is
+    // being counted is what the PC sent and a retry is not a second request.
+    // `usb_proxy_enumerates_the_device_behind_the_port` asserts exactly six for
+    // the PC's six control transfers, which is what pins that.
     //
     // `data_fwd` is one cycle when a transaction that is **not** part of a
     // control transfer is handed to the engine — a bulk or an interrupt one.
@@ -429,6 +435,11 @@ module usb_proxy_relay #(
     reg [15:0] dn_tog_out;
 
     // The answer being sent upstream.
+    // `trn_busy` a cycle ago, for the rising edge that says the engine has taken
+    // **this** job and not the one before it.
+    reg        busy_q;
+    wire       trn_taken = trn_busy & ~busy_q;
+
     reg        pending;
     reg [1:0]  ans;
     reg        ans_tog;
@@ -514,12 +525,45 @@ module usb_proxy_relay #(
                                           : rd_byte;
 
     // -----------------------------------------------------------------
-    // What the engine is asked for.
+    // What the engine is asked for, and the two things a preempting SETUP
+    // would otherwise break.
     // -----------------------------------------------------------------
     // `trn_start` is a level and not a pulse, which is the contract
-    // `usb_host_sie` states: hold it until `trn_busy`. `J_WANT` is exactly
-    // that level.
-    assign trn_start  = (j_state == J_WANT) & dn_ready;
+    // `usb_host_sie` states: hold it until `trn_busy`. `J_WANT` is exactly that
+    // level — **and it is gated on the engine being idle**, which is not the same
+    // thing and is here because of a defect.
+    //
+    // **HIGH** (USB 2.0 §8.5.3), and it is not optional: a SETUP starts a new
+    // control transfer whatever the last one was doing, because the host has moved
+    // on. So the one job can be replaced while the **engine** is still running the
+    // job it replaced, and two things followed from that.
+    //
+    // The first: with `trn_start` ungated and `trn_busy` read as a level, the new
+    // job saw the **old** transaction's `trn_busy` and called itself running — and
+    // then read the old transaction's `trn_done` and `trn_status` as its own
+    // answer. An old transaction that was acknowledged would have set
+    // `ct_setup_ok` for a SETUP the device never saw, and the data stage after it
+    // would have gone to a device still in the previous transfer. So the request
+    // waits for the engine, and `trn_taken` is the engine **taking** it rather
+    // than the engine being busy.
+    //
+    // The second is one cycle wide: a `trn_done` for the abandoned transaction
+    // arriving in the **same cycle** as the SETUP's data packet. Verilog's last
+    // assignment wins and the `trn_done` arm is written after the packet arm, so
+    // it would overwrite the job the SETUP had just built — with `j_resp` of
+    // `A_DATA` and `j_kind` of `K_SETUP`, which is a job no token matches and
+    // which `job_free` will not drop, so the transfer would stall until the host
+    // gave up and sent another SETUP. `job_replaced` is the guard, and a SETUP's
+    // data packet is the **only** thing that replaces a running job: every other
+    // arm schedules on `job_free`, which excludes `J_RUN`.
+    //
+    // **No test reaches either.** Making one would need a SETUP to land inside the
+    // few hundred clocks a downstream transaction takes, which is the host model's
+    // own packet timing;
+    // `usb_proxy_takes_a_setup_that_preempts_a_transaction_in_flight` reaches the
+    // preemption and says in its own comment why it would pass against the broken
+    // version too.
+    assign trn_start  = (j_state == J_WANT) & dn_ready & ~trn_busy;
     assign trn_kind   = j_kind;
     assign trn_addr   = j_addr;
     assign trn_endp   = j_endp;
@@ -548,10 +592,18 @@ module usb_proxy_relay #(
 
     // The toggle an endpoint's next packet carries in each direction, with a
     // status stage's forced to DATA1 (§8.5.3).
-    wire up_in_tog   = (ct_tok_in  & stat_in)  ? 1'b1 : up_tog_in[tok_endp];
+    //
+    // Three and not four: the toggle an **upstream IN** packet carries is decided
+    // when the downstream answer lands rather than when the token arrives — the
+    // same expression over `j_endp` and `j_stat`, in the `ST_DATA` arm below —
+    // because by then it is known whether there is a packet to send at all.
     wire up_out_exp  = (ct_tok_out & stat_out) ? 1'b1 : up_tog_out[endp_q];
     wire dn_in_exp   = (ct_tok_in  & stat_in)  ? 1'b1 : dn_tog_in[tok_endp];
     wire dn_out_tog  = (ct_tok_out & stat_out) ? 1'b1 : dn_tog_out[endp_q];
+
+    // A SETUP's data packet, which is the one thing that replaces a job the engine
+    // is still running. "What the engine is asked for" above says what it guards.
+    wire job_replaced = pkt & pkt_is_data & dat_ok & (expect == X_SETUP);
 
     // The PC's OUT packet carries the toggle we are expecting, or it is a copy
     // of one we have already acknowledged and whose acknowledgement the PC did
@@ -604,6 +656,7 @@ module usb_proxy_relay #(
             ans_len     <= 0;
             turn        <= 7'd0;
             await_ack   <= 1'b0;
+            busy_q      <= 1'b0;
             wp          <= 0;
             take        <= 1'b0;
             tx_start    <= 1'b0;
@@ -611,6 +664,7 @@ module usb_proxy_relay #(
             tx_start     <= 1'b0;
             setup_seen_q <= 1'b0;
             data_fwd_q   <= 1'b0;
+            busy_q       <= trn_busy;
 
             // ----------------------------------------------------------
             // The buffer's one write port, and the two things that fill it.
@@ -851,9 +905,9 @@ module usb_proxy_relay #(
             // ----------------------------------------------------------
             // The downstream engine.
             // ----------------------------------------------------------
-            if (j_state == J_WANT && trn_busy) j_state <= J_RUN;
+            if (j_state == J_WANT && trn_taken) j_state <= J_RUN;
 
-            if (trn_done && j_state == J_RUN) begin
+            if (trn_done && j_state == J_RUN && !job_replaced) begin
                 if (trn_status == ST_ACK) begin
                     if (j_kind == K_SETUP) begin
                         // The device has the request. Its stages may go now.

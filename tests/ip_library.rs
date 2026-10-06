@@ -17290,6 +17290,77 @@ fn usb_proxy_forwards_nothing_until_the_host_has_reset_the_port() {
     host.assert_clean();
 }
 
+/// A SETUP that arrives while a downstream transaction is still running.
+///
+/// **HIGH** (USB 2.0 §8.5.3) and it is not optional: a SETUP starts a new
+/// control transfer whatever the last one was doing, because the host has moved
+/// on. So the relay's one job can be replaced while `usb_host_sie` is still
+/// running the job it replaced, and the two have to not be confused for each
+/// other.
+///
+/// The transaction in flight here is an IN to **endpoint 5**, which
+/// `usb_device_ulpi` has not got: `usb_bulk_ep` answers a token for another
+/// endpoint number with nothing at all, which is what a host must see from an
+/// endpoint that is not in the descriptors, so the engine spends its whole
+/// timeout and its retries on it. That is long enough for a SETUP to land well
+/// inside it, which `job` not being idle asserts rather than assumes.
+///
+/// What this would catch: a relay that hangs, loses the transfer, or answers the
+/// PC out of the abandoned job's buffer.
+///
+/// What it would **not** catch, and this is the honest part: the defect the fix
+/// in `usb_proxy_relay`'s "What the engine is asked for" is about. There, a new
+/// job read the **old** transaction's `trn_busy` as its own and then the old
+/// transaction's status as its own answer — and the harmful case is the old
+/// status being an acknowledgement, which would set `ct_setup_ok` for a SETUP the
+/// device never saw. Reaching that needs the preempted transaction to be one that
+/// gets acknowledged *and* to complete inside the few hundred clocks between the
+/// PC's SETUP token and its next token, and both of those are the host model's own
+/// packet timing rather than anything a test can ask for. With a transaction that
+/// times out instead — which is what this one does — the defect produced a
+/// transfer that recovered on the host's next retry, so this test passes against
+/// the broken implementation too. It is here for the hang and the corruption, and
+/// that file's comment is where the rest of it is written down.
+#[test]
+fn usb_proxy_takes_a_setup_that_preempts_a_transaction_in_flight() {
+    let proxy = proxy_design();
+    let dev_design = ulpi_design();
+    let mut host = UsbHost::new(ProxyRig::new(&proxy, &dev_design, false), 0);
+
+    proxy_open_the_port(&mut host, 3);
+    proxy_enumerate_the_device(
+        &mut host,
+        9,
+        &expected_device_descriptor(0x1209, 0x0001),
+        &expected_configuration_descriptor(),
+        EP0_MAXPKT,
+    );
+
+    let before = host.pair.data_fwds;
+    assert_eq!(
+        host.bulk_in(9, 5),
+        UsbReply::Handshake(USB_NAK),
+        "an IN to an endpoint the device has not got is NAKed while the relay asks it"
+    );
+    assert_eq!(
+        host.pair.data_fwds,
+        before + 1,
+        "and the IN was forwarded, which is what makes a transaction be in flight"
+    );
+    assert_ne!(
+        host.port("job"),
+        0,
+        "the job is still running: the device behind the port answers an endpoint it \
+         has not got with silence, so the engine is spending its timeout"
+    );
+
+    // And now a whole control transfer, with that transaction still in flight.
+    let device = proxy_control_read(&mut host, 9, GET_DEVICE_DESCRIPTOR, EP0_MAXPKT)
+        .expect("a control transfer whose SETUP preempted a transaction in flight");
+    assert_eq!(device, expected_device_descriptor(0x1209, 0x0001));
+    host.assert_clean();
+}
+
 #[test]
 fn usb_proxy_is_one_clock_domain() {
     let kinds = crossings("usb_proxy", "usb_hub_proxy_ulpi", PROXY_TEST_PARAMS);

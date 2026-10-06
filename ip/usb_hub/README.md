@@ -637,8 +637,10 @@ catch a regression in them — the hub's own tests would have passed either way.
 **The round that built `ip/usb_proxy` made it**, because it had a board and
 `tests/usb_cdc_acm.rs` in front of it, which is what the report asked for; its §8
 carries the re-run. The cost is one flip-flop and about thirty lookup tables on
-every device in the library, and `class_req` is no longer raised for GET_STATUS at
-all, so this block **cannot** claim it even by accident.
+every device in the library, measured in the technology-independent netlist —
+`docs/ip-library.md` has that number and the larger one the ECP5 and iCE40 mappers
+turn it into — and `class_req` is no longer raised for GET_STATUS at all, so this
+block **cannot** claim it even by accident.
 
 GET_STATUS to an **interface** or an **endpoint** is still on the hook, and that
 is deliberate: those two are answerable only by something that knows which

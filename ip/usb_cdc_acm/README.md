@@ -646,7 +646,9 @@ Powered and `usb_ctrl_ep` derives it from bit 6 of the same `CFG_ATTR` the
 `bmAttributes` two lines above is written from, so **the two cannot be told
 different things**. That is the whole argument for putting a standard request in
 endpoint 0 rather than in a class, and it was worth one flip-flop and about
-thirty lookup tables on every device in this library.
+thirty lookup tables on every device in this library — in the
+technology-independent netlist; `docs/ip-library.md` carries that number and the
+larger one each technology mapper turns it into.
 
 All sixty-seven bytes, as the kernel cached them:
 

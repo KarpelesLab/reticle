@@ -815,7 +815,7 @@ one is the opposite of that by construction: §2.
 
 ## 10. What each test would and would not catch
 
-Seven tests of this block in `tests/ip_library.rs`, three that cover every block
+Eight tests of this block in `tests/ip_library.rs`, three that cover every block
 in the library and reach it with the rest, and one that needs a board.
 
 | Test | What it would catch | What it would not |
@@ -826,6 +826,7 @@ in the library and reach it with the rest, and one that needs a board.
 | `usb_proxy_moves_bytes_through_the_port` | a toggle wrong in either direction, a packet forwarded twice, a packet dropped, a length lost, and a buffer whose bytes come out in the wrong order — over four packets of four lengths including a one-byte short one and a full 64-byte one, through the device's own loopback, with the PC's two toggles asserted independently and asserted to come back to DATA0 after four | throughput, which is not asserted anywhere |
 | `usb_proxy_propagates_a_stall_from_the_device` | a proxy that swallowed a refusal, which is §7's whole subject; a STALL that is not sticky, where §8.5.3 wants one; and a STALL that outlives the transfer it belonged to, which would refuse everything after it. The STALL is a **real** one — a string descriptor the device behind the port has not got — and not a condition the test manufactures | a STALL from a **bulk** endpoint, because nothing in this library halts one |
 | `usb_proxy_forwards_nothing_until_the_host_has_reset_the_port` | a relay that claimed tokens before the PC had enabled the port, which would answer for a device whose address is anybody's guess; a NAK where silence belongs, which would claim an endpoint; and a port reset that moved a bit in the hub without reaching the transceiver — asserted by the device's **own** `address` output going back to 0 on a second reset | whether a kernel resets a port in that order |
+| `usb_proxy_takes_a_setup_that_preempts_a_transaction_in_flight` | a relay that hangs, loses the transfer, or answers the PC out of an abandoned job's buffer when a SETUP arrives while a downstream transaction is still running — which USB 2.0 §8.5.3 makes compulsory, since a SETUP starts a new transfer whatever the last one was doing | **the defect it accompanies**, and that is said in its own comment and in `usb_proxy_relay`'s "What the engine is asked for": the harmful case needs the preempted transaction to be one that is *acknowledged* and to finish inside the few hundred clocks between two of the host's packets, and both of those are the host model's own timing. With a transaction that times out — which is what this one arranges — the broken version recovered on the host's next retry, so this test passes against it |
 | `usb_proxy_is_one_clock_domain` | a crossing added anywhere in a design with two ULPI buses in it | — |
 | `every_block_maps_to_the_logic_it_was_mapped_from` | this block's LUT4 and LUT6 mapping differing from the logic it came from, **proved** rather than sampled | anything after mapping: placement, routing, the bitstream |
 | `footprints_match_the_documentation` | the block suddenly costing twice as much | — |

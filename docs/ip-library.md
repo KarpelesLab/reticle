@@ -917,9 +917,15 @@ the CDC tests in front of it, which is exactly what the report asked for.
 GET_STATUS to the **device** is endpoint 0's now: two bytes whose bit 0 is bit 6
 of `CFG_ATTR`, the same byte the configuration descriptor's `bmAttributes` is
 written from, and whose bit 1 is a Remote Wakeup nothing in this library can
-enable. It costs **one flip-flop and about thirty lookup tables** on every device
-in the library — `usb_device_fs` on the ECP5 went from 853 LUT4 and 355
-flip-flops to 886 and 364 — and no class has to think about it again.
+enable. **What it costs is one flip-flop and about thirty lookup tables** in the
+technology-independent netlist, on every device in the library: `usb_device_fs`
+went from 88 flip-flops and 804 LUT4 cells to 89 and 835, which is the `stat_sel`
+register and the multiplexer the two bytes come out of. After ECP5 mapping the
+same change reads 853 LUT4 and 355 flip-flops against 886 and 364 — **thirty-three
+lookup tables and nine flip-flops**, and the iCE40 flow reads the same nine. Why a
+mapper turns one more generic flip-flop into nine was not chased down; both
+numbers are in the table below and this sentence is the measurement rather than
+the arithmetic. And no class has to think about the request again.
 
 GET_STATUS to an **interface** or an **endpoint** is still on the hook, and that
 is deliberate rather than unfinished: §9.4.5 makes an interface's two bytes
@@ -966,7 +972,7 @@ reported with no edge detector and no one-shot anywhere.
 that it is **two USB controllers and the thing between them**: a peripheral Link
 and a device core on one ULPI transceiver, a host Link and a transaction engine
 on another, a second packet decoder, and a 64-byte relay buffer. On the ECP5 that
-is 3090 LUT4, 998 flip-flops and 10 `TRELLIS_DPR16X4` against `usb_hub_ulpi`'s
+is 3090 LUT4, 999 flip-flops and 10 `TRELLIS_DPR16X4` against `usb_hub_ulpi`'s
 942, 324 and 2 — so **forwarding costs about 2150 lookup tables more than
 reporting a port**, and a design that only wants to be a hub should be one.
 
@@ -1469,16 +1475,20 @@ is the part that matters:
   because the device's harness hands the model `None` while the device
   transmits.
 
-  It has **not run on a board**, and that is not for want of trying:
-  [`ip/usb_host_ulpi/README.md`](../ip/usb_host_ulpi/README.md) §9 has
-  the whole of why, which is that the Cynthion's TARGET transceiver is on
-  the left edge of the die and this backend describes the top and right
-  edges only. The design places, routes and writes a bitstream all 128632
-  of whose set bits decode with nothing unexplained; what it cannot do is
-  put a pad on the right ball. One consequence is not about pins at all:
-  the three bidirectional VBUS switches onto the TARGET A node are on that
-  same edge, so **no design this flow can build can put power on that
-  socket**.
+  **It has run on a board**, and this paragraph used to say it had not. The
+  reason it could not was that the Cynthion's TARGET transceiver is on the
+  **left** edge of the die and this backend described the top and right
+  edges only — so a design on those balls was refused by name, and the three
+  bidirectional VBUS switches onto the TARGET A node are on that same edge,
+  which meant no design this flow could build could put power on that
+  socket. All four edges are described now;
+  [`docs/fpga-trellis.md`](fpga-trellis.md) has how the left one was
+  established and why a mirror of the right edge would have been wrong.
+  [`ip/usb_host_ulpi/README.md`](../ip/usb_host_ulpi/README.md) §9 is what
+  the part then said: nine registers of a real USB3343 read over sixteen
+  left-edge balls, with `0424` — Microchip's vendor ID — among them. A
+  device in that socket has since been enumerated through that same
+  transceiver, which is `usb_proxy` below.
 
 - **`usb_cdc_acm`** — the **same host model again**, through both link
   layers and through the transceiver that reports LineState late, because a
@@ -1513,6 +1523,47 @@ is the part that matters:
   [`ip/usb_cdc_acm/README.md`](../ip/usb_cdc_acm/README.md) §5 is what a host
   said, quoted — including the two faults that were invisible in simulation
   and what each of them was.
+
+- **`usb_proxy`** — **three** ends on **two** pairs, which no other test here
+  needs: a host model driving the proxy's upstream transceiver, the proxy's own
+  downstream transceiver, and a whole second design — `usb_device_ulpi` — behind
+  a third. The downstream pair is resolved the way `usb_host_ulpi`'s one is and
+  the upstream pair by the host model, and `ProxyRig` in `tests/ip_library.rs` is
+  the harness for it. Eight tests, and the shape of each is a **PC enumerating a
+  device it can only reach through our hub**: the hub enumerated and its port
+  powered and reset, and then the device's own eighteen-byte device descriptor
+  and thirty-two-byte configuration descriptor read **through** the proxy and
+  compared with the same `expected_*` functions the device's own tests use, the
+  address the host model chose read back off the **device's** own `address`
+  output, and its `configured` output after the host model's SET_CONFIGURATION.
+
+  Three of the eight reach what the first cannot. One runs the whole of it
+  through three transceiver models that each hear their own transmission and each
+  report `LineState` a clock late, which matters more here than anywhere else
+  because `LineState` is what decides when the downstream port is a port at all.
+  One runs it against a device built with `MAXPKT0 = 8` — the smallest USB 2.0
+  §5.5.3 allows — so a data stage is three and four packets instead of one, and
+  the four-packet one is **exactly** the length asked for, with no short packet to
+  stop on. And one moves bytes: four bulk packets of four lengths, including a
+  one-byte short one and a full sixty-four, through the device's own loopback and
+  back, with **eight downstream transactions counted** — one per packet each way,
+  which is the number that distinguishes bytes the device sent from bytes a relay
+  held and handed over twice.
+
+  The other four are the properties that are easy to get silently wrong: a STALL
+  the device really sent — a string descriptor it has not got — arriving at the
+  host as a STALL and staying sticky until the next SETUP; a port the host has not
+  reset forwarding **nothing at all**, not even a NAK, and a second reset putting
+  the device's own address back to 0; a SETUP preempting a transaction that is
+  still running, which USB 2.0 §8.5.3 makes compulsory and which that test's own
+  comment says it would **not** have caught the defect it accompanies; and one
+  clock domain across a design with two ULPI buses in it.
+
+  What none of it could reach is whether a **kernel** enumerates the device, and
+  [`ip/usb_proxy/README.md`](../ip/usb_proxy/README.md) §8 is that: the same
+  `dmesg` buffer with `unable to enumerate USB device` before and
+  `idVendor=1d50, idProduct=60e6` after. `tests/usb_proxy.rs` is the test, and its
+  load-bearing assertion is one boolean — a child of our hub exists in sysfs.
 
 ### What the processor actually executes
 
@@ -1884,10 +1935,10 @@ exactly what this table is for.
 | `usb_hub` | `usb_hub_ulpi` | VID=16'h1209, PID=16'h0001 | LUT6 | 87 x dff, 829 x lut, 1 x memory 2x8, 1 x memrd, 1 x memwr | 11 |
 | `usb_hub` | `usb_hub_ulpi` | VID=16'h1209, PID=16'h0001 | iCE40 HX1K | 74 x SB_CARRY, 16 x SB_DFFE, 278 x SB_DFFER, 37 x SB_DFFES, 9 x SB_DFFR, 1 x SB_GB, 40 x SB_IO, 939 x SB_LUT4 | 10 |
 | `usb_hub` | `usb_hub_ulpi` | VID=16'h1209, PID=16'h0001 | ECP5 45F | 1 x DCCA, 942 x LUT4, 2 x TRELLIS_DPR16X4, 324 x TRELLIS_FF, 40 x TRELLIS_IO | 10 |
-| `usb_proxy` | `usb_hub_proxy_ulpi` | VID=16'h1209, PID=16'h0001 | LUT4 | 211 x dff, 3056 x lut, 1 x memory 2x8, 1 x memory 64x8, 2 x memrd, 2 x memwr | 11 |
-| `usb_proxy` | `usb_hub_proxy_ulpi` | VID=16'h1209, PID=16'h0001 | LUT6 | 211 x dff, 2615 x lut, 1 x memory 2x8, 1 x memory 64x8, 2 x memrd, 2 x memwr | 11 |
-| `usb_proxy` | `usb_hub_proxy_ulpi` | VID=16'h1209, PID=16'h0001 | iCE40 HX1K | 190 x SB_CARRY, 528 x SB_DFFE, 870 x SB_DFFER, 91 x SB_DFFES, 37 x SB_DFFR, 1 x SB_GB, 87 x SB_IO, 4056 x SB_LUT4 | 10 |
-| `usb_proxy` | `usb_hub_proxy_ulpi` | VID=16'h1209, PID=16'h0001 | ECP5 45F | 1 x DCCA, 3090 x LUT4, 10 x TRELLIS_DPR16X4, 998 x TRELLIS_FF, 87 x TRELLIS_IO | 11 |
+| `usb_proxy` | `usb_hub_proxy_ulpi` | VID=16'h1209, PID=16'h0001 | LUT4 | 212 x dff, 3056 x lut, 1 x memory 2x8, 1 x memory 64x8, 2 x memrd, 2 x memwr | 11 |
+| `usb_proxy` | `usb_hub_proxy_ulpi` | VID=16'h1209, PID=16'h0001 | LUT6 | 212 x dff, 2613 x lut, 1 x memory 2x8, 1 x memory 64x8, 2 x memrd, 2 x memwr | 11 |
+| `usb_proxy` | `usb_hub_proxy_ulpi` | VID=16'h1209, PID=16'h0001 | iCE40 HX1K | 190 x SB_CARRY, 528 x SB_DFFE, 870 x SB_DFFER, 91 x SB_DFFES, 38 x SB_DFFR, 1 x SB_GB, 87 x SB_IO, 4058 x SB_LUT4 | 10 |
+| `usb_proxy` | `usb_hub_proxy_ulpi` | VID=16'h1209, PID=16'h0001 | ECP5 45F | 1 x DCCA, 3090 x LUT4, 10 x TRELLIS_DPR16X4, 999 x TRELLIS_FF, 87 x TRELLIS_IO | 11 |
 <!-- end footprints -->
 
 ### Seven things writing these blocks found
