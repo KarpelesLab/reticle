@@ -182,6 +182,23 @@
 //   LED 5  **the PC addressed the device behind the port**
 //
 // LED 5 lit is this round's whole milestone, and the kernel log is the proof.
+//
+// ===================================================================
+// ELEVEN SIGNALS THIS DESIGN DOES NOT ROUTE, AND WHICH ELEVEN
+// ===================================================================
+//
+// `reticle fpga` reports `routed 4637 of 4648 signal(s)` for this design, and
+// the difference is **`dn_frame[10:0]`**: the downstream bus's frame number,
+// which `usb_hub_proxy_ulpi` brings out and this design leaves unconnected.
+// `Netlist::is_routable` requires a signal to have both a driver and a sink, and
+// a bus with eleven drivers and no sink has eleven signals with nothing to route
+// to.
+//
+// It is written down because the arithmetic looks alarming and is not, which is
+// the same note `ip/usb_host_ulpi/README.md` §9 makes about its own "4423 of
+// 4425" — there the two were pads driven by constants. The line that carries the
+// weight in either report is the last one: every set bit decodes back through
+// the database and the arcs they select are exactly the router's.
 module usb_proxy_target #(
     // How many clocks the cores are held in reset after configuration.
     parameter integer POR = 16,
