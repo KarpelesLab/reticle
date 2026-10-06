@@ -149,10 +149,10 @@
 // configured the device, and "is this design using the rate I set?" is the
 // question this file now exists to answer.
 //
-// Pins: testdata/fpga/cynthion/usb_cdc_uart.rcf. Sources:
-// ip/usb/usb_cdc_acm/rtl/*.v,
-// ip/usb/usb_device_ulpi/rtl/usb_ulpi_link.v,
-// ip/usb/usb_device_fs/rtl/usb_ctrl_ep.v and ip/bus/uart/rtl/*.v.
+// Pins: testdata/fpga/cynthion/usb_cdc_uart.rcf.
+// Sources: ip/usb/usb_cdc_acm/rtl/*.v,
+//          ip/usb/usb_device_ulpi/rtl/usb_ulpi_link.v,
+//          ip/usb/usb_device_fs/rtl/usb_ctrl_ep.v and ip/bus/uart/rtl/*.v.
 
 module usb_cdc_uart #(
     // How many clocks the core is held in reset after configuration. A

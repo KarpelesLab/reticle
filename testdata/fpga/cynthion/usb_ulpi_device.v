@@ -135,9 +135,9 @@
 //   * **`nxt` reaches the core** and `stp` comes from it; neither is a top
 //     level decision.
 //
-// Pins: testdata/fpga/cynthion/usb_ulpi_device.rcf. Sources:
-// ip/usb/usb_device_ulpi/rtl/*.v and
-// ip/usb/usb_device_fs/rtl/usb_ctrl_ep.v.
+// Pins: testdata/fpga/cynthion/usb_ulpi_device.rcf.
+// Sources: ip/usb/usb_device_ulpi/rtl/*.v
+//          and ip/usb/usb_device_fs/rtl/usb_ctrl_ep.v.
 
 module usb_ulpi_device #(
     // How many clocks the core is held in reset after configuration. A
