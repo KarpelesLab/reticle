@@ -1194,8 +1194,12 @@ fn a_block_ram_places_routes_and_every_bit_of_it_decodes() {
     );
     assert_eq!(
         bits.ones(),
-        1274,
-        "set bits in the whole image, pads, pipeline registers and routing included"
+        1259,
+        "set bits in the whole image, pads, pipeline registers and routing included. This was \
+         1274 when the block RAM was written, against the fixed-schedule annealer; the adaptive \
+         one places the same design better and the image needs fifteen fewer routing bits for \
+         it. The two assertions above are what say the blocks themselves did not change — two \
+         cells, and the same thirty-three bits of their own"
     );
     // Every clock pin of every block on a global network, which is what
     // `ecppack` does in all 53 of its blocks and what this flow refuses to
