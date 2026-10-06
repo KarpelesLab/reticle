@@ -59,6 +59,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 
+use super::library::{LibraryIndex, LibraryProblem};
 use super::manifest::{
     DepSource, Dependency, IpManifest, Language, Project, SourceEntry, Version, VersionReq,
 };
@@ -78,6 +79,9 @@ pub const NAME_MISMATCH: &str = "P0104";
 pub const UNSUPPORTED_SOURCE: &str = "P0105";
 /// Diagnostic code for a malformed line in a lock file.
 pub const LOCK_SYNTAX: &str = "P0301";
+/// Diagnostic code for a lock file that does not describe this
+/// resolution.
+pub const LOCK_STALE: &str = "P0302";
 
 /// How deep the graph may go before the resolver gives up.
 ///
@@ -148,11 +152,15 @@ pub trait SourceProvider {
 /// A [`SourceProvider`] over a directory layout, reading through a
 /// closure.
 ///
-/// Every dependency must be a `path` dependency; a `git` or `registry`
-/// dependency is reported as [`ResolveError::Unsupported`], because
-/// fetching one is network I/O and the library does none. A transitive
-/// dependency the project does not place is looked for in a directory
-/// named after the package, next to the project.
+/// A dependency is placed by its `path`, or — when it names no source —
+/// by its **name**, through the [`LibraryIndex`] a caller may attach
+/// with [`PathProvider::with_library`]. A `git` or `registry` dependency
+/// is reported as [`ResolveError::Unsupported`], because fetching one is
+/// network I/O and the library does none.
+///
+/// With no index attached, a dependency that names no source is looked
+/// for in a directory named after the package, next to the project,
+/// which is what this provider did before an index existed.
 ///
 /// ```
 /// use std::collections::BTreeMap;
@@ -176,6 +184,7 @@ pub trait SourceProvider {
 /// ```
 pub struct PathProvider<F> {
     root: String,
+    library: LibraryIndex,
     read: F,
 }
 
@@ -187,17 +196,53 @@ impl<F: FnMut(&str) -> Option<String>> PathProvider<F> {
     pub fn new(root: impl Into<String>, read: F) -> Self {
         PathProvider {
             root: root.into(),
+            library: LibraryIndex::new(),
             read,
         }
     }
 
-    /// The directory a dependency lives in.
-    fn directory(&self, dep: &Dependency) -> Result<String, ResolveError> {
+    /// The same provider, placing nameless dependencies through
+    /// `library`.
+    ///
+    /// The index's paths are relative to the same root this provider's
+    /// are, which is the directory holding the project manifest. Build
+    /// one from the project's `library` lines; the walk that finds the
+    /// manifests belongs to the caller, since it is I/O.
+    pub fn with_library(mut self, library: LibraryIndex) -> Self {
+        self.library = library;
+        self
+    }
+
+    /// The index this provider places names with.
+    pub fn library(&self) -> &LibraryIndex {
+        &self.library
+    }
+
+    /// Where a dependency lives, and what to record as its origin.
+    ///
+    /// The directory is joined onto this provider's root, ready for the
+    /// read closure; the origin is the path *as the project would write
+    /// it*, so a lock file reads the way a manifest does.
+    fn place(&self, dep: &Dependency) -> Result<(String, DepSource), ResolveError> {
         match &dep.source {
-            Some(DepSource::Path(dir)) => Ok(join(&self.root, dir)),
-            // Convention for a transitive dependency the project does not
-            // place: a sibling directory named after the package.
-            None => Ok(join(&self.root, &dep.name)),
+            Some(DepSource::Path(dir)) => Ok((join(&self.root, dir), DepSource::Path(dir.clone()))),
+            // No source: the library places it by name, if there is one.
+            None if !self.library.is_empty() => match self.library.lookup(&dep.name) {
+                Ok(entry) => Ok((
+                    join(&self.root, &entry.dir),
+                    DepSource::Library(entry.dir.clone()),
+                )),
+                Err(problem) => Err(ResolveError::Library {
+                    problem,
+                    span: dep.span,
+                }),
+            },
+            // And with no library, the older convention: a sibling
+            // directory named after the package.
+            None => Ok((
+                join(&self.root, &dep.name),
+                DepSource::Path(join(&self.root, &dep.name)),
+            )),
             Some(other) => Err(ResolveError::Unsupported {
                 name: dep.name.clone(),
                 source: other.clone(),
@@ -209,14 +254,11 @@ impl<F: FnMut(&str) -> Option<String>> PathProvider<F> {
 
 impl<F: FnMut(&str) -> Option<String>> SourceProvider for PathProvider<F> {
     fn fetch(&mut self, dep: &Dependency) -> Result<ResolvedIp, ResolveError> {
-        let dir = self.directory(dep)?;
-        let manifest_path = join(&dir, "reticle.ip");
+        let (dir, origin) = self.place(dep)?;
+        let manifest_path = join(&dir, super::library::MANIFEST_NAME);
         match (self.read)(&manifest_path) {
             Some(manifest_text) => Ok(ResolvedIp {
-                origin: dep
-                    .source
-                    .clone()
-                    .unwrap_or_else(|| DepSource::Path(dir.clone())),
+                origin,
                 root: dir,
                 manifest_path,
                 manifest_text,
@@ -303,6 +345,14 @@ pub enum ResolveError {
         /// The `depends` line that asked for it.
         span: Span,
     },
+    /// The dependency names no source and the IP library could not
+    /// place its name.
+    Library {
+        /// Why the name could not be placed.
+        problem: LibraryProblem,
+        /// The `depends` line that asked for it.
+        span: Span,
+    },
     /// The dependency names a source this build cannot follow.
     Unsupported {
         /// The package name.
@@ -336,8 +386,10 @@ pub enum ResolveError {
         /// Each requirement, with the path through the graph that stated
         /// it, in the order they were found.
         requirements: Vec<Requirement>,
-        /// The versions that were available, ascending.
-        available: Vec<Version>,
+        /// The versions that were available, ascending, each with where
+        /// the version came from — which is the useful half when the
+        /// answer came from a library search the manifest cannot see.
+        available: Vec<(Version, DepSource)>,
     },
     /// The graph has a cycle.
     Cycle {
@@ -376,6 +428,7 @@ impl ResolveError {
                     .with_span(*span)
                     .with_note(format!("looked for {where_}"))
             }
+            ResolveError::Library { problem, span } => problem.diagnostic(*span),
             ResolveError::Unsupported { name, source, span } => Diagnostic::error(format!(
                 "cannot fetch `{name}` from {}",
                 source.describe()
@@ -420,7 +473,7 @@ impl ResolveError {
                         "available: {}",
                         available
                             .iter()
-                            .map(Version::to_string)
+                            .map(|(v, origin)| format!("{v} in {}", origin.describe()))
                             .collect::<Vec<_>>()
                             .join(", ")
                     )
@@ -694,7 +747,7 @@ impl LockFile {
                         lock_error(
                             diags,
                             &line,
-                            "an origin of `path <dir>`, `git <url> [rev <r>]` or `registry`",
+                            "an origin of `path <dir>`, `library <dir>`, `git <url> [rev <r>]` or `registry`",
                         );
                         continue;
                     };
@@ -724,6 +777,31 @@ impl LockFile {
             }
         }
         out
+    }
+
+    /// The diagnostic for a lock file that no longer describes the
+    /// resolution, or `None` when it still does.
+    ///
+    /// This is what makes a stale lock file an **error** rather than a
+    /// build that quietly used something else: `reticle build --locked`
+    /// resolves, compares, and refuses. Without `--locked` the lock file
+    /// is rewritten, which is the same decision Cargo makes.
+    ///
+    /// Every difference is a note, so a package that moved from one
+    /// directory to another — which is what a reorganised library looks
+    /// like from here — is named along with the two directories.
+    pub fn mismatch(&self, new: &LockFile, span: Span) -> Option<Diagnostic> {
+        let differences = self.differences(new);
+        if differences.is_empty() {
+            return None;
+        }
+        let mut d = Diagnostic::error("the lock file does not describe this resolution")
+            .with_code(LOCK_STALE)
+            .with_span(span);
+        for difference in differences {
+            d = d.with_note(difference);
+        }
+        Some(d.with_note("resolve again without `--locked` to write the new one"))
     }
 
     /// How `self` (an old lock file) and `new` (a fresh resolution)
@@ -774,6 +852,7 @@ fn parse_origin(words: &[super::text::Token]) -> Option<DepSource> {
     match words {
         [w] if w.is("registry") => Some(DepSource::Registry),
         [w, dir] if w.is("path") => Some(DepSource::Path(dir.as_str().to_owned())),
+        [w, dir] if w.is("library") => Some(DepSource::Library(dir.as_str().to_owned())),
         [w, url] if w.is("git") => Some(DepSource::Git {
             url: url.as_str().to_owned(),
             rev: None,
@@ -1060,12 +1139,15 @@ impl Walk<'_> {
         let names: Vec<String> = self.candidates.keys().cloned().collect();
         for name in names {
             let reqs = self.requirements.get(&name).cloned().unwrap_or_default();
-            let available: Vec<Version> = self.candidates[&name].keys().cloned().collect();
+            let available: Vec<(Version, DepSource)> = self.candidates[&name]
+                .iter()
+                .map(|(version, candidate)| (version.clone(), candidate.ip.origin.clone()))
+                .collect();
             let chosen = available
                 .iter()
                 .rev()
-                .find(|v| reqs.iter().all(|r| r.req.matches(v)))
-                .cloned();
+                .find(|(v, _)| reqs.iter().all(|r| r.req.matches(v)))
+                .map(|(v, _)| v.clone());
             match chosen {
                 Some(version) => {
                     out.insert(name, version);
@@ -1185,6 +1267,7 @@ fn build_lock(packages: &[Package], project: &Project) -> LockFile {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ip::LibraryIndex;
     use std::collections::BTreeMap as Map;
 
     /// A tiny in-memory filesystem, which is all a `PathProvider` needs.
@@ -1204,6 +1287,212 @@ mod tests {
         let resolved = Resolver::new(map).resolve(&project, &mut provider, &mut diags);
         let rendered = diags.render(resolved.source_map());
         (resolved, rendered)
+    }
+
+    /// Resolves `project_text` with an index over every `reticle.ip`
+    /// under its `library` roots.
+    ///
+    /// The filter over `fs` stands for the caller's directory walk: the
+    /// library performs no I/O, so this — and the CLI's `read_dir`
+    /// recursion — is the only thing that knows a library is a tree of
+    /// directories.
+    fn run_with_library(project_text: &str, fs: Map<String, String>) -> (Resolved, String) {
+        let mut map = SourceMap::new();
+        let file = map.add("reticle.proj", project_text).unwrap();
+        let mut diags = Diagnostics::new();
+        let project = Project::parse(project_text, file, &mut diags).expect("project parses");
+        let mut manifests: Vec<(String, String)> = Vec::new();
+        for root in &project.libraries {
+            let prefix = format!("{root}/");
+            for (path, text) in &fs {
+                if path.starts_with(&prefix) && path.ends_with(super::super::library::MANIFEST_NAME)
+                {
+                    manifests.push((path.clone(), text.clone()));
+                }
+            }
+        }
+        let index = LibraryIndex::from_manifests(project.libraries.clone(), manifests);
+        let mut provider =
+            PathProvider::new(".", |path: &str| fs.get(path).cloned()).with_library(index);
+        let resolved = Resolver::new(map).resolve(&project, &mut provider, &mut diags);
+        let rendered = diags.render(resolved.source_map());
+        (resolved, rendered)
+    }
+
+    /// The library's whole point: a dependency with no `path`, found by
+    /// name two directories down, and a lock file that says where.
+    #[test]
+    fn a_dependency_with_no_path_is_placed_by_name() {
+        let fs = files(&[
+            (
+                "ip/serial/uart/reticle.ip",
+                "name uart\nversion 1.2.0\n\nsource rtl/uart.v\n\ndepends fifo ^1.0.0\n",
+            ),
+            ("ip/serial/uart/rtl/uart.v", "module uart; endmodule\n"),
+            (
+                "ip/memory/fifo/reticle.ip",
+                "name fifo\nversion 1.0.4\n\nsource rtl/fifo.v\n",
+            ),
+            ("ip/memory/fifo/rtl/fifo.v", "module fifo; endmodule\n"),
+            ("rtl/top.v", "module top; endmodule\n"),
+        ]);
+        let (resolved, rendered) = run_with_library(
+            "name blinky\ntop top\n\nsource rtl/top.v\n\nlibrary ip\n\ndepends uart ^1.2.0\n",
+            fs,
+        );
+        assert_eq!(rendered, "");
+        assert!(resolved.is_complete());
+        // `fifo` is named by `uart` and by nobody else, and is still
+        // found: a transitive dependency goes through the library too.
+        let names: Vec<&str> = resolved.packages.iter().map(Package::name).collect();
+        assert_eq!(names, ["fifo", "uart"]);
+        assert!(resolved.package("uart").unwrap().sources[0].is_readable());
+        // The lock file records the directory the search answered with,
+        // marked as the library's answer rather than as a manifest's.
+        assert_eq!(
+            resolved.lock.package("uart").unwrap().origin,
+            DepSource::Library("ip/serial/uart".to_owned())
+        );
+        assert!(
+            resolved
+                .lock
+                .to_text()
+                .contains("package fifo 1.0.4 library ip/memory/fifo\n"),
+            "{}",
+            resolved.lock.to_text()
+        );
+    }
+
+    /// A `path` dependency is untouched by the library, even when the
+    /// library has a package of that name: the manifest is explicit and
+    /// explicit wins.
+    #[test]
+    fn a_path_dependency_ignores_the_library() {
+        let fs = files(&[
+            ("ip/uart/reticle.ip", "name uart\nversion 9.0.0\n"),
+            ("vendor/uart/reticle.ip", "name uart\nversion 1.0.0\n"),
+        ]);
+        let (resolved, rendered) = run_with_library(
+            "name blinky\n\nlibrary ip\n\ndepends uart 1.0.0 path vendor/uart\n",
+            fs,
+        );
+        assert_eq!(rendered, "");
+        assert_eq!(
+            resolved.package("uart").unwrap().version().to_string(),
+            "1.0.0"
+        );
+        assert_eq!(
+            resolved.lock.package("uart").unwrap().origin,
+            DepSource::Path("vendor/uart".to_owned())
+        );
+    }
+
+    #[test]
+    fn a_name_the_library_has_not_got_is_reported_with_the_nearest() {
+        let fs = files(&[("ip/uart/reticle.ip", "name uart\nversion 1.0.0\n")]);
+        let (resolved, rendered) =
+            run_with_library("name blinky\n\nlibrary ip\n\ndepends uarte ^1.0.0\n", fs);
+        assert!(!resolved.is_complete());
+        assert!(
+            rendered.contains("error[P0801]: the IP library has no package named `uarte`"),
+            "{rendered}"
+        );
+        assert!(
+            rendered.contains("searched 1 package under `ip`"),
+            "{rendered}"
+        );
+        assert!(
+            rendered.contains("there is a package named `uart`"),
+            "{rendered}"
+        );
+    }
+
+    #[test]
+    fn two_packages_of_one_name_name_both_manifests() {
+        let fs = files(&[
+            ("ip/old/uart/reticle.ip", "name uart\nversion 1.0.0\n"),
+            ("ip/serial/uart/reticle.ip", "name uart\nversion 1.0.0\n"),
+        ]);
+        let (resolved, rendered) =
+            run_with_library("name blinky\n\nlibrary ip\n\ndepends uart ^1.0.0\n", fs);
+        assert!(!resolved.is_complete());
+        assert!(
+            rendered.contains("error[P0802]: the IP library has 2 packages named `uart`"),
+            "{rendered}"
+        );
+        assert!(
+            rendered.contains("`ip/old/uart/reticle.ip` declares it"),
+            "{rendered}"
+        );
+        assert!(
+            rendered.contains("`ip/serial/uart/reticle.ip` declares it"),
+            "{rendered}"
+        );
+        // Nothing is locked: the name was never placed.
+        assert!(resolved.lock.package("uart").is_none());
+    }
+
+    /// The library found the name and the version is wrong, which is the
+    /// third of the three failures and the one that is *not* a library
+    /// error: the version machinery reports it, and now says which
+    /// directory the version it found lives in.
+    #[test]
+    fn a_version_the_library_cannot_satisfy_is_a_conflict() {
+        let fs = files(&[("ip/serial/uart/reticle.ip", "name uart\nversion 1.0.0\n")]);
+        let (resolved, rendered) =
+            run_with_library("name blinky\n\nlibrary ip\n\ndepends uart ^2.0.0\n", fs);
+        assert!(!resolved.is_complete());
+        assert!(
+            rendered.contains("error[P0102]: no version of `uart` satisfies every requirement"),
+            "{rendered}"
+        );
+        assert!(
+            rendered.contains("available: 1.0.0 in the library directory `ip/serial/uart`"),
+            "{rendered}"
+        );
+    }
+
+    /// A project with no `library` line resolves exactly as it did
+    /// before the index existed, including the sibling-directory
+    /// convention for a dependency nobody placed.
+    #[test]
+    fn with_no_library_the_old_convention_still_applies() {
+        let fs = files(&[("uart/reticle.ip", "name uart\nversion 1.0.0\n")]);
+        let (resolved, rendered) = run("name blinky\n\ndepends uart ^1.0.0\n", fs);
+        assert_eq!(rendered, "");
+        assert_eq!(
+            resolved.lock.package("uart").unwrap().origin,
+            DepSource::Path("uart".to_owned())
+        );
+    }
+
+    /// A lock file that no longer describes the resolution is an error
+    /// with the move spelled out, which is what `--locked` reports.
+    #[test]
+    fn a_stale_lock_file_names_what_moved() {
+        let fs = files(&[("ip/serial/uart/reticle.ip", "name uart\nversion 1.0.0\n")]);
+        let (resolved, _) =
+            run_with_library("name blinky\n\nlibrary ip\n\ndepends uart ^1.0.0\n", fs);
+        let mut map = SourceMap::new();
+        let old_text = "version 1\npackage uart 1.0.0 library ip/uart\n";
+        let file = map.add("reticle.lock", old_text).unwrap();
+        let mut diags = Diagnostics::new();
+        let old = LockFile::parse(old_text, file, &mut diags);
+        assert!(!diags.has_errors(), "{}", diags.render(&map));
+        let span = Span::new(file, 0, 0);
+        let diagnostic = old
+            .mismatch(&resolved.lock, span)
+            .expect("the lock file is stale");
+        assert_eq!(diagnostic.code, Some(LOCK_STALE));
+        assert!(
+            diagnostic.notes.iter().any(|n| n.contains(
+                "`uart` moves from the library directory `ip/uart` to the library directory `ip/serial/uart`"
+            )),
+            "{:?}",
+            diagnostic.notes
+        );
+        // And a lock file that still describes it is silence.
+        assert!(resolved.lock.mismatch(&resolved.lock, span).is_none());
     }
 
     #[test]

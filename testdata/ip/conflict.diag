@@ -16,5 +16,5 @@ error[P0102]: no version of `fifo_sync` satisfies every requirement
  9 | depends fifo_sync ^1.0.0 path ../../packages/fifo_sync
    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `conflicted` requires ^1.0.0
    |
-   = note: available: 1.0.4
+   = note: available: 1.0.4 in the directory `../../packages/fifo_sync`
 

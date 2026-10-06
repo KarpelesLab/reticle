@@ -149,6 +149,7 @@ pub mod blackbox;
 pub mod bus;
 pub mod interconnect;
 pub mod ipxact;
+pub mod library;
 pub mod manifest;
 pub mod registry;
 pub mod resolve;
@@ -161,6 +162,7 @@ pub use bus::{
 };
 pub use interconnect::{AddressRange, Crossbar, WishboneArbiter};
 pub use ipxact::{ImportOptions, ImportReport, ImportedIp, Standard, Vlnv};
+pub use library::{LibraryEntry, LibraryIndex, LibraryProblem};
 pub use manifest::{
     DepSource, Dependency, InterfaceDecl, IpManifest, Language, ParamDecl, ParamType, PortDecl,
     Project, SourceEntry, Version, VersionReq,

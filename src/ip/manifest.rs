@@ -557,6 +557,16 @@ pub enum DepSource {
     Registry,
     /// `path <dir>`: a directory, relative to the manifest.
     Path(String),
+    /// `library <dir>`: the directory a `library` search found the
+    /// package's name in.
+    ///
+    /// No `depends` line writes this: it is what the resolver *records*
+    /// when a dependency named no source and
+    /// [`super::library::LibraryIndex`] placed it, so a lock file says
+    /// which answer the search gave and
+    /// [`super::LockFile::differences`] can report that the answer has
+    /// changed.
+    Library(String),
     /// `git <url> [rev <r>]`: a checkout of a repository.
     Git {
         /// The repository URL.
@@ -572,6 +582,7 @@ impl DepSource {
         match self {
             DepSource::Registry => vec!["registry".to_owned()],
             DepSource::Path(dir) => vec!["path".to_owned(), dir.clone()],
+            DepSource::Library(dir) => vec!["library".to_owned(), dir.clone()],
             DepSource::Git { url, rev } => {
                 let mut out = vec!["git".to_owned(), url.clone()];
                 if let Some(rev) = rev {
@@ -588,6 +599,7 @@ impl DepSource {
         match self {
             DepSource::Registry => "the registry".to_owned(),
             DepSource::Path(dir) => format!("the directory `{dir}`"),
+            DepSource::Library(dir) => format!("the library directory `{dir}`"),
             DepSource::Git { url, rev: None } => format!("the repository `{url}`"),
             DepSource::Git {
                 url,
@@ -696,13 +708,14 @@ const IP_KEYS: [&str; 14] = [
 ];
 
 /// The keywords a project manifest accepts.
-const PROJECT_KEYS: [&str; 7] = [
+const PROJECT_KEYS: [&str; 8] = [
     "name",
     "top",
     "device",
     "source",
     "constraints",
     "testbench",
+    "library",
     "depends",
 ];
 
@@ -921,6 +934,16 @@ pub struct Project {
     pub constraints: Vec<String>,
     /// Testbenches.
     pub testbenches: Vec<String>,
+    /// The IP library roots to search a dependency's *name* in, in the
+    /// order written, each relative to the directory holding this
+    /// manifest.
+    ///
+    /// A `depends` line with no source is looked up by name in these,
+    /// which is what lets a project say `depends uart ^1.0.0` and not
+    /// care where `uart` sits inside the library. Empty means no search:
+    /// every dependency must then name its own source, exactly as before
+    /// this existed. See [`super::library::LibraryIndex`].
+    pub libraries: Vec<String>,
     /// The IP the project pulls in, each with where it comes from.
     pub depends: Vec<Dependency>,
     /// The span of the `top` line, for a diagnostic about the top.
@@ -939,6 +962,7 @@ impl Project {
             sources: Vec::new(),
             constraints: Vec::new(),
             testbenches: Vec::new(),
+            libraries: Vec::new(),
             depends: Vec::new(),
             top_span: None,
             span,
@@ -985,6 +1009,7 @@ impl Project {
                 }
                 "constraints" => p.push_word("constraints", &mut out.constraints),
                 "testbench" => p.push_word("testbench", &mut out.testbenches),
+                "library" => p.push_word("library", &mut out.libraries),
                 "depends" => {
                     if let Some(dep) = p.dependency(true) {
                         out.depends.push(dep);
@@ -1012,6 +1037,10 @@ impl Project {
         }
         for path in &self.testbenches {
             w.word("testbench", path);
+        }
+        w.group();
+        for path in &self.libraries {
+            w.word("library", path);
         }
         w.group();
         for dep in &self.depends {
