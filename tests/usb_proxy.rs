@@ -181,10 +181,11 @@ fn children(hub: &Path) -> Vec<PathBuf> {
         };
         // Only one level down: `7-5.1.2` is behind a hub behind our port and is
         // not a child of ours.
-        if let Some(rest) = child.strip_prefix(&prefix) {
-            if !rest.is_empty() && rest.chars().all(|c| c.is_ascii_digit()) {
-                found.push(dir);
-            }
+        let Some(rest) = child.strip_prefix(&prefix) else {
+            continue;
+        };
+        if !rest.is_empty() && rest.chars().all(|c| c.is_ascii_digit()) {
+            found.push(dir);
         }
     }
     found.sort();
@@ -253,7 +254,8 @@ fn a_device_behind_a_hub_this_compiler_built_is_enumerated_by_the_kernel() {
     );
     match interface_driver(hub, HUB_IFACE) {
         Some(driver) => assert_eq!(
-            driver, "hub",
+            driver,
+            "hub",
             "interface {HUB_IFACE} of {} is held by `{driver}` and not by the hub driver",
             hub.display()
         ),

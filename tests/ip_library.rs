@@ -16479,11 +16479,11 @@ impl UsbPair for ProxyRig<'_> {
         self.up_phy.step(&up_link, host);
         self.dn_phy.step(&dn_link, Some(dn_line));
         self.dev.cycle(Some(dn_line));
-        // Drained rather than read in place, because `UsbPair::problems` returns
-        // one slice and there are three models here.
-        self.problems.extend(self.up_phy.problems.drain(..));
-        self.problems.extend(self.dn_phy.problems.drain(..));
-        self.problems.extend(self.dev.phy.problems.drain(..));
+        // Moved rather than read in place, because `UsbPair::problems` returns one
+        // slice and there are three models here.
+        self.problems.append(&mut self.up_phy.problems);
+        self.problems.append(&mut self.dn_phy.problems);
+        self.problems.append(&mut self.dev.phy.problems);
     }
 
     fn driven(&mut self) -> Option<UsbLine> {
@@ -16755,10 +16755,7 @@ fn proxy_open_the_port(host: &mut UsbHost<ProxyRig<'_>>, hub_addr: u8) {
     host.idle(20);
     assert_eq!(
         proxy_port_status(host, hub_addr),
-        (
-            PORT_STAT_POWER | PORT_STAT_CONNECTION,
-            PORT_CHG_CONNECTION
-        ),
+        (PORT_STAT_POWER | PORT_STAT_CONNECTION, PORT_CHG_CONNECTION),
         "the port the host has just powered reports the device on it"
     );
     host.control_write(
@@ -17077,7 +17074,11 @@ fn usb_proxy_moves_bytes_through_the_port() {
     let payloads: [Vec<u8>; 4] = [
         vec![0xA5],
         (0..8u8).collect(),
-        (0..BULK_MAXPKT as u16).map(|i| (i ^ 0x5A) as u8).collect(),
+        // A full packet, each byte different from its index so that a buffer read
+        // at the wrong offset comes back wrong rather than plausible.
+        (0..u8::try_from(BULK_MAXPKT).expect("a legal wMaxPacketSize"))
+            .map(|i| i ^ 0x5A)
+            .collect(),
         vec![0xDE, 0xAD, 0xBE, 0xEF],
     ];
     for payload in &payloads {
