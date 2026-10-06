@@ -188,9 +188,9 @@ The window column is the mechanism that was missing.
 Three things to read off it:
 
 1. **The walk stays in the same country as where it started.** The worst
-   it reaches is 510 against a starting 240, not 5946, and it is back
-   under 240 by step 25 and at 144 by the end. The old schedule's best
-   step was eight times worse than the placement it was given.
+   it reaches is 510 against a starting 240, not 5946; it is back under
+   240 by step 39 and at 144 by the end. The old schedule's *best* step
+   was nearly nine times worse than the placement it was handed.
 2. **The acceptance rate decays** from 55% through the 0.44 target and
    into the quench band, instead of being pinned at a third by a window
    that cannot shrink. That decay is what lets the cooling table reach
@@ -211,7 +211,7 @@ function with a sub-tile term would change these numbers.
 
 ## What it is worth
 
-### `usb_host_target.v` — 3168 LUT4, 1108 flip-flops, 4304 movable cells
+### `usb_host_target.v` — 3168 LUT4, 1108 flip-flops, some 4300 movable cells
 
 Three numbers per row that are not seconds: the wirelength the annealer
 reached, the pips the router then needed, and the nodes its maze
@@ -227,9 +227,29 @@ the same thing on every machine.
 
 At the default effort the schedule is **free**: the same flow time to a
 wirelength 45% shorter and 7 843 fewer pips. The placer does fewer moves
-than it used to (44.3 million against 70.7) and each costs more, because
-a move now draws from an indexed window and is accepted three times out
-of ten instead of being refused; the two cancel.
+than it used to — 44.3 million against 70.7, because the schedule stops
+at 71 temperatures instead of 103 — and each costs more, so the two
+cancel. Counted rather than timed:
+
+| per move | before | after |
+|---|---|---|
+| legality steps | 15.1 | 21.0 |
+| cost pin reads | 15.7 | 25.3 |
+
+**A windowed move is usually a swap, and a die-wide move usually is
+not.** Only 13% of this part's lookup-table sites are occupied, so a
+destination drawn from the whole die is almost always empty and the move
+is one cell going somewhere; a destination drawn from one tile's
+neighbourhood of a compact placement is usually taken, and the move is
+two cells exchanging. Two cells touch twice the signals. That is the
+whole of the extra cost, and it buys a move that is worth making.
+
+One thing got cheaper. The best placement seen is now recorded at a
+temperature boundary rather than on every improving move — 62 snapshots
+against 681 — because a move is accepted a hundred times more often than
+it was and a snapshot copies the whole placement. At the temperatures
+where it matters the walk is nearly monotone, so the end of a step is
+within a move or two of the best point inside it.
 
 What the schedule bought is the knob. Effort used to be a lever that only
 went the wrong way — the previous round measured effort 3 saving 43 s of
@@ -262,13 +282,18 @@ fabric expansion and a second of routing a hundred signals.
 
 **The router does more work on the better placement** — 7.4 million
 against 6.0 million nodes off the queue — which is worth stating because
-it is the opposite of what happened on the large design. The A\* estimate
-charges per tile of Manhattan distance still to cover, so a short
-connection is guided less than a long one: a tight placement is a weaker
-search problem per net even when it is a better placement. On
-`usb_host_target.v` there are four thousand nets and congestion dominates,
-so the tighter placement wins there; on a hundred nets with the die
-nearly empty, it does not.
+it is the opposite of what happened on the large design, where the better
+placement cost the router 7% less.
+
+Why, is a **reading and not a measurement**: the A\* estimate charges
+`astar_weight` per tile of Manhattan distance still to cover, so a short
+connection is guided less strongly than a long one and the search spreads
+further before it commits. If that is right, a tight placement is a
+weaker search problem per net even while being a better placement, and it
+wins overall only once there are enough nets for congestion to dominate —
+four thousand on `usb_host_target.v`, a hundred here. Nothing has tested
+that, and the obvious test is to vary `astar_weight` and see whether the
+two designs move in opposite directions.
 
 
 ## The goldens that moved
