@@ -393,6 +393,17 @@ const VARIANTS: &[Variant] = &[
         top: "usb_hub_ulpi",
         params: &[("VID", "16'h1209"), ("PID", "16'h0001")],
     },
+    // The proxy: that hub with the forwarding half added, and the biggest block
+    // in this library by some way — two ULPI Links, two packet decoders, a
+    // device core, a host transaction engine and a 64-byte relay buffer. The row
+    // beside `usb_hub_ulpi` is what forwarding costs over reporting a port, and
+    // the one beside `usb_host_ulpi` is what the proxy saves by not
+    // instantiating `usb_host_enum`: the PC enumerates, so we do not.
+    Variant {
+        package: "usb_proxy",
+        top: "usb_hub_proxy_ulpi",
+        params: &[("VID", "16'h1209"), ("PID", "16'h0001")],
+    },
 ];
 
 /// Board constraints a variant needs to go through the FPGA flow, as
@@ -10146,17 +10157,63 @@ fn ignore_what_it_cannot_do<P: UsbPair>(host: &mut UsbHost<P>) {
     );
     host.idle(20);
 
-    // Requests it does not do are acknowledged and then stalled:
-    // GET_STATUS, and a string descriptor.
+    // Requests it does not do are acknowledged and then stalled: a string
+    // descriptor, GET_STATUS to an **interface**, GET_STATUS to an
+    // **endpoint**, and SET_FEATURE.
+    //
+    // **GET_STATUS to the device is not in that list any more**, and the next
+    // assertion is why: it is a standard request, endpoint 0 implements it now,
+    // and `usb_ctrl_ep`'s "THE DEVICE'S OWN STATUS" says why the other two
+    // recipients cannot come with it — an interface's and an endpoint's status
+    // are answerable only by something that knows which of each exist, which
+    // endpoint 0 does not. A device that answered zero for any endpoint number
+    // would be claiming endpoints it has not got, where §9.4.5 asks for a
+    // STALL. This is the pair of assertions that pins the division.
     for request in [
-        [0x80, 0x00, 0x00, 0x00, 0x00, 0x00, 0x02, 0x00],
         [0x80, 0x06, 0x01, 0x03, 0x09, 0x04, 0xFF, 0x00],
+        [0x81, 0x00, 0x00, 0x00, 0x00, 0x00, 0x02, 0x00],
+        [0x82, 0x00, 0x00, 0x00, 0x81, 0x00, 0x02, 0x00],
+        [0x00, 0x03, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00],
     ] {
         assert_eq!(host.setup(0, request), UsbReply::Handshake(USB_ACK));
         host.idle(4);
         assert_eq!(host.in_token(0), UsbReply::Handshake(USB_STALL));
         host.idle(10);
     }
+
+    // And GET_STATUS to the **device** is answered, with the two bytes USB 2.0
+    // §9.4.5 and Table 9-4 describe: bit 0 Self Powered, which is bit 6 of
+    // `CFG_ATTR` and is clear for the `80h` every device in this library
+    // declares, and bit 1 Remote Wakeup Enabled, which is clear because nothing
+    // here implements SET_FEATURE(DEVICE_REMOTE_WAKEUP) — which is the
+    // request stalled two lines above.
+    //
+    // **A host asking for more than two bytes gets two**, which is the short
+    // packet that ends a control read, and asking for one gets one: both are
+    // asserted, because the data stage is capped at `min(wLength, 2)` and a
+    // cap that was the wrong way round would pass the first and fail the
+    // second.
+    assert_eq!(
+        host.control_read(0, [0x80, 0x00, 0x00, 0x00, 0x00, 0x00, 0x02, 0x00])
+            .expect("GET_STATUS to the device"),
+        vec![0, 0],
+        "bus powered, remote wake-up not enabled"
+    );
+    host.idle(10);
+    assert_eq!(
+        host.control_read(0, [0x80, 0x00, 0x00, 0x00, 0x00, 0x00, 0xFF, 0x00])
+            .expect("GET_STATUS asked for more than it is"),
+        vec![0, 0],
+        "a wLength of 255 gets the two bytes there are and a short packet"
+    );
+    host.idle(10);
+    assert_eq!(
+        host.control_read(0, [0x80, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0x00])
+            .expect("GET_STATUS asked for one byte"),
+        vec![0],
+        "and a wLength of one gets one byte, capped the other way"
+    );
+    host.idle(10);
 
     // And after all of that, the next SETUP is served as if none of it
     // had happened.
@@ -15036,8 +15093,14 @@ const HUB_GET_HUB_STATUS: [u8; 8] = [0xA0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x04, 0
 
 /// The **standard** GET_STATUS of USB 2.0 §9.4.5, device recipient, which
 /// Linux's hub driver sends during hub probe and treats a failure of as fatal.
-/// `usb_ctrl_ep` does not implement it, so `usb_hub_req` claims it on the
-/// class hook; that block's header says why and what the right fix is.
+///
+/// `usb_hub_req` claimed it on the class hook for one round, because
+/// `usb_ctrl_ep` did not implement it and a hub that stalls it is not a hub as
+/// far as that driver is concerned. **It is endpoint 0's now** — a standard
+/// request whose two bytes are the same for every device in this library — so
+/// this request goes through the hub without the class seeing it at all, and
+/// `usb_hub_stalls_the_class_requests_it_does_not_claim` is where the class
+/// not shadowing it is asserted.
 const HUB_GET_DEVICE_STATUS: [u8; 8] = [0x80, 0x00, 0x00, 0x00, 0x00, 0x00, 0x02, 0x00];
 
 /// GetPortStatus, §11.24.2.7: class, device to host, recipient "other" —
@@ -15294,6 +15357,20 @@ impl StatusPipe {
 fn hub_port_empty<P: UsbPair>(host: &mut UsbHost<P>) {
     host.set_port("port_attached", 0, 1);
     host.set_port("port_low_speed", 0, 1);
+    // THE RESET THAT TAKES NO TIME, WHICH IS WHAT THIS BLOCK ON ITS OWN HAS
+    //
+    // `ip/usb_hub`'s port reset is a handshake: a level out while the port is
+    // resetting and a pulse in when whatever drives it has finished. Nothing
+    // downstream of the block **in these tests** drives one, so `port_reset_done`
+    // is held high and every reset finishes in the cycle it is asked for, which
+    // is exactly what this block did before the handshake existed and is what
+    // `testdata/fpga/cynthion/usb_hub_target.v` ties it to.
+    //
+    // It is driven here and not left alone because an undriven input is `x`, and
+    // an `x` into `resetting && port_reset_done` is a port that neither finishes
+    // its reset nor says so. `ip/usb_proxy`'s own tests are where the handshake
+    // takes time.
+    host.set_port("port_reset_done", 1, 1);
 }
 
 /// The whole enumeration a host does, against the descriptor set a hub
@@ -15513,9 +15590,11 @@ fn hub_class_requests<P: UsbPair>(host: &mut UsbHost<P>) {
         "wHubStatus and wHubChange"
     );
 
-    // The standard device status, which is the request Linux's hub driver
-    // sends during probe and which endpoint 0 does not implement: bit 0 is
-    // Self Powered and bit 1 is Remote Wakeup Enabled, both clear.
+    // The standard device status, which is the request Linux's hub driver sends
+    // during probe. It is **endpoint 0's** now rather than this class's, and the
+    // two bytes are the same either way: bit 0 Self Powered, out of bit 6 of
+    // `CFG_ATTR`, and bit 1 Remote Wakeup Enabled, which nothing here can set.
+    // That it still answers is the whole of what moving it had to not break.
     assert_eq!(
         host.control_read(3, HUB_GET_DEVICE_STATUS)
             .expect("the standard GET_STATUS a hub driver sends"),
@@ -15878,10 +15957,10 @@ fn usb_hub_stalls_the_class_requests_it_does_not_claim() {
     );
     assert_eq!(after, before, "a stalled request changed nothing");
 
-    // And the standard requests still belong to endpoint 0 with a class on
-    // the hook — including the one the class **does** claim, since
-    // GET_STATUS and SET_ADDRESS share the first byte of their
-    // `bmRequestType` and nothing but `bRequest` tells them apart.
+    // And the standard requests still belong to endpoint 0 with a class on the
+    // hook — including GET_STATUS, which this class claimed for one round and
+    // which `usb_ctrl_ep` implements now, and SET_ADDRESS, which shares the
+    // first byte of its `bmRequestType` with nothing but a direction bit.
     assert_eq!(
         host.control_write(4, set_address(11)),
         UsbReply::Data(USB_DATA1, Vec::new()),
@@ -16113,6 +16192,1049 @@ fn usb_hub_is_one_clock_domain() {
         let kinds = crossings("usb_hub", top, &[("VID", "16'h1209"), ("PID", "16'h0001")]);
         assert!(kinds.is_empty(), "{top}: nothing should cross: {kinds:?}");
     }
+}
+
+// ---------------------------------------------------------------------------
+// usb_proxy: the half of a hub that forwards
+// ---------------------------------------------------------------------------
+
+/// `ip/usb_proxy` at the scale a simulation can run, which is the same trade
+/// `HOST_TEST_PARAMS` makes and for the same reasons.
+///
+/// Every one of these is a **time** on a board and a count here:
+///
+///   * it **keeps** every ordering — the attach debounce before the port is a
+///     port, the PC's port reset before anything is forwarded, the SE0 before
+///     the recovery — because each is a state and not a duration;
+///   * it **keeps** the downstream bus reset long enough to be one: 20 000
+///     clocks is far more than `usb_device_ulpi`'s own `SE0_CYCLES` of 150, so
+///     the device behind the port really does see a reset and really does forget
+///     the address the PC gave it;
+///   * it **does not** check that 100 ms of debounce is 100 ms or that 15 ms of
+///     SE0 is 15 ms. Those are `usb_proxy_dn`'s defaults with the section of
+///     USB 2.0 that sets each, and only a board exercises them.
+///
+/// The reset is the one that is **not** shrunk as far as it will go, and the
+/// reason is an assertion rather than a device: a whole GetPortStatus is a
+/// couple of thousand clocks, so a reset of 800 would be over before the PC
+/// could ever read PORT_RESET set, and "the hub reports §11.5.1's **Resetting**
+/// state" would be untestable. At 20 000 each the PC polls through it a dozen
+/// times.
+///
+/// `FRAME_CYCLES` is small for the opposite reason: at the real 60 000 a whole
+/// enumeration through the proxy fits inside a handful of frames and a SOF would
+/// hardly appear. At 4 000 it lands between forwarded transactions over and
+/// over, which is where a frame that broke one would be caught.
+const PROXY_TEST_PARAMS: &[(&str, &str)] = &[
+    ("DEBOUNCE_CYCLES", "200"),
+    ("RESET_HOLD", "20000"),
+    ("RESET_RECOVERY", "20000"),
+    ("FRAME_CYCLES", "4000"),
+];
+
+fn proxy_design() -> Design {
+    design_of("usb_proxy", "usb_hub_proxy_ulpi", PROXY_TEST_PARAMS)
+}
+
+/// What a Link drove this cycle, read off one of the two ULPI buses.
+///
+/// `data` is read **only while `oe`**, for `UlpiPair::cycle`'s reason: ULPI's
+/// data lines are the Link's for exactly as long as `ulpi_data_oe` is high, and
+/// on a design whose transmit buffer is a distributed RAM they are `x` until
+/// something has filled one.
+fn link_out_of(
+    sim: &Simulator<'_>,
+    oe_net: NetHandle,
+    data_net: NetHandle,
+    stp_net: NetHandle,
+    rst_net: NetHandle,
+) -> LinkOut {
+    let oe = high(sim, oe_net);
+    LinkOut {
+        oe,
+        data: if oe { octet(get_u64(sim, data_net)) } else { 0 },
+        stp: high(sim, stp_net),
+        rst_n: high(sim, rst_net),
+    }
+}
+
+/// Three ends on two wires: the PC, the proxy, and a device behind its port.
+///
+/// `HostDevice` next door resolves **two** ends of one pair. A proxy needs
+/// three, on two pairs, and they are not symmetrical:
+///
+///   * the **upstream** pair has the PC on it — which is `UsbHost` driving
+///     through this as a `UsbPair` — and the proxy's upstream transceiver, which
+///     is a *peripheral's*: it has the 1.5 kOhm pull-up that tells the PC
+///     something is attached;
+///   * the **downstream** pair has the proxy's own transceiver on it, which is a
+///     *host's* — two 15 kOhm pull-downs, and the 45 Ohm terminations a bus
+///     reset is made of — and a whole second design, `usb_device_ulpi`, behind
+///     its own third transceiver.
+///
+/// So the downstream pair is resolved exactly the way `HostDevice::cycle`
+/// resolves its one, and the upstream pair is resolved by `UsbHost`, which
+/// drives it while it is sending and reads it when it is not.
+struct ProxyRig<'d> {
+    sim: Simulator<'d>,
+    clk: NetHandle,
+    up_dir: NetHandle,
+    up_nxt: NetHandle,
+    up_data_in: NetHandle,
+    up_data_out: NetHandle,
+    up_data_oe: NetHandle,
+    up_stp: NetHandle,
+    up_rst_out: NetHandle,
+    dn_dir: NetHandle,
+    dn_nxt: NetHandle,
+    dn_data_in: NetHandle,
+    dn_data_out: NetHandle,
+    dn_data_oe: NetHandle,
+    dn_stp: NetHandle,
+    dn_rst_out: NetHandle,
+    address: NetHandle,
+    configured: NetHandle,
+    reset_net: NetHandle,
+    ready_net: NetHandle,
+    dn_ready_net: NetHandle,
+    up_phy: UlpiPhy,
+    dn_phy: UlpiPhy,
+    dev: UlpiPair<'d>,
+    data: DataEp,
+    problems: Vec<String>,
+}
+
+impl<'d> ProxyRig<'d> {
+    fn new(proxy: &'d Design, dev_design: &'d Design, stale: bool) -> ProxyRig<'d> {
+        let flaws = |phy: UlpiPhy| {
+            if stale {
+                phy.hearing_itself().reporting_stale_line()
+            } else {
+                phy
+            }
+        };
+        // The device first and on its own, which is the order the two really
+        // come up in: its start-up connects its own pull-up and waits for the
+        // pair to charge, and until it has there is nothing for a host to see.
+        let dev = UlpiPair::with_phy(dev_design, flaws(UlpiPhy::new(ULPI_CPB)));
+        let sim = simulate(proxy, "usb_hub_proxy_ulpi");
+        let pin = |n: &str| top_net(&sim, n);
+        let mut rig = ProxyRig {
+            clk: pin("clk60"),
+            up_dir: pin("up_dir"),
+            up_nxt: pin("up_nxt"),
+            up_data_in: pin("up_data_i"),
+            up_data_out: pin("up_data_o"),
+            up_data_oe: pin("up_data_oe"),
+            up_stp: pin("up_stp"),
+            up_rst_out: pin("up_rst_n"),
+            dn_dir: pin("dn_dir"),
+            dn_nxt: pin("dn_nxt"),
+            dn_data_in: pin("dn_data_i"),
+            dn_data_out: pin("dn_data_o"),
+            dn_data_oe: pin("dn_data_oe"),
+            dn_stp: pin("dn_stp"),
+            dn_rst_out: pin("dn_rst_n"),
+            address: pin("address"),
+            configured: pin("configured"),
+            reset_net: pin("usb_reset"),
+            ready_net: pin("phy_ready"),
+            dn_ready_net: pin("dn_phy_ready"),
+            up_phy: flaws(UlpiPhy::new(ULPI_CPB)),
+            dn_phy: flaws(UlpiPhy::new(ULPI_CPB).hosting()),
+            dev,
+            data: DataEp::new(&sim, true),
+            problems: Vec::new(),
+            sim,
+        };
+        rig.data.quiet(&mut rig.sim);
+        rig.sim.set(rig.up_dir, bit(false));
+        rig.sim.set(rig.up_nxt, bit(false));
+        rig.sim.set(rig.up_data_in, word(8, 0));
+        rig.sim.set(rig.dn_dir, bit(false));
+        rig.sim.set(rig.dn_nxt, bit(false));
+        rig.sim.set(rig.dn_data_in, word(8, 0));
+        let clk = rig.clk;
+        let rst_n = top_net(&rig.sim, "rst_n");
+        reset(&mut rig.sim, clk, rst_n);
+        // Both start-ups, with nothing on the upstream pair: the PC has not
+        // reset the bus yet, and the proxy's upstream Link has to connect its
+        // own pull-up and wait for the pair to charge the way any peripheral
+        // does.
+        for _ in 0..40_000 {
+            if rig.ready() && high(&rig.sim, rig.dn_ready_net) {
+                return rig;
+            }
+            rig.cycle(None);
+        }
+        panic!(
+            "a transceiver was never configured; the upstream one saw {:?} and the \
+             downstream one {:?}",
+            rig.up_phy.accesses, rig.dn_phy.accesses
+        );
+    }
+
+    fn ready(&self) -> bool {
+        high(&self.sim, self.ready_net)
+    }
+
+    /// One of the **device's** own top-level nets, by name: its address, its
+    /// `configured`, whatever else it reports. The proxy's own are `port`.
+    fn dev_port(&self, name: &str) -> u64 {
+        self.dev.port(name)
+    }
+
+    /// Cycles until the downstream port has a debounced device on it, or
+    /// `limit` cycles go by.
+    fn until_attached(&mut self, limit: u64) -> bool {
+        for _ in 0..limit {
+            if self.port("dn_attached") == 1 {
+                return true;
+            }
+            self.cycle(None);
+        }
+        false
+    }
+}
+
+impl UsbPair for ProxyRig<'_> {
+    fn cycles_per_bit(&self) -> u64 {
+        ULPI_CPB
+    }
+
+    fn cycle(&mut self, host: Option<UsbLine>) {
+        // The downstream pair, from the outputs of the cycle before. Three
+        // things decide what it is at, in the order `HostDevice::cycle` states:
+        // the proxy's 45 Ohm terminations, which are what its port reset is and
+        // which beat a 1.5 kOhm pull-up thirtyfold; then whichever end is
+        // transmitting; then the device's own pull-up once it has charged.
+        let h = self.dn_phy.line_out;
+        let d = self.dev.phy.line_out;
+        if h.is_some() && d.is_some() {
+            self.problems
+                .push("both ends drove the downstream pair in the same cycle".into());
+        }
+        let dn_line = if self.dn_phy.drives_se0() {
+            UsbLine::Se0
+        } else if let Some(state) = h.or(d) {
+            state
+        } else if self.dev.phy.pullup_ready() {
+            UsbLine::J
+        } else {
+            UsbLine::Se0
+        };
+
+        step_data(&mut self.sim, &mut self.data);
+        // Both transceivers' outputs, presented before the edge that samples
+        // them: `ulpi_data_oe` is combinational in `dir`, as ULPI means it to
+        // be, so the low phase has to settle before it is read.
+        self.sim.set(self.up_dir, bit(self.up_phy.dir));
+        self.sim.set(self.up_nxt, bit(self.up_phy.nxt));
+        self.sim
+            .set(self.up_data_in, word(8, u64::from(self.up_phy.data)));
+        self.sim.set(self.dn_dir, bit(self.dn_phy.dir));
+        self.sim.set(self.dn_nxt, bit(self.dn_phy.nxt));
+        self.sim
+            .set(self.dn_data_in, word(8, u64::from(self.dn_phy.data)));
+        self.sim.run_for(HALF);
+        let up_link = link_out_of(
+            &self.sim,
+            self.up_data_oe,
+            self.up_data_out,
+            self.up_stp,
+            self.up_rst_out,
+        );
+        let dn_link = link_out_of(
+            &self.sim,
+            self.dn_data_oe,
+            self.dn_data_out,
+            self.dn_stp,
+            self.dn_rst_out,
+        );
+        self.sim.set(self.clk, bit(true));
+        self.sim.run_for(HALF);
+        self.sim.set(self.clk, bit(false));
+        self.up_phy.step(&up_link, host);
+        self.dn_phy.step(&dn_link, Some(dn_line));
+        self.dev.cycle(Some(dn_line));
+        // Drained rather than read in place, because `UsbPair::problems` returns
+        // one slice and there are three models here.
+        self.problems.extend(self.up_phy.problems.drain(..));
+        self.problems.extend(self.dn_phy.problems.drain(..));
+        self.problems.extend(self.dev.phy.problems.drain(..));
+    }
+
+    fn driven(&mut self) -> Option<UsbLine> {
+        self.up_phy.line_out
+    }
+
+    /// The **hub's** address, which is what a `UsbPair` means by one. The device
+    /// behind the port has its own and `dev_port` is how to read it.
+    fn address(&self) -> u64 {
+        get_u64(&self.sim, self.address)
+    }
+
+    fn configured(&self) -> bool {
+        high(&self.sim, self.configured)
+    }
+
+    fn usb_reset(&self) -> bool {
+        high(&self.sim, self.reset_net)
+    }
+
+    fn problems(&self) -> &[String] {
+        &self.problems
+    }
+
+    fn answer_window(&self) -> (u64, u64) {
+        (2 * ULPI_CPB, 13 * ULPI_CPB / 2)
+    }
+
+    fn added_delay(&self) -> Vec<u64> {
+        self.up_phy.held.clone()
+    }
+
+    fn data(&mut self) -> &mut DataEp {
+        &mut self.data
+    }
+
+    fn port(&self, name: &str) -> u64 {
+        get_u64(&self.sim, top_net(&self.sim, name))
+    }
+
+    fn set_port(&mut self, name: &str, value: u64, bits: u32) {
+        let net = top_net(&self.sim, name);
+        self.sim.set(net, word(bits, value));
+    }
+}
+
+/// How many times a transaction is offered again while the proxy NAKs it.
+///
+/// **Counted and never timed.** A NAK means the answer is not here yet and a
+/// host's answer to one is to ask again; what a test can assert about that is
+/// how many times it had to ask, which is the same number on a fast machine and
+/// a slow one. Forty is far more than the two or three a working proxy takes and
+/// far less than for ever.
+const PROXY_TRIES: usize = 40;
+
+/// Bit times of idle bus between one attempt and the next, which is the
+/// breathing room the downstream transaction runs in.
+const PROXY_GAP: u64 = 60;
+
+/// A SETUP through the proxy, offered again while it is not acknowledged.
+///
+/// A device must acknowledge a SETUP and the proxy does so at once — it has the
+/// eight bytes — so the retry here is for the bus and not for the proxy.
+fn proxy_setup<P: UsbPair>(host: &mut UsbHost<P>, addr: u8, request: [u8; 8]) -> UsbReply {
+    let mut reply = UsbReply::Nothing;
+    for _ in 0..PROXY_TRIES {
+        reply = host.setup(addr, request);
+        if reply == UsbReply::Handshake(USB_ACK) {
+            return reply;
+        }
+        host.idle(PROXY_GAP);
+    }
+    reply
+}
+
+/// A control read through the proxy: `UsbHost::control_read`'s transfer with
+/// every stage offered again while it is NAKed, and its failures **returned**
+/// rather than asserted so that a test can say which stage went wrong.
+///
+/// `maxpkt` is the **device's** `bMaxPacketSize0` and not the hub's, because
+/// what ends the data stage is a packet shorter than what the device behind the
+/// port declared. That is "a short packet ends a transfer" from this side of it.
+fn proxy_control_read<P: UsbPair>(
+    host: &mut UsbHost<P>,
+    addr: u8,
+    request: [u8; 8],
+    maxpkt: usize,
+) -> Result<Vec<u8>, String> {
+    let reply = proxy_setup(host, addr, request);
+    if reply != UsbReply::Handshake(USB_ACK) {
+        return Err(format!("the SETUP was answered {reply:?}"));
+    }
+    host.idle(4);
+    let length = usize::from(u16::from_le_bytes([request[6], request[7]]));
+    let mut got = Vec::new();
+    let mut toggle = USB_DATA1;
+    loop {
+        let mut data = None;
+        for _ in 0..PROXY_TRIES {
+            match host.bulk_in(addr, 0) {
+                UsbReply::Data(pid, payload) => {
+                    data = Some((pid, payload));
+                    break;
+                }
+                UsbReply::Handshake(USB_NAK) => host.idle(PROXY_GAP),
+                other => return Err(format!("the data stage was answered {other:?}")),
+            }
+        }
+        let Some((pid, payload)) = data else {
+            return Err(format!(
+                "the data stage was NAKed {PROXY_TRIES} times running after {} bytes",
+                got.len()
+            ));
+        };
+        if pid != toggle {
+            return Err(format!(
+                "the data stage carried PID {pid:#x} where the toggle said {toggle:#x}, \
+                 after {} bytes",
+                got.len()
+            ));
+        }
+        let short = payload.len() < maxpkt;
+        got.extend(payload);
+        host.ack();
+        toggle = other_toggle(toggle);
+        if short || got.len() >= length {
+            break;
+        }
+    }
+    // The status stage of a read: a zero-length OUT carrying DATA1.
+    for _ in 0..PROXY_TRIES {
+        match host.bulk_out(addr, 0, USB_DATA1, &[]) {
+            UsbReply::Handshake(USB_ACK) => {
+                host.idle(4);
+                return Ok(got);
+            }
+            UsbReply::Handshake(USB_NAK) => host.idle(PROXY_GAP),
+            other => return Err(format!("the status stage was answered {other:?}")),
+        }
+    }
+    Err("the status stage of a read was NAKed to exhaustion".into())
+}
+
+/// A control transfer with no data stage, through the proxy: the SETUP and then
+/// the zero-length IN of the status stage, acknowledged.
+fn proxy_control_write<P: UsbPair>(
+    host: &mut UsbHost<P>,
+    addr: u8,
+    request: [u8; 8],
+) -> Result<(), String> {
+    let reply = proxy_setup(host, addr, request);
+    if reply != UsbReply::Handshake(USB_ACK) {
+        return Err(format!("the SETUP was answered {reply:?}"));
+    }
+    host.idle(4);
+    for _ in 0..PROXY_TRIES {
+        match host.bulk_in(addr, 0) {
+            UsbReply::Data(USB_DATA1, payload) if payload.is_empty() => {
+                host.ack();
+                host.idle(4);
+                return Ok(());
+            }
+            UsbReply::Handshake(USB_NAK) => host.idle(PROXY_GAP),
+            other => return Err(format!("the status stage was answered {other:?}")),
+        }
+    }
+    Err("the status stage of a write was NAKed to exhaustion".into())
+}
+
+/// A bulk pipe through the proxy, with its two toggles — which are the **PC's**
+/// toggles and not the proxy's, so that the two sides staying in step is
+/// something this asserts rather than something it assumes.
+struct ProxyPipe {
+    endp: u8,
+    out_pid: u8,
+    in_pid: u8,
+    naks: usize,
+}
+
+impl ProxyPipe {
+    fn new(endp: u8) -> ProxyPipe {
+        ProxyPipe {
+            endp,
+            out_pid: USB_DATA0,
+            in_pid: USB_DATA0,
+            naks: 0,
+        }
+    }
+
+    fn write<P: UsbPair>(&mut self, host: &mut UsbHost<P>, addr: u8, payload: &[u8]) {
+        for _ in 0..PROXY_TRIES {
+            match host.bulk_out(addr, self.endp, self.out_pid, payload) {
+                UsbReply::Handshake(USB_ACK) => {
+                    self.out_pid = other_toggle(self.out_pid);
+                    return;
+                }
+                UsbReply::Handshake(USB_NAK) => {
+                    self.naks += 1;
+                    host.idle(PROXY_GAP);
+                }
+                other => panic!("an OUT of {} bytes was answered {other:?}", payload.len()),
+            }
+        }
+        panic!("the proxy NAKed all {PROXY_TRIES} attempts at an OUT");
+    }
+
+    fn read<P: UsbPair>(&mut self, host: &mut UsbHost<P>, addr: u8) -> Vec<u8> {
+        for _ in 0..PROXY_TRIES {
+            match host.bulk_in(addr, self.endp) {
+                UsbReply::Data(pid, payload) => {
+                    assert_eq!(
+                        pid, self.in_pid,
+                        "the IN endpoint's data toggle, as the PC keeps it"
+                    );
+                    host.ack();
+                    self.in_pid = other_toggle(self.in_pid);
+                    return payload;
+                }
+                UsbReply::Handshake(USB_NAK) => {
+                    self.naks += 1;
+                    host.idle(PROXY_GAP);
+                }
+                other => panic!("an IN was answered {other:?}"),
+            }
+        }
+        panic!("the proxy NAKed all {PROXY_TRIES} attempts at an IN");
+    }
+}
+
+/// The four bytes of a GetPortStatus, as words.
+fn proxy_port_status(host: &mut UsbHost<ProxyRig<'_>>, hub_addr: u8) -> (u16, u16) {
+    port_words(
+        &host
+            .control_read(hub_addr, hub_get_port_status(HUB_NBR_PORTS))
+            .expect("GetPortStatus"),
+    )
+}
+
+/// The hub enumerated, its port powered and reset, and the reset waited out —
+/// which is everything the PC does before it can reach the device behind the
+/// port, and the point at which forwarding begins.
+///
+/// The device's attach is **not poked**: `port_attached` is not an input of this
+/// design at all, the way it is of `ip/usb_hub` on its own. It is
+/// `usb_proxy_dn`'s own debounced sight of the downstream pair leaving SE0, so
+/// this runs the clock until it has seen it. That difference is why this harness
+/// exists.
+fn proxy_open_the_port(host: &mut UsbHost<ProxyRig<'_>>, hub_addr: u8) {
+    assert!(
+        host.pair.until_attached(8_000),
+        "the downstream device attached; dn_stage is {}",
+        host.port("dn_stage")
+    );
+
+    configure_for(
+        host,
+        hub_addr,
+        &expected_hub_device_descriptor(),
+        &expected_hub_configuration(),
+    );
+
+    let port = HUB_NBR_PORTS;
+    assert_eq!(
+        proxy_port_status(host, hub_addr),
+        (0, 0),
+        "a configured hub's port starts powered off, whatever is plugged into it"
+    );
+    host.control_write(hub_addr, hub_set_port_feature(port, FEAT_PORT_POWER));
+    host.idle(20);
+    assert_eq!(
+        proxy_port_status(host, hub_addr),
+        (
+            PORT_STAT_POWER | PORT_STAT_CONNECTION,
+            PORT_CHG_CONNECTION
+        ),
+        "the port the host has just powered reports the device on it"
+    );
+    host.control_write(
+        hub_addr,
+        hub_clear_port_feature(port, FEAT_C_PORT_CONNECTION),
+    );
+    host.idle(20);
+
+    // THE RESET THAT TAKES TIME
+    //
+    // SetPortFeature(PORT_RESET) reaches the real device now: `usb_proxy_dn`
+    // writes `50h` into the downstream transceiver's Function Control register,
+    // holds SE0 for `RESET_HOLD`, writes `45h` back and waits `RESET_RECOVERY`.
+    // So PORT_RESET reads **set** while that is happening — the bit `ip/usb_hub`
+    // used to report as a constant zero because its reset was over in the cycle
+    // it was asked for — and the port is not enabled until it is over.
+    host.control_write(hub_addr, hub_set_port_feature(port, FEAT_PORT_RESET));
+    let (stat, _) = proxy_port_status(host, hub_addr);
+    assert_ne!(
+        stat & PORT_STAT_RESET,
+        0,
+        "PORT_RESET is set while the reset is being driven at the device"
+    );
+    assert_eq!(
+        stat & PORT_STAT_ENABLE,
+        0,
+        "and the port is not enabled until it is over"
+    );
+
+    for _ in 0..200 {
+        let (stat, chg) = proxy_port_status(host, hub_addr);
+        if stat & PORT_STAT_RESET == 0 && chg & PORT_CHG_RESET != 0 {
+            assert_ne!(
+                stat & PORT_STAT_ENABLE,
+                0,
+                "a reset that completed enables the port"
+            );
+            host.control_write(hub_addr, hub_clear_port_feature(port, FEAT_C_PORT_RESET));
+            host.idle(20);
+            return;
+        }
+        host.idle(40);
+    }
+    panic!(
+        "the port reset never completed; wPortStatus {:#06x}, dn_stage {}",
+        proxy_port_status(host, hub_addr).0,
+        host.port("dn_stage")
+    );
+}
+
+/// The PC's own enumeration of the device behind the port, which is the whole of
+/// what a proxy is for: `dev_addr` is assigned by **the PC**, through the proxy,
+/// and the device's own `address` output is what says it was taken.
+fn proxy_enumerate_the_device(
+    host: &mut UsbHost<ProxyRig<'_>>,
+    dev_addr: u8,
+    device_want: &[u8],
+    config_want: &[u8],
+    maxpkt0: usize,
+) {
+    // A reset put the device at address 0, which is where the PC starts.
+    assert_eq!(
+        host.pair.dev_port("address"),
+        0,
+        "the port reset reached the device and it forgot its address"
+    );
+
+    let device = proxy_control_read(host, 0, GET_DEVICE_DESCRIPTOR, maxpkt0)
+        .expect("the device descriptor, through the proxy");
+    assert_eq!(
+        device, device_want,
+        "the descriptor the PC read is the device's own and not the proxy's"
+    );
+
+    proxy_control_write(host, 0, set_address(dev_addr)).expect("SET_ADDRESS, through the proxy");
+    assert_eq!(
+        host.pair.dev_port("address"),
+        u64::from(dev_addr),
+        "pass-through addressing: the device took the address the PC chose"
+    );
+    host.idle(20);
+
+    // The device descriptor again at the new address, which is the one
+    // transaction that tells "the address was accepted" from "the device is
+    // still answering at 0" — the two look identical until something addresses
+    // it.
+    let again = proxy_control_read(host, dev_addr, get_descriptor(1, 18), maxpkt0)
+        .expect("the device descriptor at the address the PC assigned");
+    assert_eq!(again, device_want);
+
+    // The first nine bytes of the configuration descriptor and then the whole of
+    // it: the same two reads a host does, and the second is where a multi-packet
+    // data stage and its toggle live.
+    let nine = proxy_control_read(host, dev_addr, get_descriptor(2, 9), maxpkt0)
+        .expect("the configuration header");
+    assert_eq!(nine, config_want[..9]);
+    let config = proxy_control_read(
+        host,
+        dev_addr,
+        [0x80, 0x06, 0x00, 0x02, 0x00, 0x00, 0xFF, 0x00],
+        maxpkt0,
+    )
+    .expect("the whole configuration descriptor");
+    assert_eq!(
+        config, config_want,
+        "the configuration descriptor and everything under it"
+    );
+
+    assert!(
+        !host.pair.dev.configured(),
+        "the device is not configured until the PC says so"
+    );
+    proxy_control_write(host, dev_addr, [0x00, 0x09, 0x01, 0, 0, 0, 0, 0])
+        .expect("SET_CONFIGURATION, through the proxy");
+    assert!(
+        host.pair.dev.configured(),
+        "the device is configured, by the PC, through the proxy"
+    );
+    host.idle(20);
+}
+
+/// The whole of it: a PC enumerates a device it can only reach through our hub.
+///
+/// What this would catch, and it is the round's whole claim: a control transfer
+/// not forwarded in either direction, a SETUP the device never saw, a data
+/// toggle that drifts between the two buses, a data stage cut in the wrong
+/// place, an address the device did not take, a port reset that did not reach
+/// it, and a descriptor byte that is the proxy's rather than the device's.
+///
+/// What it would **not** catch: that a *kernel* enumerates it. A host model
+/// written from the same specification as the proxy can agree with it about
+/// something they are both wrong about, which is the sentence
+/// `ip/usb_device_ulpi/README.md` §11 wrote before that block had a board;
+/// `ip/usb_proxy/README.md` §8 is the other half. Nor any of the times, which
+/// `PROXY_TEST_PARAMS` says.
+fn proxy_enumerate_our_device(stale: bool) {
+    let proxy = proxy_design();
+    let dev_design = ulpi_design();
+    let mut host = UsbHost::new(ProxyRig::new(&proxy, &dev_design, stale), 0);
+
+    proxy_open_the_port(&mut host, 3);
+    assert_eq!(
+        host.port("proxied"),
+        0,
+        "nothing has been forwarded yet: the PC has only talked to the hub"
+    );
+
+    proxy_enumerate_the_device(
+        &mut host,
+        9,
+        &expected_device_descriptor(0x1209, 0x0001),
+        &expected_configuration_descriptor(),
+        EP0_MAXPKT,
+    );
+
+    assert_eq!(
+        host.port("proxied"),
+        1,
+        "the PC addressed something behind the port"
+    );
+    assert_eq!(
+        host.port("job"),
+        0,
+        "and the relay is idle again, holding no answer nobody asked for"
+    );
+    assert_ne!(
+        host.port("dn_frame"),
+        0,
+        "frames went out on the downstream bus while this was happening"
+    );
+    assert_eq!(
+        host.port("dn_reg_failed"),
+        0,
+        "and the transceiver took every register write the port reset needed"
+    );
+    host.assert_clean();
+    assert!(
+        host.pair.problems.is_empty(),
+        "the three transceiver models saw nothing wrong:\n  {}",
+        host.pair.problems.join("\n  ")
+    );
+}
+
+/// A PC enumerating, through our hub, a device our hub never enumerated.
+#[test]
+fn usb_proxy_enumerates_the_device_behind_the_port() {
+    proxy_enumerate_our_device(false);
+}
+
+/// The same, with all three transceiver models behaving the way the part on the
+/// board does: each hears its own transmission and each reports `LineState`
+/// **late**, one transition at a time out of a backlog that outlives the
+/// packet. Both were measured on a Microchip USB3343 on a Cynthion r1.4 and both
+/// are things ULPI either permits or forbids and the part does anyway.
+///
+/// It matters more here than anywhere else in this file, because the thing that
+/// decides when the downstream port is a port at all is `LineState`: a proxy
+/// whose attach detection believed a stale reading would reset a device that had
+/// not arrived, or never reset one that had.
+#[test]
+fn usb_proxy_enumerates_through_the_transceivers_that_are_on_the_board() {
+    proxy_enumerate_our_device(true);
+}
+
+/// The same enumeration against a device whose `bMaxPacketSize0` is **eight**,
+/// which is the smallest USB 2.0 §5.5.3 allows.
+///
+/// This is the test that reaches what the other two cannot. Our device declares
+/// 64, so every descriptor it sends fits in one packet, and a data stage of one
+/// packet proves nothing about a toggle or about where a transfer ends. With
+/// eight, the eighteen-byte device descriptor arrives in three packets and the
+/// thirty-two-byte configuration descriptor in four — and the second of those
+/// also reaches the *other* way a data stage ends, because four full packets is
+/// exactly the length asked for and there is no short packet to stop on.
+///
+/// What it would catch: a toggle this proxy did not forward or did not track,
+/// which is invisible at one packet a stage; a short packet treated as the
+/// middle of a transfer; and a transfer that needed a short packet to end and
+/// hung without one.
+#[test]
+fn usb_proxy_forwards_a_data_stage_of_more_than_one_packet() {
+    let proxy = proxy_design();
+    let dev_design = design_of(
+        "usb_device_ulpi",
+        "usb_device_ulpi",
+        &[
+            ("VID", "16'h1209"),
+            ("PID", "16'h0001"),
+            ("MAXPKT0", "7'd8"),
+        ],
+    );
+    let mut host = UsbHost::new(ProxyRig::new(&proxy, &dev_design, false), 0);
+
+    proxy_open_the_port(&mut host, 3);
+
+    // The device descriptor with `bMaxPacketSize0` of eight in byte 7, which is
+    // the one byte of it this parameter changes.
+    let mut device_want = expected_device_descriptor(0x1209, 0x0001);
+    device_want[7] = 8;
+    proxy_enumerate_the_device(
+        &mut host,
+        9,
+        &device_want,
+        &expected_configuration_descriptor(),
+        8,
+    );
+
+    // A read of exactly thirty-two bytes of a thirty-two-byte descriptor: four
+    // whole packets of eight and **no short packet**, so the data stage ends
+    // because `wLength` was reached. That is the branch a proxy that only
+    // handled short packets would hang in.
+    let exact = proxy_control_read(&mut host, 9, get_descriptor(2, 32), 8)
+        .expect("four whole packets and no short one");
+    assert_eq!(exact, expected_configuration_descriptor());
+    host.assert_clean();
+}
+
+/// Bytes through the port, in both directions, on the bulk pair.
+///
+/// `ip/usb_device_ulpi`'s own data endpoint is wired in **loopback** by this
+/// file's harness — `out_*` into `in_*`, which is the arrangement the board has
+/// — so a packet written to endpoint 1 OUT comes back from endpoint 1 IN. Four
+/// of them, of four different lengths, so that:
+///
+///   * the OUT toggle alternates DATA0, DATA1, DATA0, DATA1 across four packets
+///     and the IN toggle does the same independently, which is what two
+///     endpoints' worth of toggle tracking means;
+///   * a **short** packet goes both ways, which on a bulk endpoint is the end of
+///     a transfer and must not be padded or merged;
+///   * and a **full** 64-byte packet goes both ways, which is the one that fills
+///     the relay's buffer exactly.
+///
+/// What it would catch: a toggle the proxy got wrong in either direction, a
+/// packet forwarded twice, a packet dropped, a length lost, and a buffer whose
+/// bytes come out in the wrong order. What it would **not** catch: throughput,
+/// which is not asserted anywhere and is a count of transactions rather than a
+/// number of seconds.
+#[test]
+fn usb_proxy_moves_bytes_through_the_port() {
+    let proxy = proxy_design();
+    let dev_design = ulpi_design();
+    let mut host = UsbHost::new(ProxyRig::new(&proxy, &dev_design, false), 0);
+
+    proxy_open_the_port(&mut host, 3);
+    proxy_enumerate_the_device(
+        &mut host,
+        9,
+        &expected_device_descriptor(0x1209, 0x0001),
+        &expected_configuration_descriptor(),
+        EP0_MAXPKT,
+    );
+
+    let mut pipe = ProxyPipe::new(1);
+    let payloads: [Vec<u8>; 4] = [
+        vec![0xA5],
+        (0..8u8).collect(),
+        (0..BULK_MAXPKT as u16).map(|i| (i ^ 0x5A) as u8).collect(),
+        vec![0xDE, 0xAD, 0xBE, 0xEF],
+    ];
+    for payload in &payloads {
+        pipe.write(&mut host, 9, payload);
+        let back = pipe.read(&mut host, 9);
+        assert_eq!(
+            &back, payload,
+            "the bytes the PC wrote came back out of the device's loopback"
+        );
+    }
+    assert_eq!(
+        pipe.out_pid, USB_DATA0,
+        "four OUT packets put the toggle back where it started"
+    );
+    assert_eq!(pipe.in_pid, USB_DATA0, "and four IN packets likewise");
+    host.assert_clean();
+}
+
+/// A device that refuses a request, and a PC that is told so.
+///
+/// A string descriptor is the request to use: `ip/usb_device_ulpi` has no
+/// strings, so endpoint 0 there offers the request to a class that is not there
+/// and stalls it — which is a **real** STALL from the real device and not a
+/// condition this test manufactures.
+///
+/// What it would catch: a proxy that swallowed the refusal, which is the failure
+/// mode that matters, because a device that refuses a request and a proxy that
+/// never answers look completely different to a host: the first is a driver
+/// finding out that what it asked for does not exist, the second is a transfer
+/// that hangs for five seconds and then a device the kernel gives up on. It also
+/// catches a STALL that is not sticky — USB 2.0 §8.5.3 has a stalled control
+/// transfer stay stalled until the next SETUP — and a STALL that outlives the
+/// transfer it belonged to, which would refuse everything after it.
+#[test]
+fn usb_proxy_propagates_a_stall_from_the_device() {
+    let proxy = proxy_design();
+    let dev_design = ulpi_design();
+    let mut host = UsbHost::new(ProxyRig::new(&proxy, &dev_design, false), 0);
+
+    proxy_open_the_port(&mut host, 3);
+    proxy_enumerate_the_device(
+        &mut host,
+        9,
+        &expected_device_descriptor(0x1209, 0x0001),
+        &expected_configuration_descriptor(),
+        EP0_MAXPKT,
+    );
+
+    // GET_DESCRIPTOR of a string, which the device behind the port does not
+    // have. The SETUP is acknowledged — the proxy holds the eight bytes — and
+    // the data stage is the stage that carries the refusal.
+    let request = [0x80, 0x06, 0x01, 0x03, 0x09, 0x04, 0xFF, 0x00];
+    assert_eq!(
+        proxy_setup(&mut host, 9, request),
+        UsbReply::Handshake(USB_ACK),
+        "a SETUP is always acknowledged, whatever the request turns out to be"
+    );
+    host.idle(4);
+    let mut stalled = false;
+    for _ in 0..PROXY_TRIES {
+        match host.bulk_in(9, 0) {
+            UsbReply::Handshake(USB_STALL) => {
+                stalled = true;
+                break;
+            }
+            UsbReply::Handshake(USB_NAK) => host.idle(PROXY_GAP),
+            other => panic!("a request the device stalls was answered {other:?}"),
+        }
+    }
+    assert!(
+        stalled,
+        "the device's STALL reached the PC rather than being swallowed"
+    );
+
+    // §8.5.3: it stays stalled until the next SETUP.
+    host.idle(10);
+    assert_eq!(
+        host.bulk_in(9, 0),
+        UsbReply::Handshake(USB_STALL),
+        "a stalled control transfer stays stalled"
+    );
+    host.idle(10);
+
+    // And the next transfer is served as if none of it had happened, which is
+    // the other half: a STALL that outlived its transfer would refuse this.
+    let device = proxy_control_read(&mut host, 9, GET_DEVICE_DESCRIPTOR, EP0_MAXPKT)
+        .expect("the device recovers, through the proxy");
+    assert_eq!(device, expected_device_descriptor(0x1209, 0x0001));
+    host.assert_clean();
+}
+
+/// A port the host has not enabled forwards nothing, and a port reset forgets
+/// everything about what is behind it.
+///
+/// Two properties with one setup, and both are about the gate rather than about
+/// the forwarding:
+///
+///   * before the PC resets the port, a token for an address that is not the
+///     hub's gets **nothing at all** — not a NAK, which would claim an endpoint
+///     — because `enabled` is low and the relay has not claimed the token;
+///   * resetting the port a second time, after the device has an address, puts
+///     the device back at 0. That is what pass-through addressing needs most:
+///     without it the device would keep an address from a previous session while
+///     the PC talked to address 0, and nothing would answer.
+///
+/// What it would catch: a relay that claimed tokens before the PC had enabled
+/// the port, which would answer for a device the PC has not reset and whose
+/// address is therefore anybody's guess; and a port reset that moved a bit in
+/// the hub without reaching the transceiver, which is the whole of what
+/// `usb_proxy_dn` adds.
+#[test]
+fn usb_proxy_forwards_nothing_until_the_host_has_reset_the_port() {
+    let proxy = proxy_design();
+    let dev_design = ulpi_design();
+    let mut host = UsbHost::new(ProxyRig::new(&proxy, &dev_design, false), 0);
+
+    assert!(
+        host.pair.until_attached(8_000),
+        "the downstream device attached; dn_stage is {}",
+        host.port("dn_stage")
+    );
+    configure_for(
+        &mut host,
+        3,
+        &expected_hub_device_descriptor(),
+        &expected_hub_configuration(),
+    );
+
+    // The hub is configured and its port is not even powered. A token for
+    // another address is nobody's.
+    for addr in [0, 9] {
+        assert_eq!(
+            host.bulk_in(addr, 0),
+            UsbReply::Nothing,
+            "an IN to address {addr} with the port unpowered is answered by nothing"
+        );
+        host.idle(10);
+    }
+
+    host.control_write(3, hub_set_port_feature(HUB_NBR_PORTS, FEAT_PORT_POWER));
+    host.idle(20);
+    // Powered, connected, and still not **enabled**: §11.5.1 only leaves a port
+    // Enabled after a reset, and the relay is gated on that and not on power.
+    let (stat, _) = proxy_port_status(&mut host, 3);
+    assert_ne!(stat & PORT_STAT_CONNECTION, 0, "the device is reported");
+    assert_eq!(stat & PORT_STAT_ENABLE, 0, "and the port is not enabled");
+    assert_eq!(
+        host.bulk_in(9, 0),
+        UsbReply::Nothing,
+        "a powered port that has not been reset still forwards nothing"
+    );
+    assert_eq!(host.port("proxied"), 0, "and nothing was ever forwarded");
+    host.idle(20);
+
+    // Now open it properly and give the device an address, so that the second
+    // reset has something to forget.
+    host.control_write(
+        3,
+        hub_clear_port_feature(HUB_NBR_PORTS, FEAT_C_PORT_CONNECTION),
+    );
+    host.idle(20);
+    host.control_write(3, hub_set_port_feature(HUB_NBR_PORTS, FEAT_PORT_RESET));
+    let mut enabled = false;
+    for _ in 0..200 {
+        let (stat, chg) = proxy_port_status(&mut host, 3);
+        if stat & PORT_STAT_RESET == 0 && chg & PORT_CHG_RESET != 0 {
+            enabled = stat & PORT_STAT_ENABLE != 0;
+            break;
+        }
+        host.idle(40);
+    }
+    assert!(enabled, "the first port reset enabled the port");
+    host.control_write(3, hub_clear_port_feature(HUB_NBR_PORTS, FEAT_C_PORT_RESET));
+    host.idle(20);
+
+    proxy_control_write(&mut host, 0, set_address(9)).expect("SET_ADDRESS through the proxy");
+    assert_eq!(host.pair.dev_port("address"), 9);
+    host.idle(20);
+
+    // A second port reset, which is what a PC does when an enumeration goes
+    // wrong and what it does every time it re-enumerates the hub.
+    host.control_write(3, hub_set_port_feature(HUB_NBR_PORTS, FEAT_PORT_RESET));
+    for _ in 0..200 {
+        let (stat, chg) = proxy_port_status(&mut host, 3);
+        if stat & PORT_STAT_RESET == 0 && chg & PORT_CHG_RESET != 0 {
+            break;
+        }
+        host.idle(40);
+    }
+    assert_eq!(
+        host.pair.dev_port("address"),
+        0,
+        "the second port reset reached the device, which forgot the address the PC gave it"
+    );
+    host.assert_clean();
+}
+
+#[test]
+fn usb_proxy_is_one_clock_domain() {
+    let kinds = crossings("usb_proxy", "usb_hub_proxy_ulpi", PROXY_TEST_PARAMS);
+    assert!(kinds.is_empty(), "nothing should cross: {kinds:?}");
 }
 
 // ---------------------------------------------------------------------------

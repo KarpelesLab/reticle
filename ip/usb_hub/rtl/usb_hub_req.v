@@ -27,39 +27,30 @@
 //   endpoint 0 stalls it, which is what §11.24.2 asks of a hub asked about a
 //   port number greater than `bNbrPorts`.
 //
-//   A seventh claim is a **standard** request and the next section is all of
-//   why it is here.
-//
-// THE STANDARD REQUEST A HUB CANNOT DO WITHOUT, AND WHY IT IS HERE
-//   `usb_ctrl_ep` implements five standard requests and offers the rest to
-//   the class — its own header says so, and names GET_STATUS as one of the
-//   ones a class may have "without this file changing again". A hub is the
-//   first block in this library that takes it up:
+// THE STANDARD REQUEST THIS BLOCK USED TO CLAIM, AND WHERE IT WENT
+//   Six requests and no more. For one round there was a seventh, and it was a
+//   **standard** request:
 //
 //     GET_STATUS, device    80h 00h  wValue 0, wIndex 0, wLength 2
 //
-//   because **Linux's hub driver sends it during hub probe** and treats a
-//   failure as fatal: `hub_configure` reads the device's standard status with
-//   the comment "power budgeting mostly matters with bus-powered hubs" and
-//   goes to its failure path with `can't get hub status` if the transfer does
-//   not complete. A device that stalls it is not a hub as far as that driver
-//   is concerned, however good its class requests are.
+//   which **Linux's hub driver sends during hub probe** and treats a failure
+//   as fatal: `hub_configure` reads the device's standard status with the
+//   comment "power budgeting mostly matters with bus-powered hubs" and goes to
+//   its failure path with `can't get hub status` if the transfer does not
+//   complete. `usb_ctrl_ep` did not implement it, so a hub that did not claim
+//   it on the class hook was not a hub as far as that driver was concerned,
+//   however good its class requests were.
 //
-//   USB 2.0 §9.4.5 and Table 9-4 say what the two bytes are: bit 0 of
-//   `wStatus` is **Self Powered** and bit 1 is **Remote Wakeup Enabled**,
-//   and bits 2 to 15 are reserved and zero. This block reports **both bits
-//   clear** — bus powered, remote wake-up not enabled — which agrees with the
-//   `bmAttributes` of the configuration descriptor `usb_hub` writes and with
-//   there being no SET_FEATURE(DEVICE_REMOTE_WAKEUP) anywhere in this
-//   library.
-//
-//   **It does not belong in a class block and it is here anyway.** The right
-//   home for a standard request is endpoint 0, and moving it there is a
-//   change to `usb_ctrl_ep` that every device in the library would then make
-//   — which is a better change than this one and is reported rather than
-//   made, because it widens `std_req` on the two cores that already run on
-//   silicon and this round has no measurement that would catch a regression
-//   in them. README.md §7 says it again where a reader will find it.
+//   **It is in endpoint 0 now**, where a standard request belongs: USB 2.0
+//   §9.4.5's two bytes are the same for every device in this library — bit 0
+//   is Self Powered, which is bit 6 of the `CFG_ATTR` the configuration
+//   descriptor is written from, and bit 1 is a Remote Wakeup nothing here can
+//   enable. `usb_ctrl_ep`'s "THE DEVICE'S OWN STATUS" is the whole of it, and
+//   `class_req` is no longer raised for it, so this block **cannot** claim it
+//   even by accident. The round that found the smudge reported it rather than
+//   making the change, because it widens `std_req` on two cores that run on
+//   silicon and that round had no measurement that would catch a regression in
+//   them; the round that made it re-ran `tests/usb_cdc_acm.rs` on a board.
 //
 // WHICH FEATURES ARE HONOURED, WHICH ARE ACCEPTED AND WHICH ARE STALLED
 //   A hub's features are USB 2.0 §11.24.2's feature selectors, and a block
@@ -71,7 +62,7 @@
 //
 //     SetPortFeature(PORT_POWER)        the port's own power bit
 //     ClearPortFeature(PORT_POWER)      ... and off again
-//     SetPortFeature(PORT_RESET)        completes at once; see below
+//     SetPortFeature(PORT_RESET)        the reset below, which takes time
 //     SetPortFeature(PORT_SUSPEND)      the suspend bit
 //     ClearPortFeature(PORT_SUSPEND)    ... and the resume that follows it
 //     ClearPortFeature(PORT_ENABLE)     the enable bit
@@ -110,24 +101,38 @@
 //   descriptor never sends the request, and one that sends it anyway gets the
 //   STALL that says the device never offered it.
 //
-// THE RESET THAT TAKES NO TIME, AND WHY THAT IS HONEST HERE
+// THE RESET, WHICH NOW TAKES TIME AND IS SOMEBODY ELSE'S TO DRIVE
 //   §11.5.1's **Resetting** state has a hub drive SE0 downstream for 10 to
-//   20 ms when a host sets PORT_RESET, and report PORT_RESET set while it
-//   does. **This block drives nothing downstream at all**, because what is
-//   downstream of it is not a port of this hub yet: it is a second USB
-//   controller — `ip/usb_host_ulpi` — with its own bus, its own reset and its
-//   own enumeration, and joining the two is the transaction proxy this round
-//   deliberately does not build.
+//   20 ms when a host sets PORT_RESET, report PORT_RESET set in `wPortStatus`
+//   while it does, and set C_PORT_RESET and enable the port when it finishes.
+//   This block does exactly that, and **drives none of it**: what is
+//   downstream is a second USB controller on its own bus, and the SE0 is a
+//   register write into its transceiver.
 //
-//   So the reset completes in the cycle it is asked for: `port_reset` is one
-//   cycle for whatever wants to know, C_PORT_RESET sets, the port becomes
-//   enabled if something is connected, and **PORT_RESET in wPortStatus is a
-//   constant zero** — a bit no expression in this file can set, which is why
-//   there is no register for it. A host therefore sees the reset already
-//   finished at its first GetPortStatus, enumerates the port, and gets
-//   nothing back from the device it believes is there. That is the correct
-//   outcome for a hub with no proxy behind it and README.md §8 is the kernel
-//   log of it happening.
+//   So the reset is a handshake of two signals:
+//
+//     `port_reset`      a **level**, raised by SetPortFeature(PORT_RESET) and
+//                       held until the reset is over. It is PORT_RESET in
+//                       `wPortStatus`, so it is a register and not the
+//                       constant zero it used to be.
+//     `port_reset_done` one cycle from whatever drove the reset. C_PORT_RESET
+//                       sets, the port becomes enabled if something is
+//                       connected, and `port_reset` falls.
+//
+//   `ip/usb_proxy`'s `usb_proxy_dn` is what drives it on the design this was
+//   written for, and its header has the ULPI register values and the two
+//   durations USB 2.0 §7.1.7 asks for. **Tying `port_reset_done` high restores
+//   the reset that takes no time**, which is what a design with nothing
+//   downstream wants and is what this block did for one round: the level is
+//   one cycle long, C_PORT_RESET sets immediately, and a host sees the reset
+//   already finished at its first GetPortStatus. That round's outcome — a PC
+//   that enumerates the port and gets nothing back — is in README.md §8 with
+//   its kernel log, and it is what the proxy changed.
+//
+//   A port that loses its power or its connection while resetting stops
+//   resetting: §11.5.1's **Powered-off** state has no reset in progress, and a
+//   `port_reset` left high there would be a hub reporting a reset nothing was
+//   driving.
 //
 // WHY THE CHANGE BITS ARE STICKY STATE AND NOT A ONE-SHOT
 //   The thing a hub reports on its status-change endpoint is **a set of bits
@@ -229,9 +234,12 @@ module usb_hub_req (
     output wire        port_power,
     output wire        port_enabled,
     output wire        port_suspended,
-    // One cycle: the host set PORT_RESET. "THE RESET THAT TAKES NO TIME"
-    // above says what this block does about it, which is nothing but say so.
-    output reg         port_reset,
+    // PORT_RESET, as a **level**: raised by SetPortFeature(PORT_RESET) and held
+    // until `port_reset_done`. "THE RESET, WHICH NOW TAKES TIME" above is the
+    // handshake and what tying the other half high does.
+    output wire        port_reset,
+    // One cycle: whatever drove the reset has finished it, with its recovery.
+    input  wire        port_reset_done,
 
     // THE HUB AND PORT STATUS CHANGE BITMAP, USB 2.0 §11.12.4
     //
@@ -263,9 +271,6 @@ module usb_hub_req (
     localparam [7:0] TYPE_HUB_IN   = 8'hA0;
     localparam [7:0] TYPE_PORT_OUT = 8'h23;
     localparam [7:0] TYPE_PORT_IN  = 8'hA3;
-    // And the one standard request this block claims: device to host,
-    // standard, to the device.
-    localparam [7:0] TYPE_STD_IN   = 8'h80;
 
     // bRequest. A hub reuses the standard request codes of USB 2.0 Table 9-4
     // with a class recipient rather than defining its own, which §11.24.2 is
@@ -355,7 +360,6 @@ module usb_hub_req (
     // Bytes in the data stage of each request that reads.
     localparam [6:0] LEN_HUB_DESC   = 7'd9;
     localparam [6:0] LEN_STATUS     = 7'd4;  // two 16-bit fields
-    localparam [6:0] LEN_STD_STATUS = 7'd2;  // one
 
     // -----------------------------------------------------------------
     // Which request this is. Pure combinational logic over eight bytes,
@@ -380,14 +384,6 @@ module usb_hub_req (
                        & (b_request == REQ_GET_STATUS)
                        & (w_value == 16'h0000)
                        & to_port;
-    // The standard one. "THE STANDARD REQUEST A HUB CANNOT DO WITHOUT" above
-    // is why a class block claims it; `wValue` is the status type, which USB
-    // 2.0 §9.4.5 makes zero for the standard two bytes.
-    wire get_std_stat = (bm_request_type == TYPE_STD_IN)
-                      & (b_request == REQ_GET_STATUS)
-                      & (w_value == 16'h0000)
-                      & to_hub;
-
     // The hub's two change bits, which are constant zeros here, so clearing
     // one is accepted and does nothing.
     wire clr_hub_feat = (bm_request_type == TYPE_HUB_OUT)
@@ -433,7 +429,7 @@ module usb_hub_req (
     wire clr_any = clr_power | clr_enable | clr_suspend
                  | clr_c_conn | clr_c_susp | clr_c_reset | clr_c_nil;
 
-    assign claim = get_hub_desc | get_hub_stat | get_port_stat | get_std_stat
+    assign claim = get_hub_desc | get_hub_stat | get_port_stat
                  | clr_hub_feat | set_any | clr_any;
 
     // How long the data stage is. A request that writes has none, and
@@ -441,7 +437,6 @@ module usb_hub_req (
     // arm is a length nothing asks for would be a number with no reason, so
     // it is zero.
     assign len = get_hub_desc ? LEN_HUB_DESC
-               : get_std_stat ? LEN_STD_STATUS
                : (get_hub_stat | get_port_stat) ? LEN_STATUS
                : 7'd0;
 
@@ -455,6 +450,7 @@ module usb_hub_req (
     reg c_susp;     // C_PORT_SUSPEND
     reg c_reset;    // C_PORT_RESET
     reg conn_q;     // what `connection` was a cycle ago
+    reg resetting;  // PORT_RESET: the reset asked for and not yet finished
 
     // PORT_CONNECTION. §11.5.1's Powered-off state makes a connection
     // meaningless while the port is powered off, and "WHAT A CHANGE IS A
@@ -465,6 +461,7 @@ module usb_hub_req (
     assign port_power     = powered;
     assign port_enabled   = enabled;
     assign port_suspended = suspended;
+    assign port_reset     = resetting;
 
     // -----------------------------------------------------------------
     // The bytes each read sends.
@@ -515,15 +512,16 @@ module usb_hub_req (
     //   wPortChange   0 C_PORT_CONNECTION 1 C_PORT_ENABLE  2 C_PORT_SUSPEND
     //                 3 C_PORT_OVER_CURRENT               4 C_PORT_RESET
     //
-    // PORT_RESET is zero because a reset here is over in the cycle it is
-    // asked for; PORT_HIGH_SPEED because this is a full-speed hub; the rest
-    // because nothing in this file can detect or do them.
+    // PORT_HIGH_SPEED is zero because this is a full-speed hub and the rest
+    // because nothing in this file can detect or do them. PORT_RESET is a
+    // register now and `resetting` is it: "THE RESET, WHICH NOW TAKES TIME"
+    // above.
     //
     // PORT_LOW_SPEED is gated by `connection` for the same reason the
     // specification calls it the speed of the **attached** device: which line
     // is pulled up says nothing while nothing is pulling.
     wire [7:0] port_stat_lo = {3'b000,                  // 7:5 reserved
-                               1'b0,                    // 4   PORT_RESET
+                               resetting,               // 4   PORT_RESET
                                1'b0,                    // 3   PORT_OVER_CURRENT
                                suspended,               // 2
                                enabled,                 // 1
@@ -540,13 +538,11 @@ module usb_hub_req (
                                1'b0,                  // 1   C_PORT_ENABLE
                                c_conn};               // 0
 
-    // The four bytes of the port's status, and the four zeros that are both
-    // the hub's status (§11.24.2.6 — no local supply, no over-current, and
-    // therefore no changes of either) and the two zeros of the standard
-    // device status (§9.4.5 — bus powered, no remote wake-up). One `case`
-    // serves all three because what the other two want is zero everywhere,
-    // which is a statement about this hub and is written down in the two
-    // sections above rather than left as an accident of the multiplexer.
+    // The four bytes of the port's status, and the four zeros of the hub's
+    // (§11.24.2.6 — no local supply, no over-current, and therefore no changes
+    // of either). One `case` serves both because what the hub's wants is zero
+    // everywhere, which is a statement about this hub and is written down in
+    // the section above rather than left as an accident of the multiplexer.
     reg [7:0] status_byte;
     always @(*) begin
         case (index[1:0])
@@ -576,17 +572,18 @@ module usb_hub_req (
             c_susp     <= 1'b0;
             c_reset    <= 1'b0;
             conn_q     <= 1'b0;
-            port_reset <= 1'b0;
+            resetting  <= 1'b0;
             sel_desc   <= 1'b0;
             sel_port   <= 1'b0;
         end else begin
-            port_reset <= 1'b0;
-
             // A port with nothing on it is not enabled, whatever it was told:
             // §11.5.1 takes a port out of **Enabled** on a disconnect, and a
             // host that read PORT_ENABLE set on an empty port would address a
             // device that is not there.
-            if (!connection) enabled <= 1'b0;
+            if (!connection) begin
+                enabled   <= 1'b0;
+                resetting <= 1'b0;
+            end
 
             if (req && claim) begin
                 // Which read is in progress, for `resp` above. Latched on
@@ -600,23 +597,20 @@ module usb_hub_req (
                 // what it asked for.
                 if (set_power)   powered   <= 1'b1;
                 if (set_suspend) suspended <= 1'b1;
-                if (set_reset) begin
-                    // "THE RESET THAT TAKES NO TIME" above. Nothing is driven
-                    // downstream, so the reset is finished: the port becomes
-                    // enabled if something is connected and C_PORT_RESET says
-                    // the reset completed.
-                    port_reset <= 1'b1;
-                    c_reset    <= 1'b1;
-                    enabled    <= connection;
-                end
+                // §11.5.1's **Resetting**. The reset is asked for here and
+                // finished below, when whatever drives it says so.
+                if (set_reset) resetting <= 1'b1;
 
                 // ClearPortFeature.
                 if (clr_power) begin
                     // §11.5.1's Powered-off: no connection and
                     // no enable, and `connection` follows `powered` on its
-                    // own. The enable does not, so it is cleared here.
-                    powered <= 1'b0;
-                    enabled <= 1'b0;
+                    // own. The enable does not, so it is cleared here, and
+                    // neither does a reset in progress, which a port with no
+                    // power is not in.
+                    powered   <= 1'b0;
+                    enabled   <= 1'b0;
+                    resetting <= 1'b0;
                 end
                 if (clr_enable) enabled <= 1'b0;
                 if (clr_suspend) begin
@@ -631,6 +625,18 @@ module usb_hub_req (
                 // `clr_c_conn` is below, after the arm that sets `c_conn`.
                 // `clr_c_nil` and `clr_hub_feat` name bits that are constant
                 // zeros, so they are claimed and nothing happens.
+            end
+
+            // THE RESET FINISHING, WHICH IS NOT THIS BLOCK'S DOING
+            //
+            // After the `req && claim` arm, so that a reset asked for and
+            // finished in the same cycle — which is what `port_reset_done`
+            // tied high is — is asked for first and finished second, and
+            // C_PORT_RESET is set rather than the level being left high.
+            if (resetting && port_reset_done) begin
+                resetting <= 1'b0;
+                c_reset   <= 1'b1;
+                enabled   <= connection;
             end
 
             // A HOST CLEARING A CHANGE MUST NOT LOSE ONE THAT HAPPENED
@@ -659,6 +665,7 @@ module usb_hub_req (
                 c_susp    <= 1'b0;
                 c_reset   <= 1'b0;
                 conn_q    <= 1'b0;
+                resetting <= 1'b0;
             end
         end
     end

@@ -1,55 +1,50 @@
-// A USB **hub** on a Cynthion's AUX port, with a USB **host** on its TARGET
-// port and the hub's one downstream port reporting what that host sees.
+// A USB **proxy** on a Cynthion: the hub the PC binds to on the AUX port, the
+// device it reaches *through* that hub in the TARGET-A socket, and the PC's own
+// transactions carried from one bus to the other.
 //
-// This is `usb_host_target.v` next door with the AUX side changed from a
-// serial port to a hub: `ip/usb_hub` on the auxiliary transceiver and
-// `ip/usb_host_ulpi` on the target one, with `port_attached` wired from the
-// second to the first. The computer on the AUX cable finds a hub with one
-// port; what is in the TARGET-A socket is on that port.
+// This is `usb_hub_target.v` with the thing that was missing from it put in.
+// There, `ip/usb_hub` answered the PC's class requests about its port and
+// `ip/usb_host_ulpi` enumerated whatever was on TARGET-A **for itself**, and no
+// packet crossed between the two buses — so the PC found a hub, found a device
+// on its port, reset it, and got `device descriptor read/64, error -71`, which
+// was the correct outcome of a hub that forwards nothing.
+// `ip/usb_hub/README.md` §8 quotes that log.
+//
+// `ip/usb_proxy` is what closes it, and the whole of this design is that block
+// with a board around it.
 //
 // ===================================================================
-// WHAT THIS IS AND, JUST AS IMPORTANTLY, WHAT IT IS NOT
+// WHAT IS SUPPOSED TO HAPPEN, AND HOW TO TELL
 // ===================================================================
-//
-// **It is not a USB proxy yet and must not be read as one.** Nothing joins
-// the two conversations: the hub answers the PC's control requests about its
-// port, the host enumerates whatever is on TARGET-A for itself, and no packet
-// crosses from one bus to the other. So the expected outcome on the part is:
 //
 //   * the PC's own hub driver binds — `hub 7-5:1.0: USB hub found`,
 //     `1 port detected`;
 //   * it powers the port, is told something is attached, and resets it;
-//   * and then it tries to read a device descriptor through the port and
-//     **fails**, because there is nothing on the other side of a hub that does
-//     not forward anything.
+//   * **this design resets the device too**, which is `ip/usb_proxy`'s
+//     `usb_proxy_dn` writing `50h` and then `45h` into the TARGET
+//     transceiver's Function Control register — 15 ms of SE0 and 20 ms of
+//     recovery — and only then does the hub report the reset complete and the
+//     port enabled;
+//   * and then the PC enumerates the device **itself**, through the port, and
+//     the device that appears in `lsusb` is the one in the socket with its own
+//     VID and PID.
 //
-// That is correct for this design and `ip/usb_hub/README.md` §8 quotes the
-// kernel log of it. A transaction proxy is what closes it, and §2 of that file
-// is why it cannot be done by repeating bits: through a ULPI transceiver the
-// floor for a byte in and a byte out is roughly twenty-four bit times and USB
-// allows about four.
-//
-// **That proxy exists**: `ip/usb_proxy`, and
-// `testdata/fpga/cynthion/usb_proxy_target.v` is this design with it in. This
-// one is kept because it is the measurement the proxy is measured against — the
-// same two transceivers with nothing joining them — and because its console
-// reports our own host's enumeration stage, which the proxy deliberately does
-// not have: there, the PC is the only thing that enumerates.
+// Nothing of this design's own appears in that device's descriptors, because
+// nothing of this design's own is in them: with pass-through addressing the
+// bytes the PC reads are the bytes the device sent. `ip/usb_proxy/README.md`
+// §2 is why that was the architecture chosen.
 //
 // ===================================================================
 // THE SERIAL CONSOLE IS ON T14 HERE, AND WHY IT HAS TO BE
 // ===================================================================
 //
 // `usb_host_target.v` reports itself over a CDC ACM serial port on **AUX**.
-// This design cannot: AUX is the hub. Every other design in this directory
-// that needed a console put it on the port that is now taken.
-//
-// So the console is the **other** one, the UART on ball **T14** that
-// `usb_ulpi_trace.v` established, which Apollo bridges to `/dev/ttyACM0` and
-// which is independent of AUX entirely. That file's header is the whole
-// argument for it being safe and the rule it imposes, and both are repeated
-// here because a design that drives T14 without them is two drivers on one
-// wire:
+// This design cannot: AUX is the hub. So the console is the UART on ball
+// **T14** that `usb_ulpi_trace.v` established, which Apollo bridges to
+// `/dev/ttyACM0` and which is independent of AUX entirely. That file's header
+// is the whole argument for it being safe and the rule it imposes, and both are
+// repeated here because a design that drives T14 without them is two drivers on
+// one wire:
 //
 //   * T14 is the FPGA's `uart.tx` in Great Scott Gadgets' platform file and
 //     it is on the **same net** as the debug microcontroller's JTAG `TMS`
@@ -75,14 +70,9 @@
 //     infers a clock enable, a slice's two flip-flops share one `CE` wire,
 //     and the pad never drove at all.
 //
-// The window is seventeen seconds and the PC's hub enumeration is over in
-// one, so the console is a check on the gateware's own view and the kernel
-// log is the better observable. That is deliberate: a hub is the one class
-// whose host side writes its own trace.
-//
 // THE FORMAT
 // ----------
-// One line a second: `H`, eight hex digits, CRLF. The eight digits are four
+// One line a second: `P`, eight hex digits, CRLF. The eight digits are four
 // bytes, most significant nibble first:
 //
 //   byte 0  the hub, on AUX
@@ -91,33 +81,45 @@
 //           [5] addressed          SET_ADDRESS accepted
 //           [4] saw_bus_reset      the PC has reset the AUX bus at least once
 //           [3] port_power         the PC sent SetPortFeature(PORT_POWER)
-//           [2] port_enabled       ... and PORT_RESET, which enables it
+//           [2] port_enabled       ... and the port reset finished, so it is on
 //           [1] port_suspended     ... and PORT_SUSPEND
-//           [0] saw_port_reset     a port reset has been asked for, ever
+//           [0] port_reset         a port reset is in progress **now**
 //
-//   byte 1  the host, on TARGET
-//           [7] phy_ready          the TARGET transceiver answered
-//           [6] attached           a device is on TARGET-A, debounced
-//           [5] low_speed          ... and it pulled D- up rather than D+
-//           [4] up                 our host enumerated it
-//           [3] failed             our host's enumeration gave up
-//           [2:1] vbus_state       the transceiver's own comparators
-//           [0] 0
+//   byte 1  the downstream port, on TARGET
+//           [7] dn_phy_ready       the TARGET transceiver answered
+//           [6] dn_attached        a device is on TARGET-A, debounced
+//           [5] dn_low_speed       ... and it pulled D- up rather than D+
+//           [4] saw_proxied        **the PC has addressed it through the hub**
+//           [3] dn_reg_failed      a Function Control write the part refused
+//           [2:1] dn_vbus_state    the transceiver's own comparators
+//           [0] ctrl_active        a control transfer is being forwarded
 //
-//   byte 2  `3'b0` then `stage[4:0]`, our host's enumeration stage
-//   byte 3  `1'b0`, `line_state[1:0]`, `fail_stage[4:0]`
+//   byte 2  `2'b00`, `job[1:0]`, `dn_stage[3:0]` — the relay's one job and the
+//           downstream port's state machine. `job` is 0 idle, 1 wanted, 2
+//           running, 3 an answer the PC has not taken; `dn_stage` is 1 an empty
+//           port, 4 a device the PC has not reset, 5 to 8 the reset, 10 a
+//           device that has been reset and may be relayed to.
 //
-// **Byte 0 bit 3 is the one to look at.** `port_power` is the PC's hub driver
-// having sent a class request this gateware answered, which is a stronger
-// statement than anything about descriptors: it means the kernel read the hub
-// descriptor, believed it, and started operating the port. It is `led4_n` as
-// well, so it can be read with no console at all.
+//   byte 3  `1'b0`, `dn_line_state[1:0]`, `setups[4:0]` — the TARGET pair as
+//           the transceiver last reported it, and a count of SETUP packets the
+//           PC has sent to something behind the port, saturating at 31.
+//
+// **Byte 1 bit 4 and byte 3's low five bits are the ones to look at.**
+// `saw_proxied` says the PC addressed the device at all, which no previous
+// design on this board could produce; `setups` climbing says it is enumerating
+// it. `saw_proxied` is `led5_n` as well, so it can be read with no console.
+//
+// What the console **cannot** say is whether the enumeration succeeded. That is
+// the PC's own kernel log and `lsusb`, and `ip/usb_proxy/README.md` §8 is where
+// it is quoted. A count of SETUPs that climbs to 31 and stops is a PC that
+// enumerated the device and went quiet, and one that sits at 2 is a PC retrying
+// the same request.
 //
 // ===================================================================
 // THE VBUS SWITCHES: EXACTLY ONE, AND IT HAS A PARAMETER
 // ===================================================================
 //
-// Unchanged from `usb_host_target.v`, whose header has the long form. The
+// Unchanged from `usb_hub_target.v`, whose header has the long form. The
 // platform file's own comment is the hazard:
 //
 //     # VBUS on each of the Type-C ports can be connected to TARGET A
@@ -136,14 +138,13 @@
 //
 // **Nothing here switches that pin from a class request.** The PC's
 // SetPortFeature(PORT_POWER) moves a bit inside `usb_hub` and does not reach
-// L2, which is a deliberate refusal rather than an omission: the board's
-// power topology is a property of the bitstream that was loaded, not of what
-// a host asks for, and `ip/usb_hub/README.md` §4 says it again there.
+// L2, which is a deliberate refusal rather than an omission: the board's power
+// topology is a property of the bitstream that was loaded, not of what a host
+// asks for.
 //
 // **A device on TARGET-A needs `VBUS_AUX = 1`.** With the default of 0 the
 // socket has no power, nothing attaches, and the hub correctly reports an
-// empty port — which is a useful thing to look at and is not the measurement
-// this design was built for.
+// empty port.
 //
 // ===================================================================
 // WHAT TO LOOK AT
@@ -151,33 +152,28 @@
 //
 // The LEDs, which need no console:
 //
-//   LED 0  the AUX transceiver answered — `phy_ready` of the hub
+//   LED 0  the AUX transceiver answered — the hub's `phy_ready`
 //   LED 1  the hub was configured by the PC
 //   LED 2  something is on the TARGET pair
 //   LED 3  heartbeat, so a dark board is a dead board
-//   LED 4  **the PC powered the hub's port**, which is its hub driver working
-//   LED 5  the PC reset the port, which is it trying to enumerate through it
+//   LED 4  the port is enabled — the PC reset it and the reset reached the
+//          device
+//   LED 5  **the PC addressed the device behind the port**
 //
-// LED 4 and LED 5 lit with LED 2 lit is this round's whole milestone: the
-// kernel found a hub, found something on its port, and tried.
-module usb_hub_target #(
+// LED 5 lit is this round's whole milestone, and the kernel log is the proof.
+module usb_proxy_target #(
     // How many clocks the cores are held in reset after configuration.
     parameter integer POR = 16,
-    // Whether our host's enumeration of the TARGET port runs at all. 0 leaves
-    // the target transceiver configured as a host — two 15 kOhm pull-downs and
-    // nothing else on the pair — and drives nothing, and then `attached` never
-    // rises and the hub reports an empty port.
-    parameter integer HOST_EN = 1,
-    // Whether `aux_vbus_en` (L2) is driven high, passing the AUX Type-C
-    // port's VBUS through to TARGET A. **Read the section above before
-    // changing this.** 0 is the default and closes no switch at all.
+    // Whether `aux_vbus_en` (L2) is driven high, passing the AUX Type-C port's
+    // VBUS through to TARGET A. **Read the section above before changing
+    // this.** 0 is the default and closes no switch at all.
     parameter integer VBUS_AUX = 0,
     // Which `LineState` is a full-speed device's idle J, from the target
-    // transceiver's point of view; `ip/usb_host_ulpi`'s `FS_LINE` says why
-    // this is a parameter at all.
+    // transceiver's point of view; `ip/usb_host_ulpi`'s `FS_LINE` says why this
+    // is a parameter at all.
     parameter [1:0] FS_LINE = 2'b01,
-    // Cycles of an idle bus at J before the hub's answer goes out, which ULPI
-    // 1.1 Table 10 allows a full-speed Link between 7 and 18 of.
+    // Cycles of an idle bus at J before an answer goes out, which ULPI 1.1
+    // Table 10 allows a full-speed Link between 7 and 18 of.
     parameter [6:0] TURNAROUND = 7'd9,
     // Clocks a bit on the T14 console: 60 MHz over 115200 is 520.8, and the
     // rounding is one part in five hundred against a receiver that samples in
@@ -195,7 +191,8 @@ module usb_hub_target #(
 ) (
     input  wire clk,              // A8, the 60.000 MHz oscillator
 
-    // The auxiliary transceiver: the hub the computer sees.
+    // The auxiliary transceiver: the hub the computer sees, and the proxy's
+    // upstream bus.
     inout  wire [7:0] aux_data,   // F16 G15 G16 H15 J15 J16 K15 K16
     input  wire aux_dir,          // E16
     input  wire aux_nxt,          // F15
@@ -203,7 +200,7 @@ module usb_hub_target #(
     output wire aux_rst_n,        // J13, active low at the ball
     output wire aux_clk,          // D16, the clock the board says we owe it
 
-    // The target transceiver: our own host.
+    // The target transceiver: the proxy's downstream bus.
     inout  wire [7:0] tgt_data,   // R2 R1 P2 P1 N3 N1 M2 M1
     input  wire tgt_dir,          // R3
     input  wire tgt_nxt,          // T2
@@ -224,8 +221,8 @@ module usb_hub_target #(
     output wire led1_n,           // the hub was configured
     output wire led2_n,           // something is on the target pair
     output wire led3_n,           // heartbeat
-    output wire led4_n,           // the PC powered the hub's port
-    output wire led5_n            // the PC reset the hub's port
+    output wire led4_n,           // the hub's port is enabled
+    output wire led5_n            // the PC addressed the device behind it
 );
     // -----------------------------------------------------------------
     // The power-on reset: a one walked along a shift register, so the cores
@@ -254,153 +251,110 @@ module usb_hub_target #(
     assign target_c_vbus_en = 1'b0;
 
     // =================================================================
-    // THE HOST, on TARGET
-    // =================================================================
-    // Declared before the hub because the hub's downstream port reads two of
-    // its outputs.
-    wire [7:0] tgt_o;
-    wire       tgt_oe;
-    assign tgt_data = tgt_oe ? tgt_o : 8'bz;
-
-    wire       h_phy_ready;
-    wire [1:0] h_line_state;
-    wire [1:0] h_vbus_state;
-    wire [4:0] h_stage;
-    wire       h_attached, h_low_speed, h_up, h_failed;
-    wire [4:0] h_fail_stage;
-
-    // `VENDOR_ADDR` / `VENDOR_DATA` are this board's one register and not
-    // ULPI's: a Cynthion crosses DP and DM between each transceiver and its
-    // connector, and register 39h bit 1 of the Microchip USB3343 undoes it.
-    // `usb_ulpi_device.v`'s header has the three sources that agree on it.
-    //
-    // `enum_en` is a constant here, where `usb_host_target.v` held it low
-    // until a nine-register probe had finished. There is no probe in this
-    // design — `usb_host_target.v` is the instrument and has already read
-    // those registers off this board — and `usb_host_enum` waits for
-    // `phy_ready` itself, so there is nothing for a sequencer to sequence.
-    usb_host_ulpi #(
-        .VENDOR_ADDR (6'h39),
-        .VENDOR_DATA (8'h06),
-        .FS_LINE     (FS_LINE),
-        .DESC_MAX    (7'd64)
-    ) u_host (
-        .clk60        (clk),
-        .rst_n        (reset_done),
-        .ulpi_data_i  (tgt_data),
-        .ulpi_data_o  (tgt_o),
-        .ulpi_data_oe (tgt_oe),
-        .ulpi_dir     (tgt_dir),
-        .ulpi_nxt     (tgt_nxt),
-        .ulpi_stp     (tgt_stp),
-        .ulpi_rst_n   (tgt_rst_n),
-        .phy_ready    (h_phy_ready),
-        .rx_cmd       (),
-        .rx_cmd_seen  (),
-        .line_state   (h_line_state),
-        .vbus_state   (h_vbus_state),
-        .id_pin       (),
-        .enum_en      (HOST_EN != 0),
-        .reg_start    (1'b0),
-        .reg_write    (1'b0),
-        .reg_addr     (6'h00),
-        .reg_wdata    (8'h00),
-        .reg_rdata    (),
-        .reg_done     (),
-        .reg_ok       (),
-        .reg_busy     (),
-        .frame        (),
-        .sof_sent     (),
-        .stage        (h_stage),
-        .attached     (h_attached),
-        .low_speed    (h_low_speed),
-        .up           (h_up),
-        .failed       (h_failed),
-        .fail_stage   (h_fail_stage),
-        .fail_status  (),
-        .dev_addr     (),
-        .maxpkt0      (),
-        .cfg_total    (),
-        .cfg_value    (),
-        .desc_data    (),
-        .desc_valid   (),
-        .desc_index   (),
-        .desc_tag     (),
-        .desc_done    (),
-        .desc_len     ()
-    );
-
-    // =================================================================
-    // THE HUB, on AUX
+    // THE PROXY
     // =================================================================
     wire [7:0] aux_o;
     wire       aux_oe;
     assign aux_data = aux_oe ? aux_o : 8'bz;
 
-    wire [6:0] hub_address;
-    wire       hub_configured;
-    wire       hub_bus_reset;
-    wire       hub_phy_ready;
-    wire       port_power, port_enabled, port_suspended, port_reset;
+    wire [7:0] tgt_o;
+    wire       tgt_oe;
+    assign tgt_data = tgt_oe ? tgt_o : 8'bz;
 
-    // **`port_attached` is `attached` and not `up`.** USB 2.0 §11.24.2.7.1
-    // makes PORT_CONNECTION "a device is present on this port", which is what
-    // our host's debounced attach is; whether our host has finished
-    // enumerating it is this design's business and not the PC's. `low_speed`
-    // is which line the device pulled up, which only means anything while
-    // something is attached, and `ip/usb_hub` gates it on that.
-    usb_hub_ulpi #(
-        .TURNAROUND  (TURNAROUND),
-        .VENDOR_ADDR (6'h39),
-        .VENDOR_DATA (8'h06)
-    ) u_hub (
+    wire [6:0] hub_address;
+    wire       hub_configured, hub_bus_reset, hub_phy_ready;
+    wire       port_power, port_enabled, port_suspended, port_reset;
+    wire       dn_phy_ready, dn_attached, dn_low_speed, dn_reg_failed;
+    wire [1:0] dn_line_state, dn_vbus_state;
+    wire [3:0] dn_stage;
+    wire       proxied, ctrl_active;
+    wire [1:0] job;
+
+    // `*_VENDOR_ADDR` / `*_VENDOR_DATA` are this board's one register and not
+    // ULPI's: a Cynthion crosses DP and DM between **each** transceiver and its
+    // connector, and register 39h bit 1 of the Microchip USB3343 undoes it.
+    // Great Scott Gadgets' own platform file applies `{0x39: 0b000110}` to
+    // whichever ULPI interface is built, not per port, so both ports get the
+    // same value here — and `usb_ulpi_device.v`'s header has the three sources
+    // that agree on it for AUX. For TARGET it is still only quoted:
+    // `ip/usb_host_ulpi/README.md` §5 says so, and `FS_LINE` is the parameter
+    // that settles it if the quotation is wrong.
+    usb_hub_proxy_ulpi #(
+        .UP_VENDOR_ADDR (6'h39),
+        .UP_VENDOR_DATA (8'h06),
+        .DN_VENDOR_ADDR (6'h39),
+        .DN_VENDOR_DATA (8'h06),
+        .FS_LINE        (FS_LINE),
+        .TURNAROUND     (TURNAROUND)
+    ) u_proxy (
         .clk60          (clk),
         .rst_n          (reset_done),
-        .ulpi_data_i    (aux_data),
-        .ulpi_data_o    (aux_o),
-        .ulpi_data_oe   (aux_oe),
-        .ulpi_dir       (aux_dir),
-        .ulpi_nxt       (aux_nxt),
-        .ulpi_stp       (aux_stp),
-        .ulpi_rst_n     (aux_rst_n),
+        .up_data_i      (aux_data),
+        .up_data_o      (aux_o),
+        .up_data_oe     (aux_oe),
+        .up_dir         (aux_dir),
+        .up_nxt         (aux_nxt),
+        .up_stp         (aux_stp),
+        .up_rst_n       (aux_rst_n),
+        .dn_data_i      (tgt_data),
+        .dn_data_o      (tgt_o),
+        .dn_data_oe     (tgt_oe),
+        .dn_dir         (tgt_dir),
+        .dn_nxt         (tgt_nxt),
+        .dn_stp         (tgt_stp),
+        .dn_rst_n       (tgt_rst_n),
         .address        (hub_address),
         .configured     (hub_configured),
         .usb_reset      (hub_bus_reset),
         .phy_ready      (hub_phy_ready),
-        .port_attached  (h_attached),
-        .port_low_speed (h_low_speed),
         .port_power     (port_power),
         .port_enabled   (port_enabled),
         .port_suspended (port_suspended),
-        // **Tied high, which is the reset that takes no time.** `ip/usb_hub`'s
-        // port reset is a handshake now — a level out while the port is
-        // resetting and a pulse in when whatever drives it has finished — and
-        // this design drives nothing downstream, so the answer is "already
-        // done": `port_reset` is one cycle, C_PORT_RESET sets at once, and the
-        // PC sees the reset finished at its first GetPortStatus, exactly as it
-        // did before the handshake existed. `testdata/fpga/cynthion/usb_proxy_target.v`
-        // is the design where the reset is real.
-        .port_reset      (port_reset),
-        .port_reset_done (1'b1)
+        .port_reset     (port_reset),
+        .dn_phy_ready   (dn_phy_ready),
+        .dn_attached    (dn_attached),
+        .dn_low_speed   (dn_low_speed),
+        .dn_line_state  (dn_line_state),
+        .dn_vbus_state  (dn_vbus_state),
+        .dn_stage       (dn_stage),
+        .dn_reg_failed  (dn_reg_failed),
+        .dn_frame       (),
+        .proxied        (proxied),
+        .ctrl_active    (ctrl_active),
+        .job            (job)
     );
 
     // =================================================================
-    // THE LATCHES
+    // THE LATCHES AND THE ONE COUNTER
     // =================================================================
     // Written `q <= q | event` and not `if (event) q <= 1'b1` because the
     // second infers a clock enable, a slice's two flip-flops share one `CE`
     // wire, and this design's console stayed silent on a part with it.
     reg saw_bus_reset  = 1'b0;
-    reg saw_port_reset = 1'b0;
     reg saw_attached   = 1'b0;
     reg saw_configured = 1'b0;
-    reg saw_power      = 1'b0;
+    reg saw_proxied    = 1'b0;
     always @(posedge clk) begin
         saw_bus_reset  <= saw_bus_reset  | hub_bus_reset;
-        saw_port_reset <= saw_port_reset | port_reset;
-        saw_attached   <= saw_attached   | h_attached;
+        saw_attached   <= saw_attached   | dn_attached;
         saw_configured <= saw_configured | hub_configured;
-        saw_power      <= saw_power      | port_power;
+        saw_proxied    <= saw_proxied    | proxied;
+    end
+
+    // A count of SETUP packets the PC has sent to something behind the port,
+    // which is the one number that says whether the forwarding is **working**
+    // rather than merely reached: a PC enumerating a device sends eight or so
+    // and stops.
+    //
+    // `ctrl_active` rises once per SETUP the relay took, and it stays high for
+    // the rest of that transfer, so the edge is the count. Five bits and it
+    // **saturates** rather than wrapping, because a counter that wraps reads
+    // the same as one that never ran.
+    reg       ctrl_q = 1'b0;
+    reg [4:0] setups = 5'd0;
+    always @(posedge clk) begin
+        ctrl_q <= ctrl_active;
+        if (ctrl_active && !ctrl_q && setups != 5'd31) setups <= setups + 5'd1;
     end
 
     // =================================================================
@@ -431,23 +385,21 @@ module usb_hub_target #(
     // The four bytes, which the header's table is the field list of.
     wire [7:0] b0 = {hub_phy_ready, hub_configured, hub_address != 7'd0,
                      saw_bus_reset, port_power, port_enabled, port_suspended,
-                     saw_port_reset};
-    wire [7:0] b1 = {h_phy_ready, h_attached, h_low_speed, h_up, h_failed,
-                     h_vbus_state, 1'b0};
-    wire [7:0] b2 = {3'b000, h_stage};
-    wire [7:0] b3 = {1'b0, h_line_state, h_fail_stage};
+                     port_reset};
+    wire [7:0] b1 = {dn_phy_ready, dn_attached, dn_low_speed, saw_proxied,
+                     dn_reg_failed, dn_vbus_state, ctrl_active};
+    wire [7:0] b2 = {2'b00, job, dn_stage};
+    wire [7:0] b3 = {1'b0, dn_line_state, setups};
 
-    // `H`, eight nibbles, CR, LF: eleven characters, and `pos` runs 0 to 11 —
+    // `P`, eight nibbles, CR, LF: eleven characters, and `pos` runs 0 to 11 —
     // one past the last one, which is the state the gap between lines is
     // counted in.
     //
-    // **Four bits, because eleven fits in four.** This was five, and five it is
-    // not: bit 4 is a bit no expression in this file can set, which is a
-    // flip-flop whose data input is the constant zero, which on an ECP5 is the
-    // shape that cost this project eight rounds of investigation over a
-    // `reg [2:0]` for four states. `usb_ctrl_ep`'s own header carries that
-    // account and `CLAUDE.md` the rule: a register is as wide as the values it
-    // holds.
+    // **Four bits, because eleven fits in four.** `usb_hub_target.v`'s own
+    // comment is why that matters: a fifth bit would be a bit no expression in
+    // this file can set, which is a flip-flop whose data input is the constant
+    // zero, which on an ECP5 is the shape that cost this project eight rounds
+    // of investigation over a `reg [2:0]` for four states.
     localparam [3:0] P_LAST = 4'd9;   // the CR
     localparam [3:0] P_END  = 4'd11;  // one past the LF: the gap
 
@@ -476,7 +428,7 @@ module usb_hub_target #(
                                    : (8'h37 + {4'd0, nib});
     reg [7:0] chr;
     always @(*) begin
-        if (pos == 4'd0)                  chr = 8'h48;  // 'H'
+        if (pos == 4'd0)                  chr = 8'h50;  // 'P'
         else if (pos == P_LAST)           chr = 8'h0D;
         else if (pos == P_LAST + 4'd1)    chr = 8'h0A;
         else                              chr = hex;
@@ -547,6 +499,6 @@ module usb_hub_target #(
     assign led1_n = ~saw_configured;
     assign led2_n = ~saw_attached;
     assign led3_n = ~count[25];
-    assign led4_n = ~saw_power;
-    assign led5_n = ~saw_port_reset;
+    assign led4_n = ~port_enabled;
+    assign led5_n = ~saw_proxied;
 endmodule

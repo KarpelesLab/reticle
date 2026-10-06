@@ -77,7 +77,11 @@ module usb_hub_ulpi #(
     output wire       port_power,
     output wire       port_enabled,
     output wire       port_suspended,
-    output wire       port_reset
+    // The port reset, as a level and a pulse: `usb_hub_req`'s "THE RESET,
+    // WHICH NOW TAKES TIME" is the handshake, and tying `port_reset_done` high
+    // makes the reset finish in the cycle it is asked for.
+    output wire       port_reset,
+    input  wire       port_reset_done
 );
     wire [7:0] rx_data;
     wire       rx_valid, rx_eop, rx_active, line_idle, bus_reset;
@@ -148,8 +152,9 @@ module usb_hub_ulpi #(
         .port_low_speed (port_low_speed),
         .port_power     (port_power),
         .port_enabled   (port_enabled),
-        .port_suspended (port_suspended),
-        .port_reset     (port_reset)
+        .port_suspended  (port_suspended),
+        .port_reset      (port_reset),
+        .port_reset_done (port_reset_done)
     );
 
     assign usb_reset = bus_reset;

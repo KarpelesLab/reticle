@@ -58,15 +58,50 @@
 //                                   toggle goes back to DATA0, which is
 //                                   how a host and a device agree on a
 //                                   toggle again without a bus reset
+//     GET_STATUS, device            two bytes: `bmAttributes`' own
+//                                   self-powered bit and a remote wake-up
+//                                   bit nothing in this library sets.
+//                                   "THE DEVICE'S OWN STATUS" below is
+//                                   why it is here and why the interface
+//                                   and endpoint recipients are not
 //
 //   A descriptor goes out in as many DATA1 / DATA0 packets as it takes,
 //   never more than the host's wLength, and a packet the host does not
 //   acknowledge is sent again with the same toggle. The status stage is
 //   an OUT of zero length after a read and an IN of zero length after
-//   the others. Anything else — string descriptors, GET_STATUS,
-//   requests to an interface or an endpoint — is offered to the class
-//   hook below, and answered with STALL until the next SETUP if the class
-//   does not claim it.
+//   the others. Anything else — string descriptors, GET_STATUS to an
+//   interface or an endpoint, SET_FEATURE — is offered to the class hook
+//   below, and answered with STALL until the next SETUP if the class does
+//   not claim it.
+//
+// THE DEVICE'S OWN STATUS, AND WHY ONLY THE DEVICE'S
+//   USB 2.0 §9.4.5 gives GET_STATUS three recipients and this module
+//   implements **one**: the device. Table 9-4 makes a device's two bytes
+//   bit 0 Self Powered, bit 1 Remote Wakeup Enabled and bits 2 to 15
+//   reserved and zero, and both of those bits are properties this module
+//   already holds or already knows to be absent — the first is bit 6 of
+//   `CFG_ATTR`, the same byte the configuration descriptor's
+//   `bmAttributes` is written from, and the second is zero because
+//   nothing in this library implements SET_FEATURE(DEVICE_REMOTE_WAKEUP),
+//   so there is nothing that could ever have enabled it. One answer, the
+//   same for every device here, derived from a parameter rather than
+//   restated.
+//
+//   **An interface's and an endpoint's are not, and that is deliberate.**
+//   §9.4.5 makes an interface's two bytes reserved and zero and an
+//   endpoint's bit 0 the Halt feature — and both are answerable only by
+//   something that knows which interfaces and endpoints exist, which
+//   endpoint 0 does not: `IFACE_DESC` is a blob it indexes and
+//   `usb_bulk_ep` is a module beside it. A device that answered zero to
+//   GET_STATUS for *any* endpoint number would be claiming endpoints it
+//   has not got, where §9.4.5 asks for a STALL. So those two stay on the
+//   class hook, where the block that built the descriptors is.
+//
+//   It is here rather than in a class because it is **standard**: Linux's
+//   `hub_configure` sends it to every hub and takes a failure as fatal,
+//   which is how it was found, and `ip/usb_hub` claimed it on the class
+//   hook for one round because this module did not have it. That is a
+//   layering smudge a class should never have to make twice.
 //
 //   A token addressed elsewhere, or to another endpoint, is ignored.
 //   `bus_reset` sets the address back to 0 and the configuration to none.
@@ -107,8 +142,16 @@
 //   `class_req` is deliberately **not** raised for the requests this
 //   module implements, so a class cannot shadow SET_ADDRESS or
 //   GET_DESCRIPTOR by claiming them. Everything else is offered,
-//   string descriptors and GET_STATUS included, so a class that wants
-//   those can have them without this file changing again.
+//   string descriptors included, so a class that wants those can have them
+//   without this file changing again.
+//
+//   **GET_STATUS to the device used to be in that sentence and is not any
+//   more.** It is a standard request, §9.4.5 says what its two bytes are
+//   for every device alike, and `ip/usb_hub` had to claim it on this hook
+//   to be a hub at all — which is the shape of a layering mistake rather
+//   than of a class. It is implemented above and is no longer offered;
+//   GET_STATUS to an **interface** or an **endpoint** still is, and "THE
+//   DEVICE'S OWN STATUS" above says why those two cannot come here.
 //
 //   The direction is `bmRequestType` bit 7 and is read here rather than
 //   asked for: a read becomes a data stage of `min(wLength, class_len)`
@@ -553,6 +596,11 @@ module usb_ctrl_ep #(
     reg [1:0]  expect;
     reg        toggle;
     reg        desc_sel;    // 0 device, 1 configuration
+    // The data stage in progress is the device status word of §9.4.5 and
+    // not a descriptor. One flip-flop rather than a third value of
+    // `desc_sel`, because `desc_sel` selects between two descriptors and
+    // the status word is not one of them.
+    reg        stat_sel;
     reg [OFF_BITS-1:0] in_total;   // bytes the data stage sends
     reg [OFF_BITS-1:0] in_offset;  // bytes the host has acknowledged
     reg [CHUNK_BITS-1:0] in_len;   // bytes in the packet awaiting its ACK
@@ -690,7 +738,12 @@ module usb_ctrl_ep #(
     // indexes its own bytes without restating the arithmetic.
     wire [IDX_BITS-1:0] fetch = in_offset + tx_index;
     assign class_index = fetch[6:0];
-    assign tx_byte     = class_active ? class_byte : desc(desc_sel, fetch);
+    // Three sources, and `stat_sel` picks the device status word: byte 0 is
+    // `dev_status` and byte 1 — and the one fetch past the end of a two-byte
+    // stage that the transmitter throws away — is the zero §9.4.5 reserves.
+    assign tx_byte     = class_active ? class_byte
+                       : stat_sel     ? ((fetch == 0) ? dev_status : 8'h00)
+                                      : desc(desc_sel, fetch);
 
     // The next packet of the data stage: a whole one until the last, which
     // is whatever is left and is short — and a short packet is what ends a
@@ -716,6 +769,7 @@ module usb_ctrl_ep #(
     wire [7:0]  s2 = dat[23:16];
     wire [7:0]  s3 = dat[31:24];
     wire [7:0]  s4 = dat[39:32];
+    wire [7:0]  s5 = dat[47:40];
     wire [15:0] w_length = dat[63:48];
     wire        get_desc = (s0 == 8'h80) & (s1 == 8'h06) & (s2 == 8'h00)
                          & ((s3 == 8'h01) | (s3 == 8'h02));
@@ -727,6 +781,30 @@ module usb_ctrl_ep #(
     // endpoint's address. Nothing here ever halts an endpoint, so this is
     // accepted for its other documented effect, which is the toggle.
     wire        clr_halt = (s0 == 8'h02) & (s1 == 8'h01) & (s2 == 8'h00) & (s3 == 8'h00);
+    // GET_STATUS to the **device**: bmRequestType 80h is device to host,
+    // standard, to the device; bRequest 00h is GET_STATUS; wValue and wIndex
+    // are both zero and reserved (USB 2.0 §9.4.5). The two bytes it sends are
+    // `dev_status` below. A recipient of 81h or 82h — an interface or an
+    // endpoint — does not match and goes to the class hook, which "THE
+    // DEVICE'S OWN STATUS" in the header is the reason for.
+    wire        get_stat = (s0 == 8'h80) & (s1 == 8'h00) & (s2 == 8'h00)
+                         & (s3 == 8'h00) & (s4 == 8'h00) & (s5 == 8'h00);
+
+    // The device's status word, USB 2.0 §9.4.5 and Table 9-4, low byte first.
+    //
+    //   bit 0  Self Powered           bit 6 of `CFG_ATTR`, which is the same
+    //                                 byte `bmAttributes` is written from, so
+    //                                 the two can never disagree
+    //   bit 1  Remote Wakeup Enabled  **0**, and a literal: nothing in this
+    //                                 library implements
+    //                                 SET_FEATURE(DEVICE_REMOTE_WAKEUP), so
+    //                                 there is nothing that could enable it
+    //   2..15  reserved               zero
+    //
+    // A wire and not a register, for the reason every constant-zero bit in
+    // this library is: a flip-flop whose data input is a constant is the shape
+    // an ECP5 reads as a one when the input is not routed.
+    wire [7:0]  dev_status = {6'b000000, 1'b0, CFG_ATTR[6]};
 
     // A SETUP this module will act on at all: the right stage, eight bytes,
     // DATA0, and a CRC that checked. The arms of the `if` below repeat
@@ -736,7 +814,7 @@ module usb_ctrl_ep #(
                           & (pkt_pid == PID_DATA0) & (dat_len == 7'd8);
     // A request this module implements itself. A class is offered
     // everything else and nothing of this.
-    wire        std_req   = get_desc | set_adr | set_cfg | clr_halt;
+    wire        std_req   = get_desc | set_adr | set_cfg | clr_halt | get_stat;
 
     // A host-to-device data packet this endpoint can hold: `dat` is the
     // first eight payload bytes, so a longer one is refused rather than
@@ -760,6 +838,7 @@ module usb_ctrl_ep #(
     // How long the data stage is: the class's offer for a class request,
     // the descriptor's length otherwise, and never more than wLength.
     wire [OFF_BITS-1:0] desc_len = class_req ? class_len[OFF_BITS-1:0]
+                                 : get_stat  ? 2
                                  : ((s3 == 8'h02) ? CFG_TOTAL[OFF_BITS-1:0] : 18);
     wire [OFF_BITS-1:0] send_len = (w_length < desc_len) ? w_length[OFF_BITS-1:0] : desc_len;
 
@@ -775,6 +854,7 @@ module usb_ctrl_ep #(
             expect         <= X_NONE;
             toggle         <= 1'b0;
             desc_sel       <= 1'b0;
+            stat_sel       <= 1'b0;
             in_total       <= 0;
             in_offset      <= 0;
             in_len         <= 0;
@@ -852,6 +932,7 @@ module usb_ctrl_ep #(
                         in_offset <= 0;
                         set_addr  <= 1'b0;
                         set_config <= 1'b0;
+                        stat_sel  <= 1'b0;
                         // A new transfer is nobody's until an arm claims
                         // it, so whatever the last one left is cleared
                         // here and set again below.
@@ -875,6 +956,14 @@ module usb_ctrl_ep #(
                             stage       <= C_STATUS_IN;
                             ep_clear    <= 1'b1;
                             ep_clear_ep <= s4;
+                        end else if (get_stat) begin
+                            // The two bytes of §9.4.5, capped by wLength the
+                            // way a descriptor's data stage is. A host asking
+                            // for more than two gets two and a short packet,
+                            // which is what ends a control read.
+                            stage    <= C_DATA_IN;
+                            stat_sel <= 1'b1;
+                            in_total <= send_len;
                         end else if (class_claim) begin
                             // The class above this endpoint answers it.
                             // `class_req` is high in this very cycle and

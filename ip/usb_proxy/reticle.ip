@@ -1,0 +1,113 @@
+# usb_proxy: the half of a USB hub that **forwards**. `ip/usb_hub` is a hub's
+# control endpoint — a PC's own hub driver binds to it, powers its port, is told
+# something is attached and resets it, and then cannot reach the device because
+# nothing carries a packet across. This is what carries it.
+#
+# **A transaction proxy and not a repeater.** A hub repeats a downstream packet
+# within about four bit times and through a ULPI transceiver the floor is
+# roughly twenty-four one way, so a transparent repeater on two transceivers
+# cannot meet USB's turnaround at all. NAK is the escape hatch: a device may NAK
+# until its data is ready, so the thing in the middle may take as long as it
+# likes. `usb_proxy_relay` takes the PC's token, answers NAK, runs the
+# transaction on the other bus and has the answer waiting for the retry.
+#
+# **Pass-through addressing.** The PC enumerates the device, not us: a token
+# whose address is not the hub's own is forwarded verbatim, including the PC's
+# SET_ADDRESS, so both buses agree on the address with no translation table.
+# `ip/usb_host_ulpi`'s `usb_host_enum` is therefore **not** instantiated here —
+# our host becomes a transaction engine the proxy drives. README.md §2 is the
+# decision and what was weighed against it.
+#
+# Three modules. `usb_proxy_relay` is the forwarding and the four data toggles
+# two independent buses need; `usb_proxy_dn` is the downstream port — the attach
+# debounce, the speed, and the bus reset the PC's SetPortFeature(PORT_RESET)
+# asks for, which is a register write into the transceiver and not a
+# transmission; and `usb_hub_proxy_ulpi` is the whole thing on two ULPI
+# transceivers, which is what a Great Scott Gadgets Cynthion is.
+#
+# Four `depends` lines and none of them is optional: `usb_device_fs` has
+# `usb_pkt_rx`, `usb_device_ulpi` the peripheral Link the PC is on, `usb_hub`
+# the hub itself, and `usb_host_ulpi` the host Link and the transaction engine.
+#
+# README.md says what the proxy forwards and what it does not, which parts were
+# checked in simulation and which on a part, and quotes the kernel log and the
+# `lsusb -v` of the device behind the port.
+name usb_proxy
+version 1.0.0
+license MIT
+description "A USB transaction proxy behind a one-port hub: the PC's control, bulk and interrupt transfers taken on one ULPI bus, run again on another at the device in the downstream socket, and answered back — with pass-through addressing, a data toggle per endpoint on each side, a port reset that reaches the real device, and STALL propagated both ways"
+
+top usb_hub_proxy_ulpi
+target ecp5
+
+source rtl/usb_proxy_relay.v
+source rtl/usb_proxy_dn.v
+source rtl/usb_hub_proxy_ulpi.v
+
+depends usb_device_fs ^1.0.0
+depends usb_device_ulpi ^1.0.0
+depends usb_hub ^1.0.0
+depends usb_host_ulpi ^1.0.0
+
+param VID bits 16'h1209
+param PID bits 16'h0001
+param CFG_ATTR bits 8'h80
+param CFG_POWER bits 8'd50
+param MAXPKT0 bits 7'd64
+param BUF_RAM int 1 0..1
+param RESET_CYCLES int 300 2..65535
+param SE0_CYCLES int 150 2..255
+param LINE_TRIES int 40000 1..1000000
+param REG_TRIES int 16 1..255
+param UP_VENDOR_ADDR bits 6'h00
+param UP_VENDOR_DATA bits 8'h00
+param DN_VENDOR_ADDR bits 6'h00
+param DN_VENDOR_DATA bits 8'h00
+param TURNAROUND bits 7'd9
+param FRAME_CYCLES int 60000 16..16777215
+param TIMEOUT_CYCLES int 4096 16..16777215
+param RETRIES int 3 0..255
+param TX_PER_BYTE int 48 1..255
+param TX_OVERHEAD int 128 0..65535
+param GAP_CYCLES int 12 1..255
+param DEBOUNCE_CYCLES int 6000000 1..268435455
+param RESET_HOLD int 900000 1..268435455
+param RESET_RECOVERY int 1200000 1..268435455
+param FS_LINE bits 2'b01
+param MAXPKT bits 7'd64
+
+port clk60 in
+port rst_n in
+port up_data_i in 8
+port up_data_o out 8
+port up_data_oe out
+port up_dir in
+port up_nxt in
+port up_stp out
+port up_rst_n out
+port dn_data_i in 8
+port dn_data_o out 8
+port dn_data_oe out
+port dn_dir in
+port dn_nxt in
+port dn_stp out
+port dn_rst_n out
+port address out 7
+port configured out
+port usb_reset out
+port phy_ready out
+port port_power out
+port port_enabled out
+port port_suspended out
+port port_reset out
+port dn_phy_ready out
+port dn_attached out
+port dn_low_speed out
+port dn_line_state out 2
+port dn_vbus_state out 2
+port dn_stage out 4
+port dn_reg_failed out
+port dn_frame out 11
+port proxied out
+port ctrl_active out
+port job out 2

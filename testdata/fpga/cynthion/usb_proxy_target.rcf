@@ -1,0 +1,98 @@
+# A USB **proxy** on a Great Scott Gadgets Cynthion r1.4: the hub the PC binds
+# to on the AUX port, the device it reaches through that hub in the TARGET-A
+# socket, and the serial console on T14.
+#
+# This is `usb_hub_target.rcf` with nothing added and nothing taken away — the
+# same thirteen AUX ULPI balls, the same thirteen TARGET ones, the same
+# oscillator, the same three VBUS switches, the same `uart_tx` on T14 and the
+# same six LEDs. The design above it is a different design; the board is not.
+#
+# ---------------------------------------------------------------------
+# T14, AND WHY IT IS NOT LIKE THE OTHERS
+# ---------------------------------------------------------------------
+#
+#     # Note: UART pins R14 and T14 are connected to JTAG pins R11 (TDI)
+#     # and T11 (TMS) respectively, so the microcontroller can use either
+#     # function but not both simultaneously.
+#
+#     # UART connected to the debug controller; can be routed to a host via
+#     # CDC-ACM.
+#     Resource("uart", 0,
+#         Subsignal("rx",  Pins("R14",  dir="i")),
+#         Subsignal("tx",  Pins("T14",  dir="oe"), Attrs(PULLMODE="UP")),
+#         Attrs(IO_TYPE="LVCMOS33")
+#     ),
+#
+# T14 is on the **same net** as the debug microcontroller's JTAG `TMS` output
+# and the PCB has no series resistor: the net is `/Debugger/FPGA_JTAG.TMS` and
+# FPGA balls T11 and T14 are both on it alongside the microcontroller's pin.
+# So a gateware that drives T14 while Apollo is shifting JTAG is two drivers
+# on one wire.
+#
+# `usb_proxy_target.v`'s header has the three things that keep that from
+# happening — a drive window no other part of the design can hold open,
+# `PULLMODE=UP` so the released line idles, and Apollo's own pinmux interlock
+# — and the one rule for whoever loads this: **do not start a JTAG
+# transaction until the window has shut**, which is about eighteen seconds
+# after configuration. `-pullup yes` below is the platform file's
+# `PULLMODE="UP"`.
+#
+# `-slew fast` is deliberately **not** asked for on T14: it is a 115200 baud
+# line to a chip on the same board and the platform file asks for no slew rate
+# on it either.
+#
+# Everything below this line is `usb_host_target.rcf` by way of
+# `usb_hub_target.rcf`, whose headers have the provenance of each ball, why
+# `-slew fast` is on all thirteen pins of a port rather than only its outputs,
+# why the three VBUS switches are constrained and driven rather than left out,
+# and what is deliberately not here — the CONTROL port's transceiver, the
+# TARGET sniffer pair, the two power-input switches and the USER button.
+#
+
+set_io -io_standard LVCMOS33 -pullup yes uart_tx T14
+
+set_io -io_standard LVCMOS33 clk A8
+
+# The auxiliary transceiver: the hub the PC sees, and the proxy's upstream bus.
+set_io -io_standard LVCMOS33 -slew fast aux_data[0] F16
+set_io -io_standard LVCMOS33 -slew fast aux_data[1] G15
+set_io -io_standard LVCMOS33 -slew fast aux_data[2] G16
+set_io -io_standard LVCMOS33 -slew fast aux_data[3] H15
+set_io -io_standard LVCMOS33 -slew fast aux_data[4] J15
+set_io -io_standard LVCMOS33 -slew fast aux_data[5] J16
+set_io -io_standard LVCMOS33 -slew fast aux_data[6] K15
+set_io -io_standard LVCMOS33 -slew fast aux_data[7] K16
+
+set_io -io_standard LVCMOS33 -slew fast aux_dir E16
+set_io -io_standard LVCMOS33 -slew fast aux_nxt F15
+set_io -io_standard LVCMOS33 -slew fast aux_stp E15
+set_io -io_standard LVCMOS33 -slew fast aux_rst_n J13
+set_io -io_standard LVCMOS33 -slew fast aux_clk D16
+
+# The target transceiver: the proxy's downstream bus, and the device on it.
+set_io -io_standard LVCMOS33 -slew fast tgt_data[0] R2
+set_io -io_standard LVCMOS33 -slew fast tgt_data[1] R1
+set_io -io_standard LVCMOS33 -slew fast tgt_data[2] P2
+set_io -io_standard LVCMOS33 -slew fast tgt_data[3] P1
+set_io -io_standard LVCMOS33 -slew fast tgt_data[4] N3
+set_io -io_standard LVCMOS33 -slew fast tgt_data[5] N1
+set_io -io_standard LVCMOS33 -slew fast tgt_data[6] M2
+set_io -io_standard LVCMOS33 -slew fast tgt_data[7] M1
+
+set_io -io_standard LVCMOS33 -slew fast tgt_dir R3
+set_io -io_standard LVCMOS33 -slew fast tgt_nxt T2
+set_io -io_standard LVCMOS33 -slew fast tgt_stp T3
+set_io -io_standard LVCMOS33 -slew fast tgt_rst_n R4
+set_io -io_standard LVCMOS33 -slew fast tgt_clk T4
+
+# The three bidirectional VBUS switches onto TARGET A. Driven, not omitted.
+set_io -io_standard LVCMOS33 aux_vbus_en L2
+set_io -io_standard LVCMOS33 control_vbus_en L1
+set_io -io_standard LVCMOS33 target_c_vbus_en K5
+
+set_io -io_standard LVCMOS33 led0_n E13
+set_io -io_standard LVCMOS33 led1_n C13
+set_io -io_standard LVCMOS33 led2_n B14
+set_io -io_standard LVCMOS33 led3_n A15
+set_io -io_standard LVCMOS33 led4_n D12
+set_io -io_standard LVCMOS33 led5_n C11

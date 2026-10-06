@@ -35,12 +35,15 @@
 //   turnaround does not allow it. README.md §2 is that argument in full.
 //
 //   What is behind the port instead is a **second** USB controller:
-//   `ip/usb_host_ulpi`, on its own bus, doing its own enumeration. This block
-//   reports what that controller sees — a device attached, at which speed —
-//   and nothing joins the two conversations. A host therefore finds a hub,
-//   finds something on its port, resets it, and then gets no answer from the
-//   device it believes is there. That is the correct behaviour of this block
-//   as it stands, it is deliberate, and §6 of README.md is a kernel log of it.
+//   `ip/usb_host_ulpi`, on its own bus. Joining the two conversations is
+//   `ip/usb_proxy`, which takes the PC's transaction, runs it again on the
+//   other bus and serves the answer back — a transaction proxy, with NAK as the
+//   escape hatch that makes the slow path legal. This block on its own still
+//   reports a port and never speaks through it, which is what §8 of README.md's
+//   kernel log is: a PC that finds a hub, finds something on its port, resets
+//   it, and gets no answer. `port_reset` and `port_reset_done` are the one
+//   thing the proxy needs from this half — a reset that reaches the real
+//   device — and tying the second high is the old behaviour exactly.
 //
 // THE DESCRIPTORS, AND WHERE EVERY FIELD COMES FROM
 //   USB 2.0 §11.23.1 is one page and this is all of it: a hub is a device
@@ -188,13 +191,19 @@ module usb_hub #(
 
     // WHAT THE HOST HAS MADE OF THAT PORT
     //
-    // Brought out for whatever drives the downstream half — a design's LEDs
-    // and console today, the transaction proxy later. `port_reset` is one
-    // cycle; the other three are levels.
+    // Brought out for whatever drives the downstream half: a design's LEDs and
+    // console, or `ip/usb_proxy`, which is what makes the port real. All four
+    // are levels.
     output wire       port_power,
     output wire       port_enabled,
     output wire       port_suspended,
-    output wire       port_reset
+    // PORT_RESET: raised by SetPortFeature(PORT_RESET) and held until
+    // `port_reset_done`. `usb_hub_req`'s "THE RESET, WHICH NOW TAKES TIME" is
+    // the handshake; **tie `port_reset_done` high for a design with nothing
+    // downstream** and the reset is over in the cycle it is asked for, which is
+    // what this block did before there was a proxy.
+    output wire       port_reset,
+    input  wire       port_reset_done
 );
     // -----------------------------------------------------------------
     // The interface, and the one endpoint on it.
@@ -295,7 +304,8 @@ module usb_hub #(
         .port_power     (port_power),
         .port_enabled   (port_enabled),
         .port_suspended (port_suspended),
-        .port_reset     (port_reset),
+        .port_reset      (port_reset),
+        .port_reset_done (port_reset_done),
         .change_map     (change_map)
     );
 
