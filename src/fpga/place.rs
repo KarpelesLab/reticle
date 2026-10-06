@@ -672,8 +672,71 @@ pub struct PlaceOptions {
     /// Run the annealing pass. Turning it off leaves the legalised
     /// analytic placement, which is useful for comparing the two.
     pub anneal: bool,
-    /// Geometric cooling factor, in `(0, 1)`.
-    pub cooling: f64,
+    /// A fixed geometric cooling factor in `(0, 1)`, instead of the
+    /// adaptive one.
+    ///
+    /// `None`, the default, is VPR's acceptance-rate schedule: the step is
+    /// chosen per temperature from [`cooling_factor`]. This is here so the
+    /// two can be compared on one design without recompiling, and because
+    /// a test that pins what the fixed schedule did needs to ask for it.
+    pub cooling: Option<f64>,
+    /// How the start temperature is chosen.
+    ///
+    /// `None` is the paper's rule, `20 x` the standard deviation of the
+    /// cost change over a random move sequence, which is picked so that
+    /// "initially virtually any move is accepted at the start of the
+    /// anneal". That is right when the anneal starts from a *random*
+    /// placement, which is what VPR does and what this placer does not:
+    /// there is an analytic solve and a legalisation in front of it, and
+    /// a temperature hot enough to accept anything throws their answer
+    /// away. Measured on `clock_blink.v`, it does exactly that — the
+    /// first temperature takes a wirelength of 240 to 5793, and a
+    /// hundred and twenty temperatures later the walk is at 353 and has
+    /// still never been back under where it started.
+    ///
+    /// `Some(rate)`, the default, instead solves for the temperature at
+    /// which `rate` of the sampled moves would be accepted, so the walk
+    /// begins where the schedule is trying to hold it rather than far
+    /// above it. See [`start_temperature`].
+    pub start_acceptance: Option<f64>,
+    /// The move window the anneal starts with, in tiles, or `None` for
+    /// the whole die.
+    ///
+    /// `None` is the paper's rule — "initially, `D_limit` is set to the
+    /// entire chip" — and it is right for the same reason the hot start
+    /// is: VPR anneals a *random* placement, which has nothing worth
+    /// keeping and everything worth mixing. Here an analytic solve and a
+    /// legaliser have already put every cell roughly where it belongs,
+    /// and a die-wide move at any temperature warm enough to accept one
+    /// undoes that. The limiter will widen the window on its own if the
+    /// acceptance rate asks it to.
+    pub start_window: Option<u32>,
+    /// The acceptance rate the move window aims to hold, 0.44 by default.
+    ///
+    /// Not a cooling parameter: it is the setpoint of the range limiter,
+    /// which widens the window when more than this fraction of moves is
+    /// accepted and narrows it when less is. See [`PlaceOptions::range_limit`].
+    pub target_acceptance: f64,
+    /// Shrink the move window with the acceptance rate.
+    ///
+    /// With this off, a move may send a cell to any site of its kind on
+    /// the die, which is what this placer did before and is why its
+    /// annealer could not improve on legalisation at all: at a
+    /// temperature low enough to be selective, a die-wide move is always
+    /// a large uphill one and is always rejected, so the walk spends its
+    /// whole budget being refused.
+    pub range_limit: bool,
+    /// Consecutive temperature steps that fail to improve the best
+    /// placement, once the acceptance rate has fallen into the quench
+    /// band ([`QUENCHED`]), after which the anneal stops. Zero never
+    /// stops for this reason.
+    ///
+    /// This is the exit criterion the fixed schedule did not have. VPR's
+    /// own — stop when the temperature is below `0.005 * cost / nets` —
+    /// is still there and still fires first on most designs; this one
+    /// catches a walk that has converged while the temperature is still
+    /// nominally warm.
+    pub stall_limit: u32,
     /// Upper bound on temperature steps, so a pathological design stops.
     pub max_temperatures: u32,
     /// Moves tried per temperature, or `None` for
@@ -702,10 +765,65 @@ impl Default for PlaceOptions {
             seed: 0x5EED_1CE4_0000_0001,
             analytic_iterations: 200,
             anneal: true,
-            cooling: 0.9,
+            cooling: None,
+            start_acceptance: Some(0.44),
+            start_window: Some(1),
+            target_acceptance: 0.44,
+            range_limit: true,
+            stall_limit: 4,
             max_temperatures: 120,
             moves_per_temperature: None,
             move_effort: 10,
+        }
+    }
+}
+
+/// One temperature step of the annealing schedule, as it ran.
+///
+/// Nothing here is a wall-clock number: a step is described by the work
+/// it did and by the two quantities the schedule steers on, so a test
+/// may assert on it.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct TemperatureStep {
+    /// Moves proposed at this temperature. A proposal whose window held
+    /// no site of the right kind is not one: see [`KindSites::pick`].
+    pub tried: u64,
+    /// How many of those were accepted. `accepted / tried` is the
+    /// `R_accept` the range limiter and the cooling factor both read.
+    pub accepted: u64,
+    /// The half-side of the move window, in tiles, during this step.
+    pub range_limit: u32,
+    /// The whole placement's half-perimeter wirelength when the step
+    /// ended, recounted rather than accumulated.
+    pub cost: u64,
+}
+
+/// Why the annealer stopped.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum AnnealStop {
+    /// It did not run: no movable cell, or
+    /// [`PlaceOptions::anneal`] was off.
+    #[default]
+    NotRun,
+    /// The temperature fell below `0.005 * cost / nets`, VPR's criterion:
+    /// below that, an uphill move is unlikely to be accepted at all.
+    Cold,
+    /// [`PlaceOptions::stall_limit`] steps in a row improved nothing
+    /// while the acceptance rate was in the quench band.
+    Stalled,
+    /// [`PlaceOptions::max_temperatures`] steps ran. This is the
+    /// backstop, not an outcome to be pleased about.
+    Exhausted,
+}
+
+impl AnnealStop {
+    /// The reason, as a clause that follows "stopped because".
+    fn clause(self) -> &'static str {
+        match self {
+            AnnealStop::NotRun => "it did not run",
+            AnnealStop::Cold => "the temperature fell below 0.005 of the cost per net",
+            AnnealStop::Stalled => "the best placement stopped improving",
+            AnnealStop::Exhausted => "it ran out of temperature steps",
         }
     }
 }
@@ -731,6 +849,14 @@ pub struct PlacementReport {
     pub temperatures: u32,
     /// Moves tried and moves accepted.
     pub moves: (u64, u64),
+    /// One entry per temperature step, in order.
+    ///
+    /// This is the schedule as it actually ran rather than as it was
+    /// configured, which is the only way to see whether the acceptance
+    /// rate went where the range limiter was trying to put it.
+    pub schedule: Vec<TemperatureStep>,
+    /// Why the annealer stopped.
+    pub stop: AnnealStop,
     /// Pins the architecture gives no wire, which are not routed.
     pub off_fabric: usize,
     /// What the pass cost, in work rather than in seconds.
@@ -762,6 +888,17 @@ impl PlacementReport {
             "  annealing: {} temperature(s), {} move(s), {} accepted",
             self.temperatures, self.moves.0, self.moves.1
         );
+        if let (Some(first), Some(last)) = (self.schedule.first(), self.schedule.last()) {
+            let _ = writeln!(
+                out,
+                "  schedule: acceptance {} then {}, window {} then {} tile(s), stopped because {}",
+                percent(first.accepted, first.tried),
+                percent(last.accepted, last.tried),
+                first.range_limit,
+                last.range_limit,
+                self.stop.clause(),
+            );
+        }
         let _ = writeln!(
             out,
             "  work: {} legality test(s) over {} step(s), {} cost pin read(s), {} snapshot(s)",
@@ -775,6 +912,37 @@ impl PlacementReport {
         }
         out
     }
+
+    /// The whole schedule, one line per temperature step.
+    ///
+    /// [`PlacementReport::to_text`] prints the two ends of it; this is
+    /// what shows whether the acceptance rate was held near the target
+    /// in between, which is the thing the schedule exists to do.
+    pub fn schedule_text(&self) -> String {
+        use std::fmt::Write as _;
+        let mut out = String::from("schedule:\n");
+        let _ = writeln!(out, "  step   window     tried  accepted  rate   cost");
+        for (step, s) in self.schedule.iter().enumerate() {
+            let _ = writeln!(
+                out,
+                "  {step:>4}   {:>6}  {:>8}  {:>8}  {:>4}  {:>6}",
+                s.range_limit,
+                s.tried,
+                s.accepted,
+                percent(s.accepted, s.tried),
+                s.cost,
+            );
+        }
+        out
+    }
+}
+
+/// `part / whole` as a whole-number percentage, `"-"` when `whole` is 0.
+fn percent(part: u64, whole: u64) -> String {
+    if whole == 0 {
+        return "-".to_owned();
+    }
+    format!("{}%", part.saturating_mul(100) / whole)
 }
 
 /// A rectangle of tiles a cell must stay inside.
@@ -1479,7 +1647,7 @@ pub fn place(
     report.hpwl_after = report.hpwl_before;
 
     if options.anneal {
-        let stats = anneal(
+        anneal(
             netlist,
             graph,
             &info,
@@ -1488,9 +1656,8 @@ pub fn place(
             &shared,
             options,
             &mut placement,
+            &mut report,
         );
-        report.temperatures = stats.0;
-        report.moves = (stats.1, stats.2);
         report.hpwl_after = hpwl(netlist, graph, &placement);
     }
     report.work = WORK.with(Cell::get);
@@ -2337,7 +2504,157 @@ pub fn hpwl(netlist: &Netlist, graph: &RoutingGraph, placement: &Placement) -> u
 /// One candidate move: which instances go where.
 type Move = Vec<(usize, usize)>;
 
-/// Runs the annealing pass, returning `(temperatures, moves, accepted)`.
+/// Where the sites of one kind are, so that a move can be drawn from a
+/// window of tiles rather than from the whole die.
+///
+/// The move generator used to pick uniformly from every site of the kind,
+/// wherever it was. That is fine while the temperature is hot enough to
+/// accept anything and useless afterwards: a cell sent to a random site
+/// on a 46-by-56 die changes the wirelength by tens of tiles, so once the
+/// temperature is small compared with that, every single move is refused
+/// and the remaining budget buys nothing. Betz and Rose's answer is a
+/// *range limit*: only sites within `D_limit` tiles in x and y are
+/// offered, and `D_limit` is driven by the acceptance rate, so the
+/// window shrinks exactly as fast as the walk becomes selective.
+///
+/// Drawing from a window needs the sites indexed by position, which is
+/// what this is: the columns that hold a site of the kind, and within
+/// each, its sites ordered by row. Both searches are binary, so a draw
+/// costs two `partition_point`s and two random numbers however big the
+/// die is.
+struct KindSites {
+    /// The tile columns holding at least one site of this kind,
+    /// ascending.
+    columns: Vec<u32>,
+    /// Parallel to [`KindSites::columns`]: that column's sites as
+    /// `(tile y, site index)`, ascending by `y`.
+    rows: Vec<Vec<(u32, usize)>>,
+}
+
+impl KindSites {
+    /// Indexes `sites`, which are all of one kind.
+    fn build(graph: &RoutingGraph, sites: &[usize]) -> KindSites {
+        let mut by_column: BTreeMap<u32, Vec<(u32, usize)>> = BTreeMap::new();
+        for site in sites {
+            let (x, y) = graph.sites[*site].tile;
+            by_column.entry(x).or_default().push((y, *site));
+        }
+        let mut columns = Vec::with_capacity(by_column.len());
+        let mut rows = Vec::with_capacity(by_column.len());
+        for (x, mut column) in by_column {
+            column.sort_unstable();
+            columns.push(x);
+            rows.push(column);
+        }
+        KindSites { columns, rows }
+    }
+
+    /// A site of this kind inside the tile rectangle, or `None` when the
+    /// rectangle holds none.
+    ///
+    /// A column is drawn first and a row inside it second, which is not
+    /// quite uniform over the sites of the rectangle — a sparse column is
+    /// over-weighted. That is deliberate and matches VPR, which draws a
+    /// *location* in the window and then asks what is there: what the
+    /// window has to do is bound the distance a cell moves, and no part
+    /// of the schedule reads the shape of the distribution inside it.
+    fn pick(&self, rng: &mut Rng, rect: Rect) -> Option<usize> {
+        let first = self.columns.partition_point(|c| *c < rect.x0);
+        let last = self.columns.partition_point(|c| *c <= rect.x1);
+        if first == last {
+            return None;
+        }
+        let column = &self.rows[first + rng.below(last - first)];
+        let low = column.partition_point(|(y, _)| *y < rect.y0);
+        let high = column.partition_point(|(y, _)| *y <= rect.y1);
+        if low == high {
+            return None;
+        }
+        Some(column[low + rng.below(high - low)].1)
+    }
+}
+
+/// The acceptance rate below which the walk is quenching rather than
+/// searching.
+///
+/// It is the bottom band of [`cooling_factor`]'s table, and the paper's
+/// reason for that band is the reason this constant exists: "if very few
+/// moves are being accepted ... there is also little improvement in
+/// cost". A stall above this rate is not a stall, it is a walk that has
+/// not finished exploring — which is why
+/// [`PlaceOptions::stall_limit`] is not allowed to fire until the rate
+/// is here.
+const QUENCHED: f64 = 0.15;
+
+/// The move window for the next temperature.
+///
+/// `D_limit_new = D_limit_old * (1 - 0.44 + R_accept_old)`, clamped to
+/// `1 ..= max FPGA dimension` — Betz and Rose again, and the whole
+/// mechanism is in the sign of the bracket: above the target rate the
+/// window grows, below it the window shrinks, and at the target it
+/// holds. Nothing else in the schedule is a feedback loop; this is the
+/// one that keeps the acceptance rate near 0.44 "for as long as
+/// possible", which is what the cooling table alone cannot do.
+fn next_window(window: f64, rate: f64, target: f64, widest: f64) -> f64 {
+    (window * (1.0 - target + rate)).clamp(1.0, widest)
+}
+
+/// The cooling factor for an acceptance rate, from VPR's table.
+///
+/// Betz and Rose, *VPR: a new packing, placement and routing tool for
+/// FPGA research* (FPL 1997), Table 1. The shape of it is the whole
+/// point: cool fast while almost everything is accepted, because nothing
+/// is being learned there; cool slowly in the band where some moves are
+/// accepted and some are not, because that is where the search happens;
+/// cool fast again once almost nothing is accepted, because the walk is
+/// finished and only the budget is left.
+///
+/// | `R_accept` | factor |
+/// |---|---|
+/// | `> 0.96` | 0.5 |
+/// | `0.8 ..= 0.96` | 0.9 |
+/// | `0.15 ..= 0.8` | 0.95 |
+/// | `<= 0.15` | 0.8 |
+fn cooling_factor(accepted: f64) -> f64 {
+    if accepted > 0.96 {
+        0.5
+    } else if accepted > 0.8 {
+        0.9
+    } else if accepted > 0.15 {
+        0.95
+    } else {
+        0.8
+    }
+}
+
+/// Runs the annealing pass, filling in the schedule part of `report`.
+///
+/// The schedule is Betz and Rose's, in all four of its parts:
+///
+/// 1. **Start temperature** `20 ×` the standard deviation of the cost
+///    change over `N` random moves, where `N` is the number of movable
+///    cells — the paper's `N_blocks`, not a fixed hundred. A hundred
+///    samples of a quantity whose own spread is what is being measured
+///    is not a sample of a 4000-cell design at all.
+/// 2. **`effort · n^(4/3)` moves per temperature**, as before.
+/// 3. **An adaptive cooling factor** read off the acceptance rate of the
+///    step that just ended: [`cooling_factor`].
+/// 4. **A range limit** on the move generator, updated as
+///    `D' = D · (1 - 0.44 + R_accept)` and clamped to
+///    `1 ..= max(width, height)`, which is what holds the acceptance
+///    rate near 0.44 instead of letting it collapse.
+///
+/// Plus one thing the paper does not have: a stall exit, so a placement
+/// that has converged stops rather than spending the rest of
+/// [`PlaceOptions::max_temperatures`] proving it.
+///
+/// The best placement seen is kept, so the pass is monotone — it cannot
+/// return something worse than legalisation handed it. That snapshot is
+/// taken at a temperature boundary rather than on every improving move:
+/// a move is now accepted a hundred times more often than it was, and
+/// cloning the placement on each one would cost more than the move does.
+/// The end of a temperature is within a move or two of the best point
+/// inside it once the walk is cold, which is where it matters.
 #[allow(clippy::too_many_arguments, reason = "the annealer's whole state")]
 fn anneal(
     netlist: &Netlist,
@@ -2348,56 +2665,89 @@ fn anneal(
     shared: &SiteRules,
     options: &PlaceOptions,
     placement: &mut Placement,
-) -> (u32, u64, u64) {
+    report: &mut PlacementReport,
+) {
     let movable: Vec<usize> = (0..netlist.instances.len())
         .filter(|i| info[*i].fixed.is_none())
         .collect();
     if movable.is_empty() {
-        return (0, 0, 0);
+        return;
     }
+    let index: BTreeMap<String, KindSites> = sites_by_kind
+        .iter()
+        .map(|(kind, sites)| (kind.clone(), KindSites::build(graph, sites)))
+        .collect();
     let mut rng = Rng::new(options.seed);
     let inner = options
         .moves_per_temperature
         .unwrap_or_else(|| moves_for(movable.len(), options.move_effort));
+    let widest = f64::from(graph.width.max(graph.height).max(1));
+    let mut window = match options.start_window {
+        Some(start) => f64::from(start).clamp(1.0, widest),
+        None => widest,
+    };
+    // The probe samples the same window the walk will start in, so that
+    // the temperature it yields is a temperature for the moves that will
+    // actually be made.
+    let probe_reach = if options.range_limit {
+        window.round().max(1.0) as u32
+    } else {
+        u32::MAX
+    };
 
-    // The starting temperature is the spread of the cost changes a
-    // random walk sees, which is the standard way of making one schedule
-    // fit every design size.
+    // The sample the start temperature is read off. The paper takes
+    // `N_blocks` moves, so the count is the number of movable cells and
+    // not a fixed hundred: a hundred draws from a distribution whose own
+    // spread is the thing being measured is not a sample of a four
+    // thousand cell design.
+    //
+    // Each probe move is undone. The paper's probe accepts every move,
+    // but it starts from a random placement and so stays on one; here
+    // the placement to be annealed is the legaliser's, and a probe that
+    // wanders off it measures the neighbourhood of a placement that will
+    // never be visited. What the schedule needs to know is how big a
+    // cost change a move makes *here*.
     let mut samples = Vec::new();
-    let mut probe = placement.clone();
-    let mut probe_churn = Churn::new(netlist, graph, &probe);
-    for _ in 0..inner.min(100) {
+    let mut churn = Churn::new(netlist, graph, placement);
+    for _ in 0..movable.len().clamp(20, 100_000) {
         if let Some(candidate) = propose(
             netlist,
             graph,
             info,
             macros,
             sites_by_kind,
+            &index,
             shared,
             &movable,
             &mut rng,
-            &probe,
+            placement,
+            probe_reach,
         ) {
-            samples.push(apply(graph, &mut probe_churn, &mut probe, &candidate));
+            samples.push(apply(graph, &mut churn, placement, &candidate));
+            undo(graph, &mut churn, placement);
         }
     }
-    let mut temperature = 20.0 * stddev(&samples).max(1.0);
+    let mut temperature = start_temperature(&samples, options.start_acceptance);
 
-    let mut churn = Churn::new(netlist, graph, placement);
-    let mut current = churn.spans.total() as f64;
-    // Annealing accepts uphill moves on purpose, so where it stops is not
-    // where it was best. Keeping the best placement seen makes the pass
-    // monotone: it can only improve on what legalisation produced.
+    let mut current = churn.spans.total();
     let mut best = placement.clone();
     let mut best_cost = current;
-    let mut tried = 0u64;
-    let mut accepted = 0u64;
-    let mut steps = 0u32;
-    while steps < options.max_temperatures {
-        let signals = netlist.signals.len().max(1) as f64;
-        if temperature < 0.005 * current / signals {
-            break;
-        }
+    let mut stalled = 0u32;
+    let signals = netlist.signals.len().max(1) as f64;
+    report.stop = AnnealStop::Exhausted;
+    while report.temperatures < options.max_temperatures {
+        let reach = if options.range_limit {
+            // `round` is exactly specified by IEEE 754 and so is the
+            // multiply that feeds it, unlike `exp` and `powf`: the
+            // window is the same integer on every platform.
+            window.round().max(1.0).min(f64::from(u32::MAX)) as u32
+        } else {
+            u32::MAX
+        };
+        let mut step = TemperatureStep {
+            range_limit: reach.min(graph.width.max(graph.height)),
+            ..TemperatureStep::default()
+        };
         for _ in 0..inner {
             let Some(candidate) = propose(
                 netlist,
@@ -2405,32 +2755,71 @@ fn anneal(
                 info,
                 macros,
                 sites_by_kind,
+                &index,
                 shared,
                 &movable,
                 &mut rng,
                 placement,
+                reach,
             ) else {
                 continue;
             };
-            tried += 1;
+            step.tried += 1;
             let delta = apply(graph, &mut churn, placement, &candidate);
             if delta <= 0.0 || rng.unit() * (temperature + delta) < temperature {
-                accepted += 1;
-                current += delta;
-                if current < best_cost {
-                    best_cost = current;
-                    best = placement.clone();
-                    count(|work| &mut work.snapshots, 1);
-                }
+                step.accepted += 1;
             } else {
                 undo(graph, &mut churn, placement);
             }
         }
-        temperature *= options.cooling;
-        steps += 1;
+        // Recounted, not accumulated: a few million `+= delta` on an f64
+        // drift, and both the exit criterion and the best-so-far compare
+        // against this number. The recount is one pass over the signals
+        // per temperature, which is nothing beside the moves.
+        current = churn.spans.total();
+        step.cost = current;
+        let rate = if step.tried == 0 {
+            0.0
+        } else {
+            step.accepted as f64 / step.tried as f64
+        };
+        let improved = current < best_cost;
+        if improved {
+            best_cost = current;
+            best.clone_from(placement);
+            count(|work| &mut work.snapshots, 1);
+            stalled = 0;
+        } else if rate <= QUENCHED {
+            stalled += 1;
+        }
+        report.moves.0 += step.tried;
+        report.moves.1 += step.accepted;
+        report.schedule.push(step);
+        report.temperatures += 1;
+        if options.stall_limit > 0 && stalled >= options.stall_limit {
+            report.stop = AnnealStop::Stalled;
+            break;
+        }
+        temperature *= options.cooling.unwrap_or_else(|| cooling_factor(rate));
+        window = next_window(window, rate, options.target_acceptance, widest);
+        // VPR's exit: "the anneal is terminated when
+        // T < 0.005 * Cost / N_nets", because below that an uphill move
+        // is unlikely to be accepted at all.
+        //
+        // Checked after a step, and only when that step improved
+        // nothing. Both of those are needed because this anneal does not
+        // start from a random placement: the start temperature is solved
+        // for the target acceptance rate at the legalised placement, and
+        // on a design whose neighbourhood is mostly level it comes out
+        // below the threshold immediately. The criterion describes a walk
+        // that has finished, not one that has not begun, and a step that
+        // still found an improvement has not finished.
+        if temperature < 0.005 * current as f64 / signals && !improved {
+            report.stop = AnnealStop::Cold;
+            break;
+        }
     }
     *placement = best;
-    (steps, tried, accepted)
 }
 
 /// Moves to try per temperature: `effort * n^(4/3)`, computed in integers.
@@ -2460,6 +2849,56 @@ fn cube_root(value: u128) -> u128 {
     low
 }
 
+/// The temperature the walk starts at, from a sample of cost changes.
+///
+/// `want` is `None` for the paper's rule, `20 x` the standard deviation
+/// of the sample, and `Some(rate)` to solve instead for the temperature
+/// at which `rate` of the sample would be accepted.
+///
+/// The solve is a bisection on
+/// `A(T) = mean over the sample of (delta <= 0 ? 1 : T / (T + delta))`,
+/// which is the placer's own acceptance rule — the Cauchy one, for the
+/// reason in the module docs — and is increasing in `T`, so sixty steps
+/// of bisection pin it far below anything that matters. Nothing here is
+/// a libm call, so the answer is the same on every platform.
+///
+/// `A` counts a level or downhill move as accepted, because the rate the
+/// schedule later steers on counts it too: the point of solving is to
+/// start where the feedback loop is trying to sit, and a definition that
+/// disagreed with the loop's would not do that. It is why the answer can
+/// be the floor — a neighbourhood more than `rate` of which is already
+/// level or downhill has no positive temperature that accepts only
+/// `rate` of it, and the right reading of that is "descend, do not warm
+/// up". Something has to stop the walk ending there after one step, and
+/// it is the exit criterion, which asks for a step that improved nothing
+/// as well as for a low temperature.
+fn start_temperature(samples: &[f64], want: Option<f64>) -> f64 {
+    let Some(rate) = want else {
+        return 20.0 * stddev(samples).max(1.0);
+    };
+    if samples.is_empty() {
+        return 1.0;
+    }
+    let n = samples.len() as f64;
+    let acceptance = |t: f64| {
+        samples
+            .iter()
+            .map(|d| if *d <= 0.0 { 1.0 } else { t / (t + d) })
+            .sum::<f64>()
+            / n
+    };
+    let (mut low, mut high) = (1e-9_f64, 1e9_f64);
+    for _ in 0..60 {
+        let mid = 0.5 * (low + high);
+        if acceptance(mid) < rate {
+            low = mid;
+        } else {
+            high = mid;
+        }
+    }
+    0.5 * (low + high)
+}
+
 /// The standard deviation of a sample, 0 for fewer than two values.
 fn stddev(values: &[f64]) -> f64 {
     if values.len() < 2 {
@@ -2471,7 +2910,34 @@ fn stddev(values: &[f64]) -> f64 {
     variance.sqrt()
 }
 
+/// The tiles a cell at `(x, y)` may move to: the `reach`-tile window
+/// around it, clipped to the die and to the cell's region.
+///
+/// `None` when the two do not overlap, which cannot happen for a cell
+/// legalisation put inside its own region but is checked rather than
+/// assumed.
+fn window_of(graph: &RoutingGraph, region: Option<&Rect>, x: u32, y: u32, reach: u32) -> Option<Rect> {
+    let mut rect = Rect {
+        x0: x.saturating_sub(reach),
+        y0: y.saturating_sub(reach),
+        x1: x.saturating_add(reach).min(graph.width.saturating_sub(1)),
+        y1: y.saturating_add(reach).min(graph.height.saturating_sub(1)),
+    };
+    if let Some(region) = region {
+        rect.x0 = rect.x0.max(region.x0);
+        rect.y0 = rect.y0.max(region.y0);
+        rect.x1 = rect.x1.min(region.x1);
+        rect.y1 = rect.y1.min(region.y1);
+    }
+    (rect.x0 <= rect.x1 && rect.y0 <= rect.y1).then_some(rect)
+}
+
 /// Proposes a move: a macro relocation, a move to a free site, or a swap.
+///
+/// `reach` is the range limit in tiles: the destination is drawn from the
+/// square of that half-side around where the cell is now. `u32::MAX`
+/// means the whole die, which is what the start-temperature probe uses
+/// and what [`PlaceOptions::range_limit`] turns off to.
 #[allow(clippy::too_many_arguments, reason = "the annealer's whole state")]
 fn propose(
     netlist: &Netlist,
@@ -2479,16 +2945,27 @@ fn propose(
     info: &[Placeable],
     macros: &[Macro],
     sites_by_kind: &BTreeMap<String, Vec<usize>>,
+    index: &BTreeMap<String, KindSites>,
     shared: &SiteRules,
     movable: &[usize],
     rng: &mut Rng,
     placement: &Placement,
+    reach: u32,
 ) -> Option<Move> {
     let instance = movable[rng.below(movable.len())];
+    let here = placement.site_of(instance)?;
+    let (hx, hy) = graph.sites[here].tile;
     if let Some(index) = info[instance].macro_index {
         let m = &macros[index];
-        let ax = u32::try_from(rng.below(graph.width as usize)).unwrap_or(0);
-        let ay = u32::try_from(rng.below(graph.height as usize)).unwrap_or(0);
+        // A macro moves as a whole, so the window is around its anchor
+        // and not around whichever member was drawn.
+        let (ax0, ay0) = match placement.site_of(m.anchor) {
+            Some(site) => graph.sites[site].tile,
+            None => (hx, hy),
+        };
+        let rect = window_of(graph, None, ax0, ay0, reach)?;
+        let ax = rect.x0 + u32::try_from(rng.below((rect.x1 - rect.x0 + 1) as usize)).unwrap_or(0);
+        let ay = rect.y0 + u32::try_from(rng.below((rect.y1 - rect.y0 + 1) as usize)).unwrap_or(0);
         let mut free = placement.clone();
         for (member, _, _) in &m.members {
             free.unplace(*member);
@@ -2506,15 +2983,15 @@ fn propose(
         );
     }
     let kind = &netlist.instances[instance].kind;
-    let sites = sites_by_kind.get(kind)?;
-    let target = sites[rng.below(sites.len())];
-    if placement.site_of(instance) == Some(target) {
-        return None;
-    }
-    let (x, y) = graph.sites[target].tile;
-    if let Some((rect, _)) = &info[instance].region
-        && !rect.holds(x, y)
-    {
+    let rect = window_of(
+        graph,
+        info[instance].region.as_ref().map(|(rect, _)| rect),
+        hx,
+        hy,
+        reach,
+    )?;
+    let target = index.get(kind)?.pick(rng, rect)?;
+    if target == here {
         return None;
     }
     // A move is only proposed if it is legal, which for a swap means legal
@@ -2528,14 +3005,12 @@ fn propose(
             if info[other].fixed.is_some() || info[other].macro_index.is_some() {
                 return None;
             }
-            let back = placement.site_of(instance)?;
-            let (bx, by) = graph.sites[back].tile;
             if let Some((rect, _)) = &info[other].region
-                && !rect.holds(bx, by)
+                && !rect.holds(hx, hy)
             {
                 return None;
             }
-            vec![(instance, target), (other, back)]
+            vec![(instance, target), (other, here)]
         }
     };
     shared.allows(placement, &candidate).then_some(candidate)
@@ -3016,6 +3491,250 @@ mod tests {
         // A different seed is allowed to differ; what matters is that it
         // is still a legal placement.
         assert_eq!(c.placed(), 8);
+    }
+
+    /// The cooling factor is the one in VPR's Table 1, at every boundary.
+    ///
+    /// A table is the kind of thing that gets transcribed with a `<` where
+    /// a `<=` belongs, and the bands are what the whole schedule is, so
+    /// each is checked on both sides of its edge.
+    #[test]
+    fn the_cooling_factor_follows_the_published_table() {
+        assert_eq!(cooling_factor(1.0), 0.5);
+        assert_eq!(cooling_factor(0.97), 0.5);
+        assert_eq!(cooling_factor(0.96), 0.9);
+        assert_eq!(cooling_factor(0.81), 0.9);
+        assert_eq!(cooling_factor(0.80), 0.95);
+        assert_eq!(cooling_factor(0.16), 0.95);
+        assert_eq!(cooling_factor(0.15), 0.8);
+        assert_eq!(cooling_factor(0.0), 0.8);
+    }
+
+    /// The range limiter is a feedback loop around the target rate: it
+    /// widens above, narrows below, holds at it, and never leaves
+    /// `1 ..= widest`.
+    #[test]
+    fn the_move_window_tracks_the_acceptance_rate() {
+        assert_eq!(next_window(10.0, 0.44, 0.44, 40.0), 10.0);
+        assert!(next_window(10.0, 0.9, 0.44, 40.0) > 10.0);
+        assert!(next_window(10.0, 0.1, 0.44, 40.0) < 10.0);
+        // Both clamps, which are what stop a run of refusals from driving
+        // the window to zero and a run of acceptances from making it
+        // bigger than the die.
+        assert_eq!(next_window(1.0, 0.0, 0.44, 40.0), 1.0);
+        assert_eq!(next_window(40.0, 1.0, 0.44, 40.0), 40.0);
+    }
+
+    /// The start temperature is solved for, not guessed: at the
+    /// temperature it returns, the sample it was given would be accepted
+    /// at the rate that was asked for.
+    ///
+    /// The second half is the degenerate case the solve has to get right
+    /// — a neighbourhood that is already mostly downhill cannot be made
+    /// *less* acceptable by cooling, so the answer is the floor and not a
+    /// number that overshoots.
+    #[test]
+    fn the_start_temperature_is_the_one_that_accepts_what_was_asked() {
+        let samples: Vec<f64> = (1..=100).map(|i| f64::from(i) - 40.0).collect();
+        let t = start_temperature(&samples, Some(0.44));
+        let got = samples
+            .iter()
+            .map(|d| if *d <= 0.0 { 1.0 } else { t / (t + d) })
+            .sum::<f64>()
+            / samples.len() as f64;
+        assert!((got - 0.44).abs() < 1e-6, "{got} at T = {t}");
+
+        // A neighbourhood already more than 44% downhill wants no
+        // temperature at all, and the bisection has to say so rather than
+        // overshoot: the answer is its floor, and what keeps that from
+        // ending the anneal after one step is the exit criterion.
+        assert!(start_temperature(&vec![-1.0; 10], Some(0.44)) < 1e-6);
+
+        // And the paper's rule is still there, unchanged, for the run
+        // that wants to start from scratch.
+        let spread = vec![-10.0, 10.0];
+        assert_eq!(start_temperature(&spread, None), 200.0);
+    }
+
+    /// A move window holds: every site the generator offers is inside the
+    /// rectangle it was given, and a rectangle with nothing in it offers
+    /// nothing rather than something far away.
+    #[test]
+    fn the_move_generator_stays_inside_its_window() {
+        let (_, graph) = grid(16, 16);
+        let sites: Vec<usize> = (0..graph.sites.len())
+            .filter(|s| graph.sites[*s].kind == "lut")
+            .collect();
+        let index = KindSites::build(&graph, &sites);
+        let mut rng = Rng::new(7);
+        let rect = Rect {
+            x0: 4,
+            y0: 5,
+            x1: 6,
+            y1: 9,
+        };
+        let mut seen = 0;
+        for _ in 0..2_000 {
+            let Some(site) = index.pick(&mut rng, rect) else {
+                continue;
+            };
+            let (x, y) = graph.sites[site].tile;
+            assert!(rect.holds(x, y), "({x}, {y}) is outside {rect:?}");
+            seen += 1;
+        }
+        assert!(seen > 1_000, "the window offered only {seen} site(s)");
+        assert_eq!(
+            index.pick(
+                &mut rng,
+                Rect {
+                    x0: 40,
+                    y0: 40,
+                    x1: 44,
+                    y1: 44
+                }
+            ),
+            None
+        );
+    }
+
+    /// **The annealer improves on what legalisation hands it, at the
+    /// lowest effort.** The regression this whole schedule exists for.
+    ///
+    /// The placer used to end at *exactly* the wirelength legalisation
+    /// produced on `usb_host_target.v` at any effort below 10, and on
+    /// `clock_blink.v` at every effort including 10: seven million moves
+    /// for nothing. The cause was the move generator, not the move count
+    /// — a die-wide move is a large uphill one, so once the temperature
+    /// is low enough to be selective every move is refused, and while it
+    /// is high enough to accept one the placement is scattered.
+    ///
+    /// What this would catch: a schedule that goes back to offering
+    /// die-wide moves, or a start temperature hot enough to throw the
+    /// analytic placement away, both of which show up as
+    /// `hpwl_after == hpwl_before`. What it would **not** catch: a
+    /// schedule that improves the wirelength a little when it could
+    /// improve it a lot; only a measurement on a real design says that,
+    /// and `docs/fpga-trellis.md` has it.
+    #[test]
+    fn the_annealer_improves_on_legalisation_at_the_lowest_effort() {
+        let (arch, graph) = grid(12, 12);
+        let netlist = chain(96);
+        let options = PlaceOptions {
+            move_effort: 1,
+            ..PlaceOptions::default()
+        };
+        let (_, report) =
+            place(&netlist, &arch, &graph, &Constraints::new(), &options).expect("it fits");
+        assert!(
+            report.hpwl_after < report.hpwl_before,
+            "{} move(s) left the wirelength at {}\n{}",
+            report.moves.0,
+            report.hpwl_after,
+            report.schedule_text()
+        );
+    }
+
+    /// And the range limit is *why*: the same design and the same budget,
+    /// annealed the way this placer used to, ends worse.
+    ///
+    /// This is a comparison and not an absolute number, because what is
+    /// being claimed is a mechanism. A placer whose moves may go anywhere
+    /// has a neighbourhood whose cost changes are enormous beside any
+    /// temperature that would accept them.
+    #[test]
+    fn the_range_limit_is_what_makes_the_annealing_work() {
+        let (arch, graph) = grid(12, 12);
+        let netlist = chain(96);
+        let options = PlaceOptions {
+            move_effort: 1,
+            ..PlaceOptions::default()
+        };
+        let (_, limited) =
+            place(&netlist, &arch, &graph, &Constraints::new(), &options).expect("it fits");
+        let wide = PlaceOptions {
+            range_limit: false,
+            start_window: None,
+            start_acceptance: None,
+            cooling: Some(0.9),
+            stall_limit: 0,
+            ..options
+        };
+        let (_, old) = place(&netlist, &arch, &graph, &Constraints::new(), &wide).expect("it fits");
+        assert!(
+            limited.hpwl_after < old.hpwl_after,
+            "range-limited {} against die-wide {}",
+            limited.hpwl_after,
+            old.hpwl_after
+        );
+    }
+
+    /// A placement that has converged stops, rather than spending the
+    /// rest of its budget.
+    ///
+    /// Either exit is a pass — the temperature criterion is VPR's and
+    /// fires first on most designs, the stall criterion catches the rest.
+    /// What must not happen is `Exhausted`, which means the schedule ran
+    /// to its backstop and the budget, rather than the search, decided
+    /// when to stop.
+    #[test]
+    fn a_converged_placement_stops_before_its_budget() {
+        let (arch, graph) = grid(12, 12);
+        let netlist = chain(96);
+        let (_, report) = place(
+            &netlist,
+            &arch,
+            &graph,
+            &Constraints::new(),
+            &PlaceOptions::default(),
+        )
+        .expect("it fits");
+        assert!(
+            matches!(report.stop, AnnealStop::Cold | AnnealStop::Stalled),
+            "stopped because {}, after {} of {} temperature(s)\n{}",
+            report.stop.clause(),
+            report.temperatures,
+            PlaceOptions::default().max_temperatures,
+            report.schedule_text()
+        );
+        assert_eq!(report.temperatures as usize, report.schedule.len());
+        assert_eq!(
+            report.moves,
+            report
+                .schedule
+                .iter()
+                .fold((0, 0), |(t, a), s| (t + s.tried, a + s.accepted))
+        );
+    }
+
+    /// The schedule that is reported is the one that ran, and the
+    /// placement that comes back is the best step of it.
+    ///
+    /// `TemperatureStep::cost` is recounted from the bounding boxes at
+    /// each temperature rather than accumulated from the move deltas,
+    /// which is what keeps the exit criterion honest over tens of
+    /// millions of `+=` on an `f64`; this checks that recount against
+    /// [`hpwl`], which reads the pins.
+    #[test]
+    fn the_reported_schedule_is_the_one_that_ran() {
+        let (arch, graph) = grid(12, 12);
+        let netlist = chain(96);
+        let (placement, report) = place(
+            &netlist,
+            &arch,
+            &graph,
+            &Constraints::new(),
+            &PlaceOptions::default(),
+        )
+        .expect("it fits");
+        let best = report
+            .schedule
+            .iter()
+            .map(|s| s.cost)
+            .min()
+            .expect("the annealer ran");
+        assert_eq!(best.min(report.hpwl_before), report.hpwl_after);
+        assert_eq!(hpwl(&netlist, &graph, &placement), report.hpwl_after);
+        assert!(report.to_text().contains("schedule: acceptance"));
     }
 
     /// A grid of tiles holding **two** flip-flops each, whose enable pin is

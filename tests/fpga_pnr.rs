@@ -100,6 +100,11 @@ fn expect(name: &str, actual: &str, failures: &mut Vec<String>) {
 
 /// Takes one case from its `.rtl` and `.rcf` to a bitstream.
 fn run_case(name: &str) -> (Design, ModuleId, Implementation) {
+    run_case_with(name, &PnrOptions::new())
+}
+
+/// The same, with the place-and-route knobs the caller chose.
+fn run_case_with(name: &str, pnr: &PnrOptions) -> (Design, ModuleId, Implementation) {
     let device = fpga::target(DEVICE).expect("the built-in iCE40 part");
     let mut sources = SourceMap::new();
     let rtl = read(&format!("{name}.rtl"));
@@ -122,12 +127,66 @@ fn run_case(name: &str) -> (Design, ModuleId, Implementation) {
         device,
         &constraints,
         &FpgaOptions::default(),
-        &PnrOptions::new(),
+        pnr,
         &mut diags,
     )
     .unwrap_or_else(|e| panic!("{name}: the flow failed: {e}\n{}", diags.render(&sources)));
     assert!(!diags.has_errors(), "{name}:\n{}", diags.render(&sources));
     (design, top, done)
+}
+
+/// What each case costs and what it is worth, under the annealing
+/// schedule and under the one it replaced.
+///
+/// Ignored, and asserts nothing: these are quality numbers for a report,
+/// and the quality of a placement is a trade rather than a threshold. The
+/// goldens beside this file are what pin the behaviour; this is what says
+/// whether a change to them was an improvement, which a diff of site
+/// names cannot. No wall-clock number appears here either — the router's
+/// visited-node count is the work it did, and it is the same on every
+/// machine.
+///
+/// ```sh
+/// cargo test --test fpga_pnr -- --ignored --nocapture place_and_route_quality
+/// ```
+#[test]
+#[ignore = "prints a quality table, asserts nothing"]
+fn place_and_route_quality() {
+    let schedules: [(&str, PnrOptions); 2] = [
+        ("adaptive", PnrOptions::new()),
+        ("die-wide, fixed 0.9", {
+            let mut old = PnrOptions::new();
+            old.place.range_limit = false;
+            old.place.start_window = None;
+            old.place.start_acceptance = None;
+            old.place.cooling = Some(0.9);
+            old.place.stall_limit = 0;
+            old
+        }),
+    ];
+    println!(
+        "{:<14} {:<21} {:>9} {:>8} {:>6} {:>7} {:>12}",
+        "case", "schedule", "hpwl", "after", "pips", "tiles", "nodes"
+    );
+    for name in CASES {
+        for (label, pnr) in &schedules {
+            let (_, _, done) = run_case_with(name, pnr);
+            let place = &done.pnr.placement_report;
+            let route = &done.pnr.routing_report;
+            let tiles: std::collections::BTreeSet<(u32, u32)> = (0..done.pnr.netlist.instances.len())
+                .filter_map(|i| done.pnr.placement.site_of(i))
+                .map(|s| done.pnr.graph.sites[s].tile)
+                .collect();
+            println!(
+                "{name:<14} {label:<21} {:>9} {:>8} {:>6} {:>7} {:>12}",
+                place.hpwl_before,
+                place.hpwl_after,
+                route.pips,
+                tiles.len(),
+                route.visited,
+            );
+        }
+    }
 }
 
 /// The routing golden: the convergence, then the pips per signal.

@@ -208,6 +208,35 @@ Options:
                      quicker; docs/fpga-trellis.md has what the
                      wirelength does at each. For iterating on hardware,
                      not for the bitstream you keep.
+  --place-schedule   Print the annealing schedule as it ran, one line per
+                     temperature: the move window, the moves tried and
+                     accepted, and the wirelength at the end of the step.
+                     This is how to see whether the acceptance rate is
+                     being held where the schedule aims it.
+  --place-fixed-cooling <f>
+                     Cool by a fixed factor every temperature instead of
+                     by the acceptance rate. For comparing the adaptive
+                     schedule with the one it replaced, which used 0.9.
+  --place-wide-moves Let a move send a cell to any site of its kind on the
+                     die, instead of to one inside the range limit. The
+                     old behaviour, kept so the difference can be measured
+                     rather than argued about.
+  --place-hot-start  Start the anneal at 20x the spread of the sampled
+                     cost changes, hot enough to accept almost anything,
+                     instead of at the temperature that accepts the
+                     target fraction. The old behaviour, and on a
+                     placement that an analytic solve has already made
+                     good it throws that work away.
+  --place-start-window <n>
+                     The move window the anneal starts with, in tiles; 0
+                     is the whole die. The default is 1: the analytic
+                     solve has already placed every cell roughly, and a
+                     die-wide move undoes that. The limiter widens it
+                     again if the acceptance rate asks.
+  --place-start-acceptance <r>
+                     Start at the temperature that would accept this
+                     fraction of sampled moves. The default is 0.44, the
+                     same rate the move window aims to hold.
   --timing           Print how long each stage of the flow took, to
                      stderr. Wall-clock numbers, so they belong in a
                      report and never in a test.
@@ -619,6 +648,9 @@ fn spec_for(usage: &str) -> Spec {
                 "bitstream",
                 "region",
                 "place-effort",
+                "place-fixed-cooling",
+                "place-start-acceptance",
+                "place-start-window",
             ],
             flags: &[
                 "list-devices",
@@ -627,6 +659,9 @@ fn spec_for(usage: &str) -> Spec {
                 "quiet",
                 "offline",
                 "verify",
+                "place-schedule",
+                "place-wide-moves",
+                "place-hot-start",
             ],
             repeated: &["param"],
         }
@@ -2323,12 +2358,47 @@ fn write_ecp5_bitstream(
             .parse::<usize>()
             .map_err(|_| format!("`--place-effort` wants a whole number, not `{text}`"))?;
     }
+    if let Some(text) = args.option("place-fixed-cooling") {
+        let factor = text
+            .parse::<f64>()
+            .map_err(|_| format!("`--place-fixed-cooling` wants a number, not `{text}`"))?;
+        if !(factor > 0.0 && factor < 1.0) {
+            return Err(format!("`--place-fixed-cooling` wants a factor in (0, 1), not `{text}`"));
+        }
+        place_options.cooling = Some(factor);
+    }
+    if args.flag("place-wide-moves") {
+        place_options.range_limit = false;
+    }
+    if args.flag("place-hot-start") {
+        place_options.start_acceptance = None;
+    }
+    if let Some(text) = args.option("place-start-window") {
+        let tiles = text
+            .parse::<u32>()
+            .map_err(|_| format!("`--place-start-window` wants a whole number, not `{text}`"))?;
+        place_options.start_window = (tiles > 0).then_some(tiles);
+    }
+    if let Some(text) = args.option("place-start-acceptance") {
+        let rate = text
+            .parse::<f64>()
+            .map_err(|_| format!("`--place-start-acceptance` wants a number, not `{text}`"))?;
+        if !(rate > 0.0 && rate < 1.0) {
+            return Err(format!(
+                "`--place-start-acceptance` wants a fraction in (0, 1), not `{text}`"
+            ));
+        }
+        place_options.start_acceptance = Some(rate);
+    }
     let (placement, place_report) =
         place::place(&netlist, &fabric.arch, &graph, constraints, &place_options)
             .map_err(|e| e.to_string())?;
     laps.lap("place");
     if args.flag("report") {
         eprint!("{}", place_report.to_text());
+    }
+    if args.flag("place-schedule") {
+        eprint!("{}", place_report.schedule_text());
     }
     // The one knob this family needs: a flip-flop's clock mux offers the
     // global branch wires *and* seven ordinary interconnect wires, so the
