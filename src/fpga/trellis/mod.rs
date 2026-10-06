@@ -116,10 +116,10 @@
 //!
 //! # Obtaining the database
 //!
-//! Nothing here reads a file: a [`crate::ir::memfile::FileProvider`] is handed in,
-//! rooted at the directory holding `devices.json`. `reticle fetch
-//! prjtrellis-db` puts one in the per-user cache; `docs/fpga-trellis.md`
-//! has the command and what is downloaded.
+//! Nothing here reads a file: a [`crate::ir::memfile::FileProvider`] is
+//! handed in, rooted at the directory holding `devices.json`.
+//! `reticle fetch prjtrellis-db` puts one in the per-user cache;
+//! `docs/fpga-trellis.md` has the command and what is downloaded.
 pub mod parse;
 pub mod sites;
 
@@ -1809,9 +1809,10 @@ impl Edge {
 /// the fabric. [`IoSite::pad_at`] and the rest are where its **bits** are,
 /// which the edge's tile rule decides and which is a different position on
 /// three of the four edges — and the *same* position on the bottom edge,
-/// where the buffer's tile is the pad's tile for side A. Before there was interconnect only the bits
-/// mattered and the bel was put where they were; a routed design notices,
-/// because a bel's pins resolve in the tile the bel sits in.
+/// where the buffer's tile is the pad's tile for side A. Before there was
+/// interconnect only the bits mattered and the bel was put where they
+/// were; a routed design notices, because a bel's pins resolve in the tile
+/// the bel sits in.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct IoSite {
     /// The package ball.
@@ -4703,28 +4704,31 @@ impl TrellisFabric {
             // no expression in a design ever assigns anything but zero would
             // therefore come up set.
             //
-            // That is not a hypothetical. `ip/usb/usb_device_fs`'s control endpoint
-            // had `reg [2:0] stage` for four states, so `stage[2]` was a bit
-            // nothing ever set; read back off a real ECP5 through a debug port,
-            // `stage` was **5**, `case (stage)` matched none of its four labels,
-            // and every IN token a host sent was answered from the `default` arm
-            // with a NAK. The device acknowledged the host's SETUP, received
-            // every byte of it correctly, transmitted a well-formed handshake —
-            // and never enumerated, for eight rounds of looking somewhere else.
+            // That is not a hypothetical. `ip/usb/usb_device_fs`'s control
+            // endpoint had `reg [2:0] stage` for four states, so `stage[2]`
+            // was a bit nothing ever set; read back off a real ECP5 through
+            // a debug port, `stage` was **5**, `case (stage)` matched none
+            // of its four labels, and every IN token a host sent was
+            // answered from the `default` arm with a NAK. The device
+            // acknowledged the host's SETUP, received every byte of it
+            // correctly, transmitted a well-formed handshake — and never
+            // enumerated, for eight rounds of looking somewhere else.
             // `docs/fpga-trellis.md` has the whole of it.
             //
-            // **What happens to such a flip-flop now is that the constant gets
-            // built.** `techcells::drive_constant_data` gives every flip-flop
-            // whose data input is a constant a lookup table to take it from —
-            // one per constant, shared, `INIT` all zeros or all ones, every
-            // input tied high so the value does not depend on what an unrouted
-            // input reads as — and the router routes it to the `M` wire like any
-            // other signal. That is what nextpnr's `pack_constants` does and,
-            // measured rather than assumed, it is what Lattice's own bitstreams
-            // for this board contain: `what_lattices_own_packer_writes_for_a_constant`
-            // walks `analyzer.bit` and `facedancer.bit` backwards from every one
-            // of their 1135 and 3132 fabric-fed flip-flops and finds a driver on
-            // every single one, four of them a constant `SLICEA.K0`.
+            // **What happens to such a flip-flop now is that the constant
+            // gets built.** `techcells::drive_constant_data` gives every
+            // flip-flop whose data input is a constant a lookup table to
+            // take it from — one per constant, shared, `INIT` all zeros or
+            // all ones, every input tied high so the value does not depend
+            // on what an unrouted input reads as — and the router routes it
+            // to the `M` wire like any other signal. That is what nextpnr's
+            // `pack_constants` does and, measured rather than assumed, it
+            // is what Lattice's own bitstreams for this board contain:
+            // `what_lattices_own_packer_writes_for_a_constant` walks
+            // `analyzer.bit` and `facedancer.bit` backwards from every one
+            // of their 1135 and 3132 fabric-fed flip-flops and finds a
+            // driver on every single one, four of them a constant
+            // `SLICEA.K0`.
             //
             // So what is left here is the case that genuinely cannot be built,
             // and it is narrower than it was. Three ways to reach it:
@@ -4738,16 +4742,17 @@ impl TrellisFabric {
             // - something placed a flip-flop whose data signal the router did
             //   not reach, which `Routing::verify` would also report.
             //
-            // **A data pin the netlist ties high is still allowed through**, and
-            // the reason is the one above read the other way: the untied wire
-            // *is* a one, so the flop loads the one the design asked for. That is
-            // how `usb_ulpi_link`'s `rst_q` worked before this pass existed — a
-            // set-once register that releases a transceiver's reset pin, whose
-            // data input is the constant `1'b1` and whose enable is the
-            // condition — and it was right by accident rather than by
-            // construction. The pass makes it right by construction; this
-            // allowance is what keeps a netlist built without the pass from
-            // being refused for a case that does work.
+            // **A data pin the netlist ties high is still allowed
+            // through**, and the reason is the one above read the other
+            // way: the untied wire *is* a one, so the flop loads the one
+            // the design asked for. That is how `usb_ulpi_link`'s `rst_q`
+            // worked before this pass existed — a set-once register that
+            // releases a transceiver's reset pin, whose data input is the
+            // constant `1'b1` and whose enable is the condition — and it
+            // was right by accident rather than by construction. The pass
+            // makes it right by construction; this allowance is what keeps
+            // a netlist built without the pass from being refused for a
+            // case that does work.
             let data = netlist
                 .pins
                 .iter()

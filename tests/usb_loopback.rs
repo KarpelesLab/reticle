@@ -56,16 +56,17 @@
 //! **What that would and would not catch.** It catches a flip-flop whose
 //! data input is the constant zero coming up, or being clocked to, a one —
 //! the defect itself — and it catches it on **every byte** this test moves,
-//! which is a few hundred through the assertions and two thousand more through
-//! the throughput measurement, so it cannot pass by accident. It does not catch a broken
-//! constant *one*: the same design's `rst_q` is fed by one and releases the
-//! transceiver's reset pin, so a one that came up zero means no device on
-//! the bus, and this test **skips** with "no 1209:0001 is attached" rather
-//! than failing. Nor does it say anything about a design that does not use
-//! `drive_constant_data` at all; `tests/fpga_trellis.rs` is where the
-//! netlist and the bits are checked, and
-//! `the_usb_devices_constant_zero_probe_survives_synthesis` is what stops an
-//! optimiser from deleting the probe and leaving this test green for ever.
+//! which is a few hundred through the assertions and two thousand more
+//! through the throughput measurement, so it cannot pass by accident. It
+//! does not catch a broken constant *one*: the same design's `rst_q` is fed
+//! by one and releases the transceiver's reset pin, so a one that came up
+//! zero means no device on the bus, and this test **skips** with "no
+//! 1209:0001 is attached" rather than failing. Nor does it say anything
+//! about a design that does not use `drive_constant_data` at all;
+//! `tests/fpga_trellis.rs` is where the netlist and the bits are checked,
+//! and `the_usb_devices_constant_zero_probe_survives_synthesis` is what
+//! stops an optimiser from deleting the probe and leaving this test green
+//! for ever.
 
 #![cfg(feature = "program")]
 
@@ -73,7 +74,8 @@ use std::time::{Duration, Instant};
 
 use rawusb::Context;
 
-/// pid.codes' test pair, which is `ip/usb/usb_device_fs`'s default `VID` / `PID`.
+/// pid.codes' test pair, which is `ip/usb/usb_device_fs`'s default `VID` /
+/// `PID`.
 const VID: u16 = 0x1209;
 const PID: u16 = 0x0001;
 

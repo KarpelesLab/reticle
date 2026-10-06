@@ -349,8 +349,8 @@ module usb_hub_proxy_ulpi #(
         // Nothing reads a register here. The only register transaction in a
         // proxy is the pair of writes that drive the port's reset, and a
         // write's answer is `reg_ok`; a design that wants to read the
-        // transceiver uses `ip/usb/usb_host_ulpi` with `enum_en` low, which is what
-        // that block's read-only instrument mode is for.
+        // transceiver uses `ip/usb/usb_host_ulpi` with `enum_en` low, which
+        // is what that block's read-only instrument mode is for.
         .reg_rdata    (),
         .reg_done     (reg_done),
         .reg_ok       (reg_ok),

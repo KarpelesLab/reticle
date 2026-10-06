@@ -1,7 +1,8 @@
-# usb_proxy: the half of a USB hub that **forwards**. `ip/usb/usb_hub` is a hub's
-# control endpoint — a PC's own hub driver binds to it, powers its port, is told
-# something is attached and resets it, and then cannot reach the device because
-# nothing carries a packet across. This is what carries it.
+# usb_proxy: the half of a USB hub that **forwards**. `ip/usb/usb_hub` is a
+# hub's control endpoint — a PC's own hub driver binds to it, powers its
+# port, is told something is attached and resets it, and then cannot reach
+# the device because nothing carries a packet across. This is what carries
+# it.
 #
 # **A transaction proxy and not a repeater.** A hub repeats a downstream packet
 # within about four bit times and through a ULPI transceiver the floor is
@@ -12,11 +13,11 @@
 # transaction on the other bus and has the answer waiting for the retry.
 #
 # **Pass-through addressing.** The PC enumerates the device, not us: a token
-# whose address is not the hub's own is forwarded verbatim, including the PC's
-# SET_ADDRESS, so both buses agree on the address with no translation table.
-# `ip/usb/usb_host_ulpi`'s `usb_host_enum` is therefore **not** instantiated here —
-# our host becomes a transaction engine the proxy drives. README.md §2 is the
-# decision and what was weighed against it.
+# whose address is not the hub's own is forwarded verbatim, including the
+# PC's SET_ADDRESS, so both buses agree on the address with no translation
+# table. `ip/usb/usb_host_ulpi`'s `usb_host_enum` is therefore **not**
+# instantiated here — our host becomes a transaction engine the proxy
+# drives. README.md §2 is the decision and what was weighed against it.
 #
 # Three modules. `usb_proxy_relay` is the forwarding and the four data toggles
 # two independent buses need; `usb_proxy_dn` is the downstream port — the attach

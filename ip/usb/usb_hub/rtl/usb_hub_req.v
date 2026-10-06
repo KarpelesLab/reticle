@@ -119,15 +119,15 @@
 //                       sets, the port becomes enabled if something is
 //                       connected, and `port_reset` falls.
 //
-//   `ip/usb/usb_proxy`'s `usb_proxy_dn` is what drives it on the design this was
-//   written for, and its header has the ULPI register values and the two
-//   durations USB 2.0 §7.1.7 asks for. **Tying `port_reset_done` high restores
-//   the reset that takes no time**, which is what a design with nothing
-//   downstream wants and is what this block did for one round: the level is
-//   one cycle long, C_PORT_RESET sets immediately, and a host sees the reset
-//   already finished at its first GetPortStatus. That round's outcome — a PC
-//   that enumerates the port and gets nothing back — is in README.md §8 with
-//   its kernel log, and it is what the proxy changed.
+// `ip/usb/usb_proxy`'s `usb_proxy_dn` is what drives it on the design this
+// was written for, and its header has the ULPI register values and the two
+// durations USB 2.0 §7.1.7 asks for. **Tying `port_reset_done` high
+// restores the reset that takes no time**, which is what a design with
+// nothing downstream wants and is what this block did for one round: the
+// level is one cycle long, C_PORT_RESET sets immediately, and a host sees
+// the reset already finished at its first GetPortStatus. That round's
+// outcome — a PC that enumerates the port and gets nothing back — is in
+// README.md §8 with its kernel log, and it is what the proxy changed.
 //
 //   A port that loses its power or its connection while resetting stops
 //   resetting: §11.5.1's **Powered-off** state has no reset in progress, and a
@@ -141,15 +141,15 @@
 //   ClearPortFeature(C_PORT_*). `usb_hub` sends the bitmap for as long as any
 //   of them is set and NAKs when none is.
 //
-//   That shape is chosen against the one `ip/usb/usb_cdc_acm` got wrong. Its
-//   notification endpoint had a latch meaning "the host has been told", the
-//   latch was set once per configuration, and a host that was not listening
-//   at that moment — or a driver bound a second time without a bus reset —
-//   never heard again; `ip/usb/usb_cdc_acm/README.md` §4 has the measurement that
-//   condemned it. **There is no such latch here.** Nothing in this file
-//   records having reported anything, so there is nothing that can be wrong
-//   about whether it has. The host's own ClearPortFeature is the
-//   acknowledgement, which is what USB 2.0 asks for anyway.
+// That shape is chosen against the one `ip/usb/usb_cdc_acm` got wrong. Its
+// notification endpoint had a latch meaning "the host has been told", the
+// latch was set once per configuration, and a host that was not listening
+// at that moment — or a driver bound a second time without a bus reset —
+// never heard again; `ip/usb/usb_cdc_acm/README.md` §4 has the measurement
+// that condemned it. **There is no such latch here.** Nothing in this file
+// records having reported anything, so there is nothing that can be wrong
+// about whether it has. The host's own ClearPortFeature is the
+// acknowledgement, which is what USB 2.0 asks for anyway.
 //
 //   One consequence is in the open: a host that has read the bitmap and not
 //   yet cleared the change is sent the same bitmap again. `usb_hub`'s header
@@ -217,12 +217,12 @@ module usb_hub_req (
 
     // WHAT IS ACTUALLY ON THE DOWNSTREAM PORT
     //
-    // `port_attached` is a device present and debounced — on the design this
-    // block was written for it is `ip/usb/usb_host_ulpi`'s own `attached`, which
-    // is that block's debounced sight of the pair leaving SE0 — and
-    // `port_low_speed` is which line it pulled up: a full-speed device pulls
-    // D+ up and a low-speed one D-, so the second is only meaningful while
-    // the first is high.
+    // `port_attached` is a device present and debounced — on the design
+    // this block was written for it is `ip/usb/usb_host_ulpi`'s own
+    // `attached`, which is that block's debounced sight of the pair leaving
+    // SE0 — and `port_low_speed` is which line it pulled up: a full-speed
+    // device pulls D+ up and a low-speed one D-, so the second is only
+    // meaningful while the first is high.
     input  wire        port_attached,
     input  wire        port_low_speed,
 

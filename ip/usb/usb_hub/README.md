@@ -2,23 +2,25 @@
 
 `usb_hub` is a full-speed USB 2.0 **hub** with one downstream port. A device
 built on it appears to an operating system as a hub — `USB hub found`,
-`1 port detected` — and, as with [`ip/usb/usb_cdc_acm`](../usb_cdc_acm/README.md),
-**nothing has to be installed for that to happen**: a hub is the one class
-every operating system must already know, because a hub is how it finds
-anything else at all.
+`1 port detected` — and, as with
+[`ip/usb/usb_cdc_acm`](../usb_cdc_acm/README.md), **nothing has to be
+installed for that to happen**: a hub is the one class every operating
+system must already know, because a hub is how it finds anything else at
+all.
 
 **It is a hub's control endpoint and not a hub.** That sentence is the most
-important one in this document and §2 is the whole of why. A real hub repeats
-every downstream packet to its enabled ports within about four bit times, and
-through a ULPI transceiver the floor is roughly twenty-four one way. What is
-behind this block's port instead is a **second USB controller**,
-[`ip/usb/usb_host_ulpi`](../usb_host_ulpi/README.md), on its own bus, and what joins
-the two conversations is [`ip/usb/usb_proxy`](../usb_proxy/README.md) — a transaction
-proxy, which §2 is the argument for. **This block on its own joins nothing**: a
-host finds a hub, finds something on its port, resets it, and gets no answer
-from the device it believes is there. §8 is the kernel log of exactly that,
-quoted, and it is the **correct** outcome for this block alone rather than a
-defect to be apologised for.
+important one in this document and §2 is the whole of why. A real hub
+repeats every downstream packet to its enabled ports within about four bit
+times, and through a ULPI transceiver the floor is roughly twenty-four one
+way. What is behind this block's port instead is a **second USB
+controller**, [`ip/usb/usb_host_ulpi`](../usb_host_ulpi/README.md), on its
+own bus, and what joins the two conversations is
+[`ip/usb/usb_proxy`](../usb_proxy/README.md) — a transaction proxy, which §2
+is the argument for. **This block on its own joins nothing**: a host finds a
+hub, finds something on its port, resets it, and gets no answer from the
+device it believes is there. §8 is the kernel log of exactly that, quoted,
+and it is the **correct** outcome for this block alone rather than a defect
+to be apologised for.
 
 This document is laid out the way
 [`ip/usb/usb_cdc_acm/README.md`](../usb_cdc_acm/README.md) is, and for the same
@@ -101,14 +103,14 @@ gateware changes that**: the delay is in the transceivers.
 
 **MEDIUM**. The architecture that does work decouples the two sides and uses
 **NAK** as the escape hatch. The PC's side may NAK a transaction until the
-data is there — that is what NAK is for, and chapter 8's handshake packets are
-the flow control it describes — so a thing in the middle can take as long as it
-likes: accept the host's token, answer NAK, run the transaction on the other bus
-at its own pace, and have the answer waiting for the host's retry. That is a
-**transaction proxy** and not a repeater, and it is
-[`ip/usb/usb_proxy`](../usb_proxy/README.md). This block is the part of it a host has
-to bind to first, and the two things it has to hand the other half are the port's
-state and a reset the other half can drive.
+data is there — that is what NAK is for, and chapter 8's handshake packets
+are the flow control it describes — so a thing in the middle can take as
+long as it likes: accept the host's token, answer NAK, run the transaction
+on the other bus at its own pace, and have the answer waiting for the host's
+retry. That is a **transaction proxy** and not a repeater, and it is
+[`ip/usb/usb_proxy`](../usb_proxy/README.md). This block is the part of it a
+host has to bind to first, and the two things it has to hand the other half
+are the port's state and a reset the other half can drive.
 
 **So the layering is deliberate.** The hub's control endpoint — descriptors,
 class requests, port state, status-change endpoint — is a complete and testable
@@ -327,12 +329,13 @@ with the port number, from one, in `wIndex`.
 **HIGH** (§11.24.2). The four transaction-translator requests belong to a
 high-speed hub and this is a full-speed one, which `bDeviceProtocol` says;
 SetHubDescriptor and SetHubFeature are ones a hub need not implement; and
-GetBusState is optional and for debugging. A host that reads `bDeviceProtocol`
-and `wHubCharacteristics` sends none of them, and one that sends them anyway is
-not claimed and gets a STALL from endpoint 0 — which is the right answer for a
-request the device never offered. This is `ip/usb/usb_cdc_acm`'s pattern: **what a
-block does not implement is said in a descriptor field a host reads**, so the
-STALL is a second line of defence and not the statement.
+GetBusState is optional and for debugging. A host that reads
+`bDeviceProtocol` and `wHubCharacteristics` sends none of them, and one that
+sends them anyway is not claimed and gets a STALL from endpoint 0 — which is
+the right answer for a request the device never offered. This is
+`ip/usb/usb_cdc_acm`'s pattern: **what a block does not implement is said in
+a descriptor field a host reads**, so the STALL is a second line of defence
+and not the statement.
 
 ### Honoured, accepted-and-ignored, and stalled
 
@@ -399,22 +402,24 @@ into *that* transceiver. So the reset is two signals:
 | `port_reset` | a **level**, raised by SetPortFeature(PORT_RESET) and held until the reset is over. It is PORT_RESET in `wPortStatus` |
 | `port_reset_done` | one cycle from whatever drove the reset. C_PORT_RESET sets, the port is enabled if something is connected, and `port_reset` falls |
 
-[`ip/usb/usb_proxy`](../usb_proxy/README.md)'s `usb_proxy_dn` is what drives it on
-the design this was written for, and its header has the ULPI register values and
-the two durations USB 2.0 §7.1.7 asks for.
+[`ip/usb/usb_proxy`](../usb_proxy/README.md)'s `usb_proxy_dn` is what drives
+it on the design this was written for, and its header has the ULPI register
+values and the two durations USB 2.0 §7.1.7 asks for.
 
-**For one round this block had neither signal and the reset was over in the cycle
-it was asked for**, with PORT_RESET a constant zero — a bit no expression in the
-block could set, so there was no register for it, for the reason the previous
-subsection gives. **Tying `port_reset_done` high restores exactly that**, which
-is what a design with nothing downstream wants and is what
-`testdata/fpga/cynthion/usb_hub_target.v` does. A host then sees the reset
-already complete at its first GetPortStatus, enumerates the port, and gets
-nothing back from the device it believes is there — which is §8.
+**For one round this block had neither signal and the reset was over in the
+cycle it was asked for**, with PORT_RESET a constant zero — a bit no
+expression in the block could set, so there was no register for it, for the
+reason the previous subsection gives. **Tying `port_reset_done` high
+restores exactly that**, which is what a design with nothing downstream
+wants and is what `testdata/fpga/cynthion/usb_hub_target.v` does. A host
+then sees the reset already complete at its first GetPortStatus, enumerates
+the port, and gets nothing back from the device it believes is there — which
+is §8.
 
-A port that loses its power or its connection while resetting stops resetting:
-§11.5.1's **Powered-off** state has no reset in progress, and a `port_reset` left
-high there would be a hub reporting a reset nothing was driving.
+A port that loses its power or its connection while resetting stops
+resetting: §11.5.1's **Powered-off** state has no reset in progress, and a
+`port_reset` left high there would be a hub reporting a reset nothing was
+driving.
 
 ### What a host may not have a say in
 
@@ -477,8 +482,8 @@ detect, so neither can change.
 ### Where `port_attached` comes from
 
 `port_attached` and `port_low_speed` are **inputs** of `usb_hub`, and on the
-design this block was written for they are `ip/usb/usb_host_ulpi`'s `attached` and
-`low_speed`:
+design this block was written for they are `ip/usb/usb_host_ulpi`'s
+`attached` and `low_speed`:
 
 - **`attached`** is that block's own **debounced** sight of its bus leaving
   SE0 — its `DEBOUNCE_CYCLES` is 100 ms at 60 MHz — which is a device present
@@ -490,10 +495,11 @@ design this block was written for they are `ip/usb/usb_host_ulpi`'s `attached` a
   `connection` — the specification calls it the speed of the *attached* device
   for the same reason.
 
-**`attached` and not `up`.** `ip/usb/usb_host_ulpi` also reports `up`, meaning it
-finished enumerating the device for itself. Whether *our* host has enumerated it
-is not what a PC's PORT_CONNECTION means, and reporting `up` would hide a device
-our host failed on from a host that might have done better.
+**`attached` and not `up`.** `ip/usb/usb_host_ulpi` also reports `up`,
+meaning it finished enumerating the device for itself. Whether *our* host
+has enumerated it is not what a PC's PORT_CONNECTION means, and reporting
+`up` would hide a device our host failed on from a host that might have done
+better.
 
 ### Why a connection is gated on power, and what it buys
 
@@ -504,15 +510,16 @@ powers them.
 **MEDIUM**, and this is the design's neatest consequence: gating `connection`
 on `port_power` is what makes **the first connection reportable at all**.
 
-The problem it solves is the one `ip/usb/usb_cdc_acm` got wrong. A device may well
-already be plugged into the downstream socket before the PC has even seen the
-hub, so there is no edge of `port_attached` for the hub to notice. An edge
-detector would miss it. A one-shot at configuration would catch it and would be
-the same latch that went wrong next door. But `port_power` starts at zero and
-the host sets it — `hub_power_on` runs immediately after the hub is configured —
-so `connection` rises **when the host powers the port**, which is to say at the
-moment the host is listening and expecting to be told. The change is recorded
-then, with no edge detector and no one-shot.
+The problem it solves is the one `ip/usb/usb_cdc_acm` got wrong. A device
+may well already be plugged into the downstream socket before the PC has
+even seen the hub, so there is no edge of `port_attached` for the hub to
+notice. An edge detector would miss it. A one-shot at configuration would
+catch it and would be the same latch that went wrong next door. But
+`port_power` starts at zero and the host sets it — `hub_power_on` runs
+immediately after the hub is configured — so `connection` rises **when the
+host powers the port**, which is to say at the moment the host is listening
+and expecting to be told. The change is recorded then, with no edge detector
+and no one-shot.
 
 The other half of it is that **a hub that is not configured has powered-off
 ports**: `configured` going low, on a bus reset or SET_CONFIGURATION 0, clears
@@ -611,51 +618,53 @@ bind, because **no hub request has an OUT data stage** except SetHubDescriptor,
 which §11.24.2.10 makes optional and this block stalls.
 
 **One thing the hub needed was a standard request, and it is no longer this
-block's.** Linux's `hub_configure` sends the **standard** GET_STATUS of USB 2.0
-§9.4.5, device recipient — `80h 00h`, `wLength` 2 — with the comment "power
-budgeting mostly matters with bus-powered hubs", and takes its failure path with
-`can't get hub status` if the transfer does not complete. `usb_ctrl_ep`
-implemented five standard requests and GET_STATUS was not one of them, so without
-a claim the hub stalled it and was not a hub as far as that driver is concerned.
+block's.** Linux's `hub_configure` sends the **standard** GET_STATUS of USB
+2.0 §9.4.5, device recipient — `80h 00h`, `wLength` 2 — with the comment
+"power budgeting mostly matters with bus-powered hubs", and takes its
+failure path with `can't get hub status` if the transfer does not complete.
+`usb_ctrl_ep` implemented five standard requests and GET_STATUS was not one
+of them, so without a claim the hub stalled it and was not a hub as far as
+that driver is concerned.
 
-The hook offered it: its own header said `class_req` is raised for everything but
-the five, "string descriptors and GET_STATUS included, so a class that wants
-those can have them without this file changing again". So for one round
-`usb_hub_req` claimed it and answered two zero bytes — bus powered, remote
-wake-up not enabled.
+The hook offered it: its own header said `class_req` is raised for
+everything but the five, "string descriptors and GET_STATUS included, so a
+class that wants those can have them without this file changing again". So
+for one round `usb_hub_req` claimed it and answered two zero bytes — bus
+powered, remote wake-up not enabled.
 
-**That was a layering smudge, and it has been fixed.** A standard request belongs
-in endpoint 0, and the change was to `usb_ctrl_ep`: GET_STATUS to a device is two
-bytes derived from `CFG_ATTR` — bit 6 is Self Powered — and a remote-wakeup bit
-nothing in this library can set, it is the same for every device here, and the
-next class does not have to think about it. That block's "THE DEVICE'S OWN
-STATUS" is the whole of it.
+**That was a layering smudge, and it has been fixed.** A standard request
+belongs in endpoint 0, and the change was to `usb_ctrl_ep`: GET_STATUS to a
+device is two bytes derived from `CFG_ATTR` — bit 6 is Self Powered — and a
+remote-wakeup bit nothing in this library can set, it is the same for every
+device here, and the next class does not have to think about it. That
+block's "THE DEVICE'S OWN STATUS" is the whole of it.
 
-This round reported the change rather than making it, because it widens `std_req`
-on the two cores that already run on silicon and it had no measurement that would
-catch a regression in them — the hub's own tests would have passed either way.
-**The round that built `ip/usb/usb_proxy` made it**, because it had a board and
-`tests/usb_cdc_acm.rs` in front of it, which is what the report asked for; its §8
-carries the re-run. The cost is one flip-flop and about thirty lookup tables on
-every device in the library, measured in the technology-independent netlist —
-`docs/ip-library.md` has that number and the larger one the ECP5 and iCE40 mappers
-turn it into — and `class_req` is no longer raised for GET_STATUS at all, so this
-block **cannot** claim it even by accident.
+This round reported the change rather than making it, because it widens
+`std_req` on the two cores that already run on silicon and it had no
+measurement that would catch a regression in them — the hub's own tests
+would have passed either way. **The round that built `ip/usb/usb_proxy` made
+it**, because it had a board and `tests/usb_cdc_acm.rs` in front of it,
+which is what the report asked for; its §8 carries the re-run. The cost is
+one flip-flop and about thirty lookup tables on every device in the library,
+measured in the technology-independent netlist — `docs/ip-library.md` has
+that number and the larger one the ECP5 and iCE40 mappers turn it into — and
+`class_req` is no longer raised for GET_STATUS at all, so this block
+**cannot** claim it even by accident.
 
 GET_STATUS to an **interface** or an **endpoint** is still on the hook, and that
 is deliberate: those two are answerable only by something that knows which
 interfaces and endpoints exist, which endpoint 0 does not.
 
-**One thing the hook cannot express and the hub does not need.** There is no way
-for a class to STALL a request it recognises: `class_claim` promises an answer.
-A hub has a use for that which `ip/usb/usb_cdc_acm` did not — §11.24.2.12 wants a
-STALL for a feature request made while the port is in the wrong state, which is
-a condition the feature selector alone does not decide. This block does not
-reach it, because none of the three features it sets has a state precondition it
-can fail. A hub that implemented suspend properly would, and the answer would
-be either a tenth port on the hook or a feature decoder that declines to claim
-on a condition — the second of which is what `usb_cdc_req` already does for
-`wIndex`, so it is probably enough.
+**One thing the hook cannot express and the hub does not need.** There is no
+way for a class to STALL a request it recognises: `class_claim` promises an
+answer. A hub has a use for that which `ip/usb/usb_cdc_acm` did not —
+§11.24.2.12 wants a STALL for a feature request made while the port is in
+the wrong state, which is a condition the feature selector alone does not
+decide. This block does not reach it, because none of the three features it
+sets has a state precondition it can fail. A hub that implemented suspend
+properly would, and the answer would be either a tenth port on the hook or a
+feature decoder that declines to claim on a condition — the second of which
+is what `usb_cdc_req` already does for `wIndex`, so it is probably enough.
 
 ---
 
@@ -663,10 +672,11 @@ on a condition — the second of which is what `usb_cdc_req` already does for
 
 A Great Scott Gadgets Cynthion r1.4 holding
 `testdata/fpga/cynthion/usb_hub_target.v`, built with `VBUS_AUX = 1`: this
-block behind `ip/usb/usb_device_ulpi`'s link layer on the **AUX** transceiver,
-`ip/usb/usb_host_ulpi` on the **TARGET** one, and a device in the TARGET-A socket.
-Linux 6.18.41-gentoo, `xhci_hcd`, the Cynthion on a full-speed downstream port of
-a hub. Everything below is **quoted**, not paraphrased.
+block behind `ip/usb/usb_device_ulpi`'s link layer on the **AUX**
+transceiver, `ip/usb/usb_host_ulpi` on the **TARGET** one, and a device in
+the TARGET-A socket. Linux 6.18.41-gentoo, `xhci_hcd`, the Cynthion on a
+full-speed downstream port of a hub. Everything below is **quoted**, not
+paraphrased.
 
 **What that device is, this round did not read.** It is a Great Scott Gadgets
 GreatFET (`1d50:60e6`) according to the round before, whose design printed its
@@ -729,17 +739,17 @@ usb 7-5.1: WARN: invalid context state for evaluate context command.
 usb 7-5-port1: unable to enumerate USB device
 ```
 
-**This is the correct outcome and it is not being apologised for.** §2 is why:
-nothing forwards a packet from the AUX bus to the TARGET bus, so the device the
-kernel has been told about cannot answer. Any other result from this design would
-have meant something was being faked. **These lines are what changed when
-[`ip/usb/usb_proxy`](../usb_proxy/README.md) was built**, on this board and with the
-same device in the socket, and that block's §8 is the log they changed into — so
-this quotation is kept exactly as it was, because it is the measurement the next
-one is measured against. `usb 7-5.1` is the *name the kernel gave
-a device behind our port*, and the fact that it got that far — a device number,
-a reset, a SET_ADDRESS attempt — is the measure of how much of a hub this
-block is.
+**This is the correct outcome and it is not being apologised for.** §2 is
+why: nothing forwards a packet from the AUX bus to the TARGET bus, so the
+device the kernel has been told about cannot answer. Any other result from
+this design would have meant something was being faked. **These lines are
+what changed when [`ip/usb/usb_proxy`](../usb_proxy/README.md) was built**,
+on this board and with the same device in the socket, and that block's §8 is
+the log they changed into — so this quotation is kept exactly as it was,
+because it is the measurement the next one is measured against. `usb 7-5.1`
+is the *name the kernel gave a device behind our port*, and the fact that it
+got that far — a device number, a reset, a SET_ADDRESS attempt — is the
+measure of how much of a hub this block is.
 
 **CHECKED**, and it is worth saying for whoever is looking at their own kernel
 log: this stops. The kernel tries twice, power-cycles the port, tries twice
@@ -981,8 +991,9 @@ Everything in this list is a thing a reader might reasonably expect and will not
 find.
 
 **It does not forward anything.** §2 is the whole of why.
-[`ip/usb/usb_proxy`](../usb_proxy/README.md) is the block that does, and with this one
-alone a device on the port is reported and never spoken to.
+[`ip/usb/usb_proxy`](../usb_proxy/README.md) is the block that does,
+and with this one alone a device on the port is reported and never
+spoken to.
 
 **One port.** `bNbrPorts` is 1 and it is a localparam, not a parameter, because
 a parameter with one legal value is a lie about what has been built. A second
@@ -1003,9 +1014,9 @@ feature that says so.
 
 **Nothing switches a VBUS pin from a class request.** §4's last subsection.
 
-**No strings**, so the hub has no product name in `lsusb`, for the same reason
-`ip/usb/usb_cdc_acm` has none: a string descriptor is a device's property and not a
-class's.
+**No strings**, so the hub has no product name in `lsusb`, for the same
+reason `ip/usb/usb_cdc_acm` has none: a string descriptor is a device's
+property and not a class's.
 
 **No suspend of the hub itself**, which is `usb_ctrl_ep`'s limit and not this
 block's.
@@ -1055,14 +1066,15 @@ endpoint instead.
 
 **One thing nothing here covers at all, and it is one cycle wide.**
 `usb_hub_req` is written so that a connection change arriving in the **same
-cycle** as the ClearPortFeature meant for the previous one leaves the change bit
-**set** — the clear is written first and the set second, and Verilog's last
-assignment wins. Neither the simulation nor the board reaches that cycle: a host
-model and a kernel both take microseconds between a request and a port state
-changing, and nothing here can line the two up. So the ordering is an argument in
-that file's comment and not a measurement, and the reason it is written down
-rather than left to chance is what losing it would cost — a change nothing will
-ever mention again, which is the failure mode §6 is about.
+cycle** as the ClearPortFeature meant for the previous one leaves the change
+bit **set** — the clear is written first and the set second, and Verilog's
+last assignment wins. Neither the simulation nor the board reaches that
+cycle: a host model and a kernel both take microseconds between a request
+and a port state changing, and nothing here can line the two up. So the
+ordering is an argument in that file's comment and not a measurement, and
+the reason it is written down rather than left to chance is what losing it
+would cost — a change nothing will ever mention again, which is the failure
+mode §6 is about.
 
 **And what the simulation establishes that a board cannot.** The stale-line
 transceiver — `UlpiPhy::reporting_stale_line`, which reproduces a real
@@ -1083,12 +1095,12 @@ others.
 - The same, §5.7.3 and §5.8.3 for what sizes an interrupt and a bulk endpoint
   may declare; §7.1.5 for the pull-up that says a device is attached;
   §7.1.19.1 for how long a host waits; §9.4.5 for the standard device status.
-- [`ip/usb/usb_device_ulpi/README.md`](../usb_device_ulpi/README.md) — ULPI, fact by
-  fact, with the provenance of each. Not repeated here.
-- [`ip/usb/usb_host_ulpi/README.md`](../usb_host_ulpi/README.md) — the other end of
-  the wire, which is what this block's downstream port reads.
-- [`ip/usb/usb_cdc_acm/README.md`](../usb_cdc_acm/README.md) — the first class layer,
-  and §4 of it the notification-endpoint defect this block's §6 is shaped
-  against.
+- [`ip/usb/usb_device_ulpi/README.md`](../usb_device_ulpi/README.md) —
+  ULPI, fact by fact, with the provenance of each. Not repeated here.
+- [`ip/usb/usb_host_ulpi/README.md`](../usb_host_ulpi/README.md) — the
+  other end of the wire, which is what this block's downstream port reads.
+- [`ip/usb/usb_cdc_acm/README.md`](../usb_cdc_acm/README.md) — the first
+  class layer, and §4 of it the notification-endpoint defect this block's
+  §6 is shaped against.
 - [`docs/ip-library.md`](../../../docs/ip-library.md) — the class hook, the
   footprint table, and what every block in the library costs.

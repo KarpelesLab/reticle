@@ -9,11 +9,11 @@
 //   interface clock rate is 60 MHz and that is what such a board's oscillator
 //   already is.
 //
-//   It exists for the same board the rest of the ULPI blocks exist for: on a
-//   Great Scott Gadgets Cynthion every USB port goes through its own
-//   transceiver and the FPGA cannot drive the pair at all.
-//   `ip/usb/usb_device_ulpi/README.md` states the protocol with the provenance of
-//   every fact.
+// It exists for the same board the rest of the ULPI blocks exist for: on a
+// Great Scott Gadgets Cynthion every USB port goes through its own
+// transceiver and the FPGA cannot drive the pair at all.
+// `ip/usb/usb_device_ulpi/README.md` states the protocol with the
+// provenance of every fact.
 //
 //   **This is the wrapper that matters for this block**, because the port a
 //   hub presents to a host and the port its own downstream device is on are

@@ -119,44 +119,46 @@ It is distributed as part of the repository instead.
 
 `ppu2c02` is the block whose *subject* needs a statement rather than only
 its behaviour, so it has a page of its own,
-[`ip/video/ppu2c02/README.md`](../ip/video/ppu2c02/README.md): it is implemented from
-the published description of a machine, and no game data, character data
-or lockout logic is in this repository. It is used by
-[`examples/nes`](../examples/nes), which runs a demo written for that
+[`ip/video/ppu2c02/README.md`](../ip/video/ppu2c02/README.md): it is
+implemented from the published description of a machine, and no game
+data, character data or lockout logic is in this repository. It is used
+by [`examples/nes`](../examples/nes), which runs a demo written for that
 example and nothing else. It is not in the footprint table below, which
 measures the blocks `tests/ip_library.rs` takes through the flow; its
 numbers are on its own page and in `tests/nes.rs`.
 
-Two other blocks carry a page. [`ip/video/vga_out/README.md`](../ip/video/vga_out/README.md)
-says what truncating colour to a board's bits per channel costs a picture.
-[`ip/usb/usb_device_ulpi/README.md`](../ip/usb/usb_device_ulpi/README.md) is a
-different kind of page again: it is **the protocol, written down before
-the block was**, the way [`docs/apollo-protocol.md`](apollo-protocol.md)
-was written before the Apollo transport — every fact of ULPI 1.1 the block
-relies on, with the section it came from and how sure of it this project
-is, then what the block leaves out and why, then what simulation
-established and what it cannot. A link layer written from a reading
-nobody wrote down is a link layer nobody can check.
+Two other blocks carry a page.
+[`ip/video/vga_out/README.md`](../ip/video/vga_out/README.md) says what
+truncating colour to a board's bits per channel costs a picture.
+[`ip/usb/usb_device_ulpi/README.md`](../ip/usb/usb_device_ulpi/README.md) is
+a different kind of page again: it is **the protocol, written down before
+the block was**, the way [`docs/apollo-protocol.md`](apollo-protocol.md) was
+written before the Apollo transport — every fact of ULPI 1.1 the block
+relies on, with the section it came from and how sure of it this project is,
+then what the block leaves out and why, then what simulation established and
+what it cannot. A link layer written from a reading nobody wrote down is a
+link layer nobody can check.
 
-[`ip/usb/usb_cdc_acm/README.md`](../ip/usb/usb_cdc_acm/README.md) is the third of
-that kind and is about a different sort of fact again. ULPI's document is a
-bus read out of a specification; a class layer's question is not "is this
-descriptor legal" but **"does the driver bind"**, which no specification
-answers and only a host can. So that page has a fourth confidence level
-beside HIGH, MEDIUM and LOW — **CHECKED**, meaning measured on a host with
-the output quoted — and it is careful about the difference. **CHECKED** is
-that `cdc_acm` binds to this descriptor set, that the port opens and carries
-bytes, that the **SERIAL_STATE notification arrives and the driver acts on it**
-— the ten bytes read off endpoint `82h` and `TIOCMGET` reporting DCD and DSR,
-which `cdc_acm` can only get from that notification — and that
-SET_LINE_CODING's seven bytes reach the device: 115200 read back out of its
-own registers, which is the only measurement anywhere of the class hook's
-host-to-device data stage on silicon. **MEDIUM** is the *why* of any of it:
-that the driver reads the union functional descriptor to tell the interfaces
-apart, that it wants an interrupt IN endpoint on the communications interface,
-that it gates SET_LINE_CODING on `bmCapabilities` D1. Nothing here read that
-driver's source or watched the bus, and the devices that would settle those —
-one without a union descriptor, one without the endpoint — have not been on a
+[`ip/usb/usb_cdc_acm/README.md`](../ip/usb/usb_cdc_acm/README.md) is the
+third of that kind and is about a different sort of fact again. ULPI's
+document is a bus read out of a specification; a class layer's question is
+not "is this descriptor legal" but **"does the driver bind"**, which no
+specification answers and only a host can. So that page has a fourth
+confidence level beside HIGH, MEDIUM and LOW — **CHECKED**, meaning measured
+on a host with the output quoted — and it is careful about the difference.
+**CHECKED** is that `cdc_acm` binds to this descriptor set, that the port
+opens and carries bytes, that the **SERIAL_STATE notification arrives and
+the driver acts on it** — the ten bytes read off endpoint `82h` and
+`TIOCMGET` reporting DCD and DSR, which `cdc_acm` can only get from that
+notification — and that SET_LINE_CODING's seven bytes reach the device:
+115200 read back out of its own registers, which is the only measurement
+anywhere of the class hook's host-to-device data stage on silicon.
+**MEDIUM** is the *why* of any of it: that the driver reads the union
+functional descriptor to tell the interfaces apart, that it wants an
+interrupt IN endpoint on the communications interface, that it gates
+SET_LINE_CODING on `bmCapabilities` D1. Nothing here read that driver's
+source or watched the bus, and the devices that would settle those — one
+without a union descriptor, one without the endpoint — have not been on a
 board. The page also records where the specification and the driver pull in
 opposite directions and which way the block went: D1 is one bit over four
 things, the block does three of them, and it is set anyway.
@@ -188,9 +190,9 @@ long in three places a device's never had to be:
   page says what the measurement to take is and which reference
   bitstreams would settle it.
 
-[`ip/usb/usb_hub/README.md`](../ip/usb/usb_hub/README.md) is the fifth, and it is
-the page whose **first** section is an argument about why the block is not
-the thing its name suggests. A hub is a repeater — USB 2.0 §11.1.1 — and
+[`ip/usb/usb_hub/README.md`](../ip/usb/usb_hub/README.md) is the fifth, and
+it is the page whose **first** section is an argument about why the block is
+not the thing its name suggests. A hub is a repeater — USB 2.0 §11.1.1 — and
 through a ULPI transceiver the floor for a byte in and a byte out is about
 24 bit times against the 4 a hub is allowed, because the transceiver does
 not report a byte until the byte is complete and then prepends a fresh SYNC
@@ -205,15 +207,16 @@ other four: it cites chapter 11 by **section** and never by table number,
 because a section number misquoted is findable and a table number misquoted
 sends a reader somewhere else and looks authoritative doing it.
 
-[`ip/usb/usb_proxy/README.md`](../ip/usb/usb_proxy/README.md) is the sixth, and it is
-the sequel to that kernel log: the half that forwards. Its **§2** is the one
-section to read if only one gets read, because it is an architectural decision
-written down as one — **pass-through addressing**, which makes the PC the only
-authority for the downstream device's address and so needs no translation table,
-no descriptor cache and no way for the two buses to disagree about a packet
-size. The price of it is a port reset that really reaches the device, which is
-what `ip/usb/usb_hub` gained a handshake for, and the consequence of it is that
-`ip/usb/usb_host_ulpi`'s own enumerator is not instantiated in a proxy at all.
+[`ip/usb/usb_proxy/README.md`](../ip/usb/usb_proxy/README.md) is the sixth,
+and it is the sequel to that kernel log: the half that forwards. Its **§2**
+is the one section to read if only one gets read, because it is an
+architectural decision written down as one — **pass-through addressing**,
+which makes the PC the only authority for the downstream device's address
+and so needs no translation table, no descriptor cache and no way for the
+two buses to disagree about a packet size. The price of it is a port reset
+that really reaches the device, which is what `ip/usb/usb_hub` gained a
+handshake for, and the consequence of it is that `ip/usb/usb_host_ulpi`'s
+own enumerator is not instantiated in a proxy at all.
 
 `usb_host_ulpi`'s fourth confidence level is **CHECKED** in a different
 sense from `usb_cdc_acm`'s: not "a host did this" but "**our host did this
@@ -409,15 +412,15 @@ a host-to-device data stage handed over as one packet.
 
 Two decisions in it are worth more than the rest.
 
-`class_claim` and `class_len` are read **combinationally**, in the same cycle
-`class_req` is high. That is not a shortcut: endpoint 0 chooses the
+`class_claim` and `class_len` are read **combinationally**, in the same
+cycle `class_req` is high. That is not a shortcut: endpoint 0 chooses the
 transfer's stage in the very cycle the SETUP's data packet ends, so a class
-that answered a cycle later would need a fifth stage there, a handshake back,
-and a rule about what happens if the host's next token arrives first. A
-request decoder is a comparison of eight bytes against constants — there is
-nothing in it to sequence — so asking for it combinationally asks for nothing
-a class cannot give. `ip/usb/usb_cdc_acm/rtl/usb_cdc_req.v` is that decoder and it
-is fifteen lines of `assign`.
+that answered a cycle later would need a fifth stage there, a handshake
+back, and a rule about what happens if the host's next token arrives first.
+A request decoder is a comparison of eight bytes against constants — there
+is nothing in it to sequence — so asking for it combinationally asks for
+nothing a class cannot give. `ip/usb/usb_cdc_acm/rtl/usb_cdc_req.v` is that
+decoder and it is fifteen lines of `assign`.
 
 And `class_req` is **not** raised for the five requests endpoint 0 implements,
 so a class cannot shadow SET_ADDRESS or GET_DESCRIPTOR by claiming them.
@@ -562,14 +565,14 @@ more shifts after the packet ends, which is a padding state in both directions
 and a new rule about when a second packet may start. This one is still only
 written down.
 
-A **distributed RAM** — `reg [7:0] buf [0:63]` — needs neither a write decoder
-nor a read multiplexer, and was the obvious answer. It was not available: when
-this was written `src/fpga/devices/ecp5.dev` declared that bel with no site
-count, so `fpga::place` counted zero of them and refused any design that needed
-one, which is the same gap `testdata/fpga/cynthion/usb_cdc_uart.v` records about
-`ip/memory/fifo_sync`. It is available now — 3036 sites on the Cynthion's part — and
-taking it gave back 977 of those 937 lookup tables and 1024 of the flip-flops
-as well.
+A **distributed RAM** — `reg [7:0] buf [0:63]` — needs neither a write
+decoder nor a read multiplexer, and was the obvious answer. It was not
+available: when this was written `src/fpga/devices/ecp5.dev` declared that
+bel with no site count, so `fpga::place` counted zero of them and refused
+any design that needed one, which is the same gap
+`testdata/fpga/cynthion/usb_cdc_uart.v` records about `ip/memory/fifo_sync`.
+It is available now — 3036 sites on the Cynthion's part — and taking it gave
+back 977 of those 937 lookup tables and 1024 of the flip-flops as well.
 
 **What it buys.** Measured on a Cynthion's AUX port, through
 `testdata/fpga/cynthion/usb_ulpi_device.v` — the bulk loopback, with no UART in
@@ -599,14 +602,14 @@ now the larger half of the cost. A host that pipelined its transfers would see
 more of the eight; this one waits for each.
 
 **Why the serial port's own figure is not this one.**
-`testdata/fpga/cynthion/usb_cdc_uart.v` carries **one byte at a time** through
-its UART — that file's header says why, and the short version is that it was
-written while `ip/memory/fifo_sync` could not be placed on this part — so it sends
-one-byte packets whatever `wMaxPacketSize` says, and a wider packet does
-nothing for it at all. The placement gap is closed now, so that is a design
-this round did not revisit rather than a constraint it was under.
-The bulk loopback is the design that measures the endpoint rather than the
-bridge above it.
+`testdata/fpga/cynthion/usb_cdc_uart.v` carries **one byte at a time**
+through its UART — that file's header says why, and the short version is
+that it was written while `ip/memory/fifo_sync` could not be placed on this
+part — so it sends one-byte packets whatever `wMaxPacketSize` says, and a
+wider packet does nothing for it at all. The placement gap is closed now, so
+that is a design this round did not revisit rather than a constraint it was
+under. The bulk loopback is the design that measures the endpoint rather
+than the bridge above it.
 
 **What these numbers are and are not.** They are two runs of one host on one
 machine against one part, repeatable to a tenth of a percent over four runs
@@ -616,11 +619,11 @@ they do not measure is a host that pipelines transfers instead of waiting for
 each one — a queue of URBs would overlap the round trips and go faster at both
 sizes — so they are the floor of what the endpoint can do and not the ceiling.
 
-**What it found in this compiler, and it is fixed now.** `ip/memory/fifo_sync` could
-not be placed on an ECP5 at all. Its storage is an array indexed by a
-variable, which becomes a distributed RAM, and nothing in the ECP5 fabric
-model had a site for one to go in, so `fpga::place` counted zero of them and
-refused at any depth and with `FWFT` either way:
+**What it found in this compiler, and it is fixed now.**
+`ip/memory/fifo_sync` could not be placed on an ECP5 at all. Its storage is
+an array indexed by a variable, which becomes a distributed RAM, and nothing
+in the ECP5 fabric model had a site for one to go in, so `fpga::place`
+counted zero of them and refused at any depth and with `FWFT` either way:
 
 ```text
 error: the design needs 2 `lutram` site(s) and the part has 0
@@ -638,13 +641,13 @@ nothing.
 What it took was modelling a slice's distributed-RAM mode in the Trellis
 loader — the bel, its wires and its configuration bits — and
 `docs/fpga-trellis.md`'s first section is the whole account. In short: a
-`TRELLIS_DPR16X4` is **slices A, B and C of one logic tile**, held together by
-one bit of that tile (`F50B11`), so a tile holds exactly one and it costs six
-of the tile's eight lookup tables. `ip/memory/fifo_sync` now places, routes and comes
-out as a bitstream at depths 16, 32 and 64, with every bit of the image
-decoding back through the database into a feature it names — 97 bits per RAM,
-which is `ecppack`'s own number for the 111 distributed RAMs in this board's
-reference bitstreams.
+`TRELLIS_DPR16X4` is **slices A, B and C of one logic tile**, held together
+by one bit of that tile (`F50B11`), so a tile holds exactly one and it costs
+six of the tile's eight lookup tables. `ip/memory/fifo_sync` now places,
+routes and comes out as a bitstream at depths 16, 32 and 64, with every bit
+of the image decoding back through the database into a feature it names — 97
+bits per RAM, which is `ecppack`'s own number for the 111 distributed RAMs
+in this board's reference bitstreams.
 
 **The 7 series is still in the old position**, and it was looked at far
 enough to say so precisely rather than by analogy.
@@ -913,48 +916,51 @@ alternative was to leave a bulk pair in the fabric that no descriptor declares
 and no host would ever address, which at 64 bytes a direction is over a thousand
 flip-flops or sixteen `TRELLIS_DPR16X4` for nothing.
 
-**So a hub costs less than the vendor-specific device it is built on.** On the
-ECP5, `usb_device_fs` is 886 LUT4, 364 flip-flops and 16 `TRELLIS_DPR16X4`, and
-`usb_hub_fs` is **847, 318 and 2** — thirty-nine fewer lookup tables, forty-six
-fewer flip-flops and fourteen fewer distributed RAMs than the block it is a class
-layer on top of. `usb_device_ulpi` to `usb_hub_ulpi` is the same subtraction
-twice: 979 and 370 and 16 against 942 and 324 and 2. Against the other class,
-`usb_cdc_acm_ulpi`'s 1229 and 481 and 18, the hub is 287 lookup tables and 157
-flip-flops smaller. A class layer is not necessarily an addition.
+**So a hub costs less than the vendor-specific device it is built on.** On
+the ECP5, `usb_device_fs` is 886 LUT4, 364 flip-flops and 16
+`TRELLIS_DPR16X4`, and `usb_hub_fs` is **847, 318 and 2** — thirty-nine
+fewer lookup tables, forty-six fewer flip-flops and fourteen fewer
+distributed RAMs than the block it is a class layer on top of.
+`usb_device_ulpi` to `usb_hub_ulpi` is the same subtraction twice: 979 and
+370 and 16 against 942 and 324 and 2. Against the other class,
+`usb_cdc_acm_ulpi`'s 1229 and 481 and 18, the hub is 287 lookup tables and
+157 flip-flops smaller. A class layer is not necessarily an addition.
 
-(The two distributed RAMs hold **sixteen bits** — the status-change endpoint's
-two-byte packet buffer — because one `TRELLIS_DPR16X4` is four bits of width and
-the width is eight. `BUF_RAM = 0` would put those sixteen bits in flip-flops and
-is very likely the better choice at that size on this family; the footprint table
-does not measure it and the parameter is there so a design can.)
+(The two distributed RAMs hold **sixteen bits** — the status-change
+endpoint's two-byte packet buffer — because one `TRELLIS_DPR16X4` is four
+bits of width and the width is eight. `BUF_RAM = 0` would put those sixteen
+bits in flip-flops and is very likely the better choice at that size on this
+family; the footprint table does not measure it and the parameter is there
+so a design can.)
 
 **And two things the hub found that the serial port had not.**
 
 The first is that **the class hook was reached for a standard request, and
-should not have been**. `usb_ctrl_ep` implemented five and offered the rest, and
-its header said so in as many words — "string descriptors and GET_STATUS
-included, so a class that wants those can have them without this file changing
-again". A hub was the first class to need one: Linux's `hub_configure` sends the
-standard GET_STATUS of USB 2.0 §9.4.5 during hub probe, with the comment "power
-budgeting mostly matters with bus-powered hubs", and takes its failure path if
-the transfer does not complete. So `usb_hub_req` claimed it and answered two zero
-bytes.
+should not have been**. `usb_ctrl_ep` implemented five and offered the rest,
+and its header said so in as many words — "string descriptors and GET_STATUS
+included, so a class that wants those can have them without this file
+changing again". A hub was the first class to need one: Linux's
+`hub_configure` sends the standard GET_STATUS of USB 2.0 §9.4.5 during hub
+probe, with the comment "power budgeting mostly matters with bus-powered
+hubs", and takes its failure path if the transfer does not complete. So
+`usb_hub_req` claimed it and answered two zero bytes.
 
 That was a layering smudge, it was written up as one in that block's §7, and
-**the round that built the proxy made the change** — because it had the board and
-the CDC tests in front of it, which is exactly what the report asked for.
-GET_STATUS to the **device** is endpoint 0's now: two bytes whose bit 0 is bit 6
-of `CFG_ATTR`, the same byte the configuration descriptor's `bmAttributes` is
-written from, and whose bit 1 is a Remote Wakeup nothing in this library can
-enable. **What it costs is one flip-flop and about thirty lookup tables** in the
-technology-independent netlist, on every device in the library: `usb_device_fs`
-went from 88 flip-flops and 804 LUT4 cells to 89 and 835, which is the `stat_sel`
-register and the multiplexer the two bytes come out of. After ECP5 mapping the
-same change reads 853 LUT4 and 355 flip-flops against 886 and 364 — **thirty-three
-lookup tables and nine flip-flops**, and the iCE40 flow reads the same nine. Why a
-mapper turns one more generic flip-flop into nine was not chased down; both
-numbers are in the table below and this sentence is the measurement rather than
-the arithmetic. And no class has to think about the request again.
+**the round that built the proxy made the change** — because it had the
+board and the CDC tests in front of it, which is exactly what the report
+asked for. GET_STATUS to the **device** is endpoint 0's now: two bytes whose
+bit 0 is bit 6 of `CFG_ATTR`, the same byte the configuration descriptor's
+`bmAttributes` is written from, and whose bit 1 is a Remote Wakeup nothing
+in this library can enable. **What it costs is one flip-flop and about
+thirty lookup tables** in the technology-independent netlist, on every
+device in the library: `usb_device_fs` went from 88 flip-flops and 804 LUT4
+cells to 89 and 835, which is the `stat_sel` register and the multiplexer
+the two bytes come out of. After ECP5 mapping the same change reads 853 LUT4
+and 355 flip-flops against 886 and 364 — **thirty-three lookup tables and
+nine flip-flops**, and the iCE40 flow reads the same nine. Why a mapper
+turns one more generic flip-flop into nine was not chased down; both numbers
+are in the table below and this sentence is the measurement rather than the
+arithmetic. And no class has to think about the request again.
 
 GET_STATUS to an **interface** or an **endpoint** is still on the hook, and that
 is deliberate rather than unfinished: §9.4.5 makes an interface's two bytes
@@ -966,26 +972,27 @@ would be claiming endpoints it has not got, where §9.4.5 asks for a STALL.
 `usb_device_fs_ignores_bad_packets_and_stalls_what_it_cannot_do` asserts both
 halves of that division.
 
-The second is **how not to report a change**. `ip/usb/usb_cdc_acm`'s notification
-endpoint had a register meaning "the host has been told", it was set once per
-configuration, and a host that was not listening at that moment never heard
-again — measured on a part as no DCD and no DSR on three consecutive opens. The
-hub has no such register at all: what it reports is **sticky state the host must
-clear**, the host's own ClearPortFeature(C_PORT_*) is the acknowledgement, and
-the sender is one wire —
+The second is **how not to report a change**. `ip/usb/usb_cdc_acm`'s
+notification endpoint had a register meaning "the host has been told", it
+was set once per configuration, and a host that was not listening at that
+moment never heard again — measured on a part as no DCD and no DSR on three
+consecutive opens. The hub has no such register at all: what it reports is
+**sticky state the host must clear**, the host's own
+ClearPortFeature(C_PORT_*) is the acknowledgement, and the sender is one
+wire —
 
 ```verilog
 wire owed = configured & (change_map != 8'h00);
 ```
 
-— so the defect is not avoided, it is unrepresentable. What that costs is one
-extra one-byte packet per poll while a change is outstanding, plus exactly one
-stale bitmap after a host clears a change that a packet had already been armed
-with, and `StatusPipe::settles` in `tests/ip_library.rs` **asserts** the stale
-one rather than tolerating it. The alternative is a latch saying "this bitmap has
-already gone", which is the same defect with a different name, because nothing in
-a device can know whether the host that received a bitmap is the host that will
-act on it.
+— so the defect is not avoided, it is unrepresentable. What that costs is
+one extra one-byte packet per poll while a change is outstanding, plus
+exactly one stale bitmap after a host clears a change that a packet had
+already been armed with, and `StatusPipe::settles` in `tests/ip_library.rs`
+**asserts** the stale one rather than tolerating it. The alternative is a
+latch saying "this bitmap has already gone", which is the same defect with a
+different name, because nothing in a device can know whether the host that
+received a bitmap is the host that will act on it.
 
 The same shape handles re-enumeration for free, which the serial port needed an
 extra trigger for: a hub that is not configured has powered-off ports, a
@@ -997,45 +1004,46 @@ reported with no edge detector and no one-shot anywhere.
 
 ## The third USB block on one die, and the one it forwards for
 
-`usb_proxy` is the biggest block in this library by some way, and the reason is
-that it is **two USB controllers and the thing between them**: a peripheral Link
-and a device core on one ULPI transceiver, a host Link and a transaction engine
-on another, a second packet decoder, and a 64-byte relay buffer. On the ECP5 that
-is 3090 LUT4, 999 flip-flops and 10 `TRELLIS_DPR16X4` against `usb_hub_ulpi`'s
-942, 324 and 2 — so **forwarding costs about 2150 lookup tables more than
-reporting a port**, and a design that only wants to be a hub should be one.
+`usb_proxy` is the biggest block in this library by some way, and the reason
+is that it is **two USB controllers and the thing between them**: a
+peripheral Link and a device core on one ULPI transceiver, a host Link and a
+transaction engine on another, a second packet decoder, and a 64-byte relay
+buffer. On the ECP5 that is 3090 LUT4, 999 flip-flops and 10
+`TRELLIS_DPR16X4` against `usb_hub_ulpi`'s 942, 324 and 2 — so **forwarding
+costs about 2150 lookup tables more than reporting a port**, and a design
+that only wants to be a hub should be one.
 
 Two of those numbers are worth reading as a comparison rather than a cost.
 
-**It does not instantiate `usb_host_enum`.** `usb_host_ulpi` whole is 1299 LUT4
-and 542 flip-flops; the proxy takes `usb_ulpi_host_link` and `usb_host_sie` out
-of it and leaves the enumerator behind, because in a proxy the **PC** must be the
-thing that enumerates the device or there are two authorities assigning
-addresses. `ip/usb/usb_proxy/README.md` §2 is that decision and what was weighed
-against it; the short of it is that pass-through addressing has no translation
-table, no descriptor cache and no way for the two sides to disagree about
-`bMaxPacketSize0`, and the enumerator would have been the thing it had to
-disagree with.
+**It does not instantiate `usb_host_enum`.** `usb_host_ulpi` whole is 1299
+LUT4 and 542 flip-flops; the proxy takes `usb_ulpi_host_link` and
+`usb_host_sie` out of it and leaves the enumerator behind, because in a
+proxy the **PC** must be the thing that enumerates the device or there are
+two authorities assigning addresses. `ip/usb/usb_proxy/README.md` §2 is that
+decision and what was weighed against it; the short of it is that
+pass-through addressing has no translation table, no descriptor cache and no
+way for the two sides to disagree about `bMaxPacketSize0`, and the
+enumerator would have been the thing it had to disagree with.
 
-**The ten distributed RAMs** are the two of the hub's status-change endpoint plus
-eight for the relay's one 64-byte packet buffer. One buffer and not two, because
-a transaction moves bytes one way at a time: an IN fills it from the device and
-drains it to the PC, an OUT the other way round, and the two can never be active
-in the same cycle. It is written with **one write port** fed by a decode rather
-than two write statements, for the same reason `usb_bulk_ep` keeps its two
-buffers separate — a memory written from two places is one a backend has to take
-apart again.
+**The ten distributed RAMs** are the two of the hub's status-change endpoint
+plus eight for the relay's one 64-byte packet buffer. One buffer and not
+two, because a transaction moves bytes one way at a time: an IN fills it
+from the device and drains it to the PC, an OUT the other way round, and the
+two can never be active in the same cycle. It is written with **one write
+port** fed by a decode rather than two write statements, for the same reason
+`usb_bulk_ep` keeps its two buffers separate — a memory written from two
+places is one a backend has to take apart again.
 
-It is also the first block here to need something *back* from a block below it.
-`ip/usb/usb_hub`'s port reset used to complete in the cycle it was asked for, with
-PORT_RESET in `wPortStatus` a constant zero, because there was nothing downstream
-to reset. A proxy has to reset the real device — pass-through addressing depends
-on the device forgetting its address exactly when the PC thinks it has — so that
-reset became a handshake: `port_reset` is a level the hub holds while resetting
-and `port_reset_done` is one cycle from whatever drove it. **Tying
-`port_reset_done` high is the old behaviour exactly**, which is what a design
-with nothing downstream wants and what `testdata/fpga/cynthion/usb_hub_target.v`
-does.
+It is also the first block here to need something *back* from a block below
+it. `ip/usb/usb_hub`'s port reset used to complete in the cycle it was asked
+for, with PORT_RESET in `wPortStatus` a constant zero, because there was
+nothing downstream to reset. A proxy has to reset the real device —
+pass-through addressing depends on the device forgetting its address exactly
+when the PC thinks it has — so that reset became a handshake: `port_reset`
+is a level the hub holds while resetting and `port_reset_done` is one cycle
+from whatever drove it. **Tying `port_reset_done` high is the old behaviour
+exactly**, which is what a design with nothing downstream wants and what
+`testdata/fpga/cynthion/usb_hub_target.v` does.
 
 ## Using one
 
@@ -1348,19 +1356,19 @@ is the part that matters:
 
   Then **the bytes**. `bulk_loopback` is the one statement of moving them,
   the way `enumerate` is the one statement of enumerating, and it runs
-  against the full-speed core, the full-speed core with the host's clock
-  0.4 % slow and 0.4 % fast, the ULPI core, and the ULPI core behind the
+  against the full-speed core, the full-speed core with the host's clock 0.4
+  % slow and 0.4 % fast, the ULPI core, and the ULPI core behind the
   transceiver that reports LineState a clock late. A full **64-byte**
   packet, one a byte short of full, an eight-byte one, a five-byte one and a
   one-byte one go out and come back, each read before the next is sent, with
-  `FF` and `07` in the payload so the bit stuffing is exercised inside a data
-  packet and not only inside a descriptor. The 63-byte one is there because it
-  is the only length at which a packet fills the buffer and does not start at
-  the bottom of it, which is what a base counter off by one gets wrong. The bytes are checked at the byte interface as well as at
-  the host, packet by packet, with `out_last` where the host put the end
-  of each one, and the pair is in **loopback** — `out_*` wired into
-  `in_*` — which is the wiring the board has rather than a testbench's
-  private arrangement.
+  `FF` and `07` in the payload so the bit stuffing is exercised inside a
+  data packet and not only inside a descriptor. The 63-byte one is there
+  because it is the only length at which a packet fills the buffer and does
+  not start at the bottom of it, which is what a base counter off by one
+  gets wrong. The bytes are checked at the byte interface as well as at the
+  host, packet by packet, with `out_last` where the host put the end of each
+  one, and the pair is in **loopback** — `out_*` wired into `in_*` — which
+  is the wiring the board has rather than a testbench's private arrangement.
 
   Beside that, the endpoint's own rules, each with a test. The interface
   driven as a consumer would drive it rather than looped back, which is
@@ -1389,18 +1397,20 @@ is the part that matters:
   **All of the above runs on the buffers as arrays**, which is the default,
   and every one of them would catch a buffer that answered from the wrong
   address: `bulk_loopback`'s 63-byte packet in particular, which is the one
-  length that fills a buffer and, in the shift-register shape, does not start
-  at the bottom of it. What **none** of them reaches is the shape as it is
-  built for a device: the array becomes a memory cell, and a memory cell is
-  the backend's to lower — `the_logic_fallback_answers_like_the_memory_it_replaced`
-  in `tests/fpga_flow.rs` is what answers for that, and a board is what
-  answers for the silicon. `BUF_RAM = 0` gets `bulk_loopback` too, in
-  `usb_device_fs_loops_bytes_with_the_buffers_as_shift_registers`, because the
-  two shapes share all four of their counters and differ in a subtraction — the
-  shift register reads at `index - written` where the array reads at `index`,
-  and an off-by-one there is what the 63-byte packet is for. Its other rules,
-  the toggle and the NAKs and the zero-length packet, are not re-run on that
-  shape: none of them touches a buffer's addressing.
+  length that fills a buffer and, in the shift-register shape, does not
+  start at the bottom of it. What **none** of them reaches is the shape as
+  it is built for a device: the array becomes a memory cell, and a memory
+  cell is the backend's to lower —
+  `the_logic_fallback_answers_like_the_memory_it_replaced` in
+  `tests/fpga_flow.rs` is what answers for that, and a board is what answers
+  for the silicon. `BUF_RAM = 0` gets `bulk_loopback` too, in
+  `usb_device_fs_loops_bytes_with_the_buffers_as_shift_registers`, because
+  the two shapes share all four of their counters and differ in a
+  subtraction — the shift register reads at `index - written` where the
+  array reads at `index`, and an off-by-one there is what the 63-byte packet
+  is for. Its other rules, the toggle and the NAKs and the zero-length
+  packet, are not re-run on that shape: none of them touches a buffer's
+  addressing.
 
   **None of these would have caught the fault that cost the last round.**
   Every one of them passes against a three-bit state register for four
@@ -1530,10 +1540,10 @@ is the part that matters:
   socket. All four edges are described now;
   [`docs/fpga-trellis.md`](fpga-trellis.md) has how the left one was
   established and why a mirror of the right edge would have been wrong.
-  [`ip/usb/usb_host_ulpi/README.md`](../ip/usb/usb_host_ulpi/README.md) §9 is what
-  the part then said: nine registers of a real USB3343 read over sixteen
-  left-edge balls, with `0424` — Microchip's vendor ID — among them. A
-  device in that socket has since been enumerated through that same
+  [`ip/usb/usb_host_ulpi/README.md`](../ip/usb/usb_host_ulpi/README.md) §9
+  is what the part then said: nine registers of a real USB3343 read over
+  sixteen left-edge balls, with `0424` — Microchip's vendor ID — among them.
+  A device in that socket has since been enumerated through that same
   transceiver, which is `usb_proxy` below.
 
 - **`usb_cdc_acm`** — the **same host model again**, through both link
@@ -1562,54 +1572,59 @@ is the part that matters:
   too, the notification endpoint given an OUT direction, and the union
   functional descriptor removed.
 
-  What none of it could reach is whether a **real driver binds**, and that is
-  the interesting half of a class layer. `tests/usb_cdc_acm.rs` is that half:
-  it asks the kernel, through sysfs, whether `cdc_acm` claimed the device and
-  made a terminal, and then writes bytes to that terminal and reads them back.
-  [`ip/usb/usb_cdc_acm/README.md`](../ip/usb/usb_cdc_acm/README.md) §5 is what a host
-  said, quoted — including the two faults that were invisible in simulation
-  and what each of them was.
+  What none of it could reach is whether a **real driver binds**, and that
+  is the interesting half of a class layer. `tests/usb_cdc_acm.rs` is that
+  half: it asks the kernel, through sysfs, whether `cdc_acm` claimed the
+  device and made a terminal, and then writes bytes to that terminal and
+  reads them back.
+  [`ip/usb/usb_cdc_acm/README.md`](../ip/usb/usb_cdc_acm/README.md) §5 is
+  what a host said, quoted — including the two faults that were invisible in
+  simulation and what each of them was.
 
-- **`usb_proxy`** — **three** ends on **two** pairs, which no other test here
-  needs: a host model driving the proxy's upstream transceiver, the proxy's own
-  downstream transceiver, and a whole second design — `usb_device_ulpi` — behind
-  a third. The downstream pair is resolved the way `usb_host_ulpi`'s one is and
-  the upstream pair by the host model, and `ProxyRig` in `tests/ip_library.rs` is
-  the harness for it. Eight tests, and the shape of each is a **PC enumerating a
-  device it can only reach through our hub**: the hub enumerated and its port
-  powered and reset, and then the device's own eighteen-byte device descriptor
-  and thirty-two-byte configuration descriptor read **through** the proxy and
-  compared with the same `expected_*` functions the device's own tests use, the
-  address the host model chose read back off the **device's** own `address`
-  output, and its `configured` output after the host model's SET_CONFIGURATION.
+- **`usb_proxy`** — **three** ends on **two** pairs, which no other test
+  here needs: a host model driving the proxy's upstream transceiver, the
+  proxy's own downstream transceiver, and a whole second design —
+  `usb_device_ulpi` — behind a third. The downstream pair is resolved the
+  way `usb_host_ulpi`'s one is and the upstream pair by the host model, and
+  `ProxyRig` in `tests/ip_library.rs` is the harness for it. Eight tests,
+  and the shape of each is a **PC enumerating a device it can only reach
+  through our hub**: the hub enumerated and its port powered and reset, and
+  then the device's own eighteen-byte device descriptor and thirty-two-byte
+  configuration descriptor read **through** the proxy and compared with the
+  same `expected_*` functions the device's own tests use, the address the
+  host model chose read back off the **device's** own `address` output, and
+  its `configured` output after the host model's SET_CONFIGURATION.
 
   Three of the eight reach what the first cannot. One runs the whole of it
-  through three transceiver models that each hear their own transmission and each
-  report `LineState` a clock late, which matters more here than anywhere else
-  because `LineState` is what decides when the downstream port is a port at all.
-  One runs it against a device built with `MAXPKT0 = 8` — the smallest USB 2.0
-  §5.5.3 allows — so a data stage is three and four packets instead of one, and
-  the four-packet one is **exactly** the length asked for, with no short packet to
-  stop on. And one moves bytes: four bulk packets of four lengths, including a
-  one-byte short one and a full sixty-four, through the device's own loopback and
-  back, with **eight downstream transactions counted** — one per packet each way,
-  which is the number that distinguishes bytes the device sent from bytes a relay
-  held and handed over twice.
+  through three transceiver models that each hear their own transmission and
+  each report `LineState` a clock late, which matters more here than
+  anywhere else because `LineState` is what decides when the downstream port
+  is a port at all. One runs it against a device built with `MAXPKT0 = 8` —
+  the smallest USB 2.0 §5.5.3 allows — so a data stage is three and four
+  packets instead of one, and the four-packet one is **exactly** the length
+  asked for, with no short packet to stop on. And one moves bytes: four bulk
+  packets of four lengths, including a one-byte short one and a full
+  sixty-four, through the device's own loopback and back, with **eight
+  downstream transactions counted** — one per packet each way, which is the
+  number that distinguishes bytes the device sent from bytes a relay held
+  and handed over twice.
 
-  The other four are the properties that are easy to get silently wrong: a STALL
-  the device really sent — a string descriptor it has not got — arriving at the
-  host as a STALL and staying sticky until the next SETUP; a port the host has not
-  reset forwarding **nothing at all**, not even a NAK, and a second reset putting
-  the device's own address back to 0; a SETUP preempting a transaction that is
-  still running, which USB 2.0 §8.5.3 makes compulsory and which that test's own
-  comment says it would **not** have caught the defect it accompanies; and one
-  clock domain across a design with two ULPI buses in it.
+  The other four are the properties that are easy to get silently wrong: a
+  STALL the device really sent — a string descriptor it has not got —
+  arriving at the host as a STALL and staying sticky until the next SETUP; a
+  port the host has not reset forwarding **nothing at all**, not even a NAK,
+  and a second reset putting the device's own address back to 0; a SETUP
+  preempting a transaction that is still running, which USB 2.0 §8.5.3 makes
+  compulsory and which that test's own comment says it would **not** have
+  caught the defect it accompanies; and one clock domain across a design
+  with two ULPI buses in it.
 
-  What none of it could reach is whether a **kernel** enumerates the device, and
-  [`ip/usb/usb_proxy/README.md`](../ip/usb/usb_proxy/README.md) §8 is that: the same
-  `dmesg` buffer with `unable to enumerate USB device` before and
-  `idVendor=1d50, idProduct=60e6` after. `tests/usb_proxy.rs` is the test, and its
-  load-bearing assertion is one boolean — a child of our hub exists in sysfs.
+  What none of it could reach is whether a **kernel** enumerates the device,
+  and [`ip/usb/usb_proxy/README.md`](../ip/usb/usb_proxy/README.md) §8 is
+  that: the same `dmesg` buffer with `unable to enumerate USB device` before
+  and `idVendor=1d50, idProduct=60e6` after. `tests/usb_proxy.rs` is the
+  test, and its load-bearing assertion is one boolean — a child of our hub
+  exists in sysfs.
 
 ### What the processor actually executes
 
@@ -2245,19 +2260,19 @@ so the two buses are decoupled and the upstream side NAKs until the answer is
 there. That was the largest single piece of USB work left in this library and it
 is what `ip/usb/usb_host_ulpi` and `ip/usb/usb_hub` were both built towards.
 
-What is **still** not here, above the proxy, is isochronous transport through it:
-the downstream SOF comes from `usb_host_sie`'s own free-running counter and the
-PC's frame number is not carried across, so a device that times anything from the
-frame sees a different one on each side. Control, bulk and interrupt transfers do
-not depend on it, which is what USB 2.0 §5.6 to §5.8 make the difference.
+What is **still** not here, above the proxy, is isochronous transport
+through it: the downstream SOF comes from `usb_host_sie`'s own free-running
+counter and the PC's frame number is not carried across, so a device that
+times anything from the frame sees a different one on each side. Control,
+bulk and interrupt transfers do not depend on it, which is what USB 2.0 §5.6
+to §5.8 make the difference.
 
-**A human interface
-device is what is not here either**, and it is now a smaller job than it was: a HID
-needs the report descriptor, which is `GET_DESCRIPTOR` with a class
-descriptor type — a request the hook already offers and a class may already
-claim — plus an interrupt IN endpoint, which `usb_dev_core` already has as
-`NOTIF_ENDP`, plus the report itself. What is genuinely missing for it is
-nothing in the infrastructure; it is the block.
+**A human interface device is what is not here either**, and it is now a
+smaller job than it was: a HID needs the report descriptor, which is
+`GET_DESCRIPTOR` with a class descriptor type — a request the hook already
+offers and a class may already claim — plus an interrupt IN endpoint, which
+`usb_dev_core` already has as `NOTIF_ENDP`, plus the report itself. What is
+genuinely missing for it is nothing in the infrastructure; it is the block.
 
 Two smaller gaps the serial port left. **No strings**, so a port has no
 product name in `lsusb` and no `/dev/serial/by-id/` entry naming it; string

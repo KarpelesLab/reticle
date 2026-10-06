@@ -604,14 +604,14 @@ carries nothing, and with 64-byte packets there is not one of them.
 
 **And the packets are compared with a second implementation of the
 arithmetic.** `usb_token`, `usb_data` and `usb_sof` in that file are what
-the *host model* builds its packets with, and `usb_crcs_match_the_catalogue_and_the_wire`
-holds their CRC5 and CRC16 to the published catalogue's check values over
-`"123456789"` before anything is held to them. So the SETUP token, its
-eight-byte `GET_DESCRIPTOR` data packet and the first two SOFs are
-asserted byte for byte against a second implementation, and that one is
-pinned to a third. The SOF is worth having in that list on its own: it is
-the one token whose CRC5 covers an eleven-bit frame number rather than an
-address and an endpoint.
+the *host model* builds its packets with, and
+`usb_crcs_match_the_catalogue_and_the_wire` holds their CRC5 and CRC16 to
+the published catalogue's check values over `"123456789"` before anything
+is held to them. So the SETUP token, its eight-byte `GET_DESCRIPTOR` data
+packet and the first two SOFs are asserted byte for byte against a second
+implementation, and that one is pinned to a third. The SOF is worth
+having in that list on its own: it is the one token whose CRC5 covers an
+eleven-bit frame number rather than an address and an endpoint.
 
 Nine more tests — twelve in all — cover what an enumeration that works
 does not reach: the start-up sequence byte for byte with `0Ah` = `06h` and

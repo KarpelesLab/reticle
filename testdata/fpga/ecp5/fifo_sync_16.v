@@ -1,8 +1,8 @@
-// A top level that asks `ip/memory/fifo_sync` for DEPTH = 16 words, so a test can
-// take the library block through place, route and a bitstream at a fixed
-// depth. Verilog-2005 has no way to override a parameter from outside the
-// source and `tests/fpga_trellis.rs` elaborates with the defaults, so the
-// override lives here.
+// A top level that asks `ip/memory/fifo_sync` for DEPTH = 16 words, so a
+// test can take the library block through place, route and a bitstream at
+// a fixed depth. Verilog-2005 has no way to override a parameter from
+// outside the source and `tests/fpga_trellis.rs` elaborates with the
+// defaults, so the override lives here.
 //
 // Every port is brought straight out. That is the point: the FIFO's memory
 // becomes `TRELLIS_DPR16X4` cells, 2 of them, and nothing else in

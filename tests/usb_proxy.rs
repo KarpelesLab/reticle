@@ -1,15 +1,16 @@
 //! A device the operating system reached **through a hub this compiler built**.
 //!
-//! `tests/ip_library.rs` proves `ip/usb/usb_proxy` against a host model and three
-//! transceiver models, in simulation, and that is where the interesting
-//! assertions are — the toggles on both buses, a data stage of more than one
-//! packet, a STALL propagated, a port that forwards nothing until it is reset.
-//! What none of it can prove is the only question a proxy really has to answer:
-//! **does a kernel enumerate the device through it?** A host model written from
-//! the same specification as the proxy can agree with it about something they
-//! are both wrong about, which is the sentence `ip/usb/usb_device_ulpi/README.md`
-//! §11 wrote before that block had a board, and the one time it came true is
-//! written up in the same section.
+//! `tests/ip_library.rs` proves `ip/usb/usb_proxy` against a host model and
+//! three transceiver models, in simulation, and that is where the
+//! interesting assertions are — the toggles on both buses, a data stage of
+//! more than one packet, a STALL propagated, a port that forwards nothing
+//! until it is reset. What none of it can prove is the only question a
+//! proxy really has to answer: **does a kernel enumerate the device through
+//! it?** A host model written from the same specification as the proxy can
+//! agree with it about something they are both wrong about, which is the
+//! sentence `ip/usb/usb_device_ulpi/README.md` §11 wrote before that block
+//! had a board, and the one time it came true is written up in the same
+//! section.
 //!
 //! So this test asks the kernel:
 //!
@@ -33,36 +34,37 @@
 //!    it has not, this **skips** with a reason: a socket with no power in it is
 //!    not a broken proxy.
 //! 3. **The kernel enumerated that device, through the proxy.** This is the
-//!    whole round, and it is one assertion: a **child** of our hub exists in
-//!    sysfs. If the port reports a device and there is no child, the enumeration
-//!    failed and this **fails**, because that is precisely the state
-//!    `ip/usb/usb_hub/README.md` §8 quotes the kernel log of and precisely what
-//!    `ip/usb/usb_proxy` was built to change.
+//!    whole round, and it is one assertion: a **child** of our hub exists
+//!    in sysfs. If the port reports a device and there is no child, the
+//!    enumeration failed and this **fails**, because that is precisely the
+//!    state `ip/usb/usb_hub/README.md` §8 quotes the kernel log of and
+//!    precisely what `ip/usb/usb_proxy` was built to change.
 //!
-//!    The child's `idVendor` and `idProduct` are asserted to be **different from
-//!    our hub's**, which is the one thing that says the descriptors the kernel
-//!    read are the real device's and not ours. With pass-through addressing
-//!    there is nothing of this project in them, and if there were it would be a
-//!    defect rather than a feature.
+//! The child's `idVendor` and `idProduct` are asserted to be **different
+//! from our hub's**, which is the one thing that says the descriptors the
+//! kernel read are the real device's and not ours. With pass-through
+//! addressing there is nothing of this project in them, and if there were
+//! it would be a defect rather than a feature.
 //! 4. **Control transfers still work through it, now.** The child's device
-//!    descriptor and its whole configuration descriptor are read over usbfs —
-//!    through our hub, through the relay, to the device and back — and compared
-//!    with what sysfs says the kernel read at enumeration time. That is a
-//!    hundred-odd bytes of multi-packet control traffic in both directions, with
-//!    a status stage each way.
+//!    descriptor and its whole configuration descriptor are read over usbfs
+//!    — through our hub, through the relay, to the device and back — and
+//!    compared with what sysfs says the kernel read at enumeration time.
+//!    That is a hundred-odd bytes of multi-packet control traffic in both
+//!    directions, with a status stage each way.
 //!
-//!    Then, if the device declares a bulk IN endpoint and no kernel driver holds
-//!    its interface, one bulk read is attempted and **reported**. What that can
-//!    and cannot establish is below.
+//! Then, if the device declares a bulk IN endpoint and no kernel driver
+//! holds its interface, one bulk read is attempted and **reported**. What
+//! that can and cannot establish is below.
 //!
 //! **What this test would and would not catch.**
 //!
-//! It catches the whole of what the round claims: a proxy that does not forward,
-//! one whose port reset does not reach the device so the PC's SET_ADDRESS lands
-//! on a device that still has an old one, one whose data stages are cut in the
-//! wrong place so a descriptor comes back wrong, and one that answers with
-//! descriptors of its own rather than the device's. Part 3 is a single boolean
-//! and it is the one that could not be reached in simulation at all.
+//! It catches the whole of what the round claims: a proxy that does not
+//! forward, one whose port reset does not reach the device so the PC's
+//! SET_ADDRESS lands on a device that still has an old one, one whose data
+//! stages are cut in the wrong place so a descriptor comes back wrong, and
+//! one that answers with descriptors of its own rather than the device's.
+//! Part 3 is a single boolean and it is the one that could not be reached
+//! in simulation at all.
 //!
 //! It does **not** catch a proxy that works on Linux and not on Windows or
 //! macOS, since it asks one host. It does **not** establish **which** device is
@@ -73,15 +75,16 @@
 //! kernel's read and on this one would pass part 4, which is why part 3 is the
 //! load-bearing half: a corrupted device descriptor does not enumerate.
 //!
-//! The **bulk** attempt asserts nothing and is printed, and that is deliberate
-//! rather than lazy. A bulk IN to a device that has nothing to say is NAKed for
-//! ever and a host turns that into a timeout, so a timeout is the *expected*
-//! answer from a device with no outstanding data — and it is indistinguishable
-//! from a device that was never reached. A `EPIPE` would be a STALL, which would
-//! be the device refusing, and anything else is an error worth seeing. So the
-//! result is reported with what each outcome would mean, and what proves bytes
-//! move through this block is part 4 and the five hundred thousand bytes the
-//! simulation moves through `usb_proxy_moves_bytes_through_the_port`.
+//! The **bulk** attempt asserts nothing and is printed, and that is
+//! deliberate rather than lazy. A bulk IN to a device that has nothing to
+//! say is NAKed for ever and a host turns that into a timeout, so a timeout
+//! is the *expected* answer from a device with no outstanding data — and it
+//! is indistinguishable from a device that was never reached. A `EPIPE`
+//! would be a STALL, which would be the device refusing, and anything else
+//! is an error worth seeing. So the result is reported with what each
+//! outcome would mean, and what proves bytes move through this block is
+//! part 4 and the five hundred thousand bytes the simulation moves through
+//! `usb_proxy_moves_bytes_through_the_port`.
 //!
 //! And it says nothing at all about a board that is not plugged in: it
 //! **skips**, with a reason, because an unplugged board is not a broken
@@ -193,8 +196,8 @@ fn children(hub: &Path) -> Vec<PathBuf> {
 }
 
 /// The endpoint descriptors of a configuration descriptor blob, as
-/// `(bEndpointAddress, bmAttributes, wMaxPacketSize)`, walked along the chain of
-/// `bLength` fields the way a host does.
+/// `(bEndpointAddress, bmAttributes, wMaxPacketSize)`, walked along
+/// the chain of `bLength` fields the way a host does.
 fn endpoints(config: &[u8]) -> Vec<(u8, u8, u16)> {
     let mut at = 0;
     let mut found = Vec::new();
@@ -234,10 +237,10 @@ fn a_device_behind_a_hub_this_compiler_built_is_enumerated_by_the_kernel() {
     );
     let hub = &hubs[0];
 
-    // `ip/usb/usb_cdc_acm`, `ip/usb/usb_hub` and `ip/usb/usb_proxy` share this vendor and
-    // product pair and only one of them can be loaded at a time. Saying which
-    // is more useful than an assertion about bytes a serial port would also
-    // fail.
+    // `ip/usb/usb_cdc_acm`, `ip/usb/usb_hub` and `ip/usb/usb_proxy` share
+    // this vendor and product pair and only one of them can be loaded at a
+    // time. Saying which is more useful than an assertion about bytes a
+    // serial port would also fail.
     let class = field(hub, "bDeviceClass");
     if class != "09" {
         println!(
@@ -321,11 +324,12 @@ fn a_device_behind_a_hub_this_compiler_built_is_enumerated_by_the_kernel() {
     // THIS IS THE WHOLE ROUND, AND IT IS ONE BOOLEAN
     //
     // A child of our hub in sysfs is the kernel saying it read a device
-    // descriptor through the port, assigned an address, read a configuration
-    // descriptor and configured the device. `ip/usb/usb_hub/README.md` §8 is the
-    // kernel log of the state where there is no child — four
-    // `device descriptor read/64, error -71` and `unable to enumerate USB
-    // device` — which was the correct outcome of a hub that forwarded nothing.
+    // descriptor through the port, assigned an address, read a
+    // configuration descriptor and configured the device.
+    // `ip/usb/usb_hub/README.md` §8 is the kernel log of the state where
+    // there is no child — four `device descriptor read/64, error -71` and
+    // `unable to enumerate USB device` — which was the correct outcome of a
+    // hub that forwarded nothing.
     let kids = children(hub);
     assert!(
         !kids.is_empty(),
@@ -369,9 +373,10 @@ fn a_device_behind_a_hub_this_compiler_built_is_enumerated_by_the_kernel() {
          pair: something is answering with our descriptors instead of forwarding to the \
          device's"
     );
-    // §11.5.1: a port reaches Enabled only by being reset, and the kernel reset
-    // it to enumerate through it — so the reset `usb_proxy_dn` drove at the real
-    // device completed, which is what pass-through addressing depends on.
+    // §11.5.1: a port reaches Enabled only by being reset, and the kernel
+    // reset it to enumerate through it — so the reset `usb_proxy_dn` drove
+    // at the real device completed, which is what pass-through addressing
+    // depends on.
     assert_ne!(
         status & PORT_STAT_ENABLE,
         0,
@@ -405,8 +410,9 @@ fn a_device_behind_a_hub_this_compiler_built_is_enumerated_by_the_kernel() {
         .expect("the device descriptor, read through the proxy");
     assert_eq!(n, 18, "eighteen bytes of device descriptor");
     println!("device descriptor through the proxy: {dev_desc:02x?}");
-    // Self-consistency with what the kernel read when it enumerated the device,
-    // which is the strongest thing available without knowing what the device is.
+    // Self-consistency with what the kernel read when it enumerated the
+    // device, which is the strongest thing available without knowing what
+    // the device is.
     assert_eq!(
         u16::from_le_bytes([dev_desc[8], dev_desc[9]]),
         kid_vid_n,
@@ -487,16 +493,18 @@ fn a_device_behind_a_hub_this_compiler_built_is_enumerated_by_the_kernel() {
         println!("cannot claim interface 0 of the device behind the port ({err}); not trying");
         return;
     }
-    // A bulk **OUT** first, if the device has one, because that direction *is*
-    // assertable: an OUT that comes back `Ok` was acknowledged by the device, and
-    // nothing but the device can acknowledge it. The proxy holds the packet,
-    // NAKs the host, forwards it, and gives the host the device's own answer on
-    // the retry, which is §7 of `ip/usb/usb_proxy/README.md`.
+    // A bulk **OUT** first, if the device has one, because that direction
+    // *is* assertable: an OUT that comes back `Ok` was acknowledged by the
+    // device, and nothing but the device can acknowledge it. The proxy
+    // holds the packet, NAKs the host, forwards it, and gives the host the
+    // device's own answer on the retry, which is §7 of
+    // `ip/usb/usb_proxy/README.md`.
     //
-    // The eight bytes are a libgreat command header — class 0, verb 0, which on a
-    // GreatFET is `read_board_id` — and are **not** asserted to produce anything:
-    // what is being measured is the handshake, and a device that does not know
-    // the bytes still acknowledges a bulk OUT it had room for.
+    // The eight bytes are a libgreat command header — class 0, verb 0,
+    // which on a GreatFET is `read_board_id` — and are **not** asserted to
+    // produce anything: what is being measured is the handshake, and a
+    // device that does not know the bytes still acknowledges a bulk OUT it
+    // had room for.
     let bulk_out = eps
         .iter()
         .find(|(addr, attrs, _)| addr & 0x80 == 0 && attrs & 0x03 == 0x02);

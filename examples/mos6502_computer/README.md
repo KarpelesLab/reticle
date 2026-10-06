@@ -13,9 +13,10 @@ two are meant to be read side by side: same manifest format, same board,
 same testbench shape, same test list. Everything that differs between
 them differs because a 6502 is not a RISC-V core, and
 [`docs/writing-a-cpu.md`](../../docs/writing-a-cpu.md) is the guide that
-draws the line between the two. [`tests/mos6502_computer.rs`](../../tests/mos6502_computer.rs)
-drives it through every step. **What that proves, and what it does not,
-is at the end of this page.**
+draws the line between the two.
+[`tests/mos6502_computer.rs`](../../tests/mos6502_computer.rs) drives it
+through every step. **What that proves, and what it does not, is at the
+end of this page.**
 
 ## What is here
 

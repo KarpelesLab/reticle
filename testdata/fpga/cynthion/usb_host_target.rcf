@@ -12,8 +12,8 @@
 # `phy_ready` high — which takes the clock on `T4`, the reset on `R4`, `dir`
 # on `R3`, `nxt` on `T2`, `stp` on `T3` and all eight data balls being the
 # balls they are named here. `docs/fpga-trellis.md`'s first section has the
-# console and `ip/usb/usb_host_ulpi/README.md` §9 the same thing from the block's
-# side. Nothing in this file was changed to get there.
+# console and `ip/usb/usb_host_ulpi/README.md` §9 the same thing from the
+# block's side. Nothing in this file was changed to get there.
 #
 # A USB host on the TARGET port of a Great Scott Gadgets Cynthion r1.4,
 # with the serial console of `usb_cdc_uart.rcf` kept on AUX. Two ULPI

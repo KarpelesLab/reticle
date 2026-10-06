@@ -49,10 +49,11 @@ examples/nes/
 
 Four library packages and four files of HDL. `mos6502` is the processor,
 [`ppu2c02`](../../ip/video/ppu2c02) is the picture unit and
-[`dvi_tx`](../../ip/video/dvi_tx) and [`vga_out`](../../ip/video/vga_out) are the two
-video outputs; everything else on this page is the console *board*, which
-is the part that is neither. `vga_out` depends on `dvi_tx` for the raster
-itself, so `video_timing` is in the design once and not twice.
+[`dvi_tx`](../../ip/video/dvi_tx) and [`vga_out`](../../ip/video/vga_out)
+are the two video outputs; everything else on this page is the console
+*board*, which is the part that is neither. `vga_out` depends on `dvi_tx`
+for the raster itself, so `video_timing` is in the design once and not
+twice.
 
 ## The processor is `mos6502` with `DECIMAL_MODE = 0`
 
@@ -172,8 +173,9 @@ is the honest trade for having no clock crossing.
 The Basys 3's video output is twelve bits — four per channel, through a
 resistor ladder — and `vga_out` **truncates** the palette's eight bits
 to them rather than rounding, for the reasons
-[`ip/video/vga_out/README.md`](../../ip/video/vga_out) gives. That is a real change
-to the picture and not a rounding error, so here is the size of it.
+[`ip/video/vga_out/README.md`](../../ip/video/vga_out) gives. That is a
+real change to the picture and not a rounding error, so here is the
+size of it.
 
 `ppu_palette`'s sixty-four entries are not sixty-four colours even at
 full depth: ten of them are black — `$xE` and `$xF` are black on a real
@@ -515,12 +517,12 @@ Two things about this board file are choices rather than facts, and both
 are in [`board/ecp5_dvi.rcf`](board/ecp5_dvi.rcf):
 
 - **`clk_x5` is an input pin here, and on a real board it would come from
-  the device's PLL.** [`ip/video/dvi_tx_pll`](../../ip/video/dvi_tx_pll) is `dvi_tx`
-  with exactly that change — a `clock_mhz` attribute on an undriven wire,
-  which is how a design asks Reticle's flow for a PLL — and `nes_top`
-  would swap `input wire clk_x5` for `input wire clk_ref` and
-  `(* clock_mhz = 126 *) wire clk_x5;`. It is a pin here because a design
-  whose clock nothing drives cannot be simulated, and this one is
+  the device's PLL.** [`ip/video/dvi_tx_pll`](../../ip/video/dvi_tx_pll)
+  is `dvi_tx` with exactly that change — a `clock_mhz` attribute on an
+  undriven wire, which is how a design asks Reticle's flow for a PLL —
+  and `nes_top` would swap `input wire clk_x5` for `input wire clk_ref`
+  and `(* clock_mhz = 126 *) wire clk_x5;`. It is a pin here because a
+  design whose clock nothing drives cannot be simulated, and this one is
   simulated hard.
 - **each TMDS lane is one pin here and one differential pair on a
   connector.** On the ECP5 a pseudo-differential IO standard (LVCMOS33D)
@@ -597,8 +599,8 @@ example makes neither.
 ## What is not modelled
 
 The picture unit's own list is at the top of
-[`ip/video/ppu2c02/rtl/ppu2c02.v`](../../ip/video/ppu2c02/rtl/ppu2c02.v); the short
-version, and what the console adds to it:
+[`ip/video/ppu2c02/rtl/ppu2c02.v`](../../ip/video/ppu2c02/rtl/ppu2c02.v);
+the short version, and what the console adds to it:
 
 - **no sound.** There is no APU: no pulse channels, no triangle, no
   noise, no sample playback, and no frame counter, so nothing raises the

@@ -372,14 +372,15 @@ module usb_hub_target #(
         .port_power     (port_power),
         .port_enabled   (port_enabled),
         .port_suspended (port_suspended),
-        // **Tied high, which is the reset that takes no time.** `ip/usb/usb_hub`'s
-        // port reset is a handshake now — a level out while the port is
-        // resetting and a pulse in when whatever drives it has finished — and
-        // this design drives nothing downstream, so the answer is "already
-        // done": `port_reset` is one cycle, C_PORT_RESET sets at once, and the
-        // PC sees the reset finished at its first GetPortStatus, exactly as it
-        // did before the handshake existed. `testdata/fpga/cynthion/usb_proxy_target.v`
-        // is the design where the reset is real.
+        // **Tied high, which is the reset that takes no time.**
+        // `ip/usb/usb_hub`'s port reset is a handshake now — a level out
+        // while the port is resetting and a pulse in when whatever drives
+        // it has finished — and this design drives nothing downstream, so
+        // the answer is "already done": `port_reset` is one cycle,
+        // C_PORT_RESET sets at once, and the PC sees the reset finished at
+        // its first GetPortStatus, exactly as it did before the handshake
+        // existed. `testdata/fpga/cynthion/usb_proxy_target.v` is the
+        // design where the reset is real.
         .port_reset      (port_reset),
         .port_reset_done (1'b1)
     );

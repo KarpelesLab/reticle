@@ -1,8 +1,9 @@
 // A USB serial port on a Cynthion's AUX port, bridged to a UART:
-// `ip/usb/usb_cdc_acm` wired to the auxiliary ULPI transceiver, its bytes handed
-// to `ip/bus/uart`'s transmitter, and that transmitter's line **looped back into
-// its own receiver** so that what a program writes to `/dev/ttyACM*` it reads
-// back — having been serialised at 115200 baud in between.
+// `ip/usb/usb_cdc_acm` wired to the auxiliary ULPI transceiver, its bytes
+// handed to `ip/bus/uart`'s transmitter, and that transmitter's line
+// **looped back into its own receiver** so that what a program writes to
+// `/dev/ttyACM*` it reads back — having been serialised at 115200 baud in
+// between.
 //
 // This is `usb_ulpi_device.v`'s successor and not its replacement. That design
 // is a vendor-specific bulk loopback that no driver claims and it carries a
@@ -148,9 +149,10 @@
 // configured the device, and "is this design using the rate I set?" is the
 // question this file now exists to answer.
 //
-// Pins: testdata/fpga/cynthion/usb_cdc_uart.rcf.
-// Sources: ip/usb/usb_cdc_acm/rtl/*.v, ip/usb/usb_device_ulpi/rtl/usb_ulpi_link.v,
-//          ip/usb/usb_device_fs/rtl/usb_ctrl_ep.v and ip/bus/uart/rtl/*.v.
+// Pins: testdata/fpga/cynthion/usb_cdc_uart.rcf. Sources:
+// ip/usb/usb_cdc_acm/rtl/*.v,
+// ip/usb/usb_device_ulpi/rtl/usb_ulpi_link.v,
+// ip/usb/usb_device_fs/rtl/usb_ctrl_ep.v and ip/bus/uart/rtl/*.v.
 
 module usb_cdc_uart #(
     // How many clocks the core is held in reset after configuration. A
@@ -251,15 +253,16 @@ module usb_cdc_uart #(
     // into a level needs a rule about when it goes away, and this design has
     // no reason to have one.
     //
-    // What a host does with it: `cdc_acm` keeps the last bitmap it was sent in
-    // `ctrlin` and answers `TIOCMGET` out of it, so a program asking this
-    // terminal for its modem lines is told there is a carrier and a data set —
-    // **on every open**, because `ip/usb/usb_cdc_acm` sends a notification when the
-    // host opens the port and not only when the state changes. A constant here
-    // would otherwise be told to the host exactly once and never again, which
-    // is the defect `ip/usb/usb_cdc_acm/README.md` §4 writes up: whoever polled
-    // first got the one packet and `TIOCMGET` then read `0x026`, with no DCD
-    // and no DSR, on three consecutive opens.
+    // What a host does with it: `cdc_acm` keeps the last bitmap it was sent
+    // in `ctrlin` and answers `TIOCMGET` out of it, so a program asking
+    // this terminal for its modem lines is told there is a carrier and a
+    // data set — **on every open**, because `ip/usb/usb_cdc_acm` sends a
+    // notification when the host opens the port and not only when the state
+    // changes. A constant here would otherwise be told to the host exactly
+    // once and never again, which is the defect
+    // `ip/usb/usb_cdc_acm/README.md` §4 writes up: whoever polled first got
+    // the one packet and `TIOCMGET` then read `0x026`, with no DCD and no
+    // DSR, on three consecutive opens.
     //
     // **It does not change whether the port opens**: `cdc_acm` has no
     // `carrier_raised` operation, so the terminal layer never waits for a
@@ -358,19 +361,19 @@ module usb_cdc_uart #(
     // one-byte packet — where a bridge with a queue would have the UART
     // running back to back and the USB side overlapped with it.
     //
-    // **A wider USB packet does nothing for this**, and that is worth saying
-    // where somebody will look for it: the endpoints hold 64 bytes now, and
-    // this bridge still hands one byte to `uart_tx` per round trip, so the
-    // packets it sends are one byte long whatever `wMaxPacketSize` says. The
-    // throughput figures in `ip/usb/usb_cdc_acm/README.md` §5 are measured on the
-    // bulk loopback of `usb_ulpi_device.v`, which has no UART in the way, for
-    // exactly that reason. For a serial port
-    // a person types at, and for a test that moves a few dozen bytes, the
-    // round trip is the right trade; for a bridge to a **real** device it is
-    // not, because
-    // a real device's bytes arrive when they arrive and cannot be throttled
-    // by anything at this end. Such a design needs the FIFO, and needs the
-    // backend to be able to place one.
+    // **A wider USB packet does nothing for this**, and that is worth
+    // saying where somebody will look for it: the endpoints hold 64 bytes
+    // now, and this bridge still hands one byte to `uart_tx` per round
+    // trip, so the packets it sends are one byte long whatever
+    // `wMaxPacketSize` says. The throughput figures in
+    // `ip/usb/usb_cdc_acm/README.md` §5 are measured on the bulk loopback
+    // of `usb_ulpi_device.v`, which has no UART in the way, for exactly
+    // that reason. For a serial port a person types at, and for a test that
+    // moves a few dozen bytes, the round trip is the right trade; for a
+    // bridge to a **real** device it is not, because a real device's bytes
+    // arrive when they arrive and cannot be throttled by anything at this
+    // end. Such a design needs the FIFO, and needs the backend to be able
+    // to place one.
     wire [7:0] uart_rx_data;
     wire       uart_rx_valid;
     wire       uart_rx_error;

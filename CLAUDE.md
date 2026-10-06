@@ -61,10 +61,11 @@ Two checks that must never be weakened:
 - **Every bit decodes.** A bitstream's set bits must all decode back through
   the database, and the arcs they select must be exactly the arcs the router
   chose. Report the count and that nothing is unexplained.
-- **Mapped-netlist equivalence.** `every_block_maps_to_the_logic_it_was_mapped_from`
-  proves every library block equivalent to what it was mapped from, at two
-  lookup-table widths. It exists because the technology mapper once emitted
-  wrong logic that only a person with an oscilloscope could have found.
+- **Mapped-netlist equivalence.**
+  `every_block_maps_to_the_logic_it_was_mapped_from` proves every library
+  block equivalent to what it was mapped from, at two lookup-table widths.
+  It exists because the technology mapper once emitted wrong logic that
+  only a person with an oscilloscope could have found.
 
 **Documents here distinguish what was *checked* from what was only *quoted*,
 and say which.** A specification reference is a reading until something

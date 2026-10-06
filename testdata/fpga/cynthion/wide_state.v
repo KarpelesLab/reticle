@@ -18,12 +18,13 @@
 // that finally read the 5 off the part.
 //
 // **This builds, and that is what it is here to check.** The flow makes the
-// constant rather than leaving the wire floating: `techcells::drive_constant_data`
-// gives the flip-flop a lookup table with `INIT` all zeros and every input tied
-// high, and the router routes its output to the `M` wire, which is what
-// nextpnr's `pack_constants` does and what Lattice's own bitstreams for this
-// board contain. `tests/fpga_trellis.rs` pins both ends of that: what their
-// files hold, and that this design's finished image has the constant in it.
+// constant rather than leaving the wire floating:
+// `techcells::drive_constant_data` gives the flip-flop a lookup table with
+// `INIT` all zeros and every input tied high, and the router routes its
+// output to the `M` wire, which is what nextpnr's `pack_constants` does and
+// what Lattice's own bitstreams for this board contain.
+// `tests/fpga_trellis.rs` pins both ends of that: what their files hold,
+// and that this design's finished image has the constant in it.
 //
 // It was refused for one round, between the measurement that found the fault
 // and the driver that fixed it, and the refusal is still there for the case

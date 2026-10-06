@@ -2,12 +2,12 @@
 //! chain as `examples/mos6502_computer`.
 //!
 //! The console is **not** a game machine here: it is
-//! [`ip/cpu/mos6502`](../ip/cpu/mos6502) with `DECIMAL_MODE = 0` — which is what
-//! the processor in an NES actually is — plus
-//! [`ip/video/ppu2c02`](../ip/video/ppu2c02), 2 KiB of work RAM, an NROM cartridge
-//! and a sprite DMA engine, running a demo written for this example. No
-//! part of any commercial cartridge is in this repository and none is
-//! needed.
+//! [`ip/cpu/mos6502`](../ip/cpu/mos6502) with `DECIMAL_MODE = 0` —
+//! which is what the processor in an NES actually is — plus
+//! [`ip/video/ppu2c02`](../ip/video/ppu2c02), 2 KiB of work RAM, an
+//! NROM cartridge and a sprite DMA engine, running a demo written for
+//! this example. No part of any commercial cartridge is in this
+//! repository and none is needed.
 //!
 //! The test that matters is
 //! `the_frame_comes_out_of_the_video_port`: it runs the console for two

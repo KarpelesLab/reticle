@@ -2,16 +2,17 @@
 // device it reaches *through* that hub in the TARGET-A socket, and the PC's own
 // transactions carried from one bus to the other.
 //
-// This is `usb_hub_target.v` with the thing that was missing from it put in.
-// There, `ip/usb/usb_hub` answered the PC's class requests about its port and
-// `ip/usb/usb_host_ulpi` enumerated whatever was on TARGET-A **for itself**, and no
-// packet crossed between the two buses — so the PC found a hub, found a device
-// on its port, reset it, and got `device descriptor read/64, error -71`, which
-// was the correct outcome of a hub that forwards nothing.
-// `ip/usb/usb_hub/README.md` §8 quotes that log.
+// This is `usb_hub_target.v` with the thing that was missing from it put
+// in. There, `ip/usb/usb_hub` answered the PC's class requests about its
+// port and `ip/usb/usb_host_ulpi` enumerated whatever was on TARGET-A **for
+// itself**, and no packet crossed between the two buses — so the PC found a
+// hub, found a device on its port, reset it, and got
+// `device descriptor read/64, error -71`, which was the correct outcome of
+// a hub that forwards nothing. `ip/usb/usb_hub/README.md` §8 quotes that
+// log.
 //
-// `ip/usb/usb_proxy` is what closes it, and the whole of this design is that block
-// with a board around it.
+// `ip/usb/usb_proxy` is what closes it, and the whole of this design is
+// that block with a board around it.
 //
 // ===================================================================
 // WHAT IS SUPPOSED TO HAPPEN, AND HOW TO TELL
@@ -29,10 +30,10 @@
 //     the device that appears in `lsusb` is the one in the socket with its own
 //     VID and PID.
 //
-// Nothing of this design's own appears in that device's descriptors, because
-// nothing of this design's own is in them: with pass-through addressing the
-// bytes the PC reads are the bytes the device sent. `ip/usb/usb_proxy/README.md`
-// §2 is why that was the architecture chosen.
+// Nothing of this design's own appears in that device's descriptors,
+// because nothing of this design's own is in them: with pass-through
+// addressing the bytes the PC reads are the bytes the device sent.
+// `ip/usb/usb_proxy/README.md` §2 is why that was the architecture chosen.
 //
 // ===================================================================
 // THE SERIAL CONSOLE IS ON T14 HERE, AND WHY IT HAS TO BE
@@ -117,16 +118,17 @@
 // it; `saw_data_fwd` says a transaction outside a control transfer went across.
 // `saw_proxied` is `led5_n` as well, so it can be read with no console.
 //
-// **Why `saw_data_fwd` is a bit of its own.** A host turns a NAK for ever into a
-// timeout, so a bulk endpoint the proxy never reached and one the device NAKed
-// look identical from the host's side — `operation timed out` either way. This
-// bit is the difference, and it is the only place that difference is visible.
+// **Why `saw_data_fwd` is a bit of its own.** A host turns a NAK for ever
+// into a timeout, so a bulk endpoint the proxy never reached and one the
+// device NAKed look identical from the host's side — `operation timed out`
+// either way. This bit is the difference, and it is the only place that
+// difference is visible.
 //
-// What the console **cannot** say is whether the enumeration succeeded. That is
-// the PC's own kernel log and `lsusb`, and `ip/usb/usb_proxy/README.md` §8 is where
-// it is quoted. A count of SETUPs that climbs and stops is a PC that enumerated
-// the device and went quiet, and one that sits at 2 is a PC retrying the same
-// request.
+// What the console **cannot** say is whether the enumeration succeeded.
+// That is the PC's own kernel log and `lsusb`, and
+// `ip/usb/usb_proxy/README.md` §8 is where it is quoted. A count of SETUPs
+// that climbs and stops is a PC that enumerated the device and went quiet,
+// and one that sits at 2 is a PC retrying the same request.
 //
 // ===================================================================
 // THE VBUS SWITCHES: EXACTLY ONE, AND IT HAS A PARAMETER
@@ -159,13 +161,14 @@
 // socket has no power, nothing attaches, and the hub correctly reports an
 // empty port.
 //
-// **And a device that draws more than 100 mA needs `SELF_POWERED = 1`**, which
-// is the default and whose parameter comment is the whole argument: a
-// bus-powered hub may offer each port only 100 mA, a GreatFET's configuration
-// declares 500, and Linux's answer is to enumerate the device perfectly and then
-// leave it unconfigured — `rejected 1 configuration due to insufficient
-// available bus power`. That is one of the two ways this design can look like it
-// works and not work, and it was measured here rather than reasoned about.
+// **And a device that draws more than 100 mA needs `SELF_POWERED = 1`**,
+// which is the default and whose parameter comment is the whole argument: a
+// bus-powered hub may offer each port only 100 mA, a GreatFET's
+// configuration declares 500, and Linux's answer is to enumerate the device
+// perfectly and then leave it unconfigured —
+// `rejected 1 configuration due to insufficient available bus power`. That
+// is one of the two ways this design can look like it works and not work,
+// and it was measured here rather than reasoned about.
 //
 // ===================================================================
 // WHAT TO LOOK AT
@@ -187,18 +190,19 @@
 // ELEVEN SIGNALS THIS DESIGN DOES NOT ROUTE, AND WHICH ELEVEN
 // ===================================================================
 //
-// `reticle fpga` reports `routed 4637 of 4648 signal(s)` for this design, and
-// the difference is **`dn_frame[10:0]`**: the downstream bus's frame number,
-// which `usb_hub_proxy_ulpi` brings out and this design leaves unconnected.
-// `Netlist::is_routable` requires a signal to have both a driver and a sink, and
-// a bus with eleven drivers and no sink has eleven signals with nothing to route
-// to.
+// `reticle fpga` reports `routed 4637 of 4648 signal(s)` for this design,
+// and the difference is **`dn_frame[10:0]`**: the downstream bus's frame
+// number, which `usb_hub_proxy_ulpi` brings out and this design leaves
+// unconnected. `Netlist::is_routable` requires a signal to have both a
+// driver and a sink, and a bus with eleven drivers and no sink has eleven
+// signals with nothing to route to.
 //
-// It is written down because the arithmetic looks alarming and is not, which is
-// the same note `ip/usb/usb_host_ulpi/README.md` §9 makes about its own "4423 of
-// 4425" — there the two were pads driven by constants. The line that carries the
-// weight in either report is the last one: every set bit decodes back through
-// the database and the arcs they select are exactly the router's.
+// It is written down because the arithmetic looks alarming and is not,
+// which is the same note `ip/usb/usb_host_ulpi/README.md` §9 makes about
+// its own "4423 of 4425" — there the two were pads driven by constants. The
+// line that carries the weight in either report is the last one: every set
+// bit decodes back through the database and the arcs they select are
+// exactly the router's.
 module usb_proxy_target #(
     // How many clocks the cores are held in reset after configuration.
     parameter integer POR = 16,
@@ -208,19 +212,19 @@ module usb_proxy_target #(
     parameter integer VBUS_AUX = 0,
     // WHETHER THE HUB TELLS THE PC IT IS SELF POWERED, AND WHY IT SAYS YES
     //
-    // Bit 6 of the configuration descriptor's `bmAttributes` (USB 2.0 §9.6.3).
-    // It is **not** decoration and it is not the IP block's business: it decides
-    // how much current Linux will let a device behind the port draw, and with
-    // the wrong value the device enumerates perfectly and is then left
-    // unconfigured.
+    // Bit 6 of the configuration descriptor's `bmAttributes` (USB 2.0
+    // §9.6.3). It is **not** decoration and it is not the IP block's
+    // business: it decides how much current Linux will let a device behind
+    // the port draw, and with the wrong value the device enumerates
+    // perfectly and is then left unconfigured.
     //
     // Measured on this board, with the GreatFET in the TARGET-A socket and this
     // bit **clear**:
     //
-    //   usb 7-5.1: New USB device found, idVendor=1d50, idProduct=60e6
-    //   usb 7-5.1: Product: GreatFET
-    //   usb 7-5.1: rejected 1 configuration due to insufficient available bus power
-    //   usb 7-5.1: no configuration chosen from 1 choice
+    // usb 7-5.1: New USB device found, idVendor=1d50, idProduct=60e6
+    // usb 7-5.1: Product: GreatFET usb 7-5.1: rejected 1 configuration
+    // due to insufficient available bus power usb 7-5.1: no
+    // configuration chosen from 1 choice
     //
     // The GreatFET's one configuration declares `MaxPower 500mA`, and Linux
     // gives each port of a **bus-powered** hub 100 mA — which is all a
@@ -245,8 +249,8 @@ module usb_proxy_target #(
     // `ip/usb/usb_hub/README.md` §4 is the long form of that refusal.
     parameter integer SELF_POWERED = 1,
     // Which `LineState` is a full-speed device's idle J, from the target
-    // transceiver's point of view; `ip/usb/usb_host_ulpi`'s `FS_LINE` says why this
-    // is a parameter at all.
+    // transceiver's point of view; `ip/usb/usb_host_ulpi`'s `FS_LINE`
+    // says why this is a parameter at all.
     parameter [1:0] FS_LINE = 2'b01,
     // Cycles of an idle bus at J before an answer goes out, which ULPI 1.1
     // Table 10 allows a full-speed Link between 7 and 18 of.
@@ -346,21 +350,22 @@ module usb_proxy_target #(
     wire       proxied, ctrl_active, setup_seen, data_fwd;
     wire [1:0] job;
 
-    // `*_VENDOR_ADDR` / `*_VENDOR_DATA` are this board's one register and not
-    // ULPI's: a Cynthion crosses DP and DM between **each** transceiver and its
-    // connector, and register 39h bit 1 of the Microchip USB3343 undoes it.
-    // Great Scott Gadgets' own platform file applies `{0x39: 0b000110}` to
-    // whichever ULPI interface is built, not per port, so both ports get the
-    // same value here — and `usb_ulpi_device.v`'s header has the three sources
-    // that agree on it for AUX. For TARGET it is still only quoted:
-    // `ip/usb/usb_host_ulpi/README.md` §5 says so, and `FS_LINE` is the parameter
-    // that settles it if the quotation is wrong.
-    // `CFG_ATTR` is `bmAttributes` of the configuration descriptor: bit 7 is
-    // reserved and set, and bit 6 is Self Powered — `SELF_POWERED` above is the
-    // whole argument for it and the measurement that made it a parameter. It is
-    // also what the **standard** GET_STATUS of USB 2.0 §9.4.5 reports in bit 0
-    // of its two bytes, which `usb_ctrl_ep` derives from this same byte so the
-    // two can never disagree.
+    // `*_VENDOR_ADDR` / `*_VENDOR_DATA` are this board's one register and
+    // not ULPI's: a Cynthion crosses DP and DM between **each** transceiver
+    // and its connector, and register 39h bit 1 of the Microchip USB3343
+    // undoes it. Great Scott Gadgets' own platform file applies
+    // `{0x39: 0b000110}` to whichever ULPI interface is built, not per
+    // port, so both ports get the same value here — and
+    // `usb_ulpi_device.v`'s header has the three sources that agree on it
+    // for AUX. For TARGET it is still only quoted:
+    // `ip/usb/usb_host_ulpi/README.md` §5 says so, and `FS_LINE` is the
+    // parameter that settles it if the quotation is wrong. `CFG_ATTR` is
+    // `bmAttributes` of the configuration descriptor: bit 7 is reserved and
+    // set, and bit 6 is Self Powered — `SELF_POWERED` above is the whole
+    // argument for it and the measurement that made it a parameter. It is
+    // also what the **standard** GET_STATUS of USB 2.0 §9.4.5 reports in
+    // bit 0 of its two bytes, which `usb_ctrl_ep` derives from this same
+    // byte so the two can never disagree.
     usb_hub_proxy_ulpi #(
         .CFG_ATTR       (SELF_POWERED != 0 ? 8'hC0 : 8'h80),
         .UP_VENDOR_ADDR (6'h39),
@@ -428,20 +433,20 @@ module usb_proxy_target #(
         saw_data_fwd   <= saw_data_fwd   | data_fwd;
     end
 
-    // A count of SETUP packets the PC has sent to something behind the port,
-    // which is the one number that says whether the forwarding is **working**
-    // rather than merely reached: a PC enumerating a device sends eight or so and
-    // stops.
+    // A count of SETUP packets the PC has sent to something behind the
+    // port, which is the one number that says whether the forwarding is
+    // **working** rather than merely reached: a PC enumerating a device
+    // sends eight or so and stops.
     //
-    // `setup_seen` is one cycle per SETUP the relay took and forwarded, so this
-    // counts it directly. **It used to count edges of `ctrl_active` and that was
-    // wrong**: `ctrl_active` is a control transfer the relay holds a SETUP for and
-    // it stays high from the first SETUP until the port is reset, so the count
-    // read 2 on a board where the PC had sent dozens. The pulse exists because of
-    // that reading.
+    // `setup_seen` is one cycle per SETUP the relay took and forwarded, so
+    // this counts it directly. **It used to count edges of `ctrl_active`
+    // and that was wrong**: `ctrl_active` is a control transfer the relay
+    // holds a SETUP for and it stays high from the first SETUP until the
+    // port is reset, so the count read 2 on a board where the PC had sent
+    // dozens. The pulse exists because of that reading.
     //
-    // Five bits and it **saturates** rather than wrapping, because a counter that
-    // wraps reads the same as one that never ran.
+    // Five bits and it **saturates** rather than wrapping, because a
+    // counter that wraps reads the same as one that never ran.
     reg [4:0] setups = 5'd0;
     always @(posedge clk) begin
         if (setup_seen && setups != 5'd31) setups <= setups + 5'd1;

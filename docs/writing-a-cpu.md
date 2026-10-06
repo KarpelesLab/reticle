@@ -376,11 +376,11 @@ Suppose you generate the test programs from the core's decoder, or —
 more insidiously — write the assembler by reading the decoder's `case`
 statement while you write it. Now suppose the core has the wrong opcode
 byte for `LDA $nnnn,X`. The assembler emits that wrong byte; the core
-decodes that wrong byte as `LDA $nnnn,X`; the test passes. The core is broken for
-every program that was not assembled by this assembler, which is every
-program that exists. Nothing in the test suite can see it, because the
-suite contains exactly one statement of the encoding and the core agrees
-with it by construction.
+decodes that wrong byte as `LDA $nnnn,X`; the test passes. The core is
+broken for every program that was not assembled by this assembler, which
+is every program that exists. Nothing in the test suite can see it,
+because the suite contains exactly one statement of the encoding and the
+core agrees with it by construction.
 
 The fix is to have **two independent statements of the same table** and
 compare them. `TABLE` in `tests/mos6502_asm/mod.rs` is the reference's,

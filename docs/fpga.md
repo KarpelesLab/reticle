@@ -167,12 +167,13 @@ inlined) is `FlowError::Hierarchy`, with the reasons as diagnostics.
 
 ## Block RAM contents
 
-A memory with initial contents in the IR (`Memory::init`) keeps them when it becomes block RAM: every block
-gets its initialisation parameters, holding the width slice and the
-depth slice of the contents that block stores, and every copy of a
-memory duplicated per read port gets the same. Where each bit goes is
-data in the device file, on each `mode` line of a `bram` block and in
-its `init_params` line, so nothing about a primitive is written in Rust:
+A memory with initial contents in the IR (`Memory::init`) keeps them
+when it becomes block RAM: every block gets its initialisation
+parameters, holding the width slice and the depth slice of the
+contents that block stores, and every copy of a memory duplicated per
+read port gets the same. Where each bit goes is data in the device
+file, on each `mode` line of a `bram` block and in its `init_params`
+line, so nothing about a primitive is written in Rust:
 
 ```text
 bram SB_RAM40_4K

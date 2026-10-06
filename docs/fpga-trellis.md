@@ -893,8 +893,8 @@ the round below it named, and it is the same shape of experiment.
 
 ## A distributed RAM is on the fabric, and it is three slices held together by one bit
 
-`ip/memory/fifo_sync` could not be placed on an ECP5 at any depth. The message was
-exact and it was not about a budget:
+`ip/memory/fifo_sync` could not be placed on an ECP5 at any depth. The
+message was exact and it was not about a budget:
 
 ```
 error: the design needs 2 `lutram` site(s) and the part has 0
@@ -908,8 +908,9 @@ because a `.dev` `count` is a resource budget and `fpga::place` counts
 built by `src/fpga/trellis`, whose bels were `lut`, `ff` and `io` and nothing
 else. There was no distributed-RAM site on the die for the placer to find.
 
-There is one now, one per logic tile, and `ip/memory/fifo_sync` places, routes and
-comes out as a bitstream every bit of which decodes, at depths 16, 32 and 64.
+There is one now, one per logic tile, and `ip/memory/fifo_sync` places,
+routes and comes out as a bitstream every bit of which decodes, at depths
+16, 32 and 64.
 
 ### It was expected to be the weak case, and it is the strong one
 
@@ -1074,9 +1075,9 @@ initial contents.
 
 ### What places now, and what it costs
 
-`ip/memory/fifo_sync` with `WIDTH = 8`, through `synthesize_for`, `place`, `route`
-and `stream` on an LFE5U-12F in caBGA-256, with all of its ports on top-edge
-balls:
+`ip/memory/fifo_sync` with `WIDTH = 8`, through `synthesize_for`, `place`,
+`route` and `stream` on an LFE5U-12F in caBGA-256, with all of its ports on
+top-edge balls:
 
 | Depth | `TRELLIS_DPR16X4` | Logic tiles they take | Bits they cost |
 |---|---|---|---|
@@ -1085,12 +1086,13 @@ balls:
 | 64 | 8 | 8 | 776 |
 
 At each depth: every signal routed, every sink walked back to its driver,
-every flip-flop's clock **and every write clock** on a global network, no bit
-an arc needs clear set by something else, **every set bit of the image decoding back through the
-database into a feature it names with nothing unexplained**, and the arcs
-those bits select exactly the arcs the router chose. The "every bit decodes"
-check has found five real defects in this backend and it is not weakened
-anywhere here; the distributed RAM adds no unexplained bit.
+every flip-flop's clock **and every write clock** on a global network, no
+bit an arc needs clear set by something else, **every set bit of the image
+decoding back through the database into a feature it names with nothing
+unexplained**, and the arcs those bits select exactly the arcs the router
+chose. The "every bit decodes" check has found five real defects in this
+backend and it is not weakened anywhere here; the distributed RAM adds no
+unexplained bit.
 
 `a_distributed_ram_places_routes_and_every_bit_of_it_decodes` is that test,
 and it also asserts the exclusion from both sides: no lookup table shares a
@@ -1590,10 +1592,11 @@ drive that bit
 purpose. **That refusal lasted one round.** The round after it built the
 constant instead — a lookup table with `INIT` all zeros and every input tied
 high, which is what Lattice's own bitstreams for this board turned out to
-contain — and `tests/fpga_trellis.rs::a_register_bit_nothing_drives_is_built_from_a_constant`
+contain — and
+`tests/fpga_trellis.rs::a_register_bit_nothing_drives_is_built_from_a_constant`
 is what pins that. See "The constant is built now, and the vendor's own
-bitstreams said how"; what is still refused is a data pin with nothing at all
-on it.
+bitstreams said how"; what is still refused is a data pin with nothing at
+all on it.
 
 **A data pin the netlist ties *high* is allowed through, and that is not
 laziness.** The untied wire is a one, so the flop loads the one the design asked
@@ -1614,10 +1617,10 @@ written down in the code rather than left to be rediscovered.
 
 Nothing else. The rest of `usb_ctrl_ep`, the whole of `usb_ulpi_link`,
 `TURNAROUND` at its original `9`, `SLEWRATE`, the register sequence and the
-board's `SwapDP/DM` are all as they were, and with those two lines the device
-enumerates. That was checked the only way it can be: by building the **original**
-`usb_ulpi_link.v` and the **original** `usb_ctrl_ep.v` out of git with nothing
-but the width changed. It enumerated.
+board's `SwapDP/DM` are all as they were, and with those two lines the
+device enumerates. That was checked the only way it can be: by building the
+**original** `usb_ulpi_link.v` and the **original** `usb_ctrl_ep.v` out of
+git with nothing but the width changed. It enumerated.
 
 Three other changes were made while the fault was still hidden — `line_idle` not
 testing LineState, the turnaround counting consecutive quiet cycles, and a bus
@@ -1664,15 +1667,16 @@ infers a clock enable and the pad never drove; `q <= q | e` worked.**
 `usb_ulpi_device.v`'s header had already said so about its LED latches, and this
 is the second time it has been paid for.
 
-**2. A ULPI trace.** Ninety-six entries of `{gap, usb_reset, dir, nxt, stp,
-data}` in one shift register, triggered on the first packet whose PID and whose
-*second byte* match — the second byte matters because a root hub repeats every
-downstream packet to every enabled port, so this device sees the host's whole
-conversation with all twenty devices on that bus and a token's PID alone does not
-say whose it is. `00h` there is address zero, endpoint zero, which is this device
-and nothing else. Two filters make a whole control transfer fit in ninety-six
-entries: a receive command whose only news is LineState is dropped, and so is an
-empty turnaround cycle.
+**2. A ULPI trace.** Ninety-six entries of
+`{gap, usb_reset, dir, nxt, stp, data}` in one shift register, triggered on
+the first packet whose PID and whose *second byte* match — the second byte
+matters because a root hub repeats every downstream packet to every enabled
+port, so this device sees the host's whole conversation with all twenty
+devices on that bus and a token's PID alone does not say whose it is. `00h`
+there is address zero, endpoint zero, which is this device and nothing else.
+Two filters make a whole control transfer fit in ninety-six entries: a
+receive command whose only news is LineState is dropped, and so is an empty
+turnaround cycle.
 
 Its own bugs are the lesson. The trace printed its entries rotated by four
 because a dump that began before the buffer was full rotated partway through it;
@@ -1681,13 +1685,13 @@ byte, which a stub transceiver handing bytes over back to back could not
 catch — the testbench's stub now spaces them forty clocks apart, as a
 full-speed line does.
 
-**3. A debug port on the endpoint.** When the trace had shown the NAK and the
-bus was exonerated, `{stage, expect, toggle, await_ack, pending}` was brought out
-of `usb_ctrl_ep` in a scratch copy of the IP and latched at the trigger. It read
-`A4`: `toggle = 1`, so the SETUP had been processed; `expect = none`, as it
-should be; `pending = 0`, as it should be; and `stage = 5`, which the RTL cannot
-produce. That is the whole answer, and nothing short of reading the register was
-going to give it.
+**3. A debug port on the endpoint.** When the trace had shown the NAK and
+the bus was exonerated, `{stage, expect, toggle, await_ack, pending}` was
+brought out of `usb_ctrl_ep` in a scratch copy of the IP and latched at the
+trigger. It read `A4`: `toggle = 1`, so the SETUP had been processed;
+`expect = none`, as it should be; `pending = 0`, as it should be; and
+`stage = 5`, which the RTL cannot produce. That is the whole answer, and
+nothing short of reading the register was going to give it.
 
 ### What the trace settled on the way, and what it corrected
 
@@ -1703,17 +1707,18 @@ Every one of these is one line of a decoded trace taken on the part.
 | What does the device answer the IN with? | **`TX CMD pid=A (NAK)`**, six clocks after the token, for ever |
 | Why? | `stage` is 5 |
 
-**That corrects the previous account of this file in its central claim.** "The
-host understands none of this link's transmissions" was wrong, and so was the
-measurement it rested on: a build whose every answer is a STALL produced the same
-`dmesg` as a build that answers nothing because **a STALL in answer to a SETUP's
-data packet is not the STALL a host reports `-32` for** — that one belongs to the
-data stage — and because, as it turned out, `stage` being 5 meant neither build
-ever had the endpoint state its own experiment assumed. Every transmit-side
-experiment of the previous rounds, `SLEWRATE` and the `TURNAROUND` sweep and the
-`stp` timing included, was run against an endpoint that was going to answer NAK
-whatever the wire did. That is the shape of the mistake: a sound instrument
-pointed at a device whose state nobody had read.
+**That corrects the previous account of this file in its central claim.**
+"The host understands none of this link's transmissions" was wrong, and so
+was the measurement it rested on: a build whose every answer is a STALL
+produced the same `dmesg` as a build that answers nothing because **a STALL
+in answer to a SETUP's data packet is not the STALL a host reports `-32`
+for** — that one belongs to the data stage — and because, as it turned out,
+`stage` being 5 meant neither build ever had the endpoint state its own
+experiment assumed. Every transmit-side experiment of the previous rounds,
+`SLEWRATE` and the `TURNAROUND` sweep and the `stp` timing included, was run
+against an endpoint that was going to answer NAK whatever the wire did. That
+is the shape of the mistake: a sound instrument pointed at a device whose
+state nobody had read.
 
 ### Two things this part does that ULPI forbids, measured and not fixed
 
@@ -1721,14 +1726,15 @@ Both are real, both are in the traces, and **neither is why it failed** — whic
 is exactly why they are recorded here as facts about the part rather than as
 changes to the block.
 
-1. **Receive commands report LineState late.** Between a host's SETUP token and
-   its DATA0 packet, with the pair idle at J the whole way, the transceiver sent
-   seven single receive commands three to five clocks apart reporting J, K, J, K,
-   J, K and finally **K**. Those are the bit transitions of the packet that had
-   already finished, arriving after it: one receive command per transition, a bus
-   that carries one at a time, and a backlog that outlives the packet. ULPI 1.1
-   §3.8.1.3 says a queued receive command "must always convey the current RX CMD
-   values, not a previous or old value". This part does not.
+1. **Receive commands report LineState late.** Between a host's SETUP token
+   and its DATA0 packet, with the pair idle at J the whole way, the
+   transceiver sent seven single receive commands three to five clocks apart
+   reporting J, K, J, K, J, K and finally **K**. Those are the bit
+   transitions of the packet that had already finished, arriving after it:
+   one receive command per transition, a bus that carries one at a time, and
+   a backlog that outlives the packet. ULPI 1.1 §3.8.1.3 says a queued
+   receive command "must always convey the current RX CMD values, not a
+   previous or old value". This part does not.
 
    It is worth knowing because two things in this block read LineState: the
    turnaround `line_idle` waits for, and the SE0 count that makes a bus reset.
@@ -1753,15 +1759,16 @@ of 26 916 set bits decodes back through Project Trellis' database with nothing
 unexplained, loaded into a real ECP5 over a real JTAG transport this crate also
 wrote, is a USB 2.0 full-speed device that a Linux host enumerates.**
 
-It settles that the flow's structural checks are not enough on their own, and
-says exactly where the gap was: every one of them passed on the broken
-bitstream. 100% of the bits decoded, every sink walked back to its driver, every
-clock was on a global network, and the device did not work, because none of those
-checks has an opinion about a flip-flop whose data input nothing drives. That
-check exists now.
+It settles that the flow's structural checks are not enough on their own,
+and says exactly where the gap was: every one of them passed on the broken
+bitstream. 100% of the bits decoded, every sink walked back to its driver,
+every clock was on a global network, and the device did not work, because
+none of those checks has an opinion about a flip-flop whose data input
+nothing drives. That check exists now.
 
-It settles nothing about the rest of `usb_ctrl_ep`'s reach: one control endpoint,
-eight-byte packets, two descriptors, no interfaces with endpoints on them.
+It settles nothing about the rest of `usb_ctrl_ep`'s reach: one control
+endpoint, eight-byte packets, two descriptors, no interfaces with endpoints
+on them.
 
 ## An edge rate on every ULPI pin, and it changed nothing
 
@@ -3861,20 +3868,20 @@ design walks through six of them**, which is why this stopped being
 theoretical at the same moment the clock network arrived.
 
 **The same simplification applies to a `.config_enum`'s values, and that
-half is not covered by an automatic check.** The flip-flop is where it
-shows up: `CLK0.CLKMUX = CLK`, `LSR0.LSRMUX = LSR`, `SLICEA.GSR = ENABLED`
-and `SLICEA.REG0.LSRMODE = LSR` are each "one bit, wanted clear".
+half is not covered by an automatic check.** The flip-flop is where it shows
+up: `CLK0.CLKMUX = CLK`, `LSR0.LSRMUX = LSR`, `SLICEA.GSR = ENABLED` and
+`SLICEA.REG0.LSRMODE = LSR` are each "one bit, wanted clear".
 `dropped_clear_bits` walks pips and does not see them, and neither does
 `Decoded::unexplained`, because a stolen bit there is a bit some *other*
 value of the same field wants — set `F54B10` and `CLK0.CLKMUX` reads `INV`
-rather than leaving a bit unaccounted for. What covers it instead is
-weaker and worth naming as weaker: those fields have exactly one writer
+rather than leaving a bit unaccounted for. What covers it instead is weaker
+and worth naming as weaker: those fields have exactly one writer
 (`configure_registers`), nothing else in this backend touches a `PLC2`'s
-control muxes, and `a_flip_flops_settings_are_the_ones_lattices_own_packer_writes`
-asserts that the decoding of the clocked design reads back the values it
-meant. A check as exact as the one for arcs would need the passes to report
-what they wrote so the decoding could be compared with it; that has not been
-built.
+control muxes, and
+`a_flip_flops_settings_are_the_ones_lattices_own_packer_writes` asserts that
+the decoding of the clocked design reads back the values it meant. A check
+as exact as the one for arcs would need the passes to report what they wrote
+so the decoding could be compared with it; that has not been built.
 
 ### What it comes to
 
@@ -3896,7 +3903,8 @@ built.
 | `gb` sites | 56 |
 | `io` sites | 120 |
 
-Those are `tests/fpga_trellis.rs::the_database_describes_one_part_of_the_ecp5_family`'s
+Those are
+`tests/fpga_trellis.rs::the_database_describes_one_part_of_the_ecp5_family`'s
 assertions, so the table cannot drift from the database.
 
 **The whole die fits, and that is the surprise.** `super::xray` needs a
@@ -4805,8 +4813,8 @@ are seven such tiles on this die: one for each of banks 0, 1, 2, 3, 6 and
 7, and `BANKREF8`, which is also where the part's sysconfig settings live.
 `BANKREF1` owns all six LEDs and is the single tile at grid **(69, 0)**;
 bank 1's top-edge pads have their tiles at columns 33 to 68, so it is
-between one and thirty-six columns east of the pad it is configuring. Its `3V3` setting is
-one bit, `F18B0` within the tile.
+between one and thirty-six columns east of the pad it is configuring. Its
+`3V3` setting is one bit, `F18B0` within the tile.
 
 Three things had to be right and each has a source:
 
@@ -4903,12 +4911,12 @@ The two things it does not cover:
   Project Trellis' fuzzing rather than from Lattice. Those are as
   trustworthy as `ecppack` is. The settings that could be checked against a
   real `ecppack` output were: the base type on all four edges, hysteresis,
-  the pull mode, the slew rate, and the bank rail on seven banks. **No arc has been checked
-  against an `ecppack` output**, because the reference bitstreams route
-  different designs and there is nothing to compare an arc against. What
-  was checked instead is that every bit of this flow's own bitstream decodes
-  back, through the same database, to exactly the arcs the router chose —
-  see the top of this file.
+  the pull mode, the slew rate, and the bank rail on seven banks. **No arc
+  has been checked against an `ecppack` output**, because the reference
+  bitstreams route different designs and there is nothing to compare an arc
+  against. What was checked instead is that every bit of this flow's own
+  bitstream decodes back, through the same database, to exactly the arcs the
+  router chose — see the top of this file.
 
 ### Where the pin numbers came from
 

@@ -448,9 +448,9 @@ stated rule.
 
 **MEDIUM**. The five error bits are levels a device sets and clears, not
 events. `testdata/fpga/cynthion/usb_cdc_uart.v` leaves them clear and
-deliberately does **not** wire `ip/bus/uart`'s `rx_error` to `bFraming`: that output
-is one cycle wide, and turning a pulse into a level needs a rule about when the
-level goes away that this design has no reason to have.
+deliberately does **not** wire `ip/bus/uart`'s `rx_error` to `bFraming`:
+that output is one cycle wide, and turning a pulse into a level needs a rule
+about when the level goes away that this design has no reason to have.
 
 **MEDIUM**. What is *not* optional is the endpoint's existence. Linux's
 `cdc_acm` takes `endpoint[0]` of the communications interface and requires
@@ -471,10 +471,10 @@ earlier round said about `clocal`, which is not the observation it looks like.
 
 A Great Scott Gadgets Cynthion r1.4 on its AUX port, holding
 `testdata/fpga/cynthion/usb_cdc_uart.v` — this block behind
-`ip/usb/usb_device_ulpi`'s link layer, with its bytes bridged to `ip/bus/uart` and
-that UART's transmit line looped into its own receiver. Linux
-6.18.41-gentoo, `xhci_hcd`, the device on a full-speed downstream port of a
-hub. Everything below is quoted, not paraphrased.
+`ip/usb/usb_device_ulpi`'s link layer, with its bytes bridged to
+`ip/bus/uart` and that UART's transmit line looped into its own receiver.
+Linux 6.18.41-gentoo, `xhci_hcd`, the device on a full-speed downstream
+port of a hub. Everything below is quoted, not paraphrased.
 
 **Everything in this section was taken again** after the packet size went from
 eight bytes to 64 and the notification endpoint started sending: the kernel log,
@@ -614,9 +614,9 @@ descriptors — the **standard** GET_STATUS of USB 2.0 §9.4.5 — and on this d
 it could not: endpoint 0 did not implement that request, so it was stalled, and
 `lsusb` wrote `cannot read device status` to its standard error instead.
 
-The round that built [`ip/usb/usb_proxy`](../usb_proxy/README.md) moved GET_STATUS
-into `usb_ctrl_ep`, where a standard request belongs, and **re-ran this block's
-own board test to find out what that cost**:
+The round that built [`ip/usb/usb_proxy`](../usb_proxy/README.md) moved
+GET_STATUS into `usb_ctrl_ep`, where a standard request belongs, and
+**re-ran this block's own board test to find out what that cost**:
 
 ```console
 $ cargo test --release --features program --test usb_cdc_acm -- --ignored --nocapture
@@ -876,11 +876,11 @@ to hang up a transfer half way through.
 ### What it moves, in bytes per second
 
 Measured, not calculated, and **not measured on this block** — which is the
-first thing to say about it.
-`testdata/fpga/cynthion/usb_cdc_uart.v` carries one byte at a time through its
-UART, for the reason §7 gives about `ip/memory/fifo_sync`, so it sends one-byte packets
-whatever `wMaxPacketSize` says and a wider packet does nothing for it. The
-design that measures the *endpoint* rather than the bridge above it is
+first thing to say about it. `testdata/fpga/cynthion/usb_cdc_uart.v` carries
+one byte at a time through its UART, for the reason §7 gives about
+`ip/memory/fifo_sync`, so it sends one-byte packets whatever
+`wMaxPacketSize` says and a wider packet does nothing for it. The design
+that measures the *endpoint* rather than the bridge above it is
 `testdata/fpga/cynthion/usb_ulpi_device.v`, the bulk loopback, and
 `tests/usb_loopback.rs` times 256 write-then-read round trips through it:
 
@@ -977,8 +977,8 @@ lines that fix it.
   cannot express: §5.6.3 allows 1023 bytes and the length field is seven bits.
 - **No FIFO.** The endpoint holds one packet each way and NAKs while it is
   full, which is what bulk means. A bridge to something as slow as a UART
-  wants depth on its receive side, and `ip/memory/fifo_sync` is the block for it —
-  see §7.
+  wants depth on its receive side, and `ip/memory/fifo_sync` is the block
+  for it — see §7.
 - **One serial port.** Two would need two of everything and an interface
   association descriptor above them.
 - **No suspend, no remote wake-up, no SOF tracking, no high speed.** Those
@@ -1046,8 +1046,8 @@ that cannot be asked for have no reader, so synthesis removes them.
 
 ### `ip/memory/fifo_sync` could not be placed on an ECP5, and now can
 
-Found while bridging this block to `ip/bus/uart` on the Cynthion, and it was a gap
-in the FPGA backend rather than in either block:
+Found while bridging this block to `ip/bus/uart` on the Cynthion, and it
+was a gap in the FPGA backend rather than in either block:
 
 ```
 error: the design needs 2 `lutram` site(s) and the part has 0

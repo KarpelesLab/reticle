@@ -28,13 +28,14 @@
 //!    kernel looked at this device's descriptors, asked it for its hub
 //!    descriptor, and decided it was a hub with one port. That is the thing
 //!    simulation cannot reach.
-//! 2. **The descriptors are the ones the sources describe**, read off endpoint
-//!    0 over usbfs: the device descriptor's class triple, the whole
-//!    twenty-five byte configuration descriptor, the nine bytes of the hub
-//!    descriptor of USB 2.0 §11.23.2.1, and the two bytes of the **standard**
-//!    GET_STATUS that `ip/usb/usb_hub/README.md` §7 is about — the request Linux's
-//!    `hub_configure` treats a failure of as fatal, which this class claimed on
-//!    the hook for one round and which endpoint 0 implements now.
+//! 2. **The descriptors are the ones the sources describe**, read off
+//!    endpoint 0 over usbfs: the device descriptor's class triple, the
+//!    whole twenty-five byte configuration descriptor, the nine bytes of
+//!    the hub descriptor of USB 2.0 §11.23.2.1, and the two bytes of the
+//!    **standard** GET_STATUS that `ip/usb/usb_hub/README.md` §7 is about —
+//!    the request Linux's `hub_configure` treats a failure of as fatal,
+//!    which this class claimed on the hook for one round and which endpoint
+//!    0 implements now.
 //! 3. **The port reports a device, loses it and reports it again.** This is
 //!    the on-the-part half of the status-change assertion, done with the three
 //!    class requests a host uses: GetPortStatus reads a connection,
@@ -112,9 +113,9 @@ const TIMEOUT: Duration = Duration::from_millis(500);
 const HUB_IFACE: u8 = 0;
 const STATUS_EP: u8 = 0x81;
 const PORT: u16 = 1;
-/// `wMaxPacketSize` and `bInterval` of the status-change endpoint. Two bytes
-/// for a bitmap that is one — `ip/usb/usb_hub/README.md` §3 says why two and not
-/// one — and twelve frames, which is that block's choice.
+/// `wMaxPacketSize` and `bInterval` of the status-change endpoint. Two
+/// bytes for a bitmap that is one — `ip/usb/usb_hub/README.md` §3 says why
+/// two and not one — and twelve frames, which is that block's choice.
 const STATUS_MAXPKT: u8 = 2;
 const STATUS_INTERVAL: u8 = 12;
 
@@ -127,8 +128,8 @@ const PORT_STAT_CONNECTION: u16 = 1 << 0;
 const PORT_STAT_POWER: u16 = 1 << 8;
 const PORT_CHG_CONNECTION: u16 = 1 << 0;
 
-/// The configuration descriptor `ip/usb/usb_hub` describes, written forwards from
-/// USB 2.0 §11.23.1 — the arithmetic and not the answers, as
+/// The configuration descriptor `ip/usb/usb_hub` describes, written
+/// forwards from USB 2.0 §11.23.1 — the arithmetic and not the answers, as
 /// `tests/ip_library.rs` writes the same bytes from the same section and as
 /// `ip/usb/usb_hub/README.md` §3 tabulates them field by field.
 ///
@@ -263,9 +264,10 @@ fn a_usb_hub_this_compiler_built_is_bound_by_the_kernels_own_hub_driver() {
             .unwrap_or_default()
     };
 
-    // `ip/usb/usb_cdc_acm` and `ip/usb/usb_hub` share this vendor and product pair,
-    // and only one of them can be loaded at a time. Saying which is loaded is
-    // more useful than an assertion about bytes a serial port would also fail.
+    // `ip/usb/usb_cdc_acm` and `ip/usb/usb_hub` share this vendor and
+    // product pair, and only one of them can be loaded at a time. Saying
+    // which is loaded is more useful than an assertion about bytes a serial
+    // port would also fail.
     let class = field("bDeviceClass");
     if class != "09" {
         println!(
@@ -374,13 +376,14 @@ fn a_usb_hub_this_compiler_built_is_bound_by_the_kernels_own_hub_driver() {
     // GetHubDescriptor, USB 2.0 §11.24.2.5, asking for **fifteen** bytes and
     // getting nine.
     //
-    // Fifteen is longer than nine and that is the whole of why it is fifteen:
-    // Linux asks for the whole of its own `struct usb_hub_descriptor`, which is
-    // sized for its maximum port count, and a one-port hub has nine bytes. What
-    // makes the two work together is `usb_ctrl_ep` capping a class data stage at
-    // `min(wLength, class_len)` and a short packet ending a control read, which
-    // is the one place the class hook's arithmetic is load-bearing for this
-    // block.
+    // Fifteen is longer than nine and that is the whole of why it is
+    // fifteen: Linux asks for the whole of its own
+    // `struct usb_hub_descriptor`, which is sized for its maximum port
+    // count, and a one-port hub has nine bytes. What makes the two work
+    // together is `usb_ctrl_ep` capping a class data stage at
+    // `min(wLength, class_len)` and a short packet ending a control read,
+    // which is the one place the class hook's arithmetic is load-bearing
+    // for this block.
     let mut hub_desc = [0u8; 15];
     let n = handle
         .control_read(0xA0, 0x06, 0x2900, 0, &mut hub_desc, TIMEOUT)
@@ -402,16 +405,17 @@ fn a_usb_hub_this_compiler_built_is_bound_by_the_kernels_own_hub_driver() {
     assert_eq!(n, 4, "wHubStatus and wHubChange");
     assert_eq!(hub_status, [0, 0, 0, 0], "no local supply, no over-current");
 
-    // The **standard** GET_STATUS of USB 2.0 §9.4.5, device recipient. Linux's
-    // `hub_configure` sends it during hub probe and takes its failure path if it
-    // does not complete, so a stall here is a hub that does not bind.
+    // The **standard** GET_STATUS of USB 2.0 §9.4.5, device recipient.
+    // Linux's `hub_configure` sends it during hub probe and takes its
+    // failure path if it does not complete, so a stall here is a hub that
+    // does not bind.
     //
     // `usb_hub_req` claimed it on the class hook for one round because
-    // `usb_ctrl_ep` did not implement it; `ip/usb/usb_hub/README.md` §7 has that
-    // account and the fix, which has been made. **This assertion does not change
-    // either way**, and that is the point of it: the two bytes are the same
-    // whichever layer produces them, so what it checks is that moving the
-    // request did not lose it.
+    // `usb_ctrl_ep` did not implement it; `ip/usb/usb_hub/README.md` §7 has
+    // that account and the fix, which has been made. **This assertion does
+    // not change either way**, and that is the point of it: the two bytes
+    // are the same whichever layer produces them, so what it checks is that
+    // moving the request did not lose it.
     let mut dev_status = [0xFFu8; 2];
     let n = handle
         .control_read(0x80, 0x00, 0, 0, &mut dev_status, TIMEOUT)
@@ -470,15 +474,16 @@ fn a_usb_hub_this_compiler_built_is_bound_by_the_kernels_own_hub_driver() {
 
     // THIS TEST IS NOT THE ONLY THING OPERATING THIS PORT
     //
-    // The kernel's own hub driver is too, and it **reacts** to what the three
-    // steps below do: a connection change is what it is watching for, and its
-    // answer to one it cannot enumerate through is to power-cycle the port —
-    // `usb 7-5-port1: attempt power cycle` in the log. So a reading taken while
-    // it is still working through that sequence can be its doing rather than
-    // this test's, which is exactly what happened the first time this ran
-    // against a freshly loaded bitstream: `a powered-off port reports nothing at
-    // all` failed with `0x0101`, because the driver had put the power back
-    // between the ClearPortFeature and the GetPortStatus.
+    // The kernel's own hub driver is too, and it **reacts** to what the
+    // three steps below do: a connection change is what it is watching for,
+    // and its answer to one it cannot enumerate through is to power-cycle
+    // the port — `usb 7-5-port1: attempt power cycle` in the log. So a
+    // reading taken while it is still working through that sequence can be
+    // its doing rather than this test's, which is exactly what happened the
+    // first time this ran against a freshly loaded bitstream:
+    // `a powered-off port reports nothing at all` failed with `0x0101`,
+    // because the driver had put the power back between the
+    // ClearPortFeature and the GetPortStatus.
     //
     // **So the three steps are attempted as a whole and retried**, and if the
     // driver never leaves a clean window the half **skips** with a reason

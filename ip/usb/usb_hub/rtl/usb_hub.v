@@ -79,16 +79,17 @@
 //
 //     wire owed = configured & (change_map != 8'h00);
 //
-//   The bitmap is a function of `usb_hub_req`'s change bits, those bits are
-//   **sticky** — set when something changes and cleared only by the host's own
-//   ClearPortFeature(C_PORT_*) — and this arms a packet whenever any of them
-//   is set and the endpoint has room. Nothing here records having reported
-//   anything, because a record of having reported is exactly what went wrong
-//   next door: `ip/usb/usb_cdc_acm` had a latch meaning "the host has been told",
-//   it was set once per configuration, and a host that was not listening at
-//   that moment — or a driver bound a second time without a bus reset — never
-//   heard again. §4 of that block's README.md has the measurement that
-//   condemned it. A design with no such latch cannot have that defect.
+// The bitmap is a function of `usb_hub_req`'s change bits, those bits are
+// **sticky** — set when something changes and cleared only by the host's
+// own ClearPortFeature(C_PORT_*) — and this arms a packet whenever any of
+// them is set and the endpoint has room. Nothing here records having
+// reported anything, because a record of having reported is exactly what
+// went wrong next door: `ip/usb/usb_cdc_acm` had a latch meaning "the host
+// has been told", it was set once per configuration, and a host that was
+// not listening at that moment — or a driver bound a second time without a
+// bus reset — never heard again. §4 of that block's README.md has the
+// measurement that condemned it. A design with no such latch cannot have
+// that defect.
 //
 //   `usb_bulk_ep`'s IN side is what holds the packet, and it is driven with
 //   `in_valid`, `in_commit` and `in_ready` all in one cycle: one byte handed
@@ -114,12 +115,12 @@
 // What it does not do
 //   **One port**, and `usb_hub_req`'s header says what a second would cost.
 //
-//   **No packet repeating and no frame forwarding**, which is `ip/usb/usb_proxy`'s
-//   and is a transaction proxy rather than a repeater — README.md §2 is why it
-//   cannot be one. No downstream SE0 of this block's own either: the port reset
-//   is the `port_reset` / `port_reset_done` handshake and whatever answers it
-//   does the driving. No suspend or resume signalling on the port, no
-//   transaction translator and no high speed.
+// **No packet repeating and no frame forwarding**, which is
+// `ip/usb/usb_proxy`'s and is a transaction proxy rather than a repeater —
+// README.md §2 is why it cannot be one. No downstream SE0 of this block's
+// own either: the port reset is the `port_reset` / `port_reset_done`
+// handshake and whatever answers it does the driving. No suspend or resume
+// signalling on the port, no transaction translator and no high speed.
 //
 //   No strings, so the hub has no product name in `lsusb`, for the same
 //   reason `ip/usb/usb_cdc_acm` has none: a string descriptor is a device's
@@ -186,17 +187,17 @@ module usb_hub #(
     // WHAT IS ON THE DOWNSTREAM PORT
     //
     // Straight into `usb_hub_req`, whose port comment says what each means.
-    // On the design this block was written for they are `ip/usb/usb_host_ulpi`'s
-    // `attached` and `low_speed`, which is a **second USB controller's**
-    // debounced sight of its own bus.
+    // On the design this block was written for they are
+    // `ip/usb/usb_host_ulpi`'s `attached` and `low_speed`, which is a
+    // **second USB controller's** debounced sight of its own bus.
     input  wire       port_attached,
     input  wire       port_low_speed,
 
     // WHAT THE HOST HAS MADE OF THAT PORT
     //
-    // Brought out for whatever drives the downstream half: a design's LEDs and
-    // console, or `ip/usb/usb_proxy`, which is what makes the port real. All four
-    // are levels.
+    // Brought out for whatever drives the downstream half: a design's LEDs
+    // and console, or `ip/usb/usb_proxy`, which is what makes the port
+    // real. All four are levels.
     output wire       port_power,
     output wire       port_enabled,
     output wire       port_suspended,

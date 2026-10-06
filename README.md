@@ -149,8 +149,9 @@ feature, off by default, because it is the one feature with a dependency
 `cargo add reticle` still resolves to nothing.
 
 It was proved first on a Basys 3, loaded with Project X-Ray's own
-Vivado-built harness bitstream, which asserts `DONE`. [`docs/programming.md`](docs/programming.md) says exactly
-what that does and does not establish.
+Vivado-built harness bitstream, which asserts `DONE`.
+[`docs/programming.md`](docs/programming.md) says exactly what that
+does and does not establish.
 
 There is a second transport, for boards with no FTDI part on them: a
 Great Scott Gadgets **Cynthion** reaches its Lattice ECP5 through a debug
@@ -210,8 +211,8 @@ a board, to a bitstream this compiler wrote and a terminal a person
 typed at:
 
 - [`examples/soc`](examples/soc) — a RISC-V system on chip around
-  [`ip/cpu/rv32i`](ip/cpu/rv32i) and [`ip/bus/uart`](ip/bus/uart) that prints a line over
-  a serial port.
+  [`ip/cpu/rv32i`](ip/cpu/rv32i) and [`ip/bus/uart`](ip/bus/uart) that
+  prints a line over a serial port.
 - [`examples/mos6502_computer`](examples/mos6502_computer) — the same
   system around [`ip/cpu/mos6502`](ip/cpu/mos6502): one bus, RAM at the bottom
   for zero page and the stack, ROM at the top for the vectors.
@@ -226,21 +227,21 @@ typed at:
   pin.
 - [`examples/apple2`](examples/apple2) — an Apple II-compatible machine
   with 48 KiB, the interleaved text page at `$0400` and video through
-  [`ip/video/dvi_tx`](ip/video/dvi_tx) on an ECP5 or [`ip/video/vga_out`](ip/video/vga_out) on a
-  Digilent Basys 3, running a monitor ROM and a character generator
-  written for the example. Its tests decode the 40 x 24 character screen
-  back out of a whole frame of video — once off the DVI colour bus and
-  once off the VGA pins.
+  [`ip/video/dvi_tx`](ip/video/dvi_tx) on an ECP5 or
+  [`ip/video/vga_out`](ip/video/vga_out) on a Digilent Basys 3, running
+  a monitor ROM and a character generator written for the example. Its
+  tests decode the 40 x 24 character screen back out of a whole frame of
+  video — once off the DVI colour bus and once off the VGA pins.
 - [`examples/nes`](examples/nes) — an NES-compatible console around
-  [`ip/cpu/mos6502`](ip/cpu/mos6502) with `DECIMAL_MODE = 0`, which is what the
-  processor in an NES is, plus [`ip/video/ppu2c02`](ip/video/ppu2c02) and
-  [`ip/video/dvi_tx`](ip/video/dvi_tx) on an ECP5 or [`ip/video/vga_out`](ip/video/vga_out) on a
-  Digilent Basys 3. It runs a demo written for the example and contains
-  no part of any commercial cartridge; the test compares every one of a
-  frame's 61,440 pixels against a frame buffer computed from the
-  documentation, and a second one reads a whole 640 x 480 frame back off
-  the VGA pins with the palette truncated to the board's four bits a
-  channel.
+  [`ip/cpu/mos6502`](ip/cpu/mos6502) with `DECIMAL_MODE = 0`, which is what
+  the processor in an NES is, plus [`ip/video/ppu2c02`](ip/video/ppu2c02)
+  and [`ip/video/dvi_tx`](ip/video/dvi_tx) on an ECP5 or
+  [`ip/video/vga_out`](ip/video/vga_out) on a Digilent Basys 3. It runs a
+  demo written for the example and contains no part of any commercial
+  cartridge; the test compares every one of a frame's 61,440 pixels against
+  a frame buffer computed from the documentation, and a second one reads a
+  whole 640 x 480 frame back off the VGA pins with the palette truncated to
+  the board's four bits a channel.
 
 ### Somebody else's VHDL
 

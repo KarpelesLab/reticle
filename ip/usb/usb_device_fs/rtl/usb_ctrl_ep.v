@@ -1487,15 +1487,16 @@ module usb_bulk_ep #(
     // endpoint number nobody has gets.
     //
     // Nothing is generated away by hand. The registers of a direction that
-    // cannot be asked for have no reader — `expect_out` can never be set, so
-    // `obuf` is never written and `out_valid` is constantly low — so synthesis
-    // removes them, and that holds for the buffer whichever shape `BUF_RAM`
-    // gave it: a memory with no write port goes the same way a shift register
-    // with no reader does. With 64-byte packets that is 528 flip-flops a
-    // direction, or eight `TRELLIS_DPR16X4`, so it matters more than it did:
-    // the notification endpoint of `ip/usb/usb_cdc_acm` is `WITH_OUT = 0` and pays
-    // for neither. It is why `usb_cdc_acm_fs` needs 18 of them and not 26 —
-    // sixteen for the bulk pair and two for that endpoint's IN buffer alone.
+    // cannot be asked for have no reader — `expect_out` can never be set,
+    // so `obuf` is never written and `out_valid` is constantly low — so
+    // synthesis removes them, and that holds for the buffer whichever shape
+    // `BUF_RAM` gave it: a memory with no write port goes the same way a
+    // shift register with no reader does. With 64-byte packets that is 528
+    // flip-flops a direction, or eight `TRELLIS_DPR16X4`, so it matters
+    // more than it did: the notification endpoint of `ip/usb/usb_cdc_acm`
+    // is `WITH_OUT = 0` and pays for neither. It is why `usb_cdc_acm_fs`
+    // needs 18 of them and not 26 — sixteen for the bulk pair and two for
+    // that endpoint's IN buffer alone.
     parameter        WITH_OUT   = 1,
     parameter        WITH_IN    = 1,
     // WHICH SHAPE THE TWO PACKET BUFFERS TAKE
@@ -2055,16 +2056,17 @@ module usb_dev_core #(
     // above, which no arithmetic can check: a descriptor says what the
     // host will do and these say what the device will do.
     //
-    // **`4'd0` is a device with no data endpoint**, the same way `NOTIF_ENDP`
-    // of `4'd0` is a device with no second one, and then nothing of it is
-    // built: both directions of the endpoint below are off, `own_data` is a
-    // flip-flop whose data input is the constant zero, and the buffers, the
-    // multiplexer arm and the byte interface all go with it. `ip/usb/usb_hub` is
-    // the class that wants this — a hub's only endpoints are the control one
-    // and a status-change interrupt IN — and the alternative was to leave a
-    // bulk pair in the fabric that no descriptor declares and no host would
-    // ever address, which at 64 bytes a direction is over a thousand
-    // flip-flops or sixteen `TRELLIS_DPR16X4` for nothing.
+    // **`4'd0` is a device with no data endpoint**, the same way
+    // `NOTIF_ENDP` of `4'd0` is a device with no second one, and then
+    // nothing of it is built: both directions of the endpoint below are
+    // off, `own_data` is a flip-flop whose data input is the constant zero,
+    // and the buffers, the multiplexer arm and the byte interface all go
+    // with it. `ip/usb/usb_hub` is the class that wants this — a hub's only
+    // endpoints are the control one and a status-change interrupt IN — and
+    // the alternative was to leave a bulk pair in the fabric that no
+    // descriptor declares and no host would ever address, which at 64 bytes
+    // a direction is over a thousand flip-flops or sixteen
+    // `TRELLIS_DPR16X4` for nothing.
     parameter [3:0]   DATA_ENDP    = 4'd1,
     parameter [6:0]   MAXPKT       = 7'd64,
     // A second data endpoint, **IN only**: a CDC ACM notification

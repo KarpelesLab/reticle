@@ -6365,12 +6365,13 @@ fn every_label_of_the_target_hosts_report_names_the_value_beside_it() {
 /// The hub board's console says what its header's table says, and its pad is
 /// released when the design starts.
 ///
-/// `testdata/fpga/cynthion/usb_hub_target.v` puts `ip/usb/usb_hub` on a Cynthion's
-/// AUX port and `ip/usb/usb_host_ulpi` on its TARGET port, and because AUX is then
-/// the hub rather than a serial port its console is the UART on ball **T14** —
-/// the one on the same net as the debug microcontroller's `TMS` output, with no
-/// series resistor on the PCB. Two things about that design are worth a test
-/// and neither is the gateware's logic.
+/// `testdata/fpga/cynthion/usb_hub_target.v` puts `ip/usb/usb_hub` on a
+/// Cynthion's AUX port and `ip/usb/usb_host_ulpi` on its TARGET port, and
+/// because AUX is then the hub rather than a serial port its console is the
+/// UART on ball **T14** — the one on the same net as the debug
+/// microcontroller's `TMS` output, with no series resistor on the PCB. Two
+/// things about that design are worth a test and neither is the gateware's
+/// logic.
 ///
 /// **The four status bytes name the fields the header says they do.** That
 /// pairing was wrong on a part for a whole round of work on the design next
