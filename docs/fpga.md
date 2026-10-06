@@ -594,11 +594,31 @@ nearest free site of the kind it needs.
 
 **Annealing.** Simulated annealing over a half-perimeter wirelength cost,
 with a move set of swaps, moves to a free site and macro relocations. The
-starting temperature is twenty times the spread of the cost changes a
-random walk sees; the schedule is geometric, and it stops when the
-temperature falls below `0.005 * cost / nets` or after
-`PlaceOptions::max_temperatures` steps. The best placement seen is kept,
-so the pass can only improve on what legalisation produced.
+schedule is Betz and Rose's (VPR, FPL 1997):
+
+- `PlaceOptions::move_effort * n^(4/3)` moves per temperature;
+- the destination of a move is drawn from a **window** of `D_limit` tiles
+  around the cell, and `D_limit` is updated after every temperature by
+  `D_limit * (1 - 0.44 + R_accept)`, clamped to the die — the feedback
+  loop that holds the acceptance rate near 0.44;
+- the cooling factor is chosen per temperature from the acceptance rate,
+  0.5 / 0.9 / 0.95 / 0.8 by band (`place::cooling_factor`), rather than
+  being fixed;
+- it stops when `T < 0.005 * cost / nets` after a step that improved
+  nothing, when `PlaceOptions::stall_limit` steps in the quench band
+  improve nothing, or after `PlaceOptions::max_temperatures` steps.
+
+Two parts are adapted because this anneal refines an analytic placement
+rather than a random one: the window starts at one tile instead of the
+whole die, and the start temperature is solved for the target acceptance
+rate instead of being `20 x` the spread of a random walk. Both of the
+paper's own rules remain available (`PlaceOptions::start_window`,
+`start_acceptance`, `range_limit`, `cooling`). The best placement seen is
+kept, so the pass can only improve on what legalisation produced.
+
+**`docs/fpga-placement.md` is the account of that schedule** — what the
+placer did before it, why a die-wide move set improved nothing at all at
+any effort, and what each piece was worth measured on two designs.
 
 Constraints (`fpga::Constraints`) are honoured as follows:
 

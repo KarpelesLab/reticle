@@ -3873,6 +3873,15 @@ does and compares in one instruction. Same routes, same counts, and
 
 ### Doing less annealing is a loss, not a trade
 
+**This section is superseded and kept for its measurement.** Lowering the
+effort *was* a loss, under the schedule described below; it is now a
+trade, because the schedule changed. `docs/fpga-placement.md` has what
+replaced it and what it is worth — in short, the annealer improved
+nothing at all because its moves had no range limit, and effort 1 is now
+a 39% faster whole flow than the old default was, to a shorter placement.
+What follows is the measurement that said the cheap version of the fix
+does not work, which is still true.
+
 What is left of a big build is the **number of moves**, and the obvious lever
 is the multiplier in front of them. The schedule is VPR's — `effort · n^(4/3)`
 moves per temperature — and this flow's effort is 10, VPR's high-quality
@@ -3912,6 +3921,17 @@ there. This placer cools by 0.9 a hundred and twenty times whatever happens.
 That is a real piece of work and nothing here has done it; what this section
 records is that the cheap version of it does not work, and the measurement
 that says so.
+
+**It has been done since, and the diagnosis above was half right.** The
+start temperature was one of two causes; the other, and the larger, was
+that a move could send a cell to any site of its kind on the die, so
+there was no temperature at which a move was both acceptable and
+informative. With VPR's range limit and its acceptance-rate cooling,
+`usb_host_target.v` places to a wirelength of 13 188 rather than 23 770 in
+the same placement time, and at effort 1 the whole flow is 118.5 s
+against 193.0 s — which is this build re-measured in the same sitting, not
+the 251.1 s in the table above, since the two sittings are not comparable.
+`docs/fpga-placement.md` is the account.
 
 ### A sharper distance estimate was tried and rejected
 
