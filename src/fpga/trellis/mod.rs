@@ -1085,10 +1085,7 @@ impl TrellisDatabase {
                                 .filter(|bit| !bit.inverted)
                                 .map(at_bit)
                                 .collect();
-                            match enums
-                                .iter_mut()
-                                .find(|(f, v, _)| f == name && v == value)
-                            {
+                            match enums.iter_mut().find(|(f, v, _)| f == name && v == value) {
                                 Some((_, _, had)) => had.extend(set),
                                 None => enums.push((name.to_owned(), value.clone(), set)),
                             }
@@ -1152,7 +1149,7 @@ impl TrellisDatabase {
                 complete &= site.enum_bits(field, BRAM_RESET.1).is_some();
             }
             for letter in BRAM_PORTS {
-                for field in BRAM_TIE_LOW {
+                for field in BRAM_TIE_LOW.iter().chain(std::iter::once(&BRAM_TIE_OFF)) {
                     let field = field.replace('#', &letter.to_string());
                     complete &= site.enum_bits(&field, BRAM_INV).is_some();
                 }
@@ -2597,6 +2594,17 @@ pub const BRAM_TIE_LOW: [&str; 2] = ["RST#MUX", "WE#MUX"];
 
 /// The pin roles [`BRAM_TIE_LOW`]'s fields belong to, in the same order.
 pub const BRAM_TIE_LOW_PINS: [&str; 2] = ["rst", "we"];
+
+/// The inverting-mux field that holds a whole port's **clock enable** low,
+/// for a port a design does not use at all.
+///
+/// A port with no clock can neither read nor write whatever its other pins
+/// float to, so this is belt and braces — but it is `ecppack`'s belt and
+/// braces: it writes `CEBMUX = INV` for 32 of the 53 block RAMs in this
+/// board's bitstreams, exactly the ones whose B port is idle, and pairs it
+/// with `CLKBMUX = INV`. The enable is the half that means something, so
+/// that is the half this writes.
+pub const BRAM_TIE_OFF: &str = "CE#MUX";
 
 /// The value an inverting mux takes.
 pub const BRAM_INV: &str = "INV";
@@ -4145,6 +4153,7 @@ impl TrellisFabric {
     /// | `EBR<n>.GSR` | `DISABLED`, in all 53 |
     /// | `EBR<n>.RESETMODE`, `EBR<n>.ASYNC_RESET_RELEASE` | `ASYNC`, in all 53 |
     /// | `EBR<n>.RSTAMUX`, `EBR<n>.RSTBMUX` | `INV`, in all 53 — the reset has to be held **low** and an unrouted wire of this fabric reads as a **one** |
+    /// | `EBR<n>.CEBMUX` | `INV` in 32 of the 53, which are exactly the blocks whose B port is idle. A port with its enable held low can neither read nor write, so a port this flow does not use gets the same treatment |
     /// | `EBR<n>.WEBMUX` | `INV`, in all 53. `WEAMUX` is **never** written, because their mapping writes on port A and reads on port B. This flow is the other way round, so it writes `WEAMUX` instead |
     /// | `EBR<n>.WID` | nine bits, and the number they spell is exactly the index of one of the file's own initialisation blocks: 3 to 11 for analyzer's nine, 3 to 46 for facedancer's forty-four |
     /// | `EBR<n>.CSDECODE_A`, `..._B` | **never written**, which is `111`, which is what the three chip-select wires read when nothing drives them |
@@ -4176,6 +4185,10 @@ impl TrellisFabric {
     /// [`super::bitstream::BitstreamError`] when a bit falls outside the
     /// tile it belongs to, which would mean the grid and the database
     /// disagree.
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "a block RAM needs the device file as well, for the layout of its contents"
+    )]
     pub fn configure_bram(
         &self,
         design: &crate::ir::Design,
@@ -4203,8 +4216,9 @@ impl TrellisFabric {
                 continue;
             };
             let params = m.cells.get(instance.cell).map(|cell| &cell.params);
-            let set = |field: &str, value: &str,
-                           bits: &mut super::bitstream::Bitstream|
+            let set = |field: &str,
+                       value: &str,
+                       bits: &mut super::bitstream::Bitstream|
              -> Result<(), super::bitstream::BitstreamError> {
                 for (at, bit) in bram.enum_bits(field, value).unwrap_or_default() {
                     bits.set(*at, *bit)?;
@@ -4235,15 +4249,25 @@ impl TrellisFabric {
             // A reset and a write enable nothing drives have to be held
             // low, and this fabric's unrouted wires read as ones.
             for (port, letter) in BRAM_PORTS.iter().enumerate() {
-                for (role, field) in BRAM_TIE_LOW_PINS.iter().zip(BRAM_TIE_LOW) {
-                    let driven = netlist.pins.iter().any(|pin| {
+                let driven = |role: &str| -> bool {
+                    netlist.pins.iter().any(|pin| {
                         pin.instance == index
                             && pin.role == format!("p{port}_{role}")
                             && pin.signal.is_some()
-                    });
-                    if !driven {
+                    })
+                };
+                for (role, field) in BRAM_TIE_LOW_PINS.iter().zip(BRAM_TIE_LOW) {
+                    if !driven(role) {
                         set(&field.replace('#', &letter.to_string()), BRAM_INV, bits)?;
                     }
+                }
+                // A port with no clock is a port the design does not use.
+                if !driven("clk") {
+                    set(
+                        &BRAM_TIE_OFF.replace('#', &letter.to_string()),
+                        BRAM_INV,
+                        bits,
+                    )?;
                 }
             }
             // The identifier that ties this block to its contents, most

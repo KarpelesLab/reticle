@@ -319,6 +319,27 @@ fn compile_all(
     fabric
         .configure_lutram(&design, top, &netlist, &placement, &graph, &mut ram_only)
         .unwrap();
+    // A block RAM's settings go into three positions and its *contents*
+    // go into the stream rather than the configuration memory, which is
+    // why this returns something instead of a count.
+    let brams = fabric
+        .configure_bram(
+            &design, top, device, &netlist, &placement, &graph, &mut bits,
+        )
+        .unwrap();
+    let mut bram_only =
+        bitstream::Bitstream::empty(bitstream::BitstreamFormat::from_arch(&fabric.arch));
+    fabric
+        .configure_bram(
+            &design,
+            top,
+            device,
+            &netlist,
+            &placement,
+            &graph,
+            &mut bram_only,
+        )
+        .unwrap();
     let clocks = fabric.clock_network_use(&netlist, &placement, &graph, &routing);
     let dropped = fabric.dropped_clear_bits(&graph, &routing, &bits);
     // The same pass on its own, into an empty bitmap. A `CIB`'s constant
@@ -331,7 +352,8 @@ fn compile_all(
     fabric
         .configure_io(&design, top, &netlist, &placement, &graph, &mut io_only)
         .unwrap();
-    let stream = fabric.stream(&bits, "8").unwrap();
+    let mut stream = fabric.stream(&bits, "8").unwrap();
+    stream.bram = brams.blocks;
     let wires = routing
         .routes()
         .flat_map(|route| route.pips.iter())
@@ -354,6 +376,8 @@ fn compile_all(
             ffs,
             rams,
             ram_only,
+            overlaps: brams.overlaps,
+            bram_only,
             placement,
             clocks,
             dropped,
@@ -381,6 +405,12 @@ struct Routed {
     /// `io_only` exists: what a feature costs is a question about the pass,
     /// not about the finished image, where several features share bit space.
     ram_only: reticle::fpga::bitstream::Bitstream,
+    /// Pairs of block RAMs that cannot both be used. Empty is the only
+    /// acceptable answer; see `TrellisFabric::configure_bram`.
+    overlaps: Vec<String>,
+    /// `configure_bram` on its own, into an empty bitmap, for the same
+    /// reason `ram_only` exists.
+    bram_only: reticle::fpga::bitstream::Bitstream,
     /// Where every instance ended up, so a test can ask which tile holds
     /// what. A distributed RAM is exactly the case where that is the
     /// question: it takes six of its tile's eight lookup tables, so nothing
@@ -710,6 +740,545 @@ fn what_lattices_own_packer_writes_for_a_distributed_ram() {
         "slices of a RAM's tile with a clock enable. `CE0`..`CE3` are four wires for four slices \
          and a `TRELLIS_DPR16X4` has no enable pin at all, so a RAM contends for none of them and \
          the clock enable needs no rule"
+    );
+}
+
+/// Everything `ecppack` writes for a **block** RAM, asked in full and
+/// answered out of this board's own bitstreams.
+///
+/// A `DP16KD` is where the distributed RAM's lesson does not transfer, and
+/// that is the point of this test. A distributed RAM is one tile, one bit
+/// and three slices; a block RAM's bits are spread over **three tiles**,
+/// and the model had to be read out of the database rather than guessed by
+/// analogy — the round that modelled the slice learned that a mirrored
+/// guess "decodes perfectly against itself and drives the wrong pin".
+///
+/// # What the files say the tile rule is
+///
+/// The EBR row of this die is nine tile types repeating — `MIB_EBR0` to
+/// `MIB_EBR8` — and they hold **four** blocks between them. Exactly four of
+/// the nine carry a block's 116 `.fixed_conn` records and those four own a
+/// block; the others hold some of its *bits* and no pins at all. A block's
+/// fields live in its own tile and the two east of it, and a single field
+/// straddles the boundary: `EBR1.DP16KD.DATA_WIDTH_B` is three bits of
+/// `MIB_EBR2` and a fourth of `MIB_EBR4`, and without that fourth bit the
+/// 9-bit and the 18-bit mode are the same pattern.
+///
+/// **That rule is what this test checks, and it checks it the hard way.**
+/// Reading `MODE` back through the model finds **nine** blocks in use in
+/// `analyzer.bit`, **none** in `selftest.bit` and **forty-four** in
+/// `facedancer.bit` — the same counts
+/// `what_lattices_own_packer_writes_for_a_distributed_ram`'s header records
+/// from a different route, the per-tile field decoder. A wrong tile rule
+/// would not produce the same numbers, because four of each block's five
+/// mode bits are in a tile that is not the block's own.
+///
+/// **One correction to the record.** That header calls all 53 of them
+/// `DP16KD`. They are not: **two are `PDPW16KD`**, the pseudo dual-port
+/// mode that reads 36 bits, and `PDPW16KD`'s bit pattern is a superset of
+/// `DP16KD`'s, which is why counting by "are `DP16KD`'s bits set" gets 53
+/// and counting the mode itself gets 51 and 2. This flow builds no
+/// `PDPW16KD`.
+///
+/// # Everything their packer sets, per block
+///
+/// | | How many of the 53 |
+/// |---|---|
+/// | `EBR<n>.MODE = DP16KD` | 51; the other two are `PDPW16KD` |
+/// | `EBR<n>.GSR = DISABLED` | 53 |
+/// | `EBR<n>.RESETMODE = ASYNC`, `ASYNC_RESET_RELEASE = ASYNC` | 53 each |
+/// | `EBR<n>.RSTAMUX = INV`, `RSTBMUX = INV` | 53 each — the reset has to be held **low**, and an unrouted wire of this fabric reads as a **one** |
+/// | `EBR<n>.WEBMUX = INV` | 51, which is exactly the `DP16KD` ones: their mapping **writes on port A and reads on port B** |
+/// | `EBR<n>.WEAMUX = INV` | **2**, which are exactly the two `PDPW16KD` ones. For a true dual-port block their packer never writes it |
+/// | `EBR<n>.CEBMUX = INV` (with `CLKBMUX = INV`) | 32, which are the blocks whose B port is idle. A port whose enable is held low can neither read nor write |
+/// | `EBR<n>.DP16KD.WRITEMODE_A`, `..._B` | `READBEFOREWRITE` for all 51 |
+/// | `EBR<n>.WID` | 53: nine bits, and the number they spell is an initialisation block the same file carries |
+/// | `CSDECODE_A`, `CSDECODE_B`, `CEAMUX`, `OCEBMUX`, `CLKAMUX`, every `AD<x>MUX`, `REGMODE_A`, `REGMODE_B` | **0** — never written, in any of the 53 |
+///
+/// Two of those rows decided code, and both are about a pin nothing drives
+/// reading as a **one** on this fabric. `RSTAMUX = INV` and `WEBMUX = INV`
+/// are how their packer holds a reset and an unused write enable **low**,
+/// and `CEAMUX` and `OCEBMUX` being absent is how it holds an enable
+/// **high** — it does nothing, because an unrouted wire is already a one.
+/// The chip selects say the same from the other side: all six are unrouted
+/// and `CSDECODE_A` and `CSDECODE_B` are left at `111`, which is what three
+/// unrouted wires read. So this flow leaves the same six pins off its bel
+/// and ties the same pins with the same muxes.
+///
+/// And `WEAMUX` being written for **no** `DP16KD` is why
+/// `src/fpga/devices/ecp5.dev` lists the B port first. Project Trellis'
+/// `EBR<n>.MODE` record claims `WEAMUX`'s own bit as one that `DP16KD`
+/// wants *clear*, so a flow that read on port A and held `WEA` low with
+/// that mux writes a bitstream in which the mode bit no longer decodes —
+/// which is exactly what happened on the first run, and what the "every bit
+/// decodes" check said. Reading on port B, as their packer does, writes no
+/// bit any other field of the block disagrees about.
+///
+/// # The widths, and the one thing they settle about the overlap
+///
+/// Port A: **32** blocks 1 bit wide, 4 of 4 bits, 14 of 9 bits, and 3 whose
+/// `DATA_WIDTH_A` bits are all clear, which is the field's default of 18 —
+/// two of those three are the `PDPW16KD`s, for which the field means
+/// nothing. So **one** of the 51 `DP16KD` blocks is 18 bits wide, and the
+/// block two columns east of it is **not in use**.
+///
+/// That matters because the two top data bits of each of a block's ports
+/// are, in this model, the same interconnect wires as the two bottom bits
+/// of the block two columns east — so an 18-bit block and its eastern
+/// neighbour cannot both be used, and `configure_bram` refuses the
+/// arrangement. Their one 18-bit `DP16KD` agrees. **Their two `PDPW16KD`s
+/// do not**: both read 36 bits and both have an in-use block two columns
+/// east, which either means the overlap is not what this model says or
+/// means those designs rely on something it does not express. This flow
+/// builds no `PDPW16KD` and the refusal is the conservative direction, so
+/// the disagreement is recorded rather than resolved; `docs/fpga-trellis.md`
+/// names the experiment.
+///
+/// # What settles the contents' identifier, and what does not
+///
+/// A block RAM's contents are **not in the configuration memory**: they
+/// arrive as their own `LSC_EBR_ADDRESS`/`LSC_EBR_WRITE` commands, and the
+/// nine-bit `WID` field ties a block to its data. This test reads those
+/// nine bits of every block out of the CRAM and asserts that the numbers
+/// are exactly the set of initialisation-block indices the same file
+/// carries: **3 to 11** for analyzer's nine and **3 to 46** for
+/// facedancer's forty-four. That settles three things at once from a vendor
+/// artefact — that row 0 of the `.config` record is the most significant
+/// bit, that `WID` *is* the block index, and that `ecppack` numbers from 3.
+///
+/// **What it does not settle is the ordering of the contents themselves.**
+/// All 53 initialisation blocks are zero, exactly as all 111 of their
+/// distributed RAMs are empty, so they cannot tell a right ordering from a
+/// wrong one. This test asserts the zeros rather than skipping them, so a
+/// future reference bitstream with contents would fail here and say so —
+/// which is the moment the claim could be upgraded.
+#[test]
+#[cfg(feature = "verilog")]
+fn what_lattices_own_packer_writes_for_a_block_ram() {
+    let Some(root) = chipdb() else { return };
+    let db = trellis::open(&Disk(root), "", PART).unwrap();
+    let fabric = db.load(&TrellisOptions::new()).unwrap();
+    assert_eq!(
+        fabric.brams.len(),
+        56,
+        "block RAMs on this die, which is the number the datasheet gives the 25F — the same \
+         silicon. Seven groups of nine tiles along each of the two EBR rows, four blocks a group"
+    );
+    // The bel is on the tile that owns the block's wires and the bits reach
+    // two tiles east of it. Both halves asserted, because the second is the
+    // one no analogy with a slice would have produced.
+    for site in &fabric.brams {
+        let mode = site
+            .enum_bits(trellis::BRAM_MODE.0, trellis::BRAM_MODE.1)
+            .unwrap_or_default();
+        assert_eq!(
+            mode.len(),
+            5,
+            "{} at X{}Y{}: bits in `MODE = DP16KD`",
+            site.bel,
+            site.at.0,
+            site.at.1
+        );
+        let spread: std::collections::BTreeSet<(u32, u32)> =
+            mode.iter().map(|(at, _)| *at).collect();
+        assert_eq!(
+            spread.len(),
+            2,
+            "{} at X{}Y{}: positions its mode's five bits are spread over",
+            site.bel,
+            site.at.0,
+            site.at.1
+        );
+        assert!(
+            mode.iter().filter(|(at, _)| *at != site.at).count() >= 4,
+            "{} at X{}Y{}: at least four of the five bits of its mode are in a tile that is not \
+             its own — for the first block of a group it is four of five and for the third it is \
+             all five, and a model that wrote only its own tile would leave the mode barely set",
+            site.bel,
+            site.at.0,
+            site.at.1
+        );
+        assert!(
+            spread
+                .iter()
+                .all(|at| at.1 == site.at.1 && at.0 >= site.at.0 && at.0 < site.at.0 + 3),
+            "{} at X{}Y{}: every bit of its mode is in its own tile or one of the two east of \
+             it, which is what `trellis::BRAM_SPAN` is",
+            site.bel,
+            site.at.0,
+            site.at.1
+        );
+        assert_eq!(site.bel, format!("EBR{}", site.index));
+        assert!(site.index < 4, "{} is one of its group's four", site.bel);
+    }
+
+    let expected: [(&str, usize); 3] = [("analyzer", 9), ("selftest", 0), ("facedancer", 44)];
+    // Over all three files: how many blocks have each field written at all,
+    // and the census of port-A widths.
+    let mut written: std::collections::BTreeMap<&str, usize> = Default::default();
+    let mut widths: std::collections::BTreeMap<String, usize> = Default::default();
+    // 18-bit blocks, and how many of those have an in-use block two columns
+    // east of them.
+    let mut wide = (0usize, 0usize);
+    let mut total = 0usize;
+    for (name, blocks) in expected {
+        let Some(bytes) = reference(name) else {
+            return;
+        };
+        let stream = Ecp5Stream::parse(&bytes, &formats).unwrap();
+        let set = |bits: &[trellis::PlacedBit]| -> bool {
+            !bits.is_empty()
+                && bits.iter().all(|(at, bit)| {
+                    fabric
+                        .frames
+                        .locate(*at, *bit)
+                        .is_some_and(|(frame, index)| stream.cram.get(frame, index))
+                })
+        };
+        let value = |site: &trellis::BramSite, field: &str| -> Option<String> {
+            // A narrow value's bits are a subset of a narrower one's, so
+            // the widest fully-set pattern is the value.
+            site.enums
+                .iter()
+                .filter(|(f, _, bits)| f == field && set(bits))
+                .max_by_key(|(_, _, bits)| bits.len())
+                .map(|(_, v, _)| v.clone())
+        };
+        let found: Vec<&trellis::BramSite> = fabric
+            .brams
+            .iter()
+            .filter(|site| {
+                set(site
+                    .enum_bits(trellis::BRAM_MODE.0, trellis::BRAM_MODE.1)
+                    .unwrap_or_default())
+            })
+            .collect();
+        assert_eq!(
+            found.len(),
+            blocks,
+            "{name}.bit: block RAMs in use. `selftest.bit` having none is asserted rather than \
+             skipped, for the same reason it is in \
+             `what_lattices_own_packer_writes_for_a_constant`: a design that needs none is the \
+             case this flow must not change"
+        );
+        // The identifier, most significant bit first, against the
+        // initialisation blocks the same file carries.
+        let mut wids: Vec<u32> = found
+            .iter()
+            .map(|site| {
+                let mut wid = 0u32;
+                for group in site
+                    .word(trellis::BRAM_WID)
+                    .expect("the database has `WID`")
+                {
+                    wid = wid << 1 | u32::from(set(group));
+                }
+                wid
+            })
+            .collect();
+        wids.sort_unstable();
+        let mut indices: Vec<u32> = stream.bram.iter().map(|block| block.index).collect();
+        indices.sort_unstable();
+        assert_eq!(
+            wids,
+            indices,
+            "{name}.bit: the `WID` field of every block RAM against the indices of the \
+             initialisation blocks the same file carries. They are equal, which settles that row \
+             0 of the `.config` record is the **most significant** bit, that `WID` is the block \
+             index, and that `ecppack` numbers from {}",
+            trellis::BRAM_FIRST_WID
+        );
+        // And every one of them is empty, which is why the ordering of a
+        // block RAM's contents is the one thing in this round that no
+        // vendor artefact settles.
+        for block in &stream.bram {
+            assert_eq!(
+                block.words.len(),
+                reticle::fpga::ecp5::BRAM_WORDS,
+                "{name}.bit: words in initialisation block {}",
+                block.index
+            );
+            assert!(
+                block.words.iter().all(|word| *word == 0),
+                "{name}.bit: initialisation block {} is not empty after all, which is the \
+                 artefact `trellis::bram_init_words`' ordering has been waiting for",
+                block.index
+            );
+        }
+        for site in &found {
+            for field in [
+                "MODE=DP16KD",
+                "MODE=PDPW16KD",
+                "GSR=DISABLED",
+                "RESETMODE=ASYNC",
+                "ASYNC_RESET_RELEASE=ASYNC",
+                "RSTAMUX=INV",
+                "RSTBMUX=INV",
+                "WEAMUX=INV",
+                "WEBMUX=INV",
+                "CEAMUX=INV",
+                "CEBMUX=INV",
+                "CLKAMUX=INV",
+                "CLKBMUX=INV",
+                "OCEAMUX=INV",
+                "OCEBMUX=INV",
+                "REGMODE_A=OUTREG",
+                "REGMODE_B=OUTREG",
+                "ADA0MUX=INV",
+                "ADB0MUX=INV",
+                "DP16KD.WRITEMODE_A=READBEFOREWRITE",
+                "DP16KD.WRITEMODE_B=READBEFOREWRITE",
+            ] {
+                let (name, want) = field.split_once('=').expect("a field and a value");
+                // `MODE = PDPW16KD` sets every bit `DP16KD` sets and more,
+                // so the mode is the widest pattern that matches.
+                let hit = if name == "MODE" {
+                    value(site, name).as_deref() == Some(want)
+                } else {
+                    set(site.enum_bits(name, want).unwrap_or_default())
+                };
+                if hit {
+                    *written.entry(field).or_default() += 1;
+                }
+            }
+            let a = value(site, trellis::BRAM_WIDTH[0]).unwrap_or_else(|| "18".to_owned());
+            if a == trellis::BRAM_DATA_PINS.to_string() {
+                wide.0 += 1;
+                if found.iter().any(|o| o.at == (site.at.0 + 2, site.at.1)) {
+                    wide.1 += 1;
+                }
+            }
+            *widths.entry(a).or_default() += 1;
+        }
+        total += blocks;
+    }
+    assert_eq!(total, 53, "block RAMs in use across the three files");
+    let mut names: Vec<(&str, usize)> = written.into_iter().collect();
+    names.sort();
+    assert_eq!(
+        names,
+        vec![
+            ("ASYNC_RESET_RELEASE=ASYNC", 53),
+            ("CEBMUX=INV", 32),
+            ("CLKBMUX=INV", 32),
+            ("DP16KD.WRITEMODE_A=READBEFOREWRITE", 51),
+            ("DP16KD.WRITEMODE_B=READBEFOREWRITE", 51),
+            ("GSR=DISABLED", 53),
+            ("MODE=DP16KD", 51),
+            ("MODE=PDPW16KD", 2),
+            ("OCEAMUX=INV", 2),
+            ("RESETMODE=ASYNC", 53),
+            ("RSTAMUX=INV", 53),
+            ("RSTBMUX=INV", 53),
+            ("WEAMUX=INV", 2),
+            ("WEBMUX=INV", 51),
+        ],
+        "every field `ecppack` writes for a block RAM, and for how many of the 53. A field absent \
+         from this list it never writes: `CSDECODE_A`, `CSDECODE_B`, `CEAMUX`, `CLKAMUX`, \
+         `OCEBMUX`, every `AD<x>MUX`, `REGMODE_A` and `REGMODE_B` — and `WEAMUX` for anything \
+         that is not a `PDPW16KD`, which is the measurement that decided which physical port \
+         this flow reads on"
+    );
+    assert_eq!(
+        widths.into_iter().collect::<Vec<_>>(),
+        vec![
+            ("1".to_owned(), 32),
+            ("18".to_owned(), 3),
+            ("4".to_owned(), 4),
+            ("9".to_owned(), 14)
+        ],
+        "the port-A width of all 53. `18` is the field's default — every bit clear — so the three \
+         are blocks whose `DATA_WIDTH_A` their packer never wrote, two of which are the \
+         `PDPW16KD`s for which it means nothing"
+    );
+    assert_eq!(
+        wide,
+        (3, 2),
+        "blocks whose port A is 18 bits wide, and how many of those have an in-use block two \
+         columns east. The two are the `PDPW16KD`s, which read 36 bits and which this flow does \
+         not build; the one true `DP16KD` at 18 bits has no such neighbour, which is what \
+         `configure_bram`'s refusal expects. The disagreement is recorded rather than resolved — \
+         see the header"
+    );
+}
+
+/// `testdata/fpga/ecp5/block_ram_2048.v` on a part: a 2 KiB writable
+/// memory and a 2 KiB ROM, which is what a block RAM was needed for.
+///
+/// Until `src/fpga/trellis` modelled a `DP16KD` neither could be placed —
+/// *"the design needs 2 `bram` site(s) and the part has 0"* — while
+/// `synthesize_for` succeeded, which is the same shape of failure the
+/// distributed RAM had. What it takes now, measured:
+///
+/// | | |
+/// |---|---|
+/// | `DP16KD` | 2, both in the **9-bit** mode, which is the mode `ecppack` used for 14 of the 53 blocks in this board's bitstreams and the widest it used that needs no wire of the block two columns east |
+/// | Configuration bits | 1019 in all, of which 35 are the two block RAMs' own |
+/// | Initialisation blocks | 2, numbered 3 and 4, of 2048 nine-bit words each |
+/// | Clock pins on a global network | 3 — `CLKA` and `CLKB` of the writable memory and `CLKB` of the ROM |
+///
+/// Three things carry the weight. **Every bit decodes**: every set bit of
+/// the image resolves through the database into a feature it names with
+/// nothing left over, and the arcs those bits select are exactly the arcs
+/// the router chose. **The contents are in the stream**: a block RAM's
+/// words are not in the configuration memory at all, and the ROM's 2048
+/// bytes are read back out of the initialisation block and compared with
+/// the function the Verilog computes. And **the clock is on a global
+/// network**, for both ports of both blocks, which `ecppack` does in all 53
+/// of its blocks and which this flow refuses to do without.
+///
+/// What this test cannot catch is the one thing `docs/fpga-trellis.md`
+/// names as open: whether word *n* of the initialisation block is address
+/// *n* of the memory the part reads. The check below is of this flow
+/// against itself — it reads back what `bram_init_words` wrote — so a
+/// permutation that was wrong in a self-consistent way would pass. Only a
+/// part can settle it.
+#[test]
+#[cfg(all(feature = "verilog", feature = "synth"))]
+fn a_block_ram_places_routes_and_every_bit_of_it_decodes() {
+    let Some(fabric) = open() else { return };
+    let (bits, stream, pads, _report, _io, routed) = compile(
+        &fabric,
+        "testdata/fpga/ecp5/block_ram_2048.v",
+        "testdata/fpga/ecp5/block_ram_2048.rcf",
+    );
+    assert_eq!(pads, 37, "every port of the design is on a ball");
+    assert!(
+        routed.overlaps.is_empty(),
+        "block RAMs that cannot both be used: {:?}",
+        routed.overlaps
+    );
+    // Two block RAMs, each on a tile that owns one, each with the 108 pins
+    // a `DP16KD` has.
+    let mut placed = 0usize;
+    for (index, instance) in routed
+        .netlist
+        .instances
+        .iter()
+        .enumerate()
+        .filter(|(_, i)| i.kind == "bram")
+    {
+        placed += 1;
+        let site = &routed.graph.sites[routed.placement.site_of(index).expect("placed")];
+        let bram = fabric
+            .brams
+            .iter()
+            .find(|b| b.at == site.tile)
+            .unwrap_or_else(|| {
+                panic!(
+                    "{} is on {}, whose position holds no block RAM",
+                    instance.name, site.name
+                )
+            });
+        assert_eq!(site.bel, bram.bel);
+        assert_eq!(
+            site.pins.len(),
+            108,
+            "{}: pins of a `DP16KD` — per port a clock, an enable, a write enable, a reset, \
+             fourteen address and eighteen each way of data",
+            site.name
+        );
+    }
+    assert_eq!(placed, 2, "`DP16KD` cells");
+    // What the two of them cost, asked of the pass rather than of the
+    // finished image, where several features share bit space.
+    assert_eq!(
+        routed.bram_only.ones(),
+        35,
+        "bits the two block RAMs cost. Twelve each are the settings every block gets — five for \
+         the mode, one for each port's 9-bit width, one for each port's write mode, one for \
+         `GSR` and one for each of the two reset fields — and the rest are the ties and the \
+         `WID`: a reset mux per port, a write-enable mux per port that does not write, a \
+         clock-enable mux per port the design does not use at all, and one bit per set bit of the \
+         block's own number"
+    );
+    assert_eq!(
+        bits.ones(),
+        1019,
+        "set bits in the whole image, pads and routing included"
+    );
+    // Every clock pin of every block on a global network, which is what
+    // `ecppack` does in all 53 of its blocks and what this flow refuses to
+    // do without.
+    assert!(
+        routed.clocks.off_network.is_empty(),
+        "clock pins that came through general routing: {:?}",
+        routed.clocks.off_network
+    );
+    assert_eq!(
+        routed.clocks.networks.values().sum::<usize>(),
+        3,
+        "clock pins examined: both ports of the writable memory and the ROM's read port"
+    );
+    assert!(routed.dropped.is_empty(), "{:?}", routed.dropped);
+
+    // The contents, which are in the stream and not in the configuration
+    // memory. Two blocks numbered from `BRAM_FIRST_WID`, of 2048 nine-bit
+    // words; one is the ROM and holds `(a ^ 0x5a) | 1`.
+    assert_eq!(stream.bram.len(), 2, "initialisation blocks, one per block");
+    assert_eq!(
+        stream.bram.iter().map(|b| b.index).collect::<Vec<_>>(),
+        vec![trellis::BRAM_FIRST_WID, trellis::BRAM_FIRST_WID + 1],
+        "block identifiers, numbered from the first one `ecppack` uses"
+    );
+    let rom = stream
+        .bram
+        .iter()
+        .find(|b| b.words.iter().any(|w| *w != 0))
+        .expect("the ROM's contents reached the stream");
+    for (address, word) in rom.words.iter().enumerate().take(2048) {
+        let want = u16::from((u8::try_from(address & 0xff).expect("masked") ^ 0x5a) | 0x01);
+        assert_eq!(
+            *word, want,
+            "word {address} of the ROM's initialisation block"
+        );
+    }
+    let blank = stream
+        .bram
+        .iter()
+        .find(|b| b.index != rom.index)
+        .expect("the writable memory's block");
+    assert!(
+        blank.words.iter().all(|w| *w == 0),
+        "the writable memory has no initial contents, so its block is all zeros — and `ecppack` \
+         writes one for every block too"
+    );
+
+    // And every bit decodes: the check that has found six real defects in
+    // this backend, including the one this round's first run hit, where
+    // `WEAMUX = INV` and `MODE = DP16KD` disagreed about a bit.
+    let db = trellis::open(&Disk(chipdb().expect("checked above")), "", PART).unwrap();
+    let decoded = db.decode(&stream.cram);
+    assert_eq!(
+        decoded.unexplained, 0,
+        "bits belonging to no feature the database names: {:?}",
+        decoded.leftovers
+    );
+    assert_eq!(
+        decoded.bits,
+        bits.ones(),
+        "the image the decoder read is the image this flow wrote"
+    );
+    let (selected, unresolved) = db.resolved_arcs(&decoded);
+    assert!(unresolved.is_empty(), "{unresolved:?}");
+    assert_eq!(
+        selected,
+        fabric.routed_arcs(&routed.graph, &routed.routing),
+        "the bits select connections the router did not choose, or miss ones it did"
+    );
+    // And the decoding says a block RAM is in `DP16KD` mode, in each of the
+    // tiles the rule spreads the field over.
+    let modes: Vec<(u32, u32)> = decoded
+        .enums
+        .iter()
+        .filter(|(_, field, value)| field.ends_with(".MODE") && value == "DP16KD")
+        .map(|(at, _, _)| *at)
+        .collect();
+    assert_eq!(
+        modes.len(),
+        4,
+        "positions whose decoding says a block RAM is in `DP16KD` mode: two tiles per block, \
+         because the five bits of the field are spread over them. {modes:?}"
     );
 }
 

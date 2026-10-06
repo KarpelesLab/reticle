@@ -1,5 +1,339 @@
 # A real Lattice ECP5, and a real `.bit`
 
+## A block RAM is on the fabric, and its bits are in three tiles
+
+`ip/fifo_sync` taught this backend that a memory needs a *site*, and the
+round that modelled a distributed RAM taught it that the site can be
+several slices of one tile. A `DP16KD` is neither, and the lesson does not
+transfer:
+
+```
+error: the design needs 2 `bram` site(s) and the part has 0
+```
+
+`src/fpga/trellis` created `lut`, `ff`, `io` and `lutram` bels and no
+`bram`, so a design whose memory inferred a block RAM died at the placer
+even though `src/fpga/devices/ecp5.dev` declared the primitive and the
+technology mapper emitted it. That was a ceiling on everything built for
+this board: `examples/mos6502_monitor` uses a **512-byte logic ROM**, about
+one lookup table per byte, and says in its own header that it does so
+because a writable memory of any size was unavailable. 56 block RAMs of
+18 kbit each — 1008 kbit — were sitting unused.
+
+They are not now. A 2 KiB writable memory and a 2 KiB ROM place, route and
+come out as a bitstream every bit of which decodes.
+
+### The tile rule, and it is not the slice's rule
+
+A distributed RAM is one tile, one bit and three slices. Guessing a block
+RAM by analogy would have been wrong in the way this file exists to catch,
+so the rule was read out of `bits.db` and the tilegrid instead:
+
+| | |
+|---|---|
+| The EBR rows | **two**, at Y25 and Y37, and each is seven groups of **nine** tile types — `MIB_EBR0` to `MIB_EBR8` — which hold **four** blocks between them |
+| Which tile owns a block | the four of the nine that carry its 116 `.fixed_conn` records: `MIB_EBR0`, `MIB_EBR2`, `MIB_EBR4` and `MIB_EBR6`, at the group's columns +0, +2, +4 and +6. The bel goes there and nowhere else; the other five hold *bits* and have no pins at all |
+| Which of the four a tile's block is | read off the field names. A tile that owns a block declares `EBR<n>.<field>` for its own `n` and, where the fuzzer found a leftover bit, for `n - 1` as well, so the block is the **highest** index the tile names |
+| Where its bits are | its own tile and the **two east of it**, and a single field straddles the boundary. `EBR1.DP16KD.DATA_WIDTH_B` is three bits of `MIB_EBR2` and a fourth of `MIB_EBR4`, and **without that fourth bit the 9-bit and the 18-bit mode are the same pattern** |
+| `MODE = DP16KD` | five bits over **two** tiles: one in the block's own and four in the tile east of it for the first and second block of a group, and all five east of it for the third and fourth |
+| The four edge cases | four of the 56 blocks have an `EBR_SPINE_*` or an `EBR_CMUX_*` where `MIB_EBR8` would be, and one group's first block has `EBR_CMUX_LR_25K` instead of `MIB_EBR0`. Those tiles declare the same fields, so the rule covers them without naming them |
+
+That last row is why a block RAM is the **first feature of this backend
+whose bits are a property of its position rather than of its tile type**.
+Every other one — a lookup table's truth table, a flip-flop's settings, a
+distributed RAM's mode — is a `BTreeMap` keyed by `Arch` tile type index,
+because the same composition has the same frame offsets everywhere. A
+block's three tiles do not: the easternmost is `MIB_EBR8` for 52 of the 56
+and something else for the other four, and a frame offset computed for one
+is wrong for the other. So `TrellisFabric::brams` is a `Vec<BramSite>`,
+one per `DP16KD` of the part, and every bit in it carries the position it
+belongs to.
+
+### How the bitstreams established it, which is the part that matters
+
+A tile rule that is wrong produces a bitstream that loads, asserts `DONE`
+and addresses the wrong memory, and nothing in this flow's own output can
+tell. So the rule was read back through Great Scott Gadgets' own
+bitstreams, at the absolute frame positions it computes, by
+`what_lattices_own_packer_writes_for_a_block_ram`.
+
+**Reading `MODE` back through the model finds nine blocks in use in
+`analyzer.bit`, none in `selftest.bit` and forty-four in
+`facedancer.bit`** — the same counts
+`what_lattices_own_packer_writes_for_a_distributed_ram`'s header had
+already recorded from a completely different route, the per-tile field
+decoder. A wrong tile rule would not produce the same numbers, because
+four of each block's five mode bits are in a tile that is not the block's
+own.
+
+**One correction to this file's record.** That header calls all 53 of them
+`DP16KD`. They are not: **two are `PDPW16KD`**, the pseudo dual-port mode
+that reads 36 bits. `PDPW16KD`'s bit pattern is a superset of `DP16KD`'s,
+which is why counting "are `DP16KD`'s bits set" gets 53 and asking which
+mode it is gets 51 and 2. This flow builds no `PDPW16KD`.
+
+### Everything `ecppack` writes for a block RAM, in full
+
+| | How many of the 53 |
+|---|---|
+| `EBR<n>.MODE = DP16KD` | 51; the other two are `PDPW16KD` |
+| `EBR<n>.GSR = DISABLED` | 53 |
+| `EBR<n>.RESETMODE = ASYNC` and `ASYNC_RESET_RELEASE = ASYNC` | 53 each |
+| `EBR<n>.RSTAMUX = INV`, `RSTBMUX = INV` | 53 each |
+| `EBR<n>.WEBMUX = INV` | 51 — exactly the `DP16KD` ones |
+| `EBR<n>.WEAMUX = INV` | **2** — exactly the two `PDPW16KD` ones |
+| `EBR<n>.CEBMUX = INV`, paired with `CLKBMUX = INV` | 32 — the blocks whose B port is idle |
+| `EBR<n>.DP16KD.WRITEMODE_A`, `..._B` | `READBEFOREWRITE` for all 51 |
+| `EBR<n>.DP16KD.DATA_WIDTH_A` | 1 for 32 of them, 4 for four, 9 for fourteen, and every bit clear — the default of 18 — for three |
+| `EBR<n>.WID` | 53: nine bits, and the number they spell is an initialisation block the same file carries |
+| `CSDECODE_A`, `CSDECODE_B`, `CEAMUX`, `OCEBMUX`, `CLKAMUX`, every `AD<x>MUX`, `REGMODE_A`, `REGMODE_B` | **0**. Never written, in any of the 53 |
+| The contents | one `LSC_EBR_WRITE` block of 2048 nine-bit words **per block RAM, written even when it is all zeros** — and it is all zeros in all 53 |
+
+**Three of those rows are about a pin nothing drives reading as a one**,
+which is the hazard this file opens with, and together they are the
+clearest statement of it anywhere in the vendor's output.
+`RSTAMUX = INV` and `WEBMUX = INV` are how their packer holds a reset and
+an unused write enable **low** — it inverts the wire, because the wire is
+already a one. `CEAMUX` and `OCEBMUX` being absent is how it holds an
+enable **high**: it does nothing. And the chip selects say it from the
+third side: all six are left unrouted and `CSDECODE_A` and `CSDECODE_B`
+are left at `111`, which is exactly what three unrouted wires read. So
+this flow leaves the same six pins off its bel — they are not in
+`bram_pins()` — and ties the same pins with the same muxes.
+
+`CEBMUX = INV` on the 32 idle ports is theirs too, and it is worth
+copying: a port whose clock enable is held low can neither read nor write
+whatever its other pins float to. `configure_bram` writes it for any port
+a design does not use, which is how the ROM below makes its unused port A
+inert rather than relying on "no clock edge, no write".
+
+### A defect the database's own account caused, and the one-line fix
+
+`WEAMUX` being written for **no** true dual-port block is not a curiosity.
+It is why `src/fpga/devices/ecp5.dev` now lists `DP16KD`'s **B** port
+first.
+
+`fpga::primitives` gives a memory's read ports the earliest `port rw`
+lines and its write ports the ones after them, so with the A side listed
+first a one-read one-write memory read on port A and wrote on port B.
+That needs `WEA` held low, which needs `WEAMUX = INV` — and Project
+Trellis' `EBR<n>.MODE` record claims `WEAMUX`'s own bit as one that
+`DP16KD` wants **clear**. Setting both is a contradiction the database
+cannot express, and the result was exact:
+
+```
+error: 1 of this bitstream's 1016 set bit(s) belong to no feature the database names
+  F99B0 of MIB_EBR2 at (col 24, row 25)
+```
+
+That is `MODE = DP16KD`'s own bit, unreadable because `WEAMUX = INV` had
+set a bit the mode wanted clear. **The "every bit decodes" check caught it
+on the first run**, which is the seventh real defect it has found in this
+backend, and the fix is to do what `ecppack` does: write on port A, read
+on port B. Then nothing this flow writes for a block collides with
+anything else it writes for the same block.
+
+Worth saying plainly what the alternative would have been. The bits are
+*independent in silicon* — `WEAMUX` is a mux and `MODE` is a mode — and a
+flow that simply dropped the clear bits from `MODE`'s record would have
+produced a working bitstream that no longer decoded. `docs/fpga-trellis.md`
+already has a section on why a bit a feature wants clear can only be
+*noticed* and not honoured; this is the same simplification meeting a
+`.config_enum` whose record the fuzzer polluted, and the only sound answer
+is not to write both.
+
+### The contents are not in the configuration memory
+
+This is the row that is unlike everything else in this file. A block RAM's
+words do not go into the CRAM: they arrive as their own commands —
+`LSC_EBR_ADDRESS` then `LSC_EBR_WRITE`, 2048 nine-bit words packed nine to
+nine bytes — and `src/fpga/ecp5.rs` has read and written them since the
+container was first modelled. What was missing was the tie between a block
+and its data, and that is the nine-bit `EBR<n>.WID` field.
+
+**That tie is measured, not read.**
+`what_lattices_own_packer_writes_for_a_block_ram` reads the nine bits of
+every block out of the CRAM and asserts that the numbers are exactly the
+set of initialisation-block indices the same file carries: **3 to 11** for
+analyzer's nine and **3 to 46** for facedancer's forty-four, with no gaps
+and no duplicates. That settles three things at once from a vendor
+artefact — that row 0 of a `.config` record is the **most significant**
+bit, that `WID` *is* the block index, and that `ecppack` numbers from 3
+(which is also what nextpnr's `pack_ebr` says in a comment, and now does
+not have to be taken on trust).
+
+### The ordering of the contents, and the honest answer about it
+
+**It has not been verified against a vendor bitstream, and it cannot be.**
+All 53 of their initialisation blocks are **zero** — exactly as all 111 of
+their distributed RAMs are empty — so they cannot tell a right ordering
+from a wrong one. The test asserts the zeros rather than skipping them, so
+a future reference bitstream with contents would fail there and say so.
+
+What the ordering rests on instead is `src/fpga/devices/ecp5.dev`'s own
+layout plus one step: 1024 rows of 18 bits in 20-bit slots, sixteen rows
+to an `INITVAL_<nn>` parameter, and **two nine-bit words of the stream to
+a row, the low word in bits 8..0**. The one thing that makes that
+self-consistent rather than merely plausible is that the block's 9-bit
+mode addresses the array in exactly those units — 2048 words of nine bits
+is the whole 18 kbit — so word *w* of the stream is address *w* of a 9-bit
+port, and the device file's `init low 0-8 9-17` says which half of a row
+each is. **A part is the only thing that can settle it**, and the
+experiment is named below.
+
+This is the same gap the distributed RAM has, one size up and one step
+closer to closing: `dpram_init_word`'s permutation is untested because
+`fpga::primitives` declines to lower an initialised memory onto a
+`TRELLIS_DPR16X4` at all. A **block** RAM's initial contents do reach the
+bitstream, so the experiment is now buildable.
+
+### The control wires, and what a block RAM takes from something else
+
+The distributed-RAM round found that a RAM's write enable takes the tile's
+`LSR1`, which the placer had to learn or the router failed. The same
+question asked of a `DP16KD` has a different answer, and it is a better
+one: **a block RAM contends with nothing in its own tile**, because an EBR
+tile has no other bel. `CIB_EBR+MIB_EBR0` contributes one `bram` bel and
+nothing else — no lookup table, no flip-flop, no pad — so there is no
+budget to share and `SiteRules` has nothing to say.
+
+What it does take is **interconnect in two neighbouring columns**. Its 116
+pins do not fit in one column's `JA*`/`JB*`/`JC*`/`JD*`/`JF*`/`JQ*`: port
+A's low pins are in the block's own column, port B's clock and enable and
+both ports' high address bits are one column east, and the **two top data
+bits of each port** are two columns east. That last column is the next
+block's own column, so in this model an 18-bit block and the block two
+columns east of it cannot both be used, and `configure_bram` refuses the
+arrangement by name.
+
+**The evidence is mixed and it is recorded rather than resolved.** Of the
+51 true `DP16KD` blocks in these files exactly one is 18 bits wide, and
+the block two columns east of it is **not** in use, which is what the
+refusal expects. But both `PDPW16KD` blocks read 36 bits — which needs the
+same four wires — and both **do** have an in-use block two columns east.
+So either the overlap is not what this reading says, or those designs rely
+on something this model does not express. This flow builds no `PDPW16KD`,
+refusing is the conservative direction, and the experiment that would
+settle it is named below.
+
+The clock is the other control wire, and it needed two fixes rather than a
+rule. `configure_bram`'s companion check is `clock_network_use`, which now
+asks about `p0_clk` and `p1_clk` of every block RAM as well as every
+flip-flop's `clk` and every distributed RAM's `wclk`: a block RAM's clock
+pin is joined straight to its tile's `JCLK0` with no mux of its own, so the
+walk stops there instead of at a slice's `CLK0`. And
+`primitives::Mapper::clock_buffers` learned two things:
+
+- **a block RAM is two clock pins, not one**, `CLKA` and `CLKB`, usually
+  the same net — found by primitive name out of the device file's own
+  `port rw` lines, exactly as the distributed RAM's `WCK` is;
+- **a memory's clock does not lose to the global-buffer threshold.** A
+  design with one block RAM and no flip-flops is three clock pins against
+  a threshold of eight, and this backend *refuses* a memory clocked
+  through general routing — so the threshold could make a legitimate
+  design unbuildable, and did. `ecppack` puts a memory's clock on a global
+  network in all 111 distributed RAMs and all 53 block RAMs of this
+  board's bitstreams, so a memory's clock now bypasses the threshold on
+  every family. That also fixed `logicram_ecp5`, whose distributed RAM's
+  clock had been on local routing all along — a design this flow would
+  have refused to write a bitstream for.
+
+### What places now, and what it costs
+
+`testdata/fpga/ecp5/block_ram_2048.v` on an LFE5U-12F in caBGA-256: a
+2048×8 writable memory with a registered read port, and a 2048×8 ROM whose
+contents are a function of the address, with all 37 of its ports on
+top-edge balls.
+
+| | |
+|---|---|
+| `DP16KD` | 2, both in the **9-bit** mode — one block each, which is why the memories are 2048 deep: a shallower one ties on block count and the mapper breaks a tie by preferring the *widest* mode |
+| Configuration bits | **1019**, of which **35** are the two blocks' own |
+| Initialisation blocks | 2, numbered 3 and 4, of 2048 nine-bit words each |
+| Clock pins on a global network | 3 — `CLKA` and `CLKB` of the writable memory, `CLKB` of the ROM |
+| Unexplained bits | **0**, and the 357 arcs the bits select are exactly the 357 the router chose |
+
+The 35 bits break down as twelve per block that every block gets — five
+for the mode, one for each port's 9-bit width, one for each port's write
+mode, one for `GSR`, one for each of the two reset fields — plus the ties
+and the identifier: a reset mux per port, a write-enable mux per port that
+does not write, a clock-enable mux per port the design does not use at all,
+and one bit per set bit of the block's own number.
+
+Two things about the Verilog are load-bearing and both are about which
+cell the memory becomes. **The read is registered with no reset**: `q <=
+mem[a]` inside a plain `always @(posedge clk)` is what `src/synth/proc`
+turns into a *clocked* read port, and a clocked read port is the only kind
+a block RAM can serve. Add a reset to that register and the promotion does
+not happen, the memory has an asynchronous read port, and
+`fpga::primitives` puts it in distributed RAM instead — which is exactly
+what `ip/fifo_sync` does, and why **no `ip/fifo_sync` footprint moved**:
+both of its variants read asynchronously, so none of them has ever been a
+block-RAM candidate and `docs/ip-library.md`'s table is unchanged. And
+**the ROM has contents and no write port**, which is the only case in which
+a block RAM's `INITVAL` parameters reach a bitstream at all.
+
+### What a board would have added, and the two cheapest experiments
+
+**A board would have added something real here, and this round did not
+touch one.** Everything above is the database, the vendor's own bitstreams
+and this flow's own output; a *wrong* block RAM decodes perfectly against
+itself and addresses the wrong memory, which is the exact shape of defect
+that cost the distributed-RAM round a section of this file.
+
+Two things rest on reading rather than on measurement, and there is one
+experiment for each.
+
+**The contents' ordering.** Whether word *n* of an initialisation block is
+address *n* of the memory the silicon reads. The check in
+`a_block_ram_places_routes_and_every_bit_of_it_decodes` reads back what
+`bram_init_words` wrote, so a permutation that was wrong in a
+self-consistent way would pass it, and the vendor's blocks are all empty.
+*The cheapest experiment:* `usb_bulk_ep`'s packet buffers are already two
+RAMs on a Cynthion with a host reading every byte back through endpoint 1,
+and `tests/usb_loopback.rs` is already the instrument. Add a third memory
+beside them — a 2048×8 ROM whose contents are `(a ^ 0x5a) | 1`, the same
+function `block_ram_2048.v` uses — and return a window of it on endpoint 1
+instead of the loopback bytes. If the host reads back the function it
+expects, at the addresses it asked for, the ordering becomes a
+measurement. It needs no new gateware beyond the endpoint's address
+decode, and it would settle `dpram_init_word`'s sibling question by
+analogy rather than by assumption.
+
+**The 18-bit overlap.** Whether an 18-bit block really sterilises the
+block two columns east of it. The reading says yes, the vendor's one
+18-bit `DP16KD` is consistent with it, and their two 36-bit `PDPW16KD`s
+contradict it. *The cheapest experiment:* build a 1024×16 memory — which
+chooses the 18-bit mode — and a second 2048×8 memory, with an `rloc` macro
+or a region putting the two blocks two columns apart, then read both back
+through endpoint 1. If both memories return their own bytes, the refusal
+is too strict and should be dropped; if the wide one's top two bits come
+back as the narrow one's bottom two, it is a fabric fact worth a section of
+its own. Until then `configure_bram` refuses, which costs the 18-bit mode
+nothing a design cannot get from two 9-bit blocks.
+
+### One gap this round found and did not fix
+
+A clock buffer can be placed where its clock **pad** cannot reach it.
+`G_CLKI_<name>` is a global wire, so a `DCC` anywhere on the die looks
+equally good to a cost function made of distances, and the one nearest a
+block RAM at Y25 is `LMID_0` at X3Y25 — which a **top**-edge pad has no
+path to at all. Left to itself the placer puts the buffer there and the
+router then says:
+
+```
+error: no path exists from the driver of `clk` to `clk$gbuf.CLKI[0]`:
+the architecture has no wire joining them
+```
+
+`testdata/fpga/ecp5/block_ram_2048.rcf` works around it with a region
+pinning the buffer to `TMID_0`/`TMID_1`, and the workaround is marked as
+one in the file. It is not about block RAM — any design whose clock sinks
+sit far from its clock pad can hit it — and the fix belongs in
+`fpga::place`, which would have to know which buffers a pad can reach.
+Nothing before this round had a clock sink far enough from its pad for it
+to matter.
+
 ## The left edge is on a part now, and the witness is a transceiver's own vendor ID
 
 The section below this one describes all four edges of this die and ends by
@@ -4715,7 +5049,10 @@ borrows now. Every backend gets it.
 | A clock on a **dedicated** clock pad | nothing, and it has never been exercised. A `PCLKT` pad reaches the centre through `G_JPCLKT<q><n> <- JINCK <- JPADDI`, all `.fixed_conn`s already in the graph; a Cynthion's oscillator is on the `PCLKC` half of the pair, so this flow has only ever taken the fabric route |
 | A ball of a package whose edge is not described | **nothing on a caBGA-256**: all four edges are described and all 197 balls the package names are pads. The row used to say the left edge was "the right edge mirrored" and half of that was wrong; see "The buffer is not where the bits are". What is still untried is a *package* whose edges this die does not have — the caBGA-381 and the TQFP144 are in `iodb.json` and no design has been built for either |
 | A carry chain | `CCU2C` has no port map in the device file, on purpose: its two sum bits and internal carry do not match the `(ci, i0, i1) -> co` model Reticle maps carry onto. The `.mux` records for the cascade wires are read already |
-| Block RAM | `Ecp5Stream` reads and writes the initialisation blocks — the reference files' 44 blocks round trip — and nothing generates one. The `MIB_EBR*` tiles' wires and pips are in the graph |
+| A block RAM's **contents on a part** | the bits are written and the stream carries them, and whether word *n* is address *n* has no evidence either way: all 53 of the vendor's initialisation blocks are empty. See "What a board would have added" in the block-RAM section, which names the one experiment |
+| A block RAM in **18-bit mode beside another** | `configure_bram` refuses it, because the two top data bits of each port are the next block's bottom two in this reading, and the vendor's two 36-bit blocks contradict that reading. The same section names the experiment |
+| A `PDPW16KD` | the pseudo dual-port mode, 36 bits on one side. Two of the 53 blocks in this board's own bitstreams are one; `fpga::primitives` has no shape for it and `configure_bram` writes `MODE = DP16KD` |
+| A block RAM's **output register** | `REGMODE_A`/`REGMODE_B` are `NOREG`, which is the default and what `ecppack` writes for all 53. A pipelined read would be `OUTREG` and a cycle later, and nothing models the extra cycle |
 | A distributed RAM's **contents** | `configure_lutram` writes them from an `INITVAL` parameter and nothing produces one: `fpga::primitives` declines to lower a memory with initial contents, so every RAM this flow builds starts empty. All 111 of the vendor's do too, so `dpram_init_word`'s permutation still has no evidence either way. What *is* settled now is the pair of **run-time** address decodings, which agree at every address of a 64-deep RAM on a real part — see the first section |
 | A distributed RAM **on a part** | see "What a board would have added" in the distributed-RAM section. Everything else about it is measured; that a written word reads back is not |
 | A flip-flop **sharing a RAM's `LSR1`** | the placer allows it when the reset *is* the RAM's write-enable net, because a wire carries one signal either way. `ecppack` never does it — 0 of 51 — so it rests on the database alone. "What a board would have added" at the end of the first section names the one experiment that settles it and the `CLK1` reading with it |
