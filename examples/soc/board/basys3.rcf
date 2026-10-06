@@ -61,7 +61,7 @@ clock_domain sys clk
 #   green J17 H17 G17 D17
 #   blue  N18 L18 K18 J18
 #   hsync P19   vsync R19
-# The `ip/dvi_tx` package in this repository drives TMDS differential
+# The `ip/video/dvi_tx` package in this repository drives TMDS differential
 # pairs and CANNOT drive this board. Its `video_timing` module, which is
 # counters and sync generation and nothing else, is reusable unchanged
 # for a VGA path; the serialiser and the TMDS encoder are not.

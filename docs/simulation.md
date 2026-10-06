@@ -381,12 +381,12 @@ a real testbench also pays.
 | `testdata/synth/ram_regread.rtl` | 2 comb + 4 edge ops, 1 reg / 8 bits, 16x8 RAM | 1.77 M cycles/s | 11.28 M cycles/s | 6.4x |
 | `testdata/synth/mux_tree.rtl` | 13 comb ops, no state | 2.47 M cycles/s | 9.23 M cycles/s | 3.7x |
 | `testdata/synth/counter_en.cells.rtl` | 2 comb + 6 edge ops, 2 regs / 9 bits | 0.72 M cycles/s | 5.31 M cycles/s | 7.4x |
-| `ip/uart_tx` | 7 comb + 40 edge ops, 4 regs / 31 bits | 1.22 M cycles/s | 4.07 M cycles/s | 3.3x |
-| `ip/uart` | 18 comb + 126 edge ops, 13 regs / 72 bits | 0.42 M cycles/s | 1.65 M cycles/s | 3.9x |
-| `ip/fifo_sync` | 18 comb + 21 edge ops, 3 regs / 18 bits, 16x8 RAM | 0.59 M cycles/s | 5.19 M cycles/s | 8.8x |
-| `ip/spi_master` | 17 comb + 90 edge ops, 10 regs / 53 bits | 0.56 M cycles/s | 2.09 M cycles/s | 3.8x |
-| `ip/i2c_master` | 21 comb + 220 edge ops, 14 regs / 41 bits | 0.40 M cycles/s | 1.07 M cycles/s | 2.7x |
-| `ip/axil_gpio` | 26 comb + 97 edge ops, 13 regs / 148 bits | 0.32 M cycles/s | 1.82 M cycles/s | 5.6x |
+| `ip:uart_tx` | 7 comb + 40 edge ops, 4 regs / 31 bits | 1.22 M cycles/s | 4.07 M cycles/s | 3.3x |
+| `ip:uart` | 18 comb + 126 edge ops, 13 regs / 72 bits | 0.42 M cycles/s | 1.65 M cycles/s | 3.9x |
+| `ip:fifo_sync` | 18 comb + 21 edge ops, 3 regs / 18 bits, 16x8 RAM | 0.59 M cycles/s | 5.19 M cycles/s | 8.8x |
+| `ip:spi_master` | 17 comb + 90 edge ops, 10 regs / 53 bits | 0.56 M cycles/s | 2.09 M cycles/s | 3.8x |
+| `ip:i2c_master` | 21 comb + 220 edge ops, 14 regs / 41 bits | 0.40 M cycles/s | 1.07 M cycles/s | 2.7x |
+| `ip:axil_gpio` | 26 comb + 97 edge ops, 13 regs / 148 bits | 0.32 M cycles/s | 1.82 M cycles/s | 5.6x |
 
 So: three to ten times on the IP blocks, and forty on a design that is
 nothing but combinational logic. Two caveats before the analysis. The two

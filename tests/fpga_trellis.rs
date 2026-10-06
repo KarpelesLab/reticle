@@ -1290,7 +1290,7 @@ fn a_block_ram_places_routes_and_every_bit_of_it_decodes() {
     );
 }
 
-/// `ip/fifo_sync` on a part, at three depths, which is the thing a
+/// `ip/memory/fifo_sync` on a part, at three depths, which is the thing a
 /// distributed RAM was needed for.
 ///
 /// Until the `lutram` bel existed this design could not be placed at all —
@@ -1367,8 +1367,11 @@ fn a_distributed_ram_places_routes_and_every_bit_of_it_decodes() {
     for (depth, rams) in [(16u32, 2usize), (32, 4), (64, 8)] {
         let top = format!("testdata/fpga/ecp5/fifo_sync_{depth}.v");
         let rcf = format!("testdata/fpga/ecp5/fifo_sync_{depth}.rcf");
-        let (bits, stream, pads, routing, _, routed) =
-            compile_all(&fabric, &[&top, "ip/fifo_sync/rtl/fifo_sync.v"], &rcf);
+        let (bits, stream, pads, routing, _, routed) = compile_all(
+            &fabric,
+            &[&top, "ip/memory/fifo_sync/rtl/fifo_sync.v"],
+            &rcf,
+        );
 
         // ---- what was placed ----
         let lutrams: Vec<usize> = routed
@@ -1576,7 +1579,7 @@ fn a_distributed_ram_and_two_reset_domains_share_a_die() {
         &fabric,
         &[
             "testdata/fpga/ecp5/lutram_reset_64.v",
-            "ip/fifo_sync/rtl/fifo_sync.v",
+            "ip/memory/fifo_sync/rtl/fifo_sync.v",
         ],
         "testdata/fpga/ecp5/lutram_reset_64.rcf",
     );
@@ -4818,7 +4821,7 @@ fn fabric_data_index(field: &str, value: &str) -> Option<u32> {
 ///
 /// `testdata/fpga/cynthion/wide_state.v` is the reproducer: three bits, four
 /// values, so `state[2]` is a flip-flop whose data input is the constant
-/// zero. `ip/usb_device_fs/rtl/usb_ctrl_ep.v` had exactly that in its
+/// zero. `ip/usb/usb_device_fs/rtl/usb_ctrl_ep.v` had exactly that in its
 /// `stage` register, and read back off a real ECP5 through a debug port
 /// `stage` was **5**: every `case (stage)` label missed, every IN token the
 /// host sent was answered from the `default` arm with a NAK, and the
@@ -4989,9 +4992,9 @@ fn a_register_bit_nothing_drives_is_built_from_a_constant() {
 #[cfg(all(feature = "verilog", feature = "synth"))]
 const USB_SOURCES: [&str; 4] = [
     "testdata/fpga/cynthion/usb_ulpi_device.v",
-    "ip/usb_device_ulpi/rtl/usb_ulpi_link.v",
-    "ip/usb_device_ulpi/rtl/usb_device_ulpi.v",
-    "ip/usb_device_fs/rtl/usb_ctrl_ep.v",
+    "ip/usb/usb_device_ulpi/rtl/usb_ulpi_link.v",
+    "ip/usb/usb_device_ulpi/rtl/usb_device_ulpi.v",
+    "ip/usb/usb_device_fs/rtl/usb_ctrl_ep.v",
 ];
 
 /// The constraints that go with them.
@@ -5561,9 +5564,9 @@ fn the_usb_devices_top_level_configures_a_transceiver_through_its_pads() {
     let sources = [
         "testdata/fpga/cynthion/usb_ulpi_device_tb.v",
         "testdata/fpga/cynthion/usb_ulpi_device.v",
-        "ip/usb_device_ulpi/rtl/usb_ulpi_link.v",
-        "ip/usb_device_ulpi/rtl/usb_device_ulpi.v",
-        "ip/usb_device_fs/rtl/usb_ctrl_ep.v",
+        "ip/usb/usb_device_ulpi/rtl/usb_ulpi_link.v",
+        "ip/usb/usb_device_ulpi/rtl/usb_device_ulpi.v",
+        "ip/usb/usb_device_fs/rtl/usb_ctrl_ep.v",
     ];
     let mut map = SourceMap::new();
     let mut diags = Diagnostics::new();
@@ -5623,9 +5626,9 @@ fn the_ulpi_traces_console_prints_the_bus_in_order() {
     let sources = [
         "testdata/fpga/cynthion/usb_ulpi_trace_tb.v",
         "testdata/fpga/cynthion/usb_ulpi_trace.v",
-        "ip/usb_device_ulpi/rtl/usb_ulpi_link.v",
-        "ip/usb_device_ulpi/rtl/usb_device_ulpi.v",
-        "ip/usb_device_fs/rtl/usb_ctrl_ep.v",
+        "ip/usb/usb_device_ulpi/rtl/usb_ulpi_link.v",
+        "ip/usb/usb_device_ulpi/rtl/usb_device_ulpi.v",
+        "ip/usb/usb_device_fs/rtl/usb_ctrl_ep.v",
     ];
     let mut map = SourceMap::new();
     let mut diags = Diagnostics::new();
@@ -6222,15 +6225,15 @@ fn every_label_of_the_target_hosts_report_names_the_value_beside_it() {
 
     let sources = [
         "testdata/fpga/cynthion/usb_host_target.v",
-        "ip/usb_host_ulpi/rtl/usb_host_ulpi.v",
-        "ip/usb_host_ulpi/rtl/usb_ulpi_host_link.v",
-        "ip/usb_host_ulpi/rtl/usb_host_sie.v",
-        "ip/usb_host_ulpi/rtl/usb_host_enum.v",
-        "ip/usb_cdc_acm/rtl/usb_cdc_acm_ulpi.v",
-        "ip/usb_cdc_acm/rtl/usb_cdc_acm.v",
-        "ip/usb_cdc_acm/rtl/usb_cdc_req.v",
-        "ip/usb_device_ulpi/rtl/usb_ulpi_link.v",
-        "ip/usb_device_fs/rtl/usb_ctrl_ep.v",
+        "ip/usb/usb_host_ulpi/rtl/usb_host_ulpi.v",
+        "ip/usb/usb_host_ulpi/rtl/usb_ulpi_host_link.v",
+        "ip/usb/usb_host_ulpi/rtl/usb_host_sie.v",
+        "ip/usb/usb_host_ulpi/rtl/usb_host_enum.v",
+        "ip/usb/usb_cdc_acm/rtl/usb_cdc_acm_ulpi.v",
+        "ip/usb/usb_cdc_acm/rtl/usb_cdc_acm.v",
+        "ip/usb/usb_cdc_acm/rtl/usb_cdc_req.v",
+        "ip/usb/usb_device_ulpi/rtl/usb_ulpi_link.v",
+        "ip/usb/usb_device_fs/rtl/usb_ctrl_ep.v",
     ];
     let mut map = SourceMap::new();
     let mut diags = Diagnostics::new();
@@ -6362,8 +6365,8 @@ fn every_label_of_the_target_hosts_report_names_the_value_beside_it() {
 /// The hub board's console says what its header's table says, and its pad is
 /// released when the design starts.
 ///
-/// `testdata/fpga/cynthion/usb_hub_target.v` puts `ip/usb_hub` on a Cynthion's
-/// AUX port and `ip/usb_host_ulpi` on its TARGET port, and because AUX is then
+/// `testdata/fpga/cynthion/usb_hub_target.v` puts `ip/usb/usb_hub` on a Cynthion's
+/// AUX port and `ip/usb/usb_host_ulpi` on its TARGET port, and because AUX is then
 /// the hub rather than a serial port its console is the UART on ball **T14** —
 /// the one on the same net as the debug microcontroller's `TMS` output, with no
 /// series resistor on the PCB. Two things about that design are worth a test
@@ -6410,15 +6413,15 @@ fn the_hub_boards_console_names_the_fields_its_header_claims() {
 
     let sources = [
         "testdata/fpga/cynthion/usb_hub_target.v",
-        "ip/usb_hub/rtl/usb_hub_ulpi.v",
-        "ip/usb_hub/rtl/usb_hub.v",
-        "ip/usb_hub/rtl/usb_hub_req.v",
-        "ip/usb_host_ulpi/rtl/usb_host_ulpi.v",
-        "ip/usb_host_ulpi/rtl/usb_ulpi_host_link.v",
-        "ip/usb_host_ulpi/rtl/usb_host_sie.v",
-        "ip/usb_host_ulpi/rtl/usb_host_enum.v",
-        "ip/usb_device_ulpi/rtl/usb_ulpi_link.v",
-        "ip/usb_device_fs/rtl/usb_ctrl_ep.v",
+        "ip/usb/usb_hub/rtl/usb_hub_ulpi.v",
+        "ip/usb/usb_hub/rtl/usb_hub.v",
+        "ip/usb/usb_hub/rtl/usb_hub_req.v",
+        "ip/usb/usb_host_ulpi/rtl/usb_host_ulpi.v",
+        "ip/usb/usb_host_ulpi/rtl/usb_ulpi_host_link.v",
+        "ip/usb/usb_host_ulpi/rtl/usb_host_sie.v",
+        "ip/usb/usb_host_ulpi/rtl/usb_host_enum.v",
+        "ip/usb/usb_device_ulpi/rtl/usb_ulpi_link.v",
+        "ip/usb/usb_device_fs/rtl/usb_ctrl_ep.v",
     ];
     let mut map = SourceMap::new();
     let mut diags = Diagnostics::new();

@@ -2,7 +2,7 @@
 // `usb_ctrl_ep`'s class hook.
 //
 // What it does
-//   Endpoint 0 in `ip/usb_device_fs` answers the standard requests and
+//   Endpoint 0 in `ip/usb/usb_device_fs` answers the standard requests and
 //   offers everything else to whatever is above it. This is what a CDC ACM
 //   device puts there: the requests a host's own serial driver sends, and
 //   nothing else.

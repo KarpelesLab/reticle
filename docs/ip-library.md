@@ -4,50 +4,77 @@ The first-party half of phase 8. [`docs/ip.md`](ip.md) describes the
 machinery — the manifest formats, the resolver, the bus model, the black
 boxes — and [`docs/writing-a-cpu.md`](writing-a-cpu.md) describes how to
 package a processor, using this library's two as the worked examples.
-This document describes the **blocks**: twenty-five pieces of HDL
+This document describes the **blocks**: twenty-nine pieces of HDL
 that drop into a design the way a crate drops into a Rust program, each
 with a manifest, a Rust co-simulation test, and a resource footprint that
 was measured rather than guessed.
 
 They live at the top of the repository, in `ip/`, one directory per
-package. A project finds a block by name (`library ../../ip`, then
-`depends uart ^1.0.0`), so this listing is a fact about the tree and not
-an interface anybody depends on:
+package, grouped into seven folders by what a block is *for*. The
+grouping is a filing system and nothing else: a project finds a block by
+name (`library ../../ip`, then `depends uart ^1.0.0`), the name is the
+one the block's own `reticle.ip` declares, and no code anywhere reads a
+category. So this listing is a fact about the tree and not an interface
+anybody depends on:
 
 ```text
 ip/
-  axil_gpio/     reticle.ip  rtl/axil_gpio.v
-  cdc_pulse/     reticle.ip  rtl/cdc_pulse.v
-  cdc_sync/      reticle.ip  rtl/cdc_sync.v
-  dvi_tx/        reticle.ip  rtl/tmds_encoder.v  rtl/video_timing.v  rtl/dvi_tx.v
-  dvi_tx_pll/    reticle.ip  rtl/dvi_tx_pll.v
-  eth_mac_rgmii/ reticle.ip  rtl/eth_mac_rgmii.v
-  eth_mac_rmii/  reticle.ip  rtl/eth_mac_tx.v  rtl/eth_mac_rx.v  rtl/eth_mac_rmii.v
-  fifo_async/    reticle.ip  rtl/fifo_async.v
-  fifo_sync/     reticle.ip  rtl/fifo_sync.v
-  hyperram_ctrl/ reticle.ip  rtl/hyperram_ctrl.v
-  i2c_master/    reticle.ip  rtl/i2c_master.v
-  mos6502/       reticle.ip  rtl/mos6502.v
-  ppu2c02/       reticle.ip  rtl/ppu_palette.v  rtl/ppu2c02.v  README.md
-  pwm/           reticle.ip  rtl/pwm.v
-  ram_wrapper/   reticle.ip  rtl/ram_sp.v  rtl/ram_sdp.v
-  rv32i/         reticle.ip  rtl/rv32i.v
-  sdram_ctrl/    reticle.ip  rtl/sdram_ctrl.v
-  spi_master/    reticle.ip  rtl/spi_master.v
-  spiflash_xip/  reticle.ip  rtl/spiflash_xip.v
-  timer/         reticle.ip  rtl/timer.v
-  uart/          reticle.ip  rtl/uart_tx.v  rtl/uart_rx.v  rtl/uart.v
+  bus/
+    axil_gpio/   reticle.ip  rtl/axil_gpio.v
+    i2c_master/  reticle.ip  rtl/i2c_master.v
+    spi_master/  reticle.ip  rtl/spi_master.v
+    uart/        reticle.ip  rtl/uart_tx.v  rtl/uart_rx.v  rtl/uart.v
                  rtl/uart_baud_div.v
-  usb_device_fs/ reticle.ip  rtl/usb_fs_rx.v  rtl/usb_fs_tx.v  rtl/usb_ctrl_ep.v  rtl/usb_device_fs.v
-                 (usb_ctrl_ep.v holds four modules; see below)
-  usb_device_fs_pll/ reticle.ip  rtl/usb_device_fs_pll.v
-  usb_device_ulpi/ reticle.ip  README.md  rtl/usb_ulpi_link.v  rtl/usb_device_ulpi.v
-  usb_host_ulpi/ reticle.ip  README.md  rtl/usb_ulpi_host_link.v  rtl/usb_host_sie.v
-                 rtl/usb_host_enum.v  rtl/usb_host_ulpi.v
-  usb_cdc_acm/   reticle.ip  README.md  rtl/usb_cdc_req.v  rtl/usb_cdc_acm.v
-                 rtl/usb_cdc_acm_fs.v  rtl/usb_cdc_acm_ulpi.v
-  vga_out/       reticle.ip  README.md  rtl/vga_out.v
+  cpu/
+    mos6502/  reticle.ip  rtl/mos6502.v
+    rv32i/    reticle.ip  rtl/rv32i.v
+  memory/
+    fifo_async/     reticle.ip  rtl/fifo_async.v
+    fifo_sync/      reticle.ip  rtl/fifo_sync.v
+    hyperram_ctrl/  reticle.ip  rtl/hyperram_ctrl.v
+    ram_wrapper/    reticle.ip  rtl/ram_sp.v  rtl/ram_sdp.v
+    sdram_ctrl/     reticle.ip  rtl/sdram_ctrl.v
+    spiflash_xip/   reticle.ip  rtl/spiflash_xip.v
+  net/
+    eth_mac_rgmii/  reticle.ip  rtl/eth_mac_rgmii.v
+    eth_mac_rmii/   reticle.ip  rtl/eth_mac_tx.v  rtl/eth_mac_rx.v
+                    rtl/eth_mac_rmii.v
+  usb/
+    usb_cdc_acm/        reticle.ip  README.md  rtl/usb_cdc_req.v
+                        rtl/usb_cdc_acm.v  rtl/usb_cdc_acm_fs.v
+                        rtl/usb_cdc_acm_ulpi.v
+    usb_device_fs/      reticle.ip  rtl/usb_fs_rx.v  rtl/usb_fs_tx.v
+                        rtl/usb_ctrl_ep.v  rtl/usb_device_fs.v
+                        (usb_ctrl_ep.v holds four modules; see below)
+    usb_device_fs_pll/  reticle.ip  rtl/usb_device_fs_pll.v
+    usb_device_ulpi/    reticle.ip  README.md  rtl/usb_ulpi_link.v
+                        rtl/usb_device_ulpi.v
+    usb_host_ulpi/      reticle.ip  README.md  rtl/usb_ulpi_host_link.v
+                        rtl/usb_host_sie.v  rtl/usb_host_enum.v
+                        rtl/usb_host_ulpi.v
+    usb_hub/            reticle.ip  README.md  rtl/usb_hub_req.v
+                        rtl/usb_hub.v  rtl/usb_hub_fs.v  rtl/usb_hub_ulpi.v
+    usb_proxy/          reticle.ip  README.md  rtl/usb_proxy_relay.v
+                        rtl/usb_proxy_dn.v  rtl/usb_hub_proxy_ulpi.v
+  util/
+    cdc_pulse/  reticle.ip  rtl/cdc_pulse.v
+    cdc_sync/   reticle.ip  rtl/cdc_sync.v
+    pwm/        reticle.ip  rtl/pwm.v
+    timer/      reticle.ip  rtl/timer.v
+  video/
+    dvi_tx/      reticle.ip  rtl/tmds_encoder.v  rtl/video_timing.v
+                 rtl/dvi_tx.v
+    dvi_tx_pll/  reticle.ip  rtl/dvi_tx_pll.v
+    ppu2c02/     reticle.ip  README.md  rtl/ppu_palette.v  rtl/ppu2c02.v
+    vga_out/     reticle.ip  README.md  rtl/vga_out.v
 ```
+
+**A folder is named after the package it holds, and the name is not
+shortened for the path it sits in**: `ip/usb/usb_device_fs/` declares
+`name usb_device_fs`, not `device_fs`. The path is a little redundant for
+it. Renaming the packages would have changed their identity — every
+`depends` line, every lock file entry and the meaning of every version
+number — to tidy a path, which is not a trade worth making.
 
 `ip/` is in the `exclude` list of `Cargo.toml`, so the published `.crate`
 does not carry it. The library is HDL, not Rust: nothing under `src/`
@@ -92,7 +119,7 @@ It is distributed as part of the repository instead.
 
 `ppu2c02` is the block whose *subject* needs a statement rather than only
 its behaviour, so it has a page of its own,
-[`ip/ppu2c02/README.md`](../ip/ppu2c02/README.md): it is implemented from
+[`ip/video/ppu2c02/README.md`](../ip/video/ppu2c02/README.md): it is implemented from
 the published description of a machine, and no game data, character data
 or lockout logic is in this repository. It is used by
 [`examples/nes`](../examples/nes), which runs a demo written for that
@@ -100,9 +127,9 @@ example and nothing else. It is not in the footprint table below, which
 measures the blocks `tests/ip_library.rs` takes through the flow; its
 numbers are on its own page and in `tests/nes.rs`.
 
-Two other blocks carry a page. [`ip/vga_out/README.md`](../ip/vga_out/README.md)
+Two other blocks carry a page. [`ip/video/vga_out/README.md`](../ip/video/vga_out/README.md)
 says what truncating colour to a board's bits per channel costs a picture.
-[`ip/usb_device_ulpi/README.md`](../ip/usb_device_ulpi/README.md) is a
+[`ip/usb/usb_device_ulpi/README.md`](../ip/usb/usb_device_ulpi/README.md) is a
 different kind of page again: it is **the protocol, written down before
 the block was**, the way [`docs/apollo-protocol.md`](apollo-protocol.md)
 was written before the Apollo transport — every fact of ULPI 1.1 the block
@@ -111,7 +138,7 @@ is, then what the block leaves out and why, then what simulation
 established and what it cannot. A link layer written from a reading
 nobody wrote down is a link layer nobody can check.
 
-[`ip/usb_cdc_acm/README.md`](../ip/usb_cdc_acm/README.md) is the third of
+[`ip/usb/usb_cdc_acm/README.md`](../ip/usb/usb_cdc_acm/README.md) is the third of
 that kind and is about a different sort of fact again. ULPI's document is a
 bus read out of a specification; a class layer's question is not "is this
 descriptor legal" but **"does the driver bind"**, which no specification
@@ -134,7 +161,7 @@ board. The page also records where the specification and the driver pull in
 opposite directions and which way the block went: D1 is one bit over four
 things, the block does three of them, and it is set anyway.
 
-[`ip/usb_host_ulpi/README.md`](../ip/usb_host_ulpi/README.md) is the
+[`ip/usb/usb_host_ulpi/README.md`](../ip/usb/usb_host_ulpi/README.md) is the
 fourth, and it is the first page here about a block that is **not a
 peripheral**. Everything else USB in this library answers somebody else's
 tokens; this one sends them. Its page is deliberately short where ULPI's
@@ -161,7 +188,7 @@ long in three places a device's never had to be:
   page says what the measurement to take is and which reference
   bitstreams would settle it.
 
-[`ip/usb_hub/README.md`](../ip/usb_hub/README.md) is the fifth, and it is
+[`ip/usb/usb_hub/README.md`](../ip/usb/usb_hub/README.md) is the fifth, and it is
 the page whose **first** section is an argument about why the block is not
 the thing its name suggests. A hub is a repeater — USB 2.0 §11.1.1 — and
 through a ULPI transceiver the floor for a byte in and a byte out is about
@@ -178,15 +205,15 @@ other four: it cites chapter 11 by **section** and never by table number,
 because a section number misquoted is findable and a table number misquoted
 sends a reader somewhere else and looks authoritative doing it.
 
-[`ip/usb_proxy/README.md`](../ip/usb_proxy/README.md) is the sixth, and it is
+[`ip/usb/usb_proxy/README.md`](../ip/usb/usb_proxy/README.md) is the sixth, and it is
 the sequel to that kernel log: the half that forwards. Its **§2** is the one
 section to read if only one gets read, because it is an architectural decision
 written down as one — **pass-through addressing**, which makes the PC the only
 authority for the downstream device's address and so needs no translation table,
 no descriptor cache and no way for the two buses to disagree about a packet
 size. The price of it is a port reset that really reaches the device, which is
-what `ip/usb_hub` gained a handshake for, and the consequence of it is that
-`ip/usb_host_ulpi`'s own enumerator is not instantiated in a proxy at all.
+what `ip/usb/usb_hub` gained a handshake for, and the consequence of it is that
+`ip/usb/usb_host_ulpi`'s own enumerator is not instantiated in a proxy at all.
 
 `usb_host_ulpi`'s fourth confidence level is **CHECKED** in a different
 sense from `usb_cdc_acm`'s: not "a host did this" but "**our host did this
@@ -389,7 +416,7 @@ that answered a cycle later would need a fifth stage there, a handshake back,
 and a rule about what happens if the host's next token arrives first. A
 request decoder is a comparison of eight bytes against constants — there is
 nothing in it to sequence — so asking for it combinationally asks for nothing
-a class cannot give. `ip/usb_cdc_acm/rtl/usb_cdc_req.v` is that decoder and it
+a class cannot give. `ip/usb/usb_cdc_acm/rtl/usb_cdc_req.v` is that decoder and it
 is fifteen lines of `assign`.
 
 And `class_req` is **not** raised for the five requests endpoint 0 implements,
@@ -463,7 +490,7 @@ listening when the state changed, and `cdc_acm` does not start listening until
 `open`. Sending one per configuration and no more meant that the single packet
 went to whoever polled first and the carrier was then wrong for ever: measured
 as `TIOCMGET = 0x026` — no DCD, no DSR — on three consecutive opens, which
-`ip/usb_cdc_acm/README.md` §4 writes up as the defect it was.
+`ip/usb/usb_cdc_acm/README.md` §4 writes up as the defect it was.
 
 `serial_state` is a **port** of `usb_cdc_acm` and not a constant, seven bits
 wide because §6.5.4 defines seven and reserves the other nine: DCD, DSR,
@@ -471,7 +498,7 @@ break, ring, framing, parity and overrun. A device with no modem lines ties it
 to `7'b000_0011` — both carriers, no errors — and the argument is the
 specification's own words for those two bits, since a port whose far end is in
 the same die has its carrier present and its data set ready from the moment it
-exists. `ip/usb_cdc_acm/README.md` §4 and §5 say what a host was observed to
+exists. `ip/usb/usb_cdc_acm/README.md` §4 and §5 say what a host was observed to
 do with it and what is only quoted.
 
 **What the class layer cost.** On the ECP5, `usb_device_fs` is 853 LUT4, 355
@@ -540,7 +567,7 @@ nor a read multiplexer, and was the obvious answer. It was not available: when
 this was written `src/fpga/devices/ecp5.dev` declared that bel with no site
 count, so `fpga::place` counted zero of them and refused any design that needed
 one, which is the same gap `testdata/fpga/cynthion/usb_cdc_uart.v` records about
-`ip/fifo_sync`. It is available now — 3036 sites on the Cynthion's part — and
+`ip/memory/fifo_sync`. It is available now — 3036 sites on the Cynthion's part — and
 taking it gave back 977 of those 937 lookup tables and 1024 of the flip-flops
 as well.
 
@@ -574,7 +601,7 @@ more of the eight; this one waits for each.
 **Why the serial port's own figure is not this one.**
 `testdata/fpga/cynthion/usb_cdc_uart.v` carries **one byte at a time** through
 its UART — that file's header says why, and the short version is that it was
-written while `ip/fifo_sync` could not be placed on this part — so it sends
+written while `ip/memory/fifo_sync` could not be placed on this part — so it sends
 one-byte packets whatever `wMaxPacketSize` says, and a wider packet does
 nothing for it at all. The placement gap is closed now, so that is a design
 this round did not revisit rather than a constraint it was under.
@@ -589,7 +616,7 @@ they do not measure is a host that pipelines transfers instead of waiting for
 each one — a queue of URBs would overlap the round trips and go faster at both
 sizes — so they are the floor of what the endpoint can do and not the ceiling.
 
-**What it found in this compiler, and it is fixed now.** `ip/fifo_sync` could
+**What it found in this compiler, and it is fixed now.** `ip/memory/fifo_sync` could
 not be placed on an ECP5 at all. Its storage is an array indexed by a
 variable, which becomes a distributed RAM, and nothing in the ECP5 fabric
 model had a site for one to go in, so `fpga::place` counted zero of them and
@@ -613,7 +640,7 @@ loader — the bel, its wires and its configuration bits — and
 `docs/fpga-trellis.md`'s first section is the whole account. In short: a
 `TRELLIS_DPR16X4` is **slices A, B and C of one logic tile**, held together by
 one bit of that tile (`F50B11`), so a tile holds exactly one and it costs six
-of the tile's eight lookup tables. `ip/fifo_sync` now places, routes and comes
+of the tile's eight lookup tables. `ip/memory/fifo_sync` now places, routes and comes
 out as a bitstream at depths 16, 32 and 64, with every bit of the image
 decoding back through the database into a feature it names — 97 bits per RAM,
 which is `ecppack`'s own number for the 111 distributed RAMs in this board's
@@ -939,7 +966,7 @@ would be claiming endpoints it has not got, where §9.4.5 asks for a STALL.
 `usb_device_fs_ignores_bad_packets_and_stalls_what_it_cannot_do` asserts both
 halves of that division.
 
-The second is **how not to report a change**. `ip/usb_cdc_acm`'s notification
+The second is **how not to report a change**. `ip/usb/usb_cdc_acm`'s notification
 endpoint had a register meaning "the host has been told", it was set once per
 configuration, and a host that was not listening at that moment never heard
 again — measured on a part as no DCD and no DSR on three consecutive opens. The
@@ -984,7 +1011,7 @@ Two of those numbers are worth reading as a comparison rather than a cost.
 and 542 flip-flops; the proxy takes `usb_ulpi_host_link` and `usb_host_sie` out
 of it and leaves the enumerator behind, because in a proxy the **PC** must be the
 thing that enumerates the device or there are two authorities assigning
-addresses. `ip/usb_proxy/README.md` §2 is that decision and what was weighed
+addresses. `ip/usb/usb_proxy/README.md` §2 is that decision and what was weighed
 against it; the short of it is that pass-through addressing has no translation
 table, no descriptor cache and no way for the two sides to disagree about
 `bMaxPacketSize0`, and the enumerator would have been the thing it had to
@@ -1000,7 +1027,7 @@ buffers separate — a memory written from two places is one a backend has to ta
 apart again.
 
 It is also the first block here to need something *back* from a block below it.
-`ip/usb_hub`'s port reset used to complete in the cycle it was asked for, with
+`ip/usb/usb_hub`'s port reset used to complete in the cycle it was asked for, with
 PORT_RESET in `wPortStatus` a constant zero, because there was nothing downstream
 to reset. A proxy has to reset the real device — pass-through addressing depends
 on the device forgetting its address exactly when the PC thinks it has — so that
@@ -1034,13 +1061,13 @@ then name only what they want, and a block is found by the **name its own
 `reticle.ip` declares** rather than by its directory, so where a block
 sits under `ip/` is `ip/`'s business and not the project's. A package from
 somewhere else is still named with `path <dir>`, and
-`depends uart ^1.0.0 path ../reticle/ip/uart` still works unchanged for a
+`depends uart ^1.0.0 path ../reticle/ip/bus/uart` still works unchanged for a
 project that wants to pin one directory.
 
 `cdc_sync` is not named there and does not have to be: `axil_gpio`,
 `cdc_pulse` and `fifo_async` declare it themselves, and the same library
 search places it. `docs/ip.md` has the whole resolution story, including
-what the lock file records (`package uart 1.0.0 library ../reticle/ip/uart`
+what the lock file records (`package uart 1.0.0 library ../reticle/ip/bus/uart`
 — the answer the search gave, so that a block which has moved is
 something `reticle build --locked` reports rather than something a build
 silently follows).
@@ -1271,7 +1298,7 @@ is the part that matters:
   exactly the mode's sync width. And a 64-pixel pattern with a different
   ramp on each channel is read back at four, eight and one bits a
   channel: the pins carry the **top** bits of each byte, since the block
-  truncates rather than rounds. `ip/vga_out/README.md` says why, and what
+  truncates rather than rounds. `ip/video/vga_out/README.md` says why, and what
   it costs a picture. `examples/apple2` and `examples/nes` both build on
   it for the Basys 3, and the NES is where the truncation shows: its
   palette is in colour, and `examples/nes/README.md` names the one pair
@@ -1432,7 +1459,7 @@ is the part that matters:
   clocks after the host's end of packet, inside the 2 to 6.5 bit times
   USB allows and inside ULPI's own 7-to-18-clock window. It is one clock
   domain and asks for no PLL. And it has **run on a board**:
-  [`ip/usb_device_ulpi/README.md`](../ip/usb_device_ulpi/README.md) §11
+  [`ip/usb/usb_device_ulpi/README.md`](../ip/usb/usb_device_ulpi/README.md) §11
   says what a Linux host read out of it and what our own host code moved
   through endpoint 1.
 
@@ -1503,7 +1530,7 @@ is the part that matters:
   socket. All four edges are described now;
   [`docs/fpga-trellis.md`](fpga-trellis.md) has how the left one was
   established and why a mirror of the right edge would have been wrong.
-  [`ip/usb_host_ulpi/README.md`](../ip/usb_host_ulpi/README.md) §9 is what
+  [`ip/usb/usb_host_ulpi/README.md`](../ip/usb/usb_host_ulpi/README.md) §9 is what
   the part then said: nine registers of a real USB3343 read over sixteen
   left-edge balls, with `0424` — Microchip's vendor ID — among them. A
   device in that socket has since been enumerated through that same
@@ -1539,7 +1566,7 @@ is the part that matters:
   the interesting half of a class layer. `tests/usb_cdc_acm.rs` is that half:
   it asks the kernel, through sysfs, whether `cdc_acm` claimed the device and
   made a terminal, and then writes bytes to that terminal and reads them back.
-  [`ip/usb_cdc_acm/README.md`](../ip/usb_cdc_acm/README.md) §5 is what a host
+  [`ip/usb/usb_cdc_acm/README.md`](../ip/usb/usb_cdc_acm/README.md) §5 is what a host
   said, quoted — including the two faults that were invisible in simulation
   and what each of them was.
 
@@ -1579,7 +1606,7 @@ is the part that matters:
   clock domain across a design with two ULPI buses in it.
 
   What none of it could reach is whether a **kernel** enumerates the device, and
-  [`ip/usb_proxy/README.md`](../ip/usb_proxy/README.md) §8 is that: the same
+  [`ip/usb/usb_proxy/README.md`](../ip/usb/usb_proxy/README.md) §8 is that: the same
   `dmesg` buffer with `unable to enumerate USB device` before and
   `idVendor=1d50, idProduct=60e6` after. `tests/usb_proxy.rs` is the test, and its
   load-bearing assertion is one boolean — a child of our hub exists in sysfs.
@@ -2216,7 +2243,7 @@ rather than a repeater, for the reason that block's README §3 gives: a ULPI
 transceiver's floor is about 24 bit times one way and a hub is allowed about 4,
 so the two buses are decoupled and the upstream side NAKs until the answer is
 there. That was the largest single piece of USB work left in this library and it
-is what `ip/usb_host_ulpi` and `ip/usb_hub` were both built towards.
+is what `ip/usb/usb_host_ulpi` and `ip/usb/usb_hub` were both built towards.
 
 What is **still** not here, above the proxy, is isochronous transport through it:
 the downstream SOF comes from `usb_host_sie`'s own free-running counter and the

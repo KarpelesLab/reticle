@@ -788,10 +788,10 @@ fn reticle(dir: &Path, args: &[&str]) -> (i32, String, String) {
 /// `reticle fpga` want them on a command line.
 #[cfg(feature = "cli")]
 const LIBRARY: [&str; 4] = [
-    "../../ip/mos6502/rtl/mos6502.v",
-    "../../ip/uart/rtl/uart_tx.v",
-    "../../ip/uart/rtl/uart_rx.v",
-    "../../ip/uart/rtl/uart.v",
+    "../../ip/cpu/mos6502/rtl/mos6502.v",
+    "../../ip/bus/uart/rtl/uart_tx.v",
+    "../../ip/bus/uart/rtl/uart_rx.v",
+    "../../ip/bus/uart/rtl/uart.v",
 ];
 
 #[cfg(feature = "cli")]

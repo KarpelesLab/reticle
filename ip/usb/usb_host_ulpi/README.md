@@ -9,7 +9,7 @@ packets with their CRC16, handshakes, a timeout with retries, the bus
 reset, and the enumeration of whatever is plugged into the port.
 
 It is written on top of the same bus this repository already has running
-on silicon. [`ip/usb_device_ulpi/README.md`](../usb_device_ulpi/README.md)
+on silicon. [`ip/usb/usb_device_ulpi/README.md`](../usb_device_ulpi/README.md)
 states ULPI fact by fact with the provenance and confidence of each, and
 **that document is not repeated here**: the turnaround, the transmit
 command, the receive command, register access, the rule about believing a
@@ -45,7 +45,7 @@ which was taken.
 - **LOW** — inference that explains the rest, with no way to check it
   here.
 - **CHECKED** — something a simulation of this block against
-  `ip/usb_device_ulpi` has actually produced, with the test that produced
+  `ip/usb/usb_device_ulpi` has actually produced, with the test that produced
   it named. §9 is the whole of that list, and it is shorter than the
   quotations.
 
@@ -264,7 +264,7 @@ and why it has not been.
 
 ### Where the reply is decoded, and why it is not here
 
-`usb_pkt_rx` decodes it, and that module is **`ip/usb_device_fs`'s**,
+`usb_pkt_rx` decodes it, and that module is **`ip/usb/usb_device_fs`'s**,
 reached through this package's `depends` line rather than copied. A PID's
 check nibble and a data packet's CRC16 are the same arithmetic in both
 directions, and that decoder has been doing it on a board. Two
@@ -305,7 +305,7 @@ parameters and the same ordering as `usb_ulpi_link`.
 **It matters to a host for the mirror of the reason it matters to a
 peripheral.** A peripheral with the bit unwritten puts its pull-up on the
 wire a host calls D- and is detected as a low-speed device it is not;
-`ip/usb_device_ulpi/README.md` §11 has the kernel log of that happening
+`ip/usb/usb_device_ulpi/README.md` §11 has the kernel log of that happening
 and of the bit fixing it. A **host** with the bit unwritten reads a
 full-speed device's pull-up on the line it calls D- and calls the device
 low speed, and then refuses to talk to it at all.
@@ -378,7 +378,7 @@ The gap this leaves between the host's token and its data packet is the
 count's slack plus `GAP_CYCLES`, about ten bit times rather than the two
 to six and a half USB 2.0 §7.1.18 names for a *response*. Nothing in
 USB 2.0 puts a ceiling on how long a host may leave between two packets
-it sends itself, and `ip/usb_device_fs`'s receiver has no timer between a
+it sends itself, and `ip/usb/usb_device_fs`'s receiver has no timer between a
 token and the data after it — which is CHECKED, since that is the device
 this host enumerates. A device that did have one would be the first thing
 a ULPI trace should be pointed at, and the fix would not be a shorter
@@ -657,7 +657,7 @@ to write a Link will be.
   rather than a second guess, because a real host has enumerated it on a
   real board — but where this document is wrong about ULPI, the host, the
   device and the model can still be wrong together. That is the sentence
-  `ip/usb_device_ulpi/README.md` §11 wrote before it had a board, and the
+  `ip/usb/usb_device_ulpi/README.md` §11 wrote before it had a board, and the
   one time it came true there is written up in the same section. **It is
   half answered now**: the next section but one has this host reading nine
   registers out of a real USB3343, so the start-up and the register
@@ -752,7 +752,7 @@ ball no design of this project's had ever driven. A wrong tile rule on
 that edge is the failure that decodes perfectly and drives the wrong pin,
 and it would have read `00` everywhere. So `docs/fpga-trellis.md`'s left
 edge is **checked against a part** and not only against Lattice's packer,
-and `ip/usb_device_ulpi`'s §2 reading of ULPI register access is now
+and `ip/usb/usb_device_ulpi`'s §2 reading of ULPI register access is now
 confirmed from the **host** end of the bus as well as the peripheral's.
 
 **And the first reading of that console said the opposite**, which is the
@@ -800,7 +800,7 @@ r1.4**, whose three USB ports each go through their own ULPI transceiver.
 The facts below are read out of
 `cynthion/gateware/platform/cynthion_r1_4.py` in the installed `cynthion`
 package, and the part is the same `USB3343-CP` the AUX port's
-`ip/usb_device_ulpi` has been talking to.
+`ip/usb/usb_device_ulpi` has been talking to.
 
 ```
 ULPIResource("target_phy", 0,
@@ -863,8 +863,8 @@ in.
   only place the resistors behind a register combination are written down,
   and §6.3.1, §6.3.2.1, §6.4.1 and §7.1.3.5 for what the part does that
   ULPI does not describe.
-- [`ip/usb_device_ulpi/README.md`](../usb_device_ulpi/README.md) — ULPI
+- [`ip/usb/usb_device_ulpi/README.md`](../usb_device_ulpi/README.md) — ULPI
   fact by fact, and the account of getting a device through this same bus
   on this same board.
-- [`docs/fpga-trellis.md`](../../docs/fpga-trellis.md) — the ECP5 backend,
+- [`docs/fpga-trellis.md`](../../../docs/fpga-trellis.md) — the ECP5 backend,
   including all four edges of the die and how each was established.

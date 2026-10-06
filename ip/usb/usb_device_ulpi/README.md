@@ -10,7 +10,7 @@ FPGA does the bytes.
 
 This document describes that bus well enough to write a link layer
 against it, and it is what `rtl/usb_ulpi_link.v` was written from. It is
-laid out the way [`docs/apollo-protocol.md`](../../docs/apollo-protocol.md)
+laid out the way [`docs/apollo-protocol.md`](../../../docs/apollo-protocol.md)
 is, because the two kinds of fact in it are very different: some are read
 out of a published specification, and some are a reading of it that no
 device has confirmed. **Four of them now have been**: a Microchip
@@ -461,10 +461,10 @@ host's end of packet, every time, which is 2.4 bit times.
 > collapses to one number. The spread was the model's and not the device's.
 >
 > What found it was joining **two** of these models pair to pair, with
-> `ip/usb_host_ulpi` on the other end: measured from the wrong edge, the
+> `ip/usb/usb_host_ulpi` on the other end: measured from the wrong edge, the
 > device's answer and the host's next token each overlapped the other end's
 > end of packet by a few cycles, which a harness that drives one end by
-> hand cannot see. `ip/usb_host_ulpi/README.md` §9 has that account.
+> hand cannot see. `ip/usb/usb_host_ulpi/README.md` §9 has that account.
 
 ---
 
@@ -537,7 +537,7 @@ Choices where the specification allowed either:
 
 > **Updated 2026-09-28: it moves bytes, and our own host code moved them.**
 > The device now has a bulk endpoint pair beside endpoint 0 —
-> `ip/usb_device_fs`'s `usb_bulk_ep`, reached through the same `depends`
+> `ip/usb/usb_device_fs`'s `usb_bulk_ep`, reached through the same `depends`
 > line — and `testdata/fpga/cynthion/usb_ulpi_device.v` wires its OUT stream
 > straight into its IN stream. (Straight, with one XOR: that design also
 > carries a flip-flop whose data input is the constant zero and XORs it into
@@ -594,7 +594,7 @@ Choices where the specification allowed either:
 > -v` reads the eighteen-byte device descriptor, at full speed, off a Cynthion's
 > AUX port. So the whole of this document's reading of ULPI now has a device
 > behind it, and the thing that had been wrong all along was neither ULPI nor
-> this block: `ip/usb_device_fs/rtl/usb_ctrl_ep.v` declared `reg [2:0] stage`
+> this block: `ip/usb/usb_device_fs/rtl/usb_ctrl_ep.v` declared `reg [2:0] stage`
 > for four states, and a flip-flop whose data input is the constant zero comes
 > up holding a **one** on the ECP5 backend that built it, because an unrouted
 > slice input on that family is high. `stage` read 5, every `case (stage)` label

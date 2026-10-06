@@ -16,5 +16,13 @@ source rtl/soc_top.v
 constraints board/hx8k_breakout.rcf
 testbench tb/soc_tb.v
 
-depends rv32i ^1.0.0 path ../../ip/rv32i
-depends uart ^1.0.0 path ../../ip/uart
+# This project names each package's directory, and it is the only one
+# left that does. Every other example declares a `library` root and
+# depends on a name, which is the form to copy: `path` here is kept on
+# purpose, so that the form stays exercised end to end by tests/soc.rs.
+# examples/mos6502_computer is the same system written the other way, and
+# docs/writing-a-cpu.md section 8 sets the two side by side — including
+# the part where grouping ip/ into category folders edited these two
+# lines and left that project's alone.
+depends rv32i ^1.0.0 path ../../ip/cpu/rv32i
+depends uart ^1.0.0 path ../../ip/bus/uart

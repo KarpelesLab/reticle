@@ -5,11 +5,11 @@
 // What it does
 //   A device this block is the class layer of appears on a Linux host as a
 //   **hub** — `hub 7-5:1.0: USB hub found`, `1 port detected` — and, as with
-//   `ip/usb_cdc_acm`, **no driver ships with it**: a hub is the one class
+//   `ip/usb/usb_cdc_acm`, **no driver ships with it**: a hub is the one class
 //   every operating system has to know, since it is how it finds anything
 //   else at all.
 //
-//   It is `usb_dev_core` from `ip/usb_device_fs` with three things added to
+//   It is `usb_dev_core` from `ip/usb/usb_device_fs` with three things added to
 //   it, which are the same three a class always is:
 //
 //     1. the descriptors, as `IFACE_DESC` — one interface and one endpoint,
@@ -35,8 +35,8 @@
 //   turnaround does not allow it. README.md §2 is that argument in full.
 //
 //   What is behind the port instead is a **second** USB controller:
-//   `ip/usb_host_ulpi`, on its own bus. Joining the two conversations is
-//   `ip/usb_proxy`, which takes the PC's transaction, runs it again on the
+//   `ip/usb/usb_host_ulpi`, on its own bus. Joining the two conversations is
+//   `ip/usb/usb_proxy`, which takes the PC's transaction, runs it again on the
 //   other bus and serves the answer back — a transaction proxy, with NAK as the
 //   escape hatch that makes the slow path legal. This block on its own still
 //   reports a port and never speaks through it, which is what §8 of README.md's
@@ -84,7 +84,7 @@
 //   ClearPortFeature(C_PORT_*) — and this arms a packet whenever any of them
 //   is set and the endpoint has room. Nothing here records having reported
 //   anything, because a record of having reported is exactly what went wrong
-//   next door: `ip/usb_cdc_acm` had a latch meaning "the host has been told",
+//   next door: `ip/usb/usb_cdc_acm` had a latch meaning "the host has been told",
 //   it was set once per configuration, and a host that was not listening at
 //   that moment — or a driver bound a second time without a bus reset — never
 //   heard again. §4 of that block's README.md has the measurement that
@@ -114,7 +114,7 @@
 // What it does not do
 //   **One port**, and `usb_hub_req`'s header says what a second would cost.
 //
-//   **No packet repeating and no frame forwarding**, which is `ip/usb_proxy`'s
+//   **No packet repeating and no frame forwarding**, which is `ip/usb/usb_proxy`'s
 //   and is a transaction proxy rather than a repeater — README.md §2 is why it
 //   cannot be one. No downstream SE0 of this block's own either: the port reset
 //   is the `port_reset` / `port_reset_done` handshake and whatever answers it
@@ -122,7 +122,7 @@
 //   transaction translator and no high speed.
 //
 //   No strings, so the hub has no product name in `lsusb`, for the same
-//   reason `ip/usb_cdc_acm` has none: a string descriptor is a device's
+//   reason `ip/usb/usb_cdc_acm` has none: a string descriptor is a device's
 //   property and not a class's.
 //
 //   No over-current detection and no local power supply, which
@@ -186,7 +186,7 @@ module usb_hub #(
     // WHAT IS ON THE DOWNSTREAM PORT
     //
     // Straight into `usb_hub_req`, whose port comment says what each means.
-    // On the design this block was written for they are `ip/usb_host_ulpi`'s
+    // On the design this block was written for they are `ip/usb/usb_host_ulpi`'s
     // `attached` and `low_speed`, which is a **second USB controller's**
     // debounced sight of its own bus.
     input  wire       port_attached,
@@ -195,7 +195,7 @@ module usb_hub #(
     // WHAT THE HOST HAS MADE OF THAT PORT
     //
     // Brought out for whatever drives the downstream half: a design's LEDs and
-    // console, or `ip/usb_proxy`, which is what makes the port real. All four
+    // console, or `ip/usb/usb_proxy`, which is what makes the port real. All four
     // are levels.
     output wire       port_power,
     output wire       port_enabled,

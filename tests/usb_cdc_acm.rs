@@ -1,7 +1,7 @@
 //! A serial port this compiler built, driven through the **operating
 //! system's own driver**.
 //!
-//! `tests/ip_library.rs` proves `ip/usb_cdc_acm` against a host model and a
+//! `tests/ip_library.rs` proves `ip/usb/usb_cdc_acm` against a host model and a
 //! transceiver model, in simulation, and that is where the interesting
 //! assertions are — the class hook claiming a request and stalling the ones it
 //! did not offer, the line coding read back byte for byte, the notification
@@ -29,7 +29,7 @@
 //! 2. **Bytes went round.** The port is configured with `stty` and written
 //!    to, and the same bytes are read back. With
 //!    `testdata/fpga/cynthion/usb_cdc_uart.v` loaded, what happens in between
-//!    is that each byte is serialised at 115200 baud by `ip/uart`'s
+//!    is that each byte is serialised at 115200 baud by `ip/bus/uart`'s
 //!    transmitter, recovered by its receiver, and handed back to the IN
 //!    endpoint — so a byte that comes back proves the whole bridge and not
 //!    only the USB half.
@@ -42,7 +42,7 @@
 //!    `serial_state_notification`. This is the half a host can be asked about
 //!    without an ioctl; `TIOCMGET` reads the same `wSerialState` out of
 //!    `cdc_acm`'s own `ctrlin` and needs `libc` and `unsafe`, which this crate
-//!    does not have, so `ip/usb_cdc_acm/README.md` §5 has that reading across
+//!    does not have, so `ip/usb/usb_cdc_acm/README.md` §5 has that reading across
 //!    three opens, taken by hand.
 //!
 //!    **A blocking `open` is not the observation it looks like.**
@@ -91,7 +91,7 @@ use std::time::Duration;
 
 use rawusb::Context;
 
-/// pid.codes' test pair, which is `ip/usb_cdc_acm`'s default `VID` / `PID`.
+/// pid.codes' test pair, which is `ip/usb/usb_cdc_acm`'s default `VID` / `PID`.
 const VID: u16 = 0x1209;
 const PID: u16 = 0x0001;
 
@@ -119,7 +119,7 @@ const ROUND_TRIP: Duration = Duration::from_secs(30);
 const SERIAL_STATE_BYTES: usize = 10;
 const SERIAL_STATE: u16 = 0x0003;
 
-/// The interface numbers and endpoint addresses `ip/usb_cdc_acm` declares.
+/// The interface numbers and endpoint addresses `ip/usb/usb_cdc_acm` declares.
 const COMM_IFACE: u8 = 0;
 const DATA_IFACE: u8 = 1;
 const NOTIF_EP: u8 = 0x82;
@@ -135,9 +135,9 @@ const EP_IN: u8 = 0x81;
 const MAX_PACKET: u8 = 64;
 const NOTIF_MAXPKT: u8 = 16;
 
-/// The configuration descriptor `ip/usb_cdc_acm` describes, written forwards
+/// The configuration descriptor `ip/usb/usb_cdc_acm` describes, written forwards
 /// from CDC 1.1 and PSTN 1.2 — the arithmetic and not the answers, as
-/// `tests/ip_library.rs` writes the same bytes and as `ip/usb_cdc_acm/README.md`
+/// `tests/ip_library.rs` writes the same bytes and as `ip/usb/usb_cdc_acm/README.md`
 /// tabulates them field by field.
 fn expected_configuration() -> Vec<u8> {
     let mut iface: Vec<u8> = Vec::new();
@@ -268,7 +268,7 @@ fn a_serial_port_this_compiler_built_is_bound_by_the_kernels_own_driver() {
                  `cdc_acm` did not bind. That is a descriptor set the driver refused — the \
                  union functional descriptor, the interrupt IN endpoint on the communications \
                  interface, or the class triple. `dmesg` will say which, and \
-                 ip/usb_cdc_acm/README.md sections 2 and 4 say what each one is for."
+                 ip/usb/usb_cdc_acm/README.md sections 2 and 4 say what each one is for."
             ),
             Ok(None) => {
                 println!(
@@ -367,7 +367,7 @@ fn a_serial_port_this_compiler_built_is_bound_by_the_kernels_own_driver() {
     // still pending, so it does not matter what has opened the terminal before
     // now — `serial_state_notification` says why that used to matter and what
     // it hid. What it does still take is the one packet that is pending when it
-    // runs, so `ip/usb_cdc_acm/README.md` §5's `TIOCMGET` readings come from a
+    // runs, so `ip/usb/usb_cdc_acm/README.md` §5's `TIOCMGET` readings come from a
     // separate run: whichever of usbfs and `cdc_acm` polls first gets a given
     // packet, and that much is just how one packet works.
     match device.open() {
@@ -582,7 +582,7 @@ fn terminal_again() -> Option<PathBuf> {
 /// after **asking for one the way a host's driver does**.
 ///
 /// It sends SET_CONTROL_LINE_STATE first, which is what `cdc_acm` issues from
-/// `acm_port_dtr_rts` on every `open`, and `ip/usb_cdc_acm` answers a request
+/// `acm_port_dtr_rts` on every `open`, and `ip/usb/usb_cdc_acm` answers a request
 /// like that with a notification whether or not the line state has moved. So
 /// the `interrupt_read` that follows is **deterministic**: it does not depend on
 /// a packet left over from configuration time, and therefore not on whether
@@ -592,7 +592,7 @@ fn terminal_again() -> Option<PathBuf> {
 /// hid a defect behind the dependency: with one notification per configuration
 /// there was exactly one packet in the device's whole life, this test consumed
 /// it, and `cdc_acm` then reported no carrier for ever — `TIOCMGET = 0x026` on
-/// every open. `ip/usb_cdc_acm/README.md` §4 has that written up.
+/// every open. `ip/usb/usb_cdc_acm/README.md` §4 has that written up.
 ///
 /// **It has to take the communications interface away from `cdc_acm` to ask**,
 /// for the same reason `line_coding` below does: usbfs refuses a transfer on an
@@ -605,7 +605,7 @@ fn terminal_again() -> Option<PathBuf> {
 /// to a host opening the port — which is the defect above and would show here
 /// as a timeout. It does **not** show that a host driver decodes them: that is
 /// `TIOCMGET`, which needs an ioctl this crate cannot make, and
-/// `ip/usb_cdc_acm/README.md` §5 has it taken by hand across three opens. It
+/// `ip/usb/usb_cdc_acm/README.md` §5 has it taken by hand across three opens. It
 /// also does not show a notification sent on a *change* of the line state,
 /// because this board's `serial_state` is a constant; that half is
 /// `tests/ip_library.rs`'s

@@ -227,7 +227,7 @@ module usb_device_ulpi #(
         // No class layer: endpoint 0 stalls what it does not itself
         // implement, which is what `class_claim` low means, and
         // `usb_ctrl_ep`'s hook costs nothing when it is tied off. A device
-        // with a class is a block above this one; `ip/usb_cdc_acm` is the
+        // with a class is a block above this one; `ip/usb/usb_cdc_acm` is the
         // first.
         .class_claim  (1'b0),
         .class_len    (7'd0),

@@ -24,7 +24,7 @@
 // the sound hardware is not here.
 //
 // On a board, `clk_x5` would come from the device's PLL rather than
-// from a pin — that is what `ip/dvi_tx_pll` is for, and README.md has
+// from a pin — that is what `ip/video/dvi_tx_pll` is for, and README.md has
 // the two-line change. It is a pin here because a design whose clock
 // nothing drives cannot be simulated, and this one is simulated hard.
 module nes_top #(

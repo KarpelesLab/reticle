@@ -2,8 +2,8 @@
 // port and the hub's one downstream port reporting what that host sees.
 //
 // This is `usb_host_target.v` next door with the AUX side changed from a
-// serial port to a hub: `ip/usb_hub` on the auxiliary transceiver and
-// `ip/usb_host_ulpi` on the target one, with `port_attached` wired from the
+// serial port to a hub: `ip/usb/usb_hub` on the auxiliary transceiver and
+// `ip/usb/usb_host_ulpi` on the target one, with `port_attached` wired from the
 // second to the first. The computer on the AUX cable finds a hub with one
 // port; what is in the TARGET-A socket is on that port.
 //
@@ -23,13 +23,13 @@
 //     **fails**, because there is nothing on the other side of a hub that does
 //     not forward anything.
 //
-// That is correct for this design and `ip/usb_hub/README.md` §8 quotes the
+// That is correct for this design and `ip/usb/usb_hub/README.md` §8 quotes the
 // kernel log of it. A transaction proxy is what closes it, and §2 of that file
 // is why it cannot be done by repeating bits: through a ULPI transceiver the
 // floor for a byte in and a byte out is roughly twenty-four bit times and USB
 // allows about four.
 //
-// **That proxy exists**: `ip/usb_proxy`, and
+// **That proxy exists**: `ip/usb/usb_proxy`, and
 // `testdata/fpga/cynthion/usb_proxy_target.v` is this design with it in. This
 // one is kept because it is the measurement the proxy is measured against — the
 // same two transceivers with nothing joining them — and because its console
@@ -138,7 +138,7 @@
 // SetPortFeature(PORT_POWER) moves a bit inside `usb_hub` and does not reach
 // L2, which is a deliberate refusal rather than an omission: the board's
 // power topology is a property of the bitstream that was loaded, not of what
-// a host asks for, and `ip/usb_hub/README.md` §4 says it again there.
+// a host asks for, and `ip/usb/usb_hub/README.md` §4 says it again there.
 //
 // **A device on TARGET-A needs `VBUS_AUX = 1`.** With the default of 0 the
 // socket has no power, nothing attaches, and the hub correctly reports an
@@ -173,7 +173,7 @@ module usb_hub_target #(
     // changing this.** 0 is the default and closes no switch at all.
     parameter integer VBUS_AUX = 0,
     // Which `LineState` is a full-speed device's idle J, from the target
-    // transceiver's point of view; `ip/usb_host_ulpi`'s `FS_LINE` says why
+    // transceiver's point of view; `ip/usb/usb_host_ulpi`'s `FS_LINE` says why
     // this is a parameter at all.
     parameter [1:0] FS_LINE = 2'b01,
     // Cycles of an idle bus at J before the hub's answer goes out, which ULPI
@@ -348,7 +348,7 @@ module usb_hub_target #(
     // our host's debounced attach is; whether our host has finished
     // enumerating it is this design's business and not the PC's. `low_speed`
     // is which line the device pulled up, which only means anything while
-    // something is attached, and `ip/usb_hub` gates it on that.
+    // something is attached, and `ip/usb/usb_hub` gates it on that.
     usb_hub_ulpi #(
         .TURNAROUND  (TURNAROUND),
         .VENDOR_ADDR (6'h39),
@@ -372,7 +372,7 @@ module usb_hub_target #(
         .port_power     (port_power),
         .port_enabled   (port_enabled),
         .port_suspended (port_suspended),
-        // **Tied high, which is the reset that takes no time.** `ip/usb_hub`'s
+        // **Tied high, which is the reset that takes no time.** `ip/usb/usb_hub`'s
         // port reset is a handshake now — a level out while the port is
         // resetting and a pulse in when whatever drives it has finished — and
         // this design drives nothing downstream, so the answer is "already

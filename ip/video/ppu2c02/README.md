@@ -6,7 +6,7 @@ registers a processor reaches it through, and the fetch pipeline whose
 timing is what makes scrolling work.
 
 Most of the library's blocks are documented entirely in their source and
-in [`docs/ip-library.md`](../../docs/ip-library.md), and this one is too:
+in [`docs/ip-library.md`](../../../docs/ip-library.md), and this one is too:
 [`rtl/ppu2c02.v`](rtl/ppu2c02.v) opens with the raster, the register
 map, the `v`/`t`/`x`/`w` layout, the background and sprite pipelines, the
 bus contract, and a list of the behaviours it does **not** reproduce.
@@ -27,7 +27,7 @@ What is *not* here, and will not be:
 - **no game data of any kind.** No cartridge image, no character data,
   no music, no text, no tile that came from anyone's cartridge. The only
   graphics in this repository are the eleven tiles in
-  [`examples/nes/sw/chr.s`](../../examples/nes/sw/chr.s), drawn for that
+  [`examples/nes/sw/chr.s`](../../../examples/nes/sw/chr.s), drawn for that
   example and drawn twice — as art in a comment and as bytes — so a
   reader can check them against each other.
 - **no lockout silicon.** There is no CIC and nothing that talks to one.
@@ -43,14 +43,14 @@ What is *not* here, and will not be:
 ## The block
 
 ```text
-ip/ppu2c02/
+ip/video/ppu2c02/
   reticle.ip            the manifest: two sources, one top, 21 ports
   rtl/ppu2c02.v         the part
   rtl/ppu_palette.v     six-bit index in, 24-bit RGB out
 ```
 
 `ppu2c02` takes a clock and a **dot enable**, exactly as `video_timing`
-in [`ip/dvi_tx`](../dvi_tx) does, so a design running faster than the dot
+in [`ip/video/dvi_tx`](../dvi_tx) does, so a design running faster than the dot
 rate gives it an enable rather than a second clock. Its picture comes out
 as one palette index per dot on `vid_*`; its memory accesses go out on a
 14-bit bus that expects the byte back on the *next* enabled edge, which
@@ -76,7 +76,7 @@ number.
 
 ## Testing
 
-[`tests/nes.rs`](../../tests/nes.rs) drives it, on its own and inside a
+[`tests/nes.rs`](../../../tests/nes.rs) drives it, on its own and inside a
 console. The tests that are about this block rather than about the
 example are:
 
@@ -89,6 +89,6 @@ example are:
 | `the_frame_comes_out_of_the_video_port` | a whole frame, pixel by pixel, against a frame buffer computed from the nametable, the pattern table and the palette by the documented rules and by nothing this block does |
 
 The last one is the important one, and
-[`docs/writing-a-cpu.md`](../../docs/writing-a-cpu.md) section 3 is the
+[`docs/writing-a-cpu.md`](../../../docs/writing-a-cpu.md) section 3 is the
 argument for why it is built the way it is: the checker and the thing
 checked must not share a parent.

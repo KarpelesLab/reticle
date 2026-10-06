@@ -39,9 +39,9 @@
 //
 // Run with:
 //   reticle sim --top usb_ulpi_device_tb usb_ulpi_device_tb.v \
-//       usb_ulpi_device.v ../../../ip/usb_device_ulpi/rtl/usb_ulpi_link.v \
-//       ../../../ip/usb_device_ulpi/rtl/usb_device_ulpi.v \
-//       ../../../ip/usb_device_fs/rtl/usb_ctrl_ep.v
+//       usb_ulpi_device.v ../../../ip/usb/usb_device_ulpi/rtl/usb_ulpi_link.v \
+//       ../../../ip/usb/usb_device_ulpi/rtl/usb_device_ulpi.v \
+//       ../../../ip/usb/usb_device_fs/rtl/usb_ctrl_ep.v
 `timescale 1ps/1ps
 module usb_ulpi_device_tb;
 

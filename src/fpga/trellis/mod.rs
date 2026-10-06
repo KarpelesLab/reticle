@@ -4703,7 +4703,7 @@ impl TrellisFabric {
             // no expression in a design ever assigns anything but zero would
             // therefore come up set.
             //
-            // That is not a hypothetical. `ip/usb_device_fs`'s control endpoint
+            // That is not a hypothetical. `ip/usb/usb_device_fs`'s control endpoint
             // had `reg [2:0] stage` for four states, so `stage[2]` was a bit
             // nothing ever set; read back off a real ECP5 through a debug port,
             // `stage` was **5**, `case (stage)` matched none of its four labels,

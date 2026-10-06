@@ -1221,7 +1221,7 @@ const BASYS3_DEVICE: &str = "xc7a35t-cpg236";
 /// `apple2_basys3` through the 7-series flow, with the files a Basys 3
 /// owner would hand to Vivado written out at the end.
 ///
-/// This is the payoff of `ip/vga_out`. The same design with `dvi_tx` on
+/// This is the payoff of `ip/video/vga_out`. The same design with `dvi_tx` on
 /// the end stops here with
 ///
 /// ```text
@@ -1512,13 +1512,13 @@ fn reticle(dir: &Path, args: &[&str]) -> (i32, String, String) {
 /// `reticle fpga` want them on a command line.
 #[cfg(feature = "cli")]
 const LIBRARY: [&str; 7] = [
-    "../../ip/mos6502/rtl/mos6502.v",
-    "../../ip/uart/rtl/uart_tx.v",
-    "../../ip/uart/rtl/uart_rx.v",
-    "../../ip/uart/rtl/uart.v",
-    "../../ip/dvi_tx/rtl/tmds_encoder.v",
-    "../../ip/dvi_tx/rtl/video_timing.v",
-    "../../ip/dvi_tx/rtl/dvi_tx.v",
+    "../../ip/cpu/mos6502/rtl/mos6502.v",
+    "../../ip/bus/uart/rtl/uart_tx.v",
+    "../../ip/bus/uart/rtl/uart_rx.v",
+    "../../ip/bus/uart/rtl/uart.v",
+    "../../ip/video/dvi_tx/rtl/tmds_encoder.v",
+    "../../ip/video/dvi_tx/rtl/video_timing.v",
+    "../../ip/video/dvi_tx/rtl/dvi_tx.v",
 ];
 
 #[cfg(feature = "cli")]

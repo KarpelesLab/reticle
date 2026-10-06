@@ -210,15 +210,15 @@ a board, to a bitstream this compiler wrote and a terminal a person
 typed at:
 
 - [`examples/soc`](examples/soc) — a RISC-V system on chip around
-  [`ip/rv32i`](ip/rv32i) and [`ip/uart`](ip/uart) that prints a line over
+  [`ip/cpu/rv32i`](ip/cpu/rv32i) and [`ip/bus/uart`](ip/bus/uart) that prints a line over
   a serial port.
 - [`examples/mos6502_computer`](examples/mos6502_computer) — the same
-  system around [`ip/mos6502`](ip/mos6502): one bus, RAM at the bottom
+  system around [`ip/cpu/mos6502`](ip/cpu/mos6502): one bus, RAM at the bottom
   for zero page and the stack, ROM at the top for the vectors.
 - [`examples/mos6502_monitor`](examples/mos6502_monitor) — that machine
   with a keyboard: a machine-language monitor in 272 bytes of ROM, a
   65C51-style ACIA, and its console on a USB serial port through
-  [`ip/usb_cdc_acm`](ip/usb_cdc_acm) on a Cynthion's ULPI transceiver.
+  [`ip/usb/usb_cdc_acm`](ip/usb/usb_cdc_acm) on a Cynthion's ULPI transceiver.
   It examines memory, deposits bytes and runs code, and it is checked
   against a transcript recorded from a second implementation of the same
   interface. **This one runs on a real part**, and the host's baud rate
@@ -226,15 +226,15 @@ typed at:
   pin.
 - [`examples/apple2`](examples/apple2) — an Apple II-compatible machine
   with 48 KiB, the interleaved text page at `$0400` and video through
-  [`ip/dvi_tx`](ip/dvi_tx) on an ECP5 or [`ip/vga_out`](ip/vga_out) on a
+  [`ip/video/dvi_tx`](ip/video/dvi_tx) on an ECP5 or [`ip/video/vga_out`](ip/video/vga_out) on a
   Digilent Basys 3, running a monitor ROM and a character generator
   written for the example. Its tests decode the 40 x 24 character screen
   back out of a whole frame of video — once off the DVI colour bus and
   once off the VGA pins.
 - [`examples/nes`](examples/nes) — an NES-compatible console around
-  [`ip/mos6502`](ip/mos6502) with `DECIMAL_MODE = 0`, which is what the
-  processor in an NES is, plus [`ip/ppu2c02`](ip/ppu2c02) and
-  [`ip/dvi_tx`](ip/dvi_tx) on an ECP5 or [`ip/vga_out`](ip/vga_out) on a
+  [`ip/cpu/mos6502`](ip/cpu/mos6502) with `DECIMAL_MODE = 0`, which is what the
+  processor in an NES is, plus [`ip/video/ppu2c02`](ip/video/ppu2c02) and
+  [`ip/video/dvi_tx`](ip/video/dvi_tx) on an ECP5 or [`ip/video/vga_out`](ip/video/vga_out) on a
   Digilent Basys 3. It runs a demo written for the example and contains
   no part of any commercial cartridge; the test compares every one of a
   frame's 61,440 pixels against a frame buffer computed from the

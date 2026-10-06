@@ -2,7 +2,7 @@
 // its console on a USB serial port.
 //
 // What it does
-//   `monitor_machine` is a 6502 with an ACIA; `ip/usb_cdc_acm`'s ULPI
+//   `monitor_machine` is a 6502 with an ACIA; `ip/usb/usb_cdc_acm`'s ULPI
 //   form is a USB serial port; this file is the wire between them, plus
 //   the board's transceiver bus and its six LEDs. Plug the board in,
 //   open `/dev/ttyACM1`, and the `\` is the processor's.

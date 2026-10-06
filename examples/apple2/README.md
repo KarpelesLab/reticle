@@ -3,14 +3,14 @@
 A machine with a 6502, 48 KiB of RAM, the Apple II memory map, the Apple
 II text screen with its famously scrambled line order, and video. It
 boots into a monitor, prints a banner, beeps, and echoes what you type at
-it. The processor is [`mos6502`](../../ip/mos6502) and the keyboard is a
-terminal on [`uart`](../../ip/uart), both from Reticle's IP library. Four
+it. The processor is [`mos6502`](../../ip/cpu/mos6502) and the keyboard is a
+terminal on [`uart`](../../ip/bus/uart), both from Reticle's IP library. Four
 files in `rtl/` are the only HDL written for the project.
 
 There are **two tops**, one machine. `apple2_top` puts DVI on the end,
-through [`dvi_tx`](../../ip/dvi_tx), for an ECP5 board with a digital
+through [`dvi_tx`](../../ip/video/dvi_tx), for an ECP5 board with a digital
 video connector. `apple2_basys3` puts VGA on the end, through
-[`vga_out`](../../ip/vga_out), for a Digilent Basys 3 — which has a
+[`vga_out`](../../ip/video/vga_out), for a Digilent Basys 3 — which has a
 resistor ladder and a DE-15 socket and no HDMI or DVI connector at all.
 The computer between them is the same file, because the two blocks have
 the same fetch interface.
@@ -36,7 +36,7 @@ screen instead of a serial line, and so
 
 ```text
 examples/apple2/
-  reticle.proj            the project: mos6502, uart, dvi_tx and vga_out by path
+  reticle.proj            the project: mos6502, uart, dvi_tx and vga_out by name
   rtl/apple2_top.v        one board: a PLL, dvi_tx, and the machine
   rtl/apple2_basys3.v     the other: a clock divider, vga_out, and the same machine
   rtl/apple2.v            the machine: the 6502, 48 KiB, the ROM, the soft switches
@@ -335,7 +335,7 @@ than four hundred seconds, and each is a deliberate trade:
 
 `the_screen_comes_out_of_the_vga_pins` is the same idea one step further
 down the wire. It drives `tb/apple2_vga_tb.v`, which is the same `apple2`
-behind [`vga_out`](../../ip/vga_out) at four bits a channel, and it
+behind [`vga_out`](../../ip/video/vga_out) at four bits a channel, and it
 samples **pins**: the twelve colour bits, `vga_hsync` and `vga_vsync`.
 Nothing inside the design is looked at, and the picture is rebuilt, cut
 into cells and matched against `sw/font.txt` by the same decoder — which
@@ -442,20 +442,20 @@ The same flow runs from the command line:
 reticle fpga --device ecp5-45f-CABGA381 --top apple2_top \
   --constraints board/ulx3s.rcf \
   rtl/apple2_top.v rtl/apple2.v rtl/apple2_video.v \
-  ../../ip/mos6502/rtl/mos6502.v \
-  ../../ip/uart/rtl/uart_tx.v ../../ip/uart/rtl/uart_rx.v ../../ip/uart/rtl/uart.v \
-  ../../ip/dvi_tx/rtl/tmds_encoder.v ../../ip/dvi_tx/rtl/video_timing.v \
-  ../../ip/dvi_tx/rtl/dvi_tx.v
+  ../../ip/cpu/mos6502/rtl/mos6502.v \
+  ../../ip/bus/uart/rtl/uart_tx.v ../../ip/bus/uart/rtl/uart_rx.v ../../ip/bus/uart/rtl/uart.v \
+  ../../ip/video/dvi_tx/rtl/tmds_encoder.v ../../ip/video/dvi_tx/rtl/video_timing.v \
+  ../../ip/video/dvi_tx/rtl/dvi_tx.v
 ```
 
 and so does the simulation, which prints the session:
 
 ```sh
 reticle sim tb/apple2_tb.v rtl/apple2.v rtl/apple2_video.v \
-  ../../ip/mos6502/rtl/mos6502.v \
-  ../../ip/uart/rtl/uart_tx.v ../../ip/uart/rtl/uart_rx.v ../../ip/uart/rtl/uart.v \
-  ../../ip/dvi_tx/rtl/tmds_encoder.v ../../ip/dvi_tx/rtl/video_timing.v \
-  ../../ip/dvi_tx/rtl/dvi_tx.v
+  ../../ip/cpu/mos6502/rtl/mos6502.v \
+  ../../ip/bus/uart/rtl/uart_tx.v ../../ip/bus/uart/rtl/uart_rx.v ../../ip/bus/uart/rtl/uart.v \
+  ../../ip/video/dvi_tx/rtl/tmds_encoder.v ../../ip/video/dvi_tx/rtl/video_timing.v \
+  ../../ip/video/dvi_tx/rtl/dvi_tx.v
 ```
 
 ```text
@@ -489,7 +489,7 @@ an IO buffer that registers both edges nor a `ddr_out` register
 
 Everything else about the machine already mapped and fitted. VGA was the
 only missing piece, and `rtl/apple2_basys3.v` is what closes it: the same
-`apple2`, behind [`vga_out`](../../ip/vga_out) instead of `dvi_tx`, with
+`apple2`, behind [`vga_out`](../../ip/video/vga_out) instead of `dvi_tx`, with
 four bits a channel into the board's resistor ladder.
 
 Three things differ from the ECP5 build and nothing else does.
@@ -562,9 +562,9 @@ Vivado's own hardware manager. The same flow runs from the command line:
 reticle fpga --device xc7a35t-cpg236 --top apple2_basys3 \
   --constraints board/basys3.rcf \
   rtl/apple2_basys3.v rtl/apple2.v rtl/apple2_video.v \
-  ../../ip/mos6502/rtl/mos6502.v \
-  ../../ip/uart/rtl/uart_tx.v ../../ip/uart/rtl/uart_rx.v ../../ip/uart/rtl/uart.v \
-  ../../ip/dvi_tx/rtl/video_timing.v ../../ip/vga_out/rtl/vga_out.v
+  ../../ip/cpu/mos6502/rtl/mos6502.v \
+  ../../ip/bus/uart/rtl/uart_tx.v ../../ip/bus/uart/rtl/uart_rx.v ../../ip/bus/uart/rtl/uart.v \
+  ../../ip/video/dvi_tx/rtl/video_timing.v ../../ip/video/vga_out/rtl/vga_out.v
 ```
 
 **None of that has been run.** Vivado has not been started, no bitstream
@@ -582,7 +582,7 @@ files: at four bits a channel this machine looks exactly the same as it
 does over DVI. The screen is black and white — `0x000000` and
 `0xFFFFFF` — and truncating either of those to four bits leaves it
 unchanged. A design with gradients or blended colour would not be so
-lucky; `ip/vga_out/README.md` says what truncation costs it.
+lucky; `ip/video/vga_out/README.md` says what truncation costs it.
 
 ## Two defects this found in Reticle
 

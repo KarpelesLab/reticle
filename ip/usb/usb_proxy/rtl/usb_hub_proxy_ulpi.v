@@ -5,16 +5,16 @@
 // What it does
 //   Five blocks, and only one of them is new to this library:
 //
-//     usb_ulpi_link       `ip/usb_device_ulpi`: the upstream ULPI bus, as a
+//     usb_ulpi_link       `ip/usb/usb_device_ulpi`: the upstream ULPI bus, as a
 //                         peripheral — which is the bus the PC is on
-//     usb_hub             `ip/usb_hub`: the hub's own descriptors, class
+//     usb_hub             `ip/usb/usb_hub`: the hub's own descriptors, class
 //                         requests, port state and status-change endpoint
 //     usb_proxy_relay     the forwarding, on the same upstream bus as the hub
 //                         and on the downstream transaction engine
-//     usb_ulpi_host_link  `ip/usb_host_ulpi`: the downstream ULPI bus, as a
+//     usb_ulpi_host_link  `ip/usb/usb_host_ulpi`: the downstream ULPI bus, as a
 //                         host, with the transceiver's register port brought
 //                         out
-//     usb_host_sie        `ip/usb_host_ulpi`: frames, tokens, CRC5, one
+//     usb_host_sie        `ip/usb/usb_host_ulpi`: frames, tokens, CRC5, one
 //                         transaction at a time with a timeout and retries
 //     usb_proxy_dn        the downstream port: attach, speed, and the bus
 //                         reset the PC asked for
@@ -53,7 +53,7 @@
 //   was written for those switches are *bidirectional* between connectors, so
 //   closing two of them ties two hosts' supplies together. The PC's
 //   SetPortFeature(PORT_POWER) moves a bit in `usb_hub` and reaches no pin,
-//   which `ip/usb_hub/README.md` §4 states as a deliberate refusal.
+//   which `ip/usb/usb_hub/README.md` §4 states as a deliberate refusal.
 //
 //   **It is one clock.** Both ULPI buses run at the 60 MHz interface clock,
 //   which on a Cynthion is the board's own oscillator, and both transceivers
@@ -263,7 +263,7 @@ module usb_hub_proxy_ulpi #(
         .tx_busy      (up_tx_busy),
         .address      (address),
         .configured   (configured),
-        // **`port_attached` and not `up`**, which `ip/usb_hub/README.md` §5
+        // **`port_attached` and not `up`**, which `ip/usb/usb_hub/README.md` §5
         // argues: USB 2.0 §11.24.2.7.1 makes PORT_CONNECTION a device being
         // present, and whether anybody has enumerated it is not the PC's
         // business. In a proxy there is nothing else it could be — nothing here
@@ -349,7 +349,7 @@ module usb_hub_proxy_ulpi #(
         // Nothing reads a register here. The only register transaction in a
         // proxy is the pair of writes that drive the port's reset, and a
         // write's answer is `reg_ok`; a design that wants to read the
-        // transceiver uses `ip/usb_host_ulpi` with `enum_en` low, which is what
+        // transceiver uses `ip/usb/usb_host_ulpi` with `enum_en` low, which is what
         // that block's read-only instrument mode is for.
         .reg_rdata    (),
         .reg_done     (reg_done),

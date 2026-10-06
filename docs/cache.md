@@ -329,7 +329,7 @@ designs:
 |--------|-------|-------|-------|
 | `wide` | 631 | 25 539 | 600 leaves under 30 mids under one top (generated) |
 | `deep` | 121 | 601 | a chain of 120 stages (generated) |
-| `uart` | 3 | 242 | the bundled `ip/uart` core (real) |
+| `uart` | 3 | 242 | the bundled `ip/bus/uart` core (real) |
 
 The repository has no large design of its own — the biggest real one is the
 bundled IP library, and its largest core is three files — so the two big

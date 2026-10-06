@@ -2,8 +2,8 @@
 # serial port.
 #
 # The processor comes from the Reticle IP library in this repository's
-# ip/ directory, the USB serial port from ip/usb_cdc_acm, and the baud
-# divider from ip/uart. Four files in rtl/ and one 6502 program in sw/
+# ip/ directory, the USB serial port from ip/usb/usb_cdc_acm, and the baud
+# divider from ip/bus/uart. Four files in rtl/ and one 6502 program in sw/
 # are all the design is. See README.md for how to build, simulate and
 # load it, and for which parts of the interface it reproduces came from
 # a description and which were checked against a running original.
@@ -31,13 +31,21 @@ constraints board/cynthion.rcf
 testbench tb/monitor_tb.v
 testbench tb/monitor_bench.v
 
-depends mos6502 ^1.0.0 path ../../ip/mos6502
-depends uart ^1.0.0 path ../../ip/uart
-depends usb_cdc_acm ^1.0.0 path ../../ip/usb_cdc_acm
+# The IP library these come from. Naming it once here is what lets the
+# `depends` lines below say only what they need, so that moving a block
+# inside ip/ is a change to ip/ and not to this file. A package outside
+# the library is still named with `path <dir>`.
+library ../../ip
+
+depends mos6502 ^1.0.0
+depends uart ^1.0.0
+depends usb_cdc_acm ^1.0.0
 
 # `usb_cdc_acm` depends on these two and names them without a path,
 # because a package says what it needs and a *project* says where things
-# are. There is no registry here, so the project says where: these two
-# lines are that, and not a second opinion about what the design needs.
-depends usb_device_fs ^1.0.0 path ../../ip/usb_device_fs
-depends usb_device_ulpi ^1.0.0 path ../../ip/usb_device_ulpi
+# are. With a library root the search places them by name, so the two
+# lines below are no longer needed to find them — they are kept because
+# a project is entitled to state a requirement of its own on a package
+# it reaches indirectly, and `reticle.lock` records both.
+depends usb_device_fs ^1.0.0
+depends usb_device_ulpi ^1.0.0

@@ -1,8 +1,8 @@
 # A RISC-V SoC from the IP library
 
 A small system on chip that prints `Hello from Reticle` over a serial
-port. The processor is [`rv32i`](../../ip/rv32i) and the serial port is
-[`uart`](../../ip/uart), both from Reticle's IP library, pulled in by a
+port. The processor is [`rv32i`](../../ip/cpu/rv32i) and the serial port is
+[`uart`](../../ip/bus/uart), both from Reticle's IP library, pulled in by a
 project manifest. The only HDL written for the project is its top-level.
 
 This is the worked example for phase 8 of the [roadmap](../../ROADMAP.md),
@@ -153,8 +153,8 @@ UART into `soc_top` on the way:
 ```sh
 reticle fpga --device ice40-hx8k-ct256 --top soc_top \
   --constraints board/hx8k_breakout.rcf \
-  rtl/soc_top.v ../../ip/rv32i/rtl/rv32i.v \
-  ../../ip/uart/rtl/uart_tx.v ../../ip/uart/rtl/uart_rx.v ../../ip/uart/rtl/uart.v
+  rtl/soc_top.v ../../ip/cpu/rv32i/rtl/rv32i.v \
+  ../../ip/bus/uart/rtl/uart_tx.v ../../ip/bus/uart/rtl/uart_rx.v ../../ip/bus/uart/rtl/uart.v
 ```
 
 but its ROM is only as full as synthesis leaves it, and while synthesis

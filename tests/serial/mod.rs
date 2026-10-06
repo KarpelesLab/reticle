@@ -10,7 +10,7 @@
 //! nominal bit time, and insists on the start and stop bits. A
 //! transmitter that shifted its bits in the wrong order, held a bit for
 //! the wrong number of clocks or dropped the stop bit would be caught by
-//! it, which is the point of not reusing `ip/uart`'s receiver here.
+//! it, which is the point of not reusing `ip/bus/uart`'s receiver here.
 //!
 //! The testbenches do the same job in Verilog and print what they
 //! receive; each test checks that the two agree.

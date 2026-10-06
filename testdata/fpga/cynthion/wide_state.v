@@ -10,7 +10,7 @@
 // leaves the wire alone brings the bit up **set**, and `state` reads 5 where
 // the design can only produce 0 to 3.
 //
-// `ip/usb_device_fs/rtl/usb_ctrl_ep.v` had exactly this in its `stage`
+// `ip/usb/usb_device_fs/rtl/usb_ctrl_ep.v` had exactly this in its `stage`
 // register. Every `case (stage)` label missed, every IN token a host sent was
 // answered from the `default` arm with a NAK, and the host's transfer died of a
 // five second timeout with the device's receive path, its transmit path and its

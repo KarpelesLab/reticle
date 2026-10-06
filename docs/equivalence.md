@@ -144,7 +144,7 @@ that is not an oversight of the option so much as of the pipeline:
 nothing used to compare a mapped netlist with what it was mapped from.
 
 A mapper that covered one cone wrongly therefore emitted wrong logic and
-every test still passed. That happened: `ip/usb_cdc_acm`'s CDC descriptor
+every test still passed. That happened: `ip/usb/usb_cdc_acm`'s CDC descriptor
 set, mapped onto LUT4 and loaded on a Cynthion, answered a host with
 `bInterfaceNumber` of its data interface as 0 where the sources say 1, and
 the kernel refused the device. In simulation of the elaborated design the

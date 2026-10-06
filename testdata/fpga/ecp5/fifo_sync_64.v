@@ -1,4 +1,4 @@
-// A top level that asks `ip/fifo_sync` for DEPTH = 64 words, so a test can
+// A top level that asks `ip/memory/fifo_sync` for DEPTH = 64 words, so a test can
 // take the library block through place, route and a bitstream at a fixed
 // depth. Verilog-2005 has no way to override a parameter from outside the
 // source and `tests/fpga_trellis.rs` elaborates with the defaults, so the

@@ -115,9 +115,9 @@ the other way round: a project manifest's `library ../../ip` line plus
 
 ```sh
 reticle fpga testdata/fpga/cynthion/usb_ulpi_device.v \
-    ip/usb_device_ulpi/rtl/usb_ulpi_link.v \
-    ip/usb_device_ulpi/rtl/usb_device_ulpi.v \
-    ip/usb_device_fs/rtl/usb_ctrl_ep.v \
+    ip/usb/usb_device_ulpi/rtl/usb_ulpi_link.v \
+    ip/usb/usb_device_ulpi/rtl/usb_device_ulpi.v \
+    ip/usb/usb_device_fs/rtl/usb_ctrl_ep.v \
     --device ecp5-12f-CABGA256 \
     --constraints testdata/fpga/cynthion/usb_ulpi_device.rcf \
     --bitstream /tmp/usb_ulpi_device.bit

@@ -23,7 +23,7 @@
 ; different interface.
 ;
 ; **Plain NMOS 6502.** No `DEC A`, no `PLX`, no `BRA`, no `STZ`:
-; `ip/mos6502` is an NMOS part and says so, and the published 65C02
+; `ip/cpu/mos6502` is an NMOS part and says so, and the published 65C02
 ; ports of this interface do use those instructions — which is the one
 ; hard reason a real image of one cannot run on this machine.
 ; `tests/mos6502_monitor.rs` walks this ROM from every entry point and

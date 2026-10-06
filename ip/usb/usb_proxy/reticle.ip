@@ -1,4 +1,4 @@
-# usb_proxy: the half of a USB hub that **forwards**. `ip/usb_hub` is a hub's
+# usb_proxy: the half of a USB hub that **forwards**. `ip/usb/usb_hub` is a hub's
 # control endpoint — a PC's own hub driver binds to it, powers its port, is told
 # something is attached and resets it, and then cannot reach the device because
 # nothing carries a packet across. This is what carries it.
@@ -14,7 +14,7 @@
 # **Pass-through addressing.** The PC enumerates the device, not us: a token
 # whose address is not the hub's own is forwarded verbatim, including the PC's
 # SET_ADDRESS, so both buses agree on the address with no translation table.
-# `ip/usb_host_ulpi`'s `usb_host_enum` is therefore **not** instantiated here —
+# `ip/usb/usb_host_ulpi`'s `usb_host_enum` is therefore **not** instantiated here —
 # our host becomes a transaction engine the proxy drives. README.md §2 is the
 # decision and what was weighed against it.
 #

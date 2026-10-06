@@ -9,7 +9,7 @@
 //   `usb_fs_tx` — NRZI, bit stuffing, SYNC, the EOP and the serialiser
 //   are the transceiver's, in silicon — and presents `usb_ctrl_ep` the
 //   same byte-level interface, so the device above it is the same
-//   device. `ip/usb_device_ulpi/README.md` states the protocol this was
+//   device. `ip/usb/usb_device_ulpi/README.md` states the protocol this was
 //   written from, fact by fact, with the confidence of each and the
 //   section of the specification it came from.
 //

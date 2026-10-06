@@ -2,7 +2,7 @@
 
 ## A block RAM is on the fabric, and its bits are in three tiles
 
-`ip/fifo_sync` taught this backend that a memory needs a *site*, and the
+`ip/memory/fifo_sync` taught this backend that a memory needs a *site*, and the
 round that modelled a distributed RAM taught it that the site can be
 several slices of one tile. A `DP16KD` is neither, and the lesson does not
 transfer:
@@ -286,8 +286,8 @@ registered with no reset**: `q <= mem[a]` inside a plain
 read port, and a clocked read port is the only kind a block RAM can serve.
 Add a reset to that register and the promotion does not happen, the memory
 has an asynchronous read port, and `fpga::primitives` puts it in
-distributed RAM instead — which is exactly what `ip/fifo_sync` does, and
-why **no `ip/fifo_sync` footprint moved**: both of its variants read
+distributed RAM instead — which is exactly what `ip/memory/fifo_sync` does, and
+why **no `ip/memory/fifo_sync` footprint moved**: both of its variants read
 asynchronously, so none of them has ever been a block-RAM candidate and
 `docs/ip-library.md`'s table is unchanged. **The ROM has contents and no
 write port**, which is the only case in which a block RAM's `INITVAL`
@@ -422,7 +422,7 @@ A transceiver that answers zero to its own vendor ID and has never latched
 a receive command, with the AUX transceiver in the same bitstream working —
 which is as clean a signature of "the left-edge mapping drives the wrong
 pin" as a board can produce, and it set up a round of work to decide between
-that and a hardware-only defect in `ip/usb_host_ulpi`.
+that and a hardware-only defect in `ip/usb/usb_host_ulpi`.
 
 Both were wrong. `usb_host_target.v`'s report has a four-character label per
 item in a `LABELS` concatenation written back to front, and it indexed that
@@ -463,7 +463,7 @@ otherwise, and now it has.
 
 **What this cost, and the lesson that is not about Verilog.** The experiment
 lined up to decide between a backend bug and an IP bug — put
-`ip/usb_device_ulpi`'s known-good link on the TARGET balls and see whether
+`ip/usb/usb_device_ulpi`'s known-good link on the TARGET balls and see whether
 *it* reads `0424` — was a good experiment and was never needed, because the
 answer was already in the bytes on the console. Three of the printed values
 were impossible for the names they carried, and that is checkable without a
@@ -519,7 +519,7 @@ everything this flow had been asked to build lived on those two edges: the
 oscillator and the LEDs on the top, the AUX ULPI transceiver and the button
 on the right.
 
-Then `ip/usb_host_ulpi` arrived — a USB host for this board's **TARGET**
+Then `ip/usb/usb_host_ulpi` arrived — a USB host for this board's **TARGET**
 port — and every ball of that port is at column 0 of the caBGA-256 in
 `iodb.json`, which is the left edge:
 
@@ -646,7 +646,7 @@ its output pads a `CIB` tie rather than a route;
 would raise `aux_vbus_en`, defaulted to **0**, and its own header says to
 read its account of that node before changing it.
 
-`ip/usb_host_ulpi/README.md` §9 is the same account from the block's side.
+`ip/usb/usb_host_ulpi/README.md` §9 is the same account from the block's side.
 One thing about it has not changed: `pins partial` is still set for
 `ecp5-12f-CABGA256` in `src/fpga/devices/ecp5.dev` with only ten balls
 listed, so every TARGET ball still draws a cosmetic `F0202` warning about
@@ -893,7 +893,7 @@ the round below it named, and it is the same shape of experiment.
 
 ## A distributed RAM is on the fabric, and it is three slices held together by one bit
 
-`ip/fifo_sync` could not be placed on an ECP5 at any depth. The message was
+`ip/memory/fifo_sync` could not be placed on an ECP5 at any depth. The message was
 exact and it was not about a budget:
 
 ```
@@ -908,7 +908,7 @@ because a `.dev` `count` is a resource budget and `fpga::place` counts
 built by `src/fpga/trellis`, whose bels were `lut`, `ff` and `io` and nothing
 else. There was no distributed-RAM site on the die for the placer to find.
 
-There is one now, one per logic tile, and `ip/fifo_sync` places, routes and
+There is one now, one per logic tile, and `ip/memory/fifo_sync` places, routes and
 comes out as a bitstream every bit of which decodes, at depths 16, 32 and 64.
 
 ### It was expected to be the weak case, and it is the strong one
@@ -1074,7 +1074,7 @@ initial contents.
 
 ### What places now, and what it costs
 
-`ip/fifo_sync` with `WIDTH = 8`, through `synthesize_for`, `place`, `route`
+`ip/memory/fifo_sync` with `WIDTH = 8`, through `synthesize_for`, `place`, `route`
 and `stream` on an LFE5U-12F in caBGA-256, with all of its ports on top-edge
 balls:
 
@@ -1558,7 +1558,7 @@ usb 7-5: New USB device strings: Mfr=0, Product=0, SerialNumber=0
 
 ### The fault, in one sentence
 
-**`ip/usb_device_fs/rtl/usb_ctrl_ep.v` declared `reg [2:0] stage` for four
+**`ip/usb/usb_device_fs/rtl/usb_ctrl_ep.v` declared `reg [2:0] stage` for four
 states, so `stage[2]` was a flip-flop whose data input is the constant zero, and
 on this backend such a flip-flop comes up holding a *one*.** `stage` read **5**,
 every label of `case (stage)` missed, every IN token the host sent was answered
@@ -1871,7 +1871,7 @@ the host reported low speed — and now has a mechanism.
   Figure 5 and Table 3): **it has no pin that touches D+ or D-**, no data
   mux and no orientation switch for the data pair. Its reference schematic
   draws the receptacle's `A6`/`A7` and `B6`/`B7` going past it to the
-  transceiver. HIGH, and it is why `ip/i2c_master` was not needed after all:
+  transceiver. HIGH, and it is why `ip/bus/i2c_master` was not needed after all:
   there was nothing on that bus worth writing.
 - **It needs no configuration to be attached to, either.** `SWITCHES0`
   (`02h`) resets to `03h`, which is `PDWN1` and `PDWN2` set: a 5.1 kOhm Rd
@@ -1910,7 +1910,7 @@ therefore on the wire the host calls D+. The device still does not answer:
 
 
 The instrument for this round was not a bitstream per question but a
-**staircase probe**: `ip/usb_device_ulpi`'s two blocks wired up by hand in a
+**staircase probe**: `ip/usb/usb_device_ulpi`'s two blocks wired up by hand in a
 top level that also latches what it saw, and then reports one number by
 **detaching for a measured length of time** — the link's own reset held, so
 the transceiver's registers go with it and the start-up runs again on the way
@@ -2048,7 +2048,7 @@ obeyed.
 ### What the model had wrong, and still has
 
 Two defects in `tests/ip_library.rs`'s transceiver model, both of the shape
-§11 of `ip/usb_device_ulpi/README.md` warns about — the document, the core
+§11 of `ip/usb/usb_device_ulpi/README.md` warns about — the document, the core
 and the model agreeing about something no device had been asked:
 
 - **It kept the ULPI bus silent for the whole of the link's own packet and
@@ -2077,7 +2077,7 @@ drive, release and read themselves back on the die's **right** edge, the
 auxiliary ULPI transceiver's own data balls — was compiled by this flow and
 loaded into the LFE5U-12F of the Great Scott Gadgets Cynthion r1.4 attached
 to the machine this was written on. So was
-`testdata/fpga/cynthion/usb_ulpi_device.v`, which is `ip/usb_device_ulpi`
+`testdata/fpga/cynthion/usb_ulpi_device.v`, which is `ip/usb/usb_device_ulpi`
 behind those same eight pads: a USB full-speed device.
 
 What the flow reports for the bus:
@@ -2347,7 +2347,7 @@ test says so.
 ### And the other obstacle, which was not in the bitstream at all
 
 Fixing `decode` made the bus build. It did not make the **USB device** build:
-`ip/usb_device_ulpi` failed after seven and a half minutes with
+`ip/usb/usb_device_ulpi` failed after seven and a half minutes with
 
 ```
 error: routing did not converge: 52 node(s) are still oversubscribed after
@@ -2610,7 +2610,7 @@ Neither is why it fails to enumerate; both are real and both are fixed.
   **bus reset that nothing would end**, since a transceiver reports LineState
   only when it *changes*. The core now re-reads while it says SE0, and a bus
   reset now requires the pair to have been seen somewhere other than SE0.
-  What the model had wrong is in `ip/usb_device_ulpi/README.md` §11.
+  What the model had wrong is in `ip/usb/usb_device_ulpi/README.md` §11.
 
 #### Putting a board back to a quiet state
 
@@ -2657,7 +2657,7 @@ same gate set to that byte with two bits exchanged produced nothing at all. It
 settles that the transceiver is a **Microchip** part, read out of its own
 Vendor ID register rather than off a platform file, and that its register map
 and its `XcvrSelect` and `TermSelect` are ULPI 1.1's as
-`ip/usb_device_ulpi/README.md` reads them — the transceiver's own LineState
+`ip/usb/usb_device_ulpi/README.md` reads them — the transceiver's own LineState
 says the pull-up lands on the wire ULPI names, in both full-speed and
 low-speed mode.
 
@@ -3563,9 +3563,9 @@ The USB device is the one here that has dependencies:
 
 ```sh
 reticle fpga testdata/fpga/cynthion/usb_ulpi_device.v \
-    ip/usb_device_ulpi/rtl/usb_ulpi_link.v \
-    ip/usb_device_ulpi/rtl/usb_device_ulpi.v \
-    ip/usb_device_fs/rtl/usb_ctrl_ep.v \
+    ip/usb/usb_device_ulpi/rtl/usb_ulpi_link.v \
+    ip/usb/usb_device_ulpi/rtl/usb_device_ulpi.v \
+    ip/usb/usb_device_fs/rtl/usb_ctrl_ep.v \
     --device ecp5-12f-CABGA256 \
     --constraints testdata/fpga/cynthion/usb_ulpi_device.rcf \
     --bitstream /tmp/usb_ulpi_device.bit
@@ -4789,7 +4789,7 @@ item's value. The bytes were right and the names were not.
 `20/120 io`, and the denominator is now **197**: it is the number of `io`
 sites the fabric declares, which was 120 while two edges of four were
 described. The transcripts are dated records of runs on a part and are left
-as they were. The same figure appears in `ip/usb_cdc_acm/README.md` and
+as they were. The same figure appears in `ip/usb/usb_cdc_acm/README.md` and
 `examples/mos6502_monitor/README.md`, which are dated records too; the
 numerators — how many pads each design uses — are unchanged, and so is
 everything in `docs/ip-library.md`'s footprint table, because a footprint

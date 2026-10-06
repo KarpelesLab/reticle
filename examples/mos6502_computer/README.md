@@ -1,8 +1,8 @@
 # A 6502 computer from the IP library
 
 A small computer that prints `Hello from Reticle` over a serial port.
-The processor is [`mos6502`](../../ip/mos6502) and the serial port is
-[`uart`](../../ip/uart), both from Reticle's IP library, pulled in by a
+The processor is [`mos6502`](../../ip/cpu/mos6502) and the serial port is
+[`uart`](../../ip/bus/uart), both from Reticle's IP library, pulled in by a
 project manifest **by name**: `library ../../ip` says where the library
 is and `depends mos6502 ^1.0.0` says what is wanted, so nothing here
 knows where either block sits inside `ip/`. The only HDL written for the
@@ -239,15 +239,15 @@ UART into `computer_top` on the way:
 ```sh
 reticle fpga --device ice40-hx8k-ct256 --top computer_top \
   --constraints board/hx8k_breakout.rcf \
-  rtl/computer_top.v ../../ip/mos6502/rtl/mos6502.v \
-  ../../ip/uart/rtl/uart_tx.v ../../ip/uart/rtl/uart_rx.v ../../ip/uart/rtl/uart.v
+  rtl/computer_top.v ../../ip/cpu/mos6502/rtl/mos6502.v \
+  ../../ip/bus/uart/rtl/uart_tx.v ../../ip/bus/uart/rtl/uart_rx.v ../../ip/bus/uart/rtl/uart.v
 ```
 
 and so does the simulation:
 
 ```sh
-reticle sim tb/computer_tb.v rtl/computer_top.v ../../ip/mos6502/rtl/mos6502.v \
-  ../../ip/uart/rtl/uart_tx.v ../../ip/uart/rtl/uart_rx.v ../../ip/uart/rtl/uart.v
+reticle sim tb/computer_tb.v rtl/computer_top.v ../../ip/cpu/mos6502/rtl/mos6502.v \
+  ../../ip/bus/uart/rtl/uart_tx.v ../../ip/bus/uart/rtl/uart_rx.v ../../ip/bus/uart/rtl/uart.v
 ```
 
 which prints `Hello from Reticle`.

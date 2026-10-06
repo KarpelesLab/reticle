@@ -401,21 +401,43 @@ fn a_long_run_of_random_vectors_stays_identical() {
 
 /// Every `.v` file of the in-crate IP library, elaborated together so
 /// cross-block instances resolve.
+///
+/// The blocks sit at `ip/<category>/<package>/rtl/`, so this walks for
+/// `rtl` directories rather than assuming a depth. It read `ip/*/rtl/`
+/// before the packages were grouped into categories, and would then have
+/// found no sources at all; the caller below is what would have said so,
+/// because it asserts that at least five blocks qualified rather than
+/// trusting a loop that ran zero times.
 #[cfg(feature = "verilog")]
 fn library(top: &str) -> Option<Design> {
     use reticle::diag::Diagnostics;
     use reticle::verilog::{Dialect, ElabOptions, NoIncludes, elaborate, parse_source};
     {
+        /// Every `rtl` directory at or under `dir`, sorted, so the file
+        /// order a run sees does not depend on the filesystem's.
+        fn rtl_dirs(dir: &Path, out: &mut Vec<PathBuf>) {
+            let Ok(entries) = fs::read_dir(dir) else {
+                return;
+            };
+            let mut children: Vec<PathBuf> = entries
+                .filter_map(|e| e.ok().map(|e| e.path()))
+                .filter(|p| p.is_dir())
+                .collect();
+            children.sort();
+            for child in children {
+                if child.file_name().is_some_and(|n| n == "rtl") {
+                    out.push(child);
+                } else {
+                    rtl_dirs(&child, out);
+                }
+            }
+        }
+
         let root = testdata("ip");
         let mut sources: Vec<(String, String)> = Vec::new();
-        let mut dirs: Vec<PathBuf> = fs::read_dir(&root)
-            .ok()?
-            .filter_map(|e| e.ok().map(|e| e.path()))
-            .filter(|p| p.is_dir())
-            .collect();
-        dirs.sort();
-        for dir in dirs {
-            let rtl = dir.join("rtl");
+        let mut dirs: Vec<PathBuf> = Vec::new();
+        rtl_dirs(&root, &mut dirs);
+        for rtl in dirs {
             let Ok(entries) = fs::read_dir(&rtl) else {
                 continue;
             };
@@ -721,7 +743,11 @@ fn cycles_per_second() {
         let Some(design) = library(top) else { continue };
         subjects.push((
             Subject {
-                label: format!("ip/{top}"),
+                // `ip:<module>`, as the agreement test above labels
+                // them: these are module names and not directories, and
+                // writing one as `ip/uart` made it look like a path that
+                // the category folders then made wrong.
+                label: format!("ip:{top}"),
                 design,
                 top: top.to_owned(),
             },

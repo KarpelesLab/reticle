@@ -1,4 +1,4 @@
-// A USB full-speed device on a Cynthion's AUX port: `ip/usb_device_ulpi`
+// A USB full-speed device on a Cynthion's AUX port: `ip/usb/usb_device_ulpi`
 // wired to the auxiliary ULPI transceiver, with the bus turnaround in the
 // top level where the three-state buffers belong, and **endpoint 1 looped
 // back on itself** so that the device has something to do once a host has
@@ -31,7 +31,7 @@
 // it reads back from endpoint 1 IN, in order, with packet boundaries where it
 // put them. A loopback cannot carry a **zero-length** packet — an OUT of no
 // bytes hands nothing to the interface, so there is nothing to hand back —
-// and `ip/usb_device_fs`'s tests cover that direction instead.
+// and `ip/usb/usb_device_fs`'s tests cover that direction instead.
 //
 // The **third** observable is in the same bytes and costs one flip-flop: the
 // byte on its way back is XORed with `zero_probe`, a register whose data
@@ -136,7 +136,7 @@
 //     level decision.
 //
 // Pins: testdata/fpga/cynthion/usb_ulpi_device.rcf.
-// Sources: ip/usb_device_ulpi/rtl/*.v and ip/usb_device_fs/rtl/usb_ctrl_ep.v.
+// Sources: ip/usb/usb_device_ulpi/rtl/*.v and ip/usb/usb_device_fs/rtl/usb_ctrl_ep.v.
 
 module usb_ulpi_device #(
     // How many clocks the core is held in reset after configuration. A
@@ -347,7 +347,7 @@ module usb_ulpi_device #(
         // **There is no register in this path**, and there must not be: both
         // sides of the interface are functions of the endpoint's registers
         // alone, so wiring one straight into the other is combinational
-        // logic between two flip-flops and not a loop. `ip/usb_device_fs`'s
+        // logic between two flip-flops and not a loop. `ip/usb/usb_device_fs`'s
         // `usb_bulk_ep` header states that as a property of the block, and
         // `tests/ip_library.rs` drives this same wiring in simulation.
         //

@@ -2,11 +2,11 @@
 // finds over the USB serial console on its AUX port.
 //
 // Everything else USB in this tree is a peripheral. This is the other end:
-// `ip/usb_host_ulpi` on the target transceiver, generating a frame every
+// `ip/usb/usb_host_ulpi` on the target transceiver, generating a frame every
 // millisecond, driving a bus reset out of the transceiver's own
 // terminations, and enumerating whatever is plugged into TARGET-A as far as
 // its device descriptor, its configuration descriptor, an address and a
-// configuration. `ip/usb_cdc_acm` on the auxiliary transceiver is the
+// configuration. `ip/usb/usb_cdc_acm` on the auxiliary transceiver is the
 // console it says so on, which is the same `/dev/ttyACM*` that
 // `usb_cdc_uart.v` next door brings up and is left working for exactly that
 // reason.
@@ -40,7 +40,7 @@
 // cannot leave reset without **R4**, and cannot hand back a register byte
 // without `dir` on **R3** and the eight data balls. A wrong ball for any
 // of them reads `00` everywhere, which is what a wrong left-edge tile rule
-// would have produced. `ip/usb_host_ulpi/README.md` §9 and
+// would have produced. `ip/usb/usb_host_ulpi/README.md` §9 and
 // `docs/fpga-trellis.md` have the account from each side.
 //
 // **And the first reading of that console was the whole report end for
@@ -205,7 +205,7 @@ module usb_host_target #(
     // at 60 MHz, so the console can be opened at any time.
     parameter integer REPORT_CYCLES = 120_000_000,
     // Which `LineState` is a full-speed device's idle J, from the target
-    // transceiver's point of view. `ip/usb_host_ulpi`'s `FS_LINE` says why
+    // transceiver's point of view. `ip/usb/usb_host_ulpi`'s `FS_LINE` says why
     // this is a parameter: with `39h` bit 1 set it is `01`, and the probe's
     // `LINE` line is what settles it on a board nobody has measured.
     parameter [1:0] FS_LINE = 2'b01,

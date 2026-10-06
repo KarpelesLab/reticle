@@ -2,7 +2,7 @@
 // the port state they act on, on `usb_ctrl_ep`'s class hook.
 //
 // What it does
-//   Endpoint 0 in `ip/usb_device_fs` answers the standard requests and
+//   Endpoint 0 in `ip/usb/usb_device_fs` answers the standard requests and
 //   offers everything else to whatever is above it. This is what a hub puts
 //   there: the requests a host's own hub driver sends, the one **standard**
 //   request endpoint 0 does not implement and a hub cannot do without, and
@@ -95,7 +95,7 @@
 //     SetPortFeature of anything else, ClearPortFeature of anything else,
 //     and any of the above aimed at a port number this hub does not have
 //
-//   The pattern is `ip/usb_cdc_acm`'s and is deliberate: what a block does
+//   The pattern is `ip/usb/usb_cdc_acm`'s and is deliberate: what a block does
 //   **not** implement is said in a descriptor field a host reads — there
 //   `bmCapabilities`, here `wHubCharacteristics` — so a host that read the
 //   descriptor never sends the request, and one that sends it anyway gets the
@@ -119,7 +119,7 @@
 //                       sets, the port becomes enabled if something is
 //                       connected, and `port_reset` falls.
 //
-//   `ip/usb_proxy`'s `usb_proxy_dn` is what drives it on the design this was
+//   `ip/usb/usb_proxy`'s `usb_proxy_dn` is what drives it on the design this was
 //   written for, and its header has the ULPI register values and the two
 //   durations USB 2.0 §7.1.7 asks for. **Tying `port_reset_done` high restores
 //   the reset that takes no time**, which is what a design with nothing
@@ -141,11 +141,11 @@
 //   ClearPortFeature(C_PORT_*). `usb_hub` sends the bitmap for as long as any
 //   of them is set and NAKs when none is.
 //
-//   That shape is chosen against the one `ip/usb_cdc_acm` got wrong. Its
+//   That shape is chosen against the one `ip/usb/usb_cdc_acm` got wrong. Its
 //   notification endpoint had a latch meaning "the host has been told", the
 //   latch was set once per configuration, and a host that was not listening
 //   at that moment — or a driver bound a second time without a bus reset —
-//   never heard again; `ip/usb_cdc_acm/README.md` §4 has the measurement that
+//   never heard again; `ip/usb/usb_cdc_acm/README.md` §4 has the measurement that
 //   condemned it. **There is no such latch here.** Nothing in this file
 //   records having reported anything, so there is nothing that can be wrong
 //   about whether it has. The host's own ClearPortFeature is the
@@ -218,7 +218,7 @@ module usb_hub_req (
     // WHAT IS ACTUALLY ON THE DOWNSTREAM PORT
     //
     // `port_attached` is a device present and debounced — on the design this
-    // block was written for it is `ip/usb_host_ulpi`'s own `attached`, which
+    // block was written for it is `ip/usb/usb_host_ulpi`'s own `attached`, which
     // is that block's debounced sight of the pair leaving SE0 — and
     // `port_low_speed` is which line it pulled up: a full-speed device pulls
     // D+ up and a low-speed one D-, so the second is only meaningful while
@@ -655,7 +655,7 @@ module usb_hub_req (
             // SET_CONFIGURATION 0, so this is the whole of both: the next
             // SetPortFeature(PORT_POWER) raises `connection` again and the
             // change the host needs is produced then, with the host
-            // listening. `ip/usb_cdc_acm`'s notification endpoint needed an
+            // listening. `ip/usb/usb_cdc_acm`'s notification endpoint needed an
             // extra trigger for exactly the case this covers for free.
             if (!configured) begin
                 powered   <= 1'b0;

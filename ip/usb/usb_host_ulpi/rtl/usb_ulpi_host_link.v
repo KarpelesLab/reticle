@@ -2,13 +2,13 @@
 // **host**: bytes to and from a transceiver that does the line work.
 //
 // What it does
-//   The bus mechanics are `ip/usb_device_ulpi`'s `usb_ulpi_link`'s, and
+//   The bus mechanics are `ip/usb/usb_device_ulpi`'s `usb_ulpi_link`'s, and
 //   deliberately so: the turnaround in both directions, the transmit
 //   command, the receive command, register reads and writes with a retry
 //   on abort, and the rule that a byte from the transceiver is believed
 //   only when `dir` was already high in the cycle before it. Those have
 //   run on a Microchip USB3343 on a Great Scott Gadgets Cynthion and are
-//   not re-derived here. `ip/usb_device_ulpi/README.md` states every one
+//   not re-derived here. `ip/usb/usb_device_ulpi/README.md` states every one
 //   of them with the section of ULPI 1.1 it comes from.
 //
 //   What is different is everything about **which end of the wire this

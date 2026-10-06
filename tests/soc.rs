@@ -613,10 +613,10 @@ fn reticle_fpga_exports_the_rom_with_the_program_in_it() {
             &out_arg,
             "--quiet",
             "rtl/soc_top.v",
-            "../../ip/rv32i/rtl/rv32i.v",
-            "../../ip/uart/rtl/uart_tx.v",
-            "../../ip/uart/rtl/uart_rx.v",
-            "../../ip/uart/rtl/uart.v",
+            "../../ip/cpu/rv32i/rtl/rv32i.v",
+            "../../ip/bus/uart/rtl/uart_tx.v",
+            "../../ip/bus/uart/rtl/uart_rx.v",
+            "../../ip/bus/uart/rtl/uart.v",
         ],
     );
     assert_eq!(code, 0, "reticle fpga failed:\n{err}");
@@ -688,10 +688,10 @@ fn reticle_sim_runs_the_testbench() {
             "--quiet",
             "tb/soc_tb.v",
             "rtl/soc_top.v",
-            "../../ip/rv32i/rtl/rv32i.v",
-            "../../ip/uart/rtl/uart_tx.v",
-            "../../ip/uart/rtl/uart_rx.v",
-            "../../ip/uart/rtl/uart.v",
+            "../../ip/cpu/rv32i/rtl/rv32i.v",
+            "../../ip/bus/uart/rtl/uart_tx.v",
+            "../../ip/bus/uart/rtl/uart_rx.v",
+            "../../ip/bus/uart/rtl/uart.v",
         ],
     );
     assert_eq!(code, 0, "{err}");

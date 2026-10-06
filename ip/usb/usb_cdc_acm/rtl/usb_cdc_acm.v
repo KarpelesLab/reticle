@@ -10,7 +10,7 @@
 //   in this library. `out_*` is what a program wrote to that port and
 //   `in_*` is what it will read, a byte at a time each way.
 //
-//   It is `usb_dev_core` from `ip/usb_device_fs` with three things added to
+//   It is `usb_dev_core` from `ip/usb/usb_device_fs` with three things added to
 //   it, and it is worth being clear that those three are all a class *is*:
 //
 //     1. the descriptors, as `IFACE_DESC` — two interfaces, five

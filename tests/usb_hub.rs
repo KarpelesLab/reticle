@@ -1,7 +1,7 @@
 //! A USB hub this compiler built, asked about by the **operating system's own
 //! hub driver**.
 //!
-//! `tests/ip_library.rs` proves `ip/usb_hub` against a host model and a
+//! `tests/ip_library.rs` proves `ip/usb/usb_hub` against a host model and a
 //! transceiver model, in simulation, and that is where the interesting
 //! assertions are — the class hook claiming six requests and stalling the
 //! seventeen it did not offer, every bit of `wPortStatus`, a second
@@ -32,7 +32,7 @@
 //!    0 over usbfs: the device descriptor's class triple, the whole
 //!    twenty-five byte configuration descriptor, the nine bytes of the hub
 //!    descriptor of USB 2.0 §11.23.2.1, and the two bytes of the **standard**
-//!    GET_STATUS that `ip/usb_hub/README.md` §7 is about — the request Linux's
+//!    GET_STATUS that `ip/usb/usb_hub/README.md` §7 is about — the request Linux's
 //!    `hub_configure` treats a failure of as fatal, which this class claimed on
 //!    the hook for one round and which endpoint 0 implements now.
 //! 3. **The port reports a device, loses it and reports it again.** This is
@@ -42,7 +42,7 @@
 //!    connection with it, C_PORT_CONNECTION is set and cleared, and
 //!    SetPortFeature(PORT_POWER) brings both back with **C_PORT_CONNECTION set
 //!    a second time**. A hub with a one-shot anywhere in it fails the last
-//!    step, which is the defect `ip/usb_cdc_acm/README.md` §4 writes up.
+//!    step, which is the defect `ip/usb/usb_cdc_acm/README.md` §4 writes up.
 //!
 //!    Taking the port's power away is benign on this board and it is worth
 //!    being clear why: the socket's real VBUS is the board's own
@@ -82,7 +82,7 @@
 //! instead. What establishes the endpoint on the part is a side effect of part
 //! three rather than an assertion in it: the kernel starts enumerating the port
 //! again about a second after the power cycle, of its own accord, and nothing
-//! but that endpoint could have told it. `ip/usb_hub/README.md` §8 is the
+//! but that endpoint could have told it. `ip/usb/usb_hub/README.md` §8 is the
 //! kernel log of that and says how far it goes — the endpoint fired, and the
 //! bitmap's own byte and the NAKs in between are still only simulated.
 //!
@@ -98,7 +98,7 @@ use std::time::Duration;
 
 use rawusb::Context;
 
-/// pid.codes' test pair, which is `ip/usb_hub`'s default `VID` / `PID`.
+/// pid.codes' test pair, which is `ip/usb/usb_hub`'s default `VID` / `PID`.
 const VID: u16 = 0x1209;
 const PID: u16 = 0x0001;
 
@@ -107,13 +107,13 @@ const PID: u16 = 0x0001;
 /// and **not an assertion**: nothing here is checked against a clock.
 const TIMEOUT: Duration = Duration::from_millis(500);
 
-/// The interface number, the endpoint address and the one port `ip/usb_hub`
+/// The interface number, the endpoint address and the one port `ip/usb/usb_hub`
 /// declares.
 const HUB_IFACE: u8 = 0;
 const STATUS_EP: u8 = 0x81;
 const PORT: u16 = 1;
 /// `wMaxPacketSize` and `bInterval` of the status-change endpoint. Two bytes
-/// for a bitmap that is one — `ip/usb_hub/README.md` §3 says why two and not
+/// for a bitmap that is one — `ip/usb/usb_hub/README.md` §3 says why two and not
 /// one — and twelve frames, which is that block's choice.
 const STATUS_MAXPKT: u8 = 2;
 const STATUS_INTERVAL: u8 = 12;
@@ -127,10 +127,10 @@ const PORT_STAT_CONNECTION: u16 = 1 << 0;
 const PORT_STAT_POWER: u16 = 1 << 8;
 const PORT_CHG_CONNECTION: u16 = 1 << 0;
 
-/// The configuration descriptor `ip/usb_hub` describes, written forwards from
+/// The configuration descriptor `ip/usb/usb_hub` describes, written forwards from
 /// USB 2.0 §11.23.1 — the arithmetic and not the answers, as
 /// `tests/ip_library.rs` writes the same bytes from the same section and as
-/// `ip/usb_hub/README.md` §3 tabulates them field by field.
+/// `ip/usb/usb_hub/README.md` §3 tabulates them field by field.
 ///
 /// Twenty-five bytes, and the thing to notice is what is **not** in them: a
 /// hub's one class-specific descriptor is fetched by GetHubDescriptor and is
@@ -263,7 +263,7 @@ fn a_usb_hub_this_compiler_built_is_bound_by_the_kernels_own_hub_driver() {
             .unwrap_or_default()
     };
 
-    // `ip/usb_cdc_acm` and `ip/usb_hub` share this vendor and product pair,
+    // `ip/usb/usb_cdc_acm` and `ip/usb/usb_hub` share this vendor and product pair,
     // and only one of them can be loaded at a time. Saying which is loaded is
     // more useful than an assertion about bytes a serial port would also fail.
     let class = field("bDeviceClass");
@@ -407,7 +407,7 @@ fn a_usb_hub_this_compiler_built_is_bound_by_the_kernels_own_hub_driver() {
     // does not complete, so a stall here is a hub that does not bind.
     //
     // `usb_hub_req` claimed it on the class hook for one round because
-    // `usb_ctrl_ep` did not implement it; `ip/usb_hub/README.md` §7 has that
+    // `usb_ctrl_ep` did not implement it; `ip/usb/usb_hub/README.md` §7 has that
     // account and the fix, which has been made. **This assertion does not change
     // either way**, and that is the point of it: the two bytes are the same
     // whichever layer produces them, so what it checks is that moving the
@@ -456,7 +456,7 @@ fn a_usb_hub_this_compiler_built_is_bound_by_the_kernels_own_hub_driver() {
         "the kernel's own hub driver sent SetPortFeature(PORT_POWER), which is the \
          request this gateware answers that proves the driver is operating the port. \
          Without it, wHubCharacteristics D1:D0 is the field to look at — \
-         ip/usb_hub/README.md section 3 says why it is 01 and not 1X."
+         ip/usb/usb_hub/README.md section 3 says why it is 01 and not 1X."
     );
     if status & PORT_STAT_CONNECTION == 0 {
         println!(
@@ -552,7 +552,7 @@ fn a_usb_hub_this_compiler_built_is_bound_by_the_kernels_own_hub_driver() {
         "THE SECOND CONNECTION CHANGE. A hub that reported one change and then held a \
          latch saying the host had been told would be silent here, and the host would go \
          on believing whatever it last heard — which is exactly the defect \
-         ip/usb_cdc_acm/README.md section 4 writes up, measured on this same board."
+         ip/usb/usb_cdc_acm/README.md section 4 writes up, measured on this same board."
     );
 
     // Leave the port as the kernel's own driver had it: powered, connected,

@@ -445,7 +445,7 @@ Digilent's master XDC.
 
 **The Basys 3 has no HDMI and no DVI connector.** Its video output is
 VGA at twelve bits, four per channel, through a resistor ladder. The
-`ip/dvi_tx` package in this repository drives TMDS differential pairs
+`ip/video/dvi_tx` package in this repository drives TMDS differential pairs
 and cannot drive this board; its `video_timing` module, which is
 counters and sync generation and nothing else, is reusable unchanged for
 a VGA path, and the serialiser and TMDS encoder are not.

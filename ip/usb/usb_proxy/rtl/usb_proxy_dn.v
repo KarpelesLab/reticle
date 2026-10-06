@@ -14,7 +14,7 @@
 //   **Which speed.** A full-speed device pulls D+ up through 1.5 kOhm and a
 //   low-speed one pulls D- up (USB 2.0 §7.1.5), so `LineState` says which, and
 //   `FS_LINE` says which of the two the board calls D+ — which is a property
-//   of the board and not of ULPI, and `ip/usb_host_ulpi/README.md` §5 is why
+//   of the board and not of ULPI, and `ip/usb/usb_host_ulpi/README.md` §5 is why
 //   it has to be a parameter. A low-speed device is **reported and not spoken
 //   to**: there is no PRE token here and `usb_host_sie` is a full-speed engine.
 //
@@ -41,7 +41,7 @@
 //   be what decides whether this works.
 //
 // THE HANDSHAKE WITH THE HUB, AND WHY IT IS A LEVEL AND A PULSE
-//   `reset_req` is `ip/usb_hub`'s `port_reset`, which is now a **level** held
+//   `reset_req` is `ip/usb/usb_hub`'s `port_reset`, which is now a **level** held
 //   for as long as the port is resetting, and `reset_done` is one cycle when
 //   the reset and its recovery are over. The hub reports PORT_RESET set in
 //   `wPortStatus` while the level is high and sets C_PORT_RESET and enables the
@@ -65,20 +65,20 @@
 // What it does not do
 //   **No enumeration.** It does not read a descriptor, assign an address or
 //   set a configuration: the PC does all three and `usb_proxy_relay` forwards
-//   them. `ip/usb_host_ulpi`'s `usb_host_enum` is the block that does enumerate
+//   them. `ip/usb/usb_host_ulpi`'s `usb_host_enum` is the block that does enumerate
 //   and it is deliberately **not** instantiated in a proxy —
 //   `usb_proxy_relay`'s "PASS-THROUGH ADDRESSING" is the whole argument, and
 //   `README.md` §2 says what the enumerator is still for.
 //
 //   **No suspend or resume on the port.** The PC's
-//   SetPortFeature(PORT_SUSPEND) moves a bit in `ip/usb_hub` and nothing
+//   SetPortFeature(PORT_SUSPEND) moves a bit in `ip/usb/usb_hub` and nothing
 //   downstream stops; `sof_en` keeps the frames going and the device stays
 //   awake. ULPI §3.8.5.3.2's suspend is the change, and it needs a decision
 //   about what a resume does to a relay with a job in flight.
 //
 //   **No over-current and no VBUS.** `VbusState` is not even read here: on the
 //   board this was written for the TARGET transceiver does not sense the
-//   connector its power flows through, which `ip/usb_host_ulpi/README.md` has
+//   connector its power flows through, which `ip/usb/usb_host_ulpi/README.md` has
 //   traced from the published PCB design, so the one thing that register could
 //   be used for would be wrong. Power is a switch in the design's own top
 //   level and not a question a port asks.

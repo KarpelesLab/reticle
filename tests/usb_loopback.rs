@@ -32,7 +32,7 @@
 //!
 //! What has to be loaded for it to pass is
 //! `testdata/fpga/cynthion/usb_ulpi_device.v`, whose header says how to build
-//! and load the bitstream. Any design with `ip/usb_device_fs`'s default
+//! and load the bitstream. Any design with `ip/usb/usb_device_fs`'s default
 //! descriptors and `out_*` wired into `in_*` will do.
 //!
 //! # The byte is also a constant-zero probe
@@ -73,7 +73,7 @@ use std::time::{Duration, Instant};
 
 use rawusb::Context;
 
-/// pid.codes' test pair, which is `ip/usb_device_fs`'s default `VID` / `PID`.
+/// pid.codes' test pair, which is `ip/usb/usb_device_fs`'s default `VID` / `PID`.
 const VID: u16 = 0x1209;
 const PID: u16 = 0x0001;
 
@@ -357,7 +357,7 @@ fn usb_endpoint_one_loops_bytes_back_on_a_real_host() {
     // Nothing below is compared against a clock. `tools/check.sh` never runs
     // this test, a slow machine must not fail it, and there is no timing
     // number in any `assert`. What the figure is for is
-    // `ip/usb_cdc_acm/README.md` and `docs/ip-library.md`, where a claim
+    // `ip/usb/usb_cdc_acm/README.md` and `docs/ip-library.md`, where a claim
     // about throughput has to come off a part rather than out of arithmetic.
     //
     // The shape of the loop is the shape the device forces: it holds **one**

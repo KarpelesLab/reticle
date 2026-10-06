@@ -5,7 +5,7 @@
 //   `uart_rx` want on their `div` ports, and says whether the answer is
 //   one a UART can actually keep time with.
 //
-//   It exists because `ip/usb_cdc_acm` receives SET_LINE_CODING and
+//   It exists because `ip/usb/usb_cdc_acm` receives SET_LINE_CODING and
 //   reports `dwDTERate` — a 32-bit number a host picks — and a divisor
 //   from it is a division by a run-time value. `usb_cdc_req`'s header
 //   says so in as many words: *"a serial port whose divisor followed

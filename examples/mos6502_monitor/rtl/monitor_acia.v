@@ -4,7 +4,7 @@
 //   Four registers at `$5000`, the layout a W65C51N data sheet gives
 //   them, with a byte stream on the other side instead of a serial line.
 //   A 6502 that knows how to talk to a 65C51 talks to this, and what it
-//   is talking to is `ip/usb_cdc_acm`'s `out_*` and `in_*`.
+//   is talking to is `ip/usb/usb_cdc_acm`'s `out_*` and `in_*`.
 //
 //     RS  name     read                        write
 //     00  DATA     the byte received, taken    a byte to send

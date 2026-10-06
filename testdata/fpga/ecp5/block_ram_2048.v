@@ -20,7 +20,7 @@
 //     would read a cycle early and nothing structural would notice. Add a
 //     reset to that register and the promotion does not happen and the
 //     memory lands in distributed RAM instead, which is exactly what
-//     `ip/fifo_sync` does and why it has no block RAM in it.
+//     `ip/memory/fifo_sync` does and why it has no block RAM in it.
 //   * **the ROM has contents and no write port**, which is the case a
 //     distributed RAM cannot serve at all on this flow —
 //     `fpga::primitives` refuses to lower a memory with initial contents

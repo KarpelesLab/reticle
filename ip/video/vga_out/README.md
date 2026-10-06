@@ -11,7 +11,7 @@ not proved* at the end.
 
 ## Why it exists
 
-`ip/dvi_tx` drives TMDS differential pairs through double-data-rate
+`ip/video/dvi_tx` drives TMDS differential pairs through double-data-rate
 output registers. A board with no HDMI or DVI connector cannot use it,
 and a device file that declares no DDR register cannot build it. A
 measured run of `examples/apple2` onto `xc7a35t-cpg236` — the Digilent

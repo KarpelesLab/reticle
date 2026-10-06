@@ -47,7 +47,7 @@
 // still spends the cycle counts the 6502's tables print — a 12 MHz clock
 // runs it at 6 MHz, six times an original part. `ready` stalling the core
 // by whole cycles rather than changing the shape of one is the whole
-// reason this works; see ip/mos6502/rtl/mos6502.v.
+// reason this works; see ip/cpu/mos6502/rtl/mos6502.v.
 //
 // Interrupts are not used here: `irq` and `nmi` are tied low and the
 // program sets I anyway. The vectors still point at real code, because a

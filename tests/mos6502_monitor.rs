@@ -52,7 +52,7 @@
 //! `the_monitor_deposits_bytes_and_reads_them_back` would only notice if
 //! it scribbled over *that* byte. What covers the instructions rather
 //! than the bytes is `the_monitor_uses_no_instruction_the_core_has_not_got`,
-//! which decodes the ROM rather than running it, and `ip/mos6502`'s own
+//! which decodes the ROM rather than running it, and `ip/cpu/mos6502`'s own
 //! thirty-odd tests, which is why nothing here re-tests the processor.
 //!
 //! `examples/` is not in the published crate, so every test that needs
@@ -350,7 +350,7 @@ fn monitor_rom_is_the_assembled_source() {
     );
 }
 
-/// Nothing in the ROM is an instruction `ip/mos6502` does not have.
+/// Nothing in the ROM is an instruction `ip/cpu/mos6502` does not have.
 ///
 /// The core is an NMOS 6502 and says so; the published 65C02 ports of
 /// this interface use `DEC A` and `PLX`, which decode on this core as

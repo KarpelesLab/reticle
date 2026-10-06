@@ -3,7 +3,7 @@
 // answer served back.
 //
 // WHAT IT IS AND WHY IT CANNOT BE A REPEATER
-//   `ip/usb_hub` is a hub's control endpoint: a host finds a hub, finds a
+//   `ip/usb/usb_hub` is a hub's control endpoint: a host finds a hub, finds a
 //   device on its port, resets it — and then cannot reach it, because nothing
 //   carries a packet across. This is the thing that carries it, and it is a
 //   **transaction proxy** and not a repeater.
@@ -14,7 +14,7 @@
 //   receive path reports no byte until the byte is whole, which is eight bit
 //   times of SYNC plus a byte, and the transmit command prepends a fresh SYNC
 //   of its own before the byte reaches the wire. The delay is in the
-//   transceivers and no gateware moves it. `ip/usb_hub/README.md` §2 is the
+//   transceivers and no gateware moves it. `ip/usb/usb_hub/README.md` §2 is the
 //   argument at length.
 //
 //   **NAK is what makes the slow path legal.** USB 2.0 §8.4.6: a device may
@@ -43,7 +43,7 @@
 //   address because there is only one authority for it.**
 //
 //   The alternative was to let our own enumerator keep the address it assigns
-//   (`ip/usb_host_ulpi`'s `usb_host_enum`, which assigns 1) and translate. That
+//   (`ip/usb/usb_host_ulpi`'s `usb_host_enum`, which assigns 1) and translate. That
 //   needs: a map from the PC's address to ours, a rule for what a GET_DESCRIPTOR
 //   answers while the two disagree, a second copy of every descriptor, and an
 //   answer to the question of which of two authorities owns the device's
@@ -194,7 +194,7 @@
 //   device awake.
 //
 //   Nothing here decodes a packet or checks a CRC: `usb_pkt_rx` from
-//   `ip/usb_device_fs` does the upstream half and the same module inside
+//   `ip/usb/usb_device_fs` does the upstream half and the same module inside
 //   `usb_host_sie` does the downstream one.
 module usb_proxy_relay #(
     // The largest packet relayed, in bytes, which must be a power of two and
@@ -358,7 +358,7 @@ module usb_proxy_relay #(
 
     // -----------------------------------------------------------------
     // The upstream packet, decoded once. `usb_pkt_rx` is
-    // `ip/usb_device_fs`'s, reached through this package's `depends` line.
+    // `ip/usb/usb_device_fs`'s, reached through this package's `depends` line.
     // -----------------------------------------------------------------
     wire        pkt;
     wire [3:0]  pkt_pid;

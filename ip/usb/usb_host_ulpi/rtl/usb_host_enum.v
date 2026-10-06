@@ -300,7 +300,7 @@ module usb_host_enum #(
     // repository's standing habit, because an unrouted slice input on an
     // ECP5 reads as a **one** and a state register with a bit nothing can
     // set is a bit the part may come up with set. `reg [2:0] stage` for four
-    // states cost `ip/usb_device_fs` eight rounds of investigation, and the
+    // states cost `ip/usb/usb_device_fs` eight rounds of investigation, and the
     // port is widened where it leaves rather than here.
     reg        ctl_tag;
     reg        ctl_capture;   // the bytes are a descriptor worth reporting

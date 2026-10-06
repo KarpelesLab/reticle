@@ -3,14 +3,14 @@
 // transactions carried from one bus to the other.
 //
 // This is `usb_hub_target.v` with the thing that was missing from it put in.
-// There, `ip/usb_hub` answered the PC's class requests about its port and
-// `ip/usb_host_ulpi` enumerated whatever was on TARGET-A **for itself**, and no
+// There, `ip/usb/usb_hub` answered the PC's class requests about its port and
+// `ip/usb/usb_host_ulpi` enumerated whatever was on TARGET-A **for itself**, and no
 // packet crossed between the two buses — so the PC found a hub, found a device
 // on its port, reset it, and got `device descriptor read/64, error -71`, which
 // was the correct outcome of a hub that forwards nothing.
-// `ip/usb_hub/README.md` §8 quotes that log.
+// `ip/usb/usb_hub/README.md` §8 quotes that log.
 //
-// `ip/usb_proxy` is what closes it, and the whole of this design is that block
+// `ip/usb/usb_proxy` is what closes it, and the whole of this design is that block
 // with a board around it.
 //
 // ===================================================================
@@ -20,7 +20,7 @@
 //   * the PC's own hub driver binds — `hub 7-5:1.0: USB hub found`,
 //     `1 port detected`;
 //   * it powers the port, is told something is attached, and resets it;
-//   * **this design resets the device too**, which is `ip/usb_proxy`'s
+//   * **this design resets the device too**, which is `ip/usb/usb_proxy`'s
 //     `usb_proxy_dn` writing `50h` and then `45h` into the TARGET
 //     transceiver's Function Control register — 15 ms of SE0 and 20 ms of
 //     recovery — and only then does the hub report the reset complete and the
@@ -31,7 +31,7 @@
 //
 // Nothing of this design's own appears in that device's descriptors, because
 // nothing of this design's own is in them: with pass-through addressing the
-// bytes the PC reads are the bytes the device sent. `ip/usb_proxy/README.md`
+// bytes the PC reads are the bytes the device sent. `ip/usb/usb_proxy/README.md`
 // §2 is why that was the architecture chosen.
 //
 // ===================================================================
@@ -123,7 +123,7 @@
 // bit is the difference, and it is the only place that difference is visible.
 //
 // What the console **cannot** say is whether the enumeration succeeded. That is
-// the PC's own kernel log and `lsusb`, and `ip/usb_proxy/README.md` §8 is where
+// the PC's own kernel log and `lsusb`, and `ip/usb/usb_proxy/README.md` §8 is where
 // it is quoted. A count of SETUPs that climbs and stops is a PC that enumerated
 // the device and went quiet, and one that sits at 2 is a PC retrying the same
 // request.
@@ -195,7 +195,7 @@
 // to.
 //
 // It is written down because the arithmetic looks alarming and is not, which is
-// the same note `ip/usb_host_ulpi/README.md` §9 makes about its own "4423 of
+// the same note `ip/usb/usb_host_ulpi/README.md` §9 makes about its own "4423 of
 // 4425" — there the two were pads driven by constants. The line that carries the
 // weight in either report is the last one: every set bit decodes back through
 // the database and the arcs they select are exactly the router's.
@@ -242,10 +242,10 @@ module usb_proxy_target #(
     // instead. What makes it safe in practice is that the switch is closed by
     // the bitstream and not by the host: whatever the socket draws, it drew
     // before the PC ever asked, and no class request can change it.
-    // `ip/usb_hub/README.md` §4 is the long form of that refusal.
+    // `ip/usb/usb_hub/README.md` §4 is the long form of that refusal.
     parameter integer SELF_POWERED = 1,
     // Which `LineState` is a full-speed device's idle J, from the target
-    // transceiver's point of view; `ip/usb_host_ulpi`'s `FS_LINE` says why this
+    // transceiver's point of view; `ip/usb/usb_host_ulpi`'s `FS_LINE` says why this
     // is a parameter at all.
     parameter [1:0] FS_LINE = 2'b01,
     // Cycles of an idle bus at J before an answer goes out, which ULPI 1.1
@@ -353,7 +353,7 @@ module usb_proxy_target #(
     // whichever ULPI interface is built, not per port, so both ports get the
     // same value here — and `usb_ulpi_device.v`'s header has the three sources
     // that agree on it for AUX. For TARGET it is still only quoted:
-    // `ip/usb_host_ulpi/README.md` §5 says so, and `FS_LINE` is the parameter
+    // `ip/usb/usb_host_ulpi/README.md` §5 says so, and `FS_LINE` is the parameter
     // that settles it if the quotation is wrong.
     // `CFG_ATTR` is `bmAttributes` of the configuration descriptor: bit 7 is
     // reserved and set, and bit 6 is Self Powered — `SELF_POWERED` above is the

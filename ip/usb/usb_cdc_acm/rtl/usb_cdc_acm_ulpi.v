@@ -1,6 +1,6 @@
 // usb_cdc_acm_ulpi — a USB serial port on a board whose USB lines go
 // through a ULPI transceiver: `usb_cdc_acm` behind
-// `ip/usb_device_ulpi`'s link layer.
+// `ip/usb/usb_device_ulpi`'s link layer.
 //
 // What it does
 //   This is to `usb_cdc_acm` what `usb_device_ulpi` is to `usb_dev_core`:
@@ -12,7 +12,7 @@
 //
 //   It exists for the same board `usb_device_ulpi` exists for: on a Great
 //   Scott Gadgets Cynthion every USB port goes through its own transceiver
-//   and the FPGA cannot drive the pair at all. `ip/usb_device_ulpi`'s
+//   and the FPGA cannot drive the pair at all. `ip/usb/usb_device_ulpi`'s
 //   README.md states the protocol, with the provenance of every fact.
 //
 //   Every port but the ULPI bus is `usb_cdc_acm`'s, and that module's

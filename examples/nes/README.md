@@ -6,7 +6,7 @@ Reticle's IP library, and puts it on a monitor at 640 x 480.
 
 Two boards, one console. `nes_top` drives DVI, for an ECP5 with a
 digital video connector; `nes_basys3` puts VGA on the end, through
-[`vga_out`](../../ip/vga_out), for a Digilent Basys 3 — which has a
+[`vga_out`](../../ip/video/vga_out), for a Digilent Basys 3 — which has a
 resistor ladder and a DE-15 socket and no DVI connector at all, and
 whose part has no double-data-rate register for one either. The console,
 the cartridge and the frame buffer are the same in both.
@@ -32,7 +32,7 @@ this page.**
 
 ```text
 examples/nes/
-  reticle.proj            the project: mos6502, ppu2c02, dvi_tx and vga_out by path
+  reticle.proj            the project: mos6502, ppu2c02, dvi_tx and vga_out by name
   rtl/nes_console.v       the console board: the map, the cartridge, sprite DMA
   rtl/nes_video.v         the frame buffer, and the doubling onto 640 x 480
   rtl/nes_top.v           one top: the three of them on one clock, DVI on the end
@@ -48,8 +48,8 @@ examples/nes/
 ```
 
 Four library packages and four files of HDL. `mos6502` is the processor,
-[`ppu2c02`](../../ip/ppu2c02) is the picture unit and
-[`dvi_tx`](../../ip/dvi_tx) and [`vga_out`](../../ip/vga_out) are the two
+[`ppu2c02`](../../ip/video/ppu2c02) is the picture unit and
+[`dvi_tx`](../../ip/video/dvi_tx) and [`vga_out`](../../ip/video/vga_out) are the two
 video outputs; everything else on this page is the console *board*, which
 is the part that is neither. `vga_out` depends on `dvi_tx` for the raster
 itself, so `video_timing` is in the design once and not twice.
@@ -64,7 +64,7 @@ adders and a pair of comparators happens to be exactly the difference
 between a 6502 and the processor in this console, and setting it to zero
 is what makes the core *correct* here, not merely smaller.
 
-`ip/mos6502`'s own tests run every decimal-mode case twice, once with the
+`ip/cpu/mos6502`'s own tests run every decimal-mode case twice, once with the
 parameter on and once with it off, which is the check that the zero
 setting still has D as a flag and still does binary arithmetic. This
 example is what that setting is for.
@@ -172,7 +172,7 @@ is the honest trade for having no clock crossing.
 The Basys 3's video output is twelve bits — four per channel, through a
 resistor ladder — and `vga_out` **truncates** the palette's eight bits
 to them rather than rounding, for the reasons
-[`ip/vga_out/README.md`](../../ip/vga_out) gives. That is a real change
+[`ip/video/vga_out/README.md`](../../ip/video/vga_out) gives. That is a real change
 to the picture and not a rounding error, so here is the size of it.
 
 `ppu_palette`'s sixty-four entries are not sixty-four colours even at
@@ -280,10 +280,10 @@ Simulation and the FPGA flow from the command line:
 
 ```sh
 reticle sim tb/nes_tb.v rtl/nes_console.v \
-  ../../ip/mos6502/rtl/mos6502.v \
-  ../../ip/ppu2c02/rtl/ppu_palette.v ../../ip/ppu2c02/rtl/ppu2c02.v \
-  ../../ip/dvi_tx/rtl/tmds_encoder.v ../../ip/dvi_tx/rtl/video_timing.v \
-  ../../ip/dvi_tx/rtl/dvi_tx.v
+  ../../ip/cpu/mos6502/rtl/mos6502.v \
+  ../../ip/video/ppu2c02/rtl/ppu_palette.v ../../ip/video/ppu2c02/rtl/ppu2c02.v \
+  ../../ip/video/dvi_tx/rtl/tmds_encoder.v ../../ip/video/dvi_tx/rtl/video_timing.v \
+  ../../ip/video/dvi_tx/rtl/dvi_tx.v
 ```
 
 which runs the console for two frames and prints
@@ -298,10 +298,10 @@ and
 reticle fpga --device ecp5-45f-CABGA381 --top nes_top \
   --constraints board/ecp5_dvi.rcf \
   rtl/nes_top.v rtl/nes_console.v rtl/nes_video.v \
-  ../../ip/mos6502/rtl/mos6502.v \
-  ../../ip/ppu2c02/rtl/ppu_palette.v ../../ip/ppu2c02/rtl/ppu2c02.v \
-  ../../ip/dvi_tx/rtl/tmds_encoder.v ../../ip/dvi_tx/rtl/video_timing.v \
-  ../../ip/dvi_tx/rtl/dvi_tx.v
+  ../../ip/cpu/mos6502/rtl/mos6502.v \
+  ../../ip/video/ppu2c02/rtl/ppu_palette.v ../../ip/video/ppu2c02/rtl/ppu2c02.v \
+  ../../ip/video/dvi_tx/rtl/tmds_encoder.v ../../ip/video/dvi_tx/rtl/video_timing.v \
+  ../../ip/video/dvi_tx/rtl/dvi_tx.v
 ```
 
 which writes `nes_top.json` and `nes_top.lpf` for `nextpnr-ecp5`. The
@@ -312,9 +312,9 @@ board file, so it is a command line rather than a second `device` line:
 reticle fpga --device xc7a35t-cpg236 --top nes_basys3 \
   --constraints board/basys3.rcf \
   rtl/nes_basys3.v rtl/nes_console.v rtl/nes_video.v \
-  ../../ip/mos6502/rtl/mos6502.v \
-  ../../ip/ppu2c02/rtl/ppu_palette.v ../../ip/ppu2c02/rtl/ppu2c02.v \
-  ../../ip/dvi_tx/rtl/video_timing.v ../../ip/vga_out/rtl/vga_out.v
+  ../../ip/cpu/mos6502/rtl/mos6502.v \
+  ../../ip/video/ppu2c02/rtl/ppu_palette.v ../../ip/video/ppu2c02/rtl/ppu2c02.v \
+  ../../ip/video/dvi_tx/rtl/video_timing.v ../../ip/video/vga_out/rtl/vga_out.v
 ```
 
 which writes `nes_basys3.v`, `nes_basys3.xdc` and `nes_basys3.tcl` for
@@ -515,7 +515,7 @@ Two things about this board file are choices rather than facts, and both
 are in [`board/ecp5_dvi.rcf`](board/ecp5_dvi.rcf):
 
 - **`clk_x5` is an input pin here, and on a real board it would come from
-  the device's PLL.** [`ip/dvi_tx_pll`](../../ip/dvi_tx_pll) is `dvi_tx`
+  the device's PLL.** [`ip/video/dvi_tx_pll`](../../ip/video/dvi_tx_pll) is `dvi_tx`
   with exactly that change — a `clock_mhz` attribute on an undriven wire,
   which is how a design asks Reticle's flow for a PLL — and `nes_top`
   would swap `input wire clk_x5` for `input wire clk_ref` and
@@ -547,7 +547,7 @@ nor a `ddr_out` register
 
 Everything else about the console mapped and fitted. VGA was the only
 missing piece, and `rtl/nes_basys3.v` is what closes it: the same
-`nes_console` and `nes_video`, behind [`vga_out`](../../ip/vga_out)
+`nes_console` and `nes_video`, behind [`vga_out`](../../ip/video/vga_out)
 instead of `dvi_tx`, with three things only a board needs.
 
 - **No PLL.** The Basys 3 has one oscillator, 100 MHz on W5. A two-bit
@@ -597,7 +597,7 @@ example makes neither.
 ## What is not modelled
 
 The picture unit's own list is at the top of
-[`ip/ppu2c02/rtl/ppu2c02.v`](../../ip/ppu2c02/rtl/ppu2c02.v); the short
+[`ip/video/ppu2c02/rtl/ppu2c02.v`](../../ip/video/ppu2c02/rtl/ppu2c02.v); the short
 version, and what the console adds to it:
 
 - **no sound.** There is no APU: no pulse channels, no triangle, no

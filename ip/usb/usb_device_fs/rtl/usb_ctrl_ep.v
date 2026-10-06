@@ -99,7 +99,7 @@
 //
 //   It is here rather than in a class because it is **standard**: Linux's
 //   `hub_configure` sends it to every hub and takes a failure as fatal,
-//   which is how it was found, and `ip/usb_hub` claimed it on the class
+//   which is how it was found, and `ip/usb/usb_hub` claimed it on the class
 //   hook for one round because this module did not have it. That is a
 //   layering smudge a class should never have to make twice.
 //
@@ -147,7 +147,7 @@
 //
 //   **GET_STATUS to the device used to be in that sentence and is not any
 //   more.** It is a standard request, §9.4.5 says what its two bytes are
-//   for every device alike, and `ip/usb_hub` had to claim it on this hook
+//   for every device alike, and `ip/usb/usb_hub` had to claim it on this hook
 //   to be a hub at all — which is the shape of a layering mistake rather
 //   than of a class. It is implemented above and is no longer offered;
 //   GET_STATUS to an **interface** or an **endpoint** still is, and "THE
@@ -1457,7 +1457,7 @@ endmodule
 //   the host's scheduling differs. `WITH_OUT = 0` makes it IN only, which
 //   is the shape an interrupt endpoint usually has. A CDC ACM
 //   **SERIAL_STATE** notification is ten bytes and this is where it goes;
-//   `ip/usb_cdc_acm` gives that endpoint `MAXPKT = 16`, which is the next
+//   `ip/usb/usb_cdc_acm` gives that endpoint `MAXPKT = 16`, which is the next
 //   power of two above ten.
 //
 //   No STALL of its own: nothing here halts, so there is nothing to clear
@@ -1493,7 +1493,7 @@ module usb_bulk_ep #(
     // gave it: a memory with no write port goes the same way a shift register
     // with no reader does. With 64-byte packets that is 528 flip-flops a
     // direction, or eight `TRELLIS_DPR16X4`, so it matters more than it did:
-    // the notification endpoint of `ip/usb_cdc_acm` is `WITH_OUT = 0` and pays
+    // the notification endpoint of `ip/usb/usb_cdc_acm` is `WITH_OUT = 0` and pays
     // for neither. It is why `usb_cdc_acm_fs` needs 18 of them and not 26 —
     // sixteen for the bulk pair and two for that endpoint's IN buffer alone.
     parameter        WITH_OUT   = 1,
@@ -2028,7 +2028,7 @@ endmodule
 //   multiplexer, all of it the same shape as the second.
 //
 //   Nothing here is a class. `usb_ctrl_ep`'s class hook comes straight out
-//   of this module, and what answers it is a block above — `ip/usb_cdc_acm`
+//   of this module, and what answers it is a block above — `ip/usb/usb_cdc_acm`
 //   is the first one — because what a class request means is not something
 //   a device core can know.
 //
@@ -2059,7 +2059,7 @@ module usb_dev_core #(
     // of `4'd0` is a device with no second one, and then nothing of it is
     // built: both directions of the endpoint below are off, `own_data` is a
     // flip-flop whose data input is the constant zero, and the buffers, the
-    // multiplexer arm and the byte interface all go with it. `ip/usb_hub` is
+    // multiplexer arm and the byte interface all go with it. `ip/usb/usb_hub` is
     // the class that wants this — a hub's only endpoints are the control one
     // and a status-change interrupt IN — and the alternative was to leave a
     // bulk pair in the fabric that no descriptor declares and no host would

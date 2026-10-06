@@ -1,7 +1,7 @@
 # A USB proxy, and why the PC has to be the one that enumerates
 
 `usb_proxy` is the half of a USB hub that **forwards**.
-[`ip/usb_hub`](../usb_hub/README.md) is the other half: a hub's control
+[`ip/usb/usb_hub`](../usb_hub/README.md) is the other half: a hub's control
 endpoint, which a PC's own `hub` driver binds to, and which reports a port with
 a device on it. §8 of that document is the kernel log of what happened next —
 the PC powered the port, was told something was attached, reset it, and then
@@ -15,7 +15,7 @@ Nothing of ours is in what the PC reads, because nothing of ours is in the
 path except timing.
 
 This document is laid out the way
-[`ip/usb_hub/README.md`](../usb_hub/README.md) is, and for the same reason: the
+[`ip/usb/usb_hub/README.md`](../usb_hub/README.md) is, and for the same reason: the
 facts in it have very different provenance. Some are read out of a published
 specification. Some are a reading of what a *host* does, which only a host can
 confirm. §1 says which is which and every claim below is marked.
@@ -48,7 +48,7 @@ addressing decision are this repository's own.
 A proxy has to answer one question before any of the rest: **who assigns the
 downstream device its address?**
 
-`ip/usb_host_ulpi` came with an answer that was right for the round that built
+`ip/usb/usb_host_ulpi` came with an answer that was right for the round that built
 it and wrong for this one. `usb_host_enum` is a complete USB 2.0 §9.1.2
 enumerator: it debounces the attach, drives the bus reset, reads the device
 descriptor twice, assigns **address 1**, reads the configuration descriptor and
@@ -120,7 +120,7 @@ forwarding is still verbatim and there is still no table.
 
 `usb_host_enum` is **not instantiated in a proxy at all**.
 `usb_hub_proxy_ulpi` takes `usb_ulpi_host_link` and `usb_host_sie` out of
-`ip/usb_host_ulpi` and leaves the enumerator behind, which is also what saves
+`ip/usb/usb_host_ulpi` and leaves the enumerator behind, which is also what saves
 the proxy from paying for logic that would be fighting it.
 
 **What the enumerator is still for**, and it is not nothing:
@@ -128,7 +128,7 @@ the proxy from paying for logic that would be fighting it.
 - `testdata/fpga/cynthion/usb_host_target.v` is the **instrument** that
   established this downstream bus works at all — nine registers of a real
   USB3343 read over sixteen left-edge balls no design of this project had ever
-  driven, which is `ip/usb_host_ulpi/README.md` §9;
+  driven, which is `ip/usb/usb_host_ulpi/README.md` §9;
 - `testdata/fpga/cynthion/usb_hub_target.v` uses it to prove a device is in the
   socket and enumerable, which is the measurement this block's result is
   compared against;
@@ -142,7 +142,7 @@ A design that wants an autonomous host still has one. A proxy does not want one.
 
 **A port reset must reach the real device.** Without it the device keeps an
 address from a previous session while the PC is talking to address 0, and
-nothing answers. §5 is that, and it is why `ip/usb_hub` changed in this round.
+nothing answers. §5 is that, and it is why `ip/usb/usb_hub` changed in this round.
 
 ---
 
@@ -160,7 +160,7 @@ transceiver's transmit command, which prepends a fresh SYNC of its own. About 24
 bit times one way, against the roughly 4 a hub is allowed and the 16 USB 2.0
 §7.1.19.1 gives a host before it calls an answer a timeout. The delay is in the
 transceivers and no gateware moves it.
-[`ip/usb_hub/README.md`](../usb_hub/README.md) §2 is that argument at length.
+[`ip/usb/usb_hub/README.md`](../usb_hub/README.md) §2 is that argument at length.
 
 **HIGH** (USB 2.0 §8.4.6). The escape hatch is **NAK**: a device may answer NAK
 for as long as it likes while it gets ready, and a host's answer to a NAK is to
@@ -281,7 +281,7 @@ downstream for 10 to 20 ms when a host sets PORT_RESET, reports PORT_RESET set
 in `wPortStatus` while it does, and sets C_PORT_RESET and enables the port when
 it finishes.
 
-`ip/usb_hub` used to do none of the driving, and said so: the reset completed in
+`ip/usb/usb_hub` used to do none of the driving, and said so: the reset completed in
 the cycle it was asked for, C_PORT_RESET set at once, and **PORT_RESET in
 `wPortStatus` was a constant zero** — honest, because there was nothing
 downstream to reset. In a proxy that is no longer true, and §2's last subsection
@@ -348,7 +348,7 @@ has to.
 **HIGH** (§7.1.5). Which line the device pulled up says which speed it is, and
 `FS_LINE` says which of the two *this board* calls D+, because a Cynthion
 exchanges DP and DM between each transceiver and its connector.
-`ip/usb_host_ulpi/README.md` §5 is the whole of that, and a low-speed device is
+`ip/usb/usb_host_ulpi/README.md` §5 is the whole of that, and a low-speed device is
 **reported and not spoken to**: there is no PRE token here.
 
 ---
@@ -456,7 +456,7 @@ stream; nothing here has measured what it costs on a part, and §9 says so.
 
 A Great Scott Gadgets Cynthion r1.4 holding
 `testdata/fpga/cynthion/usb_proxy_target.v`, built with `VBUS_AUX = 1`:
-`ip/usb_proxy` with the hub on the **AUX** transceiver and the downstream port on
+`ip/usb/usb_proxy` with the hub on the **AUX** transceiver and the downstream port on
 the **TARGET** one, and a Great Scott Gadgets **GreatFET** in the TARGET-A
 socket. Linux 6.18.41-gentoo, `xhci_hcd`, the Cynthion on a full-speed downstream
 port of a hub. Everything below is **quoted**, not paraphrased.
@@ -468,7 +468,7 @@ on the same machine with the same device in the same socket — the first from
 `usb_hub_target.v`, which forwards nothing, and the second from
 `usb_proxy_target.v`, which does.
 
-**Before.** `ip/usb_hub/README.md` §8 quotes this at length and it is the
+**Before.** `ip/usb/usb_hub/README.md` §8 quotes this at length and it is the
 correct outcome of a hub with no proxy behind it:
 
 ```text
@@ -510,7 +510,7 @@ because with pass-through addressing there is nothing of this project in them.
 *indices*, and the three lines after them are the strings themselves — so the
 kernel sent GET_DESCRIPTOR(STRING) four times (a language table and three
 strings) and got each one back through the proxy. **Nothing in this library
-implements a string descriptor**: `usb_ctrl_ep` stalls one and `ip/usb_hub` has
+implements a string descriptor**: `usb_ctrl_ep` stalls one and `ip/usb/usb_hub` has
 none, which is why the hub's own three lines above read `Mfr=0, Product=0,
 SerialNumber=0`. A proxy that answered for the device rather than forwarding to
 it could not have produced those thirty-two hexadecimal digits of serial number.
@@ -549,7 +549,7 @@ The reason is nothing to do with forwarding. A GreatFET's one configuration
 declares `MaxPower 500mA`; **HIGH** (USB 2.0 §11.13) a bus-powered hub may offer
 each of its ports 100 mA, because every milliamp it hands downstream comes out of
 the allowance its own upstream cable granted it; and
-[`ip/usb_hub`](../usb_hub/README.md)'s configuration descriptor said bus powered,
+[`ip/usb/usb_hub`](../usb_hub/README.md)'s configuration descriptor said bus powered,
 100 mA, which was true of every other design in this library.
 
 **It is not true of this board.** A Cynthion's own supply and its Apollo debug
@@ -564,7 +564,7 @@ the switch is closed by the bitstream and not by the host: whatever the socket
 draws, it drew before the PC ever asked, and no class request can change it.
 
 **MEDIUM**, and it is a pleasing consequence of §7 of
-[`ip/usb_hub/README.md`](../usb_hub/README.md) rather than a coincidence: the
+[`ip/usb/usb_hub/README.md`](../usb_hub/README.md) rather than a coincidence: the
 same byte is what the **standard** GET_STATUS of §9.4.5 reports. `usb_ctrl_ep`
 derives bit 0 of its two bytes from bit 6 of `CFG_ATTR`, so a host that reads the
 configuration descriptor and a host that asks GET_STATUS cannot be told different
@@ -665,7 +665,7 @@ lines.
 `iProduct 2 GreatFET` and thirty-two hexadecimal digits of serial number are four
 more control reads — a language table and three strings — of a descriptor type
 **nothing in this library implements**. `usb_ctrl_ep` stalls a string descriptor
-and `ip/usb_hub` has none, which is why the hub's own line in the kernel log above
+and `ip/usb/usb_hub` has none, which is why the hub's own line in the kernel log above
 reads `Mfr=0, Product=0, SerialNumber=0`.
 
 **`Device Qualifier`**, which `lsusb` fetches with GET_DESCRIPTOR of type `06h` —
@@ -685,7 +685,7 @@ Device Status:     0x0001
 **MEASURED**, and both lines changed in this round.
 
 `0103h` is PORT_POWER, PORT_ENABLE and PORT_CONNECTION. The reading
-`ip/usb_hub/README.md` §8 quotes is `0101h` — powered and connected and **not
+`ip/usb/usb_hub/README.md` §8 quotes is `0101h` — powered and connected and **not
 enabled**, because that hub's port was enabled by a reset and then disabled again
 when the kernel failed to enumerate through it. **HIGH** (§11.5.1): a port is
 Enabled only by a reset completing, so `0103h` is §5's reset having reached the
@@ -693,7 +693,7 @@ real device and the kernel having got what it wanted through the port.
 
 `Device Status: 0x0001` is the **standard** GET_STATUS of §9.4.5 with bit 0 — Self
 Powered — set, answered by `usb_ctrl_ep` out of bit 6 of `CFG_ATTR`. The same
-reading in `ip/usb_hub/README.md` §8 is `0x0000`, from a class block's hook, and
+reading in `ip/usb/usb_hub/README.md` §8 is `0x0000`, from a class block's hook, and
 the byte that produced it was a literal zero in `usb_hub_req`. It is arithmetic
 over a parameter now, in endpoint 0, and it agrees with the configuration
 descriptor by construction.
@@ -731,12 +731,12 @@ that endpoint again, and the PC had stopped asking: the bulk attempt gave up. §
 thing that moves the job is the host, and if the host has lost interest there is
 nothing to do.
 
-**One reading in that is the same one `ip/usb_hub/README.md` §8 explains and it is
+**One reading in that is the same one `ip/usb/usb_hub/README.md` §8 explains and it is
 still not wrong.** Byte 1 bits 2:1 are the TARGET transceiver's `VbusState` and
 they read `00`, which USB334x Table 6-3 makes "below SessEnd" — no power on the
 port at all — while a device is attached, enumerated and configured through it.
 **The TARGET transceiver does not sense the connector its power flows through**:
-`ip/usb_host_ulpi/README.md`'s "VBUS switching" traced that from the published
+`ip/usb/usb_host_ulpi/README.md`'s "VBUS switching" traced that from the published
 Cynthion PCB design, and on TARGET `VbusState` does not mean "is my device
 powered".
 
@@ -829,7 +829,7 @@ port is reset, and whatever a forwarded SET_ADDRESS gave the device after that �
 which is already in `setup_q` and is already parsed there for SET_CONFIGURATION
 and CLEAR_FEATURE. It is one seven-bit register and one comparison, and it makes
 §2's rule true by construction instead of by a property of the bus above. It is
-reported rather than made here for the reason `ip/usb_hub/README.md` §7 reported
+reported rather than made here for the reason `ip/usb/usb_hub/README.md` §7 reported
 GET_STATUS rather than moving it: the round that found it had no measurement that
 would catch getting it wrong, and the measurement to want is the count §8 asks
 for.
@@ -841,7 +841,7 @@ follow from `usb_host_sie` being a full-speed engine with no PRE token and no
 chirp. A low-speed device on the port is reported and never spoken to.
 
 **No suspend.** The PC's SetPortFeature(PORT_SUSPEND) moves a bit in
-`ip/usb_hub` and nothing downstream stops; the downstream SOFs keep the device
+`ip/usb/usb_hub` and nothing downstream stops; the downstream SOFs keep the device
 awake. ULPI §3.8.5.3.2's suspend is the change, and it needs a decision about
 what a resume does to a relay with a job in flight.
 
@@ -850,7 +850,7 @@ what a resume does to a relay with a job in flight.
 **Nothing switches a VBUS pin.** The socket behind the port is powered by a
 switch in the design's own top level, and on the board this was written for
 those switches are *bidirectional* between connectors, so closing two of them
-ties two hosts' supplies together. `ip/usb_hub/README.md` §4 states that as a
+ties two hosts' supplies together. `ip/usb/usb_hub/README.md` §4 states that as a
 deliberate refusal.
 
 **No throughput figure.** Nothing here has measured bytes a second on a part,
@@ -886,7 +886,7 @@ in the library and reach it with the rest, and one that needs a board.
 **What none of them can catch, and it is the thing that matters most: whether a
 kernel enumerates the device through it.** A host model written from the same
 specification as the proxy can agree with it about something they are both wrong
-about — that is the sentence `ip/usb_device_ulpi/README.md` §11 wrote before that
+about — that is the sentence `ip/usb/usb_device_ulpi/README.md` §11 wrote before that
 block had a board, and the one time it came true is written up in the same
 section. §8 is the other half.
 
@@ -896,7 +896,7 @@ ours with a device behind it is attached. Its own module comment says what each
 of its four parts would and would not catch; the one that matters is part three,
 which is a single boolean — **a child of our hub exists in sysfs** — and which
 fails rather than skips if the port reports a device and the kernel enumerated
-nothing through it. That is the state `ip/usb_hub/README.md` §8 quotes the kernel
+nothing through it. That is the state `ip/usb/usb_hub/README.md` §8 quotes the kernel
 log of, and it is the one assertion in this whole round that simulation could not
 reach at all.
 
@@ -920,11 +920,11 @@ NAKed, because both are `operation timed out`. The thing that can is
   host's register values, Table 10 for the inter-packet windows.
 - *USB334x Data Sheet*, Microchip DS00002646A — Table 5-1, which is the only
   place the resistors behind a register combination are written down.
-- [`ip/usb_hub/README.md`](../usb_hub/README.md) — the other half, and §8 of it
+- [`ip/usb/usb_hub/README.md`](../usb_hub/README.md) — the other half, and §8 of it
   the kernel log this round's §8 is the sequel to.
-- [`ip/usb_host_ulpi/README.md`](../usb_host_ulpi/README.md) — the transaction
+- [`ip/usb/usb_host_ulpi/README.md`](../usb_host_ulpi/README.md) — the transaction
   engine and the Link, and §5 of it the one polarity question a board can ask.
-- [`ip/usb_device_ulpi/README.md`](../usb_device_ulpi/README.md) — ULPI, fact by
+- [`ip/usb/usb_device_ulpi/README.md`](../usb_device_ulpi/README.md) — ULPI, fact by
   fact, with the provenance of each. Not repeated here.
-- [`docs/ip-library.md`](../../docs/ip-library.md) — what every block in the
+- [`docs/ip-library.md`](../../../docs/ip-library.md) — what every block in the
   library costs.

@@ -1,5 +1,5 @@
 // usb_cdc_acm_fs — a USB serial port on a board whose D+ / D- reach the
-// FPGA: `usb_cdc_acm` behind `ip/usb_device_fs`'s own line layer.
+// FPGA: `usb_cdc_acm` behind `ip/usb/usb_device_fs`'s own line layer.
 //
 // What it does
 //   This is to `usb_cdc_acm` what `usb_device_fs` is to `usb_dev_core`:

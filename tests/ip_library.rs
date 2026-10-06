@@ -2,9 +2,11 @@
 //! and simulated.
 //!
 //! The library itself is HDL, not Rust: one directory per block under
-//! `ip/`, each a package with a `reticle.ip` manifest and its sources
-//! under `rtl/`. This file is what makes it a *tested* library rather
-//! than a folder of Verilog:
+//! `ip/<category>/`, each a package with a `reticle.ip` manifest and its
+//! sources under `rtl/`. These tests reach a block by the **name** its
+//! manifest declares and never by its path, so which category a block is
+//! filed under is `ip/`'s business. This file is what makes it a *tested*
+//! library rather than a folder of Verilog:
 //!
 //! | Test | What it proves |
 //! |------|----------------|
@@ -123,10 +125,11 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
 
 use reticle::diag::{Diagnostics, Severity};
 use reticle::fpga::{self, Constraints, FpgaOptions};
-use reticle::ip::{self, IpManifest, PathProvider};
+use reticle::ip::{self, IpManifest, LibraryIndex, PathProvider};
 use reticle::ir::hier::FlattenOptions;
 use reticle::ir::{CellKind, Design, ModuleId};
 use reticle::logic::Logic;
@@ -147,7 +150,8 @@ use reticle::verilog::{Dialect, ElabOptions, NoIncludes, elaborate, parse_source
 /// One measured configuration: a package, the module inside it that is
 /// measured and simulated, and the parameters it is built with.
 struct Variant {
-    /// The directory under `ip/`.
+    /// The name the package's own `reticle.ip` declares, which is also
+    /// the last component of its directory under `ip/`.
     package: &'static str,
     /// The module elaborated as the top.
     top: &'static str,
@@ -419,6 +423,14 @@ fn board_constraints(variant: &Variant) -> &'static str {
     }
 }
 
+/// The seven folders `ip/` is grouped into, which
+/// `every_block_is_findable_by_the_name_it_declares` holds the layout to.
+///
+/// They are a filing system and nothing more: no code reads a category,
+/// a package's identity is the name its manifest declares, and a block
+/// resolves by that name wherever it sits.
+const CATEGORIES: [&str; 7] = ["bus", "cpu", "memory", "net", "usb", "util", "video"];
+
 /// The devices the footprint table reports, besides the generic LUT
 /// mappings.
 const DEVICES: [(&str, &str); 2] = [
@@ -435,15 +447,44 @@ fn ip_dir() -> PathBuf {
 }
 
 /// The one place these tests touch the filesystem for the library.
+///
+/// `rel` is relative to `ip/`, so it starts with a category: the UART's
+/// manifest is `bus/uart/reticle.ip`.
 fn read(rel: &str) -> Option<String> {
     fs::read_to_string(ip_dir().join(rel))
         .ok()
         .map(|t| t.replace("\r\n", "\n"))
 }
 
+/// The real library, indexed by the names its manifests declare, with
+/// paths relative to `ip/` — walked once for the whole run.
+///
+/// Its root is `.` because `read` already starts at `ip/`, which puts
+/// the index's paths in the same space as that closure's.
+fn library() -> &'static LibraryIndex {
+    static INDEX: OnceLock<LibraryIndex> = OnceLock::new();
+    INDEX.get_or_init(|| LibraryIndex::from_manifests([".".to_owned()], walk_library(".")))
+}
+
+/// Where the package called `name` lives, relative to `ip/`.
+///
+/// A block sits one level down from `ip/` now — `bus/uart`,
+/// `usb/usb_hub` — so a name is no longer a directory, and the index
+/// built from the manifests' own `name` lines is what turns one into the
+/// other. That is the same answer `reticle build` gets from a project's
+/// `library` line, so a block these tests cannot find is a block a build
+/// cannot find either.
+fn package_dir(name: &str) -> String {
+    library()
+        .lookup(name)
+        .unwrap_or_else(|problem| panic!("`{name}` is not a package under ip/: {problem:?}"))
+        .dir
+        .clone()
+}
+
 /// Parses one package's manifest, failing loudly.
 fn manifest(package: &str) -> IpManifest {
-    let path = format!("{package}/reticle.ip");
+    let path = format!("{}/reticle.ip", package_dir(package));
     let text = read(&path).unwrap_or_else(|| panic!("no {path}"));
     let mut map = SourceMap::new();
     let file = map.add(path.clone(), &text).expect("manifest fits");
@@ -456,18 +497,19 @@ fn manifest(package: &str) -> IpManifest {
 
 /// The sources of `package` and everything it depends on, deepest first.
 ///
-/// A dependency lives in the directory named after it, which is the rule
-/// `PathProvider` applies too.
+/// A dependency is found by its name through [`package_dir`], which is
+/// the rule `PathProvider` applies too once it has an index.
 fn gather(package: &str, seen: &mut BTreeSet<String>, out: &mut Vec<(String, String)>) {
     if !seen.insert(package.to_owned()) {
         return;
     }
+    let dir = package_dir(package);
     let ip = manifest(package);
     for dep in &ip.depends {
         gather(&dep.name, seen, out);
     }
     for source in &ip.sources {
-        let path = format!("{package}/{}", source.path);
+        let path = format!("{dir}/{}", source.path);
         let text = read(&path).unwrap_or_else(|| panic!("no {path}"));
         out.push((path, text));
     }
@@ -605,13 +647,16 @@ fn cycle(sim: &mut Simulator<'_>, clk: NetHandle, half: u64) {
 // Manifests
 // ---------------------------------------------------------------------------
 
-/// Every package directory under `ip/`, sorted.
+/// Every package in the library, by the name its manifest declares,
+/// sorted.
+///
+/// Read off the index rather than off `read_dir`, because the top level
+/// of `ip/` is seven category folders and not twenty-nine packages.
 fn packages() -> Vec<String> {
-    let mut names: Vec<String> = fs::read_dir(ip_dir())
-        .expect("the ip/ directory")
-        .map(|e| e.expect("dir entry"))
-        .filter(|e| e.path().is_dir())
-        .map(|e| e.file_name().to_string_lossy().into_owned())
+    let mut names: Vec<String> = library()
+        .entries()
+        .iter()
+        .map(|entry| entry.name.clone())
         .collect();
     names.sort();
     assert!(
@@ -625,13 +670,25 @@ fn packages() -> Vec<String> {
 #[test]
 fn manifests_parse() {
     for package in packages() {
+        let dir = package_dir(&package);
+        // The folder is still named after the package, one category
+        // down: `bus/uart` holds `uart`. The redundancy is deliberate —
+        // a reader of a path should not have to open a manifest to know
+        // which package it is.
+        assert_eq!(
+            dir.rsplit('/').next().unwrap_or(dir.as_str()),
+            package,
+            "{dir} holds the package named {package}"
+        );
+        // And the full parse agrees with the index, which reads `name`
+        // by a small scan rather than by parsing.
         let ip = manifest(&package);
         assert_eq!(ip.name, package, "a package's name is its directory");
         assert!(ip.license.is_some(), "{package} has no license");
         assert!(ip.description.is_some(), "{package} has no description");
         assert!(!ip.sources.is_empty(), "{package} lists no source");
         for source in &ip.sources {
-            let path = format!("{package}/{}", source.path);
+            let path = format!("{dir}/{}", source.path);
             assert!(read(&path).is_some(), "{path} is listed but missing");
             assert!(
                 source.language().is_some(),
@@ -660,15 +717,19 @@ fn packages_resolve_and_elaborate() {
         let ip = manifest(&package);
         let top = ip.top.clone().expect("a top");
         // A throwaway project that depends on nothing but this package,
-        // which is exactly how a user reaches a library block.
+        // which is exactly how a user reaches a library block: one
+        // `library` line, and a `depends` that names no path. Its
+        // dependencies name no path either, so this is also what proves
+        // the search places a *transitive* name — `usb_cdc_acm` asking
+        // for `usb_device_fs` across the library, not beside itself.
         let project_text =
-            format!("name {package}_check\ntop {top}\n\ndepends {package} * path {package}\n");
+            format!("name {package}_check\ntop {top}\n\nlibrary .\n\ndepends {package} *\n");
 
         let mut map = SourceMap::new();
         let mut diags = Diagnostics::new();
         let project = ip::load_project(&mut map, "reticle.proj", &project_text, &mut diags)
             .expect("the generated project parses");
-        let mut provider = PathProvider::new(".", read);
+        let mut provider = PathProvider::new(".", read).with_library(library().clone());
         let mut resolved = ip::resolve(map, &project, &mut provider, &mut diags);
         assert!(
             resolved.is_complete(),
@@ -9869,7 +9930,7 @@ fn expected_device_descriptor(vid: u16, pid: u16) -> Vec<u8> {
 }
 
 /// The same, for a device whose class triple is not the vendor-specific
-/// default: `ip/usb_cdc_acm` says `02h` in the device descriptor as well as
+/// default: `ip/usb/usb_cdc_acm` says `02h` in the device descriptor as well as
 /// in its communications interface, which is what CDC 1.1 Table 14 asks
 /// for.
 fn expected_device_descriptor_of(vid: u16, pid: u16, class: [u8; 3]) -> Vec<u8> {
@@ -11230,7 +11291,7 @@ enum PhyState {
 
 /// A ULPI transceiver: a full-speed line on one side and the ULPI bus on
 /// the other, written from the specification in
-/// `ip/usb_device_ulpi/README.md`.
+/// `ip/usb/usb_device_ulpi/README.md`.
 ///
 /// Every cycle it presents `dir`, `nxt` and the data bus, reads what the
 /// Link drove, and complains if the Link drove a bus that was not its.
@@ -11675,7 +11736,7 @@ impl UlpiPhy {
             // Microchip USB3343 has: Vendor ID `0424h` and Product ID
             // `0009h` (DS00002646A Table 7-1, §7.1.1.1 to §7.1.1.4). The
             // first of those has been **read off a part** on this board;
-            // `ip/usb_device_ulpi/README.md` §11 has that measurement and
+            // `ip/usb/usb_device_ulpi/README.md` §11 has that measurement and
             // the other three are quoted from the same table.
             ULPI_VENDOR_ID_LOW => 0x24,
             ULPI_VENDOR_ID_HIGH => 0x04,
@@ -13029,7 +13090,7 @@ impl<'d> UlpiHost<'d> {
 ///
 /// Both halves are this repository's, and that is the point of the test and
 /// also its limit: it establishes that the two agree, not that either agrees
-/// with anybody else's. `ip/usb_device_ulpi` has already been enumerated by a
+/// with anybody else's. `ip/usb/usb_device_ulpi` has already been enumerated by a
 /// real host on a real board, which is what makes the device side of this a
 /// fixed point rather than a second guess — so a disagreement here is the
 /// host's.
@@ -13280,7 +13341,7 @@ fn usb_host_ulpi_reads_the_transceiver_before_it_drives_anything() {
     let mut host = UlpiHost::new(&design, UlpiPhy::new(ULPI_CPB).hosting());
 
     // What the part is. A Microchip USB3343 answers `0424h` and `0009h`;
-    // `ip/usb_device_ulpi/README.md` §11 has the first of those read off a
+    // `ip/usb/usb_device_ulpi/README.md` §11 has the first of those read off a
     // transceiver on this board.
     assert_eq!(host.read_register(0x00, UsbLine::Se0), Some(0x24));
     assert_eq!(host.read_register(0x01, UsbLine::Se0), Some(0x04));
@@ -13449,7 +13510,7 @@ fn usb_host_ulpi_gives_up_on_a_device_that_never_answers() {
 /// models with the D+ / D- pair between them.
 ///
 /// Both halves are in this tree and neither is a model of the other: the
-/// device is `ip/usb_device_ulpi`, which a real host has enumerated on a real
+/// device is `ip/usb/usb_device_ulpi`, which a real host has enumerated on a real
 /// board, and the host is this package. What the test asserts is bytes — the
 /// eighteen of the device descriptor and the thirty-two of the configuration
 /// descriptor, each compared with the same `expected_*` function the device's
@@ -13698,7 +13759,7 @@ fn usb_host_ulpi_enumerates_through_the_transceiver_that_is_on_the_board() {
 /// A host whose idea of which line is which is wrong calls a full-speed
 /// device low speed, and `FS_LINE` is the parameter that says which.
 ///
-/// This is the failure that cost `ip/usb_device_ulpi` three attempts from the
+/// This is the failure that cost `ip/usb/usb_device_ulpi` three attempts from the
 /// other end, and the reason the parameter exists rather than a constant: a
 /// board that exchanges DP and DM between the transceiver and its connector
 /// makes `10` the full-speed idle, and a host built for `01` refuses to talk
@@ -13775,7 +13836,7 @@ const CDC_DATA_ENDP: u8 = 1;
 const CDC_NOTIF_MAXPKT: u8 = 16;
 const CDC_SERIAL_STATE_BYTES: usize = 10;
 
-/// What `ip/usb_cdc_acm`'s own designs drive `serial_state` to: `bRxCarrier`
+/// What `ip/usb/usb_cdc_acm`'s own designs drive `serial_state` to: `bRxCarrier`
 /// and `bTxCarrier` set, every error bit clear.
 ///
 /// PSTN 1.2 §6.5.4 makes bit 0 DCD and bit 1 DSR, and a serial port whose
@@ -13813,7 +13874,7 @@ fn expected_cdc_configuration() -> Vec<u8> {
     // Set_Control_Line_State, Get_Line_Coding — and nothing else.
     iface.extend_from_slice(&[4, 0x24, 0x02, 0x02]);
     // Union functional descriptor, CDC 1.1 Table 33: interface 1 is
-    // subordinate to interface 0. `ip/usb_cdc_acm/README.md` §2 says what is
+    // subordinate to interface 0. `ip/usb/usb_cdc_acm/README.md` §2 says what is
     // known and what is only understood about a host needing it.
     iface.extend_from_slice(&[5, 0x24, 0x06, CDC_COMM_IFACE, CDC_DATA_IFACE]);
     // ENDPOINT 82h: interrupt IN, sixteen bytes — room for the ten of a
@@ -13965,7 +14026,7 @@ fn usb_cdc_acm_ulpi_enumerates_through_the_transceiver_that_is_on_the_board() {
 /// must not move: the union descriptor because it is what says the two
 /// interfaces are one function, and the interrupt IN endpoint because CDC 1.1
 /// §3.2 puts the notification element on one. Both are also understood to be
-/// what `cdc_acm` looks for, and `ip/usb_cdc_acm/README.md` §2 and §4 say how
+/// what `cdc_acm` looks for, and `ip/usb/usb_cdc_acm/README.md` §2 and §4 say how
 /// sure of that this project is — which is less sure than of the bytes.
 #[test]
 fn usb_cdc_acm_descriptors_carry_what_a_host_driver_binds_on() {
@@ -14360,7 +14421,7 @@ fn cdc_serial_state(state: u8) -> Vec<u8> {
 /// **What it would not catch.** Whether a host's driver acts on the bytes.
 /// Nothing in simulation can: this host model is written from the same
 /// specification as the device. `tests/usb_cdc_acm.rs` reads the ten bytes off
-/// the wire and `ip/usb_cdc_acm/README.md` §5 has `TIOCMGET` off a real kernel
+/// the wire and `ip/usb/usb_cdc_acm/README.md` §5 has `TIOCMGET` off a real kernel
 /// across three opens, which is the other half.
 fn cdc_notification<P: UsbPair>(host: &mut UsbHost<P>) {
     host.set_port("serial_state", CDC_LINES_UP, 7);
@@ -15319,7 +15380,7 @@ impl StatusPipe {
     /// **Asserting it rather than tolerating it** is the point. It is a
     /// property of the endpoint below the hub, not of the hub, and anything
     /// that changed it — an endpoint that can be disarmed, an arming rule with
-    /// a latch in it — should fail here and be read. `ip/usb_hub/README.md` §5
+    /// a latch in it — should fail here and be read. `ip/usb/usb_hub/README.md` §5
     /// is the same thing in prose with what the alternative would cost.
     fn settles<P: UsbPair>(
         &mut self,
@@ -15353,13 +15414,13 @@ impl StatusPipe {
 /// Nothing on the downstream port, which is what every hub test starts from.
 ///
 /// Both are **inputs**, and an input nobody drives is unknown — the same
-/// reason every test of `ip/usb_cdc_acm` sets `serial_state`.
+/// reason every test of `ip/usb/usb_cdc_acm` sets `serial_state`.
 fn hub_port_empty<P: UsbPair>(host: &mut UsbHost<P>) {
     host.set_port("port_attached", 0, 1);
     host.set_port("port_low_speed", 0, 1);
     // THE RESET THAT TAKES NO TIME, WHICH IS WHAT THIS BLOCK ON ITS OWN HAS
     //
-    // `ip/usb_hub`'s port reset is a handshake: a level out while the port is
+    // `ip/usb/usb_hub`'s port reset is a handshake: a level out while the port is
     // resetting and a pulse in when whatever drives it has finished. Nothing
     // downstream of the block **in these tests** drives one, so `port_reset_done`
     // is held high and every reset finishes in the cycle it is asked for, which
@@ -15368,7 +15429,7 @@ fn hub_port_empty<P: UsbPair>(host: &mut UsbHost<P>) {
     //
     // It is driven here and not left alone because an undriven input is `x`, and
     // an `x` into `resetting && port_reset_done` is a port that neither finishes
-    // its reset nor says so. `ip/usb_proxy`'s own tests are where the handshake
+    // its reset nor says so. `ip/usb/usb_proxy`'s own tests are where the handshake
     // takes time.
     host.set_port("port_reset_done", 1, 1);
 }
@@ -15422,7 +15483,7 @@ fn usb_hub_ulpi_enumerates_through_the_transceiver_that_is_on_the_board() {
 ///
 /// **What it would not catch.** Whether the driver binds. Nothing in
 /// simulation can, because this expectation and the block are both written
-/// from the same specification; §6 of `ip/usb_hub/README.md` has the kernel
+/// from the same specification; §6 of `ip/usb/usb_hub/README.md` has the kernel
 /// log.
 #[test]
 fn usb_hub_descriptors_carry_what_a_host_hub_driver_binds_on() {
@@ -16000,7 +16061,7 @@ fn usb_hub_stalls_the_class_requests_it_does_not_claim() {
 /// is where that is written down.
 ///
 /// **Why the fourth and sixth are the assertions that matter.** The first
-/// version of `ip/usb_cdc_acm`'s notification endpoint sent one notification
+/// version of `ip/usb/usb_cdc_acm`'s notification endpoint sent one notification
 /// per configuration and never another, which is a functional defect: the
 /// host that consumed it need not be the host that acts on it, and a driver
 /// bound a second time started with nothing. §4 of that block's README.md has
@@ -16135,7 +16196,7 @@ fn hub_status_changes<P: UsbPair>(host: &mut UsbHost<P>) {
     // ------------------------------------------------------------------
     // The port goes back to powered off, so there is nothing to report until
     // the host powers it — and then there is, which is the same path the
-    // first connection took. `ip/usb_cdc_acm` needed a trigger of its own for
+    // first connection took. `ip/usb/usb_cdc_acm` needed a trigger of its own for
     // exactly the case this covers for nothing.
     configure_for(
         host,
@@ -16198,7 +16259,7 @@ fn usb_hub_is_one_clock_domain() {
 // usb_proxy: the half of a hub that forwards
 // ---------------------------------------------------------------------------
 
-/// `ip/usb_proxy` at the scale a simulation can run, which is the same trade
+/// `ip/usb/usb_proxy` at the scale a simulation can run, which is the same trade
 /// `HOST_TEST_PARAMS` makes and for the same reasons.
 ///
 /// Every one of these is a **time** on a board and a count here:
@@ -16727,7 +16788,7 @@ fn proxy_port_status(host: &mut UsbHost<ProxyRig<'_>>, hub_addr: u8) -> (u16, u1
 /// port, and the point at which forwarding begins.
 ///
 /// The device's attach is **not poked**: `port_attached` is not an input of this
-/// design at all, the way it is of `ip/usb_hub` on its own. It is
+/// design at all, the way it is of `ip/usb/usb_hub` on its own. It is
 /// `usb_proxy_dn`'s own debounced sight of the downstream pair leaving SE0, so
 /// this runs the clock until it has seen it. That difference is why this harness
 /// exists.
@@ -16769,7 +16830,7 @@ fn proxy_open_the_port(host: &mut UsbHost<ProxyRig<'_>>, hub_addr: u8) {
     // SetPortFeature(PORT_RESET) reaches the real device now: `usb_proxy_dn`
     // writes `50h` into the downstream transceiver's Function Control register,
     // holds SE0 for `RESET_HOLD`, writes `45h` back and waits `RESET_RECOVERY`.
-    // So PORT_RESET reads **set** while that is happening — the bit `ip/usb_hub`
+    // So PORT_RESET reads **set** while that is happening — the bit `ip/usb/usb_hub`
     // used to report as a constant zero because its reset was over in the cycle
     // it was asked for — and the port is not enabled until it is over.
     host.control_write(hub_addr, hub_set_port_feature(port, FEAT_PORT_RESET));
@@ -16888,8 +16949,8 @@ fn proxy_enumerate_the_device(
 /// What it would **not** catch: that a *kernel* enumerates it. A host model
 /// written from the same specification as the proxy can agree with it about
 /// something they are both wrong about, which is the sentence
-/// `ip/usb_device_ulpi/README.md` §11 wrote before that block had a board;
-/// `ip/usb_proxy/README.md` §8 is the other half. Nor any of the times, which
+/// `ip/usb/usb_device_ulpi/README.md` §11 wrote before that block had a board;
+/// `ip/usb/usb_proxy/README.md` §8 is the other half. Nor any of the times, which
 /// `PROXY_TEST_PARAMS` says.
 fn proxy_enumerate_our_device(stale: bool) {
     let proxy = proxy_design();
@@ -17037,7 +17098,7 @@ fn usb_proxy_forwards_a_data_stage_of_more_than_one_packet() {
 
 /// Bytes through the port, in both directions, on the bulk pair.
 ///
-/// `ip/usb_device_ulpi`'s own data endpoint is wired in **loopback** by this
+/// `ip/usb/usb_device_ulpi`'s own data endpoint is wired in **loopback** by this
 /// file's harness — `out_*` into `in_*`, which is the arrangement the board has
 /// — so a packet written to endpoint 1 OUT comes back from endpoint 1 IN. Four
 /// of them, of four different lengths, so that:
@@ -17113,7 +17174,7 @@ fn usb_proxy_moves_bytes_through_the_port() {
 
 /// A device that refuses a request, and a PC that is told so.
 ///
-/// A string descriptor is the request to use: `ip/usb_device_ulpi` has no
+/// A string descriptor is the request to use: `ip/usb/usb_device_ulpi` has no
 /// strings, so endpoint 0 there offers the request to a class that is not there
 /// and stalls it — which is a **real** STALL from the real device and not a
 /// condition this test manufactures.
@@ -17855,7 +17916,7 @@ endmodule
 /// the bytes that came off a board wrong — and because a byte-level regression
 /// in the block itself would show here and nowhere else.
 ///
-/// It was found by one. `ip/usb_cdc_acm`'s fifty-eight byte descriptor set,
+/// It was found by one. `ip/usb/usb_cdc_acm`'s fifty-eight byte descriptor set,
 /// read off a Cynthion, had `bInterfaceNumber` of its data interface as **0**
 /// where the sources say 1 — one byte in sixty-seven — and `cdc_acm` refused
 /// the device with `config 1 has 1 interface, different from the descriptor's
@@ -17917,7 +17978,7 @@ endmodule
 /// cases below take `BUF_RAM = 0` and the comment on them says why.
 #[test]
 fn usb_descriptors_survive_lookup_table_mapping() {
-    // The CDC ACM descriptor set, as `ip/usb_cdc_acm` states it, for the
+    // The CDC ACM descriptor set, as `ip/usb/usb_cdc_acm` states it, for the
     // configuration that has no class layer: the same fifty-eight bytes in
     // `usb_device_fs`'s parameter. Written here in descriptor order, which is
     // the order the parameter's concatenation is in.
@@ -17944,7 +18005,7 @@ fn usb_descriptors_survive_lookup_table_mapping() {
     // Four of them and two LUT widths. The first is the descriptor set that
     // has always worked on a board, the second is the one that did not, the
     // third is the block that states it for itself, and the fourth is a
-    // **fourth blob** — `ip/usb_hub`'s twenty-five bytes — because what the
+    // **fourth blob** — `ip/usb/usb_hub`'s twenty-five bytes — because what the
     // defect below depended on was the ROM's contents and not its length.
     //
     // What the fourth case does **not** cover is the hub descriptor of USB 2.0
@@ -18110,11 +18171,12 @@ fn walk_library(root: &str) -> Vec<(String, String)> {
 
 /// The real library, indexed by name.
 ///
-/// This is the test that will fail if the planned reorganisation of
-/// `ip/` ever copies a package instead of moving it, or renames a
-/// directory without its manifest: the index is built from the declared
-/// names, so two `uart`s or a package nobody can name shows up here and
-/// nowhere else.
+/// This is the test that fails if a reorganisation of `ip/` ever copies
+/// a package instead of moving it, or renames a directory without its
+/// manifest: the index is built from the declared names, so two `uart`s
+/// or a package nobody can name shows up here and nowhere else. It was
+/// written one round before the move into category folders and it is
+/// what that move was checked with.
 ///
 /// What it would catch: a duplicate name anywhere under `ip/`, a manifest
 /// with no `name`, a `depends` naming a package the library does not
@@ -18155,6 +18217,29 @@ fn every_block_is_findable_by_the_name_it_declares() {
             "{} is not under {}",
             found.manifest,
             found.dir
+        );
+        // The layout: `ip/<category>/<package>`, with the folder named
+        // after the package it holds. Nothing in the resolver requires
+        // either — a block is found by its declared name at any depth —
+        // so this is the test that says the library is laid out the way
+        // `docs/ip-library.md` draws it.
+        let parts: Vec<&str> = found.dir.split('/').collect();
+        assert_eq!(
+            parts.len(),
+            3,
+            "{} is not ip/<category>/<package>",
+            found.dir
+        );
+        assert_eq!(parts[0], "ip");
+        assert!(
+            CATEGORIES.contains(&parts[1]),
+            "`{}` is not one of the seven categories {CATEGORIES:?}",
+            parts[1]
+        );
+        assert_eq!(
+            parts[2], entry.name,
+            "{} is not named for {}",
+            found.dir, entry.name
         );
     }
 

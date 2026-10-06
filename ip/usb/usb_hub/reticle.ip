@@ -11,8 +11,8 @@
 # downstream packet to its enabled ports within about four bit times, and
 # through a ULPI transceiver the floor is roughly twenty-four one way, so a
 # transparent repeater cannot meet USB's turnaround at all. What is behind
-# this block's port instead is a second USB controller — `ip/usb_host_ulpi`
-# — and joining the two conversations is **`ip/usb_proxy`**, a transaction
+# this block's port instead is a second USB controller — `ip/usb/usb_host_ulpi`
+# — and joining the two conversations is **`ip/usb/usb_proxy`**, a transaction
 # proxy with NAK as the escape hatch. On its own, this block finds itself a
 # host that resets its port and gets no answer from the device it believes is
 # there; README.md §2 is the timing argument and §8 is the kernel log of that

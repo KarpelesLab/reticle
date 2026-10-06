@@ -7,13 +7,13 @@ Communications Device Class is one the operating system already knows, so
 the host half of the work is a driver somebody else wrote and ships.
 
 That is the whole reason it is the first class layer in this library.
-`ip/usb_device_fs` and `ip/usb_device_ulpi` move bytes over a
+`ip/usb/usb_device_fs` and `ip/usb/usb_device_ulpi` move bytes over a
 vendor-specific interface, which is honest and is also a program's problem:
 somebody has to claim the interface and speak to it. This block moves the
 same bytes with no program at all — `cat /dev/ttyACM1` is the client.
 
 This document is laid out the way
-[`ip/usb_device_ulpi/README.md`](../usb_device_ulpi/README.md) is, and for
+[`ip/usb/usb_device_ulpi/README.md`](../usb_device_ulpi/README.md) is, and for
 the same reason: the facts in it have very different provenance. Some are
 read out of a published table. Some are a reading of what a *host driver*
 does, which no specification states and only a host can confirm. §1 says
@@ -116,7 +116,7 @@ configuration descriptor that `usb_ctrl_ep` writes, `wTotalLength` is
 `bNumInterfaces`, both `bNumEndpoints` fields and `wTotalLength` are not in
 the block's parameter at all: `usb_ctrl_ep` counts them out of the blob at
 elaboration and writes them over what is there.
-[`docs/ip-library.md`](../../docs/ip-library.md) says why. The `0` sitting
+[`docs/ip-library.md`](../../../docs/ip-library.md) says why. The `0` sitting
 in byte 4 of each interface descriptor below is a placeholder.
 
 ### INTERFACE 0 — the communications interface (9 bytes)
@@ -448,7 +448,7 @@ stated rule.
 
 **MEDIUM**. The five error bits are levels a device sets and clears, not
 events. `testdata/fpga/cynthion/usb_cdc_uart.v` leaves them clear and
-deliberately does **not** wire `ip/uart`'s `rx_error` to `bFraming`: that output
+deliberately does **not** wire `ip/bus/uart`'s `rx_error` to `bFraming`: that output
 is one cycle wide, and turning a pulse into a level needs a rule about when the
 level goes away that this design has no reason to have.
 
@@ -471,7 +471,7 @@ earlier round said about `clocal`, which is not the observation it looks like.
 
 A Great Scott Gadgets Cynthion r1.4 on its AUX port, holding
 `testdata/fpga/cynthion/usb_cdc_uart.v` — this block behind
-`ip/usb_device_ulpi`'s link layer, with its bytes bridged to `ip/uart` and
+`ip/usb/usb_device_ulpi`'s link layer, with its bytes bridged to `ip/bus/uart` and
 that UART's transmit line looped into its own receiver. Linux
 6.18.41-gentoo, `xhci_hcd`, the device on a full-speed downstream port of a
 hub. Everything below is quoted, not paraphrased.
@@ -614,7 +614,7 @@ descriptors — the **standard** GET_STATUS of USB 2.0 §9.4.5 — and on this d
 it could not: endpoint 0 did not implement that request, so it was stalled, and
 `lsusb` wrote `cannot read device status` to its standard error instead.
 
-The round that built [`ip/usb_proxy`](../usb_proxy/README.md) moved GET_STATUS
+The round that built [`ip/usb/usb_proxy`](../usb_proxy/README.md) moved GET_STATUS
 into `usb_ctrl_ep`, where a standard request belongs, and **re-ran this block's
 own board test to find out what that cost**:
 
@@ -637,7 +637,7 @@ Device Status:     0x0000
 
 **CHECKED**, and on a part. Nothing of this block changed and nothing of it
 regressed: `cdc_acm` still binds, the forty-eight bytes still go out through
-`ip/uart`'s transmitter and come back through its receiver, the SERIAL_STATE
+`ip/bus/uart`'s transmitter and come back through its receiver, the SERIAL_STATE
 notification still carries both carriers, and GET_LINE_CODING still reads back
 what the host set.
 
@@ -686,7 +686,7 @@ hello, world^M
 ```
 
 `printf` and `cat`. The characters went out of endpoint 1 OUT, through
-`ip/uart`'s transmitter at 115200 baud, back in through its receiver, out of
+`ip/bus/uart`'s transmitter at 115200 baud, back in through its receiver, out of
 endpoint 1 IN, and up through `cdc_acm` and the terminal layer into `cat`.
 
 And as a test, with the descriptors checked against the sources on the way:
@@ -878,7 +878,7 @@ to hang up a transfer half way through.
 Measured, not calculated, and **not measured on this block** — which is the
 first thing to say about it.
 `testdata/fpga/cynthion/usb_cdc_uart.v` carries one byte at a time through its
-UART, for the reason §7 gives about `ip/fifo_sync`, so it sends one-byte packets
+UART, for the reason §7 gives about `ip/memory/fifo_sync`, so it sends one-byte packets
 whatever `wMaxPacketSize` says and a wider packet does nothing for it. The
 design that measures the *endpoint* rather than the bridge above it is
 `testdata/fpga/cynthion/usb_ulpi_device.v`, the bulk loopback, and
@@ -977,12 +977,12 @@ lines that fix it.
   cannot express: §5.6.3 allows 1023 bytes and the length field is seven bits.
 - **No FIFO.** The endpoint holds one packet each way and NAKs while it is
   full, which is what bulk means. A bridge to something as slow as a UART
-  wants depth on its receive side, and `ip/fifo_sync` is the block for it —
+  wants depth on its receive side, and `ip/memory/fifo_sync` is the block for it —
   see §7.
 - **One serial port.** Two would need two of everything and an interface
   association descriptor above them.
 - **No suspend, no remote wake-up, no SOF tracking, no high speed.** Those
-  are the device core's limits and `ip/usb_device_fs` states them.
+  are the device core's limits and `ip/usb/usb_device_fs` states them.
 
 ---
 
@@ -1044,9 +1044,9 @@ a shortcut: a host must hear nothing from an endpoint the descriptors do
 not declare. Nothing is `generate`d away — the registers of a direction
 that cannot be asked for have no reader, so synthesis removes them.
 
-### `ip/fifo_sync` could not be placed on an ECP5, and now can
+### `ip/memory/fifo_sync` could not be placed on an ECP5, and now can
 
-Found while bridging this block to `ip/uart` on the Cynthion, and it was a gap
+Found while bridging this block to `ip/bus/uart` on the Cynthion, and it was a gap
 in the FPGA backend rather than in either block:
 
 ```
@@ -1115,6 +1115,6 @@ modelled, a real FIFO between the endpoint and the UART is available, which
 - *Universal Serial Bus Specification*, Revision 2.0. §9.6 and Tables 9-5,
   9-12 and 9-13 for the standard descriptors, §5.8.3 for bulk packet
   sizes, §8.5.3 for the stages of a control transfer.
-- [`ip/usb_device_ulpi/README.md`](../usb_device_ulpi/README.md) for the
-  bus below this, and [`docs/ip-library.md`](../../docs/ip-library.md) for
+- [`ip/usb/usb_device_ulpi/README.md`](../usb_device_ulpi/README.md) for the
+  bus below this, and [`docs/ip-library.md`](../../../docs/ip-library.md) for
   the device core and how the descriptors are carried.

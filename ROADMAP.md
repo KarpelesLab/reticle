@@ -523,13 +523,13 @@ FPGA:
       than off data wires. With that the ECP5 backend has pads,
       interconnect, lookup tables and clocked flip-flops, each confirmed on
       a board. See `docs/fpga-trellis.md`.
-- [x] **A distributed RAM is on the ECP5's fabric, and `ip/fifo_sync`
+- [x] **A distributed RAM is on the ECP5's fabric, and `ip/memory/fifo_sync`
       places.** Until 2026-09-28 that library block could not be placed on
       an ECP5 at any depth — `the design needs 2 lutram site(s) and the
       part has 0` — while `synthesize_for` succeeded, which is why the
       library test passed and nobody noticed. The `Arch` an ECP5 loads had
       three kinds of bel and no distributed-RAM site on the die. It has one
-      per logic tile now, and `ip/fifo_sync` places, routes and comes out
+      per logic tile now, and `ip/memory/fifo_sync` places, routes and comes out
       as a bitstream at depths 16, 32 and 64, every bit of which decodes
       back through the database with nothing unexplained. A
       `TRELLIS_DPR16X4` is **slices A, B and C of one logic tile**:
@@ -743,7 +743,7 @@ and first-party IP should drop into a design as easily as a Rust crate.
       peripheral mode and reads it back. One 60 MHz clock and **no PLL**,
       because ULPI's clock rate is what the board's oscillator already
       is. The protocol was written down first, as
-      `ip/usb_device_ulpi/README.md`, with the section of ULPI 1.1 and
+      `ip/usb/usb_device_ulpi/README.md`, with the section of ULPI 1.1 and
       the confidence of every fact, and the RTL was written from that
       document; the control endpoint is not a copy of the full-speed
       core's but the same module, `usb_ctrl_ep`, reached through a
@@ -760,7 +760,7 @@ and first-party IP should drop into a design as easily as a Rust crate.
       around on real silicon. It does **not** enumerate: the host detects
       low speed where full speed was asked for. `docs/fpga-trellis.md` has
       the seven experiments on the part that narrow that down and
-      `ip/usb_device_ulpi/README.md` §11 has what it does to this block's
+      `ip/usb/usb_device_ulpi/README.md` §11 has what it does to this block's
       confidence.
 - [x] **A class layer on top of the USB device, and the first class is the
       one an operating system already has a driver for.** `usb_ctrl_ep`
@@ -785,8 +785,8 @@ and first-party IP should drop into a design as easily as a Rust crate.
       model both cores use, through the transceiver that reports LineState
       late. **On a Cynthion's AUX port the kernel binds `cdc_acm` and a
       `/dev/ttyACM*` appears**, and `printf` and `cat` move characters
-      through it: out of endpoint 1 OUT, through `ip/uart` at 115200 baud,
-      back in and up to the host. `ip/usb_cdc_acm/README.md` is the
+      through it: out of endpoint 1 OUT, through `ip/bus/uart` at 115200 baud,
+      back in and up to the host. `ip/usb/usb_cdc_acm/README.md` is the
       protocol document, with a confidence level the ULPI one did not
       need — CHECKED, meaning measured on a host with the output quoted —
       and §5 is the kernel log and the whole `lsusb -v`. What is left is a
@@ -918,7 +918,7 @@ shaped the whole design and both were measured rather than assumed: there
 is no block RAM site in this flow, so the ROM is 505 lookup tables and the
 RAM is 530 distributed RAMs, and the monitor did not fit the one page the
 interface it reproduces manages, so it takes two and the README says what
-the second cost. It is also where the other half of `ip/uart` landed: a
+the second cost. It is also where the other half of `ip/bus/uart` landed: a
 host's `SET_LINE_CODING` rate now reaches `uart`'s divisor through
 `uart_baud_div`, and on the part it reaches a register the 6502 reads —
 `5003` answers `10` at 115200, which is the 65C51's "clocked from outside
@@ -946,7 +946,7 @@ board file is checked; both are fixed with a regression test.
 A fourth system takes the same processor somewhere it has to be right
 about more than arithmetic: `examples/nes` is an NES-compatible console,
 `mos6502` with `DECIMAL_MODE = 0` — which is what the processor in an
-NES is — plus a new library block, `ip/ppu2c02`, and `dvi_tx` for the
+NES is — plus a new library block, `ip/video/ppu2c02`, and `dvi_tx` for the
 picture, on an ECP5 45F at 5409 `LUT4` and 39 `DP16KD`, or `vga_out` on
 a Digilent Basys 3 at 3786 `LUT6` and 39 `RAMB18E1` with no PLL and no
 DDR register. It runs a demo written for the example and contains no

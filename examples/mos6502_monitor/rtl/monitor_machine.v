@@ -2,7 +2,7 @@
 //
 // What it does
 //   The whole computer, with a byte stream where its serial line would
-//   be. `monitor_cynthion.v` puts `ip/usb_cdc_acm` on the end of that
+//   be. `monitor_cynthion.v` puts `ip/usb/usb_cdc_acm` on the end of that
 //   stream and the board's transceiver on the end of *that*; a testbench
 //   drives it directly, which is what makes the monitor testable as
 //   software before any of the USB stack is in the way.
@@ -69,7 +69,7 @@
 // What it does not do
 //   No interrupts: `irq` and `nmi` are tied low, all three vectors point
 //   at the reset entry, and nothing on this machine can raise one. No timer, no
-//   cassette, no video. `ip/mos6502`'s own list of what a 6502 is and is
+//   cassette, no video. `ip/cpu/mos6502`'s own list of what a 6502 is and is
 //   not applies unchanged.
 module monitor_machine #(
     // Clocks per 6502 bus cycle. 59 at 60 MHz is 1.0169 MHz.
@@ -154,7 +154,7 @@ module monitor_machine #(
     // -----------------------------------------------------------------
     // RAM. One clocked write, one asynchronous read, no initial
     // contents and no reset: that is the shape `fpga::primitives` turns
-    // into `TRELLIS_DPR16X4`, and `ip/fifo_sync` and `usb_bulk_ep` are
+    // into `TRELLIS_DPR16X4`, and `ip/memory/fifo_sync` and `usb_bulk_ep` are
     // the two blocks in the library already written that way.
     //
     // `ram_style` is not a hint here. It lifts the 4096-bit ceiling on

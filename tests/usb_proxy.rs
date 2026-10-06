@@ -1,13 +1,13 @@
 //! A device the operating system reached **through a hub this compiler built**.
 //!
-//! `tests/ip_library.rs` proves `ip/usb_proxy` against a host model and three
+//! `tests/ip_library.rs` proves `ip/usb/usb_proxy` against a host model and three
 //! transceiver models, in simulation, and that is where the interesting
 //! assertions are — the toggles on both buses, a data stage of more than one
 //! packet, a STALL propagated, a port that forwards nothing until it is reset.
 //! What none of it can prove is the only question a proxy really has to answer:
 //! **does a kernel enumerate the device through it?** A host model written from
 //! the same specification as the proxy can agree with it about something they
-//! are both wrong about, which is the sentence `ip/usb_device_ulpi/README.md`
+//! are both wrong about, which is the sentence `ip/usb/usb_device_ulpi/README.md`
 //! §11 wrote before that block had a board, and the one time it came true is
 //! written up in the same section.
 //!
@@ -36,8 +36,8 @@
 //!    whole round, and it is one assertion: a **child** of our hub exists in
 //!    sysfs. If the port reports a device and there is no child, the enumeration
 //!    failed and this **fails**, because that is precisely the state
-//!    `ip/usb_hub/README.md` §8 quotes the kernel log of and precisely what
-//!    `ip/usb_proxy` was built to change.
+//!    `ip/usb/usb_hub/README.md` §8 quotes the kernel log of and precisely what
+//!    `ip/usb/usb_proxy` was built to change.
 //!
 //!    The child's `idVendor` and `idProduct` are asserted to be **different from
 //!    our hub's**, which is the one thing that says the descriptors the kernel
@@ -234,7 +234,7 @@ fn a_device_behind_a_hub_this_compiler_built_is_enumerated_by_the_kernel() {
     );
     let hub = &hubs[0];
 
-    // `ip/usb_cdc_acm`, `ip/usb_hub` and `ip/usb_proxy` share this vendor and
+    // `ip/usb/usb_cdc_acm`, `ip/usb/usb_hub` and `ip/usb/usb_proxy` share this vendor and
     // product pair and only one of them can be loaded at a time. Saying which
     // is more useful than an assertion about bytes a serial port would also
     // fail.
@@ -322,7 +322,7 @@ fn a_device_behind_a_hub_this_compiler_built_is_enumerated_by_the_kernel() {
     //
     // A child of our hub in sysfs is the kernel saying it read a device
     // descriptor through the port, assigned an address, read a configuration
-    // descriptor and configured the device. `ip/usb_hub/README.md` §8 is the
+    // descriptor and configured the device. `ip/usb/usb_hub/README.md` §8 is the
     // kernel log of the state where there is no child — four
     // `device descriptor read/64, error -71` and `unable to enumerate USB
     // device` — which was the correct outcome of a hub that forwarded nothing.
@@ -330,8 +330,8 @@ fn a_device_behind_a_hub_this_compiler_built_is_enumerated_by_the_kernel() {
     assert!(
         !kids.is_empty(),
         "the port reports a device ({status:#06x}) and the kernel enumerated nothing through \
-         it: there is no child of {} in sysfs. That is the state ip/usb_hub/README.md §8 \
-         quotes the kernel log of, and it is what ip/usb_proxy exists to change — so `dmesg` \
+         it: there is no child of {} in sysfs. That is the state ip/usb/usb_hub/README.md §8 \
+         quotes the kernel log of, and it is what ip/usb/usb_proxy exists to change — so `dmesg` \
          should be read here rather than this message. Look for \
          `device descriptor read/64, error -71` and `unable to enumerate USB device`, and \
          for the T14 console's own view: byte 1 bit 4 is `saw_proxied` and byte 3's low \
@@ -491,7 +491,7 @@ fn a_device_behind_a_hub_this_compiler_built_is_enumerated_by_the_kernel() {
     // assertable: an OUT that comes back `Ok` was acknowledged by the device, and
     // nothing but the device can acknowledge it. The proxy holds the packet,
     // NAKs the host, forwards it, and gives the host the device's own answer on
-    // the retry, which is §7 of `ip/usb_proxy/README.md`.
+    // the retry, which is §7 of `ip/usb/usb_proxy/README.md`.
     //
     // The eight bytes are a libgreat command header — class 0, verb 0, which on a
     // GreatFET is `read_board_id` — and are **not** asserted to produce anything:

@@ -147,9 +147,12 @@ depends mos6502 ^1.0.0
 
 `uart` is found wherever it sits under `../../ip` — including nested in a
 category folder — by the **name its own `reticle.ip` declares**, not by
-its directory's name. That is the point: `ip/usb/serial/uart/` and
-`ip/uart/` are the same package to everything above this line, so moving
-a block is a change to `ip/` and to nothing else.
+its directory's name. That is the point: `ip/uart/` and `ip/bus/uart/`
+are the same package to everything above this line, so moving a block is
+a change to `ip/` and to nothing else. The round after this one moved
+all twenty-nine, from the first spelling to the second, and no
+`depends` line in the repository that had dropped its path needed
+editing.
 
 ### Where the root comes from
 
@@ -220,7 +223,7 @@ claimed twice, that every manifest declares a name, and that every
 |------|-------|
 | `P0801` | `the IP library has no package named `uarte`` — with how many packages were searched under which roots, the nearest name the library does have, and the reminder that a package outside the library is named with `path <dir>` |
 | `P0802` | `the IP library has 2 packages named `uart`` — with a note per manifest that declares it |
-| `P0102` | `no version of `uart` satisfies every requirement` — the existing conflict, which now says *where* each available version lives: `available: 1.0.0 in the library directory `../../ip/uart`` |
+| `P0102` | `no version of `uart` satisfies every requirement` — the existing conflict, which now says *where* each available version lives: `available: 1.0.0 in the library directory `../../ip/bus/uart`` |
 
 A version mismatch is deliberately **not** a library error. The library
 answers "where is this name", and the version machinery already collects
@@ -945,9 +948,11 @@ kind does have.
   the list above says it skips. Nothing writes IP-XACT back out.
 
 The first-party IP library is in `ip/` and has its own document,
-[`ip-library.md`](ip-library.md): fourteen Verilog-2005 packages — the
-two FIFOs, the two clock domain crossings, a UART, an SPI master, an I²C
-master, a PWM, a timer, an AXI4-Lite GPIO, the block RAM wrappers, an
-RV32I processor core, an Ethernet MAC over RMII and an execute-in-place
-SPI flash reader — each with a co-simulation test and a measured
-resource footprint.
+[`ip-library.md`](ip-library.md): twenty-nine Verilog-2005 packages,
+filed under `bus/`, `cpu/`, `memory/`, `net/`, `usb/`, `util/` and
+`video/` — two processor cores, two FIFOs, two clock domain crossings, a
+UART, an SPI master, an I²C master, two Ethernet MACs, seven USB blocks,
+a video timing generator and a DVI transmitter among them — each with a
+co-simulation test and a measured resource footprint. The folders are a
+filing system: a block is reached by the name its own manifest declares,
+and nothing reads a category.

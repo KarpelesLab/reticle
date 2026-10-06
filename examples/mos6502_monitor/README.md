@@ -4,9 +4,9 @@ A machine-language monitor on a 6502, with its console on a USB serial
 port. Plug a Great Scott Gadgets Cynthion into a host, open
 `/dev/ttyACM1`, and a backslash appears; type an address and it tells you
 what is there, type `XXXX: dd dd` and it puts bytes there, type `XXXXR`
-and it runs them. The processor is [`mos6502`](../../ip/mos6502), the
-serial port is [`usb_cdc_acm`](../../ip/usb_cdc_acm) on the board's ULPI
-transceiver, and the baud divider is [`uart`](../../ip/uart)'s. Five
+and it runs them. The processor is [`mos6502`](../../ip/cpu/mos6502), the
+serial port is [`usb_cdc_acm`](../../ip/usb/usb_cdc_acm) on the board's ULPI
+transceiver, and the baud divider is [`uart`](../../ip/bus/uart)'s. Five
 files in `rtl/` and one 6502 program in `sw/` are the only design here,
 and one of the five is the program assembled.
 
@@ -313,7 +313,7 @@ things spoke last is worth less than one that always answers the question
 it exists to answer.
 
 `monitor_cynthion` then puts that rate on **ball C11** as real 8N1,
-through [`uart_baud_div`](../../ip/uart). Everything the processor prints
+through [`uart_baud_div`](../../ip/bus/uart). Everything the processor prints
 goes there as well as to the host, so a bit period on C11 is a number an
 instrument reads off a pin — and it is the only thing in this design that
 a wrong divisor cannot hide from, because a USB pipe has no bit rate and
@@ -433,13 +433,13 @@ reticle fpga examples/mos6502_monitor/rtl/monitor_rom.v \
     examples/mos6502_monitor/rtl/monitor_acia.v \
     examples/mos6502_monitor/rtl/monitor_machine.v \
     examples/mos6502_monitor/rtl/monitor_cynthion.v \
-    ip/mos6502/rtl/mos6502.v \
-    ip/uart/rtl/uart_tx.v ip/uart/rtl/uart_baud_div.v \
-    ip/usb_cdc_acm/rtl/usb_cdc_acm.v \
-    ip/usb_cdc_acm/rtl/usb_cdc_acm_ulpi.v \
-    ip/usb_cdc_acm/rtl/usb_cdc_req.v \
-    ip/usb_device_ulpi/rtl/usb_ulpi_link.v \
-    ip/usb_device_fs/rtl/usb_ctrl_ep.v \
+    ip/cpu/mos6502/rtl/mos6502.v \
+    ip/bus/uart/rtl/uart_tx.v ip/bus/uart/rtl/uart_baud_div.v \
+    ip/usb/usb_cdc_acm/rtl/usb_cdc_acm.v \
+    ip/usb/usb_cdc_acm/rtl/usb_cdc_acm_ulpi.v \
+    ip/usb/usb_cdc_acm/rtl/usb_cdc_req.v \
+    ip/usb/usb_device_ulpi/rtl/usb_ulpi_link.v \
+    ip/usb/usb_device_fs/rtl/usb_ctrl_ep.v \
     --device ecp5-12f-CABGA256 \
     --constraints examples/mos6502_monitor/board/cynthion.rcf \
     --bitstream /tmp/monitor_cynthion.bit
@@ -840,7 +840,7 @@ often, and this one now does: `monitor_acia`'s two byte registers and
 `monitor_machine`'s flush counter have no reset at all, because each is
 read only while a flag says there is something in it and every one of
 those flags does reset. That is the division
-[`usb_bulk_ep`](../../ip/usb_device_fs) already writes its buffers with,
+[`usb_bulk_ep`](../../ip/usb/usb_device_fs) already writes its buffers with,
 for the same stated reason; here it is worth twenty-five fewer flip-flops
 competing for a wire that 530 RAMs are using.
 

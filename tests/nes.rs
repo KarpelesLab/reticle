@@ -2,9 +2,9 @@
 //! chain as `examples/mos6502_computer`.
 //!
 //! The console is **not** a game machine here: it is
-//! [`ip/mos6502`](../ip/mos6502) with `DECIMAL_MODE = 0` — which is what
+//! [`ip/cpu/mos6502`](../ip/cpu/mos6502) with `DECIMAL_MODE = 0` — which is what
 //! the processor in an NES actually is — plus
-//! [`ip/ppu2c02`](../ip/ppu2c02), 2 KiB of work RAM, an NROM cartridge
+//! [`ip/video/ppu2c02`](../ip/video/ppu2c02), 2 KiB of work RAM, an NROM cartridge
 //! and a sprite DMA engine, running a demo written for this example. No
 //! part of any commercial cartridge is in this repository and none is
 //! needed.
@@ -658,7 +658,7 @@ fn tick(run: &mut Run<'_>, clk: reticle::sim::NetHandle) {
 // is written from the published description of the 2C02 — where a tile
 // comes from, where its attribute comes from, how the two bitplanes
 // become a colour index, which sprite wins — and it knows nothing about
-// how `ip/ppu2c02` fetches anything, which is the only reason comparing
+// how `ip/video/ppu2c02` fetches anything, which is the only reason comparing
 // the two means anything at all. `docs/writing-a-cpu.md` section 3 is
 // the argument.
 // ---------------------------------------------------------------------------
@@ -1855,12 +1855,12 @@ fn reticle(dir: &Path, args: &[&str]) -> (i32, String, String) {
 /// `reticle fpga` want them on a command line.
 #[cfg(feature = "cli")]
 const LIBRARY: [&str; 6] = [
-    "../../ip/mos6502/rtl/mos6502.v",
-    "../../ip/ppu2c02/rtl/ppu_palette.v",
-    "../../ip/ppu2c02/rtl/ppu2c02.v",
-    "../../ip/dvi_tx/rtl/tmds_encoder.v",
-    "../../ip/dvi_tx/rtl/video_timing.v",
-    "../../ip/dvi_tx/rtl/dvi_tx.v",
+    "../../ip/cpu/mos6502/rtl/mos6502.v",
+    "../../ip/video/ppu2c02/rtl/ppu_palette.v",
+    "../../ip/video/ppu2c02/rtl/ppu2c02.v",
+    "../../ip/video/dvi_tx/rtl/tmds_encoder.v",
+    "../../ip/video/dvi_tx/rtl/video_timing.v",
+    "../../ip/video/dvi_tx/rtl/dvi_tx.v",
 ];
 
 #[cfg(feature = "cli")]
@@ -2118,7 +2118,7 @@ fn lowering_many_small_memories_is_not_quadratic() {
 /// during blanking.
 ///
 /// This is the inverse of what DVI 1.0 section 3.2.2 specifies, written
-/// from the specification rather than from `ip/dvi_tx`: bit 9 says the
+/// from the specification rather than from `ip/video/dvi_tx`: bit 9 says the
 /// low eight bits were inverted, bit 8 says they were combined with XOR
 /// rather than XNOR, and bit 0 of the data is bit 0 of the result
 /// unchanged. `tests/ip_library.rs` is where the encoder itself is
@@ -2142,7 +2142,7 @@ fn tmds_decode(symbol: u16) -> Option<u8> {
     Some(out)
 }
 
-/// Eight palette entries and the colours `ip/ppu2c02`'s table gives
+/// Eight palette entries and the colours `ip/video/ppu2c02`'s table gives
 /// them, read off that table by hand. The test paints the frame buffer
 /// with these and no others, so it needs no second copy of all 64.
 const KNOWN: [(u8, [u8; 3]); 8] = [
@@ -2302,7 +2302,7 @@ fn the_screen_doubles_the_console_onto_the_tmds_lanes() {
 // faster clock at all and `tb/nes_vga_tb.v` takes one pixel per clock.
 // ---------------------------------------------------------------------------
 
-/// The 2C02's sixty-four colours as `ip/ppu2c02`'s `ppu_palette` gives
+/// The 2C02's sixty-four colours as `ip/video/ppu2c02`'s `ppu_palette` gives
 /// them, transcribed here and laid out the way that table is: four rows
 /// of sixteen, hue across and level down.
 ///
@@ -2391,7 +2391,7 @@ const PALETTE: [[u8; 3]; 64] = [
 /// A colour as a Basys 3 renders it: the top four bits of each channel,
 /// in the order `tb/nes_vga_tb.v`'s `vga_rgb` puts the twelve pins.
 ///
-/// `vga_out` truncates rather than rounds — `ip/vga_out/README.md` says
+/// `vga_out` truncates rather than rounds — `ip/video/vga_out/README.md` says
 /// why — so this is a shift and nothing else. It is the whole of what
 /// makes the board's picture different from the ECP5's, and the
 /// difference is worth a number:

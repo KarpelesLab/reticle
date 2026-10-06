@@ -1,5 +1,5 @@
 // usb_hub_ulpi — a USB hub on a board whose USB lines go through a ULPI
-// transceiver: `usb_hub` behind `ip/usb_device_ulpi`'s link layer.
+// transceiver: `usb_hub` behind `ip/usb/usb_device_ulpi`'s link layer.
 //
 // What it does
 //   This is to `usb_hub` what `usb_device_ulpi` is to `usb_dev_core`:
@@ -12,14 +12,14 @@
 //   It exists for the same board the rest of the ULPI blocks exist for: on a
 //   Great Scott Gadgets Cynthion every USB port goes through its own
 //   transceiver and the FPGA cannot drive the pair at all.
-//   `ip/usb_device_ulpi/README.md` states the protocol with the provenance of
+//   `ip/usb/usb_device_ulpi/README.md` states the protocol with the provenance of
 //   every fact.
 //
 //   **This is the wrapper that matters for this block**, because the port a
 //   hub presents to a host and the port its own downstream device is on are
 //   two different transceivers on the same die — the AUX port and the TARGET
 //   port of that board. `testdata/fpga/cynthion/usb_hub_target.v` is the two
-//   of them: this on AUX, `ip/usb_host_ulpi` on TARGET, and
+//   of them: this on AUX, `ip/usb/usb_host_ulpi` on TARGET, and
 //   `port_attached` wired from the one to the other.
 //
 //   Every port but the ULPI bus is `usb_hub`'s, and that module's header is

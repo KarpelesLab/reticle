@@ -1,5 +1,5 @@
 // usb_hub_fs — a USB hub on a board whose D+ / D- reach the FPGA:
-// `usb_hub` behind `ip/usb_device_fs`'s own line layer.
+// `usb_hub` behind `ip/usb/usb_device_fs`'s own line layer.
 //
 // What it does
 //   This is to `usb_hub` what `usb_device_fs` is to `usb_dev_core`:

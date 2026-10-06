@@ -28,7 +28,7 @@
 //   decision and its comment says why it is far larger than the 16 bit
 //   times USB 2.0 §7.1.19.1 gives a host.
 //
-//   `usb_pkt_rx` decodes the reply, and it is **`ip/usb_device_fs`'s**,
+//   `usb_pkt_rx` decodes the reply, and it is **`ip/usb/usb_device_fs`'s**,
 //   reached through this package's `depends` line rather than copied. The
 //   PID's check nibble, the CRC16 and a payload with its CRC taken out are
 //   the same work in both directions, and that module has been doing it on
@@ -86,7 +86,7 @@
 //   for a *response*. Nothing in USB 2.0 puts a ceiling on how long a host
 //   may leave between two packets it sends itself, and a device's receiver
 //   has no timer between a token and the data after it — it decodes
-//   packets and reacts. `ip/usb_device_fs`'s does not, and that is checked
+//   packets and reacts. `ip/usb/usb_device_fs`'s does not, and that is checked
 //   in simulation. A device that did would be the first thing a ULPI trace
 //   should be pointed at, and the fix is not a shorter count but a
 //   measurement of the transceiver's transmit-command-to-wire latency,
@@ -170,7 +170,7 @@ module usb_host_sie #(
     parameter integer GAP_CYCLES = 12,
     // Clocks of an idle bus after a received packet before the host's
     // handshake goes out, from the same table and the same window. Nine is
-    // what `ip/usb_device_ulpi` answers in and for the same reason: it
+    // what `ip/usb/usb_device_ulpi` answers in and for the same reason: it
     // lands in the middle of the 2 to 6.5 bit times USB 2.0 §7.1.18
     // allows.
     parameter integer TURNAROUND = 9
@@ -328,7 +328,7 @@ module usb_host_sie #(
     reg [7:0]  tok0, tok1;
 
     // --------------------------------------------------------------
-    // The reply, decoded. `usb_pkt_rx` is `ip/usb_device_fs`'s.
+    // The reply, decoded. `usb_pkt_rx` is `ip/usb/usb_device_fs`'s.
     // --------------------------------------------------------------
     wire        pkt;
     wire [3:0]  pkt_pid;

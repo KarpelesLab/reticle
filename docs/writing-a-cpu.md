@@ -13,7 +13,7 @@ instead.
 Reticle's library has two of them, chosen to be as unlike each other as
 possible:
 
-| | [`ip/rv32i`](../ip/rv32i) | [`ip/mos6502`](../ip/mos6502) |
+| | [`ip/cpu/rv32i`](../ip/cpu/rv32i) | [`ip/cpu/mos6502`](../ip/cpu/mos6502) |
 |---|---|---|
 | machine | 32-bit load/store, 32 registers | 8-bit accumulator, three registers |
 | instructions | fixed 32 bits, one addressing mode | one to three bytes, thirteen addressing modes |
@@ -33,7 +33,7 @@ page is only about the processor-shaped parts.
 ## 1. The manifest
 
 A core's `reticle.ip` is the same manifest every other package has.
-`ip/mos6502/reticle.ip`, entire:
+`ip/cpu/mos6502/reticle.ip`, entire:
 
 ```text
 # mos6502: the documented MOS 6502 instruction set in a cycle-counting
@@ -177,7 +177,7 @@ port at none of the cost.
 ### Declaring a bus interface
 
 A package whose ports form a *standard* bus declares it in one line
-instead of nineteen. `ip/axil_gpio/reticle.ip`:
+instead of nineteen. `ip/bus/axil_gpio/reticle.ip`:
 
 ```text
 port s_axi_aclk in
@@ -402,7 +402,7 @@ i("bpl", Rel, 0x10, 2),
 p("ora", IzY, 0x11, 5),
 ```
 
-The `case` statement in `ip/mos6502/rtl/mos6502.v` is the core's:
+The `case` statement in `ip/cpu/mos6502/rtl/mos6502.v` is the core's:
 
 ```verilog
 8'h69: begin op = OP_ADC; am = AM_IMM; end
@@ -461,7 +461,7 @@ arithmetic, for exactly the reason the file gives: "a testbench that
 borrowed the implementation's own arithmetic would agree with it however
 wrong both were". `examples/soc` and `examples/mos6502_computer` both
 decode the serial line with a receiver written from the 8N1 frame
-(`tests/serial/mod.rs`) rather than instantiating `ip/uart`'s receiver.
+(`tests/serial/mod.rs`) rather than instantiating `ip/bus/uart`'s receiver.
 It is the same idea every time: **the checker and the thing checked must
 not share a parent.**
 
@@ -1142,11 +1142,11 @@ Both examples are the same shape: a project manifest naming the core and
 a UART, and one file of user HDL.
 
 ```text
-library ../../ip                                  # examples/mos6502_computer
+library ../../ip                                # examples/mos6502_computer
 
-depends rv32i   ^1.0.0 path ../../ip/rv32i        # examples/soc
-depends mos6502 ^1.0.0                            # examples/mos6502_computer
-depends uart    ^1.0.0                            # both, in that project
+depends rv32i   ^1.0.0 path ../../ip/cpu/rv32i  # examples/soc
+depends mos6502 ^1.0.0                          # examples/mos6502_computer
+depends uart    ^1.0.0                          # both, in that project
 ```
 
 A dependency is placed either way: `path <dir>` names a directory, and a
@@ -1155,6 +1155,13 @@ found by the name its own `reticle.ip` declares, wherever it sits under
 the root. `examples/mos6502_computer` is written the second way and
 `examples/soc` the first, so both are exercised; `docs/ip.md` has the
 rules.
+
+Which is also the measured difference between the two forms, because
+`ip/` has since been grouped into category folders: `examples/soc`'s two
+`depends` lines had to be edited for the move and
+`examples/mos6502_computer`'s did not. `examples/soc` keeps the `path`
+form anyway, so that a project pinning one directory stays covered by a
+test.
 
 - **[`examples/soc`](../examples/soc)** — `rv32i` and `uart`, a ROM and
   a byte-writable RAM behind two ports, a memory-mapped UART, and a
