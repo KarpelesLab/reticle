@@ -1103,15 +1103,22 @@ fn a_distributed_ram_and_two_reset_domains_share_a_die() {
         .collect();
     assert_eq!(
         tiles.len(),
-        57,
-        "logic tiles the design occupies. The strong rule — a distributed RAM blocks its tile's \
-         eight flip-flops as well as its six lookup tables — was measured on this same design and \
-         needs **57 tiles too**, and 6698 pips against 6790. So the weak rule buys nothing here, \
-         and saying so is the honest answer: this design is bound by its 226 lookup tables and \
-         not by its flip-flops, and a RAM's tile keeps two lookup tables either way. What the \
-         weak rule buys is **capacity** — the eight flip-flop sites of every tile that holds a \
-         RAM, 24288 of them on this part — which is what a design with 530 RAMs and a thousand \
-         flip-flops spends and this one does not"
+        65,
+        "logic tiles the design occupies. **This was 57 under the die-wide annealing schedule**, \
+         and the eight extra tiles are a gain and not a loss: the same design's wirelength went \
+         from 2668 to 1289 and its routing from 6790 pips to 6396, because the old annealer \
+         improved nothing at all on this design and the placement it kept was the legaliser's, \
+         which packs tightly and wires long. See `docs/fpga-placement.md`. \
+         \
+         The comparison this number was first written for is about the RAM rule and not about \
+         the schedule, and it still reads: the strong rule — a distributed RAM blocks its tile's \
+         eight flip-flops as well as its six lookup tables — needed the **same** 57 tiles and \
+         6698 pips against the weak rule's 6790, measured on this design under that schedule. So \
+         the weak rule bought nothing in tiles here, and saying so is the honest answer: this \
+         design is bound by its 226 lookup tables and not by its flip-flops, and a RAM's tile \
+         keeps two lookup tables either way. What the weak rule buys is **capacity** — the eight \
+         flip-flop sites of every tile that holds a RAM, 24288 of them on this part — which is \
+         what a design with 530 RAMs and a thousand flip-flops spends and this one does not"
     );
 
     // ---- every bit decodes, and nothing is unexplained ----
@@ -2236,17 +2243,37 @@ fn the_bitstream_decodes_back_to_the_arcs_the_router_chose() {
         "PIOD.HYSTERESIS",
         "PIOD.PULLMODE",
         "BANK.VCCIO",
-        "SLICED.B0MUX",
     ] {
         assert!(fields.contains(&wanted), "{wanted} is not in {fields:?}");
     }
-    assert_eq!(
-        decoded
-            .words
+    // And the lookup table's input, reached through one of its slice's
+    // input muxes. *Which* one is the placer's choice and not this test's
+    // business: it was `SLICED.B0MUX` under the die-wide annealing
+    // schedule and the range-limited one puts the truth table in the other
+    // half of the same slice. Pinning the letter and the half pinned a
+    // placement, which is what the `.place` goldens are for.
+    assert!(
+        fields
             .iter()
-            .map(|(_, field, value)| (field.as_str(), value.as_str()))
-            .collect::<Vec<_>>(),
-        vec![("SLICED.K0.INIT", "1010101010101010")],
+            .any(|f| f.starts_with("SLICE") && f.ends_with("MUX")),
+        "no slice input mux carries the lookup table's input: {fields:?}"
+    );
+    let truth: Vec<(&str, &str)> = decoded
+        .words
+        .iter()
+        .map(|(_, field, value)| (field.as_str(), value.as_str()))
+        .collect();
+    assert_eq!(
+        truth.len(),
+        1,
+        "one truth table and no other word: {truth:?}"
+    );
+    assert!(
+        truth[0].0.ends_with(".INIT"),
+        "the one word is a truth table: {truth:?}"
+    );
+    assert_eq!(
+        truth[0].1, "1010101010101010",
         "one truth table, `~A` read bit 0 first"
     );
     assert_eq!(
@@ -2636,8 +2663,14 @@ fn the_clocked_design_routes_and_configures_what_its_header_promises() {
         routed.wires.len(),
         selected.len()
     );
+    // A floor, not a measurement: the exact count moves with the placement
+    // — it was 613 under the die-wide annealing schedule and is 599 under
+    // the range-limited one, which routes this counter shorter — and what
+    // this is here to catch is an image in which the routing has collapsed
+    // to a handful of arcs, which is what a decoder that silently resolved
+    // nothing would look like.
     assert!(
-        selected.len() > 600,
+        selected.len() > 400,
         "{} arcs cost bits, which is fewer than a routed counter takes",
         selected.len()
     );
@@ -4348,18 +4381,23 @@ fn a_register_bit_nothing_drives_is_built_from_a_constant() {
         selected, routed.wires,
         "the bits select connections the router did not choose, or fail to select ones it did"
     );
-    // The size of the finished image, and what the constant cost in it.
-    // Without a constant driver the same design is 171 bits, 45 arcs that
-    // cost bits, 4 `.config` words and 34 enumerated fields; with one it is
-    // 199, 47, 5 and 38. The 28 new bits are all accounted for: **16** for
-    // the `INIT` of the lookup table, one bit per entry of a truth table
-    // that is all zeros, **8** for the four two-bit ties that hold its
-    // inputs high, and **4** for the two arcs that carry its output to the
-    // flip-flop's `M` wire, two bits each. Nothing else in the image moved.
-    assert_eq!(
-        decoded.bits, 199,
-        "the size of the finished image, of which 28 bits are the constant"
-    );
+    // The size of the finished image. **It is placement-dependent** — an
+    // arc costs bits and the placer chooses which arcs a route takes — and
+    // it moved from 199 to 180 when the annealer gained a range limit and
+    // began routing this design shorter: see `docs/fpga-placement.md`.
+    //
+    // What the constant costs *inside* the image is not placement-dependent
+    // and was measured when it was added, under the old schedule: without a
+    // constant driver the same design was 171 bits, 45 arcs that cost bits,
+    // 4 `.config` words and 34 enumerated fields, and with one it was 199,
+    // 47, 5 and 38. The 28 new bits were all accounted for — **16** for the
+    // `INIT` of the lookup table, one bit per entry of a truth table that is
+    // all zeros, **8** for the four two-bit ties that hold its inputs high,
+    // and **4** for the two arcs that carry its output to the flip-flop's
+    // `M` wire, two bits each. The structural checks above are what pin
+    // those; this total is here so that a change which quietly doubles the
+    // image is noticed.
+    assert_eq!(decoded.bits, 180, "the size of the finished image");
     assert_eq!(decoded.words.len(), 5, "four mapped LUTs and the constant");
 }
 
