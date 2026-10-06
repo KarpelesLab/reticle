@@ -1635,9 +1635,13 @@ source rtl/pll.vhd language vhdl
 constraints board/ice40.rcf
 testbench tb/top_tb.v
 
+library ../ip
+library vendor/ip
+
 depends uart_lite ^1.2.0 path ../ip/uart_lite
 depends fifo_sync >=1.0.0 git https://example.invalid/fifo.git rev v1.0.4
 depends cdc_sync * registry
+depends timer ^1.0.0
 ";
 
     #[test]
@@ -1699,6 +1703,43 @@ depends cdc_sync * registry
             p.dependency("cdc_sync").unwrap().source,
             Some(DepSource::Registry)
         );
+        // `library` is repeatable and keeps the order it was written in,
+        // and a `depends` line may now name no source at all: the roots
+        // are what places it.
+        assert_eq!(p.libraries, ["../ip", "vendor/ip"]);
+        assert_eq!(p.dependency("timer").unwrap().source, None);
+    }
+
+    /// `library` belongs to a project. A package says what it needs and
+    /// never where to look, so an IP manifest that writes one gets the
+    /// unknown-key diagnostic with the project's keys nowhere in sight.
+    #[test]
+    fn library_is_a_project_keyword_only() {
+        let (m, rendered) = ip("name f\nversion 1.0.0\nlibrary ../ip\n");
+        assert!(m.is_some(), "the line is skipped, not fatal");
+        assert!(
+            rendered.contains("error[P0001]: unknown key `library` in an IP manifest"),
+            "{rendered}"
+        );
+        // And in a project it takes exactly one word.
+        let (_, rendered) = project("name p\nlibrary ../ip extra\n");
+        assert!(
+            rendered.contains("error[P0002]: `library` takes one word"),
+            "{rendered}"
+        );
+    }
+
+    /// A `depends` line may not write a `library` origin: that word is
+    /// the resolver's answer, recorded in a lock file, not something a
+    /// manifest chooses.
+    #[test]
+    fn a_dependency_cannot_name_a_library_origin() {
+        let (_, rendered) = project("name p\ndepends uart ^1.0.0 library ../ip\n");
+        assert!(
+            rendered.contains("error[P0007]"),
+            "a `library` origin was accepted on a `depends` line: {rendered}"
+        );
+        assert!(rendered.contains("dependency source"), "{rendered}");
     }
 
     #[test]
@@ -1955,6 +1996,9 @@ depends cdc_sync * registry
             DepSource::Path("../a".to_owned()).describe(),
             "the directory `../a`"
         );
+        let library = DepSource::Library("../../ip/uart".to_owned());
+        assert_eq!(library.to_string(), "library ../../ip/uart");
+        assert_eq!(library.describe(), "the library directory `../../ip/uart`");
         let git = DepSource::Git {
             url: "u".to_owned(),
             rev: Some("r".to_owned()),

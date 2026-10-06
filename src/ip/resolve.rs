@@ -263,11 +263,23 @@ impl<F: FnMut(&str) -> Option<String>> SourceProvider for PathProvider<F> {
                 manifest_path,
                 manifest_text,
             }),
-            None => Err(ResolveError::NotFound {
-                name: dep.name.clone(),
-                where_: format!("`{manifest_path}`"),
-                span: dep.span,
-            }),
+            None => {
+                let mut where_ = format!("`{manifest_path}`");
+                if dep.source.is_none() && self.library.is_empty() {
+                    // The likeliest mistake of all: a `depends` line with
+                    // nothing after the requirement, in a project that
+                    // declares no library for the name to be looked up
+                    // in.
+                    where_.push_str(", by the sibling-directory convention,");
+                    where_.push_str(" because the line names no `path`");
+                    where_.push_str(" and the project declares no `library` root");
+                }
+                Err(ResolveError::NotFound {
+                    name: dep.name.clone(),
+                    where_,
+                    span: dep.span,
+                })
+            }
         }
     }
 
@@ -1463,6 +1475,23 @@ mod tests {
         assert_eq!(
             resolved.lock.package("uart").unwrap().origin,
             DepSource::Path("uart".to_owned())
+        );
+    }
+
+    /// And when that convention finds nothing, the note says why it was
+    /// looking there — which is the mistake of writing a bare `depends`
+    /// line in a project that declares no library.
+    #[test]
+    fn a_dependency_with_nothing_to_place_it_says_so() {
+        let (resolved, rendered) = run("name blinky\n\ndepends uart ^1.0.0\n", files(&[]));
+        assert!(!resolved.is_complete());
+        assert!(
+            rendered.contains("error[P0101]: cannot find the IP package `uart`"),
+            "{rendered}"
+        );
+        assert!(
+            rendered.contains("the project declares no `library` root"),
+            "{rendered}"
         );
     }
 
