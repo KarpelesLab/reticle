@@ -173,10 +173,11 @@ fn place_and_route_quality() {
             let (_, _, done) = run_case_with(name, pnr);
             let place = &done.pnr.placement_report;
             let route = &done.pnr.routing_report;
-            let tiles: std::collections::BTreeSet<(u32, u32)> = (0..done.pnr.netlist.instances.len())
-                .filter_map(|i| done.pnr.placement.site_of(i))
-                .map(|s| done.pnr.graph.sites[s].tile)
-                .collect();
+            let tiles: std::collections::BTreeSet<(u32, u32)> =
+                (0..done.pnr.netlist.instances.len())
+                    .filter_map(|i| done.pnr.placement.site_of(i))
+                    .map(|s| done.pnr.graph.sites[s].tile)
+                    .collect();
             println!(
                 "{name:<14} {label:<21} {:>9} {:>8} {:>6} {:>7} {:>12}",
                 place.hpwl_before,

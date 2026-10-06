@@ -2363,7 +2363,9 @@ fn write_ecp5_bitstream(
             .parse::<f64>()
             .map_err(|_| format!("`--place-fixed-cooling` wants a number, not `{text}`"))?;
         if !(factor > 0.0 && factor < 1.0) {
-            return Err(format!("`--place-fixed-cooling` wants a factor in (0, 1), not `{text}`"));
+            return Err(format!(
+                "`--place-fixed-cooling` wants a factor in (0, 1), not `{text}`"
+            ));
         }
         place_options.cooling = Some(factor);
     }

@@ -2586,6 +2586,23 @@ impl KindSites {
 /// is here.
 const QUENCHED: f64 = 0.15;
 
+/// The range limit as a whole number of tiles, at least one.
+///
+/// Same shape as [`to_grid`] and for the same reason: the clamp comes
+/// before the conversion, so what is converted is a small non-negative
+/// integer and the cast cannot lose anything. `round` and `clamp` are
+/// exactly specified by IEEE 754, unlike `exp` and `powf`, so the window
+/// is the same integer on every platform — which it has to be, because
+/// the placement is a golden.
+#[allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    reason = "clamped into 1 ..= u32::MAX first, so the value is a non-negative integer"
+)]
+fn window_tiles(window: f64) -> u32 {
+    window.round().clamp(1.0, f64::from(u32::MAX)) as u32
+}
+
 /// The move window for the next temperature.
 ///
 /// `D_limit_new = D_limit_old * (1 - 0.44 + R_accept_old)`, clamped to
@@ -2690,7 +2707,7 @@ fn anneal(
     // the temperature it yields is a temperature for the moves that will
     // actually be made.
     let probe_reach = if options.range_limit {
-        window.round().max(1.0) as u32
+        window_tiles(window)
     } else {
         u32::MAX
     };
@@ -2737,10 +2754,7 @@ fn anneal(
     report.stop = AnnealStop::Exhausted;
     while report.temperatures < options.max_temperatures {
         let reach = if options.range_limit {
-            // `round` is exactly specified by IEEE 754 and so is the
-            // multiply that feeds it, unlike `exp` and `powf`: the
-            // window is the same integer on every platform.
-            window.round().max(1.0).min(f64::from(u32::MAX)) as u32
+            window_tiles(window)
         } else {
             u32::MAX
         };
@@ -2916,7 +2930,13 @@ fn stddev(values: &[f64]) -> f64 {
 /// `None` when the two do not overlap, which cannot happen for a cell
 /// legalisation put inside its own region but is checked rather than
 /// assumed.
-fn window_of(graph: &RoutingGraph, region: Option<&Rect>, x: u32, y: u32, reach: u32) -> Option<Rect> {
+fn window_of(
+    graph: &RoutingGraph,
+    region: Option<&Rect>,
+    x: u32,
+    y: u32,
+    reach: u32,
+) -> Option<Rect> {
     let mut rect = Rect {
         x0: x.saturating_sub(reach),
         y0: y.saturating_sub(reach),
@@ -3548,7 +3568,7 @@ mod tests {
         // temperature at all, and the bisection has to say so rather than
         // overshoot: the answer is its floor, and what keeps that from
         // ending the anneal after one step is the exit criterion.
-        assert!(start_temperature(&vec![-1.0; 10], Some(0.44)) < 1e-6);
+        assert!(start_temperature(&[-1.0; 10], Some(0.44)) < 1e-6);
 
         // And the paper's rule is still there, unchanged, for the run
         // that wants to start from scratch.
