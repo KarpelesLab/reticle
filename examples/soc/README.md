@@ -1,9 +1,19 @@
 # A RISC-V SoC from the IP library
 
 A small system on chip that prints `Hello from Reticle` over a serial
-port. The processor is [`rv32i`](../../ip/cpu/rv32i) and the serial port is
-[`uart`](../../ip/bus/uart), both from Reticle's IP library, pulled in by a
-project manifest. The only HDL written for the project is its top-level.
+port. The processor is [`rv32i`](../../ip/cpu/rv32i) and the serial port
+is [`uart`](../../ip/bus/uart), both from Reticle's IP library, pulled in
+by a project manifest. The only HDL written for the project is its
+top-level.
+
+Its two `depends` lines name each package's **directory**, and this is
+the only example left that does. The others declare a `library` root and
+depend on a name;
+[`examples/mos6502_computer`](../mos6502_computer) is this same system
+written that way, and
+[`docs/writing-a-cpu.md`](../../docs/writing-a-cpu.md) §8 sets the two
+side by side. `path` is kept here on purpose, so that the form a project
+pinning one directory uses stays driven end to end by a test.
 
 This is the worked example for phase 8 of the [roadmap](../../ROADMAP.md),
 whose completion criterion is "a project manifest pulling in a UART and a

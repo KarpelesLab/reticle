@@ -4,10 +4,10 @@ The first-party half of phase 8. [`docs/ip.md`](ip.md) describes the
 machinery — the manifest formats, the resolver, the bus model, the black
 boxes — and [`docs/writing-a-cpu.md`](writing-a-cpu.md) describes how to
 package a processor, using this library's two as the worked examples.
-This document describes the **blocks**: twenty-nine pieces of HDL
-that drop into a design the way a crate drops into a Rust program, each
-with a manifest, a Rust co-simulation test, and a resource footprint that
-was measured rather than guessed.
+This document describes the **blocks**: twenty-nine pieces of HDL that
+drop into a design the way a crate drops into a Rust program, each with a
+manifest, a Rust co-simulation test, and a resource footprint that was
+measured rather than guessed.
 
 They live at the top of the repository, in `ip/`, one directory per
 package, grouped into seven folders by what a block is *for*. The
@@ -1082,7 +1082,11 @@ silently follows).
 
 `tests/ip_library.rs` indexes this tree and checks it is indexable: no two
 packages claim one name, every manifest declares one, and every block's
-`depends` names a package the library has.
+`depends` names a package the library has. The same test
+(`every_block_is_findable_by_the_name_it_declares`) holds the layout
+above — three path components, a known category in the middle, and the
+last one the package's own name — because nothing in the resolver
+requires any of it and a document is not a check.
 
 Parameters are overridden at instantiation, as Verilog parameters always
 are:
@@ -1123,8 +1127,8 @@ build. Every block goes through all of:
 
 | Test | What it proves |
 |------|----------------|
-| `manifests_parse` | every `reticle.ip` parses, names its own directory, lists files that exist and round-trips through `IpManifest::to_text` |
-| `packages_resolve_and_elaborate` | every block builds through `ip::resolve` and `ip::elaborate` from a generated project, dependencies included |
+| `manifests_parse` | every `reticle.ip` parses, is named for the folder it sits in, lists files that exist and round-trips through `IpManifest::to_text` |
+| `packages_resolve_and_elaborate` | every block builds through `ip::resolve` and `ip::elaborate` from a generated project that declares a `library` root and names no path, dependencies included |
 | `blocks_synthesise_cleanly` | `synth::run` reports nothing at all — no error, no warning, and no inferred latch |
 | `footprints_match_the_documentation` | the table below is the one this run measured |
 | `axil_gpio_matches_the_axi4lite_definition` | `bus::match_ports` finds all nineteen AXI4-Lite signals on the GPIO at the widths its parameters imply |

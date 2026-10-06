@@ -820,7 +820,18 @@ fn reticle_build_builds_the_project() {
     );
     assert!(!err.contains("simulation-only statement dropped"), "{err}");
     let lock = fs::read_to_string(&lock).expect("a lock file");
-    assert!(lock.contains("mos6502") && lock.contains("uart"), "{lock}");
+    // The origin is the answer the library search gave, directory and
+    // all, which is what makes a block that has moved inside `ip/`
+    // something `--locked` reports rather than something a build follows
+    // in silence. Pinned here because the two `depends` lines in the
+    // manifest name no path at all, so this is the only place the layout
+    // a build used is written down.
+    for line in [
+        "package mos6502 1.0.0 library ../../ip/cpu/mos6502",
+        "package uart 1.0.0 library ../../ip/bus/uart",
+    ] {
+        assert!(lock.contains(line), "no `{line}` in:\n{lock}");
+    }
 }
 
 #[cfg(feature = "cli")]

@@ -404,10 +404,12 @@ fn a_long_run_of_random_vectors_stays_identical() {
 ///
 /// The blocks sit at `ip/<category>/<package>/rtl/`, so this walks for
 /// `rtl` directories rather than assuming a depth. It read `ip/*/rtl/`
-/// before the packages were grouped into categories, and would then have
-/// found no sources at all; the caller below is what would have said so,
-/// because it asserts that at least five blocks qualified rather than
-/// trusting a loop that ran zero times.
+/// before the packages were grouped into categories, and that version was
+/// put back and run against the new tree to see what it would have done:
+/// `does not elaborate on its own` for all fourteen blocks and then
+/// `only 0 IP blocks qualified for compiled mode` from the caller below.
+/// That assertion is why it is a failure and not a loop that quietly ran
+/// zero times.
 #[cfg(feature = "verilog")]
 fn library(top: &str) -> Option<Design> {
     use reticle::diag::Diagnostics;

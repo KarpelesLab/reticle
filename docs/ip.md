@@ -185,16 +185,23 @@ diagnostics into an unrelated build — and sorts the result.
 and is not descended into, so the walk never enters an `rtl/` or a `tb/`;
 a symbolic link to a directory is not followed, so a loop cannot hang it;
 every level is sorted, because `read_dir` returns filesystem order and
-this reaches a lock file; and eight levels is as deep as it looks.
+this reaches a lock file; and eight levels is as deep as it looks. The
+real `ip/` uses two of those eight — a category folder and then the
+package — and the walk needed no change to descend them.
 
-Measured over the real `ip/` — 29 packages, 38892 bytes of manifest, a
+Measured over the real `ip/` — 29 packages, 38910 bytes of manifest, a
 release build, `the_library_index_cost` in `tests/ip_library.rs`, which
 prints and never asserts:
 
 | Step | Per build |
 |------|-----------|
-| walk the tree and read every manifest | 95 µs |
-| scan, sort and build the index | 57 µs |
+| walk the tree and read every manifest | 100 µs |
+| scan, sort and build the index | 59 µs |
+
+Re-measured after the packages were grouped into seven category folders,
+which is one more level for the walk to descend: 95 µs became 100 and
+57 became 59, over three runs each. Five microseconds is not a finding,
+and it is here because the alternative to re-measuring is assuming.
 
 **No cache.** A tenth of a millisecond is four orders of magnitude below
 anything a person notices and five below the ECP5 database load that this
@@ -209,6 +216,8 @@ Two manifests under the roots declaring the same name is an error naming
 both paths, not a first-wins. A library is a layout — one directory per
 package — and the mistake this really catches is a package *copied* where
 it should have been *moved*, which is the mistake a reorganisation makes.
+The reorganisation came, all twenty-nine packages of it, and this check
+caught nothing: the moves were `git mv` and the guard was watching.
 A library that genuinely wants two versions of one package side by side
 is what a registry is for, or `path`, which says exactly which directory
 is meant.
@@ -314,17 +323,30 @@ fresh resolution disagree, `LockFile::mismatch` turns that into a `P0302`
 diagnostic, and `reticle build --locked` fails with it and writes
 nothing:
 
+This one is `examples/mos6502_computer` built against the lock file it had
+before `ip/` was grouped into category folders, which is the real case
+rather than a constructed one:
+
 ```text
 error[P0302]: the lock file does not describe this resolution
  --> reticle.lock:1:1
-  = note: `clock_div` moves from the library directory
-          `../../library/divider` to the library directory
-          `../../library/timing/divider`
+  |
+1 | version 1
+  | ^
+  |
+  = note: `mos6502` moves from the library directory `../../ip/mos6502`
+          to the library directory `../../ip/cpu/mos6502`
+  = note: `uart` moves from the library directory `../../ip/uart` to the
+          library directory `../../ip/bus/uart`
   = note: resolve again without `--locked` to write the new one
 ```
 
 Without `--locked`, a build that resolves cleanly rewrites the lock file,
-which is the same decision Cargo makes.
+which is the same decision Cargo makes. No lock file is committed in this
+repository — each example's is written into a scratch directory by its
+test — so the move had nothing to regenerate and a build simply wrote the
+new paths. A consumer who commits one gets the two notes above, which is
+the whole point of recording the directory and not only the version.
 
 ## Bus interfaces
 
