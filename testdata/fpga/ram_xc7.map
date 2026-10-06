@@ -9,11 +9,10 @@ io:
   wdata (16 bits) -> IBUF
   rdata (16 bits) -> OBUF
 clocks:
-  clk (2 clock pins) -> BUFG
+  clk (2 clock pins) -> local routing (below the threshold of 8)
 logic:
   0 LUTs, depth 0
 netlist:
-  1 x BUFG
   38 x IBUF
   16 x OBUF
   1 x RAMB18E1

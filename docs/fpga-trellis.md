@@ -216,27 +216,32 @@ on something this model does not express. This flow builds no `PDPW16KD`,
 refusing is the conservative direction, and the experiment that would
 settle it is named below.
 
-The clock is the other control wire, and it needed two fixes rather than a
-rule. `configure_bram`'s companion check is `clock_network_use`, which now
-asks about `p0_clk` and `p1_clk` of every block RAM as well as every
-flip-flop's `clk` and every distributed RAM's `wclk`: a block RAM's clock
-pin is joined straight to its tile's `JCLK0` with no mux of its own, so the
-walk stops there instead of at a slice's `CLK0`. And
-`primitives::Mapper::clock_buffers` learned two things:
+The clock is the other control wire, and it needed a fix at each end.
+`configure_bram`'s companion check is `clock_network_use`, which now asks
+about `p0_clk` and `p1_clk` of every block RAM as well as every flip-flop's
+`clk` and every distributed RAM's `wclk`: a block RAM's clock pin is joined
+straight to its tile's `JCLK0` with no mux of its own, so the walk stops
+there instead of at a slice's `CLK0`. And
+`primitives::Mapper::clock_buffers` learned that **a block RAM is two clock
+pins, not one** — `CLKA` and `CLKB`, usually the same net — found by
+primitive name out of the device file's own `port rw` lines, exactly as the
+distributed RAM's `WCK` is. Until that, a block RAM's clock was not counted
+towards a buffer's fanout and was not rewired onto it, which is the defect
+the distributed-RAM round found one size down.
 
-- **a block RAM is two clock pins, not one**, `CLKA` and `CLKB`, usually
-  the same net — found by primitive name out of the device file's own
-  `port rw` lines, exactly as the distributed RAM's `WCK` is;
-- **a memory's clock does not lose to the global-buffer threshold.** A
-  design with one block RAM and no flip-flops is three clock pins against
-  a threshold of eight, and this backend *refuses* a memory clocked
-  through general routing — so the threshold could make a legitimate
-  design unbuildable, and did. `ecppack` puts a memory's clock on a global
-  network in all 111 distributed RAMs and all 53 block RAMs of this
-  board's bitstreams, so a memory's clock now bypasses the threshold on
-  every family. That also fixed `logicram_ecp5`, whose distributed RAM's
-  clock had been on local routing all along — a design this flow would
-  have refused to write a bitstream for.
+**A memory's clock can still lose to the global-buffer threshold, and that
+is a gap.** A clock earns a buffer by driving at least eight clock pins,
+and two block RAMs are **three**; this backend then refuses the bitstream,
+because a memory clocked through general routing has skew nobody has a
+model for. Bypassing the threshold for a memory was tried and is wrong in
+general: on the iCE40 architecture this flow has, an `SB_RAM40_4K`'s `RCLK`
+has no path from an `SB_GB`'s output at all, so buffering it makes a design
+that used to route stop routing. So the threshold stands, the design below
+carries sixteen pipeline registers to get over it, and the real fix — a
+per-family statement that this family's memories must be clocked globally
+— is in "What remains". The same gap is why `logicram_ecp5`, two
+distributed RAMs and nothing else, has its clock on local routing: a
+bitstream for it would be refused today.
 
 ### What places now, and what it costs
 
@@ -248,30 +253,41 @@ top-edge balls.
 | | |
 |---|---|
 | `DP16KD` | 2, both in the **9-bit** mode — one block each, which is why the memories are 2048 deep: a shallower one ties on block count and the mapper breaks a tie by preferring the *widest* mode |
-| Configuration bits | **1019**, of which **35** are the two blocks' own |
+| Configuration bits | **1274**, of which **33** are the two blocks' own |
 | Initialisation blocks | 2, numbered 3 and 4, of 2048 nine-bit words each |
-| Clock pins on a global network | 3 — `CLKA` and `CLKB` of the writable memory, `CLKB` of the ROM |
-| Unexplained bits | **0**, and the 357 arcs the bits select are exactly the 357 the router chose |
+| Clock pins on a global network | 19 — both ports of the writable memory, the ROM's read port, and sixteen pipeline registers |
+| Unexplained bits | **0**, and the 460 arcs the bits select are exactly the 460 the router chose |
 
-The 35 bits break down as twelve per block that every block gets — five
+The 33 bits break down as twelve per block that every block gets — five
 for the mode, one for each port's 9-bit width, one for each port's write
 mode, one for `GSR`, one for each of the two reset fields — plus the ties
 and the identifier: a reset mux per port, a write-enable mux per port that
-does not write, a clock-enable mux per port the design does not use at all,
-and one bit per set bit of the block's own number.
+is **in use** and does not write, a clock-enable mux per port the design
+does not use at all, and one bit per set bit of the block's own number.
 
-Two things about the Verilog are load-bearing and both are about which
-cell the memory becomes. **The read is registered with no reset**: `q <=
-mem[a]` inside a plain `always @(posedge clk)` is what `src/synth/proc`
-turns into a *clocked* read port, and a clocked read port is the only kind
-a block RAM can serve. Add a reset to that register and the promotion does
-not happen, the memory has an asynchronous read port, and
-`fpga::primitives` puts it in distributed RAM instead — which is exactly
-what `ip/fifo_sync` does, and why **no `ip/fifo_sync` footprint moved**:
-both of its variants read asynchronously, so none of them has ever been a
-block-RAM candidate and `docs/ip-library.md`'s table is unchanged. And
-**the ROM has contents and no write port**, which is the only case in which
-a block RAM's `INITVAL` parameters reach a bitstream at all.
+That "in use" is the second half of the `WEAMUX` story. A port the design
+does not touch at all — the ROM's port A — is held off by its **enable**,
+and giving its write enable a tie as well would set the very bit
+`EBR<n>.MODE` wants clear and make the mode undecodable again. A port
+whose enable is low cannot write, so one tie is the right number, and it
+is the one `ecppack` writes.
+
+Three things about the Verilog are load-bearing. **The memory read is
+registered with no reset**: `q <= mem[a]` inside a plain
+`always @(posedge clk)` is what `src/synth/proc` turns into a *clocked*
+read port, and a clocked read port is the only kind a block RAM can serve.
+Add a reset to that register and the promotion does not happen, the memory
+has an asynchronous read port, and `fpga::primitives` puts it in
+distributed RAM instead — which is exactly what `ip/fifo_sync` does, and
+why **no `ip/fifo_sync` footprint moved**: both of its variants read
+asynchronously, so none of them has ever been a block-RAM candidate and
+`docs/ip-library.md`'s table is unchanged. **The ROM has contents and no
+write port**, which is the only case in which a block RAM's `INITVAL`
+parameters reach a bitstream at all. And **both outputs are registered a
+second time**, which is not for timing: sixteen flip-flops take the
+clock's pin count from three to nineteen, over the global-buffer threshold
+of eight, without which the clock stays on local routing and this flow
+refuses the bitstream.
 
 ### What a board would have added, and the two cheapest experiments
 
@@ -5049,6 +5065,7 @@ borrows now. Every backend gets it.
 | A clock on a **dedicated** clock pad | nothing, and it has never been exercised. A `PCLKT` pad reaches the centre through `G_JPCLKT<q><n> <- JINCK <- JPADDI`, all `.fixed_conn`s already in the graph; a Cynthion's oscillator is on the `PCLKC` half of the pair, so this flow has only ever taken the fabric route |
 | A ball of a package whose edge is not described | **nothing on a caBGA-256**: all four edges are described and all 197 balls the package names are pads. The row used to say the left edge was "the right edge mirrored" and half of that was wrong; see "The buffer is not where the bits are". What is still untried is a *package* whose edges this die does not have — the caBGA-381 and the TQFP144 are in `iodb.json` and no design has been built for either |
 | A carry chain | `CCU2C` has no port map in the device file, on purpose: its two sum bits and internal carry do not match the `(ci, i0, i1) -> co` model Reticle maps carry onto. The `.mux` records for the cascade wires are read already |
+| A memory's clock **below the buffer threshold** | a clock earns a global buffer by driving eight clock pins and two block RAMs are three, and this backend refuses a memory clocked through general routing — so a small design has to carry registers it does not need. Bypassing the threshold for memories breaks the iCE40, whose `SB_RAM40_4K` clock has no path from an `SB_GB` in this flow's architecture, so the fix is a per-family statement in the `.dev` file that this family's memories must be clocked globally, and that does not exist yet. `logicram_ecp5` is the design this already refuses |
 | A block RAM's **contents on a part** | the bits are written and the stream carries them, and whether word *n* is address *n* has no evidence either way: all 53 of the vendor's initialisation blocks are empty. See "What a board would have added" in the block-RAM section, which names the one experiment |
 | A block RAM in **18-bit mode beside another** | `configure_bram` refuses it, because the two top data bits of each port are the next block's bottom two in this reading, and the vendor's two 36-bit blocks contradict that reading. The same section names the experiment |
 | A `PDPW16KD` | the pseudo dual-port mode, 36 bits on one side. Two of the 53 blocks in this board's own bitstreams are one; `fpga::primitives` has no shape for it and `configure_bram` writes `MODE = DP16KD` |

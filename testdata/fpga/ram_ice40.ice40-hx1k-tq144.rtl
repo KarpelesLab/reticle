@@ -50,7 +50,6 @@ module ram512
   net %rdata$pin5 u1 wire
   net %rdata$pin6 u1 wire
   net %rdata$pin7 u1 wire
-  net %clk$gb u1 wire
   port clk in %clk$pad
   port we in %we$pad
   port waddr in %waddr$pad
@@ -65,7 +64,7 @@ module ram512
   assign %rdata = {%mem$rd0_w0_d0[14:14], %mem$rd0_w0_d0[12:12], %mem$rd0_w0_d0[10:10], %mem$rd0_w0_d0[8:8], %mem$rd0_w0_d0[6:6], %mem$rd0_w0_d0[4:4], %mem$rd0_w0_d0[2:2], %mem$rd0_w0_d0[0:0]}
   assign %rdata$pad = {%rdata$pin7, %rdata$pin6, %rdata$pin5, %rdata$pin4, %rdata$pin3, %rdata$pin2, %rdata$pin1, %rdata$pin0}
   attr memory = "mem"
-  cell mem$ram_w0_d0 blackbox SB_RAM40_4K #(READ_MODE=1, WRITE_MODE=1) (RADDR=resize(%raddr, u11), RCLK=%clk$gb, RE=1'd1, RCLKE=1'd1, WADDR=resize(%waddr, u11), WCLK=%clk$gb, WE=%we, WCLKE=%we, WDATA={%wdata[7:7], 1'd0, %wdata[6:6], 1'd0, %wdata[5:5], 1'd0, %wdata[4:4], 1'd0, %wdata[3:3], 1'd0, %wdata[2:2], 1'd0, %wdata[1:1], 1'd0, %wdata[0:0]}) -> (RDATA=%mem$rd0_w0_d0)
+  cell mem$ram_w0_d0 blackbox SB_RAM40_4K #(READ_MODE=1, WRITE_MODE=1) (RADDR=resize(%raddr, u11), RCLK=%clk, RE=1'd1, RCLKE=1'd1, WADDR=resize(%waddr, u11), WCLK=%clk, WE=%we, WCLKE=%we, WDATA={%wdata[7:7], 1'd0, %wdata[6:6], 1'd0, %wdata[5:5], 1'd0, %wdata[4:4], 1'd0, %wdata[3:3], 1'd0, %wdata[2:2], 1'd0, %wdata[1:1], 1'd0, %wdata[0:0]}) -> (RDATA=%mem$rd0_w0_d0)
   attr port = "clk"
   attr pin = "21"
   attr io_standard = "LVCMOS33"
@@ -144,5 +143,4 @@ module ram512
   cell rdata$io6 blackbox SB_IO #(PIN_TYPE=6'd25) (D_OUT_0=%rdata[6:6]) -> (PACKAGE_PIN=%rdata$pin6)
   attr port = "rdata"
   cell rdata$io7 blackbox SB_IO #(PIN_TYPE=6'd25) (D_OUT_0=%rdata[7:7]) -> (PACKAGE_PIN=%rdata$pin7)
-  cell clk$gbuf blackbox SB_GB (USER_SIGNAL_TO_GLOBAL_BUFFER=%clk) -> (GLOBAL_BUFFER_OUTPUT=%clk$gb)
 end

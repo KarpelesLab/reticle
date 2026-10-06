@@ -1113,9 +1113,9 @@ fn what_lattices_own_packer_writes_for_a_block_ram() {
 /// | | |
 /// |---|---|
 /// | `DP16KD` | 2, both in the **9-bit** mode, which is the mode `ecppack` used for 14 of the 53 blocks in this board's bitstreams and the widest it used that needs no wire of the block two columns east |
-/// | Configuration bits | 1019 in all, of which 35 are the two block RAMs' own |
+/// | Configuration bits | 1274 in all, of which 33 are the two block RAMs' own |
 /// | Initialisation blocks | 2, numbered 3 and 4, of 2048 nine-bit words each |
-/// | Clock pins on a global network | 3 — `CLKA` and `CLKB` of the writable memory and `CLKB` of the ROM |
+/// | Clock pins on a global network | 19 — `CLKA` and `CLKB` of the writable memory, `CLKB` of the ROM, and the sixteen pipeline registers the design has so that its clock earns a buffer at all |
 ///
 /// Three things carry the weight. **Every bit decodes**: every set bit of
 /// the image resolves through the database into a feature it names with
@@ -1184,18 +1184,18 @@ fn a_block_ram_places_routes_and_every_bit_of_it_decodes() {
     // finished image, where several features share bit space.
     assert_eq!(
         routed.bram_only.ones(),
-        35,
+        33,
         "bits the two block RAMs cost. Twelve each are the settings every block gets — five for \
          the mode, one for each port's 9-bit width, one for each port's write mode, one for \
          `GSR` and one for each of the two reset fields — and the rest are the ties and the \
-         `WID`: a reset mux per port, a write-enable mux per port that does not write, a \
-         clock-enable mux per port the design does not use at all, and one bit per set bit of the \
-         block's own number"
+         `WID`: a reset mux per port, a write-enable mux per port that is in use and does not \
+         write, a clock-enable mux per port the design does not use at all, and one bit per set \
+         bit of the block's own number"
     );
     assert_eq!(
         bits.ones(),
-        1019,
-        "set bits in the whole image, pads and routing included"
+        1274,
+        "set bits in the whole image, pads, pipeline registers and routing included"
     );
     // Every clock pin of every block on a global network, which is what
     // `ecppack` does in all 53 of its blocks and what this flow refuses to
@@ -1207,9 +1207,13 @@ fn a_block_ram_places_routes_and_every_bit_of_it_decodes() {
     );
     assert_eq!(
         routed.clocks.networks.values().sum::<usize>(),
-        3,
-        "clock pins examined: both ports of the writable memory and the ROM's read port"
+        19,
+        "clock pins examined: both ports of the writable memory, the ROM's read port and the \
+         sixteen pipeline registers — which are there to take the count over the global-buffer \
+         threshold, since three pins would leave the clock on local routing and this flow then \
+         refuses to write a memory's clock at all. See the design's own header"
     );
+    assert_eq!(routed.ffs, 16, "the two output pipeline registers");
     assert!(routed.dropped.is_empty(), "{:?}", routed.dropped);
 
     // The contents, which are in the stream and not in the configuration

@@ -50,7 +50,6 @@ module ram512
   net %rdata$pin5 u1 wire
   net %rdata$pin6 u1 wire
   net %rdata$pin7 u1 wire
-  net %clk$gb u1 wire
   port clk in %clk$pad
   port we in %we$pad
   port waddr in %waddr$pad
@@ -65,7 +64,7 @@ module ram512
   assign %rdata = {%mem$rd0_w0_d0[7:7], %mem$rd0_w0_d0[6:6], %mem$rd0_w0_d0[5:5], %mem$rd0_w0_d0[4:4], %mem$rd0_w0_d0[3:3], %mem$rd0_w0_d0[2:2], %mem$rd0_w0_d0[1:1], %mem$rd0_w0_d0[0:0]}
   assign %rdata$pad = {%rdata$pin7, %rdata$pin6, %rdata$pin5, %rdata$pin4, %rdata$pin3, %rdata$pin2, %rdata$pin1, %rdata$pin0}
   attr memory = "mem"
-  cell mem$ram_w0_d0 blackbox DP16KD #(DATA_WIDTH_A=18, DATA_WIDTH_B=18) (ADB={resize(%raddr, u10), 4'd3}, CLKB=%clk$gb, CEB=1'd1, ADA={resize(%waddr, u10), 4'd3}, CLKA=%clk$gb, CEA=%we, WEA=%we, DIA=resize(%wdata, u18)) -> (DOB=%mem$rd0_w0_d0)
+  cell mem$ram_w0_d0 blackbox DP16KD #(DATA_WIDTH_A=18, DATA_WIDTH_B=18) (ADB={resize(%raddr, u10), 4'd3}, CLKB=%clk, CEB=1'd1, ADA={resize(%waddr, u10), 4'd3}, CLKA=%clk, CEA=%we, WEA=%we, DIA=resize(%wdata, u18)) -> (DOB=%mem$rd0_w0_d0)
   attr port = "clk"
   attr pin = "G2"
   attr io_standard = "LVCMOS33"
@@ -145,5 +144,4 @@ module ram512
   cell rdata$io6 blackbox TRELLIS_IO #(DIR="OUTPUT") (I=%rdata[6:6]) -> (B=%rdata$pin6)
   attr port = "rdata"
   cell rdata$io7 blackbox TRELLIS_IO #(DIR="OUTPUT") (I=%rdata[7:7]) -> (B=%rdata$pin7)
-  cell clk$gbuf blackbox DCCA (CLKI=%clk, CE=1'd1) -> (CLKO=%clk$gb)
 end

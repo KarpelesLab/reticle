@@ -9,10 +9,9 @@ io:
   wdata (8 bits) -> TRELLIS_IO
   rdata (8 bits) -> TRELLIS_IO
 clocks:
-  clk (2 clock pins) -> DCCA
+  clk (2 clock pins) -> local routing (below the threshold of 8)
 logic:
   0 LUTs, depth 0
 netlist:
-  1 x DCCA
   1 x DP16KD
   36 x TRELLIS_IO

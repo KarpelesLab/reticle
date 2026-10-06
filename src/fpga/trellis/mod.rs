@@ -4153,7 +4153,7 @@ impl TrellisFabric {
     /// | `EBR<n>.GSR` | `DISABLED`, in all 53 |
     /// | `EBR<n>.RESETMODE`, `EBR<n>.ASYNC_RESET_RELEASE` | `ASYNC`, in all 53 |
     /// | `EBR<n>.RSTAMUX`, `EBR<n>.RSTBMUX` | `INV`, in all 53 — the reset has to be held **low** and an unrouted wire of this fabric reads as a **one** |
-    /// | `EBR<n>.CEBMUX` | `INV` in 32 of the 53, which are exactly the blocks whose B port is idle. A port with its enable held low can neither read nor write, so a port this flow does not use gets the same treatment |
+    /// | `EBR<n>.CEBMUX` | `INV` in 32 of the 53, which are exactly the blocks whose B port is idle. A port with its enable held low can neither read nor write, so a port this flow does not use gets the same treatment — **and no write-enable tie**, because `WEAMUX`'s bit is one `MODE` wants clear |
     /// | `EBR<n>.WEBMUX` | `INV`, in all 53. `WEAMUX` is **never** written, because their mapping writes on port A and reads on port B. This flow is the other way round, so it writes `WEAMUX` instead |
     /// | `EBR<n>.WID` | nine bits, and the number they spell is exactly the index of one of the file's own initialisation blocks: 3 to 11 for analyzer's nine, 3 to 46 for facedancer's forty-four |
     /// | `EBR<n>.CSDECODE_A`, `..._B` | **never written**, which is `111`, which is what the three chip-select wires read when nothing drives them |
@@ -4256,13 +4256,20 @@ impl TrellisFabric {
                             && pin.signal.is_some()
                     })
                 };
-                for (role, field) in BRAM_TIE_LOW_PINS.iter().zip(BRAM_TIE_LOW) {
-                    if !driven(role) {
-                        set(&field.replace('#', &letter.to_string()), BRAM_INV, bits)?;
+                // A port with no clock is a port the design does not use at
+                // all, and holding its **enable** low is what makes it
+                // inert. Its write enable then needs no tie of its own —
+                // which is just as well, because `WEAMUX`'s bit is one that
+                // `EBR<n>.MODE`'s own record wants clear, so writing both
+                // would leave the mode undecodable. `ecppack` writes
+                // `WEAMUX` for no `DP16KD` either.
+                if driven("clk") {
+                    for (role, field) in BRAM_TIE_LOW_PINS.iter().zip(BRAM_TIE_LOW) {
+                        if !driven(role) {
+                            set(&field.replace('#', &letter.to_string()), BRAM_INV, bits)?;
+                        }
                     }
-                }
-                // A port with no clock is a port the design does not use.
-                if !driven("clk") {
+                } else {
                     set(
                         &BRAM_TIE_OFF.replace('#', &letter.to_string()),
                         BRAM_INV,

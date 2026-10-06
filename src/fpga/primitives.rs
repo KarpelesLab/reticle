@@ -3674,20 +3674,17 @@ impl Mapper<'_> {
         // once it is mapped; a memory port is one.
         let mut fanout: BTreeMap<String, ClockFanout> = BTreeMap::new();
         for (id, cell) in module.cells.iter() {
-            // `memory` marks a pin whose fanout the threshold must not have
-            // the last word on; see `ClockFanout::memory`.
-            let ports: Vec<(usize, String, bool)> = match &cell.kind {
+            let ports: Vec<(usize, String)> = match &cell.kind {
                 CellKind::Dff { .. } => vec![(
                     cell.output("q").map_or(1, |q| {
                         usize::try_from(net_width(module, q)).unwrap_or(1).max(1)
                     }),
                     "clk".to_owned(),
-                    false,
                 )],
                 CellKind::MemRdPort { clocked, .. } | CellKind::MemWrPort { clocked, .. }
                     if *clocked =>
                 {
-                    vec![(1, "clk".to_owned(), true)]
+                    vec![(1, "clk".to_owned())]
                 }
                 CellKind::Blackbox(primitive) => {
                     let mut found = Vec::new();
@@ -3695,13 +3692,13 @@ impl Mapper<'_> {
                         .as_ref()
                         .filter(|(name, _)| name == primitive.as_str())
                     {
-                        found.push((1, port.clone(), true));
+                        found.push((1, port.clone()));
                     }
                     for (_, port) in bram_clocks
                         .iter()
                         .filter(|(name, _)| name == primitive.as_str())
                     {
-                        found.push((1, port.clone(), true));
+                        found.push((1, port.clone()));
                     }
                     if found.is_empty() {
                         continue;
@@ -3710,7 +3707,7 @@ impl Mapper<'_> {
                 }
                 _ => continue,
             };
-            for (pins, port, memory) in ports {
+            for (pins, port) in ports {
                 let Some(clk) = cell.input(&port) else {
                     continue;
                 };
@@ -3722,11 +3719,9 @@ impl Mapper<'_> {
                     net,
                     sinks: Vec::new(),
                     pins: 0,
-                    memory: false,
                 });
                 entry.sinks.push((id, port));
                 entry.pins += pins;
-                entry.memory |= memory;
             }
         }
         // Highest fanout first, ties broken by name so the choice is
@@ -3742,11 +3737,10 @@ impl Mapper<'_> {
                 net,
                 sinks: cells,
                 pins: count,
-                memory,
             },
         ) in candidates
         {
-            if count < self.options.global_buffer_threshold && !memory {
+            if count < self.options.global_buffer_threshold {
                 self.report.clocks.push(ClockMapping {
                     net: name,
                     fanout: count,
@@ -3833,17 +3827,6 @@ struct ClockFanout {
     net: NetId,
     /// The `(cell, port)` pairs that move onto the buffer's output.
     sinks: Vec<(CellId, String)>,
-    /// Whether any sink is a **memory's** clock.
-    ///
-    /// A memory's clock does not get to be below the threshold. The ECP5
-    /// backend refuses a RAM whose clock arrived through general routing —
-    /// `ecppack` puts one on a global network in all 111 distributed RAMs
-    /// and all 53 block RAMs of this board's own bitstreams, and a clock
-    /// off data wires has skew nobody has a model for — so a threshold that
-    /// left a memory's clock local would make a legitimate design
-    /// unbuildable rather than merely slower. A design with one block RAM
-    /// and no flip-flops is three clock pins, and that is the whole of it.
-    memory: bool,
     /// How many clock *pins* that is once the cells are mapped, which is
     /// what the threshold is measured against.
     pins: usize,
