@@ -82,6 +82,108 @@ pub(crate) fn is_negedge(old: Bit, new: Bit) -> bool {
     (old != Bit::Zero && new == Bit::Zero) || (old == Bit::One && !new.is_known())
 }
 
+/// Mask of the table entries whose index has address bit `j` set, within
+/// one 64-bit word of a truth table. Only the six low address bits vary
+/// inside a word; above that a whole word is in or out.
+const ADDRESS_BIT: [u64; 6] = [
+    0xAAAA_AAAA_AAAA_AAAA,
+    0xCCCC_CCCC_CCCC_CCCC,
+    0xF0F0_F0F0_F0F0_F0F0,
+    0xFF00_FF00_FF00_FF00,
+    0xFFFF_0000_FFFF_0000,
+    0xFFFF_FFFF_0000_0000,
+];
+
+/// A lookup table's output for an address that may have unknown bits.
+///
+/// `init` bit `i` is the output for address `i`, and an address outside the
+/// table reads as `x` — so a fully known address is one bit of `init` and
+/// nothing here is needed. The interesting case is an address with `x` or
+/// `z` bits, and the rule this implements is:
+///
+/// > the output is the value every input assignment consistent with the
+/// > unknown bits produces, and `x` when two such assignments disagree.
+///
+/// A lookup table is not one of the gate-level primitives IEEE 1364-2005
+/// §7 tabulates, so there is no table to copy; this is the generalisation
+/// of the ones there. Applying it to `and` reproduces §7.2's table
+/// (`0 & x` is `0`, `1 & x` is `x`), to `or` the same (`1 | x` is `1`), to
+/// `xor` all-`x`, and to a two-to-one multiplexer the merge of §5.1.13's
+/// conditional operator — a cell's output is unknown exactly when the
+/// unknown inputs can change it, never merely because they exist. So the
+/// rule is not an extension of the standard but what the standard already
+/// does for every primitive it defines.
+///
+/// It is computed by restriction rather than by search: the known address
+/// bits select a sub-cube of the table as a word mask, and the surviving
+/// entries are known to agree when they are all ones or all zeros. That is
+/// `k` word operations and no allocation, for any `k`.
+///
+/// Every bail-out below yields `x`, which is what an unknown address used
+/// to yield unconditionally, so no path here is more optimistic than the
+/// shape of the table allows.
+pub(crate) fn lut_output(init: &Logic, a: &Logic) -> Logic {
+    let entries = init.width();
+    // 2^k entries is what `CellKind::Lut` promises; anything else is a
+    // malformed cell whose sub-cubes are not word masks.
+    if entries == 0 || !entries.is_power_of_two() {
+        return Logic::x(1);
+    }
+    let k = entries.trailing_zeros();
+    // An address bit above the table's own index width can only take the
+    // read out of range, which reads as `x`; unknown there means it might.
+    if (k..a.width()).any(|j| a.bit(j) != Bit::Zero) {
+        return Logic::x(1);
+    }
+    // The six low address bits choose within a word: AND in one mask per
+    // known bit and leave the unknown ones free.
+    let mut low = u64::MAX;
+    for j in 0..k.min(6) {
+        match a.get(j).unwrap_or(Bit::Zero) {
+            Bit::One => low &= ADDRESS_BIT[j as usize],
+            Bit::Zero => low &= !ADDRESS_BIT[j as usize],
+            _ => {}
+        }
+    }
+    let (value, unknown) = (init.value_words(), init.unknown_words());
+    let words = value.len();
+    let mut ones = false;
+    let mut zeros = false;
+    for (w, (&v, &u)) in value.iter().zip(unknown).enumerate() {
+        // A known address bit at or above six picks whole words.
+        let selected = (6..k).all(|j| match a.get(j).unwrap_or(Bit::Zero) {
+            Bit::One => (w >> (j - 6)) & 1 == 1,
+            Bit::Zero => (w >> (j - 6)) & 1 == 0,
+            _ => true,
+        });
+        if !selected {
+            continue;
+        }
+        let mut m = low;
+        if w + 1 == words && !entries.is_multiple_of(64) {
+            m &= (1u64 << (entries % 64)) - 1;
+        }
+        if m == 0 {
+            continue;
+        }
+        // An `x` in the table itself, at an entry that survives.
+        if u & m != 0 {
+            return Logic::x(1);
+        }
+        ones |= v & m != 0;
+        zeros |= !v & m != 0;
+        if ones && zeros {
+            return Logic::x(1);
+        }
+    }
+    match (ones, zeros) {
+        (true, false) => Logic::from_bool(true),
+        (false, true) => Logic::from_bool(false),
+        // No entry survived, which a non-empty sub-cube cannot do.
+        _ => Logic::x(1),
+    }
+}
+
 /// Whether a change from `old` to `new` satisfies `polarity`.
 pub(crate) fn edge_matches(polarity: Polarity, old: &Logic, new: &Logic) -> bool {
     match polarity {
@@ -617,9 +719,12 @@ impl<'d> Simulator<'d> {
             }
             CellKind::Lut { init, .. } => {
                 let a = self.cell_input(c, "a")?;
+                // The common case is a fully known address: one bit of the
+                // table, no mask arithmetic. `lut_output` handles the rest.
                 Some(match a.to_u64().and_then(|i| u32::try_from(i).ok()) {
                     Some(i) if i < init.width() => Logic::from_bit(init.bit(i)),
-                    _ => Logic::x(1),
+                    Some(_) => Logic::x(1),
+                    None => lut_output(&init, &a),
                 })
             }
             CellKind::Tristate => {
@@ -788,5 +893,157 @@ mod tests {
         assert!(edge_matches(Polarity::Pos, &zero, &one));
         assert!(!edge_matches(Polarity::Neg, &zero, &one));
         assert_eq!(bit0(&Logic::zero(0)), Bit::X);
+    }
+
+    /// An address built from a pattern of `0`, `1`, `x` and `z`, LSB first.
+    fn address(pattern: &str) -> Logic {
+        let bits: Vec<Bit> = pattern
+            .chars()
+            .map(|c| Bit::from_char(c).expect("a bit character"))
+            .collect();
+        Logic::from_bits(&bits)
+    }
+
+    /// What the rule says, computed by enumerating every assignment of the
+    /// unknown address bits — the definition rather than the implementation.
+    fn by_enumeration(init: &Logic, a: &Logic) -> Bit {
+        let free: Vec<u32> = (0..a.width()).filter(|&j| !a.bit(j).is_known()).collect();
+        assert!(free.len() < 20, "too many assignments to enumerate");
+        let mut answer: Option<Bit> = None;
+        for fill in 0u32..(1u32 << free.len()) {
+            let mut v = a.clone();
+            for (n, &j) in free.iter().enumerate() {
+                v.set_bit(j, Bit::from_bool((fill >> n) & 1 == 1));
+            }
+            let got = match v.to_u64().and_then(|i| u32::try_from(i).ok()) {
+                Some(i) if i < init.width() => init.bit(i),
+                _ => Bit::X,
+            };
+            match answer {
+                None if got.is_known() => answer = Some(got),
+                Some(prev) if prev == got => {}
+                _ => return Bit::X,
+            }
+        }
+        answer.unwrap_or(Bit::X)
+    }
+
+    #[test]
+    fn a_lookup_table_is_known_when_its_unknown_inputs_cannot_change_it() {
+        // Two-input AND, `init` bit 3 only.
+        let and2 = Logic::from_u64(0b1000, 4);
+        // `a[0]` unknown over a zero `a[1]`: both entries are 0, so the
+        // output is 0 — IEEE 1364-2005 §7.2's `0 & x = 0`.
+        assert_eq!(lut_output(&and2, &address("x0")).bit(0), Bit::Zero);
+        assert_eq!(lut_output(&and2, &address("0x")).bit(0), Bit::Zero);
+        // With the other input a one the unknown does reach the output.
+        assert_eq!(lut_output(&and2, &address("x1")).bit(0), Bit::X);
+        assert_eq!(lut_output(&and2, &address("1x")).bit(0), Bit::X);
+
+        // Two-input OR: `1 | x = 1`.
+        let or2 = Logic::from_u64(0b1110, 4);
+        assert_eq!(lut_output(&or2, &address("x1")).bit(0), Bit::One);
+        assert_eq!(lut_output(&or2, &address("x0")).bit(0), Bit::X);
+
+        // A table that ignores `a[1]` entirely: y = a[0].
+        let pass0 = Logic::from_u64(0b1010, 4);
+        assert_eq!(lut_output(&pass0, &address("1x")).bit(0), Bit::One);
+        assert_eq!(lut_output(&pass0, &address("0x")).bit(0), Bit::Zero);
+        // And one that ignores both.
+        assert_eq!(lut_output(&Logic::ones(4), &address("xx")).bit(0), Bit::One);
+        assert_eq!(
+            lut_output(&Logic::zero(4), &address("xx")).bit(0),
+            Bit::Zero
+        );
+
+        // `z` is as free as `x`: a high-impedance address bit is an input
+        // assignment nobody knows, not a third value the table has an
+        // entry for.
+        assert_eq!(lut_output(&and2, &address("z0")).bit(0), Bit::Zero);
+        assert_eq!(lut_output(&and2, &address("z1")).bit(0), Bit::X);
+
+        // Six inputs, one word, and only `a[5]` matters.
+        let bit5 = Logic::from_u64(0xFFFF_FFFF_0000_0000, 64);
+        assert_eq!(lut_output(&bit5, &address("xxxxx1")).bit(0), Bit::One);
+        assert_eq!(lut_output(&bit5, &address("xxxxx0")).bit(0), Bit::Zero);
+        assert_eq!(lut_output(&bit5, &address("xxxxxx")).bit(0), Bit::X);
+
+        // Seven inputs is two words, so the selecting bit is above the
+        // low six and picks a whole word.
+        let bit6 = Logic::from_planes(128, false, vec![0, u64::MAX], vec![0, 0]);
+        assert_eq!(lut_output(&bit6, &address("xxxxxx1")).bit(0), Bit::One);
+        assert_eq!(lut_output(&bit6, &address("xxxxxx0")).bit(0), Bit::Zero);
+        assert_eq!(lut_output(&bit6, &address("xxxxxxx")).bit(0), Bit::X);
+
+        // An `x` in the table itself, at an entry the address can reach.
+        let mut holey = Logic::ones(4);
+        holey.set_bit(2, Bit::X);
+        assert_eq!(lut_output(&holey, &address("x0")).bit(0), Bit::One);
+        assert_eq!(lut_output(&holey, &address("0x")).bit(0), Bit::X);
+
+        // An address bit above the table's index width can only take the
+        // read out of range, which is `x` whether it is known or not.
+        assert_eq!(lut_output(&and2, &address("x01")).bit(0), Bit::X);
+        assert_eq!(lut_output(&and2, &address("x0x")).bit(0), Bit::X);
+        assert_eq!(lut_output(&and2, &address("x00")).bit(0), Bit::Zero);
+
+        // A malformed table is `x`, as it was before.
+        assert_eq!(lut_output(&Logic::ones(3), &address("xx")).bit(0), Bit::X);
+        assert_eq!(lut_output(&Logic::ones(0), &address("x")).bit(0), Bit::X);
+    }
+
+    #[test]
+    fn every_three_input_table_and_address_agrees_with_the_rule() {
+        // All 256 three-input functions against all 4^3 addresses over
+        // {0, 1, x, z}: the restriction arithmetic is compared with the
+        // enumeration it is an optimisation of, fully known addresses
+        // included, so this also pins the fast path's answer.
+        let alphabet = ['0', '1', 'x', 'z'];
+        for table in 0u64..256 {
+            let init = Logic::from_u64(table, 8);
+            for i in 0..alphabet.len() {
+                for j in 0..alphabet.len() {
+                    for l in 0..alphabet.len() {
+                        let p: String = [alphabet[i], alphabet[j], alphabet[l]].iter().collect();
+                        let a = address(&p);
+                        assert_eq!(
+                            lut_output(&init, &a).bit(0),
+                            by_enumeration(&init, &a),
+                            "table {table:#04x} address {p}"
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn a_two_word_table_agrees_with_the_rule() {
+        // Seven inputs crosses the word boundary, which is the only part
+        // of the mask arithmetic the three-input sweep cannot reach. The
+        // tables are a small LCG so the test is deterministic.
+        let mut seed = 0x2545_F491_4F6C_DD1Du64;
+        let mut next = move || {
+            seed ^= seed << 13;
+            seed ^= seed >> 7;
+            seed ^= seed << 17;
+            seed
+        };
+        let alphabet = ['0', '1', 'x', 'z'];
+        for _ in 0..64 {
+            let init = Logic::from_planes(128, false, vec![next(), next()], vec![0, 0]);
+            for _ in 0..256 {
+                let bits = next();
+                let p: String = (0..7)
+                    .map(|n| alphabet[((bits >> (2 * n)) & 3) as usize])
+                    .collect();
+                let a = address(&p);
+                assert_eq!(
+                    lut_output(&init, &a).bit(0),
+                    by_enumeration(&init, &a),
+                    "address {p}"
+                );
+            }
+        }
     }
 }
