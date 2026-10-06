@@ -464,8 +464,26 @@ module usb_proxy_relay #(
     // Which tokens are this block's.
     // -----------------------------------------------------------------
     // A token for an address that is not the hub's, while the hub's port is
-    // enabled. "PASS-THROUGH ADDRESSING" above is why that is exactly the set
-    // of tokens meant for something behind the port.
+    // enabled. "PASS-THROUGH ADDRESSING" above is why that is **nearly** exactly
+    // the set of tokens meant for something behind the port.
+    //
+    // **AND IT IS TOO WIDE, WHICH WAS FOUND ON A BOARD.** It is exact on a root
+    // port, where a host controller sends a packet only down the path the address
+    // is on. It is **not** exact on a hub's downstream port, because **HIGH**
+    // (USB 2.0 §11.1.2.1) a hub repeats downstream traffic to all of its enabled
+    // ports — so a hub plugged into another hub can see tokens addressed to its
+    // siblings, and this claims them: forwards them to a device that ignores
+    // them, and answers NAK upstream while another device is being addressed.
+    //
+    // The narrowing is one seven-bit register: claim the **one** address the PC
+    // gave the device — zero from the port reset, and whatever a forwarded
+    // SET_ADDRESS gave it after that, which is already in `setup_q` and is
+    // already parsed there for SET_CONFIGURATION and CLEAR_FEATURE.
+    // `README.md` §9's "A claim that is too wide" is the measurement that asked
+    // for it, what it did and did not establish, and why it is reported here
+    // rather than made: the round that found it had no measurement that would
+    // catch getting it wrong, and the instrument it wants is a **count** of
+    // forwarded transactions where `data_fwd` is only a latch.
     wire claim = enabled & ~port_reset & tok_ok & (tok_addr != hub_addr);
 
     assign owns        = owns_q;

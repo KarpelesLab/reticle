@@ -107,6 +107,15 @@ and there is no table, no map and no cache. And because the descriptors the PC
 reads are the device's own bytes, every length on both buses agrees for free:
 `bMaxPacketSize0`, `wMaxPacketSize`, `wTotalLength`, all of them.
 
+**The MEDIUM above is doing real work and §9 is where it was found out.** "A
+token whose address is not the hub's own is for something behind the port" is true
+of a root port and **not** of a hub's port in general, because a hub repeats
+downstream traffic to all of its enabled ports. Narrowing the claim to the one
+address the PC gave the device is a seven-bit register and a comparison, and §9's
+"A claim that is too wide" is the measurement that asked for it and why it is
+reported rather than made here. Nothing else in this section depends on it: the
+forwarding is still verbatim and there is still no table.
+
 ### So our host stops being a host
 
 `usb_host_enum` is **not instantiated in a proxy at all**.
@@ -742,19 +751,26 @@ either**, which is why that part of the test reports rather than asserts: **HIGH
 into a timeout, and from the host's side an endpoint the proxy never reached and
 one the device NAKed are both `operation timed out`.
 
-**The console is what tells them apart.** `saw_data_fwd`, byte 1 bit 0, is set:
-`usb_proxy_relay` handed the engine a transaction that was **not** part of a
-control transfer, so the bulk token went out on the downstream wire. That bit
-exists because of this measurement — it was `ctrl_active` in the first version of
-this console, which said nothing about bulk at all.
+**The console was meant to tell them apart and it told something else.**
+`saw_data_fwd`, byte 1 bit 0, is set — `usb_proxy_relay` handed the engine a
+transaction that was **not** part of a control transfer — but it was **already set
+in the reading taken before the bulk attempt**, so it does not say that the
+attempt is what set it. That bit exists because of this measurement and the
+measurement then went past it: §9's "A claim that is too wide" is what it found.
 
-So what is established is that **a bulk transaction is forwarded downstream**, and
-what is **not** established is whether the GreatFET NAKed it or said nothing. Its
-firmware's libgreat command pipe is a vendor control request and these bulk
-endpoints are armed on demand, so a NAK until a buffer is queued is what a reading
-of that firmware would predict — but this round did not read it and does not claim
-it. Distinguishing the two needs `trn_status` on the console, which is three more
-bits and the obvious next instrument.
+So what is established about bulk on the part is weaker than it looks: a
+transaction outside a control transfer **was** forwarded to the downstream bus,
+and nothing here says it was the one the test sent. Whether the GreatFET NAKed its
+bulk endpoints or said nothing is not established either. Its firmware's libgreat
+command pipe is a vendor control request and these bulk endpoints are armed on
+demand, so a NAK until a buffer is queued is what a reading of that firmware would
+predict — but this round did not read it and does not claim it.
+
+**A latch was the wrong instrument and that is the lesson of it.** What is wanted
+is a **count**, the way `setups` is a count: `setups` sitting at exactly 11 is what
+makes the control half of this section a measurement, and a latch that says "at
+least one, ever" cannot do the same work. `trn_status` on the console would be
+three bits more and would separate a NAK from a timeout as well.
 
 **What *is* asserted about bulk is in simulation**, and it is asserted exactly:
 `usb_proxy_moves_bytes_through_the_port` sends four packets of four different
@@ -782,6 +798,41 @@ per-device state at all, so several addresses would work — but the toggle arra
 are one set, and two devices sharing an endpoint number would share a toggle. A
 second device needs the arrays indexed by address too, and there is nowhere for
 one to be: the hub has one port.
+
+### A claim that is too wide, found on the part and not fixed in this round
+
+§2's rule is that **a token whose address is not the hub's own is a token for
+something behind the port**, and the thing that makes it true is the host
+controller sending a packet only down the path the address is on. That is true of
+a root port. **It is not true of a hub's downstream port in general**, because
+**HIGH** (USB 2.0 §11.1.2.1) a hub repeats downstream traffic to **all** of its
+enabled ports — so a hub plugged into another hub can see tokens addressed to its
+siblings, and this relay would claim them: forward them to the device behind its
+own port, which ignores them, and **answer NAK upstream while another device is
+being addressed**. Two devices driving one bus is the failure that is worth taking
+seriously.
+
+**What was measured, and it is not the whole answer.** On the board this block ran
+on, the Cynthion is on a full-speed downstream port of a high-speed hub, and
+`setups` on the console sat at **exactly 11** — the kernel's own enumeration of
+the device and nothing else — through readings seconds apart with other devices
+busy on the same bus. So sibling **control** traffic did not reach this port, which
+is what a high-speed hub's transaction translator targeting one port would
+predict. But `saw_data_fwd` was set before anything in this round had sent a bulk
+packet, which says that *something* addressed a non-zero endpoint of an address
+that was not the hub's, and this round did not find out what. A latch cannot say
+how many or whose; §8's last subsection is that lesson.
+
+**The fix is bounded and is the next round's.** The relay should claim **one**
+address rather than every address that is not the hub's: zero from the moment the
+port is reset, and whatever a forwarded SET_ADDRESS gave the device after that —
+which is already in `setup_q` and is already parsed there for SET_CONFIGURATION
+and CLEAR_FEATURE. It is one seven-bit register and one comparison, and it makes
+§2's rule true by construction instead of by a property of the bus above. It is
+reported rather than made here for the reason `ip/usb_hub/README.md` §7 reported
+GET_STATUS rather than moving it: the round that found it had no measurement that
+would catch getting it wrong, and the measurement to want is the count §8 asks
+for.
 
 **No isochronous transfers, and no frame alignment.** §4's last subsection.
 
