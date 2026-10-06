@@ -299,10 +299,35 @@ accounted for, and one of them is a loss.
 `blinky_ice40.asc` moves with its `.bits`, being the same bitstream
 written out in full.
 
-Nothing else moved. The ECP5 bitstream checks are unaffected in kind:
-`usb_host_target.v` still decodes every one of its 114 857 set bits back
-through the database into exactly the arcs the router chose, with none
-unexplained, and the mapped-netlist equivalence test does not involve a
+Four assertions in `tests/fpga_trellis.rs` moved with the placements, and
+three of them should never have been placement-dependent:
+
+| test | was | is |
+|---|---|---|
+| `a_distributed_ram_and_two_reset_domains_share_a_die` | 57 logic tiles | 65 |
+| `a_register_bit_nothing_drives_is_built_from_a_constant` | 199 bits | 180 |
+| `the_clocked_design_routes_and_configures_what_its_header_promises` | `> 600` arcs, 693 | 599 |
+| `the_bitstream_decodes_back_to_the_arcs_the_router_chose` | `SLICED.B0MUX` by name | any slice input mux |
+
+The first is the one worth reading, because 65 tiles against 57 looks
+like a regression and is not. `lutram_reset_64.v` with `fifo_sync`:
+
+| | wirelength | logic tiles | pips | router nodes |
+|---|---|---|---|---|
+| before | 2668 → **2668** | 57 | 6790 | 46 591 174 |
+| after | 2668 → **1289** | 65 | **6396** | **41 997 067** |
+
+The old annealer improved nothing here either, so what it kept was the
+legaliser's placement — which packs cells into the fewest tiles it can
+and wires them long. The new one spends eight more tiles and halves the
+wirelength, and the router needs 394 fewer pips for it. A tile count is
+not a quality measure on a part with 24 288 flip-flop sites and 3036
+logic tiles for a design using 65 of them.
+
+The two correctness checks are unaffected in kind. `usb_host_target.v`
+still decodes every one of its 114 364 set bits back through the database
+into exactly the 35 151 arcs the router chose, with none unexplained, and
+`every_block_maps_to_the_logic_it_was_mapped_from` does not involve a
 placement at all.
 
 

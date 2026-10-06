@@ -2664,7 +2664,7 @@ fn the_clocked_design_routes_and_configures_what_its_header_promises() {
         selected.len()
     );
     // A floor, not a measurement: the exact count moves with the placement
-    // — it was 613 under the die-wide annealing schedule and is 599 under
+    // — it was 693 under the die-wide annealing schedule and is 599 under
     // the range-limited one, which routes this counter shorter — and what
     // this is here to catch is an image in which the routing has collapsed
     // to a handful of arcs, which is what a decoder that silently resolved
