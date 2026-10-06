@@ -1272,6 +1272,12 @@ fn the_database_describes_one_part_of_the_ecp5_family() {
     assert_eq!(
         graph.site_counts(),
         vec![
+            // One block RAM per `DP16KD` of the part, which is what the
+            // datasheet says the 25F — the same die — has. Nine tile types
+            // repeat along each of the two EBR rows and hold four blocks
+            // between them, and only the four that carry a block's 116
+            // `.fixed_conn`s get a bel; see `trellis::BramSite`.
+            ("bram".to_owned(), 56),
             ("ff".to_owned(), 24_288),
             ("gb".to_owned(), 56),
             // One `io` site per ball the package names, now that all four

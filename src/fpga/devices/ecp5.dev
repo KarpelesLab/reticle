@@ -36,6 +36,18 @@
 #     the B side), which is what a Yosys JSON netlist carries and what
 #     nextpnr splits into bits. Lattice Diamond wants the per-bit form
 #     (ADA0, ADA1, ...); Reticle does not emit that yet.
+#   * DP16KD port order: **the B side is listed first**, which looks
+#     arbitrary and is not. `fpga::primitives` gives a memory's read ports
+#     the earliest port lines and its write ports the ones after them, so
+#     listing B first puts a one-read one-write memory's **write** on
+#     physical port A and its **read** on port B — which is what Lattice's
+#     own packer does in all 53 block RAMs of this board's reference
+#     bitstreams (`WEBMUX = INV` in every one of them, `WEAMUX` in none).
+#     That is not cosmetic: Project Trellis' `EBR<n>.MODE` record claims
+#     `WEAMUX`'s own bit as one that `DP16KD` wants *clear*, so a flow that
+#     read on port A and held `WEA` low with its inverting mux would write a
+#     bitstream in which the mode bit no longer decodes. See
+#     `TrellisFabric::configure_bram` and `docs/fpga-trellis.md`.
 #   * DP16KD layout, on each `mode` line. The contents are 1024 rows of
 #     18 bits; INITVAL_<nn> holds rows 16nn..16nn+15, each in a 20-bit
 #     slot whose top two bits are zero (`init_params`). The address pins
@@ -180,8 +192,8 @@ device ecp5-25f-CABGA381
     mode 1 16384 param DATA_WIDTH_A=1 DATA_WIDTH_B=1 init low 0 1 2 3 4 5 6 7 9 10 11 12 13 14 15 16
     flags dual_port init
     init_params INITVAL_ count 64 digits 2 rows 16 slot 20
-    port rw clk=CLKA en=CEA addr=ADA din=DIA dout=DOA we=WEA rst=RSTA
     port rw clk=CLKB en=CEB addr=ADB din=DIB dout=DOB we=WEB rst=RSTB
+    port rw clk=CLKA en=CEA addr=ADA din=DIA dout=DOA we=WEA rst=RSTA
   end
   dsp MULT18X18D a 18 b 18 p 36 accumulator stages 3 port a=A b=B c=C p=P clk=CLK0
   io_standard LVCMOS33 vccio 3.3 drive 4,8,12,16,20 slew slow,fast
@@ -300,8 +312,8 @@ device ecp5-12f-CABGA256
     mode 1 16384 param DATA_WIDTH_A=1 DATA_WIDTH_B=1 init low 0 1 2 3 4 5 6 7 9 10 11 12 13 14 15 16
     flags dual_port init
     init_params INITVAL_ count 64 digits 2 rows 16 slot 20
-    port rw clk=CLKA en=CEA addr=ADA din=DIA dout=DOA we=WEA rst=RSTA
     port rw clk=CLKB en=CEB addr=ADB din=DIB dout=DOB we=WEB rst=RSTB
+    port rw clk=CLKA en=CEA addr=ADA din=DIA dout=DOA we=WEA rst=RSTA
   end
   dsp MULT18X18D a 18 b 18 p 36 accumulator stages 3 port a=A b=B c=C p=P clk=CLK0
   io_standard LVCMOS33 vccio 3.3 drive 4,8,12,16,20 slew slow,fast
@@ -385,8 +397,8 @@ device ecp5-45f-CABGA381
     mode 1 16384 param DATA_WIDTH_A=1 DATA_WIDTH_B=1 init low 0 1 2 3 4 5 6 7 9 10 11 12 13 14 15 16
     flags dual_port init
     init_params INITVAL_ count 64 digits 2 rows 16 slot 20
-    port rw clk=CLKA en=CEA addr=ADA din=DIA dout=DOA we=WEA rst=RSTA
     port rw clk=CLKB en=CEB addr=ADB din=DIB dout=DOB we=WEB rst=RSTB
+    port rw clk=CLKA en=CEA addr=ADA din=DIA dout=DOA we=WEA rst=RSTA
   end
   dsp MULT18X18D a 18 b 18 p 36 accumulator stages 3 port a=A b=B c=C p=P clk=CLK0
   io_standard LVCMOS33 vccio 3.3 drive 4,8,12,16,20 slew slow,fast

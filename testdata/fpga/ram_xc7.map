@@ -8,9 +8,12 @@ io:
   raddr (10 bits) -> IBUF
   wdata (16 bits) -> IBUF
   rdata (16 bits) -> OBUF
+clocks:
+  clk (2 clock pins) -> BUFG
 logic:
   0 LUTs, depth 0
 netlist:
+  1 x BUFG
   38 x IBUF
   16 x OBUF
   1 x RAMB18E1

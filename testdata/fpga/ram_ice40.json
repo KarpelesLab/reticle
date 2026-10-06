@@ -38,11 +38,11 @@
           },
           "connections": {
             "RADDR": [ 49, 50, 51, 52, 53, 54, 55, 56, 57, "0", "0" ],
-            "RCLK": [ 38 ],
+            "RCLK": [ 81 ],
             "RE": [ "1" ],
             "RCLKE": [ "1" ],
             "WADDR": [ 40, 41, 42, 43, 44, 45, 46, 47, 48, "0", "0" ],
-            "WCLK": [ 38 ],
+            "WCLK": [ 81 ],
             "WE": [ 39 ],
             "WCLKE": [ 39 ],
             "WDATA": [ 58, "0", 59, "0", 60, "0", 61, "0", 62, "0", 63, "0", 64, "0", 65 ],
@@ -702,6 +702,20 @@
             "D_OUT_0": [ 73 ],
             "PACKAGE_PIN": [ 37 ]
           }
+        },
+        "clk$gbuf": {
+          "hide_name": 0,
+          "type": "SB_GB",
+          "parameters": {},
+          "attributes": {},
+          "port_directions": {
+            "USER_SIGNAL_TO_GLOBAL_BUFFER": "input",
+            "GLOBAL_BUFFER_OUTPUT": "output"
+          },
+          "connections": {
+            "USER_SIGNAL_TO_GLOBAL_BUFFER": [ 38 ],
+            "GLOBAL_BUFFER_OUTPUT": [ 81 ]
+          }
         }
       },
       "netnames": {
@@ -948,6 +962,11 @@
         "rdata$pin7": {
           "hide_name": 0,
           "bits": [ 37 ],
+          "attributes": {}
+        },
+        "clk$gb": {
+          "hide_name": 0,
+          "bits": [ 81 ],
           "attributes": {}
         }
       }

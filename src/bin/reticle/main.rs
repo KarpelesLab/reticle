@@ -2464,6 +2464,26 @@ fn write_ecp5_bitstream(
     let rams = fabric
         .configure_lutram(design, top, &netlist, &placement, &graph, &mut tiles)
         .map_err(|e| e.to_string())?;
+    // A block RAM is not a slice writ large: its settings are spread over
+    // its own tile and the two east of it, and its *contents* are not in
+    // the configuration memory at all — they arrive as their own commands
+    // in the stream. See `TrellisFabric::configure_bram`.
+    let brams = fabric
+        .configure_bram(
+            design, top, device, &netlist, &placement, &graph, &mut tiles,
+        )
+        .map_err(|e| e.to_string())?;
+    if !brams.overlaps.is_empty() {
+        return Err(format!(
+            "{} pair(s) of block RAMs cannot both be used, so nothing was written: {}. The two \
+             top data bits of each port of a block RAM are the same interconnect wires as the two \
+             bottom bits of the block two columns east, so an 18-bit block sterilises its \
+             eastern neighbour. Two ways out: narrow the memory's mode, or keep the blocks \
+             apart. See docs/fpga-trellis.md",
+            brams.overlaps.len(),
+            brams.overlaps.join("; ")
+        ));
+    }
     // A clock that came through general routing routes, verifies and
     // configures, and its skew is nobody's model. Refusing is the only
     // thing that makes `clock_node_costs`' preference a guarantee.
@@ -2488,7 +2508,11 @@ fn write_ecp5_bitstream(
         );
     }
 
-    let stream = fabric.stream(&tiles, speed).map_err(|e| e.to_string())?;
+    let mut stream = fabric.stream(&tiles, speed).map_err(|e| e.to_string())?;
+    // One initialisation block per block RAM, which `ecppack` writes even
+    // when the contents are all zero.
+    let blocks = brams.blocks.len();
+    stream.bram = brams.blocks;
     laps.lap("assemble the bitstream");
 
     // Two checks on the finished image, both of them exact, both of them
@@ -2583,11 +2607,17 @@ fn write_ecp5_bitstream(
         .map(|(kind, used, total)| format!("{used}/{total} {kind}"))
         .collect::<Vec<_>>()
         .join(", ");
-    let clocked = if ffs == 0 {
+    // A design with no flip-flop can still be clocked: a block RAM reads
+    // and writes on an edge, and this is the line that says its clock
+    // reached a global network. Counting the pins the check examined rather
+    // than the flip-flops is what makes it say so.
+    let clock_pins: usize = clocks.networks.values().sum();
+    let clocked = if clock_pins == 0 {
         "note: nothing in this design is clocked, so no global clock network was used\n".to_owned()
     } else {
         format!(
-            "note: {ffs} flip-flop(s), every clock on a global network: {}\n",
+            "note: {ffs} flip-flop(s), {rams} distributed RAM(s) and {blocks} block RAM(s), every \
+             clock pin on a global network: {}\n",
             clocks
                 .networks
                 .iter()
@@ -2598,8 +2628,8 @@ fn write_ecp5_bitstream(
     };
     Ok(format!(
         "note: wrote {path}, {} byte(s) compressed, {} configuration bit(s) set, {pads} pad(s), \
-         {luts} lookup table(s), {ffs} flip-flop(s) and {rams} distributed RAM(s) configured, \
-         {placed}\n\
+         {luts} lookup table(s), {ffs} flip-flop(s), {rams} distributed RAM(s) and {blocks} \
+         block RAM(s) configured, {placed}\n\
          note: routed {} of {} signal(s) with {} pip(s) over {} wire(s), and every sink was \
          walked back to its driver\n\
          {clocked}\

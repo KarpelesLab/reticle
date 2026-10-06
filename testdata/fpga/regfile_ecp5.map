@@ -10,10 +10,13 @@ io:
   ra2 (5 bits) -> TRELLIS_IO
   rd1 (32 bits) -> TRELLIS_IO
   rd2 (32 bits) -> TRELLIS_IO
+clocks:
+  clk (8 clock pins) -> DCCA
 notes:
   memory `regs` has 2 read ports and one `DP16KD` serves one, so its contents are held in 2 copies written together
 logic:
   0 LUTs, depth 0
 netlist:
+  1 x DCCA
   4 x DP16KD
   113 x TRELLIS_IO

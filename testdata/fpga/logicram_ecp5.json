@@ -45,7 +45,7 @@
             "DO3": "output"
           },
           "connections": {
-            "WCK": [ 28 ],
+            "WCK": [ 54 ],
             "WRE": [ 29 ],
             "WAD0": [ 30 ],
             "WAD1": [ 31 ],
@@ -96,7 +96,7 @@
             "DO3": "output"
           },
           "connections": {
-            "WCK": [ 28 ],
+            "WCK": [ 54 ],
             "WRE": [ 29 ],
             "WAD0": [ 30 ],
             "WAD1": [ 31 ],
@@ -587,6 +587,22 @@
             "I": [ 53 ],
             "B": [ 27 ]
           }
+        },
+        "clk$gbuf": {
+          "hide_name": 0,
+          "type": "DCCA",
+          "parameters": {},
+          "attributes": {},
+          "port_directions": {
+            "CLKI": "input",
+            "CE": "input",
+            "CLKO": "output"
+          },
+          "connections": {
+            "CLKI": [ 28 ],
+            "CE": [ "1" ],
+            "CLKO": [ 54 ]
+          }
         }
       },
       "netnames": {
@@ -818,6 +834,11 @@
         "rdata$pin7": {
           "hide_name": 0,
           "bits": [ 27 ],
+          "attributes": {}
+        },
+        "clk$gb": {
+          "hide_name": 0,
+          "bits": [ 54 ],
           "attributes": {}
         }
       }

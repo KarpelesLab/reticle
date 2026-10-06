@@ -47,6 +47,7 @@ module ram16
   net %rdata$pin5 u1 wire
   net %rdata$pin6 u1 wire
   net %rdata$pin7 u1 wire
+  net %clk$gb u1 wire
   port clk in %clk$pad
   port we in %we$pad
   port waddr in %waddr$pad
@@ -61,9 +62,9 @@ module ram16
   assign %rdata = {%mem$rd0_r0_b1_3, %mem$rd0_r0_b1_2, %mem$rd0_r0_b1_1, %mem$rd0_r0_b1_0, %mem$rd0_r0_b0_3, %mem$rd0_r0_b0_2, %mem$rd0_r0_b0_1, %mem$rd0_r0_b0_0}
   assign %rdata$pad = {%rdata$pin7, %rdata$pin6, %rdata$pin5, %rdata$pin4, %rdata$pin3, %rdata$pin2, %rdata$pin1, %rdata$pin0}
   attr memory = "mem"
-  cell mem$dpr0_0_0 blackbox TRELLIS_DPR16X4 #(WCKMUX="WCK", WREMUX="WRE") (WCK=%clk, WRE=%we, WAD0=%waddr[0:0], WAD1=%waddr[1:1], WAD2=%waddr[2:2], WAD3=%waddr[3:3], RAD0=%raddr[0:0], RAD1=%raddr[1:1], RAD2=%raddr[2:2], RAD3=%raddr[3:3], DI0=%wdata[3:0][0:0], DI1=%wdata[3:0][1:1], DI2=%wdata[3:0][2:2], DI3=%wdata[3:0][3:3]) -> (DO0=%mem$rd0_r0_b0_0, DO1=%mem$rd0_r0_b0_1, DO2=%mem$rd0_r0_b0_2, DO3=%mem$rd0_r0_b0_3)
+  cell mem$dpr0_0_0 blackbox TRELLIS_DPR16X4 #(WCKMUX="WCK", WREMUX="WRE") (WCK=%clk$gb, WRE=%we, WAD0=%waddr[0:0], WAD1=%waddr[1:1], WAD2=%waddr[2:2], WAD3=%waddr[3:3], RAD0=%raddr[0:0], RAD1=%raddr[1:1], RAD2=%raddr[2:2], RAD3=%raddr[3:3], DI0=%wdata[3:0][0:0], DI1=%wdata[3:0][1:1], DI2=%wdata[3:0][2:2], DI3=%wdata[3:0][3:3]) -> (DO0=%mem$rd0_r0_b0_0, DO1=%mem$rd0_r0_b0_1, DO2=%mem$rd0_r0_b0_2, DO3=%mem$rd0_r0_b0_3)
   attr memory = "mem"
-  cell mem$dpr0_0_1 blackbox TRELLIS_DPR16X4 #(WCKMUX="WCK", WREMUX="WRE") (WCK=%clk, WRE=%we, WAD0=%waddr[0:0], WAD1=%waddr[1:1], WAD2=%waddr[2:2], WAD3=%waddr[3:3], RAD0=%raddr[0:0], RAD1=%raddr[1:1], RAD2=%raddr[2:2], RAD3=%raddr[3:3], DI0=%wdata[7:4][0:0], DI1=%wdata[7:4][1:1], DI2=%wdata[7:4][2:2], DI3=%wdata[7:4][3:3]) -> (DO0=%mem$rd0_r0_b1_0, DO1=%mem$rd0_r0_b1_1, DO2=%mem$rd0_r0_b1_2, DO3=%mem$rd0_r0_b1_3)
+  cell mem$dpr0_0_1 blackbox TRELLIS_DPR16X4 #(WCKMUX="WCK", WREMUX="WRE") (WCK=%clk$gb, WRE=%we, WAD0=%waddr[0:0], WAD1=%waddr[1:1], WAD2=%waddr[2:2], WAD3=%waddr[3:3], RAD0=%raddr[0:0], RAD1=%raddr[1:1], RAD2=%raddr[2:2], RAD3=%raddr[3:3], DI0=%wdata[7:4][0:0], DI1=%wdata[7:4][1:1], DI2=%wdata[7:4][2:2], DI3=%wdata[7:4][3:3]) -> (DO0=%mem$rd0_r0_b1_0, DO1=%mem$rd0_r0_b1_1, DO2=%mem$rd0_r0_b1_2, DO3=%mem$rd0_r0_b1_3)
   attr port = "clk"
   attr pin = "G2"
   attr io_standard = "LVCMOS33"
@@ -120,4 +121,5 @@ module ram16
   cell rdata$io6 blackbox TRELLIS_IO #(DIR="OUTPUT") (I=%rdata[6:6]) -> (B=%rdata$pin6)
   attr port = "rdata"
   cell rdata$io7 blackbox TRELLIS_IO #(DIR="OUTPUT") (I=%rdata[7:7]) -> (B=%rdata$pin7)
+  cell clk$gbuf blackbox DCCA (CLKI=%clk, CE=1'd1) -> (CLKO=%clk$gb)
 end

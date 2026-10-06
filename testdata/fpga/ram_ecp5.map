@@ -8,8 +8,11 @@ io:
   raddr (9 bits) -> TRELLIS_IO
   wdata (8 bits) -> TRELLIS_IO
   rdata (8 bits) -> TRELLIS_IO
+clocks:
+  clk (2 clock pins) -> DCCA
 logic:
   0 LUTs, depth 0
 netlist:
+  1 x DCCA
   1 x DP16KD
   36 x TRELLIS_IO

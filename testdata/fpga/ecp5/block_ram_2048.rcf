@@ -1,0 +1,57 @@
+# Every port of `testdata/fpga/ecp5/block_ram_2048.v` on a top-edge ball
+# of an LFE5U-12F in caBGA-256, in the order Project Trellis' own
+# `iodb.json` lists them across the die: column ascending, PIO A before
+# PIO B. Nothing here is about a board — no board has this design on it —
+# and the only thing that matters about the assignment is that it is
+# fixed, so that the placement the test measures is the same on every run.
+#
+# The top edge is the one this backend describes with two PIOs a position
+# (56 balls of the package are on it), and bank 1's rail is 3.3 V, hence
+# LVCMOS33 throughout. See `docs/fpga-trellis.md`.
+#
+# `clk` is first on purpose: it is the one signal that has to leave its pad
+# through a clock buffer and travel the global network, and it reaches both
+# ports of both block RAMs — `CLKA` and `CLKB` of each — which is four
+# clock pins on one net.
+
+set_io -io_standard LVCMOS33 clk A2
+set_io -io_standard LVCMOS33 we B3
+set_io -io_standard LVCMOS33 addr[0] A3
+set_io -io_standard LVCMOS33 addr[1] A4
+set_io -io_standard LVCMOS33 addr[2] E4
+set_io -io_standard LVCMOS33 addr[3] D4
+set_io -io_standard LVCMOS33 addr[4] C4
+set_io -io_standard LVCMOS33 addr[5] B4
+set_io -io_standard LVCMOS33 addr[6] E5
+set_io -io_standard LVCMOS33 addr[7] D5
+set_io -io_standard LVCMOS33 addr[8] C5
+set_io -io_standard LVCMOS33 addr[9] B5
+set_io -io_standard LVCMOS33 addr[10] A5
+set_io -io_standard LVCMOS33 wdata[0] A6
+set_io -io_standard LVCMOS33 wdata[1] E6
+set_io -io_standard LVCMOS33 wdata[2] D6
+set_io -io_standard LVCMOS33 wdata[3] C6
+set_io -io_standard LVCMOS33 wdata[4] B6
+set_io -io_standard LVCMOS33 wdata[5] E7
+set_io -io_standard LVCMOS33 wdata[6] D7
+set_io -io_standard LVCMOS33 wdata[7] C7
+set_io -io_standard LVCMOS33 rdata[0] B7
+set_io -io_standard LVCMOS33 rdata[1] A7
+set_io -io_standard LVCMOS33 rdata[2] A8
+set_io -io_standard LVCMOS33 rdata[3] E8
+set_io -io_standard LVCMOS33 rdata[4] D8
+set_io -io_standard LVCMOS33 rdata[5] C8
+set_io -io_standard LVCMOS33 rdata[6] B8
+set_io -io_standard LVCMOS33 rdata[7] B9
+set_io -io_standard LVCMOS33 romdata[0] C9
+set_io -io_standard LVCMOS33 romdata[1] D9
+set_io -io_standard LVCMOS33 romdata[2] E9
+set_io -io_standard LVCMOS33 romdata[3] A9
+set_io -io_standard LVCMOS33 romdata[4] A10
+set_io -io_standard LVCMOS33 romdata[5] B10
+set_io -io_standard LVCMOS33 romdata[6] C10
+set_io -io_standard LVCMOS33 romdata[7] D10
+
+
+region topclock 31 0 32 0
+assign *gbuf* region topclock

@@ -963,6 +963,220 @@ impl TrellisDatabase {
             dprams.insert(*index, DpRamBits { mode });
         }
 
+        // ---- the block RAM ----
+        //
+        // A `DP16KD` is 18 kbit, true dual port, and it is **not** a slice
+        // writ large: the rule a distributed RAM taught — "one tile, one
+        // bit, three slices" — does not transfer and a guess by analogy
+        // would have been wrong. What the database says, read rather than
+        // reasoned about:
+        //
+        // - the EBR row of this die is nine tile types repeating,
+        //   `MIB_EBR0` to `MIB_EBR8`, and they hold **four** blocks
+        //   between them;
+        // - exactly four of the nine — `MIB_EBR0`, `MIB_EBR2`, `MIB_EBR4`
+        //   and `MIB_EBR6` — carry the 116 `.fixed_conn` records that
+        //   join a block's pins to the interconnect. Those are the tiles
+        //   that own a block, and the bel goes on them;
+        // - a block's **fields** are spread over its own tile and the two
+        //   east of it, and a single field's bits straddle the boundary.
+        //   `EBR1.DP16KD.DATA_WIDTH_B` is three bits of `MIB_EBR2` and a
+        //   fourth of `MIB_EBR4`; without that fourth bit the 9-bit and
+        //   18-bit modes are the same pattern. So a block's bits are
+        //   gathered from [`BRAM_SPAN`] positions and each one remembers
+        //   which position it belongs to;
+        // - which of the four a tile's block is, is read off the field
+        //   names: a tile that owns a block declares `EBR<n>.<field>` for
+        //   its own `n` and, where the fuzzer found a leftover bit, for
+        //   `n - 1` as well, so the block is the **highest** index the
+        //   tile names.
+        //
+        // The four blocks of a group overlap in the interconnect: the two
+        // top data bits of each of a block's ports are the same wires as
+        // the two bottom bits of the block two columns east. That is in
+        // this model — the pins are declared and the routing graph has
+        // them — and `configure_bram` refuses the one arrangement where it
+        // bites. `docs/fpga-trellis.md` says what is and is not settled
+        // about it.
+        let mut brams: Vec<(usize, BramSite)> = Vec::new();
+        // Per candidate tile type: the bel it would get, and whether every
+        // position of that type turned out complete. A bel is declared only
+        // when they all did, because a site whose bits this flow cannot
+        // write would place and configure nothing.
+        type BramCandidate = (String, Vec<(String, super::arch::WireRef)>, bool);
+        let mut bram_bel: BTreeMap<usize, BramCandidate> = BTreeMap::new();
+        for (at, list) in &members {
+            let Some(index) = comp_at.get(at).and_then(|c| type_of.get(*c)).copied() else {
+                continue;
+            };
+            // Which of this position's tiles owns a block RAM's wires.
+            let Some(owner) = list.iter().find(|ty| {
+                self.types.get(ty.as_str()).is_some_and(|db| {
+                    db.fixed.iter().any(|(sink, source)| {
+                        sink.ends_with(BRAM_WIRE.1) || source.ends_with(BRAM_WIRE.1)
+                    })
+                })
+            }) else {
+                continue;
+            };
+            let Some(db) = self.types.get(owner.as_str()) else {
+                continue;
+            };
+            // The block's index inside its group, off the field names.
+            let mut which: Option<u32> = None;
+            for (field, _, _) in &db.enums {
+                let Some(rest) = field.strip_prefix("EBR") else {
+                    continue;
+                };
+                let digits: String = rest.chars().take_while(char::is_ascii_digit).collect();
+                if let Ok(n) = digits.parse::<u32>() {
+                    which = Some(which.map_or(n, |had: u32| had.max(n)));
+                }
+            }
+            let Some(which) = which else { continue };
+            let bel = format!("EBR{which}");
+            let prefix_of = format!("EBR{which}.");
+
+            // The pins: the roles are written down, the wires are read out
+            // of this tile's own fixed connections.
+            let mut pins: Vec<(String, super::arch::WireRef)> = Vec::new();
+            for (role, pin) in bram_pins() {
+                let own = format!("{}{pin}{}", BRAM_WIRE.0, BRAM_WIRE.1);
+                let joined = db
+                    .fixed
+                    .iter()
+                    .find_map(|(sink, source)| {
+                        if *sink == own {
+                            Some(source.as_str())
+                        } else if *source == own {
+                            Some(sink.as_str())
+                        } else {
+                            None
+                        }
+                    })
+                    .and_then(|name| wire_ref(name, prefix, &globals));
+                if let Some(wire) = joined {
+                    pins.push((role, wire));
+                }
+            }
+
+            // The bits, from this position and the two east of it.
+            let mut enums: Vec<(String, String, Vec<PlacedBit>)> = Vec::new();
+            let mut words: Vec<(String, Vec<Vec<PlacedBit>>)> = Vec::new();
+            for dx in 0..BRAM_SPAN {
+                let there = (at.0 + dx, at.1);
+                let Some((windows, _)) = windows_at.get(&there) else {
+                    continue;
+                };
+                for (ty, offset) in windows {
+                    let Some(db) = self.types.get(ty.as_str()) else {
+                        continue;
+                    };
+                    let at_bit = |bit: &parse::DbBit| -> PlacedBit {
+                        (there, ConfigBit::new(offset + bit.frame, bit.bit))
+                    };
+                    for (field, _, options) in &db.enums {
+                        let Some(name) = field.strip_prefix(prefix_of.as_str()) else {
+                            continue;
+                        };
+                        for (value, bits) in options {
+                            let set: Vec<PlacedBit> = bits
+                                .iter()
+                                .filter(|bit| !bit.inverted)
+                                .map(at_bit)
+                                .collect();
+                            match enums
+                                .iter_mut()
+                                .find(|(f, v, _)| f == name && v == value)
+                            {
+                                Some((_, _, had)) => had.extend(set),
+                                None => enums.push((name.to_owned(), value.clone(), set)),
+                            }
+                        }
+                    }
+                    for (field, _, groups) in &db.words {
+                        let Some(name) = field.strip_prefix(prefix_of.as_str()) else {
+                            continue;
+                        };
+                        let here: Vec<Vec<PlacedBit>> = groups
+                            .iter()
+                            .map(|group| {
+                                group
+                                    .iter()
+                                    .filter(|bit| !bit.inverted)
+                                    .map(at_bit)
+                                    .collect()
+                            })
+                            .collect();
+                        match words.iter_mut().find(|(f, _)| f == name) {
+                            // A word can straddle a tile boundary too, and
+                            // `WID` does: `MIB_EBR7` holds four of its nine
+                            // bits and the tile east of it the other five,
+                            // each marking the ones it does not hold `-`.
+                            Some((_, had)) if had.len() == here.len() => {
+                                for (into, from) in had.iter_mut().zip(here) {
+                                    into.extend(from);
+                                }
+                            }
+                            Some(_) => {}
+                            None => words.push((name.to_owned(), here)),
+                        }
+                    }
+                }
+            }
+            enums.sort();
+            words.sort();
+            let site = BramSite {
+                at: *at,
+                bel: bel.clone(),
+                index: which,
+                enums,
+                words,
+            };
+            // Complete enough to configure: every field this flow writes,
+            // every pin the primitive has, and nine `WID` bits.
+            let mut complete = pins.len() == bram_pins().len()
+                && site.has_enum(BRAM_MODE.0)
+                && site.enum_bits(BRAM_MODE.0, BRAM_MODE.1).is_some()
+                && site.enum_bits(BRAM_GSR.0, BRAM_GSR.1).is_some()
+                && site
+                    .word(BRAM_WID)
+                    .is_some_and(|w| w.len() == BRAM_WID_BITS as usize);
+            for field in BRAM_WIDTH {
+                complete &= site.has_enum(field);
+            }
+            for field in BRAM_WRITEMODE.0 {
+                complete &= site.enum_bits(field, BRAM_WRITEMODE.1).is_some();
+            }
+            for field in BRAM_RESET.0 {
+                complete &= site.enum_bits(field, BRAM_RESET.1).is_some();
+            }
+            for letter in BRAM_PORTS {
+                for field in BRAM_TIE_LOW {
+                    let field = field.replace('#', &letter.to_string());
+                    complete &= site.enum_bits(&field, BRAM_INV).is_some();
+                }
+            }
+            let entry = bram_bel.entry(index).or_insert((bel, pins, true));
+            entry.2 &= complete;
+            if complete {
+                brams.push((index, site));
+            }
+        }
+        for (index, (bel, pins, complete)) in &bram_bel {
+            if !complete {
+                continue;
+            }
+            let mut decl = BelDecl::new(bel, "bram");
+            decl.pins = pins.clone();
+            arch.tile_types[*index].bels.push(decl);
+        }
+        let brams: Vec<BramSite> = brams
+            .into_iter()
+            .filter(|(index, _)| bram_bel.get(index).is_some_and(|(_, _, done)| *done))
+            .map(|(_, site)| site)
+            .collect();
+
         // ---- the pads ----
         let Some(pinout) = self.pinouts.iter().find(|p| p.package == options.package) else {
             return Err(TrellisError::NoSuchPackage {
@@ -1133,6 +1347,7 @@ impl TrellisDatabase {
             luts: luts.len(),
             ffs: ffs.len(),
             dprams: dprams.len(),
+            brams: brams.len(),
             clock_networks: clocks.indices.len(),
             references_off_the_grid: off_grid,
         };
@@ -1148,6 +1363,7 @@ impl TrellisDatabase {
             luts,
             ffs,
             dprams,
+            brams,
             clocks,
             clears,
             bank_bits,
@@ -1447,6 +1663,12 @@ pub struct TrellisStats {
     /// is every composition that contains a `PLC2`. One `lutram` bel each,
     /// and so one site per logic tile of the die.
     pub dprams: usize,
+    /// Block RAMs the die has, one per `DP16KD` of the part.
+    ///
+    /// Unlike every other count here this is a number of **sites** and not
+    /// of tile types, because a block RAM's bits are a property of its
+    /// position; see [`BramSite`].
+    pub brams: usize,
     /// Global clock networks the die has.
     pub clock_networks: usize,
     /// Wire references that point off the grid, which is what happens at
@@ -1489,6 +1711,7 @@ impl TrellisStats {
         line("lookup tables", self.luts as u64);
         line("flip-flops", self.ffs as u64);
         line("distributed RAM tile types", self.dprams as u64);
+        line("block RAMs", self.brams as u64);
         line(
             "references off the grid",
             self.references_off_the_grid as u64,
@@ -1989,10 +2212,11 @@ pub type ResolvedWire = (String, (u32, u32));
 /// which of them did not come off one at all.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct ClockUse {
-    /// Network index to how many flip-flop clock pins it reached.
+    /// Network index to how many clock pins it reached: a flip-flop's, a
+    /// distributed RAM's write clock, or either port of a block RAM.
     pub networks: BTreeMap<u32, usize>,
-    /// The flip-flops whose clock arrived through general interconnect
-    /// instead, as `<instance> on <site>`.
+    /// The cells whose clock arrived through general interconnect instead,
+    /// as `<instance> on <site>`. A block RAM appears once per port.
     pub off_network: Vec<String>,
 }
 
@@ -2286,6 +2510,319 @@ pub struct DpRamBits {
     /// settings were three bits would still be configured correctly by
     /// setting all of them.
     pub mode: Vec<ConfigBit>,
+}
+
+// ---------------------------------------------------------------------------
+// The block RAM
+// ---------------------------------------------------------------------------
+
+/// How many address pins each port of a `DP16KD` has.
+///
+/// Fourteen, because the array is addressed in units of its **narrowest**
+/// mode: 16384 words of one bit. A wider mode leaves the low pins out and
+/// `src/fpga/devices/ecp5.dev`'s `addr` clause says how many.
+pub const BRAM_ADDR_PINS: u32 = 14;
+
+/// How many data pins each port of a `DP16KD` has, in each direction.
+///
+/// Eighteen: 16 kbit of data and two parity bits, which the narrow modes
+/// skip.
+pub const BRAM_DATA_PINS: u32 = 18;
+
+/// The letter Lattice gives each of a `DP16KD`'s two ports, in the order
+/// `src/fpga/devices/ecp5.dev` lists its `port rw` lines.
+///
+/// That order is what [`super::place`]'s `describe` turns into the `p0_`
+/// and `p1_` prefixes of a block RAM's pin roles, so it has to agree with
+/// the device file and a test asserts that it does.
+///
+/// **`B` comes first**, and the device file says why at length: the mapper
+/// gives a read port the earliest port line, so listing B first reads on
+/// port B and writes on port A, which is what `ecppack` does — and the
+/// alternative cannot be configured, because the database's `EBR<n>.MODE`
+/// record claims `WEAMUX`'s bit as one `DP16KD` wants clear.
+pub const BRAM_PORTS: [char; 2] = ['B', 'A'];
+
+/// The prefix and suffix an EBR's own pin wires carry in a `bits.db`.
+///
+/// A `PLC2` spells a slice's pins `A0_SLICE`; an EBR tile spells a block
+/// RAM's `JADA0_EBR`. The `J` is Project Trellis' mark for a wire that
+/// only ever joins a bel to the interconnect, and the `_EBR` is what makes
+/// a tile recognisable as one that **owns** a block RAM rather than one
+/// that merely holds some of its bits — which is the distinction the whole
+/// model turns on, since nine tile types hold the bits of four blocks.
+pub const BRAM_WIRE: (&str, &str) = ("J", "_EBR");
+
+/// The field that puts an EBR into true dual-port mode, and the value.
+///
+/// `PDPW16KD` (pseudo dual port, 36 bits wide on one side) is the other
+/// thing an EBR can be and this flow does not build one.
+pub const BRAM_MODE: (&str, &str) = ("MODE", "DP16KD");
+
+/// The two fields carrying each port's width, indexed the way
+/// [`BRAM_PORTS`] is.
+pub const BRAM_WIDTH: [&str; 2] = ["DP16KD.DATA_WIDTH_A", "DP16KD.DATA_WIDTH_B"];
+
+/// The two fields carrying each port's read-during-write behaviour, and
+/// the value `ecppack` writes for all 53 block RAMs of this board's own
+/// bitstreams.
+///
+/// It is a don't-care for what this flow builds — a port of a block this
+/// flow emits either reads or writes, never both — so matching the vendor
+/// is the only reason to prefer one, and it is reason enough.
+pub const BRAM_WRITEMODE: ([&str; 2], &str) = (
+    ["DP16KD.WRITEMODE_A", "DP16KD.WRITEMODE_B"],
+    "READBEFOREWRITE",
+);
+
+/// `EBR<n>.GSR`, and the value that keeps the global set/reset out of a
+/// memory's output registers. `ecppack` writes it for every block.
+pub const BRAM_GSR: (&str, &str) = ("GSR", "DISABLED");
+
+/// The two reset fields and the value `ecppack` writes for both.
+pub const BRAM_RESET: ([&str; 2], &str) = (["RESETMODE", "ASYNC_RESET_RELEASE"], "ASYNC");
+
+/// The inverting-mux fields of the two pins a block RAM needs held **low**
+/// when nothing drives them, per port, and the value that does it.
+///
+/// An unrouted input of this fabric reads as a **one** — the hazard
+/// `docs/fpga-trellis.md` opens with — so a reset and an unused write
+/// enable have to be inverted rather than left alone. That is not a
+/// reading: `ecppack` writes `RSTAMUX = INV` and `RSTBMUX = INV` for every
+/// one of the 53 block RAMs in this board's bitstreams and `WEBMUX = INV`
+/// for every one whose B port does not write, while leaving `CEAMUX`,
+/// `CEBMUX`, `OCEAMUX` and `OCEBMUX` alone — and those are exactly the
+/// pins that want a **one** when nothing drives them.
+pub const BRAM_TIE_LOW: [&str; 2] = ["RST#MUX", "WE#MUX"];
+
+/// The pin roles [`BRAM_TIE_LOW`]'s fields belong to, in the same order.
+pub const BRAM_TIE_LOW_PINS: [&str; 2] = ["rst", "we"];
+
+/// The value an inverting mux takes.
+pub const BRAM_INV: &str = "INV";
+
+/// The multi-bit field naming which block-RAM initialisation block of the
+/// bitstream belongs to this EBR.
+///
+/// A block RAM's contents are **not in the configuration memory at all**:
+/// they arrive as their own `LSC_EBR_ADDRESS`/`LSC_EBR_WRITE` commands
+/// (see [`super::ecp5`]), and this nine-bit word is what ties a block to
+/// its data. Row 0 of the `.config` record is the **most significant**
+/// bit, which is measured rather than assumed — see
+/// `what_lattices_own_packer_writes_for_a_block_ram`, which reads the
+/// nine bits of all 53 blocks out of `analyzer.bit` and `facedancer.bit`
+/// and finds exactly the set of initialisation-block indices those files
+/// carry.
+pub const BRAM_WID: &str = "WID";
+
+/// How many bits [`BRAM_WID`] has.
+pub const BRAM_WID_BITS: u32 = 9;
+
+/// The first identifier this flow gives a block RAM, which is the first
+/// one `ecppack` gives.
+///
+/// Measured: `analyzer.bit` has nine block RAMs and its initialisation
+/// blocks are 3 to 11, `facedancer.bit` has forty-four and its are 3 to
+/// 46. nextpnr's `pack_ebr` says the same thing in a comment and this
+/// agrees with it.
+pub const BRAM_FIRST_WID: u32 = 3;
+
+/// How many tiles east of its own an EBR's configuration reaches.
+///
+/// Two, so three positions in all. This is **not** by analogy with
+/// anything: the EBR row of this die is nine tile types repeating
+/// (`MIB_EBR0`..`MIB_EBR8`) and they hold four blocks between them, so a
+/// block's fields are spread over its own tile and the two east of it and
+/// a field's bits can straddle the boundary. `EBR1.DP16KD.DATA_WIDTH_B`
+/// is three bits of `MIB_EBR2` and a fourth of `MIB_EBR4`, two tiles
+/// away, and without that fourth bit the 9-bit and 18-bit modes are
+/// indistinguishable.
+pub const BRAM_SPAN: u32 = 3;
+
+/// The `(pin role, Lattice pin)` table of a `DP16KD`.
+///
+/// Only the names are written down; **which wire each pin reaches is read
+/// out of the tile's own `.fixed_conn` records**, which is the difference
+/// [`sites`]'s header is about. `JADA0_EBR <- JC4` says the first address
+/// pin of port A is the interconnect's `JC4`, and `JF0 <- JDOA0_EBR` says
+/// the first read-data pin drives `JF0`; this table only has to know that
+/// `ADA0` is `p0_addr0`.
+///
+/// The roles are `p<port>_<role>` because that is what
+/// [`super::place`]'s `describe` builds from a `bram` line's `port rw`
+/// entries — both ports call their clock `clk`, so the port index has to
+/// be in the role.
+///
+/// `OCEA`/`OCEB` and `CSA0`..`CSB2` are deliberately **absent**. They are
+/// six more wires the tile joins, and every one of them wants a **one**,
+/// which is what an unrouted wire of this fabric already gives: `ecppack`
+/// leaves all six unrouted in all 53 blocks and writes
+/// `CSDECODE_A = CSDECODE_B = 111` — that is, no bits at all — to match.
+#[must_use]
+pub fn bram_pins() -> Vec<(String, String)> {
+    let mut out = Vec::new();
+    for (port, letter) in BRAM_PORTS.iter().enumerate() {
+        out.push((format!("p{port}_clk"), format!("CLK{letter}")));
+        out.push((format!("p{port}_en"), format!("CE{letter}")));
+        out.push((format!("p{port}_we"), format!("WE{letter}")));
+        out.push((format!("p{port}_rst"), format!("RST{letter}")));
+        for bit in 0..BRAM_ADDR_PINS {
+            out.push((format!("p{port}_addr{bit}"), format!("AD{letter}{bit}")));
+        }
+        for bit in 0..BRAM_DATA_PINS {
+            out.push((format!("p{port}_din{bit}"), format!("DI{letter}{bit}")));
+            out.push((format!("p{port}_dout{bit}"), format!("DO{letter}{bit}")));
+        }
+    }
+    out
+}
+
+/// One bit of a block RAM's configuration: the **position** it belongs to
+/// and the bit inside that position's combined frame numbering.
+///
+/// Every other feature of this backend writes into one position and so
+/// needs no such pair. A block RAM is the first that does not: see
+/// [`BRAM_SPAN`].
+pub type PlacedBit = ((u32, u32), ConfigBit);
+
+/// Where one block RAM's settings are.
+///
+/// Per **position**, not per tile type, which is the thing that makes this
+/// unlike every other bel of this backend. A `DP16KD`'s fields live in its
+/// own tile and the two east of it ([`BRAM_SPAN`]), those three positions
+/// hold different compositions, and the compositions differ from block to
+/// block: the easternmost tile of the fourth block of a group is
+/// `MIB_EBR8` for fifty-two of this die's fifty-six blocks and an
+/// `EBR_SPINE_*` or an `EBR_CMUX_*` for the other four. A frame offset
+/// computed for one of those is wrong for the other, so there is nothing a
+/// tile type could usefully hold.
+///
+/// Every field of every one of the three tiles is kept, rather than only
+/// the ones this flow writes. That is on purpose: it is what lets
+/// `what_lattices_own_packer_writes_for_a_block_ram` ask what `ecppack`
+/// wrote for a field this flow leaves alone, which is how the rows about
+/// `CSDECODE`, `CEAMUX` and `REGMODE` in `docs/fpga-trellis.md` were
+/// answered.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct BramSite {
+    /// The position of the tile that owns the block's **wires**, which is
+    /// where its bel is.
+    pub at: (u32, u32),
+    /// The bel's name, `EBR<n>` for the block's index inside its group.
+    pub bel: String,
+    /// Which of its group's four blocks this is, which is what names
+    /// every one of its fields.
+    pub index: u32,
+    /// Every enumerated field the three tiles declare for this block, as
+    /// `(field, value, bits)` with the `EBR<n>.` prefix stripped. Bits a
+    /// value wants **clear** are dropped, for the reason
+    /// [`TrellisDatabase::locate_field`] gives.
+    pub enums: Vec<(String, String, Vec<PlacedBit>)>,
+    /// Every multi-bit field, as `(field, groups)`, one group per bit **in
+    /// the order the database lists them** — which for [`BRAM_WID`] is
+    /// most significant first.
+    pub words: Vec<(String, Vec<Vec<PlacedBit>>)>,
+}
+
+impl BramSite {
+    /// The bits one value of one enumerated field needs set.
+    #[must_use]
+    pub fn enum_bits(&self, field: &str, value: &str) -> Option<&[PlacedBit]> {
+        self.enums
+            .iter()
+            .find(|(f, v, _)| f == field && v == value)
+            .map(|(_, _, bits)| bits.as_slice())
+    }
+
+    /// True when the three tiles declare that field at all.
+    #[must_use]
+    pub fn has_enum(&self, field: &str) -> bool {
+        self.enums.iter().any(|(f, _, _)| f == field)
+    }
+
+    /// The bit groups of a multi-bit field, in database order.
+    #[must_use]
+    pub fn word(&self, field: &str) -> Option<&[Vec<PlacedBit>]> {
+        self.words
+            .iter()
+            .find(|(f, _)| f == field)
+            .map(|(_, groups)| groups.as_slice())
+    }
+}
+
+/// How many bits one word of a block RAM's initialisation stream holds.
+///
+/// Nine, not eight: the array is 2048 words of nine bits — 16 kbit of data
+/// and 2 kbit of parity — and the stream's own packing is nine words to
+/// nine bytes ([`super::ecp5::BRAM_WORDS`] and `pack_bram_row`). So a
+/// **row** of the contents, which is 18 bits, is two of these.
+pub const BRAM_INIT_WORD_BITS: u32 = 9;
+
+/// What [`TrellisFabric::configure_bram`] produced.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct BramConfig {
+    /// One initialisation block per block RAM, in the order the blocks were
+    /// given their [`BRAM_WID`]s. Written even when the contents are all
+    /// zero, because `ecppack` writes one for every block too.
+    pub blocks: Vec<super::ecp5::BramBlock>,
+    /// Pairs of block RAMs that cannot both be used, as
+    /// `X<x>Y<y> is 18 bits wide and X<x>Y<y> is in use`.
+    ///
+    /// See [`TrellisFabric::configure_bram`]: the two top data bits of each
+    /// of a block's ports are the same interconnect wires as the two bottom
+    /// bits of the block two columns east. A non-empty list means nothing
+    /// was written and the caller must say so.
+    pub overlaps: Vec<String>,
+}
+
+/// One block RAM's initialisation stream, from the `INITVAL_<nn>`
+/// parameters the technology mapper put on its cell.
+///
+/// The layout is the device file's — `init_params` says how many
+/// parameters there are, how many rows each holds and how wide a row's
+/// slot is — and the only thing added here is that a row is **two** words
+/// of the stream, the low one in its bottom [`BRAM_INIT_WORD_BITS`]. That
+/// last step is what no vendor bitstream in this tree can confirm, because
+/// all 53 of theirs are zero; [`TrellisFabric::configure_bram`] says what
+/// it rests on instead.
+#[must_use]
+pub fn bram_init_words(
+    device: &super::Device,
+    primitive: &str,
+    params: Option<&crate::ir::Attrs>,
+) -> Vec<u16> {
+    let mut words = vec![0u16; super::ecp5::BRAM_WORDS];
+    let Some(shape) = device.block_rams.iter().find(|s| s.name == primitive) else {
+        return words;
+    };
+    let Some(init) = shape.init_params.as_ref() else {
+        return words;
+    };
+    for index in 0..init.count {
+        let value = params.and_then(|p| p.get(&init.name(index)));
+        if value.is_none() {
+            continue;
+        }
+        for row in 0..init.rows {
+            let at_row = u64::from(index) * u64::from(init.rows) + u64::from(row);
+            let Ok(first) = usize::try_from(at_row * 2) else {
+                continue;
+            };
+            for half in 0..2u32 {
+                let mut word = 0u16;
+                for bit in 0..BRAM_INIT_WORD_BITS {
+                    let at = row * init.slot + half * BRAM_INIT_WORD_BITS + bit;
+                    if super::bitstream::param_bit(value, at) {
+                        word |= 1 << bit;
+                    }
+                }
+                if let Some(slot) = words.get_mut(first + half as usize) {
+                    *slot = word;
+                }
+            }
+        }
+    }
+    words
 }
 
 /// The letter Project Trellis names slice `index` with.
@@ -3077,6 +3614,13 @@ pub struct TrellisFabric {
     /// live in [`TrellisFabric::luts`], because a slice in `DPRAM` mode
     /// *is* its lookup tables.
     pub dprams: BTreeMap<usize, DpRamBits>,
+    /// Where every block RAM's settings are, one entry per `DP16KD` of the
+    /// part, in position order.
+    ///
+    /// By position and not by tile type, which is the one thing about a
+    /// block RAM that is unlike everything else this fabric holds; see
+    /// [`BramSite`].
+    pub brams: Vec<BramSite>,
     /// The global clock network, and the joins it needed; see
     /// [`ClockNetwork`].
     pub clocks: ClockNetwork,
@@ -3581,6 +4125,186 @@ impl TrellisFabric {
         Ok(done)
     }
 
+    /// Writes every block RAM's settings, and returns the initialisation
+    /// blocks its contents go in.
+    ///
+    /// # Everything `ecppack` writes for a block RAM, in full
+    ///
+    /// Read out of Great Scott Gadgets' own bitstreams for this board, at
+    /// the absolute frame positions this flow computes, by
+    /// `what_lattices_own_packer_writes_for_a_block_ram`. There are
+    /// **nine** block RAMs in `analyzer.bit`, **none** in `selftest.bit`
+    /// and **forty-four** in `facedancer.bit`, and the list below is
+    /// everything their packer sets for each one — not a summary of it:
+    ///
+    /// | | |
+    /// |---|---|
+    /// | `EBR<n>.MODE` | `DP16KD`, which is **five bits spread over two tiles** — one in the block's own and four in the one east of it |
+    /// | `EBR<n>.DP16KD.DATA_WIDTH_A`, `..._B` | the mode's width. `facedancer.bit` is 9 on both ports in all forty-four; `analyzer.bit` has 4s as well |
+    /// | `EBR<n>.DP16KD.WRITEMODE_A`, `..._B` | `READBEFOREWRITE`, in all 53 |
+    /// | `EBR<n>.GSR` | `DISABLED`, in all 53 |
+    /// | `EBR<n>.RESETMODE`, `EBR<n>.ASYNC_RESET_RELEASE` | `ASYNC`, in all 53 |
+    /// | `EBR<n>.RSTAMUX`, `EBR<n>.RSTBMUX` | `INV`, in all 53 — the reset has to be held **low** and an unrouted wire of this fabric reads as a **one** |
+    /// | `EBR<n>.WEBMUX` | `INV`, in all 53. `WEAMUX` is **never** written, because their mapping writes on port A and reads on port B. This flow is the other way round, so it writes `WEAMUX` instead |
+    /// | `EBR<n>.WID` | nine bits, and the number they spell is exactly the index of one of the file's own initialisation blocks: 3 to 11 for analyzer's nine, 3 to 46 for facedancer's forty-four |
+    /// | `EBR<n>.CSDECODE_A`, `..._B` | **never written**, which is `111`, which is what the three chip-select wires read when nothing drives them |
+    /// | `EBR<n>.CEAMUX`, `CEBMUX`, `OCEAMUX`, `OCEBMUX` | never written. Those four pins want a **one** and get one for free |
+    /// | `EBR<n>.CLKAMUX`, `CLKBMUX`, `ADA<n>MUX`, `ADB<n>MUX` | never written: the default polarity |
+    /// | `EBR<n>.REGMODE_A`, `..._B` | never written, so `NOREG`: the output register is not used |
+    /// | The contents | a `LSC_EBR_WRITE` block of 2048 nine-bit words per block RAM, **written even when it is all zeros** — and it is all zeros in all 53 |
+    ///
+    /// So an empty block RAM costs eleven to fifteen configuration bits,
+    /// depending on the width, plus a 2.3 kB initialisation block in the
+    /// stream. That is `ecppack`'s number as well as this flow's.
+    ///
+    /// # What the contents' ordering rests on, which is not a bitstream
+    ///
+    /// All 53 of the vendor's initialisation blocks are **zero**, exactly
+    /// as all 111 of their distributed RAMs are empty, so they say nothing
+    /// about where a word goes. What this writes is the layout
+    /// `src/fpga/devices/ecp5.dev` states — 1024 rows of 18 bits in 20-bit
+    /// slots, sixteen to an `INITVAL_<nn>` parameter, two nine-bit words to
+    /// a row, the low word in bits 8..0 — and the only thing that makes it
+    /// self-consistent rather than merely plausible is that the block's
+    /// own 9-bit mode addresses the array in exactly those units, so word
+    /// *w* of the stream is address *w* of a 9-bit port. **A part is the
+    /// only thing that can settle it**; `docs/fpga-trellis.md` names the
+    /// experiment.
+    ///
+    /// # Errors
+    ///
+    /// [`super::bitstream::BitstreamError`] when a bit falls outside the
+    /// tile it belongs to, which would mean the grid and the database
+    /// disagree.
+    pub fn configure_bram(
+        &self,
+        design: &crate::ir::Design,
+        module: crate::ir::ModuleId,
+        device: &super::Device,
+        netlist: &super::place::Netlist,
+        placement: &super::place::Placement,
+        graph: &super::arch::RoutingGraph,
+        bits: &mut super::bitstream::Bitstream,
+    ) -> Result<BramConfig, super::bitstream::BitstreamError> {
+        let mut out = BramConfig::default();
+        let Some(m) = design.modules.get(module) else {
+            return Ok(out);
+        };
+        let mut wid = BRAM_FIRST_WID;
+        for (index, instance) in netlist.instances.iter().enumerate() {
+            if instance.kind != "bram" {
+                continue;
+            }
+            let Some(site) = placement.site_of(index) else {
+                continue;
+            };
+            let site = &graph.sites[site];
+            let Some(bram) = self.brams.iter().find(|b| b.at == site.tile) else {
+                continue;
+            };
+            let params = m.cells.get(instance.cell).map(|cell| &cell.params);
+            let set = |field: &str, value: &str,
+                           bits: &mut super::bitstream::Bitstream|
+             -> Result<(), super::bitstream::BitstreamError> {
+                for (at, bit) in bram.enum_bits(field, value).unwrap_or_default() {
+                    bits.set(*at, *bit)?;
+                }
+                Ok(())
+            };
+            set(BRAM_MODE.0, BRAM_MODE.1, bits)?;
+            set(BRAM_GSR.0, BRAM_GSR.1, bits)?;
+            for field in BRAM_RESET.0 {
+                set(field, BRAM_RESET.1, bits)?;
+            }
+            for field in BRAM_WRITEMODE.0 {
+                set(field, BRAM_WRITEMODE.1, bits)?;
+            }
+            // Each port's width, out of the parameter the device file's
+            // `mode` line sets. The parameter is the field's own last
+            // component, so nothing here names `DATA_WIDTH_A`.
+            for field in BRAM_WIDTH {
+                let name = field.rsplit('.').next().unwrap_or(field);
+                let Some(value) = params
+                    .and_then(|p| p.get(name))
+                    .and_then(crate::ir::AttrValue::as_int)
+                else {
+                    continue;
+                };
+                set(field, &value.to_string(), bits)?;
+            }
+            // A reset and a write enable nothing drives have to be held
+            // low, and this fabric's unrouted wires read as ones.
+            for (port, letter) in BRAM_PORTS.iter().enumerate() {
+                for (role, field) in BRAM_TIE_LOW_PINS.iter().zip(BRAM_TIE_LOW) {
+                    let driven = netlist.pins.iter().any(|pin| {
+                        pin.instance == index
+                            && pin.role == format!("p{port}_{role}")
+                            && pin.signal.is_some()
+                    });
+                    if !driven {
+                        set(&field.replace('#', &letter.to_string()), BRAM_INV, bits)?;
+                    }
+                }
+            }
+            // The identifier that ties this block to its contents, most
+            // significant bit first.
+            let Some(groups) = bram.word(BRAM_WID) else {
+                continue;
+            };
+            for (shift, group) in groups.iter().enumerate() {
+                let bit = BRAM_WID_BITS as usize - 1 - shift;
+                if wid >> bit & 1 == 0 {
+                    continue;
+                }
+                for (at, one) in group {
+                    bits.set(*at, *one)?;
+                }
+            }
+            out.blocks.push(super::ecp5::BramBlock {
+                index: wid,
+                words: bram_init_words(device, &instance.primitive, params),
+            });
+            wid += 1;
+        }
+        // The two top data bits of each of a block's ports are the same
+        // interconnect wires as the two bottom bits of the block two
+        // columns east, so a block in 18-bit mode and its eastern
+        // neighbour cannot both be used. Nothing in the vendor's three
+        // bitstreams exercises 18-bit mode, so there is no artefact to
+        // check a model of it against, and refusing is the honest answer.
+        let placed: Vec<((u32, u32), bool)> = netlist
+            .instances
+            .iter()
+            .enumerate()
+            .filter(|(_, inst)| inst.kind == "bram")
+            .filter_map(|(index, inst)| {
+                let site = placement.site_of(index)?;
+                let wide = BRAM_WIDTH.iter().any(|field| {
+                    let name = field.rsplit('.').next().unwrap_or(field);
+                    m.cells
+                        .get(inst.cell)
+                        .and_then(|cell| cell.params.get(name))
+                        .and_then(crate::ir::AttrValue::as_int)
+                        == Some(i64::from(BRAM_DATA_PINS))
+                });
+                Some((graph.sites[site].tile, wide))
+            })
+            .collect();
+        for (at, wide) in &placed {
+            if !wide {
+                continue;
+            }
+            let east = (at.0 + 2, at.1);
+            if placed.iter().any(|(other, _)| *other == east) {
+                out.overlaps.push(format!(
+                    "X{}Y{} is 18 bits wide and X{}Y{} is in use",
+                    at.0, at.1, east.0, east.1
+                ));
+            }
+        }
+        Ok(out)
+    }
+
     /// A [`super::route::RouteOptions::node_base`] vector that makes the
     /// global clock network cheap, so a clock goes on it.
     ///
@@ -3756,13 +4480,41 @@ impl TrellisFabric {
             // write clock off a data wire is the same unmodelled skew a
             // flip-flop's would be. The pin is `wclk` and the wire it
             // reaches is `WCK<n>_SLICE`, fixed to the tile's `CLK1`.
-            let role = match instance.kind.as_str() {
-                "ff" => "clk",
-                "lutram" => "wclk",
+            //
+            // A **block** RAM is two clocks rather than one — `CLKA` and
+            // `CLKB`, which this flow usually drives from the same net —
+            // and each of them arrives on its own tile's `JCLK0`, one
+            // column apart. `ecppack` puts both on a global network in all
+            // 53 of this board's block RAMs, so both are asked about.
+            let roles: &[&str] = match instance.kind.as_str() {
+                "ff" => &["clk"],
+                "lutram" => &["wclk"],
+                "bram" => &["p0_clk", "p1_clk"],
                 _ => continue,
             };
+            for role in roles {
+                self.one_clock_pin(netlist, placement, graph, routing, index, role, &mut out);
+            }
+        }
+        out
+    }
+
+    /// One clock pin's own path back through the route, for
+    /// [`TrellisFabric::clock_network_use`].
+    #[allow(clippy::too_many_arguments)]
+    fn one_clock_pin(
+        &self,
+        netlist: &super::place::Netlist,
+        placement: &super::place::Placement,
+        graph: &super::arch::RoutingGraph,
+        routing: &super::Routing,
+        index: usize,
+        role: &str,
+        out: &mut ClockUse,
+    ) {
+        {
             let Some(site) = placement.site_of(index) else {
-                continue;
+                return;
             };
             let site = &graph.sites[site];
             let Some(signal) = netlist
@@ -3771,7 +4523,7 @@ impl TrellisFabric {
                 .find(|pin| pin.instance == index && pin.role == role)
                 .and_then(|pin| pin.signal)
             else {
-                continue;
+                return;
             };
             // Walk this pin's own path back through the route until a
             // branch wire turns up. Asking "does the route touch a branch
@@ -3799,7 +4551,13 @@ impl TrellisFabric {
                     // one flop of a tile can be on the network while its
                     // neighbour came off a data wire, which is what
                     // happened before `RouteOptions::node_base` existed.
-                    if matches!(graph.wire(node).name.as_str(), "CLK0" | "CLK1") {
+                    // `JCLK0` and `JCLK1` are the same thing in an EBR
+                    // tile, and a block RAM's clock pin is joined straight
+                    // to one of them with no mux of its own.
+                    if matches!(
+                        graph.wire(node).name.as_str(),
+                        "CLK0" | "CLK1" | "JCLK0" | "JCLK1"
+                    ) {
                         found = ClockNetwork::branch_index(&driver.name);
                         break;
                     }
@@ -3814,7 +4572,6 @@ impl TrellisFabric {
                 )),
             }
         }
-        out
     }
 
     /// Sets the bits that configure every placed flip-flop, and returns how

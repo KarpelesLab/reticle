@@ -3651,48 +3651,83 @@ impl Mapper<'_> {
             .device
             .bel(BelRole::LutRam)
             .and_then(|ram| ram.port("wclk").map(|p| (ram.name.clone(), p.to_owned())));
+        // A **block** RAM is the same case one size up, and it has a clock
+        // per physical port rather than one: a `DP16KD` is `CLKA` and
+        // `CLKB`, usually the same net, and both of them have to reach the
+        // global network or the memory is clocked off data wires. Taken
+        // from the `bram` line's own `port rw` entries, so nothing here
+        // names a Lattice port.
+        let bram_clocks: Vec<(String, String)> = self
+            .device
+            .block_rams
+            .iter()
+            .flat_map(|shape| {
+                shape.port_map.iter().filter_map(|port| {
+                    port.signal("clk")
+                        .map(|name| (shape.name.clone(), name.to_owned()))
+                })
+            })
+            .collect();
         // Which net each clock pin reads, how many pins that is, and which
         // cell port would move onto the buffer. A flip-flop cell is as many
         // clock pins as it is bits wide, since that is what it becomes
         // once it is mapped; a memory port is one.
         let mut fanout: BTreeMap<String, ClockFanout> = BTreeMap::new();
         for (id, cell) in module.cells.iter() {
-            let (pins, port) = match &cell.kind {
-                CellKind::Dff { .. } => (
+            // `memory` marks a pin whose fanout the threshold must not have
+            // the last word on; see `ClockFanout::memory`.
+            let ports: Vec<(usize, String, bool)> = match &cell.kind {
+                CellKind::Dff { .. } => vec![(
                     cell.output("q").map_or(1, |q| {
                         usize::try_from(net_width(module, q)).unwrap_or(1).max(1)
                     }),
                     "clk".to_owned(),
-                ),
+                    false,
+                )],
                 CellKind::MemRdPort { clocked, .. } | CellKind::MemWrPort { clocked, .. }
                     if *clocked =>
                 {
-                    (1, "clk".to_owned())
+                    vec![(1, "clk".to_owned(), true)]
                 }
-                CellKind::Blackbox(primitive)
-                    if lutram_clock
+                CellKind::Blackbox(primitive) => {
+                    let mut found = Vec::new();
+                    if let Some((_, port)) = lutram_clock
                         .as_ref()
-                        .is_some_and(|(name, _)| name == primitive.as_str()) =>
-                {
-                    let (_, port) = lutram_clock.as_ref().expect("matched above");
-                    (1, port.clone())
+                        .filter(|(name, _)| name == primitive.as_str())
+                    {
+                        found.push((1, port.clone(), true));
+                    }
+                    for (_, port) in bram_clocks
+                        .iter()
+                        .filter(|(name, _)| name == primitive.as_str())
+                    {
+                        found.push((1, port.clone(), true));
+                    }
+                    if found.is_empty() {
+                        continue;
+                    }
+                    found
                 }
                 _ => continue,
             };
-            let Some(clk) = cell.input(&port) else {
-                continue;
-            };
-            let Some(net) = module.exprs.get(clk).and_then(Expr::as_net) else {
-                continue;
-            };
-            let name = module.nets[net].name.as_str().to_owned();
-            let entry = fanout.entry(name).or_insert_with(|| ClockFanout {
-                net,
-                sinks: Vec::new(),
-                pins: 0,
-            });
-            entry.sinks.push((id, port));
-            entry.pins += pins;
+            for (pins, port, memory) in ports {
+                let Some(clk) = cell.input(&port) else {
+                    continue;
+                };
+                let Some(net) = module.exprs.get(clk).and_then(Expr::as_net) else {
+                    continue;
+                };
+                let name = module.nets[net].name.as_str().to_owned();
+                let entry = fanout.entry(name).or_insert_with(|| ClockFanout {
+                    net,
+                    sinks: Vec::new(),
+                    pins: 0,
+                    memory: false,
+                });
+                entry.sinks.push((id, port));
+                entry.pins += pins;
+                entry.memory |= memory;
+            }
         }
         // Highest fanout first, ties broken by name so the choice is
         // reproducible.
@@ -3707,10 +3742,11 @@ impl Mapper<'_> {
                 net,
                 sinks: cells,
                 pins: count,
+                memory,
             },
         ) in candidates
         {
-            if count < self.options.global_buffer_threshold {
+            if count < self.options.global_buffer_threshold && !memory {
                 self.report.clocks.push(ClockMapping {
                     net: name,
                     fanout: count,
@@ -3797,6 +3833,17 @@ struct ClockFanout {
     net: NetId,
     /// The `(cell, port)` pairs that move onto the buffer's output.
     sinks: Vec<(CellId, String)>,
+    /// Whether any sink is a **memory's** clock.
+    ///
+    /// A memory's clock does not get to be below the threshold. The ECP5
+    /// backend refuses a RAM whose clock arrived through general routing —
+    /// `ecppack` puts one on a global network in all 111 distributed RAMs
+    /// and all 53 block RAMs of this board's own bitstreams, and a clock
+    /// off data wires has skew nobody has a model for — so a threshold that
+    /// left a memory's clock local would make a legitimate design
+    /// unbuildable rather than merely slower. A design with one block RAM
+    /// and no flip-flops is three clock pins, and that is the whole of it.
+    memory: bool,
     /// How many clock *pins* that is once the cells are mapped, which is
     /// what the threshold is measured against.
     pins: usize,
@@ -4858,16 +4905,33 @@ mod tests {
                 assert_eq!(init_bit(cell, &param, at), (word >> j) & 1 == 1, "{a}.{j}");
             }
         }
+        // The **read** is on port B and the **write** on port A, which is
+        // the other way round from what this test asserted until the
+        // Trellis backend learned to configure a `DP16KD`. It is not a
+        // cosmetic change: `src/fpga/devices/ecp5.dev` lists the B side
+        // first on purpose, because the mapper gives a read port the
+        // earliest port line, and Project Trellis' `EBR<n>.MODE` record
+        // claims `WEAMUX`'s own bit as one that `DP16KD` wants clear — so
+        // a flow that read on port A and held `WEA` low with its
+        // inverting mux wrote a bitstream whose mode bit no longer
+        // decoded. `ecppack` reads on port B too, in all 53 block RAMs of
+        // this board's reference bitstreams.
         let text = design.to_text();
-        assert!(text.contains("ADA={%raddr, 3'd0}"), "{text}");
-        assert!(text.contains("ADB={%waddr, 3'd0}"), "{text}");
+        assert!(text.contains("ADB={%raddr, 3'd0}"), "{text}");
+        assert!(text.contains("ADA={%waddr, 3'd0}"), "{text}");
+        // And the read port's write enable is **not** connected, which is
+        // what `TrellisFabric::configure_bram` turns into `WEBMUX = INV`:
+        // an unrouted input of this fabric reads as a one, and a read port
+        // whose write enable floats high writes at every address it reads.
+        assert!(!text.contains("WEB="), "{text}");
+        assert!(text.contains("WEA=%we"), "{text}");
 
         // 1024x18 ties the two pins below the address, the write byte
         // enables, high.
         let (mut design, top, _map) = memory_design(18, 1024);
         run(&mut design, top, "ecp5-45f-CABGA381", &options);
         let text = design.to_text();
-        assert!(text.contains("ADB={%waddr, 4'd3}"), "{text}");
+        assert!(text.contains("ADA={%waddr, 4'd3}"), "{text}");
     }
 
     #[test]
