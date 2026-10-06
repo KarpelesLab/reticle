@@ -24,6 +24,109 @@ per-language choice is whether the front end lowered an assignment as
 blocking or non-blocking. Processes are run by an interpreter with an
 explicit frame stack, so a `wait` saves a continuation without OS threads.
 
+## What `x` costs
+
+A cell's output should be `x` when the unknown bits of its inputs can change
+it, and for no other reason. `sched::lut_output` states that rule exactly:
+
+> the output is the value every input assignment consistent with the unknown
+> inputs produces, and `x` when two such assignments disagree.
+
+A lookup table is **not** one of the gate-level primitives IEEE 1364-2005 §7
+tabulates, so there is no table to copy — but that rule, applied to the
+primitives the standard does define, reproduces their tables: `0 & x` is `0`
+and `1 & x` is `x` (§7.2's `and` table), `1 | x` is `1`, `x ^ 0` is `x`, and
+a two-to-one multiplexer is the bit-by-bit merge of its two arms that
+§5.1.13 gives the conditional operator. So the rule is not an extension of
+the standard; it is what the standard already does everywhere it says
+anything, written in a form that does not need a table per cell.
+
+It is computed by restriction rather than by search. The known address bits
+select a sub-cube of the truth table, which is a word mask over `init`, and
+the surviving entries are known to agree when they are all ones or all zeros:
+`k` word operations, no allocation and no enumeration, for any `k`. A fully
+known address skips all of it and reads one bit of `init`, exactly as before,
+so the hot path is unchanged.
+
+**It used to answer `x` as soon as any address bit was `x`**, whether the
+table's function read that bit or not, and that was measurably worse than
+the cells a mapped netlist replaces. `CellKind::Mux` hands on the input its
+select chose, so an unknown on the other arm is harmless; after covering,
+that multiplexer is `lut` cells, and one unwritten byte of a packet buffer
+used to silence a whole USB device. `tests/sim_lut_x.rs` holds the mapped
+netlists that pin it, and `sched.rs`'s own tests check the restriction
+arithmetic against an enumeration of the assignments for every three-input
+function and every address over `{0, 1, x, z}`.
+
+**What it costs: nothing measurable.** On one x86-64 box with `--release`,
+an 8x8 multiplier mapped onto LUT4 (182 lookup tables), 2000 input vectors
+through the event simulator, best of five runs, three samples of each build:
+
+| Unknown bits of one operand | Before | After |
+|-----------------------------|--------|-------|
+| none (the hot path) | 7150–7270 vectors/s | 7230–7620 vectors/s |
+| one | 18100–19310 | 18070–19260 |
+| four | 19960–21320 | 20930–21260 |
+| eight | 21050–21700 | 21490–21760 |
+
+The two builds' spreads overlap at every row, so the restriction is below
+this measurement's noise; the `--release` run of
+`usb_descriptors_survive_lookup_table_mapping`, which simulates four mapped
+USB devices at two lookup-table widths, took 3.71 s both before and after.
+(The rows with unknown inputs are *faster* than the hot path because an `x`
+that spreads stops nets toggling, which is scheduling the simulator then does
+not do — they measure activity, not the rule.)
+
+### Per-cell optimality is not network optimality
+
+A covered netlist can still be more unknown than the logic it came from, and
+no cell-by-cell four-state evaluation can fix that. Technology mapping
+duplicates and merges cones, so the multiplexer whose select made the unknown
+irrelevant may no longer exist as a cell: in `usb_device_fs` mapped onto
+LUT4, two separate lookup tables each take the unwritten buffer's bit 7 and
+`own_data` among their inputs and each genuinely depends on that bit, and the
+dependence cancels only where they **reconverge** several cells later.
+Restricting one table cannot see a correlation between two of them.
+
+This was measured, not guessed: forcing that buffer's read to `0x00` and to
+`0xFF` makes all eight of
+`usb_descriptors_survive_lookup_table_mapping`'s mapped devices answer the
+*same, right* descriptor bytes, so the descriptors do not depend on the
+buffer at all and the `x` is pure pessimism — and the same run with the
+buffer left unwritten still answers nothing. Deciding it would take ternary
+analysis across the network (symbolic simulation, or one satisfiability
+question per net), which is not what an event-driven simulator does. A
+testbench whose design has a memory nothing wrote should **write it**:
+`Simulator::memories`, `mem_len` and `set_mem` do that in four lines, and
+`CompiledSim`'s `CompileOptions::zero_init` is the same answer for the
+compiled engine.
+
+### Where the simulator is still pessimistic, and where it is optimistic
+
+Pessimism is safe and loses coverage; optimism invents a value and hides a
+defect. Both are listed because the second is the one to be unhappy about.
+
+| Cell or operator | What `x` does | Verdict |
+|------------------|---------------|---------|
+| `Not` `Buf` `And` `Or` `Xor`, the reductions | the IEEE §7.2–§7.3 tables, bit by bit | optimal |
+| `Eq` `Ne` | `0` when some bit is known on both sides and differs, else `x` | optimal, and *better* than §5.1.8's letter, which says `x` whenever either operand has an `x` |
+| `Mux` `Dlatch` | the chosen input; §5.1.13's merge when the select or enable is `x` | optimal |
+| `Lut` | the rule above | optimal |
+| `Lt` `Le` `Gt` `Ge` | `x` if either operand has any unknown bit | **pessimistic beyond the standard**: §5.1.7 says `x` when the relation is *ambiguous*, and `4'b1xxx > 4'b0111` is not. `Logic::relation` in `src/logic.rs` |
+| `Add` `Sub` `Mul` `Div` `Mod`, `<<` `>>` `>>>` | all `x` if any operand bit is unknown | pessimistic, but §5.1 and §5.1.12 **require** it |
+| `Pmux` | all `x` if any select bit is unknown | pessimistic, and the same shape of defect the lookup table had — though mostly unimprovable, since any assignment that sets a second select bit is `x` anyway. The one case it loses is a single unknown select bit over known zeros, which should merge like a `Mux`. Not a Verilog primitive; no mapped netlist in the corpus contains one |
+| `MemRdPort` | all `x` for an unknown or out-of-range address | pessimistic; the same restriction would decide it when the reachable elements agree. An out-of-range select reading `x` is §5.2.1 |
+| `Tristate` | all `x` when the enable is `x` | optimal without strengths; §7.11's `bufif` tables would give a *weak* `0` or `1`, which `Logic` does not model |
+| `Dff` enable | an `x` enable **holds** `q` | **optimistic**: it might have loaded, so the answer is §5.1.13's merge of `d` and `q`, the way `Dlatch` already does it |
+| `Dff` reset | an `x` reset counts as **inactive** | **optimistic**, same reason |
+| `MemWrPort` enable | an `x` enable writes **nothing** | **optimistic**, same reason |
+| `MemRdPort` enable (clocked) | an `x` enable **reads** | the opposite convention from `Dff`'s enable; one of the two is wrong |
+| `Dff` clock | `x→1` and `0→x` both count as a positive edge | deliberately pessimistic, and what §9.7.1 asks for |
+
+The three optimistic rows are the ones that could let a broken design pass,
+and none of them is this round's: they are reported here so the next round
+starts from a list rather than from a surprise.
+
 ## What the simulator refuses to run
 
 A black box the design **declares** simulates: its outputs stay undriven and
@@ -340,6 +443,13 @@ not the order of magnitude a compiled simulator is supposed to be worth:
   overlapping attempts end to end.
 - `tests/sim_cosim.rs` and `tests/sim_fst.rs` cover the Rust API and the
   FST writer and reader.
+- `tests/sim_lut_x.rs` drives **mapped** netlists — Verilog synthesised and
+  covered onto LUT4 and LUT6 inside the test — at the lookup-table rule
+  above, including an unwritten memory behind a mapped multiplexer. Three of
+  its four checks fail without that rule; the fourth, the parity of the
+  unknown bits, fails if the rule is ever *optimistic*, which is what it is
+  there for. Its `#[ignore]`d `lookup_table_evaluation_rate` prints the
+  measurement in the table above.
 - `tests/sim_compiled.rs` is the compiled engine's real deliverable: it
   runs the *same* design through both engines for thousands of seeded
   random input vectors, comparing every net and every memory element
