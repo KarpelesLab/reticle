@@ -606,6 +606,48 @@ Call Management", "CDC ACM", "CDC Union" — is worth noticing for itself: it
 is a second, independent parser agreeing that those five bytes are a union
 functional descriptor naming interfaces 0 and 1.
 
+### One line that was not in that reading and is now
+
+The quotation above is from the round that built this block, and it ends at the
+last endpoint descriptor. `lsusb` prints one more line after a device's
+descriptors — the **standard** GET_STATUS of USB 2.0 §9.4.5 — and on this device
+it could not: endpoint 0 did not implement that request, so it was stalled, and
+`lsusb` wrote `cannot read device status` to its standard error instead.
+
+The round that built [`ip/usb_proxy`](../usb_proxy/README.md) moved GET_STATUS
+into `usb_ctrl_ep`, where a standard request belongs, and **re-ran this block's
+own board test to find out what that cost**:
+
+```console
+$ cargo test --release --features program --test usb_cdc_acm -- --ignored --nocapture
+the kernel gave 1209:0001 the terminal /dev/ttyACM1
+configuration descriptor (67 bytes): [09, 02, 43, 00, 02, 01, 00, 80, 32, ...]
+bDeviceClass is 02h, bDeviceSubClass and bDeviceProtocol 00h
+SERIAL_STATE off endpoint 0x82: [a1, 20, 00, 00, 00, 00, 02, 00, 03, 00]
+  bRxCarrier and bTxCarrier set, wLength 2, wIndex 0: PSTN 1.2 §6.5.4, field for field
+48 bytes out, 48 bytes back
+host -> USB -> UART transmit -> UART receive -> USB -> host, 48 bytes, byte for byte
+GET_LINE_CODING: 115200 baud, bCharFormat 0, bParityType 0, bDataBits 8
+`cdc_acm` is back on /dev/ttyACM1
+
+$ lsusb -d 1209:0001 -v | grep -E 'bmAttributes +0x|Device Status'
+    bmAttributes         0x80
+Device Status:     0x0000
+```
+
+**CHECKED**, and on a part. Nothing of this block changed and nothing of it
+regressed: `cdc_acm` still binds, the forty-eight bytes still go out through
+`ip/uart`'s transmitter and come back through its receiver, the SERIAL_STATE
+notification still carries both carriers, and GET_LINE_CODING still reads back
+what the host set.
+
+And the line that was missing is there: `Device Status: 0x0000`. Bit 0 is Self
+Powered and `usb_ctrl_ep` derives it from bit 6 of the same `CFG_ATTR` the
+`bmAttributes` two lines above is written from, so **the two cannot be told
+different things**. That is the whole argument for putting a standard request in
+endpoint 0 rather than in a class, and it was worth one flip-flop and about
+thirty lookup tables on every device in this library.
+
 All sixty-seven bytes, as the kernel cached them:
 
 ```console

@@ -560,7 +560,209 @@ same byte is what the **standard** GET_STATUS of §9.4.5 reports. `usb_ctrl_ep`
 derives bit 0 of its two bytes from bit 6 of `CFG_ATTR`, so a host that reads the
 configuration descriptor and a host that asks GET_STATUS cannot be told different
 things about whether this device is self powered. That is the whole argument for
-putting a standard request in endpoint 0 instead of in a class.
+putting a standard request in endpoint 0 instead of in a class, and the next
+subsection is `lsusb` reading both halves of it off the part.
+
+### What it read off the part
+
+With `SELF_POWERED = 1` the configuration is chosen and the device is usable.
+`lsusb -v`, through our hub, of the device in the socket:
+
+```console
+$ lsusb -d 1d50:60e6 -v
+Bus 007 Device 031: ID 1d50:60e6 OpenMoko, Inc. replacement for GoodFET/FaceDancer - GreatFet
+Negotiated speed: Full Speed (12Mbps)
+Device Descriptor:
+  bLength                18
+  bDescriptorType         1
+  bcdUSB               2.00
+  bDeviceClass            0 [unknown]
+  bDeviceSubClass         0 [unknown]
+  bDeviceProtocol         0
+  bMaxPacketSize0        64
+  idVendor           0x1d50 OpenMoko, Inc.
+  idProduct          0x60e6 replacement for GoodFET/FaceDancer - GreatFet
+  bcdDevice            1.00
+  iManufacturer           1 Great Scott Gadgets
+  iProduct                2 GreatFET
+  iSerial                 3 000000000000000057cc67e6341d3457
+  bNumConfigurations      1
+  Configuration Descriptor:
+    bLength                 9
+    bDescriptorType         2
+    wTotalLength       0x0020
+    bNumInterfaces          1
+    bConfigurationValue     1
+    iConfiguration          0
+    bmAttributes         0x80
+      (Bus Powered)
+    MaxPower              500mA
+    Interface Descriptor:
+      bLength                 9
+      bDescriptorType         4
+      bInterfaceNumber        0
+      bAlternateSetting       0
+      bNumEndpoints           2
+      bInterfaceClass       255 Vendor Specific Class
+      bInterfaceSubClass    255 Vendor Specific Subclass
+      bInterfaceProtocol    255 Vendor Specific Protocol
+      iInterface              0
+      Endpoint Descriptor:
+        bLength                 7
+        bDescriptorType         5
+        bEndpointAddress     0x81  EP 1 IN
+        bmAttributes            2
+          Transfer Type            Bulk
+          Synch Type               None
+          Usage Type               Data
+        wMaxPacketSize     0x0040  1x 64 bytes
+        bInterval               0
+      Endpoint Descriptor:
+        bLength                 7
+        bDescriptorType         5
+        bEndpointAddress     0x02  EP 2 OUT
+        bmAttributes            2
+          Transfer Type            Bulk
+          Synch Type               None
+          Usage Type               Data
+        wMaxPacketSize     0x0040  1x 64 bytes
+        bInterval               0
+Device Qualifier (for other device speed):
+  bLength                10
+  bDescriptorType         6
+  bcdUSB               2.00
+  bDeviceClass            0 [unknown]
+  bDeviceSubClass         0 [unknown]
+  bDeviceProtocol         0
+  bMaxPacketSize0        64
+  bNumConfigurations      2
+```
+
+**MEASURED.** Four things in it are the proxy's and not the device's to claim.
+
+**`wTotalLength 0x0020` is thirty-two bytes and all thirty-two are there**, with
+the interface descriptor and both endpoint descriptors under it. The host read it
+twice — once for its nine-byte header and once for the whole of it — and §4's "a
+short packet ends a transfer" is what makes the first of those two stop at nine
+rather than running on into the second.
+
+**`MaxPower 500mA` and `bmAttributes 0x80`** are the **device's** power
+declaration and not the hub's, and they are the two bytes the subsection above is
+about. The hub's own read `0xc0` and `100mA`. Two devices on one bus with
+different answers, each reporting its own, is pass-through addressing in two
+lines.
+
+**The three strings.** `iManufacturer 1 Great Scott Gadgets`,
+`iProduct 2 GreatFET` and thirty-two hexadecimal digits of serial number are four
+more control reads — a language table and three strings — of a descriptor type
+**nothing in this library implements**. `usb_ctrl_ep` stalls a string descriptor
+and `ip/usb_hub` has none, which is why the hub's own line in the kernel log above
+reads `Mfr=0, Product=0, SerialNumber=0`.
+
+**`Device Qualifier`**, which `lsusb` fetches with GET_DESCRIPTOR of type `06h` —
+a request **this library stalls** — and which the device answered with ten bytes.
+There is no clearer single statement that what the host is talking to is the
+device and not the proxy.
+
+And the hub's own port, read at the same moment:
+
+```console
+$ lsusb -d 1209:0001 -v | grep -A 3 'Hub Port Status'
+ Hub Port Status:
+   Port 1: 0000.0103 power enable connect
+Device Status:     0x0001
+```
+
+**MEASURED**, and both lines changed in this round.
+
+`0103h` is PORT_POWER, PORT_ENABLE and PORT_CONNECTION. The reading
+`ip/usb_hub/README.md` §8 quotes is `0101h` — powered and connected and **not
+enabled**, because that hub's port was enabled by a reset and then disabled again
+when the kernel failed to enumerate through it. **HIGH** (§11.5.1): a port is
+Enabled only by a reset completing, so `0103h` is §5's reset having reached the
+real device and the kernel having got what it wanted through the port.
+
+`Device Status: 0x0001` is the **standard** GET_STATUS of §9.4.5 with bit 0 — Self
+Powered — set, answered by `usb_ctrl_ep` out of bit 6 of `CFG_ATTR`. The same
+reading in `ip/usb_hub/README.md` §8 is `0x0000`, from a class block's hook, and
+the byte that produced it was a literal zero in `usb_hub_req`. It is arithmetic
+over a parameter now, in endpoint 0, and it agrees with the configuration
+descriptor by construction.
+
+### The gateware's own view, over the T14 console
+
+**MEASURED.** The console `usb_proxy_target.v` puts on ball T14 — which Apollo
+bridges to `/dev/ttyACM0` and which exists because AUX is the hub and cannot be a
+serial port as well — printed, with the kernel's enumeration already over and then
+again after a bulk attempt from userspace:
+
+```text
+PFCD14A2B      (and two more of the same)
+PFCD17A2E      (and five more of the same)
+```
+
+That design's header is the field table. Decoded:
+
+| | byte 0, the hub | byte 1, the port | byte 2 | byte 3 |
+|---|---|---|---|---|
+| `FC D1 4A 2B` | ready, configured, addressed, bus reset seen, port powered **and enabled**, not suspended, not resetting | ready, attached, full speed, **proxied**, no refused register write, VbusState `00`, **a transaction forwarded outside a control transfer** | a control transfer held, job **idle**, `dn_stage` **10** | LineState `01`, **11** SETUPs forwarded |
+| `FC D1 7A 2E` | the same | the same | job **3** — an answer the PC has not come back for | **14** SETUPs forwarded |
+
+**`dn_stage` 10 is `D_UP`**, which `usb_proxy_dn` only reaches by driving a bus
+reset at the device and waiting out its recovery. **`setups` 11 and then 14** is
+the count climbing by exactly the three control transfers `tests/usb_proxy.rs`
+does between the two readings — its device descriptor read and its two
+configuration descriptor reads — which is the forwarding counted rather than
+inferred.
+
+**`job` 3 in the second reading is correct and is worth explaining**, because it
+looks like a stuck state machine. The relay keeps a NAK answer until the PC asks
+that endpoint again, and the PC had stopped asking: the bulk attempt gave up. §3's
+"nothing is retried in the middle" is why that is the right behaviour — the next
+thing that moves the job is the host, and if the host has lost interest there is
+nothing to do.
+
+**One reading in that is the same one `ip/usb_hub/README.md` §8 explains and it is
+still not wrong.** Byte 1 bits 2:1 are the TARGET transceiver's `VbusState` and
+they read `00`, which USB334x Table 6-3 makes "below SessEnd" — no power on the
+port at all — while a device is attached, enumerated and configured through it.
+**The TARGET transceiver does not sense the connector its power flows through**:
+`ip/usb_host_ulpi/README.md`'s "VBUS switching" traced that from the published
+Cynthion PCB design, and on TARGET `VbusState` does not mean "is my device
+powered".
+
+### Bytes over bulk: what was established and what was not
+
+The GreatFET declares a bulk pair — `81h` IN and `02h` OUT, 64 bytes each — and
+`tests/usb_proxy.rs` tries both. Both time out.
+
+**That is not evidence of a broken proxy and it is not evidence of a working one
+either**, which is why that part of the test reports rather than asserts: **HIGH**
+(§8.4.6) a device may NAK for as long as it likes, a host turns a NAK for ever
+into a timeout, and from the host's side an endpoint the proxy never reached and
+one the device NAKed are both `operation timed out`.
+
+**The console is what tells them apart.** `saw_data_fwd`, byte 1 bit 0, is set:
+`usb_proxy_relay` handed the engine a transaction that was **not** part of a
+control transfer, so the bulk token went out on the downstream wire. That bit
+exists because of this measurement — it was `ctrl_active` in the first version of
+this console, which said nothing about bulk at all.
+
+So what is established is that **a bulk transaction is forwarded downstream**, and
+what is **not** established is whether the GreatFET NAKed it or said nothing. Its
+firmware's libgreat command pipe is a vendor control request and these bulk
+endpoints are armed on demand, so a NAK until a buffer is queued is what a reading
+of that firmware would predict — but this round did not read it and does not claim
+it. Distinguishing the two needs `trn_status` on the console, which is three more
+bits and the obvious next instrument.
+
+**What *is* asserted about bulk is in simulation**, and it is asserted exactly:
+`usb_proxy_moves_bytes_through_the_port` sends four packets of four different
+lengths — one byte, eight, a full sixty-four and four — through
+`usb_device_ulpi`'s own loopback and gets each one back byte for byte, with the
+PC's two data toggles asserted independently and **eight downstream transactions
+counted**, one per packet each way. A relay that held a packet and handed it over
+twice would not read eight.
 
 ---
 
@@ -638,7 +840,18 @@ section. §8 is the other half.
 
 **And one more test, which is a board and not a model.** `tests/usb_proxy.rs` is
 `#[ignore]`d, needs `--features program`, and skips with a reason when no hub of
-ours with a device behind it is attached.
+ours with a device behind it is attached. Its own module comment says what each
+of its four parts would and would not catch; the one that matters is part three,
+which is a single boolean — **a child of our hub exists in sysfs** — and which
+fails rather than skips if the port reports a device and the kernel enumerated
+nothing through it. That is the state `ip/usb_hub/README.md` §8 quotes the kernel
+log of, and it is the one assertion in this whole round that simulation could not
+reach at all.
+
+The bulk half of it **reports** rather than asserts, and §8's last subsection is
+why: a host cannot tell an endpoint the proxy never reached from one the device
+NAKed, because both are `operation timed out`. The thing that can is
+`saw_data_fwd` on the board's console, and that bit exists because of this.
 
 ---
 

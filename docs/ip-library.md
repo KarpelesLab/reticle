@@ -966,8 +966,8 @@ reported with no edge detector and no one-shot anywhere.
 that it is **two USB controllers and the thing between them**: a peripheral Link
 and a device core on one ULPI transceiver, a host Link and a transaction engine
 on another, a second packet decoder, and a 64-byte relay buffer. On the ECP5 that
-is 3084 LUT4, 996 flip-flops and 10 `TRELLIS_DPR16X4` against `usb_hub_ulpi`'s
-942, 324 and 2 — so **forwarding costs about 2100 lookup tables more than
+is 3090 LUT4, 998 flip-flops and 10 `TRELLIS_DPR16X4` against `usb_hub_ulpi`'s
+942, 324 and 2 — so **forwarding costs about 2150 lookup tables more than
 reporting a port**, and a design that only wants to be a hub should be one.
 
 Two of those numbers are worth reading as a comparison rather than a cost.
@@ -1884,10 +1884,10 @@ exactly what this table is for.
 | `usb_hub` | `usb_hub_ulpi` | VID=16'h1209, PID=16'h0001 | LUT6 | 87 x dff, 829 x lut, 1 x memory 2x8, 1 x memrd, 1 x memwr | 11 |
 | `usb_hub` | `usb_hub_ulpi` | VID=16'h1209, PID=16'h0001 | iCE40 HX1K | 74 x SB_CARRY, 16 x SB_DFFE, 278 x SB_DFFER, 37 x SB_DFFES, 9 x SB_DFFR, 1 x SB_GB, 40 x SB_IO, 939 x SB_LUT4 | 10 |
 | `usb_hub` | `usb_hub_ulpi` | VID=16'h1209, PID=16'h0001 | ECP5 45F | 1 x DCCA, 942 x LUT4, 2 x TRELLIS_DPR16X4, 324 x TRELLIS_FF, 40 x TRELLIS_IO | 10 |
-| `usb_proxy` | `usb_hub_proxy_ulpi` | VID=16'h1209, PID=16'h0001 | LUT4 | 209 x dff, 3051 x lut, 1 x memory 2x8, 1 x memory 64x8, 2 x memrd, 2 x memwr | 11 |
-| `usb_proxy` | `usb_hub_proxy_ulpi` | VID=16'h1209, PID=16'h0001 | LUT6 | 209 x dff, 2602 x lut, 1 x memory 2x8, 1 x memory 64x8, 2 x memrd, 2 x memwr | 11 |
-| `usb_proxy` | `usb_hub_proxy_ulpi` | VID=16'h1209, PID=16'h0001 | iCE40 HX1K | 190 x SB_CARRY, 528 x SB_DFFE, 870 x SB_DFFER, 91 x SB_DFFES, 35 x SB_DFFR, 1 x SB_GB, 85 x SB_IO, 4051 x SB_LUT4 | 10 |
-| `usb_proxy` | `usb_hub_proxy_ulpi` | VID=16'h1209, PID=16'h0001 | ECP5 45F | 1 x DCCA, 3084 x LUT4, 10 x TRELLIS_DPR16X4, 996 x TRELLIS_FF, 85 x TRELLIS_IO | 11 |
+| `usb_proxy` | `usb_hub_proxy_ulpi` | VID=16'h1209, PID=16'h0001 | LUT4 | 211 x dff, 3056 x lut, 1 x memory 2x8, 1 x memory 64x8, 2 x memrd, 2 x memwr | 11 |
+| `usb_proxy` | `usb_hub_proxy_ulpi` | VID=16'h1209, PID=16'h0001 | LUT6 | 211 x dff, 2615 x lut, 1 x memory 2x8, 1 x memory 64x8, 2 x memrd, 2 x memwr | 11 |
+| `usb_proxy` | `usb_hub_proxy_ulpi` | VID=16'h1209, PID=16'h0001 | iCE40 HX1K | 190 x SB_CARRY, 528 x SB_DFFE, 870 x SB_DFFER, 91 x SB_DFFES, 37 x SB_DFFR, 1 x SB_GB, 87 x SB_IO, 4056 x SB_LUT4 | 10 |
+| `usb_proxy` | `usb_hub_proxy_ulpi` | VID=16'h1209, PID=16'h0001 | ECP5 45F | 1 x DCCA, 3090 x LUT4, 10 x TRELLIS_DPR16X4, 998 x TRELLIS_FF, 87 x TRELLIS_IO | 11 |
 <!-- end footprints -->
 
 ### Seven things writing these blocks found
