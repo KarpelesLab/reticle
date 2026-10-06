@@ -633,8 +633,14 @@ and first-party IP should drop into a design as easily as a Rust crate.
       and ranges, bus interfaces exposed, target constraints, licence,
       version. See `docs/ip.md`.
 - [x] Project manifest for the user's design (`reticle.proj`): dependencies
-      on IP packages by path, git URL or registry, target device,
-      constraints files, testbenches. Resolution is depth first, selects the
+      on IP packages by name against a `library` root, or by path, git URL
+      or registry, target device, constraints files, testbenches. A
+      dependency with no source is looked up by the name its own
+      `reticle.ip` declares, wherever it sits under the root, so a project
+      does not encode the library's layout; two packages of one name is an
+      error naming both (`P0802`), and a lock file records the directory
+      the search answered with, which `reticle build --locked` refuses to
+      disagree with (`P0302`). Resolution is depth first, selects the
       highest version satisfying every requirement, reports conflicts and
       cycles with the path through the graph, and writes a `reticle.lock`.
       `git` and `registry` are grammar only so far, since fetching one is

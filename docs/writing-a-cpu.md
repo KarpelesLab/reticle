@@ -1139,13 +1139,22 @@ and the cores are flattened with everything else. On the HX8K:
 ## 8. Dropping the core into a system
 
 Both examples are the same shape: a project manifest naming the core and
-a UART by path, and one file of user HDL.
+a UART, and one file of user HDL.
 
 ```text
+library ../../ip                                  # examples/mos6502_computer
+
 depends rv32i   ^1.0.0 path ../../ip/rv32i        # examples/soc
-depends mos6502 ^1.0.0 path ../../ip/mos6502      # examples/mos6502_computer
-depends uart    ^1.0.0 path ../../ip/uart         # both
+depends mos6502 ^1.0.0                            # examples/mos6502_computer
+depends uart    ^1.0.0                            # both, in that project
 ```
+
+A dependency is placed either way: `path <dir>` names a directory, and a
+`library` root lets a `depends` line name only the package, which is then
+found by the name its own `reticle.ip` declares, wherever it sits under
+the root. `examples/mos6502_computer` is written the second way and
+`examples/soc` the first, so both are exercised; `docs/ip.md` has the
+rules.
 
 - **[`examples/soc`](../examples/soc)** — `rv32i` and `uart`, a ROM and
   a byte-writable RAM behind two ports, a memory-mapped UART, and a

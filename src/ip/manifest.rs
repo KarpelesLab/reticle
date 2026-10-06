@@ -9,8 +9,10 @@
 //!   and the IP it depends on.
 //! - **`reticle.proj`**, a [`Project`], sits in the user's design and
 //!   describes what to build: a name, a top, a target device, the
-//!   sources, constraints and testbenches, and the dependencies with
-//!   where to get each one from.
+//!   sources, constraints and testbenches, the IP library roots to
+//!   search, and the dependencies with where to get each one from — or,
+//!   for one the library places by name, with nothing more than a
+//!   version requirement.
 //!
 //! `ROADMAP.md` calls the project file `reticle.toml`. It is spelled
 //! `reticle.proj` here because it is *not* TOML: the crate has no TOML
@@ -66,10 +68,16 @@
 //! constraints board/ice40.rcf
 //! testbench   tb/top_tb.v
 //!
-//! depends     uart_lite ^1.2.0 path ../ip/uart_lite
+//! library     ../ip
+//!
+//! depends     uart_lite ^1.2.0
 //! depends     fifo_sync >=1.0.0 git https://example.invalid/fifo.git rev v1.0.4
 //! depends     cdc_sync  *       registry
+//! depends     vendor_pll 2.1.0  path vendor/pll
 //! ```
+//!
+//! A `depends` line with no source is placed by **name** against the
+//! `library` roots; see [`super::library`].
 //!
 //! # Round-tripping
 //!

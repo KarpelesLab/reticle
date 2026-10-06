@@ -103,9 +103,12 @@ source      rtl/top.v
 constraints board/ice40.rcf
 testbench   tb/top_tb.v
 
-depends     uart_lite ^1.2.0 path ../ip/uart_lite
+library     ../ip
+
+depends     uart_lite ^1.2.0
 depends     fifo_sync >=1.0.0 git https://example.invalid/fifo.git rev v1.0.4
 depends     cdc_sync  *       registry
+depends     vendor_pll 2.1.0  path vendor/pll
 ```
 
 | Keyword | Takes | Meaning |
@@ -116,15 +119,125 @@ depends     cdc_sync  *       registry
 | `source` | `<path> [language <lang>] [encrypted]` | the project's own HDL |
 | `constraints` | a path | a constraints file |
 | `testbench` | a path | a testbench |
+| `library` | a path | an IP library root to look a dependency's *name* up in; repeatable |
 | `depends` | `<name> <requirement> [where]` | IP to pull in, and where from |
 
-`where` is `path <dir>`, `git <url> [rev <r>]` or `registry`. The library
+`where` is `path <dir>`, `git <url> [rev <r>]` or `registry`, **or nothing
+at all**, in which case the name is looked up in the `library` roots — see
+[the next section](#the-ip-library-a-dependency-with-no-path). The library
 itself does no I/O and no networking: the `PathProvider` it ships resolves
 `path` dependencies through a caller-supplied closure, `RegistryProvider`
 resolves `registry` ones through an index and another closure (see [the
 registry](#the-registry-a-static-index)), and `git` is still declined with a
 clear diagnostic. The CLI — or a WebAssembly playground, or a test — is the
 only thing that ever opens a file.
+
+## The IP library: a dependency with no path
+
+A package already declares its own identity and already names what it
+needs without a path (`depends fifo_sync ^1.0.0`). A project can now do
+the same:
+
+```text
+library ../../ip
+
+depends uart    ^1.0.0
+depends mos6502 ^1.0.0
+```
+
+`uart` is found wherever it sits under `../../ip` — including nested in a
+category folder — by the **name its own `reticle.ip` declares**, not by
+its directory's name. That is the point: `ip/usb/serial/uart/` and
+`ip/uart/` are the same package to everything above this line, so moving
+a block is a change to `ip/` and to nothing else.
+
+### Where the root comes from
+
+From `library` lines in `reticle.proj`, each relative to the directory
+holding that manifest, searched in the order written, plus any
+`reticle build --library <dir>` for a build against a library that is not
+the project's own.
+
+There is no default and no environment variable. A path in this project
+comes from a manifest or from the command line and never from a guess: a
+manifest is committed and reviewed, so a reader of the repository can see
+which HDL a build used, and `$RETICLE_IP_PATH` would let the same project
+build from different sources on two machines with nothing written down
+anywhere. A default of `../../ip` would be worse still — a guess that is
+right for this repository's examples and wrong everywhere else.
+
+Order decides nothing, because a name found twice is an error rather than
+a shadowing. It only decides which root a diagnostic lists first.
+
+### How the index is built, and what it costs
+
+The caller walks each root for `reticle.ip` files and hands the
+`(path, text)` pairs to `LibraryIndex::from_manifests`, which reads each
+manifest's `name` and `version` — by a small scan, not by
+`IpManifest::parse`, so a package nobody depends on cannot push its own
+diagnostics into an unrelated build — and sorts the result.
+
+`reticle build` does that walk (`library_manifests` in
+`src/bin/reticle/main.rs`): a directory holding a manifest is a package
+and is not descended into, so the walk never enters an `rtl/` or a `tb/`;
+a symbolic link to a directory is not followed, so a loop cannot hang it;
+every level is sorted, because `read_dir` returns filesystem order and
+this reaches a lock file; and eight levels is as deep as it looks.
+
+Measured over the real `ip/` — 29 packages, 38892 bytes of manifest, a
+release build, `the_library_index_cost` in `tests/ip_library.rs`, which
+prints and never asserts:
+
+| Step | Per build |
+|------|-----------|
+| walk the tree and read every manifest | 95 µs |
+| scan, sort and build the index | 57 µs |
+
+**No cache.** A tenth of a millisecond is four orders of magnitude below
+anything a person notices and five below the ECP5 database load that this
+project learned to measure rather than assume. A library of ten thousand
+packages would be 50 ms, still not worth a cache file that could go
+stale; the figure to re-measure is the one above, and the test to
+re-measure it with is committed.
+
+### One name, one package
+
+Two manifests under the roots declaring the same name is an error naming
+both paths, not a first-wins. A library is a layout — one directory per
+package — and the mistake this really catches is a package *copied* where
+it should have been *moved*, which is the mistake a reorganisation makes.
+A library that genuinely wants two versions of one package side by side
+is what a registry is for, or `path`, which says exactly which directory
+is meant.
+
+`tests/ip_library.rs` indexes the real `ip/` and asserts that no name is
+claimed twice, that every manifest declares a name, and that every
+`depends` any block states is a name the library has.
+
+### The three failures
+
+| Code | Reads |
+|------|-------|
+| `P0801` | `the IP library has no package named `uarte`` — with how many packages were searched under which roots, the nearest name the library does have, and the reminder that a package outside the library is named with `path <dir>` |
+| `P0802` | `the IP library has 2 packages named `uart`` — with a note per manifest that declares it |
+| `P0102` | `no version of `uart` satisfies every requirement` — the existing conflict, which now says *where* each available version lives: `available: 1.0.0 in the library directory `../../ip/uart`` |
+
+A version mismatch is deliberately **not** a library error. The library
+answers "where is this name", and the version machinery already collects
+every requirement on a package with the path through the graph that
+stated it; giving it a second, library-shaped way to complain about a
+version would make a failure depend on which requirement was walked
+first. Naming the directory in its note is what that diagnostic was
+missing.
+
+### Sans-I/O
+
+Walking a directory is I/O, so the walk belongs to the caller — the CLI,
+a test, or a WebAssembly bundle — and the index, the lookup and the
+diagnostics are a pure function of the `(path, text)` pairs it hands
+over. `src/ip/library.rs` opens nothing, and the paths it is given are in
+the same space as every other path the resolver sees: relative to the
+project manifest, exactly like a `path` dependency's.
 
 ## Version requirements
 
@@ -149,7 +262,8 @@ not quietly pick up `1.1.0-rc1`.
 1. The graph is walked depth first from the project's `depends` lines.
 2. A transitive dependency's *location* comes from the project's own
    `depends` line for that name when it has one; otherwise the provider
-   decides, and `PathProvider` looks for a directory named after the
+   decides, and `PathProvider` looks the name up in the `library` roots,
+   falling back — with no library — to a directory named after the
    package next to the project.
 3. Every requirement on a package is collected, and the **highest version
    satisfying all of them** is selected.
@@ -181,9 +295,33 @@ requires uart_lite fifo_sync ^1.0.0
 
 `package` lines are sorted by name and `requires` lines by dependent then
 dependency, so the file changes only when the resolution does.
-`LockFile::differences` says in words how a stored lock file and a fresh
-resolution disagree, which is what a `--locked` build reports instead of
-moving silently.
+
+The origin is **the answer the resolution got**, not the words the
+manifest wrote: `path <dir>` when the manifest named a directory,
+`library <dir>` when a `library` search found the name there, `registry`
+or `git` for those. So a lock file still encodes a layout — that is its
+job. It records what was built from, and a layout that changes is
+something a build must be able to notice.
+
+Nothing ever resolves *from* a lock file: resolution always goes through
+the manifests and the index, and the lock file is compared against the
+result. That is what makes a stale one an error rather than a wrong
+build. `LockFile::differences` says in words how a stored lock file and a
+fresh resolution disagree, `LockFile::mismatch` turns that into a `P0302`
+diagnostic, and `reticle build --locked` fails with it and writes
+nothing:
+
+```text
+error[P0302]: the lock file does not describe this resolution
+ --> reticle.lock:1:1
+  = note: `clock_div` moves from the library directory
+          `../../library/divider` to the library directory
+          `../../library/timing/divider`
+  = note: resolve again without `--locked` to write the new one
+```
+
+Without `--locked`, a build that resolves cleanly rewrites the lock file,
+which is the same decision Cargo makes.
 
 ## Bus interfaces
 
@@ -508,6 +646,29 @@ with `DECERR` while leaving the bus usable. That is what proves the
 generator, rather than a golden netlist that could be wrong in exactly the
 same way twice.
 
+### A project with no path at all
+
+`testdata/ip/projects/library/` is the same shape as the first example
+with every `path` removed. It declares `library ../../library` and one
+dependency, `clock_div ^1.0.0`; the fixture library under
+`testdata/ip/library/` holds that package at `timing/divider/` and the
+package it needs, `pulse_edge`, at `glue/edge/` — two levels down, in
+directories deliberately not named after the packages in them, and the
+second one not mentioned by the project at all. Its lock file is the
+whole of what the search decided:
+
+```text
+package clock_div 1.0.0 library ../../library/timing/divider
+package pulse_edge 1.0.0 library ../../library/glue/edge
+
+requires clock_div pulse_edge ^1.0.0
+requires library_search clock_div ^1.0.0
+```
+
+`examples/mos6502_computer` is the same thing over the real library: a
+`library ../../ip` line, `depends mos6502 ^1.0.0`, `depends uart ^1.0.0`,
+and nothing in the manifest that knows where either of them sits.
+
 ## The registry: a static index
 
 A registry is what the crates.io index is: a **git repository of
@@ -758,11 +919,12 @@ be nowhere for a resolved entity to come from.
 | `P0001`–`P0008` | manifest syntax: unknown key, shape, version, requirement, duplicate, missing, unknown word, parameter |
 | `P0101`–`P0105` | resolution: not found, conflict, cycle, name mismatch, unsupported source |
 | `P0201`–`P0205` | buses: missing signal, direction, width, unknown bus, `.bus` syntax |
-| `P0301` | lock file syntax |
+| `P0301`–`P0302` | lock file: syntax, and a lock file that does not describe this resolution |
 | `P0401`–`P0404` | building: no such top, unknown language, (retired), invalid design |
 | `P0501`–`P0507` | XML: syntax, mismatched tag, entity, refused entity or DTD, duplicate attribute, unbound prefix, nesting |
 | `P0601`–`P0608` | IP-XACT: unknown standard, not a component, missing element, odd version, unresolved expression, unknown bus, unknown file type, unknown direction |
 | `P0701`–`P0704` | registry: index syntax, no such package, no such version, already a dependency |
+| `P0801`–`P0802` | IP library: no package of that name, two packages of one name |
 
 An unknown key comes with a "did you mean" over the keys that manifest
 kind does have.

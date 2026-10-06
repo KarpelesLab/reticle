@@ -10,7 +10,9 @@ with a manifest, a Rust co-simulation test, and a resource footprint that
 was measured rather than guessed.
 
 They live at the top of the repository, in `ip/`, one directory per
-package:
+package. A project finds a block by name (`library ../../ip`, then
+`depends uart ^1.0.0`), so this listing is a fact about the tree and not
+an interface anybody depends on:
 
 ```text
 ip/
@@ -1021,14 +1023,31 @@ device ice40-hx1k-tq144
 
 source rtl/top.v
 
-depends uart      ^1.0.0 path ../reticle/ip/uart
-depends fifo_sync ^1.0.0 path ../reticle/ip/fifo_sync
+library ../reticle/ip
+
+depends uart      ^1.0.0
+depends fifo_sync ^1.0.0
 ```
 
+The `library` line says where this tree is, once. The two `depends` lines
+then name only what they want, and a block is found by the **name its own
+`reticle.ip` declares** rather than by its directory, so where a block
+sits under `ip/` is `ip/`'s business and not the project's. A package from
+somewhere else is still named with `path <dir>`, and
+`depends uart ^1.0.0 path ../reticle/ip/uart` still works unchanged for a
+project that wants to pin one directory.
+
 `cdc_sync` is not named there and does not have to be: `axil_gpio`,
-`cdc_pulse` and `fifo_async` declare it themselves and `PathProvider`
-finds it in the directory next to the one it came from. `docs/ip.md` has
-the whole resolution story.
+`cdc_pulse` and `fifo_async` declare it themselves, and the same library
+search places it. `docs/ip.md` has the whole resolution story, including
+what the lock file records (`package uart 1.0.0 library ../reticle/ip/uart`
+— the answer the search gave, so that a block which has moved is
+something `reticle build --locked` reports rather than something a build
+silently follows).
+
+`tests/ip_library.rs` indexes this tree and checks it is indexable: no two
+packages claim one name, every manifest declares one, and every block's
+`depends` names a package the library has.
 
 Parameters are overridden at instantiation, as Verilog parameters always
 are:

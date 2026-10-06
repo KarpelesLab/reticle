@@ -107,8 +107,11 @@ touches the ECP5 backend.
 
 ## Building a design
 
-**There is no library search path.** `reticle fpga` takes a list of files, and
-a design instantiating library IP must name its sources:
+**`reticle fpga` has no library search path.** It takes a list of files, and
+a design instantiating library IP must name its sources. (`reticle build` is
+the other way round: a project manifest's `library ../../ip` line plus
+`depends uart ^1.0.0` finds the package by name, and `docs/ip.md` says how.
+`fpga` stays a file list on purpose — it is given HDL, not a project.)
 
 ```sh
 reticle fpga testdata/fpga/cynthion/usb_ulpi_device.v \

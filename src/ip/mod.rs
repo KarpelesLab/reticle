@@ -12,6 +12,7 @@
 //! |------|------|
 //! | [`manifest`] | the `reticle.ip` and `reticle.proj` formats |
 //! | [`mod@resolve`] | the dependency graph, version selection, `reticle.lock` |
+//! | [`library`] | placing a dependency by name against the IP library |
 //! | [`bus`] | bus interfaces as data; port-map generation and checking |
 //! | [`interconnect`] | crossbar and arbiter generators over the IR builder |
 //! | [`blackbox`] | encrypted and vendor IP as stubs |
@@ -45,8 +46,10 @@
 //! source      rtl/top.v
 //! constraints board/ice40.rcf
 //!
-//! depends     uart_lite ^1.2.0 path ../ip/uart_lite
-//! depends     fifo_sync >=1.0.0 path ../ip/fifo_sync
+//! library     ../ip
+//!
+//! depends     uart_lite ^1.2.0
+//! depends     fifo_sync >=1.0.0
 //! ```
 //!
 //! `docs/ip.md` has a complete worked example, with the two IP packages
@@ -58,7 +61,11 @@
 //!    lines.
 //! 2. An IP manifest says *what* it needs (`depends fifo_sync ^1.0.0`)
 //!    and never where that lives. The project places it, or the
-//!    [`SourceProvider`] does; that is what keeps a package portable.
+//!    [`SourceProvider`] does; that is what keeps a package portable. A
+//!    project need not place it either: a [`LibraryIndex`] over the
+//!    `library` roots finds a package by the name it declares, wherever
+//!    it sits in the tree, and two packages of one name is an error
+//!    naming both rather than a first-wins ([`library`]).
 //! 3. Of everything fetched for a package, the **highest version that
 //!    satisfies every requirement** on it is selected.
 //! 4. A cycle, a conflict and a package that cannot be fetched are each

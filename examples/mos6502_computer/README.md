@@ -3,7 +3,10 @@
 A small computer that prints `Hello from Reticle` over a serial port.
 The processor is [`mos6502`](../../ip/mos6502) and the serial port is
 [`uart`](../../ip/uart), both from Reticle's IP library, pulled in by a
-project manifest. The only HDL written for the project is its top-level.
+project manifest **by name**: `library ../../ip` says where the library
+is and `depends mos6502 ^1.0.0` says what is wanted, so nothing here
+knows where either block sits inside `ip/`. The only HDL written for the
+project is its top-level.
 
 This is [`examples/soc`](../soc) again with the other processor, and the
 two are meant to be read side by side: same manifest format, same board,
@@ -18,7 +21,7 @@ is at the end of this page.**
 
 ```text
 examples/mos6502_computer/
-  reticle.proj                the project: mos6502 and uart by path, the HX8K
+  reticle.proj                the project: mos6502 and uart by name, the HX8K
   rtl/computer_top.v          the one piece of user HDL: ROM, RAM, decoder, UART registers
   sw/hello.s                  the program, in 6502 assembly
   sw/hello.hex                the program assembled, which the ROM loads with $readmemh
