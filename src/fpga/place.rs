@@ -676,7 +676,7 @@ pub struct PlaceOptions {
     /// adaptive one.
     ///
     /// `None`, the default, is VPR's acceptance-rate schedule: the step is
-    /// chosen per temperature from [`cooling_factor`]. This is here so the
+    /// chosen per temperature from `cooling_factor`. This is here so the
     /// two can be compared on one design without recompiling, and because
     /// a test that pins what the fixed schedule did needs to ask for it.
     pub cooling: Option<f64>,
@@ -697,7 +697,7 @@ pub struct PlaceOptions {
     /// `Some(rate)`, the default, instead solves for the temperature at
     /// which `rate` of the sampled moves would be accepted, so the walk
     /// begins where the schedule is trying to hold it rather than far
-    /// above it. See [`start_temperature`].
+    /// above it. See `start_temperature`.
     pub start_acceptance: Option<f64>,
     /// The move window the anneal starts with, in tiles, or `None` for
     /// the whole die.
@@ -728,7 +728,7 @@ pub struct PlaceOptions {
     pub range_limit: bool,
     /// Consecutive temperature steps that fail to improve the best
     /// placement, once the acceptance rate has fallen into the quench
-    /// band ([`QUENCHED`]), after which the anneal stops. Zero never
+    /// band (`QUENCHED`, 0.15), after which the anneal stops. Zero never
     /// stops for this reason.
     ///
     /// This is the exit criterion the fixed schedule did not have. VPR's
@@ -786,7 +786,7 @@ impl Default for PlaceOptions {
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct TemperatureStep {
     /// Moves proposed at this temperature. A proposal whose window held
-    /// no site of the right kind is not one: see [`KindSites::pick`].
+    /// no site of the right kind is not one.
     pub tried: u64,
     /// How many of those were accepted. `accepted / tried` is the
     /// `R_accept` the range limiter and the cooling factor both read.
@@ -2690,7 +2690,7 @@ fn anneal(
     if movable.is_empty() {
         return;
     }
-    let index: BTreeMap<String, KindSites> = sites_by_kind
+    let windows: BTreeMap<String, KindSites> = sites_by_kind
         .iter()
         .map(|(kind, sites)| (kind.clone(), KindSites::build(graph, sites)))
         .collect();
@@ -2733,7 +2733,7 @@ fn anneal(
             info,
             macros,
             sites_by_kind,
-            &index,
+            &windows,
             shared,
             &movable,
             &mut rng,
@@ -2769,7 +2769,7 @@ fn anneal(
                 info,
                 macros,
                 sites_by_kind,
-                &index,
+                &windows,
                 shared,
                 &movable,
                 &mut rng,
@@ -2965,7 +2965,7 @@ fn propose(
     info: &[Placeable],
     macros: &[Macro],
     sites_by_kind: &BTreeMap<String, Vec<usize>>,
-    index: &BTreeMap<String, KindSites>,
+    windows: &BTreeMap<String, KindSites>,
     shared: &SiteRules,
     movable: &[usize],
     rng: &mut Rng,
@@ -3010,7 +3010,7 @@ fn propose(
         hy,
         reach,
     )?;
-    let target = index.get(kind)?.pick(rng, rect)?;
+    let target = windows.get(kind)?.pick(rng, rect)?;
     if target == here {
         return None;
     }
