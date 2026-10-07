@@ -2652,20 +2652,20 @@ exactly what this table is for.
 | `cdc_pulse` | `cdc_pulse` | (defaults) | ECP5 45F | 4 x LUT4, 6 x TRELLIS_FF, 7 x TRELLIS_IO | 1 |
 | `fifo_async` | `fifo_async` | WIDTH=8, DEPTH=16 | LUT4 | 10 x dff, 41 x lut, 1 x memory 16x8, 1 x memrd, 1 x memwr | 4 |
 | `fifo_async` | `fifo_async` | WIDTH=8, DEPTH=16 | LUT6 | 10 x dff, 37 x lut, 1 x memory 16x8, 1 x memrd, 1 x memwr | 3 |
-| `fifo_async` | `fifo_async` | WIDTH=8, DEPTH=16 | iCE40 HX1K | 8 x SB_CARRY, 128 x SB_DFFE, 41 x SB_DFFR, 1 x SB_DFFS, 2 x SB_GB, 24 x SB_IO, 298 x SB_LUT4 | 4 |
-| `fifo_async` | `fifo_async` | WIDTH=8, DEPTH=16 | ECP5 45F | 2 x DCCA, 41 x LUT4, 2 x TRELLIS_DPR16X4, 42 x TRELLIS_FF, 24 x TRELLIS_IO | 4 |
+| `fifo_async` | `fifo_async` | WIDTH=8, DEPTH=16 | iCE40 HX1K | 8 x SB_CARRY, 128 x SB_DFFE, 41 x SB_DFFR, 1 x SB_DFFS, 2 x SB_GB, 24 x SB_IO, 299 x SB_LUT4 | 4 |
+| `fifo_async` | `fifo_async` | WIDTH=8, DEPTH=16 | ECP5 45F | 6 x CCU2C, 2 x DCCA, 29 x LUT4, 2 x TRELLIS_DPR16X4, 42 x TRELLIS_FF, 24 x TRELLIS_IO | 3 |
 | `uart` | `uart` | CLK_DIV=104 | LUT4 | 18 x dff, 237 x lut | 8 |
 | `uart` | `uart` | CLK_DIV=104 | LUT6 | 18 x dff, 216 x lut | 6 |
 | `uart` | `uart` | CLK_DIV=104 | iCE40 HX1K | 33 x SB_CARRY, 80 x SB_DFFER, 26 x SB_DFFES, 17 x SB_DFFR, 2 x SB_DFFS, 1 x SB_GB, 43 x SB_IO, 274 x SB_LUT4 | 8 |
-| `uart` | `uart` | CLK_DIV=104 | ECP5 45F | 1 x DCCA, 240 x LUT4, 125 x TRELLIS_FF, 43 x TRELLIS_IO | 8 |
+| `uart` | `uart` | CLK_DIV=104 | ECP5 45F | 21 x CCU2C, 1 x DCCA, 242 x LUT4, 125 x TRELLIS_FF, 43 x TRELLIS_IO | 8 |
 | `uart` | `uart_baud_div` | (defaults) | LUT4 | 9 x dff, 282 x lut | 23 |
 | `uart` | `uart_baud_div` | (defaults) | LUT6 | 9 x dff, 235 x lut | 17 |
-| `uart` | `uart_baud_div` | (defaults) | iCE40 HX1K | 35 x SB_CARRY, 181 x SB_DFFER, 3 x SB_DFFES, 1 x SB_GB, 52 x SB_IO, 263 x SB_LUT4 | 23 |
-| `uart` | `uart_baud_div` | (defaults) | ECP5 45F | 1 x DCCA, 282 x LUT4, 184 x TRELLIS_FF, 52 x TRELLIS_IO | 23 |
+| `uart` | `uart_baud_div` | (defaults) | iCE40 HX1K | 35 x SB_CARRY, 181 x SB_DFFER, 3 x SB_DFFES, 1 x SB_GB, 52 x SB_IO, 265 x SB_LUT4 | 23 |
+| `uart` | `uart_baud_div` | (defaults) | ECP5 45F | 20 x CCU2C, 1 x DCCA, 264 x LUT4, 184 x TRELLIS_FF, 52 x TRELLIS_IO | 23 |
 | `uart` | `uart_frame` | CLK_DIV=104 | LUT4 | 21 x dff, 303 x lut | 8 |
 | `uart` | `uart_frame` | CLK_DIV=104 | LUT6 | 21 x dff, 254 x lut | 6 |
 | `uart` | `uart_frame` | CLK_DIV=104 | iCE40 HX1K | 42 x SB_CARRY, 83 x SB_DFFER, 28 x SB_DFFES, 18 x SB_DFFR, 2 x SB_DFFS, 1 x SB_GB, 53 x SB_IO, 346 x SB_LUT4 | 8 |
-| `uart` | `uart_frame` | CLK_DIV=104 | ECP5 45F | 1 x DCCA, 305 x LUT4, 131 x TRELLIS_FF, 53 x TRELLIS_IO | 8 |
+| `uart` | `uart_frame` | CLK_DIV=104 | ECP5 45F | 30 x CCU2C, 1 x DCCA, 302 x LUT4, 131 x TRELLIS_FF, 53 x TRELLIS_IO | 8 |
 | `uart` | `uart_line_coding` | (defaults) | LUT4 | 18 x lut | 3 |
 | `uart` | `uart_line_coding` | (defaults) | LUT6 | 15 x lut | 3 |
 | `uart` | `uart_line_coding` | (defaults) | iCE40 HX1K | 34 x SB_IO, 18 x SB_LUT4 | 3 |
@@ -2676,16 +2676,16 @@ exactly what this table is for.
 | `spi_master` | `spi_master` | CPOL=0, CPHA=0, CLK_DIV=4, WIDTH=8 | ECP5 45F | 14 x CCU2C, 1 x DCCA, 74 x LUT4, 53 x TRELLIS_FF, 25 x TRELLIS_IO | 3 |
 | `i2c_master` | `i2c_master` | CLK_DIV=30 | LUT4 | 14 x dff, 116 x lut | 7 |
 | `i2c_master` | `i2c_master` | CLK_DIV=30 | LUT6 | 14 x dff, 90 x lut | 4 |
-| `i2c_master` | `i2c_master` | CLK_DIV=30 | iCE40 HX1K | 18 x SB_CARRY, 20 x SB_DFFER, 4 x SB_DFFES, 17 x SB_DFFR, 1 x SB_GB, 30 x SB_IO, 117 x SB_LUT4 | 3 |
-| `i2c_master` | `i2c_master` | CLK_DIV=30 | ECP5 45F | 1 x DCCA, 116 x LUT4, 41 x TRELLIS_FF, 30 x TRELLIS_IO | 7 |
+| `i2c_master` | `i2c_master` | CLK_DIV=30 | iCE40 HX1K | 18 x SB_CARRY, 20 x SB_DFFER, 4 x SB_DFFES, 17 x SB_DFFR, 1 x SB_GB, 30 x SB_IO, 119 x SB_LUT4 | 3 |
+| `i2c_master` | `i2c_master` | CLK_DIV=30 | ECP5 45F | 12 x CCU2C, 1 x DCCA, 120 x LUT4, 41 x TRELLIS_FF, 30 x TRELLIS_IO | 3 |
 | `spi_display_rx` | `spi_display_rx` | FRAME_MODE=0 | LUT4 | 29 x dff, 208 x lut | 5 |
 | `spi_display_rx` | `spi_display_rx` | FRAME_MODE=0 | LUT6 | 29 x dff, 180 x lut | 4 |
-| `spi_display_rx` | `spi_display_rx` | FRAME_MODE=0 | iCE40 HX1K | 93 x SB_CARRY, 113 x SB_DFFER, 2 x SB_DFFES, 26 x SB_DFFR, 1 x SB_GB, 124 x SB_IO, 194 x SB_LUT4 | 4 |
-| `spi_display_rx` | `spi_display_rx` | FRAME_MODE=0 | ECP5 45F | 1 x DCCA, 209 x LUT4, 141 x TRELLIS_FF, 124 x TRELLIS_IO | 5 |
+| `spi_display_rx` | `spi_display_rx` | FRAME_MODE=0 | iCE40 HX1K | 93 x SB_CARRY, 113 x SB_DFFER, 2 x SB_DFFES, 26 x SB_DFFR, 1 x SB_GB, 124 x SB_IO, 195 x SB_LUT4 | 4 |
+| `spi_display_rx` | `spi_display_rx` | FRAME_MODE=0 | ECP5 45F | 57 x CCU2C, 1 x DCCA, 97 x LUT4, 141 x TRELLIS_FF, 124 x TRELLIS_IO | 4 |
 | `spi_display_rx` | `spi_display_rx` | FRAME_MODE=2 | LUT4 | 27 x dff, 198 x lut | 5 |
 | `spi_display_rx` | `spi_display_rx` | FRAME_MODE=2 | LUT6 | 27 x dff, 174 x lut | 3 |
-| `spi_display_rx` | `spi_display_rx` | FRAME_MODE=2 | iCE40 HX1K | 93 x SB_CARRY, 111 x SB_DFFER, 2 x SB_DFFES, 26 x SB_DFFR, 1 x SB_GB, 124 x SB_IO, 192 x SB_LUT4 | 5 |
-| `spi_display_rx` | `spi_display_rx` | FRAME_MODE=2 | ECP5 45F | 1 x DCCA, 198 x LUT4, 139 x TRELLIS_FF, 124 x TRELLIS_IO | 5 |
+| `spi_display_rx` | `spi_display_rx` | FRAME_MODE=2 | iCE40 HX1K | 93 x SB_CARRY, 111 x SB_DFFER, 2 x SB_DFFES, 26 x SB_DFFR, 1 x SB_GB, 124 x SB_IO, 194 x SB_LUT4 | 5 |
+| `spi_display_rx` | `spi_display_rx` | FRAME_MODE=2 | ECP5 45F | 57 x CCU2C, 1 x DCCA, 97 x LUT4, 139 x TRELLIS_FF, 124 x TRELLIS_IO | 5 |
 | `pwm` | `pwm` | WIDTH=8 | LUT4 | 2 x dff, 23 x lut | 6 |
 | `pwm` | `pwm` | WIDTH=8 | LUT6 | 2 x dff, 17 x lut | 4 |
 | `pwm` | `pwm` | WIDTH=8 | iCE40 HX1K | 7 x SB_CARRY, 8 x SB_DFFER, 8 x SB_DFFR, 1 x SB_GB, 21 x SB_IO, 23 x SB_LUT4 | 6 |
