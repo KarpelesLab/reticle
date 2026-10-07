@@ -310,11 +310,23 @@ every state including the two of its three bits that nothing reaches.
 
 All from `docs/ip-library.md`'s footprint table, at `CLK_DIV=104`.
 
-| | LUT4 | LUT6 | LUT4 depth | ECP5 45F LUT4 | ECP5 45F FF | iCE40 SB_LUT4 |
+| | LUT4 | LUT6 | LUT4 depth | ECP5 45F | ECP5 45F FF | iCE40 SB_LUT4 |
 |---|---|---|---|---|---|---|
-| `uart`, 8N1, before this round | 213 | 187 | 8 | 215 | 120 | 247 |
-| `uart`, 8N1, now | 237 | 216 | 8 | 240 | 125 | 274 |
-| `uart_frame`, fully configurable | 303 | 254 | 8 | 305 | 131 | 346 |
+| `uart`, 8N1, before this round | 213 | 187 | 8 | 215 LUT4 † | 120 | 247 |
+| `uart`, 8N1, now | 237 | 216 | 8 | 21 CCU2C + 242 LUT4 | 125 | 274 |
+| `uart_frame`, fully configurable | 303 | 254 | 8 | 30 CCU2C + 302 LUT4 | 131 | 346 |
+
+† **The first row's ECP5 figure is not comparable to the two below it**,
+and no honest re-measurement of it exists: it was taken before this
+backend inferred a `CCU2C`, and the RTL it describes — `uart` 1.0.0, with
+no frame layer — is gone, so there is nothing left to re-run. The three
+generic `LUT4` numbers in the second column are on the same flow as each
+other and are what the 24-lookup-table claim below rests on; the iCE40
+column did not move either, because `SB_CARRY` was always inferred there.
+What the carry chain took out of the ECP5 rows is the baud divisor's
+comparator and the sample counter: 21 carry cells in `uart`, 30 in
+`uart_frame`, and in both cases the depth stayed at 8, because the
+critical path through a UART is not its counter.
 
 The three extra `TRELLIS_IO` on the ECP5 rows, 40 to 43, are
 `rx_frame_error`, `rx_parity_error` and `rx_break`: a block measured as a

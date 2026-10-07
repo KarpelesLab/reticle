@@ -382,13 +382,22 @@ circuit is entitled to lose, and the model asserts the property rather
 than trusting the arithmetic.
 
 Area, MEASURED by `footprints_match_the_documentation` and tabulated in
-[`docs/ip-library.md`](../../../docs/ip-library.md): on an ECP5 45F, 209
-LUT4 and 141 flip-flops at the defaults, of which **96 flip-flops are the
-six counters** at `COUNT_WIDTH = 16`. The receiver proper is under
-forty-five flip-flops, so `COUNT_WIDTH = 8` roughly halves the block and
-`COUNT_WIDTH = 1` turns every counter into a sticky flag. LUT depth 5,
-and `FRAME_MODE = 2` is 11 LUT4 smaller — which is what "keep the other
-two modes, they are cheap" means as a number.
+[`docs/ip-library.md`](../../../docs/ip-library.md): on an ECP5 45F,
+**57 `CCU2C` and 97 LUT4** with 141 flip-flops at the defaults, of which
+**96 flip-flops are the six counters** at `COUNT_WIDTH = 16`. The
+receiver proper is under forty-five flip-flops, so `COUNT_WIDTH = 8`
+roughly halves the block and `COUNT_WIDTH = 1` turns every counter into a
+sticky flag. LUT depth 4, and `FRAME_MODE = 2` is the same 97 LUT4 with
+two fewer flip-flops.
+
+This block was first measured at 209 LUT4 and depth 5, before this
+backend inferred a carry cell, and the correction is instructive: **more
+than half of its logic was the six counters' ripple adders.** That is the
+cost of instrumenting a block, and it is the reason `COUNT_WIDTH` is a
+parameter — a bring-up build wants all six counters at 16 bits, and a
+deployed one may want none of them. `FRAME_MODE = 2` used to be 11 LUT4
+smaller than mode 0 and is now the same size, because what it removed was
+addition that a carry chain no longer spends lookup tables on.
 
 Beyond those fifteen, two shared tests name this block:
 `spi_display_rx_is_one_clock_domain` asks `timing::analyze_cdc` for its
@@ -463,6 +472,14 @@ metastability, and that is not a small gap: an unrouted slice input on an
 ECP5 reads as a one, and `CLAUDE.md` records eight rounds lost to a
 three-bit register that read 5.
 
+That particular cause is now fixed — this backend infers a `CCU2C`, which
+is where this block's 57 of them come from — and the round that fixed it
+proved the point a second time rather than retiring it. A carry chain's
+constant operand pins were left unrouted, so `cnt + 1` computed `cnt - 1`
+on the part while placing, routing, decoding, passing an exhaustive check
+*and* passing a SAT equivalence proof, because in a netlist a constant pin
+evaluates to the constant. A board caught it; nothing else could.
+
 So, concretely, what remains unknown about this block:
 
 - **that the four signals arrive.** Nothing here says these pins can be
@@ -470,8 +487,9 @@ So, concretely, what remains unknown about this block:
   reach the fabric with the setup a real pad needs;
 - **that the timing closes.** The LUT depth in §9 is the mapped
   combinational depth, which is the shape of the critical path and not a
-  closed clock. On the ECP5 this backend infers no carry cell, so the
-  saturating counters are ripple chains;
+  closed clock. The counters are carry chains now rather than ripples of
+  lookup tables, which is why the depth is 4 and not 5, but a depth is
+  still not a slack figure and there is no vendor timing model here;
 - **that the far side is what §1 says.** Every fact about the link is one
   person's reading of an analyser display. The two counters in §4 that
   should read zero are the test of that reading, and they can only be run
