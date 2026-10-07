@@ -588,6 +588,28 @@ fn describe(device: &Device, primitive: &str) -> Option<(String, Vec<(String, St
             }
         }
     }
+    // A clock generator: its `pll` line names the clock ports by role
+    // (`ref`, `out`, `fb`, `fbout`, `lock`), and the pins it ties to a
+    // constant (a reset, a power-down) keep their own name, lowercased,
+    // so that a fabric which can route one says which wire it is on.
+    for pll in device
+        .clock_resources
+        .plls
+        .iter()
+        .filter(|p| p.name == primitive)
+    {
+        kind = Some(BelRole::Pll.keyword().to_owned());
+        for (role, name) in &pll.ports {
+            if !bases.iter().any(|(p, _)| p == name) {
+                bases.push((name.clone(), role.clone()));
+            }
+        }
+        for (name, _) in &pll.ties {
+            if !bases.iter().any(|(p, _)| p == name) {
+                bases.push((name.clone(), name.to_lowercase()));
+            }
+        }
+    }
     kind.map(|kind| (kind, bases))
 }
 

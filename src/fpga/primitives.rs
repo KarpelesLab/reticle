@@ -3859,6 +3859,28 @@ impl Mapper<'_> {
             let value = const_expr(module, Const::from_bool(*level), span);
             inputs.push((Name::new(port.clone()), value));
         }
+        // The lock indicator, when the design asked for it: a net nothing
+        // drives, carrying `clock_locked = "<this clock>"`. It is the same
+        // shape of request as the clock itself — a net the design reads
+        // and leaves to the flow to drive — and without it a PLL's LOCKED
+        // has no name a design could use. A net something already drives
+        // is left alone; the netlist check reports a second driver better
+        // than this could.
+        if let Some(lock) = shape.port("lock") {
+            let driven = super::constraints::driven_nets(module);
+            let asked: Vec<NetId> = module
+                .nets
+                .iter()
+                .filter(|(id, net)| {
+                    net.attrs.get("clock_locked").and_then(AttrValue::as_str) == Some(name.as_str())
+                        && !driven.get(id.index()).copied().unwrap_or(true)
+                })
+                .map(|(id, _)| id)
+                .collect();
+            if let Some(net) = asked.first() {
+                outputs.push((Name::new(lock), *net));
+            }
+        }
         let cell = add_cell(
             module,
             &format!("{name}$pll"),
