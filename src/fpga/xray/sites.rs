@@ -670,7 +670,19 @@ pub(super) struct ExtraBel {
 /// takes `CLK_BUFG_CK_GCLK<n>` from. That the wire index `<n>` is the
 /// same number as the site's `Y` is the one thing here nothing
 /// corroborates past `n = 0`.
+///
+/// # The PLL of a clock management tile
+///
+/// Its features do have a prefix of their own, `PLLE2_ADV`, but no
+/// `_X<n>`/`_Y<n>` suffix says which site it is, so the prefix machinery
+/// makes it a bel of kind `other` with no pins. `super::cmt` supplies the
+/// kind and the pins, and the reader keeps the features it already filed
+/// under that name.
 pub(super) fn extra_bels(tile_type: &str) -> Vec<ExtraBel> {
+    let managers = super::cmt::clock_manager_bels(tile_type);
+    if !managers.is_empty() {
+        return managers;
+    }
     if !matches!(tile_type, "CLK_BUFG_BOT_R" | "CLK_BUFG_TOP_R") {
         return Vec::new();
     }

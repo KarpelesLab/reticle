@@ -1,0 +1,16 @@
+# Digilent Basys 3 (Xilinx XC7A35T-1CPG236C): the oscillator and three
+# LEDs, for `pll_blink.v`.
+#
+# PROVENANCE: the pin names are transcribed from
+# `examples/soc/board/basys3.rcf`, which transcribes Digilent's published
+# `Basys-3-Master.xdc`. W5 is the board's single 100 MHz oscillator and
+# its only clock source; U16, E19 and U19 are LED 0, LED 1 and LED 2.
+# All four are pins the board drives into or reads from the FPGA in the
+# direction used here: W5 is an input, the LEDs are outputs.
+#
+# Nothing built with these constraints has been loaded into a part.
+set_io -io_standard LVCMOS33 clk W5
+set_io -io_standard LVCMOS33 led_raw U16
+set_io -io_standard LVCMOS33 led_pll E19
+set_io -io_standard LVCMOS33 led_locked U19
+create_clock -name sys -period 10.0 clk

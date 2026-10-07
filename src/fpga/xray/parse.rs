@@ -841,6 +841,12 @@ pub(super) fn bels_of(
             });
             coverage.modes += 1;
         }
+        // A bel the prefix machinery did find, but without a kind or pins
+        // (a clock management tile's `PLLE2_ADV`), keeps the features it
+        // was given: the extra declaration adds to it, never erases it.
+        if let Some(found) = bels.remove(&extra.name) {
+            bel.config.extend(found.config);
+        }
         bels.insert(extra.name, bel);
     }
 

@@ -149,11 +149,13 @@ use super::xc7::{FrameMap, Part, TileBits};
 use crate::ir::memfile::FileProvider;
 use crate::json::Json;
 
+mod cmt;
 mod dsp;
 mod lutram;
 mod parse;
 mod sites;
 
+pub use cmt::{ClockManagerError, Counter, PllSettings, counter, pll_registers};
 pub use dsp::{DSP_PRIMITIVE, dsp_refusal};
 pub use parse::{Ppip, PpipKind, fabric_of, family_directory, is_pip_feature};
 pub use sites::{SiteCoverage, io_standards};

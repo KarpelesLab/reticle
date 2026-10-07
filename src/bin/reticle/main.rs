@@ -2859,6 +2859,26 @@ fn needs_global_buffer(
     })
 }
 
+/// True when the design holds one of the device's clock generators,
+/// which on a 7-series part sit in a clock management tile that the
+/// region around the pins need not reach.
+fn needs_clock_manager(
+    design: &reticle::ir::Design,
+    top: reticle::ir::ModuleId,
+    device: &reticle::fpga::Device,
+) -> bool {
+    use reticle::ir::CellKind;
+    let plls: Vec<&str> = device
+        .clock_resources
+        .plls
+        .iter()
+        .map(|p| p.name.as_str())
+        .collect();
+    design.modules[top].cells.iter().any(
+        |(_, cell)| matches!(&cell.kind, CellKind::Blackbox(name) if plls.contains(&name.as_str())),
+    )
+}
+
 /// Writes a Xilinx 7-series `.bit` from a real chip database.
 ///
 /// # Two designs written here have been loaded into a part
@@ -2949,6 +2969,16 @@ fn write_xc7_bitstream(
                 .map_err(|e| e.to_string())?
                 .or(Some(region));
         }
+        // A PLL lives in a clock management tile at the die's edge, in a
+        // column of its own; grow to the nearest one for the same reason.
+        if let Some(region) = options.region
+            && needs_clock_manager(design, top, device)
+        {
+            options.region = db
+                .region_with_site_type(&files, region, "PLLE2_ADV")
+                .map_err(|e| e.to_string())?
+                .or(Some(region));
+        }
     }
 
     let fabric = db.load(&files, &options).map_err(|e| e.to_string())?;
@@ -3003,6 +3033,11 @@ fn write_xc7_bitstream(
     let pulled = fabric
         .apply_pullups(design, top, &graph, &netlist, &placement, &mut tiles)
         .map_err(|e| e.to_string())?;
+    // A PLL's registers are computed from its parameters and from whether
+    // its reset was routed. See `XrayFabric::configure_clock_managers`.
+    let pll_bits = fabric
+        .configure_clock_managers(design, top, &graph, &netlist, &placement, &mut tiles)
+        .map_err(|e| e.to_string())?;
     let frames = xc7::frames_from_bitstream(&fabric.part, &tiles, &fabric.frames)
         .map_err(|e| e.to_string())?;
 
@@ -3044,6 +3079,11 @@ fn write_xc7_bitstream(
     }
     if pulled > 0 {
         note.push_str(&format!("note: {pulled} pad(s) given a weak pull-up\n"));
+    }
+    if pll_bits > 0 {
+        note.push_str(&format!(
+            "note: {pll_bits} PLL register bit(s); no PLL from this flow has run on a part\n"
+        ));
     }
     if let Some(reason) = &failure {
         note.push_str(&format!("warning: the router gave up: {reason}\n"));
