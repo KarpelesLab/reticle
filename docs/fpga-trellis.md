@@ -413,15 +413,22 @@ which would be under a nanosecond for the whole adder — but that is
 and this repository has no vendor timing model at all (`reticle timing` says
 in its own help that its device numbers are placeholders).
 
-**The cheapest experiment is already written and waiting, and it is now
-the only one left.** `tests/usb_crypto_console.rs` is on `master`,
+**The experiment that is still open** is the one written and waiting.
+`tests/usb_crypto_console.rs` is on `master`,
 `#[ignore]`d, skips with a reason when no board is attached, and **fails on
 the board** as of the round that wrote it: it asks a Cynthion at 60 MHz for
 the SHA-256 of the empty message and for a ChaCha20 quarter round, and got
 seven different answers in sixteen runs. If the diagnosis was right it should
 now get `e3b0c442…` every time. That is a far stronger claim than any depth
 number — a deterministic function answering deterministically, repeatedly,
-from silicon — and it costs one `reticle fpga` and one `reticle program`.
+from silicon.
+
+**It was attempted here and the obstacle was the router, not the part.**
+None of the three builds of that design converged; see "Routing a carry
+design is slower" below. What was loaded on a part instead were the two
+designs that do route, and both of them work — which establishes that a
+carry chain computes and places correctly on this silicon, and leaves
+"does a 32-bit chain close 60 MHz" open.
 
 What is known about it as this is written: the design with **both** cores,
 which did not route at all before (886 nodes still oversubscribed after 40
@@ -433,14 +440,42 @@ cell from the constant drivers, because the design already had the two
 shared constant lookup tables for its flip-flops and a carry cell's
 operand asks for the same two.
 
-**Routing them takes much longer than it did**, and that is worth saying
-rather than leaving to be rediscovered: the single-core build used to route
-in 11 m 29 s and was still going at 26 minutes here. A chain concentrates
-pin demand — a 32-bit add is five logic tiles, each wanting sixteen operand
-wires in and eight sums out, where the same adder in lookup tables was
-spread over twice as many tiles — so the negotiated-congestion router has
-more to negotiate. Whether either build converges inside the forty-iteration
-cap was **not established by this round**.
+### Routing a carry design is slower, and the console did not converge
+
+**This is the gap this round leaves open, and it is a placement-quality one
+rather than a correctness one.** All three crypto-console builds were run to
+the router's forty-iteration cap and **none of them converged**:
+
+| build | before the chain | with the chain |
+|---|---|---|
+| `WITH_CIPHER=0` (hash) | 5891 `LUT4`, routed **8353 of 8353 signals in 11 m 29 s** | 4427 `LUT4` + 451 `CCU2C`, still iterating at **1 h 26 m** |
+| `WITH_HASH=0` (cipher) | 8375 `LUT4`, routed **10 111 of 10 111 in 4 m 50 s** | 5426 `LUT4` + 683 `CCU2C`, still iterating at **39 m** |
+| both cores | 11 955 `LUT4`, **gave up** after 40 iterations and 1 h 50 m | 7629 `LUT4` + 1018 `CCU2C`, still iterating at **1 h 26 m** |
+
+So the design got a third smaller and a factor of five shallower and became
+*harder to route*. Two reasons, and the second is actionable in one line:
+
+**A chain concentrates pin demand.** A 32-bit add is five logic tiles, each
+wanting sixteen operand wires in and eight sums out of one tile, where the
+same adder in lookup tables was spread over twice as many tiles with half the
+pins each. The negotiated-congestion router has more to negotiate in the same
+interconnect.
+
+**And the annealer can barely move a chain.** `PlaceOptions`' schedule ends
+at a **one-tile** move window, and a chain is moved by drawing a new *start
+site* inside that window — which for a chain already anchored at slice A of
+its tile means the four carry sites of that one tile, so the whole 17-cell
+chain can shift by at most three slices and only when the sites past its end
+are free. Everything else in the design anneals around chains that are
+essentially frozen where the legaliser put them, and the legaliser packs
+tightly and wires long. The cheapest experiment is to scale a chain's move
+window by its own length in tiles — `window_of`'s `reach` for a chain —
+and re-measure these three rows; it was not tried here because changing the
+placer invalidates every golden and every measurement above it.
+
+Nothing about this is a correctness claim either way: the two designs that
+*do* route are on a part and work, and a design that does not converge is
+refused rather than written.
 
 Two cheaper things that are *not* substitutes, and it is worth being clear
 about why: the `0.494 bytes/clock` throughput figure the earlier round
