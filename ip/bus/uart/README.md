@@ -270,11 +270,17 @@ every state including the two of its three bits that nothing reaches.
 
 All from `docs/ip-library.md`'s footprint table, at `CLK_DIV=104`.
 
-| | LUT4 | LUT4 depth | ECP5 45F LUT4 | ECP5 45F FF |
-|---|---|---|---|---|
-| `uart`, 8N1, before this round | 213 | 8 | 215 | 120 |
-| `uart`, 8N1, now | 237 | 8 | 239 | 126 |
-| `uart_frame`, fully configurable | 303 | 8 | 305 | 131 |
+| | LUT4 | LUT6 | LUT4 depth | ECP5 45F LUT4 | ECP5 45F FF | iCE40 SB_LUT4 |
+|---|---|---|---|---|---|---|
+| `uart`, 8N1, before this round | 213 | 187 | 8 | 215 | 120 | 247 |
+| `uart`, 8N1, now | 237 | 216 | 8 | 240 | 125 | 274 |
+| `uart_frame`, fully configurable | 303 | 254 | 8 | 305 | 131 | 346 |
+
+The three extra `TRELLIS_IO` on the ECP5 rows, 40 to 43, are
+`rx_frame_error`, `rx_parity_error` and `rx_break`: a block measured as a
+top level has a pad per port, and those three are new ports. The
+flip-flop count went **down** by five, which is the shift register
+growing by two while the receive format stopped being latched.
 
 **8N1 costs 24 more LUT4 — about 11% — and no extra logic depth.** The
 depth matters more than the count on this backend, and it did not move: the
