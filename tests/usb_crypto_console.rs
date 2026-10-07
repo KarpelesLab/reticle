@@ -97,9 +97,9 @@ const RESET_COUNTER: &str = "00000001";
 /// that does not carry the counter from 1 to 2 gets the second half wrong.
 const KEYSTREAM_2_4_2: &str = concat!(
     "224f51f3401bd9e12fde276fb8631ded8c131f823d2c06e27e4fcaec9ef3cf78",
-    "88a3b0aa372600a92b57974cded2b9334794cba40c63e34cdea212c4cf07d41b",
-    "769a6749f3f630f4122cafe28ec4dc47e26d4346d70b98c73f3e9c53ac40c594",
-    "5398b6eda1a832c89c167eacd901d7e2bf363740373201aa188fbbce83991c4ed",
+    "8a3b0aa372600a92b57974cded2b9334794cba40c63e34cdea212c4cf07d41b7",
+    "69a6749f3f630f4122cafe28ec4dc47e26d4346d70b98c73f3e9c53ac40c5945",
+    "398b6eda1a832c89c167eacd901d7e2bf363740373201aa188fbbce83991c4ed",
 );
 
 /// RFC 8439 Appendix A.1 vector #1: the all-zero key, the all-zero nonce,
@@ -334,8 +334,14 @@ fn unhex(text: &str) -> Vec<u8> {
                 .expect("a hex digit")
         })
         .collect();
-    assert!(digits.len() % 2 == 0, "an even number of hex digits");
-    digits.chunks(2).map(|pair| (pair[0] << 4) | pair[1]).collect()
+    assert!(
+        digits.len().is_multiple_of(2),
+        "an even number of hex digits"
+    );
+    digits
+        .chunks(2)
+        .map(|pair| (pair[0] << 4) | pair[1])
+        .collect()
 }
 
 /// The bytes `crypto_pattern` makes in `tests/ip_library.rs`: byte *i* is
@@ -465,7 +471,9 @@ fn sha256_and_chacha20_answer_a_host_from_a_real_part() {
     ];
     for n in lengths {
         let bytes = pattern(n);
-        let (got, _) = console.ask(&format!("h {}", hex(&bytes))).expect("a digest");
+        let (got, _) = console
+            .ask(&format!("h {}", hex(&bytes)))
+            .expect("a digest");
         let want = host_digest(&bytes).expect("sha256sum");
         assert_eq!(got, want, "the part's digest of {n} pattern byte(s)");
     }
@@ -505,12 +513,10 @@ fn sha256_and_chacha20_answer_a_host_from_a_real_part() {
     // keystream exclusive-ored with it, which is the only assertion here
     // that touches the exclusive-or itself.
     let plain = pattern(32);
-    let (got, _) = console.ask(&format!("E {}", hex(&plain))).expect("a cipher");
-    let want: Vec<u8> = plain
-        .iter()
-        .zip(ks.iter())
-        .map(|(a, b)| a ^ b)
-        .collect();
+    let (got, _) = console
+        .ask(&format!("E {}", hex(&plain)))
+        .expect("a cipher");
+    let want: Vec<u8> = plain.iter().zip(ks.iter()).map(|(a, b)| a ^ b).collect();
     assert_eq!(got, hex(&want), "the exclusive-or of the keystream");
     println!("E: 32 pattern bytes enciphered, against RFC 8439's keystream, byte for byte");
 

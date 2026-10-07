@@ -15171,7 +15171,7 @@ fn console_line<P: UsbPair>(host: &mut UsbHost<P>, pipe: &mut BulkPipe, addr: u8
 fn console_type<P: UsbPair>(host: &mut UsbHost<P>, pipe: &mut BulkPipe, addr: u8, line: &str) {
     let mut bytes = line.as_bytes().to_vec();
     bytes.push(b'\r');
-    for packet in bytes.chunks(usize::from(BULK_MAXPKT)) {
+    for packet in bytes.chunks(BULK_MAXPKT) {
         pipe.write(host, addr, packet);
     }
 }

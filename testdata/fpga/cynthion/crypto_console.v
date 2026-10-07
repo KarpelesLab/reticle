@@ -21,11 +21,23 @@
 // THE PROTOCOL, AND WHY IT IS THIS ONE
 // ===================================================================
 //
-// A **line** is bytes up to a carriage return (0Dh). Line feeds (0Ah) are
-// ignored wherever they appear, so a host sending CR, LF or CRLF all work
-// and nothing has to agree about which. Every line gets exactly one answer
-// line, terminated CR LF, and a short USB packet is committed at the end of
-// it so a one-line answer does not wait for the next.
+// A **line** is bytes up to a carriage return (0Dh) **or** a line feed
+// (0Ah), and an **empty line is answered with nothing at all**. Those two
+// rules together are what make CR, LF and CRLF all work with nothing having
+// to agree about which: CRLF is one line and then an empty one, and the
+// empty one is silent. It is also what makes
+//
+//     echo 'H abc' > /dev/ttyACM1
+//
+// — which sends a line feed and no carriage return — do what a person typing
+// it plainly means, and which a console that insisted on CR would hang on.
+//
+// A space before the command letter is ignored too, for the same reason: a
+// line a person typed with a stray space in front of it is a line they meant.
+//
+// Every other line gets exactly one answer line, terminated CR LF, and a
+// short USB packet is committed at the end of it so a one-line answer does
+// not wait for the next.
 //
 //   | Line | What it does | Answer |
 //   |------|--------------|--------|
@@ -59,8 +71,8 @@
 //   this file.
 //
 //   **`h <hex>` is for a test**, because the text form cannot express
-//   every message and must not pretend to. A line ends at a CR, so a
-//   message containing CR cannot be typed; a terminal in the wrong mode
+//   every message and must not pretend to. A line ends at a CR or an LF, so a
+//   message containing either cannot be typed; a terminal in the wrong mode
 //   translates newlines, strips the eighth bit or eats control characters,
 //   and the digest that comes back is then wrong about a message that was
 //   never sent. Hex has none of those arguments: every byte of every
@@ -80,9 +92,10 @@
 //   come back" and "did the input come back" the same observation when they
 //   should be two; and with a one-byte-deep return path it deadlocks a host
 //   that writes a whole line before reading any of it, which is what
-//   `write_all` does. So nothing is echoed, every line is answered, and a
-//   bare CR answers with an empty line — which is still evidence the part
-//   is alive.
+//   `write_all` does. So nothing is echoed, and the thing that tells a
+//   person the part is alive before anything has been typed is the
+//   **banner**: the help line goes out the moment the host configures the
+//   port, so `cat /dev/ttyACM1` says something on its own.
 //
 // Why there is no buffer, and what that buys
 //   Nothing here holds a message. Bytes are decoded as they arrive and
@@ -92,8 +105,9 @@
 //   megabytes of hex digits on one line is a two-megabyte message, and
 //   that is how the bytes-per-second figure in
 //   `testdata/fpga/cynthion/usb_crypto_console.v`'s header was taken. It
-//   also means `ip/memory/fifo_sync` is not needed, which matters because
-//   this part is nearly full without it.
+//   also means `ip/memory/fifo_sync` is not needed, which saves having to
+//   find out whether one can be placed — `usb_cdc_uart.v`'s header says it
+//   could not be, and that note is now out of date.
 //
 // Why `Z` and `X` exist at all
 //   To separate two rates that a single measurement confuses. `h` and `E`
@@ -134,8 +148,8 @@
 //   of digits answers `ERR` and leaves that one register holding the digits
 //   that did arrive, shifted up. The registers are shifted into rather than
 //   staged through a copy because a 256-bit staging register would cost
-//   three hundred and eighty-four lookup tables of parallel load on a part
-//   with none to spare, and `k`, `n` and `c` print the registers back so a
+//   three hundred and eighty-four lookup tables of parallel load for nothing
+//   this design needs, and `k`, `n` and `c` print the registers back, so a
 //   disturbed one is visible rather than secret.
 module crypto_console #(
     // Bits of the SHA-256 message byte counter. `ip/crypto/sha256`'s own
@@ -295,9 +309,20 @@ module crypto_console #(
     wire       is_hex = digit | lower | upper;
     wire [3:0] nib    = digit ? rx_data[3:0] : (rx_data[3:0] + 4'd9);
 
-    wire is_cr = (rx_data == CH_CR);
-    wire is_lf = (rx_data == CH_LF);
-    wire is_sp = (rx_data == CH_SP);
+    // **Either** terminator ends a line, and an empty line is answered with
+    // nothing at all. That combination is what makes CR, LF and CRLF all
+    // work with nothing having to agree about which, and it is what makes
+    //
+    //     echo 'H abc' > /dev/ttyACM1
+    //
+    // — which sends a line feed and no carriage return — do what a person
+    // typing it plainly means. A console that took only CR would hang on it
+    // and a console that took both and answered an empty line would send two
+    // answers for one CRLF.
+    wire is_cr  = (rx_data == CH_CR);
+    wire is_lf  = (rx_data == CH_LF);
+    wire is_eol = is_cr | is_lf;
+    wire is_sp  = (rx_data == CH_SP);
 
     // Lower case out, because `sha256sum` prints lower case and a
     // comparison that has to fold case is a comparison with a step in it
@@ -332,10 +357,11 @@ module crypto_console #(
     //
     // That is worth stating because the obvious arrangement — one wide
     // staging register, parallel-loaded into three others — costs a
-    // multiplexer per bit, three hundred and eighty-four of them, on a part
-    // this design leaves about fifteen hundred lookup tables spare on.
-    // Rotating in place costs the four bits where the nibble comes in and
-    // nothing else.
+    // multiplexer per bit, three hundred and eighty-four of them. Rotating
+    // in place costs the four bits where the nibble comes in and nothing
+    // else, which is as close to free as a decision in this file gets.
+    // `usb_crypto_console.v`'s header has what the whole console cost and
+    // how much of the part is left.
     reg [255:0] key_q;
     reg [95:0]  nonce_q;
     reg [31:0]  ctr_q;
@@ -362,8 +388,18 @@ module crypto_console #(
     // bits.
     reg [6:0] en_q;
 
-    // How many hex digits an argument has had. Up to 64, so seven bits.
+    // How many hex digits an argument has had, **saturating at 65**: sixty-six
+    // values, so seven bits.
+    //
+    // It saturates rather than wrapping because wrapping would be a defect a
+    // person could type. A `K` line with 128 digits on it would take a
+    // seven-bit counter back round to 64, which is the value that means
+    // "exactly as many digits as the key has nibbles" — so a line twice as
+    // long as it should be would be accepted and the key would be the
+    // second half of what was typed. Held at 65, every length over 64 fails
+    // every one of the checks below.
     reg [6:0] nb_q;
+    wire [6:0] nb_next = (nb_q == 7'd65) ? nb_q : (nb_q + 7'd1);
 
     // Half a byte of a hex payload.
     reg [3:0] hi_q;
@@ -458,8 +494,8 @@ module crypto_console #(
     // -----------------------------------------------------------------
     // The source: where the next message byte comes from.
     // -----------------------------------------------------------------
-    wire txt_byte_here = ((state_q == S_TXT) && rx_valid && !is_cr && !is_lf)
-                       || ((state_q == S_TXT1) && rx_valid && !is_cr && !is_lf && !is_sp);
+    wire txt_byte_here = ((state_q == S_TXT) && rx_valid && !is_eol)
+                       || ((state_q == S_TXT1) && rx_valid && !is_eol && !is_sp);
     wire hex_byte_here = (state_q == S_HEX) && rx_valid && is_hex && half_q;
     wire gen_byte_here = (state_q == S_GEN) && (cnt_q != 32'd0);
 
@@ -504,8 +540,8 @@ module crypto_console #(
                     : (state_q == S_EOL1)  ? 1'b1
                     : (state_q == S_NUM)   ? 1'b1
                     : (state_q == S_ARG)   ? 1'b1
-                    : (state_q == S_TXT1)  ? (is_cr | is_lf | is_sp | src_ready)
-                    : (state_q == S_TXT)   ? (is_cr | is_lf | src_ready)
+                    : (state_q == S_TXT1)  ? (is_eol | is_sp | src_ready)
+                    : (state_q == S_TXT)   ? (is_eol | src_ready)
                     : (state_q == S_HEX)   ? ((is_hex & half_q) ? src_ready : 1'b1)
                     :                        1'b0;
 
@@ -694,7 +730,7 @@ module crypto_console #(
             // Written `q <= q | event` rather than `if (event) q <= 1'b1`
             // because the second infers a clock enable and a slice's two
             // flip-flops share one, which `clock_blink.v` explains.
-            saw_line_q   <= saw_line_q | (rx_beat & is_cr);
+            saw_line_q   <= saw_line_q | (rx_beat & is_eol);
             saw_answer_q <= saw_answer_q | tx_commit;
 
             // --------------------------------------------------------
@@ -768,11 +804,11 @@ module crypto_console #(
                         un_q       <= 3'd0;
                         infl_q     <= 1'b0;
                         ans_q      <= A_NONE;
-                        if (is_lf) begin
+                        // An empty line, or a space before the letter. The
+                        // console says nothing, which is what makes one
+                        // CRLF one answer.
+                        if (is_eol | is_sp) begin
                             state_q <= S_CMD;
-                        end else if (is_cr) begin
-                            state_q <= S_EOL;
-                            eol_q   <= 2'd2;
                         end else begin
                             case (rx_data)
                                 8'h48: begin  // H: text, hashed
@@ -845,19 +881,18 @@ module crypto_console #(
                 // of its own: in `S_TXT` a space is part of the message.
                 S_TXT1: begin
                     if (rx_beat) begin
-                        if (is_cr)      state_q <= S_FLUSH;
-                        else if (is_lf) state_q <= S_TXT1;
-                        else            state_q <= S_TXT;
+                        if (is_eol) state_q <= S_FLUSH;
+                        else        state_q <= S_TXT;
                     end
                 end
 
                 S_TXT: begin
-                    if (rx_beat && is_cr) state_q <= S_FLUSH;
+                    if (rx_beat && is_eol) state_q <= S_FLUSH;
                 end
 
                 S_HEX: begin
                     if (rx_beat) begin
-                        if (is_cr) begin
+                        if (is_eol) begin
                             // Half a byte and then the end of the line is
                             // an odd number of digits, which is not a
                             // sequence of bytes.
@@ -871,7 +906,7 @@ module crypto_console #(
                             end else begin
                                 state_q <= S_FLUSH;
                             end
-                        end else if (is_lf | is_sp) begin
+                        end else if (is_sp) begin
                             state_q <= S_HEX;
                         end else if (is_hex) begin
                             if (half_q) half_q <= 1'b0;
@@ -889,7 +924,7 @@ module crypto_console #(
 
                 S_NUM: begin
                     if (rx_beat) begin
-                        if (is_cr) begin
+                        if (is_eol) begin
                             if ((nb_q == 7'd0) || (nb_q > 7'd8)) begin
                                 ans_q      <= A_STR;
                                 str_q      <= STR_ERR;
@@ -899,11 +934,11 @@ module crypto_console #(
                             end else begin
                                 state_q <= S_GEN;
                             end
-                        end else if (is_lf | is_sp) begin
+                        end else if (is_sp) begin
                             state_q <= S_NUM;
                         end else if (is_hex) begin
                             cnt_q <= {cnt_q[27:0], nib};
-                            nb_q  <= nb_q + 7'd1;
+                            nb_q  <= nb_next;
                         end else begin
                             state_q    <= S_SKIP;
                             use_hash_q <= 1'b0;
@@ -914,7 +949,7 @@ module crypto_console #(
 
                 S_ARG: begin
                     if (rx_beat) begin
-                        if (is_cr) begin
+                        if (is_eol) begin
                             // The register is the right one only if exactly
                             // as many digits arrived as it has nibbles.
                             if (((ans_q == A_KEY) && (nb_q == 7'd64))
@@ -927,10 +962,10 @@ module crypto_console #(
                                 str_q <= STR_ERR;
                             end
                             state_q <= S_ANS;
-                        end else if (is_lf | is_sp) begin
+                        end else if (is_sp) begin
                             state_q <= S_ARG;
                         end else if (is_hex) begin
-                            nb_q <= nb_q + 7'd1;
+                            nb_q <= nb_next;
                             case (ans_q)
                                 A_KEY:   key_q   <= {key_q[251:0], nib};
                                 A_NON:   nonce_q <= {nonce_q[91:0], nib};
@@ -946,9 +981,7 @@ module crypto_console #(
 
                 S_EOL1: begin
                     if (rx_beat) begin
-                        if (is_lf) begin
-                            state_q <= S_EOL1;
-                        end else if (is_cr) begin
+                        if (is_eol) begin
                             state_q <= S_ANS;
                             en_q    <= (ans_q == A_KEY) ? 7'd64
                                      : (ans_q == A_NON) ? 7'd24
@@ -967,7 +1000,7 @@ module crypto_console #(
                     // told so with `start`, which is what that port is for;
                     // the cipher does not need telling, because every
                     // command that uses it starts it.
-                    if (rx_beat && is_cr) begin
+                    if (rx_beat && is_eol) begin
                         ans_q   <= A_STR;
                         str_q   <= STR_ERR;
                         hs_q    <= 1'b1;

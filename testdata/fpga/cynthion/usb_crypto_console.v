@@ -81,26 +81,62 @@
 // design cannot take the debugger away.
 //
 // ===================================================================
-// THE PART IS NEARLY FULL, AND THAT IS THE DESIGN'S ONE HARD LIMIT
+// TWO ANSWERS TO "HOW BIG IS THIS PART", AND THEY DIFFER BY A FACTOR OF TWO
 // ===================================================================
 //
-// An LFE5U-12F has 12 144 lookup tables. The serial port is about 1 230 of
-// them, `ip/crypto/sha256` about 3 200 and `ip/crypto/chacha20` about
-// 5 980 — ten and a half thousand before a single line of this console
-// exists. That is why there is no FIFO anywhere in it, why the key, the
-// nonce and the counter are **rotated** rather than parallel-loaded out of
-// a staging register, and why the digest is read out of
-// `ip/crypto/sha256`'s own holding register instead of being copied into
-// one here. `crypto_console.v`'s header has each of those three decisions
-// with its cost.
+// This design is **11 971 lookup tables** and 2 999 flip-flops: the serial
+// port is about 1 230 of them, `ip/crypto/sha256` 3 205,
+// `ip/crypto/chacha20` 5 978, and `crypto_console` itself 1 558.
 //
-// **Most of that area is adders with no carry cell.** `src/fpga/trellis`
-// describes `CCU2C` without a port map, so the flow reports
-// `N adder(s) stay generic` and a 32-bit addition becomes a ripple of LUT4
-// about twenty-one levels deep. On an iCE40, where `SB_CARRY` is inferred,
-// ChaCha20's quarter round is **5** levels and SHA-256's T1 chain is **9**;
-// here they are **87** and **39**. That is the single change that would
-// most move both the area and the clock of this design, it is a change to
+// `src/fpga/devices/ecp5.dev` declares `count 12144` for an
+// `ecp5-12f-CABGA256`, which is the LFE5U-12F's datasheet figure, so at the
+// synthesis stage this design is at **98.6 per cent** of the part.
+//
+// **Placement reports 11 973 of 24 288 lut sites**, which is 49 per cent,
+// and it is not wrong either: the sites come out of Project Trellis' own
+// tile grid, and prjtrellis describes a **die**. An LFE5U-12F is an
+// LFE5U-25F die with less of it guaranteed, so a fabric database that
+// describes the silicon finds 24 288 lookup tables, 3 036
+// `TRELLIS_DPR16X4` and 56 block RAMs on a part whose data sheet promises
+// half of that.
+//
+// Nothing here depends on the difference — 11 971 fits inside 12 144 — and
+// it is written down because a design that needed **more** than 12 144
+// would synthesise, place, route and produce a working bitstream while
+// using fabric Lattice does not guarantee on this part number, and nothing
+// in the flow would say so. That is a note about the two databases rather
+// than about this design, and the place to act on it is `src/`.
+//
+// The three decisions this design made expecting a full part are still the
+// right ones and cost nothing: no FIFO anywhere (so no byte is ever held and
+// a line may be any length), the key, nonce and counter **rotated** rather
+// than parallel-loaded out of a staging register, and the digest read out of
+// `ip/crypto/sha256`'s own holding register instead of copied into one here.
+// `crypto_console.v`'s header has each of them with its cost.
+//
+// ===================================================================
+// MOST OF THE AREA IS ADDERS WITH NO CARRY CELL, AND THAT IS THE CLOCK
+// ===================================================================
+//
+// `src/fpga/trellis` describes `CCU2C` without a (ci, i0, i1, co) port map,
+// so the flow reports `85 adder(s) stay generic` for this design and a
+// 32-bit addition becomes a ripple of LUT4 about twenty-one levels deep.
+// On an iCE40, where `SB_CARRY` is inferred, ChaCha20's quarter round is
+// **5** levels of lookup table and SHA-256's T1 chain is **9**; here the
+// mapper reports the design's longest path as **87**, which is ChaCha20's
+// four chained 32-bit additions, and `ip/crypto/sha256`'s own is **39**.
+//
+// **There is no vendor timing model in this repository**, so "the clock
+// closed" cannot be a slack number here: `reticle timing` says in its own
+// help that its device numbers are placeholders. What a closed clock means
+// for this design is therefore the stronger thing and not the weaker one —
+// **the part computes the right answers at 60 MHz**, which a path missing
+// 16.67 ns could not do, because a wrong bit anywhere in eighty-seven
+// levels of logic changes the digest. `tests/usb_crypto_console.rs` is that
+// measurement and the session quoted above is what it printed.
+//
+// Inferring the carry cell is the single change that would most move both
+// the area and the achievable clock of this design. It is a change to
 // `src/` and not to anything in `ip/`, and it is noted here and not made.
 //
 // Sources: ip/usb/usb_cdc_acm/rtl/*.v,
