@@ -6716,172 +6716,574 @@ fn the_hub_boards_console_names_the_fields_its_header_claims() {
     );
 }
 
+/// Everything Lattice's own packer writes for a `CCU2C`, asked in full
+/// and answered out of their own bitstreams for this very board.
+///
+/// This is the strongest evidence any feature of this backend rests on,
+/// by weight: **2131 carry cells** in three files this tree already
+/// decodes byte for byte — 1212 in `analyzer.bit`, 6 in `selftest.bit`,
+/// 913 in `facedancer.bit` — against 111 distributed RAMs and 53 block
+/// RAMs. Any design with arithmetic in it has carry cells, and all three
+/// of these have plenty.
+///
+/// | | |
+/// |---|---|
+/// | How many | 1212 in `analyzer.bit`, 6 in `selftest.bit`, 913 in `facedancer.bit`, over 625 tiles |
+/// | `SLICE<l>.MODE` | `CCU2`, **two bits, per slice** — four separate fields, so a tile holds one carry cell or four. Set in their files at the frames this flow computes |
+/// | `SLICE<l>.CCU2.INJECT1_0` | `NO` in **all 2131**, without exception |
+/// | `SLICE<l>.CCU2.INJECT1_1` | `NO` in 1883; left at its `YES` default in 248, which are exactly the slices whose upper half is unused |
+/// | `SLICE<l>.K<n>.INIT` | the lane's truth table: bits 15..12 the propagate, bits 3..0 the generate. The 248 unused upper halves are at the `0xFFFF` default, which costs no bits *and* passes the carry through |
+/// | `SLICE<l>.C<n>MUX`, `D<n>MUX` | `= 1` in **every one of the 4262 halves**, without exception |
+/// | The sum | `F<z> <- F5<l>_SLICE` for a lower half and `FX<l>_SLICE` for an upper one: **all 4014** driven halves, and not one on the `F<z>_SLICE` a lookup table uses |
+/// | The chain | A, B, C, D of a tile and then the tile one column **east**: every one of the 239 maximal runs begins at slice A |
+/// | Entering it | the first half of every run has propagate **zero**, so its carry out is its generate whatever `FCI` carried |
+/// | Leaving it | the last half of every run has propagate zero too, so its sum *is* the carry handed to it — which is how the chain's carry out is read |
+/// | Flip-flops in a carry slice | 419 of them across the three. Arithmetic mode takes a slice's lookup tables, **not** its registers |
+/// | Other logic in a carry tile | 384 lookup tables in slices of a carry tile that are not in `CCU2` mode |
+///
+/// One row of that table is the direct measurement of a **shared bit**,
+/// and it is the seventh such place on this part. `INJECT1_<n> = NO` is
+/// set on 4014 of the 4262 halves, and 4014 sums are driven: the same
+/// number, because `CCU2.INJECT1_<n> = NO` and the pip
+/// `F<z> <- F5<l>_SLICE` are one fuse. Read as logic it selects the
+/// slice's wide-function output; read as arithmetic it ungates the
+/// carry.
+///
+/// # The INIT values, which say what the nibbles mean
+///
+/// Eighteen distinct truth tables across the three files, and every one
+/// of them is an arithmetic lane under the equation above:
+///
+/// | `INIT` | propagate | generate | what it is |
+/// |---|---|---|---|
+/// | `0x666A` | `a ^ b` | `a` | a two-operand add — what this flow writes |
+/// | `0x666C` | `a ^ b` | `b` | the same, generate on the other operand |
+/// | `0x999A`, `0x999C` | `a ~^ b` | `a`, `b` | a subtract |
+/// | `0xAAA0`, `0xCCC0` | `a`, `b` | 0 | one operand and the carry: an increment |
+/// | `0x555A`, `0x333C` | `~a`, `~b` | `a`, `b` | one operand and a constant one |
+/// | `0x5550`, `0x3330`, `0xFFF0` | `~a`, `~b`, 1 | 0 | constants folded in |
+/// | `0xAAAA`, `0xCCCC` | `a`, `b` | `a`, `b` | the same as `0xAAA0`/`0xCCC0`: where the propagate is zero the generate is too |
+/// | `0x0000` | 0 | 0 | a carry in of **zero** |
+/// | `0x000A`, `0x000C` | 0 | `a`, `b` | a carry in off a routed wire |
+/// | `0x000E` | 0 | `a \| b` | a carry in of **one**, with both pins forced high |
+/// | `0xFFFF` | 1 | 1 | the default, which costs no bits: an unused half that passes the carry through untouched |
+///
+/// `0x666A` is the value `src/fpga/devices/ecp5.dev` carries and
+/// `0x0000` the one it writes for a lane that enters the chain, so both
+/// of this flow's two values are in the vendor's own files.
+///
+/// # What this did **not** settle, and it is worth saying
+///
+/// `ecppack` enters a chain with a cell of its own and reads the carry
+/// out with another, where this flow spends a *lane* on each — the
+/// cheaper arrangement, and the one its own `INIT` table allows, since
+/// a lane with both operands zero has propagate and generate zero
+/// without any special value. Nothing in these files contradicts it,
+/// and nothing in them demonstrates it either. What demonstrates it is
+/// `tests/fpga_carry.rs`, where a solver proves the chain equivalent to
+/// the adder it came from, and `src/fpga/primitives.rs`'s own exhaustive
+/// check, which varies the dangling `CIN` and the unconnected operand
+/// pins both ways.
 #[test]
-#[ignore]
-fn zz_scratch_carry() {
+fn what_lattices_own_packer_writes_for_a_carry_cell() {
     let Some(root) = chipdb() else { return };
     let db = trellis::open(&Disk(root), "", PART).unwrap();
-    let _fabric = db.load(&TrellisOptions::new()).unwrap();
-    for name in ["analyzer", "selftest", "facedancer"] {
-        let Some(bytes) = reference(name) else { return };
+    let fabric = db.load(&TrellisOptions::new()).unwrap();
+    // file, carry slices, tiles holding them.
+    let expected: [(&str, usize, usize); 3] = [
+        ("analyzer", 1212, 363),
+        ("selftest", 6, 2),
+        ("facedancer", 913, 260),
+    ];
+    // Across all three, in the order the assertion at the end names them.
+    let mut inject = [0usize; 2];
+    let mut tied = 0usize;
+    let mut sums = [0usize; 3]; // on F5/FX, on F<z>_SLICE, undriven
+    let mut runs = 0usize;
+    let mut flops = 0usize;
+    let mut other_logic = 0usize;
+    let mut tables: std::collections::BTreeSet<u32> = Default::default();
+    for (name, cells, tiles) in expected {
+        let Some(bytes) = reference(name) else {
+            return;
+        };
         let stream = Ecp5Stream::parse(&bytes, &formats).unwrap();
         let decoded = db.decode(&stream.cram);
-        let mut ccu2: std::collections::BTreeSet<(u32, u32, char)> = Default::default();
-        for (at, field, value) in &decoded.enums {
-            if field.ends_with(".MODE") && value == "CCU2" {
-                ccu2.insert((at.0, at.1, field.as_bytes()[5] as char));
+        let mut carry: std::collections::BTreeSet<(u32, u32, char)> = Default::default();
+        let (field, value) = trellis::CARRY_MODE;
+        for (at, name, what) in &decoded.enums {
+            if what == value
+                && name.ends_with(&format!(".{field}"))
+                && let Some(letter) = name.strip_prefix("SLICE").and_then(|s| s.chars().next())
+            {
+                carry.insert((at.0, at.1, letter));
             }
         }
-        println!("=== {name}: {} CCU2 slices", ccu2.len());
-        let hex = |at: (u32, u32), field: &str| -> u32 {
-            match decoded
-                .words
-                .iter()
-                .find(|(p, f, _)| *p == at && f == field)
-                .map(|(_, _, v)| v.as_str())
-            {
-                None => 0xFFFF,
-                Some(s) => s
-                    .bytes()
-                    .enumerate()
-                    .map(|(i, b)| u32::from(b == b'1') << i)
-                    .sum(),
-            }
-        };
-        let enum_of = |at: (u32, u32), field: &str| -> Option<&str> {
+        assert_eq!(carry.len(), cells, "{name}.bit: slices in `CCU2` mode");
+        let positions: std::collections::BTreeSet<(u32, u32)> =
+            carry.iter().map(|(x, y, _)| (*x, *y)).collect();
+        assert_eq!(positions.len(), tiles, "{name}.bit: tiles holding one");
+        let enum_of = |at: (u32, u32), what: &str| -> Option<&str> {
             decoded
                 .enums
                 .iter()
-                .find(|(p, f, _)| *p == at && f == field)
+                .find(|(p, f, _)| *p == at && f == what)
                 .map(|(_, _, v)| v.as_str())
         };
-        let driven = |at: (u32, u32), wire: &str| -> bool {
-            decoded.arcs.iter().any(|(p, to, _)| *p == at && to == wire)
+        let word = |at: (u32, u32), what: &str| -> u32 {
+            match decoded
+                .words
+                .iter()
+                .find(|(p, f, _)| *p == at && f == what)
+                .map(|(_, _, v)| v.as_str())
+            {
+                // The `INIT` bits are `!`-marked, so the default is all
+                // ones and costs no bits at all.
+                None => 0xFFFF,
+                Some(bits) => bits
+                    .bytes()
+                    .enumerate()
+                    .map(|(index, bit)| u32::from(bit == b'1') << index)
+                    .sum(),
+            }
         };
-        // Reconstruct chains under the rule "A,B,C,D then the tile east".
-        let next = |(x, y, l): (u32, u32, char)| -> (u32, u32, char) {
+        for (x, y, letter) in &carry {
+            let at = (*x, *y);
+            let slice = usize::from(*letter as u8 - b'A');
+            // The mode bits, at the absolute frame positions this flow
+            // computes for them.
+            let ty = fabric.arch.tile_index_at(at.0, at.1).expect("a tile");
+            let bits = fabric
+                .carries
+                .get(&(ty, format!("SLICE{letter}.{}", trellis::CARRY_BEL)))
+                .unwrap_or_else(|| panic!("{name}.bit: X{}Y{} holds no carry bel", at.0, at.1));
+            assert_eq!(bits.mode.len(), 2, "two bits, and per slice");
+            for bit in &bits.mode {
+                let (frame, index) = fabric.frames.locate(at, *bit).expect("inside the tile");
+                assert!(
+                    stream.cram.get(frame, index),
+                    "{name}.bit: F{frame}B{index}, a `CCU2` mode bit of X{}Y{} SLICE{letter}, is \
+                     clear in a file whose decoding says that slice is in that mode",
+                    at.0,
+                    at.1
+                );
+            }
+            for half in 0..2usize {
+                let z = slice * 2 + half;
+                match enum_of(
+                    at,
+                    &format!("SLICE{letter}.{}", trellis::carry_inject(half)),
+                ) {
+                    Some(trellis::CARRY_OFF) => inject[0] += 1,
+                    None => inject[1] += 1,
+                    other => panic!("{name}.bit: INJECT1_{half} is {other:?}"),
+                }
+                // `C` and `D` are not operands and are forced high, which
+                // is what puts the propagate in bits 15..12.
+                for input in trellis::CARRY_TIED_INPUTS {
+                    let input = trellis::LUT_INPUTS[input];
+                    assert_eq!(
+                        enum_of(at, &format!("SLICE{letter}.{input}{half}MUX")),
+                        Some(trellis::TIE_HIGH),
+                        "{name}.bit at X{}Y{} SLICE{letter}: {input}{half} is not forced high",
+                        at.0,
+                        at.1
+                    );
+                    tied += 1;
+                }
+                tables.insert(word(at, &format!("SLICE{letter}.K{half}.INIT")));
+                // Where the sum leaves the slice, which is not where a
+                // lookup table's output leaves it.
+                let wanted = trellis::carry_pins(slice)
+                    .into_iter()
+                    .find(|(role, _)| *role == format!("s{half}"))
+                    .map(|(_, wire)| wire)
+                    .expect("a sum pin");
+                match decoded
+                    .arcs
+                    .iter()
+                    .find(|(p, to, _)| *p == at && *to == format!("F{z}"))
+                    .map(|(_, _, from)| from.as_str())
+                {
+                    Some(from) if from == wanted => sums[0] += 1,
+                    Some(from) => {
+                        assert_ne!(
+                            from,
+                            format!("F{z}_SLICE"),
+                            "{name}.bit at X{}Y{}: a carry slice's sum came out on the lookup \
+                             table's own output wire",
+                            at.0,
+                            at.1
+                        );
+                        sums[1] += 1;
+                    }
+                    None => sums[2] += 1,
+                }
+            }
+            // A carry slice keeps its flip-flops, and the rest of its
+            // tile keeps its lookup tables; both are why
+            // `BelDecl::blocks` names two bels and not ten.
+            for half in 0..2usize {
+                if enum_of(at, &format!("SLICE{letter}.REG{half}.SD")).is_some() {
+                    flops += 1;
+                }
+            }
+        }
+        for at in &positions {
+            for slice in 0..4usize {
+                let letter = (b'A' + u8::try_from(slice).unwrap()) as char;
+                if carry.contains(&(at.0, at.1, letter)) {
+                    continue;
+                }
+                for half in 0..2usize {
+                    if word(*at, &format!("SLICE{letter}.K{half}.INIT")) != 0xFFFF {
+                        other_logic += 1;
+                    }
+                }
+            }
+        }
+        // The chain, walked the way the fabric says it runs: A, B, C, D
+        // and then the tile one column east. Every maximal run must begin
+        // at slice A — a run beginning anywhere else would mean a carry
+        // arriving from a slice in logic mode — and the halves at its two
+        // ends must both have propagate zero, which is how a chain is
+        // entered and how its carry out is read.
+        let step = |(x, y, l): (u32, u32, char)| -> (u32, u32, char) {
             if l == 'D' {
                 (x + 1, y, 'A')
             } else {
                 (x, y, (l as u8 + 1) as char)
             }
         };
-        let prev = |(x, y, l): (u32, u32, char)| -> Option<(u32, u32, char)> {
+        let back = |(x, y, l): (u32, u32, char)| -> Option<(u32, u32, char)> {
             if l == 'A' {
                 (x > 0).then_some((x - 1, y, 'D'))
             } else {
                 Some((x, y, (l as u8 - 1) as char))
             }
         };
-        let mut runs: Vec<Vec<(u32, u32, char)>> = Vec::new();
-        let mut seen: std::collections::BTreeSet<(u32, u32, char)> = Default::default();
-        for cell in &ccu2 {
-            if seen.contains(cell) || prev(*cell).is_some_and(|p| ccu2.contains(&p)) {
+        let propagate = |(x, y, l): (u32, u32, char), half: usize| -> u32 {
+            (word((x, y), &format!("SLICE{l}.K{half}.INIT")) >> 12) & 0xF
+        };
+        for cell in &carry {
+            if back(*cell).is_some_and(|before| carry.contains(&before)) {
                 continue;
             }
-            let mut run = Vec::new();
-            let mut at = *cell;
-            loop {
-                run.push(at);
-                seen.insert(at);
-                let n = next(at);
-                if ccu2.contains(&n) {
-                    at = n;
-                } else {
-                    break;
-                }
+            assert_eq!(
+                cell.2, 'A',
+                "{name}.bit: a chain begins at X{}Y{} SLICE{}, and a carry can only arrive at a \
+                 slice from the one before it",
+                cell.0, cell.1, cell.2
+            );
+            let mut last = *cell;
+            while carry.contains(&step(last)) {
+                last = step(last);
             }
-            runs.push(run);
-        }
-        // Tabulate the INIT of each half by its place in a run.
-        let mut by_place: std::collections::BTreeMap<String, usize> = Default::default();
-        let mut injectors: std::collections::BTreeMap<String, usize> = Default::default();
-        for run in &runs {
-            for (i, (x, y, l)) in run.iter().enumerate() {
-                let at = (*x, *y);
-                let s = u32::from(*l as u8 - b'A');
-                for half in 0..2u32 {
-                    let z = s * 2 + half;
-                    let init = hex(at, &format!("SLICE{l}.K{half}.INIT"));
-                    // propagate quadrant with C and D forced high, and the
-                    // generate nibble.
-                    let p = (init >> 12) & 0xF;
-                    let g = init & 0xF;
-                    let place = if i == 0 && half == 0 {
-                        "first half"
-                    } else if i == run.len() - 1 && half == 1 {
-                        "last half"
-                    } else {
-                        "middle"
-                    };
-                    by_place
-                        .entry(format!("{place}: INIT=0x{init:04X} p={p:X} g={g:X}"))
-                        .and_modify(|c| *c += 1)
-                        .or_insert(1);
-                    if p == 0 {
-                        let a = (
-                            enum_of(at, &format!("SLICE{l}.A{half}MUX")),
-                            driven(at, &format!("A{z}")),
-                        );
-                        let b = (
-                            enum_of(at, &format!("SLICE{l}.B{half}MUX")),
-                            driven(at, &format!("B{z}")),
-                        );
-                        injectors
-                            .entry(format!(
-                                "p=0 INIT=0x{init:04X} at place {i}/{} half {half} A={a:?} B={b:?}",
-                                run.len()
-                            ))
-                            .and_modify(|c| *c += 1)
-                            .or_insert(1);
-                    }
-                }
-            }
-        }
-        println!("  {} runs", runs.len());
-        for (k, v) in &by_place {
-            println!("    {k} x{v}");
-        }
-        println!("  injector-shaped halves:");
-        let mut collapsed: std::collections::BTreeMap<String, usize> = Default::default();
-        for (k, v) in &injectors {
-            let key = k.split(" at place ").next().unwrap().to_owned();
-            let tail = k.split(" half ").nth(1).unwrap();
-            *collapsed.entry(format!("{key} half {tail}")).or_insert(0) += v;
-        }
-        for (k, v) in &collapsed {
-            println!("    {k} x{v}");
-        }
-        // The first few runs in full.
-        for run in runs.iter().take(3) {
-            println!("  run of {}:", run.len());
-            for (x, y, l) in run {
-                let at = (*x, *y);
-                let s = u32::from(*l as u8 - b'A');
-                let mut line = format!("    X{x}Y{y} SLICE{l}");
-                for half in 0..2u32 {
-                    let z = s * 2 + half;
-                    line.push_str(&format!(
-                        " | K{half}=0x{:04X} inj{half}={:?}",
-                        hex(at, &format!("SLICE{l}.K{half}.INIT")),
-                        enum_of(at, &format!("SLICE{l}.CCU2.INJECT1_{half}")),
-                    ));
-                    for x2 in ['A', 'B', 'C', 'D'] {
-                        line.push_str(&format!(
-                            " {x2}{half}={}",
-                            match (
-                                enum_of(at, &format!("SLICE{l}.{x2}{half}MUX")),
-                                driven(at, &format!("{x2}{z}"))
-                            ) {
-                                (Some(v), r) => format!("mux{v}/routed{r}"),
-                                (None, r) => format!("-/routed{r}"),
-                            }
-                        ));
-                    }
-                    line.push_str(&format!(" F{z}driven={}", driven(at, &format!("F{z}"))));
-                }
-                println!("{line}");
-            }
+            assert_eq!(
+                propagate(*cell, 0),
+                0,
+                "{name}.bit: the chain at X{}Y{} does not start with a propagate of zero, so what \
+                 it adds depends on a wire nothing drives",
+                cell.0,
+                cell.1
+            );
+            assert_eq!(
+                propagate(last, 1),
+                0,
+                "{name}.bit: the chain ending at X{}Y{} SLICE{} does not end with a propagate of \
+                 zero",
+                last.0,
+                last.1,
+                last.2
+            );
+            runs += 1;
         }
     }
+    assert_eq!(
+        (inject, tied, sums, runs, flops, other_logic),
+        (
+            // `INJECT1_<n> = NO` for 4014 of the 4262 halves and left at
+            // its `YES` default for 248 — and those 248 are exactly the
+            // halves with no sum and no `INIT`, which is the arrangement
+            // that passes a carry through an unused half for free.
+            //
+            // 4014 is also exactly how many sums are driven, three lines
+            // below, and that is not a coincidence: `INJECT1_<n> = NO`
+            // and the pip that takes the sum out of the slice **are the
+            // same bit**. This equality is the direct measurement of
+            // that, over 4262 halves of 2131 cells in three files.
+            [4014, 248],
+            // `C<n>MUX` and `D<n>MUX` forced high: two inputs of every
+            // one of the 4262 halves, with no exception anywhere.
+            8524,
+            // Every driven sum on `F5<l>_SLICE` or `FX<l>_SLICE`, none on
+            // anything else, and 248 undriven.
+            [4014, 0, 248],
+            // Maximal runs of the chain across the three files.
+            239,
+            // Flip-flops inside a carry slice, which is why a carry cell
+            // blocks two bels and not ten.
+            419,
+            // Lookup tables in the slices of a carry tile that are not in
+            // `CCU2` mode, which is the other half of the same rule.
+            384,
+        ),
+        "what `ecppack` writes for a carry cell has changed shape"
+    );
+    assert_eq!(
+        tables.len(),
+        18,
+        "distinct truth tables across the three files: {:?}",
+        tables
+            .iter()
+            .map(|t| format!("{t:#06X}"))
+            .collect::<Vec<_>>()
+    );
+    // The two values this flow itself writes are both in their files.
+    assert!(tables.contains(&0x666A), "a two-operand add");
+    assert!(tables.contains(&0x0000), "a carry in of zero");
+}
+
+/// A carry chain places, routes and every bit of it decodes.
+///
+/// `testdata/fpga/ecp5/carry_chain_16.v` is a 16-bit accumulator and
+/// nothing else: seventeen lanes, so nine `CCU2C` in one chain, with
+/// every sum registered so that every one of them has to leave its slice
+/// and come back in.
+///
+/// What this asserts beyond "it came out":
+///
+/// - the chain is **contiguous and in order**, cell *n* + 1 on the site
+///   cell *n*'s carry out reaches. That is the thing placement had to
+///   learn, and it is checked against the fabric's own pips rather than
+///   against a slice-letter rule written down here.
+/// - the chain runs **east**, one column at a time, four slices to a
+///   tile — which is the direction a guess by analogy with the iCE40
+///   would have got wrong.
+/// - the carry net of every link is routed and **costs no bits**, because
+///   it is dedicated metal.
+/// - every slice holding a carry cell is in `CCU2` mode in the finished
+///   image, at the absolute frame positions this flow computes, and
+///   **no lookup table shares a slice with one** — from both sides.
+/// - every set bit decodes back through the database with nothing
+///   unexplained, and the arcs they select are exactly the ones the
+///   router chose plus the ones a carry cell's own `INJECT1` bits claim.
+///   See `chosen_with_carry`.
+#[test]
+#[cfg(all(feature = "verilog", feature = "synth"))]
+fn a_carry_chain_places_routes_and_every_bit_of_it_decodes() {
+    let Some(root) = chipdb() else { return };
+    let db = trellis::open(&Disk(root.clone()), "", PART).unwrap();
+    let fabric = db.load(&TrellisOptions::new()).unwrap();
+    let (bits, stream, pads, report, _io, routed) = compile_all(
+        &fabric,
+        &["testdata/fpga/ecp5/carry_chain_16.v"],
+        "testdata/fpga/ecp5/carry_chain_16.rcf",
+    );
+    assert_eq!(pads, 34, "every port on a top-edge ball");
+
+    // ---- the chain itself ----
+    let carries: Vec<usize> = (0..routed.netlist.instances.len())
+        .filter(|index| routed.netlist.instances[*index].kind == "carry")
+        .collect();
+    assert_eq!(
+        carries.len(),
+        9,
+        "sixteen bits is seventeen lanes is nine `CCU2C`"
+    );
+    assert_eq!(routed.carries.cells, 9, "and all nine were configured");
+    let site_of = |index: usize| {
+        &routed.graph.sites[routed
+            .placement
+            .site_of(index)
+            .unwrap_or_else(|| panic!("instance {index} is not placed"))]
+    };
+    // The chain in netlist order: each cell's `co` signal feeds the next
+    // cell's `ci`, which is how `fpga::place` found it too.
+    let mut order: Vec<usize> = Vec::new();
+    let signal = |index: usize, role: &str| -> Option<usize> {
+        routed.netlist.instances[index]
+            .pins
+            .iter()
+            .find(|pin| routed.netlist.pins[**pin].role == role)
+            .and_then(|pin| routed.netlist.pins[*pin].signal)
+    };
+    let mut head = carries.clone();
+    head.retain(|index| {
+        let Some(incoming) = signal(*index, "ci") else {
+            return true;
+        };
+        routed.netlist.signals[incoming].driver.is_none()
+    });
+    assert_eq!(head.len(), 1, "one chain, so one cell with no carry in");
+    let mut at = head[0];
+    loop {
+        order.push(at);
+        let Some(out) = signal(at, "co") else { break };
+        let sinks = &routed.netlist.signals[out].sinks;
+        if sinks.is_empty() {
+            break;
+        }
+        at = routed.netlist.pins[sinks[0]].instance;
+    }
+    assert_eq!(order.len(), 9, "and it is one chain and not two");
+
+    // Consecutive sites, in the fabric's own terms: the carry out of one
+    // reaches the carry in of the next, over pips that cost no bits.
+    for pair in order.windows(2) {
+        let (from, to) = (site_of(pair[0]), site_of(pair[1]));
+        let start = from.pin("co").expect("a carry out");
+        let wanted = to.pin("ci").expect("a carry in");
+        let mut frontier = vec![start];
+        let mut found = false;
+        for _ in 0..8 {
+            let mut next = Vec::new();
+            for node in frontier {
+                for pip in routed.graph.outgoing(node) {
+                    assert!(
+                        routed.graph.pip_bits(*pip).is_empty(),
+                        "a carry travels over a pip that costs bits, so it is not dedicated \
+                         metal after all"
+                    );
+                    let node = routed.graph.pip(*pip).to;
+                    if node == wanted {
+                        found = true;
+                    } else {
+                        next.push(node);
+                    }
+                }
+            }
+            if found || next.is_empty() {
+                break;
+            }
+            frontier = next;
+        }
+        assert!(
+            found,
+            "`{}` and `{}` are not consecutive on the carry chain, so the carry between them \
+             has no path at all",
+            from.name, to.name
+        );
+    }
+    // And the shape that is: four slices to a tile, then one column east.
+    let mut columns: Vec<(u32, u32, String)> = order
+        .iter()
+        .map(|index| {
+            let site = site_of(*index);
+            (site.tile.0, site.tile.1, site.bel.clone())
+        })
+        .collect();
+    let row = columns[0].1;
+    assert!(
+        columns.iter().all(|(_, y, _)| *y == row),
+        "the chain left its row, and the fabric has no link that does: {columns:?}"
+    );
+    columns.dedup_by_key(|(x, _, _)| *x);
+    assert_eq!(
+        columns.len(),
+        3,
+        "nine cells is three tiles of four slices, so two column steps: {columns:?}"
+    );
+    for pair in columns.windows(2) {
+        assert_eq!(
+            pair[1].0,
+            pair[0].0 + 1,
+            "the chain stepped by more than one column"
+        );
+    }
+
+    // ---- what it costs, and what it does not take ----
+    //
+    // A carry cell blocks its slice's two lookup tables and nothing else.
+    // Asserted from both sides, the way the distributed RAM's exclusion
+    // is: no lookup table in a carry's slice, and every carry's two
+    // lookup tables empty.
+    let mut blocked: std::collections::BTreeSet<(u32, u32, String)> = Default::default();
+    for index in &carries {
+        let site = site_of(*index);
+        let letter = site
+            .bel
+            .strip_prefix("SLICE")
+            .and_then(|s| s.chars().next())
+            .expect("a slice");
+        for half in 0..2 {
+            blocked.insert((site.tile.0, site.tile.1, format!("SLICE{letter}.K{half}")));
+        }
+    }
+    assert_eq!(blocked.len(), 18, "nine slices of two lookup tables");
+    for (index, instance) in routed.netlist.instances.iter().enumerate() {
+        if instance.kind != "lut" {
+            continue;
+        }
+        let site = site_of(index);
+        assert!(
+            !blocked.contains(&(site.tile.0, site.tile.1, site.bel.clone())),
+            "`{}` holds a lookup table and a carry cell's own truth table",
+            site.name
+        );
+    }
+    // Its flip-flops it does keep, which is the other half of the rule.
+    let flops = (0..routed.netlist.instances.len())
+        .filter(|index| routed.netlist.instances[*index].kind == "ff")
+        .count();
+    assert_eq!(flops, 16, "one per bit of the accumulator");
+    assert_eq!(report.signals, routed.netlist.routable().len());
+
+    // ---- the bits ----
+    let (field, value) = trellis::CARRY_MODE;
+    let mut mode_bits = 0usize;
+    for index in &carries {
+        let site = site_of(*index);
+        let key = (site.tile_type, site.bel.clone());
+        let carry = fabric.carries.get(&key).expect("a carry bel's bits");
+        for at in carry.mode.iter().chain(carry.inject.iter().flatten()) {
+            let (frame, bit) = fabric.frames.locate(site.tile, *at).expect("inside");
+            assert!(
+                stream.cram.get(frame, bit),
+                "F{frame}B{bit} of `{}` is clear, and it is a bit the carry cell needs",
+                site.name
+            );
+            mode_bits += 1;
+        }
+    }
+    assert_eq!(mode_bits, 9 * 4, "two mode bits and two inject bits each");
+    assert!(
+        bits.ones() > routed.carry_only.ones(),
+        "the carry cells' bits are a part of the design's image and not all of it"
+    );
+
+    let decoded = db.decode(&stream.cram);
+    assert_eq!(decoded.bits, stream.cram.count_ones());
+    assert_eq!(
+        decoded.unexplained,
+        0,
+        "{} of {} bit(s) belong to no feature the database names:\n{}",
+        decoded.unexplained,
+        decoded.bits,
+        decoded.to_text()
+    );
+    let (selected, unresolved) = db.resolved_arcs(&decoded);
+    assert!(unresolved.is_empty(), "{unresolved:?}");
+    assert_eq!(
+        selected,
+        chosen_with_carry(&fabric, &routed),
+        "the bits select connections the router did not choose, or miss ones it did"
+    );
+    // And the decoding names the carry cells themselves: nine slices in
+    // `CCU2` mode, and no other slice of the die in it.
+    let modes: Vec<&(u32, u32)> = decoded
+        .enums
+        .iter()
+        .filter(|(_, f, v)| v == value && f.ends_with(&format!(".{field}")))
+        .map(|(at, _, _)| at)
+        .collect();
+    assert_eq!(modes.len(), 9, "{modes:?}");
+    // Nothing an arc of the design needs clear was set by something else,
+    // and every clock pin arrived on a global network.
+    assert!(routed.dropped.is_empty(), "{:?}", routed.dropped);
+    assert!(
+        routed.clocks.off_network.is_empty(),
+        "{:?}",
+        routed.clocks.off_network
+    );
 }
