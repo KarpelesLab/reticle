@@ -1,0 +1,16 @@
+# Digilent Basys 3 (Xilinx XC7A35T-1CPG236C), five pins of it.
+#
+# PROVENANCE: V17 / V16 (SW0, SW1) and U16 / E19 (LD0, LD1) are the pins
+# `sw_led.rcf` uses and `examples/soc/board/basys3.rcf` lists. K17 is
+# Pmod JC pin 1, checked on 2026-10-08 against Digilent's published
+# `Basys-3-Master.xdc` ("Pmod Header JC", `JC[0]`, "Sch name = JC1"); it
+# is in bank 14 with the switches and LEDs, which keeps the loaded fabric
+# small.
+#
+# `-pullup yes` on jc1 is what makes a released pin read one rather than
+# float. NOTHING FROM THIS FILE HAS BEEN TRIED ON A PART.
+set_io -io_standard LVCMOS33 sw0 V17
+set_io -io_standard LVCMOS33 sw1 V16
+set_io -io_standard LVCMOS33 -pullup yes jc1 K17
+set_io -io_standard LVCMOS33 led0 U16
+set_io -io_standard LVCMOS33 led1 E19
