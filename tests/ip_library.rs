@@ -20,7 +20,7 @@
 //! | `sha256_takes_the_same_cycles_...`, `chacha20_takes_the_same_cycles_...` | the cycle count of both crypto blocks is **measured** to be independent of the message and of the key |
 //! | `inflate_decompresses_the_compcol_corpus` | 123 DEFLATE and zlib streams a second, independent compression library produced are decompressed byte for byte, under four different consumers |
 //! | `inflate_reports_every_malformed_stream`, `inflate_refuses_or_decodes_every_single_byte_corruption`, `inflate_reports_every_truncation` | every malformed input is **reported** — 21 hand-built streams, 482 corruptions and 235 truncations, and none of the 1196 runs reached its loop bound |
-//! | `a_streams_ready_is_a_function_of_registers` | every block with a ready/valid handshake has a `ready` and a `valid` the timing graph shows depend on **no input port** — including `ip/bus/uart`, whose `rx_valid` and four error flags must not reach back through `rx_ready` — which is the rule `ip/crypto/chacha20`'s header states and nothing used to check |
+//! | `a_streams_ready_is_a_function_of_registers` | every block with a ready/valid handshake has a `ready` and a `valid` the timing graph shows depend on **no input port** — including `ip/bus/uart`, whose `rx_valid` and four error flags must not reach back through `rx_ready` — which is the rule `ip/crypto/chacha20`'s header states and nothing used to check; and every output of `spi_display_rx`, whose inputs are asynchronous pins, is held to the same walk |
 //! | `axil_gpio_matches_the_axi4lite_definition` | `bus::match_ports` recognises the GPIO's bus port |
 //! | `spi_display_rx_is_one_clock_domain` | the one block fed by an external clock does **not** clock on it: one domain, no crossing |
 //! | `cdc_*`, `fifo_async_*` | `timing::analyze_cdc` calls every crossing a synchroniser, never an unsynchronised one |
@@ -34,13 +34,18 @@
 //! period, and the PWM's duty cycle is counted over a whole period.
 //!
 //! `spi_display_rx` is the one block here whose far side is **nobody's
-//! specification** — a screen's SPI link as a user observed it — so its
-//! twelve testbenches drive a model of that master in absolute
-//! simulation time, with every far-side event on an odd tick so that no
-//! pin changes in the same instant as the edge that samples it. Two of
-//! them exist to pin what the block *cannot* tell you: a falling-edge
-//! master read on the rising edge delivers every frame at eight bits
-//! with every counter reading zero, and the wrong bytes.
+//! specification** — a screen's SPI link as a user observed it, on
+//! hardware this machine does not have — so its fifteen testbenches
+//! drive a model of that master in absolute simulation time, with every
+//! far-side event on an odd tick so that no pin changes in the same
+//! instant as the edge that samples it. Three of them exist to pin what
+//! the block *cannot* tell you: a falling-edge master read on the rising
+//! edge delivers every frame at eight bits with every counter reading
+//! zero and the wrong bytes, and a boundary pulse cannot be told from a
+//! level. Its rate limit is a **ratio of clocks** rather than a
+//! frequency, and the test for it moves the parameter against a fixed
+//! waveform, which is the same experiment as moving the clock against a
+//! fixed link.
 //!
 //! The four larger blocks are tested the same way and harder.
 //! `eth_mac_rmii` has its own transmitter looped into its own receiver,
@@ -4373,6 +4378,73 @@ fn spi_display_rx_reports_a_gap_too_short_to_see() {
         "a one-clock gap has no margin and says so"
     );
     assert!(got.overrun);
+}
+
+#[test]
+fn spi_display_rx_reports_two_frames_merged_by_a_gap_it_never_saw() {
+    // A gap of half a system clock period falls **entirely between two
+    // sampling edges**, so the frame close is not merely marginal — it
+    // is invisible. That is the case `overrun_count` cannot catch,
+    // because there is no sampled edge whose margin it could measure,
+    // and it is exactly why the bit count is a second instrument rather
+    // than a redundant one.
+    let mut far = FarSide::new(SPI_PERIOD);
+    far.send(&command(0xA5));
+    far.gap = HALF;
+    far.send(&pixel(0x3C));
+    far.gap = 8 * 2 * HALF;
+    far.send(&pixel(0x7E));
+    far.session(&[]);
+
+    let got = spi_display_session(&[], &far);
+    // The two bytes either side of the missed close merged into one
+    // sixteen-bit frame, so **neither** is delivered. The third byte,
+    // framed normally, is.
+    assert_eq!(got.bytes, vec![(0x7E, true)], "the merged pair is dropped");
+    assert_eq!(got.bit_errors, 1, "one frame disagreed, and only one");
+    assert_eq!(
+        got.overruns, 0,
+        "a gap with no sampled edge inside it has no margin to measure"
+    );
+    assert_eq!(
+        got.dc_changes, 0,
+        "and `dc` never judged it either: the merged frame never \
+         completed, so the bit count is the only instrument that has it"
+    );
+    assert_eq!(
+        got.frames,
+        far.frames - 1,
+        "the master closed four frames and the block saw three"
+    );
+    // **`last_bit_count` is a live value and not a log.** The good frame
+    // after the merged one overwrote it, so at the end of this session it
+    // reads eight again while `bit_error_count` still reads one. The
+    // counter is the record; `last_bit_count` only says what the most
+    // recent close found, which is worth knowing before anyone reads it
+    // as a history.
+    assert_eq!(got.last_bit_count, 8, "the next good frame overwrote it");
+
+    // So to see the fifteen, the merged frame has to be the last one.
+    // Sixteen bits read as **15** because the bit counter saturates
+    // there, rather than wrapping onto eight and looking correct.
+    let mut far = FarSide::new(SPI_PERIOD);
+    far.send(&command(0xA5));
+    far.gap = HALF;
+    far.send(&pixel(0x3C));
+    far.gap = 8 * 2 * HALF;
+    far.session(&[]);
+
+    let got = spi_display_session(&[], &far);
+    assert!(
+        got.bytes.is_empty(),
+        "neither of the merged pair is delivered"
+    );
+    assert_eq!(got.bit_errors, 1);
+    assert_eq!(
+        got.last_bit_count, 15,
+        "sixteen bits, saturating at fifteen"
+    );
+    assert_eq!(got.overruns, 0, "still nothing for the margin to measure");
 }
 
 #[test]
@@ -23996,4 +24068,42 @@ fn a_streams_ready_is_a_function_of_registers() {
         "uart.uart_line_coding is a combinational decode; `cfg_data_bits` depending on no \
          input port would mean it had stopped decoding anything"
     );
+    // `spi_display_rx` has no producer handshake — its producer is four
+    // pins — but the **mirror rule matters more** there than anywhere
+    // else in this library, because those four pins are asynchronous to
+    // the clock. An output a consumer samples must be a function of
+    // registers, or the consumer's logic is fed straight off an external
+    // pin with no synchroniser in front of it, and the whole argument
+    // for oversampling rather than clocking on `sclk` collapses. So the
+    // same walk is run on every output of it that a design reads.
+    //
+    // This is the mechanised form of what `spi_display_rx_is_one_clock_domain`
+    // checks structurally: that one says nothing in the block is clocked
+    // by `sclk`, and this one says nothing in it is *combinationally*
+    // driven by `sclk` either. `rx_valid` written as
+    // `assign rx_valid = deliver;` would pass the first and fail this.
+    for port in [
+        "rx_valid",
+        "rx_byte",
+        "rx_is_data",
+        "framed",
+        "framing_error",
+        "dc_error",
+        "overrun",
+        "bit_count",
+        "last_bit_count",
+        "bit_error_count",
+        "dc_change_count",
+        "overrun_count",
+        "cmd_byte_count",
+        "data_byte_count",
+        "frame_count",
+    ] {
+        let inputs = combinational_inputs_of("spi_display_rx", "spi_display_rx", &[], port);
+        assert!(
+            inputs.is_empty(),
+            "spi_display_rx: `{port}` depends combinationally on {inputs:?}, \
+             which puts an asynchronous pin into a consumer's logic"
+        );
+    }
 }

@@ -150,7 +150,7 @@ in that category because of the second and third observations in §1.
 | `bit_error_count` | `COUNT_WIDTH` | **0** | A frame did not carry eight bits. The bursts were OBSERVED to be exactly eight, so this is a fault and not a tolerance. `last_bit_count` says *which* count it arrived at — seven and nine are identical in this counter and completely different in the diagnosis. |
 | `dc_change_count` | `COUNT_WIDTH` | **0** | `dc` moved inside a byte. Per-byte holding was OBSERVED, so a wire that disagrees with itself is either not `dc` — a mislabelled analyser channel, which is what the first pass in §1 actually was — or a display that qualifies per bit. At the default `DC_SAMPLE = 0` those bytes are **withheld**, because a wrongly tagged command byte is worse than a missing one. |
 | `overrun_count` | `COUNT_WIDTH` | **0** | A sampled input held its level for fewer than `PHASE_MARGIN` system clocks, so its next transition could have been missed. This is the *early* warning: it rises before any bit is lost. See §7. |
-| `last_bit_count` | 4 | **8** | The bit count at the most recent frame close. Saturates at fifteen, so "the frame never closed" reads as 15 rather than wrapping onto 8. |
+| `last_bit_count` | 4 | **8** | The bit count at the most recent frame close. **A live value, not a log**: a good frame after a bad one overwrites it, so `bit_error_count` is the record and this is the detail. Saturates at fifteen, so sixteen bits cannot read as eight and look correct. |
 | `bit_count` | 4 | — | Bits in the frame in progress, live. Useful on a probe, not in a log. |
 | `framed` | 1 | **1** | The block has seen a frame close and then a frame open, so it is accumulating bits. **Read this first when nothing comes out at all.** |
 | `framing_error`, `dc_error`, `overrun` | 1 | **0** | The three error counters as single wires, for a design that wants three lights rather than a bus. |
@@ -232,11 +232,16 @@ later.
    less urgency. Check whether the idle gap is the culprit rather than
    the burst: §7 gives the gap its own minimum, and a short gap is the
    one that bites while the byte rate looks comfortable.
-5. **`last_bit_count` reads 9, or 16, or 15** — not a rate problem. 9
-   means there are more clock edges in a frame than there should be; 16
-   means two frames were merged, so a frame close was missed (a gap below
-   the §7 minimum); 15 is the saturation value and means the frame has
-   not closed at all since the counter last reset.
+5. **`last_bit_count` reads 9 or more** — not a rate problem. 9 means
+   there were more clock edges inside one frame than there should be.
+   **15 is the saturation value**: the in-frame bit counter stops there,
+   so 15 means at least fifteen edges arrived before the frame closed,
+   and the usual cause is two frames merged because a close was missed —
+   a gap below §7's minimum. It saturates rather than wrapping precisely
+   so that sixteen bits cannot read as eight and look correct. Remember
+   that this one is a live value: if `bit_error_count` is non-zero and
+   `last_bit_count` reads 8, a good frame has overwritten the evidence
+   and the stream is intermittent rather than uniformly broken.
 6. **`dc_change_count` is non-zero** — the fourth thing to suspect, and
    the one that says the *wiring* is not what the labels claim. Either
    the wire called `dc` is really `mosi` on another channel — which is
@@ -333,8 +338,14 @@ that wire is synchronised and edge-detected exactly like `sclk`:
 exactly two clocks the bytes are right and `overrun_count` is 0; at one
 clock the bytes still survive but `overrun_count` rises, because the
 deassertion was seen once and the assertion after it could have been
-missed. A gap missed altogether merges two bytes and reads as sixteen
-bits at the next frame close.
+missed. A gap missed altogether merges two bytes, and the next frame
+close reports `last_bit_count` as **15** — sixteen bits arrived and the
+counter saturates there rather than wrapping onto eight and looking
+correct. `spi_display_rx_reports_two_frames_merged_by_a_gap_it_never_saw`
+drives a gap of half a system clock, which falls **entirely between two
+sampling edges**: `overrun_count` cannot see that one at all, because
+there is no sampled edge whose margin it could measure, which is exactly
+why the bit count is a second instrument and not a redundant one.
 
 ## 8. Why `mosi` and `dc` cannot skew against each other
 
@@ -362,7 +373,7 @@ checks every byte and every tag.
 
 ## 9. What the tests would and would not catch
 
-Fourteen testbenches drive a model of the master — `FarSide` in
+Fifteen testbenches drive a model of the master — `FarSide` in
 `tests/ip_library.rs` — in **absolute simulation time**, with every
 far-side event on an odd tick so that no pin ever changes in the same
 instant as the system clock edge that samples it. That race is one an
@@ -379,6 +390,17 @@ forty-five flip-flops, so `COUNT_WIDTH = 8` roughly halves the block and
 and `FRAME_MODE = 2` is 11 LUT4 smaller — which is what "keep the other
 two modes, they are cheap" means as a number.
 
+Beyond those fifteen, two shared tests name this block:
+`spi_display_rx_is_one_clock_domain` asks `timing::analyze_cdc` for its
+domains, and `a_streams_ready_is_a_function_of_registers` walks the
+timing graph backwards from every output a design reads — `rx_valid`,
+`rx_byte`, `rx_is_data`, all six counters and the three error wires — and
+asserts that **no input port is reachable**. That is the mechanised form
+of the whole argument for oversampling: `rx_valid` written as a
+combinational `assign` would still pass the one-domain test and would put
+an asynchronous pin straight into the consumer's logic, and this one
+fails it.
+
 **What the tests would catch.** A wrong shift direction, a lost or
 doubled bit, a byte delivered twice (`rx_valid` is checked to be one
 cycle per counted byte, and every byte to land in exactly one of the two
@@ -388,8 +410,11 @@ after a reset landing mid-byte, a counter that disagrees with its sticky
 wire, a `dc` sampled at the wrong point or carrying the data, an `sclk`
 too fast to oversample, a `PHASE_MARGIN` that does not mean what §7 says
 it means, a gap too short to see, and a fourth wire of the wrong
-polarity. Each of the off-by-one cases is run in **all three** framing
-modes, because the modes differ precisely in what they do about them.
+polarity, and a gap of half a system clock that is missed entirely —
+which merges two bytes and is the one case `overrun_count` cannot see,
+since there is no sampled edge whose margin it could measure. Each of the
+off-by-one cases is run in **all three** framing modes, because the modes
+differ precisely in what they do about them.
 
 **What they would not catch**, and this list is the honest part:
 

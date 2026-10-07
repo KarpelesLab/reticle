@@ -1795,7 +1795,7 @@ is the part that matters:
   `mosi` on the rising edge and presents `miso` on the falling one, so
   the bits are checked where a real slave would look at them; `cs_n` is
   checked to fall before the first edge and rise after the last.
-- **`spi_display_rx`** — fourteen testbenches against a model of the
+- **`spi_display_rx`** — fifteen testbenches against a model of the
   display's own master, driven in **absolute simulation time** with every
   far-side event on an odd tick, so no pin ever changes in the same
   instant as the system clock edge that samples it. A plausible session
@@ -1808,8 +1808,14 @@ is the part that matters:
   settings; an `sclk` at the rate limit, a shade over it and well past
   it; `PHASE_MARGIN` moved against a fixed waveform, which is the same
   experiment as moving the system clock against a fixed link; a gap of
-  two system clocks and of one; a boundary pulse instead of a level; and
-  both chip select polarities. Three of those tests exist to pin what the
+  two system clocks and of one; a gap of **half** a system clock, which
+  falls entirely between two sampling edges and so is the one the overrun
+  counter cannot see at all; a boundary pulse instead of a level; and
+  both chip select polarities. Its outputs are also walked backwards
+  through the timing graph by
+  `a_streams_ready_is_a_function_of_registers`, because a block whose
+  inputs are asynchronous pins must not put one of them into a consumer's
+  combinational logic. Three of those tests exist to pin what the
   block **cannot** tell you — the sampling edge, the bit order, and
   whether a pulse and a level can be told apart at all — and one asks
   `timing::analyze_cdc` to confirm there is only one clock in it.

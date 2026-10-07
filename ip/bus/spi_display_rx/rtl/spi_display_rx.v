@@ -208,8 +208,10 @@
 //   `cs_n` is synchronised and edge-detected exactly like `sclk`:
 //   **`cs_n` must be deasserted for at least PHASE_MARGIN `clk`
 //   periods** — two of them by default, 33.3 ns at 60 MHz. A shorter gap
-//   is reported, and a deassertion missed altogether merges two bytes
-//   and shows up as sixteen bits at the next frame close.
+//   is reported, and a deassertion missed altogether merges two bytes,
+//   which the next frame close reports as a bit count of **fifteen**:
+//   sixteen bits arrived and `bit_count` saturates there rather than
+//   wrapping onto eight and looking correct.
 //
 // Why `mosi` and `dc` cannot skew against each other
 //   They are sampled together, and three structural reasons rather than
