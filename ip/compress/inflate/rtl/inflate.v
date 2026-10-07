@@ -625,6 +625,7 @@ module inflate #(
         .dist_bad  (win_dist_bad),
         .copy_open ((state_q == S_COPEN) && !win_dist_bad),
         .rd_en     (copy_issue),
+        .rd_take   (put_copy),
         .rd_data   (win_rd_data),
         .rd_valid  (win_rd_valid)
     );

@@ -476,6 +476,42 @@ const VARIANTS: &[Variant] = &[
         top: "chacha20",
         params: &[],
     },
+    // The `compress` category. `inflate_adler` has a row of its own for
+    // the same reason `chacha20_qr` does: RFC 1950 §9 is a testable
+    // statement on its own and the row is what prices it. `inflate_window`
+    // has one because it is where sixteen of the eighteen block RAMs are,
+    // so the two rows together say what the decoder costs and what the
+    // window costs.
+    Variant {
+        package: "inflate",
+        top: "inflate_adler",
+        params: &[],
+    },
+    Variant {
+        package: "inflate",
+        top: "inflate_window",
+        params: &[("WINDOW_BITS", "15")],
+    },
+    Variant {
+        package: "inflate",
+        top: "inflate",
+        params: &[("WINDOW_BITS", "15"), ("WRAPPER", "1")],
+    },
+    // What RFC 1950's framing costs: the two-byte header check, the
+    // four-byte trailer compare and `inflate_adler`.
+    Variant {
+        package: "inflate",
+        top: "inflate",
+        params: &[("WINDOW_BITS", "15"), ("WRAPPER", "0")],
+    },
+    // And what the window costs, which is the question a small part
+    // asks: 1 KiB instead of 32, so the table says it rather than
+    // leaving a reader to build it.
+    Variant {
+        package: "inflate",
+        top: "inflate",
+        params: &[("WINDOW_BITS", "10"), ("WRAPPER", "1")],
+    },
 ];
 
 /// Board constraints a variant needs to go through the FPGA flow, as
@@ -497,8 +533,8 @@ fn board_constraints(variant: &Variant) -> &'static str {
 /// They are a filing system and nothing more: no code reads a category,
 /// a package's identity is the name its manifest declares, and a block
 /// resolves by that name wherever it sits.
-const CATEGORIES: [&str; 8] = [
-    "bus", "cpu", "crypto", "memory", "net", "usb", "util", "video",
+const CATEGORIES: [&str; 9] = [
+    "bus", "compress", "cpu", "crypto", "memory", "net", "usb", "util", "video",
 ];
 
 /// The devices the footprint table reports, besides the generic LUT
@@ -20010,4 +20046,1535 @@ fn the_library_index_cost() {
          walk and read: {walk:?} per run\n  \
          index (clone, scan, sort): {build:?} per run"
     );
+}
+
+// ---------------------------------------------------------------------------
+// ip/compress/inflate — RFC 1951 DEFLATE and RFC 1950 zlib
+// ---------------------------------------------------------------------------
+
+/// The plaintext rules the corpus names, implemented the same way the
+/// out-of-tree generator implemented them.
+///
+/// The corpus stores a stream and a *rule*, not a plaintext, which is the
+/// trick that lets one case be a hundred thousand bytes of highly
+/// compressible text for a kilobyte of committed hex. The cost is that
+/// this function and the generator's have to agree, and the `adler` field
+/// of each record is what catches it when they do not:
+/// `inflate_plaintext_rules_match_the_corpus` checks every one of them
+/// before any simulation happens, so a rule that has drifted is reported
+/// as a rule that has drifted rather than as a broken decompressor.
+fn plaintext(rule: &str, len: usize) -> Vec<u8> {
+    const WORDS: [&str; 16] = [
+        "the", "quick", "brown", "fox", "jumps", "over", "lazy", "dog", "and", "then", "it",
+        "runs", "away", "into", "deep", "forest",
+    ];
+    let mut out = Vec::with_capacity(len);
+    let (kind, arg) = match rule.split_once(':') {
+        Some((k, a)) => (k, a.parse::<u32>().expect("a rule argument")),
+        None => (rule, 0),
+    };
+    match kind {
+        "zeros" => out.resize(len, 0u8),
+        "ones" => out.resize(len, 0xffu8),
+        // The same rule `sha256`'s padding table uses.
+        "pattern" => out.extend((0..len).map(|i| ((i * 7 + 13) & 0xff) as u8)),
+        "counter" => out.extend((0..len).map(|i| (i & 0xff) as u8)),
+        // Incompressible, so the encoder reaches for a stored block.
+        "lcg" => {
+            let mut x = arg | 1;
+            for _ in 0..len {
+                x = x.wrapping_mul(1_103_515_245).wrapping_add(12_345);
+                out.push((x >> 16) as u8);
+            }
+        }
+        // `pattern` modulo a period, so every match is at that distance.
+        "rep" => {
+            let p = arg as usize;
+            out.extend((0..len).map(|i| (((i % p) * 7 + 13) & 0xff) as u8));
+        }
+        // English-shaped text: what a dynamic Huffman block is for.
+        "text" => {
+            let mut x = arg | 1;
+            while out.len() < len {
+                x = x.wrapping_mul(1_103_515_245).wrapping_add(12_345);
+                out.extend_from_slice(WORDS[((x >> 20) % 16) as usize].as_bytes());
+                out.push(b' ');
+            }
+            out.truncate(len);
+        }
+        // Runs of one byte, 1 to 64 long: many short distances.
+        "runs" => {
+            let mut x = arg | 1;
+            while out.len() < len {
+                x = x.wrapping_mul(1_103_515_245).wrapping_add(12_345);
+                let b = (x >> 16) as u8;
+                x = x.wrapping_mul(1_103_515_245).wrapping_add(12_345);
+                let n = ((x >> 20) % 64 + 1) as usize;
+                for _ in 0..n {
+                    out.push(b);
+                }
+            }
+            out.truncate(len);
+        }
+        other => panic!("unknown plaintext rule `{other}`"),
+    }
+    assert_eq!(out.len(), len, "rule `{rule}` produced the wrong length");
+    out
+}
+
+/// RFC 1950 §9, in Rust, for the corpus's own bookkeeping.
+fn adler32(data: &[u8]) -> u32 {
+    let mut a = 1u32;
+    let mut b = 0u32;
+    for byte in data {
+        a = (a + u32::from(*byte)) % 65521;
+        b = (b + a) % 65521;
+    }
+    (b << 16) | a
+}
+
+/// One record of `testdata/ip/inflate_corpus.txt`.
+struct Corpus {
+    name: String,
+    /// `fast` for the cases the gate runs, `bulk` for the big ones.
+    tier: String,
+    /// `zlib` or `deflate`, which is what `WRAPPER` has to be set to.
+    wrapper: String,
+    rule: String,
+    len: usize,
+    adler: u32,
+    /// BFINAL and BTYPE of the first block, which is as much as can be
+    /// read off a stream without an inflater.
+    first: (bool, u8),
+    note: String,
+    stream: Vec<u8>,
+}
+
+fn corpus() -> &'static [Corpus] {
+    static CORPUS: OnceLock<Vec<Corpus>> = OnceLock::new();
+    CORPUS.get_or_init(|| {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("testdata/ip/inflate_corpus.txt");
+        let text = fs::read_to_string(&path)
+            .unwrap_or_else(|e| panic!("cannot read {}: {e}", path.display()))
+            .replace("\r\n", "\n");
+        let mut out: Vec<Corpus> = Vec::new();
+        for line in text.lines() {
+            let line = line.trim_end();
+            if line.is_empty() || line.starts_with('#') {
+                continue;
+            }
+            let (tag, rest) = line.split_once(' ').expect("a tagged line");
+            let mut field = rest.split_whitespace();
+            match tag {
+                "case" => {
+                    let name = field.next().expect("a name").to_owned();
+                    let tier = field.next().expect("a tier").to_owned();
+                    let wrapper = field.next().expect("a wrapper").to_owned();
+                    out.push(Corpus {
+                        name,
+                        tier,
+                        wrapper,
+                        rule: String::new(),
+                        len: 0,
+                        adler: 0,
+                        first: (false, 0),
+                        note: String::new(),
+                        stream: Vec::new(),
+                    });
+                }
+                "gen" => {
+                    let case = out.last_mut().expect("a case first");
+                    case.rule = field.next().expect("a rule").to_owned();
+                    case.len = field.next().expect("a length").parse().expect("a number");
+                    case.adler =
+                        u32::from_str_radix(field.next().expect("an adler"), 16).expect("hex");
+                }
+                "first" => {
+                    let case = out.last_mut().expect("a case first");
+                    let bfinal = field.next().expect("bfinal") == "1";
+                    let btype: u8 = field.next().expect("btype").parse().expect("a number");
+                    case.first = (bfinal, btype);
+                }
+                "note" => out.last_mut().expect("a case first").note = rest.to_owned(),
+                "hex" => {
+                    let case = out.last_mut().expect("a case first");
+                    let digits = field.next().expect("hex digits").as_bytes();
+                    assert!(digits.len() % 2 == 0, "{}: odd hex run", case.name);
+                    for pair in digits.chunks(2) {
+                        let s = std::str::from_utf8(pair).expect("ascii");
+                        case.stream
+                            .push(u8::from_str_radix(s, 16).expect("a hex byte"));
+                    }
+                }
+                other => panic!("unknown corpus tag `{other}`"),
+            }
+        }
+        assert!(out.len() > 100, "only {} corpus cases", out.len());
+        out
+    })
+}
+
+/// A DEFLATE bit writer, for the streams no compressor will produce.
+///
+/// RFC 1951 §3.1.1 packs everything but Huffman codes least significant
+/// bit first, and Huffman codes most significant bit first. Both are
+/// here, because a hand-built vector needs both and getting one of them
+/// backwards is the classic way to waste an afternoon.
+struct BitWriter {
+    bytes: Vec<u8>,
+    bit: u32,
+}
+
+impl BitWriter {
+    fn new() -> Self {
+        BitWriter {
+            bytes: Vec::new(),
+            bit: 0,
+        }
+    }
+
+    /// `n` bits of `value`, least significant first: §3.1.1's order for
+    /// block headers, lengths and extra bits.
+    fn bits(&mut self, value: u32, n: u32) {
+        for i in 0..n {
+            if self.bit == 0 {
+                self.bytes.push(0);
+            }
+            if (value >> i) & 1 != 0 {
+                let last = self.bytes.len() - 1;
+                self.bytes[last] |= 1 << self.bit;
+            }
+            self.bit = (self.bit + 1) & 7;
+        }
+    }
+
+    /// `n` bits of `code`, most significant first: §3.1.1's order for a
+    /// Huffman code, "packed starting with the most significant bit of
+    /// the code".
+    fn code(&mut self, code: u32, n: u32) {
+        for i in (0..n).rev() {
+            self.bits((code >> i) & 1, 1);
+        }
+    }
+
+    fn align(&mut self) {
+        if self.bit != 0 {
+            self.bit = 0;
+        }
+    }
+
+    fn byte(&mut self, value: u8) {
+        assert_eq!(self.bit, 0, "a byte must be written aligned");
+        self.bytes.push(value);
+    }
+
+    fn finish(self) -> Vec<u8> {
+        self.bytes
+    }
+}
+
+/// §3.2.6's fixed literal/length code, as (code, bits).
+fn fixed_lit_code(symbol: u32) -> (u32, u32) {
+    match symbol {
+        0..=143 => (0x30 + symbol, 8),
+        144..=255 => (0x190 + symbol - 144, 9),
+        256..=279 => (symbol - 256, 7),
+        280..=287 => (0xc0 + symbol - 280, 8),
+        _ => panic!("no fixed code for {symbol}"),
+    }
+}
+
+/// Everything a testbench needs to hold of `inflate`.
+struct InflateBench {
+    clk: NetHandle,
+    rst_n: NetHandle,
+    start: NetHandle,
+    in_byte: NetHandle,
+    in_valid: NetHandle,
+    in_last: NetHandle,
+    in_ready: NetHandle,
+    out_byte: NetHandle,
+    out_valid: NetHandle,
+    out_ready: NetHandle,
+    done: NetHandle,
+    error: NetHandle,
+    error_code: NetHandle,
+}
+
+/// How the consumer behaves, which is the whole of the back-pressure
+/// story and so the whole of the stall-mid-copy story.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Sink {
+    /// `out_ready` always high: the block runs at its own rate.
+    Greedy,
+    /// High on every other cycle, which guarantees a stall inside every
+    /// copy longer than one byte.
+    Alternate,
+    /// High when a counter says so, from a fixed sequence: an uneven
+    /// pattern that stalls at positions no round number would reach.
+    Ragged(u32),
+    /// Low for `n` cycles after each byte taken.
+    Slow(u32),
+}
+
+/// What one run produced.
+#[derive(Debug)]
+struct Run {
+    /// The bytes the block handed over, however the run ended.
+    out: Vec<u8>,
+    /// `done` came up with everything delivered.
+    done: bool,
+    /// `error` came up, with its code.
+    error: Option<u8>,
+    cycles: u64,
+}
+
+impl InflateBench {
+    fn attach(sim: &mut Simulator<'_>) -> Self {
+        let bench = InflateBench {
+            clk: top_net(sim, "clk"),
+            rst_n: top_net(sim, "rst_n"),
+            start: top_net(sim, "start"),
+            in_byte: top_net(sim, "in_byte"),
+            in_valid: top_net(sim, "in_valid"),
+            in_last: top_net(sim, "in_last"),
+            in_ready: top_net(sim, "in_ready"),
+            out_byte: top_net(sim, "out_byte"),
+            out_valid: top_net(sim, "out_valid"),
+            out_ready: top_net(sim, "out_ready"),
+            done: top_net(sim, "done"),
+            error: top_net(sim, "error"),
+            error_code: top_net(sim, "error_code"),
+        };
+        sim.set(bench.start, bit(false));
+        sim.set(bench.in_valid, bit(false));
+        sim.set(bench.in_last, bit(false));
+        sim.set(bench.in_byte, word(8, 0));
+        sim.set(bench.out_ready, bit(false));
+        reset(sim, bench.clk, bench.rst_n);
+        bench
+    }
+
+    /// Decompresses one stream.
+    ///
+    /// `limit` is a **loop bound**, not a time-out: it is a count of
+    /// simulated clock edges, so it is the same number on every machine,
+    /// and reaching it is a failure of the design rather than of the
+    /// host. Every state of this block either consumes an input bit,
+    /// produces an output byte, or ends on a counter, so a stream that
+    /// reaches the bound is one that has found a loop that does none of
+    /// those — which is the defect this bound exists to catch.
+    fn run(&self, sim: &mut Simulator<'_>, stream: &[u8], sink: Sink, limit: u64) -> Run {
+        sim.set(self.start, bit(true));
+        sim.set(self.in_valid, bit(false));
+        sim.set(self.in_last, bit(false));
+        sim.set(self.out_ready, bit(false));
+        cycle(sim, self.clk, HALF);
+        sim.set(self.start, bit(false));
+
+        let mut index = 0usize;
+        let mut ended = false;
+        let mut out: Vec<u8> = Vec::new();
+        let mut cycles = 0u64;
+        let mut taken = 0u32;
+        let mut hold = 0u32;
+        loop {
+            if ended {
+                sim.set(self.in_valid, bit(false));
+                sim.set(self.in_last, bit(false));
+            } else {
+                let more = index < stream.len();
+                sim.set(self.in_valid, bit(more));
+                sim.set(
+                    self.in_byte,
+                    word(8, if more { u64::from(stream[index]) } else { 0 }),
+                );
+                // Like `sha256`'s: `in_last` marks the point the stream
+                // ends at, and with `in_valid` low it ends it with no
+                // byte here — which is how an empty stream is spelled.
+                sim.set(self.in_last, bit(index + 1 >= stream.len()));
+            }
+
+            let want = match sink {
+                Sink::Greedy => true,
+                Sink::Alternate => cycles % 2 == 0,
+                // A 23-step cycle, so it does not line up with anything
+                // in the block: 23 is prime and longer than the longest
+                // run of states between two output bytes.
+                Sink::Ragged(seed) => ((cycles as u32 + seed) * 7 % 23) < 9,
+                Sink::Slow(_) => hold == 0,
+            };
+            sim.set(self.out_ready, bit(want));
+
+            // Both handshakes are driven by registers, so what they read
+            // here is what the last edge produced and nothing set above
+            // can have disturbed them.
+            let accepted = !ended && high(sim, self.in_ready);
+            let handed = want && high(sim, self.out_valid);
+            let byte = if handed {
+                Some(octet(get_u64(sim, self.out_byte)))
+            } else {
+                None
+            };
+
+            cycle(sim, self.clk, HALF);
+            cycles += 1;
+
+            if accepted {
+                if index + 1 >= stream.len() {
+                    ended = true;
+                } else {
+                    index += 1;
+                }
+            }
+            if let Some(b) = byte {
+                out.push(b);
+                taken += 1;
+                let _ = taken;
+                if let Sink::Slow(n) = sink {
+                    hold = n;
+                }
+            } else if hold > 0 {
+                hold -= 1;
+            }
+
+            if high(sim, self.error) {
+                return Run {
+                    out,
+                    done: false,
+                    error: Some(octet(get_u64(sim, self.error_code))),
+                    cycles,
+                };
+            }
+            if high(sim, self.done) {
+                return Run {
+                    out,
+                    done: true,
+                    error: None,
+                    cycles,
+                };
+            }
+            assert!(
+                cycles < limit,
+                "inflate neither finished nor failed in {limit} cycles: \
+                 {} of {} input bytes taken, {} output bytes",
+                index,
+                stream.len(),
+                out.len()
+            );
+        }
+    }
+}
+
+/// A loop bound for a stream of `inlen` bytes expected to produce
+/// `outlen`.
+///
+/// The worst case per input byte is a dynamic block header: three
+/// counting sorts, each at most 16 + 290 + 15 + 290 cycles, over the
+/// fifteen-odd bytes the smallest dynamic header takes — call it 200 a
+/// byte. The worst case per output byte is fifteen bits of Huffman code
+/// plus a cycle, so twenty. Neither is tight; both are numbers rather
+/// than seconds.
+fn inflate_limit(inlen: usize, outlen: usize) -> u64 {
+    2000 + 200 * inlen as u64 + 20 * outlen as u64
+}
+
+fn inflate_design(window_bits: u32, wrapper: u32) -> Design {
+    design_of(
+        "inflate",
+        "inflate",
+        &[
+            ("WINDOW_BITS", &window_bits.to_string()),
+            ("WRAPPER", &wrapper.to_string()),
+        ],
+    )
+}
+
+/// The plaintext rules in this file are the generator's rules.
+///
+/// What it would catch: a rule here that has drifted from the one the
+/// corpus was built against — which would otherwise show up as every
+/// case of that rule failing, and look like a decompressor fault.
+///
+/// What it would not catch: anything about the decompressor at all. It
+/// does not simulate. It is the check that makes every failure below
+/// attributable.
+#[test]
+fn inflate_plaintext_rules_match_the_corpus() {
+    let mut rules: BTreeSet<&str> = BTreeSet::new();
+    for case in corpus() {
+        let plain = plaintext(&case.rule, case.len);
+        assert_eq!(
+            adler32(&plain),
+            case.adler,
+            "{}: the `{}` rule at {} bytes no longer makes what the corpus was built from",
+            case.name,
+            case.rule,
+            case.len
+        );
+        rules.insert(case.rule.split(':').next().expect("a rule name"));
+    }
+    // Every rule the generator has is used, so none of them is dead
+    // code pretending to be coverage.
+    let expected: BTreeSet<&str> = ["counter", "lcg", "ones", "pattern", "rep", "runs", "text", "zeros"]
+        .into_iter()
+        .collect();
+    assert_eq!(rules, expected, "the corpus no longer uses every rule");
+}
+
+/// RFC 1950 §9's checksum, on its own.
+///
+/// §9 gives the algorithm and no vectors, so the expectations are what
+/// the Rust `adler32` above computes — a second implementation of the
+/// same six lines, which is weak as oracles go. What makes it worth
+/// having is the *cases*: an input long enough to need the reduction on
+/// `a` and one long enough to need it on `b`, which is where a
+/// hand-written modular sum goes wrong.
+///
+/// What it would catch: a wrong initial value (1 and 0, not 0 and 0), a
+/// wrong BASE, a reduction that subtracts when it should not or not when
+/// it should, and the two sums swapped in `sum`.
+///
+/// What it would not catch: a reduction that is wrong only for inputs
+/// longer than 8192 bytes of 0xff — the bound where `b` could in
+/// principle need two subtractions if `a` were not reduced first. The
+/// module header argues it cannot, and `inflate_decompresses_the_compcol_corpus`
+/// checks the whole 100 000-byte case through the real trailer.
+#[test]
+fn inflate_adler_matches_rfc_1950_9() {
+    let design = design_of("inflate", "inflate_adler", &[]);
+    let mut sim = simulate(&design, "inflate_adler");
+    let clk = top_net(&sim, "clk");
+    let rst_n = top_net(&sim, "rst_n");
+    let start = top_net(&sim, "start");
+    let in_byte = top_net(&sim, "in_byte");
+    let in_valid = top_net(&sim, "in_valid");
+    let sum = top_net(&sim, "sum");
+    sim.set(start, bit(false));
+    sim.set(in_valid, bit(false));
+    sim.set(in_byte, word(8, 0));
+    reset(&mut sim, clk, rst_n);
+
+    // The empty string is the reset value, which §9's "s1 = 1" makes 1.
+    assert_eq!(get_u64(&sim, sum), 1, "the empty string is not 1");
+
+    let cases: [(&str, Vec<u8>); 6] = [
+        ("one byte", vec![0x61]),
+        ("\"abc\"", b"abc".to_vec()),
+        ("256 bytes of 0xff", vec![0xff; 256]),
+        // 258 bytes of 0xff puts `a` over 65521 and so needs its
+        // reduction; `b` passes 65521 long before.
+        ("1024 bytes of 0xff", vec![0xff; 1024]),
+        ("a counting pattern", plaintext("counter", 1000)),
+        ("text", plaintext("text:1", 777)),
+    ];
+    for (what, data) in cases {
+        sim.set(start, bit(true));
+        cycle(&mut sim, clk, HALF);
+        sim.set(start, bit(false));
+        for byte in &data {
+            sim.set(in_byte, word(8, u64::from(*byte)));
+            sim.set(in_valid, bit(true));
+            cycle(&mut sim, clk, HALF);
+        }
+        sim.set(in_valid, bit(false));
+        cycle(&mut sim, clk, HALF);
+        assert_eq!(
+            narrow(get_u64(&sim, sum)),
+            adler32(&data),
+            "{what}: {} bytes",
+            data.len()
+        );
+    }
+}
+
+/// The window refuses a distance it cannot answer, and forwards a byte
+/// it is reading in the cycle it writes it.
+///
+/// This is the only test in the library that drives `dist_bad` directly,
+/// and it exists because no *stream* can ask for distance 0: RFC 1951
+/// §3.2.5's smallest distance code is 1, so the arm of the check that
+/// refuses zero is unreachable from `inflate.v`. A module boundary is
+/// what makes it testable at all, and that is most of why
+/// `inflate_window` is a module.
+///
+/// What it would catch: a distance check that compares against the
+/// window size rather than against the bytes actually written, so that a
+/// fresh stream could read whatever the last one left in the block RAM;
+/// an off-by-one at the two ends of the range (`dist == n` legal,
+/// `dist == n + 1` not, and `dist == 1 << WINDOW_BITS` legal once full);
+/// a missing write-forward, which shows up as the second byte of a
+/// distance-1 run being stale.
+///
+/// What it would not catch: anything about *where* `inflate.v` asserts
+/// `copy_open`, which is the other half of the contract — that is
+/// `inflate_refuses_a_distance_behind_the_start_of_the_stream`'s job.
+#[test]
+fn inflate_window_refuses_a_distance_it_does_not_hold() {
+    // A 256-byte window, so "full" is reachable in a readable number of
+    // cycles and the wrap is a real wrap.
+    let design = design_of("inflate", "inflate_window", &[("WINDOW_BITS", "8")]);
+    let mut sim = simulate(&design, "inflate_window");
+    let clk = top_net(&sim, "clk");
+    let rst_n = top_net(&sim, "rst_n");
+    let start = top_net(&sim, "start");
+    let wr_data = top_net(&sim, "wr_data");
+    let wr_en = top_net(&sim, "wr_en");
+    let dist = top_net(&sim, "dist");
+    let dist_bad = top_net(&sim, "dist_bad");
+    let copy_open = top_net(&sim, "copy_open");
+    let rd_en = top_net(&sim, "rd_en");
+    let rd_take = top_net(&sim, "rd_take");
+    let rd_data = top_net(&sim, "rd_data");
+    let rd_valid = top_net(&sim, "rd_valid");
+
+    let idle = |sim: &mut Simulator<'_>| {
+        sim.set(wr_en, bit(false));
+        sim.set(copy_open, bit(false));
+        sim.set(rd_en, bit(false));
+        sim.set(rd_take, bit(false));
+    };
+    idle(&mut sim);
+    sim.set(start, bit(false));
+    sim.set(dist, word(16, 0));
+    sim.set(wr_data, word(8, 0));
+    reset(&mut sim, clk, rst_n);
+
+    // Nothing written: every distance is out of range, zero included.
+    for d in [0u64, 1, 2, 255, 256, 257, 32768] {
+        sim.set(dist, word(16, d));
+        sim.run_for(1);
+        assert!(
+            high(&sim, dist_bad),
+            "an empty window accepted distance {d}"
+        );
+    }
+
+    // Write n bytes; distances 1..=n are in range and n+1 is not.
+    let mut written = 0u64;
+    let push = |sim: &mut Simulator<'_>, byte: u8| {
+        sim.set(wr_data, word(8, u64::from(byte)));
+        sim.set(wr_en, bit(true));
+        cycle(sim, clk, HALF);
+        sim.set(wr_en, bit(false));
+    };
+    for step in [1u64, 1, 1, 7, 50, 196] {
+        for _ in 0..step {
+            push(&mut sim, octet(written & 0xff));
+            written += 1;
+        }
+        let have = written.min(256);
+        for (d, bad) in [(0u64, true), (1, false), (have, false), (have + 1, true)] {
+            sim.set(dist, word(16, d));
+            sim.run_for(1);
+            assert_eq!(
+                high(&sim, dist_bad),
+                bad,
+                "after {written} bytes, distance {d} should be {}",
+                if bad { "refused" } else { "accepted" }
+            );
+        }
+    }
+    assert_eq!(written, 256, "the window should be exactly full");
+    // Full: the whole window is in range and one more is not. A distance
+    // of exactly the window length is the oldest byte, which is the byte
+    // about to be overwritten, and is legal.
+    for (d, bad) in [(256u64, false), (257, true), (32768, true)] {
+        sim.set(dist, word(16, d));
+        sim.run_for(1);
+        assert_eq!(high(&sim, dist_bad), bad, "when full, distance {d}");
+    }
+    // And after a wrap it stays full rather than going back to counting.
+    push(&mut sim, 0xaa);
+    sim.set(dist, word(16, 256));
+    sim.run_for(1);
+    assert!(!high(&sim, dist_bad), "a wrapped window forgot it was full");
+
+    // Reading a run at distance 1, with a write to the same address in
+    // the same cycle. Without the bypass the second byte of the run is
+    // whatever the memory held before.
+    sim.set(dist, word(16, 1));
+    sim.set(copy_open, bit(true));
+    cycle(&mut sim, clk, HALF);
+    sim.set(copy_open, bit(false));
+    let mut run: Vec<u8> = Vec::new();
+    // Prime, then read and write together for as long as the copy lasts.
+    sim.set(rd_en, bit(true));
+    cycle(&mut sim, clk, HALF);
+    sim.set(rd_en, bit(false));
+    for _ in 0..6 {
+        assert!(high(&sim, rd_valid), "the window stopped answering");
+        let byte = octet(get_u64(&sim, rd_data));
+        run.push(byte);
+        sim.set(wr_data, word(8, u64::from(byte)));
+        sim.set(wr_en, bit(true));
+        sim.set(rd_en, bit(true));
+        sim.set(rd_take, bit(true));
+        cycle(&mut sim, clk, HALF);
+        sim.set(wr_en, bit(false));
+        sim.set(rd_en, bit(false));
+        sim.set(rd_take, bit(false));
+    }
+    idle(&mut sim);
+    assert_eq!(
+        run,
+        vec![0xaa; 6],
+        "a distance-1 run read stale bytes: the write bypass is not working"
+    );
+
+    // And a byte nobody has taken survives being left there.
+    //
+    // `Sink::Alternate` found this as a wrong fourth byte on a four-byte
+    // stream: `rd_valid` used to be `rd_en` delayed by a cycle, so a copy
+    // that stalled for one cycle lost the byte it had already fetched and
+    // the stream came out one byte short with a checksum failure. The
+    // same arithmetic that makes the forwarded byte right also has to
+    // make it *keep* being right.
+    sim.set(dist, word(16, 3));
+    sim.set(copy_open, bit(true));
+    cycle(&mut sim, clk, HALF);
+    sim.set(copy_open, bit(false));
+    sim.set(rd_en, bit(true));
+    cycle(&mut sim, clk, HALF);
+    sim.set(rd_en, bit(false));
+    assert!(high(&sim, rd_valid), "the primed read never arrived");
+    let held = octet(get_u64(&sim, rd_data));
+    for n in 0..5 {
+        cycle(&mut sim, clk, HALF);
+        assert!(
+            high(&sim, rd_valid),
+            "the window dropped an untaken byte after {} idle cycles",
+            n + 1
+        );
+        assert_eq!(
+            octet(get_u64(&sim, rd_data)),
+            held,
+            "the window changed an untaken byte after {} idle cycles",
+            n + 1
+        );
+    }
+    // Taking it, with no new read, clears the valid and nothing else.
+    sim.set(rd_take, bit(true));
+    cycle(&mut sim, clk, HALF);
+    sim.set(rd_take, bit(false));
+    assert!(!high(&sim, rd_valid), "a taken byte stayed valid");
+    idle(&mut sim);
+}
+
+/// The corpus, decompressed byte for byte.
+///
+/// This is the measurement the whole round rests on. 123 streams that
+/// `compcol` — the user's own from-scratch Rust compression library,
+/// driven out of tree and read only — produced from eight documented
+/// plaintext rules at lengths from 0 to 4096, each in both framings
+/// (RFC 1950 and raw RFC 1951) and at compression levels 1, 6 and 9.
+/// `ip/compress/inflate/README.md` §3 says how the cases were chosen and
+/// what each group reaches.
+///
+/// Each case is run four times with four different consumers, because
+/// **the consumer is the only thing that can stall a copy** and a copy
+/// that resumes wrongly is the defect this block is most likely to
+/// have. `Sink::Greedy` never stalls; `Sink::Alternate` stalls inside
+/// every copy of more than one byte; `Sink::Ragged` stalls on a 23-step
+/// pattern that lines up with nothing; `Sink::Slow` stalls for three
+/// cycles after every byte, which is longer than any single state.
+///
+/// What it would catch: every wrong length base, distance base and extra
+/// bit count of §3.2.5; a wrong code-length permutation or run-length
+/// code in §3.2.7; a counting sort that places a symbol at the wrong
+/// index; a bit reader that drops or repeats a bit at a byte boundary; a
+/// copy that restarts, overshoots or forgets where it was after a stall;
+/// a window that reads the wrong byte for a distance; and — because 61
+/// of these are zlib-framed — an Adler-32 that disagrees with a real
+/// compressor's over tens of thousands of bytes.
+///
+/// What it would not catch: a distance past 32768, since nothing here is
+/// long enough to use one (`inflate_crosses_the_32_kib_window` is the
+/// `#[ignore]`d test that is); a malformed stream of any kind, since
+/// every one of these is well formed (the three tests after this one);
+/// and anything about the clock, since this is a four-state zero-delay
+/// simulation.
+#[test]
+fn inflate_decompresses_the_compcol_corpus() {
+    let zlib = inflate_design(15, 1);
+    let raw = inflate_design(15, 0);
+    let mut zsim = simulate(&zlib, "inflate (zlib)");
+    let mut rsim = simulate(&raw, "inflate (raw)");
+    let zbench = InflateBench::attach(&mut zsim);
+    let rbench = InflateBench::attach(&mut rsim);
+
+    // Four consumers for the small cases and two for the large ones. Every
+    // case is stalled by `Alternate`, which is the pattern that found the
+    // window's dropped byte; the other two are there to stall at positions
+    // a regular pattern cannot reach, and running them over the handful of
+    // four-thousand-byte cases as well would double this test's cycles for
+    // no new shape of stall.
+    const ALL: [Sink; 4] = [Sink::Greedy, Sink::Alternate, Sink::Ragged(5), Sink::Slow(3)];
+    const BIG: [Sink; 2] = [Sink::Greedy, Sink::Alternate];
+    let mut cases = 0usize;
+    let mut runs = 0usize;
+    let mut bytes = 0u64;
+    let mut cycles = 0u64;
+    for case in corpus() {
+        if case.tier != "fast" {
+            continue;
+        }
+        let plain = plaintext(&case.rule, case.len);
+        let (sim, bench) = if case.wrapper == "zlib" {
+            (&mut zsim, &zbench)
+        } else {
+            (&mut rsim, &rbench)
+        };
+        cases += 1;
+        let sinks: &[Sink] = if case.len <= 1100 { &ALL } else { &BIG };
+        for sink in sinks.iter().copied() {
+            let run = bench.run(
+                sim,
+                &case.stream,
+                sink,
+                inflate_limit(case.stream.len(), case.len),
+            );
+            assert_eq!(
+                run.error, None,
+                "{} with {sink:?}: reported error {:?} after {} of {} bytes",
+                case.name,
+                run.error,
+                run.out.len(),
+                case.len
+            );
+            assert!(run.done, "{} with {sink:?}: never finished", case.name);
+            assert_eq!(
+                run.out.len(),
+                plain.len(),
+                "{} with {sink:?}: {} bytes out, {} expected",
+                case.name,
+                run.out.len(),
+                plain.len()
+            );
+            if run.out != plain {
+                let at = run
+                    .out
+                    .iter()
+                    .zip(&plain)
+                    .position(|(a, b)| a != b)
+                    .expect("a difference");
+                panic!(
+                    "{} with {sink:?}: first difference at byte {at}: got {:02x}, want {:02x}",
+                    case.name, run.out[at], plain[at]
+                );
+            }
+            runs += 1;
+            bytes += case.len as u64;
+            cycles += run.cycles;
+        }
+    }
+    assert!(cases >= 120, "only {cases} fast corpus cases");
+    // All three of §3.2.3's block types, by the first block of some
+    // case: a corpus that lost its stored or its dynamic cases would
+    // otherwise pass quietly.
+    for btype in [0u8, 1, 2] {
+        assert!(
+            corpus()
+                .iter()
+                .any(|c| c.tier == "fast" && c.first == (true, btype)),
+            "no fast corpus case is a single block of BTYPE {btype}"
+        );
+    }
+    println!(
+        "inflate: {cases} corpus cases, {runs} runs, \
+         {bytes} output bytes in {cycles} cycles ({:.3} bytes/cycle)",
+        bytes as f64 / cycles as f64
+    );
+}
+
+/// Every malformed stream this block knows how to refuse, refused with
+/// the code it is supposed to refuse it with.
+///
+/// Each case is hand built with `BitWriter` from the sections named,
+/// because no compressor will produce any of them. That makes them the
+/// one group of vectors here that is *derived from the specification*
+/// rather than agreed with a second implementation, and the bit order of
+/// §3.1.1 — least significant first for everything but a Huffman code —
+/// is what a reader should check them against.
+///
+/// What it would catch: a missing check, a check that reports the wrong
+/// code, and — this is the point — any of these inputs hanging, since
+/// `run`'s loop bound fails rather than waiting.
+///
+/// What it would not catch: a check that fires when it should not, which
+/// is `inflate_decompresses_the_compcol_corpus`'s job from the other
+/// side; and the one arm of the distance check no stream can reach,
+/// which `inflate_window_refuses_a_distance_it_does_not_hold` drives
+/// directly.
+#[test]
+fn inflate_reports_every_malformed_stream() {
+    // RFC 1950 §2.2: FCHECK is chosen so that CMF*256 + FLG is a
+    // multiple of 31, which is how a header with a *deliberate* fault in
+    // one field can keep every other field legal.
+    fn zlib_header(cmf: u8, fdict: bool) -> [u8; 2] {
+        for low in 0u16..32 {
+            let flg = low | if fdict { 0x20 } else { 0 };
+            if (u16::from(cmf) * 256 + flg) % 31 == 0 {
+                return [cmf, flg as u8];
+            }
+        }
+        panic!("no FCHECK for CMF {cmf:#04x}");
+    }
+
+    // Error codes, as `inflate.v` names them.
+    const E_HEADER: u8 = 1;
+    const E_BTYPE: u8 = 2;
+    const E_NLEN: u8 = 3;
+    const E_CODE: u8 = 4;
+    const E_DIST: u8 = 5;
+    const E_TRUNC: u8 = 6;
+    const E_ADLER: u8 = 7;
+
+    // A legal one-byte zlib stream, to corrupt.
+    let good: Vec<u8> = corpus()
+        .iter()
+        .find(|c| c.name == "pattern_9_l6_zlib")
+        .expect("a short zlib case")
+        .stream
+        .clone();
+
+    // --- the RFC 1950 §2.2 header ---------------------------------------
+    let mut zlib_cases: Vec<(&str, Vec<u8>, u8)> = Vec::new();
+    {
+        // A check that is not a multiple of 31. 0x78 0x9c is the usual
+        // header; xor 1 into FLG and it is not.
+        let mut bad = good.clone();
+        bad[1] ^= 1;
+        zlib_cases.push(("§2.2 FCHECK is wrong", bad, E_HEADER));
+    }
+    for (what, cmf, fdict) in [
+        ("§2.2 CM is 9, not deflate", 0x79u8, false),
+        ("§2.2 CINFO is 8, over the 32K maximum", 0x88, false),
+        ("§2.2 FDICT asks for a preset dictionary", 0x78, true),
+    ] {
+        let head = zlib_header(cmf, fdict);
+        let mut bad = good.clone();
+        bad[0] = head[0];
+        bad[1] = head[1];
+        zlib_cases.push((what, bad, E_HEADER));
+    }
+    // --- RFC 1950 §9's trailer ------------------------------------------
+    for i in 0..4 {
+        let mut bad = good.clone();
+        let n = bad.len();
+        bad[n - 4 + i] ^= 0x01;
+        zlib_cases.push(("§9 the checksum does not match", bad, E_ADLER));
+    }
+    // A stream with no trailer at all, which is the truncation that
+    // would otherwise pass as a complete decode.
+    {
+        let mut bad = good.clone();
+        bad.truncate(bad.len() - 4);
+        zlib_cases.push(("§9 the trailer is missing", bad, E_TRUNC));
+    }
+
+    // --- raw RFC 1951 ---------------------------------------------------
+    let mut raw_cases: Vec<(&str, Vec<u8>, u8)> = Vec::new();
+
+    // §3.2.3: BTYPE 11 is "reserved (error)".
+    {
+        let mut w = BitWriter::new();
+        w.bits(1, 1); // BFINAL
+        w.bits(3, 2); // BTYPE 11
+        raw_cases.push(("§3.2.3 BTYPE is the reserved 11", w.finish(), E_BTYPE));
+    }
+    // §3.2.4: NLEN must be the one's complement of LEN.
+    {
+        let mut w = BitWriter::new();
+        w.bits(0, 1);
+        w.bits(0, 2); // stored, not final
+        w.align();
+        w.byte(5);
+        w.byte(0); // LEN = 5
+        w.byte(0);
+        w.byte(0); // NLEN = 0, which is not ~5
+        for b in b"hello" {
+            w.byte(*b);
+        }
+        raw_cases.push(("§3.2.4 NLEN is not ~LEN", w.finish(), E_NLEN));
+    }
+    // §3.2.5: 286 and 287 "will never actually occur", and the fixed
+    // code of §3.2.6 nevertheless has codes for them.
+    for symbol in [286u32, 287] {
+        let mut w = BitWriter::new();
+        w.bits(1, 1);
+        w.bits(1, 2); // fixed
+        let (code, bits) = fixed_lit_code(symbol);
+        w.code(code, bits);
+        raw_cases.push((
+            "§3.2.5 a length symbol of 286 or 287",
+            w.finish(),
+            E_CODE,
+        ));
+    }
+    // §3.2.6: distance symbols 30 and 31 likewise.
+    for symbol in [30u32, 31] {
+        let mut w = BitWriter::new();
+        w.bits(1, 1);
+        w.bits(1, 2);
+        let (code, bits) = fixed_lit_code(b'A'.into());
+        w.code(code, bits); // one literal, so the window is not empty
+        let (code, bits) = fixed_lit_code(257); // length 3
+        w.code(code, bits);
+        w.code(symbol, 5); // the fixed distance code is 5 bits flat
+        raw_cases.push(("§3.2.6 a distance symbol of 30 or 31", w.finish(), E_CODE));
+    }
+    // §3.2.5: a distance reaching behind the start of the stream. One
+    // literal has been produced, so the history is one byte long.
+    {
+        let mut w = BitWriter::new();
+        w.bits(1, 1);
+        w.bits(1, 2);
+        let (code, bits) = fixed_lit_code(b'A'.into());
+        w.code(code, bits);
+        let (code, bits) = fixed_lit_code(257); // length 3
+        w.code(code, bits);
+        w.code(13, 5); // distance symbol 13: base 97, five extra bits
+        w.bits(3, 5); // distance 100, and one byte of history
+        raw_cases.push((
+            "§3.2.5 a distance behind the start of the stream",
+            w.finish(),
+            E_DIST,
+        ));
+    }
+    // §3.2.7: an over-subscribed code-length code. Four codes of one bit
+    // each, in a space that holds two.
+    {
+        let mut w = BitWriter::new();
+        w.bits(1, 1);
+        w.bits(2, 2); // dynamic
+        w.bits(0, 5); // HLIT: 257 literal/length codes
+        w.bits(0, 5); // HDIST: 1 distance code
+        w.bits(0, 4); // HCLEN: 4 code-length codes
+        for _ in 0..4 {
+            w.bits(1, 3); // all one bit long
+        }
+        raw_cases.push((
+            "§3.2.7 an over-subscribed code-length code",
+            w.finish(),
+            E_CODE,
+        ));
+    }
+    // §3.2.7: an incomplete code-length code. One code of one bit, in a
+    // space that holds two.
+    {
+        let mut w = BitWriter::new();
+        w.bits(1, 1);
+        w.bits(2, 2);
+        w.bits(0, 5);
+        w.bits(0, 5);
+        w.bits(0, 4);
+        w.bits(1, 3);
+        for _ in 0..3 {
+            w.bits(0, 3);
+        }
+        raw_cases.push((
+            "§3.2.7 an incomplete code-length code",
+            w.finish(),
+            E_CODE,
+        ));
+    }
+    // §3.2.7's code 16 copies the previous code length, and there is no
+    // previous one at the start.
+    //
+    // The code-length code here is four two-bit codes, which is complete:
+    // in §3.2.7's permutation the first four entries are symbols 16, 17,
+    // 18 and 0, so sorted by (length, symbol) the codes are 0 -> 00,
+    // 16 -> 01, 17 -> 10, 18 -> 11.
+    let cl_four = |w: &mut BitWriter| {
+        w.bits(1, 1);
+        w.bits(2, 2);
+        w.bits(0, 5);
+        w.bits(0, 5);
+        w.bits(0, 4);
+        for _ in 0..4 {
+            w.bits(2, 3); // every one of the four is two bits long
+        }
+    };
+    {
+        let mut w = BitWriter::new();
+        cl_four(&mut w);
+        w.code(1, 2); // symbol 16, with nothing to repeat
+        w.bits(0, 2); // its two extra bits
+        raw_cases.push((
+            "§3.2.7 code 16 with no previous code length",
+            w.finish(),
+            E_CODE,
+        ));
+    }
+    // §3.2.7: a run that writes past the last code length declared.
+    // HLIT 0 and HDIST 0 declare 258 of them; two runs of 138 zeros is
+    // 276.
+    {
+        let mut w = BitWriter::new();
+        cl_four(&mut w);
+        for _ in 0..2 {
+            w.code(3, 2); // symbol 18: repeat zero 11 to 138 times
+            w.bits(127, 7); // 11 + 127 = 138
+        }
+        raw_cases.push((
+            "§3.2.7 a zero run past the last code length",
+            w.finish(),
+            E_CODE,
+        ));
+    }
+    // The empty stream: `in_last` with no bytes at all.
+    raw_cases.push(("an empty stream", Vec::new(), E_TRUNC));
+
+    // --- run them -------------------------------------------------------
+    let zlib = inflate_design(15, 1);
+    let raw = inflate_design(15, 0);
+    let mut zsim = simulate(&zlib, "inflate (zlib)");
+    let mut rsim = simulate(&raw, "inflate (raw)");
+    let zbench = InflateBench::attach(&mut zsim);
+    let rbench = InflateBench::attach(&mut rsim);
+
+    for (what, stream, code) in &zlib_cases {
+        let run = zbench.run(
+            &mut zsim,
+            stream,
+            Sink::Greedy,
+            inflate_limit(stream.len(), 4096),
+        );
+        assert_eq!(
+            run.error,
+            Some(*code),
+            "{what}: {} -> error {:?}, done {}, {} bytes out",
+            hex(stream),
+            run.error,
+            run.done,
+            run.out.len()
+        );
+    }
+    for (what, stream, code) in &raw_cases {
+        let run = rbench.run(
+            &mut rsim,
+            stream,
+            Sink::Greedy,
+            inflate_limit(stream.len(), 4096),
+        );
+        assert_eq!(
+            run.error,
+            Some(*code),
+            "{what}: {} -> error {:?}, done {}, {} bytes out",
+            hex(stream),
+            run.error,
+            run.done,
+            run.out.len()
+        );
+    }
+    // Every code but `E_NONE` has a case. A code with no case is a check
+    // nothing drives.
+    let mut seen: BTreeSet<u8> = BTreeSet::new();
+    for (_, _, code) in zlib_cases.iter().chain(raw_cases.iter()) {
+        seen.insert(*code);
+    }
+    assert_eq!(
+        seen,
+        [E_HEADER, E_BTYPE, E_NLEN, E_CODE, E_DIST, E_TRUNC, E_ADLER]
+            .into_iter()
+            .collect::<BTreeSet<u8>>(),
+        "not every error code has a case"
+    );
+    println!(
+        "inflate: {} malformed streams reported, {} distinct codes",
+        zlib_cases.len() + raw_cases.len(),
+        seen.len()
+    );
+}
+
+/// A legal stream run against a window too small for it is **reported**,
+/// not decoded wrongly.
+///
+/// A design built with `WINDOW_BITS` below 15 cannot decode every legal
+/// stream, because RFC 1951 §3.2.5 lets a compressor name a distance of
+/// up to 32768. The choice `inflate_window.v` makes is to let that fail
+/// at the distance rather than up front on RFC 1950 §2.2's CINFO, so
+/// that a short file compressed by an ordinary compressor still decodes
+/// on a small window — which is the common case and the useful one.
+///
+/// This test is the pair that shows the difference is about the window
+/// and not about the stream: the *same* stream decodes at 15 and is
+/// refused at 8, and a stream whose distances were capped to 256 decodes
+/// at both.
+///
+/// What it would catch: a window whose fullness is tracked wrongly, so
+/// that a distance it does hold is refused or one it does not is
+/// accepted; and a `WINDOW_BITS` that is not actually plumbed through.
+///
+/// What it would not catch: whether the *first* out-of-range distance is
+/// the one reported, since nothing here counts how far the decode got.
+#[test]
+fn inflate_reports_a_distance_its_window_cannot_reach() {
+    const E_DIST: u8 = 5;
+    // A stream with distances far past 256: 4000 bytes of text at level 9
+    // with no distance cap.
+    let big = corpus()
+        .iter()
+        .find(|c| c.name == "text1_4000_l6_deflate")
+        .expect("the 4000-byte text case");
+    // And the same shape of data compressed so that nothing reaches past
+    // 256, which is what `max_distance` is for.
+    let capped = corpus()
+        .iter()
+        .find(|c| c.name == "w256_text19_4000_deflate")
+        .expect("the capped 4000-byte text case");
+
+    let wide = inflate_design(15, 0);
+    let narrow_win = inflate_design(8, 0);
+    let mut wsim = simulate(&wide, "inflate (window 32768)");
+    let mut nsim = simulate(&narrow_win, "inflate (window 256)");
+    let wbench = InflateBench::attach(&mut wsim);
+    let nbench = InflateBench::attach(&mut nsim);
+
+    for case in [big, capped] {
+        let plain = plaintext(&case.rule, case.len);
+        let limit = inflate_limit(case.stream.len(), case.len);
+        let run = wbench.run(&mut wsim, &case.stream, Sink::Greedy, limit);
+        assert_eq!(run.error, None, "{}: refused by a full window", case.name);
+        assert_eq!(run.out, plain, "{}: wrong at WINDOW_BITS=15", case.name);
+    }
+
+    let run = nbench.run(
+        &mut nsim,
+        &capped.stream,
+        Sink::Greedy,
+        inflate_limit(capped.stream.len(), capped.len),
+    );
+    assert_eq!(
+        run.error, None,
+        "{}: a capped stream was refused by a 256-byte window",
+        capped.name
+    );
+    assert_eq!(
+        run.out,
+        plaintext(&capped.rule, capped.len),
+        "{}: wrong at WINDOW_BITS=8",
+        capped.name
+    );
+
+    let run = nbench.run(
+        &mut nsim,
+        &big.stream,
+        Sink::Greedy,
+        inflate_limit(big.stream.len(), big.len),
+    );
+    assert_eq!(
+        run.error,
+        Some(E_DIST),
+        "{}: a 256-byte window accepted a 32 KiB-window stream and produced {} bytes",
+        big.name,
+        run.out.len()
+    );
+    // And what it did produce before refusing is a prefix of the truth,
+    // not rubbish.
+    let plain = plaintext(&big.rule, big.len);
+    assert!(
+        run.out.len() <= plain.len() && plain.starts_with(&run.out),
+        "{}: the bytes before the refusal are not a prefix of the plaintext",
+        big.name
+    );
+}
+
+/// A corrupted stream is refused or decoded correctly, and never
+/// anything else.
+///
+/// This is the property that matters for a block that reads bytes
+/// somebody else chose: for **every** single-byte corruption of a real
+/// stream, the run must end with `error`, or with `done` and the exact
+/// plaintext — and it must end. It must never claim `done` with bytes
+/// that are not the plaintext, and it must never fail to end, which is
+/// what `run`'s loop bound asserts.
+///
+/// Three streams, one of each block type of §3.2.3, two masks per byte
+/// position: 0x01, which usually lands inside a Huffman code, and 0x80,
+/// which usually lands in a different field of the same byte.
+///
+/// **A refused run's partial output is not checked, and must not be.** A
+/// corrupted stream is a *different* stream: a flipped bit in a code
+/// length changes the whole code, so the bytes a decoder produces before
+/// it notices are legitimately different bytes rather than a prefix of
+/// the truth. That is what the checksum of RFC 1950 §9 is for, and
+/// `error` is the decoder saying so. Asserting a prefix here was the
+/// first version of this test and it failed on byte 35 — correctly.
+///
+/// Some corruptions decode *correctly*, and that is not a fault either:
+/// a flipped bit in the padding after the last block changes nothing a
+/// decoder reads. The assertion allows exactly that and nothing else.
+///
+/// What it would catch: a decoder that can be made to loop (a repeat
+/// count that does not terminate, a copy that never drains, a bit reader
+/// that stops asking for bytes); one that can be made to read a window
+/// position it never wrote, which `E_DIST` is the answer to; and one
+/// that produces wrong output and still says `done`.
+///
+/// What it would not catch: a multi-byte corruption; a corruption of a
+/// **raw** stream, which has no checksum, so wrong-but-plausible output
+/// is possible there by design and the container above it is what
+/// catches it; and a stream crafted rather than corrupted, which is
+/// `inflate_reports_every_malformed_stream`'s half of the job.
+#[test]
+fn inflate_refuses_or_decodes_every_single_byte_corruption() {
+    let design = inflate_design(15, 1);
+    let mut sim = simulate(&design, "inflate (zlib)");
+    let bench = InflateBench::attach(&mut sim);
+
+    let mut refused = 0usize;
+    let mut unharmed = 0usize;
+    let mut codes: BTreeMap<u8, usize> = BTreeMap::new();
+    // One stream of each of §3.2.3's three block types, so that a
+    // corruption lands in a dynamic header, a fixed block's codes and a
+    // stored block's length field.
+    for name in ["text1_100_l6_zlib", "runs2_500_l6_zlib", "lcg1_100_l6_zlib"] {
+        let case = corpus()
+            .iter()
+            .find(|c| c.name == name)
+            .unwrap_or_else(|| panic!("no case {name}"));
+        let plain = plaintext(&case.rule, case.len);
+        for i in 0..case.stream.len() {
+            for mask in [0x01u8, 0x80] {
+                let mut bad = case.stream.clone();
+                bad[i] ^= mask;
+                let run = bench.run(
+                    &mut sim,
+                    &bad,
+                    Sink::Greedy,
+                    inflate_limit(bad.len(), case.len + 1024),
+                );
+                match run.error {
+                    Some(code) => {
+                        refused += 1;
+                        *codes.entry(code).or_default() += 1;
+                        assert!(!run.done, "{name} byte {i} xor {mask:#04x}: done and error");
+                    }
+                    None => {
+                        assert!(
+                            run.done,
+                            "{name} byte {i} xor {mask:#04x}: neither done nor error"
+                        );
+                        assert_eq!(
+                            run.out, plain,
+                            "{name} byte {i} xor {mask:#04x}: said `done` with the wrong bytes"
+                        );
+                        unharmed += 1;
+                    }
+                }
+            }
+        }
+    }
+    assert!(
+        refused > 100 && unharmed < refused,
+        "{refused} refused and {unharmed} decoded correctly: that is not a corruption sweep"
+    );
+    // Every corruption that gets past the structure checks is caught by
+    // §9's checksum, so a sweep with no `E_ADLER` in it would mean the
+    // trailer was not being checked at all.
+    assert!(
+        codes.contains_key(&7),
+        "no corruption was caught by the Adler-32: {codes:?}"
+    );
+    println!(
+        "inflate: {} single-byte corruptions of three streams: {refused} reported {codes:?}, \
+         {unharmed} harmless",
+        refused + unharmed
+    );
+}
+
+/// Every prefix of a stream is reported, and never finished.
+///
+/// A truncated stream is the malformation an attacker gets for free, and
+/// the one a decompressor is most likely to wait forever on. For every
+/// proper prefix of three real streams — one of each block type, and one
+/// of them raw, so that there is no checksum to fall back on — the run
+/// must end with an error and must not say `done`.
+///
+/// What it would catch: a bit reader that waits for a byte that is never
+/// coming instead of noticing `in_last`; any state that needs input and
+/// does not check for the end of it; and a zlib stream whose missing
+/// trailer is not noticed, which would turn a truncation into a silent
+/// short read. The raw case is the one that matters most: with no
+/// checksum, `E_TRUNC` is the only thing that can catch it.
+///
+/// What it would not catch: *which* error a given prefix gets, which is
+/// not a property worth pinning — a prefix whose last partial byte
+/// happens to spell a reserved BTYPE legitimately reports `E_BTYPE`
+/// rather than `E_TRUNC`. The bound on the output length is there
+/// instead: the padding bits of the last byte can spell at most one more
+/// symbol, so at most one more match of at most 258 bytes.
+#[test]
+fn inflate_reports_every_truncation() {
+    let zlib = inflate_design(15, 1);
+    let raw = inflate_design(15, 0);
+    let mut zsim = simulate(&zlib, "inflate (zlib)");
+    let mut rsim = simulate(&raw, "inflate (raw)");
+    let zbench = InflateBench::attach(&mut zsim);
+    let rbench = InflateBench::attach(&mut rsim);
+
+    let mut codes: BTreeMap<u8, usize> = BTreeMap::new();
+    let mut prefixes = 0usize;
+    let mut exact = 0usize;
+    for name in ["text1_100_l6_zlib", "lcg1_100_l6_zlib", "runs2_500_l6_deflate"] {
+        let case = corpus()
+            .iter()
+            .find(|c| c.name == name)
+            .unwrap_or_else(|| panic!("no case {name}"));
+        let plain = plaintext(&case.rule, case.len);
+        let (sim, bench) = if case.wrapper == "zlib" {
+            (&mut zsim, &zbench)
+        } else {
+            (&mut rsim, &rbench)
+        };
+        for n in 0..case.stream.len() {
+            let run = bench.run(
+                sim,
+                &case.stream[..n],
+                Sink::Greedy,
+                inflate_limit(n, case.len + 1024),
+            );
+            let code = run
+                .error
+                .unwrap_or_else(|| panic!("{name}: a {n}-byte prefix finished: done {}", run.done));
+            assert!(!run.done, "{name}: a {n}-byte prefix is done and in error");
+            assert!(
+                run.out.len() <= plain.len() + 258,
+                "{name}: a {n}-byte prefix produced {} bytes of a {}-byte plaintext",
+                run.out.len(),
+                plain.len()
+            );
+            if plain.starts_with(&run.out) {
+                exact += 1;
+            }
+            *codes.entry(code).or_default() += 1;
+            prefixes += 1;
+        }
+    }
+    assert!(prefixes > 200, "only {prefixes} prefixes");
+    println!(
+        "inflate: {prefixes} prefixes of three streams, all reported: {codes:?}; \
+         {exact} produced an exact prefix of the plaintext"
+    );
+}
+
+/// The big cases: a stream long enough that the 32 KiB window wraps and
+/// a distance reaches past it.
+///
+/// `#[ignore]`d because it is the only part of this round measured in
+/// millions of simulated clock edges: 680 000 output bytes across nine
+/// streams, including 120 000 bytes of text whose matches do reach back
+/// tens of thousands of bytes. Nothing in the fast corpus can: a
+/// distance past 32768 needs a plaintext longer than that, and a
+/// plaintext longer than that costs more cycles than a gate should
+/// spend.
+///
+/// What it would catch: a window pointer that wraps wrongly, a
+/// `full_q` that never latches so that an old distance is refused after
+/// the wrap, and an Adler-32 whose reduction drifts over a hundred
+/// thousand bytes.
+///
+/// What it would not catch: anything the fast corpus already covers,
+/// and nothing about malformed input.
+#[test]
+#[ignore = "hundreds of thousands of simulated cycles; run it deliberately"]
+fn inflate_crosses_the_32_kib_window() {
+    let zlib = inflate_design(15, 1);
+    let raw = inflate_design(15, 0);
+    let mut zsim = simulate(&zlib, "inflate (zlib)");
+    let mut rsim = simulate(&raw, "inflate (raw)");
+    let zbench = InflateBench::attach(&mut zsim);
+    let rbench = InflateBench::attach(&mut rsim);
+
+    let mut bytes = 0u64;
+    let mut cycles = 0u64;
+    let mut cases = 0usize;
+    for case in corpus() {
+        if case.tier != "bulk" {
+            continue;
+        }
+        let plain = plaintext(&case.rule, case.len);
+        let (sim, bench) = if case.wrapper == "zlib" {
+            (&mut zsim, &zbench)
+        } else {
+            (&mut rsim, &rbench)
+        };
+        let run = bench.run(
+            sim,
+            &case.stream,
+            Sink::Greedy,
+            inflate_limit(case.stream.len(), case.len),
+        );
+        assert_eq!(run.error, None, "{}: reported an error", case.name);
+        assert!(run.done, "{}: never finished", case.name);
+        assert_eq!(run.out.len(), plain.len(), "{}: wrong length", case.name);
+        assert!(run.out == plain, "{}: wrong bytes", case.name);
+        println!(
+            "  {}: {} stream bytes -> {} output bytes in {} cycles ({:.3} bytes/cycle)",
+            case.name,
+            case.stream.len(),
+            case.len,
+            run.cycles,
+            case.len as f64 / run.cycles as f64
+        );
+        bytes += case.len as u64;
+        cycles += run.cycles;
+        cases += 1;
+    }
+    assert!(cases >= 8, "only {cases} bulk cases");
+    println!(
+        "inflate: {cases} large cases, {bytes} output bytes in {cycles} cycles \
+         ({:.3} bytes/cycle)",
+        bytes as f64 / cycles as f64
+    );
+}
+
+/// What this block actually costs per byte, by block type.
+///
+/// `#[ignore]`d and printed, never asserted: a throughput figure belongs
+/// in a README and a cycle count asserted against a constant is a test
+/// that fails the day somebody makes the block faster.
+///
+/// The three numbers are different enough to be worth separating. A
+/// stored block is a byte a cycle. A copy is a byte a cycle once it
+/// starts. A literal costs a cycle per bit of its Huffman code and one
+/// more, so it is the slow case and it is what ordinary text is mostly
+/// made of.
+#[test]
+#[ignore = "prints a throughput figure for ip/compress/inflate/README.md §8"]
+fn inflate_throughput_by_block_type() {
+    let raw = inflate_design(15, 0);
+    let mut sim = simulate(&raw, "inflate (raw)");
+    let bench = InflateBench::attach(&mut sim);
+    for name in [
+        "lcg1_1000_l6_deflate",
+        "zeros_1024_l6_deflate",
+        "rep64_4096_l6_deflate",
+        "text1_4000_l6_deflate",
+        "counter_1000_l6_deflate",
+        "runs4_2000_l6_deflate",
+    ] {
+        let case = corpus()
+            .iter()
+            .find(|c| c.name == name)
+            .unwrap_or_else(|| panic!("no case {name}"));
+        let run = bench.run(
+            &mut sim,
+            &case.stream,
+            Sink::Greedy,
+            inflate_limit(case.stream.len(), case.len),
+        );
+        assert_eq!(run.error, None, "{name}");
+        println!(
+            "{name}: first block BTYPE {}, {} stream bytes -> {} output bytes in {} cycles, \
+             {:.3} bytes/cycle",
+            case.first.1,
+            case.stream.len(),
+            case.len,
+            run.cycles,
+            case.len as f64 / run.cycles as f64
+        );
+    }
 }

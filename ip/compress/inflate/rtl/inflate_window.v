@@ -20,8 +20,9 @@
 // Why it is its own module
 //   Because `dist_bad` is the whole security of a decompressor's memory,
 //   and a module boundary is what lets a test drive it directly rather
-//   than through a Huffman decoder. `inflate_window_refuses_a_distance_
-//   behind_the_start` writes n bytes and then asks for n+1 back.
+//   than through a Huffman decoder.
+//   `inflate_window_refuses_a_distance_it_does_not_hold` writes n bytes
+//   and then asks for n+1 back.
 //
 // The distance that reaches behind the start of the stream
 //   A stream whose first match says "copy from 500 bytes ago" when 10
@@ -102,6 +103,12 @@ module inflate_window #(
     input  wire        copy_open,
 
     input  wire        rd_en,
+    // The byte on `rd_data` has been taken. Without it this module could
+    // not tell a stalled consumer from a finished one, and `rd_valid`
+    // would drop a byte nobody had taken yet — which is exactly the
+    // defect `inflate_window_refuses_a_distance_it_does_not_hold` grew a
+    // section for after `Sink::Alternate` found it on a four-byte stream.
+    input  wire        rd_take,
     output wire [7:0]  rd_data,
     output wire        rd_valid
 );
@@ -165,9 +172,16 @@ module inflate_window #(
             if (copy_open) src_q <= first_src;
             else if (rd_en) src_q <= src_q + {{(WINDOW_BITS-1){1'b0}}, 1'b1};
 
-            rv_q      <= rd_en && !start;
-            use_fwd_q <= collide;
-            if (collide) fwd_q <= wr_data;
+            // A one-deep valid: a read sets it and only a take clears
+            // it, so a byte survives any number of stalled cycles. The
+            // data survives with it because `rd_q` and `fwd_q` are
+            // written only when a read is issued.
+            if (start) rv_q <= 1'b0;
+            else rv_q <= rd_en || (rv_q && !rd_take);
+            if (rd_en) begin
+                use_fwd_q <= collide;
+                if (collide) fwd_q <= wr_data;
+            end
         end
     end
 endmodule
