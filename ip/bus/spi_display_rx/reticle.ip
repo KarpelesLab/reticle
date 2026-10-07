@@ -1,0 +1,69 @@
+# spi_display_rx: the receiving end of a display's four-wire SPI link —
+# `sclk`, `mosi`, `dc` and `cs_n` — oversampled in the system clock
+# domain.
+#
+# There is no datasheet for this link. Everything the block assumes is
+# what the user observed with an analyser on their own hardware: `sclk`
+# in bursts of exactly eight edges, one data wire carrying commands and
+# pixels, a `dc` wire that holds for a whole byte and says which, and a
+# fourth wire high between bursts. README.md §1 records all three passes
+# of that observation, including the two readings that were wrong, and
+# §5 says which parameters a measurement still has to choose.
+#
+# Receive only: no `miso` and no transmit path.
+#
+# `sclk` is **not** a clock here. All four pins are synchronised through
+# `cdc_sync` and oversampled, so the whole block sits in one clock domain
+# and its bytes cross nothing. That costs a rate limit — each `sclk`
+# phase must last two `clk` periods, so 15 MHz at the Cynthion's 60 MHz
+# — and `overrun_count` reports when the margin is gone rather than
+# dropping bits quietly. The block's header has the whole argument.
+#
+# The counters are the point as much as the bytes are:
+# `cmd_byte_count` against `data_byte_count` says what a capture
+# contained, and `bit_error_count` and `dc_change_count` are numbers that
+# should read **zero** against this link.
+name spi_display_rx
+version 1.0.0
+license MIT
+description "Receiver for a display's four-wire SPI link: one data wire sampled against an oversampled external clock, bytes framed by the chip select and tagged by D/C, with counters for command and data bytes, frames, bit-count mismatches, D/C disagreements and sampling overruns"
+
+top spi_display_rx
+target ice40
+target ecp5
+
+source rtl/spi_display_rx.v
+
+depends cdc_sync ^1.0.0
+
+param SAMPLE_EDGE int 0 0..1
+param MSB_FIRST int 1 0..1
+param FRAME_MODE int 0 0..2
+param CS_ACTIVE_LOW int 1 0..1
+param CS_PULSE int 0 0..1
+param DC_SAMPLE int 0 0..2
+param DC_DATA_LEVEL int 1 0..1
+param SYNC_STAGES int 2 2..4
+param COUNT_WIDTH int 16 1..32
+
+port clk in
+port rst_n in
+port sclk in
+port mosi in
+port dc in
+port cs_n in
+port rx_byte out 8
+port rx_is_data out
+port rx_valid out
+port cmd_byte_count out COUNT_WIDTH
+port data_byte_count out COUNT_WIDTH
+port frame_count out COUNT_WIDTH
+port bit_error_count out COUNT_WIDTH
+port dc_change_count out COUNT_WIDTH
+port overrun_count out COUNT_WIDTH
+port bit_count out 4
+port last_bit_count out 4
+port framed out
+port framing_error out
+port dc_error out
+port overrun out

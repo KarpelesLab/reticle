@@ -271,6 +271,20 @@ const VARIANTS: &[Variant] = &[
         top: "i2c_master",
         params: &[("CLK_DIV", "30")],
     },
+    // The display receiver, at the frame mode the user's own hardware
+    // calls for and at the one that ignores the chip select entirely. The
+    // pair of rows is what the framing costs, which is the question a
+    // reader of this table has about a block with three modes.
+    Variant {
+        package: "spi_display_rx",
+        top: "spi_display_rx",
+        params: &[("FRAME_MODE", "0")],
+    },
+    Variant {
+        package: "spi_display_rx",
+        top: "spi_display_rx",
+        params: &[("FRAME_MODE", "2")],
+    },
     Variant {
         package: "pwm",
         top: "pwm",
@@ -3390,6 +3404,945 @@ fn spi_master_clocks_mode_0_and_mode_3() {
     // And a second pattern, so a stuck bit cannot pass both.
     assert_eq!(spi_round_trip(0, 0, 0x01, 0x80), (0x01, 0x80));
     assert_eq!(spi_round_trip(1, 1, 0xFE, 0x7F), (0xFE, 0x7F));
+}
+
+// ---------------------------------------------------------------------------
+// spi_display_rx: a model of the display's own master
+// ---------------------------------------------------------------------------
+
+/// Where the far side's events sit relative to the system clock's.
+///
+/// The system clock's edges land on multiples of `HALF`, which is even,
+/// and every event this model emits is at an **odd** tick, so a pin never
+/// changes in the same instant as the edge that samples it — a race an
+/// event-driven simulator is entitled to resolve either way, and a real
+/// circuit is entitled to lose. [`FarSide::at`] asserts it rather than
+/// trusting the arithmetic.
+const FAR_PHASE: u64 = 5001;
+
+/// One frame the display's master sends: a byte on `mosi` under one
+/// `cs_n`, with `dc` saying what the byte is.
+struct Frame {
+    byte: u8,
+    /// The level `dc` is held at for the **whole** frame, which is what
+    /// a display controller does and what the user confirmed.
+    is_data: bool,
+    /// How many `sclk` edges the frame actually carries. **Eight** is
+    /// what was observed on the user's hardware; seven and nine are the
+    /// cases that make checking the frame against the bit count worth
+    /// anything.
+    bits: u32,
+}
+
+/// A command byte: `dc` low for the whole frame.
+fn command(byte: u8) -> Frame {
+    Frame {
+        byte,
+        is_data: false,
+        bits: 8,
+    }
+}
+
+/// A data byte — a pixel, in this link's traffic: `dc` high.
+fn pixel(byte: u8) -> Frame {
+    Frame {
+        byte,
+        is_data: true,
+        bits: 8,
+    }
+}
+
+const PIN_SCLK: usize = 0;
+const PIN_MOSI: usize = 1;
+const PIN_DC: usize = 2;
+const PIN_CS: usize = 3;
+
+/// A model of the display's master: `sclk` in bursts, `mosi`, `dc` and
+/// `cs_n`, as timed changes on four pins.
+///
+/// Every property of the waveform that `spi_display_rx` has a parameter
+/// for is a field here, so a test can build a master that **disagrees**
+/// with how the block is configured. That is what tests a parameter, as
+/// opposed to merely exercising it.
+struct FarSide {
+    /// `sclk` period in simulator ticks. A multiple of four, so the half
+    /// period is even and every event stays on an odd tick.
+    period: u64,
+    /// How long `cs_n` is deasserted between frames, in ticks.
+    gap: u64,
+    /// True if the master presents its data for a **falling** sampling
+    /// edge: `sclk` rises first and the wires change just after it.
+    sample_falling: bool,
+    /// True if the master sends the most significant bit first.
+    msb_first: bool,
+    /// The `cs_n` level that means "between bytes".
+    cs_idle: bool,
+    /// Whether `cs_n` is driven at all.
+    cs_present: bool,
+    /// True if `dc` carries the byte's **bits** instead of holding the
+    /// byte's tag: the mislabelled-analyser-channel hypothesis, which
+    /// `dc_change_count` exists to settle.
+    dc_follows_data: bool,
+    /// How long after the non-sampling edge `mosi` changes.
+    mosi_skew: u64,
+    /// How long after the frame opens the held `dc` is driven. A master
+    /// qualifies the byte before it clocks it, so this is small — but it
+    /// is **not** `mosi_skew`, and two wires sampled by one edge should
+    /// not care which of them moved first.
+    dc_skew: u64,
+    /// Frames closed, which is the number the block's own `frame_count`
+    /// is compared against.
+    frames: u64,
+    /// `(tick, pin, level)`, sorted by tick.
+    events: Vec<(u64, usize, bool)>,
+    /// When the next frame may begin.
+    now: u64,
+}
+
+impl FarSide {
+    /// A master at `period` ticks an `sclk` period, in the shape the
+    /// user observed: eight-edge bursts, wires changing on the
+    /// non-sampling edge, `cs_n` high between bytes.
+    ///
+    /// The gap is eight system clock periods, which is comfortable; the
+    /// tests that care about the gap set it themselves.
+    fn new(period: u64) -> FarSide {
+        assert_eq!(
+            period % 4,
+            0,
+            "an `sclk` period must be a multiple of four ticks"
+        );
+        FarSide {
+            period,
+            gap: 8 * 2 * HALF,
+            sample_falling: false,
+            msb_first: true,
+            cs_idle: true,
+            cs_present: true,
+            dc_follows_data: false,
+            mosi_skew: 2,
+            dc_skew: 2,
+            frames: 0,
+            events: Vec::new(),
+            now: FAR_PHASE,
+        }
+    }
+
+    /// One pin change, at a tick that cannot race the system clock.
+    fn at(&mut self, tick: u64, pin: usize, level: bool) {
+        assert_eq!(
+            tick % 2,
+            1,
+            "a far side event at tick {tick} could race the system clock"
+        );
+        self.events.push((tick, pin, level));
+    }
+
+    /// The `sclk` edges and wire changes of one frame, starting at `t0`.
+    ///
+    /// The wires change just after the edge that does **not** sample,
+    /// which is how a source-synchronous master gives a receiver half a
+    /// period of setup and half of hold.
+    fn edges(&mut self, t0: u64, f: &Frame) {
+        for i in 0..f.bits {
+            let base = t0 + u64::from(i) * self.period;
+            let shift = if self.msb_first { 7 - (i % 8) } else { i % 8 };
+            let data = (f.byte >> shift) & 1 == 1;
+            let mosi_at = base + self.mosi_skew;
+            if self.sample_falling {
+                self.at(base, PIN_SCLK, true);
+                self.at(mosi_at, PIN_MOSI, data);
+                let half = base + self.period / 2;
+                self.at(half, PIN_SCLK, false);
+            } else {
+                self.at(mosi_at, PIN_MOSI, data);
+                let half = base + self.period / 2;
+                self.at(half, PIN_SCLK, true);
+                let next = base + self.period;
+                self.at(next, PIN_SCLK, false);
+            }
+            // The mislabelled-channel hypothesis: `dc` is really `mosi`
+            // on another analyser channel, so it carries the bit at the
+            // same instant and with the same skew.
+            if self.dc_follows_data {
+                self.at(mosi_at, PIN_DC, data);
+            }
+        }
+    }
+
+    /// `sclk` edges with **no frame around them**: the tail of the byte
+    /// a reset landed in the middle of.
+    fn mid_frame_start(&mut self, bits: u32) {
+        let t0 = self.now;
+        let partial = Frame {
+            byte: 0xFF,
+            is_data: true,
+            bits,
+        };
+        self.edges(t0, &partial);
+        self.now = t0 + u64::from(bits) * self.period;
+    }
+
+    /// The gap that closes whatever came before, then one frame.
+    fn send(&mut self, f: &Frame) {
+        self.close();
+        let t0 = self.now + self.gap;
+        if self.cs_present {
+            let level = !self.cs_idle;
+            self.at(t0, PIN_CS, level);
+        }
+        // `dc` qualifies the byte, so a master drives it as it opens the
+        // frame and holds it — which is what the user confirmed, and
+        // which is why no sampling edge inside the frame can disagree
+        // about the tag.
+        if !self.dc_follows_data {
+            let (dc_at, level) = (t0 + self.dc_skew, f.is_data);
+            self.at(dc_at, PIN_DC, level);
+        }
+        // `cs_n` falls half an `sclk` period before the first edge and
+        // rises half a period after the last, which is what a master
+        // that is not trying to catch a receiver out does. The lead
+        // matters: with the fall in the same instant as the first
+        // sampling edge a frame *looks* like seven bits, and a test that
+        // let that happen would be measuring the model.
+        let lead = self.period / 2;
+        self.edges(t0 + lead, f);
+        self.now = t0 + 2 * lead + u64::from(f.bits) * self.period;
+    }
+
+    /// Deassert `cs_n`, which is what closes a frame.
+    fn close(&mut self) {
+        if self.cs_present {
+            let (tick, level) = (self.now, self.cs_idle);
+            self.at(tick, PIN_CS, level);
+            self.frames += 1;
+        }
+    }
+
+    /// Every frame of a session, and the deassertion that closes the
+    /// last of them — without which the last byte is never framed.
+    fn session(&mut self, frames: &[Frame]) {
+        for f in frames {
+            self.send(f);
+        }
+        self.close();
+        self.events.sort_by_key(|e| e.0);
+    }
+}
+
+/// What came out of the block over one far-side session.
+struct Received {
+    /// Every `(byte, is_data)` pair `rx_valid` announced.
+    bytes: Vec<(u8, bool)>,
+    cmd_bytes: u64,
+    data_bytes: u64,
+    frames: u64,
+    bit_errors: u64,
+    dc_changes: u64,
+    overruns: u64,
+    last_bit_count: u64,
+    framed: bool,
+    framing_error: bool,
+    dc_error: bool,
+    overrun: bool,
+}
+
+/// Drives one far-side session into a `spi_display_rx` built with
+/// `params`.
+///
+/// The system clock and the far side are advanced together in absolute
+/// time, so the two are related only by the numbers the far side was
+/// built with and never by a shared edge.
+fn spi_display_session(params: &[(&str, &str)], far: &FarSide) -> Received {
+    let design = design_of("spi_display_rx", "spi_display_rx", params);
+    let mut sim = simulate(&design, "spi_display_rx");
+    let clk = top_net(&sim, "clk");
+    let rst_n = top_net(&sim, "rst_n");
+    let pins = [
+        top_net(&sim, "sclk"),
+        top_net(&sim, "mosi"),
+        top_net(&sim, "dc"),
+        top_net(&sim, "cs_n"),
+    ];
+    let rx_valid = top_net(&sim, "rx_valid");
+    let rx_byte = top_net(&sim, "rx_byte");
+    let rx_is_data = top_net(&sim, "rx_is_data");
+
+    // The link idles with `sclk` low, `mosi` and `dc` low, and `cs_n`
+    // **asserted** — which is to say the master is in the middle of a
+    // byte when the reset is released. That is the state a receiver must
+    // not be permanently mis-framed by, so it is the state every one of
+    // these sessions starts in.
+    sim.set(pins[PIN_SCLK], bit(false));
+    sim.set(pins[PIN_MOSI], bit(false));
+    sim.set(pins[PIN_DC], bit(false));
+    sim.set(pins[PIN_CS], bit(!far.cs_idle));
+    reset(&mut sim, clk, rst_n);
+
+    let mut next_clk = sim.time() + HALF;
+    let mut clk_high = false;
+    let mut event = 0usize;
+    let mut bytes = Vec::new();
+    // Long enough after the last pin change for the last byte to be
+    // announced, and for nothing else to be.
+    let end = far.events.last().map_or(sim.time(), |e| e.0) + 40 * HALF;
+    while sim.time() < end {
+        let next_event = far.events.get(event).map_or(u64::MAX, |e| e.0);
+        let at = next_clk.min(next_event);
+        if at >= end {
+            break;
+        }
+        sim.run_until(at);
+        while event < far.events.len() && far.events[event].0 == at {
+            let (_, pin, level) = far.events[event];
+            sim.set(pins[pin], bit(level));
+            event += 1;
+        }
+        if at == next_clk {
+            // The high phase has elapsed, so what the rising edge
+            // produced is settled and this is where it is read.
+            if clk_high && high(&sim, rx_valid) {
+                bytes.push((octet(get_u64(&sim, rx_byte)), high(&sim, rx_is_data)));
+            }
+            clk_high = !clk_high;
+            sim.set(clk, bit(clk_high));
+            next_clk += HALF;
+        }
+    }
+
+    let got = Received {
+        cmd_bytes: get_u64(&sim, top_net(&sim, "cmd_byte_count")),
+        data_bytes: get_u64(&sim, top_net(&sim, "data_byte_count")),
+        frames: get_u64(&sim, top_net(&sim, "frame_count")),
+        bit_errors: get_u64(&sim, top_net(&sim, "bit_error_count")),
+        dc_changes: get_u64(&sim, top_net(&sim, "dc_change_count")),
+        overruns: get_u64(&sim, top_net(&sim, "overrun_count")),
+        last_bit_count: get_u64(&sim, top_net(&sim, "last_bit_count")),
+        framed: high(&sim, top_net(&sim, "framed")),
+        framing_error: high(&sim, top_net(&sim, "framing_error")),
+        dc_error: high(&sim, top_net(&sim, "dc_error")),
+        overrun: high(&sim, top_net(&sim, "overrun")),
+        bytes,
+    };
+    // `rx_valid` is one cycle per byte, and every byte lands in exactly
+    // one of the two counters. A valid held for two cycles, a byte
+    // counted without one, or a tag that reached neither counter fails
+    // here rather than as a confusing length mismatch later.
+    assert_eq!(
+        u64::try_from(got.bytes.len()).expect("a small count"),
+        got.cmd_bytes + got.data_bytes,
+        "one `rx_valid` cycle per counted byte, and one counter per byte"
+    );
+    let data_seen = got.bytes.iter().filter(|(_, is_data)| *is_data).count();
+    assert_eq!(
+        u64::try_from(data_seen).expect("a small count"),
+        got.data_bytes,
+        "the data bytes this testbench saw are the ones counted as data"
+    );
+    assert_eq!(
+        got.framing_error,
+        got.bit_errors != 0,
+        "`framing_error` is `bit_error_count != 0`"
+    );
+    assert_eq!(
+        got.dc_error,
+        got.dc_changes != 0,
+        "`dc_error` is `dc_change_count != 0`"
+    );
+    assert_eq!(
+        got.overrun,
+        got.overruns != 0,
+        "`overrun` is `overrun_count != 0`"
+    );
+    got
+}
+
+/// The pairs a session should produce, for the frames it sent.
+fn expected_bytes(frames: &[Frame]) -> Vec<(u8, bool)> {
+    frames.iter().map(|f| (f.byte, f.is_data)).collect()
+}
+
+/// A byte whose bits are not all the same, so a `dc` wire that was
+/// really carrying `mosi` would be seen to move inside it. `00h` and
+/// `FFh` are the two bytes that would not give it away, which is why
+/// `dc_change_count` is a lower bound and not a proof.
+fn byte_moves(byte: u8) -> bool {
+    byte != 0x00 && byte != 0xFF
+}
+
+/// A run of command bytes and then a long run of pixels, which is the
+/// shape this link's traffic actually has.
+fn display_traffic() -> Vec<Frame> {
+    // Six bytes that look like an initialisation sequence, then a ramp
+    // of pixels.
+    let init = [0x01u8, 0x11, 0x3A, 0x55, 0x29, 0x2C];
+    let mut frames: Vec<Frame> = init.iter().map(|c| command(*c)).collect();
+    for i in 0..64u32 {
+        frames.push(pixel(octet(u64::from(i) * 3 + 1)));
+    }
+    frames
+}
+
+/// Six system clocks to an `sclk` period, which is comfortably inside
+/// the four this block needs.
+const SPI_PERIOD: u64 = 6 * 2 * HALF;
+
+#[test]
+fn spi_display_rx_receives_a_plausible_display_session() {
+    let frames = display_traffic();
+    let mut far = FarSide::new(SPI_PERIOD);
+    far.session(&frames);
+
+    // The defaults: `cs_n` frames the byte, the rising edge samples, the
+    // most significant bit arrives first, `dc` must agree with itself.
+    let got = spi_display_session(&[], &far);
+
+    assert_eq!(
+        got.bytes,
+        expected_bytes(&frames),
+        "every byte, with the tag `dc` gave it"
+    );
+    assert_eq!(got.cmd_bytes, 6, "six commands");
+    assert_eq!(got.data_bytes, 64, "then sixty-four pixels");
+    assert_eq!(got.frames, far.frames, "every frame `cs_n` closed");
+    // The three numbers that say the far side is what we think it is.
+    assert_eq!(
+        got.bit_errors, 0,
+        "frames of exactly eight bits leave nothing to report"
+    );
+    assert_eq!(
+        got.dc_changes, 0,
+        "`dc` holding for a whole byte leaves nothing to report either"
+    );
+    assert_eq!(
+        got.overruns, 0,
+        "six system clocks an `sclk` period is not tight"
+    );
+    assert_eq!(got.last_bit_count, 8, "every frame closed at eight bits");
+    assert!(got.framed, "the first frame open framed the block");
+
+    // And the capture the user actually had in front of them: pixels
+    // only, no command in the window at all. `dc` is then constant while
+    // `cs_n` toggles once a byte, which is exactly what "`dc` is mostly
+    // the reverse of `cs_n`" looks like — and this pair of counters is
+    // what says so rather than anyone squinting at a waveform.
+    let pixels: Vec<Frame> = (0..32u32).map(|i| pixel(octet(u64::from(i) + 1))).collect();
+    let mut far = FarSide::new(SPI_PERIOD);
+    far.session(&pixels);
+    let got = spi_display_session(&[], &far);
+    assert_eq!(got.cmd_bytes, 0, "a pixel run contains no command at all");
+    assert_eq!(got.data_bytes, 32);
+    assert_eq!(got.dc_changes, 0, "`dc` never moved, which is the point");
+    assert_eq!(got.bit_errors, 0);
+}
+
+#[test]
+fn spi_display_rx_delivers_every_byte_in_every_frame_mode() {
+    // Patterns that a one-bit shift, a stuck bit or a swapped wire all
+    // change: a complement pair, both of the bytes that do not toggle,
+    // and both tags.
+    let frames = [
+        command(0xA5),
+        pixel(0x3C),
+        command(0x00),
+        pixel(0xFF),
+        command(0x7E),
+        pixel(0x81),
+    ];
+    let mut far = FarSide::new(SPI_PERIOD);
+    far.session(&frames);
+
+    for mode in ["0", "1", "2"] {
+        let got = spi_display_session(&[("FRAME_MODE", mode)], &far);
+        assert_eq!(got.bytes, expected_bytes(&frames), "mode {mode}");
+        assert_eq!(got.cmd_bytes, 3, "mode {mode}");
+        assert_eq!(got.data_bytes, 3, "mode {mode}");
+        assert_eq!(
+            got.bit_errors, 0,
+            "mode {mode}: a correct master disagrees with nothing"
+        );
+        assert_eq!(got.dc_changes, 0, "mode {mode}");
+        assert_eq!(got.overruns, 0, "mode {mode}");
+        // Frames are counted in every mode, including the one that
+        // ignores them — which is what makes mode 2 a *measurement* of
+        // whether mode 0 would have worked.
+        assert_eq!(got.frames, far.frames, "mode {mode}");
+        if mode == "0" {
+            assert_eq!(got.last_bit_count, 8, "the frame closed at eight bits");
+        } else {
+            // Counting for itself, the block delivered on the eighth bit
+            // and was back at zero when the frame closed.
+            assert_eq!(got.last_bit_count, 0, "mode {mode}");
+        }
+    }
+}
+
+#[test]
+fn spi_display_rx_reports_a_frame_that_was_not_eight_bits() {
+    for bits in [7u32, 9] {
+        // Every frame here carries the **same** tag, so a byte that
+        // straddles two of them still agrees with itself about `dc`:
+        // this part is about the bit count and nothing else.
+        let frames: Vec<Frame> = (0..8u8)
+            .map(|i| Frame {
+                byte: 0x5A ^ i,
+                is_data: true,
+                bits,
+            })
+            .collect();
+        let mut far = FarSide::new(SPI_PERIOD);
+        far.session(&frames);
+
+        // Under `cs_n`'s authority a frame that was not eight bits is
+        // **dropped and counted**, never shifted out as a byte.
+        let got = spi_display_session(&[("FRAME_MODE", "0")], &far);
+        assert!(
+            got.bytes.is_empty(),
+            "{bits} bits: nothing should be delivered"
+        );
+        assert_eq!(got.cmd_bytes + got.data_bytes, 0, "{bits} bits");
+        assert_eq!(
+            got.bit_errors, 8,
+            "{bits} bits: one mismatch per framed byte"
+        );
+        assert_eq!(
+            got.last_bit_count,
+            u64::from(bits),
+            "{bits} bits: and the count it arrived at is readable"
+        );
+        assert!(got.framing_error, "{bits} bits");
+        assert_eq!(
+            got.overruns, 0,
+            "{bits} bits: the rate was never the problem"
+        );
+        assert_eq!(got.frames, far.frames, "{bits} bits");
+
+        // Counting eight for itself, the block cannot drop anything: it
+        // delivers a byte every eight bits whatever the frames were, so
+        // the bytes straddle the boundaries. Nothing in the data path
+        // notices — the frame counter is the only thing that does.
+        for mode in ["1", "2"] {
+            let got = spi_display_session(&[("FRAME_MODE", mode)], &far);
+            assert_eq!(
+                got.cmd_bytes + got.data_bytes,
+                u64::from(8 * bits) / 8,
+                "mode {mode}, {bits} bits: a byte every eight bits of the stream"
+            );
+            assert!(
+                got.bit_errors > 0,
+                "mode {mode}, {bits} bits: `cs_n` disagreed and said so"
+            );
+            assert!(got.framing_error, "mode {mode}, {bits} bits");
+            assert_eq!(got.dc_changes, 0, "mode {mode}, {bits} bits: one tag");
+        }
+
+        // And with the tags **alternating**, a byte that straddles two
+        // frames straddles two tags, so `dc` is seen to move inside it
+        // and mode 0's agreement rule withholds it. Two independent
+        // instruments then report the same misframing.
+        let frames: Vec<Frame> = (0..8u8)
+            .map(|i| Frame {
+                byte: 0x5A ^ i,
+                is_data: i % 2 == 0,
+                bits,
+            })
+            .collect();
+        let mut far = FarSide::new(SPI_PERIOD);
+        far.session(&frames);
+        let got = spi_display_session(&[("FRAME_MODE", "1")], &far);
+        assert!(
+            got.dc_changes > 0,
+            "{bits} bits: a straddling byte has two tags"
+        );
+        assert!(
+            got.cmd_bytes + got.data_bytes < u64::from(8 * bits) / 8,
+            "{bits} bits: and the ones that do are withheld"
+        );
+    }
+}
+
+#[test]
+fn spi_display_rx_without_a_chip_select_delivers_nothing_unless_told_to_count() {
+    let frames = [command(0xA5), pixel(0x3C), pixel(0x7E)];
+    let mut far = FarSide::new(SPI_PERIOD);
+    far.cs_present = false;
+    far.session(&frames);
+    assert_eq!(far.frames, 0, "the model drove no chip select at all");
+
+    // Modes 0 and 1 both wait for a frame that never opens. That is the
+    // honest answer — a receiver that guessed the phase would be wrong
+    // seven times in eight — and the counters say exactly why: no frame
+    // was ever seen, so the block was never framed.
+    for mode in ["0", "1"] {
+        let got = spi_display_session(&[("FRAME_MODE", mode)], &far);
+        assert!(got.bytes.is_empty(), "mode {mode}");
+        assert_eq!(got.frames, 0, "mode {mode}");
+        assert!(!got.framed, "mode {mode}: nothing ever framed it");
+        assert_eq!(got.bit_errors, 0, "mode {mode}: nothing was judged");
+    }
+
+    // Mode 2 counts eight from reset and needs no frame at all, which is
+    // the user's own first suspicion made buildable. It works here
+    // because the reset landed before the first byte;
+    // `spi_display_rx_cannot_be_mis_framed_by_a_late_start` is the case
+    // where that is not true.
+    let got = spi_display_session(&[("FRAME_MODE", "2")], &far);
+    assert_eq!(
+        got.bytes,
+        expected_bytes(&frames),
+        "mode 2 needs no chip select"
+    );
+    assert_eq!(got.bit_errors, 0, "and nothing contradicted it");
+}
+
+#[test]
+fn spi_display_rx_cannot_be_mis_framed_by_a_late_start() {
+    // Five `sclk` edges with no frame around them, as if the reset had
+    // been released three bits into a byte, and then an ordinary
+    // session.
+    let frames = [command(0xA5), pixel(0x3C), pixel(0x7E)];
+    let mut far = FarSide::new(SPI_PERIOD);
+    far.mid_frame_start(5);
+    far.session(&frames);
+
+    // `cs_n`'s authority discards the byte the block was born inside —
+    // `framed` is low until a frame *opens* — so every byte after it is
+    // right and **nothing is reported**. Being permanently mis-framed by
+    // a late start is the failure a continuous-clock receiver cannot
+    // avoid, and this is the test that it has been avoided.
+    let got = spi_display_session(&[], &far);
+    assert_eq!(
+        got.bytes,
+        expected_bytes(&frames),
+        "aligned from the first frame"
+    );
+    assert_eq!(
+        got.bit_errors, 0,
+        "the partial byte was discarded, not decoded wrong"
+    );
+    assert_eq!(
+        got.frames, far.frames,
+        "its closing deassertion was still seen"
+    );
+
+    // Mode 2 has nothing to align to and is mis-framed by exactly those
+    // five bits for the rest of the session — and the chip select it is
+    // ignoring is what says so.
+    let got = spi_display_session(&[("FRAME_MODE", "2")], &far);
+    assert_ne!(
+        got.bytes,
+        expected_bytes(&frames),
+        "mode 2 is five bits out"
+    );
+    assert!(
+        got.bit_errors > 0,
+        "and the chip select mode 2 ignores still reports it"
+    );
+}
+
+#[test]
+fn spi_display_rx_samples_both_wires_whatever_their_skew() {
+    // Ten system clocks an `sclk` period, with `mosi` changing
+    // immediately after the non-sampling edge and `dc` arriving three
+    // system clocks later — right up against the two clocks of setup
+    // the first sampling edge leaves. Both are still read correctly,
+    // and the tag is still the tag.
+    let frames = [command(0xA5), pixel(0x0F), command(0x7E), pixel(0x81)];
+    let period = 10 * 2 * HALF;
+    let mut far = FarSide::new(period);
+    far.mosi_skew = 2;
+    // The first sampling edge is one `sclk` period after the frame
+    // opens: half a period of lead, then half a period to the edge.
+    far.dc_skew = period - 2 * 2 * HALF;
+    far.session(&frames);
+
+    let got = spi_display_session(&[], &far);
+    assert_eq!(
+        got.bytes,
+        expected_bytes(&frames),
+        "three clocks of skew between `mosi` and `dc`"
+    );
+    assert_eq!(got.bit_errors, 0);
+    assert_eq!(got.dc_changes, 0, "a late `dc` is not a moving `dc`");
+    assert_eq!(got.overruns, 0);
+}
+
+#[test]
+fn spi_display_rx_samples_the_edge_and_the_bit_order_it_is_told_to() {
+    // A master that presents its data for the **falling** edge, with a
+    // skew big enough for an oversampler to tell the two edges apart.
+    // Below one system clock the wrong edge samples the wire *as it
+    // changes*, which a real part resolves metastably and a simulator
+    // resolves arbitrarily — so the skew here is a quarter of an `sclk`
+    // period and the answer below is a fact rather than a simulator's
+    // choice.
+    //
+    // The frames all carry the same tag, which is what a pixel run
+    // looks like and therefore most of this link's traffic.
+    let frames = [pixel(0xA5), pixel(0x3C), pixel(0x7E)];
+    let mut far = FarSide::new(SPI_PERIOD);
+    far.sample_falling = true;
+    far.mosi_skew = SPI_PERIOD / 4;
+    far.session(&frames);
+
+    let got = spi_display_session(&[("SAMPLE_EDGE", "1")], &far);
+    assert_eq!(
+        got.bytes,
+        expected_bytes(&frames),
+        "sampled on the falling edge"
+    );
+    assert_eq!(got.bit_errors, 0);
+    assert_eq!(got.dc_changes, 0);
+
+    // The same master read on the rising edge is **wrong and looks
+    // perfectly healthy**: three frames of eight bits, no mismatch, no
+    // overrun, `dc` holding exactly as it should — and every byte
+    // shifted by one bit. `dc` cannot give it away either, because a
+    // master drives the tag as it opens the frame and both edges are
+    // long after that.
+    //
+    // So **no counter in this block can choose the sampling edge**.
+    // That is why it is a parameter, and why README.md §5 sends the user
+    // to a known initialisation sequence instead of to a number.
+    let got = spi_display_session(&[], &far);
+    assert_eq!(
+        got.cmd_bytes + got.data_bytes,
+        3,
+        "every frame still closed at eight bits"
+    );
+    assert_eq!(got.bit_errors, 0, "and nothing to report about it");
+    assert_eq!(got.dc_changes, 0, "the tag is still perfectly held");
+    assert_eq!(got.overruns, 0);
+    assert_ne!(
+        got.bytes,
+        expected_bytes(&frames),
+        "but the bytes are not the bytes"
+    );
+
+    // Bit order is the same kind of unknown and the same kind of answer.
+    let mut far = FarSide::new(SPI_PERIOD);
+    far.msb_first = false;
+    far.session(&frames);
+    let got = spi_display_session(&[("MSB_FIRST", "0")], &far);
+    assert_eq!(
+        got.bytes,
+        expected_bytes(&frames),
+        "least significant bit first"
+    );
+    assert_eq!(got.bit_errors, 0);
+}
+
+#[test]
+fn spi_display_rx_reports_a_dc_that_moves_inside_a_byte() {
+    // The hypothesis this counter exists for: the wire labelled `dc` was
+    // really `mosi` on another analyser channel, so it carries the
+    // byte's bits rather than holding the byte's tag.
+    let frames = [
+        command(0xA5),
+        pixel(0x80),
+        command(0x00),
+        pixel(0x01),
+        pixel(0xFF),
+    ];
+    let moving = frames.iter().filter(|f| byte_moves(f.byte)).count();
+    assert_eq!(moving, 3, "three of these five bytes would give it away");
+    let mut far = FarSide::new(SPI_PERIOD);
+    far.dc_follows_data = true;
+    far.session(&frames);
+
+    // Required to agree, which is the default: a byte whose `dc` moved
+    // inside it is counted and **withheld**, because a wrongly tagged
+    // command byte is worse than a missing one. `00h` and `FFh` do not
+    // move, so those two come through — tagged by a `dc` that really did
+    // hold, because the data did.
+    let got = spi_display_session(&[], &far);
+    assert_eq!(
+        got.dc_changes,
+        u64::try_from(moving).expect("small"),
+        "the bytes whose bits move are the bytes `dc` moved inside"
+    );
+    assert!(got.dc_error);
+    assert_eq!(
+        got.bytes,
+        vec![(0x00, false), (0xFF, true)],
+        "only the two bytes `dc` agreed about, tagged by what it held"
+    );
+    assert_eq!(got.bit_errors, 0, "the framing was never the problem");
+    assert_eq!(got.frames, far.frames, "and every frame was still seen");
+
+    // Taking the first bit instead delivers everything, and the tag is
+    // then the byte's own most significant bit — which is what makes
+    // this a measurement rather than a worry: a `dc` that is really
+    // `mosi` tags every byte with one of its own bits, and which bit it
+    // is says which bit order the analyser was looking at.
+    let got = spi_display_session(&[("DC_SAMPLE", "1")], &far);
+    let by_first: Vec<(u8, bool)> = frames
+        .iter()
+        .map(|f| (f.byte, f.byte & 0x80 != 0))
+        .collect();
+    assert_eq!(got.bytes, by_first, "tagged by the first bit");
+    assert_eq!(
+        got.dc_changes,
+        u64::try_from(moving).expect("small"),
+        "still counted, just no longer withheld"
+    );
+
+    // And the last bit, which is the other half of that decision.
+    let got = spi_display_session(&[("DC_SAMPLE", "2")], &far);
+    let by_last: Vec<(u8, bool)> = frames
+        .iter()
+        .map(|f| (f.byte, f.byte & 0x01 != 0))
+        .collect();
+    assert_eq!(got.bytes, by_last, "tagged by the last bit");
+    assert_ne!(by_first, by_last, "the two choices differ on this traffic");
+}
+
+#[test]
+fn spi_display_rx_reports_an_sclk_it_cannot_oversample() {
+    let frames = [command(0xA5), pixel(0x3C), pixel(0x7E)];
+
+    // **At the stated limit**: four system clocks an `sclk` period, so
+    // each phase lasts exactly two and is seen exactly twice. Nothing is
+    // lost and nothing is reported. At 60 MHz this is 15 MHz.
+    let mut far = FarSide::new(4 * 2 * HALF);
+    far.session(&frames);
+    let got = spi_display_session(&[], &far);
+    assert_eq!(
+        got.bytes,
+        expected_bytes(&frames),
+        "four clocks a period is enough"
+    );
+    assert_eq!(got.bit_errors, 0);
+    assert_eq!(
+        got.overruns, 0,
+        "two samples a phase is the margin, and it holds"
+    );
+
+    // **A shade over it**: three system clocks a period, so a phase is
+    // sometimes seen only once. No edge is lost yet and every byte is
+    // still right — and the overrun counter says the margin has gone,
+    // which is the warning arriving *before* the corruption.
+    let mut far = FarSide::new(3 * 2 * HALF);
+    far.session(&frames);
+    let got = spi_display_session(&[], &far);
+    assert_eq!(got.bytes, expected_bytes(&frames), "no edge lost yet");
+    assert_eq!(got.bit_errors, 0, "so the bit counts still agree");
+    assert!(
+        got.overruns > 0,
+        "but the margin is gone and it is reported"
+    );
+    assert!(got.overrun);
+
+    // **Well past it**: an `sclk` period and a half of the system clock,
+    // where whole phases fall between sampling edges and edges are
+    // genuinely lost. Mode 0 reports a bit count below eight and
+    // **delivers nothing**, rather than shifting a corrupt byte out.
+    let mut far = FarSide::new(3 * HALF);
+    far.session(&frames);
+    let got = spi_display_session(&[], &far);
+    assert!(got.bytes.is_empty(), "nothing corrupt was delivered");
+    assert!(got.bit_errors > 0, "the bit count said so");
+    assert!(got.last_bit_count < 8, "and said how many bits did arrive");
+    assert!(
+        got.overruns > 0,
+        "the sampling margin said so independently"
+    );
+}
+
+#[test]
+fn spi_display_rx_reports_a_gap_too_short_to_see() {
+    let frames = [command(0xA5), pixel(0x3C), pixel(0x7E)];
+
+    // `cs_n` is edge-detected exactly like `sclk`, so **the gap has its
+    // own minimum**: two system clock periods, 33.3 ns at 60 MHz. At
+    // exactly two the bytes are right and nothing is reported.
+    let mut far = FarSide::new(SPI_PERIOD);
+    far.gap = 2 * 2 * HALF;
+    far.session(&frames);
+    let got = spi_display_session(&[], &far);
+    assert_eq!(
+        got.bytes,
+        expected_bytes(&frames),
+        "two clocks of gap is enough"
+    );
+    assert_eq!(got.bit_errors, 0);
+    assert_eq!(got.overruns, 0);
+
+    // At one, the deassertion is seen once and the assertion after it
+    // could have been missed. The bytes do survive here; the point is
+    // that **a short gap is reported** even when the byte rate is
+    // comfortable, which is a fact the user can check against a scope.
+    let mut far = FarSide::new(SPI_PERIOD);
+    far.gap = 2 * HALF;
+    far.session(&frames);
+    let got = spi_display_session(&[], &far);
+    assert_eq!(
+        got.bytes,
+        expected_bytes(&frames),
+        "it worked, with nothing to spare"
+    );
+    assert!(
+        got.overruns > 0,
+        "a one-clock gap has no margin and says so"
+    );
+    assert!(got.overrun);
+}
+
+#[test]
+fn spi_display_rx_takes_a_chip_select_of_either_polarity() {
+    let frames = [command(0xA5), pixel(0x3C), pixel(0x7E)];
+
+    // The polarity the user observed is the default. Inverted, the same
+    // waveform needs CS_ACTIVE_LOW = 0 and is read identically.
+    let mut far = FarSide::new(SPI_PERIOD);
+    far.cs_idle = false;
+    far.session(&frames);
+    let got = spi_display_session(&[("CS_ACTIVE_LOW", "0")], &far);
+    assert_eq!(
+        got.bytes,
+        expected_bytes(&frames),
+        "an active-high chip select"
+    );
+    assert_eq!(got.bit_errors, 0);
+    assert_eq!(got.frames, far.frames);
+
+    // And read at the *wrong* polarity the same wire frames the gaps
+    // instead of the bytes: the block sees no eight-bit frame at all and
+    // delivers nothing. A wrong polarity is loud, which is the opposite
+    // of a wrong sampling edge.
+    let got = spi_display_session(&[], &far);
+    assert!(got.bytes.is_empty(), "the wrong polarity frames the gaps");
+    assert!(got.bit_errors > 0, "and that is reported, not guessed at");
+}
+
+#[test]
+fn spi_display_rx_is_one_clock_domain() {
+    // The whole argument for oversampling rather than clocking on
+    // `sclk`: there is **one** clock in this block and nothing crosses
+    // between domains, so no output of it needs a synchroniser and no
+    // external pin needs to reach a clock buffer.
+    let (mut design, id) = flattened("spi_display_rx", "spi_display_rx", &[]);
+    let mut diags = Diagnostics::new();
+    synth_run(&mut design, &SynthOptions::default(), &mut diags);
+    assert!(!diags.has_errors(), "spi_display_rx does not synthesise");
+    let module = flatten_for_timing(&design, id).expect("a flat module");
+    let report = analyze_cdc_with(&module, &TimingSpec::default());
+    assert!(
+        !report.has_errors(),
+        "spi_display_rx has a crossing reported as an error:\n{}",
+        report.render()
+    );
+    let names: Vec<&str> = report.domains.iter().map(|d| d.name.as_str()).collect();
+    assert_eq!(
+        report.domains.len(),
+        1,
+        "`sclk` must not be a clock here, got domains {names:?}"
+    );
+    assert!(
+        report.crossings.is_empty(),
+        "nothing in spi_display_rx should cross a domain:\n{}",
+        report.render()
+    );
 }
 
 /// One command for the I²C master: what to put on the bus and what the
