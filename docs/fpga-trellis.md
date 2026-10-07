@@ -401,8 +401,10 @@ Everything above *except the last section* is off the part. The database, the
 vendor's bitstreams, the placer, the router, the "every bit decodes" check,
 the solver and the exhaustive simulation are all static, and **not one of
 them can tell you whether the clock closes** — nor, as the section above
-records, whether a constant is a constant. That is the whole point of this change and it is
-the one thing a depth figure does not say: depth 4 instead of 87 is a claim
+records, whether a constant is a constant.
+
+A closed clock is the whole point of this change and it is the one thing a
+depth figure does not say: depth 4 instead of 87 is a claim
 about how many lookup-table levels the mapped network has, and a chain's own
 delay is not in it at all. A 32-bit add is seventeen `CIN → COUT` hops and
 one lane's `A → S`; Yosys' `cells_sim.v` puts those at 43 ps and 379 ps,
