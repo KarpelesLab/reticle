@@ -62,7 +62,7 @@
 //   The cycle count is 129 per block whatever the bytes are: no loop
 //   here is bounded by data, and the one table — K(t) — is indexed by
 //   the round counter, which counts 0 to 63 and depends on nothing.
-//   `tests/ip_crypto.rs` measures that rather than asserting it, and
+//   `tests/ip_library.rs` measures that rather than asserting it, and
 //   `ip/crypto/sha256/README.md` §4 says what it does and does not
 //   establish. It does **not** establish anything about power or
 //   electromagnetic emission.
@@ -146,7 +146,7 @@ module sha256_core (
     // A case over the round counter and not a memory, on purpose. The
     // index is `round_q`, which counts 0 to 63 and is a function of
     // nothing but the clock, so this table is addressed by a public
-    // value; synthesis turns it into logic and `tests/ip_crypto.rs`
+    // value; synthesis turns it into logic and `tests/ip_library.rs`
     // asserts that neither crypto block contains a memory array at all.
     function [31:0] k_of;
         input [5:0] t;

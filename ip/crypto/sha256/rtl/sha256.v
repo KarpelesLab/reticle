@@ -29,6 +29,16 @@
 //   empty one. A design that only ever hashes whole messages ties it to
 //   zero; nothing needs to be pulsed to begin.
 //
+//   **Do not raise `in_valid` in the same cycle as `start`.** `in_ready`
+//   is a function of registers only — nothing a caller drives reaches
+//   it, which is what keeps two of these back to back from building a
+//   combinational path from one's `in_valid` to the other's
+//   `in_ready` — so it can be high in that cycle while the reload
+//   discards the byte. There is nothing to lose by it: `start`
+//   abandons the message that byte belonged to. But a caller using
+//   `start` to *begin* a message must leave `in_valid` low in that one
+//   cycle, and has no reason to use `start` that way at all.
+//
 //   Byte order is FIPS 180-4's throughout: the first byte of the message
 //   is the most significant byte of M(0), and `digest[255:248]` is the
 //   first byte of the digest.
@@ -48,8 +58,8 @@
 //   example is 56 bytes long, which is not a coincidence. A library
 //   block that leaves that to every caller ships that bug once per
 //   caller; a library block that does it itself ships it once, and
-//   `tests/ip_crypto.rs` drives every message length from 0 to 129 and
-//   192 through it.
+//   `tests/ip_library.rs` drives nineteen message lengths through it,
+//   from 0 to 192, chosen around every boundary the padding has.
 //
 //   So: both, and the default — `top` in the manifest — is the one that
 //   pads.
@@ -154,6 +164,11 @@ module sha256 #(
     wire        core_valid = pad_phase || ((state_q == P_MSG) && in_valid);
     wire        fed        = core_valid && core_ready;
 
+    // Registers only, and deliberately: nothing a caller drives reaches
+    // this, so two of these blocks back to back cannot build a
+    // combinational path between one's `in_valid` and the other's
+    // `in_ready`. The cost of that is the rule in the header about
+    // `start` and `in_valid` in one cycle.
     assign in_ready     = (state_q == P_MSG) && core_ready && !init_q;
     assign digest_valid = dv_q;
     assign digest       = dg_q;

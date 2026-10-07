@@ -94,7 +94,10 @@ module chacha20 (
     input  wire         clk,
     input  wire         rst_n,
 
-    // Open a stream at `counter`. Clears `exhausted`.
+    // Open a stream at `counter`. Clears `exhausted`. Leave `in_valid`
+    // low in this one cycle: `in_ready` is a function of registers only
+    // (see below), so it can be high while the restart discards the
+    // word.
     input  wire         start,
 
     input  wire [255:0] key,
@@ -133,6 +136,10 @@ module chacha20 (
     wire         core_valid;
     wire [511:0] core_block;
 
+    // Registers only, for the reason `sha256`'s does the same: nothing a
+    // caller drives reaches it, so two blocks back to back cannot build
+    // a combinational path between one's `in_valid` and the other's
+    // `in_ready`.
     assign in_ready  = (state_q == C_RUN);
     assign out_data  = out_q;
     assign out_valid = ov_q;

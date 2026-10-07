@@ -14,7 +14,7 @@
 //
 // Why it is its own module
 //   Because RFC 8439 §2.1.1 is a test vector for *this* function, and a
-//   module is the only thing a testbench can reach. `tests/ip_crypto.rs`
+//   module is the only thing a testbench can reach. `tests/ip_library.rs`
 //   drives §2.1.1's four numbers straight into these ports and compares
 //   the four that come out, which localises a fault to the rotation
 //   amounts and the addition order rather than to "the keystream is

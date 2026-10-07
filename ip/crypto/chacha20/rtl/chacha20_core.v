@@ -26,10 +26,11 @@
 //   `advance` rotates `block` one 32-bit word towards the most
 //   significant end, so a consumer can take the keystream a word at a
 //   time without a sixteen-way multiplexer; sixteen pulses bring it back
-//   where it started. A consumer that reads all 512 bits at once leaves
-//   it tied low and never notices. `chacha20` uses it, and the fact that
-//   it costs nothing is why that module has no keystream register of its
-//   own.
+//   where it started. It is ignored while `busy`, because the register it
+//   would rotate is mid-round. A consumer that reads all 512 bits at once
+//   leaves it tied low and never notices. `chacha20` uses it, and the fact
+//   that it costs nothing is why that module has no keystream register of
+//   its own.
 //
 // What the caller must hold still
 //   `key`, `nonce` and `counter` must not change between `start` and
@@ -70,7 +71,7 @@
 // Constant time
 //   Twenty rounds whatever the key is, no table of any kind, and no
 //   index derived from anything but `round_q`, which counts 0 to 19.
-//   `tests/ip_crypto.rs` measures the cycle count for different keys and
+//   `tests/ip_library.rs` measures the cycle count for different keys and
 //   compares them. `ip/crypto/chacha20/README.md` §4 says what that does
 //   and does not establish, and it does **not** establish anything about
 //   power or electromagnetic emission.
