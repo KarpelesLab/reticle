@@ -1,0 +1,266 @@
+// SHA-256 and ChaCha20 on a Cynthion, behind its USB serial port.
+//
+// `ip/crypto/sha256` and `ip/crypto/chacha20` landed verified against
+// FIPS 180-4, RFC 8439 and `purecrypto` — **entirely in simulation**. Both
+// READMEs say so, and both name the experiment they were not doing. This is
+// it: `crypto_console` on the auxiliary ULPI transceiver, so a
+// `/dev/ttyACM*` the kernel's own `cdc_acm` driver binds answers
+// `H abc` with a digest `sha256sum` agrees with.
+//
+// `testdata/fpga/cynthion/usb_cdc_uart.v` is the design this one is built
+// after — the same transceiver, the same six LEDs, the same argument about
+// why driving these pins is safe — and `examples/mos6502_monitor` is the
+// other design on this board with a **command interface** over that
+// console. This is the third thing of that shape and the first that
+// computes something a published standard has an answer for.
+//
+// ===================================================================
+// WHAT THERE IS TO LOOK AT
+// ===================================================================
+//
+//     dmesg | tail
+//     ls -l /dev/serial/by-id/
+//     stty -F /dev/ttyACM1 115200 raw -echo
+//     cat /dev/ttyACM1 &
+//     printf 'H abc\r' > /dev/ttyACM1
+//     printf '%s' abc | sha256sum
+//
+// `1209:0001` is pid.codes' test pair, the default of the core's `VID` and
+// `PID`. **The number in `/dev/ttyACM*` is not fixed**: a Cynthion's own
+// Apollo debugger is itself a CDC ACM device and is usually `ttyACM0`, so
+// this one is normally `ttyACM1`. `/dev/serial/by-id/` names them, and
+// `tests/usb_crypto_console.rs` finds the port by walking sysfs rather than
+// by guessing a number.
+//
+// The baud rate is irrelevant and is set only because `stty` insists on
+// one: there is no serial line inside this design, so nothing here divides
+// anything. `usb_cdc_uart.v` next door is the one with a real 8N1 waveform
+// on a pin, and `crypto_console_ulpi.v` says why this one ignores
+// `dwDTERate`.
+//
+// The six LEDs are the diagnosis for when the port does not appear, and the
+// first four are read the same way `usb_cdc_uart.v`'s are:
+//
+//     LED 0   THE TRANSCEIVER CAME UP         `phy_ready`, live
+//     LED 1   THE HOST CONFIGURED IT          `configured`, latched
+//     LED 2   A LINE WAS TYPED AT IT          latched
+//     LED 3   heartbeat, 0.89 Hz              the clock runs
+//     LED 4   AN ANSWER WENT BACK             latched
+//     LED 5   A CORE IS WORKING               live: the hash or the cipher
+//
+// Read from the bottom up, and `usb_ulpi_device.v`'s header has the whole
+// ladder for LEDs 0, 1 and 3 and the bus below them. What is new here:
+//
+//   * **LED 1 lit, LED 2 dark** — the device enumerated and nothing has
+//     written a carriage return to the port. That is the resting state:
+//     opening a port is not typing at it.
+//   * **LED 2 lit, LED 4 dark** — a line arrived and no answer came back,
+//     which means the console is stuck waiting for a core. A core that
+//     never finishes is the one failure this design can have that is not
+//     visible as a wrong answer.
+//   * **LED 4 lit** — the whole path worked at least once: a line in, a
+//     core run, an answer out.
+//   * **LED 5** flickers while a command runs and is dark between them.
+//     `h`, `E`, `Z` and `X` of any length make it visibly dim rather than
+//     off, which is the only analogue instrument this design has.
+//
+// ===================================================================
+// WHY DRIVING THESE PINS IS SAFE
+// ===================================================================
+//
+// The same eight ULPI balls, the same clock and the same six LEDs
+// `usb_ulpi_device.v` and `usb_cdc_uart.v` drive, for the same reasons and
+// with the same argument; those files' headers have the long form and
+// `usb_crypto_console.rcf` beside this one has every line's provenance. The
+// short form: the data lines are released whenever `ulpi_dir` is high,
+// which is the bus's own arbitration (ULPI 1.1 §3.3); every direction is
+// the one Great Scott Gadgets' platform file gives it; the Type-C
+// controllers, **the VBUS switches** and the pseudo-supply pins are left
+// alone; and the `CONTROL` port the Apollo debugger lives on is a different
+// transceiver on different balls and is not mentioned here, so loading this
+// design cannot take the debugger away.
+//
+// ===================================================================
+// THE PART IS NEARLY FULL, AND THAT IS THE DESIGN'S ONE HARD LIMIT
+// ===================================================================
+//
+// An LFE5U-12F has 12 144 lookup tables. The serial port is about 1 230 of
+// them, `ip/crypto/sha256` about 3 200 and `ip/crypto/chacha20` about
+// 5 980 — ten and a half thousand before a single line of this console
+// exists. That is why there is no FIFO anywhere in it, why the key, the
+// nonce and the counter are **rotated** rather than parallel-loaded out of
+// a staging register, and why the digest is read out of
+// `ip/crypto/sha256`'s own holding register instead of being copied into
+// one here. `crypto_console.v`'s header has each of those three decisions
+// with its cost.
+//
+// **Most of that area is adders with no carry cell.** `src/fpga/trellis`
+// describes `CCU2C` without a port map, so the flow reports
+// `N adder(s) stay generic` and a 32-bit addition becomes a ripple of LUT4
+// about twenty-one levels deep. On an iCE40, where `SB_CARRY` is inferred,
+// ChaCha20's quarter round is **5** levels and SHA-256's T1 chain is **9**;
+// here they are **87** and **39**. That is the single change that would
+// most move both the area and the clock of this design, it is a change to
+// `src/` and not to anything in `ip/`, and it is noted here and not made.
+//
+// Sources: ip/usb/usb_cdc_acm/rtl/*.v,
+//          ip/usb/usb_device_ulpi/rtl/usb_ulpi_link.v,
+//          ip/usb/usb_device_ulpi/rtl/usb_device_ulpi.v,
+//          ip/usb/usb_device_fs/rtl/usb_ctrl_ep.v,
+//          ip/crypto/sha256/rtl/*.v, ip/crypto/chacha20/rtl/*.v,
+//          testdata/fpga/cynthion/crypto_console.v and
+//          testdata/fpga/cynthion/crypto_console_ulpi.v.
+// Pins:    testdata/fpga/cynthion/usb_crypto_console.rcf.
+module usb_crypto_console #(
+    // How many clocks the core is held in reset after configuration. A
+    // testbench has no use for more than a few; the board gets sixteen,
+    // which is 0.27 us at 60 MHz.
+    parameter integer POR = 16,
+    // Cycles of an idle bus at J before the device's answer goes out, which
+    // ULPI 1.1 Table 10 allows a full-speed Link between 7 and 18 of.
+    parameter [6:0] TURNAROUND = 7'd9
+) (
+    input  wire clk,             // A8, the 60.000 MHz oscillator
+
+    // The auxiliary transceiver, all on the die's right edge but D16.
+    inout  wire [7:0] ulpi_data, // F16 G15 G16 H15 J15 J16 K15 K16
+    input  wire ulpi_dir,        // E16
+    input  wire ulpi_nxt,        // F15
+    output wire ulpi_stp,        // E15
+    output wire ulpi_rst_n,      // J13, active low at the ball
+    output wire ulpi_clk,        // D16, the clock the board says we owe it
+
+    output wire led0_n,          // THE TRANSCEIVER CAME UP
+    output wire led1_n,          // THE HOST CONFIGURED IT
+    output wire led2_n,          // A LINE WAS TYPED AT IT
+    output wire led3_n,          // heartbeat
+    output wire led4_n,          // AN ANSWER WENT BACK
+    output wire led5_n           // A CORE IS WORKING
+);
+    // -----------------------------------------------------------------
+    // The power-on reset: a one walked along a shift register, so the core
+    // is held in reset for `POR` clocks — 0.27 us at 60 MHz, well inside
+    // the 5 us the core then holds the transceiver's own reset pin for.
+    //
+    // `usb_ulpi_device.v`'s header says why this is a shift register and
+    // not `rst_n` tied high: an ECP5 releases every flip-flop into its
+    // `REGSET` state and tying it high would work on the part, but a
+    // simulator has no `REGSET` and every register of the core would stay
+    // unknown for ever.
+    // -----------------------------------------------------------------
+    reg [POR-1:0] por = {POR{1'b0}};
+    always @(posedge clk) begin
+        por <= {por[POR-2:0], 1'b1};
+    end
+    wire reset_done = por[POR-1];
+
+    wire [7:0] data_o;
+    wire       data_oe;
+    wire [6:0] address;
+    wire       configured;
+    wire       usb_reset;
+    wire       phy_ready;
+    wire       hash_busy;
+    wire       cipher_active;
+    wire       saw_line;
+    wire       saw_answer;
+
+    // ===================================================================
+    // WHAT THIS PORT REPORTS AS ITS LINE STATE
+    // ===================================================================
+    //
+    // `serial_state` is `wSerialState` of the SERIAL_STATE notification
+    // `ip/usb/usb_cdc_acm` sends: bit 0 is `bRxCarrier` (DCD), bit 1 is
+    // `bTxCarrier` (DSR), and bits 2 to 6 are break, ring, framing, parity
+    // and overrun (PSTN 1.2 §6.5.4 Table 31).
+    //
+    // **Both carriers, no errors**, which is what `usb_cdc_uart.v` reports
+    // and for a stronger version of the same reason: there is no serial
+    // line here at all, not even one eleven nets long, so there is nothing
+    // that could be unplugged and no framing error that anything could
+    // cause. A constant here is told to the host on **every open**, because
+    // `ip/usb/usb_cdc_acm` sends a notification when the host opens the
+    // port and not only when the state changes; that block's README §4
+    // writes up what happened when it did not.
+    wire [6:0] serial_state = 7'b000_0011;
+
+    // THE TURNAROUND, which is the top level's whole job on this bus: the
+    // link says when it owns the bus and this makes that eight pads. There
+    // is no register in the way, so the pads let go in the same cycle the
+    // link does.
+    assign ulpi_data = data_oe ? data_o : 8'bz;
+
+    // The interface clock the board asks the FPGA to provide. `clk_dir='o'`
+    // and 60 MHz both ways, so there is nothing to make: no PLL.
+    assign ulpi_clk = clk;
+
+    // `VENDOR_ADDR` / `VENDOR_DATA` are this board's one register and not
+    // ULPI's: a Cynthion crosses DP and DM between the transceiver and the
+    // connector and register 39h bit 1 of the Microchip USB3343 undoes it.
+    // `usb_ulpi_device.v`'s header has the three sources that agree on it.
+    crypto_console_ulpi #(
+        .TURNAROUND  (TURNAROUND),
+        .VENDOR_ADDR (6'h39),
+        .VENDOR_DATA (8'h06)
+    ) u_top (
+        .clk60         (clk),
+        .rst_n         (reset_done),
+        .ulpi_data_i   (ulpi_data),
+        .ulpi_data_o   (data_o),
+        .ulpi_data_oe  (data_oe),
+        .ulpi_dir      (ulpi_dir),
+        .ulpi_nxt      (ulpi_nxt),
+        .ulpi_stp      (ulpi_stp),
+        .ulpi_rst_n    (ulpi_rst_n),
+        .address       (address),
+        .configured    (configured),
+        .usb_reset     (usb_reset),
+        .phy_ready     (phy_ready),
+        .serial_state  (serial_state),
+        .hash_busy     (hash_busy),
+        .cipher_active (cipher_active),
+        .saw_line      (saw_line),
+        .saw_answer    (saw_answer)
+    );
+
+    // -----------------------------------------------------------------
+    // The heartbeat.
+    // -----------------------------------------------------------------
+    // The reduction spelling of `+ 1` that `clock_blink.v` explains.
+    reg [25:0] count = 26'd0;
+    wire [25:0] toggle;
+    assign toggle[0] = 1'b1;
+
+    genvar i;
+    generate
+        for (i = 1; i < 26; i = i + 1) begin : carry
+            assign toggle[i] = &count[i-1:0];
+        end
+    endgenerate
+
+    always @(posedge clk) begin
+        count <= count ^ toggle;
+    end
+
+    // Written `q <= q | event` and not `if (event) q <= 1'b1` because the
+    // second infers a clock enable, and a slice's two flip-flops share one
+    // `CE` wire.
+    reg saw_configured = 1'b0;
+    always @(posedge clk) begin
+        saw_configured <= saw_configured | configured;
+    end
+
+    // Active low: a pin driven low lights one.
+    assign led0_n = ~phy_ready;
+    assign led1_n = ~saw_configured;
+    assign led2_n = ~saw_line;
+    assign led3_n = ~count[25];
+    assign led4_n = ~saw_answer;
+    assign led5_n = ~(hash_busy | cipher_active);
+
+    // `address` and `usb_reset` are brought out of the module below and not
+    // used here, which is deliberate: they are the two signals a person
+    // adding a seventh diagnosis would want, and a wire with a name is
+    // easier to find than a port with a blank beside it.
+    wire [7:0] unused = {address, usb_reset};
+endmodule

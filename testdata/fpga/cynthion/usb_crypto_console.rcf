@@ -1,0 +1,77 @@
+# The auxiliary ULPI transceiver of a Great Scott Gadgets Cynthion r1.4,
+# wired as a USB **serial port with SHA-256 and ChaCha20 behind it**: the
+# same thirteen ULPI balls, the same oscillator and the same six LEDs
+# `usb_ulpi_device.rcf` and `usb_cdc_uart.rcf` constrain, for the same
+# reasons.
+#
+# `usb_ulpi_device.rcf` has the long form of every line's provenance — the
+# platform file's own `ULPIResource`, why `-slew fast` is on all thirteen
+# pins and not only the outputs, why no pin gets a `-pullup`, and where A8
+# and the six LEDs sit in the fabric. Nothing here differs from it, and it
+# is repeated rather than shared because a constraints file is a statement
+# about one design's ports and this design has its own.
+#
+#     ULPIResource("aux_phy", 0,
+#         data="F16 G15 G16 H15 J15 J16 K15 K16", clk="D16", clk_dir='o',
+#         dir="E16", nxt="F15", stp="E15", rst="J13", rst_invert=True,
+#         attrs=Attrs(IO_TYPE="LVCMOS33", SLEWRATE="FAST")),
+#
+#     # Primary, discrete 60MHz oscillator.
+#     Resource("clk_60MHz", 0, Pins("A8", dir="i"),
+#         Clock(60e6), Attrs(IO_TYPE="LVCMOS33")),
+#
+#     *LEDResources(pins="E13 C13 B14 A15 D12 C11",
+#                   attrs=Attrs(IO_TYPE="LVCMOS33"), invert=True),
+#
+# `default_usb_connection = "aux_phy"` is the platform file's own, and
+# `apollo_port_sharing` names only `control_phy`, so the AUX port is nobody
+# else's: loading this cannot take away the Apollo debugger this board is
+# programmed over.
+#
+# ---------------------------------------------------------------------
+# WHAT IS NOT HERE, AND WHY
+# ---------------------------------------------------------------------
+#
+# **No VBUS switch.** The two of them are bidirectional onto a shared node
+# and `docs/apollo-protocol.md` §7 is about why exactly one may ever be
+# enabled; this design needs neither, because the host it answers is on the
+# other side of the AUX connector and supplies its own.
+#
+# **No waveform on a pin.** `usb_cdc_uart.rcf` puts a 115200 baud 8N1
+# waveform on ball C11 because that design has a real UART in it. This one
+# has no serial line at all — the bytes go from the endpoint to a parser and
+# from a parser to two crypto cores — so C11 carries `led5_n`, which is a
+# core being busy, and an oscilloscope on it sees how long a command took
+# and nothing finer. A **power** trace is what would say anything about what
+# the cores leak, and that needs a shunt and not a pin;
+# `ip/crypto/sha256/README.md` §5 is clear that nothing in this repository
+# has taken one.
+#
+# The USER button is deliberately **not** constrained, for the same reason
+# as next door: a manual reset would need the core's `rst_n`, which is
+# asynchronous, and `configure_registers` refuses an asynchronous reset on
+# this family.
+
+set_io -io_standard LVCMOS33 clk A8
+
+set_io -io_standard LVCMOS33 -slew fast ulpi_data[0] F16
+set_io -io_standard LVCMOS33 -slew fast ulpi_data[1] G15
+set_io -io_standard LVCMOS33 -slew fast ulpi_data[2] G16
+set_io -io_standard LVCMOS33 -slew fast ulpi_data[3] H15
+set_io -io_standard LVCMOS33 -slew fast ulpi_data[4] J15
+set_io -io_standard LVCMOS33 -slew fast ulpi_data[5] J16
+set_io -io_standard LVCMOS33 -slew fast ulpi_data[6] K15
+set_io -io_standard LVCMOS33 -slew fast ulpi_data[7] K16
+
+set_io -io_standard LVCMOS33 -slew fast ulpi_dir E16
+set_io -io_standard LVCMOS33 -slew fast ulpi_nxt F15
+set_io -io_standard LVCMOS33 -slew fast ulpi_stp E15
+set_io -io_standard LVCMOS33 -slew fast ulpi_rst_n J13
+set_io -io_standard LVCMOS33 -slew fast ulpi_clk D16
+
+set_io -io_standard LVCMOS33 led0_n E13
+set_io -io_standard LVCMOS33 led1_n C13
+set_io -io_standard LVCMOS33 led2_n B14
+set_io -io_standard LVCMOS33 led3_n A15
+set_io -io_standard LVCMOS33 led4_n D12
+set_io -io_standard LVCMOS33 led5_n C11
