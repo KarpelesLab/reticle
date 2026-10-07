@@ -71,7 +71,7 @@ use reticle::fpga::{self, BelRole, Constraints, FpgaOptions, MapOptions};
 use reticle::ir::builder::ModuleBuilder;
 use reticle::ir::validate::validate_module;
 use reticle::ir::{
-    AttrValue, Cell, CellId, CellKind, Design, ExprId, ExprKind, Module, ModuleId, NetId, Type,
+    AttrValue, Cell, CellId, CellKind, Design, ExprKind, Module, ModuleId, NetId, Type,
 };
 use reticle::logic::{Bit, Logic};
 use reticle::source::{SourceMap, Span};
@@ -885,7 +885,11 @@ fn the_one_bit_families_are_untouched() {
 mod proofs {
     use super::*;
     use reticle::formal::{EquivOptions, EquivOutcome, check_equivalent};
-    use reticle::ir::{Const, Name};
+    // `ExprId` is only needed by `model_ccu2c`, which is in this module, so
+    // it is imported here: at the top of the file it is an unused import in
+    // a build with `fpga` and without `formal`, which the gate's per-feature
+    // clippy loop refuses.
+    use reticle::ir::{Const, ExprId, Name};
 
     /// Replaces every primitive of the mapped module with the model it
     /// stands for, leaving ordinary IR the bit-blaster can read.
