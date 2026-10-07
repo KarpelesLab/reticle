@@ -2804,12 +2804,38 @@ impl Mapper<'_> {
         // Nothing else can be taken over. A port driven by an ordinary
         // expression has no enable to read, so it gets the old treatment:
         // a constant enable and no input path. Both are reported.
+        //
+        // An *output* a tri-state drives is taken over the same way, but
+        // only where the family has a separate primitive for it: Xilinx's
+        // `OBUFT`, declared `io for out` after `OBUF` so that an ordinary
+        // output still gets the plain buffer. A family whose one buffer
+        // already has an enable is left exactly as it was.
+        let tristate_out = (dir == PortDir::Out && ddr.is_none() && bel.enable_port().is_none())
+            .then(|| {
+                self.device.bels.iter().find(|b| {
+                    b.role == BelRole::Io
+                        && b.io_dirs.iter().any(|d| d == "out")
+                        && b.enable_port().is_some()
+                        && b.has_ports(&["pad", "dout"])
+                })
+            })
+            .flatten()
+            .cloned();
         let tristate = match (dir, &ddr) {
             (PortDir::InOut, None) => self.absorbed_tristate(module, core),
+            (PortDir::Out, None) if tristate_out.is_some() => self.absorbed_tristate(module, core),
             // A registered pad's data comes from the IO register, so the
             // tri-state driver is not what reaches the pin and absorbing
             // it would move the enable ahead of the register.
             _ => None,
+        };
+        let swapped;
+        let bel = match (&tristate, &tristate_out) {
+            (Some(_), Some(out)) if dir == PortDir::Out => {
+                swapped = out.clone();
+                &swapped
+            }
+            _ => bel,
         };
         // What the absorbed driver said, as two nets of this module rather
         // than as the expressions the cell carried. A black box's pin has
@@ -2955,7 +2981,7 @@ impl Mapper<'_> {
                     if let Some(port_name) = bel.port("dout") {
                         inputs.push((Name::new(port_name), value));
                     }
-                    if dir == PortDir::InOut
+                    if (dir == PortDir::InOut || tristate.is_some())
                         && let Some((port_name, active_low)) = bel.enable_port()
                     {
                         let port_name = Name::new(port_name);
@@ -5406,6 +5432,86 @@ mod tests {
                     .iter()
                     .any(|a| matches!(a.target, Lvalue::Net(n) if n == core)),
                 "{device}: nothing drives the port's net, so the pin is not read back"
+            );
+        }
+    }
+
+    /// An `output` port a tri-state drives becomes Xilinx's `OBUFT` — the
+    /// family's separate tristate output — with the enable inverted for its
+    /// `T` and the tri-state cell taken over; on a family whose one buffer
+    /// already has an enable nothing about such a port changes.
+    ///
+    /// What this catches: the port falling back to a plain `OBUF` (which
+    /// used to leave the `$tristate` cell behind for the netlist check to
+    /// refuse as "a generic cell, not a primitive"), the enable reaching
+    /// `T` the wrong way round, and the takeover leaking into ECP5, whose
+    /// behaviour for this shape is not what this change is about. It
+    /// cannot catch that `T` is the right way round on silicon; see
+    /// `tests/fpga_xray_tristate.rs`.
+    #[test]
+    fn a_tristated_output_becomes_an_obuft_where_the_family_has_one() {
+        for (device, takes_over) in [("xc7a35t-cpg236", true), ("ecp5-12f-CABGA256", false)] {
+            let (sources, span) = span();
+            let mut b = ModuleBuilder::new("top", span);
+            let data = b.input("data", Type::bit());
+            let en = b.input("en", Type::bit());
+            let pin = b.output("pin", Type::bit());
+            let data_e = b.net(data);
+            let en_e = b.net(en);
+            b.cell(
+                "tri",
+                CellKind::Tristate,
+                vec![(Name::new("a"), data_e), (Name::new("en"), en_e)],
+                vec![(Name::new("y"), pin)],
+            );
+            let mut design = Design::new();
+            let top = design.add_module(b.finish());
+            design.top = Some(top);
+
+            let mut diags = Diagnostics::new();
+            let constraints = Constraints::default();
+            let report = map_with(&mut design, top, device, &constraints, &mut diags);
+            let _ = &sources;
+            let module = design.module(top);
+            let tristates = module
+                .cells
+                .iter()
+                .filter(|(_, c)| c.kind == CellKind::Tristate)
+                .count();
+            if !takes_over {
+                assert_eq!(tristates, 1, "{device}: the tri-state was taken over");
+                continue;
+            }
+            assert!(!diags.has_errors(), "{device}: {}", diags.render(&sources));
+            assert_eq!(tristates, 0, "{device}: the tri-state cell is still there");
+            let mapping = report.io_buffers.iter().find(|i| i.port == "pin").unwrap();
+            assert_eq!(mapping.primitive, "OBUFT");
+            assert_eq!(cells_named(&design, top, "OBUFT"), 1);
+            assert_eq!(cells_named(&design, top, "OBUF"), 0);
+
+            let module = design.module(top);
+            let cell = &module.cells[module.cell_by_name("pin$io0").unwrap()];
+            let (_, driven) = cell
+                .inputs
+                .iter()
+                .find(|(p, _)| p.as_str() == "T")
+                .expect("the OBUFT's T is connected");
+            let net = module.net_by_name("pin$oe").expect("the enable net");
+            assert_eq!(module.expr(*driven).as_net(), Some(net));
+            let assign = module
+                .assigns
+                .iter()
+                .find(|a| matches!(a.target, Lvalue::Net(n) if n == net))
+                .expect("the enable net is assigned");
+            assert!(
+                matches!(
+                    module.expr(assign.value).kind,
+                    ExprKind::Unary {
+                        op: UnaryOp::LogicNot | UnaryOp::Not,
+                        ..
+                    }
+                ),
+                "`T` releases on a one, so the enable must reach it inverted"
             );
         }
     }
