@@ -14,8 +14,8 @@ cs7` was stored, reported back correctly by GET_LINE_CODING, and **ignored
 on the wire**. Closing that is what this round is.
 
 - §1 says what each kind of claim here rests on.
-- §2 is **eight modules in two layers**, which is a shape Verilog forced and
-  area then justified.
+- §2 is **eight modules, two layers and four files**: a shape Verilog
+  forced, area justified, and a file list made non-negotiable.
 - §3 is the character format and the CDC mapping, in full, including every
   value that is not implemented and what it does instead.
 - §4 is **area, measured**: what 8N1 costs now, what full configurability
@@ -60,7 +60,7 @@ that means.
 
 ---
 
-## 2. Eight modules in two layers
+## 2. Eight modules, two layers, four files
 
 ```
 uart              8N1 by default; uart_tx + uart_rx
@@ -79,6 +79,42 @@ uart_line_coding  a host's three bytes -> the three format ports
 `uart_frame_tx` with its format ports tied to constants built from its
 parameters, and `uart_rx` does the same with `uart_frame_rx`. Nothing is
 implemented twice, so nothing can drift.
+
+### Why eight modules are four files, which was learned the hard way
+
+```
+rtl/uart_tx.v        uart_frame_tx, then uart_tx
+rtl/uart_rx.v        uart_frame_rx, then uart_rx
+rtl/uart.v           uart_frame, then uart
+rtl/uart_baud_div.v  uart_baud_div, then uart_line_coding
+```
+
+Each configurable module shares a file with the facade built on it, and the
+four files are **exactly the four this package has always had**. That is
+not tidiness, it is the second half of the compatibility requirement, and
+it was found by breaking it.
+
+`reticle fpga` has no library search path — `CLAUDE.md` says so in as many
+words — so a design built that way names every source on a command line.
+This repository names these four paths by hand in nine places:
+`tests/soc.rs`, `tests/apple2.rs` and `tests/mos6502_computer.rs` each
+**assert** the package's resolved source list is exactly these four, and
+`examples/soc/README.md`, `examples/apple2/README.md`,
+`examples/mos6502_computer/README.md` and
+`examples/mos6502_monitor/README.md` print command lines a reader is meant
+to be able to paste.
+
+The first version of this round put each new module in a new file. Every
+instantiation still compiled — and the gate failed with
+`error[I0034]: no module named uart_frame_tx is defined`, because
+`tests/apple2.rs` hands `reticle sim` a seven-element list that did not
+have the file in it. **An instantiation is not the only thing a library
+has to keep working**: a package whose file *set* changes forces every
+consumer to be edited, which is a breaking change in all but name. Four
+files, eight modules, nothing to re-list.
+
+There is precedent in this library — `ip/usb/usb_device_fs/rtl/usb_ctrl_ep.v`
+holds four modules — and `CONTRIBUTING.md` has no rule either way.
 
 ### Why a parameter and a port, rather than one or the other
 
@@ -710,5 +746,6 @@ The rate and the framing are two separate decodes —`uart_baud_div` and
   that block does with it, including the "nothing acts on the line coding"
   section this round makes obsolete.
 - `docs/ip-library.md` — the footprint table §4 quotes, and the catalogue.
-- `uart_frame_tx.v`, `uart_frame_rx.v` and `uart_line_coding.v` headers —
+- The `uart_frame_tx`, `uart_frame_rx` and `uart_line_coding` headers in
+  `uart_tx.v`, `uart_rx.v` and `uart_baud_div.v` —
   the long form of §3, §4 and §5 at the point of use.

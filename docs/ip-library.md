@@ -23,8 +23,8 @@ ip/
     axil_gpio/   reticle.ip  rtl/axil_gpio.v
     i2c_master/  reticle.ip  rtl/i2c_master.v
     spi_master/  reticle.ip  rtl/spi_master.v
-    uart/        reticle.ip  rtl/uart_tx.v  rtl/uart_rx.v  rtl/uart.v
-                 rtl/uart_baud_div.v
+    uart/        reticle.ip  README.md  rtl/uart_tx.v  rtl/uart_rx.v
+                 rtl/uart.v  rtl/uart_baud_div.v
   compress/
     inflate/  reticle.ip  README.md  rtl/inflate_adler.v
               rtl/inflate_window.v  rtl/inflate.v
@@ -98,8 +98,10 @@ It is distributed as part of the repository instead.
 | `cdc_sync` | `cdc_sync` | N-flop clock domain crossing synchroniser, parameterised width and depth | — |
 | `cdc_pulse` | `cdc_pulse` | one pulse across two domains through a toggle and a full handshake | `cdc_sync` |
 | `fifo_async` | `fifo_async` | asynchronous FIFO, gray-coded pointers, pointer synchronisers | `cdc_sync` |
-| `uart` | `uart`, `uart_tx`, `uart_rx` | 8N1 UART, run-time or parameterised baud divisor, ready / valid | — |
+| `uart` | `uart`, `uart_tx`, `uart_rx` | UART, 8N1 by default, framing from parameters, run-time or parameterised baud divisor, ready / valid, `rx_error` plus the three it is made of | — |
+| `uart` | `uart_frame`, `uart_frame_tx`, `uart_frame_rx` | the same two halves with the **character format on ports** — 5 to 8 data bits, five parity modes, one or two stop bits — a receive handshake, and framing, parity, break and overrun reported separately | — |
 | `uart` | `uart_baud_div` | clocks per bit from a bit rate, by restoring long division, with the rates it refuses | — |
+| `uart` | `uart_line_coding` | a USB host's `bCharFormat`, `bParityType` and `bDataBits` turned into those format ports, with an `ok` for the values it cannot give exactly | — |
 | `spi_master` | `spi_master` | byte-level SPI master, any CPOL / CPHA | — |
 | `i2c_master` | `i2c_master` | byte-level I²C master, 7-bit addressing, clock stretching tolerated | — |
 | `pwm` | `pwm` | counter-comparator PWM, duty latched once per period | — |
@@ -1609,7 +1611,44 @@ is the part that matters:
   the parameter, at a value neither divides the other, so a bit period
   that came from the port and one that came from the parameter cannot be
   confused; and the three divisors it refuses, each falling back to
-  CLK_DIV rather than stopping the port.
+  CLK_DIV rather than stopping the port. All five of those tests predate
+  the character format and **none was edited** when it arrived, which is
+  the sharpest statement that 8N1 still means what it meant. Beside them,
+  `rx_error` through the 8N1 wrapper is checked to be the disjunction of
+  the three signals that now say *which*.
+- **`uart_frame`, against something that is not `uart_rx`** — the forty
+  character formats (four data widths x five parity modes x one or two
+  stop bits), three times over: the transmitter's line decoded **by hand
+  in Rust**, the receiver fed from levels a **hand-written encoder**
+  produced, and the two wired to each other. Then each of the four
+  receive errors deliberately: a stop bit held low, a data bit inverted
+  under a parity that depends on the data and the parity bit inverted
+  under one that does not, the line held low for three frame periods, and
+  `rx_ready` held low across two characters. Each raises its own signal,
+  and each is followed by a good character that the receiver still takes.
+
+  **Why a hand decoder, and not `uart_rx`.** Three mutations were run
+  against the finished RTL to find out. Swapping odd and even parity in
+  the transmitter is caught by the hand decoder *and* by the loopback,
+  because a receiver checks parity. Forcing `two_stop` low, so that every
+  format sends one stop bit, is caught by the hand decoder and **the
+  loopback passes it** — and not by luck: a receiver samples the first
+  stop bit and nothing after it, so no receiver anywhere could catch it.
+  Only something that counts bit periods between start edges can. That
+  one row is the whole case for `ip/bus/uart/README.md` §7's approach, and
+  it is the same reason `examples/mos6502_computer/tb/computer_tb.v` and
+  `examples/soc/tb/soc_tb.v` decode their lines by hand in Verilog.
+- **`uart_line_coding` and `uart_frame` together** — the second of the two
+  loops that join a USB host to a waveform. Every value PSTN 1.2 defines
+  in `bCharFormat`, `bParityType` and `bDataBits`, plus an undefined one
+  in each, against the mapping tables in the block's README; and then the
+  three numbers the decode produced are driven onto `uart_frame`'s format
+  ports and the frame on `tx` is decoded by hand against what the host
+  asked for. Nothing is spelled twice — the format the decoder expects is
+  derived from what the hardware produced — so a decode and a transmitter
+  that disagreed would fail. The substitutions are in it: a host asking
+  for one and a half stop bits gets a frame of two, and one asking for
+  sixteen data bits gets eight, each with `ok` low.
 - **`uart_baud_div` and `uart` together** — the last link in the claim
   that a host setting a rate changes a waveform. The divider is run until
   it has an answer, the number is handed to `uart`'s `div` port, and the
@@ -1631,13 +1670,20 @@ is the part that matters:
   comparison inside the loop, and `uart` came out at 229 `LUT4` and a
   logic depth of **19** that way — against 120 and **6** before the port
   existed. Latching the limit makes the loop a sixteen-bit *equality*
-  against a register: 215 `LUT4` at depth **8**, in the table below. So
-  the run-time divisor costs about 95 lookup tables and two levels of
-  depth, and the magnitude comparison would have bought eleven more
-  levels and nothing else — a rate that changes mid-character costs that
-  character either way. Latching also gives the better semantics: a
-  character in flight keeps the rate it started at, so a rate change can
-  never corrupt a byte.
+  against a register: 215 `LUT4` at depth **8**. So the run-time divisor
+  costs about 95 lookup tables and two levels of depth, and the magnitude
+  comparison would have bought eleven more levels and nothing else — a
+  rate that changes mid-character costs that character either way.
+  Latching also gives the better semantics: a character in flight keeps
+  the rate it started at, so a rate change can never corrupt a byte.
+
+  Those three numbers are from **before** the character format arrived
+  and are kept because they are the account of why `div` is latched. The
+  table below now reads **237** `LUT4` for 8N1 at the same depth of 8,
+  and 303 for `uart_frame` with the format on ports;
+  `ip/bus/uart/README.md` §4 says where the 24 went and reports the one
+  place the same "a constant does not fold through a flip-flop" effect
+  cost 38 more until the receive format was *un*latched.
 - **`spi_master`** — modes 0 and 3, with a slave model that samples
   `mosi` on the rising edge and presents `miso` on the falling one, so
   the bits are checked where a real slave would look at them; `cs_n` is

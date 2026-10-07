@@ -95,8 +95,15 @@ resolves the two packages, writes `reticle.lock`, elaborates the design
 and synthesises it:
 
 ```text
-note: built `mos6502_computer`: 6 module(s) from 6 source(s)
+note: built `mos6502_computer`: 12 module(s) from 6 source(s)
 ```
+
+Twelve modules out of six files is `ip/bus/uart`: each of its four files
+holds two modules, the fixed-format one this design instantiates and the
+run-time-configurable one it is built on.
+`ip/bus/uart/README.md` §2 says why they share a file, and the short
+version is this command line — a package whose file set changes forces
+every list of sources in the repository to be edited.
 
 Synthesis turns the ROM's `$readmemh` into the memory's initial
 contents, reading the file through a provider the binary gives it.

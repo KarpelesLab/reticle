@@ -618,6 +618,12 @@ fn the_project_resolves_and_elaborates() {
             // SET_LINE_CODING rate had to reach a divisor; it is not
             // instantiated here, and a package hands over all of its
             // sources whether the design reaches them or not.
+            //
+            // The list is still **four** files after the character format
+            // arrived, and deliberately: each of them now holds two
+            // modules, the configurable one and the fixed-format facade
+            // built on it. `ip/bus/uart/README.md` §2 has the reason, and
+            // this assertion is one of the three it names.
             ("uart", "rtl/uart_baud_div.v"),
             ("dvi_tx", "rtl/tmds_encoder.v"),
             ("dvi_tx", "rtl/video_timing.v"),

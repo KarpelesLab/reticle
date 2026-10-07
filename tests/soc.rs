@@ -353,6 +353,12 @@ fn the_project_resolves_and_elaborates() {
             // SET_LINE_CODING rate had to reach a divisor; it is not
             // instantiated here, and a package hands over all of its
             // sources whether the design reaches them or not.
+            //
+            // The list is still **four** files after the character format
+            // arrived, and deliberately: each of them now holds two
+            // modules, the configurable one and the fixed-format facade
+            // built on it. `ip/bus/uart/README.md` §2 has the reason, and
+            // this assertion is one of the three it names.
             ("uart", "rtl/uart_baud_div.v"),
             ("soc", "rtl/soc_top.v"),
         ],
@@ -653,7 +659,7 @@ fn reticle_build_builds_the_project() {
     );
     assert_eq!(code, 0, "reticle build failed:\n{err}");
     assert!(
-        err.contains("note: built `soc`: 6 module(s) from 6 source(s)"),
+        err.contains("note: built `soc`: 12 module(s) from 6 source(s)"),
         "{err}"
     );
     // The binary hands synthesis a file provider rooted at the manifest's

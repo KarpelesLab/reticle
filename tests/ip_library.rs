@@ -2264,7 +2264,7 @@ impl Parity {
     /// Written from the definition — even parity leaves the number of
     /// ones in the whole character even, odd parity leaves it odd, mark
     /// and space are the constants their names are — and **not** from the
-    /// exclusive ors in `uart_frame_tx.v`, so that the model and the
+    /// exclusive ors in `uart_frame_tx`, so that the model and the
     /// hardware cannot be wrong in the same direction.
     fn bit(self, data: u8, data_bits: u32) -> Option<bool> {
         let ones = (data & mask_bits(data_bits)).count_ones();
@@ -2833,7 +2833,7 @@ fn uart_frame_halves_agree_at_every_character_format() {
 /// still takes the next character.
 ///
 /// The byte is delivered with the error, which is the behaviour
-/// `uart_rx.v` has always had and `uart_frame_rx.v` keeps: a wrong byte
+/// `uart_rx` has always had and `uart_frame_rx` keeps: a wrong byte
 /// at a consumer says more than silence does. 0x7E is chosen because it
 /// is not zero — an all-zero frame with a low stop bit is a break and has
 /// its own test.
@@ -2973,7 +2973,7 @@ fn uart_frame_rx_reports_a_break_once_and_waits_for_the_line() {
 ///
 /// `rx_ready` is held low across two characters. The second raises
 /// `rx_overrun`, the **newer** character is the one that survives — which
-/// is a 16550's behaviour and `uart_frame_rx.v`'s header argues for it —
+/// is a 16550's behaviour and `uart_frame_rx`'s header argues for it —
 /// and a third character after `rx_ready` comes back arrives intact.
 ///
 /// What it would not catch: an overrun in `uart` or `uart_rx`, which

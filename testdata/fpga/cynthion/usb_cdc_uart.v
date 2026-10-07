@@ -171,7 +171,7 @@
 // reason `ip/bus/uart` grew `uart_frame` at all — a format compiled into a
 // parameter cannot follow a host.
 //
-// What a host may ask for and what it gets is `uart_line_coding.v`'s own
+// What a host may ask for and what it gets is `uart_line_coding`'s own
 // header, in three tables. The short form: 5, 6, 7 and 8 data bits and all
 // five parity types — none, odd, even, mark, space — are sent and checked
 // exactly; one and two stop bits likewise; **one and a half stop bits are

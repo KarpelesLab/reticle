@@ -1,14 +1,25 @@
 # uart: a transmitter and a receiver behind one baud divisor. The package
-# ships eight modules in two layers. `top` names `uart`, which is the
-# 8N1-by-default pair a design with a fixed framing wants, and a design
-# that wants only one half instantiates `uart_tx` or `uart_rx` directly.
-# Underneath them `uart_frame`, `uart_frame_tx` and `uart_frame_rx` are
-# the same hardware with the character format on **ports** instead of
-# parameters, which is what a USB serial port needs: `uart_baud_div`
-# turns a bit rate into the `div` every one of them takes, and
-# `uart_line_coding` turns a host's SET_LINE_CODING into the format the
-# frame modules take — so that a host's `stty` reaches the wire and not
-# just a register. README.md says which to use and what each costs.
+# ships eight modules in **four files and two layers**, and the file count
+# is not an accident: a design that reaches this library through
+# `reticle fpga` names its sources by hand, and three test suites and four
+# example READMEs in this repository name exactly these four paths. So each
+# configurable module lives in the same file as the fixed-format facade
+# built on it, and adding the character format added no file for anybody to
+# have to list. README.md §2 says it at length.
+#
+#   rtl/uart_tx.v        uart_frame_tx, then uart_tx
+#   rtl/uart_rx.v        uart_frame_rx, then uart_rx
+#   rtl/uart.v           uart_frame, then uart
+#   rtl/uart_baud_div.v  uart_baud_div, then uart_line_coding
+#
+# `top` names `uart`, which is the 8N1-by-default pair a design with a
+# fixed framing wants, and a design that wants only one half instantiates
+# `uart_tx` or `uart_rx` directly. The `uart_frame*` modules are the same
+# hardware with the character format on **ports** instead of parameters,
+# which is what a USB serial port needs: `uart_baud_div` turns a bit rate
+# into the `div` every one of them takes, and `uart_line_coding` turns a
+# host's SET_LINE_CODING into the format the frame modules take — so that
+# a host's `stty` reaches the wire and not just a register.
 name uart
 version 1.0.0
 license MIT
@@ -18,14 +29,10 @@ top uart
 target ice40
 target ecp5
 
-source rtl/uart_frame_tx.v
-source rtl/uart_frame_rx.v
-source rtl/uart_frame.v
 source rtl/uart_tx.v
 source rtl/uart_rx.v
 source rtl/uart.v
 source rtl/uart_baud_div.v
-source rtl/uart_line_coding.v
 
 param CLK_DIV int 16 4..65535
 param DATA_BITS int 8 5..8
