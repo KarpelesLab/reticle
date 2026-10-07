@@ -1,0 +1,53 @@
+# inflate — RFC 1951 DEFLATE and RFC 1950 zlib, decompressing.
+#
+# Three modules, smallest first. `inflate_adler` is RFC 1950 §9's
+# checksum and exists because that section is a testable statement on
+# its own. `inflate_window` is the 32 KiB sliding window as a circular
+# buffer in block RAM, and it owns the one check that decides whether a
+# malformed stream reads back somebody else's data: a distance reaching
+# behind the start of the stream. `inflate` is everything else — the bit
+# reader, the Huffman decoder, the code-length decoder of §3.2.7, the
+# copy engine and the framing. `top` names that one.
+#
+# All three of §3.2.3's block types are decoded. Every malformed input
+# is reported on `error_code` and none is hung on, which for a block
+# that reads attacker-controlled bytes is a requirement and not a
+# feature; `ip/compress/inflate/README.md` §6 and §7 are about that.
+#
+# There is no compressor here, and no gzip: §9 of the README says what
+# each would need and why neither is in this package.
+#
+# The default window is 262 144 bits, which is sixteen `DP16KD` on an
+# ECP5 and more block RAM than a small iCE40 has. `WINDOW_BITS` lowers
+# it for a design whose streams were compressed with a smaller window;
+# README §5 says what that costs and what it reports.
+name inflate
+version 1.0.0
+license MIT
+description "RFC 1951 DEFLATE decompressor with the RFC 1950 zlib wrapper: stored, fixed and dynamic blocks, a block-RAM sliding window, and every malformed stream reported"
+
+top inflate
+target ice40
+target ecp5
+
+source rtl/inflate_adler.v
+source rtl/inflate_window.v
+source rtl/inflate.v
+
+param WINDOW_BITS int 15 8..15
+param WRAPPER int 1 0..1
+
+port clk in
+port rst_n in
+port start in
+port in_byte in 8
+port in_valid in
+port in_last in
+port in_ready out
+port out_byte out 8
+port out_valid out
+port out_ready in
+port done out
+port error out
+port error_code out 3
+port busy out
