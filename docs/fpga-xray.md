@@ -1046,37 +1046,62 @@ In rough order of how much stands behind each.
    but also, very likely, configuration a real part needs and this one
    does not have. That is the largest known unknown, and no amount of
    structural checking will close it.
-3. **A carry chain.** This is now the biggest hole in what the loader can
-   route, and it is not a missing table — it is packing. Three things
-   stand in the way and each is a real piece of work:
+3. **A carry chain — placed, routed and decoded; not yet seen on a
+   part.** `examples/basys3/blink_carry.v`, a 32-bit `count <= count + 1`,
+   builds to a `.bit` whose eight `CARRY4` sit up one column of slices
+   with their carry on the dedicated `COUT` → `CIN` path, and every one of
+   its bits decodes. *Carry chains on this fabric* below has how, what is
+   checked and what is only quoted. What is missing is the board: nobody
+   has loaded it.
 
-   - **`S` has no tile wire.** A `CARRY4`'s four propagate inputs are
-     wired inside the slice to the four lookup tables' `O6` outputs and
-     reach no wire the interconnect can drive. `ppips_clbll_l.db` lists
-     `CLBLL_LL_A.CLBLL_LL_A1 hint`, which is the lookup table used as a
-     wire, and taking a `hint` means putting a cell on that lookup table.
-     So every bit of the propagate needs a lookup table **in the same
-     slice at the same position**, which the placer cannot express: it
-     places bels independently and its only relative-placement mechanism,
-     the `rloc` macro, works in whole tiles.
-   - **The chain must run up one column.** `CIN` comes only from the
-     `COUT` of the slice below (`tileconn` joins `CLBLL_LL_CIN` to the
-     next tile's `CLBLL_LL_COUT_N`), so a seven-element chain needs seven
-     vertically adjacent slices of the same half. Nothing in the placer
-     knows that, and annealing for wirelength does not produce it.
-   - **`CYINIT` is a constant.** An incrementer's carry in is a one, and
-     the bit that says so is `PRECYINIT.C1` — a feature that depends on a
-     *pin being tied to a constant*, which `ConfigEntry` has no variant
-     for. `PRECYINIT.CIN` for the rest of the chain would fit the
-     existing pass-through mechanism; `C1` would not.
+   What this item said before 2026-10-08 is kept, because each of its
+   three obstacles is what the work below answers, and the first one was
+   stated as a placer limitation when it is a fact about the metal:
 
-   What does work is mapping: `count + 1` becomes seven `CARRY4` with the
-   right wiring, `tests/fpga_carry.rs` proves the chain against the
-   primitive's own model, and the Vivado export path uses it. It is only
-   this loader's placement and routing that cannot. `examples/basys3/blink.v`
-   therefore spells its increment out as a toggle chain, which
-   `the_blink_designs_toggle_chain_is_an_increment` proves equal to
-   `count + 1`, and says so in its header.
+   > **A carry chain.** This is now the biggest hole in what the loader can
+   > route, and it is not a missing table — it is packing. Three things
+   > stand in the way and each is a real piece of work:
+   >
+   > - **`S` has no tile wire.** A `CARRY4`'s four propagate inputs are
+   >   wired inside the slice to the four lookup tables' `O6` outputs and
+   >   reach no wire the interconnect can drive. `ppips_clbll_l.db` lists
+   >   `CLBLL_LL_A.CLBLL_LL_A1 hint`, which is the lookup table used as a
+   >   wire, and taking a `hint` means putting a cell on that lookup table.
+   >   So every bit of the propagate needs a lookup table **in the same
+   >   slice at the same position**, which the placer cannot express: it
+   >   places bels independently and its only relative-placement mechanism,
+   >   the `rloc` macro, works in whole tiles.
+   > - **The chain must run up one column.** `CIN` comes only from the
+   >   `COUT` of the slice below (`tileconn` joins `CLBLL_LL_CIN` to the
+   >   next tile's `CLBLL_LL_COUT_N`), so a seven-element chain needs seven
+   >   vertically adjacent slices of the same half. Nothing in the placer
+   >   knows that, and annealing for wirelength does not produce it.
+   > - **`CYINIT` is a constant.** An incrementer's carry in is a one, and
+   >   the bit that says so is `PRECYINIT.C1` — a feature that depends on a
+   >   *pin being tied to a constant*, which `ConfigEntry` has no variant
+   >   for. `PRECYINIT.CIN` for the rest of the chain would fit the
+   >   existing pass-through mechanism; `C1` would not.
+   >
+   > What does work is mapping: `count + 1` becomes seven `CARRY4` with the
+   > right wiring, `tests/fpga_carry.rs` proves the chain against the
+   > primitive's own model, and the Vivado export path uses it. It is only
+   > this loader's placement and routing that cannot. `examples/basys3/blink.v`
+   > therefore spells its increment out as a toggle chain, which
+   > `the_blink_designs_toggle_chain_is_an_increment` proves equal to
+   > `count + 1`, and says so in its header.
+
+   How each was answered: (a) the propagate pin is now declared *on* the
+   lookup table's output wire, so the requirement is a property of the
+   routing graph, and the placer learned to read such properties off the
+   graph in general rather than to know about slices; (b) the same reading
+   gives the chain's vertical adjacency; (c) `ConfigEntry` gained the
+   variant it had no room for, `Tied`. Mapping was never the gap, as the
+   item said. One premise of (c) was wrong, though: an incrementer's
+   carry in is **not** a one. The mapper adds the one through the
+   propagate — `S[0]` is `~count[0]` — and ties the carry in to zero,
+   which is `PRECYINIT.C0` and costs no bits at all, so `count + 1` never
+   needed `C1`. It is supported anyway, for a design that asks for it.
+
 4. **A memory, and a `SLICEM`.** Nothing has looked at `RAMB18E1`, so a
    design with one will not route. A `SLICEM`'s **distributed RAM** has now
    been looked at, because the ECP5 gained one on 2026-09-28 and the
@@ -1284,6 +1309,124 @@ unless it says otherwise:
 `segbits_dsp_*.db`, `ppips_dsp_*.db` and `mask_dsp_*.db` are already in
 `src/bin/reticle/prjxray-db.manifest`; nothing needed fetching.
 
+## Carry chains on this fabric
+
+`examples/basys3/blink_carry.v` is `count <= count + 1` on 32 bits with
+the top sixteen on the LEDs (fifteen of them; see the file for why LED 6
+is left alone). Mapping makes it eight `CARRY4`. Built with
+
+```sh
+reticle fpga --device xc7a35t-cpg236 \
+    --constraints examples/basys3/blink_carry.rcf \
+    --bitstream blink_carry.bit \
+    examples/basys3/blink_carry.v
+```
+
+it places, routes every signal that has a reader (105 of them; the other
+25 are carry-out bits nothing reads), and **every one of the 2560 bits it
+sets decodes back into a feature `prjxray-db` names, with none left over.
+The 453 interconnect arcs those features name are exactly the 453
+bit-costing pips the router took**, tile for tile and name for name.
+`tests/fpga_xray_carry.rs` asserts both. The chain lands on
+`SLICEL_X1` of `CLBLM_R_X11Y30` up to `CLBLM_R_X11Y37`, one tile per
+link.
+
+**Nothing of this has been on a board.** What a person should see is in
+the design's header: a binary count, each visible LED blinking at half
+the rate of the one to its right, LED 9 at the 1.49 Hz `blink.v` was
+watched at.
+
+### What the slice requires, and where each requirement now lives
+
+Three facts about the silicon, each read off the database:
+
+| Fact | Where it is in the database | How the flow obeys it |
+|---|---|---|
+| `S[n]` *is* the `O6` of the lookup table at position `n` | `ppips_clbll_l.db` gives `S` no wire; the only line near it is the `hint` that is the table used as a wire | the `CARRY4` bel's `p<n>` pin is declared **on the lookup table's output wire** (`CLBLL_LL_A`), so the router can reach it only from that table |
+| `CIN` comes only from the `COUT` of the slice below, same half | `tileconn.json` joins `CLBLL_LL_CIN` to the next tile's `CLBLL_LL_COUT_N` (and through `HCLK_CLB` across a clock row) | `co3` is on `COUT`, `ci` on a wire fed from `CIN` by a hop costing `PRECYINIT.CIN` |
+| a constant carry in is `PRECYINIT.C0` / `C1`; a constant generate is `O5` via `<L>CY0` | `segbits_clbll_l.db`; meaning from prjxray's fuzzers, see below | a new `ConfigEntry::Tied { pin, value, bits }`: bits set when the cell's pin is tied to that constant |
+
+The first two are now properties of the **routing graph**, and the placer
+reads them from there rather than knowing anything about slices:
+`place::build_clusters` walks back from every sink pin a signal has; when
+the walk closes within eight wires on every site of the sink's kind and
+finds exactly one site of the driver's kind each time, the driver's site
+is a function of the sink's, and the instances so related become one rigid
+macro that legalisation and the annealer move as a whole. For the counter
+that is one macro of 40 cells — eight `CARRY4` and 32 lookup tables. On a
+family whose pins are all on the interconnect no walk closes and nothing
+changes; the whole test suite, ECP5, Gowin and iCE40 goldens included,
+is unchanged by it.
+
+The third needs no placement: `PRECYINIT.C0` is every bit clear, so the
+mapper's first `CARRY4` (carry in tied to zero) sets nothing, and
+`PRECYINIT.C1` — which the mapper never asks for, because an `add` has no
+carry-in port — is there for a design that ties a carry in to one.
+
+What the mapped netlist lacked is supplied by `xray::legalise_carries`:
+`count + 1` folds 31 of the 32 propagate bits into plain flip-flop
+outputs (`count[i] ^ 0`), so each gets a **buffer lookup table**,
+`INIT = 0xAAAAAAAAAAAAAAAA`, which is a route-through. A lane whose
+generate is a constant gets a table of its own whose lower half is the
+constant, for `O5`, with `I5` tied to one in the netlist so the cell's
+model reads the upper half just as `O6` does with `A6` high. A lane whose
+outputs nothing reads is left alone and its inputs become `x`.
+`tests/fpga_carry.rs::legalising_a_chain_for_a_slice_changes_no_sum`
+simulates the legalised netlist exhaustively against the arithmetic.
+
+The sums leave the carry two ways and the router picks: into the
+flip-flop beside them (`<L>FFMUX.XOR`) or out through the slice's output
+mux (`<L>OUTMUX.XOR`) to a flip-flop elsewhere. The placer did not pack
+the flip-flops: in the build above five sums take the first way and 27
+the second. That is wire, not a fault.
+
+### Checked, quoted, and not known
+
+**Checked**, against the database or by a test:
+
+- every bit set decodes, and the decoded arcs are the routed pips
+  (`the_carry_counter_decodes_into_exactly_what_was_placed_and_routed`);
+- the chain is one column, one slice half, each link one tile up or two
+  across a clock row (`the_chain_runs_up_one_column_of_one_slice_half`);
+- each `S[n]`'s driver is the lookup table at letter `n` of the same slice
+  (`every_propagate_bit_comes_from_the_lookup_table_beside_it`);
+- the first slice carries no `PRECYINIT` feature, each later one exactly
+  `PRECYINIT.CIN`, and each carry is routed `COUT` → `COUT_N` → `CIN`
+  without touching the interconnect
+  (`the_chain_starts_from_a_constant_and_continues_on_cin`);
+- the legalised netlist computes the same sums
+  (`legalising_a_chain_for_a_slice_changes_no_sum`), and that test fails
+  when the buffer table reads the wrong input — tried;
+- no wire in `artix7/` contains `_CARRY_`, so the invented in-slice wires
+  cannot collide (a `grep` over every `segbits`, `ppips` and `tileconn`
+  file of the pinned commit).
+
+**Quoted**, from documents and not measured here — there is no Vivado
+bitstream with a carry chain in `artix7/harness/`, so none of this has an
+oracle the way the IO and clock paths do:
+
+- `PRECYINIT`'s four settings mean logic 0, logic 1, `AX` and `CIN`:
+  prjxray's `fuzzers/017-clb-precyinit/README.md`;
+- `<L>CY0` clear takes `DI` from the bypass input `<L>X`, set from `O5`:
+  `fuzzers/013-clb-ncy0/README.md`. **This is the opposite of the reading
+  first made while writing this**, which took the bit as "use `AX`"; the README's table and
+  nextpnr-xilinx's `fasm.cc`, which writes `<L>CY0` only when the `CY0`
+  mux's source pin is `O5`, both say otherwise. Had the guess stood, every
+  generate would have come from an `O5` nobody configured;
+- the output mux's `XOR` is the `CARRY4`'s `O[n]` and its `CY` is
+  `CO[n]`: the variants of `fuzzers/016-clb-noutmux/top.py`;
+- `S[n]` is position `n`'s `O6`: UG474's slice diagram;
+- an unrouted interconnect input reads one: `ppips_int_l.db` records
+  `VCC_WIRE` as every `IMUX`'s `default` source. The buffer tables do not
+  depend on it — their halves are equal — but a lane with a constant
+  generate does, through `A6`.
+
+**Not known**: whether it counts. A carry chain is the first path in this
+flow whose every feature is a reading of a fuzzer rather than a
+transcription of a working bitstream, so the board is the first oracle it
+will have.
+
+
 ## Where the code is
 
 | | |
@@ -1292,6 +1435,7 @@ unless it says otherwise:
 | `src/fpga/xray/mod.rs` | the loader: the database as an `Arch` plus a `FrameMap`, with the region and the measurement |
 | `src/fpga/xray/parse.rs` | one reader per file of the database |
 | `src/fpga/xray/lutram.rs` | a `SLICEM`'s distributed RAM: the `RAM64X1D` bel, its pins, its blocks and its bits, with the sources of the quoted part |
+| `src/fpga/xray/carry.rs` | `legalise_carries`: a lookup table for every propagate bit of a `CARRY4` that has none, and the constant generates in `O5` |
 | `src/fpga/xray/sites.rs` | the inside of a site: pin names from UG474 and UG471, the wire each sits on, the orientations the database only implies, the IO recipe read off Vivado's own bitstream, and the clock tables — the `BUFGCTRL`, the `BUFHCE` of a clock row, the wires that cost bits to touch and the rebuffer enables |
 | `XrayFabric::enable_global_clocks` | the one bit that belongs to no pip: a global clock's rebuffer enables, over the whole column, once the routing is known |
 | `src/fpga/xray/cmt.rs` | the clock management tile: the PLL as a bel, its DRP register values (computed and quoted, each said which), and `XrayFabric::configure_clock_managers` |
@@ -1299,8 +1443,9 @@ unless it says otherwise:
 | `src/fpga/devices/xc7.dev` | the device: primitives, pins, and now the IDCODE |
 | `tests/fpga_xray.rs` | everything above, against the real database, skipping without it |
 | `tests/fpga_xray_lutram.rs` | the distributed RAM, built from `examples/basys3/lutram.v` and decoded |
-| `examples/basys3/` | the two designs that have reached a part, the distributed-RAM demo that has not yet, and their constraints |
+| `examples/basys3/` | the two designs that have reached a part, the tristate, distributed-RAM, PLL and carry-chain demos that have not yet, and their constraints |
 | `src/fpga/xray/dsp.rs` | the refusal of a `DSP48E1`, and the measured reasons for it |
+| `tests/fpga_xray_carry.rs` | the carry chain: placed up one column, propagate from the lookup table beside it, `CIN` and a constant carry in, every bit decoded and every arc the router's |
 | `XrayDatabase::decode` | the other direction: a bitstream back into the database's feature names, with an accounting of every bit it could not name |
 
 `src/fpga/arch/synthetic.rs` is untouched and still says what it always

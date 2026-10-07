@@ -27,15 +27,19 @@
 // # Why the increment is spelled out
 //
 // `count <= count + 1` is the obvious way to write this, and Reticle maps
-// it — correctly — onto seven `CARRY4` primitives. A 7-series carry chain
-// cannot be *routed* by this flow yet, and the reason is structural
-// rather than a missing table: a `CARRY4`'s `S` inputs are wired inside
+// it — correctly — onto seven `CARRY4` primitives. When this design was
+// written a 7-series carry chain could not be *routed* by this flow. It
+// can now — `blink_carry.v` beside this file is the obvious counter, and
+// `docs/fpga-xray.md` says how — but this file is kept as it was, because
+// it is the design that was watched blinking. The reason it gave was
+// structural rather than a missing table: a `CARRY4`'s `S` inputs are wired inside
 // the slice to the four lookup tables' `O6` outputs and reach no tile
 // wire at all, so every bit of the propagate needs a lookup table in the
 // same slice at the same position, and the placer has no way to say
 // "these two cells share a slice". The chain also has to run up one
 // column of slices, because `CIN` comes only from the `COUT` of the slice
-// below. Mapping is not the gap; packing and chain placement are.
+// below. Mapping is not the gap; packing and chain placement are. (Both
+// are now read off the routing graph by the placer.)
 //
 // So the increment is written as what a carry chain computes: bit i
 // toggles when every bit below it is one. That is `count + 1` exactly,

@@ -1487,10 +1487,12 @@ fn the_rebuffer_enables_pair_with_the_ends_vivado_marks() {
 }
 
 /// `examples/basys3/blink.v` spells its increment out as a toggle chain
-/// rather than writing `count + 1`, because a `+` maps onto a `CARRY4`
-/// chain this flow cannot route. The design's comment says the two are
-/// the same thing; this proves it, over all 2^26 values, with Reticle's
-/// own equivalence checker.
+/// rather than writing `count + 1`, because when it was written a `+`
+/// mapped onto a `CARRY4` chain this flow could not route. It can now
+/// (`tests/fpga_xray_carry.rs`), and `blink.v` is kept as the design that
+/// was watched working, so its claim is still worth proving. The
+/// design's comment says the two are the same thing; this proves it,
+/// over all 2^26 values, with Reticle's own equivalence checker.
 ///
 /// **This test needs no chip database.** It is here rather than in
 /// `tests/fpga_carry.rs` because what it guards is a claim in the blink
