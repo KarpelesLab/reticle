@@ -663,10 +663,12 @@ mod tests {
     #[test]
     fn the_integration_tests_look_for_the_versions_pinned_here() {
         let xray = include_str!("../../../tests/fpga_xray.rs");
+        let xray_lutram = include_str!("../../../tests/fpga_xray_lutram.rs");
         let gowin = include_str!("../../../tests/fpga_gowin.rs");
         let trellis_test = include_str!("../../../tests/fpga_trellis.rs");
         for (db, test) in [
             (&PRJXRAY, xray),
+            (&PRJXRAY, xray_lutram),
             (&APICULA, gowin),
             (&TRELLIS, trellis_test),
         ] {
