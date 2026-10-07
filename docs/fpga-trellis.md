@@ -23,8 +23,8 @@ deterministic function that gives a different answer each run is a path that
 does not close.
 
 An adder on this part is a carry chain now. `chacha20_core` went from 5834
-`LUT4` at depth 87 to 547 `CCU2C` and 3031 `LUT4` at **depth 4**;
-`sha256_core` from 3041 at 39 to 314 and 1686 at **depth 7**. Both are now
+`LUT4` at depth 87 to 547 `CCU2C` and 3033 `LUT4` at **depth 4**;
+`sha256_core` from 3041 at 39 to 314 and 1688 at **depth 7**. Both are now
 *shallower on the ECP5 than on the iCE40*, which is worth a sentence of its
 own below. **Forty-four** rows of `docs/ip-library.md`'s footprint table
 moved, and thirty-five iCE40 rows moved with them by one or two cells and no
