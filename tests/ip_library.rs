@@ -3437,7 +3437,12 @@ const FAR_PHASE: u64 = 5001;
 
 /// One frame the display's master sends: a byte on `mosi` under one
 /// `cs_n`, with `dc` saying what the byte is.
-struct Frame {
+///
+/// `SpiFrame` and not `Frame` because `ip/bus/uart`'s harness in this
+/// same file is a `Frame` — a character frame, the other thing the word
+/// means in hardware. The two arrived on separate branches and the
+/// collision only appeared when they were rebased together.
+struct SpiFrame {
     byte: u8,
     /// The level `dc` is held at for the **whole** frame, which is what
     /// a display controller does and what the user confirmed.
@@ -3450,8 +3455,8 @@ struct Frame {
 }
 
 /// A command byte: `dc` low for the whole frame.
-fn command(byte: u8) -> Frame {
-    Frame {
+fn command(byte: u8) -> SpiFrame {
+    SpiFrame {
         byte,
         is_data: false,
         bits: 8,
@@ -3459,8 +3464,8 @@ fn command(byte: u8) -> Frame {
 }
 
 /// A data byte — a pixel, in this link's traffic: `dc` high.
-fn pixel(byte: u8) -> Frame {
-    Frame {
+fn pixel(byte: u8) -> SpiFrame {
+    SpiFrame {
         byte,
         is_data: true,
         bits: 8,
@@ -3568,7 +3573,7 @@ impl FarSide {
     /// The wires change just after the edge that does **not** sample,
     /// which is how a source-synchronous master gives a receiver half a
     /// period of setup and half of hold.
-    fn edges(&mut self, t0: u64, f: &Frame) {
+    fn edges(&mut self, t0: u64, f: &SpiFrame) {
         for i in 0..f.bits {
             let base = t0 + u64::from(i) * self.period;
             let shift = if self.msb_first { 7 - (i % 8) } else { i % 8 };
@@ -3599,7 +3604,7 @@ impl FarSide {
     /// a reset landed in the middle of.
     fn mid_frame_start(&mut self, bits: u32) {
         let t0 = self.now;
-        let partial = Frame {
+        let partial = SpiFrame {
             byte: 0xFF,
             is_data: true,
             bits,
@@ -3609,7 +3614,7 @@ impl FarSide {
     }
 
     /// The gap that closes whatever came before, then one frame.
-    fn send(&mut self, f: &Frame) {
+    fn send(&mut self, f: &SpiFrame) {
         self.close();
         let t0 = self.now + self.gap;
         if self.cs_present && !self.cs_pulse {
@@ -3656,7 +3661,7 @@ impl FarSide {
 
     /// Every frame of a session, and the deassertion that closes the
     /// last of them — without which the last byte is never framed.
-    fn session(&mut self, frames: &[Frame]) {
+    fn session(&mut self, frames: &[SpiFrame]) {
         for f in frames {
             self.send(f);
         }
@@ -3793,7 +3798,7 @@ fn spi_display_session(params: &[(&str, &str)], far: &FarSide) -> Received {
 }
 
 /// The pairs a session should produce, for the frames it sent.
-fn expected_bytes(frames: &[Frame]) -> Vec<(u8, bool)> {
+fn expected_bytes(frames: &[SpiFrame]) -> Vec<(u8, bool)> {
     frames.iter().map(|f| (f.byte, f.is_data)).collect()
 }
 
@@ -3807,11 +3812,11 @@ fn byte_moves(byte: u8) -> bool {
 
 /// A run of command bytes and then a long run of pixels, which is the
 /// shape this link's traffic actually has.
-fn display_traffic() -> Vec<Frame> {
+fn display_traffic() -> Vec<SpiFrame> {
     // Six bytes that look like an initialisation sequence, then a ramp
     // of pixels.
     let init = [0x01u8, 0x11, 0x3A, 0x55, 0x29, 0x2C];
-    let mut frames: Vec<Frame> = init.iter().map(|c| command(*c)).collect();
+    let mut frames: Vec<SpiFrame> = init.iter().map(|c| command(*c)).collect();
     for i in 0..64u32 {
         frames.push(pixel(octet(u64::from(i) * 3 + 1)));
     }
@@ -3861,7 +3866,7 @@ fn spi_display_rx_receives_a_plausible_display_session() {
     // `cs_n` toggles once a byte, which is exactly what "`dc` is mostly
     // the reverse of `cs_n`" looks like — and this pair of counters is
     // what says so rather than anyone squinting at a waveform.
-    let pixels: Vec<Frame> = (0..32u32).map(|i| pixel(octet(u64::from(i) + 1))).collect();
+    let pixels: Vec<SpiFrame> = (0..32u32).map(|i| pixel(octet(u64::from(i) + 1))).collect();
     let mut far = FarSide::new(SPI_PERIOD);
     far.session(&pixels);
     let got = spi_display_session(&[], &far);
@@ -3918,8 +3923,8 @@ fn spi_display_rx_reports_a_frame_that_was_not_eight_bits() {
         // Every frame here carries the **same** tag, so a byte that
         // straddles two of them still agrees with itself about `dc`:
         // this part is about the bit count and nothing else.
-        let frames: Vec<Frame> = (0..8u8)
-            .map(|i| Frame {
+        let frames: Vec<SpiFrame> = (0..8u8)
+            .map(|i| SpiFrame {
                 byte: 0x5A ^ i,
                 is_data: true,
                 bits,
@@ -3975,8 +3980,8 @@ fn spi_display_rx_reports_a_frame_that_was_not_eight_bits() {
         // frames straddles two tags, so `dc` is seen to move inside it
         // and mode 0's agreement rule withholds it. Two independent
         // instruments then report the same misframing.
-        let frames: Vec<Frame> = (0..8u8)
-            .map(|i| Frame {
+        let frames: Vec<SpiFrame> = (0..8u8)
+            .map(|i| SpiFrame {
                 byte: 0x5A ^ i,
                 is_data: i % 2 == 0,
                 bits,
