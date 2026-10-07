@@ -379,6 +379,7 @@ fn compile_all(
             overlaps: brams.overlaps,
             bram_only,
             placement,
+            place_report: report,
             clocks,
             dropped,
             graph,
@@ -416,6 +417,10 @@ struct Routed {
     /// question: it takes six of its tile's eight lookup tables, so nothing
     /// else may be in there.
     placement: reticle::fpga::place::Placement,
+    /// What the placer did, so a test can ask which sites a cell was *not*
+    /// allowed to take. A clock buffer is the case where that is the
+    /// question: see `PlacementReport::reach`.
+    place_report: reticle::fpga::place::PlacementReport,
     /// Which global clock network each of their clocks arrived on.
     clocks: trellis::ClockUse,
     /// Bits an arc of the design needs **clear** that something else set.
@@ -1201,6 +1206,39 @@ fn a_block_ram_places_routes_and_every_bit_of_it_decodes() {
          it. The two assertions above are what say the blocks themselves did not change — two \
          cells, and the same thirty-three bits of their own"
     );
+    // The buffer is on a site the clock's own pad can drive, and the
+    // placer is what knows that rather than the constraints file. Ball A2
+    // is on the top edge, and seven of this part's fifty-six `DCC`s have
+    // no path from it: `LDCC3`, `LDCC4`, `LDCC8`, `LDCC11` and `LDCC13` at
+    // `X3Y25`, and `RDCC11` and `RDCC13` at `X69Y25`. All fourteen `LDCC`s
+    // are in one tile, so a placer that judges a site by distance treats
+    // them as interchangeable and the annealer swaps between them for
+    // nothing — which is how `block_ram_2048.rcf` came to pin the buffer
+    // to the top edge by hand. It does not any more; see
+    // `fpga::place::confine_to_reachable`.
+    assert_eq!(
+        routed.place_report.reach,
+        vec![("clk$gbuf".to_owned(), 49, 56)],
+        "the clock buffer keeps the 49 of 56 `DCC` sites ball A2 can drive"
+    );
+    let buffer = routed
+        .netlist
+        .instances
+        .iter()
+        .position(|instance| instance.kind == "gb")
+        .expect("a clock buffer");
+    let site = &routed.graph.sites[routed.placement.site_of(buffer).expect("placed")];
+    for unreachable in [
+        "X3Y25/LDCC3",
+        "X3Y25/LDCC4",
+        "X3Y25/LDCC8",
+        "X3Y25/LDCC11",
+        "X3Y25/LDCC13",
+        "X69Y25/RDCC11",
+        "X69Y25/RDCC13",
+    ] {
+        assert_ne!(site.name, unreachable, "the pad cannot drive this buffer");
+    }
     // Every clock pin of every block on a global network, which is what
     // `ecppack` does in all 53 of its blocks and what this flow refuses to
     // do without.

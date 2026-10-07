@@ -51,7 +51,3 @@ set_io -io_standard LVCMOS33 romdata[4] A10
 set_io -io_standard LVCMOS33 romdata[5] B10
 set_io -io_standard LVCMOS33 romdata[6] C10
 set_io -io_standard LVCMOS33 romdata[7] D10
-
-
-region topclock 31 0 32 0
-assign *gbuf* region topclock

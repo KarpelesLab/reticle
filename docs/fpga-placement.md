@@ -364,6 +364,184 @@ into exactly the 35 151 arcs the router chose, with none unexplained, and
 placement at all.
 
 
+## The site a clock buffer may take
+
+The schedule above judges a site by one question — is it free, and does
+nothing else in the tile want the same bel pin — and that question is
+enough everywhere the fabric is uniform. On a **global** wire it is not,
+because a global wire's neighbourhood is not a function of distance. Two
+defects came of asking only it, one from each direction, and they are the
+same defect:
+
+- **Nothing could drive the buffer.** On an ECP5 the clock buffer's input
+  is the global wire `G_CLKI_<name>`, and an `LFE5U-12F` has fifty-six
+  buffers. `block_ram_2048.v`, whose clock enters on ball **A2** — a
+  top-edge pad, site `X4Y0/PIOA` — put its buffer where the block RAMs
+  are and the router said *"no path exists from the driver of `clk` to
+  `clk$gbuf.CLKI[0]`: the architecture has no wire joining them"*. It
+  reproduces today by confining `*gbuf*` to the one tile the block RAMs
+  pull it towards (`region 3 25 3 25`): the placer chooses `X3Y25/LDCC3`
+  and the router says exactly that, word for word.
+- **The buffer could drive nothing.** On the iCE40-like architecture this
+  crate carries, a block RAM's clock pin is fed from its tile's local
+  tracks and from nothing else. A round that let a memory's clock earn a
+  buffer therefore made `ram_ice40` stop routing, with *"no path exists
+  from the driver of `clk$gb` to `mem$ram_w0_d0.RCLK[0]`"*, and the round
+  that found it reverted the mapper rather than fixing the placer.
+
+### What a pad can reach, measured
+
+Asked of the graph rather than reasoned about — one breadth-first sweep
+forward from `X4Y0/JPADDIA_PIO`, the wire ball A2's pad drives:
+
+| | |
+|---|---|
+| wires reached | 623 532 of the die's 1 096 425 |
+| `gb` sites whose `G_CLKI_*` is among them | **49** |
+| `gb` sites whose `G_CLKI_*` is not | **7** |
+
+The seven are `LDCC3`, `LDCC4`, `LDCC8`, `LDCC11` and `LDCC13` at
+`X3Y25`, and `RDCC11` and `RDCC13` at `X69Y25`. So the earlier round's
+reading — that a buffer "at X3Y25 looks nearest to a block RAM at Y25 and
+a top-edge pad has no path to it" — is half right and worth correcting:
+**nine of the fourteen buffers in that very tile are reachable from that
+very pad.** The tile is not the unit; the buffer is.
+
+That matters because of what it does to the annealer. All fourteen `LDCC`
+sites are in one tile, so a move between them changes the tile-granular
+wirelength by **exactly zero** — and a zero-cost move is accepted at any
+temperature, as "The acceptance rate, measured" above says it must be. A
+buffer that legalisation put on a reachable site is therefore shuffled
+onto an unreachable one for nothing, by whichever draw of the random
+number generator comes next. Nothing about that is flaky: it is the same
+site for the same seed every time. It is arbitrary, which is worse,
+because it means the build works or does not for reasons no input states.
+
+### The question the placer asks now
+
+`place::confine_to_reachable` runs after the pin constraints and the
+regions and before legalisation, and gives a cell a set of sites rather
+than letting distance decide alone. Only a pin the architecture puts on a
+**global** wire is asked about — on these two families that is a clock
+buffer's input and output and nothing else — and only against the other
+end of the signal that pin carries. Which end the sweep starts from
+depends on which end has one wire:
+
+- **A counterpart a package pin fixes** has exactly one wire, so the
+  sweep starts there and runs towards the candidate sites. One sweep
+  answers the question for all of them at once, and the answer is exact.
+  This is the ECP5 case: a clock enters the die at a pad, and the pad is
+  `set_io`'d.
+- **A movable counterpart** has one wire per site of its kind — 24 288
+  for a flip-flop. Seeding a sweep with all of them costs thirty times as
+  much and narrows nothing, because the sites of a kind are
+  interchangeable: if one is reachable they all are. So that direction is
+  swept from the *candidate pins* outwards instead, and the question it
+  answers is the one that has actually been wrong — whether a path to
+  that kind of site exists **at all**. This is the iCE40 case: no `SB_GB`
+  reaches any block RAM's clock, so the answer is no and the design is
+  refused.
+
+A cell left no site is `PlaceError::NoReachableSite`, which names both
+pins and both cells and says how many sites of the kind the part has. The
+router used to find both of these, one sink at a time, after a whole
+placement had been computed.
+
+### What it costs
+
+Counted, not timed, in `PlaceWork::reach_steps` — wires taken off the
+sweep's queue:
+
+| design | graph | wires swept |
+|---|---|---|
+| `block_ram_2048.v` on an `LFE5U-12F` | 1 096 425 wires | 765 754 |
+| `blinky_ice40` and `carry_ice40` | 19 872 wires | **1** each |
+| `ram_ice40` | 19 872 wires | **0** |
+
+Three things set that cost. A sweep **stops as soon as it has its
+answer**: the two iCE40 designs with a buffer cost one wire each, because
+a `glb<n>` wire drives a logic tile's clock pin directly and the first
+node off the queue settles it, and the ECP5 design's three output-side
+sweeps cost 142 222 between them for the same reason, while its one
+input-side sweep costs 623 532 because it has to exhaust the die to prove
+that seven buffers are not in it. A design with **no globally-wired pin**
+pays nothing at all, which is why `ram_ice40` — whose clock is under the
+global-buffer threshold and gets no buffer — is a zero. And the cost is
+paid **once, before legalisation**: a move pays one binary search in a
+list of at most a few dozen sites, so the adaptive schedule's 44 million
+moves on `usb_host_target.v` are untouched. For scale, routing
+`block_ram_2048.v` takes 4 654 993 nodes off the *router's* queue, so the
+whole check is about a sixth of one route of the design it protects.
+
+That last claim is a tripwire and not a comment:
+`the_reachability_check_does_not_grow_with_the_move_count` runs one design
+twice in one process at ten times the move effort and asserts that the
+move count changed and `reach_steps` did not. A check that asked the
+routing graph on every proposal would be a number that tracks the moves,
+and that is the thing worth asserting — not a number of seconds.
+
+### What it would and would not catch
+
+Seeding with the union over where the other end *may* go makes the answer
+a **relaxation**: a site is kept when some placement of the other end
+could reach it. So the check never rejects a site that could have worked,
+and it does not catch a buffer that reaches some sites of a kind but not
+the ones the rest of the placement wants — an ECP5 `TDCC` whose quadrant
+does not hold the flip-flops it clocks would still be found by the
+router. What it does catch is exactly the two failures above: a
+counterpart a package pin fixes, where the answer is exact, and a kind no
+site of which is reachable, which no relaxation can hide.
+
+### What it cost the placements
+
+Nothing measurable, which is the answer a narrowing constraint should
+give when the sites it rules out were not the ones being chosen.
+
+| | before | after |
+|---|---|---|
+| `block_ram_2048.v` wirelength | 1373 → 1362 | 1373 → **1362** |
+| its pips, router nodes | 603, 4 654 993 | **603**, **4 654 993** |
+| its tiles, set bits | 37, 1259 | **37**, **1259** |
+| the three iCE40 goldens | — | **byte for byte unchanged** |
+
+`testdata/fpga/ecp5/block_ram_2048.rcf` carried the workaround for the
+first failure — a one-tile region that pinned `*gbuf*` to the top edge —
+and it is gone. The placement with the region and the placement without
+it are the same placement, site for site, which is what says the placer
+is now choosing rather than being told.
+
+### "A flaky test", which was not one
+
+The iCE40 half arrived as a report of flakiness: `tests/fpga_pnr.rs`
+reddened one full gate with the `RCLK` message above, then passed twelve
+runs in isolation and passed again in the same full-suite position. That
+reading is wrong, and the wrong reading is the useful part, because a
+placer whose output depends on anything but its seed would be a much worse
+problem than this one.
+
+What was measured instead:
+
+- `tests/fpga_pnr.rs` run **thirty times** on the base this round started
+  from, eight test threads, in the full-suite position: **0 failures**. A
+  placement is reproducible, as `the_same_seed_gives_the_same_placement`
+  already says.
+- The failing message reproduced **deterministically** by restoring the
+  one input condition it needs — a global-buffer threshold low enough that
+  a memory's two clock pins earn a buffer — and it comes out byte for
+  byte: *"no path exists from the driver of `clk$gb` to
+  `mem$ram_w0_d0.RCLK[0]`"*. That is now
+  `a_clock_buffer_that_cannot_reach_its_loads_is_a_placement_error` in
+  `tests/fpga_pnr.rs`.
+
+So the gate that reddened was measured on a base that had since moved:
+commit `87dc304` let a memory's clock bypass the threshold, and `21a008e`
+took it back out the same day. `CLAUDE.md` says a gate measured on a base
+that has since moved does not count, and this is what that costs when it
+is read as nondeterminism instead — two rounds, one of which is this one.
+Nothing was made rarer here; the condition that produced the message is
+now a test, and the placer refuses it before the router ever sees it.
+
+
 ## What was not done, and would be next
 
 - **The cost function has no congestion term.** VPR's is
@@ -379,5 +557,7 @@ placement at all.
   nothing connects it to the placer.
 - **A move is still proposed before it is judged legal.** On the ECP5 the
   shared-pin check (`SiteRules`) rejects a fraction of the window's
-  offers, and a generator that knew which sites of the window were
-  compatible would not have to.
+  offers, and so now does the reachability set of a clock buffer — five of
+  the fourteen offers a window around `X3Y25` makes for one. A generator
+  that knew which sites of the window the cell could take would not have
+  to make them.

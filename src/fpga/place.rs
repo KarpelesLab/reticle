@@ -13,9 +13,10 @@
 //!    design with no fixed pins bounded. The result is a cloud of real
 //!    numbers, not a placement: two cells may want the same site.
 //! 2. **Legalisation and annealing.** Every cell is assigned the nearest
-//!    free site of the kind it needs, then simulated annealing improves
-//!    the result against a half-perimeter wirelength cost with a move set
-//!    of swaps, moves to free sites and relative-placement macro moves.
+//!    free site of the kind it needs *and may legally take*, then
+//!    simulated annealing improves the result against a half-perimeter
+//!    wirelength cost with a move set of swaps, moves to free sites and
+//!    relative-placement macro moves.
 //!
 //! # What the constraints mean here
 //!
@@ -33,6 +34,20 @@
 //! - An **`rloc` macro** is rigid: its members keep the exact tile
 //!   offsets the constraint states, and the annealer moves the macro, not
 //!   its members.
+//!
+//! # What a legal site is
+//!
+//! Three things beyond "a site of the right kind that is free":
+//!
+//! - nothing else in the tile may want a bel pin this cell also wants,
+//!   nor a wire out of a pool the tile shares (`SiteRules`);
+//! - a cell confined by a region or a macro must stay where it says;
+//! - and the fabric has to be able to **carry the cell's signals to and
+//!   from the site** (`confine_to_reachable`). That last one only ever
+//!   rules anything out on a global wire, whose neighbourhood is not a
+//!   function of distance — a clock buffer's — and it is the difference
+//!   between a design the router refuses after a whole placement and one
+//!   the placer refuses before it starts.
 //!
 //! # Determinism
 //!
@@ -177,6 +192,31 @@ pub enum PlaceError {
         /// How many sites of that kind the region holds.
         available: usize,
     },
+    /// No site of the kind a cell needs can carry one of its signals: the
+    /// fabric has no path between that pin and the other end of the net,
+    /// wherever either of them is put.
+    ///
+    /// This is the global network's error. A clock buffer's input and
+    /// output are global wires, and a global wire's neighbourhood is not a
+    /// function of distance: on this ECP5 seven of the part's fifty-six
+    /// buffer sites cannot be reached from a given top-edge pad at all,
+    /// and on the iCE40-like architecture a block RAM's clock pin cannot
+    /// be reached from a global buffer at all. Both used to be found by
+    /// the router, one signal at a time and after the whole placement was
+    /// finished. See `confine_to_reachable`.
+    NoReachableSite {
+        /// The pin that cannot be connected, as `<cell>.<role>` — the
+        /// same spelling the router's own unroutable-sink message uses.
+        pin: String,
+        /// The kind of site the cell needs.
+        kind: String,
+        /// How many sites of that kind the part has.
+        available: usize,
+        /// The pin at the other end of that signal, spelled the same way.
+        other: String,
+        /// True when the signal arrives on `pin`, false when it leaves.
+        inbound: bool,
+    },
     /// The netlist could not be read bit by bit, from the emitter's
     /// bit-level view.
     Netlist(String),
@@ -219,6 +259,19 @@ impl fmt::Display for PlaceError {
                 f,
                 "region `{region}` holds {available} `{kind}` site(s) and {needed} cell(s) were assigned to it"
             ),
+            PlaceError::NoReachableSite {
+                pin,
+                kind,
+                available,
+                other,
+                inbound,
+            } => {
+                let (from, to) = if *inbound { (other, pin) } else { (pin, other) };
+                write!(
+                    f,
+                    "none of the part's {available} `{kind}` site(s) has a path from `{from}` to `{to}`"
+                )
+            }
             PlaceError::Netlist(message) => write!(f, "the netlist cannot be read: {message}"),
         }
     }
@@ -634,6 +687,11 @@ pub struct PlaceWork {
     pub cost_pins: u64,
     /// Times the best placement so far was recorded.
     pub snapshots: u64,
+    /// Wires the reachability sweeps took off their queue, which is what
+    /// `confine_to_reachable` costs. It is paid once, before
+    /// legalisation, and no move pays any of it: a move's share of this
+    /// check is one binary search in a list of at most a few dozen sites.
+    pub reach_steps: u64,
 }
 
 thread_local! {
@@ -650,6 +708,7 @@ thread_local! {
         legality_steps: 0,
         cost_pins: 0,
         snapshots: 0,
+        reach_steps: 0,
     }) };
 }
 
@@ -859,6 +918,14 @@ pub struct PlacementReport {
     pub stop: AnnealStop,
     /// Pins the architecture gives no wire, which are not routed.
     pub off_fabric: usize,
+    /// One entry per cell whose site set reachability narrowed, as
+    /// `(the cell, sites left, sites of its kind)`, sorted by name.
+    ///
+    /// Empty for every design on a family whose bels have no global pin,
+    /// and empty for a design whose clock buffers can go anywhere. A
+    /// non-empty entry is the placer saying which cells it may not place
+    /// by distance alone; see `confine_to_reachable`.
+    pub reach: Vec<(String, usize, usize)>,
     /// What the pass cost, in work rather than in seconds.
     pub work: PlaceWork,
 }
@@ -907,6 +974,24 @@ impl PlacementReport {
             self.work.cost_pins,
             self.work.snapshots
         );
+        if !self.reach.is_empty() {
+            let _ = writeln!(
+                out,
+                "  reachable sites: {}",
+                self.reach
+                    .iter()
+                    .map(|(cell, left, all)| format!("{cell} {left} of {all}"))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            );
+        }
+        if self.work.reach_steps > 0 {
+            let _ = writeln!(
+                out,
+                "  reachability: {} wire(s) swept",
+                self.work.reach_steps
+            );
+        }
         if self.off_fabric > 0 {
             let _ = writeln!(out, "  off-fabric pins: {}", self.off_fabric);
         }
@@ -1569,6 +1654,21 @@ struct Placeable {
     region: Option<(Rect, String)>,
     /// The macro it belongs to.
     macro_index: Option<usize>,
+    /// The sites it may take, when reachability rules some of them out:
+    /// sorted, so membership is a binary search. `None` means every site
+    /// of its kind, which is what every cell of every family whose bels
+    /// have no global pin gets. See [`confine_to_reachable`].
+    allowed: Option<Vec<usize>>,
+}
+
+impl Placeable {
+    /// True when this cell may sit on `site`, as far as reachability is
+    /// concerned. Free for a cell that is not reachability-constrained.
+    fn may_take(&self, site: usize) -> bool {
+        self.allowed
+            .as_ref()
+            .is_none_or(|sites| sites.binary_search(&site).is_ok())
+    }
 }
 
 /// Places `netlist` on `graph`.
@@ -1618,10 +1718,16 @@ pub fn place(
             fixed: None,
             region: None,
             macro_index: None,
+            allowed: None,
         })
         .collect();
     fix_pins(netlist, arch, graph, &mut info, &mut report)?;
     apply_regions(netlist, graph, constraints, &mut info);
+    // After the pin constraints and the regions, because both of them
+    // narrow where the *other* end of a global signal can be, and before
+    // legalisation, because the answer is a constraint on every site this
+    // pass or the annealer may choose.
+    confine_to_reachable(netlist, graph, &sites_by_kind, &mut info, &mut report)?;
     let macros = build_macros(netlist, constraints, &mut info);
     report.macros = (
         macros.len(),
@@ -1829,6 +1935,337 @@ fn build_macros(
 // ---------------------------------------------------------------------------
 // Analytic placement
 // ---------------------------------------------------------------------------
+
+/// A reusable breadth-first sweep over the routing graph.
+///
+/// Only [`confine_to_reachable`] uses it, and the reason it is a struct is
+/// the stamp: a sweep marks a million wires on a real part, and a design
+/// with two clocks asks for several sweeps, so the mark is a generation
+/// number rather than a `bool` that would have to be cleared each time.
+struct Sweep {
+    /// The generation each wire was last reached in.
+    stamp: Vec<u32>,
+    /// The generation the current sweep is marking with. Starts at 1, so
+    /// a zero stamp means "never reached".
+    now: u32,
+    /// The frontier, as a queue with a read cursor rather than a
+    /// `VecDeque`: it is drained once per sweep and never wraps.
+    queue: Vec<NodeId>,
+}
+
+impl Sweep {
+    /// A sweep over a graph of `nodes` wires, with nothing marked.
+    fn new(nodes: usize) -> Sweep {
+        Sweep {
+            stamp: vec![0; nodes],
+            now: 0,
+            queue: Vec::new(),
+        }
+    }
+
+    /// Marks every wire reachable from `seeds` — forwards along the pips
+    /// when `forward`, backwards against them otherwise — and returns how
+    /// many wires of `wanted` it reached, stopping as soon as that count
+    /// reaches `enough`.
+    ///
+    /// `wanted` must be sorted. The early exit is what makes the usual
+    /// answer cheap: a sweep that has its answer has no reason to carry
+    /// on, and only a sweep whose answer is "no" has to exhaust the
+    /// graph. The cost is one visit per wire and one look per pip,
+    /// counted into [`PlaceWork::reach_steps`].
+    fn mark(
+        &mut self,
+        graph: &RoutingGraph,
+        seeds: &[NodeId],
+        forward: bool,
+        wanted: &[NodeId],
+        enough: usize,
+    ) -> usize {
+        self.now += 1;
+        self.queue.clear();
+        let mut found = 0usize;
+        for seed in seeds {
+            if self.stamp[*seed as usize] != self.now {
+                self.stamp[*seed as usize] = self.now;
+                self.queue.push(*seed);
+                found += usize::from(wanted.binary_search(seed).is_ok());
+            }
+        }
+        let mut head = 0usize;
+        let mut steps = 0u64;
+        while head < self.queue.len() && found < enough {
+            let node = self.queue[head];
+            head += 1;
+            steps += 1;
+            let pips = if forward {
+                graph.outgoing(node)
+            } else {
+                graph.incoming(node)
+            };
+            for pip in pips {
+                let pip = graph.pip(*pip);
+                let next = if forward { pip.to } else { pip.from };
+                if self.stamp[next as usize] != self.now {
+                    self.stamp[next as usize] = self.now;
+                    self.queue.push(next);
+                    found += usize::from(wanted.binary_search(&next).is_ok());
+                }
+            }
+        }
+        count(|work| &mut work.reach_steps, steps);
+        found
+    }
+
+    /// True when the last [`Sweep::mark`] reached `node`.
+    fn reached(&self, node: NodeId) -> bool {
+        self.stamp[node as usize] == self.now
+    }
+}
+
+/// Narrows every cell's site set to the sites the fabric can actually
+/// carry its signals to and from, and reports a cell for which that set
+/// is empty.
+///
+/// # Why this exists, and why it is not asked of every cell
+///
+/// A site's legality was "is it free, and does nothing in the tile want
+/// the same bel pin" ([`SiteRules`]). That is enough on general
+/// interconnect, where the fabric is uniform and a path exists between
+/// any two tiles; it is not enough on a **global** wire, whose
+/// neighbourhood is not a function of distance. Two defects came of that,
+/// one from each direction:
+///
+/// - **Nothing can drive it.** An ECP5 clock buffer's input is the global
+///   wire `G_CLKI_<name>`, and the part has fifty-six buffers. Measured on
+///   an `LFE5U-12F` in caBGA-256, a pad on the top edge (ball A2, site
+///   `X4Y0/PIOA`) reaches **49** of them and not the other **7** —
+///   `LDCC3`, `LDCC4`, `LDCC8`, `LDCC11` and `LDCC13` at `X3Y25`, and
+///   `RDCC11` and `RDCC13` at `X69Y25`. All fourteen `LDCC` sites are in
+///   one tile, so to a placer that judges a site by distance they are
+///   interchangeable, and five of them cannot be driven.
+/// - **It can drive nothing.** On the iCE40-like architecture this crate
+///   carries, a block RAM's clock pin is fed from its tile's local tracks
+///   and from nothing else, so a global buffer's output cannot reach it
+///   from *any* site. A round that put a memory's clock on a buffer made
+///   `ram_ice40` stop routing for that reason.
+///
+/// Both were found by the router, after a whole placement, as an
+/// unroutable sink. This asks the question before legalisation instead,
+/// and the answer constrains every move.
+///
+/// # What is asked, and what it costs
+///
+/// Only a pin the architecture puts on a global wire is asked about, and
+/// only against the other end of the signal it carries. **Which end the
+/// sweep starts from is decided by which end has one wire**:
+///
+/// - a counterpart a **package pin fixes** has exactly one, so the sweep
+///   runs from there towards the candidate sites — forwards for a pin the
+///   signal arrives on, backwards for one it leaves — and one sweep
+///   answers the question for every candidate at once, exactly. This is
+///   the ECP5 case above: a clock enters the die at a pad, and the pad is
+///   `set_io`'d;
+/// - a **movable** counterpart has one wire per site of its kind, 24 288
+///   for a flip-flop. Seeding with all of them costs thirty times as much
+///   and narrows nothing, because the sites of a kind are
+///   interchangeable: if one is reachable they all are. So that direction
+///   is swept from *this cell's* candidate pins outwards, and answers the
+///   question that has actually been wrong — whether a path to that kind
+///   of site exists **at all**. This is the iCE40 case above.
+///
+/// Either way it is one pass over the graph per globally-wired pin per
+/// counterpart group, counted in [`PlaceWork::reach_steps`], and a sweep
+/// stops as soon as it has its answer. It is paid once, before
+/// legalisation; a move pays nothing but a binary search in
+/// [`Placeable::allowed`], which
+/// `the_reachability_check_does_not_grow_with_the_move_count` asserts by
+/// running one design at two move efforts in one process.
+///
+/// # What it would and would not catch
+///
+/// Seeding with the union over where a movable counterpart *may* go makes
+/// the answer a relaxation: a site is kept when **some** placement of the
+/// other end could reach it, so the check never rejects a site that could
+/// have worked, and it does not catch a buffer that reaches some sites of
+/// a kind but not the ones the rest of the placement wants. It catches
+/// exactly the two cases above. A counterpart a package pin fixes — the
+/// pad, which is how a clock enters the die — is one seed and the answer
+/// is exact; and a kind no site of which is reachable is rejected
+/// whatever the relaxation.
+fn confine_to_reachable(
+    netlist: &Netlist,
+    graph: &RoutingGraph,
+    sites_by_kind: &BTreeMap<String, Vec<usize>>,
+    info: &mut [Placeable],
+    report: &mut PlacementReport,
+) -> Result<(), PlaceError> {
+    // Which kinds have a bel pin on a global wire at all. One pass over
+    // the sites, so a family whose bels have none — every one but the
+    // ECP5 and the iCE40-like fabric's `gb` — leaves at the first `if`.
+    let mut global_pins: BTreeMap<&str, Vec<&str>> = BTreeMap::new();
+    for site in &graph.sites {
+        if global_pins.contains_key(site.kind.as_str()) {
+            continue;
+        }
+        let roles: Vec<&str> = site
+            .pins
+            .iter()
+            .filter(|(_, node)| graph.wire(*node).global)
+            .map(|(role, _)| role.as_str())
+            .collect();
+        if !roles.is_empty() {
+            global_pins.insert(site.kind.as_str(), roles);
+        }
+    }
+    if global_pins.is_empty() {
+        return Ok(());
+    }
+
+    let mut sweep = Sweep::new(graph.nodes.len());
+    for index in 0..netlist.instances.len() {
+        let kind = netlist.instances[index].kind.clone();
+        let Some(roles) = global_pins.get(kind.as_str()) else {
+            continue;
+        };
+        let Some(candidates) = sites_by_kind.get(&kind) else {
+            continue;
+        };
+        let mut allowed: Vec<usize> = candidates.clone();
+        let mut narrowed = false;
+        for pin_index in netlist.instances[index].pins.clone() {
+            let role = netlist.pins[pin_index].role.clone();
+            let output = netlist.pins[pin_index].output;
+            if !roles.contains(&role.as_str()) {
+                continue;
+            }
+            let Some(signal) = netlist.pins[pin_index].signal else {
+                continue;
+            };
+            let others: Vec<usize> = if output {
+                netlist.signals[signal].sinks.clone()
+            } else {
+                netlist.signals[signal].driver.into_iter().collect()
+            };
+            // One sweep per *group* of counterparts that share a seed set:
+            // every flip-flop's `clk` asks the same question of the same
+            // wires, and a design has sixteen of them.
+            let mut asked: Vec<String> = Vec::new();
+            for other in others {
+                let op = &netlist.pins[other];
+                if op.instance == index {
+                    continue;
+                }
+                let key = match info[op.instance].fixed {
+                    Some(site) => format!("={site}:{}", op.role),
+                    None => format!("~{}:{}", netlist.instances[op.instance].kind, op.role),
+                };
+                if asked.contains(&key) {
+                    continue;
+                }
+                asked.push(key);
+                let theirs = seed_wires(netlist, graph, sites_by_kind, info, op);
+                if theirs.is_empty() {
+                    continue;
+                }
+                let mut ours: Vec<NodeId> = allowed
+                    .iter()
+                    .filter_map(|site| graph.sites[*site].pin(&role))
+                    .collect();
+                ours.sort_unstable();
+                ours.dedup();
+                let fail = || PlaceError::NoReachableSite {
+                    pin: format!("{}.{role}", netlist.instances[index].name),
+                    kind: kind.clone(),
+                    available: candidates.len(),
+                    other: format!("{}.{}", netlist.instances[op.instance].name, op.role),
+                    inbound: !output,
+                };
+                // Which end to sweep from is decided by which end has one
+                // wire. A counterpart a package pin fixes has exactly one,
+                // so the sweep starts there and the answer is exact for
+                // every candidate site at once. A movable counterpart has
+                // one per site of its kind — twenty-four thousand for a
+                // flip-flop — and seeding with all of them answers the
+                // same question at thirty times the cost and narrows
+                // nothing, because the sites of a kind are
+                // interchangeable: if one is reachable they all are. So
+                // that direction is swept from *our* candidate pins
+                // instead, and the question it answers is the one that has
+                // been wrong — whether a path to that kind exists at all.
+                if info[op.instance].fixed.is_some() {
+                    sweep.mark(graph, &theirs, !output, &ours, ours.len());
+                    let before = allowed.len();
+                    allowed.retain(|site| {
+                        graph.sites[*site]
+                            .pin(&role)
+                            .is_some_and(|node| sweep.reached(node))
+                    });
+                    narrowed |= allowed.len() != before;
+                    if allowed.is_empty() {
+                        return Err(fail());
+                    }
+                    // A cell a package pin fixes has one site rather than a
+                    // choice of them, so a constraint that asks for an
+                    // unreachable one is refused here too — with the
+                    // counterpart that ruled it out named, which is what a
+                    // later check could not have said.
+                    if info[index]
+                        .fixed
+                        .is_some_and(|site| allowed.binary_search(&site).is_err())
+                    {
+                        return Err(fail());
+                    }
+                } else if sweep.mark(graph, &ours, output, &theirs, 1) == 0 {
+                    return Err(fail());
+                }
+            }
+        }
+        // A cell a package pin fixes keeps the site the pin names; the
+        // loop above has already refused one that cannot be connected.
+        if !narrowed || info[index].fixed.is_some() {
+            continue;
+        }
+        report.reach.push((
+            netlist.instances[index].name.clone(),
+            allowed.len(),
+            candidates.len(),
+        ));
+        info[index].allowed = Some(allowed);
+    }
+    report.reach.sort();
+    Ok(())
+}
+
+/// Every wire the other end of a signal could be on: the one its package
+/// pin fixes it to, or that role's wire on every site of its kind inside
+/// its region.
+///
+/// Sorted and deduplicated, so the seeds do not depend on the order the
+/// netlist happened to give the pins.
+fn seed_wires(
+    netlist: &Netlist,
+    graph: &RoutingGraph,
+    sites_by_kind: &BTreeMap<String, Vec<usize>>,
+    info: &[Placeable],
+    pin: &NetPin,
+) -> Vec<NodeId> {
+    let mut out: Vec<NodeId> = Vec::new();
+    if let Some(site) = info[pin.instance].fixed {
+        out.extend(graph.sites[site].pin(&pin.role));
+    } else if let Some(sites) = sites_by_kind.get(&netlist.instances[pin.instance].kind) {
+        let region = info[pin.instance].region.as_ref().map(|(rect, _)| rect);
+        for site in sites {
+            let (x, y) = graph.sites[*site].tile;
+            if region.is_some_and(|rect| !rect.holds(x, y)) {
+                continue;
+            }
+            out.extend(graph.sites[*site].pin(&pin.role));
+        }
+    }
+    out.sort_unstable();
+    out.dedup();
+    out
+}
 
 /// A sparse symmetric matrix in the shape a conjugate gradient wants.
 #[derive(Clone, Debug, Default)]
@@ -2075,6 +2512,7 @@ fn legalise(
             sites_by_kind,
             kind,
             region,
+            info[index].allowed.as_deref(),
             target,
             shared,
             index,
@@ -2133,23 +2571,34 @@ fn no_room(
                 .iter()
                 .filter(|inst| inst.kind == kind)
                 .count();
+            // What ran out is what this cell could have taken, so a cell
+            // reachability confined counts its own sites and not the
+            // part's. See `confine_to_reachable`.
+            let available = info[index]
+                .allowed
+                .as_ref()
+                .map_or_else(|| sites.len(), Vec::len);
             PlaceError::NoSites {
                 kind,
                 needed,
-                available: sites.len(),
+                available,
             }
         }
     }
 }
 
-/// The free site of `kind` closest to `target`, inside `region`, that
-/// `instance` may legally take.
+/// The free site of `kind` closest to `target`, inside `region` and among
+/// `allowed`, that `instance` may legally take.
+///
+/// `allowed` is [`Placeable::allowed`]: the sites reachability left, or
+/// `None` for every site of the kind.
 #[allow(clippy::too_many_arguments, reason = "the legaliser's whole state")]
 fn nearest_free(
     graph: &RoutingGraph,
     sites_by_kind: &BTreeMap<String, Vec<usize>>,
     kind: &str,
     region: Option<&Rect>,
+    allowed: Option<&[usize]>,
     target: (u32, u32),
     shared: &SiteRules,
     instance: usize,
@@ -2159,6 +2608,9 @@ fn nearest_free(
     let mut best: Option<(u64, usize)> = None;
     for site in sites {
         if placement.instance_at(*site).is_some() {
+            continue;
+        }
+        if allowed.is_some_and(|ok| ok.binary_search(site).is_err()) {
             continue;
         }
         let (x, y) = graph.sites[*site].tile;
@@ -2252,6 +2704,7 @@ fn macro_sites(
             graph.sites[**s].tile == (x, y)
                 && placement.instance_at(**s).is_none()
                 && !taken.contains(*s)
+                && info[*member].may_take(**s)
                 && shared.allows(placement, &[(*member, **s)])
         })?;
         taken.push(*site);
@@ -3014,6 +3467,16 @@ fn propose(
     if target == here {
         return None;
     }
+    // Reachability, which for everything but a cell on the global network
+    // is one `is_none` and free: see `confine_to_reachable`. Without it
+    // the annealer would move a clock buffer between the sites of one
+    // tile for nothing — all fourteen of this ECP5's `LDCC` buffers are
+    // in `X3Y25` and five of them cannot be driven from a top-edge pad —
+    // because such a move changes the tile-granular wirelength by exactly
+    // zero and is accepted at any temperature.
+    if !info[instance].may_take(target) {
+        return None;
+    }
     // A move is only proposed if it is legal, which for a swap means legal
     // after both halves have happened: see `SiteRules`. The annealer
     // therefore never has to undo an illegal placement, and a design whose
@@ -3028,6 +3491,9 @@ fn propose(
             if let Some((rect, _)) = &info[other].region
                 && !rect.holds(hx, hy)
             {
+                return None;
+            }
+            if !info[other].may_take(here) {
                 return None;
             }
             vec![(instance, target), (other, here)]

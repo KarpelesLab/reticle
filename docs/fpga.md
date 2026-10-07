@@ -621,6 +621,21 @@ kept, so the pass can only improve on what legalisation produced.
 placer did before it, why a die-wide move set improved nothing at all at
 any effort, and what each piece was worth measured on two designs.
 
+**Reachability.** A site is legal only if the fabric can carry the cell's
+signals to and from it, and on a **global** wire that is not the same
+question as "is it free". `place::confine_to_reachable` therefore gives a
+cell whose bel pin is a global wire the set of sites it may take, before
+legalisation, by sweeping the routing graph from the other end of each
+such signal: on an `LFE5U-12F` a clock on ball A2 can drive **49** of the
+part's 56 clock buffers and not the other seven, and on the iCE40-like
+architecture a global buffer cannot reach a block RAM's clock pin from any
+site at all. Both used to be found by the router, as an unroutable sink,
+after the whole design had been placed; a cell left no site is now
+`PlaceError::NoReachableSite`, naming both pins. The check is asked only
+of globally-wired pins, costs one graph sweep per such pin and is paid
+once — a move pays a binary search — and `docs/fpga-placement.md` has the
+measurements, the cost and what it does not catch.
+
 Constraints (`fpga::Constraints`) are honoured as follows:
 
 - a **pin constraint** (`set_io`) is hard: the cell lands on the site the
@@ -637,7 +652,8 @@ Constraints (`fpga::Constraints`) are honoured as follows:
 
 A design that does not fit is reported, not approximated: `PlaceError`
 says which kind of site ran out and by how much, which two cells want one
-package pin, or which region cannot hold what was assigned to it.
+package pin, which region cannot hold what was assigned to it, or which
+pin of which cell no site of its kind can connect.
 
 ## Routing
 

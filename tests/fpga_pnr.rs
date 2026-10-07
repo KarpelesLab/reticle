@@ -501,3 +501,148 @@ fn the_icestorm_tools_read_the_bitstream_if_they_are_installed() {
         );
     }
 }
+
+/// A clock buffer the fabric cannot carry to its loads is a **placement**
+/// error, naming both ends, and not an unroutable sink found after the
+/// whole design has been placed.
+///
+/// This is the seeded reproduction of a defect that reached master once
+/// and was reverted rather than fixed. `ram_ice40`'s clock has two pins,
+/// which is under the global-buffer threshold, so the design in the
+/// goldens above has no buffer at all; a round that let a memory's clock
+/// bypass the threshold gave it one, and the flow then died in the router
+/// with *"no path exists from the driver of `clk$gb` to
+/// `mem$ram_w0_d0.RCLK[0]`"*. The threshold is only what hides it: on this
+/// architecture an `SB_RAM40_4K`'s clock pin is fed from its tile's local
+/// tracks and from nothing else, so an `SB_GB`'s output cannot reach it
+/// from **any** of the eight buffer sites, and no placement of either cell
+/// could have worked.
+///
+/// Lowering the threshold here is what makes that reproducible without
+/// waiting for the mapper to change its mind again. What this test would
+/// not catch is the other half of the same question — a buffer site that
+/// cannot be *driven* — because on this architecture a buffer's input is a
+/// local wire reachable from anywhere; the ECP5, whose buffer inputs are
+/// global wires, is where that half shows, and `docs/fpga-placement.md`
+/// has the measurement.
+#[test]
+fn a_clock_buffer_that_cannot_reach_its_loads_is_a_placement_error() {
+    let device = fpga::target(DEVICE).expect("the built-in iCE40 part");
+    let mut sources = SourceMap::new();
+    let rtl = read("ram_ice40.rtl");
+    let file = sources.add("ram_ice40.rtl", rtl.clone()).unwrap();
+    let mut design = Design::parse_text(&rtl, file).expect("the IR parses");
+    let top = design.top.expect("a top module");
+    let rcf = read("ram_ice40.rcf");
+    let rcf_file = sources.add("ram_ice40.rcf", rcf.clone()).unwrap();
+    let mut diags = Diagnostics::new();
+    let mut constraints = Constraints::parse(&rcf, rcf_file, &mut diags);
+    constraints.merge_attrs(&design, top, &mut diags);
+
+    // The one knob that changes: a memory's two clock pins now earn a
+    // global buffer, which is what the reverted round made happen for
+    // every family at once.
+    let options = FpgaOptions {
+        map: reticle::fpga::MapOptions {
+            global_buffer_threshold: 1,
+            ..reticle::fpga::MapOptions::default()
+        },
+        ..FpgaOptions::default()
+    };
+    let err = fpga::implement(
+        &mut design,
+        top,
+        device,
+        &constraints,
+        &options,
+        &PnrOptions::new(),
+        &mut diags,
+    )
+    .expect_err("the fabric cannot clock a block RAM from a global buffer");
+    let fpga::FlowError::Placement(err) = err else {
+        panic!("the router found it again, not the placer: {err}");
+    };
+    assert_eq!(
+        err,
+        reticle::fpga::place::PlaceError::NoReachableSite {
+            pin: "clk$gbuf.o".to_owned(),
+            kind: "gb".to_owned(),
+            available: 8,
+            other: "mem$ram_w0_d0.p0_clk".to_owned(),
+            inbound: false,
+        },
+        "the placer says which pin of which cell, and that the part has \
+         eight buffer sites and none of them serves it"
+    );
+    assert!(
+        err.to_string()
+            .contains("has a path from `clk$gbuf.o` to `mem$ram_w0_d0.p0_clk`"),
+        "{err}"
+    );
+}
+
+/// Reachability costs the three golden designs nothing, and the ones with
+/// a clock buffer keep every site they had.
+///
+/// The check only narrows a cell whose bel pin is a **global** wire. On
+/// this architecture that is an `SB_GB`'s output and nothing else, and its
+/// eight sites all reach the logic tiles, so no design here loses a site
+/// and the placements above are byte for byte what they were. The sweep is
+/// still paid, and this records that it is paid only by a design that has
+/// a buffer at all.
+#[test]
+fn reachability_narrows_nothing_on_the_golden_designs() {
+    for name in CASES {
+        let (_, _, done) = run_case(name);
+        let report = &done.pnr.placement_report;
+        assert!(
+            report.reach.is_empty(),
+            "{name}: reachability ruled a site out: {:?}",
+            report.reach
+        );
+        // A design with a buffer pays for the sweeps; one without pays
+        // nothing at all, because no pin of it is on a global wire.
+        let buffers = done
+            .pnr
+            .netlist
+            .instances
+            .iter()
+            .filter(|instance| instance.kind == "gb")
+            .count();
+        assert_eq!(
+            report.work.reach_steps > 0,
+            buffers > 0,
+            "{name}: swept {} wire(s) with {buffers} global buffer(s)",
+            report.work.reach_steps
+        );
+    }
+}
+
+/// The reachability check is paid once and not per move.
+///
+/// Two runs of one design in one process, at ten times the move effort:
+/// the annealer does several times the work and the sweep does **exactly**
+/// the same. No wall-clock number appears here — a careless check that
+/// asked the routing graph on every proposal would show up as a count that
+/// tracks the move count, which is the only thing worth asserting.
+#[test]
+fn the_reachability_check_does_not_grow_with_the_move_count() {
+    let effort = |n: usize| {
+        let mut pnr = PnrOptions::new();
+        pnr.place.move_effort = n;
+        pnr
+    };
+    let (_, _, small) = run_case_with("blinky_ice40", &effort(1));
+    let (_, _, large) = run_case_with("blinky_ice40", &effort(10));
+    assert!(
+        large.pnr.placement_report.moves.0 > small.pnr.placement_report.moves.0 * 2,
+        "the effort knob should have moved the move count: {} then {}",
+        small.pnr.placement_report.moves.0,
+        large.pnr.placement_report.moves.0
+    );
+    assert_eq!(
+        small.pnr.placement_report.work.reach_steps, large.pnr.placement_report.work.reach_steps,
+        "the sweep is paid before legalisation, so ten times the moves is \
+         the same number of wires"
+    );
+}
