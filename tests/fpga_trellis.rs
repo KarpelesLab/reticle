@@ -7322,4 +7322,26 @@ fn a_carry_chain_places_routes_and_every_bit_of_it_decodes() {
         "{:?}",
         routed.clocks.off_network
     );
+
+    // And the whole thing again, in this same process, because a chain is
+    // a new kind of group in the placer and the placer's determinism is
+    // what makes every golden in this tree mean anything. Two runs of one
+    // design must agree about every site and every bit — the annealer's
+    // moves for a chain draw from the same seeded generator as the rest,
+    // and its candidate start sites are a sorted `Vec`.
+    let (again, stream_again, _, _, _, routed_again) = compile_all(
+        &fabric,
+        &["testdata/fpga/ecp5/carry_chain_16.v"],
+        "testdata/fpga/ecp5/carry_chain_16.rcf",
+    );
+    assert_eq!(
+        routed_again.placement, routed.placement,
+        "the placer put this design somewhere else the second time"
+    );
+    assert_eq!(again.ones(), bits.ones());
+    assert_eq!(
+        stream_again.cram.count_ones(),
+        stream.cram.count_ones(),
+        "and the bitstream differs although the placement does not"
+    );
 }
