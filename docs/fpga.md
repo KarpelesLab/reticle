@@ -758,6 +758,17 @@ Constraints (`fpga::Constraints`) are honoured as follows:
 - an **`rloc` macro** is rigid — its members keep the exact tile offsets
   the constraint states, and the annealer moves the macro, not its
   members.
+- **dedicated wiring** is a macro nobody had to write: before
+  legalisation `place::build_clusters` walks back from every sink pin
+  through the routing graph, and where the walk closes within a few wires
+  on every site of the sink's kind and finds exactly one site of the
+  driver's kind each time, the driver's site is a function of the sink's.
+  Instances so related move as one rigid group, onto exact sites. On a
+  7-series part that is a `CARRY4` chain — each carry in fed only from the
+  carry out of the slice below, each propagate input the very wire of the
+  lookup table beside it — and on a family whose pins are all on the
+  interconnect no walk closes and nothing changes. `docs/fpga-xray.md`
+  has the carry chain it was written for.
 
 A design that does not fit is reported, not approximated: `PlaceError`
 says which kind of site ran out and by how much, which two cells want one

@@ -34,6 +34,12 @@
 //! - An **`rloc` macro** is rigid: its members keep the exact tile
 //!   offsets the constraint states, and the annealer moves the macro, not
 //!   its members.
+//! - **Dedicated wiring** makes a macro of its own. A sink pin that the
+//!   routing graph can reach from only one site of its driver's kind — a
+//!   7-series carry in, fed only from the carry out of the slice below —
+//!   ties the two cells' sites together, and the cells so tied move as
+//!   one rigid group onto exact sites. It is read off the graph, not
+//!   named: see `build_clusters`.
 //!
 //! # What a legal site is
 //!
@@ -76,9 +82,10 @@
 //! [`Constraints::keeps_hierarchy`]: super::Constraints::keeps_hierarchy
 
 use std::cell::Cell;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::error::Error;
 use std::fmt;
+use std::rc::Rc;
 
 use super::arch::{Arch, NodeId, RoutingGraph};
 use super::constraints::{Constraints, matches_glob};
@@ -925,7 +932,11 @@ pub struct PlacementReport {
     /// `keep_hierarchy` confined.
     pub confined: usize,
     /// Relative-placement macros, and how many instances are in them.
+    /// Groups held together by dedicated wiring are counted here too.
     pub macros: (usize, usize),
+    /// Of those, the groups held together by dedicated wiring rather than
+    /// by a constraint; see `build_clusters`.
+    pub dedicated: usize,
     /// Temperature steps the annealer ran.
     pub temperatures: u32,
     /// Moves tried and moves accepted.
@@ -1664,8 +1675,13 @@ fn matchable(wanted: &[(usize, u32)]) -> bool {
 struct Macro {
     /// The instance every offset is measured from.
     anchor: usize,
-    /// The members, with their offsets from the anchor.
+    /// The members, with their offsets from the anchor. For a group held
+    /// together by [`Exact`] wiring the offsets are not used and are zero.
     members: Vec<(usize, i32, i32)>,
+    /// When the group is held together by dedicated wiring rather than by
+    /// an `rloc` constraint: the exact site of every member follows from
+    /// the anchor's site, and this says how.
+    exact: Option<Exact>,
 }
 
 /// Everything the placer knows about one instance beyond the netlist.
@@ -1750,7 +1766,10 @@ pub fn place(
     // legalisation, because the answer is a constraint on every site this
     // pass or the annealer may choose.
     confine_to_reachable(netlist, graph, &sites_by_kind, &mut info, &mut report)?;
-    let macros = build_macros(netlist, constraints, &mut info);
+    let mut macros = build_macros(netlist, constraints, &mut info);
+    let clusters = build_clusters(netlist, graph, &sites_by_kind, &mut info, macros.len());
+    report.dedicated = clusters.len();
+    macros.extend(clusters);
     report.macros = (
         macros.len(),
         macros.iter().map(|m| m.members.len()).sum::<usize>(),
@@ -1949,9 +1968,379 @@ fn build_macros(
         for (member, _, _) in &members {
             info[*member].macro_index = Some(index);
         }
-        macros.push(Macro { anchor, members });
+        macros.push(Macro {
+            anchor,
+            members,
+            exact: None,
+        });
     }
     macros
+}
+
+// ---------------------------------------------------------------------------
+// Dedicated connections
+// ---------------------------------------------------------------------------
+
+/// How far [`dedicated_drivers`] walks back from a pin before it decides
+/// the pin is reachable from the general interconnect.
+///
+/// A dedicated connection is a handful of wires: a 7-series carry chain's
+/// is four (`CARRY_CI` ← `CIN` ← the slice below's `COUT_N` ← its `COUT`),
+/// five where the chain crosses a clock row, and a lookup table feeding the
+/// carry beside it is one. A lookup table input reaches two dozen wires in
+/// two steps, so a small bound costs a walk nothing and loses nothing.
+const DEDICATED_WALK: usize = 8;
+
+/// Where a sink's driver must be, for one kind of dedicated connection:
+/// `(sink kind, sink role, driver kind, driver role)`, as two maps that are
+/// each other's inverse.
+///
+/// A sink site that is absent from [`Relation::driver_of`] has no site of
+/// the driver's kind that can reach it at all — the bottom slice of a
+/// column has no carry coming in — and a member that needs one cannot sit
+/// there.
+#[derive(Debug, Default)]
+struct Relation {
+    /// Sink site to the one driver site that can reach it.
+    driver_of: HashMap<usize, usize>,
+    /// Driver site to the one sink site it reaches.
+    sink_of: HashMap<usize, usize>,
+}
+
+/// A group whose members' sites follow from one another through dedicated
+/// wiring: each link says that the driver of a signal must sit on the one
+/// site its sink can be reached from.
+#[derive(Debug)]
+struct Exact {
+    /// `(driver instance, sink instance, relation)`.
+    links: Vec<(usize, usize, Rc<Relation>)>,
+    /// The order to resolve the members in from the anchor: each entry is
+    /// an index into `links` and whether the member it resolves is the
+    /// link's driver (else its sink).
+    order: Vec<(usize, bool)>,
+    /// Every site of the anchor's kind, by tile.
+    anchor_sites: HashMap<(u32, u32), Vec<usize>>,
+}
+
+/// The sites of kind `driver_kind` whose `driver_role` pin can reach the
+/// `role` pin of `site` **only** through wires nothing else drives, or
+/// `None` when the walk back from the pin reaches more than
+/// [`DEDICATED_WALK`] wires and the pin is therefore fed from the general
+/// interconnect.
+///
+/// The walk follows every pip backwards, whatever its bits. That is the
+/// point: a carry chain's hop from `CIN` costs `PRECYINIT.CIN`, and it is
+/// still the only way in.
+fn dedicated_drivers(
+    graph: &RoutingGraph,
+    pins_at: &HashMap<NodeId, Vec<(usize, String)>>,
+    site: usize,
+    role: &str,
+    driver_kind: &str,
+    driver_role: &str,
+) -> Option<Vec<usize>> {
+    let mut seen: Vec<NodeId> = graph.sites[site].pin_nodes(role).collect();
+    if seen.is_empty() {
+        return Some(Vec::new());
+    }
+    let mut next = 0;
+    while next < seen.len() {
+        let node = seen[next];
+        next += 1;
+        for pip in graph.incoming(node) {
+            let from = graph.pip(*pip).from;
+            if !seen.contains(&from) {
+                seen.push(from);
+                if seen.len() > DEDICATED_WALK {
+                    return None;
+                }
+            }
+        }
+    }
+    let mut out: Vec<usize> = Vec::new();
+    for node in &seen {
+        for (other, other_role) in pins_at.get(node).into_iter().flatten() {
+            if *other != site
+                && other_role == driver_role
+                && graph.sites[*other].kind == driver_kind
+                && !out.contains(other)
+            {
+                out.push(*other);
+            }
+        }
+    }
+    Some(out)
+}
+
+/// Finds every group of instances that dedicated wiring holds together, and
+/// makes each one a rigid macro whose members' **exact sites** follow from
+/// its anchor's.
+///
+/// # Why the placer has to know
+///
+/// Most of a fabric is general interconnect: a signal leaves a site and
+/// can reach any other, at a price the router pays. Some of it is not. A
+/// 7-series `CARRY4`'s carry in comes only from the `COUT` of the slice
+/// directly below, and its propagate input *is* the output of the lookup
+/// table at the same position of the same slice. A placement that puts the
+/// two ends of such a connection anywhere else is not a worse placement but
+/// an impossible one, and the router finds that out only after the whole
+/// design has been placed.
+///
+/// So it is read off the routing graph, before legalisation, as the
+/// relations the router will need: for each signal, walk back from each
+/// sink pin through the graph ([`dedicated_drivers`]); if the walk closes
+/// within a few wires on every site of the sink's kind, and finds exactly
+/// one site of the driver's kind for each, then the driver's site is a
+/// function of the sink's. Nothing names a carry chain, a slice or a
+/// lookup table: on a family whose every pin is on the interconnect no
+/// walk closes, no relation is found, and placement is exactly what it was.
+///
+/// Instances related this way are grouped, and a group moves as a whole —
+/// in legalisation and in the annealer's macro move — to wherever its
+/// anchor's kind has a site from which every member's site exists and is
+/// free. An instance already fixed to a pin or already in an `rloc` macro
+/// is never put in such a group: two rigid shapes cannot both be obeyed,
+/// and the constraint the user wrote wins.
+fn build_clusters(
+    netlist: &Netlist,
+    graph: &RoutingGraph,
+    sites_by_kind: &BTreeMap<String, Vec<usize>>,
+    info: &mut [Placeable],
+    first_index: usize,
+) -> Vec<Macro> {
+    let free =
+        |i: usize, info: &[Placeable]| info[i].fixed.is_none() && info[i].macro_index.is_none();
+    // Which site pin sits on which node, built lazily: most designs on most
+    // families have no pair of instances worth asking about.
+    let mut pins_at: Option<HashMap<NodeId, Vec<(usize, String)>>> = None;
+    let mut relations: BTreeMap<(String, String, String, String), Option<Rc<Relation>>> =
+        BTreeMap::new();
+    let mut links: Vec<(usize, usize, Rc<Relation>)> = Vec::new();
+
+    for signal in &netlist.signals {
+        let Some(driver) = signal.driver else {
+            continue;
+        };
+        let dpin = &netlist.pins[driver];
+        let x = dpin.instance;
+        if !free(x, info) {
+            continue;
+        }
+        for sink in &signal.sinks {
+            let spin = &netlist.pins[*sink];
+            let y = spin.instance;
+            if y == x || !free(y, info) {
+                continue;
+            }
+            let key = (
+                netlist.instances[y].kind.clone(),
+                spin.role.clone(),
+                netlist.instances[x].kind.clone(),
+                dpin.role.clone(),
+            );
+            if !relations.contains_key(&key) {
+                let pins_at = pins_at.get_or_insert_with(|| {
+                    let mut map: HashMap<NodeId, Vec<(usize, String)>> = HashMap::new();
+                    for (index, site) in graph.sites.iter().enumerate() {
+                        for (role, node) in &site.pins {
+                            map.entry(*node).or_default().push((index, role.clone()));
+                        }
+                    }
+                    map
+                });
+                let relation = find_relation(graph, pins_at, sites_by_kind, &key);
+                relations.insert(key.clone(), relation);
+            }
+            if let Some(Some(relation)) = relations.get(&key) {
+                links.push((x, y, Rc::clone(relation)));
+            }
+        }
+    }
+    if links.is_empty() {
+        return Vec::new();
+    }
+
+    // Group the linked instances.
+    let mut parent: BTreeMap<usize, usize> = BTreeMap::new();
+    fn root(parent: &mut BTreeMap<usize, usize>, mut i: usize) -> usize {
+        while let Some(&p) = parent.get(&i) {
+            if p == i {
+                break;
+            }
+            i = p;
+        }
+        i
+    }
+    for (x, y, _) in &links {
+        parent.entry(*x).or_insert(*x);
+        parent.entry(*y).or_insert(*y);
+        let (a, b) = (root(&mut parent, *x), root(&mut parent, *y));
+        if a != b {
+            let (keep, drop) = (a.min(b), a.max(b));
+            parent.insert(drop, keep);
+        }
+    }
+    let mut groups: BTreeMap<usize, Vec<usize>> = BTreeMap::new();
+    let members: Vec<usize> = parent.keys().copied().collect();
+    for i in members {
+        let r = root(&mut parent, i);
+        groups.entry(r).or_default().push(i);
+    }
+
+    let mut out = Vec::new();
+    for (_, members) in groups {
+        // The anchor is the member whose kind has the fewest sites, so the
+        // macro move draws from the scarcest resource; ties go to the
+        // lowest index, so the choice is deterministic.
+        let anchor = *members
+            .iter()
+            .min_by_key(|i| {
+                let kind = &netlist.instances[**i].kind;
+                (sites_by_kind.get(kind).map_or(0, Vec::len), **i)
+            })
+            .expect("a group has members");
+        let mine: Vec<(usize, usize, Rc<Relation>)> = links
+            .iter()
+            .filter(|(x, _, _)| members.contains(x))
+            .map(|(x, y, r)| (*x, *y, Rc::clone(r)))
+            .collect();
+        // Resolve outwards from the anchor, one link at a time.
+        let mut known = vec![anchor];
+        let mut order = Vec::new();
+        while known.len() < members.len() {
+            let before = known.len();
+            for (index, (x, y, _)) in mine.iter().enumerate() {
+                if known.contains(x) && !known.contains(y) {
+                    order.push((index, false));
+                    known.push(*y);
+                } else if known.contains(y) && !known.contains(x) {
+                    order.push((index, true));
+                    known.push(*x);
+                }
+            }
+            if known.len() == before {
+                break;
+            }
+        }
+        let mut anchor_sites: HashMap<(u32, u32), Vec<usize>> = HashMap::new();
+        for site in sites_by_kind
+            .get(&netlist.instances[anchor].kind)
+            .into_iter()
+            .flatten()
+        {
+            anchor_sites
+                .entry(graph.sites[*site].tile)
+                .or_default()
+                .push(*site);
+        }
+        let index = first_index + out.len();
+        for member in &members {
+            info[*member].macro_index = Some(index);
+        }
+        out.push(Macro {
+            anchor,
+            members: members.iter().map(|m| (*m, 0, 0)).collect(),
+            exact: Some(Exact {
+                links: mine,
+                order,
+                anchor_sites,
+            }),
+        });
+    }
+    out
+}
+
+/// The relation for one `(sink kind, sink role, driver kind, driver role)`,
+/// or `None` when that connection is not dedicated: some site of the sink's
+/// kind is fed from the general interconnect, or can be reached from more
+/// than one site of the driver's kind, or two sinks share one driver site.
+fn find_relation(
+    graph: &RoutingGraph,
+    pins_at: &HashMap<NodeId, Vec<(usize, String)>>,
+    sites_by_kind: &BTreeMap<String, Vec<usize>>,
+    key: &(String, String, String, String),
+) -> Option<Rc<Relation>> {
+    let (sink_kind, sink_role, driver_kind, driver_role) = key;
+    let mut relation = Relation::default();
+    for site in sites_by_kind.get(sink_kind)? {
+        if graph.sites[*site].pin(sink_role).is_none() {
+            continue;
+        }
+        let drivers =
+            dedicated_drivers(graph, pins_at, *site, sink_role, driver_kind, driver_role)?;
+        match drivers.as_slice() {
+            [] => {}
+            [one] => {
+                if relation.sink_of.insert(*one, *site).is_some() {
+                    return None;
+                }
+                relation.driver_of.insert(*site, *one);
+            }
+            _ => return None,
+        }
+    }
+    (!relation.driver_of.is_empty()).then(|| Rc::new(relation))
+}
+
+/// The sites a dedicated-wiring group would take with its anchor on some
+/// site of the tile `(ax, ay)`, or `None` when no site of that tile works.
+#[allow(clippy::too_many_arguments, reason = "the legaliser's whole state")]
+fn exact_sites(
+    graph: &RoutingGraph,
+    info: &[Placeable],
+    m: &Macro,
+    exact: &Exact,
+    shared: &SiteRules,
+    placement: &Placement,
+    ax: u32,
+    ay: u32,
+) -> Option<Vec<(usize, usize)>> {
+    let candidates = exact.anchor_sites.get(&(ax, ay))?;
+    'anchor: for start in candidates {
+        let mut at: BTreeMap<usize, usize> = BTreeMap::new();
+        at.insert(m.anchor, *start);
+        for (link, driver_side) in &exact.order {
+            let (x, y, relation) = &exact.links[*link];
+            let site = if *driver_side {
+                relation.driver_of.get(at.get(y)?).copied()
+            } else {
+                relation.sink_of.get(at.get(x)?).copied()
+            };
+            let Some(site) = site else { continue 'anchor };
+            at.insert(if *driver_side { *x } else { *y }, site);
+        }
+        // Every link, including the ones the walk did not use, must hold.
+        for (x, y, relation) in &exact.links {
+            let (Some(sx), Some(sy)) = (at.get(x), at.get(y)) else {
+                continue 'anchor;
+            };
+            if relation.driver_of.get(sy) != Some(sx) {
+                continue 'anchor;
+            }
+        }
+        let mut out: Vec<(usize, usize)> = Vec::with_capacity(at.len());
+        let mut taken: Vec<usize> = Vec::with_capacity(at.len());
+        for (member, site) in &at {
+            let (x, y) = graph.sites[*site].tile;
+            if placement.instance_at(*site).is_some()
+                || taken.contains(site)
+                || !info[*member].may_take(*site)
+                || info[*member]
+                    .region
+                    .as_ref()
+                    .is_some_and(|(rect, _)| !rect.holds(x, y))
+            {
+                continue 'anchor;
+            }
+            taken.push(*site);
+            out.push((*member, *site));
+        }
+        if shared.allows(placement, &out) {
+            return Some(out);
+        }
+    }
+    None
 }
 
 // ---------------------------------------------------------------------------
@@ -2707,6 +3096,9 @@ fn macro_sites(
     ax: u32,
     ay: u32,
 ) -> Option<Vec<(usize, usize)>> {
+    if let Some(exact) = &m.exact {
+        return exact_sites(graph, info, m, exact, shared, placement, ax, ay);
+    }
     let mut taken: Vec<usize> = Vec::new();
     let mut out = Vec::new();
     for (member, dx, dy) in &m.members {
@@ -3981,6 +4373,178 @@ mod tests {
         assert_eq!(tiles[2].0, tiles[0].0 + 2);
         assert_eq!(tiles[0].1, tiles[1].1);
         assert_eq!(tiles[0].1, tiles[2].1);
+    }
+
+    /// A fabric with a carry chain in miniature: each tile has a lookup
+    /// table and a carry element whose propagate pin **is** the table's
+    /// output wire, and whose carry in is fed only from the carry out of
+    /// the tile one row down (`dy = +1`), the way `tileconn` joins a
+    /// 7-series `CIN` to the `COUT_N` below it. Two other lookup tables
+    /// per tile are free-standing.
+    fn chained(width: u32, height: u32) -> (Arch, RoutingGraph) {
+        let mut arch = Arch::new("t", "test", width, height);
+        let mut tile = TileType::new("logic", "logic_tile", 4, 4);
+        for name in ["i", "o", "j", "q", "cin", "cout"] {
+            tile.wires.push(WireDecl {
+                name: name.to_owned(),
+                dx: 0,
+                dy: 0,
+            });
+        }
+        let mut lut = BelDecl::new("lut", "lut");
+        lut.pins.push(("i0".to_owned(), WireRef::local("i")));
+        lut.pins.push(("o".to_owned(), WireRef::local("o")));
+        tile.bels.push(lut);
+        let mut other = BelDecl::new("lut2", "lut");
+        other.pins.push(("i0".to_owned(), WireRef::local("j")));
+        other.pins.push(("o".to_owned(), WireRef::local("q")));
+        tile.bels.push(other);
+        let mut carry = BelDecl::new("cy", "carry");
+        carry.pins.push(("p0".to_owned(), WireRef::local("o")));
+        carry.pins.push(("ci".to_owned(), WireRef::local("cin")));
+        carry.pins.push(("co3".to_owned(), WireRef::local("cout")));
+        tile.bels.push(carry);
+        tile.pips.push(PipDecl {
+            from: WireRef::at("cout", 0, 1),
+            to: WireRef::local("cin"),
+            bits: Vec::new(),
+        });
+        arch.tile_types.push(tile);
+        for y in 0..height {
+            for x in 0..width {
+                arch.set_tile(x, y, 0);
+            }
+        }
+        let graph = arch.build_graph();
+        (arch, graph)
+    }
+
+    /// `n` carry elements chained `co3` to `ci`, each with its own lookup
+    /// table on `p0`.
+    fn carry_chain(n: usize) -> Netlist {
+        let mut netlist = Netlist {
+            instances: Vec::new(),
+            pins: Vec::new(),
+            signals: Vec::new(),
+            off_fabric: Vec::new(),
+        };
+        let pin = |netlist: &mut Netlist, instance, role: &str, output, signal: usize| {
+            let index = netlist.pins.len();
+            netlist.pins.push(NetPin {
+                instance,
+                port: role.to_owned(),
+                bit: 0,
+                role: role.to_owned(),
+                output,
+                signal: Some(signal),
+                constant: None,
+            });
+            if output {
+                netlist.signals[signal].driver = Some(index);
+            } else {
+                netlist.signals[signal].sinks.push(index);
+            }
+            netlist.instances[instance].pins.push(index);
+        };
+        for k in 0..n {
+            for (name, kind) in [(format!("lut{k}"), "lut"), (format!("cy{k}"), "carry")] {
+                netlist.instances.push(Instance {
+                    cell: CellId::from_index(netlist.instances.len()),
+                    name,
+                    primitive: kind.to_owned(),
+                    kind: kind.to_owned(),
+                    pins: Vec::new(),
+                    pin: None,
+                });
+            }
+            netlist.signals.push(Signal {
+                name: format!("s{k}"),
+                driver: None,
+                sinks: Vec::new(),
+            });
+            let s = netlist.signals.len() - 1;
+            pin(&mut netlist, 2 * k, "o", true, s);
+            pin(&mut netlist, 2 * k + 1, "p0", false, s);
+            if k > 0 {
+                netlist.signals.push(Signal {
+                    name: format!("c{k}"),
+                    driver: None,
+                    sinks: Vec::new(),
+                });
+                let c = netlist.signals.len() - 1;
+                pin(&mut netlist, 2 * (k - 1) + 1, "co3", true, c);
+                pin(&mut netlist, 2 * k + 1, "ci", false, c);
+            }
+        }
+        netlist
+    }
+
+    /// **Dedicated wiring is read off the graph and obeyed.** Nothing here
+    /// names a carry chain: the placer finds that `p0` can be reached only
+    /// from the lookup table of the same tile and `ci` only from the `co3`
+    /// one row down, and keeps the whole chain rigid through legalisation
+    /// and annealing.
+    ///
+    /// Would catch: the walk stopping too early or too late, the relation
+    /// inverted (the chain stacked downwards), and the annealer moving one
+    /// member of the group on its own. Would not catch: a real fabric whose
+    /// dedicated path is longer than `DEDICATED_WALK` wires — the 7-series
+    /// one is four, which `tests/fpga_xray_carry.rs` exercises.
+    #[test]
+    fn dedicated_wiring_holds_a_chain_together() {
+        let (arch, graph) = chained(4, 6);
+        let netlist = carry_chain(4);
+        let (placement, report) = place(
+            &netlist,
+            &arch,
+            &graph,
+            &Constraints::new(),
+            &PlaceOptions::default(),
+        )
+        .unwrap();
+        assert_eq!(report.dedicated, 1, "one group");
+        assert_eq!(report.macros, (1, 8));
+        let site = |i: usize| &graph.sites[placement.site_of(i).unwrap()];
+        for k in 0..4 {
+            assert_eq!(
+                site(2 * k).tile,
+                site(2 * k + 1).tile,
+                "lut{k} beside cy{k}"
+            );
+            assert_eq!(
+                site(2 * k).bel,
+                "lut",
+                "lut{k} on the table whose output is p0"
+            );
+            if k > 0 {
+                let (below, here) = (site(2 * k - 1).tile, site(2 * k + 1).tile);
+                assert_eq!(here.0, below.0, "the chain leaves its column");
+                assert_eq!(here.1 + 1, below.1, "cy{k} is not one row up");
+            }
+        }
+        // And a chain too tall for the fabric is refused, not bent.
+        let netlist = carry_chain(7);
+        assert!(
+            place(
+                &netlist,
+                &arch,
+                &graph,
+                &Constraints::new(),
+                &PlaceOptions::default()
+            )
+            .is_err()
+        );
+        // A design with no dedicated wiring makes no group at all.
+        let (arch, graph) = grid(4, 4);
+        let (_, report) = place(
+            &chain(6),
+            &arch,
+            &graph,
+            &Constraints::new(),
+            &PlaceOptions::default(),
+        )
+        .unwrap();
+        assert_eq!(report.dedicated, 0);
     }
 
     #[test]
