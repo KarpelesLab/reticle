@@ -199,6 +199,49 @@
 // I just set?" is the question this file exists to answer and the framing
 // is three quarters of the setting.
 //
+// ===================================================================
+// WHAT THE PART SAID, WHICH IS THE ONE FIELD A LOOPBACK CAN SHOW
+// ===================================================================
+//
+// This was loaded, and so was the version of this file from before the
+// framing was wired up, in the same session. The observable is the device
+// file and nothing else: a character of *n* data bits carries *n* bits, so
+// a byte with anything set above bit *n*-1 **cannot come back whole** —
+// the transmitter drops those bits and the receiver has nothing to put in
+// them. The host side is `termios` directly rather than `stty`, with
+// `iflag` zero, so the kernel's own ISTRIP is not what narrows anything.
+//
+// Before, five line codings and one waveform:
+//
+//     cs8 n 1   sent 41 c1 ff 80   back 41 c1 ff 80
+//     cs7 n 1   sent 41 c1 ff 80   back 41 c1 ff 80
+//     cs6 n 1   sent 41 c1 ff 80   back 41 c1 ff 80
+//     cs5 n 1   sent 41 c1 ff 80   back 41 c1 ff 80
+//     cs8 e 2   sent 41 c1 ff 80   back 41 c1 ff 80
+//
+// After, each byte exactly `sent & ((1 << n) - 1)`:
+//
+//     cs8 n 1   sent 41 c1 ff 80   back 41 c1 ff 80
+//     cs7 n 1   sent 41 c1 ff 80   back 41 41 7f 00
+//     cs6 n 1   sent 41 c1 ff 80   back 01 01 3f 00
+//     cs5 n 1   sent 41 c1 ff 80   back 01 01 1f 00
+//
+// And with the rate moved at the same time, since the two decodes are
+// separate blocks: `9600 cs7 e 1` returns `41 41 7f 00`, `19200 cs5 o 2`
+// returns `01 01 1f 00`, `230400 cs7 e 2` returns `41 41 7f 00`, and
+// `1200 cs6 n 1` returns `01 01 3f 00`.
+//
+// **What that does and does not establish.** It establishes that
+// `bDataBits` reaches the wire, and — because a parity bit one end inserts
+// and the other does not expect moves the stop bit by a whole bit period —
+// that both halves agree about whether there is a parity bit and where it
+// sits, at every width, with one stop bit and with two. It does **not**
+// establish the parity bit's *value* or the number of stop bits: those are
+// symmetric in a loop and no host-side observation can reach them.
+// `tests/ip_library.rs` is where they are checked, by a decoder written in
+// Rust rather than by `uart_rx`, and `ip/bus/uart/README.md` §7 has the
+// mutation that proves a receiver cannot do it.
+//
 // Pins: testdata/fpga/cynthion/usb_cdc_uart.rcf.
 // Sources: ip/usb/usb_cdc_acm/rtl/*.v,
 //          ip/usb/usb_device_ulpi/rtl/usb_ulpi_link.v,

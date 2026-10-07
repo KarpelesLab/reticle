@@ -884,13 +884,24 @@ arcs are exactly the ones the router chose.
 
 The **serial port** was built and loaded too, because a bulk loopback and a
 class device are not the same traffic: `testdata/fpga/cynthion/usb_cdc_uart.v`
-comes out as 1383 lookup tables, 604 flip-flops and **18** distributed RAMs —
+came out as 1383 lookup tables, 604 flip-flops and **18** distributed RAMs —
 the bulk pair's sixteen and the notification endpoint's two — with all 59 995 of
 its bits decoding and nothing unexplained. On the part the kernel's own
 `cdc_acm` binds it on `/dev/ttyACM1`, the ten bytes of SERIAL_STATE arrive off
 endpoint `82h` with both carriers set, 48 bytes go out and come back byte for
 byte through the UART, and GET_LINE_CODING answers 115200 8N1. That is
 `tests/usb_cdc_acm.rs`, and it is `#[ignore]`d like the other two.
+
+Those three numbers are of **that** design and no longer of this one: the
+design has grown twice since, and the second time is
+[`ip/bus/uart/README.md`](../ip/bus/uart/README.md) §9. It is 1786 lookup
+tables and 837 flip-flops with the 8N1 UART it had, and **1877 and 845**
+with the configurable one and the line-coding decode — 91 lookup tables and
+8 flip-flops for a host's framing reaching the wire. Both were built,
+loaded and measured through the device file in the same session, which is
+what makes the difference a measurement rather than a subtraction: five
+different line codings produced one waveform before and five different
+waveforms after.
 
 **The address permutation is right in silicon, and this is the first thing that
 could say so.** `docs/fpga-trellis.md` records the gap: a distributed RAM's

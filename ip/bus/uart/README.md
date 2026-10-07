@@ -27,7 +27,7 @@ on the wire**. Closing that is what this round is.
 - §7 is **what each test would and would not catch**, including three
   mutations that were run to find out.
 - §8 is what this block still does not do.
-- §9 is what has and has not been measured on hardware.
+- §9 is **what the board said**, which is yes, and what it still cannot say.
 
 ---
 
@@ -579,32 +579,118 @@ stop-bit count.
 
 ---
 
-## 9. What has and has not been measured on hardware
+## 9. What the board said
 
-**Nothing in this round has been on a part.** The board was holding the USB
-proxy with a GreatFET behind it and another round was using it, so the
-hardware step was left undone rather than fought over. What that leaves
-unmeasured is specific:
+**It was free, and it says yes.** The Cynthion was holding
+`testdata/fpga/cynthion/usb_proxy_target.v` with a GreatFET enumerated
+behind it and had not seen a USB event in four and a half hours, with no
+programmer running; the proxy was rebuilt first, loaded back afterwards,
+and the GreatFET came back on the same port with the same serial number.
 
-- that a host's `stty -F /dev/ttyACM1 9600 parenb cs7` produces a 7E1 frame
-  at 9600 baud on ball C11 — which is the demonstration this round is for;
-- that `testdata/fpga/cynthion/usb_cdc_uart.v` is wired the way §7 says it
-  cannot test;
-- that the extra 24 lookup tables at 8N1 place and route in the designs
-  that use them. The ECP5 flow was run on `usb_cdc_uart.v` and
-  `docs/ip-library.md`'s table runs it on `uart` and `uart_frame`, so this
-  is measured for those; the five example designs are not re-measured here.
+### What was measured, and why this is a measurement and not a loopback
 
-What *is* measured without a board: every area figure in §4, every
-behavioural claim in §5 and §7, and the three mutations.
+`testdata/fpga/cynthion/usb_cdc_uart.v` loops its own transmit line into
+its own receive line inside the die, so the two halves share `div` and
+share every `cfg_*` wire. That makes **almost** every field of the line
+coding invisible from the host's end: a parity bit both ends agree about,
+or a second stop bit the receiver does not look at, returns the byte that
+was sent either way.
 
-The procedure for when the board is free is the one
-`testdata/fpga/cynthion/usb_cdc_uart.v`'s header describes: load it, watch
-LED 0 for whether the whole line coding was honoured exactly, and put an
-instrument on LED 5, which carries the real waveform out of ball C11. The
-thing to read off it is **the number of bit periods between two start
-edges**, because that is what the framing changes and what no loopback can
-see.
+One field is not invisible. A character of *n* data bits carries only *n*
+bits, so a byte with anything set above bit *n*-1 **cannot come back
+whole** — the UART drops those bits on the way out and has nothing to put
+in them on the way back. So the observable is:
+
+    byte back  ==  byte sent  &  ((1 << bDataBits) - 1)
+
+and nothing else in the path can produce it. The host side is `termios`
+directly rather than `stty`, with `iflag` zero, so the kernel's own
+`ISTRIP` is not what narrows anything.
+
+### The control, which is the same board with the previous bitstream
+
+The design as it stood before this round, built from `HEAD~1` and loaded
+first:
+
+    cs8 n 1 stop     sent 41 c1 ff 80   back 41 c1 ff 80
+    cs7 n 1 stop     sent 41 c1 ff 80   back 41 c1 ff 80
+    cs6 n 1 stop     sent 41 c1 ff 80   back 41 c1 ff 80
+    cs5 n 1 stop     sent 41 c1 ff 80   back 41 c1 ff 80
+    cs8 e 2 stop     sent 41 c1 ff 80   back 41 c1 ff 80
+
+Five different line codings, one waveform. That is the defect, on the
+part, in five lines.
+
+### The same board with this round's bitstream
+
+    cs8 n 1 stop     sent 41 c1 ff 80   back 41 c1 ff 80
+    cs7 n 1 stop     sent 41 c1 ff 80   back 41 41 7f 00
+    cs6 n 1 stop     sent 41 c1 ff 80   back 01 01 3f 00
+    cs5 n 1 stop     sent 41 c1 ff 80   back 01 01 1f 00
+
+Every byte is exactly `sent & ((1 << n) - 1)`: `0xC1` loses its top bit at
+seven, its top two at six, its top three at five; `0xFF` becomes `0x7F`,
+`0x3F`, `0x1F`; `0x80` becomes nothing at all. **The host's `bDataBits`
+reached the wire.**
+
+### Parity and the stop bits, which this can and cannot see
+
+    cs8 e 1 stop     sent 41 c1 ff 80   back 41 c1 ff 80
+    cs8 o 1 stop     sent 41 c1 ff 80   back 41 c1 ff 80
+    cs8 n 2 stop     sent 41 c1 ff 80   back 41 c1 ff 80
+    cs8 e 2 stop     sent 41 c1 ff 80   back 41 c1 ff 80
+    cs7 e 1 stop     sent 41 c1 ff 80   back 41 41 7f 00
+    cs7 o 2 stop     sent 41 c1 ff 80   back 41 41 7f 00
+    cs5 e 2 stop     sent 41 c1 ff 80   back 01 01 1f 00
+
+What that **does** establish is not nothing. A parity bit the transmitter
+inserts and the receiver does not expect shifts the stop bit by one bit
+period, so the frame would mis-decode and the byte would come back wrong
+or not at all. It came back right at five data widths with parity on, odd
+and even, with one stop bit and two — so **both halves agree about whether
+there is a parity bit and where it sits**, at every width, on the part.
+
+What it does **not** establish is the parity bit's *value* or the number
+of stop bits. Those are symmetric here and no host-side observation can
+reach them; §7's hand decoder is the only thing in this repository that
+can, and the mutation table there says so.
+
+### And both loops at once
+
+The rate and the framing are two separate decodes —`uart_baud_div` and
+`uart_line_coding` — so they were set together:
+
+    9600 cs7 e 1 stop   sent 41 c1 ff 80   back 41 41 7f 00
+    9600 cs8 n 1 stop   sent 41 c1 ff 80   back 41 c1 ff 80
+    19200 cs5 o 2 stop  sent 41 c1 ff 80   back 01 01 1f 00
+    230400 cs7 e 2 stop sent 41 c1 ff 80   back 41 41 7f 00
+    1200 cs6 n 1 stop   sent 41 c1 ff 80   back 01 01 3f 00
+
+`stty -F /dev/ttyACM1 9600 parenb cs7` — the command this round exists for
+— now changes the signalling.
+
+### What is still not measured
+
+- **The parity bit's value and the stop-bit count, on a part.** Simulation
+  has them; the board cannot, for the reason above. A second device at the
+  other end of a real wire, or an instrument on ball C11, is what would
+  close that, and this board has neither — `testdata/fpga/cynthion/usb_cdc_uart.v`'s
+  header says why the return leg is a net and not a pin.
+- **A break and an overrun on a part.** Neither can happen in this design:
+  nothing holds the line low and `rx_ready` is high in every cycle a
+  character can arrive. Making them happen needs a design that can drive
+  the line low, which this one has no port for.
+- **The five example designs re-placed.** The flow was run on
+  `usb_cdc_uart.v` — 1786 lookup tables and 837 flip-flops before, **1877
+  and 845** after, so the whole round costs that design 91 lookup tables
+  and 8 flip-flops — and `docs/ip-library.md`'s table runs it on `uart` and
+  `uart_frame`. `examples/soc`, `examples/mos6502_computer`,
+  `examples/mos6502_monitor` and `examples/apple2` were not rebuilt for a
+  device here; their own test suites elaborate and simulate them
+  unedited.
+- **A second vendor's UART.** Nothing here has talked to one. Everything
+  in §3 about what a *far end* will accept is an argument from the
+  framing, not a measurement against another implementation.
 
 ---
 
