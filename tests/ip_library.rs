@@ -20,7 +20,7 @@
 //! | `sha256_takes_the_same_cycles_...`, `chacha20_takes_the_same_cycles_...` | the cycle count of both crypto blocks is **measured** to be independent of the message and of the key |
 //! | `inflate_decompresses_the_compcol_corpus` | 123 DEFLATE and zlib streams a second, independent compression library produced are decompressed byte for byte, under four different consumers |
 //! | `inflate_reports_every_malformed_stream`, `inflate_refuses_or_decodes_every_single_byte_corruption`, `inflate_reports_every_truncation` | every malformed input is **reported** — 21 hand-built streams, 482 corruptions and 235 truncations, and none of the 1196 runs reached its loop bound |
-//! | `a_streams_ready_is_a_function_of_registers` | every block with a ready/valid input stream has an `in_ready` the timing graph shows depends on **no input port**, which is the rule `ip/crypto/chacha20`'s header states and nothing used to check |
+//! | `a_streams_ready_is_a_function_of_registers` | every block with a ready/valid handshake has a `ready` and a `valid` the timing graph shows depend on **no input port** — including `ip/bus/uart`, whose `rx_valid` and four error flags must not reach back through `rx_ready` — which is the rule `ip/crypto/chacha20`'s header states and nothing used to check |
 //! | `axil_gpio_matches_the_axi4lite_definition` | `bus::match_ports` recognises the GPIO's bus port |
 //! | `cdc_*`, `fifo_async_*` | `timing::analyze_cdc` calls every crossing a synchroniser, never an unsynchronised one |
 //! | the rest | behaviour, driven through `sim::Simulator` |
@@ -22836,4 +22836,76 @@ fn a_streams_ready_is_a_function_of_registers() {
             "inflate: `{port}` depends combinationally on {inputs:?}"
         );
     }
+    // `ip/bus/uart` spells the same two handshakes `tx_ready` and
+    // `rx_valid`, so it needs its own list rather than a fifth row above.
+    // It is here because a UART is exactly the block somebody puts two of
+    // back to back — one design in this repository already wires a
+    // transmitter's line into a receiver — and because the receiver's
+    // handshake is new: `rx_valid` stays high until `rx_ready` is high in
+    // the same cycle, and the easy way to write that is
+    // `assign rx_valid = char_done | (held & ~rx_ready)`, which is the
+    // mirror fault this rule forbids. `uart_frame_rx` holds the character
+    // in a register instead, so `rx_ready` reaches `rx_valid` only
+    // through a clock edge.
+    //
+    // The four error signals are in the list for the reason `inflate`'s
+    // `done` and `busy` are: they are flags a consumer samples, and one
+    // that depended on `rx_ready` would put the consumer's own logic on
+    // this block's path. `rx_overrun` is the one that had to be designed
+    // for it, and **this was checked by breaking it**: writing it the
+    // obvious way, `assign rx_overrun = rx_valid & ~rx_ready`, fails here
+    // with ``uart.uart_frame: `rx_overrun` depends combinationally on
+    // {"rx_ready"}``, which is what makes this a measurement rather than
+    // an empty pass.
+    let uart_cases: &[(&str, &[&str])] = &[
+        // The 8N1 facades, which is what the five existing designs
+        // instantiate.
+        ("uart", &["tx_ready", "rx_valid", "rx_error"]),
+        ("uart_tx", &["tx_ready"]),
+        ("uart_rx", &["rx_valid", "rx_error"]),
+        // And the configurable pair, with the handshake and the four
+        // separate errors.
+        (
+            "uart_frame",
+            &[
+                "tx_ready",
+                "rx_valid",
+                "rx_frame_error",
+                "rx_parity_error",
+                "rx_break",
+                "rx_overrun",
+            ],
+        ),
+    ];
+    for (top, ports) in uart_cases {
+        for port in *ports {
+            let inputs = combinational_inputs_of("uart", top, &[("CLK_DIV", "104")], port);
+            assert!(
+                inputs.is_empty(),
+                "uart.{top}: `{port}` depends combinationally on {inputs:?}"
+            );
+        }
+    }
+    // `uart_baud_div` and `uart_line_coding` are not streams and have no
+    // handshake, and the difference between them is worth one assertion
+    // each rather than none. `uart_baud_div`'s `div` and `ok` are
+    // registers, so a UART never sees a half-computed divisor — that is a
+    // property its header claims. `uart_line_coding` is **wholly
+    // combinational** and says so: it is a decode of a register
+    // `ip/usb/usb_cdc_acm` already has, its `cfg_*` outputs are a function
+    // of its inputs by construction, and this is the one place in the
+    // library where that set being non-empty is the correct answer.
+    for port in ["div", "ok", "busy"] {
+        let inputs = combinational_inputs_of("uart", "uart_baud_div", &[], port);
+        assert!(
+            inputs.is_empty(),
+            "uart.uart_baud_div: `{port}` depends combinationally on {inputs:?}"
+        );
+    }
+    let inputs = combinational_inputs_of("uart", "uart_line_coding", &[], "cfg_data_bits");
+    assert!(
+        !inputs.is_empty(),
+        "uart.uart_line_coding is a combinational decode; `cfg_data_bits` depending on no \
+         input port would mean it had stopped decoding anything"
+    );
 }

@@ -24,7 +24,7 @@ on the wire**. Closing that is what this round is.
 - §5 is the four receive errors — how each is raised, and how the receiver
   recovers from each.
 - §6 is the baud divisor, which did not change.
-- §7 is **what each test would and would not catch**, including three
+- §7 is **what each test would and would not catch**, including four
   mutations that were run to find out.
 - §8 is what this block still does not do.
 - §9 is **what the board said**, which is yes, and what it still cannot say.
@@ -572,7 +572,40 @@ in Verilog.
   statement that 8N1 means what it meant.
 - **`packages_resolve_and_elaborate`** and the five example test suites
   elaborate designs nobody touched, which is the structural half of the
-  same claim.
+  same claim. Three of those suites also **assert the package's resolved
+  source list**, which is why §2's file layout is what it is.
+
+### The handshake contract
+
+- **`a_streams_ready_is_a_function_of_registers`** — not this round's
+  test: `ip/crypto/chacha20` stated the rule in its header and
+  `ip/compress/inflate` turned it into a test, and this round added the
+  UART to its list. **`in_ready` must not depend combinationally on
+  anything a producer drives**, or two such blocks back to back build a
+  path from one's `in_valid` to the other's `in_ready` — and a UART is
+  exactly the block somebody puts two of back to back, which one design
+  in this repository already does. It walks the timing graph backwards
+  from `tx_ready`, `rx_valid`, `rx_error` and all four error flags, on the
+  8N1 facades and on the configurable pair, and asserts no input port is
+  reachable.
+
+  **`rx_overrun` had to be designed for this.** The obvious spelling of
+  "the character on `rx_data` is being dropped" is
+  `assign rx_overrun = rx_valid & ~rx_ready`, which is combinational on an
+  input; it is a registered pulse instead. Writing it the obvious way
+  fails the test with ``uart.uart_frame: `rx_overrun` depends
+  combinationally on {"rx_ready"}``, which is how the assertion was
+  checked rather than assumed. The same reasoning is why `rx_valid` is
+  held in a register rather than `char_done | (held & ~rx_ready)`.
+
+  `uart_line_coding` is in the same test with the assertion **inverted**:
+  it is wholly combinational, by design and by §3's argument, so a walk
+  from `cfg_data_bits` that reached no input port would mean it had
+  stopped decoding anything.
+
+  *Would not catch:* delay. A registered `tx_ready` with forty levels
+  behind it is a slow block, not a broken contract, and §4's `lut_depth`
+  is where that shows up.
 
 ### One test-harness defect worth recording
 

@@ -1649,6 +1649,20 @@ is the part that matters:
   that disagreed would fail. The substitutions are in it: a host asking
   for one and a half stop bits gets a frame of two, and one asking for
   sixteen data bits gets eight, each with `ok` low.
+- **`uart`'s two handshakes, in
+  `a_streams_ready_is_a_function_of_registers`** — the rule
+  `ip/crypto/chacha20` established and `ip/compress/inflate` turned into a
+  test, applied to a UART because a UART is exactly the block somebody
+  puts two of back to back. `tx_ready`, `rx_valid`, `rx_error` and the
+  four separate error flags are each walked backwards through the timing
+  graph, and no input port is reachable from any of them. The one that had
+  to be *designed* for it is `rx_overrun`: the obvious spelling is
+  `assign rx_overrun = rx_valid & ~rx_ready`, and writing it that way
+  fails the test with ``uart.uart_frame: `rx_overrun` depends
+  combinationally on {"rx_ready"}``, which is how the assertion was
+  checked rather than assumed. `uart_line_coding` is in the same test with
+  the assertion **inverted**: it is a wholly combinational decode, so an
+  empty set there would mean it had stopped decoding anything.
 - **`uart_baud_div` and `uart` together** — the last link in the claim
   that a host setting a rate changes a waveform. The divider is run until
   it has an answer, the number is handed to `uart`'s `div` port, and the
