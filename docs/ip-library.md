@@ -4,13 +4,13 @@ The first-party half of phase 8. [`docs/ip.md`](ip.md) describes the
 machinery — the manifest formats, the resolver, the bus model, the black
 boxes — and [`docs/writing-a-cpu.md`](writing-a-cpu.md) describes how to
 package a processor, using this library's two as the worked examples.
-This document describes the **blocks**: twenty-nine pieces of HDL that
+This document describes the **blocks**: thirty-one pieces of HDL that
 drop into a design the way a crate drops into a Rust program, each with a
 manifest, a Rust co-simulation test, and a resource footprint that was
 measured rather than guessed.
 
 They live at the top of the repository, in `ip/`, one directory per
-package, grouped into seven folders by what a block is *for*. The
+package, grouped into eight folders by what a block is *for*. The
 grouping is a filing system and nothing else: a project finds a block by
 name (`library ../../ip`, then `depends uart ^1.0.0`), the name is the
 one the block's own `reticle.ip` declares, and no code anywhere reads a
@@ -28,6 +28,10 @@ ip/
   cpu/
     mos6502/  reticle.ip  rtl/mos6502.v
     rv32i/    reticle.ip  rtl/rv32i.v
+  crypto/
+    chacha20/  reticle.ip  README.md  rtl/chacha20_qr.v
+               rtl/chacha20_core.v  rtl/chacha20.v
+    sha256/    reticle.ip  README.md  rtl/sha256_core.v  rtl/sha256.v
   memory/
     fifo_async/     reticle.ip  rtl/fifo_async.v
     fifo_sync/      reticle.ip  rtl/fifo_sync.v
@@ -116,6 +120,8 @@ It is distributed as part of the repository instead.
 | `usb_cdc_acm` | `usb_cdc_acm`, `usb_cdc_req`, `usb_cdc_acm_fs`, `usb_cdc_acm_ulpi` | a USB serial port the operating system's own driver binds to: two interfaces with the union functional descriptor, the line-coding and control-line requests, a notification endpoint that sends SERIAL_STATE and a 64-byte bulk pair, behind either link layer | `usb_device_fs`, `usb_device_ulpi` |
 | `usb_hub` | `usb_hub`, `usb_hub_req`, `usb_hub_fs`, `usb_hub_ulpi` | a USB 2.0 full-speed **hub**, which is the other class every operating system already has a driver for: the hub and port class requests of USB 2.0 §11.24.2, the hub descriptor of §11.23.2.1, one interrupt IN status-change endpoint and **no bulk endpoint at all**, with a port whose state is read from a second USB controller on the other side of the die | `usb_device_fs`, `usb_device_ulpi` |
 | `ppu2c02` | `ppu2c02`, `ppu_palette` | NES-compatible picture unit: 256x240 raster, nametables and attributes, scrolling through `v`/`t`/`x`/`w`, 8x8 sprites with per-line evaluation, priority and sprite zero hit | — |
+| `sha256` | `sha256`, `sha256_core` | FIPS 180-4 SHA-256 over a byte stream, **padding included**: one round per cycle, 129 cycles a block, fixed latency for a given message length | — |
+| `chacha20` | `chacha20`, `chacha20_core`, `chacha20_qr` | RFC 8439 ChaCha20: the quarter round, the block function at one round per cycle (22 cycles a block), and the stream cipher over a 32-bit port, with a stop when the block counter runs out | — |
 
 `ppu2c02` is the block whose *subject* needs a statement rather than only
 its behaviour, so it has a page of its own,
@@ -217,6 +223,21 @@ two buses to disagree about a packet size. The price of it is a port reset
 that really reaches the device, which is what `ip/usb/usb_hub` gained a
 handshake for, and the consequence of it is that `ip/usb/usb_host_ulpi`'s
 own enumerator is not instantiated in a proxy at all.
+
+[`ip/crypto/sha256/README.md`](../ip/crypto/sha256/README.md) and
+[`ip/crypto/chacha20/README.md`](../ip/crypto/chacha20/README.md) are the
+seventh and eighth, and they are the first pages here that have to be
+careful about a **negative** claim rather than a positive one. A USB page
+says what a host was observed to do; a crypto page has to say what an
+*attacker* cannot do, and the shape of that is a section listing exactly
+what is **not** defended against. Both have a §4 for the constant-time
+property that is measured — fixed latency, no addressable storage — and a
+§5 for what that property is not, which is anything at all about power
+consumption or electromagnetic emission. The category's own section,
+[below](#the-crypto-category-and-what-a-constant-time-claim-is-worth), is
+where the doctrine and the provenance live, including which facts came out
+of a document and which were confirmed against a second running
+implementation.
 
 `usb_host_ulpi`'s fourth confidence level is **CHECKED** in a different
 sense from `usb_cdc_acm`'s: not "a host did this" but "**our host did this
@@ -1045,6 +1066,199 @@ from whatever drove it. **Tying `port_reset_done` high is the old behaviour
 exactly**, which is what a design with nothing downstream wants and what
 `testdata/fpga/cynthion/usb_hub_target.v` does.
 
+## The crypto category, and what a constant-time claim is worth
+
+`ip/crypto/` is the eighth category and the first in this library whose
+subject makes a claim about an *attacker* rather than about a protocol.
+Two blocks are in it, `sha256` and `chacha20`, and what makes them a
+category rather than two more blocks is a doctrine they are built to and
+must be read with.
+
+The doctrine comes from `purecrypto`, the user's from-scratch Rust
+cryptography library, whose foundation is stated in its `ct` module:
+"every operation here runs in time independent of the secret values it
+touches, so higher layers can be built without secret-dependent branches
+or memory accesses." In hardware that becomes three obligations, and the
+first two are met here.
+
+**Fixed latency.** The cycle count depends on the message *length* and on
+nothing in the message or the key. `sha256` is 129 cycles a block whatever
+the bytes are; `chacha20_core` is 22 cycles a block whatever the key is.
+Both are **measured** rather than argued:
+`sha256_takes_the_same_cycles_whatever_the_message_says` runs nine
+maximally different bodies at each of six lengths and asserts one cycle
+count per length, and `chacha20_takes_the_same_cycles_whatever_the_key_is`
+runs nine keys against three nonces and three counters — eighty-one
+blocks — and asserts 22 for every one of them. Both also assert that the
+outputs were all *different*, because nine equal cycle counts from nine
+identical runs would prove nothing.
+
+A cycle count that depends on a *length* is not a leak worth chasing: a
+caller streams the bytes in through a handshake, so the byte count is on
+the interface whatever the block does, and no block could hide it.
+
+**No secret-dependent addressing.** Neither block contains a memory array
+at all, which `crypto_blocks_hold_no_memory_to_index` asserts
+structurally, after synthesis, on every variant in the footprint table.
+SHA-256's one table — the sixty-four K constants of FIPS 180-4 §4.2.2 — is
+a `case` over the round counter and becomes logic; ChaCha20 has no table
+of any kind. There is therefore nothing in either block that a secret byte
+*could* index.
+
+What that test does not establish is that no *multiplexer* is selected by
+a secret, which would be a timing channel in a netlist without being a
+memory. Nothing in either block does it — every select here is a
+counter — but proving it would take a taint analysis from the key ports
+forward, and Reticle has none. That is the gap, named.
+
+**And what is not defended against.** Everything above is about *logical*
+time. An FPGA with a perfectly fixed cycle count still leaks through power
+consumption and electromagnetic emission, and differential power analysis
+is a real, practised attack on exactly these two primitives — the SHA-256
+round's additions and ChaCha20's both consume key-dependent power whatever
+cycle they happen in. **Nothing in this repository has measured a power
+trace or an emission, and nothing here is masked, randomised or
+duplicated against one.** No block in `ip/crypto/` should be relied on
+where an attacker has physical access to the part, and neither block's
+README claims otherwise; each one's §5 says it again at length.
+
+There is one thing a crypto block can do that neither of those is about,
+and `chacha20` does it: RFC 8439's block counter is 32 bits, so a (key,
+nonce) pair is good for 2^32 blocks. Wrapping it would hand out the same
+keystream twice, which ends the confidentiality of both messages, so the
+block latches `exhausted`, **stops accepting data**, and makes the caller
+supply a new nonce. `chacha20_stops_rather_than_repeat_its_keystream`
+starts a stream at counter 0xFFFFFFFE, checks that the two blocks it is
+entitled to come out, that the next word is refused, and that the two
+blocks differ.
+
+### Where each fact came from
+
+This library's documents separate what was checked from what was quoted,
+and a crypto block has an unusually clean separation available: there are
+published vectors, and there is a second implementation on this machine.
+
+**Read from a document.** The algorithms, the constants and every
+expectation but one. SHA-256 is FIPS 180-4: §4.2.2's sixty-four K
+constants, §5.3.3's eight initial values, §4.4 to §4.7's sigma functions,
+§5.1.1's padding and §6.2.2's round. The vectors are Appendix B.1
+(`"abc"`), B.2 (the 56-byte string — which is **the padding edge**, and
+FIPS choosing a 56-byte example is not a coincidence) and B.3 (one million
+`'a'`, run as an `#[ignore]`d test). ChaCha20 is RFC 8439, with §2.1.1's
+quarter-round vector, §2.2.1's quarter round on a state, §2.3.2's block
+function **including the sixteen-word state after twenty rounds and before
+the feed-forward addition**, §2.4.2's 114-byte encryption with its
+keystream, and Appendix A.1's five blocks and A.2's two encryptions.
+
+§2.3.2's intermediate state is the valuable one, and it is why one test
+reads an internal register rather than a port: if the keystream is wrong
+and the after-twenty-rounds state is right, the fault is in the addition
+or the serialisation; if the intermediate state is wrong, it is in a
+quarter round or in how four of them are wired into a column or a
+diagonal, and `chacha20_qr`'s own two vectors say which. That is the
+difference between localising a fault and knowing that the output is
+wrong.
+
+**Confirmed against a running implementation.** `purecrypto` was driven
+with the same inputs, out of tree, and compared. It reproduced all four
+published SHA-256 digests and all nine published ChaCha20 vectors byte for
+byte — so by the time it is used as an oracle it has already agreed with
+both authorities everywhere both of them speak. What rests on it alone is
+two things:
+
+- the **empty message's** digest, which FIPS 180-4 Appendix B does not
+  give. `e3b0c442...` is published widely and derivable from §5.1.1 by
+  hand; here it is a value a second implementation computed.
+- the nineteen-length padding table in
+  `sha256_pads_every_length_purecrypto_was_asked_about`, which is how
+  every branch of the padding is covered at all: 55 bytes (no zeros at
+  all), 56 (the spill into an extra block), 57 to 63 (the spill with the
+  zeros wrapping a block boundary), 0 mod 64 (a whole block of message
+  and then a whole block of nothing but padding), and three lengths past
+  two blocks. No published document gives nineteen lengths of an
+  arbitrary message.
+
+`purecrypto` is **not** a dependency of anything committed: this
+repository ships no third-party crates, and the comparison was run in a
+throwaway crate outside the tree. What is committed is the numbers it
+produced, as a table, which is the same shape as every other golden here.
+
+**Found by a test no document asks for.** Encryption and decryption are
+the same operation for a keystream cipher, so putting a ciphertext back
+through must give the plaintext. RFC 8439 does not state that as a vector
+and does not have to. That round trip found a real defect: `chacha20` asks
+for the next keystream block as soon as the current one is drained, so a
+stream whose last word fell on a block boundary leaves a request in the
+air — and a new `start` arriving then was ignored by `chacha20_core`,
+which took `start` only from idle, leaving the wrapper to use a block
+computed for the *old* counter as the new stream's first. Every one of the
+nine published vectors passed with that bug in place, because every one of
+them starts from reset. `chacha20_core` now takes `start` from any state,
+and `chacha20` ignores a `valid` that arrives while its own request is
+still up.
+
+### What AES should inherit
+
+AES is deliberately **not** in this round. It is the biggest of the three —
+a key schedule, a choice of S-box representation, and modes — and it is
+much easier once there is a settled answer to what a crypto block in this
+library looks like. This round is that answer, and these are the parts of
+it AES should take.
+
+1. **Three levels, smallest first, each a module because a published
+   vector addresses it.** `chacha20_qr` exists because RFC 8439 §2.1.1 is
+   a test vector for a quarter round; `sha256_core` exists because a
+   caller with padded blocks should not pay for a padder. AES's
+   equivalents are the S-box, one round, the key schedule and a mode, and
+   FIPS 197 publishes intermediate state per round — so the round should
+   be reachable from a testbench and those tables asserted against it, the
+   way RFC 8439 §2.3.2's are here.
+
+2. **The port width is the width at which the port stops being the
+   limit.** `sha256` is 8 bits wide because its compression takes 64
+   cycles for 64 bytes, so one byte per cycle is already as fast as the
+   core; `chacha20` is 32 bits wide because its core makes 64 bytes in 22
+   cycles and a 32-bit port drains them in 16. The rule, not the number,
+   is what carries over: AES-128 at one round per cycle is about eleven
+   cycles for sixteen bytes, so a 32-bit port (four cycles) is free and a
+   128-bit flat port buys nothing but 128 IO buffers in this table.
+
+3. **A byte string has its first byte at the most significant end**, on
+   every flat multi-byte port, in both blocks, with no exception — so a
+   key copied out of a specification goes straight in. The one port that
+   is not a byte string says so: ChaCha20's `counter` is a number, because
+   RFC 8439 calls word 12 a block counter and prints it as one.
+
+4. **Never a register wider than the values it holds.** `sha256`'s byte
+   counter is 61 bits and not 64, because the length field FIPS 180-4
+   appends is a *bit* count whose low three bits are necessarily zero on a
+   byte interface — three flip-flops that could only hold zero are three
+   flip-flops not declared. The state registers hold three to five values
+   and are two or three bits wide. AES's round counter holds 0 to 13.
+
+5. **Fixed latency proved by measurement, in the same shape.** Two tests,
+   one per block, each running many maximally different secrets at one
+   length and asserting a single cycle count — and asserting the outputs
+   differed, so the equality is not the equality of identical runs. AES is
+   where this gets *hard* rather than easy: a table-driven S-box in a
+   block RAM is exactly the secret-dependent memory access
+   `crypto_blocks_hold_no_memory_to_index` forbids, so AES's S-box has to
+   be combinational — 256 entries of logic, or the composite-field
+   inversion — and that test should be **extended** to cover AES rather
+   than relaxed for it. If AES cannot pass it, AES is not ready.
+
+6. **An area/throughput decision stated with numbers, and a trade named
+   and declined.** Both blocks here refuse a second 512-bit buffer, and
+   each header says what it would have bought (1.98x a block for
+   `sha256_core`, 1.7x for `chacha20`) and what it would have cost (512
+   flip-flops, more than the rest of the block holds). AES's equivalent is
+   one round per cycle against a fully unrolled pipeline, and the numbers
+   belong in its header before the code does.
+
+7. **Say what is not defended against, in the README, in a section of its
+   own.** AES is the primitive differential power analysis was *developed*
+   on. A block that does not say so is worse than one that does not exist.
+
 ## Using one
 
 A block is an ordinary IP package, so a project reaches it with a
@@ -1132,6 +1346,7 @@ build. Every block goes through all of:
 | `blocks_synthesise_cleanly` | `synth::run` reports nothing at all — no error, no warning, and no inferred latch |
 | `footprints_match_the_documentation` | the table below is the one this run measured |
 | `axil_gpio_matches_the_axi4lite_definition` | `bus::match_ports` finds all nineteen AXI4-Lite signals on the GPIO at the widths its parameters imply |
+| `crypto_blocks_hold_no_memory_to_index` | neither `sha256` nor `chacha20` contains a memory array at any level, so no table in either can be addressed by a secret |
 
 and then a behavioural co-simulation test through `sim::Simulator`, which
 is the part that matters:
@@ -1630,6 +1845,32 @@ is the part that matters:
   test, and its load-bearing assertion is one boolean — a child of our hub
   exists in sysfs.
 
+- **`sha256`** — the three messages FIPS 180-4 Appendix B works through,
+  and the empty one it does not. B.1 is `"abc"`; B.2 is the 56-byte string
+  and so is the **padding edge**, where the eight-byte length field does
+  not fit and the padding spills into a second block; B.3's million
+  characters are an `#[ignore]`d test because they are two million clock
+  edges. Then `sha256_core` on its own, fed a block the test padded by
+  hand from §5.1.1, which is what makes "the padding is the wrapper's job"
+  a decomposition rather than a claim. Then nineteen message lengths
+  around every boundary the padding has, with the digests from
+  `purecrypto`. And then the cycle count: nine maximally different bodies
+  at each of six lengths, one cycle count per length.
+- **`chacha20`** — four of RFC 8439's sections and both of its appendices.
+  §2.1.1 and §2.2.1 go straight into `chacha20_qr`'s ports, because a
+  quarter round is a module here precisely so that a vector can address
+  it. §2.3.2 is checked **twice over**: the serialised block on the port,
+  and the sixteen-word state after twenty rounds and before the
+  feed-forward addition, read off the working register — which is the
+  difference between knowing a keystream is wrong and knowing which
+  quarter round is. Appendix A.1's five blocks cover the counter and nonce
+  positions §2.3.2 cannot. §2.4.2's 114 bytes and Appendix A.2's 375 and
+  127 exercise the stream across block boundaries, with the keystream
+  checked as well as the ciphertext. Eighty-one key, nonce and counter
+  combinations give eighty-one different blocks at 22 cycles each. And a
+  stream started at counter 0xFFFFFFFE gets the two blocks it is owed and
+  is then refused, with `exhausted` up.
+
 ### What the processor actually executes
 
 `rv32i` is the one block where "it simulates" would mean nothing on its
@@ -1766,6 +2007,34 @@ more `SB_CARRY`. The LUT depth does not move, because the decimal path
 is beside the binary one and not in front of it, so the parameter buys
 area back and nothing else. Off, D is still a flag — SED, CLD, PHP and
 PLP all see it — and ADC and SBC simply ignore it.
+
+**The two crypto blocks are where `LUT depth` and the carry chain part
+company, and the numbers say which backend infers one.** A ChaCha20
+quarter round is four 32-bit additions in series and `chacha20_core`
+computes a whole round in a cycle, so its critical path is those four
+adders. On the iCE40 that is **depth 8**, because `SB_CARRY` is inferred
+and a 32-bit add is one carry chain; on the generic LUT4 and LUT6
+mappings and on the **ECP5** it is **depth 87**, because neither of those
+flows emits a carry cell and a 32-bit ripple-carry add is twenty-odd
+levels of logic. `sha256_core`'s five-deep T1 chain is the same story at
+39 against 9. Nothing is wrong with the blocks: this is
+`src/fpga/trellis` having no CCU2 inference, which every arithmetic block
+in this table pays for — `rv32i` is depth 34 on the ECP5 and `mos6502` 16
+— and it is the one change that would move the most rows here. It is
+noted and not made; `src/**` belonged to another round.
+
+Both blocks are also near the top of this table by area, and the reason is
+the same arithmetic. `chacha20_core` is 5834 LUT4 — the largest single
+module in the library — of which sixteen 32-bit adders in the quarter
+rounds and sixteen more in the feed-forward addition are most of it. That
+is the price of one round per cycle, and `chacha20_qr`'s own row is what
+makes it checkable: 573 LUT4 for one quarter round, four of them in a
+round, and the rest is the column/diagonal muxing and the final add.
+
+Every port of these blocks takes an IO buffer as usual, which is why
+`chacha20_core` shows 902 `SB_IO` — a 256-bit key, a 96-bit nonce, a
+32-bit counter and a 512-bit block output are 896 of them. Dropped into a
+design the buffers disappear and the adders do not.
 
 **The Xilinx 7 series is not in this table**, although
 `src/fpga/devices/xc7.dev` describes the Artix-7 of the Digilent Basys 3
@@ -2004,6 +2273,30 @@ exactly what this table is for.
 | `usb_proxy` | `usb_hub_proxy_ulpi` | VID=16'h1209, PID=16'h0001 | LUT6 | 212 x dff, 2613 x lut, 1 x memory 2x8, 1 x memory 64x8, 2 x memrd, 2 x memwr | 11 |
 | `usb_proxy` | `usb_hub_proxy_ulpi` | VID=16'h1209, PID=16'h0001 | iCE40 HX1K | 190 x SB_CARRY, 528 x SB_DFFE, 870 x SB_DFFER, 91 x SB_DFFES, 38 x SB_DFFR, 1 x SB_GB, 87 x SB_IO, 4058 x SB_LUT4 | 10 |
 | `usb_proxy` | `usb_hub_proxy_ulpi` | VID=16'h1209, PID=16'h0001 | ECP5 45F | 1 x DCCA, 3090 x LUT4, 10 x TRELLIS_DPR16X4, 999 x TRELLIS_FF, 87 x TRELLIS_IO | 11 |
+| `sha256` | `sha256_core` | (defaults) | LUT4 | 7 x dff, 3041 x lut | 39 |
+| `sha256` | `sha256_core` | (defaults) | LUT6 | 7 x dff, 2013 x lut | 33 |
+| `sha256` | `sha256_core` | (defaults) | iCE40 HX1K | 568 x SB_CARRY, 902 x SB_DFFER, 136 x SB_DFFES, 1 x SB_DFFR, 1 x SB_GB, 270 x SB_IO, 2402 x SB_LUT4 | 9 |
+| `sha256` | `sha256_core` | (defaults) | ECP5 45F | 1 x DCCA, 3041 x LUT4, 1039 x TRELLIS_FF, 270 x TRELLIS_IO | 39 |
+| `sha256` | `sha256` | (defaults) | LUT4 | 13 x dff, 3205 x lut | 39 |
+| `sha256` | `sha256` | (defaults) | LUT6 | 13 x dff, 2270 x lut | 33 |
+| `sha256` | `sha256` | (defaults) | iCE40 HX1K | 633 x SB_CARRY, 1231 x SB_DFFER, 136 x SB_DFFES, 2 x SB_DFFR, 1 x SB_GB, 272 x SB_IO, 2557 x SB_LUT4 | 9 |
+| `sha256` | `sha256` | (defaults) | ECP5 45F | 1 x DCCA, 3205 x LUT4, 1369 x TRELLIS_FF, 272 x TRELLIS_IO | 39 |
+| `sha256` | `sha256` | LEN_BITS=32 | LUT4 | 13 x dff, 3135 x lut | 39 |
+| `sha256` | `sha256` | LEN_BITS=32 | LUT6 | 13 x dff, 2219 x lut | 33 |
+| `sha256` | `sha256` | LEN_BITS=32 | iCE40 HX1K | 604 x SB_CARRY, 1202 x SB_DFFER, 136 x SB_DFFES, 2 x SB_DFFR, 1 x SB_GB, 272 x SB_IO, 2501 x SB_LUT4 | 9 |
+| `sha256` | `sha256` | LEN_BITS=32 | ECP5 45F | 1 x DCCA, 3135 x LUT4, 1340 x TRELLIS_FF, 272 x TRELLIS_IO | 39 |
+| `chacha20` | `chacha20_qr` | (defaults) | LUT4 | 573 x lut | 87 |
+| `chacha20` | `chacha20_qr` | (defaults) | LUT6 | 441 x lut | 75 |
+| `chacha20` | `chacha20_qr` | (defaults) | iCE40 HX1K | 124 x SB_CARRY, 256 x SB_IO, 447 x SB_LUT4 | 5 |
+| `chacha20` | `chacha20_qr` | (defaults) | ECP5 45F | 573 x LUT4, 256 x TRELLIS_IO | 87 |
+| `chacha20` | `chacha20_core` | (defaults) | LUT4 | 4 x dff, 5834 x lut | 87 |
+| `chacha20` | `chacha20_core` | (defaults) | LUT6 | 4 x dff, 4189 x lut | 76 |
+| `chacha20` | `chacha20_core` | (defaults) | iCE40 HX1K | 996 x SB_CARRY, 519 x SB_DFFER, 1 x SB_DFFR, 1 x SB_GB, 902 x SB_IO, 4641 x SB_LUT4 | 8 |
+| `chacha20` | `chacha20_core` | (defaults) | ECP5 45F | 1 x DCCA, 5834 x LUT4, 520 x TRELLIS_FF, 902 x TRELLIS_IO | 87 |
+| `chacha20` | `chacha20` | (defaults) | LUT4 | 11 x dff, 5978 x lut | 87 |
+| `chacha20` | `chacha20` | (defaults) | LUT6 | 11 x dff, 3810 x lut | 76 |
+| `chacha20` | `chacha20` | (defaults) | iCE40 HX1K | 1030 x SB_CARRY, 590 x SB_DFFER, 3 x SB_DFFR, 1 x SB_GB, 456 x SB_IO, 4764 x SB_LUT4 | 8 |
+| `chacha20` | `chacha20` | (defaults) | ECP5 45F | 1 x DCCA, 5978 x LUT4, 593 x TRELLIS_FF, 456 x TRELLIS_IO | 87 |
 <!-- end footprints -->
 
 ### Seven things writing these blocks found
@@ -2293,3 +2586,34 @@ straightforward multi-cycle machine rather than a squeezed one — one
 barrel shifters, 64-bit `mcycle` and `minstret`, and word-wide muxes the
 LUT mapper does not pack especially tightly. Making it smaller is worth
 doing and is not worth doing before it is right.
+
+**AES is what the `crypto` category does not have**, and it was left out on
+purpose rather than forgotten. It is the biggest of the three symmetric
+primitives a library like this wants — a key schedule, a choice of S-box
+representation, and then the modes, which are where most of the usable
+surface is — and every one of those three choices is easier against a
+settled answer to what a crypto block here looks like. That answer is now
+written down in
+[the category's own section](#the-crypto-category-and-what-a-constant-time-claim-is-worth),
+and its last part is the seven things AES should inherit. One of them is
+not negotiable and is the reason this order is the right one: a
+table-driven S-box in a block RAM is exactly the secret-dependent memory
+access `crypto_blocks_hold_no_memory_to_index` forbids, so AES's S-box has
+to be combinational, and the test that forbids it should be **extended**
+to AES rather than relaxed for it.
+
+**And neither crypto block has been near a board**, which is a different
+sort of gap from the ones above because it is the only one a measurement
+would close rather than code. Both are pure logic with no device
+primitive, no PLL and no pin timing, so simulation sees everything the
+part would about *function*. What a board would add is two things
+simulation cannot produce: a **real throughput figure**, which is this
+table's cycle counts multiplied by a clock that place and route actually
+closed — and on the ECP5 that clock is the thing the missing carry
+inference above would move most — and a **power trace**, which is the only
+way the side channel §5 of both READMEs disclaims could ever be
+characterised. The cheapest experiment for the first is `sha256` with its
+byte port fed from `ip/bus/uart`'s receiver and its digest clocked back out
+of the transmitter: no new HDL but a top level, one serial port, and a
+digest a host can compare against `sha256sum`. The second needs a shunt
+resistor and an oscilloscope and is not an afternoon.

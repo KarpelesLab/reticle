@@ -16,6 +16,8 @@
 //! | `usb_descriptors_survive_lookup_table_mapping` | a **mapped** netlist still answers GET_DESCRIPTOR with the right bytes |
 //! | `every_block_maps_to_the_logic_it_was_mapped_from` | every block's LUT4 and LUT6 mapping is **proved** equivalent to the logic it came from |
 //! | `footprints_match_the_documentation` | the table in `docs/ip-library.md` is the one this run measures |
+//! | `crypto_blocks_hold_no_memory_to_index` | neither crypto block holds a memory array, so nothing in one can be addressed by a secret |
+//! | `sha256_takes_the_same_cycles_...`, `chacha20_takes_the_same_cycles_...` | the cycle count of both crypto blocks is **measured** to be independent of the message and of the key |
 //! | `axil_gpio_matches_the_axi4lite_definition` | `bus::match_ports` recognises the GPIO's bus port |
 //! | `cdc_*`, `fifo_async_*` | `timing::analyze_cdc` calls every crossing a synchroniser, never an unsynchronised one |
 //! | the rest | behaviour, driven through `sim::Simulator` |
@@ -108,6 +110,29 @@
 //! names what to change; the first six now hold their fix and the
 //! seventh, which the 6502 found, still holds its gap. The paragraph in
 //! `docs/ip-library.md` each points at records what was wrong.
+//!
+//! The two blocks of `ip/crypto/` are tested against **published vectors
+//! and a second implementation**. FIPS 180-4 Appendix B and RFC 8439's
+//! §2.1.1, §2.2.1, §2.3.2, §2.4.2, A.1 and A.2 are all here, cited by
+//! section, and §2.3.2's sixteen-word intermediate state is read off
+//! `chacha20_core`'s working register rather than its port — because a
+//! wrong keystream says nothing about *which* quarter round is wrong and
+//! that table does. Beside them is a nineteen-length SHA-256 padding table
+//! whose digests came from `purecrypto`, the user's from-scratch Rust
+//! crypto library, run out of tree: no document publishes nineteen lengths
+//! of an arbitrary message, and that is the only way every branch of the
+//! padding gets covered. `purecrypto` reproduced every published vector
+//! here before it was trusted for the rest.
+//!
+//! Two of those tests are about *time* rather than values, and they are the
+//! point of the category: a hardware block whose cycle count depends on a
+//! secret is the direct analogue of a secret-dependent branch. They are
+//! measurements — nine maximally different messages per length, eighty-one
+//! key, nonce and counter combinations — and each also asserts the outputs
+//! were all different, because equal cycle counts from identical runs prove
+//! nothing. What they do not establish is anything about power or
+//! electromagnetic emission; `docs/ip-library.md` and both blocks' READMEs
+//! are careful about that line and so is this file.
 //!
 //! Set `UPDATE_EXPECT=1` to rewrite the footprint table in
 //! `docs/ip-library.md` after an intended change, and read the diff: a
@@ -414,6 +439,43 @@ const VARIANTS: &[Variant] = &[
         top: "usb_hub_proxy_ulpi",
         params: &[("VID", "16'h1209"), ("PID", "16'h0001")],
     },
+    // The `crypto` category: two blocks, each measured at every level it
+    // offers, because the levels are the area/throughput argument. The
+    // quarter round has a row of its own so that the claim "four of them
+    // a cycle costs four quarter rounds and no more depth" is a number
+    // and not a sentence.
+    Variant {
+        package: "sha256",
+        top: "sha256_core",
+        params: &[],
+    },
+    Variant {
+        package: "sha256",
+        top: "sha256",
+        params: &[],
+    },
+    // What the message counter costs. The default spans the whole of
+    // FIPS 180-4's length range; 32 bits spans four gigabytes.
+    Variant {
+        package: "sha256",
+        top: "sha256",
+        params: &[("LEN_BITS", "32")],
+    },
+    Variant {
+        package: "chacha20",
+        top: "chacha20_qr",
+        params: &[],
+    },
+    Variant {
+        package: "chacha20",
+        top: "chacha20_core",
+        params: &[],
+    },
+    Variant {
+        package: "chacha20",
+        top: "chacha20",
+        params: &[],
+    },
 ];
 
 /// Board constraints a variant needs to go through the FPGA flow, as
@@ -429,13 +491,15 @@ fn board_constraints(variant: &Variant) -> &'static str {
     }
 }
 
-/// The seven folders `ip/` is grouped into, which
+/// The eight folders `ip/` is grouped into, which
 /// `every_block_is_findable_by_the_name_it_declares` holds the layout to.
 ///
 /// They are a filing system and nothing more: no code reads a category,
 /// a package's identity is the name its manifest declares, and a block
 /// resolves by that name wherever it sits.
-const CATEGORIES: [&str; 7] = ["bus", "cpu", "memory", "net", "usb", "util", "video"];
+const CATEGORIES: [&str; 8] = [
+    "bus", "cpu", "crypto", "memory", "net", "usb", "util", "video",
+];
 
 /// The devices the footprint table reports, besides the generic LUT
 /// mappings.
@@ -18145,6 +18209,1229 @@ fn usb_descriptors_survive_lookup_table_mapping() {
 }
 
 // ---------------------------------------------------------------------------
+// Crypto: SHA-256 and ChaCha20
+// ---------------------------------------------------------------------------
+
+/// A byte string as a `Logic`, **first byte at the most significant end**.
+///
+/// That is the convention both crypto blocks use for every flat
+/// multi-byte port — `key`, `nonce`, `digest`, `block` — and it is the
+/// order a specification prints a key in, so a vector copied out of
+/// RFC 8439 goes straight in.
+fn byte_string(bytes: &[u8]) -> Logic {
+    let parts: Vec<Logic> = bytes
+        .iter()
+        .map(|b| Logic::from_u64(u64::from(*b), 8))
+        .collect();
+    Logic::concat_all(parts.iter())
+}
+
+/// The `n` bytes a net holds, read back the same way round.
+fn net_bytes(sim: &Simulator<'_>, handle: NetHandle, n: usize) -> Vec<u8> {
+    let value = sim.get(handle);
+    assert_eq!(
+        value.width(),
+        u32::try_from(n * 8).expect("a width that fits"),
+        "net is {} bits, {n} bytes asked for",
+        value.width()
+    );
+    (0..n)
+        .map(|i| {
+            let hi = u32::try_from((n - i) * 8 - 1).expect("a bit index that fits");
+            octet(
+                value
+                    .slice(hi, hi - 7)
+                    .to_u64()
+                    .unwrap_or_else(|| panic!("byte {i} holds x or z: {value}")),
+            )
+        })
+        .collect()
+}
+
+/// A hexadecimal string, lower case and unseparated, which is how every
+/// expectation in this section is written: a digest or a keystream is
+/// copied out of its document as one string and compared as one string,
+/// so a mismatch prints both in full and the eye finds where they part.
+fn hex(bytes: &[u8]) -> String {
+    let mut out = String::with_capacity(bytes.len() * 2);
+    for b in bytes {
+        out.push_str(&format!("{b:02x}"));
+    }
+    out
+}
+
+/// The message body the padding table uses: byte `i` is
+/// `(i * 7 + 13) & 0xff`.
+///
+/// Neither all zeros nor text, cheap to restate, and — the point — the
+/// same rule the `purecrypto` run that produced the expected digests
+/// used, so the two sides of that comparison were written once.
+fn crypto_pattern(n: usize) -> Vec<u8> {
+    (0..n).map(|i| octet(((i * 7 + 13) & 0xff) as u64)).collect()
+}
+
+/// Everything a testbench needs to hold of `sha256`.
+struct Sha256Bench {
+    clk: NetHandle,
+    rst_n: NetHandle,
+    start: NetHandle,
+    in_byte: NetHandle,
+    in_valid: NetHandle,
+    in_last: NetHandle,
+    in_ready: NetHandle,
+    digest: NetHandle,
+    digest_valid: NetHandle,
+}
+
+impl Sha256Bench {
+    fn attach(sim: &mut Simulator<'_>) -> Self {
+        let bench = Sha256Bench {
+            clk: top_net(sim, "clk"),
+            rst_n: top_net(sim, "rst_n"),
+            start: top_net(sim, "start"),
+            in_byte: top_net(sim, "in_byte"),
+            in_valid: top_net(sim, "in_valid"),
+            in_last: top_net(sim, "in_last"),
+            in_ready: top_net(sim, "in_ready"),
+            digest: top_net(sim, "digest"),
+            digest_valid: top_net(sim, "digest_valid"),
+        };
+        sim.set(bench.start, bit(false));
+        sim.set(bench.in_valid, bit(false));
+        sim.set(bench.in_last, bit(false));
+        sim.set(bench.in_byte, word(8, 0));
+        reset(sim, bench.clk, bench.rst_n);
+        bench
+    }
+
+    /// Hashes one message and returns its digest and the number of clock
+    /// cycles from the `start` pulse to `digest_valid`.
+    ///
+    /// `in_valid` is held high for every byte, with no gaps, so the cycle
+    /// count is a property of the block and not of this driver. That is
+    /// what makes it worth comparing two of them.
+    fn message(&self, sim: &mut Simulator<'_>, msg: &[u8]) -> ([u8; 32], u64) {
+        // A new message from a known state, whatever the last one left.
+        sim.set(self.start, bit(true));
+        cycle(sim, self.clk, HALF);
+        sim.set(self.start, bit(false));
+
+        let mut index = 0usize;
+        let mut ended = false;
+        let mut cycles = 0u64;
+        // Two blocks of padding is the worst case, and a block is 129
+        // cycles; this is that with room, and it is a loop bound rather
+        // than a time-out.
+        let limit = 200 + 140 * (msg.len() as u64 / 64 + 2);
+        loop {
+            if ended {
+                sim.set(self.in_valid, bit(false));
+                sim.set(self.in_last, bit(false));
+            } else {
+                let more = index < msg.len();
+                sim.set(self.in_valid, bit(more));
+                sim.set(self.in_byte, word(8, if more { u64::from(msg[index]) } else { 0 }));
+                // `in_last` ends the message at this point in the stream;
+                // with `in_valid` low it ends it with no byte, which is
+                // how the empty message is spelled.
+                sim.set(self.in_last, bit(index + 1 >= msg.len()));
+            }
+            // `in_ready` is driven by registers only, so its value here
+            // is the one the last edge produced and setting the inputs
+            // above cannot have disturbed it.
+            let accepted = !ended && high(sim, self.in_ready);
+            cycle(sim, self.clk, HALF);
+            cycles += 1;
+            if accepted {
+                if index + 1 >= msg.len() {
+                    ended = true;
+                } else {
+                    index += 1;
+                }
+            }
+            if high(sim, self.digest_valid) {
+                let bytes = net_bytes(sim, self.digest, 32);
+                let mut digest = [0u8; 32];
+                digest.copy_from_slice(&bytes);
+                return (digest, cycles);
+            }
+            assert!(
+                cycles < limit,
+                "sha256 did not finish a {}-byte message in {limit} cycles",
+                msg.len()
+            );
+        }
+    }
+}
+
+/// The three messages FIPS 180-4 Appendix B works through, and the empty
+/// one it does not.
+///
+/// B.1 is `"abc"`, one block. B.2 is the 56-byte string, which is **the
+/// padding edge**: 56 bytes leave no room for the eight-byte length
+/// field, so the padding spills into a second block. FIPS 180-4's own
+/// example being exactly 56 bytes long is not a coincidence, and it is
+/// the case a byte-stream hasher gets wrong.
+///
+/// The empty message is **not** in FIPS 180-4 Appendix B. Its digest is
+/// published widely and is what `purecrypto` computes for `b""` on this
+/// machine, and the padding rule derives it by hand; this test treats it
+/// as a vector from a running implementation and §3 of
+/// `ip/crypto/sha256/README.md` says so.
+///
+/// What this test would catch: any wrong K constant, any wrong initial
+/// value, a wrong sigma rotation, a wrong round order, a wrong byte
+/// order on the way in or out, padding that omits or misplaces the `1`
+/// bit or the length, and — this is B.2's job — padding that does not
+/// spill into a second block when it must.
+///
+/// What it would not catch: a message longer than two blocks (B.3, below,
+/// and the length table after it), a length that is not one of these
+/// four, and anything at all about timing.
+#[test]
+fn sha256_matches_the_fips_180_4_examples() {
+    let design = design_of("sha256", "sha256", &[]);
+    let mut sim = simulate(&design, "sha256");
+    let bench = Sha256Bench::attach(&mut sim);
+
+    let cases: [(&str, &[u8], &str); 3] = [
+        (
+            "FIPS 180-4 B.1",
+            b"abc",
+            "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad",
+        ),
+        (
+            "FIPS 180-4 B.2",
+            b"abcdbcdecdefdefgefghfghighijhijkijkljklmklmnlmnomnopnopq",
+            "248d6a61d20638b8e5c026930c3e6039a33ce45964ff2167f6ecedd419db06c1",
+        ),
+        (
+            "the empty message",
+            b"",
+            "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        ),
+    ];
+
+    for (what, message, expected) in cases {
+        let (digest, cycles) = bench.message(&mut sim, message);
+        assert_eq!(
+            hex(&digest),
+            expected,
+            "{what}: {} bytes, {cycles} cycles",
+            message.len()
+        );
+    }
+
+    // B.2 is two blocks and B.1 is one, which is the whole point of
+    // having both: the chaining value has to carry from one to the next.
+    let (_, one) = bench.message(&mut sim, b"abc");
+    let (_, two) = bench.message(
+        &mut sim,
+        b"abcdbcdecdefdefgefghfghighijhijkijkljklmklmnlmnomnopnopq",
+    );
+    assert!(
+        two > one,
+        "the 56-byte message must cost more than the 3-byte one: {two} against {one}"
+    );
+}
+
+/// Every padding branch there is, at nineteen message lengths.
+///
+/// The expected digests come from **`purecrypto`**, the user's
+/// from-scratch Rust crypto library, run over the same `crypto_pattern`
+/// rule this test uses. That makes them a second, independent oracle
+/// rather than a reading: `purecrypto` reproduces all four of the
+/// published values in the test above and all nine ChaCha20 vectors
+/// below, so by the time it is trusted here it has agreed with the
+/// authorities everywhere both of them speak.
+///
+/// The lengths are chosen around every boundary the padding has:
+///
+/// | Length mod 64 | What it exercises |
+/// |---|---|
+/// | 55 | the `1` bit lands on byte 55, the length field fills 56..63, **no zeros at all** |
+/// | 56 | no room for the length field: the padding spills into a whole extra block |
+/// | 57..63 | the spill, with the zeros wrapping a block boundary |
+/// | 0 | a whole block of message and then a whole block of nothing but padding |
+/// | 1, 3 | the ordinary case, short |
+///
+/// What it would catch: an off-by-one in where the length field starts,
+/// a zero run that stops at the wrong byte, a byte counter that counts
+/// padding bytes as message bytes, a length field written little-endian,
+/// and a chaining value that does not survive three blocks.
+///
+/// What it would not catch: a length above 192 bytes, a counter that
+/// overflows LEN_BITS (nothing simulated here comes near 2^61 bytes),
+/// and a block that is wrong in a way the compression function and the
+/// padding cancel out — which is why the published vectors above are a
+/// separate test and not folded into this one.
+#[test]
+fn sha256_pads_every_length_purecrypto_was_asked_about() {
+    let design = design_of("sha256", "sha256", &[]);
+    let mut sim = simulate(&design, "sha256");
+    let bench = Sha256Bench::attach(&mut sim);
+
+    // Produced by `purecrypto::hash::sha256` over `crypto_pattern(n)`.
+    const TABLE: [(usize, &str); 19] = [
+        (0, "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"),
+        (1, "9d1e0e2d9459d06523ad13e28a4093c2316baafe7aec5b25f30eba2e113599c4"),
+        (3, "10c38ff6aa77aaf0a08345dea78ac620f90429576e826996518aba266f14b46f"),
+        (54, "a181b5442ceb430fd1c2b2245a953f17ca4058881c1282024b973b8562a805be"),
+        (55, "764c574722e6e2ccaa5422f8ec731111ac72ff7039793148623e56b75a32c11f"),
+        (56, "43fbbe48a6796cb7414a92cd785d9f4a976c2f70fc59c60a309f95e3022db77a"),
+        (57, "e038a2370dbd74c3c8b89b95e7c351fec4821e3415f7aef3a0925215bc6ff953"),
+        (63, "c309180feace42e90107301813aef6f309cac604e831b3fd9692a3298aa6da54"),
+        (64, "3a38aed112131d75fc0e636437f5b675c83c01ade88d99f6b6c54b0d6129174f"),
+        (65, "2ee4bedec261c1561dafa7ba28e4e3ece281bc0f51afca40b83b3a2a7c41a050"),
+        (118, "4a6edb5613289eccf0568a8091fc9ae750bbf82f5352528e4688d65480d6cc38"),
+        (119, "0a70cbf85ea376617e4bfad11040a9559638f8ceb57844a901573674578af539"),
+        (120, "7d3fd765bd3d4a0587f5bab94200b1d38b23398b94544ff5257f695b2227918f"),
+        (121, "ce828eed6582389e10c153a818088fd9f2b48d8478325f72d0bd67f979b8536d"),
+        (127, "ff998a2ad3412188b7ba531324bf977b22e77aa3b1befb11c699bf2a14959ee7"),
+        (128, "8b94fd8b7db8b1ef29c089c16389697a057310b7c739c1ad844e9be970f5cfd6"),
+        (129, "22afcb610b1282b24536c87a33acc00a80c720c9d3509960ae11a9bd87501330"),
+        (192, "6b2a097aff28b485a0c701b5da8724a4cb7d4d97c6f2178ba43fe295beca2232"),
+        // 108 is the middle of a block rather than an edge of one, as a
+        // control: one full block of message, then 44 bytes of message
+        // with the 1 bit, the zeros and the length behind them.
+        (108, "13f6a38d129ef9870df728f2d3364ae2ab9acbb8d1de245b1f0ecbe1050f43c6"),
+    ];
+
+    for (length, expected) in TABLE {
+        let message = crypto_pattern(length);
+        let (digest, cycles) = bench.message(&mut sim, &message);
+        assert_eq!(hex(&digest), expected, "a {length}-byte message, {cycles} cycles");
+    }
+}
+
+/// `sha256_core` on its own, fed a block this test padded itself.
+///
+/// The point is that the two halves separate: a caller with padded blocks
+/// uses the core and gets the same answer the wrapper would have given,
+/// which is what makes "padding is the wrapper's job" a decomposition and
+/// not a claim. The padded block here is `"abc"` padded by hand from
+/// FIPS 180-4 §5.1.1 — three message bytes, `0x80`, fifty-two zeros, and
+/// `0x0000000000000018` — so this test states the padding rule
+/// independently of the hardware that implements it.
+///
+/// What it would catch: a compression function that only works behind its
+/// own padder (a shared register the wrapper happened to initialise, say),
+/// and a `block_valid` that fires at the wrong time.
+///
+/// What it would not catch: anything about the padding logic, which is the
+/// point — this test is the one that does not use it.
+#[test]
+fn sha256_core_compresses_a_block_somebody_else_padded() {
+    let design = design_of("sha256", "sha256_core", &[]);
+    let mut sim = simulate(&design, "sha256_core");
+    let clk = top_net(&sim, "clk");
+    let rst_n = top_net(&sim, "rst_n");
+    let start = top_net(&sim, "start");
+    let in_byte = top_net(&sim, "in_byte");
+    let in_valid = top_net(&sim, "in_valid");
+    let in_ready = top_net(&sim, "in_ready");
+    let block_valid = top_net(&sim, "block_valid");
+    let state = top_net(&sim, "state");
+
+    sim.set(start, bit(false));
+    sim.set(in_valid, bit(false));
+    sim.set(in_byte, word(8, 0));
+    reset(&mut sim, clk, rst_n);
+
+    // FIPS 180-4 §5.1.1 applied to "abc" by hand: the message, the single
+    // 1 bit as 0x80, zeros, and the length 24 as sixty-four big-endian
+    // bits.
+    let mut padded = Vec::from(*b"abc");
+    padded.push(0x80);
+    padded.resize(56, 0x00);
+    padded.extend_from_slice(&(24u64).to_be_bytes());
+    assert_eq!(padded.len(), 64, "one block");
+
+    let mut index = 0usize;
+    sim.set(in_valid, bit(true));
+    sim.set(in_byte, word(8, u64::from(padded[0])));
+    for _ in 0..400 {
+        let accepted = high(&sim, in_ready) && index < padded.len();
+        cycle(&mut sim, clk, HALF);
+        if accepted {
+            index += 1;
+            if index < padded.len() {
+                sim.set(in_byte, word(8, u64::from(padded[index])));
+            } else {
+                sim.set(in_valid, bit(false));
+            }
+        }
+        if high(&sim, block_valid) {
+            assert_eq!(index, padded.len(), "the whole block went in first");
+            assert_eq!(
+                hex(&net_bytes(&sim, state, 32)),
+                "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad",
+                "the chaining value after one padded block is the digest of \"abc\""
+            );
+            return;
+        }
+    }
+    panic!("sha256_core never finished a block");
+}
+
+/// **The fixed-latency measurement for SHA-256.**
+///
+/// A hardware block whose cycle count depends on a secret is the direct
+/// analogue of a secret-dependent branch, which is the thing
+/// `purecrypto`'s `ct` module exists to avoid. So: nine messages of the
+/// same length whose bytes are as different as they can be made — all
+/// zeros, all ones, one bit set at each end, a counting pattern, its
+/// complement — and the assertion is that every one of them takes the
+/// **same number of cycles** from `start` to `digest_valid`. Then the
+/// same again at six lengths, including both sides of the padding edge.
+///
+/// What it establishes: the cycle count is a function of the message
+/// *length* and of nothing in the message's *content*. That is the
+/// property that matters, because a length is not a secret — a caller
+/// streams the bytes in, so the byte count is visible on the interface
+/// whatever this block does, and no block could hide it.
+///
+/// What it does **not** establish, and the README says this again at more
+/// length: anything about power or electromagnetic emission. Differential
+/// power analysis works on a block with a perfectly fixed cycle count,
+/// and nothing here has been near an oscilloscope. It also says nothing
+/// about the *synthesised* netlist's gate delays — this is a cycle count
+/// in a zero-delay simulation, so it proves the control path is
+/// data-independent and not that the data path's timing is.
+///
+/// What it would not catch: a data-dependent *stall* that the driver's
+/// own back-pressure hid, which is why the driver holds `in_valid` high
+/// for every byte with no gaps; and a cycle count that depends on the
+/// *previous* message, which is why `start` is pulsed before each one.
+#[test]
+fn sha256_takes_the_same_cycles_whatever_the_message_says() {
+    let design = design_of("sha256", "sha256", &[]);
+    let mut sim = simulate(&design, "sha256");
+    let bench = Sha256Bench::attach(&mut sim);
+
+    // Every length is measured at every one of these bodies. 55 and 56
+    // are the two sides of the padding edge, 64 is a whole block, and 0
+    // is the message with no bytes at all.
+    for length in [0usize, 1, 55, 56, 64, 130] {
+        let bodies: Vec<Vec<u8>> = vec![
+            vec![0x00; length],
+            vec![0xff; length],
+            vec![0xaa; length],
+            crypto_pattern(length),
+            crypto_pattern(length).iter().map(|b| !b).collect(),
+            (0..length).map(|i| if i == 0 { 1 } else { 0 }).collect(),
+            (0..length)
+                .map(|i| if i + 1 == length { 0x80 } else { 0 })
+                .collect(),
+            (0..length).map(|i| octet((i as u64).wrapping_mul(31))).collect(),
+            (0..length).map(|i| octet(!(i as u64) & 0xff)).collect(),
+        ];
+
+        let mut seen: Vec<(u64, String)> = Vec::new();
+        for body in &bodies {
+            assert_eq!(body.len(), length, "a body of the stated length");
+            let (digest, cycles) = bench.message(&mut sim, body);
+            seen.push((cycles, hex(&digest)));
+        }
+
+        let first = seen[0].0;
+        for (cycles, digest) in &seen {
+            assert_eq!(
+                *cycles, first,
+                "a {length}-byte message took {cycles} cycles where another took \
+                 {first}; the digest was {digest}"
+            );
+        }
+        // And the nine bodies really were different messages, so the
+        // equality above is not the equality of nine identical runs. The
+        // empty message is the one exception: there is only one of it.
+        let digests: BTreeSet<&String> = seen.iter().map(|(_, d)| d).collect();
+        if length == 0 {
+            assert_eq!(digests.len(), 1, "there is one empty message");
+        } else {
+            assert!(
+                digests.len() > 1,
+                "a {length}-byte message gave one digest for nine different bodies, so \
+                 this test proved nothing about it"
+            );
+        }
+    }
+}
+
+/// FIPS 180-4 Appendix B.3: one million `'a'` characters.
+///
+/// Ignored, because it is 15 625 blocks at 129 cycles each — about two
+/// million clock edges — and that is minutes in a debug build rather
+/// than the two seconds the rest of this section takes. It is here
+/// because it is the only vector in the standard that runs the chaining
+/// value through four figures of blocks, and because the length field it
+/// produces, 8 000 000, is the only published one with bits above the
+/// low sixteen set.
+///
+/// Run it with
+/// `cargo test --all-features --test ip_library --release -- --ignored
+/// --nocapture sha256_hashes_the_million`.
+#[test]
+#[ignore = "two million clock edges; run it on purpose"]
+fn sha256_hashes_the_million_characters_of_appendix_b_3() {
+    let design = design_of("sha256", "sha256", &[]);
+    let mut sim = simulate(&design, "sha256");
+    let bench = Sha256Bench::attach(&mut sim);
+    let message = vec![b'a'; 1_000_000];
+    let (digest, cycles) = bench.message(&mut sim, &message);
+    println!("FIPS 180-4 B.3: {cycles} cycles for 1 000 000 bytes");
+    assert_eq!(
+        hex(&digest),
+        "cdc76e5c9914fb9281a1c7e284d73e67f1809a48a497200e046d39ccc7112cd0"
+    );
+}
+
+/// RFC 8439 §2.1.1 and §2.2.1: the quarter round, on its own ports.
+///
+/// Two vectors from two different sections. §2.1.1 is four numbers chosen
+/// to make the arithmetic visible; §2.2.1 applies QUARTERROUND(2, 7, 8,
+/// 13) to a sample state, which is a *diagonal* round's quarter and
+/// therefore reaches the same logic through a different set of values.
+///
+/// This is why `chacha20_qr` is a module. A keystream that comes out
+/// wrong tells you nothing about which of the four additions, the four
+/// exclusive-ors or the four rotations is at fault; these two vectors
+/// tell you it is none of them.
+///
+/// What it would catch: a wrong rotation amount, a rotation written as a
+/// shift, the wrong operand order in any of the four steps, a rotation
+/// applied before the exclusive-or rather than after.
+///
+/// What it would not catch: anything about how `chacha20_core` wires
+/// four of these together, which is §2.3.2's job below, or the state
+/// setup, or the feed-forward addition.
+#[test]
+fn chacha20_qr_matches_rfc_8439_2_1_1_and_2_2_1() {
+    let design = design_of("chacha20", "chacha20_qr", &[]);
+    let mut sim = simulate(&design, "chacha20_qr");
+    let a_in = top_net(&sim, "a_in");
+    let b_in = top_net(&sim, "b_in");
+    let c_in = top_net(&sim, "c_in");
+    let d_in = top_net(&sim, "d_in");
+    let a_out = top_net(&sim, "a_out");
+    let b_out = top_net(&sim, "b_out");
+    let c_out = top_net(&sim, "c_out");
+    let d_out = top_net(&sim, "d_out");
+
+    let cases: [(&str, [u32; 4], [u32; 4]); 2] = [
+        (
+            "RFC 8439 2.1.1",
+            [0x1111_1111, 0x0102_0304, 0x9b8d_6f43, 0x0123_4567],
+            [0xea2a_92f4, 0xcb1c_f8ce, 0x4581_472e, 0x5881_c4bb],
+        ),
+        (
+            // The sample state of §2.2.1 at indices 2, 7, 8 and 13.
+            "RFC 8439 2.2.1, QUARTERROUND(2, 7, 8, 13)",
+            [0x5164_61b1, 0x2a5f_714c, 0x5337_2767, 0x3d63_1689],
+            [0xbdb8_86dc, 0xcfac_afd2, 0xe46b_ea80, 0xccc0_7c79],
+        ),
+    ];
+
+    for (what, input, expected) in cases {
+        sim.set(a_in, word(32, u64::from(input[0])));
+        sim.set(b_in, word(32, u64::from(input[1])));
+        sim.set(c_in, word(32, u64::from(input[2])));
+        sim.set(d_in, word(32, u64::from(input[3])));
+        sim.run_for(HALF);
+        let got = [
+            get_u32(&sim, a_out),
+            get_u32(&sim, b_out),
+            get_u32(&sim, c_out),
+            get_u32(&sim, d_out),
+        ];
+        assert_eq!(
+            got.map(|v| format!("{v:08x}")),
+            expected.map(|v| format!("{v:08x}")),
+            "{what}"
+        );
+    }
+}
+
+/// Everything `chacha20_core` needs from a testbench.
+struct ChaChaCore {
+    clk: NetHandle,
+    rst_n: NetHandle,
+    start: NetHandle,
+    advance: NetHandle,
+    key: NetHandle,
+    nonce: NetHandle,
+    counter: NetHandle,
+    valid: NetHandle,
+    block: NetHandle,
+    /// The working state, read for RFC 8439 §2.3.2's intermediate value.
+    st_q: NetHandle,
+}
+
+impl ChaChaCore {
+    fn attach(sim: &mut Simulator<'_>) -> Self {
+        let bench = ChaChaCore {
+            clk: top_net(sim, "clk"),
+            rst_n: top_net(sim, "rst_n"),
+            start: top_net(sim, "start"),
+            advance: top_net(sim, "advance"),
+            key: top_net(sim, "key"),
+            nonce: top_net(sim, "nonce"),
+            counter: top_net(sim, "counter"),
+            valid: top_net(sim, "valid"),
+            block: top_net(sim, "block"),
+            st_q: top_net(sim, "st_q"),
+        };
+        sim.set(bench.start, bit(false));
+        sim.set(bench.advance, bit(false));
+        sim.set(bench.key, byte_string(&[0u8; 32]));
+        sim.set(bench.nonce, byte_string(&[0u8; 12]));
+        sim.set(bench.counter, word(32, 0));
+        reset(sim, bench.clk, bench.rst_n);
+        bench
+    }
+
+    /// One block. Returns its 64 serialised bytes, the sixteen state
+    /// words as they stood **after the twenty rounds and before the
+    /// final addition**, and the cycles from `start` to `valid`.
+    fn block_of(
+        &self,
+        sim: &mut Simulator<'_>,
+        key: &[u8; 32],
+        nonce: &[u8; 12],
+        counter: u32,
+    ) -> (Vec<u8>, [u32; 16], u64) {
+        sim.set(self.key, byte_string(key));
+        sim.set(self.nonce, byte_string(nonce));
+        sim.set(self.counter, word(32, u64::from(counter)));
+        sim.set(self.start, bit(true));
+        cycle(sim, self.clk, HALF);
+        sim.set(self.start, bit(false));
+
+        let mut cycles = 1u64;
+        loop {
+            // The state as the last edge left it. When `valid` comes up
+            // on the next edge, this is the value the addition was
+            // applied to — which is the table RFC 8439 §2.3.2 prints
+            // under "After running 20 rounds".
+            let before = self.state_words(sim);
+            cycle(sim, self.clk, HALF);
+            cycles += 1;
+            if high(sim, self.valid) {
+                return (net_bytes(sim, self.block, 64), before, cycles);
+            }
+            assert!(cycles < 200, "chacha20_core never raised valid");
+        }
+    }
+
+    fn state_words(&self, sim: &Simulator<'_>) -> [u32; 16] {
+        let value = sim.get(self.st_q);
+        let mut out = [0u32; 16];
+        for (i, word) in out.iter_mut().enumerate() {
+            let hi = u32::try_from(511 - 32 * i).expect("a bit index that fits");
+            *word = narrow(
+                value
+                    .slice(hi, hi - 31)
+                    .to_u64()
+                    .unwrap_or_else(|| panic!("state word {i} holds x or z")),
+            );
+        }
+        out
+    }
+}
+
+/// RFC 8439 §2.3.2, including **the intermediate state**.
+///
+/// The RFC prints three sixteen-word tables for one block: the state as
+/// set up, the state after twenty rounds, and the state after the
+/// original is added back. The middle one is the valuable one, and it is
+/// the reason this test reads an internal register and not only a port:
+/// if the keystream is wrong but the after-twenty-rounds state is right,
+/// the fault is in the feed-forward addition or the serialisation; if the
+/// intermediate state is wrong, the fault is in a quarter round or in how
+/// the four of them are wired into a column or a diagonal round, and
+/// `chacha20_qr_matches_rfc_8439_2_1_1_and_2_2_1` says which.
+///
+/// What it would catch: the state setup (the constants, the little-endian
+/// key load, the counter in word 12 and not 13), the column/diagonal
+/// alternation and which words each kind touches, the round count, the
+/// feed-forward addition, and the serialisation's byte order.
+///
+/// What it would not catch: a counter that is byte-swapped — this vector's
+/// counter is 1, which is the same number either way round. Appendix A.1
+/// test vector #4 uses counter 2 and #5 counter 0 with a nonce that is
+/// not symmetric, and those are the next test.
+#[test]
+fn chacha20_core_reaches_the_state_rfc_8439_2_3_2_prints() {
+    let design = design_of("chacha20", "chacha20_core", &[]);
+    let mut sim = simulate(&design, "chacha20_core");
+    let bench = ChaChaCore::attach(&mut sim);
+
+    let mut key = [0u8; 32];
+    for (i, byte) in key.iter_mut().enumerate() {
+        *byte = octet(i as u64);
+    }
+    let nonce: [u8; 12] = [0, 0, 0, 0x09, 0, 0, 0, 0x4a, 0, 0, 0, 0];
+
+    let (block, after_rounds, cycles) = bench.block_of(&mut sim, &key, &nonce, 1);
+
+    // "After running 20 rounds (10 column rounds interleaved with 10
+    // diagonal rounds), the ChaCha state looks like this".
+    const AFTER_20: [u32; 16] = [
+        0x8377_78ab, 0xe238_d763, 0xa67a_e21e, 0x5950_bb2f, 0xc4f2_d0c7, 0xfc62_bb2f, 0x8fa0_18fc,
+        0x3f5e_c7b7, 0x3352_71c2, 0xf294_89f3, 0xeabd_a8fc, 0x82e4_6ebd, 0xd19c_12b4, 0xb04e_16de,
+        0x9e83_d0cb, 0x4e3c_50a2,
+    ];
+    assert_eq!(
+        after_rounds.map(|w| format!("{w:08x}")),
+        AFTER_20.map(|w| format!("{w:08x}")),
+        "the state after twenty rounds, RFC 8439 2.3.2"
+    );
+
+    // "Serialized Block".
+    assert_eq!(
+        hex(&block),
+        "10f1e7e4d13b5915500fdd1fa32071c4\
+         c7d1f4c733c068030422aa9ac3d46c4e\
+         d2826446079faa0914c2d705d98b02a2\
+         b5129cd1de164eb9cbd083e8a2503c4e",
+        "the serialised block, RFC 8439 2.3.2"
+    );
+    // 20 rounds, one cycle to add the initial state back, one to start.
+    assert_eq!(cycles, 22, "a block is 22 cycles");
+}
+
+/// RFC 8439 Appendix A.1: five more blocks of the block function.
+///
+/// These are the vectors that pin down what §2.3.2's cannot. Between them
+/// they use counter 0, 1 and 2, a key of all zeros, a key with its last
+/// byte set, a key with `0xff` in its *second* byte, and a nonce with a
+/// 2 in its last byte — so a byte-swapped counter, a reversed key load
+/// and a nonce written into the wrong words are all visible here and
+/// none of them is visible in §2.3.2.
+///
+/// All five were also run through `purecrypto` on this machine and agree,
+/// which is what earns `purecrypto` the right to be the oracle for the
+/// SHA-256 length table above.
+///
+/// What it would not catch: anything about the stream — the counter
+/// advancing between blocks, the exclusive-or, the 32-bit port — which is
+/// §2.4.2 and A.2 below.
+#[test]
+fn chacha20_core_matches_rfc_8439_appendix_a_1() {
+    let design = design_of("chacha20", "chacha20_core", &[]);
+    let mut sim = simulate(&design, "chacha20_core");
+    let bench = ChaChaCore::attach(&mut sim);
+
+    let zero = [0u8; 32];
+    let mut one_at_end = [0u8; 32];
+    one_at_end[31] = 1;
+    let mut ff_second = [0u8; 32];
+    ff_second[1] = 0xff;
+    let n_zero = [0u8; 12];
+    let mut n_two = [0u8; 12];
+    n_two[11] = 2;
+
+    let cases: [(&str, [u8; 32], [u8; 12], u32, &str); 5] = [
+        (
+            "#1",
+            zero,
+            n_zero,
+            0,
+            "76b8e0ada0f13d90405d6ae55386bd28bdd219b8a08ded1aa836efcc8b770dc7\
+             da41597c5157488d7724e03fb8d84a376a43b8f41518a11cc387b669b2ee6586",
+        ),
+        (
+            "#2",
+            zero,
+            n_zero,
+            1,
+            "9f07e7be5551387a98ba977c732d080dcb0f29a048e3656912c6533e32ee7aed\
+             29b721769ce64e43d57133b074d839d531ed1f28510afb45ace10a1f4b794d6f",
+        ),
+        (
+            "#3",
+            one_at_end,
+            n_zero,
+            1,
+            "3aeb5224ecf849929b9d828db1ced4dd832025e8018b8160b82284f3c949aa5a\
+             8eca00bbb4a73bdad192b5c42f73f2fd4e273644c8b36125a64addeb006c13a0",
+        ),
+        (
+            "#4",
+            ff_second,
+            n_zero,
+            2,
+            "72d54dfbf12ec44b362692df94137f328fea8da73990265ec1bbbea1ae9af0ca\
+             13b25aa26cb4a648cb9b9d1be65b2c0924a66c54d545ec1b7374f4872e99f096",
+        ),
+        (
+            "#5",
+            zero,
+            n_two,
+            0,
+            "c2c64d378cd536374ae204b9ef933fcd1a8b2288b3dfa49672ab765b54ee27c7\
+             8a970e0e955c14f3a88e741b97c286f75f8fc299e8148362fa198a39531bed6d",
+        ),
+    ];
+
+    for (what, key, nonce, counter, expected) in cases {
+        let (block, _, cycles) = bench.block_of(&mut sim, &key, &nonce, counter);
+        assert_eq!(hex(&block), expected, "RFC 8439 A.1 {what}");
+        assert_eq!(cycles, 22, "RFC 8439 A.1 {what} took {cycles} cycles");
+    }
+}
+
+/// Everything `chacha20` needs from a testbench.
+struct ChaChaStream {
+    clk: NetHandle,
+    rst_n: NetHandle,
+    start: NetHandle,
+    key: NetHandle,
+    nonce: NetHandle,
+    counter: NetHandle,
+    in_data: NetHandle,
+    in_valid: NetHandle,
+    in_ready: NetHandle,
+    out_data: NetHandle,
+    out_valid: NetHandle,
+    exhausted: NetHandle,
+}
+
+impl ChaChaStream {
+    fn attach(sim: &mut Simulator<'_>) -> Self {
+        let bench = ChaChaStream {
+            clk: top_net(sim, "clk"),
+            rst_n: top_net(sim, "rst_n"),
+            start: top_net(sim, "start"),
+            key: top_net(sim, "key"),
+            nonce: top_net(sim, "nonce"),
+            counter: top_net(sim, "counter"),
+            in_data: top_net(sim, "in_data"),
+            in_valid: top_net(sim, "in_valid"),
+            in_ready: top_net(sim, "in_ready"),
+            out_data: top_net(sim, "out_data"),
+            out_valid: top_net(sim, "out_valid"),
+            exhausted: top_net(sim, "exhausted"),
+        };
+        sim.set(bench.start, bit(false));
+        sim.set(bench.in_valid, bit(false));
+        sim.set(bench.in_data, word(32, 0));
+        sim.set(bench.key, byte_string(&[0u8; 32]));
+        sim.set(bench.nonce, byte_string(&[0u8; 12]));
+        sim.set(bench.counter, word(32, 0));
+        reset(sim, bench.clk, bench.rst_n);
+        bench
+    }
+
+    /// Encrypts (or decrypts — it is the same thing) `data`, returning
+    /// the result and the cycles from `start` to the last `out_valid`.
+    ///
+    /// A final partial word is padded with zeros and the extra output
+    /// bytes dropped, which is the block's documented answer to a length
+    /// that is not a multiple of four: the keystream depends on the key,
+    /// the nonce and the position and on nothing in the data, so the
+    /// discarded bytes change nothing.
+    fn apply(
+        &self,
+        sim: &mut Simulator<'_>,
+        key: &[u8; 32],
+        nonce: &[u8; 12],
+        counter: u32,
+        data: &[u8],
+    ) -> (Vec<u8>, u64) {
+        sim.set(self.key, byte_string(key));
+        sim.set(self.nonce, byte_string(nonce));
+        sim.set(self.counter, word(32, u64::from(counter)));
+        sim.set(self.start, bit(true));
+        cycle(sim, self.clk, HALF);
+        sim.set(self.start, bit(false));
+
+        let mut words: Vec<u32> = Vec::new();
+        for chunk in data.chunks(4) {
+            let mut four = [0u8; 4];
+            four[..chunk.len()].copy_from_slice(chunk);
+            words.push(u32::from_be_bytes(four));
+        }
+
+        let mut sent = 0usize;
+        let mut out: Vec<u8> = Vec::new();
+        let mut cycles = 1u64;
+        let limit = 100 + 60 * (words.len() as u64 + 2);
+        while out.len() < words.len() * 4 {
+            let more = sent < words.len();
+            sim.set(self.in_valid, bit(more));
+            sim.set(self.in_data, word(32, if more { u64::from(words[sent]) } else { 0 }));
+            let moved = more && high(sim, self.in_ready);
+            cycle(sim, self.clk, HALF);
+            cycles += 1;
+            if moved {
+                sent += 1;
+            }
+            if high(sim, self.out_valid) {
+                out.extend_from_slice(&get_u32(sim, self.out_data).to_be_bytes());
+            }
+            assert!(
+                cycles < limit,
+                "chacha20 produced {} of {} bytes in {limit} cycles",
+                out.len(),
+                words.len() * 4
+            );
+        }
+        sim.set(self.in_valid, bit(false));
+        out.truncate(data.len());
+        (out, cycles)
+    }
+}
+
+/// RFC 8439 §2.4.2: the sunscreen text, 114 bytes over two blocks.
+///
+/// This is the first vector here that needs the *stream*: 114 bytes is
+/// one block and most of another, so the counter has to advance from 1 to
+/// 2 between them with nothing re-started, and the 29th word is a partial
+/// one. The RFC prints the keystream as well as the ciphertext, so both
+/// are checked — the keystream by encrypting zeros, which is the same
+/// thing the block function's output is and a separate path through this
+/// module.
+///
+/// What it would catch: a counter that does not advance between blocks, a
+/// counter that advances by the wrong amount, a block boundary at the
+/// wrong word, the exclusive-or dropping or swapping bytes, and the
+/// registered output being off by a word.
+///
+/// What it would not catch: a counter that does not advance *correctly
+/// past a carry*, which needs a counter near a byte boundary — A.2 #3
+/// below starts at 42 and A.2 #2 at 1, so neither does that either. A
+/// block starting at counter 0xFFFFFFFE would, and
+/// `chacha20_stops_rather_than_repeat_its_keystream` is the test that
+/// goes there.
+#[test]
+fn chacha20_encrypts_the_text_of_rfc_8439_2_4_2() {
+    let design = design_of("chacha20", "chacha20", &[]);
+    let mut sim = simulate(&design, "chacha20");
+    let bench = ChaChaStream::attach(&mut sim);
+
+    let mut key = [0u8; 32];
+    for (i, byte) in key.iter_mut().enumerate() {
+        *byte = octet(i as u64);
+    }
+    let nonce: [u8; 12] = [0, 0, 0, 0, 0, 0, 0, 0x4a, 0, 0, 0, 0];
+    let plain: &[u8] = b"Ladies and Gentlemen of the class of '99: If I could offer you only one tip for the future, sunscreen would be it.";
+    assert_eq!(plain.len(), 114, "the RFC's own length");
+
+    let (cipher, cycles) = bench.apply(&mut sim, &key, &nonce, 1, plain);
+    assert_eq!(
+        hex(&cipher),
+        "6e2e359a2568f98041ba0728dd0d6981e97e7aec1d4360c20a27afccfd9fae0b\
+         f91b65c5524733ab8f593dabcd62b3571639d624e65152ab8f530c359f0861d8\
+         07ca0dbf500d6a6156a38e088a22b65e52bc514d16ccf806818ce91ab7793736\
+         5af90bbf74a35be6b40b8eedf2785e42874d",
+        "RFC 8439 2.4.2 ciphertext, in {cycles} cycles"
+    );
+
+    // The keystream the RFC prints beside it, which is what encrypting
+    // zeros gives. 128 bytes, because the RFC prints both blocks.
+    let (keystream, _) = bench.apply(&mut sim, &key, &nonce, 1, &[0u8; 128]);
+    assert_eq!(
+        hex(&keystream),
+        "224f51f3401bd9e12fde276fb8631ded8c131f823d2c06e27e4fcaec9ef3cf78\
+         8a3b0aa372600a92b57974cded2b9334794cba40c63e34cdea212c4cf07d41b7\
+         69a6749f3f630f4122cafe28ec4dc47e26d4346d70b98c73f3e9c53ac40c5945\
+         398b6eda1a832c89c167eacd901d7e2bf363740373201aa188fbbce83991c4ed",
+        "RFC 8439 2.4.2 keystream"
+    );
+
+    // Encryption and decryption are the same operation, so the
+    // ciphertext put back through gives the plaintext. The RFC does not
+    // say this in a vector and it does not have to; it is what a
+    // keystream cipher is, and a block that got it wrong would be wrong
+    // in a way the vectors above cannot see.
+    let (back, _) = bench.apply(&mut sim, &key, &nonce, 1, &cipher);
+    assert_eq!(back, plain, "decryption is the same operation");
+}
+
+/// RFC 8439 Appendix A.2: two more encryptions, one of 375 bytes.
+///
+/// #2 is the IETF Note Well text, 375 bytes — six blocks — at counter 1
+/// with a key and nonce that are almost but not entirely zero. #3 is 127
+/// bytes at counter **42** with a key that is nothing but entropy, which
+/// is the only vector anywhere here whose starting counter is neither 0,
+/// 1 nor 2.
+///
+/// Both agree with `purecrypto` as well, which is #3's second reason for
+/// being here: it is the longest thing in this section and the oracle and
+/// the document both say the same of it.
+///
+/// What it would not catch: #1 of A.2, which is 64 zero bytes under a
+/// zero key — already covered exactly by A.1 #1, since encrypting zeros
+/// is the keystream.
+#[test]
+fn chacha20_matches_rfc_8439_appendix_a_2() {
+    let design = design_of("chacha20", "chacha20", &[]);
+    let mut sim = simulate(&design, "chacha20");
+    let bench = ChaChaStream::attach(&mut sim);
+
+    // A.2 #2.
+    let mut key = [0u8; 32];
+    key[31] = 1;
+    let mut nonce = [0u8; 12];
+    nonce[11] = 2;
+    let plain: &[u8] = b"Any submission to the IETF intended by the Contributor for publication as all or part of an IETF Internet-Draft or RFC and any statement made within the context of an IETF activity is considered an \"IETF Contribution\". Such statements include oral statements in IETF sessions, as well as written and electronic communications made at any time or place, which are addressed to";
+    assert_eq!(plain.len(), 375, "the RFC's own length");
+    let (cipher, cycles) = bench.apply(&mut sim, &key, &nonce, 1, plain);
+    assert_eq!(
+        hex(&cipher),
+        "a3fbf07df3fa2fde4f376ca23e82737041605d9f4f4f57bd8cff2c1d4b7955ec\
+         2a97948bd3722915c8f3d337f7d370050e9e96d647b7c39f56e031ca5eb6250d\
+         4042e02785ececfa4b4bb5e8ead0440e20b6e8db09d881a7c6132f420e527950\
+         42bdfa7773d8a9051447b3291ce1411c680465552aa6c405b7764d5e87bea85a\
+         d00f8449ed8f72d0d662ab052691ca66424bc86d2df80ea41f43abf937d3259d\
+         c4b2d0dfb48a6c9139ddd7f76966e928e635553ba76c5c879d7b35d49eb2e62b\
+         0871cdac638939e25e8a1e0ef9d5280fa8ca328b351c3c765989cbcf3daa8b6c\
+         cc3aaf9f3979c92b3720fc88dc95ed84a1be059c6499b9fda236e7e818b04b0b\
+         c39c1e876b193bfe5569753f88128cc08aaa9b63d1a16f80ef2554d7189c411f\
+         5869ca52c5b83fa36ff216b9c1d30062bebcfd2dc5bce0911934fda79a86f6e6\
+         98ced759c3ff9b6477338f3da4f9cd8514ea9982ccafb341b2384dd902f3d1ab\
+         7ac61dd29c6f21ba5b862f3730e37cfdc4fd806c22f221",
+        "RFC 8439 A.2 #2, in {cycles} cycles"
+    );
+
+    // A.2 #3.
+    let key3: [u8; 32] = [
+        0x1c, 0x92, 0x40, 0xa5, 0xeb, 0x55, 0xd3, 0x8a, 0xf3, 0x33, 0x88, 0x86, 0x04, 0xf6, 0xb5,
+        0xf0, 0x47, 0x39, 0x17, 0xc1, 0x40, 0x2b, 0x80, 0x09, 0x9d, 0xca, 0x5c, 0xbc, 0x20, 0x70,
+        0x75, 0xc0,
+    ];
+    let plain3: &[u8] = b"'Twas brillig, and the slithy toves\nDid gyre and gimble in the wabe:\nAll mimsy were the borogoves,\nAnd the mome raths outgrabe.";
+    assert_eq!(plain3.len(), 127, "the RFC's own length");
+    let (cipher3, _) = bench.apply(&mut sim, &key3, &nonce, 42, plain3);
+    assert_eq!(
+        hex(&cipher3),
+        "62e6347f95ed87a45ffae7426f27a1df5fb69110044c0d73118effa95b01e5cf\
+         166d3df2d721caf9b21e5fb14c616871fd84c54f9d65b283196c7fe4f60553eb\
+         f39c6402c42234e32a356b3e764312a61a5532055716ead6962568f87d3f3f77\
+         04c6a8d1bcd1bf4d50d6154b6da731b187b58dfd728afa36757a797ac188d1",
+        "RFC 8439 A.2 #3"
+    );
+}
+
+/// **The fixed-latency measurement for ChaCha20.**
+///
+/// Nine keys as different from each other as thirty-two bytes can be,
+/// each with three nonces and three counters, and the assertion is that
+/// `chacha20_core` takes the **same 22 cycles** for every one of the
+/// eighty-one combinations. Then the same for the stream: nine keys over
+/// a 200-byte message, same cycle count every time.
+///
+/// Why this is the test that matters here: ChaCha20's cycle count has no
+/// honest reason to depend on the key, so an implementation where it does
+/// has a data-dependent branch in it — which is exactly the thing an
+/// AES implementation with a table-driven S-box has, and exactly the
+/// reason AES is not in this round.
+///
+/// What it establishes: twenty rounds happen whatever the key, the nonce
+/// and the counter are, and nothing in this block short-circuits on a
+/// zero word or an equal pair.
+///
+/// What it does **not** establish: anything about power or
+/// electromagnetic emission, which is where a real attack on this
+/// primitive would go, and nothing about gate delay in the synthesised
+/// netlist. `ip/crypto/chacha20/README.md` §5 is the whole of that.
+///
+/// What it would not catch: a *data*-dependent stall in the stream, since
+/// the keystream does not depend on the data at all — the plaintext in
+/// the stream half of this test is the same every time on purpose, and
+/// the keys are what vary.
+#[test]
+fn chacha20_takes_the_same_cycles_whatever_the_key_is() {
+    let keys: Vec<[u8; 32]> = {
+        let mut out: Vec<[u8; 32]> = vec![[0x00; 32], [0xff; 32], [0xaa; 32], [0x55; 32]];
+        let mut counting = [0u8; 32];
+        for (i, byte) in counting.iter_mut().enumerate() {
+            *byte = octet(i as u64);
+        }
+        out.push(counting);
+        out.push(counting.map(|b| !b));
+        let mut first = [0u8; 32];
+        first[0] = 0x80;
+        out.push(first);
+        let mut last = [0u8; 32];
+        last[31] = 0x01;
+        out.push(last);
+        let mut spread = [0u8; 32];
+        for (i, byte) in spread.iter_mut().enumerate() {
+            *byte = octet((i as u64).wrapping_mul(37).wrapping_add(11));
+        }
+        out.push(spread);
+        out
+    };
+
+    // The block function.
+    let design = design_of("chacha20", "chacha20_core", &[]);
+    let mut sim = simulate(&design, "chacha20_core");
+    let bench = ChaChaCore::attach(&mut sim);
+
+    let nonces: [[u8; 12]; 3] = [
+        [0; 12],
+        [0xff; 12],
+        [0, 0, 0, 0x09, 0, 0, 0, 0x4a, 0, 0, 0, 0],
+    ];
+    let counters = [0u32, 1, 0xFFFF_FFFF];
+
+    let mut blocks: BTreeSet<String> = BTreeSet::new();
+    let mut measured = 0usize;
+    for key in &keys {
+        for nonce in &nonces {
+            for counter in counters {
+                let (block, _, cycles) = bench.block_of(&mut sim, key, nonce, counter);
+                assert_eq!(
+                    cycles, 22,
+                    "chacha20_core took {cycles} cycles for key {}",
+                    hex(key)
+                );
+                blocks.insert(hex(&block));
+                measured += 1;
+            }
+        }
+    }
+    assert_eq!(measured, keys.len() * nonces.len() * counters.len());
+    assert_eq!(
+        blocks.len(),
+        measured,
+        "the {measured} inputs should give {measured} different blocks, so the equal \
+         cycle counts above are not the cycle counts of one repeated run"
+    );
+
+    // And the stream, over a message long enough to span four blocks.
+    let design = design_of("chacha20", "chacha20", &[]);
+    let mut sim = simulate(&design, "chacha20");
+    let bench = ChaChaStream::attach(&mut sim);
+    let plain = crypto_pattern(200);
+    let mut counts: BTreeSet<u64> = BTreeSet::new();
+    let mut ciphers: BTreeSet<String> = BTreeSet::new();
+    for key in &keys {
+        let (cipher, cycles) = bench.apply(&mut sim, key, &nonces[2], 7, &plain);
+        counts.insert(cycles);
+        ciphers.insert(hex(&cipher));
+    }
+    assert_eq!(
+        counts.len(),
+        1,
+        "the stream took {counts:?} cycles over nine different keys"
+    );
+    assert_eq!(ciphers.len(), keys.len(), "nine keys, nine ciphertexts");
+}
+
+/// The counter runs out and the block stops instead of repeating itself.
+///
+/// RFC 8439 §2.3's block counter is 32 bits, so a (key, nonce) pair is
+/// good for 2^32 blocks and no more. Wrapping it would hand out the same
+/// keystream twice, which for a stream cipher is the end of the
+/// confidentiality of both messages — so this block latches `exhausted`,
+/// stops accepting data, and makes the caller say `start` again with a
+/// new nonce.
+///
+/// The test starts the stream at 0xFFFFFFFE, which gives it exactly two
+/// blocks, and checks that the first 128 bytes come out, that the 129th
+/// word is **not** accepted, and that `exhausted` is high. Starting two
+/// below the top is also the only place in this file where the counter
+/// carries from 0xFF to 0x00 in its low byte, so it is the test that
+/// would catch a counter incremented a byte at a time.
+///
+/// What it would not catch: an `exhausted` that latches one block early
+/// or late by more than one — the two-block window here pins it to
+/// within one block, and a wider window would take 2^32 blocks to check.
+#[test]
+fn chacha20_stops_rather_than_repeat_its_keystream() {
+    let design = design_of("chacha20", "chacha20", &[]);
+    let mut sim = simulate(&design, "chacha20");
+    let bench = ChaChaStream::attach(&mut sim);
+
+    let key = [0x42u8; 32];
+    let nonce = [0x17u8; 12];
+
+    // Two blocks' worth, which is all there is from 0xFFFFFFFE. The
+    // sixteenth word of the second block is the last the counter can pay
+    // for, so `exhausted` latches on the edge that word moves on — which
+    // is the edge this keystream's last four bytes were registered on.
+    let (two, _) = bench.apply(&mut sim, &key, &nonce, 0xFFFF_FFFE, &[0u8; 128]);
+    assert_eq!(two.len(), 128);
+
+    // One word more. It is never accepted.
+    sim.set(bench.in_valid, bit(true));
+    sim.set(bench.in_data, word(32, 0));
+    for _ in 0..200 {
+        assert!(
+            !high(&sim, bench.in_ready),
+            "chacha20 accepted a word past block 2^32"
+        );
+        cycle(&mut sim, bench.clk, HALF);
+    }
+    sim.set(bench.in_valid, bit(false));
+    assert!(high(&sim, bench.exhausted), "and it says why");
+
+    // The two blocks really were blocks 0xFFFFFFFE and 0xFFFFFFFF and
+    // not the same block twice, which is the thing being prevented.
+    assert_ne!(two[..64], two[64..], "two different keystream blocks");
+
+    // `start` clears it.
+    let (again, _) = bench.apply(&mut sim, &key, &nonce, 0, &[0u8; 64]);
+    assert_eq!(again.len(), 64);
+    assert!(!high(&sim, bench.exhausted), "`start` clears it");
+}
+
+/// **No secret-dependent addressing: there is nothing to address.**
+///
+/// Neither crypto block contains a memory array at all. SHA-256's one
+/// table, the sixty-four K constants, is a `case` over the round counter
+/// and becomes logic; ChaCha20 has no table of any kind, which is one of
+/// the reasons it is in this round and AES is not.
+///
+/// What this establishes: no lookup table in either block can be indexed
+/// by a secret byte, because there is no indexable storage for one to
+/// index. That is a structural fact about the synthesised design rather
+/// than a reading of the source.
+///
+/// What it does **not** establish: that no *multiplexer* is selected by a
+/// secret. A one-hot mux over sixteen words whose select comes from key
+/// material would pass this test and would be a timing side channel in a
+/// netlist even though it is not a memory. Nothing in either block does
+/// that — every select here is a counter — but this test does not prove
+/// it, and no test in this file does. It would take a taint analysis from
+/// the key ports forward, which Reticle does not have; §5 of both READMEs
+/// records that as the gap it is.
+#[test]
+fn crypto_blocks_hold_no_memory_to_index() {
+    for variant in VARIANTS {
+        if !matches!(variant.package, "sha256" | "chacha20") {
+            continue;
+        }
+        let (mut design, id) = flattened(variant.package, variant.top, variant.params);
+        let mut diags = Diagnostics::new();
+        synth_run(&mut design, &SynthOptions::default(), &mut diags);
+        assert!(
+            !diags.has_errors(),
+            "{}.{} does not synthesise",
+            variant.package,
+            variant.top
+        );
+        let module = design.module(id);
+        let memories: Vec<String> = module
+            .memories
+            .iter()
+            .map(|(_, m)| format!("{} x {}", m.size, m.elem.width().unwrap_or(0)))
+            .collect();
+        assert!(
+            memories.is_empty(),
+            "{}.{} holds {} memory array(s): {}",
+            variant.package,
+            variant.top,
+            memories.len(),
+            memories.join(", ")
+        );
+    }
+}
+
+// ---------------------------------------------------------------------------
 // The library as an index
 // ---------------------------------------------------------------------------
 
@@ -18224,7 +19511,7 @@ fn every_block_is_findable_by_the_name_it_declares() {
         assert_eq!(parts[0], "ip");
         assert!(
             CATEGORIES.contains(&parts[1]),
-            "`{}` is not one of the seven categories {CATEGORIES:?}",
+            "`{}` is not one of the eight categories {CATEGORIES:?}",
             parts[1]
         );
         assert_eq!(

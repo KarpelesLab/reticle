@@ -1,0 +1,38 @@
+# chacha20 — RFC 8439 ChaCha20.
+#
+# Three modules, smallest first. `chacha20_qr` is one quarter round and
+# exists because RFC 8439 §2.1.1 is a test vector for it. `chacha20_core`
+# is the block function of §2.3 — four quarter rounds a cycle, twenty
+# rounds, 22 cycles a block. `chacha20` is the encryption of §2.4: the
+# keystream exclusive-ored with a 32-bit stream, the counter advanced per
+# block, and a stop when the counter would run out. `top` names that one.
+#
+# There is no Poly1305 here, so nothing in this package authenticates
+# anything. `ip/crypto/chacha20/README.md` §6 is about that, and §4 and
+# §5 are about what the constant-time claim covers and what it does not.
+name chacha20
+version 1.0.0
+license MIT
+description "RFC 8439 ChaCha20: the quarter round, the block function at one round per cycle, and the stream cipher over a 32-bit ready/valid stream"
+
+top chacha20
+target ice40
+target ecp5
+
+source rtl/chacha20_qr.v
+source rtl/chacha20_core.v
+source rtl/chacha20.v
+
+port clk in
+port rst_n in
+port start in
+port key in 256
+port nonce in 96
+port counter in 32
+port in_data in 32
+port in_valid in
+port in_ready out
+port out_data out 32
+port out_valid out
+port active out
+port exhausted out

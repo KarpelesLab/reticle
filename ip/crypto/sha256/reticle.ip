@@ -1,0 +1,35 @@
+# sha256 — FIPS 180-4 SHA-256 over a byte stream.
+#
+# Two modules, and the choice between them is the choice about padding.
+# `top` names `sha256`, which pads: it counts the message, appends the 1
+# bit, the zeros and the 64-bit length, and hands whole blocks to
+# `sha256_core`. A caller that already has padded 512-bit blocks
+# instantiates `sha256_core` on its own and pays for none of that.
+#
+# `ip/crypto/sha256/README.md` has the vectors, the fixed-latency
+# measurement and — in §4 and §5 — what this block does and does not
+# defend against.
+name sha256
+version 1.0.0
+license MIT
+description "FIPS 180-4 SHA-256 with its own padding, one round per cycle, over a byte-wide ready/valid stream"
+
+top sha256
+target ice40
+target ecp5
+
+source rtl/sha256_core.v
+source rtl/sha256.v
+
+param LEN_BITS int 61 6..61
+
+port clk in
+port rst_n in
+port start in
+port in_byte in 8
+port in_valid in
+port in_last in
+port in_ready out
+port digest_valid out
+port digest out 256
+port busy out
