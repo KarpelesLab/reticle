@@ -102,6 +102,24 @@ const KEYSTREAM_2_4_2: &str = concat!(
     "398b6eda1a832c89c167eacd901d7e2bf363740373201aa188fbbce83991c4ed",
 );
 
+/// The digest of a mebibyte and of sixteen mebibytes of keystream under the
+/// reset key, nonce and counter, which is what `X 100000` and `X 1000000`
+/// should answer.
+///
+/// **CONFIRMED and not HIGH**: no document prints a mebibyte of keystream, so
+/// the oracle for a length like that can only be a second implementation, and
+/// the one this project uses is `purecrypto` — the user's from-scratch Rust
+/// cryptography library, driven out of tree and **not** a dependency of
+/// anything here. `ip/crypto/chacha20/README.md` §7 is where it earned that
+/// right: it reproduced all nine of RFC 8439's vectors byte for byte, and
+/// `ip/crypto/sha256/README.md` §3 has the same argument for the
+/// nineteen-length padding table. Everything else in this file compares
+/// against a published hexdump or against `sha256sum`.
+const KEYSTREAM_DIGEST_1M: &str =
+    "386a463c3523ae2fa21a85d18c54312f028a2de99aaa669271fb103702da423a";
+const KEYSTREAM_DIGEST_16M: &str =
+    "5b39f10bc286d5f5cc3aaa3b3bc2400b218040389c4212f1587d71f6cdd20a15";
+
 /// RFC 8439 Appendix A.1 vector #1: the all-zero key, the all-zero nonce,
 /// block counter 0, one block.
 const KEYSTREAM_A1_1: &str = concat!(
@@ -195,10 +213,16 @@ impl Console {
     /// does and does not reach on this driver. The baud rate is arbitrary:
     /// there is no serial line inside this design, so nothing divides
     /// anything, and `stty` merely insists on a number.
+    ///
+    /// `min 0 time 10` is a one-second read timeout with no minimum, so a
+    /// read returns rather than blocking for ever. It is **not** a budget
+    /// for an answer: [`Console::ask`] keeps reading across as many of those
+    /// as `QUIET` allows, because a `Z` of sixty-four mebibytes is seconds
+    /// of silence and then one line.
     fn open(path: &str) -> Result<Console, String> {
         let stty = Command::new("stty")
             .args([
-                "-F", path, "115200", "raw", "-echo", "clocal", "min", "0", "time", "100",
+                "-F", path, "115200", "raw", "-echo", "clocal", "min", "0", "time", "10",
             ])
             .status()
             .map_err(|e| format!("cannot run `stty` ({e})"))?;
@@ -605,11 +629,14 @@ fn sha256_and_chacha20_answer_a_host_from_a_real_part() {
     // these and the figures above is the whole of the answer to "what is the
     // bottleneck".
     //
-    // The digests are **not** checked at these sizes and that is said
-    // plainly: `Z` is checkable at any length because zero bytes are, and it
-    // is checked; a sixty-four mebibyte keystream would need `purecrypto`
-    // out of tree, and the lengths RFC 8439 publishes are checked above
-    // instead.
+    // Both are checked, at every size: `Z` against `sha256sum` over the same
+    // zeros, and `X` against the two constants above, which is the one place
+    // in this file whose oracle is `purecrypto` rather than a published
+    // document or somebody else's tool. RFC 8439 does not print a mebibyte of
+    // keystream and nothing does, so a length that long has no authority to
+    // compare against — and `ip/crypto/chacha20/README.md` §7 is where
+    // `purecrypto` earned the right to be the oracle, by reproducing all nine
+    // of RFC 8439's vectors byte for byte.
     for bytes in [1usize << 20, 1 << 26] {
         let (got, took) = console.ask(&format!("Z {bytes:x}")).expect("a digest");
         let secs = took.as_secs_f64();
@@ -622,13 +649,38 @@ fn sha256_and_chacha20_answer_a_host_from_a_real_part() {
             bytes as f64 / secs / 60e6
         );
     }
-    for bytes in [1usize << 20, 1 << 24] {
-        let (_, took) = console.ask(&format!("X {bytes:x}")).expect("a digest");
+    // Part three set the key, the nonce and the counter to zero to reach
+    // RFC 8439 A.1 vector #1, so they have to be put back before a keystream
+    // digest can be compared against anything: the two constants below are
+    // for the values the part came up holding, and a keystream under some
+    // other key is a different keystream. Asserting the readback is what
+    // makes that a checked step rather than a hope.
+    for (line, want, what) in [
+        (format!("K {RESET_KEY}"), "OK", "the key"),
+        (format!("N {RESET_NONCE}"), "OK", "the nonce"),
+        (format!("C {RESET_COUNTER}"), "OK", "the counter"),
+        ("k".to_owned(), RESET_KEY, "the key, read back"),
+        ("n".to_owned(), RESET_NONCE, "the nonce, read back"),
+        ("c".to_owned(), RESET_COUNTER, "the counter, read back"),
+    ] {
+        let (got, _) = console.ask(&line).expect("an answer");
+        assert_eq!(got, want, "{what}");
+    }
+
+    for (bytes, want) in [
+        (1usize << 20, KEYSTREAM_DIGEST_1M),
+        (1usize << 24, KEYSTREAM_DIGEST_16M),
+    ] {
+        let (got, took) = console.ask(&format!("X {bytes:x}")).expect("a digest");
         let secs = took.as_secs_f64();
+        assert_eq!(
+            got, want,
+            "{bytes} bytes of keystream, enciphered and hashed on the part"
+        );
         println!(
             "X, {bytes} bytes on the device: {took:?} -> {:.0} bytes/s enciphered \
-             and hashed ({:.3} bytes/clock at 60 MHz), digest not checked at this \
-             length",
+             and hashed ({:.3} bytes/clock at 60 MHz), and the digest agrees with \
+             purecrypto",
             bytes as f64 / secs,
             bytes as f64 / secs / 60e6
         );
