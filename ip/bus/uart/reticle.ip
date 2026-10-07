@@ -21,7 +21,7 @@
 # host's SET_LINE_CODING into the format the frame modules take — so that
 # a host's `stty` reaches the wire and not just a register.
 name uart
-version 1.0.0
+version 1.1.0
 license MIT
 description "UART transmitter and receiver with a ready/valid interface, selectable data bits, parity and stop bits, distinguished receive errors, and a run-time or parameterised baud divisor"
 

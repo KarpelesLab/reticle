@@ -792,7 +792,7 @@ fn reticle_build_builds_the_project() {
     // a build used is written down.
     for line in [
         "package mos6502 1.0.0 library ../../ip/cpu/mos6502",
-        "package uart 1.0.0 library ../../ip/bus/uart",
+        "package uart 1.1.0 library ../../ip/bus/uart",
     ] {
         assert!(lock.contains(line), "no `{line}` in:\n{lock}");
     }

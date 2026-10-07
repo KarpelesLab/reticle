@@ -1530,7 +1530,7 @@ project that wants to pin one directory.
 `cdc_sync` is not named there and does not have to be: `axil_gpio`,
 `cdc_pulse` and `fifo_async` declare it themselves, and the same library
 search places it. `docs/ip.md` has the whole resolution story, including
-what the lock file records (`package uart 1.0.0 library ../reticle/ip/bus/uart`
+what the lock file records (`package uart 1.1.0 library ../reticle/ip/bus/uart`
 — the answer the search gave, so that a block which has moved is
 something `reticle build --locked` reports rather than something a build
 silently follows).

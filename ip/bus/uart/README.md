@@ -642,13 +642,13 @@ stop-bit count.
   bits is the worst of the forty.
 - **No fractional divisor.** `uart_baud_div`'s header says what that costs
   at high rates.
-- **The package version is still 1.0.0.** It should be 1.1.0: this round is
-  new, backwards-compatible modules and ports. It was left alone because
-  `tests/mos6502_computer.rs` asserts the exact line
-  `package uart 1.0.0 library ../../ip/bus/uart` in a generated lock file,
-  and that file was outside this round's scope. Every `depends uart ^1.0.0`
-  in the tree accepts either, so nothing resolves differently — but the
-  bump is owed.
+- **The package is 1.1.0, not 1.0.0.** The character format is new,
+  backwards-compatible modules and ports: `uart` with no parameters is the
+  8N1 pair 1.0.0 shipped, so a minor bump is the whole of it. Every
+  `depends uart ^1.0.0` in the tree accepts 1.1.0 and nothing resolves
+  differently; what the bump moved is the generated lock line
+  `package uart 1.1.0 library ../../ip/bus/uart`, which
+  `tests/mos6502_computer.rs` and `docs/ip-library.md` both quote.
 
 ---
 
