@@ -37,7 +37,13 @@ module crypto_console_ulpi #(
     parameter [7:0]   VENDOR_DATA = 8'h06,
     // Bits of the SHA-256 message byte counter; `crypto_console`'s own
     // parameter and that module's header says why 32.
-    parameter integer LEN_BITS    = 32
+    parameter integer LEN_BITS    = 32,
+    // Whether each crypto core is built. `crypto_console`'s own parameters,
+    // and that module's header says why they exist: the design with both of
+    // them does not route on this part, and the one with either of them
+    // does.
+    parameter integer WITH_HASH   = 1,
+    parameter integer WITH_CIPHER = 1
 ) (
     input  wire       clk60,
     input  wire       rst_n,
@@ -124,7 +130,9 @@ module crypto_console_ulpi #(
     wire console_rst_n = rst_n & configured;
 
     crypto_console #(
-        .LEN_BITS (LEN_BITS)
+        .LEN_BITS    (LEN_BITS),
+        .WITH_HASH   (WITH_HASH),
+        .WITH_CIPHER (WITH_CIPHER)
     ) u_console (
         .clk           (clk60),
         .rst_n         (console_rst_n),

@@ -155,7 +155,37 @@ module crypto_console #(
     // Bits of the SHA-256 message byte counter. `ip/crypto/sha256`'s own
     // parameter; 32 is 4 GiB, and the paragraph above says why that is the
     // right width here rather than FIPS 180-4's 61.
-    parameter integer LEN_BITS = 32
+    parameter integer LEN_BITS = 32,
+
+    // WHETHER EACH CORE IS BUILT AT ALL, AND WHY THAT IS A PARAMETER
+    //
+    // Both, by default, which is what this console is for. The reason either
+    // can be left out is a **measurement on the router**, and it belongs
+    // here rather than in a comment somewhere else because it is the one
+    // thing that decides which bitstream a person can actually load.
+    //
+    // With both cores the design is 11 955 lookup tables, and
+    // `reticle fpga --bitstream` for an `ecp5-12f-CABGA256` **does not
+    // converge**: after 40 ripup iterations and about an hour and fifty
+    // minutes it reports 886 nodes still oversubscribed. With one core it is
+    // between five and eight thousand and it routes.
+    // `testdata/fpga/cynthion/usb_crypto_console.v`'s header has the exact
+    // message, the wire it names and why that wire is a fabric fact rather
+    // than a budget.
+    //
+    // So this is not a knob for taste. It is the difference between a design
+    // that reaches a part and one that does not, and it is a parameter
+    // rather than two files so that the parser, the protocol and the
+    // simulation tests are the same in every variant.
+    //
+    // A command whose core is absent answers `ERR` at the command letter —
+    // nothing downstream has to know — and `?` still lists every letter,
+    // because the help line is a string table and not a function of the
+    // parameters. A host that wants to know which variant it is talking to
+    // types `H abc` and `e 40` and reads the answers;
+    // `tests/usb_crypto_console.rs` does exactly that.
+    parameter integer WITH_HASH   = 1,
+    parameter integer WITH_CIPHER = 1
 ) (
     input  wire       clk,
     input  wire       rst_n,
@@ -421,20 +451,34 @@ module crypto_console #(
     reg          hash_last;
     reg  [7:0]   hash_byte;
 
-    sha256 #(
-        .LEN_BITS (LEN_BITS)
-    ) u_hash (
-        .clk          (clk),
-        .rst_n        (rst_n),
-        .start        (hs_q),
-        .in_byte      (hash_byte),
-        .in_valid     (hash_feed),
-        .in_last      (hash_last),
-        .in_ready     (sha_ready),
-        .digest_valid (digest_valid),
-        .digest       (digest),
-        .busy         (hash_busy)
-    );
+    generate
+        if (WITH_HASH != 0) begin : g_hash
+            sha256 #(
+                .LEN_BITS (LEN_BITS)
+            ) u_hash (
+                .clk          (clk),
+                .rst_n        (rst_n),
+                .start        (hs_q),
+                .in_byte      (hash_byte),
+                .in_valid     (hash_feed),
+                .in_last      (hash_last),
+                .in_ready     (sha_ready),
+                .digest_valid (digest_valid),
+                .digest       (digest),
+                .busy         (hash_busy)
+            );
+        end else begin : g_no_hash
+            // No hash. The digest is zero and no `digest_valid` ever
+            // arrives, so `S_WAIT` would never leave — which is why
+            // `in_ready` is **high**: nothing in the pipeline can block on a
+            // core that is not there, and every command that would have
+            // reached one is refused at its command letter instead.
+            assign digest       = 256'd0;
+            assign digest_valid = 1'b0;
+            assign sha_ready    = 1'b1;
+            assign hash_busy    = 1'b0;
+        end
+    endgenerate
 
     wire [31:0] ciph_out;
     wire        ciph_out_valid;
@@ -443,21 +487,36 @@ module crypto_console #(
     reg         ciph_valid;
     reg  [31:0] ciph_word;
 
-    chacha20 u_cipher (
-        .clk       (clk),
-        .rst_n     (rst_n),
-        .start     (cs_q),
-        .key       (key_q),
-        .nonce     (nonce_q),
-        .counter   (ctr_q),
-        .in_data   (ciph_word),
-        .in_valid  (ciph_valid),
-        .in_ready  (ciph_ready),
-        .out_data  (ciph_out),
-        .out_valid (ciph_out_valid),
-        .active    (cipher_active),
-        .exhausted (ciph_exhausted)
-    );
+    generate
+        if (WITH_CIPHER != 0) begin : g_ciph
+            chacha20 u_cipher (
+                .clk       (clk),
+                .rst_n     (rst_n),
+                .start     (cs_q),
+                .key       (key_q),
+                .nonce     (nonce_q),
+                .counter   (ctr_q),
+                .in_data   (ciph_word),
+                .in_valid  (ciph_valid),
+                .in_ready  (ciph_ready),
+                .out_data  (ciph_out),
+                .out_valid (ciph_out_valid),
+                .active    (cipher_active),
+                .exhausted (ciph_exhausted)
+            );
+        end else begin : g_no_ciph
+            // No cipher, and `in_ready` high for the same reason the hash's
+            // is. `K`, `N`, `C`, `k`, `n` and `c` still work: they are four
+            // shift registers and a printer, they cost nothing, and a key
+            // the part remembers is a true thing to be able to read back
+            // whether or not anything enciphers with it.
+            assign ciph_out       = 32'd0;
+            assign ciph_out_valid = 1'b0;
+            assign ciph_ready     = 1'b1;
+            assign ciph_exhausted = 1'b0;
+            assign cipher_active  = 1'b0;
+        end
+    endgenerate
 
     // -----------------------------------------------------------------
     // THE CIPHER'S THIRTY-TWO BIT PORT, WHICH IS A BYTE STREAM HERE
@@ -811,33 +870,63 @@ module crypto_console #(
                             state_q <= S_CMD;
                         end else begin
                             case (rx_data)
+                                // A command whose core this build left out
+                                // goes straight to `S_SKIP`, which swallows
+                                // the rest of the line and answers `ERR`.
+                                // Each condition is on a parameter, so one
+                                // arm of it is folded away at elaboration
+                                // and costs nothing.
                                 8'h48: begin  // H: text, hashed
-                                    use_hash_q <= 1'b1;
-                                    state_q    <= S_TXT1;
+                                    if (WITH_HASH != 0) begin
+                                        use_hash_q <= 1'b1;
+                                        state_q    <= S_TXT1;
+                                    end else begin
+                                        state_q    <= S_SKIP;
+                                    end
                                 end
                                 8'h68: begin  // h: hex, hashed
-                                    use_hash_q <= 1'b1;
-                                    state_q    <= S_HEX;
+                                    if (WITH_HASH != 0) begin
+                                        use_hash_q <= 1'b1;
+                                        state_q    <= S_HEX;
+                                    end else begin
+                                        state_q    <= S_SKIP;
+                                    end
                                 end
                                 8'h45: begin  // E: hex, enciphered
-                                    use_ciph_q <= 1'b1;
-                                    cs_q       <= 1'b1;
-                                    state_q    <= S_HEX;
+                                    if (WITH_CIPHER != 0) begin
+                                        use_ciph_q <= 1'b1;
+                                        cs_q       <= 1'b1;
+                                        state_q    <= S_HEX;
+                                    end else begin
+                                        state_q    <= S_SKIP;
+                                    end
                                 end
                                 8'h65: begin  // e: keystream
-                                    use_ciph_q <= 1'b1;
-                                    cs_q       <= 1'b1;
-                                    state_q    <= S_NUM;
+                                    if (WITH_CIPHER != 0) begin
+                                        use_ciph_q <= 1'b1;
+                                        cs_q       <= 1'b1;
+                                        state_q    <= S_NUM;
+                                    end else begin
+                                        state_q    <= S_SKIP;
+                                    end
                                 end
                                 8'h5A: begin  // Z: zeros, hashed
-                                    use_hash_q <= 1'b1;
-                                    state_q    <= S_NUM;
+                                    if (WITH_HASH != 0) begin
+                                        use_hash_q <= 1'b1;
+                                        state_q    <= S_NUM;
+                                    end else begin
+                                        state_q    <= S_SKIP;
+                                    end
                                 end
                                 8'h58: begin  // X: keystream, hashed
-                                    use_hash_q <= 1'b1;
-                                    use_ciph_q <= 1'b1;
-                                    cs_q       <= 1'b1;
-                                    state_q    <= S_NUM;
+                                    if ((WITH_HASH != 0) && (WITH_CIPHER != 0)) begin
+                                        use_hash_q <= 1'b1;
+                                        use_ciph_q <= 1'b1;
+                                        cs_q       <= 1'b1;
+                                        state_q    <= S_NUM;
+                                    end else begin
+                                        state_q    <= S_SKIP;
+                                    end
                                 end
                                 8'h4B: begin  // K
                                     state_q <= S_ARG;

@@ -27,7 +27,7 @@ that implies a defence it does not have.
 - §6 is what the block does not do.
 - §7 is area and throughput, with the trade that was declined and its
   numbers.
-- §8 is what a board would add, and the cheapest experiment.
+- §8 is **what a board added**, with the session it was taken from.
 - §9 is the reading list.
 
 ---
@@ -47,12 +47,13 @@ that implies a defence it does not have.
   with the same inputs out of tree. `purecrypto` is **not** a dependency of
   anything in this repository — there are no third-party crates here — and
   what is committed is the numbers it produced.
+- **CHECKED** — observed on a real part, in the sense
+  `ip/usb/usb_cdc_acm/README.md` means it: a digest this block computed on
+  an ECP5 and a host's own `sha256sum` agreeing about the same bytes. §8 is
+  all of it, and it is **one** kind of claim and not the general one — a
+  correct answer off silicon is a result about *function*, and §5's list of
+  what is not defended against is unchanged by every word of it.
 - **LOW** — inference that explains the rest, with no way to check it here.
-
-There is no **CHECKED** level on this page in the sense
-`ip/usb/usb_cdc_acm/README.md` means it. Nothing here has been on a board.
-§8 says what that would add and why it is a real gap rather than a
-formality.
 
 ---
 
@@ -417,7 +418,14 @@ and a 32-bit ripple-carry add is twenty-odd levels of logic. That is a
 property of `src/fpga/trellis`, not of this block — every arithmetic block
 in the library pays it — and it is the single change that would most move
 this block's achievable clock on an ECP5. It is noted and not made; `src/`
-belonged to another round.
+belonged to another round, and it still does.
+
+**That sentence has now been tested rather than argued.** §8's design runs
+this block at 60 MHz on an ECP5 with all thirty-nine levels in the clock
+period, so the depth is survivable and not fatal; what it costs is the
+difference between 60 MHz and whatever a nine-level version of the same path
+would have closed at, which is a measurement nobody has taken because
+nothing here infers the carry cell to compare against.
 
 ### Throughput
 
@@ -427,7 +435,12 @@ is 49.6 MB/s, 397 Mbit/s. The B.3 run in §3 is 2 015 623 cycles for a
 million bytes, which is that figure arrived at over 15 626 blocks.
 
 There is no measured clock behind the 100 MHz: it is a round number to
-multiply by, and §8 is about why a real one needs a board.
+multiply by. **There is a measured one now, and it is 60 MHz** — the clock
+this block closed on an ECP5, which §8 is about. 0.496 bytes per cycle at
+60 MHz is **29.8 MB/s**, and §8 has what a part actually delivered and why
+the two numbers are not the same. The 100 stays above because every cycle
+figure on this page has always been multiplied by it and changing one
+multiplier would make the early sections disagree with the late ones.
 
 ### The trade declined
 

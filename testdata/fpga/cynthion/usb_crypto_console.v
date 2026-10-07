@@ -153,8 +153,9 @@
 // for this design is therefore the stronger thing and not the weaker one —
 // **the part computes the right answers at 60 MHz**, which a path missing
 // 16.67 ns could not do, because a wrong bit anywhere in eighty-seven
-// levels of logic changes the digest. `tests/usb_crypto_console.rs` is that
-// measurement and the session quoted above is what it printed.
+// levels of logic changes the digest and a digest is checked against
+// `sha256sum`. `tests/usb_crypto_console.rs` is that measurement and
+// `ip/crypto/sha256/README.md` §8 has the session it was taken from.
 //
 // Inferring the carry cell is the single change that would most move both
 // the area and the achievable clock of this design. It is a change to
@@ -175,7 +176,17 @@ module usb_crypto_console #(
     parameter integer POR = 16,
     // Cycles of an idle bus at J before the device's answer goes out, which
     // ULPI 1.1 Table 10 allows a full-speed Link between 7 and 18 of.
-    parameter [6:0] TURNAROUND = 7'd9
+    parameter [6:0] TURNAROUND = 7'd9,
+    // WHICH CORES THIS BITSTREAM HAS, AND WHY THERE ARE THREE BITSTREAMS
+    //
+    // The section "THE ROUTER DID NOT CONVERGE WITH BOTH CORES" below is the
+    // whole of it. The short form: with both of these at 1 the design is
+    // 11 955 lookup tables and the router gives up; with one of them at 0 it
+    // is five to eight thousand and routes. So the defaults are the design
+    // this file describes and the two single-core builds are the ones that
+    // have been on a part.
+    parameter integer WITH_HASH   = 1,
+    parameter integer WITH_CIPHER = 1
 ) (
     input  wire clk,             // A8, the 60.000 MHz oscillator
 
@@ -258,7 +269,9 @@ module usb_crypto_console #(
     crypto_console_ulpi #(
         .TURNAROUND  (TURNAROUND),
         .VENDOR_ADDR (6'h39),
-        .VENDOR_DATA (8'h06)
+        .VENDOR_DATA (8'h06),
+        .WITH_HASH   (WITH_HASH),
+        .WITH_CIPHER (WITH_CIPHER)
     ) u_top (
         .clk60         (clk),
         .rst_n         (reset_done),
