@@ -184,7 +184,7 @@ pub(super) fn site_of_prefix<'a>(tile: &'a XrayTile, prefix: &str) -> Option<&'a
 /// The same silicon position carries the same interconnect index, so
 /// `CLBLL_LL` is the `X`-index-0 slice. `tests/fpga_xray.rs` re-derives
 /// that from `ppips_*.db` so it cannot silently drift.
-fn slice_wire_prefix(tile_type: &str, index: u32) -> Option<&'static str> {
+pub(super) fn slice_wire_prefix(tile_type: &str, index: u32) -> Option<&'static str> {
     let pair: [&'static str; 2] = match tile_type {
         "CLBLL_L" | "CLBLL_R" => ["CLBLL_LL", "CLBLL_L"],
         "CLBLM_L" | "CLBLM_R" => ["CLBLM_M", "CLBLM_L"],

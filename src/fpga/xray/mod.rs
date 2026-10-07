@@ -150,6 +150,7 @@ use crate::ir::memfile::FileProvider;
 use crate::json::Json;
 
 mod dsp;
+mod lutram;
 mod parse;
 mod sites;
 

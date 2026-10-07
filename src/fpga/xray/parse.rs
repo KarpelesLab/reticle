@@ -697,6 +697,29 @@ pub(super) fn bels_of(
         attach(&mut bels, (*prefix).to_owned(), site_kind, prefix, "");
     }
 
+    // A `SLICEM`'s distributed RAM, which `site_kind` cannot tell from a
+    // `SLICEL` because both are a "slice": the site *type* can. See
+    // [`super::lutram`] for which lookup tables it takes and why.
+    for prefix in &prefixes {
+        let is_slicem = by_prefix
+            .get(*prefix)
+            .is_some_and(|(_, site_type)| site_type == "SLICEM");
+        if !is_slicem {
+            continue;
+        }
+        let mut resolved = super::lutram::Resolved::default();
+        let ram = super::lutram::bel(&tile.tile_type, prefix, features, wires, &mut resolved);
+        coverage.pins += resolved.pins;
+        coverage.pins_unresolved += resolved.pins_missing;
+        match ram {
+            Some(ram) => {
+                coverage.modes += 1;
+                bels.insert(ram.name.clone(), ram);
+            }
+            None => coverage.modes_unresolved += 1,
+        }
+    }
+
     // Now attach every feature to the bel it names.
     for feature in features.features() {
         let mut parts = feature.name.split('.');
