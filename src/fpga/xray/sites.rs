@@ -363,6 +363,14 @@ pub(super) fn bel_pins(tile_type: &str, prefix: &str, sub: &str) -> Vec<BelPin> 
     // from); `xc7.dev` calls the same two roles `din` and `dout`. The
     // pad itself is deliberately absent: it is a package ball, not a
     // wire the router can reach, and a design's port net ends there.
+    //
+    // The third pin is the tristate, UG471's `T`: what `xc7.dev` declares
+    // as `oen=T` and `fpga::place` hands the graph as `oe`, because the
+    // graph knows wires and not which way round a pin's logic is. Its
+    // metal is `IOB_T<n>`, which `tileconn.json` joins to `LIOI_T<n>` /
+    // `RIOI_T<n>` in the IO-logic tile beside it — the end of the `TQ`
+    // path [`tristate_through`] declares. An `IBUF` or `OBUF` on the same
+    // site leaves the pin unrouted, as Vivado leaves it.
     if base == "IOB" && (tile_type == "LIOB33" || tile_type == "RIOB33") {
         return vec![
             BelPin {
@@ -372,6 +380,10 @@ pub(super) fn bel_pins(tile_type: &str, prefix: &str, sub: &str) -> Vec<BelPin> 
             BelPin {
                 role: "dout",
                 wire: format!("IOB_O{index}"),
+            },
+            BelPin {
+                role: "oe",
+                wire: format!("IOB_T{index}"),
             },
         ];
     }
@@ -448,8 +460,56 @@ pub(super) fn pass_throughs(tile_type: &str) -> Vec<PassThrough> {
                 format!("OLOGIC_Y{n}.OSERDES.DATA_RATE_TQ.BUF"),
             ],
         });
+        out.push(tristate_through(side, n));
     }
     out
+}
+
+/// The tristate's path through an `OLOGICE3`: fabric `T1` in, `TQ` out,
+/// on to the pad's `T`. See [`pass_throughs`] for why a hop through a
+/// site is declared here rather than taken from `ppips`.
+///
+/// # The two features, and what each one is for
+///
+/// `ppips_lioi3.db` records `LIOI_OLOGIC<n>_TQ` ← `IOI_OLOGIC<n>_T1` as
+/// `always`, and it is no more free than the data hop beside it:
+///
+/// - **`OLOGIC_Y<n>.OSERDES.DATA_RATE_TQ.BUF`** chooses what `TQ` is: `T1`
+///   passed straight through, rather than the `SDR` or `DDR` tristate
+///   register. Its three values are one-hot in `segbits_lioi3.db`
+///   (`32_66 !32_70 !33_69` is `BUF` on `Y0`), so a blank tile is *none*
+///   of them. The data hop already sets it, because Vivado sets it on
+///   every plain output; it is repeated here so that a tristate whose
+///   data is not routed through the same site still gets its buffer.
+///   Setting a bit twice sets it once.
+/// - **`OLOGIC_Y<n>.ZINV_T1`** is the polarity, and the polarity is the
+///   bug that matters. prjxray's `Z` prefix marks an inverted field:
+///   `fuzzers/036-iob-ologic/generate.py` tags it as
+///   `ZINV_T1 = 1 ^ IS_T1_INVERTED`, so the bit **set** is `T1` **not**
+///   inverted and a blank tile inverts it. nextpnr-xilinx's
+///   `xilinx/fasm.cc` puts exactly this one feature on exactly this
+///   pseudo-pip (`IOI_OLOGIC<n>_T1` → `…_OLOGIC<n>_TQ`). With it set, a
+///   one the fabric drives reaches the pad's `T` as a one, and a `T` of
+///   one releases the pad — UG471's `OBUFT` truth table, and the sense
+///   `xc7.dev`'s `oen=T` declares.
+///
+/// **Both are quoted, not measured.** No Vivado bitstream in
+/// `artix7/harness/` has a tristate pin — every `OLOGIC` they configure
+/// is a plain output — so no oracle here sets `ZINV_T1` at all. And the
+/// one thing a board has said is compatible with either reading: an
+/// `OBUF` leaves `ZINV_T1` clear and `T1` unrouted, and `sw_led`'s LED
+/// lit, which fits "inverted, and an unrouted `T1` reads one" exactly as
+/// well as "not inverted, and it reads zero". `examples/basys3/pmod_bidir.v`
+/// is the design that tells the two apart on a part.
+fn tristate_through(side: &str, n: u32) -> PassThrough {
+    PassThrough {
+        to: format!("{side}_OLOGIC{n}_TQ"),
+        from: format!("IOI_OLOGIC{n}_T1"),
+        features: vec![
+            format!("OLOGIC_Y{n}.OSERDES.DATA_RATE_TQ.BUF"),
+            format!("OLOGIC_Y{n}.ZINV_T1"),
+        ],
+    }
 }
 
 /// The paths through a slice that a clocked design needs.
@@ -885,6 +945,10 @@ pub(super) struct IoStandard {
     pub input: &'static [&'static str],
     /// The features an output buffer of this standard needs.
     pub output: &'static [&'static str],
+    /// What a bidirectional buffer needs **on top of** [`IoStandard::output`]:
+    /// the input receiver, without the input-only setting that switches
+    /// the driver off. See [`io_features`].
+    pub receiver: &'static [&'static str],
 }
 
 /// Every IO standard this flow can configure, which is one.
@@ -907,6 +971,7 @@ pub(super) const IO_STANDARDS: &[IoStandard] = &[IoStandard {
         "IOB_Y{}.LVCMOS33_LVTTL.DRIVE.I12_I16",
         "IOB_Y{}.PULLTYPE.NONE",
     ],
+    receiver: &["IOB_Y{}.LVCMOS25_LVCMOS33_LVTTL.IN"],
 }];
 
 /// The standard of that name.
@@ -920,14 +985,58 @@ pub fn io_standards() -> Vec<&'static str> {
     IO_STANDARDS.iter().map(|s| s.name).collect()
 }
 
-/// Which primitive of `xc7.dev` each direction of an IO buffer is, so a
-/// [`ConfigEntry::Cell`](crate::fpga::ConfigEntry) can select it.
+/// Every IO primitive of `xc7.dev` that an IO buffer site configures, so
+/// a [`ConfigEntry::Cell`](crate::fpga::ConfigEntry) can select each.
 ///
 /// `IBUF` drives the fabric from the pad and `OBUF` the pad from the
-/// fabric; `OBUFT` and `IOBUF` also exist and are **not** here, because
-/// their tristate path needs `OLOGIC` `T` features this module has not
-/// measured.
-pub(super) const IO_PRIMITIVES: [(&str, bool); 2] = [("IBUF", true), ("OBUF", false)];
+/// fabric. `OBUFT` and `IOBUF` were left out until 2026-10-08 because
+/// their tristate path needed `OLOGIC` `T` features nothing here had
+/// read; [`tristate_through`] is that path now, and these two are what
+/// the pad itself costs — see [`io_features`].
+pub(super) const IO_PRIMITIVES: [&str; 4] = ["IBUF", "OBUF", "OBUFT", "IOBUF"];
+
+/// The features, as templates over the half, that a pad of `standard`
+/// costs when `primitive` sits on it.
+///
+/// # What a tristate or a bidirectional pad costs at the pad
+///
+/// The pad itself does not know whether its `T` is routed: `segbits_liob33.db`
+/// has no feature that mentions a tristate at all, out of eighty-three.
+/// The tristate lives entirely in the `OLOGIC` beside it
+/// ([`tristate_through`]). So an `OBUFT` costs exactly what an `OBUF`
+/// costs.
+///
+/// An `IOBUF` is an output with the **input receiver** switched on
+/// as well: [`IoStandard::output`] plus [`IoStandard::receiver`], and
+/// **not** `IN_ONLY`. The two input features do different things, which
+/// the bits say by themselves: `LVCMOS25_LVCMOS33_LVTTL.IN` is
+/// `38_86 39_85 39_87` for `Y0` and touches no drive bit, while `IN_ONLY`
+/// is a *value of the drive field*: it is written over the same eighteen
+/// bits as every `DRIVE.*` pattern, with `38_64` and `39_65` — which
+/// every `DRIVE.*` value sets — required clear. An `IBUF` takes both; an
+/// `IOBUF` must take the first and must not take the second, or its
+/// drive field would hold two values at once.
+///
+/// That split is **quoted**: it is what nextpnr-xilinx's
+/// `write_io_config` writes (`LVCMOS25_LVCMOS33_LVTTL.IN` when the pad has
+/// an input buffer, `IN_ONLY` only `if (!is_output)`), and the bit
+/// patterns agree with it. No Vivado bitstream in `artix7/harness/` has a
+/// bidirectional pad to measure it against.
+pub(super) fn io_features(standard: &IoStandard, primitive: &str) -> Option<Vec<&'static str>> {
+    match primitive {
+        "IBUF" => Some(standard.input.to_vec()),
+        "OBUF" | "OBUFT" => Some(standard.output.to_vec()),
+        "IOBUF" => Some(
+            standard
+                .output
+                .iter()
+                .chain(standard.receiver)
+                .copied()
+                .collect(),
+        ),
+        _ => None,
+    }
+}
 
 /// Substitutes a bel index into a feature template.
 pub(super) fn with_index(template: &str, index: u32) -> String {
@@ -1120,20 +1229,82 @@ mod tests {
     fn an_io_buffer_has_a_fabric_side_and_no_pad() {
         let pins = bel_pins("LIOB33", "IOB_Y1", "");
         let names: Vec<(&str, &str)> = pins.iter().map(|p| (p.role, p.wire.as_str())).collect();
-        assert_eq!(names, vec![("din", "IOB_IBUF1"), ("dout", "IOB_O1")]);
+        assert_eq!(
+            names,
+            vec![("din", "IOB_IBUF1"), ("dout", "IOB_O1"), ("oe", "IOB_T1")]
+        );
         assert!(!pins.iter().any(|p| p.role == "pad"));
     }
 
+    /// Both halves, the two data directions and — since the tristate path
+    /// was declared — the `T` hop beside the output one. This asserted four
+    /// hops while the tristate was missing; six is the same table plus
+    /// the hop that makes an `IOBUF` route, and the data hops are still
+    /// exactly where they were.
     #[test]
-    fn an_ioi3_declares_both_halves_of_both_directions() {
+    fn an_ioi3_declares_both_halves_of_both_directions_and_the_tristate() {
         let p = pass_throughs("LIOI3");
-        assert_eq!(p.len(), 4);
+        assert_eq!(p.len(), 6);
         assert_eq!(p[0].to, "IOI_ILOGIC0_O");
         assert_eq!(p[0].from, "LIOI_ILOGIC0_D");
         assert_eq!(p[0].features, vec!["ILOGIC_Y0.ZINV_D"]);
         assert_eq!(p[1].to, "LIOI_OLOGIC0_OQ");
         assert_eq!(p[1].from, "IOI_OLOGIC0_D1");
+        assert_eq!(p[2].to, "LIOI_OLOGIC0_TQ");
+        assert_eq!(p[2].from, "IOI_OLOGIC0_T1");
         assert_eq!(pass_throughs("RIOI3")[0].from, "RIOI_ILOGIC0_D");
+        assert_eq!(pass_throughs("RIOI3")[5].to, "RIOI_OLOGIC1_TQ");
+    }
+
+    /// The tristate hop's polarity bit is on, and is the one for *its own*
+    /// half.
+    ///
+    /// What this catches: the hop declared without `ZINV_T1` (a blank
+    /// tile inverts `T1`, so every `IOBUF` would drive exactly when it
+    /// was told to release), or with the other half's bit (one pad's
+    /// enable inverted by the routing of its neighbour). What it cannot
+    /// catch: that `ZINV_T1` set really means "not inverted" on silicon.
+    /// That is quoted from prjxray's fuzzer and nextpnr-xilinx, and only a
+    /// part can check it — `examples/basys3/pmod_bidir.v`.
+    #[test]
+    fn the_tristate_hop_holds_t_uninverted_and_passes_it_straight_through() {
+        for n in 0..2u32 {
+            let hop = tristate_through("LIOI", n);
+            assert_eq!(hop.to, format!("LIOI_OLOGIC{n}_TQ"));
+            assert_eq!(hop.from, format!("IOI_OLOGIC{n}_T1"));
+            assert_eq!(
+                hop.features,
+                vec![
+                    format!("OLOGIC_Y{n}.OSERDES.DATA_RATE_TQ.BUF"),
+                    format!("OLOGIC_Y{n}.ZINV_T1"),
+                ]
+            );
+        }
+    }
+
+    /// An `IOBUF` is an output plus the receiver, and never `IN_ONLY`; an
+    /// `OBUFT` is an output and nothing more.
+    ///
+    /// What this catches: a bidirectional pad given the input recipe
+    /// (whose `IN_ONLY` is a value of the drive field, so the pad would be
+    /// configured as two drive strengths at once), or given no receiver
+    /// (so it would drive and never read). It does not check that the
+    /// receiver feature is the right one on silicon; that is quoted from
+    /// nextpnr-xilinx, and the harness has no bidirectional pad.
+    #[test]
+    fn a_bidirectional_pad_is_an_output_with_its_receiver_on() {
+        let s = io_standard("LVCMOS33").unwrap();
+        let iobuf = io_features(s, "IOBUF").unwrap();
+        assert!(iobuf.iter().all(|f| !f.ends_with(".IN_ONLY")), "{iobuf:?}");
+        assert!(iobuf.contains(&"IOB_Y{}.LVCMOS25_LVCMOS33_LVTTL.IN"));
+        assert!(iobuf.contains(&"IOB_Y{}.LVCMOS33_LVTTL.DRIVE.I12_I16"));
+        assert_eq!(io_features(s, "OBUFT").unwrap(), s.output.to_vec());
+        assert_eq!(io_features(s, "OBUF").unwrap(), s.output.to_vec());
+        assert_eq!(io_features(s, "IBUF").unwrap(), s.input.to_vec());
+        assert!(io_features(s, "BUFG").is_none());
+        for primitive in IO_PRIMITIVES {
+            assert!(io_features(s, primitive).is_some(), "{primitive}");
+        }
     }
 
     /// A slice's pass-throughs are the ones a clocked design needs and

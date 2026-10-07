@@ -179,12 +179,20 @@
 #     which was wrong by exactly one inversion and had no symptom because
 #     nothing ever drove the pin: the mapper tied it to a constant one,
 #     which on this primitive means permanently high impedance while the
-#     warning it printed said the enable was "tied active". OBUFT is
-#     declared as `other` so a netlist check knows it: Reticle infers a
-#     tristate enable for an `inout` port with a tri-state driver, but it
-#     builds it out of `IOBUF`, so it never instantiates an `OBUFT`.
-#     NOTHING HAS PUT A TRISTATE ON A 7-SERIES PART: the ECP5 backend is
-#     where that was first done, and `docs/fpga-trellis.md` has it.
+#     warning it printed said the enable was "tied active". OBUFT was
+#     declared as `other` until 2026-10-08, so a netlist check knew it
+#     but no placer could put one on a pad: an `other` site is not an IO
+#     site. It is `io for out` now, AFTER `OBUF`, so the mapper — which
+#     takes the first buffer for a direction — still builds an `OBUF` for
+#     an output and an `IOBUF` for an `inout` port, and an `OBUFT` a
+#     design instantiates by name lands on a pad. The X-Ray backend's
+#     tristate path (`src/fpga/xray/sites.rs`, `tristate_through`) is
+#     what makes either of them route. Its polarity bit is QUOTED from
+#     prjxray's fuzzer and nextpnr-xilinx, not measured: no Vivado
+#     bitstream this project has holds a tristate pin, and NO TRISTATE
+#     HAS BEEN SEEN ON A 7-SERIES PART. `examples/basys3/pmod_bidir.v` is
+#     the design that will say. The ECP5 backend is where a tristate was
+#     first carried to a part, and `docs/fpga-trellis.md` has it.
 #     IOSTANDARD, DRIVE and SLEW are parameters of these primitives in
 #     the library, but Vivado takes them from the XDC, which is where
 #     Reticle puts them, so no `param_*` clause sets them here.
@@ -334,7 +342,7 @@ device xc7a35t-cpg236
   bel IBUF io for in port pad=I din=O
   bel OBUF io for out port pad=O dout=I
   bel IOBUF io for inout port pad=IO din=O dout=I oen=T
-  bel OBUFT other port pad=O dout=I oen=T
+  bel OBUFT io for out port pad=O dout=I oen=T
   bel BUFG gb count 32 port i=I o=O
   bel RAM64X1D lutram port wclk=WCLK we=WE waddr=A0,A1,A2,A3,A4,A5 din=D raddr=DPRA0,DPRA1,DPRA2,DPRA3,DPRA4,DPRA5 dout=DPO
   bram RAMB18E1

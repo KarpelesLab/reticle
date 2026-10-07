@@ -754,11 +754,9 @@ pub(super) fn bels_of(
             let Some(index) = sites::prefix_index(prefix) else {
                 continue;
             };
-            for (primitive, input) in sites::IO_PRIMITIVES {
-                let names = if input {
-                    standard.input
-                } else {
-                    standard.output
+            for primitive in sites::IO_PRIMITIVES {
+                let Some(names) = sites::io_features(standard, primitive) else {
+                    continue;
                 };
                 let mut bits = Vec::new();
                 let mut missing: Vec<String> = Vec::new();
