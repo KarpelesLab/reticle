@@ -22,8 +22,13 @@
 //     ls -l /dev/serial/by-id/
 //     stty -F /dev/ttyACM1 115200 raw -echo
 //     cat /dev/ttyACM1 &
-//     printf 'H abc\r' > /dev/ttyACM1
+//     echo 'H abc' > /dev/ttyACM1
 //     printf '%s' abc | sha256sum
+//
+// Both terminators end a line, so `echo` and `printf 'H abc\r'` both work and
+// a CRLF is one line; `crypto_console.v`'s header says why that is two rules
+// and not one. `?` lists the commands and the port prints that list on its
+// own the moment it is configured, so none of this needs a manual.
 //
 // `1209:0001` is pid.codes' test pair, the default of the core's `VID` and
 // `PID`. **The number in `/dev/ttyACM*` is not fixed**: a Cynthion's own
@@ -46,13 +51,14 @@
 //     LED 2   A LINE WAS TYPED AT IT          latched
 //     LED 3   heartbeat, 0.89 Hz              the clock runs
 //     LED 4   AN ANSWER WENT BACK             latched
-//     LED 5   A CORE IS WORKING               live: the hash or the cipher
+//     LED 5   A CORE HAS BEEN STARTED         live for the hash, latched for
+//                                             the cipher — read the note
 //
 // Read from the bottom up, and `usb_ulpi_device.v`'s header has the whole
 // ladder for LEDs 0, 1 and 3 and the bus below them. What is new here:
 //
-//   * **LED 1 lit, LED 2 dark** — the device enumerated and nothing has
-//     written a carriage return to the port. That is the resting state:
+//   * **LED 1 lit, LED 2 dark** — the device enumerated and no line
+//     terminator has been written to the port. That is the resting state:
 //     opening a port is not typing at it.
 //   * **LED 2 lit, LED 4 dark** — a line arrived and no answer came back,
 //     which means the console is stuck waiting for a core. A core that
@@ -60,9 +66,24 @@
 //     visible as a wrong answer.
 //   * **LED 4 lit** — the whole path worked at least once: a line in, a
 //     core run, an answer out.
-//   * **LED 5** flickers while a command runs and is dark between them.
-//     `h`, `E`, `Z` and `X` of any length make it visibly dim rather than
-//     off, which is the only analogue instrument this design has.
+//   * **LED 5 is two signals ORed together and they behave differently**,
+//     which is worth stating because the obvious reading of it is wrong.
+//     `ip/crypto/sha256`'s `busy` is live: it is high while a message is
+//     being hashed, so LED 5 flickers during `H`, `h`, `Z` and `X` and is
+//     dark between them, and a long one makes it visibly dim rather than
+//     off. `ip/crypto/chacha20`'s `active` is **not** live: it means "a
+//     stream is open", a stream is opened by `start` and closed by nothing
+//     but a reset or the counter running out, so it **latches** from the
+//     first `e`, `E` or `X` of the session. So LED 5 blinks until a cipher
+//     command is typed and is lit from then on.
+//
+//     That is a property of the block's port and not a defect in it —
+//     `ip/crypto/chacha20/README.md` §3 says `active` is "a stream is open:
+//     `start` has been seen and `exhausted` has not latched" — and it is
+//     left as it is rather than papered over with a timer, because a
+//     latched LED that says "the cipher has been used" is still a true
+//     statement and inventing a rule for when a stream ends would be
+//     inventing a rule this design has no reason to have.
 //
 // ===================================================================
 // WHY DRIVING THESE PINS IS SAFE
