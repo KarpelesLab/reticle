@@ -31,9 +31,33 @@
 //! `CARRY4` in Rust over [`Logic`], the proof builds it out of `mux` and
 //! `xor` cells, so a mistake in either shows up as a disagreement.
 //!
-//! The other families are checked here too, because the point of the
-//! device-model extension is that it changed nothing for them: the iCE40
-//! still maps its one-bit `SB_CARRY` and the ECP5 still declines.
+//! # The ECP5's `CCU2C`, which is the third shape
+//!
+//! The same two checks cover `src/fpga/devices/ecp5.dev`'s `CCU2C`, which
+//! takes the two operands rather than a propagate and answers the sums,
+//! two bits of adder per instance. Its model, from the fields
+//! `docs/fpga-trellis.md` reads out of `ecppack`'s own bitstreams:
+//!
+//! ```text
+//! propagate[i] = INIT<i>[12 + 2b + a]   (the lookup table, C and D high)
+//! generate[i]  = INIT<i>[2b + a]        (its low nibble, a table of its own)
+//! S<i>         = propagate[i] ^ carry[i]
+//! carry[0]     = CIN
+//! carry[i+1]   = propagate[i] ? carry[i] : generate[i]
+//! COUT         = carry[2]
+//! ```
+//!
+//! That matters more here than it does for the 7 series, because **the
+//! equivalence proof the rest of this tree relies on cannot see a carry
+//! cell at all**: `every_block_maps_to_the_logic_it_was_mapped_from`
+//! proves the *technology mapper* against its own AIG, and a carry cell is
+//! emitted before that pass runs and is a blackbox the AIG never holds.
+//! `mod proofs` below is the only place in the tree where a SAT solver is
+//! shown the inside of one.
+//!
+//! The iCE40 is checked here too, because the point of each extension to
+//! the device model is that it changed nothing for the families that were
+//! already right: it still maps its one-bit `SB_CARRY`.
 
 #![cfg(all(feature = "fpga", feature = "synth"))]
 
@@ -53,6 +77,18 @@ use reticle::logic::{Bit, Logic};
 use reticle::source::{SourceMap, Span};
 
 const XC7: &str = "xc7a35t-cpg236";
+const ECP5: &str = "ecp5-45f-CABGA381";
+
+/// Mapping with no IO or clock buffers, which is how the ECP5 runs are
+/// made: a `TRELLIS_IO` is a pad and a pad is not a wire this file can
+/// evaluate, and what is under test is the carry chain.
+fn bare() -> MapOptions {
+    MapOptions {
+        insert_io_buffers: false,
+        insert_clock_buffers: false,
+        ..MapOptions::default()
+    }
+}
 
 fn span() -> Span {
     let mut map = SourceMap::new();
@@ -423,6 +459,39 @@ impl<'m> Netlist<'m> {
                 values.insert(out("O"), o);
                 values.insert(out("CO"), co);
             }
+            // CCU2C, from the equations in this file's own header.
+            "CCU2C" => {
+                let init = |lane: u32| -> reticle::ir::Const {
+                    match cell.params.get(&format!("INIT{lane}")) {
+                        Some(AttrValue::Const(c)) => c.clone(),
+                        other => panic!("`{}` has INIT{lane} {other:?}", cell.name),
+                    }
+                };
+                let mut carry = one("CIN", values);
+                for lane in 0..2u32 {
+                    let init = init(lane);
+                    // A lane with no operand pins is a zero of the chain
+                    // and its INIT says so, so which value an absent pin
+                    // is modelled with cannot matter. `src/fpga/
+                    // primitives.rs`'s own check varies it both ways.
+                    let index = u32::from(one(&format!("B{lane}"), values) == Bit::One) * 2
+                        + u32::from(one(&format!("A{lane}"), values) == Bit::One);
+                    let propagate = init.bit(12 + index) == Bit::One;
+                    let generate = init.bit(index);
+                    let sum = if propagate {
+                        !matches!(carry, Bit::One)
+                    } else {
+                        matches!(carry, Bit::One)
+                    };
+                    if let Some(out) = cell.output(&format!("S{lane}")) {
+                        values.insert(out, Logic::from_bit(if sum { Bit::One } else { Bit::Zero }));
+                    }
+                    carry = if propagate { carry } else { generate };
+                }
+                if let Some(out) = cell.output("COUT") {
+                    values.insert(out, Logic::from_bit(carry));
+                }
+            }
             other => panic!("primitive `{other}` (cell `{}`) is not modelled", cell.name),
         }
     }
@@ -441,15 +510,31 @@ fn port_net(module: &Module, name: &str) -> NetId {
 /// Simulates every input combination of `shape` at `width` bits and
 /// compares with the arithmetic it stands for.
 fn check_exhaustively(shape: Shape, width: u32, map: MapOptions) {
-    check(shape, width, map, false);
+    check_full(shape, width, XC7, map, false);
+}
+
+/// The same, on a named device.
+fn check_on(shape: Shape, width: u32, device: &str, map: MapOptions) {
+    check_full(shape, width, device, map, false);
 }
 
 /// [`check_exhaustively`], optionally after `fpga::xray::legalise_carries`
 /// has given every propagate bit a lookup table of its own.
 fn check(shape: Shape, width: u32, map: MapOptions, legalise: bool) {
-    let (mut design, top, report) = mapped(shape, width, XC7, map);
+    check_full(shape, width, XC7, map, legalise);
+}
+
+/// The one simulation the three wrappers above all reach: map `shape` at
+/// `width` bits for `device`, legalise the chain for a slice if asked,
+/// then evaluate every input combination.
+fn check_full(shape: Shape, width: u32, device: &str, map: MapOptions, legalise: bool) {
+    assert!(
+        !legalise || device == XC7,
+        "`legalise_carries` is the 7 series' own pass and there is nothing to ask it on {device}"
+    );
+    let (mut design, top, report) = mapped(shape, width, device, map);
     if legalise {
-        let device = fpga::target(XC7).expect("a built-in device");
+        let device = fpga::target(device).expect("a built-in device");
         fpga::xray::legalise_carries(&mut design, top, device).expect("the chain legalises");
         let problems = validate_module(design.module(top));
         assert!(
@@ -687,34 +772,96 @@ fn an_adder_below_the_threshold_stays_generic() {
 // The other families
 // ---------------------------------------------------------------------------
 
+/// Every input combination of an ECP5 adder, on the element's own
+/// equation.
+///
+/// Four, five and eight bits of two-operand add, plus the shape with a
+/// carry in (which is two chained adders) and the one with a constant
+/// operand. The widths that are not odd multiples of the element's two
+/// lanes matter here in a way they do not on the 7 series, because this
+/// chain spends a lane entering itself: an 8-bit add is nine lanes, so
+/// five instances with one lane over, and a 7-bit add is eight lanes
+/// with none.
+#[test]
+fn every_input_of_an_ecp5_adder_is_simulated() {
+    for width in [4, 5, 7, 8] {
+        for shape in [Shape::Plain, Shape::Widened, Shape::Constant(1)] {
+            check_on(shape, width, ECP5, bare());
+        }
+    }
+    for width in [4, 5] {
+        check_on(Shape::CarryIn, width, ECP5, bare());
+    }
+    // And the awkward narrow widths, with the threshold out of the way.
+    let one = MapOptions {
+        min_carry_width: 1,
+        ..bare()
+    };
+    for width in [1, 2, 3, 6] {
+        check_on(Shape::Plain, width, ECP5, one.clone());
+        check_on(Shape::Widened, width, ECP5, one.clone());
+    }
+}
+
+/// An ECP5 adder is `(width + 1) / 2` instances rounded up and **no
+/// soft logic at all**, which is the whole difference from the other two
+/// shapes.
+#[test]
+fn an_ecp5_adder_costs_one_ccu2c_per_two_bits_and_no_lookup_table() {
+    for (width, instances) in [(4u32, 3usize), (8, 5), (16, 9), (32, 17), (31, 16)] {
+        let (_, _, report) = mapped(Shape::Plain, width, ECP5, bare());
+        assert_eq!(
+            report.count("CCU2C"),
+            instances,
+            "{width} bits is {} lanes",
+            width + 1
+        );
+        assert_eq!(
+            report.count("LUT4"),
+            0,
+            "{width} bits: the element is the propagate and the generate, \
+             so nothing outside it computes either"
+        );
+        assert_eq!(report.luts, 0, "and the technology mapper covered nothing");
+        assert_eq!(report.lut_depth, 0);
+        let chain = &report.primitives.carry_chains[0];
+        assert_eq!(chain.primitive, "CCU2C");
+        assert_eq!((chain.width, chain.primitives), (width, instances as u32));
+    }
+    // A subtract still goes through lookup tables. The element can do one
+    // — `ecppack` writes INIT 0x999A for a subtract bit, with the
+    // propagate `a ~^ b` — and this flow does not ask it to.
+    let (_, _, report) = mapped(Shape::Subtract, 8, ECP5, bare());
+    assert_eq!(report.count("CCU2C"), 0);
+}
+
 /// Nothing changed for the families that were already working: the iCE40
-/// maps its one-bit element, and the ECP5 still declines with the note it
-/// declined with before.
+/// maps its one-bit element.
 #[test]
 fn the_one_bit_families_are_untouched() {
     let (_, _, report) = mapped(Shape::Plain, 8, "ice40-hx1k-tq144", MapOptions::default());
     assert_eq!(report.count("SB_CARRY"), 7, "one per bit but the last");
     assert_eq!(report.primitives.carry_chains[0].primitive, "SB_CARRY");
 
-    let (_, _, report) = mapped(Shape::Plain, 8, "ecp5-45f-CABGA381", MapOptions::default());
-    assert_eq!(report.count("CCU2C"), 0);
-    assert!(report.primitives.carry_chains.is_empty());
-    assert!(
-        report
-            .primitives
-            .notes
-            .iter()
-            .any(|n| n.contains("without a (ci, i0, i1, co) port map")),
-        "the ECP5 stopped saying why it declines: {:?}",
-        report.primitives.notes
-    );
-
-    // And the two shapes are told apart by the device database itself.
+    // And the three shapes are told apart by the device database
+    // itself, which is what decides which path maps an adder.
     let ice40 = fpga::target("ice40-hx1k-tq144").unwrap();
     assert!(ice40.bel(BelRole::Carry).unwrap().wide_carry().is_none());
-    let ecp5 = fpga::target("ecp5-45f-CABGA381").unwrap();
+    assert!(ice40.bel(BelRole::Carry).unwrap().operand_carry().is_none());
+    let ecp5 = fpga::target(ECP5).unwrap();
     assert!(ecp5.bel(BelRole::Carry).unwrap().wide_carry().is_none());
+    let operand = ecp5
+        .bel(BelRole::Carry)
+        .unwrap()
+        .operand_carry()
+        .expect("the ECP5's is the operand shape");
+    assert_eq!(operand.width, 2);
+    assert_eq!((operand.a, operand.b), ("A0,A1", "B0,B1"));
+    assert_eq!(operand.sum, "S0,S1");
+    assert_eq!((operand.carry_in, operand.carry_out), ("CIN", "COUT"));
+    assert_eq!(operand.init, None, "nothing can drive this chain's CIN");
     let xc7 = fpga::target(XC7).unwrap();
+    assert!(xc7.bel(BelRole::Carry).unwrap().operand_carry().is_none());
     let wide = xc7.bel(BelRole::Carry).unwrap().wide_carry().expect("wide");
     assert_eq!(wide.width, 4);
     assert_eq!(wide.propagate, "S");
@@ -733,7 +880,7 @@ fn the_one_bit_families_are_untouched() {
 mod proofs {
     use super::*;
     use reticle::formal::{EquivOptions, EquivOutcome, check_equivalent};
-    use reticle::ir::Name;
+    use reticle::ir::{Const, Name};
 
     /// Replaces every primitive of the mapped module with the model it
     /// stands for, leaving ordinary IR the bit-blaster can read.
@@ -787,6 +934,7 @@ mod proofs {
                     );
                 }
                 "CARRY4" => model_carry4(&mut b, &cell),
+                "CCU2C" => model_ccu2c(&mut b, &cell),
                 other => panic!("primitive `{other}` has no model"),
             }
             replaced.push(id);
@@ -857,9 +1005,86 @@ mod proofs {
         b.assign(cell.output("CO").expect("`CO`"), co);
     }
 
+    /// `CCU2C` out of `lut`, `xor` and `mux`, written from the
+    /// equations in this file's header.
+    ///
+    /// The two lookup tables are the halves of the element's own `INIT`
+    /// that the silicon reads: bits 15..12 are the propagate, read with
+    /// `C` and `D` forced high, and bits 3..0 are the generate, which is
+    /// a two-input table in its own right. Writing them as two `lut`
+    /// cells over `{b, a}` is the whole claim, and it is a different
+    /// statement of it from the Rust above.
+    fn model_ccu2c(b: &mut ModuleBuilder, cell: &Cell) {
+        let name = cell.name.as_str().to_owned();
+        let zero = b.constant(Const::zero(1));
+        let mut carry = cell.input("CIN").unwrap_or(zero);
+        for lane in 0..2u32 {
+            let AttrValue::Const(init) = cell
+                .params
+                .get(&format!("INIT{lane}"))
+                .unwrap_or_else(|| panic!("`{name}` has no INIT{lane}"))
+            else {
+                panic!("`{name}` has a non-constant INIT{lane}")
+            };
+            let nibble = |shift: u32| -> Const {
+                let mut out = Const::zero(4);
+                for bit in 0..4 {
+                    out.set_bit(bit, init.bit(shift + bit));
+                }
+                out
+            };
+            let pin = |role: &str| cell.input(&format!("{role}{lane}")).unwrap_or(zero);
+            let inputs = b.concat(vec![pin("B"), pin("A")]);
+            let table = |b: &mut ModuleBuilder, what: &str, init: Const| {
+                let out = b.add_net(format!("{name}$model${what}{lane}"), Type::bit());
+                b.cell(
+                    format!("{name}$model${what}{lane}$lut"),
+                    CellKind::Lut { k: 2, init },
+                    vec![(Name::new("a"), inputs)],
+                    vec![(Name::new("y"), out)],
+                );
+                b.net(out)
+            };
+            let propagate = table(b, "p", nibble(12));
+            let generate = table(b, "g", nibble(0));
+            if let Some(out) = cell.output(&format!("S{lane}")) {
+                let sum = b.add_net(format!("{name}$model$s{lane}"), Type::bit());
+                b.cell2(
+                    format!("{name}$model$xor{lane}"),
+                    CellKind::Xor,
+                    propagate,
+                    carry,
+                    sum,
+                );
+                let sum = b.net(sum);
+                b.assign(out, sum);
+            }
+            let next = b.add_net(format!("{name}$model$c{lane}"), Type::bit());
+            b.cell(
+                format!("{name}$model$mux{lane}"),
+                CellKind::Mux,
+                vec![
+                    (Name::new("a"), generate),
+                    (Name::new("b"), carry),
+                    (Name::new("s"), propagate),
+                ],
+                vec![(Name::new("y"), next)],
+            );
+            carry = b.net(next);
+        }
+        if let Some(out) = cell.output("COUT") {
+            b.assign(out, carry);
+        }
+    }
+
     /// Proves the mapped netlist equivalent to the design it came from.
     fn prove(shape: Shape, width: u32) {
-        let (design, top, _) = mapped(shape, width, XC7, MapOptions::default());
+        prove_on(shape, width, XC7, MapOptions::default());
+    }
+
+    /// The same, on a named device.
+    fn prove_on(shape: Shape, width: u32, device: &str, map: MapOptions) {
+        let (design, top, _) = mapped(shape, width, device, map);
         let modelled = model_primitives(design.module(top).clone());
         let mut proof = Design::new();
         let mut reference = shape.module("reference", width);
@@ -897,5 +1122,26 @@ mod proofs {
         prove(Shape::Constant(1), 16);
         prove(Shape::Constant(0xdead), 16);
         prove(Shape::CarryIn, 16);
+    }
+
+    /// The same proof for the ECP5's `CCU2C`, at the widths simulation
+    /// cannot reach and at the shapes where the lane the chain spends on
+    /// entering itself lands differently.
+    ///
+    /// **This is the only check in the tree that shows a solver the
+    /// inside of a carry cell**; see this file's header for why
+    /// `every_block_maps_to_the_logic_it_was_mapped_from` cannot.
+    #[test]
+    fn the_ecp5_chain_is_proved_equivalent() {
+        for width in [16, 32] {
+            prove_on(Shape::Plain, width, ECP5, bare());
+        }
+        for width in [9, 10, 17] {
+            prove_on(Shape::Plain, width, ECP5, bare());
+            prove_on(Shape::Widened, width, ECP5, bare());
+        }
+        prove_on(Shape::Constant(1), 16, ECP5, bare());
+        prove_on(Shape::Constant(0xdead), 16, ECP5, bare());
+        prove_on(Shape::CarryIn, 16, ECP5, bare());
     }
 }
