@@ -1,37 +1,86 @@
-// uart_rx — an 8N1 UART receiver with a valid strobe.
+// uart_rx — a UART receiver with a valid strobe, 8N1 by default.
 //
 // What it does
 //   Waits for the falling edge that starts a character, waits half a bit
 //   period and checks the line is still low (so a glitch does not start a
-//   character), then samples eight data bits and the stop bit at the
-//   middle of each bit period. `rx_valid` is high for one cycle when a
-//   character has been assembled, with the byte on `rx_data` and
-//   `rx_error` high in that same cycle if the stop bit was not high,
-//   which is a framing error.
+//   character), then samples the data bits, the parity bit if the framing
+//   has one, and the stop bit at the middle of each bit period.
+//   `rx_valid` is high for one cycle when a character has been assembled,
+//   with the byte on `rx_data`.
 //
 //   `rx` is asynchronous to `clk` by definition, so it goes through a
 //   two-flop synchroniser before anything looks at it. That costs two
 //   cycles of latency and is not optional.
 //
+//   **The framing is two parameters and defaults to 8N1**, so an
+//   instantiation written before they existed means exactly what it
+//   always did. The receiver itself is `uart_frame_rx`, whose two format
+//   ports this module ties to constants; there is no stop-bit parameter
+//   because a receiver samples the first stop bit and nothing after it,
+//   and that file's header says why at length.
+//
+//   A design whose framing is **chosen at run time** instantiates
+//   `uart_frame_rx` or `uart_frame` instead. Verilog has no default for a
+//   port, so the format could not be made a port here without every
+//   existing instantiation having to connect it.
+//
+// The errors, and what this module can and cannot tell you
+//   `rx_error` is what it always was — *something* was wrong with the
+//   character — and it is now the disjunction of the three signals beside
+//   it, each of which says which:
+//
+//   * `rx_frame_error` — the stop bit was not high. The byte the broken
+//     frame produced is still delivered, with `rx_valid`.
+//   * `rx_parity_error` — the parity bit disagreed with the data. Never
+//     high with the default framing, which has no parity bit. The byte is
+//     still delivered.
+//   * `rx_break` — the line was low for a whole frame, which is a break
+//     and **not a character**: `rx_valid` stays low, one `rx_break` cycle
+//     is produced however long the break is, and the receiver then waits
+//     for the line to return to mark before looking for another start
+//     edge. That last part is the recovery, and it is why a held-low line
+//     does not produce a break every frame period for ever.
+//
+//     This is a **change** from the behaviour before the errors were
+//     separated: a frame of all zeros with a low stop bit used to arrive
+//     as 0x00 with `rx_error`. It is now a break and arrives as no
+//     character at all. Every consumer in this repository left `rx_error`
+//     unconnected and read `rx_valid` as a keystroke, so the change can
+//     only remove a byte nobody sent.
+//
+//   **An overrun cannot be reported here**, and the reason is this
+//   module's own interface: `rx_valid` is a strobe with no `rx_ready`, so
+//   a character nobody takes in that one cycle is lost and nothing in the
+//   block can tell that from a character nobody wanted. `uart_frame_rx`
+//   has the handshake and the `rx_overrun` that goes with it; a design
+//   that needs to know instantiates that instead. Saying so is better
+//   than offering a wire that is always zero.
+//
 // What it does not do
-//   8N1 only, one sample per bit at the nominal centre: no parity, no
-//   majority vote over three samples, no oversampling clock recovery, no
-//   break or overrun detection, and no FIFO — a character not consumed in
-//   the cycle `rx_valid` is high is lost, so put `fifo_sync` behind it if
-//   the consumer cannot keep up. It does not resynchronise mid-character,
-//   so the clock error budget is the usual half a bit over ten bits,
-//   about 5% in theory and under 2% in practice.
+//   One sample per bit at the nominal centre: no majority vote over three
+//   samples, no oversampling clock recovery and no FIFO — a character not
+//   consumed in the cycle `rx_valid` is high is lost, so put `fifo_sync`
+//   behind it if the consumer cannot keep up. It does not resynchronise
+//   mid-character, so the clock error budget is the usual half a bit over
+//   a frame, about 5% in theory and under 2% in practice.
 //
 //   `div` is read **once per character**, in the cycle the start edge is
 //   found, and latched with the half-bit period derived from it. A
 //   character being received therefore keeps the rate it started at
 //   however `div` moves, and a change takes effect from the next start
 //   edge. `uart_tx` does the same and its header says what that costs and
-//   saves.
+//   saves. The framing is parameters here, so there is nothing to latch;
+//   `uart_frame_rx`'s header says why it does not latch its ports either
+//   and what that was measured to save in this module.
 module uart_rx #(
     // Clock cycles per bit when `div` does not give one. At least four,
     // so half a bit is countable.
-    parameter CLK_DIV = 16
+    parameter CLK_DIV = 16,
+    // Data bits in a character: 5, 6, 7 or 8. Anything else is 8.
+    parameter DATA_BITS = 8,
+    // `bParityType` of PSTN 1.2: 0 none, 1 odd, 2 even, 3 mark, 4 space.
+    // Anything else is none.
+    parameter PARITY = 0
 ) (
     input  wire       clk,
     input  wire       rst_n,
@@ -44,108 +93,40 @@ module uart_rx #(
 
     input  wire       rx,
 
-    output reg  [7:0] rx_data,
-    output reg        rx_valid,
-    output reg        rx_error
+    output wire [7:0] rx_data,
+    output wire       rx_valid,
+    // Any of the three below. What it has always been, widened only by
+    // the break that used to arrive as a framing error on a zero byte.
+    output wire       rx_error,
+    output wire       rx_frame_error,
+    output wire       rx_parity_error,
+    output wire       rx_break
 );
-    // Four clocks, so half a bit is a countable number of them. The
-    // comparison is against a constant, so it is the low bits of `div`
-    // being zero and not a subtraction.
-    localparam [15:0] DIV_MIN = 16'd4;
+    // The parameters in the widths `uart_frame_rx` takes them in.
+    localparam [3:0] CFG_DATA_BITS = DATA_BITS;
+    localparam [2:0] CFG_PARITY    = PARITY;
 
-    wire [15:0] div_used = (div < DIV_MIN) ? CLK_DIV[15:0] : div;
-    // The bit period of the character being received, and half of it,
-    // each one short. Latched at the start edge; `div_half` is a shift
-    // rather than a divide, because a divide by a run-time value is what
-    // this whole arrangement exists not to need twice.
-    reg [15:0] div_last;
-    reg [15:0] div_half;
+    assign rx_error = rx_frame_error | rx_parity_error | rx_break;
 
-    localparam [1:0] S_IDLE  = 2'd0;
-    localparam [1:0] S_START = 2'd1;
-    localparam [1:0] S_DATA  = 2'd2;
-    localparam [1:0] S_STOP  = 2'd3;
-
-    // The input synchroniser. Two separately named registers, so the
-    // flip-flop inference produces the two-flop chain a CDC checker
-    // recognises rather than one two-bit register.
-    reg rx_meta_q;
-    reg rx_sync_q;
-
-    always @(posedge clk or negedge rst_n) begin
-        if (!rst_n) begin
-            rx_meta_q <= 1'b1;
-            rx_sync_q <= 1'b1;
-        end else begin
-            rx_meta_q <= rx;
-            rx_sync_q <= rx_meta_q;
-        end
-    end
-
-    reg [1:0]  state;
-    reg [15:0] div_cnt;
-    reg [2:0]  bit_idx;
-    reg [7:0]  shift_q;
-
-    always @(posedge clk or negedge rst_n) begin
-        if (!rst_n) begin
-            state    <= S_IDLE;
-            div_cnt  <= 16'd0;
-            div_last <= CLK_DIV[15:0] - 16'd1;
-            div_half <= {1'b0, CLK_DIV[15:1]} - 16'd1;
-            bit_idx  <= 3'd0;
-            shift_q  <= 8'd0;
-            rx_data  <= 8'd0;
-            rx_valid <= 1'b0;
-            rx_error <= 1'b0;
-        end else begin
-            rx_valid <= 1'b0;
-            rx_error <= 1'b0;
-            case (state)
-                S_IDLE: begin
-                    div_cnt <= 16'd0;
-                    bit_idx <= 3'd0;
-                    if (!rx_sync_q) begin
-                        state <= S_START;
-                        // The rate this character will be timed at. Taken
-                        // here and nowhere else, so the eight samples of
-                        // one frame are all the same distance apart.
-                        div_last <= div_used - 16'd1;
-                        div_half <= {1'b0, div_used[15:1]} - 16'd1;
-                    end
-                end
-                S_START: begin
-                    if (div_cnt == div_half) begin
-                        div_cnt <= 16'd0;
-                        // Still low at the middle of the start bit: a
-                        // real character. Otherwise it was a glitch.
-                        state   <= rx_sync_q ? S_IDLE : S_DATA;
-                    end else begin
-                        div_cnt <= div_cnt + 16'd1;
-                    end
-                end
-                S_DATA: begin
-                    if (div_cnt == div_last) begin
-                        div_cnt <= 16'd0;
-                        shift_q <= {rx_sync_q, shift_q[7:1]};
-                        if (bit_idx == 3'd7) state <= S_STOP;
-                        else                 bit_idx <= bit_idx + 3'd1;
-                    end else begin
-                        div_cnt <= div_cnt + 16'd1;
-                    end
-                end
-                default: begin
-                    if (div_cnt == div_last) begin
-                        div_cnt  <= 16'd0;
-                        state    <= S_IDLE;
-                        rx_data  <= shift_q;
-                        rx_valid <= 1'b1;
-                        rx_error <= !rx_sync_q;
-                    end else begin
-                        div_cnt <= div_cnt + 16'd1;
-                    end
-                end
-            endcase
-        end
-    end
+    uart_frame_rx #(
+        .CLK_DIV (CLK_DIV)
+    ) u_rx (
+        .clk             (clk),
+        .rst_n           (rst_n),
+        .div             (div),
+        .cfg_data_bits   (CFG_DATA_BITS),
+        .cfg_parity      (CFG_PARITY),
+        .rx              (rx),
+        // Always ready, which is what makes `rx_valid` the one-cycle
+        // strobe this module has always had — and what makes an overrun
+        // unobservable, as the header says.
+        .rx_ready        (1'b1),
+        .rx_data         (rx_data),
+        .rx_valid        (rx_valid),
+        .rx_frame_error  (rx_frame_error),
+        .rx_parity_error (rx_parity_error),
+        .rx_break        (rx_break),
+        // Structurally impossible with `rx_ready` tied high.
+        .rx_overrun      ()
+    );
 endmodule

@@ -238,6 +238,24 @@ const VARIANTS: &[Variant] = &[
         top: "uart_baud_div",
         params: &[],
     },
+    // The same two halves with the character format on **ports** rather
+    // than parameters, which is what lets a USB host's SET_LINE_CODING
+    // reach the wire. Measured beside `uart` at the same divisor, so the
+    // price of run-time data bits, parity and stop bits is a subtraction
+    // of two rows of this table and not a claim in a header.
+    Variant {
+        package: "uart",
+        top: "uart_frame",
+        params: &[("CLK_DIV", "104")],
+    },
+    // The decode of the three bytes the host sent. The only block in the
+    // library with no clock at all: it is a table, and a table of a
+    // register somebody else already has does not need one of its own.
+    Variant {
+        package: "uart",
+        top: "uart_line_coding",
+        params: &[],
+    },
     Variant {
         package: "spi_master",
         top: "spi_master",
@@ -2188,6 +2206,1073 @@ fn uart_baud_div_computes_the_divisor_for_the_rates_a_host_asks_for() {
         high(&sim, ok),
         "916 baud is the slowest rate sixteen bits can express at 60 MHz"
     );
+}
+
+// ---------------------------------------------------------------------------
+// The character format, and a receiver written in Rust to check it with
+// ---------------------------------------------------------------------------
+
+/// `bParityType` of PSTN 1.2 §6.3.11, which is also what
+/// `uart_frame_tx`'s and `uart_frame_rx`'s `cfg_parity` port takes.
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+enum Parity {
+    None,
+    Odd,
+    Even,
+    Mark,
+    Space,
+}
+
+/// Every parity mode, in the order the port numbers them.
+const PARITIES: [Parity; 5] = [
+    Parity::None,
+    Parity::Odd,
+    Parity::Even,
+    Parity::Mark,
+    Parity::Space,
+];
+
+impl Parity {
+    /// The value `cfg_parity` takes.
+    fn code(self) -> u64 {
+        match self {
+            Parity::None => 0,
+            Parity::Odd => 1,
+            Parity::Even => 2,
+            Parity::Mark => 3,
+            Parity::Space => 4,
+        }
+    }
+
+    /// The mode a `cfg_parity` value means, for a test that reads one
+    /// out of `uart_line_coding` rather than choosing it.
+    fn from_code(code: u64) -> Self {
+        *PARITIES
+            .iter()
+            .find(|p| p.code() == code)
+            .unwrap_or_else(|| panic!("{code} is not a parity mode"))
+    }
+
+    /// Whether the format has a parity bit at all.
+    fn present(self) -> bool {
+        self != Parity::None
+    }
+
+    /// The parity bit that follows `data`, or `None` for a format that
+    /// has no parity bit.
+    ///
+    /// Written from the definition — even parity leaves the number of
+    /// ones in the whole character even, odd parity leaves it odd, mark
+    /// and space are the constants their names are — and **not** from the
+    /// exclusive ors in `uart_frame_tx.v`, so that the model and the
+    /// hardware cannot be wrong in the same direction.
+    fn bit(self, data: u8, data_bits: u32) -> Option<bool> {
+        let ones = (data & mask_bits(data_bits)).count_ones();
+        match self {
+            Parity::None => Option::None,
+            Parity::Even => Some(!ones.is_multiple_of(2)),
+            Parity::Odd => Some(ones.is_multiple_of(2)),
+            Parity::Mark => Some(true),
+            Parity::Space => Some(false),
+        }
+    }
+}
+
+/// The low `n` bits of a byte, which is what a character of `n` data bits
+/// can carry.
+fn mask_bits(n: u32) -> u8 {
+    u8::try_from((1u16 << n) - 1).expect("at most eight bits")
+}
+
+/// `cfg_stop` for a number of stop bits: `bCharFormat`, where 0 is one
+/// stop bit and 2 is two.
+fn stop_code(stop_bits: u32) -> u64 {
+    if stop_bits == 1 { 0 } else { 2 }
+}
+
+/// Every format the block claims: four widths, five parity modes, one or
+/// two stop bits — forty combinations.
+fn every_format() -> Vec<(u32, Parity, u32)> {
+    let mut out = Vec::new();
+    for bits in 5..=8u32 {
+        for parity in PARITIES {
+            for stop in [1u32, 2] {
+                out.push((bits, parity, stop));
+            }
+        }
+    }
+    out
+}
+
+/// The levels one character puts on the line, one per bit period: the
+/// start bit low, the data bits least significant first, the parity bit
+/// if the format has one, and the stop bits high.
+fn frame_levels(byte: u8, data_bits: u32, parity: Parity, stop_bits: u32) -> Vec<bool> {
+    let mut out = vec![false];
+    for k in 0..data_bits {
+        out.push((byte >> k) & 1 == 1);
+    }
+    if let Some(p) = parity.bit(byte, data_bits) {
+        out.push(p);
+    }
+    out.extend(std::iter::repeat_n(
+        true,
+        usize::try_from(stop_bits).expect("a stop-bit count fits a usize"),
+    ));
+    out
+}
+
+/// Bit periods in one frame of this format.
+fn frame_len(data_bits: u32, parity: Parity, stop_bits: u32) -> u32 {
+    1 + data_bits + u32::from(parity.present()) + stop_bits
+}
+
+/// One character read off a recording of a serial line by hand.
+struct Decoded {
+    /// The clock the start bit began at.
+    start: usize,
+    byte: u8,
+    /// The parity bit as it arrived, for a format that has one.
+    parity: Option<bool>,
+    /// Every sample from the end of the last data or parity bit to the
+    /// end of the last stop bit. All of them must be mark, and how many
+    /// there are is what the stop-bit count *means*.
+    stop_run: Vec<bool>,
+    /// The first space sample at or after the end of this frame, which
+    /// can only be the next character's start bit. `None` if the line
+    /// stayed idle to the end of the recording.
+    next: Option<usize>,
+}
+
+/// Decodes one character out of `line`, where `line[i]` is the level the
+/// transmitter held at clock `i`.
+///
+/// **This is the thing that is not `uart_frame_rx`.** It is a receiver
+/// written here from the definition of asynchronous serial framing — the
+/// character begins at a falling edge, each bit is sampled half a bit
+/// period into it, and the frame is as many bit periods long as the
+/// format says — and it shares no code and no reasoning with the Verilog.
+/// A testbench that checked `uart_frame_tx` with `uart_frame_rx` would
+/// pass happily on two halves of one misunderstanding;
+/// `examples/mos6502_computer/tb/computer_tb.v` and
+/// `examples/soc/tb/soc_tb.v` decode their lines by hand for the same
+/// reason, and this is that in Rust so that the whole matrix of formats
+/// can be swept.
+///
+/// `from` must land in a stretch of mark — the caller starts at the
+/// recording's leading idle and then at the end of each frame it has
+/// already decoded. **That is not circular and it is not a shortcut**:
+/// it is the one thing asynchronous framing actually requires a receiver
+/// to know, and a receiver that looked for the next falling edge instead
+/// would lock onto a one-to-zero transition between two data bits. An
+/// earlier draft of this function did exactly that and decoded half of
+/// one character and half of the next; no rule about how much mark
+/// precedes an edge can fix it, because a data bit one period long is
+/// preceded by exactly as much mark as a single stop bit is.
+fn decode_frame(
+    line: &[bool],
+    from: usize,
+    div: usize,
+    data_bits: u32,
+    parity: Parity,
+    stop_bits: u32,
+) -> Option<Decoded> {
+    let start = (from..line.len()).find(|&i| !line[i])?;
+    let sample = |k: usize| line.get(start + div / 2 + k * div).copied();
+    if sample(0)? {
+        return None; // the line came back up before the middle of the start bit
+    }
+    let mut byte = 0u8;
+    for k in 0..data_bits {
+        if sample(1 + k as usize)? {
+            byte |= 1 << k;
+        }
+    }
+    let mut bit = 1 + data_bits as usize;
+    let parity_bit = if parity.present() {
+        let got = sample(bit)?;
+        bit += 1;
+        Some(got)
+    } else {
+        None
+    };
+    // The stop bits are not sampled at their centres but checked whole:
+    // a mid-bit sample of the first one cannot tell one stop bit from
+    // two, because the line is mark either way, and only the length of
+    // the mark can.
+    let span = frame_len(data_bits, parity, stop_bits) as usize * div;
+    let tail = line.get(start + bit * div..start + span)?.to_vec();
+    let next = (start + span..line.len()).find(|&i| !line[i]);
+    Some(Decoded {
+        start,
+        byte,
+        parity: parity_bit,
+        stop_run: tail,
+        next,
+    })
+}
+
+/// Asserts that `line` carries `bytes` as frames of this format.
+///
+/// Four claims a frame, and the third and fourth are the ones a casual
+/// check would leave out:
+///
+///   * the data bits are the byte, masked to the width the format
+///     carries;
+///   * the parity bit is the one the model computes from counted ones;
+///   * every sample from the end of the data to the end of the frame is
+///     **mark**, and there are `stop_bits` bit periods of them — which is
+///     the only statement about the stop-bit count a line can make, since
+///     one stop bit and two are both mark where a receiver samples;
+///   * the next character's start bit comes no more than a clock or so
+///     after the frame ends, which is what stops a transmitter passing by
+///     padding the tail.
+fn expect_frames(
+    line: &[bool],
+    div: usize,
+    bits: u32,
+    parity: Parity,
+    stop: u32,
+    bytes: &[u8],
+    what: &str,
+) {
+    let span = frame_len(bits, parity, stop) as usize * div;
+    let mut at = 0usize;
+    for (nth, &byte) in bytes.iter().enumerate() {
+        let got = decode_frame(line, at, div, bits, parity, stop)
+            .unwrap_or_else(|| panic!("{what}: no frame {nth} on the line"));
+        assert_eq!(
+            got.byte,
+            byte & mask_bits(bits),
+            "{what}: the data bits of {byte:#04x}"
+        );
+        assert_eq!(
+            got.parity,
+            parity.bit(byte, bits),
+            "{what}: the parity bit of {byte:#04x}"
+        );
+        assert_eq!(
+            got.stop_run.len(),
+            stop as usize * div,
+            "{what}: the recording is too short for the stop bits of {byte:#04x}"
+        );
+        assert!(
+            got.stop_run.iter().all(|&level| level),
+            "{what}: the stop bits of {byte:#04x} are not all mark: {:?}",
+            got.stop_run
+        );
+        if nth + 1 < bytes.len() {
+            let next = got
+                .next
+                .unwrap_or_else(|| panic!("{what}: the line never fell again after {byte:#04x}"));
+            let gap = next - got.start;
+            assert!(
+                gap < span + div,
+                "{what}: the next start bit is {gap} clocks after this one and a frame of \
+                 this format is {span}, so the tail is {} clocks too long",
+                gap - span
+            );
+            at = got.start + span;
+        }
+    }
+}
+
+/// Whatever the receiver produced, in the order it produced it.
+#[derive(Debug, PartialEq, Eq)]
+enum Rx {
+    Char {
+        byte: u8,
+        frame_error: bool,
+        parity_error: bool,
+    },
+    Break,
+    Overrun,
+}
+
+/// A clean character, which is what almost every assertion below wants.
+fn ch(byte: u8) -> Rx {
+    Rx::Char {
+        byte,
+        frame_error: false,
+        parity_error: false,
+    }
+}
+
+/// A simulation of `uart_frame` with every port to hand.
+///
+/// `uart_frame` rather than the two halves separately because it is the
+/// block a design instantiates, so a test of it is also a test that the
+/// pair is wired together — and because one harness then serves the
+/// transmitter tests, the receiver tests and the loopback.
+struct Frame<'d> {
+    sim: Simulator<'d>,
+    clk: NetHandle,
+    rst_n: NetHandle,
+    tx_data: NetHandle,
+    tx_valid: NetHandle,
+    tx_ready: NetHandle,
+    tx: NetHandle,
+    rx: NetHandle,
+    rx_ready: NetHandle,
+    rx_data: NetHandle,
+    rx_valid: NetHandle,
+    rx_frame_error: NetHandle,
+    rx_parity_error: NetHandle,
+    rx_break: NetHandle,
+    rx_overrun: NetHandle,
+}
+
+impl<'d> Frame<'d> {
+    /// Out of reset, line idle, consumer ready, format set from the three
+    /// numbers the ports actually take.
+    fn with_cfg(
+        design: &'d Design,
+        div: u64,
+        cfg_bits: u64,
+        cfg_parity: u64,
+        cfg_stop: u64,
+    ) -> Self {
+        let sim = simulate(design, "uart_frame");
+        let mut me = Frame {
+            clk: top_net(&sim, "clk"),
+            rst_n: top_net(&sim, "rst_n"),
+            tx_data: top_net(&sim, "tx_data"),
+            tx_valid: top_net(&sim, "tx_valid"),
+            tx_ready: top_net(&sim, "tx_ready"),
+            tx: top_net(&sim, "tx"),
+            rx: top_net(&sim, "rx"),
+            rx_ready: top_net(&sim, "rx_ready"),
+            rx_data: top_net(&sim, "rx_data"),
+            rx_valid: top_net(&sim, "rx_valid"),
+            rx_frame_error: top_net(&sim, "rx_frame_error"),
+            rx_parity_error: top_net(&sim, "rx_parity_error"),
+            rx_break: top_net(&sim, "rx_break"),
+            rx_overrun: top_net(&sim, "rx_overrun"),
+            sim,
+        };
+        let div_net = top_net(&me.sim, "div");
+        let bits_net = top_net(&me.sim, "cfg_data_bits");
+        let par_net = top_net(&me.sim, "cfg_parity");
+        let stop_net = top_net(&me.sim, "cfg_stop");
+        me.sim.set(div_net, word(16, div));
+        me.sim.set(bits_net, word(4, cfg_bits));
+        me.sim.set(par_net, word(3, cfg_parity));
+        me.sim.set(stop_net, word(2, cfg_stop));
+        me.sim.set(me.rx, bit(true));
+        me.sim.set(me.rx_ready, bit(true));
+        me.sim.set(me.tx_valid, bit(false));
+        let (clk, rst_n) = (me.clk, me.rst_n);
+        reset(&mut me.sim, clk, rst_n);
+        me
+    }
+
+    /// The same, from the format in the model's own terms.
+    fn new(design: &'d Design, div: u64, bits: u32, parity: Parity, stop: u32) -> Self {
+        Self::with_cfg(design, div, u64::from(bits), parity.code(), stop_code(stop))
+    }
+
+    fn tick(&mut self) {
+        let clk = self.clk;
+        cycle(&mut self.sim, clk, HALF);
+    }
+
+    /// What the receiver is saying **this** cycle, then one clock.
+    ///
+    /// The order matters and cost a debugging round: the handshake is a
+    /// transfer in the cycle where `rx_valid` and `rx_ready` are both
+    /// high, and the edge at the end of that cycle is what clears
+    /// `rx_valid`. Looked at *after* the edge, a character the consumer
+    /// had been holding off and then took would have vanished without
+    /// ever being counted.
+    fn step(&mut self, out: &mut Vec<Rx>) {
+        self.collect(out);
+        self.tick();
+    }
+
+    /// Whatever the receiver is saying, appended to `out`.
+    ///
+    /// A character counts when it is **taken** — `rx_valid` and
+    /// `rx_ready` both high — because `rx_valid` is a handshake here and
+    /// a character nobody takes stays offered.
+    fn collect(&self, out: &mut Vec<Rx>) {
+        if high(&self.sim, self.rx_valid) && high(&self.sim, self.rx_ready) {
+            out.push(Rx::Char {
+                byte: octet(get_u64(&self.sim, self.rx_data)),
+                frame_error: high(&self.sim, self.rx_frame_error),
+                parity_error: high(&self.sim, self.rx_parity_error),
+            });
+        }
+        if high(&self.sim, self.rx_break) {
+            out.push(Rx::Break);
+        }
+        if high(&self.sim, self.rx_overrun) {
+            out.push(Rx::Overrun);
+        }
+    }
+
+    /// Hands `bytes` to the transmitter as fast as it will take them and
+    /// records `tx`, one sample a clock, for `clocks` clocks.
+    fn send(&mut self, bytes: &[u8], div: u64, clocks: usize) -> Vec<bool> {
+        let mut line = Vec::with_capacity(clocks);
+        // One bit period of idle first. `tx_ready` is high out of reset,
+        // so without it the first start bit would be the first sample of
+        // the recording and a decoder looking for a falling *edge* out of
+        // mark would find the second one instead — which it did, and the
+        // byte it then reported was the next character's bits.
+        for _ in 0..div {
+            self.tick();
+            line.push(high(&self.sim, self.tx));
+        }
+        let mut next = 0usize;
+        if let Some(&first) = bytes.first() {
+            self.sim.set(self.tx_data, word(8, u64::from(first)));
+            self.sim.set(self.tx_valid, bit(true));
+        }
+        for _ in 0..clocks {
+            let taken = high(&self.sim, self.tx_valid) && high(&self.sim, self.tx_ready);
+            self.tick();
+            if taken {
+                next += 1;
+                match bytes.get(next) {
+                    Some(&byte) => self.sim.set(self.tx_data, word(8, u64::from(byte))),
+                    None => self.sim.set(self.tx_valid, bit(false)),
+                }
+            }
+            line.push(high(&self.sim, self.tx));
+        }
+        assert_eq!(next, bytes.len(), "the transmitter did not take every byte");
+        line
+    }
+
+    /// Holds each of `levels` on `rx` for `div` clocks, collecting
+    /// whatever the receiver produces.
+    fn drive(&mut self, levels: &[bool], div: u64, out: &mut Vec<Rx>) {
+        for &level in levels {
+            self.sim.set(self.rx, bit(level));
+            for _ in 0..div {
+                self.step(out);
+            }
+        }
+    }
+
+    /// Idle line, long enough for the receiver to finish a character and
+    /// settle.
+    fn idle(&mut self, clocks: u64, out: &mut Vec<Rx>) {
+        self.sim.set(self.rx, bit(true));
+        for _ in 0..clocks {
+            self.step(out);
+        }
+    }
+
+    /// Sends `bytes` with `tx` wired into `rx`, one clock at a time, and
+    /// returns what came back.
+    fn loop_back(&mut self, bytes: &[u8], clocks: usize) -> Vec<Rx> {
+        let mut out = Vec::new();
+        let mut next = 0usize;
+        if let Some(&first) = bytes.first() {
+            self.sim.set(self.tx_data, word(8, u64::from(first)));
+            self.sim.set(self.tx_valid, bit(true));
+        }
+        for _ in 0..clocks {
+            let level = high(&self.sim, self.tx);
+            self.sim.set(self.rx, bit(level));
+            let taken = high(&self.sim, self.tx_valid) && high(&self.sim, self.tx_ready);
+            self.collect(&mut out);
+            self.tick();
+            if taken {
+                next += 1;
+                match bytes.get(next) {
+                    Some(&byte) => self.sim.set(self.tx_data, word(8, u64::from(byte))),
+                    None => self.sim.set(self.tx_valid, bit(false)),
+                }
+            }
+        }
+        assert_eq!(next, bytes.len(), "the transmitter did not take every byte");
+        out
+    }
+}
+
+/// The divisor the format tests run at. Eight is the smallest the
+/// existing tests use and it keeps the sweeps quick; the receiver's
+/// two-flop synchroniser shifts every sample two clocks later, which at
+/// eight clocks a bit is still two clocks inside the bit.
+const FMT_DIV: u64 = 8;
+
+/// [`FMT_DIV`] as an index into a recording of the line.
+fn fmt_div_clocks() -> usize {
+    usize::try_from(FMT_DIV).expect("a divisor fits a usize")
+}
+
+/// A label for a failing format, so that one of forty says which.
+fn fmt_label(bits: u32, parity: Parity, stop: u32) -> String {
+    format!("{bits} data bits, {parity:?} parity, {stop} stop bit(s)")
+}
+
+/// `uart_frame` built once for the sweeps. CLK_DIV is 16 and every test
+/// drives `div` with eight, so a bit period that came from the parameter
+/// could not be mistaken for one that came from the port.
+fn frame_design() -> Design {
+    design_of("uart", "uart_frame", &[("CLK_DIV", "16")])
+}
+
+/// The transmitter puts the frame the format says on the line, read by a
+/// decoder that is not `uart_frame_rx`.
+///
+/// Forty formats, two bytes each. Every data width, every parity mode and
+/// both stop-bit counts; the byte is checked masked to the width, the
+/// parity bit against the model's own arithmetic, every stop bit against
+/// being high, and the **gap between two back-to-back frames** against
+/// the frame length the format implies.
+///
+/// That last assertion is the one that catches a stop-bit count, and it
+/// is worth saying why it has to be there: a mid-bit sample of the first
+/// stop bit cannot tell one stop bit from two, because the line is high
+/// either way. Only the distance to the next start edge can.
+///
+/// What it would not catch: anything about the receiver, which is
+/// `uart_frame_rx_reads_the_frame_a_hand_encoder_writes`; a format whose
+/// `div` is wrong, which is `uart_takes_its_divisor_from_a_port`; and any
+/// error condition, since nothing here is broken on purpose. It also
+/// cannot catch a transmitter that is correct at eight clocks a bit and
+/// wrong at 6250 — the frame is counted in bit periods and the bit period
+/// is one latched comparison, which is what `a_hosts_rate_becomes_a_bit
+/// _period` measures separately.
+#[test]
+fn uart_frame_tx_sends_the_frame_a_hand_decoder_reads() {
+    let design = frame_design();
+    let div = fmt_div_clocks();
+    for (bits, parity, stop) in every_format() {
+        let label = fmt_label(bits, parity, stop);
+        let mut uart = Frame::new(&design, FMT_DIV, bits, parity, stop);
+        let bytes = [0xA5u8, 0x3C];
+        // Two frames of the longest format, and a margin for the
+        // handshake and the idle before the first start bit.
+        let line = uart.send(&bytes, FMT_DIV, 2 * 12 * div + 4 * div);
+
+        expect_frames(&line, div, bits, parity, stop, &bytes, &label);
+    }
+}
+
+/// The receiver reads the frame an encoder that is not `uart_frame_tx`
+/// writes.
+///
+/// The other direction of the same independence: the levels driven onto
+/// `rx` come from [`frame_levels`], which is written from the definition
+/// of the framing, so a receiver that agreed with a wrong transmitter
+/// would fail here.
+///
+/// Four bytes a format, including 0x00 and 0xFF — the two that make every
+/// parity mode disagree with every other, and 0x00 the one a break would
+/// be confused with if the stop bit were not also checked.
+///
+/// What it would not catch: an error condition (each has a test of its
+/// own below); a format the encoder gets wrong in the same way the
+/// receiver does, which is why the encoder is written from the
+/// specification and the parity arithmetic is counted ones rather than an
+/// exclusive or; and anything about the transmitter.
+#[test]
+fn uart_frame_rx_reads_the_frame_a_hand_encoder_writes() {
+    let design = frame_design();
+    for (bits, parity, stop) in every_format() {
+        let label = fmt_label(bits, parity, stop);
+        let mut uart = Frame::new(&design, FMT_DIV, bits, parity, stop);
+        let bytes = [0xA5u8, 0x3C, 0x00, 0xFF];
+        let mut got = Vec::new();
+        // Two bit periods of mark first: the synchroniser comes out of
+        // reset holding the idle level, and a start edge needs an idle
+        // line to be an edge from.
+        uart.idle(2 * FMT_DIV, &mut got);
+        for &byte in &bytes {
+            let levels = frame_levels(byte, bits, parity, stop);
+            uart.drive(&levels, FMT_DIV, &mut got);
+        }
+        uart.idle(3 * FMT_DIV, &mut got);
+
+        let want: Vec<Rx> = bytes.iter().map(|&b| ch(b & mask_bits(bits))).collect();
+        assert_eq!(got, want, "{label}");
+    }
+}
+
+/// Both halves against each other, at every format, with the
+/// transmitter's own line wired into the receiver.
+///
+/// This is the weakest of the three and it is here for what the other two
+/// cannot see: that the *same* `cfg_*` values mean the same thing to both
+/// halves. A transmitter and a receiver that disagreed about, say, where
+/// the parity bit goes would each still satisfy its own test against the
+/// model if the model were wrong — and would fail here. Run the other way
+/// round it is the failure a loopback cannot see, which is why all three
+/// exist.
+///
+/// What it would not catch: a shared misunderstanding of the framing, by
+/// construction — and that is not a theoretical worry. Replacing
+/// `uart_frame_tx`'s `two_stop` with a constant zero, so that every
+/// format sends one stop bit, leaves **this test green**: the receiver
+/// samples the first stop bit and nothing after it, so a transmitter that
+/// forgot the second one is invisible to it. The hand decoder caught that
+/// mutation on every two-stop format, and that is the clearest statement
+/// of why it exists. A parity sense inverted in the transmitter is caught
+/// here, because the receiver checks parity; a stop-bit count is not,
+/// because nothing in a receiver does.
+#[test]
+fn uart_frame_halves_agree_at_every_character_format() {
+    let design = frame_design();
+    for (bits, parity, stop) in every_format() {
+        let label = fmt_label(bits, parity, stop);
+        let mut uart = Frame::new(&design, FMT_DIV, bits, parity, stop);
+        let bytes = [0xA5u8, 0x3C, 0x00, 0xFF, 0x01];
+        let div = fmt_div_clocks();
+        let clocks = bytes.len() * 13 * div + 4 * div;
+        let got = uart.loop_back(&bytes, clocks);
+        let want: Vec<Rx> = bytes.iter().map(|&b| ch(b & mask_bits(bits))).collect();
+        assert_eq!(got, want, "{label}");
+    }
+}
+
+/// A framing error: the stop bit held low, deliberately, and the receiver
+/// still takes the next character.
+///
+/// The byte is delivered with the error, which is the behaviour
+/// `uart_rx.v` has always had and `uart_frame_rx.v` keeps: a wrong byte
+/// at a consumer says more than silence does. 0x7E is chosen because it
+/// is not zero — an all-zero frame with a low stop bit is a break and has
+/// its own test.
+///
+/// What it would not catch: a receiver that raised `rx_frame_error` for
+/// everything, which the forty clean formats above rule out; and the
+/// difference between a framing error and a break, which
+/// `uart_frame_rx_reports_a_break_once_and_waits_for_the_line` pins from
+/// the other side.
+#[test]
+fn uart_frame_rx_reports_a_framing_error_and_takes_the_next_character() {
+    let design = frame_design();
+    let mut uart = Frame::new(&design, FMT_DIV, 8, Parity::None, 1);
+    let mut got = Vec::new();
+    uart.idle(2 * FMT_DIV, &mut got);
+
+    // A frame of 0x7E whose stop bit is low.
+    let mut broken = frame_levels(0x7E, 8, Parity::None, 1);
+    let last = broken.len() - 1;
+    broken[last] = false;
+    uart.drive(&broken, FMT_DIV, &mut got);
+    // The line has to come back to mark before another start edge: the
+    // low stop bit *is* the next start bit otherwise, which is a
+    // property of the wire and not of this block.
+    uart.idle(2 * FMT_DIV, &mut got);
+    uart.drive(&frame_levels(0x41, 8, Parity::None, 1), FMT_DIV, &mut got);
+    uart.idle(3 * FMT_DIV, &mut got);
+
+    assert_eq!(
+        got,
+        vec![
+            Rx::Char {
+                byte: 0x7E,
+                frame_error: true,
+                parity_error: false,
+            },
+            ch(0x41),
+        ],
+        "the broken frame's byte arrives with its own error, and the receiver recovers"
+    );
+}
+
+/// A parity error: one bit of a correctly-framed character inverted, so
+/// that the parity bit no longer matches the data.
+///
+/// Inverting a **data** bit rather than the parity bit is the more
+/// faithful fault — it is what a wire does — and it also proves the
+/// receiver computes the parity of the data it received rather than
+/// comparing the parity bit against itself.
+///
+/// What it would not catch: a receiver that reported a parity error on
+/// every character, which the twenty-four clean parity formats above rule
+/// out; and a parity error on a format with no parity bit, which cannot
+/// happen because there is no bit to disagree with — the sweeps cover
+/// that direction.
+#[test]
+fn uart_frame_rx_reports_a_parity_error_and_takes_the_next_character() {
+    let design = frame_design();
+    for parity in [Parity::Odd, Parity::Even, Parity::Mark, Parity::Space] {
+        let mut uart = Frame::new(&design, FMT_DIV, 8, parity, 1);
+        let mut got = Vec::new();
+        uart.idle(2 * FMT_DIV, &mut got);
+
+        // 0x5A's frame, with the parity bit that belongs to 0x5A and the
+        // data of 0x5B. For mark and space the parity bit does not depend
+        // on the data at all, so the inversion goes on the parity bit
+        // instead — there is no data change that could disagree with a
+        // constant.
+        let mut levels = frame_levels(0x5A, 8, parity, 1);
+        let wrong_byte = matches!(parity, Parity::Odd | Parity::Even);
+        if wrong_byte {
+            levels[1] = !levels[1]; // data bit 0: 0x5A becomes 0x5B
+        } else {
+            let slot = 9; // the parity bit: start, eight data, parity
+            levels[slot] = !levels[slot];
+        }
+        uart.drive(&levels, FMT_DIV, &mut got);
+        uart.idle(FMT_DIV, &mut got);
+        uart.drive(&frame_levels(0x41, 8, parity, 1), FMT_DIV, &mut got);
+        uart.idle(3 * FMT_DIV, &mut got);
+
+        assert_eq!(
+            got,
+            vec![
+                Rx::Char {
+                    byte: if wrong_byte { 0x5B } else { 0x5A },
+                    frame_error: false,
+                    parity_error: true,
+                },
+                ch(0x41),
+            ],
+            "{parity:?}: the character arrives with a parity error and the receiver recovers"
+        );
+    }
+}
+
+/// A break: the line held low for longer than a frame, which raises
+/// `rx_break` **once**, produces no character, and ends when the line
+/// returns to mark.
+///
+/// Held low for three frame periods, so a receiver that treated a break
+/// as a stream of framing errors would produce three events and a
+/// receiver with no recovery state would never stop. Both are failures
+/// here.
+///
+/// What it would not catch: a break shorter than one frame, which is not
+/// a break and arrives as a framing error on a zero byte — that boundary
+/// is not pinned by any test, and the honest reason is that the boundary
+/// is a definition rather than a measurement: a receiver with no
+/// bit-period timer of its own cannot distinguish "low for exactly one
+/// frame" from "a 0x00 whose stop bit failed", and this block chooses to
+/// call it a break.
+#[test]
+fn uart_frame_rx_reports_a_break_once_and_waits_for_the_line() {
+    let design = frame_design();
+    let mut uart = Frame::new(&design, FMT_DIV, 8, Parity::None, 1);
+    let mut got = Vec::new();
+    uart.idle(2 * FMT_DIV, &mut got);
+
+    // Thirty bit periods of low: three 8N1 frames.
+    uart.drive(&[false; 30], FMT_DIV, &mut got);
+    assert_eq!(got, vec![Rx::Break], "one break, not one per frame period");
+
+    // The line let go, and a character after it.
+    uart.idle(2 * FMT_DIV, &mut got);
+    uart.drive(&frame_levels(0x41, 8, Parity::None, 1), FMT_DIV, &mut got);
+    uart.idle(3 * FMT_DIV, &mut got);
+    assert_eq!(
+        got,
+        vec![Rx::Break, ch(0x41)],
+        "the receiver comes back when the line does"
+    );
+}
+
+/// An overrun: a character assembled while the previous one had not been
+/// taken.
+///
+/// `rx_ready` is held low across two characters. The second raises
+/// `rx_overrun`, the **newer** character is the one that survives — which
+/// is a 16550's behaviour and `uart_frame_rx.v`'s header argues for it —
+/// and a third character after `rx_ready` comes back arrives intact.
+///
+/// What it would not catch: an overrun in `uart` or `uart_rx`, which
+/// cannot happen because `rx_ready` is tied high there and so is not a
+/// gap in the test but a property of those two modules; and the case of a
+/// character delivered in the same cycle the previous one is taken, which
+/// the handshake orders explicitly in the RTL and nothing here exercises.
+#[test]
+fn uart_frame_rx_reports_an_overrun_and_keeps_the_newer_character() {
+    let design = frame_design();
+    let mut uart = Frame::new(&design, FMT_DIV, 8, Parity::None, 1);
+    let mut got = Vec::new();
+    uart.idle(2 * FMT_DIV, &mut got);
+
+    // Nobody is reading.
+    let ready = uart.rx_ready;
+    uart.sim.set(ready, bit(false));
+    uart.drive(&frame_levels(0x11, 8, Parity::None, 1), FMT_DIV, &mut got);
+    uart.idle(FMT_DIV, &mut got);
+    assert_eq!(got, vec![], "nothing is taken while `rx_ready` is low");
+    let held = get_u64(&uart.sim, uart.rx_data);
+    assert!(
+        high(&uart.sim, uart.rx_valid),
+        "the character is still offered"
+    );
+    assert_eq!(held, 0x11, "and it is the one that arrived");
+
+    uart.drive(&frame_levels(0x22, 8, Parity::None, 1), FMT_DIV, &mut got);
+    uart.idle(FMT_DIV, &mut got);
+    assert_eq!(
+        got,
+        vec![Rx::Overrun],
+        "the second character overran the first"
+    );
+    assert_eq!(
+        get_u64(&uart.sim, uart.rx_data),
+        0x22,
+        "the newer character is the one kept"
+    );
+
+    // The consumer comes back, takes it, and the next one is clean.
+    uart.sim.set(ready, bit(true));
+    uart.idle(FMT_DIV, &mut got);
+    uart.drive(&frame_levels(0x33, 8, Parity::None, 1), FMT_DIV, &mut got);
+    uart.idle(3 * FMT_DIV, &mut got);
+    assert_eq!(
+        got,
+        vec![Rx::Overrun, ch(0x22), ch(0x33)],
+        "the held character is taken and the receiver carries on"
+    );
+}
+
+/// `uart_rx`'s one `rx_error` wire still means what it meant, and the
+/// three beside it say which.
+///
+/// The 8N1 wrapper is what `examples/soc`, `examples/apple2`,
+/// `examples/mos6502_computer` and the Cynthion designs instantiate, so
+/// this is the compatibility assertion: a frame with a low stop bit
+/// arrives as its byte with `rx_error` high, exactly as
+/// `uart_reports_a_framing_error_when_the_stop_bit_is_missing` has always
+/// required, and `rx_frame_error` is the one of the three that is set.
+///
+/// What it would not catch: that no existing instantiation needs
+/// changing, which is a structural claim and is checked by
+/// `packages_resolve_and_elaborate` and by the example tests elaborating
+/// designs nobody edited.
+#[test]
+fn uart_rx_error_is_the_disjunction_of_the_three_it_now_has() {
+    let design = design_of("uart", "uart", &[("CLK_DIV", "8")]);
+    let mut sim = simulate(&design, "uart");
+    let clk = top_net(&sim, "clk");
+    let rst_n = top_net(&sim, "rst_n");
+    let rx = top_net(&sim, "rx");
+    let rx_data = top_net(&sim, "rx_data");
+    let rx_valid = top_net(&sim, "rx_valid");
+    let rx_error = top_net(&sim, "rx_error");
+    let rx_frame_error = top_net(&sim, "rx_frame_error");
+    let rx_parity_error = top_net(&sim, "rx_parity_error");
+    let rx_break = top_net(&sim, "rx_break");
+
+    sim.set(rx, bit(true));
+    sim.set(top_net(&sim, "div"), word(16, 0)); // "use CLK_DIV"
+    sim.set(top_net(&sim, "tx_valid"), bit(false));
+    reset(&mut sim, clk, rst_n);
+
+    let mut broken = frame_levels(0x7E, 8, Parity::None, 1);
+    let last = broken.len() - 1;
+    broken[last] = false;
+    let mut seen = None;
+    let mut breaks = 0usize;
+    for level in broken.iter().copied().chain(std::iter::repeat_n(true, 24)) {
+        sim.set(rx, bit(level));
+        for _ in 0..8 {
+            cycle(&mut sim, clk, HALF);
+            if high(&sim, rx_valid) {
+                seen = Some((
+                    get_u64(&sim, rx_data),
+                    high(&sim, rx_error),
+                    high(&sim, rx_frame_error),
+                    high(&sim, rx_parity_error),
+                ));
+            }
+            if high(&sim, rx_break) {
+                breaks += 1;
+            }
+        }
+    }
+    assert_eq!(
+        seen,
+        Some((0x7E, true, true, false)),
+        "`rx_error` is still the wire it was, and `rx_frame_error` says which"
+    );
+    assert_eq!(breaks, 0, "a 0x7E frame is not a break");
+}
+
+/// `uart_line_coding` maps what a host asked for, including the values it
+/// cannot give the host.
+///
+/// Combinational, so this is a table and not a waveform: every value the
+/// specification defines in each of the three fields, plus one undefined
+/// value in each, against what `ip/bus/uart/README.md` §3 says each one
+/// does.
+///
+/// What it would not catch: whether `uart_frame` then *uses* the three
+/// numbers — that is
+/// `a_hosts_line_coding_becomes_the_frame_on_the_line` — and whether a
+/// real host's SET_LINE_CODING reaches `char_format`, `parity` and
+/// `data_bits` at all, which is
+/// `usb_cdc_acm_ulpi_answers_the_line_coding_and_control_line_requests`.
+#[test]
+fn uart_line_coding_maps_the_formats_a_host_asks_for() {
+    let design = design_of("uart", "uart_line_coding", &[]);
+    let mut sim = simulate(&design, "uart_line_coding");
+    let char_format = top_net(&sim, "char_format");
+    let parity = top_net(&sim, "parity");
+    let data_bits = top_net(&sim, "data_bits");
+    let cfg_data_bits = top_net(&sim, "cfg_data_bits");
+    let cfg_parity = top_net(&sim, "cfg_parity");
+    let cfg_stop = top_net(&sim, "cfg_stop");
+    let ok = top_net(&sim, "ok");
+
+    // (bCharFormat, bParityType, bDataBits) -> (cfg_data_bits,
+    // cfg_parity, cfg_stop, ok), and why.
+    let table = [
+        (0u64, 0u64, 8u64, 8u64, 0u64, 0u64, true, "8N1, the default"),
+        (0, 0, 7, 7, 0, 0, true, "cs7, which `stty` offers"),
+        (0, 0, 6, 6, 0, 0, true, "six data bits"),
+        (0, 0, 5, 5, 0, 0, true, "five, the Baudot width"),
+        (0, 1, 7, 7, 1, 0, true, "7O1: `stty parenb parodd cs7`"),
+        (0, 2, 7, 7, 2, 0, true, "7E1: `stty parenb cs7`"),
+        (
+            0,
+            3,
+            8,
+            8,
+            3,
+            0,
+            true,
+            "mark parity, the 9-bit address trick",
+        ),
+        (0, 4, 8, 8, 4, 0, true, "space parity"),
+        (2, 0, 8, 8, 0, 2, true, "8N2: `stty cstopb`"),
+        (2, 2, 7, 7, 2, 2, true, "7E2, the longest frame there is"),
+        (
+            1,
+            0,
+            8,
+            8,
+            0,
+            2,
+            false,
+            "one and a half stop bits are sent as two, and `ok` says so",
+        ),
+        (
+            0,
+            0,
+            16,
+            8,
+            0,
+            0,
+            false,
+            "sixteen data bits do not fit an eight-bit datapath",
+        ),
+        (
+            0,
+            0,
+            9,
+            8,
+            0,
+            0,
+            false,
+            "nine is not a CDC value and is not built",
+        ),
+        (
+            0,
+            5,
+            8,
+            8,
+            0,
+            0,
+            false,
+            "no parity type above space is defined",
+        ),
+        (
+            3,
+            0,
+            8,
+            8,
+            0,
+            0,
+            false,
+            "no character format above two is defined",
+        ),
+    ];
+
+    for (fmt, par, bits, want_bits, want_par, want_stop, want_ok, why) in table {
+        sim.set(char_format, word(8, fmt));
+        sim.set(parity, word(8, par));
+        sim.set(data_bits, word(8, bits));
+        sim.run_for(HALF);
+        let got = (
+            get_u64(&sim, cfg_data_bits),
+            get_u64(&sim, cfg_parity),
+            get_u64(&sim, cfg_stop),
+            high(&sim, ok),
+        );
+        assert_eq!(
+            got,
+            (want_bits, want_par, want_stop, want_ok),
+            "bCharFormat {fmt}, bParityType {par}, bDataBits {bits}: {why}"
+        );
+    }
+}
+
+/// **The loop, closed by a variable.** A host's three bytes go into
+/// `uart_line_coding`, its three answers come out as numbers, those
+/// numbers are driven onto `uart_frame`'s format ports, and the frame
+/// that appears on `tx` is decoded by hand and checked against what the
+/// host asked for.
+///
+/// Nothing here is spelled twice: the format the decoder expects is
+/// derived from the `cfg_*` values the hardware produced, so the only way
+/// to pass is for the decode module and the transmitter to agree, and for
+/// the frame on the wire to be the one the host's `stty` named.
+/// `a_hosts_rate_becomes_a_bit_period` is the same shape for the baud
+/// rate, and the two together are the whole claim that a host's line
+/// coding changes a waveform.
+///
+/// What it would not catch: the wiring in a *design*. That
+/// `testdata/fpga/cynthion/usb_cdc_uart.v` connects `usb_cdc_acm`'s
+/// `char_format`, `parity` and `data_bits` to this decoder and its
+/// outputs to the UART is structural, and the only check of it short of
+/// an oscilloscope is a host setting a format on the part and reading
+/// back what comes out of the loop.
+#[test]
+fn a_hosts_line_coding_becomes_the_frame_on_the_line() {
+    let coding = design_of("uart", "uart_line_coding", &[]);
+    let frame = frame_design();
+    let div = fmt_div_clocks();
+
+    // What a terminal program asks for: the three fields of
+    // SET_LINE_CODING, including the one value a host may send that this
+    // UART substitutes for.
+    for (fmt, par, bits, why) in [
+        (0u64, 0u64, 8u64, "8N1"),
+        (0, 2, 7, "7E1, `stty parenb cs7`"),
+        (0, 1, 7, "7O1, `stty parenb parodd cs7`"),
+        (2, 0, 8, "8N2, `stty cstopb`"),
+        (2, 2, 5, "5E2, the shortest character and the longest tail"),
+        (1, 0, 8, "8N1.5, which is sent as 8N2"),
+        (0, 0, 16, "sixteen data bits, which are sent as eight"),
+    ] {
+        let mut sim = simulate(&coding, "uart_line_coding");
+        sim.set(top_net(&sim, "char_format"), word(8, fmt));
+        sim.set(top_net(&sim, "parity"), word(8, par));
+        sim.set(top_net(&sim, "data_bits"), word(8, bits));
+        sim.run_for(HALF);
+        let cfg_bits = get_u64(&sim, top_net(&sim, "cfg_data_bits"));
+        let cfg_par = get_u64(&sim, top_net(&sim, "cfg_parity"));
+        let cfg_stop = get_u64(&sim, top_net(&sim, "cfg_stop"));
+        drop(sim);
+
+        // The format those three numbers mean, in the model's terms.
+        let width = u32::try_from(cfg_bits).expect("a width");
+        let parity = Parity::from_code(cfg_par);
+        let stops = if cfg_stop == 0 { 1u32 } else { 2 };
+
+        let mut uart = Frame::with_cfg(&frame, FMT_DIV, cfg_bits, cfg_par, cfg_stop);
+        let bytes = [0x4Bu8, 0x55];
+        let line = uart.send(&bytes, FMT_DIV, 2 * 12 * div + 4 * div);
+
+        expect_frames(&line, div, width, parity, stops, &bytes, why);
+
+        let span = frame_len(width, parity, stops) as usize * div;
+        println!(
+            "bCharFormat {fmt}, bParityType {par}, bDataBits {bits} -> {width} data bits, \
+             {parity:?} parity, {stops} stop bit(s), {span} clocks a frame: {why}"
+        );
+    }
 }
 
 /// One SPI transfer in the given mode: what the master put on `mosi`,

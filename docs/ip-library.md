@@ -2375,14 +2375,22 @@ exactly what this table is for.
 | `fifo_async` | `fifo_async` | WIDTH=8, DEPTH=16 | LUT6 | 10 x dff, 37 x lut, 1 x memory 16x8, 1 x memrd, 1 x memwr | 3 |
 | `fifo_async` | `fifo_async` | WIDTH=8, DEPTH=16 | iCE40 HX1K | 8 x SB_CARRY, 128 x SB_DFFE, 41 x SB_DFFR, 1 x SB_DFFS, 2 x SB_GB, 24 x SB_IO, 298 x SB_LUT4 | 4 |
 | `fifo_async` | `fifo_async` | WIDTH=8, DEPTH=16 | ECP5 45F | 2 x DCCA, 41 x LUT4, 2 x TRELLIS_DPR16X4, 42 x TRELLIS_FF, 24 x TRELLIS_IO | 4 |
-| `uart` | `uart` | CLK_DIV=104 | LUT4 | 16 x dff, 213 x lut | 8 |
-| `uart` | `uart` | CLK_DIV=104 | LUT6 | 16 x dff, 187 x lut | 6 |
-| `uart` | `uart` | CLK_DIV=104 | iCE40 HX1K | 33 x SB_CARRY, 60 x SB_DFFER, 24 x SB_DFFES, 34 x SB_DFFR, 2 x SB_DFFS, 1 x SB_GB, 40 x SB_IO, 247 x SB_LUT4 | 8 |
-| `uart` | `uart` | CLK_DIV=104 | ECP5 45F | 1 x DCCA, 215 x LUT4, 120 x TRELLIS_FF, 40 x TRELLIS_IO | 8 |
+| `uart` | `uart` | CLK_DIV=104 | LUT4 | 21 x dff, 275 x lut | 8 |
+| `uart` | `uart` | CLK_DIV=104 | LUT6 | 21 x dff, 228 x lut | 6 |
+| `uart` | `uart` | CLK_DIV=104 | iCE40 HX1K | 33 x SB_CARRY, 84 x SB_DFFER, 29 x SB_DFFES, 17 x SB_DFFR, 2 x SB_DFFS, 1 x SB_GB, 43 x SB_IO, 310 x SB_LUT4 | 8 |
+| `uart` | `uart` | CLK_DIV=104 | ECP5 45F | 1 x DCCA, 277 x LUT4, 132 x TRELLIS_FF, 43 x TRELLIS_IO | 8 |
 | `uart` | `uart_baud_div` | (defaults) | LUT4 | 9 x dff, 282 x lut | 23 |
 | `uart` | `uart_baud_div` | (defaults) | LUT6 | 9 x dff, 235 x lut | 17 |
 | `uart` | `uart_baud_div` | (defaults) | iCE40 HX1K | 35 x SB_CARRY, 181 x SB_DFFER, 3 x SB_DFFES, 1 x SB_GB, 52 x SB_IO, 263 x SB_LUT4 | 23 |
 | `uart` | `uart_baud_div` | (defaults) | ECP5 45F | 1 x DCCA, 282 x LUT4, 184 x TRELLIS_FF, 52 x TRELLIS_IO | 23 |
+| `uart` | `uart_frame` | CLK_DIV=104 | LUT4 | 23 x dff, 311 x lut | 8 |
+| `uart` | `uart_frame` | CLK_DIV=104 | LUT6 | 23 x dff, 253 x lut | 6 |
+| `uart` | `uart_frame` | CLK_DIV=104 | iCE40 HX1K | 42 x SB_CARRY, 86 x SB_DFFER, 31 x SB_DFFES, 18 x SB_DFFR, 2 x SB_DFFS, 1 x SB_GB, 53 x SB_IO, 355 x SB_LUT4 | 8 |
+| `uart` | `uart_frame` | CLK_DIV=104 | ECP5 45F | 1 x DCCA, 313 x LUT4, 137 x TRELLIS_FF, 53 x TRELLIS_IO | 8 |
+| `uart` | `uart_line_coding` | (defaults) | LUT4 | 18 x lut | 3 |
+| `uart` | `uart_line_coding` | (defaults) | LUT6 | 15 x lut | 3 |
+| `uart` | `uart_line_coding` | (defaults) | iCE40 HX1K | 34 x SB_IO, 18 x SB_LUT4 | 3 |
+| `uart` | `uart_line_coding` | (defaults) | ECP5 45F | 18 x LUT4, 34 x TRELLIS_IO | 3 |
 | `spi_master` | `spi_master` | CPOL=0, CPHA=0, CLK_DIV=4, WIDTH=8 | LUT4 | 10 x dff, 87 x lut | 6 |
 | `spi_master` | `spi_master` | CPOL=0, CPHA=0, CLK_DIV=4, WIDTH=8 | LUT6 | 10 x dff, 80 x lut | 4 |
 | `spi_master` | `spi_master` | CPOL=0, CPHA=0, CLK_DIV=4, WIDTH=8 | iCE40 HX1K | 22 x SB_CARRY, 35 x SB_DFFER, 1 x SB_DFFES, 17 x SB_DFFR, 1 x SB_GB, 25 x SB_IO, 73 x SB_LUT4 | 3 |

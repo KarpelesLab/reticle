@@ -2,8 +2,8 @@
 // `ip/usb/usb_cdc_acm` wired to the auxiliary ULPI transceiver, its bytes
 // handed to `ip/bus/uart`'s transmitter, and that transmitter's line
 // **looped back into its own receiver** so that what a program writes to
-// `/dev/ttyACM*` it reads back — having been serialised at 115200 baud in
-// between.
+// `/dev/ttyACM*` it reads back — having been serialised in between at the
+// rate **and in the character format** the host set with `stty`.
 //
 // This is `usb_ulpi_device.v`'s successor and not its replacement. That design
 // is a vendor-specific bulk loopback that no driver claims and it carries a
@@ -39,23 +39,31 @@
 // first four are `usb_ulpi_device.v`'s so that the two designs are read the
 // same way:
 //
-//     LED 0   THE RATE CAME FROM THE HOST     `baud_ok`, live
-//     LED 1   THE HOST CONFIGURED IT          `configured`, latched
-//     LED 2   A BYTE WENT OUT TO THE UART     latched
-//     LED 3   heartbeat, 0.89 Hz              the clock runs
-//     LED 4   A BYTE CAME BACK FROM THE UART  latched
-//     LED 5   THE UART'S TRANSMIT LINE        live, dark while idle
+//     LED 0   THE LINE CODING CAME FROM THE HOST   live
+//     LED 1   THE HOST CONFIGURED IT               `configured`, latched
+//     LED 2   A BYTE WENT OUT TO THE UART          latched
+//     LED 3   heartbeat, 0.89 Hz                   the clock runs
+//     LED 4   A BYTE CAME BACK FROM THE UART       latched
+//     LED 5   THE UART'S TRANSMIT LINE             live, dark while idle
 //
 // Read from the bottom up, and `usb_ulpi_device.v`'s header has the whole
 // ladder for LEDs 0, 1, 3 and the bus below them. What is new here:
 //
 //   * **LED 0 dark with LED 1 dark** — nothing has enumerated it and no
-//     rate has been set, which is also what a transceiver that never came
-//     up looks like; `phy_ready` used to have this LED and `usb_ulpi_device.v`
-//     still reports it on LED 0, so load that one to tell the two apart.
-//   * **LED 0 dark with LED 1 lit** — the device is enumerated and the
-//     divisor is still `CLK_DIV`, because the rate the host asked for was
-//     one `uart_baud_div` refused. `stty -F /dev/ttyACM1 115200` lights it.
+//     line coding has been set, which is also what a transceiver that never
+//     came up looks like; `phy_ready` used to have this LED and
+//     `usb_ulpi_device.v` still reports it on LED 0, so load that one to
+//     tell the two apart.
+//   * **LED 0 dark with LED 1 lit** — the device is enumerated and the wire
+//     is **not** doing exactly what the host asked for. It is `baud_ok`
+//     and `coding_ok` together, so either the rate was one
+//     `uart_baud_div` refused and the divisor is still `CLK_DIV`, or the
+//     framing was one `uart_line_coding` could not give exactly — sixteen
+//     data bits, an undefined parity type, or one and a half stop bits,
+//     which this UART sends as two. `stty -F /dev/ttyACM1 115200 cs8 -parenb
+//     -cstopb` lights it. Note that **the wire is still being driven** in
+//     every one of those cases, with the substitution each block's header
+//     documents; the LED says "not exactly", not "not at all".
 //   * **LED 1 lit, LED 2 dark** — the host enumerated the device and no
 //     program has written to the port. That is the resting state: opening
 //     the port is not writing to it.
@@ -64,13 +72,15 @@
 //     the part, that is a baud divisor wrong enough to break framing, or a
 //     receiver that never saw the start bit — and nothing on the board can
 //     cause it.
-//   * **LED 4 lit** — the whole path worked at least once: USB out, 8N1
-//     down a wire, 8N1 back up, USB in.
+//   * **LED 4 lit** — the whole path worked at least once: USB out, a frame
+//     down a wire, a frame back up, USB in.
 //   * **LED 5** flickers while bytes flow and is dark otherwise, because the
 //     line idles high and the LEDs are active low. It is also the one place
-//     the serial data **leaves the part**: ball C11 carries the real 8N1
-//     waveform, start bit, eight data bits and stop bit, at 115200 baud, so
-//     an oscilloscope or a logic analyser on that LED sees the characters.
+//     the serial data **leaves the part**: ball C11 carries the real
+//     waveform — start bit, five to eight data bits, the parity bit if the
+//     host asked for one, and one or two stop bits, at whatever rate the
+//     host set — so an oscilloscope or a logic analyser on that LED sees the
+//     characters, and sees the *framing* change when `stty` changes it.
 //
 // ===================================================================
 // THE LOOPBACK IS INSIDE THE DIE, AND THAT IS SAID PLAINLY
@@ -120,7 +130,7 @@
 //
 // `SET_LINE_CODING` carries `dwDTERate` and `ip/usb/usb_cdc_acm` brings it out
 // on `baud`. This design **follows it**: `uart_baud_div` divides 60 000 000
-// by that number and hands the quotient to `uart`'s `div` port, so the 8N1
+// by that number and hands the quotient to `uart_frame`'s `div` port, so the
 // waveform on ball C11 changes rate when a host changes rate.
 //
 // It did not, and the paragraph that used to be here said why not — that a
@@ -144,10 +154,50 @@
 // under 30 is refused because half a clock in 30 is 1.67 % and 8N1's
 // practical budget is about 2 %.
 //
-// **LED 0 says whether the rate came from the host.** It was the
-// transceiver being ready, which LED 1 already implies once the host has
-// configured the device, and "is this design using the rate I set?" is the
-// question this file now exists to answer.
+// ===================================================================
+// THE FRAMING, WHICH IS ALSO NOW WHAT THE HOST ASKED FOR
+// ===================================================================
+//
+// `SET_LINE_CODING` carries three more fields — `bCharFormat`,
+// `bParityType` and `bDataBits` — and `ip/usb/usb_cdc_acm` brings all three
+// out beside `baud`. This design **follows them too**:
+// `uart_line_coding` turns the host's three bytes into `uart_frame`'s
+// `cfg_data_bits`, `cfg_parity` and `cfg_stop`, and `uart_frame` is
+// `uart_tx` and `uart_rx` with those on ports instead of parameters.
+//
+// They were stored, reported back verbatim by `GET_LINE_CODING`, and
+// **ignored on the wire**: `stty -F /dev/ttyACM1 9600 parenb cs7` changed
+// the rate and nothing else. That is the gap this closes, and it is the
+// reason `ip/bus/uart` grew `uart_frame` at all — a format compiled into a
+// parameter cannot follow a host.
+//
+// What a host may ask for and what it gets is `uart_line_coding.v`'s own
+// header, in three tables. The short form: 5, 6, 7 and 8 data bits and all
+// five parity types — none, odd, even, mark, space — are sent and checked
+// exactly; one and two stop bits likewise; **one and a half stop bits are
+// sent as two** and **sixteen data bits are sent as eight**, each with `ok`
+// low so that this design can say so on LED 0. Nothing hangs and nothing
+// silently does something else without saying it did.
+//
+// **The echo cannot tell the framing either**, for the same reason it
+// cannot tell the rate: both halves of the loop take the same `cfg_*`
+// wires, so a format that was wrong in both would still read back byte for
+// byte. C11 is again the observable — a frame on that ball is one start
+// bit, then as many data bits as `cs5`..`cs8` named, then a parity bit or
+// not, then one or two stop bits, and the *number of bit periods between
+// two start edges* is what changes when `stty` does. `tests/ip_library.rs`
+// decodes exactly that by hand in Rust rather than with `uart_rx`, for the
+// one defect a loopback structurally cannot see: it caught a transmitter
+// that sent one stop bit where two were asked for, which the loopback
+// passed happily, because a receiver samples the first stop bit and
+// nothing after it.
+//
+// **LED 0 says whether the whole line coding came from the host.** It was
+// the transceiver being ready, which LED 1 already implies once the host
+// has configured the device; it then became the baud rate alone; it is now
+// the rate **and** the framing, because "is this design doing exactly what
+// I just set?" is the question this file exists to answer and the framing
+// is three quarters of the setting.
 //
 // Pins: testdata/fpga/cynthion/usb_cdc_uart.rcf.
 // Sources: ip/usb/usb_cdc_acm/rtl/*.v,
@@ -175,7 +225,7 @@ module usb_cdc_uart #(
     output wire ulpi_rst_n,      // J13, active low at the ball
     output wire ulpi_clk,        // D16, the clock the board says we owe it
 
-    output wire led0_n,          // the divisor came from the host's rate
+    output wire led0_n,          // the whole line coding came from the host
     output wire led1_n,          // THE HOST CONFIGURED IT
     output wire led2_n,          // A BYTE WENT OUT TO THE UART
     output wire led3_n,          // heartbeat
@@ -218,10 +268,11 @@ module usb_cdc_uart #(
     wire       in_commit;
 
     // What the host asked the line to be, and the control lines it
-    // asserted. Nothing here acts on them — "THE BAUD DIVISOR" above says
-    // why — and they are brought out to named wires rather than left
-    // unconnected so that a person adding a divider or an LED for DTR has
-    // them in front of them.
+    // asserted. All four fields of the line coding are **acted on** —
+    // `baud` through `uart_baud_div` and the other three through
+    // `uart_line_coding` — and the two headers above say how. `dtr` and
+    // `rts` are still only brought out to named wires, because this design
+    // has no modem to assert them at and no spare LED to show them on.
     wire [31:0] baud;
     wire [7:0]  char_format;
     wire [7:0]  parity;
@@ -245,13 +296,18 @@ module usb_cdc_uart #(
     // could hang up. A design bridging to a **real** device would drive bit 0
     // from whatever tells it the far end is there.
     //
-    // The error bits are clear and `uart_rx_error` is deliberately **not**
-    // wired to `bFraming`, for the reason the receive path below gives: a
-    // framing error here would be a wrong `CLK_DIV`, which nothing on this
-    // board can cause, and PSTN's error bits are levels a device sets and
-    // clears rather than the one-cycle pulse `uart_rx` gives. Turning a pulse
-    // into a level needs a rule about when it goes away, and this design has
-    // no reason to have one.
+    // The error bits are clear and `uart_frame_rx`'s four error signals are
+    // deliberately **not** wired to `bFraming`, `bParity`, `bBreak` and
+    // `bOverRun`, for two reasons that both still hold. The first is that
+    // **none of the four can fire on this board**: the two halves of the
+    // loop take the same `div` and the same `cfg_*` wires, so there is no
+    // framing or parity error to have; nothing holds the line low, so there
+    // is no break; and `rx_ready` below is high in every cycle a character
+    // can arrive, so there is no overrun. The second is the shape of the
+    // signals: PSTN's error bits are levels a device sets and clears, and
+    // these are one-cycle pulses. Turning a pulse into a level needs a rule
+    // about when it goes away, and a design where the pulse cannot happen
+    // has no way to choose that rule well.
     //
     // What a host does with it: `cdc_acm` keeps the last bitmap it was sent
     // in `ctrlin` and answers `TIOCMGET` out of it, so a program asking
@@ -376,7 +432,10 @@ module usb_cdc_uart #(
     // to place one.
     wire [7:0] uart_rx_data;
     wire       uart_rx_valid;
-    wire       uart_rx_error;
+    wire       uart_rx_frame_error;
+    wire       uart_rx_parity_error;
+    wire       uart_rx_break;
+    wire       uart_rx_overrun;
     wire       uart_tx_ready;
     wire       uart_txd;
     wire       uart_rxd;
@@ -418,7 +477,7 @@ module usb_cdc_uart #(
     assign out_ready = hand & uart_tx_ready;
 
     // 60 000 000 / `baud`, rounded to nearest, or CLK_DIV when that is not
-    // a number a UART can keep time with. `baud_ok` is the LED.
+    // a number a UART can keep time with.
     wire [15:0] baud_div;
     wire        baud_ok;
 
@@ -434,20 +493,56 @@ module usb_cdc_uart #(
         .busy  ()
     );
 
-    uart #(
+    // The other three fields of the line coding, turned into the three
+    // numbers the UART's format ports take. Combinational: the host's bytes
+    // are already registers inside `usb_cdc_acm`, so there is nothing here
+    // to clock.
+    wire [3:0] cfg_data_bits;
+    wire [2:0] cfg_parity;
+    wire [1:0] cfg_stop;
+    wire       coding_ok;
+
+    uart_line_coding u_coding (
+        .char_format   (char_format),
+        .parity        (parity),
+        .data_bits     (data_bits),
+        .cfg_data_bits (cfg_data_bits),
+        .cfg_parity    (cfg_parity),
+        .cfg_stop      (cfg_stop),
+        .ok            (coding_ok)
+    );
+
+    // `uart_frame` and not `uart`: the format is on ports here because a
+    // host chooses it, and `uart` is the same pair with it compiled in.
+    // `ip/bus/uart/README.md` §2 is why there are two of them.
+    uart_frame #(
         .CLK_DIV (CLK_DIV)
     ) u_uart (
-        .clk      (clk),
-        .rst_n    (reset_done),
-        .div      (baud_div),
-        .tx_data  (out_data),
-        .tx_valid (hand),
-        .tx_ready (uart_tx_ready),
-        .tx       (uart_txd),
-        .rx       (uart_rxd),
-        .rx_data  (uart_rx_data),
-        .rx_valid (uart_rx_valid),
-        .rx_error (uart_rx_error)
+        .clk             (clk),
+        .rst_n           (reset_done),
+        .div             (baud_div),
+        .cfg_data_bits   (cfg_data_bits),
+        .cfg_parity      (cfg_parity),
+        .cfg_stop        (cfg_stop),
+        .tx_data         (out_data),
+        .tx_valid        (hand),
+        .tx_ready        (uart_tx_ready),
+        .tx              (uart_txd),
+        .rx              (uart_rxd),
+        // The return register being empty is the whole of this design's
+        // receive back-pressure, and the throttle above guarantees it is
+        // empty whenever a character can arrive — so this is high every
+        // time it matters and `uart_rx_overrun` can never fire. Driving it
+        // from the real condition rather than tying it to one is still the
+        // right wiring: if somebody changes the throttle, the receiver will
+        // say that a byte was dropped instead of dropping it silently.
+        .rx_ready        (~echo_full),
+        .rx_data         (uart_rx_data),
+        .rx_valid        (uart_rx_valid),
+        .rx_frame_error  (uart_rx_frame_error),
+        .rx_parity_error (uart_rx_parity_error),
+        .rx_break        (uart_rx_break),
+        .rx_overrun      (uart_rx_overrun)
     );
 
     // THE LOOP. One net, and the header above says what it does and does not
@@ -462,6 +557,16 @@ module usb_cdc_uart #(
     assign in_data   = echo;
     assign in_valid  = give;
     assign in_commit = give;
+
+    // And the other handshake, which `uart_frame_rx` now has: `rx_valid`
+    // stays high until a cycle in which `rx_ready` is high too, so what
+    // takes the character is that cycle and not `rx_valid` on its own.
+    // Written as the conjunction rather than as `uart_rx_valid` alone
+    // because the two differ the moment anybody changes the throttle: with
+    // `echo_full` set, `rx_valid` would still be high and the byte would be
+    // latched into `echo` over and over, which is the repeated-byte defect
+    // this file already carries one account of.
+    wire take = uart_rx_valid & ~echo_full;
 
     always @(posedge clk or negedge reset_done) begin
         if (!reset_done) begin
@@ -482,19 +587,23 @@ module usb_cdc_uart #(
             //
             // They cannot happen at once as this design stands, and that is
             // exactly why the order is worth stating: `give` needs
-            // `echo_full`, and `echo_full` is zero whenever a byte is in the
-            // loop, because `hand` above will not start one otherwise. The
-            // invariant is real and it is also two lines away from whoever
-            // changes the throttle.
+            // `echo_full` and `take` needs it clear, so the two are now
+            // mutually exclusive by construction as well as by the
+            // invariant that `hand` will not start a character unless
+            // `echo_full` and `in_flight` are both clear. The invariant is
+            // real and it is also two lines away from whoever changes the
+            // throttle.
             if (give) echo_full <= 1'b0;
 
-            // Back out of the receiver. A framing error is not special-cased:
-            // the byte such a frame produced is handed back anyway, and
-            // `uart_rx_error` is deliberately left unread so that a broken
-            // divisor shows as wrong bytes at the host rather than as
-            // silence. Nothing on this board can cause one, since the two
-            // halves share `CLK_DIV`.
-            if (uart_rx_valid) begin
+            // Back out of the receiver. A framing or parity error is not
+            // special-cased: the byte such a frame produced is handed back
+            // anyway, and the four error signals are deliberately left
+            // unread so that a broken divisor or a broken format shows as
+            // wrong bytes at the host rather than as silence. Nothing on
+            // this board can raise one, since the two halves share `div`
+            // and share every `cfg_*` wire; "WHAT THIS PORT REPORTS AS ITS
+            // LINE STATE" above says the same about `wSerialState`.
+            if (take) begin
                 echo      <= uart_rx_data;
                 echo_full <= 1'b1;
                 in_flight <= 1'b0;
@@ -530,13 +639,15 @@ module usb_cdc_uart #(
     always @(posedge clk) begin
         saw_configured <= saw_configured | configured;
         saw_tx         <= saw_tx | (out_valid & out_ready);
-        saw_rx         <= saw_rx | uart_rx_valid;
+        saw_rx         <= saw_rx | take;
     end
 
     // Active low: a pin driven low lights one.
     // Live rather than latched: it is the answer to "is this design using
-    // the rate I just set?", and a latch would answer "did it ever".
-    assign led0_n = ~baud_ok;
+    // the line coding I just set?", and a latch would answer "did it
+    // ever". Both halves of the answer have to hold at once, so it is the
+    // conjunction of the divider's `ok` and the format decode's.
+    assign led0_n = ~(baud_ok & coding_ok);
     assign led1_n = ~saw_configured;
     assign led2_n = ~saw_tx;
     assign led3_n = ~count[25];

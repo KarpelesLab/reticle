@@ -1,23 +1,36 @@
-# uart: an 8N1 transmitter and receiver behind one baud divisor. The
-# package ships four modules; `top` names the pair, and a design that
-# wants only one half instantiates `uart_tx` or `uart_rx` directly.
-# `uart_baud_div` turns a bit rate into the `div` those two take, which
-# is what lets a USB serial port's SET_LINE_CODING reach the wire.
+# uart: a transmitter and a receiver behind one baud divisor. The package
+# ships eight modules in two layers. `top` names `uart`, which is the
+# 8N1-by-default pair a design with a fixed framing wants, and a design
+# that wants only one half instantiates `uart_tx` or `uart_rx` directly.
+# Underneath them `uart_frame`, `uart_frame_tx` and `uart_frame_rx` are
+# the same hardware with the character format on **ports** instead of
+# parameters, which is what a USB serial port needs: `uart_baud_div`
+# turns a bit rate into the `div` every one of them takes, and
+# `uart_line_coding` turns a host's SET_LINE_CODING into the format the
+# frame modules take — so that a host's `stty` reaches the wire and not
+# just a register. README.md says which to use and what each costs.
 name uart
 version 1.0.0
 license MIT
-description "8N1 UART transmitter and receiver with a ready/valid interface and a run-time or parameterised baud divisor"
+description "UART transmitter and receiver with a ready/valid interface, selectable data bits, parity and stop bits, distinguished receive errors, and a run-time or parameterised baud divisor"
 
 top uart
 target ice40
 target ecp5
 
+source rtl/uart_frame_tx.v
+source rtl/uart_frame_rx.v
+source rtl/uart_frame.v
 source rtl/uart_tx.v
 source rtl/uart_rx.v
 source rtl/uart.v
 source rtl/uart_baud_div.v
+source rtl/uart_line_coding.v
 
 param CLK_DIV int 16 4..65535
+param DATA_BITS int 8 5..8
+param PARITY int 0 0..4
+param STOP_BITS int 1 1..2
 
 port clk in
 port rst_n in
@@ -30,3 +43,6 @@ port rx in
 port rx_data out 8
 port rx_valid out
 port rx_error out
+port rx_frame_error out
+port rx_parity_error out
+port rx_break out
