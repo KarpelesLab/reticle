@@ -1562,6 +1562,7 @@ build. Every block goes through all of:
 | `footprints_match_the_documentation` | the table below is the one this run measured |
 | `axil_gpio_matches_the_axi4lite_definition` | `bus::match_ports` finds all nineteen AXI4-Lite signals on the GPIO at the widths its parameters imply |
 | `crypto_blocks_hold_no_memory_to_index` | neither `sha256` nor `chacha20` contains a memory array at any level, so no table in either can be addressed by a secret |
+| `inflate_plaintext_rules_match_the_corpus` | the eight plaintext rules `testdata/ip/inflate_corpus.txt` names still produce what the corpus was generated from, checked by Adler-32 before anything simulates |
 
 and then a behavioural co-simulation test through `sim::Simulator`, which
 is the part that matters:
@@ -2085,6 +2086,24 @@ is the part that matters:
   combinations give eighty-one different blocks at 22 cycles each. And a
   stream started at counter 0xFFFFFFFE gets the two blocks it is owed and
   is then refused, with `exhausted` up.
+- **`inflate`** — 132 streams a second, independent compression library
+  produced, and no published vectors at all, because DEFLATE has none and
+  does not need any. 123 of them run in the gate, each under up to four
+  different `out_ready` patterns, and every byte of all 228 272 is
+  compared; the other nine are hundreds of thousands of cycles each and
+  are the only ones long enough to make the 32 KiB window wrap, so they
+  are `#[ignore]`d. Then the half no compressor can produce: 21 streams
+  hand built from RFC 1951 and RFC 1950 with a bit writer, one for each
+  way a stream can be malformed and all seven error codes covered; 482
+  single-byte corruptions of three real streams, of which 479 are
+  reported and 3 are harmless padding flips and **none** decodes to the
+  wrong bytes and says `done`; and 235 truncations, every proper prefix
+  of three streams, all of them reported. `inflate_window` and
+  `inflate_adler` are driven on their own as well, the first because no
+  stream can ask it for distance zero and only a direct testbench can.
+  Every one of the 1196 runs carries a **loop bound in simulated clock
+  edges**, so a stream that could make this block wait forever fails the
+  test rather than hanging it, and none of them reached it.
 
 ### What the processor actually executes
 
@@ -2852,3 +2871,26 @@ byte port fed from `ip/bus/uart`'s receiver and its digest clocked back out
 of the transmitter: no new HDL but a top level, one serial port, and a
 digest a host can compare against `sha256sum`. The second needs a shunt
 resistor and an oscilloscope and is not an afternoon.
+
+**Compression is what the `compress` category does not have**, and it was
+left out for the same kind of reason AES was: it is the larger half and it
+is easier against a settled answer. A compressor needs hash-chain match
+finding over the same 32 KiB window `inflate` already has, two passes over
+every block to choose between RFC 1951 §3.2.3's three types by exact bit
+cost, and a length-limited Huffman code *builder* — which is a different
+and larger piece of work than the counting sort the decoder needs. What
+this round settles for it is the window, the handshake, the stall-rather-
+than-buffer answer to the output asymmetry, and the oracle: `compcol`
+round-trips in both directions, so a compressor's output can be checked by
+*its* decompressor as well as by this one, which is a stronger position
+than decompression was in.
+
+**And `inflate` has not been near a board either**, for the same reason
+and with one addition. Besides the clock, a board would say whether
+**sixteen `DP16KD` of one memory place and route at a useful frequency**,
+which is the only part of this block simulation cannot speak to at all.
+The cheapest experiment is the same shape as `sha256`'s: a top level that
+takes a zlib stream in on `ip/bus/uart`'s receiver and sends the plaintext
+back out of its transmitter, with an idle timeout standing in for
+`in_last`, and a host that pipes a file through `compcol` and compares.
+`ip/compress/inflate/README.md` §10 has it in full.
