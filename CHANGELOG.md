@@ -7,6 +7,119 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.5](https://github.com/KarpelesLab/reticle/compare/v0.0.4...v0.0.5) - 2026-10-07
+
+### Added
+
+- *(fpga)* build the console with either crypto core, because both do not route
+- *(fpga)* both crypto blocks behind a Cynthion's USB serial port
+- *(ip)* a crypto category, with SHA-256 and ChaCha20
+- *(cli)* walk the IP library for `reticle build`, and --locked
+- *(ip)* resolve a dependency by name against an IP library
+- *(ip)* two pulses that say what the proxy forwarded, and the board's self-powered bit
+- *(ip)* a USB transaction proxy behind the hub, with pass-through addressing
+- *(trellis)* a DP16KD can be placed, and its bits are in three tiles
+- *(place)* give the annealer VPR's adaptive schedule and a range limit
+- *(hub)* a single-port USB 2.0 hub the kernel's own hub driver binds
+- *(fpga)* `--place-effort`, and the measurement that says not to lower it
+- *(fpga)* a design on the TARGET port's balls places, routes and decodes
+- *(fpga)* the left and bottom edges of an ECP5 are described
+- *(ip)* a USB full-speed host behind a ULPI transceiver
+- *(fpga)* a distributed RAM spends its tile's LSR1, and the placer knows
+- *(monitor)* the whole machine answers through the board's transceiver
+- *(examples)* a 6502 monitor with its console on a USB serial port
+- *(uart)* the host's baud rate reaches the divisor
+- *(usb)* the endpoint buffers are arrays, and the byte multiplexer is gone
+
+### Fixed
+
+- *(fpga)* either terminator ends a line, and a digit counter that saturates
+- *(place)* a clock buffer may only take a site its driver can reach
+- *(tests)* give the example tests the library index their manifests need
+- *(ip)* a SETUP that preempts a transaction the engine is still running
+- *(tests)* three lints nightly clippy reports that stable does not yet
+- *(trellis)* a memory's clock keeps the threshold, and an idle port needs one tie
+- *(place)* keep the public docs out of the private items
+- *(place)* one helper for the range limit's conversion to tiles
+- *(sim)* a lookup table is unknown only when an unknown input can change it
+- *(hub)* the hardware test raced the kernel's own hub driver
+- *(hub)* the board console's character counter was a bit too wide
+- *(fpga)* a public doc comment linked a private function
+- *(fpga)* the TARGET host's report printed every label beside another item's value
+- two lints a newer clippy reports and this machine's does not
+- *(ip)* four defects the host found, and the model defect that hid two
+- *(monitor)* the ACIA's clock-source bits belong to the host, not the 6502
+- *(monitor)* the ACIA's clock source is one field, not half of one
+- *(tests)* the lints the gate insists on, and a correct file count
+
+### Other
+
+- *(crypto)* what the board said, which is no
+- *(crypto)* ask the part whether one line gets one answer, before asking whether it is right
+- *(fpga)* what LED 5 actually says, which is two signals behaving differently
+- *(crypto)* check the big keystream digests, and put the key back first
+- *(crypto)* the console in simulation through the whole USB stack, and on a part
+- *(ip)* re-measure the library index now that it holds thirty-one
+- *(ip)* what each crypto block defends against, and what it does not
+- keep the two-line `Pins:` / `Sources:` headers two lines
+- *(ip)* what the move measured, and the lock file it writes
+- rewrap the paragraphs the longer IP paths overflowed
+- *(ip)* follow the packages into their categories
+- *(ip)* pin the `library` grammar, and say why P0101 was looking there
+- *(ip)* the library root, the index's measured cost, and the three failures
+- *(fpga)* which eleven signals the proxy board design does not route
+- the proxy measured on a part, and the CDC port re-verified after GET_STATUS
+- *(ip)* the proxy's page, the library's, and the hub's reset and GET_STATUS
+- *(fpga)* the block RAM's image is fifteen bits smaller on the new annealer
+- *(trellis)* a block RAM's pins come out of the database, and the refusal is not shown failing
+- *(trellis)* what ecppack writes for a block RAM, and a design that uses two
+- *(place)* say what the start-temperature probe samples now
+- *(place)* say which per-move numbers were counted and which were read
+- *(place)* the lutram case, and the arc count that was really 693
+- *(trellis)* pin the new placements, and stop pinning a placer's choice
+- *(place)* say where the 73-tile window comes from
+- *(place)* the account of the annealing schedule, measured
+- *(sim)* what `x` costs, cell by cell, and where it is still invented
+- one more section number that should be a named port state
+- *(hub)* cite only the subsections whose numbering has been checked
+- *(hub)* the board design's console names the fields its header claims
+- *(hub)* the hub in the footprint table, the equivalence proof and the
+- *(hub)* ten simulation tests of the hub, through both link layers
+- *(fpga)* the routing goldens gain the line that counts the search
+- *(fpga)* what an ECP5 build costs, and a guard that counts rather than times
+- *(fpga)* two inner loops that did thirty-two times the work asked of them
+- *(fpga)* the placer rescanned a thousand-sink net on every move
+- *(fpga)* the ECP5 flow's fixed cost, and the placer's legality check
+- *(synth)* the performance figures are the final ones, measured twice
+- *(synth)* the profile after the work, beside the profile before it
+- *(synth)* where synthesis spends its time, and two guards that count work
+- *(synth)* the cofactor built a truth table to read one word out of it
+- *(synth)* the cone walks allocated and hashed once per cut, and twice per proof
+- *(synth)* the mapper spent half its time hashing four-byte keys
+- *(tests)* two lints on the report test's byte capture
+- the left edge of this die is on a part, and a transceiver's vendor ID is the witness
+- *(trellis)* the section that quoted the error now quotes the bitstream
+- *(fpga)* two doc comments that still counted two edges
+- *(trellis)* all four edges of the pad model, and what a board cannot show here
+- *(fpga)* what Lattice's own packer writes for a left- and a bottom-edge pad
+- a green gate here is not a green CI, and the toolchain is why
+- *(ip)* the device's answer delay is one number now, and the model is why
+- *(ip)* a descriptor in packets of eight, and the bytes against a third implementation
+- *(fpga)* two edges of the die, and the day the other two stopped being theoretical
+- *(tests)* rustfmt the transceiver model's new guard
+- *(ip)* the host's page, and what writing a second thing against one bus found
+- *(monitor)* the rejection path and the editing keys, against the original
+- the three examples pin uart's fourth source
+- the example that ends on a part, in the roadmap
+- *(monitor)* which of the ACIA's facts were read and which were inferred
+- *(monitor)* the terminal session, and the one measurement nobody took
+- *(monitor)* the ROM costs one lookup table a byte, measured
+- the file every agent in this project has been told to read
+- *(fpga)* the probe reaches eight lookup tables, not sixty-four
+- *(usb)* quote the flow's own reason for the iCE40 fallback
+- *(usb)* the shift-register shape moves bytes too
+- *(usb)* the array's footprint, and the permutation that was never tested
+
 ## [0.0.4](https://github.com/KarpelesLab/reticle/compare/v0.0.3...v0.0.4) - 2026-09-28
 
 ### Added
