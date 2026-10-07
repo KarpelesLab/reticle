@@ -1641,7 +1641,98 @@ impl XrayFabric {
         }
         Ok(count)
     }
+
+    /// Switches on the weak pull-up of every IO buffer whose cell asks for
+    /// one — `set_io -pullup yes`, which the IO pass records as the
+    /// cell's `pullup` attribute — and returns how many pads it pulled.
+    ///
+    /// # Why this is a pass and not a bel entry
+    ///
+    /// A bel's [`ConfigEntry`](super::arch::ConfigEntry) list is selected by primitive name and by
+    /// the cell's *parameters*, and a pull is neither: on the 7 series it
+    /// is a constraint (`set_property PULLUP TRUE` in an XDC), not a
+    /// parameter of `IBUF` or `IOBUF`, and putting one on the cell would
+    /// hand Vivado an instance parameter its library does not have. So
+    /// the request stays an attribute and this reads it, once placement
+    /// says which pad each buffer is on.
+    ///
+    /// # The bits
+    ///
+    /// `segbits_liob33.db` writes `PULLTYPE` as a three-bit field, for
+    /// `IOB_Y0`: `NONE` is `!38_92 38_94 !39_93`, `PULLUP` is
+    /// `!38_92 38_94 39_93`, `KEEPER` is `38_92 38_94 !39_93`, and
+    /// `PULLDOWN` is **all three clear**. Every buffer recipe already sets
+    /// `PULLTYPE.NONE`, so adding `PULLTYPE.PULLUP`'s ones gives exactly
+    /// the `PULLUP` pattern, and `NONE` no longer decodes because its
+    /// `!39_93` fails. The bits are the ones the loader already attached
+    /// to the bel as the inert entry `ConfigEntry::Cell { primitive:
+    /// "PULLTYPE.PULLUP", .. }` (see `parse::bels_of`), so nothing here
+    /// names a bit position.
+    ///
+    /// What this has been checked against: three of the four Vivado
+    /// harness designs set `PULLTYPE.PULLUP` on some pad and Vivado's
+    /// `design.json` names it; that is the feature's name and bits, not
+    /// its effect. **No pull-up from this flow has been seen on a part.**
+    ///
+    /// # Errors
+    ///
+    /// Those of [`super::bitstream::Bitstream::set`].
+    pub fn apply_pullups(
+        &self,
+        design: &crate::ir::Design,
+        top: crate::ir::ModuleId,
+        graph: &super::arch::RoutingGraph,
+        netlist: &super::Netlist,
+        placement: &super::place::Placement,
+        bits: &mut super::bitstream::Bitstream,
+    ) -> Result<usize, super::bitstream::BitstreamError> {
+        let Some(module) = design.modules.get(top) else {
+            return Ok(0);
+        };
+        let mut pulled = 0usize;
+        for (index, instance) in netlist.instances.iter().enumerate() {
+            if instance.kind != "io" {
+                continue;
+            }
+            let wants = module
+                .cells
+                .get(instance.cell)
+                .and_then(|cell| cell.attrs.get("pullup"))
+                .and_then(crate::ir::AttrValue::as_int)
+                == Some(1);
+            if !wants {
+                continue;
+            }
+            let Some(site) = placement.site_of(index) else {
+                continue;
+            };
+            let site = &graph.sites[site];
+            let Some(bel) = self.arch.tile_types[site.tile_type].bel(&site.bel) else {
+                continue;
+            };
+            let pullup = bel.config.iter().find_map(|entry| match entry {
+                super::arch::ConfigEntry::Cell { primitive, bits }
+                    if primitive == PULLUP_FEATURE =>
+                {
+                    Some(bits)
+                }
+                _ => None,
+            });
+            let Some(pullup) = pullup else {
+                continue;
+            };
+            for bit in pullup {
+                bits.set(site.tile, *bit)?;
+            }
+            pulled += 1;
+        }
+        Ok(pulled)
+    }
 }
+
+/// The tail of the `segbits` feature that turns an IO buffer's weak
+/// pull-up on; see [`XrayFabric::apply_pullups`].
+const PULLUP_FEATURE: &str = "PULLTYPE.PULLUP";
 
 /// The global clock rebuffer enables a family's `segbits` files hold.
 ///

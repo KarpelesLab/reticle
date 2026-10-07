@@ -2967,6 +2967,12 @@ fn write_xc7_bitstream(
     let clock_bits = fabric
         .enable_global_clocks(&graph, &routing, &mut tiles)
         .map_err(|e| e.to_string())?;
+    // A pull-up is a constraint, not a cell parameter, so it is read off
+    // the buffer's attribute once placement says which pad it is on. See
+    // `XrayFabric::apply_pullups`.
+    let pulled = fabric
+        .apply_pullups(design, top, &graph, &netlist, &placement, &mut tiles)
+        .map_err(|e| e.to_string())?;
     let frames = xc7::frames_from_bitstream(&fabric.part, &tiles, &fabric.frames)
         .map_err(|e| e.to_string())?;
 
@@ -3005,6 +3011,9 @@ fn write_xc7_bitstream(
         note.push_str(&format!(
             "note: {clock_bits} global clock rebuffer enable bit(s) over the column\n"
         ));
+    }
+    if pulled > 0 {
+        note.push_str(&format!("note: {pulled} pad(s) given a weak pull-up\n"));
     }
     if let Some(reason) = &failure {
         note.push_str(&format!("warning: the router gave up: {reason}\n"));
