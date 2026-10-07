@@ -583,6 +583,170 @@ the four is an error:
   feature is either the buffer enable or a `HCLK_LEAF_CLK_B_*` pip — and
   not the tile.
 
+## A tristate, and a pad that reads itself
+
+**Nothing in this section has been on a part.** It builds, routes, and
+decodes; whether the pad lets go when it is told to is what
+`examples/basys3/pmod_bidir.v` exists to find out.
+
+### First, the oracle that is not there
+
+The question this project asks first — what does Vivado write, in full,
+for this cell? — has no answer here. All four designs in
+`artix7/harness/` were searched, every `IOB`, `ILOGIC` and `OLOGIC`
+feature of their `design.json` tallied: there is **no** `ZINV_T1`, no
+`TQ` path other than the plain-output `DATA_RATE_TQ.BUF`, and no pad
+with both a drive strength and an input receiver. Every pad Vivado built
+for those boards is an input or an output. So everything below about the
+tristate is a reading of the database and of two other programs, and it
+says which.
+
+What the harnesses *do* have is `PULLTYPE.PULLUP` and
+`PULLTYPE.PULLDOWN` on pads — the names, though not the effect.
+
+### Where the tristate goes
+
+| Stage | Wire or feature | Source |
+|---|---|---|
+| fabric to the IO logic | `INT_L`'s `IMUX_L15` → `IOI_IMUX15_<1-n>` → `IOI_OLOGIC<n>_T1` | `ppips_lioi3.db`, `always`; the router found it unaided |
+| through the `OLOGIC` | `LIOI_OLOGIC<n>_TQ` ← `IOI_OLOGIC<n>_T1` | `ppips_lioi3.db` calls it `always`; it is not — see below |
+| to the pad | `LIOI_T<n>` ← `LIOI_OLOGIC<n>_TQ`, joined to `IOB_T<n>` | `ppips_lioi3.db` and `tileconn.json` |
+| the pad's pin | `IOB_T<n>`, the IO bel's `oe` | the bel's third pin, beside `din` and `dout` |
+
+The hop through the `OLOGIC` costs two features, declared in
+`sites.rs`'s `tristate_through` the way the data hop beside it is:
+
+- **`OLOGIC_Y<n>.OSERDES.DATA_RATE_TQ.BUF`** — what `TQ` is: `T1` passed
+  straight through, not the `SDR` or `DDR` register. **Checked**, in the
+  sense that matters here: the field is one-hot in `segbits_lioi3.db`, so
+  a blank tile is none of the three, and every plain output Vivado built
+  sets `BUF`. The data hop already set it; the tristate hop sets it too,
+  so a tristate whose data is not routed through the same site still has
+  it.
+- **`OLOGIC_Y<n>.ZINV_T1`** — the polarity. **Quoted.** prjxray's
+  `fuzzers/036-iob-ologic/generate.py` tags it as
+  `ZINV_T1 = 1 ^ IS_T1_INVERTED`, so set means `T1` is not inverted and a
+  blank tile inverts it; nextpnr-xilinx's `xilinx/fasm.cc` puts this one
+  feature, and only it, on this very pseudo-pip. Both were read on
+  2026-10-08. With it set, a one from the fabric is a one at the pad's
+  `T`, and UG471's `OBUFT` releases the pad on a one.
+
+**The one board result that touches this cannot tell the readings
+apart.** `sw_led`'s LED lit with `ZINV_T1` clear and `T1` unrouted. Under
+prjxray's reading that is "inverted, and an unrouted `T1` reads one";
+under the opposite reading it is "not inverted, and it reads zero". Both
+drive the pad. It would be easy to cite that LED as evidence for the
+polarity, and it is not.
+
+### What the pad costs
+
+`segbits_liob33.db` has eighty-three features and **none mentions a
+tristate**. So an `OBUFT` costs at the pad exactly what an `OBUF` does,
+and the tristate is entirely the `OLOGIC`'s business — the same finding
+the ECP5 made in its own vocabulary ("the tristate is a routed wire
+rather than a setting", `docs/fpga-trellis.md`).
+
+An `IOBUF` is the output recipe plus `LVCMOS25_LVCMOS33_LVTTL.IN`, the
+input receiver — and **not** `IN_ONLY`, which an `IBUF` also takes. The
+bits say why the two differ: `.IN` is `38_86 39_85 39_87` and touches no
+drive bit, while `IN_ONLY` is a value of the eighteen-bit drive field
+every `DRIVE.*` is written over, so an `IOBUF` given both would be
+configured as two drive strengths at once. That split is **quoted** from
+nextpnr-xilinx's `write_io_config` (`.IN` for a pad with an input buffer,
+`IN_ONLY` only `if (!is_output)`) and consistent with the bit patterns;
+no Vivado design here has a bidirectional pad to measure it.
+
+### Pull-ups
+
+`PULLTYPE` is a three-bit field. For `IOB_Y0`: `NONE` is
+`!38_92 38_94 !39_93`, `PULLUP` is `!38_92 38_94 39_93`, `KEEPER` is
+`38_92 38_94 !39_93`, and **`PULLDOWN` is all three clear** — which is
+also what a pad nothing configures gets. Every recipe here sets `NONE`;
+`set_io -pullup yes` adds `PULLUP`'s ones on top, which turns the field
+into `PULLUP` and makes `NONE` stop decoding.
+
+A pull-up is a constraint on this family, not an `IBUF` parameter (Vivado
+takes it from an XDC), so it cannot ride a bel's configuration entry
+without handing Vivado an instance parameter its library lacks.
+`XrayFabric::apply_pullups` reads the cell's `pullup` attribute after
+placement instead, and `reticle fpga --bitstream` runs it. `-pullup no`
+leaves `NONE`, as before; there is no way to ask for a pull-down or a
+keeper.
+
+### What was checked instead
+
+`tests/fpga_xray_tristate.rs`, against the real database, skipping
+without it:
+
+| Design | Set bits | Unexplained | Arcs decoded = arcs routed | Hops through a site | Signals |
+|---|---|---|---|---|---|
+| `pmod_bidir` (`IOBUF`, pull-up) | 155 | 0 | 26 = 26 | 7 | 4 of 4 |
+| a tri-stated `output` (`OBUFT`) | 96 | 0 | 14 = 14 | 4 | 3 of 3 |
+
+"Arcs decoded = arcs routed" is a set equality: every interconnect pip
+the frames switch on is one the router took, and every pip it took with
+bits is in the frames. On top of that the test asserts, half by half,
+K17's pad (`.IN`, `DRIVE.I12_I16`, `SLEW.SLOW`, `PULLTYPE.PULLUP`, no
+`IN_ONLY`, no `NONE`, the other half untouched) and its IO logic
+(`ZINV_D`, `OMUX.D1`, `OQUSED`, `DATA_RATE_TQ.BUF`, `ZINV_T1`, nothing on
+`Y0`), that the two LEDs' plain outputs got **no** `ZINV_T1`, and that
+the `OBUFT`'s pad has no input setting at all.
+
+`the_enable_reaches_the_pad_the_right_way_round` checks the whole
+polarity chain *given* prjxray's reading: it walks the synthesised netlist
+from the `IOBUF`'s `T` back to the lookup table that drives it and on to
+SW0's buffer, evaluates the table, applies `ZINV_T1`, and asserts that
+SW0 up gives the pad `T = 0` (drive) and SW0 down `T = 1` (release). It
+would catch the mapper's inversion lost or doubled, the enable wired to
+the wrong switch, or the bit missing. If prjxray's reading were the wrong
+way round, it would pass anyway — which is the honest limit of a desk.
+
+### The demo, and what it should do
+
+`examples/basys3/pmod_bidir.v` with `pmod_bidir.rcf`: SW0 (V17) enables
+the driver, SW1 (V16) is the value, Pmod JC pin 1 (K17) is the
+bidirectional pad with its pull-up, LD0 (U16) shows what K17 **reads**
+through its own input buffer, LD1 (E19) shows SW0.
+
+```sh
+reticle fpga --device xc7a35t-cpg236 \
+    --constraints examples/basys3/pmod_bidir.rcf \
+    --bitstream pmod_bidir.bit \
+    examples/basys3/pmod_bidir.v
+```
+
+| SW0 | SW1 | K17 | LD0 | LD1 |
+|---|---|---|---|---|
+| down | down | released, pulled up | on | off |
+| down | up | released, pulled up | on | off |
+| up | down | driven low | **off** | on |
+| up | up | driven high | on | on |
+
+LD0 is dark in exactly one position, and from there flipping SW0 down
+must relight it at once: that is the pad letting go and the pull-up
+taking it. With the enable inverted the dark position moves to SW0 down,
+SW1 down, and LD0 follows SW1 only while SW0 is down. Nothing should be
+plugged into JC: K17 goes to that header and nowhere else Digilent's
+`Basys-3-Master.xdc` names, so the FPGA is the only driver the net has
+whichever way the enable turns out to be.
+
+### What is not verified
+
+- That `ZINV_T1` set means "not inverted" on silicon. Quoted twice,
+  measured never.
+- That `LVCMOS25_LVCMOS33_LVTTL.IN` without `IN_ONLY` gives a working
+  receiver beside a working driver. Quoted.
+- That the pull-up pulls. Its name and bits are the database's; its
+  effect has not been seen.
+- `OBUFT` instantiated by name in Verilog. Reticle has no library of
+  vendor primitives to elaborate it against, so only the mapper's own
+  `OBUFT` — from a tri-stated `output` port — is built.
+- A tristate whose data is a constant (`assign pin = en ? 1'b0 : 1'bz`,
+  an open drain). The tristate hop sets `DATA_RATE_TQ.BUF` for itself for
+  that case, but nothing has built one.
+- The `_SING` IO tiles at the ends of a bank, which no table in
+  `sites.rs` describes for any direction.
+
 ## What remains before an LED could light
 
 In rough order of how much stands behind each.
@@ -726,10 +890,22 @@ In rough order of how much stands behind each.
    `FDRE` with `INIT=1'b0`. Nothing connects the two. The IO buffers
    work because `sites.rs` gathers their features under the names `IBUF`
    and `OBUF` explicitly; nothing else does.
-6. **IO standards other than LVCMOS33, and tristate.** `OBUFT` and
-   `IOBUF` need `OLOGIC` `T` features that have not been measured, so a
-   tristate design will not route here. Other standards are refused rather
-   than approximated.
+6. **IO standards other than LVCMOS33, and tristate.** *(Written before
+   2026-10-08:)* `OBUFT` and `IOBUF` need `OLOGIC` `T` features that have
+   not been measured, so a tristate design will not route here. Other
+   standards are refused rather than approximated.
+
+   **The tristate half of that is done as far as a desk can take it, and
+   the "not measured" is still true.** Since 2026-10-08 an `inout` port
+   builds an `IOBUF` and a tri-stated `output` an `OBUFT`; both route,
+   every bit of both bitstreams decodes, and the arcs read back are
+   exactly the arcs routed. The `T` features were identified from the
+   database and from two named sources rather than from a Vivado
+   bitstream, because no harness design has a tristate pin — so the
+   polarity is quoted, not checked. *A tristate, and a pad that reads
+   itself* below has all of it. Pull-ups (`set_io -pullup yes`) came with
+   it. Other standards, `DRIVE` and `SLEW` other than the one recipe are
+   still refused or ignored as before.
 
    Two things about that changed on 2026-09-27 and neither of them makes it
    work. `xc7.dev` used to declare `IOBUF`'s tristate as `oe=T`, an **output
@@ -742,6 +918,12 @@ In rough order of how much stands behind each.
    to a part is Lattice; `docs/fpga-trellis.md` has it, including the `ecppack`
    comparison that says a bidirectional pad on an ECP5 costs nothing beyond
    its base type.
+   One more thing the paragraph above got wrong by omission: *where* the
+   mapper stopped was not only at `sites.rs`. A tri-stated `output` port
+   — as opposed to an `inout` one — never got as far as the backend; the
+   mapper left the `$tristate` cell behind and the netlist check refused
+   it as "a generic cell, not a primitive". `xc7.dev` had declared
+   `OBUFT` as `other`, so nothing could have placed one on a pad anyway.
 7. **Six million `String`s.** The routing graph holds the whole die in
    1386 MiB, most of it wire names. Interning those is what makes
    whole-die routing comfortable rather than merely possible.
