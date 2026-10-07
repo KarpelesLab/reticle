@@ -785,6 +785,31 @@ fn set_params(cell: &mut Cell, bel: &BelKind) {
 /// is not something a structural check would notice. Every input of a
 /// `lutram` primitive is therefore given a real driver, which is what
 /// nextpnr's `pack_constants` does for all of them.
+///
+/// # And a carry element's operands, which cost a board to find
+///
+/// A **carry** element's inputs are the third case and they were the
+/// expensive one. `cnt + 1` is an adder whose second operand is a
+/// constant, so thirty-one of its thirty-two `b` pins are a constant
+/// **zero** — and a constant on a carry cell's operand pin is not a wire
+/// anything routes, so on an ECP5 every one of them read as a **one** and
+/// the chain computed `cnt - 1`.
+///
+/// Nothing off the part could see it. The design synthesised, placed,
+/// routed, and every set bit of its bitstream decoded back through the
+/// database into the arcs the router chose; the exhaustive check in
+/// `src/fpga/primitives.rs` and the SAT proof in `tests/fpga_carry.rs`
+/// both passed, because in a netlist a constant pin evaluates to the
+/// constant. What found it was a Cynthion: the USB device design of
+/// `CLAUDE.md`'s own example stopped enumerating, and the build of the
+/// same design with carry inference switched off was byte-identical to
+/// the bitstream that works.
+///
+/// So this pass covers every input of a `carry` primitive too. A pin the
+/// element could absorb the constant into — an ECP5 `CCU2C` lane whose
+/// `INIT` could be rewritten, which is what `ecppack` does — would be
+/// cheaper by a net, and is not done: the driver is correct on every
+/// family and the folding would be correct on one.
 fn drive_constant_data(
     module: &mut Module,
     device: &Device,
@@ -803,9 +828,18 @@ fn drive_constant_data(
         .filter(|bel| bel.role == BelRole::Ff)
         .map(|bel| (bel.name.clone(), bel.port("d").unwrap_or("D").to_owned()))
         .collect();
-    for bel in device.bels.iter().filter(|b| b.role == BelRole::LutRam) {
+    for bel in device
+        .bels
+        .iter()
+        .filter(|b| matches!(b.role, BelRole::LutRam | BelRole::Carry))
+    {
         for (role, names) in &bel.ports {
-            if role == "dout" {
+            // The outputs, which nothing drives from outside, and the
+            // chain's own two ends, which are dedicated metal: a `ci` is
+            // reached from the cell below or from nowhere, and a flow that
+            // put a lookup table on one would be describing a connection
+            // the fabric does not have.
+            if matches!(role.as_str(), "dout" | "o" | "s" | "co" | "ci") {
                 continue;
             }
             for name in names.split(',') {
