@@ -747,6 +747,125 @@ whichever way the enable turns out to be.
 - The `_SING` IO tiles at the ends of a bank, which no table in
   `sites.rs` describes for any direction.
 
+## A distributed RAM on a `SLICEM`
+
+`examples/basys3/lutram.v` — sixteen words of four bits, written from
+the switches on a button and read at another address onto four LEDs —
+maps to four `RAM64X1D`, places, **routes completely** (112 of 112
+signals) and comes out as a `.bit` for the XC7A35T-CPG236. Decoded back
+through the database:
+
+```
+decoded: 4033 bit(s) over 178 tile(s) into 2185 feature(s); 0 bit(s) unexplained, 0 tile(s) with no segbits file
+112 of 112 signal(s) routed; 1008 interconnect pip(s) routed, 1008 decoded; 53 fixed path(s) through a site
+```
+
+and the two sets of 1008 are the same set.
+
+(4033 is with an `INIT` of three set bits given to one RAM by the test, in
+both of its copies; the design as `reticle fpga` builds it sets 4027.)
+Every bit is named, and the interconnect the decoding finds is exactly the
+interconnect the router chose. That is
+`tests/fpga_xray_lutram.rs::a_distributed_ram_reaches_a_bit_file_and_every_bit_decodes`.
+
+**Nobody has loaded it into a part.** Everything below is either read
+from the database or quoted, and each line says which.
+
+### What a `RAM64X1D` is on this fabric
+
+One `lutram` bel per `CLBLM`, `SLICEM_X0_RAM64X1D`, declared by
+`src/fpga/xray/lutram.rs`:
+
+| | | Source |
+|---|---|---|
+| write port, and `SPO` | the `D` lookup table: `A0..A5` on `CLBLM_M_D1..D6` | quoted |
+| read port | the `C` lookup table: `DPRA0..5` on `CLBLM_M_C1..C6`, `DPO` on `CLBLM_M_C` | quoted |
+| contents | the cell's `INIT`, unpermuted, into **both** `DLUT.INIT` and `CLUT.INIT` | quoted |
+| mode | `SLICEM_X0.DLUT.RAM` and `SLICEM_X0.CLUT.RAM`, one bit each | read |
+| left clear | `SMALL` (32 words), `SRL`, `WA7USED`, `WA8USED`, `WEMUX.CE` (enable from `CE` rather than `WE`), `CLKINV` | read |
+| the read port's data | `CLUT.DI1MUX`: its no-bit value is `DI_DMC31`, the `D` table's `DI` | read |
+| `din`, `we`, `wclk` | `CLBLM_M_DI` off `FAN3`, `CLBLM_M_WE` off `FAN4`, `CLBLM_M_CLK` off `CLK1`, all `always` in `ppips` | read |
+| blocks | `SLICEM_X0_DLUT` and `SLICEM_X0_CLUT`, nothing else | follows from the two above |
+
+So a RAM costs two lookup tables. The slice's `A` and `B` lookup tables,
+its four flip-flops and the whole `SLICEL` of the same tile stay usable,
+and in the demo eleven lookup tables and flip-flops share a tile with a
+RAM in the build the test makes. `BelDecl::blocks`, which the ECP5's distributed RAM introduced, is the
+mechanism; nothing in the placer was changed. Only a `CLBLM` offers the
+bel: a `CLBLL` has no `RAM` feature and no `WE` wire.
+
+Empty contents cost nothing: these `INIT` bits are not `!`-marked, so an
+empty RAM is the two mode bits. The mapper still declines a memory with
+initial contents, so the `INIT` path is exercised only by the test, which
+sets one by hand on the netlist.
+
+### The address permutation, and why it is quoted
+
+Which lookup table is which port, and in what order the address bits
+reach its inputs, is not in `prjxray-db`, and the one Vivado bitstream it
+ships for this board has no RAM in it. Getting it wrong is silent: the
+design places, routes, decodes bit for bit and reads every word from the
+wrong address. The reading taken here comes from two sources that agree:
+
+- **nextpnr-xilinx** (`gatecat/nextpnr-xilinx`, branch `xilinx-upstream`),
+  `xilinx/pack_dram.cc`: for a `RAM64X1D` the "write address input" cell
+  goes at the top `z` of the slice, `SPO` is folded into it, and `DPO`
+  goes at the next `z` down. `xilinx/fasm.cc`'s `write_luts_config`
+  names those `"ABCD"[3]` and `[2]`, the `D` and the `C`. Its `dram_rules`
+  map `RADR<i>` to `A<i+1>` and `WADR<i>` to `WA<i+1>`, copy the cell's
+  `INIT` to every lookup table of the RAM, and `get_lut_init` writes it
+  with the identity physical-to-logical map.
+- **Project X-Ray**, `fuzzers/018-clb-ram/generate.py`: a single
+  `RAM64X1D` is tagged as occupying `(a, b, c, d) = (0, 0, 1, 1)`, "D is
+  always occupied first (due to WA/A sharing on D)", and a sample is only
+  kept when Vivado's own placement matched that tuple. That is the
+  nearest thing to a Vivado observation available, and it covers the
+  lookup tables, not the order of the inputs.
+
+That the write address `WA1..6` *is* the `D` lookup table's `D1..6` is
+also how Xilinx UG474 describes a `SLICEM`. **No measurement backs any of
+it.** `lutram.rs`'s own test pins the table so it cannot drift, and it
+would pass with the table wrong.
+
+### What a person should do with the demo
+
+```sh
+reticle fpga --device xc7a35t-cpg236 \
+    --constraints examples/basys3/lutram.rcf \
+    --bitstream lutram.bit \
+    examples/basys3/lutram.v
+```
+
+`SW0..SW3` is the write address, `SW4..SW7` the word, `SW8..SW11` the read
+address; `BTNC` writes while held; `LD0..LD3` show the word at the read
+address, `LD5` lights while writing, `LD7` blinks to say the design is
+alive. With every switch down the four LEDs are dark. Then, for each `k`
+of 0 to 3, write the word `1<<k` at the address `1<<k` (`SW<k>` and
+`SW<4+k>` up, press `BTNC`, switches down). Reading `SW8` alone should
+light `LD0` alone, `SW9` alone `LD1` alone, and so on; every other read
+address should stay dark. A disagreement between the two ports about
+which input is which address bit puts some other word, or none, on one of
+those four. The header of `lutram.v` has the full procedure.
+
+`LD6` is not used because its pin, U14, is the only buffer of a
+`LIOB33_SING` tile, which this flow has no IO table for; constraining a
+port to it is refused ("maps to no usable site") rather than guessed at.
+
+### What is not established
+
+- Anything on silicon: the permutation, `DI_DMC31` meaning `DI` for a RAM,
+  and that `WEMUX` clear selects the `WE` pin.
+- A slice's clock is one for all its storage elements, and its `CLKINV` is
+  one bit. A RAM and a flip-flop on different clocks in one `SLICEM` fail
+  to route rather than mis-configure, because both pins are the one wire
+  `CLBLM_M_CLK`; but a falling-edge flip-flop beside a RAM sets `CLKINV`
+  and would invert the RAM's write clock too, and nothing refuses that —
+  the caveat `sites.rs`'s `slice_pass_throughs` already states for two
+  kinds of flip-flop in one slice.
+- One RAM per `SLICEM`. Two `RAM64X1D` that share a write address could
+  share one slice (the `B`/`A` pair, written through the `D` inputs), and
+  `RAM32X1D`, `RAM128X1D` and the `RAM64M` family are not offered.
+
 ## What remains before an LED could light
 
 In rough order of how much stands behind each.
@@ -884,6 +1003,16 @@ In rough order of how much stands behind each.
    either a Vivado design with one or a board.
 
    Nothing of this has been attempted. One family at a time.
+
+   **Done on 2026-10-08, except on silicon** — see *A distributed RAM on a
+   `SLICEM`* below. The paragraphs above are left as they were written
+   because every structural claim in them held when the code was written
+   against it: one bit per lookup table, one `SLICEM`, the `SLICEL` beside
+   it untouched, the five write-port wires off the `FAN` bus, `INIT` through
+   the ordinary parameter path. Two things were added that they did not
+   say: `CLUT.DI1MUX` with **no** bit set is the one a `RAM64X1D` wants,
+   and the open question about the permutation now has an answer — quoted
+   from two sources, still not measured.
 5. **Feature-name to primitive-name mapping.** The loader still emits
    `ConfigEntry::Cell { primitive: "ZINI", .. }` for a flip-flop feature
    because `ZINI` is what the database calls it; Reticle's primitive is
@@ -1006,11 +1135,13 @@ unless it says otherwise:
 | `src/fpga/xc7.rs` | the UG470 container: frames, packets, the frame address register, the CRC, the `.bit` wrapper, a reader |
 | `src/fpga/xray/mod.rs` | the loader: the database as an `Arch` plus a `FrameMap`, with the region and the measurement |
 | `src/fpga/xray/parse.rs` | one reader per file of the database |
+| `src/fpga/xray/lutram.rs` | a `SLICEM`'s distributed RAM: the `RAM64X1D` bel, its pins, its blocks and its bits, with the sources of the quoted part |
 | `src/fpga/xray/sites.rs` | the inside of a site: pin names from UG474 and UG471, the wire each sits on, the orientations the database only implies, the IO recipe read off Vivado's own bitstream, and the clock tables — the `BUFGCTRL`, the `BUFHCE` of a clock row, the wires that cost bits to touch and the rebuffer enables |
 | `XrayFabric::enable_global_clocks` | the one bit that belongs to no pip: a global clock's rebuffer enables, over the whole column, once the routing is known |
 | `src/fpga/devices/xc7.dev` | the device: primitives, pins, and now the IDCODE |
 | `tests/fpga_xray.rs` | everything above, against the real database, skipping without it |
-| `examples/basys3/` | the two designs that have reached a part, and their constraints |
+| `tests/fpga_xray_lutram.rs` | the distributed RAM, built from `examples/basys3/lutram.v` and decoded |
+| `examples/basys3/` | the two designs that have reached a part, the distributed-RAM demo that has not yet, and their constraints |
 | `src/fpga/xray/dsp.rs` | the refusal of a `DSP48E1`, and the measured reasons for it |
 | `XrayDatabase::decode` | the other direction: a bitstream back into the database's feature names, with an accounting of every bit it could not name |
 
