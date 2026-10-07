@@ -22,6 +22,7 @@
 //! | `inflate_reports_every_malformed_stream`, `inflate_refuses_or_decodes_every_single_byte_corruption`, `inflate_reports_every_truncation` | every malformed input is **reported** — 21 hand-built streams, 482 corruptions and 235 truncations, and none of the 1196 runs reached its loop bound |
 //! | `a_streams_ready_is_a_function_of_registers` | every block with a ready/valid handshake has a `ready` and a `valid` the timing graph shows depend on **no input port** — including `ip/bus/uart`, whose `rx_valid` and four error flags must not reach back through `rx_ready` — which is the rule `ip/crypto/chacha20`'s header states and nothing used to check |
 //! | `axil_gpio_matches_the_axi4lite_definition` | `bus::match_ports` recognises the GPIO's bus port |
+//! | `spi_display_rx_is_one_clock_domain` | the one block fed by an external clock does **not** clock on it: one domain, no crossing |
 //! | `cdc_*`, `fifo_async_*` | `timing::analyze_cdc` calls every crossing a synchroniser, never an unsynchronised one |
 //! | the rest | behaviour, driven through `sim::Simulator` |
 //!
@@ -31,6 +32,15 @@
 //! slave model that acknowledges and stretches the clock, the
 //! asynchronous FIFO passes data between two clocks with no common
 //! period, and the PWM's duty cycle is counted over a whole period.
+//!
+//! `spi_display_rx` is the one block here whose far side is **nobody's
+//! specification** — a screen's SPI link as a user observed it — so its
+//! twelve testbenches drive a model of that master in absolute
+//! simulation time, with every far-side event on an odd tick so that no
+//! pin changes in the same instant as the edge that samples it. Two of
+//! them exist to pin what the block *cannot* tell you: a falling-edge
+//! master read on the rising edge delivers every frame at eight bits
+//! with every counter reading zero, and the wrong bytes.
 //!
 //! The four larger blocks are tested the same way and harder.
 //! `eth_mac_rmii` has its own transmitter looped into its own receiver,
