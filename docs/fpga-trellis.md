@@ -320,10 +320,13 @@ placer, the router, the "every bit decodes" check, the solver and the
 exhaustive simulation are all static, and **not one of them can tell you
 whether the clock closes**. That is the whole point of this change and it is
 the one thing a depth figure does not say: depth 4 instead of 87 is a claim
-about how many lookup-table levels the mapped network has, and a `CCU2C`
-chain's real delay is 17 cells of `CIN → COUT` (43 ps each, by the element's
-own `specify` block) plus one `A → S` — fast, dedicated, and still not
-measured here.
+about how many lookup-table levels the mapped network has, and a chain's own
+delay is not in it at all. A 32-bit add is seventeen `CIN → COUT` hops and
+one lane's `A → S`; Yosys' `cells_sim.v` puts those at 43 ps and 379 ps,
+which would be under a nanosecond for the whole adder — but that is
+**nextpnr's** timing model quoted, not Lattice's and not anything measured,
+and this repository has no vendor timing model at all (`reticle timing` says
+in its own help that its device numbers are placeholders).
 
 **The cheapest experiment is already written and waiting.**
 `tests/usb_crypto_console.rs` is on `master`, `#[ignore]`d, skips with a

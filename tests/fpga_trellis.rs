@@ -7278,6 +7278,42 @@ fn a_carry_chain_places_routes_and_every_bit_of_it_decodes() {
         .map(|(at, _, _)| at)
         .collect();
     assert_eq!(modes.len(), 9, "{modes:?}");
+    // The truth tables, read back out of the image rather than taken on
+    // the writer's word. This is the assertion that would notice `INIT1`
+    // written into `K0`: seventeen lanes carry the adder and the chain's
+    // entry, and the eighteenth is the one left over at the top.
+    let mut lanes: std::collections::BTreeMap<u32, usize> = Default::default();
+    for index in &carries {
+        let site = site_of(*index);
+        let letter = site
+            .bel
+            .strip_prefix("SLICE")
+            .and_then(|s| s.chars().next())
+            .expect("a slice");
+        for half in 0..2 {
+            let what = format!("SLICE{letter}.K{half}.INIT");
+            let value: u32 = match decoded
+                .words
+                .iter()
+                .find(|(p, f, _)| *p == site.tile && *f == what)
+                .map(|(_, _, v)| v.as_str())
+            {
+                // `!`-marked bits, so the default is all ones.
+                None => 0xFFFF,
+                Some(bits) => bits
+                    .bytes()
+                    .enumerate()
+                    .map(|(index, bit)| u32::from(bit == b'1') << index)
+                    .sum(),
+            };
+            *lanes.entry(value).or_default() += 1;
+        }
+    }
+    assert_eq!(
+        lanes,
+        [(0x0000, 2), (0x666A, 16)].into_iter().collect(),
+        "sixteen adder lanes, the lane that enters the chain and the lane left over at the top"
+    );
     // Nothing an arc of the design needs clear was set by something else,
     // and every clock pin arrived on a global network.
     assert!(routed.dropped.is_empty(), "{:?}", routed.dropped);
