@@ -376,13 +376,24 @@ what `0xAAA0` and `0xCCC0` are in the table above and costs no net at all. A
 driver is correct on every family and the folding would be correct on one;
 the folding is worth doing and is not done here.
 
-With the fix, that design enumerates and `tests/usb_loopback.rs` passes on
-the part: **256 bytes out through endpoint 1 and back byte-identical** in
-packets of 64, 63, 8, 5 and 1, then 16 KiB in 256 round trips at
-**256 011 bytes/s** each way — the same rate the round that wrote that test
-measured — through two distributed RAMs whose write pointer and read index
-are carry chains. A byte that came back from the wrong address would be a
-wrong chain, and none did.
+With the fix, that design enumerates and **two of this tree's board tests
+pass on the part with carry chains inside them**, on a Great Scott Gadgets
+Cynthion r1.4 (`LFE5U-12F-8CABGA256`, serial
+`35L6H2CMGJJVCIBAEA3GCLAN74`) at 60 MHz:
+
+| | |
+|---|---|
+| `tests/usb_loopback.rs` | `usb_ulpi_device.v`: 962 `LUT4`, **66 `CCU2C` in 14 chains**, 16 distributed RAMs. 256 bytes out through endpoint 1 and back **byte-identical** in packets of 64, 63, 8, 5 and 1, then 16 KiB in 256 round trips at **256 011 bytes/s** each way — the rate the round that wrote that test measured. The buffers' write pointer and read index are carry chains, so a byte back from the wrong address would be a wrong chain |
+| `tests/usb_proxy.rs` | `usb_proxy_target.v` with `VBUS_AUX = 1`: 3245 `LUT4`, **161 `CCU2C`**, 4884 signals of which 4843 routed — the eleven its own header accounts for, plus **thirty carry-outs off the tops of chains**, which nothing reads and which is therefore how many chains it has. The kernel enumerated a **GreatFET through our hub and our proxy** — `1d50:60e6` as a child of `1209:0001` in sysfs — and its device and configuration descriptors came back through the relay byte for byte |
+
+Both bitstreams have every set bit decoding with nothing unexplained and
+the arcs they select exactly the arcs the router chose: 39 900 bits into
+11 715 arcs for the first, 120 732 into 36 329 for the second.
+
+The proxy is the better of the two as a check on *placement*: thirty chains
+over 161 cells is thirty runs of consecutive carry sites that all had to be
+right at once, and a chain in the wrong place has no path for its carry at
+all — the router would have refused it rather than mis-computed.
 
 ### What a board would add, and the cheapest experiment
 
