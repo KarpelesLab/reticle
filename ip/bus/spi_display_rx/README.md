@@ -2,15 +2,31 @@
 
 This is the one block in this library written from **nobody's
 specification**. Everything it assumes about the link on the other side
-of its pins was observed by the user with a logic analyser on their own
+of its pins was observed by a user with a logic analyser on their own
 hardware, and the observation changed three times while the block was
-being written. So this page is organised the way `docs/fpga-trellis.md`
-is: what was observed, what was *concluded*, and which conclusions were
-wrong — because the two wrong readings are the reason two of the
-parameters exist.
+being written. **And the screen is not on this machine** — it will be
+connected on a different computer, by a different person, on different
+hardware — so this page is not a prelude to a bring-up. It *is* the
+bring-up: §4 and §6 are written for someone we will never talk to, and
+every number in §7 is a ratio they can check against their own clock
+rather than a frequency that happens to suit ours.
 
-The project's rule applies throughout: a claim that was **measured** is
-marked as such, and a claim that is only a **reading** says so.
+The project's confidence levels, which this page uses throughout:
+
+- **OBSERVED** — the user watched it on an analyser. The strongest claim
+  here about the far side, and the only kind there is.
+- **MEASURED** — a number this repository produced by running something:
+  a byte out of `sim::Simulator`, a cell count out of
+  `fpga::synthesize_for`. Reproducible from a clean checkout by the test
+  named beside it.
+- **READING** — an inference that explains the rest, with no way to check
+  it from here.
+- **CHECKED** — observed on a real part, the way
+  `ip/usb/usb_cdc_acm/README.md` means it. **There is no CHECKED claim on
+  this page at all**, and §10 is about that, because
+  `ip/crypto/sha256/README.md` §8 is this project's standing lesson that
+  six kinds of simulation evidence and a wrong answer on silicon are
+  perfectly compatible.
 
 ## 1. What was observed, in three passes
 
@@ -52,45 +68,44 @@ So the link is conventional four-wire SPI:
 | Wire | What it does | How sure |
 |------|--------------|----------|
 | `sclk` | the master's clock, in **bursts of exactly eight edges** with an idle gap between them. Not continuous. | OBSERVED, twice |
-| `mosi` | the one data wire, carrying commands **and** pixels | OBSERVED (third pass; the second pass had this as two wires) |
-| `dc` | says whether the byte is data or a command, and **holds for the whole byte** | OBSERVED (third pass; the second pass had it toggling per bit) |
+| `mosi` | the one data wire, carrying commands **and** pixels | OBSERVED (third pass; the first had this as two wires) |
+| `dc` | says whether the byte is data or a command, and **holds for the whole byte** | OBSERVED (third pass; the first had it toggling per bit) |
 | `cs_n` | high between bursts, low while a burst is in progress | OBSERVED |
 
 Receive only. There is no `miso` in the capture and the block has no
 transmit path.
 
 **The two-lane reading was ruled out by the user, not overlooked.** It is
-recorded here because the block kept two things from it: the counters are
-per-*category* (`cmd_byte_count` and `data_byte_count`) rather than one
-total, which is what the two-lane design needed and what turns out to
-answer a better question; and `dc_change_count` exists precisely because
-`dc` was once believed to carry data.
+recorded here because the block kept two things from it: the byte
+counters are per-*category* (`cmd_byte_count` and `data_byte_count`)
+rather than one total, which is what the two-lane design needed and what
+turns out to answer a better question; and `dc_change_count` exists
+precisely because `dc` was once believed to carry data.
 
 ## 2. Why the fourth wire is called `cs_n`
 
-READING, not measured: the fourth wire is the **chip select**. A master
-that deasserts `cs_n` between byte transfers produces exactly the
-reported observation — "high between bursts of eight" is an idle
-active-low select — and that makes this textbook four-wire SPI
-(`sclk`, `mosi`, `cs_n`, `dc`) rather than anything exotic. The block is
-named and documented for that reading.
+READING: the fourth wire is the **chip select**. A master that deasserts
+`cs_n` between byte transfers produces exactly the reported observation
+— "high between bursts of eight" is an idle active-low select — and that
+makes this textbook four-wire SPI (`sclk`, `mosi`, `cs_n`, `dc`) rather
+than anything exotic. The block is named and documented for that reading.
 
 **Nothing in the block depends on it.** What the logic needs from that
 wire is a *frame*: an edge that says a byte ended and an edge that says
 the next began. A per-byte strobe pulse would serve identically, which is
 what `CS_PULSE = 1` is for. So the reading is a documentation decision,
-and the thing that would distinguish the two is a question for the
-user's master rather than for this receiver: a chip select is deasserted
-once per *transaction* on most displays — one select held across a
-command and its parameters — and a select that drops between every byte
-is a master that chose to. If the user's master ever holds the select
-across several bytes, `FRAME_MODE = 1` is the setting for it and
-`bit_error_count` is what will have said so.
+and what would distinguish the two is a question about the user's master
+rather than about this receiver: a chip select is usually deasserted once
+per *transaction* — one select held across a command and its parameters
+— and a select that drops between every byte is a master that chose to.
+If the user's master ever holds the select across several bytes,
+`FRAME_MODE = 1` is the setting for it and `bit_error_count` is what will
+have said so.
 
 ## 3. `dc` looking like the inverse of `cs_n` is what a pixel run looks like
 
-Worth writing down so that nobody re-derives it. The user's reading that
-`dc` is "mostly the reverse of `cs_n`" is **the expected appearance of a
+Worth writing down so that nobody re-derives it. The reading that `dc` is
+"mostly the reverse of `cs_n`" is **the expected appearance of a
 pixel-only capture**, not a property of the link:
 
 - during bulk pixel traffic `dc` sits at one level for *thousands* of
@@ -116,29 +131,47 @@ This is the same shape of note as the `VbusState` reading in
 a reading that looked wrong, turned out to be the board and not the
 decode, and cost rounds before someone traced the net and wrote it down.
 
-## 4. The numbers that should be zero
+## 4. The numbers, and how to read them
+
+**This is the bring-up procedure.** Whoever connects the screen gets six
+counters and nothing else — no oscilloscope trace from us, no reference
+decode, no part we can compare against. So each one is written out with
+what it should read and what a wrong value means.
 
 An instrument whose expected reading is **exactly zero** is far more
 useful than one whose expected reading is "small", and two of these are
-now in that category because of the second and third observations above.
+in that category because of the second and third observations in §1.
 
-| Counter | Expected | What a non-zero value means |
-|---------|----------|------------------------------|
-| `bit_error_count` | **0** | A frame did not carry eight bits. The bursts were confirmed to be exactly eight, so this is a fault: the sampling edge is wrong, the oversampling is too slow, or the far side is not what we think. `last_bit_count` says *which* count it arrived at — seven and nine look identical in the counter and completely different in the diagnosis. |
-| `dc_change_count` | **0** | `dc` moved inside a byte. `dc` holding for a whole byte is confirmed, so a wire that disagrees with itself is either not `dc` — a mislabelled analyser channel, which is what the second pass above actually was — or a display that qualifies per bit. In the default `DC_SAMPLE = 0` those bytes are **withheld**, because a wrongly tagged command byte is worse than a missing one. |
-| `overrun_count` | **0** | A sampled input held a level for only one system clock, so its next transition could have been missed. See §6. |
-| `cmd_byte_count`, `data_byte_count` | — | Not expected to be anything. They are the measurement of §3. |
-| `frame_count` | — | Frames `cs_n` closed, counted raw: before the block is framed, and whatever the bit count was. Compare it with the byte counts to see how many frames were rejected. |
+| Counter | Width | Expected | What a non-zero value means |
+|---------|-------|----------|------------------------------|
+| `cmd_byte_count` | `COUNT_WIDTH` | — | Bytes delivered with `dc` saying *command*. Compare with the next row; that comparison is §3. |
+| `data_byte_count` | `COUNT_WIDTH` | — | Bytes delivered with `dc` saying *data*. The two together are the delivered byte count, and the gap between their sum and `frame_count` is how many frames were rejected. |
+| `frame_count` | `COUNT_WIDTH` | — | Frames the fourth wire closed, counted **raw**: before the block is framed, and whatever the bit count was. The first one closes the byte the reset landed inside, so expect it to be one more than the bytes in a clean run. |
+| `bit_error_count` | `COUNT_WIDTH` | **0** | A frame did not carry eight bits. The bursts were OBSERVED to be exactly eight, so this is a fault and not a tolerance. `last_bit_count` says *which* count it arrived at — seven and nine are identical in this counter and completely different in the diagnosis. |
+| `dc_change_count` | `COUNT_WIDTH` | **0** | `dc` moved inside a byte. Per-byte holding was OBSERVED, so a wire that disagrees with itself is either not `dc` — a mislabelled analyser channel, which is what the first pass in §1 actually was — or a display that qualifies per bit. At the default `DC_SAMPLE = 0` those bytes are **withheld**, because a wrongly tagged command byte is worse than a missing one. |
+| `overrun_count` | `COUNT_WIDTH` | **0** | A sampled input held its level for fewer than `PHASE_MARGIN` system clocks, so its next transition could have been missed. This is the *early* warning: it rises before any bit is lost. See §7. |
+| `last_bit_count` | 4 | **8** | The bit count at the most recent frame close. Saturates at fifteen, so "the frame never closed" reads as 15 rather than wrapping onto 8. |
+| `bit_count` | 4 | — | Bits in the frame in progress, live. Useful on a probe, not in a log. |
+| `framed` | 1 | **1** | The block has seen a frame close and then a frame open, so it is accumulating bits. **Read this first when nothing comes out at all.** |
+| `framing_error`, `dc_error`, `overrun` | 1 | **0** | The three error counters as single wires, for a design that wants three lights rather than a bus. |
 
-`framed` is the fifth instrument and the one to read first when nothing
-comes out at all: in `FRAME_MODE` 0 and 1 a `framed` that stays low means
-**no byte will ever be delivered**, and `frame_count` then says whether
-the wire moved at all. That is the diagnostic for a select that is
-absent, stuck, or on the wrong pin — and it is a deliberate choice over
-guessing a phase, because a guessed phase is wrong seven times in eight.
+Every counter **saturates** rather than wrapping. An instrument that
+wraps reports a small number for a large fault.
 
-Every counter saturates rather than wrapping. An instrument that wraps
-reports a small number for a large fault.
+**The one output that is not a counter**: `rx_valid` is high for exactly
+one system clock per delivered byte, with the byte on `rx_byte` and its
+tag on `rx_is_data`. There is no buffer, so a consumer that cannot take a
+byte a frame misses it — put `ip/memory/fifo_sync` behind it if that
+matters.
+
+**If `framed` is low**, no byte will ever be delivered in `FRAME_MODE` 0
+or 1, and `frame_count` then says whether the fourth wire moved at all:
+zero means the wire is absent, stuck, or on a different pin than you
+think. That is a deliberate choice over guessing the byte phase, because
+a guessed phase is wrong seven times in eight. `FRAME_MODE = 2` is the
+escape hatch — it counts eight bits from reset and needs no frame — and
+it still counts frames, so running in mode 2 *measures* whether mode 0
+would have worked.
 
 ## 5. What a measurement still has to choose
 
@@ -147,10 +180,10 @@ tests say so explicitly rather than leaving it implied.
 
 **`SAMPLE_EDGE`** — which `sclk` edge samples `mosi`. A wrong choice
 samples the wire as it changes and delivers plausible-looking rubbish
-with **every counter still reading zero**:
-`spi_display_rx_samples_the_edge_and_the_bit_order_it_is_told_to` builds
-a falling-edge master, reads it on the rising edge, and asserts that
-three frames of eight bits arrive with no mismatch, no overrun and a
+with **every counter still reading zero**. MEASURED, by
+`spi_display_rx_samples_the_edge_and_the_bit_order_it_is_told_to`: it
+builds a falling-edge master, reads it on the rising edge, and asserts
+that three frames of eight bits arrive with no mismatch, no overrun and a
 perfectly held `dc` — and that the bytes are wrong. `dc` cannot give it
 away either, because a master drives the tag as it opens the frame and
 both edges are long after that.
@@ -159,18 +192,67 @@ both edges are long after that.
 significant bit first, which is the default, and a wrong choice is
 bit-reversed bytes.
 
-**The cheapest experiment that settles both** needs no new hardware and
-no board: build the design twice, once at each `SAMPLE_EDGE`, and compare
-the **command** byte stream against the screen's own initialisation
+**The cheapest experiment that settles both** needs no extra hardware:
+build the design twice, once at each `SAMPLE_EDGE`, and compare the
+**command** byte stream against the screen's own initialisation
 sequence. Display controllers open with a recognisable run — a software
 reset, a sleep-out, a pixel-format byte — and exactly one of the four
 (edge, bit order) combinations produces bytes that look like a controller
 being initialised. A bit-reversed stream is obvious by eye; a one-bit
 shift is obvious the moment two candidate decodes are put side by side.
-That is why the parameters are parameters: the measurement is a
-twenty-minute experiment and the argument is unresolvable.
+That is why these are parameters: the measurement is a twenty-minute
+experiment and the argument is unresolvable.
 
-## 6. The clock domain, and the rate
+## 6. What to look at first when the numbers are wrong
+
+In this order. It is cheap to write down now and expensive to work out
+later.
+
+1. **`framed` is low, or `frame_count` is 0** — the fourth wire is not
+   reaching the block, or is on a different pin. Nothing else can be
+   diagnosed until this is fixed. If the wire is definitely connected and
+   definitely moving, try `CS_ACTIVE_LOW = 0`: at the wrong polarity the
+   block frames the gaps instead of the bytes, which is loud rather than
+   subtle (`bit_error_count` climbs and nothing is delivered).
+2. **Bytes arrive and they are garbage, with every counter at zero** —
+   the **sampling edge**. This is the first thing to suspect because it
+   is the failure that is completely silent, and §5 says how to settle
+   it. Try `SAMPLE_EDGE = 1`. If the bytes become plausible but
+   *reversed*, that was the bit order instead: `MSB_FIRST = 0`.
+3. **`bit_error_count` is climbing with `last_bit_count` below 8** — the
+   **oversampling ratio** against the real `sclk`. Edges are being lost.
+   Measure or look up the master's `sclk` and check it against §7's
+   ratio; if it is too fast for the system clock, the answer is a faster
+   system clock (or `PHASE_MARGIN = 1`, which buys a factor of two and
+   gives up the early warning), never a change to this block.
+   `overrun_count` will almost always be non-zero too, and in that order:
+   the margin goes before the bits do.
+4. **`overrun_count` is climbing but `bit_error_count` is 0** — the
+   margin is gone and nothing is broken *yet*. Same remedy as 3, with
+   less urgency. Check whether the idle gap is the culprit rather than
+   the burst: §7 gives the gap its own minimum, and a short gap is the
+   one that bites while the byte rate looks comfortable.
+5. **`last_bit_count` reads 9, or 16, or 15** — not a rate problem. 9
+   means there are more clock edges in a frame than there should be; 16
+   means two frames were merged, so a frame close was missed (a gap below
+   the §7 minimum); 15 is the saturation value and means the frame has
+   not closed at all since the counter last reset.
+6. **`dc_change_count` is non-zero** — the fourth thing to suspect, and
+   the one that says the *wiring* is not what the labels claim. Either
+   the wire called `dc` is really `mosi` on another channel — which is
+   exactly the mistake the first pass in §1 made — or this display
+   qualifies per bit. `DC_SAMPLE = 1` delivers the bytes anyway and tags
+   each with its own first bit, which makes the mislabelling obvious: the
+   tag will track the data.
+7. **Everything reads zero and nothing happens at all** — suspect
+   `sclk`. The block is entirely passive until an `sclk` edge arrives,
+   and no counter distinguishes "no clock" from "no traffic".
+
+So, condensed: **sampling edge, then the oversampling ratio against the
+real `sclk`, then the fourth wire's polarity, then whether the fourth
+wire is `cs_n` at all.**
+
+## 7. The clock domain, and the rate as a ratio of clocks
 
 `sclk` is an external pin, asynchronous to the design's clock, and **it
 is not used as a clock here**. Two reasons:
@@ -183,62 +265,78 @@ is not used as a clock here**. Two reasons:
    convenient.
 
 So all four pins go through their own `cdc_sync` and the whole block runs
-on the system clock. **MEASURED**, by
-`spi_display_rx_is_one_clock_domain`: `timing::analyze_cdc` finds one
-domain and no crossing in the synthesised, flattened netlist.
+on the system clock. MEASURED, by `spi_display_rx_is_one_clock_domain`:
+`timing::analyze_cdc` finds one domain and no crossing in the
+synthesised, flattened netlist.
 
-**The rate limit.** A level presented to a free-running sampler for `T`
-clock periods is seen by at least `floor(T)` sampling edges, so each
-`sclk` phase must last **at least two system clock periods** for its
-transition to be certain of being seen with a clock of margin in hand.
-That is an `sclk` period of four system clocks at a 50% duty cycle:
+**The rate limit is a ratio, not a frequency**, because nothing in the
+block knows what the system clock runs at. A level presented to a
+free-running sampler for `T` clock periods is seen by at least `floor(T)`
+sampling edges, so for a transition to be certain of being seen with
+margin in hand:
 
-| System clock | Fastest `sclk` | Minimum high and low time |
-|--------------|----------------|---------------------------|
-| 60 MHz (Cynthion) | **15 MHz** | 33.3 ns each |
-| 100 MHz | 25 MHz | 20 ns each |
-| 12 MHz | 3 MHz | 167 ns each |
+> **each `sclk` phase must last at least `PHASE_MARGIN` system clock
+> periods**, so at a 50% duty cycle **one `sclk` period must last at
+> least `2 * PHASE_MARGIN` system clocks** — four at the default, which
+> makes the fastest `sclk` a **quarter of the system clock**.
 
-A display link of a few megahertz is an order of magnitude inside the
-60 MHz figure. `spi_display_rx_reports_an_sclk_it_cannot_oversample`
-pins the limit itself: at exactly four system clocks a period every byte
-is right and `overrun_count` is **0**.
+That is the number to check, and it needs no knowledge of this project.
+Worked examples at `PHASE_MARGIN = 2`:
 
-**Above it, nothing is dropped quietly.** Two independent instruments
-report it, in this order:
+| System clock | Minimum clocks per `sclk` period | Fastest `sclk` | Minimum `sclk` high and low time | Minimum `cs_n` deassertion |
+|--------------|----------------------------------|----------------|----------------------------------|----------------------------|
+| 12 MHz | 4 | 3 MHz | 167 ns | 167 ns |
+| 25 MHz | 4 | 6.25 MHz | 80 ns | 80 ns |
+| 50 MHz | 4 | 12.5 MHz | 40 ns | 40 ns |
+| 60 MHz | 4 | 15 MHz | 33.3 ns | 33.3 ns |
+| 100 MHz | 4 | 25 MHz | 20 ns | 20 ns |
 
-- at a *shade* over the limit — three system clocks a period — a phase
-  is sometimes seen only once. No edge is lost yet, every byte is still
-  right, and `overrun_count` rises. **The warning arrives before the
-  corruption**, which is the whole point of counting phases rather than
-  bits.
+A display link of a few megahertz is comfortably inside all of those. If
+yours is not, raise the system clock — this block is cheap enough (§9)
+that it is not what limits a design's clock — or set `PHASE_MARGIN = 1`,
+which halves the requirement to two clocks per `sclk` period and gives up
+the early warning in exchange, leaving `bit_error_count` as the only
+instrument. MEASURED, by
+`spi_display_rx_states_its_rate_limit_as_a_ratio_of_clocks`: the same
+waveform at four clocks per `sclk` period passes at `PHASE_MARGIN` 1 and
+2 and reports an overrun at 3 and 4, and at six clocks a period it passes
+at 3 — the ratio is the rule and the parameter moves it.
+
+**Above the limit, nothing is dropped quietly.** Two independent
+instruments report it, in this order:
+
+- at a *shade* over it — three system clocks a period at the default
+  margin — a phase is sometimes seen only once. No edge is lost yet,
+  every byte is still right, and `overrun_count` rises. **The warning
+  arrives before the corruption**, which is the whole point of counting
+  phases rather than bits;
 - well past it — an `sclk` period and a half of the system clock — whole
   phases fall between sampling edges and edges are genuinely lost. The
   frame then closes at fewer than eight bits, `bit_error_count` rises,
-  `last_bit_count` says how many bits did arrive, and in the default
-  mode **nothing is delivered**: a corrupt byte is never shifted out.
+  `last_bit_count` says how many bits did arrive, and in the default mode
+  **nothing is delivered**: a corrupt byte is never shifted out.
 
-Both of those are asserted in that test.
+Both are asserted in `spi_display_rx_reports_an_sclk_it_cannot_oversample`.
 
-**The gap gives the recovery time**, so the constraint is on the
-in-burst `sclk` period and not on a sustained byte rate: delivering a
-byte takes one system clock and there is no buffer to drain, so a frame
-may follow its predecessor as closely as `cs_n` allows. But **a short
-gap can starve the block even when the byte rate is comfortable**,
-because `cs_n` is synchronised and edge-detected exactly like `sclk`:
+**The gap gives the recovery time**, so the constraint is on the in-burst
+`sclk` period and not on a sustained byte rate: delivering a byte takes
+one system clock and there is no buffer to drain, so a frame may follow
+its predecessor as closely as the fourth wire allows. But **a short gap
+can starve the block even when the byte rate is comfortable**, because
+that wire is synchronised and edge-detected exactly like `sclk`:
 
-> **`cs_n` must be deasserted for at least two system clock periods —
-> 33.3 ns at 60 MHz.**
+> **`cs_n` must be deasserted for at least `PHASE_MARGIN` system clock
+> periods** — two by default, which is the last column of the table
+> above.
 
-That is a fact the user can check against their capture.
 `spi_display_rx_reports_a_gap_too_short_to_see` pins both sides of it: at
 exactly two clocks the bytes are right and `overrun_count` is 0; at one
 clock the bytes still survive but `overrun_count` rises, because the
 deassertion was seen once and the assertion after it could have been
-missed. A gap missed altogether merges two bytes and shows up as sixteen
+missed. A gap missed altogether merges two bytes and reads as sixteen
 bits at the next frame close.
 
-## 7. Why `mosi` and `dc` cannot skew against each other
+## 8. Why `mosi` and `dc` cannot skew against each other
 
 Three structural reasons rather than timing arguments:
 
@@ -250,21 +348,21 @@ Three structural reasons rather than timing arguments:
    one detected `sclk` edge — reading the two synchroniser outputs at one
    instant. There is no per-wire sampling decision to disagree about;
 3. the sample instant is **half an `sclk` period away from either wire's
-   transitions**, which §6's rate limit makes at least two system clocks.
-   A wire's first synchroniser flop may resolve a metastable input either
-   way, and so may see a transition a clock early or late, independently
-   per wire — but that uncertainty is one clock, spent two clocks away
-   from the instant that matters. Driver skew between the two is absorbed
-   by the same margin.
+   transitions**, which §7's rate limit makes at least `PHASE_MARGIN`
+   system clocks. A wire's first synchroniser flop may resolve a
+   metastable input either way, and so may see a transition a clock early
+   or late, independently per wire — but that uncertainty is one clock,
+   spent `PHASE_MARGIN` clocks away from the instant that matters. Driver
+   skew between the two is absorbed by the same margin.
 
 `spi_display_rx_samples_both_wires_whatever_their_skew` drives `mosi`
 immediately after the non-sampling edge and `dc` three system clocks
 later, right up against the setup the first sampling edge leaves, and
 checks every byte and every tag.
 
-## 8. What the tests would and would not catch
+## 9. What the tests would and would not catch
 
-Twelve testbenches drive a model of the master — `FarSide` in
+Fourteen testbenches drive a model of the master — `FarSide` in
 `tests/ip_library.rs` — in **absolute simulation time**, with every
 far-side event on an odd tick so that no pin ever changes in the same
 instant as the system clock edge that samples it. That race is one an
@@ -272,16 +370,26 @@ event-driven simulator is entitled to resolve either way and a real
 circuit is entitled to lose, and the model asserts the property rather
 than trusting the arithmetic.
 
-**What they would catch.** A wrong shift direction, a lost or doubled
-bit, a byte delivered twice (`rx_valid` is checked to be one cycle per
-counted byte, and every byte to land in exactly one of the two category
-counters), a frame of seven or nine bits treated as eight, a byte
-delivered when the frame said it should not be, a mis-framed start after
-a reset landing mid-byte, a counter that disagrees with its sticky wire,
-a `dc` sampled at the wrong point, an `sclk` too fast to oversample, a
-gap too short to see, and a chip select of the wrong polarity. Each of
-the off-by-one cases is run in **all three** framing modes, because the
-modes differ precisely in what they do about them.
+Area, MEASURED by `footprints_match_the_documentation` and tabulated in
+[`docs/ip-library.md`](../../../docs/ip-library.md): on an ECP5 45F, 209
+LUT4 and 141 flip-flops at the defaults, of which **96 flip-flops are the
+six counters** at `COUNT_WIDTH = 16`. The receiver proper is under
+forty-five flip-flops, so `COUNT_WIDTH = 8` roughly halves the block and
+`COUNT_WIDTH = 1` turns every counter into a sticky flag. LUT depth 5,
+and `FRAME_MODE = 2` is 11 LUT4 smaller — which is what "keep the other
+two modes, they are cheap" means as a number.
+
+**What the tests would catch.** A wrong shift direction, a lost or
+doubled bit, a byte delivered twice (`rx_valid` is checked to be one
+cycle per counted byte, and every byte to land in exactly one of the two
+category counters), a frame of seven or nine bits treated as eight, a
+byte delivered when the frame said it should not be, a mis-framed start
+after a reset landing mid-byte, a counter that disagrees with its sticky
+wire, a `dc` sampled at the wrong point or carrying the data, an `sclk`
+too fast to oversample, a `PHASE_MARGIN` that does not mean what §7 says
+it means, a gap too short to see, and a fourth wire of the wrong
+polarity. Each of the off-by-one cases is run in **all three** framing
+modes, because the modes differ precisely in what they do about them.
 
 **What they would not catch**, and this list is the honest part:
 
@@ -290,73 +398,64 @@ modes differ precisely in what they do about them.
   and is not the same as choosing;
 - **metastability.** The simulator has no metastable resolution, so the
   synchronisers are tested for latency and not for what they are for.
-  The argument in §7 is a reading of how the sampling is structured, not
-  a measurement;
-- **anything about the pins.** No pin assignment exists yet (§9), so
-  nothing here says these four signals can be routed to one bank, meet
-  their IO standard, or reach the fabric with the setup a real part
-  needs;
-- **the real `sclk` frequency.** The rate analysis is arithmetic about
-  the system clock, and the user's actual `sclk` has not been measured.
-  If it turns out to be above 15 MHz at 60 MHz, the answer is a faster
-  system clock, not a change to this block;
+  §8's argument is a reading of how the sampling is structured, not a
+  measurement;
+- **anything about pins, pads or IO timing.** See §10;
+- **the real `sclk` frequency.** §7 is arithmetic about a ratio. Nobody
+  here has measured the master's clock, and if it turns out to be above
+  the ratio, the remedy is in §6 step 3;
 - **what the bytes mean.** There is no display model here. A decode that
   is bit-perfect and addresses the wrong window would pass every test on
   this page;
 - **a glitch.** There is no deglitching beyond the synchroniser, so a
-  runt on `sclk` lasting two system clocks is a bit as far as this block
-  is concerned, and no test says otherwise.
+  runt on `sclk` lasting `PHASE_MARGIN` system clocks is a bit as far as
+  this block is concerned, and no test says otherwise;
+- **`CS_PULSE = 1` as a *better* reading.**
+  `spi_display_rx_takes_a_boundary_pulse_instead_of_a_level` drives a
+  pulse and decodes it both ways, and the level reading wins: a pulse's
+  own trailing edge serves as the frame open, so reading it as a level
+  loses nothing, while the pulse setting spends the first byte arming.
+  The parameter is tested and **not vindicated**; it is there for a
+  strobe whose release cannot be trusted or does not exist.
 
-## 9. What a board would add, and what the user has to tell us first
+## 10. Nothing here has been near a part
 
-**No board was touched.** Two other rounds may have had the Cynthion, and
-more to the point **the pin assignment is not known**, which makes a
-bitstream impossible rather than merely unwise.
+**There is no CHECKED claim on this page.** No bitstream, no board, no
+pin assignment, no top level — and that is by instruction rather than by
+omission: the screen is not on this machine and will be connected
+elsewhere, so a board design made here would be a guess about hardware
+nobody here can see. There is deliberately no
+`testdata/fpga/*` top level and no constraints file for this block.
 
-What a board would add that simulation cannot:
+This project has a specific reason to say that loudly.
+`ip/crypto/sha256/README.md` §8 records a block that passed published
+vectors, a second independent implementation, mapped-netlist equivalence
+at two lookup-table widths, a constant-time measurement and every
+simulation this repository can run — and then computed **wrong digests**
+on an ECP5, differently between identical runs, because the data path had
+no carry cell under it. Simulation has no unrouted wires and no
+metastability, and that is not a small gap: an unrouted slice input on an
+ECP5 reads as a one, and `CLAUDE.md` records eight rounds lost to a
+three-bit register that read 5.
 
-- that the four signals *arrive* — the right wires on the right balls,
-  at an IO standard the bank can carry;
-- the two numbers in §4 read off real traffic. `bit_error_count` and
-  `dc_change_count` are expected to be zero, and a zero from the part is
-  worth more than every assertion on this page put together, because it
-  is the only evidence that the far side is what the capture suggested;
-- whether `cmd_byte_count` stays at zero over a long run, which settles
-  §3;
-- the real `sclk` rate, by implication: an `overrun_count` of zero after
-  minutes of traffic is a measurement that the link is inside the §6
-  limit.
+So, concretely, what remains unknown about this block:
 
-**What the user has to tell us to get there: which four pins the signals
-arrive on.** That is the whole blocker. And the Cynthion makes it
-awkward, for a reason worth repeating from
-`testdata/fpga/cynthion/bidir_loopback.v`: the only free user IO on the
-part this project describes is the **two PMOD headers** — PMOD A is
-`C9 B9 D11 C12 C8 D8 D9 C10` and PMOD B is `B4 B5 B6 B7 C5 A5 A6 A7`,
-all `dir="io"` on the top edge — and this project has deliberately
-avoided them until now, because *nothing this machine can read says
-whether anything is plugged into one*. Every other pin on the two edges
-the backend describes is claimed by the ULPI transceivers, the HyperRAM,
-the Type-C controllers or the LEDs, and **driving a pin something else
-on the board also drives can damage hardware**.
+- **that the four signals arrive.** Nothing here says these pins can be
+  assigned on any particular part, share a bank, meet an IO standard, or
+  reach the fabric with the setup a real pad needs;
+- **that the timing closes.** The LUT depth in §9 is the mapped
+  combinational depth, which is the shape of the critical path and not a
+  closed clock. On the ECP5 this backend infers no carry cell, so the
+  saturating counters are ripple chains;
+- **that the far side is what §1 says.** Every fact about the link is one
+  person's reading of an analyser display. The two counters in §4 that
+  should read zero are the test of that reading, and they can only be run
+  by whoever has the screen;
+- **that `dc` and the data wire are not swapped**, which is §6 step 6 and
+  the one wiring error this block can detect by itself.
 
-So the cheapest experiment, in order:
-
-1. the user says which four PMOD pins they will wire the screen's
-   `sclk`, `mosi`, `dc` and `cs_n` to, and confirms nothing else is on
-   that header. Four inputs is the easy direction — the block drives
-   none of them, so the worst case of a wrong guess is that it reads
-   rubbish rather than that it fights another driver;
-2. a top level that is this block plus `ip/bus/uart`'s transmitter, with
-   the five counters of §4 and `last_bit_count` clocked out as a line of
-   text once a second. No new HDL beyond the top level, and the answer
-   arrives on a serial terminal;
-3. if the serial port is inconvenient, the degenerate version is three
-   LEDs: `framing_error`, `dc_error` and `overrun`. Three dark LEDs after
-   a minute of traffic is the headline result, and the LEDs are a pin
-   assignment this project has already used and watched
-   (`testdata/fpga/cynthion/leds.v`).
-
-Step 2 is the one worth doing, because the counters are the block's
-reason for existing and a light that stays dark does not say what the
-traffic *was*.
+What would close all of it is one run on the part the screen is attached
+to, with the §4 counters read out. Two zeros — `bit_error_count` and
+`dc_change_count` — would be worth more than every assertion on this page
+put together, because they are the only evidence that could exist that
+the far side is what the capture suggested.

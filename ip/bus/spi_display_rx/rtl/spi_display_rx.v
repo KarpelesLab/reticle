@@ -57,7 +57,8 @@
 //                    which is right — a wrong choice samples the wires
 //                    as they change and produces plausible-looking
 //                    rubbish with every counter still reading zero.
-//                    README.md §5 says what experiment chooses it, and
+//                    README.md §5 says what experiment chooses it, §6
+//                    the order to suspect things in, and
 //                    `spi_display_rx_samples_the_edge_and_the_bit_order_it_is_told_to`
 //                    is the test that makes that silence explicit.
 //     MSB_FIRST      1 takes the first bit of a burst as bit 7, 0 as
@@ -132,10 +133,11 @@
 //                      the number says which, and in mode 0 the bytes
 //                      are withheld until it is understood.
 //     overrun_count    clocks in which a sampled input had held its
-//                      level for only one `clk` — the margin for
-//                      detecting its next transition is gone, so the
-//                      next one may be missed entirely. **Also expected
-//                      to be zero**; see the rate limit below.
+//                      level for fewer than PHASE_MARGIN `clk` periods —
+//                      the margin for detecting its next transition is
+//                      gone, so the next one may be missed entirely.
+//                      **Also expected to be zero**; see the rate limit
+//                      below.
 //     bit_count        bits in the frame in progress, live.
 //     last_bit_count   the bit count at the most recent frame close,
 //                      which turns one `bit_error_count` into "it was
@@ -166,22 +168,37 @@
 //   proves by asking `timing::analyze_cdc` and getting one domain and
 //   no crossing.
 //
-//   Oversampling costs a rate limit and here it is. A level presented to
-//   a free-running sampler for T clock periods is seen by at least
-//   floor(T) sampling edges, so **each `sclk` phase must last at least
-//   two `clk` periods** for its transition to be certain of being seen
-//   with a clock of margin in hand: a four-`clk` `sclk` period at a 50%
-//   duty cycle, which at the Cynthion's 60 MHz is **15 MHz** — a minimum
-//   high time and a minimum low time of 33.3 ns each. A display link of
-//   a few megahertz is an order of magnitude inside that.
+//   Oversampling costs a rate limit, and it is stated as **a ratio of
+//   clocks** rather than as a frequency, because nothing here knows what
+//   `clk` runs at. A level presented to a free-running sampler for T
+//   clock periods is seen by at least floor(T) sampling edges, so for a
+//   transition to be certain of being seen with margin in hand:
 //
-//   Above it, nothing is silently dropped. Two independent counters
-//   report it: a phase seen only once raises `overrun_count` before any
-//   bit is actually lost, and a phase seen *no* times loses an edge,
-//   which in mode 0 arrives at the frame close as a bit count below
-//   eight and raises `bit_error_count`, with `last_bit_count` saying how
-//   many bits did arrive. A too-fast `sclk` is therefore reported twice
-//   and corrupts nothing quietly.
+//     each `sclk` phase must last at least PHASE_MARGIN `clk` periods
+//     => at a 50% duty cycle, one `sclk` period must last at least
+//        2 * PHASE_MARGIN `clk` periods
+//     => the fastest `sclk` is f(clk) / (2 * PHASE_MARGIN)
+//
+//   At the default PHASE_MARGIN of 2 that is **four `clk` periods per
+//   `sclk` period**, so `sclk` may be up to a quarter of `clk`: 6.25 MHz
+//   on a 25 MHz part, 15 MHz on a 60 MHz one, 25 MHz on a 100 MHz one.
+//   Equivalently, a minimum `sclk` high time and low time of two `clk`
+//   periods each — 33.3 ns at 60 MHz. A display link of a few megahertz
+//   is comfortably inside all of those.
+//
+//   PHASE_MARGIN is the knob, and it trades warning for headroom: 1
+//   allows the fastest `sclk` (half of `clk`) and reports nothing until a
+//   bit is actually lost, while 3 or 4 report the margin going long
+//   before anything breaks. It does not change what the block can
+//   *decode*, only when it starts complaining.
+//
+//   Above the limit, nothing is silently dropped. Two independent
+//   counters report it: a phase seen fewer than PHASE_MARGIN times
+//   raises `overrun_count` before any bit is lost, and a phase seen *no*
+//   times loses an edge, which in mode 0 arrives at the frame close as a
+//   bit count below eight and raises `bit_error_count`, with
+//   `last_bit_count` saying how many bits did arrive. A too-fast `sclk`
+//   is therefore reported twice and corrupts nothing quietly.
 //
 //   The **gap gives the recovery time**, so the limit is on the in-burst
 //   `sclk` period and not on a sustained rate: delivering a byte takes
@@ -189,10 +206,10 @@
 //   predecessor as closely as `cs_n` allows. But a **short gap can
 //   starve the block even when the byte rate is comfortable**, because
 //   `cs_n` is synchronised and edge-detected exactly like `sclk`:
-//   **`cs_n` must be deasserted for at least two `clk` periods**, 33.3
-//   ns at 60 MHz. A shorter gap is reported — one `clk` of deassertion
-//   raises `overrun_count`, and a deassertion missed altogether shows up
-//   as sixteen bits at the next frame close.
+//   **`cs_n` must be deasserted for at least PHASE_MARGIN `clk`
+//   periods** — two of them by default, 33.3 ns at 60 MHz. A shorter gap
+//   is reported, and a deassertion missed altogether merges two bytes
+//   and shows up as sixteen bits at the next frame close.
 //
 // Why `mosi` and `dc` cannot skew against each other
 //   They are sampled together, and three structural reasons rather than
@@ -208,7 +225,7 @@
 //      disagree about.
 //   3. The sample instant is **half an `sclk` period away from either
 //      wire's transitions**, which the rate limit above makes at least
-//      two `clk` periods. A wire's first synchroniser flop may resolve a
+//      PHASE_MARGIN `clk` periods. A wire's first synchroniser flop may resolve a
 //      metastable input either way and so may see a transition a clock
 //      early or late, independently per wire — but that uncertainty is
 //      one `clk`, spent two `clk` away from the instant that matters, so
@@ -227,8 +244,15 @@
 //   no display model: what the bytes mean is the screen's business and
 //   this block does not guess. No measurement of the `sclk` *frequency*
 //   — it reports whether it could sample, not what the rate was. And no
-//   deglitching beyond the synchroniser: a runt on `sclk` that lasts two
-//   `clk` periods is a bit as far as this block is concerned.
+//   deglitching beyond the synchroniser: a runt on `sclk` that lasts
+//   PHASE_MARGIN `clk` periods is a bit as far as this block is
+//   concerned.
+//
+//   **And nothing here has been near a part.** Every claim this header
+//   makes is simulation or arithmetic. The screen is not on this machine
+//   and will be connected elsewhere, so there is no board design here and
+//   no pin assignment; README.md §10 says what that leaves unknown, in
+//   the terms `ip/crypto/sha256/README.md` §8 earned the hard way.
 module spi_display_rx #(
     // Which `sclk` edge samples `mosi` and `dc`: 0 rising, 1 falling.
     parameter SAMPLE_EDGE   = 0,
@@ -245,6 +269,10 @@ module spi_display_rx #(
     parameter DC_SAMPLE     = 0,
     // The `dc` level that means a data byte rather than a command.
     parameter DC_DATA_LEVEL = 1,
+    // How many `clk` periods a sampled level must be seen for before
+    // its next transition is considered safe. Also the minimum `cs_n`
+    // deassertion, in `clk` periods, and half the minimum `sclk` period.
+    parameter PHASE_MARGIN  = 2,
     // Synchroniser depth for all four inputs, 2 to 4.
     parameter SYNC_STAGES   = 2,
     // Width of every instrumentation counter.
@@ -286,6 +314,12 @@ module spi_display_rx #(
     localparam DC_AGREE  = (DC_SAMPLE == 0) ? 1'b1 : 1'b0;
     // The tag comes from the last bit rather than the first.
     localparam DC_LAST   = (DC_SAMPLE == 2) ? 1'b1 : 1'b0;
+
+    // Wide enough for PHASE_MARGIN and not a bit wider: the hold
+    // counters only ever carry one to PHASE_MARGIN.
+    localparam HOLD_W = $clog2(PHASE_MARGIN + 1);
+    localparam [HOLD_W-1:0] HOLD_ONE  = 1;
+    localparam [HOLD_W-1:0] HOLD_FULL = PHASE_MARGIN;
 
     localparam [COUNT_WIDTH-1:0] CNT_ZERO = {COUNT_WIDTH{1'b0}};
     localparam [COUNT_WIDTH-1:0] CNT_MAX  = {COUNT_WIDTH{1'b1}};
@@ -348,12 +382,13 @@ module spi_display_rx #(
     // -------------------------------------------------------------------
     reg sclk_q;
     reg gap_q;
-    // The current level of this input has been observed at least twice,
-    // so its next transition cannot be missed. Out of reset both inputs
-    // count as settled, or the first real edge would report an overrun
-    // that never happened.
-    reg sclk_held;
-    reg gap_held;
+    // How many `clk` periods the current level of this input has been
+    // observed for, saturating at PHASE_MARGIN. At PHASE_MARGIN its next
+    // transition cannot be missed. Out of reset both inputs count as
+    // settled, or the first real edge would report an overrun that never
+    // happened.
+    reg [HOLD_W-1:0] sclk_hold;
+    reg [HOLD_W-1:0] gap_hold;
     // A frame close has been seen, so the frame open that follows it is
     // one whose beginning we watched. Without this the block would trust
     // a frame open inferred from the synchronisers' own reset value,
@@ -381,9 +416,11 @@ module spi_display_rx #(
     wire frame_close = gap_rise;
     wire frame_open  = ((CS_PULSE != 0) ? gap_rise : gap_fall) && seen_gap;
 
-    // A level that lasted one `clk` is a transition we were one clock
-    // from losing, on either input.
-    wire margin_lost = (sclk_edge && !sclk_held) || (gap_edge && !gap_held);
+    // A level seen fewer than PHASE_MARGIN times is a transition we were
+    // within a clock of losing, on either input. The counters saturate,
+    // so "not full" is "too short".
+    wire margin_lost = (sclk_edge && (sclk_hold != HOLD_FULL))
+                    || (gap_edge && (gap_hold != HOLD_FULL));
 
     // -------------------------------------------------------------------
     // The shift register, the bit counter and the `dc` tag
@@ -453,8 +490,8 @@ module spi_display_rx #(
         if (!rst_n) begin
             sclk_q     <= 1'b0;
             gap_q      <= (CS_ACTIVE_LOW != 0) ? 1'b0 : 1'b1;
-            sclk_held  <= 1'b1;
-            gap_held   <= 1'b1;
+            sclk_hold  <= HOLD_FULL;
+            gap_hold   <= HOLD_FULL;
             seen_gap   <= 1'b0;
             data_sh    <= 8'd0;
             bit_cnt    <= 4'd0;
@@ -467,10 +504,19 @@ module spi_display_rx #(
             rx_is_data <= 1'b0;
             rx_valid   <= 1'b0;
         end else begin
-            sclk_q    <= sclk_s;
-            gap_q     <= gap;
-            sclk_held <= !sclk_edge;
-            gap_held  <= !gap_edge;
+            sclk_q <= sclk_s;
+            gap_q  <= gap;
+
+            if (sclk_edge) begin
+                sclk_hold <= HOLD_ONE;
+            end else if (sclk_hold != HOLD_FULL) begin
+                sclk_hold <= sclk_hold + HOLD_ONE;
+            end
+            if (gap_edge) begin
+                gap_hold <= HOLD_ONE;
+            end else if (gap_hold != HOLD_FULL) begin
+                gap_hold <= gap_hold + HOLD_ONE;
+            end
 
             rx_valid <= deliver;
             if (deliver) begin

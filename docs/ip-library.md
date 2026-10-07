@@ -105,7 +105,7 @@ It is distributed as part of the repository instead.
 | `uart` | `uart_line_coding` | a USB host's `bCharFormat`, `bParityType` and `bDataBits` turned into those format ports, with an `ok` for the values it cannot give exactly | — |
 | `spi_master` | `spi_master` | byte-level SPI master, any CPOL / CPHA | — |
 | `i2c_master` | `i2c_master` | byte-level I²C master, 7-bit addressing, clock stretching tolerated | — |
-| `spi_display_rx` | `spi_display_rx` | the **receiving** end of a display's four-wire SPI: one data wire oversampled against an external clock, bytes framed by the chip select and tagged by D/C, with every uncertainty a parameter and six counters that measure the link | `cdc_sync` |
+| `spi_display_rx` | `spi_display_rx` | the **receiving** end of a display's four-wire SPI: one data wire oversampled against an external clock, bytes framed by the chip select and tagged by D/C, with every uncertainty a parameter, a rate limit stated as a ratio of clocks, and six counters that are the only way the link will ever be characterised | `cdc_sync` |
 | `pwm` | `pwm` | counter-comparator PWM, duty latched once per period | — |
 | `timer` | `timer` | prescaled auto-reload down-counter with a pulse and a sticky interrupt | — |
 | `axil_gpio` | `axil_gpio` | AXI4-Lite GPIO subordinate: data, direction and set registers | `cdc_sync` |
@@ -1564,22 +1564,34 @@ out anyway. So all four pins go through their own `cdc_sync` and the
 whole block is oversampled in the system clock domain —
 `spi_display_rx_is_one_clock_domain` asks `timing::analyze_cdc` and gets
 one domain and no crossing, which is the claim stated as a test rather
-than as a sentence. The price is a rate limit, and the block states it:
-each `sclk` phase must last two system clocks, so **15 MHz at the
-Cynthion's 60 MHz**, with a minimum `cs_n` deassertion of 33.3 ns
-because the frame is edge-detected the same way. Both numbers are pinned
-by tests at the limit and a shade past it, and past it the failure is a
-**reported** overrun and a bit count below eight, never a quiet byte.
+than as a sentence. The price is a rate limit, and the block states it
+**as a ratio of clocks rather than as a frequency**, because the screen
+will be connected on hardware nobody here has: an `sclk` period must last
+at least `2 * PHASE_MARGIN` system clocks — four at the default, so
+`sclk` may be up to a quarter of the system clock — and the fourth wire
+must be deasserted for `PHASE_MARGIN` of them, since the frame is
+edge-detected the same way. A frequency is a fact about our board; a
+ratio is a fact anyone can check against theirs, and the 60 MHz figure
+(15 MHz) is one row of a table rather than the statement. Both halves are
+pinned by tests: at the limit, a shade past it, and with the parameter
+moved against a fixed waveform, which is the same experiment as moving
+the clock against a fixed link. Past the limit the failure is a
+**reported** overrun and then a bit count below eight, never a quiet
+byte.
 
-**No board has seen it**, and that is the gap rather than an oversight:
-the pin assignment is not known, and on the Cynthion the only free user
-IO is the two PMOD headers that
-[`testdata/fpga/cynthion/bidir_loopback.v`](../testdata/fpga/cynthion/bidir_loopback.v)
-explains this project has avoided, since nothing readable says whether
-anything is plugged into them. What the user has to supply is one fact —
-which four pins the screen's wires arrive on — and that block's README §9
-has the cheapest experiment after that: this block plus `ip/bus/uart`'s
-transmitter printing the six counters once a second.
+**Nothing in it has been near a part, and that is deliberate rather than
+pending.** The screen is on another machine and will be connected by
+someone else, so there is no top level under `testdata/fpga/` and no
+constraints file: a pin assignment made here would be a guess about
+hardware nobody here can see. What that leaves unknown is §10 of the
+block's README, written in the terms
+[`ip/crypto/sha256/README.md`](../ip/crypto/sha256/README.md) §8 earned —
+a block that passed published vectors, a second implementation, mapped
+equivalence at two widths and a constant-time measurement, and then
+computed wrong digests on silicon. A block verified only in simulation
+should say so where a reader cannot miss it, and the counters are the
+reason that is survivable here: whoever connects the screen can run the
+measurement themselves, and §4 of that README is written for them.
 
 ## Using one
 
@@ -1783,7 +1795,7 @@ is the part that matters:
   `mosi` on the rising edge and presents `miso` on the falling one, so
   the bits are checked where a real slave would look at them; `cs_n` is
   checked to fall before the first edge and rise after the last.
-- **`spi_display_rx`** — twelve testbenches against a model of the
+- **`spi_display_rx`** — fourteen testbenches against a model of the
   display's own master, driven in **absolute simulation time** with every
   far-side event on an odd tick, so no pin ever changes in the same
   instant as the system clock edge that samples it. A plausible session
@@ -1794,9 +1806,12 @@ is the part that matters:
   a byte; `mosi` and `dc` driven three system clocks apart; a `dc` that
   carries the data rather than the tag, in each of the three D/C
   settings; an `sclk` at the rate limit, a shade over it and well past
-  it; a gap of two system clocks and of one; and both chip select
-  polarities. Two of those tests exist to pin what the block **cannot**
-  tell you — the sampling edge and the bit order — and one asks
+  it; `PHASE_MARGIN` moved against a fixed waveform, which is the same
+  experiment as moving the system clock against a fixed link; a gap of
+  two system clocks and of one; a boundary pulse instead of a level; and
+  both chip select polarities. Three of those tests exist to pin what the
+  block **cannot** tell you — the sampling edge, the bit order, and
+  whether a pulse and a level can be told apart at all — and one asks
   `timing::analyze_cdc` to confirm there is only one clock in it.
 - **`i2c_master`** — a whole seven-bit addressed exchange over an
   open-drain bus model: address for writing, a data byte, a repeated
@@ -2523,15 +2538,17 @@ timing, which is the usual way round: it was written to dodge a compiler bug,
 not because it was better logic.
 
 **`spi_display_rx` is the row where the instrumentation is most of the
-block**, and the two rows say so. On the ECP5 it is 204 LUT4 and 139
+block**, and the two rows say so. On the ECP5 it is 209 LUT4 and 141
 flip-flops, of which **96 are the six counters** — sixteen bits each at
 the default `COUNT_WIDTH`, about seventy per cent of the block's storage
 — and 93 of the iCE40's `SB_CARRY` are their incrementers and saturation
 compares. The receiver proper is an eight-bit shift register, a four-bit
 bit counter, four two-flop synchronisers and the edge detection: under
-forty flip-flops. So `COUNT_WIDTH = 8` roughly halves the block, and
+forty-five flip-flops. So `COUNT_WIDTH = 8` roughly halves the block, and
 `COUNT_WIDTH = 1` turns every counter into a sticky flag for a design
-that only wants the three error wires. The pair of rows also prices the
+that only wants the three error wires. `PHASE_MARGIN` costs almost
+nothing by comparison: its two hold counters are
+`$clog2(PHASE_MARGIN + 1)` bits each, two at the default. The pair of rows also prices the
 framing: `FRAME_MODE = 2`, which ignores the chip select and counts eight
 bits for itself, is 11 LUT4 and 2 flip-flops smaller — which is what
 "keep the other two modes, they are cheap" meant as a number.
@@ -2598,14 +2615,14 @@ exactly what this table is for.
 | `i2c_master` | `i2c_master` | CLK_DIV=30 | LUT6 | 14 x dff, 90 x lut | 4 |
 | `i2c_master` | `i2c_master` | CLK_DIV=30 | iCE40 HX1K | 18 x SB_CARRY, 20 x SB_DFFER, 4 x SB_DFFES, 17 x SB_DFFR, 1 x SB_GB, 30 x SB_IO, 117 x SB_LUT4 | 3 |
 | `i2c_master` | `i2c_master` | CLK_DIV=30 | ECP5 45F | 1 x DCCA, 116 x LUT4, 41 x TRELLIS_FF, 30 x TRELLIS_IO | 7 |
-| `spi_display_rx` | `spi_display_rx` | FRAME_MODE=0 | LUT4 | 29 x dff, 204 x lut | 5 |
-| `spi_display_rx` | `spi_display_rx` | FRAME_MODE=0 | LUT6 | 29 x dff, 175 x lut | 4 |
-| `spi_display_rx` | `spi_display_rx` | FRAME_MODE=0 | iCE40 HX1K | 93 x SB_CARRY, 111 x SB_DFFER, 26 x SB_DFFR, 2 x SB_DFFS, 1 x SB_GB, 124 x SB_IO, 190 x SB_LUT4 | 4 |
-| `spi_display_rx` | `spi_display_rx` | FRAME_MODE=0 | ECP5 45F | 1 x DCCA, 204 x LUT4, 139 x TRELLIS_FF, 124 x TRELLIS_IO | 5 |
-| `spi_display_rx` | `spi_display_rx` | FRAME_MODE=2 | LUT4 | 27 x dff, 194 x lut | 5 |
-| `spi_display_rx` | `spi_display_rx` | FRAME_MODE=2 | LUT6 | 27 x dff, 169 x lut | 3 |
-| `spi_display_rx` | `spi_display_rx` | FRAME_MODE=2 | iCE40 HX1K | 93 x SB_CARRY, 109 x SB_DFFER, 26 x SB_DFFR, 2 x SB_DFFS, 1 x SB_GB, 124 x SB_IO, 188 x SB_LUT4 | 5 |
-| `spi_display_rx` | `spi_display_rx` | FRAME_MODE=2 | ECP5 45F | 1 x DCCA, 193 x LUT4, 137 x TRELLIS_FF, 124 x TRELLIS_IO | 5 |
+| `spi_display_rx` | `spi_display_rx` | FRAME_MODE=0 | LUT4 | 29 x dff, 208 x lut | 5 |
+| `spi_display_rx` | `spi_display_rx` | FRAME_MODE=0 | LUT6 | 29 x dff, 180 x lut | 4 |
+| `spi_display_rx` | `spi_display_rx` | FRAME_MODE=0 | iCE40 HX1K | 93 x SB_CARRY, 113 x SB_DFFER, 2 x SB_DFFES, 26 x SB_DFFR, 1 x SB_GB, 124 x SB_IO, 194 x SB_LUT4 | 4 |
+| `spi_display_rx` | `spi_display_rx` | FRAME_MODE=0 | ECP5 45F | 1 x DCCA, 209 x LUT4, 141 x TRELLIS_FF, 124 x TRELLIS_IO | 5 |
+| `spi_display_rx` | `spi_display_rx` | FRAME_MODE=2 | LUT4 | 27 x dff, 198 x lut | 5 |
+| `spi_display_rx` | `spi_display_rx` | FRAME_MODE=2 | LUT6 | 27 x dff, 174 x lut | 3 |
+| `spi_display_rx` | `spi_display_rx` | FRAME_MODE=2 | iCE40 HX1K | 93 x SB_CARRY, 111 x SB_DFFER, 2 x SB_DFFES, 26 x SB_DFFR, 1 x SB_GB, 124 x SB_IO, 192 x SB_LUT4 | 5 |
+| `spi_display_rx` | `spi_display_rx` | FRAME_MODE=2 | ECP5 45F | 1 x DCCA, 198 x LUT4, 139 x TRELLIS_FF, 124 x TRELLIS_IO | 5 |
 | `pwm` | `pwm` | WIDTH=8 | LUT4 | 2 x dff, 23 x lut | 6 |
 | `pwm` | `pwm` | WIDTH=8 | LUT6 | 2 x dff, 17 x lut | 4 |
 | `pwm` | `pwm` | WIDTH=8 | iCE40 HX1K | 7 x SB_CARRY, 8 x SB_DFFER, 8 x SB_DFFR, 1 x SB_GB, 21 x SB_IO, 21 x SB_LUT4 | 6 |
@@ -3071,24 +3088,22 @@ access `crypto_blocks_hold_no_memory_to_index` forbids, so AES's S-box has
 to be combinational, and the test that forbids it should be **extended**
 to AES rather than relaxed for it.
 
-**`spi_display_rx` has not been near a board either, and it is the block
-that most needs to be**, because the far side of its pins is an
-observation rather than a document. Every other gap on this page would be
-closed by writing code; this one is closed by one fact the user has to
-supply — **which four pins the screen's `sclk`, `mosi`, `dc` and `cs_n`
-arrive on** — and the Cynthion makes that awkward, since the only free
-user IO is the two PMOD headers
-[`testdata/fpga/cynthion/bidir_loopback.v`](../testdata/fpga/cynthion/bidir_loopback.v)
-explains this project has avoided. Nothing readable says whether anything
-is plugged into them, and driving a pin something else on the board also
-drives can damage hardware; four *inputs* are the forgiving direction,
-since the worst case of a wrong guess is reading rubbish rather than
-fighting a driver. After that the cheapest experiment is this block plus
-`ip/bus/uart`'s transmitter printing its six counters once a second, and
-the result that matters is two numbers reading **zero** —
-`bit_error_count` and `dc_change_count` — which is the only evidence
-that the link is what the capture suggested. That block's README §9 has
-the whole sequence.
+**`spi_display_rx` has not been near a part, and will not be from
+here.** The screen it receives is on another machine and will be
+connected by someone else, so there is no top level and no pin
+assignment for it — a board design made here would be a guess about
+hardware nobody here can see. That makes it the one block in this library
+whose *entire* deliverable is the HDL, the tests and the page, and it is
+why the page is shaped the way it is: §4 of its README is a bring-up
+procedure written for a person this project will never talk to, naming
+every counter, what it should read, and what a wrong value means, and §6
+is the order to suspect things in — the sampling edge, then the
+oversampling ratio against their real `sclk`, then the fourth wire's
+polarity, then whether that wire is a chip select at all. The two
+counters that should read **zero**, `bit_error_count` and
+`dc_change_count`, are the only evidence that could ever exist that the
+link is what the capture suggested, and only whoever has the screen can
+produce it.
 
 **And neither crypto block has been near a board**, which is a different
 sort of gap from the ones above because it is the only one a measurement

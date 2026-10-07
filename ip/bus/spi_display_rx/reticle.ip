@@ -8,16 +8,24 @@
 # pixels, a `dc` wire that holds for a whole byte and says which, and a
 # fourth wire high between bursts. README.md §1 records all three passes
 # of that observation, including the two readings that were wrong, and
-# §5 says which parameters a measurement still has to choose.
+# §5 says which parameters a measurement still has to choose, §4 how to
+# read every counter and §6 the order to suspect things in when they come
+# back wrong.
 #
 # Receive only: no `miso` and no transmit path.
 #
 # `sclk` is **not** a clock here. All four pins are synchronised through
 # `cdc_sync` and oversampled, so the whole block sits in one clock domain
-# and its bytes cross nothing. That costs a rate limit — each `sclk`
-# phase must last two `clk` periods, so 15 MHz at the Cynthion's 60 MHz
-# — and `overrun_count` reports when the margin is gone rather than
-# dropping bits quietly. The block's header has the whole argument.
+# and its bytes cross nothing. That costs a rate limit, stated as a ratio
+# because nothing here knows what `clk` runs at: an `sclk` period must
+# last at least `2 * PHASE_MARGIN` system clocks, four at the default, so
+# `sclk` may be up to a quarter of `clk`. `overrun_count` reports when
+# the margin is gone rather than dropping bits quietly. The block's
+# header has the whole argument.
+#
+# **Nothing in this block has been near a part.** It is verified in
+# simulation and by arithmetic, and README.md says so where a reader
+# cannot miss it.
 #
 # The counters are the point as much as the bytes are:
 # `cmd_byte_count` against `data_byte_count` says what a capture
@@ -43,6 +51,7 @@ param CS_ACTIVE_LOW int 1 0..1
 param CS_PULSE int 0 0..1
 param DC_SAMPLE int 0 0..2
 param DC_DATA_LEVEL int 1 0..1
+param PHASE_MARGIN int 2 1..8
 param SYNC_STAGES int 2 2..4
 param COUNT_WIDTH int 16 1..32
 

@@ -3489,6 +3489,14 @@ struct FarSide {
     cs_idle: bool,
     /// Whether `cs_n` is driven at all.
     cs_present: bool,
+    /// True if the fourth wire is a **pulse** at the boundary rather
+    /// than a level held across the byte. That was the reading the
+    /// user's first description allowed, and the block keeps a
+    /// parameter for it.
+    cs_pulse: bool,
+    /// How long that pulse lasts. Shorter than the gap, or it would
+    /// still be a level.
+    cs_pulse_width: u64,
     /// True if `dc` carries the byte's **bits** instead of holding the
     /// byte's tag: the mislabelled-analyser-channel hypothesis, which
     /// `dc_change_count` exists to settle.
@@ -3529,6 +3537,8 @@ impl FarSide {
             msb_first: true,
             cs_idle: true,
             cs_present: true,
+            cs_pulse: false,
+            cs_pulse_width: 2 * 2 * HALF,
             dc_follows_data: false,
             mosi_skew: 2,
             dc_skew: 2,
@@ -3597,7 +3607,7 @@ impl FarSide {
     fn send(&mut self, f: &Frame) {
         self.close();
         let t0 = self.now + self.gap;
-        if self.cs_present {
+        if self.cs_present && !self.cs_pulse {
             let level = !self.cs_idle;
             self.at(t0, PIN_CS, level);
         }
@@ -3626,6 +3636,16 @@ impl FarSide {
             let (tick, level) = (self.now, self.cs_idle);
             self.at(tick, PIN_CS, level);
             self.frames += 1;
+            if self.cs_pulse {
+                // A pulse returns to its resting level on its own, so
+                // the frame is never a level at all.
+                assert!(
+                    self.cs_pulse_width < self.gap,
+                    "a pulse as long as the gap is a level"
+                );
+                let (back, resting) = (self.now + self.cs_pulse_width, !self.cs_idle);
+                self.at(back, PIN_CS, resting);
+            }
         }
     }
 
@@ -4260,6 +4280,63 @@ fn spi_display_rx_reports_an_sclk_it_cannot_oversample() {
 }
 
 #[test]
+fn spi_display_rx_states_its_rate_limit_as_a_ratio_of_clocks() {
+    // The limit is `2 * PHASE_MARGIN` system clocks per `sclk` period,
+    // and it is a **ratio** rather than a frequency because nothing in
+    // the block knows what the system clock runs at. This test moves the
+    // parameter against a fixed waveform, which is the same experiment
+    // as moving the clock against a fixed link and is the one a reader
+    // on a 25 MHz or a 100 MHz part needs to believe.
+    let frames = [command(0xA5), pixel(0x3C), pixel(0x7E)];
+
+    // Four system clocks a period. The default margin of 2 needs exactly
+    // that and is satisfied; a margin of 3 wants six and is not — and
+    // says so without losing a byte, which is what asking for more
+    // margin than the link has buys you.
+    let mut far = FarSide::new(4 * 2 * HALF);
+    far.session(&frames);
+    for (margin, expect_overrun) in [("1", false), ("2", false), ("3", true), ("4", true)] {
+        let got = spi_display_session(&[("PHASE_MARGIN", margin)], &far);
+        assert_eq!(
+            got.bytes,
+            expected_bytes(&frames),
+            "margin {margin}: the margin does not change what decodes"
+        );
+        assert_eq!(got.bit_errors, 0, "margin {margin}");
+        assert_eq!(
+            got.overruns != 0,
+            expect_overrun,
+            "margin {margin} against four clocks a period"
+        );
+    }
+
+    // Six system clocks a period satisfies a margin of 3 as well, which
+    // is the other half of the ratio: the same waveform passes or fails
+    // according to the number, and the number is checkable arithmetic.
+    let mut far = FarSide::new(6 * 2 * HALF);
+    far.session(&frames);
+    let got = spi_display_session(&[("PHASE_MARGIN", "3")], &far);
+    assert_eq!(got.bytes, expected_bytes(&frames));
+    assert_eq!(got.overruns, 0, "six clocks a period is three a phase");
+
+    // And a margin of 1 reports nothing however fast `sclk` goes, which
+    // is what it is for: the bit count is then the only instrument, and
+    // it still catches an edge that was genuinely lost.
+    let mut far = FarSide::new(3 * HALF);
+    far.session(&frames);
+    let got = spi_display_session(&[("PHASE_MARGIN", "1")], &far);
+    assert_eq!(
+        got.overruns, 0,
+        "a margin of one asks for no margin and so reports none"
+    );
+    assert!(
+        got.bit_errors > 0,
+        "but a lost edge is still a lost edge, and the bit count has it"
+    );
+    assert!(got.bytes.is_empty(), "and nothing corrupt was delivered");
+}
+
+#[test]
 fn spi_display_rx_reports_a_gap_too_short_to_see() {
     let frames = [command(0xA5), pixel(0x3C), pixel(0x7E)];
 
@@ -4323,6 +4400,54 @@ fn spi_display_rx_takes_a_chip_select_of_either_polarity() {
     let got = spi_display_session(&[], &far);
     assert!(got.bytes.is_empty(), "the wrong polarity frames the gaps");
     assert!(got.bit_errors > 0, "and that is reported, not guessed at");
+}
+
+#[test]
+fn spi_display_rx_takes_a_boundary_pulse_instead_of_a_level() {
+    // The reading the user's first description allowed, before the
+    // second pass established that the wire is high across the whole
+    // gap: the fourth wire is a **pulse** marking the byte boundary. It
+    // was never disproved, only made unlikely, and it costs one mux on
+    // the frame-open edge — so it is a parameter, and a parameter that
+    // elaborates but is never simulated is not a parameter anyone should
+    // trust.
+    let frames = [command(0xA5), pixel(0x3C), pixel(0x7E)];
+    let mut far = FarSide::new(SPI_PERIOD);
+    far.cs_pulse = true;
+    far.session(&frames);
+
+    let got = spi_display_session(&[("CS_PULSE", "1")], &far);
+    // **A pulse costs the first byte**, and that is not a defect: a
+    // level has two edges per gap, so the first gap can both arm the
+    // block and open a frame, while a pulse has one — so the first
+    // pulse arms and the second is the first close that delivers
+    // anything. Paying one byte beats trusting an edge whose beginning
+    // was never seen, which is the same argument `framed` makes.
+    assert_eq!(
+        got.bytes,
+        expected_bytes(&frames)[1..],
+        "every byte but the one the first pulse armed on"
+    );
+    assert_eq!(got.bit_errors, 0, "and the byte it skipped is not an error");
+    assert_eq!(got.dc_changes, 0);
+    assert_eq!(got.overruns, 0);
+    assert_eq!(got.frames, far.frames, "one pulse, one frame");
+
+    // And read as a **level**, the same waveform decodes *better*: the
+    // pulse's own trailing edge serves as the frame open, so nothing is
+    // lost to arming. Worth asserting rather than hiding, because it
+    // says what CS_PULSE is actually for — not a pulse like this one,
+    // which a level reading handles, but a strobe whose release cannot
+    // be trusted or does not exist. On this traffic the parameter is
+    // **tested and not vindicated**, and saying so is better than
+    // implying the test chose it.
+    let got = spi_display_session(&[], &far);
+    assert_eq!(
+        got.bytes,
+        expected_bytes(&frames),
+        "read as a level, a pulse loses nothing"
+    );
+    assert_eq!(got.bit_errors, 0);
 }
 
 #[test]
