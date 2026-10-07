@@ -924,13 +924,80 @@ In rough order of how much stands behind each.
    mapper left the `$tristate` cell behind and the netlist check refused
    it as "a generic cell, not a primitive". `xc7.dev` had declared
    `OBUFT` as `other`, so nothing could have placed one on a pad anyway.
-7. **Six million `String`s.** The routing graph holds the whole die in
+7. **A `DSP48E1`.** Mapped for Vivado since 2026-10-08, refused here by
+   name; the section *A DSP48E1: mapped, not placed* below has exactly
+   what is missing, measured. With `--bitstream` the command line keeps
+   multiplies in lookup tables instead.
+8. **Six million `String`s.** The routing graph holds the whole die in
    1386 MiB, most of it wire names. Interning those is what makes
    whole-die routing comfortable rather than merely possible.
 
 Until 1 is done, what this flow writes for a clocked design is a
 bitstream whose every feature on the clock path matches a working one and
 whose effect on silicon nobody has seen.
+
+## A DSP48E1: mapped, not placed
+
+`xc7.dev` declares `DSP48E1` and `fpga::primitives` puts a multiply on
+it (`docs/fpga.md`, *The DSP48E1*, and `tests/fpga_dsp.rs`, which proves
+the mapping against the block's model). That is the Vivado route. This
+backend does not place one, and **a netlist holding one is refused by
+name** (`fpga::xray::dsp_refusal`) before the database is opened; with
+`--bitstream` the command line turns DSP inference off, so a `*` stays in
+lookup tables and the refusal only meets a `DSP48E1` instantiated by hand.
+Before this, such a netlist met the placer's generic "the design needs 1
+`dsp` site(s) and the part has 0", which is true of the loaded fabric and
+false of the part.
+
+What stands in the way, each item **checked** against the pinned database
+unless it says otherwise:
+
+1. **No site, no pins.** `parse::site_kind` maps the site type `DSP48E1`
+   to `dsp`, but the loader names a tile's bels by the prefix of its
+   features, and every `DSP_L` / `DSP_R` feature is `DSP48.DSP_0.*` or
+   `DSP48.DSP_1.*`. Loaded around the `DSP_R` column at grid x 28, each
+   DSP tile becomes **one** site called `DSP48`, of kind `other`, with
+   **zero pins**, and the region has no `dsp` site at all.
+   `the_fabric_has_no_dsp_site_and_the_database_no_use_mult` pins this.
+   The pins are in the database: `ppips_dsp_l.db` is 560 `always` lines
+   from site pin to tile wire (`DSP_L.DSP_0_A0.DSP_IMUX23_0 always`), the
+   shape a slice's pins already have, so this part is ordinary work in
+   `sites.rs` — two sites per tile, 560 pin lines between them.
+2. **`USE_MULT` has no bits.** `segbits_dsp_{l,r}.db` hold 436 lines each
+   from Project X-Ray's fuzzer `100-dsp-mskpat`: the registers (`AREG_0`,
+   `BREG_0`, `ZMREG`, `ZPREG`, `ZCREG`, …), `A_INPUT`, `B_INPUT`,
+   `USE_DPORT`, `USE_SIMD`, `MASK`, `PATTERN`, the `ZIS_*_INVERTED`
+   inverters, and local `DSP_GND_L` / `DSP_VCC_L` ties for `D`, `INMODE`,
+   `OPMODE6`, `ALUMODE2..3`, `CARRYINSEL2`, four clock enables and `RSTD`. The fuzzer's
+   own `generate.py` (read upstream, **quoted**: f4pga/prjxray `master`)
+   varies `USE_MULT` over `NONE` / `MULTIPLY` / `DYNAMIC` and tags it as
+   `USE_MULT[0..1]`, and also tags `USE_PATTERN_DETECT` — and **neither
+   survived into the database**. Either a multiply needs no bit, or the
+   solver could not find it. Which one is the difference between a
+   multiplier and a block that outputs its `C` input, and nothing here can
+   tell them apart.
+3. **The `Z` features are inverted.** `generate.py` writes a `Z` tag as
+   the complement of the parameter, so a blank tile is a DSP with every
+   register *on* and every input *inverted*. A configured block must set
+   `ZMREG`, `ZPREG`, `ZCREG`, `ZOPMODEREG`, `ZALUMODEREG`, `ZINMODEREG`,
+   `ZCARRYINREG` and `ZCARRYINSELREG` to turn the registers off, and
+   `AREG_0` / `BREG_0`. `ConfigEntry::ParamZero` already expresses this;
+   what is missing is the table from `DSP48E1` parameters to those names.
+4. **Zeros need a constant route.** An unrouted 7-series input reads one:
+   `ppips_int_l.db` has `INT_L.IMUX_L0.VCC_WIRE default` for all 48 `IMUX`es.
+   `OPMODE`, `ALUMODE`, `INMODE` and `CARRYIN` can take their zeros from
+   their own inverters, but `CARRYINSEL[1:0]` has neither an inverter nor
+   a local tie, so `000` needs `GND_WIRE` routed through `GFAN0`/`GFAN1`
+   into its `IMUX`, and `INT_L.GFAN0.GND_WIRE` is a five-bit pip with two
+   bits that must be *clear*. The router has no constant source.
+5. **No oracle.** Every tile this backend configures was compared with
+   what Vivado wrote for the same cell; the Vivado bitstream in
+   `artix7/harness/` is switches to LEDs and contains no DSP. Without a
+   Vivado-built design holding a `DSP48E1`, items 2 and 3 would be
+   guesses on silicon.
+
+`segbits_dsp_*.db`, `ppips_dsp_*.db` and `mask_dsp_*.db` are already in
+`src/bin/reticle/prjxray-db.manifest`; nothing needed fetching.
 
 ## Where the code is
 
@@ -944,6 +1011,7 @@ whose effect on silicon nobody has seen.
 | `src/fpga/devices/xc7.dev` | the device: primitives, pins, and now the IDCODE |
 | `tests/fpga_xray.rs` | everything above, against the real database, skipping without it |
 | `examples/basys3/` | the two designs that have reached a part, and their constraints |
+| `src/fpga/xray/dsp.rs` | the refusal of a `DSP48E1`, and the measured reasons for it |
 | `XrayDatabase::decode` | the other direction: a bitstream back into the database's feature names, with an accounting of every bit it could not name |
 
 `src/fpga/arch/synthetic.rs` is untouched and still says what it always

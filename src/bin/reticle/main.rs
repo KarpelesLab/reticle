@@ -1971,13 +1971,26 @@ fn fpga(args: &Args) -> Result<Outcome, ArgError> {
         return Ok(Outcome::Failed);
     }
 
-    let options = FpgaOptions {
+    let mut options = FpgaOptions {
         synth: synth_options(args.positionals()),
         verify_mapping: args
             .flag("verify")
             .then(reticle::synth::techmap::MapVerifyOptions::default),
         ..FpgaOptions::default()
     };
+    // Reticle's own 7-series backend cannot place a DSP48E1
+    // (`fpga::xray::dsp` says why), so for its bitstream a multiply stays
+    // in lookup tables, which are slower and correct. The Vivado files
+    // this run also writes follow the same netlist.
+    if args.option("bitstream").is_some() && device.family == "xc7" {
+        options.map.infer_dsp = false;
+        if !args.flag("quiet") {
+            eprintln!(
+                "note: `--bitstream` keeps multiplies out of DSP48E1, which this backend cannot \
+                 place; without it the netlist for Vivado uses them"
+            );
+        }
+    }
     let mut diags = Diagnostics::new();
     let flow = match synthesize_for(&mut design, top, device, &constraints, &options, &mut diags) {
         Ok(report) => report,
@@ -2878,6 +2891,12 @@ fn write_xc7_bitstream(
     use reticle::fpga::xc7::{self, BitHeader};
     use reticle::fpga::xray::{GridRegion, XrayDatabase, XrayOptions};
     use reticle::fpga::{Netlist, bitstream};
+
+    // A DSP48E1 instantiated in the source reaches here even with
+    // inference off; refuse it by name before loading anything.
+    if let Some(message) = reticle::fpga::xray::dsp_refusal(design, top) {
+        return Err(message);
+    }
 
     let root = datadir::PRJXRAY
         .locate(args.option("chipdb"), args.flag("offline"))

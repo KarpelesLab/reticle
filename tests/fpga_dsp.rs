@@ -825,3 +825,97 @@ mod proofs {
         }
     }
 }
+
+// ---------------------------------------------------------------------------
+// The fabric
+// ---------------------------------------------------------------------------
+
+mod fabric {
+    use std::path::Path;
+
+    use reticle::fpga::xray::{GridRegion, XrayDatabase, XrayOptions};
+    use reticle::ir::memfile::FileProvider;
+
+    struct DiskFiles;
+
+    impl FileProvider for DiskFiles {
+        fn read_file(&self, path: &str) -> Option<String> {
+            std::fs::read_to_string(path).ok()
+        }
+    }
+
+    fn chipdb() -> Option<String> {
+        let probe = "artix7/xc7a50t/tilegrid.json";
+        if let Ok(root) = std::env::var("RETICLE_CHIPDB") {
+            if Path::new(&format!("{root}/{probe}")).is_file() {
+                return Some(root);
+            }
+            eprintln!("skipped: RETICLE_CHIPDB is `{root}` but has no `{probe}`");
+            return None;
+        }
+        let home = std::env::var("XDG_CACHE_HOME")
+            .ok()
+            .filter(|s| !s.is_empty())
+            .map(|d| format!("{d}/reticle"))
+            .or_else(|| {
+                std::env::var("HOME")
+                    .ok()
+                    .map(|h| format!("{h}/.cache/reticle"))
+            })?;
+        let dir = format!("{home}/prjxray-db/0a0addedd73e7e4139d52a6d8db4258763e0f1f3");
+        if Path::new(&format!("{dir}/{probe}")).is_file() {
+            Some(dir)
+        } else {
+            eprintln!(
+                "skipped: needs a Project X-Ray database; run `reticle fetch prjxray-db` \
+                 or set RETICLE_CHIPDB"
+            );
+            None
+        }
+    }
+
+    /// What the loader makes of a `DSP_R` tile today, measured, and what
+    /// the database holds for one. This pins the reasons
+    /// `fpga::xray::dsp_refusal` gives: if a later change teaches the
+    /// loader a `dsp` site, or a newer database documents `USE_MULT`,
+    /// this fails and the refusal is worth revisiting.
+    #[test]
+    fn the_fabric_has_no_dsp_site_and_the_database_no_use_mult() {
+        let Some(root) = chipdb() else { return };
+        let db = XrayDatabase::open(&DiskFiles, &root, "xc7a35t-cpg236", &XrayOptions::new())
+            .expect("the database opens");
+        // Columns 24 to 32 of the bottom rows: slices either side of the
+        // `DSP_R` column at grid x 28, whose tiles start at y 5.
+        let mut options = XrayOptions::new();
+        options.region = Some(GridRegion::new(24, 0, 32, 12));
+        let fabric = db.load(&DiskFiles, &options).expect("the region loads");
+        let graph = fabric.arch.build_graph();
+        assert_eq!(
+            graph.sites.iter().filter(|s| s.kind == "dsp").count(),
+            0,
+            "the loader now makes a `dsp` site; the refusal in fpga::xray::dsp is stale"
+        );
+        let dsp_tiles: Vec<_> = graph.sites.iter().filter(|s| s.tile.0 == 28).collect();
+        assert!(!dsp_tiles.is_empty(), "the region holds the DSP column");
+        for site in &dsp_tiles {
+            assert_eq!(site.bel, "DSP48", "{}", site.name);
+            assert_eq!(site.kind, "other", "{}", site.name);
+            assert!(site.pins.is_empty(), "{} has pins now", site.name);
+        }
+        for side in ["l", "r"] {
+            let path = format!("{root}/artix7/segbits_dsp_{side}.db");
+            let text = std::fs::read_to_string(&path).expect("the DSP segbits are fetched");
+            assert!(
+                text.contains(".ZMREG[0] "),
+                "{path} documents the registers"
+            );
+            assert!(
+                !text.contains("USE_MULT"),
+                "{path} documents USE_MULT now; the refusal in fpga::xray::dsp is stale"
+            );
+            let ppips = format!("{root}/artix7/ppips_dsp_{side}.db");
+            let text = std::fs::read_to_string(&ppips).expect("the DSP ppips are fetched");
+            assert!(text.contains(".DSP_0_A0.DSP_IMUX23_0 always"), "{ppips}");
+        }
+    }
+}
