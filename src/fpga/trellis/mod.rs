@@ -894,6 +894,84 @@ impl TrellisDatabase {
             }
         }
 
+        // ---- the carry chain ----
+        //
+        // A `CCU2C` is a slice in `CCU2` mode: two bits of arithmetic out
+        // of the slice's own two lookup tables, which it consumes, and a
+        // carry that enters on dedicated metal from the slice before it.
+        // `CARRY_PINS` has the wiring and `docs/fpga-trellis.md` the
+        // provenance. Unlike a distributed RAM's, the mode is **per
+        // slice**: four separate two-bit fields, so a tile may hold one
+        // carry cell or four, in any combination, beside ordinary logic in
+        // the slices that are not in that mode.
+        let mut carries: BTreeMap<(usize, String), CarryBits> = BTreeMap::new();
+        for (name, index) in &type_of {
+            let Some(offset) = layout
+                .get(name)
+                .and_then(|w| w.iter().find(|(ty, _)| ty == LOGIC_TILE))
+                .map(|(_, offset)| *offset)
+            else {
+                continue;
+            };
+            let Some(db) = self.types.get(LOGIC_TILE) else {
+                continue;
+            };
+            let at = |field: &str, value: &str| -> Vec<ConfigBit> {
+                db.enum_bits(field, value)
+                    .into_iter()
+                    .flatten()
+                    .filter(|bit| !bit.inverted)
+                    .map(|bit| ConfigBit::new(offset + bit.frame, bit.bit))
+                    .collect()
+            };
+            for slice in 0..SLICES_PER_TILE {
+                let letter = slice_letter(slice);
+                let bel = format!("SLICE{letter}.{CARRY_BEL}");
+                let pins = carry_pins(slice);
+                if pins
+                    .iter()
+                    .any(|(_, wire)| !arch.tile_types[*index].has_wire(wire))
+                {
+                    continue;
+                }
+                // The two lookup tables a carry cell takes over *are* its
+                // propagate and its generate, so a tile whose lookup
+                // tables this loader did not declare cannot hold one: the
+                // `INIT` words would have nowhere to go.
+                let blocks: Vec<String> = (0..2)
+                    .map(|half| format!("SLICE{letter}.K{half}"))
+                    .collect();
+                if blocks
+                    .iter()
+                    .any(|b| !luts.contains_key(&(*index, b.clone())))
+                {
+                    continue;
+                }
+                let (field, value) = CARRY_MODE;
+                let mode = at(&format!("SLICE{letter}.{field}"), value);
+                let inject = [
+                    at(&format!("SLICE{letter}.{}", carry_inject(0)), CARRY_OFF),
+                    at(&format!("SLICE{letter}.{}", carry_inject(1)), CARRY_OFF),
+                ];
+                if mode.is_empty() || inject.iter().any(Vec::is_empty) {
+                    continue;
+                }
+                let mut decl = BelDecl::new(&bel, "carry");
+                decl.pins = pins
+                    .iter()
+                    .map(|(role, wire)| {
+                        (
+                            (*role).to_owned(),
+                            super::arch::WireRef::local(wire.clone()),
+                        )
+                    })
+                    .collect();
+                decl.blocks = blocks;
+                arch.tile_types[*index].bels.push(decl);
+                carries.insert((*index, bel), CarryBits { mode, inject });
+            }
+        }
+
         // ---- the distributed RAM ----
         //
         // A `TRELLIS_DPR16X4` is not a bel of the silicon: it is three
@@ -1343,6 +1421,7 @@ impl TrellisDatabase {
             clear_collisions,
             luts: luts.len(),
             ffs: ffs.len(),
+            carries: carries.len(),
             dprams: dprams.len(),
             brams: brams.len(),
             clock_networks: clocks.indices.len(),
@@ -1359,6 +1438,7 @@ impl TrellisDatabase {
             io,
             luts,
             ffs,
+            carries,
             dprams,
             brams,
             clocks,
@@ -1600,6 +1680,18 @@ impl TrellisDatabase {
     }
 }
 
+/// What [`TrellisFabric::configure_carry`] wrote.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct CarryConfig {
+    /// How many carry cells were configured.
+    pub cells: usize,
+    /// The sum arcs a carry cell's `INJECT1` bits select whether or not
+    /// the router asked for them, as `(sink, source)` in the positions a
+    /// decoding resolves to; see
+    /// [`TrellisFabric::configure_carry`].
+    pub sums: BTreeSet<(ResolvedWire, ResolvedWire)>,
+}
+
 /// What a load measured, so the numbers in a document cannot drift from
 /// the database.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -1656,6 +1748,9 @@ pub struct TrellisStats {
     pub luts: usize,
     /// Flip-flops that became a bel.
     pub ffs: usize,
+    /// Carry cells declared, by `(Arch` tile type, bel name)`: four per
+    /// composition that holds a `PLC2`, one per slice.
+    pub carries: usize,
     /// Tile *types* that can hold a distributed RAM, which on this family
     /// is every composition that contains a `PLC2`. One `lutram` bel each,
     /// and so one site per logic tile of the die.
@@ -1707,6 +1802,7 @@ impl TrellisStats {
         line("of those, ambiguous", self.clear_collisions as u64);
         line("lookup tables", self.luts as u64);
         line("flip-flops", self.ffs as u64);
+        line("carry cells", self.carries as u64);
         line("distributed RAM tile types", self.dprams as u64);
         line("block RAMs", self.brams as u64);
         line(
@@ -2285,6 +2381,140 @@ pub const LOGIC_TILE: &str = "PLC2";
 
 /// How many lookup tables one [`LOGIC_TILE`] offers: four slices of two.
 pub const LUTS_PER_TILE: usize = 8;
+
+/// How many slices one [`LOGIC_TILE`] holds.
+pub const SLICES_PER_TILE: usize = 4;
+
+/// The bel name a carry cell takes inside its tile type, after the
+/// slice: `SLICEA.CCU2`.
+pub const CARRY_BEL: &str = "CCU2";
+
+/// The field and value that put a slice in arithmetic mode.
+///
+/// **Two bits per slice**, and four separate fields — `SLICEA.MODE`
+/// through `SLICED.MODE` — which is the first thing that distinguishes a
+/// carry cell from a distributed RAM, whose three slices share one bit.
+/// So a logic tile holds one carry cell or four, in any combination, and
+/// ordinary logic in whichever slices are not in that mode. All three of
+/// Great Scott Gadgets' bitstreams do exactly that: 2131 slices in
+/// `CCU2` mode spread over 625 tiles.
+pub const CARRY_MODE: (&str, &str) = ("MODE", "CCU2");
+
+/// The value of `CCU2.INJECT1_<n>` a carry chain needs, which is the one
+/// that is **not** the default.
+///
+/// With `INJECT1_<n> = YES` the silicon gates the generate term away and
+/// the lane computes `propagate & carry in` — the carry chain still
+/// routes, still decodes and adds nothing. `ecppack` writes `NO` for
+/// `INJECT1_0` in **all 2131** of its carry slices without exception, and
+/// for `INJECT1_1` in all but the 248 whose upper half is unused.
+pub const CARRY_OFF: &str = "NO";
+
+/// The `CCU2.INJECT1_<half>` field of one half of a slice.
+#[must_use]
+pub fn carry_inject(half: usize) -> String {
+    format!("CCU2.INJECT1_{half}")
+}
+
+/// A carry cell's pins, role to wire, for the slice at `slice`.
+///
+/// # Where the sum comes out, which is not where a lookup table's does
+///
+/// A slice's lookup table reaches the fabric on `F<z>_SLICE`. A carry
+/// cell's sum does **not**: it comes out on `F5<l>_SLICE` for the lower
+/// half and `FX<l>_SLICE` for the upper one, which in logic mode are the
+/// slice's wide-function outputs. That is measured and not reasoned
+/// about — of the 2266 carry halves in Great Scott Gadgets' bitstreams
+/// whose `F` wire is driven at all, **every one** takes `F5<l>_SLICE` or
+/// `FX<l>_SLICE` and none takes `F<z>_SLICE`.
+///
+/// It also explains a bit that would otherwise look like a collision, and
+/// it is the **seventh** place on this part where two features share one:
+/// the pip `F<z> <- F5<l>_SLICE` and the field `INJECT1_0 = NO` are the
+/// same bit, `F8B10` in slice A. Read as logic it selects the
+/// wide-function output; read as arithmetic it ungates the carry. One
+/// fuse, one gate, two names in `bits.db` — and routing a carry cell's
+/// sum out of its slice sets exactly the bit the arithmetic needs anyway.
+///
+/// # The chain, which is metal and not interconnect
+///
+/// `ci` and `co` are dedicated wires with **no mux anywhere**:
+///
+/// ```text
+/// FCI_SLICE  <- FCI <- HFIE0000          slice A's carry in
+/// FCIB_SLICE <- FCOA_SLICE               B's, from A's
+/// FCIC_SLICE <- FCOB_SLICE
+/// FCID_SLICE <- FCOC_SLICE
+/// FCO <- FCO_SLICE,  E1_HFIE0000 <- FCO  slice D's, into the tile EAST
+/// ```
+///
+/// every one of them a `.fixed_conn`. So a chain runs A, B, C, D and then
+/// the tile **one column east in the same row** — not up a column, which
+/// is what a guess by analogy with the iCE40 would have said — and
+/// nothing on the fabric can drive a carry in. `fpga::place` reads the
+/// relationship out of those pips rather than out of this table.
+#[must_use]
+pub fn carry_pins(slice: usize) -> Vec<(&'static str, String)> {
+    let letter = slice_letter(slice);
+    let (low, high) = (slice * 2, slice * 2 + 1);
+    vec![
+        // libtrellis spells slice A's carry in and slice D's carry out
+        // without their letter, because they are the tile's own ends.
+        (
+            "ci",
+            if slice == 0 {
+                "FCI_SLICE".to_owned()
+            } else {
+                format!("FCI{letter}_SLICE")
+            },
+        ),
+        (
+            "co",
+            if slice == SLICES_PER_TILE - 1 {
+                "FCO_SLICE".to_owned()
+            } else {
+                format!("FCO{letter}_SLICE")
+            },
+        ),
+        ("a0", format!("A{low}_SLICE")),
+        ("b0", format!("B{low}_SLICE")),
+        ("s0", format!("F5{letter}_SLICE")),
+        ("a1", format!("A{high}_SLICE")),
+        ("b1", format!("B{high}_SLICE")),
+        ("s1", format!("FX{letter}_SLICE")),
+    ]
+}
+
+/// The two truth tables a carry cell's `INIT0` and `INIT1` go in, which
+/// are the slice's own lookup tables.
+#[must_use]
+pub fn carry_luts(slice: usize) -> [String; 2] {
+    let letter = slice_letter(slice);
+    [format!("SLICE{letter}.K0"), format!("SLICE{letter}.K1")]
+}
+
+/// The cell parameters carrying a carry cell's two truth tables.
+pub const CARRY_INIT: [&str; 2] = ["INIT0", "INIT1"];
+
+/// Which of a lookup table's inputs a carry cell does not use and holds
+/// **high**, as indices into [`LUT_INPUTS`].
+///
+/// `A` and `B` are the operands; `C` and `D` are not wired at all and
+/// their muxes are set to one, which is what puts the propagate in bits
+/// 15..12 of the truth table. `ecppack` sets `C<n>MUX = 1` and
+/// `D<n>MUX = 1` in **every one** of the 4262 carry halves in Great Scott
+/// Gadgets' bitstreams, without exception.
+pub const CARRY_TIED_INPUTS: [usize; 2] = [2, 3];
+
+/// Where a carry cell's bits are, for one tile type and one slice.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct CarryBits {
+    /// The bits of `SLICE<l>.MODE = CCU2`; see [`CARRY_MODE`].
+    pub mode: Vec<ConfigBit>,
+    /// The bits of `CCU2.INJECT1_<half> = NO`, lower half first; see
+    /// [`CARRY_OFF`].
+    pub inject: [Vec<ConfigBit>; 2],
+}
 
 /// The letters Project Trellis gives a lookup table's four inputs, in the
 /// order Reticle's `i0`..`i3` pin roles take.
@@ -3617,6 +3847,10 @@ pub struct TrellisFabric {
     pub luts: BTreeMap<(usize, String), LutBits>,
     /// Where each flip-flop's settings are, keyed the same way.
     pub ffs: BTreeMap<(usize, String), FfBits>,
+    /// Where each carry cell's mode and inject bits are, keyed the same
+    /// way. Its two `INIT` words live in [`TrellisFabric::luts`], because
+    /// a slice in `CCU2` mode *is* its two lookup tables.
+    pub carries: BTreeMap<(usize, String), CarryBits>,
     /// Where a distributed RAM's mode bit is, by `Arch` tile type index.
     ///
     /// One entry per tile type that can hold a [`DPRAM_BEL`]; its contents
@@ -4132,6 +4366,153 @@ impl TrellisFabric {
             done += 1;
         }
         Ok(done)
+    }
+
+    /// Writes every carry cell's settings, and returns what it wrote
+    /// and the sum arcs it claimed.
+    ///
+    /// # Everything `ecppack` writes for a `CCU2C`, in full
+    ///
+    /// Read back out of Great Scott Gadgets' own ECP5 bitstreams at the
+    /// absolute frame positions this flow computes for them. There are
+    /// **2131** carry slices in the three files — 1212 in `analyzer.bit`,
+    /// 6 in `selftest.bit`, 913 in `facedancer.bit` — so unlike the
+    /// distributed RAM this is not a thin sample.
+    ///
+    /// | | |
+    /// |---|---|
+    /// | `SLICE<l>.MODE` | `CCU2`, **two bits, per slice**: four separate fields, so a tile holds one carry cell or four. 625 tiles hold the 2131 |
+    /// | `SLICE<l>.CCU2.INJECT1_0` | `NO` in **all 2131**, without exception. `YES` is the default and gates the generate away |
+    /// | `SLICE<l>.CCU2.INJECT1_1` | `NO` in 1883, left at `YES` in the 248 whose upper half is unused — and those have `K1.INIT` at its default too, which passes the carry through untouched |
+    /// | `SLICE<l>.K0.INIT`, `K1.INIT` | the lane's truth table. Bits 15..12 are the propagate and bits 3..0 the generate, which the silicon reads as a two-input table of its own |
+    /// | `SLICE<l>.C<n>MUX`, `D<n>MUX` | `= 1` in **every one of the 4262 halves**. The operands are `A` and `B`; `C` and `D` are not wired and are forced high, which is what puts the propagate in bits 15..12 |
+    /// | `SLICE<l>.A<n>MUX`, `B<n>MUX` | `= 1` for an operand that is a constant, with the constant folded into `INIT` |
+    /// | The sum | `F<z> <- F5<l>_SLICE` for the lower half and `FX<l>_SLICE` for the upper: of the 2266 driven halves, **every one**, and none on the plain `F<z>_SLICE` a lookup table uses |
+    /// | The chain | `.fixed_conn` throughout and **no mux anywhere**: A to B to C to D inside the tile and then the tile one column **east**, same row |
+    /// | The carry in | a cell of its own at the bottom of every chain, propagate zero so that `COUT = generate` whatever `FCI` carried: `INIT = 0x0000` for a zero, `0x000A`/`0x000C` for a routed signal |
+    /// | The carry out | a cell of its own at the top, `INIT[15:12] = 0`, so its sum is the carry it was handed |
+    /// | The flip-flops of a carry slice | still in use — hundreds of `REG<n>.SD = 0` in `CCU2` slices. Arithmetic mode takes a slice's two lookup tables, **not** its registers |
+    ///
+    /// The INIT values are worth quoting, because they say what the
+    /// nibbles mean: `0x666A` is an add (propagate `a ^ b`, generate
+    /// `a`), `0x666C` the same with the generate on `b`, `0x999A` a
+    /// subtract (propagate `a ~^ b`), `0xAAA0` and `0xCCC0` one operand
+    /// and the carry, and `0x0000` a chain entry. This flow writes
+    /// `0x666A` for an adder lane and `0x0000` for a lane that enters the
+    /// chain; `src/fpga/devices/ecp5.dev` carries both.
+    ///
+    /// # What a carry cell contends for
+    ///
+    /// **Its slice's two lookup tables, and nothing else.** That is what
+    /// `BelDecl::blocks` says, and it is the vendor's own answer rather
+    /// than a cautious guess: their carry tiles have ordinary logic in the
+    /// slices that are not in `CCU2` mode and flip-flops inside the slices
+    /// that are. A carry cell takes no control wire — no clock, no reset,
+    /// no clock enable — so it does not touch the `LSR`/`CLK` budget a
+    /// distributed RAM spends.
+    ///
+    /// What it does force is **adjacency**, which nothing else on this
+    /// part does: the chain's carry has no routable path, so cell *n* + 1
+    /// must be on the very next carry site. `fpga::place` reads that
+    /// relationship off the fabric's own pips and places a chain as a
+    /// unit.
+    ///
+    /// # The arcs this returns
+    ///
+    /// `INJECT1_<n> = NO` and the pip that carries the sum out of the
+    /// slice are **the same bit**, so a decoding of the finished image
+    /// reports the pip whether or not the router used it. A carry cell
+    /// whose sum nothing reads — the lane that enters the chain, and the
+    /// lane left over at the top of an odd-width adder — therefore leaves
+    /// a bit that looks like an arc and is not one. Those arcs come back
+    /// from here so a caller can account for them, rather than being
+    /// quietly excused: see
+    /// `the_bitstream_decodes_back_to_the_arcs_the_router_chose`.
+    ///
+    /// # Errors
+    ///
+    /// [`super::bitstream::BitstreamError`] when a bit falls outside the
+    /// tile it belongs to, which would mean the grid and the database
+    /// disagree.
+    pub fn configure_carry(
+        &self,
+        design: &crate::ir::Design,
+        module: crate::ir::ModuleId,
+        netlist: &super::place::Netlist,
+        placement: &super::place::Placement,
+        graph: &super::arch::RoutingGraph,
+        bits: &mut super::bitstream::Bitstream,
+    ) -> Result<CarryConfig, super::bitstream::BitstreamError> {
+        let mut out = CarryConfig::default();
+        let Some(m) = design.modules.get(module) else {
+            return Ok(out);
+        };
+        for (index, instance) in netlist.instances.iter().enumerate() {
+            if instance.kind != "carry" {
+                continue;
+            }
+            let Some(site) = placement.site_of(index) else {
+                continue;
+            };
+            let site = &graph.sites[site];
+            let key = (site.tile_type, site.bel.clone());
+            let Some(carry) = self.carries.get(&key) else {
+                continue;
+            };
+            let Some(slice) = site
+                .bel
+                .strip_suffix(&format!(".{CARRY_BEL}"))
+                .and_then(|s| s.strip_prefix("SLICE"))
+                .and_then(|s| s.chars().next())
+                .map(|letter| usize::from(letter as u8 - b'A'))
+                .filter(|slice| *slice < SLICES_PER_TILE)
+            else {
+                continue;
+            };
+            for at in &carry.mode {
+                bits.set(site.tile, *at)?;
+            }
+            let params = m.cells.get(instance.cell).map(|cell| &cell.params);
+            for (half, lut) in carry_luts(slice).into_iter().enumerate() {
+                // The generate term is gated away unless this is written,
+                // and the carry chain adds nothing without it.
+                for at in &carry.inject[half] {
+                    bits.set(site.tile, *at)?;
+                }
+                let Some(lut) = self.luts.get(&(site.tile_type, lut)) else {
+                    continue;
+                };
+                // `C` and `D` are not wired: forcing them high is what
+                // makes bits 15..12 of the table the propagate.
+                for input in CARRY_TIED_INPUTS {
+                    for at in lut.tie_high.get(input).into_iter().flatten() {
+                        bits.set(site.tile, *at)?;
+                    }
+                }
+                let init = params.and_then(|p| p.get(CARRY_INIT[half]));
+                for (bit, groups) in lut.init_zero.iter().enumerate() {
+                    let value =
+                        super::bitstream::param_bit(init, u32::try_from(bit).unwrap_or(u32::MAX));
+                    let groups = if value { &lut.init_one[bit] } else { groups };
+                    for at in groups {
+                        bits.set(site.tile, *at)?;
+                    }
+                }
+            }
+            // Both sum pips, routed or not; see this method's own docs.
+            for role in ["s0", "s1"] {
+                for node in site.pin_nodes(role) {
+                    let wire = graph.wire(node);
+                    for pip in graph.outgoing(node) {
+                        let to = graph.wire(graph.pip(*pip).to);
+                        out.sums
+                            .insert(((to.name.clone(), to.tile), (wire.name.clone(), wire.tile)));
+                    }
+                }
+            }
+            out.cells += 1;
+        }
+        Ok(out)
     }
 
     /// Writes every block RAM's settings, and returns the initialisation

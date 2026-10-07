@@ -11,6 +11,147 @@
         "led": { "direction": "output", "bits": [ 4 ] }
       },
       "cells": {
+        "inc$carry0": {
+          "hide_name": 0,
+          "type": "CCU2C",
+          "parameters": {
+            "INIT0": 0,
+            "INIT1": 26218,
+            "INJECT1_0": "NO",
+            "INJECT1_1": "NO"
+          },
+          "attributes": {},
+          "port_directions": {
+            "A1": "input",
+            "B1": "input",
+            "S1": "output",
+            "COUT": "output"
+          },
+          "connections": {
+            "A1": [ 8 ],
+            "B1": [ "1" ],
+            "S1": [ 15 ],
+            "COUT": [ 23 ]
+          }
+        },
+        "inc$carry1": {
+          "hide_name": 0,
+          "type": "CCU2C",
+          "parameters": {
+            "INIT0": 26218,
+            "INIT1": 26218,
+            "INJECT1_0": "NO",
+            "INJECT1_1": "NO"
+          },
+          "attributes": {},
+          "port_directions": {
+            "A0": "input",
+            "B0": "input",
+            "A1": "input",
+            "B1": "input",
+            "CIN": "input",
+            "S0": "output",
+            "S1": "output",
+            "COUT": "output"
+          },
+          "connections": {
+            "A0": [ 9 ],
+            "B0": [ "0" ],
+            "A1": [ 10 ],
+            "B1": [ "0" ],
+            "CIN": [ 23 ],
+            "S0": [ 16 ],
+            "S1": [ 17 ],
+            "COUT": [ 24 ]
+          }
+        },
+        "inc$carry2": {
+          "hide_name": 0,
+          "type": "CCU2C",
+          "parameters": {
+            "INIT0": 26218,
+            "INIT1": 26218,
+            "INJECT1_0": "NO",
+            "INJECT1_1": "NO"
+          },
+          "attributes": {},
+          "port_directions": {
+            "A0": "input",
+            "B0": "input",
+            "A1": "input",
+            "B1": "input",
+            "CIN": "input",
+            "S0": "output",
+            "S1": "output",
+            "COUT": "output"
+          },
+          "connections": {
+            "A0": [ 11 ],
+            "B0": [ "0" ],
+            "A1": [ 12 ],
+            "B1": [ "0" ],
+            "CIN": [ 24 ],
+            "S0": [ 18 ],
+            "S1": [ 19 ],
+            "COUT": [ 25 ]
+          }
+        },
+        "inc$carry3": {
+          "hide_name": 0,
+          "type": "CCU2C",
+          "parameters": {
+            "INIT0": 26218,
+            "INIT1": 26218,
+            "INJECT1_0": "NO",
+            "INJECT1_1": "NO"
+          },
+          "attributes": {},
+          "port_directions": {
+            "A0": "input",
+            "B0": "input",
+            "A1": "input",
+            "B1": "input",
+            "CIN": "input",
+            "S0": "output",
+            "S1": "output",
+            "COUT": "output"
+          },
+          "connections": {
+            "A0": [ 13 ],
+            "B0": [ "0" ],
+            "A1": [ 14 ],
+            "B1": [ "0" ],
+            "CIN": [ 25 ],
+            "S0": [ 20 ],
+            "S1": [ 21 ],
+            "COUT": [ 26 ]
+          }
+        },
+        "inc$carry4": {
+          "hide_name": 0,
+          "type": "CCU2C",
+          "parameters": {
+            "INIT0": 26218,
+            "INIT1": 0,
+            "INJECT1_0": "NO",
+            "INJECT1_1": "NO"
+          },
+          "attributes": {},
+          "port_directions": {
+            "A0": "input",
+            "B0": "input",
+            "CIN": "input",
+            "S0": "output",
+            "COUT": "output"
+          },
+          "connections": {
+            "A0": [ 7 ],
+            "B0": [ "0" ],
+            "CIN": [ 26 ],
+            "S0": [ 22 ],
+            "COUT": [ 27 ]
+          }
+        },
         "clk$io0": {
           "hide_name": 0,
           "type": "TRELLIS_IO",
@@ -88,227 +229,7 @@
           "connections": {
             "CLKI": [ 5 ],
             "CE": [ "1" ],
-            "CLKO": [ 23 ]
-          }
-        },
-        "$lut10": {
-          "hide_name": 1,
-          "type": "LUT4",
-          "parameters": {
-            "INIT": 32768
-          },
-          "attributes": {},
-          "port_directions": {
-            "A": "input",
-            "B": "input",
-            "C": "input",
-            "D": "input",
-            "Z": "output"
-          },
-          "connections": {
-            "A": [ 8 ],
-            "B": [ 9 ],
-            "C": [ 10 ],
-            "D": [ 11 ],
-            "Z": [ 24 ]
-          }
-        },
-        "$lut11": {
-          "hide_name": 1,
-          "type": "LUT4",
-          "parameters": {
-            "INIT": 32768
-          },
-          "attributes": {},
-          "port_directions": {
-            "A": "input",
-            "B": "input",
-            "C": "input",
-            "D": "input",
-            "Z": "output"
-          },
-          "connections": {
-            "A": [ 12 ],
-            "B": [ 13 ],
-            "C": [ 14 ],
-            "D": [ 24 ],
-            "Z": [ 25 ]
-          }
-        },
-        "$lut12": {
-          "hide_name": 1,
-          "type": "LUT4",
-          "parameters": {
-            "INIT": 26214
-          },
-          "attributes": {},
-          "port_directions": {
-            "A": "input",
-            "B": "input",
-            "C": "input",
-            "D": "input",
-            "Z": "output"
-          },
-          "connections": {
-            "A": [ 7 ],
-            "B": [ 25 ],
-            "C": [ "0" ],
-            "D": [ "0" ],
-            "Z": [ 22 ]
-          }
-        },
-        "$lut13": {
-          "hide_name": 1,
-          "type": "LUT4",
-          "parameters": {
-            "INIT": 30960
-          },
-          "attributes": {},
-          "port_directions": {
-            "A": "input",
-            "B": "input",
-            "C": "input",
-            "D": "input",
-            "Z": "output"
-          },
-          "connections": {
-            "A": [ 12 ],
-            "B": [ 13 ],
-            "C": [ 14 ],
-            "D": [ 24 ],
-            "Z": [ 21 ]
-          }
-        },
-        "$lut14": {
-          "hide_name": 1,
-          "type": "LUT4",
-          "parameters": {
-            "INIT": 27756
-          },
-          "attributes": {},
-          "port_directions": {
-            "A": "input",
-            "B": "input",
-            "C": "input",
-            "D": "input",
-            "Z": "output"
-          },
-          "connections": {
-            "A": [ 12 ],
-            "B": [ 13 ],
-            "C": [ 24 ],
-            "D": [ "0" ],
-            "Z": [ 20 ]
-          }
-        },
-        "$lut15": {
-          "hide_name": 1,
-          "type": "LUT4",
-          "parameters": {
-            "INIT": 26214
-          },
-          "attributes": {},
-          "port_directions": {
-            "A": "input",
-            "B": "input",
-            "C": "input",
-            "D": "input",
-            "Z": "output"
-          },
-          "connections": {
-            "A": [ 12 ],
-            "B": [ 24 ],
-            "C": [ "0" ],
-            "D": [ "0" ],
-            "Z": [ 19 ]
-          }
-        },
-        "$lut16": {
-          "hide_name": 1,
-          "type": "LUT4",
-          "parameters": {
-            "INIT": 32640
-          },
-          "attributes": {},
-          "port_directions": {
-            "A": "input",
-            "B": "input",
-            "C": "input",
-            "D": "input",
-            "Z": "output"
-          },
-          "connections": {
-            "A": [ 8 ],
-            "B": [ 9 ],
-            "C": [ 10 ],
-            "D": [ 11 ],
-            "Z": [ 18 ]
-          }
-        },
-        "$lut17": {
-          "hide_name": 1,
-          "type": "LUT4",
-          "parameters": {
-            "INIT": 30840
-          },
-          "attributes": {},
-          "port_directions": {
-            "A": "input",
-            "B": "input",
-            "C": "input",
-            "D": "input",
-            "Z": "output"
-          },
-          "connections": {
-            "A": [ 8 ],
-            "B": [ 9 ],
-            "C": [ 10 ],
-            "D": [ "0" ],
-            "Z": [ 17 ]
-          }
-        },
-        "$lut18": {
-          "hide_name": 1,
-          "type": "LUT4",
-          "parameters": {
-            "INIT": 26214
-          },
-          "attributes": {},
-          "port_directions": {
-            "A": "input",
-            "B": "input",
-            "C": "input",
-            "D": "input",
-            "Z": "output"
-          },
-          "connections": {
-            "A": [ 8 ],
-            "B": [ 9 ],
-            "C": [ "0" ],
-            "D": [ "0" ],
-            "Z": [ 16 ]
-          }
-        },
-        "$lut19": {
-          "hide_name": 1,
-          "type": "LUT4",
-          "parameters": {
-            "INIT": 21845
-          },
-          "attributes": {},
-          "port_directions": {
-            "A": "input",
-            "B": "input",
-            "C": "input",
-            "D": "input",
-            "Z": "output"
-          },
-          "connections": {
-            "A": [ 8 ],
-            "B": [ "0" ],
-            "C": [ "0" ],
-            "D": [ "0" ],
-            "Z": [ 15 ]
+            "CLKO": [ 28 ]
           }
         },
         "counter$ff0": {
@@ -332,7 +253,7 @@
             "Q": "output"
           },
           "connections": {
-            "CLK": [ 23 ],
+            "CLK": [ 28 ],
             "DI": [ 15 ],
             "CE": [ "1" ],
             "LSR": [ 6 ],
@@ -360,7 +281,7 @@
             "Q": "output"
           },
           "connections": {
-            "CLK": [ 23 ],
+            "CLK": [ 28 ],
             "DI": [ 16 ],
             "CE": [ "1" ],
             "LSR": [ 6 ],
@@ -388,7 +309,7 @@
             "Q": "output"
           },
           "connections": {
-            "CLK": [ 23 ],
+            "CLK": [ 28 ],
             "DI": [ 17 ],
             "CE": [ "1" ],
             "LSR": [ 6 ],
@@ -416,7 +337,7 @@
             "Q": "output"
           },
           "connections": {
-            "CLK": [ 23 ],
+            "CLK": [ 28 ],
             "DI": [ 18 ],
             "CE": [ "1" ],
             "LSR": [ 6 ],
@@ -444,7 +365,7 @@
             "Q": "output"
           },
           "connections": {
-            "CLK": [ 23 ],
+            "CLK": [ 28 ],
             "DI": [ 19 ],
             "CE": [ "1" ],
             "LSR": [ 6 ],
@@ -472,7 +393,7 @@
             "Q": "output"
           },
           "connections": {
-            "CLK": [ 23 ],
+            "CLK": [ 28 ],
             "DI": [ 20 ],
             "CE": [ "1" ],
             "LSR": [ 6 ],
@@ -500,7 +421,7 @@
             "Q": "output"
           },
           "connections": {
-            "CLK": [ 23 ],
+            "CLK": [ 28 ],
             "DI": [ 21 ],
             "CE": [ "1" ],
             "LSR": [ 6 ],
@@ -528,7 +449,7 @@
             "Q": "output"
           },
           "connections": {
-            "CLK": [ 23 ],
+            "CLK": [ 28 ],
             "DI": [ 22 ],
             "CE": [ "1" ],
             "LSR": [ 6 ],
@@ -560,6 +481,71 @@
         "next": {
           "hide_name": 0,
           "bits": [ 15, 16, 17, 18, 19, 20, 21, 22 ],
+          "attributes": {}
+        },
+        "inc$s0_1": {
+          "hide_name": 0,
+          "bits": [ 15 ],
+          "attributes": {}
+        },
+        "inc$co0": {
+          "hide_name": 0,
+          "bits": [ 23 ],
+          "attributes": {}
+        },
+        "inc$s1_0": {
+          "hide_name": 0,
+          "bits": [ 16 ],
+          "attributes": {}
+        },
+        "inc$s1_1": {
+          "hide_name": 0,
+          "bits": [ 17 ],
+          "attributes": {}
+        },
+        "inc$co1": {
+          "hide_name": 0,
+          "bits": [ 24 ],
+          "attributes": {}
+        },
+        "inc$s2_0": {
+          "hide_name": 0,
+          "bits": [ 18 ],
+          "attributes": {}
+        },
+        "inc$s2_1": {
+          "hide_name": 0,
+          "bits": [ 19 ],
+          "attributes": {}
+        },
+        "inc$co2": {
+          "hide_name": 0,
+          "bits": [ 25 ],
+          "attributes": {}
+        },
+        "inc$s3_0": {
+          "hide_name": 0,
+          "bits": [ 20 ],
+          "attributes": {}
+        },
+        "inc$s3_1": {
+          "hide_name": 0,
+          "bits": [ 21 ],
+          "attributes": {}
+        },
+        "inc$co3": {
+          "hide_name": 0,
+          "bits": [ 26 ],
+          "attributes": {}
+        },
+        "inc$s4_0": {
+          "hide_name": 0,
+          "bits": [ 22 ],
+          "attributes": {}
+        },
+        "inc$co4": {
+          "hide_name": 0,
+          "bits": [ 27 ],
           "attributes": {}
         },
         "clk$pad": {
@@ -594,57 +580,7 @@
         },
         "clk$gb": {
           "hide_name": 0,
-          "bits": [ 23 ],
-          "attributes": {}
-        },
-        "$lut0": {
-          "hide_name": 1,
-          "bits": [ 24 ],
-          "attributes": {}
-        },
-        "$lut1": {
-          "hide_name": 1,
-          "bits": [ 25 ],
-          "attributes": {}
-        },
-        "$lut2": {
-          "hide_name": 1,
-          "bits": [ 22 ],
-          "attributes": {}
-        },
-        "$lut3": {
-          "hide_name": 1,
-          "bits": [ 21 ],
-          "attributes": {}
-        },
-        "$lut4": {
-          "hide_name": 1,
-          "bits": [ 20 ],
-          "attributes": {}
-        },
-        "$lut5": {
-          "hide_name": 1,
-          "bits": [ 19 ],
-          "attributes": {}
-        },
-        "$lut6": {
-          "hide_name": 1,
-          "bits": [ 18 ],
-          "attributes": {}
-        },
-        "$lut7": {
-          "hide_name": 1,
-          "bits": [ 17 ],
-          "attributes": {}
-        },
-        "$lut8": {
-          "hide_name": 1,
-          "bits": [ 16 ],
-          "attributes": {}
-        },
-        "$lut9": {
-          "hide_name": 1,
-          "bits": [ 15 ],
+          "bits": [ 28 ],
           "attributes": {}
         },
         "counter$q0": {

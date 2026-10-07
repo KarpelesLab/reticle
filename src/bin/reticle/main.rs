@@ -2633,6 +2633,14 @@ fn write_ecp5_bitstream(
             design, top, &netlist, &placement, &graph, &routing, &mut tiles,
         )
         .map_err(|e| e.to_string())?;
+    // A carry cell is a slice in arithmetic mode: its two `INIT` words
+    // are the propagate and the generate, its unused inputs are forced
+    // high, and the bit that ungates its carry is the same bit as the pip
+    // that carries its sum out of the slice. See
+    // `TrellisFabric::configure_carry`.
+    let carries = fabric
+        .configure_carry(design, top, &netlist, &placement, &graph, &mut tiles)
+        .map_err(|e| e.to_string())?;
     // A distributed RAM is three slices of one logic tile, and its mode and
     // its contents are the same `INIT` words a lookup table would use; see
     // `TrellisFabric::configure_lutram`.
@@ -2743,7 +2751,13 @@ fn write_ecp5_bitstream(
         ));
     }
     let (selected, unresolved) = db.resolved_arcs(&decoded);
-    let chosen = fabric.routed_arcs(&graph, &routing);
+    let mut chosen = fabric.routed_arcs(&graph, &routing);
+    // A carry cell's `INJECT1_<n> = NO` is the *same bit* as the pip that
+    // takes its sum out of the slice, so a decoding reports that pip
+    // whether the router asked for it or not. Those arcs are accounted
+    // for here by name rather than excused: everything else must still
+    // match exactly. See `TrellisFabric::configure_carry`.
+    chosen.extend(carries.sums.iter().cloned());
     if !unresolved.is_empty() || selected != chosen {
         let extra: Vec<String> = selected
             .difference(&chosen)
@@ -2814,8 +2828,8 @@ fn write_ecp5_bitstream(
     };
     Ok(format!(
         "note: wrote {path}, {} byte(s) compressed, {} configuration bit(s) set, {pads} pad(s), \
-         {luts} lookup table(s), {ffs} flip-flop(s), {rams} distributed RAM(s) and {blocks} \
-         block RAM(s) configured, {placed}\n\
+         {luts} lookup table(s), {} carry cell(s), {ffs} flip-flop(s), {rams} distributed \
+         RAM(s) and {blocks} block RAM(s) configured, {placed}\n\
          note: routed {} of {} signal(s) with {} pip(s) over {} wire(s), and every sink was \
          walked back to its driver\n\
          {clocked}\
@@ -2826,6 +2840,7 @@ fn write_ecp5_bitstream(
          `reticle program --device <serial> {path}`\n",
         bytes.len(),
         stream.cram.count_ones(),
+        carries.cells,
         route_report.signals,
         netlist.signals.len(),
         route_report.pips,

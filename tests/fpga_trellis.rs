@@ -311,6 +311,14 @@ fn compile_all(
             &design, top, &netlist, &placement, &graph, &routing, &mut bits,
         )
         .unwrap();
+    let carries = fabric
+        .configure_carry(&design, top, &netlist, &placement, &graph, &mut bits)
+        .unwrap();
+    let mut carry_only =
+        bitstream::Bitstream::empty(bitstream::BitstreamFormat::from_arch(&fabric.arch));
+    fabric
+        .configure_carry(&design, top, &netlist, &placement, &graph, &mut carry_only)
+        .unwrap();
     let rams = fabric
         .configure_lutram(&design, top, &netlist, &placement, &graph, &mut bits)
         .unwrap();
@@ -374,6 +382,8 @@ fn compile_all(
         Routed {
             wires,
             ffs,
+            carries,
+            carry_only,
             rams,
             ram_only,
             overlaps: brams.overlaps,
@@ -400,6 +410,14 @@ struct Routed {
     wires: std::collections::BTreeSet<(Wire, Wire)>,
     /// How many flip-flops `configure_registers` wrote settings for.
     ffs: usize,
+    /// What `configure_carry` wrote, and the sum arcs it claimed: a carry
+    /// cell's `INJECT1_<n> = NO` is the same bit as the pip that takes
+    /// its sum out of the slice, so a decoding reports that pip whether
+    /// the router asked for it or not.
+    carries: reticle::fpga::trellis::CarryConfig,
+    /// That pass on its own, into an empty bitmap, for the same reason
+    /// `ram_only` exists.
+    carry_only: reticle::fpga::bitstream::Bitstream,
     /// How many distributed RAMs `configure_lutram` wrote settings for.
     rams: usize,
     /// That pass on its own, into an empty bitmap, for the same reason
@@ -443,6 +461,30 @@ struct Routed {
 /// One wire of the routing graph: its name and the position it starts in.
 #[cfg(all(feature = "verilog", feature = "synth"))]
 type Wire = (String, (u32, u32));
+
+/// The arcs a decoding of this design's bitstream must select: the ones
+/// the router chose, plus the ones a carry cell's own settings claim.
+///
+/// A `CCU2C`'s `CCU2.INJECT1_<n> = NO` and the pip that takes its sum out
+/// of the slice (`F<z> <- F5<l>_SLICE`) are **the same bit** — `F8B10` in
+/// slice A — so a decoding reports that pip whether the router asked for
+/// it or not. The lane a chain spends entering itself and the lane left
+/// over at the top of an odd-width adder both have sums nothing reads,
+/// and both leave that bit set.
+///
+/// This is an addition and not a relaxation: every one of these arcs is
+/// named, from the placement, by `configure_carry`, and the comparison is
+/// still an equality. A bit no carry cell accounts for still fails.
+/// `docs/fpga-trellis.md` has the measurement.
+#[cfg(all(feature = "verilog", feature = "synth"))]
+fn chosen_with_carry(
+    fabric: &trellis::TrellisFabric,
+    routed: &Routed,
+) -> std::collections::BTreeSet<(trellis::ResolvedWire, trellis::ResolvedWire)> {
+    let mut out = fabric.routed_arcs(&routed.graph, &routed.routing);
+    out.extend(routed.carries.sums.iter().cloned());
+    out
+}
 
 /// Whether Lattice's own bitstreams for this board contain a distributed
 /// RAM at all, asked because the answer decides how strong the claim in
@@ -1309,7 +1351,7 @@ fn a_block_ram_places_routes_and_every_bit_of_it_decodes() {
     assert!(unresolved.is_empty(), "{unresolved:?}");
     assert_eq!(
         selected,
-        fabric.routed_arcs(&routed.graph, &routed.routing),
+        chosen_with_carry(&fabric, &routed),
         "the bits select connections the router did not choose, or miss ones it did"
     );
     // And the decoding says a block RAM is in `DP16KD` mode, in each of the
@@ -1542,7 +1584,7 @@ fn a_distributed_ram_places_routes_and_every_bit_of_it_decodes() {
         assert!(unresolved.is_empty(), "depth {depth}: {unresolved:?}");
         assert_eq!(
             selected,
-            fabric.routed_arcs(&routed.graph, &routed.routing),
+            chosen_with_carry(&fabric, &routed),
             "depth {depth}: the bits select connections the router did not choose, or miss ones \
              it did"
         );
@@ -1677,8 +1719,17 @@ fn a_distributed_ram_and_two_reset_domains_share_a_die() {
     }
     assert_eq!(sharing_the_write_clock, 0);
     // The point of the weak rule: a RAM's tile keeps its flip-flops.
+    //
+    // The bound was 16 until the ECP5 learnt its carry chain, and it is 8
+    // now because **this design got smaller**: its four FIFOs' pointers
+    // used to be lookup tables and flip-flops spread through the RAM
+    // tiles and are a `CCU2C` chain of their own now, so the annealer has
+    // less to pack in beside a RAM. 13 land there as this is written.
+    // What the assertion is for has not changed and is not weakened: a
+    // rule that emptied a RAM's tile would route too and would be the
+    // wrong rule.
     assert!(
-        flops_in_ram_tiles >= 16,
+        flops_in_ram_tiles >= 8,
         "only {flops_in_ram_tiles} flip-flop(s) landed in a RAM's tile. A rule that emptied a \
          RAM's tile would route too, and it would be the wrong rule: `ecppack` puts a flip-flop \
          in 79 of the 111 RAM tiles of this board's own bitstreams"
@@ -1721,8 +1772,12 @@ fn a_distributed_ram_and_two_reset_domains_share_a_die() {
         .collect();
     assert_eq!(
         tiles.len(),
-        65,
-        "logic tiles the design occupies. **This was 57 under the die-wide annealing schedule**, \
+        59,
+        "logic tiles the design occupies. **This was 65 before the ECP5 inferred a carry chain**, \
+         and the six it lost are the four FIFOs' pointers: a `cnt + 1` used to be lookup tables \
+         and an XOR per bit and is three `CCU2C` now, so the design has fewer cells to pack. \
+         \
+         Before that it was 57 under the die-wide annealing schedule, \
          and the eight extra tiles are a gain and not a loss: the same design's wirelength went \
          from 2668 to 1289 and its routing from 6790 pips to 6396, because the old annealer \
          improved nothing at all on this design and the placement it kept was the legaliser's, \
@@ -1751,7 +1806,7 @@ fn a_distributed_ram_and_two_reset_domains_share_a_die() {
     assert!(unresolved.is_empty(), "{unresolved:?}");
     assert_eq!(
         selected,
-        fabric.routed_arcs(&routed.graph, &routed.routing),
+        chosen_with_carry(&fabric, &routed),
         "the bits select connections the router did not choose, or miss ones it did"
     );
     assert!(routed.dropped.is_empty(), "{:?}", routed.dropped);
@@ -1896,6 +1951,13 @@ fn the_database_describes_one_part_of_the_ecp5_family() {
             // between them, and only the four that carry a block's 116
             // `.fixed_conn`s get a bel; see `trellis::BramSite`.
             ("bram".to_owned(), 56),
+            // Four carry cells per logic tile, one per slice, and 3036
+            // tiles: a `CCU2C` is **one** slice, where a distributed RAM
+            // is three, because `SLICE<l>.MODE = CCU2` is four separate
+            // two-bit fields where `DPRAM`/`RAMW` is one shared bit. All
+            // three of the vendor's own bitstreams put one, two, three or
+            // four of them in a tile. See `trellis::CARRY_MODE`.
+            ("carry".to_owned(), 12_144),
             ("ff".to_owned(), 24_288),
             ("gb".to_owned(), 56),
             // One `io` site per ball the package names, now that all four
@@ -5597,7 +5659,7 @@ fn the_bidirectional_design_routes_and_configures_what_its_header_promises() {
     assert!(decoded.bits > 2000, "{} set bit(s)", decoded.bits);
     let (selected, unresolved) = db.resolved_arcs(&decoded);
     assert!(unresolved.is_empty(), "{unresolved:?}");
-    assert_eq!(selected, fabric.routed_arcs(&routed.graph, &routed.routing));
+    assert_eq!(selected, chosen_with_carry(&fabric, &routed));
     // E13's own settings, read back out of the finished image through the
     // database rather than out of the pass that wrote them.
     let mine: Vec<(&str, &str)> = decoded
@@ -5971,7 +6033,7 @@ fn the_bidirectional_bus_routes_and_configures_what_its_header_promises() {
     );
     let (selected, unresolved) = db.resolved_arcs(&decoded);
     assert!(unresolved.is_empty(), "{unresolved:?}");
-    assert_eq!(selected, fabric.routed_arcs(&routed.graph, &routed.routing));
+    assert_eq!(selected, chosen_with_carry(&fabric, &routed));
     // Every one of the eight, read back out of the finished image through
     // the database rather than out of the pass that wrote it — which for
     // every one of the three tiles means both halves of a pair at once, and is
@@ -6231,7 +6293,7 @@ fn the_target_ulpi_design_routes_and_configures_what_its_header_promises() {
     );
     let (selected, unresolved) = db.resolved_arcs(&decoded);
     assert!(unresolved.is_empty(), "{unresolved:?}");
-    assert_eq!(selected, fabric.routed_arcs(&routed.graph, &routed.routing));
+    assert_eq!(selected, chosen_with_carry(&fabric, &routed));
 
     // Every ball read back out of the finished image rather than out of the
     // pass that wrote it. An **output** is allowed either spelling, because a

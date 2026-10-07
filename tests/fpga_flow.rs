@@ -289,7 +289,13 @@ fn every_layer_of_the_flow_is_exercised() {
         // no distributed RAM is flip-flops and a read multiplexer.
         ("logicram_ice40", &["SB_DFFE", "SB_LUT4", "SB_IO"]),
         ("carry_ice40", &["SB_CARRY", "SB_LUT4", "SB_DFF"]),
-        ("blinky_ecp5", &["LUT4", "TRELLIS_FF", "TRELLIS_IO", "DCCA"]),
+        // A counter, so its adder is the ECP5's own carry chain and
+        // there is no `LUT4` left in it at all: a `CCU2C` is the
+        // propagate and the generate as well as the sum.
+        (
+            "blinky_ecp5",
+            &["CCU2C", "TRELLIS_FF", "TRELLIS_IO", "DCCA"],
+        ),
         ("ram_ecp5", &["DP16KD", "TRELLIS_IO"]),
         // The same memory on a family that has one.
         ("logicram_ecp5", &["TRELLIS_DPR16X4", "TRELLIS_IO"]),
