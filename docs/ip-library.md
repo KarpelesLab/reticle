@@ -1276,6 +1276,16 @@ iCE40's is 9 and ChaCha20's quarter round is **87** where an iCE40's is 5.
 what stands between every arithmetic block in this library and an ECP5.** It is
 a `src/` change and this round reports it rather than making it.
 
+**It has been made since.** `src/fpga/devices/ecp5.dev` gives `CCU2C` a port
+map now and `src/fpga/trellis` has 12 144 `carry` sites, so the two numbers
+this paragraph turns on are **7 and 4** rather than 39 and 87, and forty-four
+ECP5 rows of the footprint table moved with them.
+`docs/fpga-trellis.md`'s first section is the account, including what
+`ecppack` writes for a `CCU2C` over 2131 instances and which way its chain
+runs. The paragraph above is left as it was written because the diagnosis it
+makes — two populations of command, one with adders in it and one without —
+is the reasoning that identified the cause, and it is the useful part.
+
 **Three: a real throughput figure, and the bottleneck.** These are good although
 the answers are not, because a rate is a cycle count and the cycle count is the
 half that works. SHA-256 hashing sixteen mebibytes of zeros it makes itself:
@@ -2455,26 +2465,37 @@ twenty-odd levels of logic; on the iCE40 it is **depth 8**, because
 **The ECP5 was 87 too, and it is 4.** That row used to say what this
 paragraph said next — that `src/fpga/trellis` inferred no `CCU2C` and
 every arithmetic block in the table paid for it — and the gap is closed.
-Thirty-nine ECP5 rows moved and no other row in the table moved at all,
-which is what a change confined to one device file and one mapping path
-should look like. The four the note named:
+**Forty-four ECP5 rows moved and no other row in the table moved at
+all**, which is what a change confined to one device file and one mapping
+path should look like:
 
 | Block | Before | After |
 |---|---|---|
 | `chacha20_core` | 5834 LUT4, depth **87** | 547 CCU2C + 3031 LUT4, depth **4** |
 | `sha256_core` | 3041 LUT4, depth **39** | 314 CCU2C + 1686 LUT4, depth **7** |
+| `inflate_adler` | 152 LUT4, depth **26** | 18 CCU2C + 90 LUT4, depth **6** |
+| `inflate` (`WRAPPER=1`) | 1894 LUT4, depth **33** | 143 CCU2C + 1617 LUT4, depth **19** |
 | `rv32i` (`REGFILE_BRAM=0`) | 2487 LUT4, depth **34** | 117 CCU2C + 2079 LUT4, depth **33** |
 | `mos6502` (`DECIMAL_MODE=1`) | 1720 LUT4, depth **16** | 119 CCU2C + 1594 LUT4, depth **16** |
 
-Two of those are the point and two are the honest limit. The crypto
-blocks are adder-bound and their depth collapses — and the ECP5 now
-comes out **shallower than the iCE40** on both (4 against 8, 7 against
-9), because a `CCU2C` computes its own sums where an `SB_CARRY` needs an
-XOR pair per bit outside it. `rv32i` and `mos6502` are not adder-bound:
-their critical paths are instruction decode and addressing, so they buy
-area (408 and 126 fewer LUT4) and a level at most. A depth figure is not
-a timing figure, and the blocks whose depth did not move are the ones
-that say so.
+The first four are the point and the last two are the honest limit. The
+adder-bound blocks' depth collapses, and the ECP5 now comes out
+**shallower than the iCE40** on every one of them — 4 against 8, 7
+against 9, 6 against 20, 19 against 31 — because a `CCU2C` computes its
+own sums where an `SB_CARRY` needs an XOR pair per bit outside it, and
+those XORs are LUT cells the mapper covers and counts.
+
+`inflate_adler` is the smallest clean measurement of the whole change,
+which is why it is in this list although it is six lines of RTL: two
+chained 17-bit modular sums, nothing else, **26 levels before and 6
+after**. It was the one block in the library where the ECP5 was deeper
+than the *generic LUT6 mapping* as well as deeper than the iCE40, and it
+is now shallower than both.
+
+`rv32i` and `mos6502` are not adder-bound: their critical paths are
+instruction decode and addressing, so they buy area (408 and 126 fewer
+LUT4) and a level at most. A depth figure is not a timing figure, and the
+blocks whose depth did not move are the ones that say so.
 
 Both blocks are also near the top of this table by area, and the reason is
 the same arithmetic. `chacha20_core` is 5834 LUT4 on the generic
@@ -2794,23 +2815,23 @@ exactly what this table is for.
 | `inflate` | `inflate_adler` | (defaults) | LUT4 | 2 x dff, 152 x lut | 26 |
 | `inflate` | `inflate_adler` | (defaults) | LUT6 | 2 x dff, 130 x lut | 20 |
 | `inflate` | `inflate_adler` | (defaults) | iCE40 HX1K | 32 x SB_CARRY, 31 x SB_DFFER, 1 x SB_DFFES, 1 x SB_GB, 44 x SB_IO, 123 x SB_LUT4 | 20 |
-| `inflate` | `inflate_adler` | (defaults) | ECP5 45F | 1 x DCCA, 152 x LUT4, 32 x TRELLIS_FF, 44 x TRELLIS_IO | 26 |
+| `inflate` | `inflate_adler` | (defaults) | ECP5 45F | 18 x CCU2C, 1 x DCCA, 90 x LUT4, 32 x TRELLIS_FF, 44 x TRELLIS_IO | 6 |
 | `inflate` | `inflate_window` | WINDOW_BITS=15 | LUT4 | 6 x dff, 157 x lut, 1 x memory 32768x8, 1 x memrd, 1 x memwr | 12 |
 | `inflate` | `inflate_window` | WINDOW_BITS=15 | LUT6 | 6 x dff, 114 x lut, 1 x memory 32768x8, 1 x memrd, 1 x memwr | 8 |
 | `inflate` | `inflate_window` | WINDOW_BITS=15 | iCE40 HX1K | 28 x SB_CARRY, 6 x SB_DFFE, 40 x SB_DFFER, 1 x SB_DFFR, 1 x SB_GB, 41 x SB_IO, 722 x SB_LUT4, 64 x SB_RAM40_4K | 12 |
-| `inflate` | `inflate_window` | WINDOW_BITS=15 | ECP5 45F | 1 x DCCA, 16 x DP16KD, 314 x LUT4, 45 x TRELLIS_FF, 41 x TRELLIS_IO | 12 |
+| `inflate` | `inflate_window` | WINDOW_BITS=15 | ECP5 45F | 16 x CCU2C, 1 x DCCA, 16 x DP16KD, 285 x LUT4, 45 x TRELLIS_FF, 41 x TRELLIS_IO | 12 |
 | `inflate` | `inflate` | WINDOW_BITS=15, WRAPPER=1 | LUT4 | 57 x dff, 1749 x lut, 1 x memory 16x6, 1 x memory 16x9, 1 x memory 288x9, 1 x memory 320x4, 1 x memory 32768x8, 1 x memory 32x5, 6 x memrd, 6 x memwr | 31 |
 | `inflate` | `inflate` | WINDOW_BITS=15, WRAPPER=1 | LUT6 | 57 x dff, 1455 x lut, 1 x memory 16x6, 1 x memory 16x9, 1 x memory 288x9, 1 x memory 320x4, 1 x memory 32768x8, 1 x memory 32x5, 6 x memrd, 6 x memwr | 26 |
 | `inflate` | `inflate` | WINDOW_BITS=15, WRAPPER=1 | iCE40 HX1K | 223 x SB_CARRY, 412 x SB_DFFE, 369 x SB_DFFER, 7 x SB_DFFES, 5 x SB_DFFR, 1 x SB_GB, 30 x SB_IO, 3271 x SB_LUT4, 67 x SB_RAM40_4K | 31 |
-| `inflate` | `inflate` | WINDOW_BITS=15, WRAPPER=1 | ECP5 45F | 1 x DCCA, 18 x DP16KD, 1894 x LUT4, 9 x TRELLIS_DPR16X4, 390 x TRELLIS_FF, 30 x TRELLIS_IO | 33 |
+| `inflate` | `inflate` | WINDOW_BITS=15, WRAPPER=1 | ECP5 45F | 143 x CCU2C, 1 x DCCA, 18 x DP16KD, 1617 x LUT4, 9 x TRELLIS_DPR16X4, 390 x TRELLIS_FF, 30 x TRELLIS_IO | 19 |
 | `inflate` | `inflate` | WINDOW_BITS=15, WRAPPER=0 | LUT4 | 55 x dff, 1576 x lut, 1 x memory 16x6, 1 x memory 16x9, 1 x memory 288x9, 1 x memory 320x4, 1 x memory 32768x8, 1 x memory 32x5, 6 x memrd, 6 x memwr | 27 |
 | `inflate` | `inflate` | WINDOW_BITS=15, WRAPPER=0 | LUT6 | 55 x dff, 1303 x lut, 1 x memory 16x6, 1 x memory 16x9, 1 x memory 288x9, 1 x memory 320x4, 1 x memory 32768x8, 1 x memory 32x5, 6 x memrd, 6 x memwr | 24 |
 | `inflate` | `inflate` | WINDOW_BITS=15, WRAPPER=0 | iCE40 HX1K | 191 x SB_CARRY, 412 x SB_DFFE, 337 x SB_DFFER, 7 x SB_DFFES, 5 x SB_DFFR, 1 x SB_GB, 30 x SB_IO, 3101 x SB_LUT4, 67 x SB_RAM40_4K | 31 |
-| `inflate` | `inflate` | WINDOW_BITS=15, WRAPPER=0 | ECP5 45F | 1 x DCCA, 18 x DP16KD, 1730 x LUT4, 9 x TRELLIS_DPR16X4, 358 x TRELLIS_FF, 30 x TRELLIS_IO | 27 |
+| `inflate` | `inflate` | WINDOW_BITS=15, WRAPPER=0 | ECP5 45F | 125 x CCU2C, 1 x DCCA, 18 x DP16KD, 1514 x LUT4, 9 x TRELLIS_DPR16X4, 358 x TRELLIS_FF, 30 x TRELLIS_IO | 19 |
 | `inflate` | `inflate` | WINDOW_BITS=10, WRAPPER=1 | LUT4 | 57 x dff, 1691 x lut, 1 x memory 1024x8, 1 x memory 16x6, 1 x memory 16x9, 1 x memory 288x9, 1 x memory 320x4, 1 x memory 32x5, 6 x memrd, 6 x memwr | 31 |
 | `inflate` | `inflate` | WINDOW_BITS=10, WRAPPER=1 | LUT6 | 57 x dff, 1423 x lut, 1 x memory 1024x8, 1 x memory 16x6, 1 x memory 16x9, 1 x memory 288x9, 1 x memory 320x4, 1 x memory 32x5, 6 x memrd, 6 x memwr | 26 |
 | `inflate` | `inflate` | WINDOW_BITS=10, WRAPPER=1 | iCE40 HX1K | 213 x SB_CARRY, 407 x SB_DFFE, 359 x SB_DFFER, 7 x SB_DFFES, 5 x SB_DFFR, 1 x SB_GB, 30 x SB_IO, 2530 x SB_LUT4, 5 x SB_RAM40_4K | 31 |
-| `inflate` | `inflate` | WINDOW_BITS=10, WRAPPER=1 | ECP5 45F | 1 x DCCA, 3 x DP16KD, 1687 x LUT4, 9 x TRELLIS_DPR16X4, 376 x TRELLIS_FF, 30 x TRELLIS_IO | 31 |
+| `inflate` | `inflate` | WINDOW_BITS=10, WRAPPER=1 | ECP5 45F | 139 x CCU2C, 1 x DCCA, 3 x DP16KD, 1420 x LUT4, 9 x TRELLIS_DPR16X4, 376 x TRELLIS_FF, 30 x TRELLIS_IO | 19 |
 <!-- end footprints -->
 
 ### Seven things writing these blocks found
