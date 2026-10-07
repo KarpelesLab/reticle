@@ -2476,21 +2476,6 @@ every arithmetic block in the table paid for it — and the gap is closed.
 | `rv32i` (`REGFILE_BRAM=0`) | 2487 LUT4, depth **34** | 117 CCU2C + 2080 LUT4, depth **33** |
 | `mos6502` (`DECIMAL_MODE=1`) | 1720 LUT4, depth **16** | 119 CCU2C + 1596 LUT4, depth **16** |
 
-**And thirty-five iCE40 rows moved by one or two cells each, with no
-depth anywhere.** That is a second thing the same round found, and it is
-worth a paragraph because it is a *correctness* fix rather than a cost.
-`cnt + 1` is an adder whose second operand is a constant, so most of its
-`b` pins are a constant **zero** — and a constant on a carry element's
-operand pin is not a wire anything routes. On an ECP5 an unrouted slice
-input reads as a **one**, so the chain computed `cnt - 1`: the design
-placed, routed and decoded perfectly and
-`testdata/fpga/cynthion/usb_ulpi_device.v` stopped enumerating on a
-Cynthion. `techcells::drive_constant_data` gives those pins a real
-driver now, on every family that has a carry element, which costs the
-one or two shared constant lookup tables these rows gained — and on the
-iCE40 it is the same latent defect being closed before anything runs
-`SB_CARRY` on a part. `docs/fpga-trellis.md` has how the board found it.
-
 The first four are the point and the last two are the honest limit. The
 adder-bound blocks' depth collapses, and the ECP5 now comes out
 **shallower than the iCE40** on every one of them — 4 against 8, 7
@@ -2509,6 +2494,21 @@ is now shallower than both.
 instruction decode and addressing, so they buy area (407 and 124 fewer
 LUT4) and a level at most. A depth figure is not a timing figure, and the
 blocks whose depth did not move are the ones that say so.
+
+**And thirty-five iCE40 rows moved by one or two cells each, with no
+depth anywhere.** That is a second thing the same round found, and it is
+worth a paragraph because it is a *correctness* fix rather than a cost.
+`cnt + 1` is an adder whose second operand is a constant, so most of its
+`b` pins are a constant **zero** — and a constant on a carry element's
+operand pin is not a wire anything routes. On an ECP5 an unrouted slice
+input reads as a **one**, so the chain computed `cnt - 1`: the design
+placed, routed and decoded perfectly and
+`testdata/fpga/cynthion/usb_ulpi_device.v` stopped enumerating on a
+Cynthion. `techcells::drive_constant_data` gives those pins a real
+driver now, on every family that has a carry element, which costs the
+one or two shared constant lookup tables these rows gained — and on the
+iCE40 it is the same latent defect being closed before anything runs
+`SB_CARRY` on a part. `docs/fpga-trellis.md` has how the board found it.
 
 Both blocks are also near the top of this table by area, and the reason is
 the same arithmetic. `chacha20_core` is 5834 LUT4 on the generic
