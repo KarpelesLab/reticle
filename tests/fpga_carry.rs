@@ -826,7 +826,10 @@ fn an_ecp5_adder_costs_one_ccu2c_per_two_bits_and_no_lookup_table() {
         assert_eq!(report.lut_depth, 0);
         let chain = &report.primitives.carry_chains[0];
         assert_eq!(chain.primitive, "CCU2C");
-        assert_eq!((chain.width, chain.primitives), (width, instances as u32));
+        assert_eq!(
+            (chain.width, chain.primitives),
+            (width, u32::try_from(instances).unwrap())
+        );
     }
     // A subtract still goes through lookup tables. The element can do one
     // — `ecppack` writes INIT 0x999A for a subtract bit, with the
