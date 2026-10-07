@@ -243,6 +243,19 @@ where the doctrine and the provenance live, including which facts came out
 of a document and which were confirmed against a second running
 implementation.
 
+[`ip/bus/uart/README.md`](../ip/bus/uart/README.md) is the ninth, and it is
+the only one so far whose subject is a **shape** rather than a protocol.
+The block is eight modules in two layers because Verilog-2005 has no
+default for a port and five designs in this repository instantiate the
+three that were there first: a character format a USB host chooses cannot
+be a parameter, a parameter is the only thing that can keep an existing
+instantiation meaning what it meant, so the package has both and one
+implementation underneath. That page is also where this library first had
+to write down **what a loopback cannot see** — a transmitter sending one
+stop bit where two were asked for is invisible to any receiver, because a
+receiver samples the first stop bit and nothing after it — and it says
+which three mutations were run to establish that rather than assert it.
+
 `usb_host_ulpi`'s fourth confidence level is **CHECKED** in a different
 sense from `usb_cdc_acm`'s: not "a host did this" but "**our host did this
 to our own device**", which is a real test and a smaller claim.
