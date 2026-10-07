@@ -20,6 +20,7 @@
 //! | `sha256_takes_the_same_cycles_...`, `chacha20_takes_the_same_cycles_...` | the cycle count of both crypto blocks is **measured** to be independent of the message and of the key |
 //! | `inflate_decompresses_the_compcol_corpus` | 123 DEFLATE and zlib streams a second, independent compression library produced are decompressed byte for byte, under four different consumers |
 //! | `inflate_reports_every_malformed_stream`, `inflate_refuses_or_decodes_every_single_byte_corruption`, `inflate_reports_every_truncation` | every malformed input is **reported** — 21 hand-built streams, 482 corruptions and 235 truncations, and none of the 1196 runs reached its loop bound |
+//! | `a_streams_ready_is_a_function_of_registers` | every block with a ready/valid input stream has an `in_ready` the timing graph shows depends on **no input port**, which is the rule `ip/crypto/chacha20`'s header states and nothing used to check |
 //! | `axil_gpio_matches_the_axi4lite_definition` | `bus::match_ports` recognises the GPIO's bus port |
 //! | `cdc_*`, `fifo_async_*` | `timing::analyze_cdc` calls every crossing a synchroniser, never an unsynchronised one |
 //! | the rest | behaviour, driven through `sim::Simulator` |
@@ -21594,6 +21595,160 @@ fn inflate_throughput_by_block_type() {
             case.len,
             run.cycles,
             case.len as f64 / run.cycles as f64
+        );
+    }
+}
+
+/// The input ports a given output port depends on combinationally.
+///
+/// Builds the timing graph of the flattened, synthesised block and walks
+/// *backwards* from the named output port, stopping at every start
+/// point — which is either a sequential cell's output or an input port.
+/// What comes back is the names of the input ports the walk reached, so
+/// an empty answer means the output is a function of registers and
+/// constants and nothing else.
+fn combinational_inputs_of(
+    package: &str,
+    top: &str,
+    params: &[(&str, &str)],
+    port: &str,
+) -> BTreeSet<String> {
+    use reticle::timing::graph::{PinDirection, PointKind, TimingGraph};
+
+    let (mut design, id) = flattened(package, top, params);
+    let mut diags = Diagnostics::new();
+    synth_run(&mut design, &SynthOptions::default(), &mut diags);
+    assert!(!diags.has_errors(), "{package}.{top} does not synthesise");
+    let module = flatten_for_timing(&design, id).expect("a flat module");
+    let graph = TimingGraph::build(&module);
+
+    // The pin of the output port is the one that *loads* the net the
+    // port drives, which is the one with `Input` direction.
+    let start = graph
+        .pins
+        .iter()
+        .position(|p| p.port == port && p.cell_type == "port" && p.direction == PinDirection::Input)
+        .map(|i| graph.pins[i].clone())
+        .unwrap_or_else(|| panic!("{package}.{top} has no output port pin `{port}`"));
+    let start_id = graph
+        .pin_by_name(&start.name)
+        .expect("the pin names itself");
+
+    let mut seen: BTreeSet<u32> = BTreeSet::new();
+    let mut queue = vec![start_id];
+    let mut inputs: BTreeSet<String> = BTreeSet::new();
+    while let Some(pin) = queue.pop() {
+        if !seen.insert(pin.raw()) {
+            continue;
+        }
+        // A start point ends the walk. Which kind it is, is the answer.
+        if pin != start_id && graph.is_start(pin) {
+            let kind = graph
+                .start_points
+                .iter()
+                .find(|s| s.pin == pin)
+                .map(|s| s.kind)
+                .expect("a start point");
+            if kind == PointKind::Port {
+                inputs.insert(graph.pin(pin).owner.clone());
+            }
+            continue;
+        }
+        for arc in graph.fanin(pin) {
+            queue.push(arc.from);
+        }
+    }
+    inputs
+}
+
+/// `in_ready` is a function of registers, on every block in this library
+/// that has one.
+///
+/// `ip/crypto/chacha20` established the rule and wrote it in its header:
+/// **`in_ready` must not depend combinationally on anything a producer
+/// drives.** If it does, two such blocks back to back build a path from
+/// one's `in_valid` to the other's `in_ready`, and a row of them takes
+/// the clock with them. Until this test there was nothing that checked
+/// it; `ip/compress/inflate/README.md` §4.3 named that as a gap in the
+/// test suite, and this is it closed.
+///
+/// The method is the timing graph the static timing analysis already
+/// builds: walk backwards from the `in_ready` port and see which start
+/// points the walk reaches. A start point is either a sequential cell's
+/// output or an input port, so the answer is exactly the set of input
+/// ports `in_ready` is a combinational function of, and the assertion is
+/// that the set is **empty**.
+///
+/// What it would catch: `assign in_ready = state_ok && in_valid;`, which
+/// is the natural way to write a block that only accepts a byte when it
+/// can use it, and the single mistake this rule exists to forbid. It
+/// would also catch it through any depth of logic and through a module
+/// boundary, because the walk is over the flattened design. **It was
+/// checked by breaking it**: adding `&& in_valid` to `inflate`'s
+/// `in_ready` fails this test with
+/// ``inflate.inflate: `in_ready` depends combinationally on {"in_valid"}``,
+/// which is what makes it a measurement rather than an empty pass.
+///
+/// What it would not catch: the same fault on `out_valid`, which is the
+/// mirror rule — an `out_valid` that depends on `out_ready` is just as
+/// bad — and which is checked here too for the one block that has both
+/// handshakes. And it says nothing about *delay*: a registered
+/// `in_ready` with forty levels of logic behind it is a slow block, not
+/// a broken contract, and `lut_depth` in the footprint table is where
+/// that shows up.
+#[test]
+fn a_streams_ready_is_a_function_of_registers() {
+    // Every block in the library with a `valid`/`ready` input stream.
+    type Case = (
+        &'static str,
+        &'static str,
+        &'static [(&'static str, &'static str)],
+    );
+    let cases: &[Case] = &[
+        ("sha256", "sha256", &[]),
+        ("chacha20", "chacha20", &[]),
+        (
+            "inflate",
+            "inflate",
+            &[("WINDOW_BITS", "10"), ("WRAPPER", "1")],
+        ),
+        (
+            "inflate",
+            "inflate",
+            &[("WINDOW_BITS", "10"), ("WRAPPER", "0")],
+        ),
+    ];
+    for (package, top, params) in cases {
+        let inputs = combinational_inputs_of(package, top, params, "in_ready");
+        assert!(
+            inputs.is_empty(),
+            "{package}.{top}: `in_ready` depends combinationally on {inputs:?}"
+        );
+    }
+    // The mirror rule, for the one block with a back-pressured output.
+    let inputs = combinational_inputs_of(
+        "inflate",
+        "inflate",
+        &[("WINDOW_BITS", "10"), ("WRAPPER", "1")],
+        "out_valid",
+    );
+    assert!(
+        inputs.is_empty(),
+        "inflate: `out_valid` depends combinationally on {inputs:?}"
+    );
+    // And the control-flag outputs a consumer samples, for the same
+    // reason: a `done` that depended on `out_ready` would make the
+    // consumer's own logic part of this block's path.
+    for port in ["done", "error", "busy"] {
+        let inputs = combinational_inputs_of(
+            "inflate",
+            "inflate",
+            &[("WINDOW_BITS", "10"), ("WRAPPER", "1")],
+            port,
+        );
+        assert!(
+            inputs.is_empty(),
+            "inflate: `{port}` depends combinationally on {inputs:?}"
         );
     }
 }

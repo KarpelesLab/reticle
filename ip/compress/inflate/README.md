@@ -355,15 +355,27 @@ where:
 
 The second row is the one that was wrong, and §3 says how it was found.
 
-**LOW**, and worth saying: "registered ready" is a property of the
-source this document can point at, and nothing in this repository
-*proves* it. There is no test that asserts `in_ready`'s cone of logic
-contains no input port. Reticle has the timing graph that could answer
-it (`timing::graph::flatten_for_timing`) and the question is a reachable
-one; it is not asked anywhere in the library yet, for this block or for
-`chacha20`. That is a gap in the test suite and not in the design, and
-it is the one thing from this round worth building for the whole
-library rather than for one block.
+**MEASURED**, and it was a gap until this round.
+`a_streams_ready_is_a_function_of_registers` builds the timing graph the
+static timing analysis already builds, walks **backwards** from the
+`in_ready` port, and collects the start points the walk reaches. A start
+point is either a sequential cell's output or an input port, so what
+comes back is exactly the set of input ports `in_ready` is a
+combinational function of — and the assertion is that the set is empty.
+
+It runs over `sha256`, `chacha20` and both framings of `inflate`, so the
+rule `chacha20`'s header states is now checked for the block that states
+it as well as for this one, and it covers `out_valid`, `done`, `error`
+and `busy` here too, which is the mirror rule: an `out_valid` that
+depended on `out_ready` would be just as bad.
+
+**It was checked by breaking it.** Adding `&& in_valid` to the
+expression fails the test with the port named, which is what makes it a
+measurement rather than an empty pass.
+
+What it still does not say is anything about *delay*. A registered
+`in_ready` with forty levels of logic behind it is a slow block and not
+a broken contract, and `lut_depth` in §8 is where that shows up.
 
 ### 4.4 Huffman decoding: sequential, and all three block types
 
