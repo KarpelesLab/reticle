@@ -423,12 +423,22 @@ from silicon — and it costs one `reticle fpga` and one `reticle program`.
 
 What is known about it as this is written: the design with **both** cores,
 which did not route at all before (886 nodes still oversubscribed after 40
-iterations and 1 h 50 m), is 7627 `LUT4` and 1018 `CCU2C` at **depth 17**
+iterations and 1 h 50 m), is 7629 `LUT4` and 1018 `CCU2C` at **depth 17**
 instead of 11 955 `LUT4` at depth 87, and its placement comes out as **83
-chains over 1018 cells**. Whether it routes was not established here: the run
-was started before the constant-driver defect above was found, so it was
-building the wrong netlist and was stopped. The single-core build is 4427
-`LUT4` and 451 `CCU2C` at **depth 16** instead of 5891 at 39.
+chains over 1018 cells**; the single-core build is 4427 `LUT4` and 451
+`CCU2C` at **depth 16** instead of 5891 at 39. Neither of those gained a
+cell from the constant drivers, because the design already had the two
+shared constant lookup tables for its flip-flops and a carry cell's
+operand asks for the same two.
+
+**Routing them takes much longer than it did**, and that is worth saying
+rather than leaving to be rediscovered: the single-core build used to route
+in 11 m 29 s and was still going at 26 minutes here. A chain concentrates
+pin demand — a 32-bit add is five logic tiles, each wanting sixteen operand
+wires in and eight sums out, where the same adder in lookup tables was
+spread over twice as many tiles — so the negotiated-congestion router has
+more to negotiate. Whether either build converges inside the forty-iteration
+cap was **not established by this round**.
 
 Two cheaper things that are *not* substitutes, and it is worth being clear
 about why: the `0.494 bytes/clock` throughput figure the earlier round
