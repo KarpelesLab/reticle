@@ -189,19 +189,25 @@ this reaches a lock file; and eight levels is as deep as it looks. The
 real `ip/` uses two of those eight — a category folder and then the
 package — and the walk needed no change to descend them.
 
-Measured over the real `ip/` — 29 packages, 38910 bytes of manifest, a
+Measured over the real `ip/` — 31 packages, 41118 bytes of manifest, a
 release build, `the_library_index_cost` in `tests/ip_library.rs`, which
 prints and never asserts:
 
 | Step | Per build |
 |------|-----------|
-| walk the tree and read every manifest | 100 µs |
-| scan, sort and build the index | 59 µs |
+| walk the tree and read every manifest | 126 µs |
+| scan, sort and build the index | 56 µs |
 
-Re-measured after the packages were grouped into seven category folders,
-which is one more level for the walk to descend: 95 µs became 100 and
-57 became 59, over three runs each. Five microseconds is not a finding,
-and it is here because the alternative to re-measuring is assuming.
+Re-measured twice since it was first taken, and the honest reading is
+that this measurement is noisier than the changes being measured. At 29
+packages under seven category folders it was 100 µs and 59 µs, and the
+grouping into those folders — one more level for the walk to descend —
+had moved it from 95 and 57, over three runs each. At 31 packages under
+eight folders, with two blocks added, it is 126 and 56: the walk is up
+a quarter and the index build is *down*, which two more manifests cannot
+explain either way. Tens of microseconds on a machine doing other things
+is not a finding. What the numbers are for is the order of magnitude, and
+that has not moved.
 
 **No cache.** A tenth of a millisecond is four orders of magnitude below
 anything a person notices and five below the ECP5 database load that this
@@ -970,11 +976,12 @@ kind does have.
   the list above says it skips. Nothing writes IP-XACT back out.
 
 The first-party IP library is in `ip/` and has its own document,
-[`ip-library.md`](ip-library.md): twenty-nine Verilog-2005 packages,
-filed under `bus/`, `cpu/`, `memory/`, `net/`, `usb/`, `util/` and
-`video/` — two processor cores, two FIFOs, two clock domain crossings, a
-UART, an SPI master, an I²C master, two Ethernet MACs, seven USB blocks,
-a video timing generator and a DVI transmitter among them — each with a
-co-simulation test and a measured resource footprint. The folders are a
+[`ip-library.md`](ip-library.md): thirty-one Verilog-2005 packages,
+filed under `bus/`, `cpu/`, `crypto/`, `memory/`, `net/`, `usb/`, `util/`
+and `video/` — two processor cores, two FIFOs, two clock domain
+crossings, a UART, an SPI master, an I²C master, two Ethernet MACs, seven
+USB blocks, a video timing generator, a DVI transmitter, SHA-256 and
+ChaCha20 among them — each with a co-simulation test and a measured
+resource footprint. The folders are a
 filing system: a block is reached by the name its own manifest declares,
 and nothing reads a category.

@@ -721,7 +721,7 @@ fn cycle(sim: &mut Simulator<'_>, clk: NetHandle, half: u64) {
 /// sorted.
 ///
 /// Read off the index rather than off `read_dir`, because the top level
-/// of `ip/` is seven category folders and not twenty-nine packages.
+/// of `ip/` is eight category folders and not thirty-one packages.
 fn packages() -> Vec<String> {
     let mut names: Vec<String> = library()
         .entries()
