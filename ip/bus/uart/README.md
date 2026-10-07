@@ -33,13 +33,17 @@ on the wire**. Closing that is what this round is.
 
 ## 1. Confidence, and what it is based on
 
-Three kinds of claim appear below and they are not worth the same.
+Four kinds of claim appear below and they are not worth the same.
 
 - **Measured.** Every area and depth figure is from
   `docs/ip-library.md`'s footprint table, which `tests/ip_library.rs`
   regenerates by running the real flow for LUT4, LUT6, an iCE40 HX1K and an
   ECP5 45F. Every behavioural claim is from a simulation in that same file,
   and §7 says which test is which.
+- **Measured on a part.** §9 only. One field of the line coding is visible
+  from a host's end of a loopback, and that one was measured on a Cynthion
+  against the previous bitstream in the same session. §9 is careful about
+  which of the three fields that is and which two it is not.
 - **Quoted.** The CDC encodings are read off the PSTN subclass
   specification (USB Communications Class Subclass Specification for PSTN
   Devices, revision 1.2, §6.3.11, Table 17) and are a reading until
