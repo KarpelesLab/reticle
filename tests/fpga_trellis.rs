@@ -1772,12 +1772,21 @@ fn a_distributed_ram_and_two_reset_domains_share_a_die() {
         .collect();
     assert_eq!(
         tiles.len(),
-        59,
+        57,
         "logic tiles the design occupies. **This was 65 before the ECP5 inferred a carry chain**, \
-         and the six it lost are the four FIFOs' pointers: a `cnt + 1` used to be lookup tables \
-         and an XOR per bit and is three `CCU2C` now, so the design has fewer cells to pack. \
+         and the eight it lost are the four FIFOs' pointers: a `cnt + 1` used to be lookup tables \
+         and an XOR per bit and is three `CCU2C` plus a share of two constant lookup tables now, \
+         so the design has fewer cells to pack. \
          \
-         Before that it was 57 under the die-wide annealing schedule, \
+         It read 58 while the carry chain had a placer mechanism of its own, which anchored a \
+         chain on its first *site* and walked the fabric's links from there. The mechanism it \
+         has now is `fpga::place`'s `build_clusters`, which was written for the 7-series \
+         `CARRY4`, covers this fabric unmodified, and anchors a rigid group on a *tile* and \
+         tries every slice of it — and on this design that finds a placement one tile tighter. \
+         Measured both ways on this test; neither number is a budget. \
+         \
+         Before any of that it was 57 under the die-wide annealing schedule — the same count \
+         for a different reason, and the paragraph below is still about that comparison, \
          and the eight extra tiles are a gain and not a loss: the same design's wirelength went \
          from 2668 to 1289 and its routing from 6790 pips to 6396, because the old annealer \
          improved nothing at all on this design and the placement it kept was the legaliser's, \
