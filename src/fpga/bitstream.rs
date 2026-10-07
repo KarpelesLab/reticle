@@ -44,7 +44,9 @@
 //!   [`ConfigEntry::Cell`] entry gives for that primitive (which is how
 //!   twenty `SB_DFF*` variants become one mode field) and, for each
 //!   [`ConfigEntry::Param`] entry, the bits of the parameter the cell
-//!   actually carries (`LUT_INIT`, `PIN_TYPE`, `READ_MODE`).
+//!   actually carries (`LUT_INIT`, `PIN_TYPE`, `READ_MODE`), and for
+//!   each [`ConfigEntry::Tied`] entry its bits when the cell's pin of
+//!   that role is tied to that constant rather than wired.
 //!
 //! Nothing else. A bit no pip and no cell claims stays zero.
 
@@ -640,6 +642,22 @@ pub fn generate(
                         bitstream.set(site.tile, *at)?;
                     }
                 }
+                ConfigEntry::Tied { pin, value, bits } => {
+                    let wanted = if *value {
+                        crate::logic::Bit::One
+                    } else {
+                        crate::logic::Bit::Zero
+                    };
+                    let tied = instance.pins.iter().any(|p| {
+                        let p = &netlist.pins[*p];
+                        p.role == *pin && p.signal.is_none() && p.constant == Some(wanted)
+                    });
+                    if tied {
+                        for bit in bits {
+                            bitstream.set(site.tile, *bit)?;
+                        }
+                    }
+                }
             }
         }
     }
@@ -927,6 +945,101 @@ mod tests {
                 BitstreamError::NoSuchModule
             );
         }
+    }
+
+    /// A `Tied` entry fires on the constant a pin is tied to and on
+    /// nothing else: not on the other constant, and not on a pin that is
+    /// wired. It is what a 7-series carry chain's `PRECYINIT.C1` and
+    /// `CARRY4.<L>CY0` are, and getting the value backwards would start a
+    /// counter at the wrong carry.
+    #[test]
+    fn a_tied_pin_sets_the_bits_for_its_constant_only() {
+        use crate::fpga::arch::ConfigEntry;
+        use crate::fpga::{Netlist, PlaceOptions, place};
+        use crate::ir::builder::ModuleBuilder;
+        use crate::ir::{CellKind, Name, Type};
+        use crate::source::{SourceMap, Span};
+
+        let mut arch = Arch::new("t", "ice40", 1, 1);
+        let mut tile = TileType::new("logic", "logic_tile", 1, 8);
+        for name in ["i", "j", "k", "o"] {
+            tile.wires.push(WireDecl {
+                name: name.to_owned(),
+                dx: 0,
+                dy: 0,
+            });
+        }
+        let mut bel = BelDecl::new("lut", "lut");
+        bel.pins.push(("i0".to_owned(), WireRef::local("i")));
+        bel.pins.push(("i1".to_owned(), WireRef::local("j")));
+        bel.pins.push(("i2".to_owned(), WireRef::local("k")));
+        bel.pins.push(("o".to_owned(), WireRef::local("o")));
+        // i1 is tied to one and i2 to zero; i0 is wired.
+        for (pin, value, bit) in [
+            ("i0", false, 0),
+            ("i0", true, 1),
+            ("i1", false, 2),
+            ("i1", true, 3),
+            ("i2", false, 4),
+            ("i2", true, 5),
+        ] {
+            bel.config.push(ConfigEntry::Tied {
+                pin: pin.to_owned(),
+                value,
+                bits: vec![ConfigBit::new(0, bit)],
+            });
+        }
+        tile.bels.push(bel);
+        arch.tile_types.push(tile);
+        arch.set_tile(0, 0, 0);
+        let graph = arch.build_graph();
+
+        let mut sources = SourceMap::new();
+        let file = sources.add("t.v", "").unwrap();
+        let span = Span::new(file, 0, 0);
+        let mut b = ModuleBuilder::new("t", span);
+        let a = b.input("a", Type::bit());
+        let y = b.output("y", Type::bit());
+        let a_e = b.net(a);
+        let one = b.const_u64(1, 1);
+        let zero = b.const_u64(1, 0);
+        b.cell(
+            "l",
+            CellKind::Blackbox(Name::new("SB_LUT4")),
+            vec![
+                (Name::new("I0"), a_e),
+                (Name::new("I1"), one),
+                (Name::new("I2"), zero),
+            ],
+            vec![(Name::new("O"), y)],
+        );
+        let mut design = Design::new();
+        let top = design.add_module(b.finish());
+        design.top = Some(top);
+        let device = crate::fpga::target("ice40-hx1k-tq144").unwrap();
+        let netlist = Netlist::build(&design, top, device, &graph).unwrap();
+        let (placement, _) = place(
+            &netlist,
+            &arch,
+            &graph,
+            &crate::fpga::Constraints::new(),
+            &PlaceOptions::default(),
+        )
+        .unwrap();
+        let bitstream = generate(
+            &design,
+            top,
+            &arch,
+            &graph,
+            &netlist,
+            &placement,
+            &Routing::new(netlist.signals.len()),
+        )
+        .unwrap();
+        let set: Vec<u32> = (0..6)
+            .filter(|bit| bitstream.get((0, 0), ConfigBit::new(0, *bit)) == Some(true))
+            .collect();
+        assert_eq!(set, vec![3, 4], "i1 tied to one, i2 tied to zero, i0 wired");
     }
 
     #[test]

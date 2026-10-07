@@ -267,6 +267,25 @@ pub enum ConfigEntry {
         /// Where its complement lives in the tile.
         at: ConfigBit,
     },
+    /// Bits set when the cell's pin `pin` is **tied to a constant** rather
+    /// than wired, and the constant is `value`.
+    ///
+    /// A router does not route a constant, so a fabric whose way of
+    /// delivering one is a mux setting inside the site has nowhere else to
+    /// say so. A 7-series slice is the case that needed it: the carry
+    /// chain's first carry in is a constant one by `PRECYINIT.C1` and a
+    /// constant zero by setting nothing, and a `CARRY4`'s generate input
+    /// takes a constant from the lookup table's `O5` by `CARRY4.ACY0`.
+    /// Neither depends on which primitive sits on the bel or on any of its
+    /// parameters — only on what one of its pins is tied to.
+    Tied {
+        /// The pin role, as [`BelDecl::pins`] names it.
+        pin: String,
+        /// The constant the pin must be tied to for the bits to be set.
+        value: bool,
+        /// The bits to set.
+        bits: Vec<ConfigBit>,
+    },
 }
 
 /// One placeable element declared by a tile type.

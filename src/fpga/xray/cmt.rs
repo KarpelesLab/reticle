@@ -461,7 +461,9 @@ pub(super) fn apply_registers(
         let known = config.iter().any(|entry| match entry {
             ConfigEntry::Param { name, .. } => name == field,
             ConfigEntry::Cell { primitive, .. } => primitive == field,
-            ConfigEntry::ParamZero { .. } => false,
+            // A constant on a pin is applied with the rest of the site's
+            // configuration, never as a register field.
+            ConfigEntry::ParamZero { .. } | ConfigEntry::Tied { .. } => false,
         });
         if !known {
             return Err(ClockManagerError::MissingField {
@@ -492,7 +494,7 @@ pub(super) fn apply_registers(
                     }
                 }
             }
-            ConfigEntry::ParamZero { .. } => {}
+            ConfigEntry::ParamZero { .. } | ConfigEntry::Tied { .. } => {}
         }
     }
     Ok(count)

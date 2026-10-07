@@ -789,7 +789,9 @@ mod tests {
             for bel in &tile.bels {
                 for entry in &bel.config {
                     match entry {
-                        ConfigEntry::Cell { bits, .. } => used.extend(bits.iter().copied()),
+                        ConfigEntry::Cell { bits, .. } | ConfigEntry::Tied { bits, .. } => {
+                            used.extend(bits.iter().copied());
+                        }
                         ConfigEntry::Param { at, .. } | ConfigEntry::ParamZero { at, .. } => {
                             used.push(*at);
                         }

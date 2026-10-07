@@ -127,6 +127,17 @@ impl Arch {
                                 at.col
                             ));
                         }
+                        ConfigEntry::Tied { pin, value, bits } => {
+                            out.push_str(&format!(
+                                "{head} tied {} {}",
+                                quote(pin),
+                                u8::from(*value)
+                            ));
+                            if !bits.is_empty() {
+                                out.push_str(&format!(" bits {}", write_bits(bits)));
+                            }
+                            out.push('\n');
+                        }
                     }
                 }
             }
@@ -521,7 +532,7 @@ impl<'a> Parser<'a> {
             return;
         }
         let Some(what) = self
-            .word(line, 3, "`cell`, `param` or `paramz`")
+            .word(line, 3, "`cell`, `param`, `paramz` or `tied`")
             .map(str::to_owned)
         else {
             return;
@@ -559,6 +570,27 @@ impl<'a> Parser<'a> {
                         );
                         return;
                     }
+                }
+            }
+            "tied" => {
+                let pin = self.word(line, 4, "a pin role").map(str::to_owned);
+                let value = match self.number(line, 5, "the constant, 0 or 1") {
+                    Some(0) => Some(false),
+                    Some(1) => Some(true),
+                    Some(_) => {
+                        self.error(line.span, "a pin is tied to 0 or to 1");
+                        None
+                    }
+                    None => None,
+                };
+                let bits = if line.get(6).is_some() {
+                    self.bits_clause(line, 6)
+                } else {
+                    Some(Vec::new())
+                };
+                match (pin, value, bits) {
+                    (Some(pin), Some(value), Some(bits)) => ConfigEntry::Tied { pin, value, bits },
+                    _ => return,
                 }
             }
             other => {
@@ -786,6 +818,49 @@ end
         assert_eq!(graph.sites[ram].pin("raddr0"), Some(nodes[0]));
         assert_eq!(graph.sites[lut0].pin("i0"), Some(nodes[0]));
         assert_eq!(graph.sites[lut1].pin("i0"), Some(nodes[1]));
+    }
+
+    /// A `tied` config line carries a pin role, the constant and the bits,
+    /// and comes back out of the text form unchanged.
+    #[test]
+    fn a_tied_entry_round_trips() {
+        const TEXT: &str = "\
+arch tied
+  family test
+  part test-part
+  grid 1 1
+  tiletype logic asc logic_tile bits 1 4
+  wire logic a span 0 0
+  bel logic carry carry pin cyinit=a
+  config logic carry tied cyinit 1 bits 0.2
+  config logic carry tied cyinit 0
+  tiles logic rect 0 0 0 0
+end
+";
+        let (archs, diags) = parse(TEXT);
+        assert_eq!(diags, "");
+        let bel = archs[0].tile_types[0].bel("carry").unwrap();
+        assert_eq!(
+            bel.config,
+            vec![
+                ConfigEntry::Tied {
+                    pin: "cyinit".to_owned(),
+                    value: true,
+                    bits: vec![ConfigBit::new(0, 2)],
+                },
+                ConfigEntry::Tied {
+                    pin: "cyinit".to_owned(),
+                    value: false,
+                    bits: Vec::new(),
+                },
+            ]
+        );
+        let text = archs[0].to_text();
+        let (again, diags) = parse(&text);
+        assert_eq!(diags, "");
+        assert_eq!(again[0], archs[0], "{text}");
+        let (_, diags) = parse(&TEXT.replace("tied cyinit 0", "tied cyinit 2"));
+        assert!(diags.contains("tied to 0 or to 1"), "{diags}");
     }
 
     #[test]
