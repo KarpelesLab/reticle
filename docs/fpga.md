@@ -91,6 +91,13 @@ whole range in 0.1 MHz steps:
 | iCE40 `SB_PLL40_CORE` | 12 MHz | 0.39 % | 0.75 % | 1.1 % |
 | ECP5 `EHXPLLL` | 25 MHz | 0.30 % | 1.4 % | 10.7 % (at the bottom of the range) |
 
+The PLL's lock indicator is asked for the same way: a net nothing
+drives, carrying `(* clock_locked = "sys" *)`, becomes the `LOCKED` (the
+`lock` role of the `pll` line) of the PLL generating `sys`, and is then an
+ordinary signal the design can read. `examples/basys3/pll_blink.v` puts
+it on an LED. A device whose `pll` line names no `lock` port leaves the
+net undriven, and the netlist check reports it.
+
 A request that cannot be met — no PLL described, no input clock to
 start from, every PLL of the die already in use, a reference outside the
 input range — is an error naming which, and the net is left undriven for

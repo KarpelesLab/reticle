@@ -142,6 +142,12 @@ reticle fpga --device xc7a35t-cpg236 \
     --constraints examples/basys3/blink.rcf \
     --bitstream blink.bit --report \
     examples/basys3/blink.v
+
+# and the PLL, which nothing has run on a part yet (see "The PLL"):
+reticle fpga --device xc7a35t-cpg236 \
+    --constraints examples/basys3/pll_blink.rcf \
+    --bitstream pll_blink.bit --report \
+    examples/basys3/pll_blink.v
 ```
 
 `--chipdb <dir>` names the database explicitly; `RETICLE_CHIPDB` is the
@@ -866,6 +872,148 @@ port to it is refused ("maps to no usable site") rather than guessed at.
   share one slice (the `B`/`A` pair, written through the `D` inputs), and
   `RAM32X1D`, `RAM128X1D` and the `RAM64M` family are not offered.
 
+## The PLL
+
+`examples/basys3/pll_blink.v` asks for a 25 MHz clock by leaving a net
+undriven with `(* clock_mhz = 25 *)` on it, and for that clock's lock
+indicator with `(* clock_locked = "clk_pll" *)` on another (`docs/fpga.md`,
+"Generated clocks"). Mapping makes one `PLLE2_BASE` with `DIVCLK_DIVIDE =
+1`, `CLKFBOUT_MULT = 8`, `CLKOUT0_DIVIDE = 32`. It builds to a `.bit` for
+the XC7A35T, **routed completely** (177 of 177 signals), and decoded back
+through the database:
+
+```
+decoded: 6297 bit(s) over 151 tile(s) into 3563 feature(s); 0 bit(s) unexplained
+1426 arc(s) decoded, the same 1426 the router chose
+```
+
+**Nothing of it has run on a part.** What the user should see when it
+does, and why that test is sharp, is in the file's header: two LEDs
+blinking in step, one off the raw oscillator and one off the PLL, and
+`LOCKED` lit on a third. `tests/fpga_xray_pll.rs` holds both checks below.
+
+### Where it sits, and how the clock gets in and out
+
+A clock management tile is four tiles of the grid. Only its `UPPER_T`
+quarter has a site of interest, `PLLE2_ADV`; `LOWER_B` holds the
+`MMCME2_ADV`, and the two in between have no bits at all, only wires
+(`ppips` and `tileconn`). In both orientations prjxray calls the PLL's own
+wires `CMT_TOP_R_UPPER_T_PLLE2_*`, even in an `L` tile. The PLL's feature
+prefix, `PLLE2_ADV`, carries no `_X`/`_Y` suffix, so the prefix machinery
+made it a pinless bel of kind `other`; `src/fpga/xray/cmt.rs` gives it the
+kind `pll` and seven pins and keeps every feature the reader had filed
+under it.
+
+| Pin | Wire, and what reaches it |
+|---|---|
+| `CLKIN1` | the `PLLE2_CLKIN1` mux: from the tile's `CLKIN1` (the clock row's `HCLK_CMT_MUX_PLLE2_CLKIN1`, which takes a clock-capable pad's `CCIO` or a global clock's `BUFHCLK`), from a frequency backbone, or from general routing |
+| `CLKFBIN` | the `PLLE2_CLKFBIN` mux, which can take `CLKFBOUT2IN` |
+| `CLKOUT0`, `CLKFBOUT` | `CLKPLL0`, `CLKPLL6` and on into the clock row's `HCLK_CMT_MUX_CLK_PLL*`, the way to a `BUFG` |
+| `LOCKED` | `CMT_TOP_LOGIC_OUTS_L_B21_11`, through the `CMT_FIFO` tile into an interconnect tile: an ordinary fabric signal |
+| `RST`, `PWRDWN` | an `IMUX` of that interconnect tile |
+
+In the demo the placer chose the left-hand PLL, `PLLE2_ADV_X0Y0`, because
+the LEDs are on the left. So the reference arrives from the raw clock's
+`BUFG`, along the bottom clock row into `HCLK_CMT_X8Y26` and its
+`CK_BUFHCLK0`, and not straight from the pad's `CCIO`. Both are legal, and
+both end on the PLL's dedicated `CLKIN1` input rather than general routing.
+
+**The feedback closes inside the tile.** `ppips` records `CLKFBOUT` reaching
+`CMT_TOP_{L,R}_CLKFBOUT2IN` unconditionally, and the `CLKFBIN` mux selects
+it with a pip of its own, so the router closes the `CLKFBOUT` to `CLKFBIN`
+net that mapping makes in one arc and the test asserts exactly that. That
+is `COMPENSATION = INTERNAL`, whose only other bit is
+`COMPENSATION.Z_ZHOLD_OR_CLKIN_BUF`, the one f4pga and nextpnr-xilinx both
+write. A loop through a `BUFG` would be `ZHOLD`, which needs bits this flow
+does not set.
+
+### The registers: computed, quoted, and how each was checked
+
+A PLL's parameters are not stored as parameters. The frames hold its DRP
+register file, the words a design could rewrite at run time, and
+prjxray-db names every field after XAPP888's register map (its fuzzer's
+`write_pll_reg.py` lays the register space out bit by bit). The generic
+feature reader already turns `PLLE2_ADV.CLKOUT0_CLKOUT1_HIGH_TIME[4]` into a
+parameter bit, so what was missing was only the values, which
+`cmt::pll_registers` computes:
+
+| Field | Source |
+|---|---|
+| high time, low time, `EDGE`, `NO_COUNT` of `DIVCLK`, `CLKFBOUT` and `CLKOUT0`..`5` | **computed**, from XAPP888's divider arithmetic for a 50 % duty cycle, no phase shift. An unused output keeps the library's division by one, with its output enable off |
+| `LKTABLE[39:0]`, the lock detector | **quoted**: XAPP888's table as f4pga-arch-defs transcribes it (`pll_lktable_lookup`), extracted by script and not retyped |
+| `TABLE[9:0]`, the loop filter | **quoted** the same way (`pll_table_lookup`). f4pga's `OPTIMIZED` table equals its `HIGH` one |
+| `FILTREG1_RESERVED = 0x008`, `LOCKREG3_RESERVED = 1`, the rest and `POWER_REG` zero | **quoted**: f4pga and nextpnr-xilinx both write these, and neither says why |
+| `IN_USE`, `Z_ZHOLD_OR_CLKIN_BUF` | **quoted**, from the same two |
+| `ZINV_RST`, `ZINV_PWRDWN` | **derived**; see the next section |
+
+An earlier draft of the lock table in this module was typed from memory,
+and a script comparing it with f4pga's file found it wrong from the
+eleventh entry on. The table is now the script's output, and the
+comparison is the reason to trust it.
+
+What checks these values, and how far:
+
+- `the_pll_registers_land_where_the_database_says` writes two settings
+  into the same tile, (1, 8, 32, `OPTIMIZED`) and (2, 20, 7, `LOW`,
+  `STARTUP_WAIT`, routed reset), decodes the frames, and compares the
+  whole tile with a feature list worked out by hand: 56 and 60 features,
+  162 and 166 bits, nothing else set. It catches a field at the wrong
+  bit, high and low time swapped or `EDGE` lost on an odd division, a
+  table indexed off by one, and the wrong bandwidth's table.
+- At a multiplier of 8 the two quoted tables give `0xB5BE8FA401` and
+  `0x3B4`, **the constants nextpnr-xilinx writes for every PLL**. That
+  is a second, independent source for one entry of each table, and no
+  more than that.
+- **Nothing here has been compared with a Vivado bitstream holding a
+  PLL.** The four harness designs in `artix7/harness/` contain none, and
+  Vivado was not available. A reserved field Vivado sets that both open
+  tools leave clear would be invisible to every check above.
+
+### The reset that reads as one
+
+An unrouted interconnect input on this fabric is not left floating.
+Every `IMUX` of an `INT_L` or `INT_R` has a `default` pseudo-pip from
+`VCC_WIRE`, so a site pin nothing drives **reads one**. The ECP5 has the
+same trap, and it cost a USB device eight rounds there. A PLL whose
+`RST` and `PWRDWN` are "tied low" by being left unrouted is held in reset
+and powered down, and never locks.
+
+The bit that rescues it is prjxray's `ZINV_RST`, and the name points the
+wrong way. prjxray's `032-cmt-pll` fuzzer tagged it `1 ^ IS_RST_INVERTED`
+on PLLs whose `RST` was **unconnected**, so what it found is the bit
+Vivado sets when it ties a reset low by inverting the default one.
+nextpnr-xilinx writes `ZINV_RST = IS_RST_INVERTED` for a reset it routes,
+with a comment that the name looks wrong. f4pga writes `ZINV_RST = 1` with
+the pin tied to `VCC` for a constant zero, and 0 for a routed reset. All
+three agree once read that way: **the bit set means the inverter is on**.
+So a reset tied low stays unrouted with the bit set, and a routed reset
+gets the bit clear. `CLKINSEL` needs nothing: `PLLE2_BASE` holds it high,
+which selects `CLKIN1`, and the default one already reads high.
+
+That reading is consistent across three sources and has not been
+measured. If it is wrong, the PLL never locks: `LOCKED` stays dark, and
+since the PLL then outputs nothing, the LED counting its output stays
+dark too.
+
+The DRP's own inputs (`DEN`, `DWE`, `DADDR`, `DI`) are left unrouted as
+well, and so read one. `DCLK` is left unrouted too, so it never changes,
+and a DRP access needs a `DCLK` edge. That is the reasoning, and it has
+not been tried.
+
+### What is not done
+
+- **`MMCME2_BASE`.** Its register map differs from the PLL's: fractional
+  dividers, a `POWER_REG` f4pga computes, a filter table of its own. The
+  mapper's solver can choose an MMCM for a frequency the PLL cannot hit
+  exactly. Such a cell would land on a PLL site, which is the only kind
+  `pll` here, and `configure_clock_managers` refuses it by name rather
+  than configure an MMCM with a PLL's registers.
+- **Phase shift, duty cycle other than one half, `CLKOUT1`..`5`.**
+  `PLLE2_BASE` as `xc7.dev` maps it uses only `CLKOUT0`, and the arithmetic
+  above is for 50 % and zero phase.
+- **`COMPENSATION = ZHOLD`, or feedback through a `BUFG`.** Only the
+  internal loop is written.
+
 ## What remains before an LED could light
 
 In rough order of how much stands behind each.
@@ -1060,6 +1208,14 @@ In rough order of how much stands behind each.
 8. **Six million `String`s.** The routing graph holds the whole die in
    1386 MiB, most of it wire names. Interning those is what makes
    whole-die routing comfortable rather than merely possible.
+9. **A PLL on a part.** This list did not mention the PLL at all until
+   2026-10-08, which was itself a gap: `xc7.dev` declared `PLLE2_BASE` and
+   mapping instantiated it, but no fabric bel existed, so a design with a
+   generated clock could not be placed. One now can be (*The PLL* above).
+   `examples/basys3/pll_blink.v` is the test that settles it on a board,
+   and until someone runs it, every register value the PLL section
+   calls quoted is a reading and not a measurement. The `MMCME2_BASE` is
+   still not done.
 
 Until 1 is done, what this flow writes for a clocked design is a
 bitstream whose every feature on the clock path matches a working one and
@@ -1138,6 +1294,8 @@ unless it says otherwise:
 | `src/fpga/xray/lutram.rs` | a `SLICEM`'s distributed RAM: the `RAM64X1D` bel, its pins, its blocks and its bits, with the sources of the quoted part |
 | `src/fpga/xray/sites.rs` | the inside of a site: pin names from UG474 and UG471, the wire each sits on, the orientations the database only implies, the IO recipe read off Vivado's own bitstream, and the clock tables — the `BUFGCTRL`, the `BUFHCE` of a clock row, the wires that cost bits to touch and the rebuffer enables |
 | `XrayFabric::enable_global_clocks` | the one bit that belongs to no pip: a global clock's rebuffer enables, over the whole column, once the routing is known |
+| `src/fpga/xray/cmt.rs` | the clock management tile: the PLL as a bel, its DRP register values (computed and quoted, each said which), and `XrayFabric::configure_clock_managers` |
+| `tests/fpga_xray_pll.rs` | the PLL design end to end, and two register settings decoded back |
 | `src/fpga/devices/xc7.dev` | the device: primitives, pins, and now the IDCODE |
 | `tests/fpga_xray.rs` | everything above, against the real database, skipping without it |
 | `tests/fpga_xray_lutram.rs` | the distributed RAM, built from `examples/basys3/lutram.v` and decoded |
