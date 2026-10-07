@@ -1197,6 +1197,82 @@ them starts from reset. `chacha20_core` now takes `start` from any state,
 and `chacha20` ignores a `valid` that arrives while its own request is
 still up.
 
+### And then it went on a part, and said no
+
+**CHECKED.** Everything above was true of a simulator. Both blocks have now run
+on a Great Scott Gadgets Cynthion — an ECP5 `LFE5U-12F-8CABGA256` — at 60 MHz,
+in `testdata/fpga/cynthion/usb_crypto_console.v`: the two of them behind
+`ip/usb/usb_cdc_acm`, so a `/dev/ttyACM*` the kernel's own driver binds answers
+typed lines. `ip/crypto/sha256/README.md` §8 is the long account with the
+sessions, and `tests/usb_crypto_console.rs` is the test.
+
+**Both cores give wrong answers on it**, and the three things that only a part
+could say are these.
+
+**One: a design with both cores does not route.** 11 955 lookup tables, 40 ripup
+iterations, an hour and fifty minutes, and 886 nodes still oversubscribed — with
+the worst of them a *control wire* the router's own message says the placer
+rejects before it is made, so the architecture description is missing a rule.
+`WITH_HASH` and `WITH_CIPHER` make each core optional and the single-core builds
+route in minutes: 5 891 lookup tables and 8 353 of 8 353 signals for SHA-256 and
+8 375 and 10 111 of 10 111 for ChaCha20, both with every set bit decoding back
+through the database and nothing unexplained. The bitstreams are not in question.
+
+**Two: the cycle counts are right and the data paths are not.** Over forty runs
+of each line on the part, the two commands with no adder in them — a string out
+of a 64-entry table and a 256-bit register rotated four bits at a time — were
+right **forty times out of forty**. The two with chained 32-bit additions were
+wrong every time, and *differently* between identical runs: seven distinct
+digests in sixteen runs of the empty message, and two distinct keystreams in
+forty runs of `e 10`. One line, one answer, is a property no standard has to
+state, and which of these commands stops having it is what separates a
+mis-mapped lookup table from a path that does not settle inside 16.67 ns.
+
+Sixty megahertz is the ULPI interface rate, so there was no slower clock to
+retreat to. The cause is the paragraph both READMEs' §7 and §8 have always had,
+and it has been promoted from a footnote: `src/fpga/trellis` describes `CCU2C`
+without a (ci, i0, i1, co) port map, a 32-bit addition becomes a ripple of
+LUT4 about twenty-one levels deep, SHA-256's T1 chain is **39** levels where an
+iCE40's is 9 and ChaCha20's quarter round is **87** where an iCE40's is 5.
+**Inferring the carry cell is not a change that would improve a clock; it is
+what stands between every arithmetic block in this library and an ECP5.** It is
+a `src/` change and this round reports it rather than making it.
+
+**Three: a real throughput figure, and the bottleneck.** These are good although
+the answers are not, because a rate is a cycle count and the cycle count is the
+half that works. SHA-256 hashing sixteen mebibytes of zeros it makes itself:
+**29.63 MB/s, 0.494 bytes per clock** against the **0.496** a four-state
+zero-delay simulator computes — four tenths of a per cent over 262 144 blocks,
+and the one claim on either page the part *confirmed*. The same block fed over
+USB: **132.0 kB/s** of message and **264.0 kB/s** on the wire, which is a factor
+of **225** below the core. Half of that factor is the protocol's hexadecimal
+framing and the other half is the endpoint — `tests/usb_loopback.rs` times the
+bulk loopback of `usb_ulpi_device.v` at 255 500 bytes/s each way at a 64-byte
+packet, and 264 kB/s is that ceiling. The two directions differ by 3.8:
+1 005 kB/s inbound against 264 outbound, because an OUT endpoint that NAKs while
+a core is busy costs the host a transaction per NAK and an IN endpoint does not.
+
+**And one thing it is tempting to read into this and must not be.** None of it
+says either block is wrong. Every vector above still passes, the decompositions
+are still checked, and the fault is in the path from the blocks' logic to this
+part's flip-flops. Nor is any of it a statement about what the blocks **leak**:
+a cycle count measured on a part is still a cycle count, nothing has recorded a
+power trace or an emission, and the sentence in each README's §5 is untouched —
+neither block is for secrecy against an attacker holding the board. What the
+round does add to that section is one sharp thing: §5 called a data-path delay
+"real and invisible here", and it is now real and *visible*, as a wrong digest.
+
+**What AES should inherit from this half of the round** is an **eighth** item
+for the list below. A crypto block in this library gets on a part, behind a host
+interface that needs no host software, with its answers compared against
+somebody else's implementation rather than a second one of our own — and the
+design that does it is three modules, so the parser can be driven without the
+USB stack, the USB stack without the board, and the board is a top level with
+pads and LEDs. The ninth item is shorter: **ask whether one line gets one
+answer before asking whether it is the right one.** It needs no oracle, it is
+the first thing a terminal can measure, and on this round it is what turned "the
+cores are wrong" into "the adders do not arrive".
+
 ### What AES should inherit
 
 AES is deliberately **not** in this round. It is the biggest of the three —

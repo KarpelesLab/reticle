@@ -24,7 +24,8 @@ section to read before using this block for anything.
 - §7 is the vectors, by section, including the intermediate state.
 - §8 is area and throughput, with the trade that was declined.
 - §9 is the defect a test no document asks for found.
-- §10 is **what a board added**, and what it did not.
+- §10 is **what the board said**, which is **no**, and what that does and
+  does not measure.
 - §11 is the reading list.
 
 ---
@@ -40,12 +41,11 @@ section to read before using this block for anything.
 - **CONFIRMED** — agreed with `purecrypto`, the user's from-scratch Rust
   cryptography library, driven with the same inputs out of tree.
   `purecrypto` is **not** a dependency of anything committed here.
-- **CHECKED** — observed on a real part: a keystream this block produced on
-  an ECP5 at 60 MHz, byte for byte against RFC 8439's own hexdump. §10 says
-  what that did and did not establish, and
+- **CHECKED** — observed on a real part. There is one such claim on this page
+  and §10 is it, and it is **negative**: this block has run on an ECP5 at
+  60 MHz and the keystream it produced there was not RFC 8439's.
   [`ip/crypto/sha256/README.md`](../sha256/README.md) §8 is the long account
-  of the round, because both blocks went on the same die in the same
-  bitstream.
+  of the round, because both blocks went on the same die.
 - **LOW** — inference that explains the rest, with no way to check it here.
 
 ---
@@ -459,15 +459,15 @@ notice it arrived is **39 cycles for 64 bytes, 1.64 bytes per cycle** —
 the 39 is arrived at and not assumed.
 
 There is no measured clock behind the 100 MHz; it is a round number to
-multiply by. **There is a measured one now, and it is 60 MHz** — the clock
-this block closed on an ECP5, which §10 and
-[`ip/crypto/sha256/README.md`](../sha256/README.md) §8 are about. The 100
-stays in the paragraph above because it is what the cycle counts have always
-been multiplied by and changing it would make every earlier figure on this
-page disagree with every later one; the honest reading is that a real part
-ran this block a little under two thirds as fast as the round number
-suggests, and that the reason is the carry cell the paragraph before last
-says is missing.
+multiply by, and it stays because every cycle count on this page has always
+been multiplied by it.
+
+**There is no measured clock for this block at all**, and that is §10: it has
+been on an ECP5 at 60 MHz, which is the rate a ULPI transceiver forces, and at
+that rate the eighty-seven levels of LUT4 the paragraph before last describes
+do not settle and the keystream is wrong. The carry cell that paragraph says
+is missing is not a thing that would raise this figure — it is what stands
+between this block and having one.
 
 ### The trade declined
 
@@ -530,19 +530,20 @@ not here.
 
 ---
 
-## 10. What a board added, and what it did not
+## 10. What the board said, and what it did not
 
-**CHECKED.** This block has now been on a part, and the account of the round
-is [`ip/crypto/sha256/README.md`](../sha256/README.md) §8 rather than this
-section — the two blocks went on the same die in the same bitstream, and one
-account of a round is better than two halves that can drift apart. That
-section has the board, the clock, the session a host drove it from and every
-measured figure. This one is what the round says about **ChaCha20**.
+**CHECKED**, and the answer is **no**.
+
+The long account of the round is
+[`ip/crypto/sha256/README.md`](../sha256/README.md) §8 rather than this
+section — the two blocks went on the same die, in the same design, and one
+account is better than two halves that can drift apart. That section has the
+board, the clock, the three bitstreams, the sessions, the throughput figures
+and the conclusion. This one is what the round says about **ChaCha20**.
 
 The design is `testdata/fpga/cynthion/usb_crypto_console.v` on a Great Scott
-Gadgets Cynthion r1.4 — an ECP5 `LFE5U-12F-8CABGA256` — at **60 MHz**, with
-this block and `ip/crypto/sha256` behind `ip/usb/usb_cdc_acm`, so a
-`/dev/ttyACM*` the kernel's own `cdc_acm` driver binds answers typed lines.
+Gadgets Cynthion r1.4 — an ECP5 `LFE5U-12F-8CABGA256` — at **60 MHz**, which
+is the rate `ip/usb/usb_device_ulpi` needs and therefore not a choice.
 `testdata/fpga/cynthion/crypto_console.v` is the protocol, and three of its
 commands reach this block, three different ways on purpose:
 
@@ -554,60 +555,102 @@ commands reach this block, three different ways on purpose:
   because `e` gives the same answer whether the exclusive-or works or not.
 - **`X <n>` is both cores in series:** SHA-256 of `n` bytes of keystream,
   which turns any length of cipher output into sixty-four digits a host can
-  check. It is what makes a mebibyte of keystream checkable at all without a
-  mebibyte coming back over the wire, and it is the only command here that
-  would catch a fault appearing only after thousands of blocks — the counter
-  advancing wrongly at some particular value, say, which no published vector
-  reaches because no published vector is that long.
+  check. It is what would make a mebibyte of keystream checkable without a
+  mebibyte coming back over the wire, and it is the only command that would
+  catch a fault appearing only after thousands of blocks — a counter
+  advancing wrongly at some particular value, which no published vector
+  reaches because no published vector is that long. **It has never run**: the
+  design with both cores in it does not route on this part, which §8's first
+  table is about, so there is no bitstream that has both commands.
 
-**The cheapest experiment this section used to propose is worth comparing
-against what was done**, because the difference is the useful part. It said:
-`ip/bus/uart` and a cable, with the key and nonce **constant in the
-bitstream**, which it called "fine for a throughput measurement and exactly
-the wrong habit for anything else". What was built instead puts the key,
-the nonce and the counter on **typed commands** (`K`, `N`, `C`) and prints
-them back (`k`, `n`, `c`), which is better for a reason the old plan did not
-anticipate: a constant key can only ever check one vector. A typed key
-checks RFC 8439 Appendix A.1's as well as §2.4.2's, in one session, on one
-bitstream — and a key that is typed is also a key that is *read back*, so
-"the part is using the key the host meant" is an assertion rather than an
-assumption.
+### The keystream is wrong
 
-It is also, unavoidably, a key crossing an unencrypted serial port into a
-part that will print it to anyone who asks. That is right for an instrument
-whose job is to compare a block against a specification and wrong for
-everything else, and `crypto_console.v`'s own header says so in those words.
+```text
+$ k    -> 000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f
+$ n    -> 000000000000004a00000000
+$ c    -> 00000001
+$ e 40 -> 8e54cd1c4213f27dfed844f13387fe0b5045b9e65d645174e390460a9fa5cb23…
+   RFC -> 224f51f3401bd9e12fde276fb8631ded8c131f823d2c06e27e4fcaec9ef3cf78…
+```
 
-### What a board did not add
+The key, the nonce and the counter on the part are RFC 8439 §2.4.2's, read
+back off it byte for byte, and the keystream under them is not §2.4.2's. Under
+an all-zero key, nonce and counter typed at it — Appendix A.1 vector #1 — it is
+not that either.
 
-Nothing in §5 moved. Not one item, and the reason to say so at length is
-that a hardware result is exactly the kind of thing that invites a reader to
-assume otherwise:
+**And it is wrong the same way most of the time and not always.** Forty runs
+of `e 10`, which is sixteen bytes of one deterministic function:
+
+```text
+  39 x 28d3e7850ed5188b80148edfecb5c41d
+   1 x 285b6888e9a0508f8014c6e5f9b5c495
+```
+
+and forty of `E 00000000`, 36 to 4 between the same two values. Meanwhile, on
+the same bitstream and in the same session, forty `?` lines and forty `k` lines
+were right **forty times out of forty**. §8 has that table in full and the
+argument it makes: the two paths with no adder in them never fail, the two with
+chained 32-bit additions always do, and the failure is a data path that does not
+settle inside 16.67 ns rather than logic that is wrong.
+
+**This block is the deeper of the two and it fails more stably**, which is worth
+writing down because it is the opposite of the naive expectation. §8's four
+chained 32-bit additions are **87** levels of LUT4 here against 5 on an iCE40;
+SHA-256's five are 39 against 9. The 39-level path scatters across seven values
+in sixteen runs and the 87-level one lands on one value 39 times in 40. A path
+that misses its deadline by a little captures whatever has arrived, which varies
+with everything; a path that misses by a lot captures a partial result that is
+itself a stable function of the inputs.
+
+So §8's note about the carry cell is this page's note too, and it is no longer
+about a clock this block *could* reach: **`src/fpga/trellis` describing `CCU2C`
+without a port map is what stands between this block and working on an ECP5 at
+all.** It is a `src/` change and it is named rather than made.
+
+### What the board did confirm
+
+One thing, and it is §8's: the **cycle count**. `Z` on the SHA-256 bitstream
+measures 0.494 bytes per clock against the 0.496 a zero-delay simulator
+computed, over 262 144 blocks. This block has no equivalent single number off
+the part, because the only command that drives it without USB in the way (`e`)
+sends two hexadecimal digits a byte back and is therefore limited by the
+endpoint: 16 KiB of keystream in 32.6 ms is **502.7 kB/s of keystream and
+1 005 kB/s on the wire**, which is the IN direction of a full-speed bulk
+endpoint and not this block. §8 has the decomposition.
+
+### What the board did not add
+
+Nothing in §5 moved. Not one item, and the reason to say so at length is that a
+hardware result — even a negative one — is exactly the kind of thing that
+invites a reader to assume otherwise:
 
 - **Power analysis.** ChaCha20's first round operates directly on key words,
-  which is what makes a first-round attack the obvious one — and there is now
-  a part doing exactly that, repeatedly, with a key a host chose and a
-  trigger on a pin. **No trace has been taken.** Nothing here is masked,
-  randomised or duplicated. Running on silicon makes a measurement *possible*
-  and does not make it *made*.
+  which is what makes a first-round attack the obvious one — and there is now a
+  part doing exactly that, repeatedly, with a key a host chose and a trigger on
+  a pin. **No trace has been taken.** Nothing here is masked, randomised or
+  duplicated. Running on silicon makes a measurement *possible* and does not
+  make it *made*.
 - **Electromagnetic emission.** The same argument with a probe, and no
   measurement.
-- **Gate delay.** §4's figure is still a cycle count. It is a cycle count
-  observed on a part now rather than in a four-state zero-delay simulator,
-  which is a stronger statement about the *control* path and exactly as
-  silent about whether a carry ripples further for one operand than another.
-  §8's depth figures say how far there is to ripple: four chained 32-bit
-  additions are **87** levels of LUT4 on this flow against 5 on an iCE40,
-  and what the board establishes is that eighty-seven levels fit in 16.67 ns
-  — not how much of it any particular operand leaves spare.
-- **Fault injection.** No redundancy and no checking, on silicon as in
-  simulation.
-- **Key residue.** Nothing is zeroised. `st_q` holds key-derived state for
-  the twenty rounds, on a part as in a simulator, and `k` will print the key
-  itself to anybody who opens the port.
+- **Gate delay.** §4's figure is still a cycle count, and what this round added
+  is not a delay but the knowledge that the delay is **large enough to break
+  the block**. §5 called a carry that ripples further for one operand than
+  another "real and invisible here"; it is still invisible as a number and it is
+  now visible as a wrong keystream.
+- **Fault injection.** No redundancy and no checking. §5 says a glitch that
+  skips a round "produces a keystream the attacker may well be able to work
+  with, and nothing here would notice" — and nothing did notice forty wrong
+  keystreams either. The console cannot tell a wrong answer from a right one and
+  neither can the block.
+- **Key residue.** Nothing is zeroised. `st_q` holds key-derived state for the
+  twenty rounds, on a part as in a simulator, and `k` will print the key itself
+  to anybody who opens the port — which is the point of `k` and the opposite of
+  what a key wants.
 
-**The short version is unchanged: this block is for confidentiality against
-an attacker on the wire, not against one holding the board.**
+**The short version is unchanged: this block is for confidentiality against an
+attacker on the wire, not against one holding the board.** And a sentence this
+round adds to it: on an ECP5 built by this flow, it is not yet for
+confidentiality against anybody, because it does not compute ChaCha20.
 
 ---
 

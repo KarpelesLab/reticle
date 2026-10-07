@@ -4,8 +4,32 @@
 // FIPS 180-4, RFC 8439 and `purecrypto` — **entirely in simulation**. Both
 // READMEs say so, and both name the experiment they were not doing. This is
 // it: `crypto_console` on the auxiliary ULPI transceiver, so a
-// `/dev/ttyACM*` the kernel's own `cdc_acm` driver binds answers
-// `H abc` with a digest `sha256sum` agrees with.
+// `/dev/ttyACM*` the kernel's own `cdc_acm` driver binds answers a typed
+// line.
+//
+// ===================================================================
+// READ THIS FIRST: THE CORES GIVE WRONG ANSWERS ON THIS PART
+// ===================================================================
+//
+// This design runs. The port enumerates, `cdc_acm` binds it, the parser
+// answers, the registers read back, the error paths work and the cycle counts
+// are within half a per cent of what a simulator computes. **And both crypto
+// cores produce wrong answers**, differently between identical runs, because
+// 39 and 87 levels of carry-less LUT4 addition do not settle in 16.67 ns on
+// an LFE5U-12F — and 60 MHz is the ULPI interface rate, so there is no slower
+// clock to retreat to.
+//
+// `ip/crypto/sha256/README.md` §8 is the measurement: the sessions, the
+// forty-run repeatability tables, the two shallow commands that are right
+// forty times out of forty, and why the conclusion is the missing `CCU2C`
+// port map in `src/fpga/trellis` rather than anything in `ip/crypto/`.
+// `tests/usb_crypto_console.rs` is the test and it **fails**, which is the
+// correct outcome and not a broken test.
+//
+// So this file is a working instrument pointed at a backend defect. Loading
+// it and typing at it is worth doing — the answers are wrong in a way that is
+// itself the result — and nothing here should be read as this part computing
+// SHA-256 or ChaCha20.
 //
 // `testdata/fpga/cynthion/usb_cdc_uart.v` is the design this one is built
 // after — the same transceiver, the same six LEDs, the same argument about
@@ -20,7 +44,7 @@
 //
 //     dmesg | tail
 //     ls -l /dev/serial/by-id/
-//     stty -F /dev/ttyACM1 115200 raw -echo
+//     stty -F /dev/ttyACM1 115200 raw -echo clocal min 0 time 10
 //     cat /dev/ttyACM1 &
 //     echo 'H abc' > /dev/ttyACM1
 //     printf '%s' abc | sha256sum
@@ -29,6 +53,14 @@
 // a CRLF is one line; `crypto_console.v`'s header says why that is two rules
 // and not one. `?` lists the commands and the port prints that list on its
 // own the moment it is configured, so none of this needs a manual.
+//
+// **`min 0 time 10` is not decoration and `cat` twice is a trap.** A `printf`
+// and a `cat` per line open and close the terminal twice a command, and
+// `cdc_acm` tears its read URBs down on the last close — so every answer goes
+// missing and a device that is working perfectly looks completely dead. That
+// happened, and it cost a round of looking for a fault that was not there.
+// One open for the session is what a terminal program does: `screen`,
+// `picocom`, or the `exec 3<>/dev/ttyACM1` the shell has built in.
 //
 // `1209:0001` is pid.codes' test pair, the default of the core's `VID` and
 // `PID`. **The number in `/dev/ttyACM*` is not fixed**: a Cynthion's own
@@ -149,17 +181,68 @@
 //
 // **There is no vendor timing model in this repository**, so "the clock
 // closed" cannot be a slack number here: `reticle timing` says in its own
-// help that its device numbers are placeholders. What a closed clock means
-// for this design is therefore the stronger thing and not the weaker one —
-// **the part computes the right answers at 60 MHz**, which a path missing
-// 16.67 ns could not do, because a wrong bit anywhere in eighty-seven
-// levels of logic changes the digest and a digest is checked against
-// `sha256sum`. `tests/usb_crypto_console.rs` is that measurement and
-// `ip/crypto/sha256/README.md` §8 has the session it was taken from.
+// help that its device numbers are placeholders. So the clock was tested the
+// only way a terminal can test it, and it **did not close**.
 //
-// Inferring the carry cell is the single change that would most move both
-// the area and the achievable clock of this design. It is a change to
-// `src/` and not to anything in `ip/`, and it is noted here and not made.
+// Every command this console has is a function of its own line and of
+// registers the line can read back, so one line must get one answer. On the
+// part, over forty runs each:
+//
+//     ?            a 64-entry string table          40 of 40 right
+//     k            a 256-bit rotate and an encoder  40 of 40 right
+//     h            SHA-256's T1 chain, 39 levels    7 distinct in 16, all wrong
+//     e 10         ChaCha20's quarter round, 87     2 distinct, 39:1, both wrong
+//     E 00000000   the same plus an exclusive-or    2 distinct, 36:4, both wrong
+//
+// The two paths with no adder in them never fail and the two with chained
+// 32-bit additions always do. That is two populations rather than a delay
+// anybody measured, and it is as close to a timing report as this flow can
+// get. `ip/crypto/sha256/README.md` §8 has the sessions, the wrong digests,
+// and the detail that the **deeper** core fails more *stably* — a path that
+// misses by a little captures whatever has arrived and a path that misses by
+// a lot captures a stable partial result.
+//
+// **What the part did confirm is the cycle count.** `Z 1000000` hashes
+// sixteen mebibytes of device-generated zeros at **0.494 bytes per clock**
+// against the 0.496 a four-state zero-delay simulator computes — four tenths
+// of a per cent over 262 144 blocks. The control path is exactly as fast as
+// simulation says. It is the data path that does not arrive.
+//
+// Inferring the carry cell is therefore not a change that would move this
+// design's achievable clock: **it is what stands between these two blocks and
+// working on this family at all.** It is a change to `src/` and not to
+// anything in `ip/`, and it is noted here and not made. The other way round
+// would be a pipeline stage inside each round, which is a change to `ip/` that
+// breaks every cycle-count figure both READMEs rest on; fixing the backend
+// fixes every arithmetic block in the library at once.
+//
+// ===================================================================
+// WHAT IT MOVES, AND WHERE THE BOTTLENECK IS
+// ===================================================================
+//
+// Measured on the part, and valid although the answers are wrong, because a
+// rate is a cycle count and the cycle count is the half of this design that
+// works:
+//
+//     Z 1000000   16 MiB made on the device       29.63 MB/s   0.494 B/clock
+//     h + 256 KiB of hex   the link, outbound     132.0 kB/s hashed
+//                                                 264.0 kB/s on the wire
+//     e 4000      16 KiB of keystream, hex out    502.7 kB/s keystream
+//                 the link, inbound              1 005 kB/s on the wire
+//
+// **The bottleneck is the link, by a factor of 225.** Half of that factor is
+// this protocol's: a message byte crosses as two hexadecimal digits, so the
+// wire carries twice the message. The other half is the endpoint, and it is
+// somebody else's measurement agreeing — `tests/usb_loopback.rs` times the
+// bulk loopback of `usb_ulpi_device.v` at 255 500 bytes/s each way at a
+// 64-byte packet, and 264 kB/s is that ceiling. So nothing in
+// `crypto_console` is in the way of the OUT direction.
+//
+// The two directions are **not** equal: 264 kB/s out against 1 005 kB/s in. An
+// IN endpoint is filled when the host asks and a full-speed frame has room
+// for nineteen 64-byte bulk transactions; an OUT endpoint that NAKs while the
+// console is busy costs the host a transaction per NAK. The OUT figure is
+// what a round trip looks like and the IN figure is what a stream looks like.
 //
 // Sources: ip/usb/usb_cdc_acm/rtl/*.v,
 //          ip/usb/usb_device_ulpi/rtl/usb_ulpi_link.v,

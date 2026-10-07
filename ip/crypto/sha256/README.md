@@ -27,7 +27,9 @@ that implies a defence it does not have.
 - §6 is what the block does not do.
 - §7 is area and throughput, with the trade that was declined and its
   numbers.
-- §8 is **what a board added**, with the session it was taken from.
+- §8 is **what the board said**, which is **no** — the design runs on an
+  ECP5 and both cores give wrong answers on it, and §8 is the measurement
+  that says why and the one figure it confirmed.
 - §9 is the reading list.
 
 ---
@@ -48,11 +50,13 @@ that implies a defence it does not have.
   anything in this repository — there are no third-party crates here — and
   what is committed is the numbers it produced.
 - **CHECKED** — observed on a real part, in the sense
-  `ip/usb/usb_cdc_acm/README.md` means it: a digest this block computed on
-  an ECP5 and a host's own `sha256sum` agreeing about the same bytes. §8 is
-  all of it, and it is **one** kind of claim and not the general one — a
-  correct answer off silicon is a result about *function*, and §5's list of
-  what is not defended against is unchanged by every word of it.
+  `ip/usb/usb_cdc_acm/README.md` means it. There is exactly one such claim on
+  this page and §8 is it, and it is **negative**: this block has run on an
+  ECP5 at 60 MHz and the digests it produced there were wrong, and wrong
+  differently between identical runs. §8 says what that measures — a data
+  path with no carry cell under it — what it does not (§3's vectors still
+  pass and §5's list is untouched by it), and the one figure the part
+  *confirmed*.
 - **LOW** — inference that explains the rest, with no way to check it here.
 
 ---
@@ -422,10 +426,14 @@ belonged to another round, and it still does.
 
 **That sentence has now been tested rather than argued.** §8's design runs
 this block at 60 MHz on an ECP5 with all thirty-nine levels in the clock
-period, so the depth is survivable and not fatal; what it costs is the
-difference between 60 MHz and whatever a nine-level version of the same path
-would have closed at, which is a measurement nobody has taken because
-nothing here infers the carry cell to compare against.
+period, and **it does not**: §8's design runs this block at 60 MHz on an
+ECP5 — the clock that board's USB transceiver forces and the only one
+available — and the digests that come out are wrong, and wrong differently
+between identical runs. Thirty-nine levels of LUT4 do not settle in 16.67 ns
+on this part. That sentence has now been tested rather than argued, and it
+turned out to be an understatement: inferring the carry cell is not a change
+that would move this block's achievable clock, it is the change that stands
+between this block and working on this family at all.
 
 ### Throughput
 
@@ -435,12 +443,16 @@ is 49.6 MB/s, 397 Mbit/s. The B.3 run in §3 is 2 015 623 cycles for a
 million bytes, which is that figure arrived at over 15 626 blocks.
 
 There is no measured clock behind the 100 MHz: it is a round number to
-multiply by. **There is a measured one now, and it is 60 MHz** — the clock
-this block closed on an ECP5, which §8 is about. 0.496 bytes per cycle at
-60 MHz is **29.8 MB/s**, and §8 has what a part actually delivered and why
-the two numbers are not the same. The 100 stays above because every cycle
-figure on this page has always been multiplied by it and changing one
-multiplier would make the early sections disagree with the late ones.
+multiply by, and it stays because every cycle figure on this page has always
+been multiplied by it.
+
+**The 0.496 is measured on a part now, and it came out 0.494.** §8 has the
+run: sixteen mebibytes and 262 144 blocks of it, on an ECP5 at 60 MHz,
+**29.63 MB/s**, which is four tenths of a per cent off what a four-state
+zero-delay simulator computed. That is this page's one claim the board
+*confirmed* — and it is a claim about the **control** path, which is the half
+of this block that closes 60 MHz. The other half does not, and §8 is about
+that.
 
 ### The trade declined
 
@@ -464,37 +476,268 @@ reason with the same arithmetic, which is written up there.
 
 ---
 
-## 8. What a board would add, and the cheapest experiment
+## 8. What the board said
 
-**This block has not been on a board, and it does not need one to be
-correct.** It is pure logic: no PLL, no device primitive, no pin timing, no
-double-data-rate register. Simulation sees everything the part would about
-*function*, which is why `ip/usb/usb_device_ulpi`'s warning about
-simulation not simulating an IO register does not apply here.
+**CHECKED**, and it is the most important section on this page, because what
+the board said is **no**.
 
-Two things a board would add that simulation cannot produce:
+The design is `testdata/fpga/cynthion/usb_crypto_console.v`: this block and
+`ip/crypto/chacha20` behind `ip/usb/usb_cdc_acm`, so a `/dev/ttyACM*` the
+kernel's own `cdc_acm` driver binds answers typed lines.
+`testdata/fpga/cynthion/crypto_console.v` is the protocol and
+`tests/usb_crypto_console.rs` is the test. The part is a Great Scott Gadgets
+Cynthion r1.4, an ECP5 `LFE5U-12F-8CABGA256`, serial
+`35L6H2CMGJJVCIBAEA3GCLAN74`, at **60 MHz** — the board's own oscillator, which
+is not a choice: `ip/usb/usb_device_ulpi` needs exactly that, so there is no
+slower clock to retreat to. Linux 6.18.41-gentoo, `xhci_hcd`, the device on a
+full-speed downstream port of a hub. Everything below is **quoted**.
 
-1. **A real throughput figure.** Everything in §7 is cycles. Bytes per
-   second needs a clock that place and route actually closed, and on the
-   ECP5 that number is exactly the one the missing carry inference above
-   would move most — so measuring it would also price that fix.
-2. **A power trace.** It is the only way the side channel §5 disclaims
-   could be characterised at all. Without it, §5 is a statement that
-   nothing was checked, which is the honest thing to say and is not a
-   result.
+This replaces the section that used to be here, which proposed `ip/bus/uart` and
+a cable as "the cheapest experiment" and said it would give "the closed clock,
+the real bytes per second, and an end-to-end check of the whole block on silicon
+in one afternoon". Two of those three happened. The third is the headline and it
+went the other way.
 
-**The cheapest experiment, for the first:** `sha256` with its byte port fed
-from `ip/bus/uart`'s receiver and its digest clocked back out through the
-transmitter. No new HDL but a top level — both blocks exist and both have a
-byte-wide ready/valid port — one serial cable, and a host that compares
-what comes back against `sha256sum`. That gives the closed clock, the real
-bytes per second, and an end-to-end check of the whole block on silicon in
-one afternoon. It would also be the first time anything in `ip/crypto/`
-computed a digest outside a simulator.
+### Three bitstreams, because the one with both cores does not route
 
-The second needs a shunt resistor, an oscilloscope and a trigger, and is
-not an afternoon. It is also the only one of the two that would let §5
-become a measurement instead of a disclaimer.
+The design with both cores is 11 955 lookup tables, and `reticle fpga
+--bitstream` **does not converge** on it: after 40 ripup iterations and an hour
+and fifty minutes,
+
+```text
+error: routing did not converge: 886 node(s) are still oversubscribed after 40
+iteration(s), worst at X26Y1/H06E0303 (2 signals), ... X45Y2/V02S0701 (2 signals), ...
+  X45Y2/V02S0701 is a control wire of X45Y2: 17 of that tile's bels have a pin
+  that can only be reached through it, and 2 signals were routed onto it —
+  `u_console.u_hash.u_core.h_q$ff$mux[191]` and
+  `u_console.u_hash.u_core.w_q$pmux[23]`.
+```
+
+The router's own message says the placer rejects that arrangement before it is
+made (`SiteRules` in `src/fpga/place.rs`), so a design that reaches it has found
+a control wire the architecture does not describe yet. **That is a `src/fpga`
+fact, reported here rather than fixed**, and the named wire is the thing to act
+on.
+
+So `crypto_console` takes `WITH_HASH` and `WITH_CIPHER`, and the two single-core
+builds route in minutes:
+
+| build | LUT4 | flip-flops | depth | routing |
+|---|---|---|---|---|
+| both cores | 11 955 | 2 999 | 87 | **gives up after 40 iterations, 1 h 50 m** |
+| `WITH_CIPHER=0` | 5 891 | 2 378 | **39** | 8 353 of 8 353 signals, 11 m 29 s |
+| `WITH_HASH=0` | 8 375 | 1 652 | **87** | 10 111 of 10 111 signals, 4 m 50 s |
+
+Both bitstreams have every set bit decoding back through the database with
+nothing unexplained — 231 610 bits into 77 578 arcs for the first, 279 362 into
+88 667 for the second — and the arcs they select are exactly the arcs the router
+chose. **The bitstreams are not in question.**
+
+### What works on the part, and it is most of it
+
+```text
+$ stty -F /dev/ttyACM1 115200 raw -echo clocal min 0 time 10
+$ ?  -> H t|h x|E x|e n|Z n|X n|K x|N x|C x|k|n|c|?
+$ k  -> 000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f
+$ n  -> 000000000000004a00000000
+$ c  -> 00000001
+$ C 00000007 -> OK
+$ c  -> 00000007
+$ K 00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff -> OK
+$ K 00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff0 -> ERR
+$ k  -> 0112233445566778899aabbccddeeff00112233445566778899aabbccddeeff0
+$ Q  -> ERR
+$ h 6 -> ERR
+```
+
+The kernel bound `cdc_acm` and gave the device `/dev/ttyACM1`; the help line is
+exact; the 256-bit key, the 96-bit nonce and the 32-bit counter come out of reset
+holding RFC 8439 §2.4.2's values and read back byte for byte; a typed counter
+reads back; a 65-digit `K` answers `ERR` and leaves the key shifted up by one
+nibble, which is **exactly** what `crypto_console.v`'s header says it will do and
+is the first time that paragraph has been checked anywhere; and five kinds of
+malformed line answer `ERR` with the console still working after them.
+
+So: the USB stack, the class layer, the bulk endpoints, the parser, the padding
+state machine's *control*, the string table, the three wide registers and their
+rotating hexadecimal printer, and every error path — all of it closes 60 MHz and
+all of it is right.
+
+### And the digest is wrong, and **not the same wrong twice**
+
+```text
+$ h  -> 9182a9ff537747493eac092f706c8757600082bda13a5417e8cd6be261a66ca1
+$ h  -> 0db02563334a2035247386933558969ae09e6e8c9e9c12777520e6b554ea000b
+$ H abc -> 2bd8ce53a22d6b45c22e2189592fcd7857370a886191c1eae1a490024cc24f52
+$ H abc -> e9880856b005b3ed25948cf610081632b3171c6f7cb8e4d74218c758b3b89f7e
+$ Z 40 -> 5f31796850a3eb89abdf34b31d55e427a4164906883b64b0a85aa39f3a7cdbf1
+```
+
+`ba7816bf…` is what `H abc` should answer, `e3b0c442…` is what `h` should and
+`f5a5fd42…` is what `Z 40` should; none of them is what came back. **`h` is the
+empty message**: no byte of it crosses USB, none of it is typed, it is one block
+of pure padding the device generates itself, and it is therefore the most
+deterministic thing this console can be asked. It gave a different answer every
+time.
+
+That non-repeatability is the whole finding, and `tests/usb_crypto_console.rs` is
+built around measuring it rather than around the digest, because **which**
+commands stop being functions of their own line is what separates the two reasons
+an answer can be wrong. A wrong *constant* is a mis-mapped lookup table or an
+unrouted wire. A wrong *varying* answer is a path that does not settle inside the
+clock period. Sixteen runs of each, with the two shallow commands as the control
+group:
+
+```text
+--- one line, one answer: 16 runs each ---
+  ?                  -> one answer in 16 runs: H t|h x|E x|e n|Z n|X n|K x|N x|C x|k|n|c|?
+  k                  -> one answer in 16 runs: 000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f
+  n                  -> one answer in 16 runs: 000000000000004a00000000
+  c                  -> one answer in 16 runs: 00000001
+
+thread '…' panicked at tests/usb_crypto_console.rs:414:5:
+`h` is a function of its own line and gave 7 distinct answers in 16 runs, so a
+path in it does not settle inside 16.67 ns:
+  4 x 1526135a94747b51ba3d9b2c6eb0ef9af72837d7848343c80dc6ec98263fef54
+  4 x cc39bdad648c1eeaaf755dd5e42fe240c33b3f5988ff7c453798a00788965556
+  3 x ef71af907e80288efcc1d4defc5360cfef4e79028557694213cd5ce56b6f4b4e
+  2 x 24d5863d88e1b87e4fc2ac2a8a0334fa40e08627faa3c4439c982758f5c40397
+  1 x 588817dbcf8511378bbec1a55fe08d27c2e990db9f83332f0517e18e67b3e255
+  1 x 7e3a402f690f2a7f07f89e5659af15479302218f96fb72758012521c873740b7
+  1 x f05c3730399da5998d9f4f7e6cdfb0ccdacf3daa243541a39d4998aff3c25201
+```
+
+Taken at forty runs rather than sixteen, across both bitstreams:
+
+| line | the deepest thing in it | depth, LUT4 | forty runs |
+|---|---|---|---|
+| `?` | a 64-entry string table | shallow | **40 of 40 right** |
+| `k` | a 256-bit rotate and a nibble encoder | shallow | **40 of 40 right** |
+| `e 10` | ChaCha20's quarter round | **87** | 2 distinct, 39 : 1, both wrong |
+| `E 00000000` | the same, plus an exclusive-or | **87** | 2 distinct, 36 : 4, both wrong |
+| `h` | SHA-256's T1 chain | **39** | 7 distinct in 16, all wrong |
+
+**The two paths with no adder in them never fail and the two with chained 32-bit
+additions always do.** That is the conclusion, and it is an argument from two
+populations rather than a delay anybody measured: there is no vendor timing model
+in this repository — `reticle timing` says in its own help that its device
+numbers are placeholders — so "the clock did not close" cannot be a slack figure
+here. It can be, and is, a wrong answer that changes between identical runs.
+
+Two details worth keeping because they are the kind that localise a fault. The
+*tail* of a wrong digest is often right: `h` once gave
+`…85c7d9b0ddeb65bbfef098a3b886335c` and `Z 0` — the same empty message by another
+route — gave `…51c7d9b0ddeb65bbfef098a3b886335c`, agreeing in the last thirteen
+bytes and differing above them, which is what a chain that settles at its cheap
+end and not at its expensive end looks like. And the **deeper** block is the
+*more* repeatable one: ChaCha20 at 87 levels lands on the same wrong value 39
+times in 40, where SHA-256 at 39 levels scatters. A path that misses by a little
+captures whatever has arrived, which varies; a path that misses by a lot captures
+a partial result that is itself stable.
+
+**The cause is §7's last paragraph, which has been corrected because it was too
+optimistic.** `src/fpga/trellis` describes `CCU2C` without a (ci, i0, i1, co)
+port map, the flow says so — `50 adder(s) stay generic` for the hash build, `85`
+for both — and a 32-bit addition becomes a ripple of LUT4 about twenty-one levels
+deep. Five of those chained is 39 levels; four of ChaCha20's is 87. On an iCE40,
+where `SB_CARRY` is inferred, the same two paths are **9** and **5**. Inferring
+the carry cell on the ECP5 is no longer a nicety that would improve a clock:
+**it is what stands between these two blocks and working on this part at all.**
+It is a `src/` change and it is named rather than made.
+
+A **pipeline stage** inside the round would be the other way round, and it is a
+change to `ip/crypto/` rather than to `src/`: it would break the
+129-cycles-a-block figure every section of this page rests on, and §4's
+fixed-latency measurement would have to be retaken. Fixing the backend fixes
+every arithmetic block in the library at once; pipelining fixes one, slower.
+
+### 1. A real throughput figure, and the bottleneck
+
+**MEASURED**, and these are good even though the answers are not: a rate is a
+cycle count, the cycle count is the control path, and the control path is the
+half of this design that works. Taken on the `WITH_CIPHER=0` bitstream unless
+marked.
+
+| what | what it measures | measured |
+|---|---|---|
+| `Z 1000000` — 16 MiB made on the device | **this block**, nothing on USB | **29.63 MB/s**, **0.494 bytes/clock** |
+| `Z 400000` — 4 MiB | the same | 29.44 MB/s, 0.491 bytes/clock |
+| `Z 100000` — 1 MiB | the same, with the round trip visible | 27.92 MB/s, 0.465 bytes/clock |
+| `h` + 256 KiB as hex | the **link, outbound** | 132.0 kB/s hashed, **264.0 kB/s on the wire** |
+| `h` + 64 KiB as hex | the same | 131.8 kB/s hashed, 263.6 kB/s |
+| `e 4000` — 16 KiB of keystream | the **link, inbound** (`WITH_HASH=0`) | 502.7 kB/s, 1 005 kB/s on the wire |
+
+**§7's 0.496 bytes per cycle is now measured on silicon: 0.494.** That is the one
+number on this page the board *confirmed* rather than contradicted, and it is
+worth saying what it means — the cycle count a four-state zero-delay simulator
+computed is the cycle count a part takes, to four tenths of a per cent, over
+sixteen mebibytes and 262 144 blocks. The *control* path of this block is exactly
+as fast as §4 says and §7 multiplies.
+
+**The bottleneck is the link and it is not close.** 29.63 MB/s of core against
+0.132 MB/s of message over USB is a factor of **225**. Half of that factor is
+this protocol's own: a message byte crosses as two hexadecimal digits, so
+264.0 kB/s on the wire carries 132.0 kB/s of message, and hex framing costs
+exactly two. The other half is somebody else's measurement agreeing —
+`ip/usb/usb_cdc_acm/README.md` §5 has `tests/usb_loopback.rs` timing the *bulk
+loopback* of `testdata/fpga/cynthion/usb_ulpi_device.v` at **255 500 bytes/s each
+way** at a 64-byte packet size, and 264 kB/s is that ceiling. So the OUT
+direction of this console runs at the endpoint's own rate and nothing in
+`crypto_console` is in the way.
+
+The two directions are **not** the same, and that is new: 264 kB/s out against
+1 005 kB/s in, a factor of 3.8. An IN endpoint is filled when the host asks and a
+full-speed frame has room for nineteen 64-byte bulk transactions; an OUT endpoint
+that NAKs while the console is busy costs the host a transaction per NAK. So the
+OUT figure is the one that matches a *round trip* and the IN figure the one that
+matches a stream.
+
+### 2. A closed clock — what was asked for, and what there is instead
+
+The question was whether this block meets timing on the part at the clock it
+uses. The answer is **no, at 60 MHz, which is the only clock this board's USB
+transceiver allows**, and the three things that make that a measurement rather
+than a guess are the two shallow control commands being right forty times out of
+forty, the two deep ones being wrong every time, and the wrongness varying.
+
+What a slack number would need, and nobody has: a delay model for this device in
+`src/fpga`. What a *faster* answer would need: the carry cell. What a **slower
+clock** would need, and is the obvious next experiment: a second clock domain,
+because 60 MHz is the ULPI interface rate and not negotiable — the console would
+stay at 60 and the cores would run at 60/N behind a handshake, which is a real
+design change and a clock-domain crossing where there is currently one domain
+and a test asserting it.
+
+### 3. What this still does not establish
+
+A wrong answer off a real part is a result about **function**, and a right one
+would have been too. Neither is a result about anything in §5, and the
+distinction is the whole reason §4 and §5 are two sections:
+
+- **Power analysis.** Nothing has recorded a power trace of this block. Running
+  on silicon makes one *possible* — there is now a part drawing current while
+  hashing a message somebody chose, with LED 5 high for exactly the window it
+  takes, so ball C11 is a hardware trigger. It does not make one *taken*.
+  Nothing here is masked, randomised or duplicated.
+- **Electromagnetic emission.** The same, with a probe instead of a shunt.
+- **Gate delay.** §4's fixed-latency claim is a cycle count, and the board
+  confirmed the cycle count to 0.4 per cent. It is still not a propagation delay.
+  A carry that ripples further for one operand than another does not change how
+  many clock edges pass and is exactly as invisible to a hardware cycle count as
+  to a simulated one. What this round did add is that the data path's delay is a
+  *physical quantity large enough to matter*, which §5 called "real and invisible
+  here" and which is now real and visible as a wrong digest.
+- **Fault injection.** No redundancy and no checking, on silicon as in
+  simulation — and a round that produced wrong answers out of correct logic is a
+  reminder of what §5 says about one: a glitched clock "will produce a wrong
+  digest and say nothing", and so did this.
+
+**And the one thing a reader must not take from this section.** None of it says
+the block is wrong. Every vector in §3 still passes, the decomposition is still
+checked, and the fault is in the path from this block's logic to this part's
+flip-flops. What it says is that **until the ECP5 backend infers a carry cell,
+this block is a simulation result on that family** — which is exactly the
+sentence §1's `CHECKED` level exists so that this page can write.
 
 ---
 

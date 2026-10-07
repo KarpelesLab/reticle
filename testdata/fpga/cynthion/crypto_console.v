@@ -122,6 +122,13 @@
 //   megabyte of ChaCha20 output can be compared against `purecrypto` on the
 //   host without a megabyte coming back over the wire.
 //
+//   **`X` has never run on a part**, and the reason is the paragraph about
+//   `WITH_HASH` and `WITH_CIPHER` below: it is the one command that needs both
+//   cores, the design with both does not route on an LFE5U-12F, and there is
+//   therefore no bitstream in which `X` is anything but `ERR`. It works in
+//   simulation, where `a_crypto_console_answers_through_the_transceiver_that_is_on_the_board`
+//   drives it through the USB stack. That is a gap and it is named.
+//
 // What it does not do
 //   **No authentication.** `E` is ChaCha20 and nothing else: no Poly1305,
 //   so a ciphertext from it is malleable and carries no tag.
