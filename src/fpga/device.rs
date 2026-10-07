@@ -33,6 +33,7 @@
 //!   bel SB_IO io port pad=PACKAGE_PIN din=D_IN_0 dout=D_OUT_0 oe=OUTPUT_ENABLE
 //!   bram SB_RAM40_4K
 //!     ports 2
+//!     count 16
 //!     mode 16 256 init high 0-15
 //!     mode 8 512 data 0,2,4,6,8,10,12,14 init high 0,2,4,6,8,10,12,14 1,3,5,7,9,11,13,15
 //!     flags dual_port init
@@ -161,6 +162,29 @@
 //! `WEBWE[3:0]`) are what this is for — a memory written a whole word at
 //! a time drives all of them alike, and leaving the upper bits
 //! unconnected would write one byte and drop the rest.
+//!
+//! # What a `count` is, and what it is not
+//!
+//! `bel … count N` and `bram … count N` say **how many the part number is
+//! specified to have**, which is a statement from the vendor's data sheet
+//! and not a statement about silicon. The two can differ, and on one part
+//! this project builds for they differ by a factor of two: an
+//! `LFE5U-12F` and an `LFE5U-25F` are the same die, Project Trellis
+//! carries **one** database for both — at commit `015e033` of
+//! `YosysHQ/prjtrellis-db` the directories `ECP5/LFE5U-12F` and
+//! `ECP5/LFE5U-25F` are the same git tree, `76b742b1` — and the fabric
+//! that comes out of it enumerates the 25F's 24 288 lookup-table sites
+//! whichever part number asked for it. Lattice specifies 12 for the 12F
+//! (`FPGA-DS-02012-3.4` Table 1.1).
+//!
+//! So nothing may conclude from a `count` that a site does not exist, and
+//! nothing may conclude from a site existing that the part number covers
+//! it. [`Device::over_specification`] is the one place that compares the
+//! two, and it produces a [`SiteOverrun`] — a warning
+//! ([`OVER_SPECIFICATION`]), because the fabric the design would use is
+//! real and may well work, and because **which** of the die's sites the
+//! smaller part number covers is not stated anywhere this project can
+//! read. `docs/fpga-trellis.md` has the whole account.
 
 use std::fmt;
 
@@ -174,6 +198,9 @@ use crate::source::{SourceId, Span};
 pub const DEV_SYNTAX: &str = "F0100";
 /// Diagnostic code for a `.dev` construct that is well formed but unknown.
 pub const DEV_UNKNOWN: &str = "F0101";
+/// Diagnostic code for a design that needs more of a primitive than the
+/// part number is specified to have. See [`Device::over_specification`].
+pub const OVER_SPECIFICATION: &str = "F0400";
 
 /// The name of a package pin, as printed on the datasheet (`A3`, `21`).
 pub type PinName = String;
@@ -827,6 +854,10 @@ impl BramPort {
 pub struct BramShape {
     /// The primitive name (`SB_RAM40_4K`, `DP16KD`).
     pub name: String,
+    /// How many of these blocks the part number is specified to have,
+    /// when the number is known. See the module docs on what a `count`
+    /// is: it is the data sheet's number, not the fabric's.
+    pub count: Option<u32>,
     /// The `(data_width, depth)` pairs the block can be configured as, in
     /// file order. Every pair of one block holds the same number of bits.
     pub width_modes: Vec<(u32, u32)>,
@@ -1524,6 +1555,58 @@ pub struct Device {
     pub tile_grid: Option<Grid>,
 }
 
+/// A design that needs more of one primitive than the part number is
+/// specified to have.
+///
+/// The hazard this names is quiet: the fabric database a backend loads
+/// describes a *die*, and several part numbers may be cut from one die
+/// with the vendor guaranteeing less of it than is there. Such a design
+/// places, routes, produces a bitstream in which every bit decodes, and
+/// runs — on the part in front of whoever built it. What it is not is
+/// covered by the data sheet of the part number it was built for.
+///
+/// [`Device::over_specification`] produces these.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SiteOverrun {
+    /// The device the design was built for ([`Device::name`]).
+    pub device: String,
+    /// The primitive the design uses too many of.
+    pub primitive: String,
+    /// How many the netlist holds.
+    pub used: usize,
+    /// How many the database says the part number has.
+    pub specified: u32,
+}
+
+impl SiteOverrun {
+    /// The headline, as a warning message.
+    pub fn message(&self) -> String {
+        format!(
+            "this design needs {} `{}` and `{}` is specified to have {}",
+            self.used, self.primitive, self.device, self.specified
+        )
+    }
+
+    /// Why this is a warning and not an error, as a note.
+    ///
+    /// The sentence is the whole point of the diagnostic: the sites are
+    /// there, the design will use them, and *which* of the die's sites
+    /// the part number covers is not something the open databases say, so
+    /// no tool here can place inside them even if it wanted to.
+    pub fn why_it_is_not_an_error(&self) -> &'static str {
+        "the fabric database describes the die, which may serve several part numbers; the sites \
+         beyond the specified count exist and this build will use them, but which of them the \
+         part number covers is not stated in any database Reticle reads, so placement cannot be \
+         confined to them"
+    }
+}
+
+impl fmt::Display for SiteOverrun {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.message())
+    }
+}
+
 impl Device {
     /// An empty device with the given name and family.
     pub fn new(name: impl Into<String>, family: impl Into<String>) -> Self {
@@ -1706,6 +1789,88 @@ impl Device {
     /// The site with the given name.
     pub fn site(&self, name: &str) -> Option<&Site> {
         self.sites.iter().find(|s| s.name == name)
+    }
+
+    /// How many of the primitive called `name` this part number is
+    /// specified to have, when the database says.
+    ///
+    /// A family that declares one primitive several times — the ECP5's
+    /// thirty-six `bel TRELLIS_FF` lines, one per flip-flop variant —
+    /// puts the number on one of them, because they are all the same
+    /// silicon; so the first line that carries a count answers for the
+    /// name. This is the data sheet's number; see the module docs on what
+    /// a `count` is not.
+    pub fn specified_count(&self, name: &str) -> Option<u32> {
+        self.bels
+            .iter()
+            .filter(|b| b.name == name)
+            .find_map(|b| b.count)
+            .or_else(|| {
+                self.block_rams
+                    .iter()
+                    .filter(|b| b.name == name)
+                    .find_map(|b| b.count)
+            })
+            .or_else(|| {
+                self.clock_resources
+                    .plls
+                    .iter()
+                    .filter(|p| p.name == name)
+                    .find_map(|p| p.count)
+            })
+    }
+
+    /// How many sites of a placer's site *kind* (`lut`, `ff`, `bram`,
+    /// `lutram`, …) this part number is specified to have.
+    ///
+    /// [`Device::specified_count`] keyed by primitive name is what the
+    /// netlist asks with; a placement report counts by kind instead, so
+    /// this is the same answer reached through [`BelRole`]. A kind the
+    /// device describes with a `bram` block rather than a `bel` line —
+    /// the ECP5's `DP16KD` — is found there too.
+    ///
+    /// This is what lets a utilisation line print both numbers, which is
+    /// the only way a reader can tell "half the part left" from "the die
+    /// has twice what the part number covers".
+    pub fn specified_sites(&self, kind: &str) -> Option<u32> {
+        let role = BelRole::from_keyword(kind)?;
+        if let Some(bel) = self.bel(role)
+            && let Some(count) = self.specified_count(&bel.name)
+        {
+            return Some(count);
+        }
+        if role == BelRole::Bram {
+            return self.block_rams.first().and_then(|b| b.count);
+        }
+        None
+    }
+
+    /// Which cell types a netlist uses more of than this part number is
+    /// specified to have.
+    ///
+    /// `netlist` is `(primitive name, how many)`, which is what
+    /// [`super::flow::FlowReport::netlist`] holds. Only a name the
+    /// database carries a count for can be over it, and the result is in
+    /// the order `netlist` was in, so it is deterministic.
+    ///
+    /// This is a *check*, not a stage: it answers a question about a
+    /// mapped netlist and a part number and reads nothing else. The
+    /// caller turns each [`SiteOverrun`] into a warning; nothing here
+    /// refuses anything, and
+    /// [`SiteOverrun::why_it_is_not_an_error`] says why.
+    pub fn over_specification(&self, netlist: &[(String, usize)]) -> Vec<SiteOverrun> {
+        netlist
+            .iter()
+            .filter_map(|(name, used)| {
+                let specified = self.specified_count(name)?;
+                (*used > specified as usize).then(|| SiteOverrun {
+                    device: self.name.clone(),
+                    primitive: name.clone(),
+                    used: *used,
+                    specified,
+                })
+            })
+            .collect()
     }
 
     /// Parses exactly one `device` block from `text`.
@@ -1964,6 +2129,9 @@ fn write_value(value: &AttrValue) -> String {
 fn write_bram(out: &mut String, bram: &BramShape) {
     out.push_str(&format!("  bram {}\n", quote(&bram.name)));
     out.push_str(&format!("    ports {}\n", bram.ports));
+    if let Some(count) = bram.count {
+        out.push_str(&format!("    count {count}\n"));
+    }
     for (index, (width, depth)) in bram.width_modes.iter().enumerate() {
         let mut line = format!("    mode {width} {depth}");
         if let Some(params) = bram.mode_params.get(index)
@@ -2572,6 +2740,7 @@ impl<'a> Parser<'a> {
         let name = self.word(header, 1, "a block RAM name")?.to_owned();
         let mut bram = BramShape {
             name,
+            count: None,
             width_modes: Vec::new(),
             mode_params: Vec::new(),
             ports: 1,
@@ -2600,6 +2769,11 @@ impl<'a> Parser<'a> {
                 "ports" => {
                     if let Some(value) = self.number_at(line, 1, "the number of ports") {
                         bram.ports = value;
+                    }
+                }
+                "count" => {
+                    if let Some(value) = self.number_at(line, 1, "the number of blocks") {
+                        bram.count = Some(value);
                     }
                 }
                 "mode" => {
@@ -3530,6 +3704,7 @@ end
     fn empty_shapes_have_sane_defaults() {
         let bram = BramShape {
             name: "R".into(),
+            count: None,
             width_modes: Vec::new(),
             mode_params: Vec::new(),
             ports: 1,

@@ -1908,6 +1908,46 @@ fn the_database_describes_one_part_of_the_ecp5_family() {
             ("lutram".to_owned(), 3036)
         ]
     );
+    // ---- and what the *part number* is specified to have ----
+    //
+    // **These two sets of numbers disagree on purpose, and this is where
+    // they meet.** Everything above is the die; Lattice's Table 1.1
+    // (`FPGA-DS-02012-3.4`) gives the LFE5U-12 half of it for logic —
+    // 12k LUTs against the LFE5U-25's 24k — and 32 of its 56 sysMEM
+    // blocks. The 12F and the 25F are one die and Project Trellis carries
+    // one database for both (see
+    // `the_same_die_serves_two_parts_and_only_the_idcode_differs`), so a
+    // 12F build is placed on all of it.
+    //
+    // A build that crosses the specified figure is `F0400`, a warning,
+    // because the sites exist and *which* of them the part number covers
+    // is stated in no database here. `tests/fpga_flow.rs`'s
+    // `the_ecp5_12f_is_specified_at_half_the_die_it_shares_with_the_25f`
+    // pins the data sheet's side on its own, with no database needed; this
+    // is the assertion that the two sides are the factors apart they
+    // should be.
+    let part = reticle::fpga::target("ecp5-12f-CABGA256").expect("the 12F");
+    let specified = |name: &str| part.specified_count(name).expect(name) as usize;
+    let enumerated = |kind: &str| {
+        graph
+            .site_counts()
+            .into_iter()
+            .find(|(k, _)| k == kind)
+            .expect(kind)
+            .1
+    };
+    assert_eq!((specified("LUT4"), enumerated("lut")), (12_144, 24_288));
+    assert_eq!(
+        (specified("TRELLIS_FF"), enumerated("ff")),
+        (12_144, 24_288)
+    );
+    assert_eq!(
+        (specified("TRELLIS_DPR16X4"), enumerated("lutram")),
+        (1518, 3036)
+    );
+    // Block RAM is the one that is not a factor of two, which is why the
+    // uncovered part of the die cannot be a geometric half of it.
+    assert_eq!((specified("DP16KD"), enumerated("bram")), (32, 56));
     // A ratio between two sizes in one process, not a wall clock: the
     // whole-die graph is under a kilobyte per node, which is what makes it
     // fit at all.

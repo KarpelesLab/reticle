@@ -2761,10 +2761,21 @@ fn write_ecp5_bitstream(
     std::fs::write(path, &bytes).map_err(|e| format!("cannot write `{path}`: {e}"))?;
     laps.lap("check the arcs and write");
 
+    // The denominator is the **die's**, and on an LFE5U-12F the die is an
+    // LFE5U-25F's: `6183/24288 lut` on a part Lattice specifies at 12 144
+    // reads as half empty when it is half full. So where the device file
+    // knows the part number's own figure and it differs, both are printed.
+    // `docs/fpga-trellis.md` has why they differ and `F0400` is the
+    // warning for crossing the smaller one.
     let placed = place_report
         .usage
         .iter()
-        .map(|(kind, used, total)| format!("{used}/{total} {kind}"))
+        .map(|(kind, used, total)| match device.specified_sites(kind) {
+            Some(spec) if spec as usize != *total => {
+                format!("{used}/{total} {kind} ({spec} specified)")
+            }
+            _ => format!("{used}/{total} {kind}"),
+        })
         .collect::<Vec<_>>()
         .join(", ");
     // A design with no flip-flop can still be clocked: a block RAM reads

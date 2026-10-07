@@ -533,6 +533,21 @@ nothing unexplained — 231 610 bits into 77 578 arcs for the first, 279 362 int
 88 667 for the second — and the arcs they select are exactly the arcs the router
 chose. **The bitstreams are not in question.**
 
+### 11 955 is 98.4 % of this part, not 49 %
+
+The flow reports `11955/24288 lut` for the both-cores build, and that number is
+the **die**. The die is an LFE5U-25F's; Lattice specifies the LFE5U-12F this
+board carries at **12 144** lookup tables, half of it, and 11 955 of 12 144 is
+**98.4 %**. `docs/fpga-trellis.md` has why the two numbers differ and what could
+not be established about it; `crypto_console_ulpi` is the same story at 11 888,
+97.9 %.
+
+That is worth knowing next to the routing failure above and it is **not an
+explanation of it**: the router was given all 24 288 sites and still gave up, so
+the named control wire is still the thing to act on. What changes is the reading
+of the headline figure — this design is not a part half empty, it is a part
+specified full, and a single-core build is the configuration that fits with room.
+
 ### What works on the part, and it is most of it
 
 ```text

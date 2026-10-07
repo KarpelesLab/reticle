@@ -101,7 +101,7 @@ use super::place::{Netlist, PlaceOptions, Placement, PlacementReport};
 use super::route::{RouteOptions, Routing, RoutingReport};
 use super::techcells::CellMapReport;
 #[cfg(feature = "synth")]
-use crate::diag::Diagnostics;
+use crate::diag::{Diagnostic, Diagnostics};
 use crate::ir::emit::{BitView, EmitError, SigBit, VerilogOptions, emit_json, emit_verilog_with};
 use crate::ir::{Bit, CellKind, Design, ModuleId, PortDir};
 
@@ -554,6 +554,29 @@ pub fn synthesize_for(
     }
 
     report.netlist = cell_types(design, module);
+
+    // 6. Does it fit the *part number*? The fabric a backend loads later
+    // describes a die, and a die may serve several part numbers with the
+    // vendor covering less of it than is there — the LFE5U-12F is half an
+    // LFE5U-25F and the two share one Project Trellis database — so the
+    // placer finding a site is not the same question as the data sheet
+    // having one. Here is the only place that asks the second question,
+    // and it asks it of the mapped netlist because that is what a
+    // utilisation figure is counted from.
+    //
+    // A warning and not an error: the sites are real, the build will use
+    // them and it will very likely work. What nothing can do is place
+    // inside the covered region, because no database says which region
+    // that is. See `Device::over_specification`.
+    let span = design.modules[module].span;
+    for over in device.over_specification(&report.netlist) {
+        diags.push(
+            Diagnostic::warning(over.message())
+                .with_code(super::device::OVER_SPECIFICATION)
+                .with_span(span)
+                .with_note(over.why_it_is_not_an_error()),
+        );
+    }
     Ok(report)
 }
 

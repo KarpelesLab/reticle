@@ -4397,17 +4397,169 @@ the usual answer is spatial partitioning rather than locks.
 | Clock buffers (`DCC`) | 56: twelve at the top, fourteen on each of the left and right, sixteen at the bottom |
 | `lut` sites | 24 288 |
 | `ff` sites | 24 288 |
+| `lutram` sites | 3036 |
+| `bram` sites | 56 |
+| **What Lattice specifies for this part number** | **12 144 LUT4, 12 144 registers, 1518 distributed RAMs, 32 block RAMs** — half the die for logic, 32 of 56 for block RAM. The next section is about that |
 
 `tests/fpga_trellis.rs::the_database_describes_one_part_of_the_ecp5_family`
 asserts every one of those, so the table cannot drift from the database.
 
 **The LFE5U-12F and the LFE5U-25F are the same die.** Their three
-per-part files in `prjtrellis-db` are byte-identical, their `devices.json`
-entries differ in the `idcode` field and in nothing else, nextpnr loads
-one `chipdb-25k.bin` for both, and Lattice's own TN-02039 Table B.4 gives
+per-part files in `prjtrellis-db` are not merely byte-identical — at
+commit `015e033` the two directories are **the same tree object**,
+`76b742b1e18d8a3a37a9f6c1c9a51547b6f6c683` — their `devices.json` entries
+differ in the `idcode` field and in nothing else, nextpnr loads one
+`chipdb-25k.bin` for both, and Lattice's own TN-02039 Table B.4 gives
 both 7562 frames of 592 bits. Only the identifier tells them apart, which
 is why `TrellisFabric::check_idcode` is not a nicety: a bitstream from the
 wrong half of the database would configure the part and assert `DONE`.
+
+## The part number is specified at half the die, and the flow says so now
+
+The section above says the LFE5U-12F and the LFE5U-25F are the same die
+and treats that as a fact about *identifiers*. It is also a fact about
+**capacity**, and for a long time nothing in this flow said so: a 12F
+design placed on all 24 288 lookup-table sites of the die, routed, got a
+bitstream in which every bit decoded, and was reported as using "half the
+part". It was using all of a part Lattice sells as half that size.
+
+### What each source actually says
+
+**CHECKED — Lattice.** Table 1.1 of the *ECP5 and ECP5-5G Family Data
+Sheet*, `FPGA-DS-02012-3.4`, page 12, read from the document rather than
+remembered:
+
+| | LFE5U-12 | LFE5U-25 | LFE5U-45 |
+|---|---|---|---|
+| LUTs (k) | **12** | **24** | 44 |
+| sysMEM Blocks (18 kb) | **32** | **56** | 108 |
+| Embedded Memory (kb) | 576 | 1,008 | 1944 |
+| Distributed RAM Bits (kb) | **97** | **194** | 351 |
+| 18 × 18 Multipliers | 28 | 28 | 72 |
+| PLLs/DLLs | 2/2 | 2/2 | 4/4 |
+| 256 caBGA (SerDes/I/O) | 0/197 | 0/197 | 0/197 |
+
+So the derating is **not uniform**: logic and distributed RAM are exactly
+half, block RAM is 32 of 56, and the multipliers, the PLLs and the 197
+balls of the caBGA-256 are the *same on both part numbers*. Nothing
+geometric explains a set of factors like that. §2 of the same document
+says "Each slice contains two LUT4s feeding two registers", which is how
+the register count is known: it follows the lookup tables, so 12 144.
+
+**CHECKED — Project Trellis.** The database draws no distinction at all.
+At commit `015e033` of `YosysHQ/prjtrellis-db`, the git **tree object**
+for `ECP5/LFE5U-12F` and for `ECP5/LFE5U-25F` is the same object,
+`76b742b1e18d8a3a37a9f6c1c9a51547b6f6c683` — not two identical copies,
+one tree listed twice. (`LFE5UM-25F` and `LFE5UM5G-25F` likewise share
+`04caf2fb74c0`, and the three 45Fs share `7486f1c6798c`.) `tilegrid.json`
+fetched for the 12F is 2 806 980 bytes with MD5
+`f96e14359ba5a53cc541e676fbe37a2e`, and so is the 25F's. Counted out of
+that one file: **3036 `PLC2` tiles, 12 144 `SLICE` sites** — two LUT4 to a
+slice, so 24 288 — and `devices.json` gives both part numbers
+`max_row` 50, `max_col` 72, 7562 frames of 592 bits, differing only in
+`idcode`.
+
+**CHECKED — this backend.** `graph.site_counts()` for the 12F is 24 288
+`lut`, 24 288 `ff`, 3036 `lutram`, 56 `bram`, 56 `gb`, 197 `io`, pinned by
+`the_database_describes_one_part_of_the_ecp5_family`. The 56 block RAMs
+are the 25F's figure, which that test already said in a comment.
+
+**CHECKED — nextpnr.** `ecp5/arch.cc` upstream loads
+`ecp5/chipdb-25k.bin` when the chip is `LFE5U_12F`, together with the
+25F, the UM-25F and the UM5G-25F, and applies no restriction of any kind;
+`ecp5/main.cc` mentions the 12F exactly once, to offer `--12k`. **So the
+state of the art does not solve this problem — it ignores it.** A design
+built with yosys and nextpnr for a 12F may use the whole die and
+routinely does, which is also why this is a warning here and not a
+refusal.
+
+**NOT ESTABLISHED — which sites.** *Nothing read here says which 12 144
+of the 24 288 Lattice covers*, and the shape of the derating argues that
+the question may not have a geometric answer: a contiguous half of the
+die would take half the DSP columns and half the I/O with it, and the
+data sheet gives the 12F all of both. Candidate explanations not
+distinguished by anything available — speed binning on a fully present
+fabric, a per-part test program that only guarantees part of it, a
+fuse-free marketing split — all predict the same open database. Lattice
+Diamond presumably has the answer in its own device data; that is not
+something this project can read.
+
+### What the flow does about it
+
+`count` in a `.dev` file now means **what the part number is specified to
+have**, and it is a different question from what the fabric enumerates.
+`Device::specified_count` answers the first, `graph.site_counts()` the
+second, and `Device::over_specification` is the only place that compares
+them. A design over the specified figure is `F0400`, a **warning**:
+
+```text
+warning[F0400]: this design needs 33 `DP16KD` and `ecp5-12f-CABGA256` is specified to have 32
+ --> wide_store.rtl:1:8
+  = note: the fabric database describes the die, which may serve several part numbers; the
+          sites beyond the specified count exist and this build will use them, but which of
+          them the part number covers is not stated in any database Reticle reads, so
+          placement cannot be confined to them
+```
+
+It is a warning and not an error for one reason, and it is the reason
+above: **the covered region cannot be identified, so nothing can be done
+about the overrun except say it.** Refusing would also refuse builds that
+nextpnr makes every day and that work. What the diagnostic buys is that
+the number stops being invisible.
+
+The counts the ECP5 file now carries, from the table above:
+
+| device | `LUT4` | `TRELLIS_FF` | `TRELLIS_DPR16X4` | `DP16KD` |
+|---|---|---|---|---|
+| `ecp5-12f-CABGA256` | 12 144 | 12 144 | 1518 | 32 |
+| `ecp5-25f-CABGA381` | 24 288 | 24 288 | 3036 | 56 |
+| `ecp5-45f-CABGA381` | 43 848 | 43 848 | 5481 | 108 |
+
+The `TRELLIS_DPR16X4` figures are derived and exact rather than quoted:
+Lattice counts eight bits of distributed RAM per LUT4 (24 288 × 8 =
+194 304, which is the 25F's "194 kb"), a `TRELLIS_DPR16X4` is 64 bits, so
+the number of them is the LUT4 count over eight.
+
+### What this changes for the designs already here
+
+Every design under `testdata/fpga/cynthion/`, mapped for
+`ecp5-12f-CABGA256`, against the 12 144 the part number is specified to
+have — CHECKED, by running `reticle fpga --report` over each:
+
+| design | `LUT4` | of 12 144 | `TRELLIS_FF` | `TRELLIS_DPR16X4` |
+|---|---|---|---|---|
+| `usb_crypto_console` | **11 955** | **98.4 %** | 2999 | 18 |
+| `crypto_console_ulpi` | **11 888** | **97.9 %** | 2956 | 18 |
+| `crypto_console` | 10 679 | 87.9 % | 2477 | 0 |
+| `usb_proxy_target` | 3449 | 28.4 % | 1137 | 10 |
+| `usb_host_target` | 3181 | 26.2 % | 1109 | 28 |
+| `usb_hub_target` | 2531 | 20.8 % | 979 | 2 |
+| `usb_cdc_uart` | 1877 | 15.5 % | 845 | 18 |
+| `usb_ulpi_trace` | 1321 | 10.9 % | 2029 | 8 |
+| `usb_ulpi_device` | 1063 | 8.8 % | 417 | 16 |
+| `bidir_bus` | 103 | 0.8 % | 31 | 0 |
+| everything else | ≤ 74 | | | |
+
+`examples/mos6502_monitor` is 6183, 50.9 %, which its README already
+states against 12 144.
+
+**Nothing here is over the line, and two designs are within two per cent
+of it.** That is the result worth having: `usb_crypto_console` at 11 955
+of 12 144 has been reported for months as "11 955 / 24 288", which reads
+as a part half empty, and it is a part at 98.4 %. The 11 955 figure is
+not new — `ip/crypto/sha256/README.md` recorded it, and running the
+design again reproduced it exactly, which is what makes this table a
+measurement rather than a restatement.
+
+It is worth saying what this does **not** settle. `ip/crypto/sha256`
+records that `usb_crypto_console` *does not route*: 886 nodes still
+oversubscribed after 40 iterations, with a named control wire the
+architecture does not describe. A design at 98 % of its part number is
+exactly where congestion is expected, so the utilisation is a second
+reading of that failure — but the router was given all 24 288 sites and
+still gave up, so it is not an explanation, and the named wire is still
+the thing to act on. The honest statement is that the two facts are
+consistent and neither implies the other.
 
 ## Where a pad's bits are, and how that was established
 

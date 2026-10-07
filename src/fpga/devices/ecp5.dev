@@ -105,9 +105,28 @@
 #   * MULT18X18D is an 18x18 signed multiplier with a 36-bit product and
 #     up to three pipeline stages. High confidence for the arithmetic,
 #     MEDIUM confidence for the port names recorded here (bus form again).
-#   * Resource counts (24k LUTs, 56 block RAMs and 28 multipliers on the
-#     25F; 44k LUTs, 108 and 54 on the 45F) are the datasheet figures.
-#     Medium-high confidence.
+#   * Resource counts are **Table 1.1 of Lattice's ECP5 and ECP5-5G
+#     Family Data Sheet, FPGA-DS-02012-3.4**, read in full rather than
+#     remembered, and they are what every `count` in this file says:
+#
+#       device      LUTs   sysMEM(18kb)  distributed RAM   18x18 mult
+#       LFE5U-12     12k        32            97 kb            28
+#       LFE5U-25     24k        56           194 kb            28
+#       LFE5U-45     44k       108           351 kb            72
+#
+#     `lutram count` is derived from the distributed-RAM figure and is
+#     exact: Lattice counts 8 bits of distributed RAM per LUT4 (24 288 x
+#     8 = 194 304 bits, which is the 25F's "194 kb"), a TRELLIS_DPR16X4
+#     is 64 bits, and so the number of them is the LUT4 count over eight
+#     — 3036 on the 25F, 1518 on the 12F, 5481 on the 45F. HIGH.
+#
+#     An earlier version of this line said the 45F has 54 multipliers.
+#     The datasheet says 72; the wrong number is recorded here because it
+#     was believed for a year and nothing in the file depended on it.
+#
+#     **A count is the part number's, not the die's**, and on the 12F
+#     below the two differ by a factor of two. `src/fpga/device.rs` has
+#     what that means and `docs/fpga-trellis.md` has the whole account.
 #   * The carry unit CCU2C computes two sum bits and their carry inside
 #     the cell, which does not match the simple (ci, i0, i1) -> co model
 #     Reticle maps carry chains onto, so no port map is recorded and
@@ -182,9 +201,10 @@ device ecp5-25f-CABGA381
   bel IDDRX1F ddr_in port d=D clk=SCLK rst=RST q0=Q0 q1=Q1
   bel ODDRX1F ddr_out port d0=D0 d1=D1 clk=SCLK rst=RST q=Q
   bel DELAYG iodelay port i=A o=Z param DEL_MODE="USER_DEFINED" param_value DEL_VALUE=127
-  bel TRELLIS_DPR16X4 lutram port wclk=WCK we=WRE waddr=WAD0,WAD1,WAD2,WAD3 din=DI0,DI1,DI2,DI3 raddr=RAD0,RAD1,RAD2,RAD3 dout=DO0,DO1,DO2,DO3 param WCKMUX="WCK" WREMUX="WRE"
+  bel TRELLIS_DPR16X4 lutram count 3036 port wclk=WCK we=WRE waddr=WAD0,WAD1,WAD2,WAD3 din=DI0,DI1,DI2,DI3 raddr=RAD0,RAD1,RAD2,RAD3 dout=DO0,DO1,DO2,DO3 param WCKMUX="WCK" WREMUX="WRE"
   bram DP16KD
     ports 2
+    count 56
     mode 18 1024 param DATA_WIDTH_A=18 DATA_WIDTH_B=18 addr 4 pad 4'b0011 init low 0-17
     mode 9 2048 param DATA_WIDTH_A=9 DATA_WIDTH_B=9 addr 3 init low 0-8 9-17
     mode 4 4096 param DATA_WIDTH_A=4 DATA_WIDTH_B=4 addr 2 init low 0-3 4-7 9-12 13-16
@@ -242,8 +262,32 @@ end
 #     **right** edge of the die, in bank 3, and `iodb.json` is what says
 #     so. `docs/fpga-trellis.md` has its circuit and why `PULLMODE` has
 #     to be written for it.
-#   * The **cell counts** are the LFE5U-12F's 12 144 lookup tables, from
-#     Lattice's family data. MEDIUM, and nothing here depends on them.
+#   * The **cell counts are the ones Lattice specifies for the 12F and
+#     they are half the die.** Table 1.1 of FPGA-DS-02012-3.4 gives the
+#     LFE5U-12 12k LUTs, 32 sysMEM blocks and 97 kb of distributed RAM,
+#     against the LFE5U-25's 24k, 56 and 194 kb; the counts below are
+#     12 144 LUT4, 12 144 flip-flops (the datasheet's §2 says "each slice
+#     contains two LUT4s feeding two registers", so registers follow
+#     LUT4s), 1518 TRELLIS_DPR16X4 and 32 DP16KD. HIGH — read from the
+#     document, not remembered.
+#
+#     **The fabric this backend loads enumerates twice that**, and that
+#     is not a defect in either number. The 12F and the 25F are the same
+#     die: at commit 015e033 of YosysHQ/prjtrellis-db the directories
+#     `ECP5/LFE5U-12F` and `ECP5/LFE5U-25F` are *the same git tree*
+#     (76b742b1), so `tilegrid.json` for the 12F is the 25F's file, and
+#     it enumerates 12 144 SLICE sites — 24 288 LUT4 — 3036 logic tiles
+#     and 56 EBRs. `tests/fpga_trellis.rs` pins all four. nextpnr-ecp5
+#     does not solve this either: its `--12k` loads `chipdb-25k.bin` and
+#     restricts nothing.
+#
+#     So a 12F design may use more than it is specified to and will
+#     place, route and run. Which 12 144 of the 24 288 Lattice covers is
+#     stated in no database this project can read, so placement cannot be
+#     confined to them and `F0400` is a **warning** that names the
+#     uncertainty rather than an error that hides it. The EBR derate is
+#     the sharpest instance: 32 of 56 is not even half, so no geometric
+#     half-die explains it.
 #   * Everything else is the block above's, unchanged, with the package
 #     and speed grade swapped. The bels, the block RAM and the PLL are
 #     the family's and the same die serves the 12F and the 25F.
@@ -302,9 +346,10 @@ device ecp5-12f-CABGA256
   bel IDDRX1F ddr_in port d=D clk=SCLK rst=RST q0=Q0 q1=Q1
   bel ODDRX1F ddr_out port d0=D0 d1=D1 clk=SCLK rst=RST q=Q
   bel DELAYG iodelay port i=A o=Z param DEL_MODE="USER_DEFINED" param_value DEL_VALUE=127
-  bel TRELLIS_DPR16X4 lutram port wclk=WCK we=WRE waddr=WAD0,WAD1,WAD2,WAD3 din=DI0,DI1,DI2,DI3 raddr=RAD0,RAD1,RAD2,RAD3 dout=DO0,DO1,DO2,DO3 param WCKMUX="WCK" WREMUX="WRE"
+  bel TRELLIS_DPR16X4 lutram count 1518 port wclk=WCK we=WRE waddr=WAD0,WAD1,WAD2,WAD3 din=DI0,DI1,DI2,DI3 raddr=RAD0,RAD1,RAD2,RAD3 dout=DO0,DO1,DO2,DO3 param WCKMUX="WCK" WREMUX="WRE"
   bram DP16KD
     ports 2
+    count 32
     mode 18 1024 param DATA_WIDTH_A=18 DATA_WIDTH_B=18 addr 4 pad 4'b0011 init low 0-17
     mode 9 2048 param DATA_WIDTH_A=9 DATA_WIDTH_B=9 addr 3 init low 0-8 9-17
     mode 4 4096 param DATA_WIDTH_A=4 DATA_WIDTH_B=4 addr 2 init low 0-3 4-7 9-12 13-16
@@ -387,9 +432,10 @@ device ecp5-45f-CABGA381
   bel IDDRX1F ddr_in port d=D clk=SCLK rst=RST q0=Q0 q1=Q1
   bel ODDRX1F ddr_out port d0=D0 d1=D1 clk=SCLK rst=RST q=Q
   bel DELAYG iodelay port i=A o=Z param DEL_MODE="USER_DEFINED" param_value DEL_VALUE=127
-  bel TRELLIS_DPR16X4 lutram port wclk=WCK we=WRE waddr=WAD0,WAD1,WAD2,WAD3 din=DI0,DI1,DI2,DI3 raddr=RAD0,RAD1,RAD2,RAD3 dout=DO0,DO1,DO2,DO3 param WCKMUX="WCK" WREMUX="WRE"
+  bel TRELLIS_DPR16X4 lutram count 5481 port wclk=WCK we=WRE waddr=WAD0,WAD1,WAD2,WAD3 din=DI0,DI1,DI2,DI3 raddr=RAD0,RAD1,RAD2,RAD3 dout=DO0,DO1,DO2,DO3 param WCKMUX="WCK" WREMUX="WRE"
   bram DP16KD
     ports 2
+    count 108
     mode 18 1024 param DATA_WIDTH_A=18 DATA_WIDTH_B=18 addr 4 pad 4'b0011 init low 0-17
     mode 9 2048 param DATA_WIDTH_A=9 DATA_WIDTH_B=9 addr 3 init low 0-8 9-17
     mode 4 4096 param DATA_WIDTH_A=4 DATA_WIDTH_B=4 addr 2 init low 0-3 4-7 9-12 13-16

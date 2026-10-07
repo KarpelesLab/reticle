@@ -217,6 +217,52 @@ ports than a block has is duplicated, one copy per read port, each
 holding the contents, exactly as a written memory with one write port
 is; the copies need no keeping in step.
 
+## Resource counts, and the part number that has fewer than the die
+
+`bel … count N` and `bram … count N` in a `.dev` file say **how many the
+part number is specified to have**. That is the vendor's number, and it is
+a different question from how many sites the fabric a backend loads
+enumerates. On most parts the two agree and nobody notices. On the ECP5 the
+LFE5U-12F is the same die as the LFE5U-25F — Project Trellis carries one
+database for both, and at commit `015e033` of `prjtrellis-db` the two
+directories are the same tree object — so a 12F build is placed on all
+24 288 of the die's lookup-table sites while Lattice specifies 12 144.
+
+A design that needs more of a primitive than its part number is specified
+to have is a warning, `F0400`:
+
+```text
+warning[F0400]: this design needs 33 `DP16KD` and `ecp5-12f-CABGA256` is specified to have 32
+  = note: the fabric database describes the die, which may serve several part numbers; the
+          sites beyond the specified count exist and this build will use them, but which of
+          them the part number covers is not stated in any database Reticle reads, so
+          placement cannot be confined to them
+```
+
+A warning rather than an error for the reason the note gives: the sites
+exist, the build will use them and it will probably work, and **which** of
+the die's sites the smaller part number covers is stated in no database
+this project can read — so placement cannot be confined to the covered
+region even in principle here. nextpnr-ecp5 does not confine it either:
+`--12k` loads `chipdb-25k.bin` and restricts nothing. What the diagnostic
+buys is that the overrun stops being invisible.
+
+A utilisation line prints both numbers where they differ, so that
+`1063/24288 lut (12144 specified)` cannot be misread as a part a
+twenty-fourth full. One kind on the ECP5 differs for an unrelated reason
+and is worth knowing about: `1/56 gb (16 specified)` is 56 `DCC` buffer
+bels on the die against the **16 global clock networks** they drive, which
+is what `global_buffers 16` and the `gb` bel's `count` both say. The
+binding limit there is the 16, not the 56, and it is not a part-number
+derating.
+
+The check runs at the end of `synthesize_for`, on the mapped netlist, so
+it needs no fabric database and reaches every family and every command
+that synthesises. `Device::specified_count` answers the data sheet's
+question and `Device::over_specification` is the only place that compares
+the two. `docs/fpga-trellis.md` has the full account of the ECP5 case,
+including what could not be established.
+
 ## Package pins
 
 A pin constraint names a package pin the device file lists. Most lists

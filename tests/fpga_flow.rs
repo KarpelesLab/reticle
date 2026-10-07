@@ -842,3 +842,151 @@ fn a_bus_constrained_bit_by_bit_puts_each_bit_on_its_own_pin() {
     assert!(reported.contains(&("key", Some("T2,D7"))), "{reported:?}");
     assert!(reported.contains(&("led", Some("N16,N14"))), "{reported:?}");
 }
+
+/// The LFE5U-12F's own figures, and the fact that they are **half the die
+/// the part is cut from**.
+///
+/// This is the pair of numbers that used to disagree in silence. Lattice's
+/// ECP5 and ECP5-5G Family Data Sheet, `FPGA-DS-02012-3.4` Table 1.1,
+/// gives the LFE5U-12 12k LUTs, 32 sysMEM blocks and 97 kb of distributed
+/// RAM against the LFE5U-25's 24k, 56 and 194 kb — and the two part
+/// numbers are the same die. At commit `015e033` of
+/// `YosysHQ/prjtrellis-db` the directories `ECP5/LFE5U-12F` and
+/// `ECP5/LFE5U-25F` are *the same git tree*, `76b742b1`, so the fabric a
+/// 12F build loads enumerates the 25F's 24 288 lookup-table sites, 3036
+/// logic tiles and 56 block RAMs; `tests/fpga_trellis.rs` pins those.
+///
+/// What this test catches is a device file edited to make the two numbers
+/// agree, which would be the wrong repair in either direction: raising the
+/// 12F's counts to the die's would hide the derating, and nothing may
+/// lower the die's to the part number's because the sites are there.
+///
+/// What it does **not** catch is the flow forgetting to warn — that is
+/// `a_design_over_the_part_numbers_specification_is_warned_about` below —
+/// and it cannot check the figures against Lattice, only against the
+/// transcription of them in `src/fpga/devices/ecp5.dev`.
+#[test]
+fn the_ecp5_12f_is_specified_at_half_the_die_it_shares_with_the_25f() {
+    let twelve = fpga::target("ecp5-12f-CABGA256").expect("the LFE5U-12F");
+    let twenty_five = fpga::target("ecp5-25f-CABGA381").expect("the LFE5U-25F");
+    // Only the identifier tells the two part numbers apart, and the 12F's
+    // was read from a part (`tests/program_apollo.rs`). The 25F block has
+    // none: it is the ULX3S's part and no board here has one.
+    assert_eq!(twelve.idcode, Some(0x2111_1043));
+    assert_eq!(twenty_five.idcode, None);
+
+    // Lookup tables and registers: exactly half. The data sheet's §2 says
+    // "each slice contains two LUT4s feeding two registers", so the
+    // register count follows the lookup tables rather than being quoted.
+    assert_eq!(twelve.specified_count("LUT4"), Some(12_144));
+    assert_eq!(twelve.specified_count("TRELLIS_FF"), Some(12_144));
+    assert_eq!(twenty_five.specified_count("LUT4"), Some(24_288));
+    assert_eq!(twenty_five.specified_count("TRELLIS_FF"), Some(24_288));
+
+    // Distributed RAM: the data sheet's 97 kb against 194 kb, which is
+    // eight bits a LUT4 either way, and a TRELLIS_DPR16X4 is 64 bits.
+    assert_eq!(twelve.specified_count("TRELLIS_DPR16X4"), Some(1518));
+    assert_eq!(twenty_five.specified_count("TRELLIS_DPR16X4"), Some(3036));
+    assert_eq!(1518 * 64, 97_152, "97 kb, and 12144 * 8");
+    assert_eq!(3036 * 64, 194_304, "194 kb, and 24288 * 8");
+
+    // Block RAM is the one resource that is **not** half, which is why no
+    // geometric half-die explains the derating: 32 of the die's 56.
+    assert_eq!(twelve.specified_count("DP16KD"), Some(32));
+    assert_eq!(twenty_five.specified_count("DP16KD"), Some(56));
+
+    // And a resource the 12F has all of, so a count is a per-part fact
+    // and not a scale factor: both part numbers have two PLLs.
+    assert_eq!(twelve.clock_resources.plls[0].count, Some(2));
+    assert_eq!(twenty_five.clock_resources.plls[0].count, Some(2));
+
+    // A primitive the file gives no count is not silently zero.
+    assert_eq!(twelve.specified_count("TRELLIS_IO"), None);
+    assert_eq!(twelve.specified_count("NOT_A_PRIMITIVE"), None);
+
+    // The same numbers reached by a placer's site *kind*, which is what
+    // the utilisation line prints beside the die's figure. `bram` is the
+    // one that is not a `bel` line at all, so it exercises the other half
+    // of the lookup.
+    assert_eq!(twelve.specified_sites("lut"), Some(12_144));
+    assert_eq!(twelve.specified_sites("ff"), Some(12_144));
+    assert_eq!(twelve.specified_sites("lutram"), Some(1518));
+    assert_eq!(twelve.specified_sites("bram"), Some(32));
+    assert_eq!(twelve.specified_sites("io"), None, "no count on TRELLIS_IO");
+    assert_eq!(twelve.specified_sites("not_a_kind"), None);
+}
+
+/// A design that needs more of a primitive than the part number is
+/// specified to have is **warned about by name and still built**.
+///
+/// The hazard: a 12F design over the data sheet's figures places, routes
+/// and produces a bitstream in which every bit decodes, because the
+/// fabric it was placed on is the 25F's. Before `F0400` nothing in the
+/// flow said a word about it.
+///
+/// The design is a 33-block memory rather than a 12 145-lookup-table one
+/// because block RAM is the resource whose limit is reachable in a test:
+/// 33 of the 12F's 32, and 33 of the 25F's 56, so the same design
+/// exercises both the warning and its absence.
+///
+/// What this would catch: the check removed, its code changed, its
+/// message losing either number, or a device file losing the count that
+/// makes it possible. What it would **not** catch is the warning being
+/// wrong about *which* sites are uncovered — nothing can check that,
+/// which is the finding this diagnostic exists to state.
+#[test]
+fn a_design_over_the_part_numbers_specification_is_warned_about() {
+    let rtl = "top wide_store\n\nmodule wide_store\n  net %clk u1 wire\n  \
+               net %we u1 wire\n  net %addr u16 wire\n  net %din u18 wire\n  \
+               net %dout u18 wire\n  port clk in %clk\n  port we in %we\n  \
+               port addr in %addr\n  port din in %din\n  port dout out %dout\n  \
+               memory @store 33792 x u18\n  \
+               cell wr memwr @store clocked (addr=%addr, data=%din, en=%we, clk=%clk) -> ()\n  \
+               cell rd memrd @store clocked (addr=%addr, clk=%clk, en=1'd1) -> (data=%dout)\n\
+               end\n";
+    let build = |part: &str| {
+        let device = fpga::target(part).expect("the part");
+        let mut sources = SourceMap::new();
+        let file = sources.add("wide_store.rtl", rtl.to_owned()).unwrap();
+        let mut design = Design::parse_text(rtl, file).expect("the design parses");
+        let top = design.top.expect("a top");
+        let mut diags = Diagnostics::new();
+        let constraints = Constraints::default();
+        let report = fpga::synthesize_for(
+            &mut design,
+            top,
+            device,
+            &constraints,
+            &FpgaOptions::default(),
+            &mut diags,
+        )
+        .expect("the flow runs");
+        (report, diags.render(&sources))
+    };
+
+    // 33 blocks on a part specified to have 32: warned, and the netlist is
+    // still produced, because the sites are real.
+    let (report, text) = build("ecp5-12f-CABGA256");
+    assert_eq!(report.count("DP16KD"), 33, "{}", report.to_text());
+    assert!(
+        text.contains(
+            "warning[F0400]: this design needs 33 `DP16KD` and `ecp5-12f-CABGA256` is specified \
+             to have 32"
+        ),
+        "{text}"
+    );
+    assert!(
+        text.contains("which of them the part number covers is not stated in any database"),
+        "the note has to say what cannot be known:\n{text}"
+    );
+    assert!(
+        !text.contains("error"),
+        "it is a warning, not a refusal:\n{text}"
+    );
+
+    // The same design on the larger part number cut from the same die:
+    // 33 of 56, and nothing to report.
+    let (bigger, quiet) = build("ecp5-25f-CABGA381");
+    assert_eq!(bigger.count("DP16KD"), 33);
+    assert!(!quiet.contains("F0400"), "{quiet}");
+}

@@ -611,6 +611,13 @@ The ECP5 flow in `tests/mos6502_monitor.rs`, for `ecp5-12f-CABGA256`:
 | `TRELLIS_IO` | 20 | 120 |
 | `DCCA` | 1 | 16 |
 
+The right-hand column is what **Lattice specifies for the LFE5U-12F**, and
+the flow's own note below says `6183/24288 lut` instead. Both are right:
+the 12F and the 25F are one die, the fabric database is the die's, and the
+part number covers half of it. `docs/fpga-trellis.md` has the account, and
+a design over the specified figure is warned about (`F0400`). Measured
+against the number that matters, this design is at 50.9 %.
+
 LUT depth 28. The distributed RAMs are 512 for the 4 KiB of main memory
 — sixteen words of four bits each, so 4096 bytes is 256 rows of two — and
 18 for `usb_cdc_acm`'s three endpoint buffers, which is the number
