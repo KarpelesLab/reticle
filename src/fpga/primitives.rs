@@ -28,6 +28,29 @@
 //! ports the step must connect — and *declines with a note* when the
 //! device does not describe it.
 //!
+//! # DSP blocks, signed and unsigned
+//!
+//! A [`DspShape`] without `signed` is mapped as it always was: the
+//! cell's full operand widths must fit the ports, and the block gets the
+//! generic `A_WIDTH` / `B_WIDTH` parameters. A `signed` one (the 7-series
+//! `DSP48E1`) is mapped by the operands' *significant* width: the IR's
+//! `mul` is one width throughout, so an 8x8 multiply into 16 bits arrives
+//! as `resize(a, 16) * resize(b, 16)`, and the extension is looked
+//! through. A sign extension of `k` bits fits a port of `N` when
+//! `k <= N`, a zero extension when `k < N` (the sign must stay zero), and
+//! anything no wider than the port fits as it stands, being congruent
+//! modulo its own width — which a result that wide is all that needs. The
+//! operands are swapped when only that order fits. Every bit of a result
+//! wider than the `p` port is a copy of its sign, because the product of
+//! exact operands is exact. The line's `tie` pins and `param`s go on every
+//! instance; they are what make a `DSP48E1` multiply at all.
+//!
+//! A multiply that does not fit one block is **left in logic with a
+//! note**, never split. Splitting is a cascade of partial products
+//! through `PCIN` with a 17-bit shift, its own correctness problem, and
+//! the LUT mapper already gets the arithmetic right; a wrong wide
+//! multiplier would cost more than a large one.
+//!
 //! # The memory fallback
 //!
 //! A memory that fits no block RAM is not left as a memory: a
@@ -81,7 +104,7 @@ use std::fmt::Write as _;
 
 use super::constraints::{Constraints, IoAttrs};
 use super::device::{
-    BelKind, BelRole, BramInitLayout, BramInitParams, BramModeLayout, BramShape, Device,
+    BelKind, BelRole, BramInitLayout, BramInitParams, BramModeLayout, BramShape, Device, DspShape,
     PllFeedback, PllShape, WideCarry,
 };
 use super::pll::PllSolution;
@@ -748,6 +771,148 @@ fn addr_bits(depth: u64) -> u32 {
 /// `ceil(a / b)` for positive `b`.
 fn div_ceil_u32(a: u32, b: u32) -> u32 {
     a.div_ceil(b)
+}
+
+/// One multiplier operand as a two's-complement port will see it: the
+/// value it was extended from, how many bits of it matter, and whether
+/// the extension copied its sign.
+#[derive(Clone, Copy, Debug)]
+struct SignedOperand {
+    /// The expression to connect, before widening to the pin.
+    source: ExprId,
+    /// The bits of `source` that carry the value.
+    bits: u32,
+    /// Widen by copying the sign bit rather than with zeros.
+    sign_extend: bool,
+    /// The port sees the operand's exact integer value. When false it
+    /// sees only something congruent to it modulo `2^modulus`.
+    exact: bool,
+    /// For an inexact operand, the power of two its value is right
+    /// modulo; unused when `exact`.
+    modulus: u32,
+}
+
+impl SignedOperand {
+    /// `source` widened to a pin of `pin` bits.
+    fn widen(&self, module: &mut Module, pin: u32, span: Span) -> ExprId {
+        if expr_width(module, self.source) == pin {
+            return self.source;
+        }
+        expr(
+            module,
+            ExprKind::Resize {
+                expr: self.source,
+                width: pin,
+                signed: self.sign_extend,
+            },
+            span,
+        )
+    }
+}
+
+/// How the two operands of a multiply reach a block that multiplies
+/// two's-complement operands, and which goes on which port.
+#[derive(Clone, Copy, Debug)]
+struct SignedPlan {
+    /// What goes on the `a` port.
+    a: SignedOperand,
+    /// What goes on the `b` port.
+    b: SignedOperand,
+}
+
+/// The value an operand was widened from.
+///
+/// A `Mul` cell's operands and result are all one width, so an 8x8
+/// multiply into a 16-bit result arrives as a 16x16 one whose operands
+/// are `resize(a, u16)` — eight bits of value and eight of zeros. A
+/// 25x18 block cannot take sixteen bits on its 18-bit port as they
+/// stand, but it can take the eight that matter, and that is what makes
+/// a 16x16 into 32 fit one block at all. Only a [`ExprKind::Resize`]
+/// that *widens* is looked through; it copies the sign when it asks for
+/// a signed result of a signed operand, which is the rule the IR states.
+fn significant_operand(module: &Module, e: ExprId) -> (ExprId, u32, bool) {
+    let width = expr_width(module, e);
+    if let Some(ExprKind::Resize {
+        expr: inner,
+        width: to,
+        signed,
+    }) = module.exprs.get(e).map(|x| &x.kind)
+    {
+        let bits = expr_width(module, *inner);
+        if bits < *to {
+            let inner_signed = matches!(
+                module.exprs.get(*inner).map(|x| &x.ty),
+                Some(Type::Bits { signed: true, .. })
+            );
+            return (*inner, bits, *signed && inner_signed);
+        }
+    }
+    (e, width, false)
+}
+
+/// How operand `e` can reach a two's-complement port of `port` bits, or
+/// `None` when it cannot without losing a bit the result depends on.
+///
+/// Exactly, when it is a sign extension of at most `port` bits or a zero
+/// extension of fewer than `port` (one bit is needed for the sign that
+/// stays zero). Otherwise, when the whole operand is no wider than the
+/// port, it goes on as it stands: the port then reads it as a possibly
+/// negative number that is still congruent to it modulo `2^width`, and
+/// so is the product modulo the operand's own width — which is all a
+/// `Mul` whose result is that wide asks for.
+fn signed_operand(module: &Module, e: ExprId, port: u32) -> Option<SignedOperand> {
+    let width = expr_width(module, e);
+    let (source, bits, sign_extend) = significant_operand(module, e);
+    if (sign_extend && bits <= port) || (!sign_extend && bits < port) {
+        return Some(SignedOperand {
+            source,
+            bits,
+            sign_extend,
+            exact: true,
+            modulus: 0,
+        });
+    }
+    (width <= port).then_some(SignedOperand {
+        source: e,
+        bits: width,
+        sign_extend: false,
+        exact: false,
+        modulus: width,
+    })
+}
+
+/// Whether a `result`-bit product of `a` and `b` can come out of `shape`,
+/// a block that multiplies two's complement, and how; `a` on the `a`
+/// port when that works, otherwise the two swapped.
+///
+/// The product of two exact operands is exact in `a_width + b_width`
+/// bits, so when the `p` port is at least that wide every bit of the
+/// result is right, those above the port being copies of its sign. An
+/// inexact operand makes the product right only modulo its width, and a
+/// `p` port narrower than the full product only modulo `p`; the result
+/// must fit under both.
+fn signed_plan(
+    module: &Module,
+    a: ExprId,
+    b: ExprId,
+    result: u32,
+    shape: &DspShape,
+) -> Option<SignedPlan> {
+    let fits = |x: ExprId, y: ExprId| -> Option<SignedPlan> {
+        let a = signed_operand(module, x, shape.a_width)?;
+        let b = signed_operand(module, y, shape.b_width)?;
+        let mut limit = u32::MAX;
+        for op in [a, b] {
+            if !op.exact {
+                limit = limit.min(op.modulus);
+            }
+        }
+        if shape.a_width + shape.b_width > shape.p_width {
+            limit = limit.min(shape.p_width);
+        }
+        (result <= limit).then_some(SignedPlan { a, b })
+    };
+    fits(a, b).or_else(|| fits(b, a))
 }
 
 /// The width of an expression, or 1 when it is not a bit vector.
@@ -2330,13 +2495,36 @@ impl Mapper<'_> {
             }
         }
 
-        let shape = self.device.dsps.iter().find(|shape| {
-            shape.fits_multiply(a_width, b_width, result_width)
-                && (addend.is_none() || shape.has_accumulator)
-                && shape.port("a").is_some()
-                && shape.port("b").is_some()
-                && shape.port("p").is_some()
-        });
+        // A block that takes the adder too, then — when none does — one
+        // that takes the multiply alone. Failing the first is no reason
+        // to leave the multiply in logic.
+        let connected = |shape: &&DspShape| {
+            shape.port("a").is_some() && shape.port("b").is_some() && shape.port("p").is_some()
+        };
+        let mut shape = None;
+        if addend.is_some() {
+            shape = self.device.dsps.iter().find(|shape| {
+                connected(shape)
+                    && shape.has_accumulator
+                    && !shape.signed
+                    && shape.port("c").is_some()
+                    && shape.fits_multiply(a_width, b_width, result_width)
+            });
+        }
+        if shape.is_none() {
+            addend = None;
+            fused = None;
+            result_net = y;
+            result_width = y_width;
+            shape = self.device.dsps.iter().find(|shape| {
+                connected(shape)
+                    && if shape.signed {
+                        signed_plan(module, a, b, result_width, shape).is_some()
+                    } else {
+                        shape.fits_multiply(a_width, b_width, result_width)
+                    }
+            });
+        }
         let Some(shape) = shape.cloned() else {
             self.note(format!(
                 "cell `{name}` ({a_width}x{b_width} -> {result_width}) fits no DSP block of `{}`",
@@ -2344,50 +2532,94 @@ impl Mapper<'_> {
             ));
             return None;
         };
-        if addend.is_some() && shape.port("c").is_none() {
-            // The block accumulates but the database does not say through
-            // which port, so map the multiplier alone.
-            addend = None;
-            fused = None;
-            result_net = y;
-            result_width = y_width;
-        }
 
         let accumulate = addend.is_some_and(|_| self.feeds_back(module, result_net));
+        let a_port = Name::new(shape.port("a").unwrap_or("a"));
+        let b_port = Name::new(shape.port("b").unwrap_or("b"));
+        let p_name = shape.port("p").unwrap_or("p").to_owned();
         let mut inputs = Vec::new();
-        let a_value = self.resize(module, a, shape.a_width, span);
-        let b_value = self.resize(module, b, shape.b_width, span);
-        inputs.push((Name::new(shape.port("a").unwrap_or("a")), a_value));
-        inputs.push((Name::new(shape.port("b").unwrap_or("b")), b_value));
-        if let (Some(addend), Some(port)) = (addend, shape.port("c")) {
-            let value = self.resize(module, addend, shape.p_width, span);
-            inputs.push((Name::new(port), value));
+        let (report_a, report_b);
+        if shape.signed {
+            let plan = signed_plan(module, a, b, result_width, &shape)?;
+            report_a = plan.a.bits;
+            report_b = plan.b.bits;
+            let a_pin = shape.pin_width(a_port.as_str()).unwrap_or(shape.a_width);
+            let b_pin = shape.pin_width(b_port.as_str()).unwrap_or(shape.b_width);
+            let a_value = plan.a.widen(module, a_pin, span);
+            let b_value = plan.b.widen(module, b_pin, span);
+            inputs.push((a_port, a_value));
+            inputs.push((b_port, b_value));
+        } else {
+            report_a = a_width;
+            report_b = b_width;
+            let a_value = self.resize(module, a, shape.a_width, span);
+            let b_value = self.resize(module, b, shape.b_width, span);
+            inputs.push((a_port, a_value));
+            inputs.push((b_port, b_value));
+            if let (Some(addend), Some(port)) = (addend, shape.port("c")) {
+                let value = self.resize(module, addend, shape.p_width, span);
+                inputs.push((Name::new(port), value));
+            }
         }
-        let product = add_net(
-            module,
-            &format!("{name}$p"),
-            Type::bits(shape.p_width),
-            span,
-        );
+        for (pin, value) in &shape.ties {
+            let value = const_expr(module, value.clone(), span);
+            inputs.push((Name::new(pin.as_str()), value));
+        }
+        let p_bits = shape.pin_width(&p_name).unwrap_or(shape.p_width);
+        let p_type = if shape.signed {
+            Type::sbits(p_bits)
+        } else {
+            Type::bits(p_bits)
+        };
+        let product = add_net(module, &format!("{name}$p"), p_type, span);
         let cell = add_cell(
             module,
             &format!("{name}$dsp"),
             CellKind::Blackbox(Name::new(shape.name.clone())),
             inputs,
-            vec![(Name::new(shape.port("p").unwrap_or("p")), product)],
+            vec![(Name::new(p_name), product)],
             span,
         );
-        module.cells[cell].params.set("A_WIDTH", i64::from(a_width));
-        module.cells[cell].params.set("B_WIDTH", i64::from(b_width));
+        if shape.params.is_empty() {
+            module.cells[cell].params.set("A_WIDTH", i64::from(a_width));
+            module.cells[cell].params.set("B_WIDTH", i64::from(b_width));
+        } else {
+            for (key, value) in &shape.params {
+                module.cells[cell].params.set(key.as_str(), value.clone());
+            }
+        }
         let value = net_expr(module, product, span);
-        let sliced = slice_expr(module, value, result_width - 1, 0, span);
-        add_assign(module, result_net, sliced, span);
+        let result = if result_width <= shape.p_width {
+            slice_expr(module, value, result_width - 1, 0, span)
+        } else {
+            // Only a signed block gets here: its product is exact, so
+            // every bit above the port is a copy of its sign.
+            let low = slice_expr(module, value, shape.p_width - 1, 0, span);
+            let mut value = low;
+            for (width, signed) in [
+                (shape.p_width, true),
+                (result_width, true),
+                (result_width, false),
+            ] {
+                value = expr(
+                    module,
+                    ExprKind::Resize {
+                        expr: value,
+                        width,
+                        signed,
+                    },
+                    span,
+                );
+            }
+            value
+        };
+        add_assign(module, result_net, result, span);
 
         self.report.dsps.push(DspMapping {
             cell: name,
             primitive: shape.name.clone(),
-            a_width,
-            b_width,
+            a_width: report_a,
+            b_width: report_b,
             p_width: result_width,
             multiply_add: fused.is_some(),
             accumulate,

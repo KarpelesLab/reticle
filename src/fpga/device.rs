@@ -42,6 +42,7 @@
 //!     port write clk=WCLK en=WE addr=WADDR din=WDATA
 //!   end
 //!   dsp MULT18X18D a 18 b 18 p 36 accumulator stages 3 port a=A b=B p=P
+//!   dsp DSP48E1 a 25 b 18 p 48 signed port a=A b=B p=P widths A=30 tie OPMODE=7'b0000101 param AREG=0
 //!   io_standard LVCMOS33 vccio 3.3 drive 4,8,12 slew slow,fast
 //!   bank io vccio 3.3,2.5,1.8
 //!   pins partial
@@ -1115,6 +1116,30 @@ pub struct DspShape {
     /// Abstract role to port name, in file order: `a`, `b`, `c`, `p`,
     /// `clk`, `ce`, `rst`.
     pub ports: Vec<(String, String)>,
+    /// The multiplier reads both operands as **two's complement**: an
+    /// `a`-bit operand of all ones is -1, not 2^a - 1. A 7-series
+    /// `DSP48E1` is 25x18 signed; a block without this flag is taken to
+    /// multiply unsigned operands. Mapping must know which, because it
+    /// decides how an operand narrower than the port is widened and when
+    /// one wider than the port can still be fed to it exactly.
+    pub signed: bool,
+    /// The primitive's full width of a pin wider than the role it plays:
+    /// `DSP48E1`'s `A` is 30 bits of which the multiplier reads 25, so
+    /// its line says `widths A=30` and mapping connects all thirty, the
+    /// way the vendor library declares the port, instead of a 25-bit
+    /// value a netlist reader would have to widen.
+    pub pin_widths: Vec<(String, u32)>,
+    /// Input pins tied to a constant on every instance, in file order:
+    /// the mode pins that make the block *multiply* at all (`OPMODE`,
+    /// `ALUMODE`, `INMODE` on a `DSP48E1`), and the inputs the multiply
+    /// does not use. A value is as wide as the pin.
+    pub ties: Vec<(String, Const)>,
+    /// Parameters every instance carries, in file order. When there are
+    /// any, they are the instance's parameters and nothing else is
+    /// added; without them, mapping writes `A_WIDTH` and `B_WIDTH`, the
+    /// generic convention the older shapes rely on and a parameter a
+    /// `DSP48E1` does not have.
+    pub params: Vec<(String, AttrValue)>,
 }
 
 impl DspShape {
@@ -1130,6 +1155,14 @@ impl DspShape {
     /// widths fits this block.
     pub fn fits_multiply(&self, a: u32, b: u32, p: u32) -> bool {
         a <= self.a_width && b <= self.b_width && p <= self.p_width
+    }
+
+    /// The full width of pin `name`, when the line states one.
+    pub fn pin_width(&self, name: &str) -> Option<u32> {
+        self.pin_widths
+            .iter()
+            .find(|(n, _)| n == name)
+            .map(|(_, w)| *w)
     }
 }
 
@@ -1733,6 +1766,9 @@ impl Device {
             for (_, port) in &dsp.ports {
                 push(port);
             }
+            for (port, _) in &dsp.ties {
+                push(port);
+            }
         }
         for pll in self.clock_resources.plls.iter().filter(|p| p.name == name) {
             found = true;
@@ -2260,8 +2296,37 @@ fn write_dsp(dsp: &DspShape) -> String {
     if dsp.pipeline_stages > 0 {
         line.push_str(&format!(" stages {}", dsp.pipeline_stages));
     }
+    if dsp.signed {
+        line.push_str(" signed");
+    }
     line.push_str(&write_pairs("port", &dsp.ports));
+    if !dsp.pin_widths.is_empty() {
+        line.push_str(" widths");
+        for (pin, width) in &dsp.pin_widths {
+            line.push_str(&format!(" {}={width}", quote(pin)));
+        }
+    }
+    if !dsp.ties.is_empty() {
+        line.push_str(" tie");
+        for (pin, value) in &dsp.ties {
+            line.push_str(&format!(" {}={}", quote(pin), write_tie(value)));
+        }
+    }
+    write_params(&mut line, "param", &dsp.params);
     line
+}
+
+/// A tied value as a `.dev` line writes it: `0` or `1` for one bit, a
+/// sized literal otherwise.
+fn write_tie(value: &Const) -> String {
+    if value.width() == 1 {
+        match value.to_u64() {
+            Some(0) => return "0".to_owned(),
+            Some(1) => return "1".to_owned(),
+            _ => {}
+        }
+    }
+    value.to_verilog_literal()
 }
 
 fn write_io_standard(std: &IoStandard) -> String {
@@ -3020,6 +3085,10 @@ impl<'a> Parser<'a> {
             has_accumulator: false,
             pipeline_stages: 0,
             ports: Vec::new(),
+            signed: false,
+            pin_widths: Vec::new(),
+            ties: Vec::new(),
+            params: Vec::new(),
         };
         let mut index = 2;
         while let Some(token) = line.get(index) {
@@ -3040,7 +3109,41 @@ impl<'a> Parser<'a> {
                 }
                 "preadder" => dsp.has_preadder = true,
                 "accumulator" => dsp.has_accumulator = true,
+                "signed" => dsp.signed = true,
                 "port" => dsp.ports.extend(self.pairs(line, &mut index)),
+                "widths" => {
+                    for (pin, width) in self.pairs(line, &mut index) {
+                        match width.parse::<u32>() {
+                            Ok(width) if width > 0 => dsp.pin_widths.push((pin, width)),
+                            _ => self.error(
+                                line.span,
+                                format!("pin `{pin}` needs a width in bits, not `{width}`"),
+                            ),
+                        }
+                    }
+                }
+                "tie" => {
+                    for (pin, value) in self.pairs(line, &mut index) {
+                        match parse_tie(&value) {
+                            Some(value) => dsp.ties.push((pin, value)),
+                            None => self.error(
+                                line.span,
+                                format!(
+                                    "pin `{pin}` can be tied to 0, 1 or a sized constant \
+                                     such as `7'b0000101`, not `{value}`"
+                                ),
+                            ),
+                        }
+                    }
+                }
+                "param" => {
+                    let params: Vec<(String, AttrValue)> = self
+                        .pairs(line, &mut index)
+                        .into_iter()
+                        .map(|(key, value)| (key, parse_value(&value)))
+                        .collect();
+                    dsp.params.extend(params);
+                }
                 other => {
                     let span = token.span;
                     self.unknown(span, format!("unknown `dsp` option `{other}`"));
@@ -3351,6 +3454,22 @@ impl<'a> Parser<'a> {
 /// Sized literals (`6'b011001`) become [`AttrValue::Const`] so they reach a
 /// netlist as bit vectors rather than as text; a bare decimal number
 /// becomes [`AttrValue::Int`]; anything else stays a string.
+/// A tied pin's value: `0`, `1`, or a sized, two-state Verilog literal.
+/// An `x` or `z` is refused: a tie is a constant the silicon drives, and
+/// "undefined" is not one.
+fn parse_tie(text: &str) -> Option<Const> {
+    match text {
+        "0" => return Some(Const::from_u64(0, 1)),
+        "1" => return Some(Const::from_u64(1, 1)),
+        _ => {}
+    }
+    if !text.contains('\'') {
+        return None;
+    }
+    let value = Const::parse_verilog(text).ok()?;
+    value.is_fully_known().then_some(value)
+}
+
 pub(crate) fn parse_value(text: &str) -> AttrValue {
     if text.contains('\'')
         && let Ok(c) = Const::parse_verilog(text)
@@ -3605,6 +3724,54 @@ end
         let again = again.unwrap();
         assert_eq!(device, again);
         assert_eq!(text, again.to_text());
+    }
+
+    /// A `dsp` line that ties pins, widens one and carries parameters —
+    /// the shape a 7-series `DSP48E1` needs — reads back as written, and
+    /// the tied pins are pins the netlist check accepts.
+    #[test]
+    fn a_dsp_line_ties_pins_and_carries_parameters() {
+        let text = "device d\n  family demo\n  dsp MUL a 25 b 18 p 48 signed port a=A b=B p=P \
+                    widths A=30 tie OPMODE=7'b0000101 CARRYIN=0 RSTN=1 \
+                    param AREG=0 USE_MULT=\"MULTIPLY\"\nend\n";
+        let (device, diags) = parse(text);
+        assert_eq!(diags, "");
+        let device = device.unwrap();
+        let dsp = &device.dsps[0];
+        assert!(dsp.signed);
+        assert_eq!(dsp.pin_width("A"), Some(30));
+        assert_eq!(dsp.pin_width("B"), None);
+        assert_eq!(dsp.ties[0], ("OPMODE".to_owned(), Const::from_u64(5, 7)));
+        assert_eq!(dsp.ties[1], ("CARRYIN".to_owned(), Const::from_u64(0, 1)));
+        assert_eq!(dsp.ties[2], ("RSTN".to_owned(), Const::from_u64(1, 1)));
+        assert_eq!(dsp.params[0], ("AREG".to_owned(), AttrValue::Int(0)));
+        assert_eq!(
+            dsp.params[1],
+            (
+                "USE_MULT".to_owned(),
+                AttrValue::String("MULTIPLY".to_owned())
+            )
+        );
+        let ports = device.primitive_ports("MUL").unwrap();
+        assert!(ports.iter().any(|p| p == "OPMODE"), "{ports:?}");
+        let (again, diags) = parse(&device.to_text());
+        assert_eq!(diags, "");
+        assert_eq!(again.unwrap(), device);
+    }
+
+    /// A tie to anything but a known constant is an error with the pin's
+    /// name, not a silently dropped pin.
+    #[test]
+    fn a_dsp_tie_must_be_a_known_constant() {
+        for bad in ["2", "x", "4'bxx01", "high"] {
+            let text =
+                format!("device d\n  family demo\n  dsp MUL a 4 b 4 p 8 tie OPMODE={bad}\nend\n");
+            let (_, diags) = parse(&text);
+            assert!(
+                diags.contains("pin `OPMODE` can be tied to 0, 1 or a sized constant"),
+                "{bad}: {diags}"
+            );
+        }
     }
 
     #[test]
