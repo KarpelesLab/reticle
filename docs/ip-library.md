@@ -4,13 +4,13 @@ The first-party half of phase 8. [`docs/ip.md`](ip.md) describes the
 machinery — the manifest formats, the resolver, the bus model, the black
 boxes — and [`docs/writing-a-cpu.md`](writing-a-cpu.md) describes how to
 package a processor, using this library's two as the worked examples.
-This document describes the **blocks**: thirty-one pieces of HDL that
+This document describes the **blocks**: thirty-two pieces of HDL that
 drop into a design the way a crate drops into a Rust program, each with a
 manifest, a Rust co-simulation test, and a resource footprint that was
 measured rather than guessed.
 
 They live at the top of the repository, in `ip/`, one directory per
-package, grouped into eight folders by what a block is *for*. The
+package, grouped into nine folders by what a block is *for*. The
 grouping is a filing system and nothing else: a project finds a block by
 name (`library ../../ip`, then `depends uart ^1.0.0`), the name is the
 one the block's own `reticle.ip` declares, and no code anywhere reads a
@@ -25,6 +25,9 @@ ip/
     spi_master/  reticle.ip  rtl/spi_master.v
     uart/        reticle.ip  rtl/uart_tx.v  rtl/uart_rx.v  rtl/uart.v
                  rtl/uart_baud_div.v
+  compress/
+    inflate/  reticle.ip  README.md  rtl/inflate_adler.v
+              rtl/inflate_window.v  rtl/inflate.v
   cpu/
     mos6502/  reticle.ip  rtl/mos6502.v
     rv32i/    reticle.ip  rtl/rv32i.v
@@ -122,6 +125,7 @@ It is distributed as part of the repository instead.
 | `ppu2c02` | `ppu2c02`, `ppu_palette` | NES-compatible picture unit: 256x240 raster, nametables and attributes, scrolling through `v`/`t`/`x`/`w`, 8x8 sprites with per-line evaluation, priority and sprite zero hit | — |
 | `sha256` | `sha256`, `sha256_core` | FIPS 180-4 SHA-256 over a byte stream, **padding included**: one round per cycle, 129 cycles a block, fixed latency for a given message length | — |
 | `chacha20` | `chacha20`, `chacha20_core`, `chacha20_qr` | RFC 8439 ChaCha20: the quarter round, the block function at one round per cycle (22 cycles a block), and the stream cipher over a 32-bit port, with a stop when the block counter runs out | — |
+| `inflate` | `inflate`, `inflate_window`, `inflate_adler` | RFC 1951 DEFLATE **decompressing**, with RFC 1950's zlib framing: all three block types, a 32 KiB sliding window in block RAM, a copy engine that stalls mid-match, and every malformed stream reported on a code | — |
 
 `ppu2c02` is the block whose *subject* needs a statement rather than only
 its behaviour, so it has a page of its own,
@@ -1335,6 +1339,141 @@ it AES should take.
    own.** AES is the primitive differential power analysis was *developed*
    on. A block that does not say so is worse than one that does not exist.
 
+## The compress category, and a block whose input is somebody else's
+
+`ip/compress/` is the ninth category and it holds one block, `inflate`:
+RFC 1951 DEFLATE decompressing, with RFC 1950's zlib framing around it.
+[`ip/compress/inflate/README.md`](../ip/compress/inflate/README.md) is
+the full account — the five design decisions, the corpus, the error
+table, the footprints and the measured throughput. What belongs here is
+the part that is about the **library** rather than about DEFLATE.
+
+### Why decompression first
+
+Compression and decompression are not two halves of one block, and the
+asymmetry is why this round is only the second half. A decompressor is a
+bit reader, a canonical-Huffman walk, a counting sort and a copy engine —
+1894 LUT4, 390 flip-flops and eighteen `DP16KD`, sixteen of which are
+the window. A compressor needs hash-chain match
+finding over the same 32 KiB window, two passes over every block to
+choose between the three block types by exact bit cost, and a Huffman
+code *builder*, which is the length-limited package-merge problem and a
+different and larger piece of work than the sort the decoder needs. It
+comes later, and it will go better for this round having settled what the
+interface and the window look like.
+
+The second reason is that **its test vectors are infinite and free**.
+There is no published table of DEFLATE vectors and there does not need to
+be one: compress anything with a compressor, decompress it in hardware,
+compare every byte. That is a far better position than `ip/crypto/` is
+in, where the published vectors are a dozen fixed strings, and it is
+worth saying out loud because the next block in this category inherits
+it.
+
+### The oracle, and what it is not
+
+`testdata/ip/inflate_corpus.txt` holds 132 streams that
+[`compcol`](https://github.com/KarpelesLab/compcol) — the user's own
+from-scratch Rust compression library — produced, with 123 of them in
+the tier the gate runs. This is the same method `ip/crypto/sha256` used
+with `purecrypto` and for the same reason: **two independent things
+agreeing is a measurement where one thing asserting is not.**
+
+Three things about how it was done, because the shape is reusable:
+
+- **Out of tree, read only.** The generator is a program outside this
+  repository that takes `compcol` as a path dependency and calls its
+  public API. `compcol` *is* already an optional dependency here, behind
+  `apicula`, for the xz inside a Gowin chip database — and this round did
+  not touch that, did not add a feature to it and did not add a
+  dev-dependency. What is committed is what it produced, which is the
+  rule `Cargo.toml`'s dependency note and `sha256`'s README both state.
+- **The plaintext is a rule, not a file.** Each record names a generator
+  rule and a length rather than carrying the bytes, so one case is
+  120 000 bytes of text for a kilobyte of committed hex and the whole
+  corpus is 188 kB. The cost is that the rule exists twice, and the
+  mitigation is the third field: each record carries the Adler-32 of its
+  plaintext, and `inflate_plaintext_rules_match_the_corpus` checks all
+  132 before any simulation, so a rule that has drifted is reported as a
+  rule that has drifted rather than as a broken decompressor.
+- **The corpus records what it covers.** Each record also carries the
+  BFINAL and BTYPE of its stream's first block, which is as much as can
+  be read off a DEFLATE stream without an inflater. That is what lets the
+  test *assert* that all three of RFC 1951 §3.2.3's block types are
+  present — 24 stored, 84 fixed and 15 dynamic among the 123 — rather
+  than assume it. A corpus that quietly lost its stored cases would
+  otherwise still pass.
+
+### What the breadth bought, immediately
+
+**MEASURED.** The round's first full corpus run failed, on the fourth
+byte of a four-byte stream, with a checksum mismatch — and only under
+one of the four consumers.
+
+Each case is run with up to four different `out_ready` patterns, because
+a consumer is the only thing that can stall a copy and a copy that
+resumes wrongly is the defect a decompressor is most likely to have. The
+pattern that drops `out_ready` on every other cycle found that
+`inflate_window`'s `rd_valid` was `rd_en` delayed by one cycle, so a copy
+stalled for a *single* cycle lost the byte it had already fetched out of
+the block RAM. It is a one-deep valid now, cleared by an explicit
+`rd_take` input, and the window's own test grew the section that would
+have caught it.
+
+That is the same lesson the crypto round learned from the other
+direction, where a real defect in `chacha20` passed all nine published
+RFC 8439 vectors because every one of them starts from reset:
+**published vectors test the function and not the sequencing around it.**
+Here there were no published vectors to be lulled by, and what found the
+fault was 123 streams times four consumers rather than a better vector.
+
+### A defect found in the oracle
+
+Worth recording because the next round that wants multi-block vectors
+will meet it. `compcol`'s `Flush::Sync` is the API for forcing a block
+boundary — RFC 1951 §3.2.4's empty stored block — and after one,
+`finish()` reports `StreamEnd` having written two bytes, and the
+resulting stream decodes to the right bytes but never reaches
+`StreamEnd` coming back in: `decompress_to_vec` returns
+`UnexpectedEnd`. It reproduces in twenty lines with a 440-byte input and
+has nothing to do with this block. Nothing here was changed for it and
+nothing in `compcol` was touched; the multi-block coverage `inflate` has
+instead comes from the bulk cases, which are several 16 KiB blocks each.
+
+### What the next block in this category should inherit
+
+1. **Decide the framing explicitly and support both.** `inflate` takes
+   `WRAPPER`, parses RFC 1950 and does not sniff, because a raw DEFLATE
+   stream can begin with bytes that pass RFC 1950 §2.2's check and a
+   wrong guess is a wrong decode. The container's own checksum is the
+   reason raw has to exist: gzip, zip and PNG all carry a CRC-32 and
+   would never want the Adler-32.
+2. **A checksum earns its area several times over.** RFC 1950's framing
+   is 88 LUT4 and 33 flip-flops, and of 482 single-byte corruptions of a
+   real stream, **361 are caught by the checksum and nothing else**. For
+   a block whose input is somebody else's bytes, that ratio is the
+   argument.
+3. **Report, never hang, and make the test bound a cycle count.** Every
+   malformed input has a code and a hand-built vector derived from the
+   RFC. Every test runs with a *loop bound* in simulated clock edges —
+   not a time-out — so reaching it is a failure of the design rather than
+   of the host, and 1196 runs across the round reached none.
+4. **A module boundary is how a check gets tested.** `inflate_window`
+   is a module mostly because no *stream* can ask for distance zero, so
+   that arm of its distance check is unreachable from the decoder and
+   only a direct testbench can drive it.
+5. **Stall rather than buffer, when the asymmetry is large.** A few
+   input bits can owe 258 output bytes; a counter and a pointer cost
+   nothing against 258 bytes of block RAM, and the buffer would not even
+   remove the stall.
+6. **Sweep the consumer, not just the input.** Four `out_ready`
+   patterns per case found what no vector would have.
+7. **Say which rule came from a reference implementation.** Exactly one
+   decision in `inflate` is not in either RFC — whether an incomplete
+   Huffman code is legal — and it follows `zlib`. The README marks it
+   **QUOTED** and says so in one sentence, which is what keeps the rest
+   of the page's **HIGH** worth something.
+
 ## Using one
 
 A block is an ordinary IP package, so a project reaches it with a
@@ -2373,6 +2512,26 @@ exactly what this table is for.
 | `chacha20` | `chacha20` | (defaults) | LUT6 | 11 x dff, 3810 x lut | 76 |
 | `chacha20` | `chacha20` | (defaults) | iCE40 HX1K | 1030 x SB_CARRY, 590 x SB_DFFER, 3 x SB_DFFR, 1 x SB_GB, 456 x SB_IO, 4764 x SB_LUT4 | 8 |
 | `chacha20` | `chacha20` | (defaults) | ECP5 45F | 1 x DCCA, 5978 x LUT4, 593 x TRELLIS_FF, 456 x TRELLIS_IO | 87 |
+| `inflate` | `inflate_adler` | (defaults) | LUT4 | 2 x dff, 152 x lut | 26 |
+| `inflate` | `inflate_adler` | (defaults) | LUT6 | 2 x dff, 130 x lut | 20 |
+| `inflate` | `inflate_adler` | (defaults) | iCE40 HX1K | 32 x SB_CARRY, 31 x SB_DFFER, 1 x SB_DFFES, 1 x SB_GB, 44 x SB_IO, 123 x SB_LUT4 | 20 |
+| `inflate` | `inflate_adler` | (defaults) | ECP5 45F | 1 x DCCA, 152 x LUT4, 32 x TRELLIS_FF, 44 x TRELLIS_IO | 26 |
+| `inflate` | `inflate_window` | WINDOW_BITS=15 | LUT4 | 6 x dff, 157 x lut, 1 x memory 32768x8, 1 x memrd, 1 x memwr | 12 |
+| `inflate` | `inflate_window` | WINDOW_BITS=15 | LUT6 | 6 x dff, 114 x lut, 1 x memory 32768x8, 1 x memrd, 1 x memwr | 8 |
+| `inflate` | `inflate_window` | WINDOW_BITS=15 | iCE40 HX1K | 28 x SB_CARRY, 6 x SB_DFFE, 40 x SB_DFFER, 1 x SB_DFFR, 1 x SB_GB, 41 x SB_IO, 722 x SB_LUT4, 64 x SB_RAM40_4K | 12 |
+| `inflate` | `inflate_window` | WINDOW_BITS=15 | ECP5 45F | 1 x DCCA, 16 x DP16KD, 314 x LUT4, 45 x TRELLIS_FF, 41 x TRELLIS_IO | 12 |
+| `inflate` | `inflate` | WINDOW_BITS=15, WRAPPER=1 | LUT4 | 57 x dff, 1749 x lut, 1 x memory 16x6, 1 x memory 16x9, 1 x memory 288x9, 1 x memory 320x4, 1 x memory 32768x8, 1 x memory 32x5, 6 x memrd, 6 x memwr | 31 |
+| `inflate` | `inflate` | WINDOW_BITS=15, WRAPPER=1 | LUT6 | 57 x dff, 1455 x lut, 1 x memory 16x6, 1 x memory 16x9, 1 x memory 288x9, 1 x memory 320x4, 1 x memory 32768x8, 1 x memory 32x5, 6 x memrd, 6 x memwr | 26 |
+| `inflate` | `inflate` | WINDOW_BITS=15, WRAPPER=1 | iCE40 HX1K | 223 x SB_CARRY, 412 x SB_DFFE, 369 x SB_DFFER, 7 x SB_DFFES, 5 x SB_DFFR, 1 x SB_GB, 30 x SB_IO, 3271 x SB_LUT4, 67 x SB_RAM40_4K | 31 |
+| `inflate` | `inflate` | WINDOW_BITS=15, WRAPPER=1 | ECP5 45F | 1 x DCCA, 18 x DP16KD, 1894 x LUT4, 9 x TRELLIS_DPR16X4, 390 x TRELLIS_FF, 30 x TRELLIS_IO | 33 |
+| `inflate` | `inflate` | WINDOW_BITS=15, WRAPPER=0 | LUT4 | 55 x dff, 1576 x lut, 1 x memory 16x6, 1 x memory 16x9, 1 x memory 288x9, 1 x memory 320x4, 1 x memory 32768x8, 1 x memory 32x5, 6 x memrd, 6 x memwr | 27 |
+| `inflate` | `inflate` | WINDOW_BITS=15, WRAPPER=0 | LUT6 | 55 x dff, 1303 x lut, 1 x memory 16x6, 1 x memory 16x9, 1 x memory 288x9, 1 x memory 320x4, 1 x memory 32768x8, 1 x memory 32x5, 6 x memrd, 6 x memwr | 24 |
+| `inflate` | `inflate` | WINDOW_BITS=15, WRAPPER=0 | iCE40 HX1K | 191 x SB_CARRY, 412 x SB_DFFE, 337 x SB_DFFER, 7 x SB_DFFES, 5 x SB_DFFR, 1 x SB_GB, 30 x SB_IO, 3101 x SB_LUT4, 67 x SB_RAM40_4K | 31 |
+| `inflate` | `inflate` | WINDOW_BITS=15, WRAPPER=0 | ECP5 45F | 1 x DCCA, 18 x DP16KD, 1730 x LUT4, 9 x TRELLIS_DPR16X4, 358 x TRELLIS_FF, 30 x TRELLIS_IO | 27 |
+| `inflate` | `inflate` | WINDOW_BITS=10, WRAPPER=1 | LUT4 | 57 x dff, 1691 x lut, 1 x memory 1024x8, 1 x memory 16x6, 1 x memory 16x9, 1 x memory 288x9, 1 x memory 320x4, 1 x memory 32x5, 6 x memrd, 6 x memwr | 31 |
+| `inflate` | `inflate` | WINDOW_BITS=10, WRAPPER=1 | LUT6 | 57 x dff, 1423 x lut, 1 x memory 1024x8, 1 x memory 16x6, 1 x memory 16x9, 1 x memory 288x9, 1 x memory 320x4, 1 x memory 32x5, 6 x memrd, 6 x memwr | 26 |
+| `inflate` | `inflate` | WINDOW_BITS=10, WRAPPER=1 | iCE40 HX1K | 213 x SB_CARRY, 407 x SB_DFFE, 359 x SB_DFFER, 7 x SB_DFFES, 5 x SB_DFFR, 1 x SB_GB, 30 x SB_IO, 2530 x SB_LUT4, 5 x SB_RAM40_4K | 31 |
+| `inflate` | `inflate` | WINDOW_BITS=10, WRAPPER=1 | ECP5 45F | 1 x DCCA, 3 x DP16KD, 1687 x LUT4, 9 x TRELLIS_DPR16X4, 376 x TRELLIS_FF, 30 x TRELLIS_IO | 31 |
 <!-- end footprints -->
 
 ### Seven things writing these blocks found

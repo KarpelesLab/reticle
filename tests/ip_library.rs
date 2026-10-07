@@ -18,6 +18,8 @@
 //! | `footprints_match_the_documentation` | the table in `docs/ip-library.md` is the one this run measures |
 //! | `crypto_blocks_hold_no_memory_to_index` | neither crypto block holds a memory array, so nothing in one can be addressed by a secret |
 //! | `sha256_takes_the_same_cycles_...`, `chacha20_takes_the_same_cycles_...` | the cycle count of both crypto blocks is **measured** to be independent of the message and of the key |
+//! | `inflate_decompresses_the_compcol_corpus` | 123 DEFLATE and zlib streams a second, independent compression library produced are decompressed byte for byte, under four different consumers |
+//! | `inflate_reports_every_malformed_stream`, `inflate_refuses_or_decodes_every_single_byte_corruption`, `inflate_reports_every_truncation` | every malformed input is **reported** — 21 hand-built streams, 482 corruptions and 235 truncations, and none of the 1196 runs reached its loop bound |
 //! | `axil_gpio_matches_the_axi4lite_definition` | `bus::match_ports` recognises the GPIO's bus port |
 //! | `cdc_*`, `fifo_async_*` | `timing::analyze_cdc` calls every crossing a synchroniser, never an unsynchronised one |
 //! | the rest | behaviour, driven through `sim::Simulator` |
@@ -20076,28 +20078,44 @@ fn plaintext(rule: &str, len: usize) -> Vec<u8> {
     match kind {
         "zeros" => out.resize(len, 0u8),
         "ones" => out.resize(len, 0xffu8),
-        // The same rule `sha256`'s padding table uses.
-        "pattern" => out.extend((0..len).map(|i| ((i * 7 + 13) & 0xff) as u8)),
-        "counter" => out.extend((0..len).map(|i| (i & 0xff) as u8)),
-        // Incompressible, so the encoder reaches for a stored block.
+        // The same rule `sha256`'s padding table uses, done in `u8` so
+        // that the modulo 256 is the arithmetic rather than a cast.
+        "pattern" => {
+            let mut b = 13u8;
+            for _ in 0..len {
+                out.push(b);
+                b = b.wrapping_add(7);
+            }
+        }
+        "counter" => {
+            let mut b = 0u8;
+            for _ in 0..len {
+                out.push(b);
+                b = b.wrapping_add(1);
+            }
+        }
+        // Incompressible, so the encoder reaches for a stored block. The
+        // byte is bits 16 to 23 of the state, which is the low byte of
+        // `x >> 16`.
         "lcg" => {
             let mut x = arg | 1;
             for _ in 0..len {
                 x = x.wrapping_mul(1_103_515_245).wrapping_add(12_345);
-                out.push((x >> 16) as u8);
+                out.push((x >> 16).to_le_bytes()[0]);
             }
         }
         // `pattern` modulo a period, so every match is at that distance.
         "rep" => {
-            let p = arg as usize;
-            out.extend((0..len).map(|i| (((i % p) * 7 + 13) & 0xff) as u8));
+            let period: Vec<u8> = plaintext("pattern", usize::try_from(arg).expect("a period"));
+            out.extend((0..len).map(|i| period[i % period.len()]));
         }
         // English-shaped text: what a dynamic Huffman block is for.
         "text" => {
             let mut x = arg | 1;
             while out.len() < len {
                 x = x.wrapping_mul(1_103_515_245).wrapping_add(12_345);
-                out.extend_from_slice(WORDS[((x >> 20) % 16) as usize].as_bytes());
+                let w = usize::try_from((x >> 20) % 16).expect("a word index");
+                out.extend_from_slice(WORDS[w].as_bytes());
                 out.push(b' ');
             }
             out.truncate(len);
@@ -20107,9 +20125,9 @@ fn plaintext(rule: &str, len: usize) -> Vec<u8> {
             let mut x = arg | 1;
             while out.len() < len {
                 x = x.wrapping_mul(1_103_515_245).wrapping_add(12_345);
-                let b = (x >> 16) as u8;
+                let b = (x >> 16).to_le_bytes()[0];
                 x = x.wrapping_mul(1_103_515_245).wrapping_add(12_345);
-                let n = ((x >> 20) % 64 + 1) as usize;
+                let n = (x >> 20) % 64 + 1;
                 for _ in 0..n {
                     out.push(b);
                 }
@@ -20376,7 +20394,6 @@ impl InflateBench {
         let mut ended = false;
         let mut out: Vec<u8> = Vec::new();
         let mut cycles = 0u64;
-        let mut taken = 0u32;
         let mut hold = 0u32;
         loop {
             if ended {
@@ -20397,11 +20414,11 @@ impl InflateBench {
 
             let want = match sink {
                 Sink::Greedy => true,
-                Sink::Alternate => cycles % 2 == 0,
+                Sink::Alternate => cycles & 1 == 0,
                 // A 23-step cycle, so it does not line up with anything
                 // in the block: 23 is prime and longer than the longest
                 // run of states between two output bytes.
-                Sink::Ragged(seed) => ((cycles as u32 + seed) * 7 % 23) < 9,
+                Sink::Ragged(seed) => ((cycles + u64::from(seed)) * 7 % 23) < 9,
                 Sink::Slow(_) => hold == 0,
             };
             sim.set(self.out_ready, bit(want));
@@ -20429,13 +20446,11 @@ impl InflateBench {
             }
             if let Some(b) = byte {
                 out.push(b);
-                taken += 1;
-                let _ = taken;
                 if let Sink::Slow(n) = sink {
                     hold = n;
                 }
-            } else if hold > 0 {
-                hold -= 1;
+            } else {
+                hold = hold.saturating_sub(1);
             }
 
             if high(sim, self.error) {
@@ -20516,9 +20531,11 @@ fn inflate_plaintext_rules_match_the_corpus() {
     }
     // Every rule the generator has is used, so none of them is dead
     // code pretending to be coverage.
-    let expected: BTreeSet<&str> = ["counter", "lcg", "ones", "pattern", "rep", "runs", "text", "zeros"]
-        .into_iter()
-        .collect();
+    let expected: BTreeSet<&str> = [
+        "counter", "lcg", "ones", "pattern", "rep", "runs", "text", "zeros",
+    ]
+    .into_iter()
+    .collect();
     assert_eq!(rules, expected, "the corpus no longer uses every rule");
 }
 
@@ -20809,7 +20826,12 @@ fn inflate_decompresses_the_compcol_corpus() {
     // a regular pattern cannot reach, and running them over the handful of
     // four-thousand-byte cases as well would double this test's cycles for
     // no new shape of stall.
-    const ALL: [Sink; 4] = [Sink::Greedy, Sink::Alternate, Sink::Ragged(5), Sink::Slow(3)];
+    const ALL: [Sink; 4] = [
+        Sink::Greedy,
+        Sink::Alternate,
+        Sink::Ragged(5),
+        Sink::Slow(3),
+    ];
     const BIG: [Sink; 2] = [Sink::Greedy, Sink::Alternate];
     let mut cases = 0usize;
     let mut runs = 0usize;
@@ -20835,7 +20857,8 @@ fn inflate_decompresses_the_compcol_corpus() {
                 inflate_limit(case.stream.len(), case.len),
             );
             assert_eq!(
-                run.error, None,
+                run.error,
+                None,
                 "{} with {sink:?}: reported error {:?} after {} of {} bytes",
                 case.name,
                 run.error,
@@ -20912,10 +20935,10 @@ fn inflate_reports_every_malformed_stream() {
     // multiple of 31, which is how a header with a *deliberate* fault in
     // one field can keep every other field legal.
     fn zlib_header(cmf: u8, fdict: bool) -> [u8; 2] {
-        for low in 0u16..32 {
+        for low in 0u8..32 {
             let flg = low | if fdict { 0x20 } else { 0 };
-            if (u16::from(cmf) * 256 + flg) % 31 == 0 {
-                return [cmf, flg as u8];
+            if (u16::from(cmf) * 256 + u16::from(flg)) % 31 == 0 {
+                return [cmf, flg];
             }
         }
         panic!("no FCHECK for CMF {cmf:#04x}");
@@ -21006,11 +21029,7 @@ fn inflate_reports_every_malformed_stream() {
         w.bits(1, 2); // fixed
         let (code, bits) = fixed_lit_code(symbol);
         w.code(code, bits);
-        raw_cases.push((
-            "§3.2.5 a length symbol of 286 or 287",
-            w.finish(),
-            E_CODE,
-        ));
+        raw_cases.push(("§3.2.5 a length symbol of 286 or 287", w.finish(), E_CODE));
     }
     // §3.2.6: distance symbols 30 and 31 likewise.
     for symbol in [30u32, 31] {
@@ -21073,11 +21092,7 @@ fn inflate_reports_every_malformed_stream() {
         for _ in 0..3 {
             w.bits(0, 3);
         }
-        raw_cases.push((
-            "§3.2.7 an incomplete code-length code",
-            w.finish(),
-            E_CODE,
-        ));
+        raw_cases.push(("§3.2.7 an incomplete code-length code", w.finish(), E_CODE));
     }
     // §3.2.7's code 16 copies the previous code length, and there is no
     // previous one at the start.
@@ -21418,7 +21433,11 @@ fn inflate_reports_every_truncation() {
     let mut codes: BTreeMap<u8, usize> = BTreeMap::new();
     let mut prefixes = 0usize;
     let mut exact = 0usize;
-    for name in ["text1_100_l6_zlib", "lcg1_100_l6_zlib", "runs2_500_l6_deflate"] {
+    for name in [
+        "text1_100_l6_zlib",
+        "lcg1_100_l6_zlib",
+        "runs2_500_l6_deflate",
+    ] {
         let case = corpus()
             .iter()
             .find(|c| c.name == name)
