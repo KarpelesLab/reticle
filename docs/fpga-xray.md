@@ -1014,6 +1014,113 @@ not been tried.
 - **`COMPENSATION = ZHOLD`, or feedback through a `BUFG`.** Only the
   internal loop is written.
 
+## Block RAM
+
+**Status, 2026-10-08:** a `RAMB18E1` — inferred from a Verilog memory
+with an `initial` block, or instantiated — builds through
+`reticle fpga --bitstream` for the XC7A35T to a `.bit` in which every set
+bit, contents included, decodes back through the database and the
+decoded arcs are exactly the router's plus the ties'. **Nothing with a
+block RAM has been loaded into a part.** `RAMB36E1` is not done: nothing
+places one (the device file declares only the 18 kbit block, for the
+reason it gives), and the seven `RAMB36.*` features are left alone.
+
+The demo is `examples/basys3/bram_rom.v`: a 256-word ROM addressed by
+SW0..SW7, each word its own address plus one, shown on LD7..LD14. Its
+header lists what each kind of failure would look like on the LEDs.
+
+```sh
+reticle fpga examples/basys3/bram_rom.v --device xc7a35t-cpg236 \
+    --constraints examples/basys3/bram_rom.rcf \
+    --bitstream /tmp/bram_rom.bit --output-dir /tmp
+```
+
+```
+note: 17 of 17 signal(s) with a reader routed
+note: 1 block RAM(s) configured with 87 mode feature(s); 73 input(s) tied to zero
+      over 82 pip(s), 5 left at the interconnect's VCC default, 0 idle input(s) left untied
+note: decoded: 1735 bit(s) over 154 tile(s) into 1400 feature(s); 0 bit(s) unexplained,
+      0 tile(s) with no segbits file
+```
+
+`tests/fpga_xray_bram.rs::the_rom_demo_decodes_bit_for_bit` adds that the
+205 decoded arcs are exactly the 205 the router and the ties switched on
+(17 more hops go through IO sites and cost site features, as they always
+have), and that the 1024 decoded contents bits are exactly the set bits
+of the cell's `INIT_00..INIT_3F`, which in turn are exactly the ROM in
+the 16-bit layout.
+
+### Why it did not route, which was not the reason item 4 gave
+
+The loader decides a feature prefix is a *site* when it heads a feature
+of three or more components (`SLICEL_X0.AFF.ZINI`). Every block RAM
+feature has two: `RAMB18_Y0.IN_USE`, `RAMB18_Y0.INIT_00[000]`. So both
+halves were read as wires, their 37 000 features as pips into nothing,
+and a `BRAM_L` tile got **no bel**. The placer then said "the design needs
+1 `bram` site(s) and the part has 0". `RAMB18_Y0` and `RAMB18_Y1` are now
+named as sites (`bram::is_two_part_site`); naming rather than loosening
+the rule, because a looser rule would misread interconnect wires.
+
+### What else had to change, each found by building the design
+
+| Problem | Found by | Fix |
+|---|---|---|
+| A block RAM tile has **two frame windows** — 28 configuration frames on `CLB_IO_CLK`, 128 contents frames on `BLOCK_RAM` — and both start at tile frame 0. The frame map put a bit in "whichever window claims it", so the first claimed every bit. | reading `tilegrid.json` for `BRAM_L` | the windows **stack**, `CLB_IO_CLK` first (sorted by the frame address block type, not by name, which put `BLOCK_RAM` first); contents rows are 28 and up. `xc7::FrameMap::locate` |
+| `segbits_bram_l.block_ram.db` numbers its frames from the `BLOCK_RAM` window | the same | read with its rows moved by 28 and merged into the tile type's features |
+| which half `RAMB18_Y0` is | the `IOB` rule (descending rank) would have named the *upper* half | parity, below |
+| an undriven interconnect input reads **one** | `ppips_int_l.db`: every `IMUX_L*`, `BYP_ALT*` and `FAN_ALT*` is `default` from `VCC_WIRE` | every input the design leaves alone is tied after routing, below |
+| the router carried four address bits up the **address cascade** through four unused block RAMs below the placed one (`ADDRARDADDRU<n> <- CASCINBOT`), which decoded and matched and is a path nobody takes for a lone block | the first decode of the demo | cascade inputs are left out of the graph; nothing here cascades |
+| a data input of the idle port sat behind `BYP_ALT6`, which the router had used as a hop for another signal, so the pin *carries* that signal | the four-block test | an idle input (data, or anything on a port whose enable is tied low) is tied when it can be and otherwise left; an input that matters and is behind a routed wire is **refused** |
+
+### Checked, and quoted
+
+| Claim | Status | Source |
+|---|---|---|
+| which frame bit is `INIT_xx[k]` of each half | **quoted** — the database's statement, read and applied with no transformation | `segbits_bram_l.block_ram.db`, produced by prjxray fuzzer `026-bram-data`, whose generator gives Vivado random 256-bit `INIT_xx` values and tags bit `k` with `val & (1 << k)` (read in the fuzzer's source) |
+| that `INIT_xx[k]` is bit `k` of the Verilog parameter `INIT_xx` | **quoted**, and the same reading as nextpnr-xilinx's `write_bram_init` (`init.str[k]` to `INIT_xx[k]`) | prjxray `026-bram-data/generate.py`; nextpnr-xilinx `fasm.cc` |
+| which memory word lands in which `INIT_xx` bit | **quoted** from UG473 by `xc7.dev` (MEDIUM-HIGH there), and **checked** here only in the sense that the test recomputes the 16-bit layout independently and compares | `xc7.dev`, `init_params` |
+| the decoded contents equal the cell's `INIT` | **checked**: 1024 of 1024 bits, both halves (`the_upper_half_holds_the_same_rom` moves the block to `RAMB18_Y1`), and four blocks of different contents in the 4-bit mode | `tests/fpga_xray_bram.rs` |
+| `RAMB18_Y0` is the even-`Y` site, the lower, `FIFO18E1`-typed one | **quoted** from prjxray `segmaker.py` (`name_bram18`); **corroborated** by the database: all 75 block RAM tiles have the even site lower and typed `FIFO18E1`, and every `RAMB18_Y0` contents bit is in bits 0..175 of the window, `Y1`'s in 176..319 — and a higher word is a higher site everywhere else this was checked | `the_lower_half_is_ramb18_y0_by_both_readings` |
+| a `BRAM_FIFO18_<PIN>` tile wire is the lower half's site pin `<PIN>` | **quoted**: the naming every site-pin wire of the database follows | `ppips_bram_l.db` |
+| `ADDRARDADDR[i]` is site pin `ADDRARDADDR<i>`, `WEA[0]` is `WEA0` and `WEA1`, `WEA[1]` is `WEA2` and `WEA3`, `WEBWE[7:4]` tied low | **quoted** | nextpnr-xilinx `pack.cc`, `XC7Packer::pack_bram` |
+| the mode features a 16-bit block sets: `IN_USE`, the four `*_WIDTH_*_18`, ten `ZINV_*`, `ZINIT_A/B` and `ZSRVAL_A/B` all eighteen bits (so `INIT_A = SRVAL_A = 0`); nothing for `WRITE_FIRST` or `DO*_REG = 0` | **quoted** | nextpnr-xilinx `fasm.cc`, `write_bram_half`; the feature names and bits are the database's |
+| an undriven `IMUX`, `BYP_ALT`, `FAN_ALT` reads one | **the database's statement** (`default` from `VCC_WIRE`); not seen on silicon | `ppips_int_l.db` |
+| a zero is `GND_WIRE -> GFAN0/1 -> IMUX/CTRL` | **the database's statement** (`INT_L.GFAN0.GND_WIRE` has bits); in `INT_L` every `IMUX_L`, `CTRL_L`, `BYP_ALT` and `FAN_ALT` is one hop from `GFAN0` or `GFAN1` (counted; `INT_R` not counted) | `segbits_int_l.db` |
+
+### What a block RAM's inputs are tied to
+
+The mapper connects only the pins a memory uses. The ROM connects the
+read port's clock, its enable (`1'b1`) and twelve address bits
+(`{sw, 4'd0}`), and nothing on the other port. Left like that, `WEA`
+would read one, `DIADI` all ones — so every read would also write
+`0xFFFF` — and the idle port would be enabled and writing too.
+`TiePolicy` says what each unconnected input becomes:
+
+| Inputs | Value |
+|---|---|
+| write enables, `RSTRAM*`, `RSTREG*`, the enable of an unconnected port, address bits | zero, through `GND_WIRE`; refused if no free path |
+| data and parity inputs, and everything but the enable of a port whose enable is tied low | zero when a path is free, otherwise left |
+| `ADDRATIEHIGH0/1`, `ADDRBTIEHIGH0/1` | one: the default, accepted only once the walk back from the pin reaches a `VCC_WIRE`-default wire with nothing driving the way |
+| the clocks of an unused port, `REGCE*` (nothing while `DO*_REG = 0`) | left |
+
+The demo ties 73 inputs to zero over 82 pips and leaves 5 at one (the
+four tie-highs and its own enable).
+
+### Not verified, in order of how much rides on it
+
+1. **Nothing has been on a board.** The demo exists so that one look
+   settles the contents order, the address order and the data order at
+   once.
+2. The undriven-is-one reading and the ground tie are the database's
+   word; if an undriven input reads zero instead, the ties are still
+   right and only the four tie-highs and the demo's enable change.
+3. The demo's clock reaches the block over general routing, not a
+   `BUFG`: the mapper gives a clock with one load local routing (the
+   threshold is eight), and the Verilog frontend has no `BUFG` to
+   instantiate. With one clocked element nothing can skew against it.
+4. Only the true-dual-port widths 1, 2, 4, 9 and 18 are described;
+   `RAM_MODE = "SDP"` and the 36-bit width are refused by name.
+
 ## What remains before an LED could light
 
 In rough order of how much stands behind each.
@@ -1102,8 +1209,13 @@ In rough order of how much stands behind each.
    which is `PRECYINIT.C0` and costs no bits at all, so `count + 1` never
    needed `C1`. It is supported anyway, for a design that asks for it.
 
-4. **A memory, and a `SLICEM`.** Nothing has looked at `RAMB18E1`, so a
-   design with one will not route. A `SLICEM`'s **distributed RAM** has now
+4. **A memory, and a `SLICEM`.** ~~Nothing has looked at `RAMB18E1`, so a
+   design with one will not route.~~ *Corrected 2026-10-08:* a `RAMB18E1`
+   now places, routes and configures, contents included — see *Block RAM*
+   above. What this sentence missed is *why* it did not route: not an
+   absent table but the loader reading both block RAM halves as wires,
+   so a `BRAM_L` tile had no bel at all. Block RAM is **not** tried on a
+   part. A `SLICEM`'s **distributed RAM** has now
    been looked at, because the ECP5 gained one on 2026-09-28 and the
    question "does the 7 series need the same shape of work?" had to be
    answered rather than assumed. It does, and the answer is written out
@@ -1446,6 +1558,8 @@ will have.
 | `examples/basys3/` | the two designs that have reached a part, the tristate, distributed-RAM, PLL and carry-chain demos that have not yet, and their constraints |
 | `src/fpga/xray/dsp.rs` | the refusal of a `DSP48E1`, and the measured reasons for it |
 | `tests/fpga_xray_carry.rs` | the carry chain: placed up one column, propagate from the lookup table beside it, `CIN` and a constant carry in, every bit decoded and every arc the router's |
+| `src/fpga/xray/bram.rs` | block RAM: the `RAMB18E1` bel's pins, its mode features, and `XrayFabric::configure_block_rams`, which also ties every input the design leaves alone |
+| `tests/fpga_xray_bram.rs` | block RAM: both halves, the frame-window stacking, `examples/basys3/bram_rom.v` and a four-block design, every bit decoded, every arc the router's or a tie's, the contents bit for bit |
 | `XrayDatabase::decode` | the other direction: a bitstream back into the database's feature names, with an accounting of every bit it could not name |
 
 `src/fpga/arch/synthetic.rs` is untouched and still says what it always
