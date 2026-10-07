@@ -26,8 +26,10 @@ An adder on this part is a carry chain now. `chacha20_core` went from 5834
 `LUT4` at depth 87 to 547 `CCU2C` and 3031 `LUT4` at **depth 4**;
 `sha256_core` from 3041 at 39 to 314 and 1686 at **depth 7**. Both are now
 *shallower on the ECP5 than on the iCE40*, which is worth a sentence of its
-own below. Thirty-nine rows of `docs/ip-library.md`'s footprint table moved
-and no other row in it moved at all.
+own below. **Forty-four** rows of `docs/ip-library.md`'s footprint table
+moved and no other row of it moved at all — no LUT4 row, no LUT6 row and no
+iCE40 row differs by a cell, which is what a change confined to one device
+file and one mapping path should look like.
 
 ### Everything `ecppack` writes for a `CCU2C`, in full
 
