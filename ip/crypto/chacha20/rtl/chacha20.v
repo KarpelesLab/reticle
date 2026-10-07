@@ -13,8 +13,9 @@
 //   cycle later**, registered.
 //
 //   Sixteen words is a block. After the sixteenth the counter advances
-//   and `in_ready` drops for the 22 cycles the next block takes, then
-//   comes back. Nothing has to be re-started between blocks.
+//   and `in_ready` drops for the 23 cycles it takes to ask for the next
+//   block, compute it and notice it arrived, then comes back. Nothing has
+//   to be re-started between blocks.
 //
 //   **Byte order.** `in_data[31:24]` is the first of the four bytes and
 //   `out_data[31:24]` is its result, which is the same way round as
@@ -34,9 +35,10 @@
 //   core needs 22 cycles for a block of 64 bytes; a 32-bit port drains
 //   those 64 bytes in 16 cycles, which fits inside the 22 with room, so
 //   the port is free and the core is the limit. An 8-bit port would take
-//   64 cycles to drain a block the core made in 22, and the whole thing
-//   would run at a third of the rate for no saving worth having. A
-//   64-bit port would drain in 8 and buy nothing at all.
+//   64 cycles to drain a block the core made in 22, and a block would
+//   cost 87 cycles instead of 39 — well under half the rate for no
+//   saving worth having. A 64-bit port would drain in 8 and buy nothing
+//   at all, since the 22 are still there.
 //
 //   `sha256` in this same category is 8 bits wide, and for the same
 //   reason read the other way: its compression needs 64 cycles for 64
@@ -45,16 +47,22 @@
 //   two blocks land in different places because their cores do.
 //
 // Throughput, and what is not spent on it
-//   16 cycles of data and then 22 of waiting is 64 bytes per 38 cycles,
-//   **1.68 bytes per cycle** — 168 MB/s, 1.35 Gbit/s, at 100 MHz. The
-//   obvious improvement is a second 512-bit register: copy the block out,
-//   start the next one immediately, and the 16 cycles of draining hide
-//   inside the 22 of computing, giving 64 bytes per 22 cycles, 2.9 per
-//   cycle and 2.3 Gbit/s. It costs 512 flip-flops, which is more than
-//   this module and `chacha20_core` hold together, so it is stated here
-//   and not taken — the same call `sha256_core` makes about its own
-//   second buffer, and for the same reason. `docs/ip-library.md` has the
-//   footprints both of those claims rest on.
+//   16 cycles of data, 22 of computing the next block and one to notice
+//   it arrived is **39 cycles for 64 bytes**, 1.64 bytes per cycle —
+//   164 MB/s, 1.31 Gbit/s, at 100 MHz. That is measured and not
+//   calculated: `chacha20_takes_the_same_cycles_whatever_the_key_is`
+//   prints 157 cycles for 256 bytes, which is four whole blocks and the
+//   one cycle `start` takes.
+//
+//   The obvious improvement is a second 512-bit register: copy the block
+//   out, start the next one immediately, and the 16 cycles of draining
+//   hide inside the 22 of computing, giving 64 bytes per 22 cycles —
+//   2.91 per cycle, 2.33 Gbit/s, **1.77 times** this. It costs 512
+//   flip-flops, which is more than this module and `chacha20_core` hold
+//   together, so it is stated here and not taken — the same call
+//   `sha256_core` makes about its own second buffer, and for the same
+//   reason. `docs/ip-library.md` has the footprints both of those claims
+//   rest on.
 //
 // What the caller must hold still
 //   `key` and `nonce` must not change from `start` until the stream ends.

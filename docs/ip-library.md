@@ -1250,7 +1250,7 @@ it AES should take.
 6. **An area/throughput decision stated with numbers, and a trade named
    and declined.** Both blocks here refuse a second 512-bit buffer, and
    each header says what it would have bought (1.98x a block for
-   `sha256_core`, 1.7x for `chacha20`) and what it would have cost (512
+   `sha256_core`, 1.77x for `chacha20`) and what it would have cost (512
    flip-flops, more than the rest of the block holds). AES's equivalent is
    one round per cycle against a fully unrolled pipeline, and the numbers
    belong in its header before the code does.

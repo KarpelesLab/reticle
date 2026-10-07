@@ -18267,7 +18267,9 @@ fn hex(bytes: &[u8]) -> String {
 /// same rule the `purecrypto` run that produced the expected digests
 /// used, so the two sides of that comparison were written once.
 fn crypto_pattern(n: usize) -> Vec<u8> {
-    (0..n).map(|i| octet(((i * 7 + 13) & 0xff) as u64)).collect()
+    (0..n)
+        .map(|i| octet(((i * 7 + 13) & 0xff) as u64))
+        .collect()
 }
 
 /// Everything a testbench needs to hold of `sha256`.
@@ -18330,7 +18332,10 @@ impl Sha256Bench {
             } else {
                 let more = index < msg.len();
                 sim.set(self.in_valid, bit(more));
-                sim.set(self.in_byte, word(8, if more { u64::from(msg[index]) } else { 0 }));
+                sim.set(
+                    self.in_byte,
+                    word(8, if more { u64::from(msg[index]) } else { 0 }),
+                );
                 // `in_last` ends the message at this point in the stream;
                 // with `in_valid` low it ends it with no byte, which is
                 // how the empty message is spelled.
@@ -18473,34 +18478,95 @@ fn sha256_pads_every_length_purecrypto_was_asked_about() {
 
     // Produced by `purecrypto::hash::sha256` over `crypto_pattern(n)`.
     const TABLE: [(usize, &str); 19] = [
-        (0, "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"),
-        (1, "9d1e0e2d9459d06523ad13e28a4093c2316baafe7aec5b25f30eba2e113599c4"),
-        (3, "10c38ff6aa77aaf0a08345dea78ac620f90429576e826996518aba266f14b46f"),
-        (54, "a181b5442ceb430fd1c2b2245a953f17ca4058881c1282024b973b8562a805be"),
-        (55, "764c574722e6e2ccaa5422f8ec731111ac72ff7039793148623e56b75a32c11f"),
-        (56, "43fbbe48a6796cb7414a92cd785d9f4a976c2f70fc59c60a309f95e3022db77a"),
-        (57, "e038a2370dbd74c3c8b89b95e7c351fec4821e3415f7aef3a0925215bc6ff953"),
-        (63, "c309180feace42e90107301813aef6f309cac604e831b3fd9692a3298aa6da54"),
-        (64, "3a38aed112131d75fc0e636437f5b675c83c01ade88d99f6b6c54b0d6129174f"),
-        (65, "2ee4bedec261c1561dafa7ba28e4e3ece281bc0f51afca40b83b3a2a7c41a050"),
-        (118, "4a6edb5613289eccf0568a8091fc9ae750bbf82f5352528e4688d65480d6cc38"),
-        (119, "0a70cbf85ea376617e4bfad11040a9559638f8ceb57844a901573674578af539"),
-        (120, "7d3fd765bd3d4a0587f5bab94200b1d38b23398b94544ff5257f695b2227918f"),
-        (121, "ce828eed6582389e10c153a818088fd9f2b48d8478325f72d0bd67f979b8536d"),
-        (127, "ff998a2ad3412188b7ba531324bf977b22e77aa3b1befb11c699bf2a14959ee7"),
-        (128, "8b94fd8b7db8b1ef29c089c16389697a057310b7c739c1ad844e9be970f5cfd6"),
-        (129, "22afcb610b1282b24536c87a33acc00a80c720c9d3509960ae11a9bd87501330"),
-        (192, "6b2a097aff28b485a0c701b5da8724a4cb7d4d97c6f2178ba43fe295beca2232"),
+        (
+            0,
+            "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        ),
+        (
+            1,
+            "9d1e0e2d9459d06523ad13e28a4093c2316baafe7aec5b25f30eba2e113599c4",
+        ),
+        (
+            3,
+            "10c38ff6aa77aaf0a08345dea78ac620f90429576e826996518aba266f14b46f",
+        ),
+        (
+            54,
+            "a181b5442ceb430fd1c2b2245a953f17ca4058881c1282024b973b8562a805be",
+        ),
+        (
+            55,
+            "764c574722e6e2ccaa5422f8ec731111ac72ff7039793148623e56b75a32c11f",
+        ),
+        (
+            56,
+            "43fbbe48a6796cb7414a92cd785d9f4a976c2f70fc59c60a309f95e3022db77a",
+        ),
+        (
+            57,
+            "e038a2370dbd74c3c8b89b95e7c351fec4821e3415f7aef3a0925215bc6ff953",
+        ),
+        (
+            63,
+            "c309180feace42e90107301813aef6f309cac604e831b3fd9692a3298aa6da54",
+        ),
+        (
+            64,
+            "3a38aed112131d75fc0e636437f5b675c83c01ade88d99f6b6c54b0d6129174f",
+        ),
+        (
+            65,
+            "2ee4bedec261c1561dafa7ba28e4e3ece281bc0f51afca40b83b3a2a7c41a050",
+        ),
+        (
+            118,
+            "4a6edb5613289eccf0568a8091fc9ae750bbf82f5352528e4688d65480d6cc38",
+        ),
+        (
+            119,
+            "0a70cbf85ea376617e4bfad11040a9559638f8ceb57844a901573674578af539",
+        ),
+        (
+            120,
+            "7d3fd765bd3d4a0587f5bab94200b1d38b23398b94544ff5257f695b2227918f",
+        ),
+        (
+            121,
+            "ce828eed6582389e10c153a818088fd9f2b48d8478325f72d0bd67f979b8536d",
+        ),
+        (
+            127,
+            "ff998a2ad3412188b7ba531324bf977b22e77aa3b1befb11c699bf2a14959ee7",
+        ),
+        (
+            128,
+            "8b94fd8b7db8b1ef29c089c16389697a057310b7c739c1ad844e9be970f5cfd6",
+        ),
+        (
+            129,
+            "22afcb610b1282b24536c87a33acc00a80c720c9d3509960ae11a9bd87501330",
+        ),
+        (
+            192,
+            "6b2a097aff28b485a0c701b5da8724a4cb7d4d97c6f2178ba43fe295beca2232",
+        ),
         // 108 is the middle of a block rather than an edge of one, as a
         // control: one full block of message, then 44 bytes of message
         // with the 1 bit, the zeros and the length behind them.
-        (108, "13f6a38d129ef9870df728f2d3364ae2ab9acbb8d1de245b1f0ecbe1050f43c6"),
+        (
+            108,
+            "13f6a38d129ef9870df728f2d3364ae2ab9acbb8d1de245b1f0ecbe1050f43c6",
+        ),
     ];
 
     for (length, expected) in TABLE {
         let message = crypto_pattern(length);
         let (digest, cycles) = bench.message(&mut sim, &message);
-        assert_eq!(hex(&digest), expected, "a {length}-byte message, {cycles} cycles");
+        assert_eq!(
+            hex(&digest),
+            expected,
+            "a {length}-byte message, {cycles} cycles"
+        );
     }
 }
 
@@ -18623,7 +18689,9 @@ fn sha256_takes_the_same_cycles_whatever_the_message_says() {
             (0..length)
                 .map(|i| if i + 1 == length { 0x80 } else { 0 })
                 .collect(),
-            (0..length).map(|i| octet((i as u64).wrapping_mul(31))).collect(),
+            (0..length)
+                .map(|i| octet((i as u64).wrapping_mul(31)))
+                .collect(),
             (0..length).map(|i| octet(!(i as u64) & 0xff)).collect(),
         ];
 
@@ -18752,6 +18820,10 @@ fn chacha20_qr_matches_rfc_8439_2_1_1_and_2_2_1() {
     }
 }
 
+/// One Appendix A.1 case: a label, a key, a nonce, a block counter and the
+/// sixty-four keystream bytes RFC 8439 prints for them.
+type BlockVector = (&'static str, [u8; 32], [u8; 12], u32, &'static str);
+
 /// Everything `chacha20_core` needs from a testbench.
 struct ChaChaCore {
     clk: NetHandle,
@@ -18877,9 +18949,22 @@ fn chacha20_core_reaches_the_state_rfc_8439_2_3_2_prints() {
     // "After running 20 rounds (10 column rounds interleaved with 10
     // diagonal rounds), the ChaCha state looks like this".
     const AFTER_20: [u32; 16] = [
-        0x8377_78ab, 0xe238_d763, 0xa67a_e21e, 0x5950_bb2f, 0xc4f2_d0c7, 0xfc62_bb2f, 0x8fa0_18fc,
-        0x3f5e_c7b7, 0x3352_71c2, 0xf294_89f3, 0xeabd_a8fc, 0x82e4_6ebd, 0xd19c_12b4, 0xb04e_16de,
-        0x9e83_d0cb, 0x4e3c_50a2,
+        0x8377_78ab,
+        0xe238_d763,
+        0xa67a_e21e,
+        0x5950_bb2f,
+        0xc4f2_d0c7,
+        0xfc62_bb2f,
+        0x8fa0_18fc,
+        0x3f5e_c7b7,
+        0x3352_71c2,
+        0xf294_89f3,
+        0xeabd_a8fc,
+        0x82e4_6ebd,
+        0xd19c_12b4,
+        0xb04e_16de,
+        0x9e83_d0cb,
+        0x4e3c_50a2,
     ];
     assert_eq!(
         after_rounds.map(|w| format!("{w:08x}")),
@@ -18931,7 +19016,7 @@ fn chacha20_core_matches_rfc_8439_appendix_a_1() {
     let mut n_two = [0u8; 12];
     n_two[11] = 2;
 
-    let cases: [(&str, [u8; 32], [u8; 12], u32, &str); 5] = [
+    let cases: [BlockVector; 5] = [
         (
             "#1",
             zero,
@@ -19060,7 +19145,10 @@ impl ChaChaStream {
         while out.len() < words.len() * 4 {
             let more = sent < words.len();
             sim.set(self.in_valid, bit(more));
-            sim.set(self.in_data, word(32, if more { u64::from(words[sent]) } else { 0 }));
+            sim.set(
+                self.in_data,
+                word(32, if more { u64::from(words[sent]) } else { 0 }),
+            );
             let moved = more && high(sim, self.in_ready);
             cycle(sim, self.clk, HALF);
             cycles += 1;
@@ -19284,7 +19372,8 @@ fn chacha20_takes_the_same_cycles_whatever_the_key_is() {
             for counter in counters {
                 let (block, _, cycles) = bench.block_of(&mut sim, key, nonce, counter);
                 assert_eq!(
-                    cycles, 22,
+                    cycles,
+                    22,
                     "chacha20_core took {cycles} cycles for key {}",
                     hex(key)
                 );
@@ -19301,11 +19390,12 @@ fn chacha20_takes_the_same_cycles_whatever_the_key_is() {
          cycle counts above are not the cycle counts of one repeated run"
     );
 
-    // And the stream, over a message long enough to span four blocks.
+    // And the stream, over a message that is exactly four blocks, so the
+    // cycle count printed below divides by the block.
     let design = design_of("chacha20", "chacha20", &[]);
     let mut sim = simulate(&design, "chacha20");
     let bench = ChaChaStream::attach(&mut sim);
-    let plain = crypto_pattern(200);
+    let plain = crypto_pattern(256);
     let mut counts: BTreeSet<u64> = BTreeSet::new();
     let mut ciphers: BTreeSet<String> = BTreeSet::new();
     for key in &keys {
@@ -19319,6 +19409,14 @@ fn chacha20_takes_the_same_cycles_whatever_the_key_is() {
         "the stream took {counts:?} cycles over nine different keys"
     );
     assert_eq!(ciphers.len(), keys.len(), "nine keys, nine ciphertexts");
+    // Printed and not asserted, because it is the throughput figure the
+    // README quotes and a number of cycles is not a number of seconds.
+    // 256 bytes is 64 words, which is four whole blocks.
+    println!(
+        "chacha20: {} cycles for {} bytes",
+        counts.iter().next().expect("one count"),
+        plain.len()
+    );
 }
 
 /// The counter runs out and the block stops instead of repeating itself.
