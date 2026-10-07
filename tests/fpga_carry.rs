@@ -441,7 +441,23 @@ fn port_net(module: &Module, name: &str) -> NetId {
 /// Simulates every input combination of `shape` at `width` bits and
 /// compares with the arithmetic it stands for.
 fn check_exhaustively(shape: Shape, width: u32, map: MapOptions) {
-    let (design, top, report) = mapped(shape, width, XC7, map);
+    check(shape, width, map, false);
+}
+
+/// [`check_exhaustively`], optionally after `fpga::xray::legalise_carries`
+/// has given every propagate bit a lookup table of its own.
+fn check(shape: Shape, width: u32, map: MapOptions, legalise: bool) {
+    let (mut design, top, report) = mapped(shape, width, XC7, map);
+    if legalise {
+        let device = fpga::target(XC7).expect("a built-in device");
+        fpga::xray::legalise_carries(&mut design, top, device).expect("the chain legalises");
+        let problems = validate_module(design.module(top));
+        assert!(
+            !problems.has_errors(),
+            "the legalised module is not valid: {:?}",
+            problems.iter().map(|d| &d.message).collect::<Vec<_>>()
+        );
+    }
     let module = design.module(top);
     let netlist = Netlist::new(module);
     let ports = shape.inputs(width);
@@ -512,6 +528,45 @@ fn every_input_of_an_awkward_width_is_simulated() {
     for width in [1, 2, 3, 6, 7] {
         check_exhaustively(Shape::Plain, width, one.clone());
         check_exhaustively(Shape::Widened, width, one.clone());
+    }
+}
+
+/// **Legalising a chain for a 7-series slice changes no sum.**
+///
+/// `fpga::xray::legalise_carries` puts a buffer lookup table in front of
+/// every propagate bit that has none, a constant one in front of every
+/// constant bit of a lane something reads, and `x` on the lanes nothing
+/// reads. The widened shape is the one that exercises the constants: its
+/// top lane adds two zeros and its sum is the carry out, so that lane's
+/// propagate *and* generate are constants, and its lookup table carries
+/// the generate in the lower half of its truth table for `O5` with `I5`
+/// tied to one.
+///
+/// Would catch: a buffer reading the wrong input, a truth table whose
+/// upper half is not the propagate, `S` and `DI` reassembled in the wrong
+/// lane order, and a lane wrongly judged dead. Would not catch: `O5`
+/// reading something other than the lower half on silicon — this model
+/// reads `O6` only, and the lower half is the database's reading of the
+/// `CARRY4.<L>CY0` mux, quoted in `docs/fpga-xray.md`.
+#[test]
+fn legalising_a_chain_for_a_slice_changes_no_sum() {
+    for width in [4, 5, 8] {
+        for shape in [
+            Shape::Plain,
+            Shape::Widened,
+            Shape::Constant(1),
+            Shape::Constant(5),
+        ] {
+            check(shape, width, MapOptions::default(), true);
+        }
+    }
+    check(Shape::CarryIn, 5, MapOptions::default(), true);
+    let one = MapOptions {
+        min_carry_width: 1,
+        ..MapOptions::default()
+    };
+    for width in [1, 3, 6] {
+        check(Shape::Widened, width, one.clone(), true);
     }
 }
 

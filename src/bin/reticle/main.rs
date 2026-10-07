@@ -269,8 +269,10 @@ GW2A and Lattice ECP5):
                      a design that lights six LEDs has been watched, and a
                      routed one (button_led.v) and a clocked counter
                      (clock_blink.v) have been accepted but not yet looked
-                     at. On the 7 series a carry chain does not route; on
-                     Gowin nothing clocked does yet. See docs/fpga-xray.md,
+                     at. On the 7 series a carry chain places and routes
+                     (examples/basys3/blink_carry.v) but has not been on a
+                     board; on Gowin nothing clocked routes yet. See
+                     docs/fpga-xray.md,
                      docs/fpga-gowin.md and docs/fpga-trellis.md. For
                      Gowin this is the only output: there is no nextpnr
                      export.
@@ -2988,6 +2990,13 @@ fn write_xc7_bitstream(
         fabric.check_idcode(idcode).map_err(|e| e.to_string())?;
     }
 
+    // A `CARRY4`'s propagate inputs are the outputs of the lookup tables
+    // beside it, so the mapped netlist is first given a lookup table for
+    // every propagate bit that has none. See `xray::legalise_carries`.
+    let mut design = design.clone();
+    let packing = reticle::fpga::xray::legalise_carries(&mut design, top, device)?;
+    let design = &design;
+
     let graph = fabric.arch.build_graph();
     let netlist = Netlist::build(design, top, device, &graph).map_err(|e| e.to_string())?;
     let (placement, placement_report) = place(
@@ -3055,6 +3064,9 @@ fn write_xc7_bitstream(
 
     let mut note = String::new();
     note.push_str(&fabric.stats.to_text());
+    if packing.carries > 0 {
+        note.push_str(&format!("note: {}", packing.to_text()));
+    }
     note.push_str(&format!(
         "note: wrote {path}, {} byte(s), {} frame(s), {} configuration bit(s) set\n",
         bytes.len(),
@@ -3068,9 +3080,11 @@ fn write_xc7_bitstream(
         placement_report.fixed,
         placement_report.off_fabric
     ));
+    // A signal nobody reads — a carry chain's per-bit carry outs, mostly —
+    // is not one the router owes a path, so it is not counted against it.
+    let routable = netlist.routable().len();
     note.push_str(&format!(
-        "note: {routed} of {} signal(s) routed\n",
-        netlist.signals.len()
+        "note: {routed} of {routable} signal(s) with a reader routed\n"
     ));
     if clock_bits > 0 {
         note.push_str(&format!(
@@ -3088,7 +3102,7 @@ fn write_xc7_bitstream(
     if let Some(reason) = &failure {
         note.push_str(&format!("warning: the router gave up: {reason}\n"));
     }
-    if routed < netlist.signals.len() {
+    if routed < routable {
         note.push_str(
             "warning: the design is NOT FULLY ROUTED. A signal with no path contributes nothing \
              to the bitstream, so what was written configures less than the design asks for. \
@@ -3099,8 +3113,8 @@ fn write_xc7_bitstream(
     note.push_str(
         "note: two designs from this flow have been loaded into a part, both on a \
          Basys 3, and a person watched both work: a lookup table and three \
-         pins, and a clocked counter. Nothing larger has been tried; a carry \
-         chain does not route. See docs/fpga-xray.md.\n",
+         pins, and a clocked counter. Nothing larger has been tried on a part; \
+         a carry chain places and routes but has not. See docs/fpga-xray.md.\n",
     );
     Ok(note)
 }
