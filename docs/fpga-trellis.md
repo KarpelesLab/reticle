@@ -27,9 +27,10 @@ An adder on this part is a carry chain now. `chacha20_core` went from 5834
 `sha256_core` from 3041 at 39 to 314 and 1686 at **depth 7**. Both are now
 *shallower on the ECP5 than on the iCE40*, which is worth a sentence of its
 own below. **Forty-four** rows of `docs/ip-library.md`'s footprint table
-moved and no other row of it moved at all — no LUT4 row, no LUT6 row and no
-iCE40 row differs by a cell, which is what a change confined to one device
-file and one mapping path should look like.
+moved, and thirty-five iCE40 rows moved with them by one or two cells and no
+depth — which is the other half of this round and is a *correctness* fix
+rather than a cost. "A board found what nothing else could" below is that
+half, and it is the part worth reading first.
 
 ### Everything `ecppack` writes for a `CCU2C`, in full
 
@@ -315,12 +316,81 @@ equation quoted above:
   left there, and the unconnected operand pins, which on this family read as
   a **one**. Both ways, same answer.
 
+### A board found what nothing else could: a constant is not a tie
+
+**Everything above was true and the chain still computed the wrong number.**
+
+`cnt + 1` is an adder whose second operand is a constant, so thirty-one of
+its thirty-two `b` pins are a constant **zero**. A constant is not a wire the
+router routes — and `CLAUDE.md`'s own first hazard is that **an unrouted
+slice input on an ECP5 reads as a one**. So every one of those pins read as a
+one and the chain computed `cnt - 1`. Every counter, every pointer, every
+`+ 1` in the library.
+
+Nothing off the part could see it, and the list of what passed is the point:
+
+- the design synthesised, placed and routed;
+- **every set bit of its bitstream decoded** back through the database into
+  the arcs the router chose, with none unexplained;
+- `a_carry_chain_adds_what_it_was_asked_to_add` evaluated **every** input
+  pattern of a six-bit adder against the element's own equation, with the
+  dangling `CIN` and the unconnected pins varied both ways;
+- `tests/fpga_carry.rs` **proved** sixteen and thirty-two bits equivalent
+  with a SAT solver, over shapes that include a constant operand.
+
+All of them, because **in a netlist a constant pin evaluates to the
+constant.** The fabric is the only place it does not, and the three checks
+this project calls load-bearing are all netlist checks.
+
+What found it was `testdata/fpga/cynthion/usb_ulpi_device.v` — the design in
+`CLAUDE.md`'s own example — refusing to enumerate on a Cynthion:
+
+```text
+usb 7-5: device descriptor read/64, error -71      (four times)
+usb 7-5: device not accepting address 52, error -71
+usb usb7-port5: unable to enumerate USB device
+```
+
+And the bisection was as sharp as a board can give: the **same design from
+the same tree** with `CCU2C`'s port map stripped out of `ecp5.dev` came out
+**byte-identical** to the bitstream that works. One feature, one difference,
+one outcome.
+
+`techcells::drive_constant_data` gives those pins a real driver now — the
+same shared constant lookup table it was extended to give a distributed RAM's
+inputs, for the same reason, which makes this the **third** time this hazard
+has been met: a flip-flop's data pin, every input of a `lutram`, and now a
+carry element's operands. Two roles are excluded and both are the chain's own
+ends: `ci`, which is dedicated metal nothing outside may drive, and `cyinit`,
+which is the pin a family *designs* to take a constant.
+
+It costs one or two cells per module — the constant lookup tables are shared —
+and no depth at all, which is why thirty-five iCE40 rows of the footprint
+table moved by one or two `SB_LUT4` and not one of them by a level. The iCE40
+side is the same latent defect closed before anything runs an `SB_CARRY` on a
+part.
+
+**The cheaper fix is the one `ecppack` uses**, and this flow does not use it:
+fold the constant into the lane's own `INIT` and tie the pin high, which is
+what `0xAAA0` and `0xCCC0` are in the table above and costs no net at all. A
+driver is correct on every family and the folding would be correct on one;
+the folding is worth doing and is not done here.
+
+With the fix, that design enumerates and `tests/usb_loopback.rs` passes on
+the part: **256 bytes out through endpoint 1 and back byte-identical** in
+packets of 64, 63, 8, 5 and 1, then 16 KiB in 256 round trips at
+**256 011 bytes/s** each way — the same rate the round that wrote that test
+measured — through two distributed RAMs whose write pointer and read index
+are carry chains. A byte that came back from the wrong address would be a
+wrong chain, and none did.
+
 ### What a board would add, and the cheapest experiment
 
-Everything above is off the part. The database, the vendor's bitstreams, the
-placer, the router, the "every bit decodes" check, the solver and the
-exhaustive simulation are all static, and **not one of them can tell you
-whether the clock closes**. That is the whole point of this change and it is
+Everything above *except the last section* is off the part. The database, the
+vendor's bitstreams, the placer, the router, the "every bit decodes" check,
+the solver and the exhaustive simulation are all static, and **not one of
+them can tell you whether the clock closes** — nor, as the section above
+records, whether a constant is a constant. That is the whole point of this change and it is
 the one thing a depth figure does not say: depth 4 instead of 87 is a claim
 about how many lookup-table levels the mapped network has, and a chain's own
 delay is not in it at all. A 32-bit add is seventeen `CIN → COUT` hops and
@@ -330,15 +400,24 @@ which would be under a nanosecond for the whole adder — but that is
 and this repository has no vendor timing model at all (`reticle timing` says
 in its own help that its device numbers are placeholders).
 
-**The cheapest experiment is already written and waiting.**
-`tests/usb_crypto_console.rs` is on `master`, `#[ignore]`d, skips with a
-reason when no board is attached, and currently **fails on the board**: it
-asks a Cynthion at 60 MHz for the SHA-256 of the empty message and for a
-ChaCha20 quarter round, and before this change it got seven different answers
-in sixteen runs. If the diagnosis was right it should now get `e3b0c442…`
-every time. That is a far stronger claim than any depth number — a
-deterministic function answering deterministically, repeatedly, from silicon
-— and it costs one `reticle fpga` and one `reticle program`.
+**The cheapest experiment is already written and waiting, and it is now
+the only one left.** `tests/usb_crypto_console.rs` is on `master`,
+`#[ignore]`d, skips with a reason when no board is attached, and **fails on
+the board** as of the round that wrote it: it asks a Cynthion at 60 MHz for
+the SHA-256 of the empty message and for a ChaCha20 quarter round, and got
+seven different answers in sixteen runs. If the diagnosis was right it should
+now get `e3b0c442…` every time. That is a far stronger claim than any depth
+number — a deterministic function answering deterministically, repeatedly,
+from silicon — and it costs one `reticle fpga` and one `reticle program`.
+
+What is known about it as this is written: the design with **both** cores,
+which did not route at all before (886 nodes still oversubscribed after 40
+iterations and 1 h 50 m), is 7627 `LUT4` and 1018 `CCU2C` at **depth 17**
+instead of 11 955 `LUT4` at depth 87, and its placement comes out as **83
+chains over 1018 cells**. Whether it routes was not established here: the run
+was started before the constant-driver defect above was found, so it was
+building the wrong netlist and was stopped. The single-core build is 4427
+`LUT4` and 451 `CCU2C` at **depth 16** instead of 5891 at 39.
 
 Two cheaper things that are *not* substitutes, and it is worth being clear
 about why: the `0.494 bytes/clock` throughput figure the earlier round

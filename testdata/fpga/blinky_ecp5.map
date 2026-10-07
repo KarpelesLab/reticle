@@ -12,5 +12,6 @@ logic:
 netlist:
   5 x CCU2C
   1 x DCCA
+  2 x LUT4
   8 x TRELLIS_FF
   3 x TRELLIS_IO

@@ -14,4 +14,4 @@ netlist:
   8 x SB_DFFSR
   1 x SB_GB
   3 x SB_IO
-  8 x SB_LUT4
+  10 x SB_LUT4

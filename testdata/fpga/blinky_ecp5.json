@@ -29,7 +29,7 @@
           },
           "connections": {
             "A1": [ 8 ],
-            "B1": [ "1" ],
+            "B1": [ 29 ],
             "S1": [ 15 ],
             "COUT": [ 23 ]
           }
@@ -56,9 +56,9 @@
           },
           "connections": {
             "A0": [ 9 ],
-            "B0": [ "0" ],
+            "B0": [ 30 ],
             "A1": [ 10 ],
-            "B1": [ "0" ],
+            "B1": [ 30 ],
             "CIN": [ 23 ],
             "S0": [ 16 ],
             "S1": [ 17 ],
@@ -87,9 +87,9 @@
           },
           "connections": {
             "A0": [ 11 ],
-            "B0": [ "0" ],
+            "B0": [ 30 ],
             "A1": [ 12 ],
-            "B1": [ "0" ],
+            "B1": [ 30 ],
             "CIN": [ 24 ],
             "S0": [ 18 ],
             "S1": [ 19 ],
@@ -118,9 +118,9 @@
           },
           "connections": {
             "A0": [ 13 ],
-            "B0": [ "0" ],
+            "B0": [ 30 ],
             "A1": [ 14 ],
-            "B1": [ "0" ],
+            "B1": [ 30 ],
             "CIN": [ 25 ],
             "S0": [ 20 ],
             "S1": [ 21 ],
@@ -146,7 +146,7 @@
           },
           "connections": {
             "A0": [ 7 ],
-            "B0": [ "0" ],
+            "B0": [ 30 ],
             "CIN": [ 26 ],
             "S0": [ 22 ],
             "COUT": [ 27 ]
@@ -455,6 +455,50 @@
             "LSR": [ 6 ],
             "Q": [ 7 ]
           }
+        },
+        "const1$lut": {
+          "hide_name": 0,
+          "type": "LUT4",
+          "parameters": {
+            "INIT": 65535
+          },
+          "attributes": {},
+          "port_directions": {
+            "A": "input",
+            "B": "input",
+            "C": "input",
+            "D": "input",
+            "Z": "output"
+          },
+          "connections": {
+            "A": [ "0" ],
+            "B": [ "0" ],
+            "C": [ "0" ],
+            "D": [ "0" ],
+            "Z": [ 29 ]
+          }
+        },
+        "const0$lut": {
+          "hide_name": 0,
+          "type": "LUT4",
+          "parameters": {
+            "INIT": 0
+          },
+          "attributes": {},
+          "port_directions": {
+            "A": "input",
+            "B": "input",
+            "C": "input",
+            "D": "input",
+            "Z": "output"
+          },
+          "connections": {
+            "A": [ "0" ],
+            "B": [ "0" ],
+            "C": [ "0" ],
+            "D": [ "0" ],
+            "Z": [ 30 ]
+          }
         }
       },
       "netnames": {
@@ -621,6 +665,16 @@
         "counter$q7": {
           "hide_name": 0,
           "bits": [ 7 ],
+          "attributes": {}
+        },
+        "const1": {
+          "hide_name": 0,
+          "bits": [ 29 ],
+          "attributes": {}
+        },
+        "const0": {
+          "hide_name": 0,
+          "bits": [ 30 ],
           "attributes": {}
         }
       }

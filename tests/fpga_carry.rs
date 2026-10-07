@@ -71,7 +71,7 @@ use reticle::fpga::{self, BelRole, Constraints, FpgaOptions, MapOptions};
 use reticle::ir::builder::ModuleBuilder;
 use reticle::ir::validate::validate_module;
 use reticle::ir::{
-    AttrValue, Cell, CellId, CellKind, Design, ExprKind, Module, ModuleId, NetId, Type,
+    AttrValue, Cell, CellId, CellKind, Design, ExprId, ExprKind, Module, ModuleId, NetId, Type,
 };
 use reticle::logic::{Bit, Logic};
 use reticle::source::{SourceMap, Span};
@@ -412,16 +412,18 @@ impl<'m> Netlist<'m> {
                 let width = self.module.nets[*out].ty.width().unwrap_or(1);
                 values.insert(*out, value.resize(width));
             }
+            // A LUT of whatever width, indexed by **its own input ports in
+            // declaration order**: the 7 series calls them `I0`..`I5` and
+            // an ECP5 calls them `A`..`D`, and the constant drivers
+            // `techcells::drive_constant_data` builds are ECP5 `LUT4`s.
             lut if lut.starts_with("LUT") && lut.len() == 4 => {
                 let init = match cell.params.get("INIT") {
                     Some(AttrValue::Const(c)) => c.clone(),
                     other => panic!("`{}` has INIT {other:?}", cell.name),
                 };
                 let mut index = 0u32;
-                for pin in 0..6u32 {
-                    if cell.input(&format!("I{pin}")).is_some()
-                        && one(&format!("I{pin}"), values) == Bit::One
-                    {
+                for (pin, (port, _)) in cell.inputs.iter().enumerate() {
+                    if one(port.as_str(), values) == Bit::One {
                         index |= 1 << pin;
                     }
                 }
@@ -920,13 +922,18 @@ mod proofs {
                     };
                     let init = init.clone();
                     let k = init.width().trailing_zeros();
-                    let mut pins = Vec::new();
-                    for pin in (0..k).rev() {
-                        let e = cell
-                            .input(&format!("I{pin}"))
-                            .unwrap_or_else(|| panic!("`{}` has no I{pin}", cell.name));
-                        pins.push(e);
-                    }
+                    assert_eq!(
+                        cell.inputs.len(),
+                        k as usize,
+                        "`{}` has {} input(s) for a {k}-input table",
+                        cell.name,
+                        cell.inputs.len()
+                    );
+                    // Its own ports in declaration order, for the same
+                    // reason the Rust model uses them: `I0`..`I5` on the
+                    // 7 series, `A`..`D` on an ECP5.
+                    let mut pins: Vec<ExprId> = cell.inputs.iter().map(|(_, e)| *e).collect();
+                    pins.reverse();
                     let a = b.concat(pins);
                     let (_, out) = cell.outputs[0];
                     b.cell(

@@ -5761,6 +5761,96 @@ mod tests {
         }
     }
 
+    /// No pin of a carry cell is left holding a constant, because on this
+    /// family an unrouted pin is not the constant it was given.
+    ///
+    /// **This is the check the round that inferred the chain did not have,
+    /// and a board found what it was missing.** `cnt + 1` is an adder with
+    /// a constant second operand, so thirty-one of its thirty-two `b` pins
+    /// were a constant zero; a constant is not a wire the router routes,
+    /// and an unrouted slice input on an ECP5 reads as a **one**, so the
+    /// chain computed `cnt - 1`. The design placed, routed and decoded
+    /// perfectly, and `testdata/fpga/cynthion/usb_ulpi_device.v` stopped
+    /// enumerating.
+    ///
+    /// Every exhaustive and formal check in this tree passed through it,
+    /// including the ones in this file and the SAT proof in
+    /// `tests/fpga_carry.rs` over `Shape::Constant`, because **a constant
+    /// pin evaluates to the constant in a netlist**. So the assertion has
+    /// to be structural: after the whole flow, no input pin of a carry
+    /// cell may be a constant. `techcells::drive_constant_data` is what
+    /// makes that true.
+    #[test]
+    fn no_carry_pin_is_left_holding_a_constant() {
+        use crate::ir::emit::{BitView, SigBit};
+
+        // An adder with a constant operand, which is what a counter is:
+        // the shape that was wrong on silicon.
+        let (map, span) = span();
+        let mut b = ModuleBuilder::new("top", span);
+        let x = b.input("x", Type::bits(16));
+        let q = b.output("q", Type::bits(16));
+        let x_e = b.net(x);
+        let one = b.constant(Const::from_u64(1, 16));
+        b.cell2("inc", CellKind::Add, x_e, one, q);
+        let mut design = Design::new();
+        let top = design.add_module(b.finish());
+        design.top = Some(top);
+        let _ = map;
+
+        // The whole flow, because the driver is put in by the *last* pass:
+        // `fpga::techcells::map_cells`, which `synthesize_for` runs and
+        // `primitives::map` on its own does not.
+        let device = target("ecp5-25f-CABGA381").unwrap();
+        let mut diags = Diagnostics::new();
+        let options = super::super::FpgaOptions {
+            map: MapOptions {
+                insert_io_buffers: false,
+                insert_clock_buffers: false,
+                ..MapOptions::default()
+            },
+            ..super::super::FpgaOptions::default()
+        };
+        super::super::synthesize_for(
+            &mut design,
+            top,
+            device,
+            &Constraints::new(),
+            &options,
+            &mut diags,
+        )
+        .expect("the flow");
+        assert!(!diags.has_errors(), "{:?}", diags.iter().count());
+
+        let module = design.module(top);
+        let view = BitView::new(module).expect("structural");
+        let mut carries = 0usize;
+        let mut pins = 0usize;
+        for (_, cell) in module.cells.iter() {
+            if cell.kind != CellKind::Blackbox(Name::new("CCU2C")) {
+                continue;
+            }
+            carries += 1;
+            for (port, expr) in &cell.inputs {
+                for bit in view.expr_bits(*expr).expect("structural") {
+                    assert!(
+                        matches!(view.canonical(bit), SigBit::Slot(_)),
+                        "`{}`.{port} is a constant, and an unrouted slice input on this family                          reads as a one",
+                        cell.name
+                    );
+                    pins += 1;
+                }
+            }
+        }
+        assert_eq!(carries, 9, "sixteen bits is seventeen lanes");
+        assert_eq!(
+            pins, 40,
+            "thirty-two operand pins of sixteen adder bits, all of them driven, and the eight \
+             `CIN`s of the chain — the lane that enters it has no pins at all and the ninth \
+             cell's `CIN` is the one nothing may drive"
+        );
+    }
+
     /// A family that declares a carry element without a port map of any
     /// of the three shapes still declines, loudly.
     ///

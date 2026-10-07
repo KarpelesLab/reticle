@@ -36,6 +36,8 @@ module blinky
   net %counter$q5 u1 wire
   net %counter$q6 u1 wire
   net %counter$q7 u1 wire
+  net %const1 u1 wire
+  net %const0 u1 wire
   port clk in %clk$pad
   port rst in %rst$pad
   port led out %led$pad
@@ -45,13 +47,13 @@ module blinky
   assign %next = {%$lut0, %$lut1, %$lut2, %$lut3, %$lut4, %$lut5, %$lut6, %$lut7}
   assign %led$pad = %led$pin0
   assign %count = {%counter$q7, %counter$q6, %counter$q5, %counter$q4, %counter$q3, %counter$q2, %counter$q1, %counter$q0}
-  cell inc$carry0 blackbox SB_CARRY (CI=1'd0, I0=%count[0:0], I1=8'd1[0:0]) -> (CO=%inc$c0)
-  cell inc$carry1 blackbox SB_CARRY (CI=%inc$c0, I0=%count[1:1], I1=8'd1[1:1]) -> (CO=%inc$c1)
-  cell inc$carry2 blackbox SB_CARRY (CI=%inc$c1, I0=%count[2:2], I1=8'd1[2:2]) -> (CO=%inc$c2)
-  cell inc$carry3 blackbox SB_CARRY (CI=%inc$c2, I0=%count[3:3], I1=8'd1[3:3]) -> (CO=%inc$c3)
-  cell inc$carry4 blackbox SB_CARRY (CI=%inc$c3, I0=%count[4:4], I1=8'd1[4:4]) -> (CO=%inc$c4)
-  cell inc$carry5 blackbox SB_CARRY (CI=%inc$c4, I0=%count[5:5], I1=8'd1[5:5]) -> (CO=%inc$c5)
-  cell inc$carry6 blackbox SB_CARRY (CI=%inc$c5, I0=%count[6:6], I1=8'd1[6:6]) -> (CO=%inc$c6)
+  cell inc$carry0 blackbox SB_CARRY (CI=1'd0, I0=%count[0:0], I1=%const1) -> (CO=%inc$c0)
+  cell inc$carry1 blackbox SB_CARRY (CI=%inc$c0, I0=%count[1:1], I1=%const0) -> (CO=%inc$c1)
+  cell inc$carry2 blackbox SB_CARRY (CI=%inc$c1, I0=%count[2:2], I1=%const0) -> (CO=%inc$c2)
+  cell inc$carry3 blackbox SB_CARRY (CI=%inc$c2, I0=%count[3:3], I1=%const0) -> (CO=%inc$c3)
+  cell inc$carry4 blackbox SB_CARRY (CI=%inc$c3, I0=%count[4:4], I1=%const0) -> (CO=%inc$c4)
+  cell inc$carry5 blackbox SB_CARRY (CI=%inc$c4, I0=%count[5:5], I1=%const0) -> (CO=%inc$c5)
+  cell inc$carry6 blackbox SB_CARRY (CI=%inc$c5, I0=%count[6:6], I1=%const0) -> (CO=%inc$c6)
   attr port = "clk"
   attr pin = "21"
   attr io_standard = "LVCMOS33"
@@ -82,4 +84,6 @@ module blinky
   cell counter$ff5 blackbox SB_DFFSR (C=%clk$gb, D=%next[5:5], R=%rst) -> (Q=%counter$q5)
   cell counter$ff6 blackbox SB_DFFSR (C=%clk$gb, D=%next[6:6], R=%rst) -> (Q=%counter$q6)
   cell counter$ff7 blackbox SB_DFFSR (C=%clk$gb, D=%next[7:7], R=%rst) -> (Q=%counter$q7)
+  cell const1$lut blackbox SB_LUT4 #(LUT_INIT=16'd65535) (I0=1'd0, I1=1'd0, I2=1'd0, I3=1'd0) -> (O=%const1)
+  cell const0$lut blackbox SB_LUT4 #(LUT_INIT=16'd0) (I0=1'd0, I1=1'd0, I2=1'd0, I3=1'd0) -> (O=%const0)
 end

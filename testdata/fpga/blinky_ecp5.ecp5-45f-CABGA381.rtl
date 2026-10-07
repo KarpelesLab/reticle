@@ -34,6 +34,8 @@ module blinky
   net %counter$q5 u1 wire
   net %counter$q6 u1 wire
   net %counter$q7 u1 wire
+  net %const1 u1 wire
+  net %const0 u1 wire
   port clk in %clk$pad
   port rst in %rst$pad
   port led out %led$pad
@@ -43,11 +45,11 @@ module blinky
   assign %next = {%inc$s4_0, %inc$s3_1, %inc$s3_0, %inc$s2_1, %inc$s2_0, %inc$s1_1, %inc$s1_0, %inc$s0_1}
   assign %led$pad = %led$pin0
   assign %count = {%counter$q7, %counter$q6, %counter$q5, %counter$q4, %counter$q3, %counter$q2, %counter$q1, %counter$q0}
-  cell inc$carry0 blackbox CCU2C #(INIT0=16'd0, INIT1=16'd26218, INJECT1_0="NO", INJECT1_1="NO") (A1=%count[0:0], B1=8'd1[0:0]) -> (S1=%inc$s0_1, COUT=%inc$co0)
-  cell inc$carry1 blackbox CCU2C #(INIT0=16'd26218, INIT1=16'd26218, INJECT1_0="NO", INJECT1_1="NO") (A0=%count[1:1], B0=8'd1[1:1], A1=%count[2:2], B1=8'd1[2:2], CIN=%inc$co0) -> (S0=%inc$s1_0, S1=%inc$s1_1, COUT=%inc$co1)
-  cell inc$carry2 blackbox CCU2C #(INIT0=16'd26218, INIT1=16'd26218, INJECT1_0="NO", INJECT1_1="NO") (A0=%count[3:3], B0=8'd1[3:3], A1=%count[4:4], B1=8'd1[4:4], CIN=%inc$co1) -> (S0=%inc$s2_0, S1=%inc$s2_1, COUT=%inc$co2)
-  cell inc$carry3 blackbox CCU2C #(INIT0=16'd26218, INIT1=16'd26218, INJECT1_0="NO", INJECT1_1="NO") (A0=%count[5:5], B0=8'd1[5:5], A1=%count[6:6], B1=8'd1[6:6], CIN=%inc$co2) -> (S0=%inc$s3_0, S1=%inc$s3_1, COUT=%inc$co3)
-  cell inc$carry4 blackbox CCU2C #(INIT0=16'd26218, INIT1=16'd0, INJECT1_0="NO", INJECT1_1="NO") (A0=%count[7:7], B0=8'd1[7:7], CIN=%inc$co3) -> (S0=%inc$s4_0, COUT=%inc$co4)
+  cell inc$carry0 blackbox CCU2C #(INIT0=16'd0, INIT1=16'd26218, INJECT1_0="NO", INJECT1_1="NO") (A1=%count[0:0], B1=%const1) -> (S1=%inc$s0_1, COUT=%inc$co0)
+  cell inc$carry1 blackbox CCU2C #(INIT0=16'd26218, INIT1=16'd26218, INJECT1_0="NO", INJECT1_1="NO") (A0=%count[1:1], B0=%const0, A1=%count[2:2], B1=%const0, CIN=%inc$co0) -> (S0=%inc$s1_0, S1=%inc$s1_1, COUT=%inc$co1)
+  cell inc$carry2 blackbox CCU2C #(INIT0=16'd26218, INIT1=16'd26218, INJECT1_0="NO", INJECT1_1="NO") (A0=%count[3:3], B0=%const0, A1=%count[4:4], B1=%const0, CIN=%inc$co1) -> (S0=%inc$s2_0, S1=%inc$s2_1, COUT=%inc$co2)
+  cell inc$carry3 blackbox CCU2C #(INIT0=16'd26218, INIT1=16'd26218, INJECT1_0="NO", INJECT1_1="NO") (A0=%count[5:5], B0=%const0, A1=%count[6:6], B1=%const0, CIN=%inc$co2) -> (S0=%inc$s3_0, S1=%inc$s3_1, COUT=%inc$co3)
+  cell inc$carry4 blackbox CCU2C #(INIT0=16'd26218, INIT1=16'd0, INJECT1_0="NO", INJECT1_1="NO") (A0=%count[7:7], B0=%const0, CIN=%inc$co3) -> (S0=%inc$s4_0, COUT=%inc$co4)
   attr port = "clk"
   attr pin = "G2"
   attr io_standard = "LVCMOS33"
@@ -72,4 +74,6 @@ module blinky
   cell counter$ff5 blackbox TRELLIS_FF #(GSR="DISABLED", REGMODE="FF", CEMUX=1, CLKMUX="CLK", LSRMUX="LSR", SRMODE="LSR_OVER_CE", REGSET="RESET") (CLK=%clk$gb, DI=%next[5:5], CE=1'd1, LSR=%rst) -> (Q=%counter$q5)
   cell counter$ff6 blackbox TRELLIS_FF #(GSR="DISABLED", REGMODE="FF", CEMUX=1, CLKMUX="CLK", LSRMUX="LSR", SRMODE="LSR_OVER_CE", REGSET="RESET") (CLK=%clk$gb, DI=%next[6:6], CE=1'd1, LSR=%rst) -> (Q=%counter$q6)
   cell counter$ff7 blackbox TRELLIS_FF #(GSR="DISABLED", REGMODE="FF", CEMUX=1, CLKMUX="CLK", LSRMUX="LSR", SRMODE="LSR_OVER_CE", REGSET="RESET") (CLK=%clk$gb, DI=%next[7:7], CE=1'd1, LSR=%rst) -> (Q=%counter$q7)
+  cell const1$lut blackbox LUT4 #(INIT=16'd65535) (A=1'd0, B=1'd0, C=1'd0, D=1'd0) -> (Z=%const1)
+  cell const0$lut blackbox LUT4 #(INIT=16'd0) (A=1'd0, B=1'd0, C=1'd0, D=1'd0) -> (Z=%const0)
 end

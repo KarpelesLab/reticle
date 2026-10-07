@@ -805,11 +805,19 @@ fn set_params(cell: &mut Cell, bel: &BelKind) {
 /// same design with carry inference switched off was byte-identical to
 /// the bitstream that works.
 ///
-/// So this pass covers every input of a `carry` primitive too. A pin the
-/// element could absorb the constant into — an ECP5 `CCU2C` lane whose
-/// `INIT` could be rewritten, which is what `ecppack` does — would be
-/// cheaper by a net, and is not done: the driver is correct on every
-/// family and the folding would be correct on one.
+/// So this pass covers every input of a `carry` primitive too, with two
+/// exclusions and both of them are the chain's own ends. `ci` is
+/// dedicated metal from the cell below and nothing outside may drive it.
+/// `cyinit` is the pin a family *designs* to take a constant — the
+/// 7-series' own way in, which [`WideCarry`](super::device::WideCarry)
+/// describes as "the chain goes on `ci` and the constant on `init`" — so
+/// it can absorb one by construction, and giving it a lookup table would
+/// cost one per chain for nothing.
+///
+/// A pin the element could absorb the constant into — an ECP5 `CCU2C`
+/// lane whose `INIT` could be rewritten, which is what `ecppack` does —
+/// would be cheaper by a net, and is not done: the driver is correct on
+/// every family and the folding would be correct on one.
 fn drive_constant_data(
     module: &mut Module,
     device: &Device,
@@ -839,7 +847,7 @@ fn drive_constant_data(
             // reached from the cell below or from nowhere, and a flow that
             // put a lookup table on one would be describing a connection
             // the fabric does not have.
-            if matches!(role.as_str(), "dout" | "o" | "s" | "co" | "ci") {
+            if matches!(role.as_str(), "dout" | "o" | "s" | "co" | "ci" | "cyinit") {
                 continue;
             }
             for name in names.split(',') {
