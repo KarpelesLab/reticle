@@ -326,6 +326,7 @@ came from and how far it is to be trusted, per group, the way
 | `RAMB18E1` contents layout (`INIT_00`..`INIT_3F`) | **medium-high** — the 256-bit-chunks-in-address-order description is UG473's; the row-sharing order in the narrow modes was reasoned from it here |
 | byte write enables (`WEA[1:0]`, `WEBWE[3:0]`) | **high** |
 | `IBUF` / `OBUF` / `IOBUF` / `OBUFT`, `BUFG`, `RAM64X1D` | **high** |
+| `DSP48E1` ties and parameters for a plain multiply | **high** — transcribed from Yosys' `xc7_dsp_map.v`, checked against `cells_sim.v`'s model; not run through Vivado |
 | `PLLE2_BASE` / `MMCME2_BASE` ports and divider parameters | **high** |
 | their VCO bands (PLL 800–1600, MMCM 600–1200 MHz, −1 grade) | **medium-high** |
 | their phase-detector and input limits | **medium** |
@@ -380,6 +381,58 @@ An adder narrower than four bits (`MapOptions::min_carry_width`, which
 is one whole `CARRY4`) stays in LUTs, and so does a `sub`: the IR's
 `sub` cell is not lowered through the carry path on any family.
 
+### The DSP48E1
+
+A multiply goes onto one `DSP48E1`, configured as a combinational 25x18
+two's-complement multiplier: `OPMODE = 7'b0000101`, `ALUMODE = 0`,
+`INMODE = 0`, `CARRYINSEL = 0`, `CARRYIN = 0`, `C`, `D`, `ACIN`, `BCIN`
+and `PCIN` tied to zero, and every pipeline register off. Every one of
+those is **transcribed** from Yosys' `techlibs/xilinx/xc7_dsp_map.v`
+(fetched, not recalled), which is the instance `synth_xilinx` writes for
+the same job, and checked against the DSP48E1 model in its
+`cells_sim.v`. The registers matter more than they look: **the library
+default of every one of the fourteen is 1**, so an instance that left
+them out would be a three-stage pipeline on an unconnected clock.
+
+Which multiplies fit is decided by the operands' **significant** width,
+not by the cell's. The IR's `mul` has one width for both operands and
+the result, so `assign y = a * b` with 8-bit operands and a 16-bit `y`
+arrives as a 16x16 multiply of `resize(a, u16)` and `resize(b, u16)`;
+mapping looks through the extension and puts eight bits on each port.
+Because the block reads its operands as signed:
+
+| operand | goes on a port of `N` bits when | and the port sees |
+|---|---|---|
+| sign-extended from `k` bits | `k <= N` | its exact value |
+| zero-extended from `k` bits | `k < N` — one bit is the sign that stays zero | its exact value |
+| neither, `w` bits | `w <= N` | a value congruent to it modulo `2^w`, which is enough for a `w`-bit result |
+
+So 25x18 signed and 24x17 unsigned are the largest products one block
+takes, either operand on either port. The product of two exact operands
+is exact in 43 bits; a result wider than `P`'s 48 is the sign of `P`
+extended, not zeros.
+
+**What does not fit one block is left to the LUT mapper, with a note** —
+an 18x18 unsigned product, a 26-bit operand, two operands both past 18
+bits. Splitting a wide multiply over several blocks is possible (that is
+what `PCIN` and the 17-bit shift of `OPMODE[6:4] = 101` are for) and is
+not done. A multiply feeding an adder still gets its block; the adder
+stays in fabric, because the 7-series line declares no accumulator.
+
+`tests/fpga_dsp.rs` checks every mapping against a model of the block
+that reads the instance's own `OPMODE`, `ALUMODE`, `INMODE`,
+`CARRYINSEL` and `CARRYIN` and refuses any setting or register outside
+the plain-multiply table, so a wrong tie fails there: exhaustive
+simulation of every input up to 16 bits, every corner pair and 2000
+seeded random pairs at the widest shapes (a sample, and called one), and
+`formal::check_equivalent` proofs of the narrow shapes, including the
+sign-extended result above 48 bits. Turning the sign extension of the
+operands off, or of the result, or tying `OPMODE` to zero, each fails it.
+
+Vivado has not been run over an instance of it here, and nothing has
+put one on a part through Reticle's own bitstream path:
+[`fpga-xray.md`](fpga-xray.md) says why that half is not done.
+
 ### What is deliberately left out, and why
 
 - **`RAMB36E1` is not declared.** In non-cascaded use its
@@ -388,11 +441,14 @@ is one whole `CARRY4`) stays in LUTs, and so does a `sub`: the IR's
   `RAMB36E1` declared here would address the wrong half of its array.
   Fifty `RAMB36E1` and a hundred `RAMB18E1` are the same array seen two
   ways, so no capacity is lost — only the 36- and 72-bit-wide modes.
-- **`DSP48E1` is not declared.** It does not multiply unless `OPMODE`,
+- ~~**`DSP48E1` is not declared.**~~ *This was true until 2026-10-08
+  and the reason was right:* it does not multiply unless `OPMODE`,
   `ALUMODE` and `INMODE` are driven with the right constants, and the
-  `.dev` `dsp` line has no way to tie an input. Declaring it would
-  produce a netlist that instantiates a DSP doing something other than
-  the multiply it replaced. Multiplies go to `LUT6`s.
+  `.dev` `dsp` line then had no way to tie an input, so declaring it
+  would have produced a netlist that instantiates a DSP doing something
+  other than the multiply it replaced. The line can tie pins now, and
+  the block is declared; see *The DSP48E1* below. What is still left out
+  is everything it does besides one combinational multiply.
 - **`IDDR` / `ODDR` / `IDELAYE2` are not declared**, so a `ddr` port or
   an `io_delay` is a warning and an ordinary buffer.
 - **No tile grid**, so a placement region on this part is reported as

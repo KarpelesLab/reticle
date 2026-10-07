@@ -724,7 +724,19 @@ fn the_unsupported_corners_are_reported() {
         "the 7-series file declares a DDR register it cannot wire"
     );
     assert!(device.bel(BelRole::IoDelay).is_none());
-    assert!(device.dsps.is_empty(), "DSP48E1 is deliberately undeclared");
+    // DSP48E1 used to be here, deliberately undeclared, because the `dsp`
+    // line could not tie its mode pins and an untied block does not
+    // multiply. It can now, so the block is declared — and declared only
+    // with the ties that make it a plain multiply. `tests/fpga_dsp.rs`
+    // proves what it computes.
+    let dsp = &device.dsps[0];
+    assert_eq!(dsp.name, "DSP48E1");
+    for pin in ["OPMODE", "ALUMODE", "INMODE", "CARRYINSEL", "CARRYIN"] {
+        assert!(
+            dsp.ties.iter().any(|(p, _)| p == pin),
+            "DSP48E1 is declared without {pin} tied, so it would not multiply"
+        );
+    }
 }
 
 /// The part's own figures, so that a change to the device file that

@@ -657,10 +657,13 @@ accidentally undo.
   list of individual pins (right for the ECP5's `TRELLIS_DPR16X4` and the
   7 series' `RAM64X1D`, which really do have one port per bit). An
   instance would not elaborate.
-- **No DSP.** `xc7.dev`'s reason for leaving out the DSP48E1: a Gowin
+- **No DSP.** `xc7.dev`'s old reason for leaving out the DSP48E1: a Gowin
   multiplier does not multiply unless `ASEL`, `BSEL`, `ASIGN`, `BSIGN` and
   the mode parameters are driven with the right constants, and the `dsp`
-  line cannot state a tied input.
+  line could not state a tied input. Since 2026-10-08 it can (`tie`,
+  `param`, `signed`; `docs/fpga.md` has the DSP48E1 that uses them), so
+  that reason is gone; nobody has yet read the Gowin multiplier's
+  constants off a source, which is the reason that remains.
 - **No DDR or SERDES**, and **no differential buffers**. The latter needs a
   *pin pair*, and Reticle's constraints model names one pin per port, so
   it cannot check that `tmds_d_p[0]` and `tmds_d_n[0]` are the two halves
