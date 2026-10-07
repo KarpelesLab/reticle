@@ -15059,6 +15059,348 @@ fn a_6502_monitor_answers_through_the_transceiver_that_is_on_the_board() {
     host.idle(10);
 }
 
+// ---------------------------------------------------------------------------
+// The crypto console: both blocks of ip/crypto/ behind that same serial port
+// ---------------------------------------------------------------------------
+
+/// `testdata/fpga/cynthion/crypto_console_ulpi.v`, when this copy of the
+/// crate has the board designs.
+///
+/// Built here rather than in `tests/usb_crypto_console.rs` because the
+/// transceiver model and its harness live in this file, and a model of a
+/// part that misbehaves the way the one on the board misbehaves is worth
+/// more than a second copy of it.
+fn crypto_console_design() -> Option<Design> {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("testdata/fpga/cynthion");
+    if !root.join("crypto_console_ulpi.v").is_file() {
+        println!("skipping: testdata/fpga/cynthion is not in this copy of the crate");
+        return None;
+    }
+
+    let mut sources: Vec<(String, String)> = Vec::new();
+    let mut seen = BTreeSet::new();
+    gather("usb_cdc_acm", &mut seen, &mut sources);
+    gather("sha256", &mut seen, &mut sources);
+    gather("chacha20", &mut seen, &mut sources);
+    for name in ["crypto_console.v", "crypto_console_ulpi.v"] {
+        let path = format!("testdata/fpga/cynthion/{name}");
+        let text =
+            std::fs::read_to_string(root.join(name)).unwrap_or_else(|e| panic!("{path}: {e}"));
+        sources.push((path, text));
+    }
+
+    let mut map = SourceMap::new();
+    let mut diags = Diagnostics::new();
+    let mut files = Vec::with_capacity(sources.len());
+    for (path, text) in &sources {
+        let id = map.add(path.clone(), text).expect("source fits");
+        files.push(parse_source(
+            &mut map,
+            id,
+            Dialect::Verilog2005,
+            &mut NoIncludes,
+            &mut diags,
+        ));
+    }
+    assert!(
+        !diags.has_errors(),
+        "the crypto console does not parse:\n{}",
+        diags.render(&map)
+    );
+
+    let options = ElabOptions::new(Dialect::Verilog2005)
+        .with_top("crypto_console_ulpi")
+        // The board writes a Microchip USB3343 vendor register to undo a
+        // crossed DP / DM pair, and `UlpiPhy` models ULPI's own registers
+        // and not that part's extras — so it answers zero to a read of one
+        // and the Link retries for ever. The board's register is the
+        // board's; `a_6502_monitor_answers_through_the_transceiver_that_is_on_the_board`
+        // does the same for the same reason.
+        .with_param("VENDOR_ADDR", "6'h00")
+        .with_param("VENDOR_DATA", "8'h00");
+    let refs: Vec<_> = files.iter().collect();
+    let design = elaborate(&refs, &options, &mut diags);
+    assert!(
+        !diags.has_errors(),
+        "crypto_console_ulpi does not elaborate:\n{}",
+        diags.render(&map)
+    );
+    Some(design.expect("crypto_console_ulpi produced a design"))
+}
+
+/// One answer line, read off endpoint `81h` until the CR LF that ends it.
+///
+/// The console commits a short packet at the end of every answer, so an
+/// answer is there as soon as it is finished — but *when* it is finished is
+/// a number of clock cycles that depends on the command: 129 a block for
+/// SHA-256 and 39 for a ChaCha20 block, and `Z 400` is sixteen blocks. So
+/// this polls rather than waiting a fixed time, and the budget is in polls
+/// and never in seconds.
+///
+/// The CR and the LF are stripped, because what the caller wants to compare
+/// is the answer and not the line ending — and the line ending is checked
+/// here instead, once, which is the better place for it.
+fn console_line<P: UsbPair>(host: &mut UsbHost<P>, pipe: &mut BulkPipe, addr: u8) -> String {
+    let mut out: Vec<u8> = Vec::new();
+    for _ in 0..4000 {
+        let packet = pipe.read_or_nothing(host, addr);
+        if packet.is_empty() {
+            host.idle(140);
+        } else {
+            out.extend_from_slice(&packet);
+            if out.ends_with(b"\r\n") {
+                out.truncate(out.len() - 2);
+                return String::from_utf8_lossy(&out).into_owned();
+            }
+        }
+    }
+    panic!(
+        "no answer line came back: {:?}",
+        String::from_utf8_lossy(&out)
+    );
+}
+
+/// A line typed at the console, as a host writes it: bulk packets of at
+/// most `wMaxPacketSize`, which is what a write longer than one packet
+/// becomes on the wire.
+///
+/// A `K` line is 67 bytes with its carriage return, so it **is** two
+/// packets, and that is worth having rather than avoiding: a parser that
+/// lost a byte where one packet ends and the next begins would pass every
+/// other assertion in this test.
+fn console_type<P: UsbPair>(host: &mut UsbHost<P>, pipe: &mut BulkPipe, addr: u8, line: &str) {
+    let mut bytes = line.as_bytes().to_vec();
+    bytes.push(b'\r');
+    for packet in bytes.chunks(usize::from(BULK_MAXPKT)) {
+        pipe.write(host, addr, packet);
+    }
+}
+
+/// SHA-256 and ChaCha20 answering a host **through the whole USB stack**,
+/// in simulation, before any of it is on a part.
+///
+/// This is `testdata/fpga/cynthion/usb_crypto_console.v` with nothing left
+/// out but the pads: `crypto_console`, `ip/crypto/sha256`,
+/// `ip/crypto/chacha20`, `ip/usb/usb_cdc_acm`'s class layer,
+/// `ip/usb/usb_device_ulpi`'s link layer, and the model of a Microchip
+/// USB3343 that **reports LineState late** — the behaviour ULPI 1.1
+/// §3.8.1.3 forbids in so many words and the part on this board has anyway.
+/// A host enumerates it, reads the banner the console printed, types at it,
+/// and checks every answer against a published vector.
+///
+/// `testdata/fpga/cynthion/crypto_console_tb.v` is the same session with
+/// the USB stack taken out of the way, and it is the one to read when an
+/// answer is wrong. This one proves there is a **way through**: that the
+/// bytes of a command reach the parser across a bulk OUT endpoint and that
+/// the digits of an answer come back across a bulk IN one, with the data
+/// toggles and the NAKs a real host would see.
+///
+/// What it would and would not catch. It catches a wrong digest, a wrong
+/// keystream, a parser that loses a byte at a packet boundary, and an
+/// answer that is never committed — which would show here as the poll loop
+/// in `console_line` running out. It catches the console not coming up at
+/// all, because the banner is the first assertion.
+///
+/// It would **not** catch anything about the board that is not in the
+/// model: an unrouted wire, a pad that does not drive, a timing path that
+/// does not close. `CLAUDE.md` says why that is not optional, and
+/// `testdata/fpga/cynthion/usb_crypto_console.v`'s header has the session
+/// that was taken on the part instead. It also says nothing at all about
+/// what either core **leaks** — `ip/crypto/sha256/README.md` §5 is the list
+/// of what is not defended against, and a cycle count in a zero-delay
+/// simulator does not touch any of it.
+#[test]
+fn a_crypto_console_answers_through_the_transceiver_that_is_on_the_board() {
+    let Some(design) = crypto_console_design() else {
+        return;
+    };
+    let phy = UlpiPhy::new(ULPI_CPB).reporting_stale_line();
+    let mut host = UsbHost::new(UlpiPair::with_phy_data(&design, phy, false), 0);
+    host.set_port("serial_state", CDC_LINES_UP, 7);
+    configure_for(
+        &mut host,
+        11,
+        &expected_cdc_device_descriptor(),
+        &expected_cdc_configuration(),
+    );
+
+    let mut pipe = BulkPipe::new(CDC_DATA_ENDP);
+
+    // The banner. The console is held in reset until `configured`, so it
+    // prints this into a live endpoint rather than into one a bus reset is
+    // about to clear — which is the argument `crypto_console_ulpi.v`'s
+    // header makes, and the reason a person who opens the port with `cat`
+    // is told what to type.
+    assert_eq!(
+        console_line(&mut host, &mut pipe, 11),
+        "H t|h x|E x|e n|Z n|X n|K x|N x|C x|k|n|c|?",
+        "the help line is the console's reset state"
+    );
+
+    // FIPS 180-4 Appendix B.1, typed the way a person would type it.
+    console_type(&mut host, &mut pipe, 11, "H abc");
+    assert_eq!(
+        console_line(&mut host, &mut pipe, 11),
+        "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad",
+        "FIPS 180-4 B.1, off the bulk endpoints"
+    );
+
+    // The same three bytes as hex. Two forms of the same message must give
+    // one digest, and this is the assertion that says the text form is not
+    // quietly adding or dropping a byte.
+    console_type(&mut host, &mut pipe, 11, "h 616263");
+    assert_eq!(
+        console_line(&mut host, &mut pipe, 11),
+        "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad",
+        "the hex form of B.1 is the same message"
+    );
+
+    // The empty message, which Appendix B does not give and which no other
+    // command here can express. `purecrypto` computes this for the empty
+    // input and it is published in a great many places;
+    // `sha256_matches_the_fips_180_4_examples` has the same constant with
+    // the same provenance.
+    console_type(&mut host, &mut pipe, 11, "h");
+    assert_eq!(
+        console_line(&mut host, &mut pipe, 11),
+        "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "the empty message"
+    );
+
+    // Appendix B.2 is 56 bytes long, which is the padding edge: the length
+    // field needs all eight bytes left in the block, so the `1` bit has
+    // nowhere to go and the padding spills into a second block. It is also
+    // the one line here longer than a single bulk packet going the other
+    // way would be, so it crosses the OUT endpoint in one 57-byte packet
+    // and the digest crosses the IN endpoint in a 64-byte one and a short
+    // one.
+    console_type(
+        &mut host,
+        &mut pipe,
+        11,
+        "H abcdbcdecdefdefgefghfghighijhijkijkljklmklmnlmnomnopnopq",
+    );
+    assert_eq!(
+        console_line(&mut host, &mut pipe, 11),
+        "248d6a61d20638b8e5c026930c3e6039a33ce45964ff2167f6ecedd419db06c1",
+        "FIPS 180-4 B.2, the padding edge"
+    );
+
+    // Sixty-four zero bytes **made on the device**, which is the other
+    // padding case: a whole block of message and then a whole block of
+    // nothing but padding. This one does not cross the OUT endpoint at all,
+    // which is what makes `Z` a measurement of the core rather than of the
+    // link.
+    console_type(&mut host, &mut pipe, 11, "Z 40");
+    assert_eq!(
+        console_line(&mut host, &mut pipe, 11),
+        "f5a5fd42d16a20302798ef6ed309979b43003d2320d9f0e8ea9831a92759fb4b",
+        "sixty-four zero bytes, hashed without any of them crossing USB"
+    );
+
+    // The key, the nonce and the counter as they come out of reset, which
+    // are RFC 8439 §2.4.2's so that the keystream below needs no key typed
+    // first.
+    console_type(&mut host, &mut pipe, 11, "k");
+    assert_eq!(
+        console_line(&mut host, &mut pipe, 11),
+        "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+        "RFC 8439 2.4.2's key"
+    );
+    console_type(&mut host, &mut pipe, 11, "n");
+    assert_eq!(
+        console_line(&mut host, &mut pipe, 11),
+        "000000000000004a00000000",
+        "RFC 8439 2.4.2's nonce"
+    );
+    console_type(&mut host, &mut pipe, 11, "c");
+    assert_eq!(
+        console_line(&mut host, &mut pipe, 11),
+        "00000001",
+        "RFC 8439 2.4.2's block counter"
+    );
+
+    // And the keystream RFC 8439 §2.4.2 prints beside its ciphertext. Two
+    // blocks of it, so the counter advances from 1 to 2 with nothing
+    // re-started — which `chacha20_encrypts_the_text_of_rfc_8439_2_4_2`
+    // asserts of the block and this asserts of the whole stack.
+    console_type(&mut host, &mut pipe, 11, "e 80");
+    assert_eq!(
+        console_line(&mut host, &mut pipe, 11),
+        "224f51f3401bd9e12fde276fb8631ded8c131f823d2c06e27e4fcaec9ef3cf78\
+         8a3b0aa372600a92b57974cded2b9334794cba40c63e34cdea212c4cf07d41b7\
+         69a6749f3f630f4122cafe28ec4dc47e26d4346d70b98c73f3e9c53ac40c5945\
+         398b6eda1a832c89c167eacd901d7e2bf363740373201aa188fbbce83991c4ed",
+        "RFC 8439 2.4.2's keystream, 128 bytes over two blocks"
+    );
+
+    // The same keystream reached the other way, because exclusive-or with
+    // zero is the identity: `E` of zero bytes is `e` of that many. A
+    // keystream that came out right one way and wrong the other would be
+    // the exclusive-or dropping or swapping bytes.
+    console_type(&mut host, &mut pipe, 11, "E 0000000000000000");
+    assert_eq!(
+        console_line(&mut host, &mut pipe, 11),
+        "224f51f3401bd9e1",
+        "enciphering zeros is the keystream"
+    );
+
+    // And the digest of sixty-four bytes of that keystream, which is the
+    // command that makes a megabyte of cipher output checkable in
+    // sixty-four digits. The expectation is what `sha256sum` says of the
+    // first sixty-four bytes of the hexdump above, computed on the host and
+    // not by anything in this repository.
+    console_type(&mut host, &mut pipe, 11, "X 40");
+    assert_eq!(
+        console_line(&mut host, &mut pipe, 11),
+        "690c2d96bf4ce23316caa5bb6949a6f694e8759b7de598964c34db4be4a04720",
+        "the hash of the cipher's own output, both cores in series"
+    );
+
+    // A key, a nonce and a counter typed at it, and then RFC 8439
+    // Appendix A.1 vector #1 — the all-zero key at counter zero.
+    console_type(
+        &mut host,
+        &mut pipe,
+        11,
+        "K 0000000000000000000000000000000000000000000000000000000000000000",
+    );
+    assert_eq!(console_line(&mut host, &mut pipe, 11), "OK", "the key");
+    console_type(&mut host, &mut pipe, 11, "N 000000000000000000000000");
+    assert_eq!(console_line(&mut host, &mut pipe, 11), "OK", "the nonce");
+    console_type(&mut host, &mut pipe, 11, "C 00000000");
+    assert_eq!(console_line(&mut host, &mut pipe, 11), "OK", "the counter");
+    console_type(&mut host, &mut pipe, 11, "e 40");
+    assert_eq!(
+        console_line(&mut host, &mut pipe, 11),
+        "76b8e0ada0f13d90405d6ae55386bd28bdd219b8a08ded1aa836efcc8b770dc7\
+         da41597c5157488d7724e03fb8d84a376a43b8f41518a11cc387b669b2ee6586",
+        "RFC 8439 A.1 vector 1"
+    );
+
+    // The five ways a line can be wrong, each a different branch of the
+    // parser, and then a digest again — because recovering from an error is
+    // the half of error handling that is easy to get wrong, and a console
+    // that answers `ERR` for ever afterwards would pass every assertion
+    // above.
+    for bad in ["Q", "h 6", "h 6g", "C 0000", "Z"] {
+        console_type(&mut host, &mut pipe, 11, bad);
+        assert_eq!(
+            console_line(&mut host, &mut pipe, 11),
+            "ERR",
+            "`{bad}` is not a line this console can answer"
+        );
+    }
+    console_type(&mut host, &mut pipe, 11, "H abc");
+    assert_eq!(
+        console_line(&mut host, &mut pipe, 11),
+        "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad",
+        "and it still works after five bad lines"
+    );
+
+    host.idle(10);
+}
+
 /// Everything runs on the one clock, in both wrappers.
 #[test]
 fn usb_cdc_acm_is_one_clock_domain() {
