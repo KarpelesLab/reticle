@@ -355,6 +355,9 @@ pub(super) fn bel_pins(tile_type: &str, prefix: &str, sub: &str) -> Vec<BelPin> 
                 },
             ];
         }
+        if sub == "CARRY4" {
+            return carry_pins(wires);
+        }
         return Vec::new();
     }
 
@@ -579,6 +582,181 @@ fn slice_pass_throughs(tile_type: &str) -> Vec<PassThrough> {
                 features: vec![format!("{prefix}.{letter}FFMUX.{letter}X")],
             });
         }
+        out.extend(carry_pass_throughs(wires, prefix));
+    }
+    out
+}
+
+// ---------------------------------------------------------------------------
+// The carry chain
+// ---------------------------------------------------------------------------
+
+/// The name this module gives a wire **inside** the carry chain of the
+/// slice whose wires are prefixed `wires`: `CLBLL_LL_CARRY_XOR_A`.
+///
+/// Like [`ff_data_wire`], these are invented: the database names tile
+/// wires, and the `CARRY4`'s sum, its per-bit carry out and the inputs
+/// of its `PRECYINIT` mux never leave the slice. No
+/// wire anywhere in `artix7/` contains `_CARRY_` (checked with a `grep`
+/// over every `segbits`, `ppips` and `tileconn` file of the pinned
+/// commit), so the names cannot collide with one.
+fn carry_wire(wires: &str, what: &str) -> String {
+    format!("{wires}_CARRY_{what}")
+}
+
+/// The pins of a slice's `CARRY4`, in the roles `xc7.dev`'s
+/// `port ci=CI cyinit=CYINIT p=S di=DI s=O co=CO` produces.
+///
+/// # Where each one is
+///
+/// - **`p<n>` (`S`) is the lookup table's own output.** UG474 draws the
+///   propagate input of each bit as the `O6` of the lookup table at the
+///   same position, with no mux between them, and the database agrees:
+///   `ppips_clbll_l.db` has no wire for `S` at all, only
+///   `CLBLL_L_A.CLBLL_L_A1 hint` — the lookup table as a wire. So the pin
+///   is declared on the wire `CLBLL_LL_A` itself, the same node as the
+///   lookup table's `o`. That is the whole of the packing rule, stated as
+///   metal: the router can reach that node from nowhere, so a propagate
+///   signal arrives only when the cell driving it is the lookup table at
+///   that position of that slice, and the placer reads the same fact off
+///   the graph (see `place`'s dedicated connections).
+/// - **`di<n>` (`DI`)** sits on the slice's bypass input `<L>X` itself.
+///   The generate mux's cleared state (`CARRY4.<L>CY0` clear) *is* that
+///   input, so a routed generate costs nothing and takes the wire, and
+///   nothing else can use `<L>X` while it does. A tied generate is not
+///   routed and comes from the lookup table's `O5` instead — see
+///   [`carry_tied`].
+/// - **`s<n>` (`O`) and `co<n>` (`CO`)** sit on invented wires that the
+///   output mux and the flip-flop's data mux can select
+///   ([`carry_pass_throughs`]); `co3` is the exception and sits on the
+///   database's own `COUT`, because that is the wire `tileconn` carries up
+///   to the next slice's `CIN`.
+/// - **`ci` (`CI`) and `cyinit` (`CYINIT`)** are the two inputs of the
+///   `PRECYINIT` mux, on invented wires fed from `CIN` and from `AX`.
+fn carry_pins(wires: &str) -> Vec<BelPin> {
+    const P: [&str; 4] = ["p0", "p1", "p2", "p3"];
+    const DI: [&str; 4] = ["di0", "di1", "di2", "di3"];
+    const S: [&str; 4] = ["s0", "s1", "s2", "s3"];
+    const CO: [&str; 4] = ["co0", "co1", "co2", "co3"];
+    let mut pins = Vec::with_capacity(18);
+    for (n, letter) in SLICE_LETTERS.iter().enumerate() {
+        pins.push(BelPin {
+            role: P[n],
+            wire: format!("{wires}_{letter}"),
+        });
+        pins.push(BelPin {
+            role: DI[n],
+            wire: format!("{wires}_{letter}X"),
+        });
+        pins.push(BelPin {
+            role: S[n],
+            wire: carry_wire(wires, &format!("XOR_{letter}")),
+        });
+        pins.push(BelPin {
+            role: CO[n],
+            wire: carry_out_wire(wires, *letter),
+        });
+    }
+    pins.push(BelPin {
+        role: "ci",
+        wire: carry_wire(wires, "CI"),
+    });
+    pins.push(BelPin {
+        role: "cyinit",
+        wire: carry_wire(wires, "CYINIT"),
+    });
+    pins
+}
+
+/// The wire bit `letter`'s carry out sits on: an invented one for `A` to
+/// `C`, and the database's `COUT` for `D`, which is the one that leaves
+/// the slice.
+fn carry_out_wire(wires: &str, letter: char) -> String {
+    if letter == 'D' {
+        format!("{wires}_COUT")
+    } else {
+        carry_wire(wires, &format!("CY_{letter}"))
+    }
+}
+
+/// The paths into and out of a slice's carry chain, each with the mux
+/// setting that selects it.
+///
+/// | Hop | Feature | Meaning |
+/// |---|---|---|
+/// | `CARRY_CI` ← `CIN` | `PRECYINIT.CIN` | the chain continues from the slice below |
+/// | `CARRY_CYINIT` ← `<A>X` | `PRECYINIT.AX` | the chain starts from a fabric signal |
+/// | `<L>MUX` ← `CARRY_XOR_<L>` | `<L>OUTMUX.XOR` | the sum out of the slice |
+/// | `<L>MUX` ← carry out | `<L>OUTMUX.CY` | the carry out of the slice |
+/// | flip-flop `D` ← `CARRY_XOR_<L>` | `<L>FFMUX.XOR` | the sum into the flip-flop beside it |
+/// | flip-flop `D` ← carry out | `<L>FFMUX.CY` | the carry into it |
+///
+/// The meanings are prjxray's fuzzers', **quoted, not measured**:
+/// `017-clb-precyinit` documents `PRECYINIT` as `C0` logic 0, `C1` logic 1,
+/// `AX` the bypass input and `CIN` the carry from the slice below;
+/// `013-clb-ncy0` documents `<L>CY0` as **clear** selecting the bypass
+/// input `<L>X` and **set** selecting `O5`, which is why the generate pin
+/// sits on `<L>X` with no hop at all; and `016-clb-noutmux` drives its `XOR`
+/// variant from `CARRY4.O[n]` and its `CY` variant from `CARRY4.CO[n]`.
+/// The `CIN` hop's feature is the one nextpnr-xilinx writes whenever a
+/// `CARRY4`'s `CIN` is connected.
+fn carry_pass_throughs(wires: &str, prefix: &str) -> Vec<PassThrough> {
+    let mut out = vec![
+        PassThrough {
+            to: carry_wire(wires, "CI"),
+            from: format!("{wires}_CIN"),
+            features: vec![format!("{prefix}.PRECYINIT.CIN")],
+        },
+        PassThrough {
+            to: carry_wire(wires, "CYINIT"),
+            from: format!("{wires}_AX"),
+            features: vec![format!("{prefix}.PRECYINIT.AX")],
+        },
+    ];
+    for letter in SLICE_LETTERS {
+        let sum = carry_wire(wires, &format!("XOR_{letter}"));
+        let carry = carry_out_wire(wires, letter);
+        for (from, what) in [(&sum, "XOR"), (&carry, "CY")] {
+            out.push(PassThrough {
+                to: format!("{wires}_{letter}MUX"),
+                from: from.clone(),
+                features: vec![format!("{prefix}.{letter}OUTMUX.{what}")],
+            });
+            out.push(PassThrough {
+                to: ff_data_wire(wires, letter),
+                from: from.clone(),
+                features: vec![format!("{prefix}.{letter}FFMUX.{what}")],
+            });
+        }
+    }
+    out
+}
+
+/// What a `CARRY4` costs when one of its inputs is a constant rather
+/// than a signal, which is the one thing about it routing cannot say.
+///
+/// - **The carry in.** `PRECYINIT` has a constant zero (`C0`, which is
+///   every bit clear and so costs nothing) and a constant one (`C1`). The
+///   primitive's model is `CI | CYINIT`, so either pin tied to one asks
+///   for `C1`. A pin tied to zero asks for nothing: if the other is a
+///   signal its own hop selects it, and if not, `C0` is what a blank
+///   slice already is.
+/// - **A generate input.** `DI<n>` tied to either constant takes it from
+///   the lookup table's `O5` (`CARRY4.<L>CY0` set), because no other
+///   source the slice offers is a constant. What `O5` then says is the
+///   lookup table's business: `xray::carry` gives that position a table
+///   whose lower half is the constant, and only a lane whose outputs are
+///   read is given one.
+fn carry_tied(prefix: &str) -> Vec<(String, bool, Vec<String>)> {
+    let c1 = vec![format!("{prefix}.PRECYINIT.C1")];
+    let mut out = vec![
+        ("cyinit".to_owned(), true, c1.clone()),
+        ("ci".to_owned(), true, c1),
+    ];
+    for (n, letter) in SLICE_LETTERS.iter().enumerate() {
+        let cy0 = vec![format!("{prefix}.CARRY4.{letter}CY0")];
+        out.push((format!("di{n}"), false, cy0.clone()));
+        out.push((format!("di{n}"), true, cy0));
     }
     out
 }
@@ -728,6 +906,10 @@ pub(super) struct BelConfig {
     /// bit **inverted**: one
     /// [`ConfigEntry::ParamZero`](crate::fpga::ConfigEntry) each.
     pub inverted: Vec<(&'static str, u32, String)>,
+    /// A pin role, a constant, and the features set when the cell's pin of
+    /// that role is tied to that constant: one
+    /// [`ConfigEntry::Tied`](crate::fpga::ConfigEntry) each.
+    pub tied: Vec<(String, bool, Vec<String>)>,
 }
 
 /// What a cell on the bel `<prefix>_<sub>` of `tile_type` costs.
@@ -765,6 +947,10 @@ pub(super) fn bel_config(tile_type: &str, prefix: &str, sub: &str) -> BelConfig 
         return out;
     };
     if base != "SLICEL" && base != "SLICEM" {
+        return out;
+    }
+    if sub == "CARRY4" && slice_feature_prefix(tile_type, index).is_some() {
+        out.tied = carry_tied(prefix);
         return out;
     }
     let (Some(_), Some(letter)) = (slice_feature_prefix(tile_type, index), slice_ff_letter(sub))
@@ -1319,25 +1505,29 @@ mod tests {
         }
     }
 
-    /// A slice's pass-throughs are the ones a clocked design needs and
-    /// nothing else.
+    /// A slice's pass-throughs are the ones a clocked design and a carry
+    /// chain need, and nothing else.
     ///
     /// This used to assert a `CLBLL` had none at all, which was true when
     /// only an IO tile did and was the thing stopping the router treating
     /// a slice as a length of wire. A flip-flop changed that: it needs a
     /// path to its `D`, and its clock enable and reset come off the
-    /// slice's shared control lines. So the guard is now about *which*
-    /// paths exist rather than whether any do — every one is a multiplexer
-    /// inside the slice, named by the feature that selects it, and none
-    /// crosses the slice from one side to the other.
+    /// slice's shared control lines. The carry chain changed it again: it
+    /// needs its carry in from `CIN` or `AX`, a generate from the bypass
+    /// input, and a way out for its sums and carries. So the guard is
+    /// about *which* paths exist rather than whether any do — every one is
+    /// a multiplexer inside the slice, named by the feature that selects
+    /// it, and none crosses the slice from one side to the other.
     #[test]
-    fn a_slice_passes_through_only_where_a_flip_flop_needs_it() {
+    fn a_slice_passes_through_only_where_a_flip_flop_or_a_carry_needs_it() {
         let p = pass_throughs("CLBLL_L");
         assert!(!p.is_empty(), "a flip-flop needs a path to its `D`");
 
         // Two slices, each with a clock enable, a set/reset, and two ways
-        // into each of four flip-flops.
-        assert_eq!(p.len(), 2 * (2 + 4 * 2));
+        // into each of four flip-flops; and a carry chain with two ways
+        // in, and per bit the sum and the carry each out to the output mux
+        // and to the flip-flop.
+        assert_eq!(p.len(), 2 * (2 + 4 * 2 + 2 + 4 * 2 * 2));
 
         for hop in &p {
             assert_eq!(
@@ -1348,6 +1538,8 @@ mod tests {
             let feature = &hop.features[0];
             assert!(
                 feature.contains("FFMUX")
+                    || feature.contains("OUTMUX")
+                    || feature.contains("PRECYINIT")
                     || feature.ends_with("CEUSEDMUX")
                     || feature.ends_with("SRUSEDMUX"),
                 "unexpected slice pass-through `{feature}`"
@@ -1355,12 +1547,73 @@ mod tests {
         }
 
         // The data hops end at a flip-flop's input, never at a wire that
-        // leaves the slice.
+        // leaves the slice; the output mux hops end at the `<L>MUX` the
+        // interconnect reads.
         assert!(
             p.iter()
-                .filter(|h| h.features[0].contains("FFMUX"))
+                .filter(|h| h.features.first().is_some_and(|f| f.contains("FFMUX")))
                 .all(|h| h.to.ends_with("FF_D")),
             "a data hop must end inside a flip-flop: {p:?}"
+        );
+        assert!(
+            p.iter()
+                .filter(|h| h.features.first().is_some_and(|f| f.contains("OUTMUX")))
+                .all(|h| h.to.ends_with("MUX") && !h.to.contains("_MUX_")),
+            "an output hop must end on the slice's output: {p:?}"
+        );
+    }
+
+    /// A `CARRY4`'s propagate inputs are the lookup tables' own output
+    /// wires, its top carry out is the database's `COUT`, and everything
+    /// else it has sits inside the slice.
+    ///
+    /// Would catch: `S` put on an invented wire (the placer would then
+    /// see no dedicated connection and the router no path), `CO[3]` off
+    /// `COUT` (the chain would have no way up), or the two slices' pins
+    /// crossed. Would not catch: the letters being in the wrong order —
+    /// that is UG474's drawing, and `tests/fpga_xray_carry.rs` reads it
+    /// back out of a routed bitstream.
+    #[test]
+    fn a_carry4_takes_its_propagate_from_the_lookup_tables_beside_it() {
+        let pins = bel_pins("CLBLL_L", "SLICEL_X1", "CARRY4");
+        let wire = |role: &str| {
+            pins.iter()
+                .find(|p| p.role == role)
+                .map(|p| p.wire.as_str())
+                .unwrap_or_else(|| panic!("no `{role}`"))
+        };
+        assert_eq!(pins.len(), 18);
+        assert_eq!(wire("p0"), "CLBLL_L_A");
+        assert_eq!(wire("p3"), "CLBLL_L_D");
+        assert_eq!(wire("co3"), "CLBLL_L_COUT");
+        assert_eq!(wire("co0"), "CLBLL_L_CARRY_CY_A");
+        assert_eq!(wire("s2"), "CLBLL_L_CARRY_XOR_C");
+        assert_eq!(wire("ci"), "CLBLL_L_CARRY_CI");
+        assert_eq!(
+            wire("di1"),
+            "CLBLL_L_BX",
+            "a routed generate is the bypass input"
+        );
+        assert_eq!(
+            bel_pins("CLBLM_R", "SLICEM_X0", "CARRY4")[0].wire,
+            "CLBLM_M_A",
+            "a CLBLM's X0 is its SLICEM"
+        );
+        // And a tied carry in or generate costs what prjxray names.
+        let tied = bel_config("CLBLL_L", "SLICEL_X0", "CARRY4").tied;
+        assert!(tied.contains(&(
+            "cyinit".to_owned(),
+            true,
+            vec!["SLICEL_X0.PRECYINIT.C1".to_owned()]
+        )));
+        assert!(tied.contains(&(
+            "di2".to_owned(),
+            false,
+            vec!["SLICEL_X0.CARRY4.CCY0".to_owned()]
+        )));
+        assert!(
+            !tied.iter().any(|(pin, value, _)| pin == "cyinit" && !value),
+            "a carry in tied to zero is `C0`, which is no bits at all"
         );
     }
 

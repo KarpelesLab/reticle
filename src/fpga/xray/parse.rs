@@ -682,6 +682,22 @@ pub(super) fn bels_of(
             }
             coverage.modes += 1;
         }
+        for (pin, value, names) in config.tied {
+            let mut bits = Vec::new();
+            let mut missing = false;
+            for name in &names {
+                match features.feature(name) {
+                    Some(feature) => bits.extend(feature.ones.iter().copied()),
+                    None => missing = true,
+                }
+            }
+            if missing {
+                coverage.modes_unresolved += 1;
+                continue;
+            }
+            bel.config.push(ConfigEntry::Tied { pin, value, bits });
+            coverage.modes += 1;
+        }
         bels.insert(name, bel);
     };
     for prefix in &prefixes {
