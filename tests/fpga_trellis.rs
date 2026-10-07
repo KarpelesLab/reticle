@@ -6653,3 +6653,176 @@ fn the_hub_boards_console_names_the_fields_its_header_claims() {
         "and the pad is released for as long as the bitstream is loaded"
     );
 }
+
+
+#[test]
+#[ignore]
+fn zz_scratch_carry() {
+    let Some(root) = chipdb() else { return };
+    let db = trellis::open(&Disk(root), "", PART).unwrap();
+    let _fabric = db.load(&TrellisOptions::new()).unwrap();
+    for name in ["analyzer", "selftest", "facedancer"] {
+        let Some(bytes) = reference(name) else { return };
+        let stream = Ecp5Stream::parse(&bytes, &formats).unwrap();
+        let decoded = db.decode(&stream.cram);
+        let mut ccu2: std::collections::BTreeSet<(u32, u32, char)> = Default::default();
+        for (at, field, value) in &decoded.enums {
+            if field.ends_with(".MODE") && value == "CCU2" {
+                ccu2.insert((at.0, at.1, field.as_bytes()[5] as char));
+            }
+        }
+        println!("=== {name}: {} CCU2 slices", ccu2.len());
+        let hex = |at: (u32, u32), field: &str| -> u32 {
+            match decoded
+                .words
+                .iter()
+                .find(|(p, f, _)| *p == at && f == field)
+                .map(|(_, _, v)| v.as_str())
+            {
+                None => 0xFFFF,
+                Some(s) => s
+                    .bytes()
+                    .enumerate()
+                    .map(|(i, b)| u32::from(b == b'1') << i)
+                    .sum(),
+            }
+        };
+        let enum_of = |at: (u32, u32), field: &str| -> Option<&str> {
+            decoded
+                .enums
+                .iter()
+                .find(|(p, f, _)| *p == at && f == field)
+                .map(|(_, _, v)| v.as_str())
+        };
+        let driven = |at: (u32, u32), wire: &str| -> bool {
+            decoded.arcs.iter().any(|(p, to, _)| *p == at && to == wire)
+        };
+        // Reconstruct chains under the rule "A,B,C,D then the tile east".
+        let next = |(x, y, l): (u32, u32, char)| -> (u32, u32, char) {
+            if l == 'D' {
+                (x + 1, y, 'A')
+            } else {
+                (x, y, (l as u8 + 1) as char)
+            }
+        };
+        let prev = |(x, y, l): (u32, u32, char)| -> Option<(u32, u32, char)> {
+            if l == 'A' {
+                (x > 0).then_some((x - 1, y, 'D'))
+            } else {
+                Some((x, y, (l as u8 - 1) as char))
+            }
+        };
+        let mut runs: Vec<Vec<(u32, u32, char)>> = Vec::new();
+        let mut seen: std::collections::BTreeSet<(u32, u32, char)> = Default::default();
+        for cell in &ccu2 {
+            if seen.contains(cell) || prev(*cell).is_some_and(|p| ccu2.contains(&p)) {
+                continue;
+            }
+            let mut run = Vec::new();
+            let mut at = *cell;
+            loop {
+                run.push(at);
+                seen.insert(at);
+                let n = next(at);
+                if ccu2.contains(&n) {
+                    at = n;
+                } else {
+                    break;
+                }
+            }
+            runs.push(run);
+        }
+        // Tabulate the INIT of each half by its place in a run.
+        let mut by_place: std::collections::BTreeMap<String, usize> = Default::default();
+        let mut injectors: std::collections::BTreeMap<String, usize> = Default::default();
+        for run in &runs {
+            for (i, (x, y, l)) in run.iter().enumerate() {
+                let at = (*x, *y);
+                let s = u32::from(*l as u8 - b'A');
+                for half in 0..2u32 {
+                    let z = s * 2 + half;
+                    let init = hex(at, &format!("SLICE{l}.K{half}.INIT"));
+                    // propagate quadrant with C and D forced high, and the
+                    // generate nibble.
+                    let p = (init >> 12) & 0xF;
+                    let g = init & 0xF;
+                    let place = if i == 0 && half == 0 {
+                        "first half"
+                    } else if i == run.len() - 1 && half == 1 {
+                        "last half"
+                    } else {
+                        "middle"
+                    };
+                    by_place
+                        .entry(format!("{place}: INIT=0x{init:04X} p={p:X} g={g:X}"))
+                        .and_modify(|c| *c += 1)
+                        .or_insert(1);
+                    if p == 0 {
+                        let a = (
+                            enum_of(at, &format!("SLICE{l}.A{half}MUX")),
+                            driven(at, &format!("A{z}")),
+                        );
+                        let b = (
+                            enum_of(at, &format!("SLICE{l}.B{half}MUX")),
+                            driven(at, &format!("B{z}")),
+                        );
+                        injectors
+                            .entry(format!(
+                                "p=0 INIT=0x{init:04X} at place {i}/{} half {half} A={a:?} B={b:?}",
+                                run.len()
+                            ))
+                            .and_modify(|c| *c += 1)
+                            .or_insert(1);
+                    }
+                }
+            }
+        }
+        println!("  {} runs", runs.len());
+        for (k, v) in &by_place {
+            println!("    {k} x{v}");
+        }
+        println!("  injector-shaped halves:");
+        let mut collapsed: std::collections::BTreeMap<String, usize> = Default::default();
+        for (k, v) in &injectors {
+            let key = k.split(" at place ").next().unwrap().to_owned();
+            let tail = k.split(" half ").nth(1).unwrap();
+            *collapsed
+                .entry(format!("{key} half {tail}"))
+                .or_insert(0) += v;
+        }
+        for (k, v) in &collapsed {
+            println!("    {k} x{v}");
+        }
+        // The first few runs in full.
+        for run in runs.iter().take(3) {
+            println!("  run of {}:", run.len());
+            for (x, y, l) in run {
+                let at = (*x, *y);
+                let s = u32::from(*l as u8 - b'A');
+                let mut line = format!("    X{x}Y{y} SLICE{l}");
+                for half in 0..2u32 {
+                    let z = s * 2 + half;
+                    line.push_str(&format!(
+                        " | K{half}=0x{:04X} inj{half}={:?}",
+                        hex(at, &format!("SLICE{l}.K{half}.INIT")),
+                        enum_of(at, &format!("SLICE{l}.CCU2.INJECT1_{half}")),
+                    ));
+                    for x2 in ['A', 'B', 'C', 'D'] {
+                        line.push_str(&format!(
+                            " {x2}{half}={}",
+                            match (
+                                enum_of(at, &format!("SLICE{l}.{x2}{half}MUX")),
+                                driven(at, &format!("{x2}{z}"))
+                            ) {
+                                (Some(v), r) => format!("mux{v}/routed{r}"),
+                                (None, r) => format!("-/routed{r}"),
+                            }
+                        ));
+                    }
+                    line.push_str(&format!(" F{z}driven={}", driven(at, &format!("F{z}"))));
+                }
+                println!("{line}");
+            }
+        }
+    }
+}
