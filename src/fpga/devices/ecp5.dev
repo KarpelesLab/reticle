@@ -128,10 +128,25 @@
 #     below the two differ by a factor of two. `src/fpga/device.rs` has
 #     what that means and `docs/fpga-trellis.md` has the whole account.
 #   * The carry unit CCU2C computes two sum bits and their carry inside
-#     the cell, which does not match the simple (ci, i0, i1) -> co model
-#     Reticle maps carry chains onto, so no port map is recorded and
-#     carry mapping declines for this family with a note. That is
-#     deliberate: an approximate mapping would be worse than none.
+#     the cell, which matches neither the one-bit (ci, i0, i1) -> co model
+#     nor the 7-series (ci, cyinit, p, di, s, co) one. It has a model of
+#     its own now — `width 2` with the two operands on `a` and `b` and the
+#     sums on `s`, Reticle's `OperandCarry` — and INIT0 = INIT1 = 16'h666A
+#     is what makes each lane an adder bit: bits 15..12 of the truth table
+#     are the propagate A^B, read with C and D forced high, and bits 3..0
+#     are the generate A, which the silicon uses as a two-input lookup
+#     table of its own. INJECT1_0 and INJECT1_1 must both be "NO" or the
+#     generate term is gated away and the chain computes A & CIN.
+#     HIGH confidence: 2131 CCU2C instances in Great Scott Gadgets' own
+#     ECP5 bitstreams were read back at absolute frame positions, and
+#     `docs/fpga-trellis.md` has every field they write. The one thing
+#     those files do not pin is the INIT this file chooses: `ecppack`
+#     writes 0x666A for an add whose operands are both routed, and this
+#     file uses the same value for *every* lane, including the ones whose
+#     operands are a constant zero, because propagate and generate are
+#     then both zero and the lane is a chain entry rather than an adder
+#     bit. `a_carry_chain_adds_what_it_was_asked_to_add` checks that
+#     exhaustively against the CCU2C equation.
 #   * No tile grid is recorded: Reticle cannot state the ECP5 tile array
 #     size, and a wrong bounding box would silently accept or reject
 #     placement regions. Region constraints are therefore reported as
@@ -159,7 +174,7 @@ device ecp5-25f-CABGA381
   lut_size 4
   ff enable sync_reset async_reset shared_reset
   bel LUT4 lut count 24288 port i=A,B,C,D o=Z param INIT=16'h0000
-  bel CCU2C carry
+  bel CCU2C carry width 2 port ci=CIN a=A0,A1 b=B0,B1 s=S0,S1 co=COUT param INIT0=16'h666A INIT1=16'h666A INJECT1_0="NO" INJECT1_1="NO" param_zero0 INIT0=16'h0000 param_zero1 INIT1=16'h0000
   bel TRELLIS_FF ff count 24288 mode posedge port clk=CLK d=DI q=Q en=CE rst=LSR param GSR="DISABLED" REGMODE="FF" CEMUX="1" CLKMUX="CLK" LSRMUX="LSR" SRMODE="LSR_OVER_CE" REGSET="RESET"
   bel TRELLIS_FF ff mode posedge,sync_reset port clk=CLK d=DI q=Q en=CE rst=LSR param GSR="DISABLED" REGMODE="FF" CEMUX="1" CLKMUX="CLK" LSRMUX="LSR" SRMODE="LSR_OVER_CE" REGSET="RESET"
   bel TRELLIS_FF ff mode posedge,sync_reset,active_low port clk=CLK d=DI q=Q en=CE rst=LSR param GSR="DISABLED" REGMODE="FF" CEMUX="1" CLKMUX="CLK" LSRMUX="INV" SRMODE="LSR_OVER_CE" REGSET="RESET"
@@ -304,7 +319,7 @@ device ecp5-12f-CABGA256
   lut_size 4
   ff enable sync_reset async_reset shared_reset
   bel LUT4 lut count 12144 port i=A,B,C,D o=Z param INIT=16'h0000
-  bel CCU2C carry
+  bel CCU2C carry width 2 port ci=CIN a=A0,A1 b=B0,B1 s=S0,S1 co=COUT param INIT0=16'h666A INIT1=16'h666A INJECT1_0="NO" INJECT1_1="NO" param_zero0 INIT0=16'h0000 param_zero1 INIT1=16'h0000
   bel TRELLIS_FF ff count 12144 mode posedge port clk=CLK d=DI q=Q en=CE rst=LSR param GSR="DISABLED" REGMODE="FF" CEMUX="1" CLKMUX="CLK" LSRMUX="LSR" SRMODE="LSR_OVER_CE" REGSET="RESET"
   bel TRELLIS_FF ff mode posedge,sync_reset port clk=CLK d=DI q=Q en=CE rst=LSR param GSR="DISABLED" REGMODE="FF" CEMUX="1" CLKMUX="CLK" LSRMUX="LSR" SRMODE="LSR_OVER_CE" REGSET="RESET"
   bel TRELLIS_FF ff mode posedge,sync_reset,active_low port clk=CLK d=DI q=Q en=CE rst=LSR param GSR="DISABLED" REGMODE="FF" CEMUX="1" CLKMUX="CLK" LSRMUX="INV" SRMODE="LSR_OVER_CE" REGSET="RESET"
@@ -390,7 +405,7 @@ device ecp5-45f-CABGA381
   lut_size 4
   ff enable sync_reset async_reset shared_reset
   bel LUT4 lut count 43848 port i=A,B,C,D o=Z param INIT=16'h0000
-  bel CCU2C carry
+  bel CCU2C carry width 2 port ci=CIN a=A0,A1 b=B0,B1 s=S0,S1 co=COUT param INIT0=16'h666A INIT1=16'h666A INJECT1_0="NO" INJECT1_1="NO" param_zero0 INIT0=16'h0000 param_zero1 INIT1=16'h0000
   bel TRELLIS_FF ff count 43848 mode posedge port clk=CLK d=DI q=Q en=CE rst=LSR param GSR="DISABLED" REGMODE="FF" CEMUX="1" CLKMUX="CLK" LSRMUX="LSR" SRMODE="LSR_OVER_CE" REGSET="RESET"
   bel TRELLIS_FF ff mode posedge,sync_reset port clk=CLK d=DI q=Q en=CE rst=LSR param GSR="DISABLED" REGMODE="FF" CEMUX="1" CLKMUX="CLK" LSRMUX="LSR" SRMODE="LSR_OVER_CE" REGSET="RESET"
   bel TRELLIS_FF ff mode posedge,sync_reset,active_low port clk=CLK d=DI q=Q en=CE rst=LSR param GSR="DISABLED" REGMODE="FF" CEMUX="1" CLKMUX="CLK" LSRMUX="INV" SRMODE="LSR_OVER_CE" REGSET="RESET"

@@ -200,8 +200,9 @@ pub use constraints::{
 };
 pub use device::{
     BelKind, BelRole, BramPort, BramPortRole, BramShape, ClockRegion, ClockResources, Device,
-    DeviceDb, DspShape, FfFeatures, FfReset, FfVariant, Grid, IoBank, IoStandard, Pin, PinKind,
-    PinName, PllDivider, PllDividerRole, PllFeedback, PllShape, Site, SiteOverrun, WideCarry,
+    DeviceDb, DspShape, FfFeatures, FfReset, FfVariant, Grid, IoBank, IoStandard, OperandCarry,
+    Pin, PinKind, PinName, PllDivider, PllDividerRole, PllFeedback, PllShape, Site, SiteOverrun,
+    WideCarry,
 };
 pub use flow::{
     FlowError, FlowReport, NetlistProblem, NextpnrInputs, PnrOptions, PnrResult, PnrRoute,
@@ -527,11 +528,18 @@ mod tests {
         assert_eq!(ecp5.block_rams[0].bits(), 18432);
         assert_eq!(ecp5.dsps[0].p_width, 36);
         assert!(ecp5.tile_grid.is_none());
-        // The ECP5 carry unit is recorded but has no port map of either
-        // shape, which is what makes carry mapping decline for the
-        // family: CCU2C is neither the one-bit element nor the wide one.
+        // The ECP5 carry unit is neither the one-bit element nor the
+        // 7-series' wide one: it takes the two operands and answers the
+        // sums, two bits at a time, which is the third shape.
         let ccu2c = ecp5.bel(BelRole::Carry).unwrap();
-        assert!(!ccu2c.has_ports(&["ci"]));
         assert!(ccu2c.wide_carry().is_none());
+        let shape = ccu2c.operand_carry().unwrap();
+        assert_eq!(shape.width, 2);
+        assert_eq!((shape.a, shape.b, shape.sum), ("A0,A1", "B0,B1", "S0,S1"));
+        assert_eq!((shape.carry_in, shape.carry_out), ("CIN", "COUT"));
+        // Nothing on this fabric can drive a carry in from the
+        // interconnect, so the shape has no pin for one and the chain is
+        // entered by spending a lane. See `OperandCarry`.
+        assert_eq!(shape.init, None);
     }
 }

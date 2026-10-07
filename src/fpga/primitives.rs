@@ -105,7 +105,7 @@ use std::fmt::Write as _;
 use super::constraints::{Constraints, IoAttrs};
 use super::device::{
     BelKind, BelRole, BramInitLayout, BramInitParams, BramModeLayout, BramShape, Device, DspShape,
-    PllFeedback, PllShape, WideCarry,
+    OperandCarry, PllFeedback, PllShape, WideCarry,
 };
 use super::pll::PllSolution;
 use crate::diag::{Diagnostic, Diagnostics};
@@ -2670,7 +2670,7 @@ impl Mapper<'_> {
         let Some(bel) = self.device.bel(BelRole::Carry).cloned() else {
             return;
         };
-        let wide = bel.wide_carry().is_some();
+        let wide = bel.wide_carry().is_some() || bel.operand_carry().is_some();
         if !wide && !bel.has_ports(&["ci", "i0", "i1", "co"]) {
             let adders = module
                 .cells
@@ -2706,12 +2706,17 @@ impl Mapper<'_> {
             };
             let name = cell.name.as_str().to_owned();
             let span = cell.span;
-            let primitives = match bel.wide_carry() {
-                Some(shape) => {
+            let primitives = match (bel.operand_carry(), bel.wide_carry()) {
+                (Some(shape), _) => {
+                    let lanes = width + u32::from(shape.init.is_none());
+                    self.emit_operand_carry(module, &bel, shape, &name, a, b, y, width, span);
+                    lanes.div_ceil(shape.width)
+                }
+                (None, Some(shape)) => {
                     self.emit_wide_carry(module, &bel, shape, &name, a, b, y, width, span);
                     width.div_ceil(shape.width)
                 }
-                None => {
+                (None, None) => {
                     self.emit_carry(module, &bel, &name, a, b, y, width, span);
                     width.saturating_sub(1)
                 }
@@ -2907,6 +2912,136 @@ impl Mapper<'_> {
             }
             let carry_expr = net_expr(module, carry_net, span);
             chain = Some(slice_expr(module, carry_expr, lanes - 1, lanes - 1, span));
+        }
+        sums.reverse();
+        let value = expr(module, ExprKind::Concat(sums), span);
+        add_assign(module, y, value, span);
+    }
+
+    /// The same adder onto an [`OperandCarry`] element: a chain of
+    /// instances, each covering `shape.width` bits, each handed the two
+    /// operands and answering the sums.
+    ///
+    /// This path emits **no soft logic whatever** — no propagate XOR in
+    /// front and no sum XOR behind — because the element's own lookup
+    /// tables are the propagate and the generate. That is the whole
+    /// difference between it and [`Mapper::emit_wide_carry`], and it is
+    /// why an adder on an ECP5 stopped being twenty levels of LUT4.
+    ///
+    /// Two kinds of lane carry zeros on both operands, and both are
+    /// deliberate:
+    ///
+    /// - the **entry lane**, for a family with no `init` pin. Propagate
+    ///   zero makes the lane's carry out zero whatever reached its `ci`,
+    ///   which is the only way to enter a chain whose carry in is
+    ///   dedicated metal nothing can drive. The adder's bit 0 then lands
+    ///   on lane 1.
+    /// - the **leftover lanes** of the last instance, when the width is
+    ///   not a multiple of `shape.width`. Propagate and generate zero
+    ///   again, so nothing downstream sees them.
+    ///
+    /// The last instance's carry out is left driving a net nothing reads:
+    /// an `add` cell is as wide as its result and the carry off the top
+    /// is not part of it. A design that wants it widens the operands.
+    #[allow(clippy::too_many_arguments)]
+    fn emit_operand_carry(
+        &mut self,
+        module: &mut Module,
+        bel: &BelKind,
+        shape: OperandCarry<'_>,
+        name: &str,
+        a: ExprId,
+        b: ExprId,
+        y: NetId,
+        width: u32,
+        span: Span,
+    ) {
+        // The element's pins are one per lane and named individually —
+        // `A0`, `A1` — rather than one bus per role the way a `CARRY4`'s
+        // are, so every lane is its own port and its own one-bit net.
+        let (first_pins, second_pins, sum_pins) = (
+            bel.port_names("a"),
+            bel.port_names("b"),
+            bel.port_names("s"),
+        );
+        let lanes = shape.width.min(
+            u32::try_from(first_pins.len().min(second_pins.len()).min(sum_pins.len())).unwrap_or(0),
+        );
+        if lanes == 0 {
+            return;
+        }
+        // One lane is spent entering the chain where the family has no
+        // pin for a carry in; see `OperandCarry`.
+        let offset = u32::from(shape.init.is_none());
+        let blocks = (width + offset).div_ceil(lanes);
+        let mut sums: Vec<ExprId> = Vec::with_capacity(usize::try_from(width).unwrap_or(0));
+        let mut chain: Option<ExprId> = None;
+        for block in 0..blocks {
+            let mut inputs = Vec::with_capacity(usize::try_from(lanes * 2 + 1).unwrap_or(0));
+            let mut outputs = Vec::with_capacity(usize::try_from(lanes + 1).unwrap_or(0));
+            let mut lane_sums: Vec<ExprId> = Vec::new();
+            let mut zeroed: Vec<u32> = Vec::new();
+            for lane in 0..lanes {
+                let place = block * lanes + lane;
+                let index = usize::try_from(lane).unwrap_or(0);
+                let Some(bit) = place.checked_sub(offset).filter(|bit| *bit < width) else {
+                    // A lane that is not an adder bit: nothing is
+                    // connected to it at all and its `zero<lane>`
+                    // parameters make it a zero of the chain, whatever
+                    // its pins read. See `OperandCarry`.
+                    zeroed.push(lane);
+                    continue;
+                };
+                let first = slice_expr(module, a, bit, bit, span);
+                let second = slice_expr(module, b, bit, bit, span);
+                inputs.push((Name::new(first_pins[index]), first));
+                inputs.push((Name::new(second_pins[index]), second));
+                let sum = add_net(
+                    module,
+                    &format!("{name}$s{block}_{lane}"),
+                    Type::bit(),
+                    span,
+                );
+                outputs.push((Name::new(sum_pins[index]), sum));
+                lane_sums.push(net_expr(module, sum, span));
+            }
+            let carry_net = add_net(module, &format!("{name}$co{block}"), Type::bit(), span);
+            // The chain, and how it is entered. A family with an `init`
+            // pin takes the adder's carry in there — a constant zero,
+            // since an `add` cell has none — and the one below on `ci`;
+            // a family without one leaves the first instance's `ci`
+            // alone, because on that fabric nothing can drive it.
+            match (chain, shape.init) {
+                (Some(carry), _) => inputs.push((Name::new(shape.carry_in), carry)),
+                (None, Some(init)) => {
+                    let zero = const_expr(module, Const::zero(1), span);
+                    inputs.push((Name::new(init), zero));
+                }
+                (None, None) => {}
+            }
+            outputs.push((Name::new(shape.carry_out), carry_net));
+            let cell = add_cell(
+                module,
+                &format!("{name}$carry{block}"),
+                CellKind::Blackbox(Name::new(bel.name.clone())),
+                inputs,
+                outputs,
+                span,
+            );
+            for (key, value) in &bel.params {
+                module.cells[cell]
+                    .params
+                    .set(Name::new(key.clone()), value.clone());
+            }
+            for lane in zeroed {
+                for (key, value) in bel.params_when(&format!("zero{lane}")) {
+                    module.cells[cell]
+                        .params
+                        .set(Name::new(key.clone()), value.clone());
+                }
+            }
+            sums.extend(lane_sums);
+            chain = Some(net_expr(module, carry_net, span));
         }
         sums.reverse();
         let value = expr(module, ExprKind::Concat(sums), span);
@@ -5432,11 +5567,238 @@ mod tests {
         assert!(report.carry_chains.is_empty());
         assert_eq!(cells_named(&design, top, "SB_CARRY"), 0);
 
-        // A family whose carry element has no port map declines loudly.
+        // The ECP5's `CCU2C` is the third shape: two bits an instance,
+        // the operands straight in and the sums straight out, so no
+        // soft logic at all. An eight-bit add is nine lanes — one spent
+        // entering the chain, which that fabric has no pin for — and so
+        // five instances, the last of which has a lane over.
         let (mut design, top, _map) = adder_design(8);
         let report = run(&mut design, top, "ecp5-25f-CABGA381", &options);
+        assert_eq!(report.carry_chains[0].primitive, "CCU2C");
+        assert_eq!(report.carry_chains[0].width, 8);
+        assert_eq!(report.carry_chains[0].primitives, 5);
+        assert_eq!(cells_named(&design, top, "CCU2C"), 5);
+        assert_eq!(
+            design
+                .module(top)
+                .cells
+                .iter()
+                .filter(|(_, c)| matches!(c.kind, CellKind::Xor))
+                .count(),
+            0,
+            "no propagate XOR in front and no sum XOR behind: the element is both"
+        );
+        // The lanes that are not adder bits are the ones whose `INIT` is
+        // zero, and they are the first and the last.
+        let inits: Vec<(Option<i64>, Option<i64>)> = design
+            .module(top)
+            .cells
+            .iter()
+            .filter(|(_, c)| c.kind == CellKind::Blackbox(Name::new("CCU2C")))
+            .map(|(_, c)| {
+                let get = |k: &str| match c.params.get(k) {
+                    Some(AttrValue::Const(v)) => v.to_u64().map(|v| v as i64),
+                    _ => None,
+                };
+                (get("INIT0"), get("INIT1"))
+            })
+            .collect();
+        assert_eq!(
+            inits,
+            vec![
+                (Some(0x0000), Some(0x666A)),
+                (Some(0x666A), Some(0x666A)),
+                (Some(0x666A), Some(0x666A)),
+                (Some(0x666A), Some(0x666A)),
+                (Some(0x666A), Some(0x0000)),
+            ]
+        );
+    }
+
+    /// The chain of `CCU2C`s really does compute `a + b`, checked
+    /// exhaustively against the element's own equation.
+    ///
+    /// This is the check the equivalence proof cannot be: a carry cell is
+    /// emitted by *this* module, before the technology mapper runs, so
+    /// `every_block_maps_to_the_logic_it_was_mapped_from` never sees one
+    /// — its AIG contains no blackboxes. Nothing else in the tree would
+    /// notice an `INIT` nibble one place out, and that is precisely the
+    /// kind of mistake that places, routes, decodes and computes the
+    /// wrong number.
+    ///
+    /// The equation is the one `docs/fpga-trellis.md` reads out of
+    /// `ecppack`'s own bitstreams:
+    ///
+    /// ```text
+    /// propagate = INIT[12 + 2b + a]      (the lookup table, C and D high)
+    /// generate  = INIT[2b + a]           (its low nibble, a table of its own)
+    /// sum       = propagate ^ carry in
+    /// carry out = propagate ? carry in : generate
+    /// ```
+    ///
+    /// Two things are varied besides the operands, and both are
+    /// properties the fabric forces rather than niceties:
+    ///
+    /// - **the first instance's `CIN`, which nothing drives.** On an ECP5
+    ///   the chain is dedicated metal and the bottom of it is whatever
+    ///   the cell to the west left there, so the answer has to be the
+    ///   same for a zero and a one. It is, because the entry lane's
+    ///   propagate is zero.
+    /// - **an unconnected operand pin, which reads as a *one* on this
+    ///   family.** The zero lanes have no pins connected at all, so the
+    ///   test evaluates them both ways and insists on the same answer.
+    #[test]
+    fn a_carry_chain_adds_what_it_was_asked_to_add() {
+        use crate::ir::emit::{BitView, SigBit};
+        use crate::logic::Bit;
+
+        const WIDTH: u32 = 6;
+        let options = MapOptions {
+            insert_io_buffers: false,
+            insert_clock_buffers: false,
+            ..MapOptions::default()
+        };
+        let (mut design, top, _map) = adder_design(WIDTH);
+        let report = run(&mut design, top, "ecp5-25f-CABGA381", &options);
+        assert_eq!(report.carry_chains.len(), 1);
+        let module = design.module(top);
+        let view = BitView::new(module).expect("the mapped module is structural");
+        let here = module
+            .cells
+            .iter()
+            .next()
+            .map_or_else(|| module.ports[0].span, |(_, cell)| cell.span);
+        let bits = |expr: ExprId| view.expr_bits(expr).expect("a structural pin");
+        let net = |net: NetId| view.net_bits(net, here).expect("a bit vector");
+        // Every carry cell, as its lanes: the two operand bits and the
+        // sum bit of each, plus the two ends of the chain.
+        struct Lane {
+            a: Option<SigBit>,
+            b: Option<SigBit>,
+            s: Option<SigBit>,
+            init: u32,
+        }
+        let mut cells: Vec<(Option<SigBit>, SigBit, Vec<Lane>)> = Vec::new();
+        for (_, cell) in module.cells.iter() {
+            if cell.kind != CellKind::Blackbox(Name::new("CCU2C")) {
+                continue;
+            }
+            let init = |name: &str| match cell.params.get(name) {
+                Some(AttrValue::Const(v)) => u32::try_from(v.to_u64().unwrap()).unwrap(),
+                other => panic!("{name} is {other:?}"),
+            };
+            let lanes = (0..2)
+                .map(|lane| Lane {
+                    a: cell.input(&format!("A{lane}")).map(|e| bits(e)[0]),
+                    b: cell.input(&format!("B{lane}")).map(|e| bits(e)[0]),
+                    s: cell.output(&format!("S{lane}")).map(|n| net(n)[0]),
+                    init: init(&format!("INIT{lane}")),
+                })
+                .collect();
+            cells.push((
+                cell.input("CIN").map(|e| bits(e)[0]),
+                net(cell.output("COUT").expect("a carry out"))[0],
+                lanes,
+            ));
+        }
+        assert_eq!(cells.len(), 4, "six bits is seven lanes is four instances");
+        let x = net(module.ports[0].net);
+        let y = net(module.ports[1].net);
+        let q = net(module.ports[2].net);
+        for dangling in [false, true] {
+            for pattern in 0..(1u32 << (WIDTH * 2)) {
+                let (lhs, rhs) = (pattern & 0x3F, pattern >> WIDTH);
+                let mut known: BTreeMap<usize, bool> = BTreeMap::new();
+                for (index, bit) in x.iter().enumerate() {
+                    if let SigBit::Slot(slot) = bit {
+                        known.insert(*slot, lhs >> index & 1 == 1);
+                    }
+                }
+                for (index, bit) in y.iter().enumerate() {
+                    if let SigBit::Slot(slot) = bit {
+                        known.insert(*slot, rhs >> index & 1 == 1);
+                    }
+                }
+                // An unconnected pin is the fabric's own value, which on
+                // this family is a one; `dangling` tries both.
+                let value = |bit: Option<SigBit>, known: &BTreeMap<usize, bool>| -> bool {
+                    match bit {
+                        None => dangling,
+                        Some(SigBit::Const(Bit::One)) => true,
+                        Some(SigBit::Const(_)) => false,
+                        Some(SigBit::Slot(slot)) => *known
+                            .get(&slot)
+                            .unwrap_or_else(|| panic!("slot {slot} is not resolved yet")),
+                    }
+                };
+                for (cin, cout, lanes) in &cells {
+                    let mut carry = value(*cin, &known);
+                    for lane in lanes {
+                        let index = usize::from(value(lane.b, &known)) * 2
+                            + usize::from(value(lane.a, &known));
+                        let propagate = lane.init >> (12 + index) & 1 == 1;
+                        let generate = lane.init >> index & 1 == 1;
+                        if let Some(SigBit::Slot(slot)) = lane.s {
+                            known.insert(slot, propagate ^ carry);
+                        }
+                        carry = if propagate { carry } else { generate };
+                    }
+                    if let SigBit::Slot(slot) = cout {
+                        known.insert(*slot, carry);
+                    }
+                }
+                let got: u32 = q
+                    .iter()
+                    .enumerate()
+                    .map(|(index, bit)| u32::from(value(Some(*bit), &known)) << index)
+                    .sum();
+                assert_eq!(
+                    got,
+                    lhs.wrapping_add(rhs) & 0x3F,
+                    "{lhs} + {rhs} with a dangling pin reading {dangling}"
+                );
+            }
+        }
+    }
+
+    /// A family that declares a carry element without a port map of any
+    /// of the three shapes still declines, loudly.
+    ///
+    /// Every device file in the tree now describes one of the three, so
+    /// this is the one case no shipped `.dev` can exercise and the
+    /// device is built by hand. The path is worth keeping tested: it is
+    /// what `src/fpga/devices/ecp5.dev` was on until this round, and an
+    /// approximate mapping would be worse than none.
+    #[test]
+    fn a_carry_element_with_no_port_map_declines_with_a_note() {
+        let mut device = super::super::target("ice40-hx1k-tq144").unwrap().clone();
+        for bel in &mut device.bels {
+            if bel.role == BelRole::Carry {
+                bel.ports.clear();
+                bel.carry_width = None;
+            }
+        }
+        let options = MapOptions {
+            insert_io_buffers: false,
+            insert_clock_buffers: false,
+            ..MapOptions::default()
+        };
+        let (mut design, top, _map) = adder_design(8);
+        let mut diags = Diagnostics::new();
+        let report = map(
+            &mut design,
+            top,
+            &device,
+            &Constraints::new(),
+            &options,
+            &mut diags,
+        );
         assert!(report.carry_chains.is_empty());
-        assert!(report.notes[0].contains("without a (ci, i0, i1, co) port map"));
+        assert!(
+            report.notes[0].contains("without a (ci, i0, i1, co) port map"),
+            "{:?}",
+            report.notes
+        );
     }
 
     /// The four-bit shape: one instance per four bits, one XOR per bit

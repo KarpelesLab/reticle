@@ -6654,7 +6654,6 @@ fn the_hub_boards_console_names_the_fields_its_header_claims() {
     );
 }
 
-
 #[test]
 #[ignore]
 fn zz_scratch_carry() {
@@ -6786,9 +6785,7 @@ fn zz_scratch_carry() {
         for (k, v) in &injectors {
             let key = k.split(" at place ").next().unwrap().to_owned();
             let tail = k.split(" half ").nth(1).unwrap();
-            *collapsed
-                .entry(format!("{key} half {tail}"))
-                .or_insert(0) += v;
+            *collapsed.entry(format!("{key} half {tail}")).or_insert(0) += v;
         }
         for (k, v) in &collapsed {
             println!("    {k} x{v}");

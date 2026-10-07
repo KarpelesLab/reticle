@@ -721,6 +721,104 @@ impl BelKind {
             init,
         })
     }
+
+    /// The *operand* carry shape this primitive describes, or `None` when
+    /// it is not one. See [`OperandCarry`].
+    ///
+    /// A carry element is of this shape when its line carries a `width`
+    /// and names the two **operands** rather than a propagate: the
+    /// ECP5's `CCU2C`, which takes `a` and `b` straight off the fabric,
+    /// computes the propagate and the generate inside its own lookup
+    /// tables and answers the sums. A line with `p` and `di` is a
+    /// [`WideCarry`] and answers `None` here, and one with neither is
+    /// still "declared, unmapped".
+    ///
+    /// ```
+    /// use reticle::fpga::BelRole;
+    /// let ecp5 = reticle::fpga::target("ecp5-12f-CABGA256").unwrap();
+    /// let carry = ecp5.bel(BelRole::Carry).unwrap();
+    /// let shape = carry.operand_carry().unwrap();
+    /// assert_eq!((shape.width, shape.a, shape.sum), (2, "A0,A1", "S0,S1"));
+    /// // It is not the 7-series shape, and the 7-series is not this one.
+    /// assert!(carry.wide_carry().is_none());
+    /// let xc7 = reticle::fpga::target("xc7a35t-cpg236").unwrap();
+    /// assert!(xc7.bel(BelRole::Carry).unwrap().operand_carry().is_none());
+    /// ```
+    pub fn operand_carry(&self) -> Option<OperandCarry<'_>> {
+        if self.role != BelRole::Carry {
+            return None;
+        }
+        let width = self.carry_width?;
+        if width == 0 {
+            return None;
+        }
+        Some(OperandCarry {
+            width,
+            a: self.port("a")?,
+            b: self.port("b")?,
+            sum: self.port("s")?,
+            carry_out: self.port("co")?,
+            carry_in: self.port("ci")?,
+            init: self.port("cyinit"),
+        })
+    }
+}
+
+/// A carry element several bits wide that takes the **two operands** and
+/// computes its own sums: the Lattice ECP5's `CCU2C` and its like.
+///
+/// This is the third carry shape the families use, and what sets it apart
+/// from [`WideCarry`] is where the propagate comes from. A `CARRY4` is
+/// handed `a ^ b` by a lookup table outside it; a `CCU2C` *is* the lookup
+/// tables — each of its [`width`](Self::width) lanes owns one, computing
+/// the propagate `a ^ b` from the operand pins and the generate from the
+/// same truth table's low nibble. So an adder on this shape costs **no
+/// soft logic at all**: no propagate XOR in front and no sum XOR behind.
+///
+/// Its model, which the `CCU2C` states and which mapping relies on:
+///
+/// ```text
+/// propagate[i] = a[i] ^ b[i]
+/// generate[i]  = a[i]
+/// sum[i]       = propagate[i] ^ carry[i]
+/// carry[0]     = the instance's carry in
+/// carry[i+1]   = propagate[i] ? carry[i] : generate[i]
+/// carry_out    = carry[width]
+/// ```
+///
+/// `carry_out` is **one bit**, the carry leaving the whole instance,
+/// where a [`WideCarry`]'s is one per lane.
+///
+/// # Entering the chain
+///
+/// `init` is the pin a carry in from the fabric arrives on, and a family
+/// of this shape may well not have one: on an ECP5 the chain is
+/// `.fixed_conn` metal from end to end and **nothing can drive `CIN`
+/// but the cell below**. A shape with no `init` is entered by spending
+/// the first lane: with both operands zero that lane's propagate and
+/// generate are both zero, so its carry out is zero whatever reached its
+/// `ci`, and the adder's bit 0 lands on lane 1. That is what
+/// `ecppack` writes too — see `docs/fpga-trellis.md` — and it is why two
+/// unrelated chains may sit end to end in one column without the first
+/// corrupting the second.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct OperandCarry<'a> {
+    /// How many bits of the adder one instance covers.
+    pub width: u32,
+    /// The first operand's pins, `width` of them (`A0,A1`).
+    pub a: &'a str,
+    /// The second operand's pins, `width` of them (`B0,B1`).
+    pub b: &'a str,
+    /// The sum pins, `width` of them (`S0,S1`).
+    pub sum: &'a str,
+    /// The one-bit carry out of the whole instance (`COUT`).
+    pub carry_out: &'a str,
+    /// The one-bit carry in from the instance below (`CIN`).
+    pub carry_in: &'a str,
+    /// The one-bit carry in from the fabric, for a family that has one.
+    /// `None` means the chain is entered by spending a lane; see the
+    /// type's own documentation.
+    pub init: Option<&'a str>,
 }
 
 /// A carry element several bits wide that takes a *propagate* and
@@ -4120,8 +4218,12 @@ end
         for port in ["CLKI", "CLKOP", "CLKFB", "RST", "STDBY"] {
             assert!(pll.contains(&port.to_owned()), "{port}");
         }
-        // A carry unit without a port map is "declared, ports unknown":
-        // a `Some(empty)`, not a `None`.
-        assert_eq!(ecp5.primitive_ports("CCU2C"), Some(Vec::new()));
+        // The carry unit's ports, which this file used to leave empty —
+        // "declared, ports unknown" — and which are the two operands,
+        // the two sums and the two ends of the chain.
+        assert_eq!(
+            ecp5.primitive_ports("CCU2C").unwrap(),
+            ["CIN", "A0", "A1", "B0", "B1", "S0", "S1", "COUT"]
+        );
     }
 }
