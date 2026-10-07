@@ -25,9 +25,10 @@
 //!
 //! - **The kernel gets there first.** Linux binds `ftdi_sio` to *both*
 //!   interfaces of an FT2232H, so channel A appears as a `/dev/ttyUSB*`
-//!   even though it is the JTAG channel.
-//!   [`Cable::open`] detaches it; a power cycle or a replug gives it
-//!   back.
+//!   even though it is the JTAG channel, and macOS binds its own
+//!   `AppleUSBFTDI` the same way. [`Cable::open`] detaches it, which on
+//!   macOS takes the whole device and needs root, and dropping the
+//!   [`Cable`] hands it back.
 //! - **Vendor control requests switch the mode.** Reset, latency timer
 //!   and bit mode are FTDI vendor requests on endpoint zero, not MPSSE
 //!   commands. Their numbers are in FTDI's AN_135 and in the D2XX
@@ -94,6 +95,9 @@ pub struct Cable {
     packet_size: usize,
     serial: String,
     chip: ftdi::Chip,
+    /// Whether [`Cable::open`] took the interface from a kernel driver,
+    /// which dropping the cable must then give back.
+    detached: bool,
 }
 
 /// Turns a `rawusb` error into ours, with the operation that failed.
@@ -291,13 +295,13 @@ impl Cable {
 
         let (in_endpoint, out_endpoint, packet_size) = endpoints(&handle)?;
 
-        // The kernel's ftdi_sio binds both channels of an FT2232H, so
-        // the MPSSE one has to be taken away from it first. Nothing is
-        // lost: the driver rebinds on the next replug or power cycle.
-        if handle
+        // The system's serial driver (ftdi_sio on Linux, AppleUSBFTDI
+        // on macOS) binds both channels of an FT2232H, so the MPSSE one
+        // has to be taken away from it first, and `Drop` gives it back.
+        let detached = handle
             .kernel_driver_active(MPSSE_INTERFACE)
-            .unwrap_or(false)
-        {
+            .unwrap_or(false);
+        if detached {
             handle
                 .detach_kernel_driver(MPSSE_INTERFACE)
                 .map_err(|e| usb_err("detaching the kernel's serial driver", &e))?;
@@ -314,6 +318,7 @@ impl Cable {
             packet_size,
             serial,
             chip,
+            detached,
         };
         cable.enter_mpsse()?;
         Ok(cable)
@@ -505,6 +510,14 @@ impl Drop for Cable {
             TRANSFER_TIMEOUT,
         );
         let _ = self.handle.release_interface(self.interface);
+        // Hand the channel back to the serial driver explicitly. On macOS
+        // rawusb would otherwise do it when the handle drops, and that
+        // was seen not to happen: after a probe the board stayed captured
+        // with neither serial port, hidden from every process but root's,
+        // until it was replugged. Called explicitly, it came back.
+        if self.detached {
+            let _ = self.handle.attach_kernel_driver(self.interface);
+        }
     }
 }
 

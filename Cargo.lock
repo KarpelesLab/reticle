@@ -10,9 +10,9 @@ checksum = "f6f29da98742f258743e8bb44b09f0cc1cbca2591e709b1bb85ccd6e9111f431"
 
 [[package]]
 name = "rawusb"
-version = "0.1.4"
+version = "0.1.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a233a3cdbd5f1d2f75be1879e5e09ef6abf4c246290fb167e084c5f0e47d0852"
+checksum = "36eb91f3d99648742b819d54b8bc33941ee5740ff1b3bb0e77903daa94b5dfba"
 
 [[package]]
 name = "reticle"
