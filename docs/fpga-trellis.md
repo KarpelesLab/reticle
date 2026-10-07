@@ -1,5 +1,352 @@
 # A real Lattice ECP5, and a real `.bit`
 
+## An adder is a carry chain now, and the chain runs east
+
+The ECP5 backend inferred no carry cell. `src/fpga/devices/ecp5.dev` named
+`CCU2C` and gave it no port map, so `primitives::Mapper::carry_chains`
+declined with a note and every adder on this family became a tree of lookup
+tables. Four chained 32-bit additions came out at **logic depth 87** against
+5 on an iCE40; `ip/crypto/sha256`'s five-deep T1 chain at **39 against 9**;
+`ip/cpu/rv32i` at 34.
+
+That was reported as a performance gap and it was not one. A round put both
+crypto cores behind the Cynthion's serial port at 60 MHz — the ULPI rate, so
+there is no slower clock to retreat to — and asked for the SHA-256 of the
+**empty message**, which is the most deterministic thing the device can be
+asked: nothing typed, nothing crossing USB, one block of self-generated
+padding. It answered **seven different ways in sixteen runs**, all of them
+wrong, and ChaCha20's quarter round two ways in forty. Every command with no
+adder in it was exact, forty times out of forty. And the core's throughput on
+the part was 0.494 bytes per clock against simulation's 0.496 over 262 144
+blocks, so the control path and the cycle count were already right. A
+deterministic function that gives a different answer each run is a path that
+does not close.
+
+An adder on this part is a carry chain now. `chacha20_core` went from 5834
+`LUT4` at depth 87 to 547 `CCU2C` and 3031 `LUT4` at **depth 4**;
+`sha256_core` from 3041 at 39 to 314 and 1686 at **depth 7**. Both are now
+*shallower on the ECP5 than on the iCE40*, which is worth a sentence of its
+own below. Thirty-nine rows of `docs/ip-library.md`'s footprint table moved
+and no other row in it moved at all.
+
+### Everything `ecppack` writes for a `CCU2C`, in full
+
+This is the best-supported table in this document, by weight of evidence.
+`RETICLE_ECP5_REF` points at three bitstreams this tree decodes byte for
+byte, and **any design with arithmetic in it contains carry cells**: there
+are **2131** of them in the three — 1212 in `analyzer.bit`, 6 in
+`selftest.bit`, 913 in `facedancer.bit` — over 625 logic tiles. The
+distributed RAM round had 111 to work with and the block RAM round 53.
+`what_lattices_own_packer_writes_for_a_carry_cell` reads every one back.
+
+| | |
+|---|---|
+| How many | 1212, 6 and 913; 625 tiles hold them |
+| `SLICE<l>.MODE` | `CCU2`, **two bits, and per slice**: four separate fields, `SLICEA.MODE` to `SLICED.MODE`. Set in their files at the frames this flow computes |
+| `SLICE<l>.CCU2.INJECT1_0` | `NO` in **all 2131**, without exception. `YES` is the default and gates the generate term away |
+| `SLICE<l>.CCU2.INJECT1_1` | `NO` in 1883, left at `YES` in 248 — exactly the slices whose upper half is unused |
+| `SLICE<l>.K<n>.INIT` | the lane's truth table. **Bits 15..12 are the propagate and bits 3..0 the generate**, and the two middle quadrants are written to the same value as the top |
+| `SLICE<l>.C<n>MUX`, `D<n>MUX` | `= 1` in **every one of the 4262 halves**, without exception |
+| `SLICE<l>.A<n>MUX`, `B<n>MUX` | `= 1` for an operand that is a constant, with the constant folded into `INIT` |
+| The sum | `F<z> <- F5<l>_SLICE` for a lower half, `FX<l>_SLICE` for an upper one: **all 4014** driven halves, and **not one** on the `F<z>_SLICE` a lookup table uses |
+| The chain | `.fixed_conn` throughout with **no mux anywhere**; every one of the 239 maximal runs begins at slice A |
+| Entering it | a cell with propagate **zero** at the bottom of every run, so its carry out is its generate whatever `FCI` carried |
+| Leaving it | a cell with propagate zero at the top, so its sum *is* the carry handed to it |
+| The flip-flops of a carry slice | 419 of them in use. Arithmetic mode takes a slice's lookup tables, **not** its registers |
+| Other logic in a carry tile | 384 lookup tables in slices of a carry tile that are not in `CCU2` mode |
+
+Eighteen distinct truth tables appear across the three files and every one of
+them is an arithmetic lane under the element's equation, which is what makes
+the reading of the nibbles more than a guess:
+
+| `INIT` | propagate | generate | what it is |
+|---|---|---|---|
+| `0x666A` | `a ^ b` | `a` | a two-operand add — the value this flow writes |
+| `0x666C` | `a ^ b` | `b` | the same, generate on the other operand |
+| `0x999A`, `0x999C` | `a ~^ b` | `a`, `b` | a subtract |
+| `0xAAA0`, `0xCCC0` | `a`, `b` | 0 | one operand and the carry: an increment |
+| `0x555A`, `0x333C` | `~a`, `~b` | `a`, `b` | one operand and a constant one |
+| `0x5550`, `0x3330`, `0xFFF0` | `~a`, `~b`, 1 | 0 | constants folded in |
+| `0xAAAA`, `0xCCCC` | `a`, `b` | `a`, `b` | the same thing as `0xAAA0`/`0xCCC0`: where the propagate is zero the generate is too |
+| `0x0000` | 0 | 0 | a carry in of **zero** |
+| `0x000A`, `0x000C` | 0 | `a`, `b` | a carry in off a routed wire |
+| `0x000E` | 0 | `a \| b` | a carry in of **one**, both pins forced high |
+| `0xFFFF` | 1 | 1 | the default, which costs no bits: an unused half, passing the carry through |
+
+So the element's model, which every one of those values satisfies:
+
+```text
+propagate[i] = INIT<i>[12 + 2b + a]      the lookup table, C and D high
+generate[i]  = INIT<i>[2b + a]           its low nibble, a table of its own
+S<i>         = propagate[i] ^ carry[i]
+carry[0]     = CIN
+carry[i+1]   = propagate[i] ? carry[i] : generate[i]
+COUT         = carry[2]
+```
+
+The `INIT` bits are `!`-marked, so the default is **all ones** and a truth
+table of zeros is sixteen bits *set*. `0xFFFF` costs nothing and passes a
+carry through, which is why that is what an unused half is left at.
+
+### The chain's routing, and the direction a guess would have got wrong
+
+This is the part where a mirrored guess would have decoded perfectly and
+computed nothing, which is exactly what the left-edge round nearly did. The
+`PLC2`'s own `bits.db` says it in seven lines and they are the whole answer:
+
+```text
+.fixed_conn FCI_SLICE  FCI            slice A's carry in, from the tile's
+.fixed_conn FCI        HFIE0000       which comes off this wire
+.fixed_conn FCIB_SLICE FCOA_SLICE     B's, from A's
+.fixed_conn FCIC_SLICE FCOB_SLICE
+.fixed_conn FCID_SLICE FCOC_SLICE
+.fixed_conn FCO        FCO_SLICE      slice D's carry out, to the tile's
+.fixed_conn E1_HFIE0000 FCO           and into the tile one column EAST
+```
+
+Three things follow and all three decided code:
+
+- **A chain runs A, B, C, D and then east**, one column at a time, in the
+  same row. `E1_` is "one column east" by `parse::globalise`'s own rule, and
+  `HFIE0000` appears in no other tile type of the database at all. A chain up
+  a column — which is where the iCE40's goes, and what an analogy would have
+  said — does not exist on this part.
+- **Nothing can drive a carry in.** There is no `.mux` anywhere whose sink is
+  `FCI`, `FCI_SLICE` or any `FCI<l>_SLICE`. The interconnect cannot reach the
+  chain, so a chain cannot be entered by routing a zero to it.
+- **The whole chain costs no bits.** Every link is a `.fixed_conn`, which
+  this architecture expresses as a pip with an empty bit pattern. The router
+  routes a carry like any other net and `Routing::verify` walks it back to
+  its driver; it simply leaves no trace in the image.
+
+The vendor's files agree, and they agree in a way that is worth stating
+because it is a property rather than a count: **every one of the 239 maximal
+runs begins at slice A.** No carry slice anywhere in the three files takes
+its carry from a slice in logic mode. That is not a convention — it is the
+only arrangement in which the carry entering a chain is defined.
+
+### How a chain is entered, and the cheaper way this flow does it
+
+`ecppack` spends a whole cell at each end of a chain: one at the bottom whose
+propagate is zero, so that `COUT = generate` whatever `FCI` carried, and one
+at the top whose propagate is zero, so that its *sum* is the carry handed to
+it and the chain's carry out can be read on a wire. `0x0000` injects a zero,
+`0x000A` and `0x000C` inject a routed signal, and `0x000E` with both pins
+forced high injects a one.
+
+This flow spends a **lane**, not a cell, and needs no special `INIT` to do
+it. With both operands zero, `0x666A`'s propagate is `0 ^ 0 = 0` and its
+generate is `0`, so the lane's carry out is zero however `FCI` arrived — and
+`src/fpga/devices/ecp5.dev`'s `param_zero0` / `param_zero1` set that lane's
+`INIT` to `0x0000` as well, so the lane needs **no pins connected at all**
+and no constant routed to it. A 16-bit add is therefore seventeen lanes and
+nine `CCU2C`, and the adder's bit 0 lands on lane 1.
+
+That matters for more than area. Because every chain begins with a lane
+whose propagate is zero, **two unrelated chains may sit end to end in one
+column** and the first cannot corrupt the second — which is what the vendor's
+own files do, and why the leftmost tile of a row, whose `HFIE0000` nothing
+drives, is harmless. The carry off the top of a chain is not read at all:
+an `add` cell is as wide as its result, and a design that wants the carry
+widens its operands.
+
+Nothing in the vendor's files demonstrates the lane arrangement, and nothing
+in them contradicts it. What demonstrates it is `tests/fpga_carry.rs`, where
+`check_equivalent` **proves** the mapped chain equivalent to the adder it
+came from at 16 and 32 bits and at the awkward widths, and
+`a_carry_chain_adds_what_it_was_asked_to_add` in `src/fpga/primitives.rs`,
+which evaluates every input pattern of a six-bit add against the element's
+equation with the dangling `CIN` tried **both** ways and the unconnected
+operand pins tried both ways.
+
+### The seventh place where two features share one bit
+
+`SLICEA.CCU2.INJECT1_0 = NO` is `F8B10`. So is the `.mux F0` source
+`F5A_SLICE`:
+
+```text
+.mux F0
+F0_SLICE -
+F5A_SLICE F8B10
+
+.config_enum SLICEA.CCU2.INJECT1_0 YES
+NO F8B10
+YES !F8B10
+```
+
+One fuse with two names, and the same pairing in all four slices and both
+halves. Read as logic it selects the slice's wide-function output onto the
+tile's `F` wire; read as arithmetic it ungates the carry into the lane's XOR
+and its generate. It is the same gate either way, which is why a carry
+cell's sum comes out on `F5<l>_SLICE` and not on `F<z>_SLICE`.
+
+**The bitstreams measure it rather than merely suggesting it.** 4014 halves
+have `INJECT1_<n> = NO` and 4014 sums are driven — the same number, over 4262
+halves of 2131 cells in three files. If the two were different fuses that
+equality would be a coincidence 248 times over.
+
+The consequence for this flow is small and had to be handled rather than
+ignored: a lane whose sum nothing reads — the lane that enters the chain, and
+the lane left over at the top of an odd-width adder — still needs the bit
+set, so a decoding of the finished image reports a pip the router never
+chose. `TrellisFabric::configure_carry` returns those arcs **by name, from
+the placement**, and the caller adds them to the router's own set before
+comparing. That is an addition and not a relaxation: the comparison is still
+an equality, every arc in it is accounted for by a carry cell that is really
+there, and a bit no carry cell claims still fails. `reticle fpga --bitstream`
+and `chosen_with_carry` in `tests/fpga_trellis.rs` both do it that way.
+
+### What it contends for, and the constraint it forces
+
+**Its slice's two lookup tables, and nothing else.** `BelDecl::blocks` names
+`SLICE<l>.K0` and `SLICE<l>.K1` and stops there, and that is the vendor's
+answer rather than a cautious guess: 419 flip-flops are in use *inside* carry
+slices in their files, and 384 lookup tables are in the other slices of tiles
+that hold one. A model that blocked the tile, or the slice's registers, would
+have routed and would have been wrong in a way no test of this flow's own
+output could have caught — the same trap the distributed RAM round found.
+
+A carry cell takes **no control wire**: no clock, no reset, no clock enable.
+So unlike a distributed RAM, which spends the tile's `LSR1`, it does not
+touch the control-wire budget `SiteRules` models, and the seventh shared bit
+is the only resource it shares with anything.
+
+What it does force is **adjacency**, which nothing else on this part does.
+The carry has no routable path, so cell *n* + 1 must be on the very next
+carry site or there is no path at all — and "the router refuses after a whole
+placement" is the failure this project has twice decided is the wrong one.
+`fpga::place` learnt a second kind of group beside the `rloc` macro:
+
+- `carry_links` reads the relationship **off the fabric**. From each site's
+  `co` pin it follows pips that cost no bits until it reaches some site's
+  `ci` pin, and records the pair when exactly one site is reached. Nothing in
+  the placer names a slice, a letter, a direction or a family; on this die the
+  walk answers "A, B, C, D, then one column east" because that is what the
+  seven `.fixed_conn`s say.
+- `build_carry_chains` reads the chains **off the netlist**: a `co` pin whose
+  signal has exactly one sink, and that sink is another carry cell's `ci`.
+  Anything else leaves the cells unchained and free, which is right — then
+  there is a real net for the router to find a path for and it will say so if
+  it cannot.
+- a chain is then a group anchored on a **site** rather than on a tile, which
+  is the one thing it does not share with an `rloc` macro: where its first
+  cell goes decides where every other cell goes. The legaliser tries candidate
+  start sites nearest the analytic solution first; the annealer moves the
+  chain as a unit by drawing a new start site, exactly as it moves a macro by
+  drawing a new anchor tile. Every iteration order is over a `Vec` or a
+  `BTreeMap` and the placer stays deterministic.
+
+### What places now, and what it costs
+
+`testdata/fpga/ecp5/carry_chain_16.v` is a 16-bit accumulator and nothing
+else, with every port on a top-edge ball of an LFE5U-12F in caBGA-256:
+
+| | |
+|---|---|
+| Cells | **9 `CCU2C`**, 16 `TRELLIS_FF`, 34 `TRELLIS_IO`, 1 `DCCA` — and **0 `LUT4`** |
+| The chain | nine consecutive carry sites: four slices of a tile, then the tile one column east, twice |
+| Bits | 1091 set, of which 36 are the carry cells' mode and inject bits |
+| Routing | 59 of 60 signals (the carry off the top is driven and read by nothing), 455 pips over 514 wires, every sink walked back to its driver |
+| Decoding | **all 1091 bits decode**, 0 unexplained, into 281 arcs, 324 fields and 18 words — and the arcs they select are exactly the 281 the router chose |
+
+`a_carry_chain_places_routes_and_every_bit_of_it_decodes` is that test, and
+it checks the chain's shape against the fabric's own pips rather than against
+a rule written down in the test: for each consecutive pair it walks the
+bitless pips out of one cell's `co` and insists on arriving at the next
+cell's `ci`, and it asserts every pip on that walk costs no bits.
+
+`ip/memory/fifo_sync` goes through the same flow with carry chains in it now
+— its pointers are three `CCU2C` each — at depths 16, 32 and 64, and the
+"every bit decodes" check is not weakened anywhere: the carry chain adds no
+unexplained bit. The design also got *smaller*, which moved two numbers that
+were pinned: `lutram_reset_64` now occupies 59 logic tiles instead of 65 and
+lands 13 flip-flops in RAM tiles instead of 16.
+
+### The ECP5 is shallower than the iCE40 now, and why
+
+| Block | iCE40 HX1K | ECP5 45F, before | ECP5 45F, after |
+|---|---|---|---|
+| `chacha20_core` | depth 8 | depth **87** | depth **4** |
+| `sha256_core` | depth 9 | depth **39** | depth **7** |
+| `rv32i` | depth 10 | depth **34** | depth **33** |
+| `mos6502` | depth 11 | depth **16** | depth **16** |
+
+The crypto blocks end up shallower here than on the iCE40 because of the
+difference between the two carry elements. An `SB_CARRY` computes only the
+carry; the sum is `a ^ b ^ carry` in two XOR cells outside it, which the LUT
+mapper covers and which therefore *count*. A `CCU2C` is the lookup tables, so
+the sum comes out of the element and the adder contributes **nothing** to the
+mapped network. `chacha20_qr` says it in one row: 573 `LUT4` at depth 87
+before, 68 `CCU2C` and 128 `LUT4` at **depth 1** after.
+
+`rv32i` and `mos6502` moving by one level and none is the honest other half.
+They are not adder-bound — their critical paths are instruction decode and
+addressing — so they buy area (408 and 126 fewer `LUT4`) and almost no depth.
+**A depth figure is not a timing figure**, and those two rows are what say so.
+
+### Whether the equivalence proof sees inside a carry cell
+
+**`every_block_maps_to_the_logic_it_was_mapped_from` does not, and cannot.**
+That check proves the *technology mapper* against the AIG it mapped, and a
+carry cell is emitted by `fpga::primitives` **before** that pass runs, as a
+blackbox the AIG never holds. With respect to a `CCU2C` it is vacuous, and
+saying so plainly is better than letting the gate look greener than it is.
+
+Two checks were added that do see inside one, and they share nothing but the
+equation quoted above:
+
+- `tests/fpga_carry.rs` evaluates the whole mapped netlist — `LUT4`,
+  `CCU2C` and the assignments between them — on **every** input combination
+  at 4, 5, 7 and 8 bits in three shapes, with a Rust model of the element
+  over `Logic`; and then replaces each primitive with the same equation
+  written out of `lut`, `xor` and `mux` cells and hands it to
+  `formal::check_equivalent`, which **proves** 16 and 32 bits equivalent, and
+  9, 10 and 17, where the lane the chain spends entering itself lands
+  differently. Combinationally that is a decision procedure and not a sample.
+  It is the only place in this tree where a solver is shown the inside of a
+  carry cell.
+- `a_carry_chain_adds_what_it_was_asked_to_add` in `src/fpga/primitives.rs`
+  does the exhaustive version over the *netlist the mapper produced*, reading
+  each lane's propagate and generate out of the `INIT` the mapper wrote, and
+  varies the two things the fabric decides rather than the netlist: the
+  dangling `CIN` of the first cell, which is whatever the cell to the west
+  left there, and the unconnected operand pins, which on this family read as
+  a **one**. Both ways, same answer.
+
+### What a board would add, and the cheapest experiment
+
+Everything above is off the part. The database, the vendor's bitstreams, the
+placer, the router, the "every bit decodes" check, the solver and the
+exhaustive simulation are all static, and **not one of them can tell you
+whether the clock closes**. That is the whole point of this change and it is
+the one thing a depth figure does not say: depth 4 instead of 87 is a claim
+about how many lookup-table levels the mapped network has, and a `CCU2C`
+chain's real delay is 17 cells of `CIN → COUT` (43 ps each, by the element's
+own `specify` block) plus one `A → S` — fast, dedicated, and still not
+measured here.
+
+**The cheapest experiment is already written and waiting.**
+`tests/usb_crypto_console.rs` is on `master`, `#[ignore]`d, skips with a
+reason when no board is attached, and currently **fails on the board**: it
+asks a Cynthion at 60 MHz for the SHA-256 of the empty message and for a
+ChaCha20 quarter round, and before this change it got seven different answers
+in sixteen runs. If the diagnosis was right it should now get `e3b0c442…`
+every time. That is a far stronger claim than any depth number — a
+deterministic function answering deterministically, repeatedly, from silicon
+— and it costs one `reticle fpga` and one `reticle program`.
+
+Two cheaper things that are *not* substitutes, and it is worth being clear
+about why: the `0.494 bytes/clock` throughput figure the earlier round
+measured was already correct **while the digests were wrong**, because the
+control path closed and the data path did not; and `DONE` asserting says
+nothing at all, as four earlier sections of this document record.
+
+If the digests come out right, what it will have established is that this
+chain's direction is the right way round on silicon and not merely
+self-consistent — the one claim the vendor's bitstreams cannot settle for a
+flow that places its own chains. If they come out wrong, the diagnosis was
+wrong, and that is worth more than a green depth number.
+
 ## A block RAM is on the fabric, and its bits are in three tiles
 
 `ip/memory/fifo_sync` taught this backend that a memory needs a *site*, and the
