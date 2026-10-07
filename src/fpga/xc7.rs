@@ -364,9 +364,30 @@ impl TileBits {
 
 /// Which tiles of a [`Bitstream`] land where in the frame stream.
 ///
-/// A tile may appear more than once when it straddles two configuration
-/// buses; both windows are kept and a bit is placed in whichever one
-/// claims it.
+/// # A tile on two buses
+///
+/// Almost every tile has one window, on the `CLB_IO_CLK` bus. A block RAM
+/// tile has two: its configuration (widths, modes, the pips inside it) is
+/// 28 frames on `CLB_IO_CLK` and its **contents** are 128 frames on the
+/// `BLOCK_RAM` bus, a different block type in the frame address register.
+/// Both windows start at tile-local frame 0 in `tilegrid.json`, and both
+/// `segbits` files (`segbits_bram_l.db` and `segbits_bram_l.block_ram.db`)
+/// number their bits from frame 0 of their own window.
+///
+/// So the windows of one tile are **stacked**, in the order they were
+/// inserted: window 0 owns tile rows `0 .. frames(0)`, window 1 the next
+/// `frames(1)` rows, and so on — the same arrangement
+/// `ecp5::Ecp5FrameMap` uses for a position made of several
+/// tiles. `xray` inserts the `CLB_IO_CLK` window first, so every
+/// tile with one window means exactly what it meant before, and a block
+/// RAM's contents live at rows 28 and up.
+///
+/// This replaced a rule that placed a bit "in whichever window claims
+/// it", which was wrong for exactly the one tile type with two windows:
+/// both start at frame 0, so the first window claimed every bit and a
+/// configuration bit could land in the contents frames or the other way
+/// round. Nothing had configured a block RAM before, so nothing had
+/// noticed.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct FrameMap {
     tiles: HashMap<(u32, u32), Vec<TileBits>>,
@@ -386,6 +407,26 @@ impl FrameMap {
     /// The windows of the tile at `(x, y)`.
     pub fn windows(&self, tile: (u32, u32)) -> &[TileBits] {
         self.tiles.get(&tile).map_or(&[], Vec::as_slice)
+    }
+
+    /// How many tile rows the windows of `(x, y)` stack up to: the sum of
+    /// their frame counts.
+    pub fn bit_rows(&self, tile: (u32, u32)) -> u32 {
+        self.windows(tile).iter().map(|w| w.frames).sum()
+    }
+
+    /// Where tile bit `bit` of the tile at `(x, y)` lands, with the
+    /// windows stacked as the type documentation describes; `None` when
+    /// it falls in no window.
+    pub fn locate(&self, tile: (u32, u32), bit: ConfigBit) -> Option<(FrameAddress, usize, u32)> {
+        let mut row = bit.row;
+        for window in self.windows(tile) {
+            if row < window.frames {
+                return window.locate(ConfigBit::new(row, bit.col));
+            }
+            row -= window.frames;
+        }
+        None
     }
 
     /// How many tiles have a window.
@@ -525,22 +566,14 @@ pub fn frames_from_bitstream(
 ) -> Result<FrameData, Xc7Error> {
     let mut data = FrameData::empty(part.layout.clone());
     for (format, bits) in bitstream.used_tiles() {
-        let windows = map.windows(format.tile);
         for bit in bits {
-            let mut placed = false;
-            for window in windows {
-                if let Some((address, word, index)) = window.locate(bit) {
-                    data.set(address, word, index)?;
-                    placed = true;
-                    break;
-                }
-            }
-            if !placed {
+            let Some((address, word, index)) = map.locate(format.tile, bit) else {
                 return Err(Xc7Error::OutOfTile {
                     tile: format.tile,
                     bit,
                 });
-            }
+            };
+            data.set(address, word, index)?;
         }
     }
     Ok(data)
@@ -1586,6 +1619,41 @@ mod tests {
                 .to_string()
                 .contains("outside the frame window")
         );
+    }
+
+    /// A block RAM tile's two windows both start at tile-local frame 0, so
+    /// they must be stacked and not searched: under the old "first window
+    /// that claims it" rule, row 1 of the second window was claimed by the
+    /// first and landed in the wrong bus. This would catch that rule
+    /// coming back; it would not catch the loader inserting the windows in
+    /// the other order, which `tests/fpga_xray_bram.rs` pins against the
+    /// real `tilegrid.json`.
+    #[test]
+    fn a_tiles_two_windows_are_stacked_not_searched() {
+        let mut map = FrameMap::new();
+        let config = TileBits {
+            baseaddr: 0x0000_0000,
+            frames: 2,
+            offset: 0,
+            words: 1,
+        };
+        let contents = TileBits {
+            baseaddr: 0x0080_0000,
+            frames: 3,
+            offset: 0,
+            words: 1,
+        };
+        map.insert((4, 4), config);
+        map.insert((4, 4), contents);
+        assert_eq!(map.bit_rows((4, 4)), 5);
+        let (address, word, bit) = map.locate((4, 4), ConfigBit::new(1, 3)).unwrap();
+        assert_eq!((address.block, address.minor, word, bit), (0, 1, 0, 3));
+        let (address, _, _) = map.locate((4, 4), ConfigBit::new(2, 3)).unwrap();
+        assert_eq!((address.block, address.minor), (1, 0));
+        let (address, _, _) = map.locate((4, 4), ConfigBit::new(4, 0)).unwrap();
+        assert_eq!((address.block, address.minor), (1, 2));
+        assert!(map.locate((4, 4), ConfigBit::new(5, 0)).is_none());
+        assert!(map.locate((4, 4), ConfigBit::new(0, 32)).is_none());
     }
 
     #[test]

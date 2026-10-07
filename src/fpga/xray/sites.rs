@@ -153,6 +153,13 @@ pub(super) fn site_of_prefix<'a>(tile: &'a XrayTile, prefix: &str) -> Option<&'a
         return None;
     }
 
+    // A block RAM tile's two 18 kbit halves are named by the **parity**
+    // of the site's `Y`, not by rank. See [`block_ram_half`] for why that
+    // is not the same thing as the `IOB` rule below, and where it is from.
+    if base == "RAMB18" {
+        return block_ram_half(&candidates, index);
+    }
+
     match axis {
         Axis::X => candidates.sort_by_key(|(name, _)| site_coordinate(name).map(|c| c.0)),
         Axis::Y => candidates
@@ -164,6 +171,50 @@ pub(super) fn site_of_prefix<'a>(tile: &'a XrayTile, prefix: &str) -> Option<&'a
         // position: the numbering assumption above does not describe
         // this tile, and naming the wrong site would be worse than
         // naming none.
+        return None;
+    }
+    Some(picked)
+}
+
+/// Which of a `BRAM_L` / `BRAM_R` tile's two `RAMB18_X<x>Y<y>` sites the
+/// prefix `RAMB18_Y<index>` names: the one whose `Y` is **even** for
+/// `RAMB18_Y0` and **odd** for `RAMB18_Y1`.
+///
+/// # Where this is from, and why the `IOB` rule would have been wrong
+///
+/// Quoted, not measured here: prjxray's `prjxray/segmaker.py` names the
+/// tag of a `RAMB18` site with `name_bram18`, which is `RAMB18_Y0` when the
+/// site name ends in an even digit and `RAMB18_Y1` when it ends in an odd
+/// one. Its `IOB`, `ILOGIC` and `OLOGIC` sites go through `name_y0y1`, which
+/// is the same parity rule — and in an IO tile the even site is the
+/// *higher* one, which is what [`site_of_prefix`]'s descending rank
+/// measured against Vivado's harness bitstreams. So the rank rule is the
+/// parity rule in disguise for an IO tile, and the disguise falls off in a
+/// block RAM tile, where the even site (`RAMB18_X0Y0`, typed `FIFO18E1` in
+/// `tilegrid.json`) is the **lower** one. Ranking descending would have
+/// put `RAMB18_Y0`'s configuration on the upper half.
+///
+/// Corroborated by the database rather than only by the script: the
+/// contents bits of `RAMB18_Y0` in `segbits_bram_l.block_ram.db` occupy
+/// the low words of the tile's frame window (bits 0..175) and `RAMB18_Y1`
+/// the high ones (176..319), and in every other tile type checked so far a
+/// higher word is a higher site `Y` — `IOB_Y0`, the higher IO site, has
+/// its bits at 64..127 against `IOB_Y1`'s 32..35. Nothing on a part has
+/// confirmed it.
+fn block_ram_half<'a>(
+    candidates: &[&'a (String, String)],
+    index: u32,
+) -> Option<&'a (String, String)> {
+    if index > 1 {
+        return None;
+    }
+    let mut matching = candidates
+        .iter()
+        .filter(|(name, _)| site_coordinate(name).is_some_and(|(_, y)| y % 2 == index));
+    let picked = matching.next().copied()?;
+    // Two sites of one parity would mean the tile is not the shape this
+    // rule describes; naming either would be a guess.
+    if matching.next().is_some() {
         return None;
     }
     Some(picked)
@@ -1673,6 +1724,25 @@ mod tests {
         ] {
             assert_eq!(global_clock_enable_track(feature), None, "{feature}");
         }
+    }
+
+    /// A block RAM half is named by parity, so `RAMB18_Y0` is the lower,
+    /// even site — the opposite of what the `IOB` ranking would give the
+    /// same two names. Would catch the rank rule being applied to block
+    /// RAM; would not catch prjxray's parity rule itself being wrong.
+    #[test]
+    fn a_block_ram_half_is_named_by_parity_not_rank() {
+        let t = tile(&[
+            ("RAMB18_X0Y40", "FIFO18E1"),
+            ("RAMB18_X0Y41", "RAMB18E1"),
+            ("RAMB36_X0Y20", "RAMBFIFO36E1"),
+        ]);
+        assert_eq!(site_of_prefix(&t, "RAMB18_Y0").unwrap().0, "RAMB18_X0Y40");
+        assert_eq!(site_of_prefix(&t, "RAMB18_Y1").unwrap().0, "RAMB18_X0Y41");
+        assert!(site_of_prefix(&t, "RAMB18_Y2").is_none());
+        // And the IO rule is untouched: `IOB_Y0` is still the higher site.
+        let io = tile(&[("IOB_X0Y11", "IOB33S"), ("IOB_X0Y12", "IOB33M")]);
+        assert_eq!(site_of_prefix(&io, "IOB_Y0").unwrap().0, "IOB_X0Y12");
     }
 
     #[test]

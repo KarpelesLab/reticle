@@ -149,6 +149,7 @@ use super::xc7::{FrameMap, Part, TileBits};
 use crate::ir::memfile::FileProvider;
 use crate::json::Json;
 
+mod bram;
 mod carry;
 mod cmt;
 mod dsp;
@@ -156,6 +157,9 @@ mod lutram;
 mod parse;
 mod sites;
 
+pub use bram::{
+    BlockRamError, BlockRamReport, BlockRamTables, TiePolicy, mode_features, tie_policy,
+};
 pub use carry::{CarryPacking, legalise_carries};
 pub use cmt::{ClockManagerError, Counter, PllSettings, counter, pll_registers};
 pub use dsp::{DSP_PRIMITIVE, dsp_refusal};
@@ -443,7 +447,9 @@ pub struct XrayTile {
     /// Its sites, name to site type, in name order.
     pub sites: Vec<(String, String)>,
     /// Where its bits live, one entry per configuration bus it uses, in
-    /// bus-name order.
+    /// frame-address block-type order: `CLB_IO_CLK` first, then
+    /// `BLOCK_RAM`. The frame map stacks them in this order, so a block RAM
+    /// tile's contents are tile rows after its configuration's.
     pub bits: Vec<(String, TileBits)>,
 }
 
@@ -481,8 +487,18 @@ impl FeatureSet {
         let mut sites = HashSet::new();
         for feature in &features {
             let mut parts = feature.name.split('.');
-            if let (Some(head), Some(_), Some(_)) = (parts.next(), parts.next(), parts.next()) {
-                sites.insert(head.to_owned());
+            match (parts.next(), parts.next(), parts.next()) {
+                (Some(head), Some(_), Some(_)) => {
+                    sites.insert(head.to_owned());
+                }
+                // A block RAM half's features are all two components
+                // (`RAMB18_Y0.IN_USE`, `RAMB18_Y0.INIT_00[000]`), so the
+                // length rule never sees the site and would read 37 000
+                // of them as pips; see `bram::is_two_part_site`.
+                (Some(head), Some(_), None) if bram::is_two_part_site(head) => {
+                    sites.insert(head.to_owned());
+                }
+                _ => {}
             }
         }
         let pip_count = features
@@ -499,6 +515,11 @@ impl FeatureSet {
     /// Every feature, in file order.
     pub fn features(&self) -> &[Feature] {
         &self.features
+    }
+
+    /// The features, given back.
+    pub fn into_features(self) -> Vec<Feature> {
+        self.features
     }
 
     /// The feature of that name, without its leading tile type.
@@ -704,18 +725,13 @@ impl XrayDatabase {
 
         // Every tile type's features, read once, whether or not the
         // region uses it: the die-wide count is the measurement.
+        let block_ram_rows = block_ram_rows(&tiles);
         let mut features: HashMap<String, FeatureSet> = HashMap::new();
         for name in &types {
-            let path = format!(
-                "{}/{}/segbits_{}.db",
-                self.root,
-                self.family,
-                name.to_lowercase()
-            );
-            let Some(text) = files.read_file(&path) else {
-                continue;
-            };
-            features.insert((*name).to_owned(), parse::segbits(&text, &path)?);
+            let row = block_ram_rows.get(*name).copied();
+            if let Some(set) = self.features_of(files, name, row)? {
+                features.insert((*name).to_owned(), set);
+            }
         }
 
         // And every tile type's pseudo-pips, which are what say how a
@@ -807,6 +823,7 @@ impl XrayDatabase {
             arch,
             frames,
             clocks: clock_column(&features),
+            block_ram: BlockRamTables::new(&features, &fixed),
             stats,
         })
     }
@@ -880,6 +897,7 @@ impl XrayDatabase {
             }
         }
 
+        let block_ram_rows = block_ram_rows(&tiles);
         let mut features: HashMap<String, FeatureSet> = HashMap::new();
         let mut out = Vec::new();
         let mut tiles_touched = 0usize;
@@ -889,7 +907,11 @@ impl XrayDatabase {
             // `segbits` line uses, remembering where each came from so
             // a matched feature can strike it off.
             let mut ones: HashMap<ConfigBit, (u32, u32, u32)> = HashMap::new();
+            // The windows stack, as `xc7::FrameMap` stacks them.
+            let mut first_row = 0u32;
             for (_, window) in &tile.bits {
+                let base_row = first_row;
+                first_row += window.frames;
                 for row in 0..window.frames {
                     let Some(address) = window.baseaddr.checked_add(row) else {
                         continue;
@@ -902,7 +924,7 @@ impl XrayDatabase {
                             continue;
                         }
                         ones.insert(
-                            ConfigBit::new(row, (*word - window.offset) * 32 + *bit),
+                            ConfigBit::new(base_row + row, (*word - window.offset) * 32 + *bit),
                             (address, *word, *bit),
                         );
                     }
@@ -914,16 +936,10 @@ impl XrayDatabase {
             tiles_touched += 1;
 
             if !features.contains_key(&tile.tile_type) {
-                let path = format!(
-                    "{}/{}/segbits_{}.db",
-                    self.root,
-                    self.family,
-                    tile.tile_type.to_lowercase()
-                );
-                let set = match files.read_file(&path) {
-                    Some(text) => parse::segbits(&text, &path)?,
-                    None => FeatureSet::default(),
-                };
+                let row = block_ram_rows.get(tile.tile_type.as_str()).copied();
+                let set = self
+                    .features_of(files, &tile.tile_type, row)?
+                    .unwrap_or_default();
                 features.insert(tile.tile_type.clone(), set);
             }
             let Some(known) = features.get(&tile.tile_type) else {
@@ -958,6 +974,56 @@ impl XrayDatabase {
             tiles: tiles_touched,
             tiles_without_a_segbits_file: tiles_unnamed,
         })
+    }
+
+    /// Every feature of one tile type: `segbits_<type>.db`, and for a tile
+    /// type with a `BLOCK_RAM` window also `segbits_<type>.block_ram.db`,
+    /// whose frame numbers count from that window's first frame and are
+    /// moved to the tile rows the frame map stacks it at
+    /// (`block_ram_row`). `None` when the type has no `segbits` file.
+    ///
+    /// The contents features (`RAMB18_Y0.INIT_00[000]` and so on) are
+    /// ordinary one-bit features with an index, so they become
+    /// [`ConfigEntry::Param`](super::arch::ConfigEntry::Param) entries on
+    /// the block RAM's bel exactly the way a lookup table's `INIT[63:0]`
+    /// does, and a `RAMB18E1` cell's `INIT_00` reaches the frames with no
+    /// code that knows what a block RAM is. Which frame bit carries which
+    /// `INIT` bit is therefore the database's statement, not this
+    /// crate's: prjxray's fuzzer `026-bram-data` measured it by giving
+    /// Vivado random 256-bit `INIT_xx` values and solving for the bits.
+    fn features_of(
+        &self,
+        files: &dyn FileProvider,
+        tile_type: &str,
+        block_ram_row: Option<u32>,
+    ) -> Result<Option<FeatureSet>, XrayError> {
+        let base = format!(
+            "{}/{}/segbits_{}",
+            self.root,
+            self.family,
+            tile_type.to_lowercase()
+        );
+        let path = format!("{base}.db");
+        let Some(text) = files.read_file(&path) else {
+            return Ok(None);
+        };
+        let set = parse::segbits(&text, &path)?;
+        let Some(row) = block_ram_row else {
+            return Ok(Some(set));
+        };
+        let path = format!("{base}.block_ram.db");
+        let Some(text) = files.read_file(&path) else {
+            return Ok(Some(set));
+        };
+        let contents = parse::segbits(&text, &path)?;
+        let mut all = set.into_features();
+        for mut feature in contents.into_features() {
+            for bit in feature.ones.iter_mut().chain(feature.zeros.iter_mut()) {
+                bit.row += row;
+            }
+            all.push(feature);
+        }
+        Ok(Some(FeatureSet::new(all)))
     }
 
     /// A region that covers the tiles the given package pins sit in,
@@ -1187,16 +1253,22 @@ impl XrayDatabase {
         // bitmap shape. `tilegrid.json` keeps `frames` and `words`
         // constant within a type and varies only `offset`, which is the
         // tile's column inside the frame and belongs to the frame map.
+        // A tile on two configuration buses — a block RAM, whose
+        // contents are on `BLOCK_RAM` — stacks its windows, so its
+        // bitmap is their frames added up; see `xc7::FrameMap`.
         let mut used: BTreeMap<&str, (u32, u32)> = BTreeMap::new();
         for tile in tiles {
             if !region.contains(tile.grid_x, tile.grid_y) {
                 continue;
             }
-            let shape = tile
+            let rows = tile.bits.iter().map(|(_, b)| b.frames).sum();
+            let cols = tile
                 .bits
-                .first()
-                .map_or((0, 0), |(_, b)| (b.frames, b.words * 32));
-            used.entry(&tile.tile_type).or_insert(shape);
+                .iter()
+                .map(|(_, b)| b.words * 32)
+                .max()
+                .unwrap_or(0);
+            used.entry(&tile.tile_type).or_insert((rows, cols));
         }
 
         // Which joins each tile type owns. A `tileconn` entry names two
@@ -1302,6 +1374,9 @@ impl XrayDatabase {
             };
 
             for (to, from, feature) in set.pips() {
+                if bram::is_cascade_input(name, from) {
+                    continue;
+                }
                 let mut bits = feature.ones.clone();
                 let extra = enable_bits(to, from);
                 if !extra.is_empty() {
@@ -1447,6 +1522,28 @@ impl XrayDatabase {
     }
 }
 
+/// The tile row each tile type's `BLOCK_RAM` window starts at, once the
+/// windows are stacked in [`XrayTile::bits`] order; only the types that
+/// have such a window are present. `tilegrid.json` gives every tile of a
+/// type the same window shapes, so the first tile of a type decides.
+fn block_ram_rows(tiles: &[XrayTile]) -> HashMap<&str, u32> {
+    let mut out = HashMap::new();
+    for tile in tiles {
+        if out.contains_key(tile.tile_type.as_str()) {
+            continue;
+        }
+        let mut row = 0u32;
+        for (bus, window) in &tile.bits {
+            if bus == "BLOCK_RAM" {
+                out.insert(tile.tile_type.as_str(), row);
+                break;
+            }
+            row += window.frames;
+        }
+    }
+    out
+}
+
 /// One `tileconn` entry seen from the tile type that owns it: the type
 /// at the other end, the grid delta to it, and the wire pairs.
 type Join<'a> = (&'a str, i32, i32, &'a [(String, String)]);
@@ -1517,6 +1614,9 @@ pub struct XrayFabric {
     /// whole column of tiles rather than to any one pip; see
     /// [`XrayFabric::enable_global_clocks`].
     pub clocks: ClockColumn,
+    /// The block RAM mode features and the interconnect's `VCC_WIRE`
+    /// defaults, for [`XrayFabric::configure_block_rams`].
+    pub block_ram: BlockRamTables,
     /// What the load covered and cost.
     pub stats: XrayStats,
 }

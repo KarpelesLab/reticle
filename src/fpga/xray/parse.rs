@@ -398,7 +398,14 @@ pub(super) fn tilegrid(json: &Json, path: &str) -> Result<Vec<XrayTile>, XrayErr
                     },
                 ));
             }
-            bits.sort_by(|a, b| a.0.cmp(&b.0));
+            // In frame-address block-type order, which puts `CLB_IO_CLK`
+            // (block 0) before `BLOCK_RAM` (block 1). The order is what
+            // the frame map stacks a tile's windows in, so a block RAM
+            // tile's configuration keeps tile rows 0..28 and its contents
+            // come after; name order would have put `BLOCK_RAM` first.
+            bits.sort_by_key(|(bus, window): &(String, TileBits)| {
+                ((window.baseaddr >> 23) & 0x7, bus.clone())
+            });
         }
         out.push(XrayTile {
             name: name.clone(),
@@ -642,6 +649,18 @@ pub(super) fn bels_of(
                 coverage.pins += 1;
             } else {
                 coverage.pins_unresolved += 1;
+            }
+        }
+        // A block RAM's pins are numbered (`p0_addr13`), so they are built
+        // rather than listed; see `bram::bel_pins`.
+        if sub.is_empty() {
+            for (role, wire) in super::bram::bel_pins(&tile.tile_type, prefix) {
+                if wires.contains(wire.as_str()) {
+                    bel.pins.push((role, WireRef::local(wire)));
+                    coverage.pins += 1;
+                } else {
+                    coverage.pins_unresolved += 1;
+                }
             }
         }
         // What a cell of a given primitive costs, where this module

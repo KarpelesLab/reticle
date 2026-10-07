@@ -2861,6 +2861,20 @@ fn needs_global_buffer(
     })
 }
 
+/// Whether the mapped design instantiates one of the device's block RAMs,
+/// which decides whether the loaded region has to reach a block RAM column.
+fn needs_block_ram(
+    design: &reticle::ir::Design,
+    top: reticle::ir::ModuleId,
+    device: &reticle::fpga::Device,
+) -> bool {
+    use reticle::ir::CellKind;
+    design.modules[top].cells.iter().any(|(_, cell)| {
+        matches!(&cell.kind, CellKind::Blackbox(name)
+            if device.block_rams.iter().any(|b| b.name == name.as_str()))
+    })
+}
+
 /// True when the design holds one of the device's clock generators,
 /// which on a 7-series part sit in a clock management tile that the
 /// region around the pins need not reach.
@@ -2981,6 +2995,19 @@ fn write_xc7_bitstream(
                 .map_err(|e| e.to_string())?
                 .or(Some(region));
         }
+        // And a design with a block RAM needs a block RAM column, which
+        // a pad's neighbourhood may not reach. The tile is five
+        // interconnect rows tall and its own grid position is its lowest
+        // row, so the region is grown a few rows past it as well.
+        if let Some(region) = options.region
+            && needs_block_ram(design, top, device)
+        {
+            options.region = db
+                .region_with_site_type(&files, region, "RAMB18E1")
+                .map_err(|e| e.to_string())?
+                .map(|r| GridRegion::new(r.x0, r.y0.saturating_sub(6), r.x1 + 2, r.y1 + 6))
+                .or(Some(region));
+        }
     }
 
     let fabric = db.load(&files, &options).map_err(|e| e.to_string())?;
@@ -3047,6 +3074,18 @@ fn write_xc7_bitstream(
     let pll_bits = fabric
         .configure_clock_managers(design, top, &graph, &netlist, &placement, &mut tiles)
         .map_err(|e| e.to_string())?;
+    // A block RAM's modes, and a value on every input the design leaves
+    // alone: an undriven interconnect input reads one on this family. See
+    // `xray::bram`.
+    let block_rams = if failure.is_none() {
+        fabric
+            .configure_block_rams(
+                design, top, &graph, &netlist, &placement, &routing, &mut tiles,
+            )
+            .map_err(|e| e.to_string())?
+    } else {
+        Default::default()
+    };
     let frames = xc7::frames_from_bitstream(&fabric.part, &tiles, &fabric.frames)
         .map_err(|e| e.to_string())?;
 
@@ -3099,8 +3138,19 @@ fn write_xc7_bitstream(
             "note: {pll_bits} PLL register bit(s); no PLL from this flow has run on a part\n"
         ));
     }
+    note.push_str(&block_rams.to_text());
     if let Some(reason) = &failure {
         note.push_str(&format!("warning: the router gave up: {reason}\n"));
+    }
+    // Every set bit read back through the database, as the ECP5 flow
+    // does: a bit nothing names is a bit nobody can account for.
+    let decoded = db.decode(&files, &frames).map_err(|e| e.to_string())?;
+    note.push_str(&format!("note: {}", decoded.to_text()));
+    if decoded.unexplained > 0 {
+        note.push_str(
+            "warning: some set bits name no feature of the database; the bitstream holds \
+             configuration nobody can account for\n",
+        );
     }
     if routed < routable {
         note.push_str(
