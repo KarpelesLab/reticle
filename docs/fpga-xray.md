@@ -1,5 +1,161 @@
 # A real Xilinx 7-series fabric, and a real `.bit`
 
+## A join on the wrong tile, which welded two rows of interconnect together
+
+**CHECKED and FIXED, 8 October 2026.** This is the defect behind the
+designs on this board that place, route, report every signal routed and
+every bit decoded — and compute nothing. It is not about pads, and it is
+not about how many of them a design has.
+
+A 7-series node is **wires joined across tile boundaries**, and
+`tileconn.json` is the only statement of which wire of which tile is the
+same metal as which wire of its neighbour. Each of its entries names
+**two tile types** and a grid delta, and lists the wire pairs that are
+one node at that delta. The loader turned each pair into two zero-bit
+pips, and a pip belongs to a tile *type*, so all it could say was *"the
+wire called N, `(dx, dy)` tiles from here"*. **The partner type was
+dropped.**
+
+That is fine while two tile types that both have a wire called N can
+never sit at the same delta. On this fabric they can, and the clearest
+case is the clock-management column. A tall `CMT_TOP` is cut into
+`_UPPER_B`, `_UPPER_T`, `_LOWER_B` and `_LOWER_T`; all four name their
+wires `CMT_TOP_*`, and the file pairs, **both at delta `(1, 2)`**:
+
+| | |
+|---|---|
+| `CMT_FIFO_EE4A0_0` | with `CMT_TOP_R_UPPER_B`'s `CMT_TOP_EE4A0_0` |
+| `CMT_FIFO_EE4A0_3` | with `CMT_TOP_R_LOWER_T`'s `CMT_TOP_EE4A0_0` |
+
+`CMT_FIFO_R_X7Y20` is at grid `(7, 136)` and the tile at `(8, 138)` is
+`_LOWER_T`. Both pips were declared on `CMT_FIFO_R`, both resolved, and
+lanes 0 and 3 of that column became **one node** — two different pieces
+of metal, three interconnect rows apart.
+
+What that does to a route is visible in one line of `io_exercise`'s:
+
+```text
+X4Y142/EE4BEG0 -> X5Y142/EE4A0 -> X6Y142/INT_INTERFACE_EE4A0
+   -> X7Y136/CMT_FIFO_EE4A0_0 -> X8Y138/CMT_TOP_EE4A0_0
+   -> X9Y139/VBRK_EE4A0 -> X10Y139/CLBLL_EE4A0 -> X11Y139/EE4B0
+```
+
+An east-going wire cannot change row, and that one enters the column on
+interconnect row 13 and leaves it on row 16. The signal — `btn_c`, a
+pushbutton — was routed, its arcs were in the bitstream, every bit of it
+decoded, and on silicon it arrived nowhere. **68 of `io_exercise`'s hops
+were of this kind.**
+
+Counted over the whole die from `tilegrid.json` and `tileconn.json`
+alone, the old rule made **21 956 joins the file does not state**,
+against 4 717 252 it does:
+
+| | |
+|---|---|
+| `CMT_FIFO_R` → `CMT_TOP_R_LOWER_T` / `_UPPER_B` | 5874 each |
+| `CMT_FIFO_L` → `CMT_TOP_L_LOWER_T` / `_UPPER_B` | 3916 each |
+| `PCIE_INT_INTERFACE_L` / `_R` → `PCIE_BOT` | 1084 each |
+| `BRKH_CLB` → `CLBLM_R`, `CLBLM_L`, `CLBLL_L`, `CLBLL_R` | 72, 48, 44, 24 |
+| `LIOI3` → `LIOI3_TBYTESRC`, `RIOI3` → `RIOI3_TBYTESRC` | 12, 8 |
+
+Two of those matter beyond the count. The **clock-management column** is
+what a signal must cross to get from one side of the die to the other,
+and almost every bogus join is in it. `BRKH_CLB` is the tile that
+**breaks a CLB column at a clock-region boundary**, so a route leaving
+its clock region could be welded to the wrong row on the way. Whether
+`sw_led` and `blink` — the two designs that were ever watched working —
+took a bogus hop was not measured before the fix; what is measured is
+that the two designs that did not work took six and sixty-eight.
+
+The fix is in the model, not in the loader: [`arch::WireRef`] gained a
+`tile_type`, and a reference that names one resolves **only** against a
+tile of that type. `xray` uses it for every join. Nothing else does, and
+the text format grew `name@dx,dy:TYPE` so that `parse(to_text(a)) == a`
+still holds.
+
+### What was measured, and what is still unknown
+
+- `tests/fpga_xray_joins.rs` reads `tileconn.json` a second time,
+  independently of the loader, and checks that **every cross-tile pip of
+  a loaded region is a pair that file states, for the tile types at both
+  ends**. 421 680 cross-tile pips of a 25-by-41 corner of the grid: the
+  left-hand IO column, the clock-management column beside it and the
+  first logic columns. It fails before the fix and passes after, and a
+  second test names the `CMT_FIFO` / `CMT_TOP` pair directly.
+- `io_exercise`: 68 bogus hops before, **0** after. `carry_probe` with
+  `carry_probe_trusted.rcf`: **6** before, **0** after.
+- It does **not** follow that anything now works on the part. Nothing
+  in this section has been on silicon; it says the routing graph no
+  longer contains connections the vendor's own database denies. The
+  board is still the only oracle, and the readings taken on 8 October
+  were taken through this defect and cannot be trusted — see the
+  retractions below.
+- The sweep would not catch a join `tileconn.json` **states** and the
+  loader omits: nothing counts the file's pairs back. A missing join
+  makes a design fail to route, which is loud; a false one was silent,
+  which is why this is the shape of defect worth a test.
+
+### It accounts for every LED of the `carry_probe_trusted` reading
+
+Those six hops of `carry_probe` are not spread at random. Five of the
+seven LEDs read wrong, and the nets carrying the bogus hops are:
+
+| net | bogus hops |
+|---|---|
+| `plain[2]` | **2** |
+| `led_alive` (`plain[22]`) | 1 |
+| `led_plain` (`plain[25]`) | 1 |
+| `led_carry` (`chain[25]`) | 1 |
+| `led_moved` (`moved`) | 1 |
+
+Downstream of a bogus hop a route is connected, by muxes the bitstream
+really does program, to metal that **nothing in the design drives**.
+What such a wire reads is not something the database states — the only
+`default` lines `ppips_int_l.db` has are on the slice's own input muxes
+(`IMUX_L*`, `BYP_ALT*`, `FAN_ALT*`), all `VCC_WIRE` — but this
+repository's experience on both families is that an input nothing drives
+reads as a one, and that is what the readings look like.
+
+Taking that as the level, the whole glance follows:
+
+| LED | net | read | why |
+|---|---|---|---|
+| LD10 `led_alive` | `plain[22]` | solid on | `plain[2]`'s two bogus hops land on the lookup tables of the toggle tree, where `toggle[i] = &plain[i-1:0]`. A constant one there makes every toggle above lane 2 fire on every cycle, so the counter's upper bits run at the oscillator rather than at 12 Hz and 1.5 Hz — which is a solid LED at half brightness, not a blink |
+| LD8 `led_plain` | `plain[25]` | solid on | the same, and a bogus hop of its own |
+| LD9 `led_carry` | `chain[25]` | solid on | a bogus hop of its own |
+| LD7 `led_moved` | `moved` | solid on | a bogus hop of its own; and the latch would close honestly anyway |
+| LD5 `led_differed` | `differed` | solid on | **honestly**: with `plain` corrupted the two counters really do differ, so the latch really does close. This is the LED the retracted carry finding rested on |
+| LD11 `led_zero` | `1'b0` | dark | correct |
+| LD14 `led_one` | `1'b1` | dark | the separate `drive_constant_data` gap, below. Still unfixed |
+
+Nothing is left over, and **none of it needs the clock to be at fault.**
+That matters because it is the opposite of the reading the section below
+drew. It also means the carry chain is **not** implicated: `led_differed`
+closing is fully explained by `plain` being wrong, and says nothing
+about `chain`.
+
+### What this does to "It is the clock"
+
+**The clock-distribution diagnosis below is withdrawn as a conclusion,
+and kept as a reading.** It was inferred from "a 4-bit counter ticks and
+a 26-bit one on the same net does not" and from the five solid LEDs; the
+five solid LEDs are now explained without it, and the `diag` observation
+is explained the same way if the 26-bit counter's path to its pad went
+through a welded join — which is what `diag`'s own placement would have
+to be re-measured to say. The rebuffer-enable counts in the table below
+(4, 4, 6, 8) are real numbers from `--report` and are **not** evidence of
+a fault: nothing has shown that the columns a design needs are not among
+the ones it enables.
+
+What is true of the clock either way: `carry_probe`'s clock net, with the
+fix in, is a single clock region — along `CLK_HROW_R` at grid row 130
+and down one leaf network — and all 54 of its sinks are reached, with
+every cross-tile hop one `tileconn.json` states. A design whose
+flip-flops span *several* clock regions still has nothing measured about
+it, and the oracle for that is still unread: no Vivado bitstream in
+`artix7/harness/` has registers in more than one region.
+
+
 ## Two designs produced by this have run on a real part
 
 On 2026-09-24 the milestone design — two slide switches through one
@@ -182,6 +338,33 @@ neither fault is addressed by it and both stand on current `master`.
 
 ### Most IO pads do not follow their logic in a design with many of them
 
+> **RETRACTED as a diagnosis, and the title is wrong.** It is not about
+> pads and it is not about how many. All 49 of `io_exercise`'s pads are
+> configured correctly, which was measured on 8 October 2026 and is
+> below; the fault was 68 welded joins in the routing, which the section
+> at the top of this document records and fixes. The readings are kept
+> because they are real readings of a real part; the heading and the
+> conclusion are not.
+>
+> **The measurement that killed this theory.** `io_exercise`'s bitstream
+> was decoded and every one of the 49 pads was resolved through
+> `package_pins.csv` to its `IOB` site, its `LIOB33`/`RIOB33` tile and
+> its `_Y0`/`_Y1` half, and the features compared. Every input pad —
+> **including every stuck one** — carries exactly
+> `IN_ONLY`, `LVCMOS25_LVCMOS33_LVTTL.IN`, `PULLTYPE.NONE` with
+> `ILOGIC_Y<n>.ZINV_D` behind it, and every output pad exactly
+> `SLEW.SLOW`, `DRIVE.I12_I16`, `PULLTYPE.NONE` with
+> `OLOGIC_Y<n>.OMUX.D1`, `OQUSED`, `OSERDES.DATA_RATE_TQ.BUF`. For the
+> 32 balls `artix7/harness/basys3/swbut` also drives, that is **feature
+> for feature what Vivado put there** — the same comparison
+> `the_io_path_is_the_one_vivado_built` makes for three pins, now made
+> for thirty-two. Each buffer is also bound to the site its `set_io`
+> names, checked instance by instance against `package_pins.csv`.
+>
+> So the pads were never the problem, and the stuck/working split
+> separates on nothing about the IO: it separates on whether that
+> signal's route took a welded join.
+
 **CHECKED, 8 October 2026**, with `examples/basys3/io_exercise.v`: fifteen
 LEDs each mirroring one switch, five buttons, and the four digits. The
 design was simulated first and passes
@@ -229,6 +412,14 @@ which pads share a tile, or by placement order. The cheap next experiment
 is the same design cut down to only the eight stuck switches — if they
 work in a small design, the fault depends on how many pads are in play.
 
+**Answered, and by none of those.** The split is by whether the net took
+a welded join; the per-net breakdown was not taken for `io_exercise`
+before the fix, only the total of 68. A later board reading also
+withdrew the "stuck high inputs" reading itself: the eight LEDs in
+question were already lit, so flipping their switches proved nothing
+about the *inputs*, and a switch-at-a-time reading found no permutation
+— every responding switch lit the LED directly above it.
+
 ### LD6 is a missing feature, not a dead ball
 
 `blink_carry.rcf`, `blink_carry.v` and `bram_rom.v` all describe LD6
@@ -239,7 +430,33 @@ LD6 works and that this is a programming gap. Supporting that tile type
 is a to-do, not a board limitation, and those three comments should stop
 implying otherwise.
 
+**And the oracle for it is already in the repository, read on
+8 October 2026.** `artix7/harness/basys3/swbut/design.txt` gives U14 as
+`dout[6]`, `package_pins.csv` gives it as `IOB_X0Y0` of
+`LIOB33_SING_X0Y0`, and `design.json`'s `required_features` show Vivado
+configuring it with **exactly the ordinary output recipe**, on the
+`_Y0` half, which is the only half a `_SING` tile has:
+
+| Tile | What Vivado sets |
+|---|---|
+| `LIOB33_SING_X0Y0` | `IOB_Y0.IN_TERM.NONE`, `IOB_Y0.…SLEW.SLOW`, `IOB_Y0.LVCMOS33_LVTTL.DRIVE.I12_I16`, `IOB_Y0.PULLTYPE.NONE` |
+| `LIOI3_SING_X0Y0` | `OLOGIC_Y0.OMUX.D1`, `OLOGIC_Y0.OQUSED`, `OLOGIC_Y0.OSERDES.DATA_RATE_TQ.BUF` |
+
+That is feature for feature what `src/fpga/xray/sites.rs` already emits
+for an `LIOB33` / `LIOI3` output, with `IOB_Y1` and `OLOGIC_Y1` absent.
+So adding the two `_SING` types is a table entry and not a
+reverse-engineering problem. **Not done here**, and nothing about it has
+been on silicon.
+
 ### It is the clock: flip-flops outside some set of columns never tick
+
+> **WITHDRAWN as a conclusion, 8 October 2026, by the section at the top
+> of this document.** Every reading quoted below is explained by a
+> routing-graph defect that welded two rows of interconnect together, and
+> that defect has been measured and fixed. The text is kept because the
+> reasoning is sound given what was known: it is what you conclude when
+> five LEDs on five different nets all read one, and it was wrong only
+> because an undriven wire reads one too.
 
 **This is where the evidence points, and it explains every reading above
 including the two retracted ones.**
@@ -295,7 +512,7 @@ block RAM, a PLL or a pad.
 | flip-flops | CHECKED, by the same two counters |
 | a `CARRY4` chain | **UNKNOWN.** The reading that said "wrong" was retracted; it rested on a pad that does not follow its net |
 | a pad tied to a constant | **UNKNOWN** on the board. The gap in `drive_constant_data` is real in the source and needs no board to see |
-| the global clock reaching every flip-flop | **CHECKED WRONG** — a 4-bit counter ticks while a 26-bit one on the same net does not |
+| the global clock reaching every flip-flop | **UNKNOWN.** Called "CHECKED WRONG" on the strength of five solid LEDs and one frozen counter; the five LEDs turned out to be welded joins (top section) and the frozen counter is explained the same way. Nothing has been shown wrong about the clock itself |
 | `RAMB18E1`, `RAM64X1D`, `PLLE2_BASE` | the part accepts the bitstreams with `DONE` high, which means CRC passed and nothing more. Not run. |
 | the board's serial port | UNRESOLVED. Nothing this flow drives onto A18 has reached the host, including a bare counter bit with no UART in it, so the pin assignment in `examples/soc/board/basys3.rcf` is in doubt and `examples/basys3/selftest.v` cannot yet report. |
 

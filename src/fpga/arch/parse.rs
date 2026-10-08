@@ -699,7 +699,12 @@ fn parse_bit(text: &str) -> Option<ConfigBit> {
     })
 }
 
-/// Parses a wire reference: `name`, `name@dx,dy` or `*name`.
+/// Parses a wire reference: `name`, `name@dx,dy`, `name@dx,dy:TYPE` or
+/// `*name`.
+///
+/// The `:TYPE` form pins the reference to a tile of that type, which is
+/// what [`WireRef::at_in`] is for; no hand-written architecture uses it
+/// and the 7-series loader always does.
 fn parse_wire_ref(text: &str) -> Option<WireRef> {
     if let Some(name) = text.strip_prefix('*') {
         if name.is_empty() {
@@ -711,8 +716,17 @@ fn parse_wire_ref(text: &str) -> Option<WireRef> {
         None if text.is_empty() => None,
         None => Some(WireRef::local(text)),
         Some((name, offset)) => {
+            let (offset, tile_type) = match offset.split_once(':') {
+                Some((offset, tile_type)) if !tile_type.is_empty() => (offset, Some(tile_type)),
+                Some(_) => return None,
+                None => (offset, None),
+            };
             let (dx, dy) = offset.split_once(',')?;
-            Some(WireRef::at(name, dx.parse().ok()?, dy.parse().ok()?))
+            let (dx, dy) = (dx.parse().ok()?, dy.parse().ok()?);
+            Some(match tile_type {
+                Some(tile_type) => WireRef::at_in(name, dx, dy, tile_type),
+                None => WireRef::at(name, dx, dy),
+            })
         }
     }
 }
@@ -982,6 +996,17 @@ end
         assert_eq!(parse_wire_ref("*"), None);
         assert_eq!(parse_wire_ref("a@1"), None);
         assert_eq!(parse_wire_ref("a@x,1"), None);
+        // The type-qualified form, and that it round-trips.
+        assert_eq!(
+            parse_wire_ref("a@1,2:INT_L"),
+            Some(WireRef::at_in("a", 1, 2, "INT_L"))
+        );
+        assert_eq!(WireRef::at_in("a", 1, 2, "INT_L").to_text(), "a@1,2:INT_L");
+        assert_eq!(
+            parse_wire_ref(&WireRef::at_in("a", 0, 0, "INT_L").to_text()),
+            Some(WireRef::at_in("a", 0, 0, "INT_L"))
+        );
+        assert_eq!(parse_wire_ref("a@1,2:"), None);
         assert_eq!(parse_bit("3.20"), Some(ConfigBit::new(3, 20)));
         assert_eq!(parse_bit("3"), None);
         assert_eq!(parse_bit("a.b"), None);

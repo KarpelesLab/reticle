@@ -69,6 +69,17 @@
 //!    configuration bits — which the model already means as "a connection
 //!    that is always there". It is faithful, and it costs one graph edge
 //!    per join per direction; [`XrayStats::joins`] counts them.
+//!
+//!    A `tileconn` entry names **two tile types**, and the far end of
+//!    each pip carries that type — [`WireRef::at_in`] — because the
+//!    offset and the wire name alone are not enough: a tall `CMT_TOP` is
+//!    cut into four types that all name their wires `CMT_TOP_*`, and the
+//!    file pairs two *different* `CMT_FIFO` lanes with the same
+//!    `CMT_TOP_EE4A0_0` at the same offset, one per half. Dropping the
+//!    type welded those two lanes into one node, so a route could enter
+//!    the column on one interconnect row and leave it three rows away,
+//!    with every signal routed and every bit decoding. See
+//!    `docs/fpga-xray.md` and `tests/fpga_xray_joins.rs`.
 //! 2. **A tile's bits live at a frame address, not at a position in a
 //!    per-tile bitmap.** [`Arch`] has nowhere to put a frame address, so
 //!    the mapping comes out beside the architecture as a
@@ -1447,13 +1458,20 @@ impl XrayDatabase {
                     if !bits.is_empty() {
                         stats.coverage.wire_enables += 2;
                     }
+                    // The far end names its tile *type* as well as its
+                    // offset. Without that, a join lands on whatever
+                    // tile sits at the offset and happens to have a wire
+                    // of that name — and `tileconn.json` pairs the same
+                    // name at the same offset for two different types
+                    // wherever a tall tile is cut into an upper and a
+                    // lower half. See `WireRef::tile_type`.
                     tile_type.pips.push(PipDecl {
                         from: WireRef::local(mine.clone()),
-                        to: WireRef::at(theirs.clone(), *dx, *dy),
+                        to: WireRef::at_in(theirs.clone(), *dx, *dy, *other),
                         bits: bits.clone(),
                     });
                     tile_type.pips.push(PipDecl {
-                        from: WireRef::at(theirs.clone(), *dx, *dy),
+                        from: WireRef::at_in(theirs.clone(), *dx, *dy, *other),
                         to: WireRef::local(mine.clone()),
                         bits,
                     });

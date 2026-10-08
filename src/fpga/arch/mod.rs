@@ -171,6 +171,20 @@ pub struct WireRef {
     pub dy: i32,
     /// True when `name` is a global wire rather than a tile wire.
     pub global: bool,
+    /// The tile type the referred-to tile must have, or `None` for any.
+    ///
+    /// A reference by offset and name alone is ambiguous whenever two
+    /// tile types that both declare a wire of that name can sit at the
+    /// same offset. That is not a corner case on a 7-series: the four
+    /// `CMT_TOP_*` types all name their wires `CMT_TOP_*`, and
+    /// `tileconn.json` pairs `CMT_FIFO_EE4A0_0` with
+    /// `CMT_TOP_R_UPPER_B`'s `CMT_TOP_EE4A0_0` and
+    /// `CMT_FIFO_EE4A0_3` with `CMT_TOP_R_LOWER_T`'s wire of the **same
+    /// name**, both at offset `(1, 2)`. Without the type, one of the two
+    /// joins lands on the wrong tile and welds two different pieces of
+    /// metal into one node — see [`super::xray`] and
+    /// `docs/fpga-xray.md`.
+    pub tile_type: Option<String>,
 }
 
 impl WireRef {
@@ -181,6 +195,7 @@ impl WireRef {
             dx: 0,
             dy: 0,
             global: false,
+            tile_type: None,
         }
     }
 
@@ -191,6 +206,21 @@ impl WireRef {
             dx,
             dy,
             global: false,
+            tile_type: None,
+        }
+    }
+
+    /// A reference to a wire of a tile of type `tile_type`, `(dx, dy)`
+    /// tiles away. The reference resolves to nothing when the tile there
+    /// is of another type, which is what makes a join between two
+    /// same-named wires of two different types unambiguous.
+    pub fn at_in(name: impl Into<String>, dx: i32, dy: i32, tile_type: impl Into<String>) -> Self {
+        WireRef {
+            name: name.into(),
+            dx,
+            dy,
+            global: false,
+            tile_type: Some(tile_type.into()),
         }
     }
 
@@ -201,6 +231,7 @@ impl WireRef {
             dx: 0,
             dy: 0,
             global: true,
+            tile_type: None,
         }
     }
 
@@ -208,6 +239,8 @@ impl WireRef {
     pub fn to_text(&self) -> String {
         if self.global {
             format!("*{}", self.name)
+        } else if let Some(tile_type) = &self.tile_type {
+            format!("{}@{},{}:{}", self.name, self.dx, self.dy, tile_type)
         } else if self.dx == 0 && self.dy == 0 {
             self.name.clone()
         } else {
@@ -800,6 +833,15 @@ impl RoutingGraph {
             let oy = i64::from(y) + i64::from(wref.dy);
             let ox = u32::try_from(ox).ok()?;
             let oy = u32::try_from(oy).ok()?;
+            // A reference that names a tile type resolves only against a
+            // tile of that type: see `WireRef::tile_type`.
+            let wrong_type = wref
+                .tile_type
+                .as_deref()
+                .is_some_and(|want| arch.tile_at(ox, oy).map(|t| t.name.as_str()) != Some(want));
+            if wrong_type {
+                return None;
+            }
             index.get(&(ox, oy, wref.name.as_str())).copied()
         };
 

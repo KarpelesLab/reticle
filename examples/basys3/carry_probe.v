@@ -1,12 +1,22 @@
 // Two counters that must agree, one using a `CARRY4` chain and one not,
-// on a Digilent Basys 3 — and on 8 October 2026 they did **not** agree.
+// on a Digilent Basys 3.
 //
-// WHAT WAS MEASURED, and this is the only CHECKED claim on this page: a
-// person at the board read LD4 **lit**, which is the latch that closes
-// the first cycle the two counters differ. So `count + 1` at 26 bits
-// does not compute plus one on this part, while the same increment
-// spelled out as lookup tables does. LD5 was also lit, so the carry
-// counter is not simply frozen — it moves and it is wrong.
+// NOTHING ABOUT THE CARRY CHAIN IS ESTABLISHED BY EITHER READING TAKEN
+// ON 8 OCTOBER 2026, and the retracted text is kept below because the
+// way it misled is the useful part. Both readings were taken through a
+// routing-graph defect — a `tileconn` join that landed on the wrong
+// tile type and welded two interconnect rows together — that corrupted
+// the carry-free counter this design compares against.
+// `docs/fpga-xray.md` accounts for every LED of the second reading
+// without the carry chain being at fault at all. Use
+// `carry_probe_trusted.rcf`, and read the doc first.
+//
+// RETRACTED: "a person at the board read LD4 **lit**, which is the latch
+// that closes the first cycle the two counters differ. So `count + 1` at
+// 26 bits does not compute plus one on this part." LD4 is ball W18,
+// which was later found not to follow its net; and in the re-run on
+// trusted balls the latch closed honestly, because `plain[2]` lost two
+// hops to the welded join and the two counters really did differ.
 //
 // Why this design and not `blink_carry.v`: that one asks a person to
 // judge whether each LED blinks at half the rate of the LED to its
@@ -28,9 +38,11 @@
 // them; it was built to answer "is there a fault" without a person
 // having to interpret anything, and that is all it answers.
 //
-// A SECOND FAULT, visible on the same glance: LD0 is driven by the
-// constant `1'b1` and read **dark**, beside LD1 driven by `1'b0` which
-// also read dark. `techcells::drive_constant_data` builds a real driver
+// A SECOND FAULT, whose code half is real whatever the board says: LD0
+// is driven by the constant `1'b1` and read **dark** (on `carry_probe.rcf`
+// beside LD1 driven by `1'b0`, which also read dark; on
+// `carry_probe_trusted.rcf` LD14 was the constant one and read dark
+// while the constant zero on LD11 correctly did too). `techcells::drive_constant_data` builds a real driver
 // for a constant that reaches a flip-flop's data pin, a distributed
 // RAM's inputs or a carry cell's operands, and **not** for one that
 // reaches an output buffer, so the pad's input is left unrouted. On this
