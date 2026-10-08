@@ -121,9 +121,7 @@ module iso7816_terminal #(
     parameter GAP_ETU          = 256,
     // No `HOST_DIV` here any more: the serial port moved out, so the rate
     // it runs at is the business of whoever instantiates one.
-    parameter WDOG_BITS        = 31,
-    // Received bytes held while the console drains them, as a power of two.
-    parameter FIFO_BITS        = 8
+    parameter WDOG_BITS        = 31
 ) (
     // The system clock, 112 MHz on the board. The top makes it, because a
     // PLL request is only honoured on the top module's nets.
@@ -770,9 +768,9 @@ module iso7816_terminal #(
 
     reg [2:0]   phase = P_IDLE;
     reg [3:0]   pos   = 4'd0;
-    wire [7:0]  pend_byte;
-    wire        pend_bad;
-    wire        pend_mon;
+    reg [7:0]   pend_byte = 8'd0;
+    reg         pend_bad  = 1'b0;
+    reg         pend_mon  = 1'b0;
     // `m` stops card bytes being printed. Counters are untouched.
     //
     // **One bad receiver can starve a shared port.** This half shares
@@ -783,7 +781,7 @@ module iso7816_terminal #(
     // frame dump truncated to two lines of eight. The counters in `s`
     // still say what arrived; only the hex stops.
     reg         mute      = 1'b0;
-    wire        have_byte;
+    reg         have_byte = 1'b0;
     reg [127:0] status_sh = 128'd0;
     reg [5:0]   status_left = 6'd0;
     reg         want_status = 1'b0;
@@ -840,63 +838,54 @@ module iso7816_terminal #(
         end
     end
 
-    // A queue of received bytes, not one.
+    // One byte deep, and a count of what that costs.
     //
-    // **Because the card outruns the console by forty to one.** At F/D = 4 a
-    // byte arrives on the contact every 6 us; printed as `XX` at 115200 one
-    // costs about 260 us, so a one-deep buffer drops almost everything a
-    // card says at the fast rate. The card has things to say after the
-    // display comes up and stops working if they go unanswered, so losing
-    // them is not cosmetic.
+    // **Two queues were tried here and both were reverted.** A 256-entry
+    // `reg [9:0] fifo [0:255]` read at `fifo[fifo_r]` is distributed RAM, and
+    // it silenced this half on the part the moment the card was activated. A
+    // 32-entry packed vector shifted on push and read through a multiplexer --
+    // flops and logic, nothing inferred -- flooded the console with the
+    // banner table's `default` character instead. Both passed
+    // `iso7816_terminal_tb.v`, so neither failure is reproducible off the
+    // board, and a construct that cannot be debugged in simulation has no
+    // business holding a card's replies.
     //
-    // `FIFO_BITS` entries of {monitor, parity bad, byte}. 8 bits is 256,
-    // which holds any T=0 response whole; `lost_q` counts what did not fit
-    // rather than letting it vanish, and `s` reports it.
-    localparam integer FIFO_N = 1 << FIFO_BITS;
-
-    reg [9:0]            fifo [0:FIFO_N-1];
-    reg [FIFO_BITS-1:0]  fifo_w = {FIFO_BITS{1'b0}};
-    reg [FIFO_BITS-1:0]  fifo_r = {FIFO_BITS{1'b0}};
-    reg [15:0]           lost_q = 16'd0;
-
-    wire                 fifo_empty = (fifo_w == fifo_r);
-    wire [FIFO_BITS-1:0] fifo_w_next = fifo_w + {{(FIFO_BITS-1){1'b0}}, 1'b1};
-    wire                 fifo_full = (fifo_w_next == fifo_r);
-
-    // What the emitter sees, unchanged in shape from the one-deep version.
-    wire [9:0] fifo_head = fifo[fifo_r];
-    assign     pend_byte = fifo_head[7:0];
-    assign     pend_bad  = fifo_head[8];
-    assign     pend_mon  = fifo_head[9];
-    assign     have_byte = !fifo_empty;
+    // What that costs, measured: the card's reply to its initialisation frame
+    // came back as `4E 00 00 4E 00 00 31 00 01 60 00 00` with `lost_q` at 7,
+    // because at F/D = 4 a byte lands every 6 us and printing one costs 15 us
+    // at 2.000 Mbaud. Short exchanges survive -- the ATR, the PPS echo and
+    // the frame all show `lost_q` at 0 -- and a burst does not. `lost_q` is
+    // in `s` so this is never silent, and a queue remains the right answer.
+    reg  [15:0] lost_q = 16'd0;
 
     wire        take_card = card_rx_valid && !mute;
     wire        take_mon  = !card_rx_valid && mon_rx_valid && !mute;
     wire        take      = take_card || take_mon;
-    wire [9:0]  take_word = take_card ? {1'b0, card_parity_err, card_rx}
-                                      : {1'b1, mon_parity_err,  mon_rx};
+    wire [7:0]  take_byte = take_card ? card_rx          : mon_rx;
+    wire        take_bad  = take_card ? card_parity_err  : mon_parity_err;
 
     always @(posedge sys) begin
         if (!rst_n) begin
-            fifo_w    <= {FIFO_BITS{1'b0}};
-            fifo_r    <= {FIFO_BITS{1'b0}};
+            have_byte <= 1'b0;
             lost_q    <= 16'd0;
             gap       <= 32'd0;
             line_open <= 1'b0;
         end else begin
             if (take) begin
-                if (fifo_full) begin
+                if (have_byte && !byte_done) begin
                     if (lost_q != 16'hFFFF) lost_q <= lost_q + 16'd1;
                 end else begin
-                    fifo[fifo_w] <= take_word;
-                    fifo_w       <= fifo_w_next;
+                    pend_byte <= take_byte;
+                    pend_bad  <= take_bad;
+                    pend_mon  <= take_mon;
+                    have_byte <= 1'b1;
                 end
                 gap       <= gap_load;
                 line_open <= 1'b1;
             end else if (gap != 0) begin
                 gap <= gap - 1'b1;
             end
-            if (byte_done) fifo_r <= fifo_r + {{(FIFO_BITS-1){1'b0}}, 1'b1};
+            if (byte_done && !take) have_byte <= 1'b0;
             if (eol_done)  line_open <= 1'b0;
         end
     end
@@ -950,6 +939,7 @@ module iso7816_terminal #(
             {4'd5, 2'd0}: banner_ch = "+";
             {4'd5, 2'd1}: banner_ch = "F";
             {4'd5, 2'd2}: banner_ch = "S";
+            {4'd5, 2'd3}: banner_ch = "T";
             {4'd8, 2'd0}: banner_ch = cst_good ? "+" : "-";
             {4'd8, 2'd1}: banner_ch = "C";
             {4'd8, 2'd2}: banner_ch = "S";
@@ -961,6 +951,7 @@ module iso7816_terminal #(
             {4'd6, 2'd0}: banner_ch = "+";
             {4'd6, 2'd1}: banner_ch = "S";
             {4'd6, 2'd2}: banner_ch = "L";
+            {4'd6, 2'd3}: banner_ch = "W";
             default:      banner_ch = "T";
         endcase
     endfunction
