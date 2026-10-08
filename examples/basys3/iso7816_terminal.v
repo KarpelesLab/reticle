@@ -755,6 +755,16 @@ module iso7816_terminal #(
     reg [7:0]   pend_byte = 8'd0;
     reg         pend_bad  = 1'b0;
     reg         pend_mon  = 1'b0;
+    // `m` stops card bytes being printed. Counters are untouched.
+    //
+    // **One bad receiver can starve a shared port.** This half shares
+    // one serial port with a display half, and a mis-sampling receiver
+    // emits three characters per phantom byte: a real card's 14-byte ATR
+    // came back as thirteen hundred characters, which left the arbiter no
+    // room, so the display half's status line came back empty and its
+    // frame dump truncated to two lines of eight. The counters in `s`
+    // still say what arrived; only the hex stops.
+    reg         mute      = 1'b0;
     reg         have_byte = 1'b0;
     reg [127:0] status_sh = 128'd0;
     reg [5:0]   status_left = 6'd0;
@@ -818,14 +828,14 @@ module iso7816_terminal #(
             gap       <= 32'd0;
             line_open <= 1'b0;
         end else begin
-            if (card_rx_valid) begin
+            if (card_rx_valid && !mute) begin
                 pend_byte <= card_rx;
                 pend_bad  <= card_parity_err;
                 pend_mon  <= 1'b0;
                 have_byte <= 1'b1;
                 gap       <= gap_load;
                 line_open <= 1'b1;
-            end else if (mon_rx_valid) begin
+            end else if (mon_rx_valid && !mute) begin
                 // The card's bytes arrive on both receivers and the main one
                 // wins the cycle, so what reaches here is what this terminal
                 // put on the wire itself.
@@ -841,6 +851,11 @@ module iso7816_terminal #(
             if (byte_done) have_byte <= 1'b0;
             if (eol_done)  line_open <= 1'b0;
         end
+    end
+
+    always @(posedge sys) begin
+        if (!rst_n) mute <= 1'b0;
+        else if (cmd_now && cmd_data == 8'h6D) mute <= ~mute;   // 'm'
     end
 
     always @(posedge sys) begin
