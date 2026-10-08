@@ -643,7 +643,7 @@ module iso7816_terminal #(
             card_active <= 1'b0;
             settle      <= {(VCC_BITS + 1){1'b0}};
             held        <= 16'd0;
-            banner      <= 3'd0;
+            banner      <= 4'd0;
             etu_div     <= SLOW_DIV16;
             pps_armed   <= 1'b0;
         end else begin
@@ -676,7 +676,7 @@ module iso7816_terminal #(
                         if (held == RST_HOLD - 1) begin
                             rst_q       <= 1'b1;
                             card_active <= 1'b1;
-                            banner      <= 3'd3;
+                            banner      <= 4'd3;
                             state       <= S_RUN;
                         end else begin
                             held <= held + 16'd1;
