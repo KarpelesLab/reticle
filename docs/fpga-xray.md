@@ -1,5 +1,158 @@
 # A real Xilinx 7-series fabric, and a real `.bit`
 
+## A status word whose fields came back moved, and what it is not
+
+**MEASURED on a Basys 3, 8 October 2026, and NOT YET EXPLAINED.** This
+section is here because the path to the answer is the useful part and
+because four plausible causes have been ruled out with a measurement each.
+
+`examples/basys3/iso7816_terminal.v` builds a 128-bit status word as a
+concatenation of registers and constants, loads it into a 128-bit shift
+register and emits it as 32 hex nibbles. Three readings, taken with the
+design loaded and answering:
+
+| field | holds | read |
+|---|---|---|
+| `CARD_DIV16`, a `localparam [15:0]` | 14 | `0x00A4` |
+| `etu_div`, a `reg [15:0]` | 5208 | `0x14D0` |
+| `etu_div` after a PPS | 56 | `0x0290` |
+
+and the **pure constant** `128'h0123456789ABCDEFFEDCBA9876543210`, pushed
+through the same shift register and the same emitter, came back byte for
+byte exact.
+
+### The arithmetic the reading fits
+
+One rule reproduces all three fields exactly — 48 measured bits, with no
+free parameter beyond the rule itself:
+
+```text
+R[i] = T[i]      for even i
+R[i] = T[i - 4]  for odd  i
+```
+
+`T` is the word the source says, `R` the word that came back. It is
+`R = (T & 0x5555…) | ((T << 4) & 0xAAAA…)`, and it is **forced** to be
+something of this shape: no single offset fits, because bit 34 must have
+offset 0 and bit 57 must have offset 4. Said physically, the odd bits are
+**one shift step ahead** of the even ones. Applied to the known constant
+the same rule gives `0321476D8BA9CFEF…`, which is not what came back — so
+whatever it is, it acts on the status leg and not on the constant leg.
+
+### What it is not
+
+Everything here was measured in-tree, on the mapped netlist of the design
+that was on the board (`examples/basys3/iso7816_terminal_pad.v` plus the
+core and `ip/bus/{uart,iso7816_uart}`), not on a reduction of it.
+
+- **Not the front end.** `reticle sim` on the construct emits the right
+  32 nibbles.
+- **Not generic synthesis or LUT covering.** Each of the 128 `LUT6`s that
+  drive the shift register's `D` was evaluated through its own `INIT`: the
+  status load, the known-constant load and the four-bit shift are all
+  exactly right, for every bit. `reticle fpga --verify` agrees on the
+  mapping, and `tests/fpga_xray_wide.rs` now pins the whole construct.
+- **Not placement legality.** 351 slices hold flip-flops in that design
+  and **not one** of them mixes clock, clock enable, set/reset or
+  synchronous-versus-asynchronous. The placer's own
+  `SiteRules` enforces the first three because they are *wires* a slice
+  shares; the fourth comes along for the ride.
+- **Not the routing.** The 7-series bitstream path never checked this —
+  see the next section — and with the check in place the design routes
+  2867 of 2867 signals and every sink is reached **from its own signal's
+  driver**, with no node carrying two signals.
+
+### The measurement that no static defect can produce
+
+Bit 37 of the word is `CARD_DIV16`'s bit 5. Both the status word and the
+known constant have **zero** there, so the mapper gave that bit a
+two-input lookup table, `f(host_valid, status_sh[33])`, with no
+`want_known` input at all: **the same logic, the same truth table, the
+same inputs under both commands.** Yet bit 37 read one under `s` and zero
+under `k`.
+
+No mis-wiring, no permuted truth table and no wrong tap can do that: all
+three are the same for both commands. So either the defect is **dynamic**
+— timing, or a slice field whose value depends on what the design is doing
+— or **the two readings were not taken from one bitstream**, which would
+make a placement-dependent static defect fit again and is the cheapest
+thing to check next. That the Basys 3's other open symptom changes which
+LED is stuck between builds is a reason to suspect the second.
+
+### What to measure next
+
+- Take the `s` and the `k` readings **from one load of one bitstream**,
+  in one session, and say so. If they disagree across builds the search
+  narrows to placement.
+- Emit the word twice in a row without reloading, and emit 64 nibbles
+  instead of 32. A register one step ahead shows up as a repeat.
+- Read `status_left` and `pos` out alongside the word: the model says the
+  odd bits took one extra step, and a counter that disagrees with the
+  nibble count would say where.
+
+## The 7-series bitstream path never checked its own routing
+
+**CHECKED and FIXED, 8 October 2026.** `reticle fpga --bitstream` went
+place → route → generate, and the only thing it said about the result was
+a count: `N of N signal(s) with a reader routed`. The ECP5 path has walked
+every sink backwards through the pips it was given since it was written —
+`routing.verify`, a dozen lines above where it writes the file — and the
+7-series path did not. A route that occupies the right wires without
+joining them is exactly the defect the section above this one is about, and
+on this family it was the one that could not be caught.
+
+It is called now. Both designs it was tried on pass it, so **it did not
+find anything**: `examples/basys3/iso7816_terminal_pad.v` (2867 signals)
+and the 128-bit shift register of `tests/fpga_xray_wide.rs`. What it costs
+is a walk per sink and it runs only when the router succeeded.
+
+What `verify` cannot see is a pin the right signal reaches **and another
+signal also drives**, because it only ever looks at one signal's pips.
+`tests/fpga_xray_wide.rs` builds the reverse map over every route at once
+and asks the question the other way round; that is also green on both
+designs, and the router's own capacity model is why.
+
+## A register's declared initial value never reaches `INIT`
+
+**CHECKED, 8 October 2026. Real, reproducible without a board, and NOT
+FIXED.** `tests/fpga_xray_wide.rs`'s
+`a_registers_declared_initial_value_reaches_the_flip_flops_init` is the
+reproducer; it is `#[ignore]`d so the gate stays green, and
+`cargo test --all-features --test fpga_xray_wide -- --ignored` shows it.
+
+`reg [15:0] r = 16'h1234;` maps to sixteen `FDRE #(INIT=1'd0)`. The cause
+is one level below the FPGA flow: [`ir::CellKind::Dff`] has **no field for
+a power-up value**, so `techcells::set_params` copies the device file's
+declared default for whichever variant the bit chose and nothing else —
+`FDRE` is `INIT=1'b0` and `FDSE` is `INIT=1'b1` in `src/fpga/devices/xc7.dev`,
+whose `ff` line does not carry the `init` flag that `ice40.dev`'s does.
+
+On this fabric that is not cosmetic. `<letter>FF.ZINI` is an **inverted**
+field — the bit has to be *set* for a flip-flop to come out of
+configuration holding zero — so `INIT` decides the state the part starts
+in. Two consequences, both read off the netlist and neither on a part:
+
+- a register with a declared value starts at **zero**, except in the bits
+  its set/reset drives to one, which start at **one**: `reg [15:0] etu_div
+  = 16'd5208` with `if (fast) etu_div <= 16'd56` maps to flip-flops whose
+  `INIT`s spell **56**, the reset value;
+- a register declared zero that is *set* somewhere starts holding **one**,
+  because that bit took `FDSE`'s default.
+
+**It does not explain either Basys 3 symptom, and this is worth saying.**
+`iso7816_terminal.v` resets `etu_div` to `SLOW_DIV16` as well as declaring
+it, and `ip/bus/iso7816_uart` declares no initial value at all and resets
+everything through `rst_n` — so both designs are indifferent to it. A
+design that relies on a power-up value and has no reset is the one this
+bites, and `examples/basys3/` has several registers declared `= 1'b1`.
+
+Fixing it is a change to the IR: an initial value on `CellKind::Dff`,
+carried through elaboration, generic synthesis, the equivalence checker and
+every backend. Until then the habit is the workaround: **reset what you
+rely on.**
+
+[`ir::CellKind::Dff`]: ../src/ir/cell.rs
+
 ## A join on the wrong tile, which welded two rows of interconnect together
 
 **CHECKED and FIXED, 8 October 2026.** This is the defect behind the

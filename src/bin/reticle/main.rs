@@ -3062,6 +3062,22 @@ fn write_xc7_bitstream(
         }
     };
 
+    // The router says it connected every sink; this walks each sink back
+    // through the pips the design was given and checks that it really did,
+    // and that the signal it arrives from is the one the netlist names.
+    // The ECP5 path has done this since it was written; this one had not,
+    // and a routed design that computes nothing is exactly what it is for.
+    // A route that failed above has nothing to check.
+    if failure.is_none() {
+        let problems = routing.verify(&netlist, &graph, &placement);
+        if !problems.is_empty() {
+            return Err(format!(
+                "the routing does not implement the netlist, so nothing was written: {}",
+                problems.join("; ")
+            ));
+        }
+    }
+
     let mut tiles = bitstream::generate(
         design,
         top,
