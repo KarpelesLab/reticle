@@ -152,6 +152,65 @@ round's carry-operand fix landed, produced a **byte-identical**
 bitstream — the pass reports `0 constant lookup table(s) added` — so
 neither fault is addressed by it and both stand on current `master`.
 
+### Most IO pads do not follow their logic in a design with many of them
+
+**CHECKED, 8 October 2026**, with `examples/basys3/io_exercise.v`: fifteen
+LEDs each mirroring one switch, five buttons, and the four digits. The
+design was simulated first and passes
+(`io_exercise_tb.v`: every switch to its own LED with the LD6 gap, all
+five buttons, all four digit enables), so what follows is the part's
+answer and not the RTL's.
+
+Two readings, all switches down and then all switches up:
+
+| | reads | balls |
+|---|---|---|
+| `sw[5] sw[7] sw[8] sw[9] sw[10] sw[11] sw[14]` | **correctly** | V15 W13 V2 T3 T2 R3 T1 |
+| `sw[0] sw[1] sw[2] sw[3] sw[4] sw[12] sw[13] sw[15]` | **stuck high** | V17 V16 W16 W17 W15 W2 U1 R2 |
+| `sw[6]` | not observable — no LED | W14 |
+| `btn_d` | **correctly** | U17 |
+| `btn_c btn_u btn_l btn_r` | **stuck low** | U18 T18 W19 T17 |
+| all fifteen LEDs | **correctly** (all lit under BTND) | — |
+
+The outputs are affected too, and `an` proves it arithmetically rather
+than by eye: `an = ~(4'd1 << digit)` can only ever have **one** bit low,
+so at most one digit can be enabled at a time — and three digits were lit
+with the fourth dark. The decimal point, which is `~count[25]`, did not
+blink at all, while BTND worked, so the clock and the flip-flops are
+fine and it is that pad that is not following its net.
+
+**The part that makes this a flow defect and not a board fact: V17 and
+V16 are in the stuck set, and those same two balls worked correctly in
+`sw_led`** — a person flipped them and watched the exclusive-or follow
+through all four combinations on the same afternoon. Same balls, same
+board, two designs, opposite results. So the pads are reachable and
+something about configuring many of them at once is wrong.
+
+What the build claims about the same bitstream, which is again the
+uncomfortable part: `22 x IBUF`, `27 x OBUF`, `179 of 179 signal(s) with
+a reader routed`, `0 feature(s) missing`, and on decode `0 bit(s)
+unexplained, 0 tile(s) with no segbits file`.
+
+One figure that looks like evidence and is not: the report's
+`16 io buffer(s)` is the same in a three-pad design as in this
+forty-nine-pad one, so it counts something in the database rather than
+what was configured. Noted because it cost a wrong conclusion.
+
+Not yet established: whether the split is by IO tile type, by bank, by
+which pads share a tile, or by placement order. The cheap next experiment
+is the same design cut down to only the eight stuck switches — if they
+work in a small design, the fault depends on how many pads are in play.
+
+### LD6 is a missing feature, not a dead ball
+
+`blink_carry.rcf`, `blink_carry.v` and `bram_rom.v` all describe LD6
+(ball U14) as skipped because it sits in a `LIOB33_SING` tile this flow's
+IO tables do not describe. That is accurate about the flow and reads as
+if the ball were unusable, which it is not: the board's owner confirms
+LD6 works and that this is a programming gap. Supporting that tile type
+is a to-do, not a board limitation, and those three comments should stop
+implying otherwise.
+
 ### What is now known about this part, in order of confidence
 
 | | |
