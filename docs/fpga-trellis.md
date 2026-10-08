@@ -471,8 +471,10 @@ What is known about it as this is written: the design with **both** cores,
 which did not route at all before (886 nodes still oversubscribed after 40
 iterations and 1 h 50 m), is 7629 `LUT4` and 1018 `CCU2C` at **depth 17**
 instead of 11 955 `LUT4` at depth 87, and its placement comes out as **83
-chains over 1018 cells**; the single-core build is 4427 `LUT4` and 451
-`CCU2C` at **depth 16** instead of 5891 at 39. Neither of those gained a
+dedicated-wiring groups over 1018 cells** — the same 83 under both of the
+two mechanisms this fabric's chain has been through, which is one small
+piece of evidence that they found the same chains; the single-core build is
+4427 `LUT4` and 451 `CCU2C` at **depth 16** instead of 5891 at 39. Neither of those gained a
 cell from the constant drivers, because the design already had the two
 shared constant lookup tables for its flip-flops and a carry cell's
 operand asks for the same two.
@@ -485,9 +487,14 @@ the router's forty-iteration cap and **none of them converged**:
 
 | build | before the chain | with the chain |
 |---|---|---|
-| `WITH_CIPHER=0` (hash) | 5891 `LUT4`, routed **8353 of 8353 signals in 11 m 29 s** | 4427 `LUT4` + 451 `CCU2C`, still iterating at **1 h 26 m** |
-| `WITH_HASH=0` (cipher) | 8375 `LUT4`, routed **10 111 of 10 111 in 4 m 50 s** | 5426 `LUT4` + 683 `CCU2C`, still iterating at **39 m** |
-| both cores | 11 955 `LUT4`, **gave up** after 40 iterations and 1 h 50 m | 7629 `LUT4` + 1018 `CCU2C`, still iterating at **1 h 26 m** |
+| `WITH_CIPHER=0` (hash) | 5891 `LUT4`, routed **8353 of 8353 signals in 11 m 29 s** | 4427 `LUT4` + 451 `CCU2C`, **gave up** after 40 iterations and 1 h 45 m, 366 nodes still oversubscribed |
+| `WITH_HASH=0` (cipher) | 8375 `LUT4`, routed **10 111 of 10 111 in 4 m 50 s** | 5426 `LUT4` + 683 `CCU2C`, **gave up** after 40 iterations and 1 h 11 m, 72 still oversubscribed |
+| both cores | 11 955 `LUT4`, **gave up** after 40 iterations and 1 h 50 m | 7629 `LUT4` + 1018 `CCU2C`, **gave up** after 40 iterations and 4 h 00 m, 5522 nodes still oversubscribed |
+
+The right-hand column is measured on the mechanism the tree ships, which is
+not the one the first attempt used; the two agreed about how many chains
+there are (83 groups over 1018 cells for the both-cores build) and disagreed
+about where they go, and neither converged.
 
 So the design got a third smaller and a factor of five shallower and became
 *harder to route*. Two reasons, and the second is actionable in one line:
@@ -498,17 +505,57 @@ same adder in lookup tables was spread over twice as many tiles with half the
 pins each. The negotiated-congestion router has more to negotiate in the same
 interconnect.
 
-**And the annealer can barely move a chain.** `PlaceOptions`' schedule ends
-at a **one-tile** move window, and a chain is moved by drawing a new *start
-site* inside that window — which for a chain already anchored at slice A of
-its tile means the four carry sites of that one tile, so the whole 17-cell
-chain can shift by at most three slices and only when the sites past its end
-are free. Everything else in the design anneals around chains that are
-essentially frozen where the legaliser put them, and the legaliser packs
-tightly and wires long. The cheapest experiment is to scale a chain's move
-window by its own length in tiles — `window_of`'s `reach` for a chain —
-and re-measure these three rows; it was not tried here because changing the
-placer invalidates every golden and every measurement above it.
+**And the annealer may barely be able to move a chain.** `PlaceOptions`'
+schedule ends at a **one-tile** move window, and a rigid group is moved by
+drawing a new anchor *tile* inside that window — so a group spanning five
+tiles can only ever shift by a fifth of its own length per move, and only
+when every site the fabric's links then hand its members is free. Everything
+else in the design anneals around groups that are nearly where the legaliser
+put them, and the legaliser packs tightly and wires long.
+
+### The move-window experiment was run, and it is not the fix
+
+**CHECKED, and the answer is no.** The experiment the paragraph above asks
+for — scale a rigid group's `reach` in `propose` by the group's own tile
+extent, so that one schedule step means the same *fraction of its own
+length* for a group as it does for a cell — was implemented and both
+placers were run on the console designs, same seed, same everything else:
+
+| build | one-tile window (shipping) | window × group extent |
+|---|---|---|
+| `WITH_CIPHER=0` (hash) | wirelength **54 882**, **366** nodes still oversubscribed after 40 iterations, 1 h 45 m | wirelength **54 719**, **302** oversubscribed, 1 h 45 m |
+| `WITH_HASH=0` (cipher) | wirelength **81 411**, **72** oversubscribed, 1 h 11 m | wirelength **81 115**, **97** oversubscribed, 1 h 11 m |
+| both cores | wirelength **137 708**, **5522** oversubscribed, 4 h 00 m | wirelength **134 397**, **4571** oversubscribed, 3 h 46 m |
+
+So the scaling does what it was meant to do and it does not help: **0.3 % to
+2.4 % off the wirelength and not one of the six runs converged**. The
+residual overuse does not even move consistently — 64 nodes better on the
+hash, 951 better on the both-cores build, and 25 *worse* on the cipher —
+and "better" here means 4571 nodes oversubscribed instead of 5522, which is
+not a different outcome. The change is therefore **not in the tree**: it
+costs a placer behaviour change and every golden that rests on one, and buys
+nothing that gets a design routed.
+
+**What the router itself says the obstacle is, which is not the annealer.**
+Every one of the runs above fails the same way, and the message names it:
+
+```text
+X37Y11/V02S0201 is a control wire of X37Y11: 21 of that tile's bels have a
+pin that can only be reached through it, and 2 signals were routed onto it
+... The placer rejects this arrangement before it is made (`SiteRules` in
+`src/fpga/place.rs`), so a design that gets here has found a control wire
+the architecture does not describe yet
+```
+
+That is the same diagnosis `ip/crypto/sha256/README.md` §8 recorded for the
+both-cores build before the chain existed, and it is a **fabric-description**
+fact rather than a placement-quality one: `SiteRules` believes it already
+forbids the arrangement the router ended up in, so some wire of a logic tile
+that 21 of its bels can only be reached through is not in the architecture's
+control-wire set. Naming that wire class and adding it is the next thing to
+do, and it is a `src/fpga/trellis` change rather than a `src/fpga/place` one.
+The chain did not cause it — it made it easier to hit, by packing more logic
+into fewer tiles.
 
 Nothing about this is a correctness claim either way: the two designs that
 *do* route are on a part and work, and a design that does not converge is
