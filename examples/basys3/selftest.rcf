@@ -1,0 +1,49 @@
+# Digilent Basys 3 (Xilinx XC7A35T-1CPG236C): the pins `selftest.v` uses.
+#
+# PROVENANCE: every pin name is transcribed from
+# `examples/soc/board/basys3.rcf`, which transcribes Digilent's published
+# `Basys-3-Master.xdc`. W5 is the 100 MHz oscillator, U18 the centre
+# pushbutton BTNC, V17/V16/W16 the slide switches SW0..SW2, and A18 the
+# FPGA's transmit pin into the on-board USB-UART bridge (Digilent names
+# it `RsTx`, from the FPGA's point of view).
+#
+# The four-digit display: segments a..g on W7 W6 U8 V8 U5 V5 U7, the
+# decimal point on V7, and the digit anodes `an[0]`..`an[3]` on U2 U4 V4
+# W4. Which end of the glass `an[0]` is at is NOT established here; the
+# design's mode 7 is how to find out, and its header says how to read it.
+#
+# LD6 (U14) is deliberately absent. It is the one pin of a `LIOB33_SING`
+# tile, which this flow has no table for — `lutram.rcf` found that first,
+# and this file skips from LD5 to LD7 for the same reason.
+set_io -io_standard LVCMOS33 clk W5
+set_io -io_standard LVCMOS33 btn U18
+
+set_io -io_standard LVCMOS33 sw[0] V17
+set_io -io_standard LVCMOS33 sw[1] V16
+set_io -io_standard LVCMOS33 sw[2] W16
+
+set_io -io_standard LVCMOS33 led_carry  U16
+set_io -io_standard LVCMOS33 led_bram   E19
+set_io -io_standard LVCMOS33 led_lut    U19
+set_io -io_standard LVCMOS33 led_pll    V19
+set_io -io_standard LVCMOS33 led_locked W18
+set_io -io_standard LVCMOS33 led_all    U15
+set_io -io_standard LVCMOS33 led_alive  V14
+
+set_io -io_standard LVCMOS33 seg[0] W7
+set_io -io_standard LVCMOS33 seg[1] W6
+set_io -io_standard LVCMOS33 seg[2] U8
+set_io -io_standard LVCMOS33 seg[3] V8
+set_io -io_standard LVCMOS33 seg[4] U5
+set_io -io_standard LVCMOS33 seg[5] V5
+set_io -io_standard LVCMOS33 seg[6] U7
+set_io -io_standard LVCMOS33 dp     V7
+set_io -io_standard LVCMOS33 an[0]  U2
+set_io -io_standard LVCMOS33 an[1]  U4
+set_io -io_standard LVCMOS33 an[2]  V4
+set_io -io_standard LVCMOS33 an[3]  W4
+
+set_io -io_standard LVCMOS33 uart_tx_pin A18
+
+create_clock -name sys -period 10.0 clk
+clock_domain sys clk

@@ -86,6 +86,89 @@ differ because the two designs drive different halves of the die, and the
 differences are enumerated below. That comparison is
 `tests/fpga_xray.rs::the_clock_path_is_the_one_vivado_built`.
 
+## A carry chain, on the part, and it is wrong
+
+**CHECKED, 8 October 2026.** `examples/basys3/carry_probe.v` runs two
+26-bit counters off the board's oscillator. One is written `chain + 1`
+and maps onto seven `CARRY4`; the other is written as
+`plain <= plain ^ toggle` with `toggle[i] = &plain[i-1:0]` and maps onto
+no carry cell at all — `blink.v`'s idiom, kept for exactly this purpose.
+Both start at zero and both add one per cycle, so they are equal on every
+cycle, and LD4 latches the first cycle they are not.
+
+A person at the board read **LD4 lit**. LD5, which latches "the carry
+counter left zero", was **also lit**, so the chain is not frozen: it
+moves and it computes something other than plus one.
+
+What the build said about the same bitstream, which is the part worth
+sitting with:
+
+- `7 CARRY4`, `200 of 200 signal(s) with a reader routed`
+- `5969 configuration bit(s) set`, and on decode **`0 bit(s)
+  unexplained, 0 tile(s) with no segbits file`**
+- `carry_probe_tb.v` passes: 5000 cycles with the two counters agreeing
+  exactly, so the RTL is not at fault
+
+So this is the ECP5 lesson again, on a different family and found the
+same way. A design can place, route, produce a bitstream in which every
+set bit decodes back through the vendor's own database into the arcs the
+router chose, pass its own simulation — and compute the wrong number.
+Only the part says so.
+
+**What is not yet established is which carry is wrong.** A chain whose
+`COUT` never reaches the next cell's `CIN`, and a chain whose first
+`CYINIT` is not the one that `+ 1` needs, both show as one lit LED. The
+two are distinguishable: the first makes every fifth bit wrong and the
+second makes the whole count wrong by one, and a design that reports the
+counter's low byte rather than one bit of it would separate them. That is
+the next measurement, not a conclusion to draw from this one.
+
+Note that `97fd6bc` is called *"give a slice's `CARRY4` its pins, its
+muxes and its constants"* and `68bc282` adds a config entry for a pin
+tied to a constant, including `PRECYINIT.C1` for a carry-in of one. Those
+are where to look first, and the fact that they exist is why this needs
+measuring rather than assuming.
+
+### And a constant on a pad, which is a second fault
+
+On the same glance, LD0 — driven by the constant `1'b1` — read **dark**,
+beside LD1 driven by `1'b0`, also dark. Both constant-driven pads are
+dark whatever the constant is, while every pad driven by a register or a
+lookup table behaves: `sw_led`'s exclusive-or followed the switches
+through all four combinations on the same afternoon, and
+`(por == 4'hF)` lit after fifteen clock edges.
+
+The cause is in the flow and not in the fabric.
+`techcells::drive_constant_data` gives a real driver to a constant that
+reaches a flip-flop's data pin, a distributed RAM's inputs, or — since
+the ECP5 carry round — a carry cell's operands. It does **not** cover an
+output buffer's input, so `assign led = 1'b1` leaves the pad's input
+unrouted, and an unrouted input reads low on this family and **high** on
+an ECP5. The same source defect therefore has opposite symptoms on the
+two families, and neither produces a diagnostic.
+
+Rebuilding the identical design on `1f99eb9`, which is where the ECP5
+round's carry-operand fix landed, produced a **byte-identical**
+bitstream — the pass reports `0 constant lookup table(s) added` — so
+neither fault is addressed by it and both stand on current `master`.
+
+### What is now known about this part, in order of confidence
+
+| | |
+|---|---|
+| lookup tables and LVCMOS33 pads | CHECKED twice, by two designs and two people's glances |
+| the 100 MHz oscillator, `BUFG` and the clock tree | CHECKED: a 4-bit counter reaches 15 and stays there, and a 26-bit carry-free counter blinks |
+| flip-flops | CHECKED, by the same two counters |
+| a `CARRY4` chain | **CHECKED WRONG** — this section |
+| a pad tied to a constant | **CHECKED WRONG** — above |
+| `RAMB18E1`, `RAM64X1D`, `PLLE2_BASE` | the part accepts the bitstreams with `DONE` high, which means CRC passed and nothing more. Not run. |
+| the board's serial port | UNRESOLVED. Nothing this flow drives onto A18 has reached the host, including a bare counter bit with no UART in it, so the pin assignment in `examples/soc/board/basys3.rcf` is in doubt and `examples/basys3/selftest.v` cannot yet report. |
+
+All seven designs in `examples/basys3/` were loaded on 8 October 2026 and
+every one brought `DONE` high with no CRC error. That is worth exactly
+what it says and no more: the part accepted the image. Two of them have
+since been shown to compute the wrong thing.
+
 ## Getting the database
 
 It is [`f4pga/prjxray-db`](https://github.com/f4pga/prjxray-db), Project

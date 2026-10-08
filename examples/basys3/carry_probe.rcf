@@ -1,0 +1,10 @@
+set_io -io_standard LVCMOS33 clk W5
+set_io -io_standard LVCMOS33 led_one      U16
+set_io -io_standard LVCMOS33 led_zero     E19
+set_io -io_standard LVCMOS33 led_plain    U19
+set_io -io_standard LVCMOS33 led_carry    V19
+set_io -io_standard LVCMOS33 led_differed W18
+set_io -io_standard LVCMOS33 led_moved    U15
+set_io -io_standard LVCMOS33 led_alive    V14
+create_clock -name sys -period 10.0 clk
+clock_domain sys clk
