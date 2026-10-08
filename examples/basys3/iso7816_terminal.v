@@ -183,8 +183,64 @@ module iso7816_terminal #(
     reg        pad_hi    = 1'b0;   // and after releasing
 
     wire blk_oe, blk_o;
-    assign io_oe = blk_oe | pad_drive;
+    // `pad_const` asserts the enable while leaving the data input on the
+    // **bare constant** leg, which is what the block's own transmission
+    // uses. `pad_drive` instead selects a `1'b0` through this mux, making
+    // the data input a LUT output -- genuinely driven. The two differ in
+    // exactly one thing: whether anything drives the pad's data input.
+    //
+    // That matters because `techcells::drive_constant_data` collects pins
+    // only from flip-flop, LUT-RAM and carry bels; `BelRole::Io` is absent,
+    // so a constant feeding an `IOBUF`'s data input has no driver at all.
+    // If an undriven input reads one, the pad drives the contact high when
+    // enabled -- indistinguishable, on an open-drain line with a pull-up,
+    // from releasing it. `L` drives low and worked; this says whether the
+    // constant leg does too.
+    assign io_oe = blk_oe | pad_drive | pad_const;
     assign io_o  = pad_drive ? 1'b0 : blk_o;
+
+    // `C`: the same two samples as `L`, but with the data input left on the
+    // bare constant.
+    reg        pad_const = 1'b0;
+    reg [1:0]  cst_step  = 2'd0;
+    reg [23:0] cst_t     = 24'd0;
+    reg        cst_lo    = 1'b1;
+    reg        cst_hi    = 1'b0;
+
+    always @(posedge sys) begin
+        if (!rst_n) begin
+            pad_const <= 1'b0;
+            cst_step  <= 2'd0;
+            cst_t     <= 24'd0;
+        end else case (cst_step)
+            2'd0: if (cmd_valid && cmd_data == 8'h43) begin   // 'C'
+                pad_const <= 1'b1;
+                cst_t     <= PAD_HOLD;
+                cst_step  <= 2'd1;
+            end
+            2'd1: begin
+                cst_t <= cst_t - 1'b1;
+                if (cst_t == 24'd1) begin
+                    cst_lo    <= io_i;
+                    pad_const <= 1'b0;
+                    cst_t     <= PAD_HOLD;
+                    cst_step  <= 2'd2;
+                end
+            end
+            2'd2: begin
+                cst_t <= cst_t - 1'b1;
+                if (cst_t == 24'd1) begin
+                    cst_hi   <= io_i;
+                    cst_step <= 2'd3;
+                end
+            end
+            2'd3: cst_step <= 2'd0;
+        endcase
+    end
+
+    wire cst_done = (cst_step == 2'd3);
+    // `+CST` only if the constant leg pulled the contact low and let it rise.
+    wire cst_good = (cst_lo == 1'b0) && (cst_hi == 1'b1);
 
     always @(posedge sys) begin
         if (!rst_n) begin
@@ -482,7 +538,9 @@ module iso7816_terminal #(
     // Nothing is lost in safety: the rate cannot change by accident, only
     // on an explicit command, and the host that sends it has just seen the
     // echo it is deciding on.
-    reg [2:0] banner = 3'd0;  // 1 +VCC 2 +CLK 3 +RST 4 -OFF 5 +FAST 6 +SLOW
+    // 1 +VCC 2 +CLK 3 +RST 4 -OFF 5 +FAST 6 +SLOW 7 +PAD 8 +CST.
+    // Four bits because slot 0 means `none`, so eight was already full.
+    reg [3:0] banner = 4'd0;
 
     // =================================================================
     // The sequencer
@@ -520,31 +578,31 @@ module iso7816_terminal #(
             etu_div     <= SLOW_DIV16;
             pps_armed   <= 1'b0;
         end else begin
-            banner <= 3'd0;      // a pulse, not a level
+            banner <= 4'd0;      // a pulse, not a level
             case (state)
                 S_IDLE:
                     if (cmd_valid && cmd_data == 8'h41) begin   // 'A'
                         vcc_q   <= 1'b1;
                         settle  <= {1'b1, {VCC_BITS{1'b0}}};
                         etu_div <= SLOW_DIV16;
-                        banner  <= 3'd1;
+                        banner  <= 4'd1;
                         state   <= S_VCC;
                     end
                 S_VCC:
                     if (wdog_bite) begin
                         vcc_q  <= 1'b0; clk_on <= 1'b0;
-                        banner <= 3'd4; state <= S_OFF;
+                        banner <= 4'd4; state <= S_OFF;
                     end else if (settle != 0) settle <= settle - 1'b1;
                     else begin
                         clk_on <= 1'b1;
                         held   <= 16'd0;
-                        banner <= 3'd2;
+                        banner <= 4'd2;
                         state  <= S_CLK;
                     end
                 S_CLK:
                     if (wdog_bite) begin
                         rst_q <= 1'b0; clk_on <= 1'b0; vcc_q <= 1'b0;
-                        banner <= 3'd4; state <= S_OFF;
+                        banner <= 4'd4; state <= S_OFF;
                     end else if (crise) begin
                         if (held == RST_HOLD - 1) begin
                             rst_q       <= 1'b1;
@@ -563,13 +621,14 @@ module iso7816_terminal #(
                     // The host decides, having seen the echo.
                     if (cmd_valid && cmd_data == 8'h46) begin      // 'F'
                         etu_div <= FAST_DIV16;
-                        banner  <= 3'd5;
+                        banner  <= 4'd5;
                     end
                     if (cmd_valid && cmd_data == 8'h53) begin      // 'S'
                         etu_div <= SLOW_DIV16;
-                        banner  <= 3'd6;
+                        banner  <= 4'd6;
                     end
-                    if (pad_done) banner <= 3'd7;
+                    if (pad_done) banner <= 4'd7;
+                    if (cst_done) banner <= 4'd8;
                     if ((cmd_valid && cmd_data == 8'h44) || wdog_bite) begin
                         rst_q       <= 1'b0;
                         clk_on      <= 1'b0;
@@ -582,7 +641,7 @@ module iso7816_terminal #(
                     if (settle != 0) settle <= settle - 1'b1;
                     else begin
                         vcc_q  <= 1'b0;
-                        banner <= 3'd4;
+                        banner <= 4'd4;
                         state  <= S_OFF;
                     end
                 default: state <= S_IDLE;
@@ -643,10 +702,11 @@ module iso7816_terminal #(
                          : GAP_LOAD_SLOW;
 
     reg p_vcc = 1'b0, p_clk = 1'b0, p_rst = 1'b0, p_off = 1'b0,
-        p_fast = 1'b0, p_slow = 1'b0, p_pad = 1'b0;
-    wire [2:0] want_banner = p_vcc ? 3'd1 : p_clk ? 3'd2 : p_rst ? 3'd3
-                           : p_fast ? 3'd5 : p_slow ? 3'd6 : p_pad ? 3'd7 : p_off ? 3'd4
-                           : 3'd0;
+        p_fast = 1'b0, p_slow = 1'b0, p_pad = 1'b0, p_cst = 1'b0;
+    wire [3:0] want_banner = p_vcc ? 4'd1 : p_clk ? 4'd2 : p_rst ? 4'd3
+                           : p_fast ? 4'd5 : p_slow ? 4'd6 : p_pad ? 4'd7
+                           : p_cst ? 4'd8 : p_off ? 4'd4
+                           : 4'd0;
 
     wire banner_done = (phase == P_BANNER) && (pos == 4'd5) && host_valid && host_ready;
     wire byte_done   = (phase == P_BYTE)   && (pos == 4'd2) && host_valid && host_ready;
@@ -655,26 +715,28 @@ module iso7816_terminal #(
     always @(posedge sys) begin
         if (!rst_n) begin
             p_vcc <= 1'b0; p_clk <= 1'b0; p_rst <= 1'b0; p_off <= 1'b0;
-            p_fast <= 1'b0; p_slow <= 1'b0; p_pad <= 1'b0;
+            p_fast <= 1'b0; p_slow <= 1'b0; p_pad <= 1'b0; p_cst <= 1'b0;
         end else begin
             case (banner)
-                3'd1: p_vcc <= 1'b1;
-                3'd2: p_clk <= 1'b1;
-                3'd3: p_rst <= 1'b1;
-                3'd4: p_off <= 1'b1;
-                3'd5: p_fast <= 1'b1;
-                3'd6: p_slow <= 1'b1;
-                3'd7: p_pad  <= 1'b1;
+                4'd1: p_vcc <= 1'b1;
+                4'd2: p_clk <= 1'b1;
+                4'd3: p_rst <= 1'b1;
+                4'd4: p_off <= 1'b1;
+                4'd5: p_fast <= 1'b1;
+                4'd6: p_slow <= 1'b1;
+                4'd7: p_pad  <= 1'b1;
+                4'd8: p_cst  <= 1'b1;
                 default: ;
             endcase
             if (banner_done) begin
                 case (want_banner)
-                    3'd1: p_vcc <= 1'b0;
-                    3'd2: p_clk <= 1'b0;
-                    3'd3: p_rst <= 1'b0;
-                    3'd5: p_fast <= 1'b0;
-                    3'd6: p_slow <= 1'b0;
-                    3'd7: p_pad  <= 1'b0;
+                    4'd1: p_vcc <= 1'b0;
+                    4'd2: p_clk <= 1'b0;
+                    4'd3: p_rst <= 1'b0;
+                    4'd5: p_fast <= 1'b0;
+                    4'd6: p_slow <= 1'b0;
+                    4'd7: p_pad  <= 1'b0;
+                    4'd8: p_cst  <= 1'b0;
                     default: p_off <= 1'b0;
                 endcase
             end
@@ -734,35 +796,39 @@ module iso7816_terminal #(
     endfunction
 
     function [7:0] banner_ch;
-        input [2:0] which;
+        input [3:0] which;
         input [1:0] at;
         case ({which, at})
-            {3'd1, 2'd0}: banner_ch = "+";
-            {3'd1, 2'd1}: banner_ch = "V";
-            {3'd1, 2'd2}: banner_ch = "C";
-            {3'd1, 2'd3}: banner_ch = "C";
-            {3'd2, 2'd0}: banner_ch = "+";
-            {3'd2, 2'd1}: banner_ch = "C";
-            {3'd2, 2'd2}: banner_ch = "L";
-            {3'd2, 2'd3}: banner_ch = "K";
-            {3'd3, 2'd0}: banner_ch = "+";
-            {3'd3, 2'd1}: banner_ch = "R";
-            {3'd3, 2'd2}: banner_ch = "S";
-            {3'd3, 2'd3}: banner_ch = "T";
-            {3'd4, 2'd0}: banner_ch = "-";
-            {3'd4, 2'd1}: banner_ch = "O";
-            {3'd4, 2'd2}: banner_ch = "F";
-            {3'd4, 2'd3}: banner_ch = "F";
-            {3'd5, 2'd0}: banner_ch = "+";
-            {3'd5, 2'd1}: banner_ch = "F";
-            {3'd5, 2'd2}: banner_ch = "S";
-            {3'd7, 2'd0}: banner_ch = pad_good ? "+" : "-";
-            {3'd7, 2'd1}: banner_ch = "P";
-            {3'd7, 2'd2}: banner_ch = "A";
-            {3'd7, 2'd3}: banner_ch = "D";
-            {3'd6, 2'd0}: banner_ch = "+";
-            {3'd6, 2'd1}: banner_ch = "S";
-            {3'd6, 2'd2}: banner_ch = "L";
+            {4'd1, 2'd0}: banner_ch = "+";
+            {4'd1, 2'd1}: banner_ch = "V";
+            {4'd1, 2'd2}: banner_ch = "C";
+            {4'd1, 2'd3}: banner_ch = "C";
+            {4'd2, 2'd0}: banner_ch = "+";
+            {4'd2, 2'd1}: banner_ch = "C";
+            {4'd2, 2'd2}: banner_ch = "L";
+            {4'd2, 2'd3}: banner_ch = "K";
+            {4'd3, 2'd0}: banner_ch = "+";
+            {4'd3, 2'd1}: banner_ch = "R";
+            {4'd3, 2'd2}: banner_ch = "S";
+            {4'd3, 2'd3}: banner_ch = "T";
+            {4'd4, 2'd0}: banner_ch = "-";
+            {4'd4, 2'd1}: banner_ch = "O";
+            {4'd4, 2'd2}: banner_ch = "F";
+            {4'd4, 2'd3}: banner_ch = "F";
+            {4'd5, 2'd0}: banner_ch = "+";
+            {4'd5, 2'd1}: banner_ch = "F";
+            {4'd5, 2'd2}: banner_ch = "S";
+            {4'd8, 2'd0}: banner_ch = cst_good ? "+" : "-";
+            {4'd8, 2'd1}: banner_ch = "C";
+            {4'd8, 2'd2}: banner_ch = "S";
+            {4'd8, 2'd3}: banner_ch = "T";
+            {4'd7, 2'd0}: banner_ch = pad_good ? "+" : "-";
+            {4'd7, 2'd1}: banner_ch = "P";
+            {4'd7, 2'd2}: banner_ch = "A";
+            {4'd7, 2'd3}: banner_ch = "D";
+            {4'd6, 2'd0}: banner_ch = "+";
+            {4'd6, 2'd1}: banner_ch = "S";
+            {4'd6, 2'd2}: banner_ch = "L";
             default:      banner_ch = "T";
         endcase
     endfunction
@@ -787,7 +853,7 @@ module iso7816_terminal #(
         end else if (!host_valid) begin
             case (phase)
                 P_IDLE:
-                    if (want_banner != 3'd0)      begin phase <= P_BANNER; pos <= 4'd0; end
+                    if (want_banner != 4'd0)      begin phase <= P_BANNER; pos <= 4'd0; end
                     else if (want_known) begin
                         // Every nibble distinct. If this comes back
                         // altered, the fault is the path or the way

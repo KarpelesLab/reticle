@@ -468,7 +468,7 @@ pub struct Arch {
     /// with the reason, in ball order.
     ///
     /// A loader that knows *why* a ball is unreachable puts the sentence
-    /// here, and [`super::place`] quotes it when a design constrains a
+    /// here, and [`super::place()`] quotes it when a design constrains a
     /// port to one. Without it the only thing placement can say is that
     /// the ball maps to no usable site, which is true of a ball that is
     /// a ground pin, of one whose tile type the loader has no tables
