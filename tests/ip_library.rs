@@ -23,6 +23,7 @@
 //! | `a_streams_ready_is_a_function_of_registers` | every block with a ready/valid handshake has a `ready` and a `valid` the timing graph shows depend on **no input port** — including `ip/bus/uart`, whose `rx_valid` and four error flags must not reach back through `rx_ready` — which is the rule `ip/crypto/chacha20`'s header states and nothing used to check; and every output of `spi_display_rx`, whose inputs are asynchronous pins, is held to the same walk |
 //! | `axil_gpio_matches_the_axi4lite_definition` | `bus::match_ports` recognises the GPIO's bus port |
 //! | `spi_display_rx_is_one_clock_domain` | the one block fed by an external clock does **not** clock on it: one domain, no crossing |
+//! | `iso7816_uart_talks_to_a_model_card` | the smart card character layer's own HDL testbench, run here so that CI executes it: a model card on the other end of one open-drain wire, through a rate change, both conventions, a parity error each way and a card that never answers |
 //! | `cdc_*`, `fifo_async_*` | `timing::analyze_cdc` calls every crossing a synchroniser, never an unsynchronised one |
 //! | the rest | behaviour, driven through `sim::Simulator` |
 //!
@@ -305,6 +306,20 @@ const VARIANTS: &[Variant] = &[
         package: "spi_display_rx",
         top: "spi_display_rx",
         params: &[("FRAME_MODE", "2")],
+    },
+    // The smart card character layer, with the T=0 parity exchange and
+    // without it. The pair of rows is what the error pulse, the 11.5 etu
+    // sample and the repeat cost, which is the question a reader has
+    // about a parameter whose whole job is to be turned off.
+    Variant {
+        package: "iso7816_uart",
+        top: "iso7816_uart",
+        params: &[("PARITY_RETRY", "1")],
+    },
+    Variant {
+        package: "iso7816_uart",
+        top: "iso7816_uart",
+        params: &[("PARITY_RETRY", "0")],
     },
     Variant {
         package: "pwm",
@@ -725,6 +740,63 @@ fn design_of(package: &str, top: &str, params: &[(&str, &str)]) -> Design {
         problems.render(&map)
     );
     design
+}
+
+/// Elaborates one package's sources **plus a testbench of its own**,
+/// with the testbench as the top.
+///
+/// A `_tb.v` is deliberately not a `source` line in a manifest — it is
+/// not part of the block and a design that depends on the block must not
+/// get it — so it cannot come in through [`gather`] and is named here.
+/// `bench` is relative to the package's directory, as a manifest spells
+/// a source.
+fn testbench_design(package: &str, bench: &str, top: &str) -> Design {
+    let mut sources = Vec::new();
+    gather(package, &mut BTreeSet::new(), &mut sources);
+    let path = format!("{}/{bench}", package_dir(package));
+    let text = read(&path).unwrap_or_else(|| panic!("no {path}"));
+    sources.push((path, text));
+
+    let mut map = SourceMap::new();
+    let mut diags = Diagnostics::new();
+    let mut files = Vec::with_capacity(sources.len());
+    for (path, text) in &sources {
+        let id = map.add(path.clone(), text).expect("source fits");
+        files.push(parse_source(
+            &mut map,
+            id,
+            Dialect::Verilog2005,
+            &mut NoIncludes,
+            &mut diags,
+        ));
+    }
+    assert!(
+        !diags.has_errors(),
+        "{package}'s testbench does not parse:\n{}",
+        diags.render(&map)
+    );
+
+    let options = ElabOptions::new(Dialect::Verilog2005).with_top(top);
+    let refs: Vec<_> = files.iter().collect();
+    let design = elaborate(&refs, &options, &mut diags);
+    assert!(
+        !diags.has_errors(),
+        "{top} does not elaborate:\n{}",
+        diags.render(&map)
+    );
+    // A warning here is a width truncation or an unreset register in the
+    // testbench itself, and the block's README promises there are none.
+    let complaints: Vec<String> = diags
+        .iter()
+        .filter(|d| d.severity >= Severity::Warning)
+        .map(|d| format!("{}: {}", d.severity, d.message))
+        .collect();
+    assert!(
+        complaints.is_empty(),
+        "{top} elaborates with complaints:\n  {}",
+        complaints.join("\n  ")
+    );
+    design.unwrap_or_else(|| panic!("{top} produced no design"))
 }
 
 /// A design flattened onto its top, which is what both the measurements
@@ -4826,6 +4898,52 @@ fn spi_display_rx_is_one_clock_domain() {
         report.crossings.is_empty(),
         "nothing in spi_display_rx should cross a domain:\n{}",
         report.render()
+    );
+}
+
+/// `ip/bus/iso7816_uart` against the model card in its own testbench.
+///
+/// The testbench is **HDL and not Rust**, which is a departure from the
+/// rest of this file and is on purpose: the far side of a smart card
+/// contact is a timed open-drain wire, and a model of it wants `#`
+/// delays in absolute simulation time rather than a loop over clock
+/// edges. `ip/video/ssd1306_slave/rtl/ssd1306_slave_tb.v` is written the
+/// same way for the same reason. What this test adds is that the
+/// testbench **runs in CI**: a `_tb.v` nothing executes is a file, not a
+/// test.
+///
+/// Everything it checks is in its own header, and the short version is
+/// that it is fifteen sections of protocol with every one of the five
+/// counters compared against a total the testbench keeps itself at
+/// eighteen checkpoints, **including before anything is driven** —
+/// which is the case `ip/bus/spi_display_rx` failed and fifteen of its
+/// own testbenches missed.
+///
+/// What this test would catch beyond the assertions in that file: a
+/// simulator message of any kind, and a testbench that stops without
+/// reaching `$finish`, which is how its own watchdog reports a hang.
+///
+/// What it would not catch: anything about a real card or a real part.
+/// Nothing in this block has been near either.
+#[test]
+fn iso7816_uart_talks_to_a_model_card() {
+    let design = testbench_design("iso7816_uart", "rtl/iso7816_uart_tb.v", "iso7816_uart_tb");
+    let mut sim = simulate(&design, "iso7816_uart_tb");
+    sim.run();
+    let printed = sim.output().to_owned();
+    let messages: Vec<String> = sim.messages().iter().map(|d| d.message.clone()).collect();
+    assert!(
+        messages.is_empty(),
+        "the simulator complained:\n  {}\noutput:\n{printed}",
+        messages.join("\n  ")
+    );
+    assert!(
+        sim.finished(),
+        "the testbench did not reach $finish:\n{printed}"
+    );
+    assert!(
+        printed.starts_with("PASS:"),
+        "the model card session did not pass:\n{printed}"
     );
 }
 
@@ -24381,6 +24499,42 @@ fn a_streams_ready_is_a_function_of_registers() {
             inputs.is_empty(),
             "spi_display_rx: `{port}` depends combinationally on {inputs:?}, \
              which puts an asynchronous pin into a consumer's logic"
+        );
+    }
+    // `ip/bus/iso7816_uart` has both handshakes and an asynchronous pin,
+    // so both halves of the rule apply to it at once. `tx_ready` must
+    // not reach back through `tx_valid`; `rx_valid` and the three flags
+    // beside it must not reach back through `rx_ready`; and every output
+    // a design reads must be a function of registers, because `io_i` is
+    // a pad and a consumer fed combinationally off one has no
+    // synchroniser in front of it.
+    //
+    // `io_oe` is in the list for a different reason, and it is the one
+    // worth stating: an output enable that depended on `io_i` would be a
+    // combinational loop the moment the pad is wired to the pin, since
+    // `io_i` is the wire `io_oe` drives. `io_o` is a constant here, so an
+    // empty answer for it is also the statement that nothing can ever
+    // drive this open-drain line high.
+    for port in [
+        "tx_ready",
+        "tx_abort",
+        "rx_data",
+        "rx_valid",
+        "rx_parity_error",
+        "rx_overrun",
+        "rx_timeout",
+        "io_oe",
+        "io_o",
+        "tx_char_count",
+        "rx_char_count",
+        "parity_error_count",
+        "repeat_count",
+        "timeout_count",
+    ] {
+        let inputs = combinational_inputs_of("iso7816_uart", "iso7816_uart", &[], port);
+        assert!(
+            inputs.is_empty(),
+            "iso7816_uart: `{port}` depends combinationally on {inputs:?}"
         );
     }
 }

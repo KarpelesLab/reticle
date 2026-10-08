@@ -1,0 +1,120 @@
+# iso7816_uart: the character layer of an ISO/IEC 7816-3 smart card
+# interface, from the **terminal's** side — one wire, half duplex, open
+# drain, 8E2, and a rate that changes between characters.
+#
+# What is on the other side: a smart card, or a device that speaks like
+# one. The terminal drives the card clock and reset; **neither is in this
+# block**. This is the character layer only, and the activation sequence
+# is a separate concern.
+#
+# **The protocol is QUOTED** from ISO/IEC 7816-3 as it was described to
+# this project: the etu as F/D card clocks (default F=372, D=1, so
+# 21505 baud at 8 MHz), the eight-data-bit even-parity frame with a guard
+# time of at least 2 etu, the direct and inverse conventions and what each
+# inverts, the T=0 error pulse at 10.5 etu and the sample at 11.5, TC1 as
+# 0 to 254 extra guard etu, and the waiting time. **No card and no part
+# has run this block**, and README.md §1 says so where a reader cannot
+# miss it.
+#
+# The rate is a run-time input in **system clock cycles per etu**, which
+# is `ip/bus/uart`'s `div` convention. On the intended board the system
+# clock is 112 MHz, chosen because it divides by an even number to every
+# card clock the owner wants (8, 7, 5.6, 4, 3.5, 2, 1.75 and 1 MHz, at
+# divisors 14, 16, 20, 28, 32, 56, 64 and 112), so `etu_div` is
+# `(F/D) * divisor` and is an exact whole number at every rate: 5208 for
+# the default F/D at an 8 MHz card clock, which is 21505 baud, and 56 for
+# F/D = 4, which is 2 Mbaud. It is read once per character, so a PPS
+# exchange changes the rate between characters with no rebuild — which is
+# the requirement this block was written for, and
+# `rtl/iso7816_uart_tb.v` tests exactly that transition rather than the
+# two rates separately.
+#
+# `active` holds the block **inert** so that an activation sequencer can
+# own the line: the wire released, the transmitter idle and refusing
+# bytes, anything in flight abandoned with `tx_abort`, and the receiver
+# held off. That matters because the board switches the card's VCC through
+# an external high-side switch, and the deactivation order is mandated —
+# RST low, CLK stopped low, **IO released**, then VCC off. Driving a pin
+# into an unpowered device forward-biases its ESD diodes, so it is a
+# hazard requirement and not a nicety. Releasing the line is the safe
+# state, because an open-drain bus idles high through its pull-up and a
+# released line is indistinguishable from an idle one to the far end.
+#
+# `OE_INVERT`, `OUT_INVERT` and `IN_INVERT` put the polarity of each of
+# the three pad wires where a board needs it: the pad is not always what
+# drives the contact, and a discrete transistor pulling it down inverts,
+# as does a buffer with an active-low enable. One exclusive or each, and
+# the testbench runs a **second instance with all three set** on the same
+# contact through an inverting external stage, because an untested
+# parameter is a liability.
+#
+# `convention` is a **port and not a parameter** because the terminal
+# only learns it by decoding the ATR's TS byte at run time. Inverse
+# inverts the polarity **and** the bit order, and the testbench decodes
+# one captured frame all four ways so that a block which inverted only
+# one of the two could not pass.
+#
+# The counters are the point as much as the bytes are, and the testbench
+# compares every one against a driven total **including before anything
+# is driven**: `ip/bus/spi_display_rx` shipped with two defects that
+# masked each other and left one counter permanently one too high, and
+# fifteen of its own testbenches missed it because every one of them
+# started from the state in which the two faults agreed. Fixed on
+# 8 October 2026; that block's README.md §3a is the account, and the
+# lesson here is that a counter is tested against a total driven since
+# reset, including zero, and **from every start state** — which is why
+# §0 of the testbench holds the wire low across reset, the level
+# opposite to the input synchroniser's own reset value.
+#
+# That is not a hypothetical here. This block has one edge detector, the
+# start-bit falling edge, and it had the same fault: for the first two
+# clocks after reset the synchroniser presents what reset gave it, so a
+# contact held low by a dead card arrived as a start bit and decoded as
+# nine zeros — whose parity is legitimately even, so the only trace was a
+# counter. `parity_error_count` and `timeout_count` are the numbers that
+# should read zero against a working card.
+name iso7816_uart
+version 1.0.0
+license MIT
+description "ISO/IEC 7816-3 character layer for a smart card terminal: one open-drain wire, 8E2 framing, direct and inverse conventions on a port, a run-time etu divisor that changes between characters, T=0 parity error signalling with repeats, run-time guard and waiting times, and saturating counters"
+
+top iso7816_uart
+target ice40
+target ecp5
+target xc7
+
+source rtl/iso7816_uart.v
+
+param ETU_DIV int 5208 8..65535
+param PARITY_RETRY int 1 0..1
+param MAX_REPEAT int 3 0..15
+param COUNT_WIDTH int 16 1..32
+param OE_INVERT int 0 0..1
+param OUT_INVERT int 0 0..1
+param IN_INVERT int 0 0..1
+
+port clk in
+port rst_n in
+port active in
+port etu_div in 16
+port guard_etu in 8
+port convention in
+port wt_etu in 24
+port tx_data in 8
+port tx_valid in
+port tx_ready out
+port tx_abort out
+port rx_data out 8
+port rx_ready in
+port rx_valid out
+port rx_parity_error out
+port rx_overrun out
+port rx_timeout out
+port io_i in
+port io_oe out
+port io_o out
+port tx_char_count out COUNT_WIDTH
+port rx_char_count out COUNT_WIDTH
+port parity_error_count out COUNT_WIDTH
+port repeat_count out COUNT_WIDTH
+port timeout_count out COUNT_WIDTH

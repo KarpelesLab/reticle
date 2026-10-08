@@ -106,6 +106,7 @@ It is distributed as part of the repository instead.
 | `spi_master` | `spi_master` | byte-level SPI master, any CPOL / CPHA | — |
 | `i2c_master` | `i2c_master` | byte-level I²C master, 7-bit addressing, clock stretching tolerated | — |
 | `spi_display_rx` | `spi_display_rx` | the **receiving** end of a display's four-wire SPI: one data wire oversampled against an external clock, bytes framed by the chip select and tagged by D/C, with every uncertainty a parameter, a rate limit stated as a ratio of clocks, and six counters that are the only way the link will ever be characterised | `cdc_sync` |
+| `iso7816_uart` | `iso7816_uart` | the character layer of an ISO/IEC 7816-3 smart card terminal: one **open-drain** contact, half duplex, 8E2, with the etu divisor, the guard time, the waiting time and the **convention** all run-time inputs, T=0 parity error signalling with repeats in both directions, an `active` input that holds the block inert so an activation sequencer can own the line, and five saturating counters | — |
 | `pwm` | `pwm` | counter-comparator PWM, duty latched once per period | — |
 | `timer` | `timer` | prescaled auto-reload down-counter with a pulse and a sticky interrupt | — |
 | `axil_gpio` | `axil_gpio` | AXI4-Lite GPIO subordinate: data, direction and set registers | `cdc_sync` |
@@ -1603,6 +1604,45 @@ should say so where a reader cannot miss it, and the counters are the
 reason that is survivable here: whoever connects the screen can run the
 measurement themselves, and §4 of that README is written for them.
 
+## A fault that travelled, which is the argument for writing the account
+down
+
+`ip/bus/spi_display_rx/README.md` §3a is this library's longest defect
+account: a counter permanently one too high on a Basys 3, from **a
+synchroniser's reset value compared against as if it were an observation
+of a pin**. The remedy was a `settle_sr` that counts the blind window out
+so that no edge is taken until both halves of the comparison have been
+loaded from the wire.
+
+`ip/bus/iso7816_uart` was written a few hours later and **had the same
+fault**, found by reading that account rather than by a failing test. It
+has exactly one edge detector — the start bit's falling edge — and for
+the first two clocks after reset its input synchroniser is still showing
+what reset gave it. So a contact held low, which is what a dead card or
+an unpowered one looks like, arrived as a start bit and decoded as a
+character of nine zeros — **whose parity is legitimately even**, so the
+only trace of it was a counter. The byte looked valid all the way up.
+
+Three things are worth taking from that:
+
+1. **The shape is reusable and the fix is not.** `spi_display_rx` gates
+   four edge detectors on `SYNC_STAGES + 1` clocks; this block gates one
+   on three, and also **reopens** the window whenever its `active` input
+   comes back, because a block that can be made inert and live again has
+   the fault twice. Neither gate would have been written here without the
+   account.
+2. **A test for it has to drive the opposite level.** Holding the contact
+   low across reset is the same experiment as flipping the
+   synchroniser's reset value, and it is the one start state neither
+   block's earlier testbenches drove.
+3. **The first version of such a test is usually vacuous.** Here it held
+   the contact low for eight clocks and passed against the fault, because
+   the manufactured start bit is rejected as a glitch half an etu later
+   if the line has come back by then. Twelve etu is the committed
+   version. That measurement is in that block's README §5 beside the
+   twenty-six other mutations, because a test suite nobody has run against
+   a broken implementation is a test suite nobody has measured.
+
 ## Using one
 
 A block is an ordinary IP package, so a project reaches it with a
@@ -2704,6 +2744,14 @@ exactly what this table is for.
 | `spi_display_rx` | `spi_display_rx` | FRAME_MODE=2 | LUT6 | 28 x dff, 175 x lut | 4 |
 | `spi_display_rx` | `spi_display_rx` | FRAME_MODE=2 | iCE40 HX1K | 93 x SB_CARRY, 111 x SB_DFFER, 2 x SB_DFFES, 28 x SB_DFFR, 1 x SB_DFFS, 1 x SB_GB, 124 x SB_IO, 196 x SB_LUT4 | 5 |
 | `spi_display_rx` | `spi_display_rx` | FRAME_MODE=2 | ECP5 45F | 57 x CCU2C, 1 x DCCA, 99 x LUT4, 142 x TRELLIS_FF, 124 x TRELLIS_IO | 5 |
+| `iso7816_uart` | `iso7816_uart` | PARITY_RETRY=1 | LUT4 | 38 x dff, 605 x lut | 8 |
+| `iso7816_uart` | `iso7816_uart` | PARITY_RETRY=1 | LUT6 | 38 x dff, 506 x lut | 8 |
+| `iso7816_uart` | `iso7816_uart` | PARITY_RETRY=1 | iCE40 HX1K | 140 x SB_CARRY, 207 x SB_DFFER, 34 x SB_DFFES, 27 x SB_DFFR, 3 x SB_DFFS, 1 x SB_GB, 159 x SB_IO, 576 x SB_LUT4 | 8 |
+| `iso7816_uart` | `iso7816_uart` | PARITY_RETRY=1 | ECP5 45F | 85 x CCU2C, 1 x DCCA, 486 x LUT4, 271 x TRELLIS_FF, 159 x TRELLIS_IO | 8 |
+| `iso7816_uart` | `iso7816_uart` | PARITY_RETRY=0 | LUT4 | 38 x dff, 601 x lut | 8 |
+| `iso7816_uart` | `iso7816_uart` | PARITY_RETRY=0 | LUT6 | 38 x dff, 501 x lut | 8 |
+| `iso7816_uart` | `iso7816_uart` | PARITY_RETRY=0 | iCE40 HX1K | 140 x SB_CARRY, 207 x SB_DFFER, 34 x SB_DFFES, 27 x SB_DFFR, 3 x SB_DFFS, 1 x SB_GB, 159 x SB_IO, 572 x SB_LUT4 | 8 |
+| `iso7816_uart` | `iso7816_uart` | PARITY_RETRY=0 | ECP5 45F | 85 x CCU2C, 1 x DCCA, 482 x LUT4, 271 x TRELLIS_FF, 159 x TRELLIS_IO | 8 |
 | `pwm` | `pwm` | WIDTH=8 | LUT4 | 2 x dff, 23 x lut | 6 |
 | `pwm` | `pwm` | WIDTH=8 | LUT6 | 2 x dff, 17 x lut | 4 |
 | `pwm` | `pwm` | WIDTH=8 | iCE40 HX1K | 7 x SB_CARRY, 8 x SB_DFFER, 8 x SB_DFFR, 1 x SB_GB, 21 x SB_IO, 23 x SB_LUT4 | 6 |
