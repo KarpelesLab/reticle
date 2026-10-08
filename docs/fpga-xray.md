@@ -1243,6 +1243,134 @@ decodable: 100/12 is 8.333 MHz, and anything deriving its own timing by
 counting the clock — a smart card's etu is `F/D` cycles of the terminal's
 clock — tracks it with no error at all.
 
+### A global clock with no buffer driving it, found by an A/B pair on the card
+
+**CHECKED, 9 October 2026, and this is the cleanest A/B this project has
+had.** Two bitstreams of `examples/basys3/iso7816_terminal.v` built
+twenty-six lines of logic apart — a gate on when a monitor instance
+reports, a 20-bit counter and a comparison; no new IO, no new pins, the
+same constraints file — behave differently on the part, back to back, same
+card, same wiring, in the order broken/works/works:
+
+```
+works.bit    ATR reads 3B1B8705322E352E310433000004, twice, clean
+broken.bit   ATR reads !FC>30!FC00!FC00!FC>FF3C!C080>E03C>BC!FC>603C!7C!C00000!FC>3000000000
+```
+
+So the card is fine and the bitstream is wrong. Both decode with **0 bits
+unexplained** and both have the same single tile with no segbits file
+(`MONITOR_BOT_X46Y79`), so "every bit decodes" says nothing about this —
+which is the point.
+
+**The pad was not it.** `RIOB33_X43Y85` and `RIOI3_X43Y85` — ball `J3`,
+the card contact — decode to **identical** feature sets in the two
+images, as does `INT_R_X43Y85` beside them. A parallel round had wondered
+whether the `IOB_Y0`/`IOB_Y1` half rule is inverted on a right-edge
+`RIOB33`, so that `J3`'s bits land on the neighbouring ball; it is not,
+and it cannot be: `tilegrid.json` gives `RIOB33_X43Y85` the sites
+`IOB_X1Y85` (`IOB33S`) and `IOB_X1Y86` (`IOB33M`), `J3` is the higher one,
+and **all 120** two-site `IOB33` tiles on this die have an even higher
+site `Y`, so "the higher site is `IOB_Y0`" and "`site_y % 2 == 0` is
+`IOB_Y0`" are the same rule here. There is no tile where the two could
+disagree. (The `_SING` tiles are a different question and are already
+written down above.)
+
+**It is the clock, and the whole of it.** Restricted to tiles outside
+`CLB*`, `INT_*` and `VBRK` — a different placement rewrites those
+wholesale, 44 170 features against 47 157 over 1165 tiles — the entire
+difference is the clock network, 87 lines of it. The working image:
+
+```
+CLK_BUFG_BOT_R_X60Y48  BUFGCTRL.BUFGCTRL_X0Y12.IN_USE
+                       BUFGCTRL.BUFGCTRL_X0Y12.IS_IGNORE1_INVERTED
+                       BUFGCTRL.BUFGCTRL_X0Y12.ZINV_CE0
+                       BUFGCTRL.BUFGCTRL_X0Y12.ZINV_S0
+                       CLK_BUFG_BUFGCTRL12_I0.CLK_BUFG_BOT_R_CK_MUXED24
+                       CLK_BUFG_CK_GCLK12.CLK_BUFG_BUFGCTRL12_O
+```
+
+one clock, one buffer, configured, its input routed and its output on
+`GCLK12`. The garbling one has the same six for `BUFGCTRL_X0Y8` and
+`GCLK8` — **and a second global clock**, whose only configuration
+anywhere is one feature, the only feature in its tile:
+
+```
+CLK_BUFG_TOP_R_X60Y53  CLK_BUFG_CK_GCLK28.CLK_BUFG_BUFGCTRL12_O
+```
+
+`GCLK28` taken from the output of a `BUFGCTRL` with no `IN_USE`, no
+polarity bits and nothing routed to its input — and then enabled the
+length of the buffer column (`GCLK28_ENABLE_ABOVE`/`_BELOW` at Y13, Y65,
+Y90, Y117), rebuffered across the middle, made `CK_GCLK28_ACTIVE` in the
+top clock row, muxed onto `CLK_HROW_CK_MUX_OUT_R10` and given two more
+`BUFHCE`s and a set of `HCLK` leaf enables. A `BUFGCTRL` that is not in
+use passes nothing, so that clock carries nothing and every flip-flop on
+it never ticks. Nothing in the image is unexplained; the bits that would
+say the buffer is on are **absent**.
+
+The same image also has `CLK_HROW_CK_MUX_OUT_R1.CLK_HROW_CK_INT_0_0` —
+a clock steered into the horizontal network straight off interconnect —
+which is the same story from the other end.
+
+#### Why: `ppips` calls a `BUFGCTRL` a wire, and it is not
+
+`ppips_clk_bufg_top_r.db` and its `_bot_` twin each contain sixteen lines
+of the form
+
+```
+CLK_BUFG_TOP_R.CLK_BUFG_BUFGCTRL0_O.CLK_BUFG_BUFGCTRL0_I0 always
+```
+
+thirty-two over the die: a free, unconditional, bit-less hop from each
+buffer's input straight to its output. Everything *else* on that path
+costs bits — `segbits_clk_bufg_*.db` has 160 pips into
+`BUFGCTRL<n>_I0`/`_I1` and 16 from `BUFGCTRL<n>_O` onto `CK_GCLK<n>` in
+each tile — so the router paid for getting to the buffer and for leaving
+it, and nothing at all for the buffer.
+
+**This is the `CEUSEDMUX`/`SRUSEDMUX` mistake again, one tile type over,
+and the fix was already written for the tile next door.**
+`src/fpga/xray/sites.rs`'s `horizontal_clock_buffers` says it in as many
+words about `BUFHCE`: "`ppips_clk_hrow_bot_r.db` records
+`CLK_HROW_CK_HCLK_OUT_L0.CLK_HROW_CK_MUX_OUT_L0 always`, which is the
+buffer seen as metal; it is not free, and `IN_USE` is what turns it on."
+The `BUFHCE`s were charged and the `BUFGCTRL`s were not, and `pass_throughs`
+simply had no branch for `CLK_BUFG_BOT_R`/`CLK_BUFG_TOP_R`.
+`global_clock_buffers` is that branch: the hop now costs the four features
+`extra_bels` already puts on a placed `BUFG`.
+
+It also explains why one of the pair worked. The working image's placer
+had put its single `BUFG` on `BUFGCTRL_X0Y12`, which is **the very bel the
+router walked through**, so the four features were written by the placed
+cell and the free hop was harmless. The garbling image's buffer was on
+`X0Y8` and its second clock walked through `X0Y28`, which nothing had
+placed. One of the two was correct by coincidence of placement and
+routing agreeing, which is exactly what makes a defect look like a
+lottery.
+
+#### What is checked, and what is not
+
+`Decoded::clocks_without_a_driver` reads this off a finished bitstream:
+for every `GCLK<n>` an image distributes, some `CLK_BUFG_*` tile must both
+drive it from a `BUFGCTRL<m>` output and say that buffer is `IN_USE`. It
+reports **one line for `broken.bit` and none for `works.bit`**, naming the
+tile, the clock and the missing feature. `blink.v` as this flow builds it
+and Vivado's own `basys3/swbut` harness are both clean, and the vendor's
+being clean is what says the check describes the fabric rather than this
+flow's habits
+(`every_global_clock_a_bitstream_distributes_has_a_buffer_driving_it`).
+
+What is **not** established: that the fix makes the garbling design read
+the ATR. Those two files are build output from a worktree this round
+cannot rebuild — the design is being changed by another round — so what is
+measured here is the cause, not the cure. The cure needs that source
+rebuilt on this branch and the ATR read again. Also unchecked: a
+`BUFGCTRL` in use whose input mux selects nothing, a `BUFHCE` in use with
+no clock reaching it, and a clock distributed correctly to the wrong
+flip-flops. And nothing here has measured what a switched-off `BUFGCTRL`
+puts on its output; that it passes nothing is the data sheet's statement
+and the reason the four bits exist.
+
 ### What is now known about this part, in order of confidence
 
 | | |
