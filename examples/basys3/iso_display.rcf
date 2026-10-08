@@ -1,0 +1,161 @@
+# Digilent Basys 3 (Xilinx XC7A35T-1CPG236C): `iso_display_pad.v` — an
+# ISO 7816 card and an SSD1306 panel in one bitstream, on one serial port.
+#
+# The top is `iso_display_pad`, the thin wrapper that holds the PLL and the
+# three bidirectional balls; `iso_display` itself takes `io_i` and drives
+# `io_oe`/`io_o` so a testbench can put a model card on the contact.
+#
+# This file is the union of `iso7816_terminal.rcf` and
+# `ssd1306_console.rcf` and adds nothing of its own: the two halves share
+# the clock, the serial port, the LEDs and the digits, and their other pins
+# do not overlap.
+#
+# PROVENANCE: ball names transcribed from `examples/soc/board/basys3.rcf`,
+# which transcribes Digilent's published `Basys-3-Master.xdc`. Two lines of
+# that file have been CHECKED on this board and one was wrong, so treat the
+# rest as a reading: A18/B18 are the FPGA's transmit and receive into the
+# USB-UART bridge (CHECKED 8 October 2026 by echoing bytes through
+# `uart_loop.v`), and `sw[0]`/`led[0]` are at the RIGHT-hand end (CHECKED
+# the same day, correcting a comment that said left).
+#
+# ===================================================================
+# SAFETY: WHAT IS ON THE OTHER END OF THESE FOUR BALLS
+# ===================================================================
+#
+# **`N2` switches the user's device's 3.3 V supply.** It drives the LED of
+# an AQV210 PhotoMOS relay through a series resistor, so a high here closes
+# that relay and powers the device. It must be low at power-up and must go
+# high only as the first step of the card half's activation sequence, which
+# is the only thing in the design that can reach it:
+#
+#   - `vcc_en` comes out of `iso7816_terminal`'s sequencer and nothing else
+#     drives it. `iso_display.v` passes it through; `iso_display_pad.v`
+#     passes it to the ball.
+#   - the register behind it initialises to zero, is cleared by the
+#     power-on reset, and is set only by `A`.
+#   - the display half cannot ask for it: no display command is an ISO
+#     command, which is the rule the whole shared alphabet is built on.
+#
+# `J3`, `L3` and `M2` are the user's card's contact, clock and reset. Do not
+# add a pin to this file that the design does not need; every one of these
+# four goes somewhere that matters.
+#
+# **Pmod JXADC** for those four, chosen over JA/JB/JC because the board's
+# owner confirmed visually that its anti-aliasing capacitors C33-C36 are
+# **not populated**. That matters: a series resistor only costs low-level
+# margin, but a shunt capacitor sits across an open-drain line and sets its
+# rise time — even 1 nF with a 1k pull-up would make 2 Mbaud impossible.
+# With the pads empty the rise is stray capacitance only, about 115 ns to
+# 90 % at 50 pF, which is a fifth of a 500 ns etu.
+#
+#   JXADC1  J3   io         the card's single line, driven and read. Open
+#                           drain: pulled low or released, never driven
+#                           high, so the card and this board share it.
+#   JXADC2  L3   clk_card   8.000 MHz, 112 MHz / 14, exactly 50 % duty
+#   JXADC3  M2   rst_card   active low
+#   JXADC4  N2   vcc_en     the AQV210 PhotoMOS relay's LED. See above.
+#   JXADC5  —    GND
+#
+# **No `-pullup` on `io`**: the line already has an external 1k to 3.3 V.
+# A second pull would change the timing the owner measured for.
+#
+# ===================================================================
+# THE DISPLAY LINK
+# ===================================================================
+#
+# The top row of **Pmod JA**, plus a ground. A Pmod connector is 12 pins,
+# 2x6: pins 1-4 and 7-10 are the eight signals, 5 and 11 are ground, 6 and
+# 12 are 3V3.
+#
+#   JA1   J1     sclk    the master's clock
+#   JA2   L2     mosi    its data: commands and pixels on one wire
+#   JA3   J2     dc      low for a command byte, high for a pixel byte
+#   JA4   G2     cs_n    low while a byte is on the wire
+#   JA5   —      GND     connect this: two boards need a common ground
+#
+# JA rather than JB because it is on the same edge as JXADC — shorter leads
+# and one ground reference.
+#
+# **These four may be any ball of JA**, which was measured rather than
+# assumed: all eight JA balls were built as plain inputs and every one
+# decoded completely. The same balls used *bidirectionally* do not: L2, G2,
+# K2 and G3 each put configuration bits in a tile this database has no
+# segbits file for, so a bitstream using them as an inout cannot be fully
+# decoded and checked. These four are inputs, so the gap does not reach
+# them — but a design that made one of them bidirectional would be
+# unverifiable, and that is worth knowing before anybody moves a wire.
+#
+# **All four are inputs.** This design is the display, not the driver.
+#
+# **3.3 V only.** The Basys 3's Pmod pins are 3.3 V CMOS. A 5 V master
+# needs level shifting, and connecting one directly risks the part.
+#
+# **The rate limit is a ratio**: `PHASE_MARGIN = 2` in `spi_display_rx`
+# means each `sclk` phase must last at least two system clocks, so at
+# 112 MHz `sclk` may run up to 28 MHz — more margin than the 25 it had at
+# 100 MHz, since the combined design clocks faster. An SSD1306's own
+# maximum is well under either. `overrun_count` rises before any bit is
+# lost, so the counters say when the margin has gone rather than dropping
+# bits quietly.
+set_io -io_standard LVCMOS33 clk W5
+
+set_io -io_standard LVCMOS33 io       J3
+set_io -io_standard LVCMOS33 clk_card L3
+set_io -io_standard LVCMOS33 rst_card M2
+set_io -io_standard LVCMOS33 vcc_en   N2
+
+set_io -io_standard LVCMOS33 sclk J1
+set_io -io_standard LVCMOS33 mosi L2
+set_io -io_standard LVCMOS33 dc   J2
+set_io -io_standard LVCMOS33 cs_n G2
+
+# The far side's two button lines, on **Pmod JC** — reachable from the same
+# side of the board as JA. These must be bidirectional: each is released
+# except while pressed.
+#
+#   JC1  K17  btn_left   idles LOW  through a 10k pull-down -> press drives HIGH
+#   JC2  M18  btn_right  idles HIGH through a 10k pull-up   -> press drives LOW
+#
+# No `-pullup`: the far side's own resistors define both idle levels, and a
+# second pull would fight one of them.
+set_io -io_standard LVCMOS33 btn_left  K17
+set_io -io_standard LVCMOS33 btn_right M18
+
+set_io -io_standard LVCMOS33 uart_rx_pin B18
+set_io -io_standard LVCMOS33 uart_tx_pin A18
+
+set_io -io_standard LVCMOS33 led[0]  U16
+set_io -io_standard LVCMOS33 led[1]  E19
+set_io -io_standard LVCMOS33 led[2]  U19
+set_io -io_standard LVCMOS33 led[3]  V19
+set_io -io_standard LVCMOS33 led[4]  W18
+set_io -io_standard LVCMOS33 led[5]  U15
+set_io -io_standard LVCMOS33 led[6]  V14
+set_io -io_standard LVCMOS33 led[7]  V13
+set_io -io_standard LVCMOS33 led[8]  V3
+set_io -io_standard LVCMOS33 led[9]  W3
+set_io -io_standard LVCMOS33 led[10] U3
+set_io -io_standard LVCMOS33 led[11] P3
+set_io -io_standard LVCMOS33 led[12] N3
+set_io -io_standard LVCMOS33 led[13] P1
+set_io -io_standard LVCMOS33 led[14] L1
+
+# Segments a..g, the decimal point, and the four digit anodes.
+# **`an[0]` is the RIGHT-hand digit**, CHECKED 8 October 2026 by reading
+# `1f29` off the glass in `selftest.v` — a status byte then a sequence
+# number in that order — so the most significant nibble is leftmost.
+set_io -io_standard LVCMOS33 seg[0] W7
+set_io -io_standard LVCMOS33 seg[1] W6
+set_io -io_standard LVCMOS33 seg[2] U8
+set_io -io_standard LVCMOS33 seg[3] V8
+set_io -io_standard LVCMOS33 seg[4] U5
+set_io -io_standard LVCMOS33 seg[5] V5
+set_io -io_standard LVCMOS33 seg[6] U7
+set_io -io_standard LVCMOS33 dp     V7
+set_io -io_standard LVCMOS33 an[0]  U2
+set_io -io_standard LVCMOS33 an[1]  U4
+set_io -io_standard LVCMOS33 an[2]  V4
+set_io -io_standard LVCMOS33 an[3]  W4
+
+create_clock -name sys -period 10.0 clk
+clock_domain sys clk
