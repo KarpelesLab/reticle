@@ -50,7 +50,7 @@
           "connections": {
             "PACKAGE_PIN": [ 3 ],
             "INPUT_CLK": [ 6 ],
-            "CLOCK_ENABLE": [ "1" ],
+            "CLOCK_ENABLE": [ 9 ],
             "D_IN_0": [ 7 ],
             "D_IN_1": [ 8 ]
           }
@@ -75,7 +75,7 @@
             "D_OUT_0": [ 7 ],
             "D_OUT_1": [ 7 ],
             "OUTPUT_CLK": [ 6 ],
-            "CLOCK_ENABLE": [ "1" ],
+            "CLOCK_ENABLE": [ 9 ],
             "PACKAGE_PIN": [ 4 ]
           }
         },
@@ -99,8 +99,30 @@
             "D_OUT_0": [ 8 ],
             "D_OUT_1": [ 8 ],
             "OUTPUT_CLK": [ 6 ],
-            "CLOCK_ENABLE": [ "1" ],
+            "CLOCK_ENABLE": [ 9 ],
             "PACKAGE_PIN": [ 5 ]
+          }
+        },
+        "const1$lut": {
+          "hide_name": 0,
+          "type": "SB_LUT4",
+          "parameters": {
+            "LUT_INIT": 65535
+          },
+          "attributes": {},
+          "port_directions": {
+            "I0": "input",
+            "I1": "input",
+            "I2": "input",
+            "I3": "input",
+            "O": "output"
+          },
+          "connections": {
+            "I0": [ "0" ],
+            "I1": [ "0" ],
+            "I2": [ "0" ],
+            "I3": [ "0" ],
+            "O": [ 9 ]
           }
         }
       },
@@ -155,6 +177,11 @@
         "tx$pin1": {
           "hide_name": 0,
           "bits": [ 5 ],
+          "attributes": {}
+        },
+        "const1": {
+          "hide_name": 0,
+          "bits": [ 9 ],
           "attributes": {}
         }
       }

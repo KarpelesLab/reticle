@@ -1241,12 +1241,19 @@ fn a_block_ram_places_routes_and_every_bit_of_it_decodes() {
     );
     assert_eq!(
         bits.ones(),
-        1259,
+        1352,
         "set bits in the whole image, pads, pipeline registers and routing included. This was \
          1274 when the block RAM was written, against the fixed-schedule annealer; the adaptive \
-         one places the same design better and the image needs fifteen fewer routing bits for \
-         it. The two assertions above are what say the blocks themselves did not change — two \
-         cells, and the same thirty-three bits of their own"
+         one placed the same design better and brought it to 1259; and it is 1352 now because a \
+         `DP16KD`'s **address** gets a driver. `src/fpga/devices/ecp5.dev` says `addr 4 pad \
+         4'b0011` for the 18-bit mode — the block reads `AD[3:0]` and they must be `0011` — and \
+         two of those four bits are a constant zero that nothing routed, which on this family \
+         reads as a **one**. So every 18-bit block RAM this flow built addressed its contents \
+         through `1111`, and no test of this flow's own output could have seen it: the netlist \
+         has the zeros, and every bit of the old image decoded. The extra bits are one constant \
+         lookup table and the arcs that carry it to eight address pins over two blocks. The two \
+         assertions above are what say the blocks' own settings did not change — two cells, and \
+         the same thirty-three bits"
     );
     // The buffer is on a site the clock's own pad can drive, and the
     // placer is what knows that rather than the constraints file. Ball A2
@@ -7353,4 +7360,270 @@ fn a_carry_chain_places_routes_and_every_bit_of_it_decodes() {
         stream.cram.count_ones(),
         "and the bitstream differs although the placement does not"
     );
+}
+
+/// What Lattice's own packer writes for an **output pad whose data is a
+/// constant**, asked in full of their three bitstreams for this very
+/// board, because the database offers two different answers and this flow
+/// had been giving the other one.
+///
+/// A `TRELLIS_IO` driving a constant has two ways to get it on this
+/// family. The `CIB` tile beside the pad has a mux field —
+/// `CIB.JA0MUX`, [`trellis::DATA_MUX`] — whose values include a fixed `0`
+/// and a fixed `1`, so a pad's data wire can simply be *tied*, which is
+/// what [`TrellisFabric::configure_io`] has always done. Or the constant
+/// can be **built**, as a lookup table whose truth table ignores its
+/// inputs, and routed in like any other signal.
+///
+/// Their files settle it, and not narrowly:
+///
+/// | | |
+/// |---|---|
+/// | Output and bidirectional pads | 109 in `analyzer.bit`, 102 in `selftest.bit`, 107 in `facedancer.bit` |
+/// | …whose data wire is **tied** through `CIB.J<x>MUX` | **none.** Not one, in any of the three |
+/// | …whose data wire comes from a lookup table with `INIT` all **ones** | 32, 32, 31 |
+/// | …all zeros | 21, 21, 20 |
+/// | …from ordinary logic | 56, 49, 56 |
+/// | …with nothing at all on it | **none** |
+/// | How many such lookup tables | **one per constant per design**, shared: the zero feeds 97, 90 and 98 pad wires and the one feeds 32, 32 and 31 |
+/// | The **tristate** wire, `CIB.JB0MUX` | tied in **none** of them either: 76, 69 and 78 pads take it from the same zero lookup table and the rest from ordinary logic |
+///
+/// So the vendor never uses the tie, on either wire, and always builds the
+/// constant — which is the same answer
+/// `what_lattices_own_packer_writes_for_a_constant` got for a flip-flop's
+/// data pin, from the same lookup tables. **The positions agree**: the
+/// zero is `X38Y27` in `analyzer.bit` and `X11Y6` in `facedancer.bit`, the
+/// one is `X5Y27` and `X64Y8`, and those are the four that test names from
+/// its own walk backwards from every `M` wire. Two readings of different
+/// pins arriving at the same four slices is what makes this a measurement
+/// and not a coincidence.
+///
+/// It also finishes a sentence that test left open. It says `selftest.bit`
+/// has no constant on a flip-flop's data pin **at all** — and yet
+/// `selftest.bit` has both constant lookup tables, `SLICEC.K0` at `X63Y23`
+/// for the zero and `SLICEA.K0` at `X3Y10` for the one. They are there for
+/// its *pads*.
+///
+/// # What this changed, and what it did not
+///
+/// `techcells::drive_constant_data` now gives an `io` primitive's data pin
+/// a driver, so the tie is no longer reached for a constant and this flow
+/// writes what they write.
+///
+/// The **tristate** tie is kept, and that is a deliberate disagreement
+/// with the row above: `CIB.JB0MUX = 0` is on every Cynthion bitstream
+/// this flow has put in a part and the pads drove, so it is measured
+/// working, and the direction of a pad is decided from that pin's constant
+/// before anything else happens. Replacing something that works on
+/// silicon with something that works on silicon is churn.
+///
+/// # Two pads that are not pads, which is why `DRIVE` is the test
+///
+/// `PIO<s>.BASE_TYPE` alone says 111 output or bidirectional pads in
+/// `analyzer.bit` and two of them have neither a tie nor a route. Both
+/// read `BIDIR_LVCMOS12`, both are at `X0Y39`, and neither has a
+/// `PIO<s>.DRIVE`, an `OPENDRAIN` or a `SLEWRATE` while the two other
+/// sides of that same tile have all three. `LVCMOS12`'s bit pattern is a
+/// subset of other settings' — the decoder reports `PIOB.BASE_TYPE =
+/// BIDIR_LVCMOS12` at `CIB` positions too, which hold no pad at all — and
+/// a Cynthion has no 1.2 V bank. They are inputs misread, so an output is
+/// identified here by having a **drive strength**, which only an output
+/// has. The other two files have no such pad and no `LVCMOS12` anywhere.
+#[test]
+fn what_lattices_own_packer_writes_for_a_constant_on_a_pad() {
+    let Some(root) = chipdb() else { return };
+    let db = trellis::open(&Disk(root), "", PART).unwrap();
+    let fabric = db.load(&TrellisOptions::new()).unwrap();
+    // Per file: output/bidir pads by `BASE_TYPE`, of those the ones with a
+    // drive strength, then for the data wire (ones, zeros, ordinary logic)
+    // and for the tristate wire (zeros, ordinary logic), then the slice
+    // the zero came from and the one the one came from with their total
+    // fan-out over both wires.
+    type Expect = (&'static str, usize, usize, [usize; 3], [usize; 2], Shared);
+    type Shared = (
+        (u32, u32),
+        &'static str,
+        usize,
+        (u32, u32),
+        &'static str,
+        usize,
+    );
+    let expected: [Expect; 3] = [
+        (
+            "analyzer",
+            111,
+            109,
+            [32, 21, 56],
+            [76, 33],
+            ((38, 27), "F0", 97, (5, 27), "F0", 32),
+        ),
+        (
+            "selftest",
+            102,
+            102,
+            [32, 21, 49],
+            [69, 33],
+            ((63, 23), "F4", 90, (3, 10), "F0", 32),
+        ),
+        (
+            "facedancer",
+            107,
+            107,
+            [31, 20, 56],
+            [78, 29],
+            ((11, 6), "F0", 98, (64, 8), "F0", 31),
+        ),
+    ];
+    for (name, by_base_type, with_drive, data_from, oe_from, shared) in expected {
+        let Some(bytes) = reference(name) else { return };
+        let stream = Ecp5Stream::parse(&bytes, &formats).unwrap();
+        let decoded = db.decode(&stream.cram);
+        let (arcs, unresolved) = db.resolved_arcs(&decoded);
+        assert!(unresolved.is_empty(), "{name}: {unresolved:?}");
+        let mut driver = std::collections::BTreeMap::new();
+        for (to, from) in &arcs {
+            driver.insert(to.clone(), from.clone());
+        }
+        // The truth table of the lookup table a slice wire comes out of,
+        // or `None` when the wire is not one: `F<2n+h>` is `SLICE<l>.K<h>`
+        // with `l` the slice `n`. A word at its default is not reported
+        // and this field's default is all ones.
+        let init_of = |at: (u32, u32), wire: &str| -> Option<String> {
+            let index = wire.strip_prefix('F')?.parse::<u32>().ok()?;
+            let letter = ['A', 'B', 'C', 'D'][(index / 2) as usize];
+            let field = format!("SLICE{letter}.K{}.INIT", index % 2);
+            Some(
+                decoded
+                    .words
+                    .iter()
+                    .find(|(pos, what, _)| *pos == at && *what == field)
+                    .map_or_else(|| "1111111111111111".to_owned(), |(_, _, v)| v.clone()),
+            )
+        };
+        let mut bases = 0usize;
+        let mut drives = 0usize;
+        let mut data = [0usize; 3];
+        let mut oe = [0usize; 2];
+        let mut ties: Vec<String> = Vec::new();
+        let mut nothing: Vec<String> = Vec::new();
+        let mut fanout: std::collections::BTreeMap<((u32, u32), String), usize> =
+            Default::default();
+        for pad in &fabric.io {
+            let at = pad.pad_at;
+            let field = |f: String| {
+                decoded
+                    .enums
+                    .iter()
+                    .find(|(p, x, _)| *p == at && *x == f)
+                    .map(|(_, _, v)| v.as_str())
+            };
+            let Some(base) = field(format!("PIO{}.BASE_TYPE", pad.side)) else {
+                continue;
+            };
+            if !(base.starts_with("OUTPUT_") || base.starts_with("BIDIR_")) {
+                continue;
+            }
+            bases += 1;
+            // See the header: an output has a drive strength and the two
+            // `BIDIR_LVCMOS12` readings in `analyzer.bit` have not.
+            if field(format!("PIO{}.DRIVE", pad.side)).is_none() {
+                assert_eq!(
+                    base, "BIDIR_LVCMOS12",
+                    "{name}: {} is an output with no drive strength",
+                    pad.ball
+                );
+                continue;
+            }
+            drives += 1;
+            for (sink, wire_is_data) in [("JPADDO", true), ("JPADDT", false)] {
+                let (cib_at, mux) = db
+                    .cib_mux(pad.bel, &format!("{sink}{}", pad.side))
+                    .expect("the pad's own fixed connection names the mux");
+                let wire = mux
+                    .trim_start_matches("CIB.")
+                    .trim_end_matches("MUX")
+                    .to_owned();
+                if let Some((_, _, value)) = decoded
+                    .enums
+                    .iter()
+                    .find(|(p, x, _)| *p == cib_at && *x == mux)
+                {
+                    ties.push(format!("{} {mux} = {value}", pad.ball));
+                    continue;
+                }
+                let mut node = (wire, cib_at);
+                if !driver.contains_key(&node) {
+                    nothing.push(format!("{} {sink}{}", pad.ball, pad.side));
+                    continue;
+                }
+                let mut seen = std::collections::BTreeSet::new();
+                while let Some(next) = driver.get(&node) {
+                    if !seen.insert(next.clone()) {
+                        break;
+                    }
+                    node = next.clone();
+                }
+                let init = init_of(node.1, &node.0);
+                let all = |c: char| init.as_deref().is_some_and(|i| i.chars().all(|x| x == c));
+                if all('1') || all('0') {
+                    *fanout.entry((node.1, node.0.clone())).or_default() += 1;
+                }
+                match (wire_is_data, all('1'), all('0')) {
+                    (true, true, _) => data[0] += 1,
+                    (true, _, true) => data[1] += 1,
+                    (true, _, _) => data[2] += 1,
+                    // A tristate from a constant **one** would release the
+                    // pad for good, and none of them does.
+                    (false, true, _) => panic!("{name}: {} has a tristate tied high", pad.ball),
+                    (false, _, true) => oe[0] += 1,
+                    (false, _, _) => oe[1] += 1,
+                }
+            }
+        }
+        assert_eq!(bases, by_base_type, "{name}: pads by BASE_TYPE");
+        assert_eq!(
+            drives, with_drive,
+            "{name}: of those, with a drive strength"
+        );
+        // The headline, and the reason this test exists: the vendor never
+        // ties a pad's data or tristate wire, although the database offers
+        // the field and this flow used to write it.
+        assert!(
+            ties.is_empty(),
+            "{name}.bit ties {} pad wire(s) through a `CIB` mux after all: {ties:?}",
+            ties.len()
+        );
+        assert!(
+            nothing.is_empty(),
+            "{name}.bit leaves {} pad wire(s) with neither a tie nor a route: {nothing:?}",
+            nothing.len()
+        );
+        assert_eq!(
+            data, data_from,
+            "{name}: pad data from a one, from a zero, from ordinary logic"
+        );
+        assert_eq!(
+            oe, oe_from,
+            "{name}: pad tristate from a zero, from ordinary logic"
+        );
+        // One lookup table per constant, shared across the whole die —
+        // which is what makes this `pack_constants` and not a tie-off per
+        // pad.
+        let (zero_at, zero_wire, zero_fan, one_at, one_wire, one_fan) = shared;
+        let mut got: Vec<(&(u32, u32), &String, &usize)> = fanout
+            .iter()
+            .map(|((at, wire), fan)| (at, wire, fan))
+            .collect();
+        got.sort_by_key(|(_, _, fan)| std::cmp::Reverse(**fan));
+        assert_eq!(
+            got,
+            vec![
+                (&zero_at, &zero_wire.to_owned(), &zero_fan),
+                (&one_at, &one_wire.to_owned(), &one_fan),
+            ],
+            "{name}: the constant lookup tables feeding pads, by fan-out. These are the same \
+             slices `what_lattices_own_packer_writes_for_a_constant` finds by walking back from \
+             every flip-flop's `M` wire"
+        );
+    }
 }

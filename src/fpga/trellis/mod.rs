@@ -3961,6 +3961,32 @@ impl TrellisFabric {
     ///    and **not tied at all** when a signal drives it, because then the
     ///    router has driven that wire and tying it would fight the route.
     ///
+    /// # The data tie is a fallback now, and the vendor is why
+    ///
+    /// Item 4 used to be the normal case for `assign led = 1'b1`, and
+    /// asking what Lattice's own packer writes for such a pad said it
+    /// should not be. Across `analyzer.bit`, `selftest.bit` and
+    /// `facedancer.bit` — 318 output and bidirectional pads — the number
+    /// whose data wire is tied through `CIB.J<x>MUX` is **none**. Every
+    /// one of them is either driven by ordinary logic or routed from a
+    /// lookup table whose `INIT` is all zeros or all ones, one per
+    /// constant per design, the very same slices that feed those designs'
+    /// flip-flops. `tests/fpga_trellis.rs`'s
+    /// `what_lattices_own_packer_writes_for_a_constant_on_a_pad` is that
+    /// measurement, and
+    /// [`techcells::drive_constant_data`](super::techcells) now builds the
+    /// constant, so a pad reaching this pass with one is a pad whose
+    /// netlist did not come through that step.
+    ///
+    /// The **tristate** tie of item 3 stays, and that is a deliberate
+    /// disagreement with the same reading: their files route a zero into
+    /// 76, 69 and 78 tristate wires and tie none, while `CIB.JB0MUX = 0`
+    /// is on every Cynthion bitstream this flow has put in a part and the
+    /// pads drove. One of the two is measured on silicon and the other is
+    /// measured in somebody else's file; replacing the first with the
+    /// second would be churn, and the direction of a pad is read off that
+    /// pin's constant before anything else happens.
+    ///
     /// **What an input gets**:
     ///
     /// 1. `PIO<side>.BASE_TYPE = INPUT_<standard>` in both tiles;

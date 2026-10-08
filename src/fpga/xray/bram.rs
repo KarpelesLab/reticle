@@ -31,6 +31,48 @@
 //! input left alone, which is only accepted once the walk back from the
 //! pin has reached a wire the database says defaults to `VCC_WIRE` and
 //! nothing on the way is driven.
+//!
+//! # A pin the design *does* drive with a constant does not come here
+//!
+//! It used to, and that was a defect of a different shape from the one
+//! above. A `RAMB18E1` in 18-bit mode takes its word address on
+//! `ADDRARDADDR[13:4]` and `src/fpga/devices/xc7.dev` pads the four bits
+//! below with zeros, so four address pins per port arrived here as
+//! **netlist constants** — and this pass went looking for a ground path
+//! for each of them.
+//!
+//! There is exactly one such path and it is contended. `segbits_int_l.db`
+//! has two `GND_WIRE` pips in the whole tile, `INT_L.GFAN0.GND_WIRE` and
+//! `INT_L.GFAN1.GND_WIRE`; every one of the 48 `IMUX_L<n>` has a pip from
+//! one of those two fans and from exactly one of them, so a tile offers
+//! **two** ground sources for 48 inputs — and `GFAN0` and `GFAN1` are
+//! ordinary routing wires the router is free to spend on a signal. So
+//! whether the hunt found a path depended on what the router had done
+//! around that block, which depended on where the placer had put it.
+//! `examples/basys3/ssd1306_console.v` did not build at all;
+//! `examples/basys3/selftest.v` built, then an unrelated edit moved the
+//! placement and it did not, then another moved it back and it did. **A
+//! flow that is meant to be deterministic should not succeed or fail at
+//! tying an address bit to ground depending on where a block landed**, and
+//! that non-determinism was the defect, more than any one failure.
+//!
+//! The remedy is not a wider search: it is
+//! [`techcells::drive_constant_data`](crate::fpga::techcells), which now
+//! gives a block RAM's pins — like a flip-flop's data pin, a distributed
+//! RAM's inputs and a carry cell's operands before them — a real driver
+//! **before placement**, so the router routes them like any other net and
+//! this pass is never asked. That is also what the vendors do: nextpnr's
+//! `pack_constants` builds a `$PACKER_GND`, and Lattice's own bitstreams
+//! for a Cynthion route a constant lookup table into all 320 of their
+//! output pads rather than using the tie their database offers (see
+//! `tests/fpga_trellis.rs`'s
+//! `what_lattices_own_packer_writes_for_a_constant_on_a_pad`).
+//!
+//! What is left here is the case a driver cannot serve: a pin the design
+//! **does not connect at all**, which has no net to route and still needs
+//! a value. Those are far fewer — one two-block design ties 27 and leaves
+//! 5 idle — and when the hunt fails for one of them it now says what is
+//! contended and what to do about it.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::error::Error;
@@ -227,6 +269,75 @@ pub enum TiePolicy {
     /// Not tied at all: a clock nothing drives, and `REGCE`, which does
     /// nothing while `DOA_REG` and `DOB_REG` are 0.
     Leave,
+}
+
+/// Whether `role` is an address bit the block's **width mode does not
+/// read**, which makes it idle whatever the netlist put on it.
+///
+/// A `RAMB18E1` addresses its words through the top of `ADDRARDADDR` and
+/// ignores the bits below, and how many it ignores is the width mode: a
+/// port 18 bits wide uses `[13:4]`, 9 bits `[13:3]`, 4 bits `[13:2]`, 2
+/// bits `[13:1]` and 1 bit all fourteen. The Xilinx library says so, and
+/// `src/fpga/devices/xc7.dev` says the same thing from the other side with
+/// its `addr N` clause, which is what makes the mapper pad those bits with
+/// zeros in the first place.
+///
+/// **This is what stopped a contended ground fan failing a build.** Those
+/// padding bits used to arrive here as netlist constants with
+/// [`TiePolicy::Zero`], which hunts a free `GND_WIRE -> GFAN<n>` path; an
+/// interconnect tile has two such fans for 48 inputs and the router
+/// competes for both, so whether the hunt found one depended on where the
+/// block landed. `examples/basys3/ssd1306_console.v` did not build at all
+/// and `examples/basys3/selftest.v` built, then did not, then did. A bit
+/// the block does not read has no business failing anything, so it is
+/// [`TiePolicy::Idle`] now: tied to zero when a fan is free and left to
+/// the interconnect's own default when none is.
+///
+/// A family that *does* read those bits is the opposite case and is not
+/// handled here at all: an ECP5 `DP16KD` in 18-bit mode needs
+/// `AD[3:0] = 0011`, `src/fpga/devices/ecp5.dev` says so with `pad
+/// 4'b0011`, and `techcells::drive_constant_data` gives them a real
+/// driver before placement.
+///
+/// The widths are read off the cell's own parameters, and a port whose
+/// width is missing or 0 is a port in use at the widest mode — which is
+/// the conservative answer, because it claims the fewest unread bits.
+fn unused_address_bit(role: &str, params: &dyn Fn(&str) -> Option<AttrValue>) -> bool {
+    let Some((port, bit)) = role.split_once("_addr") else {
+        return false;
+    };
+    let Ok(bit) = bit.parse::<u32>() else {
+        return false;
+    };
+    let suffix = match port {
+        "p0" => 'A',
+        "p1" => 'B',
+        _ => return false,
+    };
+    // The narrowest width either direction of this port is used at decides
+    // how many low bits it reads: a port read at 18 bits and written at 9
+    // reads `AD[13:3]`.
+    let low = ["READ_WIDTH_", "WRITE_WIDTH_"]
+        .into_iter()
+        .filter_map(|name| params(&format!("{name}{suffix}")).and_then(|v| v.as_int()))
+        .filter(|width| *width > 0)
+        .map(address_low_bit)
+        .min()
+        .unwrap_or(0);
+    bit < low
+}
+
+/// The lowest `ADDRARDADDR` bit a port of this width uses: 18 bits take
+/// `[13:4]` and one bit takes all fourteen. A width
+/// [`mode_features`] does not describe answers 0, which claims nothing.
+fn address_low_bit(width: i64) -> u32 {
+    match width {
+        18 => 4,
+        9 => 3,
+        4 => 2,
+        2 => 1,
+        _ => 0,
+    }
 }
 
 /// The policy for one input role of a block RAM bel (`p0_we0`, `tie_p1_regce`).
@@ -604,7 +715,14 @@ fn tie(
         }
     }
     Err(format!(
-        "no free GND_WIRE path reaches `{}` within two pips",
+        "no free GND_WIRE path reaches `{}` within two pips. An interconnect tile has exactly \
+         two ground fans — `GFAN0` serves half its `IMUX`es and `GFAN1` the other half — and the \
+         router competes for both, so this says the fan this pin's `IMUX` is reachable from \
+         carries a signal. A pin the **netlist** holds at a constant never asks this: \
+         `techcells::drive_constant_data` builds it a driver before placement, which is also \
+         what Lattice's own packer does. So this is a pin nothing connects at all, and the ways \
+         out are to connect it or to leave the port it belongs to entirely unused, which makes \
+         it `TiePolicy::Idle` and lets it go untied",
         name(pin)
     ))
 }
@@ -713,13 +831,20 @@ impl XrayFabric {
                 if is_output(role) {
                     continue;
                 }
+                // An address bit below the width mode's own range is one
+                // the block does not read, whether the netlist gives it a
+                // constant or nothing at all, so it must not be able to
+                // fail a build: see [`unused_address_bit`].
+                let idle = unused_address_bit(role, &params);
                 let want = match given.get(role.as_str()) {
                     Some(None) => continue,
+                    Some(Some(Bit::Zero)) if idle => TiePolicy::Idle,
                     Some(Some(Bit::Zero)) => TiePolicy::Zero,
                     Some(Some(Bit::One)) => TiePolicy::One,
                     Some(Some(other)) => {
                         return Err(fail(format!("`{role}` is the constant `{other:?}`")));
                     }
+                    None if idle => TiePolicy::Idle,
                     None => match tie_policy(role) {
                         // A port whose enable is tied low reads and writes
                         // nothing, so its address is as idle as data.
@@ -837,6 +962,53 @@ mod tests {
         assert_eq!(tie_policy("tie_p1_regce"), TiePolicy::Leave);
         assert!(is_output("p0_dout7"));
         assert!(!is_output("p0_din7"));
+    }
+
+    /// Which address bits a width mode leaves unread, which is what stops
+    /// a contended ground fan failing a build over one.
+    ///
+    /// What this would catch: a width whose low bit count is wrong, and a
+    /// role name parsed as the wrong port. What it would **not** catch:
+    /// that the Xilinx library really does ignore those bits — that is
+    /// quoted, and `src/fpga/devices/xc7.dev`'s `addr N` clauses quote the
+    /// same thing from the other side.
+    #[test]
+    fn an_address_bit_below_the_width_modes_range_is_unread() {
+        let wide = params(&[
+            ("READ_WIDTH_A", AttrValue::Int(18)),
+            ("WRITE_WIDTH_A", AttrValue::Int(18)),
+            ("READ_WIDTH_B", AttrValue::Int(9)),
+            ("WRITE_WIDTH_B", AttrValue::Int(9)),
+        ]);
+        // 18 bits reads `ADDRARDADDR[13:4]`, so 0..3 are unread and 4 is
+        // the first bit that matters.
+        for bit in 0..4 {
+            assert!(unused_address_bit(&format!("p0_addr{bit}"), &wide), "{bit}");
+        }
+        for bit in 4..14 {
+            assert!(
+                !unused_address_bit(&format!("p0_addr{bit}"), &wide),
+                "{bit}"
+            );
+        }
+        // 9 bits reads one bit further down.
+        assert!(unused_address_bit("p1_addr2", &wide));
+        assert!(!unused_address_bit("p1_addr3", &wide));
+        // Nothing but an address bit, and nothing but the two ports.
+        for role in ["p0_we0", "p0_din0", "p0_clk", "tie_p0_addrtie1", "p2_addr0"] {
+            assert!(!unused_address_bit(role, &wide), "{role}");
+        }
+        // A port read at 18 bits and written at 1 reads all fourteen: the
+        // narrowest use of either direction decides, which claims the
+        // fewest unread bits and is the conservative answer.
+        let mixed = params(&[
+            ("READ_WIDTH_A", AttrValue::Int(18)),
+            ("WRITE_WIDTH_A", AttrValue::Int(1)),
+        ]);
+        assert!(!unused_address_bit("p0_addr0", &mixed));
+        // A port with no width at all is a port this says nothing about.
+        let none = params(&[]);
+        assert!(!unused_address_bit("p0_addr0", &none));
     }
 
     fn params<'a>(list: &'a [(&'a str, AttrValue)]) -> impl Fn(&str) -> Option<AttrValue> + 'a {

@@ -50,6 +50,10 @@ module ram512
   net %rdata$pin5 u1 wire
   net %rdata$pin6 u1 wire
   net %rdata$pin7 u1 wire
+  net %mem$ram_w0_d0$ADA u14 wire
+  net %const1 u1 wire
+  net %const0 u1 wire
+  net %mem$ram_w0_d0$ADB u14 wire
   port clk in %clk$pad
   port we in %we$pad
   port waddr in %waddr$pad
@@ -63,8 +67,10 @@ module ram512
   assign %wdata = {%wdata$in7, %wdata$in6, %wdata$in5, %wdata$in4, %wdata$in3, %wdata$in2, %wdata$in1, %wdata$in0}
   assign %rdata = {%mem$rd0_w0_d0[7:7], %mem$rd0_w0_d0[6:6], %mem$rd0_w0_d0[5:5], %mem$rd0_w0_d0[4:4], %mem$rd0_w0_d0[3:3], %mem$rd0_w0_d0[2:2], %mem$rd0_w0_d0[1:1], %mem$rd0_w0_d0[0:0]}
   assign %rdata$pad = {%rdata$pin7, %rdata$pin6, %rdata$pin5, %rdata$pin4, %rdata$pin3, %rdata$pin2, %rdata$pin1, %rdata$pin0}
+  assign %mem$ram_w0_d0$ADA = {resize(%waddr, u10), 4'd3}
+  assign %mem$ram_w0_d0$ADB = {resize(%raddr, u10), 4'd3}
   attr memory = "mem"
-  cell mem$ram_w0_d0 blackbox DP16KD #(DATA_WIDTH_A=18, DATA_WIDTH_B=18) (ADB={resize(%raddr, u10), 4'd3}, CLKB=%clk, CEB=1'd1, ADA={resize(%waddr, u10), 4'd3}, CLKA=%clk, CEA=%we, WEA=%we, DIA=resize(%wdata, u18)) -> (DOB=%mem$rd0_w0_d0)
+  cell mem$ram_w0_d0 blackbox DP16KD #(DATA_WIDTH_A=18, DATA_WIDTH_B=18) (ADB={%const0, %mem$ram_w0_d0$ADB[12:12], %mem$ram_w0_d0$ADB[11:11], %mem$ram_w0_d0$ADB[10:10], %mem$ram_w0_d0$ADB[9:9], %mem$ram_w0_d0$ADB[8:8], %mem$ram_w0_d0$ADB[7:7], %mem$ram_w0_d0$ADB[6:6], %mem$ram_w0_d0$ADB[5:5], %mem$ram_w0_d0$ADB[4:4], %const0, %const0, %const1, %const1}, CLKB=%clk, CEB=1'd1, ADA={%const0, %mem$ram_w0_d0$ADA[12:12], %mem$ram_w0_d0$ADA[11:11], %mem$ram_w0_d0$ADA[10:10], %mem$ram_w0_d0$ADA[9:9], %mem$ram_w0_d0$ADA[8:8], %mem$ram_w0_d0$ADA[7:7], %mem$ram_w0_d0$ADA[6:6], %mem$ram_w0_d0$ADA[5:5], %mem$ram_w0_d0$ADA[4:4], %const0, %const0, %const1, %const1}, CLKA=%clk, CEA=%we, WEA=%we, DIA=resize(%wdata, u18)) -> (DOB=%mem$rd0_w0_d0)
   attr port = "clk"
   attr pin = "G2"
   attr io_standard = "LVCMOS33"
@@ -144,4 +150,6 @@ module ram512
   cell rdata$io6 blackbox TRELLIS_IO #(DIR="OUTPUT") (I=%rdata[6:6]) -> (B=%rdata$pin6)
   attr port = "rdata"
   cell rdata$io7 blackbox TRELLIS_IO #(DIR="OUTPUT") (I=%rdata[7:7]) -> (B=%rdata$pin7)
+  cell const1$lut blackbox LUT4 #(INIT=16'd65535) (A=1'd0, B=1'd0, C=1'd0, D=1'd0) -> (Z=%const1)
+  cell const0$lut blackbox LUT4 #(INIT=16'd0) (A=1'd0, B=1'd0, C=1'd0, D=1'd0) -> (Z=%const0)
 end

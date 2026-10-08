@@ -7,3 +7,4 @@ logic:
   0 LUTs, depth 0
 netlist:
   4 x SB_IO
+  1 x SB_LUT4

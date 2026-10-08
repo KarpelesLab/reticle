@@ -36,10 +36,10 @@
             "DOB": "output"
           },
           "connections": {
-            "ADB": [ "1", "1", "0", "0", 49, 50, 51, 52, 53, 54, 55, 56, 57, "0" ],
+            "ADB": [ 84, 84, 85, 85, 49, 50, 51, 52, 53, 54, 55, 56, 57, 85 ],
             "CLKB": [ 38 ],
             "CEB": [ "1" ],
-            "ADA": [ "1", "1", "0", "0", 40, 41, 42, 43, 44, 45, 46, 47, 48, "0" ],
+            "ADA": [ 84, 84, 85, 85, 40, 41, 42, 43, 44, 45, 46, 47, 48, 85 ],
             "CLKA": [ 38 ],
             "CEA": [ 39 ],
             "WEA": [ 39 ],
@@ -701,6 +701,50 @@
             "I": [ 73 ],
             "B": [ 37 ]
           }
+        },
+        "const1$lut": {
+          "hide_name": 0,
+          "type": "LUT4",
+          "parameters": {
+            "INIT": 65535
+          },
+          "attributes": {},
+          "port_directions": {
+            "A": "input",
+            "B": "input",
+            "C": "input",
+            "D": "input",
+            "Z": "output"
+          },
+          "connections": {
+            "A": [ "0" ],
+            "B": [ "0" ],
+            "C": [ "0" ],
+            "D": [ "0" ],
+            "Z": [ 84 ]
+          }
+        },
+        "const0$lut": {
+          "hide_name": 0,
+          "type": "LUT4",
+          "parameters": {
+            "INIT": 0
+          },
+          "attributes": {},
+          "port_directions": {
+            "A": "input",
+            "B": "input",
+            "C": "input",
+            "D": "input",
+            "Z": "output"
+          },
+          "connections": {
+            "A": [ "0" ],
+            "B": [ "0" ],
+            "C": [ "0" ],
+            "D": [ "0" ],
+            "Z": [ 85 ]
+          }
         }
       },
       "netnames": {
@@ -947,6 +991,26 @@
         "rdata$pin7": {
           "hide_name": 0,
           "bits": [ 37 ],
+          "attributes": {}
+        },
+        "mem$ram_w0_d0$ADA": {
+          "hide_name": 0,
+          "bits": [ "1", "1", "0", "0", 40, 41, 42, 43, 44, 45, 46, 47, 48, "0" ],
+          "attributes": {}
+        },
+        "const1": {
+          "hide_name": 0,
+          "bits": [ 84 ],
+          "attributes": {}
+        },
+        "const0": {
+          "hide_name": 0,
+          "bits": [ 85 ],
+          "attributes": {}
+        },
+        "mem$ram_w0_d0$ADB": {
+          "hide_name": 0,
+          "bits": [ "1", "1", "0", "0", 49, 50, 51, 52, 53, 54, 55, 56, 57, "0" ],
           "attributes": {}
         }
       }

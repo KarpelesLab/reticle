@@ -135,6 +135,16 @@ module regfile
   net %rd2$pin30 u1 wire
   net %rd2$pin31 u1 wire
   net %clk$gb u1 wire
+  net %regs$c0$ram_w0_d0$ADA u14 wire
+  net %const1 u1 wire
+  net %const0 u1 wire
+  net %regs$c0$ram_w0_d0$ADB u14 wire
+  net %regs$c0$ram_w1_d0$ADA u14 wire
+  net %regs$c0$ram_w1_d0$ADB u14 wire
+  net %regs$c1$ram_w0_d0$ADA u14 wire
+  net %regs$c1$ram_w0_d0$ADB u14 wire
+  net %regs$c1$ram_w1_d0$ADA u14 wire
+  net %regs$c1$ram_w1_d0$ADB u14 wire
   port clk in %clk$pad
   port we in %we$pad
   port wa in %wa$pad
@@ -153,14 +163,22 @@ module regfile
   assign %rd2 = {%regs$c1$rd0_w1_d0[13:13], %regs$c1$rd0_w1_d0[12:12], %regs$c1$rd0_w1_d0[11:11], %regs$c1$rd0_w1_d0[10:10], %regs$c1$rd0_w1_d0[9:9], %regs$c1$rd0_w1_d0[8:8], %regs$c1$rd0_w1_d0[7:7], %regs$c1$rd0_w1_d0[6:6], %regs$c1$rd0_w1_d0[5:5], %regs$c1$rd0_w1_d0[4:4], %regs$c1$rd0_w1_d0[3:3], %regs$c1$rd0_w1_d0[2:2], %regs$c1$rd0_w1_d0[1:1], %regs$c1$rd0_w1_d0[0:0], %regs$c1$rd0_w0_d0[17:17], %regs$c1$rd0_w0_d0[16:16], %regs$c1$rd0_w0_d0[15:15], %regs$c1$rd0_w0_d0[14:14], %regs$c1$rd0_w0_d0[13:13], %regs$c1$rd0_w0_d0[12:12], %regs$c1$rd0_w0_d0[11:11], %regs$c1$rd0_w0_d0[10:10], %regs$c1$rd0_w0_d0[9:9], %regs$c1$rd0_w0_d0[8:8], %regs$c1$rd0_w0_d0[7:7], %regs$c1$rd0_w0_d0[6:6], %regs$c1$rd0_w0_d0[5:5], %regs$c1$rd0_w0_d0[4:4], %regs$c1$rd0_w0_d0[3:3], %regs$c1$rd0_w0_d0[2:2], %regs$c1$rd0_w0_d0[1:1], %regs$c1$rd0_w0_d0[0:0]}
   assign %rd1$pad = {%rd1$pin31, %rd1$pin30, %rd1$pin29, %rd1$pin28, %rd1$pin27, %rd1$pin26, %rd1$pin25, %rd1$pin24, %rd1$pin23, %rd1$pin22, %rd1$pin21, %rd1$pin20, %rd1$pin19, %rd1$pin18, %rd1$pin17, %rd1$pin16, %rd1$pin15, %rd1$pin14, %rd1$pin13, %rd1$pin12, %rd1$pin11, %rd1$pin10, %rd1$pin9, %rd1$pin8, %rd1$pin7, %rd1$pin6, %rd1$pin5, %rd1$pin4, %rd1$pin3, %rd1$pin2, %rd1$pin1, %rd1$pin0}
   assign %rd2$pad = {%rd2$pin31, %rd2$pin30, %rd2$pin29, %rd2$pin28, %rd2$pin27, %rd2$pin26, %rd2$pin25, %rd2$pin24, %rd2$pin23, %rd2$pin22, %rd2$pin21, %rd2$pin20, %rd2$pin19, %rd2$pin18, %rd2$pin17, %rd2$pin16, %rd2$pin15, %rd2$pin14, %rd2$pin13, %rd2$pin12, %rd2$pin11, %rd2$pin10, %rd2$pin9, %rd2$pin8, %rd2$pin7, %rd2$pin6, %rd2$pin5, %rd2$pin4, %rd2$pin3, %rd2$pin2, %rd2$pin1, %rd2$pin0}
+  assign %regs$c0$ram_w0_d0$ADA = {resize(%wa, u10), 4'd3}
+  assign %regs$c0$ram_w0_d0$ADB = {resize(%ra1, u10), 4'd3}
+  assign %regs$c0$ram_w1_d0$ADA = {resize(%wa, u10), 4'd3}
+  assign %regs$c0$ram_w1_d0$ADB = {resize(%ra1, u10), 4'd3}
+  assign %regs$c1$ram_w0_d0$ADA = {resize(%wa, u10), 4'd3}
+  assign %regs$c1$ram_w0_d0$ADB = {resize(%ra2, u10), 4'd3}
+  assign %regs$c1$ram_w1_d0$ADA = {resize(%wa, u10), 4'd3}
+  assign %regs$c1$ram_w1_d0$ADB = {resize(%ra2, u10), 4'd3}
   attr memory = "regs"
-  cell regs$c0$ram_w0_d0 blackbox DP16KD #(DATA_WIDTH_A=18, DATA_WIDTH_B=18) (ADB={resize(%ra1, u10), 4'd3}, CLKB=%clk$gb, CEB=1'd1, ADA={resize(%wa, u10), 4'd3}, CLKA=%clk$gb, CEA=%we, WEA=%we, DIA=%wd[17:0]) -> (DOB=%regs$c0$rd0_w0_d0)
+  cell regs$c0$ram_w0_d0 blackbox DP16KD #(DATA_WIDTH_A=18, DATA_WIDTH_B=18) (ADB={%const0, %const0, %const0, %const0, %const0, %regs$c0$ram_w0_d0$ADB[8:8], %regs$c0$ram_w0_d0$ADB[7:7], %regs$c0$ram_w0_d0$ADB[6:6], %regs$c0$ram_w0_d0$ADB[5:5], %regs$c0$ram_w0_d0$ADB[4:4], %const0, %const0, %const1, %const1}, CLKB=%clk$gb, CEB=1'd1, ADA={%const0, %const0, %const0, %const0, %const0, %regs$c0$ram_w0_d0$ADA[8:8], %regs$c0$ram_w0_d0$ADA[7:7], %regs$c0$ram_w0_d0$ADA[6:6], %regs$c0$ram_w0_d0$ADA[5:5], %regs$c0$ram_w0_d0$ADA[4:4], %const0, %const0, %const1, %const1}, CLKA=%clk$gb, CEA=%we, WEA=%we, DIA=%wd[17:0]) -> (DOB=%regs$c0$rd0_w0_d0)
   attr memory = "regs"
-  cell regs$c0$ram_w1_d0 blackbox DP16KD #(DATA_WIDTH_A=18, DATA_WIDTH_B=18) (ADB={resize(%ra1, u10), 4'd3}, CLKB=%clk$gb, CEB=1'd1, ADA={resize(%wa, u10), 4'd3}, CLKA=%clk$gb, CEA=%we, WEA=%we, DIA=resize(%wd[31:18], u18)) -> (DOB=%regs$c0$rd0_w1_d0)
+  cell regs$c0$ram_w1_d0 blackbox DP16KD #(DATA_WIDTH_A=18, DATA_WIDTH_B=18) (ADB={%const0, %const0, %const0, %const0, %const0, %regs$c0$ram_w1_d0$ADB[8:8], %regs$c0$ram_w1_d0$ADB[7:7], %regs$c0$ram_w1_d0$ADB[6:6], %regs$c0$ram_w1_d0$ADB[5:5], %regs$c0$ram_w1_d0$ADB[4:4], %const0, %const0, %const1, %const1}, CLKB=%clk$gb, CEB=1'd1, ADA={%const0, %const0, %const0, %const0, %const0, %regs$c0$ram_w1_d0$ADA[8:8], %regs$c0$ram_w1_d0$ADA[7:7], %regs$c0$ram_w1_d0$ADA[6:6], %regs$c0$ram_w1_d0$ADA[5:5], %regs$c0$ram_w1_d0$ADA[4:4], %const0, %const0, %const1, %const1}, CLKA=%clk$gb, CEA=%we, WEA=%we, DIA=resize(%wd[31:18], u18)) -> (DOB=%regs$c0$rd0_w1_d0)
   attr memory = "regs"
-  cell regs$c1$ram_w0_d0 blackbox DP16KD #(DATA_WIDTH_A=18, DATA_WIDTH_B=18) (ADB={resize(%ra2, u10), 4'd3}, CLKB=%clk$gb, CEB=1'd1, ADA={resize(%wa, u10), 4'd3}, CLKA=%clk$gb, CEA=%we, WEA=%we, DIA=%wd[17:0]) -> (DOB=%regs$c1$rd0_w0_d0)
+  cell regs$c1$ram_w0_d0 blackbox DP16KD #(DATA_WIDTH_A=18, DATA_WIDTH_B=18) (ADB={%const0, %const0, %const0, %const0, %const0, %regs$c1$ram_w0_d0$ADB[8:8], %regs$c1$ram_w0_d0$ADB[7:7], %regs$c1$ram_w0_d0$ADB[6:6], %regs$c1$ram_w0_d0$ADB[5:5], %regs$c1$ram_w0_d0$ADB[4:4], %const0, %const0, %const1, %const1}, CLKB=%clk$gb, CEB=1'd1, ADA={%const0, %const0, %const0, %const0, %const0, %regs$c1$ram_w0_d0$ADA[8:8], %regs$c1$ram_w0_d0$ADA[7:7], %regs$c1$ram_w0_d0$ADA[6:6], %regs$c1$ram_w0_d0$ADA[5:5], %regs$c1$ram_w0_d0$ADA[4:4], %const0, %const0, %const1, %const1}, CLKA=%clk$gb, CEA=%we, WEA=%we, DIA=%wd[17:0]) -> (DOB=%regs$c1$rd0_w0_d0)
   attr memory = "regs"
-  cell regs$c1$ram_w1_d0 blackbox DP16KD #(DATA_WIDTH_A=18, DATA_WIDTH_B=18) (ADB={resize(%ra2, u10), 4'd3}, CLKB=%clk$gb, CEB=1'd1, ADA={resize(%wa, u10), 4'd3}, CLKA=%clk$gb, CEA=%we, WEA=%we, DIA=resize(%wd[31:18], u18)) -> (DOB=%regs$c1$rd0_w1_d0)
+  cell regs$c1$ram_w1_d0 blackbox DP16KD #(DATA_WIDTH_A=18, DATA_WIDTH_B=18) (ADB={%const0, %const0, %const0, %const0, %const0, %regs$c1$ram_w1_d0$ADB[8:8], %regs$c1$ram_w1_d0$ADB[7:7], %regs$c1$ram_w1_d0$ADB[6:6], %regs$c1$ram_w1_d0$ADB[5:5], %regs$c1$ram_w1_d0$ADB[4:4], %const0, %const0, %const1, %const1}, CLKB=%clk$gb, CEB=1'd1, ADA={%const0, %const0, %const0, %const0, %const0, %regs$c1$ram_w1_d0$ADA[8:8], %regs$c1$ram_w1_d0$ADA[7:7], %regs$c1$ram_w1_d0$ADA[6:6], %regs$c1$ram_w1_d0$ADA[5:5], %regs$c1$ram_w1_d0$ADA[4:4], %const0, %const0, %const1, %const1}, CLKA=%clk$gb, CEA=%we, WEA=%we, DIA=resize(%wd[31:18], u18)) -> (DOB=%regs$c1$rd0_w1_d0)
   attr port = "clk"
   attr pin = "G2"
   attr io_standard = "LVCMOS33"
@@ -392,4 +410,6 @@ module regfile
   attr port = "rd2"
   cell rd2$io31 blackbox TRELLIS_IO #(DIR="OUTPUT") (I=%rd2[31:31]) -> (B=%rd2$pin31)
   cell clk$gbuf blackbox DCCA (CLKI=%clk, CE=1'd1) -> (CLKO=%clk$gb)
+  cell const1$lut blackbox LUT4 #(INIT=16'd65535) (A=1'd0, B=1'd0, C=1'd0, D=1'd0) -> (Z=%const1)
+  cell const0$lut blackbox LUT4 #(INIT=16'd0) (A=1'd0, B=1'd0, C=1'd0, D=1'd0) -> (Z=%const0)
 end

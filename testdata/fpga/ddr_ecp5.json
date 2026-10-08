@@ -81,7 +81,7 @@
           "connections": {
             "D": [ 10 ],
             "SCLK": [ 6 ],
-            "RST": [ "0" ],
+            "RST": [ 13 ],
             "Q0": [ 7 ],
             "Q1": [ 8 ]
           }
@@ -102,7 +102,7 @@
             "D0": [ 7 ],
             "D1": [ 7 ],
             "SCLK": [ 6 ],
-            "RST": [ "0" ],
+            "RST": [ 13 ],
             "Q": [ 11 ]
           }
         },
@@ -140,7 +140,7 @@
             "D0": [ 8 ],
             "D1": [ 8 ],
             "SCLK": [ 6 ],
-            "RST": [ "0" ],
+            "RST": [ 13 ],
             "Q": [ 12 ]
           }
         },
@@ -160,6 +160,28 @@
           "connections": {
             "I": [ 12 ],
             "B": [ 5 ]
+          }
+        },
+        "const0$lut": {
+          "hide_name": 0,
+          "type": "LUT4",
+          "parameters": {
+            "INIT": 0
+          },
+          "attributes": {},
+          "port_directions": {
+            "A": "input",
+            "B": "input",
+            "C": "input",
+            "D": "input",
+            "Z": "output"
+          },
+          "connections": {
+            "A": [ "0" ],
+            "B": [ "0" ],
+            "C": [ "0" ],
+            "D": [ "0" ],
+            "Z": [ 13 ]
           }
         }
       },
@@ -234,6 +256,11 @@
         "tx$d1": {
           "hide_name": 0,
           "bits": [ 12 ],
+          "attributes": {}
+        },
+        "const0": {
+          "hide_name": 0,
+          "bits": [ 13 ],
           "attributes": {}
         }
       }

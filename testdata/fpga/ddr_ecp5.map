@@ -8,5 +8,6 @@ logic:
 netlist:
   1 x DELAYG
   1 x IDDRX1F
+  1 x LUT4
   2 x ODDRX1F
   4 x TRELLIS_IO

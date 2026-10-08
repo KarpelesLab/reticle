@@ -14,4 +14,5 @@ logic:
   0 LUTs, depth 0
 netlist:
   1 x DP16KD
+  2 x LUT4
   36 x TRELLIS_IO

@@ -133,7 +133,7 @@
 use std::collections::BTreeMap;
 use std::fmt::Write as _;
 
-use super::device::{BelKind, BelRole, Device, FfReset, FfVariant};
+use super::device::{BelKind, BelRole, BramShape, Device, FfReset, FfVariant};
 use super::primitives::{add_assign, add_cell, add_net, const_expr, expr, net_expr, slice_expr};
 use crate::diag::{Diagnostic, Diagnostics};
 use crate::ir::emit::{BitView, SigBit};
@@ -161,15 +161,16 @@ pub struct CellMapReport {
     /// One entry per net, however many flip-flops share it; the inverter
     /// itself is counted in `primitives` like any other LUT.
     pub inverted: Vec<(String, String)>,
-    /// Flip-flops whose data input was a constant and now has a lookup
-    /// table driving it, as `(cell, the constant)`, in cell order.
+    /// Primitive pins that were a constant and now have a lookup table
+    /// driving them, as `(cell, port, the constant)`, in cell order.
     ///
-    /// One entry per flip-flop and **one LUT per constant**, shared by
-    /// every flip-flop of the module that wants that value, which is what
-    /// nextpnr's `pack_constants` does and what Lattice's own bitstreams
-    /// for this board contain. The LUTs themselves are counted in
-    /// `primitives` like any other.
-    pub constants: Vec<(String, Bit)>,
+    /// One entry per **bit** of one pin of one cell — a block RAM's
+    /// fourteen-bit address contributes one entry per constant bit — and
+    /// **one LUT per constant**, shared by every pin of the module that
+    /// wants that value, which is what nextpnr's `pack_constants` does and
+    /// what Lattice's own bitstreams for this board contain. The LUTs
+    /// themselves are counted in `primitives` like any other.
+    pub constants: Vec<(String, String, Bit)>,
 }
 
 impl CellMapReport {
@@ -181,8 +182,9 @@ impl CellMapReport {
             && self.constants.is_empty()
     }
 
-    /// How many flip-flops were given a constant driver, which is not the
-    /// number of drivers: there is one LUT per constant, not per flop.
+    /// How many primitive pin bits were given a constant driver, which is
+    /// not the number of drivers: there is one LUT per constant, not one
+    /// per pin.
     pub fn constant_data_pins(&self) -> usize {
         self.constants.len()
     }
@@ -215,11 +217,8 @@ impl CellMapReport {
         for (net, pin) in &self.inverted {
             let _ = writeln!(out, "  {net} inverted for the {pin} the device has");
         }
-        for (cell, value) in &self.constants {
-            let _ = writeln!(
-                out,
-                "  {cell}'s data input is the constant {value}, now driven"
-            );
+        for (cell, port, value) in &self.constants {
+            let _ = writeln!(out, "  {cell}'s {port} is the constant {value}, now driven");
         }
         for (cell, why) in &self.declined {
             let _ = writeln!(out, "  {cell} stays generic ({why})");
@@ -766,16 +765,165 @@ fn set_params(cell: &mut Cell, bel: &BelKind) {
     }
 }
 
-// --- a constant on a flip-flop's data input ---------------------------------
+// --- a constant on a primitive's input pin ----------------------------------
+
+/// Whether a family *designs* this pin to take a constant, so leaving one
+/// on it is correct rather than the defect [`drive_constant_data`] exists
+/// to prevent.
+///
+/// This is the whole exception list, and every entry is a mechanism that
+/// has been read somewhere rather than a guess. Anything not named here
+/// gets a driver, which is the safe default: a pin nothing drives does not
+/// read the constant it was given — on an ECP5 it reads a **one** and on
+/// the 7 series the database says every `IMUX` reads `VCC_WIRE` — so
+/// "needs a driver" is the answer to assume when nothing says otherwise.
+///
+/// | Pin | What absorbs the constant |
+/// |---|---|
+/// | any input of a `lut` | the **truth table**. [`map_lut`] widens a narrow table so the function ignores the tied inputs, and Lattice's own packer does the same thing from the other end — `SLICE<l>.<X><n>MUX = 1` on every unused input, with the value folded into `INIT`, in all 4262 carry halves of this board's own bitstreams |
+/// | a `ff`'s `clk`, `en`, `rst` | a **mux bit the backend writes**. On an ECP5 `SLICE<l>.CEMUX = 1` and `LSR<c>.LSRMUX`; on the 7 series a cleared `CEUSEDMUX` ties `CE` to one and a cleared `SRUSEDMUX` ties `SR` to zero, which is exactly what a flip-flop with no enable and no reset wants. Only `d` has no such bit, and `d` is what this pass was written for |
+/// | a `carry`'s `ci` | **dedicated metal** from the cell below. Nothing outside the chain may drive it, and a lookup table on one would describe a connection the fabric has not got |
+/// | a `carry`'s `cyinit` | the pin a family designs as its way in: [`WideCarry`](super::device::WideCarry) is "the chain goes on `ci` and the constant on `init`" |
+/// | a wide `carry`'s `p` and `di` | **the lane's own truth table.** These two roles exist only on the [`WideCarry`](super::device::WideCarry) shape — a 7-series `CARRY4`'s `S` and `DI` — and `src/fpga/xray/carry.rs` already puts a constant propagate into a lookup table of that lane and a constant generate into the *lower half* of it, because `DI` is reached from the slice's own `O5` and not from general routing. A driver elsewhere would cost a lookup table and a route to get to a pin the fabric wires short. The narrow shapes' operands (`a`, `b`, `i0`, `i1`) are **not** here: those are the pins that cost a board |
+/// | an `io`'s `oe` / `oen` | the **direction recipe**. Which of `IBUF`/`OBUF`/`IOBUF` a port gets, and which `BASE_TYPE` value an ECP5 pad gets, is decided from this pin; the ECP5 then ties the wire itself (`CIB.JB0MUX`), and that tie is on every Cynthion bitstream this flow has put in a part |
+/// | an `io`'s `pad` | it reaches the outside world, not the fabric, and `Netlist::off_fabric` already says so |
+/// | any `clk` | a clock is not a data pin. A lookup table on one would be a clock arriving on general routing, which both fabric backends refuse by name — so a constant here is reported, not papered over |
+/// | every pin of a `gb` | its `i` is a clock, and its `en` is a constant **this flow puts there on purpose**: [`super::primitives`] ties an ECP5 `DCCA`'s `CE` high because nothing gates a clock here, and leaving it unconnected would let the tool decide what an unenabled clock buffer does. A lookup table on it would ask the router for a path into a clock buffer's enable for no defect at all |
+///
+/// A `dsp` and a `pll` are not `bel` lines — they are shapes of their own
+/// — so they never reach this list, and the pins they hold at a constant
+/// are the ones their own `tie` clause names: a declaration that the
+/// *silicon* drives them, which `src/fpga/xray/cmt.rs` then reads off the
+/// pin to pick the site's inverter bits.
+///
+/// The table above is what every family has in common. A family with a
+/// mechanism another family has not got names the pin in its own `.dev`
+/// file instead, with an `absorbs` clause, and
+/// [`BelKind::absorbs_constant`] is consulted first — which is how a
+/// 7-series `OBUF`'s data pin gets a driver while an ECP5 `TRELLIS_IO`'s
+/// does not.
+///
+/// **That one is a real disagreement with the vendor and is deliberate.**
+/// `ecppack` writes `CIB.J<x>MUX` for **not one** of the 318 output pads
+/// of `analyzer.bit`, `selftest.bit` and `facedancer.bit`, on the data
+/// wire or the tristate wire: it routes its constant lookup table into
+/// every one of them instead, which is what
+/// `tests/fpga_trellis.rs`'s
+/// `what_lattices_own_packer_writes_for_a_constant_on_a_pad` measures. The
+/// tie this flow writes instead is in every bitstream it has put in a
+/// Cynthion, including the one whose `R4` holds a constant zero and which
+/// a USB host enumerates — so it is measured on **silicon**, where the
+/// vendor's answer is measured in somebody else's file. Replacing
+/// something that works on a part with something that works on a part is
+/// churn, and the part is the better instrument. The 7 series has no such
+/// field, so there the constant is built.
+fn absorbs_constant(bel: &BelKind, port: &str) -> bool {
+    if bel.absorbs_constant(port) {
+        return true;
+    }
+    match bel.role {
+        BelRole::Lut | BelRole::GlobalBuffer => true,
+        BelRole::Ff => port != "d",
+        BelRole::Carry => matches!(port, "ci" | "cyinit" | "p" | "di") || port.ends_with("clk"),
+        _ => matches!(port, "oe" | "oen" | "pad") || port.ends_with("clk"),
+    }
+}
+
+/// Whether a block RAM pin of abstract role `role` needs a driver on a
+/// block of this shape.
+///
+/// A `bram` block is not a `bel` line — it is declared by its own block
+/// with a `port` map of abstract roles (`clk`, `en`, `addr`, `din`,
+/// `dout`, `we`, `rst`) — so it is asked separately, and the answer is
+/// narrower than for a `bel`: **its address, on a family whose own `.dev`
+/// file states what the bits below the word address must read.**
+///
+/// That clause is `pad` on a `mode` line, and the ECP5 is the family that
+/// has one:
+///
+/// ```text
+/// mode 18 1024 param DATA_WIDTH_A=18 DATA_WIDTH_B=18 addr 4 pad 4'b0011 …
+/// ```
+///
+/// A `DP16KD` in 18-bit mode addresses its words through `AD[13:4]` and
+/// **reads** `AD[3:0]`, which must be `0011`. Two of those four bits are a
+/// constant zero, nothing routed them, and an unrouted input on that
+/// family is a **one** — so every 18-bit block RAM this flow built
+/// addressed its contents through `1111`. Driving them is the fix.
+///
+/// A family that states no `pad` is read as not reading those bits, and
+/// **that is a reading rather than a measurement.** It is the right one
+/// for the two families whose libraries say so — a `RAMB18E1` in 18-bit
+/// mode uses `ADDRARDADDR[13:4]` and an `SB_RAM40_4K` in 8-bit mode
+/// `ADDR[8:0]`, with the rest unused — but it is their documentation
+/// speaking and not this project's instrument. What makes it safe to rely
+/// on: nextpnr ties those bits to zero on both families, so a netlist that
+/// goes out to nextpnr gets them driven there, and on the 7 series
+/// `XrayFabric::configure_block_rams` now gives an unused address bit the
+/// idle policy, so a contended ground fan can no longer fail a build over
+/// one.
+///
+/// The other roles stay with the backends' own tie passes, which is what
+/// those were written for, and the gap that leaves is named in
+/// `tests/fpga_constants.rs`.
+fn bram_pin_needs_a_driver(role: &str, shape: &BramShape) -> bool {
+    role == "addr"
+        && shape
+            .mode_layouts
+            .iter()
+            .any(|layout| layout.addr_pad.is_some())
+}
+
+/// Every `(primitive, port)` of `device` that a constant may not be left
+/// on, from the device's own declarations and from nothing else.
+fn pins_needing_a_driver(device: &Device) -> Vec<(String, String)> {
+    let mut out: Vec<(String, String)> = Vec::new();
+    for bel in &device.bels {
+        for (role, names) in &bel.ports {
+            if absorbs_constant(bel, role) {
+                continue;
+            }
+            for name in names.split(',').filter(|n| !n.is_empty()) {
+                out.push((bel.name.clone(), name.to_owned()));
+            }
+        }
+    }
+    for bram in &device.block_rams {
+        for port in &bram.port_map {
+            for (role, name) in &port.signals {
+                if bram_pin_needs_a_driver(role, bram) {
+                    out.push((bram.name.clone(), name.clone()));
+                }
+            }
+        }
+    }
+    // A family declares its one flip-flop once per parameter set — an ECP5
+    // has thirty-six `TRELLIS_FF` lines, and three `bram` blocks per device
+    // say the same two ports — so the same `(primitive, port)` pair arrives
+    // many times, and a cell would be given a driver once per line.
+    out.sort();
+    out.dedup();
+    out
+}
 
 /// Gives every pin that is a constant and cannot absorb one something that
 /// drives it: one lookup table per constant, shared by every cell of the
 /// module that asks for that value.
 ///
+/// Which pins those are is [`absorbs_constant`]'s answer, read off the
+/// device's own port maps: **every input of every primitive except the
+/// ones a family designs to take a constant**. The default is the one that
+/// is safe, because the fault this prevents is silent — a netlist has no
+/// unrouted wires, so a constant pin evaluates to the constant in every
+/// simulation, every exhaustive model check and every SAT proof in this
+/// tree, and the bitstream decodes perfectly either way.
+///
 /// See the module docs for why a fabric flip-flop cannot absorb a constant
 /// the way a lookup table can, and
 /// `tests/fpga_trellis.rs`'s `what_lattices_own_packer_writes_for_a_constant`
 /// for the vendor bitstreams this shape was read out of.
+///
+/// # The five pins that were added one defect at a time
 ///
 /// A flip-flop's data input is the pin this was written for. A distributed
 /// RAM's inputs are in exactly the same position and for a sharper reason:
@@ -786,33 +934,52 @@ fn set_params(cell: &mut Cell, bel: &BelKind) {
 /// `lutram` primitive is therefore given a real driver, which is what
 /// nextpnr's `pack_constants` does for all of them.
 ///
-/// # And a carry element's operands, which cost a board to find
-///
-/// A **carry** element's inputs are the third case and they were the
-/// expensive one. `cnt + 1` is an adder whose second operand is a
-/// constant, so thirty-one of its thirty-two `b` pins are a constant
-/// **zero** — and a constant on a carry cell's operand pin is not a wire
-/// anything routes, so on an ECP5 every one of them read as a **one** and
-/// the chain computed `cnt - 1`.
-///
-/// Nothing off the part could see it. The design synthesised, placed,
+/// A **carry** element's inputs were the third case and the expensive one.
+/// `cnt + 1` is an adder whose second operand is a constant, so thirty-one
+/// of its thirty-two `b` pins are a constant **zero** — and a constant on
+/// a carry cell's operand pin is not a wire anything routes, so on an ECP5
+/// every one of them read as a **one** and the chain computed `cnt - 1`.
+/// Nothing off the part could see it: the design synthesised, placed,
 /// routed, and every set bit of its bitstream decoded back through the
-/// database into the arcs the router chose; the exhaustive check in
+/// database into the arcs the router chose, while the exhaustive check in
 /// `src/fpga/primitives.rs` and the SAT proof in `tests/fpga_carry.rs`
-/// both passed, because in a netlist a constant pin evaluates to the
-/// constant. What found it was a Cynthion: the USB device design of
-/// `CLAUDE.md`'s own example stopped enumerating, and the build of the
-/// same design with carry inference switched off was byte-identical to
-/// the bitstream that works.
+/// both passed. What found it was a Cynthion that stopped enumerating.
 ///
-/// So this pass covers every input of a `carry` primitive too, with two
-/// exclusions and both of them are the chain's own ends. `ci` is
-/// dedicated metal from the cell below and nothing outside may drive it.
-/// `cyinit` is the pin a family *designs* to take a constant — the
-/// 7-series' own way in, which [`WideCarry`](super::device::WideCarry)
-/// describes as "the chain goes on `ci` and the constant on `init`" — so
-/// it can absorb one by construction, and giving it a lookup table would
-/// cost one per chain for nothing.
+/// A **block RAM's address** and an **output buffer's data** are the
+/// fourth and fifth, and they are the reason this is now a rule with a
+/// short list of exceptions rather than a list of three roles:
+///
+/// - an ECP5 `DP16KD` in 18-bit mode wants `AD[3:0] = 0011`, which
+///   `src/fpga/devices/ecp5.dev` states as `pad 4'b0011`. Two of those
+///   four bits are a constant **zero**, nothing routed them, and an
+///   unrouted input on that family reads as a one — so every 18-bit
+///   block RAM this flow built addressed its contents through `AD[3:0]`
+///   reading `1111`. That is the `lutram` fault again, in the hard block,
+///   and no test of this flow's own output could have seen it. It is
+///   driven now, and only on the family whose file states the value:
+///   [`bram_pin_needs_a_driver`] says why;
+/// - an output buffer's data pin had nothing anywhere on the 7 series.
+///   `assign led = 1'b1` left the pad's input unrouted and the pad came
+///   out **low** on a Basys 3 — the opposite symptom to the ECP5's, from
+///   the same cause, with no diagnostic on either. It is built now.
+///
+/// The two families' answers differ and that is the point of the
+/// `absorbs` clause: an ECP5 pad's data wire *can* be tied, in the `CIB`
+/// tile beside it, and that tie is in every bitstream this flow has put in
+/// a Cynthion — so `ecp5.dev` says `absorbs dout` and this pass leaves it
+/// alone there. A 7-series `OBUF` has no such field.
+///
+/// The 7-series block RAM address is not fixed here at all, and that is
+/// worth being exact about. Those bits are ones the block does **not**
+/// read, and what went wrong was the post-route tie pass failing a build
+/// over them: it hunts a free `GND_WIRE -> GFAN<n>` path, an interconnect
+/// tile has exactly **two** such fans for its 48 inputs and the router
+/// competes for both, so whether a build succeeded depended on where the
+/// block landed. `examples/basys3/ssd1306_console.v` did not build at all
+/// and `examples/basys3/selftest.v` built, then did not, then did. The
+/// remedy there is `src/fpga/xray/bram.rs`'s `unused_address_bit`, which
+/// gives such a bit the idle policy instead — no lookup table and no route
+/// for a bit nothing reads.
 ///
 /// A pin the element could absorb the constant into — an ECP5 `CCU2C`
 /// lane whose `INIT` could be rewritten, which is what `ecppack` does —
@@ -830,44 +997,16 @@ fn drive_constant_data(
         // `TrellisFabric::configure_registers`.
         return;
     };
-    let mut data_ports: Vec<(String, String)> = device
-        .bels
-        .iter()
-        .filter(|bel| bel.role == BelRole::Ff)
-        .map(|bel| (bel.name.clone(), bel.port("d").unwrap_or("D").to_owned()))
-        .collect();
-    for bel in device
-        .bels
-        .iter()
-        .filter(|b| matches!(b.role, BelRole::LutRam | BelRole::Carry))
-    {
-        for (role, names) in &bel.ports {
-            // The outputs, which nothing drives from outside, and the
-            // chain's own two ends, which are dedicated metal: a `ci` is
-            // reached from the cell below or from nowhere, and a flow that
-            // put a lookup table on one would be describing a connection
-            // the fabric does not have.
-            if matches!(role.as_str(), "dout" | "o" | "s" | "co" | "ci" | "cyinit") {
-                continue;
-            }
-            for name in names.split(',') {
-                data_ports.push((bel.name.clone(), name.to_owned()));
-            }
-        }
-    }
-    // A family declares its one flip-flop once per parameter set — an ECP5
-    // has thirty-six `TRELLIS_FF` lines — so the same `(primitive, port)`
-    // pair arrives many times, and a cell would be given a driver once per
-    // line.
-    data_ports.sort();
-    data_ports.dedup();
+    let data_ports = pins_needing_a_driver(device);
     if data_ports.is_empty() {
         return;
     }
-    // Which flip-flop asks for which constant, decided on the bit-level
-    // view so that a constant reaching the pin through a continuous
-    // assignment, a slice or a concatenation counts as one.
-    let mut wanted: Vec<(CellId, String, Bit)> = Vec::new();
+    // Which pin asks for which constant, decided on the bit-level view so
+    // that a constant reaching the pin through a continuous assignment, a
+    // slice or a concatenation counts as one — and **per bit**, because a
+    // block RAM's address arrives as one fourteen-bit pin of which four
+    // bits are the constant.
+    let mut wanted: Vec<(CellId, String, Vec<Option<Bit>>)> = Vec::new();
     match BitView::new(module) {
         Ok(view) => {
             for (id, cell) in module.cells.iter() {
@@ -878,13 +1017,27 @@ fn drive_constant_data(
                     .iter()
                     .filter(|(name, _)| name == primitive.as_str())
                 {
+                    // An output port of the cell is not in `inputs`, which
+                    // is how a role name that means an input on one
+                    // primitive and an output on another is told apart: an
+                    // `io`'s `dout` carries the design's value *to* the
+                    // pad, a `lutram`'s `dout` is what it reads back.
                     let Some(d) = cell.input(port) else { continue };
                     let Ok(bits) = view.expr_bits(d) else {
                         continue;
                     };
-                    let [bit] = bits[..] else { continue };
-                    if let SigBit::Const(value @ (Bit::Zero | Bit::One)) = view.canonical(bit) {
-                        wanted.push((id, port.clone(), value));
+                    let values: Vec<Option<Bit>> = bits
+                        .iter()
+                        .map(|bit| match view.canonical(*bit) {
+                            // An `x` or a `z` is not built: there is no
+                            // wire value for either, so the pin is left as
+                            // it is and the backend names it.
+                            SigBit::Const(value @ (Bit::Zero | Bit::One)) => Some(value),
+                            _ => None,
+                        })
+                        .collect();
+                    if values.iter().any(Option::is_some) {
+                        wanted.push((id, port.clone(), values));
                     }
                 }
             }
@@ -896,28 +1049,64 @@ fn drive_constant_data(
 
     let mut zero: Option<NetId> = None;
     let mut one: Option<NetId> = None;
-    for (id, port, value) in wanted {
+    for (id, port, values) in wanted {
         let span = module.cells[id].span;
-        let held = if value == Bit::One {
-            &mut one
+        let name = module.cells[id].name.as_str().to_owned();
+        let Some(old) = module.cells[id].input(&port) else {
+            continue;
+        };
+        // A pin with some constant bits and some real ones keeps the real
+        // ones, and they are taken off a net rather than off the original
+        // expression: a block RAM's address arrives as a concatenation, and
+        // slicing *that* ten times would repeat the whole concatenation ten
+        // times in everything downstream reads.
+        let width = u32::try_from(values.len()).unwrap_or(1);
+        let kept = values.iter().any(Option::is_none).then(|| {
+            let net = add_net(module, &format!("{name}${port}"), Type::bits(width), span);
+            add_assign(module, net, old, span);
+            net_expr(module, net, span)
+        });
+        // One expression per bit, least significant first: the shared
+        // driver where the bit was a constant, the pin's own bit where it
+        // was not.
+        let mut parts: Vec<ExprId> = Vec::with_capacity(values.len());
+        for (index, value) in values.iter().enumerate() {
+            let bit = u32::try_from(index).unwrap_or(0);
+            let Some(value) = value else {
+                let base = kept.unwrap_or(old);
+                parts.push(slice_expr(module, base, bit, bit, span));
+                continue;
+            };
+            let held = if *value == Bit::One {
+                &mut one
+            } else {
+                &mut zero
+            };
+            let net = match *held {
+                Some(net) => net,
+                None => {
+                    let net = constant_lut(module, device, &lut, *value, span, report, diags);
+                    *held = Some(net);
+                    net
+                }
+            };
+            parts.push(net_expr(module, net, span));
+            report.constants.push((name.clone(), port.clone(), *value));
+        }
+        // `Concat` is most significant first.
+        parts.reverse();
+        let driven = if parts.len() == 1 {
+            parts[0]
         } else {
-            &mut zero
+            expr(module, ExprKind::Concat(parts), span)
         };
-        let net = match *held {
-            Some(net) => net,
-            None => {
-                let net = constant_lut(module, device, &lut, value, span, report, diags);
-                *held = Some(net);
-                net
-            }
-        };
-        let driven = net_expr(module, net, span);
-        let cell = &mut module.cells[id];
-        let name = cell.name.as_str().to_owned();
-        if let Some((_, slot)) = cell.inputs.iter_mut().find(|(p, _)| p.as_str() == port) {
+        if let Some((_, slot)) = module.cells[id]
+            .inputs
+            .iter_mut()
+            .find(|(p, _)| p.as_str() == port)
+        {
             *slot = driven;
         }
-        report.constants.push((name, value));
     }
 }
 
@@ -1117,14 +1306,14 @@ mod tests {
         assert_eq!(report.count("LUT4"), 2);
         assert_eq!(
             report.constants,
-            vec![("r$ff1".to_owned(), Bit::Zero)],
+            vec![("r$ff1".to_owned(), "DI".to_owned(), Bit::Zero)],
             "one flip-flop asked for a constant, and it is the top bit"
         );
         assert_eq!(report.constant_data_pins(), 1);
         assert!(
             report
                 .to_text()
-                .contains("r$ff1's data input is the constant 0, now driven"),
+                .contains("r$ff1's DI is the constant 0, now driven"),
             "{}",
             report.to_text()
         );
@@ -1171,7 +1360,10 @@ mod tests {
         let report = map_cells(&mut design, top, device, &mut diags);
         assert_eq!(diags.len(), 0, "{:?}", diags.iter().next());
         assert!(!validate(&design).has_errors());
-        assert_eq!(report.constants, vec![("r$ff1".to_owned(), Bit::One)]);
+        assert_eq!(
+            report.constants,
+            vec![("r$ff1".to_owned(), "DI".to_owned(), Bit::One)]
+        );
         assert_eq!(
             port_net(&design, top, "r$ff1", "DI").as_deref(),
             Some("const1")

@@ -19,4 +19,5 @@ logic:
 netlist:
   1 x DCCA
   4 x DP16KD
+  2 x LUT4
   113 x TRELLIS_IO

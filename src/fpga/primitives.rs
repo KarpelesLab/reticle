@@ -5780,6 +5780,17 @@ mod tests {
     /// to be structural: after the whole flow, no input pin of a carry
     /// cell may be a constant. `techcells::drive_constant_data` is what
     /// makes that true.
+    ///
+    /// **The general form of this test is
+    /// `no_primitive_input_is_left_holding_a_constant` in
+    /// `tests/fpga_constants.rs`**, which asks it of every bel role on
+    /// every device this tree ships and carries the list of pins a family
+    /// designs to take a constant. It exists because the same fault then
+    /// turned up on a block RAM's address and on an output buffer's data,
+    /// two pins this test says nothing about. This one is kept because it
+    /// is the one a board paid for, and because it pins the *count* — 40
+    /// pins over 9 cells for a sixteen-bit counter — which the general
+    /// one does not.
     #[test]
     fn no_carry_pin_is_left_holding_a_constant() {
         use crate::ir::emit::{BitView, SigBit};
