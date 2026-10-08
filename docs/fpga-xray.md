@@ -62,10 +62,10 @@ Two of those matter beyond the count. The **clock-management column** is
 what a signal must cross to get from one side of the die to the other,
 and almost every bogus join is in it. `BRKH_CLB` is the tile that
 **breaks a CLB column at a clock-region boundary**, so a route leaving
-its clock region could be welded to the wrong row on the way. Whether
-`sw_led` and `blink` — the two designs that were ever watched working —
-took a bogus hop was not measured before the fix; what is measured is
-that the two designs that did not work took six and sixty-eight.
+its clock region could be welded to the wrong row on the way. `sw_led`
+and `blink` — the two designs that were ever watched working — take no
+bogus hop at all, measured on the code before the fix; `carry_probe`
+takes six and `io_exercise` sixty-eight. The table below has all four.
 
 The fix is in the model, not in the loader: [`arch::WireRef`] gained a
 `tile_type`, and a reference that names one resolves **only** against a
@@ -82,8 +82,31 @@ still holds.
   left-hand IO column, the clock-management column beside it and the
   first logic columns. It fails before the fix and passes after, and a
   second test names the `CMT_FIFO` / `CMT_TOP` pair directly.
-- `io_exercise`: 68 bogus hops before, **0** after. `carry_probe` with
-  `carry_probe_trusted.rcf`: **6** before, **0** after.
+- Four designs, counted the same way before the fix and after. The two
+  that a person ever watched working had **no** bogus hop; the two that
+  did not work had all of them:
+
+  | design | bogus hops before | after | watched |
+  |---|---|---|---|
+  | `sw_led` | 0 | 0 | works |
+  | `blink` | 0 | 0 | works |
+  | `carry_probe` (`carry_probe_trusted.rcf`) | **6** | 0 | wrong |
+  | `io_exercise` | **68** | 0 | wrong |
+
+- And in `io_exercise` the hops land on the nets that read wrong, with
+  no exception either way. All sixteen switch nets carry two to four of
+  them (each switch feeds its LED *and* the display multiplexer, and a
+  hop on one branch leaves the others alone). Of the fifteen LED nets,
+  exactly four carry one — `led[1]`, `led[11]`, `led[12]`, `led[14]`,
+  which are LD1, LD12, LD13 and LD15 — and **all four are in the set of
+  eight that read stuck**, while none of the seven that read correctly
+  carries any. `dp` carries three, which is why the decimal point never
+  blinked; `an[0]` carries one, which is why three digits could be lit
+  at once; `seg[0]`, `seg[4]`, `seg[5]` and `seg[6]` carry one or two,
+  so the glass could not be read at all. `btn_c`, `btn_u` and `btn_l`
+  carry one each. `btn_r` carries none and still read wrong — but it was
+  read *through* the display, which `dp`, `an[0]` and four segments had
+  already corrupted.
 - It does **not** follow that anything now works on the part. Nothing
   in this section has been on silicon; it says the routing graph no
   longer contains connections the vendor's own database denies. The
@@ -413,8 +436,9 @@ is the same design cut down to only the eight stuck switches — if they
 work in a small design, the fault depends on how many pads are in play.
 
 **Answered, and by none of those.** The split is by whether the net took
-a welded join; the per-net breakdown was not taken for `io_exercise`
-before the fix, only the total of 68. A later board reading also
+a welded join — all four LED nets with a bogus hop are in the stuck set
+of eight and none of the seven that worked has one; the top section has
+the breakdown. A later board reading also
 withdrew the "stuck high inputs" reading itself: the eight LEDs in
 question were already lit, so flipping their switches proved nothing
 about the *inputs*, and a switch-at-a-time reading found no permutation
