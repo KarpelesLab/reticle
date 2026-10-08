@@ -8,20 +8,59 @@
 # bytes through `uart_loop.v`), and `sw[0]`/`led[0]` are at the RIGHT-hand
 # end (CHECKED the same day, correcting a comment that said left).
 #
-# Pmod JA's top row, as Digilent prints it: JA1 J1, JA2 L2, JA3 J2,
-# JA4 G2. NOT CHECKED — nothing has been driven into JA on this board.
-# `examples/basys3/io_exercise.v` is how to check a pad before trusting
-# it.
+# ===================================================================
+# WHERE TO CONNECT THE FOUR WIRES
+# ===================================================================
+#
+# The top row of **Pmod JB**, plus a ground. Digilent numbers a Pmod
+# connector 1-6 along the top row and 7-12 along the bottom, with pins 5
+# and 11 ground and pins 6 and 12 3V3.
+#
+#   JB1   A14    sclk    the master's clock
+#   JB2   A16    mosi    its data: commands and pixels on one wire
+#   JB3   B15    dc      low for a command byte, high for a pixel byte
+#   JB4   B16    cs_n    low while a byte is on the wire
+#   JB5   —      GND     connect this: two boards need a common ground
+#
+# **All four are inputs.** This design never drives them; it is the
+# display, not the driver.
+#
+# **3.3 V only.** The Basys 3's Pmod pins are 3.3 V CMOS. A 5 V master —
+# a classic Arduino, for instance — needs level shifting, and connecting
+# one directly risks the part.
+#
+# **The rate limit is a ratio**: `PHASE_MARGIN = 2` against a 100 MHz
+# clock means each `sclk` phase must last at least two system clocks, so
+# `sclk` may run up to 25 MHz. An SSD1306's own maximum is well under
+# that. `overrun_count` rises before any bit is lost, so the counters say
+# when the margin has gone rather than dropping bits quietly.
+#
+# JA and JC work identically — all three were built and routed on this
+# part with zero unexplained bits, so the choice is physical convenience.
+# To move, replace the four balls below with that header's top row:
+#
+#   JA   J1  L2  J2  G2         JC   K17 M18 N17 P18
+#
+# Avoid JXADC: it is the analog header and carries filtering that has no
+# business on a digital clock.
+#
+# **NOT CHECKED: no signal has been driven into any Pmod on this board.**
+# What the balls do is quoted from Digilent's master constraints, and what
+# the flow does with them is verified only as far as "it places, routes
+# and every bit decodes". The counters are the real test, and §4 of
+# `ip/bus/spi_display_rx/README.md` says how to read them: both byte
+# counts advancing while `bit_error_count` and `dc_change_count` stay at
+# zero is a working link.
 #
 # LD6 (ball U14) is absent: it is the one LED ball of the sixteen in a
 # `LIOB33_SING` tile, which this flow has no IO table for. A gap in the
 # flow, not a dead ball. So `led[5]` is LD5 and `led[6]` is LD7.
 set_io -io_standard LVCMOS33 clk W5
 
-set_io -io_standard LVCMOS33 sclk J1
-set_io -io_standard LVCMOS33 mosi L2
-set_io -io_standard LVCMOS33 dc   J2
-set_io -io_standard LVCMOS33 cs_n G2
+set_io -io_standard LVCMOS33 sclk A14
+set_io -io_standard LVCMOS33 mosi A16
+set_io -io_standard LVCMOS33 dc   B15
+set_io -io_standard LVCMOS33 cs_n B16
 
 set_io -io_standard LVCMOS33 uart_rx_pin B18
 set_io -io_standard LVCMOS33 uart_tx_pin A18
