@@ -1,0 +1,15 @@
+# Digilent Basys 3: `carry_where.v` on the seven LED balls that have been
+# watched changing state on this board.
+#
+# LD10 and LD14 are the two slow blinkers and LD11 is the control; the
+# four in between are latches. Ball order follows `io_exercise.rcf`.
+set_io -io_standard LVCMOS33 clk W5
+set_io -io_standard LVCMOS33 led_diff_lo  U15
+set_io -io_standard LVCMOS33 led_diff_mid V14
+set_io -io_standard LVCMOS33 led_diff_hi  V13
+set_io -io_standard LVCMOS33 led_diff_top V3
+set_io -io_standard LVCMOS33 led_free     W3
+set_io -io_standard LVCMOS33 led_zero     U3
+set_io -io_standard LVCMOS33 led_chain    P1
+create_clock -name sys -period 10.0 clk
+clock_domain sys clk

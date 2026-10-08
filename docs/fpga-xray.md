@@ -265,6 +265,65 @@ differ because the two designs drive different halves of the die, and the
 differences are enumerated below. That comparison is
 `tests/fpga_xray.rs::the_clock_path_is_the_one_vivado_built`.
 
+## A carry chain on the part, and it is right
+
+**CHECKED, 8 October 2026, and this is the first measurement from this
+board that rests on an instrument checked before the subject.**
+`examples/basys3/carry_where.v` runs a 26-bit `chain + 1` counter against
+a 26-bit carry-free counter, holds both at zero until one shared edge
+releases them, and latches — in four groups covering every bit — whether
+they ever differ. A person at the board read:
+
+| LED | | read |
+|---|---|---|
+| LD10 | carry-free counter, bit 25 | **blinking ~1.5 Hz** |
+| LD14 | carry-chain counter, bit 25 | **blinking, in step with LD10** |
+| LD5 LD7 LD8 LD9 | ever differed in bits 0–5, 6–12, 13–18, 19–25 | **all dark** |
+| LD11 | a register only ever assigned zero | **dark** — the control |
+
+So the `CARRY4` chain computes plus one across all 26 bits. Bit 25 cannot
+move unless every carry below it propagates, and the four latches say the
+two counters were never once unequal over the whole 2^26 count. **This is
+also the first design containing a carry chain seen working on a part
+here**, and so the first silicon confirmation of the `tileconn` join fix.
+
+### Why this design and not `carry_probe.v`
+
+`carry_probe.v` asks "do they differ" with one latch, and over one
+afternoon that latch closed for **three** different reasons, each
+producing an identical lit LED: a pad that did not follow its net, a
+welded routing join corrupting `plain[2]`, and finally the two counters
+being released from configuration one clock edge apart. A single bit
+cannot distinguish a fault from a bad instrument from a startup artefact.
+
+Three rules came out of that, and they are why this reading is worth
+something:
+
+- **Nothing an eye must judge.** An earlier design put 12 Hz on an LED and
+  asked whether it was blinking; the honest answer was "lit", and that
+  answer was then used as data. The only moving lights here are 1.5 Hz,
+  countable by eye; every other claim is a latch that is on or off.
+- **A control that fails loudly.** LD11 is a *register* holding zero, not
+  a constant — because a pad tied to a constant is itself a defect on
+  this family, so a constant control could not tell the instrument apart
+  from the fault it exists to exclude.
+- **An arm that cannot disarm.** Both counters are released on one edge
+  so a ragged release cannot leave them permanently one apart. The first
+  attempt walked a single one up a shift register under an enable; it
+  walked off the end, `armed` went low for good, both counters froze and
+  the latches stayed lit from the brief armed window. On the board that
+  read as "nothing blinking, two LEDs on". `arm` now shifts **ones** in
+  and saturates.
+
+### What this does and does not establish
+
+It establishes the carry chain, the join fix, flip-flops, the clock and
+seven output pads, in one clock region. It does **not** establish
+multi-region clocking: all of this design's clock sinks are in one
+region, nothing in `artix7/harness/` has registers in more than one, and
+so there is no oracle for that case yet. It says nothing about the block
+RAM, the distributed RAM or the PLL.
+
 ## A carry chain on the part: RETRACTED, and what the retraction found
 
 > **This section's conclusion was wrong, and the way it was wrong is the
@@ -534,7 +593,7 @@ block RAM, a PLL or a pad.
 | lookup tables and LVCMOS33 pads | CHECKED twice, by two designs and two people's glances |
 | the 100 MHz oscillator, `BUFG` and the clock tree | CHECKED: a 4-bit counter reaches 15 and stays there, and a 26-bit carry-free counter blinks |
 | flip-flops | CHECKED, by the same two counters |
-| a `CARRY4` chain | **UNKNOWN.** The reading that said "wrong" was retracted; it rested on a pad that does not follow its net |
+| a `CARRY4` chain | **CHECKED CORRECT** — `carry_where.v`, all 26 bits, with a control |
 | a pad tied to a constant | **UNKNOWN** on the board. The gap in `drive_constant_data` is real in the source and needs no board to see |
 | the global clock reaching every flip-flop | **UNKNOWN.** Called "CHECKED WRONG" on the strength of five solid LEDs and one frozen counter; the five LEDs turned out to be welded joins (top section) and the frozen counter is explained the same way. Nothing has been shown wrong about the clock itself |
 | `RAMB18E1`, `RAM64X1D`, `PLLE2_BASE` | the part accepts the bitstreams with `DONE` high, which means CRC passed and nothing more. Not run. |
