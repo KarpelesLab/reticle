@@ -9,12 +9,20 @@
 //!
 //! - a **block RAM's address**. An ECP5 `DP16KD` in 18-bit mode wants
 //!   `AD[3:0] = 0011` and two of those bits are a constant **zero**, which
-//!   an unrouted ECP5 input reads as a **one**; a 7-series `RAMB18E1`'s
-//!   unused low address bits are a constant zero whose post-route hunt for
-//!   a ground path could fail depending on where the block landed.
-//! - an **output buffer's data**. `assign led = 1'b1` left the pad's input
-//!   unrouted: **low** on a Basys 3, **high** on an ECP5, no diagnostic on
-//!   either.
+//!   an unrouted ECP5 input reads as a **one**, so every 18-bit block this
+//!   flow built addressed its contents through `1111`.
+//! - an **output buffer's data**. On the 7 series `assign led = 1'b1` left
+//!   the pad's input unrouted and the pad came out **low** on a Basys 3,
+//!   with no diagnostic.
+//!
+//! The two remedies are not the same, and this test is keyed to that: the
+//! two pins above get a **driver**, while a 7-series `RAMB18E1`'s unused
+//! low address bits — which the block does not read — get the idle tie
+//! policy in `src/fpga/xray/bram.rs` instead, because what went wrong there
+//! was a build *failing* over a contended ground fan rather than a value
+//! being read. So `bram`/`addr` appears in the exemption table for four
+//! families and not for the ECP5, and `io`/`dout` is excused only by the
+//! one device file that declares `absorbs dout`.
 //!
 //! # What this would and would not catch
 //!
