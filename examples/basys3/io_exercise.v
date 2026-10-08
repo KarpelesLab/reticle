@@ -152,25 +152,37 @@ module io_exercise (
                       : from_switches;
 
     // Active low, segments a..g in that order.
+    // Active low, and **the bit order is `gfedcba`**: the leftmost bit of
+    // a `7'b...` literal is the most significant, which is `seg[6]`, which
+    // is segment g. The first version of this table was written as though
+    // the leftmost bit were segment a, so every pattern was bit-reversed —
+    // a `0` came out as a zero with no top bar and a lit middle bar.
+    //
+    // Nothing in simulation can catch that: the patterns are arbitrary
+    // constants and a reversed font is as self-consistent as a correct
+    // one. Only a person looking at the glass can, and one did.
+    //
+    // Checked against the standard active-low hex font: C0 F9 A4 B0 99 92
+    // 82 F8 80 90 88 83 C6 A1 86 8E.
     function [6:0] segments;
         input [3:0] value;
         case (value)
-            4'h0: segments = 7'b0000001;
-            4'h1: segments = 7'b1001111;
-            4'h2: segments = 7'b0010010;
-            4'h3: segments = 7'b0000110;
-            4'h4: segments = 7'b1001100;
-            4'h5: segments = 7'b0100100;
-            4'h6: segments = 7'b0100000;
-            4'h7: segments = 7'b0001111;
+            4'h0: segments = 7'b1000000;
+            4'h1: segments = 7'b1111001;
+            4'h2: segments = 7'b0100100;
+            4'h3: segments = 7'b0110000;
+            4'h4: segments = 7'b0011001;
+            4'h5: segments = 7'b0010010;
+            4'h6: segments = 7'b0000010;
+            4'h7: segments = 7'b1111000;
             4'h8: segments = 7'b0000000;
-            4'h9: segments = 7'b0000100;
+            4'h9: segments = 7'b0010000;
             4'hA: segments = 7'b0001000;
-            4'hB: segments = 7'b1100000;
-            4'hC: segments = 7'b0110001;
-            4'hD: segments = 7'b1000010;
-            4'hE: segments = 7'b0110000;
-            default: segments = 7'b0111000;
+            4'hB: segments = 7'b0000011;
+            4'hC: segments = 7'b1000110;
+            4'hD: segments = 7'b0100001;
+            4'hE: segments = 7'b0000110;
+            default: segments = 7'b0001110;  // F
         endcase
     endfunction
 
