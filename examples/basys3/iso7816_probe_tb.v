@@ -181,7 +181,18 @@ module iso7816_probe_tb;
     endtask
 
     integer i;
-    reg [7:0] atr [0:4];
+    // **The real device's answer-to-reset**, as its owner reported it, not
+    // an invented one. A well-formed T=0 ATR: TS=3B direct convention,
+    // T0=1B meaning TA1 follows and eleven historical bytes, TA1=87 giving
+    // Fi=512 and Di=64 so F/D is 8, then "2.0.1" in ASCII among the
+    // historical bytes, and no TCK because the protocol is T=0.
+    //
+    // Fourteen bytes is a better test than five for a reason beyond
+    // length: it crosses the idle-gap timeout several times over, so a gap
+    // counted in the wrong unit shows up as a CRLF in the middle of the
+    // answer rather than passing unnoticed.
+    localparam integer ATR_LEN = 14;
+    reg [7:0] atr [0:13];
     reg [7:0] want;
 
     function [7:0] hexch;
@@ -226,13 +237,15 @@ module iso7816_probe_tb;
         end
 
         // ---- The card answers ----
-        atr[0] = 8'h3B; atr[1] = 8'h90; atr[2] = 8'h11;
-        atr[3] = 8'h00; atr[4] = 8'hA5;
-        for (i = 0; i < 5; i = i + 1) card_byte(atr[i]);
+        atr[0]  = 8'h3B; atr[1]  = 8'h1B; atr[2]  = 8'h87; atr[3]  = 8'h05;
+        atr[4]  = 8'h32; atr[5]  = 8'h2E; atr[6]  = 8'h30; atr[7]  = 8'h2E;
+        atr[8]  = 8'h31; atr[9]  = 8'h04; atr[10] = 8'h33; atr[11] = 8'h00;
+        atr[12] = 8'h00; atr[13] = 8'h04;
+        for (i = 0; i < ATR_LEN; i = i + 1) card_byte(atr[i]);
 
         // Through a temporary, because slicing an array element directly
         // (`atr[i][3:0]`) is not supported here.
-        for (i = 0; i < 5; i = i + 1) begin
+        for (i = 0; i < ATR_LEN; i = i + 1) begin
             want = atr[i];
             host_recv;
             if (ch !== hexch(want[7:4])) begin
@@ -264,8 +277,8 @@ module iso7816_probe_tb;
         end
         expect_line("-OFF");
 
-        $display("PASS: power then clock then reset, in that order and never overlapping; reset held %0d card clock cycles; five answer bytes received at 8E2 and printed; deactivation dropped reset and the clock before power",
-                 card_rises);
+        $display("PASS: power then clock then reset, in that order and never overlapping; reset held %0d card clock cycles; all %0d bytes of the real device's answer-to-reset received at 8E2 and printed; deactivation dropped reset and the clock before power",
+                 card_rises, ATR_LEN);
         $finish;
     end
 
