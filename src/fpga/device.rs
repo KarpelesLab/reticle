@@ -124,6 +124,28 @@
 //! both. See [`BelKind::enable_port`], which is also where the reason a
 //! marker would not have done is written down.
 //!
+//! # Pins whose constant the backend applies itself
+//!
+//! A primitive input holding a constant normally needs something to
+//! **drive** it, because an unrouted input does not read the constant it
+//! was given: on an ECP5 it reads a one, and on the 7 series prjxray's
+//! database says every `IMUX` reads `VCC_WIRE`. That is what
+//! [`super::techcells`]'s constant pass is for, and most of its exceptions
+//! are the same on every family. A family with a mechanism another family
+//! has not got says so with an `absorbs` clause naming the pin roles:
+//!
+//! ```text
+//! bel TRELLIS_IO io absorbs dout port pad=B din=O dout=I oen=T
+//! ```
+//!
+//! The ECP5 is the one that has one. A pad's data wire can be tied in the
+//! `CIB` tile beside it (`CIB.J<x>MUX = 0` or `= 1`), which
+//! `TrellisFabric::configure_io` writes and which is in every bitstream
+//! this flow has put in a Cynthion. A 7-series `OBUF` has no such field,
+//! so the same source — `assign led = 1'b1` — left the pad's input
+//! unrouted and the pad came out **low** on a Basys 3. See
+//! [`BelKind::absorbs`].
+//!
 //! # Carry elements, one bit or several
 //!
 //! Most families expose a one-bit carry: two operand bits and a carry in,
@@ -572,6 +594,30 @@ pub struct BelKind {
     /// one `bel` line each with a `for` clause, and
     /// [`Device::io_bel`] picks between them.
     pub io_dirs: Vec<String>,
+    /// Input pin **roles** whose constant this family's backend applies
+    /// itself, so a constant left on one is correct rather than a pin
+    /// nothing drives. Written `absorbs dout,oe` in the text format.
+    ///
+    /// This is the device's answer to the question
+    /// [`techcells::drive_constant_data`](super::techcells) asks of every
+    /// primitive input: a pin holding a constant needs a **driver**,
+    /// because an unrouted input does not read the constant it was given —
+    /// on an ECP5 it reads a one and on the 7 series the database says
+    /// every `IMUX` reads `VCC_WIRE`. Most of the exceptions are the same
+    /// on every family and are named in code (a lookup table's inputs, a
+    /// carry chain's ends, a clock); this is for the ones that are **not**,
+    /// and it exists because one family has a pin another has not got.
+    ///
+    /// The ECP5's is `TRELLIS_IO`'s `dout`. The `CIB` tile beside a pad
+    /// declares `CIB.J<x>MUX` with a fixed `0` and a fixed `1`, and
+    /// `TrellisFabric::configure_io` writes it — a tie that is in every
+    /// bitstream this flow has put in a Cynthion, including the one whose
+    /// `R4` holds a constant zero and which a USB host enumerates. A
+    /// 7-series `OBUF` has nothing of the kind, so `assign led = 1'b1`
+    /// left the pad's input unrouted and the pad came out **low** on a
+    /// Basys 3. Same source defect, one family has a mechanism for it and
+    /// the other has not, and this is where that is written down.
+    pub absorbs: Vec<String>,
 }
 
 impl BelKind {
@@ -587,7 +633,15 @@ impl BelKind {
             carry_width: None,
             ff: None,
             io_dirs: Vec::new(),
+            absorbs: Vec::new(),
         }
+    }
+
+    /// Whether this primitive's backend applies a constant on the pin
+    /// playing `role` itself; see [`BelKind::absorbs`].
+    #[must_use]
+    pub fn absorbs_constant(&self, role: &str) -> bool {
+        self.absorbs.iter().any(|r| r == role)
     }
 
     /// The port name playing `role`, if the database records one.
@@ -2233,6 +2287,9 @@ fn write_bel(bel: &BelKind) -> String {
     if !bel.io_dirs.is_empty() {
         line.push_str(&format!(" for {}", join(&bel.io_dirs)));
     }
+    if !bel.absorbs.is_empty() {
+        line.push_str(&format!(" absorbs {}", join(&bel.absorbs)));
+    }
     line.push_str(&write_pairs("port", &bel.ports));
     write_params(&mut line, "param", &bel.params);
     for (condition, params) in &bel.cond_params {
@@ -2875,6 +2932,16 @@ impl<'a> Parser<'a> {
                                 format!("unknown port direction `{word}`, expected `in`, `out` or `inout`"),
                             );
                         }
+                    }
+                }
+                "absorbs" => {
+                    let Some(token) = line.get(index) else {
+                        self.error(line.span, "expected pin roles after `absorbs`");
+                        break;
+                    };
+                    index += 1;
+                    for word in token.as_str().split(',').filter(|w| !w.is_empty()) {
+                        bel.absorbs.push(word.to_owned());
                     }
                 }
                 "port" => bel.ports.extend(self.pairs(line, &mut index)),
@@ -3822,6 +3889,52 @@ end
         let again = again.unwrap();
         assert_eq!(device, again);
         assert_eq!(text, again.to_text());
+    }
+
+    /// A `bel` line's `absorbs` clause reads back as written, and the
+    /// shipped ECP5 file is the one that has one.
+    ///
+    /// It is the device's answer to "does a constant on this pin need a
+    /// driver?", and it is in the file rather than in code because the
+    /// answer differs by family: an ECP5 pad's data wire can be tied in
+    /// the `CIB` tile beside it and a 7-series `OBUF`'s cannot. See
+    /// [`BelKind::absorbs`].
+    #[test]
+    fn a_bel_line_names_the_pins_its_backend_ties_itself() {
+        let text = "device d\n  family demo\n  \
+                    bel PAD io absorbs dout,oe port pad=B din=O dout=I oe=T\nend\n";
+        let (device, diags) = parse(text);
+        assert_eq!(diags, "");
+        let device = device.unwrap();
+        let bel = &device.bels[0];
+        assert_eq!(bel.absorbs, vec!["dout".to_owned(), "oe".to_owned()]);
+        assert!(bel.absorbs_constant("dout"));
+        assert!(bel.absorbs_constant("oe"));
+        assert!(!bel.absorbs_constant("din"));
+        // And it survives a round trip, which is what keeps `to_text` from
+        // quietly dropping the one thing that makes a pad's constant safe.
+        let again = parse(&device.to_text()).0.unwrap();
+        assert_eq!(device, again);
+        assert!(device.to_text().contains(" absorbs dout,oe "));
+
+        // The shipped files: the ECP5's `TRELLIS_IO` is the only `bel`
+        // line in the tree with a clause, and the 7 series' buffers have
+        // none, which is exactly the difference.
+        let ecp5 = super::super::target("ecp5-12f-CABGA256").unwrap();
+        let io = ecp5.bel(BelRole::Io).unwrap();
+        assert_eq!(io.name, "TRELLIS_IO");
+        assert!(io.absorbs_constant("dout"), "{:?}", io.absorbs);
+        for name in ["xc7a35t-cpg236", "ice40-hx1k-tq144", "gw2a-18-pg256"] {
+            let device = super::super::target(name).unwrap();
+            for bel in &device.bels {
+                assert!(
+                    bel.absorbs.is_empty(),
+                    "{name}: `{}` declares `absorbs {:?}`, which is new",
+                    bel.name,
+                    bel.absorbs
+                );
+            }
+        }
     }
 
     /// A `dsp` line that ties pins, widens one and carries parameters —
