@@ -1,0 +1,12 @@
+# Vivado XDC written by reticle for xc7a35t-cpg236 (xc7)
+set_property PACKAGE_PIN V17 [get_ports {sw0}]
+set_property IOSTANDARD LVCMOS33 [get_ports {sw0}]
+set_property PACKAGE_PIN V16 [get_ports {sw1}]
+set_property IOSTANDARD LVCMOS33 [get_ports {sw1}]
+set_property PACKAGE_PIN H2 [get_ports {jc1}]
+set_property IOSTANDARD LVCMOS33 [get_ports {jc1}]
+set_property PULLUP TRUE [get_ports {jc1}]
+set_property PACKAGE_PIN U15 [get_ports {led0}]
+set_property IOSTANDARD LVCMOS33 [get_ports {led0}]
+set_property PACKAGE_PIN V14 [get_ports {led1}]
+set_property IOSTANDARD LVCMOS33 [get_ports {led1}]

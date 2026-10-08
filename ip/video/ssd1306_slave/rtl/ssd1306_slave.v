@@ -113,7 +113,11 @@ module ssd1306_slave #(
     parameter PAGES       = 8,
     // Width of the diagnostic counters. They saturate rather than wrap,
     // so a reader can tell "many" from "a few".
-    parameter COUNT_WIDTH = 16
+    parameter COUNT_WIDTH = 16,
+    // 1 puts the display memory in a block RAM, which is right. 0 puts it
+    // in lookup tables, which is a way round a 7-series backend defect —
+    // see the memory's own comment below.
+    parameter BLOCK_RAM   = 1
 ) (
     input  wire                   clk,
     input  wire                   rst_n,
@@ -132,7 +136,7 @@ module ssd1306_slave #(
     // parameter the instantiator must keep consistent with `COLUMNS` and
     // `PAGES` would be one more thing to get wrong for no gain.
     input  wire [15:0]            rd_addr,
-    output reg  [7:0]             rd_data,
+    output wire [7:0]             rd_data,
 
     // A whole frame has just been written. One cycle.
     output wire                   frame_done,
@@ -196,20 +200,57 @@ module ssd1306_slave #(
 
     // ---- The display memory. ----
     //
-    // `ram_style` asks for a block RAM: 1024 bytes is above the size a
-    // mapper puts in lookup tables by itself, and a `RAMB18E1` holds it
-    // with half the block left over.
-    (* ram_style = "block" *)
-    reg [7:0] gddram [0:WORDS-1];
-
+    // 1024 bytes is above the size a mapper puts in lookup tables by
+    // itself, so `BLOCK_RAM = 1` asks for a block RAM and a `RAMB18E1`
+    // holds it with half the block left over. That is the right choice and
+    // the default.
+    //
+    // **`BLOCK_RAM = 0` exists as a way round a backend defect**, not as a
+    // preference. On the 7-series, tying a block RAM's unused address bit
+    // to ground searches only two pips for a ground path and fails when the
+    // block lands somewhere without one:
+    //
+    //     error: block RAM `panel.gddram$ram_w0_d0`: tying `p0_addr2` to
+    //     Zero: no free GND_WIRE path reaches
+    //     `X75Y103/BRAM_RAMB18_ADDRARDADDR2` within two pips
+    //
+    // It is **placement-dependent** — the same design built, then failed
+    // after an unrelated edit moved the placement, then built again — which
+    // makes it worse than a reproducible failure. Until it is fixed,
+    // `BLOCK_RAM = 0` puts the memory in lookup tables instead and builds
+    // every time, at the cost of roughly a hundred and thirty `SLICEM`s
+    // where one block RAM would do. `docs/fpga-xray.md` records the defect.
     reg [ADDR_BITS-1:0] wr_addr;
     reg [7:0]           wr_data;
     reg                 wr_en;
 
-    always @(posedge clk) begin
-        if (wr_en) gddram[wr_addr] <= wr_data;
-        rd_data <= gddram[rd_addr[ADDR_BITS-1:0]];
-    end
+    wire [7:0] rd_q;
+
+    generate
+        if (BLOCK_RAM != 0) begin : as_block
+            (* ram_style = "block" *)
+            reg [7:0] mem [0:WORDS-1];
+            reg [7:0] q;
+            always @(posedge clk) begin
+                if (wr_en) mem[wr_addr] <= wr_data;
+                q <= mem[rd_addr[ADDR_BITS-1:0]];
+            end
+            assign rd_q = q;
+        end else begin : as_lut
+            (* ram_style = "distributed" *)
+            reg [7:0] mem [0:WORDS-1];
+            reg [7:0] q;
+            always @(posedge clk) begin
+                if (wr_en) mem[wr_addr] <= wr_data;
+                q <= mem[rd_addr[ADDR_BITS-1:0]];
+            end
+            assign rd_q = q;
+        end
+    endgenerate
+
+    // Registered inside the generate, so the latency is the same either
+    // way: one clock from `rd_addr` to `rd_data`.
+    assign rd_data = rd_q;
 
     // ---- State the commands set. ----
     reg                 on_q;

@@ -1,0 +1,73 @@
+# The top is `iso7816_terminal_pad`, the thin wrapper that holds the
+# tristate; `iso7816_terminal` itself takes `io_i` and drives
+# `io_oe`/`io_o` so a testbench can put two devices on one wire.
+# Digilent Basys 3: `iso7816_terminal_pad.v` — an ISO 7816 card brought up and
+# listened to, with its answer forwarded to a host.
+#
+# PROVENANCE: ball names transcribed from `examples/soc/board/basys3.rcf`,
+# which transcribes Digilent's published `Basys-3-Master.xdc`. Two lines of
+# that file have been CHECKED on this board and one was wrong, so treat the
+# rest as a reading.
+#
+# **Pmod JXADC**, chosen over JA/JB/JC because the board's owner confirmed
+# visually that its anti-aliasing capacitors C33-C36 are **not populated**.
+# That matters: a series resistor only costs low-level margin, but a shunt
+# capacitor sits across an open-drain line and sets its rise time — even
+# 1 nF with a 1k pull-up would make 2 Mbaud impossible. With the pads empty
+# the rise is stray capacitance only, about 115 ns to 90 % at 50 pF, which
+# is a fifth of a 500 ns etu.
+#
+#   JXADC1  J3   io         the card's single line, driven and read. Open
+#                           drain: pulled low or released, never driven
+#                           high, so the card and this board share it.
+#   JXADC2  L3   clk_card   8.000 MHz, 112 MHz / 14, exactly 50 % duty
+#   JXADC3  M2   rst_card   active low
+#   JXADC4  N2   vcc_en     an AQV210 PhotoMOS relay's LED, through a
+#                           series resistor.
+#   JXADC5  —    GND
+#
+# **No `-pullup` on `io`**: the line already has an external 1k to 3.3 V.
+# A second pull would change the timing the owner measured for.
+set_io -io_standard LVCMOS33 clk W5
+
+set_io -io_standard LVCMOS33 io       J3
+set_io -io_standard LVCMOS33 clk_card L3
+set_io -io_standard LVCMOS33 rst_card M2
+set_io -io_standard LVCMOS33 vcc_en   N2
+
+set_io -io_standard LVCMOS33 uart_rx_pin B18
+set_io -io_standard LVCMOS33 uart_tx_pin A18
+
+set_io -io_standard LVCMOS33 led[0]  U16
+set_io -io_standard LVCMOS33 led[1]  E19
+set_io -io_standard LVCMOS33 led[2]  U19
+set_io -io_standard LVCMOS33 led[3]  V19
+set_io -io_standard LVCMOS33 led[4]  W18
+set_io -io_standard LVCMOS33 led[5]  U15
+set_io -io_standard LVCMOS33 led[6]  V14
+set_io -io_standard LVCMOS33 led[7]  V13
+set_io -io_standard LVCMOS33 led[8]  V3
+set_io -io_standard LVCMOS33 led[9]  W3
+set_io -io_standard LVCMOS33 led[10] U3
+set_io -io_standard LVCMOS33 led[11] P3
+set_io -io_standard LVCMOS33 led[12] N3
+set_io -io_standard LVCMOS33 led[13] P1
+set_io -io_standard LVCMOS33 led[14] L1
+
+# `an[0]` is the RIGHT-hand digit (CHECKED 8 October 2026 by reading `1f29`
+# off the glass), so the most significant nibble is leftmost.
+set_io -io_standard LVCMOS33 seg[0] W7
+set_io -io_standard LVCMOS33 seg[1] W6
+set_io -io_standard LVCMOS33 seg[2] U8
+set_io -io_standard LVCMOS33 seg[3] V8
+set_io -io_standard LVCMOS33 seg[4] U5
+set_io -io_standard LVCMOS33 seg[5] V5
+set_io -io_standard LVCMOS33 seg[6] U7
+set_io -io_standard LVCMOS33 dp     V7
+set_io -io_standard LVCMOS33 an[0]  U2
+set_io -io_standard LVCMOS33 an[1]  U4
+set_io -io_standard LVCMOS33 an[2]  V4
+set_io -io_standard LVCMOS33 an[3]  W4
+
+create_clock -name sys -period 10.0 clk
+clock_domain sys clk

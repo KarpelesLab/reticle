@@ -1016,7 +1016,7 @@ impl XrayDatabase {
         let mut features: HashMap<String, FeatureSet> = HashMap::new();
         let mut out = Vec::new();
         let mut tiles_touched = 0usize;
-        let mut tiles_unnamed = 0usize;
+        let mut tiles_unnamed: Vec<String> = Vec::new();
         for tile in &tiles {
             // The tile's own bits, in the tile-local coordinates a
             // `segbits` line uses, remembering where each came from so
@@ -1060,7 +1060,7 @@ impl XrayDatabase {
                 continue;
             };
             if known.features().is_empty() {
-                tiles_unnamed += 1;
+                tiles_unnamed.push(format!("{} ({})", tile.name, tile.tile_type));
                 continue;
             }
             for feature in known.features() {
@@ -1086,7 +1086,12 @@ impl XrayDatabase {
             bits: total,
             unexplained: unexplained.len(),
             tiles: tiles_touched,
-            tiles_without_a_segbits_file: tiles_unnamed,
+            tiles_without_a_segbits_file: tiles_unnamed.len(),
+            tiles_with_no_segbits_file: {
+                tiles_unnamed.sort();
+                tiles_unnamed.dedup();
+                tiles_unnamed
+            },
         })
     }
 
@@ -1810,6 +1815,13 @@ pub struct Decoded {
     /// Of those, how many have no `segbits` file at all, so nothing
     /// their bits say could have been named.
     pub tiles_without_a_segbits_file: usize,
+    /// **Which** ones, `name (type)`, sorted. The count on its own cannot
+    /// be judged: "1 tile with no segbits file" could be a harmless
+    /// configuration tile or the one holding the bits that matter, and
+    /// bits in these tiles are left out of [`Decoded::unexplained`]
+    /// rather than counted — so this list is the only thing that says
+    /// whether a clean `unexplained` means what it appears to.
+    pub tiles_with_no_segbits_file: Vec<String>,
 }
 
 impl Decoded {
@@ -1827,6 +1839,13 @@ impl Decoded {
             self.unexplained,
             self.tiles_without_a_segbits_file
         );
+        // Name them. A count cannot be judged; a name can be looked up.
+        for which in &self.tiles_with_no_segbits_file {
+            let _ = writeln!(
+                out,
+                "  no segbits for {which}; its bits are not counted above"
+            );
+        }
         out
     }
 
