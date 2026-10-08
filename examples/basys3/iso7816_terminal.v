@@ -727,6 +727,19 @@ module iso7816_terminal #(
 
     reg [15:0] bytes_q = 16'd0, perr_q = 16'd0, sent_q = 16'd0,
                tmo_q   = 16'd0;
+    // Set while the block is driving the contact and for a character
+    // afterwards, so a byte the monitor delivers at the end of one is still
+    // attributed to us. 18 etu is a character of 12 plus margin.
+    reg [19:0] mon_hold = 20'd0;
+    wire       mon_gate = (mon_hold != 0);
+    wire [19:0] mon_span = {etu_div, 4'd0} + {4'd0, etu_div};   // 17 etu
+
+    always @(posedge sys) begin
+        if (!rst_n)        mon_hold <= 20'd0;
+        else if (blk_oe)   mon_hold <= mon_span;
+        else if (mon_hold != 0) mon_hold <= mon_hold - 1'b1;
+    end
+
     always @(posedge sys) begin
         if (!rst_n) begin
             bytes_q <= 16'd0; perr_q <= 16'd0; sent_q <= 16'd0;
@@ -825,10 +838,19 @@ module iso7816_terminal #(
                 have_byte <= 1'b1;
                 gap       <= gap_load;
                 line_open <= 1'b1;
-            end else if (mon_rx_valid) begin
-                // The card's bytes arrive on both receivers and the main one
-                // wins the cycle, so what reaches here is what this terminal
-                // put on the wire itself.
+            end else if (mon_rx_valid && mon_gate) begin
+                // **Only while this terminal is the one driving.** The two
+                // receivers do not deliver a byte on the same cycle, so
+                // letting the main one win a race does not keep the monitor
+                // quiet about the card: it reported the card's bytes too,
+                // mis-decoded (`D8` for a `3B` the main receiver read
+                // correctly), and doubling the print load made the emitter
+                // fall behind at 21.5 kbaud so that a pending byte was
+                // overwritten -- one byte of a real card's ATR went missing
+                // that way. Gated on having driven the contact during the
+                // character, the monitor reports this terminal's own bytes
+                // and nothing else, which is all it was built for; it read
+                // a 51-byte frame correctly at 2 Mbaud that way.
                 pend_byte <= mon_rx;
                 pend_bad  <= mon_parity_err;
                 pend_mon  <= 1'b1;
