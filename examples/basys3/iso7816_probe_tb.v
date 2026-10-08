@@ -183,9 +183,23 @@ module iso7816_probe_tb;
     integer i;
     // **The real device's answer-to-reset**, as its owner reported it, not
     // an invented one. A well-formed T=0 ATR: TS=3B direct convention,
-    // T0=1B meaning TA1 follows and eleven historical bytes, TA1=87 giving
-    // Fi=512 and Di=64 so F/D is 8, then "2.0.1" in ASCII among the
-    // historical bytes, and no TCK because the protocol is T=0.
+    // T0=1B meaning TA1 follows and eleven historical bytes, then "2.0.1"
+    // in ASCII among the historical bytes, and no TCK because the protocol
+    // is T=0.
+    //
+    // **TA1 = 87 is partly vendor-specific, and the first reading of it
+    // here was wrong.** The low nibble is standard: DI = 7 means Di = 64.
+    // The high nibble is not: **FI = 8 is RFU** in ISO 7816-3's Fi table —
+    // `Fi = 512` is FI = **9**, which is what this comment first claimed.
+    // So the clock-rate conversion factor is whatever the vendor defines.
+    //
+    // The device's owner targets 2 Mbaud at an 8 MHz clock, which fixes
+    // `F/D = 4`, so with Di = 64 the vendor's Fi is 256 — another value the
+    // standard does not list. The consequence is better than the wrong
+    // reading suggested: **8 MHz already gives exactly 2 Mbaud**, so no
+    // 16 MHz clock is needed and the odd-divisor duty-cycle problem that
+    // 16 MHz would have brought does not arise. The post-PPS etu is 4 card
+    // clock cycles, which at CARD_DIV=14 is 56 system cycles.
     //
     // Fourteen bytes is a better test than five for a reason beyond
     // length: it crosses the idle-gap timeout several times over, so a gap
