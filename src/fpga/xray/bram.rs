@@ -32,7 +32,7 @@
 //! pin has reached a wire the database says defaults to `VCC_WIRE` and
 //! nothing on the way is driven.
 //!
-//! # A pin the design *does* drive with a constant does not come here
+//! # An address bit the width mode does not read cannot fail a build
 //!
 //! It used to, and that was a defect of a different shape from the one
 //! above. A `RAMB18E1` in 18-bit mode takes its word address on
@@ -56,22 +56,26 @@
 //! tying an address bit to ground depending on where a block landed**, and
 //! that non-determinism was the defect, more than any one failure.
 //!
-//! The remedy is not a wider search: it is
-//! [`techcells::drive_constant_data`](crate::fpga::techcells), which now
-//! gives a block RAM's pins — like a flip-flop's data pin, a distributed
-//! RAM's inputs and a carry cell's operands before them — a real driver
-//! **before placement**, so the router routes them like any other net and
-//! this pass is never asked. That is also what the vendors do: nextpnr's
-//! `pack_constants` builds a `$PACKER_GND`, and Lattice's own bitstreams
-//! for a Cynthion route a constant lookup table into all 320 of their
-//! output pads rather than using the tie their database offers (see
-//! `tests/fpga_trellis.rs`'s
-//! `what_lattices_own_packer_writes_for_a_constant_on_a_pad`).
+//! **The remedy is not a wider search and it is not a driver either.** The
+//! search is not too narrow — the path exists for every input, and what
+//! fails is contention — and a driver would be a lookup table and a route
+//! for a bit the block does not read. The fix is to stop treating such a
+//! bit as something that can fail: [`unused_address_bit`] works out from
+//! the cell's own width parameters which address bits the mode leaves
+//! unread, and gives them [`TiePolicy::Idle`], so they are tied to zero
+//! when a fan is free and left at the interconnect's default when none is.
 //!
-//! What is left here is the case a driver cannot serve: a pin the design
+//! A family that *does* read those bits is the opposite case and is not
+//! handled here: an ECP5 `DP16KD` in 18-bit mode needs `AD[3:0] = 0011`,
+//! `src/fpga/devices/ecp5.dev` says so with `pad 4'b0011`, and
+//! [`techcells::drive_constant_data`](crate::fpga::techcells) gives those
+//! bits a real driver before placement. The rule there is the device
+//! file's statement and not a guess about what a block ignores.
+//!
+//! What is left for the hunt is the case neither covers: a pin the design
 //! **does not connect at all**, which has no net to route and still needs
 //! a value. Those are far fewer — one two-block design ties 27 and leaves
-//! 5 idle — and when the hunt fails for one of them it now says what is
+//! 5 idle — and when it fails for one of them it now says what is
 //! contended and what to do about it.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
@@ -718,11 +722,11 @@ fn tie(
         "no free GND_WIRE path reaches `{}` within two pips. An interconnect tile has exactly \
          two ground fans — `GFAN0` serves half its `IMUX`es and `GFAN1` the other half — and the \
          router competes for both, so this says the fan this pin's `IMUX` is reachable from \
-         carries a signal. A pin the **netlist** holds at a constant never asks this: \
-         `techcells::drive_constant_data` builds it a driver before placement, which is also \
-         what Lattice's own packer does. So this is a pin nothing connects at all, and the ways \
-         out are to connect it or to leave the port it belongs to entirely unused, which makes \
-         it `TiePolicy::Idle` and lets it go untied",
+         carries a signal. An **address** bit never asks this any more — one below the width \
+         mode's own range is a bit the block does not read and gets `TiePolicy::Idle`, and one \
+         inside it is a bit the design drives — so this is a pin nothing connects at all, and \
+         the ways out are to connect it or to leave the port it belongs to entirely unused, \
+         which also makes it idle and lets it go untied",
         name(pin)
     ))
 }
