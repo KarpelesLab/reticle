@@ -45,7 +45,7 @@
 //! | `<family>/mapping/devices.yaml` | which fabric a die uses — `xc7a35t` is the same die as `xc7a50t` |
 //! | `<family>/<part>/part.json` | the IDCODE and the frame layout, column by column |
 //! | `<family>/<part>/package_pins.csv` | package pin to site, for [`Arch::pinmap`] |
-//! | `<family>/<fabric>/tilegrid.json` | every tile: name, type, grid position, sites, and where its bits live in the frames |
+//! | `<family>/<fabric>/tilegrid.json` | every tile: name, type, grid position, sites, where its bits live in the frames, and for a tile type with no `segbits` file of its own the [`TileAlias`] onto one that has |
 //! | `<family>/<fabric>/tileconn.json` | which wire of a tile is the same metal as which wire of its neighbour |
 //! | `<family>/segbits_<type>.db` | which bits switch on which pip and which bel feature |
 //! | `<family>/ppips_<type>.db` | the fixed, unprogrammable wiring inside a tile — which is how a site pin reaches the interconnect |
@@ -462,6 +462,101 @@ pub struct XrayTile {
     /// `BLOCK_RAM`. The frame map stacks them in this order, so a block RAM
     /// tile's contents are tile rows after its configuration's.
     pub bits: Vec<(String, TileBits)>,
+    /// Which other tile type's `segbits` describe this tile's bits, when
+    /// `tilegrid.json` says so. See [`TileAlias`].
+    pub bits_alias: Option<TileAlias>,
+}
+
+impl XrayTile {
+    /// The name of the tile type whose features describe this tile.
+    ///
+    /// Normally the tile's own type. A tile whose bits are **aliased**
+    /// onto another type ([`TileAlias`]) gets a name of its own per
+    /// alias offset, because two tiles of one aliased type can need two
+    /// different feature sets: see [`TileAlias`] for the whole story.
+    pub fn feature_type(&self) -> String {
+        match &self.bits_alias {
+            Some(alias) => format!("{}_W{}", self.tile_type, alias.start_offset),
+            None => self.tile_type.clone(),
+        }
+    }
+
+    /// How many 32-bit words wide this tile's own bitmap is, over every
+    /// configuration bus it uses.
+    pub(super) fn words(&self) -> u32 {
+        self.bits.iter().map(|(_, b)| b.words).max().unwrap_or(0)
+    }
+}
+
+/// What [`XrayDatabase::pinmap`] answers: the package pin to site map,
+/// and the balls it had to refuse, each with the reason.
+type PinMap = (Vec<(String, String)>, Vec<(String, String)>);
+
+/// What `tilegrid.json` says describes a tile's bits, when they are not
+/// described by the tile's own type.
+///
+/// # What this is for, and what it is not
+///
+/// prjxray ships no `segbits_liob33_sing.db`, `segbits_lioi3_sing.db`
+/// or `_r` equivalent: the single-IOB tiles at the two ends of every IO
+/// bank have no `segbits` file of their own. What they have instead is
+/// an `alias` member on their `bits` entry, which names the tile type
+/// that *does* — `LIOB33` for a `LIOB33_SING` — and the word of that
+/// type's bitmap where the aliased tile's own words begin:
+///
+/// ```json
+/// "LIOB33_SING_X0Y0": { "bits": { "CLB_IO_CLK": {
+///   "baseaddr": "0x00400000", "frames": 42, "offset": 0, "words": 2,
+///   "alias": { "type": "LIOB33", "start_offset": 2,
+///              "sites": { "IOB33_Y0": "IOB33_Y0" } } } } }
+/// ```
+///
+/// A `LIOB33` is four words wide and a `LIOB33_SING` two, so the
+/// hypothesis that a `_SING` tile is simply its neighbour with one half
+/// unpopulated is **wrong about the shape**: the shapes differ, and
+/// `start_offset` is the correction. With it the rule is uniform —
+/// a feature of the aliased type at bit offset `c` is at `c -
+/// 32 * start_offset` here, and a feature whose bits fall outside this
+/// tile's own `32 * words` is not a feature of this tile at all.
+///
+/// That filter is what picks the half, and it needs nothing else.
+/// **CHECKED** over the whole of `segbits_liob33.db`,
+/// `segbits_riob33.db`, `segbits_lioi3.db` and `segbits_rioi3.db`:
+/// every `_Y0` feature's bits lie in words 2..3 and every `_Y1`
+/// feature's in words 0..1, with no exceptions in 382 features. So a
+/// tile with `start_offset` 2 keeps exactly the `_Y0` half and one with
+/// `start_offset` 0 exactly the `_Y1` half.
+///
+/// And **that is what Vivado writes**, read from three of the reference
+/// designs under `artix7/harness/`: `basys3/swbut` configures
+/// `LIOB33_SING_X0Y0.IOB_Y0.*` (`start_offset` 2),
+/// `arty-a7/swbut` configures `RIOB33_SING_X43Y50.IOB_Y0.*`
+/// (`start_offset` 2) and `arty-a7/pmod` configures
+/// `LIOB33_SING_X0Y99.IOB_Y1.*` (`start_offset` 0). `docs/fpga-xray.md`
+/// lists every feature each one sets.
+///
+/// The `sites` member says the same thing a second way — the top tile's
+/// lone site is aliased `IOB33_Y0` → `IOB33_Y1` — but only for the
+/// `IOB` tiles; for `LIOI3_SING` it is empty although Vivado still
+/// names that tile's features `ILOGIC_Y1`. So it is not read here: the
+/// bit window is the rule and the `sites` map agrees with it where it
+/// says anything.
+///
+/// # Why an aliased tile gets its own feature-type name
+///
+/// Two `LIOB33_SING` tiles with different `start_offset` keep different
+/// halves, and the two halves' bits are **not** at the same offsets
+/// within the tile (`IOB_Y0.…SLEW.SLOW` lands at bits 41..47 after the
+/// shift, `IOB_Y1`'s at 16..22). One [`super::arch::TileType`] cannot
+/// describe both, so [`XrayTile::feature_type`] gives each alias offset
+/// a name of its own and the two become two tile types.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TileAlias {
+    /// The tile type whose `segbits_<type>.db` describes these bits.
+    pub tile_type: String,
+    /// How many 32-bit words into that type's bitmap this tile's own
+    /// words begin.
+    pub start_offset: u32,
 }
 
 /// One feature of a `segbits` file: a name and the bits that make it
@@ -735,13 +830,20 @@ impl XrayDatabase {
         stats.mapped_tiles = frames.len();
 
         // Every tile type's features, read once, whether or not the
-        // region uses it: the die-wide count is the measurement.
+        // region uses it: the die-wide count is the measurement. Keyed
+        // by `XrayTile::feature_type`, which splits an aliased type into
+        // one per alias offset; `representative` holds one tile of each
+        // so the alias can be applied.
         let block_ram_rows = block_ram_rows(&tiles);
+        let mut representative: BTreeMap<String, &XrayTile> = BTreeMap::new();
+        for tile in &tiles {
+            representative.entry(tile.feature_type()).or_insert(tile);
+        }
         let mut features: HashMap<String, FeatureSet> = HashMap::new();
-        for name in &types {
-            let row = block_ram_rows.get(*name).copied();
-            if let Some(set) = self.features_of(files, name, row)? {
-                features.insert((*name).to_owned(), set);
+        for (key, tile) in &representative {
+            let row = block_ram_rows.get(tile.tile_type.as_str()).copied();
+            if let Some(set) = self.features_for(files, tile, row)? {
+                features.insert(key.clone(), set);
             }
         }
 
@@ -762,7 +864,7 @@ impl XrayDatabase {
             fixed.insert((*name).to_owned(), parse::ppips(&text, &path)?);
         }
         for tile in &tiles {
-            if let Some(set) = features.get(&tile.tile_type) {
+            if let Some(set) = features.get(&tile.feature_type()) {
                 stats.features_die += u64::try_from(set.features().len()).unwrap_or(0);
                 stats.pip_features_die += u64::try_from(set.pip_count()).unwrap_or(0);
             }
@@ -804,7 +906,7 @@ impl XrayDatabase {
             }
             in_region += 1;
             let name = tile.tile_type.as_str();
-            if let Some(set) = features.get(name) {
+            if let Some(set) = features.get(&tile.feature_type()) {
                 wanted += set.pip_count();
             }
             if let Some(ppips) = fixed.get(name) {
@@ -826,7 +928,9 @@ impl XrayDatabase {
         let mut arch = self.build_arch(
             &tiles, &features, &fixed, &conn, region, &part, standard, &mut stats,
         );
-        arch.pinmap = self.pinmap(files, &tiles, &features, region)?;
+        let (pinmap, refused) = self.pinmap(files, &tiles, &features, region)?;
+        arch.pinmap = pinmap;
+        arch.unplaceable_pins = refused;
         stats.tiles_loaded = in_region;
 
         Ok(XrayFabric {
@@ -946,14 +1050,13 @@ impl XrayDatabase {
             }
             tiles_touched += 1;
 
-            if !features.contains_key(&tile.tile_type) {
+            let key = tile.feature_type();
+            if !features.contains_key(&key) {
                 let row = block_ram_rows.get(tile.tile_type.as_str()).copied();
-                let set = self
-                    .features_of(files, &tile.tile_type, row)?
-                    .unwrap_or_default();
-                features.insert(tile.tile_type.clone(), set);
+                let set = self.features_for(files, tile, row)?.unwrap_or_default();
+                features.insert(key.clone(), set);
             }
-            let Some(known) = features.get(&tile.tile_type) else {
+            let Some(known) = features.get(&key) else {
                 continue;
             };
             if known.features().is_empty() {
@@ -1035,6 +1138,58 @@ impl XrayDatabase {
             all.push(feature);
         }
         Ok(Some(FeatureSet::new(all)))
+    }
+
+    /// Every feature of the tile type `tile` belongs to, which is
+    /// [`XrayTile::feature_type`] and not always the tile's own type.
+    ///
+    /// A tile whose own type has a `segbits` file is read from it. One
+    /// that does not but carries a [`TileAlias`] is read from the
+    /// aliased type's file, with every bit moved by the alias offset and
+    /// every feature that then falls outside this tile's own bitmap
+    /// dropped — which is what leaves exactly the half the tile has.
+    /// [`TileAlias`] is the whole account, including what measured it.
+    ///
+    /// The tile's own file wins where there is one, so a database that
+    /// grows a `segbits_liob33_sing.db` is believed over the alias
+    /// without a code change.
+    ///
+    /// # Errors
+    ///
+    /// Those of [`XrayDatabase::features_of`].
+    fn features_for(
+        &self,
+        files: &dyn FileProvider,
+        tile: &XrayTile,
+        block_ram_row: Option<u32>,
+    ) -> Result<Option<FeatureSet>, XrayError> {
+        if let Some(set) = self.features_of(files, &tile.tile_type, block_ram_row)? {
+            return Ok(Some(set));
+        }
+        let Some(alias) = &tile.bits_alias else {
+            return Ok(None);
+        };
+        let Some(set) = self.features_of(files, &alias.tile_type, block_ram_row)? else {
+            return Ok(None);
+        };
+        let shift = alias.start_offset * 32;
+        let limit = shift + tile.words() * 32;
+        let mut kept = Vec::new();
+        for mut feature in set.into_features() {
+            if feature
+                .ones
+                .iter()
+                .chain(feature.zeros.iter())
+                .any(|bit| bit.col < shift || bit.col >= limit)
+            {
+                continue;
+            }
+            for bit in feature.ones.iter_mut().chain(feature.zeros.iter_mut()) {
+                bit.col -= shift;
+            }
+            kept.push(feature);
+        }
+        Ok(Some(FeatureSet::new(kept)))
     }
 
     /// A region that covers the tiles the given package pins sit in,
@@ -1180,13 +1335,26 @@ impl XrayDatabase {
     /// and without it a constrained pin resolves to nothing. Pins whose
     /// site is outside the loaded region are dropped, since there is no
     /// site for them to name.
+    ///
+    /// The second list is every ball the package has that this flow
+    /// cannot place, each with the reason, which becomes the body of the
+    /// diagnostic a design constraining such a ball gets
+    /// ([`Arch::unplaceable_pins`]). A ball is unplaceable when nothing
+    /// in the database describes the bits of the tile it sits in — the
+    /// state the `_SING` IO tiles were in until the alias of
+    /// [`TileAlias`] was read — or when the tile type has features but
+    /// none of them claims this ball's site, which is what a
+    /// multi-gigabit transceiver or an analogue-monitor ball looks like.
+    /// Saying which is the whole point: "nothing is there" and "this
+    /// flow has no table for it" are different problems and one of them
+    /// is ours.
     fn pinmap(
         &self,
         files: &dyn FileProvider,
         tiles: &[XrayTile],
         features: &HashMap<String, FeatureSet>,
         region: GridRegion,
-    ) -> Result<Vec<(String, String)>, XrayError> {
+    ) -> Result<PinMap, XrayError> {
         let path = format!(
             "{}/{}/{}/package_pins.csv",
             self.root, self.family, self.part_dir
@@ -1203,17 +1371,49 @@ impl XrayDatabase {
         }
         let empty = FeatureSet::default();
         let mut out = Vec::new();
+        let mut refused = Vec::new();
         for (pin, site) in parse::package_pins(&text) {
             let Some(tile) = where_is.get(site.as_str()) else {
                 continue;
             };
-            let set = features.get(&tile.tile_type).unwrap_or(&empty);
+            let set = features.get(&tile.feature_type()).unwrap_or(&empty);
+            if set.features().is_empty() {
+                refused.push((
+                    pin,
+                    format!(
+                        "it is site `{site}` of tile `{}`, and nothing in this database \
+                         describes the bits of a `{}` — there is no `segbits_{}.db` and \
+                         `tilegrid.json` gives the tile no alias onto a type that has one",
+                        tile.name,
+                        tile.tile_type,
+                        tile.tile_type.to_lowercase()
+                    ),
+                ));
+                continue;
+            }
             let Some(bel) = parse::bel_of_site(tile, &site, set) else {
                 continue;
             };
+            if !set.sites().contains(&bel) {
+                // `bel_of_site` falls back to the site's own name when no
+                // feature prefix claims it, which places the pin on a bel
+                // `bels_of` never declared. Refuse it here, where the tile
+                // is still in hand to say so, instead of leaving placement
+                // to report a site that does not exist.
+                refused.push((
+                    pin,
+                    format!(
+                        "it is site `{site}` of tile `{}`, a `{}`, and no feature of that \
+                         tile type names that site, so this flow has no bel for it",
+                        tile.name, tile.tile_type
+                    ),
+                ));
+                continue;
+            }
             out.push((pin, format!("X{}Y{}/{bel}", tile.grid_x, tile.grid_y)));
         }
-        Ok(out)
+        refused.sort();
+        Ok((out, refused))
     }
 
     /// The node count the database's own `element_counts.csv` states, for
@@ -1267,7 +1467,12 @@ impl XrayDatabase {
         // A tile on two configuration buses — a block RAM, whose
         // contents are on `BLOCK_RAM` — stacks its windows, so its
         // bitmap is their frames added up; see `xc7::FrameMap`.
-        let mut used: BTreeMap<&str, (u32, u32)> = BTreeMap::new();
+        // A tile whose bits are aliased gets a tile type per alias
+        // offset, so the key here is `XrayTile::feature_type` and the
+        // *database's* type is carried alongside: it is what names the
+        // `ppips` file, the `sites` tables and the `tileconn` joins,
+        // none of which the alias touches. See [`TileAlias`].
+        let mut used: BTreeMap<String, (u32, u32, &str)> = BTreeMap::new();
         for tile in tiles {
             if !region.contains(tile.grid_x, tile.grid_y) {
                 continue;
@@ -1279,7 +1484,15 @@ impl XrayDatabase {
                 .map(|(_, b)| b.words * 32)
                 .max()
                 .unwrap_or(0);
-            used.entry(&tile.tile_type).or_insert((rows, cols));
+            used.entry(tile.feature_type())
+                .or_insert((rows, cols, tile.tile_type.as_str()));
+        }
+        // Which tile types of the region each database type stands for:
+        // one of itself, or one per alias offset. A join names the far
+        // end's database type, and the tile there may be any of them.
+        let mut variants: BTreeMap<&str, Vec<&str>> = BTreeMap::new();
+        for (key, (_, _, db_type)) in &used {
+            variants.entry(db_type).or_default().push(key.as_str());
         }
 
         // Which joins each tile type owns. A `tileconn` entry names two
@@ -1307,9 +1520,10 @@ impl XrayDatabase {
         let empty = FeatureSet::default();
         let no_ppips: Vec<parse::Ppip> = Vec::new();
         let mut index_of: HashMap<&str, usize> = HashMap::new();
-        for (name, (rows, cols)) in &used {
-            let mut tile_type = TileType::new(*name, *name, *rows, *cols);
-            let set = features.get(*name).unwrap_or(&empty);
+        for (key, (rows, cols, name)) in &used {
+            let key = key.as_str();
+            let mut tile_type = TileType::new(key, key, *rows, *cols);
+            let set = features.get(key).unwrap_or(&empty);
             let ppips = fixed.get(*name).unwrap_or(&no_ppips);
 
             // A fixed path through a site is declared here rather than
@@ -1446,57 +1660,65 @@ impl XrayDatabase {
                 stats.coverage.pass_throughs += 1;
             }
             for (other, dx, dy, pairs) in joins.get(*name).into_iter().flatten() {
-                if !used.contains_key(other) {
+                // `tileconn.json` names the far end's *database* type,
+                // and an aliased type stands for one tile type per alias
+                // offset. The join is declared once for each, and at
+                // most one of them resolves, because the tile at the
+                // offset is of exactly one type: see `WireRef::at_in`.
+                let Some(ends) = variants.get(other) else {
                     continue;
-                }
+                };
                 for (mine, theirs) in pairs.iter() {
-                    // Only `mine` is a wire of this tile type, so only
-                    // its enable can be charged here; the other end's
-                    // belongs to the tile at the other end and is
-                    // charged by that type's own joins.
-                    let bits = enables.get(mine.as_str()).cloned().unwrap_or_default();
-                    if !bits.is_empty() {
-                        stats.coverage.wire_enables += 2;
+                    for other in ends {
+                        // Only `mine` is a wire of this tile type, so only
+                        // its enable can be charged here; the other end's
+                        // belongs to the tile at the other end and is
+                        // charged by that type's own joins.
+                        let bits = enables.get(mine.as_str()).cloned().unwrap_or_default();
+                        if !bits.is_empty() {
+                            stats.coverage.wire_enables += 2;
+                        }
+                        // The far end names its tile *type* as well as its
+                        // offset. Without that, a join lands on whatever
+                        // tile sits at the offset and happens to have a wire
+                        // of that name — and `tileconn.json` pairs the same
+                        // name at the same offset for two different types
+                        // wherever a tall tile is cut into an upper and a
+                        // lower half. See `WireRef::tile_type`.
+                        tile_type.pips.push(PipDecl {
+                            from: WireRef::local(mine.clone()),
+                            to: WireRef::at_in(theirs.clone(), *dx, *dy, *other),
+                            bits: bits.clone(),
+                        });
+                        tile_type.pips.push(PipDecl {
+                            from: WireRef::at_in(theirs.clone(), *dx, *dy, *other),
+                            to: WireRef::local(mine.clone()),
+                            bits,
+                        });
                     }
-                    // The far end names its tile *type* as well as its
-                    // offset. Without that, a join lands on whatever
-                    // tile sits at the offset and happens to have a wire
-                    // of that name — and `tileconn.json` pairs the same
-                    // name at the same offset for two different types
-                    // wherever a tall tile is cut into an upper and a
-                    // lower half. See `WireRef::tile_type`.
-                    tile_type.pips.push(PipDecl {
-                        from: WireRef::local(mine.clone()),
-                        to: WireRef::at_in(theirs.clone(), *dx, *dy, *other),
-                        bits: bits.clone(),
-                    });
-                    tile_type.pips.push(PipDecl {
-                        from: WireRef::at_in(theirs.clone(), *dx, *dy, *other),
-                        to: WireRef::local(mine.clone()),
-                        bits,
-                    });
                 }
             }
 
-            index_of.insert(*name, arch.tile_types.len());
+            index_of.insert(key, arch.tile_types.len());
             arch.tile_types.push(tile_type);
         }
 
         // Bels are declared on the tile type, but `tilegrid.json` names
         // sites per tile, so the first tile of each type that has any
         // supplies the site types the type's bels are built from.
-        let mut seeded: HashSet<&str> = HashSet::new();
+        let mut seeded: HashSet<String> = HashSet::new();
         for tile in tiles {
             if !region.contains(tile.grid_x, tile.grid_y) || tile.sites.is_empty() {
                 continue;
             }
-            if !seeded.insert(&tile.tile_type) {
+            let key = tile.feature_type();
+            if !seeded.insert(key.clone()) {
                 continue;
             }
-            let Some(index) = index_of.get(tile.tile_type.as_str()) else {
+            let Some(index) = index_of.get(key.as_str()) else {
                 continue;
             };
-            let set = features.get(&tile.tile_type).unwrap_or(&empty);
+            let set = features.get(&key).unwrap_or(&empty);
             // A pin may only name a wire the tile type really declares,
             // so the wire list is handed in and a pin that misses it is
             // counted rather than left to dangle.
@@ -1513,7 +1735,7 @@ impl XrayDatabase {
             if !region.contains(tile.grid_x, tile.grid_y) {
                 continue;
             }
-            if let Some(index) = index_of.get(tile.tile_type.as_str()) {
+            if let Some(index) = index_of.get(tile.feature_type().as_str()) {
                 arch.set_tile(tile.grid_x, tile.grid_y, *index);
             }
         }

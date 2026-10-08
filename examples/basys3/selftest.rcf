@@ -15,8 +15,10 @@
 # most significant nibble is leftmost.
 #
 # LD6 (U14) is deliberately absent. It is the one pin of a `LIOB33_SING`
-# tile, which this flow has no table for — `lutram.rcf` found that first,
-# and this file skips from LD5 to LD7 for the same reason.
+# tile, which this flow had no table for when this file was written —
+# `lutram.rcf` found that first, and this file skips from LD5 to LD7 for
+# the same reason. The table exists now (`fpga::xray::TileAlias`); the
+# skip is kept so the LED map a person reads does not move.
 set_io -io_standard LVCMOS33 clk W5
 set_io -io_standard LVCMOS33 btn U18
 

@@ -1570,3 +1570,386 @@ endmodule
         report.outcome
     );
 }
+
+/// **The oracle for the single-IOB tiles at the ends of a bank.** What
+/// Vivado wrote in every `*_SING` tile the four reference designs touch,
+/// read back in full and compared with what those designs say they
+/// needed.
+///
+/// # Why this test is the whole argument
+///
+/// prjxray ships no `segbits_liob33_sing.db` and no `_lioi3_sing`,
+/// `_riob33_sing` or `_rioi3_sing` either, so until now this flow had
+/// nothing to say about the top and bottom ball of every IO bank — it
+/// set no bits there and refused the pin. What it has instead is the
+/// `alias` member `tilegrid.json` puts on those tiles' bit windows,
+/// which names the two-IOB type whose `segbits` do describe them and
+/// the word offset to read them at (`xray::TileAlias`).
+///
+/// A structural argument from `tilegrid.json` would be a reading. This
+/// is a measurement: three of the designs under `artix7/harness/` drive
+/// a ball in such a tile, between them covering **both edges of the
+/// die, both halves and both directions** —
+///
+/// | design | tiles | half | direction |
+/// |---|---|---|---|
+/// | `basys3/swbut` | `LIOB33_SING_X0Y0`, `LIOI3_SING_X0Y0` | `_Y0` | output (U14, LD6) |
+/// | `arty-a7/swbut` | `RIOB33_SING_X43Y50`, `RIOI3_SING_X43Y50` | `_Y0` | output |
+/// | `arty-a7/pmod` | `LIOB33_SING_X0Y99`, `LIOI3_SING_X0Y99` | `_Y1` | input |
+///
+/// — and for each one this decodes Vivado's own `design.bit` through the
+/// alias and asserts the features that come out are **exactly** the ones
+/// that design's `design.json` says it needed there, no more and no
+/// fewer. A wrong word offset, the wrong half, or a sign slip on the
+/// shift all move bits out of the window and lose features, and this
+/// would see it.
+///
+/// What it does not establish: that the two `_SING` tiles no harness
+/// touches — a bottom-half input and a top-half output — are right. Both
+/// follow from the same shift, and the shift is now measured four ways,
+/// but neither has been seen. Nor does it say anything about silicon;
+/// `examples/basys3/io_exercise.v` is the design built to ask a person.
+///
+/// A feature whose `segbits` line has no bit that must be **one** can
+/// never be decoded — it would match an empty bitstream everywhere — so
+/// those are dropped from the expectation here rather than quietly
+/// tolerated, and the test says how many it dropped.
+#[test]
+fn every_single_io_tile_vivado_drove_decodes_to_exactly_what_it_needed() {
+    let Some(root) = chipdb() else { return };
+    let mut checked = 0;
+    for design in [
+        "basys3/swbut",
+        "arty-a7/swbut",
+        "arty-a7/pmod",
+        "arty-a7/uart",
+    ] {
+        let path = format!("{root}/artix7/harness/{design}/design.json");
+        let Ok(text) = std::fs::read_to_string(&path) else {
+            eprintln!("skipped: the checkout has no `{path}`");
+            continue;
+        };
+        // Every `*_SING` feature the design occupies, as (tile, feature).
+        let mut wanted: Vec<(String, String)> = Vec::new();
+        for quoted in text.split('"') {
+            if !quoted.contains("_SING_X") {
+                continue;
+            }
+            let Some((tile, feature)) = quoted.split_once(".") else {
+                continue;
+            };
+            wanted.push((tile.to_owned(), feature.to_owned()));
+        }
+        if wanted.is_empty() {
+            eprintln!("{design}: no `_SING` tile — nothing to check");
+            continue;
+        }
+
+        // Which of them could ever be decoded: a feature with no bit
+        // that must be one is never reported, by design.
+        let mut dropped = 0;
+        wanted.retain(|(tile, feature)| {
+            // The `_SING` types have no `segbits` file of their own; the
+            // aliased type's is where the line is, and it heads every
+            // line with its own name.
+            let mut kind = tile_type_of(tile).to_owned();
+            let mut path = format!("{root}/artix7/segbits_{}.db", kind.to_lowercase());
+            if std::fs::metadata(&path).is_err() {
+                kind = kind.trim_end_matches("_SING").to_owned();
+                path = format!("{root}/artix7/segbits_{}.db", kind.to_lowercase());
+            }
+            let line = format!("{kind}.{feature} ");
+            let text = std::fs::read_to_string(&path).unwrap_or_default();
+            let Some(bits) = text
+                .lines()
+                .find_map(|l| l.strip_prefix(&line).map(str::trim))
+            else {
+                panic!("`{line}` is in no segbits file");
+            };
+            let settable = bits.split_whitespace().any(|b| !b.starts_with('!'));
+            if !settable {
+                dropped += 1;
+            }
+            settable
+        });
+        wanted.sort();
+
+        let bytes = std::fs::read(format!("{root}/artix7/harness/{design}/design.bit"))
+            .expect("a design.json has a design.bit beside it");
+        let db = XrayDatabase::open(&DiskFiles, &root, DEVICE, &XrayOptions::new()).unwrap();
+        let part = db.part(&DiskFiles).unwrap();
+        let bit = xc7::read_bit(&bytes).unwrap();
+        // Every arty design is for a `7a35tcsg324` and every Basys 3
+        // one for a `7a35tcpg236`: two packages of the one `xc7a50t`
+        // die, so one frame layout serves both, and the CRCs in each
+        // file check against our own calculation either way.
+        for (expected, computed) in &bit.crc_checks {
+            assert_eq!(expected, computed, "{design}");
+        }
+        let frames = xc7::FrameData::from_stream(part.layout.clone(), bit.frames.clone()).unwrap();
+        let theirs = db.decode(&DiskFiles, &frames).unwrap();
+        eprintln!("{design}: {}", theirs.to_text());
+
+        let mut got: Vec<(String, String)> = Vec::new();
+        for (tile, feature) in &wanted {
+            got.extend(
+                theirs
+                    .at(tile)
+                    .into_iter()
+                    .map(|f| (tile.clone(), f.to_owned())),
+            );
+            let _ = feature;
+        }
+        got.sort();
+        got.dedup();
+        assert_eq!(got, wanted, "{design}");
+        assert!(!wanted.is_empty(), "{design}");
+        eprintln!(
+            "{design}: {} feature(s) in {} `_SING` tile(s) decode exactly as \
+             `required_features` names them ({dropped} with no settable bit dropped)",
+            wanted.len(),
+            wanted
+                .iter()
+                .map(|(t, _)| t.clone())
+                .collect::<std::collections::BTreeSet<_>>()
+                .len(),
+        );
+        checked += 1;
+    }
+    assert!(checked > 0 || chipdb().is_none());
+}
+
+/// The type of a tile, from its name: `LIOB33_SING_X0Y0` is
+/// `LIOB33_SING`.
+fn tile_type_of(tile: &str) -> &str {
+    tile.rsplit_once('_').map_or(tile, |(head, _)| head)
+}
+
+/// **The milestone for the `_SING` tiles**: this flow drives U14, and
+/// what it writes there is what Vivado wrote there.
+///
+/// LD6 of a Basys 3 is ball `U14`, `IOB_X0Y0` of `LIOB33_SING_X0Y0`, the
+/// single-IOB tile at the bottom end of bank 14. It could not be
+/// constrained at all before `xray::TileAlias`: the pin resolved to no
+/// usable site and the flow refused it, which three files described in
+/// words that read as if the ball were dead.
+///
+/// This builds a one-pin design that drives it from a switch, and then
+/// asks the only question worth asking — decode it and decode
+/// `artix7/harness/basys3/swbut/design.bit`, and the two must agree on
+/// that tile **feature for feature**. The harness drives U14 as its
+/// `dout[6]` with an ordinary LVCMOS33 output, so there is a right
+/// answer and it is not ours to choose.
+///
+/// It also checks the thing a feature comparison cannot: that every bit
+/// the bitstream sets decodes back through the database. A tile with no
+/// `segbits` file is excluded from the unexplained count rather than
+/// added to it (`docs/fpga-xray.md`), so before this change a bit set in
+/// a `_SING` tile would have been invisible to that check; the count of
+/// such tiles is asserted to be zero so it cannot go quiet again.
+///
+/// **Nothing of this has been on silicon.**
+/// `examples/basys3/io_exercise.v` is the design built to ask a person,
+/// and its BTND lights all sixteen LEDs in one row.
+#[test]
+#[cfg(all(feature = "verilog", feature = "synth"))]
+fn the_single_io_tile_this_flow_now_drives_is_configured_as_vivado_configures_it() {
+    let Some(root) = chipdb() else { return };
+    let Some(theirs) = vivado(&root) else { return };
+    // Three builds, not one. A result that moves when an unrelated pin
+    // or the loaded region moves is a property of that build and not of
+    // the tile, and this repository has published such a result before
+    // (`docs/fpga-xray.md`, "the count moves with the route"). So the
+    // comparison below is made from three different placements: two
+    // different companion switches, and two different amounts of fabric
+    // around them.
+    for (companion, margin) in [("V17", 14u32), ("W13", 14), ("V17", 24)] {
+        one_build(&root, &theirs, companion, margin);
+    }
+}
+
+/// One `led6` build: a switch on `companion`, LD6 on U14, the fabric
+/// loaded with `margin` tiles around them. See the caller for why this
+/// is run more than once.
+#[cfg(all(feature = "verilog", feature = "synth"))]
+fn one_build(root: &str, theirs: &Decoded, companion: &str, margin: u32) {
+    use reticle::diag::Diagnostics;
+    use reticle::fpga::place::{PlaceOptions, place};
+    use reticle::fpga::{Constraints, FpgaOptions, Netlist, bitstream, synthesize_for, target};
+    use reticle::source::SourceMap;
+
+    // One switch to LD6, and nothing else, so that what lands in the
+    // `_SING` tiles is this one pin and not a side effect.
+    let verilog = "module led6(input wire sw, output wire led);\n\
+                   assign led = sw;\nendmodule\n";
+    let rcf = format!(
+        "set_io -io_standard LVCMOS33 sw {companion}\n\
+         set_io -io_standard LVCMOS33 led U14\n"
+    );
+    let rcf = rcf.as_str();
+
+    let mut map = SourceMap::new();
+    let source = map.add("led6.v", verilog).unwrap();
+    let rcf_file = map.add("led6.rcf", rcf).unwrap();
+    let mut diags = Diagnostics::new();
+    let ast = reticle::verilog::parse_source(
+        &mut map,
+        source,
+        reticle::verilog::Dialect::SystemVerilog,
+        &mut reticle::verilog::NoIncludes,
+        &mut diags,
+    );
+    let mut design = reticle::verilog::elaborate_file(
+        &ast,
+        &reticle::verilog::ElabOptions::default(),
+        &mut diags,
+    )
+    .unwrap();
+    assert!(!diags.has_errors(), "{}", diags.render(&map));
+    let top = design.top.unwrap();
+    let device = target(DEVICE).unwrap();
+    let mut constraints = Constraints::parse(rcf, rcf_file, &mut diags);
+    constraints.merge_attrs(&design, top, &mut diags);
+    synthesize_for(
+        &mut design,
+        top,
+        device,
+        &constraints,
+        &FpgaOptions::default(),
+        &mut diags,
+    )
+    .unwrap();
+    assert!(!diags.has_errors(), "{}", diags.render(&map));
+
+    let db = XrayDatabase::open(&DiskFiles, root, DEVICE, &XrayOptions::new()).unwrap();
+    let pins: Vec<String> = constraints.pins.iter().map(|p| p.pin.clone()).collect();
+    let region = db
+        .region_for_pins(&DiskFiles, &pins, margin)
+        .unwrap()
+        .expect("the companion switch and U14 are both sites of this package");
+    let mut options = XrayOptions::new();
+    options.region = Some(region);
+    let fabric = db.load(&DiskFiles, &options).unwrap();
+
+    let graph = fabric.arch.build_graph();
+    let netlist = Netlist::build(&design, top, device, &graph).unwrap();
+    let (placement, report) = place(
+        &netlist,
+        &fabric.arch,
+        &graph,
+        &constraints,
+        &PlaceOptions::default(),
+    )
+    .unwrap();
+    // Both pins held where the package map puts them — and the one that
+    // used to be refused is the point.
+    assert_eq!(report.fixed, 2, "both pins should be held at their balls");
+    let (routing, _) = reticle::fpga::route(
+        &netlist,
+        &graph,
+        &placement,
+        &reticle::fpga::RouteOptions::default(),
+    )
+    .unwrap();
+    assert_eq!(
+        routing.routed(),
+        netlist.signals.len(),
+        "{}",
+        routing.to_text(&netlist, &graph)
+    );
+
+    let tiles = bitstream::generate(
+        &design,
+        top,
+        &fabric.arch,
+        &graph,
+        &netlist,
+        &placement,
+        &routing,
+    )
+    .unwrap();
+    let frames = xc7::frames_from_bitstream(&fabric.part, &tiles, &fabric.frames).unwrap();
+    let ours = db.decode(&DiskFiles, &frames).unwrap();
+    eprintln!("led6 ({companion}, margin {margin}): {}", ours.to_text());
+
+    // ---- The two `_SING` tiles, feature for feature. ----
+    for tile in ["LIOB33_SING_X0Y0", "LIOI3_SING_X0Y0"] {
+        assert_eq!(
+            ours.at(tile),
+            theirs.at(tile),
+            "{tile}, with {companion} and margin {margin}"
+        );
+        assert_eq!(ours.at(tile).len(), 3, "{tile} should have real features");
+    }
+    // Which is the ordinary output recipe, on the half the alias picks.
+    assert!(
+        ours.at("LIOB33_SING_X0Y0")
+            .iter()
+            .all(|f| f.starts_with("IOB_Y0.")),
+        "{:?}",
+        ours.at("LIOB33_SING_X0Y0")
+    );
+    assert!(
+        ours.at("LIOI3_SING_X0Y0")
+            .iter()
+            .all(|f| f.starts_with("OLOGIC_Y0.")),
+        "{:?}",
+        ours.at("LIOI3_SING_X0Y0")
+    );
+
+    // ---- Every bit decodes, and nothing hides in an undescribed tile.
+    assert_eq!(ours.unexplained, 0, "{}", ours.to_text());
+    assert_eq!(
+        ours.tiles_without_a_segbits_file,
+        0,
+        "a bit set in a tile with no segbits file is not counted as \
+         unexplained, so this must stay zero: {}",
+        ours.to_text()
+    );
+}
+
+/// A ball this flow cannot drive says which ball and which tile, and a
+/// ball it can is not in that list.
+///
+/// Before the `_SING` tiles were reachable, constraining a port to U14
+/// got `maps to no usable site` and nothing else — the same sentence a
+/// ground pin, an unloaded region and a missing table all produce. The
+/// loader knows which of those it is, so it now says so
+/// (`Arch::unplaceable_pins`), and placement quotes it.
+///
+/// `MONITOR_BOT` is the analogue-monitor tile: `A12` and `B13` are the
+/// `XADC` differential input, they are not IO buffers and no table here
+/// will ever give them one. That makes them the right subject — a
+/// permanent example of the refusal, rather than one that would go stale
+/// the next time a tile type is added.
+///
+/// What this would not catch: a ball dropped for being outside the
+/// loaded region, which is a different silence and is still silent.
+#[test]
+fn a_ball_with_no_io_buffer_is_refused_by_name_and_by_tile() {
+    let Some(root) = chipdb() else { return };
+    let db = XrayDatabase::open(&DiskFiles, &root, DEVICE, &XrayOptions::new()).unwrap();
+
+    // The analogue monitor, with a little fabric around it.
+    let mut options = XrayOptions::new();
+    options.region = Some(GridRegion::new(40, 70, 55, 90));
+    let fabric = db.load(&DiskFiles, &options).unwrap();
+    for ball in ["A12", "B13"] {
+        let why = fabric
+            .arch
+            .why_no_pin(ball)
+            .unwrap_or_else(|| panic!("{ball} should be refused with a reason"));
+        assert!(why.contains("MONITOR_BOT"), "{ball}: {why}");
+        assert!(why.contains("IPAD_X0Y"), "{ball}: {why}");
+        assert_eq!(fabric.arch.site_of_pin(ball), None, "{ball}");
+        eprintln!("{ball}: {why}");
+    }
+
+    // And the ball this change is about is placeable, with a bel name
+    // and not a raw site name.
+    let mut options = XrayOptions::new();
+    options.region = Some(GridRegion::new(0, 145, 14, 155));
+    let fabric = db.load(&DiskFiles, &options).unwrap();
+    assert_eq!(fabric.arch.why_no_pin("U14"), None);
+    assert_eq!(fabric.arch.site_of_pin("U14"), Some("X0Y155/IOB_Y0"));
+}

@@ -3,11 +3,16 @@
 // whose job is to establish the board's wiring must not have wiring
 // mistakes of its own. The four digit-enable patterns take 2^18 cycles to
 // come round, so this runs long enough to see all of them.
+//
+// What it cannot catch, and what BTND on the board is for: that `led[6]`
+// reaches ball U14 at all. That is the `_SING` IO tile the flow could
+// not configure until `fpga::xray::TileAlias`, and a simulation has no
+// pads.
 module io_exercise_tb;
     reg clk = 1'b0;
     reg [15:0] sw = 16'd0;
     reg c = 1'b0, u = 1'b0, d = 1'b0, l = 1'b0, r = 1'b0;
-    wire [14:0] led;
+    wire [15:0] led;
     wire [6:0]  seg;
     wire        dp;
     wire [3:0]  an;
@@ -26,24 +31,21 @@ module io_exercise_tb;
 
     initial begin
         settle;
-        // Each switch lights its own LED, and `sw[6]` has no LED so the
-        // outputs above it shift down by one.
-        sw = 16'h0001; settle;
-        if (led !== 15'h0001) begin $display("FAIL: sw[0] gave led=%h", led); $finish; end
-        sw = 16'h0020; settle;
-        if (led !== 15'h0020) begin $display("FAIL: sw[5] gave led=%h", led); $finish; end
-        // sw[6] has no LED of its own: it must light nothing.
-        sw = 16'h0040; settle;
-        if (led !== 15'h0000) begin $display("FAIL: sw[6] lit led=%h, it has no LED", led); $finish; end
-        // sw[7] is LD7, which is led[6].
-        sw = 16'h0080; settle;
-        if (led !== 15'h0040) begin $display("FAIL: sw[7] gave led=%h, wanted 0040", led); $finish; end
-        sw = 16'h8000; settle;
-        if (led !== 15'h4000) begin $display("FAIL: sw[15] gave led=%h, wanted 4000", led); $finish; end
+        // One LED per switch, in order, with nothing skipped. `sw[6]`
+        // is the one that used to light nothing, because LD6's ball sits
+        // in a `LIOB33_SING` tile this flow could not configure; it has
+        // its own LED now, and `led[6]` is the bit to watch.
+        for (n = 0; n < 16; n = n + 1) begin
+            sw = 16'h0001 << n; settle;
+            if (led !== (16'h0001 << n)) begin
+                $display("FAIL: sw[%0d] gave led=%h", n, led);
+                $finish;
+            end
+        end
 
-        // BTND lights all fifteen whatever the switches say.
+        // BTND lights all sixteen whatever the switches say.
         sw = 16'h0000; d = 1'b1; settle;
-        if (led !== 15'h7FFF) begin $display("FAIL: BTND gave led=%h", led); $finish; end
+        if (led !== 16'hFFFF) begin $display("FAIL: BTND gave led=%h", led); $finish; end
         d = 1'b0;
 
         // BTNC lights every segment, the point, and all four digits.
@@ -81,7 +83,7 @@ module io_exercise_tb;
             $display("FAIL: only these digits were enabled: %b", seen);
             $finish;
         end
-        $display("PASS: every switch maps to its own LED with the LD6 gap, all five buttons do what the header says, and all four digits are multiplexed one at a time");
+        $display("PASS: all sixteen switches map to their own LED with no gap, all five buttons do what the header says, and all four digits are multiplexed one at a time");
         $finish;
     end
 endmodule

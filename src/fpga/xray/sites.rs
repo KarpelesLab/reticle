@@ -160,6 +160,17 @@ pub(super) fn site_of_prefix<'a>(tile: &'a XrayTile, prefix: &str) -> Option<&'a
         return block_ram_half(&candidates, index);
     }
 
+    // A tile whose bits are aliased onto another type is named in *that*
+    // type's vocabulary, so a `LIOB33_SING` holding one IOB can be
+    // described by `IOB_Y1` — rank 1 of a tile that has one site. The
+    // index cannot be a rank there, and there is nothing to choose
+    // between: the one site of the family is the one meant. Which half
+    // it is is settled by the alias and not by this function; see
+    // `super::TileAlias`.
+    if tile.bits_alias.is_some() && candidates.len() == 1 {
+        return candidates.first().copied();
+    }
+
     match axis {
         Axis::X => candidates.sort_by_key(|(name, _)| site_coordinate(name).map(|c| c.0)),
         Axis::Y => candidates
@@ -425,24 +436,41 @@ pub(super) fn bel_pins(tile_type: &str, prefix: &str, sub: &str) -> Vec<BelPin> 
     // `RIOI_T<n>` in the IO-logic tile beside it — the end of the `TQ`
     // path [`tristate_through`] declares. An `IBUF` or `OBUF` on the same
     // site leaves the pin unrouted, as Vivado leaves it.
-    if base == "IOB" && (tile_type == "LIOB33" || tile_type == "RIOB33") {
-        return vec![
-            BelPin {
-                role: "din",
-                wire: format!("IOB_IBUF{index}"),
-            },
-            BelPin {
-                role: "dout",
-                wire: format!("IOB_O{index}"),
-            },
-            BelPin {
-                role: "oe",
-                wire: format!("IOB_T{index}"),
-            },
-        ];
+    // A `_SING` tile holds one IOB where a `LIOB33` holds two, and its
+    // wires are numbered **0** whichever half of the two-IOB tile the
+    // database describes its bits with: `ppips_lioi3_sing.db` and
+    // `tileconn.json`'s `LIOB33_SING`/`LIOI3_SING` pairs name
+    // `IOB_IBUF0`, `IOB_O0` and `LIOI_IBUF0` and nothing with a 1 in it.
+    // So the *feature* prefix may be `IOB_Y1` (see `super::TileAlias`)
+    // while the *wire* is still `IOB_IBUF0`, and the index is not taken
+    // from the prefix here.
+    if base == "IOB" && matches!(tile_type, "LIOB33" | "RIOB33") {
+        return iob_pins(index);
+    }
+    if base == "IOB" && matches!(tile_type, "LIOB33_SING" | "RIOB33_SING") {
+        return iob_pins(0);
     }
 
     Vec::new()
+}
+
+/// The three fabric-side pins of the IO buffer whose wires carry
+/// `index`. See [`bel_pins`] for what the pad's absence means.
+fn iob_pins(index: u32) -> Vec<BelPin> {
+    vec![
+        BelPin {
+            role: "din",
+            wire: format!("IOB_IBUF{index}"),
+        },
+        BelPin {
+            role: "dout",
+            wire: format!("IOB_O{index}"),
+        },
+        BelPin {
+            role: "oe",
+            wire: format!("IOB_T{index}"),
+        },
+    ]
 }
 
 /// `i0`..`i5`, the roles `xc7.dev`'s `port i=I0,I1,I2,I3,I4,I5` produces.
@@ -488,33 +516,48 @@ pub(super) fn pass_throughs(tile_type: &str) -> Vec<PassThrough> {
     if matches!(tile_type, "CLK_HROW_BOT_R" | "CLK_HROW_TOP_R") {
         return horizontal_clock_buffers();
     }
-    let side = match tile_type {
-        "LIOI3" | "LIOI3_TBYTESRC" | "LIOI3_TBYTETERM" => "LIOI",
-        "RIOI3" | "RIOI3_TBYTESRC" | "RIOI3_TBYTETERM" => "RIOI",
+    let (side, single) = match tile_type {
+        "LIOI3" | "LIOI3_TBYTESRC" | "LIOI3_TBYTETERM" => ("LIOI", false),
+        "RIOI3" | "RIOI3_TBYTESRC" | "RIOI3_TBYTETERM" => ("RIOI", false),
+        "LIOI3_SING" => ("LIOI", true),
+        "RIOI3_SING" => ("RIOI", true),
         _ => return Vec::new(),
     };
     let mut out = Vec::new();
     for n in 0..2u32 {
+        // A `_SING` tile has one `ILOGICE3` and one `OLOGICE3` where a
+        // `LIOI3` has two, and its wires are numbered 0 whichever half
+        // of the two-row tile the database describes its bits with:
+        // `ppips_lioi3_sing.db` names `IOI_OLOGIC0_D1` and
+        // `LIOI_OLOGIC0_OQ` and nothing with a 1 in it. So both halves'
+        // *features* are offered on the *same* wire pair and the one the
+        // tile actually has survives — `build_arch` drops a hop whose
+        // features its tile type does not hold, and `super::TileAlias`
+        // has already cut the aliased feature set down to the one half
+        // this tile is. The other hop is counted in
+        // `pass_throughs_unresolved`, which is how a table that has
+        // drifted from the database says so.
+        let w = if single { 0 } else { n };
         // Pad -> fabric. `ZINV_D` is the ILOGIC's D input inverter held
         // off; it is the only bit Vivado sets on an otherwise default
         // input path, and it appears once per *used* input half.
         out.push(PassThrough {
-            to: format!("IOI_ILOGIC{n}_O"),
-            from: format!("{side}_ILOGIC{n}_D"),
+            to: format!("IOI_ILOGIC{w}_O"),
+            from: format!("{side}_ILOGIC{w}_D"),
             features: vec![format!("ILOGIC_Y{n}.ZINV_D")],
         });
         // Fabric -> pad. The OLOGIC's output mux takes D1, the OQ output
         // is in use, and the tristate path is a plain buffer.
         out.push(PassThrough {
-            to: format!("{side}_OLOGIC{n}_OQ"),
-            from: format!("IOI_OLOGIC{n}_D1"),
+            to: format!("{side}_OLOGIC{w}_OQ"),
+            from: format!("IOI_OLOGIC{w}_D1"),
             features: vec![
                 format!("OLOGIC_Y{n}.OMUX.D1"),
                 format!("OLOGIC_Y{n}.OQUSED"),
                 format!("OLOGIC_Y{n}.OSERDES.DATA_RATE_TQ.BUF"),
             ],
         });
-        out.push(tristate_through(side, n));
+        out.push(tristate_through(side, w, n));
     }
     out
 }
@@ -555,10 +598,10 @@ pub(super) fn pass_throughs(tile_type: &str) -> Vec<PassThrough> {
 /// lit, which fits "inverted, and an unrouted `T1` reads one" exactly as
 /// well as "not inverted, and it reads zero". `examples/basys3/pmod_bidir.v`
 /// is the design that tells the two apart on a part.
-fn tristate_through(side: &str, n: u32) -> PassThrough {
+fn tristate_through(side: &str, wire: u32, n: u32) -> PassThrough {
     PassThrough {
-        to: format!("{side}_OLOGIC{n}_TQ"),
-        from: format!("IOI_OLOGIC{n}_T1"),
+        to: format!("{side}_OLOGIC{wire}_TQ"),
+        from: format!("IOI_OLOGIC{wire}_T1"),
         features: vec![
             format!("OLOGIC_Y{n}.OSERDES.DATA_RATE_TQ.BUF"),
             format!("OLOGIC_Y{n}.ZINV_T1"),
@@ -1387,6 +1430,19 @@ mod tests {
                 .map(|(a, b)| ((*a).to_owned(), (*b).to_owned()))
                 .collect(),
             bits: Vec::new(),
+            bits_alias: None,
+        }
+    }
+
+    /// The same tile with its bits aliased onto another type, which is
+    /// what a `_SING` IO tile looks like: see `super::TileAlias`.
+    fn aliased_tile(sites: &[(&str, &str)], start_offset: u32) -> XrayTile {
+        XrayTile {
+            bits_alias: Some(crate::fpga::xray::TileAlias {
+                tile_type: "LIOB33".to_owned(),
+                start_offset,
+            }),
+            ..tile(sites)
         }
     }
 
@@ -1485,6 +1541,96 @@ mod tests {
         assert!(!pins.iter().any(|p| p.role == "pad"));
     }
 
+    /// A `_SING` tile's lone buffer sits on the **zero** wires however
+    /// the database names its bits.
+    ///
+    /// This is the one place the two numberings come apart: the feature
+    /// prefix of the tile at the top of a bank is `IOB_Y1` (see
+    /// `super::TileAlias`, and `artix7/harness/arty-a7/pmod`'s
+    /// `design.json`, which is Vivado writing exactly that), while the
+    /// wire is `IOB_IBUF0` because `tileconn.json`'s
+    /// `LIOB33_SING`/`LIOI3_SING` pairs name no wire with a 1 in it.
+    /// Taking the index from the prefix, as the two-IOB tiles do, would
+    /// put the pin on a wire the tile does not have, and the bel would
+    /// come out with no pins at all.
+    ///
+    /// What this would not catch: that `IOB_O0` is the *output* and
+    /// `IOB_IBUF0` the input in a `_SING` tile. That is the same
+    /// `tileconn` pairing as in a `LIOB33`, and nothing here re-measures
+    /// it.
+    #[test]
+    fn a_single_io_tiles_buffer_is_on_the_zero_wires_whichever_half_names_it() {
+        for (tile_type, prefix) in [
+            ("LIOB33_SING", "IOB_Y0"),
+            ("LIOB33_SING", "IOB_Y1"),
+            ("RIOB33_SING", "IOB_Y0"),
+            ("RIOB33_SING", "IOB_Y1"),
+        ] {
+            let pins = bel_pins(tile_type, prefix, "");
+            let names: Vec<(&str, &str)> = pins.iter().map(|p| (p.role, p.wire.as_str())).collect();
+            assert_eq!(
+                names,
+                vec![("din", "IOB_IBUF0"), ("dout", "IOB_O0"), ("oe", "IOB_T0")],
+                "{tile_type} {prefix}"
+            );
+        }
+    }
+
+    /// The prefix index of an aliased tile is not a rank, so the one
+    /// site of the family is the one meant.
+    ///
+    /// `LIOB33_SING_X0Y49` holds `IOB_X0Y49` and nothing else, and
+    /// `tilegrid.json` aliases it onto `LIOB33`'s `IOB_Y1` — rank one of
+    /// a one-site tile. Without this the top ball of every bank
+    /// resolves to no site at all, which is the shape the bug had.
+    #[test]
+    fn an_aliased_tiles_one_site_answers_to_either_half() {
+        let top = aliased_tile(&[("IOB_X0Y49", "IOB33")], 0);
+        assert_eq!(site_of_prefix(&top, "IOB_Y1").unwrap().0, "IOB_X0Y49");
+        assert_eq!(site_of_prefix(&top, "IOB_Y0").unwrap().0, "IOB_X0Y49");
+        let bottom = aliased_tile(&[("IOB_X0Y0", "IOB33")], 2);
+        assert_eq!(site_of_prefix(&bottom, "IOB_Y0").unwrap().0, "IOB_X0Y0");
+        // And the relaxation is only for an aliased tile: an ordinary
+        // one-site tile still ranks, so `_Y1` of it is nothing.
+        let plain = tile(&[("IOB_X0Y49", "IOB33")]);
+        assert_eq!(site_of_prefix(&plain, "IOB_Y0").unwrap().0, "IOB_X0Y49");
+        assert!(site_of_prefix(&plain, "IOB_Y1").is_none());
+    }
+
+    /// A `_SING` IO logic tile offers both halves' features on the one
+    /// wire pair it has, and the half the tile is keeps its hop.
+    ///
+    /// Which half that is, this function does not know and must not
+    /// guess: `build_arch` drops the hop whose features the tile type's
+    /// feature set does not hold, and that set has already been cut to
+    /// one half by `super::TileAlias`. So the table's job is to offer
+    /// both, and the test's job is to say that the wires do not move
+    /// while the features do.
+    #[test]
+    fn a_single_io_logic_tile_offers_both_halves_on_the_one_wire_set() {
+        for (tile_type, side) in [("LIOI3_SING", "LIOI"), ("RIOI3_SING", "RIOI")] {
+            let p = pass_throughs(tile_type);
+            assert_eq!(p.len(), 6, "{tile_type}");
+            for (i, half) in [(0usize, 0u32), (3, 1)] {
+                assert_eq!(p[i].to, "IOI_ILOGIC0_O");
+                assert_eq!(p[i].from, format!("{side}_ILOGIC0_D"));
+                assert_eq!(p[i].features, vec![format!("ILOGIC_Y{half}.ZINV_D")]);
+                assert_eq!(p[i + 1].to, format!("{side}_OLOGIC0_OQ"));
+                assert_eq!(p[i + 1].from, "IOI_OLOGIC0_D1");
+                assert_eq!(
+                    p[i + 1].features,
+                    vec![
+                        format!("OLOGIC_Y{half}.OMUX.D1"),
+                        format!("OLOGIC_Y{half}.OQUSED"),
+                        format!("OLOGIC_Y{half}.OSERDES.DATA_RATE_TQ.BUF"),
+                    ]
+                );
+                assert_eq!(p[i + 2].to, format!("{side}_OLOGIC0_TQ"));
+                assert_eq!(p[i + 2].from, "IOI_OLOGIC0_T1");
+            }
+        }
+    }
+
     /// Both halves, the two data directions and — since the tristate path
     /// was declared — the `T` hop beside the output one. This asserted four
     /// hops while the tristate was missing; six is the same table plus
@@ -1518,7 +1664,7 @@ mod tests {
     #[test]
     fn the_tristate_hop_holds_t_uninverted_and_passes_it_straight_through() {
         for n in 0..2u32 {
-            let hop = tristate_through("LIOI", n);
+            let hop = tristate_through("LIOI", n, n);
             assert_eq!(hop.to, format!("LIOI_OLOGIC{n}_TQ"));
             assert_eq!(hop.from, format!("IOI_OLOGIC{n}_T1"));
             assert_eq!(

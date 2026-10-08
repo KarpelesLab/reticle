@@ -83,9 +83,12 @@
 //   LD14       a heartbeat
 //   digits     frames completed, in hexadecimal
 //
-// LD6 is skipped: ball U14 sits in a `LIOB33_SING` tile this flow has no
-// IO table for, so `led[5]` is LD5 and `led[6]` is LD7. That is a gap in
-// the flow and not a dead ball.
+// LD6 is skipped: ball U14 sits in a `LIOB33_SING` tile, so `led[5]` is
+// LD5 and `led[6]` is LD7. That was a gap in the flow and never a dead
+// ball, and the gap is closed — `fpga::xray::TileAlias` reaches that
+// tile type and `examples/basys3/io_exercise.v` drives all sixteen. The
+// numbering here is kept because the LED map above is what a person
+// reads off the board.
 //
 // ===================================================================
 // WHAT IS CHECKED

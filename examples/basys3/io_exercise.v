@@ -2,7 +2,7 @@
 // that the board's map can be established before anything subtler is
 // attempted.
 //
-// Sixteen switches, fifteen of the sixteen LEDs, five pushbuttons, four
+// Sixteen switches, all sixteen LEDs, five pushbuttons, four
 // seven-segment digits with their decimal point. What it is for is to
 // turn each of those from a transcription into a measurement: this
 // repository's Basys 3 pin list came from Digilent's published master
@@ -45,10 +45,13 @@
 //   BTNR  one digit only, `an[3]`, showing `8`. The other end of the
 //         same answer, so that BTNL and BTNR together cannot both be
 //         misread.
-//   BTND  all fifteen LEDs lit, ignoring the switches. Any LED that
-//         stays dark is one that is not reaching the board — LD6 is
-//         expected to be the only one, and it is not even in this
-//         design.
+//   BTND  all sixteen LEDs lit, ignoring the switches. Any LED that
+//         stays dark is one that is not reaching the board, and the
+//         expected reading is sixteen lit in one unbroken row. This is
+//         the sharpest test on the board for the `_SING` IO tiles: LD6
+//         is ball U14, the one LED of the sixteen in a `LIOB33_SING`,
+//         and if the alias that reaches it were wrong LD6 is the one
+//         that stays dark while its fifteen neighbours light.
 //
 // ===================================================================
 // WHAT IS DELIBERATELY NOT IN IT
@@ -67,10 +70,26 @@
 // does not cover an output buffer's input. Every output here is a
 // multiplexer or a register output, so none of them depends on that.
 //
-// **LD6 is absent.** Ball U14 is the one LED of the sixteen in a
-// `LIOB33_SING` tile, which this flow's IO tables do not describe;
-// `blink_carry.rcf` and `bram_rom.v` already say so. Fifteen LEDs, and
-// the gap between LD5 and LD7 is that tile and not a mistake.
+// ===================================================================
+// LD6 USED TO BE ABSENT, AND WHY IT IS WORTH SAYING
+// ===================================================================
+//
+// Ball U14 is the one LED of the sixteen in a `LIOB33_SING` tile — the
+// single-IOB tile at the bottom end of bank 14 — and for most of this
+// flow's life nothing here could drive it. Three files said so in words
+// that read as if the ball were dead; the board's owner corrected that,
+// and the gap was ours: prjxray ships no `segbits_liob33_sing.db`, so
+// the flow had no bits to set in that tile and refused the pin.
+//
+// What it does ship is an `alias` on the tile's bit window naming the
+// two-IOB type whose `segbits` *do* describe it, and the word offset to
+// read them at. `fpga::xray::TileAlias` is the account; three of the
+// Vivado reference designs under `artix7/harness/` drive a ball in such
+// a tile and all three decode through that alias to exactly the features
+// they say they needed. So this design has sixteen LEDs and no gap, and
+// `led[n]` is `sw[n]` for every one of them.
+//
+// **Nothing about it has been on silicon.** That is what BTND is for.
 //
 // Segments and anodes are both active low — the display is common anode,
 // switched by PNP transistors — which is Digilent's reference manual and
@@ -87,8 +106,9 @@ module io_exercise (
     input  wire        btn_l,
     input  wire        btn_r,
 
-    // Fifteen LEDs: LD0 to LD5, then LD7 to LD15. See above for the gap.
-    output wire [14:0] led,
+    // All sixteen LEDs, LD0 to LD15, `led[n]` on the ball Digilent
+    // calls LDn. LD6 is ball U14, in a `LIOB33_SING` tile; see above.
+    output wire [15:0] led,
 
     output wire [6:0]  seg,
     output wire        dp,
@@ -132,10 +152,9 @@ module io_exercise (
 
     // ---- The LEDs: the switches, or all of them with BTND. ----
     //
-    // `sw[6]` has no LED of its own, so the fifteen outputs skip it:
-    // led[5] is LD5 and led[6] is LD7.
-    assign led = hold_d ? 15'h7FFF
-                        : {sw[15:7], sw[5:0]};
+    // One LED per switch, in order, with nothing skipped: the row of
+    // sixteen lit under BTND is the reading this design exists for.
+    assign led = hold_d ? 16'hFFFF : sw;
 
     // ---- What the digits show. ----
     wire [3:0] from_switches =

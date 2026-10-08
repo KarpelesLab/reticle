@@ -79,9 +79,11 @@
 //   point      blinks with the heartbeat
 //
 // LD14 is where LD6 would be in a sixteen-LED design: ball U14 sits in a
-// `LIOB33_SING` tile this flow has no IO table for, so it is skipped and
-// the design has fifteen LEDs. That is a gap in the flow, not a dead
-// ball — the board's owner confirms LD6 works.
+// `LIOB33_SING` tile this flow had no IO table for when this design was
+// written, so it is skipped and the design has fifteen LEDs. That was a
+// gap in the flow, not a dead ball — the board's owner confirms LD6
+// works — and the gap is closed: `fpga::xray::TileAlias` reaches that
+// tile type and `examples/basys3/io_exercise.v` drives all sixteen.
 //
 // ===================================================================
 // WHAT IS AND IS NOT CHECKED HERE

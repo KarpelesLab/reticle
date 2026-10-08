@@ -577,6 +577,13 @@ design was simulated first and passes
 five buttons, all four digit enables), so what follows is the part's
 answer and not the RTL's.
 
+> **The design has since grown a sixteenth LED**, which is why the
+> readings below mention fifteen and `sw[6]` with no LED of its own. LD6
+> (ball U14) was unreachable then and is not now — see "LD6 was a
+> missing feature, not a dead ball" — and `io_exercise.v` now drives
+> `led[n]` from `sw[n]` for all sixteen. The readings are left as they
+> were taken.
+
 Two readings, all switches down and then all switches up:
 
 | | reads | balls |
@@ -626,33 +633,143 @@ question were already lit, so flipping their switches proved nothing
 about the *inputs*, and a switch-at-a-time reading found no permutation
 — every responding switch lit the LED directly above it.
 
-### LD6 is a missing feature, not a dead ball
+### LD6 was a missing feature, not a dead ball — and it is done
 
-`blink_carry.rcf`, `blink_carry.v` and `bram_rom.v` all describe LD6
-(ball U14) as skipped because it sits in a `LIOB33_SING` tile this flow's
-IO tables do not describe. That is accurate about the flow and reads as
-if the ball were unusable, which it is not: the board's owner confirms
-LD6 works and that this is a programming gap. Supporting that tile type
-is a to-do, not a board limitation, and those three comments should stop
-implying otherwise.
+**DONE, 8 October 2026.** `examples/basys3/io_exercise.v` has sixteen
+LEDs and no gap, `led[6]` is ball U14, and what this flow writes in that
+ball's tile is feature for feature what Vivado writes there. The rest of
+this section is how, and what it cost; the full account of the mechanism
+is in `fpga::xray::TileAlias`.
 
-**And the oracle for it is already in the repository, read on
-8 October 2026.** `artix7/harness/basys3/swbut/design.txt` gives U14 as
-`dout[6]`, `package_pins.csv` gives it as `IOB_X0Y0` of
-`LIOB33_SING_X0Y0`, and `design.json`'s `required_features` show Vivado
-configuring it with **exactly the ordinary output recipe**, on the
-`_Y0` half, which is the only half a `_SING` tile has:
+**The wrong reading it replaces.** `blink_carry.rcf`, `blink_carry.v` and
+`bram_rom.v` all described LD6 (ball U14) as skipped because it sits in a
+`LIOB33_SING` tile this flow's IO tables did not describe. That was
+accurate about the flow and read as if the ball were unusable, which it
+is not: the board's owner confirms LD6 works and that this was a
+programming gap. Those comments now say which it was.
 
-| Tile | What Vivado sets |
-|---|---|
-| `LIOB33_SING_X0Y0` | `IOB_Y0.IN_TERM.NONE`, `IOB_Y0.…SLEW.SLOW`, `IOB_Y0.LVCMOS33_LVTTL.DRIVE.I12_I16`, `IOB_Y0.PULLTYPE.NONE` |
-| `LIOI3_SING_X0Y0` | `OLOGIC_Y0.OMUX.D1`, `OLOGIC_Y0.OQUSED`, `OLOGIC_Y0.OSERDES.DATA_RATE_TQ.BUF` |
+**It was never one LED.** `*_SING` tiles are the single-IOB tiles at
+*both* ends of *every* IO bank — twenty of them on an `xc7a50t` die,
+four tile types — so this was the top and bottom ball of every bank on
+every 7-series part this backend reaches, and U14 was just the one a
+person could see.
 
-That is feature for feature what `src/fpga/xray/sites.rs` already emits
-for an `LIOB33` / `LIOI3` output, with `IOB_Y1` and `OLOGIC_Y1` absent.
-So adding the two `_SING` types is a table entry and not a
-reverse-engineering problem. **Not done here**, and nothing about it has
-been on silicon.
+#### The oracle, read in full
+
+`artix7/harness/basys3/swbut/design.txt` gives U14 as `dout[6]`,
+`package_pins.csv` gives it as `IOB_X0Y0` of `LIOB33_SING_X0Y0`, and
+`design.json`'s `required_features` show Vivado configuring it with
+**exactly the ordinary output recipe** on the `_Y0` half. Two more of
+the harness designs drive such a ball, which between them cover the
+other edge of the die, the other half and the other direction:
+
+| design | tile | what Vivado sets |
+|---|---|---|
+| `basys3/swbut` | `LIOB33_SING_X0Y0` | `IOB_Y0.IN_TERM.NONE`, `IOB_Y0.…SLEW.SLOW`, `IOB_Y0.LVCMOS33_LVTTL.DRIVE.I12_I16`, `IOB_Y0.PULLTYPE.NONE` |
+| `basys3/swbut` | `LIOI3_SING_X0Y0` | `IDELAY_Y0.IDELAY_TYPE_FIXED`, `ILOGIC_Y0.IDELMUXE3.P1`, `ILOGIC_Y0.IFF.SRTYPE.ASYNC`, `ILOGIC_Y0.ISERDES.MODE.MASTER`, `ILOGIC_Y0.ISERDES.NUM_CE.N1`, `OLOGIC_Y0.OMUX.D1`, `OLOGIC_Y0.OQUSED`, `OLOGIC_Y0.OSERDES.DATA_RATE_TQ.BUF` |
+| `arty-a7/swbut` | `RIOB33_SING_X43Y50` | the same four, on `IOB_Y0` |
+| `arty-a7/swbut` | `RIOI3_SING_X43Y50` | the same eight, on `_Y0` |
+| `arty-a7/pmod` | `LIOB33_SING_X0Y99` | `IOB_Y1.IN_TERM.NONE`, `IOB_Y1.…IN_ONLY`, `IOB_Y1.…SLEW.FAST`, `IOB_Y1.LVCMOS25_LVCMOS33_LVTTL.IN`, `IOB_Y1.PULLTYPE.NONE` — an **input**, on the `_Y1` half |
+| `arty-a7/pmod` | `LIOI3_SING_X0Y99` | `IDELAY_Y1.IDELAY_TYPE_FIXED`, `ILOGIC_Y1.IDELMUXE3.P1`, `ILOGIC_Y1.IFF.SRTYPE.ASYNC`, `ILOGIC_Y1.ISERDES.MODE.MASTER`, `ILOGIC_Y1.ISERDES.NUM_CE.N1`, `ILOGIC_Y1.ZINV_D` |
+
+So the feature *names* are the ordinary ones and the half is `_Y0` at the
+bottom of a bank and `_Y1` at the top. That much was already quoted here
+before any of it was built; the first version of this section said
+`_Y0` was "the only half a `_SING` tile has", which the `arty-a7/pmod`
+row above disproves.
+
+#### The hypothesis that was half wrong, and what replaced it
+
+The obvious guess was that a `_SING` tile is its non-`SING` neighbour
+with one IOB unpopulated, so the neighbour's `segbits` would apply at
+the `_SING` tile's own frame address. **Wrong about the shape**, and
+`tilegrid.json` says so: a `LIOB33` window is `words: 4` and a
+`LIOB33_SING` window is `words: 2`. Had that guess been coded, every
+feature would have landed two words out.
+
+What `tilegrid.json` has instead is an `alias` member on those tiles'
+bit windows, which nothing here read:
+
+```json
+"LIOB33_SING_X0Y0": { "bits": { "CLB_IO_CLK": {
+  "baseaddr": "0x00400000", "frames": 42, "offset": 0, "words": 2,
+  "alias": { "type": "LIOB33", "start_offset": 2,
+             "sites": { "IOB33_Y0": "IOB33_Y0" } } } } }
+```
+
+`type` names the tile type whose `segbits` describe these bits and
+`start_offset` the word of *that* type's bitmap where this tile's own
+words begin. So a feature of the aliased type at bit offset `c` is at
+`c - 32 * start_offset` here, and a feature whose bits then fall outside
+this tile's own `32 * words` is not a feature of this tile at all.
+
+**That filter is what picks the half, and it needs nothing else.
+CHECKED** over the whole of `segbits_liob33.db`, `segbits_riob33.db`,
+`segbits_lioi3.db` and `segbits_rioi3.db`: of 382 half-named features,
+every `_Y0` one's bits lie in words 2..3 and every `_Y1` one's in words
+0..1, with no exceptions. A tile with `start_offset` 2 therefore keeps
+exactly the `_Y0` half and one with `start_offset` 0 exactly the `_Y1`
+half — which is the table above, derived rather than transcribed.
+
+The `alias`'s `sites` member says the same thing a second way for the
+`IOB` tiles (the top tile's lone site is aliased `IOB33_Y0` →
+`IOB33_Y1`) and is **empty for `LIOI3_SING` and `RIOI3_SING`**, although
+Vivado still names the top tile's features `ILOGIC_Y1`. So it is not
+read: the bit window is the rule, and `sites` agrees with it wherever it
+says anything.
+
+#### Two things that had to come apart
+
+- **Two `_SING` tiles of one type are two tile types here.** The two
+  halves' bits are not at the same offsets within the tile — after the
+  shift `IOB_Y0.…SLEW.SLOW` lands at bits 41..47 and `IOB_Y1`'s at
+  16..22 — so one `arch::TileType` cannot describe both. Each alias
+  offset gets its own (`LIOB33_SING_W2`, `LIOB33_SING_W0`), and a
+  `tileconn.json` join that names the far end's *database* type is
+  declared once per variant, of which at most one resolves because a
+  tile is of exactly one type.
+- **The wires are numbered 0 in both.** `ppips_lioi3_sing.db` and
+  `tileconn.json`'s `LIOB33_SING`/`LIOI3_SING` pairs name `IOB_IBUF0`,
+  `IOB_O0`, `IOI_OLOGIC0_D1` and nothing with a 1 in it. So a tile whose
+  features are `IOB_Y1.…` still has its buffer on `IOB_IBUF0`, and
+  `sites::bel_pins` must not take the wire index from the feature
+  prefix the way the two-IOB tiles do. `sites::pass_throughs` offers
+  *both* halves' features on the one wire pair and lets the tile's own
+  (already filtered) feature set keep the one it has.
+
+#### What was measured, and what was not
+
+- **CHECKED.** `every_single_io_tile_vivado_drove_decodes_to_exactly_what_it_needed`
+  decodes all three harness bitstreams and asserts the features in every
+  `_SING` tile are exactly the ones that design's `required_features`
+  names — six in `basys3/swbut`, six in `arty-a7/swbut`, four in
+  `arty-a7/pmod`, with the rest dropped because their `segbits` line has
+  no bit that must be one and so can never be decoded.
+- **CHECKED.** `the_single_io_tile_this_flow_now_drives_is_configured_as_vivado_configures_it`
+  builds a one-pin design driving U14 and compares it with the Basys 3
+  harness, feature for feature, on both `LIOB33_SING_X0Y0` and
+  `LIOI3_SING_X0Y0` — and does it **three times**, with two different
+  companion switches and two region sizes, because a result from one
+  build is a property of that build (see "retracted" above). The three
+  routes differ (32, 34 and 32 bits over 15, 13 and 15 tiles) and the
+  tile's features do not.
+- **CHECKED.** Decoding the Basys 3 harness used to report `11 tile(s)
+  with no segbits file`; it now reports **0**. Those bits were excluded
+  from the `unexplained` count rather than added to it, which this
+  document already called a blind spot in the strongest check here. It
+  is one tile type's worth smaller.
+- **NOT established.** A `_SING` tile used as a bottom-half **input** or
+  a top-half **output**. No harness drives either, so both rest on the
+  shift alone — which is measured four ways and is the same arithmetic —
+  and neither has been seen.
+- **NOT established.** Anything on silicon. The 20 `_SING` tiles of an
+  `xc7a50t` include 14 whose ball this package does not bond at all; of
+  the two `cpg236` bonds, only U14 has been built for.
+- **Nothing here is a transceiver or an `XADC` ball.** `GTP_COMMON`,
+  `GTP_CHANNEL_*` and `MONITOR_BOT` have no `segbits` and no alias, and
+  a design constraining a port to one of their balls now gets a
+  diagnostic naming the ball, the site, the tile and the tile type
+  instead of a bare "maps to no usable site".
 
 ### It is the clock: flip-flops outside some set of columns never tick
 
@@ -785,16 +902,22 @@ mostly tiles with nothing to configure — `NULL` (2491), `VBRK` (1400),
 crosses. So "no segbits file" is the ordinary state for an interface tile
 and says nothing by itself; it only matters when bits are *set* there.
 
-### LD6 is a flow gap too, and it should be closed
+### LD6 was a flow gap too, and it is closed
 
-Ball `U14` sits in `RIOB33_SING`, and the database ships segbits for
-`riob33`, `rioi3`, `rioi3_tbytesrc` and `rioi3_tbyteterm` but for **no
-`_SING` variant at all**. So the single-IOB tiles at the ends of each bank
-are simply unsupported by this flow's IO tables. LD6 works; this flow
-cannot drive it. Three files once described that as if the ball were dead,
-which the owner also corrected. Supporting the `_SING` variants is the
-to-do, and it is the same hole that makes the top and bottom ball of every
-IO bank unreachable, not just one LED.
+**The reading this replaces, kept because the path to the answer is the
+useful part.** Ball `U14` sits in a `LIOB33_SING` (this once said
+`RIOB33_SING`, which was wrong about the edge), and the database ships
+segbits for `liob33`, `riob33`, `lioi3`, `rioi3` and the `tbyte`
+variants but for **no `_SING` variant at all**. The conclusion drawn
+from that was that the single-IOB tiles at the ends of each bank are
+simply unsupported, and the to-do was to reverse-engineer them.
+
+**That was the wrong conclusion from a true observation.** There is no
+`segbits_liob33_sing.db`, but `tilegrid.json` carries an `alias` on
+those tiles' bit windows that says which type's `segbits` do describe
+them and at what word offset — so nothing needed reverse-engineering,
+only reading. See "LD6 was a missing feature, not a dead ball" above for
+the mechanism and for what Vivado's own bitstreams say about it.
 
 ### A PLL works on the part, and its own two tiles do not decode
 
@@ -1510,8 +1633,11 @@ whichever way the enable turns out to be.
 - A tristate whose data is a constant (`assign pin = en ? 1'b0 : 1'bz`,
   an open drain). The tristate hop sets `DATA_RATE_TQ.BUF` for itself for
   that case, but nothing has built one.
-- The `_SING` IO tiles at the ends of a bank, which no table in
-  `sites.rs` describes for any direction.
+- A `_SING` IO tile at the **bottom** end of a bank used as an *input*,
+  or one at the **top** end used as an *output*. The other two
+  combinations are measured against Vivado's own bitstreams and all four
+  rest on the same shift, but no harness design drives either of these
+  and nothing has.
 
 ## A distributed RAM on a `SLICEM`
 
@@ -1614,8 +1740,12 @@ which input is which address bit puts some other word, or none, on one of
 those four. The header of `lutram.v` has the full procedure.
 
 `LD6` is not used because its pin, U14, is the only buffer of a
-`LIOB33_SING` tile, which this flow has no IO table for; constraining a
-port to it is refused ("maps to no usable site") rather than guessed at.
+`LIOB33_SING` tile, which this flow had no IO table for when this demo
+was written; the write strobe went on LD5 instead and has stayed there.
+The tile type is reachable now — see "LD6 was a missing feature, not a
+dead ball" — and a ball that still cannot be driven is refused with a
+diagnostic naming the ball, its site, its tile and its tile type rather
+than a bare "maps to no usable site".
 
 ### What is not established
 

@@ -184,6 +184,12 @@ pub enum PlaceError {
         cell: String,
         /// The package pin it is constrained to.
         pin: String,
+        /// Why, when the architecture says
+        /// ([`Arch::unplaceable_pins`](super::arch::Arch::unplaceable_pins)).
+        /// A loader that knows the ball sits in a tile type it has no
+        /// tables for says so here, so the message names the tile and
+        /// not only the ball.
+        why: Option<String>,
     },
     /// Two cells were constrained to one package pin.
     PinTaken {
@@ -290,10 +296,17 @@ impl fmt::Display for PlaceError {
                 f,
                 "the design needs {needed} `{kind}` site(s) and the part has {available}"
             ),
-            PlaceError::NoPinSite { cell, pin } => write!(
-                f,
-                "`{cell}` is constrained to package pin `{pin}`, which the architecture maps to no usable site"
-            ),
+            PlaceError::NoPinSite { cell, pin, why } => match why {
+                Some(why) => write!(
+                    f,
+                    "`{cell}` is constrained to package pin `{pin}`, which the architecture \
+                     maps to no usable site: {why}"
+                ),
+                None => write!(
+                    f,
+                    "`{cell}` is constrained to package pin `{pin}`, which the architecture maps to no usable site"
+                ),
+            },
             PlaceError::PinTaken { cell, pin, by } => write!(
                 f,
                 "`{cell}` and `{by}` are both constrained to package pin `{pin}`"
@@ -1870,22 +1883,29 @@ fn fix_pins(
     let mut taken: BTreeMap<usize, String> = BTreeMap::new();
     for (index, instance) in netlist.instances.iter().enumerate() {
         let Some(pin) = &instance.pin else { continue };
+        let why = || arch.why_no_pin(pin).map(str::to_owned);
         let Some(site_name) = arch.site_of_pin(pin) else {
             return Err(PlaceError::NoPinSite {
                 cell: instance.name.clone(),
                 pin: pin.clone(),
+                why: why(),
             });
         };
         let Some(site) = graph.site_index(site_name) else {
             return Err(PlaceError::NoPinSite {
                 cell: instance.name.clone(),
                 pin: pin.clone(),
+                why: why(),
             });
         };
         if graph.sites[site].kind != instance.kind {
             return Err(PlaceError::NoPinSite {
                 cell: instance.name.clone(),
                 pin: pin.clone(),
+                why: Some(format!(
+                    "it is site `{site_name}`, which holds a `{}` and not a `{}`",
+                    graph.sites[site].kind, instance.kind
+                )),
             });
         }
         if let Some(by) = taken.get(&site) {

@@ -11,9 +11,14 @@
 # `sw[0]` is the RIGHT-hand switch and `led[0]` is the RIGHT-hand LED,
 # CHECKED on 8 October 2026 by flipping SW0 and SW1 and watching U16.
 #
-# LD6 (ball U14) is absent: it is the one LED ball of the sixteen in a
-# `LIOB33_SING` tile, which this flow's IO tables do not describe. So
-# `led[5]` is LD5 and `led[6]` is LD7, and the gap is deliberate.
+# LD6 (ball U14) used to be absent from this file: it is the one LED ball
+# of the sixteen in a `LIOB33_SING` tile, and until the alias
+# `tilegrid.json` puts on that tile's bit window was read
+# (`fpga::xray::TileAlias`) the flow had no bits to set there and refused
+# the pin. It is here now, so `led[n]` is LDn for all sixteen. The ball
+# itself was never the problem — the board's owner confirms LD6 works,
+# and `artix7/harness/basys3/swbut/design.txt` has Vivado driving U14 as
+# `dout[6]` on this very board.
 set_io -io_standard LVCMOS33 clk W5
 
 set_io -io_standard LVCMOS33 sw[0]  V17
@@ -40,22 +45,26 @@ set_io -io_standard LVCMOS33 btn_d U17
 set_io -io_standard LVCMOS33 btn_l W19
 set_io -io_standard LVCMOS33 btn_r T17
 
-# LD0..LD5, then LD7..LD15.
+# LD0..LD15, in the order `artix7/harness/basys3/swbut/design.txt` gives
+# them: that file is Vivado's own placement for this board and lists
+# `dout[0]`..`dout[15]` as U16 E19 U19 V19 W18 U15 U14 V14 V13 V3 W3 U3
+# P3 N3 P1 L1. So the sixth of them is U14, which is LD6.
 set_io -io_standard LVCMOS33 led[0]  U16
 set_io -io_standard LVCMOS33 led[1]  E19
 set_io -io_standard LVCMOS33 led[2]  U19
 set_io -io_standard LVCMOS33 led[3]  V19
 set_io -io_standard LVCMOS33 led[4]  W18
 set_io -io_standard LVCMOS33 led[5]  U15
-set_io -io_standard LVCMOS33 led[6]  V14
-set_io -io_standard LVCMOS33 led[7]  V13
-set_io -io_standard LVCMOS33 led[8]  V3
-set_io -io_standard LVCMOS33 led[9]  W3
-set_io -io_standard LVCMOS33 led[10] U3
-set_io -io_standard LVCMOS33 led[11] P3
-set_io -io_standard LVCMOS33 led[12] N3
-set_io -io_standard LVCMOS33 led[13] P1
-set_io -io_standard LVCMOS33 led[14] L1
+set_io -io_standard LVCMOS33 led[6]  U14
+set_io -io_standard LVCMOS33 led[7]  V14
+set_io -io_standard LVCMOS33 led[8]  V13
+set_io -io_standard LVCMOS33 led[9]  V3
+set_io -io_standard LVCMOS33 led[10] W3
+set_io -io_standard LVCMOS33 led[11] U3
+set_io -io_standard LVCMOS33 led[12] P3
+set_io -io_standard LVCMOS33 led[13] N3
+set_io -io_standard LVCMOS33 led[14] P1
+set_io -io_standard LVCMOS33 led[15] L1
 
 # Segments a..g, the decimal point, and the four digit anodes.
 # **`an[0]` is the RIGHT-hand digit**, CHECKED 8 October 2026 by reading

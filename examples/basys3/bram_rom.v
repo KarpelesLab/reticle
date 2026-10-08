@@ -35,10 +35,13 @@
 //   - the read port's own write enable left high: the word read back is
 //     what the data pins carry, the same for every n.
 //
-// Why only LD7..LD14: LD6 is ball U14, which sits in the die's single-IOB
-// corner tile (`LIOB33_SING_X0Y0`) and this flow does not give that tile
-// type an IO buffer yet, so a design using it does not place. LD7..LD14
-// are eight LEDs in a row with nothing in between.
+// Why only LD7..LD14: eight LEDs in a row with nothing in between, and
+// the row starts at LD7 because LD6 is ball U14, in the single-IOB tile
+// at the bottom end of bank 14 (`LIOB33_SING_X0Y0`), which this flow
+// could not configure when this design was written. It can now
+// (`fpga::xray::TileAlias`) — the ball works and always did — and this
+// design keeps its eight-in-a-row because that is what the reading
+// procedure above describes.
 //
 // WHAT HAS BEEN TRIED: built by this flow to a bitstream in which every
 // set bit decodes back through the database and the arcs equal the

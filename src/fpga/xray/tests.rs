@@ -151,6 +151,45 @@ fn the_tile_grid_comes_out_of_tilegrid_json() {
     assert!(err.to_string().contains("not an object"), "{err}");
 }
 
+/// A window that names another type's `segbits` is read, and the tile it
+/// belongs to gets a feature-type name of its own.
+///
+/// This is `LIOB33_SING_X0Y0`'s own entry, cut down. Without the
+/// `alias` the tile has no features at all, which is the state the
+/// single-IOB tiles at the ends of every IO bank were in; see
+/// [`super::TileAlias`].
+#[test]
+fn a_tile_whose_bits_are_aliased_says_so_and_names_its_own_type() {
+    let text = r#"{"LIOB33_SING_X0Y0": {
+        "bits": {"CLB_IO_CLK": {
+            "alias": {"sites": {"IOB33_Y0": "IOB33_Y0"},
+                      "start_offset": 2, "type": "LIOB33"},
+            "baseaddr": "0x00400000", "frames": 42, "offset": 0, "words": 2}},
+        "grid_x": 0, "grid_y": 155,
+        "sites": {"IOB_X0Y0": "IOB33"}, "type": "LIOB33_SING"},
+      "LIOB33_X0Y1": {
+        "bits": {"CLB_IO_CLK": {
+            "baseaddr": "0x00400000", "frames": 42, "offset": 2, "words": 4}},
+        "grid_x": 0, "grid_y": 154,
+        "sites": {"IOB_X0Y1": "IOB33S"}, "type": "LIOB33"}}"#;
+    let json = Json::parse(text).unwrap();
+    let tiles = parse::tilegrid(&json, "tilegrid.json").unwrap();
+    let sing = tiles.iter().find(|t| t.tile_type == "LIOB33_SING").unwrap();
+    let alias = sing.bits_alias.as_ref().expect("the alias is read");
+    assert_eq!(alias.tile_type, "LIOB33");
+    assert_eq!(alias.start_offset, 2);
+    assert_eq!(sing.feature_type(), "LIOB33_SING_W2");
+    // The shapes differ, which is why the alias is needed at all: two
+    // words here against the four of the type it borrows from.
+    assert_eq!(sing.bits[0].1.words, 2);
+
+    // An ordinary tile has no alias and is its own feature type.
+    let plain = tiles.iter().find(|t| t.tile_type == "LIOB33").unwrap();
+    assert!(plain.bits_alias.is_none());
+    assert_eq!(plain.feature_type(), "LIOB33");
+    assert_eq!(plain.bits[0].1.words, 4);
+}
+
 #[test]
 fn tile_joins_come_out_of_tileconn_json() {
     let text = r#"[{"grid_deltas": [1, 0], "tile_types": ["INT_L", "INT_R"],

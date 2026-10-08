@@ -158,7 +158,9 @@ module selftest #(
 
     // One LED per test, then "all of them", then a heartbeat. LD6 (U14)
     // is skipped: it is the one pin of a `LIOB33_SING` tile that this
-    // flow has no table for, which `lutram.rcf` found first.
+    // flow had no table for when this was written, which `lutram.rcf`
+    // found first. It has one now (`fpga::xray::TileAlias`) and the LED
+    // map is kept as it is so a person's reading does not move.
     output wire       led_carry,
     output wire       led_bram,
     output wire       led_lut,

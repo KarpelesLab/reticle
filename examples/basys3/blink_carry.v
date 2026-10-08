@@ -17,7 +17,7 @@
 //   LED 12 (P3)   bit 28   every 5.4 s
 //   LED  9 (V3)   bit 25   every 0.67 s, 1.49 Hz: the rate blink.v's LED 0 has
 //   LED  7 (V14)  bit 23   about 6 Hz, a fast but countable flicker
-//   LED  6 (U14)           dark; see below
+//   LED  6 (U14)           dark; this design does not drive it, see below
 //   LED  5 (U15)  bit 21   about 24 Hz, a shimmer
 //   LEDs 0 to 4            too fast to see: each looks steadily half lit
 //
@@ -35,11 +35,16 @@
 // database names; `tests/fpga_xray_carry.rs` checks that. Nobody has
 // loaded it into a board. `docs/fpga-xray.md` has the detail.
 //
-// LED 6 (U14) stays dark. Its ball is the one of the sixteen in a
-// `LIOB33_SING` tile, which this flow's IO tables do not describe, so the
-// design does not drive it rather than guess at its bits: the LEDs are two
-// ports, `led_lo` for LEDs 0 to 5 and `led_hi` for LEDs 7 to 15, and
-// counter bit 22 goes nowhere.
+// LED 6 (U14) stays dark, and that is this design's shape and not the
+// board's: the ball works, and the flow can drive it now. Its tile is a
+// `LIOB33_SING` — the single-IOB tile at the bottom end of bank 14 —
+// which this flow had no bits for when this design was written, so the
+// LEDs were split into two ports, `led_lo` for LEDs 0 to 5 and `led_hi`
+// for LEDs 7 to 15, with counter bit 22 going nowhere. The gap is kept
+// because the LED-to-bit table above is the whole check and renumbering
+// it would invalidate the reading; `examples/basys3/io_exercise.v` is
+// the design that drives all sixteen, and `fpga::xray::TileAlias` says
+// how.
 module blink_carry (
     input  wire       clk,
     output wire [5:0] led_lo,

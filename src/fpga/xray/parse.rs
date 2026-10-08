@@ -381,8 +381,23 @@ pub(super) fn tilegrid(json: &Json, path: &str) -> Result<Vec<XrayTile>, XrayErr
             sites.sort();
         }
         let mut bits = Vec::new();
+        let mut bits_alias = None;
         if let Some(members) = tile.get("bits").and_then(Json::as_object) {
             for (bus, entry) in members {
+                // A window may say that another tile type's `segbits`
+                // describe it, and where in that type's bitmap this
+                // tile's words sit. See `XrayTile::bits_alias`.
+                if let Some(alias) = entry.get("alias")
+                    && let Some(kind) = alias.get("type").and_then(Json::as_str)
+                {
+                    bits_alias = Some(super::TileAlias {
+                        tile_type: kind.to_owned(),
+                        start_offset: alias
+                            .get("start_offset")
+                            .and_then(Json::as_u32)
+                            .unwrap_or(0),
+                    });
+                }
                 let base = entry
                     .get("baseaddr")
                     .and_then(Json::as_str)
@@ -414,6 +429,7 @@ pub(super) fn tilegrid(json: &Json, path: &str) -> Result<Vec<XrayTile>, XrayErr
             grid_y,
             sites,
             bits,
+            bits_alias,
         });
     }
     out.sort_by(|a, b| a.name.cmp(&b.name));

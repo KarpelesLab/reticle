@@ -67,8 +67,11 @@
 # zero is a working link.
 #
 # LD6 (ball U14) is absent: it is the one LED ball of the sixteen in a
-# `LIOB33_SING` tile, which this flow has no IO table for. A gap in the
-# flow, not a dead ball. So `led[5]` is LD5 and `led[6]` is LD7.
+# `LIOB33_SING` tile, which this flow had no IO table for when this file
+# was written. It has one now (`fpga::xray::TileAlias`), and the ball was
+# never dead; the numbering here is left alone because the LED map above
+# is what a person reads off the board. So `led[5]` is LD5 and `led[6]`
+# is LD7.
 set_io -io_standard LVCMOS33 clk W5
 
 set_io -io_standard LVCMOS33 sclk J1

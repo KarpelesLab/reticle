@@ -464,6 +464,20 @@ pub struct Arch {
     pub tiles: Vec<Option<usize>>,
     /// Package pin to site name, in file order.
     pub pinmap: Vec<(String, String)>,
+    /// Balls the package has that this architecture cannot place, each
+    /// with the reason, in ball order.
+    ///
+    /// A loader that knows *why* a ball is unreachable puts the sentence
+    /// here, and [`super::place`] quotes it when a design constrains a
+    /// port to one. Without it the only thing placement can say is that
+    /// the ball maps to no usable site, which is true of a ball that is
+    /// a ground pin, of one whose tile type the loader has no tables
+    /// for, and of one the region simply left out — three different
+    /// problems, one of which is the flow's own.
+    ///
+    /// Empty is the ordinary state: a loader that says nothing here
+    /// loses nothing it had before.
+    pub unplaceable_pins: Vec<(String, String)>,
 }
 
 impl Arch {
@@ -485,7 +499,16 @@ impl Arch {
             tile_types: Vec::new(),
             tiles: vec![None; width as usize * height as usize],
             pinmap: Vec::new(),
+            unplaceable_pins: Vec::new(),
         }
+    }
+
+    /// Why this architecture cannot place `pin`, when it knows.
+    pub fn why_no_pin(&self, pin: &str) -> Option<&str> {
+        self.unplaceable_pins
+            .iter()
+            .find(|(p, _)| p == pin)
+            .map(|(_, why)| why.as_str())
     }
 
     /// The index of the tile type named `name`.

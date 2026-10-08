@@ -7,10 +7,13 @@
 # of these balls; no switch or button is named here.
 #
 # LED 6 is U14, the one LED ball of the sixteen that sits in a
-# `LIOB33_SING` tile — a single-buffer IO tile at the bottom of the bank,
-# which this flow's site tables do not describe — so the design leaves it
-# out rather than guess at its bits. `led_lo` is LEDs 0 to 5 and `led_hi`
-# LEDs 7 to 15.
+# `LIOB33_SING` tile — the single-IOB tile at the bottom end of bank 14.
+# This file leaves it out because the flow had no bits for that tile type
+# when the design was written. It has them now
+# (`fpga::xray::TileAlias`), the ball itself was never the problem, and
+# `examples/basys3/io_exercise.rcf` constrains all sixteen LEDs; the
+# split into `led_lo` (LEDs 0 to 5) and `led_hi` (LEDs 7 to 15) is kept
+# so the design's LED-to-bit table still reads as it was written.
 #
 # LVCMOS33 is the only IO standard this flow has bits for.
 set_io -io_standard LVCMOS33 clk W5

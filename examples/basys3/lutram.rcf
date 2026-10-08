@@ -5,8 +5,9 @@
 # `Basys-3-Master.xdc`. W5 is the 100 MHz oscillator, U18 the centre
 # pushbutton BTNC, V17..R3 slide switches SW0..SW11, U16..V19 LEDs
 # LD0..LD3, U15 LD5 and V14 LD7. (LD6, U14, is the one pin of a
-# `LIOB33_SING` tile, a single-buffer IO tile this flow has no table for,
-# which is why the write strobe is on LD5.) Every one of them is an input
+# `LIOB33_SING` tile, which this flow could not configure when this file
+# was written — it can now, see `fpga::xray::TileAlias` — which is why
+# the write strobe is on LD5 and not LD6.) Every one of them is an input
 # the board drives into the FPGA or an LED the FPGA drives; nothing here
 # drives a pin the board drives.
 #
