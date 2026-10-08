@@ -265,6 +265,57 @@ differ because the two designs drive different halves of the die, and the
 differences are enumerated below. That comparison is
 `tests/fpga_xray.rs::the_clock_path_is_the_one_vivado_built`.
 
+## A `*_SING` IO tile drives a pin on silicon
+
+**CHECKED, 8 October 2026.** `examples/basys3/io_exercise.v`, extended to all
+sixteen LEDs, was loaded and a person held BTND: **all sixteen lit, with no
+gap where LD6 used to be.** Ball U14 sits in `LIOB33_SING_X0Y0`, which this
+flow could not drive until today, and `*_SING` tiles are the single-IOB tiles
+at both ends of every IO bank — so this is a class of pins on every 7-series
+part, not one LED.
+
+The structural work behind it is in the commit; what the board adds is the
+one thing simulation cannot give, since a bitstream whose bits are placed
+from a misread offset decodes perfectly against the same misreading.
+
+### The oracle was in the repository the whole time
+
+Three of the four Vivado reference designs under `artix7/harness/` drive a
+ball in a `*_SING` tile, and **`basys3/swbut` drives U14 itself** — Vivado's
+own bitstream for this very board has been lighting LD6 all along. Between
+the three they cover both die edges, both halves and both directions. Nothing
+here had read them for this, and two documents had instead recorded LD6 as
+"skipped", which read as if the ball were dead. The board's owner corrected
+that; the oracle confirmed them.
+
+### What the database says, and what it does not
+
+The tempting hypothesis — that a `_SING` tile is its non-SING neighbour with
+one IOB unpopulated at the same offsets — is **wrong**, and `tilegrid.json`
+kills it: `LIOB33` has `words: 4` and `LIOB33_SING` has `words: 2`. Coded
+that way, every feature lands two words out.
+
+What the database does supply is an **`alias`** on those windows, naming the
+type whose `segbits` describe them, with a `start_offset`. A feature at bit
+`c` of the aliased type is at `c − 32·start_offset` here, and one whose bits
+then fall outside this tile's own extent is simply not a feature of this
+tile — **and that filter picks which half the tile holds, with nothing else
+needed.** CHECKED across every half-named feature of
+`segbits_{l,r}iob33.db` and `segbits_{l,r}ioi3.db`: of 382, every `_Y0`
+feature's bits lie in words 2–3 and every `_Y1` feature's in words 0–1,
+without exception.
+
+A correction this forced: an earlier section here said `_Y0` is "the only
+half a `_SING` tile has". `arty-a7/pmod` uses `_Y1`, as an **input**.
+
+### It also closed the blind spot
+
+Decoding the Basys 3 harness went from **11 tiles with no segbits file to
+zero**. That count is the one this document flagged as a blind spot, because
+bits in such tiles are excluded from `unexplained` rather than counted — so a
+clean "0 bits unexplained" could coexist with eleven tiles nobody had
+checked. Most of that gap was this.
+
 ## An ISO 7816 card, brought up and answering
 
 **CHECKED, 8 October 2026.** `examples/basys3/iso7816_probe.v` activated the
