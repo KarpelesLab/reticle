@@ -1,0 +1,25 @@
+# Digilent Basys 3: `partsel.v` — does a variable part-select read right?
+#
+# PROVENANCE: ball names transcribed from `examples/soc/board/basys3.rcf`.
+# Only the clock, the serial port and the LEDs; nothing on JA, JB, JC or
+# JXADC, so a card and a display attached to this board are untouched.
+set_io -io_standard LVCMOS33 clk W5
+set_io -io_standard LVCMOS33 uart_rx_pin B18
+set_io -io_standard LVCMOS33 uart_tx_pin A18
+set_io -io_standard LVCMOS33 led[0]  U16
+set_io -io_standard LVCMOS33 led[1]  E19
+set_io -io_standard LVCMOS33 led[2]  U19
+set_io -io_standard LVCMOS33 led[3]  V19
+set_io -io_standard LVCMOS33 led[4]  W18
+set_io -io_standard LVCMOS33 led[5]  U15
+set_io -io_standard LVCMOS33 led[6]  U14
+set_io -io_standard LVCMOS33 led[7]  V14
+set_io -io_standard LVCMOS33 led[8]  V13
+set_io -io_standard LVCMOS33 led[9]  V3
+set_io -io_standard LVCMOS33 led[10] W3
+set_io -io_standard LVCMOS33 led[11] U3
+set_io -io_standard LVCMOS33 led[12] P3
+set_io -io_standard LVCMOS33 led[13] N3
+set_io -io_standard LVCMOS33 led[14] P1
+create_clock -name sys -period 10.0 clk
+clock_domain sys clk
