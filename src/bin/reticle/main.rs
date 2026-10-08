@@ -3150,7 +3150,9 @@ fn write_xc7_bitstream(
     }
     if pll_bits > 0 {
         note.push_str(&format!(
-            "note: {pll_bits} PLL register bit(s); no PLL from this flow has run on a part\n"
+            "note: {pll_bits} PLL register bit(s); a PLL from this flow has locked on a \
+             Basys 3 and been counted at its asked-for ratio, and its two CMT tiles \
+             have no segbits file so their bits do not decode back\n"
         ));
     }
     note.push_str(&block_rams.to_text());

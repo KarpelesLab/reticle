@@ -655,6 +655,38 @@ and check ours feature by feature.
 counter that cannot be trusted to count cannot report on a carry chain, a
 block RAM, a PLL or a pad.
 
+### A PLL works on the part, and its own two tiles do not decode
+
+**CHECKED, 8 October 2026, both halves.**
+
+The working half: `examples/basys3/selftest.v` asks for 25 MHz by frequency
+and reports, from the part, `locked` high and **262 081 PLL cycles against
+262 144 expected** over a window of 2^20 oscillator cycles — 99.976 %, a
+deficit of a few cycles lost where the window's level crosses into the
+PLL's domain, not a frequency error. A `PLLE2_BASE` from this flow locks
+and runs at the ratio it was asked for. The flow's own note said *"no PLL
+from this flow has run on a part"*; that is no longer true and the note
+now says what was measured instead.
+
+The exactness is better than it needs to be. Asked for 8 MHz from the
+board's 100 MHz, the solver answers **+0.0 ppm** — vco 800 MHz,
+`DIVCLK_DIVIDE=1 CLKFBOUT_MULT=8 CLKOUT0_DIVIDE=100` — and a PLL output
+routes straight to a pad (`OBUF`), so a generated clock can leave the part.
+
+The other half: **a design with a PLL has two tiles with no segbits file**,
+and the same design with the PLL removed has none. So the PLL's own CMT
+tiles cannot be decoded back through the database, and "every bit decodes"
+goes quiet exactly there — 166 PLL register bits are written and not
+checkable. They are evidently *right*, since the part locks and counts
+correctly, but they are not *verified*, and on this project that is a
+different claim.
+
+So a design needing an exact frequency pays two undecodable tiles for it.
+Where a ratio will do, a fabric divider costs nothing and stays fully
+decodable: 100/12 is 8.333 MHz, and anything deriving its own timing by
+counting the clock — a smart card's etu is `F/D` cycles of the terminal's
+clock — tracks it with no error at all.
+
 ### Six Pmod balls cannot be used bidirectionally without losing the decode
 
 **CHECKED, 8 October 2026**, by building `examples/basys3/pmod_bidir.v` once
