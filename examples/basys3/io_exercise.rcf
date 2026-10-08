@@ -58,6 +58,9 @@ set_io -io_standard LVCMOS33 led[13] P1
 set_io -io_standard LVCMOS33 led[14] L1
 
 # Segments a..g, the decimal point, and the four digit anodes.
+# **`an[0]` is the RIGHT-hand digit**, CHECKED 8 October 2026 by reading
+# `1f29` off the glass in `selftest.v` — a status byte then a sequence
+# number in that order — so the most significant nibble is leftmost.
 set_io -io_standard LVCMOS33 seg[0] W7
 set_io -io_standard LVCMOS33 seg[1] W6
 set_io -io_standard LVCMOS33 seg[2] U8

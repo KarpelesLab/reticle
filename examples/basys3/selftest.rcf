@@ -9,8 +9,10 @@
 #
 # The four-digit display: segments a..g on W7 W6 U8 V8 U5 V5 U7, the
 # decimal point on V7, and the digit anodes `an[0]`..`an[3]` on U2 U4 V4
-# W4. Which end of the glass `an[0]` is at is NOT established here; the
-# design's mode 7 is how to find out, and its header says how to read it.
+# W4. **`an[0]` is the RIGHT-hand digit**, CHECKED 8 October 2026: a
+# person read `1f29` off the glass with every switch down, which is the
+# status byte followed by the sequence number in that order, so the
+# most significant nibble is leftmost.
 #
 # LD6 (U14) is deliberately absent. It is the one pin of a `LIOB33_SING`
 # tile, which this flow has no table for — `lutram.rcf` found that first,

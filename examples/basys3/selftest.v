@@ -121,15 +121,19 @@
 //   2  distributed RAM mismatches   6  PLL cycles, high half
 //   3  carry accumulator, low half  7  the constant 0123
 //
-// Mode 7 exists to settle something this repository does not know. The
-// Basys 3's four digit anodes are `an[0]` on ball U2 through `an[3]` on
-// W4, and **which end of the display `an[0]` is at has not been
-// verified here**. Mode 7 drives the fixed word 0x0123 with digit 0
-// holding the 3, so whoever is at the board can read the answer off the
-// glass: "0123" means `an[0]` is the right-hand digit, "3210" means it
-// is the left-hand one. Until that is known every other mode is still
-// readable — the digits are either in the order written here or
-// reversed — and no test depends on it.
+// Mode 7 existed to settle which end of the display `an[0]` is at, and
+// that is now **CHECKED (8 October 2026)**: it is the **right-hand**
+// digit, so `an[0]` is ball U2 at the right and `an[3]` is W4 at the left,
+// and the four digits read left to right as the most significant nibble
+// first. Measured without mode 7 in the end — a person read `1f29` off the
+// glass with every switch down, which is the status byte `1F` followed by
+// the sequence number, in that order, so the nibble order on the glass is
+// the nibble order in the word.
+//
+// Mode 7 stays, because it is the one mode whose expected value does not
+// depend on anything else working: `0123` on the glass confirms the font
+// and the digit order together in one glance, which is worth having the
+// next time either is in doubt.
 //
 // Segments and anodes are both active low (the display is common anode,
 // switched by PNP transistors), which is Digilent's reference manual and

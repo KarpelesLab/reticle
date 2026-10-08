@@ -34,11 +34,11 @@
 //         glass. The digits are all driven together here rather than
 //         multiplexed, so they are dimmer than usual and that is
 //         expected.
-//   BTNU  the digits show 0, 1, 2, 3 — digit 0 showing `0`. **This is
-//         how to find which end of the display `an[0]` is at**, which
-//         nothing in this repository knows. Read left to right: "0123"
-//         means `an[0]` is the left-hand digit, "3210" means it is the
-//         right-hand one.
+//   BTNU  the digits show 0, 1, 2, 3 — digit 0 showing `0`. This was
+//         how to find which end of the display `an[0]` is at; the answer
+//         is now **CHECKED**: `an[0]` is the **right-hand** digit, so this
+//         reads "3210" left to right. Kept because it confirms the digit
+//         order and the segment font together in one glance.
 //   BTNL  one digit only, `an[0]`, showing `8`. The same question asked
 //         a second way, and at full brightness: whichever digit lights
 //         is `an[0]`.
