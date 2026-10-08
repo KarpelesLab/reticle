@@ -435,3 +435,113 @@ fn a_grid_region_is_a_rectangle_either_way_round() {
     let around = GridRegion::around(1, 1, 4);
     assert_eq!((around.x0, around.y0), (0, 0));
 }
+
+/// A global clock distributed with nothing driving it is reported; one
+/// whose buffer is in use is not.
+///
+/// The feature names are taken verbatim from two bitstreams of one
+/// design built twenty-six lines apart, one of which read a smartcard's
+/// ATR cleanly on a Basys 3 and one of which garbled it. The decoded
+/// difference outside the placement churn was the clock network, and this
+/// is the part of it that matters: `GCLK28` enabled the length of the
+/// column, made active in the top clock row and taken by `BUFHCE`s, with
+/// its `BUFGCTRL` never marked `IN_USE` and nothing routed to its input.
+///
+/// Note that the numbering is **tile-local**: `CLK_BUFG_TOP_R`'s
+/// `BUFGCTRL12` is the die's `BUFGCTRL_X0Y28` and drives `GCLK28`, and the
+/// pip's own name pairs the two — which is why nothing here has to know
+/// which half of the column a tile is in.
+///
+/// What this would catch: a clock network written without its buffer, and
+/// a buffer's output pip written without the buffer. What it would not: a
+/// buffer in use whose input mux selects nothing, a `BUFHCE` in use with
+/// no clock reaching it, or a clock correctly distributed to the wrong
+/// flip-flops.
+#[test]
+fn a_global_clock_with_no_buffer_driving_it_is_reported() {
+    fn decoded(features: &[(&str, &str)]) -> Decoded {
+        Decoded {
+            features: features
+                .iter()
+                .map(|(t, f)| ((*t).to_owned(), (*f).to_owned()))
+                .collect(),
+            bits: 0,
+            unexplained: 0,
+            tiles: 0,
+            tiles_without_a_segbits_file: 0,
+            tiles_with_no_segbits_file: Vec::new(),
+        }
+    }
+    const BOT: &str = "CLK_BUFG_BOT_R_X60Y48";
+    const TOP: &str = "CLK_BUFG_TOP_R_X60Y53";
+    const REBUF: &str = "CLK_BUFG_REBUF_X60Y13";
+    const HROW: &str = "CLK_HROW_TOP_R_X60Y78";
+
+    // The working image: one clock, one buffer, fully configured.
+    let good = decoded(&[
+        (BOT, "BUFGCTRL.BUFGCTRL_X0Y12.IN_USE"),
+        (BOT, "BUFGCTRL.BUFGCTRL_X0Y12.ZINV_CE0"),
+        (BOT, "CLK_BUFG_CK_GCLK12.CLK_BUFG_BUFGCTRL12_O"),
+        (REBUF, "GCLK12_ENABLE_ABOVE"),
+        (REBUF, "GCLK12_ENABLE_BELOW"),
+        (
+            "CLK_BUFG_REBUF_X60Y38",
+            "CLK_BUFG_REBUF_R_CK_GCLK12_BOT.CLK_BUFG_REBUF_R_CK_GCLK12_TOP",
+        ),
+        (HROW, "CLK_HROW_R_CK_GCLK12_ACTIVE"),
+        (HROW, "CLK_HROW_CK_MUX_OUT_L0.CLK_HROW_R_CK_GCLK12"),
+    ]);
+    assert_eq!(good.clocks_without_a_driver(), Vec::<String>::new());
+
+    // The garbling one: `GCLK8` has its buffer and `GCLK28` has not.
+    let bad = decoded(&[
+        (BOT, "BUFGCTRL.BUFGCTRL_X0Y8.IN_USE"),
+        (BOT, "CLK_BUFG_CK_GCLK8.CLK_BUFG_BUFGCTRL8_O"),
+        (REBUF, "GCLK8_ENABLE_ABOVE"),
+        (REBUF, "GCLK8_ENABLE_BELOW"),
+        (REBUF, "GCLK28_ENABLE_ABOVE"),
+        (REBUF, "GCLK28_ENABLE_BELOW"),
+        (
+            "CLK_BUFG_REBUF_X60Y65",
+            "CLK_BUFG_REBUF_R_CK_GCLK28_TOP.CLK_BUFG_REBUF_R_CK_GCLK28_BOT",
+        ),
+        (TOP, "CLK_BUFG_CK_GCLK28.CLK_BUFG_BUFGCTRL12_O"),
+        (HROW, "CLK_HROW_R_CK_GCLK8_ACTIVE"),
+        (HROW, "CLK_HROW_R_CK_GCLK28_ACTIVE"),
+        (HROW, "CLK_HROW_CK_MUX_OUT_R10.CLK_HROW_R_CK_GCLK28"),
+    ]);
+    let said = bad.clocks_without_a_driver();
+    assert_eq!(said.len(), 1, "{said:?}");
+    assert!(
+        said[0].contains("GCLK28") && said[0].contains("BUFGCTRL.BUFGCTRL_X0Y12.IN_USE"),
+        "{said:?}"
+    );
+    // `GCLK8` has a configured buffer, so it is not reported: the check
+    // must not simply count clocks.
+    assert!(!said[0].contains("GCLK8 "), "{said:?}");
+
+    // A clock distributed with no `CLK_BUFG_*` tile naming it at all is
+    // the other way this goes wrong, and it reads differently.
+    let orphan = decoded(&[(REBUF, "GCLK28_ENABLE_ABOVE")]);
+    let said = orphan.clocks_without_a_driver();
+    assert_eq!(said.len(), 1, "{said:?}");
+    assert!(
+        said[0].contains("no `CLK_BUFG_*` tile drives it"),
+        "{said:?}"
+    );
+
+    // A buffer's output pip written without the buffer is reported even
+    // when nothing distributes that clock: the pip is a bit somebody set.
+    assert_eq!(
+        decoded(&[(TOP, "CLK_BUFG_CK_GCLK28.CLK_BUFG_BUFGCTRL12_O")])
+            .clocks_without_a_driver()
+            .len(),
+        1
+    );
+
+    // An image with no clock network at all says nothing.
+    assert_eq!(
+        decoded(&[("CLBLL_L_X2Y3", "SLICEL_X0.ALUT.INIT[00]")]).clocks_without_a_driver(),
+        Vec::<String>::new()
+    );
+}

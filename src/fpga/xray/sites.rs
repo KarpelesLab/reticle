@@ -516,6 +516,9 @@ pub(super) fn pass_throughs(tile_type: &str) -> Vec<PassThrough> {
     if matches!(tile_type, "CLK_HROW_BOT_R" | "CLK_HROW_TOP_R") {
         return horizontal_clock_buffers();
     }
+    if matches!(tile_type, "CLK_BUFG_BOT_R" | "CLK_BUFG_TOP_R") {
+        return global_clock_buffers();
+    }
     let (side, single) = match tile_type {
         "LIOI3" | "LIOI3_TBYTESRC" | "LIOI3_TBYTETERM" => ("LIOI", false),
         "RIOI3" | "RIOI3_TBYTESRC" | "RIOI3_TBYTETERM" => ("RIOI", false),
@@ -886,6 +889,74 @@ fn horizontal_clock_buffers() -> Vec<PassThrough> {
         }
     }
     out
+}
+
+/// The sixteen `BUFGCTRL` sites of a half of the global buffer column, as
+/// the hop each one makes from its input mux to its output.
+///
+/// **This is the `BUFHCE` paragraph above, one tile type over, and it was
+/// missing.** `ppips_clk_bufg_top_r.db` records
+///
+/// ```text
+/// CLK_BUFG_TOP_R.CLK_BUFG_BUFGCTRL0_O.CLK_BUFG_BUFGCTRL0_I0 always
+/// ```
+///
+/// sixteen times per tile, thirty-two over the die: the buffer seen as
+/// metal. It is **not** free. A `BUFGCTRL` drives its output only when
+/// `IN_USE` is set, and the three bits beside it are what hold its
+/// control pins at the levels that let a plain `BUFG` run —
+/// `IS_IGNORE1_INVERTED`, `ZINV_CE0`, `ZINV_S0`, the same four
+/// [`extra_bels`] puts on the bel for a placed `BUFG`. Everything else
+/// about the path already costs bits: `segbits_clk_bufg_*.db` has 160
+/// pips into `BUFGCTRL<n>_I0`/`_I1` and 16 from `BUFGCTRL<n>_O` onto
+/// `CK_GCLK<n>` in each tile. Only the buffer itself was free.
+///
+/// # What that cost, on a part
+///
+/// A clock could therefore acquire a global network with **no buffer
+/// driving it**: the router walks in at `I0`, out at `O` for nothing, and
+/// the bit-costing pip onto `CK_GCLK<n>` puts it on the die-wide network,
+/// which is then enabled the length of the column and made active in a
+/// clock row. Nothing is unexplained in the resulting image; the bits
+/// that would say the buffer is on are simply **absent**, and a
+/// `BUFGCTRL` that is off passes nothing.
+///
+/// Two bitstreams of one design, built twenty-six lines of logic apart,
+/// found it on a Basys 3: one read a smartcard's ATR cleanly and the
+/// other garbled it, deterministically, back to back on the same card.
+/// Decoded, the whole difference outside the placement churn was the
+/// clock network, and the garbling one's `CLK_BUFG_TOP_R_X60Y53` held
+/// exactly one feature — `CLK_BUFG_CK_GCLK28.CLK_BUFG_BUFGCTRL12_O` —
+/// while the working one had `BUFGCTRL_X0Y12` fully configured and
+/// driving `GCLK12`. The working image was right because the placer had
+/// put its one `BUFG` on the very bel the router walked through; the
+/// other had its buffer on `BUFGCTRL_X0Y8` and walked a second clock
+/// through `X0Y28` for free. So one of the two was correct by
+/// coincidence, which is what made it look like a lottery.
+///
+/// `Decoded::clocks_without_a_driver` is the check that reads this off a
+/// finished bitstream, and it reports one line for that image and none
+/// for the other.
+///
+/// **The index mapping is the feature names' own**, which is the part
+/// that needs no corroboration here: the numbering in both the `ppips`
+/// line and the `BUFGCTRL.BUFGCTRL_X0Y<n>` feature is **tile-local**, so
+/// `CLK_BUFG_TOP_R`'s buffer 12 is the die's `BUFGCTRL_X0Y28` and the
+/// `CK_GCLK28` pip in the same tile says so. Nothing here has to know
+/// which half of the column it is in.
+fn global_clock_buffers() -> Vec<PassThrough> {
+    (0..16u32)
+        .map(|n| PassThrough {
+            to: format!("CLK_BUFG_BUFGCTRL{n}_O"),
+            from: format!("CLK_BUFG_BUFGCTRL{n}_I0"),
+            features: vec![
+                format!("BUFGCTRL.BUFGCTRL_X0Y{n}.IN_USE"),
+                format!("BUFGCTRL.BUFGCTRL_X0Y{n}.IS_IGNORE1_INVERTED"),
+                format!("BUFGCTRL.BUFGCTRL_X0Y{n}.ZINV_CE0"),
+                format!("BUFGCTRL.BUFGCTRL_X0Y{n}.ZINV_S0"),
+            ],
+        })
+        .collect()
 }
 
 // ---------------------------------------------------------------------------

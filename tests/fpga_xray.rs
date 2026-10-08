@@ -1953,3 +1953,73 @@ fn a_ball_with_no_io_buffer_is_refused_by_name_and_by_tile() {
     assert_eq!(fabric.arch.why_no_pin("U14"), None);
     assert_eq!(fabric.arch.site_of_pin("U14"), Some("X0Y155/IOB_Y0"));
 }
+
+/// **Every global clock a bitstream distributes has a configured
+/// `BUFGCTRL` driving it** — this flow's own output, and Vivado's.
+///
+/// This is the clock network's version of "no primitive input is left
+/// holding a constant", and it exists for the same reason: the fault is
+/// a bit that is **absent**, so every bit decoding proves nothing about
+/// it. A `GCLK<n>` can be enabled the whole length of the buffer column,
+/// made active in a clock row, muxed onto the horizontal network and
+/// taken by `BUFHCE`s to leaf tiles, with the `BUFGCTRL` at the head of
+/// it never marked `IN_USE` — and then it carries nothing and every
+/// flip-flop on it never ticks.
+///
+/// It was found on a part, with two bitstreams of one design built
+/// twenty-six lines apart: one read a smartcard's ATR cleanly on a Basys
+/// 3 and the other garbled it, deterministically, back to back on the
+/// same card. Decoded, the entire difference outside the placement churn
+/// was the clock network, and the garbling image's `CLK_BUFG_TOP_R_X60Y53`
+/// held exactly one feature —
+/// `CLK_BUFG_CK_GCLK28.CLK_BUFG_BUFGCTRL12_O`, `GCLK28` taken from the
+/// output of a buffer with no `IN_USE`, no polarity bits and nothing
+/// routed to its input. [`Decoded::clocks_without_a_driver`] reports one
+/// line for that image and none for the working one.
+///
+/// Those two files are somebody's build output and are not in this
+/// repository, so what runs here is the check against bitstreams that
+/// *are* reachable: `examples/basys3/blink.v` as this flow builds it —
+/// the clocked design a person has watched blinking on a part — and
+/// Vivado's own `basys3/swbut` harness. Both must be clean, and the
+/// vendor's being clean is what says the check is not merely describing
+/// this flow's habits.
+///
+/// What this would catch: a clock network written without its buffer.
+/// What it would not: a buffer in use whose input mux selects nothing, a
+/// `BUFHCE` in use with no clock reaching it, or a clock distributed
+/// correctly to the wrong flip-flops. The unit test beside
+/// `clocks_without_a_driver` pins the reading itself, on the feature
+/// names of both of those bitstreams.
+#[test]
+fn every_global_clock_a_bitstream_distributes_has_a_buffer_driving_it() {
+    let Some(root) = chipdb() else { return };
+    let mut checked = 0usize;
+
+    // This flow's own clocked design.
+    if let Some(blink) = blink(&root) {
+        let said = blink.features.clocks_without_a_driver();
+        assert!(
+            said.is_empty(),
+            "blink.v distributes a global clock with nothing driving it:\n  {}",
+            said.join("\n  ")
+        );
+        checked += 1;
+    }
+
+    // And the vendor's, which is the part that makes the check mean
+    // something: Vivado's file passes it too.
+    if let Some(theirs) = vivado(&root) {
+        let said = theirs.clocks_without_a_driver();
+        assert!(
+            said.is_empty(),
+            "Vivado's own `basys3/swbut` fails this check, so the check is wrong:\n  {}",
+            said.join("\n  ")
+        );
+        checked += 1;
+    }
+
+    if checked == 0 {
+        eprintln!("skipped: neither `examples/` nor the Vivado harness is here");
+    }
+}

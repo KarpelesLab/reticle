@@ -1857,6 +1857,137 @@ impl Decoded {
             .map(|(_, f)| f.as_str())
             .collect()
     }
+
+    /// Global clocks this image **distributes** with nothing configured
+    /// to drive them, one line each.
+    ///
+    /// # Why a decoding needs this on top of "every bit decodes"
+    ///
+    /// "Every bit decodes" is a statement about the bits that are
+    /// *there*. This defect is a bit that is **absent**: a `GCLK<n>` can
+    /// be enabled the whole length of the buffer column, made active in a
+    /// clock row, muxed onto the horizontal network and taken by `BUFHCE`s
+    /// to leaf tiles — and the `BUFGCTRL` at the head of it left with no
+    /// `IN_USE`, no polarity bits and no input mux. A `BUFGCTRL` that is
+    /// not in use does not drive, so that clock carries nothing, and every
+    /// flip-flop on it never ticks. Nothing about the image is
+    /// *unexplained*; what is wrong is what it does not say.
+    ///
+    /// It is the same shape as a constant on a pin nothing drives, in the
+    /// clock network instead of the fabric, and it was found the same way:
+    /// by a person with a board and two bitstreams. Two images of one
+    /// design differing by twenty-six lines of logic read a smartcard's
+    /// ATR cleanly and garbled it; decoded, the whole difference outside
+    /// the placement churn was the clock, and the garbling one contained
+    ///
+    /// ```text
+    /// CLK_BUFG_TOP_R_X60Y53   CLK_BUFG_CK_GCLK28.CLK_BUFG_BUFGCTRL12_O
+    /// ```
+    ///
+    /// as the **only** feature in that tile: `GCLK28` driven from the
+    /// output of a buffer with nothing configuring it and nothing routed
+    /// to its input, then distributed over the die. The working image had
+    /// `BUFGCTRL_X0Y12` fully configured — `IN_USE`,
+    /// `IS_IGNORE1_INVERTED`, `ZINV_CE0`, `ZINV_S0` and
+    /// `CLK_BUFG_BUFGCTRL12_I0.CLK_BUFG_BOT_R_CK_MUXED24` — driving
+    /// `GCLK12`.
+    ///
+    /// # What it reads, and what it does not
+    ///
+    /// Everything here is the database's own feature spelling, and the
+    /// numbering is **tile-local**: `CLK_BUFG_TOP_R`'s `BUFGCTRL12` is
+    /// the die's `BUFGCTRL_X0Y28` and drives `GCLK28`, and the pip name
+    /// pairs the two, so nothing here has to know which half of the
+    /// column it is in.
+    ///
+    /// - a clock is **distributed** when a `GCLK<n>_ENABLE_*`, a
+    ///   `..._CK_GCLK<n>_TOP`/`_BOT` rebuffer pip, a
+    ///   `CLK_HROW_R_CK_GCLK<n>_ACTIVE` or a mux output selecting
+    ///   `CLK_HROW_R_CK_GCLK<n>` mentions it;
+    /// - it is **driven** when some `CLK_BUFG_*` tile has both
+    ///   `CLK_BUFG_CK_GCLK<n>.CLK_BUFG_BUFGCTRL<m>_O` and that same
+    ///   tile's `BUFGCTRL.BUFGCTRL_X0Y<m>.IN_USE`.
+    ///
+    /// An empty answer does **not** mean the clock network is right. This
+    /// says nothing about a `BUFGCTRL` that is in use but whose input mux
+    /// selects nothing, about a `BUFHCE` in use with no clock reaching it,
+    /// or about a clock that is distributed correctly and simply goes to
+    /// the wrong flip-flops. It catches one mistake, and it catches it
+    /// from a file rather than from a story.
+    #[must_use]
+    pub fn clocks_without_a_driver(&self) -> Vec<String> {
+        // Which `GCLK<n>` each tile drives from which tile-local buffer,
+        // and which tile-local buffers that tile says are in use.
+        let mut driven: BTreeSet<u32> = BTreeSet::new();
+        let mut headless: BTreeMap<u32, String> = BTreeMap::new();
+        let mut distributed: BTreeMap<u32, String> = BTreeMap::new();
+        for (tile, feature) in &self.features {
+            if let Some(rest) = feature.strip_prefix("CLK_BUFG_CK_GCLK") {
+                let Some((gclk, buffer)) = rest.split_once(".CLK_BUFG_BUFGCTRL") else {
+                    continue;
+                };
+                let Some(buffer) = buffer.strip_suffix("_O") else {
+                    continue;
+                };
+                let (Ok(gclk), Ok(_)) = (gclk.parse::<u32>(), buffer.parse::<u32>()) else {
+                    continue;
+                };
+                let in_use = format!("BUFGCTRL.BUFGCTRL_X0Y{buffer}.IN_USE");
+                if self.features.iter().any(|(t, f)| t == tile && *f == in_use) {
+                    driven.insert(gclk);
+                } else {
+                    headless.insert(
+                        gclk,
+                        format!(
+                            "{tile} drives GCLK{gclk} from BUFGCTRL{buffer}'s output and that \
+                             tile has no `{in_use}`"
+                        ),
+                    );
+                }
+                continue;
+            }
+            // Where a clock is distributed to, in the four spellings the
+            // database uses for it.
+            let mentions = feature
+                .strip_prefix("GCLK")
+                .and_then(|r| r.split_once('_'))
+                .filter(|(_, tail)| tail.starts_with("ENABLE_"))
+                .map(|(n, _)| n)
+                .or_else(|| {
+                    feature
+                        .rsplit_once("_CK_GCLK")
+                        .map(|(_, tail)| tail.split(['_', '.']).next().unwrap_or(tail))
+                });
+            if let Some(n) = mentions
+                && let Ok(n) = n.parse::<u32>()
+            {
+                distributed.entry(n).or_insert_with(|| tile.clone());
+            }
+        }
+        let mut out = Vec::new();
+        for (gclk, tile) in &distributed {
+            if driven.contains(gclk) {
+                continue;
+            }
+            match headless.get(gclk) {
+                Some(why) => out.push(why.clone()),
+                None => out.push(format!(
+                    "GCLK{gclk} is distributed (first seen at {tile}) and no `CLK_BUFG_*` tile \
+                     drives it from a `BUFGCTRL` at all"
+                )),
+            }
+        }
+        // A buffer driving a clock nothing distributes is the harmless
+        // way round and is not reported; one with no `IN_USE` is not.
+        for (gclk, why) in &headless {
+            if !distributed.contains_key(gclk) {
+                out.push(why.clone());
+            }
+        }
+        out.sort();
+        out.dedup();
+        out
+    }
 }
 
 /// A loaded fabric: the part, the architecture and the frame map, which
