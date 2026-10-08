@@ -768,12 +768,17 @@ Constraints (`fpga::Constraints`) are honoured as follows:
   carry out of the slice below, each propagate input the very wire of the
   lookup table beside it — and on a family whose pins are all on the
   interconnect no walk closes and nothing changes. `docs/fpga-xray.md`
-  has the carry chain it was written for.
+  has the carry chain it was written for, and
+  `docs/fpga-trellis.md` has the second one it was measured on: an ECP5
+  `CCU2C` chain, which runs along a *row* and not up a column and which
+  this code holds without being told so.
 
 A design that does not fit is reported, not approximated: `PlaceError`
 says which kind of site ran out and by how much, which two cells want one
-package pin, which region cannot hold what was assigned to it, or which
-pin of which cell no site of its kind can connect.
+package pin, which region cannot hold what was assigned to it, which pin
+of which cell no site of its kind can connect, or — `NoDedicatedRun` —
+that a rigid group the fabric's own wiring made found no run of its shape
+free, which is a different thing from the part being full.
 
 ## Routing
 

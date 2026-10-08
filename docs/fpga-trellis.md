@@ -218,26 +218,49 @@ What it does force is **adjacency**, which nothing else on this part does.
 The carry has no routable path, so cell *n* + 1 must be on the very next
 carry site or there is no path at all — and "the router refuses after a whole
 placement" is the failure this project has twice decided is the wrong one.
-`fpga::place` learnt a second kind of group beside the `rloc` macro:
+**This fabric needed no new placer code for that**, and finding out that it
+did not is the useful part. `fpga::place` already had a second kind of group
+beside the `rloc` macro — `build_clusters` and `Exact`, written for the
+7-series `CARRY4` — and it holds a `CCU2C` chain unmodified. Two rounds built
+the mechanism in parallel without seeing each other; the ECP5-specific one
+was dropped and this is what is left:
 
-- `carry_links` reads the relationship **off the fabric**. From each site's
-  `co` pin it follows pips that cost no bits until it reaches some site's
-  `ci` pin, and records the pair when exactly one site is reached. Nothing in
-  the placer names a slice, a letter, a direction or a family; on this die the
-  walk answers "A, B, C, D, then one column east" because that is what the
-  seven `.fixed_conn`s say.
-- `build_carry_chains` reads the chains **off the netlist**: a `co` pin whose
-  signal has exactly one sink, and that sink is another carry cell's `ci`.
-  Anything else leaves the cells unchained and free, which is right — then
-  there is a real net for the router to find a path for and it will say so if
-  it cannot.
-- a chain is then a group anchored on a **site** rather than on a tile, which
-  is the one thing it does not share with an `rloc` macro: where its first
-  cell goes decides where every other cell goes. The legaliser tries candidate
-  start sites nearest the analytic solution first; the annealer moves the
-  chain as a unit by drawing a new start site, exactly as it moves a macro by
-  drawing a new anchor tile. Every iteration order is over a `Vec` or a
-  `BTreeMap` and the placer stays deterministic.
+- `build_clusters` reads the relationship **off the routing graph**, and it
+  walks *backwards*. For every `(sink kind, sink role, driver kind, driver
+  role)` a signal in the netlist uses, it walks back from that sink pin on
+  every site of the sink's kind. If the walk closes inside `DEDICATED_WALK`
+  (eight wires) on all of them and finds exactly one site of the driver's
+  kind each time, then the driver's site **is a function of** the sink's and
+  the two cells are tied together. Nothing names a slice, a letter, a
+  direction or a family.
+- **CHECKED on this die.** `FCI_SLICE` is reached only over
+  `FCI <- HFIE0000 <- FCO <- FCO_SLICE` — five wires, every hop a
+  `.fixed_conn` — and each of the 12 144 carry sites has exactly one
+  candidate driver slice, so the condition holds and the answer is "A, B, C,
+  D, then one column east" because that is what the seven `.fixed_conn`s
+  say. A left-edge slice A has *no* candidate, which is right: no chain can
+  continue into it.
+- the tied cells become one rigid group anchored on a **tile**; which site of
+  that tile the anchor takes, and therefore where every other member goes, is
+  resolved through the relation. The legaliser tries anchor tiles nearest the
+  analytic solution first and the annealer moves the group as a unit by
+  drawing a new anchor tile, exactly as it moves an `rloc` macro. A group that
+  fits nowhere is `PlaceError::NoDedicatedRun` and not "the part is full".
+  Every iteration order is over a `Vec` or a `BTreeMap` and the placer stays
+  deterministic — `a_carry_chain_places_routes_and_every_bit_of_it_decodes`
+  places this design twice in one process and compares every site and every
+  bit.
+- a chain is still read **off the netlist** and not off the fabric: only
+  instances a signal actually joins are grouped, so a `co` nothing reads or a
+  `ci` two cells share leaves the cells free, which is right — then there is
+  a real net for the router to find a path for and it will say so if it
+  cannot.
+
+What the dropped mechanism had and this one does not is a forward walk out of
+`co`, which needed the netlist to hand it a chain *order*. This one resolves
+a group outwards from any member, so it does not; and it also holds the
+7 series' other dedicated connection, a lookup table feeding the carry beside
+it, which the chain-shaped one had no shape for.
 
 ### What places now, and what it costs
 
@@ -248,9 +271,10 @@ else, with every port on a top-edge ball of an LFE5U-12F in caBGA-256:
 |---|---|
 | Cells | **9 `CCU2C`**, 16 `TRELLIS_FF`, 34 `TRELLIS_IO`, 1 `DCCA` — and **0 `LUT4`** |
 | The chain | nine consecutive carry sites: four slices of a tile, then the tile one column east, twice |
-| Bits | 1091 set, of which 36 are the carry cells' mode and inject bits |
-| Routing | 59 of 60 signals (the carry off the top is driven and read by nothing), 455 pips over 514 wires, every sink walked back to its driver |
-| Decoding | **all 1091 bits decode**, 0 unexplained, into 281 arcs, 324 fields and 18 words — and the arcs they select are exactly the 281 the router chose |
+| The group | **one** dedicated-wiring macro over all nine cells, which is what the placement report's `dedicated wiring: 1` line says |
+| Bits | 1068 set, of which 36 are the carry cells' mode and inject bits |
+| Routing | 59 of 60 signals (the carry off the top is driven and read by nothing), 442 pips over 501 wires, every sink walked back to its driver |
+| Decoding | **all 1068 bits decode**, 0 unexplained, into 270 arcs, 322 fields and 18 words — and the arcs they select are exactly the 270 the router chose |
 
 `a_carry_chain_places_routes_and_every_bit_of_it_decodes` is that test, and
 it checks the chain's shape against the fabric's own pips rather than against
@@ -383,17 +407,30 @@ Cynthion r1.4 (`LFE5U-12F-8CABGA256`, serial
 
 | | |
 |---|---|
-| `tests/usb_loopback.rs` | `usb_ulpi_device.v`: 962 `LUT4`, **66 `CCU2C` in 14 chains**, 16 distributed RAMs. 256 bytes out through endpoint 1 and back **byte-identical** in packets of 64, 63, 8, 5 and 1, then 16 KiB in 256 round trips at **256 011 bytes/s** each way — the rate the round that wrote that test measured. The buffers' write pointer and read index are carry chains, so a byte back from the wrong address would be a wrong chain |
+| `tests/usb_loopback.rs` | `usb_ulpi_device.v`: 962 `LUT4`, **66 `CCU2C` in 14 groups**, 16 distributed RAMs. 256 bytes out through endpoint 1 and back **byte-identical** in packets of 64, 63, 8, 5 and 1, then 16 KiB in 256 round trips at **256 235 bytes/s** each way — the rate the round that wrote that test measured, to a fifth of a per cent. `zero_probe` read ZERO on every packet. The buffers' write pointer and read index are carry chains, so a byte back from the wrong address would be a wrong chain |
 | `tests/usb_proxy.rs` | `usb_proxy_target.v` with `VBUS_AUX = 1`: 3245 `LUT4`, **161 `CCU2C`**, 4884 signals of which 4843 routed — the eleven its own header accounts for, plus **thirty carry-outs off the tops of chains**, which nothing reads and which is therefore how many chains it has. The kernel enumerated a **GreatFET through our hub and our proxy** — `1d50:60e6` as a child of `1209:0001` in sysfs — and its device and configuration descriptors came back through the relay byte for byte |
 
 Both bitstreams have every set bit decoding with nothing unexplained and
-the arcs they select exactly the arcs the router chose: 39 900 bits into
-11 715 arcs for the first, 120 732 into 36 329 for the second.
+the arcs they select exactly the arcs the router chose: **39 738** bits into
+11 630 arcs for the first, 120 732 into 36 329 for the second.
 
-The proxy is the better of the two as a check on *placement*: thirty chains
-over 161 cells is thirty runs of consecutive carry sites that all had to be
-right at once, and a chain in the wrong place has no path for its carry at
-all — the router would have refused it rather than mis-computed.
+**Which placer each row was measured under**, because a placement that puts
+a chain anywhere but on consecutive carry sites has no path for its carry
+and these are the checks that would catch it. The loopback row is
+re-measured and the figures above are the new ones: it was first run while
+this fabric had a carry-chain mechanism of its own in `fpga::place`, and it
+was run again — bitstream rebuilt, part reprogrammed, test re-run — on
+`build_clusters`, the generic dedicated-wiring mechanism the tree now has.
+Same 14 groups over 66 cells, a different placement (39 738 bits and 11 630
+arcs where the first run had 39 900 and 11 715), and the same bytes back.
+The proxy row has **not** been re-measured on the new mechanism; its numbers
+are the first run's, and re-running it means enabling the AUX VBUS switch,
+which the round that reconciled the two mechanisms was not permitted to do.
+
+The proxy is still the better of the two as a check on *placement* —
+thirty chains over 161 cells is thirty runs of consecutive carry sites that
+all had to be right at once — and the loopback is the one that has been run
+both ways.
 
 ### What a board would add, and the cheapest experiment
 
