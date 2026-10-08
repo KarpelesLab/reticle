@@ -1,0 +1,129 @@
+# Digilent Basys 3 (Xilinx XC7A35T-1CPG236C): `ssd1306_console.v`.
+#
+# PROVENANCE: ball names transcribed from `examples/soc/board/basys3.rcf`,
+# which transcribes Digilent's published `Basys-3-Master.xdc`. Two lines
+# of that file have been CHECKED on this board and one of them was wrong,
+# so treat the rest as a reading: A18/B18 are the FPGA's transmit and
+# receive into the USB-UART bridge (CHECKED 8 October 2026 by echoing
+# bytes through `uart_loop.v`), and `sw[0]`/`led[0]` are at the RIGHT-hand
+# end (CHECKED the same day, correcting a comment that said left).
+#
+# ===================================================================
+# WHERE TO CONNECT THE FOUR WIRES
+# ===================================================================
+#
+# The top row of **Pmod JA**, plus a ground. A Pmod connector is 12 pins,
+# 2x6: pins 1-4 and 7-10 are the eight signals, 5 and 11 are ground, 6 and
+# 12 are 3V3.
+#
+#   JA1   J1     sclk    the master's clock
+#   JA2   L2     mosi    its data: commands and pixels on one wire
+#   JA3   J2     dc      low for a command byte, high for a pixel byte
+#   JA4   G2     cs_n    low while a byte is on the wire
+#   JA5   —      GND     connect this: two boards need a common ground
+#
+# JA rather than JB because the board's owner is also wiring an ISO 7816
+# line to JXADC, and JA is on the same edge — shorter leads and one ground
+# reference.
+#
+# **These four may be any ball of JA**, which was measured rather than
+# assumed: all eight JA balls were built as plain inputs and every one
+# decoded completely. That matters because the same balls used
+# *bidirectionally* do not: L2, G2, K2 and G3 each put configuration bits
+# in a tile this database has no segbits file for, so a bitstream using
+# them as an inout cannot be fully decoded and checked. Four of eight on
+# JA, and N2 and N1 on JXADC. These pins are inputs, so the gap does not
+# reach them — but a design that made one of them bidirectional would be
+# unverifiable, and that is worth knowing before anybody moves a wire.
+#
+# **All four are inputs.** This design never drives them; it is the
+# display, not the driver.
+#
+# **3.3 V only.** The Basys 3's Pmod pins are 3.3 V CMOS. A 5 V master —
+# a classic Arduino, for instance — needs level shifting, and connecting
+# one directly risks the part.
+#
+# **The rate limit is a ratio**: `PHASE_MARGIN = 2` against a 100 MHz
+# clock means each `sclk` phase must last at least two system clocks, so
+# `sclk` may run up to 25 MHz. An SSD1306's own maximum is well under
+# that. `overrun_count` rises before any bit is lost, so the counters say
+# when the margin has gone rather than dropping bits quietly.
+#
+# JA and JC work identically — all three were built and routed on this
+# part with zero unexplained bits, so the choice is physical convenience.
+# To move, replace the four balls below with that header's top row:
+#
+#   JB   A14 A16 B15 B16        JC   K17 M18 N17 P18
+#
+# Avoid JXADC: it is the analog header and carries filtering that has no
+# business on a digital clock.
+#
+# **NOT CHECKED: no signal has been driven into any Pmod on this board.**
+# What the balls do is quoted from Digilent's master constraints, and what
+# the flow does with them is verified only as far as "it places, routes
+# and every bit decodes". The counters are the real test, and §4 of
+# `ip/bus/spi_display_rx/README.md` says how to read them: both byte
+# counts advancing while `bit_error_count` and `dc_change_count` stay at
+# zero is a working link.
+#
+# LD6 (ball U14) is absent: it is the one LED ball of the sixteen in a
+# `LIOB33_SING` tile, which this flow has no IO table for. A gap in the
+# flow, not a dead ball. So `led[5]` is LD5 and `led[6]` is LD7.
+set_io -io_standard LVCMOS33 clk W5
+
+set_io -io_standard LVCMOS33 sclk J1
+set_io -io_standard LVCMOS33 mosi L2
+set_io -io_standard LVCMOS33 dc   J2
+set_io -io_standard LVCMOS33 cs_n G2
+
+# The far side's two button lines, on **Pmod JC** — reachable from the same
+# side of the board as JA, and the only header whose eight balls are ALL
+# clean when used bidirectionally (JA has four that are not, JXADC two).
+# These must be bidirectional: each is released except while pressed.
+#
+#   JC1  K17  btn_left   idles LOW  through a 10k pull-down -> press drives HIGH
+#   JC2  M18  btn_right  idles HIGH through a 10k pull-up   -> press drives LOW
+#
+# No `-pullup`: the far side's own resistors define both idle levels, and a
+# second pull would fight one of them.
+set_io -io_standard LVCMOS33 btn_left  K17
+set_io -io_standard LVCMOS33 btn_right M18
+
+set_io -io_standard LVCMOS33 uart_rx_pin B18
+set_io -io_standard LVCMOS33 uart_tx_pin A18
+
+set_io -io_standard LVCMOS33 led[0]  U16
+set_io -io_standard LVCMOS33 led[1]  E19
+set_io -io_standard LVCMOS33 led[2]  U19
+set_io -io_standard LVCMOS33 led[3]  V19
+set_io -io_standard LVCMOS33 led[4]  W18
+set_io -io_standard LVCMOS33 led[5]  U15
+set_io -io_standard LVCMOS33 led[6]  V14
+set_io -io_standard LVCMOS33 led[7]  V13
+set_io -io_standard LVCMOS33 led[8]  V3
+set_io -io_standard LVCMOS33 led[9]  W3
+set_io -io_standard LVCMOS33 led[10] U3
+set_io -io_standard LVCMOS33 led[11] P3
+set_io -io_standard LVCMOS33 led[12] N3
+set_io -io_standard LVCMOS33 led[13] P1
+set_io -io_standard LVCMOS33 led[14] L1
+
+# Segments a..g, the decimal point, and the four digit anodes.
+# **`an[0]` is the RIGHT-hand digit**, CHECKED 8 October 2026 by reading
+# `1f29` off the glass in `selftest.v` — a status byte then a sequence
+# number in that order — so the most significant nibble is leftmost.
+set_io -io_standard LVCMOS33 seg[0] W7
+set_io -io_standard LVCMOS33 seg[1] W6
+set_io -io_standard LVCMOS33 seg[2] U8
+set_io -io_standard LVCMOS33 seg[3] V8
+set_io -io_standard LVCMOS33 seg[4] U5
+set_io -io_standard LVCMOS33 seg[5] V5
+set_io -io_standard LVCMOS33 seg[6] U7
+set_io -io_standard LVCMOS33 dp     V7
+set_io -io_standard LVCMOS33 an[0]  U2
+set_io -io_standard LVCMOS33 an[1]  U4
+set_io -io_standard LVCMOS33 an[2]  V4
+set_io -io_standard LVCMOS33 an[3]  W4
+
+create_clock -name sys -period 10.0 clk
+clock_domain sys clk

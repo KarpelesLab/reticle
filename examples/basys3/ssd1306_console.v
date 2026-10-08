@@ -22,6 +22,8 @@
 //   a   dump after every completed frame, unprompted
 //   q   stop dumping unprompted
 //   r   reset the receiver and the display, then report status
+//   L   press the far side's LEFT button for `2**PRESS_BITS` clocks
+//   R   the same for its RIGHT button
 //
 // Anything else reports status, so a stray newline costs a line and never
 // silence.
@@ -104,7 +106,12 @@ module ssd1306_console #(
     parameter CLK_DIV  = 868,   // 100 MHz / 115200
     parameter TICK_BIT = 25,
     parameter COLUMNS  = 128,
-    parameter PAGES    = 8
+    parameter PAGES    = 8,
+    // How long a button is held, as a power of two system clocks. 23 is
+    // 75 ms at 112 MHz and 84 ms at 100 — comfortably longer than any
+    // debounce a device is likely to apply, and short enough not to look
+    // like a long press.
+    parameter PRESS_BITS = 23
 ) (
     input  wire        clk,
 
@@ -116,6 +123,23 @@ module ssd1306_console #(
 
     input  wire        uart_rx_pin,
     output wire        uart_tx_pin,
+
+    // Two of the far side's own button lines, pressed electrically.
+    //
+    // **Both are released except while pressed**, which is what makes the
+    // physical buttons still work and guarantees nothing is ever fought.
+    // Each line has its own 10k resistor defining its idle level, so a
+    // press means overpowering that resistor in one direction only — and
+    // the two directions differ:
+    //
+    //   `btn_left`   idles LOW through a pull-down  -> press drives HIGH
+    //   `btn_right`  idles HIGH through a pull-up   -> press drives LOW
+    //
+    // A push-pull output would hold each line at its idle level and fight
+    // anybody pressing the real button, which with a switch to the
+    // opposite rail is a short limited only by the pin.
+    inout  wire        btn_left,
+    inout  wire        btn_right,
 
     output wire [14:0] led,
     output wire [6:0]  seg,
@@ -227,6 +251,39 @@ module ssd1306_console #(
         end
     end
 
+    // ---- The two button lines ----
+    //
+    // A timed press rather than a toggle: the host asks once and the
+    // hardware holds the line for `2**PRESS_BITS` clocks, so a busy host
+    // cannot accidentally leave a button down or release it too soon for
+    // the far side's debounce to see it.
+    reg [PRESS_BITS:0] left_hold  = {(PRESS_BITS + 1){1'b0}};
+    reg [PRESS_BITS:0] right_hold = {(PRESS_BITS + 1){1'b0}};
+
+    always @(posedge clk) begin
+        if (!rst_n) begin
+            left_hold  <= {(PRESS_BITS + 1){1'b0}};
+            right_hold <= {(PRESS_BITS + 1){1'b0}};
+        end else begin
+            if (cmd_valid && cmd_data == 8'h4C)        // 'L'
+                left_hold <= {1'b1, {PRESS_BITS{1'b0}}};
+            else if (left_hold != 0)
+                left_hold <= left_hold - 1'b1;
+
+            if (cmd_valid && cmd_data == 8'h52)        // 'R'
+                right_hold <= {1'b1, {PRESS_BITS{1'b0}}};
+            else if (right_hold != 0)
+                right_hold <= right_hold - 1'b1;
+        end
+    end
+
+    wire press_left  = (left_hold  != 0);
+    wire press_right = (right_hold != 0);
+
+    // Driven in one direction or released. Never driven to the idle level.
+    assign btn_left  = press_left  ? 1'b1 : 1'bz;
+    assign btn_right = press_right ? 1'b0 : 1'bz;
+
     wire [7:0] flags = {display_on, inverse, all_on, charge_pump,
                         seg_remap, com_reverse, dumping, 1'b1};
 
@@ -241,7 +298,8 @@ module ssd1306_console #(
     // A status request: any character except `q`, which asks for silence,
     // and except `a`, which asks for frames and gets them.
     wire want_status = cmd_valid && cmd_data != 8'h71 && cmd_data != 8'h61
-                                 && cmd_data != 8'h64;
+                                 && cmd_data != 8'h64 && cmd_data != 8'h4C
+                                 && cmd_data != 8'h52;
     wire want_dump   = cmd_valid && cmd_data == 8'h64;   // 'd'
 
     reg status_pending = 1'b0;
@@ -295,8 +353,13 @@ module ssd1306_console #(
                                : (8'd55 + {4'd0, nibble});
     endfunction
 
-    // One cycle of read latency: `rd_data` is the byte at `rd_addr` next
-    // cycle, so the fetch step exists to wait for it.
+    // **Two cycles of read latency, not one.** `rd_addr` is a register and
+    // so is `rd_data`, so a byte asked for at the end of cycle N is only
+    // readable in cycle N+2. The first version of this waited one cycle,
+    // latched the previous byte, and emitted byte 0 twice while losing the
+    // last one — `ssd1306_console_tb.v` caught it as "page 0 column 1
+    // dumped 07, drew 12", which is byte zero's value in byte one's place.
+    // Hence a fetch of two steps: 0 issues the wait, 3 takes the byte.
     always @(posedge clk) begin
         if (!rst_n) begin
             sending   <= 1'b0;
@@ -345,7 +408,10 @@ module ssd1306_console #(
         end else begin
             // SRC_DUMP
             if (dump_step == 2'd0) begin
-                // `rd_addr` was set last cycle; take the byte.
+                // The address was set last cycle; `rd_data` is not ready
+                // until the next one.
+                dump_step <= 2'd3;
+            end else if (dump_step == 2'd3) begin
                 dump_byte <= rd_data;
                 dump_step <= 2'd1;
             end else if (tail != 2'd0) begin
@@ -448,6 +514,8 @@ module ssd1306_console #(
     endfunction
 
     assign seg = segments(nibble);
-    assign dp  = ~tick[TICK_BIT];
+    // The point blinks as a heartbeat and lights while either button is
+    // pressed, so a press is visible on the board itself.
+    assign dp  = ~(tick[TICK_BIT] | press_left | press_right);
     assign an  = ~(4'd1 << digit);
 endmodule

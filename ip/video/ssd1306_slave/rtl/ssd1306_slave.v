@@ -290,6 +290,14 @@ module ssd1306_slave #(
         endcase
     end
 
+    // The column pointer widened to eight bits, so the two halves of the
+    // page-mode column command can be built without slicing a register
+    // that may be narrower than the slice. Both results are truncated back
+    // to `COL_BITS` where they are used.
+    wire [7:0] col8       = {{(8 - COL_BITS){1'b0}}, col_q};
+    wire [7:0] col_set_lo = {col8[7:4], in_byte[3:0]};
+    wire [7:0] col_set_hi = {in_byte[3:0], col8[3:0]};
+
     // ---- The decoder. ----
     wire is_cmd  = in_valid && !in_is_data;
     wire is_data = in_valid &&  in_is_data;
@@ -397,8 +405,23 @@ module ssd1306_slave #(
                         args_q   <= 2'd1;
                     end
                     // Lower and higher column start, page addressing mode.
-                    8'h0?: col_q <= {col_q[COL_BITS-1:4], in_byte[3:0]};
-                    8'h1?: col_q <= {in_byte[COL_BITS-5:0], col_q[3:0]};
+                    //
+                    // Through `col8` rather than slicing `col_q` and
+                    // `in_byte` directly, because the direct form only
+                    // works at one geometry: at `COLUMNS = 128`,
+                    // `COL_BITS` is 7 and `in_byte[COL_BITS-5:0]` is
+                    // `in_byte[2:0]`, but at `COLUMNS = 16` it is
+                    // `in_byte[-1:0]` and at `COLUMNS = 8` even
+                    // `col_q[3:0]` is out of range. The manifest offers
+                    // `COLUMNS` from 1 to 512, so the narrow cases are
+                    // supported widths and not hypothetical ones.
+                    //
+                    // Found by `examples/basys3/ssd1306_console_tb.v`,
+                    // which runs this block at 16x2 to keep a full dump
+                    // simulable — a defect that one geometry hides and a
+                    // second one shows immediately.
+                    8'h0?: col_q <= col_set_lo[COL_BITS-1:0];
+                    8'h1?: col_q <= col_set_hi[COL_BITS-1:0];
                     // Display start line: modelled as state only, because
                     // this block has no scan-out to offset.
                     8'b01??_????: ;
