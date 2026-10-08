@@ -147,7 +147,13 @@ module iso7816_terminal_tb;
             end
             @(posedge clk);
             card_tx_v = 1'b0;
-            repeat (card_etu * 14) @(posedge clk);
+            // **2 etu, the mandatory guard and nothing more.** This was 14,
+            // which gave the receiver a long idle to resynchronise after
+            // every byte -- so back-to-back characters at the spacing a real
+            // card actually uses were never tested. On hardware the first
+            // byte of a real ATR decoded and every byte after it failed its
+            // parity, which is exactly what this hid.
+            repeat (card_etu * 2) @(posedge clk);
         end
     endtask
 
