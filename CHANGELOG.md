@@ -7,6 +7,101 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.6](https://github.com/KarpelesLab/reticle/compare/v0.0.5...v0.0.6) - 2026-10-08
+
+### Added
+
+- *(basys3)* an ISO 7816 terminal that talks, and name the tiles a decode cannot check
+- *(xray)* drive a pin in a `*_SING` IO tile, and say why when a ball cannot be
+- *(ip)* an ISO 7816-3 character layer, so a card can be talked to
+- *(fpga)* put the ECP5's carry chain on the fabric, and place it
+- *(fpga)* a third carry shape, and the ECP5's CCU2C is it
+- *(xray)* place, route and configure a RAMB18E1 with its contents
+- *(examples)* a Basys 3 counter written as count + 1
+- *(xray)* legalise a mapped CARRY4 chain for a 7-series slice
+- *(xray)* give a slice's CARRY4 its pins, its muxes and its constants
+- *(place)* read dedicated wiring off the graph and keep it rigid
+- *(fpga)* a config entry for a pin tied to a constant
+- *(xray)* place, route and configure a PLLE2_BASE on the 7-series fabric
+- *(fpga)* let a design read its generated clock's LOCKED, and place a PLL
+- *(xray)* place a RAM64X1D on a SLICEM's D and C lookup tables
+- *(xc7)* map a multiply onto DSP48E1
+- *(fpga)* let a `dsp` line tie pins, set parameters and multiply signed
+- *(fpga)* say when a design outgrows its part number, not its die
+- *(xray)* switch on a pad's weak pull-up when the constraints ask
+- *(fpga)* an output a tri-state drives becomes the family's OBUFT
+- *(xray)* route a 7-series tristate through the OLOGIC to the pad's T
+- *(spi_display_rx)* state the rate as a ratio of clocks, not a frequency
+- *(ip)* receive a display's four-wire SPI by oversampling it
+- *(ip)* uart 1.1.0, because the character format is new ports
+- *(uart)* let the host choose the framing, and say which error it was
+- *(ip)* an inflate block, and the compcol corpus it will be checked against
+
+### Fixed
+
+- *(docs)* retract "bad balls" — the count moves with the route, not the pin
+- *(docs)* five footprint rows the table had not been regenerated for
+- *(fpga)* a PLL has run on a part, and its own two tiles do not decode
+- *(ip)* spi_display_rx counted a frame its chip select never closed
+- *(xray)* a tileconn join must land on the tile type the file names
+- *(docs)* retract two board findings; the fault is the clock
+- *(tests)* an import the gate's per-feature clippy loop refuses
+- *(fpga)* a constant on a carry cell's operand needs a driver, not a tie
+- *(tests)* a cast nightly clippy refuses and stable does not yet
+- *(xray)* refuse a DSP48E1 by name, and keep multiplies in LUTs for --bitstream
+- *(program)* hand the FTDI channel back to the serial driver on macOS
+- *(test)* two branches, two meanings of `Frame`, one file
+- *(uart)* eight modules in four files, because a file list is an interface too
+
+### Other
+
+- *(xray)* a `*_SING` IO tile drives a pin on silicon
+- *(xray)* an ISO 7816 card brought up on a Basys 3, and it answers
+- *(xray)* six Pmod balls lose their decode when used bidirectionally
+- *(xray)* the serial port works, and four subsystems check out on the part
+- *(xray)* the carry chain is right, on an instrument checked first
+- *(fpga)* the four designs counted, and which nets the welded joins hit
+- *(xray)* most IO pads do not follow their logic on a Basys 3
+- *(xray)* a carry chain on a Basys 3, and it computes the wrong number
+- *(fpga)* the move-window experiment was run, and it is not the fix
+- *(fpga)* the placer this fabric's chain actually goes through, re-measured
+- *(place)* one dedicated-wiring mechanism, measured on two families
+- *(ip)* re-measure the twelve rows the merge left stale
+- *(fpga)* the gap this round leaves open is routing, and it is measurable
+- *(fpga)* break a paragraph that two edits ran together
+- *(fpga)* 57 tiles, because the pointers gained a share of two constants
+- *(fpga)* what the crypto console measures now, and that routing got slower
+- *(fpga)* two LUT4 counts the constant drivers moved
+- *(fpga)* two board tests pass with carry chains in them
+- *(ip)* put the iCE40 paragraph after the two it was interrupting
+- *(fpga)* the iCE40 place, route and bits goldens the two constant LUTs move
+- *(fpga)* the structural check the board had to stand in for
+- *(fpga)* forty-four rows, not thirty-nine
+- *(fpga)* place the carry chain twice and insist it lands the same
+- *(ip)* inflate's Adler-32 is the smallest measurement of the gap
+- *(fpga)* read a carry cell's truth tables back out of the image
+- *(fpga)* the CCU2C, the direction of its chain, and the bit it shares
+- *(fpga)* read 2131 CCU2C out of the vendor's bitstreams, and route one
+- *(ip)* re-measure every ECP5 row, now that an adder is a carry chain
+- *(fpga)* show a solver the inside of a CCU2C
+- *(fpga)* the exploratory test that reads a CCU2C out of a vendor bitstream
+- *(xray)* what block RAM rests on, checked and quoted
+- *(xray)* the PLL, what is computed, what is quoted, and the reset trap
+- *(xray)* a distributed RAM on a SLICEM, checked and quoted
+- *(xray)* a distributed RAM to a decoded .bit, and a board demo for it
+- *(xray)* what a 7-series tristate costs, and which parts are quoted
+- *(xray)* a bidirectional Pmod pin and an OBUFT, decoded to the routing
+- *(spi_display_rx)* hold every output to the registers-only walk
+- *(ip)* what a block written from nobody's specification looks like
+- *(uart)* put the UART's two handshakes under the in_ready rule
+- *(uart)* what the board said, which is that five codings are five waveforms
+- *(ip-library)* introduce the UART's page, and what a loopback cannot see
+- *(uart)* the catalogue, the footprints and the block README
+- *(ip)* check that a stream's `in_ready` really is a function of registers
+- *(ip)* what inflate's tests do, and that compression is the half still missing
+- *(ip)* the compress category, and what inflate measured
+- *(ip)* measure inflate against compcol, and fix the byte a stalled copy dropped
+
 ## [0.0.5](https://github.com/KarpelesLab/reticle/compare/v0.0.4...v0.0.5) - 2026-10-07
 
 ### Added
