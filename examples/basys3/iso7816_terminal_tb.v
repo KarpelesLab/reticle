@@ -68,15 +68,26 @@ module iso7816_terminal_tb;
     // longer than 2^20 cycles at these divisors — so the terminal
     // deactivated mid-test and printed `-OFF` where the echo was expected.
     // The board's value is 2^31, nineteen seconds.
+    // ---- The core's byte streams ----
+    //
+    // The serial port is no longer inside the core: it takes and gives
+    // bytes so that `iso_display.v` can put it and the display console on
+    // one port, and `iso7816_terminal_pad.v` is the one-core wrapper that
+    // owns the pins. The `uart` instance below does what that wrapper does.
+    wire [7:0] dut_cmd_data, dut_out_data;
+    wire       dut_cmd_valid, dut_out_valid, dut_out_ready;
+
     iso7816_terminal #(
         .CARD_DIV(CARD_DIV), .ETU_CYCLES(ETU_CYCLES),
         .FAST_ETU_CYCLES(FAST_ETU_CYCLES), .RST_HOLD(RST_HOLD),
-        .VCC_BITS(6), .GAP_ETU(24), .HOST_DIV(HOST_DIV), .WDOG_BITS(24)
+        .VCC_BITS(6), .GAP_ETU(24), .WDOG_BITS(24)
     ) dut (
         .clk(clk), .locked(1'b1), .clk_card(clk_card), .rst_card(rst_card),
         .vcc_en(vcc_en),
         .io_i(io), .io_oe(term_oe), .io_o(term_o),
-        .uart_rx_pin(host_tx), .uart_tx_pin(dut_tx),
+        .cmd_valid(dut_cmd_valid), .cmd_data(dut_cmd_data),
+        .out_valid(dut_out_valid), .out_data(dut_out_data),
+        .out_ready(dut_out_ready), .hex_run(),
         .led(led), .seg(seg), .dp(dp), .an(an));
 
     // ---- The model card: the same block, the other way round ----
@@ -153,6 +164,17 @@ module iso7816_terminal_tb;
         repeat (8) @(posedge clk);
         host_rst_n = 1'b1;
     end
+
+    // The board's own end of the link, which the core no longer contains.
+    // It shares `host_rst_n`: on the board this port leaves reset with the
+    // core, sixteen cycles after the PLL locks, and here both ends come up
+    // together after eight cycles. Nothing is sent in either window.
+    uart #(.CLK_DIV(HOST_DIV)) dut_port (
+        .clk(clk), .rst_n(host_rst_n), .div(16'd0),
+        .tx_data(dut_out_data), .tx_valid(dut_out_valid),
+        .tx_ready(dut_out_ready), .tx(dut_tx),
+        .rx(host_tx), .rx_data(dut_cmd_data), .rx_valid(dut_cmd_valid),
+        .rx_error(), .rx_frame_error(), .rx_parity_error(), .rx_break());
 
     reg  [7:0] host_data  = 8'd0;
     reg        host_valid = 1'b0;

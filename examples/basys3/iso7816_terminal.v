@@ -8,6 +8,15 @@
 // it can do the two things that needed a transmitter: the PPS exchange that
 // raises the rate, and sending command bytes afterwards.
 //
+// **This module has no serial port of its own.** It takes received bytes
+// and gives characters to send, and something above it owns the pins:
+// `iso7816_terminal_pad.v` for a board that does nothing else, or
+// `iso_display.v` where this core and `ssd1306_console.v` share one port
+// through an arbiter. That split exists because the board has one serial
+// port and a card that must be initialised and then driven cannot be split
+// across two bitstreams — reloading the part drops `vcc_en` and
+// power-cycles the device.
+//
 // ===================================================================
 // WIRING
 // ===================================================================
@@ -110,7 +119,8 @@ module iso7816_terminal #(
     parameter RST_HOLD         = 400,
     parameter VCC_BITS         = 20,
     parameter GAP_ETU          = 256,
-    parameter HOST_DIV         = 972,
+    // No `HOST_DIV` here any more: the serial port moved out, so the rate
+    // it runs at is the business of whoever instantiates one.
     parameter WDOG_BITS        = 31
 ) (
     // The system clock, 112 MHz on the board. The top makes it, because a
@@ -138,8 +148,29 @@ module iso7816_terminal #(
     output wire        io_oe,
     output wire        io_o,
 
-    input  wire        uart_rx_pin,
-    output wire        uart_tx_pin,
+    // **Bytes, not pins.** The serial port itself is one level up, for the
+    // same reason the tristate is: a board has one serial port and
+    // `iso_display.v` puts two of these cores on it. So this module takes a
+    // received-byte stream and gives a transmit stream, and whatever owns
+    // the port decides who gets to speak.
+    //
+    // `cmd_valid` is a one-cycle strobe with no back pressure, which is
+    // what `ip/bus/uart`'s receiver gives: a byte is offered for one cycle
+    // and lost if nobody looks. Every user of it here looks on the cycle it
+    // arrives.
+    //
+    // `out_valid` is held with `out_data` stable until a cycle in which
+    // `out_ready` is also high — not pulsed, because the cycle a pulse
+    // appears in is not the cycle its ready was read in.
+    input  wire        cmd_valid,
+    input  wire [7:0]  cmd_data,
+    output wire        out_valid,
+    output wire [7:0]  out_data,
+    input  wire        out_ready,
+
+    // High while a `:` run is being read, so that whoever shares the port
+    // can hold its other users off the characters that belong to the card.
+    output wire        hex_run,
 
     output wire [14:0] led,
     output wire [6:0]  seg,
@@ -192,15 +223,11 @@ module iso7816_terminal #(
     // and does nothing else. End a run with CR, LF or a space and then send
     // the next command.
     //
-    // The received byte and its strobe are declared here rather than beside
-    // the serial port below, because the gate is a continuous assignment
-    // and one of those cannot name a net that is declared later on; a
-    // procedural block can, which is why the decoders themselves never had
-    // to care where these two lived.
-    wire [7:0] cmd_data;
-    wire       cmd_valid;
-
+    // `in_hex` is exported so that `iso_display.v` can hold the display half
+    // off for exactly the same characters, with the same bit rather than a
+    // second copy of this state.
     reg       in_hex   = 1'b0;      // inside a `:` run
+    assign    hex_run  = in_hex;
     // Every command below is decoded through this and never through
     // `cmd_valid` alone.
     wire      cmd_now  = cmd_valid && !in_hex;
@@ -393,19 +420,18 @@ module iso7816_terminal #(
     assign clk_card = cclk;
 
     // =================================================================
-    // The host's serial port
+    // The host's byte streams
     // =================================================================
-
-    wire       host_ready;
+    //
+    // The emitter below was written against a `uart` instance's
+    // `tx_data`/`tx_valid`/`tx_ready`, and these three lines are all that
+    // is left of it: the port moved out, the handshake did not change.
     reg  [7:0] host_data  = 8'd0;
     reg        host_valid = 1'b0;
 
-    uart #(.CLK_DIV(HOST_DIV)) host (
-        .clk(sys), .rst_n(rst_n), .div(16'd0),
-        .tx_data(host_data), .tx_valid(host_valid), .tx_ready(host_ready),
-        .tx(uart_tx_pin),
-        .rx(uart_rx_pin), .rx_data(cmd_data), .rx_valid(cmd_valid),
-        .rx_error(), .rx_frame_error(), .rx_parity_error(), .rx_break());
+    assign out_data  = host_data;
+    assign out_valid = host_valid;
+    wire   host_ready = out_ready;
 
     function is_hex_char;
         input [7:0] c;

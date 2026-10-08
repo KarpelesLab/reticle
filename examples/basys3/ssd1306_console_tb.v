@@ -6,9 +6,16 @@
 //
 //   four pins -> spi_display_rx -> ssd1306_slave -> uart -> this file
 //
+// The `uart` in that chain is instantiated here rather than in the core,
+// because the core takes and gives bytes so that `iso_display.v` can put it
+// and the ISO 7816 terminal on the board's single serial port. The link is
+// still the library block at both ends, which is the property that matters.
+//
 // Nothing is reached into. The frame buffer is read the way a host reads
-// it, by sending `d` and parsing the hex, and compared against bytes this
-// file computed before sending them. So a defect anywhere in that chain —
+// it, by sending `g` and parsing the hex, and compared against bytes this
+// file computed before sending them. (`g` and `?` are what `d` and `s`
+// became when this half's letters moved out of the ISO terminal's way; the
+// core's header says why.) So a defect anywhere in that chain —
 // a bit sampled on the wrong edge, a command consumed as data, a pointer
 // that wraps early, a nibble emitted in the wrong order, a line break in
 // the wrong place — shows up as a mismatch with an address attached.
@@ -56,12 +63,35 @@ module ssd1306_console_tb;
     wire [6:0]  seg;
     wire        dp;
     wire [3:0]  an;
+    wire        press_left, press_right;
+
+    // ---- The core's byte streams ----
+    //
+    // The serial port is no longer inside the core: it takes and gives
+    // bytes so that `iso_display.v` can put it and the ISO 7816 terminal on
+    // the board's one port. `ssd1306_console_pad.v` is the wrapper that owns
+    // the pins, and `dut_port` below is the same wiring.
+    wire [7:0] dut_cmd_data, dut_out_data;
+    wire       dut_cmd_valid, dut_out_valid, dut_out_ready;
+
+    // The core's own reset, which the pad makes from a power-on shift
+    // register. Eight clocks, like the host's below, so neither end is
+    // talking while the other is held.
+    reg dut_rst_n = 1'b0;
+    initial begin
+        repeat (8) @(posedge clk);
+        dut_rst_n = 1'b1;
+    end
 
     ssd1306_console #(
-        .CLK_DIV(DIV), .TICK_BIT(10), .COLUMNS(COLUMNS), .PAGES(PAGES)
+        .TICK_BIT(10), .COLUMNS(COLUMNS), .PAGES(PAGES)
     ) dut (
-        .clk(clk), .sclk(sclk), .mosi(mosi), .dc(dc), .cs_n(cs_n),
-        .uart_rx_pin(host_tx), .uart_tx_pin(dut_tx),
+        .clk(clk), .rst_n(dut_rst_n),
+        .sclk(sclk), .mosi(mosi), .dc(dc), .cs_n(cs_n),
+        .cmd_valid(dut_cmd_valid), .cmd_data(dut_cmd_data),
+        .out_valid(dut_out_valid), .out_data(dut_out_data),
+        .out_ready(dut_out_ready),
+        .press_left(press_left), .press_right(press_right),
         .led(led), .seg(seg), .dp(dp), .an(an));
 
     always #5 clk = ~clk;
@@ -91,6 +121,14 @@ module ssd1306_console_tb;
     uart_rx #(.CLK_DIV(DIV)) host_in (
         .clk(clk), .rst_n(host_rst_n), .div(16'd0),
         .rx(dut_tx), .rx_data(from_dut), .rx_valid(from_dut_valid),
+        .rx_error(), .rx_frame_error(), .rx_parity_error(), .rx_break());
+
+    // ---- And the board's own end of it ----
+    uart #(.CLK_DIV(DIV)) dut_port (
+        .clk(clk), .rst_n(dut_rst_n), .div(16'd0),
+        .tx_data(dut_out_data), .tx_valid(dut_out_valid),
+        .tx_ready(dut_out_ready), .tx(dut_tx),
+        .rx(host_tx), .rx_data(dut_cmd_data), .rx_valid(dut_cmd_valid),
         .rx_error(), .rx_frame_error(), .rx_parity_error(), .rx_break());
 
     task host_send;
@@ -190,7 +228,9 @@ module ssd1306_console_tb;
         end
 
         // ---- Ask for the buffer and check every byte ----
-        host_send(8'h64);               // 'd'
+        host_send(8'h67);               // 'g', the dump. `d` was a hex
+                                        // digit and had to move; see the
+                                        // core's header.
         for (p = 0; p < PAGES; p = p + 1) begin
             line_len = 0;
             for (x = 0; x < COLUMNS; x = x + 1) begin
@@ -234,7 +274,7 @@ module ssd1306_console_tb;
         end
 
         // ---- The status line, and that it agrees with the traffic ----
-        host_send(8'h73);               // 's'
+        host_send(8'h3F);               // '?', the status line
         // 32 hex characters, then CRLF.
         begin : status
             // One 128-bit word rather than an array of fields: an unpacked

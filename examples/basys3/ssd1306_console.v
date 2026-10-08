@@ -1,32 +1,55 @@
 // A Digilent Basys 3 pretending to be a 128x64 SSD1306, with the pixels
 // readable over the board's serial port.
 //
-// Three blocks and a serial port:
+// Two blocks and a pair of byte streams:
 //
 //   ip/bus/spi_display_rx    the four wires -> bytes with a D/C tag
 //   ip/video/ssd1306_slave   those bytes -> the command set and GDDRAM
-//   ip/bus/uart              a host asks, this answers
 //
 // Plug a driver's SPI output into Pmod JA, open the serial port at 115200,
 // and read the screen. `frame_done` from the slave says when a whole frame
-// has landed, so `a` streams a copy after every redraw without a host
+// has landed, so `o` streams a copy after every redraw without a host
 // having to guess at timing.
+//
+// **This module has no serial port and no tristate of its own.** It takes
+// received bytes and gives characters to send, and asks for a button press
+// with a plain output that whoever owns the pins turns into a released or
+// driven line. `ssd1306_console_pad.v` is that owner for a board doing
+// nothing else; `iso_display.v` is the one that matters — there this core
+// and `iso7816_terminal.v` share the board's single serial port through an
+// arbiter, because a card that must be initialised over ISO 7816 and then
+// driven over SPI cannot be split across two bitstreams: reloading the part
+// drops `vcc_en` and power-cycles the device.
 //
 // ===================================================================
 // THE CONVERSATION
 // ===================================================================
 //
-//   s   status: one line of 32 hex characters (below)
-//   d   dump the frame buffer: **8 lines of 256 hex characters**, one
+//   ?   status: one line of 32 hex characters (below)
+//   g   get the frame buffer: **8 lines of 256 hex characters**, one
 //       line per page, 1024 bytes in all
-//   a   dump after every completed frame, unprompted
-//   q   stop dumping unprompted
-//   r   reset the receiver and the display, then report status
-//   L   press the far side's LEFT button for `2**PRESS_BITS` clocks
-//   R   the same for its RIGHT button
+//   o   dump after every completed frame, unprompted ("on")
+//   n   stop dumping unprompted ("no")
+//   z   zero the SPI receiver and the display. It answers nothing — ask
+//       with `?` — because only `?` reports status now; see below.
+//   <   press the far side's LEFT button for `2**PRESS_BITS` clocks
+//   >   the same for its RIGHT button
 //
-// Anything else reports status, so a stray newline costs a line and never
-// silence.
+// **These letters were moved, and `s d a q r L R` are what they were.**
+// Sharing a port with `iso7816_terminal.v` means sharing an alphabet, and
+// that half's `A P F S D s : L C k` are documented, measured against a real
+// card and learned by a person at a terminal, so this half moved. The rule
+// the new set obeys: **no display command is a hexadecimal digit**, which
+// is what makes a `:`-prefixed run of card bytes unable to contain one, and
+// none of them is an ISO letter. `iso_display.v` leans on both facts.
+//
+// **Only `?` reports status now.** It used to be "anything else reports
+// status, so a stray newline costs a line and never silence" — which is
+// wrong the moment two cores share a port: every `A`, `P` or `F` meant for
+// the card half, and every CR and LF a host sends after one, would have
+// produced a status line here in the middle of the other half's output. So
+// an unrecognised character is now silence, and a host that wants status
+// asks for it.
 //
 // A dump is 2066 characters, which at 115200 baud takes about 180 ms. If a
 // frame completes while a dump is still going out the new frame is
@@ -76,7 +99,7 @@
 //   LD0..LD7   the last byte written to the display
 //   LD8        the display has been told it is on
 //   LD9        a dump is going out
-//   LD10       dumping after every frame, from `a`
+//   LD10       dumping after every frame, from `o`
 //   LD11       the SPI receiver has seen a bit error    should stay dark
 //   LD12       a command arrived that this design does not implement
 //   LD13       a frame was dropped
@@ -106,7 +129,6 @@
 // checked.
 
 module ssd1306_console #(
-    parameter CLK_DIV  = 868,   // 100 MHz / 115200
     parameter TICK_BIT = 25,
     parameter COLUMNS  = 128,
     parameter PAGES    = 8,
@@ -114,9 +136,18 @@ module ssd1306_console #(
     // 75 ms at 112 MHz and 84 ms at 100 — comfortably longer than any
     // debounce a device is likely to apply, and short enough not to look
     // like a long press.
-    parameter PRESS_BITS = 23
+    parameter PRESS_BITS = 23,
+    // Passed straight to `ssd1306_slave`: 1 puts the 1024-byte frame
+    // buffer in a block RAM, which is right, and 0 puts it in lookup
+    // tables. It is a parameter here only so a build can be tried both
+    // ways from the top; see that module's comment on the memory.
+    parameter BLOCK_RAM = 1
 ) (
     input  wire        clk,
+    // Active low, synchronous, from whoever owns the clock: a power-on
+    // reset on the board, and the same net the serial port resets on so
+    // that neither comes up while the other is still held.
+    input  wire        rst_n,
 
     // Pmod JA, pins 1 to 4.
     input  wire        sclk,
@@ -124,25 +155,22 @@ module ssd1306_console #(
     input  wire        dc,
     input  wire        cs_n,
 
-    input  wire        uart_rx_pin,
-    output wire        uart_tx_pin,
+    // **Bytes, not pins**: `cmd_valid` is the one-cycle strobe
+    // `ip/bus/uart`'s receiver gives, and `out_valid` is held with
+    // `out_data` stable until a cycle in which `out_ready` is high too.
+    input  wire        cmd_valid,
+    input  wire [7:0]  cmd_data,
+    output wire        out_valid,
+    output wire [7:0]  out_data,
+    input  wire        out_ready,
 
-    // Two of the far side's own button lines, pressed electrically.
-    //
-    // **Both are released except while pressed**, which is what makes the
-    // physical buttons still work and guarantees nothing is ever fought.
-    // Each line has its own 10k resistor defining its idle level, so a
-    // press means overpowering that resistor in one direction only — and
-    // the two directions differ:
-    //
-    //   `btn_left`   idles LOW through a pull-down  -> press drives HIGH
-    //   `btn_right`  idles HIGH through a pull-up   -> press drives LOW
-    //
-    // A push-pull output would hold each line at its idle level and fight
-    // anybody pressing the real button, which with a switch to the
-    // opposite rail is a short limited only by the pin.
-    inout  wire        btn_left,
-    inout  wire        btn_right,
+    // A request to press one of the far side's own button lines, high for
+    // `2**PRESS_BITS` clocks. **Tristate is not here**: the line is
+    // released except while pressed, which is what keeps the physical
+    // buttons working and guarantees nothing is ever fought, and the
+    // module that owns the ball is the one that releases it.
+    output wire        press_left,
+    output wire        press_right,
 
     output wire [14:0] led,
     output wire [6:0]  seg,
@@ -151,38 +179,28 @@ module ssd1306_console #(
 );
     localparam integer WORDS = COLUMNS * PAGES;
 
-    // Saturating reset: ones shift in, so it cannot un-reset. A one-hot
-    // walking under an enable can walk off the end, which this directory
-    // has already paid for once on hardware.
-    reg [15:0] por = 16'h0000;
-    always @(posedge clk) por <= {por[14:0], 1'b1};
-    wire rst_n = por[15];
-
     reg [TICK_BIT:0] tick = {(TICK_BIT + 1){1'b0}};
     always @(posedge clk) tick <= tick + 1'b1;
 
     // =================================================================
-    // The serial port
+    // The host's byte streams
     // =================================================================
-
-    wire [7:0] cmd_data;
-    wire       cmd_valid;
-    wire       tx_ready;
+    //
+    // The emitter at the bottom was written against a `uart` instance's
+    // `tx_data`/`tx_valid`/`tx_ready` and still is: the port moved out, the
+    // handshake did not change.
     reg  [7:0] tx_data  = 8'd0;
     reg        tx_valid = 1'b0;
 
-    uart #(.CLK_DIV(CLK_DIV)) port (
-        .clk(clk), .rst_n(rst_n), .div(16'd0),
-        .tx_data(tx_data), .tx_valid(tx_valid), .tx_ready(tx_ready),
-        .tx(uart_tx_pin),
-        .rx(uart_rx_pin), .rx_data(cmd_data), .rx_valid(cmd_valid),
-        .rx_error(), .rx_frame_error(), .rx_parity_error(), .rx_break());
+    assign out_data  = tx_data;
+    assign out_valid = tx_valid;
+    wire   tx_ready  = out_ready;
 
-    // `r` holds both blocks in reset for sixteen cycles, which clears
+    // `z` holds both blocks in reset for sixteen cycles, which clears
     // every counter and the display's state.
     reg [4:0] clear = 5'd0;
     always @(posedge clk) begin
-        if (cmd_valid && cmd_data == 8'h72)  clear <= 5'd16;  // 'r'
+        if (cmd_valid && cmd_data == 8'h7A)  clear <= 5'd16;  // 'z'
         else if (clear != 5'd0)              clear <= clear - 5'd1;
     end
     wire sub_rst_n = rst_n & (clear == 5'd0);
@@ -214,7 +232,8 @@ module ssd1306_console #(
     wire [15:0] ssd_cmds, ssd_datas, ssd_frames, ssd_unknown;
 
     ssd1306_slave #(
-        .COLUMNS(COLUMNS), .PAGES(PAGES), .COUNT_WIDTH(16)
+        .COLUMNS(COLUMNS), .PAGES(PAGES), .COUNT_WIDTH(16),
+        .BLOCK_RAM(BLOCK_RAM)
     ) panel (
         .clk(clk), .rst_n(sub_rst_n),
         .in_byte(rx_byte), .in_is_data(rx_is_data), .in_valid(rx_valid),
@@ -249,8 +268,8 @@ module ssd1306_console #(
     always @(posedge clk) begin
         if (!rst_n) auto <= 1'b0;
         else if (cmd_valid) begin
-            if (cmd_data == 8'h61)      auto <= 1'b1;   // 'a'
-            else if (cmd_data == 8'h71) auto <= 1'b0;   // 'q'
+            if (cmd_data == 8'h6F)      auto <= 1'b1;   // 'o'
+            else if (cmd_data == 8'h6E) auto <= 1'b0;   // 'n'
         end
     end
 
@@ -268,24 +287,21 @@ module ssd1306_console #(
             left_hold  <= {(PRESS_BITS + 1){1'b0}};
             right_hold <= {(PRESS_BITS + 1){1'b0}};
         end else begin
-            if (cmd_valid && cmd_data == 8'h4C)        // 'L'
+            if (cmd_valid && cmd_data == 8'h3C)        // '<'
                 left_hold <= {1'b1, {PRESS_BITS{1'b0}}};
             else if (left_hold != 0)
                 left_hold <= left_hold - 1'b1;
 
-            if (cmd_valid && cmd_data == 8'h52)        // 'R'
+            if (cmd_valid && cmd_data == 8'h3E)        // '>'
                 right_hold <= {1'b1, {PRESS_BITS{1'b0}}};
             else if (right_hold != 0)
                 right_hold <= right_hold - 1'b1;
         end
     end
 
-    wire press_left  = (left_hold  != 0);
-    wire press_right = (right_hold != 0);
-
-    // Driven in one direction or released. Never driven to the idle level.
-    assign btn_left  = press_left  ? 1'b1 : 1'bz;
-    assign btn_right = press_right ? 1'b0 : 1'bz;
+    // Asked for here, released or driven one ball up.
+    assign press_left  = (left_hold  != 0);
+    assign press_right = (right_hold != 0);
 
     wire [7:0] flags = {display_on, inverse, all_on, charge_pump,
                         seg_remap, com_reverse, dumping, 1'b1};
@@ -298,12 +314,13 @@ module ssd1306_console #(
         seq
     };
 
-    // A status request: any character except `q`, which asks for silence,
-    // and except `a`, which asks for frames and gets them.
-    wire want_status = cmd_valid && cmd_data != 8'h71 && cmd_data != 8'h61
-                                 && cmd_data != 8'h64 && cmd_data != 8'h4C
-                                 && cmd_data != 8'h52;
-    wire want_dump   = cmd_valid && cmd_data == 8'h64;   // 'd'
+    // **One character, not "everything else".** Sharing a serial port with
+    // the card half means seeing its commands and the line endings a host
+    // sends after them, and answering every one of those with a status line
+    // would bury the card's own output. So status is asked for by name and
+    // an unrecognised character is silence.
+    wire want_status = cmd_valid && cmd_data == 8'h3F;   // '?'
+    wire want_dump   = cmd_valid && cmd_data == 8'h67;   // 'g'
 
     reg status_pending = 1'b0;
     reg dump_pending   = 1'b0;
