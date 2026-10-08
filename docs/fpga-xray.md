@@ -86,7 +86,22 @@ differ because the two designs drive different halves of the die, and the
 differences are enumerated below. That comparison is
 `tests/fpga_xray.rs::the_clock_path_is_the_one_vivado_built`.
 
-## A carry chain, on the part, and it is wrong
+## A carry chain on the part: RETRACTED, and what the retraction found
+
+> **This section's conclusion was wrong, and the way it was wrong is the
+> useful part.** It rested on LD4 being lit. LD4 is ball W18, and W18 was
+> later found to be one of several LED balls that do not follow their
+> net in a larger design — so "the latch closed" and "the pad is stuck
+> high" predict the same lit LED, and the reading cannot distinguish
+> them. The carry chain may well be fine. See "It is the clock" below,
+> which is where the evidence actually leads.
+>
+> The original text is kept because the mistake is instructive: the
+> instrument was never checked. `CLAUDE.md` already records one round of
+> this exact error, on a report whose label table was indexed backwards,
+> and the lesson did not transfer.
+
+### What was measured, and why it does not support the conclusion
 
 **CHECKED, 8 October 2026.** `examples/basys3/carry_probe.v` runs two
 26-bit counters off the board's oscillator. One is written `chain + 1`
@@ -129,7 +144,20 @@ tied to a constant, including `PRECYINIT.C1` for a carry-in of one. Those
 are where to look first, and the fact that they exist is why this needs
 measuring rather than assuming.
 
-### And a constant on a pad, which is a second fault
+### And a constant on a pad: the code gap is real, the measurement is not
+
+> **Also retracted as a measurement.** LD0 is ball U16, which read dark
+> with a constant here, worked correctly in `sw_led`, and read stuck
+> *lit* in `io_exercise` — three behaviours on three designs, so it
+> cannot carry a claim. A later re-run put the constant on ball P1 and
+> read it dark, which is suggestive and still not proof, because in that
+> same run a counter bit that should have flickered was solid.
+>
+> What survives is the **source** observation, which needs no board:
+> `techcells::drive_constant_data` genuinely does not cover an output
+> buffer's input, so a pad driven by a constant has its input left
+> unrouted. That is a real gap in the code and worth fixing. Whether it
+> is what the board showed is unproven.
 
 On the same glance, LD0 — driven by the constant `1'b1` — read **dark**,
 beside LD1 driven by `1'b0`, also dark. Both constant-driven pads are
@@ -211,6 +239,53 @@ LD6 works and that this is a programming gap. Supporting that tile type
 is a to-do, not a board limitation, and those three comments should stop
 implying otherwise.
 
+### It is the clock: flip-flops outside some set of columns never tick
+
+**This is where the evidence points, and it explains every reading above
+including the two retracted ones.**
+
+The decisive observation was already in `diag` and was misread as a
+success: its **4-bit** `por` counter reached 15 and held, while its
+**26-bit** counter sat frozen. Both are clocked by the same net off the
+same `BUFG`. So the clock reaches some flip-flops and not others, and
+whether a given register ticks depends on where it was placed.
+
+Then `carry_probe.v` was re-run with every output moved onto balls that
+had been *watched changing state*. Expected: LD5 dark, LD7 lit, LD8 and
+LD9 blinking, LD10 flickering, LD11 dark, LD14 lit. Read: **LD5, LD7,
+LD8, LD9, LD10 all solid on; LD11 and LD14 dark.** That is not a pattern
+of random pads — it is exactly a frozen counter, with `plain[22]`,
+`plain[25]`, `chain[25]`, `differed` and `moved` all stuck at one and
+`1'b0` correctly dark. The same signal `plain[22]` flickered correctly
+when an earlier constraint file put it on ball V14, and is solid on W3
+here: identical RTL, different placement.
+
+What `--report` says about the same designs, on the same part:
+
+| design | clock pins | `global clock rebuffer enable bit(s) over the column` | behaves? |
+|---|---|---|---|
+| `blink` | 26 | 4 | **yes**, watched 2026-09-24 |
+| `carry_probe` with `carry_probe.rcf` | 54 | 4 | no |
+| `carry_probe` with `carry_probe_trusted.rcf` | 54 | 6 | no |
+| `io_exercise` | 36 | 8 | partly |
+
+Two constraint files over one unchanged design give **4 enable bits and
+6**, so the count tracks placement; and `carry_probe` asks 54 flip-flops
+to run off the same number of enabled columns that sufficed for `blink`'s
+26. A design that happens to fit inside the enabled columns works, which
+is why the two designs that were ever watched working are the two
+smallest, and why every larger one has looked like scattered dead pads.
+
+The question to answer is whether this flow enables the global clock in
+every clock column and clock region holding a clocked flip-flop, and the
+method is the one that has found everything else here: read what Vivado
+writes, in full, for a design whose registers span several clock regions,
+and check ours feature by feature.
+
+**Everything on this board is unmeasurable until that is settled.** A
+counter that cannot be trusted to count cannot report on a carry chain, a
+block RAM, a PLL or a pad.
+
 ### What is now known about this part, in order of confidence
 
 | | |
@@ -218,8 +293,9 @@ implying otherwise.
 | lookup tables and LVCMOS33 pads | CHECKED twice, by two designs and two people's glances |
 | the 100 MHz oscillator, `BUFG` and the clock tree | CHECKED: a 4-bit counter reaches 15 and stays there, and a 26-bit carry-free counter blinks |
 | flip-flops | CHECKED, by the same two counters |
-| a `CARRY4` chain | **CHECKED WRONG** — this section |
-| a pad tied to a constant | **CHECKED WRONG** — above |
+| a `CARRY4` chain | **UNKNOWN.** The reading that said "wrong" was retracted; it rested on a pad that does not follow its net |
+| a pad tied to a constant | **UNKNOWN** on the board. The gap in `drive_constant_data` is real in the source and needs no board to see |
+| the global clock reaching every flip-flop | **CHECKED WRONG** — a 4-bit counter ticks while a 26-bit one on the same net does not |
 | `RAMB18E1`, `RAM64X1D`, `PLLE2_BASE` | the part accepts the bitstreams with `DONE` high, which means CRC passed and nothing more. Not run. |
 | the board's serial port | UNRESOLVED. Nothing this flow drives onto A18 has reached the host, including a bare counter bit with no UART in it, so the pin assignment in `examples/soc/board/basys3.rcf` is in doubt and `examples/basys3/selftest.v` cannot yet report. |
 

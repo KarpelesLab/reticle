@@ -1,0 +1,31 @@
+# `carry_probe.v` with every output on a ball that has been WATCHED
+# CHANGING STATE on this board, which is the only kind of output pad this
+# design's result can rest on.
+#
+# Why this file exists beside `carry_probe.rcf`: that one put
+# `led_differed` on W18, and W18 is one of eight LED balls later found
+# stuck high in `io_exercise` — so the lit LED that the first carry
+# reading rested on is equally explained by the pad, and the reading was
+# retracted. `docs/fpga-xray.md` records it.
+#
+# The seven balls below are the ones a person watched go from dark to lit
+# and back by flipping a switch: U15 V14 V13 V3 W3 U3 P1, which are LD5,
+# LD7, LD8, LD9, LD10, LD11 and LD14. Two of the seven are spent on
+# controls rather than on results, which is the point:
+#
+#   led_alive  W3   must FLICKER (~12 Hz). If it does not, this pad is
+#                   not following logic either and nothing else here
+#                   counts.
+#   led_zero   U3   must be DARK. A stuck-high pad shows up here.
+#
+# So a reading is only admissible when W3 flickers and U3 is dark.
+set_io -io_standard LVCMOS33 clk W5
+set_io -io_standard LVCMOS33 led_differed U15
+set_io -io_standard LVCMOS33 led_moved    V14
+set_io -io_standard LVCMOS33 led_plain    V13
+set_io -io_standard LVCMOS33 led_carry    V3
+set_io -io_standard LVCMOS33 led_alive    W3
+set_io -io_standard LVCMOS33 led_zero     U3
+set_io -io_standard LVCMOS33 led_one      P1
+create_clock -name sys -period 10.0 clk
+clock_domain sys clk
