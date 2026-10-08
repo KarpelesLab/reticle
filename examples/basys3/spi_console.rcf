@@ -1,0 +1,59 @@
+# Digilent Basys 3 (Xilinx XC7A35T-1CPG236C): `spi_console.v`.
+#
+# PROVENANCE: ball names transcribed from `examples/soc/board/basys3.rcf`,
+# which transcribes Digilent's published `Basys-3-Master.xdc`. Two lines
+# of that file have been CHECKED on this board and one of them was wrong,
+# so treat the rest as a reading: A18/B18 are the FPGA's transmit and
+# receive into the USB-UART bridge (CHECKED 8 October 2026 by echoing
+# bytes through `uart_loop.v`), and `sw[0]`/`led[0]` are at the RIGHT-hand
+# end (CHECKED the same day, correcting a comment that said left).
+#
+# Pmod JA's top row, as Digilent prints it: JA1 J1, JA2 L2, JA3 J2,
+# JA4 G2. NOT CHECKED — nothing has been driven into JA on this board.
+# `examples/basys3/io_exercise.v` is how to check a pad before trusting
+# it.
+#
+# LD6 (ball U14) is absent: it is the one LED ball of the sixteen in a
+# `LIOB33_SING` tile, which this flow has no IO table for. A gap in the
+# flow, not a dead ball. So `led[5]` is LD5 and `led[6]` is LD7.
+set_io -io_standard LVCMOS33 clk W5
+
+set_io -io_standard LVCMOS33 sclk J1
+set_io -io_standard LVCMOS33 mosi L2
+set_io -io_standard LVCMOS33 dc   J2
+set_io -io_standard LVCMOS33 cs_n G2
+
+set_io -io_standard LVCMOS33 uart_rx_pin B18
+set_io -io_standard LVCMOS33 uart_tx_pin A18
+
+set_io -io_standard LVCMOS33 led[0]  U16
+set_io -io_standard LVCMOS33 led[1]  E19
+set_io -io_standard LVCMOS33 led[2]  U19
+set_io -io_standard LVCMOS33 led[3]  V19
+set_io -io_standard LVCMOS33 led[4]  W18
+set_io -io_standard LVCMOS33 led[5]  U15
+set_io -io_standard LVCMOS33 led[6]  V14
+set_io -io_standard LVCMOS33 led[7]  V13
+set_io -io_standard LVCMOS33 led[8]  V3
+set_io -io_standard LVCMOS33 led[9]  W3
+set_io -io_standard LVCMOS33 led[10] U3
+set_io -io_standard LVCMOS33 led[11] P3
+set_io -io_standard LVCMOS33 led[12] N3
+set_io -io_standard LVCMOS33 led[13] P1
+set_io -io_standard LVCMOS33 led[14] L1
+
+set_io -io_standard LVCMOS33 seg[0] W7
+set_io -io_standard LVCMOS33 seg[1] W6
+set_io -io_standard LVCMOS33 seg[2] U8
+set_io -io_standard LVCMOS33 seg[3] V8
+set_io -io_standard LVCMOS33 seg[4] U5
+set_io -io_standard LVCMOS33 seg[5] V5
+set_io -io_standard LVCMOS33 seg[6] U7
+set_io -io_standard LVCMOS33 dp     V7
+set_io -io_standard LVCMOS33 an[0]  U2
+set_io -io_standard LVCMOS33 an[1]  U4
+set_io -io_standard LVCMOS33 an[2]  V4
+set_io -io_standard LVCMOS33 an[3]  W4
+
+create_clock -name sys -period 10.0 clk
+clock_domain sys clk

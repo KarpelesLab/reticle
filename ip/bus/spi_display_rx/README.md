@@ -131,6 +131,44 @@ This is the same shape of note as the `VbusState` reading in
 a reading that looked wrong, turned out to be the board and not the
 decode, and cost rounds before someone traced the net and wrote it down.
 
+## 3a. A known defect: `frame_count` counts one frame too many
+
+**MEASURED, 8 October 2026, by `examples/basys3/spi_console_tb.v`**, which
+drives this block's four pins and reads its counters back over a serial
+port. Two readings:
+
+- `frame_count` is **1 before anything has been driven at all**;
+- it is **9 after eight frames**.
+
+Every other counter is right, and the bytes are right, because a phantom
+frame carries no bits. The only symptom is this one counter, permanently
+one too high.
+
+The phantom is `gap_q`'s reset value. `gap` is polarity-normalised — "high
+between bytes, whatever polarity the pin uses" — so at idle it is 1 in
+both polarities, while `gap_q` resets to 0 for an active-low select. That
+manufactures a `gap_rise` on the first cycle, and `frame_close` is
+`gap_rise` with no guard on it.
+
+**It is coupled to a second defect and they mask each other.** `seen_gap`,
+which arms the block, is latched only inside `if (frame_close)` — so the
+phantom edge is also the thing that arms it. Correcting `gap_q` alone
+drops the first byte of every session, which was measured, not predicted.
+Arming from the gap's level instead was tried and is **wrong**: it
+satisfies the console testbench and fails **fourteen of the fifteen**
+testbenches below with a spurious bit error in every frame mode, for
+reasons not yet understood. The fix needs `frame_open`, `counter_clear`
+and `close_aligned` reasoned about together.
+
+**Why §5's fifteen testbenches did not catch it**, which is the part worth
+keeping: not one of them compares `frame_count` against the number of
+frames driven since reset. They check the delivered bytes and the error
+counters, and both are correct. Testing what a block *does* and testing
+what it *counts* are different jobs, and this block had only the first.
+
+Until it is fixed, `frame_count` is usable as a difference — two readings
+subtracted — and not as an absolute.
+
 ## 4. The numbers, and how to read them
 
 **This is the bring-up procedure.** Whoever connects the screen gets six
