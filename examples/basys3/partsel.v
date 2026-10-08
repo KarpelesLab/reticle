@@ -21,9 +21,24 @@
 // Reported as eight hex characters, repeating: the mismatch count, then the
 // index that last disagreed.
 //
-// **CHECKED on a Basys 3: 0000 mismatches.** So the construct is built
+// **CHECKED on a Basys 3: 0000 mismatches, indexing a register vector.** So
+// the construct is built
 // correctly and the queue's failure is something else; this file stays as the
 // thing that eliminated it, and as a pattern for the next such question.
+//
+// **It took three tries to get a trustworthy answer, and each wrong one was
+// this test's fault, not the fabric's.** In order: a constant vector, which
+// folds `pat[idx*W +: W]` into ten lookup tables of `idx` and never builds
+// the multiplexer in question at all; then two combinational trees compared
+// directly, which reported 10944 mismatches at about one per 7450 clocks;
+// then a comparison enabled one cycle before the registers it compares were
+// valid, worth exactly one mismatch at the last fill index.
+//
+// **The shape of each number said so before any further work.** A wrong
+// 32:1 multiplexer fails every time its index comes round -- a million times
+// per report here. A rate unrelated to the index is a race; a count of
+// exactly one is a boundary. Thirty seconds of arithmetic on the figure beat
+// a two-minute build each time.
 //
 // It also nearly reported a defect that does not exist. The first version
 // compared the two combinational results directly and latched the
@@ -57,23 +72,47 @@ module partsel #(
     always @(posedge sys) por <= {por[14:0], 1'b1};
     wire rst_n = por[15];
 
-    // A pattern with no repeats, so a wrong index cannot look right: entry
-    // `i` is `i * 0x29 + 0x15` in ten bits.
+    // A pattern with no repeats, so a wrong index cannot look right -- and
+    // built without arithmetic, because `i * 41 + 21` and `31 - k` are adders
+    // and the placer cannot always fit their carry groups:
+    //
+    //     entry(i) = {i, ~i}
+    //
+    // Ten bits, distinct for every `i`, and no two entries share a half.
     function [W-1:0] entry;
         input [4:0] i;
-        entry = ({5'd0, i} * 10'd41) + 10'd21;
+        entry = {i, ~i};
     endfunction
 
-    wire [N*W-1:0] pat = {
-        entry(5'd31), entry(5'd30), entry(5'd29), entry(5'd28),
-        entry(5'd27), entry(5'd26), entry(5'd25), entry(5'd24),
-        entry(5'd23), entry(5'd22), entry(5'd21), entry(5'd20),
-        entry(5'd19), entry(5'd18), entry(5'd17), entry(5'd16),
-        entry(5'd15), entry(5'd14), entry(5'd13), entry(5'd12),
-        entry(5'd11), entry(5'd10), entry(5'd9),  entry(5'd8),
-        entry(5'd7),  entry(5'd6),  entry(5'd5),  entry(5'd4),
-        entry(5'd3),  entry(5'd2),  entry(5'd1),  entry(5'd0)
-    };
+    // **A register vector, not a constant.** The first version of this test
+    // used a constant here, and `pat[idx*W +: W]` of a constant folds into
+    // about ten lookup tables of `idx` -- it never builds the multiplexer the
+    // thing under test actually uses. A queue indexes 320 live flip-flops,
+    // which is ten 32:1 multiplexers over registers, so that is what this
+    // holds now: the same shift that a queue's push performs, loading the
+    // same pattern.
+    reg [N*W-1:0] pat = {(N*W){1'b0}};
+    reg [5:0]     fill = 6'd0;
+    always @(posedge sys) begin
+        if (!rst_n) begin
+            pat  <= {(N*W){1'b0}};
+            fill <= 6'd0;
+        end else if (fill != N) begin
+            // Entries enter at offset 0 and shift up, exactly as a queue's
+            // push does, so entry `i` ends at offset `N-1-i`.
+            pat  <= {pat[(N-1)*W-1:0], entry(fill[4:0])};
+            fill <= fill + 6'd1;
+        end
+    end
+
+    // What the shift above leaves at each offset, once `fill` reaches N:
+    // offset k holds `entry(N-1-k)`.
+    // Offset k holds `entry(N-1-k)`, and for five bits `31 - k` is `~k`, so
+    // this needs no subtractor either.
+    function [W-1:0] expect_at;
+        input [4:0] k;
+        expect_at = entry(~k);
+    endfunction
 
     reg [4:0] idx = 5'd0;
     always @(posedge sys) if (rst_n) idx <= idx + 5'd1;
@@ -89,6 +128,25 @@ module partsel #(
             if (idx == k[4:0]) want = pat[k*W +: W];
     end
 
+    // And a third opinion that does not read `pat` at all, so a multiplexer
+    // that is wrong in both readings cannot pass: what the shift must have
+    // left there.
+    wire [W-1:0] pure = expect_at(idx);
+
+    // **Delayed by as many cycles as the comparison is.** `fill` reaching N
+    // means the vector is loaded *now*, but `got_q` and `want_q` hold the
+    // previous cycle's values, so comparing on the first `loaded` cycle
+    // compares a reading taken while the vector was still filling. That is
+    // worth exactly one mismatch, at the last fill index -- which is what it
+    // reported, and the count being precisely 1 is what gave it away.
+    wire       loaded_now = (fill == N);
+    reg  [2:0] loaded_sr  = 3'd0;
+    always @(posedge sys) begin
+        if (!rst_n) loaded_sr <= 3'd0;
+        else        loaded_sr <= {loaded_sr[1:0], loaded_now};
+    end
+    wire loaded = loaded_sr[2];
+
     // **Both sides are registered before they are compared.**
     //
     // Comparing two combinational mux trees and latching the difference is
@@ -101,6 +159,7 @@ module partsel #(
     // a cycle later removes the race and leaves only a real disagreement.
     reg [W-1:0] got_q  = {W{1'b0}};
     reg [W-1:0] want_q = {W{1'b0}};
+    reg [W-1:0] pure_q = {W{1'b0}};
     reg [15:0]  bad_q  = 16'd0;
     reg [15:0]  last_q = 16'd0;
     reg [4:0]   idx_q  = 5'd0;
@@ -109,14 +168,16 @@ module partsel #(
         if (!rst_n) begin
             got_q  <= {W{1'b0}};
             want_q <= {W{1'b0}};
+            pure_q <= {W{1'b0}};
             bad_q  <= 16'd0;
             last_q <= 16'd0;
             idx_q  <= 5'd0;
         end else begin
             got_q  <= got;
             want_q <= want;
+            pure_q <= pure;
             idx_q  <= idx;
-            if (got_q != want_q) begin
+            if (loaded && (got_q != want_q || got_q != pure_q)) begin
                 if (bad_q != 16'hFFFF) bad_q <= bad_q + 16'd1;
                 last_q <= {11'd0, idx_q};
             end
