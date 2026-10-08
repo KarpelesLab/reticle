@@ -49,9 +49,11 @@
 //! ordinary routing wires the router is free to spend on a signal. So
 //! whether the hunt found a path depended on what the router had done
 //! around that block, which depended on where the placer had put it.
-//! `examples/basys3/ssd1306_console.v` did not build at all;
-//! `examples/basys3/selftest.v` built, then an unrelated edit moved the
-//! placement and it did not, then another moved it back and it did. **A
+//! `examples/basys3/ssd1306_console.v` did not build at any of nine
+//! placement settings; `examples/basys3/selftest.v` built, then an
+//! unrelated edit moved the placement and it did not, then another moved it
+//! back and it did — and it builds at all nine today, which is what the
+//! same lottery looks like from the lucky side. **A
 //! flow that is meant to be deterministic should not succeed or fail at
 //! tying an address bit to ground depending on where a block landed**, and
 //! that non-determinism was the defect, more than any one failure.
@@ -291,8 +293,12 @@ pub enum TiePolicy {
 /// [`TiePolicy::Zero`], which hunts a free `GND_WIRE -> GFAN<n>` path; an
 /// interconnect tile has two such fans for 48 inputs and the router
 /// competes for both, so whether the hunt found one depended on where the
-/// block landed. `examples/basys3/ssd1306_console.v` did not build at all
-/// and `examples/basys3/selftest.v` built, then did not, then did. A bit
+/// block landed. `examples/basys3/ssd1306_console.v` failed at **all nine**
+/// placement settings tried on `097a1d4`, every one of them on `p0_addr3`;
+/// `examples/basys3/selftest.v` is the one `docs/fpga-xray.md` records
+/// building, then not, then building again as unrelated edits moved its
+/// placement — and it happens to build at all nine settings on `097a1d4`
+/// today, which is what a lottery looks like from the lucky side. A bit
 /// the block does not read has no business failing anything, so it is
 /// [`TiePolicy::Idle`] now: tied to zero when a fan is free and left to
 /// the interconnect's own default when none is.

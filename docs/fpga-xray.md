@@ -629,11 +629,20 @@ interconnect's default when none is. No extra lookup table, no extra
 route, and the lottery is gone.
 
 `examples/basys3/ssd1306_console.v` builds. It is a 128x64 SSD1306
-emulator with a UART, an SPI receiver and a block RAM — 1775 placed
-instances, 1990 routed signals, 61950 configuration bits, 0 bits
-unexplained — and it builds at **nine different placement settings**
-rather than at one. On `8970c98` the same nine all fail, every one of them
-on `p0_addr2`.
+emulator with a UART, an SPI receiver and a block RAM — 2001 of 2001
+signals routed, 61822 configuration bits, 0 unexplained — and it builds at
+**nine placement settings**: `--place-effort` 1, 3, 10 and 20, and effort 3
+again with each of `--place-wide-moves`, `--place-hot-start`,
+`--place-fixed-cooling 0.9`, `--place-start-window 0` and
+`--place-start-acceptance 0.2`. On `097a1d4` the same nine **all fail**,
+every one of them on `p0_addr3`, which is the measurement that says this
+was a lottery and not one unlucky build.
+
+It needed a second fix to get there, and it is in the same family: with the
+address closed, every one of the nine then failed on `tie_p1_we4` instead
+— `WEBWE[7:4]`, which a `RAMB18E1` does not use in `TDP` mode, and whose
+`FAN_ALT1` the router had taken as a hop so the pin could not be tied at
+all. See `tie_policy`.
 
 #### The pad: nothing absorbs it here, so the constant is built
 
