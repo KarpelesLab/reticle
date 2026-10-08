@@ -687,34 +687,92 @@ decodable: 100/12 is 8.333 MHz, and anything deriving its own timing by
 counting the clock — a smart card's etu is `F/D` cycles of the terminal's
 clock — tracks it with no error at all.
 
-### Six Pmod balls cannot be used bidirectionally without losing the decode
+### RETRACTED: there are no "bad balls" — and what the count really means
 
-**CHECKED, 8 October 2026**, by building `examples/basys3/pmod_bidir.v` once
-per ball — `inout` with a pull-up — and once as a plain input, and reading
-the decode line each time.
+> **This section claimed six Pmod balls could not be used bidirectionally,
+> and it was wrong.** The board's owner pushed back, correctly: a
+> factory-tested Basys 3 has no bad balls, and Digilent's documentation says
+> all eight JA signals are bidirectional by design. The error was mine, the
+> phrase "bad balls" was indefensible, and worse, I used the table to tell
+> the owner which pins to avoid. That advice had no basis.
 
-| ball, used as `inout` | decode |
-|---|---|
-| JA: J1, J2, H1, H2 | complete |
-| JA: **L2, G2, K2, G3** | **1 tile with no segbits file** |
-| JXADC: J3, L3, M2, K3, M3, M1 | complete |
-| JXADC: **N2, N1** | **1 tile with no segbits file** |
+**What the measurement actually was.** Building `pmod_bidir.v` once per
+ball and reading the decode line, six balls reported `1 tile with no
+segbits file`. I recorded that as a property of the ball. It is not:
 
-**As plain inputs, all eight JA balls decode completely.** So this is
-specific to the bidirectional path, not to the balls, and it is the same
-family as LD6: a tile type the IO tables do not fully describe. A
-bitstream using one of these as an `inout` still places, routes and
-reports no unexplained bits — but part of it cannot be decoded back, so
-"every bit decodes" no longer holds over the whole image, and this
-repository's strongest check goes quiet for that tile.
+| ball | LEDs U16/E19 | LEDs V19/W18 | LEDs U15/V14 |
+|---|---|---|---|
+| J1 | 0 | 0 | 0 |
+| **L2** | **1** | **0** | **1** |
+| **K2** | **1** | **0** | **1** |
+| H2 | 0 | 0 | 0 |
 
-The alternation on JA (clean, gap, clean, gap along the connector) is the
-shape of the two IOBs within one tile being unequal in the tables, which
-is where to look.
+**Same ball, same design, different LED pins, different answer.** Moving
+two unrelated pins moves the result, so what varies is the *route*, not the
+ball. One build each was never enough to claim a property, and the tile
+types say the same: all eight JA balls are `RIOB33`, and `RIOI3_X43Y89`
+(reported) and `RIOI3_X43Y95` (clean) are the same type.
 
-Practical consequence, and why it was measured: the four SPI wires of
-`examples/basys3/spi_console.v` are inputs and may sit on any JA ball,
-while an ISO 7816 I/O line is bidirectional and must avoid the six above.
+**What the count does mean**, which is worth knowing and is not nothing.
+`Decoded::tiles_without_a_segbits_file` is, in its own words, "of those
+[tiles holding at least one set bit], how many have no `segbits` file at
+all, so nothing their bits say could have been named". So the flow sets
+bits in a tile whose contents cannot be checked — **and `unexplained` reads
+zero alongside it**, so those bits are excluded from the unexplained count
+rather than counted in it. That is a blind spot in this project's strongest
+check, and it is not reported as one. Making those bits count as
+unexplained, or refusing them, is the fix; the number is a symptom.
+
+**Why most types have no segbits, and why that is normal.** Of 112 tile
+types on this die only **56** have a segbits file. The 70 without are
+mostly tiles with nothing to configure — `NULL` (2491), `VBRK` (1400),
+`INT_FEEDTHRU_1/2` (1125), `INT_INTERFACE_L/R` (850), the `TERM` tiles,
+`VFRAME`. `IO_INT_INTERFACE_L/R` (250 tiles) is exactly what an IO route
+crosses. So "no segbits file" is the ordinary state for an interface tile
+and says nothing by itself; it only matters when bits are *set* there.
+
+### LD6 is a flow gap too, and it should be closed
+
+Ball `U14` sits in `RIOB33_SING`, and the database ships segbits for
+`riob33`, `rioi3`, `rioi3_tbytesrc` and `rioi3_tbyteterm` but for **no
+`_SING` variant at all**. So the single-IOB tiles at the ends of each bank
+are simply unsupported by this flow's IO tables. LD6 works; this flow
+cannot drive it. Three files once described that as if the ball were dead,
+which the owner also corrected. Supporting the `_SING` variants is the
+to-do, and it is the same hole that makes the top and bottom ball of every
+IO bank unreachable, not just one LED.
+
+### A PLL works on the part, and its own two tiles do not decode
+
+**CHECKED, 8 October 2026, both halves.**
+
+The working half: `examples/basys3/selftest.v` asks for 25 MHz by frequency
+and reports, from the part, `locked` high and **262 081 PLL cycles against
+262 144 expected** over a window of 2^20 oscillator cycles — 99.976 %, a
+deficit of a few cycles lost where the window's level crosses into the
+PLL's domain, not a frequency error. A `PLLE2_BASE` from this flow locks
+and runs at the ratio it was asked for. The flow's own note said *"no PLL
+from this flow has run on a part"*; that is no longer true and the note
+now says what was measured instead.
+
+The exactness is better than it needs to be. Asked for 8 MHz from the
+board's 100 MHz, the solver answers **+0.0 ppm** — vco 800 MHz,
+`DIVCLK_DIVIDE=1 CLKFBOUT_MULT=8 CLKOUT0_DIVIDE=100` — and a PLL output
+routes straight to a pad (`OBUF`), so a generated clock can leave the part.
+
+The other half: **a design with a PLL has two tiles with no segbits file**,
+and the same design with the PLL removed has none. So the PLL's own CMT
+tiles cannot be decoded back through the database, and "every bit decodes"
+goes quiet exactly there — 166 PLL register bits are written and not
+checkable. They are evidently *right*, since the part locks and counts
+correctly, but they are not *verified*, and on this project that is a
+different claim.
+
+So a design needing an exact frequency pays two undecodable tiles for it.
+Where a ratio will do, a fabric divider costs nothing and stays fully
+decodable: 100/12 is 8.333 MHz, and anything deriving its own timing by
+counting the clock — a smart card's etu is `F/D` cycles of the terminal's
+clock — tracks it with no error at all.
 
 ### What is now known about this part, in order of confidence
 

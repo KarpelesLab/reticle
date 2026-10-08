@@ -77,8 +77,7 @@ set_io -io_standard LVCMOS33 dc   J2
 set_io -io_standard LVCMOS33 cs_n G2
 
 # The far side's two button lines, on **Pmod JC** — reachable from the same
-# side of the board as JA, and the only header whose eight balls are ALL
-# clean when used bidirectionally (JA has four that are not, JXADC two).
+# side of the board as JA.
 # These must be bidirectional: each is released except while pressed.
 #
 #   JC1  K17  btn_left   idles LOW  through a 10k pull-down -> press drives HIGH

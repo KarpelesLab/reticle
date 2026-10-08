@@ -26,49 +26,11 @@
 # line to JXADC, and JA is on the same edge — shorter leads and one ground
 # reference.
 #
-# **These four may be any ball of JA**, which was measured rather than
-# assumed: all eight JA balls were built as plain inputs and every one
-# decoded completely. That matters because the same balls used
-# *bidirectionally* do not: L2, G2, K2 and G3 each put configuration bits
-# in a tile this database has no segbits file for, so a bitstream using
-# them as an inout cannot be fully decoded and checked. Four of eight on
-# JA, and N2 and N1 on JXADC. These pins are inputs, so the gap does not
-# reach them — but a design that made one of them bidirectional would be
-# unverifiable, and that is worth knowing before anybody moves a wire.
-#
-# **All four are inputs.** This design never drives them; it is the
-# display, not the driver.
-#
-# **3.3 V only.** The Basys 3's Pmod pins are 3.3 V CMOS. A 5 V master —
-# a classic Arduino, for instance — needs level shifting, and connecting
-# one directly risks the part.
-#
-# **The rate limit is a ratio**: `PHASE_MARGIN = 2` against a 100 MHz
-# clock means each `sclk` phase must last at least two system clocks, so
-# `sclk` may run up to 25 MHz. An SSD1306's own maximum is well under
-# that. `overrun_count` rises before any bit is lost, so the counters say
-# when the margin has gone rather than dropping bits quietly.
-#
-# JA and JC work identically — all three were built and routed on this
-# part with zero unexplained bits, so the choice is physical convenience.
-# To move, replace the four balls below with that header's top row:
-#
-#   JB   A14 A16 B15 B16        JC   K17 M18 N17 P18
-#
-# Avoid JXADC: it is the analog header and carries filtering that has no
-# business on a digital clock.
-#
-# **NOT CHECKED: no signal has been driven into any Pmod on this board.**
-# What the balls do is quoted from Digilent's master constraints, and what
-# the flow does with them is verified only as far as "it places, routes
-# and every bit decodes". The counters are the real test, and §4 of
-# `ip/bus/spi_display_rx/README.md` says how to read them: both byte
-# counts advancing while `bit_error_count` and `dc_change_count` stay at
-# zero is a working link.
-#
-# LD6 (ball U14) is absent: it is the one LED ball of the sixteen in a
-# `LIOB33_SING` tile, which this flow has no IO table for. A gap in the
-# flow, not a dead ball. So `led[5]` is LD5 and `led[6]` is LD7.
+# These four may be any ball of JA. An earlier version of this comment
+# claimed four JA balls could not be used bidirectionally; that was wrong
+# and is retracted in `docs/fpga-xray.md` — the measurement moved when two
+# unrelated LED pins moved, so it was a property of the route and never of
+# the ball. All eight JA signals are bidirectional by design.
 set_io -io_standard LVCMOS33 clk W5
 
 set_io -io_standard LVCMOS33 sclk J1

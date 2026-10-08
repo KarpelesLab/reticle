@@ -15,13 +15,11 @@
 # is a fifth of a 500 ns etu.
 #
 #   JXADC1  J3   io         the card's single line. Read only in this
-#                           design. Clean when used bidirectionally, which
-#                           N2 and N1 are not — see `docs/fpga-xray.md`.
+#                           design.
 #   JXADC2  L3   clk_card   8.000 MHz, 112 MHz / 14, exactly 50 % duty
 #   JXADC3  M2   rst_card   active low
 #   JXADC4  N2   vcc_en     an AQV210 PhotoMOS relay's LED, through a
-#                           series resistor. Clean as a plain output, which
-#                           is all it is used as here.
+#                           series resistor.
 #   JXADC5  —    GND
 #
 # **No `-pullup` on `io`**: the line already has an external 1k to 3.3 V.
