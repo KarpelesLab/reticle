@@ -433,11 +433,85 @@ supposed to be deterministic, and it is the third variant of one defect:
 | a flip-flop's `D` | a real driver (`drive_constant_data`) |
 | a distributed RAM's inputs | a real driver |
 | a carry cell's operands | a real driver, since the ECP5 round |
-| **an output buffer's input** | **nothing** — `src/fpga/techcells.rs:838`, `data_ports` is built from `Ff`, `LutRam` and `Carry` roles only |
-| **a block RAM's address** | **a two-pip search that can fail** |
+| **an output buffer's input** | **nothing**, when this was written — `data_ports` was built from the `Ff`, `LutRam` and `Carry` roles only. A real driver now |
+| **a block RAM's address** | **a two-pip search that can fail**, when this was written. A real driver now |
 
 The first three were each added after something broke. The remedy for the
 other two is the same one: build the constant rather than hunt for it.
+
+### Both of them are closed now, and they needed different remedies
+
+**CHECKED, 8 October 2026.** The table above predicts one remedy for both.
+It is wrong about that, and finding out why took reading two databases
+rather than arguing about cost.
+
+#### The address: the search was never too narrow, and the bits are not read
+
+`GND_WIRE` reaches exactly two wires in an `INT_L` tile.
+`segbits_int_l.db` contains two lines with `GND_WIRE` in them —
+`INT_L.GFAN0.GND_WIRE` and `INT_L.GFAN1.GND_WIRE` — and every one of the
+48 `IMUX_L<n>` has a pip from one of those two fans and from exactly one
+of them (`GFAN0` serves `IMUX_L0..3`, `8..11`, `16..19` and so on,
+`GFAN1` the rest). So the two-pip path exists for **every** interconnect
+input, and a tile offers **two** ground sources for 48 of them while
+`GFAN0` and `GFAN1` are ordinary routing wires the router may spend on a
+signal. Widening the search would have been fixing the wrong thing: what
+fails is contention, not reach.
+
+And the bits in question are bits the block **does not read**. A
+`RAMB18E1` addresses its words through the top of `ADDRARDADDR` and
+ignores the rest, by the width mode: 18 bits uses `[13:4]`, 9 bits
+`[13:3]`, 4 bits `[13:2]`, 2 bits `[13:1]`, 1 bit all fourteen. The
+mapper pads the bits below with zeros because
+`src/fpga/devices/xc7.dev`'s `addr N` clause says where the word address
+starts, and those zeros then arrived at the tie pass as netlist constants
+with `TiePolicy::Zero` — which hunts a ground path and **fails a build**
+when it cannot find one.
+
+A bit nothing reads has no business failing anything. `unused_address_bit`
+in `src/fpga/xray/bram.rs` now recognises them from the cell's own
+`READ_WIDTH_*`/`WRITE_WIDTH_*` parameters and gives them
+`TiePolicy::Idle`: tied to zero when a fan is free, left at the
+interconnect's default when none is. No extra lookup table, no extra
+route, and the lottery is gone.
+
+`examples/basys3/ssd1306_console.v` builds. It is a 128x64 SSD1306
+emulator with a UART, an SPI receiver and a block RAM — 1775 placed
+instances, 1990 routed signals, 61950 configuration bits, 0 bits
+unexplained — and it builds at **nine different placement settings**
+rather than at one. On `8970c98` the same nine all fail, every one of them
+on `p0_addr2`.
+
+#### The pad: nothing absorbs it here, so the constant is built
+
+The other half of the table needs the opposite answer, and an ECP5
+settled it by having a mechanism this family has not got.
+
+A `TRELLIS_IO`'s data wire can be tied in the `CIB` tile beside the pad
+(`CIB.J<x>MUX = 0` or `= 1`), `TrellisFabric::configure_io` writes it, and
+that tie is in every bitstream this flow has put in a Cynthion — six LEDs
+lit through it, and the USB device's `R4` held low through it. A 7-series
+`OBUF` has no such field: the pin is an ordinary `IMUX` and an unrouted
+`IMUX` is whatever the fabric gives it. So here the constant has to be
+built, and `techcells::drive_constant_data` now builds it, which is also
+what nextpnr's `pack_constants` does and what `ecppack`'s own output for a
+Cynthion contains in all 318 of its output pads (see
+`docs/fpga-trellis.md`).
+
+That the two families need different answers is now written in the device
+files rather than in code: a `bel` line may carry an `absorbs` clause
+naming the pin roles whose constant that family's backend applies itself,
+and `ecp5.dev`'s `TRELLIS_IO` is the one line in the tree that has one.
+
+#### And a fourth variant, in the ECP5 block RAM, that nobody had looked for
+
+Asking the general question found one more, and it is the worst of the
+four because it was wrong on silicon rather than merely fragile:
+`src/fpga/devices/ecp5.dev` says `addr 4 pad 4'b0011`, so a `DP16KD` in
+18-bit mode **does** read the four bits below its word address — and two
+of them were a constant zero that nothing routed, which on that family
+reads as a one. `docs/fpga-trellis.md` has it. The same change fixes it,
+and `tests/fpga_constants.rs` is what would have caught it.
 
 ## A carry chain on the part, and it is right
 
@@ -570,6 +644,11 @@ measuring rather than assuming.
 > buffer's input, so a pad driven by a constant has its input left
 > unrouted. That is a real gap in the code and worth fixing. Whether it
 > is what the board showed is unproven.
+>
+> **Closed on 8 October 2026**: the pass covers an `io` primitive's data
+> pin now, and `assign led = 1'b1` reaches the pad from a lookup table.
+> The gap was real; what the board showed about it is still unproven, and
+> nothing here has been back on a part since.
 
 On the same glance, LD0 — driven by the constant `1'b1` — read **dark**,
 beside LD1 driven by `1'b0`, also dark. Both constant-driven pads are

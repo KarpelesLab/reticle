@@ -2078,6 +2078,147 @@ One thing is still recorded and deliberately not acted on: `SLICE<l>.M<n>MUX =
 1`, the two-bit tie above, which would make a constant one without a lookup
 table and which no reference bitstream exercises anywhere.
 
+## And then on a block RAM's address, which was wrong on silicon
+
+**CHECKED, 8 October 2026.** The round above gave a flip-flop's data pin a
+driver, and the rounds before it a distributed RAM's inputs and a carry
+cell's operands. Three roles, each added after something broke. Asking
+*why the list is a list* found a fourth pin, and this one was wrong on the
+part rather than merely fragile.
+
+`src/fpga/devices/ecp5.dev` says, for the widest mode of a block RAM:
+
+```
+mode 18 1024 param DATA_WIDTH_A=18 DATA_WIDTH_B=18 addr 4 pad 4'b0011 init low 0-17
+```
+
+A `DP16KD` in 18-bit mode addresses its words through `AD[13:4]`, and the
+four bits below are **not** don't-care: they must read `0011`. Two of those
+four are therefore a constant **zero** — and an unrouted input on this
+family reads as a **one**, which is the whole subject of this document.
+Nothing routed them, and `configure_bram` ties only `RST`, `WE` and `CE`,
+so `AD[3:0]` read `1111` in every 18-bit block RAM this flow has ever
+built.
+
+Nothing off the part could see it. The netlist holds the zeros, so
+simulation reads zeros; every bit of the image decoded; placement and
+routing were untouched by it. It is the carry-operand fault again, in the
+hard block, found this time by asking the general question instead of
+waiting for a board — which is the point of
+`tests/fpga_constants.rs::no_primitive_input_is_left_holding_a_constant`.
+
+`techcells::drive_constant_data` now gives those bits a driver, and
+`a_block_ram_places_routes_and_every_bit_of_it_decodes` went from 1259 set
+bits to **1352**: one constant lookup table and the arcs that carry it to
+eight address pins over two blocks. The blocks' own thirty-three bits did
+not move.
+
+**Not measured on a part.** No design in this tree puts a `DP16KD` in
+18-bit mode on the board, so what is established is that the netlist no
+longer holds the constant and that `AD[3:0]` has a driver on every bit.
+What those bits do to the block's addressing in silicon is the device
+file's statement, taken from nextpnr's own `DATA_WIDTH` handling, and is
+not something this round measured.
+
+A family that states **no** `pad` value is read as not reading those bits,
+and that is a reading rather than a measurement: a `RAMB18E1` at 18 bits
+uses `ADDRARDADDR[13:4]` and an `SB_RAM40_4K` at 8 bits `ADDR[8:0]`, with
+the rest unused, and that is their libraries speaking. So only the ECP5's
+address is driven, which is also what keeps the cost where the defect is.
+
+### What `ecppack` writes for a constant on an output pad, and why this flow still does not
+
+The other pin the same question raised was an **output pad's data**, and
+here the answer went the other way — which is worth writing down, because
+the evidence pointed one way and the part pointed the other.
+
+On the 7 series a constant on an `OBUF`'s input gets nothing at all:
+`assign led = 1'b1` leaves the pad's input unrouted and the pad came out
+**low** on a Basys 3 (`docs/fpga-xray.md`). This family is not in that
+position. A pad's data wire can be **tied** in the `CIB` tile beside it —
+`CIB.J<x>MUX = 0` or `= 1`, [`DATA_MUX`] — which
+`TrellisFabric::configure_io` has always written, and which is in every
+bitstream this flow has put in a Cynthion.
+
+Their own files do not use it. Walking backwards from every output and
+bidirectional pad of the three reference bitstreams:
+
+| | `analyzer.bit` | `selftest.bit` | `facedancer.bit` |
+|---|---|---|---|
+| Output/bidirectional pads with a drive strength | 109 | 102 | 107 |
+| **Of those, data wire tied through `CIB.J<x>MUX`** | **0** | **0** | **0** |
+| **…with nothing on the data wire at all** | **0** | **0** | **0** |
+| Data from a lookup table with `INIT` all **ones** | 32 | 32 | 31 |
+| …all **zeros** | 21 | 21 | 20 |
+| …from ordinary logic | 56 | 49 | 56 |
+| **Tristate wire tied through `CIB.J<x>MUX`** | **0** | **0** | **0** |
+| Tristate from the all-zeros lookup table | 76 | 69 | 78 |
+| …from ordinary logic | 33 | 33 | 29 |
+| Which lookup tables | zero `F0` at X38Y27 (97 wires), one `F0` at X5Y27 (32) | zero `F4` at X63Y23 (90), one `F0` at X3Y10 (32) | zero `F0` at X11Y6 (98), one `F0` at X64Y8 (31) |
+
+The last row is the strong part: those are **the same four slices** the
+flip-flop table above names, found that time by walking back from every
+`M` wire instead. Two readings of different pins landing on the same cells
+is what makes this a measurement. It also finishes a sentence that table
+left open — `selftest.bit` has no constant on a flip-flop's data pin and
+**does** have both constant lookup tables, at X63Y23 and X3Y10; they are
+there for its *pads*.
+
+The reason is mechanical rather than a preference: these files were built
+with nextpnr and `ecppack`, nextpnr's `pack_constants` runs before its
+`tie_cib_signal`, and after `pack_constants` no pad's data pin is a
+constant any more. So the tie is a path their toolchain never reaches.
+
+**And this flow keeps writing it anyway.** The tie is measured on
+**silicon**: `testdata/fpga/cynthion/leds.v` lights six LEDs through six
+`CIB.J<x>MUX = 0`, and `usb_ulpi_device.v`'s `R4` holds a constant zero
+through the same field in the bitstream a USB host enumerates. The
+vendor's answer is measured in somebody else's file. Replacing something
+that works on a part with something that works on a part is churn, and the
+part is the better instrument — so `src/fpga/devices/ecp5.dev` says
+
+```
+bel TRELLIS_IO io absorbs dout port pad=B din=O dout=I oen=T …
+```
+
+and the constant pass leaves that pin alone on this family and builds it
+on every other. `absorbs` is a new clause and it exists for exactly this:
+a pin one family has a mechanism for and another has not. If a reason ever
+appears to prefer the vendor's shape here — a `CIB` tie that misbehaves,
+or a board to re-check `leds.v` on — deleting two words from a device file
+is the whole change.
+
+### What the pass is now, and what it is allowed to skip
+
+It is no longer a list of three roles. Every input of every primitive the
+device declares gets a driver, and the exceptions are a short list each of
+which names the thing that absorbs the constant:
+
+| Pin | What absorbs it |
+|---|---|
+| any input of a `lut` | the truth table — `map_lut` widens a narrow one, and `ecppack` ties every unused input with `<X><n>MUX = 1` and folds the value into `INIT`, in all 4262 carry halves of these files |
+| a `ff`'s `clk`, `en`, `rst` | a mux bit the backend writes: `SLICE<l>.CEMUX = 1` and `LSR<c>.LSRMUX` here, a cleared `CEUSEDMUX`/`SRUSEDMUX` on the 7 series |
+| a `carry`'s `ci` | dedicated metal from the cell below |
+| a `carry`'s `cyinit` | the pin a family designs as its way in |
+| a wide `carry`'s `p` and `di` | the lane's own truth table. These two roles exist only on the 7-series `CARRY4` shape, and `src/fpga/xray/carry.rs` already puts a constant propagate into a lookup table of that lane and a constant generate into its lower half, because `DI` is reached from the slice's own `O5` and not from general routing. The narrow shapes' operands — `a`, `b`, `i0`, `i1` — are **not** here: those are the pins that cost a board |
+| an `io`'s `oe`/`oen` | the direction recipe, plus the `CIB.JB0MUX` tie |
+| an `io`'s `pad` | it reaches the outside world, not the fabric |
+| anything named `*clk` | a clock is not a data pin, and a lookup table on one would be a clock off general routing, which both backends refuse by name |
+| every pin of a `gb` | its `i` is a clock and its `en` is a constant this flow puts there on purpose: `DCCA`'s `CE` is tied high because nothing gates a clock here |
+| a `bram`'s pins other than its address | the backends' own tie passes, which is what those were written for. What that leaves open is named in `tests/fpga_constants.rs`, and the sharpest part of it is a write-data bit a *design* ties to zero inside the mode's width: `mem[a] <= {4'b0, x}` on an eight-bit memory would read ones back here |
+| whatever a device file's `absorbs` clause names | the family's own mechanism; `TRELLIS_IO`'s `dout` is the one |
+
+A `dsp` and a `pll` are not `bel` lines but shapes of their own, so they
+never reach the pass; the pins they hold at a constant are the ones their
+`tie` clause names, which is a statement that the silicon drives them.
+
+One more thing had to change for the block RAM: the pass now works **per
+bit**. A `DP16KD`'s address is one fourteen-bit pin of which four bits are
+the constant, and the old code only looked at pins that were one bit wide
+— which is why listing the role would not have been enough on its own, and
+also why a `CARRY4`'s four-bit `S` and `DI` had never reached the pass
+before.
+
 ## It enumerates, and the fault was one bit of a register this backend brings up wrong
 
 On 2026-09-27 a host on the other end of a USB cable read an eighteen-byte
