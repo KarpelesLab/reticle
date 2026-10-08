@@ -39,7 +39,13 @@
 //!   7-series carry in, fed only from the carry out of the slice below —
 //!   ties the two cells' sites together, and the cells so tied move as
 //!   one rigid group onto exact sites. It is read off the graph, not
-//!   named: see `build_clusters`.
+//!   named: see `build_clusters`. Nothing in it is about the 7 series,
+//!   and that is measured rather than hoped for — the same code holds an
+//!   ECP5 `CCU2C` chain to slices A, B, C, D of a tile and then the tile
+//!   one column east, which is a different shape of chain on a different
+//!   family. A group it cannot fit anywhere is
+//!   [`PlaceError::NoDedicatedRun`], which is not the same thing as
+//!   running out of sites.
 //!
 //! # What a legal site is
 //!
@@ -224,6 +230,28 @@ pub enum PlaceError {
         /// True when the signal arrives on `pin`, false when it leaves.
         inbound: bool,
     },
+    /// A group of cells that dedicated wiring holds rigid found nowhere
+    /// on the part that fits it.
+    ///
+    /// This is the rigid group's own error, and it is a different thing
+    /// from running out of sites: the part may have thousands free and
+    /// still have no run of *this shape* left, because such a group's
+    /// cells cannot be spread. The wiring between them has no mux on it,
+    /// so each member is on the one site its neighbour reaches or there
+    /// is no path at all. A carry chain is the case that occurs: on an
+    /// ECP5 a run is four slices of a logic tile and then the tile one
+    /// column east, so the longest possible run is one row of the die.
+    /// `build_clusters` is where the relationship is read off the fabric.
+    NoDedicatedRun {
+        /// The group's anchor cell, which names it.
+        cell: String,
+        /// The kind of site the anchor needs.
+        kind: String,
+        /// How many cells are in the group.
+        members: usize,
+        /// How many sites of the anchor's kind the part has.
+        available: usize,
+    },
     /// The netlist could not be read bit by bit, from the emitter's
     /// bit-level view.
     Netlist(String),
@@ -232,6 +260,19 @@ pub enum PlaceError {
 impl fmt::Display for PlaceError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            PlaceError::NoDedicatedRun {
+                cell,
+                kind,
+                members,
+                available,
+            } => write!(
+                f,
+                "`{cell}` is one of {members} cell(s) that the fabric's own dedicated wiring \
+                 holds in one rigid group, and no run of that shape is free; the part has \
+                 {available} `{kind}` site(s), but such a group cannot be spread — the wires \
+                 between its members have no mux on them, so each cell must sit on the one site \
+                 the cell before it reaches"
+            ),
             PlaceError::NoSuchModule => f.write_str("the module is not part of the design"),
             PlaceError::NotAPrimitive { cell, kind } => write!(
                 f,
@@ -981,6 +1022,13 @@ impl PlacementReport {
                 out,
                 "  constrained: {} at a package pin, {} in a region, {} macro(s) over {} cell(s)",
                 self.fixed, self.confined, self.macros.0, self.macros.1
+            );
+        }
+        if self.dedicated > 0 {
+            let _ = writeln!(
+                out,
+                "  dedicated wiring: {} of those macro(s) nobody asked for",
+                self.dedicated
             );
         }
         let _ = writeln!(
@@ -2102,6 +2150,35 @@ fn dedicated_drivers(
 /// free. An instance already fixed to a pin or already in an `rloc` macro
 /// is never put in such a group: two rigid shapes cannot both be obeyed,
 /// and the constraint the user wrote wins.
+///
+/// # The two families it has been measured on
+///
+/// The claim that nothing here names a family is worth only what has been
+/// measured, and two chains of two different shapes have been:
+///
+/// - the 7-series `CARRY4`, which this was written for: the carry in is
+///   reached from the slice directly *below*, and the propagate input is
+///   the lookup table at the same position of the same slice, so a group
+///   is a column of carries with their tables beside them.
+/// - the ECP5 `CCU2C`, which this was **not** written for and holds
+///   anyway. `FCI_SLICE` is reached only over
+///   `FCI <- HFIE0000 <- FCO <- FCO_SLICE`, four `.fixed_conn` hops and
+///   well inside [`DEDICATED_WALK`], and every carry site has exactly one
+///   candidate driver slice — so the nine-cell chain of
+///   `testdata/fpga/ecp5/carry_chain_16.v` comes out as one group of
+///   nine and lands on slices A, B, C, D of a tile and then the tile one
+///   column *east, in the same row*. A chain that runs along a row and a
+///   chain that runs up a column are the same statement to this code,
+///   because it asks the graph instead of saying which way is forward.
+///   `tests/fpga_trellis.rs`'s
+///   `a_carry_chain_places_routes_and_every_bit_of_it_decodes` is the
+///   measurement, and it checks each consecutive pair over the fabric's
+///   own bitless pips rather than over this function's opinion.
+///
+/// A family whose carry is on the general interconnect still gets no
+/// group, which is not a nicety but the thing that keeps it safe: the
+/// iCE40 and the synthetic architecture place exactly as they did before,
+/// with a real net for the router to find a path for.
 fn build_clusters(
     netlist: &Netlist,
     graph: &RoutingGraph,
@@ -3078,6 +3155,19 @@ fn legalise_macro(
             }
             return Ok(());
         }
+    }
+    // A rigid group that fits nowhere is not a part that ran out of
+    // sites, and saying so would send the reader to the wrong question:
+    // the chain of `tests/fpga_trellis.rs` is nine cells on a part with
+    // 12 144 of them.
+    if m.exact.is_some() {
+        let kind = netlist.instances[m.anchor].kind.clone();
+        return Err(PlaceError::NoDedicatedRun {
+            cell: netlist.instances[m.anchor].name.clone(),
+            members: m.members.len(),
+            available: sites_by_kind.get(&kind).map_or(0, Vec::len),
+            kind,
+        });
     }
     Err(no_room(netlist, graph, sites_by_kind, m.anchor, info))
 }
@@ -4486,10 +4576,13 @@ mod tests {
     /// and annealing.
     ///
     /// Would catch: the walk stopping too early or too late, the relation
-    /// inverted (the chain stacked downwards), and the annealer moving one
-    /// member of the group on its own. Would not catch: a real fabric whose
-    /// dedicated path is longer than `DEDICATED_WALK` wires — the 7-series
-    /// one is four, which `tests/fpga_xray_carry.rs` exercises.
+    /// inverted (the chain stacked downwards), the annealer moving one
+    /// member of the group on its own, and a group that fits nowhere being
+    /// reported as a part that ran out of sites. Would not catch: a real
+    /// fabric whose dedicated path is longer than `DEDICATED_WALK` wires —
+    /// the 7-series one is four, which `tests/fpga_xray_carry.rs`
+    /// exercises, and the ECP5's is five, which
+    /// `tests/fpga_trellis.rs` does.
     #[test]
     fn dedicated_wiring_holds_a_chain_together() {
         let (arch, graph) = chained(4, 6);
@@ -4522,18 +4615,27 @@ mod tests {
                 assert_eq!(here.1 + 1, below.1, "cy{k} is not one row up");
             }
         }
-        // And a chain too tall for the fabric is refused, not bent.
+        // And a chain too tall for the fabric is refused, not bent — with
+        // the rigid group's own error and not "the part is full", because
+        // this fabric has 24 carry sites and the chain wants 7 of them.
         let netlist = carry_chain(7);
-        assert!(
-            place(
-                &netlist,
-                &arch,
-                &graph,
-                &Constraints::new(),
-                &PlaceOptions::default()
-            )
-            .is_err()
-        );
+        let error = place(
+            &netlist,
+            &arch,
+            &graph,
+            &Constraints::new(),
+            &PlaceOptions::default(),
+        )
+        .expect_err("a seven-tall chain on a six-tall die");
+        match &error {
+            PlaceError::NoDedicatedRun {
+                members, available, ..
+            } => {
+                assert_eq!(*members, 14, "seven carries and their seven tables");
+                assert_eq!(*available, 24, "and the part is nowhere near full");
+            }
+            other => panic!("the rigid group reported `{other}` instead"),
+        }
         // A design with no dedicated wiring makes no group at all.
         let (arch, graph) = grid(4, 4);
         let (_, report) = place(
