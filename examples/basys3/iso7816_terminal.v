@@ -890,9 +890,20 @@ module iso7816_terminal #(
         end
     end
 
+    // `m` mutes and `u` unmutes, and activating clears it.
+    //
+    // **Not a toggle.** It was one, and because muting leaves the counters
+    // moving while nothing prints, a session that ended muted looked exactly
+    // like a receiver that had stopped working -- which cost three separate
+    // measurements before the cause was noticed each time. State a person
+    // cannot see must not be reachable by accident, so the commands set and
+    // clear it outright, and `A` clears it because starting a card session is
+    // when somebody wants to watch.
     always @(posedge sys) begin
         if (!rst_n) mute <= 1'b0;
-        else if (cmd_now && cmd_data == 8'h6D) mute <= ~mute;   // 'm'
+        else if (cmd_now && cmd_data == 8'h6D) mute <= 1'b1;   // 'm'
+        else if (cmd_now && cmd_data == 8'h75) mute <= 1'b0;   // 'u'
+        else if (cmd_now && cmd_data == 8'h41) mute <= 1'b0;   // 'A'
     end
 
     always @(posedge sys) begin
