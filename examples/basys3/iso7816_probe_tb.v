@@ -181,8 +181,11 @@ module iso7816_probe_tb;
     endtask
 
     integer i;
-    // **The real device's answer-to-reset**, as its owner reported it, not
-    // an invented one. A well-formed T=0 ATR: TS=3B direct convention,
+    // **The real device's answer-to-reset, as measured off the part** on
+    // 8 October 2026 — not as remembered. The owner quoted byte 6 as `30`
+    // and the device sends `35`, so the ASCII run is "2.5.1" and not
+    // "2.0.1": a later firmware than the ATR they had to hand. Everything
+    // else matched, including TA1 and all eleven historical bytes. A well-formed T=0 ATR: TS=3B direct convention,
     // T0=1B meaning TA1 follows and eleven historical bytes, then "2.0.1"
     // in ASCII among the historical bytes, and no TCK because the protocol
     // is T=0.
@@ -252,7 +255,7 @@ module iso7816_probe_tb;
 
         // ---- The card answers ----
         atr[0]  = 8'h3B; atr[1]  = 8'h1B; atr[2]  = 8'h87; atr[3]  = 8'h05;
-        atr[4]  = 8'h32; atr[5]  = 8'h2E; atr[6]  = 8'h30; atr[7]  = 8'h2E;
+        atr[4]  = 8'h32; atr[5]  = 8'h2E; atr[6]  = 8'h35; atr[7]  = 8'h2E;
         atr[8]  = 8'h31; atr[9]  = 8'h04; atr[10] = 8'h33; atr[11] = 8'h00;
         atr[12] = 8'h00; atr[13] = 8'h04;
         for (i = 0; i < ATR_LEN; i = i + 1) card_byte(atr[i]);

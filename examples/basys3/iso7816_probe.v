@@ -103,8 +103,36 @@
 // layer with both conventions, transmission and PPS is
 // `ip/bus/iso7816_uart`.
 //
-// **Nothing here has run against a card.** When it has, this header says
-// what it saw.
+// ===================================================================
+// WHAT IT SAW, ON A REAL CARD
+// ===================================================================
+//
+// **CHECKED, 8 October 2026.** Against the board owner's device, at an
+// 8.000 MHz card clock and the default rate:
+//
+//     +VCC
+//     +CLK
+//     +RST
+//     3B 1B 87 05 32 2E 35 2E 31 04 33 00 00 04
+//
+// **Fourteen characters, zero parity errors, zero framing errors**, and
+// the status line confirming `ETU_DIV = 5208`, `CARD_DIV = 14`,
+// `RST_HOLD = 400`. A well-formed T=0 answer-to-reset: TS=3B direct
+// convention, T0=1B so TA1 follows with eleven historical bytes, and
+// "2.5.1" in ASCII among them. `-OFF` then confirmed the supply off.
+//
+// One run established all of it together: the AQV210 relay switching the
+// device's 3.3 V supply, the PLL's 8 MHz at +0.0 ppm, the reset hold
+// counted in card clocks, the etu of 5208 system clocks giving 21505 baud,
+// the direct convention, 8E2 framing over fourteen consecutive
+// characters, the open-drain line against a 1k pull-up, and both the
+// activation and deactivation sequences in order.
+//
+// The run before it, with the supply not yet wired, read **zero bytes with
+// zero parity and zero framing errors** — worth recording because that
+// combination is diagnostic. A wrong etu, convention or clock would all
+// have produced characters *with* errors; no characters at all means the
+// line never went low, so the fault was upstream of framing.
 
 module iso7816_probe #(
     // Card clock = 112 MHz / CARD_DIV. 14 is 8 MHz. Even, for 50 % duty.
@@ -120,8 +148,16 @@ module iso7816_probe #(
     // system clocks, because a character is 12 etu and the etu scales with
     // the card clock: a timeout counted in clocks ends the line between
     // bytes at a slow card frequency and behaves at a fast one — a fault
-    // that appears only when the clock is swept, which is the plan.
-    parameter GAP_ETU     = 24,
+    // that appears only when the clock is swept.
+    //
+    // 256 and not 24, measured against a real card: at 24 the device's own
+    // pause between TS and T0 exceeded the timeout, so its answer-to-reset
+    // arrived as `3B` on one line and the remaining thirteen bytes on the
+    // next. ISO 7816-3 allows up to 9600 etu between characters of an ATR,
+    // so a short gap splits a perfectly good answer. 256 etu is 12 ms at
+    // the default rate — long enough to hold an ATR together, short enough
+    // that a finished exchange ends promptly.
+    parameter GAP_ETU     = 256,
     // Host serial port: 112 MHz / 115200 = 972.
     parameter HOST_DIV    = 972,
     // The watchdog's period, as a power of two system clocks. 31 is 19 s

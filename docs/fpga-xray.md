@@ -265,6 +265,60 @@ differ because the two designs drive different halves of the die, and the
 differences are enumerated below. That comparison is
 `tests/fpga_xray.rs::the_clock_path_is_the_one_vivado_built`.
 
+## An ISO 7816 card, brought up and answering
+
+**CHECKED, 8 October 2026.** `examples/basys3/iso7816_probe.v` activated the
+board owner's own device and read its answer-to-reset:
+
+```
++VCC
++CLK
++RST
+3B 1B 87 05 32 2E 35 2E 31 04 33 00 00 04
+```
+
+Fourteen characters, **zero parity errors and zero framing errors**, with
+the status line confirming `ETU_DIV = 5208`, `CARD_DIV = 14` and
+`RST_HOLD = 400`, and `-OFF` confirming the supply switched back off. A
+well-formed T=0 ATR: `TS = 3B` for the direct convention, `T0 = 1B` so TA1
+follows with eleven historical bytes, `TA1 = 87`, and "2.5.1" in ASCII among
+the historical bytes.
+
+One run established all of this at once, which is worth listing because
+each item had been a separate open question an hour earlier:
+
+| | |
+|---|---|
+| an AQV210 PhotoMOS relay switching the device's 3.3 V supply from a pad | works |
+| a `PLLE2_BASE` output at 112 MHz, divided by 14 to **8.000 MHz** | works |
+| the reset hold counted in **card clock cycles**, 400 of them | works |
+| an etu of 372 card cycles = 5208 system cycles = 21505 baud | works |
+| the direct convention, 8E2, over fourteen consecutive characters | works |
+| an open-drain line read against an external 1 k pull-up | works |
+| the activation and deactivation orders, power/clock/reset and reverse | works |
+
+### The negative run, and why it was worth recording
+
+The attempt before it — with the supply not yet wired — read **zero bytes,
+zero parity errors, zero framing errors**. That combination is diagnostic
+rather than merely disappointing. A wrong etu, a wrong convention or a wrong
+clock frequency would each have produced characters *with* errors, because
+the receiver would have found start bits and decoded nonsense. No characters
+at all means the line never went low, which puts the fault upstream of
+framing entirely. The probe prints raw hex and flags parity instead of
+hiding errors precisely so that the two cases cannot be confused.
+
+### One thing the card taught us about the probe
+
+At a 24-etu idle timeout the ATR arrived as two lines: `3B`, then the other
+thirteen bytes. The device pauses between TS and T0, as ISO 7816-3 permits —
+up to 9600 etu between characters of an answer-to-reset. So the timeout was
+too tight and is now 256 etu, which is 12 ms at the default rate: long
+enough to hold an ATR together, short enough to end a finished exchange
+promptly. The timeout is in etu and not in clocks, so it tracks the card
+frequency; a timeout in clocks would behave at 8 MHz and split every answer
+at 1 MHz.
+
 ## The serial port works, and with it four subsystems at once
 
 **CHECKED, 8 October 2026.** The board's USB-UART bridge carries traffic
