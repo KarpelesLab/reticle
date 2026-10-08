@@ -181,6 +181,7 @@ module iso7816_terminal_tb;
     end
 
     reg [7:0] ch;
+    integer j2;
     task host_recv;
         begin
             while (rx_rd >= rx_wr) @(posedge clk);
@@ -234,10 +235,46 @@ module iso7816_terminal_tb;
         hexch = (n < 4'd10) ? (8'd48 + {4'd0, n}) : (8'd55 + {4'd0, n});
     endfunction
 
+    // Like `expect_hex_byte`, but for a byte the monitor saw: `>` then two
+    // hex characters. A `!` instead means the parity was wrong, and that is
+    // worth reporting as itself rather than as a mismatch.
+    task expect_monitor_byte;
+        input [7:0] want;
+        begin
+            host_recv;
+            while (ch === 8'd13 || ch === 8'd10) host_recv;
+            if (ch === 8'h21) begin
+                $display("FAIL: the monitor flagged bad parity on what this terminal sent");
+                $finish;
+            end
+            if (ch !== 8'h3E) begin
+                $display("FAIL: wanted `>` from the monitor, got '%c' (%02x)", ch, ch);
+                $finish;
+            end
+            host_recv;
+            if (ch !== hexch(want[7:4])) begin
+                $display("FAIL: monitor high nibble '%c', wanted '%c'",
+                         ch, hexch(want[7:4]));
+                $finish;
+            end
+            host_recv;
+            if (ch !== hexch(want[3:0])) begin
+                $display("FAIL: monitor low nibble '%c', wanted '%c'",
+                         ch, hexch(want[3:0]));
+                $finish;
+            end
+        end
+    endtask
+
+    // Skips a line ending in front of the byte, as `expect_banner` does and
+    // for the same reason: the gap timer closes a line whenever the contact
+    // falls quiet, so any byte may be preceded by one. Counting them by hand
+    // at each call site has broken this testbench three times.
     task expect_hex_byte;
         input [7:0] v;
         begin
             host_recv;
+            while (ch === 8'd13 || ch === 8'd10) host_recv;
             if (ch !== hexch(v[7:4])) begin
                 $display("FAIL: got '%c' for the high nibble of %02x", ch, v);
                 $finish;
@@ -315,7 +352,15 @@ module iso7816_terminal_tb;
         // Echo it, still at the old rate — which is what a real card does.
         for (i = 0; i < 4; i = i + 1) card_send(got[i]);
 
-        // Those four come back to the host, which compares them itself --
+        // **Our own four go out first, and the monitor reports them.**
+        // A second receiver on the contact decodes this terminal's own
+        // transmission, each byte prefixed `>`, which is the evidence that
+        // what went on the wire was well formed -- by the same receiver
+        // that read a real card's ATR.
+        expect_monitor_byte(8'hFF); expect_monitor_byte(8'h10);
+        expect_monitor_byte(8'h87); expect_monitor_byte(8'h68);
+
+        // Then the card's echo comes back, which the host compares itself --
         // the terminal no longer does, and that is the point: a host
         // comparing four bytes is three lines, while the same comparison in
         // hardware was a state machine that could desynchronise from the
@@ -346,6 +391,10 @@ module iso7816_terminal_tb;
             $display("FAIL: the card received %02x at the fast rate, wanted A5", got[0]);
             $finish;
         end
+        // The monitor reports it too, which is the point of having it: the
+        // byte is confirmed well formed on the wire at the fast rate by the
+        // same receiver that read the ATR at the slow one.
+        expect_monitor_byte(8'hA5);
 
         host_send(8'h44);                      // 'D'
         while (vcc_en === 1'b1) begin

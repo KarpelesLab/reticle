@@ -29,6 +29,15 @@
 //              like anything else; **the host compares it**, and sends `F`
 //              if it agrees.
 //   F          switch to the fast rate. `S` switches back.
+// A byte printed with `>` in front came from the monitor, a second receiver
+// on this contact that never drives it -- so it is what this terminal itself
+// put on the wire. A byte with no prefix came from the card. `!` means the
+// parity was wrong, whichever receiver saw it.
+//
+//   L          drive the line low for 18 ms, read it, release, read again:
+//              `+PAD` if it went low and came back high, `-PAD` otherwise.
+//              This is the only check that the pad drives at all, as
+//              opposed to this design believing it transmitted.
 //   :<hex>     send those bytes to the card. `:00A4040C` sends four. Hex
 //              until anything that is not a hex digit ends it, so a newline
 //              is a fine terminator.
@@ -151,6 +160,112 @@ module iso7816_terminal #(
     wire rst_n = por[15];
 
     // =================================================================
+    // `L`: can this pad actually pull the line low?
+    // =================================================================
+    //
+    // **This exists because `sent_q` is not evidence.** The terminal
+    // counted four PPS bytes transmitted with no errors and the card
+    // answered nothing -- but that counter reflects this design's own state
+    // machine, not the wire. Receiving is proven on silicon by the ATR;
+    // driving never has been, and it is the one link in the chain with no
+    // measurement behind it.
+    //
+    // Against the line's 1 k pull-up the test is unambiguous: drive low and
+    // the line must read low, release and it must read high. A pad that
+    // cannot do that explains the silence completely, and one that can
+    // moves the question to the card.
+    localparam [23:0] PAD_HOLD = 24'd2_000_000;   // ~18 ms at 112 MHz
+
+    reg        pad_drive = 1'b0;
+    reg [1:0]  pad_step  = 2'd0;
+    reg [23:0] pad_t     = 24'd0;
+    reg        pad_lo    = 1'b1;   // the level read while driving low
+    reg        pad_hi    = 1'b0;   // and after releasing
+
+    wire blk_oe, blk_o;
+    assign io_oe = blk_oe | pad_drive;
+    assign io_o  = pad_drive ? 1'b0 : blk_o;
+
+    always @(posedge sys) begin
+        if (!rst_n) begin
+            pad_drive <= 1'b0;
+            pad_step  <= 2'd0;
+            pad_t     <= 24'd0;
+        end else case (pad_step)
+            2'd0: if (cmd_valid && cmd_data == 8'h4C) begin   // 'L'
+                pad_drive <= 1'b1;
+                pad_t     <= PAD_HOLD;
+                pad_step  <= 2'd1;
+            end
+            2'd1: begin
+                pad_t <= pad_t - 1'b1;
+                if (pad_t == 24'd1) begin
+                    pad_lo    <= io_i;      // sampled while still driving
+                    pad_drive <= 1'b0;
+                    pad_t     <= PAD_HOLD;
+                    pad_step  <= 2'd2;
+                end
+            end
+            2'd2: begin
+                pad_t <= pad_t - 1'b1;
+                if (pad_t == 24'd1) begin
+                    pad_hi   <= io_i;       // and after letting it rise
+                    pad_step <= 2'd3;
+                end
+            end
+            2'd3: pad_step <= 2'd0;         // the banner is raised below
+        endcase
+    end
+
+    // `+PAD` only when it went low under drive and high when released.
+    wire pad_done = (pad_step == 2'd3);
+    wire pad_good = (pad_lo == 1'b0) && (pad_hi == 1'b1);
+
+    // =================================================================
+    // A monitor on the same contact
+    // =================================================================
+    //
+    // **Reusing the receiver a real card already validated, instead of
+    // instrumentation written this afternoon.** A second `iso7816_uart`
+    // that never transmits -- `tx_valid` tied low, its `io_oe` and `io_o`
+    // left unconnected, so it cannot touch the wire. It decodes everything
+    // that appears there, including this terminal's own transmission, which
+    // the main instance suppresses from its own receiver.
+    //
+    // It answers the question a trace buffer was being built for: are the
+    // four PPS characters well formed on the wire? And it answers with a
+    // block that has conformance evidence -- it read a real card's 14-byte
+    // ATR with no parity or framing error -- rather than with new logic
+    // that had none. The trace buffer it replaces could not be checked in
+    // simulation, because its sample interval was written out instead of
+    // derived; it then failed on the board for a third reason, an edit that
+    // silently never applied, leaving the thing that requested the dump
+    // declared, read, and never assigned. "The instrument is broken" and
+    // "the line never moved" look identical from the far end of a serial
+    // port, and telling them apart cost two board runs.
+    //
+    // Its bytes print with `>` in front and the card's with nothing, so a
+    // single line says who drove the contact.
+    wire [7:0] mon_rx;
+    wire       mon_rx_valid, mon_parity_err;
+
+    iso7816_uart #(.ETU_DIV(SLOW_DIV)) monitor (
+        .clk(sys), .rst_n(rst_n),
+        .active(card_active),
+        .etu_div(etu_div),
+        .guard_etu(8'd0),
+        .convention(1'b0),
+        .wt_etu(24'd0),                   // it watches; it never waits
+        .tx_data(8'd0), .tx_valid(1'b0), .tx_ready(),
+        .tx_abort(),
+        .rx_data(mon_rx), .rx_ready(1'b1), .rx_valid(mon_rx_valid),
+        .rx_parity_error(mon_parity_err), .rx_overrun(),
+        .rx_timeout(),
+        .io_i(io_i), .io_oe(), .io_o(),
+        .tx_char_count(), .rx_char_count(), .parity_error_count(),
+        .repeat_count(), .timeout_count());
+
+    // =================================================================
     // The card clock
     // =================================================================
 
@@ -238,7 +353,7 @@ module iso7816_terminal #(
         .rx_data(card_rx), .rx_ready(1'b1), .rx_valid(card_rx_valid),
         .rx_parity_error(card_parity_err), .rx_overrun(),
         .rx_timeout(card_timeout),
-        .io_i(io_i), .io_oe(io_oe), .io_o(io_o),
+        .io_i(io_i), .io_oe(blk_oe), .io_o(blk_o),
         .tx_char_count(), .rx_char_count(), .parity_error_count(),
         .repeat_count(), .timeout_count());
 
@@ -454,6 +569,7 @@ module iso7816_terminal #(
                         etu_div <= SLOW_DIV16;
                         banner  <= 3'd6;
                     end
+                    if (pad_done) banner <= 3'd7;
                     if ((cmd_valid && cmd_data == 8'h44) || wdog_bite) begin
                         rst_q       <= 1'b0;
                         clk_on      <= 1'b0;
@@ -510,10 +626,12 @@ module iso7816_terminal #(
     reg [3:0]   pos   = 4'd0;
     reg [7:0]   pend_byte = 8'd0;
     reg         pend_bad  = 1'b0;
+    reg         pend_mon  = 1'b0;
     reg         have_byte = 1'b0;
     reg [127:0] status_sh = 128'd0;
     reg [5:0]   status_left = 6'd0;
     reg         want_status = 1'b0;
+    reg         want_known  = 1'b0;
     reg [31:0]  gap = 32'd0;
     reg         line_open = 1'b0;
 
@@ -525,9 +643,9 @@ module iso7816_terminal #(
                          : GAP_LOAD_SLOW;
 
     reg p_vcc = 1'b0, p_clk = 1'b0, p_rst = 1'b0, p_off = 1'b0,
-        p_fast = 1'b0, p_slow = 1'b0;
+        p_fast = 1'b0, p_slow = 1'b0, p_pad = 1'b0;
     wire [2:0] want_banner = p_vcc ? 3'd1 : p_clk ? 3'd2 : p_rst ? 3'd3
-                           : p_fast ? 3'd5 : p_slow ? 3'd6 : p_off ? 3'd4
+                           : p_fast ? 3'd5 : p_slow ? 3'd6 : p_pad ? 3'd7 : p_off ? 3'd4
                            : 3'd0;
 
     wire banner_done = (phase == P_BANNER) && (pos == 4'd5) && host_valid && host_ready;
@@ -537,7 +655,7 @@ module iso7816_terminal #(
     always @(posedge sys) begin
         if (!rst_n) begin
             p_vcc <= 1'b0; p_clk <= 1'b0; p_rst <= 1'b0; p_off <= 1'b0;
-            p_fast <= 1'b0; p_slow <= 1'b0;
+            p_fast <= 1'b0; p_slow <= 1'b0; p_pad <= 1'b0;
         end else begin
             case (banner)
                 3'd1: p_vcc <= 1'b1;
@@ -546,6 +664,7 @@ module iso7816_terminal #(
                 3'd4: p_off <= 1'b1;
                 3'd5: p_fast <= 1'b1;
                 3'd6: p_slow <= 1'b1;
+                3'd7: p_pad  <= 1'b1;
                 default: ;
             endcase
             if (banner_done) begin
@@ -555,6 +674,7 @@ module iso7816_terminal #(
                     3'd3: p_rst <= 1'b0;
                     3'd5: p_fast <= 1'b0;
                     3'd6: p_slow <= 1'b0;
+                    3'd7: p_pad  <= 1'b0;
                     default: p_off <= 1'b0;
                 endcase
             end
@@ -570,6 +690,17 @@ module iso7816_terminal #(
             if (card_rx_valid) begin
                 pend_byte <= card_rx;
                 pend_bad  <= card_parity_err;
+                pend_mon  <= 1'b0;
+                have_byte <= 1'b1;
+                gap       <= gap_load;
+                line_open <= 1'b1;
+            end else if (mon_rx_valid) begin
+                // The card's bytes arrive on both receivers and the main one
+                // wins the cycle, so what reaches here is what this terminal
+                // put on the wire itself.
+                pend_byte <= mon_rx;
+                pend_bad  <= mon_parity_err;
+                pend_mon  <= 1'b1;
                 have_byte <= 1'b1;
                 gap       <= gap_load;
                 line_open <= 1'b1;
@@ -586,6 +717,15 @@ module iso7816_terminal #(
         else if (cmd_valid && cmd_data == 8'h73) want_status <= 1'b1;
         else if (phase == P_STATUS && status_left == 0 && pos == 4'd1
                  && host_valid && host_ready) want_status <= 1'b0;
+    end
+
+    // `k`: the same emitter, a known constant, so that a reading can be
+    // separated from the thing it reads.
+    always @(posedge sys) begin
+        if (!rst_n) want_known <= 1'b0;
+        else if (cmd_valid && cmd_data == 8'h6B) want_known <= 1'b1;
+        else if (phase == P_STATUS && status_left == 0 && pos == 4'd1
+                 && host_valid && host_ready) want_known <= 1'b0;
     end
 
     function [7:0] hex;
@@ -616,6 +756,10 @@ module iso7816_terminal #(
             {3'd5, 2'd0}: banner_ch = "+";
             {3'd5, 2'd1}: banner_ch = "F";
             {3'd5, 2'd2}: banner_ch = "S";
+            {3'd7, 2'd0}: banner_ch = pad_good ? "+" : "-";
+            {3'd7, 2'd1}: banner_ch = "P";
+            {3'd7, 2'd2}: banner_ch = "A";
+            {3'd7, 2'd3}: banner_ch = "D";
             {3'd6, 2'd0}: banner_ch = "+";
             {3'd6, 2'd1}: banner_ch = "S";
             {3'd6, 2'd2}: banner_ch = "L";
@@ -627,7 +771,12 @@ module iso7816_terminal #(
         bytes_q, perr_q, sent_q, tmo_q,
         etu_div, CARD_DIV16,
         {7'd0, etu_div == FAST_DIV16}, {5'd0, state},
-        8'hA5, 8'd0
+        8'hA5,
+        // The two samples `L` took, because `-PAD` alone does not say which
+        // half failed and they mean different things: a line that would not
+        // go low is an output that never reached the pin, while one that
+        // stayed low is an enable that never released.
+        {5'd0, pad_lo, pad_hi, pad_done}
     };
 
     always @(posedge sys) begin
@@ -639,14 +788,23 @@ module iso7816_terminal #(
             case (phase)
                 P_IDLE:
                     if (want_banner != 3'd0)      begin phase <= P_BANNER; pos <= 4'd0; end
-                    else if (want_status) begin
+                    else if (want_known) begin
+                        // Every nibble distinct. If this comes back
+                        // altered, the fault is the path or the way
+                        // this flow builds a constant, not the
+                        // counters.
+                        status_sh   <= 128'h0123456789ABCDEFFEDCBA9876543210;
+                        status_left <= 6'd32;
+                        phase       <= P_STATUS;
+                        pos         <= 4'd0;
+                    end else if (want_status) begin
                         status_sh   <= status;
                         status_left <= 6'd32;
                         phase       <= P_STATUS;
                         pos         <= 4'd0;
                     end else if (have_byte) begin
                         phase <= P_BYTE;
-                        pos   <= pend_bad ? 4'd0 : 4'd1;
+                        pos   <= (pend_bad || pend_mon) ? 4'd0 : 4'd1;
                     end else if (line_open && gap == 0) begin
                         phase <= P_EOL; pos <= 4'd0;
                     end
@@ -656,7 +814,7 @@ module iso7816_terminal #(
                     host_valid <= 1'b1;
                 end
                 P_BYTE: begin
-                    host_data  <= (pos == 4'd0) ? 8'h21
+                    host_data  <= (pos == 4'd0) ? (pend_mon ? 8'h3E : 8'h21)
                                 : (pos == 4'd1) ? hex(pend_byte[7:4])
                                 :                 hex(pend_byte[3:0]);
                     host_valid <= 1'b1;

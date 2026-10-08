@@ -12,3 +12,12 @@
 # Anchored to the root: testdata/ has tracked .json and .lpf that are inputs.
 /*.json
 /*.lpf
+# The same flow, and the Vivado oracle harness, also drop an elaborated
+# netlist and a Vivado script and constraints beside those. Six of them were
+# committed by a `git add -A`, one of them 1.26 MB of generated Verilog.
+/*.v
+/*.tcl
+/*.xdc
+
+# Bench scripts: kept across sessions, never committed. See tools/local/README.md
+/tools/local/
