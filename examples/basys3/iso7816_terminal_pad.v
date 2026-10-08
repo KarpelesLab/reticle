@@ -28,7 +28,18 @@ module iso7816_terminal_pad #(
     parameter RST_HOLD        = 400,
     parameter VCC_BITS        = 20,
     parameter GAP_ETU         = 256,
-    parameter HOST_DIV        = 972,
+    // 2.000 Mbaud, exactly: 112 MHz / 56, zero error.
+    //
+    // **Because 115200 cannot keep up with the card.** At F/D = 4 a byte
+    // reaches the contact every 6 us, and printed as two hex characters one
+    // costs 260 us at 115200 -- forty times too slow, so a card talking at
+    // the fast rate was reported with most of it missing. Worse, the card's
+    // waiting time at that rate is about 4.8 ms, so a host that must answer
+    // could not even be told in time. At 2 Mbaud a byte costs 15 us, a
+    // 32-byte response reaches the host in 0.5 ms and an answer goes back
+    // in 0.3 ms, which fits inside the card's window with room to spare.
+    // The board's FT2232H carries it and Linux has `B2000000`.
+    parameter HOST_DIV        = 56,
     parameter WDOG_BITS       = 31
 ) (
     input  wire        clk,

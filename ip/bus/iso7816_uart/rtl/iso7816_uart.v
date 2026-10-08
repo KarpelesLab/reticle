@@ -207,7 +207,39 @@ module iso7816_uart #(
     // 1 takes `io_i` as inverted, for a receive path through an inverting
     // buffer. Independent of the two above: an external pull-down changes
     // the output's sense while the input still taps the contact directly.
-    parameter IN_INVERT = 0
+    parameter IN_INVERT = 0,
+    // A level must hold for `etu_div >> GLITCH_SHIFT` clocks before this
+    // block believes it. 0 disables the filter.
+    //
+    // **Because a contact is a wire in the world and a glitch is a start
+    // bit.** A capture of a real card's ATU line, 200 MHz, 20 ms, found 241
+    // transitions shorter than a microsecond, the narrowest 5 ns. Two
+    // synchronising flops reject only what is shorter than a clock period —
+    // 18 ns at 112 MHz — so a 1 us spike is as good an edge as data. One
+    // such spike makes this block flag bad parity, and with `PARITY_RETRY`
+    // on it then pulls the contact low **while the card is still
+    // transmitting**, which corrupts the next character, which fails too:
+    // a captured ATR read `3B 1B FF 1D EE 2B FE ...` where the card sent
+    // `3B 1B 87 05 32 2E ...`, with every `FF` an error pulse of this
+    // block's own making, 11.5 etu after the character before it.
+    //
+    // 4 is a sixteenth of an etu: 2.9 us at 21505 baud, 31 ns at 2 Mbaud,
+    // and nothing at all below `etu_div` 16, which degrades to no filter
+    // rather than to a broken one. The cost is that much latency on every
+    // edge, against a bit sampled at half an etu.
+    //
+    // **Default 0, because it fixes nothing that has been measured.** It was
+    // written for the capture above and then shown not to be the cause:
+    // `glitch_tb` drives a spike into a data bit and **both** a filtered and
+    // an unfiltered instance read the character correctly, because a bit is
+    // sampled at its centre and a spike at the quarter point is gone by
+    // then. By the same arithmetic the microsecond spikes in that capture
+    // are a fiftieth of an etu at 21505 baud and cannot reach a sample
+    // point. The knob is kept because a line with a slow edge or a long stub
+    // is a real thing a board may have, and because the arithmetic for
+    // choosing it is written down here; it is off until something measured
+    // asks for it.
+    parameter GLITCH_SHIFT = 0
 ) (
     input  wire                   clk,
     input  wire                   rst_n,
@@ -342,8 +374,10 @@ module iso7816_uart #(
     // — but **nothing below depends on that**, which is the point, and
     // the reason is in the next comment.
     reg io_meta_q;
-    reg io_sync_q;
+    reg io_raw_q;          // the second synchronising flop
+    reg io_sync_q;         // and the filtered line everything else reads
     reg io_prev_q;
+    reg [15:0] glitch_q;
 
     // **A synchroniser's reset value is not an observation of the pin.**
     // `io_prev_q` only holds a value that came off the wire from the
@@ -377,17 +411,35 @@ module iso7816_uart #(
     // The pad's own sense, which a board may have inverted.
     wire io_in = IN_INVERT ? ~io_i : io_i;
 
+    // How long a level must hold. Derived from the live `etu_div`, so it
+    // follows a rate change without being told.
+    wire [15:0] glitch_span = (GLITCH_SHIFT == 0) ? 16'd0
+                                                  : (etu_div >> GLITCH_SHIFT);
+
     always @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
             io_meta_q <= 1'b1;
+            io_raw_q  <= 1'b1;
             io_sync_q <= 1'b1;
             io_prev_q <= 1'b1;
+            glitch_q  <= 16'd0;
             settle_sr <= 3'b000;
             active_q  <= 1'b0;
         end else begin
             io_meta_q <= io_in;
-            io_sync_q <= io_meta_q;
+            io_raw_q  <= io_meta_q;
             io_prev_q <= io_sync_q;
+            // A change is believed once it has held `glitch_span` clocks.
+            if (glitch_span == 16'd0) begin
+                io_sync_q <= io_raw_q;
+            end else if (io_raw_q == io_sync_q) begin
+                glitch_q <= 16'd0;
+            end else if (glitch_q >= glitch_span) begin
+                io_sync_q <= io_raw_q;
+                glitch_q  <= 16'd0;
+            end else begin
+                glitch_q <= glitch_q + 16'd1;
+            end
             settle_sr <= active_q ? {settle_sr[1:0], 1'b1} : 3'b000;
             active_q  <= active;
         end

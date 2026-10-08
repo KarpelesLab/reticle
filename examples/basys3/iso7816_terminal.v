@@ -121,7 +121,9 @@ module iso7816_terminal #(
     parameter GAP_ETU          = 256,
     // No `HOST_DIV` here any more: the serial port moved out, so the rate
     // it runs at is the business of whoever instantiates one.
-    parameter WDOG_BITS        = 31
+    parameter WDOG_BITS        = 31,
+    // Received bytes held while the console drains them, as a power of two.
+    parameter FIFO_BITS        = 8
 ) (
     // The system clock, 112 MHz on the board. The top makes it, because a
     // PLL request is only honoured on the top module's nets.
@@ -378,7 +380,7 @@ module iso7816_terminal #(
     wire [7:0] mon_rx;
     wire       mon_rx_valid, mon_parity_err;
 
-    iso7816_uart #(.ETU_DIV(SLOW_DIV)) monitor (
+    iso7816_uart #(.ETU_DIV(SLOW_DIV), .PARITY_RETRY(0)) monitor (
         .clk(sys), .rst_n(rst_n),
         .active(card_active),
         .etu_div(etu_div),
@@ -467,7 +469,23 @@ module iso7816_terminal #(
     wire        card_tx_ready;
     reg  [7:0]  card_tx = 8'd0;
     reg         card_tx_valid = 1'b0;
-    iso7816_uart #(.ETU_DIV(SLOW_DIV)) line (
+    // **`PARITY_RETRY = 0`: this terminal never signals a parity error.**
+    //
+    // T=0 lets a receiver report a bad character by pulling the contact low
+    // for 1-2 etu at 10.5 etu, and the block implements it. On this link it
+    // is actively harmful, and a 200 MHz capture of the contact shows why:
+    // after the card's `3B 1B` came a low pulse 11.48 etu later -- exactly
+    // an error signal's position -- and from there the ATR read
+    // `3B 1B FF 1D EE 2B FE ...` against the `3B 1B 87 05 32 2E ...` the
+    // card sent. The pulse lands **while the card is still transmitting**,
+    // so one bad character becomes every character after it. The board's
+    // owner confirmed the pulses were ours.
+    //
+    // Nothing here needs it: a character the terminal mishears is asked for
+    // again by the layer above, which is a host's business and not this
+    // module's. The monitor instance keeps it off for the same reason, and
+    // because an instance that cannot drive cannot corrupt what it watches.
+    iso7816_uart #(.ETU_DIV(SLOW_DIV), .PARITY_RETRY(0)) line (
         .clk(sys), .rst_n(rst_n),
         .active(card_active),
         .etu_div(etu_div),
@@ -752,9 +770,9 @@ module iso7816_terminal #(
 
     reg [2:0]   phase = P_IDLE;
     reg [3:0]   pos   = 4'd0;
-    reg [7:0]   pend_byte = 8'd0;
-    reg         pend_bad  = 1'b0;
-    reg         pend_mon  = 1'b0;
+    wire [7:0]  pend_byte;
+    wire        pend_bad;
+    wire        pend_mon;
     // `m` stops card bytes being printed. Counters are untouched.
     //
     // **One bad receiver can starve a shared port.** This half shares
@@ -765,7 +783,7 @@ module iso7816_terminal #(
     // frame dump truncated to two lines of eight. The counters in `s`
     // still say what arrived; only the hex stops.
     reg         mute      = 1'b0;
-    reg         have_byte = 1'b0;
+    wire        have_byte;
     reg [127:0] status_sh = 128'd0;
     reg [5:0]   status_left = 6'd0;
     reg         want_status = 1'b0;
@@ -822,33 +840,63 @@ module iso7816_terminal #(
         end
     end
 
+    // A queue of received bytes, not one.
+    //
+    // **Because the card outruns the console by forty to one.** At F/D = 4 a
+    // byte arrives on the contact every 6 us; printed as `XX` at 115200 one
+    // costs about 260 us, so a one-deep buffer drops almost everything a
+    // card says at the fast rate. The card has things to say after the
+    // display comes up and stops working if they go unanswered, so losing
+    // them is not cosmetic.
+    //
+    // `FIFO_BITS` entries of {monitor, parity bad, byte}. 8 bits is 256,
+    // which holds any T=0 response whole; `lost_q` counts what did not fit
+    // rather than letting it vanish, and `s` reports it.
+    localparam integer FIFO_N = 1 << FIFO_BITS;
+
+    reg [9:0]            fifo [0:FIFO_N-1];
+    reg [FIFO_BITS-1:0]  fifo_w = {FIFO_BITS{1'b0}};
+    reg [FIFO_BITS-1:0]  fifo_r = {FIFO_BITS{1'b0}};
+    reg [15:0]           lost_q = 16'd0;
+
+    wire                 fifo_empty = (fifo_w == fifo_r);
+    wire [FIFO_BITS-1:0] fifo_w_next = fifo_w + {{(FIFO_BITS-1){1'b0}}, 1'b1};
+    wire                 fifo_full = (fifo_w_next == fifo_r);
+
+    // What the emitter sees, unchanged in shape from the one-deep version.
+    wire [9:0] fifo_head = fifo[fifo_r];
+    assign     pend_byte = fifo_head[7:0];
+    assign     pend_bad  = fifo_head[8];
+    assign     pend_mon  = fifo_head[9];
+    assign     have_byte = !fifo_empty;
+
+    wire        take_card = card_rx_valid && !mute;
+    wire        take_mon  = !card_rx_valid && mon_rx_valid && !mute;
+    wire        take      = take_card || take_mon;
+    wire [9:0]  take_word = take_card ? {1'b0, card_parity_err, card_rx}
+                                      : {1'b1, mon_parity_err,  mon_rx};
+
     always @(posedge sys) begin
         if (!rst_n) begin
-            have_byte <= 1'b0;
+            fifo_w    <= {FIFO_BITS{1'b0}};
+            fifo_r    <= {FIFO_BITS{1'b0}};
+            lost_q    <= 16'd0;
             gap       <= 32'd0;
             line_open <= 1'b0;
         end else begin
-            if (card_rx_valid && !mute) begin
-                pend_byte <= card_rx;
-                pend_bad  <= card_parity_err;
-                pend_mon  <= 1'b0;
-                have_byte <= 1'b1;
-                gap       <= gap_load;
-                line_open <= 1'b1;
-            end else if (mon_rx_valid && !mute) begin
-                // The card's bytes arrive on both receivers and the main one
-                // wins the cycle, so what reaches here is what this terminal
-                // put on the wire itself.
-                pend_byte <= mon_rx;
-                pend_bad  <= mon_parity_err;
-                pend_mon  <= 1'b1;
-                have_byte <= 1'b1;
+            if (take) begin
+                if (fifo_full) begin
+                    if (lost_q != 16'hFFFF) lost_q <= lost_q + 16'd1;
+                end else begin
+                    fifo[fifo_w] <= take_word;
+                    fifo_w       <= fifo_w_next;
+                end
                 gap       <= gap_load;
                 line_open <= 1'b1;
             end else if (gap != 0) begin
                 gap <= gap - 1'b1;
             end
-            if (byte_done) have_byte <= 1'b0;
+            if (byte_done) fifo_r <= fifo_r + {{(FIFO_BITS-1){1'b0}}, 1'b1};
             if (eol_done)  line_open <= 1'b0;
         end
     end
@@ -926,7 +974,9 @@ module iso7816_terminal #(
         // half failed and they mean different things: a line that would not
         // go low is an output that never reached the pin, while one that
         // stayed low is an enable that never released.
-        {5'd0, pad_lo, pad_hi, pad_done}
+        // What the receive queue had to drop, saturating. Zero is the
+        // only acceptable value once a card is talking at the fast rate.
+        lost_q[7:0]
     };
 
     always @(posedge sys) begin

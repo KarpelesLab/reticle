@@ -54,7 +54,28 @@ module iso7816_terminal_tb;
     // X proves nothing. Each side either pulls low or releases, so the line
     // is low exactly when somebody pulls it.
     wire term_oe, term_o, card_oe, card_o;
-    wire io = ~((term_oe & ~term_o) | (card_oe & ~card_o));
+    // A third thing that can pull the contact down: noise.
+    //
+    // **The line is a wire in the world.** A 200 MHz capture of a real
+    // card's contact found 241 transitions shorter than a microsecond in a
+    // 20 ms window. Two synchronising flops reject only sub-clock spikes, so
+    // before `GLITCH_SHIFT` existed one of those was a start bit — and with
+    // `PARITY_RETRY` on, the parity error it caused made the terminal pull
+    // the contact low while the card was still transmitting. The captured
+    // ATR read `3B 1B FF 1D EE 2B FE ...` for a card that sent
+    // `3B 1B 87 05 32 2E ...`.
+    reg  glitch = 1'b0;
+    wire io = ~((term_oe & ~term_o) | (card_oe & ~card_o) | glitch);
+
+    // One spike, narrower than the filter's window, at the worst moment.
+    task spike;
+        input integer clocks;
+        begin
+            glitch = 1'b1;
+            repeat (clocks) @(posedge clk);
+            glitch = 1'b0;
+        end
+    endtask
 
     wire clk_card, rst_card, vcc_en, dut_tx;
     wire [14:0] led;
@@ -337,7 +358,19 @@ module iso7816_terminal_tb;
         atr[4]  = 8'h32; atr[5]  = 8'h2E; atr[6]  = 8'h35; atr[7]  = 8'h2E;
         atr[8]  = 8'h31; atr[9]  = 8'h04; atr[10] = 8'h33; atr[11] = 8'h00;
         atr[12] = 8'h00; atr[13] = 8'h04;
-        for (i = 0; i < 14; i = i + 1) card_send(atr[i]);
+        // **Spikes, where they do the most harm.** One while the line is
+        // idle before the first character, one between characters, and one
+        // inside a character's stop bits — each a thirty-second of an etu,
+        // well under the filter's sixteenth, and each enough to be a start
+        // bit to a receiver that believes any edge.
+        spike(card_etu / 32);
+        card_send(atr[0]);
+        spike(card_etu / 32);
+        card_send(atr[1]);
+        for (i = 2; i < 14; i = i + 1) begin
+            card_send(atr[i]);
+            if (i == 5 || i == 9) spike(card_etu / 32);
+        end
         for (i = 0; i < 14; i = i + 1) begin
             want = atr[i];
             expect_hex_byte(want);
