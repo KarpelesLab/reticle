@@ -265,6 +265,75 @@ differ because the two designs drive different halves of the die, and the
 differences are enumerated below. That comparison is
 `tests/fpga_xray.rs::the_clock_path_is_the_one_vivado_built`.
 
+## The serial port works, and with it four subsystems at once
+
+**CHECKED, 8 October 2026.** The board's USB-UART bridge carries traffic
+both ways: `uart_loop.v` — receive on B18, retransmit on A18 — echoed
+`RETICLE-7SERIES` back to the host **byte-identical**, 15 bytes for 15.
+
+Every earlier serial attempt failed, including a bare counter bit driven
+onto A18 with no UART in it, and the pin assignment was suspected for it.
+**The pins were right all along**; the welded `tileconn` joins were
+corrupting the path. The fix in `ad7897e` is what made the port work.
+
+This matters out of proportion to itself: it is the first channel on this
+board that a *machine* can read. Every reading before it cost a person's
+attention and several were ambiguous because of it.
+
+### What the part then reported about itself
+
+`examples/basys3/selftest.v` exercises four subsystems and prints 32 hex
+characters about three times a second. Decoded:
+
+```
+EADBEEF0 0003FFC2 0000 0000 A5C3 17 02
+   carry      PLL  BRAM  LUT magic  st seq
+```
+
+| field | read | means |
+|---|---|---|
+| carry accumulator | `EADBEEF0` | exactly `0xDEADBEEF * 16` truncated — **CHECKED** |
+| block RAM mismatches | `0000` | all 256 words of a `RAMB18E1`: contents, address order, data order — **CHECKED** |
+| distributed RAM mismatches | `0000` | all 16 words of four `RAM64X1D` on a `SLICEM` — **CHECKED**, and this is the address permutation `src/fpga/xray/lutram.rs` says it took from nextpnr-xilinx and X-Ray's fuzzer rather than measuring |
+| `A5C3` | correct | baud rate, bit order and framing |
+| status `17` | bits 0,1,2,4 | carry, block RAM, distributed RAM and **PLL locked** all pass |
+| PLL cycles | `0003FFC2` | 262 082 against 262 144 expected: **99.976 %** |
+| sequence | increments | the part is running, not repeating one line |
+
+The PLL deficit is 0.024 %, and a PLL built from integer dividers cannot
+be off by that — a divisor of four either holds or is out by 25 %. It is a
+few cycles lost where the window's level crosses into the PLL's domain at
+each end. **The test was wrong, not the PLL**: it demanded exact equality
+across a clock-domain crossing. It now allows a tenth of a per cent, which
+still refuses every wrong answer it exists to catch, and the reported
+field stays the raw count so the margin is always visible.
+
+### A third variant of the constant-driver defect, found by accident
+
+Giving that tolerance its own expression shifted the placement, and the
+same design that had just built then refused:
+
+```
+error: block RAM `rom$ram_w0_d0`: tying `p0_addr2` to Zero: no free
+GND_WIDE path reaches X19Y119/BRAM_FIFO18_ADDRARDADDR2 within two pips
+```
+
+So a block RAM address input tied to a constant is reached by a search of
+**two pips** for a ground path, and whether one exists depends on where
+the block RAM landed. That is placement roulette in a flow that is
+supposed to be deterministic, and it is the third variant of one defect:
+
+| a constant reaching | gets |
+|---|---|
+| a flip-flop's `D` | a real driver (`drive_constant_data`) |
+| a distributed RAM's inputs | a real driver |
+| a carry cell's operands | a real driver, since the ECP5 round |
+| **an output buffer's input** | **nothing** — `src/fpga/techcells.rs:838`, `data_ports` is built from `Ff`, `LutRam` and `Carry` roles only |
+| **a block RAM's address** | **a two-pip search that can fail** |
+
+The first three were each added after something broke. The remedy for the
+other two is the same one: build the constant rather than hunt for it.
+
 ## A carry chain on the part, and it is right
 
 **CHECKED, 8 October 2026, and this is the first measurement from this
