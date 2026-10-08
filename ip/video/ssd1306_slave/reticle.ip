@@ -37,8 +37,13 @@
 # anything is driven at all. That order is deliberate:
 # `ip/bus/spi_display_rx` shipped with two defects that masked each other
 # and left one counter permanently one too high, and fifteen of its own
-# testbenches missed it because not one compared a counter against what it
-# had driven.
+# testbenches missed it. They all compared `frame_count` against the
+# frames their model drove; what they never did was drive that comparison
+# from the state that exposed it — the select **idle** at reset, with
+# nothing sent yet. Fixed on 8 October 2026, and
+# `ip/bus/spi_display_rx/README.md` §3a is the account; the lesson this
+# file took from it is that a counter is tested against a total driven
+# since reset, including zero, and from every start state.
 #
 # `unknown_cmds` counts a command this block does not implement and
 # otherwise ignores it, as a real SSD1306 does with most of the reserved

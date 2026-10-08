@@ -3,9 +3,11 @@
 //
 // Written after `ip/bus/spi_display_rx` was found to have two defects that
 // masked each other and left one counter permanently one too high, which
-// fifteen of its own testbenches missed because **not one of them compared
-// a counter against the number of things it had driven**. So this file
-// checks the accounting first and the pixels second:
+// fifteen of its own testbenches missed: they did compare a counter
+// against the number of things they had driven, but **never from the
+// state that exposed it** — a part coming up with nothing driven yet. So
+// this file checks the accounting first, from reset, and the pixels
+// second:
 //
 //   - every counter against a driven total, including the zero case,
 //     before anything is sent;
