@@ -1,0 +1,85 @@
+# ssd1306_slave: a mono OLED controller's protocol and display memory, as
+# a slave — so that a part can stand in for the glass.
+#
+# It takes **bytes with a command/data tag**, not wires. The transport is
+# somebody else's job: `ip/bus/spi_display_rx` gives it four-wire SPI,
+# which is what an SSD1306 in 4-wire mode speaks, and an I2C or parallel
+# front end would give it the same stream. Splitting the protocol from the
+# wire is what makes the block testable without a serial link and usable
+# behind any other one.
+#
+# What it is for: developing and watching a display driver without the
+# panel, and capturing the pixels a driver would have drawn.
+# `frame_done` strobes when a whole frame has landed — the pointer wrapping
+# to the start of both windows, which needs no idle timer and no guess
+# about rate — so a host can take a copy after each redraw.
+#
+# The memory is an SSD1306's, which is **pages and not scanlines**: each
+# byte is eight vertically stacked pixels, bit 0 the topmost, so pixel
+# (x, y) is bit y%8 of address (y/8)*COLUMNS + x. 128x64 is 1024 bytes and
+# fits one `RAMB18E1` with half left over. Nothing is transposed here,
+# because a scanline layout is a format no SSD1306 driver speaks.
+#
+# Geometry is parameterised: PAGES=8 is 128x64, PAGES=4 the 128x32 part,
+# and COLUMNS=132 an SH1106, which is the same protocol over a wider
+# memory.
+#
+# **The command set is QUOTED** from the Solomon Systech SSD1306 datasheet
+# revision 1.1, section 10's command table and section 8.7 on the display
+# RAM. It has not been checked against a real SSD1306 — standing in for
+# one is the point — and **no part has run this block**. What is checked is
+# that it behaves as the datasheet describes: `rtl/ssd1306_slave_tb.v`
+# drives the initialisation sequence a real driver sends, writes a full
+# frame, and reads all 1024 bytes back at addresses it computes itself.
+#
+# That testbench checks the block's **accounting** before its pixels —
+# every counter against a driven total, including the count before
+# anything is driven at all. That order is deliberate:
+# `ip/bus/spi_display_rx` shipped with two defects that masked each other
+# and left one counter permanently one too high, and fifteen of its own
+# testbenches missed it because not one compared a counter against what it
+# had driven.
+#
+# `unknown_cmds` counts a command this block does not implement and
+# otherwise ignores it, as a real SSD1306 does with most of the reserved
+# space — so a driver using something unmodelled is a number somebody can
+# read rather than a silent misbehaviour.
+name ssd1306_slave
+version 1.0.0
+license MIT
+description "An SSD1306-compatible mono display as a slave: the command set, the page-organised display memory, a readable frame buffer and a strobe when a frame is complete"
+
+top ssd1306_slave
+target ice40
+target ecp5
+target xc7
+
+source rtl/ssd1306_slave.v
+
+param COLUMNS int 128 1..512
+param PAGES int 8 1..32
+param COUNT_WIDTH int 16 1..32
+
+port clk in
+port rst_n in
+port in_byte in 8
+port in_is_data in
+port in_valid in
+port rd_addr in 16
+port rd_data out 8
+port frame_done out
+port display_on out
+port inverse out
+port all_on out
+port contrast out 8
+port addr_mode out 2
+port charge_pump out
+port seg_remap out
+port com_reverse out
+port col_ptr out 8
+port page_ptr out 8
+port pending_args out 2
+port cmd_count out 16
+port data_count out 16
+port frame_count out 16
+port unknown_cmds out 16
