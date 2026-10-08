@@ -44,10 +44,17 @@
 //   D          deactivate: reset, clock, line, then power — in that order
 //   s          status
 //
-// `A`, `D` and `P` are themselves hex digits, which is why sending bytes
-// needs the `:` prefix: inside a `:` run every character is data, outside it
-// every character is a command. Without that, `:0A` and a request to
-// activate would be indistinguishable.
+// `A`, `C`, `D` and `F` are themselves hex digits, which is why sending
+// bytes needs the `:` prefix: inside a `:` run every character is data,
+// outside it every character is a command. Without that, `:0A` and a
+// request to activate would be indistinguishable.
+//
+// **That rule is enforced, and for a while it was not.** Every command
+// decoder used to look at the received byte alone, so the uppercase digits
+// inside a run ran their commands as well — see the gate near the top of
+// the module for what that did and how it was found. A run ends at the
+// first character that is not a hex digit, and that character is the
+// terminator and nothing else: end a run with CR, LF or a space.
 //
 // Everything the card says comes back as two hex characters per byte, with
 // `!` before a byte whose parity was wrong, and a CRLF once the line has
@@ -160,6 +167,45 @@ module iso7816_terminal #(
     wire rst_n = por[15];
 
     // =================================================================
+    // Inside a `:` run, every character is data
+    // =================================================================
+    //
+    // **This is a gate on every command, and it was missing.** The header
+    // has always said that `A`, `C`, `D` and `F` being hexadecimal digits is
+    // why sending bytes needs a `:` prefix — inside a run every character is
+    // data, outside it every character is a command — but only the byte
+    // assembler below honoured it. Every command decoder looked at
+    // `cmd_data` alone, so the uppercase digits in a run were **also**
+    // executed: `:00A4040C` ran `C`, which drives the contact low for 18 ms
+    // and overwrote the byte going out on the wire — the model card
+    // received `00 A4 04 00`. That is how it was found: by a testbench that
+    // drives this half and the display console on one serial port.
+    //
+    // `D` is the one that matters: a `D` nibble in an APDU would have
+    // deactivated the card mid-frame, dropping `vcc_en` and power-cycling
+    // whatever is on the other end. `F` and `S` would have changed the rate
+    // mid-frame. Lowercase hexadecimal collides with nothing, which is
+    // probably why a 51-byte frame went out on real hardware intact.
+    //
+    // The run's **terminating** character is data too, by the same rule:
+    // `in_hex` is still high on the cycle it arrives, so it closes the run
+    // and does nothing else. End a run with CR, LF or a space and then send
+    // the next command.
+    //
+    // The received byte and its strobe are declared here rather than beside
+    // the serial port below, because the gate is a continuous assignment
+    // and one of those cannot name a net that is declared later on; a
+    // procedural block can, which is why the decoders themselves never had
+    // to care where these two lived.
+    wire [7:0] cmd_data;
+    wire       cmd_valid;
+
+    reg       in_hex   = 1'b0;      // inside a `:` run
+    // Every command below is decoded through this and never through
+    // `cmd_valid` alone.
+    wire      cmd_now  = cmd_valid && !in_hex;
+
+    // =================================================================
     // `L`: can this pad actually pull the line low?
     // =================================================================
     //
@@ -213,7 +259,7 @@ module iso7816_terminal #(
             cst_step  <= 2'd0;
             cst_t     <= 24'd0;
         end else case (cst_step)
-            2'd0: if (cmd_valid && cmd_data == 8'h43) begin   // 'C'
+            2'd0: if (cmd_now && cmd_data == 8'h43) begin     // 'C'
                 pad_const <= 1'b1;
                 cst_t     <= PAD_HOLD;
                 cst_step  <= 2'd1;
@@ -248,7 +294,7 @@ module iso7816_terminal #(
             pad_step  <= 2'd0;
             pad_t     <= 24'd0;
         end else case (pad_step)
-            2'd0: if (cmd_valid && cmd_data == 8'h4C) begin   // 'L'
+            2'd0: if (cmd_now && cmd_data == 8'h4C) begin     // 'L'
                 pad_drive <= 1'b1;
                 pad_t     <= PAD_HOLD;
                 pad_step  <= 2'd1;
@@ -350,8 +396,6 @@ module iso7816_terminal #(
     // The host's serial port
     // =================================================================
 
-    wire [7:0] cmd_data;
-    wire       cmd_valid;
     wire       host_ready;
     reg  [7:0] host_data  = 8'd0;
     reg        host_valid = 1'b0;
@@ -420,7 +464,6 @@ module iso7816_terminal #(
     localparam [1:0] SRC_IDLE = 2'd0, SRC_HOST = 2'd1, SRC_PPS = 2'd2;
 
     reg [1:0] tx_src   = SRC_IDLE;
-    reg       in_hex   = 1'b0;      // inside a `:` run
     reg       have_hi  = 1'b0;
     reg [3:0] hi_nib   = 4'd0;
     reg [1:0]  pps_idx = 2'd0;
@@ -581,7 +624,7 @@ module iso7816_terminal #(
             banner <= 4'd0;      // a pulse, not a level
             case (state)
                 S_IDLE:
-                    if (cmd_valid && cmd_data == 8'h41) begin   // 'A'
+                    if (cmd_now && cmd_data == 8'h41) begin     // 'A'
                         vcc_q   <= 1'b1;
                         settle  <= {1'b1, {VCC_BITS{1'b0}}};
                         etu_div <= SLOW_DIV16;
@@ -614,22 +657,22 @@ module iso7816_terminal #(
                         end
                     end
                 S_RUN: begin
-                    if (cmd_valid && cmd_data == 8'h50) pps_armed <= 1'b1;
+                    if (cmd_now && cmd_data == 8'h50) pps_armed <= 1'b1;
                     if (pps_armed && tx_src == SRC_PPS && pps_idx == 2'd0
                         && !card_tx_valid)
                         pps_armed <= 1'b0;     // all four have gone
                     // The host decides, having seen the echo.
-                    if (cmd_valid && cmd_data == 8'h46) begin      // 'F'
+                    if (cmd_now && cmd_data == 8'h46) begin        // 'F'
                         etu_div <= FAST_DIV16;
                         banner  <= 4'd5;
                     end
-                    if (cmd_valid && cmd_data == 8'h53) begin      // 'S'
+                    if (cmd_now && cmd_data == 8'h53) begin        // 'S'
                         etu_div <= SLOW_DIV16;
                         banner  <= 4'd6;
                     end
                     if (pad_done) banner <= 4'd7;
                     if (cst_done) banner <= 4'd8;
-                    if ((cmd_valid && cmd_data == 8'h44) || wdog_bite) begin
+                    if ((cmd_now && cmd_data == 8'h44) || wdog_bite) begin
                         rst_q       <= 1'b0;
                         clk_on      <= 1'b0;
                         card_active <= 1'b0;
@@ -776,7 +819,7 @@ module iso7816_terminal #(
 
     always @(posedge sys) begin
         if (!rst_n) want_status <= 1'b0;
-        else if (cmd_valid && cmd_data == 8'h73) want_status <= 1'b1;
+        else if (cmd_now && cmd_data == 8'h73) want_status <= 1'b1;
         else if (phase == P_STATUS && status_left == 0 && pos == 4'd1
                  && host_valid && host_ready) want_status <= 1'b0;
     end
@@ -785,7 +828,7 @@ module iso7816_terminal #(
     // separated from the thing it reads.
     always @(posedge sys) begin
         if (!rst_n) want_known <= 1'b0;
-        else if (cmd_valid && cmd_data == 8'h6B) want_known <= 1'b1;
+        else if (cmd_now && cmd_data == 8'h6B) want_known <= 1'b1;
         else if (phase == P_STATUS && status_left == 0 && pos == 4'd1
                  && host_valid && host_ready) want_known <= 1'b0;
     end

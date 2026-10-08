@@ -226,7 +226,7 @@ module iso7816_terminal_tb;
         end
     endtask
 
-    integer i;
+    integer i, deact;
     reg [7:0] want;
     reg [7:0] atr [0:13];
 
@@ -386,6 +386,13 @@ module iso7816_terminal_tb;
         host_send(8'h3A);                      // ':'
         host_send(8'h41);                      // 'A'
         host_send(8'h35);                      // '5'  -> 0xA5
+        // **Close the run.** Inside a `:` run every character is data, and
+        // that is now enforced on every command decoder rather than only on
+        // the byte assembler — so the `D` below is a hex digit until the run
+        // ends. This testbench used to leave the run open and deactivate
+        // anyway, which is exactly the defect: `D` was data *and* a command
+        // at the same time.
+        host_send(8'h0D);                      // CR ends it
         while (got_n < 1) @(posedge clk);
         if (got[0] !== 8'hA5) begin
             $display("FAIL: the card received %02x at the fast rate, wanted A5", got[0]);
@@ -397,10 +404,23 @@ module iso7816_terminal_tb;
         expect_monitor_byte(8'hA5);
 
         host_send(8'h44);                      // 'D'
+        // Reset must drop before power does. Bounded, and each way of
+        // failing says which it was: an unbounded wait here reported
+        // "reset still released" when the real fault was that `D` had not
+        // been obeyed at all, which named the wrong half of the sequence.
+        // The bound is in clocks: powering down settles for 2**VCC_BITS of
+        // them, 64 here, so 100000 is a wide margin and not a time.
+        deact = 0;
         while (vcc_en === 1'b1) begin
             @(posedge clk);
-            if (vcc_en && rst_card) begin
-                $display("FAIL: reset still released while powering down");
+            deact = deact + 1;
+            if (rst_card) begin
+                $display("FAIL: still powered with reset released, %0d clocks after `D`",
+                         deact);
+                $finish;
+            end
+            if (deact > 100000) begin
+                $display("FAIL: `D` did not power the card down");
                 $finish;
             end
         end
