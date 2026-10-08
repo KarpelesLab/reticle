@@ -1805,7 +1805,7 @@ is the part that matters:
   `mosi` on the rising edge and presents `miso` on the falling one, so
   the bits are checked where a real slave would look at them; `cs_n` is
   checked to fall before the first edge and rise after the last.
-- **`spi_display_rx`** — fifteen testbenches against a model of the
+- **`spi_display_rx`** — sixteen testbenches against a model of the
   display's own master, driven in **absolute simulation time** with every
   far-side event on an odd tick, so no pin ever changes in the same
   instant as the system clock edge that samples it. A plausible session
@@ -1821,7 +1821,17 @@ is the part that matters:
   two system clocks and of one; a gap of **half** a system clock, which
   falls entirely between two sampling edges and so is the one the overrun
   counter cannot see at all; a boundary pulse instead of a level; and
-  both chip select polarities. Its outputs are also walked backwards
+  both chip select polarities. The sixteenth is about the block's
+  **accounting** rather than its behaviour — all six counters against
+  totals the model drove, from a reset, for 0, 1, 2, 8 and 70 frames and
+  with the select both idle and asserted when the reset is released — and
+  it exists because the other fifteen all passed on a block whose
+  `frame_count` was permanently one too high, every one of them having
+  started with the select asserted, the one state in which the defect
+  could not appear. `ip/bus/spi_display_rx/README.md` §3a is that round,
+  and it is the clearest instance in this repository of **testing what a
+  block does not being the same as testing what it counts**. Its
+  outputs are also walked backwards
   through the timing graph by
   `a_streams_ready_is_a_function_of_registers`, because a block whose
   inputs are asynchronous pins must not put one of them into a consumer's
@@ -2601,20 +2611,28 @@ timing, which is the usual way round: it was written to dodge a compiler bug,
 not because it was better logic.
 
 **`spi_display_rx` is the row where the instrumentation is most of the
-block**, and the two rows say so. On the ECP5 it is 209 LUT4 and 141
-flip-flops, of which **96 are the six counters** — sixteen bits each at
-the default `COUNT_WIDTH`, about seventy per cent of the block's storage
-— and 93 of the iCE40's `SB_CARRY` are their incrementers and saturation
-compares. The receiver proper is an eight-bit shift register, a four-bit
-bit counter, four two-flop synchronisers and the edge detection: under
-forty-five flip-flops. So `COUNT_WIDTH = 8` roughly halves the block, and
+block**, and the two rows say so. On the ECP5 it is 101 LUT4 under 57
+carry cells and 144 flip-flops, of which **96 are the six counters** —
+sixteen bits each at the default `COUNT_WIDTH`, two thirds of the block's
+storage — and 93 of the iCE40's `SB_CARRY` are their incrementers and
+saturation compares. The receiver proper is an eight-bit shift register, a
+four-bit bit counter, four two-flop synchronisers, a three-flop settle
+counter and the edge detection: under fifty flip-flops. So
+`COUNT_WIDTH = 8` roughly halves the block, and
 `COUNT_WIDTH = 1` turns every counter into a sticky flag for a design
 that only wants the three error wires. `PHASE_MARGIN` costs almost
 nothing by comparison: its two hold counters are
 `$clog2(PHASE_MARGIN + 1)` bits each, two at the default. The pair of rows also prices the
 framing: `FRAME_MODE = 2`, which ignores the chip select and counts eight
-bits for itself, is 11 LUT4 and 2 flip-flops smaller — which is what
+bits for itself, is 2 LUT4 and 2 flip-flops smaller — which is what
 "keep the other two modes, they are cheap" meant as a number.
+
+The settle counter is `SYNC_STAGES + 1` bits and gates every edge
+detector in the block; it arrived with the fix in
+[`ip/bus/spi_display_rx/README.md`](../ip/bus/spi_display_rx/README.md)
+§3a and cost 3 flip-flops and 4 LUT4. It is the price of not reading a
+synchroniser's reset value as an observation of a pin, which this block
+was doing twice: once as a frame and once as a bit.
 
 Its 124 IO buffers are, as everywhere in this table, an artefact of
 measuring a block as its own top: six inputs, twenty-two bits of byte,
@@ -2678,14 +2696,14 @@ exactly what this table is for.
 | `i2c_master` | `i2c_master` | CLK_DIV=30 | LUT6 | 14 x dff, 90 x lut | 4 |
 | `i2c_master` | `i2c_master` | CLK_DIV=30 | iCE40 HX1K | 18 x SB_CARRY, 20 x SB_DFFER, 4 x SB_DFFES, 17 x SB_DFFR, 1 x SB_GB, 30 x SB_IO, 119 x SB_LUT4 | 3 |
 | `i2c_master` | `i2c_master` | CLK_DIV=30 | ECP5 45F | 12 x CCU2C, 1 x DCCA, 120 x LUT4, 41 x TRELLIS_FF, 30 x TRELLIS_IO | 3 |
-| `spi_display_rx` | `spi_display_rx` | FRAME_MODE=0 | LUT4 | 29 x dff, 208 x lut | 5 |
-| `spi_display_rx` | `spi_display_rx` | FRAME_MODE=0 | LUT6 | 29 x dff, 180 x lut | 4 |
-| `spi_display_rx` | `spi_display_rx` | FRAME_MODE=0 | iCE40 HX1K | 93 x SB_CARRY, 113 x SB_DFFER, 2 x SB_DFFES, 26 x SB_DFFR, 1 x SB_GB, 124 x SB_IO, 195 x SB_LUT4 | 4 |
-| `spi_display_rx` | `spi_display_rx` | FRAME_MODE=0 | ECP5 45F | 57 x CCU2C, 1 x DCCA, 97 x LUT4, 141 x TRELLIS_FF, 124 x TRELLIS_IO | 4 |
-| `spi_display_rx` | `spi_display_rx` | FRAME_MODE=2 | LUT4 | 27 x dff, 198 x lut | 5 |
-| `spi_display_rx` | `spi_display_rx` | FRAME_MODE=2 | LUT6 | 27 x dff, 174 x lut | 3 |
-| `spi_display_rx` | `spi_display_rx` | FRAME_MODE=2 | iCE40 HX1K | 93 x SB_CARRY, 111 x SB_DFFER, 2 x SB_DFFES, 26 x SB_DFFR, 1 x SB_GB, 124 x SB_IO, 194 x SB_LUT4 | 5 |
-| `spi_display_rx` | `spi_display_rx` | FRAME_MODE=2 | ECP5 45F | 57 x CCU2C, 1 x DCCA, 97 x LUT4, 139 x TRELLIS_FF, 124 x TRELLIS_IO | 5 |
+| `spi_display_rx` | `spi_display_rx` | FRAME_MODE=0 | LUT4 | 30 x dff, 209 x lut | 5 |
+| `spi_display_rx` | `spi_display_rx` | FRAME_MODE=0 | LUT6 | 30 x dff, 181 x lut | 4 |
+| `spi_display_rx` | `spi_display_rx` | FRAME_MODE=0 | iCE40 HX1K | 93 x SB_CARRY, 113 x SB_DFFER, 2 x SB_DFFES, 28 x SB_DFFR, 1 x SB_DFFS, 1 x SB_GB, 124 x SB_IO, 198 x SB_LUT4 | 4 |
+| `spi_display_rx` | `spi_display_rx` | FRAME_MODE=0 | ECP5 45F | 57 x CCU2C, 1 x DCCA, 101 x LUT4, 144 x TRELLIS_FF, 124 x TRELLIS_IO | 4 |
+| `spi_display_rx` | `spi_display_rx` | FRAME_MODE=2 | LUT4 | 28 x dff, 200 x lut | 5 |
+| `spi_display_rx` | `spi_display_rx` | FRAME_MODE=2 | LUT6 | 28 x dff, 175 x lut | 4 |
+| `spi_display_rx` | `spi_display_rx` | FRAME_MODE=2 | iCE40 HX1K | 93 x SB_CARRY, 111 x SB_DFFER, 2 x SB_DFFES, 28 x SB_DFFR, 1 x SB_DFFS, 1 x SB_GB, 124 x SB_IO, 196 x SB_LUT4 | 5 |
+| `spi_display_rx` | `spi_display_rx` | FRAME_MODE=2 | ECP5 45F | 57 x CCU2C, 1 x DCCA, 99 x LUT4, 142 x TRELLIS_FF, 124 x TRELLIS_IO | 5 |
 | `pwm` | `pwm` | WIDTH=8 | LUT4 | 2 x dff, 23 x lut | 6 |
 | `pwm` | `pwm` | WIDTH=8 | LUT6 | 2 x dff, 17 x lut | 4 |
 | `pwm` | `pwm` | WIDTH=8 | iCE40 HX1K | 7 x SB_CARRY, 8 x SB_DFFER, 8 x SB_DFFR, 1 x SB_GB, 21 x SB_IO, 23 x SB_LUT4 | 6 |

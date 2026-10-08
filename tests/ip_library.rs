@@ -35,14 +35,20 @@
 //!
 //! `spi_display_rx` is the one block here whose far side is **nobody's
 //! specification** — a screen's SPI link as a user observed it, on
-//! hardware this machine does not have — so its fifteen testbenches
+//! hardware this machine does not have — so its sixteen testbenches
 //! drive a model of that master in absolute simulation time, with every
 //! far-side event on an odd tick so that no pin changes in the same
 //! instant as the edge that samples it. Three of them exist to pin what
 //! the block *cannot* tell you: a falling-edge master read on the rising
 //! edge delivers every frame at eight bits with every counter reading
 //! zero and the wrong bytes, and a boundary pulse cannot be told from a
-//! level. Its rate limit is a **ratio of clocks** rather than a
+//! level. The sixteenth is about the **accounting** and not the
+//! behaviour — every counter against a total the model drove, from a
+//! reset, including the total zero — and it exists because fifteen
+//! testbenches of behaviour all passed on a block whose `frame_count`
+//! was permanently one too high;
+//! `ip/bus/spi_display_rx/README.md` §3a is that round. Its rate limit
+//! is a **ratio of clocks** rather than a
 //! frequency, and the test for it moves the parameter against a fixed
 //! waveform, which is the same experiment as moving the clock against a
 //! fixed link.
@@ -3507,6 +3513,23 @@ struct FarSide {
     /// How long that pulse lasts. Shorter than the gap, or it would
     /// still be a level.
     cs_pulse_width: u64,
+    /// Whether the select is **asserted** when the reset is released:
+    /// true for a part that comes up inside a byte, false for one that
+    /// comes up on an idle line. [`FarSide::new`] asserts it, because
+    /// that is the harder case for framing; [`FarSide::starting_idle`]
+    /// is the commoner one on a real link and the one README.md §3a's
+    /// phantom frame needed.
+    starts_asserted: bool,
+    /// Whether the select is asserted *now*, so that a `close` with no
+    /// frame open emits nothing and counts nothing.
+    cs_asserted: bool,
+    /// Whether `sclk`, `mosi` and `dc` rest **high** rather than low
+    /// before the first burst. Only the zero-frame checks in
+    /// `spi_display_rx_counts_exactly_the_frames_it_was_driven` use it,
+    /// to hold all four pins at the opposite level to the
+    /// synchronisers' `INIT` and show that no counter moves from a reset
+    /// value. It is not a CPOL setting: nothing inverts the bursts.
+    pins_rest_high: bool,
     /// True if `dc` carries the byte's **bits** instead of holding the
     /// byte's tag: the mislabelled-analyser-channel hypothesis, which
     /// `dc_change_count` exists to settle.
@@ -3549,6 +3572,9 @@ impl FarSide {
             cs_present: true,
             cs_pulse: false,
             cs_pulse_width: 2 * 2 * HALF,
+            starts_asserted: true,
+            cs_asserted: true,
+            pins_rest_high: false,
             dc_follows_data: false,
             mosi_skew: 2,
             dc_skew: 2,
@@ -3556,6 +3582,21 @@ impl FarSide {
             events: Vec::new(),
             now: FAR_PHASE,
         }
+    }
+
+    /// The same master with the select **idle** when the reset is
+    /// released: a part that comes up between bytes rather than inside
+    /// one, which is what a board that is powered on before its display
+    /// starts talking actually sees.
+    ///
+    /// The difference matters to the accounting and to nothing else:
+    /// there is no byte in progress for the first deassertion to close,
+    /// so the frames the block counts are exactly the frames sent.
+    fn starting_idle(period: u64) -> FarSide {
+        let mut far = FarSide::new(period);
+        far.starts_asserted = false;
+        far.cs_asserted = false;
+        far
     }
 
     /// One pin change, at a tick that cannot race the system clock.
@@ -3620,6 +3661,7 @@ impl FarSide {
         if self.cs_present && !self.cs_pulse {
             let level = !self.cs_idle;
             self.at(t0, PIN_CS, level);
+            self.cs_asserted = true;
         }
         // `dc` qualifies the byte, so a master drives it as it opens the
         // frame and holds it — which is what the user confirmed, and
@@ -3641,11 +3683,18 @@ impl FarSide {
     }
 
     /// Deassert `cs_n`, which is what closes a frame.
+    ///
+    /// A select that is already idle has nothing to close: on a line that
+    /// was idle at reset the leading `close` of the first [`FarSide::send`]
+    /// drives no edge, so it is not a frame and must not be counted as
+    /// one. That is the only difference between the two starts, and it is
+    /// the number `frame_count` is checked against.
     fn close(&mut self) {
-        if self.cs_present {
+        if self.cs_present && self.cs_asserted {
             let (tick, level) = (self.now, self.cs_idle);
             self.at(tick, PIN_CS, level);
             self.frames += 1;
+            self.cs_asserted = self.cs_pulse;
             if self.cs_pulse {
                 // A pulse returns to its resting level on its own, so
                 // the frame is never a level at all.
@@ -3680,6 +3729,10 @@ struct Received {
     bit_errors: u64,
     dc_changes: u64,
     overruns: u64,
+    /// Bits in the frame in progress at the end of the session. Zero on
+    /// a line that was never framed, which is what says that no bit was
+    /// shifted in from a synchroniser's reset value.
+    bit_count: u64,
     last_bit_count: u64,
     framed: bool,
     framing_error: bool,
@@ -3708,15 +3761,26 @@ fn spi_display_session(params: &[(&str, &str)], far: &FarSide) -> Received {
     let rx_byte = top_net(&sim, "rx_byte");
     let rx_is_data = top_net(&sim, "rx_is_data");
 
-    // The link idles with `sclk` low, `mosi` and `dc` low, and `cs_n`
-    // **asserted** — which is to say the master is in the middle of a
-    // byte when the reset is released. That is the state a receiver must
-    // not be permanently mis-framed by, so it is the state every one of
-    // these sessions starts in.
-    sim.set(pins[PIN_SCLK], bit(false));
-    sim.set(pins[PIN_MOSI], bit(false));
-    sim.set(pins[PIN_DC], bit(false));
-    sim.set(pins[PIN_CS], bit(!far.cs_idle));
+    // The link idles with `sclk` low, `mosi` and `dc` low, and — by
+    // default — `cs_n` **asserted**, which is to say the master is in the
+    // middle of a byte when the reset is released. That is the state a
+    // receiver must not be permanently mis-framed by, so it is the state
+    // nearly all of these sessions start in;
+    // [`FarSide::starting_idle`] is the other one, and
+    // `pins_rest_high` puts all four pins at the opposite level to the
+    // synchronisers' `INIT`.
+    let rest = far.pins_rest_high;
+    sim.set(pins[PIN_SCLK], bit(rest));
+    sim.set(pins[PIN_MOSI], bit(rest));
+    sim.set(pins[PIN_DC], bit(rest));
+    sim.set(
+        pins[PIN_CS],
+        bit(if far.starts_asserted {
+            !far.cs_idle
+        } else {
+            far.cs_idle
+        }),
+    );
     reset(&mut sim, clk, rst_n);
 
     let mut next_clk = sim.time() + HALF;
@@ -3757,6 +3821,7 @@ fn spi_display_session(params: &[(&str, &str)], far: &FarSide) -> Received {
         bit_errors: get_u64(&sim, top_net(&sim, "bit_error_count")),
         dc_changes: get_u64(&sim, top_net(&sim, "dc_change_count")),
         overruns: get_u64(&sim, top_net(&sim, "overrun_count")),
+        bit_count: get_u64(&sim, top_net(&sim, "bit_count")),
         last_bit_count: get_u64(&sim, top_net(&sim, "last_bit_count")),
         framed: high(&sim, top_net(&sim, "framed")),
         framing_error: high(&sim, top_net(&sim, "framing_error")),
@@ -3874,6 +3939,213 @@ fn spi_display_rx_receives_a_plausible_display_session() {
     assert_eq!(got.data_bytes, 32);
     assert_eq!(got.dc_changes, 0, "`dc` never moved, which is the point");
     assert_eq!(got.bit_errors, 0);
+}
+
+#[test]
+fn spi_display_rx_counts_exactly_the_frames_it_was_driven() {
+    // **The accounting test, and the gap it fills is that there was
+    // none.** The fifteen testbenches beside it check what the block
+    // *does* — every byte, every tag, every error counter — and each of
+    // them does compare `frame_count` against `FarSide::frames`. But
+    // every one of them starts with the select **asserted**, a part
+    // coming up inside a byte, and in that state the block's phantom
+    // frame could not happen: `gap` read "inside a byte" out of reset
+    // too, so the reset values agreed and no edge was manufactured.
+    //
+    // A part that comes up on an **idle line** — which is what a board
+    // powered on before its display starts talking does, and what
+    // `examples/basys3/spi_console_tb.v` drives — disagreed with its own
+    // reset value and counted a frame that carried no bits. Every other
+    // counter was right, so the only way to see it was to compare a
+    // counter against a driven total from reset, **including the total
+    // zero**. README.md §3a is the account.
+    //
+    // So: the zero case first, then one, two and eight frames, in all
+    // three framing modes, with every one of the six counters checked
+    // against what was sent.
+
+    // ---- Nothing driven at all ----
+    //
+    // The line is idle, no `sclk` ever moves, and every counter must
+    // read zero. Before the fix `frame_count` read **1** here.
+    for mode in ["0", "1", "2"] {
+        let mut far = FarSide::starting_idle(SPI_PERIOD);
+        far.session(&[]);
+        assert_eq!(far.frames, 0, "the model drove no frame");
+        let got = spi_display_session(&[("FRAME_MODE", mode)], &far);
+        assert!(got.bytes.is_empty(), "mode {mode}: nothing was sent");
+        assert_eq!(
+            got.frames, 0,
+            "mode {mode}: no frame was driven, so none may be counted"
+        );
+        assert_eq!(got.cmd_bytes, 0, "mode {mode}");
+        assert_eq!(got.data_bytes, 0, "mode {mode}");
+        assert_eq!(got.bit_errors, 0, "mode {mode}");
+        assert_eq!(got.dc_changes, 0, "mode {mode}");
+        assert_eq!(got.overruns, 0, "mode {mode}");
+        assert_eq!(got.bit_count, 0, "mode {mode}: no bit was taken");
+        assert_eq!(got.last_bit_count, 0, "mode {mode}");
+    }
+
+    // ---- Nothing driven, and every pin at the opposite level to the
+    // synchronisers' `INIT` ----
+    //
+    // The sharper form of the same question, because the defect was a
+    // reset value and not a frame: all four chains are built with
+    // `INIT(0)`, so holding all four pins **high** makes every one of
+    // them transition once as the real level propagates. Not one of
+    // those transitions is an observation of anything, and no counter
+    // may move on them.
+    //
+    // This catches a second instance of the same defect, which nothing
+    // had looked for: with `sclk` resting high, `FRAME_MODE = 2` counts
+    // from reset with `framed` already set, so the propagation edge used
+    // to be taken as a **bit** — `bit_count` read 1 before the master
+    // sent anything, and every byte of the stream after it was one bit
+    // out. An idle-high `sclk` is CPOL = 1, which is an ordinary way for
+    // an SPI master to rest.
+    for mode in ["0", "1", "2"] {
+        let mut far = FarSide::starting_idle(SPI_PERIOD);
+        far.pins_rest_high = true;
+        far.session(&[]);
+        let got = spi_display_session(&[("FRAME_MODE", mode)], &far);
+        assert!(got.bytes.is_empty(), "mode {mode}");
+        assert_eq!(
+            got.frames, 0,
+            "mode {mode}: a chip select propagating through its \
+             synchroniser is not a frame"
+        );
+        assert_eq!(
+            got.bit_count, 0,
+            "mode {mode}: an `sclk` propagating through its synchroniser \
+             is not a bit"
+        );
+        assert_eq!(got.cmd_bytes, 0, "mode {mode}");
+        assert_eq!(got.data_bytes, 0, "mode {mode}");
+        assert_eq!(got.bit_errors, 0, "mode {mode}");
+        assert_eq!(got.dc_changes, 0, "mode {mode}");
+        assert_eq!(got.overruns, 0, "mode {mode}");
+    }
+
+    // ---- One, two and eight frames from an idle line ----
+    //
+    // Eight is what the console testbench drives and read 9 for; one is
+    // the case where the old arming and the old phantom cancelled, so
+    // correcting either alone shows up here as a dropped byte.
+    let all = [
+        command(0x2A),
+        command(0x2B),
+        command(0x2C),
+        pixel(0x11),
+        pixel(0x22),
+        pixel(0x33),
+        pixel(0x44),
+        pixel(0xA7),
+    ];
+    for n in [1usize, 2, 8] {
+        let frames = &all[..n];
+        let cmds = u64::try_from(frames.iter().filter(|f| !f.is_data).count()).expect("small");
+        let datas = u64::try_from(frames.iter().filter(|f| f.is_data).count()).expect("small");
+        for mode in ["0", "1", "2"] {
+            let mut far = FarSide::starting_idle(SPI_PERIOD);
+            far.session(frames);
+            assert_eq!(
+                far.frames,
+                u64::try_from(n).expect("small"),
+                "{n} frames: the model closed one select per byte and no more"
+            );
+            let got = spi_display_session(&[("FRAME_MODE", mode)], &far);
+            // The count, against the driven total. This is the assertion
+            // the block failed.
+            assert_eq!(
+                got.frames, far.frames,
+                "{n} frames, mode {mode}: `frame_count` against the frames driven"
+            );
+            // And the bytes, because the two halves of the defect masked
+            // each other: a fix that only silenced the phantom would
+            // drop the first byte here and leave this line failing.
+            assert_eq!(
+                got.bytes,
+                expected_bytes(frames),
+                "{n} frames, mode {mode}: every byte, from the first"
+            );
+            assert_eq!(got.cmd_bytes, cmds, "{n} frames, mode {mode}");
+            assert_eq!(got.data_bytes, datas, "{n} frames, mode {mode}");
+            assert_eq!(
+                got.cmd_bytes + got.data_bytes,
+                far.frames,
+                "{n} frames, mode {mode}: every frame yielded a byte"
+            );
+            assert_eq!(got.bit_errors, 0, "{n} frames, mode {mode}");
+            assert_eq!(got.dc_changes, 0, "{n} frames, mode {mode}");
+            assert_eq!(got.overruns, 0, "{n} frames, mode {mode}");
+            assert!(got.framed, "{n} frames, mode {mode}");
+        }
+    }
+
+    // ---- The long session, for the two byte counters ----
+    //
+    // Seventy frames of the traffic this link actually carries, so the
+    // byte counters are checked against a driven total too and not only
+    // the frame counter.
+    let frames = display_traffic();
+    let mut far = FarSide::starting_idle(SPI_PERIOD);
+    far.session(&frames);
+    assert_eq!(far.frames, 70, "six commands and sixty-four pixels");
+    let got = spi_display_session(&[], &far);
+    assert_eq!(got.bytes, expected_bytes(&frames));
+    assert_eq!(
+        got.frames, far.frames,
+        "seventy frames driven, seventy counted"
+    );
+    assert_eq!(got.cmd_bytes, 6);
+    assert_eq!(got.data_bytes, 64);
+    assert_eq!(got.bit_errors, 0);
+    assert_eq!(got.dc_changes, 0);
+    assert_eq!(got.overruns, 0);
+    assert_eq!(got.last_bit_count, 8);
+
+    // ---- And the asymmetry that is not a defect ----
+    //
+    // A part that comes up **inside** a byte sees one more frame than
+    // the bytes it delivers, because the deassertion that closes the
+    // byte the reset landed in is a real edge on the wire and
+    // `frame_count` is documented as raw: it is what says the fourth
+    // wire moved at all. The difference between this and the idle start
+    // above is the whole of the accounting, so it is asserted rather
+    // than left to be rediscovered.
+    let frames = &all[..3];
+    let mut far = FarSide::new(SPI_PERIOD);
+    far.session(frames);
+    assert_eq!(
+        far.frames, 4,
+        "three frames and the one the reset landed in"
+    );
+    let got = spi_display_session(&[], &far);
+    assert_eq!(got.bytes, expected_bytes(frames), "every byte after it");
+    assert_eq!(
+        got.frames, far.frames,
+        "the closing deassertion of the byte the reset landed in counts"
+    );
+    assert_eq!(
+        got.cmd_bytes + got.data_bytes + 1,
+        got.frames,
+        "one more frame than bytes, and exactly one"
+    );
+    assert_eq!(got.bit_errors, 0, "and the partial frame is not an error");
+
+    // **What this test would not catch.** It is about accounting and
+    // nothing else: it compares six counters against totals a model
+    // chose, so a block that counted correctly and *decoded* wrongly
+    // passes every line of it except the byte comparisons, which is why
+    // those are here too. It says nothing about the sampling edge, the
+    // bit order, metastability, the real `sclk` frequency, pins or pads —
+    // README.md §9 is the full list, and this test moves exactly one item
+    // off it. It also cannot catch a counter that is wrong only once it
+    // has saturated, because nothing here drives 65 536 frames, and it
+    // would not have caught the phantom at all if the far-side model had
+    // only ever started mid-byte: the driven total has to be compared
+    // from a reset the block had no edge to arm on.
 }
 
 #[test]

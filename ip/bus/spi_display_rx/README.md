@@ -131,43 +131,171 @@ This is the same shape of note as the `VbusState` reading in
 a reading that looked wrong, turned out to be the board and not the
 decode, and cost rounds before someone traced the net and wrote it down.
 
-## 3a. A known defect: `frame_count` counts one frame too many
+## 3a. `frame_count` counted one frame too many, and the reset value that did it
+
+**Fixed, 8 October 2026.** The account below keeps every measurement that
+got there, including the two attempts that were wrong, because the way the
+two faults hid each other is the useful part and is a shape worth
+recognising again: *a defect and the thing that masked it were the same
+flip-flop's reset value.*
+
+### What was measured
 
 **MEASURED, 8 October 2026, by `examples/basys3/spi_console_tb.v`**, which
 drives this block's four pins and reads its counters back over a serial
 port. Two readings:
 
-- `frame_count` is **1 before anything has been driven at all**;
-- it is **9 after eight frames**.
+- `frame_count` was **1 before anything had been driven at all**;
+- it was **9 after eight frames**.
 
-Every other counter is right, and the bytes are right, because a phantom
-frame carries no bits. The only symptom is this one counter, permanently
-one too high.
+Every other counter was right, and the bytes were right, because the
+phantom frame carried no bits. The only symptom was this one counter,
+permanently one too high.
 
-The phantom is `gap_q`'s reset value. `gap` is polarity-normalised — "high
-between bytes, whatever polarity the pin uses" — so at idle it is 1 in
-both polarities, while `gap_q` resets to 0 for an active-low select. That
-manufactures a `gap_rise` on the first cycle, and `frame_close` is
-`gap_rise` with no guard on it.
+### The first fault: a reset value of the pin where the signal is normalised
 
-**It is coupled to a second defect and they mask each other.** `seen_gap`,
-which arms the block, is latched only inside `if (frame_close)` — so the
-phantom edge is also the thing that arms it. Correcting `gap_q` alone
-drops the first byte of every session, which was measured, not predicted.
-Arming from the gap's level instead was tried and is **wrong**: it
-satisfies the console testbench and fails **fourteen of the fifteen**
-testbenches below with a spurious bit error in every frame mode, for
-reasons not yet understood. The fix needs `frame_open`, `counter_clear`
-and `close_aligned` reasoned about together.
+`gap` is polarity-normalised — "high between bytes, whatever polarity the
+pin uses" — so at idle it is 1 in *both* polarities, while `gap_q` reset
+to `(CS_ACTIVE_LOW != 0) ? 1'b0 : 1'b1`, the idle level of the **pin**.
+For an active-low select those differ, so a `gap_rise` was manufactured on
+the first clock, and `frame_close` is `gap_rise` with no guard on it.
 
-**Why §5's fifteen testbenches did not catch it**, which is the part worth
-keeping: not one of them compares `frame_count` against the number of
-frames driven since reset. They check the delivered bytes and the error
-counters, and both are correct. Testing what a block *does* and testing
-what it *counts* are different jobs, and this block had only the first.
+A part that comes out of reset with an **idle line** is between bytes, and
+the reset value said it was inside one.
 
-Until it is fixed, `frame_count` is usable as a difference — two readings
-subtracted — and not as an absolute.
+### The second fault: the phantom was also what armed the block
+
+`seen_gap` gates `frame_open`, and it was latched **only inside
+`if (frame_close)`**. So on an idle line the phantom edge was the only
+thing that ever armed the block, and the two faults cancelled: the block
+worked and miscounted.
+
+Two measurements of that coupling, both run rather than reasoned:
+
+- **`gap_q` corrected alone** (to `1'b1`): the phantom frame goes away and
+  the **first byte of every session is dropped**, because nothing arms the
+  block any more. `spi_console_tb` then reports 2 command bytes where 3
+  were sent.
+- **arming from the gap's *level* as well** (`if (gap) seen_gap <= 1'b1;`
+  in place of the latch inside `frame_close`): satisfies
+  `spi_console_tb` completely, and with the `cs_n` synchroniser's `INIT`
+  also set to the inactive level it fails **fifteen of the sixteen**
+  testbenches in §9 — every one that simulates — with `bit_error_count`
+  reading 1 where a correct master disagrees with nothing, in every frame
+  mode. With `INIT` left at 0 it fails exactly one of them,
+  `spi_display_rx_takes_a_chip_select_of_either_polarity`.
+
+That last line was recorded as "for reasons not yet understood" and the
+change reverted. The reason is the **third** reset value, and finding it is
+what made the fix work.
+
+### The reason: a synchroniser's `INIT` is not an observation of a pin
+
+For the first `SYNC_STAGES` clocks after reset each `cdc_sync` chain still
+presents its own `INIT`, and on the clock after that the `*_q` an edge
+detector compares against is still the `INIT`-derived one. So **any edge
+this block detects in the first `SYNC_STAGES + 1` clocks is manufactured
+by reset values and says nothing about the wire.**
+
+That is why arming from the level failed. With `INIT` presenting "idle",
+`gap` reads 1 during that blind window, the level arms the block, and then
+the real level propagating in arrives as a `gap_fall` — a **frame open**,
+on a line that was asserted all along. The block is framed in the middle
+of the byte the reset landed in, which is precisely the failure
+`spi_display_rx_cannot_be_mis_framed_by_a_late_start` exists to forbid, and
+the first real frame close reports the one bit error. One spurious arm, one
+spurious frame open, one spurious bit error, in every mode.
+
+### The fix
+
+A `SYNC_STAGES + 1`-bit shift register, `settle_sr`, counts the blind
+window out, and **every** edge in the block is gated on it:
+
+```verilog
+wire settled   = settle_sr[SYNC_STAGES];
+wire sclk_rise = settled && sclk_s && !sclk_q;
+wire gap_rise  = settled && gap && !gap_q;
+```
+
+and `seen_gap` is armed from the gap's **level**, once that level is an
+observation:
+
+```verilog
+if (settled && gap) seen_gap <= 1'b1;
+```
+
+Three things fall out of it:
+
+- **No edge is ever manufactured**, so the reset values of `sclk_q` and
+  `gap_q` stop mattering; `gap_q` resets to `1'b1`, the normalised "between
+  bytes", and nothing compares against it until it has been loaded from a
+  pin.
+- **A part that comes up on an idle line arms without an edge**, which is
+  the thing a frame-close latch structurally could not do. It is also the
+  honest reading of "armed": an idle select *is* the gap, and seeing it is
+  seeing it.
+- **A part that comes up mid-byte still discards that byte**, because at
+  the moment the window closes `gap` reads 0 and the block is not armed —
+  so it waits for the real deassertion, exactly as before.
+
+It costs **three flip-flops and four LUT4 on an ECP5** (§9), and one
+transition: a pin that moves within `SYNC_STAGES + 1` clocks of reset
+release is seen as a level and not as an edge. Nothing is armed or framed
+that early, so there is nothing for it to lose.
+
+### What `INIT` should be, which was the other open question
+
+The question was whether the `cs_n` synchroniser's `INIT(0)` is wrong,
+since with `CS_ACTIVE_LOW = 1` it presents "asserted" until the real level
+arrives. The answer turned out to be that **nothing should depend on it**,
+and now nothing does: `INIT` only ever colours the blind window, and no
+edge is taken from inside the window. All four chains are left at `INIT(0)`
+rather than given a polarity-dependent value, because a block whose
+behaviour depends on a synchroniser's reset value is the defect, and
+picking a better value would have hidden the next instance of it.
+
+That is a claim, so it is measured two ways. The committed one is in
+`spi_display_rx_counts_exactly_the_frames_it_was_driven`, which holds all
+four pins **high** — the opposite level to every chain's `INIT` — with
+nothing driven, so every chain transitions once as the real level
+propagates, and asserts that no counter and no bit counter moves. Driving a
+pin opposite to its `INIT` is the same experiment as flipping the `INIT`.
+The uncommitted cross-check: flipping the `sclk` and `cs_n` chains' `INIT`
+by hand leaves all sixteen testbenches passing, **MEASURED, 8 October
+2026**.
+
+### A second instance, found by asking the same question of the other pins
+
+`frame_count` was the counter that was wrong, but the fault was a reset
+value, so the same question was put to the other three pins — and `sclk`
+had it too. With `sclk` resting **high** (CPOL = 1, an ordinary way for an
+SPI master to idle) and `FRAME_MODE = 2`, which counts from reset with
+`framed` already set, the edge of `sclk` propagating through its own
+synchroniser **was taken as a bit**: `bit_count` read 1 before the master
+sent anything, and every byte of the stream after it was one bit out.
+**MEASURED, 8 October 2026** at `bit_count=1 frame_count=1` on the
+unfixed block with all four pins idle high. The same `settled` gate fixes
+it, and the zero-frame cases of the new testbench pin it.
+
+No corresponding fault exists on `mosi` or `dc`: neither is edge-detected,
+only sampled, and nothing samples them until the block is armed.
+
+### Why the sixteenth testbench had to be written
+
+This is the part worth keeping. The fifteen testbenches in §9 *do* compare
+`frame_count` against the number of frames the model drove — `far.frames`,
+asserted in most of them. They could not catch this because **every one of
+them starts with the select asserted**, a part coming up inside a byte, and
+in that state the two reset values agreed and no phantom was manufactured.
+The one state that exposed it was the commonest one on a real board: the
+line idle, and **nothing driven yet**.
+
+So the new test's first assertion is the zero case — no frames driven, so
+no frames counted — and it is the assertion that fails on the unfixed
+block. Testing what a block *does* and testing what it *counts* are
+different jobs, and a counter is only tested against a **total driven since
+reset**, including zero. `frame_count` is now an absolute and not only a
+difference.
 
 ## 4. The numbers, and how to read them
 
@@ -184,7 +312,7 @@ in that category because of the second and third observations in §1.
 |---------|-------|----------|------------------------------|
 | `cmd_byte_count` | `COUNT_WIDTH` | — | Bytes delivered with `dc` saying *command*. Compare with the next row; that comparison is §3. |
 | `data_byte_count` | `COUNT_WIDTH` | — | Bytes delivered with `dc` saying *data*. The two together are the delivered byte count, and the gap between their sum and `frame_count` is how many frames were rejected. |
-| `frame_count` | `COUNT_WIDTH` | — | Frames the fourth wire closed, counted **raw**: before the block is framed, and whatever the bit count was. The first one closes the byte the reset landed inside, so expect it to be one more than the bytes in a clean run. |
+| `frame_count` | `COUNT_WIDTH` | — | Frames the fourth wire closed, counted **raw**: before the block is framed, and whatever the bit count was. On a part that comes up with the select **idle** this is exactly the bytes in a clean run; on one that comes up **inside** a byte it is one more, because the deassertion that closes that byte is a real edge on the wire and this counter is what says the wire moved at all. It counts nothing that the wire did not do — §3a is the round that made that true, and `spi_display_rx_counts_exactly_the_frames_it_was_driven` is what holds it. |
 | `bit_error_count` | `COUNT_WIDTH` | **0** | A frame did not carry eight bits. The bursts were OBSERVED to be exactly eight, so this is a fault and not a tolerance. `last_bit_count` says *which* count it arrived at — seven and nine are identical in this counter and completely different in the diagnosis. |
 | `dc_change_count` | `COUNT_WIDTH` | **0** | `dc` moved inside a byte. Per-byte holding was OBSERVED, so a wire that disagrees with itself is either not `dc` — a mislabelled analyser channel, which is what the first pass in §1 actually was — or a display that qualifies per bit. At the default `DC_SAMPLE = 0` those bytes are **withheld**, because a wrongly tagged command byte is worse than a missing one. |
 | `overrun_count` | `COUNT_WIDTH` | **0** | A sampled input held its level for fewer than `PHASE_MARGIN` system clocks, so its next transition could have been missed. This is the *early* warning: it rises before any bit is lost. See §7. |
@@ -411,7 +539,7 @@ checks every byte and every tag.
 
 ## 9. What the tests would and would not catch
 
-Fifteen testbenches drive a model of the master — `FarSide` in
+Sixteen testbenches drive a model of the master — `FarSide` in
 `tests/ip_library.rs` — in **absolute simulation time**, with every
 far-side event on an odd tick so that no pin ever changes in the same
 instant as the system clock edge that samples it. That race is one an
@@ -421,12 +549,18 @@ than trusting the arithmetic.
 
 Area, MEASURED by `footprints_match_the_documentation` and tabulated in
 [`docs/ip-library.md`](../../../docs/ip-library.md): on an ECP5 45F,
-**57 `CCU2C` and 97 LUT4** with 141 flip-flops at the defaults, of which
+**57 `CCU2C` and 101 LUT4** with 144 flip-flops at the defaults, of which
 **96 flip-flops are the six counters** at `COUNT_WIDTH = 16`. The
-receiver proper is under forty-five flip-flops, so `COUNT_WIDTH = 8`
+receiver proper is under fifty flip-flops, so `COUNT_WIDTH = 8`
 roughly halves the block and `COUNT_WIDTH = 1` turns every counter into a
-sticky flag. LUT depth 4, and `FRAME_MODE = 2` is the same 97 LUT4 with
-two fewer flip-flops.
+sticky flag. LUT depth 4, and `FRAME_MODE = 2` is 99 LUT4 with two fewer
+flip-flops.
+
+Three of those flip-flops and four of those LUT4 are §3a's `settle_sr`,
+which is `SYNC_STAGES + 1` bits wide and gates every edge detector in the
+block. It is the price of not taking a synchroniser's reset value for an
+observation of a pin, and at two per cent of the block's storage it is
+not a price worth optimising.
 
 This block was first measured at 209 LUT4 and depth 5, before this
 backend inferred a carry cell, and the correction is instructive: **more
@@ -434,10 +568,10 @@ than half of its logic was the six counters' ripple adders.** That is the
 cost of instrumenting a block, and it is the reason `COUNT_WIDTH` is a
 parameter — a bring-up build wants all six counters at 16 bits, and a
 deployed one may want none of them. `FRAME_MODE = 2` used to be 11 LUT4
-smaller than mode 0 and is now the same size, because what it removed was
-addition that a carry chain no longer spends lookup tables on.
+smaller than mode 0 and is now two LUT4 smaller, because what it removed
+was addition that a carry chain no longer spends lookup tables on.
 
-Beyond those fifteen, two shared tests name this block:
+Beyond those sixteen, two shared tests name this block:
 `spi_display_rx_is_one_clock_domain` asks `timing::analyze_cdc` for its
 domains, and `a_streams_ready_is_a_function_of_registers` walks the
 timing graph backwards from every output a design reads — `rx_valid`,
@@ -447,6 +581,17 @@ of the whole argument for oversampling: `rx_valid` written as a
 combinational `assign` would still pass the one-domain test and would put
 an asynchronous pin straight into the consumer's logic, and this one
 fails it.
+
+The sixteenth is
+`spi_display_rx_counts_exactly_the_frames_it_was_driven`, and it is the
+only one that is about the **accounting** rather than the behaviour: it
+compares all six counters against totals a model chose, from a reset, for
+0, 1, 2, 8 and 70 frames, in all three framing modes, with the select both
+idle and asserted when the reset is released. §3a is why it exists. Its
+zero cases are also the committed form of "no counter moves from a
+synchroniser's reset value": all four pins are held at the opposite level
+to every chain's `INIT` with nothing driven, and every counter and
+`bit_count` must read zero.
 
 **What the tests would catch.** A wrong shift direction, a lost or
 doubled bit, a byte delivered twice (`rx_valid` is checked to be one
@@ -462,6 +607,10 @@ which merges two bytes and is the one case `overrun_count` cannot see,
 since there is no sampled edge whose margin it could measure. Each of the
 off-by-one cases is run in **all three** framing modes, because the modes
 differ precisely in what they do about them.
+
+**And, since §3a, a counter that is off by a fixed amount from reset** —
+any of the six, in either start state, including with nothing driven at
+all. That is the one item this list gained by being wrong about it.
 
 **What they would not catch**, and this list is the honest part:
 
@@ -479,6 +628,9 @@ differ precisely in what they do about them.
 - **what the bytes mean.** There is no display model here. A decode that
   is bit-perfect and addresses the wrong window would pass every test on
   this page;
+- **a counter that is wrong only once it has saturated.** Nothing drives
+  65 536 frames, so the saturation arithmetic is exercised by the
+  `COUNT_WIDTH` the testbenches use and not at the top of the range;
 - **a glitch.** There is no deglitching beyond the synchroniser, so a
   runt on `sclk` lasting `PHASE_MARGIN` system clocks is a bit as far as
   this block is concerned, and no test says otherwise;

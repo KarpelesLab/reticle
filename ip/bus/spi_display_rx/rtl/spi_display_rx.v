@@ -43,9 +43,20 @@
 //   starting in the middle of a stream, which is the one failure a
 //   continuous-clock receiver cannot avoid. The frame a reset lands
 //   inside is *discarded* rather than decoded wrong — `framed` stays low
-//   until a frame close **and then** a frame open have both been seen,
-//   so the frame the block trusts is one whose beginning it watched
-//   rather than one inferred from the synchronisers' reset value.
+//   until the line has been **observed between bytes** and a frame open
+//   has followed, so the frame the block trusts is one whose beginning
+//   it watched rather than one inferred from the synchronisers' reset
+//   value.
+//
+//   "Observed" is load-bearing, and README.md §3a is the round that
+//   earned the word: for the first SYNC_STAGES + 1 clocks after reset
+//   every edge detector here is still comparing against reset values
+//   rather than against a pin, so nothing in that window counts as an
+//   observation of anything. `settle_sr` holds the edges off until it
+//   is over. A part that comes up on an idle line is between bytes and
+//   is armed by that level without needing an edge at all; a part that
+//   comes up inside a byte is not armed, and waits for the real
+//   deassertion.
 //
 // What is a parameter, and why
 //   Each of these is a fact about the far side that nobody has measured.
@@ -115,7 +126,13 @@
 //                      for byte would be genuinely odd and worth
 //                      stopping for.
 //     frame_count      frames seen, counted raw — before `framed`, and
-//                      whatever the bit count was.
+//                      whatever the bit count was. Raw does not mean
+//                      loose: it counts closes the **wire** performed
+//                      and never one manufactured by a reset value,
+//                      which README.md §3a is the account of. So it is
+//                      the bytes in a clean run on a part that came up
+//                      with the select idle, and one more on a part
+//                      that came up inside a byte.
 //     bit_error_count  frames whose bit count was not a byte boundary:
 //                      in mode 0 a count other than eight, in modes 1
 //                      and 2 a frame closing mid-byte. **This should
@@ -387,29 +404,57 @@ module spi_display_rx #(
     // How many `clk` periods the current level of this input has been
     // observed for, saturating at PHASE_MARGIN. At PHASE_MARGIN its next
     // transition cannot be missed. Out of reset both inputs count as
-    // settled, or the first real edge would report an overrun that never
-    // happened.
+    // having held for the full margin, or the first real edge would
+    // report an overrun that never happened. (Nothing to do with
+    // `settled` below, which is about the synchronisers and not about
+    // the margin.)
     reg [HOLD_W-1:0] sclk_hold;
     reg [HOLD_W-1:0] gap_hold;
-    // A frame close has been seen, so the frame open that follows it is
-    // one whose beginning we watched. Without this the block would trust
-    // a frame open inferred from the synchronisers' own reset value,
-    // which is a guess about the pin and not an observation of it — and
-    // the guess is wrong for one of the two CS_ACTIVE_LOW settings. One
-    // flip-flop makes the behaviour out of reset independent of both the
-    // polarity and the synchroniser's INIT.
+    // Armed: the line has been **observed** between bytes, so the frame
+    // open that follows is one whose beginning we watched rather than one
+    // inferred from a reset value. Without this the block would trust a
+    // frame open manufactured by the synchronisers' INIT, which is a
+    // guess about the pin and not an observation of it.
+    //
+    // It is armed from the gap's **level** and not from a frame close,
+    // and that distinction is the whole of README.md §3a: a part that
+    // comes up on an idle line never sees a close, so arming on one
+    // meant arming on a phantom edge instead — and because the phantom
+    // was also what armed the block, correcting the phantom alone
+    // silently dropped the first byte of every session. The level is
+    // only an observation once `settled` says the chain is carrying the
+    // pin, which is the other half of the same fix.
     reg seen_gap;
+    // The synchronisers' reset value is not an observation of a pin. For
+    // the first SYNC_STAGES clocks after reset each chain still presents
+    // its INIT, and on the clock after that the `*_q` an edge is
+    // compared against is still the INIT-derived one — so any edge
+    // detected before SYNC_STAGES + 1 clocks have passed is manufactured
+    // by reset values and says nothing about the wire. This shift
+    // register counts those clocks out and every edge below is gated on
+    // it, which is what actually makes the behaviour out of reset
+    // independent of the polarity and of every INIT: the reset values of
+    // `sclk_q` and `gap_q` are immaterial because nothing compares
+    // against them until they have been loaded from a real pin.
+    //
+    // It costs one transition at the very start — a pin that moves in
+    // the first SYNC_STAGES + 1 clocks after reset release is not seen as
+    // an edge, only as a level. Nothing is armed or framed that early, so
+    // there is nothing for it to lose.
+    reg [SYNC_STAGES:0] settle_sr;
+
+    wire settled = settle_sr[SYNC_STAGES];
 
     // High between bytes, whatever polarity the pin uses.
     wire gap = (CS_ACTIVE_LOW != 0) ? cs_s : !cs_s;
 
-    wire sclk_rise = sclk_s && !sclk_q;
-    wire sclk_fall = !sclk_s && sclk_q;
+    wire sclk_rise = settled && sclk_s && !sclk_q;
+    wire sclk_fall = settled && !sclk_s && sclk_q;
     wire sclk_edge = sclk_rise || sclk_fall;
     wire sample    = (SAMPLE_EDGE != 0) ? sclk_fall : sclk_rise;
 
-    wire gap_rise = gap && !gap_q;
-    wire gap_fall = !gap && gap_q;
+    wire gap_rise = settled && gap && !gap_q;
+    wire gap_fall = settled && !gap && gap_q;
     wire gap_edge = gap_rise || gap_fall;
 
     // A frame closed; a frame opened. With a pulse rather than a level
@@ -490,8 +535,14 @@ module spi_display_rx #(
 
     always @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
+            // Immaterial, both of them: `settled` holds every edge off
+            // until these have been loaded from a pin. The old value
+            // here was `(CS_ACTIVE_LOW != 0) ? 1'b0 : 1'b1` — the idle
+            // level of the **pin** where `gap` is the normalised one,
+            // which is where README.md §3a's phantom frame came from.
             sclk_q     <= 1'b0;
-            gap_q      <= (CS_ACTIVE_LOW != 0) ? 1'b0 : 1'b1;
+            gap_q      <= 1'b1;
+            settle_sr  <= {(SYNC_STAGES+1){1'b0}};
             sclk_hold  <= HOLD_FULL;
             gap_hold   <= HOLD_FULL;
             seen_gap   <= 1'b0;
@@ -506,8 +557,18 @@ module spi_display_rx #(
             rx_is_data <= 1'b0;
             rx_valid   <= 1'b0;
         end else begin
-            sclk_q <= sclk_s;
-            gap_q  <= gap;
+            sclk_q    <= sclk_s;
+            gap_q     <= gap;
+            settle_sr <= {settle_sr[SYNC_STAGES-1:0], 1'b1};
+
+            // The line is between bytes and we are looking at the pin
+            // rather than at an INIT, so the next frame open is
+            // trustworthy. A frame close is one way to observe this and
+            // not the only one — a part that comes up idle observes it
+            // without any edge at all.
+            if (settled && gap) begin
+                seen_gap <= 1'b1;
+            end
 
             if (sclk_edge) begin
                 sclk_hold <= HOLD_ONE;
@@ -530,7 +591,6 @@ module spi_display_rx #(
 
             if (frame_close) begin
                 last_cnt <= cnt_now;
-                seen_gap <= 1'b1;
             end
 
             if (frame_open) begin

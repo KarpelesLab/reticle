@@ -9,37 +9,43 @@
 // read 32 hex characters, and check them against what it sent.
 //
 // ===================================================================
-// THIS TESTBENCH CURRENTLY FAILS, AND THAT IS THE POINT
+// THIS TESTBENCH FOUND A DEFECT IN THE IP, WHICH WAS THE POINT
 // ===================================================================
 //
-// It reports `FAIL: 9 frames, wanted 8`, and the fault is in
-// `ip/bus/spi_display_rx`, not here. Two measurements, both from this
+// It reported `FAIL: 9 frames, wanted 8`, and the fault was in
+// `ip/bus/spi_display_rx` and not here. Two measurements, both from this
 // file:
 //
-//   - `frame_count` reads **1 before a single frame has been driven**,
-//     and 9 after driving 8. The byte counts are right throughout, so a
-//     phantom frame carries no bits and the only symptom is one counter
-//     reading one too high.
-//   - The phantom comes from `gap_q` resetting to 0 while `gap` — which
+//   - `frame_count` read **1 before a single frame had been driven**,
+//     and 9 after driving 8. The byte counts were right throughout, so
+//     the phantom frame carried no bits and the only symptom was one
+//     counter reading one too high.
+//   - The phantom came from `gap_q` resetting to 0 while `gap` — which
 //     is polarity-normalised and means "between bytes" — is 1 at idle.
-//     That manufactures a `gap_rise` on the first cycle, and
+//     That manufactured a `gap_rise` on the first cycle, and
 //     `frame_close` is `gap_rise` with no guard.
 //
-// **The two defects are coupled**: `seen_gap`, which arms the block, is
-// latched only inside `if (frame_close)`, so the phantom edge is also
-// what arms it. Correcting `gap_q` alone drops the first byte of every
-// session — measured. Arming from the gap level instead was tried and is
-// **wrong**: it passes this file and fails fourteen of the block's own
-// fifteen testbenches with a spurious bit error in every frame mode, for
-// reasons not yet understood. So the fix needs `frame_open`,
-// `counter_clear` and `close_aligned` worked through together, not one
-// reset value patched at a time.
+// **The two defects were coupled**: `seen_gap`, which arms the block, was
+// latched only inside `if (frame_close)`, so the phantom edge was also
+// what armed it, and the two cancelled — the block worked and
+// miscounted. Correcting `gap_q` alone dropped the first byte of every
+// session, measured here as 2 command bytes where 3 were sent. The
+// resolution is a third reset value: a synchroniser's INIT is not an
+// observation of a pin either, so for SYNC_STAGES + 1 clocks after reset
+// no edge the block detects means anything, and the fix gates every edge
+// detector on a settle counter and arms from the gap's *level*. Fixed on
+// 8 October 2026; `ip/bus/spi_display_rx/README.md` §3a is the full
+// account, including the attempt that broke fifteen of the block's own
+// sixteen testbenches and why.
 //
-// Why this file found what fifteen dedicated testbenches did not: none of
-// them compares `frame_count` against the number of frames driven since
-// reset. They check the bytes and the error counters, which are correct.
-// Testing a block's behaviour and testing its accounting are different
-// jobs.
+// Why this file found what fifteen dedicated testbenches did not: all
+// fifteen started with the select **asserted**, a part coming up inside a
+// byte, and in that state the two reset values agreed and no phantom was
+// manufactured. This file does what a board does and comes up on an idle
+// line. Testing a block's behaviour and testing its accounting are
+// different jobs, and
+// `spi_display_rx_counts_exactly_the_frames_it_was_driven` is the
+// sixteenth, which now does the second one in simulation.
 //
 // The divisor is 16 cycles per bit rather than 868, and `sclk` runs at
 // one tenth of the system clock rather than a quarter, so the whole
