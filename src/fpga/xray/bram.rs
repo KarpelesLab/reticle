@@ -354,6 +354,24 @@ pub fn tie_policy(role: &str) -> TiePolicy {
         TiePolicy::Leave
     } else if kind.starts_with("din") {
         TiePolicy::Idle
+    } else if role.starts_with(TIE_ONLY) && kind.starts_with("we") {
+        // `WEBWE[7:4]`, the only tie-only write enables there are: a
+        // `RAMB18E1` uses them for the upper bytes of its 36-bit
+        // simple-dual-port mode and **not** in `TDP`, which is the only
+        // mode `mode_features` describes and so the only one this flow
+        // writes. nextpnr ties them low anyway, and so does this when a
+        // ground fan is free; what `Idle` adds is that it will not fail a
+        // build when one is not.
+        //
+        // That matters because they are the pins the router is most likely
+        // to have walked through: it was `tie_p1_we4` on
+        // `examples/basys3/ssd1306_console.v`, whose `FAN_ALT1` carried
+        // another signal, so the pin could not be tied at all — and a pin
+        // the mode does not read has no business failing a build. This is
+        // the Xilinx library's statement (UG473: in TDP, `WEBWE[3:0]` is
+        // used and `WEBWE[7:4]` is not) and nextpnr's own, **quoted**: no
+        // instrument here has measured what a one on one of them does.
+        TiePolicy::Idle
     } else {
         TiePolicy::Zero
     }
@@ -950,7 +968,6 @@ mod tests {
         for role in [
             "p0_we0",
             "p1_we3",
-            "tie_p1_we5",
             "p0_rst",
             "tie_p0_rstreg",
             "p1_en",
@@ -958,7 +975,11 @@ mod tests {
         ] {
             assert_eq!(tie_policy(role), TiePolicy::Zero, "{role}");
         }
-        for role in ["p0_din2", "tie_p1_dinp1"] {
+        // A data bit, a parity bit — and `WEBWE[7:4]`, the only tie-only
+        // write enables there are, which `TDP` does not use. A write
+        // enable the netlist *does* map a port onto stays `Zero`, which is
+        // the pair of assertions that matter here.
+        for role in ["p0_din2", "tie_p1_dinp1", "tie_p1_we4", "tie_p1_we7"] {
             assert_eq!(tie_policy(role), TiePolicy::Idle, "{role}");
         }
         assert_eq!(tie_policy("tie_p0_addrtie1"), TiePolicy::One);
