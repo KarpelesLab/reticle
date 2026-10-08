@@ -12,15 +12,29 @@
 # WHERE TO CONNECT THE FOUR WIRES
 # ===================================================================
 #
-# The top row of **Pmod JB**, plus a ground. Digilent numbers a Pmod
-# connector 1-6 along the top row and 7-12 along the bottom, with pins 5
-# and 11 ground and pins 6 and 12 3V3.
+# The top row of **Pmod JA**, plus a ground. A Pmod connector is 12 pins,
+# 2x6: pins 1-4 and 7-10 are the eight signals, 5 and 11 are ground, 6 and
+# 12 are 3V3.
 #
-#   JB1   A14    sclk    the master's clock
-#   JB2   A16    mosi    its data: commands and pixels on one wire
-#   JB3   B15    dc      low for a command byte, high for a pixel byte
-#   JB4   B16    cs_n    low while a byte is on the wire
-#   JB5   —      GND     connect this: two boards need a common ground
+#   JA1   J1     sclk    the master's clock
+#   JA2   L2     mosi    its data: commands and pixels on one wire
+#   JA3   J2     dc      low for a command byte, high for a pixel byte
+#   JA4   G2     cs_n    low while a byte is on the wire
+#   JA5   —      GND     connect this: two boards need a common ground
+#
+# JA rather than JB because the board's owner is also wiring an ISO 7816
+# line to JXADC, and JA is on the same edge — shorter leads and one ground
+# reference.
+#
+# **These four may be any ball of JA**, which was measured rather than
+# assumed: all eight JA balls were built as plain inputs and every one
+# decoded completely. That matters because the same balls used
+# *bidirectionally* do not: L2, G2, K2 and G3 each put configuration bits
+# in a tile this database has no segbits file for, so a bitstream using
+# them as an inout cannot be fully decoded and checked. Four of eight on
+# JA, and N2 and N1 on JXADC. These pins are inputs, so the gap does not
+# reach them — but a design that made one of them bidirectional would be
+# unverifiable, and that is worth knowing before anybody moves a wire.
 #
 # **All four are inputs.** This design never drives them; it is the
 # display, not the driver.
@@ -39,7 +53,7 @@
 # part with zero unexplained bits, so the choice is physical convenience.
 # To move, replace the four balls below with that header's top row:
 #
-#   JA   J1  L2  J2  G2         JC   K17 M18 N17 P18
+#   JB   A14 A16 B15 B16        JC   K17 M18 N17 P18
 #
 # Avoid JXADC: it is the analog header and carries filtering that has no
 # business on a digital clock.
@@ -57,10 +71,10 @@
 # flow, not a dead ball. So `led[5]` is LD5 and `led[6]` is LD7.
 set_io -io_standard LVCMOS33 clk W5
 
-set_io -io_standard LVCMOS33 sclk A14
-set_io -io_standard LVCMOS33 mosi A16
-set_io -io_standard LVCMOS33 dc   B15
-set_io -io_standard LVCMOS33 cs_n B16
+set_io -io_standard LVCMOS33 sclk J1
+set_io -io_standard LVCMOS33 mosi L2
+set_io -io_standard LVCMOS33 dc   J2
+set_io -io_standard LVCMOS33 cs_n G2
 
 set_io -io_standard LVCMOS33 uart_rx_pin B18
 set_io -io_standard LVCMOS33 uart_tx_pin A18

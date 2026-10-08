@@ -655,6 +655,35 @@ and check ours feature by feature.
 counter that cannot be trusted to count cannot report on a carry chain, a
 block RAM, a PLL or a pad.
 
+### Six Pmod balls cannot be used bidirectionally without losing the decode
+
+**CHECKED, 8 October 2026**, by building `examples/basys3/pmod_bidir.v` once
+per ball — `inout` with a pull-up — and once as a plain input, and reading
+the decode line each time.
+
+| ball, used as `inout` | decode |
+|---|---|
+| JA: J1, J2, H1, H2 | complete |
+| JA: **L2, G2, K2, G3** | **1 tile with no segbits file** |
+| JXADC: J3, L3, M2, K3, M3, M1 | complete |
+| JXADC: **N2, N1** | **1 tile with no segbits file** |
+
+**As plain inputs, all eight JA balls decode completely.** So this is
+specific to the bidirectional path, not to the balls, and it is the same
+family as LD6: a tile type the IO tables do not fully describe. A
+bitstream using one of these as an `inout` still places, routes and
+reports no unexplained bits — but part of it cannot be decoded back, so
+"every bit decodes" no longer holds over the whole image, and this
+repository's strongest check goes quiet for that tile.
+
+The alternation on JA (clean, gap, clean, gap along the connector) is the
+shape of the two IOBs within one tile being unequal in the tables, which
+is where to look.
+
+Practical consequence, and why it was measured: the four SPI wires of
+`examples/basys3/spi_console.v` are inputs and may sit on any JA ball,
+while an ISO 7816 I/O line is bidirectional and must avoid the six above.
+
 ### What is now known about this part, in order of confidence
 
 | | |
