@@ -416,7 +416,7 @@ fn held_constants(name: &str, verilog: &str, device: &str) -> (Vec<Held>, usize)
 /// stopped driving one it used to. It names the cell, the port and the bit.
 ///
 /// What it would not catch: that a constant on a *listed* pin is still
-/// absorbed. Those eleven rows are readings of a database, of a vendor
+/// absorbed. Those sixteen rows are readings of a database, of a vendor
 /// bitstream or of this flow's own code, and if one of them stops being
 /// true nothing here will say so.
 #[test]
