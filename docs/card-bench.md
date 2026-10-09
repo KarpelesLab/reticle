@@ -1,0 +1,123 @@
+# Driving a smart card and its display from a Basys 3
+
+What another machine needs to repeat this. The pin map and the safety rules
+are in `examples/basys3/iso_display.rcf`, which is authoritative and has the
+provenance; this file is the operating knowledge around it, most of which was
+learned by getting it wrong.
+
+## Safety, first
+
+**`N2` (JXADC4) drives an AQV210 PhotoMOS relay that switches the device's
+3.3 V supply.** High closes the relay and powers somebody's hardware.
+
+- It must be low at power-up, and only the card half's activation sequence
+  may raise it. Nothing else in a design may reach that ball.
+- **Always send `D` when finished.** The terminal also deactivates by itself
+  after about nineteen seconds of silence, which is a backstop and not a
+  policy.
+- **Do not power-cycle the device repeatedly without being asked.** A loop
+  that activates and deactivates switches the relay each time; eight
+  iterations alarmed the board's owner, reasonably.
+- One agent at a time on the JTAG chain.
+
+## The wiring
+
+| header | ball | signal |
+|---|---|---|
+| JXADC1 | `J3` | the card's single contact, open drain, **1 kΩ pull-up to 3.3 V** on the board |
+| JXADC2 | `L3` | card clock, 8.000 MHz (CHECKED: 125.0 ns, 50 % duty) |
+| JXADC3 | `M2` | card reset, active low |
+| JXADC4 | `N2` | `vcc_en`, the relay |
+| JA1–JA4 | `J1 L2 J2 G2` | `sclk`, `mosi`, `dc`, `cs_n` from the device's display bus |
+| JC1, JC2 | `K17`, `M18` | the device's LEFT and RIGHT button lines |
+
+A 4.7 kΩ pull-up is **not** adequate: against 50 pF it reaches 90 % in about
+540 ns, and an etu at 2 Mbaud is 500 ns. 1 kΩ gives about 115 ns.
+
+## Building it
+
+```sh
+RETICLE_CHIPDB=/path/to/prjxray-db reticle fpga \
+    --device xc7a35t-cpg236 \
+    --constraints examples/basys3/iso_display.rcf \
+    --bitstream iso_display.bit \
+    examples/basys3/iso_display_pad.v examples/basys3/iso_display.v \
+    examples/basys3/iso7816_terminal.v examples/basys3/ssd1306_console.v \
+    ip/bus/uart/rtl/uart.v ip/bus/uart/rtl/uart_tx.v \
+    ip/bus/uart/rtl/uart_rx.v ip/bus/uart/rtl/uart_baud_div.v \
+    ip/bus/iso7816_uart/rtl/iso7816_uart.v \
+    ip/bus/spi_display_rx/rtl/spi_display_rx.v \
+    ip/video/ssd1306_slave/rtl/ssd1306_slave.v \
+    ip/util/cdc_sync/rtl/cdc_sync.v
+```
+
+**`BLOCK_RAM` must be 0 on `iso_display_pad` for now.** With the frame buffer
+in a block RAM the build fails: `p1_din9` on a port the design only reads
+through cannot find a free `GND_WIRE` fan, and whether it can depends on
+placement -- the same design built an hour earlier. A port whose write enable
+never asserts should get `TiePolicy::Idle`, as address bits outside the width
+mode already do; until it does, the buffer goes in lookup tables.
+
+## The console is 2.000 Mbaud
+
+Not 115200. `HOST_DIV = 56` against a 112 MHz PLL, zero error; Linux has
+`B2000000`. At 115200 a received card byte cost 260 us to print against 6 us
+between arrivals at F/D = 4, and the card's waiting time at that rate is
+about 4.8 ms -- a host could not be told in time, let alone answer.
+
+Verify the link before trusting anything through it: `k` emits
+`0123456789ABCDEFFEDCBA9876543210` and it must come back exactly.
+
+## The sequence
+
+```
+A                 activate: VCC, clock, reset released after 400 card clocks
+                  -> +VCC +CLK +RST, then the card's ATR as hex
+P                 send PPS FF 10 87 68; the echo comes back as hex
+F                 switch to 2 Mbaud -- only after checking the echo
+:<hex>            send those bytes to the card
+D                 deactivate: reset, clock, line, then power, in that order
+s                 card status, 32 hex characters
+?  g              display status; dump the frame buffer as hex
+m  u              mute / unmute the printing of card bytes
+```
+
+**`F` must be conditional on the echo reading `FF108768`.** Switching
+regardless leaves this end at 2 Mbaud against a card still at 21505 baud,
+mutually deaf, and it looks like the card ignoring what follows rather than a
+negotiation that never happened. One run drew a logo and the next did not,
+for exactly that reason.
+
+## Gotchas that cost hours
+
+- **Drain the port to quiet before measuring.** A frame dump is 2064
+  characters and the terminal may still be sending it when the next command
+  goes out, so the previous run's pixels arrive where the ATR was expected.
+- **Hex characters inside a `:` run used to run as commands.** Fixed, but
+  worth knowing why a frame containing `d8`, `f4` or `0c` once deactivated
+  the card mid-frame: uppercase `D` is deactivate. The bytes are the same
+  either case; the parser takes `0-9 A-F a-f`.
+- **The card's reply to a long frame outruns a one-deep buffer.** `lost_q` in
+  `s` counts the drops; short exchanges show 0 and a burst does not. The
+  reply carries `60`, T=0's NULL procedure byte asking for more time, so
+  answering it needs all of it. A queue for this has been attempted three
+  times and reverted three times -- see `examples/basys3/iso7816_burst_tb.v`,
+  which reproduces the loss, and `examples/basys3/partsel.v`, which clears
+  the construct that was suspected.
+- **A loose SPI wire reads as `unknown` climbing while `data` climbs too.**
+  An undriven `mosi` floats high, so every byte is `FF`: not a valid command,
+  and the frame buffer fills with ones. Check `?` before trusting a display
+  result.
+- **The bench scripts are not in the repository.** `tools/local/` is
+  deliberately ignored. The sequence above is all a replacement needs.
+
+## What is CHECKED on hardware
+
+Activation in the mandated order; a real card's 14-byte ATR
+(`3B1B8705322E352E310433000004`) with no parity or framing errors; a PPS the
+card echoes exactly; the rate change; a 51-byte initialisation frame the card
+acts on; and the device drawing into `ip/video/ssd1306_slave` -- 3072 bytes
+through 83 commands, **zero unknown commands**, four consecutive identical
+runs. The card clock measured 8.0000 MHz with a logic analyser.
+
+Not established: anything about bursts, as above.

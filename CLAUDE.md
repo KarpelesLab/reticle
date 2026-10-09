@@ -144,6 +144,15 @@ Apollo debug microcontroller: `reticle program --list` finds it.
 - **One agent at a time.** Two programmers on one JTAG chain collide, and so do
   two `cargo` builds in one worktree.
 
+A Basys 3 is sometimes attached too, with a smart card and its display
+wired to it. **`docs/card-bench.md` is what to read before touching that**,
+and the one rule that matters most: ball `N2` switches the device's 3.3 V
+supply through a PhotoMOS relay, so it must be low at power-up, only the
+activation sequence may raise it, and `D` goes at the end of every run.
+Do not power-cycle somebody's device repeatedly without being asked.
+
+Its console is **2.000 Mbaud**, not 115200.
+
 `docs/fpga-trellis.md` is the account of this backend, including the faults it
 has had and how each was found. It is worth reading before changing the ECP5
 flow.
