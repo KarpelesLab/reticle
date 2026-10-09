@@ -51,12 +51,29 @@ RETICLE_CHIPDB=/path/to/prjxray-db reticle fpga \
     ip/util/cdc_sync/rtl/cdc_sync.v
 ```
 
-**`BLOCK_RAM` must be 0 on `iso_display_pad` for now.** With the frame buffer
-in a block RAM the build fails: `p1_din9` on a port the design only reads
-through cannot find a free `GND_WIRE` fan, and whether it can depends on
-placement -- the same design built an hour earlier. A port whose write enable
-never asserts should get `TiePolicy::Idle`, as address bits outside the width
-mode already do; until it does, the buffer goes in lookup tables.
+`BLOCK_RAM` defaults to 1 and the frame buffer is a real block RAM. It
+briefly had to be 0: a `din` bit on a port the design only reads through
+could not find a free `GND_WIRE` fan, and whether it could depended on
+placement. That is fixed -- a data bit nothing stores or reads no longer
+fails a build.
+
+## Two rates, and why they are what they are
+
+**The card runs at 1 Mbaud, not 2.** Its ATR offers `TA1 = 87`, which is
+F/D = 4 and 2 Mbaud on the contact -- but `87` is vendor-specific (FI = 8 is
+RFU) and at that rate a card byte lands every 6 us while printing it costs
+10 us on the console, so a long reply overflowed the receive buffer and the
+card's answer to its initialisation frame lost 7 bytes. `97` is the
+standard's own pair -- FI = 9 is Fi = 512, DI = 7 is Di = 64, F/D = 8 -- and
+this device accepts it. A byte then lands every 12 us against 10 us to print
+it, and nothing is lost. `PPS1` and `FAST_ETU_CYCLES` are parameters and
+**must agree**.
+
+Measured by `examples/basys3/iso7816_burst_tb.v`, which prints and never
+asserts:
+
+    F/D = 4 (PPS1 87, 2 Mbaud)   24 bytes: 10 lost   200 bytes: 85 lost
+    F/D = 8 (PPS1 97, 1 Mbaud)   24 bytes:  0 lost   200 bytes:  0 lost
 
 ## The console is 2.000 Mbaud
 
@@ -73,8 +90,8 @@ Verify the link before trusting anything through it: `k` emits
 ```
 A                 activate: VCC, clock, reset released after 400 card clocks
                   -> +VCC +CLK +RST, then the card's ATR as hex
-P                 send PPS FF 10 87 68; the echo comes back as hex
-F                 switch to 2 Mbaud -- only after checking the echo
+P                 send PPS FF 10 97 78 (`PPS1`); the echo comes back as hex
+F                 switch to the fast rate -- only after checking the echo
 :<hex>            send those bytes to the card
 D                 deactivate: reset, clock, line, then power, in that order
 s                 card status, 32 hex characters
@@ -82,7 +99,8 @@ s                 card status, 32 hex characters
 m  u              mute / unmute the printing of card bytes
 ```
 
-**`F` must be conditional on the echo reading `FF108768`.** Switching
+**`F` must be conditional on the echo matching what was sent** (`FF109778`
+with the default `PPS1`). Switching
 regardless leaves this end at 2 Mbaud against a card still at 21505 baud,
 mutually deaf, and it looks like the card ignoring what follows rather than a
 negotiation that never happened. One run drew a logo and the next did not,
@@ -97,13 +115,15 @@ for exactly that reason.
   worth knowing why a frame containing `d8`, `f4` or `0c` once deactivated
   the card mid-frame: uppercase `D` is deactivate. The bytes are the same
   either case; the parser takes `0-9 A-F a-f`.
-- **The card's reply to a long frame outruns a one-deep buffer.** `lost_q` in
-  `s` counts the drops; short exchanges show 0 and a burst does not. The
-  reply carries `60`, T=0's NULL procedure byte asking for more time, so
-  answering it needs all of it. A queue for this has been attempted three
-  times and reverted three times -- see `examples/basys3/iso7816_burst_tb.v`,
-  which reproduces the loss, and `examples/basys3/partsel.v`, which clears
-  the construct that was suspected.
+- **`lost_q` in `s` must read 0.** It counts received bytes the buffer had
+  to drop. At F/D = 4 a long reply lost 7 of them; at F/D = 8 it loses none,
+  which is why the terminal asks for `97`. If it is not zero, the console is
+  not keeping up with the contact and the two rates have drifted apart.
+  The reply carries `60`, T=0's NULL procedure byte asking for more time, so
+  answering it needs all of it. Three receive queues were written for this
+  before the rate was changed instead, and all three were reverted; see
+  `iso7816_burst_tb.v`, which reproduces the loss, and `partsel.v`, which
+  clears the construct that was suspected.
 - **A loose SPI wire reads as `unknown` climbing while `data` climbs too.**
   An undriven `mosi` floats high, so every byte is `FF`: not a valid command,
   and the frame buffer fills with ones. Check `?` before trusting a display
@@ -120,4 +140,7 @@ acts on; and the device drawing into `ip/video/ssd1306_slave` -- 3072 bytes
 through 83 commands, **zero unknown commands**, four consecutive identical
 runs. The card clock measured 8.0000 MHz with a logic analyser.
 
-Not established: anything about bursts, as above.
+Not established on hardware at the time of writing: the 1 Mbaud rate. The
+`97` exchange and its loss figures are from `iso7816_burst_tb.v` and the
+card owner's word that the device accepts it; the hardware runs above were
+taken at F/D = 4.

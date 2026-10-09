@@ -151,7 +151,9 @@ supply through a PhotoMOS relay, so it must be low at power-up, only the
 activation sequence may raise it, and `D` goes at the end of every run.
 Do not power-cycle somebody's device repeatedly without being asked.
 
-Its console is **2.000 Mbaud**, not 115200.
+Its console is **2.000 Mbaud**, not 115200, and the card's own contact
+runs at 1 Mbaud after the PPS -- two different rates that are easy to
+confuse.
 
 `docs/fpga-trellis.md` is the account of this backend, including the faults it
 has had and how each was found. It is worth reading before changing the ECP5
