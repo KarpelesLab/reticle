@@ -337,6 +337,77 @@ fn unused_address_bit(role: &str, params: &dyn Fn(&str) -> Option<AttrValue>) ->
     bit < low
 }
 
+/// Whether `role` is a data input whose value nothing will ever see, which
+/// makes it idle whatever the netlist put on it — the data-side twin of
+/// [`unused_address_bit`]. Two cases, both read off the cell:
+///
+/// - **Above the port's write width.** A port written 9 bits wide stores
+///   `DI[7:0]` and `DIP[0]`, 18 bits `DI[15:0]` and `DIP[1:0]`, and 4, 2
+///   and 1 bits store that many of `DI` and no parity.
+/// - **Stored but never read.** When all four widths are the same, bit `i`
+///   written on either port comes back as `DO[i]` on either port and
+///   nowhere else, so if neither port's `dout<i>` is routed (`read` holds
+///   the `i` that are), what `din<i>` stores is never seen. This is the
+///   case that failed: the mapper builds a 1024x8 memory in the 16-bit
+///   mode with `DIBDI = {8'b0, data}`, and bits 8 to 15 are written and
+///   never read.
+///
+/// Both are UG473's tables, **quoted**: nothing here has measured what a
+/// one on an unread `DIBDI13` does — but whatever it does lands in a bit
+/// no routed wire reads.
+///
+/// It is needed for the same reason the address rule was. Those bits
+/// arrive as netlist zeros, a netlist zero was [`TiePolicy::Zero`], and a
+/// zero tie hunts one of a tile's two ground fans — so whether
+/// `examples/basys3/ssd1306_console.v` built depended on where its block
+/// landed. It built at the default placement and failed at
+/// `--place-effort 3` on `p1_din13`, which nobody saw until `--place-*`
+/// reached the 7-series placer at all.
+///
+/// Mixed widths and a width that is missing, 0 or not one of the five
+/// claim nothing beyond the first case, which is the conservative answer.
+fn unused_data_bit(
+    role: &str,
+    params: &dyn Fn(&str) -> Option<AttrValue>,
+    read: &HashSet<u32>,
+) -> bool {
+    let bare = role.strip_prefix(TIE_ONLY).unwrap_or(role);
+    let Some((port, bit)) = bare.split_once("_din") else {
+        return false;
+    };
+    let suffix = match port {
+        "p0" => 'A',
+        "p1" => 'B',
+        _ => return false,
+    };
+    let width = |name: &str| params(name).and_then(|v| v.as_int());
+    let (data, parity) = match width(&format!("WRITE_WIDTH_{suffix}")) {
+        Some(18) => (16, 2),
+        Some(9) => (8, 1),
+        Some(4) => (4, 0),
+        Some(2) => (2, 0),
+        Some(1) => (1, 0),
+        _ => return false,
+    };
+    if let Some(bit) = bit.strip_prefix('p') {
+        return bit.parse::<u32>().is_ok_and(|bit| bit >= parity);
+    }
+    let Ok(bit) = bit.parse::<u32>() else {
+        return false;
+    };
+    if bit >= data {
+        return true;
+    }
+    let all = [
+        "READ_WIDTH_A",
+        "WRITE_WIDTH_A",
+        "READ_WIDTH_B",
+        "WRITE_WIDTH_B",
+    ]
+    .map(width);
+    all.iter().all(|w| *w == all[0]) && !read.contains(&bit)
+}
+
 /// The lowest `ADDRARDADDR` bit a port of this width uses: 18 bits take
 /// `[13:4]` and one bit takes all fourteen. A width
 /// [`mode_features`] does not describe answers 0, which claims nothing.
@@ -843,6 +914,17 @@ impl XrayFabric {
                 };
                 given.insert(pin.role.as_str(), value);
             }
+            // The data bits some port's output is routed from: a `din<i>`
+            // outside this set stores a value nobody reads.
+            let read: HashSet<u32> = instance
+                .pins
+                .iter()
+                .map(|pin| &netlist.pins[*pin])
+                .filter(|pin| pin.output)
+                .filter(|pin| pin.signal.is_some_and(|s| routing.route(s).is_some()))
+                .filter_map(|pin| pin.role.split_once("_dout"))
+                .filter_map(|(_, bit)| bit.parse::<u32>().ok())
+                .collect();
             // Whether the port a role belongs to is ever enabled: its
             // enable is routed or tied to one.
             let enabled = |role: &str| -> bool {
@@ -859,11 +941,13 @@ impl XrayFabric {
                 if is_output(role) {
                     continue;
                 }
-                // An address bit below the width mode's own range is one
-                // the block does not read, whether the netlist gives it a
-                // constant or nothing at all, so it must not be able to
-                // fail a build: see [`unused_address_bit`].
-                let idle = unused_address_bit(role, &params);
+                // An address bit below the width mode's own range, or a data
+                // bit nothing stores or nothing reads, is one that does not matter,
+                // whether the netlist gives it a constant or nothing at all,
+                // so it must not be able to fail a build: see
+                // [`unused_address_bit`] and [`unused_data_bit`].
+                let idle =
+                    unused_address_bit(role, &params) || unused_data_bit(role, &params, &read);
                 let want = match given.get(role.as_str()) {
                     Some(None) => continue,
                     Some(Some(Bit::Zero)) if idle => TiePolicy::Idle,
@@ -1040,6 +1124,68 @@ mod tests {
         // A port with no width at all is a port this says nothing about.
         let none = params(&[]);
         assert!(!unused_address_bit("p0_addr0", &none));
+    }
+
+    /// What this would catch: a write width with the wrong data or parity
+    /// count, a parity role parsed as a data bit or the other way round,
+    /// the read width deciding instead of the write width, and an unread
+    /// bit called idle when the widths differ. What it would **not** catch:
+    /// that the block really ignores those bits — that is UG473, quoted —
+    /// or a `read` set built wrongly from the netlist, which
+    /// `ssd1306_console.v` building at `--place-effort 3` is the check on.
+    #[test]
+    fn a_data_bit_nothing_stores_or_reads_is_idle() {
+        let all_read: HashSet<u32> = (0..16).collect();
+        let mixed_list = [
+            ("WRITE_WIDTH_A", AttrValue::Int(18)),
+            ("READ_WIDTH_B", AttrValue::Int(18)),
+            ("WRITE_WIDTH_B", AttrValue::Int(9)),
+        ];
+        let mixed = params(&mixed_list);
+        // 18 bits stores all sixteen data bits and both parity bits.
+        for bit in 0..16 {
+            assert!(
+                !unused_data_bit(&format!("p0_din{bit}"), &mixed, &all_read),
+                "{bit}"
+            );
+        }
+        assert!(!unused_data_bit("tie_p0_dinp1", &mixed, &all_read));
+        // 9 bits stores `DI[7:0]` and `DIP[0]`; the read width is 18 and
+        // does not decide.
+        assert!(!unused_data_bit("p1_din7", &mixed, &all_read));
+        for bit in 8..16 {
+            assert!(
+                unused_data_bit(&format!("p1_din{bit}"), &mixed, &all_read),
+                "{bit}"
+            );
+        }
+        assert!(!unused_data_bit("tie_p1_dinp0", &mixed, &all_read));
+        assert!(unused_data_bit("tie_p1_dinp1", &mixed, &all_read));
+        // Mixed widths: an unread bit inside the write width is not
+        // claimed, because bit `i` in is not bit `i` out.
+        assert!(!unused_data_bit("p0_din13", &mixed, &HashSet::new()));
+        // Nothing but a data bit, and nothing but the two ports.
+        for role in ["p1_addr0", "p1_we0", "tie_p1_we4", "p1_clk", "p2_din9"] {
+            assert!(!unused_data_bit(role, &mixed, &all_read), "{role}");
+        }
+        // A port with no write width is a port this says nothing about.
+        assert!(!unused_data_bit("p0_din15", &params(&[]), &HashSet::new()));
+
+        // The shape that failed a build: a 1024x8 memory in the 16-bit
+        // mode, written on port B with `{8'b0, data}` and read on port A's
+        // low eight bits. `p1_din13` is stored and never read.
+        let sixteen_list = [
+            ("READ_WIDTH_A", AttrValue::Int(18)),
+            ("WRITE_WIDTH_A", AttrValue::Int(18)),
+            ("READ_WIDTH_B", AttrValue::Int(18)),
+            ("WRITE_WIDTH_B", AttrValue::Int(18)),
+        ];
+        let sixteen = params(&sixteen_list);
+        let low_byte: HashSet<u32> = (0..8).collect();
+        assert!(unused_data_bit("p1_din13", &sixteen, &low_byte));
+        assert!(unused_data_bit("p0_din8", &sixteen, &low_byte));
+        assert!(!unused_data_bit("p1_din7", &sixteen, &low_byte));
+        assert!(!unused_data_bit("p1_din13", &sixteen, &all_read));
     }
 
     fn params<'a>(list: &'a [(&'a str, AttrValue)]) -> impl Fn(&str) -> Option<AttrValue> + 'a {
