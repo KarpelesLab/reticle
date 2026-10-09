@@ -152,6 +152,32 @@ module ssd1306_console_tb;
         end
     endtask
 
+    // ---- Every line the host receives, counted in the background ----
+    //
+    // A burst of requests is answered while the host is still sending, so
+    // the replies cannot be read with `host_recv` between sends. This
+    // counts complete lines, and lines that were not 32 hex characters and
+    // CRLF, whatever else the test is doing.
+    integer lines_seen = 0;
+    integer bad_lines  = 0;
+    integer rx_line_len   = 0;
+    reg     rx_line_bad   = 1'b0;
+    always @(posedge clk) begin
+        if (from_dut_valid) begin
+            if (from_dut == 8'd10) begin
+                lines_seen = lines_seen + 1;
+                if (rx_line_bad || rx_line_len != 32) bad_lines = bad_lines + 1;
+                rx_line_len = 0;
+                rx_line_bad = 1'b0;
+            end else if (from_dut != 8'd13) begin
+                rx_line_len = rx_line_len + 1;
+                if (!((from_dut >= 8'h30 && from_dut <= 8'h39) ||
+                      (from_dut >= 8'h41 && from_dut <= 8'h46)))
+                    rx_line_bad = 1'b1;
+            end
+        end
+    end
+
     // ---- The far side of the SPI link ----
     //
     // One byte per `cs_n`, most significant bit first, sampled by the
@@ -328,8 +354,43 @@ module ssd1306_console_tb;
             end
         end
 
-        $display("PASS: a real initialisation sequence and a full %0dx%0d frame driven bit by bit into the four pins, dumped back over the serial port as %0d lines of %0d hex characters with every byte equal to what was drawn, one frame counted, %0d data bytes counted, no unknown command and no bit error",
-                 COLUMNS, PAGES, PAGES, COLUMNS * 2, WORDS);
+        // ---- A burst: requests that arrive while a line is going out ----
+        //
+        // `?`, `?`, `g`, `?` back to back, one character time apart, which
+        // is how a host that does not wait for each answer sends them. Each
+        // arrives while an earlier answer is still on the wire. Every one
+        // must be answered: two status lines, a dump of PAGES lines, and a
+        // third status line. On a Basys 3 at 2 Mbaud the second of two
+        // back-to-back requests was dropped without a word, because the
+        // pending flag was cleared on every cycle the port was sending.
+        begin : burst
+            integer before, waited;
+            before = lines_seen;
+            host_send(8'h3F);
+            host_send(8'h3F);
+            host_send(8'h67);
+            host_send(8'h3F);
+            waited = 0;
+            while (lines_seen < before + 3 + PAGES && waited < DIV * 10 * 400) begin
+                @(posedge clk);
+                waited = waited + 1;
+            end
+            // And nothing more after it.
+            repeat (DIV * 10 * 40) @(posedge clk);
+            if (lines_seen - before !== 3 + PAGES) begin
+                $display("FAIL: a burst of ?, ?, g, ? got %0d line(s), wanted %0d",
+                         lines_seen - before, 3 + PAGES);
+                $finish;
+            end
+            if (bad_lines !== 0) begin
+                $display("FAIL: %0d line(s) were not 32 hex characters and CRLF",
+                         bad_lines);
+                $finish;
+            end
+        end
+
+        $display("PASS: a real initialisation sequence and a full %0dx%0d frame driven bit by bit into the four pins, dumped back over the serial port as %0d lines of %0d hex characters with every byte equal to what was drawn, one frame counted, %0d data bytes counted, no unknown command and no bit error; and a burst of ?, ?, g, ? sent back to back answered in full, %0d lines",
+                 COLUMNS, PAGES, PAGES, COLUMNS * 2, WORDS, 3 + PAGES);
         $finish;
     end
 endmodule

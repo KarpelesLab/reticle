@@ -837,7 +837,56 @@ module iso_display_tb;
         end
         expect_banner("-OFF");
 
-        $display("PASS: one serial port carried both halves — the card activated in order, the real 14-byte ATR received as one line, four bytes sent to the card and read back off the wire by the monitor, a %0dx%0d frame driven bit by bit into the SPI pins and dumped whole while the card was talking into the same port, both status lines answered by their own half and by neither other, both buttons pressed and released, PPS echoed and the rate changed, a byte each way at F/D=%0d, and deactivation dropped reset and the clock before power",
+        // ---- A burst across both halves, sent without waiting ----
+        //
+        // `k s ? k s ? g`, one character time apart: each request arrives
+        // while an earlier answer — its own half's or the other's — is still
+        // going out. Every one must be answered: two known constants, two
+        // card status lines, two display status lines and a dump of PAGES
+        // lines, every line whole. On a Basys 3 at 2 Mbaud the second request
+        // to a half that was still answering got nothing, because each half
+        // kept one flag per request and cleared it before the answer ended.
+        // Judged after the fact rather than line by line, because a failure
+        // here is an answer that never comes, and waiting for it would hang.
+        expect_silence("before the burst");
+        host_send(8'h6B);   // k
+        host_send(8'h73);   // s
+        host_send(8'h3F);   // ?
+        host_send(8'h6B);   // k
+        host_send(8'h73);   // s
+        host_send(8'h3F);   // ?
+        host_send(8'h67);   // g
+        repeat (HOST_DIV * 10 * 40 * (6 + PAGES)) @(posedge clk);
+        begin : burst
+            integer lines, known, bad, len, k;
+            reg [8*32-1:0] text;
+            lines = 0; known = 0; bad = 0; len = 0; text = 0;
+            for (k = rx_rd; k < rx_wr; k = k + 1) begin
+                if (rxq[k % 4096] == 8'd10) begin
+                    if (len != 0) begin
+                        lines = lines + 1;
+                        if (len != 32) bad = bad + 1;
+                        if (len == 32 && text == "0123456789ABCDEFFEDCBA9876543210")
+                            known = known + 1;
+                    end
+                    len = 0; text = 0;
+                end else if (rxq[k % 4096] != 8'd13) begin
+                    if (!((rxq[k % 4096] >= 8'h30 && rxq[k % 4096] <= 8'h39) ||
+                          (rxq[k % 4096] >= 8'h41 && rxq[k % 4096] <= 8'h46)))
+                        bad = bad + 1;
+                    text = {text[8*31-1:0], rxq[k % 4096]};
+                    len = len + 1;
+                end
+            end
+            rx_rd = rx_wr;
+            if (lines !== 6 + PAGES || known !== 2 || bad !== 0) begin
+                $display("FAIL: a burst of k s ? k s ? g got %0d line(s), %0d of them the known constant and %0d malformed; wanted %0d, 2 and 0",
+                         lines, known, bad, 6 + PAGES);
+                $finish;
+            end
+        end
+
+        $display("PASS: one serial port carried both halves — the card activated in order, the real 14-byte ATR received as one line, four bytes sent to the card and read back off the wire by the monitor, a %0dx%0d frame driven bit by bit into the SPI pins and dumped whole while the card was talking into the same port, both status lines answered by their own half and by neither other, both buttons pressed and released, PPS echoed and the rate changed, a byte each way at F/D=%0d, deactivation dropped reset and the clock before power, and a burst of k s ? k s ? g sent without waiting answered in full",
                  COLUMNS, PAGES, FAST_ETU_CYCLES);
         $finish;
     end

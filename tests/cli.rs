@@ -1088,3 +1088,83 @@ fn ssd1306_console_is_clocked_entirely_on_the_global_network() {
         "not every clock pin was on the network: {line}"
     );
 }
+
+/// Runs one of `examples/basys3/`'s testbenches through `reticle sim` and
+/// requires its PASS line.
+#[cfg(feature = "sim")]
+fn basys3_testbench(bench: &str, sources: &[&str]) {
+    let mut args = vec!["sim", "--quiet", bench];
+    args.extend_from_slice(sources);
+    let (code, out, err) = run(&args);
+    assert_eq!(code, 0, "{err}");
+    assert!(
+        out.lines().any(|line| line.starts_with("PASS:")),
+        "`{bench}` did not pass:\n{out}\n{err}"
+    );
+}
+
+#[cfg(feature = "sim")]
+const UART: [&str; 4] = [
+    "ip/bus/uart/rtl/uart.v",
+    "ip/bus/uart/rtl/uart_baud_div.v",
+    "ip/bus/uart/rtl/uart_rx.v",
+    "ip/bus/uart/rtl/uart_tx.v",
+];
+
+/// The display console answers every request a host sends without waiting,
+/// among the rest of what its testbench checks. Its burst of `?`, `?`, `g`,
+/// `?` got 3 lines of 5 before the request queue, because the status flag
+/// was cleared on every cycle the port was sending; that was found on a
+/// Basys 3 at 2 Mbaud. About 6 s from a debug build.
+///
+/// It would not catch a queue that is too shallow for a longer burst — the
+/// burst is four — nor anything about the part: the board found this, and
+/// the board is where the sixteen-deep limit was measured.
+#[cfg(feature = "sim")]
+#[test]
+fn the_ssd1306_console_testbench_passes() {
+    let mut sources = vec![
+        "examples/basys3/ssd1306_console.v",
+        "ip/bus/spi_display_rx/rtl/spi_display_rx.v",
+        "ip/util/cdc_sync/rtl/cdc_sync.v",
+        "ip/video/ssd1306_slave/rtl/ssd1306_slave.v",
+    ];
+    sources.extend(UART);
+    basys3_testbench("examples/basys3/ssd1306_console_tb.v", &sources);
+}
+
+/// The card terminal answers `k`, `s`, `k` sent back to back, in order.
+/// Before the request queue only the first came back, because both request
+/// flags were cleared at the end of either one's line. About 30 s from a
+/// debug build. Same limits as the display console's test.
+#[cfg(feature = "sim")]
+#[test]
+fn the_iso7816_terminal_testbench_passes() {
+    let mut sources = vec![
+        "examples/basys3/iso7816_terminal.v",
+        "ip/bus/iso7816_uart/rtl/iso7816_uart.v",
+        "ip/util/cdc_sync/rtl/cdc_sync.v",
+    ];
+    sources.extend(UART);
+    basys3_testbench("examples/basys3/iso7816_terminal_tb.v", &sources);
+}
+
+/// Both halves on one port, as the board runs them: among the rest, a burst
+/// of `k s ? k s ? g` sent without waiting must come back as eight whole
+/// lines. It got four before the request queue. About 60 s from a debug
+/// build.
+#[cfg(feature = "sim")]
+#[test]
+fn the_iso_display_testbench_passes() {
+    let mut sources = vec![
+        "examples/basys3/iso_display.v",
+        "examples/basys3/iso7816_terminal.v",
+        "examples/basys3/ssd1306_console.v",
+        "ip/bus/iso7816_uart/rtl/iso7816_uart.v",
+        "ip/bus/spi_display_rx/rtl/spi_display_rx.v",
+        "ip/video/ssd1306_slave/rtl/ssd1306_slave.v",
+        "ip/util/cdc_sync/rtl/cdc_sync.v",
+    ];
+    sources.extend(UART);
+    basys3_testbench("examples/basys3/iso_display_tb.v", &sources);
+}

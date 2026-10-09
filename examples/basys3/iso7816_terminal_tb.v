@@ -239,6 +239,28 @@ module iso7816_terminal_tb;
         end
     endtask
 
+    // `host_recv` with a deadline, for a test whose failure is an answer
+    // that never comes: without one that failure is a simulation that never
+    // ends rather than a FAIL line.
+    task host_recv_within;
+        input integer limit;
+        integer waited;
+        begin
+            waited = 0;
+            while (rx_rd >= rx_wr) begin
+                @(posedge clk);
+                waited = waited + 1;
+                if (waited > limit) begin
+                    $display("FAIL: no character from the terminal within %0d clocks",
+                             limit);
+                    $finish;
+                end
+            end
+            ch    = rxq[rx_rd % 1024];
+            rx_rd = rx_rd + 1;
+        end
+    endtask
+
     task host_send;
         input [7:0] c;
         begin
@@ -487,7 +509,49 @@ module iso7816_terminal_tb;
         end
         expect_banner("-OFF");
 
-        $display("PASS: activation in order; the real 14-byte ATR received; PPS FF 10 87 68 sent and received byte-for-byte by the card, echoed and compared by this testbench as a host would; the rate switched on `F`; two bytes received and one sent at F/D=4 afterwards; deactivation dropped reset and the clock before power");
+        // ---- A burst: requests that arrive while a line is going out ----
+        //
+        // `k`, `s`, `k` back to back, one character time apart, which is how
+        // a host that does not wait for each answer sends them. Each arrives
+        // while an earlier answer is still on the wire, and each must be
+        // answered, in order. On a Basys 3 at 2 Mbaud only the first was:
+        // the two request flags were cleared together at the end of either
+        // one's line, so an `s` during a `k` line was wiped with it.
+        repeat (HOST_DIV * 10 * 200) @(posedge clk);
+        rx_rd = rx_wr;                         // whatever came before
+        host_send(8'h6B);                      // 'k'
+        host_send(8'h73);                      // 's'
+        host_send(8'h6B);                      // 'k'
+        begin : burst
+            reg [127:0] word;
+            integer line, n;
+            for (line = 0; line < 3; line = line + 1) begin
+                host_recv_within(HOST_DIV * 10 * 200);
+                while (ch === 8'd13 || ch === 8'd10) host_recv_within(HOST_DIV * 10 * 200);
+                word = 128'd0;
+                for (n = 0; n < 32; n = n + 1) begin
+                    if (!((ch >= 8'h30 && ch <= 8'h39) || (ch >= 8'h41 && ch <= 8'h46))) begin
+                        $display("FAIL: burst line %0d character %0d is %02x, not hex",
+                                 line, n, ch);
+                        $finish;
+                    end
+                    word = (word << 4)
+                         | {124'd0, (ch <= 8'h39) ? ch[3:0] : ch[3:0] + 4'd9};
+                    if (n != 31) host_recv_within(HOST_DIV * 10 * 200);
+                end
+                if ((line != 1) && word !== 128'h0123456789ABCDEFFEDCBA9876543210) begin
+                    $display("FAIL: burst line %0d is %032x, wanted the known constant",
+                             line, word);
+                    $finish;
+                end
+                if ((line == 1) && word[15:8] !== 8'hA5) begin
+                    $display("FAIL: burst line 1 is %032x, wanted a status line", word);
+                    $finish;
+                end
+            end
+        end
+
+        $display("PASS: activation in order; the real 14-byte ATR received; PPS FF 10 87 68 sent and received byte-for-byte by the card, echoed and compared by this testbench as a host would; the rate switched on `F`; two bytes received and one sent at F/D=4 afterwards; deactivation dropped reset and the clock before power; and k, s, k sent back to back answered in full and in order");
         $finish;
     end
 endmodule

@@ -784,8 +784,6 @@ module iso7816_terminal #(
     reg         have_byte = 1'b0;
     reg [127:0] status_sh = 128'd0;
     reg [5:0]   status_left = 6'd0;
-    reg         want_status = 1'b0;
-    reg         want_known  = 1'b0;
     reg [31:0]  gap = 32'd0;
     reg         line_open = 1'b0;
 
@@ -906,20 +904,46 @@ module iso7816_terminal #(
         else if (cmd_now && cmd_data == 8'h41) mute <= 1'b0;   // 'A'
     end
 
-    always @(posedge sys) begin
-        if (!rst_n) want_status <= 1'b0;
-        else if (cmd_now && cmd_data == 8'h73) want_status <= 1'b1;
-        else if (phase == P_STATUS && status_left == 0 && pos == 4'd1
-                 && host_valid && host_ready) want_status <= 1'b0;
-    end
+    // **`s` and `k` queue.** Each is pushed when it arrives and popped when
+    // its own line *starts*, so one that arrives while an earlier answer is
+    // still on the wire waits its turn. Two flags lost them: both were
+    // cleared together at the end of either one's line, so on a Basys 3 at
+    // 2 Mbaud an `s` sent straight after a `k` got no answer, and neither
+    // did a second `k`. `iso7816_terminal_tb.v` sends `k`, `s`, `k` back to
+    // back and wants all three, in order.
+    //
+    // One bit per request, oldest in bit 0: 0 the status word, 1 the known
+    // constant. Sixteen deep; a seventeenth outstanding request is dropped,
+    // since the port has no flow control. A host gets 34 characters back for
+    // every one it sends, so only one that sends more than sixteen without
+    // reading can fill it.
+    localparam integer QUEUE = 16;
+    reg [QUEUE-1:0] queue = {QUEUE{1'b0}};
+    // Which entries are in use, as a thermometer: ones from bit 0 up. That
+    // needs no adder, and the slot a new request lands in is the one bit a
+    // push changes. A five-bit count was the first version, and its carry
+    // chain was what the placer could not fit in `iso_display.v`.
+    reg [QUEUE-1:0] q_held = {QUEUE{1'b0}};
 
-    // `k`: the same emitter, a known constant, so that a reading can be
-    // separated from the thing it reads.
+    wire             q_push  = cmd_now && (cmd_data == 8'h73 || cmd_data == 8'h6B);
+    wire             q_known = cmd_data == 8'h6B;
+    // Exactly the emitter's own condition for starting a status line below.
+    wire             q_pop   = !host_valid && phase == P_IDLE
+                             && want_banner == 4'd0 && q_held[0];
+    wire [QUEUE-1:0] q_kept  = q_pop ? {1'b0, q_held[QUEUE-1:1]}  : q_held;
+    wire [QUEUE-1:0] q_shift = q_pop ? {1'b0, queue[QUEUE-1:1]} : queue;
+    wire             q_fits  = !q_kept[QUEUE-1];
+    wire [QUEUE-1:0] q_grown = {q_kept[QUEUE-2:0], 1'b1};
+    wire [QUEUE-1:0] q_slot  = q_grown & ~q_kept;
+
     always @(posedge sys) begin
-        if (!rst_n) want_known <= 1'b0;
-        else if (cmd_now && cmd_data == 8'h6B) want_known <= 1'b1;
-        else if (phase == P_STATUS && status_left == 0 && pos == 4'd1
-                 && host_valid && host_ready) want_known <= 1'b0;
+        if (!rst_n) begin
+            queue <= {QUEUE{1'b0}};
+            q_held  <= {QUEUE{1'b0}};
+        end else begin
+            queue <= (q_push && q_fits && q_known) ? (q_shift | q_slot) : q_shift;
+            q_held  <= (q_push && q_fits) ? q_grown : q_kept;
+        end
     end
 
     function [7:0] hex;
@@ -990,17 +1014,14 @@ module iso7816_terminal #(
             case (phase)
                 P_IDLE:
                     if (want_banner != 4'd0)      begin phase <= P_BANNER; pos <= 4'd0; end
-                    else if (want_known) begin
-                        // Every nibble distinct. If this comes back
-                        // altered, the fault is the path or the way
-                        // this flow builds a constant, not the
+                    else if (q_held[0]) begin
+                        // `k` is a constant with every nibble distinct. If
+                        // it comes back altered, the fault is the path or
+                        // the way this flow builds a constant, not the
                         // counters.
-                        status_sh   <= 128'h0123456789ABCDEFFEDCBA9876543210;
-                        status_left <= 6'd32;
-                        phase       <= P_STATUS;
-                        pos         <= 4'd0;
-                    end else if (want_status) begin
-                        status_sh   <= status;
+                        status_sh   <= queue[0]
+                                     ? 128'h0123456789ABCDEFFEDCBA9876543210
+                                     : status;
                         status_left <= 6'd32;
                         phase       <= P_STATUS;
                         pos         <= 4'd0;

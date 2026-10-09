@@ -335,27 +335,62 @@ module ssd1306_console #(
     wire want_status = cmd_valid && cmd_data == 8'h3F;   // '?'
     wire want_dump   = cmd_valid && cmd_data == 8'h67;   // 'g'
 
-    reg status_pending = 1'b0;
-    reg dump_pending   = 1'b0;
+    // **A queue, not a flag.** Each request is pushed when it arrives and
+    // popped when its own line *starts*, so one that arrives while an
+    // earlier answer is still on the wire waits its turn instead of being
+    // lost. Two flags did lose them: the status flag was cleared on every
+    // cycle the port was sending, so on a Basys 3 at 2 Mbaud the second of
+    // two back-to-back `?` got no answer at all, and a `g` during a dump
+    // likewise. `ssd1306_console_tb.v` sends `?`, `?`, `g`, `?` back to
+    // back and wants every answer.
+    //
+    // One bit per request, oldest in bit 0: 0 a status line, 1 a dump.
+    // Sixteen deep. A host gets one line of at least 34 characters per
+    // one-character request, so only one that sends more than sixteen
+    // requests without reading can fill it; a seventeenth outstanding
+    // request is dropped, since this port has no flow control to hold
+    // the host off with.
+    //
+    // A dump asked for by `o` is not a request and does not queue: it keeps
+    // its own flag, and a frame that completes while one is waiting or
+    // going out is counted in `dropped`, as before.
+    localparam integer QUEUE = 16;
+    reg [QUEUE-1:0] queue        = {QUEUE{1'b0}};
+    // Which entries are in use, as a thermometer: ones from bit 0 up. That
+    // needs no adder, and the slot a new request lands in is the one bit a
+    // push changes. A five-bit count was the first version, and its carry
+    // chain was what the placer could not fit in `iso_display.v`.
+    reg [QUEUE-1:0] held         = {QUEUE{1'b0}};
+    reg             auto_pending = 1'b0;
+
+    wire             take_auto = !sending && auto_pending;
+    wire             pop       = !sending && !auto_pending && held[0];
+    wire             push      = want_status || want_dump;
+    wire [QUEUE-1:0] kept      = pop ? {1'b0, held[QUEUE-1:1]}  : held;
+    wire [QUEUE-1:0] shifted   = pop ? {1'b0, queue[QUEUE-1:1]} : queue;
+    wire             fits      = !kept[QUEUE-1];
+    wire [QUEUE-1:0] grown     = {kept[QUEUE-2:0], 1'b1};
+    wire [QUEUE-1:0] slot      = grown & ~kept;
 
     always @(posedge clk) begin
         if (!rst_n) begin
-            status_pending <= 1'b0;
-            dump_pending   <= 1'b0;
-            dropped        <= 16'd0;
+            queue        <= {QUEUE{1'b0}};
+            held         <= {QUEUE{1'b0}};
+            auto_pending <= 1'b0;
+            dropped      <= 16'd0;
         end else begin
-            if (want_status)                      status_pending <= 1'b1;
-            else if (sending && !dumping)         status_pending <= 1'b0;
+            queue <= (push && fits && want_dump) ? (shifted | slot) : shifted;
+            held  <= (push && fits) ? grown : kept;
 
-            if (want_dump)                        dump_pending <= 1'b1;
-            else if (auto && frame_done) begin
+            if (take_auto) auto_pending <= 1'b0;
+            if (auto && frame_done) begin
                 // A frame while a dump is going out is counted, not sent.
-                if (dumping || dump_pending) begin
+                if (dumping || (auto_pending && !take_auto)) begin
                     if (dropped != 16'hFFFF) dropped <= dropped + 16'd1;
                 end else begin
-                    dump_pending <= 1'b1;
+                    auto_pending <= 1'b1;
                 end
-            end else if (dumping)                 dump_pending <= 1'b0;
+            end
         end
     end
 
@@ -403,7 +438,7 @@ module ssd1306_console #(
             dump_step <= 2'd0;
             rd_addr   <= 16'd0;
         end else if (!sending) begin
-            if (dump_pending) begin
+            if (take_auto || (pop && queue[0])) begin
                 sending   <= 1'b1;
                 dumping   <= 1'b1;
                 source    <= SRC_DUMP;
@@ -411,7 +446,7 @@ module ssd1306_console #(
                 dump_step <= 2'd0;
                 rd_addr   <= 16'd0;
                 tail      <= 2'd0;
-            end else if (status_pending) begin
+            end else if (pop) begin
                 sending <= 1'b1;
                 source  <= SRC_STATUS;
                 shifter <= status;

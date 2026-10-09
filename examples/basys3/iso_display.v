@@ -59,7 +59,7 @@
 //                           except while pressed
 //   JC2     M18  btn_right  the same for RIGHT
 //
-//   B18/A18      the board's USB-UART bridge, 115200 8N1
+//   B18/A18      the board's USB-UART bridge, 2 Mbaud 8N1 (`HOST_DIV`)
 //
 // ===================================================================
 // THE CONVERSATION
