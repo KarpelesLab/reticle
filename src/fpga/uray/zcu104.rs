@@ -32,11 +32,13 @@ pub const DIE: &str = "xazu7ev";
 /// The default eastern edge of the region, as an interconnect column.
 pub const DEFAULT_EAST: u32 = 31;
 
-/// The furthest east the region may reach: interconnect columns X39 to X41
-/// are where the ZU3EG's wiring rules stop fitting this die
-/// (`docs/fpga-uray.md`, "Where it still fails"), and track 14 carries
-/// `PL_CLK0` in every clock row beside the processor up to here.
-pub const MAX_EAST: u32 = 38;
+/// The furthest east the region may reach. Interconnect column 37 is east
+/// of an UltraRAM column, which the ZU3EG whose rules join the wires does
+/// not have, so no data wire of the model crosses it and slices beyond it
+/// cannot send a signal back (`docs/fpga-uray.md`, "Where it still
+/// fails"). Track 14 carries `PL_CLK0` in every clock row beside the
+/// processor up to here.
+pub const MAX_EAST: u32 = 36;
 
 /// The horizontal distribution track that carries `PL_CLK0` in Vivado's
 /// clock network for the PYNQ base overlay. Measured on the ZCU104 at

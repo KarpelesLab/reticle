@@ -301,7 +301,7 @@ Writing a bitstream for the ZCU104 (xczu7ev-ffvc1156):
                      its leaves.
   --east <n>         How far east the fabric reaches, as an interconnect
                      column: 31 (the default, 11 520 lookup tables) up to
-                     38 (27 648), for a design that does not fit. A wider
+                     36 (26 880), for a design that does not fit. A wider
                      fabric takes longer to load and route.
 ";
 

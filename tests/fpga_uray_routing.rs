@@ -456,3 +456,94 @@ fn the_undriven_processor_inputs_are_the_ones_vivado_leaves() {
         "in the table but driven: {missing:?}; undriven but not in the table: {extra:?}"
     );
 }
+
+/// Every lookup table of the widest region the flow places on can reach
+/// one in the middle, and be reached from it, over the nodes the router
+/// may use: the region's own fabric with Vivado's borrowed clock network
+/// closed, as `zcu104::implement` routes.
+///
+/// It exists because the region once reached interconnect column 38, and
+/// a network placed there failed after ten minutes with "no path exists".
+/// Column 37 is east of an UltraRAM column, the ZU3EG whose rules join
+/// the wires has none, and no wire of the model crosses it but 856 clock
+/// wires. The slices beyond could send nothing back west. The *forward*
+/// half of this test passed against that region, by a path nobody
+/// traced; the backward half fails, with 3 840 outputs in the two columns
+/// past the UltraRAM.
+///
+/// It would not catch a pair of lookup tables joined only through a third
+/// table's pins, or a path that exists but is too congested to use, and it
+/// asks about one table in the middle rather than every pair.
+#[test]
+fn every_lookup_table_of_the_widest_region_reaches_the_middle() {
+    use reticle::fpga::uray::zcu104::{Board, MAX_EAST, PL_CLK0_TRACK, clock_tile_types};
+    use std::collections::VecDeque;
+    let (Some(bits_root), Some(wiring_root)) = (uraydb(), wiringdb()) else {
+        return;
+    };
+    let Some(bitstream) = reference() else { return };
+    let inputs = inputs(&bits_root, &wiring_root);
+    let mut board = Board::reaching(&inputs, Some(PL_CLK0_TRACK), MAX_EAST).unwrap();
+    board
+        .replay(&bitstream, &clock_tile_types(&inputs.grid, false))
+        .unwrap();
+    let closed = board.closed_nodes(&HashSet::new()).unwrap();
+    let graph = &board.graph;
+    let tables: Vec<_> = graph.sites.iter().filter(|s| s.kind == "lut").collect();
+    let search = |start: Vec<NodeId>, forward: bool| {
+        let mut seen = vec![false; graph.nodes.len()];
+        let mut queue = VecDeque::new();
+        for node in start {
+            seen[node as usize] = true;
+            queue.push_back(node);
+        }
+        while let Some(node) = queue.pop_front() {
+            let pips = if forward {
+                graph.outgoing(node)
+            } else {
+                graph.incoming(node)
+            };
+            for &pip in pips {
+                let pip = graph.pip(pip);
+                let next = if forward { pip.to } else { pip.from };
+                if !seen[next as usize] && !closed[next as usize] {
+                    seen[next as usize] = true;
+                    queue.push_back(next);
+                }
+            }
+        }
+        seen
+    };
+    let middle = tables[tables.len() / 2];
+    let from = search(middle.pin("o").into_iter().collect(), true);
+    let to = search(middle.pin_nodes("i0").collect(), false);
+    let unreached: Vec<_> = tables
+        .iter()
+        .flat_map(|t| t.pins.iter().filter(|(r, _)| r.starts_with('i')))
+        .filter(|(_, n)| !from[*n as usize])
+        .collect();
+    let unreaching: Vec<_> = tables
+        .iter()
+        .filter(|t| t.pin("o").is_some_and(|o| !to[o as usize]))
+        .map(|t| t.name.as_str())
+        .collect();
+    eprintln!(
+        "{} lookup tables to interconnect column {MAX_EAST}; {} inputs unreached from {}, \
+         {} outputs that cannot reach it",
+        tables.len(),
+        unreached.len(),
+        middle.name,
+        unreaching.len()
+    );
+    assert_eq!(tables.len(), 26_880);
+    assert!(
+        unreached.is_empty(),
+        "{:?}",
+        &unreached[..unreached.len().min(8)]
+    );
+    assert!(
+        unreaching.is_empty(),
+        "{:?}",
+        &unreaching[..unreaching.len().min(8)]
+    );
+}
