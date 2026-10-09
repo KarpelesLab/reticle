@@ -146,8 +146,33 @@ pub(crate) const TRELLIS: Database = Database {
     },
 };
 
+/// Project U-Ray's UltraScale+ database: the ZU7EV die of it, which is
+/// what `tests/fpga_uray.rs` reads.
+///
+/// It is **`mithro/prjuray-db-ultrascaleplus`**, not `f4pga/prjuray-db`.
+/// The f4pga snapshot stopped in 2020 with one die, the ZU3EG; this one
+/// was generated in September 2026 from Vivado 2025.2 for thirteen dies,
+/// and has the DSP and UltraRAM tiles the older one lacks.
+///
+/// And it is a **subset**: every tile type's `segbits` and `defaults`
+/// file, the register settings, the licence and the readme, and of the
+/// thirteen dies only `xazu7ev/` — 168 files, 47 MB. The database's own
+/// readme names that die as the one an `xczu7ev` uses; the ZCU104
+/// carries an XCZU7EV.
+pub(crate) const PRJURAY: Database = Database {
+    name: "prjuray-db",
+    version: "9e7d3e7965240fd260d6549a1883a01a152ae490",
+    what: "Project U-Ray's Xilinx UltraScale+ database (mithro/prjuray-db-ultrascaleplus, CC0), ZU7EV die",
+    env: "RETICLE_URAYDB",
+    probe: "xazu7ev/tilegrid.json",
+    source: Source::Files {
+        base: "https://raw.githubusercontent.com/mithro/prjuray-db-ultrascaleplus/9e7d3e7965240fd260d6549a1883a01a152ae490/",
+        manifest: include_str!("prjuray-db.manifest"),
+    },
+};
+
 /// Every database, in the order `reticle fetch` lists them.
-pub(crate) const ALL: [&Database; 3] = [&PRJXRAY, &APICULA, &TRELLIS];
+pub(crate) const ALL: [&Database; 4] = [&PRJXRAY, &APICULA, &TRELLIS, &PRJURAY];
 
 /// The database called `name`.
 pub(crate) fn by_name(name: &str) -> Option<&'static Database> {
@@ -555,7 +580,7 @@ pub(crate) fn fetch_cmd(args: &Args) -> Result<Outcome, ArgError> {
 
 #[cfg(test)]
 mod tests {
-    use super::{ALL, APICULA, Found, PRJXRAY, Source, TRELLIS, parse_manifest};
+    use super::{ALL, APICULA, Found, PRJURAY, PRJXRAY, Source, TRELLIS, parse_manifest};
     use std::fs;
     use std::path::PathBuf;
 
@@ -647,6 +672,27 @@ mod tests {
         );
     }
 
+    /// The U-Ray subset is every tile type's bits and one die, and
+    /// nothing a fetch would refuse to write.
+    #[test]
+    fn the_uray_manifest_is_the_zu7ev_subset() {
+        let Source::Files { manifest, .. } = &PRJURAY.source else {
+            panic!("prjuray-db is fetched file by file")
+        };
+        let files = parse_manifest(manifest).expect("every line parses");
+        assert_eq!(files.len(), 168);
+        let has = |p: &str| files.iter().any(|f| f.path == p);
+        assert!(has("COPYING"));
+        assert!(has(PRJURAY.probe));
+        assert!(has("segbits_clel_r.db"));
+        assert!(has("defaults_clem.db"));
+        assert!(
+            files
+                .iter()
+                .all(|f| !f.path.contains('/') || f.path.starts_with("xazu7ev/"))
+        );
+    }
+
     #[test]
     fn a_manifest_line_that_escapes_its_directory_is_refused() {
         let sha = "0".repeat(64);
@@ -666,11 +712,13 @@ mod tests {
         let xray_lutram = include_str!("../../../tests/fpga_xray_lutram.rs");
         let gowin = include_str!("../../../tests/fpga_gowin.rs");
         let trellis_test = include_str!("../../../tests/fpga_trellis.rs");
+        let uray = include_str!("../../../tests/fpga_uray.rs");
         for (db, test) in [
             (&PRJXRAY, xray),
             (&PRJXRAY, xray_lutram),
             (&APICULA, gowin),
             (&TRELLIS, trellis_test),
+            (&PRJURAY, uray),
         ] {
             for pinned in [db.name, db.version, db.env] {
                 let quoted = format!("\"{pinned}\"");
@@ -689,6 +737,6 @@ mod tests {
                 db.probe
             );
         }
-        assert_eq!(ALL.len(), 3);
+        assert_eq!(ALL.len(), 4);
     }
 }

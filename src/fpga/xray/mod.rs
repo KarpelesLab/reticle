@@ -175,6 +175,19 @@ pub use carry::{CarryPacking, legalise_carries};
 pub use cmt::{ClockManagerError, Counter, PllSettings, counter, pll_registers};
 pub use dsp::{DSP_PRIMITIVE, dsp_refusal};
 pub use parse::{Ppip, PpipKind, fabric_of, family_directory, is_pip_feature};
+
+/// Reads one `segbits_<type>.db`: a feature name and its bits per line.
+///
+/// Project U-Ray writes the same format, which is why this is public:
+/// [`super::uray`] reads its files through it.
+///
+/// # Errors
+///
+/// [`XrayError::Malformed`] with the line number for a bit that is not
+/// `<frame>_<bit>`.
+pub fn parse_segbits(text: &str, path: &str) -> Result<FeatureSet, XrayError> {
+    parse::segbits(text, path)
+}
 pub use sites::{SiteCoverage, io_standards};
 
 /// Why a Project X-Ray database could not be read.

@@ -459,9 +459,11 @@ lists each one and where it is. A database already present is left alone.
 ahead of time, before going offline, or for a script.
 
 Databases:
-  prjxray-db  Project X-Ray's Xilinx 7-series database, Artix-7 part (45 MB)
-  apicula     Project Apicula's Gowin databases (a 4 MB download)
-  all         Both
+  prjxray-db     Project X-Ray's Xilinx 7-series database, Artix-7 part (45 MB)
+  apicula        Project Apicula's Gowin databases (a 4 MB download)
+  prjtrellis-db  Project Trellis' Lattice ECP5 database, LFE5U-12F part (6 MB)
+  prjuray-db     Project U-Ray's Xilinx UltraScale+ database, ZU7EV die (47 MB)
+  all            All of them
 
 Each is pinned to one upstream version and checked file by file against
 SHA-256 digests built into reticle. The download is done by `curl`.

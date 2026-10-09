@@ -184,6 +184,7 @@ pub mod route;
 pub mod techcells;
 mod text;
 pub mod trellis;
+pub mod uray;
 pub mod xc7;
 pub mod xray;
 
