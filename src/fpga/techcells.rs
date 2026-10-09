@@ -975,8 +975,9 @@ fn pins_needing_a_driver(device: &Device) -> Vec<(String, String)> {
 /// over them: it hunts a free `GND_WIRE -> GFAN<n>` path, an interconnect
 /// tile has exactly **two** such fans for its 48 inputs and the router
 /// competes for both, so whether a build succeeded depended on where the
-/// block landed. `examples/basys3/ssd1306_console.v` failed at all nine
-/// placement settings tried on `097a1d4`, and `selftest.v` is the design
+/// block landed. `examples/basys3/ssd1306_console.v` failed on `097a1d4`
+/// (at one placement, though it was recorded as nine: see
+/// `docs/fpga-xray.md`), and `selftest.v` is the design
 /// `docs/fpga-xray.md` records building, then not, then building again. The
 /// remedy there is `src/fpga/xray/bram.rs`'s `unused_address_bit`, which
 /// gives such a bit the idle policy instead — no lookup table and no route

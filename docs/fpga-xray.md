@@ -644,6 +644,39 @@ address closed, every one of the nine then failed on `tie_p1_we4` instead
 `FAN_ALT1` the router had taken as a hop so the pin could not be tied at
 all. See `tie_policy`.
 
+**Corrected, 9 October 2026: those nine were one placement.** Until
+`3c91260`, `reticle fpga --bitstream` for a 7-series part called the placer
+with `PlaceOptions::default()` whatever the command line said; only the ECP5
+writer read `--place-*`. So the nine builds above were the same placement
+nine times, "all nine fail on `097a1d4`" was one failure seen nine times,
+and neither says anything about a lottery. The reading is left above
+because it is how the gap was found: asking this design for a second
+placement gave a byte-identical bitstream.
+
+Measured again with the flags reaching the placer, on `c33b2e7`, the same
+nine settings all build — 1997 of 1997 signals routed, 0 bits unexplained —
+into **five** distinct bitstreams, not nine:
+
+| settings | bitstream |
+|---|---|
+| `--place-effort 10` (the default) | `322aa42f` |
+| `--place-effort 1` | `83fff04b` |
+| `--place-effort 20` | `eb7d5510` |
+| effort 3; effort 3 with `--place-fixed-cooling 0.9`; with `--place-start-acceptance 0.2` | `fdc89175` |
+| effort 3 with `--place-wide-moves`; with `--place-hot-start`; with `--place-start-window 0` | `9697de6e` |
+
+(The first eight hex digits of each file's MD5.) That three-way and two-way
+sameness is NOT EXPLAINED here; it may mean those flags change nothing on
+this design at effort 3.
+
+Before `c33b2e7`, effort 3 **did not build**: `p1_din13` could not be tied.
+The mapper puts the 1024x8 frame buffer in the 16-bit mode with
+`DIBDI = {8'b0, data}`, so bits 8 to 15 are netlist zeros that are written
+and never read, and a netlist zero was `TiePolicy::Zero`. It is the address
+defect again on the data side, and `unused_data_bit` closes it the same way.
+So the lottery was real — the default placement had simply always drawn the
+lucky ticket for this design.
+
 #### The pad: nothing absorbs it here, so the constant is built
 
 The other half of the table needs the opposite answer, and an ECP5
