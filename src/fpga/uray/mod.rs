@@ -29,6 +29,14 @@
 //! | the ECC in word 45 and the low half of word 46 ([`is_ecc_bit`]) | **measured** on the same bitstream; see that function |
 //! | the packet stream, the registers and the CRC | the 7-series ones, unchanged: [`super::xc7::read_bit`] reads Vivado's ZCU104 bitstream with every CRC matching |
 
+mod fabric;
+
+pub use fabric::{
+    ALIASES, FabricInputs, FabricStats, GridRegion, SiteDecl, SiteTypePins, TileConn,
+    TileTypeWiring, UrayFabric, build_arch, composed_joins, is_break_type, parse_tileconn,
+    routing_of, wiring_type,
+};
+
 use std::collections::{BTreeMap, HashMap};
 use std::error::Error;
 use std::fmt;

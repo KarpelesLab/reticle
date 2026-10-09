@@ -171,8 +171,32 @@ pub(crate) const PRJURAY: Database = Database {
     },
 };
 
+/// The 2020 Project U-Ray snapshot's *wiring*: every tile type's wires,
+/// pips and sites, every site type's pins, and the ZU3EG's
+/// `tileconn.json`. `tests/fpga_uray_routing.rs` reads it.
+///
+/// [`PRJURAY`] has the bits and no wiring at all, and this has wiring
+/// for only one die, the ZU3EG. What makes it serve the ZU7EV is that
+/// the two dies share tile types and wire names; how far that carries,
+/// and the two adjustments it needs, are measured in `docs/fpga-uray.md`.
+/// Its own `segbits` files use other names and are not fetched, and
+/// neither is the ZU3EG's tile grid.
+///
+/// 202 files, 104 MB, most of it `tileconn.json` (81 MB).
+pub(crate) const PRJURAY_2020: Database = Database {
+    name: "prjuray-db-2020",
+    version: "affbc5e555ebae16475f32e8fb2d6565d4204f3f",
+    what: "Project U-Ray's 2020 snapshot (f4pga/prjuray-db, CC0): tile and site types, ZU3EG wiring",
+    env: "RETICLE_URAYWIRING",
+    probe: "zynqusp/xczu3eg-sfvc784-1-e/tileconn.json",
+    source: Source::Files {
+        base: "https://raw.githubusercontent.com/f4pga/prjuray-db/affbc5e555ebae16475f32e8fb2d6565d4204f3f/",
+        manifest: include_str!("prjuray-db-2020.manifest"),
+    },
+};
+
 /// Every database, in the order `reticle fetch` lists them.
-pub(crate) const ALL: [&Database; 4] = [&PRJXRAY, &APICULA, &TRELLIS, &PRJURAY];
+pub(crate) const ALL: [&Database; 5] = [&PRJXRAY, &APICULA, &TRELLIS, &PRJURAY, &PRJURAY_2020];
 
 /// The database called `name`.
 pub(crate) fn by_name(name: &str) -> Option<&'static Database> {
@@ -580,7 +604,9 @@ pub(crate) fn fetch_cmd(args: &Args) -> Result<Outcome, ArgError> {
 
 #[cfg(test)]
 mod tests {
-    use super::{ALL, APICULA, Found, PRJURAY, PRJXRAY, Source, TRELLIS, parse_manifest};
+    use super::{
+        ALL, APICULA, Found, PRJURAY, PRJURAY_2020, PRJXRAY, Source, TRELLIS, parse_manifest,
+    };
     use std::fs;
     use std::path::PathBuf;
 
@@ -693,6 +719,27 @@ mod tests {
         );
     }
 
+    /// The 2020 subset is the tile and site types and one die's wiring.
+    #[test]
+    fn the_2020_uray_manifest_is_the_wiring_subset() {
+        let Source::Files { manifest, .. } = &PRJURAY_2020.source else {
+            panic!("prjuray-db-2020 is fetched file by file")
+        };
+        let files = parse_manifest(manifest).expect("every line parses");
+        assert_eq!(files.len(), 202);
+        let has = |p: &str| files.iter().any(|f| f.path == p);
+        assert!(has("COPYING"));
+        assert!(has(PRJURAY_2020.probe));
+        assert!(has("zynqusp/tile_types/tile_type_INT.json"));
+        assert!(has("zynqusp/site_types/site_type_SLICEL.json"));
+        assert!(files.iter().all(|f| {
+            !f.path.contains('/')
+                || f.path.starts_with("zynqusp/tile_types/")
+                || f.path.starts_with("zynqusp/site_types/")
+                || f.path == PRJURAY_2020.probe
+        }));
+    }
+
     #[test]
     fn a_manifest_line_that_escapes_its_directory_is_refused() {
         let sha = "0".repeat(64);
@@ -713,12 +760,15 @@ mod tests {
         let gowin = include_str!("../../../tests/fpga_gowin.rs");
         let trellis_test = include_str!("../../../tests/fpga_trellis.rs");
         let uray = include_str!("../../../tests/fpga_uray.rs");
+        let uray_routing = include_str!("../../../tests/fpga_uray_routing.rs");
         for (db, test) in [
             (&PRJXRAY, xray),
             (&PRJXRAY, xray_lutram),
             (&APICULA, gowin),
             (&TRELLIS, trellis_test),
             (&PRJURAY, uray),
+            (&PRJURAY, uray_routing),
+            (&PRJURAY_2020, uray_routing),
         ] {
             for pinned in [db.name, db.version, db.env] {
                 let quoted = format!("\"{pinned}\"");
@@ -737,6 +787,6 @@ mod tests {
                 db.probe
             );
         }
-        assert_eq!(ALL.len(), 4);
+        assert_eq!(ALL.len(), 5);
     }
 }

@@ -215,9 +215,10 @@ pins the count.
 The 2026 database ships *bits* only. Which wire of a tile is the same
 metal as which wire of its neighbour is in the 2020 f4pga snapshot: its
 `tileconn.json` and `tile_types/*.json`, CC0, for the ZU3EG alone. This
-section is the measurement of how far those carry to the ZU7EV. **None of
-it is in Reticle yet**; it was done with throwaway scripts, and the
-numbers are what an implementation must reproduce.
+section is the measurement of how far those carry to the ZU7EV. The
+measurement was first done with throwaway scripts over the whole die; the
+result is now [`src/fpga/uray/fabric.rs`](../src/fpga/uray/fabric.rs),
+and [the last subsection](#in-reticle) is what it reproduces.
 
 ### What carries over unchanged
 
@@ -302,11 +303,49 @@ RAM pins the 2020 tile types name differently, interface tiles
 (`INT_INTF_*`) whose outputs are fed through `&` features, and the PCIe
 and transceiver interfaces.
 
+### In Reticle
+
+`uray::build_arch` builds an `Arch` for a region of the grid from the
+2026 tile grid and bits, the 2020 tile types and the ZU3EG's
+`tileconn.json` (`reticle fetch prjuray-db prjuray-db-2020`):
+
+- one tile type per ZU7EV type, its wires being its 2020 type's (through
+  the aliases);
+- a pip for every routing feature of its `segbits` file;
+- two bitless pips, one each way, for every wire pair of every rule.
+
+The composed joins depend on the instance, because whether a `CLEM` is the
+next real tile east of a `CLEL_R` depends on where the two sit. So they go
+on a *variant* of the western type, such as `CLEL_R+CLEM@3`, and only
+where the ZU3EG has no direct rule for that pair at that offset. Declared
+on the type instead, the same joins would misfire 1 216 times on this die,
+for example joining `INT_INTF_R` to a `CLEM` across the `DSP` between
+them.
+
+`tests/fpga_uray_routing.rs` runs the check above over reticle's own
+graph for the block between `INT_X5Y290` and `INT_X30Y250`. That block
+has 3 257 tiles, 3.9 million pips, 20 million join pips and six variants.
+A node the region's edge cuts is left out, exactly. Of the region's pips,
+**Vivado set 255 241, and every core node they touch is driven exactly
+once and read**. Core nodes are those made only of interconnect, slice
+and break tiles. The block RAM and interface nodes are counted apart and
+pinned (167 driven twice, 652 undriven, 2 560 unread): they reach the
+interconnect through `&` features, which name two pips that share one bit
+and cannot be split.
+
+One mistake on the way is worth keeping. The composition walks the rules
+from each first step through break tiles, with a budget of 200 states. In
+the first Rust version, one budget was shared by all of a wire's first
+steps. A bus wire has dozens of them, one per break tile row offset, so
+the budget ran out before the bus was reached, and the region showed
+16 431 undriven nodes. The scripts had given each first step its own
+budget. With that restored, the count fell to 652, all of them outside
+the core.
+
 ## What remains, in order
 
-1. **The routing graph in Reticle.** Fetch the 2020 snapshot's tile types
-   and `tileconn.json`, apply the aliases and the composition, and pin the
-   counts above.
+1. **Bels.** The slice's lookup tables, flip-flops and carry chain, from
+   the 2026 `segbits` names and the 2020 site types.
 2. **Write a bitstream**, starting with logic the processor can see:
    leave the base overlay's AXI path alone and change one LUT of it, or
    drive an LED from a fresh design.
