@@ -1015,3 +1015,76 @@ fn place_effort_changes_a_seven_series_placement() {
         "`--place-effort 1` built the same bitstream as the default effort"
     );
 }
+
+/// Every clock pin of `examples/basys3/ssd1306_console.v` arrives on the
+/// global clock network, at the placement that once put fifteen of them on
+/// general interconnect.
+///
+/// That design, at `--place-effort 3`, is where a clock routed through
+/// `FAN_BOUNCE` chains of 80 to 103 hops gave a hold violation on a Basys 3:
+/// the status line's shift register captured its neighbour's new value and
+/// every character read some bits from the next nibble. With the router's
+/// steering removed the build is refused, naming 15 clock pins; this
+/// requires it to build and to report every pin on the network.
+///
+/// What it would catch: the steering lost (the build is refused) or the
+/// refusal lost along with it (the count stops being "N of N"). What it
+/// would not catch: skew *on* the network, which this flow does not model
+/// — only a part shows that.
+///
+/// Ignored because it places and routes an 1800-cell design: about 80 s
+/// from a release build and 450 s from a debug one. Run it with
+/// `cargo test --release --all-features --test cli -- --include-ignored
+/// ssd1306_console_is_clocked`.
+#[test]
+#[ignore = "places and routes an 1800-cell design; run with --release --include-ignored"]
+fn ssd1306_console_is_clocked_entirely_on_the_global_network() {
+    let dir = scratch("ssd1306_console_clocks");
+    let bit = dir.join("ssd1306_console.bit");
+    let out = Command::new(env!("CARGO_BIN_EXE_reticle"))
+        .args([
+            "fpga",
+            "examples/basys3/ssd1306_console_pad.v",
+            "examples/basys3/ssd1306_console.v",
+            "ip/bus/spi_display_rx/rtl/spi_display_rx.v",
+            "ip/util/cdc_sync/rtl/cdc_sync.v",
+            "ip/video/ssd1306_slave/rtl/ssd1306_slave.v",
+            "ip/bus/uart/rtl/uart.v",
+            "ip/bus/uart/rtl/uart_baud_div.v",
+            "ip/bus/uart/rtl/uart_rx.v",
+            "ip/bus/uart/rtl/uart_tx.v",
+            "--top",
+            "ssd1306_console_pad",
+            "--device",
+            "xc7a35t-cpg236",
+            "--constraints",
+            "examples/basys3/ssd1306_console.rcf",
+            "--place-effort",
+            "3",
+            "--output-dir",
+            dir.to_str().unwrap(),
+            "--bitstream",
+            bit.to_str().unwrap(),
+        ])
+        .env("RETICLE_OFFLINE", "1")
+        .output()
+        .expect("failed to run the reticle binary");
+    let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
+    if stderr.contains("needs a chip database") {
+        eprintln!("skipped: needs a Project X-Ray database; run `reticle fetch prjxray-db`");
+        return;
+    }
+    assert_eq!(out.status.code(), Some(0), "{stderr}");
+    let line = stderr
+        .lines()
+        .find(|line| line.contains("clock pin(s) a global buffer drives arrived"))
+        .unwrap_or_else(|| panic!("no clock-network line in:\n{stderr}"));
+    let numbers: Vec<usize> = line
+        .split_whitespace()
+        .filter_map(|word| word.parse().ok())
+        .collect();
+    assert!(
+        numbers.len() >= 2 && numbers[0] == numbers[1] && numbers[0] > 0,
+        "not every clock pin was on the network: {line}"
+    );
+}

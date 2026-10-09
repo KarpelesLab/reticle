@@ -2,6 +2,21 @@
 
 ## A status word whose fields came back moved, and what it is not
 
+**EXPLAINED AND FIXED, 9 October 2026: it was the clock.** A global clock
+was reaching some flip-flops through general interconnect — chains of 80 to
+103 `FAN_BOUNCE`/`BYP_BOUNCE` hops — while their neighbours were on the
+global network, and the skew between the two was a hold violation: a
+shift-register stage captured its upstream neighbour's *new* value, so
+those bits were one shift step ahead. That is the "dynamic" defect the
+measurement below said it had to be, and it is placement-dependent, which
+is why which bits moved changed between builds. With the clock kept on the
+network, the same `iso7816_terminal.v` on the same part reads
+`etu_div = 0x1458` (5208) and `CARD_DIV16 = 0x000E` (14) — exactly the
+source — over 30 consecutive reads, and `k` is still exact. The account is
+in [A clock off the network](#a-clock-off-the-network-and-the-hold-violation-it-made)
+below. The original reading follows unchanged, because it is what
+narrowed the search.
+
 **MEASURED on a Basys 3, 8 October 2026, and NOT YET EXPLAINED.** This
 section is here because the path to the answer is the useful part and
 because four plausible causes have been ruled out with a measurement each.
@@ -89,6 +104,78 @@ LED is stuck between builds is a reason to suspect the second.
 - Read `status_left` and `pos` out alongside the word: the model says the
   odd bits took one extra step, and a counter that disagrees with the
   nibble count would say where.
+
+## A clock off the network, and the hold violation it made
+
+**CHECKED on a Basys 3, 9 October 2026.**
+
+`examples/basys3/ssd1306_console.v` reproduced the status-word fault
+above in a design that does nothing else: its 128-bit status line came
+back with some bits of every hex character taken from the next nibble.
+The flags byte, whose bit 0 is a constant one, read `10`; the sequence
+number counted `00, 10, 02, 12, …`. The testbench parses the same line and
+passes, and the mapped netlist reads `shifter[127:124]` as it should.
+
+**It moved with the placement.** At the default placement bits 3, 1 and 0
+of each character were one shift step early and bit 2 was right; at
+`--place-effort 3` bits 3 and 0 were early and bits 2 and 1 right. In both
+cases an early bit read *exactly* the value the shift register was about
+to load, which no mis-wiring of a reader does cleanly and a hold violation
+does exactly.
+
+**The route said why.** Two flip-flops of the shift register in one slice
+with one clock enable, one right and one early, ruled out a shared slice
+control. Their clock paths did not: `ff127` was clocked through 80 hops of
+`FAN_BOUNCE`, `FAN_ALT` and `BYP_BOUNCE`, daisy-chained from tile to tile,
+and `ff123`, which feeds it, through 103; a flip-flop that read correctly
+took `GCLK_B0 -> CLK1` and nothing else. The 7-series writer called the
+router with no clock preference at all, and an interconnect tile's `CLK`
+pins take `FAN_BOUNCE`, `ER1END`, `WR1END` and `SR1END` as well as the
+twelve `GCLK_B`, so once part of a clock's tree existed a neighbouring
+tile's data wires were cheaper than the network.
+
+**Three changes, each found by the one before it failing:**
+
+1. **Steer the clock onto the network** — `XrayFabric::clock_node_costs`,
+   the 7-series counterpart of the ECP5 flow's, makes network wires cost a
+   twentieth of an ordinary one.
+2. **Keep everything else off it** — `RouteOptions::network`. Unlike the
+   ECP5's, this network is **not** a one-way funnel: the clock row takes
+   interconnect inputs and a break tile joins general routing onto the
+   vertical tracks. With the steering alone a flip-flop's output rode 1322
+   pips of clock wire and took the ground fans a block RAM's write enable
+   needed, so the build failed. Only a signal a global buffer drives may
+   enter now. Which wires are the network is `is_clock_wire`, and its
+   first version — "starts with `HCLK_`" — barred general routing that
+   crosses a clock tile (`HCLK_NN6A`, `HCLK_LV`, `CLK_FEED_EE2A`, a carry
+   chain's `HCLK_CLB_COUT0_L`), so that nothing routed at all.
+3. **Load the `HCLK` row of every clock region the design covers** —
+   `XrayDatabase::region_with_clock_rows`. `iso7816_terminal.v` then still
+   had one flip-flop clocked off the network, at `X14Y51`: the region
+   loaded around its pins reached rows of the clock region 0-51 but not
+   that region's `HCLK` row at 26, so nothing there could reach the network
+   and the clock came down from the region above through `GFAN`.
+
+And a refusal, as on the ECP5: `clock_network_use` walks every clock pin's
+own path back to its first programmable pip, and `reticle fpga
+--bitstream` writes nothing if a clock a global buffer drives arrived any
+other way. With the steering removed it refuses `ssd1306_console.v` at
+`--place-effort 3`, naming 15 pins; `blink.v` is clean either way, which
+is why `blink` alone never showed this.
+
+**What was measured after:** every clock pin on the network in
+`ssd1306_console.v` (635 of 635, at the default placement and at effort
+3), `iso7816_terminal.v` (948 of 948) and `blink.v` (26 of 26), all
+signals routed and 0 bits unexplained. On the part, `ssd1306_console.v`
+gave 300 consecutive status lines with the sequence number counting by one
+through a wrap, and `iso7816_terminal.v` read its fields as the source
+says.
+
+**What is not established:** skew *on* the network is still nobody's
+model here — nothing in this flow computes clock arrival times — and the
+network's wire names are the ones these designs used, read off their
+routes; a clock region or an IO clock they never reached may name wires
+`is_clock_wire` does not know.
 
 ## The 7-series bitstream path never checked its own routing
 

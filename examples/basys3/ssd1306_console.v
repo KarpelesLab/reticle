@@ -122,11 +122,19 @@
 // select and D/C as a real driver would — then asks over the serial port
 // and checks all 1024 bytes of the dump against what it drew.
 //
-// **No part has run this**, and `ip/bus/spi_display_rx`'s `frame_count` is
-// known to read one too high from reset (its README §3a). The SPI
-// receiver's frame counter is not in the status line for that reason; the
-// one reported is the **display's**, which counts completed frames and is
-// checked.
+// **On a Basys 3, 9 October 2026, the serial half is CHECKED and the SPI
+// half is not.** `?` gave 300 consecutive correct status lines, `g` a
+// correct empty frame, and `z`, `o`, `n` and unknown characters were silent
+// as documented. That needed a fix in the flow first: the status line had
+// come back with bits taken from the next nibble, a hold violation from a
+// clock routed off the global network (`docs/fpga-xray.md`, "A clock off
+// the network"). Nothing has driven the four SPI pins, so the display path
+// has run only in `ssd1306_console_tb.v`, and `<`/`>` have not been tried.
+//
+// `ip/bus/spi_display_rx`'s `frame_count` is known to read one too high
+// from reset (its README §3a). The SPI receiver's frame counter is not in
+// the status line for that reason; the one reported is the **display's**,
+// which counts completed frames and is checked.
 
 module ssd1306_console #(
     parameter TICK_BIT = 25,

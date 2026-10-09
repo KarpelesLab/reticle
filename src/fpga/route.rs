@@ -193,6 +193,22 @@ pub struct RouteOptions {
     /// optimality and not correctness, and it errs towards the network,
     /// which is the direction the caller asked for.
     pub node_base: Vec<f32>,
+    /// Nodes only some signals may enter, by node id, or empty for "none":
+    /// a node marked `true` is closed to every signal
+    /// [`RouteOptions::network_signals`] does not allow.
+    ///
+    /// This exists because a cheap class of wire is only sound when nothing
+    /// but the signals it is meant for can reach it. On an ECP5 the clock
+    /// network is a one-way funnel, so [`RouteOptions::node_base`] alone is
+    /// enough. A 7-series clock network is **not**: the clock row takes
+    /// interconnect inputs and a break tile joins general routing onto the
+    /// vertical tracks, so making it cheap drew data signals onto it — a
+    /// flip-flop's output rode 1322 pips of global clock wire, and took the
+    /// ground fans a block RAM's write enable needed.
+    pub network: Vec<bool>,
+    /// The signals allowed onto [`RouteOptions::network`], by signal index,
+    /// or empty for "every signal".
+    pub network_signals: Vec<bool>,
 }
 
 impl Default for RouteOptions {
@@ -204,6 +220,8 @@ impl Default for RouteOptions {
             history_factor: 1.0,
             astar_weight: 0.3,
             node_base: Vec::new(),
+            network: Vec::new(),
+            network_signals: Vec::new(),
         }
     }
 }
@@ -448,11 +466,13 @@ struct Geometry {
     base: f32,
     /// True when it reaches every tile.
     global: bool,
+    /// True when it is one of [`RouteOptions::network`]'s nodes.
+    reserved: bool,
 }
 
 impl Geometry {
     /// The table for a whole graph.
-    fn of(graph: &RoutingGraph, base: &[f32]) -> Vec<Geometry> {
+    fn of(graph: &RoutingGraph, base: &[f32], reserved: &[bool]) -> Vec<Geometry> {
         graph
             .nodes
             .iter()
@@ -462,6 +482,7 @@ impl Geometry {
                 span: wire.span,
                 base: base.get(index).copied().unwrap_or(1.0),
                 global: wire.global,
+                reserved: reserved.get(index).copied().unwrap_or(false),
             })
             .collect()
     }
@@ -567,7 +588,7 @@ pub fn route(
     }
 
     let mut state = State::new(graph.nodes.len());
-    let geometry = Geometry::of(graph, &options.node_base);
+    let geometry = Geometry::of(graph, &options.node_base, &options.network);
     // The node every outgoing pip reaches, in the order
     // [`RoutingGraph::outgoing`] hands the pips over, so the inner loop of
     // the expansion walks two sequential arrays instead of chasing a
@@ -855,9 +876,14 @@ fn route_one(
     let mut tree: BTreeSet<NodeId> = BTreeSet::new();
     tree.insert(source);
     let mut pips: Vec<PipId> = Vec::new();
+    let barred = !options
+        .network_signals
+        .get(signal)
+        .copied()
+        .unwrap_or(options.network_signals.is_empty());
     for (sink, name) in &terminals.sinks {
         let Some(path) = maze(
-            graph, geometry, edges, state, scratch, &tree, *sink, present, options,
+            graph, geometry, edges, state, scratch, &tree, *sink, present, options, barred,
         ) else {
             return Err(RouteError::Unroutable {
                 signal: netlist.signals[signal].name.clone(),
@@ -953,6 +979,7 @@ fn maze(
     sink: NodeId,
     present: f64,
     options: &RouteOptions,
+    barred: bool,
 ) -> Option<Vec<PipId>> {
     let target = geometry[sink as usize].tile;
     // The per-tile charge is scaled by the node's own base cost, because
@@ -992,6 +1019,9 @@ fn maze(
         let here = scratch.cost_of(node);
         let run = reach_start[node as usize] as usize..reach_start[node as usize + 1] as usize;
         for (pip, next) in graph.outgoing(node).iter().zip(&reach[run]) {
+            if barred && geometry[*next as usize].reserved {
+                continue;
+            }
             let step = state.node_cost(*next, geometry[*next as usize].base, present);
             let candidate = here + step;
             if candidate < scratch.cost_of(*next) {
@@ -1405,6 +1435,72 @@ mod tests {
         };
         let (ignored, _) = route(&netlist, &graph, &placement, &options).unwrap();
         assert!(!on_second_row(&ignored));
+    }
+
+    /// [`RouteOptions::network`] closes the cheap class to a signal
+    /// [`RouteOptions::network_signals`] does not allow, and leaves it open
+    /// to one it does. This is the half a 7-series clock network needs and
+    /// an ECP5's does not: there, data signals can reach the clock wires,
+    /// and making them cheap drew a flip-flop's output across 1322 pips of
+    /// them.
+    ///
+    /// What it would catch: the barrier ignored, applied to the wrong
+    /// signals, or applied to an allowed one. What it would not catch: the
+    /// wrong set of nodes being marked on a real fabric, which is
+    /// `xray::is_clock_wire`'s test and a real build's business.
+    #[test]
+    fn a_barred_signal_keeps_off_the_network_and_an_allowed_one_takes_it() {
+        let (_, graph) = detour(8);
+        let netlist = pairs(1);
+        let mut placement = Placement::new(netlist.instances.len(), graph.sites.len());
+        for (index, (bel, tile)) in [("src0", 0), ("dst0", 7)].into_iter().enumerate() {
+            let site = graph
+                .site_index(&format!("X{tile}Y0/{bel}"))
+                .expect("the bel exists");
+            placement.place(index, site);
+        }
+        let on_second_row = |routing: &Routing| {
+            routing
+                .routes()
+                .any(|r| r.nodes.iter().any(|n| graph.wire(*n).tile.1 == 1))
+        };
+        let network: Vec<bool> = graph.nodes.iter().map(|wire| wire.tile.1 == 1).collect();
+        let base: Vec<f32> = network
+            .iter()
+            .map(|on| if *on { 0.05 } else { 1.0 })
+            .collect();
+        let signal = netlist
+            .signals
+            .iter()
+            .position(Signal::is_routable)
+            .expect("one signal to route");
+
+        let mut allowed = vec![false; netlist.signals.len()];
+        allowed[signal] = true;
+        let options = RouteOptions {
+            node_base: base.clone(),
+            network: network.clone(),
+            network_signals: allowed,
+            ..RouteOptions::default()
+        };
+        let (taken, _) = route(&netlist, &graph, &placement, &options).unwrap();
+        assert!(
+            on_second_row(&taken),
+            "an allowed signal should take the cheap network"
+        );
+
+        let options = RouteOptions {
+            node_base: base,
+            network,
+            network_signals: vec![false; netlist.signals.len()],
+            ..RouteOptions::default()
+        };
+        let (kept_off, _) = route(&netlist, &graph, &placement, &options).unwrap();
+        assert!(
+            !on_second_row(&kept_off),
+            "a barred signal went onto the network however cheap it was"
+        );
+        assert!(kept_off.verify(&netlist, &graph, &placement).is_empty());
     }
 
     #[test]

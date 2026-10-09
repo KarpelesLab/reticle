@@ -1318,6 +1318,58 @@ impl XrayDatabase {
         }))
     }
 
+    /// The same region, grown so that every clock region it overlaps has
+    /// its `HCLK` row inside it.
+    ///
+    /// A flip-flop is clocked from the global network through its own clock
+    /// region's horizontal clock row: the `HCLK` tile drives the leaves,
+    /// and the leaves drive `GCLK_B` in every interconnect tile of the
+    /// region. A region loaded around the design's pins can cover some rows
+    /// of a clock region without its `HCLK` row, and then nothing placed in
+    /// those rows can reach the network at all. That happened on
+    /// `examples/basys3/iso7816_terminal.v`: the host UART's synchroniser
+    /// landed at `X14Y51`, the clock region of rows 0-51 had no `HCLK` row
+    /// loaded, and the router brought the clock down from the region above
+    /// through `GFAN` and a chain of bounce wires — the kind of path that
+    /// gave a hold violation on the part.
+    ///
+    /// The clock regions are read off the grid rather than assumed: each
+    /// `HCLK_L`/`HCLK_R` row is one region's centre, and a region's
+    /// boundary is midway between two centres — on this part rows 26, 78
+    /// and 130, with the `BRKH` break rows at 52 and 104, which is where the
+    /// midpoints fall.
+    ///
+    /// # Errors
+    ///
+    /// Those of [`XrayDatabase::tiles`].
+    pub fn region_with_clock_rows(
+        &self,
+        files: &dyn FileProvider,
+        region: GridRegion,
+    ) -> Result<GridRegion, XrayError> {
+        let tiles = self.tiles(files)?;
+        let rows: BTreeSet<u32> = tiles
+            .iter()
+            .filter(|tile| matches!(tile.tile_type.as_str(), "HCLK_L" | "HCLK_R"))
+            .map(|tile| tile.grid_y)
+            .collect();
+        let rows: Vec<u32> = rows.into_iter().collect();
+        let mut out = region;
+        for (index, row) in rows.iter().enumerate() {
+            let top = index
+                .checked_sub(1)
+                .map_or(0, |before| u32::midpoint(rows[before], *row) + 1);
+            let bottom = rows
+                .get(index + 1)
+                .map_or(u32::MAX, |after| u32::midpoint(*row, *after));
+            if region.y0 <= bottom && region.y1 >= top {
+                out.y0 = out.y0.min(*row);
+                out.y1 = out.y1.max(*row);
+            }
+        }
+        Ok(out)
+    }
+
     /// Every tile of `tilegrid.json`, in name order.
     ///
     /// # Errors
@@ -2152,6 +2204,140 @@ impl XrayFabric {
         Ok(count)
     }
 
+    /// A [`super::route::RouteOptions::node_base`] vector that makes the
+    /// global clock network cheap, so a clock goes on it — the 7-series
+    /// counterpart of `TrellisFabric::clock_node_costs`, for the same
+    /// reason.
+    ///
+    /// # What happened without it
+    ///
+    /// An interconnect tile's `CLK0`/`CLK1` take twelve `GCLK_B` wires
+    /// **and** `FAN_BOUNCE`, `ER1END`, `WR1END` and `SR1END`
+    /// (`segbits_int_l.db`). A router with no preference reaches a clock pin
+    /// whichever way is cheapest, and once part of the clock's tree is
+    /// built, a neighbouring tile's ordinary wires are cheaper than going
+    /// back to the network. On `examples/basys3/ssd1306_console.v` the
+    /// flip-flops of the status shift register were clocked through
+    /// **80 to 103** `FAN_BOUNCE`/`BYP_BOUNCE` hops, daisy-chained from
+    /// tile to tile, while a flip-flop one row away was on `GCLK_B0`. The
+    /// skew between those two kinds of path was larger than a flip-flop's
+    /// clock-to-out, so `shifter[127]` captured `shifter[123]`'s **new**
+    /// value — a hold violation — and every character of the status line
+    /// read some of its bits from the next nibble. Which bits depended on
+    /// the placement. It routed, verified and decoded cleanly: only the
+    /// part showed it.
+    ///
+    /// # Why it is not sound on its own here
+    ///
+    /// On an ECP5 the network is a one-way funnel and a cheap network is
+    /// all it takes. **This one is not.** The clock row takes interconnect
+    /// inputs (`CLK_HROW_WW2END2`, a buffer tile's `CLK_BUFG_IMUX`) and a
+    /// break tile joins general routing onto the vertical tracks
+    /// (`BRKH_CLK_R_CK_GCLK26 -> CLK_BUFG_CK_GCLK26`), and `GCLK_B` feeds
+    /// `GFAN` and so every `IMUX`. With only this, a flip-flop's output
+    /// rode 1322 pips of clock wire and took the two ground fans a block
+    /// RAM's write enable needed. So it goes with
+    /// [`XrayFabric::clock_network_nodes`] as a barrier: only a signal a
+    /// global buffer drives may enter the network at all.
+    #[must_use]
+    pub fn clock_node_costs(&self, graph: &super::arch::RoutingGraph, preference: f32) -> Vec<f32> {
+        let mut out = vec![1.0f32; graph.nodes.len()];
+        for (index, wire) in graph.nodes.iter().enumerate() {
+            if is_clock_wire(&wire.name) {
+                out[index] = preference;
+            }
+        }
+        out
+    }
+
+    /// The global clock network's nodes, for
+    /// [`super::route::RouteOptions::network`]: what a signal no global
+    /// buffer drives may not enter. See [`XrayFabric::clock_node_costs`].
+    #[must_use]
+    pub fn clock_network_nodes(&self, graph: &super::arch::RoutingGraph) -> Vec<bool> {
+        graph
+            .nodes
+            .iter()
+            .map(|wire| is_clock_wire(&wire.name))
+            .collect()
+    }
+
+    /// Whether each placed clock pin's clock arrived from the global
+    /// network, for every clock a global buffer drives.
+    ///
+    /// [`XrayFabric::clock_node_costs`] is a preference and a preference
+    /// can be lost, and a clock off the network fails as skew rather than
+    /// as a broken bitstream — nothing else would notice — so
+    /// `reticle fpga --bitstream` refuses on what this finds.
+    ///
+    /// A pin is on the network when the **first programmable pip** on its
+    /// own path back through the route comes from a clock-network wire:
+    /// `CLK1 <- GCLK_B0_EAST`, not `CLK1 <- FAN_BOUNCE5`. It is asked of
+    /// each pin's own path, because one slice of a tile can be on the
+    /// network while its neighbour is not. A clock no global buffer drives
+    /// is counted in [`XrayClockUse::unbuffered`] and not judged: there is
+    /// no network for it to have been on.
+    #[must_use]
+    pub fn clock_network_use(
+        &self,
+        netlist: &super::Netlist,
+        placement: &super::place::Placement,
+        graph: &super::arch::RoutingGraph,
+        routing: &super::Routing,
+    ) -> XrayClockUse {
+        let mut out = XrayClockUse::default();
+        for (index, instance) in netlist.instances.iter().enumerate() {
+            let roles: &[&str] = match instance.kind.as_str() {
+                "ff" => &["clk"],
+                "lutram" => &["wclk"],
+                "bram" => &["p0_clk", "p1_clk"],
+                _ => continue,
+            };
+            let Some(site) = placement.site_of(index) else {
+                continue;
+            };
+            let site = &graph.sites[site];
+            for role in roles {
+                let Some(signal) = instance
+                    .pins
+                    .iter()
+                    .map(|pin| &netlist.pins[*pin])
+                    .find(|pin| pin.role == *role)
+                    .and_then(|pin| pin.signal)
+                else {
+                    continue;
+                };
+                let (Some(pin), Some(route)) = (site.pin(role), routing.route(signal)) else {
+                    continue;
+                };
+                if !is_clock_wire(&graph.wire(route.source).name) {
+                    out.unbuffered += 1;
+                    continue;
+                }
+                let mut node = pin;
+                let mut on_network = false;
+                for _ in 0..32 {
+                    let Some(id) = route.pips.iter().find(|id| graph.pip(**id).to == node) else {
+                        break;
+                    };
+                    let pip = graph.pip(*id);
+                    if !graph.pip_bits(*id).is_empty() {
+                        on_network = is_clock_wire(&graph.wire(pip.from).name);
+                        break;
+                    }
+                    node = pip.from;
+                }
+                if on_network {
+                    out.on_network += 1;
+                } else {
+                    out.off_network
+                        .push(format!("{} ({role}) on {}", instance.name, site.name));
+                }
+            }
+        }
+        out
+    }
+
     /// Switches on the weak pull-up of every IO buffer whose cell asks for
     /// one — `set_io -pullup yes`, which the IO pass records as the
     /// cell's `pullup` attribute — and returns how many pads it pulled.
@@ -2280,6 +2466,69 @@ fn split_device(device: &str) -> Option<(String, String)> {
         return None;
     }
     Some((die.to_owned(), package.to_owned()))
+}
+
+/// How the clock pins of a placed 7-series design were reached; see
+/// [`XrayFabric::clock_network_use`].
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct XrayClockUse {
+    /// Clock pins whose clock came off the global network.
+    pub on_network: usize,
+    /// Clock pins a global buffer's clock reached through general
+    /// interconnect instead, as `<instance> (<role>) on <site>`.
+    pub off_network: Vec<String>,
+    /// Clock pins whose clock no global buffer drives.
+    pub unbuffered: usize,
+}
+
+/// The default [`XrayFabric::clock_node_costs`] preference: the same
+/// twentieth of an ordinary wire the ECP5 flow uses.
+pub const CLOCK_PREFERENCE: f32 = 0.05;
+
+/// Whether a wire belongs to the global clock network.
+///
+/// **Not a tile prefix.** The clock tiles are crossed by ordinary
+/// routing: `HCLK_NN6A`, `HCLK_LV`, `CLK_FEED_EE2A`, `CLK_HROW_WW4END0` and
+/// a carry chain's `HCLK_CLB_COUT0_L` are general interconnect that happens
+/// to pass through an `HCLK` or clock-row tile, and a rule of "starts with
+/// `HCLK_`" barred every one of them, so that no signal of
+/// `examples/basys3/ssd1306_console.v` could route at all. What marks a
+/// clock wire is in the rest of the name:
+///
+/// - `GCLK`: the 32 vertical tracks (`CLK_BUFG_CK_GCLK`,
+///   `CLK_FEED_R_CK_GCLK`, `CLK_BUFG_REBUF_R_CK_GCLK<n>_TOP`), the clock
+///   row's view of them (`CLK_HROW_R_CK_GCLK`) and the twelve an
+///   interconnect tile takes (`GCLK_B<n>`, `GCLK_L_B<n>`);
+/// - `BUFHCLK`: the horizontal buffers' outputs and every feedthrough and
+///   column tile that carries them (`HCLK_CK_BUFHCLK`,
+///   `HCLK_CLB_CK_BUFHCLK`, `HCLK_FEEDTHRU_1_CK_BUFHCLK`, ...);
+/// - `HCLK_LEAF_CLK`: the leaf drivers onto `GCLK_B`;
+/// - `CK_MUX_OUT` and `CK_HCLK_OUT`: the clock row's own path;
+/// - a `BUFGCTRL`'s output, `CLK_BUFG_BUFGCTRL<n>_O`.
+///
+/// Three things that match and are left out: the clock row's `*TEST*`
+/// wires; a block RAM's `REGCLK<x>` pins, which contain `GCLK` by accident;
+/// and `I2GCLK`, the dedicated path from a clock-capable pad to a buffer,
+/// whose signal an input buffer drives and not a global buffer — barring it
+/// would keep a pad's clock off the only road to its `BUFG`. These are the
+/// wires the clock of that design took on the network, read off its route.
+fn is_clock_wire(name: &str) -> bool {
+    if ["TEST", "REGCLK", "I2GCLK"]
+        .iter()
+        .any(|part| name.contains(part))
+    {
+        return false;
+    }
+    [
+        "GCLK",
+        "BUFHCLK",
+        "HCLK_LEAF_CLK",
+        "CK_MUX_OUT",
+        "CK_HCLK_OUT",
+    ]
+    .iter()
+    .any(|part| name.contains(part))
+        || (name.starts_with("CLK_BUFG_BUFGCTRL") && name.ends_with("_O"))
 }
 
 #[cfg(test)]

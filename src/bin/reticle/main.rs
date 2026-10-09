@@ -3033,6 +3033,18 @@ fn write_xc7_bitstream(
                 .map(|r| GridRegion::new(r.x0, r.y0.saturating_sub(6), r.x1 + 2, r.y1 + 6))
                 .or(Some(region));
         }
+        // Last, because every growth above can move the rectangle into
+        // another clock region: a clocked design needs the `HCLK` row of
+        // every clock region it covers, or what is placed there cannot be
+        // clocked from the network. See `region_with_clock_rows`.
+        if let Some(region) = options.region
+            && needs_global_buffer(design, top, device)
+        {
+            options.region = Some(
+                db.region_with_clock_rows(&files, region)
+                    .map_err(|e| e.to_string())?,
+            );
+        }
     }
 
     let fabric = db.load(&files, &options).map_err(|e| e.to_string())?;
@@ -3063,8 +3075,29 @@ fn write_xc7_bitstream(
     // A route that fails says why. Writing the file anyway is the right
     // thing — a partly configured bitstream is still worth looking at —
     // but the reason goes in the report rather than into a shrug.
+    //
+    // A clock is steered onto the global network rather than merely
+    // allowed it: see `XrayFabric::clock_node_costs` for what happened
+    // without this, which was a hold violation on the part. And only a
+    // clock may enter it: this network has entries from general routing,
+    // so a cheap one would draw data onto it too.
+    let network_signals: Vec<bool> = netlist
+        .signals
+        .iter()
+        .map(|signal| {
+            signal
+                .driver
+                .is_some_and(|pin| netlist.instances[netlist.pins[pin].instance].kind == "gb")
+        })
+        .collect();
+    let route_options = RouteOptions {
+        node_base: fabric.clock_node_costs(&graph, reticle::fpga::xray::CLOCK_PREFERENCE),
+        network: fabric.clock_network_nodes(&graph),
+        network_signals,
+        ..RouteOptions::default()
+    };
     let mut failure = None;
-    let (routing, routed) = match route(&netlist, &graph, &placement, &RouteOptions::default()) {
+    let (routing, routed) = match route(&netlist, &graph, &placement, &route_options) {
         Ok((routing, report)) => (routing, report.signals),
         Err(e) => {
             failure = Some(e.to_string());
@@ -3086,6 +3119,30 @@ fn write_xc7_bitstream(
                 problems.join("; ")
             ));
         }
+    }
+
+    // A clock that came through general routing routes, verifies and
+    // configures, and its skew is nobody's model: on a Basys 3 it was a
+    // hold violation that made a shift register skip. Refusing is what
+    // makes `clock_node_costs`' preference a guarantee.
+    let clocks = fabric.clock_network_use(&netlist, &placement, &graph, &routing);
+    if failure.is_none() && !clocks.off_network.is_empty() {
+        let mut named = clocks.off_network.clone();
+        let more = named.len().saturating_sub(8);
+        named.truncate(8);
+        return Err(format!(
+            "{} clock pin(s) a global buffer drives were reached through general interconnect \
+             instead of the global clock network, so nothing was written: {}{}. The route exists \
+             and the bitstream would configure it; what it would not do is control skew, and on \
+             this family that has been a hold violation on a part. See docs/fpga-xray.md",
+            clocks.off_network.len(),
+            named.join(", "),
+            if more > 0 {
+                format!(" and {more} more")
+            } else {
+                String::new()
+            }
+        ));
     }
 
     let mut tiles = bitstream::generate(
@@ -3169,6 +3226,21 @@ fn write_xc7_bitstream(
     if clock_bits > 0 {
         note.push_str(&format!(
             "note: {clock_bits} global clock rebuffer enable bit(s) over the column\n"
+        ));
+    }
+    if clocks.on_network > 0 {
+        note.push_str(&format!(
+            "note: {} of {} clock pin(s) a global buffer drives arrived on the global clock \
+             network\n",
+            clocks.on_network,
+            clocks.on_network + clocks.off_network.len()
+        ));
+    }
+    if clocks.unbuffered > 0 {
+        note.push_str(&format!(
+            "warning: {} clock pin(s) driven by a clock no global buffer drives, so through \
+             general interconnect with unmodelled skew\n",
+            clocks.unbuffered
         ));
     }
     if pulled > 0 {

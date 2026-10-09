@@ -545,3 +545,66 @@ fn a_global_clock_with_no_buffer_driving_it_is_reported() {
         Vec::<String>::new()
     );
 }
+
+/// The global clock network's wires, by name, as `is_clock_wire` must sort
+/// them. Each name on either side came out of one build of
+/// `examples/basys3/ssd1306_console.v`: the first list is the path its
+/// clock took on the network, the second is general interconnect that
+/// crosses a clock tile, every one of which an earlier "starts with
+/// `HCLK_`" rule barred, so that no signal of that design could route.
+///
+/// What it would catch: a stem that misses part of the network (a clock
+/// steered off it at that hop) or catches ordinary routing (data refused a
+/// road it needs). What it would not catch: a clock wire whose name this
+/// design never used — a clock region it did not reach, an IO clock.
+#[test]
+fn the_clock_network_is_told_from_the_routing_that_crosses_it() {
+    for name in [
+        "CLK_BUFG_BUFGCTRL6_O",
+        "CLK_BUFG_CK_GCLK26",
+        "BRKH_CLK_R_CK_GCLK26",
+        "CLK_BUFG_REBUF_R_CK_GCLK26_TOP",
+        "CLK_FEED_R_CK_GCLK26",
+        "CLK_HROW_R_CK_GCLK26",
+        "CLK_HROW_CK_MUX_OUT_L4",
+        "CLK_HROW_CK_HCLK_OUT_L4",
+        "CLK_HROW_CK_BUFHCLK_L4",
+        "HCLK_CK_BUFHCLK4",
+        "HCLK_CLB_CK_BUFHCLK4",
+        "HCLK_FEEDTHRU_1_CK_BUFHCLK4",
+        "HCLK_VBRK_CK_BUFHCLK4",
+        "HCLK_INT_INTERFACE_CK_BUFHCLK4",
+        "HCLK_LEAF_CLK_B_TOP4",
+        "GCLK_B0",
+        "GCLK_B0_EAST",
+        "GCLK_L_B6_WEST",
+    ] {
+        assert!(super::is_clock_wire(name), "{name} is on the clock network");
+    }
+    for name in [
+        "HCLK_NN6A3",
+        "HCLK_LV7",
+        "HCLK_SS6END_N0_3",
+        "HCLK_CLB_COUT0_L",
+        "HCLK_BRAM_CASCIN_L_ADDRARDADDRU5",
+        "CLK_FEED_EE2A1",
+        "CLK_HROW_WW4END0_1",
+        "CLK_HROW_IMUX30_1",
+        "CLK_HROW_CK_INT_0_1",
+        "CLK_BUFG_REBUF_EE2A0_1",
+        "CLK_BUFG_IMUX30_2",
+        "CLK_BUFG_BUFGCTRL6_I",
+        "CLK_HROW_CK_GCLK_IN_TEST4",
+        "BRAM_FIFO18_REGCLKARDRCLK",
+        "LIOI_I2GCLK_TOP0",
+        "FAN_BOUNCE5",
+        "CLK1",
+        "GFAN0",
+        "IMUX_L16",
+    ] {
+        assert!(
+            !super::is_clock_wire(name),
+            "{name} is not on the clock network"
+        );
+    }
+}
