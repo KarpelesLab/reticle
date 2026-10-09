@@ -273,3 +273,43 @@ fn how_vivado_leaves_the_default_bits() {
         eprintln!("{kind}: all {all}, some {some}, none {none}");
     }
 }
+
+/// The two `INIT` bits the database files as defaults are ordinary
+/// truth-table bits: read through the full 64-bit layout, the slice where
+/// Vivado ties two processor inputs low holds two tables of contents zero
+/// (the `D` and `F` tables, whose outputs reach the interface column) and
+/// six of exactly the unused pattern. See `uray::slice`.
+///
+/// If the missing bits were stored inverted, the two zero tables would
+/// read `0x8000_0000_8000_0000` and the unused ones zero; if the layout
+/// were wrong, none would read either value.
+#[test]
+fn vivados_constant_zero_tables_read_zero_through_the_full_layout() {
+    use reticle::fpga::uray::slice::{self, LUT_LETTERS, UNUSED_LUT_INIT};
+    let Some(root) = uraydb() else { return };
+    let Some(bytes) = reference() else { return };
+    let grid = grid(&root);
+    let layout = FrameLayout::from_grid(&grid);
+    let bit = uray::read_bit(&bytes).unwrap();
+    let decoded = uray::decode(&grid, &layout, &bit.frames).unwrap();
+    let types = tile_types(&root, &grid);
+    let index = grid
+        .tiles()
+        .iter()
+        .position(|t| t.name == "CLEL_R_X27Y180")
+        .unwrap();
+    let set: std::collections::HashSet<_> = decoded.tiles[&index].iter().copied().collect();
+    let mut contents = Vec::new();
+    for letter in LUT_LETTERS {
+        let init = slice::lut_init_bits(&types["CLEL_R"], letter).unwrap();
+        contents.push((letter, slice::read_lut(&init, &|b| set.contains(&b))));
+    }
+    for (letter, value) in contents {
+        let expected = if matches!(letter, 'D' | 'F') {
+            0
+        } else {
+            UNUSED_LUT_INIT
+        };
+        assert_eq!(value, expected, "{letter}6LUT reads {value:#018x}");
+    }
+}

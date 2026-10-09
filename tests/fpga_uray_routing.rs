@@ -495,20 +495,6 @@ fn vivados_routing_is_consistent_beside_the_processor() {
     assert_eq!(verdict.other, (439, 839, 6380), "{verdict:?}");
 }
 
-/// The node, by union-find root, of every wire of `graph`, with joins
-/// (bitless pips) as the only edges.
-fn node_roots(graph: &reticle::fpga::arch::RoutingGraph) -> Vec<u32> {
-    let mut nodes = Nodes((0..u32::try_from(graph.nodes.len()).unwrap()).collect());
-    for (id, pip) in graph.pips.iter().enumerate() {
-        if graph.pip_bits(u32::try_from(id).unwrap()).is_empty() {
-            nodes.join(pip.from, pip.to);
-        }
-    }
-    (0..u32::try_from(graph.nodes.len()).unwrap())
-        .map(|i| nodes.find(i))
-        .collect()
-}
-
 /// The cheapest path of pips from any wire of `from`'s node to any wire
 /// of `to`'s node, counting each pip with bits as one and each join as
 /// nothing, never entering a node in `forbidden`. The pips with bits, in
@@ -563,24 +549,30 @@ fn search(
 
 /// Writes the first bitstream for the ZCU104 that Reticle builds itself:
 /// EMIO GPIO output 0 routed straight back to EMIO GPIO input 1, through
-/// the processor's interface column and the interconnect, and nothing
-/// else. Linux drives `gpio594` as an output and reads `gpio595` as an
-/// input. The two are different lines on purpose: Linux reads an output
-/// line's own output register back, so a loopback onto the same line
-/// would look the same whether it worked or not. `docs/fpga-uray.md` has
-/// the procedure and the result.
+/// the processor's interface column and the interconnect, with every other
+/// `PS8` input Vivado would drive tied to zero from lookup tables beside
+/// the column, as Vivado ties them (`uray::processor`).
+///
+/// Linux drives `gpio594` as an output and reads `gpio595` as an input.
+/// The two are different lines on purpose: Linux reads an output line's
+/// own output register back, so a loopback onto the same line would look
+/// the same whether it worked or not. `docs/fpga-uray.md` has the
+/// procedure and the result.
 ///
 /// Ignored because it writes files: set `RETICLE_ZCU104_OUT` to a
 /// directory, and it writes `emio_loopback.bit` and `.bin` there.
 ///
-/// Before writing, it holds the bitstream to the project's two checks
-/// that apply to a routing-only design: every set bit decodes, through
-/// the database, to a feature; and the pips the decoded bits turn on are
-/// exactly the pips of the route.
+/// Before writing, it holds the bitstream to the project's checks for a
+/// design of routing and lookup tables: every set bit decodes, through the
+/// database, to a feature; every pip the bits turn on is one the design
+/// chose, or a sibling of one that shares its bits; and every lookup table
+/// reads back the contents it was given.
 #[test]
 #[ignore = "writes a bitstream for the board"]
 fn an_emio_loopback_for_the_board() {
     use reticle::fpga::arch::ConfigBit;
+    use reticle::fpga::uray::processor;
+    use reticle::fpga::uray::slice::{self, LUT_LETTERS, UNUSED_LUT_INIT};
     use reticle::fpga::xc7::BitHeader;
 
     let (Some(bits_root), Some(wiring_root)) = (uraydb(), wiringdb()) else {
@@ -591,9 +583,10 @@ fn an_emio_loopback_for_the_board() {
         return;
     };
     let inputs = inputs(&bits_root, &wiring_root);
-    let ps = position(&inputs.grid, "PSS_ALTO_X0Y60");
-    let low = position(&inputs.grid, "INT_X31Y0");
-    let high = position(&inputs.grid, "INT_X27Y239");
+    let grid = &inputs.grid;
+    let ps = position(grid, "PSS_ALTO_X0Y60");
+    let low = position(grid, "INT_X31Y0");
+    let high = position(grid, "INT_X27Y239");
     let region = GridRegion::new(
         ps.0,
         high.1.min(low.1),
@@ -602,7 +595,7 @@ fn an_emio_loopback_for_the_board() {
     );
     let fabric = uray::build_arch(
         &FabricInputs {
-            grid: &inputs.grid,
+            grid,
             bits: &inputs.bits,
             wiring: &inputs.wiring,
             rules: &inputs.rules,
@@ -610,19 +603,53 @@ fn an_emio_loopback_for_the_board() {
         region,
     );
     let graph = fabric.arch.build_graph();
-    let roots = node_roots(&graph);
-    let wire = |name: &str| -> NodeId {
-        let index = graph
-            .nodes
-            .iter()
-            .position(|w| w.tile == ps && w.name == name)
-            .unwrap_or_else(|| panic!("the PS8 tile has no wire `{name}`"));
-        u32::try_from(index).unwrap()
-    };
-    let source = wire("PSS_ALTO_CORE_0_FMIO_GPIO_OUT0");
-    let sink = wire("PSS_ALTO_CORE_0_FMIO_GPIO_IN1");
-    // No other processor pin may be touched: a stray signal on an AXI
-    // handshake input would be far worse than a failed loopback.
+    let roots = processor::node_roots(&graph);
+    let mut wire_at: HashMap<((u32, u32), &str), NodeId> = HashMap::new();
+    for (i, w) in graph.nodes.iter().enumerate() {
+        wire_at.insert((w.tile, w.name.as_str()), u32::try_from(i).unwrap());
+    }
+    let at: HashMap<(u32, u32), usize> = grid
+        .tiles()
+        .iter()
+        .enumerate()
+        .map(|(i, t)| (t.grid, i))
+        .collect();
+
+    // Every site pin of the region: which nodes already have a driver,
+    // and which inputs are whose.
+    let mut site_outputs: HashSet<u32> = HashSet::new();
+    let mut ps8_inputs: Vec<(String, NodeId)> = Vec::new();
+    for y in region.y0..=region.y1 {
+        for x in region.x0..=region.x1 {
+            let Some(index) = fabric.arch.tile_index_at(x, y) else {
+                continue;
+            };
+            let kind = uray::wiring_type(&fabric.database_type[index]);
+            let Some(wiring) = inputs.wiring.get(kind) else {
+                continue;
+            };
+            for site in &wiring.sites {
+                let Some(pins) = inputs.sites.get(&site.site_type) else {
+                    continue;
+                };
+                for (pin, wire) in &site.pins {
+                    let Some(&id) = wire_at.get(&((x, y), wire.as_str())) else {
+                        continue;
+                    };
+                    if pins.outputs.contains(pin) {
+                        site_outputs.insert(roots[id as usize]);
+                    } else if pins.inputs.contains(pin) && site.site_type == "PS8" {
+                        ps8_inputs.push((pin.clone(), id));
+                    }
+                }
+            }
+        }
+    }
+    let ps_wire = |name: &str| -> NodeId { wire_at[&(ps, name)] };
+    let source = ps_wire("PSS_ALTO_CORE_0_FMIO_GPIO_OUT0");
+    let sink = ps_wire("PSS_ALTO_CORE_0_FMIO_GPIO_IN1");
+
+    // The loopback first, kept off every other processor pin.
     let forbidden: HashSet<u32> = graph
         .nodes
         .iter()
@@ -631,13 +658,6 @@ fn an_emio_loopback_for_the_board() {
         .map(|(i, _)| roots[i])
         .filter(|r| *r != roots[source as usize] && *r != roots[sink as usize])
         .collect();
-    for (label, end) in [("source", source), ("sink", sink)] {
-        let members: Vec<_> = (0..graph.nodes.len())
-            .filter(|&i| roots[i] == roots[end as usize])
-            .map(|i| (graph.nodes[i].tile, graph.nodes[i].name.clone()))
-            .collect();
-        eprintln!("{label} node: {members:?}");
-    }
     let route = search(&graph, &roots, source, sink, &forbidden).expect("a route exists");
     for pip in &route {
         let p = &graph.pips[*pip as usize];
@@ -649,78 +669,152 @@ fn an_emio_loopback_for_the_board() {
             graph.pip_bits(*pip)
         );
     }
-
-    // Tile bits: the route's, then every slice's defaults, as Vivado
-    // leaves an unused slice.
-    let at: HashMap<(u32, u32), usize> = inputs
-        .grid
-        .tiles()
-        .iter()
-        .enumerate()
-        .map(|(i, t)| (t.grid, i))
-        .collect();
-    let mut bits: Vec<(usize, ConfigBit)> = Vec::new();
+    let mut used: HashSet<u32> = HashSet::new();
+    let mut at_wire = source;
+    used.insert(roots[at_wire as usize]);
     for pip in &route {
+        at_wire = graph.pips[*pip as usize].to;
+        used.insert(roots[at_wire as usize]);
+        used.insert(roots[graph.pips[*pip as usize].from as usize]);
+    }
+
+    // Then the constant: every other PS8 input Vivado would drive, from
+    // the lookup tables of the slices beside the interface column.
+    let undriven = processor::left_undriven();
+    let sinks: Vec<NodeId> = ps8_inputs
+        .iter()
+        .filter(|(pin, id)| !undriven.contains(pin) && !used.contains(&roots[*id as usize]))
+        .map(|(_, id)| *id)
+        .collect();
+    let mut blocked: HashSet<u32> = site_outputs.clone();
+    blocked.extend(used.iter().copied());
+    for (pin, id) in &ps8_inputs {
+        if undriven.contains(pin) {
+            blocked.insert(roots[*id as usize]);
+        }
+    }
+    let int27 = position(grid, "INT_X27Y0").0;
+    let mut sources: Vec<(NodeId, usize)> = Vec::new();
+    for (index, tile) in grid.tiles().iter().enumerate() {
+        if tile.kind != "CLEL_R"
+            || tile.grid.0 != int27 + 1
+            || !region.contains(tile.grid.0, tile.grid.1)
+        {
+            continue;
+        }
+        for (l, letter) in LUT_LETTERS.iter().enumerate() {
+            let wire = format!("CLE_CLE_L_SITE_0_{letter}_O");
+            if let Some(&id) = wire_at.get(&(tile.grid, wire.as_str())) {
+                sources.push((id, index * 8 + l));
+                blocked.remove(&roots[id as usize]);
+            }
+        }
+    }
+    let tie = processor::route_constant(&graph, &roots, &sources, &sinks, &blocked);
+    let unreached: Vec<&str> = tie
+        .unreached
+        .iter()
+        .map(|id| graph.nodes[*id as usize].name.as_str())
+        .collect();
+    eprintln!(
+        "{} inputs to tie, {} pips, {} lookup tables; unreached: {} {:?}",
+        sinks.len(),
+        tie.pips.len(),
+        tie.sources.len(),
+        unreached.len(),
+        &unreached[..unreached.len().min(12)]
+    );
+    assert!(unreached.is_empty(), "every input Vivado drives is driven");
+
+    // Tile bits: the pips', then every lookup table of every slice.
+    let mut bits: Vec<(usize, ConfigBit)> = Vec::new();
+    for pip in route.iter().chain(&tie.pips) {
         let tile = at[&graph.pips[*pip as usize].tile];
         bits.extend(graph.pip_bits(*pip).iter().map(|b| (tile, *b)));
     }
-    let defaults = {
-        let mut out: HashMap<String, Vec<ConfigBit>> = HashMap::new();
-        for kind in ["CLEL_L", "CLEL_R", "CLEM", "CLEM_R"] {
-            let stem = TileTypeBits::file_stem(kind).replacen("segbits_", "defaults_", 1);
-            let path = format!("{bits_root}/{stem}.db");
-            let parsed = TileTypeBits::parse("", "none", Some((&read(&path), &path))).unwrap();
-            out.insert(kind.to_owned(), parsed.defaults);
-        }
-        out
-    };
-    for (index, tile) in inputs.grid.tiles().iter().enumerate() {
-        if let Some(list) = defaults.get(&tile.kind) {
-            bits.extend(list.iter().map(|b| (index, *b)));
+    let mut layouts: HashMap<(String, char), [ConfigBit; 64]> = HashMap::new();
+    for kind in ["CLEL_L", "CLEL_R", "CLEM", "CLEM_R"] {
+        for letter in LUT_LETTERS {
+            layouts.insert(
+                (kind.to_owned(), letter),
+                slice::lut_init_bits(&inputs.bits[kind], letter).unwrap(),
+            );
         }
     }
-    let layout = FrameLayout::from_grid(&inputs.grid);
-    let frames = uray::frames_from_tile_bits(&inputs.grid, &layout, bits).unwrap();
+    let mut contents: HashMap<(usize, char), u64> = HashMap::new();
+    for (index, tile) in grid.tiles().iter().enumerate() {
+        for letter in LUT_LETTERS {
+            let Some(layout) = layouts.get(&(tile.kind.clone(), letter)) else {
+                continue;
+            };
+            let l = LUT_LETTERS.iter().position(|c| *c == letter).unwrap();
+            let value = if tie.sources.contains(&(index * 8 + l)) {
+                0
+            } else {
+                UNUSED_LUT_INIT
+            };
+            contents.insert((index, letter), value);
+            for (i, b) in layout.iter().enumerate() {
+                if value >> i & 1 == 1 {
+                    bits.push((index, *b));
+                }
+            }
+        }
+    }
+    let layout = FrameLayout::from_grid(grid);
+    let frames = uray::frames_from_tile_bits(grid, &layout, bits).unwrap();
 
-    // Every bit decodes, and the pips it turns on are the route's.
-    let decoded = uray::decode(&inputs.grid, &layout, &frames).unwrap();
+    // The checks.
+    let decoded = uray::decode(grid, &layout, &frames).unwrap();
     assert!(decoded.unowned.is_empty());
     let mut types = inputs.bits.clone();
-    for (kind, list) in &defaults {
-        types
-            .entry(kind.clone())
-            .or_default()
-            .defaults
-            .clone_from(list);
+    for kind in ["CLEL_L", "CLEL_R", "CLEM", "CLEM_R"] {
+        let stem = TileTypeBits::file_stem(kind).replacen("segbits_", "defaults_", 1);
+        let path = format!("{bits_root}/{stem}.db");
+        let parsed = TileTypeBits::parse("", "none", Some((&read(&path), &path))).unwrap();
+        types.entry(kind.to_owned()).or_default().defaults = parsed.defaults;
     }
-    let explained = uray::explain(&inputs.grid, &decoded, &types);
+    let explained = uray::explain(grid, &decoded, &types);
     assert_eq!(explained.unexplained_total(), 0, "{explained:?}");
-    eprintln!(
-        "{} set bits, every one explained; {} of them the route's",
-        decoded.set_bits,
-        route
-            .iter()
-            .map(|p| graph.pip_bits(*p).len())
-            .sum::<usize>()
-    );
-    let mut on = HashSet::new();
+    for ((index, letter), value) in &contents {
+        let set: HashSet<_> = decoded
+            .tiles
+            .get(index)
+            .into_iter()
+            .flatten()
+            .copied()
+            .collect();
+        let layout = &layouts[&(grid.tiles()[*index].kind.clone(), *letter)];
+        assert_eq!(slice::read_lut(layout, &|b| set.contains(&b)), *value);
+    }
+    let chosen: HashSet<u32> = route.iter().chain(&tie.pips).copied().collect();
+    let mut extra = 0usize;
     for (index, pip) in graph.pips.iter().enumerate() {
         let id = u32::try_from(index).unwrap();
         let pattern = graph.pip_bits(id);
-        if pattern.is_empty() {
+        if pattern.is_empty() || chosen.contains(&id) {
             continue;
         }
-        let tile = at[&pip.tile];
-        let Some(set) = decoded.tiles.get(&tile) else {
+        let Some(set) = decoded.tiles.get(&at[&pip.tile]) else {
             continue;
         };
         if pattern.iter().all(|b| set.contains(b)) {
-            on.insert(id);
+            // Only a pip that shares every bit with a chosen one may be on.
+            let shares = chosen
+                .iter()
+                .any(|c| graph.pips[*c as usize].tile == pip.tile && graph.pip_bits(*c) == pattern);
+            assert!(
+                shares,
+                "an unchosen pip is on: {}",
+                graph.nodes[pip.to as usize].name
+            );
+            extra += 1;
         }
     }
-    let chosen: HashSet<u32> = route.iter().copied().collect();
-    let extra: Vec<_> = on.difference(&chosen).collect();
-    eprintln!("pips the bits turn on beyond the route: {}", extra.len());
+    eprintln!(
+        "{} set bits, every one explained; {extra} pips on beside the chosen ones, each sharing a chosen one's bits",
+        decoded.set_bits
+    );
 
     let header = BitHeader::new("emio_loopback", "xczu7ev-ffvc1156-2-e");
     let bit = uray::write_bit(&header, uray::IDCODE_XCZU7EV, &layout, &frames).unwrap();
@@ -731,4 +825,81 @@ fn an_emio_loopback_for_the_board() {
         uray::bin_from_bit(&bit).unwrap(),
     )
     .unwrap();
+}
+
+/// The table of `PS8` inputs Vivado leaves undriven, re-derived from
+/// Vivado's routing on Reticle's own fabric: an input is undriven when no
+/// pip whose bits Vivado set drives its node. It must be exactly
+/// `uray::processor::left_undriven`, all 585.
+#[test]
+fn the_undriven_processor_inputs_are_the_ones_vivado_leaves() {
+    use reticle::fpga::uray::processor;
+    let (Some(bits_root), Some(wiring_root)) = (uraydb(), wiringdb()) else {
+        return;
+    };
+    let Some(bitstream) = reference() else { return };
+    let inputs = inputs(&bits_root, &wiring_root);
+    let grid = &inputs.grid;
+    let ps = position(grid, "PSS_ALTO_X0Y60");
+    let low = position(grid, "INT_X31Y0");
+    let high = position(grid, "INT_X27Y239");
+    let region = GridRegion::new(
+        ps.0,
+        high.1.min(low.1),
+        low.0.max(high.0),
+        high.1.max(low.1),
+    );
+    let fabric = uray::build_arch(
+        &FabricInputs {
+            grid,
+            bits: &inputs.bits,
+            wiring: &inputs.wiring,
+            rules: &inputs.rules,
+        },
+        region,
+    );
+    let graph = fabric.arch.build_graph();
+    let roots = processor::node_roots(&graph);
+
+    let layout = FrameLayout::from_grid(grid);
+    let bit = uray::read_bit(&bitstream).unwrap();
+    let decoded = uray::decode(grid, &layout, &bit.frames).unwrap();
+    let mut set: HashMap<(u32, u32), HashSet<_>> = HashMap::new();
+    for (tile, bits) in &decoded.tiles {
+        set.insert(grid.tiles()[*tile].grid, bits.iter().copied().collect());
+    }
+    let mut driven: HashSet<u32> = HashSet::new();
+    for (id, pip) in graph.pips.iter().enumerate() {
+        let bits = graph.pip_bits(u32::try_from(id).unwrap());
+        if !bits.is_empty()
+            && set
+                .get(&pip.tile)
+                .is_some_and(|s| bits.iter().all(|b| s.contains(b)))
+        {
+            driven.insert(roots[pip.to as usize]);
+        }
+    }
+    let wiring = &inputs.wiring["PSS_ALTO"];
+    let pins = &inputs.sites["PS8"];
+    let mut undriven = std::collections::BTreeSet::new();
+    for (pin, wire) in &wiring.sites[0].pins {
+        if !pins.inputs.contains(pin) {
+            continue;
+        }
+        let id = graph
+            .nodes
+            .iter()
+            .position(|w| w.tile == ps && w.name == *wire)
+            .unwrap();
+        if !driven.contains(&roots[id]) {
+            undriven.insert(pin.clone());
+        }
+    }
+    let table = processor::left_undriven();
+    let missing: Vec<_> = table.difference(&undriven).collect();
+    let extra: Vec<_> = undriven.difference(&table).collect();
+    assert!(
+        missing.is_empty() && extra.is_empty(),
+        "in the table but driven: {missing:?}; undriven but not in the table: {extra:?}"
+    );
 }

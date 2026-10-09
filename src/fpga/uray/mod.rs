@@ -31,6 +31,8 @@
 
 mod bitstream;
 mod fabric;
+pub mod processor;
+pub mod slice;
 
 pub use bitstream::{
     IDCODE_XCZU7EV, LEADING_DUMMY_WORDS, bin_from_bit, frames_from_tile_bits, write_bit,

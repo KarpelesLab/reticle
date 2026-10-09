@@ -441,20 +441,80 @@ is why the route ends at input 1.
   level was left undriven, and read as asserted.
 
 Both say the same thing: **a bitstream for this part must tie the
-processor's unused inputs**, as Vivado's evidently does. Which inputs,
-and to what level, is the next thing to read out of `base.bit`. Until
-then, a Reticle design should be loaded only briefly, with the base
-overlay reloaded afterwards, as it was here.
+processor's unused inputs**, as Vivado's evidently does.
+
+## Tying the processor's inputs
+
+### What Vivado does
+
+Every `PS8` input's node was traced back through the pips Vivado turned
+on in `base.bit`. 2 958 inputs end at a lookup table of contents zero in
+a slice beside the interface column. That includes both USB controllers'
+`EMIO_HUB_PORT_OVERCRNT_*`, every fabric interrupt line not in use, and
+every unused AXI port's `AWVALID`, `ARVALID`, `WVALID` …. About 1 200 more
+are driven by the overlay's own logic. **585 are driven by nothing.** No
+input is tied to one.
+
+The 585 are test and scan pins (`BSCAN_*`, `TEST_*`, `FMIO_TEST_*`,
+`IDCODE*`), the PHY's analogue test interface (`I_AFE_*`),
+characterisation inputs (`FMIO_CHAR_*`, `IO_CHAR_*`), and a handful of
+active-low functional inputs: `NIRQ0_LPD_RPU`, `NFIQ*`,
+`FMIO_SPI*_SS_IN_B`, `FMIO_SD*_SDIF_WP`. For those, reading 1 — which is
+what an undriven input reads — *is* idle. Vivado relies on that, and the
+interrupt and over-current effects above are the same reading on inputs
+where 1 means "asserted".
+
+The list is `src/fpga/uray/ps8_undriven.txt`.
+`the_undriven_processor_inputs_are_the_ones_vivado_leaves` re-derives it
+from Vivado's routing on Reticle's own fabric: an input is undriven when
+no pip whose bits are set drives its node. The result is exactly the 585.
+
+### A lookup table's two missing bits
+
+Tying to zero needs a lookup table of contents zero, so it needs all 64
+of a table's `INIT` bits. The database names 62 of them. `INIT[31]` and
+`INIT[63]` are missing from every table, and the 16 `defaults` bits of a
+slice are two per table.
+
+**They are the same bits, stored like the others.** The 62 named bits
+sit on a grid, `INIT[i]` at frame `f0 + 3 − i mod 4`, bit
+`c0 + 15 − ⌊i/4⌋`. Continued, that grid puts `INIT[63]` and `INIT[31]`
+exactly on two of the defaults, for every table. Read through the full
+layout, the slice where Vivado ties two inputs low (`CLEL_R_X27Y180`)
+holds two tables reading 0, the two whose outputs reach the interface
+column, and six reading `0x8000_0000_8000_0000`. That is what Vivado
+leaves in a table nothing uses, and why the generator filed those two
+bits as defaults. Had the bits been stored inverted, the two zero tables
+would read `0x8000…` and the others zero.
+`vivados_constant_zero_tables_read_zero_through_the_full_layout` pins
+this, and `uray::slice::lut_init_bits` fills the two bits in from the
+grid, refusing a database whose named bits are off it.
+
+### The loopback, tied, and with nothing besides
+
+`uray::processor::route_constant` grows one tree from the lookup tables
+of the slices beside the interface column to every input it must drive.
+Reusing the tree costs nothing, and the tree never enters a node that
+already has a driver or an input that must stay undriven. For the
+loopback it ties **4 153 inputs** with 7 201 pips from 313 tables, with
+none unreached. Every other table on the die gets Vivado's unused
+contents. The bitstream's 467 380 set bits all decode. Every table reads
+back what it was given, and the only pips on besides the chosen ones are
+the interface tile's 29 siblings.
+
+**On the board, 2026-10-09**: the loopback worked as before (EMIO 1
+follows EMIO 0 through `0, 1, 0, 1, 1, 0`), and this time **nothing else
+happened**. IRQ 54 stayed at its count of 1, both ports' over-current
+counters stayed at 2, and the kernel logged nothing but the load. The
+base overlay was reloaded afterwards and answered on AXI.
 
 ## What remains, in order
 
-1. **Tie the processor's unused inputs**, as Vivado does: read which
-   ones `base.bit` drives, and from what.
-2. **Bels.** The slice's lookup tables, flip-flops and carry chain, from
-   the 2026 `segbits` names and the 2020 site types. Two of each
-   lookup table's 64 `INIT` bits are missing from the database. On the
-   evidence so far they are the 16 `defaults` bits, stored inverted, but
-   that is not yet checked.
+1. **Bels.** The slice's lookup tables, flip-flops and carry chain as
+   bels the placer can use, from the 2026 `segbits` names and the 2020
+   site types. The lookup tables' contents are complete (above).
+2. **A clock.** The processor's `PL_CLK0`, through its `BUFG_PS`, onto
+   the global network and down to the slices.
 3. **The processor interface.** The fabric talks to Linux through the
    `PS8` block's AXI ports, whose bits are in `INT_INTF_LEFT_TERM_PSS` and
    `PSS_ALTO`.
