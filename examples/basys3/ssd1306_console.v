@@ -122,14 +122,19 @@
 // select and D/C as a real driver would — then asks over the serial port
 // and checks all 1024 bytes of the dump against what it drew.
 //
-// **On a Basys 3, 9 October 2026, the serial half is CHECKED and the SPI
-// half is not.** `?` gave 300 consecutive correct status lines, `g` a
+// **Both halves have run on a Basys 3.** The SPI half did first, inside
+// `iso_display.v` (`78a162f`): a real device drew its logo into this core
+// and the dump rendered it legibly, with `unknown` at zero over 3072 bytes.
+// This standalone wrapper was then CHECKED on 9 October 2026 with nothing
+// on the SPI pins: `?` gave 300 consecutive correct status lines, `g` a
 // correct empty frame, and `z`, `o`, `n` and unknown characters were silent
 // as documented. That needed a fix in the flow first: the status line had
 // come back with bits taken from the next nibble, a hold violation from a
 // clock routed off the global network (`docs/fpga-xray.md`, "A clock off
-// the network"). Nothing has driven the four SPI pins, so the display path
-// has run only in `ssd1306_console_tb.v`, and `<`/`>` have not been tried.
+// the network") — and `iso_display.v` has not been rebuilt and run with
+// that fix yet. `<`/`>` have not been tried from this wrapper.
+//
+// **This wrapper's port is 115200 baud; `iso_display.v`'s is 2 Mbaud.**
 //
 // `ip/bus/spi_display_rx`'s `frame_count` is known to read one too high
 // from reset (its README §3a). The SPI receiver's frame counter is not in
