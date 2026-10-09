@@ -549,6 +549,77 @@ flip-flops (`AFF2`), the other letters, the lookup table path
 (`FFMUXA1.SP.D6.OUT1`) and which flip-flops share a clock enable are
 still readings of the database, not measurements.
 
+## The processor's clocks, found by counting them
+
+### What the databases do not say
+
+The processor's clocks enter the fabric through `BUFG_PS` buffers. On
+the ZU3EG they sit in `RCLK_INTF_LEFT_TERM_ALTO` tiles. On the ZU7EV the
+tiles in that place are `RCLK_RCLK_INTF_LEFT_TERM_DA6_FT`, a type the
+2020 snapshot does not describe and whose 2026 `segbits` file is empty.
+The ZU3EG type's own features are no better: its input-select features
+give the same two bits to unrelated pairs of input and buffer (`07_069
+08_071` appears for at least four). Read through those features, Vivado's
+bits in the ZU7EV tile explain one thing,
+`CLK_BUFG_PS_14_CLK_OUT->CLK_HROUTE14`, and leave the rest unexplained.
+
+### The experiment
+
+`three_clock_counters` in `tests/fpga_uray_board.rs` borrows the clock
+network instead of building it. Every bit Vivado set in the fabric's
+clock rows (the `RCLK_*` types) and in the processor's clock buffer
+tiles is copied verbatim, 7 480 bits in 362 tiles. The I/O banks' clock
+rows (`RCLK_HDIO`, `RCLK_HPIO`, `RCLK_XIPHY` …) are left out: they share
+frames with the I/O tiles, and the first attempt set 115 bits inside
+`HDIO_BOT_RIGHT` and `XIPHY_BYTE_L`, which drive the board's pins.
+
+Each of three 32-bit ripple counters is clocked by a leaf clock that
+Vivado switched on beside the processor:
+
+- **counter 0**: track 14 of `RCLK_INT_L_X29Y89`, where Vivado's buffer
+  sends `PL_CLK0`, judging by the one feature that explains;
+- **counter 1**: track 11, the other track in use in every clock region
+  there;
+- **counter 2**: track 22.
+
+A leaf reaches the interconnect through `GCLK_B` wires, and only in one
+half of its clock region's column. Leaf 10 of that tile reaches
+`INT_X29` rows 248–279 of the grid. From there the path to a slice's
+`CLK1` is `GCLK_B → INT_NODE_GLOBAL → CTRL`, all documented. Each stage
+is flip-flop `A` of its own slice, with its data on the bypass from
+lookup table `A` (contents `0x5555…`, an inverter of `AQ`). It carries no
+clock-enable or set/reset feature. Linux reads each counter as one
+32-bit EMIO bank from the GPIO block's read-only data registers
+(`0xFF0A006C`, `…70`, `…74`), twice, a measured interval apart.
+
+### What it counted
+
+**On the ZCU104, 2026-10-09**, in three runs of a quarter of a second:
+
+| counter | track | rate |
+|---|---|---|
+| 0 | 14 | **100.001 MHz** |
+| 1 | 11 | **300.00 MHz** |
+| 2 | 22 | 0 |
+
+Track 14 is `PL_CLK0`, which the processor configuration sets to
+99.999 MHz. Track 11 is another processor clock, at 300 MHz. Track 22 is
+fed by a clock manager, which was not replayed, so it does not run.
+Nothing else happened: no interrupt, no over-current.
+
+The same run established, on the part:
+
+- a flip-flop with **no** clock-enable or set/reset feature has its
+  enable on and its reset off;
+- a lookup table's output, routed to the flip-flop's bypass, works;
+- a 32-stage ripple counter, every hop through Reticle's own routing,
+  runs at 300 MHz;
+- the leaf-to-slice clock path above is right.
+
+What it does not establish is the clock network itself. That is
+Vivado's, copied. Building it, rather than borrowing it, is the job of
+an experiment that varies one buffer's bits at a time.
+
 ## What remains, in order
 
 1. **Bels.** The slice's lookup tables, flip-flops and carry chain as
@@ -556,8 +627,10 @@ still readings of the database, not measurements.
    site types. The lookup tables' contents are complete and one flip-flop
    has run (above). Which flip-flops share each clock enable and reset
    is the next thing to measure.
-2. **A clock.** The processor's `PL_CLK0`, through its `BUFG_PS`, onto
-   the global network and down to the slices.
+2. **A clock of Reticle's own.** `PL_CLK0` now reaches slices through
+   Vivado's clock network, replayed (above). Building that network rather
+   than borrowing it needs the processor's clock buffers on this die,
+   which no database describes.
 3. **The processor interface.** The fabric talks to Linux through the
    `PS8` block's AXI ports, whose bits are in `INT_INTF_LEFT_TERM_PSS` and
    `PSS_ALTO`.

@@ -246,6 +246,10 @@ pub struct Board<'a> {
     luts: HashMap<(usize, char), u64>,
     /// `PS8` input nodes the design drives itself.
     driven_inputs: HashSet<NodeId>,
+    /// Bits copied verbatim from Vivado's bitstream, by grid tile index.
+    replayed: HashMap<usize, Vec<ConfigBit>>,
+    /// Nodes the replayed bits drive, which a net may only start from.
+    replay_driven: HashSet<NodeId>,
 }
 
 impl<'a> Board<'a> {
@@ -298,6 +302,8 @@ impl<'a> Board<'a> {
             features: Vec::new(),
             luts: HashMap::new(),
             driven_inputs: HashSet::new(),
+            replayed: HashMap::new(),
+            replay_driven: HashSet::new(),
         };
         // Every site output already has a driver, and every processor pin
         // is off limits until a net names it.
@@ -386,6 +392,11 @@ impl<'a> Board<'a> {
     /// net or a site holds. Returns the pips with bits, for a report.
     pub fn connect(&mut self, from: NodeId, to: NodeId) -> Vec<String> {
         let (source, sink) = (self.roots[from as usize], self.roots[to as usize]);
+        assert!(
+            !self.replay_driven.contains(&sink),
+            "{} is driven by the replayed bits",
+            self.name(to)
+        );
         let mut forbidden: HashSet<u32> = self.blocked.union(&self.used).copied().collect();
         forbidden.remove(&source);
         forbidden.remove(&sink);
@@ -413,9 +424,103 @@ impl<'a> Board<'a> {
         report
     }
 
+    /// The tiles holding a wire of `node`'s node.
+    pub fn node_tiles(&self, node: NodeId) -> Vec<(u32, u32)> {
+        let root = self.roots[node as usize];
+        let mut out: Vec<(u32, u32)> = (0..self.graph.nodes.len())
+            .filter(|&i| self.roots[i] == root)
+            .map(|i| self.graph.nodes[i].tile)
+            .collect();
+        out.sort_unstable();
+        out.dedup();
+        out
+    }
+
+    /// Prints the wires of `node`'s node and the pips leaving it, for
+    /// debugging a route that will not form.
+    pub fn describe(&self, node: NodeId) {
+        let root = self.roots[node as usize];
+        let members: Vec<NodeId> = (0..self.graph.nodes.len())
+            .filter(|&i| self.roots[i] == root)
+            .map(|i| NodeId::try_from(i).unwrap())
+            .collect();
+        eprintln!("node of {}: {} wires", self.name(node), members.len());
+        for m in members.iter().take(12) {
+            eprintln!("  {}", self.name(*m));
+        }
+        let mut outs = Vec::new();
+        for m in &members {
+            for &pip in self.graph.outgoing(*m) {
+                let to = self.graph.pips[pip as usize].to;
+                if self.graph.pip_bits(pip).is_empty() {
+                    continue;
+                }
+                let r = self.roots[to as usize];
+                outs.push(format!(
+                    "{} blocked={} used={}",
+                    self.name(to),
+                    self.blocked.contains(&r),
+                    self.used.contains(&r)
+                ));
+            }
+        }
+        eprintln!(
+            "  {} pips out, e.g. {:?}",
+            outs.len(),
+            &outs[..outs.len().min(8)]
+        );
+    }
+
     fn name(&self, node: NodeId) -> String {
         let w = &self.graph.nodes[node as usize];
         format!("{:?}:{}", w.tile, w.name)
+    }
+
+    /// Copies, verbatim, every bit Vivado set in every tile whose type is
+    /// one of `types`, from `bitstream`. Every node a pip of those bits
+    /// drives inside the region is then off limits, except as a net's
+    /// source.
+    ///
+    /// This is how a design borrows what Reticle cannot yet build, such as
+    /// the clock network beside the processor, whose buffers the database
+    /// does not describe on this die. The copied tiles are exempt from
+    /// [`Board::finish`]'s checks, which say how many there were.
+    pub fn replay(&mut self, bitstream: &[u8], types: &[&str]) -> usize {
+        let grid = &self.inputs.grid;
+        let layout = FrameLayout::from_grid(grid);
+        let bit = uray::read_bit(bitstream).unwrap();
+        let decoded = uray::decode(grid, &layout, &bit.frames).unwrap();
+        let mut count = 0;
+        for (index, bits) in &decoded.tiles {
+            if types.contains(&grid.tiles()[*index].kind.as_str()) {
+                count += bits.len();
+                self.replayed.insert(*index, bits.clone());
+            }
+        }
+        for (id, pip) in self.graph.pips.iter().enumerate() {
+            let pattern = self.graph.pip_bits(PipId::try_from(id).unwrap());
+            let Some(&index) = self.tile_at.get(&pip.tile) else {
+                continue;
+            };
+            let Some(bits) = self.replayed.get(&index) else {
+                continue;
+            };
+            if !pattern.is_empty() && pattern.iter().all(|b| bits.contains(b)) {
+                let root = self.roots[pip.to as usize];
+                self.replay_driven.insert(root);
+                self.blocked.insert(root);
+            }
+        }
+        count
+    }
+
+    /// The node of wire `wire` in the tile called `tile`.
+    pub fn wire(&self, tile: &str, wire: &str) -> NodeId {
+        let t = &self.inputs.grid.tiles()[self.tile(tile)];
+        *self
+            .wire_at
+            .get(&(t.grid, wire.to_owned()))
+            .unwrap_or_else(|| panic!("`{tile}` has no wire `{wire}` in the fabric"))
     }
 
     /// Turns on the slice feature `feature` (as `segbits` spells it, with
@@ -517,6 +622,9 @@ impl<'a> Board<'a> {
             let tile = self.tile_at[&self.graph.pips[*pip as usize].tile];
             bits.extend(self.graph.pip_bits(*pip).iter().map(|b| (tile, *b)));
         }
+        for (index, replayed) in &self.replayed {
+            bits.extend(replayed.iter().map(|b| (*index, *b)));
+        }
         for (index, feature) in &self.features {
             let kind = &grid.tiles()[*index].kind;
             let f = self.inputs.bits[kind]
@@ -567,7 +675,17 @@ impl<'a> Board<'a> {
             let parsed = TileTypeBits::parse("", "none", Some((&read(&path), &path))).unwrap();
             types.entry(kind.to_owned()).or_default().defaults = parsed.defaults;
         }
-        let explained = uray::explain(grid, &decoded, &types);
+        // Replayed tiles are Vivado's, verbatim: they are left out of the
+        // checks, whose subject is what this design chose.
+        let mut own = decoded.clone();
+        own.tiles
+            .retain(|index, _| !self.replayed.contains_key(index));
+        let explained = uray::explain(grid, &own, &types);
+        eprintln!(
+            "{} bits replayed verbatim in {} tiles",
+            self.replayed.values().map(Vec::len).sum::<usize>(),
+            self.replayed.len()
+        );
         assert_eq!(explained.unexplained_total(), 0, "{explained:?}");
         for ((index, letter), value) in &contents {
             let set: HashSet<_> = decoded
@@ -588,7 +706,7 @@ impl<'a> Board<'a> {
             if pattern.is_empty() || chosen_set.contains(&id) {
                 continue;
             }
-            let Some(set) = decoded.tiles.get(&self.tile_at[&pip.tile]) else {
+            let Some(set) = own.tiles.get(&self.tile_at[&pip.tile]) else {
                 continue;
             };
             if pattern.iter().all(|b| set.contains(b)) {
