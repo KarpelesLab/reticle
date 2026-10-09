@@ -43,8 +43,13 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
 use super::{TileGrid, TileTypeBits, UrayError};
-use crate::fpga::arch::{Arch, ConfigBit, PipDecl, TileType, WireDecl, WireRef};
+use crate::fpga::arch::{Arch, BelDecl, ConfigBit, PipDecl, TileType, WireDecl, WireRef};
 use crate::json::Json;
+
+/// The tile types that hold a slice: `CLEL_*` a logic slice, `CLEM*` a
+/// memory slice, both with the same eight lookup tables and sixteen
+/// flip-flops as far as [`super::slice`] models them.
+pub const SLICE_TYPES: [&str; 4] = ["CLEL_L", "CLEL_R", "CLEM", "CLEM_R"];
 
 /// ZU7EV tile types whose wiring is a ZU3EG type's under another name.
 ///
@@ -444,6 +449,10 @@ pub struct FabricStats {
     /// Buffered 2020 pips declared as fixed wiring, summed over tile
     /// types.
     pub fixed: usize,
+    /// Slice tile types whose bels could not be built, and why.
+    pub slice_errors: BTreeMap<String, String>,
+    /// Leaf clock pips from [`PL_CLK0`], summed over tile types.
+    pub clock_leaves: usize,
     /// Tile types in the region that the 2020 snapshot does not describe
     /// even through [`ALIASES`]: their wires come only from their own
     /// pips, and no rule joins them to anything.
@@ -472,7 +481,28 @@ pub struct FabricInputs<'a> {
     pub wiring: &'a HashMap<String, TileTypeWiring>,
     /// The ZU3EG's `tileconn.json` (2020).
     pub rules: &'a [TileConn],
+    /// The horizontal distribution track that carries the processor's
+    /// `PL_CLK0` in every clock row of the region, when the caller knows
+    /// it: see [`PL_CLK0`].
+    pub processor_clock_track: Option<u32>,
 }
+
+/// The global wire, and the pin, that stand for the processor's first
+/// fabric clock.
+///
+/// The processor's clock buffers on this die are not in either database,
+/// so this fabric does not route `PL_CLK0` from the `PS8`: a design gets
+/// it from a clock network borrowed from Vivado's bitstream, which carries
+/// it on one horizontal distribution track of every clock row (track 14,
+/// measured at 100.001 MHz on the ZCU104; `docs/fpga-uray.md`). The global
+/// wire is that track, everywhere at once. A pip from it to each leaf of
+/// every `RCLK_INT_*` tile carries the leaf's two documented features —
+/// the track onto the leaf's input, and the leaf's buffer on — so the
+/// router turns on exactly the leaves a design uses.
+pub const PL_CLK0: &str = "PL_CLK0";
+
+/// How many EMIO GPIO lines the processor has in each direction.
+pub const EMIO_LINES: u32 = 96;
 
 /// The name of the variant of `base` that also joins east to `other`,
 /// `distance` columns away.
@@ -623,8 +653,7 @@ pub fn build_arch(inputs: &FabricInputs<'_>, region: GridRegion) -> UrayFabric {
         }
         // A buffered pip of a 2020 type with no sites, whose destination no
         // feature of the 2026 `segbits` drives, is fixed wiring with no
-        // bits: the
-        // interface column's `IMUX_FT0_28 ->> IMUX_FT1_28`, which is how
+        // bits: the interface column's `IMUX_FT0_28 ->> IMUX_FT1_28`, which is how
         // the interconnect reaches the processor's inputs. Where a feature
         // does drive the destination, the wire is a mux and the pip is
         // left out, because a bitless copy would let the router use it
@@ -672,6 +701,72 @@ pub fn build_arch(inputs: &FabricInputs<'_>, region: GridRegion) -> UrayFabric {
                 dy: 0,
             })
             .collect();
+        // A slice's bels, and the wires and pips inside its site.
+        if SLICE_TYPES.contains(&kind.as_str())
+            && let Some(site) = wiring.sites.first()
+        {
+            match super::slice::slice_model(&site.pins, bits) {
+                Ok(model) => {
+                    tile_type
+                        .wires
+                        .extend(model.wires.into_iter().map(|name| WireDecl {
+                            name,
+                            dx: 0,
+                            dy: 0,
+                        }));
+                    tile_type.pips.extend(model.pips);
+                    tile_type.bels = model.bels;
+                }
+                Err(e) => {
+                    stats.slice_errors.insert(kind.clone(), e.to_string());
+                }
+            }
+        }
+        // The processor's EMIO GPIO lines and its first clock, as places a
+        // design's ports can be bound to.
+        if kind == "PSS_ALTO"
+            && let Some(site) = wiring.sites.first()
+        {
+            let pin_wire = |pin: &str| site.pins.iter().find(|(p, _)| p == pin).map(|(_, w)| w);
+            for k in 0..EMIO_LINES {
+                if let Some(w) = pin_wire(&format!("FMIO_GPIO_OUT{k}")) {
+                    let mut bel = BelDecl::new(format!("EMIO_O{k}"), "io");
+                    bel.pins
+                        .push(("din".to_owned(), WireRef::local(w.as_str())));
+                    tile_type.bels.push(bel);
+                }
+                if let Some(w) = pin_wire(&format!("FMIO_GPIO_IN{k}")) {
+                    let mut bel = BelDecl::new(format!("EMIO_I{k}"), "io");
+                    bel.pins
+                        .push(("dout".to_owned(), WireRef::local(w.as_str())));
+                    tile_type.bels.push(bel);
+                }
+            }
+            if inputs.processor_clock_track.is_some() {
+                let mut bel = BelDecl::new(PL_CLK0, "io");
+                bel.pins.push(("din".to_owned(), WireRef::global(PL_CLK0)));
+                tile_type.bels.push(bel);
+            }
+        }
+        if let Some(track) = inputs.processor_clock_track
+            && kind.starts_with("RCLK_INT_")
+        {
+            for k in 0..32 {
+                let onto = format!("CLK_HDISTR_FT0_{track}->CLK_LEAF_SITES_{k}_CLK_IN");
+                let on = format!("CLK_LEAF_SITES_{k}_CLK_IN->CLK_LEAF_SITES_{k}_CLK_LEAF");
+                let find = |name: &str| bits.features.iter().find(|f| f.name == name);
+                if let (Some(a), Some(b)) = (find(&onto), find(&on)) {
+                    let mut leaf_bits = a.ones.clone();
+                    leaf_bits.extend(b.ones.iter().copied());
+                    tile_type.pips.push(PipDecl {
+                        from: WireRef::global(PL_CLK0),
+                        to: WireRef::local(format!("CLK_LEAF_SITES_{k}_CLK_LEAF")),
+                        bits: leaf_bits,
+                    });
+                    stats.clock_leaves += 1;
+                }
+            }
+        }
         for (from, to, bits) in pips {
             tile_type.pips.push(PipDecl {
                 from: WireRef::local(from),
@@ -744,6 +839,23 @@ pub fn build_arch(inputs: &FabricInputs<'_>, region: GridRegion) -> UrayFabric {
             let t = &arch.tile_types[type_index];
             stats.pips += t.pips.iter().filter(|p| !p.bits.is_empty()).count();
             stats.joins += t.pips.iter().filter(|p| p.bits.is_empty()).count();
+        }
+    }
+    // The processor's pins, by name, at the `PSS_ALTO` tile of the region.
+    if let Some(tile) = tiles
+        .iter()
+        .find(|t| t.kind == "PSS_ALTO" && region.contains(t.grid.0, t.grid.1))
+    {
+        let (x, y) = tile.grid;
+        for k in 0..EMIO_LINES {
+            for name in [format!("EMIO_O{k}"), format!("EMIO_I{k}")] {
+                arch.pinmap.push((name.clone(), format!("X{x}Y{y}/{name}")));
+            }
+        }
+        if inputs.processor_clock_track.is_some() {
+            arch.globals.push(PL_CLK0.to_owned());
+            arch.pinmap
+                .push((PL_CLK0.to_owned(), format!("X{x}Y{y}/{PL_CLK0}")));
         }
     }
     stats.tile_types = arch.tile_types.len();

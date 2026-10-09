@@ -281,6 +281,28 @@ GW2A and Lattice ECP5):
                      default is a box around the constrained pins,
                      because the whole die is 20 million pips and will
                      not fit.
+
+Writing a bitstream for the ZCU104 (xczu7ev-ffvc1156):
+  A design's ports are the processor's, not the package's: bind inputs to
+  EMIO_O0..EMIO_O95 (EMIO GPIO outputs, which Linux drives as gpio594 and
+  up), outputs to EMIO_I0..EMIO_I95 (which Linux reads), and a clock to
+  PL_CLK0. The databases are `reticle fetch prjuray-db prjuray-db-2020`.
+  --bitstream <file> Write the .bit here and the .bin the Linux FPGA
+                     manager loads beside it. The design lands beside the
+                     processor and every processor input it does not use
+                     is tied as Vivado ties it. A 32-bit counter written
+                     this way has run on a ZCU104 at 100 MHz; see
+                     docs/fpga-uray.md.
+  --borrow-clock <base.bit>
+                     Required. The PYNQ base overlay's own base.bit, whose
+                     clock network carries PL_CLK0 into the fabric:
+                     Reticle cannot yet build this die's processor clock
+                     buffers and borrows that network, verbatim, without
+                     its leaves.
+  --east <n>         How far east the fabric reaches, as an interconnect
+                     column: 31 (the default, 11 520 lookup tables) up to
+                     38 (27 648), for a design that does not fit. A wider
+                     fabric takes longer to load and route.
 ";
 
 const SYNTH_USAGE: &str = "\
@@ -658,6 +680,8 @@ fn spec_for(usage: &str) -> Spec {
                 "chipdb",
                 "bitstream",
                 "region",
+                "borrow-clock",
+                "east",
                 "place-effort",
                 "place-fixed-cooling",
                 "place-start-acceptance",
@@ -2033,6 +2057,11 @@ fn fpga(args: &Args) -> Result<Outcome, ArgError> {
         return Ok(gowin_fpga(args, &design, top, device, &constraints));
     }
 
+    // Nor has UltraScale+: Reticle's own flow, straight to a `.bit`.
+    if device.family == "uray" {
+        return Ok(uray_fpga(args, &design, top, device, &constraints));
+    }
+
     // Check the netlist against the device before writing it, so a file
     // nextpnr would reject never reaches the disk unnoticed.
     let problems = check_nextpnr_json(&design, top, device, &constraints);
@@ -2940,6 +2969,100 @@ fn needs_clock_manager(
 ///
 /// The database never comes from the library: it is read here, through
 /// a `FileProvider`, from a directory the user named.
+/// `reticle fpga` for the ZCU104: place, route and write a bitstream the
+/// Linux FPGA manager loads. See `fpga::uray::zcu104` for what it rests on.
+fn uray_fpga(
+    args: &Args,
+    design: &reticle::ir::Design,
+    top: reticle::ir::ModuleId,
+    device: &reticle::fpga::Device,
+    constraints: &reticle::fpga::Constraints,
+) -> Outcome {
+    match write_uray_bitstream(args, design, top, device, constraints) {
+        Ok(note) => {
+            if !args.flag("quiet") {
+                eprint!("{note}");
+            }
+            Outcome::Ok
+        }
+        Err(message) => {
+            eprintln!("error: {message}");
+            Outcome::Failed
+        }
+    }
+}
+
+fn write_uray_bitstream(
+    args: &Args,
+    design: &reticle::ir::Design,
+    top: reticle::ir::ModuleId,
+    device: &reticle::fpga::Device,
+    constraints: &reticle::fpga::Constraints,
+) -> Result<String, String> {
+    use reticle::fpga::uray::zcu104::{ImplementOptions, ZcuDatabase, implement};
+
+    let Some(path) = args.option("bitstream") else {
+        return Err(
+            "xczu7ev-ffvc1156 has no outside place-and-route flow: pass --bitstream <file>"
+                .to_owned(),
+        );
+    };
+    let Some(clock) = args.option("borrow-clock") else {
+        return Err(
+            "--borrow-clock <base.bit> is required: Reticle borrows the PYNQ base \
+             overlay's clock network to bring PL_CLK0 into the fabric (see docs/fpga-uray.md)"
+                .to_owned(),
+        );
+    };
+    let oracle = std::fs::read(clock).map_err(|e| format!("cannot read `{clock}`: {e}"))?;
+    let offline = args.flag("offline");
+    let bits_root = datadir::PRJURAY
+        .locate(None, offline)
+        .map_err(|err| format!("`--bitstream` needs Project U-Ray's database: {err}"))?;
+    let wiring_root = datadir::PRJURAY_2020
+        .locate(None, offline)
+        .map_err(|err| format!("`--bitstream` needs Project U-Ray's 2020 wiring: {err}"))?;
+    let files = DiskFiles::for_sources(&[]);
+    let db = ZcuDatabase::load(
+        &files,
+        &bits_root.to_string_lossy(),
+        &wiring_root.to_string_lossy(),
+    )
+    .map_err(|e| e.to_string())?;
+    let east = match args.option("east") {
+        Some(text) => text
+            .parse::<u32>()
+            .map_err(|_| format!("`--east {text}` is not an interconnect column number"))?,
+        None => reticle::fpga::uray::zcu104::DEFAULT_EAST,
+    };
+    let place = place_options(args)?;
+    let written = implement(
+        &db,
+        design,
+        top,
+        device,
+        constraints,
+        &ImplementOptions {
+            oracle: &oracle,
+            place: &place,
+            east,
+        },
+    )?;
+    std::fs::write(path, &written.bit).map_err(|e| format!("cannot write `{path}`: {e}"))?;
+    let bin = std::path::Path::new(path).with_extension("bin");
+    std::fs::write(&bin, &written.bin)
+        .map_err(|e| format!("cannot write `{}`: {e}", bin.display()))?;
+    let mut note = String::new();
+    for line in &written.report {
+        note.push_str(&format!("{line}\n"));
+    }
+    note.push_str(&format!(
+        "wrote {path} and {}; load the .bin through /sys/class/fpga_manager\n",
+        bin.display()
+    ));
+    Ok(note)
+}
+
 fn write_xc7_bitstream(
     args: &Args,
     design: &reticle::ir::Design,

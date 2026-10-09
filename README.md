@@ -48,7 +48,7 @@ Early, but the middle of the pipeline runs end to end. What works today:
 | IP | manifests with dependency resolution and a lock file, bus interfaces, generated interconnect, encrypted-core black boxes, a static registry index, IP-XACT import |
 | Tooling | Verilog and VHDL formatters, a language server for both, an incremental build cache, an HTML schematic and reference viewer |
 | Embedding | C ABI for use from another tool, and a WebAssembly build with a browser playground under `web/` |
-| FPGA | device database (iCE40, ECP5, Xilinx 7 series, generic), primitive mapping, placement and IO constraints, nextpnr and vendor export |
+| FPGA | device database (iCE40, ECP5, Xilinx 7 series, Zynq UltraScale+, generic), primitive mapping, placement and IO constraints, nextpnr and vendor export |
 
 Both languages go all the way through, from source to a synthesised
 netlist, a simulation or a proof.
@@ -123,6 +123,23 @@ reticle fpga --device gw2a-18-pg256 \
     --constraints examples/primer20k/key_led.rcf \
     --bitstream key_led.fs examples/primer20k/key_led.v
 reticle program key_led.fs
+```
+
+A third is the programmable logic of a Xilinx Zynq UltraScale+, the
+XCZU7EV on a ZCU104, from Project U-Ray's databases. There a design talks
+to Linux rather than to pins: its ports are the processor's EMIO GPIO
+lines and its clock is the processor's `PL_CLK0`, and the output is a
+`.bin` that Linux's FPGA manager loads. A 32-bit counter built this way
+counted at 100.000 MHz on the board, read from Linux.
+[`docs/fpga-uray.md`](docs/fpga-uray.md) says exactly what is established,
+including that the clock network is still borrowed from the board's own
+PYNQ image (`--borrow-clock`).
+
+```sh
+reticle fetch prjuray-db prjuray-db-2020
+reticle fpga --device xczu7ev-ffvc1156 \
+    --constraints examples/zcu104/counter.rcf \
+    --bitstream counter.bit --borrow-clock base.bit examples/zcu104/counter.v
 ```
 
 ### Loading one into a board

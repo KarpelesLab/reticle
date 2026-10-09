@@ -1,0 +1,243 @@
+# Xilinx Zynq UltraScale+ (XCZU7EV), as far as Reticle has run it on the
+# part: the programmable logic of the ZCU104, reached from the processor.
+#
+# WHAT HAS RUN ON SILICON, on a ZCU104 on 2026-10-09 (docs/fpga-uray.md):
+# EMIO GPIO routed through the fabric; lookup tables of every contents;
+# an FDRE with its clock, enable and reset driven from Linux, through
+# load, capture, hold and synchronous reset; and 32-stage ripple counters
+# of FDREs and inverters at 100 and 300 MHz on the processor's clocks.
+# Everything else a 7-series file declares — carry chains, wide muxes,
+# DSPs, block RAMs, LUT RAMs, the other flip-flop primitives, I/O pads —
+# is absent on purpose: a primitive Reticle cannot place correctly is
+# better refused than placed.
+#
+# The ports are the processor's, not the package's. A design talks to
+# Linux over EMIO GPIO and is clocked by the processor's PL_CLK0:
+#
+#   * EMIO_O<k> (k = 0..95) is EMIO GPIO output k, which Linux drives as
+#     gpio<594+k>: a design INPUT, through an IBUF.
+#   * EMIO_I<k> is EMIO GPIO input k, which Linux reads as gpio<594+k>:
+#     a design OUTPUT, through an OBUF.
+#   * PL_CLK0 is the processor's first fabric clock, 100 MHz in the PYNQ
+#     image: a design input that may only clock flip-flops.
+#
+# Primitive names, ports and the LUT convention are the 7-series ones
+# (see xc7.dev for where they were read): UltraScale+ keeps LUT1..LUT6
+# with O = INIT[{I5..I0}] and the FD* flip-flops unchanged. No global
+# buffer is declared, so a clock is not given a BUFG: the fabric's
+# PL_CLK0 is already a global wire, borrowed from Vivado's clock network
+# (src/fpga/uray/fabric.rs, PL_CLK0).
+
+device xczu7ev-ffvc1156
+  family uray
+  package ffvc1156
+  speed 2
+  idcode 0x04a5a093
+  lut_size 6
+  ff enable sync_reset shared_reset
+  bel LUT6 lut count 230400 port i=I0,I1,I2,I3,I4,I5 o=O param INIT=64'h0000000000000000
+  bel LUT5 lut port i=I0,I1,I2,I3,I4 o=O param INIT=32'h00000000
+  bel LUT4 lut port i=I0,I1,I2,I3 o=O param INIT=16'h0000
+  bel LUT3 lut port i=I0,I1,I2 o=O param INIT=8'h00
+  bel LUT2 lut port i=I0,I1 o=O param INIT=4'h0
+  bel LUT1 lut port i=I0 o=O param INIT=2'h0
+  bel FDRE ff count 460800 mode posedge port clk=C d=D q=Q en=CE rst=R param INIT=1'b0
+  bel FDRE ff mode posedge,enable port clk=C d=D q=Q en=CE rst=R param INIT=1'b0
+  bel FDRE ff mode posedge,sync_reset port clk=C d=D q=Q en=CE rst=R param INIT=1'b0
+  bel FDRE ff mode posedge,enable,sync_reset port clk=C d=D q=Q en=CE rst=R param INIT=1'b0
+  bel IBUF io for in port pad=I din=O
+  bel OBUF io for out port pad=O dout=I
+  pin PL_CLK0 clock
+  pin EMIO_O0 io
+  pin EMIO_O1 io
+  pin EMIO_O2 io
+  pin EMIO_O3 io
+  pin EMIO_O4 io
+  pin EMIO_O5 io
+  pin EMIO_O6 io
+  pin EMIO_O7 io
+  pin EMIO_O8 io
+  pin EMIO_O9 io
+  pin EMIO_O10 io
+  pin EMIO_O11 io
+  pin EMIO_O12 io
+  pin EMIO_O13 io
+  pin EMIO_O14 io
+  pin EMIO_O15 io
+  pin EMIO_O16 io
+  pin EMIO_O17 io
+  pin EMIO_O18 io
+  pin EMIO_O19 io
+  pin EMIO_O20 io
+  pin EMIO_O21 io
+  pin EMIO_O22 io
+  pin EMIO_O23 io
+  pin EMIO_O24 io
+  pin EMIO_O25 io
+  pin EMIO_O26 io
+  pin EMIO_O27 io
+  pin EMIO_O28 io
+  pin EMIO_O29 io
+  pin EMIO_O30 io
+  pin EMIO_O31 io
+  pin EMIO_O32 io
+  pin EMIO_O33 io
+  pin EMIO_O34 io
+  pin EMIO_O35 io
+  pin EMIO_O36 io
+  pin EMIO_O37 io
+  pin EMIO_O38 io
+  pin EMIO_O39 io
+  pin EMIO_O40 io
+  pin EMIO_O41 io
+  pin EMIO_O42 io
+  pin EMIO_O43 io
+  pin EMIO_O44 io
+  pin EMIO_O45 io
+  pin EMIO_O46 io
+  pin EMIO_O47 io
+  pin EMIO_O48 io
+  pin EMIO_O49 io
+  pin EMIO_O50 io
+  pin EMIO_O51 io
+  pin EMIO_O52 io
+  pin EMIO_O53 io
+  pin EMIO_O54 io
+  pin EMIO_O55 io
+  pin EMIO_O56 io
+  pin EMIO_O57 io
+  pin EMIO_O58 io
+  pin EMIO_O59 io
+  pin EMIO_O60 io
+  pin EMIO_O61 io
+  pin EMIO_O62 io
+  pin EMIO_O63 io
+  pin EMIO_O64 io
+  pin EMIO_O65 io
+  pin EMIO_O66 io
+  pin EMIO_O67 io
+  pin EMIO_O68 io
+  pin EMIO_O69 io
+  pin EMIO_O70 io
+  pin EMIO_O71 io
+  pin EMIO_O72 io
+  pin EMIO_O73 io
+  pin EMIO_O74 io
+  pin EMIO_O75 io
+  pin EMIO_O76 io
+  pin EMIO_O77 io
+  pin EMIO_O78 io
+  pin EMIO_O79 io
+  pin EMIO_O80 io
+  pin EMIO_O81 io
+  pin EMIO_O82 io
+  pin EMIO_O83 io
+  pin EMIO_O84 io
+  pin EMIO_O85 io
+  pin EMIO_O86 io
+  pin EMIO_O87 io
+  pin EMIO_O88 io
+  pin EMIO_O89 io
+  pin EMIO_O90 io
+  pin EMIO_O91 io
+  pin EMIO_O92 io
+  pin EMIO_O93 io
+  pin EMIO_O94 io
+  pin EMIO_O95 io
+  pin EMIO_I0 io
+  pin EMIO_I1 io
+  pin EMIO_I2 io
+  pin EMIO_I3 io
+  pin EMIO_I4 io
+  pin EMIO_I5 io
+  pin EMIO_I6 io
+  pin EMIO_I7 io
+  pin EMIO_I8 io
+  pin EMIO_I9 io
+  pin EMIO_I10 io
+  pin EMIO_I11 io
+  pin EMIO_I12 io
+  pin EMIO_I13 io
+  pin EMIO_I14 io
+  pin EMIO_I15 io
+  pin EMIO_I16 io
+  pin EMIO_I17 io
+  pin EMIO_I18 io
+  pin EMIO_I19 io
+  pin EMIO_I20 io
+  pin EMIO_I21 io
+  pin EMIO_I22 io
+  pin EMIO_I23 io
+  pin EMIO_I24 io
+  pin EMIO_I25 io
+  pin EMIO_I26 io
+  pin EMIO_I27 io
+  pin EMIO_I28 io
+  pin EMIO_I29 io
+  pin EMIO_I30 io
+  pin EMIO_I31 io
+  pin EMIO_I32 io
+  pin EMIO_I33 io
+  pin EMIO_I34 io
+  pin EMIO_I35 io
+  pin EMIO_I36 io
+  pin EMIO_I37 io
+  pin EMIO_I38 io
+  pin EMIO_I39 io
+  pin EMIO_I40 io
+  pin EMIO_I41 io
+  pin EMIO_I42 io
+  pin EMIO_I43 io
+  pin EMIO_I44 io
+  pin EMIO_I45 io
+  pin EMIO_I46 io
+  pin EMIO_I47 io
+  pin EMIO_I48 io
+  pin EMIO_I49 io
+  pin EMIO_I50 io
+  pin EMIO_I51 io
+  pin EMIO_I52 io
+  pin EMIO_I53 io
+  pin EMIO_I54 io
+  pin EMIO_I55 io
+  pin EMIO_I56 io
+  pin EMIO_I57 io
+  pin EMIO_I58 io
+  pin EMIO_I59 io
+  pin EMIO_I60 io
+  pin EMIO_I61 io
+  pin EMIO_I62 io
+  pin EMIO_I63 io
+  pin EMIO_I64 io
+  pin EMIO_I65 io
+  pin EMIO_I66 io
+  pin EMIO_I67 io
+  pin EMIO_I68 io
+  pin EMIO_I69 io
+  pin EMIO_I70 io
+  pin EMIO_I71 io
+  pin EMIO_I72 io
+  pin EMIO_I73 io
+  pin EMIO_I74 io
+  pin EMIO_I75 io
+  pin EMIO_I76 io
+  pin EMIO_I77 io
+  pin EMIO_I78 io
+  pin EMIO_I79 io
+  pin EMIO_I80 io
+  pin EMIO_I81 io
+  pin EMIO_I82 io
+  pin EMIO_I83 io
+  pin EMIO_I84 io
+  pin EMIO_I85 io
+  pin EMIO_I86 io
+  pin EMIO_I87 io
+  pin EMIO_I88 io
+  pin EMIO_I89 io
+  pin EMIO_I90 io
+  pin EMIO_I91 io
+  pin EMIO_I92 io
+  pin EMIO_I93 io
+  pin EMIO_I94 io
+  pin EMIO_I95 io
+end

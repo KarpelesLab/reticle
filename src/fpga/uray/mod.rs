@@ -33,15 +33,16 @@ mod bitstream;
 mod fabric;
 pub mod processor;
 pub mod slice;
+pub mod zcu104;
 
 pub use bitstream::{
     IDCODE_XCZU7EV, LEADING_DUMMY_WORDS, bin_from_bit, frames_from_tile_bits, write_bit,
 };
 
 pub use fabric::{
-    ALIASES, FabricInputs, FabricStats, GridRegion, SiteDecl, SiteTypePins, TileConn,
-    TileTypeWiring, UrayFabric, build_arch, composed_joins, is_break_type, parse_tileconn,
-    routing_of, wiring_type,
+    ALIASES, EMIO_LINES, FabricInputs, FabricStats, GridRegion, PL_CLK0, SLICE_TYPES, SiteDecl,
+    SiteTypePins, TileConn, TileTypeWiring, UrayFabric, build_arch, composed_joins, is_break_type,
+    parse_tileconn, routing_of, wiring_type,
 };
 
 use std::collections::{BTreeMap, HashMap};

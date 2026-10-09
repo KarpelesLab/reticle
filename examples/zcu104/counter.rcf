@@ -1,0 +1,35 @@
+# The counter's ports, bound to the processor's EMIO GPIO inputs and its
+# first fabric clock. See counter.v.
+set_io clk PL_CLK0
+set_io count[0] EMIO_I0
+set_io count[1] EMIO_I1
+set_io count[2] EMIO_I2
+set_io count[3] EMIO_I3
+set_io count[4] EMIO_I4
+set_io count[5] EMIO_I5
+set_io count[6] EMIO_I6
+set_io count[7] EMIO_I7
+set_io count[8] EMIO_I8
+set_io count[9] EMIO_I9
+set_io count[10] EMIO_I10
+set_io count[11] EMIO_I11
+set_io count[12] EMIO_I12
+set_io count[13] EMIO_I13
+set_io count[14] EMIO_I14
+set_io count[15] EMIO_I15
+set_io count[16] EMIO_I16
+set_io count[17] EMIO_I17
+set_io count[18] EMIO_I18
+set_io count[19] EMIO_I19
+set_io count[20] EMIO_I20
+set_io count[21] EMIO_I21
+set_io count[22] EMIO_I22
+set_io count[23] EMIO_I23
+set_io count[24] EMIO_I24
+set_io count[25] EMIO_I25
+set_io count[26] EMIO_I26
+set_io count[27] EMIO_I27
+set_io count[28] EMIO_I28
+set_io count[29] EMIO_I29
+set_io count[30] EMIO_I30
+set_io count[31] EMIO_I31

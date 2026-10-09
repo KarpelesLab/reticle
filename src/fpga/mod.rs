@@ -238,10 +238,11 @@ use crate::source::SourceMap;
 ///
 /// The name is only used in diagnostics, which a well-formed file never
 /// produces. Adding a family means adding a file here.
-pub const BUILTIN_FILES: [(&str, &str); 5] = [
+pub const BUILTIN_FILES: [(&str, &str); 6] = [
     ("ice40.dev", include_str!("devices/ice40.dev")),
     ("ecp5.dev", include_str!("devices/ecp5.dev")),
     ("xc7.dev", include_str!("devices/xc7.dev")),
+    ("uray.dev", include_str!("devices/uray.dev")),
     ("gowin.dev", include_str!("devices/gowin.dev")),
     ("generic.dev", include_str!("devices/generic.dev")),
 ];
@@ -304,6 +305,7 @@ mod tests {
                 "ecp5-12f-CABGA256",
                 "ecp5-45f-CABGA381",
                 "xc7a35t-cpg236",
+                "xczu7ev-ffvc1156",
                 "gw2a-18-pg256",
                 "generic",
                 "generic-k6",
@@ -345,7 +347,13 @@ mod tests {
             //
             // Keeping the requirement for every other family is what
             // makes this test still catch a file that simply forgot one.
-            let excused = device.family == "gowin";
+            //
+            // UltraScale+ is excused for a third reason: `devices/uray.dev`
+            // declares only what has run on a ZCU104, and its ports are
+            // the processor's EMIO lines, which have no bidirectional form,
+            // and its clock is a global wire already, with no buffer to
+            // instantiate.
+            let excused = device.family == "gowin" || device.family == "uray";
             for (direction, roles) in [
                 ("in", &["pad", "din"][..]),
                 ("out", &["pad", "dout"][..]),
@@ -455,7 +463,37 @@ mod tests {
                 "{} declares no flip-flop",
                 device.name
             );
-            // The four shapes every synthesised design produces.
+            // The shapes every synthesised design produces. UltraScale+
+            // declares only the rising-edge, synchronous-reset `FDRE`
+            // that has run on a ZCU104 (`devices/uray.dev`): a design that
+            // needs another is refused at mapping rather than placed on a
+            // flip-flop whose bits no part has confirmed.
+            if device.family == "uray" {
+                for has_enable in [false, true] {
+                    for reset in [
+                        None,
+                        Some(FfReset {
+                            asynchronous: false,
+                            sets: false,
+                            active_high: true,
+                        }),
+                    ] {
+                        let variant = FfVariant {
+                            clk_pos: true,
+                            has_enable,
+                            enable_active_high: true,
+                            reset,
+                        };
+                        assert!(
+                            device.ff_variant(variant).is_some(),
+                            "{} has no flip-flop with {}",
+                            device.name,
+                            variant.describe()
+                        );
+                    }
+                }
+                continue;
+            }
             for (clk_pos, has_enable) in [(true, false), (true, true), (false, false)] {
                 let plain = FfVariant {
                     clk_pos,

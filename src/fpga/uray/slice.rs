@@ -144,3 +144,200 @@ mod tests {
         assert!(lut_init_bits(&table(&(1..64).collect::<Vec<_>>()), 'A').is_err());
     }
 }
+
+/// Which control pins serve which flip-flops.
+///
+/// A slice has two clocks, four clock enables and two set/resets for its
+/// sixteen flip-flops. The database settles which flip-flops *share* a
+/// "used" bit: its `CE_ACTIVE` and `SR_ACTIVE` features give the same bit
+/// to the first flip-flops of `A`–`D`, to the second flip-flops of
+/// `A`–`D`, to the first of `E`–`H` and to the second of `E`–`H`, and
+/// [`slice_model`] refuses a database where they do not. Which *pin* each
+/// group listens to is not in the database. `AFF` on `CLK1`, `CKEN1` and
+/// `SRST1` is **measured** (`one_flip_flop` in `tests/fpga_uray_board.rs`);
+/// the rest of this table is the reading that follows from it and has not
+/// been run.
+pub fn control_pins(letter: char, second: bool) -> (&'static str, &'static str, &'static str) {
+    let upper = matches!(letter, 'E' | 'F' | 'G' | 'H');
+    let clock = if upper { "CLK2" } else { "CLK1" };
+    let reset = if upper { "SRST2" } else { "SRST1" };
+    let enable = match (upper, second) {
+        (false, false) => "CKEN1",
+        (false, true) => "CKEN2",
+        (true, false) => "CKEN3",
+        (true, true) => "CKEN4",
+    };
+    (clock, enable, reset)
+}
+
+/// What a slice tile contributes to the fabric: its bels, the wires it
+/// invents inside the site, and the pips that join them to the site pins.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct SliceModel {
+    /// The eight six-input lookup tables and sixteen flip-flops.
+    pub bels: Vec<crate::fpga::arch::BelDecl>,
+    /// Wires that exist only inside the site: one per control group.
+    pub wires: Vec<String>,
+    /// From a site pin to a control group's wire, with the group's "used"
+    /// bit, so a group's enable or reset costs its bit exactly when it is
+    /// routed.
+    pub pips: Vec<crate::fpga::arch::PipDecl>,
+}
+
+/// The slice of a tile whose site pins are `pins` (pin name to tile wire)
+/// and whose features are `bits`.
+///
+/// Each lookup table is a `lut` bel: `i0`..`i5` on `A1`..`A6`, `o` on
+/// `A_O`, and `INIT` written through [`lut_init_bits`]. Each flip-flop is
+/// an `ff` bel taking its data from its bypass pin (`AX`, or `A_I` for the
+/// second): a lookup table's output reaches it through the fabric, as it
+/// did in the counters that ran on the part. Its clock is the slice's clock
+/// pin; its enable and reset are its group's wire. An `FDRE` sets the
+/// bypass select, the group's synchronous bit and its reset value of zero,
+/// and its `INIT` of zero sets `FFINIT=INIT0`.
+///
+/// # Errors
+///
+/// [`UrayError::Malformed`] for a feature or pin the model needs and the
+/// database lacks, or for a control group whose members do not share their
+/// bit.
+pub fn slice_model(
+    pins: &[(String, String)],
+    bits: &TileTypeBits,
+) -> Result<SliceModel, UrayError> {
+    use crate::fpga::arch::{BelDecl, ConfigEntry, PipDecl, WireRef};
+    let bad = |message: String| UrayError::Malformed {
+        path: "slice".to_owned(),
+        message,
+    };
+    let wire = |pin: &str| -> Result<String, UrayError> {
+        pins.iter()
+            .find(|(p, _)| p == pin)
+            .map(|(_, w)| w.clone())
+            .ok_or_else(|| bad(format!("the site has no pin `{pin}`")))
+    };
+    let feature = |name: &str| -> Option<&Vec<ConfigBit>> {
+        bits.features
+            .iter()
+            .find(|f| f.name == format!("SLICE_X0Y0.{name}"))
+            .map(|f| &f.ones)
+    };
+    let need = |name: &str| -> Result<Vec<ConfigBit>, UrayError> {
+        feature(name)
+            .cloned()
+            .ok_or_else(|| bad(format!("the database has no `SLICE_X0Y0.{name}`")))
+    };
+    // A group's bit, from whichever members name it, all of which must agree.
+    let group_bit = |members: &[String], tail: &str| -> Result<Vec<ConfigBit>, UrayError> {
+        let mut found: Option<Vec<ConfigBit>> = None;
+        for m in members {
+            if let Some(b) = feature(&format!("{m}.{tail}")) {
+                match &found {
+                    None => found = Some(b.clone()),
+                    Some(f) if f == b => {}
+                    Some(f) => {
+                        return Err(bad(format!(
+                            "`{m}.{tail}` is {b:?} where the rest of its group has {f:?}"
+                        )));
+                    }
+                }
+            }
+        }
+        found.ok_or_else(|| bad(format!("no member of {members:?} names `{tail}`")))
+    };
+
+    let mut model = SliceModel::default();
+    for letter in LUT_LETTERS {
+        let mut lut = BelDecl::new(format!("{letter}6LUT"), "lut");
+        for i in 1..=6 {
+            lut.pins.push((
+                format!("i{}", i - 1),
+                WireRef::local(wire(&format!("{letter}{i}"))?),
+            ));
+        }
+        lut.pins.push((
+            "o".to_owned(),
+            WireRef::local(wire(&format!("{letter}_O"))?),
+        ));
+        for (index, at) in lut_init_bits(bits, letter)?.iter().enumerate() {
+            lut.config.push(ConfigEntry::Param {
+                name: "INIT".to_owned(),
+                index: u32::try_from(index).unwrap_or(0),
+                at: *at,
+            });
+        }
+        model.bels.push(lut);
+    }
+
+    for upper in [false, true] {
+        let letters: &[char] = if upper {
+            &['E', 'F', 'G', 'H']
+        } else {
+            &['A', 'B', 'C', 'D']
+        };
+        let half = if upper { "EFGH" } else { "ABCD" };
+        let all: Vec<String> = letters
+            .iter()
+            .flat_map(|l| [format!("{l}FF"), format!("{l}FF2")])
+            .collect();
+        let sync = group_bit(&all, "SYNC_ATTR=SYNC")?;
+        for second in [false, true] {
+            let members: Vec<String> = letters
+                .iter()
+                .map(|l| format!("{l}FF{}", if second { "2" } else { "" }))
+                .collect();
+            let (clock, enable, reset) = control_pins(letters[0], second);
+            let group = format!("{half}{}", if second { "2" } else { "1" });
+            let ce = format!("RETICLE_SLICE_CE_{group}");
+            let sr = format!("RETICLE_SLICE_SR_{group}");
+            model.pips.push(PipDecl {
+                from: WireRef::local(wire(enable)?),
+                to: WireRef::local(ce.clone()),
+                bits: group_bit(&members, "CE_ACTIVE=TRUE")?,
+            });
+            model.pips.push(PipDecl {
+                from: WireRef::local(wire(reset)?),
+                to: WireRef::local(sr.clone()),
+                bits: group_bit(&members, "SR_ACTIVE=TRUE")?,
+            });
+            model.wires.push(ce.clone());
+            model.wires.push(sr.clone());
+            for (letter, name) in letters.iter().zip(&members) {
+                let n = if second { "2" } else { "1" };
+                let mut ff = BelDecl::new(name.clone(), "ff");
+                let data = if second {
+                    format!("{letter}_I")
+                } else {
+                    format!("{letter}X")
+                };
+                let q = if second {
+                    format!("{letter}Q2")
+                } else {
+                    format!("{letter}Q")
+                };
+                ff.pins
+                    .push(("clk".to_owned(), WireRef::local(wire(clock)?)));
+                ff.pins.push(("d".to_owned(), WireRef::local(wire(&data)?)));
+                ff.pins.push(("q".to_owned(), WireRef::local(wire(&q)?)));
+                ff.pins.push(("en".to_owned(), WireRef::local(ce.clone())));
+                ff.pins.push(("rst".to_owned(), WireRef::local(sr.clone())));
+                let mut fdre = need(&format!("FFMUX{letter}{n}.SP.BYP.OUT{n}"))?;
+                fdre.extend(need(&format!("{name}.FFSR=SRLOW"))?);
+                fdre.extend(sync.iter().copied());
+                ff.config.push(ConfigEntry::Cell {
+                    primitive: "FDRE".to_owned(),
+                    bits: fdre,
+                });
+                for at in need(&format!("{name}.FFINIT=INIT0"))? {
+                    ff.config.push(ConfigEntry::ParamZero {
+                        name: "INIT".to_owned(),
+                        index: 0,
+                        at,
+                    });
+                }
+                model.bels.push(ff);
+            }
+        }
+    }
+    Ok(model)
+}

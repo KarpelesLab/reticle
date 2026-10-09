@@ -620,13 +620,86 @@ What it does not establish is the clock network itself. That is
 Vivado's, copied. Building it, rather than borrowing it, is the job of
 an experiment that varies one buffer's bits at a time.
 
+## From Verilog to the part
+
+**Run on the ZCU104 on 2026-10-09: a 32-bit counter written in Verilog,
+taken through Reticle's whole flow, counted at 100.000 MHz.**
+
+```verilog
+module top(input wire clk, output reg [31:0] count);
+  always @(posedge clk) count <= count + 32'd1;
+endmodule
+```
+
+with `clk` bound to `PL_CLK0` and `count[k]` to `EMIO_I<k>`
+(`examples/zcu104/counter.v` and `.rcf`). From the command line:
+
+```sh
+reticle fetch prjuray-db prjuray-db-2020
+reticle fpga examples/zcu104/counter.v --device xczu7ev-ffvc1156 \
+    --constraints examples/zcu104/counter.rcf \
+    --bitstream counter.bit --borrow-clock base.bit
+```
+
+`--borrow-clock` names the PYNQ base overlay's own `base.bit`, whose
+clock network carries `PL_CLK0` (below). The command writes `counter.bit`
+and `counter.bin`. The `.bin` is what the FPGA manager loads, and this
+one is byte-identical to the file that counted on the board.
+`verilog_counter` in `tests/fpga_uray_board.rs` runs the same flow
+through the library. Elaboration, synthesis,
+technology mapping, the generic placer and the generic router are the
+ones every other family uses. What the UltraScale+ backend adds is this.
+
+**A device**, `devices/uray.dev`, declaring only what has run: `LUT1`
+to `LUT6`, `FDRE` in its four modes, and an input and an output buffer.
+Its pins are the processor's: `EMIO_O<k>` (design inputs), `EMIO_I<k>`
+(design outputs) and `PL_CLK0`. There is no global buffer, so no `BUFG`
+is inserted. No carry chain, DSP, block RAM or other flip-flop
+primitive is declared, so a design that needs one is refused at mapping.
+
+**Bels**, from `uray::slice::slice_model`, for every slice tile:
+
+- eight `lut` bels, with `INIT` through the full 64-bit layout;
+- sixteen `ff` bels, each taking its data from its bypass pin, so a
+  lookup table's output reaches it through the fabric.
+
+A flip-flop's enable and reset are its control group's wire, and a
+pass-through pip from the slice's `CKEN`/`SRST` pin carries the group's
+"used" bit. The bit is set exactly when the router routes the group's
+enable or reset; left unrouted, the flip-flop runs enabled and unreset,
+as measured. The database's shared bits fix which flip-flops form a
+group, and `slice_model` refuses a database where they disagree.
+
+**The processor's endpoints**: `io` bels in the `PSS_ALTO` tile on the
+`FMIO_GPIO_OUT`/`IN` wires, and `PL_CLK0` on a global wire. A pip from
+that wire to every leaf of every `RCLK_INT_*` tile carries the leaf's two
+documented features for track 14. The router therefore turns on exactly
+the leaves the design uses.
+
+**The rest of the clock network is borrowed.** The distribution rows and
+the processor's clock buffers are replayed from Vivado's bitstream, 719
+bits in 150 tiles. The leaf tiles are not replayed: their leaves are the
+design's. The router is kept off every node the replayed bits drive, and
+off every processor input the design does not own.
+
+Then the board test's finishing pass ties the processor's other inputs,
+4 122 of them. It gives every unused table Vivado's unused contents, and
+holds the result to the checks: all 470 937 set bits outside the replayed
+tiles decode to a feature. The only pips on besides the chosen ones are
+two that a chosen leaf pip is made of.
+
+The placer filled flip-flops of all four control groups and both halves
+of the slice. If the pin-to-group reading in `uray::slice::control_pins`
+were wrong anywhere it was used, some bits of the count would be stuck
+or wrong. They were not. That is evidence for the clock pins. The enable
+and reset pins of each group are still unexercised, because the counter
+uses neither.
+
 ## What remains, in order
 
-1. **Bels.** The slice's lookup tables, flip-flops and carry chain as
-   bels the placer can use, from the 2026 `segbits` names and the 2020
-   site types. The lookup tables' contents are complete and one flip-flop
-   has run (above). Which flip-flops share each clock enable and reset
-   is the next thing to measure.
+1. **More of the slice**: the carry chain, for adders that are not
+   lookup-table ripples; the lookup table's direct path to its
+   flip-flop; and the enable and reset pins of every group, measured.
 2. **A clock of Reticle's own.** `PL_CLK0` now reaches slices through
    Vivado's clock network, replayed (above). Building that network rather
    than borrowing it needs the processor's clock buffers on this die,

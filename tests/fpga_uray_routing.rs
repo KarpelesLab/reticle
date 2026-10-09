@@ -95,6 +95,7 @@ fn verdict(inputs: &Inputs, bitstream: &[u8], region: GridRegion) -> Verdict {
             bits: &inputs.bits,
             wiring: &inputs.wiring,
             rules: &inputs.rules,
+            processor_clock_track: None,
         },
         region,
     );
@@ -213,6 +214,19 @@ fn verdict(inputs: &Inputs, bitstream: &[u8], region: GridRegion) -> Verdict {
         }
     }
 
+    // And the fabric's own bels, whose pins include wires no 2020 site
+    // type lists (a slice's control-group wires).
+    for site in &graph.sites {
+        for (role, node) in &site.pins {
+            let root = nodes.find(*node) as usize;
+            if matches!(role.as_str(), "o" | "q" | "din") {
+                sited_out[root] = true;
+            } else {
+                sited_in[root] = true;
+            }
+        }
+    }
+
     // The bits Vivado set, tile by tile.
     let layout = FrameLayout::from_grid(&inputs.grid);
     let bit = uray::read_bit(bitstream).unwrap();
@@ -313,8 +327,10 @@ fn vivados_routing_is_consistent_on_the_fabric() {
     let region = GridRegion::new(a.0.min(b.0), a.1.min(b.1), a.0.max(b.0), a.1.max(b.1));
     let verdict = verdict(&inputs, &bitstream, region);
     eprintln!("{verdict:?}");
-    // Measured: Vivado set 255 241 of the region's pips.
-    assert_eq!(verdict.active_pips, 255_241, "{verdict:?}");
+    // Measured: Vivado set 262 267 of the region's pips — 255 241 in the
+    // interconnect and 7 026 slice control groups (a group's clock enable
+    // or set/reset in use; `uray::slice`).
+    assert_eq!(verdict.active_pips, 262_267, "{verdict:?}");
     assert_eq!(
         (verdict.double_driven, verdict.undriven, verdict.unread),
         (0, 0, 0),
@@ -348,7 +364,9 @@ fn vivados_routing_is_consistent_beside_the_processor() {
     );
     let verdict = verdict(&inputs, &bitstream, region);
     eprintln!("{verdict:?}");
-    assert_eq!(verdict.active_pips, 163_313, "{verdict:?}");
+    // 163 313 in the interconnect and the interface column, and 3 597
+    // slice control groups.
+    assert_eq!(verdict.active_pips, 166_910, "{verdict:?}");
     assert_eq!(
         (verdict.double_driven, verdict.undriven, verdict.unread),
         (0, 0, 0),
@@ -389,6 +407,7 @@ fn the_undriven_processor_inputs_are_the_ones_vivado_leaves() {
             bits: &inputs.bits,
             wiring: &inputs.wiring,
             rules: &inputs.rules,
+            processor_clock_track: None,
         },
         region,
     );

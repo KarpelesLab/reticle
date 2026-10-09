@@ -19,7 +19,8 @@ mod uray_board;
 
 use std::path::PathBuf;
 
-use uray_board::{Board, inputs, uraydb, wiringdb};
+use reticle::fpga::uray::zcu104::clock_tile_types;
+use uray_board::{Board, inputs, uraydb, wiringdb, write};
 
 /// The output directory, or `None` having said why.
 fn out_dir() -> Option<PathBuf> {
@@ -43,10 +44,16 @@ fn emio_loopback() {
         return;
     };
     let inputs = inputs(&bits, &wiring);
-    let mut board = Board::new(&inputs, &bits);
-    let route = board.connect(board.emio_out(0), board.emio_in(1));
+    let mut board = Board::new(&inputs, None).unwrap();
+    let route = board
+        .connect(board.emio_out(0).unwrap(), board.emio_in(1).unwrap())
+        .unwrap();
     eprintln!("{route:#?}");
-    board.finish(&out, "emio_loopback");
+    write(
+        &board.finish("emio_loopback").unwrap(),
+        &out,
+        "emio_loopback",
+    );
 }
 
 /// One flip-flop, every pin of it driven from Linux, to test what the
@@ -65,10 +72,13 @@ fn emio_loopback() {
 /// | 3 | `CKEN1` |
 /// | 4 | `SRST1` |
 ///
-/// The features are the six Vivado sets on 350 `AFF`s of the base overlay
+/// The bits are the six Vivado sets on 350 `AFF`s of the base overlay
 /// whose data comes from `AX`: the bypass select, clock enable and
 /// set/reset in use, synchronous, initial value zero and reset value
-/// zero. If they mean what their names say, the flip-flop is an `FDRE`.
+/// zero. The two "in use" bits are reached by routing to the control
+/// group's wires, as `uray::slice` models them; the rest are named. If
+/// they mean what their names say, the flip-flop is an `FDRE` — and on
+/// the ZCU104 on 2026-10-09 it was one, in all nine steps of the test.
 #[test]
 #[ignore = "writes a bitstream for the board"]
 fn one_flip_flop() {
@@ -76,25 +86,46 @@ fn one_flip_flop() {
         return;
     };
     let inputs = inputs(&bits, &wiring);
-    let mut board = Board::new(&inputs, &bits);
+    let mut board = Board::new(&inputs, None).unwrap();
     let slice = "CLEL_R_X27Y206";
-    for (emio, pin) in [(0, "AX"), (2, "CLK1"), (3, "CKEN1"), (4, "SRST1")] {
-        let route = board.connect(board.emio_out(emio), board.slice_pin(slice, pin));
+    // The enable and reset reach the flip-flop through its control
+    // group's wire, behind the pip that carries the group's "used" bit
+    // (`uray::slice`): routing to the group wire turns that bit on.
+    for (emio, pin) in [(0, "AX"), (2, "CLK1")] {
+        let (from, to) = (
+            board.emio_out(emio).unwrap(),
+            board.slice_pin(slice, pin).unwrap(),
+        );
+        let route = board.connect(from, to).unwrap();
         eprintln!("EMIO {emio} -> {pin}: {route:?}");
     }
-    let route = board.connect(board.slice_pin(slice, "AQ"), board.emio_in(1));
+    for (emio, wire) in [(3, "RETICLE_SLICE_CE_ABCD1"), (4, "RETICLE_SLICE_SR_ABCD1")] {
+        let (from, to) = (
+            board.emio_out(emio).unwrap(),
+            board.wire(slice, wire).unwrap(),
+        );
+        let route = board.connect(from, to).unwrap();
+        eprintln!("EMIO {emio} -> {wire}: {route:?}");
+    }
+    let (from, to) = (
+        board.slice_pin(slice, "AQ").unwrap(),
+        board.emio_in(1).unwrap(),
+    );
+    let route = board.connect(from, to).unwrap();
     eprintln!("AQ -> EMIO in 1: {route:?}");
     for feature in [
         "SLICE_X0Y0.FFMUXA1.SP.BYP.OUT1",
-        "SLICE_X0Y0.AFF.CE_ACTIVE=TRUE",
-        "SLICE_X0Y0.AFF.SR_ACTIVE=TRUE",
         "SLICE_X0Y0.AFF.SYNC_ATTR=SYNC",
         "SLICE_X0Y0.AFF.FFINIT=INIT0",
         "SLICE_X0Y0.AFF.FFSR=SRLOW",
     ] {
-        board.feature(slice, feature);
+        board.feature(slice, feature).unwrap();
     }
-    board.finish(&out, "one_flip_flop");
+    write(
+        &board.finish("one_flip_flop").unwrap(),
+        &out,
+        "one_flip_flop",
+    );
 }
 
 /// Which leaf sites of the `RCLK_INT_L` tile `tile` Vivado fed from
@@ -136,7 +167,7 @@ fn slices_near(
     count: usize,
     taken: &mut Vec<String>,
 ) -> Vec<String> {
-    let grid = &board.inputs.grid;
+    let grid = &board.db.grid;
     let int27 = grid
         .tiles()
         .iter()
@@ -176,20 +207,29 @@ fn slices_near(
 fn ripple_counter(board: &mut Board<'_>, clock: u32, slices: &[String], emio_base: u32) {
     let mut clock = clock;
     for (i, slice) in slices.iter().enumerate() {
-        board.connect(clock, board.slice_pin(slice, "CLK1"));
-        board.lut(slice, 'A', 0x5555_5555_5555_5555);
-        board.connect(board.slice_pin(slice, "AQ"), board.slice_pin(slice, "A1"));
-        board.connect(board.slice_pin(slice, "A_O"), board.slice_pin(slice, "AX"));
+        let pin = |board: &Board<'_>, name: &str| board.slice_pin(slice, name).unwrap();
+        let clk = pin(board, "CLK1");
+        board.connect(clock, clk).unwrap();
+        board.lut(slice, 'A', 0x5555_5555_5555_5555).unwrap();
+        let (q, a1, o, ax) = (
+            pin(board, "AQ"),
+            pin(board, "A1"),
+            pin(board, "A_O"),
+            pin(board, "AX"),
+        );
+        board.connect(q, a1).unwrap();
+        board.connect(o, ax).unwrap();
         for feature in [
             "SLICE_X0Y0.FFMUXA1.SP.BYP.OUT1",
             "SLICE_X0Y0.AFF.FFINIT=INIT0",
             "SLICE_X0Y0.AFF.FFSR=SRLOW",
         ] {
-            board.feature(slice, feature);
+            board.feature(slice, feature).unwrap();
         }
         let k = emio_base + u32::try_from(i).unwrap();
-        board.connect(board.slice_pin(slice, "AQ"), board.emio_in(k));
-        clock = board.slice_pin(slice, "AQ");
+        let emio = board.emio_in(k).unwrap();
+        board.connect(q, emio).unwrap();
+        clock = q;
     }
 }
 
@@ -215,26 +255,11 @@ fn three_clock_counters() {
         return;
     };
     let inputs = inputs(&bits, &wiring);
-    let mut board = Board::new(&inputs, &bits);
-    let mut types: Vec<&str> = inputs
-        .grid
-        .tiles()
-        .iter()
-        .map(|t| t.kind.as_str())
-        // The fabric's clock rows and the processor's clock buffers, and
-        // nothing that clocks an I/O bank: those rows share frames with
-        // the I/O tiles, and copying them would set bits inside tiles that
-        // drive the board's pins.
-        .filter(|k| {
-            (k.starts_with("RCLK_") || k.contains("INTF_LEFT_TERM_DA6"))
-                && !["HDIO", "HPIO", "XIPHY", "_IO", "AMS", "GT", "PCIE"]
-                    .iter()
-                    .any(|io| k.contains(io))
-        })
-        .collect();
-    types.sort_unstable();
-    types.dedup();
-    let replayed = board.replay(&oracle, &types);
+    let mut board = Board::new(&inputs, None).unwrap();
+    // The fabric's clock rows and the processor's clock buffers, leaves
+    // included: these counters are clocked by leaves Vivado turned on.
+    let types = clock_tile_types(&inputs.grid, true);
+    let replayed = board.replay(&oracle, &types).unwrap();
     eprintln!(
         "replayed {replayed} bits of {} clock tile types",
         types.len()
@@ -251,10 +276,9 @@ fn three_clock_counters() {
     {
         let leaves = leaves_on(&inputs, &oracle, tile, track);
         eprintln!("{tile} track {track}: leaves {leaves:?}");
-        let leaf = board.wire(tile, &format!("CLK_LEAF_SITES_{}_CLK_LEAF", leaves[0]));
-        if std::env::var("URAY_DEBUG").is_ok() {
-            board.describe(leaf);
-        }
+        let leaf = board
+            .wire(tile, &format!("CLK_LEAF_SITES_{}_CLK_LEAF", leaves[0]))
+            .unwrap();
         // The first stage sits beside an interconnect tile the leaf
         // reaches: a leaf serves one half of its clock region's column.
         let reach = board.node_tiles(leaf);
@@ -272,12 +296,98 @@ fn three_clock_counters() {
             .map(|t| t.name.clone())
             .expect("a free slice beside the leaf's reach");
         taken.push(first.clone());
-        let near = inputs.grid.tiles()[board.tile(&first)].grid;
+        let near = inputs.grid.tiles()[board.tile(&first).unwrap()].grid;
         let mut slices = vec![first];
         slices.extend(slices_near(&board, near, 31, &mut taken));
         let base = 32 * u32::try_from(counter).unwrap();
         ripple_counter(&mut board, leaf, &slices, base);
         eprintln!("counter {counter}: {} .. {}", slices[0], slices[31]);
     }
-    board.finish(&out, "three_clock_counters");
+    write(
+        &board.finish("three_clock_counters").unwrap(),
+        &out,
+        "three_clock_counters",
+    );
+}
+
+/// A 32-bit counter written in Verilog and taken through Reticle's whole
+/// flow — elaboration, synthesis, technology mapping, placement, routing
+/// and the bitstream — onto the processor's side of the fabric, clocked by
+/// `PL_CLK0` and read by Linux on EMIO inputs 0..31.
+///
+/// The clock network is Vivado's, replayed, without its leaves: the
+/// router reaches each flip-flop from the `PL_CLK0` global wire through a
+/// leaf of track 14 it turns on itself, by the leaf's documented features.
+/// If the count runs at 100 MHz, everything between Verilog and the part
+/// works.
+#[test]
+#[ignore = "writes a bitstream for the board"]
+#[cfg(all(feature = "verilog", feature = "synth"))]
+fn verilog_counter() {
+    use reticle::diag::Diagnostics;
+    use reticle::fpga::{Constraints, FpgaOptions, synthesize_for, target};
+    use reticle::source::SourceMap;
+
+    let (Some(bits), Some(wiring), Some(out)) = (uraydb(), wiringdb(), out_dir()) else {
+        return;
+    };
+    let Some(oracle) = uray_board::reference() else {
+        return;
+    };
+    let verilog = "module top(input wire clk, output reg [31:0] count);\n\
+                   always @(posedge clk) count <= count + 32'd1;\n\
+                   endmodule\n";
+    let mut rcf = String::from("set_io clk PL_CLK0\n");
+    for k in 0..32 {
+        rcf.push_str(&format!("set_io count[{k}] EMIO_I{k}\n"));
+    }
+
+    let mut map = SourceMap::new();
+    let source = map.add("counter.v", verilog).unwrap();
+    let rcf_file = map.add("counter.rcf", &rcf).unwrap();
+    let mut diags = Diagnostics::new();
+    let ast = reticle::verilog::parse_source(
+        &mut map,
+        source,
+        reticle::verilog::Dialect::SystemVerilog,
+        &mut reticle::verilog::NoIncludes,
+        &mut diags,
+    );
+    let mut design = reticle::verilog::elaborate_file(
+        &ast,
+        &reticle::verilog::ElabOptions::default(),
+        &mut diags,
+    )
+    .unwrap();
+    assert!(!diags.has_errors(), "{}", diags.render(&map));
+    let top = design.top.unwrap();
+    let device = target("xczu7ev-ffvc1156").unwrap();
+    let mut constraints = Constraints::parse(&rcf, rcf_file, &mut diags);
+    constraints.merge_attrs(&design, top, &mut diags);
+    synthesize_for(
+        &mut design,
+        top,
+        device,
+        &constraints,
+        &FpgaOptions::default(),
+        &mut diags,
+    )
+    .unwrap();
+    assert!(!diags.has_errors(), "{}", diags.render(&map));
+
+    let inputs = inputs(&bits, &wiring);
+    let written = reticle::fpga::uray::zcu104::implement(
+        &inputs,
+        &design,
+        top,
+        device,
+        &constraints,
+        &reticle::fpga::uray::zcu104::ImplementOptions {
+            oracle: &oracle,
+            place: &reticle::fpga::PlaceOptions::default(),
+            east: reticle::fpga::uray::zcu104::DEFAULT_EAST,
+        },
+    )
+    .unwrap();
+    write(&written, &out, "verilog_counter");
 }
