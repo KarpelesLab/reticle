@@ -24,7 +24,7 @@
 module iso7816_terminal_pad #(
     parameter CARD_DIV        = 14,
     parameter ETU_CYCLES      = 372,
-    parameter FAST_ETU_CYCLES = 4,
+    parameter FAST_ETU_CYCLES = 8,     // with `PPS1 = 97`: 1 Mbaud on the contact
     parameter RST_HOLD        = 400,
     parameter VCC_BITS        = 20,
     parameter GAP_ETU         = 256,

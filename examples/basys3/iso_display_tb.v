@@ -772,8 +772,8 @@ module iso_display_tb;
         host_send(8'h50);                      // 'P'
         wait_card_bytes(4);
         if (got[0] !== 8'hFF || got[1] !== 8'h10
-            || got[2] !== 8'h87 || got[3] !== 8'h68) begin
-            $display("FAIL: the card received %02x %02x %02x %02x, wanted FF 10 87 68",
+            || got[2] !== 8'h97 || got[3] !== 8'h78) begin
+            $display("FAIL: the card received %02x %02x %02x %02x, wanted FF 10 97 78",
                      got[0], got[1], got[2], got[3]);
             $finish;
         end
@@ -787,8 +787,8 @@ module iso_display_tb;
 
         // Our own four went out first, and the monitor read them back off
         // the wire; then the card's echo, which the **host** compares.
-        expect_monitor_line(4, {96'd0, 8'hFF, 8'h10, 8'h87, 8'h68});
-        expect_card_line(4, {96'd0, 8'hFF, 8'h10, 8'h87, 8'h68});
+        expect_monitor_line(4, {96'd0, 8'hFF, 8'h10, 8'h97, 8'h78});
+        expect_card_line(4, {96'd0, 8'hFF, 8'h10, 8'h97, 8'h78});
 
         host_send(8'h46);                      // 'F'
         expect_banner("+FST");

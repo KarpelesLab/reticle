@@ -13,7 +13,7 @@
 //   1. The activation order — power, then clock, then reset released.
 //   2. The card's answer-to-reset is received and printed. The bytes are
 //      the real device's, measured off the part.
-//   3. **The PPS exchange**: the terminal sends `FF 10 87 68`, the card
+//   3. **The PPS exchange**: the terminal sends `FF 10 97 78`, the card
 //      receives exactly those four bytes, echoes them, and the terminal
 //      reports `+PPS` and switches to the fast rate.
 //   4. **Talking at the fast rate afterwards** — a byte each way at
@@ -418,8 +418,8 @@ module iso7816_terminal_tb;
         // Wait for all four to reach the card.
         while (got_n < 4) @(posedge clk);
         if (got[0] !== 8'hFF || got[1] !== 8'h10
-            || got[2] !== 8'h87 || got[3] !== 8'h68) begin
-            $display("FAIL: the card received %02x %02x %02x %02x, wanted FF 10 87 68",
+            || got[2] !== 8'h97 || got[3] !== 8'h78) begin
+            $display("FAIL: the card received %02x %02x %02x %02x, wanted FF 10 97 78",
                      got[0], got[1], got[2], got[3]);
             $finish;
         end
@@ -441,7 +441,7 @@ module iso7816_terminal_tb;
         // what went on the wire was well formed -- by the same receiver
         // that read a real card's ATR.
         expect_monitor_byte(8'hFF); expect_monitor_byte(8'h10);
-        expect_monitor_byte(8'h87); expect_monitor_byte(8'h68);
+        expect_monitor_byte(8'h97); expect_monitor_byte(8'h78);
 
         // Then the card's echo comes back, which the host compares itself --
         // the terminal no longer does, and that is the point: a host
@@ -449,7 +449,7 @@ module iso7816_terminal_tb;
         // hardware was a state machine that could desynchronise from the
         // card irrecoverably.
         expect_hex_byte(8'hFF); expect_hex_byte(8'h10);
-        expect_hex_byte(8'h87); expect_hex_byte(8'h68);
+        expect_hex_byte(8'h97); expect_hex_byte(8'h78);
         host_recv; host_recv;                  // the CRLF ending that line
 
         // Having seen the echo agree, ask for the fast rate.
@@ -551,7 +551,7 @@ module iso7816_terminal_tb;
             end
         end
 
-        $display("PASS: activation in order; the real 14-byte ATR received; PPS FF 10 87 68 sent and received byte-for-byte by the card, echoed and compared by this testbench as a host would; the rate switched on `F`; two bytes received and one sent at F/D=4 afterwards; deactivation dropped reset and the clock before power; and k, s, k sent back to back answered in full and in order");
+        $display("PASS: activation in order; the real 14-byte ATR received; PPS FF 10 97 78 sent and received byte-for-byte by the card, echoed and compared by this testbench as a host would; the rate switched on `F`; two bytes received and one sent at F/D=4 afterwards; deactivation dropped reset and the clock before power; and k, s, k sent back to back answered in full and in order");
         $finish;
     end
 endmodule

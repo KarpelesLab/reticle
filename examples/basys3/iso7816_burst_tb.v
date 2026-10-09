@@ -17,6 +17,22 @@
 // buffer it prints a loss, which is how it is known to be measuring anything
 // at all.
 //
+// **Measured again on 9 October 2026, at the board's own ratios.** This
+// used to end a line after every card character (`GAP_ETU` 8, shorter than
+// one 12-etu character) and to model a console character as 7.5 fast etu;
+// the board ends a line after 256 etu of silence, and a 2 Mbaud console
+// character is 10 etu of `F/D = 4`. At those ratios, with the one-deep
+// buffer:
+//
+//   F/D = 4 (PPS1 87, 2 Mbaud on the contact)   24 bytes: 10 lost   200: 85
+//   F/D = 8 (PPS1 97, 1 Mbaud on the contact)   24 bytes:  0 lost   200:  0
+//
+// A card byte is 12 etu and printing it costs two characters, 20 bits: at
+// F/D = 4 that is 10 us against 6, and at F/D = 8 10 us against 12. So the
+// terminal asks for `97` now and this runs at F/D = 8. What a queue is
+// still for is a reply that starts while the display half holds the shared
+// port mid-line, which this testbench does not model.
+//
 // Measured on hardware for comparison: a full sequence against a real card
 // leaves `lost_q` at 4, and the card's reply to its initialisation frame came
 // back as `4E 00 00 4E 00 00 31 00 01 60 00 00` with 7 dropped. That reply
@@ -26,12 +42,15 @@
 `timescale 1ns / 1ps
 module iso7816_burst_tb;
     // Scaled so the ratio that decides the answer is the real one: a card
-    // byte every 12 etu at F/D = 4, against a console spending three
-    // characters on each of them.
+    // byte every 12 etu, against a console spending two characters on each
+    // of them. (This said three, which is what an 8-etu `GAP_ETU` made it:
+    // a line ending after every byte.)
     localparam integer CARD_DIV    = 2;
     localparam integer ETU_CYCLES  = 16;      // slow etu = 32 clocks
-    localparam integer FAST_ETU    = 4;       // fast etu = 8 clocks
-    localparam integer CHAR_CLOCKS = 60;      // a console character
+    localparam integer FAST_ETU    = 8;       // fast etu = 16 clocks, F/D = 8
+    // A 2 Mbaud console character is 10 bits of 56 system clocks, which is 10
+    // etu of `F/D = 4` (56 clocks too): 10 * 4 * CARD_DIV here.
+    localparam integer CHAR_CLOCKS = 10 * 4 * CARD_DIV;
     localparam integer BURST       = 24;
 
     reg clk = 1'b0;
@@ -52,7 +71,7 @@ module iso7816_burst_tb;
     iso7816_terminal #(
         .CARD_DIV(CARD_DIV), .ETU_CYCLES(ETU_CYCLES),
         .FAST_ETU_CYCLES(FAST_ETU), .RST_HOLD(8), .VCC_BITS(4),
-        .GAP_ETU(8), .WDOG_BITS(28)
+        .GAP_ETU(256), .WDOG_BITS(28)
     ) dut (
         .clk(clk), .locked(1'b1), .clk_card(clk_card), .rst_card(rst_card),
         .vcc_en(vcc_en), .io_i(io), .io_oe(term_oe), .io_o(term_o),
@@ -160,7 +179,7 @@ module iso7816_burst_tb;
                     nib = sub[3:0];
                     w   = (w << 4) | {124'd0, nib};
                 end
-                $display("note: %0d bytes at F/D=4 -> rx %0d, parity errors %0d, lost %0d",
+                $display("note: %0d bytes at the fast rate -> rx %0d, parity errors %0d, lost %0d",
                          BURST, w[127:112], w[111:96], w[7:0]);
                 if (w[7:0] == 0)
                     $display("PASS: nothing was lost; the receive path keeps up");

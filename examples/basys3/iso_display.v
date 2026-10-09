@@ -70,7 +70,7 @@
 // device and learned by a person at a terminal:
 //
 //   A          activate: power, clock, hold reset 400 card clocks, release
-//   P          send PPS `FF 10 87 68`; the echo comes back as hex and the
+//   P          send PPS `FF 10 97 78`; the echo comes back as hex and the
 //              **host** compares it
 //   F          switch to the fast rate            S   switch back
 //   :<hex>     send those bytes to the card. `:00A4040C` sends four. Hex
@@ -216,7 +216,7 @@ module iso_display #(
     // ---- The card half. `iso7816_terminal.v` explains every one. ----
     parameter CARD_DIV        = 14,
     parameter ETU_CYCLES      = 372,
-    parameter FAST_ETU_CYCLES = 4,
+    parameter FAST_ETU_CYCLES = 8,
     parameter RST_HOLD        = 400,
     parameter VCC_BITS        = 20,
     parameter GAP_ETU         = 256,

@@ -34,7 +34,7 @@
 // ===================================================================
 //
 //   A          activate: power, clock, hold reset 400 card clocks, release
-//   P          send PPS `FF 10 87 68`. The card's echo comes back as hex
+//   P          send PPS `FF 10 97 78` (`PPS1`). The card's echo comes back as hex
 //              like anything else; **the host compares it**, and sends `F`
 //              if it agrees.
 //   F          switch to the fast rate. `S` switches back.
@@ -87,16 +87,21 @@
 //   /32 = 3.5     /56 = 2   /64 = 1.75  /112 = 1
 //
 // Before PPS, `F/D` is 372: etu = 372 * 14 = **5208** system cycles, which
-// is 21505 baud. After this card's PPS, `F/D` is 4: etu = 4 * 14 = **56**,
-// which is 2 Mbaud. Changing `CARD_DIV` changes both rates together and
+// is 21505 baud. After the PPS this sends, `F/D` is 8: etu = 8 * 14 =
+// **112**, which is 1 Mbaud. Changing `CARD_DIV` changes both rates together and
 // keeps both exact, which is the whole reason the etu is expressed in card
 // cycles rather than in a baud number.
 //
-// **`TA1 = 87` is partly vendor-specific.** `DI = 7` is Di = 64 as the
-// standard says, but **`FI = 8` is RFU** in ISO 7816-3's Fi table — `Fi =
-// 512` is FI = 9. So `F/D = 4` here comes from the device's own
-// documentation and the owner's measurement, not from the standard's
-// tables, and `FAST_ETU_CYCLES` is a parameter for exactly that reason.
+// **The card offers `TA1 = 87`, and this asks for `97`.** `DI = 7` is Di =
+// 64 as the standard says, but **`FI = 8` is RFU** in ISO 7816-3's Fi table;
+// the device's own documentation and its owner make it `F/D = 4`, 2 Mbaud.
+// That was the first PPS this sent, and at 2 Mbaud a card byte lands every
+// 6 us while printing one costs 10 us on the 2 Mbaud host port, so a long
+// reply overflowed the one-byte buffer below. `97` is the standard's own
+// pair — FI = 9 is Fi = 512, so `F/D = 8` — and the owner's word is that the
+// card accepts it and talks at 1 Mbaud, a byte every 12 us, which the host
+// port keeps up with. `PPS1` and `FAST_ETU_CYCLES` are parameters, and they
+// must agree: `87` with 4, `97` with 8.
 //
 // ===================================================================
 // WHAT IS CHECKED
@@ -114,8 +119,10 @@ module iso7816_terminal #(
     parameter CARD_DIV         = 14,
     // F/D before PPS. 372 is the standard default.
     parameter ETU_CYCLES       = 372,
-    // F/D after this card's PPS. Vendor-specific; see above.
-    parameter FAST_ETU_CYCLES  = 4,
+    // F/D after this card's PPS, and the PPS1 that asks for it; see above.
+    // They must agree: `8'h97` is F/D = 8, `8'h87` is F/D = 4 on this card.
+    parameter FAST_ETU_CYCLES  = 8,
+    parameter [7:0] PPS1       = 8'h97,
     parameter RST_HOLD         = 400,
     parameter VCC_BITS         = 20,
     parameter GAP_ETU          = 256,
@@ -515,16 +522,17 @@ module iso7816_terminal #(
     reg [19:0] tx_wait = 20'd0;
     wire [19:0] gap_etu_4 = {etu_div, 2'd0};
 
-    // `FF 10 87 68`: PPSS, then PPS0 saying PPS1 follows and the protocol
-    // is T=0, then PPS1 carrying the same Fi/Di as TA1, then the check
-    // byte, which is the exclusive-or of the three before it.
+    // `FF 10 97 78`: PPSS, then PPS0 saying PPS1 follows and the protocol
+    // is T=0, then PPS1 carrying the Fi/Di asked for, then the check byte,
+    // which is the exclusive-or of the three before it — computed, so that
+    // changing `PPS1` cannot leave a stale one.
     function [7:0] pps_byte;
         input [1:0] at;
         case (at)
             2'd0: pps_byte = 8'hFF;
             2'd1: pps_byte = 8'h10;
-            2'd2: pps_byte = 8'h87;
-            default: pps_byte = 8'h68;
+            2'd2: pps_byte = PPS1;
+            default: pps_byte = 8'hFF ^ 8'h10 ^ PPS1;
         endcase
     endfunction
 
@@ -850,8 +858,11 @@ module iso7816_terminal #(
     //
     // What that costs, measured: the card's reply to its initialisation frame
     // came back as `4E 00 00 4E 00 00 31 00 01 60 00 00` with `lost_q` at 7,
-    // because at F/D = 4 a byte lands every 6 us and printing one costs 15 us
-    // at 2.000 Mbaud. Short exchanges survive -- the ATR, the PPS echo and
+    // because at F/D = 4 a byte lands every 6 us and printing one costs 10 us
+    // at 2.000 Mbaud (two hex characters). `PPS1 = 97` asks for F/D = 8, a
+    // byte every 12 us, which the port keeps up with; the buffer is still one
+    // deep, so a reply that starts while the display half holds the port
+    // mid-line still loses bytes, and still counts them. Short exchanges survive -- the ATR, the PPS echo and
     // the frame all show `lost_q` at 0 -- and a burst does not. `lost_q` is
     // in `s` so this is never silent, and a queue remains the right answer.
     reg  [15:0] lost_q = 16'd0;
