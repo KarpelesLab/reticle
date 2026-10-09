@@ -1992,6 +1992,10 @@ fn a_ball_with_no_io_buffer_is_refused_by_name_and_by_tile() {
 /// `clocks_without_a_driver` pins the reading itself, on the feature
 /// names of both of those bitstreams.
 #[test]
+// `blink()` builds a bitstream, so this needs the same features it does;
+// without them the call does not resolve and `--features fpga` alone fails
+// to compile, which the gate catches and a single-feature run does not.
+#[cfg(all(feature = "verilog", feature = "synth"))]
 fn every_global_clock_a_bitstream_distributes_has_a_buffer_driving_it() {
     let Some(root) = chipdb() else { return };
     let mut checked = 0usize;
