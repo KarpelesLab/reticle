@@ -962,3 +962,56 @@ fn verify_refutes_a_bad_design_and_writes_a_trace() {
     let waves = std::fs::read_to_string(&trace).unwrap();
     assert!(waves.contains("$scope module fifo $end"), "{waves}");
 }
+
+/// `--place-*` must reach the placer for a 7-series bitstream, not only for
+/// an ECP5 one. Until this test, the 7-series writer placed with the
+/// defaults whatever it was given and said nothing, so a table of "nine
+/// placement settings" in `docs/fpga-xray.md` was one placement built nine
+/// times.
+///
+/// It catches a writer that ignores `--place-effort`: with the defaults
+/// forced, both builds are byte-identical. It would not catch one that
+/// honours that flag and drops another, since it changes only one.
+#[test]
+fn place_effort_changes_a_seven_series_placement() {
+    let dir = scratch("place_effort_xc7");
+    let build = |name: &str, extra: &[&str]| {
+        let bit = dir.join(name);
+        let mut args = vec![
+            "fpga",
+            "examples/basys3/blink.v",
+            "--device",
+            "xc7a35t-cpg236",
+            "--constraints",
+            "examples/basys3/blink.rcf",
+            "--output-dir",
+            dir.to_str().unwrap(),
+            "--bitstream",
+            bit.to_str().unwrap(),
+        ];
+        args.extend_from_slice(extra);
+        let out = Command::new(env!("CARGO_BIN_EXE_reticle"))
+            .args(&args)
+            .env("RETICLE_OFFLINE", "1")
+            .output()
+            .expect("failed to run the reticle binary");
+        let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
+        (out.status.code(), stderr, bit)
+    };
+
+    let (code, stderr, default_bit) = build("default.bit", &[]);
+    if stderr.contains("needs a chip database") {
+        eprintln!("skipped: needs a Project X-Ray database; run `reticle fetch prjxray-db`");
+        return;
+    }
+    assert_eq!(code, Some(0), "{stderr}");
+    let (code, stderr, quick_bit) = build("effort1.bit", &["--place-effort", "1"]);
+    assert_eq!(code, Some(0), "{stderr}");
+
+    let default_bytes = std::fs::read(default_bit).unwrap();
+    let quick_bytes = std::fs::read(quick_bit).unwrap();
+    assert_ne!(
+        default_bytes, quick_bytes,
+        "`--place-effort 1` built the same bitstream as the default effort"
+    );
+}

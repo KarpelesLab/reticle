@@ -2249,7 +2249,7 @@ fn write_gowin_bitstream(
 
     use reticle::fpga::apicula::{ApiculaDatabase, ApiculaOptions};
     use reticle::fpga::bitstream;
-    use reticle::fpga::place::{PlaceOptions, place};
+    use reticle::fpga::place::place;
     use reticle::fpga::route::{RouteOptions, route};
     use reticle::fpga::xray::GridRegion;
     use reticle::fpga::{Netlist, Routing};
@@ -2341,7 +2341,7 @@ fn write_gowin_bitstream(
         &fabric.arch,
         &graph,
         constraints,
-        &PlaceOptions::default(),
+        &place_options(args)?,
     )
     .map_err(|e| e.to_string())?;
     // A route that fails stops here: unlike the 7-series writer, which
@@ -2474,6 +2474,53 @@ impl Laps {
     }
 }
 
+/// The placer's settings from `--place-*`, shared by every backend that
+/// places: a flag one writer reads and another ignores builds the same
+/// placement whatever it is given, and says nothing.
+fn place_options(args: &Args) -> Result<reticle::fpga::place::PlaceOptions, String> {
+    let mut place_options = reticle::fpga::place::PlaceOptions::default();
+    if let Some(text) = args.option("place-effort") {
+        place_options.move_effort = text
+            .parse::<usize>()
+            .map_err(|_| format!("`--place-effort` wants a whole number, not `{text}`"))?;
+    }
+    if let Some(text) = args.option("place-fixed-cooling") {
+        let factor = text
+            .parse::<f64>()
+            .map_err(|_| format!("`--place-fixed-cooling` wants a number, not `{text}`"))?;
+        if !(factor > 0.0 && factor < 1.0) {
+            return Err(format!(
+                "`--place-fixed-cooling` wants a factor in (0, 1), not `{text}`"
+            ));
+        }
+        place_options.cooling = Some(factor);
+    }
+    if args.flag("place-wide-moves") {
+        place_options.range_limit = false;
+    }
+    if args.flag("place-hot-start") {
+        place_options.start_acceptance = None;
+    }
+    if let Some(text) = args.option("place-start-window") {
+        let tiles = text
+            .parse::<u32>()
+            .map_err(|_| format!("`--place-start-window` wants a whole number, not `{text}`"))?;
+        place_options.start_window = (tiles > 0).then_some(tiles);
+    }
+    if let Some(text) = args.option("place-start-acceptance") {
+        let rate = text
+            .parse::<f64>()
+            .map_err(|_| format!("`--place-start-acceptance` wants a number, not `{text}`"))?;
+        if !(rate > 0.0 && rate < 1.0) {
+            return Err(format!(
+                "`--place-start-acceptance` wants a fraction in (0, 1), not `{text}`"
+            ));
+        }
+        place_options.start_acceptance = Some(rate);
+    }
+    Ok(place_options)
+}
+
 fn write_ecp5_bitstream(
     args: &Args,
     design: &reticle::ir::Design,
@@ -2527,46 +2574,7 @@ fn write_ecp5_bitstream(
     let netlist = Netlist::build(design, top, device, &graph).map_err(|e| e.to_string())?;
     laps.lap("build the netlist");
 
-    let mut place_options = place::PlaceOptions::default();
-    if let Some(text) = args.option("place-effort") {
-        place_options.move_effort = text
-            .parse::<usize>()
-            .map_err(|_| format!("`--place-effort` wants a whole number, not `{text}`"))?;
-    }
-    if let Some(text) = args.option("place-fixed-cooling") {
-        let factor = text
-            .parse::<f64>()
-            .map_err(|_| format!("`--place-fixed-cooling` wants a number, not `{text}`"))?;
-        if !(factor > 0.0 && factor < 1.0) {
-            return Err(format!(
-                "`--place-fixed-cooling` wants a factor in (0, 1), not `{text}`"
-            ));
-        }
-        place_options.cooling = Some(factor);
-    }
-    if args.flag("place-wide-moves") {
-        place_options.range_limit = false;
-    }
-    if args.flag("place-hot-start") {
-        place_options.start_acceptance = None;
-    }
-    if let Some(text) = args.option("place-start-window") {
-        let tiles = text
-            .parse::<u32>()
-            .map_err(|_| format!("`--place-start-window` wants a whole number, not `{text}`"))?;
-        place_options.start_window = (tiles > 0).then_some(tiles);
-    }
-    if let Some(text) = args.option("place-start-acceptance") {
-        let rate = text
-            .parse::<f64>()
-            .map_err(|_| format!("`--place-start-acceptance` wants a number, not `{text}`"))?;
-        if !(rate > 0.0 && rate < 1.0) {
-            return Err(format!(
-                "`--place-start-acceptance` wants a fraction in (0, 1), not `{text}`"
-            ));
-        }
-        place_options.start_acceptance = Some(rate);
-    }
+    let place_options = place_options(args)?;
     let (placement, place_report) =
         place::place(&netlist, &fabric.arch, &graph, constraints, &place_options)
             .map_err(|e| e.to_string())?;
@@ -2937,7 +2945,7 @@ fn write_xc7_bitstream(
     constraints: &reticle::fpga::Constraints,
     path: &str,
 ) -> Result<String, String> {
-    use reticle::fpga::place::{PlaceOptions, place};
+    use reticle::fpga::place::place;
     use reticle::fpga::route::{RouteOptions, route};
     use reticle::fpga::xc7::{self, BitHeader};
     use reticle::fpga::xray::{GridRegion, XrayDatabase, XrayOptions};
@@ -3046,7 +3054,7 @@ fn write_xc7_bitstream(
         &fabric.arch,
         &graph,
         constraints,
-        &PlaceOptions::default(),
+        &place_options(args)?,
     )
     .map_err(|e| e.to_string())?;
 
