@@ -142,10 +142,45 @@ MicroBlaze memories are typically filled in after implementation. That
 would also explain why only some rows are affected. **This guess is not
 checked.**
 
-Whether the ECC *matters* for writing is a separate question, and it is
-answerable on the board. A 7-series configuration engine ignores frame ECC
-on write; if this one does too, a bitstream with zero ECC configures. That
-has not been tried.
+Whether the ECC *matters* for writing is a separate question, and the
+board answered it.
+
+### The configuration engine does not check the ECC on write
+
+**Measured on the ZCU104 on 2026-10-09.** `base.bit` was rewritten with
+all 48 ECC bits of every one of its 51 906 frames cleared, and the CRC
+after `FDRI` recomputed. The CRC is UG470's, and the rewriter was first
+checked by reproducing both of Vivado's own CRCs and the board's
+`base.bin` byte for byte. The rewritten file was loaded through the
+kernel's FPGA manager, the same path PYNQ uses.
+
+It configured: the manager reported success and the state `operating`.
+The overlay worked: the LED `axi_gpio` at `0x8004_6000` held every value
+written to it and read it back, over the processor's AXI port into the
+fabric. To show the load really replaced the fabric's contents rather
+than leaving the old ones running, the LED register was set to `0xF`
+before each load. It read `0x0` afterwards, both for the zero-ECC file
+and for the original reloaded after it.
+
+So a bitstream Reticle writes for this part may leave the ECC zero. That
+says nothing about what the ECC computes, which is still open above.
+
+### What the kernel loads
+
+PYNQ loads `/lib/firmware/base.bin`. That file is `base.bit` without its
+header, starting at the dummy `0xFFFFFFFF` words before the sync word,
+with **every 32-bit word byte-swapped**. Measured: the swapped tail of
+`base.bit` is identical to the board's `base.bin`, all 19 311 092 bytes.
+
+```sh
+# as root on the board; flags 0 is a full (not partial) configuration
+cp design.bin /lib/firmware/
+echo 0 > /sys/class/fpga_manager/fpga0/flags
+echo design.bin > /sys/class/fpga_manager/fpga0/firmware
+```
+
+Loading a design replaces the base overlay. Reload `base.bin` the same
+way to leave the board as PYNQ expects it.
 
 ### Nearly every bit is a named feature
 
@@ -175,18 +210,106 @@ oracle here is much larger than those designs, so the two counts do not
 compare directly. **Measured**; `every_bit_of_vivados_zcu104_bitstream_has_an_owner`
 pins the count.
 
+## A routing graph for the ZU7EV, from the ZU3EG's rules
+
+The 2026 database ships *bits* only. Which wire of a tile is the same
+metal as which wire of its neighbour is in the 2020 f4pga snapshot: its
+`tileconn.json` and `tile_types/*.json`, CC0, for the ZU3EG alone. This
+section is the measurement of how far those carry to the ZU7EV. **None of
+it is in Reticle yet**; it was done with throwaway scripts, and the
+numbers are what an implementation must reproduce.
+
+### What carries over unchanged
+
+- **The grid coordinates.** For the ZU3EG, which both databases describe,
+  all 66 385 tiles have the same name and the same position in both.
+- **The wire names.** The 2020 *tile types* use the same Vivado names as
+  the 2026 `segbits` files: 3 624 of the 3 651 `INT` switches the new
+  database documents are switches of the old `INT` type. (The 2020
+  *segbits* files used different names and a multi-bit encoding; they are
+  not used.)
+- **The interior.** `tileconn.json` is rules: two tile types, a grid
+  offset, and the wire pairs joined across it. Applied to the ZU7EV grid,
+  86 % of its 18 720 `INT` tiles join exactly 1 578 wire ends, which is
+  what 81 % of the ZU3EG's do.
+
+### The check
+
+Decode `base.bit` through the 2026 database. Every one-bit switch feature
+whose bit is set is an active switch: 1.6 million of them, nearly all in
+`INT`. Every `INT` switch in that database is one bit, so the decoder does
+not have to guess. Build each switch's source and destination nodes from
+the rules, then count three things:
+
+- nodes driven by **two** active switches, which a wrong join produces;
+- source nodes **nothing drives**, which are not a site pin or a constant;
+- driven nodes **nothing reads**, which are not a site pin.
+
+The 2026 database writes some features as two switches joined by `&`,
+because they share a bit the generator could not separate, and a
+bidirectional switch as `<->`. Both kinds are left out of the active set,
+because their bit does not say which switch is on.
+
+### Three steps, each measured
+
+| | double-driven | undriven | unread |
+|---|---|---|---|
+| ZU3EG rules as they are | 1 205 | 76 862 | 103 313 |
+| + five type aliases | 1 205 | 55 174 | 80 753 |
+| + composition through break tiles | 1 203 | 16 106 | 36 999 |
+
+**The aliases.** The ZU7EV has 133 tile types the ZU3EG lacks. Four are
+the same tile under a name ending in `_FT` (`AMS_M12BUF_BOT_L_FT` is the
+ZU3EG's `AMS_M12BUF_BOT_L`), and `INT_TERM_P` behaves as `INT_TERM_B`.
+Each alias was kept only if the oracle said failures fell and
+double-drives did not rise. They were tried one at a time against
+name-derived candidates, and only these five passed.
+
+**The composition.** On the ZU3EG a slice-M column is never directly east
+of a slice-L column: a block RAM, DSP or clock-region break column always
+sits between. On the ZU7EV the two are often adjacent
+(`INT_X49 | CLEL_R_X49 | CLEM_X50`), and no ZU3EG rule joins them. The
+east–west bus wires pass *through* the break tiles (`CFRM_CBRK_L`,
+`CFG_M12BUF`) on the ZU3EG, whose wire names carry the row offset within
+the tall tile (`EASTBUSIN_FT0_1_3` is row 1, wire 3). Composing the rules
+through those tiles gives direct wire pairs. Applying them between the
+next non-blank, non-break tiles in a row removed 39 000 undriven nodes
+and created no double-drive.
+
+### Where it still fails
+
+Restricted to nodes made only of interconnect, slice and break tiles —
+where a first design lives — **4 069 nodes are undriven and 5 718 unread,
+out of 1.33 million**. They sit almost entirely in five interconnect
+columns:
+
+| `INT` column | failures |
+|---|---|
+| X39, X40, X41 | 2 630, 3 027, 382 |
+| X68, X69 | 286, 3 241 |
+| X0, X1, X2 | 112, 34, 13 |
+| every other column | 74 between them |
+
+X39–X41 is the column of the configuration block in the middle of the
+die; X68–X69 is the right edge, beside the transceivers; X0–X2 is beside
+the processor system. The other sixty-odd interconnect columns, across
+every row, agree with Vivado's routing of a 3.5-million-bit design. A
+first backend can work in a region that leaves those columns out, as the
+7-series one loads a region.
+
+The rest of the failures are outside the core and are understood: block
+RAM pins the 2020 tile types name differently, interface tiles
+(`INT_INTF_*`) whose outputs are fed through `&` features, and the PCIe
+and transceiver interfaces.
+
 ## What remains, in order
 
-1. **Load a bitstream through the board's FPGA manager.** First
-   `base.bit` itself as a round trip, then the same bitstream with its ECC
-   zeroed. This needs root on the board, and it replaces the logic PYNQ's
-   base overlay is using.
-2. **A routing graph for this die.** The database ships *bits*. Which wire
-   of a tile joins which wire of its neighbour is in the 2020 f4pga
-   snapshot's `tileconn.json`, but only for the ZU3EG. The ZU7EV is a
-   different grid of the same tile types.
-3. **Write a bitstream**, starting with one LUT driving one pin, and watch
-   it on the board.
-4. **The processor interface.** The fabric talks to Linux through the
+1. **The routing graph in Reticle.** Fetch the 2020 snapshot's tile types
+   and `tileconn.json`, apply the aliases and the composition, and pin the
+   counts above.
+2. **Write a bitstream**, starting with logic the processor can see:
+   leave the base overlay's AXI path alone and change one LUT of it, or
+   drive an LED from a fresh design.
+3. **The processor interface.** The fabric talks to Linux through the
    `PS8` block's AXI ports, whose bits are in `INT_INTF_LEFT_TERM_PSS` and
    `PSS_ALTO`.
