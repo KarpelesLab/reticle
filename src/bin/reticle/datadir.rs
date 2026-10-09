@@ -760,7 +760,7 @@ mod tests {
         let gowin = include_str!("../../../tests/fpga_gowin.rs");
         let trellis_test = include_str!("../../../tests/fpga_trellis.rs");
         let uray = include_str!("../../../tests/fpga_uray.rs");
-        let uray_routing = include_str!("../../../tests/fpga_uray_routing.rs");
+        let uray_routing = include_str!("../../../tests/uray_board/mod.rs");
         for (db, test) in [
             (&PRJXRAY, xray),
             (&PRJXRAY, xray_lutram),

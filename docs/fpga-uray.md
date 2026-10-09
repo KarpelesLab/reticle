@@ -387,7 +387,7 @@ Vivado set there fit, with every core node driven once and read.
 
 **Run on the ZCU104 on 2026-10-09, and it worked.**
 
-`an_emio_loopback_for_the_board` in `tests/fpga_uray_routing.rs` builds the
+`emio_loopback` in `tests/fpga_uray_board.rs` builds the
 processor-side fabric and searches it for a path from `FMIO_GPIO_OUT0`
 (EMIO GPIO output 0) to `FMIO_GPIO_IN1` (input 1). The search may not
 enter any other `PS8` pin's node, so no stray signal can reach a
@@ -508,11 +508,54 @@ happened**. IRQ 54 stayed at its count of 1, both ports' over-current
 counters stayed at 2, and the kernel logged nothing but the load. The
 base overlay was reloaded afterwards and answered on AXI.
 
+## A flip-flop, clocked by hand
+
+**Run on the ZCU104 on 2026-10-09, and it behaved as an `FDRE` in every
+step.**
+
+The database names a slice's flip-flop features after Vivado's
+attributes (`CE_ACTIVE=TRUE`, `SR_ACTIVE=TRUE`, `SYNC_ATTR=SYNC`,
+`FFINIT=INIT0`, `FFSR=SRLOW`). It also files some single bits under
+several of those names at once: `AFF.CE_ACTIVE=TRUE` and
+`AFF.CE_GND=TRUE` are both bit `14_007`, which `BFF` names too. That bit
+is shared by a group of flip-flops, not owned by one. Which bits an
+`FDRE` needs is a question the names alone do not settle. Vivado's
+base overlay offers a hypothesis: 350 of its `AFF`s whose data comes from
+the bypass carry exactly the bypass select (`FFMUXA1.SP.BYP.OUT1`) and
+those five features.
+
+`one_flip_flop` in `tests/fpga_uray_board.rs` tests it on the part.
+`AFF` of `CLEL_R_X27Y206` takes its data from `AX`. Its `CLK1`, `CKEN1`
+and `SRST1` are each routed from an EMIO output through the interconnect:
+the slice's clock pin is fed by an `INT_NODE_GLOBAL` node, which ordinary
+routing can drive. Linux can therefore clock it by hand, and needs no
+clock buffer for the experiment. `AQ` goes to EMIO input 1.
+
+| step | expected | Q |
+|---|---|---|
+| after the load, before any edge | 0 (`INIT0`) | 0 |
+| D=1, CE=1, no edge | 0 | 0 |
+| edge, D=1, CE=1 | 1 | 1 |
+| edge, D=0, CE=1 | 0 | 0 |
+| edge, D=1, CE=0 | 0 (hold) | 0 |
+| edge, D=1, CE=1 | 1 | 1 |
+| SR=1, no edge | 1 (synchronous) | 1 |
+| edge, SR=1, D=1 | 0 (`SRLOW`) | 0 |
+| edge, SR=0, D=1 | 1 | 1 |
+
+Nothing else happened: no interrupt, no over-current. That is one
+flip-flop of sixteen, with its data from the bypass. The second
+flip-flops (`AFF2`), the other letters, the lookup table path
+(`FFMUXA1.SP.D6.OUT1`) and which flip-flops share a clock enable are
+still readings of the database, not measurements.
+
 ## What remains, in order
 
 1. **Bels.** The slice's lookup tables, flip-flops and carry chain as
    bels the placer can use, from the 2026 `segbits` names and the 2020
-   site types. The lookup tables' contents are complete (above).
+   site types. The lookup tables' contents are complete and one flip-flop
+   has run (above). Which flip-flops share each clock enable and reset
+   is the next thing to measure.
 2. **A clock.** The processor's `PL_CLK0`, through its `BUFG_PS`, onto
    the global network and down to the slices.
 3. **The processor interface.** The fabric talks to Linux through the
