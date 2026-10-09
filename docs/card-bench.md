@@ -99,6 +99,27 @@ s                 card status, 32 hex characters
 m  u              mute / unmute the printing of card bytes
 ```
 
+### The initialisation frame
+
+51 bytes, which this device answers by clearing its display and then drawing
+a logo. Send them with `:` and a carriage return; the parser takes `0-9 A-F
+a-f` and the case does not change what reaches the contact.
+
+```
+010030000800030304322e323804f4d8aa4304312e313604f1308974100702020014150c090106312e31312e3005312e322e30
+```
+
+```
+01 00 30 00 08 00 03 03 04 32 2e 32 38 04 f4 d8 aa 43 04 31 2e 31 36 04 f1
+30 89 74 10 07 02 02 00 14 15 0c 09 01 06 31 2e 31 31 2e 30 05 31 2e 32 2e 30
+```
+
+Several of those bytes are ASCII -- `32 2e 32 38` is `2.28`, `31 2e 31 36`
+is `1.16`, `31 2e 31 31 2e 30` is `1.11.0` and `31 2e 32 2e 30` is `1.2.0` --
+so it looks like a set of version strings the device is told about. A wrong
+byte does not trigger initialisation at all, which is what makes the display
+drawing a sufficient check that all 51 arrived.
+
 **`F` must be conditional on the echo matching what was sent** (`FF109778`
 with the default `PPS1`). Switching
 regardless leaves this end at 2 Mbaud against a card still at 21505 baud,
