@@ -342,13 +342,119 @@ the budget ran out before the bus was reached, and the region showed
 budget. With that restored, the count fell to 652, all of them outside
 the core.
 
+### The processor's side
+
+The processor system sits at the bottom left of the die. Its one `PS8`
+site, in the one `PSS_ALTO` tile, reaches the fabric through a column of
+`INT_INTF_LEFT_TERM_PSS` interface tiles beside interconnect column X27.
+The ZU3EG's rules join every `PS8` pin to an interface tile by a long
+offset (159 columns, up to 185 rows). On the ZU7EV the processor block is
+anchored at a different distance from the bottom of its column, and the
+column is taller, so whether those offsets carry over was not obvious.
+
+**They do, unchanged. Checked against Vivado's choice of pins.** Take
+every interface output Vivado's routing reads, map it back to a `PS8` pin
+through the ZU3EG offset shifted by *s* rows, and see which pins they
+are. At *s* = 0 they are the overlay's own ports: `AXI_PL_PORT2` (the LPD
+AXI master, `M_AXI_HPM0_LPD`: 128 `WDATA`, 40 `AWADDR`, 40 `ARADDR` …),
+five `FMIO_GPIO_OUT` (EMIO GPIO) and the `AXDS2`/`AXDS6` read data of the
+video pipeline's memory reads. No other shift comes close. A count that
+ignores pin names cannot find this: nearly every (row, wire) of the
+column is some `PS8` pin, so any shift explains most of the used wires.
+
+**The processor's inputs need fixed wiring the 2026 database does not
+name.** An interface tile's `IMUX_FT1_*` reaches the `PS8` input, and the
+2020 type joins it to the interconnect through `IMUX_FT0_* ->> IMUX_FT1_*`.
+That is a buffered pip with no bits, absent from the 2026 `segbits`.
+`build_arch` therefore declares a 2020 buffered pip as bitless wiring when
+its tile type has no sites and no feature drives its destination. A
+compound `&` feature counts as driving. Both conditions were added
+because a looser rule broke something:
+
+- Without the "no sites" condition, a block RAM's internal buffered pips
+  became fixed wiring and gave one output wire several drivers. Block RAM
+  double-drives rose from 167 to 260.
+- Without counting `&` features, `INT_INTF_L`'s `LOGIC_OUTS_R*`, which
+  are reached only through such features, would get a bitless path that
+  skips their gate.
+
+`vivados_routing_is_consistent_beside_the_processor` runs the check over
+the `PS8` tile, the interface column and interconnect columns X27–X31,
+over the four clock region rows the processor spans. All 163 313 pips
+Vivado set there fit, with every core node driven once and read.
+
+## The first design on the part: an EMIO loopback
+
+**Run on the ZCU104 on 2026-10-09, and it worked.**
+
+`an_emio_loopback_for_the_board` in `tests/fpga_uray_routing.rs` builds the
+processor-side fabric and searches it for a path from `FMIO_GPIO_OUT0`
+(EMIO GPIO output 0) to `FMIO_GPIO_IN1` (input 1). The search may not
+enter any other `PS8` pin's node, so no stray signal can reach a
+processor input such as an AXI handshake. It writes the result with
+`uray::write_bit`.
+
+The writer is Vivado's command sequence word for word. Given Vivado's own
+header and frames, it reproduces `base.bit` byte for byte,
+and `uray::bin_from_bit` of that reproduces the board's `base.bin`
+(`the_writer_reproduces_vivados_bitstream_byte_for_byte`).
+
+The route is three pips:
+
+```text
+(160,159) INT_INTF_LEFT_TERM_PSS  LOGIC_OUTS_L18 -> LOGIC_OUTS_R18   bits 01_021 02_027 03_024
+(161,159) INT                     LOGIC_OUTS_W18 -> INT_NODE_IMUX_47_INT_OUT1   bit 17_026
+(161,159) INT                     INT_NODE_IMUX_47_INT_OUT1 -> IMUX_W31        bit 11_022
+```
+
+The bitstream sets 460 805 bits: those 5, and the 16 `defaults` bits of
+every slice tile. The defaults are how Vivado leaves an unused slice:
+most of `base.bit`'s slices carry all 16, and the rest are slices in
+use. The `HDIO_TOP_RIGHT` defaults are left clear, as Vivado leaves them
+on unused I/O tiles. **Every set bit decodes to a feature.** The decoded
+pips are the route's plus 29 others: the interface tile's three enable
+bits are shared by all 30 of its `LOGIC_OUTS` passes, so turning one on
+turns on all of them. The other 29 carry processor outputs onto
+interconnect wires that nothing reads.
+
+On the board, through the FPGA manager, with Linux driving `gpio594`
+(EMIO 0, as an output) and reading `gpio595` (EMIO 1, as an input):
+
+| output | input, base overlay | input, loopback |
+|---|---|---|
+| 0, 1, 0, 1, 1, 0 | 0, 0, 0, 0, 0, 0 | 0, 1, 0, 1, 1, 0 |
+
+The output and the input are different lines on purpose. Linux reads an
+output line's own output register back, so a loopback onto the same line
+reads the same whether it works or not. That was measured first, and it
+is why the route ends at input 1.
+
+### What it did besides, and what that says
+
+- **IRQ 54 fired once.** That is the fabric's first interrupt line, GIC
+  SPI 121, which PYNQ's `uio_pdrv_genirq` owns. Undriven, it read as
+  asserted. The UIO handler masks the line, so it fired once and stopped.
+- **The kernel logged `usb usb1-port1: over-current condition`** and the
+  same for `usb2-port1`, at the moment of the load. Nothing was plugged
+  into either port, and nothing was logged after the base overlay was
+  reloaded. A processor input that Vivado's bitstream holds at a safe
+  level was left undriven, and read as asserted.
+
+Both say the same thing: **a bitstream for this part must tie the
+processor's unused inputs**, as Vivado's evidently does. Which inputs,
+and to what level, is the next thing to read out of `base.bit`. Until
+then, a Reticle design should be loaded only briefly, with the base
+overlay reloaded afterwards, as it was here.
+
 ## What remains, in order
 
-1. **Bels.** The slice's lookup tables, flip-flops and carry chain, from
-   the 2026 `segbits` names and the 2020 site types.
-2. **Write a bitstream**, starting with logic the processor can see:
-   leave the base overlay's AXI path alone and change one LUT of it, or
-   drive an LED from a fresh design.
+1. **Tie the processor's unused inputs**, as Vivado does: read which
+   ones `base.bit` drives, and from what.
+2. **Bels.** The slice's lookup tables, flip-flops and carry chain, from
+   the 2026 `segbits` names and the 2020 site types. Two of each
+   lookup table's 64 `INIT` bits are missing from the database. On the
+   evidence so far they are the 16 `defaults` bits, stored inverted, but
+   that is not yet checked.
 3. **The processor interface.** The fabric talks to Linux through the
    `PS8` block's AXI ports, whose bits are in `INT_INTF_LEFT_TERM_PSS` and
    `PSS_ALTO`.

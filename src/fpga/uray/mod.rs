@@ -29,7 +29,12 @@
 //! | the ECC in word 45 and the low half of word 46 ([`is_ecc_bit`]) | **measured** on the same bitstream; see that function |
 //! | the packet stream, the registers and the CRC | the 7-series ones, unchanged: [`super::xc7::read_bit`] reads Vivado's ZCU104 bitstream with every CRC matching |
 
+mod bitstream;
 mod fabric;
+
+pub use bitstream::{
+    IDCODE_XCZU7EV, LEADING_DUMMY_WORDS, bin_from_bit, frames_from_tile_bits, write_bit,
+};
 
 pub use fabric::{
     ALIASES, FabricInputs, FabricStats, GridRegion, SiteDecl, SiteTypePins, TileConn,
@@ -438,6 +443,8 @@ impl FrameLayout {
 /// What a `.bit` holds, read for an UltraScale+ part.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct UltraScaleBit {
+    /// The wrapper's fields.
+    pub header: xc7::BitHeader,
     /// The wrapper's part field (`xczu7ev-ffvc1156-2-e`).
     pub part: String,
     /// The IDCODE the stream writes.
@@ -459,7 +466,8 @@ pub struct UltraScaleBit {
 pub fn read_bit(bytes: &[u8]) -> Result<UltraScaleBit, UrayError> {
     let bit = xc7::read_bit(bytes)?;
     Ok(UltraScaleBit {
-        part: bit.header.part,
+        part: bit.header.part.clone(),
+        header: bit.header,
         idcode: bit.idcode,
         frames: bit.frames,
     })

@@ -169,16 +169,20 @@ pub struct SiteDecl {
     pub pins: Vec<(String, String)>,
 }
 
-/// What one 2020 `tile_type_<T>.json` gives: the wires and the sites.
+/// What one 2020 `tile_type_<T>.json` gives: the wires, the sites, and
+/// the buffered pips.
 ///
-/// Its pips are not used: which of them are programmable, and with which
-/// bits, comes from the 2026 database's `segbits` instead.
+/// Which pips are programmable, and with which bits, comes from the 2026
+/// database's `segbits` instead. The buffered ones (`A->>B`) are kept
+/// because some of them have no bits at all: see [`build_arch`].
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct TileTypeWiring {
     /// Every wire of the type.
     pub wires: Vec<String>,
     /// Every site.
     pub sites: Vec<SiteDecl>,
+    /// Every non-pseudo pip written `A->>B`, as `(A, B)`.
+    pub buffered: Vec<(String, String)>,
 }
 
 impl TileTypeWiring {
@@ -204,6 +208,19 @@ impl TileTypeWiring {
                     .collect();
             }
             _ => return Err(bad("there is no `wires` list".to_owned())),
+        }
+        if let Some(Json::Object(pips)) = json.get("pips") {
+            for (name, info) in pips {
+                let pseudo = info.get("is_pseudo").and_then(Json::as_str) == Some("1");
+                let Some((_, body)) = name.split_once('.') else {
+                    continue;
+                };
+                if let Some((a, b)) = body.split_once("->>")
+                    && !pseudo
+                {
+                    out.buffered.push((a.to_owned(), b.to_owned()));
+                }
+            }
         }
         if let Some(Json::Array(sites)) = json.get("sites") {
             for site in sites {
@@ -424,6 +441,9 @@ pub struct FabricStats {
     pub joins: usize,
     /// Features skipped because they name two pips with one bit.
     pub compound_features: usize,
+    /// Buffered 2020 pips declared as fixed wiring, summed over tile
+    /// types.
+    pub fixed: usize,
     /// Tile types in the region that the 2020 snapshot does not describe
     /// even through [`ALIASES`]: their wires come only from their own
     /// pips, and no rule joins them to anything.
@@ -601,6 +621,43 @@ pub fn build_arch(inputs: &FabricInputs<'_>, region: GridRegion) -> UrayFabric {
                 pips.push((from, to, feature.ones.clone()));
             }
         }
+        // A buffered pip of a 2020 type with no sites, whose destination no
+        // feature of the 2026 `segbits` drives, is fixed wiring with no
+        // bits: the
+        // interface column's `IMUX_FT0_28 ->> IMUX_FT1_28`, which is how
+        // the interconnect reaches the processor's inputs. Where a feature
+        // does drive the destination, the wire is a mux and the pip is
+        // left out, because a bitless copy would let the router use it
+        // without setting the mux.
+        // A compound feature (`A->B&C->D`) is never made a pip, but its
+        // destinations are muxes all the same: `INT_INTF_L`'s
+        // `LOGIC_OUTS_R*` are driven only through such features, and a
+        // bitless copy of their buffered pip would skip the gate.
+        let mut driven: HashSet<&str> = pips.iter().map(|(_, to, _)| *to).collect();
+        for feature in bits.features.iter().filter(|f| f.name.contains('&')) {
+            for part in feature.name.split('&') {
+                for (_, to) in routing_of(part).into_iter().flatten() {
+                    driven.insert(to);
+                }
+            }
+        }
+        let mut fixed_pips: Vec<(&str, &str)> = Vec::new();
+        // Only in a tile without sites: inside a block RAM the buffered
+        // pips are its output selection, and taken as fixed they give one
+        // output wire several drivers.
+        let buffered = if wiring.sites.is_empty() {
+            wiring.buffered.as_slice()
+        } else {
+            &[]
+        };
+        for (from, to) in buffered {
+            if !driven.contains(to.as_str()) {
+                wires.insert(from.as_str());
+                wires.insert(to.as_str());
+                fixed_pips.push((from.as_str(), to.as_str()));
+            }
+        }
+        stats.fixed += fixed_pips.len();
         for rule in rules_from.get(wiring_kind).into_iter().flatten() {
             wires.extend(rule.pairs.iter().map(|(mine, _)| mine.as_str()));
         }
@@ -620,6 +677,13 @@ pub fn build_arch(inputs: &FabricInputs<'_>, region: GridRegion) -> UrayFabric {
                 from: WireRef::local(from),
                 to: WireRef::local(to),
                 bits,
+            });
+        }
+        for (from, to) in fixed_pips {
+            tile_type.pips.push(PipDecl {
+                from: WireRef::local(from),
+                to: WireRef::local(to),
+                bits: Vec::new(),
             });
         }
         let mut join = |mine: &str, theirs: &str, dx: i32, dy: i32, other: &str| {

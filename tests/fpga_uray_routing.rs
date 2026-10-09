@@ -402,6 +402,9 @@ fn verdict(inputs: &Inputs, bitstream: &[u8], region: GridRegion) -> Verdict {
             let double = drivers[t] > 1;
             let unread = !reads[t] && !sited_in[t];
             if !core[t] {
+                if debug && double && out.other.0 < 8 {
+                    eprintln!("other double: {:?}", describe(&mut nodes, to));
+                }
                 out.other.0 += usize::from(double);
                 out.other.2 += usize::from(unread);
             } else {
@@ -454,4 +457,278 @@ fn vivados_routing_is_consistent_on_the_fabric() {
     // Block RAM and interface nodes, pinned so a change shows: see the
     // module documentation for why they are not zero.
     assert_eq!(verdict.other, (167, 652, 2560), "{verdict:?}");
+}
+
+/// The processor's side of the fabric: the `PS8` site, the interface
+/// column beside it and four interconnect columns, over the four clock
+/// region rows the processor system spans. Vivado routes the base
+/// overlay's EMIO GPIO outputs and its AXI port through here, and this is
+/// the path a design has to use to talk to Linux.
+#[test]
+fn vivados_routing_is_consistent_beside_the_processor() {
+    let (Some(bits_root), Some(wiring_root)) = (uraydb(), wiringdb()) else {
+        return;
+    };
+    let Some(bitstream) = reference() else { return };
+    let inputs = inputs(&bits_root, &wiring_root);
+    let ps = position(&inputs.grid, "PSS_ALTO_X0Y60");
+    let low = position(&inputs.grid, "INT_X31Y0");
+    let high = position(&inputs.grid, "INT_X27Y239");
+    let region = GridRegion::new(
+        ps.0,
+        high.1.min(low.1),
+        low.0.max(high.0),
+        high.1.max(low.1),
+    );
+    let verdict = verdict(&inputs, &bitstream, region);
+    eprintln!("{verdict:?}");
+    assert_eq!(verdict.active_pips, 163_313, "{verdict:?}");
+    assert_eq!(
+        (verdict.double_driven, verdict.undriven, verdict.unread),
+        (0, 0, 0),
+        "a core node of Vivado's routing does not fit the fabric: {verdict:?}"
+    );
+    // The interface column's nodes are not core. Every `LOGIC_OUTS` pass
+    // of an interface tile shares that tile's three enable bits, so
+    // decoding counts all thirty of a used tile as on: most of the
+    // unread nodes are those.
+    assert_eq!(verdict.other, (439, 839, 6380), "{verdict:?}");
+}
+
+/// The node, by union-find root, of every wire of `graph`, with joins
+/// (bitless pips) as the only edges.
+fn node_roots(graph: &reticle::fpga::arch::RoutingGraph) -> Vec<u32> {
+    let mut nodes = Nodes((0..u32::try_from(graph.nodes.len()).unwrap()).collect());
+    for (id, pip) in graph.pips.iter().enumerate() {
+        if graph.pip_bits(u32::try_from(id).unwrap()).is_empty() {
+            nodes.join(pip.from, pip.to);
+        }
+    }
+    (0..u32::try_from(graph.nodes.len()).unwrap())
+        .map(|i| nodes.find(i))
+        .collect()
+}
+
+/// The cheapest path of pips from any wire of `from`'s node to any wire
+/// of `to`'s node, counting each pip with bits as one and each join as
+/// nothing, never entering a node in `forbidden`. The pips with bits, in
+/// order.
+fn search(
+    graph: &reticle::fpga::arch::RoutingGraph,
+    roots: &[u32],
+    from: NodeId,
+    to: NodeId,
+    forbidden: &HashSet<u32>,
+) -> Option<Vec<u32>> {
+    use std::collections::VecDeque;
+    let target = roots[to as usize];
+    let mut cost = vec![u32::MAX; graph.nodes.len()];
+    let mut came: Vec<Option<u32>> = vec![None; graph.nodes.len()];
+    let mut queue = VecDeque::new();
+    cost[from as usize] = 0;
+    queue.push_back(from);
+    while let Some(wire) = queue.pop_front() {
+        if roots[wire as usize] == target {
+            let mut pips = Vec::new();
+            let mut at = wire;
+            while let Some(pip) = came[at as usize] {
+                if !graph.pip_bits(pip).is_empty() {
+                    pips.push(pip);
+                }
+                at = graph.pips[pip as usize].from;
+            }
+            pips.reverse();
+            return Some(pips);
+        }
+        for &pip in graph.outgoing(wire) {
+            let next = graph.pips[pip as usize].to;
+            if forbidden.contains(&roots[next as usize]) && roots[next as usize] != target {
+                continue;
+            }
+            let step = u32::from(!graph.pip_bits(pip).is_empty());
+            let c = cost[wire as usize] + step;
+            if c < cost[next as usize] {
+                cost[next as usize] = c;
+                came[next as usize] = Some(pip);
+                if step == 0 {
+                    queue.push_front(next);
+                } else {
+                    queue.push_back(next);
+                }
+            }
+        }
+    }
+    None
+}
+
+/// Writes the first bitstream for the ZCU104 that Reticle builds itself:
+/// EMIO GPIO output 0 routed straight back to EMIO GPIO input 1, through
+/// the processor's interface column and the interconnect, and nothing
+/// else. Linux drives `gpio594` as an output and reads `gpio595` as an
+/// input. The two are different lines on purpose: Linux reads an output
+/// line's own output register back, so a loopback onto the same line
+/// would look the same whether it worked or not. `docs/fpga-uray.md` has
+/// the procedure and the result.
+///
+/// Ignored because it writes files: set `RETICLE_ZCU104_OUT` to a
+/// directory, and it writes `emio_loopback.bit` and `.bin` there.
+///
+/// Before writing, it holds the bitstream to the project's two checks
+/// that apply to a routing-only design: every set bit decodes, through
+/// the database, to a feature; and the pips the decoded bits turn on are
+/// exactly the pips of the route.
+#[test]
+#[ignore = "writes a bitstream for the board"]
+fn an_emio_loopback_for_the_board() {
+    use reticle::fpga::arch::ConfigBit;
+    use reticle::fpga::xc7::BitHeader;
+
+    let (Some(bits_root), Some(wiring_root)) = (uraydb(), wiringdb()) else {
+        return;
+    };
+    let Ok(out_dir) = std::env::var("RETICLE_ZCU104_OUT") else {
+        eprintln!("skipped: set RETICLE_ZCU104_OUT to a directory to write into");
+        return;
+    };
+    let inputs = inputs(&bits_root, &wiring_root);
+    let ps = position(&inputs.grid, "PSS_ALTO_X0Y60");
+    let low = position(&inputs.grid, "INT_X31Y0");
+    let high = position(&inputs.grid, "INT_X27Y239");
+    let region = GridRegion::new(
+        ps.0,
+        high.1.min(low.1),
+        low.0.max(high.0),
+        high.1.max(low.1),
+    );
+    let fabric = uray::build_arch(
+        &FabricInputs {
+            grid: &inputs.grid,
+            bits: &inputs.bits,
+            wiring: &inputs.wiring,
+            rules: &inputs.rules,
+        },
+        region,
+    );
+    let graph = fabric.arch.build_graph();
+    let roots = node_roots(&graph);
+    let wire = |name: &str| -> NodeId {
+        let index = graph
+            .nodes
+            .iter()
+            .position(|w| w.tile == ps && w.name == name)
+            .unwrap_or_else(|| panic!("the PS8 tile has no wire `{name}`"));
+        u32::try_from(index).unwrap()
+    };
+    let source = wire("PSS_ALTO_CORE_0_FMIO_GPIO_OUT0");
+    let sink = wire("PSS_ALTO_CORE_0_FMIO_GPIO_IN1");
+    // No other processor pin may be touched: a stray signal on an AXI
+    // handshake input would be far worse than a failed loopback.
+    let forbidden: HashSet<u32> = graph
+        .nodes
+        .iter()
+        .enumerate()
+        .filter(|(_, w)| w.tile == ps)
+        .map(|(i, _)| roots[i])
+        .filter(|r| *r != roots[source as usize] && *r != roots[sink as usize])
+        .collect();
+    for (label, end) in [("source", source), ("sink", sink)] {
+        let members: Vec<_> = (0..graph.nodes.len())
+            .filter(|&i| roots[i] == roots[end as usize])
+            .map(|i| (graph.nodes[i].tile, graph.nodes[i].name.clone()))
+            .collect();
+        eprintln!("{label} node: {members:?}");
+    }
+    let route = search(&graph, &roots, source, sink, &forbidden).expect("a route exists");
+    for pip in &route {
+        let p = &graph.pips[*pip as usize];
+        eprintln!(
+            "{:?} {} -> {}  {:?}",
+            p.tile,
+            graph.nodes[p.from as usize].name,
+            graph.nodes[p.to as usize].name,
+            graph.pip_bits(*pip)
+        );
+    }
+
+    // Tile bits: the route's, then every slice's defaults, as Vivado
+    // leaves an unused slice.
+    let at: HashMap<(u32, u32), usize> = inputs
+        .grid
+        .tiles()
+        .iter()
+        .enumerate()
+        .map(|(i, t)| (t.grid, i))
+        .collect();
+    let mut bits: Vec<(usize, ConfigBit)> = Vec::new();
+    for pip in &route {
+        let tile = at[&graph.pips[*pip as usize].tile];
+        bits.extend(graph.pip_bits(*pip).iter().map(|b| (tile, *b)));
+    }
+    let defaults = {
+        let mut out: HashMap<String, Vec<ConfigBit>> = HashMap::new();
+        for kind in ["CLEL_L", "CLEL_R", "CLEM", "CLEM_R"] {
+            let stem = TileTypeBits::file_stem(kind).replacen("segbits_", "defaults_", 1);
+            let path = format!("{bits_root}/{stem}.db");
+            let parsed = TileTypeBits::parse("", "none", Some((&read(&path), &path))).unwrap();
+            out.insert(kind.to_owned(), parsed.defaults);
+        }
+        out
+    };
+    for (index, tile) in inputs.grid.tiles().iter().enumerate() {
+        if let Some(list) = defaults.get(&tile.kind) {
+            bits.extend(list.iter().map(|b| (index, *b)));
+        }
+    }
+    let layout = FrameLayout::from_grid(&inputs.grid);
+    let frames = uray::frames_from_tile_bits(&inputs.grid, &layout, bits).unwrap();
+
+    // Every bit decodes, and the pips it turns on are the route's.
+    let decoded = uray::decode(&inputs.grid, &layout, &frames).unwrap();
+    assert!(decoded.unowned.is_empty());
+    let mut types = inputs.bits.clone();
+    for (kind, list) in &defaults {
+        types
+            .entry(kind.clone())
+            .or_default()
+            .defaults
+            .clone_from(list);
+    }
+    let explained = uray::explain(&inputs.grid, &decoded, &types);
+    assert_eq!(explained.unexplained_total(), 0, "{explained:?}");
+    eprintln!(
+        "{} set bits, every one explained; {} of them the route's",
+        decoded.set_bits,
+        route
+            .iter()
+            .map(|p| graph.pip_bits(*p).len())
+            .sum::<usize>()
+    );
+    let mut on = HashSet::new();
+    for (index, pip) in graph.pips.iter().enumerate() {
+        let id = u32::try_from(index).unwrap();
+        let pattern = graph.pip_bits(id);
+        if pattern.is_empty() {
+            continue;
+        }
+        let tile = at[&pip.tile];
+        let Some(set) = decoded.tiles.get(&tile) else {
+            continue;
+        };
+        if pattern.iter().all(|b| set.contains(b)) {
+            on.insert(id);
+        }
+    }
+    let chosen: HashSet<u32> = route.iter().copied().collect();
+    let extra: Vec<_> = on.difference(&chosen).collect();
+    eprintln!("pips the bits turn on beyond the route: {}", extra.len());
+
+    let header = BitHeader::new("emio_loopback", "xczu7ev-ffvc1156-2-e");
+    let bit = uray::write_bit(&header, uray::IDCODE_XCZU7EV, &layout, &frames).unwrap();
+    let dir = Path::new(&out_dir);
+    std::fs::write(dir.join("emio_loopback.bit"), &bit).unwrap();
+    std::fs::write(
+        dir.join("emio_loopback.bin"),
+        uray::bin_from_bit(&bit).unwrap(),
+    )
+    .unwrap();
 }

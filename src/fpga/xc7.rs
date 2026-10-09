@@ -893,28 +893,29 @@ fn nop() -> u32 {
 }
 
 /// Accumulates the configuration packet stream, keeping the CRC as it
-/// goes.
-struct Stream {
-    words: Vec<u32>,
+/// goes. The UltraScale+ writer in [`super::uray`] uses it too: the
+/// packets, the registers and the CRC are the same there.
+pub(crate) struct Stream {
+    pub(crate) words: Vec<u32>,
     crc: u32,
 }
 
 impl Stream {
-    fn new() -> Stream {
+    pub(crate) fn new() -> Stream {
         Stream {
             words: Vec::new(),
             crc: 0,
         }
     }
 
-    fn nops(&mut self, count: usize) {
+    pub(crate) fn nops(&mut self, count: usize) {
         for _ in 0..count {
             self.words.push(nop());
         }
     }
 
     /// A one-word write, which is every register but `FDRI`.
-    fn write(&mut self, register: Register, value: u32) {
+    pub(crate) fn write(&mut self, register: Register, value: u32) {
         self.words.push(type1(2, register.address(), 1));
         self.words.push(value);
         self.crc = crc_update(self.crc, register.address(), value);
@@ -922,7 +923,7 @@ impl Stream {
 
     /// A `CMD` write. `RCRC` resets the CRC register, so nothing before
     /// it counts.
-    fn command(&mut self, command: Command) {
+    pub(crate) fn command(&mut self, command: Command) {
         let value = command as u32;
         self.words.push(type1(2, Register::Cmd.address(), 1));
         self.words.push(value);
@@ -934,7 +935,7 @@ impl Stream {
     }
 
     /// A write to a register this module has no name for.
-    fn write_raw(&mut self, register: u32, value: u32) {
+    pub(crate) fn write_raw(&mut self, register: u32, value: u32) {
         self.words.push(type1(2, register, 1));
         self.words.push(value);
         self.crc = crc_update(self.crc, register, value);
@@ -942,7 +943,7 @@ impl Stream {
 
     /// The frame stream: an empty type 1 `FDRI` write followed by a type
     /// 2 packet carrying every word.
-    fn frames(&mut self, data: &[u32]) {
+    pub(crate) fn frames(&mut self, data: &[u32]) {
         self.words.push(type1(2, Register::Fdri.address(), 0));
         self.words.push(type2(2, data.len()));
         self.words.extend_from_slice(data);
@@ -953,7 +954,7 @@ impl Stream {
 
     /// Writes the running CRC as a check value; the register resets
     /// itself afterwards.
-    fn checkpoint(&mut self) {
+    pub(crate) fn checkpoint(&mut self) {
         let crc = self.crc;
         self.words.push(type1(2, Register::Crc.address(), 1));
         self.words.push(crc);
@@ -1022,8 +1023,15 @@ pub fn write_bit(header: &BitHeader, part: &Part, data: &FrameData) -> Result<Ve
     stream.command(Command::Desync);
     stream.nops(400);
 
-    let mut payload = Vec::with_capacity(stream.words.len() * 4 + 64);
-    for _ in 0..LEADING_DUMMY_WORDS {
+    Ok(wrap(header, LEADING_DUMMY_WORDS, &stream.words))
+}
+
+/// A `.bit` file around a packet stream: the header, `leading` dummy
+/// words, the bus-width pattern, two more dummy words and the sync word,
+/// then `words`.
+pub(crate) fn wrap(header: &BitHeader, leading: usize, words: &[u32]) -> Vec<u8> {
+    let mut payload = Vec::with_capacity(words.len() * 4 + 64);
+    for _ in 0..leading {
         payload.extend_from_slice(&u32::MAX.to_be_bytes());
     }
     for word in BUS_WIDTH_PATTERN {
@@ -1033,7 +1041,7 @@ pub fn write_bit(header: &BitHeader, part: &Part, data: &FrameData) -> Result<Ve
         payload.extend_from_slice(&u32::MAX.to_be_bytes());
     }
     payload.extend_from_slice(&SYNC_WORD.to_be_bytes());
-    for word in &stream.words {
+    for word in words {
         payload.extend_from_slice(&word.to_be_bytes());
     }
 
@@ -1048,7 +1056,7 @@ pub fn write_bit(header: &BitHeader, part: &Part, data: &FrameData) -> Result<Ve
     out.push(b'e');
     out.extend_from_slice(&u32::try_from(payload.len()).unwrap_or(0).to_be_bytes());
     out.extend_from_slice(&payload);
-    Ok(out)
+    out
 }
 
 /// Writes one keyed, NUL-terminated header field.
@@ -1226,6 +1234,33 @@ pub fn read_bit(bytes: &[u8]) -> Result<Bit, Xc7Error> {
         crc_checks,
         packets,
     })
+}
+
+/// Where a `.bit`'s payload — field `e`, the configuration stream —
+/// starts, after the header.
+///
+/// # Errors
+///
+/// [`Xc7Error::Malformed`] for a file that is not a `.bit`.
+pub(crate) fn payload_start(bytes: &[u8]) -> Result<usize, Xc7Error> {
+    let mut reader = ByteReader { bytes, pos: 0 };
+    let magic_len = usize::from(reader.u16()?);
+    reader.take(magic_len)?;
+    if reader.u16()? != 1 {
+        return Err(Xc7Error::Malformed("this is not a .bit file".to_owned()));
+    }
+    loop {
+        let key = *reader
+            .take(1)?
+            .first()
+            .ok_or_else(|| Xc7Error::Malformed("the header ends early".to_owned()))?;
+        if key == b'e' {
+            reader.u32()?;
+            return Ok(reader.pos);
+        }
+        let length = usize::from(reader.u16()?);
+        reader.take(length)?;
+    }
 }
 
 /// A bounds-checked cursor over a `.bit` file.

@@ -200,3 +200,76 @@ fn every_bit_of_vivados_zcu104_bitstream_has_an_owner() {
 
 /// Measured with this file's own decoder; see the test above.
 const UNEXPLAINED: usize = 10_827;
+
+/// The writer is Vivado's recipe word for word: given the reference
+/// bitstream's own header and frames, it writes the reference bitstream,
+/// byte for byte. And the `.bin` derived from it is the one PYNQ loads,
+/// when that is beside it.
+///
+/// This would catch any word of the sequence out of place, a wrong
+/// register value, a CRC computed over the wrong words, or a wrong
+/// preamble. It would not catch a sequence that Vivado happens to use for
+/// this design but that some other set of frames needs differently.
+#[test]
+fn the_writer_reproduces_vivados_bitstream_byte_for_byte() {
+    let Some(bytes) = reference() else { return };
+    let Some(root) = uraydb() else { return };
+    let layout = FrameLayout::from_grid(&grid(&root));
+    let bit = uray::read_bit(&bytes).unwrap();
+    let written = uray::write_bit(&bit.header, bit.idcode.unwrap(), &layout, &bit.frames).unwrap();
+    assert_eq!(written.len(), bytes.len());
+    let first = written.iter().zip(&bytes).position(|(a, b)| a != b);
+    assert_eq!(first, None, "the first byte that differs");
+
+    let Ok(dir) = std::env::var("RETICLE_ZCU104_REF") else {
+        return;
+    };
+    match std::fs::read(Path::new(&dir).join("base.bin")) {
+        Ok(bin) => assert!(uray::bin_from_bit(&written).unwrap() == bin),
+        Err(_) => eprintln!("skipped the .bin half: no base.bin beside base.bit"),
+    }
+}
+
+/// What an unused tile looks like in Vivado's output: how many tiles of
+/// each type with `defaults` carry every default bit, some, or none.
+/// Printed, not asserted: it is what tells whether a bitstream Reticle
+/// writes must set the defaults of the tiles it does not use.
+#[test]
+#[ignore = "prints a measurement"]
+fn how_vivado_leaves_the_default_bits() {
+    let Some(root) = uraydb() else { return };
+    let Some(bytes) = reference() else { return };
+    let grid = grid(&root);
+    let layout = FrameLayout::from_grid(&grid);
+    let bit = uray::read_bit(&bytes).unwrap();
+    let decoded = uray::decode(&grid, &layout, &bit.frames).unwrap();
+    let types = tile_types(&root, &grid);
+    let mut counts: std::collections::BTreeMap<&str, [usize; 3]> = Default::default();
+    for (index, tile) in grid.tiles().iter().enumerate() {
+        let Some(info) = types.get(&tile.kind) else {
+            continue;
+        };
+        if info.defaults.is_empty() {
+            continue;
+        }
+        let set: std::collections::HashSet<_> = decoded
+            .tiles
+            .get(&index)
+            .into_iter()
+            .flatten()
+            .copied()
+            .collect();
+        let on = info.defaults.iter().filter(|b| set.contains(b)).count();
+        let slot = if on == info.defaults.len() {
+            0
+        } else if on == 0 {
+            2
+        } else {
+            1
+        };
+        counts.entry(tile.kind.as_str()).or_default()[slot] += 1;
+    }
+    for (kind, [all, some, none]) in counts {
+        eprintln!("{kind}: all {all}, some {some}, none {none}");
+    }
+}
