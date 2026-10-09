@@ -239,6 +239,13 @@ module iso7816_uart #(
     // is a real thing a board may have, and because the arithmetic for
     // choosing it is written down here; it is off until something measured
     // asks for it.
+    //
+    // **It costs one flip-flop even at 0**, because the filtered line is a
+    // third stage after the two synchronising flops: `dff` 38 to 39 at both
+    // lookup-table widths, `SB_DFFS` 3 to 4 on an iCE40 HX1K, `TRELLIS_FF`
+    // 271 to 272 on an ECP5 45F. `footprints_match_the_documentation` is
+    // what caught that, and it is the point of its existing: a shared
+    // block's cost should not change without somebody noticing.
     parameter GLITCH_SHIFT = 0
 ) (
     input  wire                   clk,
