@@ -346,6 +346,10 @@ module iso_display #(
         .clk_card(clk_card), .rst_card(rst_card), .vcc_en(vcc_en),
         .io_i(io_i), .io_oe(io_oe), .io_o(io_o),
         .cmd_valid(cmd_valid), .cmd_data(cmd_data),
+        // `<` and `>` press the device's buttons through `W`'s engine as
+        // well as on the JC lines: with the FPGA as the MCU, a press is a
+        // BUTTON_PUSH_EVENT and not a level on a wire.
+        .seph_buttons({press_right, press_left}),
         .out_valid(iso_out_valid), .out_data(iso_out_data),
         .out_ready(iso_out_ready), .hex_run(hex_run),
         .led(iso_led), .seg(iso_seg), .dp(), .an(iso_an));

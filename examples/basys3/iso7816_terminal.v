@@ -123,6 +123,12 @@ module iso7816_terminal #(
     // They must agree: `8'h97` is F/D = 8, `8'h87` is F/D = 4 on this card.
     parameter FAST_ETU_CYCLES  = 8,
     parameter [7:0] PPS1       = 8'h97,
+    // System clocks per millisecond for `W`'s SEPROXYHAL engine: 112 000
+    // at 112 MHz. A testbench shrinks it so that a ticker is not 100 ms.
+    parameter integer SEPH_MS_CYCLES = 112000,
+    // And between the end of the SE's status and the engine's answer:
+    // 11 200 is 100 us at 112 MHz, what a real MCU leaves.
+    parameter integer SEPH_TURN_CYCLES = 11200,
     parameter RST_HOLD         = 400,
     parameter VCC_BITS         = 20,
     parameter GAP_ETU          = 256,
@@ -171,6 +177,9 @@ module iso7816_terminal #(
     // appears in is not the cycle its ready was read in.
     input  wire        cmd_valid,
     input  wire [7:0]  cmd_data,
+    // The device's two buttons as `W`'s engine reports them to the SE:
+    // bit 0 left, bit 1 right, high while pressed.
+    input  wire [1:0]  seph_buttons,
     output wire        out_valid,
     output wire [7:0]  out_data,
     input  wire        out_ready,
@@ -507,10 +516,45 @@ module iso7816_terminal #(
         .repeat_count(), .timeout_count());
 
     // =================================================================
+    // `W`: this terminal becomes the SE's MCU
+    // =================================================================
+    //
+    // A Nano X's secure element is the card on this contact, and once the
+    // PPS has set the rate it expects an MCU to talk SEPROXYHAL to it.
+    // `ip/bus/seph_mcu` is that MCU: `W` starts it, it sends
+    // SESSION_START and from then on answers every turn the SE ends --
+    // tickers, status, BLE command completes, button changes -- with no
+    // host involved. The card's bytes are still printed (`m` mutes them),
+    // and its own bytes come back with `>` through the monitor like any
+    // other transmission.
+    //
+    // **`W` only after `F`.** The engine does not know about rates; it
+    // starts talking at whatever `etu_div` is. A host must check the PPS
+    // echo and switch first, exactly as before. It stops the moment the
+    // card is deactivated, by `D` or by the watchdog.
+    wire [7:0]  seph_tx_data;
+    wire        seph_tx_valid, seph_active, seph_started;
+    wire        seph_tx_ready;
+    wire [15:0] seph_rx_packets, seph_tx_events;
+    wire [7:0]  seph_last_tag;
+    wire        seph_start = cmd_now && cmd_data == 8'h57 && card_active;   // 'W'
+
+    seph_mcu #(.MS_CYCLES(SEPH_MS_CYCLES), .TURN_CYCLES(SEPH_TURN_CYCLES)) seph (
+        .clk(sys), .rst_n(rst_n),
+        .start(seph_start), .stop(!card_active),
+        .rx_data(card_rx), .rx_valid(card_rx_valid),
+        .tx_data(seph_tx_data), .tx_valid(seph_tx_valid), .tx_ready(seph_tx_ready),
+        .buttons(seph_buttons),
+        .active(seph_active), .started(seph_started),
+        .rx_packets(seph_rx_packets), .tx_events(seph_tx_events),
+        .last_rx_tag(seph_last_tag), .ms());
+
+    // =================================================================
     // Sending bytes: a `:` run from the host, or the PPS
     // =================================================================
 
-    localparam [1:0] SRC_IDLE = 2'd0, SRC_HOST = 2'd1, SRC_PPS = 2'd2;
+    localparam [1:0] SRC_IDLE = 2'd0, SRC_HOST = 2'd1, SRC_PPS = 2'd2,
+                     SRC_SEPH = 2'd3;
 
     reg [1:0] tx_src   = SRC_IDLE;
     reg       have_hi  = 1'b0;
@@ -566,6 +610,15 @@ module iso7816_terminal #(
                         && have_hi;
     wire [7:0] host_byte = {hi_nib, hex_val(cmd_data)};
 
+    // The engine's byte is taken exactly when the branch below that loads
+    // it runs: everything ahead of it in that chain must be idle.
+    wire seph_take = rst_n && !card_tx_valid && seph_tx_valid
+                  && !(tx_src == SRC_PPS && tx_wait != 0)
+                  && !(tx_src == SRC_SEPH && tx_wait != 0)
+                  && !host_byte_ready
+                  && !(pps_armed && tx_src != SRC_PPS);
+    assign seph_tx_ready = seph_take;
+
     // The guard-time countdown has to run while `card_tx_valid` is **low**,
     // which is why it is inside that branch and not after it. The first
     // version put it in a later `else if`, reachable only when valid was
@@ -586,6 +639,8 @@ module iso7816_terminal #(
                     card_tx_valid <= 1'b1;
                     pps_idx       <= (pps_idx == 2'd3) ? 2'd0 : (pps_idx + 2'd1);
                 end
+            end else if (tx_src == SRC_SEPH && tx_wait != 0) begin
+                tx_wait <= tx_wait - 1'b1;
             end else if (host_byte_ready) begin
                 card_tx       <= host_byte;
                 card_tx_valid <= 1'b1;
@@ -595,6 +650,10 @@ module iso7816_terminal #(
                 card_tx_valid <= 1'b1;
                 tx_src        <= SRC_PPS;
                 pps_idx       <= 2'd1;
+            end else if (seph_take) begin
+                card_tx       <= seph_tx_data;
+                card_tx_valid <= 1'b1;
+                tx_src        <= SRC_SEPH;
             end else if (tx_src == SRC_PPS) begin
                 // The fourth byte has gone and no wait is pending.
                 tx_src <= SRC_IDLE;
@@ -607,6 +666,8 @@ module iso7816_terminal #(
             // separated by several etu exchange cleanly while back-to-back
             // ones draw a parity error and a T=0 repeat.
             if (tx_src == SRC_PPS && pps_idx != 2'd0) tx_wait <= gap_etu_4;
+            // The engine's bytes are spaced the same way: four etu.
+            if (tx_src == SRC_SEPH) tx_wait <= gap_etu_4;
         end
     end
 

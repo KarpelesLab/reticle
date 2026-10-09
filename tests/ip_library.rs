@@ -321,6 +321,12 @@ const VARIANTS: &[Variant] = &[
         top: "iso7816_uart",
         params: &[("PARITY_RETRY", "0")],
     },
+    // The SEPROXYHAL MCU, at a 112 MHz millisecond.
+    Variant {
+        package: "seph_mcu",
+        top: "seph_mcu",
+        params: &[("MS_CYCLES", "112000")],
+    },
     Variant {
         package: "pwm",
         top: "pwm",
@@ -4944,6 +4950,35 @@ fn iso7816_uart_talks_to_a_model_card() {
     assert!(
         printed.starts_with("PASS:"),
         "the model card session did not pass:\n{printed}"
+    );
+}
+
+/// `seph_mcu`'s own testbench, run here so that CI executes it: a model
+/// secure element plays one scripted boot and every byte the block sends
+/// is checked -- SESSION_START, one event per turn and none before the
+/// first status, tickers at the SE's interval, the status packet, two BLE
+/// replies byte for byte against a real MCU's, and a button press and
+/// release. It would not catch an SE that asks for something the script
+/// does not.
+#[test]
+fn seph_mcu_runs_a_session_with_a_model_se() {
+    let design = testbench_design("seph_mcu", "rtl/seph_mcu_tb.v", "seph_mcu_tb");
+    let mut sim = simulate(&design, "seph_mcu_tb");
+    sim.run();
+    let printed = sim.output().to_owned();
+    let messages: Vec<String> = sim.messages().iter().map(|d| d.message.clone()).collect();
+    assert!(
+        messages.is_empty(),
+        "the simulator complained:\n  {}\noutput:\n{printed}",
+        messages.join("\n  ")
+    );
+    assert!(
+        sim.finished(),
+        "the testbench did not reach $finish:\n{printed}"
+    );
+    assert!(
+        printed.starts_with("PASS:"),
+        "the model SE session did not pass:\n{printed}"
     );
 }
 

@@ -101,12 +101,13 @@ module iso7816_terminal_tb;
     iso7816_terminal #(
         .CARD_DIV(CARD_DIV), .ETU_CYCLES(ETU_CYCLES),
         .FAST_ETU_CYCLES(FAST_ETU_CYCLES), .RST_HOLD(RST_HOLD),
-        .VCC_BITS(6), .GAP_ETU(24), .WDOG_BITS(24)
+        .VCC_BITS(6), .GAP_ETU(24), .WDOG_BITS(24), .SEPH_MS_CYCLES(4),
+        .SEPH_TURN_CYCLES(FAST_DIV * 16)
     ) dut (
         .clk(clk), .locked(1'b1), .clk_card(clk_card), .rst_card(rst_card),
         .vcc_en(vcc_en),
         .io_i(io), .io_oe(term_oe), .io_o(term_o),
-        .cmd_valid(dut_cmd_valid), .cmd_data(dut_cmd_data),
+        .cmd_valid(dut_cmd_valid), .cmd_data(dut_cmd_data), .seph_buttons(2'b00),
         .out_valid(dut_out_valid), .out_data(dut_out_data),
         .out_ready(dut_out_ready), .hex_run(),
         .led(led), .seg(seg), .dp(dp), .an(an));
@@ -138,6 +139,7 @@ module iso7816_terminal_tb;
     // ---- Everything the card received, so the PPS can be checked ----
     reg [7:0] got [0:63];
     integer   got_n = 0;
+    integer   base  = 0;
     always @(posedge clk) begin
         if (card_rx_v) begin
             got[got_n % 64] = card_rx;
@@ -486,6 +488,49 @@ module iso7816_terminal_tb;
         // same receiver that read the ATR at the slow one.
         expect_monitor_byte(8'hA5);
 
+        // ---- `W`: the terminal becomes the SE's MCU ----
+        //
+        // SESSION_START must reach the card whole, at the fast rate, and
+        // after the card ends its turn with a status the next thing it
+        // receives must be a ticker. That is the integration: the engine's
+        // bytes through the shared transmitter, and the card's bytes into
+        // the engine. `ip/bus/seph_mcu`'s own testbench checks the rest of
+        // the policy.
+        got_n = 0;
+        host_send(8'h57);                      // 'W'
+        deact = 0;
+        while (got_n < 51 && deact < card_etu * 12 * 51 * 4) begin
+            @(posedge clk); deact = deact + 1;
+        end
+        if (got_n < 51 || got[0] !== 8'h01 || got[1] !== 8'h00 || got[2] !== 8'h30
+            || got[50] !== 8'h30) begin
+            $display("FAIL: `W` sent %0d byte(s) to the card, %02x %02x %02x ... %02x; wanted the 51-byte SESSION_START",
+                     got_n, got[0], got[1], got[2], got[50]);
+            $finish;
+        end
+        repeat (card_etu * 16) @(posedge clk);
+        card_send(8'h60); card_send(8'h00); card_send(8'h02);
+        card_send(8'h00); card_send(8'h00);
+        // The model's receiver hears its own transmission on the shared
+        // wire, so count only what arrives from here on. The engine waits
+        // `SEPH_TURN_CYCLES` before answering, so nothing of it is missed.
+        base = got_n;
+        deact = 0;
+        while (got_n < base + 7 && deact < 4 * 100 * 4 + card_etu * 12 * 7 * 4) begin
+            @(posedge clk); deact = deact + 1;
+        end
+        if (got_n < base + 7 || got[base % 64] !== 8'h0e || got[(base + 1) % 64] !== 8'h00
+            || got[(base + 2) % 64] !== 8'h04) begin
+            $display("FAIL: after the card's status the terminal sent %0d byte(s), first %02x %02x %02x; wanted a TICKER_EVENT",
+                     got_n - base, got[base % 64], got[(base + 1) % 64], got[(base + 2) % 64]);
+            $finish;
+        end
+        // The engine now waits for another status, which never comes. What
+        // the console printed meanwhile -- the engine's bytes through the
+        // monitor and the card's status -- is not this test's business.
+        repeat (card_etu * 40) @(posedge clk);
+        rx_rd = rx_wr;
+
         host_send(8'h44);                      // 'D'
         // Reset must drop before power does. Bounded, and each way of
         // failing says which it was: an unbounded wait here reported
@@ -551,7 +596,7 @@ module iso7816_terminal_tb;
             end
         end
 
-        $display("PASS: activation in order; the real 14-byte ATR received; PPS FF 10 97 78 sent and received byte-for-byte by the card, echoed and compared by this testbench as a host would; the rate switched on `F`; two bytes received and one sent at F/D=4 afterwards; deactivation dropped reset and the clock before power; and k, s, k sent back to back answered in full and in order");
+        $display("PASS: activation in order; the real 14-byte ATR received; PPS FF 10 97 78 sent and received byte-for-byte by the card, echoed and compared by this testbench as a host would; the rate switched on `F`; two bytes received and one sent at F/D=4 afterwards; deactivation dropped reset and the clock before power; and k, s, k sent back to back answered in full and in order; `W` sent SESSION_START whole and a ticker after the card's status");
         $finish;
     end
 endmodule

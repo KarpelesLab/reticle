@@ -107,6 +107,7 @@ It is distributed as part of the repository instead.
 | `i2c_master` | `i2c_master` | byte-level I²C master, 7-bit addressing, clock stretching tolerated | — |
 | `spi_display_rx` | `spi_display_rx` | the **receiving** end of a display's four-wire SPI: one data wire oversampled against an external clock, bytes framed by the chip select and tagged by D/C, with every uncertainty a parameter, a rate limit stated as a ratio of clocks, and six counters that are the only way the link will ever be characterised | `cdc_sync` |
 | `iso7816_uart` | `iso7816_uart` | the character layer of an ISO/IEC 7816-3 smart card terminal: one **open-drain** contact, half duplex, 8E2, with the etu divisor, the guard time, the waiting time and the **convention** all run-time inputs, T=0 parity error signalling with repeats in both directions, an `active` input that holds the block inert so an activation sequencer can own the line, and five saturating counters | — |
+| `seph_mcu` | `seph_mcu` | the **MCU** end of Ledger's SEPROXYHAL link to a secure element, as bytes: SESSION_START, then one event per turn after each SE status -- an HCI command complete for a BLE command, a STATUS_EVENT for a status request, a BUTTON_PUSH_EVENT on a button change, a TICKER_EVENT at the SE's interval | — |
 | `pwm` | `pwm` | counter-comparator PWM, duty latched once per period | — |
 | `timer` | `timer` | prescaled auto-reload down-counter with a pulse and a sticky interrupt | — |
 | `axil_gpio` | `axil_gpio` | AXI4-Lite GPIO subordinate: data, direction and set registers | `cdc_sync` |
@@ -2752,6 +2753,10 @@ exactly what this table is for.
 | `iso7816_uart` | `iso7816_uart` | PARITY_RETRY=0 | LUT6 | 39 x dff, 501 x lut | 8 |
 | `iso7816_uart` | `iso7816_uart` | PARITY_RETRY=0 | iCE40 HX1K | 140 x SB_CARRY, 207 x SB_DFFER, 34 x SB_DFFES, 27 x SB_DFFR, 4 x SB_DFFS, 1 x SB_GB, 159 x SB_IO, 572 x SB_LUT4 | 8 |
 | `iso7816_uart` | `iso7816_uart` | PARITY_RETRY=0 | ECP5 45F | 85 x CCU2C, 1 x DCCA, 482 x LUT4, 272 x TRELLIS_FF, 159 x TRELLIS_IO | 8 |
+| `seph_mcu` | `seph_mcu` | MS_CYCLES=112000 | LUT4 | 34 x dff, 741 x lut | 12 |
+| `seph_mcu` | `seph_mcu` | MS_CYCLES=112000 | LUT6 | 34 x dff, 584 x lut | 9 |
+| `seph_mcu` | `seph_mcu` | MS_CYCLES=112000 | iCE40 HX1K | 140 x SB_CARRY, 179 x SB_DFFE, 148 x SB_DFFESR, 6 x SB_DFFESS, 1 x SB_GB, 99 x SB_IO, 707 x SB_LUT4 | 12 |
+| `seph_mcu` | `seph_mcu` | MS_CYCLES=112000 | ECP5 45F | 85 x CCU2C, 1 x DCCA, 702 x LUT4, 333 x TRELLIS_FF, 99 x TRELLIS_IO | 12 |
 | `pwm` | `pwm` | WIDTH=8 | LUT4 | 2 x dff, 23 x lut | 6 |
 | `pwm` | `pwm` | WIDTH=8 | LUT6 | 2 x dff, 17 x lut | 4 |
 | `pwm` | `pwm` | WIDTH=8 | iCE40 HX1K | 7 x SB_CARRY, 8 x SB_DFFER, 8 x SB_DFFR, 1 x SB_GB, 21 x SB_IO, 23 x SB_LUT4 | 6 |

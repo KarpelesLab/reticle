@@ -1133,7 +1133,8 @@ fn the_ssd1306_console_testbench_passes() {
     basys3_testbench("examples/basys3/ssd1306_console_tb.v", &sources);
 }
 
-/// The card terminal answers `k`, `s`, `k` sent back to back, in order.
+/// The card terminal answers `k`, `s`, `k` sent back to back, in order,
+/// and `W` sends a whole SESSION_START and a ticker after the card's status.
 /// Before the request queue only the first came back, because both request
 /// flags were cleared at the end of either one's line. About 30 s from a
 /// debug build. Same limits as the display console's test.
@@ -1143,6 +1144,7 @@ fn the_iso7816_terminal_testbench_passes() {
     let mut sources = vec![
         "examples/basys3/iso7816_terminal.v",
         "ip/bus/iso7816_uart/rtl/iso7816_uart.v",
+        "ip/bus/seph_mcu/rtl/seph_mcu.v",
         "ip/util/cdc_sync/rtl/cdc_sync.v",
     ];
     sources.extend(UART);
@@ -1161,6 +1163,7 @@ fn the_iso_display_testbench_passes() {
         "examples/basys3/iso7816_terminal.v",
         "examples/basys3/ssd1306_console.v",
         "ip/bus/iso7816_uart/rtl/iso7816_uart.v",
+        "ip/bus/seph_mcu/rtl/seph_mcu.v",
         "ip/bus/spi_display_rx/rtl/spi_display_rx.v",
         "ip/video/ssd1306_slave/rtl/ssd1306_slave.v",
         "ip/util/cdc_sync/rtl/cdc_sync.v",

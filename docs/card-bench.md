@@ -46,6 +46,7 @@ RETICLE_CHIPDB=/path/to/prjxray-db reticle fpga \
     ip/bus/uart/rtl/uart.v ip/bus/uart/rtl/uart_tx.v \
     ip/bus/uart/rtl/uart_rx.v ip/bus/uart/rtl/uart_baud_div.v \
     ip/bus/iso7816_uart/rtl/iso7816_uart.v \
+    ip/bus/seph_mcu/rtl/seph_mcu.v \
     ip/bus/spi_display_rx/rtl/spi_display_rx.v \
     ip/video/ssd1306_slave/rtl/ssd1306_slave.v \
     ip/util/cdc_sync/rtl/cdc_sync.v
@@ -93,6 +94,9 @@ A                 activate: VCC, clock, reset released after 400 card clocks
 P                 send PPS FF 10 97 78 (`PPS1`); the echo comes back as hex
 F                 switch to the fast rate -- only after checking the echo
 :<hex>            send those bytes to the card
+W                 become the SE's MCU: `ip/bus/seph_mcu` sends SESSION_START and
+                  answers every SE turn from then on (tickers, status, BLE command
+                  completes, buttons from `<` and `>`); only after `F`
 D                 deactivate: reset, clock, line, then power, in that order
 s                 card status, 32 hex characters
 ?  g              display status; dump the frame buffer as hex
@@ -151,6 +155,24 @@ for exactly that reason.
   result.
 - **The bench scripts are not in the repository.** `tools/local/` is
   deliberately ignored. The sequence above is all a replacement needs.
+
+## Open: some builds misbehave on the part, and which ones moves with placement
+
+**NOT EXPLAINED, 10 October 2026.** The same RTL, built at different
+placements, has given on this board: `TTTT` instead of `+VCC`; a PPS sent
+as `FF FF FF ...`; banners and line endings repeated hundreds of times; and
+no answer at all. All of these are logic the testbenches pass. One build
+was taken apart: bit 3 of the card half's output byte (`host_data[3]`) is
+stuck at zero -- `k` prints `8` as `0` and CR LF as `05 02`, while the
+display half on the same port prints cleanly. On that build every
+inter-tile join (109 921) matches Project X-Ray's `tileconn.json`, every
+fixed intra-tile hop (28 203) its `ppips`, the flip-flop's slice features
+are self-consistent, no lookup table depends on a tied input, and **the
+fault is unchanged at half the clock with identical placement and
+routing**, so it is not timing. What is left is something the database
+cannot check from inside the flow -- the frame address a tile's bits land
+at, or the database itself. Until it is found, a build has to be checked
+with `k`, `?`, `A`, `P` before it is trusted with the device.
 
 ## What is CHECKED on hardware
 

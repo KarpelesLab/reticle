@@ -95,7 +95,7 @@ module iso7816_terminal_pad #(
         .clk(clk_pll), .locked(locked), .clk_card(clk_card), .rst_card(rst_card),
         .vcc_en(vcc_en),
         .io_i(io), .io_oe(io_oe), .io_o(io_o),
-        .cmd_valid(cmd_valid), .cmd_data(cmd_data),
+        .cmd_valid(cmd_valid), .cmd_data(cmd_data), .seph_buttons(2'b00),
         .out_valid(out_valid), .out_data(out_data), .out_ready(out_ready),
         // Nothing else is on this port, so nothing needs holding off a
         // `:` run's characters.

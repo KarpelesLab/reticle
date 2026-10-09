@@ -1,0 +1,47 @@
+# seph_mcu: the MCU's end of Ledger's SEPROXYHAL link, as bytes.
+#
+# A Nano X's secure element talks SEPROXYHAL to its MCU over the ISO 7816
+# contact once the PPS has set the rate. This block is the MCU: it sends
+# SESSION_START on `start`, then on each of its turns -- after every status
+# the SE sends -- one event: an HCI "command complete" for a BLE command,
+# a STATUS_EVENT for a status request, a BUTTON_PUSH_EVENT when `buttons`
+# changes, or a TICKER_EVENT at the SE's interval. That is enough to bring
+# an SE up and keep it running; USB and BLE configuration are read and
+# accepted, not acted on.
+#
+# It moves bytes with a valid/ready handshake and knows nothing of ISO 7816;
+# `iso7816_uart` carries them on a real contact. README.md has the protocol,
+# what was CHECKED on a real SE and what is only QUOTED.
+name seph_mcu
+version 1.0.0
+license MIT
+description "Ledger SEPROXYHAL MCU side: session start, turn-based events (ticker, status, button, BLE command complete) answering a secure element's commands, over a byte stream"
+
+top seph_mcu
+target ice40
+target ecp5
+target xc7
+
+source rtl/seph_mcu.v
+
+param MS_CYCLES int 112000 1..1000000
+param SESSION_LEN int 51 4..64
+param STATUS_LEN int 23 4..64
+param BUTTON_SHIFT int 1 0..6
+
+port clk in
+port rst_n in
+port start in
+port stop in
+port rx_data in 8
+port rx_valid in
+port tx_data out 8
+port tx_valid out
+port tx_ready in
+port buttons in 2
+port active out
+port started out
+port rx_packets out 16
+port tx_events out 16
+port last_rx_tag out 8
+port ms out 32
