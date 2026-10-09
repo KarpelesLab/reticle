@@ -298,6 +298,24 @@ every row, agree with Vivado's routing of a 3.5-million-bit design. A
 first backend can work in a region that leaves those columns out, as the
 7-series one loads a region.
 
+**And one column the check did not see: the first UltraRAM.** The region
+`reticle fpga` places on first reached interconnect column 38, and the
+first design large enough to use the far end of it, a binarized network
+of 12 800 lookup tables, failed to route after ten minutes with "no path
+exists". In the routing graph of that region (measured 2026-10-10), no
+wire crosses the UltraRAM column between interconnect columns 36 and 37
+except 856 clock wires, and the 3 840 lookup tables of the slices beyond
+it cannot send a signal back west. The ZU3EG has no UltraRAM (quoted from
+its data sheet, not checked), so its rules have no joins across one.
+Why the check above did not report it is not established: it judges
+nodes by Vivado's routing, so it can only see a cut where the base
+overlay routes across one. The
+region therefore stops at column 36, 26 880 lookup tables, and
+`every_lookup_table_of_the_widest_region_reaches_the_middle` in
+`tests/fpga_uray_routing.rs` asks the question that does see a cut:
+whether every table's output reaches one in the middle, and every
+table's input can be reached from it.
+
 The rest of the failures are outside the core and are understood: block
 RAM pins the 2020 tile types name differently, interface tiles
 (`INT_INTF_*`) whose outputs are fed through `&` features, and the PCIe
@@ -707,3 +725,13 @@ uses neither.
 3. **The processor interface.** The fabric talks to Linux through the
    `PS8` block's AXI ports, whose bits are in `INT_INTF_LEFT_TERM_PSS` and
    `PSS_ALTO`.
+4. **Instantiated primitives.** A `LUT6` written as an instance in Verilog
+   stays an instance: the frontend does not know the device's primitives,
+   and the flow does not turn such an instance into a cell with the
+   device's port directions. Until 2026-10-10 the place-and-route netlist
+   read only cells and dropped every instance without a word, in every
+   family; a network of 1 355 instantiated tables was routed and written
+   without them. It now refuses the first instance by name. Meanwhile a
+   design that wants a particular lookup-table structure can mark the
+   nets between the tables `(* keep *)`, which synthesis treats as mapping
+   boundaries.

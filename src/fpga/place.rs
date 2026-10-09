@@ -97,7 +97,7 @@ use super::arch::{Arch, NodeId, RoutingGraph};
 use super::constraints::{Constraints, matches_glob};
 use super::device::{BelRole, Device};
 use crate::ir::emit::{BitView, SigBit};
-use crate::ir::{CellId, CellKind, Design, ModuleId};
+use crate::ir::{CellId, CellKind, Design, ModuleId, ModuleRef};
 
 /// A seeded xorshift generator.
 ///
@@ -159,6 +159,15 @@ pub enum PlaceError {
         cell: String,
         /// What it is instead.
         kind: String,
+    },
+    /// An instance is left in the module. The netlist holds only cells,
+    /// so reading on would leave the instance's outputs driven by nothing
+    /// and route a design that is not the one written.
+    Instance {
+        /// The instance's name.
+        instance: String,
+        /// The module or primitive it instantiates.
+        module: String,
     },
     /// A primitive the device database does not declare.
     UnknownPrimitive {
@@ -287,6 +296,12 @@ impl fmt::Display for PlaceError {
             PlaceError::UnknownPrimitive { cell, primitive } => write!(
                 f,
                 "`{cell}` instantiates `{primitive}`, which the device database does not declare"
+            ),
+            PlaceError::Instance { instance, module } => write!(
+                f,
+                "`{instance}` is an instance of `{module}`, which place and route cannot hold: \
+                 the flow does not yet turn an instantiated primitive into a cell, so write the \
+                 logic instead, or flatten the design if `{module}` is a module of it"
             ),
             PlaceError::NoSites {
                 kind,
@@ -439,8 +454,9 @@ impl Netlist {
     ///
     /// # Errors
     ///
-    /// [`PlaceError::NotAPrimitive`] and [`PlaceError::UnknownPrimitive`]
-    /// when the netlist is not one the device could hold, and
+    /// [`PlaceError::NotAPrimitive`], [`PlaceError::UnknownPrimitive`] and
+    /// [`PlaceError::Instance`] when the netlist is not one the device
+    /// could hold, and
     /// [`PlaceError::Netlist`] when a cell connection is not structural.
     pub fn build(
         design: &Design,
@@ -458,6 +474,18 @@ impl Netlist {
             signals: Vec::new(),
             off_fabric: Vec::new(),
         };
+        if let Some((_, instance)) = m.instances.iter().next() {
+            return Err(PlaceError::Instance {
+                instance: instance.name.as_str().to_owned(),
+                module: match &instance.module {
+                    ModuleRef::Resolved(id) => design
+                        .modules
+                        .get(*id)
+                        .map_or_else(String::new, |m| m.name.as_str().to_owned()),
+                    ModuleRef::Unresolved(name) => name.as_str().to_owned(),
+                },
+            });
+        }
         let mut by_slot: BTreeMap<usize, usize> = BTreeMap::new();
         let roles = pin_roles(graph);
 
@@ -4137,6 +4165,33 @@ mod tests {
         }
         let graph = arch.build_graph();
         (arch, graph)
+    }
+
+    /// An instance left in the module is refused by name. The netlist
+    /// used to read only the cells, so an instantiated `LUT2` vanished and
+    /// the signal it drove reached its readers driven by nothing; a
+    /// network of 1 355 such instances was routed, written and would have
+    /// been loaded, computing something else. This catches any leftover
+    /// instance; it would not catch a cell whose pins are wrongly read.
+    #[test]
+    fn an_instance_left_in_the_module_is_refused() {
+        let text = "top t\nmodule t\n  net %a u1 wire\n  net %t u1 wire\n  \
+                    port a in %a\n  port y out %t\n  \
+                    instance u of LUT2 (I0=%a, I1=%a, O=%t)\nend\n";
+        let mut sources = crate::source::SourceMap::new();
+        let file = sources.add("t.rtl", text).unwrap();
+        let design = Design::parse_text(text, file).unwrap();
+        let device = crate::fpga::target("generic").unwrap();
+        let (_, graph) = grid(2, 2);
+        let error = Netlist::build(&design, design.top.unwrap(), device, &graph).unwrap_err();
+        assert_eq!(
+            error,
+            PlaceError::Instance {
+                instance: "u".to_owned(),
+                module: "LUT2".to_owned()
+            }
+        );
+        assert!(error.to_string().contains("`u` is an instance of `LUT2`"));
     }
 
     /// A chain of `n` LUTs, each feeding the next.
