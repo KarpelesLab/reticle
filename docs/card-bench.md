@@ -156,23 +156,33 @@ for exactly that reason.
 - **The bench scripts are not in the repository.** `tools/local/` is
   deliberately ignored. The sequence above is all a replacement needs.
 
-## Open: some builds misbehave on the part, and which ones moves with placement
+## Builds that misbehaved on the part: two signals on one long line
 
-**NOT EXPLAINED, 10 October 2026.** The same RTL, built at different
-placements, has given on this board: `TTTT` instead of `+VCC`; a PPS sent
-as `FF FF FF ...`; banners and line endings repeated hundreds of times; and
-no answer at all. All of these are logic the testbenches pass. One build
-was taken apart: bit 3 of the card half's output byte (`host_data[3]`) is
-stuck at zero -- `k` prints `8` as `0` and CR LF as `05 02`, while the
-display half on the same port prints cleanly. On that build every
-inter-tile join (109 921) matches Project X-Ray's `tileconn.json`, every
-fixed intra-tile hop (28 203) its `ppips`, the flip-flop's slice features
-are self-consistent, no lookup table depends on a tied input, and **the
-fault is unchanged at half the clock with identical placement and
-routing**, so it is not timing. What is left is something the database
-cannot check from inside the flow -- the frame address a tile's bits land
-at, or the database itself. Until it is found, a build has to be checked
-with `k`, `?`, `A`, `P` before it is trusted with the device.
+**EXPLAINED AND FIXED, 10 October 2026.** The same RTL, built at different
+placements, gave on this board: `TTTT` instead of `+VCC`; a PPS sent as
+`FF FF FF ...`; banners and line endings repeated hundreds of times; and no
+answer at all -- all logic the testbenches pass. One build was taken apart:
+`k` printed `8` as `0` and CR LF as `05 02`, bit 3 of the card half's output
+byte gone, while the display half on the same port printed cleanly.
+
+Every check inside the flow passed: 109 921 inter-tile joins matched
+Project X-Ray's `tileconn.json`, 28 203 fixed hops its `ppips`, no lookup
+table depended on a tied input, and the fault was unchanged at **half the
+clock with identical placement and routing**, so it was not timing.
+Configuration readback (`reticle program --readback`, written for this)
+showed the part held the bitstream word for word, top and bottom halves,
+and `--capture` showed the flip-flop itself holding the right value -- so
+the value was lost on its way *out*.
+
+The cause was in the router. A 7-series long line (`LV`, `LVB`, `LH`) is one
+piece of metal with a different name in every tile, joined in the graph by
+a free pip each way, and the router counted capacity per **name**. A long
+line can be driven from either end, so it put one signal on `LV0` and
+another on `LV18` of the same wire: 38 such pairs in that build, each route
+valid on its own, shorted on the part. `route::physical_nodes` now merges
+joined names into one node for capacity, and `reticle fpga --bitstream`
+refuses a routing in which any physical wire carries two signals. The same
+placement then printed `k` exactly and passed every burst.
 
 ## What is CHECKED on hardware
 

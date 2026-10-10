@@ -463,6 +463,12 @@ Options:
   --probe            Read IDCODE and, for a Xilinx, Gowin or Lattice
                      part, its status register, and stop without writing
                      anything
+  --readback <far,frames>
+                     Xilinx only: read `frames` configuration frames back
+                     from frame address `far` (hex) and print them, one
+                     frame per line as 101 hex words. Writes no frame
+  --capture          With --readback: GCAPTURE first, so every flip-flop's
+                     present value is read back in its INIT bit
   --quiet            Do not report progress
 
 Needs the `program` feature, which is off by default because it is the
@@ -720,8 +726,8 @@ fn spec_for(usage: &str) -> Spec {
         }
     } else if std::ptr::eq(usage, PROGRAM_USAGE) {
         Spec {
-            options: &["device", "clock", "expect"],
-            flags: &["list", "probe", "quiet"],
+            options: &["device", "clock", "expect", "readback"],
+            flags: &["list", "probe", "quiet", "capture"],
             repeated: &[],
         }
     } else if std::ptr::eq(usage, FETCH_USAGE) {
@@ -3241,6 +3247,21 @@ fn write_xc7_bitstream(
             return Err(format!(
                 "the routing does not implement the netlist, so nothing was written: {}",
                 problems.join("; ")
+            ));
+        } // Two signals on one piece of metal pass the check above, because
+        // each route is valid on its own. See `route::physical_nodes`.
+        let shorts = routing.shorts(&netlist, &graph);
+        if !shorts.is_empty() {
+            return Err(format!(
+                "{} wire(s) carry two signals, which on the part would short them, so nothing \
+                 was written: {}",
+                shorts.len(),
+                shorts
+                    .iter()
+                    .take(8)
+                    .cloned()
+                    .collect::<Vec<_>>()
+                    .join("; ")
             ));
         }
     }

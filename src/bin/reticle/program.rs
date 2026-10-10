@@ -135,7 +135,24 @@ fn go(args: &Args) -> Result<Outcome, Fault> {
         return Ok(Outcome::Ok);
     }
 
-    let probe = args.flag("probe");
+    let readback = match args.option("readback") {
+        None => None,
+        Some(text) => {
+            let parsed = text.split_once(',').and_then(|(far, frames)| {
+                let far = u32::from_str_radix(far.trim_start_matches("0x"), 16).ok()?;
+                let frames = frames.parse::<u32>().ok()?;
+                (frames > 0 && frames <= 4096).then_some((far, frames))
+            });
+            Some(parsed.ok_or_else(|| {
+                Fault::Usage(format!(
+                    "`--readback {text}` is not `far,frames`: a hex frame address and 1 to \
+                     4096 frames"
+                ))
+            })?)
+        }
+    };
+    // A readback reads the part and writes nothing, like `--probe`.
+    let probe = args.flag("probe") || readback.is_some();
     let expect = args.option("expect").map(parse_hex).transpose()?;
     let clock = args
         .u32_option("clock")?
@@ -147,7 +164,9 @@ fn go(args: &Args) -> Result<Outcome, Fault> {
     let load = if probe {
         if !args.positionals().is_empty() {
             return Err(Fault::Usage(
-                "`--probe` reads the part and writes nothing, so it takes no file".into(),
+                "`--probe` and `--readback` read the part and write nothing, so they take no \
+                 file"
+                    .into(),
             ));
         }
         None
@@ -264,6 +283,25 @@ fn go(args: &Args) -> Result<Outcome, Fault> {
                 xilinx::idcode_revision(idcode)
             ));
             say(&format!("status: {}", status(&cable)?));
+            if let Some((far, frames)) = readback {
+                // A few frames per job: the whole job is written before any
+                // of its reply is read, and an FT2232H holds 4 KB of reply,
+                // so a long readback in one job stalls the bus. The capture
+                // is taken once, by the first job, so every frame shows the
+                // same instant.
+                let mut done = 0u32;
+                while done < frames {
+                    let take = (frames - done).min(READBACK_CHUNK);
+                    let capture = args.flag("capture") && done == 0;
+                    let job = xilinx::readback_job(far + done, take, capture);
+                    let reply = cable.run(&job)?;
+                    for (i, frame) in (0u32..).zip(xilinx::read_frames(&job, &reply)?.iter()) {
+                        let words: Vec<String> = frame.iter().map(|w| format!("{w:08x}")).collect();
+                        println!("{:08x} {}", far + done + i, words.join(" "));
+                    }
+                    done += take;
+                }
+            }
         } else if let Some(name) = gowin::part_name(idcode) {
             say(&format!("IDCODE {idcode:#010x}: Gowin {name}"));
             say(&format!("status: {}", gowin_status(&cable)?));
@@ -842,6 +880,9 @@ fn gowin_status(cable: &usb::Cable) -> Result<gowin::Status, ProgramError> {
 }
 
 /// Reads the status register.
+/// Frames per readback job; see where it is used.
+const READBACK_CHUNK: u32 = 3;
+
 fn status(cable: &usb::Cable) -> Result<xilinx::Status, ProgramError> {
     let job = xilinx::status_job();
     let reply = cable.run(&job)?;

@@ -555,6 +555,112 @@ pub fn read_status(job: &Job, reply: &[u8]) -> Result<Status, super::jtag::JobEr
     Ok(Status(word_msb_first(&packed)))
 }
 
+/// Words in one 7-series configuration frame.
+pub const FRAME_WORDS: usize = 101;
+
+/// [`FRAME_WORDS`] as the configuration packets count it.
+const FRAME_WORDS_U32: u32 = 101;
+
+/// The `CFG_IN` payload that reads `frames` configuration frames back from
+/// frame address `far`, as 32-bit words in configuration order.
+///
+/// UG470's JTAG readback sequence (chapter 6, "Readback"): sync, `RCRC`,
+/// `RCFG`, the frame address, then a type 1 read of `FDRO` with no words
+/// and a type 2 read carrying the count. The engine sends **one dummy
+/// frame first**, so the count is `frames + 1` frames. With `capture`, a
+/// `GCAPTURE` goes first: it copies every flip-flop's present value into
+/// its `INIT` bit in configuration memory, so the frames read back carry
+/// the running design's state where the bitstream carried its initial
+/// values. Nothing here writes a frame; `GCAPTURE` changes only those
+/// `INIT` bits, which matter again only at the next `GRESTORE` or
+/// reconfiguration.
+///
+/// It ends with `DESYNC`, so the engine is not left waiting for a packet.
+#[must_use]
+pub fn readback_words(far: u32, frames: u32, capture: bool) -> Vec<u32> {
+    const REG_CMD: u32 = 4;
+    const REG_FAR: u32 = 1;
+    const REG_FDRO: u32 = 3;
+    let count = (frames + 1) * FRAME_WORDS_U32;
+    let mut out = vec![0xFFFF_FFFF, SYNC_WORD, NOOP];
+    if capture {
+        out.extend([type1_header(0b10, REG_CMD, 1), 0x0000_000C, NOOP, NOOP]);
+    }
+    out.extend([
+        type1_header(0b10, REG_CMD, 1),
+        0x0000_0007, // RCRC
+        NOOP,
+        NOOP,
+        type1_header(0b10, REG_CMD, 1),
+        0x0000_0004, // RCFG
+        NOOP,
+        type1_header(0b10, REG_FAR, 1),
+        far,
+        type1_header(0b01, REG_FDRO, 0),
+        0x4800_0000 | count, // type 2, read
+    ]);
+    out.extend(std::iter::repeat_n(NOOP, 32));
+    out
+}
+
+/// The words that put the engine back to sleep after a readback:
+/// `DESYNC` and the no-ops that clock it through.
+#[must_use]
+pub fn desync_words() -> Vec<u32> {
+    vec![type1_header(0b10, 4, 1), 0x0000_000D, NOOP, NOOP]
+}
+
+/// Reads `frames` frames back from `far`: `CFG_IN` with
+/// [`readback_words`], then `CFG_OUT` for the frames and the leading dummy
+/// one, then `CFG_IN` with [`desync_words`]. Capture 0 is the frame data.
+#[must_use]
+pub fn readback_job(far: u32, frames: u32, capture: bool) -> Job {
+    let words = readback_words(far, frames, capture);
+    let payload = reverse_all(
+        &words
+            .iter()
+            .flat_map(|w| w.to_be_bytes())
+            .collect::<Vec<u8>>(),
+    );
+    let mut scan = Scan::new();
+    scan.shift_ir(&[Instruction::CfgIn.bits()], IR_LENGTH);
+    scan.shift_dr(&payload, payload.len() * 8);
+    scan.shift_ir(&[Instruction::CfgOut.bits()], IR_LENGTH);
+    let _ = scan.read_dr((frames as usize + 1) * FRAME_WORDS * 32);
+    let desync = reverse_all(
+        &desync_words()
+            .iter()
+            .flat_map(|w| w.to_be_bytes())
+            .collect::<Vec<u8>>(),
+    );
+    scan.shift_ir(&[Instruction::CfgIn.bits()], IR_LENGTH);
+    scan.shift_dr(&desync, desync.len() * 8);
+    scan.finish()
+}
+
+/// The frames a [`readback_job`] returned, the leading dummy frame
+/// dropped, each as [`FRAME_WORDS`] words.
+///
+/// # Errors
+///
+/// [`JobError`](super::jtag::JobError) when the reply is too short.
+pub fn read_frames(job: &Job, reply: &[u8]) -> Result<Vec<Vec<u32>>, super::jtag::JobError> {
+    let packed = job.capture(0, reply)?;
+    let words: Vec<u32> = packed
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .map(|word| word_msb_first(word))
+        .collect();
+    Ok(words
+        .as_chunks::<FRAME_WORDS>()
+        .0
+        .iter()
+        .skip(1)
+        .map(|frame| frame.to_vec())
+        .collect())
+}
+
 /// `JPROGRAM`: clears the configuration memory, then rests in
 /// `Run-Test/Idle` while the part erases.
 ///
@@ -603,6 +709,32 @@ pub fn start_job() -> Job {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+
+    /// The readback packet stream, pinned word for word to UG470's JTAG
+    /// readback sequence: sync, `RCRC`, `RCFG`, the frame address, a type 1
+    /// read of `FDRO` with no words and a type 2 read carrying the count of
+    /// the frames asked for **plus the one dummy frame** the engine sends
+    /// first. With `capture`, `GCAPTURE` (`0x0C`) comes before all of it.
+    ///
+    /// What it would catch: a wrong register or command code, a count
+    /// without the dummy frame. What it would not catch: the engine's own
+    /// behaviour, which was checked on a Basys 3 -- 3636 words of a column
+    /// read back equal, word for word, to the bitstream that wrote them.
+    #[test]
+    fn a_readback_asks_for_the_frames_and_the_dummy_one() {
+        let words = readback_words(0x0000_0C00, 3, false);
+        assert_eq!(&words[..3], &[0xFFFF_FFFF, SYNC_WORD, NOOP]);
+        assert_eq!(&words[3..5], &[0x3000_8001, 0x0000_0007]); // CMD = RCRC
+        assert_eq!(&words[7..9], &[0x3000_8001, 0x0000_0004]); // CMD = RCFG
+        assert_eq!(&words[10..12], &[0x3000_2001, 0x0000_0C00]); // FAR
+        assert_eq!(words[12], 0x2800_6000); // read FDRO, type 1, no words
+        assert_eq!(words[13], 0x4800_0000 | (4 * 101)); // type 2: 3 + 1 frames
+        let captured = readback_words(0x0000_0C00, 3, true);
+        assert_eq!(&captured[3..5], &[0x3000_8001, 0x0000_000C]); // GCAPTURE
+        assert_eq!(&desync_words()[..2], &[0x3000_8001, 0x0000_000D]);
+    }
+
     #[test]
     fn the_status_word_accounts_for_every_bit_it_reads() {
         // The two readings this project has taken from an XC7A35T after
@@ -659,7 +791,6 @@ mod tests {
         }
     }
 
-    use super::*;
     use crate::program::jtag::unpack_capture;
 
     /// The opcodes are UG470 table 6-3's, six bits each.

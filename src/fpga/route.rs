@@ -47,7 +47,7 @@
 //! pin order, and the priority queue breaks ties by node id, so the same
 //! placement always produces the same routing.
 
-use std::collections::{BTreeSet, BinaryHeap};
+use std::collections::{BTreeSet, BinaryHeap, HashMap};
 use std::error::Error;
 use std::fmt;
 
@@ -304,6 +304,41 @@ impl Routing {
         lines.concat()
     }
 
+    /// Physical nodes that carry more than one signal, one line each.
+    ///
+    /// The router keeps capacity per physical node (see
+    /// [`physical_nodes`]), so this is empty for any routing it returns;
+    /// it is here so that a writer can refuse what it is about to write
+    /// rather than trust that, and because the defect it catches -- two
+    /// signals on the two ends of one long line -- passes every per-route
+    /// check there is.
+    #[must_use]
+    pub fn shorts(&self, netlist: &Netlist, graph: &RoutingGraph) -> Vec<String> {
+        let group = physical_nodes(graph);
+        let mut owner: HashMap<NodeId, usize> = HashMap::new();
+        let mut out = Vec::new();
+        for route in self.routes() {
+            let mut roots: Vec<NodeId> = route.nodes.iter().map(|n| group[*n as usize]).collect();
+            roots.sort_unstable();
+            roots.dedup();
+            for root in roots {
+                match owner.get(&root) {
+                    Some(other) if *other != route.signal => out.push(format!(
+                        "`{}` and `{}` share {}",
+                        netlist.signals[*other].name,
+                        netlist.signals[route.signal].name,
+                        graph.wire(root).full_name()
+                    )),
+                    Some(_) => {}
+                    None => {
+                        owner.insert(root, route.signal);
+                    }
+                }
+            }
+        }
+        out
+    }
+
     /// Checks that the routing really connects every sink to its driver.
     ///
     /// This is the property that matters, and it is checked the hard way:
@@ -503,28 +538,41 @@ impl Geometry {
 
 /// The router's per-node state.
 struct State {
-    /// How many signals are on each node.
+    /// How many signals are on each **physical** node, indexed by its
+    /// root in `group`; only roots are ever non-zero.
     occupancy: Vec<u32>,
-    /// The accumulated congestion history of each node.
+    /// The accumulated congestion history, by root likewise.
     history: Vec<f64>,
+    /// Each graph node's physical node: see [`physical_nodes`].
+    group: Vec<NodeId>,
 }
 
 impl State {
-    fn new(nodes: usize) -> Self {
+    fn new(group: Vec<NodeId>) -> Self {
+        let nodes = group.len();
         State {
             occupancy: vec![0; nodes],
             history: vec![0.0; nodes],
+            group,
         }
     }
 
     /// The cost of putting one more signal on a node whose base cost is
     /// `base`.
     fn node_cost(&self, node: NodeId, base: f32, present: f64) -> f64 {
-        let index = node as usize;
+        let index = self.group[node as usize] as usize;
         // Capacity is one signal per wire; the excess is what the present
         // factor multiplies.
         let overuse = f64::from(self.occupancy[index]);
         f64::from(base) * (1.0 + present * overuse) * (1.0 + self.history[index])
+    }
+
+    /// The physical nodes a route occupies, each once.
+    fn roots(&self, nodes: &[NodeId]) -> Vec<NodeId> {
+        let mut out: Vec<NodeId> = nodes.iter().map(|n| self.group[*n as usize]).collect();
+        out.sort_unstable();
+        out.dedup();
+        out
     }
 
     /// The nodes carrying more than one signal.
@@ -587,7 +635,7 @@ pub fn route(
         });
     }
 
-    let mut state = State::new(graph.nodes.len());
+    let mut state = State::new(physical_nodes(graph));
     let geometry = Geometry::of(graph, &options.node_base, &options.network);
     // The node every outgoing pip reaches, in the order
     // [`RoutingGraph::outgoing`] hands the pips over, so the inner loop of
@@ -622,8 +670,8 @@ pub fn route(
                 options,
                 netlist,
             )?;
-            for node in &route.nodes {
-                state.occupancy[*node as usize] += 1;
+            for root in state.roots(&route.nodes) {
+                state.occupancy[root as usize] += 1;
             }
             routing.routes[terminals.signal] = Some(route);
         }
@@ -840,11 +888,72 @@ fn nodes_of(
 /// Takes a signal's route out of the occupancy counts.
 fn rip_up(state: &mut State, routing: &mut Routing, signal: usize) {
     if let Some(route) = routing.routes[signal].take() {
-        for node in route.nodes {
-            let slot = &mut state.occupancy[node as usize];
+        for root in state.roots(&route.nodes) {
+            let slot = &mut state.occupancy[root as usize];
             *slot = slot.saturating_sub(1);
         }
     }
+}
+
+/// Each graph node's **physical** node, as the smallest graph node id of
+/// the metal it is part of.
+///
+/// A graph node is a wire *name in one tile*. On a 7-series part one piece
+/// of metal has a different name in every tile it crosses, and the loader
+/// joins those names with a free pip **each way** (`xray`'s module header,
+/// mismatch 1), because the architecture has no other way to say it. To
+/// the router those were separate nodes, each with a capacity of one
+/// signal. For a wire driven only from its start that cost nothing, since
+/// a second signal had no way on. **A long line is driven from either
+/// end**, and the router put one signal on `LV0` and another on `LV18` of
+/// the same `LV` -- 38 such pairs in one build of
+/// `examples/basys3/iso_display.v`, every route individually valid, and on
+/// the part the two signals shorted. One of them was the enable that
+/// loads the terminal's output byte, so `8` printed as `0`.
+///
+/// So two nodes are one physical node when a free pip runs between them
+/// **in both directions**: that is exactly what a join is. A fixed buffer
+/// (`always` in a `ppips` file) or a site's own wiring is one-way and is
+/// not merged -- its two ends really are two wires. On a family whose
+/// architecture spells wires by span, and so declares no joins, every
+/// node is its own physical node and this changes nothing.
+pub fn physical_nodes(graph: &RoutingGraph) -> Vec<NodeId> {
+    let n = graph.nodes.len();
+    let mut parent: Vec<NodeId> = (0..n).map(|i| NodeId::try_from(i).unwrap_or(0)).collect();
+    fn find(parent: &mut [NodeId], mut x: NodeId) -> NodeId {
+        while parent[x as usize] != x {
+            let up = parent[parent[x as usize] as usize];
+            parent[x as usize] = up;
+            x = up;
+        }
+        x
+    }
+    for a in 0..n {
+        let a = NodeId::try_from(a).unwrap_or(0);
+        for pip in graph.outgoing(a) {
+            if !graph.pip_bits(*pip).is_empty() {
+                continue;
+            }
+            let b = graph.pip(*pip).to;
+            if b == a {
+                continue;
+            }
+            let back = graph
+                .outgoing(b)
+                .iter()
+                .any(|p| graph.pip(*p).to == a && graph.pip_bits(*p).is_empty());
+            if back {
+                let (ra, rb) = (find(&mut parent, a), find(&mut parent, b));
+                if ra != rb {
+                    let (lo, hi) = if ra < rb { (ra, rb) } else { (rb, ra) };
+                    parent[hi as usize] = lo;
+                }
+            }
+        }
+    }
+    (0..n)
+        .map(|i| find(&mut parent, NodeId::try_from(i).unwrap_or(0)))
+        .collect()
 }
 
 /// Where one signal starts and where it has to get to, resolved onto the
@@ -1127,6 +1236,118 @@ mod tests {
         }
         let graph = arch.build_graph();
         (arch, graph)
+    }
+
+    /// Two tiles whose `long` wires are **one piece of metal**, joined the
+    /// way the 7-series loader joins a long line -- a free pip each way --
+    /// and each with a `short` wire of its own. Each tile has a source and
+    /// a sink that can use either.
+    fn joined_long(base_long: f32) -> (RoutingGraph, Vec<f32>) {
+        let mut arch = Arch::new("joined", "test", 2, 1);
+        let mut tile = TileType::new("t", "t_tile", 8, 8);
+        for name in ["long", "short", "out0", "in0"] {
+            tile.wires.push(WireDecl {
+                name: name.to_owned(),
+                dx: 0,
+                dy: 0,
+            });
+        }
+        let mut src = BelDecl::new("src0", "lut");
+        src.pins.push(("o".to_owned(), WireRef::local("out0")));
+        tile.bels.push(src);
+        let mut dst = BelDecl::new("dst0", "ff");
+        dst.pins.push(("d".to_owned(), WireRef::local("in0")));
+        tile.bels.push(dst);
+        let mut bit = 0u32;
+        let mut next = || {
+            let at = ConfigBit::new(bit / 8, bit % 8);
+            bit += 1;
+            vec![at]
+        };
+        for track in ["long", "short"] {
+            tile.pips.push(PipDecl {
+                from: WireRef::local("out0"),
+                to: WireRef::local(track),
+                bits: next(),
+            });
+            tile.pips.push(PipDecl {
+                from: WireRef::local(track),
+                to: WireRef::local("in0"),
+                bits: next(),
+            });
+        }
+        for dx in [-1, 1] {
+            tile.pips.push(PipDecl {
+                from: WireRef::at("long", dx, 0),
+                to: WireRef::local("long"),
+                bits: Vec::new(),
+            });
+        }
+        arch.tile_types.push(tile);
+        arch.set_tile(0, 0, 0);
+        arch.set_tile(1, 0, 0);
+        let graph = arch.build_graph();
+        let base = graph
+            .nodes
+            .iter()
+            .map(|w| if w.name == "long" { base_long } else { 1.0 })
+            .collect();
+        (graph, base)
+    }
+
+    /// Two signals may not share a physical wire just because it has a
+    /// different name in each tile. Before [`physical_nodes`] the router
+    /// counted capacity per name, and on a 7-series part it put two
+    /// signals on the two ends of one long line, which the part shorted.
+    ///
+    /// What it would catch: capacity kept per graph node again, or joins
+    /// not recognised as joins. What it would not catch: a family whose
+    /// loader joins wires some other way than a free pip each way.
+    #[test]
+    fn two_signals_never_share_one_piece_of_metal() {
+        let (graph, base) = joined_long(0.1);
+        let groups = physical_nodes(&graph);
+        let node = |name: &str| -> NodeId {
+            let index = (0..graph.nodes.len())
+                .find(|i| graph.wire(NodeId::try_from(*i).unwrap_or(0)).full_name() == name)
+                .unwrap_or_else(|| panic!("no node {name}"));
+            NodeId::try_from(index).unwrap_or(0)
+        };
+        let (long0, long1, short0) = (node("X0Y0/long"), node("X1Y0/long"), node("X0Y0/short"));
+        assert_eq!(
+            groups[long0 as usize], groups[long1 as usize],
+            "a join is one node"
+        );
+        assert_ne!(groups[long0 as usize], groups[short0 as usize]);
+
+        let netlist = pairs(2);
+        let mut placement = Placement::new(netlist.instances.len(), graph.sites.len());
+        for (index, site) in ["X0Y0/src0", "X0Y0/dst0", "X1Y0/src0", "X1Y0/dst0"]
+            .iter()
+            .enumerate()
+        {
+            placement.place(index, graph.site_index(site).expect("site"));
+        }
+        let options = RouteOptions {
+            node_base: base,
+            ..RouteOptions::default()
+        };
+        let (routing, _) = route(&netlist, &graph, &placement, &options).expect("it routes");
+        assert!(routing.verify(&netlist, &graph, &placement).is_empty());
+        assert!(
+            routing.shorts(&netlist, &graph).is_empty(),
+            "{:?}",
+            routing.shorts(&netlist, &graph)
+        );
+        let on_long = routing
+            .routes()
+            .filter(|r| {
+                r.nodes
+                    .iter()
+                    .any(|n| groups[*n as usize] == groups[long0 as usize])
+            })
+            .count();
+        assert_eq!(on_long, 1, "exactly one signal takes the long wire");
     }
 
     /// `n` independent source-to-sink signals.

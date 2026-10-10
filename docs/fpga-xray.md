@@ -105,6 +105,45 @@ LED is stuck between builds is a reason to suspect the second.
   odd bits took one extra step, and a counter that disagrees with the
   nibble count would say where.
 
+## Two signals on one long line
+
+**CHECKED on a Basys 3, 10 October 2026.** After the clock fix below, builds
+of `examples/basys3/iso_display.v` still misbehaved on the part, and which
+logic failed moved with the placement. On one build, bit 3 of the card
+half's output byte was stuck at zero.
+
+Nothing the flow checks found it. Every join (109 921) and fixed hop
+(28 203) on that build matches Project X-Ray; the slice features are
+self-consistent; halving the clock with **identical** placement and routing
+changed nothing. Two instruments did:
+
+- **Configuration readback** (`reticle program --readback FAR,FRAMES`):
+  the part held the bitstream word for word, in the top half and the
+  bottom. So the configuration was exactly what was written.
+- **Capture** (`--capture`, a `GCAPTURE` before the readback): the stuck
+  bit's flip-flop held **1**, the value it should, while its readers saw 0.
+  So the value was lost on the wire out of it.
+
+The wire was shared. The loader turns each `tileconn` pair into a free pip
+each way (mismatch 1 in `src/fpga/xray/mod.rs`), and the router counted one
+signal per graph node -- per wire **name**. A long line (`LV`, `LVB`, `LH`)
+is one piece of metal named `LV0` at one end and `LV18` at the other, and it
+can be driven from **either** end, so the router put one signal on each
+end. An independent check of that build against `tileconn.json` found 38
+physical wires carrying two signals, every one a long line, one of them the
+enable that loads the terminal's output byte.
+
+`route::physical_nodes` now merges every pair of nodes joined by a free pip
+each way, and the router keeps occupancy, history and overuse per physical
+node. `reticle fpga --bitstream` also refuses a routing in which any
+physical wire carries two signals (`Routing::shorts`). The same placement,
+rebuilt, printed `k` exactly, passed 500 request bursts, and ran the secure
+element from the FPGA to its PIN screen.
+
+What is **not** established: that no other kind of graph node is one wire
+under two names in a way this does not merge -- a join written as one pip
+rather than two would not be. The independent check found long lines only.
+
 ## A clock off the network, and the hold violation it made
 
 **CHECKED on a Basys 3, 9 October 2026.**
