@@ -97,6 +97,12 @@ module iso7816_terminal_tb;
     // owns the pins. The `uart` instance below does what that wrapper does.
     wire [7:0] dut_cmd_data, dut_out_data;
     wire       dut_cmd_valid, dut_out_valid, dut_out_ready;
+    // Holds the port as `iso_display.v`'s display half does while it dumps a
+    // frame, which is about 10 ms on the board: long enough for the card to
+    // send hundreds of bytes that must all wait.
+    reg        hold_port = 1'b0;
+    wire       port_ready;
+    assign dut_out_ready = port_ready && !hold_port;
 
     iso7816_terminal #(
         .CARD_DIV(CARD_DIV), .ETU_CYCLES(ETU_CYCLES),
@@ -200,8 +206,8 @@ module iso7816_terminal_tb;
     // together after eight cycles. Nothing is sent in either window.
     uart #(.CLK_DIV(HOST_DIV)) dut_port (
         .clk(clk), .rst_n(host_rst_n), .div(16'd0),
-        .tx_data(dut_out_data), .tx_valid(dut_out_valid),
-        .tx_ready(dut_out_ready), .tx(dut_tx),
+        .tx_data(dut_out_data), .tx_valid(dut_out_valid && !hold_port),
+        .tx_ready(port_ready), .tx(dut_tx),
         .rx(host_tx), .rx_data(dut_cmd_data), .rx_valid(dut_cmd_valid),
         .rx_error(), .rx_frame_error(), .rx_parity_error(), .rx_break());
 
@@ -465,6 +471,28 @@ module iso7816_terminal_tb;
         card_send(8'h00);
         expect_hex_byte(8'h90);
         expect_hex_byte(8'h00);
+        host_recv; host_recv;                  // that line's CRLF
+
+        // ---- A reply while the port is held ----
+        //
+        // On the board the display half holds the shared port for a whole
+        // frame dump, and a card reply arriving meanwhile used to keep one
+        // byte and count the rest lost: 19 in a minute of `W` on 11 October
+        // 2026, and three packets a host parsed wrong because of it. Every
+        // byte must come out afterwards, in order, on one line.
+        hold_port = 1'b1;
+        for (j2 = 0; j2 < 40; j2 = j2 + 1)
+            card_send(j2[7:0] ^ 8'h3C);
+        repeat (card_etu * 40) @(posedge clk);
+        hold_port = 1'b0;
+        for (j2 = 0; j2 < 40; j2 = j2 + 1)
+            expect_hex_byte(j2[7:0] ^ 8'h3C);
+        host_recv;
+        if (ch !== 8'h0D) begin
+            $display("FAIL: after the held reply came %02x, wanted the CR ending its line", ch);
+            $finish;
+        end
+        host_recv;
 
         // A byte from the host to the card, at the fast rate.
         got_n = 0;
@@ -596,7 +624,7 @@ module iso7816_terminal_tb;
             end
         end
 
-        $display("PASS: activation in order; the real 14-byte ATR received; PPS FF 10 97 78 sent and received byte-for-byte by the card, echoed and compared by this testbench as a host would; the rate switched on `F`; two bytes received and one sent at F/D=4 afterwards; deactivation dropped reset and the clock before power; and k, s, k sent back to back answered in full and in order; `W` sent SESSION_START whole and a ticker after the card's status");
+        $display("PASS: activation in order; the real 14-byte ATR received; PPS FF 10 97 78 sent and received byte-for-byte by the card, echoed and compared by this testbench as a host would; the rate switched on `F`; two bytes received and one sent at the fast rate afterwards; 40 bytes received while the port was held printed whole and in order; deactivation dropped reset and the clock before power; and k, s, k sent back to back answered in full and in order; `W` sent SESSION_START whole and a ticker after the card's status");
         $finish;
     end
 endmodule

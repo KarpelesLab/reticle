@@ -17,6 +17,11 @@
 // buffer it prints a loss, which is how it is known to be measuring anything
 // at all.
 //
+// **The third attempt is in** (11 October 2026): a 1023-entry queue in a
+// block RAM, read synchronously. What it was for -- a reply arriving while
+// the display half holds the port -- is what `iso7816_terminal_tb.v` now
+// tests, and on the part a minute of `W` printed every byte with `lost_q` at 0.
+//
 // **Measured again on 9 October 2026, at the board's own ratios.** This
 // used to end a line after every card character (`GAP_ETU` 8, shorter than
 // one 12-etu character) and to model a console character as 7.5 fast etu;

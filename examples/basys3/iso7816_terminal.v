@@ -909,57 +909,94 @@ module iso7816_terminal #(
         end
     end
 
-    // One byte deep, and a count of what that costs.
+    // A queue of 1023 card bytes in one block RAM, and a count of what it
+    // could not hold.
     //
-    // **Two queues were tried here and both were reverted.** A 256-entry
-    // `reg [9:0] fifo [0:255]` read at `fifo[fifo_r]` is distributed RAM, and
-    // it silenced this half on the part the moment the card was activated. A
-    // 32-entry packed vector shifted on push and read through a multiplexer --
-    // flops and logic, nothing inferred -- flooded the console with the
-    // banner table's `default` character instead. Both passed
-    // `iso7816_terminal_tb.v`, so neither failure is reproducible off the
-    // board, and a construct that cannot be debugged in simulation has no
-    // business holding a card's replies.
+    // **Two queues were tried here before and both were reverted.** A
+    // 256-entry `reg [9:0] fifo [0:255]` read at `fifo[fifo_r]` is
+    // distributed RAM, and it silenced this half on the part the moment the
+    // card was activated. A 32-entry packed vector shifted on push and read
+    // through a multiplexer -- flops and logic, nothing inferred -- flooded
+    // the console with the banner table's `default` character instead. Both
+    // passed `iso7816_terminal_tb.v`, and neither failure reproduced off the
+    // board. Neither is evidence against a queue now: on 10 October 2026 the
+    // router was found counting capacity per graph node rather than per piece
+    // of metal, so two signals could share one long line (`docs/fpga-xray.md`,
+    // "Two signals on one long line"), which is exactly the class of fault
+    // that passes simulation and fails on the part.
     //
-    // What that costs, measured: the card's reply to its initialisation frame
-    // came back as `4E 00 00 4E 00 00 31 00 01 60 00 00` with `lost_q` at 7,
-    // because at F/D = 4 a byte lands every 6 us and printing one costs 10 us
-    // at 2.000 Mbaud (two hex characters). `PPS1 = 97` asks for F/D = 8, a
-    // byte every 12 us, which the port keeps up with; the buffer is still one
-    // deep, so a reply that starts while the display half holds the port
-    // mid-line still loses bytes, and still counts them. Short exchanges survive -- the ATR, the PPS echo and
-    // the frame all show `lost_q` at 0 -- and a burst does not. `lost_q` is
-    // in `s` so this is never silent, and a queue remains the right answer.
+    // What one byte deep cost, measured: the card's reply to its
+    // initialisation frame came back as `4E 00 00 4E 00 00 31 00 01 60 00 00`
+    // with `lost_q` at 7 at F/D = 4, and at F/D = 8, where the port keeps up
+    // with a steady reply, a minute of `W` on 11 October 2026 still lost 19
+    // bytes, every one of them a reply that arrived while the display half
+    // held the shared port for a frame dump -- about 10 ms, which at a byte
+    // every 12 us is far more than one byte. `iso7816_terminal_tb.v` now holds
+    // the port across a 40-byte reply, and fails against the one-byte buffer.
+    // `lost_q` is still in `s`, so an overflow is never silent.
     reg  [15:0] lost_q = 16'd0;
 
     wire        take_card = card_rx_valid && !mute;
-    wire        take_mon  = !card_rx_valid && mon_rx_valid && !mute;
+    // While `W`'s engine runs, the monitor's copies of the engine's own bytes
+    // are not printed. The engine composed them, so they say nothing a host
+    // does not know, and printing them as well as the SE's answers -- three
+    // characters for each of ours, two for each of the SE's -- fell behind
+    // the contact: 48 bytes counted lost in `s` in the first session, every
+    // one of them a printing loss and none a protocol one.
+    wire        take_mon  = !card_rx_valid && mon_rx_valid && !mute && !seph_active;
     wire        take      = take_card || take_mon;
     wire [7:0]  take_byte = take_card ? card_rx          : mon_rx;
     wire        take_bad  = take_card ? card_parity_err  : mon_parity_err;
 
+    (* ram_style = "block" *)
+    reg  [9:0]  fq [0:1023];
+    reg  [9:0]  fq_w = 10'd0, fq_r = 10'd0;
+    reg  [9:0]  fq_q = 10'd0;
+    reg         fq_fetch = 1'b0;
+    wire        fq_empty = fq_w == fq_r;
+    wire        fq_full  = (fq_w + 10'd1) == fq_r;
+
+    // The memory alone, with no reset, so it maps to a block RAM.
+    always @(posedge sys) begin
+        if (take && !fq_full) fq[fq_w] <= {take_bad, take_mon, take_byte};
+        fq_q <= fq[fq_r];
+    end
+
     always @(posedge sys) begin
         if (!rst_n) begin
             have_byte <= 1'b0;
+            fq_w      <= 10'd0;
+            fq_r      <= 10'd0;
+            fq_fetch  <= 1'b0;
             lost_q    <= 16'd0;
             gap       <= 32'd0;
             line_open <= 1'b0;
         end else begin
             if (take) begin
-                if (have_byte && !byte_done) begin
+                if (fq_full) begin
                     if (lost_q != 16'hFFFF) lost_q <= lost_q + 16'd1;
                 end else begin
-                    pend_byte <= take_byte;
-                    pend_bad  <= take_bad;
-                    pend_mon  <= take_mon;
-                    have_byte <= 1'b1;
+                    fq_w <= fq_w + 1'b1;
                 end
                 gap       <= gap_load;
                 line_open <= 1'b1;
             end else if (gap != 0) begin
                 gap <= gap - 1'b1;
             end
-            if (byte_done && !take) have_byte <= 1'b0;
+            // One read in flight at a time: a block RAM answers a cycle
+            // after it is asked, so `fq_fetch` marks the cycle its output
+            // is the entry at the old `fq_r`.
+            if (fq_fetch) begin
+                {pend_bad, pend_mon, pend_byte} <= fq_q;
+                have_byte <= 1'b1;
+            end else if (byte_done) begin
+                have_byte <= 1'b0;
+            end
+            fq_fetch <= 1'b0;
+            if (!fq_fetch && (!have_byte || byte_done) && !fq_empty) begin
+                fq_r     <= fq_r + 1'b1;
+                fq_fetch <= 1'b1;
+            end
             if (eol_done)  line_open <= 1'b0;
         end
     end
@@ -1106,7 +1143,11 @@ module iso7816_terminal #(
                     end else if (have_byte) begin
                         phase <= P_BYTE;
                         pos   <= (pend_bad || pend_mon) ? 4'd0 : 4'd1;
-                    end else if (line_open && gap == 0) begin
+                    end else if (line_open && gap == 0 && fq_empty && !fq_fetch) begin
+                        // Not while the queue still holds bytes: between two
+                        // reads `have_byte` is low for a cycle, and a gap that
+                        // ran out while the port was held would otherwise
+                        // break a reply in the middle.
                         phase <= P_EOL; pos <= 4'd0;
                     end
                 P_BANNER: begin
