@@ -180,6 +180,10 @@ module iso7816_terminal #(
     // The device's two buttons as `W`'s engine reports them to the SE:
     // bit 0 left, bit 1 right, high while pressed.
     input  wire [1:0]  seph_buttons,
+    // The device's two button lines **as read**, already synchronised:
+    // bit 0 left, bit 1 right. Reported in `s`, so a host can see each line's
+    // idle level and which way a press moves it before anything drives one.
+    input  wire [1:0]  buttons_in,
     output wire        out_valid,
     output wire [7:0]  out_data,
     input  wire        out_ready,
@@ -1066,7 +1070,9 @@ module iso7816_terminal #(
     wire [127:0] status = {
         bytes_q, perr_q, sent_q, tmo_q,
         etu_div, CARD_DIV16,
-        {7'd0, etu_div == FAST_DIV16}, {5'd0, state},
+        // Bit 0 the fast rate; bits 7 and 6 the right and left button
+        // lines as read, which is how a host learns their idle levels.
+        {buttons_in, 5'd0, etu_div == FAST_DIV16}, {5'd0, state},
         8'hA5,
         // The two samples `L` took, because `-PAD` alone does not say which
         // half failed and they mean different things: a line that would not

@@ -29,9 +29,17 @@
 //                the high level. That is why the card and this board can
 //                share the wire with no contention, and why the internal
 //                pull-up must stay off in the constraints.
-//   `btn_left`   idles LOW through the far side's 10k pull-down, so a press
-//                drives HIGH and nothing else ever drives it.
-//   `btn_right`  idles HIGH through a 10k pull-up, so a press drives LOW.
+//   `btn_left`   idles LOW, so a press drives it HIGH. It is on **JC2**.
+//   `btn_right`  idles HIGH, so a press drives it LOW. It is on **JC1**.
+//
+// **CHECKED 10 October 2026, and the pins were the other way round.** The
+// constraints put left on JC1 and right on JC2, so every press drove a
+// line to the level it was already at and none ever registered. Read back
+// through `s` with the device powered and nothing driving either line, JC1
+// idles high and JC2 low; pressing JC2 then moved the PIN cursor left and
+// JC1 moved it right. So the levels here were right for each button and
+// the balls were swapped. A press lasts 100 ms (`PRESS_COUNT`), a human
+// press.
 //
 // A push-pull output on either button line would hold it at its idle level
 // and fight anybody pressing the real button, which with a switch to the
@@ -63,6 +71,7 @@ module iso_display_pad #(
     parameter COLUMNS         = 128,
     parameter PAGES           = 8,
     parameter PRESS_BITS      = 23,
+    parameter integer PRESS_COUNT = 11_200_000,   // 100 ms at 112 MHz
     parameter BLOCK_RAM       = 1
 ) (
     input  wire        clk,
@@ -97,12 +106,21 @@ module iso_display_pad #(
     wire io_oe, io_o;
     wire press_left, press_right;
 
+    // The two button lines as the far side holds them, through two flip-
+    // flops each because they are asynchronous to everything here.
+    reg [1:0] btn_meta = 2'b00, btn_sync = 2'b00;
+    always @(posedge clk_pll) begin
+        btn_meta <= {btn_right, btn_left};
+        btn_sync <= btn_meta;
+    end
+
     iso_display #(
         .CARD_DIV(CARD_DIV), .ETU_CYCLES(ETU_CYCLES),
         .FAST_ETU_CYCLES(FAST_ETU_CYCLES), .RST_HOLD(RST_HOLD),
         .VCC_BITS(VCC_BITS), .GAP_ETU(GAP_ETU), .WDOG_BITS(WDOG_BITS),
         .HOST_DIV(HOST_DIV), .TICK_BIT(TICK_BIT),
         .COLUMNS(COLUMNS), .PAGES(PAGES), .PRESS_BITS(PRESS_BITS),
+        .PRESS_COUNT(PRESS_COUNT),
         .BLOCK_RAM(BLOCK_RAM)
     ) core (
         .clk(clk_pll), .locked(locked),
@@ -110,6 +128,7 @@ module iso_display_pad #(
         .io_i(io), .io_oe(io_oe), .io_o(io_o),
         .sclk(sclk), .mosi(mosi), .dc(dc), .cs_n(cs_n),
         .press_left(press_left), .press_right(press_right),
+        .buttons_in(btn_sync),
         .uart_rx_pin(uart_rx_pin), .uart_tx_pin(uart_tx_pin),
         .led(led), .seg(seg), .dp(dp), .an(an));
 

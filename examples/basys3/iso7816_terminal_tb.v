@@ -107,7 +107,7 @@ module iso7816_terminal_tb;
         .clk(clk), .locked(1'b1), .clk_card(clk_card), .rst_card(rst_card),
         .vcc_en(vcc_en),
         .io_i(io), .io_oe(term_oe), .io_o(term_o),
-        .cmd_valid(dut_cmd_valid), .cmd_data(dut_cmd_data), .seph_buttons(2'b00),
+        .cmd_valid(dut_cmd_valid), .cmd_data(dut_cmd_data), .seph_buttons(2'b00), .buttons_in(2'b00),
         .out_valid(dut_out_valid), .out_data(dut_out_data),
         .out_ready(dut_out_ready), .hex_run(),
         .led(led), .seg(seg), .dp(dp), .an(an));

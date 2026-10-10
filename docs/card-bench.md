@@ -29,7 +29,8 @@ learned by getting it wrong.
 | JXADC3 | `M2` | card reset, active low |
 | JXADC4 | `N2` | `vcc_en`, the relay |
 | JA1–JA4 | `J1 L2 J2 G2` | `sclk`, `mosi`, `dc`, `cs_n` from the device's display bus |
-| JC1, JC2 | `K17`, `M18` | the device's LEFT and RIGHT button lines |
+| JC2 | `M18` | the device's LEFT button line: idles low, a press drives it high (CHECKED) |
+| JC1 | `K17` | the device's RIGHT button line: idles high, a press drives it low (CHECKED) |
 
 A 4.7 kΩ pull-up is **not** adequate: against 50 pF it reaches 90 % in about
 540 ns, and an etu at 2 Mbaud is 500 ns. 1 kΩ gives about 115 ns.
@@ -185,6 +186,15 @@ refuses a routing in which any physical wire carries two signals. The same
 placement then printed `k` exactly and passed every burst.
 
 ## What is CHECKED on hardware
+
+**The FPGA as the SE's MCU, 10 October 2026.** `A`, `P`, `F`, then `W`: the
+board alone ran the secure element -- SESSION_START, then a ticker or a
+status event for every turn the SE ended -- and the SE drew its PIN screen,
+read back with `g`. `<` and `>` move the PIN cursor left and right: each
+press is 100 ms on the button line, JC2 driven high for left and JC1 driven
+low for right, which is the opposite pairing to what the constraints said
+until both lines were read back idle and a press was watched on the screen.
+
 
 Activation in the mandated order; a real card's 14-byte ATR
 (`3B1B8705322E352E310433000004`) with no parity or framing errors; a PPS the

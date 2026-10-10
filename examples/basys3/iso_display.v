@@ -55,9 +55,10 @@
 //   JA4     G2   cs_n       low while a byte is on the wire
 //   JA5     —    GND
 //
-//   JC1     K17  btn_left   the far side's LEFT button line, released
+//   JC2     M18  btn_left   the far side's LEFT button line, released
 //                           except while pressed
-//   JC2     M18  btn_right  the same for RIGHT
+//   JC1     K17  btn_right  the same for RIGHT (the two were swapped until
+//                           measured, 10 October 2026)
 //
 //   B18/A18      the board's USB-UART bridge, 2 Mbaud 8N1 (`HOST_DIV`)
 //
@@ -239,6 +240,7 @@ module iso_display #(
     parameter COLUMNS         = 128,
     parameter PAGES           = 8,
     parameter PRESS_BITS      = 23,
+    parameter integer PRESS_COUNT = 1 << PRESS_BITS,
     parameter BLOCK_RAM       = 1,
     // Which bit of a free-running counter picks what the digits show. 25
     // is about 0.3 s at 112 MHz.
@@ -265,6 +267,8 @@ module iso_display #(
     // ---- A request to press one of the far side's buttons ----
     output wire        press_left,
     output wire        press_right,
+    // The two button lines as read, synchronised: bit 0 left, bit 1 right.
+    input  wire [1:0]  buttons_in,
 
     // ---- The one serial port ----
     input  wire        uart_rx_pin,
@@ -346,10 +350,12 @@ module iso_display #(
         .clk_card(clk_card), .rst_card(rst_card), .vcc_en(vcc_en),
         .io_i(io_i), .io_oe(io_oe), .io_o(io_o),
         .cmd_valid(cmd_valid), .cmd_data(cmd_data),
-        // `<` and `>` press the device's buttons through `W`'s engine as
-        // well as on the JC lines: with the FPGA as the MCU, a press is a
-        // BUTTON_PUSH_EVENT and not a level on a wire.
-        .seph_buttons({press_right, press_left}),
+        // **No button events.** A real Nano X's MCU never sends one -- its
+        // capture has none in 44 143 packets, with a PIN entered during it --
+        // because the buttons are wired to the SE itself. `<` and `>` press
+        // the JC lines instead, which is what that wiring is.
+        .seph_buttons(2'b00),
+        .buttons_in(buttons_in),
         .out_valid(iso_out_valid), .out_data(iso_out_data),
         .out_ready(iso_out_ready), .hex_run(hex_run),
         .led(iso_led), .seg(iso_seg), .dp(), .an(iso_an));
@@ -365,7 +371,7 @@ module iso_display #(
 
     ssd1306_console #(
         .TICK_BIT(TICK_BIT), .COLUMNS(COLUMNS), .PAGES(PAGES),
-        .PRESS_BITS(PRESS_BITS), .BLOCK_RAM(BLOCK_RAM)
+        .PRESS_BITS(PRESS_BITS), .PRESS_COUNT(PRESS_COUNT), .BLOCK_RAM(BLOCK_RAM)
     ) panel (
         .clk(clk), .rst_n(rst_n),
         .sclk(sclk), .mosi(mosi), .dc(dc), .cs_n(cs_n),

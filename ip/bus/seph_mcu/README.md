@@ -64,20 +64,26 @@ prototype of exactly this policy over the Basys 3 console
 status events in 20 s, every one answered by a status, and the SE drew its
 PIN entry screen.
 
-**NOT yet run on a part: this block itself.** It is integrated into
-`examples/basys3/iso_display.v` as the console's `W` command and passes that
-design's testbenches, but the builds made of it so far have hit a
-placement-dependent fault elsewhere in the card half (see
-`docs/card-bench.md`), so the engine has not yet talked to the SE. What
-was checked on the part is the same policy driven from the host.
+**CHECKED on a part, 10 October 2026: this block itself**, as the console's
+`W` command in `examples/basys3/iso_display.v` on a Basys 3. After `A`, `P`
+and `F`, with no host involved, it sent SESSION_START and answered every SE
+turn -- 78 tickers and 7 status events in 7 s, a status after each -- and the
+SE drew its PIN screen into the board's SSD1306 slave, 4096 bytes with no
+unknown command. (Earlier builds of that design misbehaved for a reason in
+the router, not here: see `docs/card-bench.md`.)
 
 **QUOTED, not measured:**
 
 - the BLE answers — from a capture of a real Nano X's MCU
   (`visgrok`, `capture-20261009-125946.seph.log`); the SE 2.5.1 above
   sent no BLE command;
-- `BUTTON_SHIFT = 1` — Ledger's SDK reads the button byte as `byte >> 1`;
-  no button press has reached an SE from this block yet;
+- `BUTTON_SHIFT = 1` — Ledger's SDK reads the button byte as `byte >> 1`.
+  **A Nano X does not use BUTTON_PUSH_EVENT at all**: its MCU sends none in
+  the 44 143 packets of the capture, a PIN entered during it, because the
+  buttons are wired to the SE. An SE 2.5.1 sent four of them from this
+  block answered each with a plain status and changed nothing on screen.
+  `iso_display.v` therefore ties `buttons` low and presses the button lines
+  instead;
 - what an SE does with a status it does not like.
 
 ## 4. The testbench

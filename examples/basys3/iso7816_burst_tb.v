@@ -75,7 +75,7 @@ module iso7816_burst_tb;
     ) dut (
         .clk(clk), .locked(1'b1), .clk_card(clk_card), .rst_card(rst_card),
         .vcc_en(vcc_en), .io_i(io), .io_oe(term_oe), .io_o(term_o),
-        .cmd_valid(cmd_valid), .cmd_data(cmd_data), .seph_buttons(2'b00), .hex_run(hex_run),
+        .cmd_valid(cmd_valid), .cmd_data(cmd_data), .seph_buttons(2'b00), .buttons_in(2'b00), .hex_run(hex_run),
         .out_valid(out_valid), .out_data(out_data), .out_ready(out_ready),
         .led(led), .seg(seg), .dp(dp), .an(an));
 

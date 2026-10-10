@@ -150,6 +150,10 @@ module ssd1306_console #(
     // debounce a device is likely to apply, and short enough not to look
     // like a long press.
     parameter PRESS_BITS = 23,
+    // How many clocks a press lasts; it must fit in PRESS_BITS + 1 bits.
+    // The default is the old `2**PRESS_BITS`. `iso_display_pad.v` asks for
+    // 100 ms, a human press.
+    parameter integer PRESS_COUNT = 1 << PRESS_BITS,
     // Passed straight to `ssd1306_slave`: 1 puts the 1024-byte frame
     // buffer in a block RAM, which is right, and 0 puts it in lookup
     // tables. It is a parameter here only so a build can be tried both
@@ -292,6 +296,7 @@ module ssd1306_console #(
     // hardware holds the line for `2**PRESS_BITS` clocks, so a busy host
     // cannot accidentally leave a button down or release it too soon for
     // the far side's debounce to see it.
+    localparam [PRESS_BITS:0] PRESS_LOAD = PRESS_COUNT;
     reg [PRESS_BITS:0] left_hold  = {(PRESS_BITS + 1){1'b0}};
     reg [PRESS_BITS:0] right_hold = {(PRESS_BITS + 1){1'b0}};
 
@@ -301,12 +306,12 @@ module ssd1306_console #(
             right_hold <= {(PRESS_BITS + 1){1'b0}};
         end else begin
             if (cmd_valid && cmd_data == 8'h3C)        // '<'
-                left_hold <= {1'b1, {PRESS_BITS{1'b0}}};
+                left_hold <= PRESS_LOAD;
             else if (left_hold != 0)
                 left_hold <= left_hold - 1'b1;
 
             if (cmd_valid && cmd_data == 8'h3E)        // '>'
-                right_hold <= {1'b1, {PRESS_BITS{1'b0}}};
+                right_hold <= PRESS_LOAD;
             else if (right_hold != 0)
                 right_hold <= right_hold - 1'b1;
         end

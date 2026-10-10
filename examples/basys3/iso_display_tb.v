@@ -136,6 +136,7 @@ module iso_display_tb;
         .io_i(io), .io_oe(term_oe), .io_o(term_o),
         .sclk(sclk), .mosi(mosi), .dc(dc), .cs_n(cs_n),
         .press_left(press_left), .press_right(press_right),
+        .buttons_in(2'b00),
         .uart_rx_pin(host_tx), .uart_tx_pin(dut_tx),
         .led(led), .seg(seg), .dp(dp), .an(an));
 
