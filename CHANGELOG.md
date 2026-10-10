@@ -7,6 +7,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.7](https://github.com/KarpelesLab/reticle/compare/v0.0.6...v0.0.7) - 2026-10-10
+
+### Added
+
+- *(ip)* seph_mcu, the MCU's end of Ledger's SEPROXYHAL link, and `W` on the card bench
+- *(uray)* `reticle fpga` builds ZCU104 bitstreams from Verilog
+- *(uray)* tie the processor's unused inputs, as Vivado does
+- *(uray)* write an UltraScale+ bitstream, and run one on the ZCU104
+- *(uray)* an UltraScale+ routing fabric that fits Vivado's routing
+- *(uray)* read UltraScale+ frames and give every bit to its tile
+
+### Fixed
+
+- *(basys3)* the device's buttons press, and the FPGA runs the secure element to its PIN screen
+- *(route)* two signals never share one piece of metal, and the readback that found it
+- *(basys3)* queue the console's requests, so none sent without waiting is lost
+- *(uray)* stop the region before the first UltraRAM column
+- *(fpga)* refuse an instance the place-and-route netlist cannot hold
+- *(xray)* keep a global clock on the global network, and refuse when it is not
+- *(xray)* a block RAM data bit nothing stores or reads cannot fail a build
+- *(fpga)* `--place-*` reaches the placer for 7-series and Gowin bitstreams
+
+### Other
+
+- *(card-bench)* the initialisation frame itself
+- what another machine needs to drive the card bench
+- what another machine needs to drive the card bench
+- *(uray)* count the processor's clocks on the ZCU104 — PL_CLK0 is 100 MHz
+- *(uray)* a flip-flop clocked by hand from Linux behaves as an FDRE
+- *(uray)* the ZCU104 takes zero ECC, and how far ZU3EG routing carries
+- *(fpga)* the nine placements were one, and what nine really give
+
 ## [0.0.6](https://github.com/KarpelesLab/reticle/compare/v0.0.5...v0.0.6) - 2026-10-09
 
 ### Added
