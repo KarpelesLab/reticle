@@ -215,7 +215,13 @@ struct Built {
     /// What configuring the block RAMs did.
     report: reticle::fpga::xray::BlockRamReport,
     /// Signals with a driver and a sink, and how many were routed.
+    ///
+    /// These two being equal is **not** the same as every pin reaching a
+    /// wire: a signal something reads and nothing drives has no driver,
+    /// so it is not in either number. `driverless` is that question.
     signals: (usize, usize),
+    /// Signals something reads and nothing drives, one sentence each.
+    driverless: Vec<String>,
     /// Pips taken through a site (an IO logic hop), whose bits are site
     /// features rather than an arc of their own.
     site_hops: usize,
@@ -431,6 +437,7 @@ fn build(root: &str, verilog: &str, rcf: &str, half: Option<&str>) -> Built {
         rams,
         report,
         signals: (routable, routing.routed()),
+        driverless: netlist.driverless(),
         site_hops,
     }
 }
@@ -593,6 +600,87 @@ fn the_rom_demo_decodes_bit_for_bit() {
     let got = contents(&built, tile, bel);
     assert_eq!(got, expected, "the contents bits are not the cell's INIT");
     eprintln!("{} contents bit(s) decode to exactly the ROM", got.len());
+}
+
+/// A 16384 by 1 memory, which is the shape whose block RAM data pins are
+/// **one bit wide**, and the pin role that had no wire.
+///
+/// `Netlist::build` resolved a pin role by dropping the bit index from
+/// any port one bit wide. That is right for a flip-flop's `d` and a block
+/// RAM's `we`, which the architecture declares without an index, and
+/// wrong for a `RAMB18E1`'s data pins, which are indexed in every mode:
+/// the role named no wire, the pin went to `Netlist::off_fabric`, and the
+/// read data net was left with **nothing driving it**.
+///
+/// **Nothing else in this file would see that**, which is the point of
+/// the test. The router is handed only the signals that have both a
+/// driver and a sink, so a driverless one is not in `signals` either --
+/// `built.signals.0 == built.signals.1` stays true -- it is skipped, the
+/// routing verifies, and every set bit still decodes into the arcs the
+/// router chose. On this family an unrouted input reads as a **zero**, so
+/// the memory would read back empty; the same fault on an ECP5 reads as a
+/// one, and `docs/fpga-trellis.md` records 32768 bytes of `ff` off a
+/// Cynthion from exactly this cause.
+///
+/// The 1-bit mode is where it shows because that is the only mode whose
+/// data ports are one bit wide, and 16384 words of one bit reaches it on
+/// block count alone: one `RAMB18E1` there against two in any other mode,
+/// so no tie-break steers it. On the ECP5 the 1-bit mode is marked
+/// `unverified` -- its layout is a reading that nothing has measured, and
+/// the 4-bit one beside it is measured *wrong* -- so this is the family
+/// that still exercises the pin.
+///
+/// What this would not catch: a data pin that reaches the fabric on the
+/// wrong wire. Both ends exist then, and nothing here can tell a right
+/// wire from a wrong one.
+#[test]
+#[cfg(all(feature = "verilog", feature = "synth"))]
+fn a_one_bit_wide_memorys_data_pin_reaches_the_fabric() {
+    let Some(root) = chipdb() else { return };
+    let verilog = "module onebit (input wire clk, input wire we, input wire [13:0] a, \
+                   input wire d, output wire q);
+        reg mem [0:16383];
+        reg mem_q;
+        always @(posedge clk) begin
+            if (we) mem[a] <= d;
+            mem_q <= mem[a];
+        end
+        reg [7:0] pipe;
+        always @(posedge clk) pipe <= {pipe[6:0], mem_q};
+        assign q = pipe[7];
+    endmodule";
+    let mut rcf = String::from("set_io -io_standard LVCMOS33 clk W5\n");
+    let pins = [
+        "V17", "V16", "W16", "W17", "W15", "V15", "W14", "W13", "U16", "E19", "U19", "V19", "W18",
+        "U15",
+    ];
+    for (i, pin) in pins.iter().enumerate() {
+        rcf.push_str(&format!("set_io -io_standard LVCMOS33 a[{i}] {pin}\n"));
+    }
+    rcf.push_str("set_io -io_standard LVCMOS33 we V14\n");
+    rcf.push_str("set_io -io_standard LVCMOS33 d V13\n");
+    rcf.push_str("set_io -io_standard LVCMOS33 q W3\n");
+    let built = build(&root, verilog, &rcf, None);
+    eprint!("{}", built.report.to_text());
+
+    // The assertion the design exists for.
+    assert!(
+        built.driverless.is_empty(),
+        "a pin reads a signal nothing drives: {}",
+        built.driverless.join("; ")
+    );
+    // One block is what says the mode is the 1-bit one: 16384 words of
+    // one bit needs two in any other.
+    assert_eq!(
+        built.rams.len(),
+        1,
+        "`RAMB18E1` cells, so the mode is the 1-bit one"
+    );
+    // And the checks the rest of this file makes, which all passed while
+    // the memory could not be read at all.
+    assert_eq!(built.signals.0, built.signals.1, "not every signal routed");
+    assert_eq!(built.decoded.unexplained, 0);
+    assert_arcs_are_the_routers(&built);
 }
 
 /// Four block RAMs with different contents, so that both halves of a tile

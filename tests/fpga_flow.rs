@@ -982,13 +982,21 @@ fn a_design_over_the_part_numbers_specification_is_warned_about() {
         (report, diags.render(&sources))
     };
 
-    // 33 blocks on a part specified to have 32: warned, and the netlist is
+    // 34 blocks on a part specified to have 32: warned, and the netlist is
     // still produced, because the sites are real.
+    //
+    // 34 and not 33, which is what this said until the 18-bit mode started
+    // carrying `neighbours 1`. 33792 words of 18 bits is 33 blocks in the
+    // 18-bit mode against 34 in the 9-bit mode, two wide and seventeen
+    // deep, and the mapper takes the 34: each 18-bit block sterilises the
+    // one two columns east, so the cheaper-looking arrangement needs up to
+    // 66 blocks of a part that has 56 and `configure_bram` would refuse it.
+    // One block more and a design that can be placed.
     let (report, text) = build("ecp5-12f-CABGA256");
-    assert_eq!(report.count("DP16KD"), 33, "{}", report.to_text());
+    assert_eq!(report.count("DP16KD"), 34, "{}", report.to_text());
     assert!(
         text.contains(
-            "warning[F0400]: this design needs 33 `DP16KD` and `ecp5-12f-CABGA256` is specified \
+            "warning[F0400]: this design needs 34 `DP16KD` and `ecp5-12f-CABGA256` is specified \
              to have 32"
         ),
         "{text}"
@@ -1003,8 +1011,8 @@ fn a_design_over_the_part_numbers_specification_is_warned_about() {
     );
 
     // The same design on the larger part number cut from the same die:
-    // 33 of 56, and nothing to report.
+    // 34 of 56, and nothing to report.
     let (bigger, quiet) = build("ecp5-25f-CABGA381");
-    assert_eq!(bigger.count("DP16KD"), 33);
+    assert_eq!(bigger.count("DP16KD"), 34);
     assert!(!quiet.contains("F0400"), "{quiet}");
 }

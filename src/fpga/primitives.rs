@@ -1287,46 +1287,50 @@ impl Mapper<'_> {
         true
     }
 
-    /// Picks the shape and mode that uses fewest blocks, then the one
-    /// that spreads a word over fewest blocks, then the narrowest.
+    /// Picks a mode whose layout a part has confirmed, then the one that
+    /// costs the fewest blocks, then the fewest blocks per word, then the
+    /// widest.
     ///
-    /// **Fewest blocks** is the only part that is about capacity. The two
-    /// tie-breaks are both about which arrangement is the one this flow
-    /// has evidence for, and they were each written after a build went
-    /// wrong.
+    /// **Verified first, before block count.** A mode marked
+    /// [`unverified`](crate::fpga::device::BramModeLayout::unverified) is
+    /// one no part has been read back in, and a wrong layout is not worth
+    /// a block: a memory any verified mode can hold goes there even if an
+    /// unverified mode would save blocks. The ECP5's 4-bit mode is why —
+    /// `ip/compress/inflate`'s 320 x 4 code-length memory ties at one
+    /// block with the 9-bit mode, took the 4-bit one, and decoded
+    /// dynamic-Huffman streams into `80 | E_DIST` on a Cynthion. It is
+    /// ordered, not refused, so a shape that genuinely needs a narrow mode
+    /// still gets one and the mapping report says which.
     ///
-    /// **Fewest columns**, because a word split across blocks side by side
-    /// is a different thing from a word a single block holds, and the
-    /// narrow modes that split it are the ones
-    /// `src/fpga/devices/ecp5.dev` marks MEDIUM confidence -- where the
-    /// 4-, 2- and 1-bit words sit in an 18 kbit array is Reticle's reading
-    /// and has never been checked against a part. A 32768 x 8 memory ties
-    /// at sixteen blocks four ways over (9, 4, 2, 1)-bit modes, so
-    /// preferring the narrowest alone sent `bram_echo.v`'s window through
-    /// the least-trusted of them, and it read `ff` for all 32768 bytes on
-    /// a Cynthion. One block per word keeps that to the memories that
-    /// genuinely need a narrow mode to fit at all.
+    /// **Cost, not count.** A mode can cost more than the blocks it
+    /// occupies: `blocks * (1 + neighbours)`, where
+    /// [`neighbours`](crate::fpga::device::BramModeLayout::neighbours) is
+    /// how many other blocks each one sterilises. An ECP5 `DP16KD` in
+    /// 18-bit mode takes two data bits off the next block's interconnect
+    /// column, so it costs two. A 9-bit memory 288 deep needs one block in
+    /// either mode, and the tie used to hand it the 18-bit one and
+    /// sterilise a neighbour for nothing — `testdata/fpga/cynthion/`'s
+    /// decompressor, five such memories beside a 32768-byte window, could
+    /// not be placed at all. Counting the neighbour decides it without a
+    /// tie.
     ///
-    /// **Narrowest** after that, because width is not free on this family:
-    /// an ECP5 `DP16KD` in 18-bit mode takes its top two data bits from
-    /// the interconnect column two east, which is the next block's own
-    /// column, so an 18-bit block and the block two columns east of it
-    /// cannot both be used -- `configure_bram` refuses that arrangement
-    /// and `docs/fpga-trellis.md` has the wires. A 9-bit memory 288 deep
-    /// needs one block in either mode, so the tie used to hand it the
-    /// 18-bit one and sterilise a neighbour for nothing, and
-    /// `testdata/fpga/cynthion/`'s decompressor -- five such memories
-    /// beside a 32768-byte window -- could not be placed at all. Both of
-    /// those shapes are one column wide, so this tie-break still decides
-    /// them and the one above does not interfere.
+    /// Saying it this way rather than as "prefer the narrowest mode"
+    /// matters: narrow-is-better is the ECP5's situation and not the
+    /// iCE40's, whose `SB_RAM40_4K` sterilises nothing and whose widest
+    /// mode is the one to want. A general rule changed a family it had no
+    /// business changing, and `a_small_memory_fits_one_block` said so.
     ///
-    /// The cost of narrow, at equal columns, is address bits, which the
-    /// block decodes itself, and nothing else.
+    /// **Fewest blocks per word** next, because a word split across blocks
+    /// side by side is a different arrangement from one a single block
+    /// holds, and the one this flow has evidence for is the single block.
+    ///
+    /// **Widest** last, which is the old rule and keeps a memory that fits
+    /// either way on the simplest addressing.
     fn choose_bram(&self, width: u32, depth: u64) -> Option<(usize, (u32, u32), u32, u32)> {
         let mut best: Option<(usize, (u32, u32), u32, u32)> = None;
-        let mut best_key: Option<(u64, u32, u32)> = None;
+        let mut best_key: Option<(u8, u64, u32, u32)> = None;
         for (index, shape) in self.device.block_rams.iter().enumerate() {
-            for &(mode_width, mode_depth) in &shape.width_modes {
+            for (mode, &(mode_width, mode_depth)) in shape.width_modes.iter().enumerate() {
                 if mode_width == 0 || mode_depth == 0 {
                     continue;
                 }
@@ -1335,10 +1339,18 @@ impl Mapper<'_> {
                     continue;
                 };
                 let blocks = u64::from(wide) * u64::from(deep);
-                // Fewest blocks, then fewest blocks per word, then the
-                // narrowest mode. See the doc comment for what each of
-                // the two tie-breaks was written for.
-                let key = (blocks, wide, mode_width);
+                // `mode_layouts` runs in step with `width_modes`; a mode
+                // the device file gave no layout at all is neither
+                // unverified nor costly, because then there is nothing to
+                // be wrong and nothing to sterilise.
+                let layout = shape.mode_layouts.get(mode);
+                let unverified = u8::from(layout.is_some_and(|l| l.unverified));
+                let neighbours = u64::from(layout.map_or(0, |l| l.neighbours));
+                // A confirmed layout first, then the fewest blocks the
+                // mode really costs, then the fewest blocks per word,
+                // then the widest. See the doc comment.
+                let cost = blocks * (1 + neighbours);
+                let key = (unverified, cost, wide, u32::MAX - mode_width);
                 if best_key.is_none_or(|b| key < b) {
                     best_key = Some(key);
                     best = Some((index, (mode_width, mode_depth), wide, deep));

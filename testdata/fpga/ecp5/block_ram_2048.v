@@ -49,13 +49,13 @@
 // sixteen blocks).
 //
 // That the depth is 2048 rather than something shallower used to matter,
-// and no longer does. `Mapper::choose_bram` broke a tie on block count by
-// preferring the *widest* mode, so a shallower memory would have taken the
-// 18-bit mode — the one this backend refuses to place next to another
-// block. It now prefers the fewest blocks per word and then the
-// *narrowest*, which picks the 9-bit mode at any depth this block can
-// hold; `choose_bram`'s own comment has what each of those two tie-breaks
-// was written for.
+// and no longer does. `Mapper::choose_bram` counted blocks and broke a tie
+// by preferring the *widest* mode, so a shallower memory would have taken
+// the 18-bit mode — the one this backend refuses to place next to another
+// block. It now counts what a mode really costs: `src/fpga/devices/ecp5.dev`
+// says `neighbours 1` on the 18-bit line, so that mode costs two blocks
+// for every one it occupies and loses to the 9-bit mode outright at any
+// depth this block can hold. The widest mode still wins a genuine tie.
 //
 // The pins are on top-edge balls of an LFE5U-12F in caBGA-256, in the
 // order `iodb.json` lists them across the die. No board has this design on

@@ -1065,6 +1065,39 @@ pub struct BramModeLayout {
     /// when the database does not say, in which case a memory with
     /// initial contents cannot be put in this mode with them.
     pub init: Option<BramInitLayout>,
+    /// How many *other* blocks each block in this mode makes unusable.
+    ///
+    /// A mode can cost more than the block it is in. An ECP5 `DP16KD` in
+    /// 18-bit mode takes its top two data bits off the interconnect
+    /// column two east, which is the next block's own column, so an
+    /// 18-bit block and the block two columns east of it cannot both be
+    /// used; `TrellisFabric::configure_bram` refuses that arrangement and
+    /// `docs/fpga-trellis.md` has the wires.
+    ///
+    /// [`Mapper::choose_bram`](crate::fpga) counts `blocks * (1 +
+    /// neighbours)`, so a mode that sterilises one costs double and a
+    /// memory that fits either way takes the mode that does not. This is
+    /// the ECP5's reason stated where it belongs: a general preference for
+    /// narrow modes would have changed the iCE40, which has no such
+    /// conflict and whose widest mode is the one to want.
+    pub neighbours: u32,
+    /// True when no part has ever been read back in this mode, so the
+    /// layout above is a reading rather than a measurement.
+    ///
+    /// [`Mapper::choose_bram`](crate::fpga) orders a verified mode ahead
+    /// of an unverified one **before** it counts blocks, so a memory any
+    /// verified mode can hold never lands in one of these — a wrong
+    /// layout is not a trade worth making for a block. It is still
+    /// declared, because it is a mode the hardware has and because the
+    /// shape that needs it should fail loudly rather than be absent.
+    ///
+    /// The ECP5's 4-bit mode is why this field exists: `ip/compress/inflate`'s
+    /// 320 x 4 code-length memory was put there by a block-count tie, and
+    /// on a Cynthion it decoded dynamic-Huffman streams into
+    /// `80 | E_DIST` after a handful of correct bytes. The same memory in
+    /// the 9-bit mode is right. `docs/fpga-trellis.md` has the
+    /// measurement and what is still not known about it.
+    pub unverified: bool,
 }
 
 impl BramModeLayout {
@@ -2392,6 +2425,16 @@ fn write_mode_layout(line: &mut String, layout: &BramModeLayout) {
             line.push_str(&write_bit_list(word));
         }
     }
+    // These two go last because `init`'s words run until the next
+    // non-numeric token, so a number after them would be read as another
+    // word. The parser accepts them in any order; the writer has to pick
+    // one, and this is the one that round-trips.
+    if layout.neighbours > 0 {
+        line.push_str(&format!(" neighbours {}", layout.neighbours));
+    }
+    if layout.unverified {
+        line.push_str(" unverified");
+    }
 }
 
 /// Writes bit positions as a comma-separated list, with a run of three
@@ -3186,6 +3229,13 @@ impl<'a> Parser<'a> {
                     } else {
                         layout.init = Some(BramInitLayout { select, words });
                     }
+                }
+                "unverified" => layout.unverified = true,
+                "neighbours" => {
+                    if let Some(value) = self.number_at(line, index, "a number of blocks") {
+                        layout.neighbours = value;
+                    }
+                    index += 1;
                 }
                 other => {
                     let span = token.span;

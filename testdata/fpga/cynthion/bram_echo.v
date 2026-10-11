@@ -12,9 +12,12 @@
 // blocks of it. The memory was not in 9-bit mode. A 32768 x 8 memory ties
 // at sixteen blocks over the 9-, 4-, 2- and 1-bit modes, and
 // `Mapper::choose_bram` had just been changed to break such a tie by
-// preferring the narrowest, so this was eight blocks **side by side** in
-// **1-bit** mode -- one of the three the device file marks MEDIUM
-// confidence. In that mode a block's data port is one bit wide, and a
+// preferring the narrowest mode, so this was eight blocks **side by side**
+// in **1-bit** mode -- one of the three the device file marks MEDIUM
+// confidence. (That rule is gone: the ECP5's reason for wanting narrow is
+// that its 18-bit mode sterilises a neighbour, and the device file says
+// so with `neighbours 1` now, which decides the case without a
+// preference that reached other families.) In that mode a block's data port is one bit wide, and a
 // one-bit port's pin role had its bit index dropped: right for a
 // flip-flop's `d`, wrong for `DOB`, whose pin is `p0_dout0`. So the role
 // named no wire, the read data net was left with nothing driving it, and

@@ -23605,6 +23605,79 @@ fn inflate_decompresses_the_compcol_corpus() {
 /// side; and the one arm of the distance check no stream can reach,
 /// which `inflate_window_refuses_a_distance_it_does_not_hold` drives
 /// directly.
+/// A refused stream must leave nothing behind, and a dynamic-Huffman
+/// stream after one must still decode.
+///
+/// **This is the shape no other test here reaches.** Every malformed
+/// stream in `inflate_reports_every_malformed_stream` is followed by
+/// another malformed one or by nothing; `inflate_decompresses_the_compcol_corpus`
+/// never refuses anything. So a stream refused part-way, followed by a
+/// *good* one, was only ever run on a part -- and there four of the 123
+/// cases came back wrong, all of them dynamic-Huffman streams that
+/// happened to sit immediately after a raw-deflate case the zlib build
+/// refuses. All four decode correctly when run on their own.
+///
+/// The three code-length structures are what a dynamic block rebuilds and
+/// a stored or fixed block never touches, which is why the pairing
+/// matters: `pattern_*` and `runs_*` after a refusal are fine.
+///
+/// What this would not catch: anything about the framing around the
+/// block. `testdata/fpga/cynthion/usb_inflate_tb.v` owns that, and its
+/// own refusal cases are followed by a stored block for the same reason
+/// this one is needed.
+#[test]
+fn inflate_rearms_after_a_refusal_for_a_dynamic_huffman_stream() {
+    let design = inflate_design(15, 1);
+    let mut sim = simulate(&design, "inflate (zlib)");
+    let bench = InflateBench::attach(&mut sim);
+
+    // A dynamic-Huffman case, and the same stream with its two zlib
+    // header bytes removed, which is what a raw deflate stream looks like
+    // to a build that wants a wrapper: refused, and refused after a byte
+    // or two has already gone in.
+    let case = corpus()
+        .iter()
+        .find(|c| c.name == "text1_100_l6_zlib")
+        .expect("a dynamic-Huffman case");
+    let plain = plaintext(&case.rule, case.len);
+    let refused: Vec<u8> = case.stream[2..].to_vec();
+
+    for round in 0..3 {
+        let bad = bench.run(
+            &mut sim,
+            &refused,
+            Sink::Greedy,
+            inflate_limit(refused.len(), case.len),
+        );
+        assert!(
+            bad.error.is_some(),
+            "round {round}: a stream with no zlib header was accepted"
+        );
+        let good = bench.run(
+            &mut sim,
+            &case.stream,
+            Sink::Greedy,
+            inflate_limit(case.stream.len(), case.len),
+        );
+        assert_eq!(
+            good.error,
+            None,
+            "round {round}: reported {:?} after {} of {} bytes, having refused the stream before it",
+            good.error,
+            good.out.len(),
+            case.len
+        );
+        assert!(good.done, "round {round}: never finished");
+        assert_eq!(
+            good.out,
+            plain,
+            "round {round}: {} bytes out, {} expected",
+            good.out.len(),
+            plain.len()
+        );
+    }
+}
+
 #[test]
 fn inflate_reports_every_malformed_stream() {
     // RFC 1950 §2.2: FCHECK is chosen so that CMF*256 + FLG is a

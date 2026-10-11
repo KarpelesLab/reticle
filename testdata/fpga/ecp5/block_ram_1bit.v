@@ -1,29 +1,34 @@
-// A 16384 x 1 memory, which is the only shape that reaches a `DP16KD`'s
-// **1-bit** mode, and the shape that found a pin nothing drove.
+// A 16384 x 1 memory: the narrowest, deepest shape this flow has to map,
+// and the one that says which `DP16KD` mode it is willing to use.
 //
-// `src/fpga/devices/ecp5.dev` gives the block five modes. A memory one bit
-// wide is the one case where the narrowest of them wins outright rather
-// than by a tie-break: 16384 words of one bit is one block in the 1-bit
-// mode and two in any other, so `Mapper::choose_bram` picks it on block
-// count alone and no change to how ties break can steer it elsewhere.
+// **It takes eight blocks, and that is the point.** 16384 words of one bit
+// is one block in the `DP16KD`'s 1-bit mode and eight in its 9-bit mode,
+// and `Mapper::choose_bram` takes the eight. The 1-bit mode is marked
+// `unverified` in `src/fpga/devices/ecp5.dev`: where the 4-, 2- and 1-bit
+// words sit in an 18 kbit array is a reading nothing has measured, and the
+// 4-bit mode beside it is measured **wrong** -- `ip/compress/inflate`'s
+// 320 x 4 code-length memory decoded dynamic-Huffman streams into
+// `80 | E_DIST` on a Cynthion there and decodes the whole corpus in the
+// 9-bit mode. So `choose_bram` orders a confirmed layout ahead of an
+// unverified one before it counts anything, and this file is what pins that
+// it does. Seven blocks of waste is the price of a memory that reads back.
 //
-// **What this caught.** In that mode the block's data ports are one bit
-// wide, and `Netlist::build` used to drop the bit index from the pin role
-// of any port one bit wide -- which is right for a flip-flop's `d` and for
-// a block RAM's `we`, declared without an index, and wrong for `DOB`,
-// whose pin is `p0_dout0`. The role named no wire, the pin went to
-// `Netlist::off_fabric`, and the read data net was left with **nothing
-// driving it**. Nothing downstream objected: the router is only given the
-// signals that have a driver and a sink, so the routing verified, every
-// set bit of the bitstream decoded back through the database, and the arcs
-// were exactly the arcs the router chose. On a part the read would have
-// come back as all **ones**, because an unrouted input on this family
-// reads as a one -- which is what `testdata/fpga/cynthion/bram_echo.v`
-// did, for 32768 bytes, on a Cynthion.
+// **What it was written for, and no longer catches.** In the 1-bit mode a
+// block's data ports are one bit wide, and `Netlist::build` used to drop
+// the bit index from the pin role of any port one bit wide -- right for a
+// flip-flop's `d` and a block RAM's `we`, declared without an index, and
+// wrong for `DOB`, whose pin is `p0_dout0`. The role named no wire, the
+// pin went to `Netlist::off_fabric`, and the read data net was left with
+// nothing driving it; on a part it read all **ones**, which is what
+// `testdata/fpga/cynthion/bram_echo.v` did for 32768 bytes. Quarantining
+// the mode means this design no longer reaches a one-bit port, so the
+// regression test for that fix is
+// `tests/fpga_xray_bram.rs::a_one_bit_wide_memorys_data_pin_reaches_the_fabric`,
+// on the family whose 1-bit mode is not in question.
 //
-// So the assertion that matters here is `Netlist::driverless`, not
-// anything about the image. A bitstream for this design was wrong in a way
-// no count of its bits could show.
+// `Netlist::driverless` is still asserted here, because it costs nothing
+// and because a bitstream for this design was once wrong in a way no count
+// of its bits could show.
 //
 // The shape otherwise follows `block_ram_2048.v`: the read is registered
 // with no reset and its register has exactly one reader, which is what

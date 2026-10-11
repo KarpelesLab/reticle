@@ -2772,11 +2772,11 @@ exactly what this table is for.
 | `ram_wrapper` | `ram_sp` | WIDTH=8, DEPTH=256, OUT_REG=0 | LUT4 | 1 x lut, 1 x memory 256x8, 1 x memrd, 1 x memwr | 1 |
 | `ram_wrapper` | `ram_sp` | WIDTH=8, DEPTH=256, OUT_REG=0 | LUT6 | 1 x lut, 1 x memory 256x8, 1 x memrd, 1 x memwr | 1 |
 | `ram_wrapper` | `ram_sp` | WIDTH=8, DEPTH=256, OUT_REG=0 | iCE40 HX1K | 27 x SB_IO, 1 x SB_LUT4, 1 x SB_RAM40_4K | 1 |
-| `ram_wrapper` | `ram_sp` | WIDTH=8, DEPTH=256, OUT_REG=0 | ECP5 45F | 1 x DP16KD, 3 x LUT4, 27 x TRELLIS_IO | 1 |
+| `ram_wrapper` | `ram_sp` | WIDTH=8, DEPTH=256, OUT_REG=0 | ECP5 45F | 1 x DP16KD, 2 x LUT4, 27 x TRELLIS_IO | 1 |
 | `ram_wrapper` | `ram_sdp` | WIDTH=8, DEPTH=256, OUT_REG=0 | LUT4 | 1 x memory 256x8, 1 x memrd, 1 x memwr | 0 |
 | `ram_wrapper` | `ram_sdp` | WIDTH=8, DEPTH=256, OUT_REG=0 | LUT6 | 1 x memory 256x8, 1 x memrd, 1 x memwr | 0 |
 | `ram_wrapper` | `ram_sdp` | WIDTH=8, DEPTH=256, OUT_REG=0 | iCE40 HX1K | 36 x SB_IO, 1 x SB_RAM40_4K | 0 |
-| `ram_wrapper` | `ram_sdp` | WIDTH=8, DEPTH=256, OUT_REG=0 | ECP5 45F | 1 x DP16KD, 2 x LUT4, 36 x TRELLIS_IO | 0 |
+| `ram_wrapper` | `ram_sdp` | WIDTH=8, DEPTH=256, OUT_REG=0 | ECP5 45F | 1 x DP16KD, 1 x LUT4, 36 x TRELLIS_IO | 0 |
 | `rv32i` | `rv32i` | REGFILE_BRAM=0 | LUT4 | 14 x dff, 2436 x lut, 1 x memory 32x32, 2 x memrd, 1 x memwr | 34 |
 | `rv32i` | `rv32i` | REGFILE_BRAM=0 | LUT6 | 14 x dff, 2180 x lut, 1 x memory 32x32, 2 x memrd, 1 x memwr | 29 |
 | `rv32i` | `rv32i` | REGFILE_BRAM=0 | iCE40 HX1K | 220 x SB_CARRY, 1024 x SB_DFFE, 292 x SB_DFFER, 66 x SB_DFFR, 1 x SB_GB, 208 x SB_IO, 5049 x SB_LUT4 | 36 |
@@ -2908,15 +2908,15 @@ exactly what this table is for.
 | `inflate` | `inflate` | WINDOW_BITS=15, WRAPPER=1 | LUT4 | 57 x dff, 1749 x lut, 1 x memory 16x6, 1 x memory 16x9, 1 x memory 288x9, 1 x memory 320x4, 1 x memory 32768x8, 1 x memory 32x5, 6 x memrd, 6 x memwr | 31 |
 | `inflate` | `inflate` | WINDOW_BITS=15, WRAPPER=1 | LUT6 | 57 x dff, 1455 x lut, 1 x memory 16x6, 1 x memory 16x9, 1 x memory 288x9, 1 x memory 320x4, 1 x memory 32768x8, 1 x memory 32x5, 6 x memrd, 6 x memwr | 26 |
 | `inflate` | `inflate` | WINDOW_BITS=15, WRAPPER=1 | iCE40 HX1K | 223 x SB_CARRY, 412 x SB_DFFE, 369 x SB_DFFER, 7 x SB_DFFES, 5 x SB_DFFR, 1 x SB_GB, 30 x SB_IO, 3272 x SB_LUT4, 67 x SB_RAM40_4K | 31 |
-| `inflate` | `inflate` | WINDOW_BITS=15, WRAPPER=1 | ECP5 45F | 143 x CCU2C, 1 x DCCA, 18 x DP16KD, 1618 x LUT4, 9 x TRELLIS_DPR16X4, 390 x TRELLIS_FF, 30 x TRELLIS_IO | 19 |
+| `inflate` | `inflate` | WINDOW_BITS=15, WRAPPER=1 | ECP5 45F | 143 x CCU2C, 1 x DCCA, 18 x DP16KD, 1621 x LUT4, 9 x TRELLIS_DPR16X4, 390 x TRELLIS_FF, 30 x TRELLIS_IO | 19 |
 | `inflate` | `inflate` | WINDOW_BITS=15, WRAPPER=0 | LUT4 | 55 x dff, 1576 x lut, 1 x memory 16x6, 1 x memory 16x9, 1 x memory 288x9, 1 x memory 320x4, 1 x memory 32768x8, 1 x memory 32x5, 6 x memrd, 6 x memwr | 27 |
 | `inflate` | `inflate` | WINDOW_BITS=15, WRAPPER=0 | LUT6 | 55 x dff, 1303 x lut, 1 x memory 16x6, 1 x memory 16x9, 1 x memory 288x9, 1 x memory 320x4, 1 x memory 32768x8, 1 x memory 32x5, 6 x memrd, 6 x memwr | 24 |
 | `inflate` | `inflate` | WINDOW_BITS=15, WRAPPER=0 | iCE40 HX1K | 191 x SB_CARRY, 412 x SB_DFFE, 337 x SB_DFFER, 7 x SB_DFFES, 5 x SB_DFFR, 1 x SB_GB, 30 x SB_IO, 3102 x SB_LUT4, 67 x SB_RAM40_4K | 31 |
-| `inflate` | `inflate` | WINDOW_BITS=15, WRAPPER=0 | ECP5 45F | 125 x CCU2C, 1 x DCCA, 18 x DP16KD, 1515 x LUT4, 9 x TRELLIS_DPR16X4, 358 x TRELLIS_FF, 30 x TRELLIS_IO | 19 |
+| `inflate` | `inflate` | WINDOW_BITS=15, WRAPPER=0 | ECP5 45F | 125 x CCU2C, 1 x DCCA, 18 x DP16KD, 1514 x LUT4, 9 x TRELLIS_DPR16X4, 358 x TRELLIS_FF, 30 x TRELLIS_IO | 19 |
 | `inflate` | `inflate` | WINDOW_BITS=10, WRAPPER=1 | LUT4 | 57 x dff, 1691 x lut, 1 x memory 1024x8, 1 x memory 16x6, 1 x memory 16x9, 1 x memory 288x9, 1 x memory 320x4, 1 x memory 32x5, 6 x memrd, 6 x memwr | 31 |
 | `inflate` | `inflate` | WINDOW_BITS=10, WRAPPER=1 | LUT6 | 57 x dff, 1423 x lut, 1 x memory 1024x8, 1 x memory 16x6, 1 x memory 16x9, 1 x memory 288x9, 1 x memory 320x4, 1 x memory 32x5, 6 x memrd, 6 x memwr | 26 |
 | `inflate` | `inflate` | WINDOW_BITS=10, WRAPPER=1 | iCE40 HX1K | 213 x SB_CARRY, 407 x SB_DFFE, 359 x SB_DFFER, 7 x SB_DFFES, 5 x SB_DFFR, 1 x SB_GB, 30 x SB_IO, 2531 x SB_LUT4, 5 x SB_RAM40_4K | 31 |
-| `inflate` | `inflate` | WINDOW_BITS=10, WRAPPER=1 | ECP5 45F | 139 x CCU2C, 1 x DCCA, 3 x DP16KD, 1421 x LUT4, 9 x TRELLIS_DPR16X4, 376 x TRELLIS_FF, 30 x TRELLIS_IO | 19 |
+| `inflate` | `inflate` | WINDOW_BITS=10, WRAPPER=1 | ECP5 45F | 139 x CCU2C, 1 x DCCA, 3 x DP16KD, 1431 x LUT4, 9 x TRELLIS_DPR16X4, 376 x TRELLIS_FF, 30 x TRELLIS_IO | 19 |
 <!-- end footprints -->
 
 ### Seven things writing these blocks found

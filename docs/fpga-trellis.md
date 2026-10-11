@@ -1,5 +1,86 @@
 # A real Lattice ECP5, and a real `.bit`
 
+## The 4-bit block RAM mode is wrong on silicon, and the other two narrow ones are not trusted
+
+**CHECKED on a part, 12 October 2026.** With the window fixed, the
+decompressor of the section below decoded 55 of the corpus' 59 zlib cases
+on a Cynthion and failed the dynamic-Huffman ones: `80 | E_DIST` after
+between four and thirty correct bytes, and in one case 91 bytes of wrong
+output and `80 | E_ADLER`. Simulation decodes all 123 at the same
+`WINDOW_BITS`, with four different stall patterns, and `--report` says why
+the two disagree:
+
+```
+u_bridge.u_inflate.clen (320x4)      -> 1 x DP16KD in 4x4096 mode (1 wide, 1 deep)
+u_bridge.u_inflate.lsym (288x9)      -> 1 x DP16KD in 9x2048 mode (1 wide, 1 deep)
+u_bridge.u_inflate.u_win.mem (32768x8) -> 16 x DP16KD in 9x2048 mode (1 wide, 16 deep)
+```
+
+`clen` holds §3.2.7's code lengths, which only a dynamic block builds —
+every stored and fixed-Huffman case passed — and it is the one memory in
+the **4-bit** mode. 320 words of 4 bits is one block in either the 4-bit
+or the 9-bit mode, a tie, and the tie had been handed to the narrower.
+
+Two builds settle it. The same memory widened so that the tie goes to the
+9-bit mode: all three failing cases correct. The same memory pushed out of
+block RAM entirely, into 96 distributed RAMs: all three correct. The only
+thing that changed between a wrong answer and a right one is which mode
+the block was in.
+
+### What is not known, which is most of it
+
+The device file's own note had already said where its confidence ran out:
+
+> MEDIUM confidence for where the 4-, 2- and 1-bit words sit: that the
+> parity bits are skipped is Reticle's reading of how the 16 kbit modes
+> use an 18 kbit array, not something checked against a part or a
+> bitstream.
+
+That reading is now refuted, and **it is not clear which part of the line
+is wrong.** Two things rule themselves out: the data pins are the low four
+under either reading of the parity bits, so `init low 0-3 ...` cannot be
+it; and `clen` has no initial contents at all, so the init layout is not
+read by this design in the first place. What is left is the `addr 2`
+alignment and the `DATA_WIDTH_A=4` encoding itself, and neither has been
+measured. All 53 block RAMs of this board's reference bitstreams are 9- or
+18-bit, so there is no vendor example of a narrow one to read.
+
+### What was done instead
+
+A mode line may now carry `unverified`, and the ECP5's 4-, 2- and 1-bit
+lines all do: the 4-bit one because it is measured wrong, the other two
+because they come from the same reading. `Mapper::choose_bram` orders a
+verified mode ahead of an unverified one **before** it counts blocks, so a
+memory any verified mode can hold never reaches one. A wrong layout is not
+worth a block.
+
+The cost is real and is the point of
+`tests/fpga_trellis.rs::the_narrowest_memory_takes_eight_blocks_rather_than_an_unverified_mode`:
+16384 words of one bit is one block in the 1-bit mode and **eight** in the
+9-bit mode, and the flow takes the eight. Seven blocks of waste buys a
+memory that reads back.
+
+With that, `clen` is in the 9-bit mode with `ip/compress/inflate`
+untouched, and the three cases decode.
+
+### The one that moved out from under it
+
+Quarantining the 1-bit mode means no ECP5 memory reaches a one-bit block
+RAM data port any more, which is the shape the section below was written
+on. That fix's regression test is therefore on the 7 series, where the
+1-bit mode is not in question:
+`tests/fpga_xray_bram.rs::a_one_bit_wide_memorys_data_pin_reaches_the_fabric`.
+`testdata/fpga/ecp5/block_ram_1bit.v` stays, asserting the thing it can
+still assert — that the mode is refused.
+
+### What to do to get the narrow modes back
+
+Read one back off a part, the way the 9-bit mode was read back: a memory
+in the 4-bit mode behind the CDC front end, a known pattern written and
+read, and the *shape* of the difference says whether it is the address
+alignment or the width encoding. Until someone does that, the three lines
+stay marked.
+
 ## A block RAM read back 32768 bytes of `ff`, and the flow had not routed a pin
 
 **CHECKED on a part, 12 October 2026.** `testdata/fpga/cynthion/usb_inflate.v`
@@ -68,11 +149,18 @@ modes `src/fpga/devices/ecp5.dev` marks **MEDIUM confidence** —
 > use an 18 kbit array, not something checked against a part or a
 > bitstream.
 
-— to first choice for every memory that ties. The key is `(blocks, wide,
-mode_width)` now: fewest blocks, then fewest blocks per word, then
-narrowest. Both of the shapes that motivated the original change are one
-column wide, so they still get the 9-bit mode, and nothing reaches a
-narrow mode by tie any more.
+— to first choice for every memory that ties, and it changed a family it
+had no business changing: an iCE40's `SB_RAM40_4K` sterilises nothing and
+its widest mode is the one to want, which `a_small_memory_fits_one_block`
+said out loud as soon as the gate ran.
+
+The rule states the ECP5's reason now instead of a preference. A mode line
+may carry `neighbours N`, the 18-bit line carries `neighbours 1`, and
+`choose_bram` costs a mode at `blocks * (1 + neighbours)`. A 288 x 9
+memory is one block in the 9-bit mode and one block plus a sterilised
+neighbour in the 18-bit one, so it is not a tie at all any more, and the
+widest mode still wins a genuine tie as it always did. The whole key is
+`(unverified, cost, wide, widest)`.
 
 **The pin, which is the real one.** In the 1-bit mode a block's data ports
 are one bit wide, and `Netlist::build` resolved a pin role like this:
