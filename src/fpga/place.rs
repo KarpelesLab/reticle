@@ -527,7 +527,22 @@ impl Netlist {
                 for (index, bit) in bits.iter().enumerate() {
                     let index = u32::try_from(index).unwrap_or(u32::MAX);
                     let role = match &base {
-                        Some(base) if width == 1 => base.clone(),
+                        // A one-bit port's pin is usually the base with no
+                        // index at all -- a flip-flop's `d`, a block RAM's
+                        // `we` -- and the architecture is the only thing
+                        // that knows which. Asking it, rather than reading
+                        // the width, is the whole of this: a `DP16KD` in
+                        // 1-bit mode has a one-bit `DOB` whose pin is
+                        // still `p0_dout0`, so dropping the index named a
+                        // role the fabric has no wire for, the pin went to
+                        // `off_fabric`, and the net was left with nothing
+                        // driving it. See [`Netlist::driverless`] for what
+                        // that costs on a part.
+                        Some(base)
+                            if width == 1 && roles.contains(&(kind.clone(), base.clone())) =>
+                        {
+                            base.clone()
+                        }
                         Some(base) => format!("{base}{index}"),
                         None => format!("{port}{index}"),
                     };
@@ -610,6 +625,59 @@ impl Netlist {
         (0..self.signals.len())
             .filter(|s| self.signals[*s].is_routable())
             .collect()
+    }
+
+    /// The signals something reads and nothing drives, one sentence each.
+    ///
+    /// Such a signal is not [routable](Signal::is_routable), so the router
+    /// never looks at it, and `routed N of M signal(s)` counts it in the
+    /// M beside every signal nothing reads — which is why it has to be
+    /// said separately rather than inferred from that line.
+    ///
+    /// It is not harmless and it is not visible in the bitstream. An
+    /// unrouted interconnect input on an ECP5 reads as a **one** at every
+    /// sink and a 7-series one reads as a zero, so the pin takes a value
+    /// the netlist never asked for while every structural check
+    /// downstream still passes: the routing verifies, every set bit
+    /// decodes, and the arcs are exactly the arcs the router chose.
+    /// `testdata/fpga/cynthion/bram_echo.v` read `ff` for all 32768 of
+    /// its bytes on a part because of twenty of these, and the only
+    /// number that differed from a build that worked was the M.
+    pub fn driverless(&self) -> Vec<String> {
+        let mut out = Vec::new();
+        for signal in &self.signals {
+            if signal.driver.is_some() || signal.sinks.is_empty() {
+                continue;
+            }
+            // The readers, named the way a person reading Verilog would
+            // find them. One is the common case and all of them would be
+            // a wall of text, so the rest are counted.
+            let mut readers: Vec<String> = signal
+                .sinks
+                .iter()
+                .map(|sink| {
+                    let pin = &self.pins[*sink];
+                    format!(
+                        "{}.{}[{}]",
+                        self.instances[pin.instance].name, pin.port, pin.bit
+                    )
+                })
+                .collect();
+            readers.sort();
+            readers.dedup();
+            let how_many = readers.len();
+            let first = readers.first().map_or_else(String::new, Clone::clone);
+            let rest = match how_many {
+                0 | 1 => String::new(),
+                2 => " and 1 other pin".to_owned(),
+                n => format!(" and {} other pin(s)", n - 1),
+            };
+            out.push(format!(
+                "`{}` is read by {first}{rest} and nothing drives it",
+                signal.name
+            ));
+        }
+        out
     }
 }
 
@@ -4165,6 +4233,83 @@ mod tests {
         }
         let graph = arch.build_graph();
         (arch, graph)
+    }
+
+    /// `driverless` names the signals something reads and nothing drives,
+    /// and stays quiet about the two shapes that are fine: a signal with
+    /// both ends, and a signal with a driver that nothing reads.
+    ///
+    /// Built by hand rather than compiled, because the condition comes of
+    /// a pin whose role the architecture has no wire for — `build` drops
+    /// those into [`Netlist::off_fabric`] and carries on — so no source
+    /// text produces it on the generic device. `tests/fpga_trellis.rs`'s
+    /// `a_one_bit_memory_reaches_the_narrowest_mode_with_every_pin_driven`
+    /// is the end-to-end half, on the shape that really did it.
+    ///
+    /// What this would not catch: a pin that reaches the fabric on the
+    /// *wrong* wire. Both ends exist there, and nothing in this file can
+    /// tell a right wire from a wrong one.
+    #[test]
+    fn a_signal_something_reads_and_nothing_drives_is_named() {
+        let pin = |instance: usize, port: &str, bit: u32, output: bool, signal: usize| NetPin {
+            instance,
+            port: port.to_owned(),
+            bit,
+            role: port.to_owned(),
+            output,
+            signal: Some(signal),
+            constant: None,
+        };
+        let instance = |name: &str| Instance {
+            cell: CellId::from_index(0),
+            name: name.to_owned(),
+            primitive: "LUT4".to_owned(),
+            kind: "lut".to_owned(),
+            pins: Vec::new(),
+            pin: None,
+        };
+        // Three signals: one with both ends, one read by two pins and
+        // driven by none, one driven and unread.
+        let netlist = Netlist {
+            instances: vec![instance("u_drive"), instance("u_read"), instance("u_other")],
+            pins: vec![
+                pin(0, "o", 0, true, 0),
+                pin(1, "i0", 0, false, 0),
+                pin(1, "i1", 0, false, 1),
+                pin(2, "i0", 0, false, 1),
+                pin(2, "o", 0, true, 2),
+            ],
+            signals: vec![
+                Signal {
+                    name: "whole".to_owned(),
+                    driver: Some(0),
+                    sinks: vec![1],
+                },
+                Signal {
+                    name: "orphan".to_owned(),
+                    driver: None,
+                    sinks: vec![2, 3],
+                },
+                Signal {
+                    name: "unread".to_owned(),
+                    driver: Some(4),
+                    sinks: Vec::new(),
+                },
+            ],
+            off_fabric: Vec::new(),
+        };
+        let found = netlist.driverless();
+        assert_eq!(
+            found,
+            vec![
+                "`orphan` is read by u_other.i0[0] and 1 other pin and nothing drives it"
+                    .to_owned()
+            ],
+            "only the signal with sinks and no driver, naming a reader and counting the rest"
+        );
+        // And the pair that is the whole point of the distinction: a
+        // signal nothing reads is not routed either, and is not a fault.
+        assert_eq!(netlist.routable(), vec![0]);
     }
 
     /// An instance left in the module is refused by name. The netlist

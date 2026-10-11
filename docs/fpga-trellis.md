@@ -1,5 +1,121 @@
 # A real Lattice ECP5, and a real `.bit`
 
+## A block RAM read back 32768 bytes of `ff`, and the flow had not routed a pin
+
+**CHECKED on a part, 12 October 2026.** `testdata/fpga/cynthion/usb_inflate.v`
+decodes a deflate stream's first literal byte correctly on a Cynthion and
+returns `ff` for every byte that comes out of its 32768-byte sliding
+window. An unrouted input on this family reads as a **one**, so `ff` is
+exactly what a read that never arrives looks like — the subject of this
+whole document, met again.
+
+Every check this flow has passed, and the one that mattered:
+
+| asked | answered |
+|---|---|
+| does the routing implement the netlist? | yes — every sink walked back to its driver |
+| does every set bit decode? | yes — 117 422 bits, 0 unexplained, arcs exactly the arcs the router chose |
+| does the design simulate? | yes — the testbench passes |
+| `routed N of M signal(s)` | **2162 of 2202** |
+
+That last line was the only one that moved, and it was unreadable. The
+router is handed `Netlist::routable()` — the signals with **both** a
+driver and a sink — so the 40 it was not handed sat together in the M:
+signals nothing reads, which are nobody's fault, beside signals **nothing
+drives**, which are. A working build of the same design at a smaller depth
+said 2145 of 2166. Twenty against twenty-one. Nothing distinguishes them.
+
+### How it was localised
+
+Not by reading the code. By building the same Verilog at four depths and
+asking the part:
+
+| memory | blocks | on the part |
+|---|---|---|
+| 1024 x 8 | 1 | correct |
+| 4096 x 8 | 2 | correct |
+| 8192 x 8 | 4 | correct |
+| 32768 x 8 | 16 | `ff`, every byte |
+
+and the step from four blocks to sixteen is where `routed N of M` went
+from twenty short to forty. `Netlist::driverless` was written to say which
+twenty, and it named them at once:
+
+```
+error: nothing drives 16 signal(s) that something reads, so nothing was written
+  `u_echo.mem$rd0_w7_d0` is read by $lut2334.A[0] and nothing drives it
+  `u_echo.mem$rd0_w7_d1` is read by $lut2335.B[0] and nothing drives it
+  ...
+```
+
+`w7_d1`. Eight blocks **side by side** and two deep — not sixteen deep,
+one wide. The memory was in the `DP16KD`'s **1-bit** mode, one bit of each
+word per block, which is not the mode anyone had intended for it.
+
+### Two faults, and the tie-break is the shallower one
+
+**The mode.** `Mapper::choose_bram` takes the fewest blocks and breaks a
+tie. A 32768 x 8 memory ties at sixteen blocks **four ways** — the 9-, 4-,
+2- and 1-bit modes all reach it — and the tie-break had just been changed
+to prefer the *narrowest*, which picks the 1-bit one. That change was made
+for a good reason (an 18-bit block sterilises the block two columns east,
+so a 288 x 9 memory should not take the 18-bit mode when the 9-bit mode
+costs the same block) and it was too broad: it also promoted the three
+modes `src/fpga/devices/ecp5.dev` marks **MEDIUM confidence** —
+
+> MEDIUM confidence for where the 4-, 2- and 1-bit words sit: that the
+> parity bits are skipped is Reticle's reading of how the 16 kbit modes
+> use an 18 kbit array, not something checked against a part or a
+> bitstream.
+
+— to first choice for every memory that ties. The key is `(blocks, wide,
+mode_width)` now: fewest blocks, then fewest blocks per word, then
+narrowest. Both of the shapes that motivated the original change are one
+column wide, so they still get the 9-bit mode, and nothing reaches a
+narrow mode by tie any more.
+
+**The pin, which is the real one.** In the 1-bit mode a block's data ports
+are one bit wide, and `Netlist::build` resolved a pin role like this:
+
+```rust
+Some(base) if width == 1 => base.clone(),
+```
+
+A one-bit port's pin usually *is* the base with no index — a flip-flop's
+`d`, a block RAM's `we`, declared that way by the architecture. A
+`DP16KD`'s data pins are not: they are `p0_dout0 .. p0_dout17`, and there
+is no bare `p0_dout`. So the role named no wire, the pin went to
+`Netlist::off_fabric`, the net was left with no driver, and the router was
+never asked. It now asks the architecture instead of reading the width,
+which is the only thing that knows.
+
+That fault had nothing to do with the tie-break. A **16384 x 1** memory
+reaches the 1-bit mode on block count alone — one block there, two in
+every other mode — so it was reachable from ordinary Verilog the whole
+time, and it is now
+`testdata/fpga/ecp5/block_ram_1bit.v`. Reverting the one-line fix makes
+that design fail with `` `mem_q` is read by pipe$ff$ff0.DI[0] and nothing
+drives it ``, which is how we know the test catches the bug rather than
+merely passing beside it.
+
+### What is checked now, and what is not
+
+With both fixed, the 32768 x 8 memory is sixteen `DP16KD` in **9-bit**
+mode, and a part reads back what was written to it at 8, 64, 1024, 4096
+and 16384 bytes. That is the first time this flow's block RAM **contents**
+have been read back out of silicon in any mode; the two earlier block-RAM
+sections are bitstream-level.
+
+What is still unmeasured: the 4-, 2- and 1-bit layouts. `block_ram_1bit.v`
+proves the pins reach the fabric and the netlist is whole; it says nothing
+about whether a word written in 1-bit mode comes back. The device file's
+MEDIUM stands, and `choose_bram` now keeps a memory out of those modes
+unless it genuinely needs one to fit.
+
+And `check_driverless` refuses the build on both families. The 7-series
+had the same hole — an unrouted input there reads as a **zero** instead,
+which is quieter and no better.
+
 ## An adder is a carry chain now, and the chain runs east
 
 The ECP5 backend inferred no carry cell. `src/fpga/devices/ecp5.dev` named

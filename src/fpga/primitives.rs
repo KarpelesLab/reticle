@@ -1287,11 +1287,44 @@ impl Mapper<'_> {
         true
     }
 
-    /// Picks the shape and mode that uses fewest blocks, preferring the
-    /// widest mode when several tie.
+    /// Picks the shape and mode that uses fewest blocks, then the one
+    /// that spreads a word over fewest blocks, then the narrowest.
+    ///
+    /// **Fewest blocks** is the only part that is about capacity. The two
+    /// tie-breaks are both about which arrangement is the one this flow
+    /// has evidence for, and they were each written after a build went
+    /// wrong.
+    ///
+    /// **Fewest columns**, because a word split across blocks side by side
+    /// is a different thing from a word a single block holds, and the
+    /// narrow modes that split it are the ones
+    /// `src/fpga/devices/ecp5.dev` marks MEDIUM confidence -- where the
+    /// 4-, 2- and 1-bit words sit in an 18 kbit array is Reticle's reading
+    /// and has never been checked against a part. A 32768 x 8 memory ties
+    /// at sixteen blocks four ways over (9, 4, 2, 1)-bit modes, so
+    /// preferring the narrowest alone sent `bram_echo.v`'s window through
+    /// the least-trusted of them, and it read `ff` for all 32768 bytes on
+    /// a Cynthion. One block per word keeps that to the memories that
+    /// genuinely need a narrow mode to fit at all.
+    ///
+    /// **Narrowest** after that, because width is not free on this family:
+    /// an ECP5 `DP16KD` in 18-bit mode takes its top two data bits from
+    /// the interconnect column two east, which is the next block's own
+    /// column, so an 18-bit block and the block two columns east of it
+    /// cannot both be used -- `configure_bram` refuses that arrangement
+    /// and `docs/fpga-trellis.md` has the wires. A 9-bit memory 288 deep
+    /// needs one block in either mode, so the tie used to hand it the
+    /// 18-bit one and sterilise a neighbour for nothing, and
+    /// `testdata/fpga/cynthion/`'s decompressor -- five such memories
+    /// beside a 32768-byte window -- could not be placed at all. Both of
+    /// those shapes are one column wide, so this tie-break still decides
+    /// them and the one above does not interfere.
+    ///
+    /// The cost of narrow, at equal columns, is address bits, which the
+    /// block decodes itself, and nothing else.
     fn choose_bram(&self, width: u32, depth: u64) -> Option<(usize, (u32, u32), u32, u32)> {
         let mut best: Option<(usize, (u32, u32), u32, u32)> = None;
-        let mut best_key: Option<(u64, u32)> = None;
+        let mut best_key: Option<(u64, u32, u32)> = None;
         for (index, shape) in self.device.block_rams.iter().enumerate() {
             for &(mode_width, mode_depth) in &shape.width_modes {
                 if mode_width == 0 || mode_depth == 0 {
@@ -1302,9 +1335,10 @@ impl Mapper<'_> {
                     continue;
                 };
                 let blocks = u64::from(wide) * u64::from(deep);
-                // Fewest blocks wins; the widest mode breaks the tie, so a
-                // memory that fits either way keeps its addressing simple.
-                let key = (blocks, u32::MAX - mode_width);
+                // Fewest blocks, then fewest blocks per word, then the
+                // narrowest mode. See the doc comment for what each of
+                // the two tie-breaks was written for.
+                let key = (blocks, wide, mode_width);
                 if best_key.is_none_or(|b| key < b) {
                     best_key = Some(key);
                     best = Some((index, (mode_width, mode_depth), wide, deep));

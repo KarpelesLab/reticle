@@ -1,0 +1,29 @@
+# Every port of `testdata/fpga/ecp5/block_ram_1bit.v` on a top-edge ball of
+# an LFE5U-12F in caBGA-256, in the order Project Trellis' own `iodb.json`
+# lists them across the die: column ascending, PIO A before PIO B. Nothing
+# here is about a board -- no board has this design on it -- and the only
+# thing that matters about the assignment is that it is fixed, so that a
+# placement a test measures is the same on every run.
+#
+# Bank 1's rail is 3.3 V, hence LVCMOS33 throughout. `clk` is first because
+# it is the one signal that has to leave its pad through a clock buffer and
+# travel the global network, and it reaches both ports of the block RAM.
+
+set_io -io_standard LVCMOS33 clk A2
+set_io -io_standard LVCMOS33 we B3
+set_io -io_standard LVCMOS33 addr[0] A3
+set_io -io_standard LVCMOS33 addr[1] A4
+set_io -io_standard LVCMOS33 addr[2] E4
+set_io -io_standard LVCMOS33 addr[3] D4
+set_io -io_standard LVCMOS33 addr[4] C4
+set_io -io_standard LVCMOS33 addr[5] B4
+set_io -io_standard LVCMOS33 addr[6] E5
+set_io -io_standard LVCMOS33 addr[7] D5
+set_io -io_standard LVCMOS33 addr[8] C5
+set_io -io_standard LVCMOS33 addr[9] B5
+set_io -io_standard LVCMOS33 addr[10] A5
+set_io -io_standard LVCMOS33 addr[11] A6
+set_io -io_standard LVCMOS33 addr[12] E6
+set_io -io_standard LVCMOS33 addr[13] D6
+set_io -io_standard LVCMOS33 wdata C6
+set_io -io_standard LVCMOS33 rdata B6

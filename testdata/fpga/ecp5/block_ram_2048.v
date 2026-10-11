@@ -44,10 +44,18 @@
 // Both memories are 2048 words of 8 bits, which is one block each in the
 // `DP16KD`'s **9-bit** mode — 2048 words of 9 bits, the widest mode
 // `ecppack` used that needs no wire belonging to the block two columns
-// east. That is not a coincidence of sizing: a shallower memory would tie
-// on block count and the mapper breaks a tie by preferring the *widest*
-// mode, and the 18-bit mode is the one this backend refuses to place next
-// to another block.
+// east, and the only mode of the five whose contents have been read back
+// out of a part (`testdata/fpga/cynthion/bram_echo.v`, 32768 bytes over
+// sixteen blocks).
+//
+// That the depth is 2048 rather than something shallower used to matter,
+// and no longer does. `Mapper::choose_bram` broke a tie on block count by
+// preferring the *widest* mode, so a shallower memory would have taken the
+// 18-bit mode — the one this backend refuses to place next to another
+// block. It now prefers the fewest blocks per word and then the
+// *narrowest*, which picks the 9-bit mode at any depth this block can
+// hold; `choose_bram`'s own comment has what each of those two tie-breaks
+// was written for.
 //
 // The pins are on top-edge balls of an LFE5U-12F in caBGA-256, in the
 // order `iodb.json` lists them across the die. No board has this design on

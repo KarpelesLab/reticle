@@ -2559,6 +2559,46 @@ fn place_options(args: &Args) -> Result<reticle::fpga::place::PlaceOptions, Stri
     Ok(place_options)
 }
 
+/// Refuses a netlist in which something reads a signal nothing drives.
+///
+/// This is checked before placement because no later check sees it. The
+/// router is only asked for the signals that have both a driver and a
+/// sink, so a driverless one is skipped, the routing verifies, every set
+/// bit of the bitstream decodes, and the arcs are exactly the arcs the
+/// router chose — and the pin still reads a value the netlist never asked
+/// for, a **one** on an ECP5 and a zero on the 7 series. The only number
+/// that moved when `testdata/fpga/cynthion/bram_echo.v` read `ff` for all
+/// 32768 of its bytes on a part was the second one in `routed N of M
+/// signal(s)`, where it sat beside every signal nothing reads.
+///
+/// `Netlist::driverless` writes the sentences; this one decides they are
+/// fatal and keeps the list short enough to read.
+fn check_driverless(netlist: &reticle::fpga::place::Netlist) -> Result<(), String> {
+    let problems = netlist.driverless();
+    if problems.is_empty() {
+        return Ok(());
+    }
+    const SHOWN: usize = 8;
+    let more = problems.len().saturating_sub(SHOWN);
+    let tail = if more > 0 {
+        format!("; and {more} more")
+    } else {
+        String::new()
+    };
+    Err(format!(
+        "nothing drives {} signal(s) that something reads, so nothing was written \
+         (an unrouted input reads as a one on an ECP5 and a zero on the 7 series, \
+         not as the value the netlist meant): {}{tail}",
+        problems.len(),
+        problems
+            .iter()
+            .take(SHOWN)
+            .cloned()
+            .collect::<Vec<_>>()
+            .join("; ")
+    ))
+}
+
 fn write_ecp5_bitstream(
     args: &Args,
     design: &reticle::ir::Design,
@@ -2610,6 +2650,7 @@ fn write_ecp5_bitstream(
     let graph = fabric.arch.build_graph();
     laps.lap("build the graph");
     let netlist = Netlist::build(design, top, device, &graph).map_err(|e| e.to_string())?;
+    check_driverless(&netlist)?;
     laps.lap("build the netlist");
 
     let place_options = place_options(args)?;
@@ -3193,6 +3234,7 @@ fn write_xc7_bitstream(
 
     let graph = fabric.arch.build_graph();
     let netlist = Netlist::build(design, top, device, &graph).map_err(|e| e.to_string())?;
+    check_driverless(&netlist)?;
     let (placement, placement_report) = place(
         &netlist,
         &fabric.arch,

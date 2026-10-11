@@ -1377,6 +1377,100 @@ fn a_block_ram_places_routes_and_every_bit_of_it_decodes() {
     );
 }
 
+/// # A one-bit-wide memory, and the block RAM pin that had no wire
+///
+/// 16384 words of one bit is the only shape that reaches a `DP16KD`'s
+/// **1-bit** mode on block count alone: one block there and two in every
+/// other mode, so no tie-break steers it. `testdata/fpga/ecp5/block_ram_1bit.v`
+/// says at more length what that found.
+///
+/// The mode makes the block's data ports one bit wide, and `Netlist::build`
+/// used to drop the bit index from the pin role of any port one bit wide.
+/// That is right for a flip-flop's `d` and for a block RAM's `we`, which
+/// the architecture declares without an index, and wrong for `DOB`, whose
+/// pin is `p0_dout0`: the role named no wire, the pin went to
+/// `Netlist::off_fabric`, and the read data net was left with nothing
+/// driving it.
+///
+/// **No count of bits could have caught that**, and that is why the
+/// assertions here are about the netlist. The router is only handed the
+/// signals that have both a driver and a sink, so a driverless one is
+/// skipped and everything downstream still agrees with itself: the routing
+/// verifies, every set bit decodes back through the database, and the arcs
+/// are exactly the arcs the router chose. The part is the only thing that
+/// disagrees, by reading **ones** — an unrouted input on this family is
+/// tied high — which is what `testdata/fpga/cynthion/bram_echo.v` did for
+/// all 32768 of its bytes on a Cynthion, through the same fault in the
+/// same mode.
+///
+/// What this test would not catch: whether the 1-bit mode's *contents* are
+/// laid out correctly. Where the 4-, 2- and 1-bit words sit in an 18 kbit
+/// array is Reticle's reading of how the narrow modes use the parity bits,
+/// marked MEDIUM confidence in `src/fpga/devices/ecp5.dev`, and nothing
+/// here or on a part has measured it. Only the 9-bit mode has been read
+/// back out of a part — `bram_echo.v` at 32768 bytes, sixteen blocks —
+/// and `Mapper::choose_bram` prefers one block per word partly so that a
+/// tie never lands a memory in a mode this untested.
+#[test]
+#[cfg(all(feature = "verilog", feature = "synth"))]
+fn a_one_bit_memory_reaches_the_narrowest_mode_with_every_pin_driven() {
+    let Some(fabric) = open() else { return };
+    let (_bits, _stream, pads, _report, _io, routed) = compile(
+        &fabric,
+        "testdata/fpga/ecp5/block_ram_1bit.v",
+        "testdata/fpga/ecp5/block_ram_1bit.rcf",
+    );
+    assert_eq!(pads, 18, "every port of the design is on a ball");
+    // The assertion the design exists for.
+    let driverless = routed.netlist.driverless();
+    assert!(
+        driverless.is_empty(),
+        "a pin reads a signal nothing drives, which on this family reads as a one: {}",
+        driverless.join("; ")
+    );
+    // One block is what says the mode is the 1-bit one: 16384 words of one
+    // bit needs two blocks in any other.
+    let brams: Vec<usize> = routed
+        .netlist
+        .instances
+        .iter()
+        .enumerate()
+        .filter(|(_, i)| i.kind == "bram")
+        .map(|(index, _)| index)
+        .collect();
+    assert_eq!(
+        brams.len(),
+        1,
+        "`DP16KD` cells, so the mode is the 1-bit one"
+    );
+    // And the read data pin is the indexed role, carrying a signal. The
+    // bare `p0_dout` is what the old code asked for and what the fabric
+    // does not have, so its absence is half the assertion.
+    let pins: Vec<&reticle::fpga::place::NetPin> = routed.netlist.instances[brams[0]]
+        .pins
+        .iter()
+        .map(|pin| &routed.netlist.pins[*pin])
+        .collect();
+    let dout = pins
+        .iter()
+        .find(|pin| pin.role == "p0_dout0")
+        .expect("the block's port B read data pin is `p0_dout0`");
+    assert!(dout.output, "it is the block that drives it");
+    assert!(
+        dout.signal.is_some(),
+        "and it carries the memory's read data rather than a constant"
+    );
+    assert!(
+        !pins.iter().any(|pin| pin.role == "p0_dout"),
+        "no pin asks for a role the fabric has no wire for"
+    );
+    assert!(
+        routed.overlaps.is_empty(),
+        "block RAMs that cannot both be used: {:?}",
+        routed.overlaps
+    );
+}
+
 /// `ip/memory/fifo_sync` on a part, at three depths, which is the thing a
 /// distributed RAM was needed for.
 ///
