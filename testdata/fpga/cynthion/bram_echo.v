@@ -44,7 +44,8 @@
 // and a write in the same cycle at the same address, which is the window's
 // other hard case and wants its own test -- and nothing at all about the
 // 4-, 2- and 1-bit modes' *contents*, which no test and no part has
-// measured.
+// measured. The same-cycle, same-address case named above now has its own
+// design, `bram_rw.v`, and the answer off the part is read-before-write.
 
 module bram_echo #(
     parameter integer ADDR_BITS = 15

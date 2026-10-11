@@ -51,24 +51,58 @@
 // between them. A mode byte in the framing would fix it and has not been
 // written.
 //
-// **OPEN: four cases are wrong, and all four are dynamic-Huffman streams
-// that follow a refused one.** `text1_100`, `text1_1000`, `text5_1000`
-// and `text1_4000` at zlib are each immediately preceded in corpus order
-// by a raw-deflate case this build refuses, and each of the four decodes
-// **correctly when run on its own**. What comes back is plausible text
-// with wrong matches in it -- `awaway tht cg` for `away dog and la` --
-// followed by `85`, `80 | E_DIST`: the literals are right and the
-// length/distance pairs are not.
+// **OPEN, and the rule is about history, not about refusals.** Four of
+// the 59 zlib cases are wrong -- `text1_100`, `text1_1000`, `text5_1000`
+// and `text1_4000`, all dynamic-Huffman -- and what decides it is:
 //
-// Simulation does not reproduce it.
-// `tests/ip_library.rs::inflate_rearms_after_a_refusal_for_a_dynamic_huffman_stream`
-// runs exactly that pairing three times over on the same instance and
-// passes, and `usb_inflate_tb.v` follows each of its own refusals with a
-// stream that decodes. So this is the third hardware-only divergence in
-// this design, and the untested thing nearest to it is named in
-// `bram_echo.v`'s header: a block RAM read and written in the same cycle
-// at the same address, which is what building a Huffman table does and
-// what no test here has ever measured on silicon.
+//     a dynamic-Huffman stream decodes correctly only if this decoder has
+//     not already decoded a DIFFERENT stream since configuration.
+//
+// Measured one row at a time, reconfiguring the part before each row,
+// because one failure wedges it and every row after then reads the same:
+//
+//     before the dynamic stream          result
+//     -------------------------------    ------------------------
+//     nothing at all                     correct
+//     the same dynamic stream            correct
+//     a refusal only                     correct
+//     a stored-block stream              4 bytes, then status C0
+//     a fixed-Huffman stream             4 bytes, then status C0
+//     a different dynamic stream         4 bytes, then status C0
+//
+// **The reading before this one was wrong and is worth leaving here.** It
+// said "a dynamic stream that follows a refused one", because all four
+// failures sit immediately after a raw-deflate case in corpus order and
+// each one decodes correctly on its own. A refusal is harmless; what the
+// corpus order hid is that every one of those cases also followed a
+// successful decode. Running the rows against a part that had already run
+// other rows is what made a correlation look like a cause -- the same
+// contamination that made the first eight rows of the first attempt
+// identical.
+//
+// Three things have been eliminated, two by test and one by measurement:
+//
+//   * `inflate.v`'s own state. `tests/ip_library.rs`'s
+//     `inflate_rearms_after_a_refusal_for_a_dynamic_huffman_stream` and
+//     `inflate_takes_the_corpus_in_order_with_the_deflate_cases_refused`
+//     run the pairing three times over and then all 123 cases in corpus
+//     order through one `WRAPPER=1` instance, refusals included. Both
+//     pass, so the decoder re-arms correctly and this is a hardware-only
+//     divergence.
+//   * the window. `bram_echo.v` reads 32768 bytes back off the part.
+//   * a block RAM read in the cycle its own address is written, which is
+//     what a counting sort does and what `bram_echo.v`'s header named as
+//     the nearest untested thing. `bram_rw.v` measures it: the part reads
+//     **before** the write, which is what the Verilog and
+//     `WRITEMODE_A/B = READBEFOREWRITE` both say. Not the fault.
+//
+// So what remains is state that survives a stream and differs between the
+// part and the simulator, in something other than the window -- the three
+// small Huffman structures are the candidates, two of them distributed
+// RAM. The next step is instrumentation on the part rather than more
+// reasoning: that is what found all three of this backend's earlier
+// hardware-only faults, and `testdata/fpga/cynthion/` already holds the
+// serial console and trace buffer for it.
 //
 // ===================================================================
 // THE FRAMING, AND WHY THERE IS ANY

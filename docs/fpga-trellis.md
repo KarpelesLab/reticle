@@ -1,5 +1,80 @@
 # A real Lattice ECP5, and a real `.bit`
 
+## A dynamic-Huffman stream decodes once, and a correlation looked like a cause
+
+**CHECKED on a part, 12 October 2026. OPEN.** With the window routed and
+the 4-bit mode quarantined, 55 of the corpus' 59 zlib cases decode on a
+Cynthion. The four that do not are all dynamic-Huffman, and the rule that
+decides them is not the one this document first recorded:
+
+> a dynamic-Huffman stream decodes correctly only if this decoder has not
+> already decoded a **different** stream since configuration.
+
+| before the dynamic stream | result |
+|---|---|
+| nothing at all | correct |
+| the same dynamic stream | correct |
+| a refusal only | correct |
+| a stored-block stream | 4 bytes, then status `C0` |
+| a fixed-Huffman stream | 4 bytes, then status `C0` |
+| a different dynamic stream | 4 bytes, then status `C0` |
+
+### The wrong reading, and why it was wrong
+
+The first version of this said *"a dynamic stream that follows a refused
+one"*, and it is worth leaving here because of how it was produced. All
+four failures sit immediately after a raw-deflate case in corpus order —
+the cases this `WRAPPER=1` build refuses — and each decodes correctly when
+run on its own. That is a real correlation and it is not the cause: a
+refusal on its own is harmless. What the corpus order hid is that each of
+those cases also followed a *successful* decode.
+
+Two rounds of contamination made it look solid. The first attempt at a
+table like the one above ran every row against one configuration, and the
+third row wedged the part, so rows four to eight all read `C0` and agreed
+with whatever was being proposed. **One failure wedges this design until
+it is reconfigured**, which is a fact about the bridge worth having on its
+own, and it means a row is only evidence if the part was loaded fresh for
+it. Reconfiguring before each row is what produced the table.
+
+### What has been eliminated
+
+- **`inflate.v`'s own state**, by two tests that run the sequences a part
+  runs: a refusal followed by a dynamic stream, three times over on one
+  instance, and all 123 cases in corpus order through a single
+  `WRAPPER=1` instance with `E_HEADER` asserted for each of the 64
+  deflate ones. Both pass, so the decoder re-arms and this is a
+  hardware-only divergence.
+- **The window**, by `testdata/fpga/cynthion/bram_echo.v`: 32768 bytes
+  written and read back over sixteen blocks.
+- **A block RAM read in the cycle its own address is written**, which is
+  what a counting sort does and what `bram_echo.v`'s header named as the
+  nearest untested thing. `testdata/fpga/cynthion/bram_rw.v` measures it
+  and the answer is **read-before-write**, as the Verilog and
+  `WRITEMODE_A/B = READBEFOREWRITE` both say. This flow had never read
+  that behaviour off a part before; it is not the fault.
+
+That last one also cost a false positive worth recording. Its first
+measurement came back as the *new* data for fifteen of sixteen bytes and
+the old data for the first, which reads exactly like a block that writes
+before it reads. It was the design's own output register: `rd_q <=
+mem[addr]` unconditionally keeps re-reading while the host has not yet
+taken the byte, and by then the write has landed. Byte 0 was taken at once
+and so was right. **The shape of the number gave it away** — one byte
+behaving differently from fifteen is a handshake, not a memory — which is
+the third time on this backend that a suspected hardware fault has turned
+out to be the harness.
+
+### What is left
+
+State that survives a stream, differs between the part and the simulator,
+and is not the window. The three small Huffman structures are the
+candidates — `clen` and `lsym` in block RAM, `dsym`, `lcnt` and `dcnt` in
+distributed RAM. The next step is instrumentation on the part rather than
+more reasoning: that is what found all three of this backend's earlier
+hardware-only faults, and `testdata/fpga/cynthion/` already holds the
+serial console and the trace buffer for it.
+
 ## The 4-bit block RAM mode is wrong on silicon, and the other two narrow ones are not trusted
 
 **CHECKED on a part, 12 October 2026.** With the window fixed, the
