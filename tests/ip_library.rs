@@ -23605,6 +23605,81 @@ fn inflate_decompresses_the_compcol_corpus() {
 /// side; and the one arm of the distance check no stream can reach,
 /// which `inflate_window_refuses_a_distance_it_does_not_hold` drives
 /// directly.
+/// The whole corpus in corpus order, through **one** zlib instance, with
+/// the raw-deflate cases refused as they go.
+///
+/// This is the sequence a part sees and the one no other test here builds.
+/// `inflate_decompresses_the_compcol_corpus` sends the zlib cases to a
+/// `WRAPPER=1` instance and the deflate cases to a `WRAPPER=0` one, so
+/// each instance only ever sees streams it accepts, and the zlib cases run
+/// back to back with nothing refused between them.
+/// `testdata/fpga/cynthion/usb_inflate.v` builds **one** decoder with
+/// `WRAPPER=1`, so on the Cynthion the order is: decode, refuse, decode,
+/// refuse — and four of the 59 zlib cases came back wrong there, each of
+/// them immediately after a refusal, each correct when run on its own.
+///
+/// So the question this asks is whether a refused stream leaves something
+/// behind that the *next* stream reads, with every case's history exactly
+/// as the part had it. A refusal is cheap to simulate — it ends at the
+/// header — so running all 123 in order costs little more than the 59.
+///
+/// What this would not catch: anything the fabric does and the simulator
+/// does not, which is the other possibility for those four cases and the
+/// one `docs/fpga-trellis.md` names. If this passes, the fault is not in
+/// `inflate.v`'s state.
+#[test]
+fn inflate_takes_the_corpus_in_order_with_the_deflate_cases_refused() {
+    let design = inflate_design(15, 1);
+    let mut sim = simulate(&design, "inflate (zlib)");
+    let bench = InflateBench::attach(&mut sim);
+
+    let mut decoded = 0usize;
+    let mut refused = 0usize;
+    for case in corpus() {
+        if case.tier != "fast" {
+            continue;
+        }
+        let limit = inflate_limit(case.stream.len(), case.len);
+        let run = bench.run(&mut sim, &case.stream, Sink::Greedy, limit);
+        if case.wrapper == "zlib" {
+            let plain = plaintext(&case.rule, case.len);
+            assert_eq!(
+                run.error,
+                None,
+                "{}: reported {:?} after {} of {} bytes, in corpus order",
+                case.name,
+                run.error,
+                run.out.len(),
+                case.len
+            );
+            assert!(run.done, "{}: never finished", case.name);
+            assert_eq!(
+                run.out,
+                plain,
+                "{}: {} bytes out, {} expected",
+                case.name,
+                run.out.len(),
+                plain.len()
+            );
+            decoded += 1;
+        } else {
+            // A raw deflate stream has no zlib header, so this build must
+            // refuse it — and the code says so rather than just "some
+            // error", because a refusal for the wrong reason would leave
+            // the decoder in a different place.
+            assert_eq!(
+                run.error,
+                Some(1),
+                "{}: a stream with no zlib header should be E_HEADER, not {:?}",
+                case.name,
+                run.error
+            );
+            refused += 1;
+        }
+    }
+    assert_eq!((decoded, refused), (59, 64), "the corpus this ran");
+}
+
 /// A refused stream must leave nothing behind, and a dynamic-Huffman
 /// stream after one must still decode.
 ///
