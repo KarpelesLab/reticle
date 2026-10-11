@@ -34,6 +34,9 @@
 //       with `?` — because only `?` reports status now; see below.
 //   <   press the far side's LEFT button for `2**PRESS_BITS` clocks
 //   >   the same for its RIGHT button
+//   [ ] push the LEFT button and hold it; release it
+//   { } the same for the RIGHT button. Both can be down at once, and `D`
+//       releases both.
 //
 // **These letters were moved, and `s d a q r L R` are what they were.**
 // Sharing a port with `iso7816_terminal.v` means sharing an alphabet, and
@@ -292,34 +295,60 @@ module ssd1306_console #(
 
     // ---- The two button lines ----
     //
-    // A timed press rather than a toggle: the host asks once and the
-    // hardware holds the line for `2**PRESS_BITS` clocks, so a busy host
-    // cannot accidentally leave a button down or release it too soon for
-    // the far side's debounce to see it.
+    // A timed press, and a held one.
+    //
+    // `<` and `>` are timed: the host asks once and the hardware holds the
+    // line for `PRESS_COUNT` clocks, so a busy host cannot leave a button
+    // down or release it too soon for the far side's debounce to see it.
+    //
+    // `[` `]` and `{` `}` push and release the left and right buttons and
+    // leave the timing to the host, which is what a long press and both
+    // buttons at once need -- a Ledger confirms with both. A release ends a
+    // timed press too, so `]` always means "the left button is up". `D`
+    // releases both: it powers the far side down, and a button held into an
+    // unpowered device would drive it through its input. (`D` inside a `:`
+    // run is a hex digit, but `iso_display.v` keeps a run off this half.)
     localparam [PRESS_BITS:0] PRESS_LOAD = PRESS_COUNT;
     reg [PRESS_BITS:0] left_hold  = {(PRESS_BITS + 1){1'b0}};
     reg [PRESS_BITS:0] right_hold = {(PRESS_BITS + 1){1'b0}};
+    reg                left_down  = 1'b0;
+    reg                right_down = 1'b0;
+
+    wire release_all = cmd_valid && cmd_data == 8'h44;            // 'D'
+    wire left_up     = release_all || (cmd_valid && cmd_data == 8'h5D);  // ']'
+    wire right_up    = release_all || (cmd_valid && cmd_data == 8'h7D);  // '}'
 
     always @(posedge clk) begin
         if (!rst_n) begin
             left_hold  <= {(PRESS_BITS + 1){1'b0}};
             right_hold <= {(PRESS_BITS + 1){1'b0}};
+            left_down  <= 1'b0;
+            right_down <= 1'b0;
         end else begin
-            if (cmd_valid && cmd_data == 8'h3C)        // '<'
+            if (left_up)
+                left_hold <= {(PRESS_BITS + 1){1'b0}};
+            else if (cmd_valid && cmd_data == 8'h3C)   // '<'
                 left_hold <= PRESS_LOAD;
             else if (left_hold != 0)
                 left_hold <= left_hold - 1'b1;
 
-            if (cmd_valid && cmd_data == 8'h3E)        // '>'
+            if (right_up)
+                right_hold <= {(PRESS_BITS + 1){1'b0}};
+            else if (cmd_valid && cmd_data == 8'h3E)   // '>'
                 right_hold <= PRESS_LOAD;
             else if (right_hold != 0)
                 right_hold <= right_hold - 1'b1;
+
+            if (left_up)                                   left_down  <= 1'b0;
+            else if (cmd_valid && cmd_data == 8'h5B)       left_down  <= 1'b1;  // '['
+            if (right_up)                                  right_down <= 1'b0;
+            else if (cmd_valid && cmd_data == 8'h7B)       right_down <= 1'b1;  // '{'
         end
     end
 
     // Asked for here, released or driven one ball up.
-    assign press_left  = (left_hold  != 0);
-    assign press_right = (right_hold != 0);
+    assign press_left  = left_down  || (left_hold  != 0);
+    assign press_right = right_down || (right_hold != 0);
 
     wire [7:0] flags = {display_on, inverse, all_on, charge_pump,
                         seg_remap, com_reverse, dumping, 1'b1};

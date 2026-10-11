@@ -765,6 +765,39 @@ module iso_display_tb;
         end
         expect_silence("a button press is not announced");
 
+        // Held presses: down until released, both at once, each released on
+        // its own. Four timed presses' worth of waiting is what tells a held
+        // press from a timed one -- a `[` that only started a timed press
+        // would have let go by then.
+        host_send(8'h5B);               // '['
+        repeat (4 << PRESS_BITS) @(posedge clk);
+        if (press_left !== 1'b1 || press_right !== 1'b0) begin
+            $display("FAIL: `[` did not hold the left button alone (left %b, right %b)",
+                     press_left, press_right); $finish;
+        end
+        host_send(8'h7B);               // '{'
+        repeat (4 << PRESS_BITS) @(posedge clk);
+        if (press_left !== 1'b1 || press_right !== 1'b1) begin
+            $display("FAIL: `[` then `{` did not hold both buttons (left %b, right %b)",
+                     press_left, press_right); $finish;
+        end
+        host_send(8'h5D);               // ']'
+        if (press_left !== 1'b0 || press_right !== 1'b1) begin
+            $display("FAIL: `]` should release only the left button (left %b, right %b)",
+                     press_left, press_right); $finish;
+        end
+        host_send(8'h7D);               // '}'
+        if (press_right !== 1'b0) begin
+            $display("FAIL: `}` did not release the right button"); $finish;
+        end
+        // A release ends a timed press as well.
+        host_send(8'h3C);               // '<'
+        host_send(8'h5D);               // ']'
+        if (press_left !== 1'b0) begin
+            $display("FAIL: `]` did not end a timed `<` press"); $finish;
+        end
+        expect_silence("held presses are not announced");
+
         // =============================================================
         // 7. PPS, the rate change, and the card at 2 Mbaud
         // =============================================================
@@ -818,7 +851,15 @@ module iso_display_tb;
         // 8. Deactivation, in order
         // =============================================================
 
+        // Both held into `D`, which must let them go: it powers the device
+        // down, and a held button would drive an unpowered input.
+        host_send(8'h5B);                      // '['
+        host_send(8'h7B);                      // '{'
         host_send(8'h44);                      // 'D'
+        if (press_left !== 1'b0 || press_right !== 1'b0) begin
+            $display("FAIL: `D` left a button held (left %b, right %b)",
+                     press_left, press_right); $finish;
+        end
         // Reset must drop before power does. Bounded in clocks — powering
         // down settles for 2**VCC_BITS of them, 64 here — and each way of
         // failing says which it was.
@@ -887,7 +928,7 @@ module iso_display_tb;
             end
         end
 
-        $display("PASS: one serial port carried both halves — the card activated in order, the real 14-byte ATR received as one line, four bytes sent to the card and read back off the wire by the monitor, a %0dx%0d frame driven bit by bit into the SPI pins and dumped whole while the card was talking into the same port, both status lines answered by their own half and by neither other, both buttons pressed and released, PPS echoed and the rate changed, a byte each way at F/D=%0d, deactivation dropped reset and the clock before power, and a burst of k s ? k s ? g sent without waiting answered in full",
+        $display("PASS: one serial port carried both halves — the card activated in order, the real 14-byte ATR received as one line, four bytes sent to the card and read back off the wire by the monitor, a %0dx%0d frame driven bit by bit into the SPI pins and dumped whole while the card was talking into the same port, both status lines answered by their own half and by neither other, both buttons pressed and released, held, held together and released one at a time, and released by `D`, PPS echoed and the rate changed, a byte each way at F/D=%0d, deactivation dropped reset and the clock before power, and a burst of k s ? k s ? g sent without waiting answered in full",
                  COLUMNS, PAGES, FAST_ETU_CYCLES);
         $finish;
     end

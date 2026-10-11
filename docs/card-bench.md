@@ -97,7 +97,11 @@ F                 switch to the fast rate -- only after checking the echo
 :<hex>            send those bytes to the card
 W                 become the SE's MCU: `ip/bus/seph_mcu` sends SESSION_START and
                   answers every SE turn from then on (tickers, status, BLE command
-                  completes, buttons from `<` and `>`); only after `F`
+                  completes); only after `F`. A Nano X's buttons are its own
+                  lines, not SEPROXYHAL events -- see below
+<  >              press the LEFT / RIGHT button for 100 ms
+[  ]              push the LEFT button and hold it / release it
+{  }              the same for the RIGHT button; `D` releases both
 D                 deactivate: reset, clock, line, then power, in that order
 s                 card status, 32 hex characters
 ?  g              display status; dump the frame buffer as hex
@@ -194,6 +198,14 @@ read back with `g`. `<` and `>` move the PIN cursor left and right: each
 press is 100 ms on the button line, JC2 driven high for left and JC1 driven
 low for right, which is the opposite pairing to what the constraints said
 until both lines were read back idle and a press was watched on the screen.
+
+**Held presses, 11 October 2026.** `[` `]` `{` `}` hold and release each
+button for as long as the host likes, both at once included, with the lines'
+levels read back through `s` at every step. Held 1.5 s, neither button moved
+the cursor until it was released -- the device acts on the release -- and
+`[{` then `]}` entered a digit: the first PIN dot filled and the delete glyph
+appeared. `D` releases anything still held, because it powers the device
+down and a held line would drive an unpowered input.
 
 
 Activation in the mandated order; a real card's 14-byte ATR

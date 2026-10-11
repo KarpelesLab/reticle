@@ -91,6 +91,9 @@
 //              ask with `?`.
 //   <          press the far side's LEFT button for 2**PRESS_BITS clocks
 //   >          the same for its RIGHT button
+//   [  ]       push the LEFT button and hold it; release it
+//   {  }       the same for the RIGHT button: a long press, or both at
+//              once, timed by the host. `D` releases both.
 //
 // **The alphabet rule.** No display command is a hexadecimal digit and none
 // is an ISO command. The first half of that is what makes a `:` run safe:
