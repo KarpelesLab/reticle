@@ -53,6 +53,20 @@ it. Reconfiguring before each row is what produced the table.
   and the answer is **read-before-write**, as the Verilog and
   `WRITEMODE_A/B = READBEFOREWRITE` both say. This flow had never read
   that behaviour off a part before; it is not the fault.
+- **A distributed RAM read and written at one address in one cycle, with
+  the read feeding the write.** This is the sharper version, and it is
+  what `inflate`'s count file literally does: `lcnt[cnt_addr]` is a
+  *combinational* read and `lcnt[cnt_addr] <= cnt_rd + 1` is a write of
+  the same address in the same cycle. The reason to care is what sits
+  downstream — **`lsym` is never cleared between streams.** The decoder
+  only indexes the slots the counts say were filled this time, so stale
+  entries are unreachable *if the counts are right*; a count wrong by
+  anything reads a symbol the previous stream left, which is invisible
+  while `lsym` is still all zeros and wrong the moment a different stream
+  has written it. That is the observed rule exactly.
+  `testdata/fpga/cynthion/lutram_rw.v` measures it on two
+  `TRELLIS_DPR16X4`, the same primitive and the same sixteen-word depth,
+  and the answer is read, add, write — as modelled. Not the fault either.
 
 That last one also cost a false positive worth recording. Its first
 measurement came back as the *new* data for fifteen of sixteen bytes and
@@ -67,13 +81,24 @@ out to be the harness.
 
 ### What is left
 
-State that survives a stream, differs between the part and the simulator,
-and is not the window. The three small Huffman structures are the
-candidates — `clen` and `lsym` in block RAM, `dsym`, `lcnt` and `dcnt` in
-distributed RAM. The next step is instrumentation on the part rather than
-more reasoning: that is what found all three of this backend's earlier
-hardware-only faults, and `testdata/fpga/cynthion/` already holds the
-serial console and the trace buffer for it.
+Something the first decode leaves behind that differs between the part and
+the simulator while that decode's own output is correct. Both start from
+the same state — a configured part's memories and registers are at the
+values the bitstream set, and the simulator's at the same zeros — which is
+why the first stream is right on both, and the four mechanisms above are
+now measured to agree, so the difference is somewhere narrower than any of
+them.
+
+The next step is instrumentation rather than more reasoning, and the
+reasoning above is why: each of these four rounds cost a build and a load
+to eliminate one candidate, and the candidate list is no longer short
+enough for that to pay. What is wanted is the decoder's own state at the
+moment the second stream stalls — the counts it computed, and the index it
+took into `lsym` — which means a trace buffer in the fabric and a console
+to read it out. `testdata/fpga/cynthion/` already holds both, from the
+eight rounds that found the register this backend brought up wrong; that
+is the shape of thing that found all three of this backend's earlier
+hardware-only faults, and none of them was found by reading.
 
 ## The 4-bit block RAM mode is wrong on silicon, and the other two narrow ones are not trusted
 

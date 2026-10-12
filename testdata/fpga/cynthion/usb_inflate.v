@@ -95,14 +95,27 @@
 //     the nearest untested thing. `bram_rw.v` measures it: the part reads
 //     **before** the write, which is what the Verilog and
 //     `WRITEMODE_A/B = READBEFOREWRITE` both say. Not the fault.
+//   * a distributed RAM read and written at one address in one cycle with
+//     the read feeding the write, which is what this block's count file
+//     literally does -- `lcnt[cnt_addr]` is combinational and
+//     `lcnt[cnt_addr] <= cnt_rd + 1` writes the same address in the same
+//     cycle. It matters because **`lsym` is never cleared between
+//     streams**: the decoder only indexes slots the counts say were filled
+//     this time, so a count wrong by anything reads a symbol the previous
+//     stream left -- invisible while `lsym` is all zeros, wrong once a
+//     different stream has written it, which is this rule exactly.
+//     `lutram_rw.v` measures it on the same primitive at the same depth:
+//     read, add, write, as modelled. Not the fault either.
 //
-// So what remains is state that survives a stream and differs between the
-// part and the simulator, in something other than the window -- the three
-// small Huffman structures are the candidates, two of them distributed
-// RAM. The next step is instrumentation on the part rather than more
-// reasoning: that is what found all three of this backend's earlier
-// hardware-only faults, and `testdata/fpga/cynthion/` already holds the
-// serial console and trace buffer for it.
+// So what remains is something the first decode leaves behind that differs
+// between the part and the simulator while its own output is correct. The
+// next step is instrumentation rather than more reasoning: four rounds have
+// each cost a build and a load to eliminate one candidate, and what is
+// wanted now is the decoder's own state at the moment the second stream
+// stalls -- the counts it computed and the index it took into `lsym`.
+// `testdata/fpga/cynthion/` already holds the serial console and the trace
+// buffer that found this backend's earlier hardware-only faults, none of
+// which was found by reading.
 //
 // ===================================================================
 // THE FRAMING, AND WHY THERE IS ANY
