@@ -51,7 +51,8 @@
 // policy: SESSION_START, then 182 tickers and 18 status events over
 // 20 s, every one answered with a status, and the SE drew its PIN screen.
 // The BLE answers are from the capture, not from that run: that SE sent no
-// BLE command.
+// BLE command. `seph_mcu_replay_tb.v` replays the capture's configuration
+// and checks all fifteen answers byte for byte.
 //
 // ===================================================================
 // WHAT IS A PARAMETER, AND WHY
@@ -142,6 +143,10 @@ module seph_mcu #(
     reg [15:0] rlen   = 16'd0;
     reg [7:0]  p0     = 8'd0;
     reg [7:0]  p1     = 8'd0;
+    // ACI_GATT_ADD_CHAR's Char_Properties, byte 23 of a BLE_SEND's payload
+    // (opcode 2, service handle 2, UUID type 1, UUID 16, value length 2).
+    reg [7:0]  p23    = 8'd0;
+    reg [7:0]  ble_props = 8'd0;
     reg [15:0] rpos   = 16'd0;
 
     // A packet has just ended, with these: the tag, its length and the
@@ -151,6 +156,7 @@ module seph_mcu #(
     wire       done      = active && (end_empty || end_body);
     wire [7:0] d_p0      = (end_body && rpos == 16'd0) ? rx_data : p0;
     wire [7:0] d_p1      = (end_body && rpos == 16'd1) ? rx_data : p1;
+    wire [7:0] d_p23     = (end_body && rpos == 16'd23) ? rx_data : p23;
     wire [15:0] d_len    = end_empty ? 16'd0 : rlen;
 
     // ---- Sending ----
@@ -313,6 +319,7 @@ module seph_mcu #(
                     default: begin
                         if (rpos == 16'd0) p0 <= rx_data;
                         if (rpos == 16'd1) p1 <= rx_data;
+                        if (rpos == 16'd23) p23 <= rx_data;
                         rpos  <= rpos + 16'd1;
                         rleft <= rleft - 16'd1;
                         if (rleft == 16'd1) rstate <= R_TAG;
@@ -331,6 +338,7 @@ module seph_mcu #(
                     8'h38: if (d_len >= 16'd2) begin
                                want_ble <= 1'b1;
                                ble_op   <= {d_p0, d_p1};
+                               ble_props <= d_p23;
                            end
                     default: ;
                 endcase
@@ -354,7 +362,15 @@ module seph_mcu #(
                     kind     <= K_BLE;
                     bop      <= ble_op;
                     bhandle  <= char_handle;
-                    if (ble_op == 16'hfd04) char_handle <= char_handle + 8'd2;
+                    // A characteristic takes a declaration and a value
+                    // handle, and a third for its client configuration
+                    // descriptor if it can notify or indicate (0x10, 0x20).
+                    // The capture's three came back 0d, 10, 12 for
+                    // properties 10, 08, 04; adding 2 every time gave 0f
+                    // and 11, which an SE would have used for the wrong
+                    // attributes.
+                    if (ble_op == 16'hfd04)
+                        char_handle <= char_handle + ((ble_props & 8'h30) != 8'd0 ? 8'd3 : 8'd2);
                     last     <= 7'd9 + {3'd0, ble_ret_len(ble_op)};
                 end else if (go_status) begin
                     want_status <= 1'b0;

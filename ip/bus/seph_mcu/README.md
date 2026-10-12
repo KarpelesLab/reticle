@@ -27,7 +27,9 @@ each turn, the block sends the first of these that is due:
    for each command's completion; answering success accepts the
    configuration without a radio. The return parameters a real MCU sent
    for `aci_gap_init` (`fc8a`), `aci_gatt_add_service` (`fd02`) and
-   `aci_gatt_add_char` (`fd04`) are reproduced.
+   `aci_gatt_add_char` (`fd04`) are reproduced. A characteristic's handle
+   advances by two, or by three if its properties include notify or
+   indicate (`0x30`), as the real radio's did.
 2. **STATUS_EVENT** (`0x15`), the `STATUS` parameter verbatim, for a
    REQUEST_STATUS (`0x52`).
 3. **BUTTON_PUSH_EVENT** (`0x05`) when `buttons` differs from what was
@@ -38,6 +40,12 @@ each turn, the block sends the first of these that is due:
 
 If nothing is due the turn waits. Every other SE command — USB
 configuration, MCU lock, MORE_TIME — is counted and needs no answer.
+
+**USB needs no answer because no host is plugged in.** In the capture the
+SE's USB_CONFIG `connect` was followed by the MCU's USB_EVENT `reset`, and
+then by enumeration, only because a host was attached and reset the bus.
+With no host, a real MCU sees no reset and reports none. What an SE does
+while it waits for one is not measured here.
 
 ## 2. Parameters
 
@@ -74,9 +82,15 @@ the router, not here: see `docs/card-bench.md`.)
 
 **QUOTED, not measured:**
 
-- the BLE answers — from a capture of a real Nano X's MCU
-  (`visgrok`, `capture-20261009-125946.seph.log`); the SE 2.5.1 above
-  sent no BLE command;
+- the BLE and USB configuration — answered byte for byte as a real Nano
+  X's MCU answered them in a capture (`visgrok`,
+  `capture-20261009-125946.seph.log`, SE 2.6.0), which
+  `rtl/seph_mcu_replay_tb.v` replays. No SE has sent either to this block:
+  an SE 2.5.1 at its PIN screen sent neither BLE_SEND nor USB_CONFIG in
+  60 s, where the SE 2.6.0 of the capture configured both 2 s after
+  booting. Whether 2.5.1 waits for the PIN, or for something in
+  SESSION_START (its features word is `08000303`, the capture's
+  `08002303`), is not known;
 - `BUTTON_SHIFT = 1` — Ledger's SDK reads the button byte as `byte >> 1`.
   **A Nano X does not use BUTTON_PUSH_EVENT at all**: its MCU sends none in
   the 44 143 packets of the capture, a PIN entered during it, because the
@@ -95,3 +109,10 @@ timestamps, the status packet, two BLE replies byte for byte against the
 capture, a button press and release, and the counters. It is one boot, not
 the protocol: an SE that wants something the script does not ask for is
 not covered.
+
+`rtl/seph_mcu_replay_tb.v` replays a real configuration from the capture:
+every packet the SE sent from SESSION_START until its fifteenth BLE command
+was answered, USB_CONFIG included, and each BLE answer must equal the real
+MCU's byte for byte. It caught the characteristic handles, which the block
+counted two at a time and so answered `0d 0f 11` where the radio had said
+`0d 10 12`.

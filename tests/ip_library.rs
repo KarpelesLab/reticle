@@ -4982,6 +4982,34 @@ fn seph_mcu_runs_a_session_with_a_model_se() {
     );
 }
 
+/// `seph_mcu` against a real secure element's radio and USB configuration,
+/// replayed from a capture of a real Nano X: fifteen BLE commands, each
+/// answer byte for byte the real MCU's, with the SE's USB_CONFIG packets in
+/// the turns where it sent them. It fails on the characteristic handles the
+/// block used to count two at a time (0d, 0f, 11 where the radio said 0d,
+/// 10, 12). It would not catch anything after configuration.
+#[test]
+fn seph_mcu_answers_a_real_configuration_as_the_real_mcu_did() {
+    let design = testbench_design("seph_mcu", "rtl/seph_mcu_replay_tb.v", "seph_mcu_replay_tb");
+    let mut sim = simulate(&design, "seph_mcu_replay_tb");
+    sim.run();
+    let printed = sim.output().to_owned();
+    let messages: Vec<String> = sim.messages().iter().map(|d| d.message.clone()).collect();
+    assert!(
+        messages.is_empty(),
+        "the simulator complained:\n  {}\noutput:\n{printed}",
+        messages.join("\n  ")
+    );
+    assert!(
+        sim.finished(),
+        "the testbench did not reach $finish:\n{printed}"
+    );
+    assert!(
+        printed.starts_with("PASS:"),
+        "the replayed configuration did not pass:\n{printed}"
+    );
+}
+
 /// One command for the I²C master: what to put on the bus and what the
 /// slave model should do about it.
 struct I2cCommand {
