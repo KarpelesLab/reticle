@@ -1,34 +1,36 @@
 // A 16384 x 1 memory: the narrowest, deepest shape this flow has to map,
 // and the one that says which `DP16KD` mode it is willing to use.
 //
-// **It takes eight blocks, and that is the point.** 16384 words of one bit
-// is one block in the `DP16KD`'s 1-bit mode and eight in its 9-bit mode,
-// and `Mapper::choose_bram` takes the eight. The 1-bit mode is marked
-// `unverified` in `src/fpga/devices/ecp5.dev`: where the 4-, 2- and 1-bit
-// words sit in an 18 kbit array is a reading nothing has measured, and the
-// 4-bit mode beside it is measured **wrong** -- `ip/compress/inflate`'s
-// 320 x 4 code-length memory decoded dynamic-Huffman streams into
-// `80 | E_DIST` on a Cynthion there and decodes the whole corpus in the
-// 9-bit mode. So `choose_bram` orders a confirmed layout ahead of an
-// unverified one before it counts anything, and this file is what pins that
-// it does. Seven blocks of waste is the price of a memory that reads back.
+// **It takes one block, and that is the point.** 16384 words of one bit is
+// one block in the `DP16KD`'s 1-bit mode and eight in its 9-bit mode, and
+// `Mapper::choose_bram` takes the one.
 //
-// **What it was written for, and no longer catches.** In the 1-bit mode a
+// That needs a test because for a day it took the eight. The 4-, 2- and
+// 1-bit modes were marked `unverified` and ordered behind every other
+// mode, on the strength of an A/B that did not hold: the 4-bit build of
+// `ip/compress/inflate` was measured on a part that had just run a
+// 123-case corpus and the 9-bit build on a fresh load, and that design's
+// failures depend on what decoded before them.
+// `testdata/fpga/cynthion/bram_probe.v` then read all three modes back off
+// a Cynthion at full depth -- 16384 x 1, 8192 x 2, 4096 x 4, one address at
+// a time and then every address -- and every address landed where it was
+// asked for and every value came back unpermuted. The marker is gone and
+// seven blocks came back with it.
+//
+// **What it was written for, and catches again.** In the 1-bit mode a
 // block's data ports are one bit wide, and `Netlist::build` used to drop
 // the bit index from the pin role of any port one bit wide -- right for a
 // flip-flop's `d` and a block RAM's `we`, declared without an index, and
 // wrong for `DOB`, whose pin is `p0_dout0`. The role named no wire, the
 // pin went to `Netlist::off_fabric`, and the read data net was left with
 // nothing driving it; on a part it read all **ones**, which is what
-// `testdata/fpga/cynthion/bram_echo.v` did for 32768 bytes. Quarantining
-// the mode means this design no longer reaches a one-bit port, so the
-// regression test for that fix is
-// `tests/fpga_xray_bram.rs::a_one_bit_wide_memorys_data_pin_reaches_the_fabric`,
-// on the family whose 1-bit mode is not in question.
+// `testdata/fpga/cynthion/bram_echo.v` did for 32768 bytes. While the mode
+// was quarantined this design no longer reached a one-bit port and the
+// regression moved to the 7 series; it is back under test here too.
 //
-// `Netlist::driverless` is still asserted here, because it costs nothing
-// and because a bitstream for this design was once wrong in a way no count
-// of its bits could show.
+// What this would not catch: where a word sits in a row of the *initial*
+// contents in a narrow mode. This memory has none, `bram_probe.v` writes
+// at run time, and so neither reads `init low` -- which stays a reading.
 //
 // The shape otherwise follows `block_ram_2048.v`: the read is registered
 // with no reset and its register has exactly one reader, which is what

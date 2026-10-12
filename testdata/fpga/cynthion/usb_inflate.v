@@ -37,12 +37,18 @@
 //   * sixteen block RAM read-data nets nothing drove, so the 32768-byte
 //     window read `ff` for every byte -- `docs/fpga-trellis.md` and
 //     `bram_echo.v`;
-//   * the `DP16KD`'s 4-bit mode, which a block-count tie put the 320 x 4
-//     code-length memory into, and which is wrong on silicon --
-//     `src/fpga/devices/ecp5.dev` now marks it `unverified` and
-//     `choose_bram` orders a confirmed layout first;
 //   * a refused stream wedging the bridge for good, because `S_FEED` read
 //     neither `error` nor a timer -- `inflate_bridge.v`.
+//
+// A third was reported and withdrawn: the `DP16KD`'s 4-bit mode, which a
+// block-count tie put the 320 x 4 code-length memory into, was recorded as
+// wrong on silicon. It is not. `bram_probe.v` reads all three narrow modes
+// back off a part and finds every address and every value right, and this
+// design decodes the three cases said to fail when it is loaded fresh with
+// that memory in the 4-bit mode. The comparison behind the claim had the
+// 4-bit build measured after a 123-case corpus run and the 9-bit build on
+// a fresh load, which on a part that carries state between frames is not a
+// comparison at all.
 //
 // **The 64 raw-deflate cases are refused, by construction.** This design
 // builds `inflate` with `WRAPPER(1)`, so a stream with no zlib header is a
@@ -51,34 +57,39 @@
 // between them. A mode byte in the framing would fix it and has not been
 // written.
 //
-// **OPEN, and the rule is about history, not about refusals.** Four of
-// the 59 zlib cases are wrong -- `text1_100`, `text1_1000`, `text5_1000`
-// and `text1_4000`, all dynamic-Huffman -- and what decides it is:
+// **OPEN, and it depends on the stream before it. No rule has been
+// established.** Four of the 59 zlib cases are wrong, and which four
+// depends on what decoded immediately before. One fresh configuration per
+// cell, the first stream run and checked, then the second:
 //
-//     a dynamic-Huffman stream decodes correctly only if this decoder has
-//     not already decoded a DIFFERENT stream since configuration.
+//     first \ second   text1_100   text1_1000  text5_1000  pattern_9
+//     ---------------  ----------  ----------  ----------  ---------
+//     text1_100            ok          ok          ok          ok
+//     text1_1000       4B then C0      ok          ok          ok
+//     text5_1000       4B then C0      ok          ok          ok
+//     pattern_9        4B then C0  4B then C0  4B then C0      ok
 //
-// Measured one row at a time, reconfiguring the part before each row,
-// because one failure wedges it and every row after then reads the same:
+// Every failure is **exactly four correct bytes and then a stall**,
+// whatever the stream -- the same count for a hundred-byte answer and a
+// thousand-byte one -- so the decoder produces four bytes and then waits
+// for input that never comes.
 //
-//     before the dynamic stream          result
-//     -------------------------------    ------------------------
-//     nothing at all                     correct
-//     the same dynamic stream            correct
-//     a refusal only                     correct
-//     a stored-block stream              4 bytes, then status C0
-//     a fixed-Huffman stream             4 bytes, then status C0
-//     a different dynamic stream         4 bytes, then status C0
+// It is not "a different stream before it": 100 then 1000 is fine and 1000
+// then 100 is not. It is not output length; it is not block type, since
+// the fixed-Huffman case breaks dynamic ones and is broken by none; and
+// the compressed lengths (78, 308, 308, 17) order it no better. The matrix
+// is the finding.
 //
-// **The reading before this one was wrong and is worth leaving here.** It
-// said "a dynamic stream that follows a refused one", because all four
-// failures sit immediately after a raw-deflate case in corpus order and
-// each one decodes correctly on its own. A refusal is harmless; what the
-// corpus order hid is that every one of those cases also followed a
-// successful decode. Running the rows against a part that had already run
-// other rows is what made a correlation look like a cause -- the same
-// contamination that made the first eight rows of the first attempt
-// identical.
+// **Two readings have been withdrawn here and both came of the same
+// mistake.** The first said "a dynamic stream that follows a refused one",
+// because all four failures sit immediately after a raw-deflate case in
+// corpus order; a refusal alone is harmless, and what the order hid is
+// that each also followed a successful decode. The second said "only if no
+// different stream has decoded since configuration", which the first row
+// above contradicts. A part that carries state between frames gives **one
+// measurement per configuration**, and rows run against a part that
+// earlier rows had already wedged are what made a correlation look like a
+// cause twice.
 //
 // Three things have been eliminated, two by test and one by measurement:
 //

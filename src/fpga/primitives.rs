@@ -1287,20 +1287,8 @@ impl Mapper<'_> {
         true
     }
 
-    /// Picks a mode whose layout a part has confirmed, then the one that
-    /// costs the fewest blocks, then the fewest blocks per word, then the
-    /// widest.
-    ///
-    /// **Verified first, before block count.** A mode marked
-    /// [`unverified`](crate::fpga::device::BramModeLayout::unverified) is
-    /// one no part has been read back in, and a wrong layout is not worth
-    /// a block: a memory any verified mode can hold goes there even if an
-    /// unverified mode would save blocks. The ECP5's 4-bit mode is why —
-    /// `ip/compress/inflate`'s 320 x 4 code-length memory ties at one
-    /// block with the 9-bit mode, took the 4-bit one, and decoded
-    /// dynamic-Huffman streams into `80 | E_DIST` on a Cynthion. It is
-    /// ordered, not refused, so a shape that genuinely needs a narrow mode
-    /// still gets one and the mapping report says which.
+    /// Picks the mode that costs the fewest blocks, then the one that
+    /// spreads a word over fewest blocks, then the widest.
     ///
     /// **Cost, not count.** A mode can cost more than the blocks it
     /// occupies: `blocks * (1 + neighbours)`, where
@@ -1309,12 +1297,12 @@ impl Mapper<'_> {
     /// 18-bit mode takes two data bits off the next block's interconnect
     /// column, so it costs two. A 9-bit memory 288 deep needs one block in
     /// either mode, and the tie used to hand it the 18-bit one and
-    /// sterilise a neighbour for nothing — `testdata/fpga/cynthion/`'s
+    /// sterilise a neighbour for nothing -- `testdata/fpga/cynthion/`'s
     /// decompressor, five such memories beside a 32768-byte window, could
     /// not be placed at all. Counting the neighbour decides it without a
     /// tie.
     ///
-    /// Saying it this way rather than as "prefer the narrowest mode"
+    /// Saying it that way rather than as "prefer the narrowest mode"
     /// matters: narrow-is-better is the ECP5's situation and not the
     /// iCE40's, whose `SB_RAM40_4K` sterilises nothing and whose widest
     /// mode is the one to want. A general rule changed a family it had no
@@ -1324,11 +1312,20 @@ impl Mapper<'_> {
     /// side by side is a different arrangement from one a single block
     /// holds, and the one this flow has evidence for is the single block.
     ///
-    /// **Widest** last, which is the old rule and keeps a memory that fits
-    /// either way on the simplest addressing.
+    /// **Widest** last, which is the oldest rule here and keeps a memory
+    /// that fits either way on the simplest addressing. It is also what
+    /// keeps a 320 x 4 memory in the 9-bit mode rather than the 4-bit one,
+    /// a tie at one block either way.
+    ///
+    /// There was briefly a fourth term ahead of all of these, ordering a
+    /// mode no part had been read back in behind every other. It is gone:
+    /// `testdata/fpga/cynthion/bram_probe.v` read all three of the ECP5's
+    /// narrow modes back off a Cynthion and found every address and every
+    /// value correct, and `docs/fpga-trellis.md` has that measurement and
+    /// the confounded comparison that had asked for the term.
     fn choose_bram(&self, width: u32, depth: u64) -> Option<(usize, (u32, u32), u32, u32)> {
         let mut best: Option<(usize, (u32, u32), u32, u32)> = None;
-        let mut best_key: Option<(u8, u64, u32, u32)> = None;
+        let mut best_key: Option<(u64, u32, u32)> = None;
         for (index, shape) in self.device.block_rams.iter().enumerate() {
             for (mode, &(mode_width, mode_depth)) in shape.width_modes.iter().enumerate() {
                 if mode_width == 0 || mode_depth == 0 {
@@ -1340,17 +1337,18 @@ impl Mapper<'_> {
                 };
                 let blocks = u64::from(wide) * u64::from(deep);
                 // `mode_layouts` runs in step with `width_modes`; a mode
-                // the device file gave no layout at all is neither
-                // unverified nor costly, because then there is nothing to
-                // be wrong and nothing to sterilise.
-                let layout = shape.mode_layouts.get(mode);
-                let unverified = u8::from(layout.is_some_and(|l| l.unverified));
-                let neighbours = u64::from(layout.map_or(0, |l| l.neighbours));
-                // A confirmed layout first, then the fewest blocks the
-                // mode really costs, then the fewest blocks per word,
-                // then the widest. See the doc comment.
+                // the device file gave no layout at all costs only its own
+                // blocks, because then there is nothing to sterilise.
+                let neighbours = u64::from(
+                    shape
+                        .mode_layouts
+                        .get(mode)
+                        .map_or(0, |layout| layout.neighbours),
+                );
+                // The blocks the mode really costs, then fewest blocks per
+                // word, then the widest. See the doc comment.
                 let cost = blocks * (1 + neighbours);
-                let key = (unverified, cost, wide, u32::MAX - mode_width);
+                let key = (cost, wide, u32::MAX - mode_width);
                 if best_key.is_none_or(|b| key < b) {
                     best_key = Some(key);
                     best = Some((index, (mode_width, mode_depth), wide, deep));

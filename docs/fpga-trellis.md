@@ -2,40 +2,53 @@
 
 ## A dynamic-Huffman stream decodes once, and a correlation looked like a cause
 
-**CHECKED on a part, 12 October 2026. OPEN.** With the window routed and
-the 4-bit mode quarantined, 55 of the corpus' 59 zlib cases decode on a
-Cynthion. The four that do not are all dynamic-Huffman, and the rule that
-decides them is not the one this document first recorded:
+**CHECKED on a part, 13 October 2026. OPEN.** With the window routed, 55
+of the corpus' 59 zlib cases decode on a Cynthion. Which four do not
+depends on the stream decoded immediately before, and the honest form of
+that is the matrix rather than a rule. One fresh configuration per cell,
+the first stream run and checked, then the second:
 
-> a dynamic-Huffman stream decodes correctly only if this decoder has not
-> already decoded a **different** stream since configuration.
+| first ↓ · second → | text1_100 | text1_1000 | text5_1000 | pattern_9 |
+|---|---|---|---|---|
+| **text1_100** | ok | ok | ok | ok |
+| **text1_1000** | 4 bytes, `C0` | ok | ok | ok |
+| **text5_1000** | 4 bytes, `C0` | ok | ok | ok |
+| **pattern_9** | 4 bytes, `C0` | 4 bytes, `C0` | 4 bytes, `C0` | ok |
 
-| before the dynamic stream | result |
-|---|---|
-| nothing at all | correct |
-| the same dynamic stream | correct |
-| a refusal only | correct |
-| a stored-block stream | 4 bytes, then status `C0` |
-| a fixed-Huffman stream | 4 bytes, then status `C0` |
-| a different dynamic stream | 4 bytes, then status `C0` |
+Every failure is **exactly four correct bytes and then a stall**, whatever
+the stream, which is the clearest thing in the table: the decoder produces
+four bytes and then waits for input that never comes, and the bridge's
+counter reports it. Four bytes is the same count for a hundred-byte answer
+and a thousand-byte one.
 
-### The wrong reading, and why it was wrong
+**No rule has been established.** It is not "a different stream": 100 then
+1000 is fine and 1000 then 100 is not. It is not output length, which
+orders the cells no better — 100 → 1000 works and 10 → 1000 does not, and
+1000 → 10 works. It is not block type: the fixed-Huffman case breaks
+dynamic ones and is broken by none. Compressed lengths are 78, 308, 308 and
+17 bytes, which fits nothing above either. The table is the finding.
 
-The first version of this said *"a dynamic stream that follows a refused
-one"*, and it is worth leaving here because of how it was produced. All
-four failures sit immediately after a raw-deflate case in corpus order —
-the cases this `WRAPPER=1` build refuses — and each decodes correctly when
-run on its own. That is a real correlation and it is not the cause: a
-refusal on its own is harmless. What the corpus order hid is that each of
-those cases also followed a *successful* decode.
+### Two readings withdrawn, and the one mistake behind both
 
-Two rounds of contamination made it look solid. The first attempt at a
-table like the one above ran every row against one configuration, and the
-third row wedged the part, so rows four to eight all read `C0` and agreed
-with whatever was being proposed. **One failure wedges this design until
-it is reconfigured**, which is a fact about the bridge worth having on its
-own, and it means a row is only evidence if the part was loaded fresh for
-it. Reconfiguring before each row is what produced the table.
+This section first said *"a dynamic stream that follows a refused one"*.
+All four failures sit immediately after a raw-deflate case in corpus order
+— the cases this `WRAPPER=1` build refuses — and each decodes correctly on
+its own. A real correlation, and not the cause: a refusal alone is
+harmless, and what the corpus order hid is that each of those cases also
+followed a *successful* decode.
+
+It then said *"only if no different stream has decoded since
+configuration"*, which the matrix above contradicts in its first row.
+
+Both came from the same mistake, and so did the retraction in the section
+below. **A part that carries state between frames gives one measurement
+per configuration.** The first attempt at a table like this one ran every
+row against a single load; the third row wedged the device, and rows four
+to eight then read `C0` and agreed with whatever was being proposed. One
+failure wedges this design until it is reconfigured — a fact about the
+bridge worth having on its own — so a row is evidence only if the part was
+loaded fresh for it. Three conclusions have had to be withdrawn for want of
+that, and each looked like a clean single-variable comparison at the time.
 
 ### What has been eliminated
 
@@ -100,86 +113,79 @@ eight rounds that found the register this backend brought up wrong; that
 is the shape of thing that found all three of this backend's earlier
 hardware-only faults, and none of them was found by reading.
 
-## The 4-bit block RAM mode is wrong on silicon, and the other two narrow ones are not trusted
+## The narrow block RAM modes are right, and the measurement that said otherwise was confounded
 
-**CHECKED on a part, 12 October 2026.** With the window fixed, the
-decompressor of the section below decoded 55 of the corpus' 59 zlib cases
-on a Cynthion and failed the dynamic-Huffman ones: `80 | E_DIST` after
-between four and thirty correct bytes, and in one case 91 bytes of wrong
-output and `80 | E_ADLER`. Simulation decodes all 123 at the same
-`WINDOW_BITS`, with four different stall patterns, and `--report` says why
-the two disagree:
+**CHECKED on a part, 13 October 2026.** This section said, for a day, that
+the `DP16KD`'s 4-bit mode was wrong on silicon, and that the 2- and 1-bit
+modes beside it were not to be trusted. All three are right.
+
+`testdata/fpga/cynthion/bram_probe.v` builds a memory of each width deep
+enough to fill exactly one block — 16384 x 1, 8192 x 2, 4096 x 4 — and asks
+two things of it. A **one-hot write**: zero the block, write a single
+address, read all of it back, and see which addresses came back set. Then a
+**fill**: write every address its own low bits and read all of it back.
+
+| mode | one-hot, 12 addresses across the block | every address, every value |
+|---|---|---|
+| 1-bit, 16384 words | each lands at that address alone | 0 of 16384 wrong |
+| 2-bit, 8192 words | each lands at that address alone | 0 of 8192 wrong |
+| 4-bit, 4096 words | each lands at that address alone | 0 of 4096 wrong |
+
+So `addr 1`, `addr 2`, the `DATA_WIDTH_A` encodings and the data pins are
+all correct, and `choose_bram` treats these as it treats any other mode.
+The 16384 x 1 memory of `testdata/fpga/ecp5/block_ram_1bit.v` is one block
+again instead of eight.
+
+A one-hot probe is the right shape for this and a pattern is not: a 4-bit
+word has only sixteen values, so any pattern repeats within sixteen
+addresses and a read that came back shifted or aliased would look like a
+read that came back right. Writing one address and dumping the whole block
+cannot be confused that way. The fill pass is what a one-hot probe cannot
+do — every bit of `4'hf` is the same, so it cannot see a data-pin
+permutation, and giving each address its own nibble exercises all sixteen
+values at once.
+
+### How the wrong answer was produced, which is the useful part
+
+The claim came from an A/B that looked clean and was not. With
+`ip/compress/inflate`'s 320 x 4 code-length memory in the 4-bit mode, three
+dynamic-Huffman cases failed; with the same memory in the 9-bit mode, they
+decoded. One variable, two outcomes.
+
+The variable was not the only thing that differed. **The 4-bit build was
+measured on a part that had just run all 123 corpus cases, and the 9-bit
+build on a fresh load** — and this design's failures depend on what decoded
+before them, which was not known at the time. Loaded fresh, the 4-bit build
+decodes all three:
 
 ```
-u_bridge.u_inflate.clen (320x4)      -> 1 x DP16KD in 4x4096 mode (1 wide, 1 deep)
-u_bridge.u_inflate.lsym (288x9)      -> 1 x DP16KD in 9x2048 mode (1 wide, 1 deep)
-u_bridge.u_inflate.u_win.mem (32768x8) -> 16 x DP16KD in 9x2048 mode (1 wide, 16 deep)
+clen in 4-bit mode, first streams after a fresh load:
+  text1_100_l6_zlib    -> CORRECT
+  text1_1000_l6_zlib   -> CORRECT
+  text5_1000_l9_zlib   -> CORRECT
 ```
 
-`clen` holds §3.2.7's code lengths, which only a dynamic block builds —
-every stored and fixed-Huffman case passed — and it is the one memory in
-the **4-bit** mode. 320 words of 4 bits is one block in either the 4-bit
-or the 9-bit mode, a tie, and the tie had been handed to the narrower.
+Two further things were wrong with the conclusion, and both are the kind
+worth writing down. The quarantine **did nothing for the case that asked
+for it**: with the marker removed, that memory still goes to the 9-bit
+mode, because 4-bit and 9-bit tie at one block and the widest wins. What
+had moved it was restoring widest-wins on the tie-break, not the marker.
+And the full-corpus runs that started all this fail the same family of
+cases with the memory in *either* mode — four with 9-bit, three with 4-bit
+— so the mode never explained them.
 
-Two builds settle it. The same memory widened so that the tie goes to the
-9-bit mode: all three failing cases correct. The same memory pushed out of
-block RAM entirely, into 96 distributed RAMs: all three correct. The only
-thing that changed between a wrong answer and a right one is which mode
-the block was in.
+**The rule this leaves.** An A/B on a part is only an A/B if both arms
+start from the same state, and on this board that means reconfiguring
+between them. Three conclusions in two days have had to be withdrawn for
+want of that, and all three looked like clean single-variable comparisons.
 
-### What is not known, which is most of it
+### What is still a reading
 
-The device file's own note had already said where its confidence ran out:
-
-> MEDIUM confidence for where the 4-, 2- and 1-bit words sit: that the
-> parity bits are skipped is Reticle's reading of how the 16 kbit modes
-> use an 18 kbit array, not something checked against a part or a
-> bitstream.
-
-That reading is now refuted, and **it is not clear which part of the line
-is wrong.** Two things rule themselves out: the data pins are the low four
-under either reading of the parity bits, so `init low 0-3 ...` cannot be
-it; and `clen` has no initial contents at all, so the init layout is not
-read by this design in the first place. What is left is the `addr 2`
-alignment and the `DATA_WIDTH_A=4` encoding itself, and neither has been
-measured. All 53 block RAMs of this board's reference bitstreams are 9- or
-18-bit, so there is no vendor example of a narrow one to read.
-
-### What was done instead
-
-A mode line may now carry `unverified`, and the ECP5's 4-, 2- and 1-bit
-lines all do: the 4-bit one because it is measured wrong, the other two
-because they come from the same reading. `Mapper::choose_bram` orders a
-verified mode ahead of an unverified one **before** it counts blocks, so a
-memory any verified mode can hold never reaches one. A wrong layout is not
-worth a block.
-
-The cost is real and is the point of
-`tests/fpga_trellis.rs::the_narrowest_memory_takes_eight_blocks_rather_than_an_unverified_mode`:
-16384 words of one bit is one block in the 1-bit mode and **eight** in the
-9-bit mode, and the flow takes the eight. Seven blocks of waste buys a
-memory that reads back.
-
-With that, `clen` is in the 9-bit mode with `ip/compress/inflate`
-untouched, and the three cases decode.
-
-### The one that moved out from under it
-
-Quarantining the 1-bit mode means no ECP5 memory reaches a one-bit block
-RAM data port any more, which is the shape the section below was written
-on. That fix's regression test is therefore on the 7 series, where the
-1-bit mode is not in question:
-`tests/fpga_xray_bram.rs::a_one_bit_wide_memorys_data_pin_reaches_the_fabric`.
-`testdata/fpga/ecp5/block_ram_1bit.v` stays, asserting the thing it can
-still assert — that the mode is refused.
-
-### What to do to get the narrow modes back
-
-Read one back off a part, the way the 9-bit mode was read back: a memory
-in the 4-bit mode behind the CDC front end, a known pattern written and
-read, and the *shape* of the difference says whether it is the address
-alignment or the width encoding. Until someone does that, the three lines
-stay marked.
+Where a *word* sits in a row of the initial contents in those three modes:
+the `init low` lists, and whether they skip the parity bits 8 and 17.
+`bram_probe.v` writes at run time, so it never reads them, and nothing in
+this repository builds a ROM in a narrow mode. The way to settle it is the
+same probe with contents instead of writes.
 
 ## A block RAM read back 32768 bytes of `ff`, and the flow had not routed a pin
 
@@ -239,17 +245,10 @@ word per block, which is not the mode anyone had intended for it.
 tie. A 32768 x 8 memory ties at sixteen blocks **four ways** — the 9-, 4-,
 2- and 1-bit modes all reach it — and the tie-break had just been changed
 to prefer the *narrowest*, which picks the 1-bit one. That change was made
-for a good reason (an 18-bit block sterilises the block two columns east,
+for a good reason — an 18-bit block sterilises the block two columns east,
 so a 288 x 9 memory should not take the 18-bit mode when the 9-bit mode
-costs the same block) and it was too broad: it also promoted the three
-modes `src/fpga/devices/ecp5.dev` marks **MEDIUM confidence** —
-
-> MEDIUM confidence for where the 4-, 2- and 1-bit words sit: that the
-> parity bits are skipped is Reticle's reading of how the 16 kbit modes
-> use an 18 kbit array, not something checked against a part or a
-> bitstream.
-
-— to first choice for every memory that ties, and it changed a family it
+costs the same block — and it said that reason in the wrong place. A
+preference for narrow modes applies to every family, and it changed one it
 had no business changing: an iCE40's `SB_RAM40_4K` sterilises nothing and
 its widest mode is the one to want, which `a_small_memory_fits_one_block`
 said out loud as soon as the gate ran.
@@ -260,7 +259,12 @@ may carry `neighbours N`, the 18-bit line carries `neighbours 1`, and
 memory is one block in the 9-bit mode and one block plus a sterilised
 neighbour in the 18-bit one, so it is not a tie at all any more, and the
 widest mode still wins a genuine tie as it always did. The whole key is
-`(unverified, cost, wide, widest)`.
+`(cost, wide, widest)`.
+
+Note what this did **not** need: the mode the window landed in was fine.
+The three narrow modes were briefly quarantined on the strength of a
+confounded measurement, and the section above has what a part says about
+them. What was wrong here was one pin, below.
 
 **The pin, which is the real one.** In the 1-bit mode a block's data ports
 are one bit wide, and `Netlist::build` resolved a pin role like this:

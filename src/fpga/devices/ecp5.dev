@@ -67,22 +67,31 @@
 #     12 October 2026 -- `testdata/fpga/cynthion/bram_echo.v` writes
 #     32768 bytes over sixteen blocks and reads them all back.
 #
-#     The 4-, 2- and 1-bit modes are marked `unverified`, and the 4-bit
-#     one is CHECKED WRONG. `ip/compress/inflate`'s 320 x 4 code-length
-#     memory is one block in either the 4-bit or the 9-bit mode, a tie
-#     `choose_bram` used to break by width; in the 4-bit mode a Cynthion
-#     decoded dynamic-Huffman streams into `80 | E_DIST` after between
-#     four and thirty correct bytes, and the same memory in the 9-bit
-#     mode decodes the whole corpus. Which part of the 4-bit line is
-#     wrong is **not** known: the data pins are the low four under either
-#     reading of the parity bits, and that memory has no initial contents,
-#     so neither `data` nor `init low` can be the cause -- which leaves
-#     the `addr 2` alignment and the `DATA_WIDTH_A=4` encoding itself, and
-#     neither has been measured. The 2- and 1-bit lines come from the same
-#     reading and are therefore no more trustworthy. `choose_bram` orders
-#     an unverified mode behind every verified one before it counts
-#     blocks, so nothing reaches these unless no verified mode can hold
-#     the memory at all. `docs/fpga-trellis.md` has the experiment.
+#     The 4-, 2- and 1-bit modes are CHECKED on a part as of 13 October
+#     2026, for everything but their initial contents.
+#     `testdata/fpga/cynthion/bram_probe.v` builds a memory of each width
+#     deep enough to fill one block -- 16384 x 1, 8192 x 2, 4096 x 4 --
+#     writes one address at a time and then every address, and reads the
+#     whole block back: every address lands where it was asked for and
+#     nowhere else, and every value of every width comes back unpermuted.
+#     So `addr 1`, `addr 2`, the `DATA_WIDTH_A` encodings and the data
+#     pins are all right, and `choose_bram` treats these as it treats any
+#     other mode.
+#
+#     They were briefly marked `unverified` and the 4-bit one recorded as
+#     CHECKED WRONG. That was an error, from an A/B on a part that carries
+#     state between frames: the 4-bit build was measured after a 123-case
+#     corpus run and the 9-bit one on a fresh load, and this design's
+#     failures depend on what decoded before them. Loaded fresh, the
+#     4-bit build decodes the cases it was said to fail.
+#     `docs/fpga-trellis.md` has both the measurement and the mistake.
+#
+#     What is still a reading is where a *word* sits in a row of the
+#     initial contents in those three modes -- the `init low` lists, and
+#     whether they skip the parity bits 8 and 17. `bram_probe.v` writes at
+#     run time and so never reads them; only a ROM in a narrow mode would,
+#     and nothing builds one. The way to settle it is the same probe with
+#     contents instead of writes.
 #   * TRELLIS_DPR16X4 is the distributed (LUT) RAM: sixteen words of four
 #     bits, one clocked write port (WCK, WRE, WAD0..3, DI0..3) and one
 #     asynchronous read port (RAD0..3 -> DO0..3), with WCKMUX and WREMUX
@@ -238,9 +247,9 @@ device ecp5-25f-CABGA381
     count 56
     mode 18 1024 param DATA_WIDTH_A=18 DATA_WIDTH_B=18 addr 4 pad 4'b0011 init low 0-17 neighbours 1
     mode 9 2048 param DATA_WIDTH_A=9 DATA_WIDTH_B=9 addr 3 init low 0-8 9-17
-    mode 4 4096 param DATA_WIDTH_A=4 DATA_WIDTH_B=4 addr 2 init low 0-3 4-7 9-12 13-16 unverified
-    mode 2 8192 param DATA_WIDTH_A=2 DATA_WIDTH_B=2 addr 1 init low 0,1 2,3 4,5 6,7 9,10 11,12 13,14 15,16 unverified
-    mode 1 16384 param DATA_WIDTH_A=1 DATA_WIDTH_B=1 init low 0 1 2 3 4 5 6 7 9 10 11 12 13 14 15 16 unverified
+    mode 4 4096 param DATA_WIDTH_A=4 DATA_WIDTH_B=4 addr 2 init low 0-3 4-7 9-12 13-16
+    mode 2 8192 param DATA_WIDTH_A=2 DATA_WIDTH_B=2 addr 1 init low 0,1 2,3 4,5 6,7 9,10 11,12 13,14 15,16
+    mode 1 16384 param DATA_WIDTH_A=1 DATA_WIDTH_B=1 init low 0 1 2 3 4 5 6 7 9 10 11 12 13 14 15 16
     flags dual_port init
     init_params INITVAL_ count 64 digits 2 rows 16 slot 20
     port rw clk=CLKB en=CEB addr=ADB din=DIB dout=DOB we=WEB rst=RSTB
@@ -383,9 +392,9 @@ device ecp5-12f-CABGA256
     count 32
     mode 18 1024 param DATA_WIDTH_A=18 DATA_WIDTH_B=18 addr 4 pad 4'b0011 init low 0-17 neighbours 1
     mode 9 2048 param DATA_WIDTH_A=9 DATA_WIDTH_B=9 addr 3 init low 0-8 9-17
-    mode 4 4096 param DATA_WIDTH_A=4 DATA_WIDTH_B=4 addr 2 init low 0-3 4-7 9-12 13-16 unverified
-    mode 2 8192 param DATA_WIDTH_A=2 DATA_WIDTH_B=2 addr 1 init low 0,1 2,3 4,5 6,7 9,10 11,12 13,14 15,16 unverified
-    mode 1 16384 param DATA_WIDTH_A=1 DATA_WIDTH_B=1 init low 0 1 2 3 4 5 6 7 9 10 11 12 13 14 15 16 unverified
+    mode 4 4096 param DATA_WIDTH_A=4 DATA_WIDTH_B=4 addr 2 init low 0-3 4-7 9-12 13-16
+    mode 2 8192 param DATA_WIDTH_A=2 DATA_WIDTH_B=2 addr 1 init low 0,1 2,3 4,5 6,7 9,10 11,12 13,14 15,16
+    mode 1 16384 param DATA_WIDTH_A=1 DATA_WIDTH_B=1 init low 0 1 2 3 4 5 6 7 9 10 11 12 13 14 15 16
     flags dual_port init
     init_params INITVAL_ count 64 digits 2 rows 16 slot 20
     port rw clk=CLKB en=CEB addr=ADB din=DIB dout=DOB we=WEB rst=RSTB
@@ -469,9 +478,9 @@ device ecp5-45f-CABGA381
     count 108
     mode 18 1024 param DATA_WIDTH_A=18 DATA_WIDTH_B=18 addr 4 pad 4'b0011 init low 0-17 neighbours 1
     mode 9 2048 param DATA_WIDTH_A=9 DATA_WIDTH_B=9 addr 3 init low 0-8 9-17
-    mode 4 4096 param DATA_WIDTH_A=4 DATA_WIDTH_B=4 addr 2 init low 0-3 4-7 9-12 13-16 unverified
-    mode 2 8192 param DATA_WIDTH_A=2 DATA_WIDTH_B=2 addr 1 init low 0,1 2,3 4,5 6,7 9,10 11,12 13,14 15,16 unverified
-    mode 1 16384 param DATA_WIDTH_A=1 DATA_WIDTH_B=1 init low 0 1 2 3 4 5 6 7 9 10 11 12 13 14 15 16 unverified
+    mode 4 4096 param DATA_WIDTH_A=4 DATA_WIDTH_B=4 addr 2 init low 0-3 4-7 9-12 13-16
+    mode 2 8192 param DATA_WIDTH_A=2 DATA_WIDTH_B=2 addr 1 init low 0,1 2,3 4,5 6,7 9,10 11,12 13,14 15,16
+    mode 1 16384 param DATA_WIDTH_A=1 DATA_WIDTH_B=1 init low 0 1 2 3 4 5 6 7 9 10 11 12 13 14 15 16
     flags dual_port init
     init_params INITVAL_ count 64 digits 2 rows 16 slot 20
     port rw clk=CLKB en=CEB addr=ADB din=DIB dout=DOB we=WEB rst=RSTB

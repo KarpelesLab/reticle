@@ -1377,44 +1377,44 @@ fn a_block_ram_places_routes_and_every_bit_of_it_decodes() {
     );
 }
 
-/// # The narrowest memory takes eight blocks on purpose
+/// # The narrowest memory takes one block, in a mode a part has been read
+/// back in
 ///
 /// 16384 words of one bit is **one** `DP16KD` in the 1-bit mode and eight
-/// in the 9-bit mode, and `Mapper::choose_bram` takes the eight.
-/// `src/fpga/devices/ecp5.dev` marks the 4-, 2- and 1-bit modes
-/// `unverified`: where their words sit in an 18 kbit array is Reticle's
-/// reading of how the narrow modes use the parity bits, and the 4-bit one
-/// is measured **wrong** -- `ip/compress/inflate`'s 320 x 4 code-length
-/// memory tied at one block with the 9-bit mode, took the 4-bit one, and
-/// decoded dynamic-Huffman streams into `80 | E_DIST` after between four
-/// and thirty correct bytes on a Cynthion. The same memory in the 9-bit
-/// mode decodes 55 of the corpus' 59 zlib cases. So a confirmed layout is
-/// ordered ahead of an unverified one *before* anything about cost, and
-/// seven blocks of waste is the price of a memory that reads back.
+/// in the 9-bit mode, and `Mapper::choose_bram` takes the one.
 ///
-/// This also asserts `Netlist::driverless`, which costs nothing here and
-/// is the only thing that would have caught what this design was written
-/// for. In the 1-bit mode a block's data ports are one bit wide, and a
-/// one-bit port's pin role had its bit index dropped -- right for a
+/// That is worth a test because for a day it took the eight. The 4-, 2-
+/// and 1-bit modes were marked `unverified` and ordered behind every other
+/// mode, on the strength of a comparison that did not hold: the 4-bit
+/// build of `ip/compress/inflate` was measured on a part that had just run
+/// a 123-case corpus and the 9-bit build on a fresh load, and that design's
+/// failures depend on what decoded before them.
+/// `testdata/fpga/cynthion/bram_probe.v` then read all three modes back
+/// off a Cynthion at full depth -- 16384 x 1, 8192 x 2, 4096 x 4 -- and
+/// every address and every value was right, so the marker is gone and this
+/// asserts the block count it should always have had.
+///
+/// It also asserts `Netlist::driverless`, which costs nothing here and is
+/// the only thing that would have caught what this design was first
+/// written for. In the 1-bit mode a block's data ports are one bit wide,
+/// and a one-bit port's pin role had its bit index dropped -- right for a
 /// flip-flop's `d`, wrong for `DOB`, whose pin is `p0_dout0` -- so the
 /// role named no wire and the read data net had no driver. Nothing
 /// downstream objected: the router is handed only the signals with both a
 /// driver and a sink, so the routing verified, every set bit decoded, and
 /// the arcs were exactly the arcs the router chose. The part read
-/// **ones**, 32768 of them, through
-/// `testdata/fpga/cynthion/bram_echo.v`.
+/// **ones**, 32768 of them, through `testdata/fpga/cynthion/bram_echo.v`.
+/// Since this design reaches a one-bit port again, that fix is back under
+/// test here as well as in
+/// `tests/fpga_xray_bram.rs::a_one_bit_wide_memorys_data_pin_reaches_the_fabric`.
 ///
-/// Quarantining the mode means no ECP5 memory reaches a one-bit port any
-/// more, so that fix's regression test moved to
-/// `tests/fpga_xray_bram.rs::a_one_bit_wide_memorys_data_pin_reaches_the_fabric`,
-/// where the 1-bit mode is not in question.
-///
-/// What this would not catch: whether the narrow modes' layouts are right.
-/// It asserts that they are *not used*, which is a different claim, and
-/// the useful one until someone measures them.
+/// What this would not catch: where a word sits in a row of the *initial*
+/// contents in a narrow mode. `bram_probe.v` writes at run time and never
+/// reads `init low`; only a ROM in a narrow mode would, and nothing builds
+/// one.
 #[test]
 #[cfg(all(feature = "verilog", feature = "synth"))]
-fn the_narrowest_memory_takes_eight_blocks_rather_than_an_unverified_mode() {
+fn the_narrowest_memory_takes_one_block_in_the_narrowest_mode() {
     let Some(fabric) = open() else { return };
     let (_bits, _stream, pads, _report, _io, routed) = compile(
         &fabric,
@@ -1428,17 +1428,41 @@ fn the_narrowest_memory_takes_eight_blocks_rather_than_an_unverified_mode() {
         "a pin reads a signal nothing drives, which on this family reads as a one: {}",
         driverless.join("; ")
     );
-    // Eight blocks is what says the mode is the 9-bit one. One block
-    // would mean the 1-bit mode, which is the whole thing being refused.
-    let brams = routed
+    // One block is the 1-bit mode; eight would be the 9-bit one, which is
+    // what this took while the mode was quarantined.
+    let brams: Vec<usize> = routed
         .netlist
         .instances
         .iter()
-        .filter(|i| i.kind == "bram")
-        .count();
+        .enumerate()
+        .filter(|(_, i)| i.kind == "bram")
+        .map(|(index, _)| index)
+        .collect();
     assert_eq!(
-        brams, 8,
-        "`DP16KD` cells: 16384 one-bit words in the 9-bit mode, not one in the 1-bit mode"
+        brams.len(),
+        1,
+        "`DP16KD` cells: 16384 one-bit words is one block in the 1-bit mode"
+    );
+    // And its read data pin is the indexed role, carrying a signal. The
+    // bare `p0_dout` is what the old code asked for and what the fabric
+    // does not have, so its absence is half the assertion.
+    let pins: Vec<&reticle::fpga::place::NetPin> = routed.netlist.instances[brams[0]]
+        .pins
+        .iter()
+        .map(|pin| &routed.netlist.pins[*pin])
+        .collect();
+    let dout = pins
+        .iter()
+        .find(|pin| pin.role == "p0_dout0")
+        .expect("the block's port B read data pin is `p0_dout0`");
+    assert!(dout.output, "it is the block that drives it");
+    assert!(
+        dout.signal.is_some(),
+        "and it carries the memory's read data rather than a constant"
+    );
+    assert!(
+        !pins.iter().any(|pin| pin.role == "p0_dout"),
+        "no pin asks for a role the fabric has no wire for"
     );
     assert!(
         routed.overlaps.is_empty(),

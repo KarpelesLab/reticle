@@ -1080,24 +1080,14 @@ pub struct BramModeLayout {
     /// the ECP5's reason stated where it belongs: a general preference for
     /// narrow modes would have changed the iCE40, which has no such
     /// conflict and whose widest mode is the one to want.
+    ///
+    /// This is the only thing that makes a mode cost more than a block.
+    /// There was briefly an `unverified` flag beside it, ordering a mode
+    /// no part had been read back in behind every other; it was removed
+    /// once all three of the ECP5's narrow modes were read back and found
+    /// correct. `docs/fpga-trellis.md` has that measurement and the
+    /// confounded comparison that asked for the flag.
     pub neighbours: u32,
-    /// True when no part has ever been read back in this mode, so the
-    /// layout above is a reading rather than a measurement.
-    ///
-    /// [`Mapper::choose_bram`](crate::fpga) orders a verified mode ahead
-    /// of an unverified one **before** it counts blocks, so a memory any
-    /// verified mode can hold never lands in one of these — a wrong
-    /// layout is not a trade worth making for a block. It is still
-    /// declared, because it is a mode the hardware has and because the
-    /// shape that needs it should fail loudly rather than be absent.
-    ///
-    /// The ECP5's 4-bit mode is why this field exists: `ip/compress/inflate`'s
-    /// 320 x 4 code-length memory was put there by a block-count tie, and
-    /// on a Cynthion it decoded dynamic-Huffman streams into
-    /// `80 | E_DIST` after a handful of correct bytes. The same memory in
-    /// the 9-bit mode is right. `docs/fpga-trellis.md` has the
-    /// measurement and what is still not known about it.
-    pub unverified: bool,
 }
 
 impl BramModeLayout {
@@ -2425,15 +2415,12 @@ fn write_mode_layout(line: &mut String, layout: &BramModeLayout) {
             line.push_str(&write_bit_list(word));
         }
     }
-    // These two go last because `init`'s words run until the next
-    // non-numeric token, so a number after them would be read as another
+    // This goes last because `init`'s words run until the next
+    // non-numeric token, so a number before them would be read as another
     // word. The parser accepts them in any order; the writer has to pick
     // one, and this is the one that round-trips.
     if layout.neighbours > 0 {
         line.push_str(&format!(" neighbours {}", layout.neighbours));
-    }
-    if layout.unverified {
-        line.push_str(" unverified");
     }
 }
 
@@ -3230,7 +3217,6 @@ impl<'a> Parser<'a> {
                         layout.init = Some(BramInitLayout { select, words });
                     }
                 }
-                "unverified" => layout.unverified = true,
                 "neighbours" => {
                     if let Some(value) = self.number_at(line, index, "a number of blocks") {
                         layout.neighbours = value;
