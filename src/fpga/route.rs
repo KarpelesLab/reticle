@@ -209,6 +209,18 @@ pub struct RouteOptions {
     /// The signals allowed onto [`RouteOptions::network`], by signal index,
     /// or empty for "every signal".
     pub network_signals: Vec<bool>,
+    /// After the first iteration, reroute only the signals whose route
+    /// shares a node, and leave the rest where they are.
+    ///
+    /// Off by default, which is PathFinder as published: every signal is
+    /// ripped up and rerouted every iteration. That is what every family
+    /// here was measured with, so turning it on changes their routes. On
+    /// an UltraScale+ region of 1.3 million nodes a pass over 9 416
+    /// signals takes about a minute, and most of them were never in
+    /// contention; this is the usual remedy, and the congested signals
+    /// still see the history and present costs every other node has
+    /// accumulated.
+    pub reroute_congested_only: bool,
 }
 
 impl Default for RouteOptions {
@@ -222,6 +234,7 @@ impl Default for RouteOptions {
             node_base: Vec::new(),
             network: Vec::new(),
             network_signals: Vec::new(),
+            reroute_congested_only: false,
         }
     }
 }
@@ -658,6 +671,14 @@ pub fn route(
 
     for index in 1..=options.max_iterations {
         for terminals in &terminals {
+            if index > 1
+                && options.reroute_congested_only
+                && routing.routes[terminals.signal]
+                    .as_ref()
+                    .is_some_and(|r| r.nodes.iter().all(|n| state.occupancy[*n as usize] <= 1))
+            {
+                continue;
+            }
             rip_up(&mut state, &mut routing, terminals.signal);
             let route = route_one(
                 graph,
@@ -1601,6 +1622,63 @@ mod tests {
     /// already reached the sink by another route before the cheap class was
     /// expanded. See
     /// `super::trellis::TrellisFabric::clock_node_costs`.
+    /// With [`RouteOptions::reroute_congested_only`], a signal nothing
+    /// contends with is routed once and left alone, and the two that
+    /// collide still negotiate. Two signals collide on one track as in
+    /// `congestion_is_negotiated_away`, and a third, far from them, is
+    /// alone. It would catch the option skipping the colliding signals
+    /// (they would never converge) or doing nothing (the expansion would
+    /// queue as much as without it); it would not catch a congested
+    /// signal skipped in one iteration and taken up in the next.
+    #[test]
+    fn rerouting_only_congested_signals_leaves_the_others_and_still_converges() {
+        let (_, graph) = detour(12);
+        let netlist = pairs(3);
+        let mut placement = Placement::new(netlist.instances.len(), graph.sites.len());
+        for (index, (bel, tile)) in [
+            ("src0", 0),
+            ("dst0", 7),
+            ("src1", 1),
+            ("dst1", 6),
+            ("src0", 9),
+            ("dst0", 11),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let site = graph
+                .site_index(&format!("X{tile}Y0/{bel}"))
+                .expect("the bel exists");
+            placement.place(index, site);
+        }
+        let all = RouteOptions {
+            present_factor: 0.05,
+            present_growth: 3.0,
+            ..RouteOptions::default()
+        };
+        let some = RouteOptions {
+            reroute_congested_only: true,
+            ..all.clone()
+        };
+        let (every, every_report) = route(&netlist, &graph, &placement, &all).unwrap();
+        let (only, only_report) = route(&netlist, &graph, &placement, &some).unwrap();
+        assert!(
+            only_report.iterations.len() > 1,
+            "{}",
+            only_report.to_text()
+        );
+        assert_eq!(only_report.iterations.last().unwrap().overused_nodes, 0);
+        assert!(only.verify(&netlist, &graph, &placement).is_empty());
+        let alone = netlist.routable()[2];
+        assert_eq!(every.route(alone), only.route(alone));
+        assert!(
+            only_report.queued < every_report.queued,
+            "{} against {}",
+            only_report.queued,
+            every_report.queued
+        );
+    }
+
     #[test]
     fn a_cheap_class_of_wire_is_taken_although_the_path_is_longer() {
         let (_, graph) = detour(8);
