@@ -290,6 +290,8 @@ pub struct Board<'a> {
     design_bits: Vec<(usize, ConfigBit)>,
     /// Lookup tables that design occupies.
     occupied: HashSet<(usize, char)>,
+    /// The tie-off's report line, once [`Board::tie_processor`] has run.
+    tied: Option<String>,
 }
 
 impl<'a> Board<'a> {
@@ -375,6 +377,7 @@ impl<'a> Board<'a> {
             replay_driven: HashSet::new(),
             design_bits: Vec::new(),
             occupied: HashSet::new(),
+            tied: None,
         };
         // Every site output already has a driver, and every processor pin
         // is off limits until a net names it.
@@ -507,7 +510,9 @@ impl<'a> Board<'a> {
     }
 
     /// Nodes the generic router must not enter, by wire id: every node the
-    /// replayed bits drive, every processor input but those whose roots
+    /// replayed bits drive or a net of this board already uses (the
+    /// processor's tie-offs, when [`Board::tie_processor`] ran first),
+    /// every processor input but those whose roots
     /// are in `allowed` (the design's own EMIO inputs), and the clock
     /// network's wires — every node with a wire named `CLK_…` other than a
     /// leaf's (`CLK_LEAF_SITES_…`), which only `PL_CLK0`'s own pips drive.
@@ -525,7 +530,7 @@ impl<'a> Board<'a> {
     ///
     /// As [`Board::ps8`].
     pub fn closed_nodes(&self, allowed: &HashSet<NodeId>) -> Result<Vec<bool>, UrayError> {
-        let mut closed: HashSet<NodeId> = self.replay_driven.clone();
+        let mut closed: HashSet<NodeId> = self.replay_driven.union(&self.used).copied().collect();
         for (id, wire) in self.graph.nodes.iter().enumerate() {
             if wire.name.starts_with("CLK_") && !wire.name.starts_with("CLK_LEAF_SITES_") {
                 closed.insert(self.roots[id]);
@@ -544,6 +549,32 @@ impl<'a> Board<'a> {
             }
         }
         Ok(self.roots.iter().map(|r| closed.contains(r)).collect())
+    }
+
+    /// What a placement settles before anything is routed: the lookup
+    /// tables it occupies, the outputs that already have a driver, and the
+    /// processor inputs the design drives (its `EMIO_I` lines), so that
+    /// [`Board::tie_processor`] can run before the design is routed.
+    pub fn reserve(&mut self, netlist: &crate::fpga::Netlist, placement: &crate::fpga::Placement) {
+        for (instance, _) in netlist.instances.iter().enumerate() {
+            let Some(site) = placement.site_of(instance) else {
+                continue;
+            };
+            let site = &self.graph.sites[site];
+            if let Some(letter) = site.bel.strip_suffix("6LUT").and_then(|l| l.chars().next())
+                && let Some(&index) = self.tile_at.get(&site.tile)
+            {
+                self.occupied.insert((index, letter));
+            }
+            for (role, node) in &site.pins {
+                if matches!(role.as_str(), "o" | "q" | "din") {
+                    self.blocked.insert(self.roots[*node as usize]);
+                }
+                if role == "dout" && site.tile == self.ps {
+                    self.driven_inputs.insert(self.roots[*node as usize]);
+                }
+            }
+        }
     }
 
     /// Takes over a design the generic flow placed and routed on this
@@ -774,22 +805,20 @@ impl<'a> Board<'a> {
         Ok(())
     }
 
-    /// Ties the processor's other inputs, writes every lookup table, checks
-    /// the bitstream and gives it back with the `.bin` and a report.
-    ///
-    /// The checks: every set bit outside the replayed tiles decodes to a
-    /// feature; every lookup table this pass wrote reads back what it was
-    /// given; and every pip the bits turn on is one the design chose or is
-    /// made of a chosen one's bits (an interface tile's shared enable, a
-    /// leaf clock pip's two features).
+    /// Ties every processor input Vivado would drive and the design does
+    /// not to zero, from unused lookup tables beside the interface column,
+    /// and returns the report line. [`Board::finish`] does it when nothing
+    /// has; a flow that places a large design calls it between placement
+    /// ([`Board::reserve`]) and routing, so that the tie takes its tables
+    /// and wires first and the design's router is kept off them
+    /// ([`Board::closed_nodes`]). Tied after the design, the 6 989 tables
+    /// of a 16-neuron network had taken what seven inputs needed.
     ///
     /// # Errors
     ///
-    /// [`UrayError::Malformed`] naming the check that failed.
-    pub fn finish(mut self, design_name: &str) -> Result<Written, UrayError> {
+    /// [`UrayError::Malformed`] when an input cannot be reached.
+    pub fn tie_processor(&mut self) -> Result<String, UrayError> {
         let grid = &self.db.grid;
-        let mut report = Vec::new();
-
         // The tie-offs: every PS8 input Vivado would drive and this design
         // does not, from the lookup tables beside the interface column.
         let undriven = processor::left_undriven();
@@ -851,16 +880,47 @@ impl<'a> Board<'a> {
         for tag in &tie.sources {
             self.luts.insert((tag / 8, LUT_LETTERS[tag % 8]), 0);
         }
-        report.push(format!(
+        for pip in &tie.pips {
+            let pip = &self.graph.pips[*pip as usize];
+            self.used.insert(self.roots[pip.from as usize]);
+            self.used.insert(self.roots[pip.to as usize]);
+        }
+        self.pips.extend(tie.pips.iter().copied());
+        let line = format!(
             "tied {} PS8 inputs to zero with {} pips from {} lookup tables",
             sinks.len(),
             tie.pips.len(),
             tie.sources.len()
-        ));
+        );
+        self.tied = Some(line.clone());
+        Ok(line)
+    }
+
+    /// Ties the processor's other inputs, writes every lookup table, checks
+    /// the bitstream and gives it back with the `.bin` and a report.
+    ///
+    /// The checks: every set bit outside the replayed tiles decodes to a
+    /// feature; every lookup table this pass wrote reads back what it was
+    /// given; and every pip the bits turn on is one the design chose or is
+    /// made of a chosen one's bits (an interface tile's shared enable, a
+    /// leaf clock pip's two features).
+    ///
+    /// # Errors
+    ///
+    /// [`UrayError::Malformed`] naming the check that failed.
+    pub fn finish(mut self, design_name: &str) -> Result<Written, UrayError> {
+        let grid = &self.db.grid;
+        let mut report = Vec::new();
+
+        let tied = match self.tied.take() {
+            Some(line) => line,
+            None => self.tie_processor()?,
+        };
+        report.push(tied);
 
         // Tile bits.
         let mut bits: Vec<(usize, ConfigBit)> = Vec::new();
-        let chosen: Vec<PipId> = self.pips.iter().chain(&tie.pips).copied().collect();
+        let chosen: Vec<PipId> = self.pips.clone();
         for pip in &chosen {
             if let Some(&tile) = self.tile_at.get(&self.graph.pips[*pip as usize].tile) {
                 bits.extend(self.graph.pip_bits(*pip).iter().map(|b| (tile, *b)));
@@ -1049,6 +1109,10 @@ pub fn implement(
     .map_err(|e| e.to_string())?;
     // The design's own EMIO inputs may be driven; every other processor
     // input, and every node Vivado's clock network drives, is closed.
+    // The processor's tie-offs first, while the tables and wires they need
+    // are free; the design is then routed around them.
+    board.reserve(&netlist, &placement);
+    board.tie_processor().map_err(|e| e.to_string())?;
     let mut allowed = HashSet::new();
     for k in 0..super::EMIO_LINES {
         allowed.insert(board.root(board.emio_in(k).map_err(|e| e.to_string())?));
