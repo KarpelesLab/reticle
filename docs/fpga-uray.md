@@ -713,6 +713,59 @@ or wrong. They were not. That is evidence for the clock pins. The enable
 and reset pins of each group are still unexercised, because the counter
 uses neither.
 
+## Routing a large design
+
+The counter routes in seconds. The first large design, a binarized
+network for MNIST, did not route at all, and finding out why took three
+measurements, each of which overturned the guess before it. All three
+were taken on 2026-10-10 to 10-14, with a timed copy of the flow
+(`zcu104::implement` split into its steps).
+
+**One routing pass took 21 minutes.** The network was 12 800 lookup
+tables and 9 416 signals, and the router's 40 passes would have taken
+fourteen hours. Its worst nodes were clock row buffers
+(`CLK_BUFCE_ROW_FSR_*`) carrying ten signals each: nothing closed the
+clock network's own wires to data, only the nodes Vivado's replayed bits
+drive. `Board::closed_nodes` now closes every wire named `CLK_…` but a
+leaf's. That was right, and it changed nothing measurable about the time
+(1 424 seconds a pass afterwards): the counter's bitstream came out
+byte-identical, and the cost was elsewhere.
+
+**Every piece of a wire cost the router one.** The fabric declares each
+tile's piece of a wire as its own node and joins neighbours with a
+bit-less pip each way (`fabric::build_arch`). Two thirds of the region's
+six million nodes are such pieces, and a twelve-column wire is a median
+of 22 of them. At one apiece a long wire looked twenty times as dear as
+a short one, and the search walked along every piece.
+`Board::node_bases` makes a node only bit-less pips enter free, so a
+wire costs one where its driver's pip reaches it. One pass then took 125
+seconds. Welding the pieces into one node, as the 7-series backend does,
+is the thorough repair; this is the cheap one, and it leaves the graph
+as it was checked.
+
+**And the design was too dense for the router to finish.** With both
+fixes, 3 924 tables routed in 12 passes, and 6 989 (a network of 16
+neurons) in 34 passes and 44 minutes. The 12 800 did not converge in 31
+hours. Its placement filled 1 509 of the 1 757 slices it used with all
+eight tables, in one block against the processor, where every input
+and output is; each interconnect tile then has every one of its tables'
+inputs to feed, and the router cannot swap a table's inputs to ease
+that. Spreading the same design to six or four tables a slice made it
+worse while a wire still cost one a piece, which was what pointed at
+the costs; with free pieces it is being measured again.
+
+The settings the flow uses are the ones that converged: free pieces,
+`astar_weight` 2.0 (`zcu104::ASTAR_WEIGHT`), and rerouting only the
+signals that share a node after the first pass
+(`RouteOptions::reroute_congested_only`). A weight of 2.0 makes the
+search greedy: a first pass of the 12 800 took 90 seconds at 2.0 and 125
+at the default 0.3. The 3 924-table design converged with these settings
+in 12 passes and 12 minutes using 477 000 pips (bit-less ones counted),
+and with the router's defaults — no free pieces, weight 0.3, every
+signal rerouted — in 14 passes and 47 minutes using 314 000. So the
+settings buy time with longer routes; they are a speed setting, not a
+measured optimum.
+
 ## What remains, in order
 
 1. **More of the slice**: the carry chain, for adders that are not

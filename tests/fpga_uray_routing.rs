@@ -536,6 +536,13 @@ fn every_lookup_table_of_the_widest_region_reaches_the_middle() {
         unreaching.len()
     );
     assert_eq!(tables.len(), 26_880);
+    // The router's costs: a node only bit-less pips enter is a piece of a
+    // wire already taken and costs nothing (`Board::node_bases`). Pinned
+    // as measured; a change here changes every route the flow makes.
+    let bases = board.node_bases();
+    let free = bases.iter().filter(|b| **b == 0.0).count();
+    eprintln!("{free} of {} nodes are free pieces of a wire", bases.len());
+    assert_eq!((free, bases.len()), (4_021_375, 5_984_943));
     assert!(
         unreached.is_empty(),
         "{:?}",

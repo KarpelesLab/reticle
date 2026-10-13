@@ -40,6 +40,11 @@ pub const DEFAULT_EAST: u32 = 31;
 /// processor up to here.
 pub const MAX_EAST: u32 = 36;
 
+/// The router's distance charge per grid tile on this fabric
+/// (`RouteOptions::astar_weight`). See `docs/fpga-uray.md`, "Routing a
+/// large design".
+pub const ASTAR_WEIGHT: f64 = 2.0;
+
 /// The horizontal distribution track that carries `PL_CLK0` in Vivado's
 /// clock network for the PYNQ base overlay. Measured on the ZCU104 at
 /// 100.001 MHz (`docs/fpga-uray.md`).
@@ -473,16 +478,59 @@ impl<'a> Board<'a> {
         self.roots[node as usize]
     }
 
+    /// Each node's base cost for the router (`RouteOptions::node_base`):
+    /// zero for a node every pip into which has no bits, one otherwise.
+    ///
+    /// The fabric declares each tile's piece of a wire as its own node,
+    /// joined to its neighbours by a bit-less pip each way, so a wire is
+    /// as many nodes as tiles it crosses: a twelve-column horizontal wire
+    /// is a median of 22. At one apiece the router took the long wires
+    /// for the dear ones and spent its search walking along them; two
+    /// thirds of the region's six million nodes are such pieces. A node
+    /// only bit-less pips enter is never a choice — it is the rest of a
+    /// wire already taken, or a fixed buffer — so it costs nothing, and a
+    /// wire costs one, at the piece its driver's pip reaches. Measured on
+    /// a binarized network of 9 416 signals: one routing pass took 1 424
+    /// seconds before and 125 after.
+    pub fn node_bases(&self) -> Vec<f32> {
+        let graph = &self.graph;
+        (0..graph.nodes.len())
+            .map(|node| {
+                let into = graph.incoming(NodeId::try_from(node).unwrap_or(NodeId::MAX));
+                if !into.is_empty() && into.iter().all(|p| graph.pip_bits(*p).is_empty()) {
+                    0.0
+                } else {
+                    1.0
+                }
+            })
+            .collect()
+    }
+
     /// Nodes the generic router must not enter, by wire id: every node the
-    /// replayed bits drive, and every processor input but those whose
-    /// roots are in `allowed` (the design's own EMIO inputs). Give it to
-    /// `route` as `RouteOptions::network`, with no signal allowed onto it.
+    /// replayed bits drive, every processor input but those whose roots
+    /// are in `allowed` (the design's own EMIO inputs), and the clock
+    /// network's wires — every node with a wire named `CLK_…` other than a
+    /// leaf's (`CLK_LEAF_SITES_…`), which only `PL_CLK0`'s own pips drive.
+    /// Give it to `route` as `RouteOptions::network`, with no signal
+    /// allowed onto it.
+    ///
+    /// The clock wires are closed because the router took them for data.
+    /// A clock row's distribution wire crosses the whole row and reaches
+    /// hundreds of pips, so a search that may use one explores far more,
+    /// and a binarized network of 9 416 signals spent 21 minutes on one
+    /// routing pass and left 81 745 nodes oversubscribed, the worst of
+    /// them clock row buffers carrying ten signals each.
     ///
     /// # Errors
     ///
     /// As [`Board::ps8`].
     pub fn closed_nodes(&self, allowed: &HashSet<NodeId>) -> Result<Vec<bool>, UrayError> {
         let mut closed: HashSet<NodeId> = self.replay_driven.clone();
+        for (id, wire) in self.graph.nodes.iter().enumerate() {
+            if wire.name.starts_with("CLK_") && !wire.name.starts_with("CLK_LEAF_SITES_") {
+                closed.insert(self.roots[id]);
+            }
+        }
         let inputs = self.db.sites.get("PS8").map(|p| &p.inputs);
         for (pin, wire) in self.ps8_pins()? {
             if !inputs.is_some_and(|i| i.contains(pin)) {
@@ -1008,6 +1056,9 @@ pub fn implement(
     let options = RouteOptions {
         network: board.closed_nodes(&allowed).map_err(|e| e.to_string())?,
         network_signals: vec![false; netlist.signals.len()],
+        node_base: board.node_bases(),
+        astar_weight: ASTAR_WEIGHT,
+        reroute_congested_only: true,
         ..RouteOptions::default()
     };
     let (routing, routed) =
