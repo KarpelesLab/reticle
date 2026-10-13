@@ -673,9 +673,12 @@ pub fn route(
         for terminals in &terminals {
             if index > 1
                 && options.reroute_congested_only
-                && routing.routes[terminals.signal]
-                    .as_ref()
-                    .is_some_and(|r| r.nodes.iter().all(|n| state.occupancy[*n as usize] <= 1))
+                && routing.routes[terminals.signal].as_ref().is_some_and(|r| {
+                    state
+                        .roots(&r.nodes)
+                        .iter()
+                        .all(|n| state.occupancy[*n as usize] <= 1)
+                })
             {
                 continue;
             }
@@ -1264,7 +1267,13 @@ mod tests {
     /// and each with a `short` wire of its own. Each tile has a source and
     /// a sink that can use either.
     fn joined_long(base_long: f32) -> (RoutingGraph, Vec<f32>) {
-        let mut arch = Arch::new("joined", "test", 2, 1);
+        joined_long_across(2, base_long)
+    }
+
+    /// [`joined_long`] over `tiles` tiles in a row, all of whose `long`
+    /// wires are one piece of metal.
+    fn joined_long_across(tiles: u32, base_long: f32) -> (RoutingGraph, Vec<f32>) {
+        let mut arch = Arch::new("joined", "test", tiles, 1);
         let mut tile = TileType::new("t", "t_tile", 8, 8);
         for name in ["long", "short", "out0", "in0"] {
             tile.wires.push(WireDecl {
@@ -1305,8 +1314,9 @@ mod tests {
             });
         }
         arch.tile_types.push(tile);
-        arch.set_tile(0, 0, 0);
-        arch.set_tile(1, 0, 0);
+        for x in 0..tiles {
+            arch.set_tile(x, 0, 0);
+        }
         let graph = arch.build_graph();
         let base = graph
             .nodes
@@ -1324,6 +1334,37 @@ mod tests {
     /// What it would catch: capacity kept per graph node again, or joins
     /// not recognised as joins. What it would not catch: a family whose
     /// loader joins wires some other way than a free pip each way.
+    /// [`RouteOptions::reroute_congested_only`] judges a signal by its
+    /// physical nodes. Two signals in the second and third tiles of a
+    /// three-tile long wire each take their own tile's piece of it, and
+    /// neither piece is the one the wire is counted under (the first
+    /// tile's). Read by graph node, as the option first did after physical
+    /// nodes arrived, both looked uncontended and were never rerouted: a
+    /// network of 6 989 tables on the ZCU104 kept 43 nodes oversubscribed
+    /// through 100 iterations. With two tiles this would not have caught
+    /// it, because one signal always holds the counted piece.
+    #[test]
+    fn rerouting_only_the_congested_reads_physical_nodes() {
+        let (graph, base) = joined_long_across(3, 0.1);
+        let netlist = pairs(2);
+        let mut placement = Placement::new(netlist.instances.len(), graph.sites.len());
+        for (index, site) in ["X1Y0/src0", "X1Y0/dst0", "X2Y0/src0", "X2Y0/dst0"]
+            .iter()
+            .enumerate()
+        {
+            placement.place(index, graph.site_index(site).expect("site"));
+        }
+        let options = RouteOptions {
+            node_base: base,
+            reroute_congested_only: true,
+            ..RouteOptions::default()
+        };
+        let (routing, report) = route(&netlist, &graph, &placement, &options).expect("it routes");
+        assert!(report.iterations.len() > 1, "{}", report.to_text());
+        assert!(routing.verify(&netlist, &graph, &placement).is_empty());
+        assert!(routing.shorts(&netlist, &graph).is_empty());
+    }
+
     #[test]
     fn two_signals_never_share_one_piece_of_metal() {
         let (graph, base) = joined_long(0.1);
