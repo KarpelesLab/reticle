@@ -711,6 +711,15 @@ impl<'cx, 'ast> Lowerer<'cx, 'ast> {
             net: Some(net),
             span: p.name.span,
         });
+        // `output reg q = 1'b0` gives the variable its time-zero value, as
+        // the same initialiser does in the body. An input's `= value` is
+        // instead a default for an unconnected port, which this is not.
+        if let Some(init) = &p.default
+            && is_var
+            && ir_dir != PortDir::In
+        {
+            self.initial_value(net, init, p.span);
+        }
     }
 
     /// Records the ports of a Verilog-1995 header; the declarations in the
@@ -967,6 +976,9 @@ impl<'cx, 'ast> Lowerer<'cx, 'ast> {
                 if is_var {
                     self.nets[net.index()].is_var = true;
                     self.b.module_mut().nets[net].kind = NetKind::Reg;
+                    if let Some(init) = &d.init {
+                        self.initial_value(net, init, d.span);
+                    }
                 }
                 continue;
             }
@@ -983,6 +995,9 @@ impl<'cx, 'ast> Lowerer<'cx, 'ast> {
             self.set_port_dir(&d.name.name, dir);
             if let Some(slot) = self.ports.iter_mut().find(|p| p.name == d.name.name) {
                 slot.net = Some(net);
+            }
+            if is_var && let Some(init) = &d.init {
+                self.initial_value(net, init, d.span);
             }
         }
     }

@@ -1,0 +1,38 @@
+top ansi
+
+module non_ansi
+  net %clk u1 wire
+  net %d u1 wire
+  net %a u4 reg
+  port clk in %clk
+  port d in %d
+  port a out %a
+  process initial
+    %a = 4'd5
+  end
+  process seq posedge %clk
+    %a <= {%d, 3'd0}
+  end
+end
+
+module ansi
+  net %clk u1 wire
+  net %d u1 wire
+  net %v u1 reg
+  net %q u4 reg
+  port clk in %clk
+  port d in %d
+  port v out %v
+  port q out %q
+  instance u of non_ansi (clk=%clk, d=%d)
+  process initial
+    %v = 1'd1
+  end
+  process initial
+    %q = 4'd9
+  end
+  process seq posedge %clk
+    %v <= %d
+    %q <= {3'd0, %d}
+  end
+end
