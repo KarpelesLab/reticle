@@ -1,0 +1,41 @@
+# z80: the documented Zilog Z80 instruction set in a T-state accurate
+# core. The bus is the part's own — M1, MREQ, IORQ, RD, WR, RFSH and WAIT
+# — and an instruction takes the number of T-states the Zilog tables
+# print, so a system built around published timings keeps them.
+#
+# UNDOCUMENTED_FLAGS builds bits 3 and 5 of F, which no documented
+# instruction reads and which real code tests all the same: turn it off
+# and the two bits read zero and the logic that derives them is not
+# synthesised.
+name z80
+version 0.1.0
+license MIT
+description "Zilog Z80 core: the unprefixed and CB opcode spaces, T-state accurate, NMI / INT in mode 1, HALT with refresh"
+
+top z80
+target ice40
+target ecp5
+
+source rtl/z80.v
+
+param UNDOCUMENTED_FLAGS int 1 0..1
+
+port clk in
+port rst_n in
+port addr out 16
+port dout out 8
+port din in 8
+port dout_oe out
+port m1_n out
+port mreq_n out
+port iorq_n out
+port rd_n out
+port wr_n out
+port rfsh_n out
+port halt_n out
+port wait_n in
+port int_n in
+port nmi_n in
+port dbg_pc out 16
+port dbg_retire out
+port dbg_trap out
