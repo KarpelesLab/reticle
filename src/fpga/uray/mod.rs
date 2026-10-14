@@ -41,8 +41,8 @@ pub use bitstream::{
 
 pub use fabric::{
     ALIASES, EMIO_LINES, FabricInputs, FabricStats, GridRegion, PL_CLK0, SLICE_TYPES, SiteDecl,
-    SiteTypePins, TileConn, TileTypeWiring, UrayFabric, build_arch, composed_joins, is_break_type,
-    parse_tileconn, routing_of, wiring_type,
+    SiteTypePins, TileConn, TileTypeWiring, UrayFabric, build_arch, composed_joins, hpm0_lpd_pins,
+    is_break_type, parse_tileconn, routing_of, wiring_type,
 };
 
 use std::collections::{BTreeMap, HashMap};

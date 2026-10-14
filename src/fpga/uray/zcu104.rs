@@ -1112,16 +1112,13 @@ pub fn implement(
         place_options,
     )
     .map_err(|e| e.to_string())?;
-    // The design's own EMIO inputs may be driven; every other processor
-    // input, and every node Vivado's clock network drives, is closed.
+    // The processor inputs the design is bound to may be driven; every
+    // other one, and every node Vivado's clock network drives, is closed.
     // The processor's tie-offs first, while the tables and wires they need
     // are free; the design is then routed around them.
     board.reserve(&netlist, &placement);
     board.tie_processor().map_err(|e| e.to_string())?;
-    let mut allowed = HashSet::new();
-    for k in 0..super::EMIO_LINES {
-        allowed.insert(board.root(board.emio_in(k).map_err(|e| e.to_string())?));
-    }
+    let allowed = board.driven_inputs.clone();
     let options = RouteOptions {
         network: board.closed_nodes(&allowed).map_err(|e| e.to_string())?,
         network_signals: vec![false; netlist.signals.len()],

@@ -554,3 +554,54 @@ fn every_lookup_table_of_the_widest_region_reaches_the_middle() {
         &unreaching[..unreaching.len().min(8)]
     );
 }
+
+/// Every pin of the processor's AXI master port `M_AXI_HPM0_LPD` that a
+/// design can bind (`uray::hpm0_lpd_pins`) is a `PS8` pin of the
+/// database, in the direction the table gives it, and the device file
+/// declares it by the same name.
+///
+/// It catches a misspelt signal, a wrong width, a reversed direction
+/// (which would make a design input of a pin the processor reads, and the
+/// router would refuse it as a sink or tie it), and a pin the device file
+/// forgot, which a constraint could then not bind. It does not show that
+/// the processor uses the port as the table says: that was measured on
+/// the board (`docs/fpga-uray.md`, "Reaching the fabric over AXI"). Nor
+/// does it check that `PL_GP2_CLOCKIN` is this port's clock, which was
+/// read from Vivado's bitstream.
+#[test]
+fn the_axi_ports_pins_are_the_processors_in_their_direction() {
+    let (Some(bits_root), Some(wiring_root)) = (uraydb(), wiringdb()) else {
+        return;
+    };
+    let inputs = inputs(&bits_root, &wiring_root);
+    let ps8 = &inputs.sites["PS8"];
+    let pins = uray::hpm0_lpd_pins();
+    // The clock and 514 signal bits: 40 + 40 address, 128 + 128 data, ...
+    assert_eq!(pins.len(), 515);
+    let device = reticle::fpga::builtin_devices()
+        .get("xczu7ev-ffvc1156")
+        .expect("the ZU7EV is a built-in device");
+    for (name, pin, from_processor) in &pins {
+        let (side, other) = if *from_processor {
+            (&ps8.outputs, &ps8.inputs)
+        } else {
+            (&ps8.inputs, &ps8.outputs)
+        };
+        assert!(
+            side.contains(pin) && !other.contains(pin),
+            "`{name}` is `{pin}`, which the PS8 does not have in that direction"
+        );
+        assert!(
+            device.pin(name).is_some(),
+            "the device file does not declare `{name}`"
+        );
+    }
+    // Every processor pin of the port is there: none was left out.
+    let port: Vec<_> = ps8
+        .inputs
+        .iter()
+        .chain(&ps8.outputs)
+        .filter(|p| p.starts_with("AXI_PL_PORT2_"))
+        .collect();
+    assert_eq!(port.len(), 514);
+}

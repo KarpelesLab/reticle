@@ -856,6 +856,65 @@ effort above 7 reaches it. And neither build was given a timing goal;
 the router knows nothing of delay, so 37 ns is what the placement
 happened to give, not what the part can do.
 
+## Reaching the fabric over AXI
+
+EMIO is a bit-wide path through Linux's GPIO registers, and at 107 µs an
+image the network's tens of nanoseconds do not show. The processor's
+AXI master ports are the wide path. Of the three, the base overlay uses
+`M_AXI_HPM0_LPD`, which Linux reaches at `0x8000_0000`: the overlay's
+LEDs are there, and the PYNQ image enables and configures the port.
+Reticle drives it from the fabric side only, and changes nothing on the
+processor's.
+
+**Which pins.** The port is the `PS8`'s `AXI_PL_PORT2_*`, 514 pins, which
+the processor-side check above had already matched to the overlay's own
+AXI traffic. Its clock is not named for it. Of the three
+`PL_GP0..2_CLOCKIN` inputs, Vivado's bitstream drives only
+`PL_GP2_CLOCKIN` from a clock leaf (`RCLK_INT_L_X27Y209`, leaf 12, into
+`INT_X27Y198`); the other two are tied to a lookup table like any unused
+input. So `PL_GP2_CLOCKIN` is this port's clock: **read from the
+bitstream, then confirmed by the port working.** `fabric::hpm0_lpd_pins`
+names them for a design, `HPM0_LPD_AWADDR0` … `HPM0_LPD_RREADY` and
+`HPM0_LPD_ACLK`, and `uray.dev` declares them. A design binds them as it
+binds EMIO, and drives the clock pin with `assign aclk = clk`: the router
+takes `PL_CLK0` through a leaf to the pin, as Vivado did.
+
+The port's data width is set on the processor's side. `LPD_SLCR`'s
+`AFI_FS` (`0xFF419000`) read `0x200`, which by the reference manual's
+encoding is 128 bits; that is a reading, not a measurement. The slave
+was written not to depend on it: it takes a write's word from the lane
+its strobes name, and returns a read's word on all four lanes.
+
+**Measured, 2026-10-15.** The 16-neuron network behind a small AXI slave
+(registers: seven image words, a start, three score words, and the
+class with a count of answers), 8 013 instances, routed in 4 hours 38
+minutes; 1 033 430 set bits, every one decoded. Linux maps the window
+through `/dev/mem` and a C program does seven 32-bit stores, a start,
+polls the count and reads the scores:
+
+| `PL_CLK0` | One read | One store (posted) | Per image | Bit-exact |
+|---|---|---|---|---|
+| 100 MHz | 182 ns | 20 ns | 1.11 µs | 12 / 2 000 |
+| 50 MHz | 241 ns | 41 ns | 1.58 µs | 2 000 / 2 000 |
+| 25 MHz | 361 ns | 80 ns | 2.53 µs | 2 000 / 2 000 |
+| 10 MHz | 804 ns | 200 ns | 5.51 µs | 2 000 / 2 000 |
+
+At 50 MHz the network answers every image as the model does, **68 times
+faster than over EMIO**, and the time is the bus: eleven transactions at
+a few hundred nanoseconds. Python is not in the loop.
+
+At 100 MHz it does not. The answers are wrong in ways that depend on
+the image and on the image before it, and the same image gives the same
+wrong answer. Two experiments narrowed it. Starting the same image a
+second time, 200 ns later, gave the same wrong answer, so the network was
+not still settling. Writing every word twice fixed some images but not
+all. Neither stuck pixels nor misplaced words explain the 30 answers
+recorded. The likely cause is the write path, which took a pin, two
+lookup tables and a register across the die in one clock; the EMIO
+design held its data still for several clocks before latching it, and
+never needed that. The router knows nothing of delay. A version that
+registers every input pin before any logic reads it is being built.
+
 ## What remains, in order
 
 1. **More of the slice**: the carry chain, for adders that are not
@@ -865,9 +924,10 @@ happened to give, not what the part can do.
    Vivado's clock network, replayed (above). Building that network rather
    than borrowing it needs the processor's clock buffers on this die,
    which no database describes.
-3. **The processor interface.** The fabric talks to Linux through the
-   `PS8` block's AXI ports, whose bits are in `INT_INTF_LEFT_TERM_PSS` and
-   `PSS_ALTO`.
+3. **The rest of the processor interface.** `M_AXI_HPM0_LPD` works
+   (above). The other masters, the slave ports a design would use to
+   reach DDR, and interrupts are not yet exposed; each needs the
+   processor configured for it, which the PYNQ image may not have done.
 4. **Instantiated primitives.** A `LUT6` written as an instance in Verilog
    stays an instance: the frontend does not know the device's primitives,
    and the flow does not turn such an instance into a cell with the

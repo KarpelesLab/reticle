@@ -504,6 +504,85 @@ pub const PL_CLK0: &str = "PL_CLK0";
 /// How many EMIO GPIO lines the processor has in each direction.
 pub const EMIO_LINES: u32 = 96;
 
+/// The processor's low-power-domain AXI master, `M_AXI_HPM0_LPD`: the
+/// `PS8`'s `AXI_PL_PORT2_*` pins, which the PYNQ image enables and maps at
+/// `0x8000_0000` (`docs/fpga-uray.md`, "Reaching the fabric over AXI").
+/// Each signal, its width (1 is a pin with no index), and whether the
+/// processor drives it.
+const HPM0_LPD: &[(&str, u32, bool)] = &[
+    ("AWADDR", 40, true),
+    ("AWBURST", 2, true),
+    ("AWCACHE", 4, true),
+    ("AWID", 16, true),
+    ("AWLEN", 8, true),
+    ("AWLOCK", 1, true),
+    ("AWPROT", 3, true),
+    ("AWQOS", 4, true),
+    ("AWSIZE", 3, true),
+    ("AWUSER", 16, true),
+    ("AWVALID", 1, true),
+    ("AWREADY", 1, false),
+    ("WDATA", 128, true),
+    ("WLAST", 1, true),
+    ("WSTRB", 16, true),
+    ("WVALID", 1, true),
+    ("WREADY", 1, false),
+    ("BID", 16, false),
+    ("BRESP", 2, false),
+    ("BVALID", 1, false),
+    ("BREADY", 1, true),
+    ("ARADDR", 40, true),
+    ("ARBURST", 2, true),
+    ("ARCACHE", 4, true),
+    ("ARID", 16, true),
+    ("ARLEN", 8, true),
+    ("ARLOCK", 1, true),
+    ("ARPROT", 3, true),
+    ("ARQOS", 4, true),
+    ("ARSIZE", 3, true),
+    ("ARUSER", 16, true),
+    ("ARVALID", 1, true),
+    ("ARREADY", 1, false),
+    ("RDATA", 128, false),
+    ("RID", 16, false),
+    ("RLAST", 1, false),
+    ("RRESP", 2, false),
+    ("RVALID", 1, false),
+    ("RREADY", 1, true),
+];
+
+/// The `M_AXI_HPM0_LPD` port's pins as a design sees them: the name a
+/// constraint binds (`HPM0_LPD_AWADDR0`, `HPM0_LPD_AWVALID`), the `PS8`
+/// pin, and whether the processor drives it (a design input). The port's
+/// clock is `HPM0_LPD_ACLK`, the `PS8`'s `PL_GP2_CLOCKIN`: in the base
+/// overlay it is the one of the three `PL_GP*_CLOCKIN` a clock leaf
+/// drives, the other two being tied to a lookup table.
+pub fn hpm0_lpd_pins() -> Vec<(String, String, bool)> {
+    let mut out = vec![(
+        "HPM0_LPD_ACLK".to_owned(),
+        "PL_GP2_CLOCKIN".to_owned(),
+        false,
+    )];
+    for &(signal, width, from_processor) in HPM0_LPD {
+        if width == 1 {
+            out.push((
+                format!("HPM0_LPD_{signal}"),
+                format!("AXI_PL_PORT2_{signal}"),
+                from_processor,
+            ));
+        } else {
+            for k in 0..width {
+                out.push((
+                    format!("HPM0_LPD_{signal}{k}"),
+                    format!("AXI_PL_PORT2_{signal}{k}"),
+                    from_processor,
+                ));
+            }
+        }
+    }
+    out
+}
+
 /// The name of the variant of `base` that also joins east to `other`,
 /// `distance` columns away.
 fn variant_name(base: &str, other: &str, distance: u32) -> String {
@@ -722,8 +801,8 @@ pub fn build_arch(inputs: &FabricInputs<'_>, region: GridRegion) -> UrayFabric {
                 }
             }
         }
-        // The processor's EMIO GPIO lines and its first clock, as places a
-        // design's ports can be bound to.
+        // The processor's EMIO GPIO lines, its AXI master port and its
+        // first clock, as places a design's ports can be bound to.
         if kind == "PSS_ALTO"
             && let Some(site) = wiring.sites.first()
         {
@@ -739,6 +818,14 @@ pub fn build_arch(inputs: &FabricInputs<'_>, region: GridRegion) -> UrayFabric {
                     let mut bel = BelDecl::new(format!("EMIO_I{k}"), "io");
                     bel.pins
                         .push(("dout".to_owned(), WireRef::local(w.as_str())));
+                    tile_type.bels.push(bel);
+                }
+            }
+            for (name, pin, from_processor) in hpm0_lpd_pins() {
+                if let Some(w) = pin_wire(&pin) {
+                    let mut bel = BelDecl::new(name, "io");
+                    let role = if from_processor { "din" } else { "dout" };
+                    bel.pins.push((role.to_owned(), WireRef::local(w.as_str())));
                     tile_type.bels.push(bel);
                 }
             }
@@ -851,6 +938,9 @@ pub fn build_arch(inputs: &FabricInputs<'_>, region: GridRegion) -> UrayFabric {
             for name in [format!("EMIO_O{k}"), format!("EMIO_I{k}")] {
                 arch.pinmap.push((name.clone(), format!("X{x}Y{y}/{name}")));
             }
+        }
+        for (name, _, _) in hpm0_lpd_pins() {
+            arch.pinmap.push((name.clone(), format!("X{x}Y{y}/{name}")));
         }
         if inputs.processor_clock_track.is_some() {
             arch.globals.push(PL_CLK0.to_owned());
