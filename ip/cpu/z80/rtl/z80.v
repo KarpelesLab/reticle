@@ -34,13 +34,21 @@
 //   keeps plain `HL`; so does everything in the `ED` space, which
 //   ignores a prefix entirely.
 //
-//   **What is not here:** the `DD CB` and `FD CB` subspaces, where the
-//   displacement sits *between* the prefix and the opcode instead of
-//   after it; the undocumented `IXh` and `IXl` halves, which the
-//   reference does not define; and `IM 0`'s and `IM 2`'s interrupt
-//   *responses*, since the mode is stored but `INT` always answers as
-//   mode 1. `BUSRQ` / `BUSAK` are absent: this core never gives up the
-//   bus.
+//   And `DD CB` / `FD CB`: `BIT`, `RES`, `SET` and the eight shifts on
+//   `(IX+d)` and `(IY+d)`. That encoding is the odd one of the set —
+//   the displacement sits **between** the `CB` and the opcode instead
+//   of after it, and the opcode byte is read as *data* rather than
+//   fetched, so `R` does not count it.
+//
+//   That is every documented encoding the Zilog tables hold, and
+//   `tests/ip_library.rs::z80_counts_the_t_states_of_every_instruction_it_implements`
+//   runs all 698 of them against the T-states those tables print.
+//
+//   **What is not here:** the undocumented `IXh` and `IXl` halves,
+//   which the reference does not define; the undocumented `SLL`; and
+//   `IM 0`'s and `IM 2`'s interrupt *responses*, since the mode is
+//   stored but `INT` always answers as mode 1. `BUSRQ` / `BUSAK` are
+//   absent: this core never gives up the bus.
 //
 //   And four flags are a **choice, not a measurement**: Zilog documents
 //   `INI`, `IND`, `OUTI` and `OUTD` as setting Z from the counter and N
@@ -176,7 +184,11 @@
 //
 //   `LD (IX+d),n` is the one that does not follow the rule: the
 //   reference gives it a five-T-state read of the immediate and no
-//   separate cycle for the add, so it has a shape of its own.
+//   separate cycle for the add, so it has a shape of its own. So does
+//   `DD CB`, whose four bytes are a fetch, a fetch, a read and a read:
+//
+//     BIT b,(IX+d)        M1(4) + M1(4) + 3 + 5 + 4            = 20
+//     RES / SET / shifts  M1(4) + M1(4) + 3 + 5 + 4 + 3        = 23
 //
 //   An `M1(4)` whose instruction is longer than one byte spends its
 //   fetch on the opcode; the operand bytes are the 3-T-state reads
@@ -652,7 +664,10 @@ module z80 #(
         SH_ED_IN    = 6'd31,  // M1(4) + M1(5) + io 4   + write 3  [+ 5]
         SH_ED_OUT   = 6'd32,  // M1(4) + M1(5) + read 3 + io 4     [+ 5]
         SH_PFX      = 6'd33,  // a DD or FD fetch, and nothing else
-        SH_IDX_LDN  = 6'd34;  // M1(4) + M1(4) + 3 + 5 + 3         = 19  // + read + read + two reads or writes = 20
+        SH_IDX_LDN  = 6'd34,  // M1(4) + M1(4) + 3 + 5 + 3         = 19
+        // DD CB d op, whose displacement comes *before* its opcode and
+        // whose opcode is read as data rather than fetched.
+        SH_IDX_CB   = 6'd35;  // M1(4)+M1(4)+3+5+4 [+3]      = 20 or 23  // + read + read + two reads or writes = 20
 
     reg [2:0] m = 3'd0;        // which M-cycle of the instruction
     reg [2:0] t = 3'd1;        // which T-state of that M-cycle
@@ -754,6 +769,7 @@ module z80 #(
         // A DD or FD byte is a fetch and nothing else; the shape that
         // follows is the next byte's, read through `meff`.
         if (ir_is_idx) shape = SH_PFX;
+        else if (idx_on && (ir == 8'hcb)) shape = SH_IDX_CB;
         else if (idx_on && op_ld_ptr_n) shape = SH_IDX_LDN;
         // Held for the whole of the interrupt's own three M-cycles:
         // reading it off the live inputs made it vanish after one
@@ -772,7 +788,13 @@ module z80 #(
     wire [2:0] cbz = cbo[2:0];
     // The operand: a register, or the byte read from `(HL)` — which is
     // on `din` at the end of that read and in `tmp` by the write.
-    wire [7:0] cb_val = (cbz == 3'd6) ? ((m == 3'd2) ? din : tmp) : rd8(cbz);
+    // An indexed CB form reads its operand at M-cycle four rather than
+    // two, and always from memory: `(IX+d)` whatever the register field
+    // says.
+    wire       cb_idx = idx_on && (ir == 8'hcb);
+    wire [7:0] cb_val = cb_idx    ? ((m == 3'd4) ? din : tmp)
+                      : (cbz == 3'd6) ? ((m == 3'd2) ? din : tmp)
+                      :                 rd8(cbz);
     reg  [7:0] cb_mask;
     always @(*) begin
         case (cby)
@@ -801,8 +823,12 @@ module z80 #(
         step_in  = (shape == SH_RMW) ? ((m == 3'd1) ? din : tmp) : gp_rd_y;
         // The shifter serves the four rotates of A and the whole of the
         // CB quadrant below it.
-        rot_in = (shape == SH_CB) ? cb_val : a_reg;
-        rot_op = (shape == SH_CB) ? cby : y;
+        // Both CB shapes feed the shifter their own operand; only the
+        // four rotates of A in the first quadrant feed it A. Leaving
+        // the indexed form out had `RLC (IX+d)` rotating the
+        // accumulator and storing that.
+        rot_in = ((shape == SH_CB) || (shape == SH_IDX_CB)) ? cb_val : a_reg;
+        rot_op = ((shape == SH_CB) || (shape == SH_IDX_CB)) ? cby : y;
         case (p)
             2'd0: add16_rhs = bc;
             2'd1: add16_rhs = de;
@@ -983,6 +1009,17 @@ module z80 #(
             kind = CY_NONE; tlen = 3'd5; last_cycle = 1'b0;
         end else case (shape)
             SH_PFX: begin kind = CY_M1; tlen = 3'd4; last_cycle = 1'b0; end
+            // `DD CB d op`. Four bytes, and the last of them is read
+            // as **data**: the part does not run an M1 cycle for it, so
+            // R does not count it. Every form addresses `(IX+d)`
+            // whatever its register field says.
+            SH_IDX_CB: case (m)
+                3'd0, 3'd1: begin kind = CY_M1; tlen = 3'd4; last_cycle = 1'b0; end
+                3'd2: begin kind = CY_RD; tlen = 3'd3; last_cycle = 1'b0; end
+                3'd3: begin kind = CY_RD; tlen = 3'd5; last_cycle = 1'b0; end
+                3'd4: begin kind = CY_RD; tlen = 3'd4; last_cycle = cb_is_bit; end
+                default: begin kind = CY_WR; tlen = 3'd3; last_cycle = 1'b1; end
+            endcase
             SH_IDX_LDN: case (m)
                 // Its own two fetches, which the `default` below would
                 // otherwise take for the write and end the instruction
@@ -1238,6 +1275,7 @@ module z80 #(
                            :               a_reg;          // LD (DE),A
             SH_RD_WR:     dout_r = tmp;                    // LD (HL),n
             SH_IDX_LDN:   dout_r = tmp;                    // LD (IX+d),n
+            SH_IDX_CB:    dout_r = cb_res;
             SH_ADDR_WR:   dout_r = a_reg;                  // LD (nn),A
             SH_ADDR_WR16: dout_r = (meff == 3'd3) ? pair_hl[7:0] : pair_hl[15:8];
             SH_RMW:       dout_r = step_res;
@@ -1286,6 +1324,7 @@ module z80 #(
             // Indexed by the real M-cycle, because this shape exists
             // only under a prefix and counts the prefix's own fetch.
             SH_IDX_LDN: addr_r = (m <= 3'd3) ? pc : ptr_hl;
+            SH_IDX_CB:  addr_r = (m <= 3'd3) ? pc : ptr_hl;
             SH_RMW:   addr_r = (meff == 3'd0) ? pc : ptr_hl;
             SH_ADDR_RD, SH_ADDR_WR, SH_ADDR_RD16, SH_ADDR_WR16:
                 addr_r = (meff <= 3'd2) ? pc
@@ -1437,6 +1476,10 @@ module z80 #(
                     // ended.
                     if (ir_is_idx) ir <= din;
                     else op2 <= din;
+                end else if (cb_idx && (m == 3'd3)) begin
+                    // The opcode of a `DD CB`, which arrives on a read
+                    // rather than a fetch.
+                    op2 <= din;
                 end else begin
                     tmp <= din;
                     // The two operand bytes land in WZ, at the first
@@ -1514,8 +1557,22 @@ module z80 #(
                 SH_ONE, SH_M1_6: exec_one;
                 SH_PFX: ;
                 SH_IDX_LDN: exec_idx_ldn;
+                SH_IDX_CB: exec_idx_cb;
                 default: exec_long;
             endcase
+        end
+    endtask
+
+    // `DD CB d op`: four bytes, then the operand is read, acted on and
+    // written back. `BIT` ends at the read, having only set flags.
+    task exec_idx_cb;
+        begin
+            if (m == 3'd1) pc <= pc + 16'd1;          // the CB byte
+            else if (m == 3'd2) begin
+                pc <= pc + 16'd1;                     // the displacement
+                disp <= din;
+            end else if (m == 3'd3) pc <= pc + 16'd1; // the opcode byte
+            else if (m == 3'd4) r_f <= cb_f;
         end
     endtask
 

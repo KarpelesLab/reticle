@@ -6636,11 +6636,11 @@ fn z80_design(undocumented: &str) -> Design {
 /// `ED`'s second quadrant is `LDI`, `CPI`, `INI`, `OUTI` and their
 /// repeating and decrementing forms, which are the eight that carry a
 /// second T-state count and the ones the core still traps.
-fn z80_undecoded(code: &[u8]) -> bool {
-    // `DD CB` and `FD CB` are not decoded yet: the displacement sits
-    // between the prefix and the opcode there, which is a different
-    // shape from every other index form.
-    matches!(code[0], 0xDD | 0xFD) && code.len() >= 3 && code[1] == 0xCB
+fn z80_undecoded(_code: &[u8]) -> bool {
+    // Nothing: the core decodes every documented encoding the table
+    // holds. The function stays because the sweep's shape depends on
+    // it and the next thing to be left out will want it again.
+    false
 }
 
 /// True for one of `ED`'s sixteen block instructions.
@@ -6661,6 +6661,14 @@ fn z80_is_block(code: &[u8]) -> bool {
 /// cannot change an instruction's T-states, and a jump's target does not
 /// matter to the one measurement taken before it is followed.
 fn z80_with_zero_operands(insn: &z80::Insn) -> Vec<u8> {
+    // A `DD CB` displacement sits **between** the `CB` and the opcode
+    // rather than after it, which is the one place in the instruction
+    // set where an operand is not last. Appending it put a zero where
+    // the opcode belonged, and the core correctly timed the rotate that
+    // zero names.
+    if insn.code.len() == 3 && insn.code[1] == 0xCB {
+        return vec![insn.code[0], insn.code[1], 0x00, insn.code[2]];
+    }
     let mut out = insn.code.to_vec();
     match insn.field() {
         z80::Field::None => {}
@@ -6858,8 +6866,8 @@ fn z80_counts_the_t_states_of_every_instruction_it_implements() {
     // The 140 are DD and FD with their own CB subspaces.
     assert_eq!(
         (checked, skipped),
-        (636, 62),
-        "everything but the DD CB and FD CB subspaces"
+        (698, 0),
+        "every documented encoding the reference table holds"
     );
 }
 
@@ -7033,12 +7041,15 @@ fn z80_computes_the_ed_quadrant() {
 /// index registers are genuinely separate rather than one register the
 /// prefix renames.
 ///
-/// What this would not catch: `DD CB` and `FD CB`, which the core does
-/// not decode and the sweep skips; the undocumented `IXh` / `IXl`
-/// halves, which the reference does not define and the assembler does
-/// not accept; and the documented quirk that `EX DE,HL` ignores a
-/// prefix, which has no observable effect here because the core keeps
-/// plain `hl` for it by construction.
+/// The last three instructions are the `DD CB` shape, whose
+/// displacement sits between the `CB` and the opcode and whose opcode
+/// is read as data rather than fetched.
+///
+/// What this would not catch: the undocumented `IXh` / `IXl` halves,
+/// which the reference does not define and the assembler does not
+/// accept; and the documented quirk that `EX DE,HL` ignores a prefix,
+/// which has no observable effect here because the core keeps plain
+/// `hl` for it by construction.
 #[test]
 fn z80_indexes_with_ix_and_iy() {
     let design = z80_design("1");
@@ -7075,6 +7086,20 @@ fn z80_indexes_with_ix_and_iy() {
             ld   ($9128),hl      ; 0021 again, through the stack
             ld   ix,$9130
             ld   (ix-1),$77      ; a negative displacement
+            ld   ix,$9140
+            ld   (ix+3),$0f
+            set  7,(ix+3)        ; DD CB 03 FE
+            res  0,(ix+3)
+            rlc  (ix+3)
+            ld   a,(ix+3)
+            ld   ($9150),a       ; 0f -> 8f -> 8e -> 1d
+            ld   (ix+4),$01
+            bit  0,(ix+4)
+            ld   a,0
+            jr   z,notset
+            ld   a,$be
+        notset:
+            ld   ($9151),a       ; be, because bit 0 was set
             halt
         ",
     )
@@ -7098,6 +7123,9 @@ fn z80_indexes_with_ix_and_iy() {
     assert_eq!(pair(0x9126), 0x0021, "add ix,bc");
     assert_eq!(pair(0x9128), 0x0021, "push ix then pop hl");
     assert_eq!(at(0x912f), 0x77, "a negative displacement");
+    // 0f, set 7 -> 8f, res 0 -> 8e, rlc -> 1d.
+    assert_eq!(at(0x9150), 0x1d, "set, res and rlc through DD CB");
+    assert_eq!(at(0x9151), 0xbe, "bit 0,(ix+4) found the bit set");
     assert_eq!(cpu.traps, 0, "nothing in the program trapped");
 }
 
