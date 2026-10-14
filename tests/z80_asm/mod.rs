@@ -18,6 +18,48 @@
 //! the thing on trial. The T states are the reference's, which is what a
 //! test that counts a core's cycles has to compare against.
 //!
+//! **CHECKED against a second reference, 15 October 2026.** Typing a
+//! table out is exactly the way to put the same wrong number in two
+//! places: a core and a table that agree because one person remembered
+//! the same thing twice would pass every test in this repository. So all
+//! 698 entries were compared, mechanically and by opcode bytes, against
+//! the opcode matrix published at `clrhome.org/table/`, which was
+//! compiled by somebody else and is not derived from anything here.
+//! **Every entry
+//! agrees**, in the mnemonic, in both T-state counts where there are
+//! two, in the encoding's length in bytes, and in the operand text
+//! itself but for two notation choices: that reference writes a
+//! relative branch's displacement `d` where this writes `label`, and
+//! `rst 00h` where this writes `rst $00`. The comparison was a
+//! throwaway script against that page's own markup, not anything in this
+//! repository, which is why it is recorded here as a reading rather than
+//! left as a test: nothing is committed that would re-run it.
+//!
+//! That reference holds 1443 cells to this table's 698, and the 745 it
+//! has and this does not are all deliberate, which is worth counting out
+//! because a table short of an instruction would look exactly like a
+//! table that is right:
+//!
+//! | absent | why |
+//! |---|---|
+//! | 322 | `DD CB` forms that also copy the result into a register |
+//! | 160 | `DD` / `FD` on an instruction that does not use `HL`, where the prefix is four T states and nothing else |
+//! | 112 | duplicate `DD CB` `bit` encodings, same effect, different opcode |
+//! | 92 | the `ixh` / `ixl` / `iyh` / `iyl` halves |
+//! | 33 | Z180: `in0`, `out0`, `tst`, `mlt`, `slp`, `tstio`, `otim`, `otdm`, `otimr`, `otdmr` — not Z80 at all |
+//! | 24 | `sll` |
+//! | 2 | `ED 70` `in (c)` and `ED 71` `out (c),0` |
+//!
+//! 322 + 160 + 112 + 92 + 33 + 24 + 2 is 745, so nothing is left over:
+//! every cell of that reference is either in this table or in a row
+//! above. "The undocumented encodings are deliberately absent", below,
+//! says why each row is a choice.
+//!
+//! What that check would not catch: an error common to both, since both
+//! are readings of the same published instruction set, and anything at
+//! all about the core — which is the point of keeping this file ignorant
+//! of it.
+//!
 //! All five encoding spaces are here:
 //!
 //! | space | entries |
