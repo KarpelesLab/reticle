@@ -6637,7 +6637,10 @@ fn z80_design(undocumented: &str) -> Design {
 /// repeating and decrementing forms, which are the eight that carry a
 /// second T-state count and the ones the core still traps.
 fn z80_undecoded(code: &[u8]) -> bool {
-    matches!(code[0], 0xDD | 0xFD)
+    // `DD CB` and `FD CB` are not decoded yet: the displacement sits
+    // between the prefix and the opcode there, which is a different
+    // shape from every other index form.
+    matches!(code[0], 0xDD | 0xFD) && code.len() >= 3 && code[1] == 0xCB
 }
 
 /// True for one of `ED`'s sixteen block instructions.
@@ -6855,8 +6858,8 @@ fn z80_counts_the_t_states_of_every_instruction_it_implements() {
     // The 140 are DD and FD with their own CB subspaces.
     assert_eq!(
         (checked, skipped),
-        (558, 140),
-        "the unprefixed, CB and ED encodings, against DD and FD"
+        (636, 62),
+        "everything but the DD CB and FD CB subspaces"
     );
 }
 
@@ -6873,13 +6876,7 @@ fn z80_counts_the_t_states_of_every_instruction_it_implements() {
 #[test]
 fn z80_traps_the_prefixes_it_does_not_decode() {
     let design = z80_design("1");
-    for prefix in [0xDDu8, 0xFD] {
-        let mut cpu = Z80::new(&design, &[prefix, 0x00, 0x00]);
-        let got = cpu.run_one("an undecoded prefix");
-        assert_eq!(got, 4, "an undecoded prefix takes a NOP's four T-states");
-        assert_eq!(cpu.traps, 1, "{prefix:#04x} raised dbg_trap once");
-    }
-    // `CB` and `ED` are decoded, and say nothing.
+    // `CB`, `ED`, `DD` and `FD` are all decoded, and say nothing.
     let mut cpu = Z80::new(&design, &[0xCB, 0x00]);
     cpu.run_one("rlc b");
     assert_eq!(cpu.traps, 0, "CB is decoded and raises nothing");
@@ -7024,6 +7021,83 @@ fn z80_computes_the_ed_quadrant() {
     assert_eq!(at(0x910a), 0xa3, "rrd wrote the low nibble of a into (hl)");
     assert_eq!(at(0x910b), 0x71, "and took (hl)'s low nibble into a");
     assert_eq!(at(0x910c), 0x5a, "a through I and back");
+    assert_eq!(cpu.traps, 0, "nothing in the program trapped");
+}
+
+/// # IX and IY address with a displacement, and are two registers
+///
+/// A `DD` or `FD` prefix redirects `HL` for one instruction: as a pair
+/// it becomes IX or IY, and as the address `(HL)` names it becomes that
+/// register plus a **signed** displacement byte. So this writes and
+/// reads through both, forwards and backwards, and checks that the two
+/// index registers are genuinely separate rather than one register the
+/// prefix renames.
+///
+/// What this would not catch: `DD CB` and `FD CB`, which the core does
+/// not decode and the sweep skips; the undocumented `IXh` / `IXl`
+/// halves, which the reference does not define and the assembler does
+/// not accept; and the documented quirk that `EX DE,HL` ignores a
+/// prefix, which has no observable effect here because the core keeps
+/// plain `hl` for it by construction.
+#[test]
+fn z80_indexes_with_ix_and_iy() {
+    let design = z80_design("1");
+    let image = z80::assemble(
+        "
+        .org $0000
+            ld   ix,$9100
+            ld   (ix+0),$11
+            ld   (ix+5),$22
+            ld   a,(ix+5)
+            ld   ($9120),a       ; 22
+            ld   b,$44
+            ld   (ix+2),b
+            ld   a,(ix+2)
+            ld   ($9121),a       ; 44
+            inc  (ix+0)
+            ld   a,(ix+0)
+            ld   ($9122),a       ; 12
+            ld   a,$10
+            add  a,(ix+5)
+            ld   ($9123),a       ; 32
+            ld   iy,$9200
+            ld   (iy+0),$99
+            ld   a,(ix+0)
+            ld   ($9124),a       ; still 12: IX is not IY
+            ld   a,(iy+0)
+            ld   ($9125),a       ; 99
+            ld   ix,$0001
+            ld   bc,$0020
+            add  ix,bc
+            ld   ($9126),ix      ; 0021
+            push ix
+            pop  hl
+            ld   ($9128),hl      ; 0021 again, through the stack
+            ld   ix,$9130
+            ld   (ix-1),$77      ; a negative displacement
+            halt
+        ",
+    )
+    .unwrap_or_else(|e| panic!("the program does not assemble: {e}"));
+
+    let mut program = vec![0u8; 0x1_0000];
+    for (at, byte) in &image.bytes {
+        program[usize::from(*at)] = *byte;
+    }
+    let mut cpu = Z80::new(&design, &program);
+    cpu.run(400, 8000);
+
+    let at = |a: u16| cpu.mem[usize::from(a)];
+    let pair = |a: u16| u16::from(at(a)) | (u16::from(at(a + 1)) << 8);
+    assert_eq!(at(0x9120), 0x22, "ld (ix+5),n then ld a,(ix+5)");
+    assert_eq!(at(0x9121), 0x44, "ld (ix+2),b then ld a,(ix+2)");
+    assert_eq!(at(0x9122), 0x12, "inc (ix+0)");
+    assert_eq!(at(0x9123), 0x32, "add a,(ix+5)");
+    assert_eq!(at(0x9124), 0x12, "IY did not disturb IX");
+    assert_eq!(at(0x9125), 0x99, "and IY addressed its own page");
+    assert_eq!(pair(0x9126), 0x0021, "add ix,bc");
+    assert_eq!(pair(0x9128), 0x0021, "push ix then pop hl");
+    assert_eq!(at(0x912f), 0x77, "a negative displacement");
     assert_eq!(cpu.traps, 0, "nothing in the program trapped");
 }
 

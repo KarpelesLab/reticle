@@ -27,12 +27,18 @@
 //   work. No ROM, no system software and no vendor netlist is in this
 //   package, and none is needed to run it.
 //
-//   **What is not here, and traps rather than guesses:** the `DD` and
-//   `FD` prefixes, and therefore `IX` and `IY`. Fetching one raises
-//   `dbg_trap` for a cycle and the core treats it as a `NOP`, so a
-//   program that reaches one says so instead of quietly computing
-//   something else. `IM 0`'s and `IM 2`'s *interrupt responses* are not
-//   implemented either: the mode is stored, and `INT` always answers as
+//   `DD` and `FD`: the whole documented index set. A prefix redirects
+//   `HL` for one instruction — as a pair it becomes `IX` or `IY`, and
+//   as the address `(HL)` names it becomes that register plus a signed
+//   displacement byte. `EX DE,HL` is the documented exception and
+//   keeps plain `HL`; so does everything in the `ED` space, which
+//   ignores a prefix entirely.
+//
+//   **What is not here:** the `DD CB` and `FD CB` subspaces, where the
+//   displacement sits *between* the prefix and the opcode instead of
+//   after it; the undocumented `IXh` and `IXl` halves, which the
+//   reference does not define; and `IM 0`'s and `IM 2`'s interrupt
+//   *responses*, since the mode is stored but `INT` always answers as
 //   mode 1. `BUSRQ` / `BUSAK` are absent: this core never gives up the
 //   bus.
 //
@@ -151,6 +157,26 @@
 //
 //   The second fetch of the four port forms is five T-states and the
 //   others' is four, which is the one asymmetry in the quadrant.
+//
+//   A `DD` or `FD` prefix adds its own four-T-state fetch in front of
+//   whatever follows, so `INC IX` is `INC HL` plus four and `PUSH IX`
+//   is `PUSH HL` plus four. A **displaced** form adds eight instead:
+//   three to read the displacement and five for the part to add it to
+//   the index register.
+//
+//     INC IX / LD SP,IX               4 + 6                        = 10
+//     JP (IX)                         4 + 4                        = 8
+//     LD IX,nn / POP IX               4 + 10                       = 14
+//     ADD IX,rp / PUSH IX             4 + 11                       = 15
+//     LD r,(IX+d) / ALU A,(IX+d)      4 + 3 + 5 + 7                = 19
+//     LD (IX+d),n                     M1(4) + M1(4) + 3 + 5 + 3    = 19
+//     LD (nn),IX / LD IX,(nn)         4 + 16                       = 20
+//     INC (IX+d)                      4 + 3 + 5 + 11               = 23
+//     EX (SP),IX                      4 + 19                       = 23
+//
+//   `LD (IX+d),n` is the one that does not follow the rule: the
+//   reference gives it a five-T-state read of the immediate and no
+//   separate cycle for the add, so it has a shape of its own.
 //
 //   An `M1(4)` whose instruction is longer than one byte spends its
 //   fetch on the opcode; the operand bytes are the 3-T-state reads
@@ -317,6 +343,35 @@ module z80 #(
     wire [15:0] de = {r_d, r_e};
     wire [15:0] hl = {r_h, r_l};
 
+    // ------------------------------------------------------------------
+    // WHAT `HL` MEANS, WHICH A DD OR FD PREFIX CHANGES
+    // ------------------------------------------------------------------
+    // Two different things wear the name, and a prefix redirects them
+    // differently, so they are separate wires even while nothing sets
+    // the prefix state:
+    //
+    //   `pair_hl`  HL as a 16-bit register -- `ADD HL,rp`, `INC HL`,
+    //              `LD SP,HL`, `JP (HL)`, `PUSH HL`. A prefix makes it
+    //              IX or IY.
+    //   `ptr_hl`   the address `(HL)` names -- `LD r,(HL)`, `ADD A,(HL)`,
+    //              `INC (HL)`, the CB operand. A prefix makes it
+    //              IX or IY **plus a signed displacement**.
+    //
+    // `EX DE,HL` is the documented exception: a prefix does not touch
+    // it, so it keeps plain `hl`. So does everything in the ED space,
+    // which ignores a prefix entirely.
+    reg [15:0] r_ix = 16'h0000;
+    reg [15:0] r_iy = 16'h0000;
+    reg        idx_on = 1'b0;    // a DD or FD prefix is in force
+    reg        idx_iy = 1'b0;    // and it was FD
+    reg [7:0]  disp = 8'h00;     // its displacement, where it has one
+
+    wire [15:0] idx_reg = idx_iy ? r_iy : r_ix;
+    wire [15:0] pair_hl = idx_on ? idx_reg : hl;
+    wire [15:0] ptr_hl  = idx_on
+                          ? (idx_reg + {{8{disp[7]}}, disp})
+                          : hl;
+
     // One byte of the `r[]` encoding: 0..5 are B C D E H L, 6 is `(HL)`
     // and never reaches here, and 7 is A.
     function [7:0] rd8;
@@ -360,7 +415,22 @@ module z80 #(
     // `CALL nn`, so a core that only *documented* them as unimplemented
     // would quietly push a return address and jump. `ED` is decoded now;
     // these two are not.
-    wire ir_is_prefix = (ir == 8'hdd) || (ir == 8'hfd);
+    wire ir_is_prefix = 1'b0;   // nothing is undecoded any more
+    wire ir_is_idx = (ir == 8'hdd) || (ir == 8'hfd);
+
+    // The opcodes whose operand is `(HL)`, which under a prefix becomes
+    // `(IX+d)` and costs a displacement byte and an add. `76` is HALT
+    // and not `LD (HL),(HL)`, so it is excluded.
+    wire op_at_hl = ((x == 2'd1) && ((y == 3'd6) != (z == 3'd6)))
+                 || ((x == 2'd2) && (z == 3'd6))
+                 || ((x == 2'd0) && (z == 3'd6) && (y == 3'd6))
+                 || ((x == 2'd0) && ((z == 3'd4) || (z == 3'd5)) && (y == 3'd6));
+    // `LD (IX+d),n` is the one displaced form whose shape is not the
+    // unprefixed one with cycles inserted: the reference gives it
+    // M1(4) + M1(4) + 3 + 5 + 3, with the immediate's own read
+    // stretched to five rather than a separate add. So it gets a shape.
+    wire op_ld_ptr_n = (x == 2'd0) && (z == 3'd6) && (y == 3'd6);
+    wire idx_disp = idx_on && op_at_hl && !op_ld_ptr_n;
 
     // ED's second byte, taken apart the same way. Its first quadrant
     // holds everything this core implements; the second holds the block
@@ -534,8 +604,8 @@ module z80 #(
     // The 16-bit add of ADD HL,rp: H crosses bit 11 and C bit 15, and
     // S, Z and P/V are left alone.
     reg  [15:0] add16_rhs;
-    wire [16:0] add16_sum = {1'b0, hl} + {1'b0, add16_rhs};
-    wire        add16_h   = hl[12] ^ add16_rhs[12] ^ add16_sum[12];
+    wire [16:0] add16_sum = {1'b0, pair_hl} + {1'b0, add16_rhs};
+    wire        add16_h   = pair_hl[12] ^ add16_rhs[12] ^ add16_sum[12];
 
     // ------------------------------------------------------------------
     // THE SHAPES
@@ -580,13 +650,27 @@ module z80 #(
         SH_ED_LD    = 6'd29,  // M1(4) + M1(4) + read 3 + write 5  [+ 5]
         SH_ED_CP    = 6'd30,  // M1(4) + M1(4) + read 3 + 5        [+ 5]
         SH_ED_IN    = 6'd31,  // M1(4) + M1(5) + io 4   + write 3  [+ 5]
-        SH_ED_OUT   = 6'd32;  // M1(4) + M1(5) + read 3 + io 4     [+ 5]  // + read + read + two reads or writes = 20
+        SH_ED_OUT   = 6'd32,  // M1(4) + M1(5) + read 3 + io 4     [+ 5]
+        SH_PFX      = 6'd33,  // a DD or FD fetch, and nothing else
+        SH_IDX_LDN  = 6'd34;  // M1(4) + M1(4) + 3 + 5 + 3         = 19  // + read + read + two reads or writes = 20
 
     reg [2:0] m = 3'd0;        // which M-cycle of the instruction
     reg [2:0] t = 3'd1;        // which T-state of that M-cycle
     reg [2:0] kind;            // what the current M-cycle is
     reg [2:0] tlen;            // how many T-states it takes
     reg       last_cycle;      // the instruction ends with this one
+
+    // How the shape tables are indexed while a prefix is in force. The
+    // prefix's own fetch is M-cycle zero, the opcode's is one -- which
+    // is the table's zero -- and a displacement inserts two more before
+    // the rest of the instruction resumes at the table's one.
+    wire [2:0] meff = !idx_on   ? m
+                    : idx_disp  ? (m - 3'd3)
+                    :             (m - 3'd1);
+
+    // Which read of the instruction proper this is, so an operand
+    // lands in the same place whatever prefix preceded it.
+    wire [2:0] opidx = ed_pfx ? (m - 3'd1) : meff;
 
     reg [5:0] shape;
     // True when the opcode's operand is `(HL)` rather than a register,
@@ -667,9 +751,10 @@ module z80 #(
                 default:    shape = SH_ED_NOP;       // NEG, IM
             endcase
         end
-        // An undecoded prefix is one M-cycle and raises `dbg_trap`,
-        // which is the whole of its behaviour: see `ir_is_prefix`.
-        if (ir_is_prefix) shape = SH_ONE;
+        // A DD or FD byte is a fetch and nothing else; the shape that
+        // follows is the next byte's, read through `meff`.
+        if (ir_is_idx) shape = SH_PFX;
+        else if (idx_on && op_ld_ptr_n) shape = SH_IDX_LDN;
         // Held for the whole of the interrupt's own three M-cycles:
         // reading it off the live inputs made it vanish after one
         // T-state and the sequencer finish the discarded opcode.
@@ -721,7 +806,7 @@ module z80 #(
         case (p)
             2'd0: add16_rhs = bc;
             2'd1: add16_rhs = de;
-            2'd2: add16_rhs = hl;
+            2'd2: add16_rhs = pair_hl;
             default: add16_rhs = sp;
         endcase
     end
@@ -881,28 +966,53 @@ module z80 #(
         kind       = CY_M1;
         tlen       = 3'd4;
         last_cycle = 1'b1;
-        case (shape)
+        // The two or four M-cycles a prefix adds in front of the
+        // instruction proper: its own fetch, the opcode's, and for a
+        // displaced form the displacement and the five-T-state add the
+        // part spends on `IX + d`.
+        // Only a *displaced* form needs its opcode fetch spelled out
+        // here. Without a displacement the table's own first cycle is
+        // that fetch, reached through `meff`, and it is not always four
+        // T-states -- `INC HL` makes it six, and forcing four here cost
+        // `INC IX` an M-cycle it does not have.
+        if (idx_disp && (m == 3'd1)) begin
+            kind = CY_M1; tlen = 3'd4; last_cycle = 1'b0;
+        end else if (idx_disp && (m == 3'd2)) begin
+            kind = CY_RD; tlen = 3'd3; last_cycle = 1'b0;
+        end else if (idx_disp && (m == 3'd3)) begin
+            kind = CY_NONE; tlen = 3'd5; last_cycle = 1'b0;
+        end else case (shape)
+            SH_PFX: begin kind = CY_M1; tlen = 3'd4; last_cycle = 1'b0; end
+            SH_IDX_LDN: case (m)
+                // Its own two fetches, which the `default` below would
+                // otherwise take for the write and end the instruction
+                // three T-states in.
+                3'd0, 3'd1: begin kind = CY_M1; tlen = 3'd4; last_cycle = 1'b0; end
+                3'd2: begin kind = CY_RD; tlen = 3'd3; last_cycle = 1'b0; end
+                3'd3: begin kind = CY_RD; tlen = 3'd5; last_cycle = 1'b0; end
+                default: begin kind = CY_WR; tlen = 3'd3; last_cycle = 1'b1; end
+            endcase
             SH_ONE:  begin kind = CY_M1; tlen = 3'd4; last_cycle = 1'b1; end
             SH_M1_6: begin kind = CY_M1; tlen = 3'd6; last_cycle = 1'b1; end
-            SH_RD8: case (m)
+            SH_RD8: case (meff)
                 3'd0: begin kind = CY_M1; tlen = 3'd4; last_cycle = 1'b0; end
                 default: begin kind = CY_RD; tlen = 3'd3; last_cycle = 1'b1; end
             endcase
-            SH_WR8: case (m)
+            SH_WR8: case (meff)
                 3'd0: begin kind = CY_M1; tlen = 3'd4; last_cycle = 1'b0; end
                 default: begin kind = CY_WR; tlen = 3'd3; last_cycle = 1'b1; end
             endcase
-            SH_RD_WR: case (m)
+            SH_RD_WR: case (meff)
                 3'd0: begin kind = CY_M1; tlen = 3'd4; last_cycle = 1'b0; end
                 3'd1: begin kind = CY_RD; tlen = 3'd3; last_cycle = 1'b0; end
                 default: begin kind = CY_WR; tlen = 3'd3; last_cycle = 1'b1; end
             endcase
-            SH_RD16: case (m)
+            SH_RD16: case (meff)
                 3'd0: begin kind = CY_M1; tlen = 3'd4; last_cycle = 1'b0; end
                 3'd1: begin kind = CY_RD; tlen = 3'd3; last_cycle = 1'b0; end
                 default: begin kind = CY_RD; tlen = 3'd3; last_cycle = 1'b1; end
             endcase
-            SH_ADDR_RD, SH_ADDR_WR: case (m)
+            SH_ADDR_RD, SH_ADDR_WR: case (meff)
                 3'd0: begin kind = CY_M1; tlen = 3'd4; last_cycle = 1'b0; end
                 3'd1: begin kind = CY_RD; tlen = 3'd3; last_cycle = 1'b0; end
                 3'd2: begin kind = CY_RD; tlen = 3'd3; last_cycle = 1'b0; end
@@ -912,7 +1022,7 @@ module z80 #(
                     last_cycle = 1'b1;
                 end
             endcase
-            SH_ADDR_RD16, SH_ADDR_WR16: case (m)
+            SH_ADDR_RD16, SH_ADDR_WR16: case (meff)
                 3'd0: begin kind = CY_M1; tlen = 3'd4; last_cycle = 1'b0; end
                 3'd1, 3'd2: begin kind = CY_RD; tlen = 3'd3; last_cycle = 1'b0; end
                 3'd3: begin
@@ -926,27 +1036,27 @@ module z80 #(
                     last_cycle = 1'b1;
                 end
             endcase
-            SH_RMW: case (m)
+            SH_RMW: case (meff)
                 3'd0: begin kind = CY_M1; tlen = 3'd4; last_cycle = 1'b0; end
                 3'd1: begin kind = CY_RD; tlen = 3'd4; last_cycle = 1'b0; end
                 default: begin kind = CY_WR; tlen = 3'd3; last_cycle = 1'b1; end
             endcase
-            SH_ADD16: case (m)
+            SH_ADD16: case (meff)
                 3'd0: begin kind = CY_M1; tlen = 3'd4; last_cycle = 1'b0; end
                 3'd1: begin kind = CY_NONE; tlen = 3'd4; last_cycle = 1'b0; end
                 default: begin kind = CY_NONE; tlen = 3'd3; last_cycle = 1'b1; end
             endcase
-            SH_PUSH, SH_NMI: case (m)
+            SH_PUSH, SH_NMI: case (meff)
                 3'd0: begin kind = CY_M1; tlen = 3'd5; last_cycle = 1'b0; end
                 3'd1: begin kind = CY_WR; tlen = 3'd3; last_cycle = 1'b0; end
                 default: begin kind = CY_WR; tlen = 3'd3; last_cycle = 1'b1; end
             endcase
-            SH_INT: case (m)
+            SH_INT: case (meff)
                 3'd0: begin kind = CY_M1; tlen = 3'd6; last_cycle = 1'b0; end
                 3'd1: begin kind = CY_WR; tlen = 3'd3; last_cycle = 1'b0; end
                 default: begin kind = CY_WR; tlen = 3'd3; last_cycle = 1'b1; end
             endcase
-            SH_JR: case (m)
+            SH_JR: case (meff)
                 3'd0: begin kind = CY_M1; tlen = 3'd4; last_cycle = 1'b0; end
                 3'd1: begin
                     kind = CY_RD; tlen = 3'd3;
@@ -955,12 +1065,12 @@ module z80 #(
                 end
                 default: begin kind = CY_NONE; tlen = 3'd5; last_cycle = 1'b1; end
             endcase
-            SH_DJNZ: case (m)
+            SH_DJNZ: case (meff)
                 3'd0: begin kind = CY_M1; tlen = 3'd5; last_cycle = 1'b0; end
                 3'd1: begin kind = CY_RD; tlen = 3'd3; last_cycle = (reg_b == 8'h00); end
                 default: begin kind = CY_NONE; tlen = 3'd5; last_cycle = 1'b1; end
             endcase
-            SH_CALL: case (m)
+            SH_CALL: case (meff)
                 3'd0: begin kind = CY_M1; tlen = 3'd4; last_cycle = 1'b0; end
                 3'd1: begin kind = CY_RD; tlen = 3'd3; last_cycle = 1'b0; end
                 3'd2: begin
@@ -974,12 +1084,12 @@ module z80 #(
                 3'd3: begin kind = CY_WR; tlen = 3'd3; last_cycle = 1'b0; end
                 default: begin kind = CY_WR; tlen = 3'd3; last_cycle = 1'b1; end
             endcase
-            SH_RET_CC: case (m)
+            SH_RET_CC: case (meff)
                 3'd0: begin kind = CY_M1; tlen = 3'd5; last_cycle = ~cond_met; end
                 3'd1: begin kind = CY_RD; tlen = 3'd3; last_cycle = 1'b0; end
                 default: begin kind = CY_RD; tlen = 3'd3; last_cycle = 1'b1; end
             endcase
-            SH_IO: case (m)
+            SH_IO: case (meff)
                 3'd0: begin kind = CY_M1; tlen = 3'd4; last_cycle = 1'b0; end
                 3'd1: begin kind = CY_RD; tlen = 3'd3; last_cycle = 1'b0; end
                 default: begin
@@ -988,22 +1098,22 @@ module z80 #(
                     last_cycle = 1'b1;
                 end
             endcase
-            SH_EXSP: case (m)
+            SH_EXSP: case (meff)
                 3'd0: begin kind = CY_M1; tlen = 3'd4; last_cycle = 1'b0; end
                 3'd1: begin kind = CY_RD; tlen = 3'd3; last_cycle = 1'b0; end
                 3'd2: begin kind = CY_RD; tlen = 3'd4; last_cycle = 1'b0; end
                 3'd3: begin kind = CY_WR; tlen = 3'd3; last_cycle = 1'b0; end
                 default: begin kind = CY_WR; tlen = 3'd5; last_cycle = 1'b1; end
             endcase
-            SH_ED_NOP: case (m)
+            SH_ED_NOP: case (meff)
                 3'd0: begin kind = CY_M1; tlen = 3'd4; last_cycle = 1'b0; end
                 default: begin kind = CY_M1; tlen = 3'd4; last_cycle = 1'b1; end
             endcase
-            SH_ED_SPEC: case (m)
+            SH_ED_SPEC: case (meff)
                 3'd0, 3'd1: begin kind = CY_M1; tlen = 3'd4; last_cycle = 1'b0; end
                 default: begin kind = CY_NONE; tlen = 3'd1; last_cycle = 1'b1; end
             endcase
-            SH_ED_IO: case (m)
+            SH_ED_IO: case (meff)
                 3'd0, 3'd1: begin kind = CY_M1; tlen = 3'd4; last_cycle = 1'b0; end
                 default: begin
                     kind = (ez == 3'd0) ? CY_IOR : CY_IOW;
@@ -1011,17 +1121,17 @@ module z80 #(
                     last_cycle = 1'b1;
                 end
             endcase
-            SH_ED_ALU16: case (m)
+            SH_ED_ALU16: case (meff)
                 3'd0, 3'd1: begin kind = CY_M1; tlen = 3'd4; last_cycle = 1'b0; end
                 3'd2: begin kind = CY_NONE; tlen = 3'd4; last_cycle = 1'b0; end
                 default: begin kind = CY_NONE; tlen = 3'd3; last_cycle = 1'b1; end
             endcase
-            SH_ED_RETN: case (m)
+            SH_ED_RETN: case (meff)
                 3'd0, 3'd1: begin kind = CY_M1; tlen = 3'd4; last_cycle = 1'b0; end
                 3'd2: begin kind = CY_RD; tlen = 3'd3; last_cycle = 1'b0; end
                 default: begin kind = CY_RD; tlen = 3'd3; last_cycle = 1'b1; end
             endcase
-            SH_ED_RRD: case (m)
+            SH_ED_RRD: case (meff)
                 3'd0, 3'd1: begin kind = CY_M1; tlen = 3'd4; last_cycle = 1'b0; end
                 3'd2: begin kind = CY_RD; tlen = 3'd3; last_cycle = 1'b0; end
                 3'd3: begin kind = CY_NONE; tlen = 3'd4; last_cycle = 1'b0; end
@@ -1030,33 +1140,33 @@ module z80 #(
             // Four M-cycles and a fifth only when it repeats. The
             // second fetch is five T-states for the two that touch a
             // port and four for the two that do not.
-            SH_ED_LD: case (m)
+            SH_ED_LD: case (meff)
                 3'd0, 3'd1: begin kind = CY_M1; tlen = 3'd4; last_cycle = 1'b0; end
                 3'd2: begin kind = CY_RD; tlen = 3'd3; last_cycle = 1'b0; end
                 3'd3: begin kind = CY_WR; tlen = 3'd5; last_cycle = ~ld_again; end
                 default: begin kind = CY_NONE; tlen = 3'd5; last_cycle = 1'b1; end
             endcase
-            SH_ED_CP: case (m)
+            SH_ED_CP: case (meff)
                 3'd0, 3'd1: begin kind = CY_M1; tlen = 3'd4; last_cycle = 1'b0; end
                 3'd2: begin kind = CY_RD; tlen = 3'd3; last_cycle = 1'b0; end
                 3'd3: begin kind = CY_NONE; tlen = 3'd5; last_cycle = ~cp_again; end
                 default: begin kind = CY_NONE; tlen = 3'd5; last_cycle = 1'b1; end
             endcase
-            SH_ED_IN: case (m)
+            SH_ED_IN: case (meff)
                 3'd0: begin kind = CY_M1; tlen = 3'd4; last_cycle = 1'b0; end
                 3'd1: begin kind = CY_M1; tlen = 3'd5; last_cycle = 1'b0; end
                 3'd2: begin kind = CY_IOR; tlen = 3'd4; last_cycle = 1'b0; end
                 3'd3: begin kind = CY_WR; tlen = 3'd3; last_cycle = ~io_again; end
                 default: begin kind = CY_NONE; tlen = 3'd5; last_cycle = 1'b1; end
             endcase
-            SH_ED_OUT: case (m)
+            SH_ED_OUT: case (meff)
                 3'd0: begin kind = CY_M1; tlen = 3'd4; last_cycle = 1'b0; end
                 3'd1: begin kind = CY_M1; tlen = 3'd5; last_cycle = 1'b0; end
                 3'd2: begin kind = CY_RD; tlen = 3'd3; last_cycle = 1'b0; end
                 3'd3: begin kind = CY_IOW; tlen = 3'd4; last_cycle = ~io_again; end
                 default: begin kind = CY_NONE; tlen = 3'd5; last_cycle = 1'b1; end
             endcase
-            SH_ED_ADDR: case (m)
+            SH_ED_ADDR: case (meff)
                 3'd0, 3'd1: begin kind = CY_M1; tlen = 3'd4; last_cycle = 1'b0; end
                 3'd2, 3'd3: begin kind = CY_RD; tlen = 3'd3; last_cycle = 1'b0; end
                 3'd4: begin
@@ -1066,7 +1176,7 @@ module z80 #(
                     kind = eq ? CY_RD : CY_WR; tlen = 3'd3; last_cycle = 1'b1;
                 end
             endcase
-            default: case (m)   // SH_CB
+            default: case (meff)   // SH_CB
                 3'd0: begin kind = CY_M1; tlen = 3'd4; last_cycle = 1'b0; end
                 3'd1: begin
                     kind = CY_M1; tlen = 3'd4;
@@ -1127,27 +1237,28 @@ module z80 #(
                            : (p == 2'd0) ? a_reg           // LD (BC),A
                            :               a_reg;          // LD (DE),A
             SH_RD_WR:     dout_r = tmp;                    // LD (HL),n
+            SH_IDX_LDN:   dout_r = tmp;                    // LD (IX+d),n
             SH_ADDR_WR:   dout_r = a_reg;                  // LD (nn),A
-            SH_ADDR_WR16: dout_r = (m == 3'd3) ? reg_l : reg_h;
+            SH_ADDR_WR16: dout_r = (meff == 3'd3) ? pair_hl[7:0] : pair_hl[15:8];
             SH_RMW:       dout_r = step_res;
             SH_PUSH: begin
-                if (z == 3'd7) dout_r = (m == 3'd1) ? pc[15:8] : pc[7:0];  // RST
+                if (z == 3'd7) dout_r = (meff == 3'd1) ? pc[15:8] : pc[7:0];  // RST
                 else case (p)
-                    2'd0: dout_r = (m == 3'd1) ? reg_b : reg_c;
-                    2'd1: dout_r = (m == 3'd1) ? reg_d : reg_e;
-                    2'd2: dout_r = (m == 3'd1) ? reg_h : reg_l;
-                    default: dout_r = (m == 3'd1) ? a_reg : f_reg;
+                    2'd0: dout_r = (meff == 3'd1) ? reg_b : reg_c;
+                    2'd1: dout_r = (meff == 3'd1) ? reg_d : reg_e;
+                    2'd2: dout_r = (meff == 3'd1) ? pair_hl[15:8] : pair_hl[7:0];
+                    default: dout_r = (meff == 3'd1) ? a_reg : f_reg;
                 endcase
             end
-            SH_CALL:  dout_r = (m == 3'd3) ? pc[15:8] : pc[7:0];
-            SH_NMI, SH_INT: dout_r = (m == 3'd1) ? pc[15:8] : pc[7:0];
-            SH_EXSP:  dout_r = (m == 3'd3) ? reg_h : reg_l;
+            SH_CALL:  dout_r = (meff == 3'd3) ? pc[15:8] : pc[7:0];
+            SH_NMI, SH_INT: dout_r = (meff == 3'd1) ? pc[15:8] : pc[7:0];
+            SH_EXSP:  dout_r = (meff == 3'd3) ? pair_hl[15:8] : pair_hl[7:0];
             SH_IO:    dout_r = a_reg;
             SH_CB:    dout_r = cb_res;
             SH_ED_IO:   dout_r = rd8(ey);                  // OUT (C),r
             SH_ED_RRD:  dout_r = (ey == 3'd4) ? rrd_mem : rld_mem;
             SH_ED_LD, SH_ED_IN, SH_ED_OUT: dout_r = tmp;
-            SH_ED_ADDR: dout_r = (m == 3'd4) ? ed_rp[7:0] : ed_rp[15:8];
+            SH_ED_ADDR: dout_r = (meff == 3'd4) ? ed_rp[7:0] : ed_rp[15:8];
             default:  dout_r = a_reg;
         endcase
     end
@@ -1155,12 +1266,12 @@ module z80 #(
     always @(*) begin
         addr_r = pc;
         case (shape)
-            SH_RD8: addr_r = (m == 3'd0) ? pc
+            SH_RD8: addr_r = (meff == 3'd0) ? pc
                            : (x == 2'd0 && z == 3'd2) ? ((p == 2'd0) ? bc : de)
-                           : ((x == 2'd1) || (x == 2'd2)) ? hl
+                           : ((x == 2'd1) || (x == 2'd2)) ? ptr_hl
                            : pc;
-            SH_WR8: addr_r = (m == 3'd0) ? pc
-                           : (x == 2'd1) ? hl
+            SH_WR8: addr_r = (meff == 3'd0) ? pc
+                           : (x == 2'd1) ? ptr_hl
                            : ((p == 2'd0) ? bc : de);
             // **Every shape's `m == 0` address is PC**, and this one was
             // `hl`. During T1 and T2 of an opcode fetch the shape is
@@ -1171,39 +1282,45 @@ module z80 #(
             // did, and the instruction after it was fetched from HL: in
             // a program that had just written 31 there, the next opcode
             // read as `LD SP,nn` and three bytes vanished.
-            SH_RD_WR: addr_r = (m <= 3'd1) ? pc : hl;
-            SH_RMW:   addr_r = (m == 3'd0) ? pc : hl;
+            SH_RD_WR: addr_r = (meff <= 3'd1) ? pc : ptr_hl;
+            // Indexed by the real M-cycle, because this shape exists
+            // only under a prefix and counts the prefix's own fetch.
+            SH_IDX_LDN: addr_r = (m <= 3'd3) ? pc : ptr_hl;
+            SH_RMW:   addr_r = (meff == 3'd0) ? pc : ptr_hl;
             SH_ADDR_RD, SH_ADDR_WR, SH_ADDR_RD16, SH_ADDR_WR16:
-                addr_r = (m <= 3'd2) ? pc
-                       : ((m == 3'd3) ? wz : (wz + 16'd1));
+                addr_r = (meff <= 3'd2) ? pc
+                       : ((meff == 3'd3) ? wz : (wz + 16'd1));
             SH_PUSH, SH_NMI, SH_INT:
-                addr_r = (m == 3'd0) ? pc
-                       : ((m == 3'd1) ? (sp - 16'd1) : (sp - 16'd2));
-            SH_CALL: addr_r = (m <= 3'd2) ? pc
-                            : ((m == 3'd3) ? (sp - 16'd1) : (sp - 16'd2));
-            SH_RD16: addr_r = (m == 3'd0) ? pc
-                            : (is_pop ? (sp + {15'd0, (m == 3'd2)}) : pc);
-            SH_RET_CC: addr_r = (m == 3'd0) ? pc : (sp + {15'd0, (m == 3'd2)});
-            SH_IO:   addr_r = (m <= 3'd1) ? pc : {a_reg, tmp};
-            SH_EXSP: addr_r = (m == 3'd0) ? pc
-                            : ((m == 3'd1) || (m == 3'd4)) ? sp : (sp + 16'd1);
-            SH_CB:   addr_r = (m <= 3'd1) ? pc : hl;
+                addr_r = (meff == 3'd0) ? pc
+                       : ((meff == 3'd1) ? (sp - 16'd1) : (sp - 16'd2));
+            SH_CALL: addr_r = (meff <= 3'd2) ? pc
+                            : ((meff == 3'd3) ? (sp - 16'd1) : (sp - 16'd2));
+            SH_RD16: addr_r = (meff == 3'd0) ? pc
+                            : (is_pop ? (sp + {15'd0, (meff == 3'd2)}) : pc);
+            SH_RET_CC: addr_r = (meff == 3'd0) ? pc : (sp + {15'd0, (meff == 3'd2)});
+            SH_IO:   addr_r = (meff <= 3'd1) ? pc : {a_reg, tmp};
+            SH_EXSP: addr_r = (meff == 3'd0) ? pc
+                            : ((meff == 3'd1) || (meff == 3'd4)) ? sp : (sp + 16'd1);
+            SH_CB:   addr_r = (meff <= 3'd1) ? pc : ptr_hl;
             // The port address of `IN r,(C)` is the whole of BC, not
             // just C: B reaches A15..A8.
-            SH_ED_IO:   addr_r = (m <= 3'd1) ? pc : bc;
-            SH_ED_RETN: addr_r = (m <= 3'd1) ? pc
-                               : (sp + {15'd0, (m == 3'd3)});
-            SH_ED_RRD:  addr_r = (m <= 3'd1) ? pc : hl;
+            SH_ED_IO:   addr_r = (meff <= 3'd1) ? pc : bc;
+            SH_ED_RETN: addr_r = (meff <= 3'd1) ? pc
+                               : (sp + {15'd0, (meff == 3'd3)});
+            SH_ED_RRD:  addr_r = (meff <= 3'd1) ? pc : hl;
             // The byte comes from (HL) and goes to (DE); a port form
             // puts BC on the bus for its own half.
-            SH_ED_LD:  addr_r = (m <= 3'd1) ? pc : ((m == 3'd2) ? hl : de);
-            SH_ED_CP:  addr_r = (m <= 3'd1) ? pc : hl;
-            SH_ED_IN:  addr_r = (m <= 3'd1) ? pc : ((m == 3'd2) ? bc : hl);
-            SH_ED_OUT: addr_r = (m <= 3'd1) ? pc : ((m == 3'd2) ? hl : bc);
-            SH_ED_ADDR: addr_r = (m <= 3'd3) ? pc
-                               : ((m == 3'd4) ? wz : (wz + 16'd1));
+            SH_ED_LD:  addr_r = (meff <= 3'd1) ? pc : ((meff == 3'd2) ? hl : de);
+            SH_ED_CP:  addr_r = (meff <= 3'd1) ? pc : hl;
+            SH_ED_IN:  addr_r = (meff <= 3'd1) ? pc : ((meff == 3'd2) ? bc : hl);
+            SH_ED_OUT: addr_r = (meff <= 3'd1) ? pc : ((meff == 3'd2) ? hl : bc);
+            SH_ED_ADDR: addr_r = (meff <= 3'd3) ? pc
+                               : ((meff == 3'd4) ? wz : (wz + 16'd1));
             default: addr_r = pc;
         endcase
+        // A prefix's own cycles all read the program: its fetch, the
+        // opcode's, and the displacement's.
+        if (idx_disp && (m <= 3'd3)) addr_r = pc;
         // M1's second half puts the refresh address out instead.
         if ((kind == CY_M1) && (t >= 3'd3)) addr_r = {8'h00, rbit7, rreg};
     end
@@ -1253,6 +1370,11 @@ module z80 #(
             nmi_seen <= 1'b0;
             nmi_last <= 1'b1;
             op2 <= 8'h00;
+            r_ix <= 16'h0000;
+            r_iy <= 16'h0000;
+            idx_on <= 1'b0;
+            idx_iy <= 1'b0;
+            disp <= 8'h00;
             ireg <= 8'h00;
             im <= 2'd0;
             in_nmi <= 1'b0;
@@ -1283,6 +1405,9 @@ module z80 #(
             if (cyc_end && last_cycle) begin
                 in_nmi <= 1'b0;
                 in_int <= 1'b0;
+                // A prefix lasts exactly one instruction.
+                idx_on <= 1'b0;
+                idx_iy <= 1'b0;
             end
 
             if (stalled) begin
@@ -1302,21 +1427,28 @@ module z80 #(
                 if ((kind == CY_M1) && (m == 3'd0)) begin
                     ir <= din;
                 end else if ((kind == CY_M1) && (m == 3'd1)) begin
-                    op2 <= din;           // the CB opcode
+                    // What the second fetch of a prefixed instruction
+                    // holds depends on which prefix it was. After CB or
+                    // ED it is a second opcode byte, decoded beside the
+                    // first. After DD or FD it **is** the opcode and
+                    // has to land in `ir` -- loading `op2` instead left
+                    // `ir` holding the prefix, so the shape stayed
+                    // "fetch another byte" and the instruction never
+                    // ended.
+                    if (ir_is_idx) ir <= din;
+                    else op2 <= din;
                 end else begin
                     tmp <= din;
-                    // The two operand bytes land in WZ, and an ED
-                    // instruction's arrive one M-cycle later than an
-                    // unprefixed one's because the prefix is fetched
-                    // first. Hardcoding the unprefixed positions put
-                    // the low byte of `LD (nn),rp` into W.
-                    if (ed_pfx) begin
-                        if (m == 3'd2) wz[7:0]  <= din;
-                        if (m == 3'd3) wz[15:8] <= din;
-                    end else begin
-                        if (m == 3'd1) wz[7:0]  <= din;
-                        if (m == 3'd2) wz[15:8] <= din;
-                    end
+                    // The two operand bytes land in WZ, at the first
+                    // and second read **of the instruction proper**.
+                    // Every prefix shifts those one M-cycle later than
+                    // an unprefixed instruction's, and keying this to
+                    // the raw cycle number put the low byte of
+                    // `LD (nn),rp` into W and then of `LD IX,nn` too.
+                    // `meff` already carries a DD or FD prefix's
+                    // offset; an ED one is a cycle of its own.
+                    if (opidx == 3'd1) wz[7:0]  <= din;
+                    if (opidx == 3'd2) wz[15:8] <= din;
                 end
             end
 
@@ -1329,6 +1461,20 @@ module z80 #(
     // ------------------------------------------------------------------
     // Everything an instruction does happens at the end of one of its
     // M-cycles, which is where the part does it too.
+    // Writing the pair `HL` names, which a prefix sends to IX or IY.
+    task wr_pair_hl;
+        input [15:0] v;
+        begin
+            if (idx_on) begin
+                if (idx_iy) r_iy <= v;
+                else        r_ix <= v;
+            end else begin
+                r_h <= v[15:8];
+                r_l <= v[7:0];
+            end
+        end
+    endtask
+
     // The one write port of the `r[]` encoding. Every variable-index
     // write goes through it, which is what keeps the register file out
     // of a memory with a port per statement.
@@ -1351,10 +1497,37 @@ module z80 #(
 
     task exec;
         begin
-            case (shape)
+            if (ir_is_idx) begin
+                // The DD or FD byte itself: note which index register
+                // the rest of the instruction means, and read on.
+                pc <= pc + 16'd1;
+                idx_on <= 1'b1;
+                idx_iy <= (ir == 8'hfd);
+            end else if (idx_disp && (m == 3'd1)) begin
+                pc <= pc + 16'd1;          // the opcode's own fetch
+            end else if (idx_disp && (m == 3'd2)) begin
+                pc <= pc + 16'd1;          // the displacement
+                disp <= din;
+            end else if (idx_disp && (m == 3'd3)) begin
+                ;                          // the five T-states of IX + d
+            end else case (shape)
                 SH_ONE, SH_M1_6: exec_one;
+                SH_PFX: ;
+                SH_IDX_LDN: exec_idx_ldn;
                 default: exec_long;
             endcase
+        end
+    endtask
+
+    // LD (IX+d),n, whose immediate is read in five T-states rather than
+    // three and which therefore has no separate cycle for the add.
+    task exec_idx_ldn;
+        begin
+            if (m == 3'd1) pc <= pc + 16'd1;
+            else if (m == 3'd2) begin
+                pc <= pc + 16'd1;
+                disp <= din;
+            end else if (m == 3'd3) pc <= pc + 16'd1;
         end
     endtask
 
@@ -1375,7 +1548,8 @@ module z80 #(
                         case (p)
                             2'd0: {r_b, r_c} <= q ? (bc - 16'd1) : (bc + 16'd1);
                             2'd1: {r_d, r_e} <= q ? (de - 16'd1) : (de + 16'd1);
-                            2'd2: {r_h, r_l} <= q ? (hl - 16'd1) : (hl + 16'd1);
+                            2'd2: wr_pair_hl(q ? (pair_hl - 16'd1)
+                                                : (pair_hl + 16'd1));
                             default: sp <= q ? (sp - 16'd1) : (sp + 16'd1);
                         endcase
                     end
@@ -1394,7 +1568,7 @@ module z80 #(
                     r_f <= alu_f;
                 end
                 default: case (z)                              // x == 3
-                    3'd1: if (q && (p == 2'd3)) sp <= hl;      // LD SP,HL
+                    3'd1: if (q && (p == 2'd3)) sp <= pair_hl;  // LD SP,HL
                     3'd3: case (y)
                         3'd5: begin                            // EX DE,HL
                             r_d <= reg_h;
@@ -1411,7 +1585,7 @@ module z80 #(
             endcase
             // `JP (HL)` is the one shape-one instruction that does not
             // advance PC past itself.
-            if ((x == 2'd3) && (z == 3'd1) && q && (p == 2'd2)) pc <= hl;
+            if ((x == 2'd3) && (z == 3'd1) && q && (p == 2'd2)) pc <= pair_hl;
             // EXX
             if ((x == 2'd3) && (z == 3'd1) && q && (p == 2'd1)) begin
                 r_b <= x_b; r_c <= x_c; r_d <= x_d;
@@ -1519,7 +1693,7 @@ module z80 #(
 
     task exec_rd8;
         begin
-            if (m == 3'd0) begin
+            if (meff == 3'd0) begin
                 pc <= pc + 16'd1;
             end else begin
                 // The byte is in `din` this edge, not yet in `tmp`.
@@ -1543,22 +1717,22 @@ module z80 #(
 
     task exec_wr8;
         begin
-            if (m == 3'd0) pc <= pc + 16'd1;
+            if (meff == 3'd0) pc <= pc + 16'd1;
         end
     endtask
 
     task exec_rd_wr;
         begin
-            if (m == 3'd0) pc <= pc + 16'd1;
-            else if (m == 3'd1) pc <= pc + 16'd1;
+            if (meff == 3'd0) pc <= pc + 16'd1;
+            else if (meff == 3'd1) pc <= pc + 16'd1;
         end
     endtask
 
     task exec_rd16;
         begin
-            if (m == 3'd0) begin
+            if (meff == 3'd0) begin
                 pc <= pc + 16'd1;
-            end else if (m == 3'd1) begin
+            end else if (meff == 3'd1) begin
                 if (!is_pop) pc <= pc + 16'd1;
             end else begin
                 if (is_pop) begin
@@ -1567,7 +1741,7 @@ module z80 #(
                     else case (p)
                         2'd0: begin r_c <= wz[7:0]; r_b <= din; end
                         2'd1: begin r_e <= wz[7:0]; r_d <= din; end
-                        2'd2: begin r_l <= wz[7:0]; r_h <= din; end
+                        2'd2: wr_pair_hl({din, wz[7:0]});
                         default: begin r_f <= wz[7:0]; r_a <= din; end
                     endcase
                 end else if (x == 2'd0) begin
@@ -1575,7 +1749,7 @@ module z80 #(
                     case (p)
                         2'd0: begin r_c <= wz[7:0]; r_b <= din; end
                         2'd1: begin r_e <= wz[7:0]; r_d <= din; end
-                        2'd2: begin r_l <= wz[7:0]; r_h <= din; end
+                        2'd2: wr_pair_hl({din, wz[7:0]});
                         default: sp <= {din, wz[7:0]};
                     endcase
                 end else begin
@@ -1590,29 +1764,29 @@ module z80 #(
 
     task exec_addr_rd;
         begin
-            if (m == 3'd0) pc <= pc + 16'd1;
-            else if (m <= 3'd2) pc <= pc + 16'd1;
+            if (meff == 3'd0) pc <= pc + 16'd1;
+            else if (meff <= 3'd2) pc <= pc + 16'd1;
             else r_a <= din;
         end
     endtask
 
     task exec_addr_wr;
         begin
-            if (m <= 3'd2) pc <= pc + 16'd1;
+            if (meff <= 3'd2) pc <= pc + 16'd1;
         end
     endtask
 
     task exec_addr_rd16;
         begin
-            if (m <= 3'd2) pc <= pc + 16'd1;
-            else if (m == 3'd3) r_l <= din;
-            else r_h <= din;
+            if (meff <= 3'd2) pc <= pc + 16'd1;
+            else if (meff == 3'd3) tmp <= din;
+            else wr_pair_hl({din, tmp});
         end
     endtask
 
     task exec_addr_wr16;
         begin
-            if (m <= 3'd2) pc <= pc + 16'd1;
+            if (meff <= 3'd2) pc <= pc + 16'd1;
         end
     endtask
 
@@ -1620,17 +1794,18 @@ module z80 #(
     // the write-back in M3 takes the same byte out of `tmp`.
     task exec_rmw;
         begin
-            if (m == 3'd0) pc <= pc + 16'd1;
-            else if (m == 3'd1) r_f <= step_f;
+            if (meff == 3'd0) pc <= pc + 16'd1;
+            else if (meff == 3'd1) r_f <= step_f;
         end
     endtask
 
     task exec_add16;
         begin
-            if (m == 3'd0) pc <= pc + 16'd1;
-            else if (m == 3'd2) begin
-                r_h <= add16_sum[15:8];
-                r_l <= add16_sum[7:0];
+            if (meff == 3'd0) pc <= pc + 16'd1;
+            else if (meff == 3'd2) begin
+                // Through the pair, because `ADD HL,rp` under a
+                // prefix is `ADD IX,rp` and the sum belongs there.
+                wr_pair_hl(add16_sum[15:0]);
                 r_f <= {f_reg[F_S], f_reg[F_Z],
                                   UNDOCUMENTED_FLAGS ? add16_sum[13] : 1'b0,
                                   add16_h,
@@ -1644,8 +1819,8 @@ module z80 #(
     // jumps to eight times its row.
     task exec_push;
         begin
-            if (m == 3'd0) pc <= pc + 16'd1;
-            else if (m == 3'd2) begin
+            if (meff == 3'd0) pc <= pc + 16'd1;
+            else if (meff == 3'd2) begin
                 sp <= sp - 16'd2;
                 if (z == 3'd7) pc <= {10'd0, y, 3'd0};
             end
@@ -1654,26 +1829,26 @@ module z80 #(
 
     task exec_jr;
         begin
-            if (m == 3'd0) pc <= pc + 16'd1;
-            else if (m == 3'd1) pc <= pc + 16'd1;
+            if (meff == 3'd0) pc <= pc + 16'd1;
+            else if (meff == 3'd1) pc <= pc + 16'd1;
             else pc <= pc + {{8{tmp[7]}}, tmp};
         end
     endtask
 
     task exec_djnz;
         begin
-            if (m == 3'd0) begin
+            if (meff == 3'd0) begin
                 pc <= pc + 16'd1;
                 r_b <= reg_b - 8'd1;
-            end else if (m == 3'd1) pc <= pc + 16'd1;
+            end else if (meff == 3'd1) pc <= pc + 16'd1;
             else pc <= pc + {{8{tmp[7]}}, tmp};
         end
     endtask
 
     task exec_call;
         begin
-            if (m <= 3'd2) pc <= pc + 16'd1;
-            else if (m == 3'd4) begin
+            if (meff <= 3'd2) pc <= pc + 16'd1;
+            else if (meff == 3'd4) begin
                 sp <= sp - 16'd2;
                 pc <= wz;
             end
@@ -1682,8 +1857,8 @@ module z80 #(
 
     task exec_ret_cc;
         begin
-            if (m == 3'd0) pc <= pc + 16'd1;
-            else if (m == 3'd2) begin
+            if (meff == 3'd0) pc <= pc + 16'd1;
+            else if (meff == 3'd2) begin
                 sp <= sp + 16'd2;
                 pc <= {din, wz[7:0]};
             end
@@ -1692,18 +1867,15 @@ module z80 #(
 
     task exec_io;
         begin
-            if (m <= 3'd1) pc <= pc + 16'd1;
+            if (meff <= 3'd1) pc <= pc + 16'd1;
             else if (y == 3'd3) r_a <= din;    // IN A,(n)
         end
     endtask
 
     task exec_exsp;
         begin
-            if (m == 3'd0) pc <= pc + 16'd1;
-            else if (m == 3'd2) begin
-                r_l <= wz[7:0];
-                r_h <= din;
-            end
+            if (meff == 3'd0) pc <= pc + 16'd1;
+            else if (meff == 3'd2) wr_pair_hl({din, wz[7:0]});
         end
     endtask
 
@@ -1711,8 +1883,8 @@ module z80 #(
     // `(HL)` form reads in M3, and everything but `BIT` writes in M4.
     task exec_cb;
         begin
-            if (m == 3'd0) pc <= pc + 16'd1;
-            else if (m == 3'd1) begin
+            if (meff == 3'd0) pc <= pc + 16'd1;
+            else if (meff == 3'd1) begin
                 pc <= pc + 16'd1;
                 if (cbz != 3'd6) begin
                     if (cbx != 2'd1) begin                 // not BIT
@@ -1720,7 +1892,7 @@ module z80 #(
                     end
                     r_f <= cb_f;
                 end
-            end else if (m == 3'd2) begin
+            end else if (meff == 3'd2) begin
                 r_f <= cb_f;
             end
         end
@@ -1732,8 +1904,8 @@ module z80 #(
     // here too and trap, because this core does not implement them.
     task exec_ed_short;
         begin
-            if (m == 3'd0) pc <= pc + 16'd1;
-            else if (m == 3'd1) begin
+            if (meff == 3'd0) pc <= pc + 16'd1;
+            else if (meff == 3'd1) begin
                 pc <= pc + 16'd1;
                 if (ed_block) trap <= 1'b1;
                 else if (ex == 2'd1) begin
@@ -1771,7 +1943,7 @@ module z80 #(
 
     task exec_ed_io;
         begin
-            if (m <= 3'd1) pc <= pc + 16'd1;
+            if (meff <= 3'd1) pc <= pc + 16'd1;
             else if (ez == 3'd0) begin                  // IN r,(C)
                 wr8(ey, din);
                 r_f <= in_f;
@@ -1781,8 +1953,8 @@ module z80 #(
 
     task exec_ed_alu16;
         begin
-            if (m <= 3'd1) pc <= pc + 16'd1;
-            else if (m == 3'd3) begin
+            if (meff <= 3'd1) pc <= pc + 16'd1;
+            else if (meff == 3'd3) begin
                 r_h <= alu16_res[15:8];
                 r_l <= alu16_res[7:0];
                 r_f <= alu16_f;
@@ -1795,8 +1967,8 @@ module z80 #(
     // the interrupt enable the NMI cleared.
     task exec_ed_retn;
         begin
-            if (m <= 3'd1) pc <= pc + 16'd1;
-            else if (m == 3'd3) begin
+            if (meff <= 3'd1) pc <= pc + 16'd1;
+            else if (meff == 3'd3) begin
                 sp <= sp + 16'd2;
                 pc <= {din, wz[7:0]};
                 iff1 <= iff2;
@@ -1812,8 +1984,8 @@ module z80 #(
     // the read landed left the write putting the new nibble back.
     task exec_ed_rrd;
         begin
-            if (m <= 3'd1) pc <= pc + 16'd1;
-            else if (m == 3'd4) begin
+            if (meff <= 3'd1) pc <= pc + 16'd1;
+            else if (meff == 3'd4) begin
                 r_a <= rxd_acc;
                 r_f <= rxd_f;
             end
@@ -1822,9 +1994,9 @@ module z80 #(
 
     task exec_ed_addr;
         begin
-            if (m <= 3'd3) pc <= pc + 16'd1;
+            if (meff <= 3'd3) pc <= pc + 16'd1;
             else if (eq) begin                          // LD rp,(nn)
-                if (m == 3'd4) begin
+                if (meff == 3'd4) begin
                     case (ep)
                         2'd0: r_c <= din;
                         2'd1: r_e <= din;
@@ -1849,13 +2021,13 @@ module z80 #(
     // be taken between iterations.
     task exec_ed_ld;
         begin
-            if (m <= 3'd1) pc <= pc + 16'd1;
-            else if (m == 3'd3) begin
+            if (meff <= 3'd1) pc <= pc + 16'd1;
+            else if (meff == 3'd3) begin
                 {r_h, r_l} <= hl_next;
                 {r_d, r_e} <= de_next;
                 {r_b, r_c} <= bc_next;
                 r_f <= ldx_f;
-            end else if (m >= 3'd4) pc <= pc - 16'd2;
+            end else if (meff >= 3'd4) pc <= pc - 16'd2;
         end
     endtask
 
@@ -1863,12 +2035,12 @@ module z80 #(
     // pointer and counter move.
     task exec_ed_cp;
         begin
-            if (m <= 3'd1) pc <= pc + 16'd1;
-            else if (m == 3'd3) begin
+            if (meff <= 3'd1) pc <= pc + 16'd1;
+            else if (meff == 3'd3) begin
                 {r_h, r_l} <= hl_next;
                 {r_b, r_c} <= bc_next;
                 r_f <= cpx_f;
-            end else if (m >= 3'd4) pc <= pc - 16'd2;
+            end else if (meff >= 3'd4) pc <= pc - 16'd2;
         end
     endtask
 
@@ -1876,23 +2048,23 @@ module z80 #(
     // here and not BC, because B is half of the port address.
     task exec_ed_io_block;
         begin
-            if (m <= 3'd1) pc <= pc + 16'd1;
-            else if (m == 3'd3) begin
+            if (meff <= 3'd1) pc <= pc + 16'd1;
+            else if (meff == 3'd3) begin
                 {r_h, r_l} <= hl_next;
                 r_b <= b_next;
                 r_f <= iox_f;
-            end else if (m >= 3'd4) pc <= pc - 16'd2;
+            end else if (meff >= 3'd4) pc <= pc - 16'd2;
         end
     endtask
 
     task exec_nmi;
         begin
-            if (m == 3'd0) begin
+            if (meff == 3'd0) begin
                 halted <= 1'b0;
                 nmi_seen <= 1'b0;
                 iff2 <= iff1;
                 iff1 <= 1'b0;
-            end else if (m == 3'd2) begin
+            end else if (meff == 3'd2) begin
                 sp <= sp - 16'd2;
                 pc <= 16'h0066;
             end
@@ -1901,11 +2073,11 @@ module z80 #(
 
     task exec_int;
         begin
-            if (m == 3'd0) begin
+            if (meff == 3'd0) begin
                 halted <= 1'b0;
                 iff1 <= 1'b0;
                 iff2 <= 1'b0;
-            end else if (m == 3'd2) begin
+            end else if (meff == 3'd2) begin
                 sp <= sp - 16'd2;
                 pc <= 16'h0038;            // mode 1
             end
