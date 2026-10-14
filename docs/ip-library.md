@@ -2793,6 +2793,14 @@ exactly what this table is for.
 | `mos6502` | `mos6502` | DECIMAL_MODE=0 | LUT6 | 25 x dff, 1286 x lut | 18 |
 | `mos6502` | `mos6502` | DECIMAL_MODE=0 | iCE40 HX1K | 125 x SB_CARRY, 132 x SB_DFFER, 4 x SB_DFFES, 3 x SB_DFFR, 1 x SB_GB, 57 x SB_IO, 1643 x SB_LUT4 | 16 |
 | `mos6502` | `mos6502` | DECIMAL_MODE=0 | ECP5 45F | 83 x CCU2C, 1 x DCCA, 1543 x LUT4, 139 x TRELLIS_FF, 57 x TRELLIS_IO | 16 |
+| `z80` | `z80` | UNDOCUMENTED_FLAGS=1 | LUT4 | 22 x dff, 2238 x lut, 1 x memory 16x8, 2 x memory 2x8, 11 x memrd, 81 x memwr | 15 |
+| `z80` | `z80` | UNDOCUMENTED_FLAGS=1 | LUT6 | 22 x dff, 1662 x lut, 1 x memory 16x8, 2 x memory 2x8, 11 x memrd, 81 x memwr | 12 |
+| `z80` | `z80` | UNDOCUMENTED_FLAGS=1 | iCE40 HX1K | 215 x SB_CARRY, 160 x SB_DFFE, 108 x SB_DFFESR, 17 x SB_DFFESS, 2 x SB_DFFSR, 1 x SB_DFFSS, 1 x SB_GB, 63 x SB_IO, 3815 x SB_LUT4 | 21 |
+| `z80` | `z80` | UNDOCUMENTED_FLAGS=1 | ECP5 45F | 134 x CCU2C, 1 x DCCA, 3650 x LUT4, 288 x TRELLIS_FF, 63 x TRELLIS_IO | 21 |
+| `z80` | `z80` | UNDOCUMENTED_FLAGS=0 | LUT4 | 22 x dff, 2233 x lut, 1 x memory 16x8, 2 x memory 2x8, 11 x memrd, 81 x memwr | 15 |
+| `z80` | `z80` | UNDOCUMENTED_FLAGS=0 | LUT6 | 22 x dff, 1658 x lut, 1 x memory 16x8, 2 x memory 2x8, 11 x memrd, 81 x memwr | 12 |
+| `z80` | `z80` | UNDOCUMENTED_FLAGS=0 | iCE40 HX1K | 215 x SB_CARRY, 160 x SB_DFFE, 108 x SB_DFFESR, 17 x SB_DFFESS, 2 x SB_DFFSR, 1 x SB_DFFSS, 1 x SB_GB, 63 x SB_IO, 3787 x SB_LUT4 | 21 |
+| `z80` | `z80` | UNDOCUMENTED_FLAGS=0 | ECP5 45F | 134 x CCU2C, 1 x DCCA, 3621 x LUT4, 288 x TRELLIS_FF, 63 x TRELLIS_IO | 21 |
 | `eth_mac_rmii` | `eth_mac_rmii` | IFG_CYCLES=48 | LUT4 | 26 x dff, 305 x lut | 4 |
 | `eth_mac_rmii` | `eth_mac_rmii` | IFG_CYCLES=48 | LUT6 | 26 x dff, 283 x lut | 4 |
 | `eth_mac_rmii` | `eth_mac_rmii` | IFG_CYCLES=48 | iCE40 HX1K | 10 x SB_CARRY, 127 x SB_DFFER, 64 x SB_DFFES, 3 x SB_DFFR, 1 x SB_GB, 34 x SB_IO, 303 x SB_LUT4 | 4 |

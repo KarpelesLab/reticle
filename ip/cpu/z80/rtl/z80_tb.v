@@ -97,6 +97,10 @@ module z80_tb;
                 if (dbg_retire) done = 1'b1;
                 if (got_t > 100) done = 1'b1;   // a core that never retires
             end
+            // `dbg_retire` is registered, so it is high in the T-state
+            // *after* the one the instruction ended on, and the count
+            // above is one too many.
+            got_t = got_t - 1;
             if (got_t !== want) begin
                 $display("FAIL %0s: %0d T-states, the tables say %0d", name, got_t, want);
                 fails = fails + 1;

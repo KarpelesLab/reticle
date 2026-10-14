@@ -83,7 +83,8 @@
 //     JR cc,e                         M1(4) + 3 [+ 5]           = 12 / 7
 //     DJNZ e                          M1(5) + 3 [+ 5]           = 13 / 8
 //     CALL nn                         M1(4) + 3 + 4 + 3 + 3        = 17
-//     CALL cc,nn                      M1(4) + 3 + 4 [+ 3 + 3]  = 17 / 10
+//     CALL cc,nn   taken              M1(4) + 3 + 4 + 3 + 3        = 17
+//                  not taken          M1(4) + 3 + 3                = 10
 //     RET cc                          M1(5) [+ 3 + 3]           = 11 / 5
 //     IN A,(n) / OUT (n),A            M1(4) + 3 + 4                = 11
 //     EX (SP),HL                      M1(4) + 3 + 4 + 3 + 5        = 19
@@ -98,6 +99,12 @@
 //   fetch on the opcode; the operand bytes are the 3-T-state reads
 //   after it. `JP cc,nn` reads both operand bytes whether it jumps or
 //   not, which is why it is 10 either way and `CALL cc,nn` is not.
+//
+//   Note where `CALL cc,nn` loses its seven T-states: not only the two
+//   writes but **one T-state of the second operand read**, which is
+//   where the push begins. A core that kept that read at four either
+//   way comes out at 11 where the reference says 10, which is the kind
+//   of thing only a count catches.
 //
 // The flags, including the two that are not documented
 //   F is `S Z Y H X P/V N C` from bit 7 down. `Y` (bit 5) and `X`
@@ -201,6 +208,13 @@ module z80 #(
     reg        in_nmi = 1'b0;    // an interrupt is being taken, and the
     reg        in_int = 1'b0;    // shape has to stay its shape
     reg        trap = 1'b0;
+    // The retirement trace. Registered, so it describes the instruction
+    // that ended on the previous edge rather than the T-state it is in:
+    // that is what this module's header promises, what `mos6502` does,
+    // and what lets a bench read it after taking the edge.
+    reg        retire_q = 1'b0;
+    reg [15:0] retire_pc = 16'h0000;
+    reg [15:0] op_pc = 16'h0000;    // the opcode being executed
 
     wire [7:0] a_reg = accs[abank];
     wire [7:0] f_reg = flagss[abank];
@@ -232,6 +246,13 @@ module z80 #(
     wire [2:0] z = ir[2:0];
     wire [1:0] p = ir[5:4];
     wire       q = ir[3];
+
+    // The three prefixes this core does not decode. They have to be
+    // named here because the matrix does not leave holes for them:
+    // `ED`, `DD` and `FD` all land on `x = 3, z = 5, q = 1`, which is
+    // `CALL nn`, so a core that only *documented* them as unimplemented
+    // would quietly push a return address and jump.
+    wire ir_is_prefix = (ir == 8'hed) || (ir == 8'hdd) || (ir == 8'hfd);
 
     // The condition codes, in the order the matrix puts them. The
     // fourth quadrant names all eight in `y`; `JR cc,e` has room for
@@ -485,6 +506,9 @@ module z80 #(
                 default: shape = SH_PUSH;                   // RST n
             endcase
         endcase
+        // An undecoded prefix is one M-cycle and raises `dbg_trap`,
+        // which is the whole of its behaviour: see `ir_is_prefix`.
+        if (ir_is_prefix) shape = SH_ONE;
         // Held for the whole of the interrupt's own three M-cycles:
         // reading it off the live inputs made it vanish after one
         // T-state and the sequencer finish the discarded opcode.
@@ -663,7 +687,11 @@ module z80 #(
                 3'd0: begin kind = CY_M1; tlen = 3'd4; last_cycle = 1'b0; end
                 3'd1: begin kind = CY_RD; tlen = 3'd3; last_cycle = 1'b0; end
                 3'd2: begin
-                    kind = CY_RD; tlen = 3'd4;
+                    kind = CY_RD;
+                    // Four T-states only when the call is taken: the
+                    // extra one is where the push begins, which is why
+                    // `CALL cc,nn` is 17 taken and 10 not, and not 11.
+                    tlen = (q || cond_met) ? 3'd4 : 3'd3;
                     last_cycle = q ? 1'b0 : ~cond_met;
                 end
                 3'd3: begin kind = CY_WR; tlen = 3'd3; last_cycle = 1'b0; end
@@ -822,8 +850,8 @@ module z80 #(
                     && (t >= 3'd2) && (t <= 3'd4));
     assign halt_n  = ~halted;
 
-    assign dbg_pc     = pc;
-    assign dbg_retire = cyc_end && last_cycle;
+    assign dbg_pc     = retire_pc;
+    assign dbg_retire = retire_q;
     assign dbg_trap   = trap;
 
     // ------------------------------------------------------------------
@@ -854,6 +882,9 @@ module z80 #(
             in_nmi <= 1'b0;
             in_int <= 1'b0;
             trap <= 1'b0;
+            retire_q <= 1'b0;
+            retire_pc <= 16'h0000;
+            op_pc <= 16'h0000;
             m <= 3'd0;
             t <= 3'd1;
         end else begin
@@ -867,9 +898,12 @@ module z80 #(
             // next opcode; the fetch happens and its byte is discarded,
             // which is what the part does.
             if (at_instr_start) begin
+                op_pc <= pc;
                 if (take_nmi) in_nmi <= 1'b1;
                 else if (take_int) in_int <= 1'b1;
             end
+            retire_q <= cyc_end && last_cycle;
+            if (cyc_end && last_cycle) retire_pc <= op_pc;
             if (cyc_end && last_cycle) begin
                 in_nmi <= 1'b0;
                 in_int <= 1'b0;
@@ -921,6 +955,10 @@ module z80 #(
     task exec_one;
         begin
             pc <= pc + 16'd1;
+            // An undecoded prefix advances past itself and says so. Its
+            // `x` and `z` reach no arm of the case below, so it is a NOP
+            // in every other respect.
+            if (ir_is_prefix) trap <= 1'b1;
             case (x)
                 2'd0: case (z)
                     3'd0: if (y == 3'd1) abank <= ~abank;      // EX AF,AF'
@@ -1064,8 +1102,6 @@ module z80 #(
         begin
             if (m == 3'd0) begin
                 pc <= pc + 16'd1;
-                // The three prefixes this core does not decode.
-                if ((ir == 8'hed) || (ir == 8'hdd) || (ir == 8'hfd)) trap <= 1'b1;
             end else begin
                 // The byte is in `din` this edge, not yet in `tmp`.
                 if (x == 2'd0) begin

@@ -373,6 +373,16 @@ const VARIANTS: &[Variant] = &[
         params: &[("DECIMAL_MODE", "0")],
     },
     Variant {
+        package: "z80",
+        top: "z80",
+        params: &[("UNDOCUMENTED_FLAGS", "1")],
+    },
+    Variant {
+        package: "z80",
+        top: "z80",
+        params: &[("UNDOCUMENTED_FLAGS", "0")],
+    },
+    Variant {
         package: "eth_mac_rmii",
         top: "eth_mac_rmii",
         params: &[("IFG_CYCLES", "48")],
@@ -6600,6 +6610,320 @@ endmodule
         ports.contains("// How wide the data bus is.\n  // The clock.\n  input  wire clk"),
         "the comment moved somewhere new again:\n{formatted}"
     );
+}
+
+// ---------------------------------------------------------------------------
+// z80: the published opcode table against the core that claims it
+// ---------------------------------------------------------------------------
+
+/// A minimal Z80 assembler and the published opcode table, typed from
+/// the Zilog reference and not from `ip/cpu/z80`.
+#[path = "z80_asm/mod.rs"]
+mod z80;
+
+fn z80_design(undocumented: &str) -> Design {
+    design_of("z80", "z80", &[("UNDOCUMENTED_FLAGS", undocumented)])
+}
+
+/// True for the three prefixes `ip/cpu/z80` does not decode.
+///
+/// The matrix leaves no holes for them: `ED`, `DD` and `FD` all land on
+/// `x = 3, z = 5, q = 1`, which is `CALL nn`. A core that only documented
+/// them as unimplemented would push a return address and jump.
+fn z80_undecoded(code: &[u8]) -> bool {
+    matches!(code[0], 0xED | 0xDD | 0xFD)
+}
+
+/// One encoding with zeros in whatever holes it has. The operand's value
+/// cannot change an instruction's T-states, and a jump's target does not
+/// matter to the one measurement taken before it is followed.
+fn z80_with_zero_operands(insn: &z80::Insn) -> Vec<u8> {
+    let mut out = insn.code.to_vec();
+    match insn.field() {
+        z80::Field::None => {}
+        z80::Field::Byte | z80::Field::Port | z80::Field::Rel | z80::Field::Disp => out.push(0),
+        z80::Field::Word | z80::Field::DispByte => {
+            out.push(0);
+            out.push(0);
+        }
+    }
+    out
+}
+
+/// Which of the reference's two counts applies at a core's first
+/// instruction.
+///
+/// A reset leaves F as `FF`, so S, Z, P/V and C are all set: the four
+/// conditions spelled without an `n` or an `o` are true and their
+/// opposites are false. `DJNZ` is the other shape with two counts, and
+/// it jumps, because B is zero and decrements to `FF`.
+fn z80_expected_t(insn: &z80::Insn) -> u8 {
+    match insn.tstates_short {
+        None => insn.tstates,
+        Some(short) => {
+            let taken = !matches!(
+                insn.shape.split(',').next().unwrap_or(""),
+                "nz" | "nc" | "po" | "p"
+            );
+            if taken { insn.tstates } else { short }
+        }
+    }
+}
+
+/// A Z80 with 64 KiB behind it, one T-state at a time.
+struct Z80<'d> {
+    sim: Simulator<'d>,
+    clk: NetHandle,
+    addr: NetHandle,
+    dout: NetHandle,
+    din: NetHandle,
+    mreq_n: NetHandle,
+    wr_n: NetHandle,
+    dbg_retire: NetHandle,
+    dbg_trap: NetHandle,
+    mem: Vec<u8>,
+    traps: u64,
+}
+
+impl<'d> Z80<'d> {
+    /// A core out of reset with `program` at address zero.
+    fn new(design: &'d Design, program: &[u8]) -> Z80<'d> {
+        let sim = simulate(design, "z80");
+        let h = |what: &str| top_net(&sim, what);
+        let mut cpu = Z80 {
+            clk: h("clk"),
+            addr: h("addr"),
+            dout: h("dout"),
+            din: h("din"),
+            mreq_n: h("mreq_n"),
+            wr_n: h("wr_n"),
+            dbg_retire: h("dbg_retire"),
+            dbg_trap: h("dbg_trap"),
+            sim,
+            mem: vec![0u8; 0x1_0000],
+            traps: 0,
+        };
+        for (at, byte) in program.iter().enumerate() {
+            cpu.mem[at] = *byte;
+        }
+        let rst_n = top_net(&cpu.sim, "rst_n");
+        // Nothing in these tests drives WAIT low or either interrupt.
+        for pin in ["wait_n", "int_n", "nmi_n"] {
+            let n = top_net(&cpu.sim, pin);
+            cpu.sim.set(n, bit(true));
+        }
+        cpu.sim.set(rst_n, bit(false));
+        cpu.sim.set(cpu.din, word(8, 0));
+        let clk = cpu.clk;
+        for _ in 0..3 {
+            cycle(&mut cpu.sim, clk, HALF);
+        }
+        cpu.sim.set(rst_n, bit(true));
+        cpu
+    }
+
+    /// One T-state: answer whatever the bus is asking for, take the
+    /// edge, and say whether an instruction ended on it.
+    fn tick(&mut self) -> bool {
+        let at = (get_u64(&self.sim, self.addr) & 0xFFFF) as usize;
+        self.sim.set(self.din, word(8, u64::from(self.mem[at])));
+        let writing = !high(&self.sim, self.mreq_n) && !high(&self.sim, self.wr_n);
+        let byte = octet(get_u64(&self.sim, self.dout));
+        let clk = self.clk;
+        cycle(&mut self.sim, clk, HALF);
+        if writing {
+            self.mem[at] = byte;
+        }
+        if high(&self.sim, self.dbg_trap) {
+            self.traps += 1;
+        }
+        high(&self.sim, self.dbg_retire)
+    }
+
+    /// The T-states one instruction takes. `dbg_retire` is registered, so
+    /// the tick that sees it is the one whose edge ended the instruction.
+    fn run_one(&mut self, what: &str) -> u8 {
+        for t in 1..=64u32 {
+            if self.tick() {
+                return u8::try_from(t).unwrap_or(u8::MAX);
+            }
+        }
+        panic!("{what} did not finish in 64 T-states");
+    }
+
+    fn run(&mut self, instructions: usize, clocks: usize) {
+        let mut done = 0;
+        for _ in 0..clocks {
+            if self.tick() {
+                done += 1;
+                if done == instructions {
+                    return;
+                }
+            }
+        }
+        panic!("only {done} of {instructions} instructions finished");
+    }
+}
+
+/// # Every encoding the core implements takes the T-states Zilog prints
+///
+/// The one measurement that makes this a Z80 rather than something
+/// Z80-shaped. A core that computes the right answer in the wrong number
+/// of cycles is not a drop-in for the part: the timings are its published
+/// interface and every system built around one depends on them.
+///
+/// The counts come from `tests/z80_asm/mod.rs`, whose table is typed from
+/// the Zilog reference and **not** from this decoder — a bench that took
+/// its expectations from the core it tests would agree with it however
+/// wrong both were. That is the same arrangement
+/// `mos6502_counts_the_cycles_of_every_instruction` has with the 6502's
+/// own figures.
+///
+/// `ip/cpu/z80/rtl/z80_tb.v` checks fifty of these by hand. This checks
+/// every one, which is how `CB`'s four quadrants and the whole of the
+/// first and second get covered rather than sampled.
+///
+/// What this would not catch: whether a count in that table is the one
+/// Zilog published, which only reading the reference again settles; and
+/// anything about `WAIT`, the interrupt inputs, or what an instruction
+/// computes. The flag and result checks are `z80_computes` below.
+#[test]
+fn z80_counts_the_t_states_of_every_instruction_it_implements() {
+    let design = z80_design("1");
+    let mut checked = 0usize;
+    let mut skipped = 0usize;
+    for insn in z80::TABLE {
+        if z80_undecoded(insn.code) {
+            skipped += 1;
+            continue;
+        }
+        let program = z80_with_zero_operands(insn);
+        let want = z80_expected_t(insn);
+        let name = insn.syntax();
+        let mut cpu = Z80::new(&design, &program);
+        let got = cpu.run_one(&name);
+        assert_eq!(
+            got, want,
+            "{name}: {got} T-states, the reference prints {want}"
+        );
+        assert_eq!(cpu.traps, 0, "{name} raised dbg_trap");
+        checked += 1;
+    }
+    // The two spaces the core claims, against the three it does not.
+    assert_eq!(
+        (checked, skipped),
+        (500, 198),
+        "the unprefixed and CB encodings, against ED, DD and FD"
+    );
+}
+
+/// # The three prefixes the core does not decode raise `dbg_trap`
+///
+/// And this is not a formality. `ED`, `DD` and `FD` all encode as
+/// `x = 3, z = 5, q = 1`, which is `CALL nn`: before the shape decode
+/// named them, every one of them pushed a return address and jumped
+/// somewhere, while the module header said they were treated as a `NOP`.
+/// A header is not a mechanism.
+///
+/// What this would not catch: anything about what those prefixes should
+/// do once they are implemented.
+#[test]
+fn z80_traps_the_prefixes_it_does_not_decode() {
+    let design = z80_design("1");
+    for prefix in [0xEDu8, 0xDD, 0xFD] {
+        let mut cpu = Z80::new(&design, &[prefix, 0x00, 0x00]);
+        let got = cpu.run_one("an undecoded prefix");
+        assert_eq!(got, 4, "an undecoded prefix takes a NOP's four T-states");
+        assert_eq!(cpu.traps, 1, "{prefix:#04x} raised dbg_trap once");
+    }
+    // `CB` is a prefix the core does decode, and it says nothing.
+    let mut cpu = Z80::new(&design, &[0xCB, 0x00]);
+    cpu.run_one("rlc b");
+    assert_eq!(cpu.traps, 0, "CB is decoded and raises nothing");
+}
+
+/// # The core computes, and the flags say what the reference says
+///
+/// Programs assembled by `z80_asm`, so the bytes are the reference's
+/// encodings rather than whatever this core happens to accept. Each one
+/// leaves its answer in memory, which is the only thing a bench can read
+/// without reaching inside the module.
+///
+/// What this would not catch: the undocumented flags, which no documented
+/// instruction reads and which nothing here can observe; and the two
+/// flags `BIT n,(HL)` takes from an internal latch on the real part, a
+/// deviation the module header states.
+#[test]
+fn z80_computes() {
+    let design = z80_design("1");
+
+    // Arithmetic, a DJNZ loop, a call through HL, a push/pop round trip,
+    // the carry flag through ADC, and a CB bit set.
+    let image = z80::assemble(
+        "
+        .org $0000
+            ld   sp,$fff0
+            ld   a,5
+            ld   b,3
+            add  a,b
+            ld   ($9000),a       ; 8
+            ld   c,0
+            ld   b,4
+        loop:
+            ld   a,c
+            add  a,b
+            ld   c,a
+            djnz loop
+            ld   a,c
+            ld   ($9001),a       ; 1+2+3+4 = 10
+            ld   hl,$9002
+            call fill
+            ld   bc,$1234
+            push bc
+            pop  hl
+            ld   ($9003),hl      ; 34 12
+            ld   a,$ff
+            add  a,1             ; carry set, a = 0
+            ld   a,0
+            adc  a,0             ; the carry comes back
+            ld   ($9005),a       ; 1
+            ld   hl,$9006
+            set  7,(hl)          ; 80
+            ld   a,$3b
+            cp   $3b
+            jr   nz,wrong
+            ld   a,$aa
+            ld   ($9007),a
+        wrong:
+            halt
+        fill:
+            ld   a,$5a
+            ld   (hl),a
+            ret
+        ",
+    )
+    .unwrap_or_else(|e| panic!("the program does not assemble: {e}"));
+
+    let mut program = vec![0u8; 0x1_0000];
+    for (at, byte) in &image.bytes {
+        program[usize::from(*at)] = *byte;
+    }
+    let mut cpu = Z80::new(&design, &program);
+    cpu.run(200, 4000);
+
+    let at = |a: u16| cpu.mem[usize::from(a)];
+    assert_eq!(at(0x9000), 0x08, "5 + 3");
+    assert_eq!(at(0x9001), 0x0a, "1 + 2 + 3 + 4 through DJNZ");
+    assert_eq!(at(0x9002), 0x5a, "the call wrote through HL");
+    assert_eq!(
+        (at(0x9003), at(0x9004)),
+        (0x34, 0x12),
+        "push BC then pop HL"
+    );
+    assert_eq!(at(0x9005), 0x01, "the carry survived into ADC");
+    assert_eq!(at(0x9006), 0x80, "set 7,(hl)");
+    assert_eq!(at(0x9007), 0xaa, "CP of equal bytes set Z");
+    assert_eq!(cpu.traps, 0, "nothing in the program trapped");
 }
 
 // ---------------------------------------------------------------------------
