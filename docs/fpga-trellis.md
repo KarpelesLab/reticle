@@ -52,12 +52,25 @@ that, and each looked like a clean single-variable comparison at the time.
 
 ### What has been eliminated
 
-- **`inflate.v`'s own state**, by two tests that run the sequences a part
-  runs: a refusal followed by a dynamic stream, three times over on one
-  instance, and all 123 cases in corpus order through a single
-  `WRAPPER=1` instance with `E_HEADER` asserted for each of the 64
-  deflate ones. Both pass, so the decoder re-arms and this is a
-  hardware-only divergence.
+- **`inflate.v`'s own state, for every pair of streams there is.**
+  Three tests run the sequences a part runs: a refusal followed by a
+  dynamic stream, three times over on one instance; all 123 cases in
+  corpus order through a single `WRAPPER=1` instance with `E_HEADER`
+  asserted for each of the 64 deflate ones; and **every ordered pair of
+  the 59 zlib cases — 3481 of them — each pair on a simulator of its
+  own**, which is the shape of the matrix above rather than of the
+  corpus. All 3481 second streams decode byte for byte. The last of
+  those is `inflate_decodes_every_zlib_stream_after_every_other_one`,
+  `#[ignore]`d for its four minutes; the sixteen cells of the matrix
+  itself run on every gate as
+  `inflate_decodes_the_four_streams_a_part_gets_wrong_after_each_other`.
+
+  A fresh simulator per pair is the point and not an accident: these
+  memories have no reset, so one simulator reused across pairs is a part
+  that was never reconfigured, which is the mistake recorded two
+  sections down. So "a stream this block leaves behind breaks the next
+  one" is now closed as an explanation, and this is a hardware-only
+  divergence.
 - **The window**, by `testdata/fpga/cynthion/bram_echo.v`: 32768 bytes
   written and read back over sixteen blocks.
 - **A block RAM read in the cycle its own address is written**, which is

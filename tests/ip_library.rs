@@ -24511,6 +24511,149 @@ fn inflate_rearms_after_a_refusal_for_a_dynamic_huffman_stream() {
     }
 }
 
+/// Runs every ordered pair drawn from `cases`, each pair on a simulator
+/// of its own, and returns how many it ran.
+///
+/// **A fresh `Simulator` per pair is the point rather than an
+/// accident.** The memories this block carries between streams have no
+/// reset, so a simulator reused across pairs is a part that was never
+/// reconfigured — which is exactly the mistake that cost three withdrawn
+/// conclusions on the board, recorded in `docs/fpga-trellis.md`. One
+/// pair, one power-on.
+fn inflate_every_ordered_pair(design: &Design, cases: &[&Corpus]) -> usize {
+    let plains: Vec<Vec<u8>> = cases.iter().map(|c| plaintext(&c.rule, c.len)).collect();
+    let mut pairs = 0usize;
+    for (ai, a) in cases.iter().enumerate() {
+        for (bi, b) in cases.iter().enumerate() {
+            let mut sim = simulate(design, "inflate (zlib)");
+            let bench = InflateBench::attach(&mut sim);
+            let first = bench.run(
+                &mut sim,
+                &a.stream,
+                Sink::Greedy,
+                inflate_limit(a.stream.len(), a.len),
+            );
+            assert_eq!(
+                first.error, None,
+                "{}: refused on a fresh simulator",
+                a.name
+            );
+            assert_eq!(
+                (first.done, &first.out),
+                (true, &plains[ai]),
+                "{}: wrong on a fresh simulator, before {}",
+                a.name,
+                b.name
+            );
+            let second = bench.run(
+                &mut sim,
+                &b.stream,
+                Sink::Greedy,
+                inflate_limit(b.stream.len(), b.len),
+            );
+            assert_eq!(
+                second.error,
+                None,
+                "{} after {}: reported {:?} with {} of {} bytes out",
+                b.name,
+                a.name,
+                second.error,
+                second.out.len(),
+                b.len
+            );
+            assert!(second.done, "{} after {}: never finished", b.name, a.name);
+            assert_eq!(
+                second.out,
+                plains[bi],
+                "{} after {}: {} bytes out, {} expected",
+                b.name,
+                a.name,
+                second.out.len(),
+                plains[bi].len()
+            );
+            pairs += 1;
+        }
+    }
+    pairs
+}
+
+/// The zlib cases, in corpus order.
+fn inflate_zlib_cases() -> Vec<&'static Corpus> {
+    corpus()
+        .iter()
+        .filter(|c| c.wrapper == "zlib" && c.tier == "fast")
+        .collect()
+}
+
+/// The four streams of `docs/fpga-trellis.md`'s matrix, each after each.
+///
+/// **This is the sequence a part runs and no other test here does.**
+/// `inflate_takes_the_corpus_in_order_with_the_deflate_cases_refused`
+/// runs one order, the corpus'; `inflate_rearms_after_a_refusal_for_a_dynamic_huffman_stream`
+/// runs one pair, three times over. On a Cynthion these four streams
+/// decode in five of their sixteen orderings' second position and not in
+/// the other eleven, and which eleven is the whole of what is known: the
+/// matrix is in `docs/fpga-trellis.md` and in
+/// `testdata/fpga/cynthion/usb_inflate.v`. That is a claim about what one
+/// stream leaves behind for the next, and this is the simulator's answer
+/// to the same question, cell for cell.
+///
+/// All sixteen pass, which is why the four failures are a hardware-only
+/// divergence rather than something `inflate.v` does.
+/// `inflate_decodes_every_zlib_stream_after_every_other_one` is the same
+/// sweep over all 59 zlib cases; it is `#[ignore]`d for its running time
+/// and this is the part of it worth paying for on every gate.
+///
+/// What this would catch: any state `start` fails to clear that a
+/// *particular* predecessor leaves wrong — the code-length memory, the
+/// count file, the sorted symbol tables, the window, the bit reader.
+/// What it would not: anything the fabric does and the simulator does
+/// not, which is the other half of the possibilities and the half this
+/// test exists to rule out.
+#[test]
+fn inflate_decodes_the_four_streams_a_part_gets_wrong_after_each_other() {
+    const MATRIX: [&str; 4] = [
+        "text1_100_l6_zlib",
+        "text1_1000_l6_zlib",
+        "text5_1000_l9_zlib",
+        "pattern_9_l6_zlib",
+    ];
+    let all = inflate_zlib_cases();
+    let cases: Vec<&Corpus> = MATRIX
+        .iter()
+        .map(|want| {
+            *all.iter()
+                .find(|c| c.name == *want)
+                .unwrap_or_else(|| panic!("no corpus case {want}"))
+        })
+        .collect();
+    let design = inflate_design(15, 1);
+    assert_eq!(
+        inflate_every_ordered_pair(&design, &cases),
+        16,
+        "the pairs this ran"
+    );
+}
+
+/// Every ordered pair of the 59 zlib corpus streams: 3481 of them.
+///
+/// `#[ignore]`d because it is four minutes of simulation, and the
+/// sixteen cells that a part disagrees with are run on every gate by
+/// `inflate_decodes_the_four_streams_a_part_gets_wrong_after_each_other`
+/// above. **Run on 15 October 2026: all 3481 pairs decode**, which is
+/// what closes "a stream this block leaves behind breaks the next one"
+/// as an explanation of the four cases a Cynthion gets wrong.
+#[test]
+#[ignore]
+fn inflate_decodes_every_zlib_stream_after_every_other_one() {
+    let cases = inflate_zlib_cases();
+    assert_eq!(cases.len(), 59, "the zlib cases this sweeps");
+    let design = inflate_design(15, 1);
+    let pairs = inflate_every_ordered_pair(&design, &cases);
+    assert_eq!(pairs, 59 * 59, "the pairs this ran");
+    println!("inflate: {pairs} ordered pairs, every second stream correct");
+}
+
 #[test]
 fn inflate_reports_every_malformed_stream() {
     // RFC 1950 §2.2: FCHECK is chosen so that CMF*256 + FLG is a

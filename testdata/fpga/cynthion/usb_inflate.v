@@ -91,14 +91,24 @@
 // earlier rows had already wedged are what made a correlation look like a
 // cause twice.
 //
-// Three things have been eliminated, two by test and one by measurement:
+// Four things have been eliminated, one by test and three by measurement:
 //
-//   * `inflate.v`'s own state. `tests/ip_library.rs`'s
-//     `inflate_rearms_after_a_refusal_for_a_dynamic_huffman_stream` and
-//     `inflate_takes_the_corpus_in_order_with_the_deflate_cases_refused`
-//     run the pairing three times over and then all 123 cases in corpus
-//     order through one `WRAPPER=1` instance, refusals included. Both
-//     pass, so the decoder re-arms correctly and this is a hardware-only
+//   * `inflate.v`'s own state, for every pair of streams there is.
+//     `tests/ip_library.rs` runs the pairing three times over
+//     (`inflate_rearms_after_a_refusal_for_a_dynamic_huffman_stream`),
+//     all 123 cases in corpus order through one `WRAPPER=1` instance
+//     with the refusals included
+//     (`inflate_takes_the_corpus_in_order_with_the_deflate_cases_refused`),
+//     and **every ordered pair of the 59 zlib cases, 3481 of them, each
+//     pair on a simulator of its own** -- which is the shape of the
+//     matrix above rather than of the corpus, and a fresh simulator per
+//     pair because these memories have no reset and a reused one is a
+//     part that was never reconfigured. All 3481 second streams decode
+//     byte for byte. The sixteen cells of the matrix itself run on every
+//     gate as
+//     `inflate_decodes_the_four_streams_a_part_gets_wrong_after_each_other`;
+//     the full sweep is `#[ignore]`d for its four minutes. So the
+//     decoder re-arms after anything, and this is a hardware-only
 //     divergence.
 //   * the window. `bram_echo.v` reads 32768 bytes back off the part.
 //   * a block RAM read in the cycle its own address is written, which is
