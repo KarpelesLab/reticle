@@ -1,5 +1,5 @@
 # z80: the documented Zilog Z80 instruction set in a T-state accurate
-# core, less the IX and IY prefixes and ED's block instructions. The bus is the part's own — M1, MREQ, IORQ, RD, WR, RFSH and WAIT
+# core, less the IX and IY prefixes. The bus is the part's own — M1, MREQ, IORQ, RD, WR, RFSH and WAIT
 # — and an instruction takes the number of T-states the Zilog tables
 # print, so a system built around published timings keeps them.
 #
@@ -10,7 +10,7 @@
 name z80
 version 0.1.0
 license MIT
-description "Zilog Z80 core: the unprefixed, CB and ED opcode spaces, T-state accurate, NMI / INT in mode 1, HALT with refresh"
+description "Zilog Z80 core: the unprefixed, CB and ED opcode spaces including the block instructions, T-state accurate, NMI / INT in mode 1"
 
 top z80
 target ice40

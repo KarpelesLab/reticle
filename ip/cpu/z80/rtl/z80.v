@@ -17,7 +17,10 @@
 //   `IN r,(C)` and `OUT (C),r` — which set flags where `IN A,(n)`
 //   leaves them alone — `NEG`, `RETN` and `RETI`, `IM 0` / `IM 1` /
 //   `IM 2`, `LD I,A` / `LD R,A` / `LD A,I` / `LD A,R`, and `RRD` /
-//   `RLD`.
+//   `RLD`. And its second quadrant: `LDI`, `LDD`, `CPI`, `CPD`, `INI`,
+//   `IND`, `OUTI`, `OUTD` and the eight repeating forms of those, which
+//   repeat the way the part does — by taking two off PC and running
+//   again, so an interrupt can be taken between iterations.
 //
 //   This is a reimplementation from the published description of the
 //   part — a machine's observable behaviour, not anyone's creative
@@ -25,16 +28,20 @@
 //   package, and none is needed to run it.
 //
 //   **What is not here, and traps rather than guesses:** the `DD` and
-//   `FD` prefixes, and therefore `IX` and `IY`; and `ED`'s second
-//   quadrant, which is `LDI`, `CPI`, `INI`, `OUTI` and their
-//   decrementing and repeating forms. Reaching one raises `dbg_trap`
-//   for a cycle and the core treats it as a `NOP` — eight T-states for
-//   a block instruction, whose prefix was fetched, and four for `DD` or
-//   `FD`. A program that reaches one says so instead of quietly
-//   computing something else. `IM 0`'s and `IM 2`'s *interrupt
-//   responses* are not implemented either: the mode is stored, and
-//   `INT` always answers as mode 1. `BUSRQ` / `BUSAK` are absent: this
-//   core never gives up the bus.
+//   `FD` prefixes, and therefore `IX` and `IY`. Fetching one raises
+//   `dbg_trap` for a cycle and the core treats it as a `NOP`, so a
+//   program that reaches one says so instead of quietly computing
+//   something else. `IM 0`'s and `IM 2`'s *interrupt responses* are not
+//   implemented either: the mode is stored, and `INT` always answers as
+//   mode 1. `BUSRQ` / `BUSAK` are absent: this core never gives up the
+//   bus.
+//
+//   And four flags are a **choice, not a measurement**: Zilog documents
+//   `INI`, `IND`, `OUTI` and `OUTD` as setting Z from the counter and N
+//   from the transfer, and calls S, H and P/V *unknown*. They are S
+//   from `B - 1` and H and P/V clear here. Nothing documented reads
+//   them; the hardware's own values depend on the byte that moved and
+//   on C, and this core does not pretend to know them.
 //
 //   That trap is a mechanism and not a comment, and it has to be,
 //   because **the matrix leaves no holes for the prefix bytes**. `ED`,
@@ -133,6 +140,17 @@
 //     ADC HL,rp / SBC HL,rp           M1(4) + M1(4) + 4 + 3        = 15
 //     RRD / RLD                       M1(4) + M1(4) + 3 + 4 + 3    = 18
 //     LD (nn),rp / LD rp,(nn)         M1(4) + M1(4) + 3+3 + 3+3    = 20
+//     LDI / LDD                       M1(4) + M1(4) + 3 + 5        = 16
+//     LDIR / LDDR, repeating          + 5                          = 21
+//     CPI / CPD                       M1(4) + M1(4) + 3 + 5        = 16
+//     CPIR / CPDR, repeating          + 5                          = 21
+//     INI / IND                       M1(4) + M1(5) + io 4 + 3     = 16
+//     INIR / INDR, repeating          + 5                          = 21
+//     OUTI / OUTD                     M1(4) + M1(5) + 3 + io 4     = 16
+//     OTIR / OTDR, repeating          + 5                          = 21
+//
+//   The second fetch of the four port forms is five T-states and the
+//   others' is four, which is the one asymmetry in the quadrant.
 //
 //   An `M1(4)` whose instruction is longer than one byte spends its
 //   fetch on the opcode; the operand bytes are the 3-T-state reads
@@ -524,38 +542,45 @@ module z80 #(
     // ------------------------------------------------------------------
     // One name per T-state shape in the header's table. The sequencer
     // below turns a shape and an M-cycle index into a bus cycle.
-    localparam [4:0]
-        SH_ONE      = 5'd0,   // M1(4) and nothing else
-        SH_RD8      = 5'd1,   // M1(4) + read 3           immediate or (HL)
-        SH_WR8      = 5'd2,   // M1(4) + write 3
-        SH_RD_WR    = 5'd3,   // M1(4) + read 3 + write 3  LD (HL),n
-        SH_RD16     = 5'd4,   // M1(4) + read 3 + read 3   LD rp,nn / POP / RET / JP
-        SH_ADDR_RD  = 5'd5,   // M1(4) + read 3 + read 3 + read 3        LD A,(nn)
-        SH_ADDR_WR  = 5'd6,   // M1(4) + read 3 + read 3 + write 3       LD (nn),A
-        SH_ADDR_RD16 = 5'd7,  // + read + read                           LD HL,(nn)
-        SH_ADDR_WR16 = 5'd8,  // + write + write                         LD (nn),HL
-        SH_RMW      = 5'd9,   // M1(4) + read 4 + write 3  INC/DEC (HL)
-        SH_M1_6     = 5'd10,  // M1(6)                     INC rp, LD SP,HL
-        SH_ADD16    = 5'd11,  // M1(4) + 4 + 3             ADD HL,rp
-        SH_PUSH     = 5'd12,  // M1(5) + write + write
-        SH_JR       = 5'd13,  // M1(4) + read 3 [+ 5]
-        SH_DJNZ     = 5'd14,  // M1(5) + read 3 [+ 5]
-        SH_CALL     = 5'd15,  // M1(4) + read 3 + read 4 [+ write + write]
-        SH_RET_CC   = 5'd16,  // M1(5) [+ read + read]
-        SH_IO       = 5'd17,  // M1(4) + read 3 + io 4
-        SH_EXSP     = 5'd18,  // M1(4) + read 3 + read 4 + write 3 + write 5
-        SH_CB       = 5'd19,  // M1(4) + M1(4) [+ read 4 [+ write 3]]
-        SH_NMI      = 5'd20,  // M1(5) + write + write
-        SH_INT      = 5'd21,  // M1(6) + write + write
+    localparam [5:0]
+        SH_ONE      = 6'd0,   // M1(4) and nothing else
+        SH_RD8      = 6'd1,   // M1(4) + read 3           immediate or (HL)
+        SH_WR8      = 6'd2,   // M1(4) + write 3
+        SH_RD_WR    = 6'd3,   // M1(4) + read 3 + write 3  LD (HL),n
+        SH_RD16     = 6'd4,   // M1(4) + read 3 + read 3   LD rp,nn / POP / RET / JP
+        SH_ADDR_RD  = 6'd5,   // M1(4) + read 3 + read 3 + read 3        LD A,(nn)
+        SH_ADDR_WR  = 6'd6,   // M1(4) + read 3 + read 3 + write 3       LD (nn),A
+        SH_ADDR_RD16 = 6'd7,  // + read + read                           LD HL,(nn)
+        SH_ADDR_WR16 = 6'd8,  // + write + write                         LD (nn),HL
+        SH_RMW      = 6'd9,   // M1(4) + read 4 + write 3  INC/DEC (HL)
+        SH_M1_6     = 6'd10,  // M1(6)                     INC rp, LD SP,HL
+        SH_ADD16    = 6'd11,  // M1(4) + 4 + 3             ADD HL,rp
+        SH_PUSH     = 6'd12,  // M1(5) + write + write
+        SH_JR       = 6'd13,  // M1(4) + read 3 [+ 5]
+        SH_DJNZ     = 6'd14,  // M1(5) + read 3 [+ 5]
+        SH_CALL     = 6'd15,  // M1(4) + read 3 + read 4 [+ write + write]
+        SH_RET_CC   = 6'd16,  // M1(5) [+ read + read]
+        SH_IO       = 6'd17,  // M1(4) + read 3 + io 4
+        SH_EXSP     = 6'd18,  // M1(4) + read 3 + read 4 + write 3 + write 5
+        SH_CB       = 6'd19,  // M1(4) + M1(4) [+ read 4 [+ write 3]]
+        SH_NMI      = 6'd20,  // M1(5) + write + write
+        SH_INT      = 6'd21,  // M1(6) + write + write
         // The ED quadrant. Every one of these begins with two opcode
         // fetches, because the prefix is fetched like any other byte.
-        SH_ED_NOP   = 5'd22,  // M1(4) + M1(4)                       = 8
-        SH_ED_SPEC  = 5'd23,  // + 1                                 = 9
-        SH_ED_IO    = 5'd24,  // + io 4                              = 12
-        SH_ED_ALU16 = 5'd25,  // + 4 + 3                             = 15
-        SH_ED_RETN  = 5'd26,  // + read 3 + read 3                   = 14
-        SH_ED_RRD   = 5'd27,  // + read 3 + 4 + write 3              = 18
-        SH_ED_ADDR  = 5'd28;  // + read + read + two reads or writes = 20
+        SH_ED_NOP   = 6'd22,  // M1(4) + M1(4)                       = 8
+        SH_ED_SPEC  = 6'd23,  // + 1                                 = 9
+        SH_ED_IO    = 6'd24,  // + io 4                              = 12
+        SH_ED_ALU16 = 6'd25,  // + 4 + 3                             = 15
+        SH_ED_RETN  = 6'd26,  // + read 3 + read 3                   = 14
+        SH_ED_RRD   = 6'd27,  // + read 3 + 4 + write 3              = 18
+        SH_ED_ADDR  = 6'd28,  // + read + read + two reads or writes = 20
+        // The block instructions. Each moves one byte and then decides
+        // whether to do it again, which costs five T-states and two off
+        // the program counter.
+        SH_ED_LD    = 6'd29,  // M1(4) + M1(4) + read 3 + write 5  [+ 5]
+        SH_ED_CP    = 6'd30,  // M1(4) + M1(4) + read 3 + 5        [+ 5]
+        SH_ED_IN    = 6'd31,  // M1(4) + M1(5) + io 4   + write 3  [+ 5]
+        SH_ED_OUT   = 6'd32;  // M1(4) + M1(5) + read 3 + io 4     [+ 5]  // + read + read + two reads or writes = 20
 
     reg [2:0] m = 3'd0;        // which M-cycle of the instruction
     reg [2:0] t = 3'd1;        // which T-state of that M-cycle
@@ -563,7 +588,7 @@ module z80 #(
     reg [2:0] tlen;            // how many T-states it takes
     reg       last_cycle;      // the instruction ends with this one
 
-    reg [4:0] shape;
+    reg [5:0] shape;
     // True when the opcode's operand is `(HL)` rather than a register,
     // which decides whether a load or an ALU operation needs a bus
     // cycle at all.
@@ -624,7 +649,13 @@ module z80 #(
         // every one of these begins with the same two 4-T-state
         // fetches, and nothing reads the shape before the second ends.
         if (ed_pfx) begin
-            if (ex != 2'd1)     shape = SH_ED_NOP;   // and the blocks
+            if (ed_block) case (ez)
+                3'd0:    shape = SH_ED_LD;           // LDI LDD LDIR LDDR
+                3'd1:    shape = SH_ED_CP;           // CPI CPD CPIR CPDR
+                3'd2:    shape = SH_ED_IN;           // INI IND INIR INDR
+                default: shape = SH_ED_OUT;          // OUTI OUTD OTIR OTDR
+            endcase
+            else if (ex != 2'd1) shape = SH_ED_NOP;
             else case (ez)
                 3'd0, 3'd1: shape = SH_ED_IO;        // IN r,(C) OUT (C),r
                 3'd2:       shape = SH_ED_ALU16;     // ADC/SBC HL,rp
@@ -774,6 +805,56 @@ module z80 #(
                           UNDOCUMENTED_FLAGS ? ir_byte[5] : 1'b0, 1'b0,
                           UNDOCUMENTED_FLAGS ? ir_byte[3] : 1'b0,
                           iff2, 1'b0, f_reg[F_C]};
+
+    // ------------------------------------------------------------------
+    // THE BLOCK INSTRUCTIONS
+    // ------------------------------------------------------------------
+    // `y` says which of the four each one is: bit 1 whether it repeats,
+    // bit 0 whether the pointers go down instead of up.
+    wire        ed_rep = ey[1];
+    wire        ed_dec = ey[0];
+    wire [15:0] bc_next = bc - 16'd1;
+    wire [15:0] hl_next = ed_dec ? (hl - 16'd1) : (hl + 16'd1);
+    wire [15:0] de_next = ed_dec ? (de - 16'd1) : (de + 16'd1);
+    wire [7:0]  b_next  = reg_b - 8'd1;
+
+    // Whether to do it again, decided from the counters as they are
+    // *before* this pass decrements them. `CPIR` stops on a match as
+    // well as on a count, which is the whole point of it.
+    wire ld_again = ed_rep && (bc != 16'd1);
+    wire cp_again = ed_rep && (bc != 16'd1) && (a_reg != tmp);
+    wire io_again = ed_rep && (reg_b != 8'd1);
+
+    // LDI and its three relatives leave S, Z and C alone and put the
+    // counter's emptiness in P/V. The two undocumented bits come from
+    // the byte that moved plus A, which is the one place they are not
+    // bits of a result.
+    wire [7:0] ld_n  = tmp + a_reg;
+    wire [7:0] ldx_f = {f_reg[F_S], f_reg[F_Z],
+                        UNDOCUMENTED_FLAGS ? ld_n[1] : 1'b0, 1'b0,
+                        UNDOCUMENTED_FLAGS ? ld_n[3] : 1'b0,
+                        bc_next != 16'd0, 1'b0, f_reg[F_C]};
+
+    // CPI compares without keeping the difference, so its flags are a
+    // subtraction's but A is not touched. P/V is the counter again, not
+    // overflow, and the undocumented bits come from the difference less
+    // the half-borrow.
+    wire [7:0] cp_res = a_reg - tmp;
+    wire       cp_h   = a_reg[4] ^ tmp[4] ^ cp_res[4];
+    wire [7:0] cp_n2  = cp_res - {7'd0, cp_h};
+    wire [7:0] cpx_f  = {cp_res[7], cp_res == 8'h00,
+                         UNDOCUMENTED_FLAGS ? cp_n2[1] : 1'b0, cp_h,
+                         UNDOCUMENTED_FLAGS ? cp_n2[3] : 1'b0,
+                         bc_next != 16'd0, 1'b1, f_reg[F_C]};
+
+    // INI, IND, OUTI and OUTD are the one place this core makes a
+    // choice the reference does not: Zilog documents Z as "set if B-1
+    // is zero" and N as set, and calls S, H and P/V **unknown**. They
+    // are S from B-1 and H and P/V clear here, which is a decision and
+    // not a measurement; the hardware's own values depend on the byte
+    // that moved and on C, and nothing documented reads them.
+    wire [7:0] iox_f = {b_next[7], b_next == 8'h00,
+                        1'b0, 1'b0, 1'b0, 1'b0, 1'b1, f_reg[F_C]};
 
     // What `IN r,(C)` puts in F, which is not what `IN A,(n)` does:
     // that one leaves every flag alone, and this one sets them from the
@@ -946,6 +1027,35 @@ module z80 #(
                 3'd3: begin kind = CY_NONE; tlen = 3'd4; last_cycle = 1'b0; end
                 default: begin kind = CY_WR; tlen = 3'd3; last_cycle = 1'b1; end
             endcase
+            // Four M-cycles and a fifth only when it repeats. The
+            // second fetch is five T-states for the two that touch a
+            // port and four for the two that do not.
+            SH_ED_LD: case (m)
+                3'd0, 3'd1: begin kind = CY_M1; tlen = 3'd4; last_cycle = 1'b0; end
+                3'd2: begin kind = CY_RD; tlen = 3'd3; last_cycle = 1'b0; end
+                3'd3: begin kind = CY_WR; tlen = 3'd5; last_cycle = ~ld_again; end
+                default: begin kind = CY_NONE; tlen = 3'd5; last_cycle = 1'b1; end
+            endcase
+            SH_ED_CP: case (m)
+                3'd0, 3'd1: begin kind = CY_M1; tlen = 3'd4; last_cycle = 1'b0; end
+                3'd2: begin kind = CY_RD; tlen = 3'd3; last_cycle = 1'b0; end
+                3'd3: begin kind = CY_NONE; tlen = 3'd5; last_cycle = ~cp_again; end
+                default: begin kind = CY_NONE; tlen = 3'd5; last_cycle = 1'b1; end
+            endcase
+            SH_ED_IN: case (m)
+                3'd0: begin kind = CY_M1; tlen = 3'd4; last_cycle = 1'b0; end
+                3'd1: begin kind = CY_M1; tlen = 3'd5; last_cycle = 1'b0; end
+                3'd2: begin kind = CY_IOR; tlen = 3'd4; last_cycle = 1'b0; end
+                3'd3: begin kind = CY_WR; tlen = 3'd3; last_cycle = ~io_again; end
+                default: begin kind = CY_NONE; tlen = 3'd5; last_cycle = 1'b1; end
+            endcase
+            SH_ED_OUT: case (m)
+                3'd0: begin kind = CY_M1; tlen = 3'd4; last_cycle = 1'b0; end
+                3'd1: begin kind = CY_M1; tlen = 3'd5; last_cycle = 1'b0; end
+                3'd2: begin kind = CY_RD; tlen = 3'd3; last_cycle = 1'b0; end
+                3'd3: begin kind = CY_IOW; tlen = 3'd4; last_cycle = ~io_again; end
+                default: begin kind = CY_NONE; tlen = 3'd5; last_cycle = 1'b1; end
+            endcase
             SH_ED_ADDR: case (m)
                 3'd0, 3'd1: begin kind = CY_M1; tlen = 3'd4; last_cycle = 1'b0; end
                 3'd2, 3'd3: begin kind = CY_RD; tlen = 3'd3; last_cycle = 1'b0; end
@@ -1036,6 +1146,7 @@ module z80 #(
             SH_CB:    dout_r = cb_res;
             SH_ED_IO:   dout_r = rd8(ey);                  // OUT (C),r
             SH_ED_RRD:  dout_r = (ey == 3'd4) ? rrd_mem : rld_mem;
+            SH_ED_LD, SH_ED_IN, SH_ED_OUT: dout_r = tmp;
             SH_ED_ADDR: dout_r = (m == 3'd4) ? ed_rp[7:0] : ed_rp[15:8];
             default:  dout_r = a_reg;
         endcase
@@ -1083,6 +1194,12 @@ module z80 #(
             SH_ED_RETN: addr_r = (m <= 3'd1) ? pc
                                : (sp + {15'd0, (m == 3'd3)});
             SH_ED_RRD:  addr_r = (m <= 3'd1) ? pc : hl;
+            // The byte comes from (HL) and goes to (DE); a port form
+            // puts BC on the bus for its own half.
+            SH_ED_LD:  addr_r = (m <= 3'd1) ? pc : ((m == 3'd2) ? hl : de);
+            SH_ED_CP:  addr_r = (m <= 3'd1) ? pc : hl;
+            SH_ED_IN:  addr_r = (m <= 3'd1) ? pc : ((m == 3'd2) ? bc : hl);
+            SH_ED_OUT: addr_r = (m <= 3'd1) ? pc : ((m == 3'd2) ? hl : bc);
             SH_ED_ADDR: addr_r = (m <= 3'd3) ? pc
                                : ((m == 3'd4) ? wz : (wz + 16'd1));
             default: addr_r = pc;
@@ -1391,6 +1508,9 @@ module z80 #(
                 SH_ED_RETN: exec_ed_retn;
                 SH_ED_RRD: exec_ed_rrd;
                 SH_ED_ADDR: exec_ed_addr;
+                SH_ED_LD: exec_ed_ld;
+                SH_ED_CP: exec_ed_cp;
+                SH_ED_IN, SH_ED_OUT: exec_ed_io_block;
                 SH_NMI: exec_nmi;
                 default: exec_int;
             endcase
@@ -1720,6 +1840,48 @@ module z80 #(
                     endcase
                 end
             end
+        end
+    endtask
+
+    // LDI, LDD, LDIR and LDDR. The pointers and the counter move at
+    // the end of the write, and a repeat costs five T-states and two
+    // off PC -- which is how the part does it, and why an interrupt can
+    // be taken between iterations.
+    task exec_ed_ld;
+        begin
+            if (m <= 3'd1) pc <= pc + 16'd1;
+            else if (m == 3'd3) begin
+                {r_h, r_l} <= hl_next;
+                {r_d, r_e} <= de_next;
+                {r_b, r_c} <= bc_next;
+                r_f <= ldx_f;
+            end else if (m >= 3'd4) pc <= pc - 16'd2;
+        end
+    endtask
+
+    // CPI, CPD, CPIR and CPDR. A is not written; only the flags and the
+    // pointer and counter move.
+    task exec_ed_cp;
+        begin
+            if (m <= 3'd1) pc <= pc + 16'd1;
+            else if (m == 3'd3) begin
+                {r_h, r_l} <= hl_next;
+                {r_b, r_c} <= bc_next;
+                r_f <= cpx_f;
+            end else if (m >= 3'd4) pc <= pc - 16'd2;
+        end
+    endtask
+
+    // INI, IND, INIR, INDR and the four OUT forms. B is the counter
+    // here and not BC, because B is half of the port address.
+    task exec_ed_io_block;
+        begin
+            if (m <= 3'd1) pc <= pc + 16'd1;
+            else if (m == 3'd3) begin
+                {r_h, r_l} <= hl_next;
+                r_b <= b_next;
+                r_f <= iox_f;
+            end else if (m >= 3'd4) pc <= pc - 16'd2;
         end
     endtask
 

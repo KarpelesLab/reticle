@@ -6637,15 +6637,21 @@ fn z80_design(undocumented: &str) -> Design {
 /// repeating and decrementing forms, which are the eight that carry a
 /// second T-state count and the ones the core still traps.
 fn z80_undecoded(code: &[u8]) -> bool {
-    if matches!(code[0], 0xDD | 0xFD) {
-        return true;
-    }
-    if code[0] == 0xED && code.len() >= 2 {
-        let op = code[1];
+    matches!(code[0], 0xDD | 0xFD)
+}
+
+/// True for one of `ED`'s sixteen block instructions.
+///
+/// They are the only encodings whose second T-state count depends on a
+/// *counter* rather than on a flag, so `z80_expected_t` cannot read the
+/// answer off the shape the way it does for a conditional jump.
+fn z80_is_block(code: &[u8]) -> bool {
+    code[0] == 0xED
+        && code.len() >= 2
         // x == 2, z < 4, y >= 4.
-        return (op >> 6) == 2 && (op & 0x04) == 0 && (op & 0x20) != 0;
-    }
-    false
+        && (code[1] >> 6) == 2
+        && (code[1] & 0x04) == 0
+        && (code[1] & 0x20) != 0
 }
 
 /// One encoding with zeros in whatever holes it has. The operand's value
@@ -6672,6 +6678,15 @@ fn z80_with_zero_operands(insn: &z80::Insn) -> Vec<u8> {
 /// opposites are false. `DJNZ` is the other shape with two counts, and
 /// it jumps, because B is zero and decrements to `FF`.
 fn z80_expected_t(insn: &z80::Insn) -> u8 {
+    // A block instruction repeats while its counter is non-zero, and a
+    // reset leaves BC and B at zero -- so the first pass decrements to
+    // `FFFF` or `FF`, which is not zero, and every repeating form takes
+    // the longer count. `CPIR` and `CPDR` also stop on a match: A is
+    // `FF` after a reset and `(HL)` is the opcode's own second byte, so
+    // they do not match and those repeat too.
+    if z80_is_block(insn.code) {
+        return insn.tstates;
+    }
     match insn.tstates_short {
         None => insn.tstates,
         Some(short) => {
@@ -6836,10 +6851,12 @@ fn z80_counts_the_t_states_of_every_instruction_it_implements() {
     // subspaces, and ED's sixteen blocks -- four groups of four, since
     // each of LDI, CPI, INI and OUTI has a decrementing and two
     // repeating forms.
+    // 558 is the unprefixed 252, the CB 248 and the whole of ED's 58.
+    // The 140 are DD and FD with their own CB subspaces.
     assert_eq!(
         (checked, skipped),
-        (542, 156),
-        "the unprefixed, CB and ED encodings, against DD, FD and the blocks"
+        (558, 140),
+        "the unprefixed, CB and ED encodings, against DD and FD"
     );
 }
 
@@ -6862,15 +6879,7 @@ fn z80_traps_the_prefixes_it_does_not_decode() {
         assert_eq!(got, 4, "an undecoded prefix takes a NOP's four T-states");
         assert_eq!(cpu.traps, 1, "{prefix:#04x} raised dbg_trap once");
     }
-    // A block instruction is decoded as far as its two fetches and then
-    // trapped, so it is eight T-states and not four.
-    for block in [0xA0u8, 0xB0, 0xA1, 0xB9] {
-        let mut cpu = Z80::new(&design, &[0xED, block]);
-        let got = cpu.run_one("a block instruction");
-        assert_eq!(got, 8, "ED {block:#04x} is two fetches");
-        assert_eq!(cpu.traps, 1, "ED {block:#04x} raised dbg_trap once");
-    }
-    // `CB` and the rest of `ED` are decoded, and say nothing.
+    // `CB` and `ED` are decoded, and say nothing.
     let mut cpu = Z80::new(&design, &[0xCB, 0x00]);
     cpu.run_one("rlc b");
     assert_eq!(cpu.traps, 0, "CB is decoded and raises nothing");
@@ -6884,7 +6893,11 @@ fn z80_traps_the_prefixes_it_does_not_decode() {
 fn z80_branches(name: &str) -> bool {
     matches!(
         name,
-        "jp" | "jr" | "call" | "ret" | "reti" | "retn" | "rst" | "djnz" | "halt"
+        "jp" | "jr" | "call" | "ret" | "reti" | "retn" | "rst" | "djnz" | "halt" // A repeating block instruction takes two off PC to run again, so
+                                                                                 // "PC is just past it" is not what it means to do.
+    ) || matches!(
+        name,
+        "ldir" | "lddr" | "cpir" | "cpdr" | "inir" | "indr" | "otir" | "otdr"
     )
 }
 
@@ -7011,6 +7024,97 @@ fn z80_computes_the_ed_quadrant() {
     assert_eq!(at(0x910a), 0xa3, "rrd wrote the low nibble of a into (hl)");
     assert_eq!(at(0x910b), 0x71, "and took (hl)'s low nibble into a");
     assert_eq!(at(0x910c), 0x5a, "a through I and back");
+    assert_eq!(cpu.traps, 0, "nothing in the program trapped");
+}
+
+/// # The block instructions move what they say, as many times as they say
+///
+/// A T-state count proves a repeating instruction took 21 states per
+/// pass; it says nothing about whether the byte moved or the counter
+/// reached zero. These four are the shapes: a block copy, a block copy
+/// downwards, a search that stops on a match, and a search that runs out
+/// of counter instead.
+///
+/// `LDIR` repeating by taking two off PC rather than by looping inside
+/// one instruction is what makes an interrupt serviceable between
+/// iterations, and it is why the test can watch the whole thing as a
+/// sequence of ordinary instructions.
+///
+/// What this would not catch: `INI` and `OUTI` and their relatives,
+/// which need an I/O device rather than this bench's flat memory; and
+/// the three flags Zilog leaves **unknown** for those, which the core
+/// documents as a choice of its own.
+#[test]
+fn z80_moves_blocks() {
+    let design = z80_design("1");
+    let image = z80::assemble(
+        "
+        .org $0000
+            ld   hl,src
+            ld   de,$9000
+            ld   bc,4
+            ldir                 ; copies four bytes up
+            ld   hl,srclast
+            ld   de,$9013
+            ld   bc,4
+            lddr                 ; and four bytes down
+            ld   hl,src
+            ld   bc,4
+            ld   a,$33
+            cpir                 ; stops on the 33, BC = 1 left
+            ld   a,0
+            jr   nz,nomatch
+            ld   a,$aa
+        nomatch:
+            ld   ($9020),a       ; aa if it found it
+            ld   a,c
+            ld   ($9021),a       ; the counter it stopped with
+            ld   hl,src
+            ld   bc,4
+            ld   a,$99
+            cpir                 ; no match: runs the counter out
+            ld   a,0
+            jr   z,wrong
+            ld   a,$55
+        wrong:
+            ld   ($9022),a       ; 55 if it did not match
+            ld   a,c
+            ld   ($9023),a       ; and the counter is empty
+            halt
+        src:
+            .db  $11, $22, $33
+        srclast:
+            .db  $44
+        ",
+    )
+    .unwrap_or_else(|e| panic!("the program does not assemble: {e}"));
+
+    let mut program = vec![0u8; 0x1_0000];
+    for (at, byte) in &image.bytes {
+        program[usize::from(*at)] = *byte;
+    }
+    let mut cpu = Z80::new(&design, &program);
+    cpu.run(400, 8000);
+
+    let at = |a: u16| cpu.mem[usize::from(a)];
+    assert_eq!(
+        [at(0x9000), at(0x9001), at(0x9002), at(0x9003)],
+        [0x11, 0x22, 0x33, 0x44],
+        "ldir copied four bytes upwards"
+    );
+    assert_eq!(
+        [at(0x9010), at(0x9011), at(0x9012), at(0x9013)],
+        [0x11, 0x22, 0x33, 0x44],
+        "lddr copied the same four downwards"
+    );
+    assert_eq!(at(0x9020), 0xaa, "cpir found the 33 and left Z set");
+    assert_eq!(
+        at(0x9021),
+        0x01,
+        "and stopped with one byte of the count left"
+    );
+    assert_eq!(at(0x9022), 0x55, "cpir found no 99 and left Z clear");
+    assert_eq!(at(0x9023), 0x00, "having run the counter out");
     assert_eq!(cpu.traps, 0, "nothing in the program trapped");
 }
 
