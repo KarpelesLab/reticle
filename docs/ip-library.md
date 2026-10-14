@@ -2753,10 +2753,10 @@ exactly what this table is for.
 | `iso7816_uart` | `iso7816_uart` | PARITY_RETRY=0 | LUT6 | 39 x dff, 501 x lut | 8 |
 | `iso7816_uart` | `iso7816_uart` | PARITY_RETRY=0 | iCE40 HX1K | 140 x SB_CARRY, 207 x SB_DFFER, 34 x SB_DFFES, 27 x SB_DFFR, 4 x SB_DFFS, 1 x SB_GB, 159 x SB_IO, 572 x SB_LUT4 | 8 |
 | `iso7816_uart` | `iso7816_uart` | PARITY_RETRY=0 | ECP5 45F | 85 x CCU2C, 1 x DCCA, 482 x LUT4, 272 x TRELLIS_FF, 159 x TRELLIS_IO | 8 |
-| `seph_mcu` | `seph_mcu` | MS_CYCLES=112000 | LUT4 | 36 x dff, 757 x lut | 12 |
-| `seph_mcu` | `seph_mcu` | MS_CYCLES=112000 | LUT6 | 36 x dff, 596 x lut | 9 |
-| `seph_mcu` | `seph_mcu` | MS_CYCLES=112000 | iCE40 HX1K | 140 x SB_CARRY, 195 x SB_DFFE, 148 x SB_DFFESR, 6 x SB_DFFESS, 1 x SB_GB, 99 x SB_IO, 721 x SB_LUT4 | 12 |
-| `seph_mcu` | `seph_mcu` | MS_CYCLES=112000 | ECP5 45F | 85 x CCU2C, 1 x DCCA, 716 x LUT4, 349 x TRELLIS_FF, 99 x TRELLIS_IO | 12 |
+| `seph_mcu` | `seph_mcu` | MS_CYCLES=112000 | LUT4 | 37 x dff, 774 x lut | 12 |
+| `seph_mcu` | `seph_mcu` | MS_CYCLES=112000 | LUT6 | 37 x dff, 597 x lut | 9 |
+| `seph_mcu` | `seph_mcu` | MS_CYCLES=112000 | iCE40 HX1K | 140 x SB_CARRY, 195 x SB_DFFE, 149 x SB_DFFESR, 6 x SB_DFFESS, 1 x SB_GB, 99 x SB_IO, 727 x SB_LUT4 | 12 |
+| `seph_mcu` | `seph_mcu` | MS_CYCLES=112000 | ECP5 45F | 85 x CCU2C, 1 x DCCA, 718 x LUT4, 350 x TRELLIS_FF, 99 x TRELLIS_IO | 12 |
 | `pwm` | `pwm` | WIDTH=8 | LUT4 | 2 x dff, 23 x lut | 6 |
 | `pwm` | `pwm` | WIDTH=8 | LUT6 | 2 x dff, 17 x lut | 4 |
 | `pwm` | `pwm` | WIDTH=8 | iCE40 HX1K | 7 x SB_CARRY, 8 x SB_DFFER, 8 x SB_DFFR, 1 x SB_GB, 21 x SB_IO, 23 x SB_LUT4 | 6 |

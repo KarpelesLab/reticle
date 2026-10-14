@@ -65,8 +65,21 @@
 // its bootloader to be updated -- and STATUS_EVENT's layout changed between
 // MCU versions (20 bytes of payload with 2.39.0, 10 with 2.40.3). The
 // defaults are what worked against SE 2.5.1: MCU "2.28", bootloader
-// "1.16", and a status saying USB-powered and charging at 80 %, 4000 mV,
-// so that the SE neither expects a USB host nor warns about the battery.
+// "1.16", and a status saying on battery at 80 %, 4000 mV, not charging,
+// with the radio's flag (0x04) added once the SE has configured it.
+//
+// **The status used to say USB-powered and charging (flags 0x09)**, on the
+// reasoning that the SE would then neither expect a USB host nor warn about
+// the battery. A real MCU never sends that: in 44143 packets it reports
+// USB-powered only with USB on or about to be (0x0d, 0x0e, 0x0f, after a
+// host's bus reset), BLE on whenever the SE has started the radio, and 0x04
+// alone on battery. With 0x09 an SE 2.5.1 drew its PIN screen and took
+// digits, then went back to "Welcome" at the onboarding's PIN confirmation,
+// 15 October 2026 -- the first step that writes anything -- and the
+// status was suspected. **It was not the cause:** with flags 0 the same SE
+// went back to "Welcome" at the same step, the same day, with the same
+// traffic. The default stays changed because it is what a real MCU says;
+// the restart is still open.
 //
 // `BUTTON_SHIFT`: the button byte is `buttons << BUTTON_SHIFT`. Ledger's
 // SDK reads it as `byte >> 1`; that is QUOTED from the SDK, not measured
@@ -85,7 +98,7 @@ module seph_mcu #(
         408'h010030000800030304322e323804f4d8aa4304312e313604f1308974100702020014150c090106312e31312e3005312e322e30},
     parameter integer STATUS_LEN    = 23,
     parameter [511:0] STATUS        = {328'd0,
-        184'h15001400000009000000000000000fa050db1bffffffdb},
+        184'h15001400000000000000000000000fa050db1bffffffdb},
     parameter integer BUTTON_SHIFT  = 1
 ) (
     input  wire        clk,
@@ -125,6 +138,10 @@ module seph_mcu #(
     reg        our_turn    = 1'b0;
     reg        want_status = 1'b0;
     reg        want_ble    = 1'b0;
+    // The radio is on once the SE has configured it: STATUS_EVENT's flag
+    // 0x04, which a real MCU sets in its first status after the SE's BLE
+    // commands (`6.677650` in the capture, flags 0x00000004).
+    reg        ble_on      = 1'b0;
     reg [15:0] ble_op      = 16'd0;
     reg [7:0]  char_handle = 8'h0d;
     reg [15:0] interval    = 16'd100;
@@ -208,10 +225,13 @@ module seph_mcu #(
         input [15:0] op;
         input [3:0]  rl;
         input [7:0]  handle;
+        input        ble;
         reg   [8:0]  shifted;
         case (k)
             K_SESSION: byte_at = SESSION[8 * (SESSION_LEN - 1 - i) +: 8];
-            K_STATUS:  byte_at = STATUS[8 * (STATUS_LEN - 1 - i) +: 8];
+            // Byte 6 is the low byte of the flags, where the radio's bit is.
+            K_STATUS:  byte_at = STATUS[8 * (STATUS_LEN - 1 - i) +: 8]
+                               | ((i == 7'd6 && ble) ? 8'h04 : 8'h00);
             K_TICKER:  case (i)
                 7'd0: byte_at = 8'h0e;  7'd1: byte_at = 8'h00;  7'd2: byte_at = 8'h04;
                 7'd3: byte_at = t[31:24];  7'd4: byte_at = t[23:16];
@@ -260,6 +280,7 @@ module seph_mcu #(
             our_turn    <= 1'b0;
             want_status <= 1'b0;
             want_ble    <= 1'b0;
+            ble_on      <= 1'b0;
             char_handle <= 8'h0d;
             interval    <= 16'd100;
             since_tick  <= 16'd0;
@@ -279,6 +300,7 @@ module seph_mcu #(
             our_turn    <= 1'b0;
             want_status <= 1'b0;
             want_ble    <= 1'b0;
+            ble_on      <= 1'b0;
             char_handle <= 8'h0d;
             interval    <= 16'd100;
             since_tick  <= 16'd0;
@@ -359,6 +381,7 @@ module seph_mcu #(
                 idx      <= 7'd0;
                 if (go_ble) begin
                     want_ble <= 1'b0;
+                    ble_on   <= 1'b1;
                     kind     <= K_BLE;
                     bop      <= ble_op;
                     bhandle  <= char_handle;
@@ -392,7 +415,7 @@ module seph_mcu #(
             // Sending: one byte at a time through the handshake.
             if (sending && !go_any) begin
                 if (!tx_valid) begin
-                    tx_data  <= byte_at(kind, idx, snap, bsnap, bop, brl, bhandle);
+                    tx_data  <= byte_at(kind, idx, snap, bsnap, bop, brl, bhandle, ble_on);
                     tx_valid <= 1'b1;
                 end else if (tx_ready) begin
                     tx_valid <= 1'b0;

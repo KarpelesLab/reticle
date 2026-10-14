@@ -60,9 +60,23 @@ while it waits for one is not measured here.
 firmware and bootloader versions, and an SE checks them: a capture shows
 an SE 2.8.0 ordering an MCU at 2.39.0 into its bootloader to be updated.
 STATUS_EVENT's layout differs between MCU versions. The defaults are what
-an SE 2.5.1 accepted: MCU "2.28", bootloader "1.16", and a status of
-USB-powered, charging, 80 %, 4000 mV, chosen so the SE neither expects a
-USB host nor warns about the battery.
+an SE 2.5.1 accepted: MCU "2.28", bootloader "1.16", and a status of on
+battery, not charging, 80 %, 4000 mV -- flags 0 -- to which the block adds
+BLE on (`0x04`) once the SE has sent its first BLE command, as a real MCU
+does.
+
+The status used to say USB-powered and charging (flags `0x09`), so that the
+SE would neither expect a USB host nor warn about the battery. A real MCU
+never reports that: in the capture's 586 statuses USB-powered appears only
+with USB on or a host's bus reset about to make it so, and BLE on is set
+whenever the SE has started the radio. With `0x09`, an SE 2.5.1 took PIN
+digits and then went back to "Welcome" at the onboarding's PIN
+confirmation. **The status was not the cause**: with flags 0 the same SE
+went back to "Welcome" at the same step, with the same traffic. The
+default stays as it is because it is what a real MCU says; the restart is
+still open. (A bench log that appeared to show the SE sending one more BLE
+command after the change, `aci_gap_init`, did not: the earlier log had it
+too, on one line with two other packets, and its parser had skipped it.)
 
 ## 3. What is CHECKED, and what is QUOTED
 

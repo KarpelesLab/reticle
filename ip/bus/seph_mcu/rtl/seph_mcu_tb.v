@@ -13,7 +13,8 @@
 //     exactly one event per turn;
 //   - SET_TICKER_INTERVAL is obeyed: consecutive tickers are at least
 //     that many milliseconds apart by their own timestamps;
-//   - REQUEST_STATUS is answered with the STATUS parameter, verbatim;
+//   - REQUEST_STATUS is answered with the STATUS parameter, verbatim
+//     until the SE has configured the radio and with BLE on after;
 //   - two BLE commands are answered with the exact bytes a real MCU sent
 //     for them, including the GAP init's return parameters;
 //   - a button press and its release are each reported, shifted;
@@ -130,7 +131,7 @@ module seph_mcu_tb;
 
     localparam [511:0] SESSION = {104'd0,
         408'h010030000800030304322e323804f4d8aa4304312e313604f1308974100702020014150c090106312e31312e3005312e322e30};
-    localparam [511:0] STATUS = {328'd0, 184'h15001400000009000000000000000fa050db1bffffffdb};
+    localparam [511:0] STATUS = {328'd0, 184'h15001400000000000000000000000fa050db1bffffffdb};
 
     integer i;
     reg [31:0] t_prev, t_now;
@@ -229,6 +230,16 @@ module seph_mcu_tb;
         se_status;
         expect_bytes({128'd0, 128'h18000d04_0e0a018a_fc000500_06000800}, 16, "aci_gap_init reply");
 
+        // ---- The status again: the radio is on now ----
+        //
+        // A real MCU's first status after the SE configured its radio says
+        // BLE on (flags 0x04). The one above, before any BLE command, says
+        // nothing is on.
+        se_byte(8'h52); se_byte(8'h00); se_byte(8'h00);
+        se_status;
+        expect_bytes({72'd0, STATUS[183:136], STATUS[135:128] | 8'h04, STATUS[127:0]},
+                     23, "STATUS_EVENT with BLE on");
+
         // ---- Buttons: press left, release ----
         buttons = 2'b01;
         se_status;
@@ -242,15 +253,15 @@ module seph_mcu_tb;
         expect_ticker;
         repeat (2) @(posedge clk);   // the counters update after the last byte
 
-        if (rx_packets != 16'd14) begin
-            $display("FAIL: %0d SE packets counted, sent 14", rx_packets);
+        if (rx_packets != 16'd16) begin
+            $display("FAIL: %0d SE packets counted, sent 16", rx_packets);
             $finish;
         end
-        if (tx_events != 16'd9) begin
-            $display("FAIL: %0d events counted, sent 9", tx_events);
+        if (tx_events != 16'd10) begin
+            $display("FAIL: %0d events counted, sent 10", tx_events);
             $finish;
         end
-        $display("PASS: SESSION_START byte for byte; nothing before the SE's status and one event per turn after; tickers at the SE's 50 ms; REQUEST_STATUS answered with STATUS; hci_reset and aci_gap_init answered as a real MCU answers them; a button press and release reported; 14 SE packets and 9 events counted");
+        $display("PASS: SESSION_START byte for byte; nothing before the SE's status and one event per turn after; tickers at the SE's 50 ms; REQUEST_STATUS answered with STATUS, and with BLE on once the SE configured the radio; hci_reset and aci_gap_init answered as a real MCU answers them; a button press and release reported; 16 SE packets and 10 events counted");
         $finish;
     end
 endmodule
