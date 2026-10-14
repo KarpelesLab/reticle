@@ -745,7 +745,10 @@ as it was checked.
 
 **And the design was too dense for the router to finish.** With both
 fixes, 3 924 tables routed in 12 passes, and 6 989 (a network of 16
-neurons) in 34 passes and 44 minutes. The 12 800 did not converge in 31
+neurons) in 34 passes and 44 minutes. (That was before the router judged
+contention by physical node; built through `reticle fpga` afterwards,
+with the processor tied first, the same network took 24 minutes 48
+seconds end to end.) The 12 800 did not converge in 31
 hours. Its placement filled 1 509 of the 1 757 slices it used with all
 eight tables, in one block against the processor, where every input
 and output is; each interconnect tile then has every one of its tables'
@@ -765,6 +768,93 @@ and with the router's defaults — no free pieces, weight 0.3, every
 signal rerouted — in 14 passes and 47 minutes using 314 000. So the
 settings buy time with longer routes; they are a speed setting, not a
 measured optimum.
+
+## A binarized network on the part
+
+The first design with a purpose: a binarized two-layer network for
+14×14 MNIST, 196 binary pixels, 16 hidden neurons and 10 classes,
+trained off the board and folded to integers (a hidden neuron fires when
+its pixels agree with its weights at least a threshold many times; a
+class's score is its hidden agreements plus a bias). The model scores
+71.07 % on the test set. Each popcount is written as a tree of six-input
+sums marked `(* keep *)`, so that every bit of every sum is one lookup
+table: 6 989 of them, through the open flow from Verilog, `--east 36`.
+
+Linux drives it over EMIO with `/dev/mem`: four 64-bit writes of the
+image, each latched on a toggle of `wr`, then a toggle of `go`; the
+fabric answers with ten 8-bit scores and the class on EMIO inputs, and
+`ack` follows `go` six clocks later. The pipeline is four registers
+deep (hidden layer, scores, the argmax's two halves, the outputs).
+
+**Measured, 2026-10-14, at `PL_CLK0` = 100 MHz:** all 10 000 test
+images gave scores and a class identical, bit for bit, to the model's;
+accuracy 71.07 %, as trained. A round trip through EMIO took 107.1 µs
+per image, and the reply was always there at the first read (no
+polls): the time is Python and the bus, and the fabric's few tens of
+nanoseconds do not show in it.
+
+**The clock, swept.** `PL0_REF_CTRL` (`0xFF5E00C0`, source IOPLL at
+1 500 MHz, divisors in bits 13:8 and 21:16) was rewritten between
+runs of 2 000 images, and put back to 100 MHz after:
+
+| Clock | Bit-exact |
+|---|---|
+| 100, 150, 187.5, 250 MHz | 2 000 / 2 000 |
+| 300 MHz | 490 / 2 000 |
+| 375 MHz | 2 000 / 2 000 |
+| 500 MHz | 1 695 / 2 000 |
+
+This is not an fmax and must not be read as one. The image is still for
+microseconds before `go`, so every stage of logic that reads it has
+settled whatever the clock; what the sweep exercises is the
+synchronisers, the six-clock `ack` and the last stages. At 300 MHz every
+failing image had scores off by one, as if one hidden bit read wrong;
+that 375 passes where 300 fails is not explained (the odd divisor, 5,
+is one guess, its duty cycle another — neither was measured).
+
+What the harness cannot measure is the network's own latency, so a
+second build measures it. It loads the image into a register on `go`,
+captures the scores and the class one clock later, and has nothing but
+lookup tables between (38 deep): the highest clock at which the answer
+still agrees with the model bounds the time from one register to the
+other. Built 2026-10-14 (6 992 tables, 1 010 701 set bits, every one
+decoded), it needed more than the router's 40 passes — one node was still
+shared after 40, at 128 minutes — and converged within 100
+(`zcu104::MAX_ITERATIONS`), in 154 minutes. Measured on the part, 2 000
+images a step:
+
+| Clock | Period | Bit-exact |
+|---|---|---|
+| 100 MHz | 10 ns | 0 |
+| 50 MHz | 20 ns | 563 |
+| 33.3 MHz | 30 ns | 901 |
+| 31.25 MHz | 32 ns | 1 572 |
+| 30 MHz | 33.3 ns | 1 800 |
+| 28.85 MHz | 34.7 ns | 1 931 |
+| 27.78 MHz | 36 ns | 1 993 |
+| 26.79 MHz | 37.3 ns | 2 000, and 10 000 / 10 000 |
+| 25.86 MHz down to 1 MHz | | 2 000 |
+
+**So the network answers within 37.3 ns of the image being registered**,
+and most images within 32. The failures thin out with the period rather
+than stopping at one, as they should: which path is slowest depends on
+the image and on the one before it. That makes the figure a
+measurement of these 10 000 transitions, not a bound on every image,
+and it includes the register's clock-to-output, its setup and the skew
+between the two registers. Unpipelined, that is some 27 million images
+a second if they could be fed that fast; through EMIO from Python they
+arrive one per 107 µs, four thousand times slower than the fabric.
+
+Below 1 MHz it fails again (12 / 2 000 at 0.38 MHz), and that one is the
+harness: it toggles `wr` and changes the word without waiting, faster
+than a clock that slow samples them.
+
+Two things the build showed in passing. `--place-effort` 12 gave a
+bitstream byte-identical to the default 10: the placer clamps its moves
+per temperature at a million (`moves_for`), and at 7 689 instances any
+effort above 7 reaches it. And neither build was given a timing goal;
+the router knows nothing of delay, so 37 ns is what the placement
+happened to give, not what the part can do.
 
 ## What remains, in order
 
